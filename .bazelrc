@@ -6,3 +6,8 @@ build --experimental_convenience_symlinks=ignore
 
 # aarch64 交叉编译
 build:aarch64 --platforms=//toolchain:aarch64_linux
+
+# 板级配置 — Radxa Zero 3W (RK3566)
+build:radxa-zero3w --platforms=//toolchain:aarch64_linux
+build:radxa-zero3w --define=platform=rockchip
+build:radxa-zero3w --define=board=radxa-zero3w

@@ -1,0 +1,15 @@
+# 自定义 Bazel 规则与配置
+
+# 平台级 config_setting — 用于组件目录 select() 路由
+config_setting(
+    name = "platform_rockchip",
+    values = {"define": "platform=rockchip"},
+    visibility = ["//visibility:public"],
+)
+
+# 板级 config_setting — 用于板级差异化选择
+config_setting(
+    name = "board_radxa_zero3w",
+    values = {"define": "board=radxa-zero3w"},
+    visibility = ["//visibility:public"],
+)
