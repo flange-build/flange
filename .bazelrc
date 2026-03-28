@@ -1,2 +1,8 @@
 # Bazel output base 持久化到项目目录，Docker volume 映射后容器重建不丢失缓存
 startup --output_base=/workspace/output/bazel
+
+# 禁用 convenience 符号链接（容器内路径在宿主机上是断链）
+build --experimental_convenience_symlinks=ignore
+
+# aarch64 交叉编译
+build:aarch64 --platforms=//toolchain:aarch64_linux
