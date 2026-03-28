@@ -1,0 +1,11 @@
+services:
+  build:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    volumes:
+      # 项目目录挂载到容器
+      - .:/workspace
+      # Bazel output base 持久化
+      - ./output/bazel:/workspace/output/bazel
+    working_dir: /workspace

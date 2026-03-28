@@ -1,0 +1,9 @@
+# 构建产物
+output/
+target/
+
+# Bazel 符号链接
+/bazel-*
+
+# 运行时状态
+.flange/

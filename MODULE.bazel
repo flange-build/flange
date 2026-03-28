@@ -1,0 +1,4 @@
+module(
+    name = "flange",
+    version = "0.1.0",
+)
