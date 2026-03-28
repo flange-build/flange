@@ -1,0 +1,33 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+context: |
+  项目名称: flange 嵌入式系统构建基座
+  项目定位: 类似 buildroot 和 yocto 的嵌入式系统构建框架，但基于 ubuntu-base 构建
+  核心目标:
+    1. 提供内核快速验证通道
+    2. 提供文件系统快速验证通道
+    3. 提供全系统级别快速验证通道
+    4. 提供产品级烧录镜像输出，支持 UFS、eMMC、SPI、SD 卡等多种存储介质的镜像生成
+  核心优势:
+    - 比 buildroot 和 yocto 支持更可靠、可预期的组件配置
+    - 更快速的编译构建速度
+    - 以复用现有的 apt 软件包为主
+    - 支持将自定义软件打包为 apt 包
+    - 最终可将自定义系统打包为可直接刷写的产品级镜像，支持 UFS、eMMC、SPI、SD 卡等多种存储介质
+  文档规范:
+    - 所有 spec 文档使用中文编写，仅专业术语保留英文
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+rules:
+  spec:
+    - 所有 spec 文档必须使用中文编写，仅专业术语可以保留英文
+    - 技术术语第一次出现时建议标注对应的英文原文
+  proposal:
+    - 提案文档使用中文编写
+    - 必须包含"非目标"章节
+  tasks:
+    - 任务拆分到每个任务不超过2小时工作量
