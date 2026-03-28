@@ -33,7 +33,7 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 │        Docker 容器           │     │         宿主机            │
 │                             │     │                          │
 │  交叉编译工具链              │     │  刷写工具（平台相关）       │
-│  内核/uboot/rootfs 构建      │────▶│  USB 连接目标设备          │
+│  内核/bootloader/rootfs 构建  │────▶│  USB 连接目标设备          │
 │  镜像打包                    │     │  分区级刷写               │
 │                             │     │                          │
 │  输出: output/              │     │  读取: output/            │
@@ -62,7 +62,7 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 
 | 组件 | 构建目标 | 刷写目标 |
 |------|---------|---------|
-| U-Boot | `bazel build //uboot` | `bazel run //uboot:flash` |
+| Bootloader | `bazel build //bootloader` | `bazel run //bootloader:flash` |
 | Kernel | `bazel build //kernel` | `bazel run //kernel:flash` |
 | Rootfs | `bazel build //rootfs` | `bazel run //rootfs:flash` |
 | 全量镜像 | `bazel build //image` | `bazel run //image:flash` |
@@ -134,14 +134,14 @@ Bazel 是本项目的唯一构建与部署系统，使用 Starlark 语言编写�
 
 ### 6.1 文件组织
 - 项目根目录包含 `MODULE.bazel`（模块定义）和顶层 `BUILD.bazel`
-- 每个组件目录（`uboot/`、`kernel/`、`rootfs/` 等）包含各自的 `BUILD.bazel`
+- 每个组件目录（`bootloader/`、`kernel/`、`rootfs/` 等）包含各自的 `BUILD.bazel`
 - 自定义构建规则放在 `build/` 目录下的 `.bzl` 文件中
 - 板级配置通过 Bazel `config_setting` 和 `select()` 实现多板适配
 
 ### 6.2 风格
 - 缩进：4 空格
 - 使用 `buildifier` 格式化所有 `BUILD.bazel` 和 `.bzl` 文件
-- 目标命名：`snake_case`，如 `build_kernel`、`flash_uboot`
+- 目标命名：`snake_case`，如 `build_kernel`、`flash_bootloader`
 - 规则函数命名：`snake_case`，如 `flange_kernel_build`
 - 每个 target 须有 `visibility` 声明，避免使用 `//visibility:public` 除非必要
 
@@ -217,19 +217,47 @@ flange/
 ├── build/              # 自定义 Bazel 规则（.bzl 文件）
 ├── board/              # 板级配置（每个板子一个子目录）
 │   └── <board-name>/
-│       ├── BUILD.bazel  # 板级构建/刷写目标
+│       ├── BUILD.bazel  # 板级构建/刷写目标（导出 filegroup）
 │       ├── config       # 板级配置文件（平台、工具链等）
-│       └── overlay/     # 文件系统覆盖层
+│       ├── overlay/     # 文件系统覆盖层
+│       └── patches/     # 板级补丁（仅影响本板子）
+│           ├── kernel/      # 板级内核补丁
+│           └── bootloader/  # 板级 bootloader 补丁
 ├── docker/             # Docker 构建环境定义
 │   └── Dockerfile       # 构建容器镜像定义
-├── kernel/             # 内核相关（配置、补丁、模块）
-│   └── BUILD.bazel      # 内核构建/刷写目标
-├── uboot/              # U-Boot 相关（配置、补丁）
-│   └── BUILD.bazel      # U-Boot 构建/刷写目标
-├── rootfs/             # 根文件系统构建
+├── bootloader/         # 引导加载程序（U-Boot / ABL 等，按平台分子目录）
+│   ├── BUILD.bazel      # 顶层 alias + select() 路由
+│   ├── rockchip/        # Rockchip U-Boot 构建（TPL+SPL+ATF）
+│   │   ├── BUILD.bazel
+│   │   ├── patches/
+│   │   └── scripts/
+│   ├── allwinner/       # Allwinner U-Boot 构建
+│   │   ├── BUILD.bazel
+│   │   └── patches/
+│   └── qualcomm/        # Qualcomm ABL/XBL 构建
+│       ├── BUILD.bazel
+│       └── patches/
+├── kernel/             # 内核构建（按平台分子目录）
+│   ├── BUILD.bazel      # 顶层 alias + select() 路由
+│   ├── rockchip/        # Rockchip 内核构建与打包
+│   │   ├── BUILD.bazel
+│   │   └── patches/
+│   ├── allwinner/       # Allwinner 内核构建与打包
+│   │   ├── BUILD.bazel
+│   │   └── patches/
+│   └── qualcomm/        # Qualcomm 内核构建与打包
+│       ├── BUILD.bazel
+│       └── patches/
+├── rootfs/             # 根文件系统构建（保持扁平，差异通过配置传入）
 │   └── BUILD.bazel      # Rootfs 构建/刷写目标
-├── image/              # 全量镜像打包
-│   └── BUILD.bazel      # 镜像聚合/刷写目标
+├── image/              # 全量镜像打包（按平台分子目录）
+│   ├── BUILD.bazel      # 顶层 alias + select() 路由
+│   ├── rockchip/        # Rockchip 镜像打包（rkimage）
+│   │   └── BUILD.bazel
+│   ├── allwinner/       # Allwinner 镜像打包（sunxi-pack）
+│   │   └── BUILD.bazel
+│   └── qualcomm/        # Qualcomm 镜像打包（rawprogram）
+│       └── BUILD.bazel
 ├── packages/           # 自定义软件包定义
 ├── tools/              # 开发/调试辅助工具
 ├── openspec/           # 工程规格管理

@@ -32,7 +32,7 @@ flange 构建系统分为五个层次：
 │  │  Docker 容器                                │                  │
 │  │  ┌───────────────────────────────────────┐ │                  │
 │  │  │  Bazel                                │ │                  │
-│  │  │  //uboot //kernel //rootfs //image    │ │                  │
+│  │  │  //bootloader //kernel //rootfs //image│ │                  │
 │  │  │  build/rules.bzl (自定义构建规则)       │ │                  │
 │  │  │  build/partition/ (分区格式转换器)      │ │                  │
 │  │  │  build/config.bzl (配置解析引擎)       │ │                  │
@@ -130,7 +130,7 @@ source envsetup.sh
 ```
 flange build              ← 等同于 flange build image（全量构建）
 flange build kernel       ← bazel build //kernel
-flange build uboot        ← bazel build //uboot
+flange build bootloader   ← bazel build //bootloader
 flange build rootfs       ← bazel build //rootfs
 flange build image        ← bazel build //image
 ```
@@ -306,7 +306,7 @@ ROCKCHIP_DEFAULTS = {
     "vendor": "rockchip",
     "flash_tool": "rkdeveloptool",
 
-    "uboot": {
+    "bootloader": {
         "repo": "https://github.com/rockchip-linux/u-boot.git",
     },
 
@@ -334,7 +334,7 @@ RK3588_DEFAULTS = {
     "arch": "aarch64",
     "toolchain": "aarch64-linux-gnu",
 
-    "uboot": {
+    "bootloader": {
         "branch": "next-dev",
         "defconfig": "rk3588_defconfig",
     },
@@ -449,10 +449,10 @@ Step 2: 条件标记解析（传入 variant + product）
   → FINAL_CONFIG（扁平、无条件标记的 dict）
 
 Step 3: 传入 Bazel 构建规则
-  //uboot  ← FINAL_CONFIG.uboot
-  //kernel ← FINAL_CONFIG.kernel
-  //rootfs ← FINAL_CONFIG.rootfs
-  //image  ← FINAL_CONFIG.partitions
+  //bootloader ← FINAL_CONFIG.bootloader（路由到平台子目录）
+  //kernel     ← FINAL_CONFIG.kernel（路由到平台子目录）
+  //rootfs     ← FINAL_CONFIG.rootfs
+  //image      ← FINAL_CONFIG.partitions（路由到平台子目录）
 ```
 
 先合并所有层（保留条件标记），最后统一解析条件。这样上层的条件标记可以被下层追加。
@@ -493,7 +493,7 @@ partition_table = struct(
             offset = "32K",           # 可选，不填则自动排列
             size = "4M",
             type = "raw",             # raw / fat32 / ext4
-            image = "//uboot:idbloader",   # 对应的 Bazel 构建 target
+            image = "//bootloader/rockchip:idbloader",  # 对应的 Bazel 构建 target
             platform_hint = "rockchip_idb",  # 平台转换器用的提示
         ),
         struct(
@@ -552,14 +552,32 @@ docker run ... bazel build //kernel \
 
 | 组件 | 构建 target | 刷写 target（生成脚本） |
 |------|------------|----------------------|
-| U-Boot | `bazel build //uboot` | `//uboot:flash` → 生成 flash 命令片段 |
+| Bootloader | `bazel build //bootloader` | `//bootloader:flash` → 生成 flash 命令片段 |
 | Kernel | `bazel build //kernel` | `//kernel:flash` → 生成 flash 命令片段 |
 | Rootfs | `bazel build //rootfs` | `//rootfs:flash` → 生成 flash 命令片段 |
 | 全量镜像 | `bazel build //image` | `//image:flash` → 生成完整 flash.sh |
 
 `//image` 聚合所有组件产物 + 分区表，打包为最终镜像并生成 `flash.sh`。
 
+差异度高的组件（bootloader、kernel、image）按平台分子目录，顶层 `BUILD.bazel` 使用 `alias` + `select()` 路由：
+
+```python
+# kernel/BUILD.bazel（bootloader/、image/ 同理）
+alias(
+    name = "kernel",
+    actual = select({
+        "//config:rockchip": "//kernel/rockchip",
+        "//config:allwinner": "//kernel/allwinner",
+        "//config:qualcomm": "//kernel/qualcomm",
+    }),
+)
+```
+
+rootfs 差异小（主要是 arch 不同），保持扁平结构，差异通过 `FINAL_CONFIG` 传入。
+
 ### 5.3 配置到构建的数据流
+
+三层职责分离：`platform/` 声明"用什么"（配置值），组件平台子目录负责"怎么做"（构建实现+平台数据），`board/` 负责"板子特殊化"（板级补丁、DTS、overlay）。
 
 ```
 config/registry.bzl
@@ -570,20 +588,25 @@ config/registry.bzl
 │  配置解析引擎 (build/config.bzl)                         │
 │                                                         │
 │  1. 按 chain 顺序加载三层配置                            │
+│     platform/ → "用什么"（repo URL、defconfig、包列表）  │
 │  2. 逐层 deep_merge                                     │
 │  3. 解析条件标记（传入 variant + product）                │
 │  → FINAL_CONFIG                                         │
 └────────┬──────────────────────────────────────┬─────────┘
          │                                      │
          ▼                                      ▼
-  各组件构建规则                           分区表转换器
-  //uboot  ← FINAL_CONFIG.uboot          partition_table
-  //kernel ← FINAL_CONFIG.kernel            │
-  //rootfs ← FINAL_CONFIG.rootfs            ▼
+  组件平台子目录 → "怎么做"              分区表转换器
+  //bootloader/rockchip                  partition_table
+  //kernel/rockchip                         │
+  //rootfs  ← FINAL_CONFIG.rootfs           ▼
          │                             平台特有格式
+         │    board/ → "板子特殊化"
+         │    filegroup 导出板级补丁
+         │    //board/rk3588-evb:kernel_patches
+         │
          └──────────┬──────────────────────┘
                     ▼
-              //image (聚合)
+              //image/rockchip (聚合)
               ├── image.img
               └── flash.sh
 ```
@@ -605,17 +628,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FLASH_TOOL="rkdeveloptool"
 
-flash_uboot()  { ... }
-flash_kernel() { ... }
-flash_rootfs() { ... }
-flash_all()    { ... }
+flash_bootloader()  { ... }
+flash_kernel()      { ... }
+flash_rootfs()      { ... }
+flash_all()         { ... }
 
 case "${1:-all}" in
-    uboot)  flash_uboot ;;
-    kernel) flash_kernel ;;
-    rootfs) flash_rootfs ;;
-    all)    flash_all ;;
-    *)      echo "用法: $0 [uboot|kernel|rootfs|all]" ;;
+    bootloader) flash_bootloader ;;
+    kernel)     flash_kernel ;;
+    rootfs)     flash_rootfs ;;
+    all)        flash_all ;;
+    *)          echo "用法: $0 [bootloader|kernel|rootfs|all]" ;;
 esac
 ```
 
@@ -690,10 +713,12 @@ flange/
 │
 ├── board/                  # 板级配置（继承第三层）
 │   ├── rk3588-evb/
-│   │   ├── BUILD.bazel
+│   │   ├── BUILD.bazel     # 导出 filegroup（kernel_patches 等）
 │   │   ├── board.bzl
 │   │   ├── overlay/
-│   │   └── patches/
+│   │   └── patches/        # 板级补丁（仅影响本板子）
+│   │       ├── kernel/
+│   │       └── bootloader/
 │   └── qemu-aarch64/      # QEMU 虚拟板（MVP 验证用）
 │       ├── BUILD.bazel
 │       └── board.bzl
@@ -704,14 +729,39 @@ flange/
 │       ├── BUILD.bazel
 │       └── src/
 │
-├── uboot/                  # U-Boot 构建
+├── bootloader/             # 引导加载程序（按平台分子目录）
+│   ├── BUILD.bazel         # 顶层 alias + select() 路由
+│   ├── rockchip/           # Rockchip U-Boot（TPL+SPL+ATF）
+│   │   ├── BUILD.bazel
+│   │   ├── patches/        # Rockchip bootloader 通用补丁
+│   │   └── scripts/
+│   ├── allwinner/          # Allwinner U-Boot
+│   │   ├── BUILD.bazel
+│   │   └── patches/
+│   └── qualcomm/           # Qualcomm ABL/XBL
+│       ├── BUILD.bazel
+│       └── patches/
+├── kernel/                 # 内核构建（按平台分子目录）
+│   ├── BUILD.bazel         # 顶层 alias + select() 路由
+│   ├── rockchip/           # Rockchip 内核构建与打包
+│   │   ├── BUILD.bazel
+│   │   └── patches/        # Rockchip 内核通用补丁
+│   ├── allwinner/
+│   │   ├── BUILD.bazel
+│   │   └── patches/
+│   └── qualcomm/
+│       ├── BUILD.bazel
+│       └── patches/
+├── rootfs/                 # 根文件系统构建（保持扁平）
 │   └── BUILD.bazel
-├── kernel/                 # 内核构建
-│   └── BUILD.bazel
-├── rootfs/                 # 根文件系统构建
-│   └── BUILD.bazel
-├── image/                  # 全量镜像打包
-│   └── BUILD.bazel
+├── image/                  # 全量镜像打包（按平台分子目录）
+│   ├── BUILD.bazel         # 顶层 alias + select() 路由
+│   ├── rockchip/           # rkimage 打包
+│   │   └── BUILD.bazel
+│   ├── allwinner/          # sunxi-pack 打包
+│   │   └── BUILD.bazel
+│   └── qualcomm/           # rawprogram 打包
+│       └── BUILD.bazel
 │
 ├── docker/                 # Docker 构建环境
 │   └── Dockerfile          # FROM --platform=linux/amd64
@@ -724,16 +774,16 @@ flange/
 │   └── cache/
 │       └── targets.json
 │
-├── output/                 # 构建中间产物（git ignored）
-│   ├── bazel/              # Bazel output base（Docker volume 映射）
-│   │   └── execroot/_main/bazel-out/
-│   ├── bin -> bazel/...    # flange build 创建的便捷链接
-│   └── out -> bazel/...    # flange build 创建的便捷链接
+├── output/                 # 构建中间产物（git ignored，Docker volume 实际目录映射）
+│   └── bazel/              # Bazel output base
+│       └── execroot/_main/bazel-out/
 │
-├── target/                 # 最终产物（git ignored）
+├── target/                 # 最终产物（git ignored，flange build 成功后复制）
 │   └── <board>/<product>/<variant>/
+│       ├── bootloader/
+│       ├── kernel/
 │       ├── rootfs.ext4
-│       ├── launch.sh
+│       ├── flash.sh
 │       └── debs/
 │
 ├── ProjectSpec.md
@@ -834,13 +884,12 @@ flange/
 **修正**：
 - 使用 `startup --output_base=/workspace/output/bazel` 将 Bazel output base 映射到项目内 volume 挂载路径
 - 使用 `build --noexperimental_convenience_symlinks` 禁用 Bazel 自动创建的便捷链接
-- `flange build` 成功后手动创建宿主机链接：
-  - `output/bin` → `output/bazel/execroot/_main/bazel-out/<config>/bin`
-  - `output/out` → `output/bazel/execroot/_main/bazel-out`
+- `output/` 和 `target/` 全部使用 Docker volume 映射为**实际目录**，禁止使用符号链接
+- `output/` — 构建中间产物（Bazel output base 通过 Docker volume 直接映射到宿主机）
 - `target/` — 最终产物（`flange build` 成功后复制到 `target/<board>/<product>/<variant>/`）
 - 两者均 git ignored
 
-**原则**：不依赖 Bazel 的便捷链接。构建中间产物通过 Docker volume 直接映射到宿主机，最终产物由 `flange build` 脚本复制到 `target/` 目录。
+**原则**：不依赖 Bazel 的便捷链接，不创建任何符号链接。构建中间产物通过 Docker volume 实际目录映射到宿主机，宿主机可以直接访问所有构建产物。最终产物由 `flange build` 脚本复制到 `target/` 目录。
 
 ### 8.9 app.yaml 在 Starlark 中不可直接解析
 
@@ -909,3 +958,31 @@ flange/
 **修正**：`registry.bzl` 使用 Starlark/Python 兼容语法，`flange lunch` 直接在宿主机用 `python3` 解析，不依赖 Docker。仅 `flange build` 等实际构建操作需要 Docker。
 
 **注意**：缓存文件 `targets.json` 需检查非空（`[ ! -s ]`），避免解析错误导致空缓存被后续使用。
+
+### 8.15 补丁归属判断规则
+
+补丁文件只会出现在两个地方，判断标准如下：
+
+| 补丁影响范围 | 存放位置 | 示例 |
+|-------------|---------|------|
+| 该平台所有板子 | 组件平台子目录 | `kernel/rockchip/patches/` |
+| 仅特定板子 | 板级目录 | `board/rk3588-evb/patches/kernel/` |
+
+- 平台通用补丁由组件平台子目录的 `BUILD.bazel` 直接通过 `glob()` 引用
+- 板级补丁由 `board/<name>/BUILD.bazel` 导出 `filegroup`，组件构建规则通过 `deps` 引用
+- `platform/` 目录不存放任何补丁文件，只包含配置值声明
+
+### 8.16 新增平台 Checklist
+
+新增一个平台（如 Amlogic）时，需完成以下步骤：
+
+1. **平台配置**：在 `platform/<vendor>/` 下创建 `base.bzl`，声明配置值（repo URL、工具链、包列表等）
+2. **SoC 配置**：在 `platform/<vendor>/<soc>/` 下创建 `base.bzl`，声明 SoC 级配置（arch、defconfig、分区表等）
+3. **组件平台子目录**：
+   - `bootloader/<vendor>/BUILD.bazel` — bootloader 构建逻辑
+   - `kernel/<vendor>/BUILD.bazel` — 内核构建与打包逻辑
+   - `image/<vendor>/BUILD.bazel` — 镜像打包逻辑
+4. **顶层路由**：在 `bootloader/BUILD.bazel`、`kernel/BUILD.bazel`、`image/BUILD.bazel` 的 `select()` 中各加一行
+5. **配置标记**：在 `config/` 下添加对应的 `config_setting`（如 `//config:amlogic`）
+6. **注册表**：在 `config/registry.bzl` 中注册板子信息
+7. **分区转换器**（如需要）：在 `build/partition/` 下添加对应的 `.bzl` 文件

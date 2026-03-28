@@ -36,7 +36,7 @@ flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建�
 - **Docker 构建**：所有编译构建在 Docker 容器内完成，宿主机不做编译环境要求
 - **宿主机刷写**：镜像刷写在宿主机执行，通过 USB 连接目标设备
 - **依赖自动推断**：组件间依赖由 Bazel 自动推断，变更后仅增量重建受影响部分
-- **多平台支持**：Rockchip、Allwinner、Qualcomm 等平台各有对应的刷写工具
+- **多平台支持**：Rockchip、Allwinner、Qualcomm、Amlogic 等平台各有对应的刷写工具
 - 构建规则使用 Starlark 编写，遵循 `buildifier` 格式化
-- Shell 脚本必须使用 `set -euo pipefail`
+- Shell 脚本必须使用 `set -xe`
 - 每个任务不超过 2 小时工作量
