@@ -825,3 +825,45 @@ flange/
 │
 └── ...
 ```
+
+---
+
+## 11. MVP 实施经验与设计修正
+
+### 11.1 app.yaml 在 Starlark 中不可直接解析
+
+**问题**：设计中 `flange_deb` 规则在 Starlark loading 阶段读取 app.yaml 生成 deb control，但 Starlark 没有 YAML 解析能力，也无法在 loading 阶段读取文件内容。
+
+**当前方案**：app.yaml 仅作为参考文件传入 `flange_deb`，元数据（version、description、maintainer）在 BUILD.bazel 的 `flange_deb` 参数中直接声明：
+
+```python
+flange_deb(
+    name = "hello-world-deb",
+    app_yaml = "app.yaml",        # 传入但不在 Starlark 中解析
+    version = "0.1.0",            # 直接声明
+    description = "示例程序",      # 直接声明
+    maintainer = "flange <f@l>",  # 直接声明
+    binary = ":hello-world",
+    ...
+)
+```
+
+**后续优化方向**：在 `flange_deb` 的 action 阶段（bash/python 脚本）读取 app.yaml 生成 debian/control，实现"app.yaml 作为 deb 元数据的唯一数据源"。
+
+### 11.2 deb conffiles 生成的空行问题
+
+**问题**：使用字符串拼接生成 conffiles 内容时，末尾会产生空行，dpkg-deb 将空行解析为非法路径导致打包失败。
+
+**修正**：改用逐行 `echo >> conffiles` 替代字符串拼接。
+
+### 11.3 Bazel visibility 默认私有
+
+**问题**：App 的 deb target 默认 visibility 为 private，rootfs 和 image 规则无法引用。
+
+**修正**：需要显式声明 `visibility = ["//visibility:public"]`。后续可考虑在 `flange_deb` 规则中默认设置 public visibility。
+
+### 11.4 flange_deb 产出的二进制架构
+
+**问题**：`flange_deb` 的 `architecture` 参数默认 `arm64`，但实际编译架构取决于 Bazel toolchain 配置。如果未正确配置交叉编译工具链，产出的 deb 声称 arm64 但内含 x86_64 二进制。
+
+**修正**：需确保 Bazel toolchain 正确注册并通过 `--platforms` 激活。`architecture` 参数应与实际编译目标一致。
