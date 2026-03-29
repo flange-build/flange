@@ -1,6 +1,5 @@
 services:
-  dev:
-    image: flange-build
+  build:
     build:
       context: .
       dockerfile: docker/Dockerfile
