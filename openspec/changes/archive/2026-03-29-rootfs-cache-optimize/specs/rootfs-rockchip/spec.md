@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: Rockchip 平台 rootfs 构建脚本
 `rootfs/rockchip/build_base.sh` SHALL 实现 Rockchip 平台的 base rootfs 构建流程：解压 ubuntu-base tarball → 设置 qemu-user-static → APT 缓存 bind-mount → chroot 安装 apt 包 → 清理 → 打包 base-rootfs.tar.zst。`rootfs/rockchip/build_customize.sh` SHALL 实现定制化流程：解压 base rootfs → 安装自定义 deb 包 → 应用 overlay → 打包 rootfs.tar.gz。
 

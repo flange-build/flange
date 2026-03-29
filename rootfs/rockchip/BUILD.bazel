@@ -1,13 +1,11 @@
-# Rockchip 平台 Rootfs 构建
+# Rockchip 平台 Rootfs 构建 — base + customize 两阶段
 
-load("//build:rootfs_build.bzl", "rootfs_build")
+load("//build:rootfs_base.bzl", "rootfs_base")
+load("//build:rootfs_customize.bzl", "rootfs_customize")
 
-rootfs_build(
-    name = "rockchip",
-    build_script = "build.sh",
-    rootfs_src = select({
-        "//build:board_radxa_zero3w": "@rootfs_src_radxa_zero3w//:ubuntu-base.tar.gz",
-    }),
+rootfs_base(
+    name = "base",
+    build_script = "build_base.sh",
     packages = select({
         "//build:board_radxa_zero3w": [
             "systemd",
@@ -23,6 +21,15 @@ rootfs_build(
             "locales",
         ],
     }),
+    rootfs_src = select({
+        "//build:board_radxa_zero3w": "@rootfs_src_radxa_zero3w//:ubuntu-base.tar.gz",
+    }),
+)
+
+rootfs_customize(
+    name = "rockchip",
+    base = ":base",
+    build_script = "build_customize.sh",
     custom_packages = select({
         "//build:board_radxa_zero3w": [],
     }),
