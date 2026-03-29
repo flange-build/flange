@@ -1,0 +1,33 @@
+# Rockchip 平台 Bootloader 构建
+
+load("//build:bootloader_build.bzl", "bootloader_build")
+
+filegroup(
+    name = "patches",
+    srcs = glob(["patches/**/*.patch"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+bootloader_build(
+    name = "rockchip",
+    build_script = "build.sh",
+    bootloader_src = select({
+        "//build:board_radxa_zero3w": "@bootloader_src_radxa_zero3w//:src",
+    }),
+    firmware_src = "@rkbin_rockchip//:src",
+    defconfig = select({
+        "//build:board_radxa_zero3w": "rk3568_defconfig",
+    }),
+    ini_prefix = select({
+        "//build:board_radxa_zero3w": "RK3566",
+    }),
+    trust_ini_prefix = select({
+        "//build:board_radxa_zero3w": "RK3568",
+    }),
+    jobs = 0,
+    platform_patches = [":patches"],
+    board_patches = select({
+        "//build:board_radxa_zero3w": ["//board/radxa-zero3w:bootloader_patches"],
+    }),
+    visibility = ["//visibility:public"],
+)

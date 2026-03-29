@@ -13,6 +13,7 @@ RADXA_ZERO3W_BOARD = {
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
         "branch": "next-dev-buildroot",
+        "defconfig": "rk3568_defconfig",
     },
     "rootfs": {
         "base": "noble",

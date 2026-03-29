@@ -20,12 +20,16 @@
 - **WHEN** 查看 bootloader/qualcomm/ 目录
 - **THEN** 包含 ABL/XBL 相关的构建逻辑，而非 U-Boot
 
-### Requirement: 顶层 alias + select() 路由
-每个按平台分子目录的组件（kernel、bootloader、image）的顶层 `BUILD.bazel` SHALL 使用 Bazel `alias` + `select()` 路由到对应平台子目录的实现 target。
+### Requirement: 组件目录遵循顶层 alias + select() 路由模式
+每个嵌入式组件（kernel、bootloader 等）SHALL 在顶层目录提供 alias target，通过 `select()` 按平台 `config_setting` 路由到 `<component>/<platform>/` 子目录的具体实现。每个平台子目录包含 `BUILD.bazel`（规则实例化）和 `build.sh`（平台策略脚本）。
 
-#### Scenario: 用户构建 kernel 时自动路由到正确平台
-- **WHEN** 当前配置为 Rockchip 平台，执行 `bazel build //kernel`
-- **THEN** 实际构建 `//kernel/rockchip` target
+#### Scenario: kernel 组件遵循此模式
+- **WHEN** 查看 `kernel/BUILD.bazel`
+- **THEN** 包含 alias 通过 `select()` 路由到 `//kernel/rockchip`
+
+#### Scenario: bootloader 组件遵循此模式
+- **WHEN** 查看 `bootloader/BUILD.bazel`
+- **THEN** 包含 alias 通过 `select()` 路由到 `//bootloader/rockchip`
 
 #### Scenario: 新增平台只需在顶层加一行
 - **WHEN** 需要新增 Amlogic 平台的 kernel 支持

@@ -136,6 +136,32 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//build:extensions.bzl%bootloader_sources": {
+      "general": {
+        "bzlTransitiveDigest": "hZcGiP9HmQJT2kCPXGB82UC43icyGQ8CEMaQGbcFkps=",
+        "usagesDigest": "+h8kVFG93czqVQk+j/oWBM7s8GYWst0STR7gtRFBf4s=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "bootloader_src_radxa_zero3w": {
+            "repoRuleId": "@@//build:bootloader_source.bzl%bootloader_source",
+            "attributes": {
+              "remote": "https://github.com/radxa/u-boot",
+              "branch": "next-dev-buildroot"
+            }
+          },
+          "rkbin_rockchip": {
+            "repoRuleId": "@@//build:rkbin_source.bzl%rkbin_source",
+            "attributes": {
+              "remote": "https://github.com/radxa/rkbin",
+              "branch": "develop-v2024.10"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": []
+      }
+    },
     "//build:extensions.bzl%kernel_sources": {
       "general": {
         "bzlTransitiveDigest": "JpsDSfHdVrbrrIX047SRAK8EsxqpRDUaVF6THw278WE=",

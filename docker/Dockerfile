@@ -2,7 +2,7 @@ FROM --platform=linux/amd64 ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 基础构建工具 + aarch64 交叉编译工具链 + 内核构建依赖
+# 基础构建工具 + aarch64 交叉编译工具链 + 内核/U-Boot 构建依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         gcc-aarch64-linux-gnu \
@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         openssh-client \
         python3 \
         python-is-python3 \
+        device-tree-compiler \
         wget \
         zip \
         unzip \
@@ -25,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libelf-dev \
         libssl-dev \
         lz4 \
+    && ln -sf /usr/bin/python3 /usr/bin/python2 \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 bazelisk（自动管理 Bazel 版本）
