@@ -1,5 +1,5 @@
 services:
-  build:
+  dev:
     image: flange-build
     build:
       context: .
