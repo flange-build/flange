@@ -32,4 +32,7 @@ RUN curl -fsSL https://github.com/bazelbuild/bazelisk/releases/latest/download/b
         -o /usr/local/bin/bazel \
     && chmod +x /usr/local/bin/bazel
 
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+
 WORKDIR /workspace
+ENTRYPOINT ["entrypoint.sh"]

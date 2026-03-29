@@ -4,6 +4,7 @@ def _kernel_build_impl(ctx):
     # 声明输出文件
     image = ctx.actions.declare_file(ctx.attr.image_name)
     dtb = ctx.actions.declare_file(ctx.attr.dts + ".dtb")
+    modules_tar = ctx.actions.declare_file("modules.tar.gz")
 
     # 从 kernel_src 输入推导源码根目录
     src_files = ctx.attr.kernel_src.files.to_list()
@@ -64,8 +65,10 @@ source "$EXEC_ROOT/{build_script}"
 echo "=== 收集构建产物 ==="
 mkdir -p "$EXEC_ROOT/$(dirname {image_out})"
 mkdir -p "$EXEC_ROOT/$(dirname {dtb_out})"
+mkdir -p "$EXEC_ROOT/$(dirname {modules_tar_out})"
 cp "$KERNEL_IMAGE" "$EXEC_ROOT/{image_out}"
 cp "$KERNEL_DTB" "$EXEC_ROOT/{dtb_out}"
+tar -czf "$EXEC_ROOT/{modules_tar_out}" -C "$KERNEL_MODULES_DIR" lib
 
 echo "=== 内核构建完成 ==="
 """.format(
@@ -78,10 +81,11 @@ echo "=== 内核构建完成 ==="
         build_script = build_script.path,
         image_out = image.path,
         dtb_out = dtb.path,
+        modules_tar_out = modules_tar.path,
     )
 
     ctx.actions.run_shell(
-        outputs = [image, dtb],
+        outputs = [image, dtb, modules_tar],
         inputs = src_files + all_patches + [build_script],
         command = script,
         mnemonic = "KernelBuild",
@@ -95,7 +99,7 @@ echo "=== 内核构建完成 ==="
         },
     )
 
-    return [DefaultInfo(files = depset([image, dtb]))]
+    return [DefaultInfo(files = depset([image, dtb, modules_tar]))]
 
 kernel_build = rule(
     implementation = _kernel_build_impl,

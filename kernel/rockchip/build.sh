@@ -17,9 +17,18 @@ CROSS_COMPILE=aarch64-linux-gnu-
 echo "=== Rockchip 内核配置: ${KERNEL_DEFCONFIG} ==="
 make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} ${KERNEL_DEFCONFIG}
 
-echo "=== Rockchip 内核编译: Image + DTB (jobs=${KERNEL_JOBS}) ==="
-make -j${KERNEL_JOBS} ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} Image dtbs
+echo "=== Rockchip 内核编译: Image + DTB + modules (jobs=${KERNEL_JOBS}) ==="
+make -j${KERNEL_JOBS} ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} KCFLAGS="-Wno-error" Image dtbs modules
+
+echo "=== Rockchip 内核模块安装 ==="
+MODULES_STAGING="${KERNEL_DIR}/_modules_install"
+rm -rf "${MODULES_STAGING}"
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} \
+    INSTALL_MOD_PATH="${MODULES_STAGING}" \
+    INSTALL_MOD_STRIP=1 \
+    modules_install
 
 # 设置产出路径供框架收集
 KERNEL_IMAGE="${KERNEL_DIR}/arch/${ARCH}/boot/Image"
 KERNEL_DTB="${KERNEL_DIR}/arch/${ARCH}/boot/dts/${KERNEL_DTS_DIR}/${KERNEL_DTS}.dtb"
+KERNEL_MODULES_DIR="${MODULES_STAGING}"

@@ -18,7 +18,7 @@ kernel_build(
         "//build:board_radxa_zero3w": "rockchip_linux_defconfig",
     }),
     dts = select({
-        "//build:board_radxa_zero3w": "rk3566-radxa-zero-3w",
+        "//build:board_radxa_zero3w": "rk3566-radxa-zero-3w-aic8800d80",
     }),
     dts_dir = "rockchip",
     jobs = 0,
