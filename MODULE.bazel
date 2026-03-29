@@ -17,3 +17,8 @@ use_repo(kernel, "kernel_src_radxa_zero3w")
 bootloader = use_extension("//build:extensions.bzl", "bootloader_sources")
 bootloader.source(board = "radxa-zero3w")
 use_repo(bootloader, "bootloader_src_radxa_zero3w", "rkbin_rockchip")
+
+# Rootfs 源码（ubuntu-base tarball，由 config_registry 驱动）
+rootfs = use_extension("//build:extensions.bzl", "rootfs_sources")
+rootfs.source(board = "radxa-zero3w")
+use_repo(rootfs, "rootfs_src_radxa_zero3w")

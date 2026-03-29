@@ -1,13 +1,13 @@
 ### Requirement: 组件目录按平台分子目录
-差异度高的组件目录（kernel、bootloader、image）SHALL 按平台建立子目录，每个子目录包含独立的 `BUILD.bazel` 和平台特有的构建脚本、补丁文件。rootfs 目录 SHALL 保持扁平结构。
+差异度高的组件目录（kernel、bootloader、image、rootfs）SHALL 按平台建立子目录，每个子目录包含独立的 `BUILD.bazel` 和平台特有的构建脚本、补丁文件。
 
 #### Scenario: kernel 目录包含平台子目录
 - **WHEN** 查看 kernel/ 目录结构
 - **THEN** 存在 rockchip/、allwinner/、qualcomm/ 等平台子目录，每个子目录包含 `BUILD.bazel`
 
-#### Scenario: rootfs 目录保持扁平
+#### Scenario: rootfs 目录包含平台子目录
 - **WHEN** 查看 rootfs/ 目录结构
-- **THEN** 只有一个顶层 `BUILD.bazel`，不存在平台子目录
+- **THEN** 存在 rockchip/ 等平台子目录，每个子目录包含 `BUILD.bazel` 和 `build.sh`
 
 ### Requirement: bootloader 目录取代 uboot 目录
 项目 SHALL 使用 `bootloader/` 作为引导加载程序的组件目录名，取代原有的 `uboot/`。该目录下按平台建子目录，可容纳 U-Boot、ABL/XBL 等不同 bootloader 实现。
@@ -21,7 +21,7 @@
 - **THEN** 包含 ABL/XBL 相关的构建逻辑，而非 U-Boot
 
 ### Requirement: 组件目录遵循顶层 alias + select() 路由模式
-每个嵌入式组件（kernel、bootloader 等）SHALL 在顶层目录提供 alias target，通过 `select()` 按平台 `config_setting` 路由到 `<component>/<platform>/` 子目录的具体实现。每个平台子目录包含 `BUILD.bazel`（规则实例化）和 `build.sh`（平台策略脚本）。
+每个嵌入式组件（kernel、bootloader、rootfs 等）SHALL 在顶层目录提供 alias target，通过 `select()` 按平台 `config_setting` 路由到 `<component>/<platform>/` 子目录的具体实现。每个平台子目录包含 `BUILD.bazel`（规则实例化）和 `build.sh`（平台策略脚本）。
 
 #### Scenario: kernel 组件遵循此模式
 - **WHEN** 查看 `kernel/BUILD.bazel`
@@ -30,6 +30,10 @@
 #### Scenario: bootloader 组件遵循此模式
 - **WHEN** 查看 `bootloader/BUILD.bazel`
 - **THEN** 包含 alias 通过 `select()` 路由到 `//bootloader/rockchip`
+
+#### Scenario: rootfs 组件遵循此模式
+- **WHEN** 查看 `rootfs/BUILD.bazel`
+- **THEN** 包含 alias 通过 `select()` 路由到 `//rootfs/rockchip`
 
 #### Scenario: 新增平台只需在顶层加一行
 - **WHEN** 需要新增 Amlogic 平台的 kernel 支持

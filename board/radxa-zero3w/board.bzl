@@ -16,6 +16,20 @@ RADXA_ZERO3W_BOARD = {
         "defconfig": "rk3568_defconfig",
     },
     "rootfs": {
-        "base": "noble",
+        "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        "packages": [
+            "systemd",
+            "systemd-sysv",
+            "dbus",
+            "network-manager",
+            "iputils-ping",
+            "iproute2",
+            "openssh-server",
+            "sudo",
+            "bash",
+            "ca-certificates",
+            "locales",
+        ],
+        "custom_packages": [],
     },
 }

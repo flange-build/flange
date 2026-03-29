@@ -4,6 +4,7 @@ load("//build:bootloader_source.bzl", "bootloader_source")
 load("//build:config_registry.bzl", "get_board_config")
 load("//build:kernel_source.bzl", "kernel_source")
 load("//build:rkbin_source.bzl", "rkbin_source")
+load("//build:rootfs_source.bzl", "rootfs_source")
 
 # --- 内核源码 ---
 
@@ -64,4 +65,28 @@ _bootloader_source_tag = tag_class(attrs = {
 bootloader_sources = module_extension(
     implementation = _bootloader_sources_impl,
     tag_classes = {"source": _bootloader_source_tag},
+)
+
+# --- Rootfs 源码（ubuntu-base tarball） ---
+
+def _rootfs_sources_impl(module_ctx):
+    for mod in module_ctx.modules:
+        for src in mod.tags.source:
+            config = get_board_config(src.board)
+            rootfs_config = config["rootfs"]
+
+            repo_name = "rootfs_src_" + src.board.replace("-", "_")
+            rootfs_source(
+                name = repo_name,
+                url = rootfs_config["url"],
+                sha256 = rootfs_config.get("sha256", ""),
+            )
+
+_rootfs_source_tag = tag_class(attrs = {
+    "board": attr.string(mandatory = True, doc = "已注册的板子名称"),
+})
+
+rootfs_sources = module_extension(
+    implementation = _rootfs_sources_impl,
+    tag_classes = {"source": _rootfs_source_tag},
 )

@@ -1,0 +1,34 @@
+# Rockchip 平台 Rootfs 构建
+
+load("//build:rootfs_build.bzl", "rootfs_build")
+
+rootfs_build(
+    name = "rockchip",
+    build_script = "build.sh",
+    rootfs_src = select({
+        "//build:board_radxa_zero3w": "@rootfs_src_radxa_zero3w//:ubuntu-base.tar.gz",
+    }),
+    packages = select({
+        "//build:board_radxa_zero3w": [
+            "systemd",
+            "systemd-sysv",
+            "dbus",
+            "network-manager",
+            "iputils-ping",
+            "iproute2",
+            "openssh-server",
+            "sudo",
+            "bash",
+            "ca-certificates",
+            "locales",
+        ],
+    }),
+    custom_packages = select({
+        "//build:board_radxa_zero3w": [],
+    }),
+    custom_packages_dir = "//packages:all_debs",
+    overlay = select({
+        "//build:board_radxa_zero3w": "//board/radxa-zero3w:overlay",
+    }),
+    visibility = ["//visibility:public"],
+)

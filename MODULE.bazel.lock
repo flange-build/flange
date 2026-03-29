@@ -181,6 +181,25 @@
         "recordedRepoMappingEntries": []
       }
     },
+    "//build:extensions.bzl%rootfs_sources": {
+      "general": {
+        "bzlTransitiveDigest": "ROgsttgR1Yxt0kD5lNmgxSYUuXxOcIpOp8XhuaUOVFA=",
+        "usagesDigest": "OCuAEkz3MZsxjaemG+l7lCq6PzDZAZEHi9twFR/eTl8=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "rootfs_src_radxa_zero3w": {
+            "repoRuleId": "@@//build:rootfs_source.bzl%rootfs_source",
+            "attributes": {
+              "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+              "sha256": ""
+            }
+          }
+        },
+        "recordedRepoMappingEntries": []
+      }
+    },
     "@@rules_kotlin+//src/main/starlark/core/repositories:bzlmod_setup.bzl%rules_kotlin_extensions": {
       "general": {
         "bzlTransitiveDigest": "nvW/NrBXlAmiQw99EMGKkLaD2KbNp2mQDlxdfpr+0Ls=",

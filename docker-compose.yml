@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    privileged: true
     volumes:
       # 项目目录挂载到容器
       - .:/workspace
