@@ -7,7 +7,7 @@
 
 #### Scenario: 平台配置包含刷写工具声明
 - **WHEN** 查看 `ROCKCHIP_PLATFORM` dict
-- **THEN** 包含 `"flash_tool"` 字段，值为 Rockchip 平台对应的刷写工具名称
+- **THEN** 包含 `"flash_tool": "upgrade_tool"` 字段，工具位于 `tools/rockchip/upgrade_tool/upgrade_tool`（项目内置，非系统安装）
 
 ### Requirement: RK3566 SoC 级配置声明
 `platform/rockchip/rk3566/config.bzl` SHALL 导出 `RK3566_SOC` dict，包含 RK3566 芯片特有的配置值，至少包括 `soc`、`arch` 字段，并声明所属 platform。

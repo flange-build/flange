@@ -18,13 +18,18 @@ def _image_collect_impl(ctx):
         "set -xe",
         'cd "$BUILD_WORKSPACE_DIRECTORY"',
         "",
-        'TARGET_DIR="target/{}/image"'.format(board),
+        'BOARD="{}"'.format(board),
+        'BUILD_DATE="$(date +%Y%m%d)"',
+        'TARGET_DIR="target/$BOARD/image"',
         'rm -rf "$TARGET_DIR"',
         'mkdir -p "$TARGET_DIR"',
     ]
     for f in all_files:
         src = '"$0.runfiles/_main/{}"'.format(f.short_path)
-        commands.append('cp -f {} "$TARGET_DIR/{}"'.format(src, f.basename))
+        if f.basename == "raw.img":
+            commands.append('cp -f {} "$TARGET_DIR/${{BOARD}}_firmware_${{BUILD_DATE}}.img"'.format(src))
+        else:
+            commands.append('cp -f {} "$TARGET_DIR/{}"'.format(src, f.basename))
     for f in extra_files:
         src = '"$0.runfiles/_main/{}"'.format(f.short_path)
         commands.append('cp -f {} "$TARGET_DIR/{}"'.format(src, f.basename))
@@ -40,7 +45,7 @@ def _image_collect_impl(ctx):
 image_collect = rule(
     implementation = _image_collect_impl,
     attrs = {
-        "image": attr.label(mandatory = True, doc = "镜像构建 target（raw.img）"),
+        "image": attr.label(mandatory = True, doc = "镜像构建 target（收集时重命名为 <board>_firmware_<date>.img）"),
         "boot": attr.label(mandatory = True, doc = "boot 分区 target（boot.img）"),
         "bootloader": attr.label(mandatory = True, doc = "Bootloader 构建 target"),
         "rootfs": attr.label(mandatory = True, doc = "Rootfs 构建 target"),

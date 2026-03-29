@@ -2,7 +2,7 @@
 
 ROCKCHIP_PLATFORM = {
     "vendor": "rockchip",
-    "flash_tool": "rkdeveloptool",
+    "flash_tool": "upgrade_tool",
     "arch": "aarch64",
     "rkbin": {
         "repo": "https://github.com/radxa/rkbin",

@@ -52,7 +52,7 @@ flange 构建系统分为五个层次：
 │  ┌──────────────▼─────────────────────────────┐                  │
 │  │  flange flash (宿主机直接执行)              │                  │
 │  │  → 调用 output/.../flash.sh                │                  │
-│  │  → 平台刷写工具 (rkdeveloptool / qdl / ...) │                  │
+│  │  → 平台刷写工具 (upgrade_tool / qdl / ...) │                  │
 │  │  → USB → 目标设备                           │                  │
 │  └────────────────────────────────────────────┘                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -245,7 +245,7 @@ $ flange status
 
 PLATFORMS = {
     "rockchip": {
-        "flash_tool": "rkdeveloptool",
+        "flash_tool": "upgrade_tool",
         "image_tool": "rkimage",
     },
     "allwinner": {
@@ -304,7 +304,7 @@ board/rk3588-evb/board.bzl              ← 第三层：board 级
 
 ROCKCHIP_DEFAULTS = {
     "vendor": "rockchip",
-    "flash_tool": "rkdeveloptool",
+    "flash_tool": "upgrade_tool",
 
     "bootloader": {
         "repo": "https://github.com/rockchip-linux/u-boot.git",
@@ -350,7 +350,7 @@ RK3588_DEFAULTS = {
     "partitions": {
         "format": "gpt",
         "entries": [
-            {"name": "idbloader", "offset": "32K",  "size": "4M",   "type": "raw"},
+            {"name": "idbloader", "offset": "32K",  "size": "4M",   "type": "raw"},  # IDB 格式 (mkimage -T rksd)
             {"name": "uboot",     "size": "4M",     "type": "raw"},
             {"name": "boot",      "size": "256M",   "type": "fat32"},
             {"name": "rootfs",    "size": "remaining", "type": "ext4"},
@@ -386,7 +386,7 @@ BOARD = {
     "partitions:smart-display": {
         "format": "gpt",
         "entries": [
-            {"name": "idbloader", "offset": "32K", "size": "4M",   "type": "raw"},
+            {"name": "idbloader", "offset": "32K", "size": "4M",   "type": "raw"},  # IDB 格式 (mkimage -T rksd)
             {"name": "uboot",     "size": "4M",     "type": "raw"},
             {"name": "boot",      "size": "256M",   "type": "fat32"},
             {"name": "rootfs",    "size": "8G",      "type": "ext4"},
@@ -494,7 +494,7 @@ partition_table = struct(
             size = "4M",
             type = "raw",             # raw / fat32 / ext4
             image = "//bootloader/rockchip:idbloader",  # 对应的 Bazel 构建 target
-            platform_hint = "rockchip_idb",  # 平台转换器用的提示
+            platform_hint = "rockchip_idb",  # IDB 格式，由 mkimage -T rksd 生成
         ),
         struct(
             name = "boot",
@@ -628,7 +628,7 @@ config/registry.bzl
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-FLASH_TOOL="rkdeveloptool"
+FLASH_TOOL="upgrade_tool"
 
 flash_bootloader()  { ... }
 flash_kernel()      { ... }
@@ -656,7 +656,7 @@ flange flash kernel
 output/rk3588-evb/smart-display/release/image/flash.sh kernel
     │
     │ 检测设备连接状态
-    │ 调用 rkdeveloptool 写入 kernel 分区
+    │ 调用 upgrade_tool 写入 kernel 分区
     ▼
 目标设备
 ```

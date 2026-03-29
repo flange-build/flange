@@ -18,15 +18,22 @@ Rockchip 构建脚本 SHALL 从 rkbin 的 INI 文件解析 BL31 固件路径，M
 - **WHEN** 构建脚本执行，`RKBIN_INI_PREFIX` 为 `"RK3566"`
 - **THEN** 脚本从 `${FIRMWARE_DIR}/RKTRUST/RK3566TRUST.ini` 中的 `[BL31_OPTION]` 段解析 `PATH` 字段，获取 bl31.elf 的相对路径
 
-### Requirement: 使用 boot_merger 生成 idbloader.img
-Rockchip 构建脚本 SHALL 使用 rkbin 自带的 `tools/boot_merger` 工具配合 `RKBOOT/${ini_prefix}MINIALL.ini` 生成 idbloader.img。
+### Requirement: 使用 mkimage 生成 idbloader.img
+Rockchip 构建脚本 SHALL 使用 `mkimage -n rk3568 -T rksd` 将 rkbin 提供的 DDR init 和 SPL 二进制文件打包为 idbloader.img（IDB 格式），用于磁盘启动（写入 sector 64）。
 
-#### Scenario: boot_merger 生成 idbloader
+#### Scenario: mkimage 生成 idbloader
 - **WHEN** U-Boot 编译完成后
-- **THEN** 脚本调用 `${FIRMWARE_DIR}/tools/boot_merger ${FIRMWARE_DIR}/RKBOOT/${RKBIN_INI_PREFIX}MINIALL.ini` 生成 idbloader.img
+- **THEN** 脚本调用 `mkimage -n rk3568 -T rksd` 配合 rkbin DDR 和 SPL 二进制文件生成 idbloader.img
+
+### Requirement: 使用 boot_merger 生成 miniloader.bin
+Rockchip 构建脚本 SHALL 使用 rkbin 自带的 `tools/boot_merger` 工具配合 `RKBOOT/${ini_prefix}MINIALL.ini` 生成 miniloader.bin（MiniLoader 格式），用于 upgrade_tool USB 上传（DB 命令）。
+
+#### Scenario: boot_merger 生成 miniloader
+- **WHEN** U-Boot 编译完成后
+- **THEN** 脚本调用 `${FIRMWARE_DIR}/tools/boot_merger ${FIRMWARE_DIR}/RKBOOT/${RKBIN_INI_PREFIX}MINIALL.ini` 生成 miniloader.bin
 
 ### Requirement: U-Boot 编译传入 BL31 路径
-Rockchip 构建脚本 SHALL 在 `make` 命令中通过 `BL31=` 参数传入从 rkbin 解析的 bl31.elf 路径，使 U-Boot 构建系统将其打包进 u-boot.itb（FIT image）。
+Rockchip 构建脚本 SHALL 在 `make` 命令中通过 `BL31=` 参数传入从 rkbin 解析的 bl31.elf 路径，使 U-Boot 构建系统将其打包进 FIT image（最终产出为 bootloader.img）。
 
 #### Scenario: U-Boot make 使用 rkbin 的 BL31
 - **WHEN** 构建脚本执行 U-Boot 编译
@@ -49,11 +56,12 @@ rkbin 相关配置 SHALL 按以下层级分布：
 - **WHEN** 调用 `get_board_config("radxa-zero3w")` 获取合并配置
 - **THEN** 返回的 dict 包含 `rkbin.repo`、`rkbin.branch`、`rkbin.ini_prefix`、`bootloader.repo`、`bootloader.branch`、`bootloader.defconfig`
 
-### Requirement: Rockchip 构建产出 idbloader.img 和 u-boot.itb
-Rockchip 平台的 Bootloader 构建 SHALL 产出两个文件：
-- `idbloader.img`：由 boot_merger 打包的引导加载器（含 DDR init + SPL）
-- `u-boot.itb`：FIT image 格式的 U-Boot 镜像（含 BL31 + U-Boot + DTB）
+### Requirement: Rockchip 构建产出 idbloader.img、bootloader.img 和 miniloader.bin
+Rockchip 平台的 Bootloader 构建 SHALL 产出三个文件：
+- `idbloader.img`：IDB 格式（mkimage -n rk3568 -T rksd），含 rkbin DDR init + SPL，用于磁盘启动（写入 sector 64）
+- `bootloader.img`：FIT image 格式的 U-Boot 镜像（含 BL31 + U-Boot + DTB），即 u-boot.itb 重命名，写入 sector 0x4000
+- `miniloader.bin`：MiniLoader 格式（boot_merger），用于 upgrade_tool USB 上传（DB 命令）
 
 #### Scenario: 构建产出文件验证
 - **WHEN** 执行 `bazel build //bootloader --config=radxa-zero3w` 完成
-- **THEN** 产出文件中包含 `idbloader.img` 和 `u-boot.itb`，两者均为非空文件
+- **THEN** 产出文件中包含 `idbloader.img`、`bootloader.img` 和 `miniloader.bin`，三者均为非空文件

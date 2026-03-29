@@ -1,8 +1,9 @@
 #!/bin/bash
-set -xe
+set -e
 
 # 从只读挂载位置复制 SSH 配置并修正权限
 if [ -d /tmp/.ssh-host ]; then
+    echo "[entrypoint] 配置 SSH 密钥..."
     mkdir -p /root/.ssh
     cp -r /tmp/.ssh-host/* /root/.ssh/
     chmod 700 /root/.ssh
@@ -11,4 +12,5 @@ if [ -d /tmp/.ssh-host ]; then
     [ -f /root/.ssh/known_hosts ] && chmod 644 /root/.ssh/known_hosts
 fi
 
+echo "[entrypoint] 执行: $*"
 exec "$@"

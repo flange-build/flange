@@ -112,7 +112,7 @@ lunch() {
 
 # --- Docker Compose 执行封装 ---
 _flange_docker_run() {
-    (cd "$FLANGE_DIR" && docker compose run --rm build "$@")
+    (cd "$FLANGE_DIR" && docker compose run --rm --build build "$@")
 }
 
 # --- flange 子命令 ---

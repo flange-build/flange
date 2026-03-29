@@ -3,11 +3,11 @@
 
 #### Scenario: 整盘 dd 刷写
 - **WHEN** 执行 `./scripts/flange-flash.sh --board radxa-zero3w --raw --device /dev/sdX`
-- **THEN** 将 `target/radxa-zero3w/image/raw.img` 通过 dd 写入 `/dev/sdX`
+- **THEN** 将 `target/radxa-zero3w/image/<board>_firmware_<date>.img` 通过 dd 写入 `/dev/sdX`
 
 #### Scenario: USB 分段刷写
 - **WHEN** 执行 `./scripts/flange-flash.sh --board radxa-zero3w`
-- **THEN** 调用平台对应的刷写工具（Rockchip: rkdeveloptool）按分区刷写各组件
+- **THEN** 调用平台对应的刷写工具（Rockchip: upgrade_tool）执行 USB 刷写流程：`upgrade_tool DB miniloader.bin` → `upgrade_tool WL 0 firmware.img` → `upgrade_tool RD`
 
 #### Scenario: 组件级刷写
 - **WHEN** 执行 `./scripts/flange-flash.sh --board radxa-zero3w --component kernel`
@@ -31,9 +31,9 @@
 ### Requirement: 刷写工具检测
 刷写脚本 SHALL 在执行前检测所需的刷写工具是否已安装，未安装时提供安装指引。
 
-#### Scenario: rkdeveloptool 未安装
-- **WHEN** Rockchip 平台刷写时宿主机未安装 `rkdeveloptool`
-- **THEN** 输出错误信息并提示安装方法
+#### Scenario: upgrade_tool 不存在
+- **WHEN** Rockchip 平台刷写时 `tools/rockchip/upgrade_tool/upgrade_tool` 不存在
+- **THEN** 输出错误信息并提示该工具为项目内置工具，需检查项目完整性
 
 #### Scenario: dd 工具检查
 - **WHEN** 使用 `--raw` 模式刷写

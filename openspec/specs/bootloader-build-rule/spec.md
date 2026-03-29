@@ -33,8 +33,9 @@
 - `RKBIN_INI_PREFIX` — rkbin INI 文件前缀（可能为空）
 
 **脚本 → 框架（输出）：**
-- `BOOTLOADER_IDBLOADER` — idbloader.img 绝对路径
-- `BOOTLOADER_ITB` — u-boot.itb 绝对路径
+- `BOOTLOADER_IMG` — bootloader.img 绝对路径（FIT image，含 U-Boot + BL31 + DTB）
+- `BOOTLOADER_IDBLOADER` — idbloader.img 绝对路径（IDB 格式，含 DDR + SPL，用于磁盘启动）
+- `BOOTLOADER_MINILOADER` — miniloader.bin 绝对路径（MiniLoader 格式，用于 USB 上传）
 
 #### Scenario: 平台脚本接收环境变量
 - **WHEN** `bootloader_build` 框架调用 `bootloader/rockchip/build.sh`
@@ -42,7 +43,7 @@
 
 #### Scenario: 平台脚本声明产出路径
 - **WHEN** 平台脚本执行完毕
-- **THEN** `$BOOTLOADER_IDBLOADER` 和 `$BOOTLOADER_ITB` 指向有效的产出文件，框架据此收集产物
+- **THEN** `$BOOTLOADER_IMG`、`$BOOTLOADER_IDBLOADER` 和 `$BOOTLOADER_MINILOADER` 指向有效的产出文件，框架据此收集产物
 
 ### Requirement: 持久化构建目录支持增量编译
 `bootloader_build` rule SHALL 使用基于 target 名称的稳定构建目录，通过 `git reset --hard HEAD` 重置源码（保留 `.o` 等编译中间产物），实现增量编译。复用与 `kernel_build` 相同的机制。

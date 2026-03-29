@@ -50,7 +50,7 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 
 | 平台 | 刷写工具 | 连接方式 |
 |------|---------|---------|
-| Rockchip | `rkdeveloptool` / `upgrade_tool` | USB |
+| Rockchip | `upgrade_tool` | USB |
 | Allwinner | `sunxi-fel` / `PhoenixSuit` | USB / FEL |
 | Qualcomm | `QDL` / `QFIL` | USB / EDL |
 

@@ -91,7 +91,11 @@ else
     echo "=== 无 overlay 目录，跳过 ==="
 fi
 
-# --- 4. 打包 ---
+# --- 4. 设置 root 密码（允许串口登录） ---
+echo "=== 设置 root 密码 ==="
+echo "root:1234" | chroot "${ROOTFS}" chpasswd
+
+# --- 5. 打包 ---
 echo "=== 打包 rootfs.tar.gz ==="
 ROOTFS_OUTPUT="${WORK_DIR}/rootfs.tar.gz"
 tar czf "${ROOTFS_OUTPUT}" -C "${ROOTFS}" .

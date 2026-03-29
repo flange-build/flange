@@ -2,8 +2,9 @@
 
 def _bootloader_build_impl(ctx):
     # 声明输出文件
+    bootloader_img = ctx.actions.declare_file("bootloader.img")
     idbloader = ctx.actions.declare_file("idbloader.img")
-    itb = ctx.actions.declare_file("u-boot.itb")
+    miniloader = ctx.actions.declare_file("miniloader.bin")
 
     # 从 bootloader_src 输入推导源码根目录
     src_files = ctx.attr.bootloader_src.files.to_list()
@@ -72,10 +73,12 @@ source "$EXEC_ROOT/{build_script}"
 
 # --- 收集构建产物 ---
 echo "=== 收集构建产物 ==="
+mkdir -p "$EXEC_ROOT/$(dirname {bootloader_img_out})"
 mkdir -p "$EXEC_ROOT/$(dirname {idbloader_out})"
-mkdir -p "$EXEC_ROOT/$(dirname {itb_out})"
+mkdir -p "$EXEC_ROOT/$(dirname {miniloader_out})"
+cp "$BOOTLOADER_IMG" "$EXEC_ROOT/{bootloader_img_out}"
 cp "$BOOTLOADER_IDBLOADER" "$EXEC_ROOT/{idbloader_out}"
-cp "$BOOTLOADER_ITB" "$EXEC_ROOT/{itb_out}"
+cp "$BOOTLOADER_MINILOADER" "$EXEC_ROOT/{miniloader_out}"
 
 echo "=== Bootloader 构建完成 ==="
 """.format(
@@ -87,18 +90,19 @@ echo "=== Bootloader 构建完成 ==="
         ini_prefix = ctx.attr.ini_prefix,
         trust_ini_prefix = ctx.attr.trust_ini_prefix if ctx.attr.trust_ini_prefix else ctx.attr.ini_prefix,
         build_script = build_script.path,
+        bootloader_img_out = bootloader_img.path,
         idbloader_out = idbloader.path,
-        itb_out = itb.path,
+        miniloader_out = miniloader.path,
     )
 
     ctx.actions.run_shell(
-        outputs = [idbloader, itb],
+        outputs = [bootloader_img, idbloader, miniloader],
         inputs = src_files + firmware_files + all_patches + [build_script],
         command = script,
         mnemonic = "BootloaderBuild",
         progress_message = "编译 Bootloader: {} + {}".format(
-            idbloader.short_path,
-            itb.short_path,
+            bootloader_img.short_path,
+            miniloader.short_path,
         ),
         execution_requirements = {
             "no-sandbox": "1",
@@ -106,7 +110,7 @@ echo "=== Bootloader 构建完成 ==="
         },
     )
 
-    return [DefaultInfo(files = depset([idbloader, itb]))]
+    return [DefaultInfo(files = depset([bootloader_img, idbloader, miniloader]))]
 
 bootloader_build = rule(
     implementation = _bootloader_build_impl,
@@ -120,7 +124,7 @@ bootloader_build = rule(
             allow_single_file = [".sh"],
             doc = "平台构建脚本，接收 BOOTLOADER_DIR/BOOTLOADER_DEFCONFIG/BOOTLOADER_JOBS/"
                   + "FIRMWARE_DIR/RKBIN_INI_PREFIX 环境变量，"
-                  + "须设置 BOOTLOADER_IDBLOADER 和 BOOTLOADER_ITB 指向产出文件的绝对路径",
+                  + "须设置 BOOTLOADER_IMG、BOOTLOADER_IDBLOADER 和 BOOTLOADER_MINILOADER",
         ),
         "firmware_src": attr.label(
             default = None,

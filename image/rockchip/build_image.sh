@@ -3,7 +3,7 @@
 #
 # 由 image_build rule 调用（source 方式），可使用以下环境变量：
 #   IMAGE_BOOT             — boot.img 路径
-#   IMAGE_BOOTLOADER_DIR   — bootloader 产物目录（含 idbloader.img, u-boot.itb）
+#   IMAGE_BOOTLOADER_DIR   — bootloader 产物目录（含 idbloader.img, bootloader.img, miniloader.bin）
 #   IMAGE_ROOTFS           — rootfs.tar.gz 路径
 #   IMAGE_PARTITION_CONFIG — parameter.txt 路径（可能为空）
 #
@@ -88,24 +88,39 @@ fi
 
 echo "--- 镜像大小: ${TOTAL_MB}MB ---"
 
-# --- 3. 创建空白镜像 ---
+# --- 3. 创建空白镜像并建立 GPT 分区表 ---
 echo "=== 创建空白镜像 ==="
 RAW_IMG="${WORK_DIR}/raw.img"
 truncate -s "${TOTAL_MB}M" "${RAW_IMG}"
 
+echo "=== 创建 GPT 分区表 ==="
+BOOT_START_BYTES=$(( BOOT_OFFSET_DEC * 512 ))
+BOOT_END_BYTES=$(( (BOOT_OFFSET_DEC + BOOT_SIZE_DEC) * 512 - 1 ))
+ROOTFS_START_BYTES=$(( ROOTFS_OFFSET_DEC * 512 ))
+ROOTFS_END_BYTES=$(( (ROOTFS_OFFSET_DEC + ROOTFS_SIZE_DEC) * 512 - 1 ))
+
+parted -s "${RAW_IMG}" mklabel gpt
+parted -s "${RAW_IMG}" mkpart boot ext4 ${BOOT_START_BYTES}B ${BOOT_END_BYTES}B
+parted -s "${RAW_IMG}" mkpart rootfs ext4 ${ROOTFS_START_BYTES}B ${ROOTFS_END_BYTES}B
+
+# 设置 rootfs 分区 PARTUUID（Rockchip 平台固定值）
+echo "=== 设置 rootfs PARTUUID ==="
+sfdisk --part-uuid "${RAW_IMG}" 2 614e0000-0000-4000-8000-000000000000
+echo "--- rootfs PARTUUID: 614e0000-0000-4000-8000-000000000000 ---"
+
 # --- 4. 写入 bootloader ---
 echo "=== 写入 bootloader ==="
 IDBLOADER="${IMAGE_BOOTLOADER_DIR}/idbloader.img"
-UBOOT_ITB="${IMAGE_BOOTLOADER_DIR}/u-boot.itb"
+BOOTLOADER_IMG="${IMAGE_BOOTLOADER_DIR}/bootloader.img"
 
 if [ -f "${IDBLOADER}" ]; then
     dd if="${IDBLOADER}" of="${RAW_IMG}" seek=64 conv=notrunc status=none
     echo "--- idbloader.img 已写入 offset=64 sectors ---"
 fi
 
-if [ -f "${UBOOT_ITB}" ]; then
-    dd if="${UBOOT_ITB}" of="${RAW_IMG}" seek=${UBOOT_OFFSET_DEC} conv=notrunc status=none
-    echo "--- u-boot.itb 已写入 offset=${UBOOT_OFFSET_DEC} sectors ---"
+if [ -f "${BOOTLOADER_IMG}" ]; then
+    dd if="${BOOTLOADER_IMG}" of="${RAW_IMG}" seek=${UBOOT_OFFSET_DEC} conv=notrunc status=none
+    echo "--- bootloader.img 已写入 offset=${UBOOT_OFFSET_DEC} sectors ---"
 fi
 
 # --- 5. 写入 boot 分区 ---
@@ -127,51 +142,15 @@ ROOTFS_MOUNTED=true
 
 tar xzf "${IMAGE_ROOTFS}" -C "${WORK_DIR}/rootfs_mnt"
 
-# 获取 rootfs UUID 并回写到 boot 分区的 extlinux.conf
-ROOTFS_UUID=$(blkid -s UUID -o value "${LOOP_DEV}")
-echo "--- rootfs UUID: ${ROOTFS_UUID} ---"
-
 umount "${WORK_DIR}/rootfs_mnt"
 ROOTFS_MOUNTED=false
 losetup -d "${LOOP_DEV}"
 LOOP_DEV=""
 
-# --- 7. 回写 rootfs UUID 到 boot.img 的 extlinux.conf ---
-echo "=== 回写 rootfs UUID 到 extlinux.conf ==="
-BOOT_IMG_COPY="${WORK_DIR}/boot_updated.img"
-cp "${IMAGE_BOOT}" "${BOOT_IMG_COPY}"
-
-BOOT_LOOP=$(losetup --show --find "${BOOT_IMG_COPY}")
-mkdir -p "${WORK_DIR}/boot_mnt"
-mount "${BOOT_LOOP}" "${WORK_DIR}/boot_mnt"
-
-if [ -f "${WORK_DIR}/boot_mnt/extlinux/extlinux.conf" ]; then
-    sed -i "s|root=ROOT_UUID|root=UUID=${ROOTFS_UUID}|g" "${WORK_DIR}/boot_mnt/extlinux/extlinux.conf"
-    echo "--- 已更新 extlinux.conf ---"
-    cat "${WORK_DIR}/boot_mnt/extlinux/extlinux.conf"
-fi
-
-umount "${WORK_DIR}/boot_mnt"
-losetup -d "${BOOT_LOOP}"
-
-# 重新写入更新后的 boot.img
-dd if="${BOOT_IMG_COPY}" of="${RAW_IMG}" seek=${BOOT_OFFSET_DEC} conv=notrunc status=none
-
-# --- 8. 写入 rootfs 到镜像 ---
+# --- 7. 写入 rootfs 到镜像 ---
 echo "=== 写入 rootfs 到镜像 ==="
 dd if="${ROOTFS_IMG}" of="${RAW_IMG}" seek=${ROOTFS_OFFSET_DEC} conv=notrunc status=none
 echo "--- rootfs.img 已写入 offset=${ROOTFS_OFFSET_DEC} sectors ---"
-
-# --- 9. 创建 GPT 分区表 ---
-echo "=== 创建 GPT 分区表 ==="
-BOOT_START_BYTES=$(( BOOT_OFFSET_DEC * 512 ))
-BOOT_END_BYTES=$(( (BOOT_OFFSET_DEC + BOOT_SIZE_DEC) * 512 - 1 ))
-ROOTFS_START_BYTES=$(( ROOTFS_OFFSET_DEC * 512 ))
-ROOTFS_END_BYTES=$(( (ROOTFS_OFFSET_DEC + ROOTFS_SIZE_DEC) * 512 - 1 ))
-
-parted -s "${RAW_IMG}" mklabel gpt
-parted -s "${RAW_IMG}" mkpart boot ext4 ${BOOT_START_BYTES}B ${BOOT_END_BYTES}B
-parted -s "${RAW_IMG}" mkpart rootfs ext4 ${ROOTFS_START_BYTES}B ${ROOTFS_END_BYTES}B
 
 # 设置产出路径
 IMAGE_OUTPUT="${RAW_IMG}"

@@ -65,22 +65,23 @@ if [ "$RAW_MODE" = true ]; then
         exit 1
     fi
 
-    RAW_IMG="${IMAGE_DIR}/raw.img"
-    if [ ! -f "$RAW_IMG" ]; then
-        log_error "未找到 raw.img: $RAW_IMG"
+    FIRMWARE_IMG=$(find "$IMAGE_DIR" -maxdepth 1 -name "*_firmware_*.img" | head -1)
+    if [ -z "$FIRMWARE_IMG" ]; then
+        log_error "未找到固件镜像（*_firmware_*.img）: $IMAGE_DIR"
         exit 1
     fi
 
     check_command "dd" || exit 1
 
-    IMG_SIZE=$(du -h "$RAW_IMG" | cut -f1)
+    IMG_NAME=$(basename "$FIRMWARE_IMG")
+    IMG_SIZE=$(du -h "$FIRMWARE_IMG" | cut -f1)
     log_step "dd 整盘刷写"
-    echo "  镜像: $RAW_IMG ($IMG_SIZE)"
+    echo "  镜像: $IMG_NAME ($IMG_SIZE)"
     echo "  目标: $DEVICE"
     confirm_action "警告: 这将覆盖 $DEVICE 上的所有数据！" || exit 0
 
     log_info "正在刷写..."
-    sudo dd if="$RAW_IMG" of="$DEVICE" bs=4M status=progress conv=fsync
+    sudo dd if="$FIRMWARE_IMG" of="$DEVICE" bs=4M status=progress conv=fsync
     sync
     log_info "dd 刷写完成"
     exit 0

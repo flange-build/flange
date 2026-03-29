@@ -65,8 +65,8 @@ echo "=== 生成 extlinux.conf ==="
         echo "  fdtoverlays${OVERLAY_PATHS}"
     fi
 
-    # append 行（ROOT_UUID 占位符，image 阶段回写）
-    echo "  append root=ROOT_UUID rootfstype=ext4 ${BOOT_KERNEL_ARGS}"
+    # append 行（使用固定 PARTUUID 标识 rootfs 分区）
+    echo "  append root=PARTUUID=614e0000-0000-4000-8000-000000000000 rootfstype=ext4 rootwait rw ${BOOT_KERNEL_ARGS}"
 } > "${BOOT_ROOT}/extlinux/extlinux.conf"
 
 cat "${BOOT_ROOT}/extlinux/extlinux.conf"

@@ -16,4 +16,4 @@
 
 #### Scenario: 产物收集到正确目录
 - **WHEN** 执行 `bazel run //bootloader:collect --config=radxa-zero3w`
-- **THEN** `idbloader.img` 和 `u-boot.itb` 被复制到 `target/radxa-zero3w/bootloader/`
+- **THEN** `idbloader.img`、`bootloader.img` 和 `miniloader.bin` 被复制到 `target/radxa-zero3w/bootloader/`

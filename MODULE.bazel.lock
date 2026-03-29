@@ -138,7 +138,7 @@
   "moduleExtensions": {
     "//build:extensions.bzl%bootloader_sources": {
       "general": {
-        "bzlTransitiveDigest": "le61RX1uLtznbEL2KYxDMiF9t2DAgnvX44YuPRqh6aI=",
+        "bzlTransitiveDigest": "L/wp+nMqdxHlMdU1YOAT4o2fCM1y4/7b/tjECrDMJVU=",
         "usagesDigest": "+h8kVFG93czqVQk+j/oWBM7s8GYWst0STR7gtRFBf4s=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -164,7 +164,7 @@
     },
     "//build:extensions.bzl%kernel_sources": {
       "general": {
-        "bzlTransitiveDigest": "le61RX1uLtznbEL2KYxDMiF9t2DAgnvX44YuPRqh6aI=",
+        "bzlTransitiveDigest": "L/wp+nMqdxHlMdU1YOAT4o2fCM1y4/7b/tjECrDMJVU=",
         "usagesDigest": "t/1TxkZ/kO9YYv7P/8dktbs5qvlC1EDsXwJBczbwSWA=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -183,7 +183,7 @@
     },
     "//build:extensions.bzl%rootfs_sources": {
       "general": {
-        "bzlTransitiveDigest": "le61RX1uLtznbEL2KYxDMiF9t2DAgnvX44YuPRqh6aI=",
+        "bzlTransitiveDigest": "L/wp+nMqdxHlMdU1YOAT4o2fCM1y4/7b/tjECrDMJVU=",
         "usagesDigest": "OCuAEkz3MZsxjaemG+l7lCq6PzDZAZEHi9twFR/eTl8=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

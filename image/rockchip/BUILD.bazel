@@ -16,7 +16,7 @@ boot_partition(
         "//build:board_radxa_zero3w": [],
     }),
     kernel_args = select({
-        "//build:board_radxa_zero3w": "console=ttyS2,1500000 loglevel=4",
+        "//build:board_radxa_zero3w": "console=ttyS2,1500000 loglevel=7",
     }),
     boot_size_mb = 64,
 )

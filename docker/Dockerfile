@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         e2fsprogs \
         dosfstools \
         parted \
+        fdisk \
         kpartx \
         qemu-user-static \
     && ln -sf /usr/bin/python3 /usr/bin/python2 \

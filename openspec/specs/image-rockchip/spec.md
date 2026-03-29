@@ -20,13 +20,17 @@
 - **WHEN** image_build 框架调用 `image/rockchip/build_image.sh`
 - **THEN** 产出的 raw.img 包含完整的分区表、bootloader、boot 分区和 rootfs 分区
 
+#### Scenario: idbloader 写入正确偏移
+- **WHEN** 镜像打包脚本写入 bootloader 组件
+- **THEN** idbloader.img（IDB 格式）被 dd 到 raw.img 的 sector 64 偏移位置
+
 #### Scenario: bootloader 写入正确偏移
 - **WHEN** parameter.txt 定义 uboot 分区偏移为 0x4000 扇区
-- **THEN** u-boot.itb 被 dd 到 raw.img 的对应偏移位置
+- **THEN** bootloader.img 被 dd 到 raw.img 的对应偏移位置
 
 #### Scenario: rootfs 从 tar.gz 转 ext4
 - **WHEN** 打包脚本处理 rootfs
-- **THEN** 创建 ext4 文件系统，将 rootfs.tar.gz 解压到其中，生成 UUID 并回写到 extlinux.conf
+- **THEN** 创建 ext4 文件系统，将 rootfs.tar.gz 解压到其中；rootfs 分区使用固定 PARTUUID（614e0000-0000-4000-8000-000000000000）通过 sfdisk 设置，extlinux.conf 使用 `root=PARTUUID=614e0000-0000-4000-8000-000000000000`，无需动态 UUID 替换
 
 ### Requirement: Rockchip parameter.txt 分区定义
 `image/rockchip/parameter.txt` SHALL 定义 Rockchip 平台的默认分区布局，包含 uboot、misc、boot、rootfs 分区的偏移和大小。
@@ -51,4 +55,4 @@
 
 #### Scenario: 收集产物完整
 - **WHEN** 执行 `bazel run //image:collect --config=radxa-zero3w`
-- **THEN** `target/radxa-zero3w/image/` 包含 `raw.img`、`idbloader.img`、`u-boot.itb`、`boot.img`、`rootfs.tar.gz`、`parameter.txt`
+- **THEN** `target/radxa-zero3w/image/` 包含 `<board>_firmware_<date>.img`（由 raw.img 重命名）、`idbloader.img`、`bootloader.img`、`miniloader.bin`、`boot.img`、`rootfs.tar.gz`、`parameter.txt`

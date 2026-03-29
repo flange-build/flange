@@ -7,14 +7,14 @@
 
 #### Scenario: image_build rule 不包含平台硬编码
 - **WHEN** 审查 `build/image_build.bzl` 的实现
-- **THEN** 不存在 `rockchip`、`rkdeveloptool`、`parameter.txt`、`idbloader` 等平台特有字符串
+- **THEN** 不存在 `rockchip`、`upgrade_tool`、`parameter.txt`、`idbloader` 等平台特有字符串
 
 ### Requirement: image_build 环境变量契约
 框架 SHALL 通过环境变量向策略脚本传递输入参数。
 
 **框架 → 脚本（输入）：**
 - `IMAGE_BOOT` — boot.img 路径
-- `IMAGE_BOOTLOADER_DIR` — bootloader 产物目录路径（包含 idbloader.img、u-boot.itb 等）
+- `IMAGE_BOOTLOADER_DIR` — bootloader 产物目录路径（包含 idbloader.img、bootloader.img、miniloader.bin 等）
 - `IMAGE_ROOTFS` — rootfs.tar.gz 路径
 - `IMAGE_PARTITION_CONFIG` — 分区配置文件路径（如 parameter.txt，可能为空）
 
@@ -48,4 +48,4 @@
 
 #### Scenario: 产物目录结构
 - **WHEN** 执行 `bazel run //image:collect --config=radxa-zero3w`
-- **THEN** `target/radxa-zero3w/image/` 目录包含 `raw.img` 和策略脚本产出的各组件镜像文件
+- **THEN** `target/radxa-zero3w/image/` 目录包含 `<board>_firmware_<date>.img`（由 raw.img 重命名）和策略脚本产出的各组件镜像文件

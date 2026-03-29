@@ -14,7 +14,7 @@
 
 #### Scenario: Rockchip 平台使用 U-Boot
 - **WHEN** 查看 bootloader/rockchip/ 目录
-- **THEN** 包含 U-Boot 相关的构建逻辑（TPL+SPL → idbloader, ATF+u-boot → u-boot.itb）
+- **THEN** 包含 U-Boot 相关的构建逻辑（rkbin DDR+SPL → idbloader.img, U-Boot+BL31+DTB → bootloader.img, boot_merger → miniloader.bin）
 
 #### Scenario: Qualcomm 平台使用 ABL
 - **WHEN** 查看 bootloader/qualcomm/ 目录

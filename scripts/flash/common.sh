@@ -13,11 +13,11 @@ log_info() {
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*"
+    echo -e "${YELLOW}[WARN]${NC} $*" >&2
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $*"
+    echo -e "${RED}[ERROR]${NC} $*" >&2
 }
 
 log_step() {
@@ -56,9 +56,9 @@ check_image_dir() {
 
     if [ ! -d "$image_dir" ]; then
         log_error "产物目录不存在: $image_dir"
-        echo "  请先执行构建和收集:"
-        echo "    docker compose run --rm build bazel build //image --config=${board}"
-        echo "    docker compose run --rm build bazel run //image:collect --config=${board}"
+        echo "  请先执行构建和收集:" >&2
+        echo "    flange build" >&2
+        echo "    flange collect" >&2
         return 1
     fi
     echo "$image_dir"
