@@ -7,3 +7,8 @@ bazel_dep(name = "platforms", version = "0.0.11")
 bazel_dep(name = "rules_cc", version = "0.1.1")
 
 register_toolchains("//toolchain:aarch64_linux_toolchain")
+
+# 内核源码仓库（由 config_registry 驱动）
+kernel = use_extension("//build:extensions.bzl", "kernel_sources")
+kernel.source(board = "radxa-zero3w")
+use_repo(kernel, "kernel_src_radxa_zero3w")

@@ -1,0 +1,30 @@
+# Rockchip 平台内核构建
+
+load("//build:kernel_build.bzl", "kernel_build")
+
+filegroup(
+    name = "patches",
+    srcs = glob(["patches/**/*.patch"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+kernel_build(
+    name = "rockchip",
+    build_script = "build.sh",
+    kernel_src = select({
+        "//build:board_radxa_zero3w": "@kernel_src_radxa_zero3w//:src",
+    }),
+    defconfig = select({
+        "//build:board_radxa_zero3w": "rockchip_linux_defconfig",
+    }),
+    dts = select({
+        "//build:board_radxa_zero3w": "rk3566-radxa-zero-3w",
+    }),
+    dts_dir = "rockchip",
+    jobs = 2,
+    platform_patches = [":patches"],
+    board_patches = select({
+        "//build:board_radxa_zero3w": ["//board/radxa-zero3w:kernel_patches"],
+    }),
+    visibility = ["//visibility:public"],
+)

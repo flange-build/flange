@@ -151,7 +151,17 @@ Bazel 是本项目的唯一构建与部署系统，使用 Starlark 语言编写�
 - 外部依赖（工具链、源码包）通过 `MODULE.bazel` 声明并锁定版本
 - 下载缓存利用 Bazel 的 repository cache 机制
 
-### 6.4 构建与刷写目标约定
+### 6.4 框架与策略分离
+
+自定义构建规则（`build/*.bzl`）采用**框架 + 策略脚本**架构，严格禁止在框架层硬编码平台/架构相关逻辑：
+
+- **框架层**（`build/*.bzl`）：负责通用流程编排（源码生命周期、补丁管理、增量编译、产物声明与收集），MUST NOT 包含 `ARCH=arm64`、`CROSS_COMPILE=aarch64-linux-gnu-` 等平台假设
+- **策略层**（`<component>/<platform>/build.sh`）：负责平台特有的构建命令（make 参数、签名、打包等），通过框架传入的环境变量获取配置
+- 框架与策略之间通过**环境变量契约**通信：框架设置输入变量（如 `KERNEL_DIR`、`KERNEL_DEFCONFIG`），策略脚本设置输出变量（如 `KERNEL_IMAGE`、`KERNEL_DTB`）
+- 新增平台时只需在组件平台子目录添加策略脚本和 `BUILD.bazel`，MUST NOT 修改框架层代码
+- 自底向上开发时，即使只有一个打样设备，也必须保持框架层的平台无关性
+
+### 6.5 构建与刷写目标约定
 - 每个组件目录提供两类 target：
   - 构建 target：默认 target，输出编译产物（如 `//kernel` 产出内核镜像）
   - 刷写 target：`flash` 目标，执行刷写操作（如 `//kernel:flash`）

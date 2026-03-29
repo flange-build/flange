@@ -8,4 +8,6 @@ services:
       - .:/workspace
       # Bazel output base 持久化
       - ./output/bazel:/workspace/output/bazel
+      # SSH 密钥（用于拉取私有 git 仓库）
+      - ~/.ssh:/root/.ssh:ro
     working_dir: /workspace

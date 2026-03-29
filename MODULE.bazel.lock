@@ -136,6 +136,25 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//build:extensions.bzl%kernel_sources": {
+      "general": {
+        "bzlTransitiveDigest": "JpsDSfHdVrbrrIX047SRAK8EsxqpRDUaVF6THw278WE=",
+        "usagesDigest": "t/1TxkZ/kO9YYv7P/8dktbs5qvlC1EDsXwJBczbwSWA=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "kernel_src_radxa_zero3w": {
+            "repoRuleId": "@@//build:kernel_source.bzl%kernel_source",
+            "attributes": {
+              "remote": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
+              "branch": "linux-6.1-stan-rkr4.1-buildroot"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": []
+      }
+    },
     "@@rules_kotlin+//src/main/starlark/core/repositories:bzlmod_setup.bzl%rules_kotlin_extensions": {
       "general": {
         "bzlTransitiveDigest": "nvW/NrBXlAmiQw99EMGKkLaD2KbNp2mQDlxdfpr+0Ls=",
