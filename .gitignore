@@ -2,6 +2,9 @@
 output/
 target/
 
+# 工具缓存
+cache/
+
 # Bazel 符号链接
 /bazel-*
 

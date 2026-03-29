@@ -544,18 +544,20 @@ docker run ... bazel build //kernel \
     --config=debug
 ```
 
-容器内安装 Bazel + 交叉编译工具链 + 构建依赖。项目根目录通过 volume mount 映射。Bazel output base 和 repository cache 通过 volume 持久化。
+容器内安装 Bazel + 交叉编译工具链 + 构建依赖。项目根目录通过 volume mount 映射。Bazel output base（`./output/bazel`）和 Bazelisk 下载缓存（`./cache/bazelisk`）通过 volume 持久化。容器通过 `entrypoint.sh` 入口脚本启动，负责从只读挂载的宿主机 SSH 目录复制密钥并修正权限。
 
 ### 5.2 组件 target 结构
 
 每个组件目录提供两类 target：
 
-| 组件 | 构建 target | 刷写 target（生成脚本） |
-|------|------------|----------------------|
-| Bootloader | `bazel build //bootloader` | `//bootloader:flash` → 生成 flash 命令片段 |
-| Kernel | `bazel build //kernel` | `//kernel:flash` → 生成 flash 命令片段 |
-| Rootfs | `bazel build //rootfs` | `//rootfs:flash` → 生成 flash 命令片段 |
-| 全量镜像 | `bazel build //image` | `//image:flash` → 生成完整 flash.sh |
+| 组件 | 构建 target | 收集 target | 刷写 target（生成脚本） |
+|------|------------|------------|----------------------|
+| Bootloader | `bazel build //bootloader` | `bazel run //bootloader:collect` | `//bootloader:flash` → 生成 flash 命令片段 |
+| Kernel | `bazel build //kernel` | `bazel run //kernel:collect` | `//kernel:flash` → 生成 flash 命令片段 |
+| Rootfs | `bazel build //rootfs` | `bazel run //rootfs:collect` | `//rootfs:flash` → 生成 flash 命令片段 |
+| 全量镜像 | `bazel build //image` | — | `//image:flash` → 生成完整 flash.sh |
+
+`collect` target 通过 `bazel run` 执行，将构建产物复制到 `target/<component>/` 目录。内核的 collect 会复制 Image、DTB，并解压 modules.tar.gz（含 `lib/modules/` 目录）。
 
 `//image` 聚合所有组件产物 + 分区表，打包为最终镜像并生成 `flash.sh`。
 
@@ -764,7 +766,10 @@ flange/
 │       └── BUILD.bazel
 │
 ├── docker/                 # Docker 构建环境
-│   └── Dockerfile          # FROM --platform=linux/amd64
+│   ├── Dockerfile          # FROM --platform=linux/amd64
+│   └── entrypoint.sh       # 容器入口脚本（SSH 权限修正）
+├── cache/                  # 工具缓存（git ignored）
+│   └── bazelisk/           # Bazelisk 下载缓存（Docker volume 映射）
 ├── tools/                  # 开发/调试辅助工具
 ├── docs/                   # 设计文档
 ├── openspec/               # 工程规格管理
@@ -778,10 +783,13 @@ flange/
 │   └── bazel/              # Bazel output base
 │       └── execroot/_main/bazel-out/
 │
-├── target/                 # 最终产物（git ignored，flange build 成功后复制）
+├── target/                 # 最终产物（git ignored，bazel run //<component>:collect 收集）
 │   └── <board>/<product>/<variant>/
-│       ├── bootloader/
 │       ├── kernel/
+│       │   ├── Image
+│       │   ├── *.dtb
+│       │   └── lib/modules/    # 内核模块（从 modules.tar.gz 解压）
+│       ├── bootloader/
 │       ├── rootfs.ext4
 │       ├── flash.sh
 │       └── debs/

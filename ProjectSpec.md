@@ -60,14 +60,15 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 
 使用 Bazel 统一管理所有组件的构建与刷写，自动推断依赖关系，无需每次全量重建：
 
-| 组件 | 构建目标 | 刷写目标 |
-|------|---------|---------|
-| Bootloader | `bazel build //bootloader` | `bazel run //bootloader:flash` |
-| Kernel | `bazel build //kernel` | `bazel run //kernel:flash` |
-| Rootfs | `bazel build //rootfs` | `bazel run //rootfs:flash` |
-| 全量镜像 | `bazel build //image` | `bazel run //image:flash` |
+| 组件 | 构建目标 | 收集目标 | 刷写目标 |
+|------|---------|---------|---------|
+| Bootloader | `bazel build //bootloader` | `bazel run //bootloader:collect` | `bazel run //bootloader:flash` |
+| Kernel | `bazel build //kernel` | `bazel run //kernel:collect` | `bazel run //kernel:flash` |
+| Rootfs | `bazel build //rootfs` | `bazel run //rootfs:collect` | `bazel run //rootfs:flash` |
+| 全量镜像 | `bazel build //image` | — | `bazel run //image:flash` |
 
 - 组件构建：在 Docker 容器内执行，Bazel 自动推断组件间依赖并决定增量构建范围
+- 产物收集：`bazel run //<component>:collect` 将构建产物（镜像、DTB、模块等）复制到 `target/<component>/`
 - 组件刷写：在宿主机执行，Bazel 读取构建产物并调用平台对应的刷写工具
 - 全量刷写：重写设备全部分区（分区表 + 所有组件镜像）
 
@@ -161,9 +162,15 @@ Bazel 是本项目的唯一构建与部署系统，使用 Starlark 语言编写�
 - 新增平台时只需在组件平台子目录添加策略脚本和 `BUILD.bazel`，MUST NOT 修改框架层代码
 - 自底向上开发时，即使只有一个打样设备，也必须保持框架层的平台无关性
 
-### 6.5 构建与刷写目标约定
-- 每个组件目录提供两类 target：
-  - 构建 target：默认 target，输出编译产物（如 `//kernel` 产出内核镜像）
+### 6.5 配置驱动原则
+- 新增板级支持或构建产物时，**只允许修改配置文件**（`.bazelrc`、`BUILD.bazel`、`board.bzl` 等），不得修改框架层规则（`build/*.bzl`）
+- 规则实现通过 `ctx.var`、`select()`、属性参数等机制从配置获取所有可变信息
+- 违反此原则说明框架抽象不足，应先重构规则再新增支持
+
+### 6.6 构建与刷写目标约定
+- 每个组件目录提供三类 target：
+  - 构建 target：默认 target，输出编译产物（如 `//kernel` 产出内核镜像 + DTB + 模块 tarball）
+  - 收集 target：`collect` 目标，将构建产物复制到 `target/<component>/`（如 `bazel run //kernel:collect`）
   - 刷写 target：`flash` 目标，执行刷写操作（如 `//kernel:flash`）
 - 全量镜像构建：`//image` target 聚合所有组件产物并打包
 - 全量刷写：`//image:flash` 执行整盘刷写
@@ -234,7 +241,8 @@ flange/
 │           ├── kernel/      # 板级内核补丁
 │           └── bootloader/  # 板级 bootloader 补丁
 ├── docker/             # Docker 构建环境定义
-│   └── Dockerfile       # 构建容器镜像定义
+│   ├── Dockerfile       # 构建容器镜像定义
+│   └── entrypoint.sh    # 容器入口脚本（SSH 权限修正等）
 ├── bootloader/         # 引导加载程序（U-Boot / ABL 等，按平台分子目录）
 │   ├── BUILD.bazel      # 顶层 alias + select() 路由
 │   ├── rockchip/        # Rockchip U-Boot 构建（TPL+SPL+ATF）
@@ -338,7 +346,8 @@ feat(kernel): 添加内核编译支持
 - 容器内安装 Bazel、交叉编译工具链及构建依赖，宿主机不做要求
 - 项目根目录通过 volume mount 映射到容器内
 - Bazel output base 和 repository cache 通过 volume 持久化
-- 宿主机 `~/.ssh` 目录以只读方式挂载到容器（用于拉取私有 git 仓库），密钥文件不得复制到镜像中
+- 宿主机 `~/.ssh` 目录以只读方式挂载到容器临时位置（`/tmp/.ssh-host:ro`），通过 entrypoint 脚本复制到 `/root/.ssh` 并修正 owner 和权限，避免 SSH 因 bind mount 导致的 "Bad owner or permissions" 问题。密钥文件不得复制到镜像中
+- Bazelisk 下载缓存通过 `./cache/bazelisk` 持久化，避免容器重建后重新下载 Bazel
 
 ### 11.3 交叉编译
 - 工具链通过 Bazel toolchain 机制注册和选择，不依赖环境变量硬编码
@@ -346,7 +355,9 @@ feat(kernel): 添加内核编译支持
 - 支持通过 `board/<board-name>/` 下的 `BUILD.bazel` 覆盖默认配置
 
 ### 11.4 输出管理
-- 构建产物由 Bazel 管理，位于 `bazel-out/` 目录（自动生成，git ignored）
+- 构建中间产物由 Bazel 管理，位于 `output/bazel/`（通过 `--output_base` 持久化，git ignored）
+- 最终产物通过 `bazel run //<component>:collect` 收集到 `target/<component>/`（git ignored）
+- 内核构建产出：Image、DTB、modules.tar.gz（模块 tarball，`INSTALL_MOD_STRIP=1` 裁剪调试符号）
 - 使用 `bazel clean` 清理构建产物
 - 使用 `bazel clean --expunge` 完全清理（含缓存）
 - 可通过 `--output_groups` 选择性输出特定产物
