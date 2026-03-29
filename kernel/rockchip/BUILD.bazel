@@ -21,7 +21,7 @@ kernel_build(
         "//build:board_radxa_zero3w": "rk3566-radxa-zero-3w",
     }),
     dts_dir = "rockchip",
-    jobs = 2,
+    jobs = 0,
     platform_patches = [":patches"],
     board_patches = select({
         "//build:board_radxa_zero3w": ["//board/radxa-zero3w:kernel_patches"],
