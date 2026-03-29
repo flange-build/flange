@@ -16,7 +16,10 @@ def _kernel_collect_impl(ctx):
     ]
     for f in kernel_files:
         src = '"$0.runfiles/_main/{}"'.format(f.short_path)
-        if f.basename.endswith(".tar.gz"):
+        if f.basename == "dtbos.tar.gz":
+            commands.append('mkdir -p "$TARGET_DIR/dtbos"')
+            commands.append('tar -xzf {} -C "$TARGET_DIR/dtbos"'.format(src))
+        elif f.basename.endswith(".tar.gz"):
             commands.append('tar -xzf {} -C "$TARGET_DIR"'.format(src))
         else:
             commands.append('cp -f {} "$TARGET_DIR/{}"'.format(src, f.basename))

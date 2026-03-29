@@ -1,0 +1,48 @@
+# Rockchip 平台镜像打包
+
+load("//build:boot_partition.bzl", "boot_partition")
+load("//build:image_build.bzl", "image_build")
+load("//build:image_collect.bzl", "image_collect")
+
+boot_partition(
+    name = "boot",
+    build_script = "build_boot.sh",
+    kernel = "//kernel/rockchip",
+    dts = select({
+        "//build:board_radxa_zero3w": "rk3566-radxa-zero-3w-aic8800d80",
+    }),
+    dts_dir = "rockchip",
+    default_overlays = select({
+        "//build:board_radxa_zero3w": [],
+    }),
+    kernel_args = select({
+        "//build:board_radxa_zero3w": "console=ttyS2,1500000 loglevel=4",
+    }),
+    boot_size_mb = 64,
+)
+
+image_build(
+    name = "rockchip",
+    build_script = "build_image.sh",
+    boot = ":boot",
+    bootloader = "//bootloader/rockchip",
+    rootfs = "//rootfs/rockchip",
+    partition_config = "parameter.txt",
+    visibility = ["//visibility:public"],
+)
+
+image_collect(
+    name = "collect",
+    image = ":rockchip",
+    boot = ":boot",
+    bootloader = "//bootloader/rockchip",
+    rootfs = "//rootfs/rockchip",
+    partition_config = ":parameter_txt",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "parameter_txt",
+    srcs = ["parameter.txt"],
+    visibility = ["//visibility:public"],
+)

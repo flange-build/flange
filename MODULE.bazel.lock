@@ -138,7 +138,7 @@
   "moduleExtensions": {
     "//build:extensions.bzl%bootloader_sources": {
       "general": {
-        "bzlTransitiveDigest": "hZcGiP9HmQJT2kCPXGB82UC43icyGQ8CEMaQGbcFkps=",
+        "bzlTransitiveDigest": "le61RX1uLtznbEL2KYxDMiF9t2DAgnvX44YuPRqh6aI=",
         "usagesDigest": "+h8kVFG93czqVQk+j/oWBM7s8GYWst0STR7gtRFBf4s=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -164,7 +164,7 @@
     },
     "//build:extensions.bzl%kernel_sources": {
       "general": {
-        "bzlTransitiveDigest": "JpsDSfHdVrbrrIX047SRAK8EsxqpRDUaVF6THw278WE=",
+        "bzlTransitiveDigest": "le61RX1uLtznbEL2KYxDMiF9t2DAgnvX44YuPRqh6aI=",
         "usagesDigest": "t/1TxkZ/kO9YYv7P/8dktbs5qvlC1EDsXwJBczbwSWA=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -183,7 +183,7 @@
     },
     "//build:extensions.bzl%rootfs_sources": {
       "general": {
-        "bzlTransitiveDigest": "ROgsttgR1Yxt0kD5lNmgxSYUuXxOcIpOp8XhuaUOVFA=",
+        "bzlTransitiveDigest": "le61RX1uLtznbEL2KYxDMiF9t2DAgnvX44YuPRqh6aI=",
         "usagesDigest": "OCuAEkz3MZsxjaemG+l7lCq6PzDZAZEHi9twFR/eTl8=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

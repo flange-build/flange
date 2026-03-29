@@ -5,6 +5,7 @@ def _kernel_build_impl(ctx):
     image = ctx.actions.declare_file(ctx.attr.image_name)
     dtb = ctx.actions.declare_file(ctx.attr.dts + ".dtb")
     modules_tar = ctx.actions.declare_file("modules.tar.gz")
+    dtbos_tar = ctx.actions.declare_file("dtbos.tar.gz")
 
     # 从 kernel_src 输入推导源码根目录
     src_files = ctx.attr.kernel_src.files.to_list()
@@ -69,6 +70,11 @@ mkdir -p "$EXEC_ROOT/$(dirname {modules_tar_out})"
 cp "$KERNEL_IMAGE" "$EXEC_ROOT/{image_out}"
 cp "$KERNEL_DTB" "$EXEC_ROOT/{dtb_out}"
 tar -czf "$EXEC_ROOT/{modules_tar_out}" -C "$KERNEL_MODULES_DIR" lib
+if [ -d "$KERNEL_DTBOS_DIR" ] && ls "$KERNEL_DTBOS_DIR"/*.dtbo 1>/dev/null 2>&1; then
+    tar -czf "$EXEC_ROOT/{dtbos_tar_out}" -C "$KERNEL_DTBOS_DIR" .
+else
+    tar -czf "$EXEC_ROOT/{dtbos_tar_out}" --files-from /dev/null
+fi
 
 echo "=== 内核构建完成 ==="
 """.format(
@@ -82,10 +88,11 @@ echo "=== 内核构建完成 ==="
         image_out = image.path,
         dtb_out = dtb.path,
         modules_tar_out = modules_tar.path,
+        dtbos_tar_out = dtbos_tar.path,
     )
 
     ctx.actions.run_shell(
-        outputs = [image, dtb, modules_tar],
+        outputs = [image, dtb, modules_tar, dtbos_tar],
         inputs = src_files + all_patches + [build_script],
         command = script,
         mnemonic = "KernelBuild",
@@ -99,7 +106,7 @@ echo "=== 内核构建完成 ==="
         },
     )
 
-    return [DefaultInfo(files = depset([image, dtb, modules_tar]))]
+    return [DefaultInfo(files = depset([image, dtb, modules_tar, dtbos_tar]))]
 
 kernel_build = rule(
     implementation = _kernel_build_impl,

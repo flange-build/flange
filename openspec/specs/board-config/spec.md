@@ -13,6 +13,10 @@
 - **WHEN** 查看板级配置的 `bootloader` 字段
 - **THEN** 包含 `repo`（仓库地址）和 `branch`（分支名）
 
+#### Scenario: 板级配置包含 boot 引导参数
+- **WHEN** 查看板级配置的 `boot` 字段
+- **THEN** 包含 `kernel_args`（内核启动参数）、`dtb_overlays`（打包的 dtbo 列表）、`default_overlays`（默认启用的 overlay 列表）
+
 ### Requirement: 板级 BUILD.bazel 声明 filegroup
 `board/radxa-zero3w/BUILD.bazel` SHALL 声明板级资源的 `filegroup`（如补丁、overlay），供组件构建规则通过 `deps` 引用。初始阶段可为空 filegroup。
 

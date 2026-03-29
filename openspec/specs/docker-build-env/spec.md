@@ -17,7 +17,7 @@
 - **THEN** 内容为 8.x 系列的具体版本号
 
 ### Requirement: 容器内预装 aarch64 交叉编译工具链
-构建容器 SHALL 预装 `gcc-aarch64-linux-gnu` 和 `g++-aarch64-linux-gnu` 交叉编译工具链、`qemu-user-static` 用于跨架构 chroot 构建 rootfs、以及 `zstd` 用于 base rootfs 的高速压缩和解压。
+构建容器 SHALL 预装 `gcc-aarch64-linux-gnu` 和 `g++-aarch64-linux-gnu` 交叉编译工具链、`qemu-user-static` 用于跨架构 chroot 构建 rootfs、`zstd` 用于 base rootfs 的高速压缩和解压、以及 `e2fsprogs`（mkfs.ext4）、`dosfstools`（mkfs.vfat）、`parted`、`kpartx` 用于镜像打包。
 
 #### Scenario: 交叉编译器可用
 - **WHEN** 在构建容器内执行 `aarch64-linux-gnu-gcc --version`
@@ -30,6 +30,10 @@
 #### Scenario: zstd 可用
 - **WHEN** 在构建容器内执行 `zstd --version`
 - **THEN** 输出 zstd 版本信息
+
+#### Scenario: 镜像打包工具可用
+- **WHEN** 在构建容器内执行 `mkfs.ext4 -V` 和 `parted --version` 和 `kpartx -V`
+- **THEN** 均输出版本信息
 
 ### Requirement: Docker Compose 定义构建服务
 项目 SHALL 提供 `docker-compose.yml`，定义名为 `build` 的构建服务，以 `privileged: true` 模式运行，支持 rootfs 构建所需的 chroot 和 mount 操作。

@@ -27,6 +27,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev \
         lz4 \
         zstd \
+        e2fsprogs \
+        dosfstools \
+        parted \
+        kpartx \
         qemu-user-static \
     && ln -sf /usr/bin/python3 /usr/bin/python2 \
     && rm -rf /var/lib/apt/lists/*
