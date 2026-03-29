@@ -334,10 +334,12 @@ feat(kernel): 添加内核编译支持
 
 ### 11.2 Docker 构建环境
 - 所有编译构建操作**必须在 Docker 容器内**完成
+- 构建镜像名为 `flange-build`，通过 `docker compose build build` 构建，通过 `docker compose run --rm build` 执行
 - Dockerfile 应基于稳定的 Ubuntu LTS 版本
 - 容器内安装 Bazel、交叉编译工具链及构建依赖，宿主机不做要求
 - 项目根目录通过 volume mount 映射到容器内
 - Bazel output base 和 repository cache 通过 volume 持久化
+- 宿主机 `~/.ssh` 以只读方式挂载到容器，用于拉取私有 git 仓库
 
 ### 11.3 交叉编译
 - 工具链通过 Bazel toolchain 机制注册和选择，不依赖环境变量硬编码
