@@ -20,9 +20,23 @@ rootfs_base(
             "ca-certificates",
             "locales",
         ],
+        "//build:board_neons_core3566_nanob": [
+            "systemd",
+            "systemd-sysv",
+            "dbus",
+            "network-manager",
+            "iputils-ping",
+            "iproute2",
+            "openssh-server",
+            "sudo",
+            "bash",
+            "ca-certificates",
+            "locales",
+        ],
     }),
     rootfs_src = select({
         "//build:board_radxa_zero3w": "@rootfs_src_radxa_zero3w//:ubuntu-base.tar.gz",
+        "//build:board_neons_core3566_nanob": "@rootfs_src_neons_core3566_nanob//:ubuntu-base.tar.gz",
     }),
 )
 
@@ -32,10 +46,20 @@ rootfs_customize(
     build_script = "build_customize.sh",
     custom_packages = select({
         "//build:board_radxa_zero3w": [],
+        "//build:board_neons_core3566_nanob": [],
     }),
     custom_packages_dir = "//packages:all_debs",
+    custom_deb_targets = select({
+        "//build:board_radxa_zero3w": [
+            "//app/adbd:adbd-deb",
+        ],
+        "//build:board_neons_core3566_nanob": [
+            "//app/adbd:adbd-deb",
+        ],
+    }),
     overlay = select({
         "//build:board_radxa_zero3w": "//board/radxa-zero3w:overlay",
+        "//build:board_neons_core3566_nanob": "//board/neons-core3566-nanob:overlay",
     }),
     visibility = ["//visibility:public"],
 )

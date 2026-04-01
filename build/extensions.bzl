@@ -18,6 +18,7 @@ def _kernel_sources_impl(module_ctx):
                 name = repo_name,
                 remote = kernel_config["repo"],
                 branch = kernel_config["branch"],
+                commit = kernel_config.get("commit", ""),
             )
 
 _source_tag = tag_class(attrs = {
@@ -46,6 +47,7 @@ def _bootloader_sources_impl(module_ctx):
                 name = repo_name,
                 remote = bootloader_config["repo"],
                 branch = bootloader_config["branch"],
+                commit = bootloader_config.get("commit", ""),
             )
 
             # rkbin 固件仓库（平台级共享，去重）

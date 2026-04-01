@@ -1,20 +1,20 @@
-"""Radxa Zero 3W (RK3566) 板级配置"""
+"""Neons Core3566 Nano B (RK3566) 板级配置"""
 
-RADXA_ZERO3W_BOARD = {
-    "board": "radxa-zero3w",
+NEONS_CORE3566_NANOB_BOARD = {
+    "board": "neons-core3566-nanob",
     "soc": "rk3566",
     "platform": "rockchip",
-    "dts": "rk3566-radxa-zero-3w",
+    "dts": "rk3566-neons-core-wavesharecm4-nano-b",
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
         "branch": "linux-6.1-stan-rkr4.1-buildroot",
-        "commit": "",
+        "commit": "e62b45adc7f89f5c8ea1918960b8c78e7c97ebf5",
         "defconfig": "rockchip_linux_defconfig",
     },
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
         "branch": "next-dev-buildroot",
-        "commit": "",
+        "commit": "3c60a711e61015c1a61247837afbeaa85bd7fbf2",
         "defconfig": "rk3568_defconfig",
     },
     "boot": {

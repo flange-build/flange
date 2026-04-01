@@ -30,6 +30,15 @@ def _rootfs_customize_impl(ctx):
 
     custom_packages = " ".join(ctx.attr.custom_packages)
 
+    # Bazel 构建的 deb targets
+    deb_target_files = []
+    deb_target_paths = []
+    for target in ctx.attr.custom_deb_targets:
+        for f in target.files.to_list():
+            deb_target_files.append(f)
+            deb_target_paths.append("$EXEC_ROOT/" + f.path)
+    deb_targets_str = " ".join(deb_target_paths)
+
     script = """\
 set -euo pipefail
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -42,6 +51,7 @@ export ROOTFS_CUSTOM_PACKAGES="{custom_packages}"
 export ROOTFS_PACKAGES_DIR="{custom_pkg_dir}"
 export ROOTFS_OVERLAY_DIR="{overlay_dir}"
 export ROOTFS_ARCH="{arch}"
+export ROOTFS_DEB_TARGETS="{deb_targets}"
 
 source "$EXEC_ROOT/{build_script}"
 
@@ -57,13 +67,14 @@ echo "=== Rootfs 定制化构建完成 ==="
         custom_pkg_dir = ("$EXEC_ROOT/" + custom_pkg_dir) if custom_pkg_dir else "",
         overlay_dir = ("$EXEC_ROOT/" + overlay_dir) if overlay_dir else "",
         arch = ctx.attr.arch,
+        deb_targets = deb_targets_str,
         build_script = build_script.path,
         rootfs_out = rootfs_tar.path,
     )
 
     ctx.actions.run_shell(
         outputs = [rootfs_tar],
-        inputs = [base_file, build_script] + overlay_files + custom_pkg_files,
+        inputs = [base_file, build_script] + overlay_files + custom_pkg_files + deb_target_files,
         command = script,
         mnemonic = "RootfsCustomize",
         progress_message = "定制化 Rootfs: {}".format(rootfs_tar.short_path),
@@ -95,6 +106,11 @@ rootfs_customize = rule(
         "custom_packages_dir": attr.label(
             default = None,
             doc = "自定义 deb 包目录 filegroup（//packages:all_debs）",
+        ),
+        "custom_deb_targets": attr.label_list(
+            allow_files = [".deb"],
+            default = [],
+            doc = "Bazel 构建的 .deb 文件 target 列表（由 flange_deb 规则产出）",
         ),
         "overlay": attr.label(
             default = None,

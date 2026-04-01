@@ -28,5 +28,6 @@ bootloader_source = repository_rule(
     attrs = {
         "remote": attr.string(mandatory = True, doc = "Git 仓库 URL"),
         "branch": attr.string(mandatory = True, doc = "Git 分支名"),
+        "commit": attr.string(default = "", doc = "锁定的 commit hash，变更时触发重新拉取"),
     },
 )

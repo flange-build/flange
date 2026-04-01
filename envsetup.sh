@@ -152,6 +152,63 @@ _flange_cmd_shell() {
     _flange_docker_run bash "$@"
 }
 
+_flange_cmd_sync() {
+    local board_bzl="$FLANGE_DIR/board/$FLANGE_BOARD/board.bzl"
+    if [[ ! -f "$board_bzl" ]]; then
+        _flange_error "未找到: $board_bzl"
+        return 1
+    fi
+
+    _flange_step "同步源码版本: $FLANGE_BOARD"
+
+    local updated=false
+
+    for section in kernel bootloader; do
+        # 从 board.bzl 提取 repo 和 branch
+        local repo branch current latest
+        repo=$(awk -v s="\"$section\"" '$0 ~ s{f=1} f && /"repo"/{print; exit}' "$board_bzl" | sed 's/.*"repo": *"\([^"]*\)".*/\1/')
+        branch=$(awk -v s="\"$section\"" '$0 ~ s{f=1} f && /"branch"/{print; exit}' "$board_bzl" | sed 's/.*"branch": *"\([^"]*\)".*/\1/')
+
+        if [[ -z "$repo" || -z "$branch" ]]; then
+            continue
+        fi
+
+        # 查询远端最新 commit
+        latest=$(git ls-remote "$repo" "refs/heads/$branch" 2>/dev/null | cut -f1)
+        if [[ -z "$latest" ]]; then
+            _flange_warn "$section: 无法获取 $repo $branch 的最新 commit"
+            continue
+        fi
+
+        # 读取当前锁定的 commit
+        current=$(awk -v s="\"$section\"" '$0 ~ s{f=1} f && /"commit"/{print; exit}' "$board_bzl" | sed 's/.*"commit": *"\([^"]*\)".*/\1/')
+
+        if [[ "$current" == "$latest" ]]; then
+            _flange_info "$section: 已是最新 (${latest:0:12})"
+            continue
+        fi
+
+        # 用 awk 更新对应 section 内的 commit
+        awk -v s="\"$section\"" -v c="$latest" '
+            $0 ~ s && /{/ { in_s = 1 }
+            in_s && /"commit"/ {
+                sub(/"commit": "[^"]*"/, "\"commit\": \"" c "\"")
+                in_s = 0
+            }
+            { print }
+        ' "$board_bzl" > "$board_bzl.tmp" && mv "$board_bzl.tmp" "$board_bzl"
+
+        _flange_info "$section: ${current:0:12} → ${latest:0:12}"
+        updated=true
+    done
+
+    if $updated; then
+        _flange_info "board.bzl 已更新，下次构建将自动拉取新版本"
+    else
+        _flange_info "所有源码均为最新"
+    fi
+}
+
 _flange_cmd_clean() {
     _flange_step "清理构建产物: $FLANGE_BOARD"
     local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD"
@@ -221,6 +278,7 @@ flange() {
         echo "    flash        刷写到目标设备"
         echo ""
         echo "  工具命令:"
+        echo "    sync         同步当前板子的源码仓库（内核/bootloader/rootfs）"
         echo "    shell        进入 Docker 构建环境 shell"
         echo "    clean        清理构建产物"
         echo "    status       显示当前状态"
@@ -236,6 +294,10 @@ flange() {
         build|kernel|bootloader|rootfs|collect|clean)
             _flange_check_all || return 1
             "_flange_cmd_$subcmd" "$@"
+            ;;
+        sync)
+            _flange_check_board || return 1
+            _flange_cmd_sync "$@"
             ;;
         flash)
             _flange_cmd_flash "$@"

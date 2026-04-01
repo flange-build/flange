@@ -11,3 +11,8 @@ build:aarch64 --platforms=//toolchain:aarch64_linux
 build:radxa-zero3w --platforms=//toolchain:aarch64_linux
 build:radxa-zero3w --define=platform=rockchip
 build:radxa-zero3w --define=board=radxa-zero3w
+
+# 板级配置 — Neons Core3566 Nano B (RK3566)
+build:neons-core3566-nanob --platforms=//toolchain:aarch64_linux
+build:neons-core3566-nanob --define=platform=rockchip
+build:neons-core3566-nanob --define=board=neons-core3566-nanob

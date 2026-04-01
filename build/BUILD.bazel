@@ -13,3 +13,9 @@ config_setting(
     values = {"define": "board=radxa-zero3w"},
     visibility = ["//visibility:public"],
 )
+
+config_setting(
+    name = "board_neons_core3566_nanob",
+    values = {"define": "board=neons-core3566-nanob"},
+    visibility = ["//visibility:public"],
+)

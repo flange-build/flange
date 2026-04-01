@@ -6,6 +6,7 @@
 #   ROOTFS_CUSTOM_PACKAGES — 空格分隔的自定义 deb 包组件名
 #   ROOTFS_PACKAGES_DIR    — 自定义 deb 包目录路径
 #   ROOTFS_OVERLAY_DIR     — board overlay 目录路径
+#   ROOTFS_DEB_TARGETS     — 空格分隔的 Bazel 构建 .deb 文件路径
 #   ROOTFS_ARCH            — 目标架构（arm64）
 #
 # 脚本须设置以下变量供框架收集产物：
@@ -68,6 +69,52 @@ if [ -n "${ROOTFS_CUSTOM_PACKAGES}" ] && [ -n "${ROOTFS_PACKAGES_DIR}" ]; then
         chroot "${ROOTFS}" apt-get install -f -y
     fi
     rm -rf "${ROOTFS}/tmp/custom-debs"
+
+    # 清理 chroot 环境
+    rm -f "${ROOTFS}/usr/bin/qemu-aarch64-static"
+    rm -f "${ROOTFS}/etc/resolv.conf"
+    umount "${ROOTFS}/dev/pts"
+    umount "${ROOTFS}/dev"
+    umount "${ROOTFS}/proc"
+    umount "${ROOTFS}/sys"
+    NEEDS_CHROOT=false
+fi
+
+# --- 2b. 安装 Bazel 构建的 deb targets ---
+if [ -n "${ROOTFS_DEB_TARGETS:-}" ]; then
+    echo "=== 安装 Bazel 构建的 deb 包 ==="
+
+    # 如果 chroot 尚未设置，先设置
+    if [ "$NEEDS_CHROOT" = false ]; then
+        NEEDS_CHROOT=true
+
+        QEMU_BIN="/usr/bin/qemu-aarch64-static"
+        if [ -f "${QEMU_BIN}" ]; then
+            cp "${QEMU_BIN}" "${ROOTFS}/usr/bin/qemu-aarch64-static"
+        fi
+
+        mount -t proc proc "${ROOTFS}/proc"
+        mount -t sysfs sys "${ROOTFS}/sys"
+        mount -o bind /dev "${ROOTFS}/dev"
+        mount -o bind /dev/pts "${ROOTFS}/dev/pts"
+        cp /etc/resolv.conf "${ROOTFS}/etc/resolv.conf" 2>/dev/null || true
+    fi
+
+    mkdir -p "${ROOTFS}/tmp/bazel-debs"
+    for deb_path in ${ROOTFS_DEB_TARGETS}; do
+        if [ -f "${deb_path}" ]; then
+            echo "--- 复制 deb: $(basename "${deb_path}") ---"
+            cp "${deb_path}" "${ROOTFS}/tmp/bazel-debs/"
+        else
+            echo "警告: deb 文件不存在: ${deb_path}"
+        fi
+    done
+
+    if ls "${ROOTFS}/tmp/bazel-debs/"*.deb 1>/dev/null 2>&1; then
+        chroot "${ROOTFS}" dpkg -i /tmp/bazel-debs/*.deb || true
+        chroot "${ROOTFS}" apt-get install -f -y
+    fi
+    rm -rf "${ROOTFS}/tmp/bazel-debs"
 
     # 清理 chroot 环境
     rm -f "${ROOTFS}/usr/bin/qemu-aarch64-static"
