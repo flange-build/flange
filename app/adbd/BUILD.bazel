@@ -1,0 +1,42 @@
+load("//build:defs.bzl", "flange_deb")
+
+# 按目标架构选择预编译 adbd 二进制
+filegroup(
+    name = "adbd-bin",
+    srcs = select({
+        "@platforms//cpu:aarch64": ["bin/adbd-arm64"],
+        "//conditions:default": ["bin/adbd-armhf"],
+    }),
+)
+
+flange_deb(
+    name = "adbd-deb",
+    app_yaml = "app.yaml",
+    version = "1.0.0",
+    description = "Android Debug Bridge daemon，通过 USB gadget 提供 adb 调试通道",
+    maintainer = "flange <flange@localhost>",
+    binary = ":adbd-bin",
+    scripts = [
+        "scripts/usbdevice",
+    ],
+    conf = [
+        "conf/usbdevice.conf",
+    ],
+    systemd = {
+        "unit": "systemd/usbdevice.service",
+        "auto_start": True,
+    },
+    paths = {
+        "bin": "/usr/bin",
+        "scripts": "/usr/bin",
+        "conf": "/etc",
+        "udev": "/usr/lib/udev/rules.d",
+    },
+    res = [
+        "udev/61-usbdevice.rules",
+    ],
+    conffiles = [
+        "/etc/usbdevice.conf",
+    ],
+    visibility = ["//visibility:public"],
+)

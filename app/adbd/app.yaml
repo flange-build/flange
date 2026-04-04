@@ -1,0 +1,16 @@
+app:
+  name: adbd
+  version: 1.0.0
+  description: Android Debug Bridge daemon，通过 USB gadget 提供 adb 调试通道
+  type: service
+  arch:
+    - aarch64
+    - armhf
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+capabilities:
+  - usb-gadget
+  - adb-debug
