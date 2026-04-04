@@ -19,3 +19,9 @@ config_setting(
     values = {"define": "board=neons-core3566-nanob"},
     visibility = ["//visibility:public"],
 )
+
+config_setting(
+    name = "board_tspi_rk3566",
+    values = {"define": "board=tspi-rk3566"},
+    visibility = ["//visibility:public"],
+)

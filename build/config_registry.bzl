@@ -5,6 +5,7 @@ load("//platform/rockchip:config.bzl", "ROCKCHIP_PLATFORM")
 load("//platform/rockchip/rk3566:config.bzl", "RK3566_SOC")
 load("//board/radxa-zero3w:board.bzl", "RADXA_ZERO3W_BOARD")
 load("//board/neons-core3566-nanob:board.bzl", "NEONS_CORE3566_NANOB_BOARD")
+load("//board/tspi-rk3566:board.bzl", "TSPI_RK3566_BOARD")
 
 _PLATFORMS = {
     "rockchip": ROCKCHIP_PLATFORM,
@@ -17,6 +18,7 @@ _SOCS = {
 _BOARDS = {
     "radxa-zero3w": RADXA_ZERO3W_BOARD,
     "neons-core3566-nanob": NEONS_CORE3566_NANOB_BOARD,
+    "tspi-rk3566": TSPI_RK3566_BOARD,
 }
 
 REGISTERED_BOARDS = _BOARDS.keys()

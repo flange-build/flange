@@ -1,0 +1,19 @@
+# TSpi RK3566 板级 target
+
+filegroup(
+    name = "kernel_patches",
+    srcs = glob(["patches/kernel/**"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "bootloader_patches",
+    srcs = glob(["patches/bootloader/**"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "overlay",
+    srcs = glob(["overlay/**"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)

@@ -16,3 +16,8 @@ build:radxa-zero3w --define=board=radxa-zero3w
 build:neons-core3566-nanob --platforms=//toolchain:aarch64_linux
 build:neons-core3566-nanob --define=platform=rockchip
 build:neons-core3566-nanob --define=board=neons-core3566-nanob
+
+# 板级配置 — TSpi RK3566
+build:tspi-rk3566 --platforms=//toolchain:aarch64_linux
+build:tspi-rk3566 --define=platform=rockchip
+build:tspi-rk3566 --define=board=tspi-rk3566

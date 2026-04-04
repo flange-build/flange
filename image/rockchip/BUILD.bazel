@@ -11,15 +11,18 @@ boot_partition(
     dts = select({
         "//build:board_radxa_zero3w": "rk3566-radxa-zero-3w-aic8800d80",
         "//build:board_neons_core3566_nanob": "rk3566-neons-core-wavesharecm4-nano-b",
+        "//build:board_tspi_rk3566": "tspi-rk3566-user-v10-ext39-linux",
     }),
     dts_dir = "rockchip",
     default_overlays = select({
         "//build:board_radxa_zero3w": [],
         "//build:board_neons_core3566_nanob": [],
+        "//build:board_tspi_rk3566": [],
     }),
     kernel_args = select({
         "//build:board_radxa_zero3w": "console=ttyS2,1500000 loglevel=7",
         "//build:board_neons_core3566_nanob": "console=ttyS2,1500000 loglevel=7",
+        "//build:board_tspi_rk3566": "console=ttyS2,1500000 loglevel=7",
     }),
     boot_size_mb = 64,
 )

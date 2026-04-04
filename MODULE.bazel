@@ -12,16 +12,19 @@ register_toolchains("//toolchain:aarch64_linux_toolchain")
 kernel = use_extension("//build:extensions.bzl", "kernel_sources")
 kernel.source(board = "radxa-zero3w")
 kernel.source(board = "neons-core3566-nanob")
-use_repo(kernel, "kernel_src_radxa_zero3w", "kernel_src_neons_core3566_nanob")
+kernel.source(board = "tspi-rk3566")
+use_repo(kernel, "kernel_src_radxa_zero3w", "kernel_src_neons_core3566_nanob", "kernel_src_tspi_rk3566")
 
 # Bootloader 源码仓库 + rkbin 固件仓库（由 config_registry 驱动）
 bootloader = use_extension("//build:extensions.bzl", "bootloader_sources")
 bootloader.source(board = "radxa-zero3w")
 bootloader.source(board = "neons-core3566-nanob")
-use_repo(bootloader, "bootloader_src_radxa_zero3w", "bootloader_src_neons_core3566_nanob", "rkbin_rockchip")
+bootloader.source(board = "tspi-rk3566")
+use_repo(bootloader, "bootloader_src_radxa_zero3w", "bootloader_src_neons_core3566_nanob", "bootloader_src_tspi_rk3566", "rkbin_rockchip")
 
 # Rootfs 源码（ubuntu-base tarball，由 config_registry 驱动）
 rootfs = use_extension("//build:extensions.bzl", "rootfs_sources")
 rootfs.source(board = "radxa-zero3w")
 rootfs.source(board = "neons-core3566-nanob")
-use_repo(rootfs, "rootfs_src_radxa_zero3w", "rootfs_src_neons_core3566_nanob")
+rootfs.source(board = "tspi-rk3566")
+use_repo(rootfs, "rootfs_src_radxa_zero3w", "rootfs_src_neons_core3566_nanob", "rootfs_src_tspi_rk3566")
