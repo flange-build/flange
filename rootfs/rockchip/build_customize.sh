@@ -64,8 +64,9 @@ if [ -n "${ROOTFS_CUSTOM_PACKAGES}" ] && [ -n "${ROOTFS_PACKAGES_DIR}" ]; then
             echo "警告: 自定义包目录不存在: ${PKG_DIR}"
         fi
     done
-    if ls "${ROOTFS}/tmp/custom-debs/"*.deb 1>/dev/null 2>&1; then
-        chroot "${ROOTFS}" dpkg -i /tmp/custom-debs/*.deb || true
+    CUSTOM_DEB_LIST=$(find "${ROOTFS}/tmp/custom-debs" -name '*.deb' -printf '/tmp/custom-debs/%f\n' 2>/dev/null)
+    if [ -n "${CUSTOM_DEB_LIST}" ]; then
+        chroot "${ROOTFS}" dpkg -i ${CUSTOM_DEB_LIST} || true
         chroot "${ROOTFS}" apt-get install -f -y
     fi
     rm -rf "${ROOTFS}/tmp/custom-debs"
@@ -110,8 +111,9 @@ if [ -n "${ROOTFS_DEB_TARGETS:-}" ]; then
         fi
     done
 
-    if ls "${ROOTFS}/tmp/bazel-debs/"*.deb 1>/dev/null 2>&1; then
-        chroot "${ROOTFS}" dpkg -i /tmp/bazel-debs/*.deb || true
+    DEB_LIST=$(find "${ROOTFS}/tmp/bazel-debs" -name '*.deb' -printf '/tmp/bazel-debs/%f\n')
+    if [ -n "${DEB_LIST}" ]; then
+        chroot "${ROOTFS}" dpkg -i ${DEB_LIST} || true
         chroot "${ROOTFS}" apt-get install -f -y
     fi
     rm -rf "${ROOTFS}/tmp/bazel-debs"
