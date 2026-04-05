@@ -15,16 +15,19 @@ kernel_build(
         "//build:board_radxa_zero3w": "@kernel_src_radxa_zero3w//:src",
         "//build:board_neons_core3566_nanob": "@kernel_src_neons_core3566_nanob//:src",
         "//build:board_tspi_rk3566": "@kernel_src_tspi_rk3566//:src",
+        "//build:board_orangepi_cm4": "@kernel_src_orangepi_cm4//:src",
     }),
     defconfig = select({
         "//build:board_radxa_zero3w": "rockchip_linux_defconfig",
         "//build:board_neons_core3566_nanob": "rockchip_linux_defconfig",
         "//build:board_tspi_rk3566": "rockchip_linux_defconfig",
+        "//build:board_orangepi_cm4": "rockchip_linux_defconfig",
     }),
     dts = select({
         "//build:board_radxa_zero3w": "rk3566-radxa-zero-3w-aic8800d80",
         "//build:board_neons_core3566_nanob": "rk3566-neons-core-wavesharecm4-nano-b",
         "//build:board_tspi_rk3566": "tspi-rk3566-user-v10-ext39-linux",
+        "//build:board_orangepi_cm4": "rk3566-orangepi-cm4-base",
     }),
     dts_dir = "rockchip",
     jobs = 0,
@@ -33,6 +36,7 @@ kernel_build(
         "//build:board_radxa_zero3w": ["//board/radxa-zero3w:kernel_patches"],
         "//build:board_neons_core3566_nanob": ["//board/neons-core3566-nanob:kernel_patches"],
         "//build:board_tspi_rk3566": ["//board/tspi-rk3566:kernel_patches"],
+        "//build:board_orangepi_cm4": ["//board/orangepi-cm4:kernel_patches"],
     }),
     visibility = ["//visibility:public"],
 )

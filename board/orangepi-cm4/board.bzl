@@ -1,20 +1,20 @@
-"""TSpi RK3566 板级配置"""
+"""Orange Pi CM4 (RK3566) 板级配置"""
 
-TSPI_RK3566_BOARD = {
-    "board": "tspi-rk3566",
+ORANGEPI_CM4_BOARD = {
+    "board": "orangepi-cm4",
     "soc": "rk3566",
     "platform": "rockchip",
-    "dts": "tspi-rk3566-user-v10-ext39-linux",
+    "dts": "rk3566-orangepi-cm4-base",
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
         "branch": "linux-6.1-stan-rkr4.1-buildroot",
-        "commit": "d425e02d22a75945fc79a10e736c1de76ca615c8",
+        "commit": "",
         "defconfig": "rockchip_linux_defconfig",
     },
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
         "branch": "next-dev-v2026.01",
-        "commit": "3c60a711e61015c1a61247837afbeaa85bd7fbf2",
+        "commit": "",
         "defconfig": "rk3568_defconfig",
     },
     "boot": {

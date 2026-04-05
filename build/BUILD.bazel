@@ -25,3 +25,9 @@ config_setting(
     values = {"define": "board=tspi-rk3566"},
     visibility = ["//visibility:public"],
 )
+
+config_setting(
+    name = "board_orangepi_cm4",
+    values = {"define": "board=orangepi-cm4"},
+    visibility = ["//visibility:public"],
+)

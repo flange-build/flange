@@ -21,3 +21,8 @@ build:neons-core3566-nanob --define=board=neons-core3566-nanob
 build:tspi-rk3566 --platforms=//toolchain:aarch64_linux
 build:tspi-rk3566 --define=platform=rockchip
 build:tspi-rk3566 --define=board=tspi-rk3566
+
+# 板级配置 — Orange Pi CM4 (RK3566)
+build:orangepi-cm4 --platforms=//toolchain:aarch64_linux
+build:orangepi-cm4 --define=platform=rockchip
+build:orangepi-cm4 --define=board=orangepi-cm4

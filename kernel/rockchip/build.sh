@@ -18,7 +18,7 @@ echo "=== Rockchip 内核配置: ${KERNEL_DEFCONFIG} ==="
 make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} ${KERNEL_DEFCONFIG}
 
 echo "=== Rockchip 内核编译: Image + DTB + modules (jobs=${KERNEL_JOBS}) ==="
-make -j${KERNEL_JOBS} ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} KCFLAGS="-Wno-error" Image dtbs modules
+make -j${KERNEL_JOBS} ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} KCFLAGS="-Wno-error" Image ${KERNEL_DTS_DIR}/${KERNEL_DTS}.dtb modules
 
 echo "=== Rockchip 内核模块安装 ==="
 MODULES_STAGING="${KERNEL_DIR}/_modules_install"

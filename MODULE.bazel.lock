@@ -138,8 +138,8 @@
   "moduleExtensions": {
     "//build:extensions.bzl%bootloader_sources": {
       "general": {
-        "bzlTransitiveDigest": "QKreAxSiad8EwgorH8nhSveA/l0eC+2d5QbPkLf3QYw=",
-        "usagesDigest": "Nb9EgdGe45UkePpMqJ0j7t1xR6jjUaW0XCdxxAJ84wk=",
+        "bzlTransitiveDigest": "zgJvORGLnKVMOkff6EKubjmPOWBNNZvffZ7oJ7y4pj8=",
+        "usagesDigest": "S6x3lAJvcO0555xzgNgsGHjqbhtclLB+tmIm9m8rAw4=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -166,6 +166,14 @@
               "branch": "next-dev-buildroot",
               "commit": "3c60a711e61015c1a61247837afbeaa85bd7fbf2"
             }
+          },
+          "bootloader_src_tspi_rk3566": {
+            "repoRuleId": "@@//build:bootloader_source.bzl%bootloader_source",
+            "attributes": {
+              "remote": "https://github.com/radxa/u-boot",
+              "branch": "next-dev-buildroot",
+              "commit": "3c60a711e61015c1a61247837afbeaa85bd7fbf2"
+            }
           }
         },
         "recordedRepoMappingEntries": []
@@ -173,8 +181,8 @@
     },
     "//build:extensions.bzl%kernel_sources": {
       "general": {
-        "bzlTransitiveDigest": "QKreAxSiad8EwgorH8nhSveA/l0eC+2d5QbPkLf3QYw=",
-        "usagesDigest": "x5Kptqfo0vwWPLWDHklklUIrlvGu9XJvU1Tx32vqb1k=",
+        "bzlTransitiveDigest": "zgJvORGLnKVMOkff6EKubjmPOWBNNZvffZ7oJ7y4pj8=",
+        "usagesDigest": "JQyeivXA63oicbqb0rmQ/5H2onSUauyY+jwjfHyGg+Q=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -184,7 +192,8 @@
             "attributes": {
               "remote": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
               "branch": "linux-6.1-stan-rkr4.1-buildroot",
-              "commit": ""
+              "commit": "",
+              "local_path": ""
             }
           },
           "kernel_src_neons_core3566_nanob": {
@@ -192,7 +201,17 @@
             "attributes": {
               "remote": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
               "branch": "linux-6.1-stan-rkr4.1-buildroot",
-              "commit": "e62b45adc7f89f5c8ea1918960b8c78e7c97ebf5"
+              "commit": "e62b45adc7f89f5c8ea1918960b8c78e7c97ebf5",
+              "local_path": ""
+            }
+          },
+          "kernel_src_tspi_rk3566": {
+            "repoRuleId": "@@//build:kernel_source.bzl%kernel_source",
+            "attributes": {
+              "remote": "",
+              "branch": "",
+              "commit": "",
+              "local_path": "/mnt/neons-kernel"
             }
           }
         },
@@ -201,8 +220,8 @@
     },
     "//build:extensions.bzl%rootfs_sources": {
       "general": {
-        "bzlTransitiveDigest": "QKreAxSiad8EwgorH8nhSveA/l0eC+2d5QbPkLf3QYw=",
-        "usagesDigest": "aQm1aEF3zfEUf21mVDyGtdb4fm8JvPKj61qmNo9IzU8=",
+        "bzlTransitiveDigest": "zgJvORGLnKVMOkff6EKubjmPOWBNNZvffZ7oJ7y4pj8=",
+        "usagesDigest": "VcH1QsE2/b46lP0h/DDa9A1+361lC+cVJym041LDHQQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -215,6 +234,13 @@
             }
           },
           "rootfs_src_neons_core3566_nanob": {
+            "repoRuleId": "@@//build:rootfs_source.bzl%rootfs_source",
+            "attributes": {
+              "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+              "sha256": ""
+            }
+          },
+          "rootfs_src_tspi_rk3566": {
             "repoRuleId": "@@//build:rootfs_source.bzl%rootfs_source",
             "attributes": {
               "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",

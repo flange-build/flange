@@ -13,7 +13,7 @@ NEONS_CORE3566_NANOB_BOARD = {
     },
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
-        "branch": "next-dev-buildroot",
+        "branch": "next-dev-v2026.01",
         "commit": "3c60a711e61015c1a61247837afbeaa85bd7fbf2",
         "defconfig": "rk3568_defconfig",
     },
