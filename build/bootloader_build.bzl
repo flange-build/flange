@@ -6,11 +6,20 @@ def _bootloader_build_impl(ctx):
     idbloader = ctx.actions.declare_file("idbloader.img")
     miniloader = ctx.actions.declare_file("miniloader.bin")
 
-    # 从 bootloader_src 输入推导源码根目录
+    # 从 bootloader_src 输入推导源码根目录，检测本地模式
     src_files = ctx.attr.bootloader_src.files.to_list()
     if not src_files:
         fail("bootloader_src 不包含任何文件")
-    makefile = src_files[0]
+
+    local_mode = False
+    makefile = None
+    for f in src_files:
+        if f.basename == ".local_mode":
+            local_mode = True
+        if f.basename == "Makefile":
+            makefile = f
+    if not makefile:
+        fail("bootloader_src 中未找到 Makefile")
     src_root = makefile.path.rsplit("/Makefile", 1)[0]
 
     # 固件仓库（可选）
@@ -47,6 +56,19 @@ def _bootloader_build_impl(ctx):
     build_script = ctx.file.build_script
 
     # 框架脚本
+    if local_mode:
+        reset_and_patch = """\
+echo "=== 本地模式：跳过 reset 和补丁 ==="
+cd "$BUILD_DIR" """
+    else:
+        reset_and_patch = """\
+echo "=== 重置源码树（保留编译产物） ==="
+cd "$BUILD_DIR"
+git reset --hard HEAD 2>/dev/null || true
+
+# --- 应用补丁 ---
+{patch_cmds}""".format(patch_cmds = patch_cmds if patch_cmds else "")
+
     script = """\
 set -euo pipefail
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -54,12 +76,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EXEC_ROOT="$(pwd)"
 BUILD_DIR="$EXEC_ROOT/{src_root}"
 
-echo "=== 重置源码树（保留编译产物） ==="
-cd "$BUILD_DIR"
-git reset --hard HEAD 2>/dev/null || true
-
-# --- 应用补丁 ---
-{patch_cmds}
+{reset_and_patch}
 
 # --- 调用平台构建脚本 ---
 export BOOTLOADER_DIR="$BUILD_DIR"
@@ -83,7 +100,7 @@ cp "$BOOTLOADER_MINILOADER" "$EXEC_ROOT/{miniloader_out}"
 echo "=== Bootloader 构建完成 ==="
 """.format(
         src_root = src_root,
-        patch_cmds = patch_cmds if patch_cmds else "",
+        reset_and_patch = reset_and_patch,
         defconfig = ctx.attr.defconfig,
         jobs = str(ctx.attr.jobs) if ctx.attr.jobs > 0 else "$(nproc)",
         firmware_dir = ("$EXEC_ROOT/" + firmware_root) if firmware_root else "",

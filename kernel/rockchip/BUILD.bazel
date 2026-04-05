@@ -30,7 +30,7 @@ kernel_build(
         "//build:board_orangepi_cm4": "rk3566-orangepi-cm4-base",
     }),
     dts_dir = "rockchip",
-    jobs = 0,
+    jobs = 6,
     platform_patches = [":patches"],
     board_patches = select({
         "//build:board_radxa_zero3w": ["//board/radxa-zero3w:kernel_patches"],

@@ -7,11 +7,20 @@ def _kernel_build_impl(ctx):
     modules_tar = ctx.actions.declare_file("modules.tar.gz")
     dtbos_tar = ctx.actions.declare_file("dtbos.tar.gz")
 
-    # 从 kernel_src 输入推导源码根目录
+    # 从 kernel_src 输入推导源码根目录，检测本地模式
     src_files = ctx.attr.kernel_src.files.to_list()
     if not src_files:
         fail("kernel_src 不包含任何文件")
-    makefile = src_files[0]
+
+    local_mode = False
+    makefile = None
+    for f in src_files:
+        if f.basename == ".local_mode":
+            local_mode = True
+        if f.basename == "Makefile":
+            makefile = f
+    if not makefile:
+        fail("kernel_src 中未找到 Makefile")
     src_root = makefile.path.rsplit("/Makefile", 1)[0]
 
     # 收集补丁文件（平台补丁 + 板级补丁）
@@ -38,7 +47,20 @@ def _kernel_build_impl(ctx):
     build_script = ctx.file.build_script
 
     # 框架脚本：直接在源码目录原地构建，无需复制
-    # 增量编译：git checkout -f . 重置被补丁修改的源文件，保留 .o 等编译产物
+    # 增量编译：保留 .o 等编译产物
+    if local_mode:
+        reset_and_patch = """\
+echo "=== 本地模式：跳过 reset 和补丁 ==="
+cd "$BUILD_DIR" """
+    else:
+        reset_and_patch = """\
+echo "=== 重置源码树（保留编译产物） ==="
+cd "$BUILD_DIR"
+git reset --hard HEAD 2>/dev/null || true
+
+# --- 应用补丁 ---
+{patch_cmds}""".format(patch_cmds = patch_cmds if patch_cmds else "")
+
     script = """\
 set -euo pipefail
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -46,12 +68,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EXEC_ROOT="$(pwd)"
 BUILD_DIR="$EXEC_ROOT/{src_root}"
 
-echo "=== 重置源码树（保留编译产物） ==="
-cd "$BUILD_DIR"
-git reset --hard HEAD 2>/dev/null || true
-
-# --- 应用补丁 ---
-{patch_cmds}
+{reset_and_patch}
 
 # --- 调用平台构建脚本 ---
 export KERNEL_DIR="$BUILD_DIR"
@@ -79,7 +96,7 @@ fi
 echo "=== 内核构建完成 ==="
 """.format(
         src_root = src_root,
-        patch_cmds = patch_cmds if patch_cmds else "",
+        reset_and_patch = reset_and_patch,
         defconfig = ctx.attr.defconfig,
         dts = ctx.attr.dts,
         dts_dir = ctx.attr.dts_dir,
