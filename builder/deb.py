@@ -12,8 +12,8 @@
 from __future__ import annotations
 
 import io
+import re
 import tarfile
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -35,6 +35,26 @@ _ARCH_MAP: Dict[str, str] = {
 
 class DebBuildError(RuntimeError):
     """deb 构建失败时抛出。"""
+
+
+# ---------------------------------------------------------------------------
+# 安全校验
+# ---------------------------------------------------------------------------
+
+_SAFE_SHELL_RE = re.compile(r'^[a-zA-Z0-9._@:/-]+$')
+
+
+def _validate_shell_safe(value: str, context: str) -> None:
+    """校验值不包含 shell 元字符，防止脚本注入。
+
+    参数：
+        value:   待校验的字符串
+        context: 错误提示上下文描述
+    抛出：
+        DebBuildError: 若 value 包含不安全字符
+    """
+    if not _SAFE_SHELL_RE.match(value):
+        raise DebBuildError(f"{context} 包含不安全字符: {value!r}")
 
 
 def _map_arch(arch: str) -> str:
@@ -131,10 +151,13 @@ def _generate_postinst(service_name: str, data_dirs: List[str]) -> str:
     返回：
         postinst 脚本内容字符串
     """
+    _validate_shell_safe(service_name, "service_name")
+
     mkdir_lines: List[str] = []
     for d in data_dirs:
         d = d.strip()
         if d:
+            _validate_shell_safe(d, "data_dirs 条目")
             mkdir_lines.append(f"    mkdir -p {d}")
     mkdir_block = "\n".join(mkdir_lines) if mkdir_lines else "    # 无需创建数据目录"
 
@@ -173,6 +196,8 @@ def _generate_prerm(service_name: str) -> str:
     返回：
         prerm 脚本内容字符串
     """
+    _validate_shell_safe(service_name, "service_name")
+
     return f"""\
 #!/bin/bash
 set -e

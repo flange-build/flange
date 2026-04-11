@@ -262,7 +262,8 @@ class TestPostinstGeneration:
         assert "mkdir -p /var/log/my-app" in script
 
     def test_no_data_dirs_no_data_mkdir(self):
-        """无 data_dirs 时数据目录部分只有注释，不生成 mkdir 数据目录命令。"""
+        """无 data_dirs 时，数据目录部分只有注释，
+        不生成用户数据目录的 mkdir 命令。"""
         script = _generate_postinst("my.service", [])
         # chroot 分支中有 mkdir -p /etc/systemd/system/$target.wants，是正常的
         # 但不应有用户数据目录的 mkdir 命令（/var/ 或 /etc/ 下的具体路径）
@@ -272,6 +273,26 @@ class TestPostinstGeneration:
         """service 文件名正确出现在脚本中。"""
         script = _generate_postinst("usbdevice.service", [])
         assert "usbdevice.service" in script
+
+    def test_service_name_with_shell_metachar_raises(self):
+        """service_name 含 shell 元字符时抛出 DebBuildError。"""
+        with pytest.raises(DebBuildError):
+            _generate_postinst("my-daemon.service; rm -rf /", [])
+
+    def test_service_name_with_dollar_raises(self):
+        """service_name 含 $ 时抛出 DebBuildError（防止变量展开注入）。"""
+        with pytest.raises(DebBuildError):
+            _generate_postinst("$malicious.service", [])
+
+    def test_data_dir_with_shell_metachar_raises(self):
+        """data_dirs 条目含 shell 元字符时抛出 DebBuildError。"""
+        with pytest.raises(DebBuildError):
+            _generate_postinst("my.service", ["/var/lib/app; rm -rf /"])
+
+    def test_data_dir_with_backtick_raises(self):
+        """data_dirs 条目含反引号时抛出 DebBuildError（防止命令替换注入）。"""
+        with pytest.raises(DebBuildError):
+            _generate_postinst("my.service", ["/var/lib/`id`"])
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +331,16 @@ class TestPrermGeneration:
         """prerm 的 stop/disable 命令失败时不应中止（|| true）。"""
         script = _generate_prerm("my-daemon.service")
         assert "|| true" in script
+
+    def test_service_name_with_shell_metachar_raises(self):
+        """service_name 含 shell 元字符时抛出 DebBuildError。"""
+        with pytest.raises(DebBuildError):
+            _generate_prerm("my-daemon.service; rm -rf /")
+
+    def test_service_name_with_dollar_raises(self):
+        """service_name 含 $ 时抛出 DebBuildError（防止变量展开注入）。"""
+        with pytest.raises(DebBuildError):
+            _generate_prerm("$(evil)")
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +532,8 @@ class TestDataTarBuild:
 
         tar_data = _build_data_tar([(src, "/usr/bin/foo", 0o755)])
         names = _read_tar_names(tar_data)
-        # tarfile 模块会去掉目录名尾部的斜杠，用 ./usr 或 ./usr/ 均可表示同一目录
+        # tarfile 模块会去掉目录名尾部的斜杠
+        # 用 ./usr 或 ./usr/ 均可表示同一目录
         assert "./usr" in names or "./usr/" in names
         assert "./usr/bin" in names or "./usr/bin/" in names
 
@@ -757,7 +789,10 @@ class TestEndToEnd:
             name="pkg",
             version="1.0",
             arch="aarch64",
-            control_fields={"control": "Package: pkg\nVersion: 1.0\nArchitecture: arm64\nMaintainer: t <t@t>\nDescription: t\n"},
+            control_fields={"control": (
+                "Package: pkg\nVersion: 1.0\nArchitecture: arm64\n"
+                "Maintainer: t <t@t>\nDescription: t\n"
+            )},
             files=[(src_file, "/usr/bin/pkg", 0o755)],
             output_dir=output_dir,
         )
