@@ -16,6 +16,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
+.venv/
 
 # 源码仓库
 sources/

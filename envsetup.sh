@@ -17,6 +17,17 @@ elif [[ -n "$0" ]]; then
 fi
 export FLANGE_DIR
 
+# --- Python venv ---
+_flange_venv="${FLANGE_DIR}/.venv"
+if [[ ! -d "$_flange_venv" ]]; then
+    echo "[INFO] 创建 Python 虚拟环境: ${_flange_venv}"
+    python3 -m venv "$_flange_venv"
+    "$_flange_venv/bin/pip" install -e "${FLANGE_DIR}[dev]" --quiet
+    echo "[INFO] 依赖安装完成"
+fi
+# shellcheck disable=SC1091
+source "$_flange_venv/bin/activate"
+
 # --- 颜色定义 ---
 _FLANGE_RED='\033[0;31m'
 _FLANGE_GREEN='\033[0;32m'
