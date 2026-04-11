@@ -32,11 +32,12 @@ flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建�
 
 ## 关键约定
 
-- **Bazel 统一构建**：Bazel 是唯一的构建和部署入口，构建用 `bazel build`，刷写用 `bazel run //<component>:flash`
+- **Python 统一构建**：构建用 `flange build`，刷写用 `flange flash`，配置通过 `lunch` 选择
 - **Docker 构建**：所有编译构建在 Docker 容器内完成，宿主机不做编译环境要求
 - **宿主机刷写**：镜像刷写在宿主机执行，通过 USB 连接目标设备
-- **依赖自动推断**：组件间依赖由 Bazel 自动推断，变更后仅增量重建受影响部分
+- **依赖自动推断**：组件间依赖由构建引擎自动推断（builder/engine.py），变更后基于内容哈希仅增量重建
 - **多平台支持**：Rockchip、Allwinner、Qualcomm、Amlogic 等平台各有对应的刷写工具
-- 构建规则使用 Starlark 编写，遵循 `buildifier` 格式化
+- 构建规则使用 Python 编写（builder/platforms/），遵循 PEP 8
 - Shell 脚本必须使用 `set -xe`
+- **Product/Variant 支持**：lunch target 格式为 `<board>-<product>-<variant>`，支持 debug/release 变体和多产品配置
 - 每个任务不超过 2 小时工作量
