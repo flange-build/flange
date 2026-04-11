@@ -54,9 +54,12 @@ def _handle_append_key(result: dict, plus_key: str, value: Any) -> None:
             result[plus_key] = value
     else:
         base_key = stripped
-        # 无条件 +key：尝试追加到 base 的 base_key 列表
+        # 无条件 +key：尝试追加到 base 的 base_key 列表，或深度合并到 base 的 dict
         if base_key in result and isinstance(result[base_key], list) and isinstance(value, list):
             result[base_key] = result[base_key] + value
+        elif base_key in result and isinstance(result[base_key], dict) and isinstance(value, dict):
+            # 字典追加合并：将 +key 的内容深度合并到 base_key
+            result[base_key] = deep_merge(result[base_key], value)
         else:
             # base 无对应 key，原样保留
             result[plus_key] = value
@@ -111,6 +114,10 @@ def resolve_conditions(config: dict, product: str, variant: str) -> dict:
     for base_key, value in unconditional_appends.items():
         if base_key in result and isinstance(result[base_key], list) and isinstance(value, list):
             result[base_key] = result[base_key] + value
+        elif base_key in result and isinstance(result[base_key], dict) and isinstance(value, dict):
+            # 字典追加合并后递归解析条件
+            merged = deep_merge(result[base_key], value)
+            result[base_key] = resolve_conditions(merged, product=product, variant=variant)
         else:
             result[base_key] = value
 
