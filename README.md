@@ -76,12 +76,16 @@ lunch
 | `flange build kernel` | 只构建内核 |
 | `flange build bootloader` | 只构建 bootloader |
 | `flange build rootfs` | 只构建根文件系统 |
+| `flange build app` | 构建当前配置所需的所有 App |
+| `flange build app <name>` | 构建指定 App |
 | `flange flash` | 刷写完整镜像到设备 |
 | `flange flash kernel` | 只刷写内核分区 |
 | `flange flash bootloader` | 只刷写 bootloader |
 | `flange clean` | 清理当前配置的构建产物 |
 | `flange status` | 显示当前配置和构建状态 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
+| `flange create app <name>` | 生成 App 工程脚手架 |
+| `flange list apps` | 列出所有可用 App |
 | `flange docker build` | 构建 Docker 镜像 |
 | `flange docker rebuild` | 无缓存重建 Docker 镜像 |
 

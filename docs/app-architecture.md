@@ -1,10 +1,6 @@
 # flange App 工程架构设计
 
-> **迁移状态**：flange 构建系统已从 Bazel 迁移至 Python 统一架构（v2.0）。本文档中涉及 `BUILD.bazel`、`flange_deb` 等 Bazel 规则的内容描述的是**设计意图**，实际实现将使用 Python 构建规则（`builder/` 模块）。App 打包系统的 Python 实现为待实施项，参见 `roadmap.md`。
->
-> 文档中的核心设计（App 分类、app.yaml 规格、deb 打包流程、systemd 集成）在 Python 架构下**完全保留**，仅构建规则的语法从 Starlark 变为 Python。
-
-本文档描述 flange 构建系统支持的用户 App 工程架构，包括 App 分类、工程结构、描述文件、构建打包、集成方式等设计。
+本文档描述 flange 构建系统支持的用户 App 工程架构，包括 App 分类、工程结构、描述文件、构建打包、集成方式等设计。App 打包系统基于 Python 统一实现，核心模块位于 `builder/` 目录。
 
 ---
 
@@ -40,7 +36,7 @@ flange 支持四种 App 类型：
 | `exec` | 可执行文件，需手动启动运行 | 1+ 个 deb 包 | `/usr/bin` 等 |
 | `service` | 服务，随系统自动启动，由 systemd 管理 | 1+ 个 deb 包 + systemd unit | `/usr/bin` + `/lib/systemd/system/` |
 | `lib` | 链接库，被其他 App 依赖 | libfoo + libfoo-dev 两个 deb 包 | `/usr/lib` + `/usr/include` |
-| `test` | 测试脚本，复制到目标文件系统执行 | 1 个 deb 包 | 由 BUILD.bazel 定义路径 |
+| `test` | 测试脚本，复制到目标文件系统执行 | 1 个 deb 包 | `/usr/lib/<name>/` |
 
 ### 1.2 一个 App 的组成
 
@@ -48,10 +44,10 @@ flange 支持四种 App 类型：
 一个 App 可能包含：
 ├── 可执行文件        ← 编译产出的二进制程序
 ├── 资源文件          ← 图片、字体、模型、音频等运行时资源
-├── 配置文件          ← 默认配置，安装到 /etc/ 下
+├── 配置文件          ← 默认配置，安装到 /etc/<name>/ 下
 ├── 用户数据目录声明   ← 运行时产生的数据（如 /var/lib/my-app/）
 ├── 依赖动态链接库     ← App 自编译的 .so（非系统 apt 包提供的）
-└── App 描述文件      ← app.yaml，App 身份与能力的元数据
+└── App 描述文件      ← app.yaml，App 身份与构建的唯一配置源
 ```
 
 ---
@@ -60,34 +56,17 @@ flange 支持四种 App 类型：
 
 ### 2.1 设计原则
 
-app.yaml 是 App 的"身份证"，只描述 **App 是什么**，不描述 **App 怎么构建**。
+app.yaml 是 App 的唯一配置文件，同时描述 **App 是什么**（身份元数据）和 **App 怎么构建**（构建配置）。Python 构建引擎从 app.yaml 中读取所有信息，无需额外的构建规则文件。
 
-```
-app.yaml（身份证）                   BUILD.bazel（施工图）
-───────────────────                 ───────────────────────────
-名称、版本、描述                     编译规则
-类型                                源文件、编译选项、构建依赖
-维护者                              deb 打包规则
-支持架构                              ├── 包名、包拆分
-App 能力/特性声明                      ├── 安装路径映射
-                                      ├── systemd unit 文件
-                                      ├── conffiles 声明
-                                      └── 运行期 apt 依赖
-```
-
-deb 包产出声明、文件系统路径映射、服务配置等**构建相关内容全部在 BUILD.bazel 中定义**。app.yaml 的信息会被 Bazel 的 `flange_deb` 规则读取，用于生成 deb 的 control 文件。
-
-### 2.2 格式定义
-
-采用 YAML 格式（比 XML 更友好，比 TOML 更适合嵌套结构），参考 iOS Info.plist 的设计思路：
+### 2.2 完整 Schema
 
 ```yaml
-# app.yaml — App 描述文件
+# app.yaml — App 描述文件（唯一配置来源）
 
 app:
-  name: my-display-app           # 包名（唯一标识）
-  version: 1.0.0                 # 语义化版本号
-  description: 智能显示终端主应用   # 简短描述
+  name: my-display-app           # 包名（唯一标识，用于 deb 包命名和依赖引用）
+  version: 1.0.0                 # 语义化版本号（SemVer）
+  description: 智能显示终端主应用   # 简短描述，写入 deb control
   type: service                  # exec | service | lib | test
   arch:                          # 支持的目标架构
     - aarch64
@@ -101,7 +80,50 @@ maintainer:
 capabilities:
   - display
   - touchscreen
-  - network
+
+# 可选：构建配置
+build:
+  system: cmake                  # none | cmake | meson | make | swift | custom
+  options:                       # 传递给构建系统的选项（cmake -D 变量等）
+    CMAKE_BUILD_TYPE: Release
+    ENABLE_TESTS: "OFF"
+  outputs:                       # 构建产物相对路径列表
+    - build/my-display-app
+  deps:                          # App 间构建依赖（其他 App 名称）
+    - libfoo
+  # custom 构建专用：命令列表（system=custom 时使用）
+  commands:
+    - ["make", "ARCH=arm64", "-j4"]
+    - ["make", "install", "DESTDIR=dist/"]
+
+# 可选：安装路径覆盖（覆盖约定式默认映射）
+install:
+  conf/special.conf: /etc/special.conf   # 源路径: 目标路径
+  scripts/helper: /usr/sbin/helper
+
+# 可选：systemd 服务配置（仅 service 类型）
+systemd:
+  unit: systemd/my-daemon.service        # unit 文件相对路径
+  auto_start: true                       # 是否随系统自动启动
+
+# 可选：运行期 apt 依赖
+depends:
+  - libc6
+  - libssl3
+
+# 可选：dpkg conffiles 声明（升级时 dpkg 不覆盖这些配置文件）
+conffiles:
+  - /etc/my-display-app/config.yaml
+
+# 可选：运行时数据目录声明（deb postinst 中自动创建）
+data_dirs:
+  - /var/lib/my-display-app
+  - /var/log/my-display-app
+
+# 可选：链接库配置（仅 lib 类型）
+lib:
+  headers_dir: include/          # 头文件目录（相对于 App 目录）
+  dev_suffix: -dev               # dev 包后缀，默认 -dev
 ```
 
 ### 2.3 字段说明
@@ -112,258 +134,171 @@ capabilities:
 | `app.version` | 是 | 语义化版本号（SemVer），用于 deb 版本 |
 | `app.description` | 是 | 简短描述，写入 deb control 的 Description 字段 |
 | `app.type` | 是 | App 类型：`exec` / `service` / `lib` / `test` |
-| `app.arch` | 是 | 支持的目标架构列表 |
+| `app.arch` | 是 | 支持的目标架构列表（至少一个） |
 | `maintainer.name` | 是 | 维护者姓名 |
 | `maintainer.email` | 是 | 维护者邮箱 |
 | `capabilities` | 否 | App 能力标签，供配置系统和文档使用 |
+| `build.system` | 否 | 构建系统，默认 `none`（预编译包） |
+| `build.options` | 否 | 传递给构建系统的选项字典 |
+| `build.outputs` | 否 | 构建产物路径列表（相对于 App 目录） |
+| `build.deps` | 否 | App 间构建依赖列表 |
+| `build.commands` | 否 | custom 构建专用命令列表 |
+| `install` | 否 | 安装路径覆盖映射，源路径 → 目标路径 |
+| `systemd.unit` | 否 | service unit 文件相对路径 |
+| `systemd.auto_start` | 否 | 是否随系统自动启动，默认 `false` |
+| `depends` | 否 | 运行期 apt 依赖列表 |
+| `conffiles` | 否 | dpkg 保护的配置文件路径列表 |
+| `data_dirs` | 否 | 运行时数据目录声明列表 |
+| `lib.headers_dir` | 否 | 头文件目录，默认 `include/` |
+| `lib.dev_suffix` | 否 | dev 包后缀，默认 `-dev` |
 
 ---
 
-## 3. BUILD.bazel 构建与打包
+## 3. app.yaml 构建配置
 
-### 3.1 自定义 Bazel 规则
+### 3.1 构建系统选项
 
-flange 提供以下自定义 Bazel 规则用于 App 构建和打包：
+`build.system` 支持以下取值：
 
-```python
-# build/defs.bzl 导出的规则
+| 取值 | 说明 | 适用场景 |
+|------|------|---------|
+| `none` | 预编译包，无编译步骤 | bin/ 中直接放置编译好的二进制 |
+| `cmake` | CMake 两阶段（configure + build） | C/C++ CMake 项目 |
+| `meson` | Meson + Ninja 两阶段（setup + build） | C/C++ Meson 项目 |
+| `make` | Make 单阶段 | Makefile 项目 |
+| `swift` | Swift Package Manager 交叉编译 | Swift 项目 |
+| `custom` | 完全自定义命令（由 `build.commands` 提供） | 特殊构建需求 |
 
-flange_deb()          # deb 打包（核心规则）
-flange_cmake()        # CMake 项目包装
-flange_meson()        # Meson 项目包装
-flange_make()         # Makefile 项目包装
-flange_swift()        # Swift Package Manager 项目包装
+### 3.2 约定式路径映射
+
+AppBuilder 根据 App 目录下的子目录名，按约定自动映射到目标文件系统路径：
+
+| 源子目录 | 目标路径 | 文件权限 |
+|---------|---------|---------|
+| `bin/` | `/usr/bin/` | `0755` |
+| `lib/` | `/usr/lib/` | `0644` |
+| `include/` | `/usr/include/<name>/` | `0644`（仅 lib 类型） |
+| `conf/` | `/etc/<name>/` | `0644` |
+| `scripts/` | `/usr/lib/<name>/` | `0755` |
+| `systemd/` | `/lib/systemd/system/` | `0644` |
+| `udev/` | `/lib/udev/rules.d/` | `0644` |
+| `res/` | `/usr/share/<name>/` | `0644` |
+
+如需覆盖约定映射，在 `install:` 段声明具体路径（见 [2.2 节](#22-完整-schema) adbd 示例）。
+
+### 3.3 预编译二进制架构选择
+
+当 `build.system = none` 时，AppBuilder 根据目标架构自动选择 `bin/` 目录中的正确二进制：
+
+- `aarch64` 目标：优先匹配 `-arm64`、`-aarch64` 后缀
+- `armhf` 目标：优先匹配 `-armhf`、`-arm32` 后缀
+- 不匹配目标架构的文件自动排除
+
+### 3.4 类型示例
+
+#### exec 类型（CMake）
+
+```yaml
+app:
+  name: my-tool
+  version: 1.0.0
+  description: 命令行工具
+  type: exec
+  arch: [aarch64]
+
+maintainer:
+  name: Dev
+  email: dev@example.com
+
+build:
+  system: cmake
+  outputs:
+    - build/my-tool
+
+depends:
+  - libc6
+  - libssl3
 ```
 
-### 3.2 exec 类型示例
+#### service 类型
 
-```python
-load("//build:defs.bzl", "flange_deb")
+```yaml
+app:
+  name: my-daemon
+  version: 1.0.0
+  description: 后台守护服务
+  type: service
+  arch: [aarch64]
 
-cc_binary(
-    name = "my-tool",
-    srcs = glob(["src/**/*.c"]),
-    deps = ["//apps/libfoo"],
-)
+maintainer:
+  name: Dev
+  email: dev@example.com
 
-flange_deb(
-    name = "my-tool-deb",
-    app_yaml = "app.yaml",
-    binary = ":my-tool",
-    conf = ["conf/tool.yaml"],
-    res = glob(["res/**"]),
-    paths = {
-        "bin":  "/usr/bin",
-        "conf": "/etc/my-tool",
-        "res":  "/usr/share/my-tool",
-    },
-    data_dirs = ["/var/lib/my-tool"],   # 运行时用户数据目录
-    runtime_deps = ["libc6", "libssl3"],
-)
+build:
+  system: cmake
+  outputs:
+    - build/my-daemon
+
+systemd:
+  unit: systemd/my-daemon.service
+  auto_start: true
+
+depends:
+  - libc6
+
+conffiles:
+  - /etc/my-daemon/config.yaml
+
+data_dirs:
+  - /var/lib/my-daemon
+  - /var/log/my-daemon
 ```
 
-### 3.3 service 类型示例
+#### lib 类型（双包产出）
 
-```python
-load("//build:defs.bzl", "flange_deb")
+```yaml
+app:
+  name: libfoo
+  version: 1.0.0
+  description: 共享链接库
+  type: lib
+  arch: [aarch64]
 
-cc_binary(
-    name = "my-daemon",
-    srcs = glob(["src/**/*.c"]),
-    deps = ["//apps/libmqtt"],
-)
+maintainer:
+  name: Dev
+  email: dev@example.com
 
-flange_deb(
-    name = "my-daemon-deb",
-    app_yaml = "app.yaml",
-    binary = ":my-daemon",
-    conf = ["conf/daemon.yaml"],
-    systemd = {
-        "unit": "systemd/my-daemon.service",
-        "auto_start": True,
-    },
-    paths = {
-        "bin":  "/usr/bin",
-        "conf": "/etc/my-daemon",
-    },
-    data_dirs = [
-        "/var/lib/my-daemon",
-        "/var/log/my-daemon",
-    ],
-    runtime_deps = ["libc6", "libmosquitto1"],
-)
+build:
+  system: cmake
+  outputs:
+    - build/libfoo.so.1.0.0
+
+lib:
+  headers_dir: include/
+  dev_suffix: -dev
+
+depends:
+  - libc6
 ```
 
-### 3.4 lib 类型示例（双包产出）
+lib 类型自动产出两个 deb 包：`libfoo_1.0.0_arm64.deb`（运行时）和 `libfoo-dev_1.0.0_arm64.deb`（开发头文件 + 静态库）。
 
-```python
-load("//build:defs.bzl", "flange_deb")
+#### test 类型
 
-cc_library(
-    name = "foo",
-    srcs = glob(["src/**/*.c"]),
-    hdrs = glob(["include/**/*.h"]),
-)
+```yaml
+app:
+  name: hw-tests
+  version: 1.0.0
+  description: 硬件验证测试脚本集
+  type: test
+  arch: [aarch64]
 
-# 运行时包: libfoo
-flange_deb(
-    name = "libfoo-deb",
-    app_yaml = "app.yaml",
-    shared_lib = ":foo",
-    paths = {"lib": "/usr/lib"},
-    runtime_deps = ["libc6"],
-)
-
-# 开发包: libfoo-dev
-flange_deb(
-    name = "libfoo-dev-deb",
-    app_yaml = "app.yaml",
-    package_suffix = "-dev",
-    headers = glob(["include/**/*.h"]),
-    static_lib = ":foo",
-    paths = {
-        "include": "/usr/include/foo",
-        "lib":     "/usr/lib",
-    },
-    runtime_deps = ["libfoo"],
-)
+maintainer:
+  name: Dev
+  email: dev@example.com
 ```
 
-### 3.5 test 类型示例
-
-```python
-load("//build:defs.bzl", "flange_deb")
-
-flange_deb(
-    name = "hw-tests-deb",
-    app_yaml = "app.yaml",
-    scripts = glob(["scripts/**/*.sh"]),
-    paths = {
-        "scripts": "/opt/tests/hw",
-    },
-)
-```
-
-### 3.6 多构建系统支持
-
-App 源码不限于 Bazel 原生规则编译。flange 通过包装规则支持多种构建系统：
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   App 构建系统支持                            │
-│                                                             │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
-│  │ Bazel 原生  │  │  CMake     │  │  Meson     │            │
-│  │ cc_binary  │  │ flange_    │  │ flange_    │            │
-│  │ cc_library │  │ cmake()   │  │ meson()   │            │
-│  └──────┬─────┘  └──────┬─────┘  └──────┬─────┘            │
-│         │               │               │                   │
-│  ┌────────────┐  ┌────────────┐                             │
-│  │  Makefile   │  │  Swift     │                             │
-│  │ flange_    │  │ flange_    │                             │
-│  │ make()    │  │ swift()   │                             │
-│  └──────┬─────┘  └──────┬─────┘                             │
-│         │               │                                   │
-│         └───────┬───────┘                                   │
-│                 ▼                                           │
-│          编译产物（binary / .so / .a）                        │
-│                 │                                           │
-│                 ▼                                           │
-│          flange_deb()  → .deb 包                            │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### CMake 项目
-
-```python
-load("//build:defs.bzl", "flange_cmake", "flange_deb")
-
-flange_cmake(
-    name = "my-cmake-app",
-    src = ".",
-    cmake_options = [
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DENABLE_TESTS=OFF",
-    ],
-    out_binaries = ["my-cmake-app"],
-    deps = ["//apps/libfoo"],
-)
-
-flange_deb(
-    name = "my-cmake-app-deb",
-    app_yaml = "app.yaml",
-    binary = ":my-cmake-app",
-    paths = {"bin": "/usr/bin"},
-)
-```
-
-#### Meson 项目
-
-```python
-load("//build:defs.bzl", "flange_meson", "flange_deb")
-
-flange_meson(
-    name = "my-meson-app",
-    src = ".",
-    meson_options = [
-        "-Dfeature_x=enabled",
-    ],
-    out_binaries = ["my-meson-app"],
-)
-
-flange_deb(
-    name = "my-meson-app-deb",
-    app_yaml = "app.yaml",
-    binary = ":my-meson-app",
-    paths = {"bin": "/usr/bin"},
-)
-```
-
-#### Makefile 项目
-
-```python
-load("//build:defs.bzl", "flange_make", "flange_deb")
-
-flange_make(
-    name = "my-legacy-app",
-    src = ".",
-    make_targets = ["all"],
-    make_vars = {
-        "PREFIX": "/usr",
-        "CROSS_COMPILE": "aarch64-linux-gnu-",
-    },
-    out_binaries = ["my-legacy-app"],
-)
-
-flange_deb(
-    name = "my-legacy-app-deb",
-    app_yaml = "app.yaml",
-    binary = ":my-legacy-app",
-    paths = {"bin": "/usr/bin"},
-)
-```
-
-#### Swift Package Manager 项目
-
-```python
-load("//build:defs.bzl", "flange_swift", "flange_deb")
-
-flange_swift(
-    name = "my-swift-app",
-    src = ".",
-    swift_build_args = [
-        "--configuration", "release",
-    ],
-    out_binaries = ["my-swift-app"],
-)
-
-flange_deb(
-    name = "my-swift-app-deb",
-    app_yaml = "app.yaml",
-    binary = ":my-swift-app",
-    paths = {"bin": "/usr/bin"},
-)
-```
+test 类型将 `scripts/` 下的 shell 脚本安装到 `/usr/lib/hw-tests/`。
 
 ---
 
@@ -376,32 +311,31 @@ flange_deb(
 │                    App 来源                                │
 │                                                          │
 │   仓库内 App（内置）              仓库外 App（外部）        │
-│   apps/<name>/                  独立 git 仓库             │
+│   app/<name>/                   独立 git 仓库             │
 │   直接在 flange 仓库开发          通过板级配置声明引入       │
 │                                                          │
 │         └──────────┬─────────────────┘                   │
 │                    ▼                                     │
 │            统一的 App 工程结构                              │
-│            统一的 flange_deb 打包                          │
+│            统一的 Python DebBuilder 打包                   │
 │            统一安装到 rootfs                               │
 └──────────────────────────────────────────────────────────┘
 ```
 
 ### 4.2 仓库内 App
 
-直接在 `apps/` 目录下开发：
+直接在 `app/` 目录下开发：
 
 ```
 flange/
-└── apps/
+└── app/
     ├── my-display-app/
     │   ├── app.yaml
-    │   ├── BUILD.bazel
     │   ├── src/
-    │   └── ...
+    │   ├── conf/
+    │   └── systemd/
     └── libfoo/
         ├── app.yaml
-        ├── BUILD.bazel
         ├── include/
         └── src/
 ```
@@ -414,10 +348,10 @@ flange/
 
 ### 4.3 仓库外 App（外部集成）
 
-在板级配置中声明 git 源，由 Bazel 自动拉取：
+在板级配置的 `external_apps` 字段中声明 git 源，由 `SourceManager` 自动拉取：
 
 ```python
-# board/rk3588-evb/board.bzl
+# board/my-board/config.py
 BOARD = {
     "rootfs": {
         "+packages": [
@@ -445,26 +379,23 @@ BOARD = {
 flange build 触发
     │
     ▼
-配置解析引擎读取 board.bzl
+配置解析引擎读取 board config.py
     │
     ├── 识别 packages 列表中的包名
-    ├── 在 apps/ 目录查找仓库内 App
+    ├── SourceManager 在 app/ 目录查找仓库内 App
     ├── 未找到 → 查找 external_apps 声明
     │
     ▼
-生成 Bazel git_repository 规则
+SourceManager 克隆外部 App 到 sources/apps/<name>
     │
     ▼
-Bazel 拉取外部 App 源码到 workspace
+AppBuilder 读取 App 目录中的 app.yaml
     │
     ▼
-按外部 App 自身的 BUILD.bazel 编译打包
-    │
-    ▼
-产出 .deb → 安装到 rootfs
+DebBuilder 打包 → .deb → 安装到 rootfs
 ```
 
-外部 App 必须遵循与仓库内 App 相同的工程结构（包含 `app.yaml` 和 `BUILD.bazel`）。
+外部 App 必须遵循与仓库内 App 相同的工程结构（包含 `app.yaml`）。
 
 ---
 
@@ -472,7 +403,7 @@ Bazel 拉取外部 App 源码到 workspace
 
 ### 5.1 systemd 集成
 
-type 为 `service` 的 App 通过 systemd 管理生命周期。服务的 systemd unit 文件在 App 工程内维护，通过 `flange_deb` 的 `systemd` 参数声明。
+`type: service` 的 App 通过 systemd 管理生命周期。service unit 文件在 App 工程内维护，通过 `app.yaml` 的 `systemd:` 段声明。
 
 ### 5.2 systemd unit 模板
 
@@ -493,103 +424,68 @@ User=root
 WantedBy=multi-user.target
 ```
 
-### 5.3 flange_deb 的 systemd 参数
+### 5.3 auto_start 行为
 
-```python
-flange_deb(
-    ...
-    systemd = {
-        "unit": "systemd/my-daemon.service",   # unit 文件路径
-        "auto_start": True,                     # deb postinst 中 systemctl enable
-    },
-)
+```yaml
+systemd:
+  unit: systemd/my-daemon.service
+  auto_start: true    # deb postinst 中执行 systemctl enable
 ```
 
-- `auto_start: True`：deb 安装时自动执行 `systemctl enable`，系统启动时自动拉起
-- `auto_start: False`：仅安装 unit 文件，需要手动 enable
+- `auto_start: true`：deb 安装时自动执行 `systemctl enable`，系统启动时自动拉起
+- `auto_start: false`：仅安装 unit 文件，需要手动 enable
 
 ---
 
 ## 6. deb 打包机制
 
-### 6.1 flange_deb 规则
+### 6.1 Python DebBuilder
 
-`flange_deb` 是 App 打包的核心 Bazel 规则，职责：
+`builder/deb.py` 中的 `DebBuilder` 是 App 打包的核心，职责：
 
 ```
-flange_deb 规则
+DebBuilder
     │
-    ├── 读取 app.yaml → 提取 name/version/description/maintainer
-    ├── 生成 debian/control 文件
-    ├── 收集编译产物 (binary/shared_lib/headers/scripts)
-    ├── 按 paths 映射组织文件布局
+    ├── 读取 AppSpec → 提取 name/version/description/maintainer
+    ├── 生成 debian/control 文件（架构自动映射 aarch64 → arm64）
+    ├── 收集编译产物（按约定映射 + install 覆盖）
     ├── 处理 systemd unit（可选）
     ├── 处理 conffiles 声明（可选）
-    ├── 生成 postinst/prerm 脚本（systemd enable/disable 等）
+    ├── 生成 postinst/prerm 脚本（systemd enable/disable、data_dirs 创建等）
     │
     ▼
-产出: <name>_<version>_<arch>.deb
+产出: <name>_<version>_<arch>.deb（纯 Python 实现，无需系统 ar/dpkg-deb）
 ```
 
-### 6.2 flange_deb 完整参数
+### 6.2 lib 类型双包产出
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `name` | string | Bazel target 名称 |
-| `app_yaml` | label | app.yaml 路径 |
-| `package_suffix` | string | 包名后缀（如 `-dev`、`-dbg`） |
-| `binary` | label | 可执行文件 target |
-| `shared_lib` | label | 动态库 target |
-| `static_lib` | label | 静态库 target |
-| `headers` | label_list | 头文件列表 |
-| `scripts` | label_list | 脚本文件列表 |
-| `conf` | label_list | 配置文件列表 |
-| `res` | label_list | 资源文件列表 |
-| `systemd` | dict | systemd 配置 `{unit, auto_start}` |
-| `paths` | dict | 安装路径映射 `{类别: 目标路径}` |
-| `data_dirs` | string_list | 运行时数据目录（deb postinst 创建） |
-| `runtime_deps` | string_list | 运行期 apt 依赖 |
-| `conffiles` | string_list | 需要保护的配置文件路径（dpkg 升级时不覆盖） |
-
-### 6.3 多包产出
-
-一个 App 可以产出多个 deb 包，通过定义多个 `flange_deb` target 实现：
-
-```python
-# 主包
-flange_deb(name = "my-app-deb", ...)
-
-# 调试包
-flange_deb(name = "my-app-dbg-deb", package_suffix = "-dbg", ...)
-
-# lib 运行时包
-flange_deb(name = "libfoo-deb", ...)
-
-# lib 开发包
-flange_deb(name = "libfoo-dev-deb", package_suffix = "-dev", ...)
-```
-
-### 6.4 deb 安装到 rootfs 的流程
+lib 类型自动产出两个 deb 包，由 `AppBuilder` 触发两次 `DebBuilder` 调用：
 
 ```
-rootfs 构建阶段（Docker 容器内，Bazel 驱动）
+libfoo_1.0.0_arm64.deb    ← 运行时包：.so 文件
+libfoo-dev_1.0.0_arm64.deb ← 开发包：头文件 + 静态库（后缀由 lib.dev_suffix 配置）
+```
+
+### 6.3 deb 安装到 rootfs 的流程
+
+```
+rootfs 构建阶段（Docker 容器内，Python 驱动）
     │
-    ├── 收集所有需要安装的 deb 包
-    │   ├── 仓库内 App 的 deb 产物
-    │   ├── 外部 App 的 deb 产物
-    │   └── 板级配置 packages 列表过滤
+    ├── AppBuilder 收集所有需要安装的 App
+    │   ├── 板级配置 packages 列表过滤
+    │   ├── 仓库内 App（app/<name>/）
+    │   └── 外部 App（sources/apps/<name>/）
     │
-    ├── 创建 rootfs chroot 环境
-    │   └── 基于 ubuntu-base
+    ├── DebBuilder 打包 → <name>_<version>_<arch>.deb
+    │
+    ├── 创建 rootfs chroot 环境（基于 ubuntu-base）
     │
     ├── apt install 系统级依赖包
     │
-    ├── dpkg -i *.deb 安装自定义 App
-    │   ├── 文件安装到声明的路径
-    │   ├── postinst 执行（创建数据目录、systemctl enable 等）
-    │   └── conffiles 注册
-    │
-    └── 产出 rootfs 镜像
+    └── dpkg -i *.deb 安装自定义 App
+        ├── 文件安装到声明的路径
+        ├── postinst 执行（创建 data_dirs、systemctl enable 等）
+        └── conffiles 注册
 ```
 
 ---
@@ -600,13 +496,12 @@ rootfs 构建阶段（Docker 容器内，Bazel 驱动）
 
 ```
 my-tool/
-├── app.yaml                # App 描述文件
-├── BUILD.bazel             # 构建 + 打包规则
+├── app.yaml                # App 唯一配置文件
 ├── src/                    # 源码
 │   └── main.c
-├── conf/                   # 默认配置文件（可选）
+├── conf/                   # 默认配置文件（可选）→ /etc/my-tool/
 │   └── config.yaml
-└── res/                    # 资源文件（可选）
+└── res/                    # 资源文件（可选）→ /usr/share/my-tool/
     └── ...
 ```
 
@@ -614,15 +509,14 @@ my-tool/
 
 ```
 my-daemon/
-├── app.yaml                # App 描述文件
-├── BUILD.bazel             # 构建 + 打包规则
+├── app.yaml                # App 唯一配置文件
 ├── src/                    # 源码
 │   └── main.c
-├── conf/                   # 默认配置文件
+├── conf/                   # 默认配置文件 → /etc/my-daemon/
 │   └── daemon.yaml
 ├── res/                    # 资源文件（可选）
 │   └── ...
-└── systemd/                # systemd unit 文件
+└── systemd/                # systemd unit 文件 → /lib/systemd/system/
     └── my-daemon.service
 ```
 
@@ -630,9 +524,8 @@ my-daemon/
 
 ```
 libfoo/
-├── app.yaml                # App 描述文件
-├── BUILD.bazel             # 构建 + 双包打包规则
-├── include/                # 公开头文件
+├── app.yaml                # App 唯一配置文件
+├── include/                # 公开头文件 → /usr/include/libfoo/（dev 包）
 │   └── foo.h
 ├── src/                    # 源码
 │   └── foo.c
@@ -644,9 +537,8 @@ libfoo/
 
 ```
 hw-tests/
-├── app.yaml                # App 描述文件
-├── BUILD.bazel             # 打包规则
-└── scripts/                # 测试脚本
+├── app.yaml                # App 唯一配置文件
+└── scripts/                # 测试脚本 → /usr/lib/hw-tests/
     ├── test_wifi.sh
     ├── test_gpio.sh
     └── test_camera.sh
@@ -661,73 +553,62 @@ hw-tests/
 `flange create app` 命令自动生成 App 工程脚手架：
 
 ```bash
-flange create app <name> --type=<type> [--path=<path>]
+flange create app <name> [--type=<type>] [--build-system=<system>] [--version=<ver>] [--description=<desc>]
 ```
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `<name>` | App 名称 | 必填 |
 | `--type` | App 类型：`exec` / `service` / `lib` / `test` | `exec` |
-| `--path` | 创建位置 | `apps/<name>` |
-| `--build-system` | 构建系统：`bazel` / `cmake` / `meson` / `make` / `swift` | `bazel` |
+| `--build-system` | 构建系统：`none` / `cmake` / `meson` / `make` / `swift` | `cmake` |
+| `--version` | 初始版本号 | `0.1.0` |
+| `--description` | 简短描述 | 空 |
+
+支持的 type × build-system 组合：
+
+| | none | cmake | meson | make | swift |
+|--|------|-------|-------|------|-------|
+| exec | Y | Y | Y | Y | Y |
+| service | Y | Y | Y | Y | Y |
+| lib | - | Y | Y | Y | - |
+| test | Y | - | - | - | - |
 
 ### 8.2 使用示例
 
 ```bash
-# 创建一个 service 类型的 App
+# 创建一个 service 类型的 App（CMake）
 $ flange create app my-daemon --type=service
-  创建: apps/my-daemon/
-  ├── app.yaml
-  ├── BUILD.bazel
-  ├── src/main.c
-  ├── conf/config.yaml
-  └── systemd/my-daemon.service
-  ✓ App 脚手架已生成
+  App 脚手架已生成：app/my-daemon/
+  # app/my-daemon/
+  # ├── app.yaml
+  # ├── CMakeLists.txt
+  # ├── src/main.c
+  # ├── conf/config.yaml
+  # └── systemd/my-daemon.service
 
-# 创建一个 CMake 项目的 App
-$ flange create app my-cmake-app --type=exec --build-system=cmake
-  创建: apps/my-cmake-app/
-  ├── app.yaml
-  ├── BUILD.bazel          ← 包含 flange_cmake() 规则
-  ├── CMakeLists.txt       ← CMake 项目模板
-  └── src/main.c
-  ✓ App 脚手架已生成
+# 创建一个 Meson 项目的 App
+$ flange create app my-app --type=exec --build-system=meson
+  App 脚手架已生成：app/my-app/
 
-# 创建一个 Swift 项目的 App
-$ flange create app my-swift-app --type=exec --build-system=swift
-  创建: apps/my-swift-app/
-  ├── app.yaml
-  ├── BUILD.bazel          ← 包含 flange_swift() 规则
-  ├── Package.swift        ← SPM 项目模板
-  └── Sources/
-      └── main.swift
-  ✓ App 脚手架已生成
+# 创建一个预编译包（无需编译步骤）
+$ flange create app my-prebuilt --type=exec --build-system=none
+  App 脚手架已生成：app/my-prebuilt/
 
-# 创建一个链接库
-$ flange create app libbar --type=lib
-  创建: apps/libbar/
-  ├── app.yaml
-  ├── BUILD.bazel          ← 包含双包 flange_deb() 规则
-  ├── include/bar.h
-  └── src/bar.c
-  ✓ App 脚手架已生成
+# 创建一个链接库（CMake）
+$ flange create app libbar --type=lib --build-system=cmake
+  App 脚手架已生成：app/libbar/
 
 # 创建测试脚本集
 $ flange create app board-tests --type=test
-  创建: apps/board-tests/
-  ├── app.yaml
-  ├── BUILD.bazel
-  └── scripts/
-      └── test_example.sh
-  ✓ App 脚手架已生成
+  App 脚手架已生成：app/board-tests/
 ```
 
 ### 8.3 其他 App 相关命令
 
 | 命令 | 说明 |
 |------|------|
-| `flange build apps/<name>` | 构建指定 App（编译 + 打 deb 包） |
-| `flange build apps` | 构建当前配置下所有需要的 App |
+| `flange build app` | 构建当前配置所需的所有 App |
+| `flange build app <name>` | 构建指定 App（编译 + 打 deb 包） |
 | `flange list apps` | 列出所有已注册的 App（仓库内 + 外部） |
 
 ---
@@ -746,9 +627,8 @@ $ flange create app board-tests --type=test
 │  └────────┬────────┘                                           │
 │           ▼                                                     │
 │  ┌─────────────────────────────────┐                           │
-│  │ apps/my-app/                    │                           │
-│  │ ├── app.yaml      (身份证)       │                           │
-│  │ ├── BUILD.bazel   (施工图)       │                           │
+│  │ app/my-app/                     │                           │
+│  │ ├── app.yaml      (唯一配置源)   │                           │
 │  │ ├── src/          (源码)         │                           │
 │  │ ├── conf/         (配置)         │                           │
 │  │ └── systemd/      (服务)         │                           │
@@ -756,21 +636,35 @@ $ flange create app board-tests --type=test
 │           │                                                     │
 │           ▼  板级配置引用                                        │
 │  ┌─────────────────────────────────┐                           │
-│  │ board/rk3588-evb/board.bzl      │                           │
+│  │ board/my-board/config.py        │                           │
 │  │ "+packages": ["my-app"]         │                           │
 │  └────────┬────────────────────────┘                           │
 │           │                                                     │
 │           ▼  flange build（Docker 容器内）                       │
 │  ┌─────────────────────────────────┐                           │
-│  │ Bazel                           │                           │
-│  │ ├── 编译 src/ → binary          │                           │
-│  │ ├── 读取 app.yaml → control     │                           │
-│  │ ├── 按 paths 组织文件布局         │                           │
-│  │ ├── 打包 → my-app_1.0_arm64.deb │                           │
-│  │ └── 安装到 rootfs chroot         │                           │
-│  │     ├── /usr/bin/my-app         │                           │
-│  │     ├── /etc/my-app/config.yaml │                           │
-│  │     └── systemctl enable my-app │                           │
+│  │ AppBuilder (builder/app.py)     │                           │
+│  │ ├── 解析 app.yaml → AppSpec     │                           │
+│  │ ├── 调用构建系统（cmake/meson…） │                           │
+│  │ └── 收集产物，按约定映射路径      │                           │
+│  └────────┬────────────────────────┘                           │
+│           │                                                     │
+│           ▼                                                     │
+│  ┌─────────────────────────────────┐                           │
+│  │ DebBuilder (builder/deb.py)     │                           │
+│  │ ├── 生成 debian/control         │                           │
+│  │ ├── 组装文件树                   │                           │
+│  │ ├── 生成 postinst/prerm          │                           │
+│  │ └── 产出 my-app_1.0_arm64.deb   │                           │
+│  └────────┬────────────────────────┘                           │
+│           │                                                     │
+│           ▼  rootfs 集成                                        │
+│  ┌─────────────────────────────────┐                           │
+│  │ RootfsBuilder                   │                           │
+│  │ ├── dpkg -i *.deb              │                           │
+│  │ │   ├── /usr/bin/my-app        │                           │
+│  │ │   ├── /etc/my-app/config…    │                           │
+│  │ │   └── systemctl enable my-app│                           │
+│  │ └── 产出 rootfs 镜像            │                           │
 │  └────────┬────────────────────────┘                           │
 │           │                                                     │
 │           ▼  flange flash                                       │
@@ -784,90 +678,42 @@ $ flange create app board-tests --type=test
 
 ---
 
-## 10. 目录结构（更新）
+## 10. 目录结构
 
-在 build-system-design.md 基础上，新增 App 相关目录：
+App 系统相关目录：
 
 ```
 flange/
-├── ...                     # （已有结构省略）
-│
-├── apps/                   # 用户 App（仓库内）
-│   ├── my-display-app/     # service 类型示例
+├── app/                    # 用户 App（仓库内）
+│   ├── adbd/               # service 类型示例
 │   │   ├── app.yaml
-│   │   ├── BUILD.bazel
+│   │   ├── bin/
+│   │   ├── conf/
+│   │   ├── scripts/
+│   │   ├── systemd/
+│   │   └── udev/
+│   ├── my-display-app/     # 自定义 service App 示例
+│   │   ├── app.yaml
 │   │   ├── src/
 │   │   ├── conf/
-│   │   ├── res/
 │   │   └── systemd/
-│   ├── libfoo/             # lib 类型示例
-│   │   ├── app.yaml
-│   │   ├── BUILD.bazel
-│   │   ├── include/
-│   │   └── src/
-│   ├── my-tool/            # exec 类型示例
-│   │   ├── app.yaml
-│   │   ├── BUILD.bazel
-│   │   └── src/
-│   └── hw-tests/           # test 类型示例
+│   └── libfoo/             # lib 类型示例
 │       ├── app.yaml
-│       ├── BUILD.bazel
-│       └── scripts/
+│       ├── include/
+│       └── src/
 │
-├── build/
-│   ├── defs.bzl            # 导出 flange_deb / flange_cmake / ...
-│   ├── deb.bzl             # deb 打包规则实现
-│   ├── cmake.bzl           # CMake 包装规则
-│   ├── meson.bzl           # Meson 包装规则
-│   ├── make.bzl            # Makefile 包装规则
-│   ├── swift.bzl           # Swift PM 包装规则
-│   └── templates/          # App 脚手架模板
-│       ├── exec/
-│       ├── service/
-│       ├── lib/
-│       └── test/
+├── builder/                # 构建引擎
+│   ├── app_spec.py         #   app.yaml 解析与校验 → AppSpec
+│   ├── app.py              #   AppBuilder（文件收集、路径映射、构建调用）
+│   ├── deb.py              #   DebBuilder（纯 Python deb 打包）
+│   ├── scaffold.py         #   AppScaffold（工程脚手架生成）
+│   └── templates/          #   脚手架模板文件
+│       ├── app.yaml.tpl    #     通用 app.yaml 模板
+│       ├── exec/           #     exec 类型模板（none/cmake/meson/make/swift）
+│       ├── service/        #     service 类型模板
+│       ├── lib/            #     lib 类型模板
+│       └── test/           #     test 类型模板
 │
-└── ...
+└── sources/apps/           # 外部 App 源码缓存（git ignored）
+    └── <name>/             #   SourceManager 克隆至此
 ```
-
----
-
-## 11. MVP 实施经验与设计修正
-
-### 11.1 app.yaml 在 Starlark 中不可直接解析
-
-**问题**：设计中 `flange_deb` 规则在 Starlark loading 阶段读取 app.yaml 生成 deb control，但 Starlark 没有 YAML 解析能力，也无法在 loading 阶段读取文件内容。
-
-**当前方案**：app.yaml 仅作为参考文件传入 `flange_deb`，元数据（version、description、maintainer）在 BUILD.bazel 的 `flange_deb` 参数中直接声明：
-
-```python
-flange_deb(
-    name = "hello-world-deb",
-    app_yaml = "app.yaml",        # 传入但不在 Starlark 中解析
-    version = "0.1.0",            # 直接声明
-    description = "示例程序",      # 直接声明
-    maintainer = "flange <f@l>",  # 直接声明
-    binary = ":hello-world",
-    ...
-)
-```
-
-**后续优化方向**：在 `flange_deb` 的 action 阶段（bash/python 脚本）读取 app.yaml 生成 debian/control，实现"app.yaml 作为 deb 元数据的唯一数据源"。
-
-### 11.2 deb conffiles 生成的空行问题
-
-**问题**：使用字符串拼接生成 conffiles 内容时，末尾会产生空行，dpkg-deb 将空行解析为非法路径导致打包失败。
-
-**修正**：改用逐行 `echo >> conffiles` 替代字符串拼接。
-
-### 11.3 Bazel visibility 默认私有
-
-**问题**：App 的 deb target 默认 visibility 为 private，rootfs 和 image 规则无法引用。
-
-**修正**：需要显式声明 `visibility = ["//visibility:public"]`。后续可考虑在 `flange_deb` 规则中默认设置 public visibility。
-
-### 11.4 flange_deb 产出的二进制架构
-
-**问题**：`flange_deb` 的 `architecture` 参数默认 `arm64`，但实际编译架构取决于 Bazel toolchain 配置。如果未正确配置交叉编译工具链，产出的 deb 声称 arm64 但内含 x86_64 二进制。
-
-**修正**：需确保 Bazel toolchain 正确注册并通过 `--platforms` 激活。`architecture` 参数应与实际编译目标一致。
