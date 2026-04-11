@@ -4,7 +4,10 @@
 # 用法: source envsetup.sh
 #
 # 注入 lunch 和 flange 函数到当前 shell session。
-# lunch 选择板级配置后，通过 flange <subcommand> 执行构建和刷写操作。
+# lunch 选择目标配置后，通过 flange <subcommand> 执行构建和刷写操作。
+#
+# 目标格式: <board>-<product>-<variant>
+#   例: radxa-zero3w-default-release
 
 # --- 项目根目录 ---
 if [[ -n "${BASH_SOURCE[0]}" ]]; then
@@ -26,6 +29,16 @@ _flange_warn()  { echo -e "${_FLANGE_YELLOW}[WARN]${_FLANGE_NC} $*"; }
 _flange_error() { echo -e "${_FLANGE_RED}[ERROR]${_FLANGE_NC} $*"; }
 _flange_step()  { echo -e "${_FLANGE_BLUE}==>${_FLANGE_NC} $*"; }
 
+# --- .flange 状态目录 ---
+_FLANGE_STATE_DIR="$FLANGE_DIR/.flange"
+_FLANGE_CONFIG_FILE="$_FLANGE_STATE_DIR/current_config"
+
+_flange_ensure_state_dir() {
+    if [[ ! -d "$_FLANGE_STATE_DIR" ]]; then
+        mkdir -p "$_FLANGE_STATE_DIR"
+    fi
+}
+
 # --- 前置检查 ---
 _flange_check_docker() {
     if ! docker info &>/dev/null; then
@@ -35,116 +48,344 @@ _flange_check_docker() {
     return 0
 }
 
-_flange_check_board() {
-    if [[ -z "$FLANGE_BOARD" ]]; then
-        _flange_error "未选择板级配置，请先执行 lunch"
+_flange_check_target() {
+    if [[ -z "$FLANGE_BOARD" ]] || [[ -z "$FLANGE_PRODUCT" ]] || [[ -z "$FLANGE_VARIANT" ]]; then
+        _flange_error "未选择目标配置，请先执行 lunch"
         return 1
     fi
     return 0
 }
 
 _flange_check_all() {
-    _flange_check_board || return 1
+    _flange_check_target || return 1
     _flange_check_docker || return 1
     return 0
 }
 
-# --- lunch 函数 ---
-lunch() {
-    local board="$1"
+# --- Python 调用封装 ---
+_flange_python() {
+    (cd "$FLANGE_DIR" && python3 -c "$1")
+}
 
-    # 扫描可用板子
-    local boards=()
-    for bzl in "$FLANGE_DIR"/board/*/board.bzl; do
-        if [[ -f "$bzl" ]]; then
-            local name
-            name="$(basename "$(dirname "$bzl")")"
-            boards+=("$name")
-        fi
-    done
-
-    if [[ ${#boards[@]} -eq 0 ]]; then
-        _flange_error "未找到任何板级配置（board/*/board.bzl）"
+# --- 持久化：保存当前配置到 .flange/current_config ---
+_flange_save_config() {
+    _flange_ensure_state_dir
+    _flange_python "
+import json
+from config.registry import resolve_config
+cfg = resolve_config('$FLANGE_BOARD', '$FLANGE_PRODUCT', '$FLANGE_VARIANT')
+with open('.flange/current_config', 'w') as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+"
+    if [[ $? -ne 0 ]]; then
+        _flange_error "配置解析失败"
         return 1
     fi
+    return 0
+}
 
-    # 直接指定板子
-    if [[ -n "$board" ]]; then
-        local found=false
-        for b in "${boards[@]}"; do
-            if [[ "$b" == "$board" ]]; then
-                found=true
-                break
-            fi
-        done
-        if ! $found; then
-            _flange_error "板子不存在: $board"
-            echo "  可用的板级配置:"
-            for b in "${boards[@]}"; do
-                echo "    - $b"
-            done
+# --- 持久化：从 .flange/current_config 恢复状态 ---
+_flange_load_config() {
+    if [[ ! -f "$_FLANGE_CONFIG_FILE" ]]; then
+        return 1
+    fi
+    local board product variant
+    board=$(_flange_python "
+import json
+with open('.flange/current_config') as f:
+    cfg = json.load(f)
+print(cfg.get('board', ''))
+")
+    product=$(_flange_python "
+import json
+with open('.flange/current_config') as f:
+    cfg = json.load(f)
+print(cfg.get('product', ''))
+")
+    variant=$(_flange_python "
+import json
+with open('.flange/current_config') as f:
+    cfg = json.load(f)
+print(cfg.get('variant', ''))
+")
+    if [[ -n "$board" ]] && [[ -n "$product" ]] && [[ -n "$variant" ]]; then
+        export FLANGE_BOARD="$board"
+        export FLANGE_PRODUCT="$product"
+        export FLANGE_VARIANT="$variant"
+        return 0
+    fi
+    return 1
+}
+
+# --- lunch 函数 ---
+lunch() {
+    local arg="$1"
+    local board="" product="" variant=""
+
+    # 解析 --variant=X / --product=X 部分覆盖
+    if [[ "$arg" == --variant=* ]]; then
+        if [[ -z "$FLANGE_BOARD" ]]; then
+            _flange_error "尚未选择板子，无法使用 --variant 覆盖。请先执行 lunch <board>-<product>-<variant>"
+            return 1
+        fi
+        variant="${arg#--variant=}"
+        board="$FLANGE_BOARD"
+        product="$FLANGE_PRODUCT"
+        # 验证 variant 合法性
+        local valid
+        valid=$(_flange_python "
+from config.query import get_valid_targets
+targets = get_valid_targets()
+found = any(t == '${board}-${product}-${variant}' for t in targets)
+print('yes' if found else 'no')
+")
+        if [[ "$valid" != "yes" ]]; then
+            _flange_error "无效的 variant: $variant（目标 ${board}-${product}-${variant} 不存在）"
             return 1
         fi
         export FLANGE_BOARD="$board"
-        _flange_info "已选择: $FLANGE_BOARD"
+        export FLANGE_PRODUCT="$product"
+        export FLANGE_VARIANT="$variant"
+        _flange_save_config || return 1
+        _flange_info "已选择: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
         return 0
     fi
 
-    # 交互式菜单
+    if [[ "$arg" == --product=* ]]; then
+        if [[ -z "$FLANGE_BOARD" ]]; then
+            _flange_error "尚未选择板子，无法使用 --product 覆盖。请先执行 lunch <board>-<product>-<variant>"
+            return 1
+        fi
+        product="${arg#--product=}"
+        board="$FLANGE_BOARD"
+        variant="$FLANGE_VARIANT"
+        # 验证 product 合法性
+        local valid
+        valid=$(_flange_python "
+from config.query import get_valid_targets
+targets = get_valid_targets()
+found = any(t == '${board}-${product}-${variant}' for t in targets)
+print('yes' if found else 'no')
+")
+        if [[ "$valid" != "yes" ]]; then
+            _flange_error "无效的 product: $product（目标 ${board}-${product}-${variant} 不存在）"
+            return 1
+        fi
+        export FLANGE_BOARD="$board"
+        export FLANGE_PRODUCT="$product"
+        export FLANGE_VARIANT="$variant"
+        _flange_save_config || return 1
+        _flange_info "已选择: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+        return 0
+    fi
+
+    # 直接指定完整目标: lunch <board>-<product>-<variant>
+    if [[ -n "$arg" ]]; then
+        local parsed
+        parsed=$(_flange_python "
+from config.query import parse_target
+import json
+try:
+    result = parse_target('$arg')
+    print(json.dumps(result))
+except ValueError as e:
+    print('ERROR:' + str(e))
+")
+        if [[ "$parsed" == ERROR:* ]]; then
+            _flange_error "${parsed#ERROR:}"
+            echo ""
+            echo "  可用的目标配置:"
+            _flange_python "
+from config.query import get_valid_targets
+for t in get_valid_targets():
+    print('    - ' + t)
+"
+            return 1
+        fi
+        board=$(_flange_python "import json; d=json.loads('$parsed'); print(d['board'])")
+        product=$(_flange_python "import json; d=json.loads('$parsed'); print(d['product'])")
+        variant=$(_flange_python "import json; d=json.loads('$parsed'); print(d['variant'])")
+
+        export FLANGE_BOARD="$board"
+        export FLANGE_PRODUCT="$product"
+        export FLANGE_VARIANT="$variant"
+        _flange_save_config || return 1
+        _flange_info "已选择: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+        return 0
+    fi
+
+    # 无参数: 交互式菜单
+    local targets_raw
+    targets_raw=$(_flange_python "
+from config.query import get_valid_targets
+for t in get_valid_targets():
+    print(t)
+")
+    if [[ -z "$targets_raw" ]]; then
+        _flange_error "未找到任何可用的目标配置（board/*/config.py）"
+        return 1
+    fi
+
+    # 将输出读入数组（兼容 bash/zsh）
+    local targets=()
+    while IFS= read -r line; do
+        targets+=("$line")
+    done <<< "$targets_raw"
+
+    if [[ ${#targets[@]} -eq 0 ]]; then
+        _flange_error "未找到任何可用的目标配置"
+        return 1
+    fi
+
     echo ""
-    echo "  可用的板级配置:"
+    echo "  可用的目标配置:"
     local i=1
-    for b in "${boards[@]}"; do
-        echo "    $i. $b"
+    for t in "${targets[@]}"; do
+        echo "    $i. $t"
         ((i++))
     done
     echo ""
-    read -r -p "  请选择 (1-${#boards[@]}): " choice
+    read -r -p "  请选择 (1-${#targets[@]}): " choice
 
-    if [[ -z "$choice" ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -gt ${#boards[@]} ]] 2>/dev/null; then
+    if [[ -z "$choice" ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -gt ${#targets[@]} ]] 2>/dev/null; then
         _flange_error "无效的选择: $choice"
         return 1
     fi
 
-    export FLANGE_BOARD="${boards[$((choice-1))]}"
-    _flange_info "已选择: $FLANGE_BOARD"
+    local selected="${targets[$((choice-1))]}"
+    # zsh 数组从 1 开始，bash 从 0 开始
+    if [[ -z "$selected" ]] && [[ -n "${targets[$choice]}" ]]; then
+        selected="${targets[$choice]}"
+    fi
+
+    local parsed
+    parsed=$(_flange_python "
+from config.query import parse_target
+import json
+result = parse_target('$selected')
+print(json.dumps(result))
+")
+    board=$(_flange_python "import json; d=json.loads('$parsed'); print(d['board'])")
+    product=$(_flange_python "import json; d=json.loads('$parsed'); print(d['product'])")
+    variant=$(_flange_python "import json; d=json.loads('$parsed'); print(d['variant'])")
+
+    export FLANGE_BOARD="$board"
+    export FLANGE_PRODUCT="$product"
+    export FLANGE_VARIANT="$variant"
+    _flange_save_config || return 1
+    _flange_info "已选择: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
 }
 
 # --- Docker Compose 执行封装 ---
 _flange_docker_run() {
-    (cd "$FLANGE_DIR" && docker compose run --rm --build build "$@")
+    (cd "$FLANGE_DIR" && docker compose run --rm build "$@")
 }
 
 # --- flange 子命令 ---
 _flange_cmd_build() {
-    _flange_step "构建完整镜像: $FLANGE_BOARD"
-    _flange_docker_run bazel build //image --config="$FLANGE_BOARD" "$@"
-}
-
-_flange_cmd_kernel() {
-    _flange_step "构建内核: $FLANGE_BOARD"
-    _flange_docker_run bazel build //kernel --config="$FLANGE_BOARD" "$@"
-}
-
-_flange_cmd_bootloader() {
-    _flange_step "构建 Bootloader: $FLANGE_BOARD"
-    _flange_docker_run bazel build //bootloader --config="$FLANGE_BOARD" "$@"
-}
-
-_flange_cmd_rootfs() {
-    _flange_step "构建 Rootfs: $FLANGE_BOARD"
-    _flange_docker_run bazel build //rootfs --config="$FLANGE_BOARD" "$@"
-}
-
-_flange_cmd_collect() {
-    _flange_step "收集构建产物: $FLANGE_BOARD"
-    _flange_docker_run bazel run //image:collect --config="$FLANGE_BOARD" "$@"
+    local component="${1:-image}"
+    _flange_step "构建组件: $component (${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT})"
+    _flange_docker_run python3 -c "
+from builder.engine import BuildEngine
+import json, logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+with open('.flange/current_config') as f:
+    cfg = json.load(f)
+engine = BuildEngine(cfg)
+engine.build('$component')
+"
 }
 
 _flange_cmd_flash() {
-    _flange_check_board || return 1
-    _flange_step "刷写: $FLANGE_BOARD"
-    "$FLANGE_DIR/scripts/flange-flash.sh" --board "$FLANGE_BOARD" "$@"
+    local component="${1:-}"
+    _flange_check_target || return 1
+    local flash_script="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT/flash.sh"
+    if [[ ! -f "$flash_script" ]]; then
+        _flange_error "刷写脚本不存在: $flash_script"
+        _flange_error "请先执行 flange build 生成镜像"
+        return 1
+    fi
+    _flange_step "刷写: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+    if [[ -n "$component" ]]; then
+        bash "$flash_script" "$component"
+    else
+        bash "$flash_script"
+    fi
+}
+
+_flange_cmd_clean() {
+    _flange_check_target || return 1
+    local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+    _flange_step "清理构建产物: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+    if [[ -d "$target_dir" ]]; then
+        rm -rf "$target_dir"
+        _flange_info "已清理: $target_dir"
+    else
+        _flange_info "无需清理: $target_dir 不存在"
+    fi
+}
+
+_flange_cmd_status() {
+    echo ""
+    echo "  flange 构建状态"
+    echo "  ─────────────────────────────"
+    if [[ -n "$FLANGE_BOARD" ]]; then
+        echo "  板级配置:  $FLANGE_BOARD"
+        echo "  产品类型:  ${FLANGE_PRODUCT:-（未设置）}"
+        echo "  构建变体:  ${FLANGE_VARIANT:-（未设置）}"
+        echo "  目标:      ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+    else
+        echo "  目标配置:  （未选择，请执行 lunch）"
+    fi
+    echo "  项目目录:  $FLANGE_DIR"
+    echo ""
+
+    # Docker 状态
+    if docker info &>/dev/null; then
+        echo -e "  Docker:    ${_FLANGE_GREEN}运行中${_FLANGE_NC}"
+        # Docker 镜像状态
+        local image_name
+        image_name=$(cd "$FLANGE_DIR" && docker compose config --images 2>/dev/null | head -1)
+        if [[ -n "$image_name" ]]; then
+            local image_id
+            image_id=$(docker images -q "$image_name" 2>/dev/null)
+            if [[ -n "$image_id" ]]; then
+                echo -e "  构建镜像:  ${_FLANGE_GREEN}已构建${_FLANGE_NC} ($image_name)"
+            else
+                echo -e "  构建镜像:  ${_FLANGE_YELLOW}未构建${_FLANGE_NC} (执行 flange docker build)"
+            fi
+        fi
+    else
+        echo -e "  Docker:    ${_FLANGE_RED}未运行${_FLANGE_NC}"
+    fi
+
+    # 构建产物状态
+    if [[ -n "$FLANGE_BOARD" ]] && [[ -n "$FLANGE_PRODUCT" ]] && [[ -n "$FLANGE_VARIANT" ]]; then
+        local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+        echo ""
+        echo "  构建产物 ($target_dir):"
+        if [[ -d "$target_dir" ]]; then
+            for comp_dir in "$target_dir"/*/; do
+                if [[ -d "$comp_dir" ]]; then
+                    local comp_name
+                    comp_name="$(basename "$comp_dir")"
+                    echo -e "    ${comp_name}/  ${_FLANGE_GREEN}✓${_FLANGE_NC}"
+                fi
+            done
+            # 列出顶层文件（如 flash.sh）
+            for f in "$target_dir"/*; do
+                if [[ -f "$f" ]]; then
+                    local fname fsize
+                    fname="$(basename "$f")"
+                    fsize="$(ls -lh "$f" | awk '{print $5}')"
+                    echo "    $fname ($fsize)"
+                fi
+            done
+        else
+            echo -e "    ${_FLANGE_YELLOW}未构建${_FLANGE_NC}"
+        fi
+    fi
+    echo ""
 }
 
 _flange_cmd_shell() {
@@ -152,111 +393,71 @@ _flange_cmd_shell() {
     _flange_docker_run bash "$@"
 }
 
-_flange_cmd_sync() {
-    local board_bzl="$FLANGE_DIR/board/$FLANGE_BOARD/board.bzl"
-    if [[ ! -f "$board_bzl" ]]; then
-        _flange_error "未找到: $board_bzl"
-        return 1
-    fi
+# --- flange docker 子命令 ---
+_flange_cmd_docker() {
+    local docker_sub="$1"
+    shift 2>/dev/null
 
-    _flange_step "同步源码版本: $FLANGE_BOARD"
-
-    local updated=false
-
-    for section in kernel bootloader; do
-        # 从 board.bzl 提取 repo 和 branch
-        local repo branch current latest
-        repo=$(awk -v s="\"$section\"" '$0 ~ s{f=1} f && /"repo"/{print; exit}' "$board_bzl" | sed 's/.*"repo": *"\([^"]*\)".*/\1/')
-        branch=$(awk -v s="\"$section\"" '$0 ~ s{f=1} f && /"branch"/{print; exit}' "$board_bzl" | sed 's/.*"branch": *"\([^"]*\)".*/\1/')
-
-        if [[ -z "$repo" || -z "$branch" ]]; then
-            continue
-        fi
-
-        # 查询远端最新 commit
-        latest=$(git ls-remote "$repo" "refs/heads/$branch" 2>/dev/null | cut -f1)
-        if [[ -z "$latest" ]]; then
-            _flange_warn "$section: 无法获取 $repo $branch 的最新 commit"
-            continue
-        fi
-
-        # 读取当前锁定的 commit
-        current=$(awk -v s="\"$section\"" '$0 ~ s{f=1} f && /"commit"/{print; exit}' "$board_bzl" | sed 's/.*"commit": *"\([^"]*\)".*/\1/')
-
-        if [[ "$current" == "$latest" ]]; then
-            _flange_info "$section: 已是最新 (${latest:0:12})"
-            continue
-        fi
-
-        # 用 awk 更新对应 section 内的 commit
-        awk -v s="\"$section\"" -v c="$latest" '
-            $0 ~ s && /{/ { in_s = 1 }
-            in_s && /"commit"/ {
-                sub(/"commit": "[^"]*"/, "\"commit\": \"" c "\"")
-                in_s = 0
-            }
-            { print }
-        ' "$board_bzl" > "$board_bzl.tmp" && mv "$board_bzl.tmp" "$board_bzl"
-
-        _flange_info "$section: ${current:0:12} → ${latest:0:12}"
-        updated=true
-    done
-
-    if $updated; then
-        _flange_info "board.bzl 已更新，下次构建将自动拉取新版本"
-    else
-        _flange_info "所有源码均为最新"
-    fi
-}
-
-_flange_cmd_clean() {
-    _flange_step "清理构建产物: $FLANGE_BOARD"
-    local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD"
-    if [[ -d "$target_dir" ]]; then
-        rm -rf "$target_dir"
-        _flange_info "已清理: $target_dir"
-    fi
-    _flange_docker_run bazel clean "$@"
-}
-
-_flange_cmd_status() {
-    echo ""
-    echo "  flange 构建状态"
-    echo "  ─────────────────────────────"
-    echo "  板级配置:  ${FLANGE_BOARD:-（未选择，请执行 lunch）}"
-    echo "  项目目录:  $FLANGE_DIR"
-    echo ""
-
-    # Docker 状态
-    if docker info &>/dev/null; then
-        echo -e "  Docker:    ${_FLANGE_GREEN}运行中${_FLANGE_NC}"
-    else
-        echo -e "  Docker:    ${_FLANGE_RED}未运行${_FLANGE_NC}"
-    fi
-
-    # 构建产物状态
-    if [[ -n "$FLANGE_BOARD" ]]; then
-        local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD"
-        echo ""
-        echo "  构建产物 ($target_dir):"
-        if [[ -d "$target_dir/image" ]]; then
-            echo -e "    image/     ${_FLANGE_GREEN}✓${_FLANGE_NC}"
-            ls -lh "$target_dir/image/" 2>/dev/null | tail -n +2 | awk '{print "      " $NF " (" $5 ")"}'
-        else
-            echo -e "    image/     ${_FLANGE_YELLOW}未构建${_FLANGE_NC}"
-        fi
-        if [[ -d "$target_dir/kernel" ]]; then
-            echo -e "    kernel/    ${_FLANGE_GREEN}✓${_FLANGE_NC}"
-        else
-            echo -e "    kernel/    ${_FLANGE_YELLOW}未构建${_FLANGE_NC}"
-        fi
-        if [[ -d "$target_dir/bootloader" ]]; then
-            echo -e "    bootloader/ ${_FLANGE_GREEN}✓${_FLANGE_NC}"
-        else
-            echo -e "    bootloader/ ${_FLANGE_YELLOW}未构建${_FLANGE_NC}"
-        fi
-    fi
-    echo ""
+    case "$docker_sub" in
+        build)
+            _flange_step "构建 Docker 镜像"
+            (cd "$FLANGE_DIR" && docker compose build "$@")
+            if [[ $? -eq 0 ]]; then
+                _flange_info "Docker 镜像构建完成"
+            else
+                _flange_error "Docker 镜像构建失败"
+                return 1
+            fi
+            ;;
+        rebuild)
+            _flange_step "重新构建 Docker 镜像（无缓存）"
+            (cd "$FLANGE_DIR" && docker compose build --no-cache "$@")
+            if [[ $? -eq 0 ]]; then
+                _flange_info "Docker 镜像重新构建完成"
+            else
+                _flange_error "Docker 镜像重新构建失败"
+                return 1
+            fi
+            ;;
+        status)
+            echo ""
+            echo "  Docker 环境状态"
+            echo "  ─────────────────────────────"
+            if docker info &>/dev/null; then
+                echo -e "  Docker 守护进程: ${_FLANGE_GREEN}运行中${_FLANGE_NC}"
+            else
+                echo -e "  Docker 守护进程: ${_FLANGE_RED}未运行${_FLANGE_NC}"
+                echo ""
+                return 1
+            fi
+            local image_name
+            image_name=$(cd "$FLANGE_DIR" && docker compose config --images 2>/dev/null | head -1)
+            if [[ -n "$image_name" ]]; then
+                local image_info
+                image_info=$(docker images --format "{{.ID}}\t{{.Size}}\t{{.CreatedAt}}" "$image_name" 2>/dev/null | head -1)
+                if [[ -n "$image_info" ]]; then
+                    echo "  镜像名称:       $image_name"
+                    echo "  镜像 ID:        $(echo "$image_info" | cut -f1)"
+                    echo "  镜像大小:       $(echo "$image_info" | cut -f2)"
+                    echo "  创建时间:       $(echo "$image_info" | cut -f3)"
+                else
+                    echo -e "  构建镜像:       ${_FLANGE_YELLOW}未构建${_FLANGE_NC}"
+                    echo "  执行 flange docker build 来构建镜像"
+                fi
+            fi
+            echo ""
+            ;;
+        *)
+            echo ""
+            echo "  用法: flange docker <subcommand>"
+            echo ""
+            echo "    build     构建 Docker 镜像"
+            echo "    rebuild   重新构建 Docker 镜像（无缓存）"
+            echo "    status    显示 Docker 镜像状态"
+            echo ""
+            return 1
+            ;;
+    esac
 }
 
 # --- flange 主入口 ---
@@ -268,22 +469,22 @@ flange() {
         echo "  用法: flange <subcommand> [参数...]"
         echo ""
         echo "  构建命令:"
-        echo "    build        构建完整镜像"
-        echo "    kernel       构建内核"
-        echo "    bootloader   构建 Bootloader"
-        echo "    rootfs       构建 Rootfs"
-        echo "    collect      收集构建产物到 target/ 目录"
+        echo "    build [component]  构建组件（默认: image）"
+        echo "    clean              清理构建产物"
         echo ""
         echo "  刷写命令:"
-        echo "    flash        刷写到目标设备"
+        echo "    flash [component]  刷写到目标设备"
         echo ""
         echo "  工具命令:"
-        echo "    sync         同步当前板子的源码仓库（内核/bootloader/rootfs）"
-        echo "    shell        进入 Docker 构建环境 shell"
-        echo "    clean        清理构建产物"
-        echo "    status       显示当前状态"
+        echo "    shell              进入 Docker 构建环境 shell"
+        echo "    status             显示当前状态"
+        echo "    docker <cmd>       管理 Docker 镜像（build/rebuild/status）"
         echo ""
-        echo "  当前板子: ${FLANGE_BOARD:-（未选择，请执行 lunch）}"
+        if [[ -n "$FLANGE_BOARD" ]]; then
+            echo "  当前目标: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+        else
+            echo "  当前目标: （未选择，请执行 lunch）"
+        fi
         echo ""
         return 0
     fi
@@ -291,16 +492,15 @@ flange() {
     shift
 
     case "$subcmd" in
-        build|kernel|bootloader|rootfs|collect|clean)
+        build)
             _flange_check_all || return 1
-            "_flange_cmd_$subcmd" "$@"
-            ;;
-        sync)
-            _flange_check_board || return 1
-            _flange_cmd_sync "$@"
+            _flange_cmd_build "$@"
             ;;
         flash)
             _flange_cmd_flash "$@"
+            ;;
+        clean)
+            _flange_cmd_clean "$@"
             ;;
         shell)
             _flange_check_docker || return 1
@@ -308,6 +508,9 @@ flange() {
             ;;
         status)
             _flange_cmd_status
+            ;;
+        docker)
+            _flange_cmd_docker "$@"
             ;;
         *)
             _flange_error "未知子命令: $subcmd"
@@ -317,6 +520,10 @@ flange() {
     esac
 }
 
-# --- 初始化消息 ---
-_flange_info "flange 开发环境已加载"
-echo "  执行 lunch 选择板级配置，然后使用 flange <subcommand> 构建"
+# --- 初始化：恢复上次配置 ---
+if _flange_load_config; then
+    _flange_info "flange 开发环境已加载（恢复上次配置: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}）"
+else
+    _flange_info "flange 开发环境已加载"
+fi
+echo "  执行 lunch 选择目标配置，然后使用 flange <subcommand> 构建"
