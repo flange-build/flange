@@ -1,7 +1,0 @@
-# 自定义 deb 包 — 统一 filegroup 导出
-
-filegroup(
-    name = "all_debs",
-    srcs = glob(["**/*.deb"], allow_empty = True),
-    visibility = ["//visibility:public"],
-)
