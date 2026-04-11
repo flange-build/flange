@@ -44,10 +44,11 @@ class ComponentBuilder(ABC):
             if patch_dir.exists():
                 all_patches.extend(sorted(patch_dir.glob("*.patch")))
         for patch in all_patches:
+            abs_patch = str(patch.resolve())
             try:
-                self.docker.run(["git", "apply", str(patch)], cwd=str(src_dir))
+                self.docker.run(["git", "apply", abs_patch], cwd=str(src_dir))
             except Exception:
-                self.docker.run(["patch", "-p1", "-i", str(patch)], cwd=str(src_dir))
+                self.docker.run(["patch", "-p1", "-i", abs_patch], cwd=str(src_dir))
 
     @abstractmethod
     def configure(self, src_dir: Path, config: dict): ...
