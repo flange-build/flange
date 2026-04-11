@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 flange 已完成 Docker 构建环境（Phase 0）、交叉编译工具链（Phase 1）、三层配置继承体系（Phase 2）和内核构建（Phase 3）。当前可以构建内核镜像，但嵌入式系统启动还需要 Bootloader（引导加载程序）。Bootloader 是启动链的第一环——没有它，内核无法被加载执行。本阶段将实现 Rockchip 平台的 Bootloader 构建规则，使 `bazel build //bootloader --config=radxa-zero3w` 能完成 U-Boot 编译并产出 idbloader.img 和 u-boot.itb。

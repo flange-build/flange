@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 flange 已具备 Docker 构建环境、aarch64 交叉编译工具链和三层配置继承体系。内核是第一个需要构建的实际嵌入式组件。Linux 内核使用自有的 Kbuild/Makefile 构建系统，无法直接用 Bazel 的 `cc_library`/`cc_binary` 编译，需要设计一套自定义 Bazel 规则来封装内核的完整构建流程。

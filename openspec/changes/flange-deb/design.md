@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 flange 的 App 体系设计（`docs/app-architecture.md`）定义了 `flange_deb` 规则作为 App 打包的核心，但该规则尚未实现。当前已有 `app/adbd` 作为第一个消费者，其 BUILD.bazel 已编写好 `flange_deb` 调用，等待规则实现。

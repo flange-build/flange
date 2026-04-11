@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 flange 的组件构建规则（kernel、bootloader、image）需要通过 `select()` 路由到正确的平台子目录，但目前缺少支撑这一路由的配置体系。没有配置体系，后续阶段的内核构建、U-Boot 构建都无法根据目标平台/板子自动选择正确的源码仓库、defconfig、补丁集等参数。

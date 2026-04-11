@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 flange 已具备 Docker 构建环境、aarch64 交叉编译工具链、三层配置继承体系和内核构建能力。Bootloader 是嵌入式系统启动链的第一环，Phase 3 已验证的"框架+策略"架构可直接复用于 Bootloader 构建。

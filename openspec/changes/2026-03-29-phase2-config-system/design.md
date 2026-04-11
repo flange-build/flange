@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 Phase 0 和 Phase 1 已完成：Docker 构建环境和 aarch64 交叉编译工具链就绪。现在需要搭建配置体系，让后续组件构建规则能通过 `select()` 路由到正确的平台实现，并从统一的配置注册表获取构建参数（源码仓库、defconfig、DTS 名称等）。

@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 Phase 0 已搭建 Docker 构建容器（Ubuntu 24.04），其中包含 `aarch64-linux-gnu-gcc` 13.3.0 交叉编译器。但 Bazel 默认使用宿主机（x86_64）的本地编译器，要产出 aarch64 二进制需要显式注册 CC toolchain 并通过 `--platforms` 激活。

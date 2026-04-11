@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 flange 项目已完成详细的架构设计文档（build-system-design.md、app-architecture.md），但尚无任何可执行代码。本阶段（Phase 0）是自底向上实施路径的第一步，搭建 Docker 容器化构建环境和 Bazel 项目骨架，为后续所有阶段提供基础设施。

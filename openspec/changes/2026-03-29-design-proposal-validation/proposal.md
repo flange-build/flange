@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 当前 ProjectSpec.md 和 build-system-design.md 中，kernel、uboot、rootfs、image 四个组件目录各只有一个 `BUILD.bazel`，平台差异全部通过 `select()` 在单个文件中处理。随着支持平台增多（Rockchip、Allwinner、Qualcomm 等），`select()` 会急剧膨胀且难以维护。同时，不同平台的 bootloader 构建流程差异巨大（Rockchip 用 U-Boot，Qualcomm 用 ABL/XBL），现有的 `uboot/` 命名无法准确覆盖所有场景。

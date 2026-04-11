@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 flange 的 App 工程体系（`docs/app-architecture.md`）要求所有 App 通过 `flange_deb` 规则打包为 .deb 并安装到 rootfs。当前 `flange_deb` 规则尚未实现，`build/defs.bzl` 不存在，导致 `app/adbd` 等已就绪的 App 无法构建。
