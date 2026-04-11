@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 Phase 0 已搭建 Docker 构建环境并在容器内安装了 aarch64-linux-gnu 交叉编译器，但 Bazel 尚不知道如何使用它。需要注册 Bazel CC toolchain 和 platform，使 `bazel build --platforms=//toolchain:aarch64_linux` 能产出 aarch64 二进制文件。这是内核、bootloader、rootfs 等所有组件构建的前提。

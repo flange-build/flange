@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 flange 构建系统当前设计中，kernel、uboot、rootfs、image 四个组件目录各只有一个 `BUILD.bazel`，所有平台差异通过 Bazel `select()` 在单文件中处理。随着 Rockchip、Allwinner、Qualcomm 等平台的接入，`select()` 分支快速膨胀，维护成本高且易出错。

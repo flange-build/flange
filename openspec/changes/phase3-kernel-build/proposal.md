@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 flange 已完成 Docker 构建环境（Phase 0）、交叉编译工具链（Phase 1）和三层配置继承体系（Phase 2）。当前具备了交叉编译能力和板级配置查询能力，但还不能构建任何实际的嵌入式组件。内核是嵌入式系统最核心的组件之一，也是项目"内核快速验证通道"核心目标的基础。本阶段将实现 Rockchip 平台的内核构建规则，使 `bazel build //kernel --config=radxa-zero3w` 能完成从源码拉取、补丁应用、defconfig 配置到交叉编译的完整流程，产出可用的 Image 和 DTB 文件。

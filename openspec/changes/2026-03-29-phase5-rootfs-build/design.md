@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 Phase 3/4 已完成内核和 bootloader 的构建框架，确立了"框架+策略脚本"架构模式。现在需要构建根文件系统，基于 ubuntu-base tarball 通过 qemu-user-static chroot 安装包、应用 overlay、安装自定义 deb 包，产出 `rootfs.tar.gz`。

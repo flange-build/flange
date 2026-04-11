@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 Phase 3/4 完成了内核和 bootloader 的构建，但系统启动后没有可用的根文件系统。Rootfs 是嵌入式系统的核心组件 — 没有它，内核和 bootloader 只是裸机固件。本阶段基于 ubuntu-base tarball 构建根文件系统，支持 apt 包安装和自定义 deb 包安装，产出 `rootfs.tar.gz`，为后续 Phase 6 镜像打包提供输入。

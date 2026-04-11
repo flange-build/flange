@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 Phase 0-6 已完成从内核到镜像刷写的完整构建链路，但用户操作需要记住冗长的 `docker compose run --rm build bazel build //image --config=radxa-zero3w` 命令。需要一个 Android AOSP 风格的 CLI 脚手架，让用户 `source envsetup.sh && lunch && flange build` 即可完成所有操作。

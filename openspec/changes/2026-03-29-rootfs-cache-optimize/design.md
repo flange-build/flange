@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 当前 `rootfs_build` 是一个单体 Bazel rule，将 ubuntu-base 解压、apt 包安装、自定义 deb 安装、overlay 应用、打包全部耦合在一个 action 中。由于使用 qemu-user-static 模拟执行，apt install 阶段耗时 ~38 分钟。Bazel 的 action cache 在所有输入不变时可以跳过，但任何输入变化（即使只改了 overlay 文件）都会触发完整重建。

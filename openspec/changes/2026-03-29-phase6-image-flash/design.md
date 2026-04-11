@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 Phase 0-5 已完成内核（Image + DTB + modules）、Bootloader（idbloader.img + u-boot.itb）、Rootfs（rootfs.tar.gz）三大组件的独立构建。但产物分散，无法直接刷入设备。Phase 6 需要：

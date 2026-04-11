@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。当前架构参见 `openspec/flange-build-tool-design.md`。
+
 ## Context
 
 当前 kernel 和 bootloader 源码通过 repository rule（`kernel_source.bzl`、`bootloader_source.bzl`）从远程 git 仓库浅克隆获取。构建脚本在 `no-sandbox` 模式下直接操作源码树，通过 `git reset --hard HEAD` 重置补丁、`make` 增量编译。

@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。
+
 ## Why
 
 当前 rootfs 构建将所有输入（ubuntu-base tarball、apt 包列表、自定义 deb、overlay）耦合在同一个 Bazel action 中。任何输入变化（即使只改了 overlay 文件）都触发完整重建（~38 分钟），其中 apt-get update + install 通过 qemu 模拟执行是主要瓶颈。参考 Armbian 的多层缓存架构，核心优化思路是：按变化频率拆分 Bazel rule，让慢变输入（包列表）和快变输入（overlay、自定义 deb）各自独立缓存。

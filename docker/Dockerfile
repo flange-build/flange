@@ -33,13 +33,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fdisk \
         kpartx \
         qemu-user-static \
-    && ln -sf /usr/bin/python3 /usr/bin/python2 \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 bazelisk（自动管理 Bazel 版本）
-RUN curl -fsSL https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 \
-        -o /usr/local/bin/bazel \
-    && chmod +x /usr/local/bin/bazel
+ENV PYTHONPATH=/workspace
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
