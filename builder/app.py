@@ -1,4 +1,4 @@
-"""App 构建器 — 文件收集与路径映射。
+"""App 构建器 — 文件收集与路径映射，以及 AppBuilder 构建协调器。
 
 约定式路径映射规则：
   bin/       → /usr/bin/          (mode 0o755)
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from builder.app_spec import AppSpec
 
@@ -261,3 +261,247 @@ def _infer_mode(install_path: str, src_rel: str) -> int:
             return 0o755
 
     return 0o644
+
+
+# ---------------------------------------------------------------------------
+# App 间拓扑排序
+# ---------------------------------------------------------------------------
+
+class CircularDependencyError(ValueError):
+    """检测到循环依赖时抛出。"""
+
+
+def _topo_sort_apps(graph: dict[str, list[str]]) -> list[str]:
+    """对 App 依赖图进行拓扑排序，返回合法的构建顺序。
+
+    使用深度优先搜索（DFS）实现拓扑排序，同时检测循环依赖。
+
+    参数：
+        graph: {app_name: [依赖 app_name, ...]} 字典，
+               键必须包含所有待构建 App；依赖列表中的 App 也必须出现在键中。
+
+    返回：
+        拓扑排序后的 App 名称列表（依赖先于被依赖方）
+
+    抛出：
+        CircularDependencyError: 若依赖图中存在循环依赖
+    """
+    # 0 = 未访问，1 = 访问中（检测循环），2 = 已完成
+    state: dict[str, int] = {name: 0 for name in graph}
+    order: list[str] = []
+
+    def _visit(name: str, path: list[str]) -> None:
+        """深度优先遍历，path 记录当前访问路径（用于循环检测报错）。"""
+        if state[name] == 2:
+            # 已处理完毕，跳过
+            return
+        if state[name] == 1:
+            # 发现回边，报告循环路径
+            cycle_start = path.index(name)
+            cycle = " → ".join(path[cycle_start:] + [name])
+            raise CircularDependencyError(f"检测到循环依赖：{cycle}")
+
+        state[name] = 1  # 标记为"访问中"
+        path.append(name)
+
+        for dep in graph.get(name, []):
+            _visit(dep, path)
+
+        path.pop()
+        state[name] = 2  # 标记为"已完成"
+        order.append(name)
+
+    for name in graph:
+        if state[name] == 0:
+            _visit(name, [])
+
+    return order
+
+
+# ---------------------------------------------------------------------------
+# AppBuilder：协调单个或全量 App 的构建与打包
+# ---------------------------------------------------------------------------
+
+class AppBuilder:
+    """App 构建协调器 — 负责查找 App 目录、加载规格、编译（预留）和打包。
+
+    参数：
+        docker:     DockerRunner 实例（用于后续编译步骤，Task 5 实现）
+        source:     SourceManager 实例（用于外部仓库 App 查找，Task 7 实现）
+        config:     FINAL_CONFIG 字典，需包含 board/product/variant/rootfs 等字段
+        project_dir: 项目根目录，默认为当前工作目录
+    """
+
+    def __init__(
+        self,
+        docker,
+        source,
+        config: dict,
+        project_dir: Optional[Path] = None,
+    ) -> None:
+        self._docker = docker
+        self._source = source
+        self._config = config
+        self._project_dir = Path(project_dir) if project_dir else Path.cwd()
+
+        # 推导输出目录：target/<board>/<product>/<variant>/app/
+        board   = config.get("board", "unknown")
+        product = config.get("product", "default")
+        variant = config.get("variant", "release")
+        self._output_dir = self._project_dir / "target" / board / product / variant / "app"
+
+        # 目标架构
+        self._arch: str = config.get("arch", "aarch64")
+
+    # -----------------------------------------------------------------------
+    # 公开接口
+    # -----------------------------------------------------------------------
+
+    def build_all(self) -> Dict[str, Path]:
+        """构建所有 custom_packages，返回 {app_name: deb_path}。
+
+        从 config["rootfs"]["custom_packages"] 获取待构建 App 列表，
+        按拓扑排序顺序逐个调用 build_one()。
+
+        返回：
+            {app_name: .deb 路径} 字典
+        """
+        custom_packages: list[str] = (
+            self._config.get("rootfs", {}).get("custom_packages", [])
+        )
+        if not custom_packages:
+            log.info("AppBuilder: custom_packages 为空，无需构建任何 App")
+            return {}
+
+        log.info(f"AppBuilder: 待构建 App 列表：{custom_packages}")
+        ordered = self._resolve_build_order(custom_packages)
+        log.info(f"AppBuilder: 构建顺序（拓扑排序）：{ordered}")
+
+        results: Dict[str, Path] = {}
+        for name in ordered:
+            deb_path = self.build_one(name)
+            results[name] = deb_path
+
+        return results
+
+    def build_one(self, app_name: str) -> Path:
+        """构建单个 App，返回生成的 .deb 路径。
+
+        流程：
+        1. 查找 App 目录
+        2. 加载 app.yaml 规格
+        3. 编译（build.system != "none" 时，当前为占位实现，Task 5 完成）
+        4. 收集安装文件
+        5. 打包为 .deb
+
+        参数：
+            app_name: App 名称（与目录名一致）
+
+        返回：
+            .deb 文件路径
+
+        抛出：
+            FileNotFoundError: App 目录或 app.yaml 不存在
+        """
+        from builder.app_spec import load_spec
+        from builder.deb import DebBuilder
+
+        log.info(f"AppBuilder: 开始构建 App '{app_name}'")
+
+        # 步骤 1：查找 App 目录
+        app_dir = self._find_app_dir(app_name)
+        log.debug(f"AppBuilder: App 目录 = {app_dir}")
+
+        # 步骤 2：加载规格
+        spec = load_spec(app_dir)
+        log.debug(f"AppBuilder: 已加载规格，版本 = {spec.app.version}")
+
+        # 步骤 3：编译（预留，Task 5 实现）
+        self._compile(app_dir, spec)
+
+        # 步骤 4：收集文件
+        files = collect_files(app_dir, spec, self._arch)
+        log.debug(f"AppBuilder: 收集到 {len(files)} 个文件")
+
+        # 步骤 5：打包 .deb
+        deb_builder = DebBuilder()
+        deb_path = deb_builder.build_from_spec(spec, self._arch, files, self._output_dir)
+        log.info(f"AppBuilder: App '{app_name}' 打包完成 → {deb_path}")
+
+        return deb_path
+
+    # -----------------------------------------------------------------------
+    # 内部辅助方法
+    # -----------------------------------------------------------------------
+
+    def _find_app_dir(self, app_name: str) -> Path:
+        """查找 App 目录。
+
+        当前仅支持在 <project_dir>/app/<name>/ 中查找。
+        Task 7 将扩展为支持 SourceManager 外部仓库查找。
+
+        参数：
+            app_name: App 名称
+
+        返回：
+            App 目录 Path
+
+        抛出：
+            FileNotFoundError: App 目录不存在
+        """
+        # 优先在本地 app/ 目录查找
+        local_dir = self._project_dir / "app" / app_name
+        if local_dir.is_dir():
+            return local_dir
+
+        raise FileNotFoundError(
+            f"App '{app_name}' 目录不存在，已查找：{local_dir}"
+        )
+
+    def _resolve_build_order(self, app_names: list[str]) -> list[str]:
+        """解析各 App 的 build.deps，拓扑排序返回构建顺序。
+
+        仅将 app_names 集合内的依赖纳入排序；集合外的依赖被忽略
+        （认为已在系统中安装，不需要本次构建）。
+
+        参数：
+            app_names: 待构建的 App 名称列表
+
+        返回：
+            拓扑排序后的名称列表
+
+        抛出：
+            CircularDependencyError: 存在循环依赖
+        """
+        from builder.app_spec import load_spec
+
+        app_set = set(app_names)
+        graph: dict[str, list[str]] = {}
+
+        for name in app_names:
+            app_dir = self._find_app_dir(name)
+            spec = load_spec(app_dir)
+            # 仅保留同属本次构建集合的依赖
+            graph[name] = [d for d in spec.build.deps if d in app_set]
+
+        return _topo_sort_apps(graph)
+
+    def _compile(self, app_dir: Path, spec: AppSpec) -> None:
+        """编译 App（当前为占位实现，Task 5 完成真正的编译逻辑）。
+
+        当 build.system 为 "none" 时跳过；其他构建系统记录日志，
+        实际编译由 Task 5 实现。
+
+        参数：
+            app_dir: App 目录
+            spec:    已加载的 AppSpec
+        """
+        if spec.build.system == "none":
+            # 预编译 App，无需编译步骤
+            return
+
+        # Task 5 将在此处实现真正的编译逻辑（cmake/meson/make/custom）
+        log.info(
+            f"AppBuilder: App '{spec.app.name}' 使用构建系统 '{spec.build.system}'，"
+            f"编译步骤待 Task 5 实现，当前跳过"
+        )
