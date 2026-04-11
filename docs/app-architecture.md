@@ -1,5 +1,9 @@
 # flange App 工程架构设计
 
+> **迁移状态**：flange 构建系统已从 Bazel 迁移至 Python 统一架构（v2.0）。本文档中涉及 `BUILD.bazel`、`flange_deb` 等 Bazel 规则的内容描述的是**设计意图**，实际实现将使用 Python 构建规则（`builder/` 模块）。App 打包系统的 Python 实现为待实施项，参见 `roadmap.md`。
+>
+> 文档中的核心设计（App 分类、app.yaml 规格、deb 打包流程、systemd 集成）在 Python 架构下**完全保留**，仅构建规则的语法从 Starlark 变为 Python。
+
 本文档描述 flange 构建系统支持的用户 App 工程架构，包括 App 分类、工程结构、描述文件、构建打包、集成方式等设计。
 
 ---
