@@ -10,3 +10,12 @@ cache/
 
 # 运行时状态
 .flange/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# 源码仓库
+sources/
