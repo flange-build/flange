@@ -11,6 +11,11 @@ class RockchipImageBuilder(ComponentBuilder):
     IDBLOADER_SECTOR = 64
     ROOTFS_PARTUUID = "614e0000-0000-4000-8000-000000000000"
 
+    def build(self, config: dict) -> dict:
+        """镜像组装无需源码仓库，跳过 source.ensure / reset / patch。"""
+        self.compile(None, config)
+        return self.collect(None, config)
+
     def configure(self, src_dir: Path, config: dict):
         pass
 

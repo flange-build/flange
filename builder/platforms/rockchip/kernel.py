@@ -17,7 +17,8 @@ class RockchipKernelBuilder(ComponentBuilder):
         jobs = config.get("jobs", 0)
         self.make(src_dir, ["Image", "dtbs", "modules"],
                   arch=self.ARCH, cross=self.CROSS, jobs=jobs,
-                  extra=["KCFLAGS=-Wno-error"])
+                  extra=["KCFLAGS=-Wno-error"],
+                  label="编译内核...")
         # 安装模块（带 strip）
         modules_staging = src_dir / "_modules_staging"
         modules_staging.mkdir(exist_ok=True)

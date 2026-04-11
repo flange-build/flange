@@ -345,14 +345,16 @@ class TestInstallOverride:
         assert "/etc/app.conf" in m
         assert m["/etc/app.conf"][1] == 0o644
 
-    def test_missing_install_source_file_logged(self, tmp_path: Path, caplog):
-        """install 段声明的源文件不存在时，记录 warning 日志并跳过该文件。"""
+    def test_missing_install_source_file_logged(self, tmp_path: Path):
+        """install 段声明的源文件不存在时，记录 warning 并跳过该文件。"""
         _touch(tmp_path / "bin" / "prog")
         spec = _make_spec(
             name="myapp",
             install={"conf/missing.conf": "/etc/app.conf"},  # 源文件不存在
         )
-        with caplog.at_level(logging.WARNING):
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as w:
+            _warnings.simplefilter("always")
             files = collect_files(tmp_path, spec, "aarch64")
 
         m = _result_map(files)
@@ -360,8 +362,8 @@ class TestInstallOverride:
         assert "/usr/bin/prog" in m
         # 缺失的 install 文件不在列表中
         assert "/etc/app.conf" not in m
-        # 日志中应有 warning
-        assert "install 映射的源文件不存在，跳过" in caplog.text
+        # 应有 UserWarning
+        assert any("install 映射的源文件不存在，跳过" in str(x.message) for x in w)
 
 
 # ---------------------------------------------------------------------------

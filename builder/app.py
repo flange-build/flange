@@ -18,14 +18,11 @@
 
 from __future__ import annotations
 
-import logging
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from builder.app_spec import AppSpec
-
-log = logging.getLogger("flange")
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +262,8 @@ def collect_files(
         src_path = app_dir / src_rel
         if not src_path.exists():
             # 源文件不存在，记录警告并跳过
-            log.warning(f"install 映射的源文件不存在，跳过: {src_path}")
+            import warnings
+            warnings.warn(f"install 映射的源文件不存在，跳过: {src_path}")
             continue
 
         # 推断文件权限：安装到 /usr/bin/ 或 /usr/sbin/ 或 /usr/lib/<name>/ 时赋予执行权限
@@ -399,6 +397,8 @@ class AppBuilder:
         project_dir: 项目根目录，默认为当前工作目录
     """
 
+    output = None  # BuildOutput，由 engine 注入
+
     def __init__(
         self,
         docker,
@@ -420,6 +420,10 @@ class AppBuilder:
         # 目标架构
         self._arch: str = config.get("arch", "aarch64")
 
+    def _status(self, msg: str):
+        if self.output:
+            self.output.status(msg)
+
     # -----------------------------------------------------------------------
     # 公开接口
     # -----------------------------------------------------------------------
@@ -437,12 +441,12 @@ class AppBuilder:
             self._config.get("rootfs", {}).get("custom_packages", [])
         )
         if not custom_packages:
-            log.info("AppBuilder: custom_packages 为空，无需构建任何 App")
+            self._status("custom_packages 为空，无需构建 App")
             return {}
 
-        log.info(f"AppBuilder: 待构建 App 列表：{custom_packages}")
+        self._status(f"待构建 App: {custom_packages}")
         ordered = self._resolve_build_order(custom_packages)
-        log.info(f"AppBuilder: 构建顺序（拓扑排序）：{ordered}")
+        self._status(f"构建顺序: {ordered}")
 
         results: Dict[str, Path] = {}
         for name in ordered:
@@ -474,15 +478,13 @@ class AppBuilder:
         from builder.app_spec import load_spec
         from builder.deb import DebBuilder
 
-        log.info(f"AppBuilder: 开始构建 App '{app_name}'")
+        self._status(f"开始构建 App '{app_name}'")
 
         # 步骤 1：查找 App 目录
         app_dir = self._find_app_dir(app_name)
-        log.debug(f"AppBuilder: App 目录 = {app_dir}")
 
         # 步骤 2：加载规格
         spec = load_spec(app_dir)
-        log.debug(f"AppBuilder: 已加载规格，版本 = {spec.app.version}")
 
         # 步骤 3：编译
         self._compile(app_dir, spec, self._config)
@@ -491,20 +493,19 @@ class AppBuilder:
         if spec.app.type == "lib":
             outputs = self._build_lib(app_dir, spec)
             runtime_path = outputs["runtime"]
-            log.info(
-                f"AppBuilder: lib App '{app_name}' 双包构建完成 → "
-                f"runtime={runtime_path.name}, dev={outputs['dev'].name}"
+            self._status(
+                f"lib App '{app_name}' 双包完成 → "
+                f"{runtime_path.name}, {outputs['dev'].name}"
             )
             return runtime_path
 
         # 收集文件（非 lib 类型）
         files = collect_files(app_dir, spec, self._arch)
-        log.debug(f"AppBuilder: 收集到 {len(files)} 个文件")
 
         # 步骤 5：打包 .deb
         deb_builder = DebBuilder()
         deb_path = deb_builder.build_from_spec(spec, self._arch, files, self._output_dir)
-        log.info(f"AppBuilder: App '{app_name}' 打包完成 → {deb_path}")
+        self._status(f"App '{app_name}' 打包完成 → {deb_path.name}")
 
         return deb_path
 
@@ -564,10 +565,7 @@ class AppBuilder:
                 # 头文件 → 开发包
                 dev_files.append((src_path, install_path, mode))
 
-        log.debug(
-            f"AppBuilder: lib '{app_name}' 文件分拣 — "
-            f"运行时 {len(runtime_files)} 个，开发 {len(dev_files)} 个"
-        )
+        # debug: 文件分拣结果（仅写日志）
 
         deb_builder = DebBuilder()
 
@@ -598,7 +596,7 @@ class AppBuilder:
             files=runtime_files,
             output_dir=self._output_dir,
         )
-        log.debug(f"AppBuilder: 运行时包已生成 → {runtime_deb}")
+        # 运行时包生成完毕
 
         # -----------------------------------------------------------------------
         # 构建开发包：lib<name>-dev
@@ -630,7 +628,7 @@ class AppBuilder:
             files=dev_files,
             output_dir=self._output_dir,
         )
-        log.debug(f"AppBuilder: 开发包已生成 → {dev_deb}")
+        # 开发包生成完毕
 
         # -----------------------------------------------------------------------
         # sysroot 安装：供后续依赖此库的 App 编译使用
@@ -672,7 +670,6 @@ class AppBuilder:
             for header in sorted(include_src.iterdir()):
                 if header.is_file():
                     shutil.copy2(str(header), str(include_dst / header.name))
-                    log.debug(f"AppBuilder: sysroot 安装头文件 {header.name}")
 
         # -----------------------------------------------------------------------
         # 安装共享库：lib/*.so* → sysroot/usr/lib/
@@ -684,9 +681,8 @@ class AppBuilder:
             for lib_file in sorted(lib_src.iterdir()):
                 if lib_file.is_file() and _is_shared_lib(lib_file.name):
                     shutil.copy2(str(lib_file), str(lib_dst / lib_file.name))
-                    log.debug(f"AppBuilder: sysroot 安装共享库 {lib_file.name}")
 
-        log.info(f"AppBuilder: lib '{app_name}' sysroot 安装完成 → {sysroot_base}")
+        self._status(f"lib '{app_name}' sysroot 安装完成")
 
     def _find_app_dir(self, app_name: str) -> Path:
         """查找 App 目录。
@@ -889,12 +885,9 @@ class AppBuilder:
 
         if system == "none":
             # 预编译 App，无需编译步骤
-            log.debug(f"AppBuilder: App '{spec.app.name}' 为预编译包，跳过编译")
             return
 
-        log.info(
-            f"AppBuilder: App '{spec.app.name}' 使用构建系统 '{system}'，开始编译"
-        )
+        self._status(f"App '{spec.app.name}' 编译 ({system})")
 
         # 生成命令列表
         commands = self._build_commands(spec, config)
@@ -902,5 +895,4 @@ class AppBuilder:
         # 逐步执行编译命令
         cwd = str(app_dir)
         for cmd in commands:
-            log.debug(f"AppBuilder: 执行命令 {cmd}")
             self._docker.run(cmd, cwd=cwd)

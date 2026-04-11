@@ -10,13 +10,10 @@
 
 from __future__ import annotations
 
-import logging
 import shutil
 import string
 from pathlib import Path
 from typing import Optional
-
-log = logging.getLogger("flange")
 
 # 模板目录（与本文件同级的 templates/ 子目录）
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -124,7 +121,7 @@ class AppScaffold:
                 shutil.rmtree(dest, ignore_errors=True)
             raise
 
-        log.info("脚手架已生成：%s（type=%s, build=%s）", dest, app_type, build_system)
+        print(f"脚手架已生成：{dest}（type={app_type}, build={build_system}）")
         return dest
 
     # ------------------------------------------------------------------

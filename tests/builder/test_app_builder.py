@@ -286,17 +286,12 @@ class TestBuildOne:
         deb_path = builder.build_one("empty_app")
         assert deb_path.exists()
 
-    def test_non_none_build_system_跳过编译(self, tmp_path, caplog):
-        """build.system != "none" 时，_compile 应记录跳过日志，不实际执行编译。"""
-        import logging
+    def test_non_none_build_system_编译执行(self, tmp_path):
+        """build.system != "none" 时，_compile 应执行编译流程。"""
         _make_app_dir(tmp_path, "cmake_app", build_system="cmake", bin_files=["cmake_app"])
         builder = _make_builder(tmp_path)
-        # Task 5 未实现前，cmake 构建系统应只记录日志并跳过
-        with caplog.at_level(logging.INFO, logger="flange"):
-            deb_path = builder.build_one("cmake_app")
+        deb_path = builder.build_one("cmake_app")
         assert deb_path.exists()
-        # 确认日志中出现跳过提示
-        assert any("cmake" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------

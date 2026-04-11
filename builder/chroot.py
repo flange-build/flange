@@ -24,6 +24,11 @@ class ChrootContext:
         self._mount("sysfs", self.rootfs / "sys", fstype="sysfs")
         self._bind("/dev", self.rootfs / "dev")
         self._bind("/dev/pts", self.rootfs / "dev/pts")
+        # DNS 解析：复制宿主 resolv.conf 到 chroot 内
+        resolv_src = Path("/etc/resolv.conf")
+        resolv_dst = self.rootfs / "etc" / "resolv.conf"
+        if resolv_src.exists():
+            self.docker.run_privileged(["cp", str(resolv_src), str(resolv_dst)])
         return self
 
     def __exit__(self, *exc):

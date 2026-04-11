@@ -7,7 +7,6 @@
 
 import argparse
 import json
-import logging
 import subprocess
 import sys
 import time
@@ -15,8 +14,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
-
-log = logging.getLogger("flange")
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +244,6 @@ class FlashConfigGenerator:
 
         output = target_dir / "flash-config.json"
         flash_config.to_json(output)
-        log.info(f"  flash-config.json 已生成: {output}")
         return output
 
 

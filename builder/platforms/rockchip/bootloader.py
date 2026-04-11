@@ -31,9 +31,11 @@ class RockchipBootloaderBuilder(ComponentBuilder):
             shutil.copy2(bl32, src_dir / "tee.bin")
             extra.append(f"TEE={src_dir / 'tee.bin'}")
 
-        # 编译 U-Boot -> u-boot.itb
-        self.make(src_dir, ["u-boot.itb"],
-                  arch=self.ARCH, cross=self.CROSS, jobs=jobs, extra=extra)
+        # 编译 U-Boot（默认 target 会生成 u-boot.itb 等全部产物）
+        extra.append("KCFLAGS=-Wno-error")
+        self.make(src_dir, [],
+                  arch=self.ARCH, cross=self.CROSS, jobs=jobs, extra=extra,
+                  label="编译 U-Boot...")
 
         # 解析 RKBOOT INI -- 生成 idbloader.img
         loader_ini = firmware_dir / "RKBOOT" / f"{ini_prefix}MINIALL.ini"

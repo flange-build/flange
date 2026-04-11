@@ -294,45 +294,69 @@ _flange_docker_run() {
 
 # --- flange 子命令 ---
 _flange_cmd_build() {
-    local component="${1:-image}"
+    # 解析 -v / -q 参数
+    local verbose=""
+    local quiet=""
+    local args=()
+    for arg in "$@"; do
+        case "$arg" in
+            -v|--verbose) verbose="True" ;;
+            -q|--quiet)   quiet="True" ;;
+            *)            args+=("$arg") ;;
+        esac
+    done
+    local component="${args[0]:-image}"
+
+    # 构建 verbose/quiet 配置注入
+    local output_cfg=""
+    if [[ -n "$verbose" ]]; then
+        output_cfg="cfg['verbose'] = True"
+    elif [[ -n "$quiet" ]]; then
+        output_cfg="cfg['quiet'] = True"
+    fi
 
     # 特殊处理: flange build app [name]
-    # component == "app" 时，第二个参数为可选的 App 名称
     if [[ "$component" == "app" ]]; then
-        local app_name="${2:-}"
+        local app_name="${args[1]:-}"
         if [[ -n "$app_name" ]]; then
-            _flange_step "构建 App: $app_name (${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT})"
             _flange_docker_run python3 -c "
-from builder.app_builder import AppBuilder
+from builder.app import AppBuilder
+from builder.docker import DockerRunner
+from builder.source import SourceManager
+from builder.output import BuildOutput, OutputLevel
 import json, logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.WARNING)
 with open('.flange/current_config') as f:
     cfg = json.load(f)
-builder = AppBuilder(cfg)
+${output_cfg}
+builder = AppBuilder(DockerRunner(), None, cfg)
 builder.build_one('$app_name')
 "
         else
-            _flange_step "构建所有 App (${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT})"
             _flange_docker_run python3 -c "
-from builder.app_builder import AppBuilder
+from builder.app import AppBuilder
+from builder.docker import DockerRunner
+from builder.source import SourceManager
+from builder.output import BuildOutput, OutputLevel
 import json, logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.WARNING)
 with open('.flange/current_config') as f:
     cfg = json.load(f)
-builder = AppBuilder(cfg)
+${output_cfg}
+builder = AppBuilder(DockerRunner(), None, cfg)
 builder.build_all()
 "
         fi
         return $?
     fi
 
-    _flange_step "构建组件: $component (${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT})"
     _flange_docker_run python3 -c "
 from builder.engine import BuildEngine
 import json, logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.WARNING)
 with open('.flange/current_config') as f:
     cfg = json.load(f)
+${output_cfg}
 engine = BuildEngine(cfg)
 engine.build('$component')
 "

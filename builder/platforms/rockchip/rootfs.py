@@ -5,18 +5,20 @@
 - Phase 2 (Customize): overlay + custom debs → 最终 rootfs.tar.gz
 """
 
-import logging
 import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.chroot import ChrootContext
 
-log = logging.getLogger("flange")
-
 
 class RockchipRootfsBuilder(ComponentBuilder):
     component = "rootfs"
+
+    def build(self, config: dict) -> dict:
+        """rootfs 无需克隆源码仓库，跳过 source.ensure / reset / patch。"""
+        self.compile(None, config)
+        return self.collect(None, config)
 
     def configure(self, src_dir: Path, config: dict):
         pass  # rootfs 无 configure 步骤
@@ -29,22 +31,31 @@ class RockchipRootfsBuilder(ComponentBuilder):
         # 检查 base 阶段缓存
         base_cache_path = self._get_base_cache_path(config)
         if base_cache_path and base_cache_path.exists():
-            log.info("  rootfs Phase 1: base 缓存命中，解压快照")
+            self._status("Phase 1: base 缓存命中")
             self._extract_base(base_cache_path, rootfs_dir)
         else:
-            log.info("  rootfs Phase 1: base 缓存未命中，完整构建")
+            self._status("Phase 1: base 缓存未命中，完整构建")
             self._build_phase1(rootfs_dir, config)
             if base_cache_path:
                 self._save_base_snapshot(rootfs_dir, base_cache_path)
 
         # Phase 2: Customize（总是执行）
-        log.info("  rootfs Phase 2: Customize")
+        if self.output:
+            self.output.spinner_start("Phase 2: customize...")
         self._build_phase2(rootfs_dir, config)
+        if self.output:
+            self.output.spinner_stop()
+        self._status("Phase 2: 完成")
 
         # Phase 3: 压缩
         self._output = self._work_dir / "rootfs.tar.gz"
+        if self.output:
+            self.output.spinner_start("压缩 rootfs...")
         self.docker.run_privileged(
             ["tar", "-czf", str(self._output), "-C", str(rootfs_dir), "."])
+        if self.output:
+            self.output.spinner_stop()
+        self._status("压缩完成")
 
     def _get_base_cache_path(self, config: dict) -> Path | None:
         """获取 base.tar.gz 快照路径。需要 cache 引用（由 engine 注入）。"""
@@ -104,7 +115,7 @@ class RockchipRootfsBuilder(ComponentBuilder):
     def _save_base_snapshot(self, rootfs_dir: Path, cache_path: Path):
         """将 Phase 1 产物保存为 base.tar.gz 快照。"""
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        log.info(f"  rootfs: 保存 base 快照到 {cache_path}")
+        self._status(f"保存 base 快照到 {cache_path.name}")
         self.docker.run_privileged(
             ["tar", "-czf", str(cache_path), "-C", str(rootfs_dir), "."])
 
