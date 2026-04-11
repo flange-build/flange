@@ -1,5 +1,6 @@
 """Rockchip Rootfs 构建策略 -- 替代 build_base.sh + build_customize.sh"""
 
+import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
@@ -45,6 +46,26 @@ class RockchipRootfsBuilder(ComponentBuilder):
         if overlay_dir.exists() and any(overlay_dir.iterdir()):
             self.docker.run_privileged(
                 ["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
+
+        # 安装 custom deb 包（来自 AppBuilder 产物目录）
+        product = config.get("product", "default")
+        variant = config.get("variant", "release")
+        target_dir = Path("target") / board / product / variant
+        app_deb_dir = target_dir / "app"
+        if app_deb_dir.exists():
+            deb_files = sorted(app_deb_dir.glob("*.deb"))
+            if deb_files:
+                # 复制 .deb 到 rootfs 临时目录，避免 chroot 内路径不可见
+                deb_tmp = rootfs_dir / "tmp" / "flange-debs"
+                deb_tmp.mkdir(parents=True, exist_ok=True)
+                for deb in deb_files:
+                    shutil.copy2(deb, deb_tmp)
+                # 在 chroot 环境内执行 dpkg -i 安装所有包
+                with ChrootContext(rootfs_dir, self.docker) as chroot:
+                    deb_list = [f"/tmp/flange-debs/{d.name}" for d in deb_files]
+                    chroot.run(["dpkg", "-i"] + deb_list)
+                # 清理临时目录，不保留在 rootfs 中
+                shutil.rmtree(deb_tmp)
 
         # Phase 3: 压缩
         self._output = self._work_dir / "rootfs.tar.gz"
