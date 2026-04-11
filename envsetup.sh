@@ -471,18 +471,48 @@ _flange_cmd_create_app() {
     fi
 
     # 解析可选参数 --type 和 --build-system
-    local app_type="binary"
+    local app_type="exec"
     local build_system="cmake"
+    local app_version="0.1.0"
+    local app_description=""
     for arg in "$@"; do
         case "$arg" in
-            --type=*)      app_type="${arg#--type=}"         ;;
-            --build-system=*) build_system="${arg#--build-system=}" ;;
+            --type=*)         app_type="${arg#--type=}"              ;;
+            --build-system=*) build_system="${arg#--build-system=}"  ;;
+            --version=*)      app_version="${arg#--version=}"        ;;
+            --description=*)  app_description="${arg#--description=}";;
         esac
     done
 
-    _flange_warn "脚手架生成器尚未实现（Task 11）"
-    _flange_info "即将创建 App: name=$app_name  type=$app_type  build-system=$build_system"
-    _flange_info "请等待 Task 11 完成后再使用此功能"
+    _flange_step "生成 App 脚手架：name=$app_name  type=$app_type  build-system=$build_system"
+
+    # 调用 Python 脚手架生成器
+    python3 -c "
+import sys
+sys.path.insert(0, '$FLANGE_DIR')
+from builder.scaffold import AppScaffold, ScaffoldError
+from pathlib import Path
+try:
+    s = AppScaffold(project_root=Path('$FLANGE_DIR'))
+    dest = s.create(
+        name='$app_name',
+        app_type='$app_type',
+        build_system='$build_system',
+        version='$app_version',
+        description='$app_description',
+    )
+    print(dest)
+except ScaffoldError as e:
+    print(f'错误：{e}', file=sys.stderr)
+    sys.exit(1)
+"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        _flange_info "App 脚手架已生成：app/$app_name/"
+    else
+        _flange_error "脚手架生成失败"
+        return 1
+    fi
 }
 
 # --- flange docker 子命令 ---
