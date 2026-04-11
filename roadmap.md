@@ -24,19 +24,26 @@
 - **删除**：全部 Bazel/Starlark 文件（47 个）、shell 构建脚本（6 个）、toolchain 目录
 - **测试**：87 个单元测试覆盖配置引擎和构建工具
 
+### App 打包系统（Python 实现）
+- **app.yaml 唯一数据源**：`builder/app_spec.py`（AppSpec dataclass + Schema 校验）
+- **deb 打包引擎**：`builder/deb.py`（Pure Python .deb 构建，tarfile + ar，不依赖 dpkg-deb）
+- **AppBuilder**：`builder/app.py`（约定式路径映射、架构选择、App 间依赖拓扑排序）
+- **6 种构建系统**：none（预编译）/ cmake / meson / make / swift / custom
+- **4 种 App 类型**：exec / service / lib（双包产出）/ test
+- **仓库内外 App**：`app/` 目录 + `external_apps` 配置声明
+- **构建引擎集成**：app 节点加入依赖图，rootfs Phase 2 自动 dpkg -i
+- **CLI 命令**：`flange build app` / `flange create app` / `flange list apps`
+- **脚手架生成器**：`builder/scaffold.py` + `builder/templates/`（type × build-system 模板矩阵）
+- **测试**：466 个单元测试（含 adbd 端到端验证）
+
 ---
 
 ## 待实施
 
-### App 打包系统
-- `flange_deb` Python 实现（替代 Bazel 规则）
-- app.yaml 解析 + deb control 生成
-- CMake/Meson/Makefile/Swift 多构建系统支持
-
 ### 多平台扩展
-- Allwinner 平台策略类（`builder/platforms/allwinner/`）
+- Allwinner 平台策略类（`builder/platforms/allwinner/`）— 首个目标：Radxa Cubie A7Z (A733)
 - Qualcomm 平台策略类
-- QEMU 虚拟平台（开发验证用）
+
 
 ### 构建优化
 - rootfs 两阶段缓存优化（base + customize 分离）

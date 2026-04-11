@@ -1,3 +1,5 @@
+> **归档说明**：本设计方案属于 Bazel 构建系统时代（v1.0），仅作历史参考。adbd 的当前打包实现基于 Python App 打包系统，参见 `builder/app.py` 和 `app/adbd/app.yaml`。
+
 ## Context
 
 flange 需要为嵌入式设备提供 adb 调试通道。adbd 通过 Linux USB gadget（configfs）暴露 ADB function，宿主机通过 `adb` 客户端即可进行 shell、文件传输、端口转发等操作。
