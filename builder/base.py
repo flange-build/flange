@@ -1,5 +1,6 @@
 """组件构建基类 — 管理源码生命周期、补丁应用。"""
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from builder.docker import DockerRunner
@@ -65,7 +66,7 @@ class ComponentBuilder(ABC):
         cmd = ["make"]
         if arch: cmd.append(f"ARCH={arch}")
         if cross: cmd.append(f"CROSS_COMPILE={cross}")
-        cmd.append(f"-j{jobs}" if jobs else "-j$(nproc)")
+        cmd.append(f"-j{jobs or os.cpu_count() or 1}")
         cmd.extend(extra or [])
         cmd.extend(targets)
         self.docker.run(cmd, cwd=str(src_dir))
