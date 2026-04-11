@@ -16,7 +16,6 @@ capabilities:
   - adb-debug
 
 install:
-  bin/adbd-arm64: /usr/bin/adbd
   conf/usbdevice.conf: /etc/usbdevice.conf
   scripts/usbdevice: /usr/sbin/usbdevice
   udev/61-usbdevice.rules: /etc/udev/rules.d/61-usbdevice.rules

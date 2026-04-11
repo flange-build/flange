@@ -122,6 +122,10 @@ def _parse_app_info(raw: dict) -> AppInfo:
     else:
         raise AppSpecError("app.arch 必须是字符串或列表")
 
+    # 校验 arch 非空
+    if not arch:
+        raise AppSpecError("app.arch 不能为空")
+
     return AppInfo(
         name=raw["name"].strip(),
         version=raw["version"].strip(),

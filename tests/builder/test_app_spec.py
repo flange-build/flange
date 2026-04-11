@@ -411,7 +411,7 @@ class TestRequiredFieldValidation:
 
     def test_missing_maintainer_name(self):
         yaml_content = (
-            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n"
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n  arch: [aarch64]\n"
             "maintainer:\n  email: a@b.com\n"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -420,7 +420,7 @@ class TestRequiredFieldValidation:
 
     def test_missing_maintainer_email(self):
         yaml_content = (
-            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n"
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n  arch: [aarch64]\n"
             "maintainer:\n  name: flange\n"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -458,12 +458,40 @@ class TestAppTypeValidation:
     @pytest.mark.parametrize("app_type", ["exec", "service", "lib", "test"])
     def test_all_valid_types_accepted(self, app_type):
         yaml_content = (
-            f"app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: {app_type}\n"
+            f"app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: {app_type}\n  arch: [aarch64]\n"
             "maintainer:\n  name: flange\n  email: a@b.com\n"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, yaml_content))
         assert spec.app.type == app_type
+
+
+# ---------------------------------------------------------------------------
+# 测试：app.arch 非空校验
+# ---------------------------------------------------------------------------
+
+class TestAppArchValidation:
+    """验证 app.arch 必须非空。"""
+
+    def test_empty_arch_list_rejected(self):
+        yaml_content = (
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n"
+            "  arch: []\n"
+            "maintainer:\n  name: flange\n  email: a@b.com\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match="app.arch 不能为空"):
+                load_spec(_write_yaml(tmpdir, yaml_content))
+
+    def test_missing_arch_defaults_to_empty_and_raises(self):
+        """app.arch 缺省且无默认值时应抛出错误。"""
+        yaml_content = (
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n"
+            "maintainer:\n  name: flange\n  email: a@b.com\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match="app.arch 不能为空"):
+                load_spec(_write_yaml(tmpdir, yaml_content))
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +504,7 @@ class TestBuildSystemValues:
     @pytest.mark.parametrize("system", ["none", "cmake", "meson", "make", "swift", "custom"])
     def test_valid_build_system(self, system):
         yaml_content = (
-            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n"
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n  arch: [aarch64]\n"
             "maintainer:\n  name: flange\n  email: a@b.com\n"
             f"build:\n  system: {system}\n"
         )
@@ -486,7 +514,7 @@ class TestBuildSystemValues:
 
     def test_invalid_build_system_rejected(self):
         yaml_content = (
-            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n"
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n  arch: [aarch64]\n"
             "maintainer:\n  name: flange\n  email: a@b.com\n"
             "build:\n  system: autotools\n"
         )
@@ -497,7 +525,7 @@ class TestBuildSystemValues:
     def test_build_system_none_is_default(self):
         """未指定 build.system 时默认为 none。"""
         yaml_content = (
-            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n"
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n  arch: [aarch64]\n"
             "maintainer:\n  name: flange\n  email: a@b.com\n"
             "build:\n  outputs: [bin/foo]\n"
         )
