@@ -284,6 +284,37 @@ _flange_docker_run() {
 # --- flange 子命令 ---
 _flange_cmd_build() {
     local component="${1:-image}"
+
+    # 特殊处理: flange build app [name]
+    # component == "app" 时，第二个参数为可选的 App 名称
+    if [[ "$component" == "app" ]]; then
+        local app_name="${2:-}"
+        if [[ -n "$app_name" ]]; then
+            _flange_step "构建 App: $app_name (${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT})"
+            _flange_docker_run python3 -c "
+from builder.app_builder import AppBuilder
+import json, logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+with open('.flange/current_config') as f:
+    cfg = json.load(f)
+builder = AppBuilder(cfg)
+builder.build_one('$app_name')
+"
+        else
+            _flange_step "构建所有 App (${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT})"
+            _flange_docker_run python3 -c "
+from builder.app_builder import AppBuilder
+import json, logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+with open('.flange/current_config') as f:
+    cfg = json.load(f)
+builder = AppBuilder(cfg)
+builder.build_all()
+"
+        fi
+        return $?
+    fi
+
     _flange_step "构建组件: $component (${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT})"
     _flange_docker_run python3 -c "
 from builder.engine import BuildEngine
@@ -393,6 +424,67 @@ _flange_cmd_shell() {
     _flange_docker_run bash "$@"
 }
 
+# --- flange list apps 子命令 ---
+_flange_cmd_list_apps() {
+    _flange_python "
+from pathlib import Path
+try:
+    import yaml
+except ImportError:
+    print('  [错误] 缺少依赖：请安装 PyYAML（pip install pyyaml）')
+    raise SystemExit(1)
+
+print('')
+print('  可用的 App:')
+print('  ─────────────────────────────')
+app_dir = Path('app')
+found = False
+if app_dir.exists():
+    for d in sorted(app_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        yaml_file = d / 'app.yaml'
+        if yaml_file.exists():
+            with open(yaml_file) as f:
+                spec = yaml.safe_load(f)
+            app = spec.get('app', {}) if spec else {}
+            name = app.get('name', d.name)
+            app_type = app.get('type', 'unknown')
+            version = app.get('version', '')
+            desc = app.get('description', '')
+            print(f'    {name:20s} {app_type:10s} {version:10s} {desc}')
+            found = True
+if not found:
+    print('    （未找到任何 App，请在 app/ 目录下创建 App）')
+print('')
+"
+}
+
+# --- flange create app 子命令 ---
+_flange_cmd_create_app() {
+    local app_name="${1:-}"
+    shift 2>/dev/null
+
+    if [[ -z "$app_name" ]]; then
+        _flange_error "用法: flange create app <name> [--type=<type>] [--build-system=<system>]"
+        return 1
+    fi
+
+    # 解析可选参数 --type 和 --build-system
+    local app_type="binary"
+    local build_system="cmake"
+    for arg in "$@"; do
+        case "$arg" in
+            --type=*)      app_type="${arg#--type=}"         ;;
+            --build-system=*) build_system="${arg#--build-system=}" ;;
+        esac
+    done
+
+    _flange_warn "脚手架生成器尚未实现（Task 11）"
+    _flange_info "即将创建 App: name=$app_name  type=$app_type  build-system=$build_system"
+    _flange_info "请等待 Task 11 完成后再使用此功能"
+}
+
 # --- flange docker 子命令 ---
 _flange_cmd_docker() {
     local docker_sub="$1"
@@ -469,16 +561,24 @@ flange() {
         echo "  用法: flange <subcommand> [参数...]"
         echo ""
         echo "  构建命令:"
-        echo "    build [component]  构建组件（默认: image）"
-        echo "    clean              清理构建产物"
+        echo "    build [component]       构建组件（默认: image）"
+        echo "    build app               构建所有 App"
+        echo "    build app <name>        构建单个 App"
+        echo "    clean                   清理构建产物"
         echo ""
         echo "  刷写命令:"
-        echo "    flash [component]  刷写到目标设备"
+        echo "    flash [component]       刷写到目标设备"
+        echo ""
+        echo "  App 命令:"
+        echo "    list apps               列出所有可用 App"
+        echo "    create app <name>       生成 App 脚手架"
+        echo "      [--type=<type>]         App 类型（binary/service/daemon，默认: binary）"
+        echo "      [--build-system=<sys>]  构建系统（cmake/make/meson，默认: cmake）"
         echo ""
         echo "  工具命令:"
-        echo "    shell              进入 Docker 构建环境 shell"
-        echo "    status             显示当前状态"
-        echo "    docker <cmd>       管理 Docker 镜像（build/rebuild/status）"
+        echo "    shell                   进入 Docker 构建环境 shell"
+        echo "    status                  显示当前状态"
+        echo "    docker <cmd>            管理 Docker 镜像（build/rebuild/status）"
         echo ""
         if [[ -n "$FLANGE_BOARD" ]]; then
             echo "  当前目标: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
@@ -501,6 +601,33 @@ flange() {
             ;;
         clean)
             _flange_cmd_clean "$@"
+            ;;
+        list)
+            # flange list apps
+            local list_target="${1:-}"
+            case "$list_target" in
+                apps)
+                    _flange_cmd_list_apps
+                    ;;
+                *)
+                    _flange_error "用法: flange list apps"
+                    return 1
+                    ;;
+            esac
+            ;;
+        create)
+            # flange create app <name> [--type=<type>] [--build-system=<system>]
+            local create_target="${1:-}"
+            shift 2>/dev/null
+            case "$create_target" in
+                app)
+                    _flange_cmd_create_app "$@"
+                    ;;
+                *)
+                    _flange_error "用法: flange create app <name>"
+                    return 1
+                    ;;
+            esac
             ;;
         shell)
             _flange_check_docker || return 1
