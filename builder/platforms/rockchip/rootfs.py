@@ -40,11 +40,8 @@ class RockchipRootfsBuilder(ComponentBuilder):
                 self._save_base_snapshot(rootfs_dir, base_cache_path)
 
         # Phase 2: Customize（总是执行）
-        if self.output:
-            self.output.spinner_start("Phase 2: customize...")
+        self._status("Phase 2: Customize")
         self._build_phase2(rootfs_dir, config)
-        if self.output:
-            self.output.spinner_stop()
         self._status("Phase 2: 完成")
 
         # Phase 3: 压缩
@@ -69,6 +66,7 @@ class RockchipRootfsBuilder(ComponentBuilder):
     def _build_phase1(self, rootfs_dir: Path, config: dict):
         """Phase 1: Base rootfs — 解压 tarball + chroot apt install。"""
         tarball_path = self.source.ensure_rootfs_tarball(config)
+        self._status("解压 base tarball...")
         self.docker.run_privileged(
             ["tar", "xf", str(tarball_path), "-C", str(rootfs_dir)])
         self.docker.run_privileged(
@@ -80,11 +78,14 @@ class RockchipRootfsBuilder(ComponentBuilder):
             apt_cache.mkdir(parents=True, exist_ok=True)
             chroot.bind_mount("/cache/apt", apt_cache)
 
-            chroot.run(["apt-get", "update"])
+            self._status("apt-get update...")
+            chroot.run(["apt-get", "update"], label="apt-get update...")
             packages = config["rootfs"].get("packages", [])
             if packages:
+                self._status(f"apt-get install ({len(packages)} 个包)...")
                 chroot.run(["apt-get", "install", "-y",
-                            "--no-install-recommends"] + packages)
+                            "--no-install-recommends"] + packages,
+                           label=f"安装 {len(packages)} 个包...")
             chroot.run(["apt-get", "clean"])
 
     def _build_phase2(self, rootfs_dir: Path, config: dict):
@@ -92,6 +93,7 @@ class RockchipRootfsBuilder(ComponentBuilder):
         board = config["board"]
         overlay_dir = Path(f"board/{board}/overlay")
         if overlay_dir.exists() and any(overlay_dir.iterdir()):
+            self._status("复制 overlay 文件...")
             self.docker.run_privileged(
                 ["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
 
@@ -103,13 +105,16 @@ class RockchipRootfsBuilder(ComponentBuilder):
         if app_deb_dir.exists():
             deb_files = sorted(app_deb_dir.glob("*.deb"))
             if deb_files:
+                deb_names = [d.name for d in deb_files]
+                self._status(f"安装 {len(deb_files)} 个 deb: {', '.join(deb_names)}")
                 deb_tmp = rootfs_dir / "tmp" / "flange-debs"
                 deb_tmp.mkdir(parents=True, exist_ok=True)
                 for deb in deb_files:
                     shutil.copy2(deb, deb_tmp)
                 with ChrootContext(rootfs_dir, self.docker) as chroot:
                     deb_list = [f"/tmp/flange-debs/{d.name}" for d in deb_files]
-                    chroot.run(["dpkg", "-i"] + deb_list)
+                    chroot.run(["dpkg", "-i"] + deb_list,
+                               label=f"dpkg -i ({len(deb_files)} 个包)...")
                 shutil.rmtree(deb_tmp)
 
     def _save_base_snapshot(self, rootfs_dir: Path, cache_path: Path):

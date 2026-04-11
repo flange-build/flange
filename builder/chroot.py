@@ -36,9 +36,10 @@ class ChrootContext:
             self.docker.run_privileged(["umount", "-l", str(mount_point)], check=False)
         return False
 
-    def run(self, cmd: list, **kwargs):
+    def run(self, cmd: list, *, label: str = "", **kwargs):
         """在 chroot 内执行命令"""
-        self.docker.run_privileged(["chroot", str(self.rootfs)] + cmd, **kwargs)
+        self.docker.run_privileged(["chroot", str(self.rootfs)] + cmd,
+                                   label=label, **kwargs)
 
     def bind_mount(self, src: str, dest: Path = None):
         dest = dest or (self.rootfs / src.lstrip("/"))
