@@ -185,10 +185,12 @@ class TestFindAppDir:
         assert result == tmp_path / "app" / "myapp"
         assert result.is_dir()
 
-    def test_目录不存在时抛出FileNotFoundError(self, tmp_path):
-        """App 目录不存在时应抛出 FileNotFoundError，且错误信息包含 App 名称。"""
+    def test_目录不存在时抛出ValueError(self, tmp_path):
+        """App 目录不存在且未在 external_apps 声明时，SourceManager 应抛出 ValueError。"""
         builder = _make_builder(tmp_path)
-        with pytest.raises(FileNotFoundError, match="nonexistent"):
+        # 配置 mock source 模拟 ensure_app 找不到 App 的行为
+        builder._source.ensure_app.side_effect = ValueError("nonexistent 未找到")
+        with pytest.raises(ValueError, match="nonexistent"):
             builder._find_app_dir("nonexistent")
 
 
@@ -269,10 +271,12 @@ class TestBuildOne:
         expected_dir = tmp_path / "target" / "test-board" / "default" / "release" / "app"
         assert deb_path.parent == expected_dir
 
-    def test_app目录不存在时抛出FileNotFoundError(self, tmp_path):
-        """App 目录不存在时应抛出 FileNotFoundError。"""
+    def test_app目录不存在时抛出ValueError(self, tmp_path):
+        """App 目录不存在且未在 external_apps 声明时，应抛出 ValueError。"""
         builder = _make_builder(tmp_path)
-        with pytest.raises(FileNotFoundError):
+        # mock source 模拟 ensure_app 找不到 App 的行为
+        builder._source.ensure_app.side_effect = ValueError("does_not_exist 未找到")
+        with pytest.raises(ValueError):
             builder.build_one("does_not_exist")
 
     def test_无文件app生成空deb(self, tmp_path):
@@ -345,7 +349,7 @@ class TestBuildAll:
             assert path.exists(), f"{name} 的 .deb 文件应存在"
 
     def test_custom_packages中app不存在时抛出错误(self, tmp_path):
-        """custom_packages 包含不存在的 App 时，应抛出 FileNotFoundError。"""
+        """custom_packages 包含不存在的 App 时，应抛出 ValueError（SourceManager 报告未找到）。"""
         config = {
             "board":   "test-board",
             "product": "default",
@@ -353,8 +357,10 @@ class TestBuildAll:
             "arch":    "aarch64",
             "rootfs":  {"custom_packages": ["ghost_app"]},
         }
-        builder = AppBuilder(MagicMock(), MagicMock(), config, project_dir=tmp_path)
-        with pytest.raises(FileNotFoundError):
+        mock_source = MagicMock()
+        mock_source.ensure_app.side_effect = ValueError("ghost_app 未找到")
+        builder = AppBuilder(MagicMock(), mock_source, config, project_dir=tmp_path)
+        with pytest.raises(ValueError):
             builder.build_all()
 
     def test_循环依赖在build_all中抛出错误(self, tmp_path):

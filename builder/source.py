@@ -54,11 +54,59 @@ class SourceManager:
                            check=True, timeout=600)
         return tarball_path
 
+    def ensure_app(self, app_name: str, config: dict) -> Path:
+        """确保 App 源码就绪，返回 App 目录路径。
+
+        查找顺序：
+          1. 仓库内 app/<app_name>/ 目录（本地开发 App）
+          2. board config 中 external_apps 字段声明的外部仓库
+
+        参数：
+            app_name: App 名称
+            config:   FINAL_CONFIG 字典，可含 external_apps 字段
+
+        返回：
+            App 目录 Path
+
+        抛出：
+            ValueError: App 既不在本地目录，也未在 external_apps 中声明
+        """
+        # 步骤 1：优先查找仓库内 app/<name>/ 目录
+        local_dir = Path(f"app/{app_name}")
+        if local_dir.exists():
+            return local_dir
+
+        # 步骤 2：查找 external_apps 配置
+        ext = config.get("external_apps", {}).get(app_name)
+        if not ext:
+            raise ValueError(
+                f"App '{app_name}' 未找到：本地目录 {local_dir} 不存在，"
+                f"且未在 external_apps 中声明"
+            )
+
+        # 步骤 3：克隆外部仓库到 sources/apps/<name>
+        app_dir = self.sources_dir / "apps" / app_name
+        if not app_dir.exists():
+            # tag 优先于 commit，branch 为可选
+            commit_ref = ext.get("tag", ext.get("commit", ""))
+            branch = ext.get("branch", "")
+            self._clone(
+                repo=ext["git"],
+                branch=branch,
+                dest=app_dir,
+                commit=commit_ref,
+            )
+        return app_dir
+
     def _clone(self, repo: str, branch: str, dest: Path, commit: str = ""):
         dest.parent.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
-        subprocess.run(["git", "clone", "--depth=1", "-b", branch, repo, str(dest)],
-                       env=env, check=True, timeout=1800)
+        # 仅在指定分支时传入 -b 选项；branch 为空时克隆默认分支
+        cmd = ["git", "clone", "--depth=1"]
+        if branch:
+            cmd += ["-b", branch]
+        cmd += [repo, str(dest)]
+        subprocess.run(cmd, env=env, check=True, timeout=1800)
         if commit:
             subprocess.run(["git", "fetch", "--depth=1", "origin", commit],
                            cwd=dest, env=env, check=True, timeout=600)

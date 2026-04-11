@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -310,6 +311,26 @@ def _infer_mode(install_path: str, src_rel: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 共享库文件名判断辅助
+# ---------------------------------------------------------------------------
+
+def _is_shared_lib(filename: str) -> bool:
+    """判断文件名是否为共享库（.so 或带版本号的 .so.*）。
+
+    匹配规则：
+    - 精确以 .so 结尾，如 libfoo.so
+    - 含有 .so. 子串，如 libfoo.so.1、libfoo.so.1.2.3
+
+    参数：
+        filename: 文件名（不含目录）
+
+    返回：
+        True 表示共享库，False 表示其他文件
+    """
+    return filename.endswith(".so") or ".so." in filename
+
+
+# ---------------------------------------------------------------------------
 # App 间拓扑排序
 # ---------------------------------------------------------------------------
 
@@ -431,20 +452,21 @@ class AppBuilder:
         return results
 
     def build_one(self, app_name: str) -> Path:
-        """构建单个 App，返回生成的 .deb 路径。
+        """构建单个 App，返回生成的运行时 .deb 路径。
 
         流程：
         1. 查找 App 目录
         2. 加载 app.yaml 规格
         3. 编译（build.system != "none" 时，当前为占位实现，Task 5 完成）
         4. 收集安装文件
-        5. 打包为 .deb
+        5a. 若为 lib 类型：调用 _build_lib() 生成双包（运行时包 + 开发包）
+        5b. 其余类型：打包为单个 .deb
 
         参数：
             app_name: App 名称（与目录名一致）
 
         返回：
-            .deb 文件路径
+            运行时 .deb 文件路径（lib 类型返回运行时包路径，其余类型返回唯一 .deb 路径）
 
         抛出：
             FileNotFoundError: App 目录或 app.yaml 不存在
@@ -465,7 +487,17 @@ class AppBuilder:
         # 步骤 3：编译
         self._compile(app_dir, spec, self._config)
 
-        # 步骤 4：收集文件
+        # 步骤 4：lib 类型走双包流程，其余类型走单包流程
+        if spec.app.type == "lib":
+            outputs = self._build_lib(app_dir, spec)
+            runtime_path = outputs["runtime"]
+            log.info(
+                f"AppBuilder: lib App '{app_name}' 双包构建完成 → "
+                f"runtime={runtime_path.name}, dev={outputs['dev'].name}"
+            )
+            return runtime_path
+
+        # 收集文件（非 lib 类型）
         files = collect_files(app_dir, spec, self._arch)
         log.debug(f"AppBuilder: 收集到 {len(files)} 个文件")
 
@@ -480,11 +512,188 @@ class AppBuilder:
     # 内部辅助方法
     # -----------------------------------------------------------------------
 
+    def _build_lib(self, app_dir: Path, spec: AppSpec) -> Dict[str, Path]:
+        """为 lib 类型 App 构建双包：运行时包和开发包。
+
+        运行时包（lib<name>）：
+          - 收集 lib/ 下的 .so 文件（含 .so.* 版本化符号链接）
+          - 安装路径：/usr/lib/
+
+        开发包（lib<name>-dev）：
+          - 收集 include/ 下头文件
+          - 收集 lib/ 下的 .a 静态库文件
+          - Depends 中包含运行时包版本约束
+
+        构建完成后调用 _install_sysroot() 将头文件与 .so 安装到 sysroot。
+
+        参数：
+            app_dir: App 工程目录
+            spec:    已解析的 AppSpec 对象
+
+        返回：
+            {"runtime": runtime_deb_path, "dev": dev_deb_path}
+        """
+        from builder.app_spec import AppInfo, AppSpec, LibConfig
+        from builder.deb import DebBuilder, generate_control
+
+        app_name = spec.app.name
+        version  = spec.app.version
+
+        # 获取 lib 配置（使用默认值兜底）
+        lib_cfg: LibConfig = spec.lib if spec.lib is not None else LibConfig()
+
+        # -----------------------------------------------------------------------
+        # 从 collect_files 结果中分拣运行时文件和开发文件
+        # -----------------------------------------------------------------------
+        all_files = collect_files(app_dir, spec, self._arch)
+
+        runtime_files: List[Tuple[Path, str, int]] = []  # .so 文件
+        dev_files: List[Tuple[Path, str, int]] = []      # 头文件 + .a 文件
+
+        for src_path, install_path, mode in all_files:
+            fname = Path(install_path).name
+            # lib/ 下的文件：按扩展名分拣到运行时包或开发包
+            if install_path.startswith("/usr/lib/"):
+                if _is_shared_lib(fname):
+                    # 共享库（.so 或 .so.* 版本化文件）→ 运行时包
+                    runtime_files.append((src_path, install_path, mode))
+                elif fname.endswith(".a"):
+                    # 静态库 → 开发包
+                    dev_files.append((src_path, install_path, mode))
+            elif install_path.startswith("/usr/include/"):
+                # 头文件 → 开发包
+                dev_files.append((src_path, install_path, mode))
+
+        log.debug(
+            f"AppBuilder: lib '{app_name}' 文件分拣 — "
+            f"运行时 {len(runtime_files)} 个，开发 {len(dev_files)} 个"
+        )
+
+        deb_builder = DebBuilder()
+
+        # -----------------------------------------------------------------------
+        # 构建运行时包：lib<name>
+        # -----------------------------------------------------------------------
+        runtime_name = f"lib{app_name}"
+
+        # 构造运行时包用的 spec 副本（改名，保留原 depends）
+        runtime_spec = AppSpec(
+            app=AppInfo(
+                name=runtime_name,
+                version=version,
+                description=spec.app.description,
+                type="lib",
+                arch=spec.app.arch,
+            ),
+            maintainer=spec.maintainer,
+            depends=list(spec.depends),
+            build=spec.build,
+        )
+        runtime_control = generate_control(runtime_spec, self._arch)
+        runtime_deb = deb_builder.build_deb(
+            name=runtime_name,
+            version=version,
+            arch=self._arch,
+            control_fields=runtime_control,
+            files=runtime_files,
+            output_dir=self._output_dir,
+        )
+        log.debug(f"AppBuilder: 运行时包已生成 → {runtime_deb}")
+
+        # -----------------------------------------------------------------------
+        # 构建开发包：lib<name>-dev
+        # -----------------------------------------------------------------------
+        dev_suffix = lib_cfg.dev_suffix
+        dev_name = f"{runtime_name}{dev_suffix}"
+
+        # 开发包 Depends：包含运行时包的精确版本约束 + 原 spec.depends
+        dev_depends = [f"{runtime_name} (= {version})"] + list(spec.depends)
+
+        dev_spec = AppSpec(
+            app=AppInfo(
+                name=dev_name,
+                version=version,
+                description=f"{spec.app.description} (开发头文件与静态库)",
+                type="lib",
+                arch=spec.app.arch,
+            ),
+            maintainer=spec.maintainer,
+            depends=dev_depends,
+            build=spec.build,
+        )
+        dev_control = generate_control(dev_spec, self._arch)
+        dev_deb = deb_builder.build_deb(
+            name=dev_name,
+            version=version,
+            arch=self._arch,
+            control_fields=dev_control,
+            files=dev_files,
+            output_dir=self._output_dir,
+        )
+        log.debug(f"AppBuilder: 开发包已生成 → {dev_deb}")
+
+        # -----------------------------------------------------------------------
+        # sysroot 安装：供后续依赖此库的 App 编译使用
+        # -----------------------------------------------------------------------
+        self._install_sysroot(app_dir, spec)
+
+        return {"runtime": runtime_deb, "dev": dev_deb}
+
+    def _install_sysroot(self, app_dir: Path, spec: AppSpec) -> None:
+        """将 lib App 的头文件和共享库安装到 sysroot 目录。
+
+        安装约定：
+          include/*.h  → sysroot/usr/include/<name>/
+          lib/*.so*    → sysroot/usr/lib/
+
+        sysroot 路径：target/<board>/<product>/<variant>/sysroot/
+
+        参数：
+            app_dir: App 工程目录
+            spec:    已解析的 AppSpec 对象
+        """
+        board   = self._config.get("board",   "unknown")
+        product = self._config.get("product", "default")
+        variant = self._config.get("variant", "release")
+
+        sysroot_base = (
+            self._project_dir / "target" / board / product / variant / "sysroot"
+        )
+
+        app_name = spec.app.name
+
+        # -----------------------------------------------------------------------
+        # 安装头文件：include/ → sysroot/usr/include/<name>/
+        # -----------------------------------------------------------------------
+        include_src = app_dir / "include"
+        if include_src.is_dir():
+            include_dst = sysroot_base / "usr" / "include" / app_name
+            include_dst.mkdir(parents=True, exist_ok=True)
+            for header in sorted(include_src.iterdir()):
+                if header.is_file():
+                    shutil.copy2(str(header), str(include_dst / header.name))
+                    log.debug(f"AppBuilder: sysroot 安装头文件 {header.name}")
+
+        # -----------------------------------------------------------------------
+        # 安装共享库：lib/*.so* → sysroot/usr/lib/
+        # -----------------------------------------------------------------------
+        lib_src = app_dir / "lib"
+        if lib_src.is_dir():
+            lib_dst = sysroot_base / "usr" / "lib"
+            lib_dst.mkdir(parents=True, exist_ok=True)
+            for lib_file in sorted(lib_src.iterdir()):
+                if lib_file.is_file() and _is_shared_lib(lib_file.name):
+                    shutil.copy2(str(lib_file), str(lib_dst / lib_file.name))
+                    log.debug(f"AppBuilder: sysroot 安装共享库 {lib_file.name}")
+
+        log.info(f"AppBuilder: lib '{app_name}' sysroot 安装完成 → {sysroot_base}")
+
     def _find_app_dir(self, app_name: str) -> Path:
         """查找 App 目录。
 
-        当前仅支持在 <project_dir>/app/<name>/ 中查找。
-        Task 7 将扩展为支持 SourceManager 外部仓库查找。
+        查找顺序：
+          1. 先在 <project_dir>/app/<name>/ 中查找本地 App
+          2. 若不存在，委托 SourceManager.ensure_app() 处理外部仓库 App
 
         参数：
             app_name: App 名称
@@ -493,16 +702,22 @@ class AppBuilder:
             App 目录 Path
 
         抛出：
-            FileNotFoundError: App 目录不存在
+            FileNotFoundError: 本地目录不存在且 SourceManager 未配置
+            ValueError: App 既不在本地，也未在 external_apps 中声明
         """
-        # 优先在本地 app/ 目录查找
+        # 步骤 1：优先在本地 app/ 目录查找
         local_dir = self._project_dir / "app" / app_name
         if local_dir.is_dir():
             return local_dir
 
-        raise FileNotFoundError(
-            f"App '{app_name}' 目录不存在，已查找：{local_dir}"
-        )
+        # 步骤 2：本地不存在时，交由 SourceManager 处理外部仓库
+        if self._source is None:
+            raise FileNotFoundError(
+                f"App '{app_name}' 目录不存在，已查找：{local_dir}"
+            )
+        # ensure_app 内部使用相对路径 "app/<name>" 查找，此处已知不存在，
+        # 直接调用以处理 external_apps 分支（ensure_app 会再次检查本地，无副作用）
+        return self._source.ensure_app(app_name, self._config)
 
     def _resolve_build_order(self, app_names: list[str]) -> list[str]:
         """解析各 App 的 build.deps，拓扑排序返回构建顺序。
