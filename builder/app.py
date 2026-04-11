@@ -18,10 +18,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import List, Tuple
 
 from builder.app_spec import AppSpec
+
+log = logging.getLogger("flange")
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +109,7 @@ def _collect_convention(
     app_dir: Path,
     app_name: str,
     arch: str,
+    app_type: str = "exec",
 ) -> list[tuple[Path, str, int, str]]:
     """遍历约定子目录，收集文件并映射路径。
 
@@ -116,14 +120,19 @@ def _collect_convention(
         app_dir:  App 工程目录
         app_name: App 名称
         arch:     目标架构名称
+        app_type: App 类型（默认 exec），用于限制某些约定（如 include/ 仅限 lib 类型）
 
     返回：
         [(src_path, install_path, mode, rel_key), ...]
     """
     results: list[tuple[Path, str, int, str]] = []
 
-    for subdir, (template, mode) in _CONVENTION_MAP.items():
-        subdir_path = app_dir / subdir
+    for subdir_name, (template, mode) in _CONVENTION_MAP.items():
+        # include/ 约定仅适用于 lib 类型
+        if subdir_name == "include" and app_type != "lib":
+            continue
+
+        subdir_path = app_dir / subdir_name
         if not subdir_path.is_dir():
             continue
 
@@ -145,8 +154,8 @@ def _collect_convention(
                 # 普通文件，直接使用原文件名
                 install_name = filename
 
-            install_path = _resolve_convention_path(subdir, install_name, app_name)
-            rel_key = f"{subdir}/{filename}"
+            install_path = _resolve_convention_path(subdir_name, install_name, app_name)
+            rel_key = f"{subdir_name}/{filename}"
             results.append((src_file, install_path, mode, rel_key))
 
     return results
@@ -177,11 +186,12 @@ def collect_files(
         mode 为文件权限（bin/ 和 scripts/ 为 0o755，其余为 0o644）
     """
     app_name = spec.app.name
+    app_type = spec.app.type
 
     # -----------------------------------------------------------------------
     # 第一步：约定映射
     # -----------------------------------------------------------------------
-    convention_entries = _collect_convention(app_dir, app_name, arch)
+    convention_entries = _collect_convention(app_dir, app_name, arch, app_type)
 
     # 构建 rel_key → (src, install_path, mode) 映射，用于 install 段覆盖
     # rel_key 格式："subdir/filename"（原始文件名，含架构后缀）
@@ -207,7 +217,8 @@ def collect_files(
         # src_rel 形如 "conf/usbdevice.conf"
         src_path = app_dir / src_rel
         if not src_path.exists():
-            # 源文件不存在，跳过（容错）
+            # 源文件不存在，记录警告并跳过
+            log.warning(f"install 映射的源文件不存在，跳过: {src_path}")
             continue
 
         # 推断文件权限：安装到 /usr/bin/ 或 /usr/sbin/ 或 /usr/lib/<name>/ 时赋予执行权限

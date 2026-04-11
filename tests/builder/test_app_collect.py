@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -143,9 +144,9 @@ class TestConventionMapping:
         assert m["/usr/share/myapp/icon.png"][1] == 0o644
 
     def test_include_convention(self, tmp_path: Path):
-        """include/ 下的文件映射到 /usr/include/<name>/，权限 0o644。"""
+        """include/ 下的文件映射到 /usr/include/<name>/，权限 0o644（仅 lib 类型）。"""
         _touch(tmp_path / "include" / "myapp.h")
-        spec = _make_spec(name="myapp")
+        spec = _make_spec(name="myapp", app_type="lib")
         files = collect_files(tmp_path, spec, "aarch64")
         m = _result_map(files)
         assert "/usr/include/myapp/myapp.h" in m
@@ -160,6 +161,19 @@ class TestConventionMapping:
         assert "/etc/my-daemon/config.yaml" in m
         # 不应包含未替换的模板
         assert all("{name}" not in p for p in m)
+
+    def test_include_excluded_for_exec_type(self, tmp_path: Path):
+        """exec 类型 App 的 include/ 目录被跳过，include 文件不在输出中。"""
+        _touch(tmp_path / "include" / "myapp.h")
+        _touch(tmp_path / "bin" / "prog")
+        spec = _make_spec(name="myapp", app_type="exec")
+        files = collect_files(tmp_path, spec, "aarch64")
+        m = _result_map(files)
+        # bin 文件应该存在
+        assert "/usr/bin/prog" in m
+        # include 文件不应该存在
+        assert not any("include" in p for p in m)
+        assert "/usr/include/myapp/myapp.h" not in m
 
     def test_app_yaml_excluded(self, tmp_path: Path):
         """app.yaml 不在任何约定子目录中，不应被收集。"""
@@ -330,6 +344,24 @@ class TestInstallOverride:
         m = _result_map(files)
         assert "/etc/app.conf" in m
         assert m["/etc/app.conf"][1] == 0o644
+
+    def test_missing_install_source_file_logged(self, tmp_path: Path, caplog):
+        """install 段声明的源文件不存在时，记录 warning 日志并跳过该文件。"""
+        _touch(tmp_path / "bin" / "prog")
+        spec = _make_spec(
+            name="myapp",
+            install={"conf/missing.conf": "/etc/app.conf"},  # 源文件不存在
+        )
+        with caplog.at_level(logging.WARNING):
+            files = collect_files(tmp_path, spec, "aarch64")
+
+        m = _result_map(files)
+        # bin/prog 使用约定映射
+        assert "/usr/bin/prog" in m
+        # 缺失的 install 文件不在列表中
+        assert "/etc/app.conf" not in m
+        # 日志中应有 warning
+        assert "install 映射的源文件不存在，跳过" in caplog.text
 
 
 # ---------------------------------------------------------------------------
