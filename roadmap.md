@@ -36,6 +36,29 @@
 - **脚手架生成器**：`builder/scaffold.py` + `builder/templates/`（type × build-system 模板矩阵）
 - **测试**：466 个单元测试（含 adbd 端到端验证）
 
+### 构建优化
+- **rootfs 两阶段缓存**：`builder/cache.py` 分阶段哈希（base/customize 独立），`builder/platforms/rockchip/rootfs.py` Phase 1 产物保存为 `base.tar.gz` 快照
+  - base 哈希输入：rootfs.url + packages + arch → 改 overlay/App 时跳过 apt install（节省 5-15 min）
+  - customize 哈希输入：base_hash + overlay + custom_packages + deb 文件 → 级联失效
+  - 跨 product/variant 共享 base.tar.gz（相同 packages → 同一快照）
+- **App 源码哈希修复**：`_hash_app_sources` 从只 hash app.yaml 改为递归 hash 整个 app 目录（正确性 bug 修复）
+- **目录递归哈希**：`_hash_directory` 工具方法，排除 `__pycache__`/`.git`/`build`/`.o`/`.pyc` 等
+- **分阶段缓存接口**：`compute_phase_hash`/`is_phase_up_to_date`/`store_phase`，ComponentBuilder 新增 cache 属性由 engine 注入
+- **测试**：50 个新增测试（目录哈希 11 + App 哈希 6 + rootfs 阶段哈希 9 + 阶段缓存 5 + rootfs 缓存 8 + E2E 7 + 引擎 3 + 原有 4）
+
+### 刷写增强
+- **纯 Python 统一刷写**：`builder/flash.py` 重写，消除偏移硬编码和两套刷写体系
+  - `FlashConfigGenerator`：构建时从 `partitions.entries` 配置生成 `flash-config.json`（分区→镜像映射由平台策略提供）
+  - `FlashExecutor`：刷写时读取 JSON，通过平台策略执行
+  - `FlashStrategy` 抽象 + `RockchipFlashStrategy`（upgrade_tool DB/WL/RD）
+  - 自动设备检测与等待（upgrade_tool LD 轮询，超时友好提示）
+  - 任意分区级刷写：`flange flash <partition-name>`
+  - dd 整盘刷写保留：`flange flash --raw /dev/sdX`
+  - CLI 入口：`python3 -m builder.flash run --target-dir ...`
+- **删除 shell 刷写脚本**：`scripts/flange-flash.sh`、`scripts/flash/common.sh`、`scripts/flash/rockchip.sh` 全部移除
+- **构建引擎集成**：`engine.py` image 构建完成后自动生成 `flash-config.json`
+- **测试**：32 个测试覆盖数据模型、策略、执行器、CLI
+
 ---
 
 ## 待实施
@@ -43,17 +66,6 @@
 ### 多平台扩展
 - Allwinner 平台策略类（`builder/platforms/allwinner/`）— 首个目标：Radxa Cubie A7Z (A733)
 - Qualcomm 平台策略类
-
-
-### 构建优化
-- rootfs 两阶段缓存优化（base + customize 分离）
-- 并行组件构建
-- 远程构建缓存
-
-### 刷写增强
-- 自动设备检测
-- 分区级刷写（单组件更新）
-- OTA 更新支持
 
 ---
 
