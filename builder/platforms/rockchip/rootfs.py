@@ -34,15 +34,22 @@ class RockchipRootfsBuilder(ComponentBuilder):
             self._status("Phase 1: base 缓存命中")
             self._extract_base(base_cache_path, rootfs_dir)
         else:
-            self._status("Phase 1: base 缓存未命中，完整构建")
+            self._status("Phase 1: base 构建")
+            if self.output:
+                self.output.indent()
             self._build_phase1(rootfs_dir, config)
             if base_cache_path:
                 self._save_base_snapshot(rootfs_dir, base_cache_path)
+            if self.output:
+                self.output.dedent()
 
         # Phase 2: Customize（总是执行）
         self._status("Phase 2: Customize")
+        if self.output:
+            self.output.indent()
         self._build_phase2(rootfs_dir, config)
-        self._status("Phase 2: 完成")
+        if self.output:
+            self.output.dedent()
 
         # Phase 3: 压缩
         self._output = self._work_dir / "rootfs.tar.gz"

@@ -104,6 +104,9 @@ class BuildOutput:
         self._tail_buffer: deque[str] = deque(maxlen=20)
         self._errors: list[str] = []
 
+        # 缩进层级：L1(▸)=0, L2(✓)=1
+        self._indent: int = 0
+
         # Spinner 状态
         self._spinner_event: threading.Event | None = None
         self._spinner_thread: threading.Thread | None = None
@@ -140,6 +143,20 @@ class BuildOutput:
             return text
         return f"{color}{text}{_Colors.RESET}"
 
+    @property
+    def _pad(self) -> str:
+        """当前缩进前缀：每层 2 空格。"""
+        return "  " * (self._indent + 1)
+
+    def indent(self):
+        """增加一层缩进（用于子步骤）。"""
+        self._indent += 1
+
+    def dedent(self):
+        """减少一层缩进。"""
+        if self._indent > 0:
+            self._indent -= 1
+
     # -----------------------------------------------------------------------
     # L1: 阶段标题
     # -----------------------------------------------------------------------
@@ -164,13 +181,16 @@ class BuildOutput:
         self._phase_start_time = time.time()
         self._tail_buffer.clear()
         self._errors.clear()
+        self._indent = 0
         self._write(self._c(_Colors.BLUE_BOLD, f"▸ {component}"))
+        self._indent = 1
 
     def phase_skip(self, component: str):
         """组件跳过：⊘ 无变更，跳过"""
         elapsed = 0.1
         self._write(self._c(_Colors.BLUE_BOLD, f"▸ {component}"))
         self._write(self._c(_Colors.GRAY, f"  ⊘ 无变更，跳过{self._fmt_time_right(elapsed)}"))
+        self._indent = 0
         self._write("")
         self._results.append({
             "component": component,
@@ -182,14 +202,16 @@ class BuildOutput:
                   error: Exception | None = None):
         """结束组件阶段。"""
         self._spinner_stop_if_running()
+        self._indent = 1
         elapsed = time.time() - self._phase_start_time
         if success:
             self._write(self._c(_Colors.GREEN,
-                                f"  ✓ 完成{self._fmt_time_right(elapsed)}"))
+                                f"{self._pad}✓ 完成{self._fmt_time_right(elapsed)}"))
         else:
             self._write(self._c(_Colors.RED_BOLD,
-                                f"  ✗ 失败{self._fmt_time_right(elapsed)}"))
+                                f"{self._pad}✗ 失败{self._fmt_time_right(elapsed)}"))
             self._show_error_context()
+        self._indent = 0
         self._write("")
         self._results.append({
             "component": component,
@@ -206,20 +228,20 @@ class BuildOutput:
         """成功状态：✓ msg"""
         if self.level == OutputLevel.QUIET:
             return
-        self._write(self._c(_Colors.GREEN, f"  ✓ {msg}"))
+        self._write(self._c(_Colors.GREEN, f"{self._pad}✓ {msg}"))
 
     def warning(self, msg: str):
         """警告：⚠ msg（仅 VERBOSE）"""
         if self.level != OutputLevel.VERBOSE:
             # 仍写入日志
-            self._log_file.write(f"  ⚠ {msg}\n")
+            self._log_file.write(f"{self._pad}⚠ {msg}\n")
             self._log_file.flush()
             return
-        self._write(self._c(_Colors.YELLOW, f"  ⚠ {msg}"))
+        self._write(self._c(_Colors.YELLOW, f"{self._pad}⚠ {msg}"))
 
     def error(self, msg: str):
         """错误：✗ msg"""
-        self._write(self._c(_Colors.RED_BOLD, f"  ✗ {msg}"))
+        self._write(self._c(_Colors.RED_BOLD, f"{self._pad}✗ {msg}"))
 
     # -----------------------------------------------------------------------
     # L3: 命令输出 (feed_line)
@@ -246,7 +268,7 @@ class BuildOutput:
         if self.level == OutputLevel.VERBOSE:
             with self._lock:
                 sys.stdout.write(
-                    self._c(_Colors.GRAY, f"  │ {line}") + "\n")
+                    self._c(_Colors.GRAY, f"{self._pad}│ {line}") + "\n")
                 sys.stdout.flush()
 
     # -----------------------------------------------------------------------
@@ -255,14 +277,15 @@ class BuildOutput:
 
     def spinner_start(self, label: str):
         """启动 braille spinner + 计时器。"""
+        self._spinner_pad = self._pad  # 固定 spinner 启动时的缩进
         if not self._tty or self.level == OutputLevel.QUIET:
             # 非 TTY / QUIET 模式仅写日志
-            self._log_file.write(f"  · {label}\n")
+            self._log_file.write(f"{self._spinner_pad}· {label}\n")
             self._log_file.flush()
             return
         if self.level == OutputLevel.VERBOSE:
             # VERBOSE 模式不用 spinner（输出已全量显示）
-            self._write(self._c(_Colors.GRAY, f"  · {label}"))
+            self._write(self._c(_Colors.GRAY, f"{self._spinner_pad}· {label}"))
             return
 
         self._spinner_label = label
@@ -292,10 +315,11 @@ class BuildOutput:
         """Spinner 线程主循环。"""
         idx = 0
         start = time.time()
+        pad = self._spinner_pad
         while not self._spinner_event.is_set():
             frame = _SPINNER_FRAMES[idx % len(_SPINNER_FRAMES)]
             elapsed = time.time() - start
-            line = f"  {frame} {self._spinner_label}  {elapsed:.0f}s"
+            line = f"{pad}{frame} {self._spinner_label}  {elapsed:.0f}s"
             if self._tty:
                 colored = self._c(_Colors.GRAY, line)
                 with self._lock:
@@ -371,10 +395,11 @@ class BuildOutput:
             return
         # 最多显示 15 行
         lines = lines[-15:]
-        border = self._c(_Colors.RED, "  " + "┄" * 50)
+        pad = self._pad
+        border = self._c(_Colors.RED, f"{pad}" + "┄" * 50)
         self._write(border)
         for line in lines:
-            self._write(self._c(_Colors.RED, f"  {line}"))
+            self._write(self._c(_Colors.RED, f"{pad}{line}"))
         self._write(border)
 
     # -----------------------------------------------------------------------
