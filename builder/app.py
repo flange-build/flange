@@ -28,6 +28,52 @@ log = logging.getLogger("flange")
 
 
 # ---------------------------------------------------------------------------
+# 交叉编译工具链前缀映射：目标架构 → 工具链前缀
+# ---------------------------------------------------------------------------
+
+_CROSS_COMPILE_PREFIX: dict[str, str] = {
+    "aarch64": "aarch64-linux-gnu-",
+    "armhf":   "arm-linux-gnueabihf-",
+    "x86_64":  "",      # 原生，无需前缀
+    "i386":    "",
+    "riscv64": "riscv64-linux-gnu-",
+}
+
+# ---------------------------------------------------------------------------
+# 构建系统命令模板：构建系统名 → 命令步骤列表
+# 每个步骤是一个字符串列表（argv 格式），选项展开后追加到对应位置
+# ---------------------------------------------------------------------------
+
+_BUILD_SYSTEMS: dict[str, list[list[str]]] = {
+    # 预编译包，无需编译步骤
+    "none": [],
+    # CMake 两阶段：configure + build
+    "cmake": [
+        [
+            "cmake", "-B", "build",
+            "-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc",
+            "-DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++",
+        ],
+        ["cmake", "--build", "build", "-j$(nproc)"],
+    ],
+    # Meson + Ninja 两阶段：setup + build
+    "meson": [
+        ["meson", "setup", "build", "--cross-file", "/etc/meson/cross-aarch64.ini"],
+        ["ninja", "-C", "build"],
+    ],
+    # Make 单阶段
+    "make": [
+        ["make", "ARCH=arm64", "CROSS_COMPILE=aarch64-linux-gnu-", "-j$(nproc)"],
+    ],
+    # Swift 交叉编译
+    "swift": [
+        ["swift", "build", "-c", "release", "--triple", "aarch64-unknown-linux-gnu"],
+    ],
+    # custom：命令由 spec.build.commands 提供，不使用此模板
+    "custom": [],
+}
+
+# ---------------------------------------------------------------------------
 # 架构后缀映射表：目标架构 → 允许的文件名后缀列表
 # ---------------------------------------------------------------------------
 
@@ -416,8 +462,8 @@ class AppBuilder:
         spec = load_spec(app_dir)
         log.debug(f"AppBuilder: 已加载规格，版本 = {spec.app.version}")
 
-        # 步骤 3：编译（预留，Task 5 实现）
-        self._compile(app_dir, spec)
+        # 步骤 3：编译
+        self._compile(app_dir, spec, self._config)
 
         # 步骤 4：收集文件
         files = collect_files(app_dir, spec, self._arch)
@@ -486,22 +532,160 @@ class AppBuilder:
 
         return _topo_sort_apps(graph)
 
-    def _compile(self, app_dir: Path, spec: AppSpec) -> None:
-        """编译 App（当前为占位实现，Task 5 完成真正的编译逻辑）。
+    def _build_commands(self, spec: AppSpec, config: dict) -> list[list[str]]:
+        """根据构建规格生成实际执行的命令列表。
 
-        当 build.system 为 "none" 时跳过；其他构建系统记录日志，
-        实际编译由 Task 5 实现。
+        处理流程：
+        1. 从 _BUILD_SYSTEMS 模板中克隆基础命令
+        2. 注入与目标架构匹配的交叉编译参数（CROSS_COMPILE、CMAKE 编译器等）
+        3. 将 build.options 展开为对应构建系统的参数格式
+        4. 若存在 sysroot（build.deps 非空），注入 sysroot 路径
 
         参数：
-            app_dir: App 目录
-            spec:    已加载的 AppSpec
+            spec:   已加载的 AppSpec
+            config: FINAL_CONFIG 字典，需包含 board/product/variant/arch 字段
+
+        返回：
+            命令步骤列表，每个步骤是 argv 字符串列表
         """
-        if spec.build.system == "none":
+        system = spec.build.system
+        arch   = config.get("arch", "aarch64")
+
+        # custom 构建系统：直接使用 spec.build.commands，不做任何模板展开
+        if system == "custom":
+            # 深拷贝，避免意外修改 spec 内部状态
+            return [list(cmd) for cmd in spec.build.commands]
+
+        # 从模板深拷贝基础命令，避免污染全局常量
+        template = _BUILD_SYSTEMS.get(system, [])
+        if not template:
+            # none 或未知系统，返回空列表
+            return []
+        commands = [list(step) for step in template]
+
+        # ------------------------------------------------------------------
+        # 注入目标架构的交叉编译参数
+        # ------------------------------------------------------------------
+        cross_prefix = _CROSS_COMPILE_PREFIX.get(arch, "aarch64-linux-gnu-")
+        cross_gcc = f"{cross_prefix}gcc"
+        cross_gxx = f"{cross_prefix}g++"
+
+        if system == "cmake":
+            # 替换 configure 步骤中的编译器标志
+            for i, arg in enumerate(commands[0]):
+                if arg.startswith("-DCMAKE_C_COMPILER="):
+                    commands[0][i] = f"-DCMAKE_C_COMPILER={cross_gcc}"
+                elif arg.startswith("-DCMAKE_CXX_COMPILER="):
+                    commands[0][i] = f"-DCMAKE_CXX_COMPILER={cross_gxx}"
+
+        elif system == "make":
+            # 替换 CROSS_COMPILE= 参数
+            for i, arg in enumerate(commands[0]):
+                if arg.startswith("CROSS_COMPILE="):
+                    commands[0][i] = f"CROSS_COMPILE={cross_prefix}"
+
+        elif system == "meson":
+            # Meson 使用 cross-file，不直接替换命令参数；
+            # 架构信息在 /etc/meson/cross-*.ini 中由 Docker 镜像管理
+            pass
+
+        elif system == "swift":
+            # 替换 --triple 后面的目标三元组
+            for i, arg in enumerate(commands[0]):
+                if arg == "--triple" and i + 1 < len(commands[0]):
+                    # 根据架构构造 LLVM 三元组
+                    triple_map = {
+                        "aarch64": "aarch64-unknown-linux-gnu",
+                        "armhf":   "armv7-unknown-linux-gnueabihf",
+                        "x86_64":  "x86_64-unknown-linux-gnu",
+                    }
+                    commands[0][i + 1] = triple_map.get(arch, f"{arch}-unknown-linux-gnu")
+
+        # ------------------------------------------------------------------
+        # 展开 build.options
+        # ------------------------------------------------------------------
+        options = spec.build.options  # dict[str, str]
+        if options:
+            if system == "cmake":
+                # CMake 选项格式：-DKEY=VALUE，追加到 configure 步骤
+                for key, value in options.items():
+                    commands[0].append(f"-D{key}={value}")
+
+            elif system == "meson":
+                # Meson 选项格式：-Dkey=value，追加到 setup 步骤
+                for key, value in options.items():
+                    commands[0].append(f"-D{key}={value}")
+
+            elif system == "make":
+                # Make 选项格式：KEY=VALUE，追加到 make 步骤
+                for key, value in options.items():
+                    commands[0].append(f"{key}={value}")
+
+            elif system == "swift":
+                # Swift 选项格式：--key value 或仅 --key（value 为空时）
+                for key, value in options.items():
+                    commands[0].append(f"--{key}")
+                    if value:
+                        commands[0].append(value)
+
+        # ------------------------------------------------------------------
+        # Sysroot 注入（当 build.deps 非空时启用）
+        # ------------------------------------------------------------------
+        if spec.build.deps:
+            board   = config.get("board",   "unknown")
+            product = config.get("product", "default")
+            variant = config.get("variant", "release")
+            # sysroot 目录约定：target/<board>/<product>/<variant>/sysroot/
+            sysroot = (
+                self._project_dir
+                / "target" / board / product / variant / "sysroot"
+            )
+            sysroot_str = str(sysroot)
+
+            if system == "cmake":
+                commands[0].append(f"-DCMAKE_SYSROOT={sysroot_str}")
+
+            elif system == "make":
+                commands[0].append(f"CFLAGS=-I{sysroot_str}/usr/include")
+                commands[0].append(f"LDFLAGS=-L{sysroot_str}/usr/lib")
+
+            elif system == "meson":
+                # Meson 的 sysroot 通过 cross-file 管理，此处不做额外注入
+                pass
+
+        return commands
+
+    def _compile(self, app_dir: Path, spec: AppSpec, config: dict) -> None:
+        """编译 App。
+
+        根据 build.system 选择执行策略：
+        - none：预编译包，直接跳过
+        - custom：执行 spec.build.commands 中的命令列表
+        - 其余（cmake/meson/make/swift）：通过 _build_commands 生成命令后逐步执行
+
+        所有命令均通过 DockerRunner 在容器内执行，工作目录设为 app_dir。
+
+        参数：
+            app_dir: App 目录（容器内的工作目录）
+            spec:    已加载的 AppSpec
+            config:  FINAL_CONFIG 字典
+        """
+        system = spec.build.system
+
+        if system == "none":
             # 预编译 App，无需编译步骤
+            log.debug(f"AppBuilder: App '{spec.app.name}' 为预编译包，跳过编译")
             return
 
-        # Task 5 将在此处实现真正的编译逻辑（cmake/meson/make/custom）
         log.info(
-            f"AppBuilder: App '{spec.app.name}' 使用构建系统 '{spec.build.system}'，"
-            f"编译步骤待 Task 5 实现，当前跳过"
+            f"AppBuilder: App '{spec.app.name}' 使用构建系统 '{system}'，开始编译"
         )
+
+        # 生成命令列表
+        commands = self._build_commands(spec, config)
+
+        # 逐步执行编译命令
+        cwd = str(app_dir)
+        for cmd in commands:
+            log.debug(f"AppBuilder: 执行命令 {cmd}")
+            self._docker.run(cmd, cwd=cwd)
