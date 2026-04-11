@@ -14,3 +14,20 @@ maintainer:
 capabilities:
   - usb-gadget
   - adb-debug
+
+install:
+  conf/usbdevice.conf: /etc/usbdevice.conf
+  scripts/usbdevice: /usr/sbin/usbdevice
+  udev/61-usbdevice.rules: /etc/udev/rules.d/61-usbdevice.rules
+
+systemd:
+  unit: systemd/usbdevice.service
+  auto_start: true
+
+depends:
+  - libc6
+
+conffiles:
+  - /etc/usbdevice.conf
+
+data_dirs: []

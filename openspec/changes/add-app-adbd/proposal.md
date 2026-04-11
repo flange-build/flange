@@ -1,3 +1,5 @@
+> **归档说明**：本变更方案属于 Bazel 构建系统时代（v1.0）。flange 已于 2026-04 迁移至 Python 统一架构（v2.0），本方案中涉及 Bazel/Starlark/BUILD.bazel 的实现细节仅作历史参考。adbd 的当前实现请参阅 `docs/app-architecture.md` 和 `app/adbd/app.yaml`。
+
 ## Why
 
 嵌入式 Linux 开发中，`adb`（Android Debug Bridge）是最高效的设备调试通道之一，支持 shell 远程登录、文件传输（push/pull）、端口转发（forward/reverse）等能力。当前 flange 缺少 adbd 支持，开发者只能依赖 SSH 或串口调试，而 SSH 需要网络配置，串口速率有限且不支持文件传输。

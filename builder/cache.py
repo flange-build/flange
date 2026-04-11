@@ -37,6 +37,38 @@ class BuildCache:
         # 全局配置
         for key in ("arch", "platform", "soc", "board"):
             h.update(self.config.get(key, "").encode())
+
+        if component == "app":
+            # App 组件哈希：custom_packages 列表 + 各 app.yaml 内容
+            self._hash_app_sources(h)
+        else:
+            # 其他组件：源码 commit + 补丁文件
+            self._hash_component_sources(h, component)
+
+        return h.hexdigest()[:16]
+
+    def _hash_app_sources(self, h: "hashlib._Hash") -> None:
+        """将 custom_packages 列表及各 App 的 app.yaml 内容混入哈希。
+
+        哈希输入：
+        - custom_packages 列表（JSON 序列化，保证顺序稳定）
+        - 每个 App 目录下 app.yaml 的文件内容（按包名排序）
+        """
+        rootfs_cfg = self.config.get("rootfs", {})
+        custom_packages: list = rootfs_cfg.get("custom_packages", [])
+        # 列表本身的序列化（包名顺序变动也会导致哈希改变）
+        h.update(json.dumps(sorted(custom_packages)).encode())
+        # 逐个 app.yaml 文件内容
+        for pkg in sorted(custom_packages):
+            app_yaml = Path("app") / pkg / "app.yaml"
+            if app_yaml.exists():
+                h.update(app_yaml.read_bytes())
+            else:
+                # 文件缺失时混入占位符，避免误判为无变更
+                h.update(f"missing:{pkg}".encode())
+
+    def _hash_component_sources(self, h: "hashlib._Hash", component: str) -> None:
+        """将源码 commit 和补丁文件内容混入哈希（非 app 组件使用）。"""
         # 源码 commit
         src_dir = Path("sources") / component / self.config["board"]
         if src_dir.exists():
@@ -56,4 +88,3 @@ class BuildCache:
             if patch_dir.exists():
                 for p in sorted(patch_dir.glob("*.patch")):
                     h.update(p.read_bytes())
-        return h.hexdigest()[:16]
