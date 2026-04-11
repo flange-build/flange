@@ -6,6 +6,7 @@ schema: spec-driven
 context: |
   项目名称: flange 嵌入式系统构建基座
   项目定位: 类似 buildroot 和 yocto 的嵌入式系统构建框架，但基于 ubuntu-base 构建
+  构建系统: Python 构建引擎（配置继承 + 内容哈希增量构建 + ComponentBuilder 策略模式），Docker 容器内执行编译
   核心目标:
     1. 提供内核快速验证通道
     2. 提供文件系统快速验证通道
