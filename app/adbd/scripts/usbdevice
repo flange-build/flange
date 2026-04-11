@@ -103,8 +103,14 @@ usb_run_stage()
 
 usb_wait_files()
 {
-	for i in `seq 200`;do
-		fuser -s $@ 2>/dev/null && break
+	# 等待 adbd 真正打开 ep1 文件描述符
+	# 注意：ep1 inode 在 FFS 挂载后永久存在，不能用 [ -e ] 判断
+	for i in $(seq 200); do
+		ADBD_PID=$(pidof adbd 2>/dev/null) || true
+		if [ -n "$ADBD_PID" ] && \
+		   ls -la /proc/$ADBD_PID/fd/ 2>/dev/null | grep -q "usb-ffs/adb/ep1"; then
+			break
+		fi
 		sleep .01
 	done
 }
@@ -173,7 +179,12 @@ usb_start_daemon()
 	touch $TAG_FILE
 
 	# Already started
-	[ -z "$(usb_get_started)" ] || return 0
+	DAEMON_STARTED="$(usb_get_started)"
+	if [ -n "$DAEMON_STARTED" ]; then
+		usb_msg "[DEBUG usb_start_daemon] usb_get_started=$DAEMON_STARTED, skipping daemon launch for $1"
+		return 0
+	fi
+	usb_msg "[DEBUG usb_start_daemon] launching daemon: $1"
 
 	# Start and spawn background daemon
 	{
@@ -222,9 +233,13 @@ ADB_INSTANCES=${ADB_INSTANCES:-ffs.adb}
 
 adb_prepare()
 {
-	usb_mount adb /dev/usb-ffs/adb -o uid=2000,gid=2000 -t functionfs
+	usb_mount adb /dev/usb-ffs/adb -o uid=2000,gid=2000,no_disconnect=1 -t functionfs
+	ADBD_PID="$(pidof adbd 2>/dev/null || echo '')"
+	usb_msg "[DEBUG adb_prepare] adbd pid=$ADBD_PID ffs_users=$(fuser -m /dev/usb-ffs/adb 2>&1 || echo 'none')"
 	usb_start_daemon /usr/bin/adbd
 	usb_wait_files -m /dev/usb-ffs/adb
+	ADBD_PID_AFTER="$(pidof adbd 2>/dev/null || echo '')"
+	usb_msg "[DEBUG adb_prepare] after: adbd pid=$ADBD_PID_AFTER"
 }
 
 adb_stop()
@@ -528,24 +543,69 @@ usb_prepare()
 		usb_run_stage usb init
 	fi
 
-	USB_STATE=$(cat /sys/class/android_usb/android0/state)
+	USB_STATE=$(cat /sys/class/android_usb/android0/state 2>/dev/null || echo "DISCONNECTED")
 	USB_UDC=$(ls /sys/class/udc/ | head -n 1)
 
 	# Parse started USB functions
 	OLD_FUNCS=$(usb_get_started)
+	USB_CURRENT_UDC="$(cat $USB_GADGET_DIR/UDC 2>/dev/null)"
 
-	# Stop old USB functions when USB functions changed
-	if [ -n "$OLD_FUNCS" ] && [ "$OLD_FUNCS" != "$USB_FUNCS" ]; then
-		usb_msg "Functions changed $OLD_FUNCS -> $USB_FUNCS"
-		usb_stop
+	usb_msg "[DEBUG prepare] USB_STATE=$USB_STATE USB_UDC=$USB_UDC USB_FUNCS=$USB_FUNCS OLD_FUNCS=$OLD_FUNCS UDC=$USB_CURRENT_UDC"
+
+	# Stop old USB functions when:
+	# 1. Functions changed (normal reconfiguration)
+	# 2. UDC unexpectedly unbound while functions still set (disconnect recovery)
+	#    This kills the old daemon (e.g. adbd) whose FFS handles are now stale,
+	#    clears the started state, and allows a fresh restart.
+	if [ -n "$OLD_FUNCS" ]; then
+		if [ "$OLD_FUNCS" != "$USB_FUNCS" ]; then
+			usb_msg "Functions changed $OLD_FUNCS -> $USB_FUNCS"
+			usb_stop
+		elif [ -z "$USB_CURRENT_UDC" ]; then
+			# Disconnect recovery: only kill daemons and clear started
+			# state. Do NOT call usb_stop — it removes ConfigFS symlinks
+			# which triggers functionfs_unbind and permanently breaks
+			# FFS (private_data set to NULL, ffs_ready returns -EINVAL).
+			usb_msg "UDC unbound, restarting daemons (preserving ConfigFS)"
+			for func in $USB_FUNCS; do
+				for instance in $(usb_instances $func); do
+					cd $USB_FUNCTIONS_DIR/$instance &>/dev/null || continue
+					usb_run_stage $func stop
+				done
+			done
+			echo > $USB_FUNCS_FILE
+			unset OLD_FUNCS
+		fi
 	fi
 
-	# Update USB PID
-	usb_pid > $USB_GADGET_DIR/idProduct
+	# Update USB PID only when UDC is not bound (i.e. gadget is not active).
+	# Writing idProduct while the UDC is bound triggers a gadget soft-
+	# disconnect and re-enumeration, which — combined with the udev rule
+	# that fires "usbdevice update" on every android_usb state change —
+	# creates an infinite reset loop.
+	if [ -z "$USB_CURRENT_UDC" ]; then
+		usb_msg "[DEBUG prepare] UDC not bound, writing idProduct=$(usb_pid)"
+		usb_pid > $USB_GADGET_DIR/idProduct
+	else
+		usb_msg "[DEBUG prepare] UDC bound ($USB_CURRENT_UDC), skipping idProduct write"
+	fi
 }
 
 usb_start()
 {
+	# If the gadget is already running with the same functions, skip.
+	# The udev rule fires "usbdevice update" on every android_usb state
+	# change (CONNECTED/CONFIGURED/DISCONNECTED).  Re-running prepare
+	# stages or touching ConfigFS attributes while the UDC is bound can
+	# cause a soft-disconnect and an infinite reset loop.
+	USB_CURRENT_UDC="$(cat $USB_GADGET_DIR/UDC 2>/dev/null)"
+	STARTED_FUNCS="$(usb_get_started)"
+	usb_msg "[DEBUG start] USB_CURRENT_UDC=$USB_CURRENT_UDC STARTED_FUNCS=$STARTED_FUNCS USB_FUNCS=$USB_FUNCS"
+	if [ -n "$USB_CURRENT_UDC" ] && [ "$STARTED_FUNCS" = "$USB_FUNCS" ]; then
+		usb_msg "[DEBUG start] Already running, skipping"
+		return 0
+	fi
+
 	usb_msg "Starting functions: $USB_FUNCS"
 
 	echo "$USB_CONFIG" > $USB_CONFIGS_STRINGS_DIR/configuration
@@ -569,6 +629,7 @@ usb_start()
 		done
 	done
 
+	usb_msg "[DEBUG start] Writing UDC=$USB_UDC"
 	usb_write $USB_GADGET_DIR/UDC $USB_UDC
 
 	for func in $USB_FUNCS; do
@@ -587,9 +648,10 @@ usb_start()
 usb_stop()
 {
 	if [ -n "$OLD_FUNCS" ]; then
-		usb_msg "Stopping functions: $OLD_FUNCS"
+		usb_msg "[DEBUG stop] Stopping functions: $OLD_FUNCS"
 	fi
 
+	usb_msg "[DEBUG stop] Unbinding UDC"
 	usb_write $USB_GADGET_DIR/UDC ""
 
 	for func in $USB_FUNCS; do
@@ -602,6 +664,9 @@ usb_stop()
 	done
 
 	rm -f $USB_CONFIGS_DIR/f-*
+
+	# Clear started state so usb_start_daemon will relaunch daemons
+	echo > $USB_FUNCS_FILE
 
 	# Clear functions to avoid stopping them again
 	unset OLD_FUNCS
@@ -627,7 +692,7 @@ echo "Starting $0 ${ACTION}, log saved to $LOG_FILE"
 # Redirect outputs to log file
 exec >>$LOG_FILE 2>&1
 
-usb_msg "Handling ${ACTION} request"
+usb_msg "=== Handling ${ACTION} request (PID=$$) ==="
 
 usb_run_stage usb prepare
 
