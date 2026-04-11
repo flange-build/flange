@@ -58,18 +58,18 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 
 ### 2.3 组件级构建与刷写
 
-使用 Bazel 统一管理所有组件的构建与刷写，自动推断依赖关系，无需每次全量重建：
+Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈希实现增量构建。产物收集到 target/<board>/<product>/<variant>/。
 
-| 组件 | 构建目标 | 收集目标 | 刷写目标 |
-|------|---------|---------|---------|
-| Bootloader | `bazel build //bootloader` | `bazel run //bootloader:collect` | `bazel run //bootloader:flash` |
-| Kernel | `bazel build //kernel` | `bazel run //kernel:collect` | `bazel run //kernel:flash` |
-| Rootfs | `bazel build //rootfs` | `bazel run //rootfs:collect` | `bazel run //rootfs:flash` |
-| 全量镜像 | `bazel build //image` | — | `bazel run //image:flash` |
+| 组件 | 构建命令 | 刷写命令 |
+|------|---------|---------|
+| Bootloader | `flange build bootloader` | `flange flash bootloader` |
+| Kernel | `flange build kernel` | `flange flash kernel` |
+| Rootfs | `flange build rootfs` | `flange flash rootfs` |
+| 全量镜像 | `flange build` | `flange flash` |
 
-- 组件构建：在 Docker 容器内执行，Bazel 自动推断组件间依赖并决定增量构建范围
-- 产物收集：`bazel run //<component>:collect` 将构建产物（镜像、DTB、模块等）复制到 `target/<component>/`
-- 组件刷写：在宿主机执行，Bazel 读取构建产物并调用平台对应的刷写工具
+- 组件构建：在 Docker 容器内执行，构建引擎自动推断组件间依赖并基于内容哈希决定增量构建范围
+- 产物收集：构建完成后自动收集到 `target/<board>/<product>/<variant>/`
+- 组件刷写：在宿主机执行，执行自动生成的 flash.sh 调用平台对应的刷写工具
 - 全量刷写：重写设备全部分区（分区表 + 所有组件镜像）
 
 ---
@@ -129,51 +129,40 @@ Shell 脚本是构建系统的核心语言。
 
 ---
 
-## 6. Bazel / Starlark 规范
+## 6. Python 构建系统规范
 
-Bazel 是本项目的唯一构建与部署系统，使用 Starlark 语言编写构建规则。
+Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 Python 编写。
 
 ### 6.1 文件组织
-- 项目根目录包含 `MODULE.bazel`（模块定义）和顶层 `BUILD.bazel`
-- 每个组件目录（`bootloader/`、`kernel/`、`rootfs/` 等）包含各自的 `BUILD.bazel`
-- 自定义构建规则放在 `build/` 目录下的 `.bzl` 文件中
-- 板级配置通过 Bazel `config_setting` 和 `select()` 实现多板适配
+- 配置引擎位于 `config/` 目录（merge.py、registry.py、query.py）
+- 构建引擎位于 `builder/` 目录
+- 平台策略类位于 `builder/platforms/<vendor>/`（如 `builder/platforms/rockchip/kernel.py`）
+- 平台/SoC/板级配置位于 `platform/` 和 `board/` 下的 `config.py` 文件
+- 分区表转换器位于 `builder/partition/`
 
-### 6.2 风格
-- 缩进：4 空格
-- 使用 `buildifier` 格式化所有 `BUILD.bazel` 和 `.bzl` 文件
-- 目标命名：`snake_case`，如 `build_kernel`、`flash_bootloader`
-- 规则函数命名：`snake_case`，如 `flange_kernel_build`
-- 每个 target 须有 `visibility` 声明，避免使用 `//visibility:public` 除非必要
+### 6.2 配置体系
+- 三层继承：platform → SoC → board，通过 `deep_merge()` 合并
+- 条件标记：`+packages:debug`（追加语义）、`packages:smart-display`（条件覆盖）
+- 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`
+- 配置解析：`resolve_config(board, product, variant)` 返回扁平的 FINAL_CONFIG dict
+- 新增板级支持只需创建 `board/<name>/config.py`，无需修改框架代码
 
-### 6.3 依赖管理
-- 组件间依赖通过 Bazel `deps` 属性声明，由 Bazel 自动推断构建顺序
-- 禁止在构建规则中使用隐式依赖（如硬编码路径引用其他组件产物）
-- 外部依赖（工具链、源码包）通过 `MODULE.bazel` 声明并锁定版本
-- 下载缓存利用 Bazel 的 repository cache 机制
+### 6.3 框架与策略分离
+- **框架层**（`builder/base.py`）：ComponentBuilder 基类，负责源码生命周期、补丁管理、增量编译
+- **策略层**（`builder/platforms/<vendor>/*.py`）：平台子类，实现 `configure()`、`compile()`、`collect()` 方法
+- 配置通过 Python dict 直接传入（无环境变量契约）
+- 新增平台时只需在 `builder/platforms/` 下添加策略子类，MUST NOT 修改框架层代码
 
-### 6.4 框架与策略分离
-
-自定义构建规则（`build/*.bzl`）采用**框架 + 策略脚本**架构，严格禁止在框架层硬编码平台/架构相关逻辑：
-
-- **框架层**（`build/*.bzl`）：负责通用流程编排（源码生命周期、补丁管理、增量编译、产物声明与收集），MUST NOT 包含 `ARCH=arm64`、`CROSS_COMPILE=aarch64-linux-gnu-` 等平台假设
-- **策略层**（`<component>/<platform>/build.sh`）：负责平台特有的构建命令（make 参数、签名、打包等），通过框架传入的环境变量获取配置
-- 框架与策略之间通过**环境变量契约**通信：框架设置输入变量（如 `KERNEL_DIR`、`KERNEL_DEFCONFIG`），策略脚本设置输出变量（如 `KERNEL_IMAGE`、`KERNEL_DTB`）
-- 新增平台时只需在组件平台子目录添加策略脚本和 `BUILD.bazel`，MUST NOT 修改框架层代码
-- 自底向上开发时，即使只有一个打样设备，也必须保持框架层的平台无关性
+### 6.4 构建与刷写约定
+- 构建命令：`flange build [component]`（component 可选：kernel、bootloader、rootfs，默认 image）
+- 刷写命令：`flange flash [component]`（执行自动生成的 `target/.../flash.sh`）
+- 增量构建：基于内容哈希（config + source commit + patches），由 `builder/cache.py` 管理
+- 产物目录：`target/<board>/<product>/<variant>/`
 
 ### 6.5 配置驱动原则
-- 新增板级支持或构建产物时，**只允许修改配置文件**（`.bazelrc`、`BUILD.bazel`、`board.bzl` 等），不得修改框架层规则（`build/*.bzl`）
-- 规则实现通过 `ctx.var`、`select()`、属性参数等机制从配置获取所有可变信息
-- 违反此原则说明框架抽象不足，应先重构规则再新增支持
-
-### 6.6 构建与刷写目标约定
-- 每个组件目录提供三类 target：
-  - 构建 target：默认 target，输出编译产物（如 `//kernel` 产出内核镜像 + DTB + 模块 tarball）
-  - 收集 target：`collect` 目标，将构建产物复制到 `target/<component>/`（如 `bazel run //kernel:collect`）
-  - 刷写 target：`flash` 目标，执行刷写操作（如 `//kernel:flash`）
-- 全量镜像构建：`//image` target 聚合所有组件产物并打包
-- 全量刷写：`//image:flash` 执行整盘刷写
+- 新增板级支持时，**只允许创建配置文件**（`board/<name>/config.py`），不得修改框架层代码
+- 所有可变信息从 FINAL_CONFIG dict 获取
+- 违反此原则说明框架抽象不足，应先重构框架再新增支持
 
 ---
 
@@ -229,60 +218,62 @@ Bazel 是本项目的唯一构建与部署系统，使用 Starlark 语言编写�
 
 ```
 flange/
-├── MODULE.bazel        # Bazel 模块定义（依赖、工具链声明）
-├── BUILD.bazel         # 顶层构建目标
-├── build/              # 自定义 Bazel 规则（.bzl 文件）
-├── board/              # 板级配置（每个板子一个子目录）
-│   └── <board-name>/
-│       ├── BUILD.bazel  # 板级构建/刷写目标（导出 filegroup）
-│       ├── config       # 板级配置文件（平台、工具链等）
-│       ├── overlay/     # 文件系统覆盖层
-│       └── patches/     # 板级补丁（仅影响本板子）
-│           ├── kernel/      # 板级内核补丁
-│           └── bootloader/  # 板级 bootloader 补丁
-├── docker/             # Docker 构建环境定义
-│   ├── Dockerfile       # 构建容器镜像定义
-│   └── entrypoint.sh    # 容器入口脚本（SSH 权限修正等）
-├── bootloader/         # 引导加载程序（U-Boot / ABL 等，按平台分子目录）
-│   ├── BUILD.bazel      # 顶层 alias + select() 路由
-│   ├── rockchip/        # Rockchip U-Boot 构建（TPL+SPL+ATF）
-│   │   ├── BUILD.bazel
-│   │   ├── patches/
-│   │   └── scripts/
-│   ├── allwinner/       # Allwinner U-Boot 构建
-│   │   ├── BUILD.bazel
-│   │   └── patches/
-│   └── qualcomm/        # Qualcomm ABL/XBL 构建
-│       ├── BUILD.bazel
-│       └── patches/
-├── kernel/             # 内核构建（按平台分子目录）
-│   ├── BUILD.bazel      # 顶层 alias + select() 路由
-│   ├── rockchip/        # Rockchip 内核构建与打包
-│   │   ├── BUILD.bazel
-│   │   └── patches/
-│   ├── allwinner/       # Allwinner 内核构建与打包
-│   │   ├── BUILD.bazel
-│   │   └── patches/
-│   └── qualcomm/        # Qualcomm 内核构建与打包
-│       ├── BUILD.bazel
-│       └── patches/
-├── rootfs/             # 根文件系统构建（保持扁平，差异通过配置传入）
-│   └── BUILD.bazel      # Rootfs 构建/刷写目标
-├── image/              # 全量镜像打包（按平台分子目录）
-│   ├── BUILD.bazel      # 顶层 alias + select() 路由
-│   ├── rockchip/        # Rockchip 镜像打包（rkimage）
-│   │   └── BUILD.bazel
-│   ├── allwinner/       # Allwinner 镜像打包（sunxi-pack）
-│   │   └── BUILD.bazel
-│   └── qualcomm/        # Qualcomm 镜像打包（rawprogram）
-│       └── BUILD.bazel
-├── packages/           # 自定义软件包定义
-├── tools/              # 开发/调试辅助工具
-├── openspec/           # 工程规格管理
-├── ProjectSpec.md      # 本文档 — 项目规格（目标/架构/编码/开发/维护规范）
+├── pyproject.toml      # Python 项目配置
+├── envsetup.sh         # CLI 入口（source 加载）
+├── docker-compose.yml  # Docker 编排配置
 ├── CLAUDE.md           # AI Agent 行为指引
-├── .bazelrc            # Bazel 运行配置
-└── docker-compose.yml  # Docker 编排配置
+├── ProjectSpec.md      # 本文档
+│
+├── config/             # 配置引擎
+│   ├── merge.py        #   deep_merge + resolve_conditions
+│   ├── registry.py     #   统一注册表 + 三层合并
+│   └── query.py        #   target 解析（给 CLI lunch 用）
+│
+├── platform/           # 平台/SoC 配置（三层继承的前两层）
+│   └── rockchip/
+│       ├── config.py   #   Rockchip 平台配置
+│       ├── patches/    #   平台级补丁
+│       │   ├── kernel/
+│       │   └── bootloader/
+│       └── rk3566/
+│           └── config.py  # RK3566 SoC 配置
+│
+├── board/              # 板级配置（第三层）+ 板级数据
+│   └── <board-name>/
+│       ├── config.py   #   板级配置（含 products/variants 声明）
+│       ├── overlay/    #   文件系统覆盖层
+│       └── patches/    #   板级补丁
+│
+├── builder/            # 构建引擎
+│   ├── engine.py       #   依赖图 + 调度
+│   ├── docker.py       #   Docker 容器执行封装
+│   ├── source.py       #   源码仓库管理
+│   ├── cache.py        #   增量构建缓存（内容哈希）
+│   ├── base.py         #   ComponentBuilder 基类
+│   ├── chroot.py       #   ChrootContext（mount/umount 管理）
+│   ├── flash.py        #   flash.sh 自动生成
+│   ├── partition/      #   分区表系统
+│   │   ├── __init__.py #     中间格式（PartitionTable/Partition）
+│   │   └── rockchip.py #     Rockchip parameter.txt 转换
+│   └── platforms/      #   平台策略类
+│       └── rockchip/
+│           ├── kernel.py      # RockchipKernelBuilder
+│           ├── bootloader.py  # RockchipBootloaderBuilder
+│           ├── rootfs.py      # RockchipRootfsBuilder
+│           └── image.py       # RockchipImageBuilder
+│
+├── docker/             # Docker 构建环境定义
+│   ├── Dockerfile
+│   └── entrypoint.sh
+├── app/                # App 定义
+├── packages/           # 自定义软件包
+├── tests/              # 测试套件
+├── openspec/           # 工程规格管理
+├── sources/            # 源码仓库（git ignored）
+├── target/             # 构建产物（git ignored）
+│   └── <board>/<product>/<variant>/
+├── .flange/            # 运行时状态（git ignored）
+└── docs/               # 设计文档
 ```
 
 ---
@@ -339,39 +330,30 @@ feat(kernel): 添加内核编译支持
 
 ## 11. 构建系统约定
 
-### 11.1 Bazel 统一构建
-- Bazel 是项目**唯一**的构建和部署入口，所有构建/刷写操作通过 `bazel build` / `bazel run` 执行
-- 组件间依赖由 Bazel 自动推断，变更某组件后仅重建受影响的部分
-- 通过 `--config=<board>` 切换板级配置（在 `.bazelrc` 中定义）
-- 使用 Bazel 的远程缓存（remote cache）加速团队协作构建
+### 11.1 Python 构建引擎
+- Python 是项目的构建引擎语言，所有构建/刷写操作通过 `flange` 命令执行
+- 组件间依赖由 `builder/engine.py` 的依赖图自动推断，变更后基于内容哈希仅增量重建
+- 通过 `lunch <board>-<product>-<variant>` 选择配置，状态持久化到 `.flange/current_config`
+- 增量构建基于内容哈希（config + source commit + patches），无需全量重建
 
 ### 11.2 Docker 构建环境
 - 所有编译构建操作**必须在 Docker 容器内**完成
-- Dockerfile 应基于稳定的 Ubuntu LTS 版本
-- 容器内安装 Bazel、交叉编译工具链及构建依赖，宿主机不做要求
+- Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖
 - 项目根目录通过 volume mount 映射到容器内
-- Bazel output base 和 repository cache 通过 volume 持久化
-- 宿主机 `~/.ssh` 目录以只读方式挂载到容器临时位置（`/tmp/.ssh-host:ro`），通过 entrypoint 脚本复制到 `/root/.ssh` 并修正 owner 和权限，避免 SSH 因 bind mount 导致的 "Bad owner or permissions" 问题。密钥文件不得复制到镜像中
-- Bazelisk 下载缓存通过 `./cache/bazelisk` 持久化，避免容器重建后重新下载 Bazel
+- 源码仓库目录 `sources/` 和 APT 缓存 `cache/apt/` 通过 volume 持久化
+- 宿主机 `~/.ssh` 以只读方式挂载，通过 entrypoint 脚本修正权限
 
 ### 11.3 交叉编译
-- 工具链通过 Bazel toolchain 机制注册和选择，不依赖环境变量硬编码
-- 板级配置通过 Bazel platform 和 `config_setting` 实现
-- 支持通过 `board/<board-name>/` 下的 `BUILD.bazel` 覆盖默认配置
+- 交叉编译器由 Docker 容器内的系统包提供（gcc-aarch64-linux-gnu）
+- 平台策略类（builder/platforms/）直接调用交叉编译器，无需额外工具链注册机制
+- 板级配置通过 config.py 中的 dict 声明（platform/SoC/board 三层继承）
 
 ### 11.4 输出管理
-- 构建中间产物由 Bazel 管理，位于 `output/bazel/`（通过 `--output_base` 持久化，git ignored）
-- 最终产物通过 `bazel run //<component>:collect` 收集到 `target/<component>/`（git ignored）
-- 内核构建产出：Image、DTB、modules.tar.gz（模块 tarball，`INSTALL_MOD_STRIP=1` 裁剪调试符号）
-- 使用 `bazel clean` 清理构建产物
-- 使用 `bazel clean --expunge` 完全清理（含缓存）
-- 可通过 `--output_groups` 选择性输出特定产物
-
-### 11.5 可复现构建
-- Bazel 天然支持沙箱化构建（sandboxed execution），保证可复现性
-- 构建过程不依赖宿主机环境，完全由 Docker + Bazel 沙箱保证
-- 外部依赖通过 `MODULE.bazel` 锁定版本（含 hash 校验）
-- Docker 镜像版本应固定（tag 锁定），避免隐式升级
+- 构建产物收集到 `target/<board>/<product>/<variant>/`（git ignored）
+- 内核产出：Image、DTB、modules（INSTALL_MOD_STRIP=1）
+- flash.sh 由 `builder/flash.py` 自动生成
+- 分区配置由 `builder/partition/` 从 config 自动转换
+- 使用 `flange clean` 清理当前配置的构建产物
 
 ---
 
@@ -384,15 +366,14 @@ feat(kernel): 添加内核编译支持
 
 ### 12.2 组件级刷写
 - 支持单独刷写各组件到设备的特定分区
-- 刷写通过 `bazel run //<component>:flash` 执行（如 `bazel run //kernel:flash`）
-- 全量刷写：`bazel run //image:flash`（重写分区表 + 所有分区）
-- Bazel 在执行刷写前自动校验构建产物完整性
+- 刷写通过 `flange flash [component]` 执行（如 `flange flash kernel`）
+- 全量刷写：`flange flash`（重写分区表 + 所有分区）
+- flash.sh 由构建引擎自动生成，包含平台特有的刷写命令
 
 ### 12.3 平台适配
-- 每个板级目录通过 `BUILD.bazel` 声明所属平台（Rockchip / Allwinner / Qualcomm 等）
-- 刷写规则根据平台 `config_setting` 自动选择对应的刷写工具和参数
-- 平台相关的刷写逻辑封装在 `build/` 下的自定义 Bazel 规则（`.bzl`）中
-- 通用刷写框架作为 Bazel rule 提供统一接口，各平台实现具体 rule
+- 每块板子的 `config.py` 声明所属平台和刷写工具
+- flash.sh 根据 FINAL_CONFIG 中的 `flash_tool` 字段自动选择刷写工具
+- 平台特有的刷写逻辑由 `builder/flash.py` 模板化生成
 
 ---
 
