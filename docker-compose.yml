@@ -7,10 +7,8 @@ services:
     volumes:
       # 项目目录挂载到容器
       - .:/workspace
-      # Bazel output base 持久化
-      - ./output/bazel:/workspace/output/bazel
-      # Bazelisk 下载缓存持久化
-      - ./cache/bazelisk:/root/.cache/bazelisk
+      # 源码仓库持久化
+      - ./sources:/workspace/sources
       # APT 下载缓存持久化
       - ./cache/apt:/cache/apt
       # SSH 密钥（挂载到临时位置，entrypoint 复制并修正权限）
