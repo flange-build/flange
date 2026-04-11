@@ -78,9 +78,11 @@ lunch
 | `flange build rootfs` | 只构建根文件系统 |
 | `flange build app` | 构建当前配置所需的所有 App |
 | `flange build app <name>` | 构建指定 App |
-| `flange flash` | 刷写完整镜像到设备 |
-| `flange flash kernel` | 只刷写内核分区 |
-| `flange flash bootloader` | 只刷写 bootloader |
+| `flange flash` | 全量刷写到设备（自动检测设备） |
+| `flange flash <partition>` | 刷写指定分区（如 rootfs, boot, uboot） |
+| `flange flash --list` | 列出可刷写分区及镜像路径 |
+| `flange flash --raw /dev/sdX` | dd 整盘刷写 |
+| `flange flash --no-wait` | 跳过设备等待（CI 环境） |
 | `flange clean` | 清理当前配置的构建产物 |
 | `flange status` | 显示当前配置和构建状态 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
@@ -335,7 +337,7 @@ flange/
 │   ├── source.py             #   源码仓库管理
 │   ├── cache.py              #   内容哈希增量缓存
 │   ├── chroot.py             #   ChrootContext（mount/umount 管理）
-│   ├── flash.py              #   flash.sh 自动生成
+│   ├── flash.py              #   统一刷写系统（配置生成 + 刷写执行）
 │   ├── partition/            #   分区表转换
 │   │   └── rockchip.py       #     → parameter.txt
 │   └── platforms/            #   平台策略类
@@ -382,7 +384,7 @@ flange build
       ├── kernel/Image, *.dtb
       ├── bootloader/
       ├── image/<board>_firmware_<date>.img
-      └── flash.sh ← 自动生成
+      └── flash-config.json ← 自动生成
 ```
 
 ## 许可证

@@ -182,6 +182,119 @@ class TestBuildEngineApp:
 # BuildCache app 组件哈希测试
 # ---------------------------------------------------------------------------
 
+class TestFlashConfigGeneration:
+    """验证 BuildEngine 在 image 构建后生成 flash-config.json。"""
+
+    def test_image_build_generates_flash_config(self, tmp_path):
+        config = {
+            "board": "test-board", "product": "default", "variant": "release",
+            "arch": "aarch64", "platform": "rockchip", "soc": "rk3566",
+            "flash_tool": "upgrade_tool",
+            "rootfs": {"custom_packages": []},
+            "partitions": {
+                "format": "gpt", "sector_size": 512,
+                "entries": [
+                    {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
+                    {"name": "rootfs", "offset": "0x40000", "size": "0x200000", "type": "ext4"},
+                ],
+            },
+        }
+        with (
+            patch("builder.engine.DockerRunner"),
+            patch("builder.engine.SourceManager"),
+            patch("builder.engine.BuildCache") as MockCache,
+            patch("builder.engine.AppBuilder") as MockAppBuilder,
+            patch("builder.engine.importlib") as mock_importlib,
+        ):
+            mock_cache = MockCache.return_value
+            mock_cache.is_up_to_date.return_value = False
+            mock_cache.compute_hash.return_value = "abc"
+            mock_cache.target_dir = tmp_path / "target" / "test-board" / "default" / "release"
+            mock_cache.target_dir.mkdir(parents=True)
+
+            mock_app = MockAppBuilder.return_value
+            mock_app.build_all.return_value = {}
+
+            mock_mod = MagicMock()
+            mock_mod.create_builder.return_value.build.return_value = {}
+            mock_importlib.import_module.return_value = mock_mod
+
+            engine = BuildEngine(config, project_dir=tmp_path)
+            engine.build("image")
+
+            flash_json = mock_cache.target_dir / "flash-config.json"
+            assert flash_json.exists()
+            import json
+            data = json.loads(flash_json.read_text())
+            assert data["platform"] == "rockchip"
+            partition_names = [p["name"] for p in data["partitions"]]
+            assert "boot" in partition_names
+            assert "rootfs" in partition_names
+
+    def test_rootfs_build_does_not_generate_flash_config(self, tmp_path):
+        config = {
+            "board": "test-board", "product": "default", "variant": "release",
+            "arch": "aarch64", "platform": "rockchip", "soc": "rk3566",
+            "rootfs": {"custom_packages": []},
+        }
+        with (
+            patch("builder.engine.DockerRunner"),
+            patch("builder.engine.SourceManager"),
+            patch("builder.engine.BuildCache") as MockCache,
+            patch("builder.engine.AppBuilder") as MockAppBuilder,
+            patch("builder.engine.importlib") as mock_importlib,
+        ):
+            mock_cache = MockCache.return_value
+            mock_cache.is_up_to_date.return_value = False
+            mock_cache.compute_hash.return_value = "abc"
+            mock_cache.target_dir = tmp_path / "target" / "test-board" / "default" / "release"
+            mock_cache.target_dir.mkdir(parents=True)
+
+            mock_app = MockAppBuilder.return_value
+            mock_app.build_all.return_value = {}
+
+            mock_mod = MagicMock()
+            mock_mod.create_builder.return_value.build.return_value = {}
+            mock_importlib.import_module.return_value = mock_mod
+
+            engine = BuildEngine(config, project_dir=tmp_path)
+            engine.build("rootfs")
+
+            flash_json = mock_cache.target_dir / "flash-config.json"
+            assert not flash_json.exists()
+
+
+class TestCacheInjection:
+    """验证 BuildEngine 向 ComponentBuilder 注入 cache 引用。"""
+
+    def test_builder_receives_cache(self, tmp_path):
+        config = {
+            "board": "test-board", "product": "default", "variant": "release",
+            "arch": "aarch64", "platform": "rockchip", "soc": "rk3566",
+            "rootfs": {"custom_packages": []},
+        }
+        with (
+            patch("builder.engine.DockerRunner"),
+            patch("builder.engine.SourceManager"),
+            patch("builder.engine.BuildCache") as MockCache,
+            patch("builder.engine.importlib") as mock_importlib,
+        ):
+            mock_cache = MockCache.return_value
+            mock_cache.is_up_to_date.return_value = False
+            mock_cache.compute_hash.return_value = "abc"
+
+            mock_builder = MagicMock()
+            mock_builder.build.return_value = {}
+            mock_mod = MagicMock()
+            mock_mod.create_builder.return_value = mock_builder
+            mock_importlib.import_module.return_value = mock_mod
+
+            engine = BuildEngine(config, project_dir=tmp_path)
+            engine.build("kernel")
+
+            assert mock_builder.cache is mock_cache
+
+
 class TestBuildCacheApp:
     """验证 BuildCache.compute_hash 对 app 组件的哈希行为。"""
 

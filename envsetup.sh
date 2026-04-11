@@ -328,20 +328,18 @@ engine.build('$component')
 }
 
 _flange_cmd_flash() {
-    local component="${1:-}"
     _flange_check_target || return 1
-    local flash_script="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT/flash.sh"
-    if [[ ! -f "$flash_script" ]]; then
-        _flange_error "刷写脚本不存在: $flash_script"
+    local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+    if [[ ! -f "${target_dir}/flash-config.json" ]]; then
+        _flange_error "未找到 flash-config.json: ${target_dir}/flash-config.json"
         _flange_error "请先执行 flange build 生成镜像"
         return 1
     fi
     _flange_step "刷写: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
-    if [[ -n "$component" ]]; then
-        bash "$flash_script" "$component"
-    else
-        bash "$flash_script"
-    fi
+    python3 -m builder.flash run \
+        --target-dir "$target_dir" \
+        --project-dir "$FLANGE_DIR" \
+        "$@"
 }
 
 _flange_cmd_clean() {
@@ -597,7 +595,11 @@ flange() {
         echo "    clean                   清理构建产物"
         echo ""
         echo "  刷写命令:"
-        echo "    flash [component]       刷写到目标设备"
+        echo "    flash                   全量刷写到目标设备"
+        echo "    flash <partition>       刷写指定分区（如 rootfs, boot）"
+        echo "    flash --list            列出可刷写分区"
+        echo "    flash --raw /dev/sdX    dd 整盘刷写"
+        echo "    flash --no-wait         跳过设备等待"
         echo ""
         echo "  App 命令:"
         echo "    list apps               列出所有可用 App"

@@ -13,6 +13,7 @@ class ComponentBuilder(ABC):
     基类负责：源码获取 → 源码重置 → 补丁应用 → 调子类 → 返回产物。
     """
     component: str = ""
+    cache: "BuildCache | None" = None  # 由 engine 注入，供子类使用分阶段缓存
 
     def __init__(self, docker: DockerRunner, source: SourceManager):
         self.docker = docker
