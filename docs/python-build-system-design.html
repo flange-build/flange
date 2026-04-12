@@ -833,52 +833,67 @@ class ComponentBuilder(ABC):
 <pre><code class="language-python">class SourceManager:
     """源码仓库管理 — 替代 Bazel module extensions + repository rules。
 
-    功能：
-    - 首次构建时 shallow clone 源码
-    - 支持 commit 锁定（精确复现）
-    - 支持 local_path 覆盖（本地开发模式）
-    - 平台级共享仓库去重（如 rkbin）
+    4 种源码模式，优先级 local_path > local_repo > repo：
+    - local_path：目录直用，不做任何 git 操作（本地 hack）
+    - local_repo：本地 git 仓库作为 clone 源（离线/镜像），后续同步同远端
+    - repo + branch + commit：远程 clone 并固定 commit（钉版本）
+    - repo + branch（无 commit）：每次 build fetch + reset --hard origin/&lt;branch&gt;
+                                  （跟随远端开发分支）
+
+    平台级共享仓库去重（如 rkbin）由 ensure_firmware 处理。
     """
 
-    def __init__(self, config: dict, sources_dir: Path = None):
-        self.config = config
+    def __init__(self, sources_dir: Path = None):
         self.sources_dir = sources_dir or Path("sources")
 
     def ensure(self, component: str, config: dict) -> Path:
-        """确保源码就绪，返回源码目录路径"""
         comp_config = config.get(component, {})
-
-        # 本地源码覆盖
-        local = comp_config.get("local_path")
-        if local:
-            return Path(local)
+        local_path = comp_config.get("local_path")
+        if local_path:
+            return Path(local_path)
 
         repo_dir = self.sources_dir / component / config["board"]
-
-        if not repo_dir.exists():
-            self._clone(
-                repo=comp_config["repo"],
-                branch=comp_config["branch"],
-                dest=repo_dir,
-                commit=comp_config.get("commit"),
-            )
-        elif comp_config.get("commit"):
-            current = self._rev_parse(repo_dir)
-            if current != comp_config["commit"]:
-                self._fetch_checkout(repo_dir, comp_config["commit"])
-
+        self._ensure_repo(repo_dir, comp_config)
         return repo_dir
 
-    def _clone(self, repo, branch, dest, commit=None):
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        cmd = ["git", "clone", "--depth=1", "-b", branch, repo, str(dest)]
-        env = {"GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
-        subprocess.run(cmd, env={**os.environ, **env},
-                       check=True, timeout=1800)
+    def _ensure_repo(self, repo_dir: Path, cfg: dict) -> None:
+        """统一的 clone + 同步入口。三种路径：
+           1. 不存在 → 首次 clone
+           2. 声明 commit → HEAD 不等时 fetch + checkout
+           3. 仅 branch → fetch + reset --hard origin/<branch>
+        """
+        clone_url = self._resolve_clone_url(cfg)
+        branch = cfg.get("branch", "")
+        commit = cfg.get("commit", "")
+
+        if not repo_dir.exists():
+            self._clone(clone_url, branch, repo_dir, commit)
+            return
         if commit:
-            subprocess.run(["git", "fetch", "--depth=1", "origin", commit],
-                           cwd=dest, check=True)
-            subprocess.run(["git", "checkout", commit], cwd=dest, check=True)</code></pre>
+            if self._rev_parse(repo_dir) != commit:
+                self._fetch_checkout(repo_dir, commit)
+            return
+        if branch:
+            self._fetch_reset_branch(repo_dir, branch)
+
+    def _resolve_clone_url(self, cfg: dict) -> str:
+        """local_repo 优先于 repo，转为 file:// URL 以启用 shallow clone。"""
+        local_repo = cfg.get("local_repo", "")
+        if local_repo:
+            path = Path(local_repo).expanduser().resolve()
+            if not path.exists():
+                raise ValueError(f"local_repo 不存在: {path}")
+            return f"file://{path}"
+        return cfg["repo"]
+
+    def _fetch_reset_branch(self, repo_dir: Path, branch: str):
+        """追远端最新：fetch + reset --hard origin/<branch>。"""
+        env = {**os.environ,
+               "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
+        subprocess.run(["git", "fetch", "--depth=1", "origin", branch],
+                       cwd=repo_dir, env=env, check=True, timeout=600)
+        subprocess.run(["git", "reset", "--hard", f"origin/{branch}"],
+                       cwd=repo_dir, check=True)</code></pre>
 </details>
 
 <details>

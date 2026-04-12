@@ -12,34 +12,28 @@ class SourceManager:
         self.sources_dir = sources_dir or Path("sources")
 
     def ensure(self, component: str, config: dict) -> Path:
-        """确保组件源码就绪，返回源码目录路径。"""
+        """确保组件源码就绪，返回源码目录路径。
+
+        优先级：local_path > local_repo > repo
+          - local_path：直接用本地目录，不碰 git
+          - local_repo / repo：正常 clone，按 commit 或 branch 追同步
+        """
         comp_config = config.get(component, {})
         local_path = comp_config.get("local_path")
         if local_path:
             return Path(local_path)
 
         repo_dir = self.sources_dir / component / config["board"]
-        if not repo_dir.exists():
-            self._clone(
-                repo=comp_config["repo"],
-                branch=comp_config["branch"],
-                dest=repo_dir,
-                commit=comp_config.get("commit", ""),
-            )
-        elif comp_config.get("commit"):
-            current = self._rev_parse(repo_dir)
-            if current != comp_config["commit"]:
-                self._fetch_checkout(repo_dir, comp_config["commit"])
+        self._ensure_repo(repo_dir, comp_config)
         return repo_dir
 
     def ensure_firmware(self, platform: str, config: dict) -> Path:
         """确保平台固件仓库就绪（如 rkbin）。"""
         rkbin_config = config.get("rkbin", {})
-        if not rkbin_config.get("repo"):
+        if not (rkbin_config.get("repo") or rkbin_config.get("local_repo")):
             return Path("")
         fw_dir = self.sources_dir / "firmware" / platform
-        if not fw_dir.exists():
-            self._clone(repo=rkbin_config["repo"], branch=rkbin_config["branch"], dest=fw_dir)
+        self._ensure_repo(fw_dir, rkbin_config)
         return fw_dir
 
     def ensure_rootfs_tarball(self, config: dict) -> Path:
@@ -98,6 +92,53 @@ class SourceManager:
             )
         return app_dir
 
+    # --- 仓库同步核心 ---
+
+    def _ensure_repo(self, repo_dir: Path, cfg: dict) -> None:
+        """统一的 clone + 同步入口。
+
+        三种路径：
+          1. repo_dir 不存在 → 首次 clone（按 branch，可选 commit）
+          2. 声明了 commit → HEAD 不等时 fetch + checkout，固定到该 commit
+          3. 仅声明 branch → fetch + reset --hard origin/<branch>，追远端最新
+
+        约定：声明 branch 不声明 commit 代表"跟随远端"语义，因此 reset --hard
+        会丢弃本地修改。要在源码目录里 hack 请改用 local_path。
+        """
+        clone_url = self._resolve_clone_url(cfg)
+        branch = cfg.get("branch", "")
+        commit = cfg.get("commit", "")
+
+        if not repo_dir.exists():
+            self._clone(clone_url, branch, repo_dir, commit)
+            return
+
+        if commit:
+            if self._rev_parse(repo_dir) != commit:
+                self._fetch_checkout(repo_dir, commit)
+            return
+
+        if branch:
+            self._fetch_reset_branch(repo_dir, branch)
+
+    def _resolve_clone_url(self, cfg: dict) -> str:
+        """选出 clone 源 URL。local_repo 优先于 repo。
+
+        local_repo 转成 file:// 绝对 URL：纯本地路径会被 git 当作 hardlink
+        clone 并忽略 --depth=1；file:// 会走 transport，shallow clone 生效。
+        """
+        local_repo = cfg.get("local_repo", "")
+        if local_repo:
+            path = Path(local_repo).expanduser().resolve()
+            if not path.exists():
+                raise ValueError(f"local_repo 不存在: {path}")
+            if not (path / ".git").exists() and not (path / "HEAD").exists():
+                raise ValueError(
+                    f"local_repo 不是一个 git 仓库（未找到 .git 或 HEAD）: {path}"
+                )
+            return f"file://{path}"
+        return cfg["repo"]
+
     def _clone(self, repo: str, branch: str, dest: Path, commit: str = ""):
         dest.parent.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
@@ -122,3 +163,16 @@ class SourceManager:
         subprocess.run(["git", "fetch", "--depth=1", "origin", commit],
                        cwd=repo_dir, env=env, check=True, timeout=600)
         subprocess.run(["git", "checkout", commit], cwd=repo_dir, check=True)
+
+    def _fetch_reset_branch(self, repo_dir: Path, branch: str):
+        """追远端最新：fetch origin/<branch> 后 reset --hard。
+
+        shallow clone 场景下 `--depth=1` 保持仓库始终是浅的，不会因为
+        历次 fetch 逐步长成完整历史。
+        """
+        env = {**os.environ,
+               "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
+        subprocess.run(["git", "fetch", "--depth=1", "origin", branch],
+                       cwd=repo_dir, env=env, check=True, timeout=600)
+        subprocess.run(["git", "reset", "--hard", f"origin/{branch}"],
+                       cwd=repo_dir, check=True)

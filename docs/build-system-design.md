@@ -59,6 +59,26 @@ builder/
 └── chroot.py          ChrootContext（mount/umount 安全管理）
 ```
 
+### 组件源码模式
+
+`builder/source.py::SourceManager` 为 kernel / bootloader / rkbin 等 git 组件
+提供 4 种源码来源，按优先级：`local_path > local_repo > repo`。
+
+| 字段 | 语义 |
+|------|------|
+| `local_path` | 目录直用，框架不做任何 git 操作（本地 hack） |
+| `local_repo` + `branch`/`commit` | 本地 git 仓库作为 clone 源，克隆后正常同步（离线构建/镜像） |
+| `repo` + `branch` + `commit` | 远程 clone，固定到 commit（钉版本） |
+| `repo` + `branch`（无 `commit`） | 远程 clone，每次 build `fetch + reset --hard origin/<branch>`（跟随远端） |
+
+`local_repo` 会在内部转为 `file://<abs>` URL 喂给 git，以确保 `--depth=1`
+shallow clone 生效（裸本地路径会走 hardlink clone 并忽略 depth）。
+
+"跟随远端"语义下，`reset --hard` 会丢弃源码目录里的本地修改——因此
+"声明 branch 不声明 commit"与"声明 local_path"互为独立的两种语义，不混用。
+
+使用详情见 [README.md §组件源码模式](../README.md#组件源码模式)。
+
 ### 依赖图
 
 ```

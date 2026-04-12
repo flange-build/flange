@@ -172,6 +172,75 @@ board/<board-name>/
     └── bootloader/    #   bootloader 补丁
 ```
 
+### 组件源码模式
+
+kernel / bootloader / rkbin 等 git 组件支持 4 种源码来源，优先级为
+`local_path > local_repo > repo`。4 种模式对应 4 种开发场景，互斥使用：
+
+| 字段组合 | 行为 | 适用场景 |
+|---------|------|---------|
+| `repo` + `branch` + `commit` | 克隆后固定到 `commit`，每次 build 校验 HEAD | 钉版本，精确复现 |
+| `repo` + `branch`（无 `commit`） | 每次 build `fetch --depth=1 origin <branch>` + `reset --hard` | 跟随远端开发分支 |
+| `local_repo` + `branch`（± `commit`） | 以本地 git 仓库为 origin clone，后续 fetch 同上 | 离线构建 / 内部镜像 |
+| `local_path` | 直接把指定目录当源码用，**完全不碰 git** | 本地 hack 调试 |
+
+哈希缓存会把 `git rev-parse HEAD` 和补丁文件内容混进组件哈希
+（`builder/cache.py:_mix_source_tree`），HEAD 变化会级联使下游组件
+失效——无需手动 `flange clean`。
+
+#### 1. 钉版本（推荐生产构建）
+
+```python
+"kernel": {
+    "repo": "https://github.com/radxa/kernel.git",
+    "branch": "linux-6.1-stan-rkr6",   # clone 时使用的分支
+    "commit": "a1b2c3d4...",           # 固定到此 commit
+},
+```
+
+#### 2. 跟随远端最新
+
+```python
+"kernel": {
+    "repo": "https://github.com/radxa/kernel.git",
+    "branch": "linux-6.1-stan-rkr6",
+    # 不写 commit → 每次 build 追 origin/<branch>
+    # 注意：reset --hard 会丢弃本地修改，要本地改动请用 local_path
+},
+```
+
+#### 3. 离线构建 / 本地镜像
+
+```python
+"kernel": {
+    "local_repo": "/home/eki/mirrors/linux.git",  # 绝对路径或 ~/...
+    "branch": "linux-6.1-stan-rkr6",
+    # commit 可选，语义同模式 1/2
+},
+```
+
+`local_repo` 内部会转为 `file://` URL 喂给 `git clone`，保留 shallow clone
+与正常远端 fetch 语义一致（而裸本地路径会被 git 当作 hardlink clone 并
+忽略 `--depth=1`）。
+
+#### 4. 本地 hack 调试
+
+```python
+"kernel": {
+    "local_path": "/workspace/my-kernel-checkout",
+    # 其他字段无效；框架原样使用此目录，不 clone 不 reset
+},
+```
+
+声明了 `local_path` 后，`repo` / `local_repo` / `branch` / `commit` 都会被
+忽略。你可以在这个目录里随便改代码、切分支、跑 `make menuconfig`，下次
+`flange build` 会直接拿当前状态构建——这也是为什么 `local_path` 早出于
+所有 git 操作之前。
+
+> ⚠️ **branch 字段变更需手动清理**：由于 shallow clone 隐式带 `--single-branch`，
+> 将一个已 clone 的组件换 branch 不会自动切换，需要 `rm -rf sources/<component>/<board>/`
+> 后重新 build。
+
 ### 添加新 SoC（已有平台）
 
 创建 `platform/<vendor>/<soc>/config.py`：
