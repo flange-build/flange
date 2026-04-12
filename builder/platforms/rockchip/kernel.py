@@ -15,7 +15,17 @@ class RockchipKernelBuilder(ComponentBuilder):
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)
-        self.make(src_dir, ["Image", "dtbs", "modules"],
+        # 单文件 dtb 目标：用 "<dts_dir>/<dts>.dtb" 这种子目录相对路径
+        # （不是 basename 也不是 arch/... 完整路径）。内核顶层 Makefile
+        # 的 `%.dtb: dtbs_prepare` 规则把它展开成：
+        #   $(MAKE) $(build)=$(dtstree) $(dtstree)/<dts_dir>/<dts>.dtb
+        # kbuild 顺着 arch/.../dts/Makefile 的 `subdir-y += <dts_dir>`
+        # 递归下到子目录，再由 scripts/Makefile.build 的通用模式规则
+        # `$(obj)/%.dtb: $(src)/%.dts FORCE` 直接按 .dts 源编 .dtb ——
+        # 目标设备树无需在子目录 Makefile 的 dtb-y 里登记。
+        dts_dir = config["kernel"].get("dts_dir", "rockchip")
+        dts = config["kernel"]["dts"]
+        self.make(src_dir, ["Image", f"{dts_dir}/{dts}.dtb", "modules"],
                   arch=self.ARCH, cross=self.CROSS, jobs=jobs,
                   extra=["KCFLAGS=-Wno-error"],
                   label="编译内核...")
