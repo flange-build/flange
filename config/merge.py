@@ -137,4 +137,8 @@ def resolve_conditions(config: dict, product: str, variant: str) -> dict:
             # 条件覆盖
             result[base_key] = value
 
+    # 将当前 product/variant 写入结果，供构建/刷写流程使用
+    result["product"] = product
+    result["variant"] = variant
+
     return result

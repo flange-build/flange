@@ -78,18 +78,19 @@ _flange_python() {
     (cd "$FLANGE_DIR" && python3 -c "$1")
 }
 
-# --- 持久化：保存当前配置到 .flange/current_config ---
+# --- 持久化：保存当前 target 选择到 .flange/current_config ---
+# current_config 只存 state pointer（board/product/variant），
+# 不缓存完整 resolved config。build/flash/app 调用时通过
+# config.loader.load_current_config() 每次重新 resolve，
+# 确保 config 源文件变更立即生效。
 _flange_save_config() {
     _flange_ensure_state_dir
     _flange_python "
-import json
-from config.registry import resolve_config
-cfg = resolve_config('$FLANGE_BOARD', '$FLANGE_PRODUCT', '$FLANGE_VARIANT')
-with open('.flange/current_config', 'w') as f:
-    json.dump(cfg, f, indent=2, ensure_ascii=False)
+from config.loader import save_state
+save_state('$FLANGE_BOARD', '$FLANGE_PRODUCT', '$FLANGE_VARIANT')
 "
     if [[ $? -ne 0 ]]; then
-        _flange_error "配置解析失败"
+        _flange_error "保存 target 选择失败"
         return 1
     fi
     return 0
@@ -322,12 +323,10 @@ _flange_cmd_build() {
             _flange_docker_run python3 -c "
 from builder.app import AppBuilder
 from builder.docker import DockerRunner
-from builder.source import SourceManager
-from builder.output import BuildOutput, OutputLevel
-import json, logging
+from config.loader import load_current_config
+import logging
 logging.basicConfig(level=logging.WARNING)
-with open('.flange/current_config') as f:
-    cfg = json.load(f)
+cfg = load_current_config()
 ${output_cfg}
 builder = AppBuilder(DockerRunner(), None, cfg)
 builder.build_one('$app_name')
@@ -336,12 +335,10 @@ builder.build_one('$app_name')
             _flange_docker_run python3 -c "
 from builder.app import AppBuilder
 from builder.docker import DockerRunner
-from builder.source import SourceManager
-from builder.output import BuildOutput, OutputLevel
-import json, logging
+from config.loader import load_current_config
+import logging
 logging.basicConfig(level=logging.WARNING)
-with open('.flange/current_config') as f:
-    cfg = json.load(f)
+cfg = load_current_config()
 ${output_cfg}
 builder = AppBuilder(DockerRunner(), None, cfg)
 builder.build_all()
@@ -352,10 +349,10 @@ builder.build_all()
 
     _flange_docker_run python3 -c "
 from builder.engine import BuildEngine
-import json, logging
+from config.loader import load_current_config
+import logging
 logging.basicConfig(level=logging.WARNING)
-with open('.flange/current_config') as f:
-    cfg = json.load(f)
+cfg = load_current_config()
 ${output_cfg}
 engine = BuildEngine(cfg)
 engine.build('$component')
