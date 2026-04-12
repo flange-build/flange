@@ -9,7 +9,7 @@ BOARD = {
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
         "branch": "linux-6.1-stan-rkr4.1-buildroot",
-        "commit": "d425e02d22a75945fc79a10e736c1de76ca615c8",
+        # 不声明 commit → 每次 build 追 origin/<branch> 最新
         "dts": "tspi-rk3566-user-v10-ext39-linux",
     },
     "bootloader": {
