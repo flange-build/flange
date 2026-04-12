@@ -165,7 +165,21 @@ class SourceManager:
         subprocess.run(["git", "checkout", commit], cwd=repo_dir, check=True)
 
     def _fetch_reset_branch(self, repo_dir: Path, branch: str):
-        """追远端最新：fetch origin/<branch> 后 reset --hard。
+        """追远端最新：fetch origin/<branch> 后两步重置（mixed + checkout）。
+
+        不用 `git reset --hard` 的原因：在 macOS / Windows 大小写不敏感
+        文件系统上，Linux kernel 等源码树含仅大小写不同的文件
+        （如 xt_connmark.h / xt_CONNMARK.h），`reset --hard` 的 checkout
+        阶段会报 "File exists" → 整条命令失败 "fatal: Could not reset
+        index file"。两步式拆分：
+
+          1. git reset --mixed origin/<branch>
+             只更新 HEAD + index（二进制 .git/index 文件），不触碰工作
+             树，大小写冲突无从发生，必须成功（check=True）。
+          2. git checkout -f .
+             尽力同步工作树到新 index。遇到大小写冲突会 stderr 报错但
+             实际已完成 checkout，exit 非零——与 ComponentBuilder.reset_source
+             同策略 check=False 吞掉退出码。
 
         shallow clone 场景下 `--depth=1` 保持仓库始终是浅的，不会因为
         历次 fetch 逐步长成完整历史。
@@ -174,5 +188,7 @@ class SourceManager:
                "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
         subprocess.run(["git", "fetch", "--depth=1", "origin", branch],
                        cwd=repo_dir, env=env, check=True, timeout=600)
-        subprocess.run(["git", "reset", "--hard", f"origin/{branch}"],
+        subprocess.run(["git", "reset", "--mixed", f"origin/{branch}"],
                        cwd=repo_dir, check=True)
+        subprocess.run(["git", "checkout", "-f", "."],
+                       cwd=repo_dir, check=False)
