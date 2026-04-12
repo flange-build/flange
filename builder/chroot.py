@@ -29,17 +29,29 @@ class ChrootContext:
         resolv_dst = self.rootfs / "etc" / "resolv.conf"
         if resolv_src.exists():
             self.docker.run_privileged(["cp", str(resolv_src), str(resolv_dst)])
+        # 阻止 dpkg/apt 在 chroot 内启动服务
+        policy_rc = self.rootfs / "usr" / "sbin" / "policy-rc.d"
+        policy_rc.parent.mkdir(parents=True, exist_ok=True)
+        policy_rc.write_text("#!/bin/sh\nexit 101\n")
+        policy_rc.chmod(0o755)
         return self
 
     def __exit__(self, *exc):
+        # 移除 policy-rc.d，恢复目标系统正常服务管理
+        policy_rc = self.rootfs / "usr" / "sbin" / "policy-rc.d"
+        if policy_rc.exists():
+            policy_rc.unlink()
         for mount_point in reversed(self._mounts):
             self.docker.run_privileged(["umount", "-l", str(mount_point)], check=False)
         return False
 
-    def run(self, cmd: list, *, label: str = "", **kwargs):
+    def run(self, cmd: list, *, label: str = "", env: dict = None, **kwargs):
         """在 chroot 内执行命令"""
+        chroot_env = {"DEBIAN_FRONTEND": "noninteractive"}
+        if env:
+            chroot_env.update(env)
         self.docker.run_privileged(["chroot", str(self.rootfs)] + cmd,
-                                   label=label, **kwargs)
+                                   label=label, env=chroot_env, **kwargs)
 
     def bind_mount(self, src: str, dest: Path = None):
         dest = dest or (self.rootfs / src.lstrip("/"))

@@ -25,5 +25,6 @@ BOARD = {
     "rootfs": {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
         "custom_packages": ["adbd"],
+        "root_password": "1234",
     },
 }

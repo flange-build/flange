@@ -1,4 +1,21 @@
-"""Rockchip 镜像组装策略 -- 替代 build_boot.sh + build_image.sh"""
+"""Rockchip 整盘镜像组装策略。
+
+职责：将前序组件的产物按 partitions 配置组装成 raw.img（GPT 整盘镜像），
+供 SD 卡/eMMC 全盘烧录。
+
+输入（从 target/<board>/<product>/<variant>/ 读取）：
+  bootloader/idbloader.img
+  bootloader/u-boot.itb
+  boot/boot.img
+  rootfs/rootfs.img
+
+输出：
+  raw.img（GPT 分区表 + 各分区镜像 dd 到对应 offset）
+
+不负责：
+  - 生成 boot.img（由 RockchipBootBuilder 负责）
+  - 生成 rootfs.img（由 RockchipRootfsBuilder 负责）
+"""
 
 import tempfile
 from pathlib import Path
@@ -8,11 +25,18 @@ from builder.base import ComponentBuilder
 class RockchipImageBuilder(ComponentBuilder):
     component = "image"
     SECTOR_SIZE = 512
-    IDBLOADER_SECTOR = 64
     ROOTFS_PARTUUID = "614e0000-0000-4000-8000-000000000000"
 
+    # 分区名到输入镜像相对路径（相对 target_dir）的映射
+    PARTITION_IMAGES = {
+        "idbloader": "bootloader/idbloader.img",
+        "uboot":     "bootloader/u-boot.itb",
+        "boot":      "boot/boot.img",
+        "rootfs":    "rootfs/rootfs.img",
+    }
+
     def build(self, config: dict) -> dict:
-        """镜像组装无需源码仓库，跳过 source.ensure / reset / patch。"""
+        """整盘组装无需克隆源码仓库，跳过 source.ensure / reset / patch。"""
         self.compile(None, config)
         return self.collect(None, config)
 
@@ -21,71 +45,89 @@ class RockchipImageBuilder(ComponentBuilder):
 
     def compile(self, src_dir: Path, config: dict):
         self._work_dir = Path(tempfile.mkdtemp(prefix="flange-image-"))
-        partitions = config.get("partitions", {})
-        entries = partitions.get("entries", [])
+        entries = self._resolve_entries(
+            config.get("partitions", {}).get("entries", []))
+        target_dir = self.cache.target_dir
 
-        # 计算分区偏移和镜像大小
-        self._entries = self._resolve_offsets(entries)
-
-        # 创建空镜像
-        total_sectors = self._calculate_total_sectors()
+        # 计算总大小 + 创建空镜像
+        total_sectors = self._total_sectors(entries)
         total_bytes = total_sectors * self.SECTOR_SIZE
         raw_img = self._work_dir / "raw.img"
-        self.docker.run_privileged([
-            "dd", "if=/dev/zero", f"of={raw_img}",
-            "bs=1", "count=0", f"seek={total_bytes}",
-        ])
+        self._status(f"创建空镜像 ({total_bytes // (1024*1024)}MB)...")
+        self.docker.run(["truncate", "-s", str(total_bytes), str(raw_img)])
 
-        # GPT 分区表
-        self.docker.run_privileged(
-            ["parted", "-s", str(raw_img), "mklabel", "gpt"])
-
-        for entry in self._entries:
+        # 写 GPT 分区表（raw 类型分区不进 GPT）
+        self._status("写 GPT 分区表...")
+        self.docker.run(["parted", "-s", str(raw_img), "mklabel", "gpt"])
+        gpt_index = 0
+        for entry in entries:
             if entry["type"] == "raw":
-                continue  # raw 分区不进分区表
-            start_bytes = entry["_offset_sectors"] * self.SECTOR_SIZE
-            end_bytes = (start_bytes
-                         + entry["_size_sectors"] * self.SECTOR_SIZE - 1)
-            self.docker.run_privileged([
+                continue
+            gpt_index += 1
+            start = entry["_offset_sectors"] * self.SECTOR_SIZE
+            end = start + entry["_size_sectors"] * self.SECTOR_SIZE - 1
+            self.docker.run([
                 "parted", "-s", str(raw_img), "mkpart",
                 entry["name"], entry["type"],
-                f"{start_bytes}B", f"{end_bytes}B",
+                f"{start}B", f"{end}B",
             ])
+            # rootfs 分区设置固定 PARTUUID（便于 kernel cmdline 引用）
+            if entry["name"] == "rootfs":
+                self.docker.run([
+                    "sfdisk", "--part-uuid", str(raw_img),
+                    str(gpt_index), self.ROOTFS_PARTUUID,
+                ])
 
-        # 设置 rootfs PARTUUID
-        self.docker.run_privileged([
-            "sfdisk", "--part-uuid", str(raw_img),
-            "2", self.ROOTFS_PARTUUID,
-        ], check=False)
+        # 按 partitions entries 顺序把各分区镜像 dd 进 raw.img
+        for entry in entries:
+            image_rel = self.PARTITION_IMAGES.get(entry["name"])
+            if not image_rel:
+                continue  # userdata 等无镜像的分区
+            image_path = target_dir / image_rel
+            if not image_path.exists():
+                self._status(f"跳过 {entry['name']}: {image_path} 不存在")
+                continue
+            offset_sectors = entry["_offset_sectors"]
+            self._status(
+                f"dd {image_rel} → sector {offset_sectors}")
+            self.docker.run([
+                "dd",
+                f"if={image_path}",
+                f"of={raw_img}",
+                f"seek={offset_sectors}",
+                "conv=notrunc",
+                "bs=512",
+                "status=none",
+            ])
 
         self._raw_img = raw_img
 
-    def _resolve_offsets(self, entries):
-        """将配置中的 hex 字符串偏移转为整数。"""
+    def _resolve_entries(self, entries: list) -> list:
+        """将配置中的 hex 字符串偏移/大小转为整数。"""
         resolved = []
         for entry in entries:
             e = dict(entry)
             e["_offset_sectors"] = (int(entry.get("offset", "0"), 0)
                                     if entry.get("offset") else 0)
             if entry["size"] == "remaining":
-                e["_size_sectors"] = 0  # 计算时特殊处理
+                # remaining 分区默认分配 4GB
+                e["_size_sectors"] = (4 * 1024 * 1024 * 1024) // self.SECTOR_SIZE
             else:
                 e["_size_sectors"] = int(entry["size"], 0)
             resolved.append(e)
         return resolved
 
-    def _calculate_total_sectors(self):
-        """计算镜像所需总 sector 数。"""
+    def _total_sectors(self, entries: list) -> int:
         max_end = 0
-        for entry in self._entries:
-            if entry["size"] == "remaining":
-                # 默认给 remaining 分配 4G
-                entry["_size_sectors"] = (
-                    (4 * 1024 * 1024 * 1024) // self.SECTOR_SIZE)
-            end = entry["_offset_sectors"] + entry["_size_sectors"]
+        for e in entries:
+            end = e["_offset_sectors"] + e["_size_sectors"]
             if end > max_end:
                 max_end = end
         return max_end + 2048  # GPT 尾部保留
+
+    def _status(self, msg: str):
+        if self.output:
+            self.output.status(msg)
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         return {"image": self._raw_img}

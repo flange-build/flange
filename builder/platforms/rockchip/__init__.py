@@ -15,7 +15,10 @@ def create_builder(component: str, docker: DockerRunner, source: SourceManager):
     elif component == "rootfs":
         from builder.platforms.rockchip.rootfs import RockchipRootfsBuilder
         return RockchipRootfsBuilder(docker, source)
-    elif component in ("boot", "image"):
+    elif component == "boot":
+        from builder.platforms.rockchip.boot import RockchipBootBuilder
+        return RockchipBootBuilder(docker, source)
+    elif component == "image":
         from builder.platforms.rockchip.image import RockchipImageBuilder
         return RockchipImageBuilder(docker, source)
     else:

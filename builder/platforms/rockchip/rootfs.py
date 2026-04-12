@@ -51,15 +51,48 @@ class RockchipRootfsBuilder(ComponentBuilder):
         if self.output:
             self.output.dedent()
 
-        # Phase 3: 压缩
-        self._output = self._work_dir / "rootfs.tar.gz"
-        if self.output:
-            self.output.spinner_start("压缩 rootfs...")
-        self.docker.run_privileged(
-            ["tar", "-czf", str(self._output), "-C", str(rootfs_dir), "."])
-        if self.output:
-            self.output.spinner_stop()
-        self._status("压缩完成")
+        # Phase 3: 确保基础 /etc/fstab 和挂载点存在
+        self._install_fstab(rootfs_dir)
+
+        # Phase 4: 从目录生成 ext4 rootfs.img（免 mount，mke2fs -d 直读目录）
+        self._output = self._work_dir / "rootfs.img"
+        rootfs_size_mb = self._partition_size_mb(config, "rootfs")
+        self._status(f"生成 rootfs.img ({rootfs_size_mb}MB)...")
+        self.docker.run([
+            "truncate", "-s", f"{rootfs_size_mb}M", str(self._output),
+        ])
+        self.docker.run([
+            "mke2fs", "-t", "ext4", "-L", "rootfs", "-F", "-q",
+            "-d", str(rootfs_dir), str(self._output),
+        ])
+
+    def _install_fstab(self, rootfs_dir: Path):
+        """写入 /etc/fstab，挂载 rootfs 和 boot 分区。
+
+        使用 LABEL 而非 PARTUUID，不依赖 GPT 分区表正确性。
+        若 overlay 已提供 /etc/fstab，则尊重 overlay 版本，不覆盖。
+        """
+        fstab = rootfs_dir / "etc" / "fstab"
+        if fstab.exists() and fstab.read_text().strip():
+            return
+        fstab.parent.mkdir(parents=True, exist_ok=True)
+        fstab.write_text(
+            "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>\n"
+            "LABEL=rootfs     /              ext4    defaults   0       1\n"
+            "LABEL=boot       /boot          ext4    defaults   0       2\n"
+        )
+        # 确保 /boot 挂载点存在
+        (rootfs_dir / "boot").mkdir(exist_ok=True)
+
+    def _partition_size_mb(self, config: dict, name: str) -> int:
+        """从 config 中读取指定分区大小（MB）。"""
+        for entry in config.get("partitions", {}).get("entries", []):
+            if entry["name"] == name:
+                size = entry["size"]
+                if size == "remaining":
+                    return 4096  # remaining 默认 4GB
+                return (int(size, 0) * 512) // (1024 * 1024)
+        raise KeyError(f"partitions.entries 中未定义分区: {name}")
 
     def _get_base_cache_path(self, config: dict) -> Path | None:
         """获取 base.tar.gz 快照路径。需要 cache 引用（由 engine 注入）。"""
@@ -96,18 +129,11 @@ class RockchipRootfsBuilder(ComponentBuilder):
             chroot.run(["apt-get", "clean"])
 
     def _build_phase2(self, rootfs_dir: Path, config: dict):
-        """Phase 2: Customize — overlay 文件覆盖 + custom deb 安装。"""
-        board = config["board"]
-        overlay_dir = Path(f"board/{board}/overlay")
-        if overlay_dir.exists() and any(overlay_dir.iterdir()):
-            self._status("复制 overlay 文件...")
-            self.docker.run_privileged(
-                ["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
-
-        # 安装 custom deb 包（来自 AppBuilder 产物目录）
+        """Phase 2: Customize — custom deb 安装 + overlay 文件覆盖。"""
+        # 先安装 deb，再覆盖 overlay（overlay 是用户定制，优先级最高）
         product = config.get("product", "default")
         variant = config.get("variant", "release")
-        target_dir = Path("target") / board / product / variant
+        target_dir = Path("target") / config["board"] / product / variant
         app_deb_dir = target_dir / "app"
         if app_deb_dir.exists():
             deb_files = sorted(app_deb_dir.glob("*.deb"))
@@ -120,9 +146,65 @@ class RockchipRootfsBuilder(ComponentBuilder):
                     shutil.copy2(deb, deb_tmp)
                 with ChrootContext(rootfs_dir, self.docker) as chroot:
                     deb_list = [f"/tmp/flange-debs/{d.name}" for d in deb_files]
-                    chroot.run(["dpkg", "-i"] + deb_list,
+                    chroot.run(["dpkg", "-i", "--force-confnew"] + deb_list,
                                label=f"dpkg -i ({len(deb_files)} 个包)...")
                 shutil.rmtree(deb_tmp)
+
+        board = config["board"]
+        overlay_dir = Path(f"board/{board}/overlay")
+        if overlay_dir.exists() and any(overlay_dir.iterdir()):
+            self._status("复制 overlay 文件...")
+            self.docker.run_privileged(
+                ["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
+
+        # 设置 root 密码（若 config 中声明）
+        root_password = config.get("rootfs", {}).get("root_password")
+        if root_password:
+            self._set_root_password(rootfs_dir, root_password)
+
+    def _set_root_password(self, rootfs_dir: Path, password: str):
+        """设置 root 账号密码，精确匹配旧 Bazel 方案：
+
+            echo "root:<password>" | chroot <rootfs> chpasswd
+
+        chpasswd 在 chroot 内执行（通过 qemu-user-static 模拟 arm64），
+        读 stdin 的 user:password 行写入 /etc/shadow。
+
+        使用 ChrootContext 确保 /proc /sys /dev 已挂载：chpasswd 通过
+        libcrypt 生成盐值时可能读 /dev/urandom，缺失时会静默失败或
+        产生无效哈希。
+
+        执行后立即读 /etc/shadow 硬校验 root 行：若密码字段仍是
+        锁定态（!/*/空）或格式非法，抛错而非静默产生不可登录镜像。
+        """
+        self._status("设置 root 密码...")
+        with ChrootContext(rootfs_dir, self.docker) as chroot:
+            chroot.run(["chpasswd"], input=f"root:{password}\n")
+        self._verify_root_password(rootfs_dir)
+
+    def _verify_root_password(self, rootfs_dir: Path):
+        """校验 /etc/shadow 中 root 行密码字段已被正确设置。"""
+        shadow = rootfs_dir / "etc" / "shadow"
+        if not shadow.exists():
+            raise RuntimeError(f"/etc/shadow 不存在: {shadow}")
+        for line in shadow.read_text().splitlines():
+            if not line.startswith("root:"):
+                continue
+            fields = line.split(":")
+            if len(fields) < 2:
+                raise RuntimeError(
+                    f"/etc/shadow root 行格式错误: {line!r}")
+            pw_hash = fields[1]
+            if pw_hash in ("", "!", "*", "!!", "x"):
+                raise RuntimeError(
+                    f"root 密码未生效：/etc/shadow 字段仍为 {pw_hash!r}，"
+                    f"chpasswd 未成功写入（检查 chroot/qemu 环境）")
+            if not pw_hash.startswith("$"):
+                raise RuntimeError(
+                    f"root 密码哈希格式非预期: {pw_hash[:40]!r}")
+            self._status(f"root 密码已写入 (hash: {pw_hash[:12]}...)")
+            return
+        raise RuntimeError("/etc/shadow 中未找到 root 账号行")
 
     def _save_base_snapshot(self, rootfs_dir: Path, cache_path: Path):
         """将 Phase 1 产物保存为 base.tar.gz 快照。"""

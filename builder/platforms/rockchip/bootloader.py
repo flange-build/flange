@@ -31,11 +31,15 @@ class RockchipBootloaderBuilder(ComponentBuilder):
             shutil.copy2(bl32, src_dir / "tee.bin")
             extra.append(f"TEE={src_dir / 'tee.bin'}")
 
-        # 编译 U-Boot（默认 target 会生成 u-boot.itb 等全部产物）
+        # 第一步：默认 target 生成 u-boot/u-boot.dtb 等基础产物
         extra.append("KCFLAGS=-Wno-error")
         self.make(src_dir, [],
                   arch=self.ARCH, cross=self.CROSS, jobs=jobs, extra=extra,
                   label="编译 U-Boot...")
+        # 第二步：基于 u-boot.dtb 打包 u-boot.itb (FIT image)
+        self.make(src_dir, ["u-boot.itb"],
+                  arch=self.ARCH, cross=self.CROSS, jobs=jobs, extra=extra,
+                  label="打包 u-boot.itb...")
 
         # 解析 RKBOOT INI -- 生成 idbloader.img
         loader_ini = firmware_dir / "RKBOOT" / f"{ini_prefix}MINIALL.ini"
@@ -102,11 +106,29 @@ class RockchipBootloaderBuilder(ComponentBuilder):
     def collect(self, src_dir: Path, config: dict) -> dict:
         firmware_dir = self._firmware_dir
         ini_prefix = self._ini_prefix
-        miniloader_candidates = list(
-            firmware_dir.glob(f"{ini_prefix}_loader_v*.bin"))
-        miniloader = miniloader_candidates[0] if miniloader_candidates else None
+        # 从 RKBOOT INI 的 [OUTPUT] 段提取 miniloader 实际文件名
+        loader_ini = firmware_dir / "RKBOOT" / f"{ini_prefix}MINIALL.ini"
+        output_name = self._extract_output_path(loader_ini.read_text())
+        miniloader = firmware_dir / output_name if output_name else None
+        if miniloader and not miniloader.exists():
+            miniloader = None
         return {
             "bootloader": src_dir / "u-boot.itb",
             "idbloader": src_dir / "idbloader.img",
             "miniloader": miniloader,
         }
+
+    def _extract_output_path(self, content: str):
+        """从 INI 的 [OUTPUT] 段提取 PATH 值。"""
+        in_section = False
+        for line in content.splitlines():
+            line = line.strip()
+            if line == "[OUTPUT]":
+                in_section = True
+                continue
+            if in_section and line.startswith("["):
+                in_section = False
+                continue
+            if in_section and line.startswith("PATH="):
+                return line.split("=", 1)[1].strip()
+        return None

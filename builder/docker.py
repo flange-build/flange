@@ -33,19 +33,22 @@ class DockerRunner:
     def run(self, cmd: list, *, cwd: str = None, env: dict = None,
             privileged: bool = False, check: bool = True,
             capture: bool = False,
+            input: str = None,
             label: str = "") -> subprocess.CompletedProcess:
 
-        # capture 模式（需要返回 stdout）不走输出捕获
-        if self.output and not capture and self._in_container:
+        # capture 或 input 模式不走输出捕获流
+        if (self.output and not capture and not input
+                and self._in_container):
             return self._run_with_capture(
                 cmd, cwd=cwd, env=env, check=check, label=label)
 
         if self._in_container:
             return self._run_direct(cmd, cwd=cwd, env=env,
-                                    check=check, capture=capture)
+                                    check=check, capture=capture,
+                                    input=input)
         return self._run_docker(cmd, cwd=cwd, env=env,
                                 privileged=privileged, check=check,
-                                capture=capture)
+                                capture=capture, input=input)
 
     def _run_with_capture(self, cmd: list, *, cwd: str = None,
                           env: dict = None, check: bool = True,
@@ -83,7 +86,8 @@ class DockerRunner:
             args=cmd, returncode=proc.returncode)
 
     def _run_direct(self, cmd: list, *, cwd: str = None, env: dict = None,
-                    check: bool = True, capture: bool = False
+                    check: bool = True, capture: bool = False,
+                    input: str = None
                     ) -> subprocess.CompletedProcess:
         """容器内直接执行命令。"""
         run_env = None
@@ -98,16 +102,28 @@ class DockerRunner:
         if capture:
             kwargs["capture_output"] = True
             kwargs["text"] = True
+        if input is not None:
+            kwargs["input"] = input
+            kwargs["text"] = True
+            # input 模式总是捕获 stderr，便于诊断 chpasswd 等
+            # 可能静默失败的命令
+            kwargs["capture_output"] = True
 
         result = subprocess.run([str(c) for c in cmd], **kwargs)
         if check and result.returncode != 0:
-            raise BuildError(
-                f"命令失败 (exit {result.returncode}): {' '.join(str(c) for c in cmd)}")
+            msg = (f"命令失败 (exit {result.returncode}): "
+                   f"{' '.join(str(c) for c in cmd)}")
+            if getattr(result, "stderr", None):
+                msg += f"\nstderr: {result.stderr}"
+            if getattr(result, "stdout", None):
+                msg += f"\nstdout: {result.stdout}"
+            raise BuildError(msg)
         return result
 
     def _run_docker(self, cmd: list, *, cwd: str = None, env: dict = None,
                     privileged: bool = False, check: bool = True,
-                    capture: bool = False) -> subprocess.CompletedProcess:
+                    capture: bool = False,
+                    input: str = None) -> subprocess.CompletedProcess:
         """通过 docker compose run 执行命令。"""
         docker_cmd = ["docker", "compose", "run", "--rm"]
         if privileged:
@@ -123,6 +139,9 @@ class DockerRunner:
         kwargs = {"cwd": self.project_dir}
         if capture:
             kwargs["capture_output"] = True
+            kwargs["text"] = True
+        if input is not None:
+            kwargs["input"] = input
             kwargs["text"] = True
 
         result = subprocess.run(docker_cmd, **kwargs)
