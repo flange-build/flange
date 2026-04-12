@@ -5,8 +5,8 @@ After=local-fs.target
 
 [Service]
 Type=forking
-ExecStart=/usr/bin/usbdevice start
-ExecStop=/usr/bin/usbdevice stop
+ExecStart=/usr/sbin/usbdevice start
+ExecStop=/usr/sbin/usbdevice stop
 
 [Install]
 WantedBy=sysinit.target
