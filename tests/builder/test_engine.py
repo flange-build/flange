@@ -109,6 +109,7 @@ class TestBuildEngineApp:
             mock_cache_instance = MockCache.return_value
             mock_cache_instance.is_up_to_date.return_value = False
             mock_cache_instance.compute_hash.return_value = "abc123"
+            mock_cache_instance.target_dir = tmp_path / "target"
 
             # AppBuilder.build_all 返回空字典
             mock_app_builder_instance = MockAppBuilder.return_value
@@ -137,6 +138,8 @@ class TestBuildEngineApp:
             mock_cache_instance = MockCache.return_value
             mock_cache_instance.is_up_to_date.return_value = False
             mock_cache_instance.compute_hash.return_value = "abc123"
+            mock_cache_instance.target_dir = tmp_path / "target"
+            mock_cache_instance.target_dir = tmp_path / "target"
 
             mock_app_builder_instance = MockAppBuilder.return_value
             mock_app_builder_instance.build_all.return_value = {"hello": fake_deb}
@@ -162,6 +165,7 @@ class TestBuildEngineApp:
             mock_cache_instance = MockCache.return_value
             mock_cache_instance.is_up_to_date.return_value = False
             mock_cache_instance.compute_hash.return_value = "abc123"
+            mock_cache_instance.target_dir = tmp_path / "target"
 
             mock_app_builder_instance = MockAppBuilder.return_value
             mock_app_builder_instance.build_all.return_value = {}

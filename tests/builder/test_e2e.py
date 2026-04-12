@@ -433,6 +433,7 @@ class TestEngineAppIntegration:
             mock_cache_instance = MockCache.return_value
             mock_cache_instance.is_up_to_date.return_value = False
             mock_cache_instance.compute_hash.return_value = "abc123"
+            mock_cache_instance.target_dir = tmp_path / "target"
 
             # AppBuilder.build_all 返回空字典（无 App 需要构建）
             mock_builder = MockAppBuilder.return_value
@@ -461,6 +462,7 @@ class TestEngineAppIntegration:
             mock_cache_instance = MockCache.return_value
             mock_cache_instance.is_up_to_date.return_value = False
             mock_cache_instance.compute_hash.return_value = "abc123"
+            mock_cache_instance.target_dir = tmp_path / "target"
 
             mock_builder = MockAppBuilder.return_value
             mock_builder.build_all.return_value = {"adbd": fake_deb}
@@ -487,6 +489,7 @@ class TestEngineAppIntegration:
             mock_cache_instance = MockCache.return_value
             mock_cache_instance.is_up_to_date.return_value = False
             mock_cache_instance.compute_hash.return_value = "abc123"
+            mock_cache_instance.target_dir = tmp_path / "target"
 
             mock_builder = MockAppBuilder.return_value
             mock_builder.build_all.return_value = {}
@@ -519,6 +522,7 @@ class TestEngineAppIntegration:
             mock_cache_instance = MockCache.return_value
             mock_cache_instance.is_up_to_date.return_value = False
             mock_cache_instance.compute_hash.return_value = "abc123"
+            mock_cache_instance.target_dir = tmp_path / "target"
 
             # 记录 build_all 调用顺序
             mock_builder = MockAppBuilder.return_value

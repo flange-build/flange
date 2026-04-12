@@ -127,8 +127,16 @@ class BuildOutput:
             sys.stdout.write(text + end)
             if flush:
                 sys.stdout.flush()
-            self._log_file.write(strip_ansi(text) + end)
-            self._log_file.flush()
+            self._log_write(strip_ansi(text) + end)
+
+    def _log_write(self, text: str):
+        """安全写入日志文件。"""
+        try:
+            if self._log_file and not self._log_file.closed:
+                self._log_file.write(text)
+                self._log_file.flush()
+        except OSError:
+            pass
 
     def _write_term_only(self, text: str, *, end: str = "", flush: bool = True):
         """仅写终端（用于 spinner \r 刷新）。"""
@@ -233,9 +241,7 @@ class BuildOutput:
     def warning(self, msg: str):
         """警告：⚠ msg（仅 VERBOSE）"""
         if self.level != OutputLevel.VERBOSE:
-            # 仍写入日志
-            self._log_file.write(f"{self._pad}⚠ {msg}\n")
-            self._log_file.flush()
+            self._log_write(f"{self._pad}⚠ {msg}\n")
             return
         self._write(self._c(_Colors.YELLOW, f"{self._pad}⚠ {msg}"))
 
@@ -252,8 +258,7 @@ class BuildOutput:
         line = line.rstrip("\n\r")
 
         # 1. 写入日志
-        self._log_file.write(line + "\n")
-        self._log_file.flush()
+        self._log_write(line + "\n")
 
         # 2. 滚动缓冲
         self._tail_buffer.append(line)
@@ -279,9 +284,7 @@ class BuildOutput:
         """启动 braille spinner + 计时器。"""
         self._spinner_pad = self._pad  # 固定 spinner 启动时的缩进
         if not self._tty or self.level == OutputLevel.QUIET:
-            # 非 TTY / QUIET 模式仅写日志
-            self._log_file.write(f"{self._spinner_pad}· {label}\n")
-            self._log_file.flush()
+            self._log_write(f"{self._spinner_pad}· {label}\n")
             return
         if self.level == OutputLevel.VERBOSE:
             # VERBOSE 模式不用 spinner（输出已全量显示）

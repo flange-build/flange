@@ -17,6 +17,49 @@ from typing import Optional
 
 
 # ---------------------------------------------------------------------------
+# 宿主机 CLI 输出辅助（与 BuildOutput 风格统一）
+# ---------------------------------------------------------------------------
+
+def _tty() -> bool:
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+def _c(color: str, text: str) -> str:
+    if not _tty():
+        return text
+    return f"{color}{text}\033[0m"
+
+_BLUE_BOLD = "\033[1;34m"
+_GREEN     = "\033[0;32m"
+_YELLOW    = "\033[1;33m"
+_RED_BOLD  = "\033[1;31m"
+_GRAY      = "\033[0;90m"
+_WHITE     = "\033[0;37m"
+
+def _header(text: str):
+    sep = "═" * 58
+    print()
+    print(_c(_WHITE, sep))
+    print(_c(_WHITE, f" {text}"))
+    print(_c(_WHITE, sep))
+    print()
+
+def _step(text: str):
+    print(_c(_BLUE_BOLD, f"▸ {text}"))
+
+def _ok(text: str):
+    print(_c(_GREEN, f"  ✓ {text}"))
+
+def _warn(text: str):
+    print(_c(_YELLOW, f"  ⚠ {text}"))
+
+def _err(text: str):
+    print(_c(_RED_BOLD, f"  ✗ {text}"))
+
+def _info(text: str):
+    print(_c(_GRAY, f"  · {text}"))
+
+
+# ---------------------------------------------------------------------------
 # 数据模型
 # ---------------------------------------------------------------------------
 
@@ -98,7 +141,8 @@ class FlashStrategy(ABC):
         """检测设备，返回 DeviceInfo 或 None。"""
 
     @abstractmethod
-    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig):
+    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
+                  device: Optional["DeviceInfo"] = None):
         """刷写前准备（如 Rockchip 上传 miniloader）。"""
 
     @abstractmethod
@@ -115,15 +159,27 @@ class FlashStrategy(ABC):
 
     def wait_for_device(self, tool: Path, timeout: int = 30) -> DeviceInfo:
         """等待设备就绪，超时抛 FlashError。"""
+        _step("等待设备连接...")
         deadline = time.time() + timeout
+        # Spinner 字符集
+        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        idx = 0
         while time.time() < deadline:
             info = self.detect_device(tool)
             if info:
-                print(f"[INFO] 已检测到 {info.platform} 设备 ({info.mode} 模式)")
+                _ok(f"已检测到 {info.platform} 设备 ({info.mode} 模式)")
                 return info
             remaining = int(deadline - time.time())
-            print(f"[INFO] 等待设备连接... ({remaining}s)", end="\r")
-            time.sleep(2)
+            if _tty():
+                frame = frames[idx % len(frames)]
+                sys.stdout.write(
+                    f"\r{_c(_GRAY, f'  {frame} 等待设备连接... ({remaining}s)')}")
+                sys.stdout.flush()
+                idx += 1
+            time.sleep(1)
+        if _tty():
+            sys.stdout.write("\r\033[K")
+        _err(f"等待设备超时（{timeout}s）")
         raise FlashError(
             f"等待设备超时（{timeout}s）。\n"
             "请确认设备已通过 USB 连接并进入刷写模式。"
@@ -157,24 +213,36 @@ class RockchipFlashStrategy(FlashStrategy):
             pass
         return None
 
-    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig):
+    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
+                  device: Optional["DeviceInfo"] = None):
+        # DB (Download Boot) 仅在 maskrom 模式下上传 loader；
+        # 设备已在 loader 模式时跳过，避免 "did not support this operation"
+        if device and device.mode != "maskrom":
+            _info(f"设备已在 {device.mode} 模式，跳过 DB")
+            return
         if config.pre_flash.download_boot:
             miniloader = target_dir / config.pre_flash.download_boot
             if not miniloader.exists():
                 raise FlashError(f"未找到 miniloader: {miniloader}")
-            print(f"[INFO] 上传 miniloader（DB）...")
+            _info("上传 miniloader（DB）...")
             subprocess.run([str(tool), "DB", str(miniloader)], check=True)
             time.sleep(1)
 
     def write_partition(self, tool: Path, offset: int, image: Path):
-        print(f"[INFO] 写入 {image.name} (offset=0x{offset:X})...")
+        try:
+            size_mb = image.stat().st_size / (1024 * 1024)
+            size_str = f", {size_mb:.1f}MB"
+        except OSError:
+            size_str = ""
+        _info(f"写入 {image.name} (offset=0x{offset:X}{size_str})...")
         subprocess.run(
             [str(tool), "WL", str(offset), str(image)],
             check=True,
         )
+        _ok(f"{image.name}")
 
     def reboot(self, tool: Path):
-        print("[INFO] 重启设备...")
+        _info("重启设备...")
         subprocess.run([str(tool), "RD"], check=True)
 
     def partition_image_map(self, config: dict) -> dict[str, str]:
@@ -265,19 +333,32 @@ class FlashExecutor:
 
     def flash_all(self, no_wait: bool = False):
         """全量刷写所有分区。"""
+        cfg = self.config
+        _header(f"flange flash · {cfg.board} · {cfg.product}-{cfg.variant}")
         tool = self.strategy.find_tool(self.project_dir)
+        device = None
         if not no_wait:
-            self.strategy.wait_for_device(tool)
-        self.strategy.pre_flash(tool, self.target_dir, self.config)
-        for part in self.config.partitions:
+            device = self.strategy.wait_for_device(tool)
+        self.strategy.pre_flash(tool, self.target_dir, cfg, device)
+
+        _step("刷写分区")
+        start = time.time()
+        for part in cfg.partitions:
             image = self.target_dir / part.image
             if not image.exists():
-                print(f"[WARN] 跳过 {part.name}: 镜像不存在 ({image})")
+                _warn(f"跳过 {part.name}: 镜像不存在")
                 continue
             offset = int(part.offset, 0)
             self.strategy.write_partition(tool, offset, image)
         self.strategy.reboot(tool)
-        print("[INFO] 刷写完成")
+        elapsed = time.time() - start
+
+        sep = "─" * 58
+        print()
+        print(_c(_WHITE, sep))
+        print(_c(_GREEN, f" ✓ 刷写完成{_c(_GRAY, f'  {elapsed:.1f}s')}"))
+        print(_c(_WHITE, sep))
+        print()
 
     def flash_partition(self, name: str, no_wait: bool = False):
         """刷写指定分区。"""
@@ -302,7 +383,8 @@ class FlashExecutor:
         offset = int(part.offset, 0)
         self.strategy.write_partition(tool, offset, image)
         self.strategy.reboot(tool)
-        print(f"[INFO] 分区 {name} 刷写完成")
+        print()
+        print(_c(_GREEN, f" ✓ 分区 {name} 刷写完成"))
 
     def flash_raw(self, device: str):
         """dd 整盘刷写。"""
@@ -311,32 +393,34 @@ class FlashExecutor:
             raise FlashError(f"未找到固件镜像（*_firmware_*.img）: {self.target_dir}")
 
         size_mb = firmware.stat().st_size / (1024 * 1024)
-        print(f"镜像: {firmware.name} ({size_mb:.0f} MB)")
-        print(f"目标: {device}")
-        confirm = input("警告: 将覆盖目标设备全部数据！确认？[y/N] ")
+        _header("flange flash --raw")
+        _info(f"镜像: {firmware.name} ({size_mb:.0f} MB)")
+        _info(f"目标: {device}")
+        confirm = input(_c(_YELLOW, "  ⚠ 将覆盖目标设备全部数据！确认？[y/N] "))
         if confirm.lower() != "y":
-            print("已取消")
+            _info("已取消")
             return
 
-        print("[INFO] 正在刷写...")
+        _step("dd 刷写")
         subprocess.run(
             ["sudo", "dd", f"if={firmware}", f"of={device}",
              "bs=4M", "status=progress", "conv=fsync"],
             check=True,
         )
         subprocess.run(["sync"], check=True)
-        print("[INFO] dd 刷写完成")
+        print()
+        print(_c(_GREEN, " ✓ dd 刷写完成"))
 
     def list_partitions(self):
         """列出所有可刷写分区。"""
-        print(f"平台: {self.config.platform}  板卡: {self.config.board}")
-        print(f"产品: {self.config.product}  变体: {self.config.variant}")
+        cfg = self.config
+        _header(f"flange flash --list · {cfg.board} · {cfg.product}-{cfg.variant}")
+        print(f"  {'分区名':<16} {'偏移':<12} {'类型':<8} {'镜像路径'}")
+        print(f"  {'─'*14}   {'─'*10}   {'─'*6}   {'─'*24}")
+        for p in cfg.partitions:
+            exists = _c(_GREEN, "✓") if (self.target_dir / p.image).exists() else _c(_RED_BOLD, "✗")
+            print(f"  {p.name:<16} {p.offset:<12} {p.type:<8} {p.image} [{exists}]")
         print()
-        print(f"{'分区名':<16} {'偏移':<12} {'类型':<8} {'镜像路径'}")
-        print("-" * 64)
-        for p in self.config.partitions:
-            exists = "✓" if (self.target_dir / p.image).exists() else "✗"
-            print(f"{p.name:<16} {p.offset:<12} {p.type:<8} {p.image} [{exists}]")
 
 
 # ---------------------------------------------------------------------------
