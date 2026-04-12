@@ -237,6 +237,17 @@ kernel / bootloader / rkbin 等 git 组件支持 4 种源码来源，优先级�
 `flange build` 会直接拿当前状态构建——这也是为什么 `local_path` 早出于
 所有 git 操作之前。
 
+**local_path 模式下的缓存语义**：该组件及其所有下游组件（例如
+kernel 的下游 boot / image）都会**强制重建**，由底层构建系统
+自己做真正的增量——kernel 走 make（看 mtime 只编改动的 .o），
+boot 走 mke2fs，image 走 dd。flange 之所以放弃缓存决策，是因为
+`local_path` 内容不走 git 也没有廉价指纹，硬按源码树哈希会出现
+"本地改了但哈希没变→缓存假命中"。互不在同一依赖链上的组件
+（例如 bootloader / rootfs）不受影响，仍然享受正常的哈希级联缓存。
+
+如果 `flange build` 发现没有任何源码变化，make 会瞬间返回
+"Nothing to do"，整个流水线代价几秒级，日常迭代无感。
+
 > ⚠️ **branch 字段变更需手动清理**：由于 shallow clone 隐式带 `--single-branch`，
 > 将一个已 clone 的组件换 branch 不会自动切换，需要 `rm -rf sources/<component>/<board>/`
 > 后重新 build。

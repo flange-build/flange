@@ -66,12 +66,18 @@ class BuildCache:
     def is_up_to_date(self, component: str) -> bool:
         """判断组件是否可跳过构建。
 
-        两层校验：
+        三层校验（任一失败都视为缓存失效）：
+          0. local_path 模式短路：当前组件或任意传递上游声明了 local_path 时，
+             框架放弃缓存决策，强制重建并级联到下游，由底层构建系统（make /
+             mke2fs 等）自己做增量。理由：local_path 指向用户正在 hack 的
+             目录，内容变化不走 git，没有可靠的廉价指纹；强行按源码树哈希
+             会假命中（"内容变了但哈希没变"）。
           1. .build_hash 文件存在且内容等于当前 compute_hash
           2. REQUIRED_ARTIFACTS 中声明的产物全部存在
-
-        任一失败都视为缓存失效，必须重建。
         """
+        if self._has_local_upstream(component):
+            return False
+
         hash_file = self.target_dir / component / ".build_hash"
         if not hash_file.exists():
             return False
@@ -80,6 +86,20 @@ class BuildCache:
         if not self._required_artifacts_present(component):
             return False
         return True
+
+    def _has_local_upstream(self, component: str) -> bool:
+        """检查组件自身或任意传递依赖是否声明了 local_path。
+
+        用于 local_path 模式的级联失效：kernel 声明了 local_path，
+        boot/image 也会跟着强制重建，确保下游产物总是基于最新的
+        kernel 产物重新组装。
+        """
+        if self.config.get(component, {}).get("local_path"):
+            return True
+        for dep in DEPENDENCY_GRAPH.get(component, []):
+            if self._has_local_upstream(dep):
+                return True
+        return False
 
     def _required_artifacts_present(self, component: str) -> bool:
         """校验 REQUIRED_ARTIFACTS 中声明的产物是否都存在。

@@ -77,6 +77,12 @@ shallow clone 生效（裸本地路径会走 hardlink clone 并忽略 depth）�
 "跟随远端"语义下，`reset --hard` 会丢弃源码目录里的本地修改——因此
 "声明 branch 不声明 commit"与"声明 local_path"互为独立的两种语义，不混用。
 
+**local_path 模式的缓存行为**：当前组件及所有下游组件强制重建，
+由底层构建系统（make / mke2fs 等）自己做增量。`builder/cache.py::
+BuildCache._has_local_upstream` 沿 `DEPENDENCY_GRAPH` 递归判断，
+命中即在 `is_up_to_date` 短路返回 False。理由：local_path 内容不走
+git，没有廉价指纹；硬按源码树哈希会出现"改了没变"的假命中。
+
 使用详情见 [README.md §组件源码模式](../README.md#组件源码模式)。
 
 ### 依赖图

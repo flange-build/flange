@@ -20,3 +20,6 @@ __pycache__/
 
 # 源码仓库
 sources/
+
+# 本地 Docker Compose 覆盖（支持 local_path 挂载等个人化配置）
+docker-compose.override.yml
