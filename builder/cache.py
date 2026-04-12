@@ -1,4 +1,10 @@
-"""增量构建缓存 — 基于内容哈希判断组件是否需要重建。"""
+"""增量构建缓存 — 基于内容哈希判断组件是否需要重建。
+
+哈希策略（Merkle tree 风格）：
+  组件哈希 = f(上游依赖哈希 + 组件自身配置 + 源码/补丁 + 其他影响产物的输入)
+
+任一上游变更都会级联使下游哈希失效，确保增量构建始终产出一致的产物。
+"""
 
 import hashlib
 import json
@@ -6,10 +12,44 @@ import subprocess
 from pathlib import Path
 
 
+# 组件依赖图：键为组件名，值为该组件依赖的上游组件列表。
+# cache 用此图做 Merkle 哈希级联；engine 用此图做拓扑排序。
+# 保持单一定义源以避免两处不一致。
+DEPENDENCY_GRAPH: dict[str, list[str]] = {
+    "kernel":     [],
+    "bootloader": [],
+    "app":        [],
+    "rootfs":     ["app"],
+    "boot":       ["kernel"],
+    "image":      ["boot", "bootloader", "rootfs"],
+}
+
+
+# 各组件必须存在的产物（相对 target/<board>/<product>/<variant>/<component>/）。
+# 支持字面量文件名和 glob 通配（如 "*.dtb"）。
+# 缓存命中时校验这些文件存在，防止 .build_hash 有效但产物被误删导致下游失败。
+# app 组件不校验：custom_packages 为空时无 deb 输出是合法状态。
+REQUIRED_ARTIFACTS: dict[str, list[str]] = {
+    "kernel":     ["Image", "*.dtb"],
+    "bootloader": ["u-boot.itb", "idbloader.img", "miniloader.bin"],
+    "boot":       ["boot.img"],
+    "rootfs":     ["rootfs.img"],
+    "image":      ["raw.img"],
+}
+
+
 class BuildCache:
     """基于内容哈希的增量构建缓存。
 
-    哈希输入：组件配置值 + 源码 commit + 补丁文件内容 + 全局配置
+    哈希输入（Merkle 级联）：
+      - 上游依赖组件的哈希
+      - 全局配置（arch/platform/soc/board）
+      - 组件自身的 config 分支
+      - 源码 git HEAD + 补丁文件内容（有源码树的组件）
+      - partitions 配置（boot/rootfs/image）
+      - rkbin firmware git HEAD（bootloader）
+      - App 源码目录递归哈希（app）
+      - rootfs base 阶段哈希 + overlay + root_password 等（rootfs）
     """
 
     def __init__(self, config: dict, target_base: Path = None):
@@ -18,19 +58,98 @@ class BuildCache:
         product = config.get("product", "default")
         variant = config.get("variant", "release")
         self.target_dir = (target_base or Path("target")) / board / product / variant
+        # 记忆化：避免 image→boot→kernel 等路径上重复计算
+        self._hash_cache: dict[str, str] = {}
+
+    # --- 主入口：组件级哈希查询 ---
 
     def is_up_to_date(self, component: str) -> bool:
+        """判断组件是否可跳过构建。
+
+        两层校验：
+          1. .build_hash 文件存在且内容等于当前 compute_hash
+          2. REQUIRED_ARTIFACTS 中声明的产物全部存在
+
+        任一失败都视为缓存失效，必须重建。
+        """
         hash_file = self.target_dir / component / ".build_hash"
         if not hash_file.exists():
             return False
-        return hash_file.read_text().strip() == self.compute_hash(component)
+        if hash_file.read_text().strip() != self.compute_hash(component):
+            return False
+        if not self._required_artifacts_present(component):
+            return False
+        return True
+
+    def _required_artifacts_present(self, component: str) -> bool:
+        """校验 REQUIRED_ARTIFACTS 中声明的产物是否都存在。
+
+        未在 REQUIRED_ARTIFACTS 中声明的组件（如 app）直接返回 True。
+        """
+        required = REQUIRED_ARTIFACTS.get(component)
+        if not required:
+            return True
+        component_dir = self.target_dir / component
+        if not component_dir.is_dir():
+            return False
+        for pattern in required:
+            if any(ch in pattern for ch in "*?["):
+                # glob 模式
+                if not any(component_dir.glob(pattern)):
+                    return False
+            else:
+                # 字面量文件名
+                if not (component_dir / pattern).exists():
+                    return False
+        return True
 
     def store(self, component: str):
         hash_file = self.target_dir / component / ".build_hash"
         hash_file.parent.mkdir(parents=True, exist_ok=True)
         hash_file.write_text(self.compute_hash(component))
 
-    # --- 分阶段缓存接口 ---
+    def compute_hash(self, component: str) -> str:
+        """计算组件的完整哈希（含依赖链级联）。"""
+        if component in self._hash_cache:
+            return self._hash_cache[component]
+
+        h = hashlib.sha256()
+
+        # 1. 上游依赖哈希（Merkle 链）：任一上游变化都级联失效
+        for dep in DEPENDENCY_GRAPH.get(component, []):
+            h.update(b"dep:")
+            h.update(dep.encode())
+            h.update(self.compute_hash(dep).encode())
+
+        # 2. 全局配置：任何组件都受其影响
+        for key in ("arch", "platform", "soc", "board"):
+            h.update(f"{key}={self.config.get(key, '')}".encode())
+
+        # 3. 组件特化哈希
+        if component == "rootfs":
+            self._mix_rootfs_customize(h)
+        elif component == "app":
+            self._mix_app_sources(h)
+        else:
+            # kernel / bootloader / boot / image
+            h.update(json.dumps(
+                self.config.get(component, {}),
+                sort_keys=True, default=str).encode())
+            self._mix_source_tree(h, component)
+
+            # 构建产物需消费 partitions 布局的组件
+            if component in ("boot", "image"):
+                self._mix_partitions(h)
+
+            # bootloader 额外依赖 rkbin firmware
+            if component == "bootloader":
+                self._mix_rkbin(h)
+
+        result = h.hexdigest()[:16]
+        self._hash_cache[component] = result
+        return result
+
+    # --- rootfs 分阶段缓存接口（Phase 1 base snapshot） ---
 
     def compute_phase_hash(self, component: str, phase: str) -> str:
         """计算组件指定阶段的哈希。目前仅支持 ("rootfs", "base")。"""
@@ -43,7 +162,8 @@ class BuildCache:
         hash_file = self.target_dir / component / f".{phase}_hash"
         if not hash_file.exists():
             return False
-        return hash_file.read_text().strip() == self.compute_phase_hash(component, phase)
+        return (hash_file.read_text().strip()
+                == self.compute_phase_hash(component, phase))
 
     def store_phase(self, component: str, phase: str):
         """保存指定阶段的哈希。"""
@@ -51,28 +171,13 @@ class BuildCache:
         hash_file.parent.mkdir(parents=True, exist_ok=True)
         hash_file.write_text(self.compute_phase_hash(component, phase))
 
-    # --- 组件级哈希 ---
-
-    def compute_hash(self, component: str) -> str:
-        if component == "rootfs":
-            return self._compute_rootfs_customize_hash()
-
-        h = hashlib.sha256()
-        # 组件配置
-        h.update(json.dumps(self.config.get(component, {}), sort_keys=True, default=str).encode())
-        # 全局配置
-        for key in ("arch", "platform", "soc", "board"):
-            h.update(self.config.get(key, "").encode())
-
-        if component == "app":
-            self._hash_app_sources(h)
-        else:
-            self._hash_component_sources(h, component)
-
-        return h.hexdigest()[:16]
+    # --- 哈希输入混合：rootfs ---
 
     def _compute_rootfs_base_hash(self) -> str:
-        """Phase 1 哈希：rootfs.url + sorted(rootfs.packages) + arch。"""
+        """Phase 1 哈希：rootfs.url + sorted(rootfs.packages) + arch。
+
+        仅覆盖 Phase 1 的输入，不含 Phase 2 customize 的内容。
+        """
         h = hashlib.sha256()
         rootfs_cfg = self.config.get("rootfs", {})
         h.update(rootfs_cfg.get("url", "").encode())
@@ -81,45 +186,34 @@ class BuildCache:
         h.update(self.config.get("arch", "").encode())
         return h.hexdigest()[:16]
 
-    def _compute_rootfs_customize_hash(self) -> str:
-        """Phase 2 哈希：base_hash + overlay + custom_packages + app debs。"""
-        h = hashlib.sha256()
-        # 级联依赖：base 变了，customize 也变
+    def _mix_rootfs_customize(self, h: "hashlib._Hash") -> None:
+        """将 rootfs customize 阶段的输入混入 h。
+
+        注意：上游 app 依赖已由 compute_hash 在 Merkle 级联中处理，
+        这里无需再 hash app deb 文件内容。
+        """
+        # Phase 1 基线（url + packages + arch）
         h.update(self._compute_rootfs_base_hash().encode())
+
         # overlay 目录递归哈希
         board = self.config["board"]
         overlay_dir = Path(f"board/{board}/overlay")
         if overlay_dir.exists():
             self._hash_directory(h, overlay_dir)
-        # custom_packages 列表
+
         rootfs_cfg = self.config.get("rootfs", {})
+        # custom_packages 列表（排序后 JSON）
         custom_packages = sorted(rootfs_cfg.get("custom_packages", []))
         h.update(json.dumps(custom_packages).encode())
-        # App deb 文件哈希
-        self._hash_app_debs(h)
-        return h.hexdigest()[:16]
+        # root 密码
+        h.update(rootfs_cfg.get("root_password", "").encode())
+        # partitions 影响 rootfs.img 大小
+        self._mix_partitions(h)
 
-    def _hash_app_debs(self, h: "hashlib._Hash") -> None:
-        """hash target/.../app/*.deb 文件内容。"""
-        app_deb_dir = self.target_dir / "app"
-        if not app_deb_dir.exists():
-            h.update(b"no-debs")
-            return
-        deb_files = sorted(app_deb_dir.glob("*.deb"))
-        if not deb_files:
-            h.update(b"no-debs")
-            return
-        for deb in deb_files:
-            h.update(deb.name.encode())
-            h.update(deb.read_bytes())
+    # --- 哈希输入混合：app ---
 
-    def _hash_app_sources(self, h: "hashlib._Hash") -> None:
-        """将 custom_packages 列表及各 App 的完整源码内容混入哈希。
-
-        哈希输入：
-        - custom_packages 列表（JSON 序列化，保证顺序稳定）
-        - 每个 App 目录下的所有文件内容（递归 hash，排除构建产物）
-        """
+    def _mix_app_sources(self, h: "hashlib._Hash") -> None:
+        """将 custom_packages 列表及各 App 的完整源码内容混入 h。"""
         rootfs_cfg = self.config.get("rootfs", {})
         custom_packages: list = rootfs_cfg.get("custom_packages", [])
         h.update(json.dumps(sorted(custom_packages)).encode())
@@ -129,6 +223,66 @@ class BuildCache:
                 self._hash_directory(h, app_dir)
             else:
                 h.update(f"missing:{pkg}".encode())
+
+    # --- 哈希输入混合：源码树 + 补丁（kernel/bootloader） ---
+
+    def _mix_source_tree(self, h: "hashlib._Hash", component: str) -> None:
+        """混入源码 git HEAD + 补丁文件内容。
+
+        若源码目录或补丁目录不存在（如 boot/image 没有源码树），安全跳过。
+        """
+        # 源码 commit
+        src_dir = Path("sources") / component / self.config["board"]
+        if src_dir.exists():
+            h.update(b"src:")
+            h.update(self._git_head(src_dir).encode())
+
+        # 补丁
+        platform = self.config.get("platform", "")
+        board = self.config["board"]
+        for patch_dir in [
+            Path(f"platform/{platform}/patches/{component}"),
+            Path(f"board/{board}/patches/{component}"),
+        ]:
+            if patch_dir.exists():
+                for p in sorted(patch_dir.glob("*.patch")):
+                    h.update(b"patch:")
+                    h.update(p.name.encode())
+                    h.update(p.read_bytes())
+
+    # --- 哈希输入混合：partitions 配置 ---
+
+    def _mix_partitions(self, h: "hashlib._Hash") -> None:
+        """混入 partitions 配置（entries 的 offset/size/type 全部参与）。"""
+        partitions = self.config.get("partitions", {})
+        h.update(b"partitions:")
+        h.update(json.dumps(partitions, sort_keys=True, default=str).encode())
+
+    # --- 哈希输入混合：rkbin firmware ---
+
+    def _mix_rkbin(self, h: "hashlib._Hash") -> None:
+        """混入 rkbin firmware 仓库的 git HEAD。
+
+        bootloader 构建时会从 rkbin 读 BL31/DDR init/SPL 等二进制，
+        rkbin 升级会改变这些二进制，必须触发 bootloader 重建。
+        """
+        fw_dir = Path("sources/firmware/rockchip")
+        if fw_dir.exists():
+            h.update(b"rkbin:")
+            h.update(self._git_head(fw_dir).encode())
+
+    # --- 工具函数 ---
+
+    def _git_head(self, repo_dir: Path) -> str:
+        """读取指定 git 仓库的 HEAD commit hash，失败返回 'unknown'。"""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_dir, capture_output=True, text=True, check=True,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return "unknown"
 
     # 目录递归哈希排除规则
     HASH_EXCLUDE_DIRS = {"__pycache__", ".git", "build", ".build", "node_modules"}
@@ -153,25 +307,3 @@ class BuildCache:
             rel = path.relative_to(directory)
             h.update(str(rel).encode())
             h.update(path.read_bytes())
-
-    def _hash_component_sources(self, h: "hashlib._Hash", component: str) -> None:
-        """将源码 commit 和补丁文件内容混入哈希（非 app 组件使用）。"""
-        # 源码 commit
-        src_dir = Path("sources") / component / self.config["board"]
-        if src_dir.exists():
-            try:
-                result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=src_dir,
-                                        capture_output=True, text=True, check=True)
-                h.update(result.stdout.strip().encode())
-            except subprocess.CalledProcessError:
-                h.update(b"unknown")
-        # 补丁文件
-        platform = self.config.get("platform", "")
-        board = self.config["board"]
-        for patch_dir in [
-            Path(f"platform/{platform}/patches/{component}"),
-            Path(f"board/{board}/patches/{component}"),
-        ]:
-            if patch_dir.exists():
-                for p in sorted(patch_dir.glob("*.patch")):
-                    h.update(p.read_bytes())

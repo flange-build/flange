@@ -1,25 +1,14 @@
 """构建引擎 — 管理依赖图、增量检查和调度。"""
 
 import importlib
+import shutil
 from pathlib import Path
 from builder.app import AppBuilder
 from builder.docker import DockerRunner, BuildError
 from builder.flash import FlashConfigGenerator
 from builder.source import SourceManager
-from builder.cache import BuildCache
+from builder.cache import BuildCache, DEPENDENCY_GRAPH
 from builder.output import BuildOutput, OutputLevel
-
-# 组件依赖图：键为组件名，值为该组件依赖的组件列表。
-# app 组件无需依赖其他组件（独立构建）；
-# rootfs 依赖 app，确保 .deb 包在 rootfs 构建前已就绪。
-DEPENDENCY_GRAPH = {
-    "kernel":     [],
-    "bootloader": [],
-    "app":        [],               # 新增：App 构建无依赖
-    "rootfs":     ["app"],          # 修改：rootfs 依赖 app（需要 .deb 文件）
-    "boot":       ["kernel"],
-    "image":      ["boot", "bootloader", "rootfs"],
-}
 
 
 def _topo_sort(graph: dict, target: str) -> list:
@@ -93,6 +82,7 @@ class BuildEngine:
                     builder.output = self.output
                     outputs = builder.build(self.config)
                 self._outputs[component] = outputs
+                self._collect_artifacts(component, outputs)
                 self.cache.store(component)
                 self.output.phase_end(component, success=True)
             except (BuildError, Exception) as e:
@@ -109,6 +99,36 @@ class BuildEngine:
         )
         builder.output = self.output
         return builder.build_all()
+
+    # (组件, collect key) → target 目录下的文件名。
+    # 未在表中的 key 保持源文件原始文件名。
+    _ARTIFACT_NAMES = {
+        ("bootloader", "bootloader"): "u-boot.itb",
+        ("bootloader", "idbloader"): "idbloader.img",
+        ("bootloader", "miniloader"): "miniloader.bin",
+        ("boot", "boot"): "boot.img",
+        ("rootfs", "rootfs"): "rootfs.img",
+        ("image", "image"): "raw.img",
+    }
+
+    def _collect_artifacts(self, component: str, outputs: dict):
+        """将构建产物复制到 target 目录，供刷写使用。"""
+        if not outputs:
+            return
+        component_dir = self.cache.target_dir / component
+        component_dir.mkdir(parents=True, exist_ok=True)
+        for key, src_path in outputs.items():
+            if src_path is None:
+                continue
+            src = Path(src_path)
+            if not src.exists() or src.is_dir():
+                continue
+            filename = self._ARTIFACT_NAMES.get((component, key), src.name)
+            dest = component_dir / filename
+            if src.resolve() == dest.resolve():
+                continue
+            shutil.copy2(src, dest)
+        self.output.status("产物收集")
 
     def _generate_flash_config(self):
         """image 构建完成后生成 flash-config.json。"""
