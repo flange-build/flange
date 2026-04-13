@@ -36,6 +36,16 @@ class SourceManager:
         self._ensure_repo(fw_dir, rkbin_config)
         return fw_dir
 
+    def ensure_extra_firmware(self, name: str, cfg: dict) -> Path:
+        """确保额外固件仓库就绪，返回仓库根目录路径。
+
+        存储路径：sources/extra-firmware/<name>/
+        cfg 格式与 rkbin 相同（repo/local_repo/branch/commit）。
+        """
+        fw_dir = self.sources_dir / "extra-firmware" / name
+        self._ensure_repo(fw_dir, cfg)
+        return fw_dir
+
     def ensure_rootfs_tarball(self, config: dict) -> Path:
         """确保 rootfs base tarball 已下载。"""
         url = config["rootfs"]["url"]

@@ -227,6 +227,9 @@ class BuildCache:
         h.update(json.dumps(custom_packages).encode())
         # root 密码
         h.update(rootfs_cfg.get("root_password", "").encode())
+        # extra_firmware 配置（repo/branch/files 变化须触发重建）
+        extra_fw = rootfs_cfg.get("extra_firmware", [])
+        h.update(json.dumps(extra_fw, sort_keys=True, default=str).encode())
         # partitions 影响 rootfs.img 大小
         self._mix_partitions(h)
 
@@ -286,7 +289,7 @@ class BuildCache:
         bootloader 构建时会从 rkbin 读 BL31/DDR init/SPL 等二进制，
         rkbin 升级会改变这些二进制，必须触发 bootloader 重建。
         """
-        fw_dir = Path("sources/firmware/rockchip")
+        fw_dir = Path(f"sources/firmware/{self.config['platform']}")
         if fw_dir.exists():
             h.update(b"rkbin:")
             h.update(self._git_head(fw_dir).encode())

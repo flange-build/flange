@@ -4,9 +4,11 @@ PLATFORM = {
     "vendor": "rockchip",
     "flash_tool": "upgrade_tool",
     "arch": "aarch64",
+    "products": ["default"],
+    "variants": ["debug", "release"],
     "rkbin": {
-        "repo": "https://github.com/radxa/rkbin",
-        "branch": "develop-v2024.10",
+        "repo": "https://github.com/armbian/rkbin",
+        "branch": "master",
     },
     "rootfs": {
         "packages": [
@@ -14,6 +16,7 @@ PLATFORM = {
             "iputils-ping", "iproute2", "openssh-server", "sudo",
             "bash", "ca-certificates", "locales",
         ],
+        "custom_packages": ["adbd"],
     },
     "+rootfs": {
         "+packages:debug": ["gdb", "strace", "tcpdump", "valgrind"],

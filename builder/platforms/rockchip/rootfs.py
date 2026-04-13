@@ -8,11 +8,11 @@
 import shutil
 import tempfile
 from pathlib import Path
-from builder.base import ComponentBuilder
+from builder.rootfs import RootfsBuilder
 from builder.chroot import ChrootContext
 
 
-class RockchipRootfsBuilder(ComponentBuilder):
+class RockchipRootfsBuilder(RootfsBuilder):
     component = "rootfs"
 
     def build(self, config: dict) -> dict:
@@ -130,7 +130,7 @@ class RockchipRootfsBuilder(ComponentBuilder):
 
     def _build_phase2(self, rootfs_dir: Path, config: dict):
         """Phase 2: Customize — custom deb 安装 + overlay 文件覆盖。"""
-        # 先安装 deb，再覆盖 overlay（overlay 是用户定制，优先级最高）
+        # 先安装 deb，再安装额外固件，最后覆盖 overlay（overlay 优先级最高）
         product = config.get("product", "default")
         variant = config.get("variant", "release")
         target_dir = Path("target") / config["board"] / product / variant
@@ -150,6 +150,8 @@ class RockchipRootfsBuilder(ComponentBuilder):
                                label=f"dpkg -i ({len(deb_files)} 个包)...")
                 shutil.rmtree(deb_tmp)
 
+        self._install_extra_firmware(rootfs_dir, config)
+
         board = config["board"]
         overlay_dir = Path(f"board/{board}/overlay")
         if overlay_dir.exists() and any(overlay_dir.iterdir()):
@@ -161,6 +163,7 @@ class RockchipRootfsBuilder(ComponentBuilder):
         root_password = config.get("rootfs", {}).get("root_password")
         if root_password:
             self._set_root_password(rootfs_dir, root_password)
+
 
     def _set_root_password(self, rootfs_dir: Path, password: str):
         """设置 root 账号密码，精确匹配旧 Bazel 方案：

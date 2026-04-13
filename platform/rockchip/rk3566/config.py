@@ -9,11 +9,23 @@ SOC = {
         "trust_ini_prefix": "RK3568",
     },
     "bootloader": {
+        "repo": "https://github.com/radxa/u-boot",
+        "branch": "next-dev-v2026.01",
         "defconfig": "rk3568_defconfig",
     },
     "kernel": {
+        "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
+        "branch": "linux-6.1-stan-rkr4.1-buildroot",
         "defconfig": "rockchip_linux_defconfig",
         "dts_dir": "rockchip",
+    },
+    "rootfs": {
+        "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+    },
+    "boot": {
+        "dtb_overlays": [],
+        "default_overlays": [],
+        "kernel_args": "console=ttyS2,1500000 loglevel=7",
     },
     "partitions": {
         "format": "gpt",
