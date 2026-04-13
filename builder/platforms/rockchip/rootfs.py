@@ -152,10 +152,18 @@ class RockchipRootfsBuilder(RootfsBuilder):
 
         self._install_extra_firmware(rootfs_dir, config)
 
+        # overlay 优先级：platform < board（后者可覆盖前者）
+        platform = config["platform"]
+        platform_overlay = Path(f"platform/{platform}/overlay")
+        if platform_overlay.exists() and any(platform_overlay.iterdir()):
+            self._status("复制 platform overlay 文件...")
+            self.docker.run_privileged(
+                ["cp", "-a", f"{platform_overlay}/.", str(rootfs_dir)])
+
         board = config["board"]
         overlay_dir = Path(f"board/{board}/overlay")
         if overlay_dir.exists() and any(overlay_dir.iterdir()):
-            self._status("复制 overlay 文件...")
+            self._status("复制 board overlay 文件...")
             self.docker.run_privileged(
                 ["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
 

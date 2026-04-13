@@ -215,7 +215,12 @@ class BuildCache:
         # Phase 1 基线（url + packages + arch）
         h.update(self._compute_rootfs_base_hash().encode())
 
-        # overlay 目录递归哈希
+        # overlay 目录递归哈希（platform 先，board 后）
+        platform = self.config.get("platform", "")
+        platform_overlay = Path(f"platform/{platform}/overlay")
+        if platform_overlay.exists():
+            self._hash_directory(h, platform_overlay)
+
         board = self.config["board"]
         overlay_dir = Path(f"board/{board}/overlay")
         if overlay_dir.exists():
