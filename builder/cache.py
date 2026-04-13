@@ -19,7 +19,7 @@ DEPENDENCY_GRAPH: dict[str, list[str]] = {
     "kernel":     [],
     "bootloader": [],
     "app":        [],
-    "rootfs":     ["app"],
+    "rootfs":     ["app", "kernel"],
     "boot":       ["kernel"],
     "image":      ["boot", "bootloader", "rootfs"],
 }

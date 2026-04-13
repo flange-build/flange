@@ -150,6 +150,7 @@ class RockchipRootfsBuilder(RootfsBuilder):
                                label=f"dpkg -i ({len(deb_files)} 个包)...")
                 shutil.rmtree(deb_tmp)
 
+        self._install_kernel_modules(rootfs_dir, config)
         self._install_extra_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)
 
@@ -158,6 +159,26 @@ class RockchipRootfsBuilder(RootfsBuilder):
         if root_password:
             self._set_root_password(rootfs_dir, root_password)
 
+
+    def _install_kernel_modules(self, rootfs_dir: Path, config: dict):
+        """将 kernel 组件产物目录中的模块安装到 rootfs /lib/modules/。
+
+        kernel 构建后，engine 将 _modules_staging 复制到
+        target/<board>/<product>/<variant>/kernel/modules/，
+        其内部结构为 lib/modules/<version>/...
+        这里把 lib/modules/ 子树整体复制进 rootfs。
+        """
+        product = config.get("product", "default")
+        variant = config.get("variant", "release")
+        target_dir = Path("target") / config["board"] / product / variant
+        modules_src = target_dir / "kernel" / "modules" / "lib" / "modules"
+        if not modules_src.is_dir():
+            return
+        self._status("安装内核模块...")
+        dest = rootfs_dir / "lib" / "modules"
+        dest.mkdir(parents=True, exist_ok=True)
+        self.docker.run_privileged(
+            ["cp", "-a", f"{modules_src}/.", str(dest)])
 
     def _set_root_password(self, rootfs_dir: Path, password: str):
         """设置 root 账号密码，精确匹配旧 Bazel 方案：

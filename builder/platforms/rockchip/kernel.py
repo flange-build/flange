@@ -36,6 +36,14 @@ class RockchipKernelBuilder(ComponentBuilder):
                   arch=self.ARCH, cross=self.CROSS,
                   extra=[f"INSTALL_MOD_PATH={modules_staging}",
                          "INSTALL_MOD_STRIP=1"])
+        # make modules_install 会在 lib/modules/<ver>/ 下创建 source/build
+        # symlink 指向容器内绝对路径（/workspace/...），部署不需要且会导致
+        # shutil.copytree 报错，直接删掉。
+        for link_name in ("source", "build"):
+            for link in (modules_staging / "lib" / "modules").glob(
+                    f"*/{link_name}"):
+                if link.is_symlink():
+                    link.unlink()
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         dts_dir = config["kernel"].get("dts_dir", "rockchip")

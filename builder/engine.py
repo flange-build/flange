@@ -100,19 +100,24 @@ class BuildEngine:
         builder.output = self.output
         return builder.build_all()
 
-    # (组件, collect key) → target 目录下的文件名。
+    # (组件, collect key) → target 目录下的文件名/目录名。
     # 未在表中的 key 保持源文件原始文件名。
     _ARTIFACT_NAMES = {
+        ("kernel",     "dtbos"):      "overlay",   # DTB overlay 目录
+        ("kernel",     "modules"):    "modules",   # 内核模块 staging 目录
         ("bootloader", "bootloader"): "u-boot.itb",
-        ("bootloader", "idbloader"): "idbloader.img",
+        ("bootloader", "idbloader"):  "idbloader.img",
         ("bootloader", "miniloader"): "miniloader.bin",
-        ("boot", "boot"): "boot.img",
-        ("rootfs", "rootfs"): "rootfs.img",
-        ("image", "image"): "raw.img",
+        ("boot",       "boot"):       "boot.img",
+        ("rootfs",     "rootfs"):     "rootfs.img",
+        ("image",      "image"):      "raw.img",
     }
 
     def _collect_artifacts(self, component: str, outputs: dict):
-        """将构建产物复制到 target 目录，供刷写使用。"""
+        """将构建产物复制到 target 目录，供刷写使用。
+
+        文件产物用 shutil.copy2，目录产物用 shutil.copytree（先删旧目录）。
+        """
         if not outputs:
             return
         component_dir = self.cache.target_dir / component
@@ -121,13 +126,18 @@ class BuildEngine:
             if src_path is None:
                 continue
             src = Path(src_path)
-            if not src.exists() or src.is_dir():
+            if not src.exists():
                 continue
             filename = self._ARTIFACT_NAMES.get((component, key), src.name)
             dest = component_dir / filename
             if src.resolve() == dest.resolve():
                 continue
-            shutil.copy2(src, dest)
+            if src.is_dir():
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(src, dest, symlinks=True)
+            else:
+                shutil.copy2(src, dest)
         self.output.status("产物收集")
 
     def _generate_flash_config(self):

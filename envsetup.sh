@@ -295,18 +295,42 @@ _flange_docker_run() {
 
 # --- flange 子命令 ---
 _flange_cmd_build() {
-    # 解析 -v / -q 参数
+    # 解析 -v / -q / -f 参数
     local verbose=""
     local quiet=""
+    local force=""
     local args=()
     for arg in "$@"; do
         case "$arg" in
             -v|--verbose) verbose="True" ;;
             -q|--quiet)   quiet="True" ;;
+            -f|--force)   force="1" ;;
             *)            args+=("$arg") ;;
         esac
     done
-    local component="${args[0]:-image}"
+
+    local component_arg="${args[0]:-}"
+
+    # -f：删除 .build_hash 触发强制重建
+    if [[ -n "$force" ]]; then
+        local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+        if [[ -n "$component_arg" ]]; then
+            # 指定了组件：只删该组件的 .build_hash，下游由 Merkle 级联自动失效
+            local hash_file="$target_dir/$component_arg/.build_hash"
+            if [[ -f "$hash_file" ]]; then
+                rm "$hash_file"
+                _flange_info "已清除 $component_arg 缓存，强制重建"
+            fi
+        else
+            # 无组件：删除所有 .build_hash 触发全量重建
+            if [[ -d "$target_dir" ]]; then
+                find "$target_dir" -name ".build_hash" -delete
+                _flange_info "已清除缓存，强制重建所有组件"
+            fi
+        fi
+    fi
+
+    local component="${component_arg:-image}"
 
     # 构建 verbose/quiet 配置注入
     local output_cfg=""
@@ -622,6 +646,7 @@ flange() {
         echo ""
         echo "  构建命令:"
         echo "    build [component]       构建组件（默认: image）"
+        echo "    build [component] -f    强制重建（-f 无 component 时重建全部）"
         echo "    build app               构建所有 App"
         echo "    build app <name>        构建单个 App"
         echo "    clean                   清理构建产物"
