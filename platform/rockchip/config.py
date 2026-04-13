@@ -7,8 +7,8 @@ PLATFORM = {
     "products": ["default"],
     "variants": ["debug", "release"],
     "rkbin": {
-        "repo": "https://github.com/armbian/rkbin",
-        "branch": "master",
+        "repo": "https://github.com/radxa/rkbin",
+        "branch": "develop-v2024.10",
     },
     "rootfs": {
         "packages": [
