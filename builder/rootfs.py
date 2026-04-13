@@ -1,6 +1,7 @@
 """RootfsBuilder — 各平台 rootfs 构建器的公共基类。
 
 通用能力（与平台无关）：
+  - apply_overlays：platform overlay → board overlay 两层覆盖
   - extra_firmware：从外部仓库拉取固件文件并写入 rootfs
 """
 
@@ -14,6 +15,26 @@ class RootfsBuilder(ComponentBuilder):
 
     各平台子类继承此类，获得通用 rootfs 能力，再叠加平台特定逻辑。
     """
+
+    def apply_overlays(self, rootfs_dir: Path, config: dict):
+        """按优先级顺序应用 overlay 文件：platform → board。
+
+        platform overlay 先应用（低优先级），board overlay 后应用（高优先级），
+        board 中的同名文件会覆盖 platform 中的文件。
+        """
+        platform = config["platform"]
+        platform_overlay = Path(f"platform/{platform}/overlay")
+        if platform_overlay.exists() and any(platform_overlay.iterdir()):
+            self._status("复制 platform overlay 文件...")
+            self.docker.run_privileged(
+                ["cp", "-a", f"{platform_overlay}/.", str(rootfs_dir)])
+
+        board = config["board"]
+        board_overlay = Path(f"board/{board}/overlay")
+        if board_overlay.exists() and any(board_overlay.iterdir()):
+            self._status("复制 board overlay 文件...")
+            self.docker.run_privileged(
+                ["cp", "-a", f"{board_overlay}/.", str(rootfs_dir)])
 
     def _install_extra_firmware(self, rootfs_dir: Path, config: dict):
         """安装额外固件文件到 rootfs。
