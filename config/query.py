@@ -6,7 +6,21 @@
 
 from pathlib import Path
 
-from config.registry import discover_boards
+from config.registry import discover_boards, get_board_config
+
+
+def _merged_configs(
+    boards: dict[str, dict],
+    project_root: Path | None = None,
+) -> dict[str, dict]:
+    """返回 {board_name: merged_config} 映射（三层合并后）。
+
+    products/variants 等字段可能来自 platform 层，必须用合并结果才能正确读取。
+    """
+    return {
+        name: get_board_config(name, boards=boards, project_root=project_root)
+        for name in boards
+    }
 
 
 def get_valid_targets(
@@ -20,8 +34,9 @@ def get_valid_targets(
     if boards is None:
         boards = discover_boards(project_root)
 
+    merged = _merged_configs(boards, project_root)
     targets: list[str] = []
-    for board_name, cfg in sorted(boards.items()):
+    for board_name, cfg in sorted(merged.items()):
         products = cfg.get("products", ["default"])
         variants = cfg.get("variants", ["release"])
         for product in products:
@@ -47,8 +62,10 @@ def parse_target(
     if boards is None:
         boards = discover_boards(project_root)
 
+    merged = _merged_configs(boards, project_root)
+
     # 按板名长度降序排列，优先匹配最长的板名
-    sorted_names = sorted(boards.keys(), key=len, reverse=True)
+    sorted_names = sorted(merged.keys(), key=len, reverse=True)
 
     for board_name in sorted_names:
         prefix = board_name + "-"
@@ -58,8 +75,7 @@ def parse_target(
             parts = remainder.rsplit("-", 1)
             if len(parts) == 2:
                 product, variant = parts
-                # 验证 product 和 variant 是否合法
-                cfg = boards[board_name]
+                cfg = merged[board_name]
                 valid_products = cfg.get("products", ["default"])
                 valid_variants = cfg.get("variants", ["release"])
                 if product in valid_products and variant in valid_variants:
