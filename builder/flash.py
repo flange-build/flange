@@ -217,6 +217,8 @@ class RockchipFlashStrategy(FlashStrategy):
                   device: Optional["DeviceInfo"] = None):
         # DB (Download Boot) 仅在 maskrom 模式下上传 loader；
         # 设备已在 loader 模式时跳过，避免 "did not support this operation"
+        if device is None:
+            device = self.detect_device(tool)
         if device and device.mode != "maskrom":
             _info(f"设备已在 {device.mode} 模式，跳过 DB")
             return
