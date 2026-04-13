@@ -17,24 +17,22 @@ class RootfsBuilder(ComponentBuilder):
     """
 
     def apply_overlays(self, rootfs_dir: Path, config: dict):
-        """按优先级顺序应用 overlay 文件：platform → board。
+        """按优先级顺序应用 overlay 文件：rootfs → platform → board。
 
-        platform overlay 先应用（低优先级），board overlay 后应用（高优先级），
-        board 中的同名文件会覆盖 platform 中的文件。
+        优先级从低到高，后应用的同名文件覆盖先应用的：
+          rootfs/overlay/          与 OS/发行版绑定，所有平台共用
+          platform/<p>/overlay/    与芯片平台绑定
+          board/<b>/overlay/       与具体板子绑定
         """
-        platform = config["platform"]
-        platform_overlay = Path(f"platform/{platform}/overlay")
-        if platform_overlay.exists() and any(platform_overlay.iterdir()):
-            self._status("复制 platform overlay 文件...")
-            self.docker.run_privileged(
-                ["cp", "-a", f"{platform_overlay}/.", str(rootfs_dir)])
-
-        board = config["board"]
-        board_overlay = Path(f"board/{board}/overlay")
-        if board_overlay.exists() and any(board_overlay.iterdir()):
-            self._status("复制 board overlay 文件...")
-            self.docker.run_privileged(
-                ["cp", "-a", f"{board_overlay}/.", str(rootfs_dir)])
+        for overlay_dir, label in [
+            (Path("rootfs/overlay"),                          "rootfs"),
+            (Path(f"platform/{config['platform']}/overlay"),  "platform"),
+            (Path(f"board/{config['board']}/overlay"),        "board"),
+        ]:
+            if overlay_dir.exists() and any(overlay_dir.iterdir()):
+                self._status(f"复制 {label} overlay 文件...")
+                self.docker.run_privileged(
+                    ["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
 
     def _install_extra_firmware(self, rootfs_dir: Path, config: dict):
         """安装额外固件文件到 rootfs。

@@ -215,16 +215,14 @@ class BuildCache:
         # Phase 1 基线（url + packages + arch）
         h.update(self._compute_rootfs_base_hash().encode())
 
-        # overlay 目录递归哈希（platform 先，board 后）
-        platform = self.config.get("platform", "")
-        platform_overlay = Path(f"platform/{platform}/overlay")
-        if platform_overlay.exists():
-            self._hash_directory(h, platform_overlay)
-
-        board = self.config["board"]
-        overlay_dir = Path(f"board/{board}/overlay")
-        if overlay_dir.exists():
-            self._hash_directory(h, overlay_dir)
+        # overlay 目录递归哈希（rootfs → platform → board）
+        for overlay_dir in [
+            Path("rootfs/overlay"),
+            Path(f"platform/{self.config.get('platform', '')}/overlay"),
+            Path(f"board/{self.config['board']}/overlay"),
+        ]:
+            if overlay_dir.exists():
+                self._hash_directory(h, overlay_dir)
 
         rootfs_cfg = self.config.get("rootfs", {})
         # custom_packages 列表（排序后 JSON）
