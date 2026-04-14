@@ -10,17 +10,22 @@ BOARD = {
     "bootloader": {
         "commit": "3c60a711e61015c1a61247837afbeaa85bd7fbf2",
     },
+    "+rootfs": {
+        "+packages": ["wpasupplicant"],
+    },
     "rootfs": {
         "root_password": "1234",
         "extra_firmware": [
             {
-                "name": "armbian",
-                "repo": "https://github.com/armbian/firmware",
-                "branch": "master",
+                "name": "radxa",
+                "repo": "https://github.com/radxa-pkg/radxa-firmware",
+                "branch": "main",
+                "repo_subdir": "radxa-firmware/lib/firmware",
                 "files": [
-                    "brcm/brcmfmac43430-sdio.bin",
-                    "brcm/brcmfmac43430-sdio.txt",
-                    "brcm/brcmfmac43430-sdio.clm_blob",
+                    "brcm/fw_bcm43438a1.bin",
+                    "brcm/nvram_ap6212a.txt",
+                    "brcm/bcm43438a1.hcd",
+                    "brcm/BCM43430A1.hcd",
                 ],
                 "dest": "lib/firmware",
             }

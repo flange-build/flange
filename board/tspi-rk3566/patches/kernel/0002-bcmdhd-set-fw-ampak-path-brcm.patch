@@ -1,0 +1,23 @@
+From: flange <flange@localhost>
+Subject: [PATCH 2/2] bcmdhd: 启用 FW_AMPAK_PATH 指向 brcm 子目录
+
+dhd_conf_add_filepath() 使用 FW_AMPAK_PATH 构造固件路径前缀。
+未定义时固件名仅为 "/fw_bcm43438a1.bin"，内核固件加载器在
+/lib/firmware/ 下找不到该文件。
+
+启用 FW_AMPAK_PATH="brcm" 后，固件名变为 "/brcm/fw_bcm43438a1.bin"，
+配合 firmware_class.path=/lib/firmware，最终搜索路径为
+/lib/firmware/brcm/fw_bcm43438a1.bin，符合标准 Linux 固件布局。
+
+diff --git a/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile b/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile
+--- a/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile
++++ b/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile
+@@ -389,7 +389,7 @@
+ ifeq ($(CONFIG_BCMDHD_AUTO_SELECT),y)
+ 	DHDCFLAGS += -DUPDATE_MODULE_NAME
+ ifeq ($(CONFIG_BCMDHD_REQUEST_FW),y)
+-#	DHDCFLAGS += -DFW_AMPAK_PATH="\"ampak\""
++	DHDCFLAGS += -DFW_AMPAK_PATH="\"brcm\""
+ #	DHDCFLAGS += -DMODULE_PATH
+ endif
+ ifneq ($(CONFIG_BCMDHD_SDIO),)

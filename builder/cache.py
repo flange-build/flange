@@ -8,6 +8,7 @@
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -332,4 +333,7 @@ class BuildCache:
         for path in sorted(entries):
             rel = path.relative_to(directory)
             h.update(str(rel).encode())
-            h.update(path.read_bytes())
+            if path.is_symlink():
+                h.update(os.readlink(path).encode())
+            else:
+                h.update(path.read_bytes())

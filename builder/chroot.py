@@ -1,5 +1,6 @@
 """Chroot 上下文管理器 — 安全管理 mount/umount 生命周期。"""
 
+import os
 from pathlib import Path
 from builder.docker import DockerRunner
 
@@ -27,6 +28,11 @@ class ChrootContext:
         # DNS 解析：复制宿主 resolv.conf 到 chroot 内
         resolv_src = Path("/etc/resolv.conf")
         resolv_dst = self.rootfs / "etc" / "resolv.conf"
+        # 保存并移除符号链接，否则 cp 会尝试写入不存在的目标
+        self._resolv_link = None
+        if resolv_dst.is_symlink():
+            self._resolv_link = os.readlink(resolv_dst)
+            self.docker.run_privileged(["rm", "-f", str(resolv_dst)])
         if resolv_src.exists():
             self.docker.run_privileged(["cp", str(resolv_src), str(resolv_dst)])
         # 阻止 dpkg/apt 在 chroot 内启动服务
@@ -37,6 +43,12 @@ class ChrootContext:
         return self
 
     def __exit__(self, *exc):
+        # 恢复 resolv.conf 符号链接（如果之前被替换）
+        resolv_dst = self.rootfs / "etc" / "resolv.conf"
+        if self._resolv_link:
+            self.docker.run_privileged(["rm", "-f", str(resolv_dst)])
+            self.docker.run_privileged(
+                ["ln", "-s", self._resolv_link, str(resolv_dst)])
         # 移除 policy-rc.d，恢复目标系统正常服务管理
         policy_rc = self.rootfs / "usr" / "sbin" / "policy-rc.d"
         if policy_rc.exists():

@@ -40,17 +40,18 @@ class RootfsBuilder(ComponentBuilder):
         config["rootfs"]["extra_firmware"] 格式：
           [
             {
-              "name": "armbian",
-              "repo": "https://github.com/armbian/firmware",
-              "branch": "master",
-              "files": ["brcm/brcmfmac43430-sdio.bin", ...],
+              "name": "radxa",
+              "repo": "https://github.com/radxa-pkg/radxa-firmware",
+              "branch": "main",
+              "repo_subdir": "radxa-firmware/lib/firmware",  # 可选，仓库内子目录作为 files 的根
+              "files": ["brcm/brcmfmac43430-sdio.txt", ...],
               "dest": "lib/firmware",   # 相对 rootfs 根目录，默认 lib/firmware
             }
           ]
 
-        files 中每条路径相对于仓库根目录，复制时保留目录结构。
-        例：files=["brcm/foo.bin"], dest="lib/firmware"
-            → rootfs/lib/firmware/brcm/foo.bin
+        files 中每条路径相对于仓库根目录（或 repo_subdir 指定的子目录），复制时保留目录结构。
+        例：repo_subdir="radxa-firmware/lib/firmware", files=["brcm/foo.txt"], dest="lib/firmware"
+            → rootfs/lib/firmware/brcm/foo.txt
         """
         extra_firmware = config.get("rootfs", {}).get("extra_firmware", [])
         if not extra_firmware:
@@ -59,9 +60,11 @@ class RootfsBuilder(ComponentBuilder):
             name = fw["name"]
             self._status(f"同步固件仓库: {name}")
             fw_dir = self.source.ensure_extra_firmware(name, fw)
+            repo_subdir = fw.get("repo_subdir", "")
+            fw_base = fw_dir / repo_subdir if repo_subdir else fw_dir
             dest_base = rootfs_dir / fw.get("dest", "lib/firmware")
             for rel_path in fw.get("files", []):
-                src = fw_dir / rel_path
+                src = fw_base / rel_path
                 if not src.exists():
                     raise FileNotFoundError(
                         f"固件文件不存在: {src}（仓库: {name}）")

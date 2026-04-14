@@ -1,0 +1,19 @@
+From: flange <flange@localhost>
+Subject: [PATCH 1/2] dts: tspi-rk3566: firmware_class.path 改为 /lib/firmware
+
+原 DTS 中 firmware_class.path=/system/etc/firmware 是 Android 路径，
+标准 Linux rootfs 上不存在该目录，导致内核固件加载器无法找到任何
+固件文件。改为 Linux 标准固件路径 /lib/firmware。
+
+diff --git a/arch/arm64/boot/dts/rockchip/tspi-rk3566-core-v10.dtsi b/arch/arm64/boot/dts/rockchip/tspi-rk3566-core-v10.dtsi
+--- a/arch/arm64/boot/dts/rockchip/tspi-rk3566-core-v10.dtsi
++++ b/arch/arm64/boot/dts/rockchip/tspi-rk3566-core-v10.dtsi
+@@ -28,7 +28,7 @@
+
+ / {
+ 	chosen: chosen {
+-		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rw rootwait firmware_class.path=/system/etc/firmware";
++		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rw rootwait firmware_class.path=/lib/firmware";
+ 	};
+
+ 	fiq-debugger {
