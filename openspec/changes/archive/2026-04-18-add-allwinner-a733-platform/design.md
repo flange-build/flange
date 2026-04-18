@@ -158,6 +158,65 @@ bsp_dir = self.source.ensure_extra("kernel_bsp", config.get("kernel_bsp", {}))
 device_dir = self.source.ensure_extra("kernel_device", config.get("kernel_device", {}))
 ```
 
+### D9: 平台级默认启用 adbd 调试通道
+
+**选择**: 在 `platform/allwinner/config.py` 的 `rootfs.custom_packages` 加入 `"adbd"`，使所有 Allwinner 板默认装配 adbd；同时在内核层保证 USB gadget + FunctionFS 为内建，并为 A7Z 提供板级 USB gadget 配置。
+
+**理由**: Rockchip 平台已在 `platform/rockchip/config.py` 采用相同模式（`custom_packages: ["adbd"]`），跨平台保持一致的默认调试能力，符合 ProjectSpec 的"平台级策略在平台 config，板级差异在 overlay"分层原则。
+
+**三个协同修改点**:
+
+#### 1. 平台层启用 App
+
+`platform/allwinner/config.py`:
+```python
+"rootfs": {
+    ...
+    "custom_packages": ["adbd"],   # 从 [] 改为含 adbd
+},
+```
+
+#### 2. 内核 USB gadget override fragment
+
+问题：`radxa.config`（来自上游，不可修改）将 `CONFIG_USB_CONFIGFS` 降为 `=m`，导致 `usbdevice.service` 启动前必须 `modprobe configfs`，启动时序脆弱。
+
+**方案**: 仿照 `_write_case_insensitive_fix()` 的生成式 fragment 模式，在 `AllwinnerKernelBuilder` 新增 `_write_usb_gadget_override()`，构建时在 `arch/arm64/configs/` 写入 `usb_gadget.config`：
+
+```
+CONFIG_CONFIGFS_FS=y
+CONFIG_USB_GADGET=y
+CONFIG_USB_CONFIGFS=y
+CONFIG_USB_CONFIGFS_F_FS=y
+```
+
+并在 `platform/allwinner/a733/config.py` 的 `kernel.defconfig` 列表尾部（在 `case_insensitive_fix.config` 之前）追加 `"usb_gadget.config"`，使其在 `radxa.config` 之后应用，覆盖降级。
+
+**替代方案**:
+- 修改上游 `radxa.config` — 违反"不修改上游源"原则
+- 在 service 启动前 modprobe — 启动时序脆弱，依赖 initramfs 或提前加载
+- 在 bsp_defconfig 里改 — 该文件来自 device-a733，不应由 flange 改写
+
+#### 3. 板级 USB gadget 参数
+
+`board/radxa-cubie-a7z/overlay/etc/usbdevice.conf`:
+```
+USB_VENDOR_ID=0x1f3a          # Allwinner Technology 官方 USB VID
+USB_PRODUCT_NAME="radxa-cubie-a7z"
+USB_MANUFACTURER="Allwinner"
+USB_GROUP=sunxi               # Allwinner 生态惯用 configfs gadget 组名
+USB_FUNCS=adb
+USB_SERIAL_SOURCE=cpuinfo
+USB_BCD_DEVICE=0x0310
+USB_BCD_USB=0x0200
+USB_MAX_POWER=500
+USB_PID_adb=0x0006
+USB_PID_DEFAULT=0x0019
+```
+
+**VID 选择理由**: `0x1f3a` 是 Allwinner Technology 向 USB-IF 注册的官方 VID，`lsusb` 显示为 "Allwinner Technology"，语义与硬件一致。Radxa VID (`0x2207`) 为 Rockchip 注册持有，用于 Allwinner 板会误导。
+
+**USB_GROUP 选择理由**: `sunxi` 是 Allwinner SoC 的内核命名空间（sunxi 平台系列），与 Rockchip 板的 `USB_GROUP=rockchip` 形成平台级对称。
+
 ## Risks / Trade-offs
 
 ### [Risk] BSP 与内核版本耦合

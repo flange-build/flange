@@ -32,6 +32,11 @@ flange 当前仅支持 Rockchip 平台（RK3566）。框架的配置注册表、
 - 新增 `AllwinnerFlashStrategy`，支持 SD 卡 dd 刷写
 - SD 卡布局：boot0@sector256, boot_package@sector24576, boot 分区, rootfs 分区
 
+### 平台级 adbd 使能
+- `platform/allwinner/config.py` 的 `custom_packages` 加入 `"adbd"`，与 Rockchip 平台对齐，使所有 Allwinner 板默认具备 adb 调试通道
+- `AllwinnerKernelBuilder` 新增 `_write_usb_gadget_override()`，生成 `usb_gadget.config` fragment 并追加到 defconfig 合并尾部，强制 `USB_GADGET=y` / `USB_CONFIGFS=y` / `USB_CONFIGFS_F_FS=y` / `CONFIGFS_FS=y`——因 `radxa.config` 将 `USB_CONFIGFS` 降为模块，不叠加 override 会导致 `usbdevice.service` 启动前必须 modprobe
+- `board/radxa-cubie-a7z/overlay/etc/usbdevice.conf` 提供 A733 平台 USB gadget 参数（VID=`0x1f3a` Allwinner Technology，USB_GROUP=`sunxi`，PID 映射表）
+
 ## 非目标
 
 - **不从源码构建 Allwinner bootloader**：boot0、U-Boot、SCP 等构建需要 4+ 专有子模块和特殊工具链（Linaro ARM 7.2.1 + RISC-V），复杂度极高且产物变化频率低，采用预编译固件方案
@@ -41,7 +46,7 @@ flange 当前仅支持 Rockchip 平台（RK3566）。框架的配置注册表、
 ## Capabilities
 
 ### New Capabilities
-- `allwinner-platform`: Allwinner 芯片平台构建支持，包含内核（BSP 集成模式）、bootloader（预编译固件模式）、boot 分区、rootfs、整盘镜像组装
+- `allwinner-platform`: Allwinner 芯片平台构建支持，包含内核（BSP 集成模式、USB gadget override）、bootloader（预编译固件模式）、boot 分区、rootfs（含默认 adbd 调试通道）、整盘镜像组装
 - `allwinner-flash`: Allwinner 平台 SD 卡刷写策略
 - `platform-abstraction`: 平台抽象层重构，消除硬编码使框架真正支持多平台扩展
 
@@ -55,9 +60,9 @@ flange 当前仅支持 Rockchip 平台（RK3566）。框架的配置注册表、
 - `config/registry.py`：自动发现逻辑替换硬编码映射表
 - `builder/engine.py`：`_ARTIFACT_NAMES` 提取为平台接口
 - `builder/flash.py`：`FlashConfigGenerator` 消除平台硬编码
-- `builder/platforms/`：新增 `allwinner/` 目录（5 个构建器模块）
-- `platform/`：新增 `allwinner/` 目录（平台配置 + SoC 配置）
-- `board/`：新增 `radxa-cubie-a7z/` 目录
+- `builder/platforms/`：新增 `allwinner/` 目录（5 个构建器模块，`kernel.py` 含 USB gadget override）
+- `platform/`：新增 `allwinner/` 目录（平台配置含 `custom_packages: ["adbd"]`、SoC 配置 defconfig 列表追加 `usb_gadget.config`）
+- `board/`：新增 `radxa-cubie-a7z/` 目录（含 `overlay/etc/usbdevice.conf` 提供 A733 USB gadget 参数）
 
 ### 依赖
 - Allwinner 预编译固件仓库（需创建，托管 boot0 + boot_package.fex 二进制）

@@ -51,6 +51,15 @@
 
 ## 10. 集成验证
 
-- [ ] 10.1 端到端验证 — 确认 `flange build` 对 radxa-cubie-a7z 目标完整走通 kernel → boot → rootfs → image 流程，生成 raw.img
-- [ ] 10.2 SD 卡刷写验证 — 将 raw.img dd 到 SD 卡，在 A7Z 板上验证启动
+- [x] 10.1 端到端验证 — 确认 `flange build` 对 radxa-cubie-a7z 目标完整走通 kernel → boot → rootfs → image 流程，生成 raw.img
+- [x] 10.2 SD 卡刷写验证 — 将 raw.img dd 到 SD 卡，在 A7Z 板上验证启动
 - [x] 10.3 回归验证 — 确认 Rockchip 平台（radxa-zero3w）构建和刷写不受影响
+
+## 11. 平台级 adbd 使能（A7Z 默认调试通道）
+
+- [x] 11.1 在 `AllwinnerKernelBuilder` 新增 `_write_usb_gadget_override()`，仿照 `_write_case_insensitive_fix()` 的生成模式，向 `arch/arm64/configs/usb_gadget.config` 写入 `CONFIG_CONFIGFS_FS=y` / `CONFIG_USB_GADGET=y` / `CONFIG_USB_CONFIGFS=y` / `CONFIG_USB_CONFIGFS_F_FS=y`；在 `build()` 中于 `_write_case_insensitive_fix()` 之前或之后调用（顺序不重要，二者独立）
+- [x] 11.2 在 `platform/allwinner/a733/config.py` 的 `kernel.defconfig` 列表中，在 `"radxa_custom.config"` 之后、`"case_insensitive_fix.config"` 之前插入 `"usb_gadget.config"`，确保覆盖 `radxa.config` 的 `USB_CONFIGFS=m` 降级
+- [x] 11.3 在 `platform/allwinner/config.py` 的 `rootfs.custom_packages` 列表加入 `"adbd"`（从 `[]` 改为 `["adbd"]`），与 Rockchip 平台对齐
+- [x] 11.4 创建 `board/radxa-cubie-a7z/overlay/etc/usbdevice.conf`，填入：`USB_VENDOR_ID=0x1f3a` / `USB_PRODUCT_NAME="radxa-cubie-a7z"` / `USB_MANUFACTURER="Allwinner"` / `USB_GROUP=sunxi` / `USB_FUNCS=adb` / `USB_SERIAL_SOURCE=cpuinfo` / `USB_BCD_DEVICE=0x0310` / `USB_BCD_USB=0x0200` / `USB_MAX_POWER=500` / `USB_PID_adb=0x0006` / `USB_PID_DEFAULT=0x0019`
+- [x] 11.5 验证最终 `.config` — 在构建后检查 `sources/repos/linux-a733/src/.config` 中 `CONFIG_USB_CONFIGFS=y`（非 `=m`），`CONFIG_USB_CONFIGFS_F_FS=y`，`CONFIG_USB_GADGET=y`
+- [x] 11.6 A7Z 目标端到端调试验证 — 镜像写入 SD 卡启动后，宿主机 `adb devices` 能识别设备，`adb shell` 可进入 shell，`adb push/pull` 文件传输正常（此步骤与 10.2 配合验证）
