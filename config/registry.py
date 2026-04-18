@@ -11,15 +11,40 @@ from typing import Any
 
 from config.merge import deep_merge, resolve_conditions
 
-# 平台配置文件路径映射（相对于项目根目录）
-_PLATFORM_CONFIGS: dict[str, str] = {
-    "rockchip": "platform/rockchip/config.py",
-}
+def _discover_platform_configs(project_root: Path) -> dict[str, str]:
+    """自动扫描 platform/*/config.py，返回 {平台名: 配置文件相对路径} 映射。"""
+    platform_dir = project_root / "platform"
+    result: dict[str, str] = {}
+    if not platform_dir.is_dir():
+        return result
+    for child in sorted(platform_dir.iterdir()):
+        if not child.is_dir() or child.name.startswith((".", "_")):
+            continue
+        config_file = child / "config.py"
+        if config_file.is_file():
+            result[child.name] = str(config_file.relative_to(project_root))
+    return result
 
-# SoC 配置文件路径映射（相对于项目根目录）
-_SOC_CONFIGS: dict[str, str] = {
-    "rk3566": "platform/rockchip/rk3566/config.py",
-}
+
+def _discover_soc_configs(project_root: Path) -> dict[str, str]:
+    """自动扫描 platform/*/*/config.py，返回 {SoC名: 配置文件相对路径} 映射。
+
+    SoC 目录是平台目录的直接子目录（排除 __pycache__ 等）。
+    """
+    platform_dir = project_root / "platform"
+    result: dict[str, str] = {}
+    if not platform_dir.is_dir():
+        return result
+    for plat_child in sorted(platform_dir.iterdir()):
+        if not plat_child.is_dir() or plat_child.name.startswith((".", "_")):
+            continue
+        for soc_child in sorted(plat_child.iterdir()):
+            if not soc_child.is_dir() or soc_child.name.startswith((".", "_")):
+                continue
+            config_file = soc_child / "config.py"
+            if config_file.is_file():
+                result[soc_child.name] = str(config_file.relative_to(project_root))
+    return result
 
 
 def _project_root() -> Path:
@@ -70,18 +95,22 @@ def discover_boards(project_root: Path | None = None) -> dict[str, dict]:
 def _load_platform_config(platform: str, project_root: Path | None = None) -> dict:
     """加载平台配置（第一层）。"""
     root = Path(project_root) if project_root else _project_root()
-    rel_path = _PLATFORM_CONFIGS.get(platform)
+    configs = _discover_platform_configs(root)
+    rel_path = configs.get(platform)
     if rel_path is None:
-        raise ValueError(f"未注册的平台：{platform}")
+        available = ", ".join(sorted(configs)) or "无"
+        raise ValueError(f"未发现平台：{platform}（可用: {available}）")
     return _load_module_var(root / rel_path, "PLATFORM")
 
 
 def _load_soc_config(soc: str, project_root: Path | None = None) -> dict:
     """加载 SoC 配置（第二层）。"""
     root = Path(project_root) if project_root else _project_root()
-    rel_path = _SOC_CONFIGS.get(soc)
+    configs = _discover_soc_configs(root)
+    rel_path = configs.get(soc)
     if rel_path is None:
-        raise ValueError(f"未注册的 SoC：{soc}")
+        available = ", ".join(sorted(configs)) or "无"
+        raise ValueError(f"未发现 SoC：{soc}（可用: {available}）")
     return _load_module_var(root / rel_path, "SOC")
 
 

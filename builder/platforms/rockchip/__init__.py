@@ -3,6 +3,18 @@
 from builder.docker import DockerRunner
 from builder.source import SourceManager
 
+# 产物名映射：(组件, collect key) → target 目录下的文件名/目录名
+ARTIFACT_NAMES = {
+    ("kernel",     "dtbos"):      "overlay",
+    ("kernel",     "modules"):    "modules",
+    ("bootloader", "bootloader"): "u-boot.itb",
+    ("bootloader", "idbloader"):  "idbloader.img",
+    ("bootloader", "miniloader"): "miniloader.bin",
+    ("boot",       "boot"):       "boot.img",
+    ("rootfs",     "rootfs"):     "rootfs.img",
+    ("image",      "image"):      "raw.img",
+}
+
 
 def create_builder(component: str, docker: DockerRunner, source: SourceManager):
     """根据组件名创建对应的 Rockchip 构建器。"""

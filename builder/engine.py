@@ -100,18 +100,15 @@ class BuildEngine:
         builder.output = self.output
         return builder.build_all()
 
-    # (组件, collect key) → target 目录下的文件名/目录名。
-    # 未在表中的 key 保持源文件原始文件名。
-    _ARTIFACT_NAMES = {
-        ("kernel",     "dtbos"):      "overlay",   # DTB overlay 目录
-        ("kernel",     "modules"):    "modules",   # 内核模块 staging 目录
-        ("bootloader", "bootloader"): "u-boot.itb",
-        ("bootloader", "idbloader"):  "idbloader.img",
-        ("bootloader", "miniloader"): "miniloader.bin",
-        ("boot",       "boot"):       "boot.img",
-        ("rootfs",     "rootfs"):     "rootfs.img",
-        ("image",      "image"):      "raw.img",
-    }
+    def _get_artifact_names(self) -> dict:
+        """从当前平台模块获取产物名映射。
+
+        各平台 __init__.py 导出 ARTIFACT_NAMES 常量；
+        未在表中的 key 保持源文件原始文件名。
+        """
+        platform = self.config["platform"]
+        mod = importlib.import_module(f"builder.platforms.{platform}")
+        return getattr(mod, "ARTIFACT_NAMES", {})
 
     def _collect_artifacts(self, component: str, outputs: dict):
         """将构建产物复制到 target 目录，供刷写使用。
@@ -128,7 +125,7 @@ class BuildEngine:
             src = Path(src_path)
             if not src.exists():
                 continue
-            filename = self._ARTIFACT_NAMES.get((component, key), src.name)
+            filename = self._get_artifact_names().get((component, key), src.name)
             dest = component_dir / filename
             if src.resolve() == dest.resolve():
                 continue

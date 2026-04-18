@@ -14,17 +14,61 @@ class SourceManager:
     def ensure(self, component: str, config: dict) -> Path:
         """确保组件源码就绪，返回源码目录路径。
 
-        优先级：local_path > local_repo > repo
-          - local_path：直接用本地目录，不碰 git
-          - local_repo / repo：正常 clone，按 commit 或 branch 追同步
+        路径解析优先级：
+          1. local_path：直接用本地目录，不碰 git
+          2. from_repo + subpath：引用配置中 repos 字典声明的命名仓库
+          3. local_repo / repo：独立 clone 到 sources/<component>/<board>/
         """
         comp_config = config.get(component, {})
         local_path = comp_config.get("local_path")
         if local_path:
             return Path(local_path)
 
+        from_repo = comp_config.get("from_repo")
+        if from_repo:
+            repo_dir = self._ensure_named_repo(from_repo, config)
+            subpath = comp_config.get("subpath", "")
+            return repo_dir / subpath if subpath else repo_dir
+
         repo_dir = self.sources_dir / component / config["board"]
         self._ensure_repo(repo_dir, comp_config)
+        return repo_dir
+
+    def ensure_extra(self, name: str, cfg: dict,
+                     config: dict | None = None) -> Path:
+        """确保额外仓库就绪（BSP、device 等），返回仓库目录路径。
+
+        路径解析优先级：
+          1. cfg.from_repo + cfg.subpath：引用命名仓库子路径（需传入 config）
+          2. cfg.repo / local_repo：独立 clone 到 sources/extra/<name>/
+        """
+        from_repo = cfg.get("from_repo")
+        if from_repo:
+            if config is None:
+                raise ValueError(
+                    f"ensure_extra({name}): from_repo 模式需要传入 config 参数")
+            repo_dir = self._ensure_named_repo(from_repo, config)
+            subpath = cfg.get("subpath", "")
+            return repo_dir / subpath if subpath else repo_dir
+
+        extra_dir = self.sources_dir / "extra" / name
+        self._ensure_repo(extra_dir, cfg)
+        return extra_dir
+
+    def _ensure_named_repo(self, name: str, config: dict) -> Path:
+        """确保命名仓库就绪，返回 sources/repos/<name>/ 路径。
+
+        命名仓库声明在 config["repos"][name] 中，
+        多个组件可共享同一命名仓库（只 clone 一次）。
+        """
+        repos = config.get("repos", {})
+        if name not in repos:
+            available = ", ".join(sorted(repos)) or "无"
+            raise ValueError(
+                f"命名仓库未定义：{name}（可用: {available}）"
+                f"；请在 config 顶层 repos 字典中声明")
+        repo_dir = self.sources_dir / "repos" / name
+        self._ensure_repo(repo_dir, repos[name])
         return repo_dir
 
     def ensure_firmware(self, platform: str, config: dict) -> Path:
@@ -114,22 +158,37 @@ class SourceManager:
 
         约定：声明 branch 不声明 commit 代表"跟随远端"语义，因此 reset --hard
         会丢弃本地修改。要在源码目录里 hack 请改用 local_path。
+
+        recurse_submodules: True 时首次 clone 递归初始化子模块，
+        update 时同步更新子模块。
         """
         clone_url = self._resolve_clone_url(cfg)
         branch = cfg.get("branch", "")
         commit = cfg.get("commit", "")
+        recurse = cfg.get("recurse_submodules", False)
 
         if not repo_dir.exists():
-            self._clone(clone_url, branch, repo_dir, commit)
+            self._clone(clone_url, branch, repo_dir, commit, recurse=recurse)
             return
 
         if commit:
             if self._rev_parse(repo_dir) != commit:
                 self._fetch_checkout(repo_dir, commit)
+                if recurse:
+                    self._update_submodules(repo_dir)
             return
 
         if branch:
             self._fetch_reset_branch(repo_dir, branch)
+            if recurse:
+                self._update_submodules(repo_dir)
+
+    def _update_submodules(self, repo_dir: Path):
+        """同步更新子模块到当前 HEAD 声明的版本。"""
+        env = {**os.environ,
+               "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
+        subprocess.run(["git", "submodule", "update", "--init", "--recursive"],
+                       cwd=repo_dir, env=env, check=True, timeout=3600)
 
     def _resolve_clone_url(self, cfg: dict) -> str:
         """选出 clone 源 URL。local_repo 优先于 repo。
@@ -149,19 +208,25 @@ class SourceManager:
             return f"file://{path}"
         return cfg["repo"]
 
-    def _clone(self, repo: str, branch: str, dest: Path, commit: str = ""):
+    def _clone(self, repo: str, branch: str, dest: Path, commit: str = "",
+               recurse: bool = False):
         dest.parent.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
-        # 仅在指定分支时传入 -b 选项；branch 为空时克隆默认分支
-        cmd = ["git", "clone", "--depth=1"]
+        # recurse_submodules 场景下避免 --depth=1（浅克隆 + 子模块常出问题）
+        if recurse:
+            cmd = ["git", "clone", "--recurse-submodules"]
+        else:
+            cmd = ["git", "clone", "--depth=1"]
         if branch:
             cmd += ["-b", branch]
         cmd += [repo, str(dest)]
-        subprocess.run(cmd, env=env, check=True, timeout=1800)
+        subprocess.run(cmd, env=env, check=True, timeout=3600)
         if commit:
             subprocess.run(["git", "fetch", "--depth=1", "origin", commit],
                            cwd=dest, env=env, check=True, timeout=600)
             subprocess.run(["git", "checkout", commit], cwd=dest, check=True)
+            if recurse:
+                self._update_submodules(dest)
 
     def _rev_parse(self, repo_dir: Path) -> str:
         result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir,

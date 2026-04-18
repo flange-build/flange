@@ -98,7 +98,7 @@ class ComponentBuilder(ABC):
         cmd = ["make"]
         if arch: cmd.append(f"ARCH={arch}")
         if cross: cmd.append(f"CROSS_COMPILE={cross}")
-        cmd.append(f"-j{jobs or max((os.cpu_count() or 1) - 2, 1)}")
+        cmd.append(f"-j{jobs or max((os.cpu_count() or 1) - 4, 1)}")
         cmd.extend(extra or [])
         cmd.extend(targets)
         self.docker.run(cmd, cwd=str(src_dir), label=label)

@@ -157,6 +157,10 @@ class FlashStrategy(ABC):
     def partition_image_map(self, config: dict) -> dict[str, str]:
         """返回 {分区名: 镜像相对路径} 映射。"""
 
+    def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
+        """生成平台特定的 pre_flash 配置。默认返回空配置。"""
+        return PreFlashConfig()
+
     def wait_for_device(self, tool: Path, timeout: int = 30) -> DeviceInfo:
         """等待设备就绪，超时抛 FlashError。"""
         _step("等待设备连接...")
@@ -255,10 +259,47 @@ class RockchipFlashStrategy(FlashStrategy):
             "rootfs": "rootfs/rootfs.img",
         }
 
+    def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
+        return PreFlashConfig(download_boot="bootloader/miniloader.bin")
+
+
+class AllwinnerFlashStrategy(FlashStrategy):
+    """Allwinner 刷写策略 — SD 卡 dd 模式。"""
+
+    def find_tool(self, project_dir: Path) -> Path:
+        # SD 卡 dd 模式使用系统 dd，返回占位路径
+        return Path("/usr/bin/dd")
+
+    def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
+        # SD 卡模式不依赖 USB 设备检测
+        return None
+
+    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
+                  device: Optional["DeviceInfo"] = None):
+        # SD 卡模式无需 pre_flash
+        pass
+
+    def write_partition(self, tool: Path, offset: int, image: Path):
+        # SD 卡模式通过 raw.img dd，不逐分区写入
+        pass
+
+    def reboot(self, tool: Path):
+        _info("SD 卡模式：请手动插入 SD 卡并重启设备")
+
+    def partition_image_map(self, config: dict) -> dict[str, str]:
+        return {
+            "boot0": "bootloader/boot0_sdcard.bin",
+            "boot0_ufs": "bootloader/boot0_ufs.bin",
+            "boot_package": "bootloader/boot_package.fex",
+            "boot": "boot/boot.img",
+            "rootfs": "rootfs/rootfs.img",
+        }
+
 
 # 策略注册表
 _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
     "rockchip": RockchipFlashStrategy,
+    "allwinner": AllwinnerFlashStrategy,
 }
 
 
@@ -296,11 +337,8 @@ class FlashConfigGenerator:
                 image=image,
             ))
 
-        # 构造 pre_flash
-        pre_flash = PreFlashConfig()
-        # Rockchip 需要上传 miniloader
-        if platform == "rockchip":
-            pre_flash.download_boot = "bootloader/miniloader.bin"
+        # 构造 pre_flash（由平台策略声明）
+        pre_flash = strategy.generate_pre_flash_config(config)
 
         flash_config = FlashConfig(
             platform=platform,
