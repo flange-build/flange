@@ -1,4 +1,4 @@
-"""Allwinner 内核构建策略 — BSP 集成模式。
+"""Allwinner A733 内核构建策略 — BSP 集成模式。
 
 构建前需要将外部 BSP 仓库和 device 仓库集成到内核源码树中：
   1. BSP 仓库 symlink 到内核 bsp/ 目录（内核 Makefile 已内置 drivers-y += bsp/）
@@ -11,7 +11,7 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 
 
-class AllwinnerKernelBuilder(ComponentBuilder):
+class AllwinnerA733KernelBuilder(ComponentBuilder):
     component = "kernel"
     ARCH = "arm64"
     CROSS = "aarch64-linux-gnu-"
@@ -307,13 +307,13 @@ class AllwinnerKernelBuilder(ComponentBuilder):
         启动前必须 modprobe configfs，启动时序脆弱。通过在 defconfig 合并尾部
         追加此 fragment 恢复为内建，使 adbd 开箱可用。
 
-        合并顺序由 platform/allwinner/a733/config.py 的 kernel.defconfig 列表保证：
+        合并顺序由 platform/allwinnera733/a733/config.py 的 kernel.defconfig 列表保证：
           defconfig → bsp_defconfig → radxa.config → radxa_custom.config
           → usb_gadget.config (本 fragment) → case_insensitive_fix.config
         """
         override = src_dir / "arch" / self.ARCH / "configs" / "usb_gadget.config"
         override.write_text(
-            "# USB gadget + FunctionFS 内建覆盖（由 AllwinnerKernelBuilder 生成）\n"
+            "# USB gadget + FunctionFS 内建覆盖（由 AllwinnerA733KernelBuilder 生成）\n"
             "# 用途：覆盖 radxa.config 的 CONFIG_USB_CONFIGFS=m，恢复为内建\n"
             "CONFIG_CONFIGFS_FS=y\n"
             "CONFIG_USB_GADGET=y\n"

@@ -1,7 +1,7 @@
-"""Allwinner 平台配置 -- 第一层继承"""
+"""Allwinner A733 (allwinnera733) 平台配置 -- 第一层继承"""
 
 PLATFORM = {
-    "vendor": "allwinner",
+    "vendor": "allwinnera733",
     "flash_tool": "dd",
     "arch": "aarch64",
     "products": ["default"],

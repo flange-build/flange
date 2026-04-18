@@ -263,8 +263,8 @@ class RockchipFlashStrategy(FlashStrategy):
         return PreFlashConfig(download_boot="bootloader/miniloader.bin")
 
 
-class AllwinnerFlashStrategy(FlashStrategy):
-    """Allwinner 刷写策略 — SD 卡 dd 模式。"""
+class AllwinnerA733FlashStrategy(FlashStrategy):
+    """Allwinner A733 刷写策略 — SD 卡 dd 模式。"""
 
     def find_tool(self, project_dir: Path) -> Path:
         # SD 卡 dd 模式使用系统 dd，返回占位路径
@@ -299,7 +299,7 @@ class AllwinnerFlashStrategy(FlashStrategy):
 # 策略注册表
 _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
     "rockchip": RockchipFlashStrategy,
-    "allwinner": AllwinnerFlashStrategy,
+    "allwinnera733": AllwinnerA733FlashStrategy,
 }
 
 

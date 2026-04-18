@@ -1,4 +1,4 @@
-"""Allwinner Bootloader 构建策略 — 源码构建模式。
+"""Allwinner A733 Bootloader 构建策略 — 源码构建模式。
 
 从 u-boot-aw2501 仓库（含 7 个子模块）编译出：
   - boot0_sdcard.bin        SD 卡启动的 Allwinner SPL（预编译 boot0 + sys_config patch）
@@ -16,7 +16,7 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 
 
-class AllwinnerBootloaderBuilder(ComponentBuilder):
+class AllwinnerA733BootloaderBuilder(ComponentBuilder):
     component = "bootloader"
 
     def build(self, config: dict) -> dict:

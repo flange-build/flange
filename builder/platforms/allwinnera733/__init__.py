@@ -1,4 +1,4 @@
-"""Allwinner 平台构建策略工厂。"""
+"""Allwinner A733 平台构建策略工厂。"""
 
 from builder.docker import DockerRunner
 from builder.source import SourceManager
@@ -17,21 +17,21 @@ ARTIFACT_NAMES = {
 
 
 def create_builder(component: str, docker: DockerRunner, source: SourceManager):
-    """根据组件名创建对应的 Allwinner 构建器。"""
+    """根据组件名创建对应的 Allwinner A733 构建器。"""
     if component == "kernel":
-        from builder.platforms.allwinner.kernel import AllwinnerKernelBuilder
-        return AllwinnerKernelBuilder(docker, source)
+        from builder.platforms.allwinnera733.kernel import AllwinnerA733KernelBuilder
+        return AllwinnerA733KernelBuilder(docker, source)
     elif component == "bootloader":
-        from builder.platforms.allwinner.bootloader import AllwinnerBootloaderBuilder
-        return AllwinnerBootloaderBuilder(docker, source)
+        from builder.platforms.allwinnera733.bootloader import AllwinnerA733BootloaderBuilder
+        return AllwinnerA733BootloaderBuilder(docker, source)
     elif component == "rootfs":
-        from builder.platforms.allwinner.rootfs import AllwinnerRootfsBuilder
-        return AllwinnerRootfsBuilder(docker, source)
+        from builder.platforms.allwinnera733.rootfs import AllwinnerA733RootfsBuilder
+        return AllwinnerA733RootfsBuilder(docker, source)
     elif component == "boot":
-        from builder.platforms.allwinner.boot import AllwinnerBootBuilder
-        return AllwinnerBootBuilder(docker, source)
+        from builder.platforms.allwinnera733.boot import AllwinnerA733BootBuilder
+        return AllwinnerA733BootBuilder(docker, source)
     elif component == "image":
-        from builder.platforms.allwinner.image import AllwinnerImageBuilder
-        return AllwinnerImageBuilder(docker, source)
+        from builder.platforms.allwinnera733.image import AllwinnerA733ImageBuilder
+        return AllwinnerA733ImageBuilder(docker, source)
     else:
         raise ValueError(f"未知组件: {component}")

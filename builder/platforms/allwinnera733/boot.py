@@ -1,4 +1,4 @@
-"""Allwinner Boot 分区镜像构建策略。
+"""Allwinner A733 Boot 分区镜像构建策略。
 
 产物：boot.img（ext4 文件系统镜像），内含：
   /extlinux/Image               — kernel 二进制
@@ -15,7 +15,7 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 
 
-class AllwinnerBootBuilder(ComponentBuilder):
+class AllwinnerA733BootBuilder(ComponentBuilder):
     component = "boot"
 
     def build(self, config: dict) -> dict:

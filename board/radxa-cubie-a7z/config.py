@@ -3,7 +3,7 @@
 BOARD = {
     "board": "radxa-cubie-a7z",
     "soc": "a733",
-    "platform": "allwinner",
+    "platform": "allwinnera733",
     "kernel": {
         "dts": "sun60i-a733-cubie-a7z",
     },

@@ -1,7 +1,7 @@
 """Allwinner A733 (sun60iw2p1) SoC 配置 -- 第二层继承"""
 
 SOC = {
-    "platform": "allwinner",
+    "platform": "allwinnera733",
     "soc": "a733",
     "arch": "aarch64",
     # 命名仓库：多组件共享同一次 clone

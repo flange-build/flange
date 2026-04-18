@@ -1,4 +1,4 @@
-"""Allwinner 整盘镜像组装策略。
+"""Allwinner A733 整盘镜像组装策略。
 
 将 bootloader 固件和分区镜像按 SD 卡分区表布局组装成 raw.img。
 
@@ -15,7 +15,7 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 
 
-class AllwinnerImageBuilder(ComponentBuilder):
+class AllwinnerA733ImageBuilder(ComponentBuilder):
     component = "image"
     SECTOR_SIZE = 512
     ROOTFS_PARTUUID = "614e0000-0000-4000-8000-000000000001"

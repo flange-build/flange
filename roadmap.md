@@ -64,7 +64,7 @@
 ## 待实施
 
 ### 多平台扩展
-- Allwinner 平台策略类（`builder/platforms/allwinner/`）— 首个目标：Radxa Cubie A7Z (A733)
+- Allwinner A733 平台策略类（`builder/platforms/allwinnera733/`）— 首个目标：Radxa Cubie A7Z (A733)
 - Qualcomm 平台策略类
 
 ---

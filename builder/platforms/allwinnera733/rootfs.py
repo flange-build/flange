@@ -1,4 +1,4 @@
-"""Allwinner Rootfs 构建策略。
+"""Allwinner A733 Rootfs 构建策略。
 
 复用 RootfsBuilder 基类的两阶段缓存、overlay、firmware 等通用能力，
 与 Rockchip 版本的主要差异在于 fstab 中 root 分区的定位方式。
@@ -11,7 +11,7 @@ from builder.rootfs import RootfsBuilder
 from builder.chroot import ChrootContext
 
 
-class AllwinnerRootfsBuilder(RootfsBuilder):
+class AllwinnerA733RootfsBuilder(RootfsBuilder):
     component = "rootfs"
 
     def build(self, config: dict) -> dict:
