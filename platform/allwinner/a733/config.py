@@ -23,7 +23,8 @@ SOC = {
         # bsp_defconfig 包含 CONFIG_AW_BSP / CONFIG_ARCH_SUN60IW2 /
         # CONFIG_AW_UART_NG 等关键 SoC 驱动；必须合并否则 UART 等外设不工作
         "defconfig": ["defconfig", "bsp_defconfig", "radxa.config",
-                      "radxa_custom.config", "case_insensitive_fix.config"],
+                      "radxa_custom.config", "usb_gadget.config",
+                      "case_insensitive_fix.config"],
         "dts_dir": "allwinner",
     },
     "kernel_bsp": {

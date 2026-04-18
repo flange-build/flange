@@ -12,7 +12,7 @@ PLATFORM = {
             "iputils-ping", "iproute2", "openssh-server", "sudo",
             "bash", "ca-certificates", "locales",
         ],
-        "custom_packages": [],
+        "custom_packages": ["adbd"],
     },
     "+rootfs": {
         "+packages:debug": ["gdb", "strace", "tcpdump", "valgrind"],

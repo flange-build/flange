@@ -53,6 +53,7 @@ class AllwinnerKernelBuilder(ComponentBuilder):
         self._integrate_dts(src_dir, bsp_dir, device_dir, config)
 
         self._write_case_insensitive_fix(src_dir)
+        self._write_usb_gadget_override(src_dir)
         self.configure(src_dir, config)
         self.compile(src_dir, config)
         result = self.collect(src_dir, config)
@@ -298,6 +299,28 @@ class AllwinnerKernelBuilder(ComponentBuilder):
             "CONFIG_IP6_NF_MATCH_HL=n\n"
         )
         self._status("FS 大小写不敏感，启用 case_insensitive_fix")
+
+    def _write_usb_gadget_override(self, src_dir: Path):
+        """生成 config fragment 强制 USB gadget + FunctionFS 为内建。
+
+        上游 radxa.config 将 CONFIG_USB_CONFIGFS 降为 =m，导致 usbdevice.service
+        启动前必须 modprobe configfs，启动时序脆弱。通过在 defconfig 合并尾部
+        追加此 fragment 恢复为内建，使 adbd 开箱可用。
+
+        合并顺序由 platform/allwinner/a733/config.py 的 kernel.defconfig 列表保证：
+          defconfig → bsp_defconfig → radxa.config → radxa_custom.config
+          → usb_gadget.config (本 fragment) → case_insensitive_fix.config
+        """
+        override = src_dir / "arch" / self.ARCH / "configs" / "usb_gadget.config"
+        override.write_text(
+            "# USB gadget + FunctionFS 内建覆盖（由 AllwinnerKernelBuilder 生成）\n"
+            "# 用途：覆盖 radxa.config 的 CONFIG_USB_CONFIGFS=m，恢复为内建\n"
+            "CONFIG_CONFIGFS_FS=y\n"
+            "CONFIG_USB_GADGET=y\n"
+            "CONFIG_USB_CONFIGFS=y\n"
+            "CONFIG_USB_CONFIGFS_F_FS=y\n"
+        )
+        self._status("usb_gadget.config 生成")
 
     def configure(self, src_dir: Path, config: dict):
         """支持多步 defconfig 合并。"""
