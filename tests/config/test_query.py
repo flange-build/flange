@@ -26,9 +26,9 @@ class TestGetValidTargets:
         assert isinstance(targets, list)
 
     def test_expected_count(self, boards):
-        """4 板 x 1 product x 2 variants = 8 个目标。"""
+        """5 板 x 1 product x 2 variants = 10 个目标。"""
         targets = get_valid_targets(boards=boards)
-        assert len(targets) == 8
+        assert len(targets) == 10
 
     def test_contains_radxa_targets(self, boards):
         targets = get_valid_targets(boards=boards)
