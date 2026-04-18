@@ -1,14 +1,14 @@
 ## 1. 前置条件
 
-- [ ] 1.1 运行 `openspec list`，确认 `add-shared-repo-references` 不在未归档列表中；若仍未归档，先完成 `/opsx:apply add-shared-repo-references` 与 `/opsx:archive add-shared-repo-references`，避免两份未归档变更同时修改 `allwinner-platform` capability
-- [ ] 1.2 确认工作树干净（`git status` 无未提交改动），便于后续 `git mv` 提交独立成形
-- [ ] 1.3 全文 grep 盘点 `"allwinner"` 字面量与 `\ballwinner\b` 目录引用（已在 proposal 阶段列出，此处按最新工作树再确认一遍），产出待改清单
+- [x] 1.1 运行 `openspec list`，确认 `add-shared-repo-references` 不在未归档列表中；若仍未归档，先完成 `/opsx:apply add-shared-repo-references` 与 `/opsx:archive add-shared-repo-references`，避免两份未归档变更同时修改 `allwinner-platform` capability
+- [x] 1.2 确认工作树干净（`git status` 无未提交改动），便于后续 `git mv` 提交独立成形
+- [x] 1.3 全文 grep 盘点 `"allwinner"` 字面量与 `\ballwinner\b` 目录引用（已在 proposal 阶段列出，此处按最新工作树再确认一遍），产出待改清单
 
 ## 2. 平台配置目录搬家（git mv 提交）
 
-- [ ] 2.1 `git mv platform/allwinner platform/allwinnera733`
-- [ ] 2.2 `git mv builder/platforms/allwinner builder/platforms/allwinnera733`
-- [ ] 2.3 提交"rename: allwinner → allwinnera733 目录搬家"，保持该 commit 仅含 rename，不混入内容修改
+- [x] 2.1 `git mv platform/allwinner platform/allwinnera733`
+- [x] 2.2 `git mv builder/platforms/allwinner builder/platforms/allwinnera733`
+- [x] 2.3 提交"rename: allwinner → allwinnera733 目录搬家"，保持该 commit 仅含 rename，不混入内容修改
 
 ## 3. 配置与字面量改写
 
