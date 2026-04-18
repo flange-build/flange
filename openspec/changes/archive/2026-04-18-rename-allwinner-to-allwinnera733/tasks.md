@@ -35,10 +35,10 @@
 
 ## 6. 构建验证
 
-- [ ] 6.1 清空 `output/radxa-cubie-a7z-default-debug/` 和 `cache/` 中该 target 相关缓存，迫使从头构建
-- [ ] 6.2 执行 `flange lunch radxa-cubie-a7z-default-debug` 与 `flange build`，确认完整构建成功、无 `未发现平台：allwinnera733` 或 `不支持的平台` 类错误
-- [ ] 6.3 检查生成的 `output/radxa-cubie-a7z-default-debug/flash-config.json`：`platform` 字段为 `"allwinnera733"`，分区表、pre_flash、flash_tool 与旧版一致
-- [ ] 6.4 物理 SD 卡刷写并上机启动 A7Z，验证 kernel console、rootfs 登录、USB adbd（`adb shell`）可用（平行于已归档 change `ceed497 feat(allwinner): A7Z 默认启用 adbd 调试通道` 的验收）
+- [x] 6.1 清空 `output/radxa-cubie-a7z-default-debug/` 和 `cache/` 中该 target 相关缓存，迫使从头构建（`flange clean` 已清 `target/radxa-cubie-a7z/default/debug/`）
+- [x] 6.2 执行 `flange lunch radxa-cubie-a7z-default-debug` 与 `flange build`，确认完整构建成功、无 `未发现平台：allwinnera733` 或 `不支持的平台` 类错误（Python smoke test + 完整 Docker build 均通过）
+- [x] 6.3 检查生成的 `output/radxa-cubie-a7z-default-debug/flash-config.json`：`platform` 字段为 `"allwinnera733"`，分区表、pre_flash、flash_tool 与旧版一致（用户手动验证通过）
+- [x] 6.4 物理 SD 卡刷写并上机启动 A7Z，验证 kernel console、rootfs 登录、USB adbd（`adb shell`）可用（平行于已归档 change `ceed497 feat(allwinner): A7Z 默认启用 adbd 调试通道` 的验收）（用户验证通过）
 
 ## 7. 文档与 OpenSpec 元数据
 
@@ -49,7 +49,7 @@
 
 ## 8. OpenSpec 校验与归档
 
-- [ ] 8.1 运行 `openspec validate rename-allwinner-to-allwinnera733`，确保所有 delta 语法正确
-- [ ] 8.2 运行 `openspec diff --change rename-allwinner-to-allwinnera733` 复核：新增 `allwinnera733-platform` / `allwinnera733-flash`，删除 `allwinner-platform` / `allwinner-flash`，`platform-abstraction` 中三条 scenario 文本更新
-- [ ] 8.3 `git log --name-status` 校验 git 重命名检测生效（`R100` 或接近满分），本次改名不应出现大量"add + delete"
-- [ ] 8.4 所有任务完成后执行 `/opsx:archive rename-allwinner-to-allwinnera733`
+- [x] 8.1 运行 `openspec validate rename-allwinner-to-allwinnera733`，确保所有 delta 语法正确（通过："Change 'rename-allwinner-to-allwinnera733' is valid"，40 deltas）
+- [x] 8.2 运行 `openspec diff --change rename-allwinner-to-allwinnera733` 复核：新增 `allwinnera733-platform` / `allwinnera733-flash`，删除 `allwinner-platform` / `allwinner-flash`，`platform-abstraction` 中三条 scenario 文本更新（`openspec show` JSON 输出验证：REMOVED 覆盖 allwinner-flash/allwinner-platform 所有 requirement，新增按预期）
+- [x] 8.3 `git log --name-status` 校验 git 重命名检测生效（`R100` 或接近满分），本次改名不应出现大量"add + delete"（全部 `R100`，10 个 rename 项）
+- [x] 8.4 所有任务完成后执行 `/opsx:archive rename-allwinner-to-allwinnera733`
