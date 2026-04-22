@@ -11,7 +11,7 @@ import copy
 
 import pytest
 
-from config.merge import deep_merge, resolve_conditions
+from builder.config.merge import deep_merge, resolve_conditions
 
 
 # ── deep_merge 测试 ──────────────────────────────────────────────

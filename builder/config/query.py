@@ -6,7 +6,7 @@
 
 from pathlib import Path
 
-from config.registry import discover_boards, get_board_config
+from builder.config.registry import discover_boards, get_board_config
 
 
 def _merged_configs(

@@ -116,7 +116,7 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
     def _build_phase2(self, rootfs_dir: Path, config: dict):
         product = config.get("product", "default")
         variant = config.get("variant", "release")
-        target_dir = Path("target") / config["board"] / product / variant
+        target_dir = Path(".build/target") / config["board"] / product / variant
         app_deb_dir = target_dir / "app"
         if app_deb_dir.exists():
             deb_files = sorted(app_deb_dir.glob("*.deb"))
@@ -144,7 +144,7 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict):
         product = config.get("product", "default")
         variant = config.get("variant", "release")
-        target_dir = Path("target") / config["board"] / product / variant
+        target_dir = Path(".build/target") / config["board"] / product / variant
         modules_src = target_dir / "kernel" / "modules" / "lib" / "modules"
         if not modules_src.is_dir():
             return

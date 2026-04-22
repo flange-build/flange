@@ -320,13 +320,13 @@ class TestInvalidCombinations:
 # ---------------------------------------------------------------------------
 
 class TestDefaultTargetDir:
-    """不指定 target_dir 时，目录应在 <project_root>/app/<name>/ 下创建。"""
+    """不指定 target_dir 时，目录应在 <project_root>/components/app/<name>/ 下创建。"""
 
     def test_default_dir_in_app_folder(self, tmp_path):
-        """默认目标目录应为 app/<name>/。"""
+        """默认目标目录应为 components/app/<name>/。"""
         s = AppScaffold(project_root=tmp_path)
         dest = s.create("myapp", "exec", "none")
-        expected = tmp_path / "app" / "myapp"
+        expected = tmp_path / "components" / "app" / "myapp"
         assert dest == expected
         assert dest.exists()
 

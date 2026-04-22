@@ -9,7 +9,7 @@ class SourceManager:
     """管理组件源码仓库的克隆、更新和本地覆盖。"""
 
     def __init__(self, sources_dir: Path = None):
-        self.sources_dir = sources_dir or Path("sources")
+        self.sources_dir = sources_dir or Path(".build/sources")
 
     def ensure(self, component: str, config: dict) -> Path:
         """确保组件源码就绪，返回源码目录路径。
@@ -17,7 +17,7 @@ class SourceManager:
         路径解析优先级：
           1. local_path：直接用本地目录，不碰 git
           2. from_repo + subpath：引用配置中 repos 字典声明的命名仓库
-          3. local_repo / repo：独立 clone 到 sources/<component>/<board>/
+          3. local_repo / repo：独立 clone 到 .build/sources/<component>/<board>/
         """
         comp_config = config.get(component, {})
         local_path = comp_config.get("local_path")
@@ -40,7 +40,7 @@ class SourceManager:
 
         路径解析优先级：
           1. cfg.from_repo + cfg.subpath：引用命名仓库子路径（需传入 config）
-          2. cfg.repo / local_repo：独立 clone 到 sources/extra/<name>/
+          2. cfg.repo / local_repo：独立 clone 到 .build/sources/extra/<name>/
         """
         from_repo = cfg.get("from_repo")
         if from_repo:
@@ -56,7 +56,7 @@ class SourceManager:
         return extra_dir
 
     def _ensure_named_repo(self, name: str, config: dict) -> Path:
-        """确保命名仓库就绪，返回 sources/repos/<name>/ 路径。
+        """确保命名仓库就绪，返回 .build/sources/repos/<name>/ 路径。
 
         命名仓库声明在 config["repos"][name] 中，
         多个组件可共享同一命名仓库（只 clone 一次）。
@@ -83,7 +83,7 @@ class SourceManager:
     def ensure_extra_firmware(self, name: str, cfg: dict) -> Path:
         """确保额外固件仓库就绪，返回仓库根目录路径。
 
-        存储路径：sources/extra-firmware/<name>/
+        存储路径：.build/sources/extra-firmware/<name>/
         cfg 格式与 rkbin 相同（repo/local_repo/branch/commit）。
         """
         fw_dir = self.sources_dir / "extra-firmware" / name
@@ -106,7 +106,7 @@ class SourceManager:
         """确保 App 源码就绪，返回 App 目录路径。
 
         查找顺序：
-          1. 仓库内 app/<app_name>/ 目录（本地开发 App）
+          1. 仓库内 components/app/<app_name>/ 目录（本地开发 App）
           2. board config 中 external_apps 字段声明的外部仓库
 
         参数：
@@ -119,8 +119,8 @@ class SourceManager:
         抛出：
             ValueError: App 既不在本地目录，也未在 external_apps 中声明
         """
-        # 步骤 1：优先查找仓库内 app/<name>/ 目录
-        local_dir = Path(f"app/{app_name}")
+        # 步骤 1：优先查找仓库内 components/app/<name>/ 目录
+        local_dir = Path(f"components/app/{app_name}")
         if local_dir.exists():
             return local_dir
 
@@ -132,7 +132,7 @@ class SourceManager:
                 f"且未在 external_apps 中声明"
             )
 
-        # 步骤 3：克隆外部仓库到 sources/apps/<name>
+        # 步骤 3：克隆外部仓库到 .build/sources/apps/<name>
         app_dir = self.sources_dir / "apps" / app_name
         if not app_dir.exists():
             # tag 优先于 commit，branch 为可选

@@ -63,7 +63,7 @@ class AllwinnerA733KernelBuilder(ComponentBuilder):
     def _locate_aggregate_root(self, src_dir: Path, config: dict) -> Path:
         """定位聚合仓库根目录。
 
-        from_repo 模式下 src_dir 是 sources/repos/<name>/<subpath>，
+        from_repo 模式下 src_dir 是 .build/sources/repos/<name>/<subpath>，
         聚合仓库根是其上两级（去掉 subpath）。直接 clone 场景下
         src_dir 自身就是 Git 仓库根。
         """

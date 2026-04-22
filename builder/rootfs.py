@@ -20,14 +20,14 @@ class RootfsBuilder(ComponentBuilder):
         """按优先级顺序应用 overlay 文件：rootfs → platform → board。
 
         优先级从低到高，后应用的同名文件覆盖先应用的：
-          rootfs/overlay/          与 OS/发行版绑定，所有平台共用
-          platform/<p>/overlay/    与芯片平台绑定
-          board/<b>/overlay/       与具体板子绑定
+          components/rootfs/overlay/          与 OS/发行版绑定，所有平台共用
+          components/platform/<p>/overlay/    与芯片平台绑定
+          components/board/<b>/overlay/       与具体板子绑定
         """
         for overlay_dir, label in [
-            (Path("rootfs/overlay"),                          "rootfs"),
-            (Path(f"platform/{config['platform']}/overlay"),  "platform"),
-            (Path(f"board/{config['board']}/overlay"),        "board"),
+            (Path("components/rootfs/overlay"),                          "rootfs"),
+            (Path(f"components/platform/{config['platform']}/overlay"),  "platform"),
+            (Path(f"components/board/{config['board']}/overlay"),        "board"),
         ]:
             if overlay_dir.exists() and any(overlay_dir.iterdir()):
                 self._status(f"复制 {label} overlay 文件...")

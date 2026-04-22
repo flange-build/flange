@@ -55,7 +55,7 @@ class AppScaffold:
 
         scaffold = AppScaffold()
         path = scaffold.create("my-app", "exec", "cmake")
-        print(path)  # /path/to/app/my-app/
+        print(path)  # /path/to/components/app/my-app/
     """
 
     def __init__(self, project_root: Optional[Path] = None) -> None:
@@ -85,7 +85,7 @@ class AppScaffold:
             name:         App 名称，用作目录名与模板变量 $name
             app_type:     App 类型（exec / service / lib / test）
             build_system: 构建系统（none / cmake / meson / make / swift）
-            target_dir:   目标父目录；None 时默认为 <project_root>/app/<name>/
+            target_dir:   目标父目录；None 时默认为 <project_root>/components/app/<name>/
             version:      版本字符串，默认 0.1.0
             description:  描述字符串，默认空
 
@@ -100,7 +100,7 @@ class AppScaffold:
 
         # 2. 确定目标目录
         if target_dir is None:
-            dest = self._root / "app" / name
+            dest = self._root / "components" / "app" / name
         else:
             dest = Path(target_dir)
 

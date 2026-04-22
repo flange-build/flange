@@ -58,7 +58,7 @@ class BuildCache:
         board = config["board"]
         product = config.get("product", "default")
         variant = config.get("variant", "release")
-        self.target_dir = (target_base or Path("target")) / board / product / variant
+        self.target_dir = (target_base or Path(".build/target")) / board / product / variant
         # 记忆化：避免 image→boot→kernel 等路径上重复计算
         self._hash_cache: dict[str, str] = {}
 
@@ -218,9 +218,9 @@ class BuildCache:
 
         # overlay 目录递归哈希（rootfs → platform → board）
         for overlay_dir in [
-            Path("rootfs/overlay"),
-            Path(f"platform/{self.config.get('platform', '')}/overlay"),
-            Path(f"board/{self.config['board']}/overlay"),
+            Path("components/rootfs/overlay"),
+            Path(f"components/platform/{self.config.get('platform', '')}/overlay"),
+            Path(f"components/board/{self.config['board']}/overlay"),
         ]:
             if overlay_dir.exists():
                 self._hash_directory(h, overlay_dir)
@@ -245,7 +245,7 @@ class BuildCache:
         custom_packages: list = rootfs_cfg.get("custom_packages", [])
         h.update(json.dumps(sorted(custom_packages)).encode())
         for pkg in sorted(custom_packages):
-            app_dir = Path("app") / pkg
+            app_dir = Path("components/app") / pkg
             if app_dir.exists():
                 self._hash_directory(h, app_dir)
             else:
@@ -259,7 +259,7 @@ class BuildCache:
         若源码目录或补丁目录不存在（如 boot/image 没有源码树），安全跳过。
         """
         # 源码 commit
-        src_dir = Path("sources") / component / self.config["board"]
+        src_dir = Path(".build/sources") / component / self.config["board"]
         if src_dir.exists():
             h.update(b"src:")
             h.update(self._git_head(src_dir).encode())
@@ -268,8 +268,8 @@ class BuildCache:
         platform = self.config.get("platform", "")
         board = self.config["board"]
         for patch_dir in [
-            Path(f"platform/{platform}/patches/{component}"),
-            Path(f"board/{board}/patches/{component}"),
+            Path(f"components/platform/{platform}/patches/{component}"),
+            Path(f"components/board/{board}/patches/{component}"),
         ]:
             if patch_dir.exists():
                 for p in sorted(patch_dir.glob("*.patch")):
@@ -293,7 +293,7 @@ class BuildCache:
         bootloader 构建时会从 rkbin 读 BL31/DDR init/SPL 等二进制，
         rkbin 升级会改变这些二进制，必须触发 bootloader 重建。
         """
-        fw_dir = Path(f"sources/firmware/{self.config['platform']}")
+        fw_dir = Path(f".build/sources/firmware/{self.config['platform']}")
         if fw_dir.exists():
             h.update(b"rkbin:")
             h.update(self._git_head(fw_dir).encode())

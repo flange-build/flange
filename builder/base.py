@@ -47,8 +47,8 @@ class ComponentBuilder(ABC):
         board = config["board"]
         count = 0
         for patch_dir in [
-            Path(f"platform/{platform}/patches/{self.component}"),
-            Path(f"board/{board}/patches/{self.component}"),
+            Path(f"components/platform/{platform}/patches/{self.component}"),
+            Path(f"components/board/{board}/patches/{self.component}"),
         ]:
             if patch_dir.exists():
                 count += len(list(patch_dir.glob("*.patch")))
@@ -70,8 +70,8 @@ class ComponentBuilder(ABC):
         board = config["board"]
         all_patches = []
         for patch_dir in [
-            Path(f"platform/{platform}/patches/{self.component}"),
-            Path(f"board/{board}/patches/{self.component}"),
+            Path(f"components/platform/{platform}/patches/{self.component}"),
+            Path(f"components/board/{board}/patches/{self.component}"),
         ]:
             if patch_dir.exists():
                 all_patches.extend(sorted(patch_dir.glob("*.patch")))

@@ -133,7 +133,7 @@ class RockchipRootfsBuilder(RootfsBuilder):
         # 先安装 deb，再安装额外固件，最后覆盖 overlay（overlay 优先级最高）
         product = config.get("product", "default")
         variant = config.get("variant", "release")
-        target_dir = Path("target") / config["board"] / product / variant
+        target_dir = Path(".build/target") / config["board"] / product / variant
         app_deb_dir = target_dir / "app"
         if app_deb_dir.exists():
             deb_files = sorted(app_deb_dir.glob("*.deb"))
@@ -170,7 +170,7 @@ class RockchipRootfsBuilder(RootfsBuilder):
         """
         product = config.get("product", "default")
         variant = config.get("variant", "release")
-        target_dir = Path("target") / config["board"] / product / variant
+        target_dir = Path(".build/target") / config["board"] / product / variant
         modules_src = target_dir / "kernel" / "modules" / "lib" / "modules"
         if not modules_src.is_dir():
             return

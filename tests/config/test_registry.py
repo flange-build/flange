@@ -8,7 +8,7 @@
 
 import pytest
 
-from config.registry import discover_boards, get_board_config, resolve_config
+from builder.config.registry import discover_boards, get_board_config, resolve_config
 
 
 # ── 所有已知板子 ──────────────────────────────────────────────────

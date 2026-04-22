@@ -411,11 +411,11 @@ class AppBuilder:
         self._config = config
         self._project_dir = Path(project_dir) if project_dir else Path.cwd()
 
-        # 推导输出目录：target/<board>/<product>/<variant>/app/
+        # 推导输出目录：.build/target/<board>/<product>/<variant>/app/
         board   = config.get("board", "unknown")
         product = config.get("product", "default")
         variant = config.get("variant", "release")
-        self._output_dir = self._project_dir / "target" / board / product / variant / "app"
+        self._output_dir = self._project_dir / ".build/target" / board / product / variant / "app"
 
         # 目标架构
         self._arch: str = config.get("arch", "aarch64")
@@ -655,7 +655,7 @@ class AppBuilder:
         variant = self._config.get("variant", "release")
 
         sysroot_base = (
-            self._project_dir / "target" / board / product / variant / "sysroot"
+            self._project_dir / ".build/target" / board / product / variant / "sysroot"
         )
 
         app_name = spec.app.name
@@ -701,8 +701,8 @@ class AppBuilder:
             FileNotFoundError: 本地目录不存在且 SourceManager 未配置
             ValueError: App 既不在本地，也未在 external_apps 中声明
         """
-        # 步骤 1：优先在本地 app/ 目录查找
-        local_dir = self._project_dir / "app" / app_name
+        # 步骤 1：优先在本地 components/app/ 目录查找
+        local_dir = self._project_dir / "components" / "app" / app_name
         if local_dir.is_dir():
             return local_dir
 
@@ -711,7 +711,7 @@ class AppBuilder:
             raise FileNotFoundError(
                 f"App '{app_name}' 目录不存在，已查找：{local_dir}"
             )
-        # ensure_app 内部使用相对路径 "app/<name>" 查找，此处已知不存在，
+        # ensure_app 内部使用相对路径 "components/app/<name>" 查找，此处已知不存在，
         # 直接调用以处理 external_apps 分支（ensure_app 会再次检查本地，无副作用）
         return self._source.ensure_app(app_name, self._config)
 
@@ -846,10 +846,10 @@ class AppBuilder:
             board   = config.get("board",   "unknown")
             product = config.get("product", "default")
             variant = config.get("variant", "release")
-            # sysroot 目录约定：target/<board>/<product>/<variant>/sysroot/
+            # sysroot 目录约定：.build/target/<board>/<product>/<variant>/sysroot/
             sysroot = (
                 self._project_dir
-                / "target" / board / product / variant / "sysroot"
+                / ".build/target" / board / product / variant / "sysroot"
             )
             sysroot_str = str(sysroot)
 

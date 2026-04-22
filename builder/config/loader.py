@@ -16,7 +16,7 @@ state 文件格式:
 import json
 from pathlib import Path
 
-from config.registry import resolve_config
+from builder.config.registry import resolve_config
 
 
 STATE_FILE = Path(".flange/current_config")

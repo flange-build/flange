@@ -7,8 +7,8 @@
 
 import pytest
 
-from config.query import get_valid_targets, parse_target
-from config.registry import discover_boards
+from builder.config.query import get_valid_targets, parse_target
+from builder.config.registry import discover_boards
 
 
 # ── get_valid_targets 测试 ───────────────────────────────────────

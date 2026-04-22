@@ -9,11 +9,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from config.merge import deep_merge, resolve_conditions
+from builder.config.merge import deep_merge, resolve_conditions
+from builder.paths import PROJECT_ROOT, components_dir
 
 def _discover_platform_configs(project_root: Path) -> dict[str, str]:
-    """自动扫描 platform/*/config.py，返回 {平台名: 配置文件相对路径} 映射。"""
-    platform_dir = project_root / "platform"
+    """自动扫描 components/platform/*/config.py，返回 {平台名: 配置文件相对路径} 映射。"""
+    platform_dir = components_dir(project_root) / "platform"
     result: dict[str, str] = {}
     if not platform_dir.is_dir():
         return result
@@ -27,11 +28,11 @@ def _discover_platform_configs(project_root: Path) -> dict[str, str]:
 
 
 def _discover_soc_configs(project_root: Path) -> dict[str, str]:
-    """自动扫描 platform/*/*/config.py，返回 {SoC名: 配置文件相对路径} 映射。
+    """自动扫描 components/platform/*/*/config.py，返回 {SoC名: 配置文件相对路径} 映射。
 
     SoC 目录是平台目录的直接子目录（排除 __pycache__ 等）。
     """
-    platform_dir = project_root / "platform"
+    platform_dir = components_dir(project_root) / "platform"
     result: dict[str, str] = {}
     if not platform_dir.is_dir():
         return result
@@ -48,8 +49,8 @@ def _discover_soc_configs(project_root: Path) -> dict[str, str]:
 
 
 def _project_root() -> Path:
-    """返回项目根目录（config/ 的上一级）。"""
-    return Path(__file__).resolve().parent.parent
+    """返回项目根目录。"""
+    return PROJECT_ROOT
 
 
 def _load_module_var(file_path: Path, var_name: str) -> Any:
@@ -76,7 +77,7 @@ def discover_boards(project_root: Path | None = None) -> dict[str, dict]:
     仅发现含 config.py 的板级目录，跳过无配置的目录。
     """
     root = Path(project_root) if project_root else _project_root()
-    board_dir = root / "board"
+    board_dir = components_dir(root) / "board"
     boards: dict[str, dict] = {}
 
     if not board_dir.is_dir():
