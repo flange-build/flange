@@ -75,4 +75,4 @@
 
 - [x] 10.1 按任务组拆分 commit：`.gitignore` / components 搬迁 / builder 代码层 / envsetup / 容器与 spec / 活文档 / 变更提案 共 7 个 commit
 - [ ] 10.2 **待用户创建 PR 时填写** BREAKING 说明
-- [ ] 10.3 **待合入后** 运行 `/opsx:archive reorganize-repo-layout`
+- [x] 10.3 运行 `/opsx:archive reorganize-repo-layout`
