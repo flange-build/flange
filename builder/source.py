@@ -8,8 +8,17 @@ from pathlib import Path
 class SourceManager:
     """管理组件源码仓库的克隆、更新和本地覆盖。"""
 
-    def __init__(self, sources_dir: Path = None):
+    def __init__(
+        self,
+        sources_dir: Path = None,
+        project_root: Path | None = None,
+    ):
         self.sources_dir = sources_dir or Path(".build/sources")
+        # project_root 为 None 时，ensure_app 访问本地 components/app/ 时以 cwd
+        # 为锚点（保持既有行为与测试兼容）；显式传入可避免依赖当前工作目录。
+        self._project_root: Path | None = (
+            Path(project_root) if project_root is not None else None
+        )
 
     def ensure(self, component: str, config: dict) -> Path:
         """确保组件源码就绪，返回源码目录路径。
@@ -105,46 +114,94 @@ class SourceManager:
     def ensure_app(self, app_name: str, config: dict) -> Path:
         """确保 App 源码就绪，返回 App 目录路径。
 
-        查找顺序：
-          1. 仓库内 components/app/<app_name>/ 目录（本地开发 App）
-          2. board config 中 external_apps 字段声明的外部仓库
+        查找顺序（任一层命中即终止，不回退）：
+          1. 仓库内 ``<project_root>/components/app/<name>/app.yaml``（本地优先）
+          2. ``external_apps[<name>]`` 显式注册：
+             - ``local_path`` 分支：直接指向宿主机任意目录，不触发 git
+             - ``git`` 分支：克隆到 ``<sources_dir>/apps/<name>/``
+          3. ``external_app_dirs`` 搜索路径列表：顺序遍历，首个含
+             ``<dir>/<name>/app.yaml`` 的目录命中即采用
+
+        三层未命中时抛出 ValueError，错误信息列出每一层已尝试的路径。
 
         参数：
             app_name: App 名称
-            config:   FINAL_CONFIG 字典，可含 external_apps 字段
+            config:   FINAL_CONFIG 字典，可含 ``external_apps`` /
+                      ``external_app_dirs`` 字段
 
         返回：
             App 目录 Path
-
-        抛出：
-            ValueError: App 既不在本地目录，也未在 external_apps 中声明
         """
-        # 步骤 1：优先查找仓库内 components/app/<name>/ 目录
-        local_dir = Path(f"components/app/{app_name}")
-        if local_dir.exists():
+        attempted: list[str] = []
+        project_root = self._project_root or Path.cwd()
+
+        # ---- 层 1：仓库内 components/app/<name>/ ---------------------------
+        local_dir = project_root / "components" / "app" / app_name
+        local_yaml = local_dir / "app.yaml"
+        if local_yaml.is_file():
             return local_dir
+        attempted.append(
+            f"本地 {local_dir} "
+            f"({'目录不存在' if not local_dir.exists() else 'app.yaml 缺失'})"
+        )
 
-        # 步骤 2：查找 external_apps 配置
+        # ---- 层 2：external_apps 显式注册 ----------------------------------
         ext = config.get("external_apps", {}).get(app_name)
-        if not ext:
+        if ext is None:
+            attempted.append(f"external_apps[{app_name!r}] 未声明")
+        else:
+            # 2a. local_path 分支：out-of-tree 本地目录，严格校验后直接返回，
+            # 不回退到后续层级（避免隐式降级掩盖用户配置错误）
+            if "local_path" in ext:
+                local_path = Path(ext["local_path"])
+                yaml_path = local_path / "app.yaml"
+                if yaml_path.is_file():
+                    return local_path
+                raise ValueError(
+                    f"App '{app_name}': external_apps[{app_name!r}].local_path "
+                    f"'{local_path}' "
+                    f"{'不存在' if not local_path.exists() else '缺失 app.yaml'}"
+                )
+
+            # 2b. git 分支：克隆到 sources_dir/apps/<name>/
+            if "git" in ext:
+                app_dir = self.sources_dir / "apps" / app_name
+                if not app_dir.exists():
+                    # tag 优先于 commit，branch 为可选
+                    commit_ref = ext.get("tag", ext.get("commit", ""))
+                    branch = ext.get("branch", "")
+                    self._clone(
+                        repo=ext["git"],
+                        branch=branch,
+                        dest=app_dir,
+                        commit=commit_ref,
+                    )
+                return app_dir
+
+            # external_apps 有条目但两个分支都没命中 —— 正常情况下
+            # normalize_app_sources 会在解析阶段拦住此分支；这里仅做防御性
+            # 报错，不悄悄回退到搜索路径。
             raise ValueError(
-                f"App '{app_name}' 未找到：本地目录 {local_dir} 不存在，"
-                f"且未在 external_apps 中声明"
+                f"App '{app_name}': external_apps[{app_name!r}] 缺少 "
+                f"local_path 或 git 字段"
             )
 
-        # 步骤 3：克隆外部仓库到 .build/sources/apps/<name>
-        app_dir = self.sources_dir / "apps" / app_name
-        if not app_dir.exists():
-            # tag 优先于 commit，branch 为可选
-            commit_ref = ext.get("tag", ext.get("commit", ""))
-            branch = ext.get("branch", "")
-            self._clone(
-                repo=ext["git"],
-                branch=branch,
-                dest=app_dir,
-                commit=commit_ref,
+        # ---- 层 3：external_app_dirs 搜索路径 ------------------------------
+        for d in config.get("external_app_dirs", []):
+            candidate = Path(d) / app_name
+            yaml_path = candidate / "app.yaml"
+            if yaml_path.is_file():
+                return candidate
+            attempted.append(
+                f"external_app_dirs 下 {candidate} "
+                f"({'目录不存在' if not candidate.exists() else 'app.yaml 缺失'})"
             )
-        return app_dir
+
+        # ---- 三层均未命中 --------------------------------------------------
+        bullets = "\n  - ".join(attempted) if attempted else "（无）"
+        raise ValueError(
+            f"App '{app_name}' 未找到。已尝试：\n  - {bullets}"
+        )
 
     # --- 仓库同步核心 ---
 

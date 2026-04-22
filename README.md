@@ -86,8 +86,8 @@ lunch
 | `flange clean` | 清理当前配置的构建产物 |
 | `flange status` | 显示当前配置和构建状态 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
-| `flange create app <name>` | 生成 App 工程脚手架 |
-| `flange list apps` | 列出所有可用 App |
+| `flange create app <name> [--type=<type>] [--build-system=<sys>] [--dir=<path>]` | 生成 App 工程脚手架（`--dir` 指向父目录以生成 out-of-tree App） |
+| `flange list apps` | 列出所有可用 App（本地 + external_apps + external_app_dirs） |
 | `flange docker build` | 构建 Docker 镜像 |
 | `flange docker rebuild` | 无缓存重建 Docker 镜像 |
 
@@ -372,6 +372,29 @@ BOARD = {
     },
 }
 ```
+
+### 引用 out-of-tree App
+
+把 App 源码放在仓库外时，有两种声明方式（详见 `docs/app-architecture.md` §8.4）：
+
+```python
+BOARD = {
+    # 方式 A：单个 App 显式注册
+    "external_apps": {
+        "wifi":   {"local_path": "~/workspace/wifi"},           # 本地目录
+        "zigbee": {"git": "ssh://git@example.com/zigbee.git",
+                   "tag": "v2.1.0"},                             # git 仓库
+    },
+    # 方式 B：搜索路径（父目录）——按顺序在其下找 <name>/app.yaml
+    "external_app_dirs": [
+        "~/my-flange-apps",
+        "../vendor-apps",
+    ],
+}
+```
+
+查找优先级：`components/app/` → `external_apps` → `external_app_dirs`。
+`~` 会展开，相对路径相对仓库根目录解析。
 
 条件标记规则：
 

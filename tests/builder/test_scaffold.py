@@ -341,6 +341,75 @@ class TestDefaultTargetDir:
 # 清理测试（原子性保证）
 # ---------------------------------------------------------------------------
 
+class TestParentDir:
+    """--dir / parent_dir 参数覆盖：父目录语义、自动 mkdir、目标冲突、注册指引。"""
+
+    def test_parent_dir_生成到_parent_name(self, tmp_path):
+        """parent_dir=<p> 时最终目录为 <p>/<name>/，name 实参决定子目录名。"""
+        parent = tmp_path / "vendor-apps"
+        parent.mkdir()
+        s = AppScaffold(project_root=tmp_path)
+        dest = s.create(
+            "wifi", "exec", "cmake",
+            parent_dir=parent,
+        )
+        assert dest == parent / "wifi"
+        assert (dest / "app.yaml").exists()
+
+    def test_parent_dir_不存在时自动创建(self, tmp_path):
+        """父目录不存在时应自动创建（与默认路径行为一致），不报错。"""
+        parent = tmp_path / "fresh" / "nested" / "vendor-apps"
+        assert not parent.exists()
+        s = AppScaffold(project_root=tmp_path)
+        dest = s.create("foo", "exec", "none", parent_dir=parent)
+        assert dest == parent / "foo"
+        assert dest.exists()
+
+    def test_parent_dir_下子目录已存在时报错(self, tmp_path):
+        """<parent>/<name>/ 已存在时应拒绝，不覆盖任何内容。"""
+        parent = tmp_path / "vendor"
+        parent.mkdir()
+        (parent / "bar").mkdir()
+        s = AppScaffold(project_root=tmp_path)
+        with pytest.raises(ScaffoldError, match="已存在"):
+            s.create("bar", "exec", "none", parent_dir=parent)
+
+    def test_target_dir_与_parent_dir_互斥(self, tmp_path):
+        """两个参数同时传入时应明确报错。"""
+        s = AppScaffold(project_root=tmp_path)
+        with pytest.raises(ScaffoldError, match="不能同时"):
+            s.create(
+                "x", "exec", "none",
+                target_dir=tmp_path / "out",
+                parent_dir=tmp_path / "other",
+            )
+
+    def test_out_of_tree_输出提示(self, tmp_path, capsys):
+        """生成到 components/app/ 之外时，stdout 应含 [注册指引] 片段。"""
+        parent = tmp_path / "workspace" / "my-apps"
+        parent.mkdir(parents=True)
+        s = AppScaffold(project_root=tmp_path)
+        dest = s.create("zigbee", "exec", "none", parent_dir=parent)
+
+        captured = capsys.readouterr().out
+        assert "[注册指引]" in captured
+        # 两种示例片段都应出现
+        assert "external_apps" in captured
+        assert "external_app_dirs" in captured
+        # 指引中应包含绝对路径
+        import os as _os
+        assert _os.path.realpath(str(dest)) in captured
+        assert _os.path.realpath(str(parent)) in captured
+
+    def test_默认路径不输出提示(self, tmp_path, capsys):
+        """生成到 components/app/<name>/ 时，stdout 不应含 [注册指引] 标记。"""
+        s = AppScaffold(project_root=tmp_path)
+        s.create("foo", "exec", "none")
+        captured = capsys.readouterr().out
+        # 用完整标记匹配，避免 tmp_path 目录名中若含中文片段被误匹配
+        assert "[注册指引]" not in captured
+
+
 class TestAtomicCleanup:
     """出错时应清理已创建的目录，不留下半成品。"""
 

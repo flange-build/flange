@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from builder.config.apps import normalize_app_sources
 from builder.config.merge import deep_merge, resolve_conditions
 from builder.paths import PROJECT_ROOT, components_dir
 
@@ -159,7 +160,11 @@ def resolve_config(
     先执行 get_board_config 三层合并，再调用 resolve_conditions
     展开 product/variant 条件标记。
     """
+    root = Path(project_root) if project_root else _project_root()
     merged = get_board_config(
-        board_name, boards=boards, project_root=project_root
+        board_name, boards=boards, project_root=root
     )
-    return resolve_conditions(merged, product=product, variant=variant)
+    resolved = resolve_conditions(merged, product=product, variant=variant)
+    # App 来源字段归一化：校验 external_apps 互斥 + 解析 local_path / external_app_dirs
+    # 到绝对路径，确保下游模块（SourceManager、app_list）拿到一致的形态。
+    return normalize_app_sources(resolved, project_root=root)

@@ -47,7 +47,10 @@ class BuildEngine:
         level = _resolve_output_level(config)
         self.output = BuildOutput(self.cache.target_dir, level=level)
         self.docker = DockerRunner(self.project_dir, output=self.output)
-        self.source = SourceManager(self.project_dir / ".build" / "sources")
+        self.source = SourceManager(
+            sources_dir=self.project_dir / ".build" / "sources",
+            project_root=self.project_dir,
+        )
         self._outputs = {}
 
     def build(self, target: str = "image"):

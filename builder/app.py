@@ -685,11 +685,10 @@ class AppBuilder:
         self._status(f"lib '{app_name}' sysroot 安装完成")
 
     def _find_app_dir(self, app_name: str) -> Path:
-        """查找 App 目录。
+        """查找 App 目录——完全委托给 SourceManager.ensure_app()。
 
-        查找顺序：
-          1. 先在 <project_dir>/app/<name>/ 中查找本地 App
-          2. 若不存在，委托 SourceManager.ensure_app() 处理外部仓库 App
+        ensure_app 已负责三层查找：本地 → external_apps → external_app_dirs，
+        并在未命中时给出详尽的错误信息。此处仅做"source 缺失"的防御性报错。
 
         参数：
             app_name: App 名称
@@ -698,21 +697,17 @@ class AppBuilder:
             App 目录 Path
 
         抛出：
-            FileNotFoundError: 本地目录不存在且 SourceManager 未配置
-            ValueError: App 既不在本地，也未在 external_apps 中声明
+            FileNotFoundError: SourceManager 未配置
+            ValueError: App 在三层查找中均未命中
         """
-        # 步骤 1：优先在本地 components/app/ 目录查找
-        local_dir = self._project_dir / "components" / "app" / app_name
-        if local_dir.is_dir():
-            return local_dir
-
-        # 步骤 2：本地不存在时，交由 SourceManager 处理外部仓库
         if self._source is None:
+            # 无 SourceManager 时退化为仅查本地，用于早期测试 / 简化场景
+            local_dir = self._project_dir / "components" / "app" / app_name
+            if (local_dir / "app.yaml").is_file():
+                return local_dir
             raise FileNotFoundError(
                 f"App '{app_name}' 目录不存在，已查找：{local_dir}"
             )
-        # ensure_app 内部使用相对路径 "components/app/<name>" 查找，此处已知不存在，
-        # 直接调用以处理 external_apps 分支（ensure_app 会再次检查本地，无副作用）
         return self._source.ensure_app(app_name, self._config)
 
     def _resolve_build_order(self, app_names: list[str]) -> list[str]:

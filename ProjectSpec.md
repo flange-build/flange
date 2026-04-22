@@ -286,6 +286,24 @@ flange/
 - **产物层** 聚合所有运行时生成物；可 `rm -rf .build/` 触发完整重建。
 - 跨层路径解析 MUST 通过 `builder.paths` 暴露的 `COMPONENTS_ROOT`/`BUILD_ROOT` 等锚点拼接，不得直接使用旧顶层名字面量。
 
+### 9.1 App 来源查找优先级
+
+App 源可来自三个层级，构建系统按下述顺序查找，任一命中即终止（不回退）：
+
+1. **本地层** — `<project_root>/components/app/<name>/`，始终扫描，不受配置影响
+2. **external_apps** — FINAL_CONFIG 中 `external_apps[<name>]` 显式注册：
+   - `local_path` 分支：指向宿主机任意目录，不触发 git
+   - `git` 分支：由 `SourceManager` 克隆到 `.build/sources/apps/<name>/`
+   - 两分支 MUST 互斥声明；同时存在或均不存在时配置解析阶段立即报错
+3. **external_app_dirs** — FINAL_CONFIG 顶层 `list[str]`，每项是一个父目录；按顺序检查 `<dir>/<name>/app.yaml`，首个命中即采用
+
+`local_path` 与 `external_app_dirs[*]` 均支持 `~` 展开，相对路径相对 **project_root** 解析，
+并在配置加载时统一 resolve 为绝对路径存入 FINAL_CONFIG（详见 `builder/config/apps.py`）。
+
+`flange list apps` 遍历全部三层并为每行加来源标签 `[local]` / `[external:local]` /
+`[external:git]` / `[dir:<path>]`；同名多来源时以优先级最高者为主来源，其它来源以
+`(also found in: ...)` 形式在次行展示。
+
 ---
 
 ## 10. Git 规范

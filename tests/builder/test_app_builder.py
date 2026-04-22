@@ -80,7 +80,7 @@ def _make_app_dir(
 
     yaml_content = "\n".join(lines) + "\n"
 
-    app_dir = tmp_path / "app" / name
+    app_dir = tmp_path / "components" / "app" / name
     app_dir.mkdir(parents=True, exist_ok=True)
     (app_dir / "app.yaml").write_text(yaml_content, encoding="utf-8")
 
@@ -97,18 +97,25 @@ def _make_app_dir(
 def _make_builder(tmp_path: Path, arch: str = "aarch64") -> AppBuilder:
     """构造一个使用 tmp_path 作为项目根目录的 AppBuilder 实例。
 
-    DockerRunner 与 SourceManager 均使用 MagicMock，
-    因为 prebuilt App（build.system=none）不需要 Docker 编译。
+    DockerRunner 使用 MagicMock（prebuilt App 不需要 Docker 编译）；
+    SourceManager 使用真实实例指向 tmp_path，让 _find_app_dir 走完整
+    三层查找路径——测试用的 App 建在 tmp_path/components/app/ 下。
     """
+    from builder.source import SourceManager  # 延迟导入避免 top-level 循环
+
     config = {
         "board":   "test-board",
         "product": "default",
         "variant": "release",
         "arch":    arch,
         "rootfs":  {"custom_packages": []},
+        "external_app_dirs": [],
     }
     docker = MagicMock()
-    source = MagicMock()
+    source = SourceManager(
+        sources_dir=tmp_path / ".build" / "sources",
+        project_root=tmp_path,
+    )
     return AppBuilder(docker, source, config, project_dir=tmp_path)
 
 
@@ -182,14 +189,12 @@ class TestFindAppDir:
         _make_app_dir(tmp_path, "myapp")
         builder = _make_builder(tmp_path)
         result = builder._find_app_dir("myapp")
-        assert result == tmp_path / "app" / "myapp"
+        assert result == tmp_path / "components" / "app" / "myapp"
         assert result.is_dir()
 
     def test_目录不存在时抛出ValueError(self, tmp_path):
-        """App 目录不存在且未在 external_apps 声明时，SourceManager 应抛出 ValueError。"""
+        """App 目录不存在且未在 external_apps / external_app_dirs 声明时抛出 ValueError。"""
         builder = _make_builder(tmp_path)
-        # 配置 mock source 模拟 ensure_app 找不到 App 的行为
-        builder._source.ensure_app.side_effect = ValueError("nonexistent 未找到")
         with pytest.raises(ValueError, match="nonexistent"):
             builder._find_app_dir("nonexistent")
 
@@ -268,14 +273,12 @@ class TestBuildOne:
         builder = _make_builder(tmp_path)
         deb_path = builder.build_one("mypkg")
 
-        expected_dir = tmp_path / "target" / "test-board" / "default" / "release" / "app"
+        expected_dir = tmp_path / ".build" / "target" / "test-board" / "default" / "release" / "app"
         assert deb_path.parent == expected_dir
 
     def test_app目录不存在时抛出ValueError(self, tmp_path):
         """App 目录不存在且未在 external_apps 声明时，应抛出 ValueError。"""
         builder = _make_builder(tmp_path)
-        # mock source 模拟 ensure_app 找不到 App 的行为
-        builder._source.ensure_app.side_effect = ValueError("does_not_exist 未找到")
         with pytest.raises(ValueError):
             builder.build_one("does_not_exist")
 
@@ -309,6 +312,7 @@ class TestBuildAll:
 
     def test_单app批量构建(self, tmp_path):
         """custom_packages 中只有一个 App 时，返回包含该 App 的字典。"""
+        from builder.source import SourceManager
         _make_app_dir(tmp_path, "solo", bin_files=["solo"])
         config = {
             "board":   "test-board",
@@ -316,8 +320,10 @@ class TestBuildAll:
             "variant": "release",
             "arch":    "aarch64",
             "rootfs":  {"custom_packages": ["solo"]},
+            "external_app_dirs": [],
         }
-        builder = AppBuilder(MagicMock(), MagicMock(), config, project_dir=tmp_path)
+        source = SourceManager(sources_dir=tmp_path / ".build/sources", project_root=tmp_path)
+        builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
         result = builder.build_all()
 
         assert "solo" in result
@@ -325,6 +331,7 @@ class TestBuildAll:
 
     def test_多app按依赖顺序构建(self, tmp_path):
         """多个 App 按拓扑排序顺序构建，全部出现在结果字典中。"""
+        from builder.source import SourceManager
         _make_app_dir(tmp_path, "libbase", bin_files=["libbase.so"])
         _make_app_dir(tmp_path, "daemon", build_deps=["libbase"], bin_files=["daemon"])
         _make_app_dir(tmp_path, "cli",    build_deps=["libbase"], bin_files=["cli"])
@@ -335,8 +342,10 @@ class TestBuildAll:
             "variant": "release",
             "arch":    "aarch64",
             "rootfs":  {"custom_packages": ["libbase", "daemon", "cli"]},
+            "external_app_dirs": [],
         }
-        builder = AppBuilder(MagicMock(), MagicMock(), config, project_dir=tmp_path)
+        source = SourceManager(sources_dir=tmp_path / ".build/sources", project_root=tmp_path)
+        builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
         result = builder.build_all()
 
         assert set(result.keys()) == {"libbase", "daemon", "cli"}
@@ -345,21 +354,23 @@ class TestBuildAll:
 
     def test_custom_packages中app不存在时抛出错误(self, tmp_path):
         """custom_packages 包含不存在的 App 时，应抛出 ValueError（SourceManager 报告未找到）。"""
+        from builder.source import SourceManager
         config = {
             "board":   "test-board",
             "product": "default",
             "variant": "release",
             "arch":    "aarch64",
             "rootfs":  {"custom_packages": ["ghost_app"]},
+            "external_app_dirs": [],
         }
-        mock_source = MagicMock()
-        mock_source.ensure_app.side_effect = ValueError("ghost_app 未找到")
-        builder = AppBuilder(MagicMock(), mock_source, config, project_dir=tmp_path)
+        source = SourceManager(sources_dir=tmp_path / ".build/sources", project_root=tmp_path)
+        builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
         with pytest.raises(ValueError):
             builder.build_all()
 
     def test_循环依赖在build_all中抛出错误(self, tmp_path):
         """custom_packages 中存在循环依赖时，build_all 应抛出 CircularDependencyError。"""
+        from builder.source import SourceManager
         _make_app_dir(tmp_path, "nodeA", build_deps=["nodeB"])
         _make_app_dir(tmp_path, "nodeB", build_deps=["nodeA"])
 
@@ -369,7 +380,9 @@ class TestBuildAll:
             "variant": "release",
             "arch":    "aarch64",
             "rootfs":  {"custom_packages": ["nodeA", "nodeB"]},
+            "external_app_dirs": [],
         }
-        builder = AppBuilder(MagicMock(), MagicMock(), config, project_dir=tmp_path)
+        source = SourceManager(sources_dir=tmp_path / ".build/sources", project_root=tmp_path)
+        builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
         with pytest.raises(CircularDependencyError):
             builder.build_all()

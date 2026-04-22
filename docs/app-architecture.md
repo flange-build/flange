@@ -553,7 +553,7 @@ hw-tests/
 `flange create app` 命令自动生成 App 工程脚手架：
 
 ```bash
-flange create app <name> [--type=<type>] [--build-system=<system>] [--version=<ver>] [--description=<desc>]
+flange create app <name> [--type=<type>] [--build-system=<system>] [--dir=<path>] [--version=<ver>] [--description=<desc>]
 ```
 
 | 参数 | 说明 | 默认值 |
@@ -561,8 +561,13 @@ flange create app <name> [--type=<type>] [--build-system=<system>] [--version=<v
 | `<name>` | App 名称 | 必填 |
 | `--type` | App 类型：`exec` / `service` / `lib` / `test` | `exec` |
 | `--build-system` | 构建系统：`none` / `cmake` / `meson` / `make` / `swift` | `cmake` |
+| `--dir` | 生成位置的**父目录**（支持 `~`、相对 cwd）；实际目录 = `<dir>/<name>/` | `components/app/` |
 | `--version` | 初始版本号 | `0.1.0` |
 | `--description` | 简短描述 | 空 |
+
+> 使用 `--dir` 指向 `components/app/` 以外的目录时，脚手架会在 stdout 追加一段
+> "注册指引"，提示在 config 里以 `external_apps.local_path` 或 `external_app_dirs`
+> 注册该位置，详见 §8.4 "out-of-tree App 与查找优先级"。
 
 支持的 type × build-system 组合：
 
@@ -609,7 +614,36 @@ $ flange create app board-tests --type=test
 |------|------|
 | `flange build app` | 构建当前配置所需的所有 App |
 | `flange build app <name>` | 构建指定 App（编译 + 打 deb 包） |
-| `flange list apps` | 列出所有已注册的 App（仓库内 + 外部） |
+| `flange list apps` | 列出所有已注册的 App（本地 + 显式注册 + 搜索路径） |
+
+### 8.4 out-of-tree App 与查找优先级
+
+flange 支持把 App 源码放在仓库之外任意目录。三种声明方式按优先级查找：
+
+1. `<project_root>/components/app/<name>/`（本地，无需配置）
+2. `external_apps[<name>]`：单个 App 显式绑定到 `local_path` 或 `git`
+3. `external_app_dirs[*]`：搜索路径列表，遍历找 `<dir>/<name>/app.yaml`
+
+任一层命中即终止。三层全部未命中时报错并列出所有已尝试的路径。
+
+`external_apps` 两分支互斥：
+
+```python
+BOARD = {
+    "external_apps": {
+        "wifi":   {"local_path": "~/workspace/wifi"},
+        "zigbee": {"git": "ssh://git@example.com/zigbee.git", "tag": "v2.1.0"},
+    },
+    "external_app_dirs": ["~/my-flange-apps", "../vendor-apps"],
+}
+```
+
+`local_path` / `external_app_dirs[*]` 支持 `~` 展开与相对 project_root 的路径解析，
+在配置加载时统一 resolve 为绝对路径。
+
+`flange list apps` 给每行加来源标签：`[local]` / `[external:local]` /
+`[external:git]` / `[dir:<path>]`。同名多来源时主来源取优先级最高者，
+其它来源以 `(also found in: ...)` 形式在次行打印。
 
 ---
 

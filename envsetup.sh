@@ -483,33 +483,30 @@ _flange_cmd_list_apps() {
     _flange_python "
 from pathlib import Path
 try:
-    import yaml
+    import yaml  # noqa: F401 —— builder.app_list 内按需使用
 except ImportError:
     print('  [错误] 缺少依赖：请安装 PyYAML（pip install pyyaml）')
     raise SystemExit(1)
 
+from builder.app_list import list_all, format_lines
+
+# 尝试加载当前 lunch 选择的 config；无 lunch 时 config=None，仅列本地 App
+config = None
+try:
+    from builder.config.loader import load_current_config
+    config = load_current_config()
+except FileNotFoundError:
+    pass
+except Exception as e:
+    print(f'  [警告] 当前配置无法加载（{type(e).__name__}），仅列出本地 App')
+
+entries = list_all(project_root=Path('$FLANGE_DIR'), config=config)
+
 print('')
 print('  可用的 App:')
 print('  ─────────────────────────────')
-app_dir = Path('components/app')
-found = False
-if app_dir.exists():
-    for d in sorted(app_dir.iterdir()):
-        if not d.is_dir():
-            continue
-        yaml_file = d / 'app.yaml'
-        if yaml_file.exists():
-            with open(yaml_file) as f:
-                spec = yaml.safe_load(f)
-            app = spec.get('app', {}) if spec else {}
-            name = app.get('name', d.name)
-            app_type = app.get('type', 'unknown')
-            version = app.get('version', '')
-            desc = app.get('description', '')
-            print(f'    {name:20s} {app_type:10s} {version:10s} {desc}')
-            found = True
-if not found:
-    print('    （未找到任何 App，请在 components/app/ 目录下创建 App）')
+for line in format_lines(entries):
+    print(line)
 print('')
 "
 }
@@ -520,38 +517,49 @@ _flange_cmd_create_app() {
     shift 2>/dev/null
 
     if [[ -z "$app_name" ]]; then
-        _flange_error "用法: flange create app <name> [--type=<type>] [--build-system=<system>]"
+        _flange_error "用法: flange create app <name> [--type=<type>] [--build-system=<system>] [--dir=<path>]"
         return 1
     fi
 
-    # 解析可选参数 --type 和 --build-system
+    # 解析可选参数
     local app_type="exec"
     local build_system="cmake"
     local app_version="0.1.0"
     local app_description=""
+    local app_parent_dir=""       # --dir 指向的父目录；空 = 使用默认 components/app/
     for arg in "$@"; do
         case "$arg" in
             --type=*)         app_type="${arg#--type=}"              ;;
             --build-system=*) build_system="${arg#--build-system=}"  ;;
             --version=*)      app_version="${arg#--version=}"        ;;
             --description=*)  app_description="${arg#--description=}";;
+            --dir=*)          app_parent_dir="${arg#--dir=}"         ;;
         esac
     done
 
-    _flange_step "生成 App 脚手架：name=$app_name  type=$app_type  build-system=$build_system"
+    # --dir 参数处理：~ 展开 + 相对 cwd 解析 + 绝对化
+    # 为了在 bash 里稳妥地支持 ~，借助 eval 展开；相对路径在 Python 侧再 resolve。
+    if [[ -n "$app_parent_dir" ]]; then
+        # shellcheck disable=SC2086
+        app_parent_dir=$(eval echo "$app_parent_dir")
+    fi
+
+    _flange_step "生成 App 脚手架：name=$app_name  type=$app_type  build-system=$build_system${app_parent_dir:+  dir=$app_parent_dir}"
 
     # 调用 Python 脚手架生成器
     python3 -c "
 import sys
+from pathlib import Path
 sys.path.insert(0, '$FLANGE_DIR')
 from builder.scaffold import AppScaffold, ScaffoldError
-from pathlib import Path
 try:
     s = AppScaffold(project_root=Path('$FLANGE_DIR'))
+    parent = Path('$app_parent_dir').resolve() if '$app_parent_dir' else None
     dest = s.create(
         name='$app_name',
         app_type='$app_type',
         build_system='$build_system',
+        parent_dir=parent,
         version='$app_version',
         description='$app_description',
     )
@@ -561,12 +569,11 @@ except ScaffoldError as e:
     sys.exit(1)
 "
     local rc=$?
-    if [[ $rc -eq 0 ]]; then
-        _flange_info "App 脚手架已生成：components/app/$app_name/"
-    else
+    if [[ $rc -ne 0 ]]; then
         _flange_error "脚手架生成失败"
         return 1
     fi
+    return 0
 }
 
 # --- flange docker 子命令 ---
@@ -663,6 +670,7 @@ flange() {
         echo "    create app <name>       生成 App 脚手架"
         echo "      [--type=<type>]         App 类型（exec/service/lib/test，默认: exec）"
         echo "      [--build-system=<sys>]  构建系统（none/cmake/meson/make/swift，默认: cmake）"
+        echo "      [--dir=<path>]          父目录（默认: components/app/）"
         echo ""
         echo "  工具命令:"
         echo "    shell                   进入 Docker 构建环境 shell"

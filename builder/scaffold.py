@@ -76,6 +76,7 @@ class AppScaffold:
         build_system: str,
         target_dir: Optional[Path] = None,
         *,
+        parent_dir: Optional[Path] = None,
         version: str = "0.1.0",
         description: str = "",
     ) -> Path:
@@ -85,7 +86,10 @@ class AppScaffold:
             name:         App 名称，用作目录名与模板变量 $name
             app_type:     App 类型（exec / service / lib / test）
             build_system: 构建系统（none / cmake / meson / make / swift）
-            target_dir:   目标父目录；None 时默认为 <project_root>/components/app/<name>/
+            target_dir:   完整目标目录（含 <name> 自身）；
+                          None 时退回 parent_dir 或默认位置
+            parent_dir:   父目录语义 —— 实际目标为 <parent_dir>/<name>/；
+                          与 target_dir 互斥（同时指定将报错）
             version:      版本字符串，默认 0.1.0
             description:  描述字符串，默认空
 
@@ -93,16 +97,22 @@ class AppScaffold:
             已创建的 App 目录路径（Path）
 
         抛出：
-            ScaffoldError: 参数无效或模板目录缺失
+            ScaffoldError: 参数无效、模板目录缺失或目标已存在
         """
         # 1. 参数校验
         self._validate(name, app_type, build_system)
+        if target_dir is not None and parent_dir is not None:
+            raise ScaffoldError(
+                "target_dir 与 parent_dir 不能同时指定，请二选一"
+            )
 
         # 2. 确定目标目录
-        if target_dir is None:
-            dest = self._root / "components" / "app" / name
-        else:
+        if target_dir is not None:
             dest = Path(target_dir)
+        elif parent_dir is not None:
+            dest = Path(parent_dir) / name
+        else:
+            dest = self._root / "components" / "app" / name
 
         if dest.exists():
             raise ScaffoldError(f"目标目录已存在：{dest}")
@@ -122,7 +132,51 @@ class AppScaffold:
             raise
 
         print(f"脚手架已生成：{dest}（type={app_type}, build={build_system}）")
+
+        # 5. 当 App 位于默认 components/app/ 之外时，输出注册指引
+        hint = self._registration_hint(dest, name)
+        if hint:
+            print(hint)
+
         return dest
+
+    def _registration_hint(self, dest: Path, name: str) -> Optional[str]:
+        """当 dest 不在 <project_root>/components/app/ 下时，生成注册指引字符串。
+
+        返回 None 表示无需提示（默认路径）；否则返回一段可直接打印的多行文本，
+        同时给出 ``external_apps`` 与 ``external_app_dirs`` 两种示例片段。
+        """
+        import os as _os
+        # 用 realpath 比较：在 macOS 上 /var 是 /private/var 的符号链接，
+        # .resolve() 在路径不存在的中间段行为不稳，realpath 能更一致地展平前缀。
+        # 拼 os.sep 避免 "/a/apps" 被误匹配到 "/a/app" 下。
+        default_prefix = (
+            _os.path.realpath(str(self._root / "components" / "app")) + _os.sep
+        )
+        abs_dest_str = _os.path.realpath(str(dest))
+        if abs_dest_str.startswith(default_prefix):
+            return None
+
+        parent_str = _os.path.dirname(abs_dest_str)
+        lines = [
+            "",
+            "[注册指引] App 位于默认 components/app/ 之外，flange 默认扫描不到。",
+            "请在 board / platform config 的 BOARD / PLATFORM / SOC 字典中追加"
+            "以下任一片段（择一即可）：",
+            "",
+            "  # 方式 A：external_apps 显式注册单个 App",
+            "  \"external_apps\": {",
+            f"      \"{name}\": {{\"local_path\": \"{abs_dest_str}\"}},",
+            "  },",
+            "",
+            "  # 方式 B：external_app_dirs 把整个父目录加入搜索路径",
+            "  \"external_app_dirs\": [",
+            f"      \"{parent_str}\",",
+            "  ],",
+            "",
+            "详见 docs/app-architecture.md。",
+        ]
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # 私有辅助方法
