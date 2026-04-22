@@ -72,7 +72,7 @@
 ## 架构约束（贯穿所有阶段）
 
 - **框架与策略分离**：`builder/base.py` 框架层禁止平台硬编码，平台逻辑通过策略子类注入
-- **三层职责分离**：`platform/` 声明配置 → `builder/platforms/` 实现构建 → `board/` 板级特殊化
-- **配置驱动**：新增板级支持只需创建 `board/<name>/config.py`，不改框架代码
+- **三层职责分离**：`components/platform/` 声明配置 → `builder/platforms/` 实现构建 → `components/board/` 板级特殊化
+- **配置驱动**：新增板级支持只需创建 `components/board/<name>/config.py`，不改框架代码
 - **增量构建**：所有组件支持基于内容哈希的增量构建
 - **打样不等于硬编码**：以 Radxa Zero 3W 验证，但框架必须保持平台无关

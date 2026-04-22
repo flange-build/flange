@@ -58,7 +58,7 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 
 ### 2.3 组件级构建与刷写
 
-Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈希实现增量构建。产物收集到 target/<board>/<product>/<variant>/。
+Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈希实现增量构建。产物收集到 .build/target/<board>/<product>/<variant>/（可经根目录软链接 target 访问）。
 
 | 组件 | 构建命令 | 刷写命令 |
 |------|---------|---------|
@@ -68,7 +68,7 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
 | 全量镜像 | `flange build` | `flange flash` |
 
 - 组件构建：在 Docker 容器内执行，构建引擎自动推断组件间依赖并基于内容哈希决定增量构建范围
-- 产物收集：构建完成后自动收集到 `target/<board>/<product>/<variant>/`
+- 产物收集：构建完成后自动收集到 `.build/target/<board>/<product>/<variant>/`（根目录 `target` 软链接直达）
 - 组件刷写：在宿主机执行，执行自动生成的 flash.sh 调用平台对应的刷写工具
 - 全量刷写：重写设备全部分区（分区表 + 所有组件镜像）
 
@@ -133,10 +133,10 @@ Shell 脚本是构建系统的核心语言。
 Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 Python 编写。
 
 ### 6.1 文件组织
-- 配置引擎位于 `config/` 目录（merge.py、registry.py、query.py）
+- 配置引擎位于 `builder/config/` 子包（merge.py、registry.py、query.py）
 - 构建引擎位于 `builder/` 目录
 - 平台策略类位于 `builder/platforms/<vendor>/`（如 `builder/platforms/rockchip/kernel.py`）
-- 平台/SoC/板级配置位于 `platform/` 和 `board/` 下的 `config.py` 文件
+- 平台/SoC/板级配置位于 `components/platform/` 和 `components/board/` 下的 `config.py` 文件
 - 分区表转换器位于 `builder/partition/`
 
 ### 6.2 配置体系
@@ -144,7 +144,7 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
 - 条件标记：`+packages:debug`（追加语义）、`packages:smart-display`（条件覆盖）
 - 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`
 - 配置解析：`resolve_config(board, product, variant)` 返回扁平的 FINAL_CONFIG dict
-- 新增板级支持只需创建 `board/<name>/config.py`，无需修改框架代码
+- 新增板级支持只需创建 `components/board/<name>/config.py`，无需修改框架代码
 
 ### 6.3 框架与策略分离
 - **框架层**（`builder/base.py`）：ComponentBuilder 基类，负责源码生命周期、补丁管理、增量编译
@@ -154,12 +154,12 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
 
 ### 6.4 构建与刷写约定
 - 构建命令：`flange build [component]`（component 可选：kernel、bootloader、rootfs，默认 image）
-- 刷写命令：`flange flash [component]`（执行自动生成的 `target/.../flash.sh`）
+- 刷写命令：`flange flash [component]`（执行自动生成的 `.build/target/.../flash.sh`）
 - 增量构建：基于内容哈希（config + source commit + patches），由 `builder/cache.py` 管理
-- 产物目录：`target/<board>/<product>/<variant>/`
+- 产物目录：`.build/target/<board>/<product>/<variant>/`（根目录 `target` 软链接指向此）
 
 ### 6.5 配置驱动原则
-- 新增板级支持时，**只允许创建配置文件**（`board/<name>/config.py`），不得修改框架层代码
+- 新增板级支持时，**只允许创建配置文件**（`components/board/<name>/config.py`），不得修改框架层代码
 - 所有可变信息从 FINAL_CONFIG dict 获取
 - 违反此原则说明框架抽象不足，应先重构框架再新增支持
 
@@ -215,65 +215,76 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
 
 ## 9. 目录结构约定
 
+顶层目录按"代码 / 内容 / 产物"三层划分，每层职责互不交叉：
+
 ```
 flange/
 ├── pyproject.toml      # Python 项目配置
-├── envsetup.sh         # CLI 入口（source 加载）
+├── envsetup.sh         # CLI 入口（source 加载，自动创建 target 软链接）
 ├── docker-compose.yml  # Docker 编排配置
 ├── CLAUDE.md           # AI Agent 行为指引
 ├── ProjectSpec.md      # 本文档
 │
-├── config/             # 配置引擎
-│   ├── merge.py        #   deep_merge + resolve_conditions
-│   ├── registry.py     #   统一注册表 + 三层合并
-│   └── query.py        #   target 解析（给 CLI lunch 用）
-│
-├── platform/           # 平台/SoC 配置（三层继承的前两层）
-│   └── rockchip/
-│       ├── config.py   #   Rockchip 平台配置
-│       ├── patches/    #   平台级补丁
-│       │   ├── kernel/
-│       │   └── bootloader/
-│       └── rk3566/
-│           └── config.py  # RK3566 SoC 配置
-│
-├── board/              # 板级配置（第三层）+ 板级数据
-│   └── <board-name>/
-│       ├── config.py   #   板级配置（含 products/variants 声明）
-│       ├── overlay/    #   文件系统覆盖层
-│       └── patches/    #   板级补丁
-│
-├── builder/            # 构建引擎
+├── builder/            # 【代码层】Python 构建引擎（唯一顶层 Python 包）
 │   ├── engine.py       #   依赖图 + 调度
+│   ├── base.py         #   ComponentBuilder 基类
+│   ├── paths.py        #   PROJECT_ROOT/COMPONENTS_ROOT/BUILD_ROOT 锚点
 │   ├── docker.py       #   Docker 容器执行封装
 │   ├── source.py       #   源码仓库管理
 │   ├── cache.py        #   增量构建缓存（内容哈希）
-│   ├── base.py         #   ComponentBuilder 基类
 │   ├── chroot.py       #   ChrootContext（mount/umount 管理）
 │   ├── flash.py        #   flash.sh 自动生成
+│   ├── config/         #   配置子系统
+│   │   ├── merge.py    #     deep_merge + resolve_conditions
+│   │   ├── registry.py #     统一注册表 + 三层合并
+│   │   └── query.py    #     target 解析（给 CLI lunch 用）
 │   ├── partition/      #   分区表系统
 │   │   ├── __init__.py #     中间格式（PartitionTable/Partition）
 │   │   └── rockchip.py #     Rockchip parameter.txt 转换
-│   └── platforms/      #   平台策略类
+│   └── platforms/      #   平台构建策略（代码）
 │       └── rockchip/
 │           ├── kernel.py      # RockchipKernelBuilder
 │           ├── bootloader.py  # RockchipBootloaderBuilder
 │           ├── rootfs.py      # RockchipRootfsBuilder
 │           └── image.py       # RockchipImageBuilder
 │
+├── components/         # 【内容层】仓库携带的原料（版本控制跟踪）
+│   ├── platform/       #   平台/SoC 配置（三层继承前两层）+ patches
+│   │   └── rockchip/
+│   │       ├── config.py   #     Rockchip 平台配置
+│   │       ├── patches/    #     平台级补丁（kernel/bootloader）
+│   │       └── rk3566/
+│   │           └── config.py  # RK3566 SoC 配置
+│   ├── board/          #   板级配置（第三层）+ 板级数据
+│   │   └── <board-name>/
+│   │       ├── config.py   #     板级配置（含 products/variants 声明）
+│   │       ├── overlay/    #     文件系统覆盖层
+│   │       └── patches/    #     板级补丁
+│   ├── app/            #   App 定义
+│   ├── packages/       #   自定义软件包
+│   └── rootfs/         #   rootfs overlay
+│
 ├── docker/             # Docker 构建环境定义
 │   ├── Dockerfile
 │   └── entrypoint.sh
-├── app/                # App 定义
-├── packages/           # 自定义软件包
 ├── tests/              # 测试套件
 ├── openspec/           # 工程规格管理
-├── sources/            # 源码仓库（git ignored）
-├── target/             # 构建产物（git ignored）
-│   └── <board>/<product>/<variant>/
-├── .flange/            # 运行时状态（git ignored）
-└── docs/               # 设计文档
+├── docs/               # 设计文档
+│
+├── .build/             # 【产物层】运行时派生物（git ignored）
+│   ├── cache/          #   工具缓存（apt 等）
+│   ├── sources/        #   源码仓库 clone/下载
+│   └── target/         #   构建产物
+│       └── <board>/<product>/<variant>/
+├── target -> .build/target  # envsetup.sh 创建的便捷软链接（git ignored）
+└── .flange/            # 运行时状态（git ignored）
 ```
+
+分层契约：
+- **代码层** 仅放可 import 的 Python 模块；`builder/` 是项目唯一顶层包。
+- **内容层** 仅放仓库携带的原料；不得出现派生物。平台的"数据部分"（patches/config）在 `components/platform/`，"逻辑部分"（builder 子类）在 `builder/platforms/`。
+- **产物层** 聚合所有运行时生成物；可 `rm -rf .build/` 触发完整重建。
+- 跨层路径解析 MUST 通过 `builder.paths` 暴露的 `COMPONENTS_ROOT`/`BUILD_ROOT` 等锚点拼接，不得直接使用旧顶层名字面量。
 
 ---
 
@@ -321,7 +332,7 @@ feat(kernel): 添加内核编译支持
 - 即使两项改动发生在同一次开发中，也必须拆分为独立 commit 以保持历史清晰可追溯
 
 ### 10.4 .gitignore
-- `output/` 和 `cache/` 必须被忽略
+- `.build/` 整棵派生物树必须被忽略（含 cache/sources/target）；`output/`、`.flange/` 亦必须忽略；根目录 `target` 软链接不提交
 - 编译产物、临时文件不得入库
 - 大文件（>1MB）使用 Git LFS
 
@@ -339,7 +350,7 @@ feat(kernel): 添加内核编译支持
 - 所有编译构建操作**必须在 Docker 容器内**完成
 - Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖
 - 项目根目录通过 volume mount 映射到容器内
-- 源码仓库目录 `sources/` 和 APT 缓存 `cache/apt/` 通过 volume 持久化
+- 源码仓库目录 `.build/sources/` 和 APT 缓存 `.build/cache/apt/` 通过 volume 持久化
 - 宿主机 `~/.ssh` 以只读方式挂载，通过 entrypoint 脚本修正权限
 
 ### 11.3 交叉编译
@@ -348,7 +359,7 @@ feat(kernel): 添加内核编译支持
 - 板级配置通过 config.py 中的 dict 声明（platform/SoC/board 三层继承）
 
 ### 11.4 输出管理
-- 构建产物收集到 `target/<board>/<product>/<variant>/`（git ignored）
+- 构建产物收集到 `.build/target/<board>/<product>/<variant>/`（git ignored，根目录 `target` 软链接直达）
 - 内核产出：Image、DTB、modules（INSTALL_MOD_STRIP=1）
 - flash.sh 由 `builder/flash.py` 自动生成
 - 分区配置由 `builder/partition/` 从 config 自动转换
@@ -435,7 +446,7 @@ feat(kernel): 添加内核编译支持
 
 ### 14.6 日志持久化
 
-- 全量构建输出（L1 + L2 + L3）写入 `target/<board>/<product>/<variant>/build.log`
+- 全量构建输出（L1 + L2 + L3）写入 `.build/target/<board>/<product>/<variant>/build.log`
 - 每次构建覆盖写入（非追加），避免日志无限增长
 - 日志文件不含 ANSI 颜色码
 - 摘要末尾打印日志文件路径

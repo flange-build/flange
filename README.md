@@ -104,7 +104,7 @@ lunch
 
 ### 添加新板子（已有平台和 SoC）
 
-只需创建一个文件 `board/<board-name>/config.py`：
+只需创建一个文件 `components/board/<board-name>/config.py`：
 
 ```python
 """<Board Name> (<SoC>) 板级配置"""
@@ -157,7 +157,7 @@ lunch <board-name>
 flange build
 ```
 
-无需修改任何框架代码。新板子会被 `config/registry.py` 自动发现。
+无需修改任何框架代码。新板子会被 `builder/config/registry.py` 自动发现。
 
 可选地，添加板级数据文件：
 
@@ -249,12 +249,12 @@ boot 走 mke2fs，image 走 dd。flange 之所以放弃缓存决策，是因为
 "Nothing to do"，整个流水线代价几秒级，日常迭代无感。
 
 > ⚠️ **branch 字段变更需手动清理**：由于 shallow clone 隐式带 `--single-branch`，
-> 将一个已 clone 的组件换 branch 不会自动切换，需要 `rm -rf sources/<component>/<board>/`
+> 将一个已 clone 的组件换 branch 不会自动切换，需要 `rm -rf .build/sources/<component>/<board>/`
 > 后重新 build。
 
 ### 添加新 SoC（已有平台）
 
-创建 `platform/<vendor>/<soc>/config.py`：
+创建 `components/platform/<vendor>/<soc>/config.py`：
 
 ```python
 """<SoC> 配置 — 第二层继承"""
@@ -285,18 +285,18 @@ SOC = {
 }
 ```
 
-然后在 `config/registry.py` 的 `_SOC_CONFIGS` 中注册：
+然后在 `builder/config/registry.py` 的 `_SOC_CONFIGS` 中注册：
 
 ```python
 _SOC_CONFIGS = {
-    "rk3566": "platform/rockchip/rk3566/config.py",
-    "<soc-name>": "platform/<vendor>/<soc>/config.py",  # 新增
+    "rk3566": "components/platform/rockchip/rk3566/config.py",
+    "<soc-name>": "components/platform/<vendor>/<soc>/config.py",  # 新增
 }
 ```
 
 ### 添加新平台
 
-1. 创建平台配置 `platform/<vendor>/config.py`：
+1. 创建平台配置 `components/platform/<vendor>/config.py`：
 
 ```python
 """<Vendor> 平台配置 — 第一层继承"""
@@ -318,12 +318,12 @@ PLATFORM = {
 }
 ```
 
-2. 在 `config/registry.py` 的 `_PLATFORM_CONFIGS` 中注册：
+2. 在 `builder/config/registry.py` 的 `_PLATFORM_CONFIGS` 中注册：
 
 ```python
 _PLATFORM_CONFIGS = {
-    "rockchip": "platform/rockchip/config.py",
-    "<vendor>": "platform/<vendor>/config.py",  # 新增
+    "rockchip": "components/platform/rockchip/config.py",
+    "<vendor>": "components/platform/<vendor>/config.py",  # 新增
 }
 ```
 
@@ -388,53 +388,58 @@ BOARD = {
 
 ```
 flange/
-├── envsetup.sh              # CLI 入口（source 加载）
+├── envsetup.sh              # CLI 入口（source 加载，自动创建 target 软链接）
 ├── pyproject.toml            # Python 项目配置
 ├── docker-compose.yml        # Docker 编排
 │
-├── config/                   # 配置引擎
-│   ├── merge.py              #   deep_merge + resolve_conditions
-│   ├── registry.py           #   统一注册表（板子发现、三层合并）
-│   └── query.py              #   target 枚举与解析
-│
-├── platform/                 # 平台/SoC 配置
-│   └── rockchip/
-│       ├── config.py         #   平台配置（第一层）
-│       ├── patches/          #   平台级补丁
-│       └── rk3566/
-│           └── config.py     #   SoC 配置（第二层）
-│
-├── board/                    # 板级配置（第三层）
-│   ├── radxa-zero3w/
-│   ├── neons-core3566-nanob/
-│   ├── tspi-rk3566/
-│   └── orangepi-cm4/
-│
-├── builder/                  # 构建引擎
+├── builder/                  # 【代码层】Python 构建引擎
 │   ├── engine.py             #   依赖图 + 增量检查 + 调度
 │   ├── base.py               #   ComponentBuilder 基类
+│   ├── paths.py              #   PROJECT_ROOT / COMPONENTS_ROOT / BUILD_ROOT 锚点
 │   ├── docker.py             #   Docker 容器执行
 │   ├── source.py             #   源码仓库管理
 │   ├── cache.py              #   内容哈希增量缓存
 │   ├── chroot.py             #   ChrootContext（mount/umount 管理）
 │   ├── flash.py              #   统一刷写系统（配置生成 + 刷写执行）
+│   ├── config/               #   配置子系统
+│   │   ├── merge.py          #     deep_merge + resolve_conditions
+│   │   ├── registry.py       #     统一注册表（板子发现、三层合并）
+│   │   └── query.py          #     target 枚举与解析
 │   ├── partition/            #   分区表转换
 │   │   └── rockchip.py       #     → parameter.txt
-│   └── platforms/            #   平台策略类
+│   └── platforms/            #   平台构建策略（代码）
 │       └── rockchip/
 │           ├── kernel.py
 │           ├── bootloader.py
 │           ├── rootfs.py
 │           └── image.py
 │
+├── components/               # 【内容层】仓库携带的原料
+│   ├── platform/             #   平台/SoC 数据（配置 + patches）
+│   │   └── rockchip/
+│   │       ├── config.py     #     平台配置（第一层）
+│   │       ├── patches/      #     平台级补丁
+│   │       └── rk3566/
+│   │           └── config.py #     SoC 配置（第二层）
+│   ├── board/                #   板级配置（第三层）
+│   │   ├── radxa-zero3w/
+│   │   ├── neons-core3566-nanob/
+│   │   ├── tspi-rk3566/
+│   │   └── orangepi-cm4/
+│   ├── app/                  #   App 定义
+│   ├── packages/             #   自定义 deb 包
+│   └── rootfs/               #   rootfs overlay
+│
 ├── docker/                   # Docker 构建环境
 │   ├── Dockerfile
 │   └── entrypoint.sh
-├── app/                      # App 定义
-├── packages/                 # 自定义 deb 包
-├── tests/                    # 测试套件（87 tests）
-├── target/                   # 构建产物（git ignored）
-├── sources/                  # 源码仓库（git ignored）
+├── tests/                    # 测试套件
+│
+├── .build/                   # 【产物层】运行时产物（git ignored）
+│   ├── cache/                #   工具缓存（apt 等）
+│   ├── sources/              #   源码 clone/下载
+│   └── target/               #   构建产物（镜像/中间件）
+├── target -> .build/target   # envsetup.sh 创建的便捷软链接（git ignored）
 └── .flange/                  # 运行时状态（git ignored）
 ```
 
@@ -443,8 +448,8 @@ flange/
 ```
 lunch radxa-zero3w-default-debug
   │
-  ├─ config/registry.py: 三层合并 (platform → SoC → board)
-  ├─ config/merge.py: resolve_conditions(merged, "default", "debug")
+  ├─ builder/config/registry.py: 三层合并 (platform → SoC → board)
+  ├─ builder/config/merge.py: resolve_conditions(merged, "default", "debug")
   └─ .flange/current_config ← FINAL_CONFIG (JSON)
 
 flange build
@@ -460,7 +465,7 @@ flange build
   │   ├─ builder/base.py: reset → patches → configure → compile → collect
   │   └─ builder/platforms/rockchip/*.py: 平台特有编译命令
   │
-  └─ target/<board>/<product>/<variant>/
+  └─ .build/target/<board>/<product>/<variant>/     (根目录 target 软链接指向此)
       ├── kernel/Image, *.dtb
       ├── bootloader/
       ├── image/<board>_firmware_<date>.img
