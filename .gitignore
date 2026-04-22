@@ -1,9 +1,9 @@
-# 构建产物
-output/
-target/
+# 构建产物（运行时产物层 + envsetup.sh 管理的便捷软链接）
+/.build/
+/target
 
-# 工具缓存
-cache/
+# 其它输出
+output/
 
 # Bazel 符号链接
 /bazel-*
@@ -17,9 +17,6 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .venv/
-
-# 源码仓库
-sources/
 
 # 本地 Docker Compose 覆盖（支持 local_path 挂载等个人化配置）
 docker-compose.override.yml
