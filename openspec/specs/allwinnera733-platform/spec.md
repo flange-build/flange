@@ -10,7 +10,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 
 #### Scenario: BSP 目录集成
 - **WHEN** 执行 `allwinnera733` 平台的内核构建，`repos.linux-a733` 已声明
-- **THEN** 内核源码树中的 `bsp/` 为 `sources/repos/linux-a733/bsp/` 的 symlink 或副本
+- **THEN** 内核源码树中的 `bsp/` 为 `.build/sources/repos/linux-a733/bsp/` 的 symlink 或副本
 
 #### Scenario: kernel/BSP/device 版本一致
 - **WHEN** linux-a733 聚合仓库的 `.gitmodules` 声明特定 commit
@@ -18,7 +18,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 
 #### Scenario: DTS 文件准备
 - **WHEN** config 指定 `kernel_device.board_dts_path` 为 `"configs/cubie_a7z/linux-5.15/board.dts"` 且 `kernel.dts` 为 `"sun60i-a733-cubie-a7z"`
-- **THEN** board.dts 从 `sources/repos/linux-a733/device-a733/configs/cubie_a7z/linux-5.15/board.dts` 复制到 `arch/arm64/boot/dts/allwinner/sun60i-a733-cubie-a7z.dts`（内核上游 DTS 目录名保持 `allwinner`，不随 flange 平台重命名而变化）
+- **THEN** board.dts 从 `.build/sources/repos/linux-a733/device-a733/configs/cubie_a7z/linux-5.15/board.dts` 复制到 `arch/arm64/boot/dts/allwinner/sun60i-a733-cubie-a7z.dts`（内核上游 DTS 目录名保持 `allwinner`，不随 flange 平台重命名而变化）
 
 #### Scenario: BSP DTSI 链接
 - **WHEN** BSP 目录的 `configs/linux-5.15/` 包含 DTSI 文件
@@ -79,29 +79,29 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** 非 raw 类型分区在 GPT 分区表中有对应条目
 
 ### Requirement: A733 平台配置三层继承
-`allwinnera733` 平台必须（SHALL）遵循 flange 的三层配置继承体系：platform → SoC → board。PLATFORM 与 SOC 两层之间在目录结构上保持分离（`platform/allwinnera733/config.py` + `platform/allwinnera733/a733/config.py`），不合并为单一文件。
+`allwinnera733` 平台必须（SHALL）遵循 flange 的三层配置继承体系：platform → SoC → board。PLATFORM 与 SOC 两层之间在目录结构上保持分离（`components/platform/allwinnera733/config.py` + `components/platform/allwinnera733/a733/config.py`），不合并为单一文件。
 
 #### Scenario: 配置合并
 - **WHEN** lunch target 为 `radxa-cubie-a7z-default-debug`
-- **THEN** 最终配置为 `platform/allwinnera733/config.py` → `platform/allwinnera733/a733/config.py` → `board/radxa-cubie-a7z/config.py` 三层深度合并的结果
+- **THEN** 最终配置为 `components/platform/allwinnera733/config.py` → `components/platform/allwinnera733/a733/config.py` → `components/board/radxa-cubie-a7z/config.py` 三层深度合并的结果
 
 #### Scenario: PLATFORM.vendor 字段与平台名一致
-- **WHEN** 加载 `platform/allwinnera733/config.py`
+- **WHEN** 加载 `components/platform/allwinnera733/config.py`
 - **THEN** `PLATFORM.vendor == "allwinnera733"`，与 `board.platform` 字段、`_FLASH_STRATEGIES` 注册键、`builder/platforms/allwinnera733/` 目录名严格一致
 
 #### Scenario: SOC.platform 字段指向新平台名
-- **WHEN** 加载 `platform/allwinnera733/a733/config.py`
+- **WHEN** 加载 `components/platform/allwinnera733/a733/config.py`
 - **THEN** `SOC.platform == "allwinnera733"`，以便 SOC 层知道自己属于哪个平台
 
 ### Requirement: A733 平台默认启用 adbd 调试通道
 `allwinnera733` 平台必须（SHALL）在 rootfs 中默认装配 `adbd` App，提供基于 USB gadget 的 adb 调试通道，使所有该平台的板开箱具备与 Rockchip 平台对等的调试能力。
 
 #### Scenario: 平台级 App 声明
-- **WHEN** 读取 `platform/allwinnera733/config.py` 的 `rootfs.custom_packages` 字段
+- **WHEN** 读取 `components/platform/allwinnera733/config.py` 的 `rootfs.custom_packages` 字段
 - **THEN** 列表包含字符串 `"adbd"`，使 `AppBuilder.build_all()` 在任意 `allwinnera733` 板的构建中自动为其打包并安装 adbd.deb
 
 #### Scenario: 板级未显式覆盖时的继承
-- **WHEN** 某 `allwinnera733` 板的 `board/<name>/config.py` 未声明 `rootfs.custom_packages`
+- **WHEN** 某 `allwinnera733` 板的 `components/board/<name>/config.py` 未声明 `rootfs.custom_packages`
 - **THEN** 经三层配置合并后，该板的 `custom_packages` 至少包含 `"adbd"`（来自平台层），rootfs 构建产物内 `/usr/bin/adbd` 等文件存在
 
 ### Requirement: A733 内核 USB gadget 保证
@@ -116,15 +116,15 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
   - `CONFIG_USB_CONFIGFS_F_FS=y`
 
 #### Scenario: defconfig 合并顺序
-- **WHEN** `platform/allwinnera733/a733/config.py` 的 `kernel.defconfig` 列表被 `configure()` 逐项应用
+- **WHEN** `components/platform/allwinnera733/a733/config.py` 的 `kernel.defconfig` 列表被 `configure()` 逐项应用
 - **THEN** `usb_gadget.config` 在 `radxa.config` 和 `radxa_custom.config` 之后应用，最终 `.config` 中 `CONFIG_USB_CONFIGFS=y`（非 `=m`）
 
 #### Scenario: 最终 `.config` 校验
-- **WHEN** 内核构建完成，读取 `sources/repos/linux-a733/src/.config`
+- **WHEN** 内核构建完成，读取 `.build/sources/repos/linux-a733/src/.config`
 - **THEN** `CONFIG_USB_GADGET=y`、`CONFIG_USB_CONFIGFS=y`、`CONFIG_USB_CONFIGFS_F_FS=y`、`CONFIG_CONFIGFS_FS=y` 四项同时成立
 
 ### Requirement: A7Z 板级 USB gadget 配置
-`board/radxa-cubie-a7z/overlay/etc/usbdevice.conf` 必须（SHALL）提供 A733 平台 USB gadget 的 VID/PID、gadget 组名、产品标识等参数，使 `usbdevice.service` 启动时能正确组装 configfs gadget 树。
+`components/board/radxa-cubie-a7z/overlay/etc/usbdevice.conf` 必须（SHALL）提供 A733 平台 USB gadget 的 VID/PID、gadget 组名、产品标识等参数，使 `usbdevice.service` 启动时能正确组装 configfs gadget 树。
 
 #### Scenario: VID 使用 Allwinner 官方值
 - **WHEN** 读取 A7Z rootfs 中 `/etc/usbdevice.conf`
@@ -139,15 +139,15 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** `USB_FUNCS=adb`，宿主机执行 `adb devices` 可识别到设备并进入 shell
 
 ### Requirement: A733 直接使用 linux-a733 原始 patches
-`AllwinnerA733KernelBuilder` 必须（SHALL）直接应用 `sources/repos/linux-a733/debian/patches/` 中的原始补丁，不再维护手动适配 `src/` 前缀的自定义版本。
+`AllwinnerA733KernelBuilder` 必须（SHALL）直接应用 `.build/sources/repos/linux-a733/debian/patches/` 中的原始补丁，不再维护手动适配 `src/` 前缀的自定义版本。
 
 #### Scenario: patches 从聚合仓库应用
 - **WHEN** 执行 `allwinnera733` 平台的内核构建
-- **THEN** 按 `sources/repos/linux-a733/debian/patches/series` 声明的顺序应用补丁
+- **THEN** 按 `.build/sources/repos/linux-a733/debian/patches/series` 声明的顺序应用补丁
 
 #### Scenario: patch 应用目录是聚合仓库根
 - **WHEN** 应用含 `a/src/...` 和 `a/bsp/...` 路径的补丁
-- **THEN** patch 在 `sources/repos/linux-a733/` 根目录应用，路径前缀自然匹配（无需 -p2 或路径改写）
+- **THEN** patch 在 `.build/sources/repos/linux-a733/` 根目录应用，路径前缀自然匹配（无需 -p2 或路径改写）
 
 #### Scenario: patches 顺序由 series 文件决定
 - **WHEN** `debian/patches/series` 列出 4 个补丁
@@ -158,4 +158,4 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 
 #### Scenario: bootloader 从命名仓库构建
 - **WHEN** 执行 `allwinnera733` 平台的 bootloader 构建
-- **THEN** 源码目录为 `sources/repos/u-boot-aw2501/`（含所有子模块）
+- **THEN** 源码目录为 `.build/sources/repos/u-boot-aw2501/`（含所有子模块）

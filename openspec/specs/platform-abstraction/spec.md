@@ -1,18 +1,18 @@
 # platform-abstraction Specification
 
 ## Purpose
-flange 的平台抽象层契约：`config/registry.py` 自动发现 `platform/*/config.py` 与 `platform/*/*/config.py`；`builder/engine.py` 通过 `config["platform"]` 动态 import `builder.platforms.<platform>` 模块获取 ARTIFACT_NAMES 与 `create_builder`；`builder/flash.py` 的 `FlashStrategy` 接口驱动 pre_flash 配置生成，避免引擎/配置生成层出现平台硬编码分支。
+flange 的平台抽象层契约：`builder/config/registry.py` 自动发现 `components/platform/*/config.py` 与 `components/platform/*/*/config.py`；`builder/engine.py` 通过 `config["platform"]` 动态 import `builder.platforms.<platform>` 模块获取 ARTIFACT_NAMES 与 `create_builder`；`builder/flash.py` 的 `FlashStrategy` 接口驱动 pre_flash 配置生成，避免引擎/配置生成层出现平台硬编码分支。
 
 ## Requirements
 ### Requirement: 配置注册表自动发现平台
-`config/registry.py` 必须（SHALL）通过扫描 `platform/*/config.py` 自动发现所有可用平台，不得使用硬编码的平台映射表。
+`builder/config/registry.py` 必须（SHALL）通过扫描 `components/platform/*/config.py` 自动发现所有可用平台，不得使用硬编码的平台映射表。
 
 #### Scenario: 新增平台自动识别
-- **WHEN** `platform/allwinnera733/config.py` 存在且导出 `PLATFORM` 变量
+- **WHEN** `components/platform/allwinnera733/config.py` 存在且导出 `PLATFORM` 变量
 - **THEN** `_load_platform_config("allwinnera733")` 成功返回平台配置字典
 
 #### Scenario: 现有 Rockchip 平台兼容
-- **WHEN** `platform/rockchip/config.py` 保持不变
+- **WHEN** `components/platform/rockchip/config.py` 保持不变
 - **THEN** `_load_platform_config("rockchip")` 返回与重构前完全相同的配置
 
 #### Scenario: 不存在的平台报错
@@ -24,14 +24,14 @@ flange 的平台抽象层契约：`config/registry.py` 自动发现 `platform/*/
 - **THEN** 抛出 `ValueError`，错误信息提示可用平台列表中包含 `allwinnera733` 而不包含 `allwinner`
 
 ### Requirement: 配置注册表自动发现 SoC
-`config/registry.py` 必须（SHALL）通过扫描 `platform/*/soc_name/config.py` 自动发现所有可用 SoC，不得使用硬编码的 SoC 映射表。SoC 目录的 parent 目录名确定其所属平台。
+`builder/config/registry.py` 必须（SHALL）通过扫描 `components/platform/*/soc_name/config.py` 自动发现所有可用 SoC，不得使用硬编码的 SoC 映射表。SoC 目录的 parent 目录名确定其所属平台。
 
 #### Scenario: 新增 SoC 自动识别
-- **WHEN** `platform/allwinnera733/a733/config.py` 存在且导出 `SOC` 变量
+- **WHEN** `components/platform/allwinnera733/a733/config.py` 存在且导出 `SOC` 变量
 - **THEN** `_load_soc_config("a733")` 成功返回 SoC 配置字典
 
 #### Scenario: 现有 RK3566 SoC 兼容
-- **WHEN** `platform/rockchip/rk3566/config.py` 保持不变
+- **WHEN** `components/platform/rockchip/rk3566/config.py` 保持不变
 - **THEN** `_load_soc_config("rk3566")` 返回与重构前完全相同的配置
 
 ### Requirement: 产物映射由平台定义

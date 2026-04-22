@@ -8,9 +8,9 @@ services:
       # 项目目录挂载到容器
       - .:/workspace
       # 源码仓库持久化
-      - ./sources:/workspace/sources
+      - ./.build/sources:/workspace/.build/sources
       # APT 下载缓存持久化
-      - ./cache/apt:/cache/apt
+      - ./.build/cache/apt:/cache/apt
       # SSH 密钥（挂载到临时位置，entrypoint 复制并修正权限）
       - ~/.ssh:/tmp/.ssh-host:ro
     working_dir: /workspace

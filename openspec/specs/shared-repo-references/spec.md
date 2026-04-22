@@ -8,22 +8,22 @@ TBD - created by archiving change add-shared-repo-references. Update Purpose aft
 
 #### Scenario: 命名仓库配置存在
 - **WHEN** 配置中声明 `repos.linux-a733` 包含 `repo` 和 `branch`
-- **THEN** `SourceManager` 能够识别并按此配置 clone 仓库到 `sources/repos/linux-a733/`
+- **THEN** `SourceManager` 能够识别并按此配置 clone 仓库到 `.build/sources/repos/linux-a733/`
 
 #### Scenario: 多个命名仓库并存
 - **WHEN** 配置声明 `repos.linux-a733` 和 `repos.u-boot-aw2501` 两个命名仓库
-- **THEN** 两者各自独立 clone 到 `sources/repos/<name>/`，互不影响
+- **THEN** 两者各自独立 clone 到 `.build/sources/repos/<name>/`，互不影响
 
 ### Requirement: 组件通过 from_repo 引用命名仓库
 组件配置必须（SHALL）支持 `from_repo` 字段引用命名仓库，可选 `subpath` 字段指定仓库内子路径。当 `from_repo` 存在时，`SourceManager.ensure()` 返回对应命名仓库的子路径，不独立 clone。
 
 #### Scenario: 组件引用命名仓库根
 - **WHEN** 组件配置为 `{"from_repo": "u-boot-aw2501"}`（无 subpath）
-- **THEN** `ensure()` 返回 `sources/repos/u-boot-aw2501/`
+- **THEN** `ensure()` 返回 `.build/sources/repos/u-boot-aw2501/`
 
 #### Scenario: 组件引用命名仓库子路径
 - **WHEN** 组件配置为 `{"from_repo": "linux-a733", "subpath": "src"}`
-- **THEN** `ensure()` 返回 `sources/repos/linux-a733/src/`
+- **THEN** `ensure()` 返回 `.build/sources/repos/linux-a733/src/`
 
 #### Scenario: 命名仓库只 clone 一次
 - **WHEN** 多个组件（kernel、kernel_bsp、kernel_device）都声明 `from_repo: "linux-a733"`
@@ -50,16 +50,16 @@ TBD - created by archiving change add-shared-repo-references. Update Purpose aft
 
 #### Scenario: 无 from_repo 时走独立 clone
 - **WHEN** 组件只声明 `repo` 字段（无 `from_repo` 无 `local_path`）
-- **THEN** `ensure()` 按原有逻辑 clone 到 `sources/<component>/<board>/`
+- **THEN** `ensure()` 按原有逻辑 clone 到 `.build/sources/<component>/<board>/`
 
 ### Requirement: 命名仓库存储位置隔离
-命名仓库必须（SHALL）存储在 `sources/repos/<name>/` 目录，不得与独立 clone 的 `sources/<component>/<board>/` 混用。
+命名仓库必须（SHALL）存储在 `.build/sources/repos/<name>/` 目录，不得与独立 clone 的 `.build/sources/<component>/<board>/` 混用。
 
 #### Scenario: 命名仓库独立存储
 - **WHEN** clone 命名仓库 `linux-a733`
-- **THEN** 仓库位于 `sources/repos/linux-a733/`，不位于 `sources/kernel/` 下
+- **THEN** 仓库位于 `.build/sources/repos/linux-a733/`，不位于 `.build/sources/kernel/` 下
 
 #### Scenario: 独立 clone 组件保持原位置
 - **WHEN** Rockchip kernel 组件使用传统 `repo` 配置
-- **THEN** 仓库仍 clone 到 `sources/kernel/<board>/`，不受命名仓库机制影响
+- **THEN** 仓库仍 clone 到 `.build/sources/kernel/<board>/`，不受命名仓库机制影响
 
