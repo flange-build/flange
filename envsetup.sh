@@ -86,7 +86,7 @@ _flange_python() {
 _flange_save_config() {
     _flange_ensure_state_dir
     _flange_python "
-from config.loader import save_state
+from builder.config.loader import save_state
 save_state('$FLANGE_BOARD', '$FLANGE_PRODUCT', '$FLANGE_VARIANT')
 "
     if [[ $? -ne 0 ]]; then
@@ -146,7 +146,7 @@ lunch() {
         # 验证 variant 合法性
         local valid
         valid=$(_flange_python "
-from config.query import get_valid_targets
+from builder.config.query import get_valid_targets
 targets = get_valid_targets()
 found = any(t == '${board}-${product}-${variant}' for t in targets)
 print('yes' if found else 'no')
@@ -174,7 +174,7 @@ print('yes' if found else 'no')
         # 验证 product 合法性
         local valid
         valid=$(_flange_python "
-from config.query import get_valid_targets
+from builder.config.query import get_valid_targets
 targets = get_valid_targets()
 found = any(t == '${board}-${product}-${variant}' for t in targets)
 print('yes' if found else 'no')
@@ -195,7 +195,7 @@ print('yes' if found else 'no')
     if [[ -n "$arg" ]]; then
         local parsed
         parsed=$(_flange_python "
-from config.query import parse_target
+from builder.config.query import parse_target
 import json
 try:
     result = parse_target('$arg')
@@ -208,7 +208,7 @@ except ValueError as e:
             echo ""
             echo "  可用的目标配置:"
             _flange_python "
-from config.query import get_valid_targets
+from builder.config.query import get_valid_targets
 for t in get_valid_targets():
     print('    - ' + t)
 "
@@ -229,12 +229,12 @@ for t in get_valid_targets():
     # 无参数: 交互式菜单
     local targets_raw
     targets_raw=$(_flange_python "
-from config.query import get_valid_targets
+from builder.config.query import get_valid_targets
 for t in get_valid_targets():
     print(t)
 ")
     if [[ -z "$targets_raw" ]]; then
-        _flange_error "未找到任何可用的目标配置（board/*/config.py）"
+        _flange_error "未找到任何可用的目标配置（components/board/*/config.py）"
         return 1
     fi
 
@@ -272,7 +272,7 @@ for t in get_valid_targets():
 
     local parsed
     parsed=$(_flange_python "
-from config.query import parse_target
+from builder.config.query import parse_target
 import json
 result = parse_target('$selected')
 print(json.dumps(result))
@@ -313,7 +313,7 @@ _flange_cmd_build() {
 
     # -f：删除 .build_hash 触发强制重建
     if [[ -n "$force" ]]; then
-        local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+        local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
         if [[ -n "$component_arg" ]]; then
             # 指定了组件：只删该组件的 .build_hash，下游由 Merkle 级联自动失效
             local hash_file="$target_dir/$component_arg/.build_hash"
@@ -347,7 +347,7 @@ _flange_cmd_build() {
             _flange_docker_run python3 -c "
 from builder.app import AppBuilder
 from builder.docker import DockerRunner
-from config.loader import load_current_config
+from builder.config.loader import load_current_config
 import logging
 logging.basicConfig(level=logging.WARNING)
 cfg = load_current_config()
@@ -359,7 +359,7 @@ builder.build_one('$app_name')
             _flange_docker_run python3 -c "
 from builder.app import AppBuilder
 from builder.docker import DockerRunner
-from config.loader import load_current_config
+from builder.config.loader import load_current_config
 import logging
 logging.basicConfig(level=logging.WARNING)
 cfg = load_current_config()
@@ -373,7 +373,7 @@ builder.build_all()
 
     _flange_docker_run python3 -c "
 from builder.engine import BuildEngine
-from config.loader import load_current_config
+from builder.config.loader import load_current_config
 import logging
 logging.basicConfig(level=logging.WARNING)
 cfg = load_current_config()
@@ -385,7 +385,7 @@ engine.build('$component')
 
 _flange_cmd_flash() {
     _flange_check_target || return 1
-    local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+    local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
     if [[ ! -f "${target_dir}/flash-config.json" ]]; then
         _flange_error "未找到 flash-config.json: ${target_dir}/flash-config.json"
         _flange_error "请先执行 flange build 生成镜像"
@@ -400,7 +400,7 @@ _flange_cmd_flash() {
 
 _flange_cmd_clean() {
     _flange_check_target || return 1
-    local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+    local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
     _flange_step "清理构建产物: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
     if [[ -d "$target_dir" ]]; then
         rm -rf "$target_dir"
@@ -446,7 +446,7 @@ _flange_cmd_status() {
 
     # 构建产物状态
     if [[ -n "$FLANGE_BOARD" ]] && [[ -n "$FLANGE_PRODUCT" ]] && [[ -n "$FLANGE_VARIANT" ]]; then
-        local target_dir="$FLANGE_DIR/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+        local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
         echo ""
         echo "  构建产物 ($target_dir):"
         if [[ -d "$target_dir" ]]; then
@@ -491,7 +491,7 @@ except ImportError:
 print('')
 print('  可用的 App:')
 print('  ─────────────────────────────')
-app_dir = Path('app')
+app_dir = Path('components/app')
 found = False
 if app_dir.exists():
     for d in sorted(app_dir.iterdir()):
@@ -509,7 +509,7 @@ if app_dir.exists():
             print(f'    {name:20s} {app_type:10s} {version:10s} {desc}')
             found = True
 if not found:
-    print('    （未找到任何 App，请在 app/ 目录下创建 App）')
+    print('    （未找到任何 App，请在 components/app/ 目录下创建 App）')
 print('')
 "
 }
@@ -562,7 +562,7 @@ except ScaffoldError as e:
 "
     local rc=$?
     if [[ $rc -eq 0 ]]; then
-        _flange_info "App 脚手架已生成：app/$app_name/"
+        _flange_info "App 脚手架已生成：components/app/$app_name/"
     else
         _flange_error "脚手架生成失败"
         return 1
@@ -735,6 +735,34 @@ flange() {
             ;;
     esac
 }
+
+# --- 便捷软链接：target -> .build/target（幂等创建，已 gitignore） ---
+# 保留根目录 target 入口，便于刷写/查看产物，无需键入完整 .build/target/ 路径。
+# 策略：
+#   - 已是指向 .build/target 的符号链接：无操作
+#   - 不存在：创建链接（目标目录 .build/target 可不存在，链接允许暂时悬空）
+#   - 是其他符号链接：修正为正确目标
+#   - 是普通文件/目录：打印 WARN 并跳过，由用户手动处置，避免误删数据
+_flange_ensure_target_link() {
+    local link_path="$FLANGE_DIR/target"
+    local link_target=".build/target"
+    if [[ -L "$link_path" ]]; then
+        local current
+        current=$(readlink "$link_path")
+        if [[ "$current" == "$link_target" ]]; then
+            return 0
+        fi
+        rm "$link_path"
+        ln -s "$link_target" "$link_path"
+        return 0
+    fi
+    if [[ -e "$link_path" ]]; then
+        _flange_warn "target 位置已有非链接文件/目录，跳过软链接创建: $link_path"
+        return 0
+    fi
+    ln -s "$link_target" "$link_path"
+}
+_flange_ensure_target_link
 
 # --- 初始化：恢复上次配置 ---
 if _flange_load_config; then
