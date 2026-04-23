@@ -295,6 +295,24 @@ _flange_docker_run() {
 
 # --- flange 子命令 ---
 _flange_cmd_build() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange build [component] [options]"
+        echo ""
+        echo "  构建指定的组件，或者构建整个系统镜像。"
+        echo ""
+        echo "  组件:"
+        echo "    image (默认)   构建完整的系统镜像 (包含所有依赖)"
+        echo "    app            构建所有的应用"
+        echo "    app <name>     构建单个应用"
+        echo "    <component>    构建指定的组件 (如: kernel, u-boot, rootfs)"
+        echo ""
+        echo "  选项:"
+        echo "    -f, --force    清除缓存并强制重新构建"
+        echo "    -v, --verbose  显示详细的构建日志"
+        echo "    -q, --quiet    静默模式，只显示错误"
+        echo "    -h, --help     显示此帮助信息"
+        return 0
+    fi
     # 解析 -v / -q / -f 参数
     local verbose=""
     local quiet=""
@@ -384,6 +402,21 @@ engine.build('$component')
 }
 
 _flange_cmd_flash() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange flash [options] [partition]"
+        echo ""
+        echo "  将构建好的镜像刷写到目标设备。"
+        echo ""
+        echo "  参数:"
+        echo "    partition      指定要刷写的分区名 (例如: rootfs, boot)。如果不指定，则全量刷写。"
+        echo ""
+        echo "  选项:"
+        echo "    --list         列出目标设备所有可刷写的分区及状态"
+        echo "    --raw <DEV>    使用 dd 将整盘镜像直接刷写到块设备 (如 /dev/sdX)"
+        echo "    --no-wait      刷写时跳过等待设备进入烧录模式的提示"
+        echo "    -h, --help     显示此帮助信息"
+        return 0
+    fi
     _flange_check_target || return 1
     local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
     if [[ ! -f "${target_dir}/flash-config.json" ]]; then
@@ -399,6 +432,12 @@ _flange_cmd_flash() {
 }
 
 _flange_cmd_clean() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange clean"
+        echo ""
+        echo "  清理当前目标的构建产物。"
+        return 0
+    fi
     _flange_check_target || return 1
     local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
     _flange_step "清理构建产物: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
@@ -411,6 +450,12 @@ _flange_cmd_clean() {
 }
 
 _flange_cmd_status() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange status"
+        echo ""
+        echo "  显示当前的开发环境配置和构建状态。"
+        return 0
+    fi
     echo ""
     echo "  flange 构建状态"
     echo "  ─────────────────────────────"
@@ -474,12 +519,24 @@ _flange_cmd_status() {
 }
 
 _flange_cmd_shell() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange shell [command]"
+        echo ""
+        echo "  进入 Docker 构建环境的交互式 Shell，或者在 Docker 中执行指定命令。"
+        return 0
+    fi
     _flange_step "进入构建环境 shell"
     _flange_docker_run bash "$@"
 }
 
 # --- flange list apps 子命令 ---
 _flange_cmd_list_apps() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange list apps"
+        echo ""
+        echo "  列出项目中所有可用的应用 (Apps)。"
+        return 0
+    fi
     _flange_python "
 from pathlib import Path
 try:
@@ -513,6 +570,23 @@ print('')
 
 # --- flange create app 子命令 ---
 _flange_cmd_create_app() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange create app <name> [options]"
+        echo ""
+        echo "  生成一个新的 App 脚手架。"
+        echo ""
+        echo "  参数:"
+        echo "    <name>                  应用名称"
+        echo ""
+        echo "  选项:"
+        echo "    --type=<type>           应用类型 (exec/service/lib/test)，默认: exec"
+        echo "    --build-system=<sys>    构建系统 (none/cmake/meson/make/swift)，默认: cmake"
+        echo "    --dir=<path>            应用生成的父目录，默认: components/app/"
+        echo "    --version=<ver>         应用初始版本，默认: 0.1.0"
+        echo "    --description=<desc>    应用描述"
+        echo "    -h, --help              显示此帮助信息"
+        return 0
+    fi
     local app_name="${1:-}"
     shift 2>/dev/null
 
@@ -576,9 +650,94 @@ except ScaffoldError as e:
     return 0
 }
 
+
+# --- flange push 子命令 ---
+_flange_cmd_push() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange push app <name> [options]"
+        echo ""
+        echo "  将单体应用热部署到通过 ADB 连接的目标设备。"
+        echo ""
+        echo "  选项:"
+        echo "    --no-build    跳过构建步骤，直接推送最后一次构建的 .deb 产物"
+        echo "    -h, --help    显示此帮助信息"
+        return 0
+    fi
+
+    _flange_check_target || return 1
+    local target="$1"
+    shift 2>/dev/null
+    
+    if [[ "$target" == "app" ]]; then
+        local app_name="${1:-}"
+        if [[ -z "$app_name" ]]; then
+            _flange_error "用法: flange push app <name>"
+            return 1
+        fi
+        
+        # 传递剩余参数（如 --no-build）
+        shift 1 2>/dev/null
+        _flange_step "热部署 App: $app_name"
+        python3 -m builder.deploy "$app_name" "$@"
+    else
+        _flange_error "用法: flange push app <name>"
+        return 1
+    fi
+}
+
+# --- flange run 子命令 ---
+_flange_cmd_run() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange run app <name> [options]"
+        echo ""
+        echo "  热部署并立即运行指定的单体应用。"
+        echo "  - 如果是 exec 类型的应用，将在设备端前台执行（可按 Ctrl+C 退出）。"
+        echo "  - 如果是 service 类型的应用，将重启其 systemd 服务并显示状态。"
+        echo ""
+        echo "  选项:"
+        echo "    --no-build    跳过构建步骤，直接推送最后一次构建的 .deb 产物"
+        echo "    -h, --help    显示此帮助信息"
+        return 0
+    fi
+
+    _flange_check_target || return 1
+    local target="$1"
+    shift 2>/dev/null
+    
+    if [[ "$target" == "app" ]]; then
+        local app_name="${1:-}"
+        if [[ -z "$app_name" ]]; then
+            _flange_error "用法: flange run app <name>"
+            return 1
+        fi
+        
+        # 传递剩余参数（如 --no-build）并加上 --run
+        shift 1 2>/dev/null
+        _flange_step "热部署并运行 App: $app_name"
+        python3 -m builder.deploy "$app_name" --run "$@"
+    else
+        _flange_error "用法: flange run app <name>"
+        return 1
+    fi
+}
+
 # --- flange docker 子命令 ---
 _flange_cmd_docker() {
     local docker_sub="$1"
+
+    if [[ "$docker_sub" == "-h" ]] || [[ "$docker_sub" == "--help" ]] || [[ -z "$docker_sub" ]]; then
+        echo "  用法: flange docker <subcommand>"
+        echo ""
+        echo "  管理构建环境的 Docker 镜像。"
+        echo ""
+        echo "  子命令:"
+        echo "    build     构建 Docker 镜像"
+        echo "    rebuild   重新构建 Docker 镜像（不使用缓存）"
+        echo "    status    显示 Docker 镜像当前状态"
+        echo "    -h, --help 显示此帮助信息"
+        return 0
+    fi
+
     shift 2>/dev/null
 
     case "$docker_sub" in
@@ -631,13 +790,8 @@ _flange_cmd_docker() {
             echo ""
             ;;
         *)
-            echo ""
-            echo "  用法: flange docker <subcommand>"
-            echo ""
-            echo "    build     构建 Docker 镜像"
-            echo "    rebuild   重新构建 Docker 镜像（无缓存）"
-            echo "    status    显示 Docker 镜像状态"
-            echo ""
+            echo "未知子命令: $docker_sub"
+            _flange_cmd_docker --help
             return 1
             ;;
     esac
@@ -647,41 +801,34 @@ _flange_cmd_docker() {
 flange() {
     local subcmd="$1"
 
-    if [[ -z "$subcmd" ]]; then
+    if [[ -z "$subcmd" ]] || [[ "$subcmd" == "-h" ]] || [[ "$subcmd" == "--help" ]]; then
         echo ""
-        echo "  用法: flange <subcommand> [参数...]"
+        echo "  flange - 嵌入式 Linux 系统构建框架"
+        echo "  =================================="
+        echo "  用法: flange <command> [args...] [options]"
         echo ""
-        echo "  构建命令:"
-        echo "    build [component]       构建组件（默认: image）"
-        echo "    build [component] -f    强制重建（-f 无 component 时重建全部）"
-        echo "    build app               构建所有 App"
-        echo "    build app <name>        构建单个 App"
-        echo "    clean                   清理构建产物"
+        echo "  核心模块 (Modules):"
+        echo "    build      [构建] 编译系统组件或应用"
+        echo "    flash      [刷写] 将镜像烧录到目标设备"
+        echo "    push       [部署] 热部署单个应用到目标设备"
+        echo "    run        [调试] 热部署并立即运行单个应用"
+        echo "    create     [脚手架] 生成新的应用或组件模板"
+        echo "    list       [查询] 列出可用的应用列表"
         echo ""
-        echo "  刷写命令:"
-        echo "    flash                   全量刷写到目标设备"
-        echo "    flash <partition>       刷写指定分区（如 rootfs, boot）"
-        echo "    flash --list            列出可刷写分区"
-        echo "    flash --raw /dev/sdX    dd 整盘刷写"
-        echo "    flash --no-wait         跳过设备等待"
-        echo ""
-        echo "  App 命令:"
-        echo "    list apps               列出所有可用 App"
-        echo "    create app <name>       生成 App 脚手架"
-        echo "      [--type=<type>]         App 类型（exec/service/lib/test，默认: exec）"
-        echo "      [--build-system=<sys>]  构建系统（none/cmake/meson/make/swift，默认: cmake）"
-        echo "      [--dir=<path>]          父目录（默认: components/app/）"
-        echo ""
-        echo "  工具命令:"
-        echo "    shell                   进入 Docker 构建环境 shell"
-        echo "    status                  显示当前状态"
-        echo "    docker <cmd>            管理 Docker 镜像（build/rebuild/status）"
+        echo "  环境与工具 (Environment & Tools):"
+        echo "    docker     管理 Docker 构建环境镜像"
+        echo "    shell      进入构建环境 (Docker) 的交互式 Shell"
+        echo "    clean      清理当前目标的构建产物"
+        echo "    status     显示当前配置和构建状态"
         echo ""
         if [[ -n "$FLANGE_BOARD" ]]; then
             echo "  当前目标: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
         else
             echo "  当前目标: （未选择，请执行 lunch）"
         fi
+        echo ""
+        echo "  获取更多帮助:"
+        echo "    flange <command> --help"
         echo ""
         return 0
     fi
@@ -698,6 +845,12 @@ flange() {
             ;;
         clean)
             _flange_cmd_clean "$@"
+            ;;
+        push)
+            _flange_cmd_push "$@"
+            ;;
+        run)
+            _flange_cmd_run "$@"
             ;;
         list)
             # flange list apps
