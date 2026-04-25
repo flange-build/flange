@@ -9,12 +9,12 @@
 
 ## 2. 构建图与缓存
 
-- [ ] 2.1 在 `builder/cache.py` 的 `DEPENDENCY_GRAPH` 中加入 `recovery: ["app", "kernel"]`
-- [ ] 2.2 在 `REQUIRED_ARTIFACTS` 中加入 `recovery/recovery.img` 校验
-- [ ] 2.3 扩展内容哈希逻辑，使 `recovery` 哈希包含 recovery 配置、kernel/app 上游哈希、overlay 和分区大小
-- [ ] 2.4 修改 `builder/engine.py`，支持 `flange build recovery` 调度和产物收集
-- [ ] 2.5 编写构建图测试：`image` 构建顺序包含 `recovery` 且位于 `image` 之前
-- [ ] 2.6 编写缓存测试：kernel 或 recovery App 变化会触发 recovery 重建
+- [x] 2.1 在 `builder/cache.py` 的 `DEPENDENCY_GRAPH` 中加入 `recovery: ["app", "kernel"]`
+- [x] 2.2 在 `REQUIRED_ARTIFACTS` 中加入 `recovery/recovery.img` 校验
+- [x] 2.3 扩展内容哈希逻辑，使 `recovery` 哈希包含 recovery 配置、kernel/app 上游哈希、overlay 和分区大小
+- [x] 2.4 修改 `builder/engine.py`，支持 `flange build recovery` 调度和产物收集
+- [x] 2.5 编写构建图测试：`image` 构建顺序包含 `recovery` 且位于 `image` 之前
+- [x] 2.6 编写缓存测试：kernel 或 recovery App 变化会触发 recovery 重建
 
 ## 3. Recovery 镜像构建
 
