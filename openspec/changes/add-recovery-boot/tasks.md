@@ -38,13 +38,13 @@
 
 ## 5. Image 与 flash-config 集成
 
-- [ ] 5.1 扩展 Rockchip image builder 的分区镜像映射，写入 `recovery/recovery.img`
-- [ ] 5.2 扩展 Allwinner A733 image builder 的分区镜像映射或首版静态跳过策略
-- [ ] 5.3 扩展 `RockchipFlashStrategy.partition_image_map()`，加入 `recovery`
-- [ ] 5.4 扩展 `AllwinnerA733FlashStrategy.partition_image_map()`，加入 `recovery` 或明确首版不刷写
-- [ ] 5.5 扩展 `FlashConfigGenerator`，为 `recovery` 写入 protection 策略元数据
-- [ ] 5.6 编写 image 组装测试：raw.img 写入 recovery 分区
-- [ ] 5.7 编写 flash-config 测试：包含 recovery 分区和镜像路径
+- [x] 5.1 扩展 Rockchip image builder 的分区镜像映射，写入 `recovery/recovery.img`
+- [x] 5.2 扩展 Allwinner A733 image builder 的分区镜像映射或首版静态跳过策略
+- [x] 5.3 扩展 `RockchipFlashStrategy.partition_image_map()`，加入 `recovery`
+- [x] 5.4 扩展 `AllwinnerA733FlashStrategy.partition_image_map()`，加入 `recovery` 或明确首版不刷写
+- [x] 5.5 扩展 `FlashConfigGenerator`，为 `recovery` 写入 protection 策略元数据
+- [x] 5.6 编写 image 组装测试：raw.img 写入 recovery 分区
+- [x] 5.7 编写 flash-config 测试：包含 recovery 分区和镜像路径
 
 ## 6. recoveryctl 设备端工具
 

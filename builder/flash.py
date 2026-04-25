@@ -70,6 +70,10 @@ class FlashPartition:
     offset: str       # "0x40" 等 hex 字符串
     type: str         # "raw", "ext4" 等
     image: str        # 相对于 target_dir 的路径
+    # recovery 与宿主机端均消费的保护标记：raw 类型分区一律 True；
+    # 此外 recovery.protected_partitions 中显式列出的分区也标记 True。
+    # 默认 False，向前兼容现有 flash-config.json 消费者。
+    protected: bool = False
 
 
 @dataclass
@@ -252,12 +256,15 @@ class RockchipFlashStrategy(FlashStrategy):
         subprocess.run([str(tool), "RD"], check=True)
 
     def partition_image_map(self, config: dict) -> dict[str, str]:
-        return {
+        m = {
             "idbloader": "bootloader/idbloader.img",
             "uboot": "bootloader/u-boot.itb",
             "boot": "boot/boot.img",
             "rootfs": "rootfs/rootfs.img",
         }
+        if (config.get("recovery") or {}).get("enabled", False):
+            m["recovery"] = "recovery/recovery.img"
+        return m
 
     def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
         return PreFlashConfig(download_boot="bootloader/miniloader.bin")
@@ -287,13 +294,18 @@ class AllwinnerA733FlashStrategy(FlashStrategy):
         _info("SD 卡模式：请手动插入 SD 卡并重启设备")
 
     def partition_image_map(self, config: dict) -> dict[str, str]:
-        return {
+        # SD 卡模式整体 dd raw.img；列出 recovery 仅为生成 flash-config.json 时
+        # 携带 protection 元数据，write_partition 不会被逐分区调用。
+        m = {
             "boot0": "bootloader/boot0_sdcard.bin",
             "boot0_ufs": "bootloader/boot0_ufs.bin",
             "boot_package": "bootloader/boot_package.fex",
             "boot": "boot/boot.img",
             "rootfs": "rootfs/rootfs.img",
         }
+        if (config.get("recovery") or {}).get("enabled", False):
+            m["recovery"] = "recovery/recovery.img"
+        return m
 
 
 # 策略注册表
@@ -319,10 +331,20 @@ class FlashConfigGenerator:
     """从 FINAL_CONFIG 生成 flash-config.json。"""
 
     def generate(self, config: dict, target_dir: Path) -> Path:
-        """生成 flash-config.json 到 target_dir，返回文件路径。"""
+        """生成 flash-config.json 到 target_dir，返回文件路径。
+
+        ``protected`` 标记规则：``type == "raw"`` 一律 True；启用 recovery 时
+        ``recovery.protected_partitions`` 名单中的分区也置 True；recovery 自身
+        分区始终视为受保护（设备端不允许从 recovery 内重写自己）。
+        """
         platform = config.get("platform", "")
         strategy = get_flash_strategy(platform)
         image_map = strategy.partition_image_map(config)
+
+        recovery_cfg = config.get("recovery") or {}
+        protected_set: set[str] = set(recovery_cfg.get("protected_partitions") or [])
+        if recovery_cfg.get("enabled", False):
+            protected_set.add("recovery")
 
         partitions = []
         for entry in config.get("partitions", {}).get("entries", []):
@@ -330,11 +352,14 @@ class FlashConfigGenerator:
             image = image_map.get(name, "")
             if not image:
                 continue  # 跳过无镜像映射的分区（如 userdata）
+            ptype = entry.get("type", "raw")
+            protected = bool(ptype == "raw" or name in protected_set)
             partitions.append(FlashPartition(
                 name=name,
                 offset=entry.get("offset", "0x0"),
-                type=entry.get("type", "raw"),
+                type=ptype,
                 image=image,
+                protected=protected,
             ))
 
         # 构造 pre_flash（由平台策略声明）

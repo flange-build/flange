@@ -26,6 +26,9 @@ class AllwinnerA733ImageBuilder(ComponentBuilder):
         "boot_package":  "bootloader/boot_package.fex",
         "boot":          "boot/boot.img",
         "rootfs":        "rootfs/rootfs.img",
+        # 首版 A733：recovery 镜像由共用 RecoveryBuilder 产出后随 raw.img 一并
+        # dd 到 SD 卡；compile 中"镜像不存在即跳过"逻辑覆盖未生成场景。
+        "recovery":      "recovery/recovery.img",
     }
 
     def build(self, config: dict) -> dict:
