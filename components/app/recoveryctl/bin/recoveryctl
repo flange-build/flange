@@ -301,6 +301,14 @@ def validate_flash(
             "如确需强制写入请添加 --force（仍会再做二次确认）。"
         )
 
+    # 二次校验：强制写入受保护分区时必须同时提供 --sha256，
+    # 避免在最敏感的分区上误写损坏镜像。
+    if entry.get("protected") and req.force and not req.sha256_expected:
+        raise RecoveryError(
+            f"--force 写入受保护分区 {req.partition} 时必须同时提供 --sha256，"
+            "以确保镜像未损坏。"
+        )
+
     if not req.image_path.is_file():
         raise RecoveryError(f"镜像文件不存在：{req.image_path}")
 

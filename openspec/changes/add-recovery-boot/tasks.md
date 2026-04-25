@@ -74,11 +74,11 @@
 
 ## 8. 安全与错误处理
 
-- [ ] 8.1 为 protected 分区定义默认策略：bootloader/raw/recovery 默认受保护
-- [ ] 8.2 为 `--force` 增加 host 侧确认与 device 侧二次校验
-- [ ] 8.3 为 ADB 未连接、设备未在 recovery、镜像不存在、分区不存在提供中文错误信息
-- [ ] 8.4 确保 `flange recovery` 不接受裸 block device 作为普通分区参数
-- [ ] 8.5 编写错误路径测试：ADB timeout、sha256 不匹配、镜像过大、目标已挂载
+- [x] 8.1 为 protected 分区定义默认策略：bootloader/raw/recovery 默认受保护
+- [x] 8.2 为 `--force` 增加 host 侧确认与 device 侧二次校验
+- [x] 8.3 为 ADB 未连接、设备未在 recovery、镜像不存在、分区不存在提供中文错误信息
+- [x] 8.4 确保 `flange recovery` 不接受裸 block device 作为普通分区参数
+- [x] 8.5 编写错误路径测试：ADB timeout、sha256 不匹配、镜像过大、目标已挂载
 
 ## 9. 文档与验收
 

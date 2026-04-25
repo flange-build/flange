@@ -202,8 +202,10 @@ class TestValidateFlash:
                 partition_resolver=lambda n: Path(f"/dev/disk/by-partlabel/{n}"),
             )
 
-    def test_protected_passes_with_force(self, rc, tmp_path):
+    def test_protected_passes_with_force_and_sha(self, rc, tmp_path):
+        # protected 分区强制写入要求 --sha256（设备端二次校验，§8.2）
         req = _flash_request(rc, tmp_path, name="recovery", force=True)
+        req.sha256_expected = rc.sha256_of_file(req.image_path)
         dev = rc.validate_flash(
             req, _sample_config(),
             block_size_lookup=lambda d: 1 << 30,

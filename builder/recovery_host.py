@@ -223,11 +223,14 @@ def _sha256_of_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
 
 
 def cmd_flash(t: Transport, *, partition: str, image: Path,
-              force: bool = False) -> int:
+              force: bool = False, prompt=input) -> int:
     """上传镜像 → 设备端 ``recoveryctl flash`` 校验后写入。
 
     宿主机不接受裸 block device 作为 partition 参数；分区名按
     recoveryctl 中 recovery-config.json 的 partitions[*].name 严格匹配。
+
+    ``--force`` 触发宿主侧二次确认（必须输入字面量 ``YES``）；设备侧还会再
+    校验 protected 分区在强制写入时必须同时提供 sha256，构成两层兜底。
     """
     if "/" in partition or partition.startswith("dev"):
         raise HostRecoveryError(
@@ -235,6 +238,14 @@ def cmd_flash(t: Transport, *, partition: str, image: Path,
         )
     if not image.is_file():
         raise HostRecoveryError(f"镜像文件不存在：{image}")
+
+    if force:
+        ans = prompt(
+            f"⚠  即将以 --force 写入受保护分区 {partition}（镜像 {image.name}）。\n"
+            f"   该操作可能导致设备无法启动。如确认请输入 'YES'（区分大小写）："
+        )
+        if (ans or "").strip() != "YES":
+            raise HostRecoveryError("用户未确认 --force 写入，已取消")
 
     require_recovery_mode(t)
 
@@ -348,7 +359,8 @@ HANDLERS = {
     "enter":  lambda t, args: cmd_enter(t),
     "list":   lambda t, args: cmd_list(t, output_json=args.output_json),
     "flash":  lambda t, args: cmd_flash(
-        t, partition=args.partition, image=Path(args.image), force=args.force),
+        t, partition=args.partition, image=Path(args.image), force=args.force,
+        prompt=input),
     "backup": lambda t, args: cmd_backup(
         t, partition=args.partition, output=Path(args.output),
         compress=args.compress),
