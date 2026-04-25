@@ -12,6 +12,7 @@ ARTIFACT_NAMES = {
     ("bootloader", "miniloader"): "miniloader.bin",
     ("boot",       "boot"):       "boot.img",
     ("rootfs",     "rootfs"):     "rootfs.img",
+    ("recovery",   "recovery"):   "recovery.img",
     ("image",      "image"):      "raw.img",
 }
 
@@ -30,6 +31,9 @@ def create_builder(component: str, docker: DockerRunner, source: SourceManager):
     elif component == "boot":
         from builder.platforms.rockchip.boot import RockchipBootBuilder
         return RockchipBootBuilder(docker, source)
+    elif component == "recovery":
+        from builder.platforms.rockchip.recovery import RockchipRecoveryBuilder
+        return RockchipRecoveryBuilder(docker, source)
     elif component == "image":
         from builder.platforms.rockchip.image import RockchipImageBuilder
         return RockchipImageBuilder(docker, source)

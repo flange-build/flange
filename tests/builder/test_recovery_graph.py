@@ -130,16 +130,18 @@ class TestRecoveryHash:
             assert h1 != h2
 
     def test_recovery_hash_propagates_app_change(self):
-        """app 组件哈希变化必须级联到 recovery。"""
+        """app 组件哈希变化必须级联到 recovery。
+
+        recovery.custom_packages 增加包名时（recovery 自有 deb 列表变化），
+        app 子系统的并集变了 → app 组件哈希变 → Merkle 链上 recovery 哈希也变。
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
-            # app 组件的哈希基于 custom_packages 列表 + 各 App 目录树。
-            # 这里只改 custom_packages 名（可不存在），观察 recovery 是否级联。
             cache1 = _make_cache(Path(tmpdir))
-            cache1.config["rootfs"]["custom_packages"] = ["adbd"]
+            cache1.config["recovery"]["custom_packages"] = ["adbd"]
             h1 = cache1.compute_hash("recovery")
 
             cache2 = _make_cache(Path(tmpdir))
-            cache2.config["rootfs"]["custom_packages"] = ["adbd", "recoveryctl"]
+            cache2.config["recovery"]["custom_packages"] = ["adbd", "recoveryctl"]
             h2 = cache2.compute_hash("recovery")
             assert h1 != h2
 

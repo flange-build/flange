@@ -431,15 +431,15 @@ class AppBuilder:
     def build_all(self) -> Dict[str, Path]:
         """构建所有 custom_packages，返回 {app_name: deb_path}。
 
-        从 config["rootfs"]["custom_packages"] 获取待构建 App 列表，
-        按拓扑排序顺序逐个调用 build_one()。
+        待构建集合为 ``rootfs.custom_packages`` 与 ``recovery.custom_packages``
+        的并集（启用 recovery 时合并）；rootfs 的 phase2 与 recovery 的
+        phase2 各自挑选所需的 deb 安装。
 
         返回：
             {app_name: .deb 路径} 字典
         """
-        custom_packages: list[str] = (
-            self._config.get("rootfs", {}).get("custom_packages", [])
-        )
+        from builder.config.apps import gather_custom_packages
+        custom_packages: list[str] = gather_custom_packages(self._config)
         if not custom_packages:
             self._status("custom_packages 为空，无需构建 App")
             return {}

@@ -282,11 +282,16 @@ class BuildCache:
     # --- 哈希输入混合：app ---
 
     def _mix_app_sources(self, h: "hashlib._Hash") -> None:
-        """将 custom_packages 列表及各 App 的完整源码内容混入 h。"""
-        rootfs_cfg = self.config.get("rootfs", {})
-        custom_packages: list = rootfs_cfg.get("custom_packages", [])
-        h.update(json.dumps(sorted(custom_packages)).encode())
-        for pkg in sorted(custom_packages):
+        """将 custom_packages 列表及各 App 的完整源码内容混入 h。
+
+        集合为 rootfs.custom_packages 与启用时 recovery.custom_packages 的并集，
+        与 AppBuilder.build_all 的来源保持一致，避免 recoveryctl 改动后 app
+        组件未失效。
+        """
+        from builder.config.apps import gather_custom_packages
+        custom_packages = gather_custom_packages(self.config)
+        h.update(json.dumps(custom_packages).encode())
+        for pkg in custom_packages:
             app_dir = Path("components/app") / pkg
             if app_dir.exists():
                 self._hash_directory(h, app_dir)

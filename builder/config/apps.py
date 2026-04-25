@@ -26,6 +26,30 @@ class AppSourceConfigError(ValueError):
     """``external_apps`` / ``external_app_dirs`` 校验失败时抛出。"""
 
 
+def gather_custom_packages(config: dict) -> list[str]:
+    """收集所有需要由 AppBuilder 构建的 custom package 名（去重 + 排序）。
+
+    既包括 ``rootfs.custom_packages``（normal 系统装入），也包括启用 recovery
+    时 ``recovery.custom_packages``（recovery 系统装入）。这是 AppBuilder 与
+    BuildCache._mix_app_sources 的单一事实源——确保 recoveryctl 这样的"只用
+    在 recovery 内"的 deb 也能进入构建集合。
+
+    禁用 recovery（``recovery.enabled is False`` 或缺省）时不读 recovery 列表。
+    """
+    rootfs_pkgs = (config.get("rootfs") or {}).get("custom_packages") or []
+    seen: set[str] = set(rootfs_pkgs)
+    merged: list[str] = list(rootfs_pkgs)
+
+    recovery_cfg = config.get("recovery") or {}
+    if recovery_cfg.get("enabled", False):
+        for pkg in recovery_cfg.get("custom_packages") or []:
+            if pkg not in seen:
+                seen.add(pkg)
+                merged.append(pkg)
+
+    return sorted(merged)
+
+
 # 合法的 git 模式字段集（白名单外字段可通过但不被本模块消费）
 _GIT_MODE_KEYS: frozenset[str] = frozenset(
     {"git", "branch", "commit", "tag", "recurse_submodules"}

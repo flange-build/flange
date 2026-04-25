@@ -18,14 +18,14 @@
 
 ## 3. Recovery 镜像构建
 
-- [ ] 3.1 新增公共 recovery 构建基类或复用 RootfsBuilder 的 recovery 构建辅助函数
-- [ ] 3.2 新增 Rockchip recovery 构建策略，产出 ext4 `recovery.img`
-- [ ] 3.3 确保 `recovery.img` 文件系统 label 为 `recovery`
-- [ ] 3.4 将 kernel modules 安装进 recovery rootfs
-- [ ] 3.5 将 `adbd` 和 `recoveryctl` 安装进 recovery rootfs
-- [ ] 3.6 安装 recovery 所需基础工具：`python3-minimal`、`util-linux`、`e2fsprogs`、`parted`、`gptfdisk`、`zstd` 等
-- [ ] 3.7 生成并嵌入 `/etc/flange/recovery-config.json`
-- [ ] 3.8 编写 recovery 构建测试：产物存在、label 正确、关键文件存在
+- [x] 3.1 新增公共 recovery 构建基类或复用 RootfsBuilder 的 recovery 构建辅助函数
+- [x] 3.2 新增 Rockchip recovery 构建策略，产出 ext4 `recovery.img`
+- [x] 3.3 确保 `recovery.img` 文件系统 label 为 `recovery`
+- [x] 3.4 将 kernel modules 安装进 recovery rootfs
+- [x] 3.5 将 `adbd` 和 `recoveryctl` 安装进 recovery rootfs
+- [x] 3.6 安装 recovery 所需基础工具：`python3-minimal`、`util-linux`、`e2fsprogs`、`parted`、`gptfdisk`、`zstd` 等
+- [x] 3.7 生成并嵌入 `/etc/flange/recovery-config.json`
+- [x] 3.8 编写 recovery 构建测试：产物存在、label 正确、关键文件存在
 
 ## 4. Boot 启动入口
 
