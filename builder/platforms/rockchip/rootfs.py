@@ -70,11 +70,22 @@ class RockchipRootfsBuilder(RootfsBuilder):
         """写入 /etc/fstab，挂载 rootfs 和 boot 分区。
 
         使用 LABEL 而非 PARTUUID，不依赖 GPT 分区表正确性。
-        若 overlay 已提供 /etc/fstab，则尊重 overlay 版本，不覆盖。
+        若 overlay 已提供真实 /etc/fstab（声明 LABEL= / UUID= / /dev/ /
+        PARTUUID= 任一挂载项），则尊重 overlay 版本不覆盖。
+
+        ubuntu-base tarball 自带的占位 fstab 仅含 "# UNCONFIGURED FSTAB FOR
+        BASE SYSTEM" 注释、无任何挂载项，会通过 ".strip() 非空" 判断逃逸；
+        必须显式按"是否含挂载项标记"来判断。
         """
         fstab = rootfs_dir / "etc" / "fstab"
-        if fstab.exists() and fstab.read_text().strip():
-            return
+        if fstab.exists():
+            existing = fstab.read_text()
+            has_real_mount = any(
+                marker in existing
+                for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")
+            )
+            if has_real_mount:
+                return
         fstab.parent.mkdir(parents=True, exist_ok=True)
         fstab.write_text(
             "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>\n"

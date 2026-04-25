@@ -114,15 +114,63 @@ class AdbTransport(Transport):
                 f"adb pull 失败：{r.stderr.strip() or r.stdout.strip()}"
             )
 
+    # 用于在 stdout 末尾捕获远端进程退出码的固定标记。
+    # 历史上不同版本的 adbd / adb 在 shell protocol v2 上的实现不一致，
+    # 经常出现远端命令失败但 `adb shell` 仍返回 0 的情况；显式包一层
+    # `; printf` 把退出码捎回来是最稳的做法。
+    _RC_MARKER = "__flange_rc__"
+
     def shell(self, args: list[str], *, capture: bool = True) -> ShellResult:
         # adb shell 把 args 当作单个字符串拼起来；用 shlex.join 安全转义
         cmdline = shlex.join(args)
-        r = self._run(["shell", cmdline], capture=capture)
+        if capture:
+            wrapped = f"{cmdline}; printf '\\n{self._RC_MARKER}=%d\\n' \"$?\""
+            r = self._run(["shell", wrapped], capture=True)
+            stdout = r.stdout or ""
+            remote_rc = self._extract_rc(stdout)
+            stdout_clean = self._strip_rc_marker(stdout)
+            # adb 自身失败（连接断开等）保留它的 rc；远端命令成功执行
+            # 时以 remote_rc 为准。
+            final_rc = r.returncode if r.returncode != 0 else remote_rc
+            return ShellResult(
+                returncode=final_rc,
+                stdout=stdout_clean,
+                stderr=r.stderr or "",
+            )
+        # 非 capture 模式：保持交互/直通输出，无法解析 rc，退化为 adb 本身的
+        # 退出码（多数现代 adb 已能透传）。
+        r = self._run(["shell", cmdline], capture=False)
         return ShellResult(
             returncode=r.returncode,
             stdout=r.stdout or "",
             stderr=r.stderr or "",
         )
+
+    @classmethod
+    def _extract_rc(cls, stdout: str) -> int:
+        """从 stdout 末尾扫描 __flange_rc__=<int> 行，找不到时返回 0。"""
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if line.startswith(cls._RC_MARKER + "="):
+                try:
+                    return int(line.split("=", 1)[1])
+                except (IndexError, ValueError):
+                    return 0
+        return 0
+
+    @classmethod
+    def _strip_rc_marker(cls, stdout: str) -> str:
+        """剥离 stdout 末尾的 __flange_rc__=<int> 标记行。"""
+        lines = stdout.splitlines(keepends=True)
+        # 从末尾向前剥离匹配行 + 紧邻的空行
+        while lines and (
+            lines[-1].strip().startswith(cls._RC_MARKER + "=")
+            or not lines[-1].strip()
+        ):
+            line = lines.pop()
+            if line.strip().startswith(cls._RC_MARKER + "="):
+                break
+        return "".join(lines)
 
     def interactive_shell(self) -> int:
         r = subprocess.run([self.adb, "shell"], check=False)
@@ -134,15 +182,32 @@ class AdbTransport(Transport):
 # ──────────────────────────────────────────────────────────────────
 
 
-def query_device_mode(t: Transport) -> str:
-    """通过 ``recoveryctl mode`` 查询设备当前模式。"""
-    r = t.shell(["recoveryctl", "mode"])
-    if r.returncode != 0:
-        raise HostRecoveryError(
-            f"无法读取设备模式（recoveryctl mode 退出 {r.returncode}）："
-            f"{r.stderr.strip() or r.stdout.strip()}"
-        )
-    return r.stdout.strip() or "normal"
+def query_device_mode(t: Transport, *, retries: int = 3,
+                      retry_sleep: float = 2.0) -> str:
+    """通过 ``recoveryctl mode`` 查询设备当前模式。
+
+    刚 reboot 完 adbd 可能尚未稳定，会出现 "error: closed" / 短暂的非 0 rc；
+    对这类瞬态错误做短暂重试，最多 ``retries`` 次。
+    """
+    last: ShellResult | None = None
+    for attempt in range(max(1, retries)):
+        r = t.shell(["recoveryctl", "mode"])
+        if r.returncode == 0:
+            return r.stdout.strip() or "normal"
+        last = r
+        # 仅对常见瞬态信号重试；其余错误（如 recoveryctl 不存在）立刻报
+        msg = (r.stderr + r.stdout).lower()
+        transient = ("closed" in msg or "device offline" in msg
+                     or "device not found" in msg or msg.strip() == "")
+        if not transient:
+            break
+        if attempt < retries - 1:
+            time.sleep(retry_sleep)
+    assert last is not None
+    raise HostRecoveryError(
+        f"无法读取设备模式（recoveryctl mode 退出 {last.returncode}）："
+        f"{last.stderr.strip() or last.stdout.strip()}"
+    )
 
 
 def require_recovery_mode(t: Transport) -> None:

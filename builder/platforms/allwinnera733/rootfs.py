@@ -63,10 +63,21 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
         ])
 
     def _install_fstab(self, rootfs_dir: Path):
-        """写入 /etc/fstab。使用 LABEL 挂载。"""
+        """写入 /etc/fstab。使用 LABEL 挂载。
+
+        ubuntu-base tarball 自带占位 fstab 仅含注释、无挂载项；判断"是否
+        被 overlay 自定义"必须按是否含 LABEL= / UUID= / /dev/ / PARTUUID=
+        任一挂载项标记，而非简单的 ".strip() 非空"。
+        """
         fstab = rootfs_dir / "etc" / "fstab"
-        if fstab.exists() and fstab.read_text().strip():
-            return
+        if fstab.exists():
+            existing = fstab.read_text()
+            has_real_mount = any(
+                marker in existing
+                for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")
+            )
+            if has_real_mount:
+                return
         fstab.parent.mkdir(parents=True, exist_ok=True)
         fstab.write_text(
             "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>\n"
