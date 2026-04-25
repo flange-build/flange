@@ -29,12 +29,12 @@
 
 ## 4. Boot 启动入口
 
-- [ ] 4.1 扩展 Rockchip boot builder，启用 recovery 时生成 normal 和 recovery 两个 extlinux label
-- [ ] 4.2 扩展 Allwinner A733 boot builder 的 extlinux 生成逻辑或增加待实现保护错误
-- [ ] 4.3 实现设备端 boot 默认项切换 helper，支持原子修改 `/boot/extlinux/extlinux.conf`
-- [ ] 4.4 确保 recovery 启动后可恢复 normal 默认项
-- [ ] 4.5 编写 extlinux 内容测试：包含 normal/recovery label 且 recovery root 指向 recovery 分区
-- [ ] 4.6 编写 boot 默认项切换测试：normal -> recovery -> normal 可往返
+- [x] 4.1 扩展 Rockchip boot builder，启用 recovery 时生成 normal 和 recovery 两个 extlinux label
+- [x] 4.2 扩展 Allwinner A733 boot builder 的 extlinux 生成逻辑或增加待实现保护错误
+- [x] 4.3 实现设备端 boot 默认项切换 helper，支持原子修改 `/boot/extlinux/extlinux.conf`
+- [x] 4.4 确保 recovery 启动后可恢复 normal 默认项
+- [x] 4.5 编写 extlinux 内容测试：包含 normal/recovery label 且 recovery root 指向 recovery 分区
+- [x] 4.6 编写 boot 默认项切换测试：normal -> recovery -> normal 可往返
 
 ## 5. Image 与 flash-config 集成
 

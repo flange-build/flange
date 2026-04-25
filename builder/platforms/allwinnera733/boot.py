@@ -13,6 +13,12 @@ import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.extlinux import (
+    LabelSpec,
+    NORMAL_LABEL,
+    RECOVERY_LABEL,
+    render_extlinux,
+)
 
 
 class AllwinnerA733BootBuilder(ComponentBuilder):
@@ -71,20 +77,42 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         根设备使用 PARTUUID 定位（由 ImageBuilder 在 GPT 分区表中写入固定
         UUID）。相比 LABEL=xxx，PARTUUID 无需 userspace udev 辅助，
         kernel 启动早期即可解析，避免 "Waiting for root device" 卡死。
+
+        启用 recovery 时新增 recovery label；recovery 分区由 mke2fs -L recovery
+        创建 ext4 label，因此 recovery 入口仍可使用 LABEL=recovery 定位（与
+        Rockchip 一致），即便首版不要求 A733 实机验证 recovery 启动。
         """
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
         root_partuuid = boot_cfg.get("root_partuuid",
                                      "614e0000-0000-4000-8000-000000000001")
-        append = (f"root=PARTUUID={root_partuuid} "
-                  f"rootfstype=ext4 rootwait rw {kernel_args}").rstrip()
-        lines = [
-            "label linux",
-            "  kernel /extlinux/Image",
-            f"  devicetree /extlinux/{dtb_filename}",
-            f"  append {append}",
-        ]
-        return "\n".join(lines) + "\n"
+
+        normal = LabelSpec(
+            name=NORMAL_LABEL,
+            kernel="/extlinux/Image",
+            fdt=f"/extlinux/{dtb_filename}",
+            fdt_directive="devicetree",
+            append=(
+                f"root=PARTUUID={root_partuuid} "
+                f"rootfstype=ext4 rootwait rw {kernel_args}"
+            ).rstrip(),
+        )
+        labels = [normal]
+
+        if (config.get("recovery") or {}).get("enabled", False):
+            recovery = LabelSpec(
+                name=RECOVERY_LABEL,
+                kernel="/extlinux/Image",
+                fdt=f"/extlinux/{dtb_filename}",
+                fdt_directive="devicetree",
+                append=(
+                    f"root=LABEL=recovery rootfstype=ext4 rootwait rw "
+                    f"flange.mode=recovery {kernel_args}"
+                ).rstrip(),
+            )
+            labels.append(recovery)
+
+        return render_extlinux(NORMAL_LABEL, labels)
 
     def _partition_size_mb(self, config: dict, name: str) -> int:
         for entry in config.get("partitions", {}).get("entries", []):
