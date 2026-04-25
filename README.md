@@ -76,6 +76,7 @@ lunch
 | `flange build kernel` | 只构建内核 |
 | `flange build bootloader` | 只构建 bootloader |
 | `flange build rootfs` | 只构建根文件系统 |
+| `flange build recovery` | 只构建 recovery 维护镜像 |
 | `flange build app` | 构建当前配置所需的所有 App |
 | `flange build app <name>` | 构建指定 App |
 | `flange flash` | 全量刷写到设备（自动检测设备） |
@@ -83,6 +84,12 @@ lunch
 | `flange flash --list` | 列出可刷写分区及镜像路径 |
 | `flange flash --raw /dev/sdX` | dd 整盘刷写 |
 | `flange flash --no-wait` | 跳过设备等待（CI 环境） |
+| `flange recovery enter` | 让设备从 normal 进入 recovery（USB ADB） |
+| `flange recovery list` | 列出设备分区与挂载状态 |
+| `flange recovery flash <part> <img>` | USB ADB 通道写入指定分区 |
+| `flange recovery backup <part> <out>` | USB ADB 通道备份分区到本机文件 |
+| `flange recovery shell` | 打开 ADB 交互式 shell |
+| `flange recovery reboot [normal\|recovery]` | 切换 boot 默认项并重启（默认 normal） |
 | `flange clean` | 清理当前配置的构建产物 |
 | `flange status` | 显示当前配置和构建状态 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
@@ -90,6 +97,46 @@ lunch
 | `flange list apps` | 列出所有可用 App（本地 + external_apps + external_app_dirs） |
 | `flange docker build` | 构建 Docker 镜像 |
 | `flange docker rebuild` | 无缓存重建 Docker 镜像 |
+
+## Recovery 维护系统
+
+flange 默认在 boot 分区生成 normal 与 recovery 双 extlinux 启动入口，并在
+GPT 中分配独立的 `recovery` 分区（默认 512MB，紧随 rootfs）。recovery 是一
+个最小化的 Ubuntu 维护系统，预装 `adbd`、`recoveryctl`、`parted`、`gptfdisk`、
+`zstd` 等工具，主要用于 normal 系统损坏或在线维护时通过 USB ADB 完成分区
+级线刷与备份。
+
+详细说明（构建产物、启动切换原理、刷写安全策略、排障）参见
+[`docs/recovery.md`](docs/recovery.md)。
+
+**典型流程：**
+
+```bash
+# 1. 构建并整盘刷写一次（首次升级到含 recovery 布局必须整盘刷）
+flange build && flange flash
+
+# 2. 设备启动 normal 后，从宿主机请求进入 recovery
+flange recovery enter
+
+# 3. 在 recovery 中查看分区状态
+flange recovery list
+
+# 4. 备份当前 rootfs
+flange recovery backup rootfs ~/rootfs-backup.img.zst
+
+# 5. 在线刷写新 rootfs
+flange recovery flash rootfs ~/build-output/rootfs.img
+
+# 6. 回到 normal 系统
+flange recovery reboot
+```
+
+**安全约束：**
+
+- `flash` / `backup` 仅在 recovery 模式下生效，normal 模式下硬性拒绝
+- `bootloader` / `recovery` / `raw` 类型分区默认受保护，需要 `--force` +
+  `--sha256` 双重确认才能写入
+- 镜像写入前自动校验 sha256、镜像大小、分区是否已挂载
 
 ## 已支持的板子
 

@@ -65,12 +65,30 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
 | Bootloader | `flange build bootloader` | `flange flash bootloader` |
 | Kernel | `flange build kernel` | `flange flash kernel` |
 | Rootfs | `flange build rootfs` | `flange flash rootfs` |
+| Recovery | `flange build recovery` | `flange flash recovery` 或 USB ADB 在线写 |
 | 全量镜像 | `flange build` | `flange flash` |
 
 - 组件构建：在 Docker 容器内执行，构建引擎自动推断组件间依赖并基于内容哈希决定增量构建范围
 - 产物收集：构建完成后自动收集到 `.build/target/<board>/<product>/<variant>/`（根目录 `target` 软链接直达）
 - 组件刷写：在宿主机执行，执行自动生成的 flash.sh 调用平台对应的刷写工具
 - 全量刷写：重写设备全部分区（分区表 + 所有组件镜像）
+
+### 2.4 USB 线刷 Recovery
+
+设备启动后可通过 `flange recovery` 命令组（宿主机）+ `recoveryctl`（设备端）
+完成在线维护与分区级线刷，事实源是构建时冻结的 `/etc/flange/recovery-config.json`：
+
+- **独立分区与独立 rootfs**：`recovery` 是独立 ext4 分区（label=recovery），
+  与 normal rootfs 互不依赖；normal 损坏时仍能启动维护
+- **双 extlinux 启动入口**：boot 分区生成 `flange` 与 `flange-recovery` 两个
+  label，由 `recoveryctl` 原子修改 `DEFAULT` 切换下次启动
+- **首版 transport = ADB over USB**：`flange recovery enter/list/flash/backup
+  /shell/reboot` 通过 ADB 编排 `recoveryctl`；后续可扩展 USB DFU
+- **安全策略**：bootloader/raw 与 recovery 自身默认 protected；强制写入
+  需要 `--force` 双重确认（host 输入 `YES` + device 端要求 `--sha256`）
+- **不属于范围**：OTA / A/B 切换 / 网络烧录 / recovery 自升级
+
+详细用户文档与排障：[`docs/recovery.md`](docs/recovery.md)。
 
 ---
 

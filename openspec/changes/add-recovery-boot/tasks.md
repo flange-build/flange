@@ -82,12 +82,16 @@
 
 ## 9. 文档与验收
 
-- [ ] 9.1 更新 README 或 docs，说明 recovery 分区、构建命令和 `flange recovery` 用法
-- [ ] 9.2 更新 ProjectSpec 或相关设计文档中关于 USB 线刷 recovery 的约定
-- [ ] 9.3 添加开发者排障文档：ADB 不识别、USB gadget 未启动、boot 默认项恢复
-- [ ] 9.4 运行单元测试：配置、构建图、boot、image、flash-config、recoveryctl、CLI
-- [ ] 9.5 本地构建验证：`flange build recovery`
-- [ ] 9.6 本地整盘构建验证：`flange build`
+- [x] 9.1 更新 README 或 docs，说明 recovery 分区、构建命令和 `flange recovery` 用法
+- [x] 9.2 更新 ProjectSpec 或相关设计文档中关于 USB 线刷 recovery 的约定
+- [x] 9.3 添加开发者排障文档：ADB 不识别、USB gadget 未启动、boot 默认项恢复
+- [x] 9.4 运行单元测试：配置、构建图、boot、image、flash-config、recoveryctl、CLI
+- [x] 9.5 本地构建验证：`flange build recovery`
+- [x] 9.6 本地整盘构建验证：`flange build`
+
+> 9.7–9.12 由用户在真实 RK3566 设备上执行。完整步骤见
+> [`acceptance.md`](acceptance.md)；通过后勾选对应任务。
+
 - [ ] 9.7 实机验证：全量刷写后 normal 系统启动成功
 - [ ] 9.8 实机验证：`flange recovery enter` 进入 recovery
 - [ ] 9.9 实机验证：`flange recovery list` 列出真实分区状态

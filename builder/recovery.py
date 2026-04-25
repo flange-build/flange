@@ -261,10 +261,20 @@ class RecoveryBuilder(ComponentBuilder):
 
         recovery 不挂载 normal rootfs 或 userdata；需要时由 recoveryctl
         显式挂载到独立目录，避免误触 normal 系统的运行时状态。
+
+        ubuntu-base tarball 自带占位 fstab（仅 "# UNCONFIGURED FSTAB FOR BASE
+        SYSTEM" 注释，无任何挂载项），需要被覆盖；只有真正声明了 ``LABEL=`` /
+        ``UUID=`` / ``/dev/`` 之类挂载项的 fstab 才视为已被 overlay 自定义。
         """
         fstab = recovery_dir / "etc" / "fstab"
-        if fstab.exists() and fstab.read_text().strip():
-            return
+        if fstab.exists():
+            existing = fstab.read_text()
+            has_real_mount = any(
+                marker in existing
+                for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")
+            )
+            if has_real_mount:
+                return
         fstab.parent.mkdir(parents=True, exist_ok=True)
         fstab.write_text(
             "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>\n"

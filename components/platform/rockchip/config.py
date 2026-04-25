@@ -34,7 +34,7 @@ PLATFORM = {
             "systemd", "systemd-sysv", "udev", "dbus",
             "python3-minimal",
             "util-linux", "e2fsprogs", "dosfstools",
-            "parted", "gptfdisk",
+            "parted", "gdisk",
             "zstd", "coreutils",
             "ca-certificates",
         ],
