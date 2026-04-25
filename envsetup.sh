@@ -433,26 +433,50 @@ _flange_cmd_flash() {
 
 _flange_cmd_recovery() {
     if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-        echo "  用法: flange recovery <subcommand> [args]"
-        echo ""
-        echo "  通过 USB ADB 编排设备端 recoveryctl，进行线刷 / 备份 / 维护。"
-        echo ""
-        echo "  子命令:"
-        echo "    enter                          请求设备从 normal 进入 recovery"
-        echo "    list [--json]                  列出设备分区与挂载状态"
-        echo "    flash <partition> <image>      上传镜像并写入指定分区"
-        echo "    backup <partition> <output>    把分区备份到本机文件（默认 zstd 压缩）"
-        echo "    shell                          打开 ADB 交互式 shell"
-        echo "    reboot [normal|recovery]       切换 boot 默认项并重启（默认 normal）"
-        echo ""
-        echo "  示例:"
-        echo "    flange recovery enter"
-        echo "    flange recovery list"
-        echo "    flange recovery flash rootfs ~/rootfs.img"
-        echo "    flange recovery backup rootfs ~/rootfs-backup.img.zst"
-        echo "    flange recovery reboot"
-        echo ""
-        echo "  前提: 宿主机 PATH 中需有 adb；设备需通过 USB 连接并启用 USB gadget。"
+        cat <<'EOF'
+  用法: flange recovery <subcommand> [args] [options]
+
+  通过 USB ADB 编排设备端 recoveryctl，完成在线分区刷写、备份与维护。
+
+  模式切换:
+    enter                       让设备从 normal 进入 recovery
+    reboot [normal|recovery]    切换 boot 默认项并重启（默认 normal）
+
+  只读查询:
+    list [--json]               列出分区与挂载状态
+    shell                       打开 ADB 交互式 shell
+
+  分区操作（要求设备处于 recovery 模式）:
+    flash <partition> <image>   把本机镜像写入指定分区
+                                  [--force]  强制写受保护分区（需输入 YES 确认）
+    backup <partition> <output> 把分区备份到本机文件
+                                  [--compress=zstd|none]   默认 zstd
+
+  典型工作流:
+    flange build && flange flash                  # 首次刷写
+    flange recovery enter                         # 进 recovery
+    flange recovery list                          # 看分区状态
+    flange recovery backup rootfs ~/bk.img.zst    # 备份 rootfs
+    flange recovery flash rootfs new-rootfs.img   # 在线刷新 rootfs
+    flange recovery reboot                        # 回 normal
+
+  分区名:
+    按设备 /etc/flange/recovery-config.json 命名（如 idbloader、uboot、boot、
+    rootfs、recovery、userdata）。运行 `flange recovery list` 查看当前可用名。
+    ⚠ 不接受裸 block device 路径（如 /dev/mmcblk0p2）。
+
+  安全约束:
+    • flash / backup 仅在 recovery 模式下生效，normal 模式下硬性拒绝
+    • bootloader、raw 类型分区与 recovery 自身默认受保护
+    • 写入受保护分区需 --force（宿主输入字面量 YES）+ 设备端要求 --sha256
+    • 写入前自动校验：分区存在 / 未挂载 / sha256 / 大小不超分区
+
+  前提:
+    宿主机 PATH 中可执行 adb；设备已通过 USB 连接并启用 USB gadget。
+    详细文档与排障：docs/recovery.md
+
+  单条子命令的详细帮助：flange recovery <subcommand> --help
+EOF
         return 0
     fi
     python3 -m builder.recovery_host "$@"

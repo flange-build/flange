@@ -447,35 +447,145 @@ def cmd_reboot(t: Transport, *, target: str) -> int:
 # ──────────────────────────────────────────────────────────────────
 
 
+_RAW = argparse.RawDescriptionHelpFormatter
+
+
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="flange recovery",
-        description="flange recovery 宿主机 CLI",
+        formatter_class=_RAW,
+        description=(
+            "flange recovery — 通过 USB ADB 编排设备端 recoveryctl，\n"
+            "完成在线分区刷写、备份与维护。"
+        ),
+        epilog=(
+            "典型工作流：\n"
+            "  flange recovery enter\n"
+            "  flange recovery list\n"
+            "  flange recovery backup rootfs ~/bk.img.zst\n"
+            "  flange recovery flash rootfs new-rootfs.img\n"
+            "  flange recovery reboot\n\n"
+            "前提：宿主机 PATH 中可执行 adb；设备已通过 USB 连接并启用 USB gadget。\n"
+            "详细文档与排障见 docs/recovery.md。"
+        ),
     )
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(
+        dest="cmd", required=True,
+        title="子命令",
+        metavar="<subcommand>",
+    )
 
-    sub.add_parser("enter", help="让设备进入 recovery 模式")
+    # ── 模式切换 ─────────────────────────────────────────
+    p_enter = sub.add_parser(
+        "enter",
+        formatter_class=_RAW,
+        help="让设备从 normal 进入 recovery",
+        description=(
+            "等待 ADB 在线 → 查询当前模式 → 已是 recovery 直接成功；\n"
+            "否则下发 `recoveryctl reboot recovery`，等待设备重启回到 ADB。\n\n"
+            "默认等待超时 90 秒（recovery 第一次冷启动 adbd 启动较慢）。"
+        ),
+    )
 
-    p_list = sub.add_parser("list", help="列出设备分区状态")
-    p_list.add_argument("--json", action="store_true", dest="output_json")
+    p_reboot = sub.add_parser(
+        "reboot",
+        formatter_class=_RAW,
+        help="切换 boot 默认项并重启",
+        description=(
+            "通过 recoveryctl 修改 /boot/extlinux/extlinux.conf 的 DEFAULT 行\n"
+            "（原子写 + os.replace），sync 后 systemctl reboot。\n\n"
+            "目标：\n"
+            "  normal    （默认）回 normal 系统\n"
+            "  recovery  保持/切换到 recovery"
+        ),
+    )
+    p_reboot.add_argument(
+        "target", nargs="?", default="normal", choices=["normal", "recovery"],
+        help="重启后进入哪个系统，默认 normal",
+    )
 
-    p_flash = sub.add_parser("flash", help="上传镜像并写入分区")
-    p_flash.add_argument("partition")
-    p_flash.add_argument("image")
-    p_flash.add_argument("--force", action="store_true",
-                         help="强制写入受保护分区")
+    # ── 只读查询 ─────────────────────────────────────────
+    p_list = sub.add_parser(
+        "list",
+        formatter_class=_RAW,
+        help="列出设备分区与挂载状态",
+        description=(
+            "调用设备端 `recoveryctl list --json`，合并\n"
+            "/etc/flange/recovery-config.json 与实时块设备状态\n"
+            "（/dev/disk/by-partlabel + 挂载点 + 大小）后输出。"
+        ),
+    )
+    p_list.add_argument(
+        "--json", action="store_true", dest="output_json",
+        help="原样输出 JSON（便于脚本消费），默认是人类可读表格",
+    )
 
-    p_backup = sub.add_parser("backup", help="备份分区到本机文件")
-    p_backup.add_argument("partition")
-    p_backup.add_argument("output")
-    p_backup.add_argument("--compress", default="zstd",
-                          choices=["zstd", "none"])
+    sub.add_parser(
+        "shell",
+        formatter_class=_RAW,
+        help="打开 ADB 交互式 shell",
+        description="透传 `adb shell`，便于在 recovery 中手工排障。",
+    )
 
-    sub.add_parser("shell", help="打开 ADB 交互式 shell")
+    # ── 分区操作 ────────────────────────────────────────
+    p_flash = sub.add_parser(
+        "flash",
+        formatter_class=_RAW,
+        help="把本机镜像写入指定分区",
+        description=(
+            "工作流：\n"
+            "  1. 校验 partition 是分区名（不接受 /dev/... 路径）\n"
+            "  2. 设备必须处于 recovery 模式（normal 模式硬性拒绝）\n"
+            "  3. host 计算镜像 sha256\n"
+            "  4. host mount userdata 当 scratch，push 镜像到设备\n"
+            "  5. 设备端 recoveryctl flash 校验：sha256 / size / 未挂载 / protected\n"
+            "  6. dd bs=4M conv=fsync 写入 → sync → 读回 sha256 校验\n"
+            "  7. host 清理 scratch\n\n"
+            "受保护分区（raw 类、recovery 自身、recovery.protected_partitions 名单）\n"
+            "需要 --force：宿主端会要求输入字面量 YES，设备端额外要求 --sha256。"
+        ),
+        epilog=(
+            "示例：\n"
+            "  flange recovery flash rootfs ~/build/rootfs.img\n"
+            "  flange recovery flash recovery ~/recovery.img --force"
+        ),
+    )
+    p_flash.add_argument(
+        "partition",
+        help="目标分区名（如 rootfs, boot, recovery）。"
+             "用 `flange recovery list` 查看可用名。",
+    )
+    p_flash.add_argument("image", help="本机镜像文件路径")
+    p_flash.add_argument(
+        "--force", action="store_true",
+        help="强制写入受保护分区；触发宿主端 YES 二次确认",
+    )
 
-    p_reboot = sub.add_parser("reboot", help="切换 boot 默认项并重启")
-    p_reboot.add_argument("target", nargs="?", default="normal",
-                          choices=["normal", "recovery"])
+    p_backup = sub.add_parser(
+        "backup",
+        formatter_class=_RAW,
+        help="把分区备份到本机文件",
+        description=(
+            "host mount userdata 当 scratch → 设备端 recoveryctl backup\n"
+            "（dd | zstd -c）写到 scratch → host adb pull 到本机 → 清理 scratch。\n\n"
+            "默认 zstd 压缩；--compress=none 输出原始未压缩镜像（占空间但便于离线挂载）。\n\n"
+            "要求设备处于 recovery 模式。"
+        ),
+        epilog=(
+            "示例：\n"
+            "  flange recovery backup rootfs ~/rootfs-$(date +%F).img.zst\n"
+            "  flange recovery backup userdata ~/userdata.img --compress=none"
+        ),
+    )
+    p_backup.add_argument(
+        "partition",
+        help="源分区名（如 rootfs, userdata）",
+    )
+    p_backup.add_argument("output", help="本机输出文件路径")
+    p_backup.add_argument(
+        "--compress", default="zstd", choices=["zstd", "none"],
+        help="压缩格式，默认 zstd（多线程，约 3-5x 压缩率）",
+    )
 
     return parser
 
