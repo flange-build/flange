@@ -29,32 +29,11 @@ from pathlib import Path
 
 
 # Recovery rootfs 通常 < 512MB（base + apps + 内核模块后剩余 < 50MB），无法
-# 容纳数百 MB 的 backup 镜像或上传镜像。备份/上传统一走 userdata 分区：
-# 临时 mount 到 /mnt/flange-scratch，操作完 umount。
-SCRATCH_MOUNT = "/mnt/flange-scratch"
-SCRATCH_DEV = "/dev/disk/by-partlabel/userdata"
-REMOTE_UPLOAD_DIR = f"{SCRATCH_MOUNT}/flange-upload"
-REMOTE_BACKUP_DIR = f"{SCRATCH_MOUNT}/flange-backup"
-
-
-def _mount_scratch(t: Transport) -> None:
-    """挂 userdata 分区到 SCRATCH_MOUNT；已挂载则跳过。"""
-    t.shell(["mkdir", "-p", SCRATCH_MOUNT])
-    # mountpoint 检查；returncode 0 表示已挂载
-    r = t.shell(["mountpoint", "-q", SCRATCH_MOUNT])
-    if r.returncode == 0:
-        return
-    r = t.shell(["mount", SCRATCH_DEV, SCRATCH_MOUNT])
-    if r.returncode != 0:
-        raise HostRecoveryError(
-            f"挂载 userdata 分区失败：{r.stderr.strip() or r.stdout.strip()}\n"
-            f"确认 {SCRATCH_DEV} 存在且可挂载（`adb shell ls -l {SCRATCH_DEV}`）。"
-        )
-
-
-def _umount_scratch(t: Transport) -> None:
-    """umount SCRATCH_MOUNT；失败仅警告，不阻断主流程。"""
-    t.shell(["umount", SCRATCH_MOUNT])
+# 容纳数百 MB 的 backup 镜像或上传镜像。当前阶段先用 /tmp（受限于 recovery
+# rootfs 剩余空间），后续替换为流式刷写工具后该限制消失（数据直接 dd | adb
+# pipe 不在设备落盘，参见 docs/recovery.md）。
+REMOTE_UPLOAD_DIR = "/tmp/flange-upload"
+REMOTE_BACKUP_DIR = "/tmp/flange-backup"
 
 
 class HostRecoveryError(RuntimeError):
@@ -362,29 +341,25 @@ def cmd_flash(t: Transport, *, partition: str, image: Path,
     sha = _sha256_of_file(image)
     remote = f"{REMOTE_UPLOAD_DIR}/{image.name}"
 
-    _mount_scratch(t)
-    try:
-        t.shell(["mkdir", "-p", REMOTE_UPLOAD_DIR])
-        print(f"上传 {image.name} ...")
-        t.push(image, remote)
+    t.shell(["mkdir", "-p", REMOTE_UPLOAD_DIR])
+    print(f"上传 {image.name} ...")
+    t.push(image, remote)
 
-        args = ["recoveryctl", "flash", partition, remote, "--sha256", sha]
-        if force:
-            args.append("--force")
-        print(f"recoveryctl flash {partition} ...")
-        # 用 capture=True 让 AdbTransport 的 __flange_rc__ marker 把远端真实 rc
-        # 透传到 host —— capture=False 仅传 adb 自身 rc，会吞掉远端失败。
-        r = t.shell(args, capture=True)
-        if r.stdout:
-            sys.stdout.write(r.stdout)
-        if r.returncode != 0:
-            raise HostRecoveryError(
-                f"recoveryctl flash 失败 (rc={r.returncode}): "
-                f"{r.stderr.strip() or r.stdout.strip()}"
-            )
-        t.shell(["rm", "-f", remote])
-    finally:
-        _umount_scratch(t)
+    args = ["recoveryctl", "flash", partition, remote, "--sha256", sha]
+    if force:
+        args.append("--force")
+    print(f"recoveryctl flash {partition} ...")
+    # 用 capture=True 让 AdbTransport 的 __flange_rc__ marker 把远端真实 rc
+    # 透传到 host —— capture=False 仅传 adb 自身 rc，会吞掉远端失败。
+    r = t.shell(args, capture=True)
+    if r.stdout:
+        sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        raise HostRecoveryError(
+            f"recoveryctl flash 失败 (rc={r.returncode}): "
+            f"{r.stderr.strip() or r.stdout.strip()}"
+        )
+    t.shell(["rm", "-f", remote])
     print(f"✓ {partition} 已刷写")
     return 0
 
@@ -398,28 +373,24 @@ def cmd_backup(t: Transport, *, partition: str, output: Path,
     require_recovery_mode(t)
 
     remote = f"{REMOTE_BACKUP_DIR}/{output.name}"
-    _mount_scratch(t)
-    try:
-        t.shell(["mkdir", "-p", REMOTE_BACKUP_DIR])
-        print(f"recoveryctl backup {partition} → {remote} ...")
-        # capture=True 让 AdbTransport 的 __flange_rc__ marker 把远端真实 rc
-        # 透传到 host，避免远端失败被吞。
-        r = t.shell(
-            ["recoveryctl", "backup", partition, remote, "--compress", compress],
-            capture=True,
+    t.shell(["mkdir", "-p", REMOTE_BACKUP_DIR])
+    print(f"recoveryctl backup {partition} → {remote} ...")
+    # capture=True 让 AdbTransport 的 __flange_rc__ marker 把远端真实 rc
+    # 透传到 host，避免远端失败被吞。
+    r = t.shell(
+        ["recoveryctl", "backup", partition, remote, "--compress", compress],
+        capture=True,
+    )
+    if r.stdout:
+        sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        raise HostRecoveryError(
+            f"recoveryctl backup 失败 (rc={r.returncode}): "
+            f"{r.stderr.strip() or r.stdout.strip()}"
         )
-        if r.stdout:
-            sys.stdout.write(r.stdout)
-        if r.returncode != 0:
-            raise HostRecoveryError(
-                f"recoveryctl backup 失败 (rc={r.returncode}): "
-                f"{r.stderr.strip() or r.stdout.strip()}"
-            )
-        print(f"拉取备份至 {output} ...")
-        t.pull(remote, output)
-        t.shell(["rm", "-f", remote])
-    finally:
-        _umount_scratch(t)
+    print(f"拉取备份至 {output} ...")
+    t.pull(remote, output)
+    t.shell(["rm", "-f", remote])
     print(f"✓ 备份完成：{output}")
     return 0
 

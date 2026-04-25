@@ -27,12 +27,14 @@ flange 在 boot 分区中提供 normal 与 recovery 两条启动路径，并预�
 | idbloader | 0x40 | 4MB | raw | bootloader stage1 |
 | uboot | 0x4000 | 4MB | raw | u-boot |
 | boot | 0x8000 | 64MB | ext4 | 内核 + DTB + extlinux.conf |
-| rootfs | 0x40000 | 1024MB | ext4 | normal 系统 |
-| **recovery** | **0x240000** | **512MB** | **ext4** | **维护系统** |
-| userdata | 0x340000 | remaining | ext4 | 用户数据 |
+| **recovery** | **0x28000** | **512MB** | **ext4** | **维护系统** |
+| rootfs | 0x128000 | remaining | ext4 | normal 系统（拉到 emmc 末尾） |
 
-> 含 recovery 的布局首次部署时必须整盘刷写（`flange flash`），不能从旧的
-> 不含 recovery 的镜像热升级到新布局。
+设计要点：
+
+- recovery 紧贴 boot 之后、rootfs 之前 —— 维护工具按 GPT 顺序固定查找。
+- rootfs 用 ``remaining`` 占满末尾，最大化容量；不再单独划 userdata 分区。
+- 首次部署该布局必须整盘刷写（`flange flash`），不能从旧布局热升级。
 
 `/boot/extlinux/extlinux.conf` 同时声明两个启动入口：
 

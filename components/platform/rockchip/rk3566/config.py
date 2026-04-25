@@ -30,16 +30,15 @@ SOC = {
     "partitions": {
         "format": "gpt",
         "sector_size": 512,
-        # recovery 分区位于 rootfs 之后、userdata 之前，
-        # 因此 userdata offset 由原 0x240000 后移到 0x340000。
-        # 现网首次升级到含 recovery 布局的镜像必须整盘刷写。
+        # 顺序：boot → recovery → rootfs；recovery 紧随 boot 便于维护工具固定
+        # 偏移找到。userdata 移除，rootfs 直接拉到 emmc 末尾（remaining）。
+        # 首次升级到该布局必须整盘刷写。
         "entries": [
-            {"name": "idbloader", "offset": "0x40", "size": "0x2000", "type": "raw"},
-            {"name": "uboot", "offset": "0x4000", "size": "0x2000", "type": "raw"},
-            {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
-            {"name": "rootfs", "offset": "0x40000", "size": "0x200000", "type": "ext4"},
-            {"name": "recovery", "offset": "0x240000", "size": "0x100000", "type": "ext4"},
-            {"name": "userdata", "offset": "0x340000", "size": "remaining", "type": "ext4"},
+            {"name": "idbloader", "offset": "0x40",     "size": "0x2000",   "type": "raw"},
+            {"name": "uboot",     "offset": "0x4000",   "size": "0x2000",   "type": "raw"},
+            {"name": "boot",      "offset": "0x8000",   "size": "0x20000",  "type": "ext4"},
+            {"name": "recovery",  "offset": "0x28000",  "size": "0x100000", "type": "ext4"},
+            {"name": "rootfs",    "offset": "0x128000", "size": "remaining", "type": "ext4"},
         ],
     },
 }

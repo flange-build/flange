@@ -109,9 +109,21 @@ class TestRecoveryPartitionLayout:
         recovery = next(e for e in cfg["partitions"]["entries"] if e["name"] == "recovery")
         assert int(recovery["size"], 0) * 512 == 512 * 1024 * 1024
 
-    def test_userdata_offset_pushed_back_after_recovery(self):
-        """加入 recovery 后 userdata offset 必须紧随 recovery 末尾，避免空洞。"""
+    def test_recovery_immediately_before_rootfs(self):
+        """recovery 必须紧贴 rootfs 之前（boot → recovery → rootfs，无空洞）。
+
+        layout 设计：维护工具固定按 GPT 顺序定位 recovery，rootfs 拉到末尾以
+        最大化容量；不再有 userdata 分区。
+        """
         cfg = resolve_config("radxa-zero3w", "default", "release")
-        entries = {e["name"]: e for e in cfg["partitions"]["entries"]}
+        entries_list = cfg["partitions"]["entries"]
+        entries = {e["name"]: e for e in entries_list}
+        names = [e["name"] for e in entries_list]
+        assert "userdata" not in entries
+        # recovery 紧贴在 rootfs 之前
+        assert names.index("recovery") + 1 == names.index("rootfs")
+        # 无空洞：recovery_end == rootfs_offset
         recovery_end = int(entries["recovery"]["offset"], 0) + int(entries["recovery"]["size"], 0)
-        assert int(entries["userdata"]["offset"], 0) == recovery_end
+        assert int(entries["rootfs"]["offset"], 0) == recovery_end
+        # rootfs 占满末尾
+        assert entries["rootfs"]["size"] == "remaining"

@@ -49,9 +49,8 @@ def _rockchip_full_config(*, recovery_enabled: bool) -> dict:
                 {"name": "idbloader", "offset": "0x40",     "size": "0x2000",   "type": "raw"},
                 {"name": "uboot",     "offset": "0x4000",   "size": "0x2000",   "type": "raw"},
                 {"name": "boot",      "offset": "0x8000",   "size": "0x20000",  "type": "ext4"},
-                {"name": "rootfs",    "offset": "0x40000",  "size": "0x200000", "type": "ext4"},
-                {"name": "recovery",  "offset": "0x240000", "size": "0x100000", "type": "ext4"},
-                {"name": "userdata",  "offset": "0x340000", "size": "remaining", "type": "ext4"},
+                {"name": "recovery",  "offset": "0x28000",  "size": "0x100000", "type": "ext4"},
+                {"name": "rootfs",    "offset": "0x128000", "size": "remaining", "type": "ext4"},
             ],
         },
     }
@@ -76,8 +75,8 @@ def _a733_full_config(*, recovery_enabled: bool) -> dict:
                 {"name": "boot0_ufs",    "offset": "0x810",    "size": "0x700",    "type": "raw"},
                 {"name": "boot_package", "offset": "0x6000",   "size": "0x2000",   "type": "raw"},
                 {"name": "boot",         "offset": "0x8000",   "size": "0x20000",  "type": "ext4"},
-                {"name": "rootfs",       "offset": "0x28000",  "size": "0x200000", "type": "ext4"},
-                {"name": "recovery",     "offset": "0x228000", "size": "0x100000", "type": "ext4"},
+                {"name": "recovery",     "offset": "0x28000",  "size": "0x100000", "type": "ext4"},
+                {"name": "rootfs",       "offset": "0x128000", "size": "remaining", "type": "ext4"},
             ],
         },
     }
@@ -119,7 +118,7 @@ class TestFlashConfigRecovery:
             recovery = next((p for p in config.partitions if p.name == "recovery"), None)
             assert recovery is not None
             assert recovery.image == "recovery/recovery.img"
-            assert recovery.offset == "0x240000"
+            assert recovery.offset == "0x28000"
             assert recovery.type == "ext4"
 
     def test_recovery_partition_marked_protected(self):
@@ -166,19 +165,20 @@ class TestRawImageRecoveryEntry:
     覆盖了 recovery 镜像未生成的边界场景。"""
 
     def test_rockchip_image_partition_order(self):
+        """boot → recovery → rootfs，recovery 紧贴在 boot 之后、rootfs 之前。"""
         cfg = _rockchip_full_config(recovery_enabled=True)
         builder = RockchipImageBuilder(docker=None, source=None)
         entries = builder._resolve_entries(cfg["partitions"]["entries"])
         names = [e["name"] for e in entries]
-        assert names.index("recovery") < names.index("userdata")
-        assert names.index("rootfs") < names.index("recovery")
+        assert names.index("boot") < names.index("recovery")
+        assert names.index("recovery") < names.index("rootfs")
 
     def test_rockchip_image_recovery_offset_size(self):
         cfg = _rockchip_full_config(recovery_enabled=True)
         builder = RockchipImageBuilder(docker=None, source=None)
         entries = builder._resolve_entries(cfg["partitions"]["entries"])
         recovery = next(e for e in entries if e["name"] == "recovery")
-        # 0x240000 sectors × 512 bytes
-        assert recovery["_offset_sectors"] == 0x240000
+        # 紧随 boot：boot offset=0x8000 + size=0x20000 = recovery offset=0x28000
+        assert recovery["_offset_sectors"] == 0x28000
         # 0x100000 sectors = 512MB
         assert recovery["_size_sectors"] * 512 == 512 * 1024 * 1024
