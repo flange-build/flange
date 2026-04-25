@@ -12,7 +12,8 @@ PLATFORM = {
             "iputils-ping", "iproute2", "openssh-server", "sudo",
             "bash", "ca-certificates", "locales",
         ],
-        "custom_packages": ["adbd"],
+        # 同 Rockchip：normal 系统也安装 recoveryctl，便于 ADB 触发模式切换。
+        "custom_packages": ["adbd", "recoveryctl"],
     },
     "+rootfs": {
         "+packages:debug": ["gdb", "strace", "tcpdump", "valgrind"],

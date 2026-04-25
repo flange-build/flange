@@ -1,0 +1,635 @@
+#!/usr/bin/env python3
+"""flange recovery 设备端 CLI。
+
+在 normal 与 recovery 系统中均会被安装。涉及分区写入、备份、读回校验等
+危险操作的子命令必须先确认当前处于 recovery 模式，否则拒绝执行：避免在
+正常运行的系统下从 ADB 触发可能损坏分区的命令。
+
+子命令汇总：
+
+    recoveryctl mode                 -> 输出 "normal" 或 "recovery"
+    recoveryctl list [--json]        -> 分区清单（来自 /etc/flange/recovery-config.json
+                                        + 实时块设备状态）
+    recoveryctl flash <part> <img>   -> 校验+写入指定分区，要求 recovery 模式
+                                        与 --sha256 校验
+    recoveryctl backup <part> <out>  -> 读取分区到文件，可选 zstd 压缩
+    recoveryctl reboot [normal|recovery]
+                                     -> 切换 boot 默认项并重启
+
+事实源：``/etc/flange/recovery-config.json`` —— 由 RecoveryBuilder 在构建时
+冻结分区表与保护策略；本脚本不重新发现分区。
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+
+# ──────────────────────────────────────────────────────────────────
+# 常量
+# ──────────────────────────────────────────────────────────────────
+
+RECOVERY_CONFIG_PATH = Path("/etc/flange/recovery-config.json")
+EXTLINUX_PATH = Path("/boot/extlinux/extlinux.conf")
+PROC_CMDLINE = Path("/proc/cmdline")
+PROC_MOUNTINFO = Path("/proc/self/mountinfo")
+DEV_BY_PARTLABEL = Path("/dev/disk/by-partlabel")
+
+NORMAL_LABEL = "flange"
+RECOVERY_LABEL = "flange-recovery"
+
+MODE_NORMAL = "normal"
+MODE_RECOVERY = "recovery"
+
+
+# ──────────────────────────────────────────────────────────────────
+# 错误类型
+# ──────────────────────────────────────────────────────────────────
+
+class RecoveryError(RuntimeError):
+    """recoveryctl 在校验或执行过程中阻断的所有错误。"""
+
+
+class ModeError(RecoveryError):
+    """模式检查失败：在 normal 模式下尝试需要 recovery 的操作。"""
+
+
+class ProtectedPartitionError(RecoveryError):
+    """目标分区受保护，需要 --force 才能写入。"""
+
+
+# ──────────────────────────────────────────────────────────────────
+# 模式检测
+# ──────────────────────────────────────────────────────────────────
+
+_MODE_RE = re.compile(r"\bflange\.mode=(\S+)")
+
+
+def parse_mode_from_cmdline(cmdline: str) -> str:
+    """从 /proc/cmdline 文本中识别 flange.mode 标记。
+
+    boot 分区的 recovery label 在 append 中加入 ``flange.mode=recovery``；
+    normal label 不带任何标记。无标记即视为 normal。
+    """
+    m = _MODE_RE.search(cmdline)
+    if m and m.group(1) == "recovery":
+        return MODE_RECOVERY
+    return MODE_NORMAL
+
+
+def detect_mode(cmdline_path: Path = PROC_CMDLINE) -> str:
+    """读取 /proc/cmdline 推断当前模式。文件不存在则保守返回 normal。"""
+    try:
+        text = cmdline_path.read_text()
+    except OSError:
+        return MODE_NORMAL
+    return parse_mode_from_cmdline(text)
+
+
+# ──────────────────────────────────────────────────────────────────
+# 配置加载
+# ──────────────────────────────────────────────────────────────────
+
+def load_recovery_config(path: Path = RECOVERY_CONFIG_PATH) -> dict:
+    """读取 /etc/flange/recovery-config.json 并返回解析后的字典。
+
+    缺失或损坏视作硬错误（脚本无法在没有这份事实源的情况下安全运行）。
+    """
+    if not path.is_file():
+        raise RecoveryError(
+            f"未找到 recovery 配置文件：{path}。"
+            "确认 recovery 镜像构建时已写入 /etc/flange/recovery-config.json。"
+        )
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise RecoveryError(f"recovery 配置文件解析失败：{path}：{e}") from e
+
+
+def find_partition_entry(config: dict, name: str) -> dict:
+    """按分区名查找配置条目。未命中时报告所有合法名称。"""
+    for entry in config.get("partitions", []):
+        if entry.get("name") == name:
+            return entry
+    available = ", ".join(p.get("name", "") for p in config.get("partitions", []))
+    raise RecoveryError(
+        f"未知分区：{name}。可用分区：{available}"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────
+# 分区 → block device 解析
+# ──────────────────────────────────────────────────────────────────
+
+def partition_to_block_device(
+    name: str,
+    by_partlabel_dir: Path = DEV_BY_PARTLABEL,
+) -> Path:
+    """优先用 /dev/disk/by-partlabel/<name>，缺失时报错。
+
+    返回的 Path 是符号链接（指向真实 /dev/mmcblk0pN 等）；调用方需要时可
+    自行 ``Path.resolve()``。
+    """
+    candidate = by_partlabel_dir / name
+    if not candidate.exists():
+        raise RecoveryError(
+            f"未找到分区设备节点：{candidate}。"
+            "请确认 GPT 分区已生效（对应 /dev/disk/by-partlabel/ 中应出现）。"
+        )
+    return candidate
+
+
+def block_device_size_bytes(dev: Path) -> int:
+    """读取块设备字节数（用 ``blockdev --getsize64``）。"""
+    result = subprocess.run(
+        ["blockdev", "--getsize64", str(dev)],
+        capture_output=True, text=True, check=True,
+    )
+    return int(result.stdout.strip())
+
+
+# ──────────────────────────────────────────────────────────────────
+# 挂载状态检测（基于 /proc/self/mountinfo，不依赖 findmnt）
+# ──────────────────────────────────────────────────────────────────
+
+def parse_mountinfo(text: str) -> dict[str, str]:
+    """把 /proc/self/mountinfo 内容解析为 ``{设备路径: 挂载点}`` 字典。
+
+    格式参考 kernel/Documentation/filesystems/proc.rst：每行字段以空格分隔，
+    第 5 字段是挂载点，``-`` 之后第二字段是设备源。
+    """
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        # mountinfo 行结构：
+        # 36 35 98:0 /mnt1 /mnt - ext4 /dev/sdc1 rw
+        parts = line.split()
+        if "-" not in parts:
+            continue
+        sep_idx = parts.index("-")
+        if sep_idx + 2 >= len(parts):
+            continue
+        mountpoint = parts[4] if len(parts) > 4 else ""
+        source = parts[sep_idx + 2]
+        if mountpoint and source.startswith("/"):
+            # 同一设备可能多挂载点，仅记录第一个
+            result.setdefault(source, mountpoint)
+    return result
+
+
+def find_mountpoint(dev: Path, mountinfo_path: Path = PROC_MOUNTINFO) -> str | None:
+    """返回 ``dev`` 当前挂载点；未挂载时返回 None。
+
+    比较时把 ``dev`` 与 mountinfo 的 source 都规范化为 ``Path.resolve()``，
+    以兼容 /dev/disk/by-partlabel 这类符号链接。
+    """
+    try:
+        text = mountinfo_path.read_text()
+    except OSError:
+        return None
+    mounts = parse_mountinfo(text)
+    target = str(dev.resolve()) if dev.exists() else str(dev)
+    # 直接命中
+    if target in mounts:
+        return mounts[target]
+    # 反向比较：mountinfo source 是绝对路径，但可能与 dev 不一致；
+    # 把每个 source resolve 一次再比
+    for src, mp in mounts.items():
+        try:
+            if Path(src).resolve() == Path(target):
+                return mp
+        except OSError:
+            continue
+    return None
+
+
+def is_partition_mounted(name: str) -> str | None:
+    """简化封装：分区名 → 挂载点（None 表示未挂载）。"""
+    dev = partition_to_block_device(name)
+    return find_mountpoint(dev)
+
+
+# ──────────────────────────────────────────────────────────────────
+# extlinux 默认项切换
+# ──────────────────────────────────────────────────────────────────
+
+_DEFAULT_RE = re.compile(
+    r"^[ \t]*DEFAULT[ \t]+(\S+)[ \t]*$", re.IGNORECASE | re.MULTILINE)
+_LABEL_RE = re.compile(
+    r"^[ \t]*label[ \t]+(\S+)[ \t]*$", re.IGNORECASE | re.MULTILINE)
+
+
+def set_extlinux_default(content: str, target: str) -> str:
+    """纯字符串变换：把 extlinux.conf 的 DEFAULT 切换到 ``target``。
+
+    必须存在对应 label；多个 DEFAULT 视为损坏。逻辑与 builder/extlinux.py
+    保持一致——我们故意不在设备端 import builder 模块（recoveryctl 是部署到
+    设备的独立脚本）。
+    """
+    labels = [m.group(1) for m in _LABEL_RE.finditer(content)]
+    if target not in labels:
+        raise RecoveryError(
+            f"目标 label {target!r} 不在 extlinux.conf 中：{labels}"
+        )
+    matches = list(_DEFAULT_RE.finditer(content))
+    if len(matches) > 1:
+        raise RecoveryError(
+            f"extlinux.conf 中存在 {len(matches)} 处 DEFAULT 指令，应为 0 或 1"
+        )
+    if not matches:
+        return f"DEFAULT {target}\n" + content
+    return _DEFAULT_RE.sub(f"DEFAULT {target}", content, count=1)
+
+
+def write_extlinux_default(target: str, path: Path = EXTLINUX_PATH) -> None:
+    """读 → 切换 → tmp → ``os.replace`` 原子覆盖。"""
+    content = path.read_text(encoding="utf-8")
+    new_content = set_extlinux_default(content, target)
+    tmp = path.with_suffix(path.suffix + ".new")
+    tmp.write_text(new_content, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Flash 校验 + 写入
+# ──────────────────────────────────────────────────────────────────
+
+@dataclass
+class FlashRequest:
+    partition: str
+    image_path: Path
+    sha256_expected: str | None = None
+    force: bool = False
+
+
+def sha256_of_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for buf in iter(lambda: f.read(chunk), b""):
+            h.update(buf)
+    return h.hexdigest()
+
+
+def validate_flash(
+    req: FlashRequest,
+    config: dict,
+    *,
+    block_size_lookup=block_device_size_bytes,
+    mounted_lookup=find_mountpoint,
+    partition_resolver=partition_to_block_device,
+) -> Path:
+    """对 FlashRequest 执行所有写入前校验，返回目标 block device。
+
+    依赖项以参数注入便于单测替换：``block_size_lookup``, ``mounted_lookup``,
+    ``partition_resolver``。
+    """
+    entry = find_partition_entry(config, req.partition)
+
+    # 受保护分区：raw 类 / recovery 自身 / 显式 protected_partitions
+    if entry.get("protected") and not req.force:
+        raise ProtectedPartitionError(
+            f"分区 {req.partition} 受保护，禁止直接写入。"
+            "如确需强制写入请添加 --force（仍会再做二次确认）。"
+        )
+
+    if not req.image_path.is_file():
+        raise RecoveryError(f"镜像文件不存在：{req.image_path}")
+
+    # sha256 校验
+    if req.sha256_expected:
+        actual = sha256_of_file(req.image_path)
+        if actual.lower() != req.sha256_expected.lower():
+            raise RecoveryError(
+                f"sha256 不匹配：期望 {req.sha256_expected}，实际 {actual}"
+            )
+
+    dev = partition_resolver(req.partition)
+
+    # 大小不超分区
+    image_size = req.image_path.stat().st_size
+    part_size = block_size_lookup(dev)
+    if image_size > part_size:
+        raise RecoveryError(
+            f"镜像 {image_size} bytes 超过分区 {req.partition} 大小 {part_size} bytes"
+        )
+
+    # 挂载检查
+    mountpoint = mounted_lookup(dev)
+    if mountpoint:
+        raise RecoveryError(
+            f"分区 {req.partition} 当前已挂载于 {mountpoint}，请先卸载后再写入"
+        )
+
+    return dev
+
+
+def do_flash(
+    req: FlashRequest,
+    config: dict,
+    *,
+    runner=subprocess.run,
+    verify_readback: bool = True,
+) -> None:
+    """执行 dd 写入并 sync；可选读回 sha256 校验。"""
+    dev = validate_flash(req, config)
+    runner(
+        ["dd", f"if={req.image_path}", f"of={dev}", "bs=4M", "conv=fsync",
+         "status=none"],
+        check=True,
+    )
+    runner(["sync"], check=True)
+
+    if not verify_readback or not req.sha256_expected:
+        return
+    image_size = req.image_path.stat().st_size
+    h = hashlib.sha256()
+    with open(dev, "rb") as f:
+        remaining = image_size
+        while remaining > 0:
+            buf = f.read(min(1024 * 1024, remaining))
+            if not buf:
+                break
+            h.update(buf)
+            remaining -= len(buf)
+    digest = h.hexdigest()
+    if digest.lower() != req.sha256_expected.lower():
+        raise RecoveryError(
+            f"写入后读回校验失败：期望 {req.sha256_expected}，实际 {digest}"
+        )
+
+
+# ──────────────────────────────────────────────────────────────────
+# Backup
+# ──────────────────────────────────────────────────────────────────
+
+@dataclass
+class BackupRequest:
+    partition: str
+    output: Path
+    compress: str = "zstd"  # "zstd" or "none"
+
+
+def do_backup(
+    req: BackupRequest,
+    config: dict,
+    *,
+    runner=subprocess.run,
+    partition_resolver=partition_to_block_device,
+    block_size_lookup=block_device_size_bytes,
+) -> None:
+    """从分区 dd 到文件；compress 为 zstd 时转 .zst（需要系统 zstd）。"""
+    find_partition_entry(config, req.partition)  # 仅用于触发未知分区报错
+    dev = partition_resolver(req.partition)
+
+    req.output.parent.mkdir(parents=True, exist_ok=True)
+    if req.compress == "none":
+        runner(
+            ["dd", f"if={dev}", f"of={req.output}", "bs=4M", "status=none"],
+            check=True,
+        )
+    elif req.compress == "zstd":
+        # dd | zstd > output。subprocess Popen 管道。
+        with req.output.open("wb") as out:
+            dd = subprocess.Popen(
+                ["dd", f"if={dev}", "bs=4M", "status=none"],
+                stdout=subprocess.PIPE,
+            )
+            zstd = subprocess.Popen(
+                ["zstd", "-q", "-T0", "-o", "/dev/stdout"],
+                stdin=dd.stdout, stdout=out,
+            )
+            if dd.stdout:
+                dd.stdout.close()
+            zstd_rc = zstd.wait()
+            dd_rc = dd.wait()
+            if dd_rc != 0 or zstd_rc != 0:
+                raise RecoveryError(
+                    f"备份失败：dd rc={dd_rc}, zstd rc={zstd_rc}"
+                )
+    else:
+        raise RecoveryError(f"未知压缩格式：{req.compress}")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Reboot
+# ──────────────────────────────────────────────────────────────────
+
+def do_reboot(
+    target: str,
+    *,
+    extlinux_writer=write_extlinux_default,
+    runner=subprocess.run,
+) -> None:
+    """切换 extlinux 默认项并 ``systemctl reboot``。
+
+    target 取值：``normal`` / ``recovery``，分别映射到 NORMAL_LABEL / RECOVERY_LABEL。
+    """
+    label_map = {MODE_NORMAL: NORMAL_LABEL, MODE_RECOVERY: RECOVERY_LABEL}
+    label = label_map.get(target)
+    if not label:
+        raise RecoveryError(
+            f"reboot 目标必须是 normal 或 recovery，得到 {target!r}"
+        )
+    extlinux_writer(label)
+    runner(["sync"], check=True)
+    runner(["systemctl", "reboot"], check=True)
+
+
+# ──────────────────────────────────────────────────────────────────
+# list
+# ──────────────────────────────────────────────────────────────────
+
+def build_partition_listing(
+    config: dict,
+    *,
+    partition_resolver=partition_to_block_device,
+    mounted_lookup=find_mountpoint,
+    block_size_lookup=block_device_size_bytes,
+) -> dict:
+    """对 recovery-config 中每个分区，附加实时块设备状态返回。
+
+    输出 schema::
+
+        {
+          "mode": "recovery",
+          "board": "...", "product": "...", "variant": "...",
+          "partitions": [
+            {
+              "name": "rootfs",
+              "offset": "0x40000",
+              "size": "0x200000",
+              "type": "ext4",
+              "protected": false,
+              "device": "/dev/disk/by-partlabel/rootfs",
+              "device_size_bytes": 1073741824,
+              "mounted": false,
+              "mountpoint": null
+            },
+            ...
+          ]
+        }
+    """
+    partitions_out = []
+    for entry in config.get("partitions", []):
+        item = dict(entry)
+        try:
+            dev = partition_resolver(entry["name"])
+            item["device"] = str(dev)
+        except RecoveryError:
+            item["device"] = None
+        if item["device"]:
+            try:
+                item["device_size_bytes"] = block_size_lookup(Path(item["device"]))
+            except (subprocess.CalledProcessError, OSError):
+                item["device_size_bytes"] = None
+            mp = mounted_lookup(Path(item["device"]))
+            item["mounted"] = mp is not None
+            item["mountpoint"] = mp
+        else:
+            item["device_size_bytes"] = None
+            item["mounted"] = False
+            item["mountpoint"] = None
+        partitions_out.append(item)
+
+    return {
+        "mode": detect_mode(),
+        "board": config.get("board", ""),
+        "product": config.get("product", ""),
+        "variant": config.get("variant", ""),
+        "transport": config.get("transport", ""),
+        "partitions": partitions_out,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────
+# CLI dispatch
+# ──────────────────────────────────────────────────────────────────
+
+def _require_recovery_mode():
+    mode = detect_mode()
+    if mode != MODE_RECOVERY:
+        raise ModeError(
+            "当前不在 recovery 模式（mode=" + mode + "），拒绝执行写入/备份操作。"
+            "请先 `flange recovery enter` 进入 recovery 后再试。"
+        )
+
+
+def cmd_mode(args) -> int:
+    print(detect_mode())
+    return 0
+
+
+def cmd_list(args) -> int:
+    config = load_recovery_config()
+    listing = build_partition_listing(config)
+    if args.json:
+        print(json.dumps(listing, indent=2, ensure_ascii=False))
+    else:
+        print(f"mode: {listing['mode']}")
+        print(f"board: {listing['board']} / {listing['product']} / {listing['variant']}")
+        print(f"transport: {listing['transport']}")
+        print()
+        print(f"  {'name':<14} {'offset':<12} {'size':<12} {'type':<6} "
+              f"{'prot':<5} {'mount':<20}")
+        for p in listing["partitions"]:
+            mp = p["mountpoint"] or ("yes" if p["mounted"] else "-")
+            print(f"  {p['name']:<14} {p['offset']:<12} {p['size']:<12} "
+                  f"{p['type']:<6} "
+                  f"{'Y' if p.get('protected') else '-':<5} "
+                  f"{mp:<20}")
+    return 0
+
+
+def cmd_flash(args) -> int:
+    _require_recovery_mode()
+    config = load_recovery_config()
+    req = FlashRequest(
+        partition=args.partition,
+        image_path=Path(args.image),
+        sha256_expected=args.sha256,
+        force=args.force,
+    )
+    do_flash(req, config)
+    print(f"✓ {args.partition} 已写入并 sync")
+    return 0
+
+
+def cmd_backup(args) -> int:
+    _require_recovery_mode()
+    config = load_recovery_config()
+    req = BackupRequest(
+        partition=args.partition,
+        output=Path(args.output),
+        compress=args.compress,
+    )
+    do_backup(req, config)
+    print(f"✓ {args.partition} 已备份至 {req.output}")
+    return 0
+
+
+def cmd_reboot(args) -> int:
+    do_reboot(args.target)
+    return 0
+
+
+def build_argparser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="recoveryctl",
+        description="flange recovery 设备端 CLI",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("mode", help="输出当前模式（normal/recovery）")
+
+    p_list = sub.add_parser("list", help="列出分区状态")
+    p_list.add_argument("--json", action="store_true", help="输出 JSON 格式")
+
+    p_flash = sub.add_parser("flash", help="向指定分区写入镜像")
+    p_flash.add_argument("partition")
+    p_flash.add_argument("image")
+    p_flash.add_argument("--sha256", help="期望的镜像 sha256（强烈建议）")
+    p_flash.add_argument("--force", action="store_true",
+                         help="强制写入受保护分区（双重确认）")
+
+    p_backup = sub.add_parser("backup", help="把分区备份到文件")
+    p_backup.add_argument("partition")
+    p_backup.add_argument("output")
+    p_backup.add_argument("--compress", default="zstd", choices=["zstd", "none"])
+
+    p_reboot = sub.add_parser("reboot", help="切换 boot 默认项并重启")
+    p_reboot.add_argument("target", nargs="?", default=MODE_NORMAL,
+                          choices=[MODE_NORMAL, MODE_RECOVERY])
+
+    return parser
+
+
+HANDLERS = {
+    "mode":   cmd_mode,
+    "list":   cmd_list,
+    "flash":  cmd_flash,
+    "backup": cmd_backup,
+    "reboot": cmd_reboot,
+}
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_argparser().parse_args(argv)
+    handler = HANDLERS[args.cmd]
+    try:
+        return handler(args) or 0
+    except RecoveryError as e:
+        print(f"recoveryctl: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

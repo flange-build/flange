@@ -48,16 +48,16 @@
 
 ## 6. recoveryctl 设备端工具
 
-- [ ] 6.1 新增 `components/app/recoveryctl/` 或 `components/packages/recoveryctl/` 工程结构
-- [ ] 6.2 实现 `recoveryctl mode`，根据 `/proc/cmdline` 或 recovery-config 判断当前模式
-- [ ] 6.3 实现 `recoveryctl list --json`，合并 recovery-config 与实际块设备状态
-- [ ] 6.4 实现分区名到 block device 的解析，优先使用 `/dev/disk/by-partlabel`
-- [ ] 6.5 实现 mounted/mountpoint 检测，基于 `findmnt` 或 `/proc/self/mountinfo`
-- [ ] 6.6 实现 `recoveryctl flash` 的 size、sha256、mounted 和 protected 校验
-- [ ] 6.7 实现 `recoveryctl flash` 写入与 `sync`，并加入基础读回校验
-- [ ] 6.8 实现 `recoveryctl backup`，支持 zstd 压缩和未压缩输出
-- [ ] 6.9 实现 `recoveryctl reboot normal|recovery`
-- [ ] 6.10 编写 recoveryctl 单元测试：list、flash 校验失败、protected 拒绝、backup 未知分区
+- [x] 6.1 新增 `components/app/recoveryctl/` 或 `components/packages/recoveryctl/` 工程结构
+- [x] 6.2 实现 `recoveryctl mode`，根据 `/proc/cmdline` 或 recovery-config 判断当前模式
+- [x] 6.3 实现 `recoveryctl list --json`，合并 recovery-config 与实际块设备状态
+- [x] 6.4 实现分区名到 block device 的解析，优先使用 `/dev/disk/by-partlabel`
+- [x] 6.5 实现 mounted/mountpoint 检测，基于 `findmnt` 或 `/proc/self/mountinfo`
+- [x] 6.6 实现 `recoveryctl flash` 的 size、sha256、mounted 和 protected 校验
+- [x] 6.7 实现 `recoveryctl flash` 写入与 `sync`，并加入基础读回校验
+- [x] 6.8 实现 `recoveryctl backup`，支持 zstd 压缩和未压缩输出
+- [x] 6.9 实现 `recoveryctl reboot normal|recovery`
+- [x] 6.10 编写 recoveryctl 单元测试：list、flash 校验失败、protected 拒绝、backup 未知分区
 
 ## 7. 宿主机 recovery CLI
 
