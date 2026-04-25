@@ -431,6 +431,33 @@ _flange_cmd_flash() {
         "$@"
 }
 
+_flange_cmd_recovery() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange recovery <subcommand> [args]"
+        echo ""
+        echo "  通过 USB ADB 编排设备端 recoveryctl，进行线刷 / 备份 / 维护。"
+        echo ""
+        echo "  子命令:"
+        echo "    enter                          请求设备从 normal 进入 recovery"
+        echo "    list [--json]                  列出设备分区与挂载状态"
+        echo "    flash <partition> <image>      上传镜像并写入指定分区"
+        echo "    backup <partition> <output>    把分区备份到本机文件（默认 zstd 压缩）"
+        echo "    shell                          打开 ADB 交互式 shell"
+        echo "    reboot [normal|recovery]       切换 boot 默认项并重启（默认 normal）"
+        echo ""
+        echo "  示例:"
+        echo "    flange recovery enter"
+        echo "    flange recovery list"
+        echo "    flange recovery flash rootfs ~/rootfs.img"
+        echo "    flange recovery backup rootfs ~/rootfs-backup.img.zst"
+        echo "    flange recovery reboot"
+        echo ""
+        echo "  前提: 宿主机 PATH 中需有 adb；设备需通过 USB 连接并启用 USB gadget。"
+        return 0
+    fi
+    python3 -m builder.recovery_host "$@"
+}
+
 _flange_cmd_clean() {
     if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
         echo "  用法: flange clean"
@@ -810,6 +837,7 @@ flange() {
         echo "  核心模块 (Modules):"
         echo "    build      [构建] 编译系统组件或应用"
         echo "    flash      [刷写] 将镜像烧录到目标设备"
+        echo "    recovery   [线刷] USB ADB 通道线刷 / 备份 / 维护设备"
         echo "    push       [部署] 热部署单个应用到目标设备"
         echo "    run        [调试] 热部署并立即运行单个应用"
         echo "    create     [脚手架] 生成新的应用或组件模板"
@@ -842,6 +870,9 @@ flange() {
             ;;
         flash)
             _flange_cmd_flash "$@"
+            ;;
+        recovery)
+            _flange_cmd_recovery "$@"
             ;;
         clean)
             _flange_cmd_clean "$@"

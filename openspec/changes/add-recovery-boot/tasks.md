@@ -61,16 +61,16 @@
 
 ## 7. 宿主机 recovery CLI
 
-- [ ] 7.1 新增宿主机 `builder/recovery.py` 或等价模块，定义 `flange recovery` CLI 入口
-- [ ] 7.2 实现 ADB transport 抽象：wait、push、pull、shell、interactive_shell
-- [ ] 7.3 实现 `flange recovery enter`
-- [ ] 7.4 实现 `flange recovery list`，解析 `recoveryctl list --json` 并格式化输出
-- [ ] 7.5 实现 `flange recovery flash <partition> <image>`，上传镜像并传递 sha256
-- [ ] 7.6 实现 `flange recovery backup <partition> <output>`，拉取备份结果
-- [ ] 7.7 实现 `flange recovery shell`
-- [ ] 7.8 实现 `flange recovery reboot [normal|recovery]`
-- [ ] 7.9 更新 `envsetup.sh` 帮助文本和命令路由
-- [ ] 7.10 编写 CLI 单元测试：参数解析、ADB 缺失、normal 模式拒绝 flash、list 格式化
+- [x] 7.1 新增宿主机 `builder/recovery.py` 或等价模块，定义 `flange recovery` CLI 入口
+- [x] 7.2 实现 ADB transport 抽象：wait、push、pull、shell、interactive_shell
+- [x] 7.3 实现 `flange recovery enter`
+- [x] 7.4 实现 `flange recovery list`，解析 `recoveryctl list --json` 并格式化输出
+- [x] 7.5 实现 `flange recovery flash <partition> <image>`，上传镜像并传递 sha256
+- [x] 7.6 实现 `flange recovery backup <partition> <output>`，拉取备份结果
+- [x] 7.7 实现 `flange recovery shell`
+- [x] 7.8 实现 `flange recovery reboot [normal|recovery]`
+- [x] 7.9 更新 `envsetup.sh` 帮助文本和命令路由
+- [x] 7.10 编写 CLI 单元测试：参数解析、ADB 缺失、normal 模式拒绝 flash、list 格式化
 
 ## 8. 安全与错误处理
 
