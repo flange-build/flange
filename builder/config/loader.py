@@ -17,24 +17,28 @@ import json
 from pathlib import Path
 
 from builder.config.registry import resolve_config
+from builder.config.validate import validate_config
 
 
 STATE_FILE = Path(".flange/current_config")
 
 
 def load_current_config() -> dict:
-    """读取 state 文件 → 重新 resolve_config → 返回完整配置字典。
+    """读取 state 文件 → 重新 resolve_config → 校验 → 返回完整配置字典。
 
     抛异常：
         FileNotFoundError: state 文件不存在（用户尚未 lunch）
         KeyError:          state 文件缺失 board 字段（文件损坏）
+        ConfigError:       配置层硬错误（recovery 启用但缺分区等）
     """
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
     board = state["board"]
     product = state.get("product", "default")
     variant = state.get("variant", "release")
-    return resolve_config(board, product, variant)
+    cfg = resolve_config(board, product, variant)
+    validate_config(cfg)
+    return cfg
 
 
 def save_state(board: str, product: str, variant: str) -> None:

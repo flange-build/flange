@@ -57,12 +57,15 @@ SOC = {
     "partitions": {
         "format": "gpt",
         "sector_size": 512,
+        # recovery 分区紧随 rootfs；首版仅做静态预留，
+        # image dd 与 flash-config 实际填充由 §5.2 / §5.4 决定。
         "entries": [
-            {"name": "boot0",         "offset": "0x100",   "size": "0x700",    "type": "raw"},
-            {"name": "boot0_ufs",     "offset": "0x810",   "size": "0x700",    "type": "raw"},
-            {"name": "boot_package",  "offset": "0x6000",  "size": "0x2000",   "type": "raw"},
-            {"name": "boot",          "offset": "0x8000",  "size": "0x20000",  "type": "ext4"},
-            {"name": "rootfs",        "offset": "0x28000", "size": "0x200000", "type": "ext4"},
+            {"name": "boot0",         "offset": "0x100",    "size": "0x700",    "type": "raw"},
+            {"name": "boot0_ufs",     "offset": "0x810",    "size": "0x700",    "type": "raw"},
+            {"name": "boot_package",  "offset": "0x6000",   "size": "0x2000",   "type": "raw"},
+            {"name": "boot",          "offset": "0x8000",   "size": "0x20000",  "type": "ext4"},
+            {"name": "rootfs",        "offset": "0x28000",  "size": "0x200000", "type": "ext4"},
+            {"name": "recovery",      "offset": "0x228000", "size": "0x100000", "type": "ext4"},
         ],
     },
 }

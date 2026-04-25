@@ -30,12 +30,16 @@ SOC = {
     "partitions": {
         "format": "gpt",
         "sector_size": 512,
+        # recovery 分区位于 rootfs 之后、userdata 之前，
+        # 因此 userdata offset 由原 0x240000 后移到 0x340000。
+        # 现网首次升级到含 recovery 布局的镜像必须整盘刷写。
         "entries": [
             {"name": "idbloader", "offset": "0x40", "size": "0x2000", "type": "raw"},
             {"name": "uboot", "offset": "0x4000", "size": "0x2000", "type": "raw"},
             {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
             {"name": "rootfs", "offset": "0x40000", "size": "0x200000", "type": "ext4"},
-            {"name": "userdata", "offset": "0x240000", "size": "remaining", "type": "ext4"},
+            {"name": "recovery", "offset": "0x240000", "size": "0x100000", "type": "ext4"},
+            {"name": "userdata", "offset": "0x340000", "size": "remaining", "type": "ext4"},
         ],
     },
 }
