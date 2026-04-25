@@ -116,9 +116,13 @@ class TestGetBoardConfig:
         assert "bash" in merged["rootfs"]["packages"]
 
     def test_rootfs_has_board_custom_packages(self, boards):
-        """板级 rootfs 应包含板级自定义包。"""
+        """板级 rootfs 应包含板级自定义包。
+
+        平台层默认 custom_packages 包含 adbd 与 recoveryctl（recoveryctl 用于
+        normal 模式下 ADB 触发 reboot 切换到 recovery）。
+        """
         merged = get_board_config("radxa-zero3w", boards=boards)
-        assert merged["rootfs"]["custom_packages"] == ["adbd"]
+        assert merged["rootfs"]["custom_packages"] == ["adbd", "recoveryctl"]
 
     def test_rkbin_merges_platform_and_soc(self, boards):
         """rkbin 应合并平台层 repo/branch 和 SoC 层 ini_prefix。"""

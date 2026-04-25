@@ -33,6 +33,9 @@ class RockchipImageBuilder(ComponentBuilder):
         "uboot":     "bootloader/u-boot.itb",
         "boot":      "boot/boot.img",
         "rootfs":    "rootfs/rootfs.img",
+        # recovery 镜像不存在时（recovery.enabled=False 或构建跳过），
+        # ImageBuilder.compile 中已有"image_path 不存在则跳过"逻辑，安全。
+        "recovery":  "recovery/recovery.img",
     }
 
     def build(self, config: dict) -> dict:

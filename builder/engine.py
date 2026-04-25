@@ -72,6 +72,11 @@ class BuildEngine:
 
     def _build_components(self, target: str):
         for component in _topo_sort(DEPENDENCY_GRAPH, target):
+            if self._component_disabled(component):
+                # 静默跳过；image 等下游会感知到 recovery 缺产物从而跳过
+                # 对应分区的 dd / flash-config 注入。
+                self.output.phase_skip(component)
+                continue
             if self.cache.is_up_to_date(component):
                 self.output.phase_skip(component)
                 continue
@@ -91,6 +96,16 @@ class BuildEngine:
             except (BuildError, Exception) as e:
                 self.output.phase_end(component, success=False, error=e)
                 raise
+
+    def _component_disabled(self, component: str) -> bool:
+        """组件是否被 config 显式关闭。
+
+        目前仅 recovery 受配置开关控制：当 ``config.recovery.enabled is False``
+        时不进入构建图执行，也不为其收集产物。
+        """
+        if component == "recovery":
+            return not (self.config.get("recovery") or {}).get("enabled", False)
+        return False
 
     def _build_app(self) -> dict:
         """使用 AppBuilder 构建所有自定义 App，返回 {app_name: deb_path} 映射。"""

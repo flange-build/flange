@@ -1,0 +1,29 @@
+app:
+  name: recoveryctl
+  version: 1.0.0
+  description: flange recovery 设备端 CLI（在 normal 与 recovery 系统中均可使用，flash/backup 仅在 recovery 模式下生效）
+  type: exec
+  arch:
+    - aarch64
+    - armhf
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+install:
+  bin/recoveryctl: /usr/sbin/recoveryctl
+
+depends:
+  # python3 是 metapackage，会带入完整 stdlib（含 json / argparse / pathlib /
+  # dataclasses 等 recoveryctl 必需模块）；python3-minimal 不够。
+  - python3
+  - util-linux
+  - e2fsprogs
+
+conffiles: []
+
+data_dirs: []

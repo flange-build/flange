@@ -12,6 +12,7 @@ ARTIFACT_NAMES = {
     ("bootloader", "boot_package"):   "boot_package.fex",
     ("boot",       "boot"):          "boot.img",
     ("rootfs",     "rootfs"):        "rootfs.img",
+    ("recovery",   "recovery"):      "recovery.img",
     ("image",      "image"):         "raw.img",
 }
 
@@ -30,6 +31,9 @@ def create_builder(component: str, docker: DockerRunner, source: SourceManager):
     elif component == "boot":
         from builder.platforms.allwinnera733.boot import AllwinnerA733BootBuilder
         return AllwinnerA733BootBuilder(docker, source)
+    elif component == "recovery":
+        from builder.platforms.allwinnera733.recovery import AllwinnerA733RecoveryBuilder
+        return AllwinnerA733RecoveryBuilder(docker, source)
     elif component == "image":
         from builder.platforms.allwinnera733.image import AllwinnerA733ImageBuilder
         return AllwinnerA733ImageBuilder(docker, source)

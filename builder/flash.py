@@ -70,6 +70,10 @@ class FlashPartition:
     offset: str       # "0x40" 等 hex 字符串
     type: str         # "raw", "ext4" 等
     image: str        # 相对于 target_dir 的路径
+    # recovery 与宿主机端均消费的保护标记：raw 类型分区一律 True；
+    # 此外 recovery.protected_partitions 中显式列出的分区也标记 True。
+    # 默认 False，向前兼容现有 flash-config.json 消费者。
+    protected: bool = False
 
 
 @dataclass
@@ -148,6 +152,15 @@ class FlashStrategy(ABC):
     @abstractmethod
     def write_partition(self, tool: Path, offset: int, image: Path):
         """写入单个分区。"""
+
+    def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
+        """在分区写入前刷新 GPT 表。默认 no-op；需要的平台覆盖。
+
+        Rockchip upgrade_tool 的 WL 命令仅按 offset 写 LBA，不会更新 GPT 表；
+        分区表变更（如新增 recovery）必须显式刷一次 GPT，否则 kernel 看不到
+        新分区，``Waiting for root device PARTLABEL=...`` 会死等。
+        """
+        return
 
     @abstractmethod
     def reboot(self, tool: Path):
@@ -247,17 +260,55 @@ class RockchipFlashStrategy(FlashStrategy):
         )
         _ok(f"{image.name}")
 
+    # GPT primary 占 LBA 1..33（GPT header + entries），protective MBR 在 LBA 0。
+    # rockchip upgrade_tool 拒绝 WL 0（保护 boot region），跳过 protective MBR
+    # 直接从 LBA 1 写 33 个 sector 即可让 kernel 看到完整分区表。
+    GPT_HEADER_LBA = 1
+    GPT_ENTRIES_SECTORS = 33  # 1 header + 32 entries = 33 sectors
+
+    def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
+        raw_img = target_dir / "image" / "raw.img"
+        if not raw_img.exists():
+            _warn(f"未找到 raw.img: {raw_img}，跳过 GPT 刷新（旧 GPT 可能丢失新分区）")
+            return
+        # 从 raw.img LBA 1 起截取 33 sectors —— 跳过 protective MBR，
+        # 保留 GPT header + entries 段。
+        import tempfile
+        sector = 512
+        size = self.GPT_ENTRIES_SECTORS * sector
+        with tempfile.NamedTemporaryFile(suffix=".gpt.bin", delete=False) as tmp:
+            with raw_img.open("rb") as f:
+                f.seek(self.GPT_HEADER_LBA * sector)
+                tmp.write(f.read(size))
+            tmp_path = Path(tmp.name)
+        try:
+            _info(f"刷新 GPT 表（LBA {self.GPT_HEADER_LBA}, "
+                  f"{self.GPT_ENTRIES_SECTORS} sectors / {size // 1024}KB）...")
+            subprocess.run(
+                [str(tool), "WL", str(self.GPT_HEADER_LBA), str(tmp_path)],
+                check=True,
+            )
+            _ok("GPT")
+        finally:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
     def reboot(self, tool: Path):
         _info("重启设备...")
         subprocess.run([str(tool), "RD"], check=True)
 
     def partition_image_map(self, config: dict) -> dict[str, str]:
-        return {
+        m = {
             "idbloader": "bootloader/idbloader.img",
             "uboot": "bootloader/u-boot.itb",
             "boot": "boot/boot.img",
             "rootfs": "rootfs/rootfs.img",
         }
+        if (config.get("recovery") or {}).get("enabled", False):
+            m["recovery"] = "recovery/recovery.img"
+        return m
 
     def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
         return PreFlashConfig(download_boot="bootloader/miniloader.bin")
@@ -287,13 +338,18 @@ class AllwinnerA733FlashStrategy(FlashStrategy):
         _info("SD 卡模式：请手动插入 SD 卡并重启设备")
 
     def partition_image_map(self, config: dict) -> dict[str, str]:
-        return {
+        # SD 卡模式整体 dd raw.img；列出 recovery 仅为生成 flash-config.json 时
+        # 携带 protection 元数据，write_partition 不会被逐分区调用。
+        m = {
             "boot0": "bootloader/boot0_sdcard.bin",
             "boot0_ufs": "bootloader/boot0_ufs.bin",
             "boot_package": "bootloader/boot_package.fex",
             "boot": "boot/boot.img",
             "rootfs": "rootfs/rootfs.img",
         }
+        if (config.get("recovery") or {}).get("enabled", False):
+            m["recovery"] = "recovery/recovery.img"
+        return m
 
 
 # 策略注册表
@@ -319,10 +375,20 @@ class FlashConfigGenerator:
     """从 FINAL_CONFIG 生成 flash-config.json。"""
 
     def generate(self, config: dict, target_dir: Path) -> Path:
-        """生成 flash-config.json 到 target_dir，返回文件路径。"""
+        """生成 flash-config.json 到 target_dir，返回文件路径。
+
+        ``protected`` 标记规则：``type == "raw"`` 一律 True；启用 recovery 时
+        ``recovery.protected_partitions`` 名单中的分区也置 True；recovery 自身
+        分区始终视为受保护（设备端不允许从 recovery 内重写自己）。
+        """
         platform = config.get("platform", "")
         strategy = get_flash_strategy(platform)
         image_map = strategy.partition_image_map(config)
+
+        recovery_cfg = config.get("recovery") or {}
+        protected_set: set[str] = set(recovery_cfg.get("protected_partitions") or [])
+        if recovery_cfg.get("enabled", False):
+            protected_set.add("recovery")
 
         partitions = []
         for entry in config.get("partitions", {}).get("entries", []):
@@ -330,11 +396,14 @@ class FlashConfigGenerator:
             image = image_map.get(name, "")
             if not image:
                 continue  # 跳过无镜像映射的分区（如 userdata）
+            ptype = entry.get("type", "raw")
+            protected = bool(ptype == "raw" or name in protected_set)
             partitions.append(FlashPartition(
                 name=name,
                 offset=entry.get("offset", "0x0"),
-                type=entry.get("type", "raw"),
+                type=ptype,
                 image=image,
+                protected=protected,
             ))
 
         # 构造 pre_flash（由平台策略声明）
@@ -383,6 +452,9 @@ class FlashExecutor:
 
         _step("刷写分区")
         start = time.time()
+        # 全量刷写时分区表可能变化（如新增 recovery），先把 GPT 表写下去；
+        # 平台默认实现是 no-op，rockchip 通过 raw.img 前几个 sector 刷写 GPT。
+        self.strategy.write_gpt(tool, self.target_dir, cfg)
         for part in cfg.partitions:
             image = self.target_dir / part.image
             if not image.exists():

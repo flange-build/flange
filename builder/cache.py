@@ -16,13 +16,17 @@ from pathlib import Path
 # 组件依赖图：键为组件名，值为该组件依赖的上游组件列表。
 # cache 用此图做 Merkle 哈希级联；engine 用此图做拓扑排序。
 # 保持单一定义源以避免两处不一致。
+#
+# recovery 组件在 image 之前构建，依赖 app（recoveryctl/adbd 通过 deb 装入
+# recovery rootfs）与 kernel（共享 kernel/dtb，并安装内核模块）。
 DEPENDENCY_GRAPH: dict[str, list[str]] = {
     "kernel":     [],
     "bootloader": [],
     "app":        [],
     "rootfs":     ["app", "kernel"],
     "boot":       ["kernel"],
-    "image":      ["boot", "bootloader", "rootfs"],
+    "recovery":   ["app", "kernel"],
+    "image":      ["boot", "bootloader", "rootfs", "recovery"],
 }
 
 
@@ -30,11 +34,13 @@ DEPENDENCY_GRAPH: dict[str, list[str]] = {
 # 支持字面量文件名和 glob 通配（如 "*.dtb"）。
 # 缓存命中时校验这些文件存在，防止 .build_hash 有效但产物被误删导致下游失败。
 # app 组件不校验：custom_packages 为空时无 deb 输出是合法状态。
+# recovery 组件仅在 enabled 时校验：禁用时无产物是合法状态（运行时短路）。
 REQUIRED_ARTIFACTS: dict[str, list[str]] = {
     "kernel":     ["Image", "*.dtb"],
     "bootloader": ["u-boot.itb", "idbloader.img", "miniloader.bin"],
     "boot":       ["boot.img"],
     "rootfs":     ["rootfs.img"],
+    "recovery":   ["recovery.img"],
     "image":      ["raw.img"],
 }
 
@@ -151,6 +157,8 @@ class BuildCache:
             self._mix_rootfs_customize(h)
         elif component == "app":
             self._mix_app_sources(h)
+        elif component == "recovery":
+            self._mix_recovery(h)
         else:
             # kernel / bootloader / boot / image
             h.update(json.dumps(
@@ -237,14 +245,53 @@ class BuildCache:
         # partitions 影响 rootfs.img 大小
         self._mix_partitions(h)
 
+    # --- 哈希输入混合：recovery ---
+
+    def _mix_recovery(self, h: "hashlib._Hash") -> None:
+        """recovery 组件特化哈希。
+
+        上游 kernel/app 哈希已由 compute_hash 的 Merkle 级联接管，本函数只
+        混入 recovery 自身可变的输入：
+          - config["recovery"] 子树（packages / custom_packages / transport
+            / protected_partitions / enabled）
+          - rootfs.url（recovery 复用 rootfs base tarball 来源）
+          - components/recovery/overlay 与平台/board 级 recovery overlay 目录
+            （存在时递归哈希）
+          - partitions 配置（recovery 分区大小变化要触发重建）
+        """
+        recovery_cfg = self.config.get("recovery", {})
+        h.update(b"recovery:")
+        h.update(json.dumps(recovery_cfg, sort_keys=True, default=str).encode())
+
+        # recovery rootfs base tarball 源（与 normal rootfs 共用）
+        rootfs_url = self.config.get("rootfs", {}).get("url", "")
+        h.update(rootfs_url.encode())
+
+        platform = self.config.get("platform", "")
+        board = self.config.get("board", "")
+        for overlay_dir in [
+            Path("components/recovery/overlay"),
+            Path(f"components/platform/{platform}/recovery-overlay"),
+            Path(f"components/board/{board}/recovery-overlay"),
+        ]:
+            if overlay_dir.exists():
+                self._hash_directory(h, overlay_dir)
+
+        self._mix_partitions(h)
+
     # --- 哈希输入混合：app ---
 
     def _mix_app_sources(self, h: "hashlib._Hash") -> None:
-        """将 custom_packages 列表及各 App 的完整源码内容混入 h。"""
-        rootfs_cfg = self.config.get("rootfs", {})
-        custom_packages: list = rootfs_cfg.get("custom_packages", [])
-        h.update(json.dumps(sorted(custom_packages)).encode())
-        for pkg in sorted(custom_packages):
+        """将 custom_packages 列表及各 App 的完整源码内容混入 h。
+
+        集合为 rootfs.custom_packages 与启用时 recovery.custom_packages 的并集，
+        与 AppBuilder.build_all 的来源保持一致，避免 recoveryctl 改动后 app
+        组件未失效。
+        """
+        from builder.config.apps import gather_custom_packages
+        custom_packages = gather_custom_packages(self.config)
+        h.update(json.dumps(custom_packages).encode())
+        for pkg in custom_packages:
             app_dir = Path("components/app") / pkg
             if app_dir.exists():
                 self._hash_directory(h, app_dir)
