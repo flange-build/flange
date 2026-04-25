@@ -11,6 +11,8 @@ PLATFORM = {
             "systemd", "systemd-sysv", "dbus", "network-manager",
             "iputils-ping", "iproute2", "openssh-server", "sudo",
             "bash", "ca-certificates", "locales",
+            # recoveryctl 依赖 python3 完整 stdlib（同 rockchip 平台说明）。
+            "python3",
         ],
         # 同 Rockchip：normal 系统也安装 recoveryctl，便于 ADB 触发模式切换。
         "custom_packages": ["adbd", "recoveryctl"],
@@ -25,7 +27,7 @@ PLATFORM = {
         "enabled": True,
         "packages": [
             "systemd", "systemd-sysv", "udev", "dbus",
-            "python3-minimal",
+            "python3",
             "util-linux", "e2fsprogs", "dosfstools",
             "parted", "gdisk",
             "zstd", "coreutils",

@@ -15,6 +15,9 @@ PLATFORM = {
             "systemd", "systemd-sysv", "dbus", "network-manager",
             "iputils-ping", "iproute2", "openssh-server", "sudo",
             "bash", "ca-certificates", "locales",
+            # recoveryctl 依赖 python3 完整 stdlib（json/argparse/pathlib/
+            # dataclasses）；不能用 python3-minimal。
+            "python3",
         ],
         # recoveryctl 需要在 normal 系统中也能调用（`recoveryctl reboot recovery`
         # 用来从 normal 进入 recovery，由 `flange recovery enter` 通过 ADB
@@ -32,7 +35,7 @@ PLATFORM = {
         "enabled": True,
         "packages": [
             "systemd", "systemd-sysv", "udev", "dbus",
-            "python3-minimal",
+            "python3",
             "util-linux", "e2fsprogs", "dosfstools",
             "parted", "gdisk",
             "zstd", "coreutils",

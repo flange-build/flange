@@ -100,13 +100,14 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         labels = [normal]
 
         if (config.get("recovery") or {}).get("enabled", False):
+            # 用 PARTLABEL= 而非 ext4 LABEL=：见 rockchip boot.py 的同一段说明。
             recovery = LabelSpec(
                 name=RECOVERY_LABEL,
                 kernel="/extlinux/Image",
                 fdt=f"/extlinux/{dtb_filename}",
                 fdt_directive="devicetree",
                 append=(
-                    f"root=LABEL=recovery rootfstype=ext4 rootwait rw "
+                    f"root=PARTLABEL=recovery rootfstype=ext4 rootwait rw "
                     f"flange.mode=recovery {kernel_args}"
                 ).rstrip(),
             )

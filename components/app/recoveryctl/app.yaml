@@ -18,7 +18,9 @@ install:
   bin/recoveryctl: /usr/sbin/recoveryctl
 
 depends:
-  - python3-minimal
+  # python3 是 metapackage，会带入完整 stdlib（含 json / argparse / pathlib /
+  # dataclasses 等 recoveryctl 必需模块）；python3-minimal 不够。
+  - python3
   - util-linux
   - e2fsprogs
 

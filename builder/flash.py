@@ -153,6 +153,15 @@ class FlashStrategy(ABC):
     def write_partition(self, tool: Path, offset: int, image: Path):
         """写入单个分区。"""
 
+    def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
+        """在分区写入前刷新 GPT 表。默认 no-op；需要的平台覆盖。
+
+        Rockchip upgrade_tool 的 WL 命令仅按 offset 写 LBA，不会更新 GPT 表；
+        分区表变更（如新增 recovery）必须显式刷一次 GPT，否则 kernel 看不到
+        新分区，``Waiting for root device PARTLABEL=...`` 会死等。
+        """
+        return
+
     @abstractmethod
     def reboot(self, tool: Path):
         """重启设备。"""
@@ -250,6 +259,41 @@ class RockchipFlashStrategy(FlashStrategy):
             check=True,
         )
         _ok(f"{image.name}")
+
+    # GPT primary 占 LBA 1..33（GPT header + entries），protective MBR 在 LBA 0。
+    # rockchip upgrade_tool 拒绝 WL 0（保护 boot region），跳过 protective MBR
+    # 直接从 LBA 1 写 33 个 sector 即可让 kernel 看到完整分区表。
+    GPT_HEADER_LBA = 1
+    GPT_ENTRIES_SECTORS = 33  # 1 header + 32 entries = 33 sectors
+
+    def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
+        raw_img = target_dir / "image" / "raw.img"
+        if not raw_img.exists():
+            _warn(f"未找到 raw.img: {raw_img}，跳过 GPT 刷新（旧 GPT 可能丢失新分区）")
+            return
+        # 从 raw.img LBA 1 起截取 33 sectors —— 跳过 protective MBR，
+        # 保留 GPT header + entries 段。
+        import tempfile
+        sector = 512
+        size = self.GPT_ENTRIES_SECTORS * sector
+        with tempfile.NamedTemporaryFile(suffix=".gpt.bin", delete=False) as tmp:
+            with raw_img.open("rb") as f:
+                f.seek(self.GPT_HEADER_LBA * sector)
+                tmp.write(f.read(size))
+            tmp_path = Path(tmp.name)
+        try:
+            _info(f"刷新 GPT 表（LBA {self.GPT_HEADER_LBA}, "
+                  f"{self.GPT_ENTRIES_SECTORS} sectors / {size // 1024}KB）...")
+            subprocess.run(
+                [str(tool), "WL", str(self.GPT_HEADER_LBA), str(tmp_path)],
+                check=True,
+            )
+            _ok("GPT")
+        finally:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
     def reboot(self, tool: Path):
         _info("重启设备...")
@@ -408,6 +452,9 @@ class FlashExecutor:
 
         _step("刷写分区")
         start = time.time()
+        # 全量刷写时分区表可能变化（如新增 recovery），先把 GPT 表写下去；
+        # 平台默认实现是 no-op，rockchip 通过 raw.img 前几个 sector 刷写 GPT。
+        self.strategy.write_gpt(tool, self.target_dir, cfg)
         for part in cfg.partitions:
             image = self.target_dir / part.image
             if not image.exists():

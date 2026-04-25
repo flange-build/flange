@@ -28,9 +28,33 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-# 设备端 recoveryctl 默认上传/备份目录
-REMOTE_UPLOAD_DIR = "/tmp/flange-upload"
-REMOTE_BACKUP_DIR = "/tmp/flange-backup"
+# Recovery rootfs 通常 < 512MB（base + apps + 内核模块后剩余 < 50MB），无法
+# 容纳数百 MB 的 backup 镜像或上传镜像。备份/上传统一走 userdata 分区：
+# 临时 mount 到 /mnt/flange-scratch，操作完 umount。
+SCRATCH_MOUNT = "/mnt/flange-scratch"
+SCRATCH_DEV = "/dev/disk/by-partlabel/userdata"
+REMOTE_UPLOAD_DIR = f"{SCRATCH_MOUNT}/flange-upload"
+REMOTE_BACKUP_DIR = f"{SCRATCH_MOUNT}/flange-backup"
+
+
+def _mount_scratch(t: Transport) -> None:
+    """挂 userdata 分区到 SCRATCH_MOUNT；已挂载则跳过。"""
+    t.shell(["mkdir", "-p", SCRATCH_MOUNT])
+    # mountpoint 检查；returncode 0 表示已挂载
+    r = t.shell(["mountpoint", "-q", SCRATCH_MOUNT])
+    if r.returncode == 0:
+        return
+    r = t.shell(["mount", SCRATCH_DEV, SCRATCH_MOUNT])
+    if r.returncode != 0:
+        raise HostRecoveryError(
+            f"挂载 userdata 分区失败：{r.stderr.strip() or r.stdout.strip()}\n"
+            f"确认 {SCRATCH_DEV} 存在且可挂载（`adb shell ls -l {SCRATCH_DEV}`）。"
+        )
+
+
+def _umount_scratch(t: Transport) -> None:
+    """umount SCRATCH_MOUNT；失败仅警告，不阻断主流程。"""
+    t.shell(["umount", SCRATCH_MOUNT])
 
 
 class HostRecoveryError(RuntimeError):
@@ -78,6 +102,21 @@ class AdbTransport(Transport):
                 "未在 PATH 中找到 adb。请安装 android-tools-adb 或在环境变量"
                 " PATH 中加入 platform-tools 目录。"
             )
+
+    def exec_stream(self, args: list[str], local_path: Path) -> int:
+        """``adb exec-out`` —— 把远端命令的 stdout 直接写到本地文件。
+
+        用于备份等"远端不能/不应在设备落盘"的场景。stderr 仍捕获到内存
+        以便诊断。返回远端命令退出码（exec-out 透传 rc）。
+        """
+        cmdline = shlex.join(args)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        with local_path.open("wb") as out:
+            r = subprocess.run(
+                [self.adb, "exec-out", cmdline],
+                stdout=out, stderr=subprocess.PIPE, check=False,
+            )
+        return r.returncode
 
     def _run(self, args: list[str], *, capture: bool = True,
              stdin=None) -> subprocess.CompletedProcess:
@@ -182,12 +221,13 @@ class AdbTransport(Transport):
 # ──────────────────────────────────────────────────────────────────
 
 
-def query_device_mode(t: Transport, *, retries: int = 3,
+def query_device_mode(t: Transport, *, retries: int = 8,
                       retry_sleep: float = 2.0) -> str:
     """通过 ``recoveryctl mode`` 查询设备当前模式。
 
-    刚 reboot 完 adbd 可能尚未稳定，会出现 "error: closed" / 短暂的非 0 rc；
-    对这类瞬态错误做短暂重试，最多 ``retries`` 次。
+    刚 reboot 完 adbd 可能尚未稳定，会出现各种瞬态错误（"error: closed"、
+    "no devices/emulators found"、"device offline"）；对这类瞬态做最多
+    ``retries`` 次短暂重试（默认 8 次×2s ≈ 16s），其余错误立刻报。
     """
     last: ShellResult | None = None
     for attempt in range(max(1, retries)):
@@ -195,10 +235,15 @@ def query_device_mode(t: Transport, *, retries: int = 3,
         if r.returncode == 0:
             return r.stdout.strip() or "normal"
         last = r
-        # 仅对常见瞬态信号重试；其余错误（如 recoveryctl 不存在）立刻报
         msg = (r.stderr + r.stdout).lower()
-        transient = ("closed" in msg or "device offline" in msg
-                     or "device not found" in msg or msg.strip() == "")
+        transient = (
+            "closed" in msg                     # error: closed
+            or "device offline" in msg          # adb device offline
+            or "no devices" in msg              # adb: no devices/emulators found
+            or "device not found" in msg        # adb: device 'xxx' not found
+            or "device unauthorized" in msg     # 第一次连 USB 调试授权
+            or msg.strip() == ""                # adbd 退出无输出
+        )
         if not transient:
             break
         if attempt < retries - 1:
@@ -224,7 +269,7 @@ def require_recovery_mode(t: Transport) -> None:
 # ──────────────────────────────────────────────────────────────────
 
 
-def cmd_enter(t: Transport, *, wait_timeout: int = 60) -> int:
+def cmd_enter(t: Transport, *, wait_timeout: int = 90) -> int:
     """让设备进入 recovery：
        1. 等待 ADB 在线
        2. 已是 recovery → 直接成功
@@ -317,23 +362,29 @@ def cmd_flash(t: Transport, *, partition: str, image: Path,
     sha = _sha256_of_file(image)
     remote = f"{REMOTE_UPLOAD_DIR}/{image.name}"
 
-    # 先确保远端目录存在
-    t.shell(["mkdir", "-p", REMOTE_UPLOAD_DIR])
-    print(f"上传 {image.name} ...")
-    t.push(image, remote)
+    _mount_scratch(t)
+    try:
+        t.shell(["mkdir", "-p", REMOTE_UPLOAD_DIR])
+        print(f"上传 {image.name} ...")
+        t.push(image, remote)
 
-    args = ["recoveryctl", "flash", partition, remote, "--sha256", sha]
-    if force:
-        args.append("--force")
-    print(f"recoveryctl flash {partition} ...")
-    r = t.shell(args, capture=False)
-    # 失败时设备端打印中文错误到 stderr；保留退出码
-    if r.returncode != 0:
-        raise HostRecoveryError(
-            f"recoveryctl flash 失败 (rc={r.returncode})"
-        )
-    # 清理上传文件
-    t.shell(["rm", "-f", remote])
+        args = ["recoveryctl", "flash", partition, remote, "--sha256", sha]
+        if force:
+            args.append("--force")
+        print(f"recoveryctl flash {partition} ...")
+        # 用 capture=True 让 AdbTransport 的 __flange_rc__ marker 把远端真实 rc
+        # 透传到 host —— capture=False 仅传 adb 自身 rc，会吞掉远端失败。
+        r = t.shell(args, capture=True)
+        if r.stdout:
+            sys.stdout.write(r.stdout)
+        if r.returncode != 0:
+            raise HostRecoveryError(
+                f"recoveryctl flash 失败 (rc={r.returncode}): "
+                f"{r.stderr.strip() or r.stdout.strip()}"
+            )
+        t.shell(["rm", "-f", remote])
+    finally:
+        _umount_scratch(t)
     print(f"✓ {partition} 已刷写")
     return 0
 
@@ -347,19 +398,28 @@ def cmd_backup(t: Transport, *, partition: str, output: Path,
     require_recovery_mode(t)
 
     remote = f"{REMOTE_BACKUP_DIR}/{output.name}"
-    t.shell(["mkdir", "-p", REMOTE_BACKUP_DIR])
-    print(f"recoveryctl backup {partition} → {remote} ...")
-    r = t.shell(
-        ["recoveryctl", "backup", partition, remote, "--compress", compress],
-        capture=False,
-    )
-    if r.returncode != 0:
-        raise HostRecoveryError(
-            f"recoveryctl backup 失败 (rc={r.returncode})"
+    _mount_scratch(t)
+    try:
+        t.shell(["mkdir", "-p", REMOTE_BACKUP_DIR])
+        print(f"recoveryctl backup {partition} → {remote} ...")
+        # capture=True 让 AdbTransport 的 __flange_rc__ marker 把远端真实 rc
+        # 透传到 host，避免远端失败被吞。
+        r = t.shell(
+            ["recoveryctl", "backup", partition, remote, "--compress", compress],
+            capture=True,
         )
-    print(f"拉取备份至 {output} ...")
-    t.pull(remote, output)
-    t.shell(["rm", "-f", remote])
+        if r.stdout:
+            sys.stdout.write(r.stdout)
+        if r.returncode != 0:
+            raise HostRecoveryError(
+                f"recoveryctl backup 失败 (rc={r.returncode}): "
+                f"{r.stderr.strip() or r.stdout.strip()}"
+            )
+        print(f"拉取备份至 {output} ...")
+        t.pull(remote, output)
+        t.shell(["rm", "-f", remote])
+    finally:
+        _umount_scratch(t)
     print(f"✓ 备份完成：{output}")
     return 0
 

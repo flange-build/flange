@@ -404,26 +404,43 @@ def do_backup(
     partition_resolver=partition_to_block_device,
     block_size_lookup=block_device_size_bytes,
 ) -> None:
-    """从分区 dd 到文件；compress 为 zstd 时转 .zst（需要系统 zstd）。"""
+    """从分区读取数据写到文件或 stdout。
+
+    ``req.output`` 为 ``Path("-")`` 时把数据流写到 stdout，由宿主机的
+    ``adb exec-out`` 直接拉走，不在设备落盘——这是默认推荐路径，因为
+    recovery rootfs 与 /tmp 都受空间限制（不到几百 MB）。
+    """
     find_partition_entry(config, req.partition)  # 仅用于触发未知分区报错
     dev = partition_resolver(req.partition)
 
-    req.output.parent.mkdir(parents=True, exist_ok=True)
+    is_stream = (str(req.output) == "-")
+    if not is_stream:
+        req.output.parent.mkdir(parents=True, exist_ok=True)
+
     if req.compress == "none":
-        runner(
-            ["dd", f"if={dev}", f"of={req.output}", "bs=4M", "status=none"],
-            check=True,
-        )
+        if is_stream:
+            # dd if=dev of=/dev/stdout, 写到 stdout
+            runner(
+                ["dd", f"if={dev}", "bs=4M", "status=none"],
+                check=True,
+            )
+        else:
+            runner(
+                ["dd", f"if={dev}", f"of={req.output}", "bs=4M", "status=none"],
+                check=True,
+            )
     elif req.compress == "zstd":
-        # dd | zstd > output。subprocess Popen 管道。
-        with req.output.open("wb") as out:
+        # dd | zstd -c (写 stdout) > {output_file 或 stdout}。
+        # ``-c`` 让 zstd 显式写 stdout，避免 ``-o /dev/stdout`` 被拒。
+        out_fp = sys.stdout.buffer if is_stream else req.output.open("wb")
+        try:
             dd = subprocess.Popen(
                 ["dd", f"if={dev}", "bs=4M", "status=none"],
                 stdout=subprocess.PIPE,
             )
             zstd = subprocess.Popen(
-                ["zstd", "-q", "-T0", "-o", "/dev/stdout"],
-                stdin=dd.stdout, stdout=out,
+                ["zstd", "-q", "-T0", "-c"],
+                stdin=dd.stdout, stdout=out_fp,
             )
             if dd.stdout:
                 dd.stdout.close()
@@ -433,6 +450,9 @@ def do_backup(
                 raise RecoveryError(
                     f"备份失败：dd rc={dd_rc}, zstd rc={zstd_rc}"
                 )
+        finally:
+            if not is_stream:
+                out_fp.close()
     else:
         raise RecoveryError(f"未知压缩格式：{req.compress}")
 

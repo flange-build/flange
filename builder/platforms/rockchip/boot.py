@@ -102,13 +102,16 @@ class RockchipBootBuilder(ComponentBuilder):
         fdt_path = f"/{self.DTB_VENDOR_DIR}/{dtb_filename}"
         overlays = [f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in default_overlays]
 
+        # 用 PARTLABEL= 而非 ext4 LABEL=：GPT partition name 由 parted mkpart
+        # 设置为 "rootfs"/"recovery"，kernel 启动早期可直接从 GPT 表解析，
+        # 不依赖文件系统 probe（避免 "Waiting for root device LABEL=..." 死等）。
         normal = LabelSpec(
             name=NORMAL_LABEL,
             kernel="/Image",
             fdt=fdt_path,
             fdt_directive="fdt",
             fdtoverlays=overlays,
-            append=f"root=LABEL=rootfs rootfstype=ext4 rootwait rw {kernel_args}".rstrip(),
+            append=f"root=PARTLABEL=rootfs rootfstype=ext4 rootwait rw {kernel_args}".rstrip(),
         )
         labels = [normal]
 
@@ -120,7 +123,7 @@ class RockchipBootBuilder(ComponentBuilder):
                 fdt_directive="fdt",
                 fdtoverlays=overlays,
                 append=(
-                    f"root=LABEL=recovery rootfstype=ext4 rootwait rw "
+                    f"root=PARTLABEL=recovery rootfstype=ext4 rootwait rw "
                     f"flange.mode=recovery {kernel_args}"
                 ).rstrip(),
             )

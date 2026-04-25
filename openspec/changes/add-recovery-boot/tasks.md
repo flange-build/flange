@@ -92,9 +92,9 @@
 > 9.7–9.12 由用户在真实 RK3566 设备上执行。完整步骤见
 > [`acceptance.md`](acceptance.md)；通过后勾选对应任务。
 
-- [ ] 9.7 实机验证：全量刷写后 normal 系统启动成功
-- [ ] 9.8 实机验证：`flange recovery enter` 进入 recovery
-- [ ] 9.9 实机验证：`flange recovery list` 列出真实分区状态
-- [ ] 9.10 实机验证：`flange recovery backup rootfs rootfs-backup.img.zst` 成功生成备份
-- [ ] 9.11 实机验证：`flange recovery flash rootfs rootfs.img` 成功刷写 rootfs
-- [ ] 9.12 实机验证：`flange recovery reboot` 返回 normal 系统
+- [x] 9.7 实机验证：全量刷写后 normal 系统启动成功
+- [x] 9.8 实机验证：`flange recovery enter` 进入 recovery
+- [x] 9.9 实机验证：`flange recovery list` 列出真实分区状态
+- [x] 9.10 实机验证：`flange recovery backup rootfs rootfs-backup.img.zst` 成功生成备份
+- [x] 9.11 实机验证：`flange recovery flash rootfs rootfs.img` 成功刷写 rootfs
+- [x] 9.12 实机验证：`flange recovery reboot` 返回 normal 系统

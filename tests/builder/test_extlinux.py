@@ -153,9 +153,11 @@ class TestRockchipBootExtlinux:
         text = builder._build_extlinux_conf(_rk3566_cfg(recovery_enabled=True), "rk3566-test.dtb")
         # 找到 recovery 段
         assert "label flange-recovery" in text
-        # recovery append 必须含 root=LABEL=recovery
+        # recovery append 必须把 root 指向 recovery 分区。我们用 PARTLABEL=
+        # （GPT partition name）而非 ext4 LABEL=，避免 kernel 启动早期
+        # 文件系统 probe 失败导致 "Waiting for root device" 死等。
         recovery_section = text.split("label flange-recovery", 1)[1]
-        assert "root=LABEL=recovery" in recovery_section
+        assert "root=PARTLABEL=recovery" in recovery_section
         # recovery append 应携带 mode 标记，便于设备端 recoveryctl 识别当前模式
         assert "flange.mode=recovery" in recovery_section
 
