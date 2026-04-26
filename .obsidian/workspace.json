@@ -4,17 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "2ba67d1bb7f9226c",
+        "id": "a56d9ada658b4edf",
         "type": "tabs",
         "children": [
           {
-            "id": "26299a9f93cfdc8e",
+            "id": "5200574af342b7c9",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
+              "type": "markdown",
+              "state": {
+                "file": "wiki/llm-wiki.md",
+                "mode": "source",
+                "source": false
+              },
               "icon": "lucide-file",
-              "title": "新标签页"
+              "title": "llm-wiki"
             }
           }
         ]
@@ -90,6 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
+                "file": "wiki/llm-wiki.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -99,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "反向链接"
+              "title": "llm-wiki 的反向链接列表"
             }
           },
           {
@@ -108,11 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
+                "file": "wiki/llm-wiki.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "出链"
+              "title": "llm-wiki 的出链列表"
             }
           },
           {
@@ -150,12 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
+                "file": "wiki/llm-wiki.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "大纲"
+              "title": "llm-wiki 的大纲"
             }
           }
         ]
@@ -176,9 +183,35 @@
       "bases:新建数据库": false
     }
   },
-  "active": "951bf756b034a358",
+  "active": "5200574af342b7c9",
   "lastOpenFiles": [
+    "wiki/log.md",
+    "wiki/index.md",
     "wiki/CLAUDE.md",
+    "wiki/workflows/external_apps-装载.md",
+    "wiki/workflows/新增板级支持.md",
+    "wiki/workflows/scaffold-新建-app-流程.md",
+    "wiki/workflows/recovery-在线刷写流程.md",
+    "wiki/platforms/allwinnera733-平台.md",
+    "wiki/platforms/index.md",
+    "wiki/subsystems/Docker-执行封装.md",
+    "wiki/subsystems/scaffold-生成器.md",
+    "wiki/concepts/U-Boot-启动链.md",
+    "wiki/concepts/recovery-系统.md",
+    "wiki/concepts/内容哈希与增量构建.md",
+    "wiki/concepts/三层继承.md",
+    "wiki/concepts/boot-once-启动切换.md",
+    "wiki/components/bootloader-构建器.md",
+    "wiki/components/image-构建器.md",
+    "wiki/components/app-打包系统.md",
+    "wiki/components/kernel-构建器.md",
+    "lunch-build-flash 流程.md",
+    "wiki/concepts/架构总览.md",
+    "wiki/concepts/仓库三层结构.md",
+    "wiki/apps/index.md",
+    "wiki/workflows/index.md",
+    "wiki/subsystems/index.md",
+    "未命名.canvas",
     "wiki/apps",
     "wiki/workflows",
     "wiki/subsystems",
@@ -186,25 +219,8 @@
     "wiki/boards",
     "wiki/platforms",
     "wiki/components",
-    "docs/superpowers/plans/2026-04-26-flange-wiki-knowledge-base-build.md",
-    "docs/superpowers/specs/2026-04-26-flange-wiki-knowledge-base-design.md",
     "docs/superpowers/specs",
     "tests/builder/test_bootloader_boot_once.py",
-    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/specs/recovery-usb-flash/spec.md",
-    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/specs/recovery-boot/spec.md",
-    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/specs/recovery-usb-flash",
-    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/tasks.md",
-    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/proposal.md",
-    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/design.md",
-    "wiki/llm-wiki.md",
-    "openspec/changes/archive/2026-04-18-rename-allwinner-to-allwinnera733/design.md",
-    "roadmap.md",
-    "ProjectSpec.md",
-    "openspec/flange-build-tool-design.md",
-    "openspec/flange-build-tool-spec.md",
-    "docs/recovery.md",
-    "docs/build-system-design.md",
-    "docs/superpowers/plans/2026-04-11-bazel-to-python-migration.md",
-    "README.md"
+    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/specs/recovery-usb-flash"
   ]
 }
