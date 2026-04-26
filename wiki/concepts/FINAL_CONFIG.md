@@ -30,7 +30,6 @@ updated: 2026-04-26
   - `product` / `variant` — 当前选择（由 resolve_conditions 写入）
 - **不可变语义**：resolve_config 返回新 dict，不修改任何输入；下游模块只读不写
 - **BuildCache 消费**：`BuildCache(config)` 接收 FINAL_CONFIG，作为所有哈希计算的基础
-- **loader.py 缺失**：`sources` 中列出的 `builder/config/loader.py` 实际不存在（功能已并入 registry.py）
 
 ## 关键代码位置
 

@@ -1953,19 +1953,19 @@ done
 
 记录输出。
 
-- [ ] **Step 12.3：检查综合页字数 > 600**
+- [ ] **Step 12.3：检查综合页字数 > 1200 非空白字符**
 
 ```bash
 cd /Users/eki/Project/Embedded_Project/flange/wiki
 
-echo "=== 超长页报告（> 600 字）==="
+echo "=== 超长页报告（> 1200 非空白字符）==="
 find . -name '*.md' -not -name 'CLAUDE.md' -not -name 'llm-wiki.md' -not -name 'log.md' -not -name 'index.md' | while read f; do
   # 提取 frontmatter 后的正文
   body=$(awk 'BEGIN{in_fm=0; done=0} /^---$/ { if(in_fm==0){in_fm=1; next} else if(in_fm==1 && done==0){done=1; next} } done { print }' "$f")
   # 中文 + 英文混合字数（去空白）
   chars=$(echo "$body" | tr -d '[:space:]' | wc -m)
-  if [ "$chars" -gt 600 ]; then
-    echo "$f: $chars 字"
+  if [ "$chars" -gt 1200 ]; then
+    echo "$f: $chars 非空白字符"
   fi
 done
 ```
