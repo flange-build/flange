@@ -38,16 +38,34 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **WHEN** 内核编译成功完成
 - **THEN** collect 返回字典包含 `"image"` (Image 路径)、`"dtb"` (DTB 路径)、`"modules"` (modules staging 目录路径)
 
-### Requirement: A733 Bootloader 预编译固件模式
-`AllwinnerA733BootloaderBuilder` 必须（SHALL）从固件仓库拉取预编译的 bootloader 二进制，不执行编译。
+### Requirement: A733 Bootloader 源码构建模式
+`AllwinnerA733BootloaderBuilder` 必须（SHALL）从命名仓库 `u-boot-aw2501` 获取源码，
+在构建前应用平台级与板级 bootloader patches，然后编译目标板产物。
 
-#### Scenario: 固件拉取
+#### Scenario: 源码构建
 - **WHEN** 执行 `allwinnera733` 平台的 bootloader 构建
-- **THEN** 构建器从 config 中指定的固件仓库克隆/更新源码，并收集 `boot0_sdcard.bin`、`boot0_ufs.bin`、`boot_package.fex` 三项产物
+- **THEN** 构建器从 `.build/sources/repos/u-boot-aw2501/` 获取源码并执行目标板 `make`
+- **AND** 收集 `boot0_sdcard.bin`、`boot0_ufs.bin`、`boot_package.fex` 等产物
 
-#### Scenario: 无编译步骤
+#### Scenario: bootloader patches
 - **WHEN** 执行 `allwinnera733` 平台的 bootloader 构建
-- **THEN** 不调用 `make`，不需要交叉编译工具链
+- **THEN** 在编译前应用 `components/platform/allwinnera733/patches/bootloader/*.patch`
+- **AND** 应用 `components/board/<board>/patches/bootloader/*.patch`
+
+### Requirement: A733 Recovery Boot 选择
+`allwinnera733` 平台必须（SHALL）支持通过 Allwinner RTC reboot flag 或可选
+`flange_boot_once=recovery` 在 U-Boot sysboot 前选择本次读取
+`/extlinux/recovery.conf`，默认读取 `/extlinux/extlinux.conf`。
+
+#### Scenario: reboot recovery 进入 recovery
+- **WHEN** Linux 通过 `reboot("recovery")` 写入 Allwinner recovery reboot flag
+- **THEN** A733 U-Boot 清除该 flag 后本次读取 `/extlinux/recovery.conf`
+- **AND** 后续普通重启默认读取 `/extlinux/extlinux.conf`
+
+#### Scenario: loader 目标使用 Allwinner bootloader reason
+- **WHEN** 设备端执行 `recoveryctl loader`
+- **THEN** Allwinner A733 平台传递 Linux reboot reason `bootloader`
+- **AND** U-Boot 按 Allwinner 既有 fastboot / loader 流程处理
 
 ### Requirement: A733 Boot 分区组装
 `AllwinnerA733BootBuilder` 必须（SHALL）将 Image、DTB 和 extlinux.conf 组装到 boot.img 中，文件布局遵循 A733 extlinux 规范。
@@ -55,6 +73,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 #### Scenario: boot 分区文件布局
 - **WHEN** 构建 `allwinnera733` 平台的 boot.img
 - **THEN** boot.img 内包含 `/extlinux/Image`、`/extlinux/sunxi.dtb`（或 config 指定的 DTB 文件名）、`/extlinux/extlinux.conf`
+- **AND** recovery 启用时包含 `/extlinux/recovery.conf`
 
 #### Scenario: extlinux.conf 内容
 - **WHEN** config 指定 `boot.kernel_args` 和 `boot.dtb_filename`

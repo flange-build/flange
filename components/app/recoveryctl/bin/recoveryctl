@@ -563,7 +563,27 @@ def supports_reboot_recovery_reason(
         compatible = compatible_path.read_bytes().lower()
     except OSError:
         return False
-    return b"rockchip" in compatible
+    return (
+        b"rockchip" in compatible
+        or b"allwinner" in compatible
+        or b"sunxi" in compatible
+    )
+
+
+def resolve_reboot_reason(
+    target: str,
+    compatible_path: Path = PROC_DEVICE_TREE_COMPATIBLE,
+) -> str:
+    """把 flange 目标模式转换为当前平台的 Linux reboot reason 字符串。"""
+    if target != MODE_LOADER:
+        return target
+    try:
+        compatible = compatible_path.read_bytes().lower()
+    except OSError:
+        return target
+    if b"allwinner" in compatible or b"sunxi" in compatible:
+        return "bootloader"
+    return target
 
 
 def reboot_with_command(
@@ -610,6 +630,7 @@ def do_reboot(
     boot_once_clearer=clear_boot_once_recovery,
     boot_once_requester=request_boot_once_recovery,
     reboot_command=reboot_with_command,
+    compatible_path: Path = PROC_DEVICE_TREE_COMPATIBLE,
     persistent: bool = False,
 ) -> None:
     """请求目标模式并重启。
@@ -641,7 +662,7 @@ def do_reboot(
         return
 
     runner(["sync"], check=True)
-    reboot_command(target)
+    reboot_command(resolve_reboot_reason(target, compatible_path))
 
 
 # ──────────────────────────────────────────────────────────────────

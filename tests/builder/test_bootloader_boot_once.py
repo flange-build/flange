@@ -5,12 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from builder.base import ComponentBuilder
+from builder.platforms.allwinnera733.bootloader import AllwinnerA733BootloaderBuilder
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PATCH = (
+ROCKCHIP_PATCH = (
     ROOT / "components" / "platform" / "rockchip" / "patches"
     / "bootloader" / "0002-select-flange-recovery-extlinux-conf.patch"
+)
+A733_PATCH = (
+    ROOT / "components" / "platform" / "allwinnera733" / "patches"
+    / "bootloader" / "0001-select-flange-recovery-extlinux-conf.patch"
 )
 
 
@@ -28,7 +33,7 @@ class BootloaderPatchCounter(ComponentBuilder):
 
 
 def test_recovery_conf_patch_contains_required_hooks():
-    text = PATCH.read_text(encoding="utf-8")
+    text = ROCKCHIP_PATCH.read_text(encoding="utf-8")
     assert "flange_boot_once" in text
     assert "flange_extlinux_conf" in text
     assert "recovery.conf" in text
@@ -37,10 +42,77 @@ def test_recovery_conf_patch_contains_required_hooks():
     assert "${prefix}extlinux/${flange_extlinux_conf}" in text
 
 
-def test_bootloader_patch_is_counted_by_build_system():
+def test_a733_recovery_conf_patch_contains_required_hooks():
+    text = A733_PATCH.read_text(encoding="utf-8")
+    assert "SUNXI_BOOT_RECOVERY_FLAG" in text
+    assert "flange_boot_once" in text
+    assert "flange_extlinux_conf" in text
+    assert "recovery.conf" in text
+    assert "flange_select_extlinux_conf(bootmode[0])" in text
+    assert "env_save()" in text
+    assert "${prefix}extlinux/${flange_extlinux_conf}" in text
+
+
+def test_rockchip_bootloader_patch_is_counted_by_build_system():
     counter = BootloaderPatchCounter(docker=None, source=None)
     count = counter._count_patches({
         "platform": "rockchip",
         "board": "tspi-rk3566",
     })
     assert count >= 2
+
+
+def test_a733_bootloader_patch_is_counted_by_build_system():
+    counter = BootloaderPatchCounter(docker=None, source=None)
+    count = counter._count_patches({
+        "platform": "allwinnera733",
+        "board": "radxa-cubie-a7z",
+    })
+    assert count >= 1
+
+
+def test_a733_bootloader_build_applies_platform_patches(monkeypatch, tmp_path):
+    src_dir = tmp_path / "u-boot-aw2501"
+    src_dir.mkdir()
+    docker = RecordingDocker()
+    source = StaticSource(src_dir)
+    builder = AllwinnerA733BootloaderBuilder(docker, source)
+    monkeypatch.setattr(builder, "_reset_with_submodules", lambda src: None)
+    monkeypatch.setattr(builder, "_ensure_toolchain", lambda **kwargs: None)
+    monkeypatch.setattr(builder, "collect", lambda src, config: {})
+
+    builder.build({
+        "platform": "allwinnera733",
+        "board": "radxa-cubie-a7z",
+        "bootloader": {
+            "target": "radxa-cubie-a7z",
+            "toolchain_tarball": "arm.tar.xz",
+            "toolchain_url": "https://example.invalid/arm.tar.xz",
+            "riscv_tarball": "riscv.tar.gz",
+            "riscv_url": "https://example.invalid/riscv.tar.gz",
+        },
+    })
+
+    commands = [" ".join(cmd) for cmd in docker.commands]
+    patch_idx = next(
+        i for i, cmd in enumerate(commands)
+        if "git apply" in cmd and "allwinnera733/patches/bootloader" in cmd
+    )
+    make_idx = next(i for i, cmd in enumerate(commands) if cmd.startswith("make "))
+    assert patch_idx < make_idx
+
+
+class RecordingDocker:
+    def __init__(self):
+        self.commands = []
+
+    def run(self, cmd, **kwargs):
+        self.commands.append(cmd)
+
+
+class StaticSource:
+    def __init__(self, src_dir: Path):
+        self.src_dir = src_dir
+
+    def ensure(self, component: str, config: dict) -> Path:
+        return self.src_dir

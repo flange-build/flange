@@ -296,11 +296,20 @@ flange recovery flash recovery <recovery.img> --force
 
 ### A733 平台 recovery 行为
 
-首版主要在 RK3566 上验证 recovery 全链路。A733 平台的 partition 表与
-flash-config 已包含 recovery 分区，整盘 dd 时也会写入；但实机 ADB 进入
-recovery → flash → reboot 的端到端通路在 A733 上尚未实测，reboot reason 与
-boot-once 选择 `recovery.conf` 的 U-Boot 逻辑也需要补齐并做实机验证。
-如需在 A733 上使用 recovery，请先做完整实机验证。
+首版主要在 RK3566 上完成 recovery 全链路验证。A733 平台的 partition 表与
+flash-config 已包含 recovery 分区，整盘 dd 时也会写入；U-Boot 适配已接入
+Allwinner RTC reboot flag：
+
+- `recoveryctl recovery` 通过 `reboot("recovery")` 写入
+  `SUNXI_BOOT_RECOVERY_FLAG`，A733 U-Boot 读取并清除后本次选择
+  `recovery.conf`。
+- `recoveryctl loader` 在 Allwinner/sunxi compatible 下会传递
+  `reboot("bootloader")`，匹配 Allwinner 既有 loader / fastboot 语义。
+- 可选的 `flange_boot_once=recovery` 会在 U-Boot 读取后先清理并保存 env；
+  若清理或保存失败，本次不会进入 recovery，避免反复进入。
+
+A733 的 recovery → flash → reboot 端到端通路仍需做实机验证后再作为量产
+流程使用。
 
 ## 不在范围
 

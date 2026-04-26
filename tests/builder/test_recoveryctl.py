@@ -418,6 +418,25 @@ class TestReboot:
         assert ["sync"] in runs
         assert reboots == [rc.MODE_LOADER]
 
+    def test_loader_target_maps_to_bootloader_reason_on_sunxi(self, rc, tmp_path):
+        compatible = tmp_path / "compatible"
+        compatible.write_bytes(b"allwinner,sun60iw2p1\0")
+        runs = []
+        reboots = []
+
+        def runner(cmd, **kw):
+            runs.append(cmd)
+            return types.SimpleNamespace(returncode=0)
+
+        rc.do_reboot(
+            "loader",
+            runner=runner,
+            reboot_command=lambda target: reboots.append(target),
+            compatible_path=compatible,
+        )
+        assert ["sync"] in runs
+        assert reboots == ["bootloader"]
+
     def test_recovery_persistent_uses_boot_once_then_normal_reboot(self, rc):
         runs = []
         reboots = []

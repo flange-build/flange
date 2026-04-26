@@ -112,7 +112,9 @@ Linux reboot reason 切换下一次启动到 recovery 并重启；如果设备�
 ### Requirement: Recovery Reboot
 `flange recovery reboot` 必须（SHALL）默认清理可选 boot-once 请求并重启设备回到
 normal 系统。命令必须支持显式目标 `normal`、`recovery` 和 `loader`；目标为
-`recovery` 或 `loader` 时必须通过 Linux reboot reason 请求对应模式。
+`recovery` 或 `loader` 时必须通过 Linux reboot reason 请求对应模式；若平台
+bootloader 使用不同 reason 字符串，可在设备端做平台映射，例如 Allwinner
+A733 的 `loader` 目标映射为 `bootloader`。
 
 #### Scenario: 重启到 normal
 - **WHEN** 设备处于 recovery 且用户执行 `flange recovery reboot`
@@ -128,4 +130,3 @@ normal 系统。命令必须支持显式目标 `normal`、`recovery` 和 `loader
 - **WHEN** 用户执行 `flange recovery reboot loader`
 - **THEN** host 调用设备端 `recoveryctl loader`
 - **AND** 设备传递 `reboot("loader")`
-

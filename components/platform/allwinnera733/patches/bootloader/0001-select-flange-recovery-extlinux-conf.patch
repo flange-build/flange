@@ -1,0 +1,136 @@
+From: flange <flange@localhost>
+Subject: [PATCH] sunxi: 按 reboot flag 选择 flange recovery extlinux 配置
+
+flange 的 boot 分区生成两份 extlinux 配置：
+
+  - /extlinux/extlinux.conf：normal 系统；
+  - /extlinux/recovery.conf：recovery 系统。
+
+Allwinner A733 BSP 已经支持通过 RTC General-Purpose Register 在 Linux
+和 U-Boot 之间传递一次性 reboot flag：Linux 的
+`reboot("recovery")` 会写入 SUNXI_BOOT_RECOVERY_FLAG，U-Boot 的
+sunxi_get_bootcmd_from_rtc() 读取后立即清零。
+
+这里在 sunxi_set_bootcmd() 完成 RTC/misc/key boot mode 仲裁后，让
+U-Boot 根据该 one-shot 状态选择本次 sysboot 读取哪份 extlinux 配置：
+
+  - SUNXI_BOOT_RECOVERY_FLAG 选择 recovery.conf；
+  - 可选的 flange_boot_once=recovery 作为断电保持兜底，读取后先清理
+    并保存 env；如果清理或保存失败，本次不进入 recovery，避免重复进入；
+  - 默认仍读取 extlinux.conf。
+
+diff --git a/src/board/sunxi/board_helper.c b/src/board/sunxi/board_helper.c
+--- a/src/board/sunxi/board_helper.c
++++ b/src/board/sunxi/board_helper.c
+@@ -8,6 +8,7 @@
+ 
+ #include <common.h>
+ #include <asm/io.h>
++#include <environment.h>
+ #include <sunxi_board.h>
+ #include <sunxi_flash.h>
+ #include <fdt_support.h>
+@@ -39,6 +40,12 @@ DECLARE_GLOBAL_DATA_PTR;
+ #define BOOT_RECOVERY_VALUE                             (0x83)
+ #define BOOT_FACTORY_VALUE                              (0x84)
+ 
++#define FLANGE_BOOT_ONCE_ENV		"flange_boot_once"
++#define FLANGE_BOOT_ONCE_RECOVERY	"recovery"
++#define FLANGE_EXTLINUX_CONF_ENV	"flange_extlinux_conf"
++#define FLANGE_NORMAL_CONF		"extlinux.conf"
++#define FLANGE_RECOVERY_CONF		"recovery.conf"
++
+ 
+ #define PARTITION_SETS_MAX_SIZE 1024
+ #define PARTITION_NAME_MAX_SIZE 16
+@@ -729,6 +736,50 @@ static int sunxi_get_bootcmd_from_misc(void)
+ }
+ #endif
+ 
++static int flange_boot_once_env_requests_recovery(void)
++{
++	const char *boot_once;
++
++	boot_once = env_get(FLANGE_BOOT_ONCE_ENV);
++	if (!boot_once || strcmp(boot_once, FLANGE_BOOT_ONCE_RECOVERY))
++		return 0;
++
++	printf("flange: %s=%s\n", FLANGE_BOOT_ONCE_ENV, boot_once);
++	if (env_set(FLANGE_BOOT_ONCE_ENV, NULL)) {
++		printf("flange: failed to clear %s\n", FLANGE_BOOT_ONCE_ENV);
++		return 0;
++	}
++
++	if (env_save()) {
++		printf("flange: failed to persist clearing %s\n",
++		       FLANGE_BOOT_ONCE_ENV);
++		return 0;
++	}
++
++	return 1;
++}
++
++static void flange_select_extlinux_conf(int boot_mode)
++{
++	const char *conf = FLANGE_NORMAL_CONF;
++
++	if (flange_boot_once_env_requests_recovery()) {
++		conf = FLANGE_RECOVERY_CONF;
++		printf("flange: boot-once selects %s\n", conf);
++	} else if (boot_mode == SUNXI_BOOT_RECOVERY_FLAG) {
++		if (sunxi_partition_get_offset_byname("recovery")) {
++			conf = FLANGE_RECOVERY_CONF;
++			printf("flange: reboot recovery selects %s\n", conf);
++		} else {
++			printf("flange: recovery partition not found\n");
++		}
++	}
++
++	if (env_set(FLANGE_EXTLINUX_CONF_ENV, conf))
++		printf("flange: failed to set %s=%s\n",
++		       FLANGE_EXTLINUX_CONF_ENV, conf);
++}
++
+ int sunxi_set_bootcmd(char *bootcmd)
+ {
+ 	int i, bootmode[4] = {0};
+@@ -751,6 +802,13 @@ int sunxi_set_bootcmd(char *bootcmd)
+ 			break;
+ 		}
+ 	}
++
++	/*
++	 * flange 只让 U-Boot 消费一次性启动状态，然后选择 sysboot 读取的
++	 * extlinux 配置文件。extlinux 文件自身只描述如何启动对应系统。
++	 */
++	flange_select_extlinux_conf(bootmode[0]);
++
+ 	switch (bootmode[0]) {
+ 	case SUNXI_EFEX_CMD_FLAG:
+ 		sunxi_board_run_fel();
+diff --git a/src/include/config_distro_bootcmd.h b/src/include/config_distro_bootcmd.h
+--- a/src/include/config_distro_bootcmd.h
++++ b/src/include/config_distro_bootcmd.h
+@@ -394,18 +394,19 @@
+ 	BOOTENV_SHARED_EFI \
+ 	"boot_prefixes=/ /boot/\0" \
+ 	"boot_scripts=boot.scr.uimg boot.scr\0" \
++	"flange_extlinux_conf=extlinux.conf\0" \
+ 	"boot_script_dhcp=boot.scr.uimg\0" \
+ 	BOOTENV_BOOT_TARGETS \
+ 	\
+ 	"boot_extlinux="                                                  \
+ 		"sysboot ${devtype} ${devnum}:${distro_bootpart} any "    \
+-			"${scriptaddr} ${prefix}extlinux/extlinux.conf\0" \
++			"${scriptaddr} ${prefix}extlinux/${flange_extlinux_conf}\0" \
+ 	\
+ 	"scan_dev_for_extlinux="                                          \
+ 		"if test -e ${devtype} "                                  \
+ 				"${devnum}:${distro_bootpart} "           \
+-				"${prefix}extlinux/extlinux.conf; then "  \
+-			"echo Found ${prefix}extlinux/extlinux.conf; "    \
++				"${prefix}extlinux/${flange_extlinux_conf}; then "  \
++			"echo Found ${prefix}extlinux/${flange_extlinux_conf}; " \
+ 			"run boot_extlinux; "                             \
+ 			"echo SCRIPT FAILED: continuing...; "             \
+ 		"fi\0"                                                    \

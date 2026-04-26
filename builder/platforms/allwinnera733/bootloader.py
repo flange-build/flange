@@ -27,6 +27,10 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
         # 源码重置 — recurse 模式需要同时重置子模块
         if not config.get("_local_mode", {}).get(self.component):
             self._reset_with_submodules(src_dir)
+            patches = self._count_patches(config)
+            self.apply_patches(src_dir, config)
+            if patches > 0:
+                self._status(f"补丁应用 ({patches} patches)")
 
         # 准备工具链：Linaro ARM（U-Boot 32-bit 编译）+ RISC-V（arisc SCP 固件）
         bl_cfg = config["bootloader"]
