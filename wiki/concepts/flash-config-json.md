@@ -26,9 +26,9 @@ updated: 2026-04-26
 
 ## 关键代码位置
 
-- [`builder/flash.py:FlashConfig`](../../builder/flash.py) — 数据模型，L87
+- [`builder/flash.py:FlashConfig`](../../builder/flash.py) — 数据模型，L86
 - [`builder/flash.py:FlashPartition`](../../builder/flash.py) — 分区条目，L67
-- [`builder/flash.py:FlashConfig.to_json / from_json`](../../builder/flash.py) — 序列化，L96-L116
+- [`builder/flash.py:FlashConfig.to_json / from_json`](../../builder/flash.py) — 序列化，L96 / L103
 
 ## 延伸阅读
 

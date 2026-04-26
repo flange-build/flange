@@ -28,8 +28,8 @@ updated: 2026-04-26
 
 ## 关键代码位置
 
-- [`components/app/recoveryctl/bin/recoveryctl`](../../components/app/recoveryctl/bin/recoveryctl) — `LINUX_REBOOT_CMD_RESTART2`、`BOOT_ONCE_ENV` 常量，L56-L58
-- [`builder/extlinux.py:RECOVERY_CONFIG`](../../builder/extlinux.py) — recovery.conf 文件名，L29
+- [`components/app/recoveryctl/bin/recoveryctl`](../../components/app/recoveryctl/bin/recoveryctl) — `BOOT_ONCE_ENV` (L57)、`LINUX_REBOOT_CMD_RESTART2` (L67)
+- [`builder/extlinux.py:RECOVERY_CONFIG`](../../builder/extlinux.py) — recovery.conf 文件名，L28
 
 ## 延伸阅读
 

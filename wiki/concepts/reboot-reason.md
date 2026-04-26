@@ -4,6 +4,8 @@ type: concept
 status: stable
 sources:
   - builder/recovery.py
+  - components/app/recoveryctl/bin/recoveryctl
+  - docs/recovery.md
 related:
   - "[[boot-once 启动切换]]"
   - "[[recovery 系统]]"

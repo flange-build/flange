@@ -27,7 +27,8 @@ updated: 2026-04-26
 
 ## 关键代码位置
 
-- [`builder/extlinux.py`](../../builder/extlinux.py) — `render_extlinux`、`NORMAL_CONFIG`、`RECOVERY_CONFIG` 常量，L1-L30
+- [`builder/extlinux.py:NORMAL_CONFIG / RECOVERY_CONFIG`](../../builder/extlinux.py) — 文件名常量，L27-L28
+- [`builder/extlinux.py:render_extlinux`](../../builder/extlinux.py) — 渲染函数，L45
 - [`docs/recovery.md`](../../docs/recovery.md) — 分区布局与启动流程用户文档
 
 ## 延伸阅读

@@ -20,7 +20,7 @@ updated: 2026-04-26
 
 - **Rockchip（`upgrade_tool`）**：进入 Maskrom 模式（长按 BOOT 按键上电，或 `recoveryctl loader`）→ LD 检测 → DB 上传 miniloader → WL 写各分区 → RD 重启
 - **Allwinner（`sunxi-fel` / PhoenixSuit）**：FEL 模式（长按 FEL 按键或 dipswitch）→ sunxi-fel 用于低层操作；PhoenixSuit/LiveSuit 用于完整镜像烧录；Radxa Cubie A7Z 使用此方案
-- **Qualcomm（QDL / QFIL / EDL）**：Emergency Download Mode（EDL）通过 9008 端口；`QDL`/`QFIL` 工具写入各分区
+- **Qualcomm（QDL / QFIL / EDL）**（计划中，未实现）：Emergency Download Mode（EDL）通过 9008 端口；`QDL`/`QFIL` 工具写入各分区
 - **进入下载模式方式**：按键组合（最常见）/ dipswitch 拨码开关 / 软件命令（`recoveryctl loader`）/ 短接焊盘
 - **与 ADB 在线刷写的区别**：线刷重写 bootloader 和 raw 分区，设备无需启动；ADB 刷写通过设备端 `recoveryctl` 操作，只能访问可挂载分区，不能改 bootloader
 

@@ -22,7 +22,7 @@ updated: 2026-04-26
 - **事实源**：`/etc/flange/recovery-config.json` — 由 `RecoveryBuilder` 在构建时冻结；`recoveryctl` 不重新扫描 `/proc`，保证与构建时分区布局一致
 - **安全要求**：`flash` 子命令强制要求 `--sha256 <hex>` 参数；设备端核验写入数据完整性后才执行 dd
 - **模式守卫**：`flash`、`backup` 等危险操作先检查 `mode == recovery`，在 normal 模式下拒绝执行，防止从 ADB 误触
-- **宿主机编排**：`builder/recovery_host.py` 的 `AdbTransport` 封装 `adb push / adb exec`；`FakeTransport` 可在单测中注入
+- **宿主机编排**：`builder/recovery_host.py` 的 `AdbTransport` 封装 `adb push / adb exec`；测试中可在 `tests/` 实现 `FakeTransport` 桩注入 `AdbTransport`
 - **transport 扩展**：当前仅 ADB over USB；接口设计允许后续添加 USB DFU 等通道
 
 ## 关键代码位置
