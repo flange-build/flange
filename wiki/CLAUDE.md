@@ -27,7 +27,7 @@
 
 ### 4.1 两类页面
 
-**综合页**（实体 / 概念 / 工作流）：frontmatter + 正文骨架（TL;DR / 关键设计要点 / 关键代码位置 / 数据流 / 易踩坑 / 延伸阅读），**正文 ≤ 600 字**，超过即拆。
+**综合页**（实体 / 概念 / 工作流）：frontmatter + 正文骨架（TL;DR / 关键设计要点 / 关键代码位置 / 数据流 / 易踩坑 / 延伸阅读），**正文 ≤ 600 字（frontmatter 不计入）**，超过即拆。
 
 **索引页**：仅列 `- [[页面]] — 一句话`，不写细节。
 
@@ -45,6 +45,22 @@ related:
 updated: YYYY-MM-DD
 ---
 ```
+
+**索引页**（精简版本，仅三字段）：
+
+```yaml
+---
+title: <子目录中文名>索引
+type: index
+updated: YYYY-MM-DD
+---
+```
+
+**字段语义**：
+
+- `sources`：本页综合自哪些 raw source（路径 + 可选锚点）。**lint 检查文件存在性，sync 检查变更是否波及本页**，所以必须列全所有引用过的 raw source（不只是主源）
+- `related`：强相关的兄弟 wiki 页面。frontmatter 列出后，正文末尾不再重复列
+- `status: wip`：用于在写、内容尚未稳定的页（如 `allwinnera733-平台`）；`deprecated` 用于将归档但暂留的页
 
 ### 4.3 链接风格
 
@@ -90,7 +106,7 @@ updated: YYYY-MM-DD
   - 孤儿页（无入向链接）
   - 断链（`[[xxx]]` 指向不存在的页）
   - frontmatter `sources:` 列出的文件不存在
-  - 综合页 > 600 字
+  - 综合页正文 > 600 字（frontmatter 不计入）
   - 与 ProjectSpec / docs / openspec 明显冲突的描述
 - **不自动修，列报告给用户**
 
@@ -104,3 +120,5 @@ updated: YYYY-MM-DD
 1. 读 `index.md` 拿全局视图
 2. 读 `log.md` 最后 5 条看最近变化
 3. 用户提问时先想"这是 sync / query / lint 中的哪一类"
+
+> 注：若 `index.md` 或 `log.md` 尚未建立（如初版构建途中），跳过对应步骤。
