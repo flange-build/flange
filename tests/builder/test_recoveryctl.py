@@ -178,6 +178,14 @@ class TestExtlinuxSwitch:
         with pytest.raises(rc.RecoveryError, match="DEFAULT"):
             rc.set_extlinux_default(bad, "a")
 
+    def test_read_extlinux_default(self, rc, tmp_path):
+        path = tmp_path / "extlinux.conf"
+        path.write_text(self.SAMPLE)
+        assert rc.read_extlinux_default(path) == rc.NORMAL_LABEL
+
+    def test_read_extlinux_default_missing(self, rc, tmp_path):
+        assert rc.read_extlinux_default(tmp_path / "missing.conf") is None
+
 
 # ── validate_flash 校验（§6.6） ───────────────────────────────
 
@@ -300,33 +308,164 @@ class TestBackup:
 
 class TestReboot:
     def test_invalid_target(self, rc):
-        with pytest.raises(rc.RecoveryError, match="normal 或 recovery"):
+        with pytest.raises(rc.RecoveryError, match="normal、recovery 或 loader"):
             rc.do_reboot("garbage")
 
-    def test_normal_target(self, rc):
-        captured = {}
-        def writer(label):
-            captured["label"] = label
+    def test_request_boot_once_recovery_requires_tool_and_config(self, rc, tmp_path):
+        cfg = tmp_path / "fw_env.config"
+        assert rc.request_boot_once_recovery(
+            which=lambda name: None,
+            fw_env_config=cfg,
+        ) is False
+        assert rc.request_boot_once_recovery(
+            which=lambda name: "/usr/sbin/fw_setenv",
+            fw_env_config=cfg,
+        ) is False
+
+    def test_request_boot_once_recovery_sets_env(self, rc, tmp_path):
+        cfg = tmp_path / "fw_env.config"
+        cfg.write_text("/dev/mmcblk0 0x0 0x2000\n")
         runs = []
+
+        def runner(cmd, **kw):
+            runs.append((cmd, kw))
+            return types.SimpleNamespace(returncode=0)
+
+        assert rc.request_boot_once_recovery(
+            runner=runner,
+            which=lambda name: "/usr/sbin/fw_setenv",
+            fw_env_config=cfg,
+        ) is True
+        assert runs == [(
+            ["/usr/sbin/fw_setenv", rc.BOOT_ONCE_ENV, rc.BOOT_ONCE_RECOVERY],
+            {"check": False},
+        )]
+
+    def test_clear_boot_once_recovery_deletes_env(self, rc, tmp_path):
+        cfg = tmp_path / "fw_env.config"
+        cfg.write_text("/dev/mmcblk0 0x0 0x2000\n")
+        runs = []
+
+        def runner(cmd, **kw):
+            runs.append((cmd, kw))
+            return types.SimpleNamespace(returncode=0)
+
+        assert rc.clear_boot_once_recovery(
+            runner=runner,
+            which=lambda name: "/usr/sbin/fw_setenv",
+            fw_env_config=cfg,
+        ) is True
+        assert runs == [(
+            ["/usr/sbin/fw_setenv", rc.BOOT_ONCE_ENV],
+            {"check": False},
+        )]
+
+    def test_normal_target_clears_boot_once_without_extlinux_write(self, rc):
+        cleared = {"called": False}
+        runs = []
+        reboots = []
+
+        def clearer(**kwargs):
+            cleared["called"] = True
+            return True
+
         def runner(cmd, **kw):
             runs.append(cmd)
-            class R: returncode = 0
-            return R()
-        rc.do_reboot("normal", extlinux_writer=writer, runner=runner)
-        assert captured["label"] == rc.NORMAL_LABEL
-        assert ["sync"] in runs
-        assert ["systemctl", "reboot"] in runs
+            return types.SimpleNamespace(returncode=0)
 
-    def test_recovery_target(self, rc):
-        captured = {}
-        def writer(label):
-            captured["label"] = label
+        rc.do_reboot(
+            "normal",
+            runner=runner,
+            boot_once_clearer=clearer,
+            reboot_command=lambda target: reboots.append(target),
+        )
+        assert cleared["called"] is True
+        assert ["sync"] in runs
+        assert reboots == [rc.MODE_NORMAL]
+
+    def test_recovery_target_uses_reboot_reason_by_default(self, rc):
+        runs = []
+        reboots = []
+
+        def runner(cmd, **kw):
+            runs.append(cmd)
+            return types.SimpleNamespace(returncode=0)
+
         rc.do_reboot(
             "recovery",
-            extlinux_writer=writer,
-            runner=lambda *a, **k: types.SimpleNamespace(returncode=0),
+            runner=runner,
+            boot_once_requester=lambda **kwargs: pytest.fail(
+                "默认 recovery 入口不应写 U-Boot env"
+            ),
+            reboot_command=lambda target: reboots.append(target),
         )
-        assert captured["label"] == rc.RECOVERY_LABEL
+        assert ["sync"] in runs
+        assert reboots == [rc.MODE_RECOVERY]
+
+    def test_loader_target_uses_reboot_reason(self, rc):
+        runs = []
+        reboots = []
+
+        def runner(cmd, **kw):
+            runs.append(cmd)
+            return types.SimpleNamespace(returncode=0)
+
+        rc.do_reboot(
+            "loader",
+            runner=runner,
+            reboot_command=lambda target: reboots.append(target),
+        )
+        assert ["sync"] in runs
+        assert reboots == [rc.MODE_LOADER]
+
+    def test_recovery_persistent_uses_boot_once_then_normal_reboot(self, rc):
+        runs = []
+        reboots = []
+        requested = {"called": False}
+
+        def requester(**kwargs):
+            requested["called"] = True
+            return True
+
+        def runner(cmd, **kw):
+            runs.append(cmd)
+            return types.SimpleNamespace(returncode=0)
+
+        rc.do_reboot(
+            "recovery",
+            runner=runner,
+            boot_once_requester=requester,
+            reboot_command=lambda target: reboots.append(target),
+            persistent=True,
+        )
+        assert requested["called"] is True
+        assert ["sync"] in runs
+        assert reboots == [rc.MODE_NORMAL]
+
+    def test_recovery_persistent_requires_boot_once_env(self, rc):
+        with pytest.raises(rc.RecoveryError, match="flange_boot_once"):
+            rc.do_reboot(
+                "recovery",
+                boot_once_requester=lambda **kwargs: False,
+                reboot_command=lambda target: pytest.fail("不应重启"),
+                persistent=True,
+            )
+
+    def test_reboot_with_command_uses_restart2_syscall(self, rc):
+        seen = []
+
+        rc.reboot_with_command(
+            "recovery",
+            syscall_func=lambda command: seen.append(command) or 0,
+        )
+        assert seen == ["recovery"]
+
+    def test_reboot_with_command_unknown_arch(self, rc):
+        with pytest.raises(rc.RecoveryError, match="未声明 reboot syscall"):
+            rc.reboot_with_command(
+                "recovery",
+                machine=lambda: "mystery-cpu",
+            )
 
 
 # ── build_partition_listing（§6.3） ───────────────────────────

@@ -128,7 +128,7 @@ def _rk3566_cfg(*, recovery_enabled: bool) -> dict:
 
 
 class TestRockchipBootExtlinux:
-    """§4.1: Rockchip boot builder 启用 recovery 时生成双 label。"""
+    """§4.1: Rockchip boot builder 启用 recovery 时生成独立配置。"""
 
     def test_normal_only_when_recovery_disabled(self):
         builder = RockchipBootBuilder(docker=None, source=None)
@@ -136,30 +136,29 @@ class TestRockchipBootExtlinux:
         assert "label flange" in text
         assert RECOVERY_LABEL not in text
 
-    def test_dual_labels_when_recovery_enabled(self):
+    def test_normal_conf_does_not_embed_recovery_label_when_enabled(self):
         builder = RockchipBootBuilder(docker=None, source=None)
         text = builder._build_extlinux_conf(_rk3566_cfg(recovery_enabled=True), "rk3566-test.dtb")
         assert f"label {NORMAL_LABEL}" in text
-        assert f"label {RECOVERY_LABEL}" in text
+        assert f"label {RECOVERY_LABEL}" not in text
 
     def test_default_points_to_normal(self):
         builder = RockchipBootBuilder(docker=None, source=None)
         text = builder._build_extlinux_conf(_rk3566_cfg(recovery_enabled=True), "rk3566-test.dtb")
         assert get_default_label(text) == NORMAL_LABEL
 
-    def test_recovery_label_root_uses_recovery_partition(self):
-        """§4.5: recovery label 的 root 必须指向 recovery 分区。"""
+    def test_recovery_conf_root_uses_recovery_partition(self):
+        """§4.5: recovery.conf 的 root 必须指向 recovery 分区。"""
         builder = RockchipBootBuilder(docker=None, source=None)
-        text = builder._build_extlinux_conf(_rk3566_cfg(recovery_enabled=True), "rk3566-test.dtb")
-        # 找到 recovery 段
-        assert "label flange-recovery" in text
-        # recovery append 必须把 root 指向 recovery 分区。我们用 PARTLABEL=
-        # （GPT partition name）而非 ext4 LABEL=，避免 kernel 启动早期
-        # 文件系统 probe 失败导致 "Waiting for root device" 死等。
-        recovery_section = text.split("label flange-recovery", 1)[1]
-        assert "root=PARTLABEL=recovery" in recovery_section
+        text = builder._build_recovery_extlinux_conf(
+            _rk3566_cfg(recovery_enabled=True),
+            "rk3566-test.dtb",
+        )
+        assert text.startswith(f"DEFAULT {RECOVERY_LABEL}\n")
+        assert f"label {RECOVERY_LABEL}" in text
+        assert "root=PARTLABEL=recovery" in text
         # recovery append 应携带 mode 标记，便于设备端 recoveryctl 识别当前模式
-        assert "flange.mode=recovery" in recovery_section
+        assert "flange.mode=recovery" in text
 
 
 def _a733_cfg(*, recovery_enabled: bool) -> dict:
@@ -173,18 +172,21 @@ def _a733_cfg(*, recovery_enabled: bool) -> dict:
 
 
 class TestA733BootExtlinux:
-    """§4.2: Allwinner A733 boot builder 同样支持双 label。"""
+    """§4.2: Allwinner A733 boot builder 同样支持独立配置。"""
 
-    def test_dual_labels_when_recovery_enabled(self):
+    def test_normal_conf_does_not_embed_recovery_label_when_enabled(self):
         builder = AllwinnerA733BootBuilder(docker=None, source=None)
         text = builder._build_extlinux_conf(_a733_cfg(recovery_enabled=True), "sunxi.dtb")
         assert f"label {NORMAL_LABEL}" in text
-        assert f"label {RECOVERY_LABEL}" in text
+        assert f"label {RECOVERY_LABEL}" not in text
 
     def test_recovery_uses_devicetree_directive(self):
         """A733 使用 devicetree 而非 fdt 关键字。"""
         builder = AllwinnerA733BootBuilder(docker=None, source=None)
-        text = builder._build_extlinux_conf(_a733_cfg(recovery_enabled=True), "sunxi.dtb")
+        text = builder._build_recovery_extlinux_conf(
+            _a733_cfg(recovery_enabled=True),
+            "sunxi.dtb",
+        )
         assert "  devicetree /extlinux/sunxi.dtb" in text
         assert "  fdt /" not in text
 

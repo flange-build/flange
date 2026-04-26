@@ -440,7 +440,8 @@ _flange_cmd_recovery() {
 
   模式切换:
     enter                       让设备从 normal 进入 recovery
-    reboot [normal|recovery]    切换 boot 默认项并重启（默认 normal）
+    reboot [normal|recovery|loader]
+                                请求目标模式并重启（默认 normal）
 
   只读查询:
     list [--json]               列出分区与挂载状态
@@ -467,6 +468,8 @@ _flange_cmd_recovery() {
 
   安全约束:
     • flash / backup 仅在 recovery 模式下生效，normal 模式下硬性拒绝
+    • 进入 recovery 使用 reboot reason，由 U-Boot 选择 recovery.conf
+      不持久修改 extlinux DEFAULT
     • bootloader、raw 类型分区与 recovery 自身默认受保护
     • 写入受保护分区需 --force（宿主输入字面量 YES）+ 设备端要求 --sha256
     • 写入前自动校验：分区存在 / 未挂载 / sha256 / 大小不超分区

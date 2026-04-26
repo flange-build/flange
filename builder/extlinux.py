@@ -1,17 +1,19 @@
-"""extlinux.conf 生成与默认项原子切换。
+"""extlinux 配置生成与默认项处理。
 
-flange 在 boot 分区内使用 U-Boot distro_bootcmd 标准的 extlinux 启动配置；
-启用 recovery 时单个 extlinux.conf 同时声明 normal 与 recovery 两个 label，
-通过 ``DEFAULT`` 指令选择本次启动入口。
+flange 在 boot 分区内使用 U-Boot distro_bootcmd 标准的 extlinux 启动配置。
+启用 recovery 时，normal 与 recovery 分别写入 ``extlinux.conf`` 与
+``recovery.conf``；U-Boot 根据 reboot reason 或 boot-once 状态选择本次读取
+哪一份配置文件，extlinux 文件本身只描述如何启动对应系统。
 
 公开 API：
 
-- ``NORMAL_LABEL`` / ``RECOVERY_LABEL`` — 与启动菜单/默认项切换共用的 label 名常量
+- ``NORMAL_LABEL`` / ``RECOVERY_LABEL`` — normal/recovery 配置内使用的 label 名常量
+- ``NORMAL_CONFIG`` / ``RECOVERY_CONFIG`` — boot 分区中的 extlinux 配置文件名
 - ``LabelSpec`` — 描述单个 label 的内容（kernel / fdt / append 等）
-- ``render_extlinux`` — 把若干 ``LabelSpec`` 渲染为完整 extlinux.conf 字符串
+- ``render_extlinux`` — 把若干 ``LabelSpec`` 渲染为完整 extlinux 配置字符串
 - ``set_default_label`` — 纯字符串变换：把现有 extlinux.conf 的 DEFAULT 改写到
-  指定 label，输入不合法时 raise ``ValueError``。设备端的写入由 recoveryctl
-  负责（写临时文件 + ``os.replace`` 原子替换）。
+  指定 label，输入不合法时 raise ``ValueError``。当前仅用于兼容 fallback
+  或手工修复场景。
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ from dataclasses import dataclass, field
 
 NORMAL_LABEL = "flange"
 RECOVERY_LABEL = "flange-recovery"
+NORMAL_CONFIG = "extlinux.conf"
+RECOVERY_CONFIG = "recovery.conf"
 
 
 @dataclass

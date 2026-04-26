@@ -89,7 +89,7 @@ lunch
 | `flange recovery flash <part> <img>` | USB ADB 通道写入指定分区 |
 | `flange recovery backup <part> <out>` | USB ADB 通道备份分区到本机文件 |
 | `flange recovery shell` | 打开 ADB 交互式 shell |
-| `flange recovery reboot [normal\|recovery]` | 切换 boot 默认项并重启（默认 normal） |
+| `flange recovery reboot [normal\|recovery\|loader]` | 请求目标模式并重启（默认 normal） |
 | `flange clean` | 清理当前配置的构建产物 |
 | `flange status` | 显示当前配置和构建状态 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
@@ -100,11 +100,13 @@ lunch
 
 ## Recovery 维护系统
 
-flange 默认在 boot 分区生成 normal 与 recovery 双 extlinux 启动入口，并在
-GPT 中分配独立的 `recovery` 分区（默认 512MB，紧随 rootfs）。recovery 是一
-个最小化的 Ubuntu 维护系统，预装 `adbd`、`recoveryctl`、`parted`、`gptfdisk`、
-`zstd` 等工具，主要用于 normal 系统损坏或在线维护时通过 USB ADB 完成分区
-级线刷与备份。
+flange 默认在 boot 分区生成 `extlinux.conf` 与 `recovery.conf` 两份启动配置，
+并在 GPT 中分配独立的 `recovery` 分区（默认 512MB，紧随 rootfs）。进入
+recovery 使用 Linux reboot reason（`reboot("recovery")`），由 U-Boot 读取并
+清除一次性状态后选择 `recovery.conf`，不持久修改 extlinux DEFAULT。recovery
+是一个最小化的 Ubuntu 维护系统，预装 `adbd`、`recoveryctl`、`parted`、
+`gptfdisk`、`zstd` 等工具，
+主要用于 normal 系统损坏或在线维护时通过 USB ADB 完成分区级线刷与备份。
 
 详细说明（构建产物、启动切换原理、刷写安全策略、排障）参见
 [`docs/recovery.md`](docs/recovery.md)。

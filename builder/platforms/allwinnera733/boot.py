@@ -3,10 +3,11 @@
 产物：boot.img（ext4 文件系统镜像），内含：
   /extlinux/Image               — kernel 二进制
   /extlinux/<dtb_filename>      — 设备树（默认 sunxi.dtb）
-  /extlinux/extlinux.conf       — U-Boot distro boot 配置
+  /extlinux/extlinux.conf       — normal 启动配置
+  /extlinux/recovery.conf       — recovery 启动配置（启用 recovery 时）
 
-Allwinner U-Boot 扫描 boot 分区的 /extlinux/extlinux.conf 启动，
-所有文件均放在 /extlinux/ 子目录下（与 Rockchip 布局不同）。
+Allwinner 首版仍由平台 boot reason 适配决定是否扫描 recovery.conf；boot 分区
+布局先与 Rockchip 对齐，所有文件均放在 /extlinux/ 子目录下。
 """
 
 import shutil
@@ -15,7 +16,9 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.extlinux import (
     LabelSpec,
+    NORMAL_CONFIG,
     NORMAL_LABEL,
+    RECOVERY_CONFIG,
     RECOVERY_LABEL,
     render_extlinux,
 )
@@ -56,9 +59,12 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         dtb_filename = config.get("boot", {}).get("dtb_filename", "sunxi.dtb")
         shutil.copy2(kernel_dtb, extlinux_dir / dtb_filename)
 
-        # 生成 extlinux.conf
-        (extlinux_dir / "extlinux.conf").write_text(
+        # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定。
+        (extlinux_dir / NORMAL_CONFIG).write_text(
             self._build_extlinux_conf(config, dtb_filename))
+        if (config.get("recovery") or {}).get("enabled", False):
+            (extlinux_dir / RECOVERY_CONFIG).write_text(
+                self._build_recovery_extlinux_conf(config, dtb_filename))
 
         # 生成 boot.img
         boot_size_mb = self._partition_size_mb(config, "boot")
@@ -72,15 +78,11 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         self._boot_img = boot_img
 
     def _build_extlinux_conf(self, config: dict, dtb_filename: str) -> str:
-        """生成 extlinux.conf。
+        """生成 normal extlinux.conf。
 
         根设备使用 PARTUUID 定位（由 ImageBuilder 在 GPT 分区表中写入固定
         UUID）。相比 LABEL=xxx，PARTUUID 无需 userspace udev 辅助，
         kernel 启动早期即可解析，避免 "Waiting for root device" 卡死。
-
-        启用 recovery 时新增 recovery label；recovery 分区由 mke2fs -L recovery
-        创建 ext4 label，因此 recovery 入口仍可使用 LABEL=recovery 定位（与
-        Rockchip 一致），即便首版不要求 A733 实机验证 recovery 启动。
         """
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
@@ -97,23 +99,25 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
                 f"rootfstype=ext4 rootwait rw {kernel_args}"
             ).rstrip(),
         )
-        labels = [normal]
+        return render_extlinux(NORMAL_LABEL, [normal])
 
-        if (config.get("recovery") or {}).get("enabled", False):
-            # 用 PARTLABEL= 而非 ext4 LABEL=：见 rockchip boot.py 的同一段说明。
-            recovery = LabelSpec(
-                name=RECOVERY_LABEL,
-                kernel="/extlinux/Image",
-                fdt=f"/extlinux/{dtb_filename}",
-                fdt_directive="devicetree",
-                append=(
-                    f"root=PARTLABEL=recovery rootfstype=ext4 rootwait rw "
-                    f"flange.mode=recovery {kernel_args}"
-                ).rstrip(),
-            )
-            labels.append(recovery)
+    def _build_recovery_extlinux_conf(self, config: dict, dtb_filename: str) -> str:
+        """生成 recovery.conf。"""
+        boot_cfg = config.get("boot", {})
+        kernel_args = boot_cfg.get("kernel_args", "")
 
-        return render_extlinux(NORMAL_LABEL, labels)
+        # 用 PARTLABEL= 而非 ext4 LABEL=：见 rockchip boot.py 的同一段说明。
+        recovery = LabelSpec(
+            name=RECOVERY_LABEL,
+            kernel="/extlinux/Image",
+            fdt=f"/extlinux/{dtb_filename}",
+            fdt_directive="devicetree",
+            append=(
+                f"root=PARTLABEL=recovery rootfstype=ext4 rootwait rw "
+                f"flange.mode=recovery {kernel_args}"
+            ).rstrip(),
+        )
+        return render_extlinux(RECOVERY_LABEL, [recovery])
 
     def _partition_size_mb(self, config: dict, name: str) -> int:
         for entry in config.get("partitions", {}).get("entries", []):

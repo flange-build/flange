@@ -26,7 +26,7 @@ flange 在 boot 分区中提供 normal 与 recovery 两条启动路径，并预�
 |------|----------------|------|------|------|
 | idbloader | 0x40 | 4MB | raw | bootloader stage1 |
 | uboot | 0x4000 | 4MB | raw | u-boot |
-| boot | 0x8000 | 64MB | ext4 | 内核 + DTB + extlinux.conf |
+| boot | 0x8000 | 64MB | ext4 | 内核 + DTB + extlinux 配置 |
 | **recovery** | **0x28000** | **512MB** | **ext4** | **维护系统** |
 | rootfs | 0x128000 | remaining | ext4 | normal 系统（拉到 emmc 末尾） |
 
@@ -36,7 +36,8 @@ flange 在 boot 分区中提供 normal 与 recovery 两条启动路径，并预�
 - rootfs 用 ``remaining`` 占满末尾，最大化容量；不再单独划 userdata 分区。
 - 首次部署该布局必须整盘刷写（`flange flash`），不能从旧布局热升级。
 
-`/boot/extlinux/extlinux.conf` 同时声明两个启动入口：
+boot 分区中有两份 extlinux 配置。正常启动读取
+`/boot/extlinux/extlinux.conf`：
 
 ```
 DEFAULT flange
@@ -44,16 +45,26 @@ DEFAULT flange
 label flange
   kernel /Image
   fdt /dtb/rockchip/<dts>.dtb
-  append root=LABEL=rootfs rootfstype=ext4 rootwait rw <kernel_args>
+  append root=PARTLABEL=rootfs rootfstype=ext4 rootwait rw <kernel_args>
+```
+
+recovery 启动读取 `/boot/extlinux/recovery.conf`：
+
+```
+DEFAULT flange-recovery
 
 label flange-recovery
   kernel /Image
   fdt /dtb/rockchip/<dts>.dtb
-  append root=LABEL=recovery rootfstype=ext4 rootwait rw flange.mode=recovery <kernel_args>
+  append root=PARTLABEL=recovery rootfstype=ext4 rootwait rw flange.mode=recovery <kernel_args>
 ```
 
-`recoveryctl` 通过修改 `DEFAULT` 行原子切换下一次启动入口（写到临时文件后
-`os.replace` 覆盖），重启后 U-Boot distro_bootcmd 按 DEFAULT 选择 label。
+进入 recovery 时，`recoveryctl recovery` 直接调用 Linux `reboot(2)` 的
+`RESTART2` 形式传递 `"recovery"`。kernel reboot-mode driver 写入平台
+boot reason；U-Boot 读取并清除该 one-shot 状态后，本次把 sysboot 目标从
+`extlinux.conf` 改为 `recovery.conf`。extlinux 只描述"怎么启动"，不负责
+判断"这次进哪里"。如需断电保持的兜底路径，可显式使用
+`flange_boot_once=recovery`。
 
 ## 关闭 recovery（特殊场景）
 
@@ -101,7 +112,7 @@ product / variant、分区表与保护策略，是设备端 `recoveryctl` 与宿
 | `flange recovery flash <part> <img>` | 上传镜像并写入分区 |
 | `flange recovery backup <part> <out>` | 备份分区到本机文件（默认 zstd 压缩） |
 | `flange recovery shell` | 打开 ADB 交互式 shell |
-| `flange recovery reboot [normal\|recovery]` | 切换 boot 默认项并重启（默认 normal） |
+| `flange recovery reboot [normal\|recovery\|loader]` | 请求目标模式并重启（默认 normal） |
 
 前提：宿主机 PATH 中可执行 `adb`，设备通过 USB 连接并启用了 USB gadget
 （`adbd` 服务正常运行）。
@@ -110,14 +121,17 @@ product / variant、分区表与保护策略，是设备端 `recoveryctl` 与宿
 
 `recoveryctl` 在 normal 与 recovery 系统中均会被安装。`flash` / `backup`
 子命令在 normal 模式下硬性拒绝（依据 `/proc/cmdline` 中的 `flange.mode`
-标记），仅 `mode` / `list` / `reboot` 可在 normal 模式下使用。
+标记），仅 `mode` / `list` / `recovery` / `loader` / `normal` / `reboot`
+可在 normal 模式下使用。
 
 ```bash
 recoveryctl mode                                   # 输出 normal 或 recovery
 recoveryctl list --json                            # 分区清单（合并 recovery-config 与实时状态）
 recoveryctl flash <part> <img> --sha256 <hash>     # 校验并写入
 recoveryctl backup <part> <out> --compress zstd    # 读取分区并压缩备份
-recoveryctl reboot recovery                        # 切换 boot 默认项并重启
+recoveryctl recovery                               # 一次性进入 recovery 并重启
+recoveryctl loader                                 # 进入 loader/download 模式
+recoveryctl normal                                 # 回 normal 系统
 ```
 
 ## 安全策略
@@ -180,7 +194,7 @@ flange recovery reboot
 
 ```bash
 recoveryctl flash rootfs /tmp/flange-upload/rootfs.img --sha256 <hash>
-recoveryctl reboot normal
+recoveryctl normal
 ```
 
 ## 排障
@@ -220,23 +234,26 @@ recoveryctl reboot normal
 4. USB gadget 未启动：常见于内核未加载 `g_ether` / configfs gadget；
    查 `dmesg | grep -i gadget` 与 `/sys/class/udc/` 目录是否非空。
 
-### 进入 recovery 后变砖（DEFAULT 切换中断电）
+### 无法进入或退出 recovery
 
-**症状**：`flange recovery enter` 中途断电后，设备一直停在 recovery（或
-反过来），无法自动切换。
+**症状**：`flange recovery enter` 后仍回到 normal，或设备一直停在
+recovery，无法自动切换。
 
 **排查**：
 
-- recovery 的 `recoveryctl reboot normal` 会重新写入 `DEFAULT flange`，再
-  执行 `systemctl reboot`。从串口能进入 U-Boot 时，可手动选 normal：
+- 新版流程不依赖持久修改 `DEFAULT`：`recoveryctl recovery` 传递
+  `reboot("recovery")`，U-Boot 读取并清除 boot reason 后只在本次选择
+  `recovery.conf`；再次普通重启应回到 `extlinux.conf`。
+- 若仍反复进入 recovery，先检查 `fw_printenv flange_boot_once` 是否残留为
+  `recovery`。这是可选断电保持路径，正常 recovery 进入不依赖它。
+- 从串口能进入 U-Boot 时，可手动启动 normal：
 
   ```
-  => bootcmd_extlinux
+  => sysboot mmc 0:1 any ${scriptaddr} /extlinux/extlinux.conf
   ```
 
-  并在 extlinux 菜单中选择 `flange` label。
-- 如果 boot 分区的 `extlinux.conf` 损坏（极少数情况），用 `flange recovery
-  shell` 手动修复：
+- 如果曾使用旧版流程导致 boot 分区的 `extlinux.conf` 被改成
+  `DEFAULT flange-recovery`，用 `flange recovery shell` 手动修复：
 
   ```bash
   mount -o remount,rw /boot
@@ -281,8 +298,9 @@ flange recovery flash recovery <recovery.img> --force
 
 首版主要在 RK3566 上验证 recovery 全链路。A733 平台的 partition 表与
 flash-config 已包含 recovery 分区，整盘 dd 时也会写入；但实机 ADB 进入
-recovery → flash → reboot 的端到端通路在 A733 上尚未实测。如需在 A733
-上使用 recovery，请先做完整实机验证。
+recovery → flash → reboot 的端到端通路在 A733 上尚未实测，reboot reason 与
+boot-once 选择 `recovery.conf` 的 U-Boot 逻辑也需要补齐并做实机验证。
+如需在 A733 上使用 recovery，请先做完整实机验证。
 
 ## 不在范围
 

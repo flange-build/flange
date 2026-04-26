@@ -4,10 +4,12 @@
   /Image                          — kernel 二进制
   /dtb/<vendor>/<dts>.dtb         — 设备树
   /dtb/<vendor>/overlay/*.dtbo    — （可选）设备树 overlay
-  /extlinux/extlinux.conf         — U-Boot distro boot 配置
+  /extlinux/extlinux.conf         — normal 启动配置
+  /extlinux/recovery.conf         — recovery 启动配置（启用 recovery 时）
 
-U-Boot distro_bootcmd 启动时自动扫描 boot 分区的 /extlinux/extlinux.conf，
-读取 kernel/fdt/append 指令后加载对应文件。
+U-Boot distro_bootcmd 默认扫描 /extlinux/extlinux.conf；flange 的 U-Boot
+补丁会在 reboot recovery 或 boot-once 请求存在时改为扫描
+/extlinux/recovery.conf。
 
 运行时通过 fstab 中 `LABEL=boot /boot ext4 ...` 挂载到 rootfs 的 /boot。
 """
@@ -18,7 +20,9 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.extlinux import (
     LabelSpec,
+    NORMAL_CONFIG,
     NORMAL_LABEL,
+    RECOVERY_CONFIG,
     RECOVERY_LABEL,
     render_extlinux,
 )
@@ -70,11 +74,14 @@ class RockchipBootBuilder(ComponentBuilder):
             overlay_dst = dtb_dir / "overlay"
             shutil.copytree(overlay_src, overlay_dst)
 
-        # 生成 extlinux.conf
+        # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定。
         extlinux_dir = staging / "extlinux"
         extlinux_dir.mkdir()
-        (extlinux_dir / "extlinux.conf").write_text(
+        (extlinux_dir / NORMAL_CONFIG).write_text(
             self._build_extlinux_conf(config, kernel_src_dtb.name))
+        if (config.get("recovery") or {}).get("enabled", False):
+            (extlinux_dir / RECOVERY_CONFIG).write_text(
+                self._build_recovery_extlinux_conf(config, kernel_src_dtb.name))
 
         # mke2fs -d 从 staging 目录直接生成 ext4 镜像（免 mount）
         boot_size_mb = self._partition_size_mb(config, "boot")
@@ -90,17 +97,10 @@ class RockchipBootBuilder(ComponentBuilder):
         self._boot_img = boot_img
 
     def _build_extlinux_conf(self, config: dict, dtb_filename: str) -> str:
-        """生成 U-Boot distro boot 使用的 extlinux.conf。
-
-        启用 recovery 时同时声明 normal 与 recovery 两个 label，DEFAULT 指向
-        normal；recovery 启动入口由设备端运行时（recoveryctl）切换 DEFAULT 实现。
-        """
+        """生成 U-Boot distro boot 使用的 normal extlinux.conf。"""
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
         default_overlays = boot_cfg.get("default_overlays", []) or []
-
-        fdt_path = f"/{self.DTB_VENDOR_DIR}/{dtb_filename}"
-        overlays = [f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in default_overlays]
 
         # 用 PARTLABEL= 而非 ext4 LABEL=：GPT partition name 由 parted mkpart
         # 设置为 "rootfs"/"recovery"，kernel 启动早期可直接从 GPT 表解析，
@@ -108,28 +108,35 @@ class RockchipBootBuilder(ComponentBuilder):
         normal = LabelSpec(
             name=NORMAL_LABEL,
             kernel="/Image",
-            fdt=fdt_path,
+            fdt=f"/{self.DTB_VENDOR_DIR}/{dtb_filename}",
             fdt_directive="fdt",
-            fdtoverlays=overlays,
+            fdtoverlays=[
+                f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in default_overlays
+            ],
             append=f"root=PARTLABEL=rootfs rootfstype=ext4 rootwait rw {kernel_args}".rstrip(),
         )
-        labels = [normal]
+        return render_extlinux(NORMAL_LABEL, [normal])
 
-        if (config.get("recovery") or {}).get("enabled", False):
-            recovery = LabelSpec(
-                name=RECOVERY_LABEL,
-                kernel="/Image",
-                fdt=fdt_path,
-                fdt_directive="fdt",
-                fdtoverlays=overlays,
-                append=(
-                    f"root=PARTLABEL=recovery rootfstype=ext4 rootwait rw "
-                    f"flange.mode=recovery {kernel_args}"
-                ).rstrip(),
-            )
-            labels.append(recovery)
+    def _build_recovery_extlinux_conf(self, config: dict, dtb_filename: str) -> str:
+        """生成 U-Boot distro boot 使用的 recovery.conf。"""
+        boot_cfg = config.get("boot", {})
+        kernel_args = boot_cfg.get("kernel_args", "")
+        default_overlays = boot_cfg.get("default_overlays", []) or []
 
-        return render_extlinux(NORMAL_LABEL, labels)
+        recovery = LabelSpec(
+            name=RECOVERY_LABEL,
+            kernel="/Image",
+            fdt=f"/{self.DTB_VENDOR_DIR}/{dtb_filename}",
+            fdt_directive="fdt",
+            fdtoverlays=[
+                f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in default_overlays
+            ],
+            append=(
+                f"root=PARTLABEL=recovery rootfstype=ext4 rootwait rw "
+                f"flange.mode=recovery {kernel_args}"
+            ).rstrip(),
+        )
+        return render_extlinux(RECOVERY_LABEL, [recovery])
 
     def _partition_size_mb(self, config: dict, name: str) -> int:
         """从 config 中读取指定分区大小（MB）。"""

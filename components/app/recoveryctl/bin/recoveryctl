@@ -13,8 +13,11 @@
     recoveryctl flash <part> <img>   -> 校验+写入指定分区，要求 recovery 模式
                                         与 --sha256 校验
     recoveryctl backup <part> <out>  -> 读取分区到文件，可选 zstd 压缩
-    recoveryctl reboot [normal|recovery]
-                                     -> 切换 boot 默认项并重启
+    recoveryctl recovery             -> 通过 reboot("recovery") 一次性进入 recovery
+    recoveryctl loader               -> 通过 reboot("loader") 进入 loader/download
+    recoveryctl normal               -> 回 normal 系统
+    recoveryctl reboot [normal|recovery|loader]
+                                     -> 兼容入口，等同于上述目标子命令
 
 事实源：``/etc/flange/recovery-config.json`` —— 由 RecoveryBuilder 在构建时
 冻结分区表与保护策略；本脚本不重新发现分区。
@@ -23,9 +26,11 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -41,15 +46,32 @@ from pathlib import Path
 
 RECOVERY_CONFIG_PATH = Path("/etc/flange/recovery-config.json")
 EXTLINUX_PATH = Path("/boot/extlinux/extlinux.conf")
+FW_ENV_CONFIG = Path("/etc/fw_env.config")
 PROC_CMDLINE = Path("/proc/cmdline")
+PROC_DEVICE_TREE_COMPATIBLE = Path("/proc/device-tree/compatible")
 PROC_MOUNTINFO = Path("/proc/self/mountinfo")
 DEV_BY_PARTLABEL = Path("/dev/disk/by-partlabel")
 
 NORMAL_LABEL = "flange"
 RECOVERY_LABEL = "flange-recovery"
+BOOT_ONCE_ENV = "flange_boot_once"
+BOOT_ONCE_RECOVERY = "recovery"
 
 MODE_NORMAL = "normal"
 MODE_RECOVERY = "recovery"
+MODE_LOADER = "loader"
+
+LINUX_REBOOT_MAGIC1 = 0xFEE1DEAD
+LINUX_REBOOT_MAGIC2 = 672274793
+LINUX_REBOOT_CMD_RESTART = 0x01234567
+LINUX_REBOOT_CMD_RESTART2 = 0xA1B2C3D4
+REBOOT_SYSCALL_BY_MACHINE = {
+    "aarch64": 142,
+    "arm64": 142,
+    "armv7l": 88,
+    "armv6l": 88,
+    "x86_64": 169,
+}
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -269,6 +291,24 @@ def write_extlinux_default(target: str, path: Path = EXTLINUX_PATH) -> None:
     os.replace(tmp, path)
 
 
+def read_extlinux_default(path: Path = EXTLINUX_PATH) -> str | None:
+    """读取当前 extlinux DEFAULT；缺失时返回 None。
+
+    仅用于兼容旧版遗留状态：正常 reboot reason 流程不依赖它。
+    """
+    if not path.is_file():
+        return None
+    content = path.read_text(encoding="utf-8")
+    matches = list(_DEFAULT_RE.finditer(content))
+    if len(matches) > 1:
+        raise RecoveryError(
+            f"extlinux.conf 中存在 {len(matches)} 处 DEFAULT 指令，应为 0 或 1"
+        )
+    if not matches:
+        return None
+    return matches[0].group(1)
+
+
 # ──────────────────────────────────────────────────────────────────
 # Flash 校验 + 写入
 # ──────────────────────────────────────────────────────────────────
@@ -458,28 +498,150 @@ def do_backup(
 
 
 # ──────────────────────────────────────────────────────────────────
-# Reboot
+# Reboot / boot reason / boot-once
 # ──────────────────────────────────────────────────────────────────
+
+def _find_fw_setenv(
+    *,
+    which=shutil.which,
+    fw_env_config: Path = FW_ENV_CONFIG,
+) -> str | None:
+    """返回可用的 fw_setenv 路径；缺少工具或配置时返回 None。"""
+    fw_setenv = which("fw_setenv")
+    if not fw_setenv or not fw_env_config.is_file():
+        return None
+    return fw_setenv
+
+
+def request_boot_once_recovery(
+    *,
+    runner=subprocess.run,
+    which=shutil.which,
+    fw_env_config: Path = FW_ENV_CONFIG,
+) -> bool:
+    """请求 U-Boot 下一次 sysboot 读取 ``recovery.conf``。
+
+    这是可选断电保持兜底路径。当前 RK3566 bootloader 仍是
+    ``CONFIG_ENV_IS_NOWHERE``，没有可从 Linux 写入的持久 U-Boot env；此时
+    返回 False，调用方应使用默认 reboot reason 路径。
+    """
+    fw_setenv = _find_fw_setenv(which=which, fw_env_config=fw_env_config)
+    if not fw_setenv:
+        return False
+    try:
+        result = runner(
+            [fw_setenv, BOOT_ONCE_ENV, BOOT_ONCE_RECOVERY],
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def clear_boot_once_recovery(
+    *,
+    runner=subprocess.run,
+    which=shutil.which,
+    fw_env_config: Path = FW_ENV_CONFIG,
+) -> bool:
+    """清理 ``flange_boot_once``，用于回 normal 前消除可选持久请求。"""
+    fw_setenv = _find_fw_setenv(which=which, fw_env_config=fw_env_config)
+    if not fw_setenv:
+        return False
+    try:
+        result = runner([fw_setenv, BOOT_ONCE_ENV], check=False)
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def supports_reboot_recovery_reason(
+    compatible_path: Path = PROC_DEVICE_TREE_COMPATIBLE,
+) -> bool:
+    """当前平台是否已知可把 ``reboot recovery`` 传给 bootloader。"""
+    try:
+        compatible = compatible_path.read_bytes().lower()
+    except OSError:
+        return False
+    return b"rockchip" in compatible
+
+
+def reboot_with_command(
+    command: str,
+    *,
+    syscall_func=None,
+    machine=platform.machine,
+) -> None:
+    """通过 Linux ``reboot(2)`` 的 RESTART2 形式传递 boot reason。
+
+    不依赖 BusyBox 或 systemctl 是否透传参数；kernel reboot-mode driver 收到
+    ``command`` 后负责写入平台 boot reason，U-Boot 再消费该 one-shot 状态。
+    """
+    if syscall_func is None:
+        machine_name = machine()
+        syscall_number = REBOOT_SYSCALL_BY_MACHINE.get(machine_name)
+        if syscall_number is None:
+            raise RecoveryError(
+                f"当前架构 {machine_name!r} 未声明 reboot syscall 编号，"
+                "无法直接传递 reboot reason。"
+            )
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        arg = ctypes.create_string_buffer(command.encode("ascii") + b"\0")
+        rc = libc.syscall(
+            syscall_number,
+            LINUX_REBOOT_MAGIC1,
+            LINUX_REBOOT_MAGIC2,
+            LINUX_REBOOT_CMD_RESTART2,
+            ctypes.byref(arg),
+        )
+    else:
+        rc = syscall_func(command)
+
+    if rc not in (None, 0):
+        err = ctypes.get_errno()
+        raise RecoveryError(f"reboot({command!r}) 失败：{os.strerror(err)}")
+
 
 def do_reboot(
     target: str,
     *,
-    extlinux_writer=write_extlinux_default,
     runner=subprocess.run,
+    boot_once_clearer=clear_boot_once_recovery,
+    boot_once_requester=request_boot_once_recovery,
+    reboot_command=reboot_with_command,
+    persistent: bool = False,
 ) -> None:
-    """切换 extlinux 默认项并 ``systemctl reboot``。
+    """请求目标模式并重启。
 
-    target 取值：``normal`` / ``recovery``，分别映射到 NORMAL_LABEL / RECOVERY_LABEL。
+    默认路径使用 ``reboot("recovery")`` / ``reboot("loader")`` 这类
+    reboot reason，让 U-Boot 选择 extlinux 配置文件。``persistent=True`` 仅用于
+    recovery 目标的可选 boot-once env 兜底，不会修改 extlinux.conf。
     """
-    label_map = {MODE_NORMAL: NORMAL_LABEL, MODE_RECOVERY: RECOVERY_LABEL}
-    label = label_map.get(target)
-    if not label:
+    if target not in (MODE_NORMAL, MODE_RECOVERY, MODE_LOADER):
         raise RecoveryError(
-            f"reboot 目标必须是 normal 或 recovery，得到 {target!r}"
+            f"reboot 目标必须是 normal、recovery 或 loader，得到 {target!r}"
         )
-    extlinux_writer(label)
+
+    if target == MODE_NORMAL:
+        boot_once_clearer(runner=runner)
+        runner(["sync"], check=True)
+        reboot_command(MODE_NORMAL)
+        return
+
+    if target == MODE_RECOVERY and persistent:
+        if not boot_once_requester(runner=runner):
+            raise RecoveryError(
+                "无法写入 flange_boot_once=recovery：缺少 fw_setenv 或 "
+                "/etc/fw_env.config。请使用默认 reboot recovery 路径，"
+                "或先配置可持久化的 U-Boot env。"
+            )
+        runner(["sync"], check=True)
+        reboot_command(MODE_NORMAL)
+        return
+
     runner(["sync"], check=True)
-    runner(["systemctl", "reboot"], check=True)
+    reboot_command(target)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -615,8 +777,15 @@ def cmd_backup(args) -> int:
 
 
 def cmd_reboot(args) -> int:
-    do_reboot(args.target)
+    do_reboot(args.target, persistent=getattr(args, "persistent", False))
     return 0
+
+
+def cmd_reboot_target(target: str):
+    def _handler(args) -> int:
+        do_reboot(target, persistent=getattr(args, "persistent", False))
+        return 0
+    return _handler
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -643,9 +812,25 @@ def build_argparser() -> argparse.ArgumentParser:
     p_backup.add_argument("output")
     p_backup.add_argument("--compress", default="zstd", choices=["zstd", "none"])
 
-    p_reboot = sub.add_parser("reboot", help="切换 boot 默认项并重启")
+    p_recovery = sub.add_parser(
+        "recovery",
+        help="通过 reboot recovery 一次性进入 recovery",
+    )
+    p_recovery.add_argument(
+        "--persistent", action="store_true",
+        help="改用 flange_boot_once=recovery 作为断电保持兜底",
+    )
+
+    sub.add_parser("loader", help="通过 reboot loader 进入 loader/download 模式")
+    sub.add_parser("normal", help="回 normal 系统")
+
+    p_reboot = sub.add_parser("reboot", help="兼容入口：请求目标模式并重启")
     p_reboot.add_argument("target", nargs="?", default=MODE_NORMAL,
-                          choices=[MODE_NORMAL, MODE_RECOVERY])
+                          choices=[MODE_NORMAL, MODE_RECOVERY, MODE_LOADER])
+    p_reboot.add_argument(
+        "--persistent", action="store_true",
+        help="仅 recovery 目标有效：改用 flange_boot_once=recovery",
+    )
 
     return parser
 
@@ -656,6 +841,9 @@ HANDLERS = {
     "flash":  cmd_flash,
     "backup": cmd_backup,
     "reboot": cmd_reboot,
+    "recovery": cmd_reboot_target(MODE_RECOVERY),
+    "loader": cmd_reboot_target(MODE_LOADER),
+    "normal": cmd_reboot_target(MODE_NORMAL),
 }
 
 

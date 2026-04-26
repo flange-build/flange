@@ -37,26 +37,40 @@ TBD - created by archiving change add-recovery-boot. Update Purpose after archiv
 - **THEN** `recovery` 组件的内容哈希随之变化并触发重建
 
 ### Requirement: Boot 分区提供 normal 和 recovery 启动入口
-启用 recovery 的 target 必须（SHALL）在 boot 分区中生成 normal 和 recovery 两个 extlinux label。normal label 必须启动 `rootfs`，recovery label 必须启动 `recovery`。
+启用 recovery 的 target 必须（SHALL）在 boot 分区中生成
+`/extlinux/extlinux.conf` 和 `/extlinux/recovery.conf`。normal 配置必须启动
+`rootfs`，recovery 配置必须启动 `recovery` 分区，并携带
+`flange.mode=recovery`。
 
-#### Scenario: extlinux 包含双启动入口
+#### Scenario: boot 分区包含两份配置
 - **WHEN** 构建启用 recovery 的 boot 分区镜像
-- **THEN** `extlinux.conf` 包含 normal label 和 recovery label
+- **THEN** `/extlinux/extlinux.conf` 存在并只描述 normal 启动
+- **AND** `/extlinux/recovery.conf` 存在并只描述 recovery 启动
 
-#### Scenario: recovery label 指向 recovery rootfs
-- **WHEN** 检查 recovery label 的 kernel append 参数
+#### Scenario: recovery 配置指向 recovery rootfs
+- **WHEN** 检查 `/extlinux/recovery.conf` 的 kernel append 参数
 - **THEN** 参数包含指向 recovery 分区的 root 定位信息
+- **AND** 参数包含 `flange.mode=recovery`
 
 ### Requirement: Recovery Boot 默认项切换
-系统必须（SHALL）提供设备端 helper，使 `flange recovery enter` 能够将下一次启动切换到 recovery，并使 `flange recovery reboot normal` 能够恢复 normal 默认启动。
+系统必须（SHALL）提供 bootloader 支持，使 U-Boot 在 sysboot 前根据
+reboot reason 或可选 `flange_boot_once=recovery` 选择本次读取
+`extlinux.conf` 或 `recovery.conf`。该状态必须（MUST）按 one-shot 语义消费；
+后续无显式请求时默认回到 normal 配置。
 
-#### Scenario: 从 normal 进入 recovery
-- **WHEN** normal 系统通过 USB ADB 在线且用户执行 `flange recovery enter`
-- **THEN** 设备端 helper 将 boot 分区默认 extlinux label 设置为 recovery 并重启
+#### Scenario: reboot recovery 选择 recovery.conf
+- **WHEN** kernel reboot-mode 将启动原因设置为 recovery
+- **THEN** U-Boot 本次 sysboot 读取 `/extlinux/recovery.conf`
+- **AND** 启动原因被清除或失效
 
-#### Scenario: 从 recovery 返回 normal
-- **WHEN** 设备处于 recovery 且用户执行 `flange recovery reboot`
-- **THEN** `recoveryctl` 将 boot 分区默认 extlinux label 恢复为 normal 并重启
+#### Scenario: boot-once env 选择 recovery.conf
+- **WHEN** U-Boot 读取到 `flange_boot_once=recovery`
+- **THEN** U-Boot 本次 sysboot 读取 `/extlinux/recovery.conf`
+- **AND** `flange_boot_once` 被清除或失效
+
+#### Scenario: 无一次性请求时启动 normal
+- **WHEN** U-Boot 未读取到 recovery boot reason 或 boot-once env
+- **THEN** U-Boot sysboot 读取 `/extlinux/extlinux.conf`
 
 ### Requirement: Recovery 纳入整盘镜像
 整盘镜像构建必须（SHALL）把 `recovery/recovery.img` 写入 `recovery` 分区，并在 GPT 中创建对应分区条目。

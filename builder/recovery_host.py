@@ -7,7 +7,7 @@
   flange recovery flash <p> <img>  -> 上传镜像并触发 recoveryctl flash
   flange recovery backup <p> <out> -> 触发 recoveryctl backup 并 pull 回宿主机
   flange recovery shell            -> 打开交互式 ADB shell
-  flange recovery reboot [target]  -> recoveryctl reboot normal|recovery
+  flange recovery reboot [target]  -> recoveryctl normal|recovery|loader
 
 Transport 层（``AdbTransport``）抽象了 ``wait / push / pull / shell /
 interactive_shell``，便于后续替换 USB DFU 等其他通道，且测试时可注入
@@ -252,20 +252,21 @@ def cmd_enter(t: Transport, *, wait_timeout: int = 90) -> int:
     """让设备进入 recovery：
        1. 等待 ADB 在线
        2. 已是 recovery → 直接成功
-       3. 否则 ``recoveryctl reboot recovery``，等待 ADB 重新连接
+       3. 否则 ``recoveryctl recovery`` 通过 reboot reason 请求一次性
+          recovery 启动，等待 ADB 重新连接
     """
     t.wait(timeout=wait_timeout)
     if query_device_mode(t) == "recovery":
         print("设备已处于 recovery 模式。")
         return 0
     print("正在请求设备切换到 recovery 模式...")
-    r = t.shell(["recoveryctl", "reboot", "recovery"])
-    if r.returncode != 0:
+    r = t.shell(["recoveryctl", "recovery"])
+    if r.returncode != 0 and r.stderr.strip():
         raise HostRecoveryError(
-            f"recoveryctl reboot recovery 失败：{r.stderr.strip()}"
+            f"recoveryctl recovery 失败：{r.stderr.strip() or r.stdout.strip()}"
         )
     print("等待设备重启进入 recovery...")
-    # systemctl reboot 不会阻塞 ADB 连接；给设备 5s 启动时间
+    # reboot 请求下发后 ADB 断连/重连需要一点时间。
     time.sleep(5)
     t.wait(timeout=wait_timeout)
     new_mode = query_device_mode(t)
@@ -400,13 +401,13 @@ def cmd_shell(t: Transport) -> int:
 
 
 def cmd_reboot(t: Transport, *, target: str) -> int:
-    if target not in ("normal", "recovery"):
+    if target not in ("normal", "recovery", "loader"):
         raise HostRecoveryError(
-            f"reboot 目标必须是 normal 或 recovery，得到 {target!r}"
+            f"reboot 目标必须是 normal、recovery 或 loader，得到 {target!r}"
         )
-    print(f"recoveryctl reboot {target} ...")
-    r = t.shell(["recoveryctl", "reboot", target])
-    # systemctl reboot 关闭 ADB 时 returncode 可能非 0；只有 stderr 有错才报
+    print(f"recoveryctl {target} ...")
+    r = t.shell(["recoveryctl", target])
+    # 直接 reboot 关闭 ADB 时 returncode 可能非 0；只有 stderr 有错才报
     if r.returncode != 0 and r.stderr.strip():
         raise HostRecoveryError(r.stderr.strip())
     print("✓ 已请求重启")
@@ -453,7 +454,9 @@ def build_argparser() -> argparse.ArgumentParser:
         help="让设备从 normal 进入 recovery",
         description=(
             "等待 ADB 在线 → 查询当前模式 → 已是 recovery 直接成功；\n"
-            "否则下发 `recoveryctl reboot recovery`，等待设备重启回到 ADB。\n\n"
+            "否则下发 `recoveryctl recovery`，由 kernel reboot-mode 与 U-Boot "
+            "选择 recovery.conf，"
+            "等待设备重启回到 ADB。\n\n"
             "默认等待超时 90 秒（recovery 第一次冷启动 adbd 启动较慢）。"
         ),
     )
@@ -461,17 +464,20 @@ def build_argparser() -> argparse.ArgumentParser:
     p_reboot = sub.add_parser(
         "reboot",
         formatter_class=_RAW,
-        help="切换 boot 默认项并重启",
+        help="请求目标模式并重启",
         description=(
-            "通过 recoveryctl 修改 /boot/extlinux/extlinux.conf 的 DEFAULT 行\n"
-            "（原子写 + os.replace），sync 后 systemctl reboot。\n\n"
+            "通过 recoveryctl 请求目标模式并重启。recovery/loader 目标使用\n"
+            "Linux reboot reason，U-Boot 读取并清除一次性状态后选择\n"
+            "extlinux.conf 或 recovery.conf；不持久修改 extlinux DEFAULT。\n\n"
             "目标：\n"
             "  normal    （默认）回 normal 系统\n"
-            "  recovery  保持/切换到 recovery"
+            "  recovery  一次性进入 recovery\n"
+            "  loader    进入 loader/download 模式"
         ),
     )
     p_reboot.add_argument(
-        "target", nargs="?", default="normal", choices=["normal", "recovery"],
+        "target", nargs="?", default="normal",
+        choices=["normal", "recovery", "loader"],
         help="重启后进入哪个系统，默认 normal",
     )
 

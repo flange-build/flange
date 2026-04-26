@@ -123,6 +123,15 @@ class TestArgparser:
         ns = build_argparser().parse_args(["reboot", "recovery"])
         assert ns.target == "recovery"
 
+    def test_reboot_help_mentions_boot_once(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            build_argparser().parse_args(["reboot", "--help"])
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "reboot reason" in out
+        assert "recovery.conf" in out
+        assert "不持久修改 extlinux DEFAULT" in out
+
 
 # ── ADB 缺失（§7.10） ───────────────────────────────────────
 
@@ -149,7 +158,7 @@ class TestEnter:
         rc = cmd_enter(t)
         assert rc == 0
         # 不应触发 reboot
-        assert ["recoveryctl", "reboot", "recovery"] not in t.shell_calls
+        assert ["recoveryctl", "recovery"] not in t.shell_calls
         assert "已处于" in capsys.readouterr().out
 
     def test_normal_triggers_reboot_and_waits(self, monkeypatch, capsys):
@@ -160,7 +169,7 @@ class TestEnter:
         monkeypatch.setattr(rh.time, "sleep", lambda *a, **k: None)
         rc = cmd_enter(t)
         assert rc == 0
-        assert ["recoveryctl", "reboot", "recovery"] in t.shell_calls
+        assert ["recoveryctl", "recovery"] in t.shell_calls
         # wait 应被调用至少两次（initial + 重启后）
         assert len(t.wait_calls) >= 2
 
@@ -283,11 +292,17 @@ class TestBackup:
 class TestReboot:
     def test_reboot_invalid_target(self):
         t = FakeTransport()
-        with pytest.raises(HostRecoveryError, match="normal 或 recovery"):
+        with pytest.raises(HostRecoveryError, match="normal、recovery 或 loader"):
             cmd_reboot(t, target="garbage")
 
     def test_reboot_normal(self):
         t = FakeTransport()
         rc = cmd_reboot(t, target="normal")
         assert rc == 0
-        assert ["recoveryctl", "reboot", "normal"] in t.shell_calls
+        assert ["recoveryctl", "normal"] in t.shell_calls
+
+    def test_reboot_loader(self):
+        t = FakeTransport()
+        rc = cmd_reboot(t, target="loader")
+        assert rc == 0
+        assert ["recoveryctl", "loader"] in t.shell_calls

@@ -9,9 +9,9 @@ Subject: [PATCH 1/2] dts: tspi-rk3566: 修正 chosen.bootargs
 
 2. 移除 root=PARTUUID=614e0000-0000
    该硬编码 root 通过 U-Boot 的 bootargs_add_dtb_dtbo + env_update 把
-   extlinux APPEND 中的 root=LABEL=... 覆盖掉，导致 normal/recovery
-   切换无效。删除后由 boot 分区的 extlinux.conf APPEND 自行决定 root，
-   配合双 extlinux label（flange / flange-recovery）实现启动入口切换。
+   extlinux APPEND 中的 root=PARTLABEL=... 覆盖掉，导致 normal/recovery
+   切换无效。删除后由 boot 分区的 extlinux 配置 APPEND 自行决定 root，
+   配合 U-Boot 在 extlinux.conf / recovery.conf 之间选择启动入口。
    其它 console=ttyFIQ0 / earlycon / firmware_class.path 仍由 DTB 提供
    作为板级合理默认。
 

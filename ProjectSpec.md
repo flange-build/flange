@@ -80,8 +80,11 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
 
 - **独立分区与独立 rootfs**：`recovery` 是独立 ext4 分区（label=recovery），
   与 normal rootfs 互不依赖；normal 损坏时仍能启动维护
-- **双 extlinux 启动入口**：boot 分区生成 `flange` 与 `flange-recovery` 两个
-  label，由 `recoveryctl` 原子修改 `DEFAULT` 切换下次启动
+- **双 extlinux 配置 + U-Boot 启动选择**：boot 分区生成
+  `/extlinux/extlinux.conf`（normal）与 `/extlinux/recovery.conf`
+  （recovery）；进入 recovery 时通过 Linux reboot reason
+  `reboot("recovery")` 让 U-Boot 本次选择 `recovery.conf`，可选
+  `flange_boot_once=recovery` 作为断电保持兜底，不持久修改 extlinux DEFAULT
 - **首版 transport = ADB over USB**：`flange recovery enter/list/flash/backup
   /shell/reboot` 通过 ADB 编排 `recoveryctl`；后续可扩展 USB DFU
 - **安全策略**：bootloader/raw 与 recovery 自身默认 protected；强制写入

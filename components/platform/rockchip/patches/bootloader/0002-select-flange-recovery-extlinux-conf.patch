@@ -1,0 +1,125 @@
+From: flange <flange@localhost>
+Subject: [PATCH] rockchip: 按 boot reason 选择 flange recovery extlinux 配置
+
+flange 的 boot 分区生成两份 extlinux 配置：
+
+  - /extlinux/extlinux.conf：normal 系统；
+  - /extlinux/recovery.conf：recovery 系统。
+
+一次性进入 recovery 不应修改 extlinux.conf 的 DEFAULT 行，也不应让
+extlinux 自己判断启动模式。这里让 U-Boot 在 Rockchip boot mode 已解析后
+选择本次 sysboot 读取哪一份配置：
+
+  - `reboot recovery` 被 Rockchip reboot-mode 解析为 BOOT_MODE_RECOVERY
+    时，本次读取 recovery.conf；
+  - 可选的 `flange_boot_once=recovery` 作为断电保持兜底，读取后立即清理；
+  - 默认仍读取 extlinux.conf。
+
+Rockchip 的 boot_mode.c 已经会在读取 reboot-mode register 后清除寄存器，
+因此 `reboot recovery` 是 one-shot，不会反复进入 recovery。
+
+diff --git a/arch/arm/mach-rockchip/boot_mode.c b/arch/arm/mach-rockchip/boot_mode.c
+--- a/arch/arm/mach-rockchip/boot_mode.c
++++ b/arch/arm/mach-rockchip/boot_mode.c
+@@ -16,6 +16,12 @@ enum {
+ 	PL,
+ };
+ 
++#define FLANGE_BOOT_ONCE_ENV		"flange_boot_once"
++#define FLANGE_BOOT_ONCE_RECOVERY	"recovery"
++#define FLANGE_EXTLINUX_CONF_ENV	"flange_extlinux_conf"
++#define FLANGE_NORMAL_CONF		"extlinux.conf"
++#define FLANGE_RECOVERY_CONF		"recovery.conf"
++
+ static int misc_require_recovery(u32 bcb_offset, int *bcb_recovery_msg)
+ {
+ 	struct bootloader_message *bmsg;
+@@ -229,11 +235,61 @@ int rockchip_get_boot_mode(void)
+ 		return boot_mode[PL];
+ }
+ 
++static bool flange_boot_once_env_requests_recovery(void)
++{
++	const char *boot_once;
++
++	boot_once = env_get(FLANGE_BOOT_ONCE_ENV);
++	if (!boot_once || strcmp(boot_once, FLANGE_BOOT_ONCE_RECOVERY))
++		return false;
++
++	printf("flange: %s=%s\n", FLANGE_BOOT_ONCE_ENV, boot_once);
++	if (env_set(FLANGE_BOOT_ONCE_ENV, NULL)) {
++		printf("flange: failed to clear %s\n", FLANGE_BOOT_ONCE_ENV);
++	} else {
++#ifdef CONFIG_CMD_SAVEENV
++		if (run_command("saveenv", 0))
++			printf("flange: failed to persist clearing %s\n",
++			       FLANGE_BOOT_ONCE_ENV);
++#else
++		printf("flange: saveenv unavailable; cleared %s in memory only\n",
++		       FLANGE_BOOT_ONCE_ENV);
++#endif
++	}
++
++	return true;
++}
++
++static void flange_select_extlinux_conf(int boot_mode)
++{
++	const char *conf = FLANGE_NORMAL_CONF;
++
++	if (flange_boot_once_env_requests_recovery()) {
++		conf = FLANGE_RECOVERY_CONF;
++		printf("flange: boot-once selects %s\n", conf);
++	} else if (boot_mode == BOOT_MODE_RECOVERY) {
++		conf = FLANGE_RECOVERY_CONF;
++		printf("flange: boot mode recovery selects %s\n", conf);
++	}
++
++	if (env_set(FLANGE_EXTLINUX_CONF_ENV, conf))
++		printf("flange: failed to set %s=%s\n",
++		       FLANGE_EXTLINUX_CONF_ENV, conf);
++}
++
+ int setup_boot_mode(void)
+ {
+ 	char env_preboot[256] = {0};
++	int boot_mode;
+ 
+-	switch (rockchip_get_boot_mode()) {
++	/*
++	 * flange 只让 U-Boot 消费一次性启动状态，然后选择 sysboot 读取的
++	 * extlinux 配置文件。extlinux 文件自身只描述如何启动对应系统。
++	 */
++	boot_mode = rockchip_get_boot_mode();
++	flange_select_extlinux_conf(boot_mode);
++
++	switch (boot_mode) {
+ 	case BOOT_MODE_BOOTLOADER:
+ 		printf("enter fastboot!\n");
+ #if defined(CONFIG_FASTBOOT_FLASH_MMC_DEV)
+diff --git a/include/config_distro_bootcmd.h b/include/config_distro_bootcmd.h
+--- a/include/config_distro_bootcmd.h
++++ b/include/config_distro_bootcmd.h
+@@ -323,18 +323,19 @@
+ 	BOOTENV_SHARED_EFI \
+ 	"boot_prefixes=/ /boot/\0" \
+ 	"boot_scripts=boot.scr.uimg boot.scr\0" \
++	"flange_extlinux_conf=extlinux.conf\0" \
+ 	"boot_script_dhcp=boot.scr.uimg\0" \
+ 	BOOTENV_BOOT_TARGETS \
+ 	\
+ 	"boot_extlinux="                                                  \
+ 		"sysboot ${devtype} ${devnum}:${distro_bootpart} any "    \
+-			"${scriptaddr} ${prefix}extlinux/extlinux.conf\0" \
++			"${scriptaddr} ${prefix}extlinux/${flange_extlinux_conf}\0" \
+ 	\
+ 	"scan_dev_for_extlinux="                                          \
+ 		"if test -e ${devtype} "                                  \
+ 				"${devnum}:${distro_bootpart} "           \
+-				"${prefix}extlinux/extlinux.conf; then "  \
+-			"echo Found ${prefix}extlinux/extlinux.conf; "    \
++				"${prefix}extlinux/${flange_extlinux_conf}; then "  \
++			"echo Found ${prefix}extlinux/${flange_extlinux_conf}; " \
+ 			"run boot_extlinux; "                             \
+ 			"echo SCRIPT FAILED: continuing...; "             \
+ 		"fi\0"                                                    \
