@@ -42,3 +42,7 @@ flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建�
 - Shell 脚本必须使用 `set -xe`
 - **Product/Variant 支持**：lunch target 格式为 `<board>-<product>-<variant>`，支持 debug/release 变体和多产品配置
 - 每个任务不超过 2 小时工作量
+
+## 知识库
+
+`wiki/` 是仓库知识库（综合层，可在 Obsidian 浏览，亦作为 AI 上下文）。详见 [wiki/CLAUDE.md](./wiki/CLAUDE.md)。

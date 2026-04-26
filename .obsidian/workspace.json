@@ -1,0 +1,210 @@
+{
+  "main": {
+    "id": "b39c1708fd5601f2",
+    "type": "split",
+    "children": [
+      {
+        "id": "2ba67d1bb7f9226c",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "26299a9f93cfdc8e",
+            "type": "leaf",
+            "state": {
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "新标签页"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "7818e39edd6619f4",
+    "type": "split",
+    "children": [
+      {
+        "id": "49de522c48d5445f",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "951bf756b034a358",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "文件列表"
+            }
+          },
+          {
+            "id": "e0550512ce513f57",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "05bf8c65c6a61782",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "982a446595cc4834",
+    "type": "split",
+    "children": [
+      {
+        "id": "9df67d08e779d108",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "3df883c56e69d70c",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "反向链接"
+            }
+          },
+          {
+            "id": "11e4a2ff3f8c8d0b",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "出链"
+            }
+          },
+          {
+            "id": "9c5ff46ddfa3bbfa",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "09b30bd9f2758e2e",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "添加笔记属性"
+            }
+          },
+          {
+            "id": "4f69f9fd99c74f38",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "大纲"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false,
+      "bases:新建数据库": false
+    }
+  },
+  "active": "951bf756b034a358",
+  "lastOpenFiles": [
+    "wiki/CLAUDE.md",
+    "wiki/apps",
+    "wiki/workflows",
+    "wiki/subsystems",
+    "wiki/concepts",
+    "wiki/boards",
+    "wiki/platforms",
+    "wiki/components",
+    "docs/superpowers/plans/2026-04-26-flange-wiki-knowledge-base-build.md",
+    "docs/superpowers/specs/2026-04-26-flange-wiki-knowledge-base-design.md",
+    "docs/superpowers/specs",
+    "tests/builder/test_bootloader_boot_once.py",
+    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/specs/recovery-usb-flash/spec.md",
+    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/specs/recovery-boot/spec.md",
+    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/specs/recovery-usb-flash",
+    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/tasks.md",
+    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/proposal.md",
+    "openspec/changes/archive/2026-04-26-add-uboot-boot-once-recovery/design.md",
+    "wiki/llm-wiki.md",
+    "openspec/changes/archive/2026-04-18-rename-allwinner-to-allwinnera733/design.md",
+    "roadmap.md",
+    "ProjectSpec.md",
+    "openspec/flange-build-tool-design.md",
+    "openspec/flange-build-tool-spec.md",
+    "docs/recovery.md",
+    "docs/build-system-design.md",
+    "docs/superpowers/plans/2026-04-11-bazel-to-python-migration.md",
+    "README.md"
+  ]
+}
