@@ -57,6 +57,7 @@ class RockchipRootfsBuilder(RootfsBuilder):
         # Phase 4: 从目录生成 ext4 rootfs.img（免 mount，mke2fs -d 直读目录）
         self._output = self._work_dir / "rootfs.img"
         rootfs_size_mb = self._partition_size_mb(config, "rootfs")
+        self._ensure_rootfs_fits_image(rootfs_dir, rootfs_size_mb)
         self._status(f"生成 rootfs.img ({rootfs_size_mb}MB)...")
         self.docker.run([
             "truncate", "-s", f"{rootfs_size_mb}M", str(self._output),
@@ -94,16 +95,6 @@ class RockchipRootfsBuilder(RootfsBuilder):
         )
         # 确保 /boot 挂载点存在
         (rootfs_dir / "boot").mkdir(exist_ok=True)
-
-    def _partition_size_mb(self, config: dict, name: str) -> int:
-        """从 config 中读取指定分区大小（MB）。"""
-        for entry in config.get("partitions", {}).get("entries", []):
-            if entry["name"] == name:
-                size = entry["size"]
-                if size == "remaining":
-                    return 4096  # remaining 默认 4GB
-                return (int(size, 0) * 512) // (1024 * 1024)
-        raise KeyError(f"partitions.entries 中未定义分区: {name}")
 
     def _get_base_cache_path(self, config: dict) -> Path | None:
         """获取 base.tar.gz 快照路径。需要 cache 引用（由 engine 注入）。"""

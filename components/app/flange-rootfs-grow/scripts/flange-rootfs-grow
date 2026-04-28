@@ -1,0 +1,40 @@
+#!/bin/bash
+set -xeuo pipefail
+
+MARKER="${FLANGE_ROOTFS_GROW_MARKER:-/var/lib/flange/rootfs-grown}"
+
+if [ -e "${MARKER}" ]; then
+    echo "rootfs 已扩容，跳过: ${MARKER}"
+    exit 0
+fi
+
+ROOT_SOURCE="${FLANGE_ROOTFS_GROW_ROOT_SOURCE:-}"
+if [ -z "${ROOT_SOURCE}" ]; then
+    ROOT_SOURCE="$(findmnt -n -o SOURCE /)"
+fi
+
+if [ -z "${ROOT_SOURCE}" ]; then
+    echo "无法识别当前 rootfs 块设备" >&2
+    exit 1
+fi
+
+read -r PARENT_DISK PART_NUM < <(lsblk -no PKNAME,PARTN "${ROOT_SOURCE}" | head -n1)
+
+if [ -z "${PARENT_DISK:-}" ] || [ -z "${PART_NUM:-}" ]; then
+    echo "无法从 ${ROOT_SOURCE} 解析父磁盘和分区号" >&2
+    exit 1
+fi
+
+DISK="/dev/${PARENT_DISK}"
+
+sgdisk -e "${DISK}"
+growpart "${DISK}" "${PART_NUM}"
+
+if ! partx -u "${DISK}"; then
+    partprobe "${DISK}"
+fi
+
+resize2fs "${ROOT_SOURCE}"
+
+mkdir -p "$(dirname "${MARKER}")"
+date -u +"%Y-%m-%dT%H:%M:%SZ" > "${MARKER}"

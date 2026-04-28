@@ -26,6 +26,8 @@ Recovery 子配置 schema（顶层 ``config["recovery"]``，全部可选；缺�
 
 from __future__ import annotations
 
+from builder.partition.size import parse_size
+
 
 class ConfigError(ValueError):
     """配置层面的硬错误：在构建/刷写之前就应阻断。"""
@@ -75,6 +77,46 @@ def validate_recovery_partition(config: dict) -> None:
             )
 
 
+def validate_rootfs_auto_grow(config: dict) -> None:
+    """校验 rootfs 首次启动扩容布局。
+
+    只有显式声明 ``grow_on_first_boot`` 的 rootfs 分区会进入校验。
+    """
+    entries = (config.get("partitions") or {}).get("entries") or []
+    for index, entry in enumerate(entries):
+        if not entry.get("grow_on_first_boot"):
+            continue
+
+        if entry.get("name") != "rootfs":
+            raise ConfigError("grow_on_first_boot 仅支持 rootfs 分区。")
+        if entry.get("type") != "ext4":
+            raise ConfigError("grow_on_first_boot 要求 rootfs 分区 type 为 ext4。")
+        image_size = entry.get("image_size")
+        if not image_size:
+            raise ConfigError(
+                "grow_on_first_boot=True 时 rootfs 分区必须声明 image_size。"
+            )
+
+        image = parse_size(image_size)
+        size = entry.get("size")
+        if size == "remaining":
+            for later in entries[index + 1:]:
+                if later.get("type") != "raw":
+                    raise ConfigError(
+                        "grow_on_first_boot=True 且 size=remaining 时，"
+                        "rootfs 必须是最后一个非 raw 分区。"
+                    )
+            continue
+
+        partition = parse_size(size)
+        if image.bytes > partition.bytes:
+            raise ConfigError(
+                f"rootfs image_size ({image.bytes} bytes) 不得大于 "
+                f"分区 size ({partition.bytes} bytes)。"
+            )
+
+
 def validate_config(config: dict) -> None:
     """对 FINAL_CONFIG 执行全部已知校验，第一项失败即抛 ConfigError。"""
     validate_recovery_partition(config)
+    validate_rootfs_auto_grow(config)

@@ -15,6 +15,7 @@ PLATFORM = {
             "systemd", "systemd-sysv", "dbus", "network-manager",
             "iputils-ping", "iproute2", "openssh-server", "sudo",
             "bash", "ca-certificates", "locales",
+            "cloud-guest-utils", "gdisk", "e2fsprogs", "util-linux",
             # recoveryctl 依赖 python3 完整 stdlib（json/argparse/pathlib/
             # dataclasses）；不能用 python3-minimal。
             "python3",
@@ -22,7 +23,7 @@ PLATFORM = {
         # recoveryctl 需要在 normal 系统中也能调用（`recoveryctl recovery`
         # 通过 reboot reason 从 normal 进入 recovery，由 `flange recovery enter`
         # 通过 ADB 触发）；flash/backup 子命令会在 normal 模式下硬性拒绝，安全。
-        "custom_packages": ["adbd", "recoveryctl"],
+        "custom_packages": ["adbd", "recoveryctl", "flange-rootfs-grow"],
     },
     "+rootfs": {
         "+packages:debug": ["gdb", "strace", "tcpdump", "valgrind"],

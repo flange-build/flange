@@ -2,9 +2,7 @@
 
 ## Purpose
 Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kernel / bootloader / rootfs / boot / image 全套 ComponentBuilder 以及 PLATFORM + SOC 两层配置继承。作为 flange 内 `platform = "allwinnera733"` 的权威规范；由 change `rename-allwinner-to-allwinnera733` 从原 `allwinner-platform` capability 整体迁移而来。
-
 ## Requirements
-
 ### Requirement: A733 内核构建支持 BSP 集成
 `AllwinnerA733KernelBuilder` 必须（SHALL）在编译前将 BSP 仓库集成到内核源码树的 `bsp/` 目录，并将 device 仓库中的 board DTS 复制到内核 DTS 目录。BSP 和 device 目录通过命名仓库 `linux-a733` 的子路径获取（`bsp/` 和 `device-a733/`），与 kernel 共用同一次 clone。
 
@@ -80,14 +78,22 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** 生成的 extlinux.conf 包含正确的 kernel、devicetree、append 行，root 指向 rootfs 分区
 
 ### Requirement: A733 Rootfs 构建
-`AllwinnerA733RootfsBuilder` 必须（SHALL）复用 `RootfsBuilder` 基类的通用能力（overlay、firmware、两阶段缓存），生成 ext4 rootfs.img。
+`AllwinnerA733RootfsBuilder` 必须（SHALL）复用 `RootfsBuilder` 基类的通用能力（overlay、firmware、两阶段缓存），
+生成 ext4 rootfs.img。若 rootfs 分区 entry 声明 `image_size`，构建器必须（MUST）使用 `image_size`
+作为 rootfs.img 的初始大小；若未声明，则保持现有兼容大小策略。
 
 #### Scenario: rootfs 构建流程
 - **WHEN** 执行 `allwinnera733` 平台的 rootfs 构建
 - **THEN** 完成 Phase 1 (base tarball + apt install) 和 Phase 2 (custom deb + overlay + firmware + 密码设置)，输出 ext4 rootfs.img
 
+#### Scenario: rootfs 使用 image_size
+- **WHEN** `allwinnera733` 平台 rootfs 分区配置为 `size: "remaining"` 且 `image_size: "2G"`
+- **THEN** `AllwinnerA733RootfsBuilder` 生成 2GB 的 ext4 rootfs.img
+
 ### Requirement: A733 整盘镜像组装
 `AllwinnerA733ImageBuilder` 必须（SHALL）将 bootloader 固件和分区镜像按 SD 卡分区表布局组装成 raw.img。
+若 rootfs 分区 entry 声明 `image_size`，raw.img 中 rootfs GPT 分区初始大小必须（MUST）使用 `image_size`；
+`size: "remaining"` 仅表示设备首次启动扩容后的最终容量语义。
 
 #### Scenario: SD 卡镜像组装
 - **WHEN** 执行 `allwinnera733` 平台的 image 构建
@@ -96,6 +102,11 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 #### Scenario: GPT 分区表
 - **WHEN** raw.img 生成完成
 - **THEN** 非 raw 类型分区在 GPT 分区表中有对应条目
+
+#### Scenario: rootfs GPT 分区使用 image_size
+- **WHEN** `allwinnera733` 平台 rootfs 分区配置为 `size: "remaining"` 且 `image_size: "2G"`
+- **THEN** raw.img 中 rootfs GPT 分区初始大小为 2GB
+- **AND** raw.img 总大小按初始分区布局计算
 
 ### Requirement: A733 平台配置三层继承
 `allwinnera733` 平台必须（SHALL）遵循 flange 的三层配置继承体系：platform → SoC → board。PLATFORM 与 SOC 两层之间在目录结构上保持分离（`components/platform/allwinnera733/config.py` + `components/platform/allwinnera733/a733/config.py`），不合并为单一文件。

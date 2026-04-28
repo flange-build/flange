@@ -140,6 +140,23 @@ flange recovery reboot
   `--sha256` 双重确认才能写入
 - 镜像写入前自动校验 sha256、镜像大小、分区是否已挂载
 
+## Rootfs 小镜像与首次启动扩容
+
+rootfs 分区可以同时声明设备最终容量和构建产物初始大小：
+
+```python
+{"name": "rootfs", "offset": "0x128000", "size": "remaining",
+ "type": "ext4", "image_size": "2G", "grow_on_first_boot": True}
+```
+
+- `size: "remaining"` 表示设备上最终扩展到存储介质剩余空间
+- `image_size` 控制构建时 `rootfs.img` 以及 `raw.img` 中 rootfs GPT 分区的初始大小
+- `grow_on_first_boot: True` 表示 normal 系统首次启动后自动扩展 rootfs
+
+启用后，normal rootfs 会安装 `flange-rootfs-grow` App。该 systemd oneshot 服务在首次启动时执行
+`sgdisk -e`、`growpart` 和 `resize2fs`，把小镜像刷入后的 rootfs 分区扩展到真实磁盘末尾；成功后写入
+`/var/lib/flange/rootfs-grown`，后续启动不重复执行。
+
 ## 已支持的板子
 
 | 板子 | SoC | 平台 |

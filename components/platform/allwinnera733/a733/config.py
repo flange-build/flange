@@ -66,7 +66,8 @@ SOC = {
             {"name": "boot_package",  "offset": "0x6000",   "size": "0x2000",   "type": "raw"},
             {"name": "boot",          "offset": "0x8000",   "size": "0x20000",  "type": "ext4"},
             {"name": "recovery",      "offset": "0x28000",  "size": "0x100000", "type": "ext4"},
-            {"name": "rootfs",        "offset": "0x128000", "size": "remaining", "type": "ext4"},
+            {"name": "rootfs",        "offset": "0x128000", "size": "remaining",
+             "type": "ext4", "image_size": "2G", "grow_on_first_boot": True},
         ],
     },
 }

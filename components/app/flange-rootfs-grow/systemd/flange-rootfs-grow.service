@@ -1,0 +1,13 @@
+[Unit]
+Description=Grow rootfs partition and filesystem on first boot
+DefaultDependencies=no
+After=local-fs.target
+ConditionPathExists=!/var/lib/flange/rootfs-grown
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/flange-rootfs-grow
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

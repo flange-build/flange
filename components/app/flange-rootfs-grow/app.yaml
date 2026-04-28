@@ -1,0 +1,33 @@
+app:
+  name: flange-rootfs-grow
+  version: 1.0.0
+  description: 首次启动时扩展 rootfs 分区和 ext4 文件系统
+  type: service
+  arch:
+    - aarch64
+    - armhf
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+install:
+  scripts/flange-rootfs-grow: /usr/sbin/flange-rootfs-grow
+
+systemd:
+  unit: systemd/flange-rootfs-grow.service
+  auto_start: true
+
+depends:
+  - cloud-guest-utils
+  - gdisk
+  - e2fsprogs
+  - util-linux
+
+conffiles: []
+
+data_dirs:
+  - /var/lib/flange

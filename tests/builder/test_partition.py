@@ -127,3 +127,17 @@ class TestRecoveryPartitionLayout:
         assert int(entries["rootfs"]["offset"], 0) == recovery_end
         # rootfs 占满末尾
         assert entries["rootfs"]["size"] == "remaining"
+
+    @pytest.mark.parametrize(
+        "board,product,variant",
+        [
+            ("radxa-zero3w", "default", "release"),
+            ("radxa-cubie-a7z", "default", "release"),
+        ],
+    )
+    def test_rootfs_has_initial_image_size_and_auto_grow(self, board, product, variant):
+        cfg = resolve_config(board, product, variant)
+        rootfs = next(e for e in cfg["partitions"]["entries"] if e["name"] == "rootfs")
+        assert rootfs["size"] == "remaining"
+        assert rootfs["image_size"] == "2G"
+        assert rootfs["grow_on_first_boot"] is True

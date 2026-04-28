@@ -119,10 +119,18 @@ class TestGetBoardConfig:
         """板级 rootfs 应包含板级自定义包。
 
         平台层默认 custom_packages 包含 adbd 与 recoveryctl（recoveryctl 用于
-        normal 模式下 ADB 触发 reboot 切换到 recovery）。
+        normal 模式下 ADB 触发 reboot 切换到 recovery），以及首次启动扩容
+        App。
         """
         merged = get_board_config("radxa-zero3w", boards=boards)
-        assert merged["rootfs"]["custom_packages"] == ["adbd", "recoveryctl"]
+        assert merged["rootfs"]["custom_packages"] == [
+            "adbd", "recoveryctl", "flange-rootfs-grow"]
+
+    def test_rootfs_has_grow_dependencies(self, boards):
+        """normal rootfs 应包含首次启动扩容 App 的运行期依赖。"""
+        merged = get_board_config("radxa-zero3w", boards=boards)
+        packages = set(merged["rootfs"]["packages"])
+        assert {"cloud-guest-utils", "gdisk", "e2fsprogs", "util-linux"} <= packages
 
     def test_rkbin_merges_platform_and_soc(self, boards):
         """rkbin 应合并平台层 repo/branch 和 SoC 层 ini_prefix。"""

@@ -55,6 +55,7 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
 
         rootfs_size_mb = self._partition_size_mb(config, "rootfs")
         self._output = self._work_dir / "rootfs.img"
+        self._ensure_rootfs_fits_image(rootfs_dir, rootfs_size_mb)
         self._status(f"生成 rootfs.img ({rootfs_size_mb}MB)...")
         self.docker.run(["truncate", "-s", f"{rootfs_size_mb}M", str(self._output)])
         self.docker.run([
@@ -85,15 +86,6 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
             "LABEL=boot       /boot          ext4    defaults   0       2\n"
         )
         (rootfs_dir / "boot").mkdir(exist_ok=True)
-
-    def _partition_size_mb(self, config: dict, name: str) -> int:
-        for entry in config.get("partitions", {}).get("entries", []):
-            if entry["name"] == name:
-                size = entry["size"]
-                if size == "remaining":
-                    return 4096
-                return (int(size, 0) * 512) // (1024 * 1024)
-        raise KeyError(f"partitions.entries 中未定义分区: {name}")
 
     def _get_base_cache_path(self, config: dict) -> Path | None:
         if not self.cache:

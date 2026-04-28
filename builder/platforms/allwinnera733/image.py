@@ -13,6 +13,8 @@ Allwinner A733 SD 卡布局：
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.docker import BuildError
+from builder.partition.size import resolve_image_size
 
 
 class AllwinnerA733ImageBuilder(ComponentBuilder):
@@ -81,6 +83,7 @@ class AllwinnerA733ImageBuilder(ComponentBuilder):
             if not image_path.exists():
                 self._status(f"跳过 {entry['name']}: {image_path} 不存在")
                 continue
+            self._ensure_partition_image_fits(image_path, entry)
             offset_sectors = entry["_offset_sectors"]
             self._status(f"dd {image_rel} → sector {offset_sectors}")
             self.docker.run([
@@ -101,12 +104,18 @@ class AllwinnerA733ImageBuilder(ComponentBuilder):
             e = dict(entry)
             e["_offset_sectors"] = (int(entry.get("offset", "0"), 0)
                                     if entry.get("offset") else 0)
-            if entry["size"] == "remaining":
-                e["_size_sectors"] = (4 * 1024 * 1024 * 1024) // self.SECTOR_SIZE
-            else:
-                e["_size_sectors"] = int(entry["size"], 0)
+            e["_size_sectors"] = resolve_image_size(entry).sectors
             resolved.append(e)
         return resolved
+
+    def _ensure_partition_image_fits(self, image_path: Path, entry: dict):
+        max_bytes = entry["_size_sectors"] * self.SECTOR_SIZE
+        image_bytes = image_path.stat().st_size
+        if image_bytes > max_bytes:
+            raise BuildError(
+                f"{entry['name']} 镜像 {image_bytes} bytes 超过初始分区大小 "
+                f"{max_bytes} bytes，请增大 image_size 或分区 size。"
+            )
 
     def _total_sectors(self, entries: list) -> int:
         max_end = 0

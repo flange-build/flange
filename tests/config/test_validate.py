@@ -6,6 +6,7 @@ from builder.config.validate import (
     ConfigError,
     validate_config,
     validate_recovery_partition,
+    validate_rootfs_auto_grow,
 )
 
 
@@ -80,3 +81,46 @@ class TestValidateConfig:
     def test_minimal_disabled_config_passes(self):
         validate_config({"recovery": {"enabled": False}})  # no raise
         validate_config({})  # no raise (recovery 缺省即关闭)
+
+
+# ── rootfs 首次启动扩容布局校验 ───────────────────────────────────
+
+
+class TestValidateRootfsAutoGrow:
+    def _cfg(self, entries: list[dict]) -> dict:
+        return {"partitions": {"format": "gpt", "entries": entries}}
+
+    def test_remaining_rootfs_last_non_raw_passes(self):
+        cfg = self._cfg([
+            {"name": "idbloader", "offset": "0x40", "size": "0x2000", "type": "raw"},
+            {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
+            {"name": "rootfs", "offset": "0x40000", "size": "remaining", "type": "ext4",
+             "image_size": "2G", "grow_on_first_boot": True},
+        ])
+        validate_rootfs_auto_grow(cfg)  # no raise
+
+    def test_data_partition_after_growing_rootfs_raises(self):
+        cfg = self._cfg([
+            {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
+            {"name": "rootfs", "offset": "0x40000", "size": "remaining", "type": "ext4",
+             "image_size": "2G", "grow_on_first_boot": True},
+            {"name": "data", "offset": "0x440000", "size": "remaining", "type": "ext4"},
+        ])
+        with pytest.raises(ConfigError, match="最后一个非 raw 分区"):
+            validate_rootfs_auto_grow(cfg)
+
+    def test_fixed_partition_smaller_than_image_size_raises(self):
+        cfg = self._cfg([
+            {"name": "rootfs", "offset": "0x40000", "size": "0x200000", "type": "ext4",
+             "image_size": "2G", "grow_on_first_boot": True},
+        ])
+        with pytest.raises(ConfigError, match="不得大于"):
+            validate_rootfs_auto_grow(cfg)
+
+    def test_missing_image_size_raises(self):
+        cfg = self._cfg([
+            {"name": "rootfs", "offset": "0x40000", "size": "remaining", "type": "ext4",
+             "grow_on_first_boot": True},
+        ])
+        with pytest.raises(ConfigError, match="image_size"):
+            validate_rootfs_auto_grow(cfg)
