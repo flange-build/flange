@@ -20,3 +20,6 @@ __pycache__/
 
 # 本地 Docker Compose 覆盖（支持 local_path 挂载等个人化配置）
 docker-compose.override.yml
+
+# Obsidian 工作区配置（每人本地化，不入库）
+.obsidian/
