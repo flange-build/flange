@@ -30,7 +30,8 @@ flange recovery enter
   → adbd + recoveryctl 待命
 
 flange recovery flash rootfs rootfs.img
-  → adb push → recoveryctl flash → dd 写分区
+  → adb exec-in recoveryctl flash
+  → recoveryctl 从 stdin 读多少写多少到分区
 
 flange recovery reboot
   → recoveryctl normal → 普通 reboot → normal
@@ -42,7 +43,7 @@ flange recovery reboot
 |---|---|
 | `enter` | 触发 boot-once 写入，重启进入 recovery |
 | `list` | 拉取并格式化可操作分区清单 |
-| `flash <part> <img>` | push 镜像 + 触发 recoveryctl 写分区 |
+| `flash <part> <img>` | exec-in 流式传输镜像 + 触发 recoveryctl 写分区 |
 | `backup <part> <out>` | 触发 recoveryctl dump + pull 回宿主机 |
 | `shell` | 打开交互式 ADB shell |
 | `reboot [target]` | 请求 normal/recovery/loader 并重启 |
@@ -54,4 +55,4 @@ flange recovery reboot
 
 ## 安全策略提示
 
-bootloader 和 recovery 分区默认 protected；强制写入须宿主机交互确认 `YES`，且设备端要求 `--sha256` 校验。详见 [[recovery 系统]] 中的安全策略节。
+bootloader 和 recovery 分区默认 protected；强制写入须宿主机交互确认 `YES`，且设备端要求 `--sha256` 并默认读回校验。详见 [[recovery 系统]] 中的安全策略节。

@@ -57,6 +57,7 @@ class FakeTransport(Transport):
     def __init__(self, *, mode: str = "recovery"):
         self.mode = mode
         self.shell_calls: list[list[str]] = []
+        self.exec_in_calls: list[tuple[list[str], Path]] = []
         self.push_calls: list = []
 
     def wait(self, timeout: int = 30) -> None:
@@ -72,6 +73,10 @@ class FakeTransport(Transport):
         self.shell_calls.append(list(args))
         if args == ["recoveryctl", "mode"]:
             return ShellResult(0, self.mode + "\n", "")
+        return ShellResult(0, "", "")
+
+    def exec_in(self, args: list[str], local_path: Path, **kwargs) -> ShellResult:
+        self.exec_in_calls.append((list(args), local_path))
         return ShellResult(0, "", "")
 
     def interactive_shell(self) -> int:
@@ -105,10 +110,11 @@ class TestForceConfirmation:
         rc = cmd_flash(t, partition="rootfs", image=img, force=True,
                        prompt=lambda *_: "YES")
         assert rc == 0
-        # --force 应被透传到 recoveryctl
-        flash_calls = [c for c in t.shell_calls
-                       if c and c[0:2] == ["recoveryctl", "flash"]]
-        assert any("--force" in c for c in flash_calls)
+        # --force 应被透传到 recoveryctl flash
+        assert len(t.exec_in_calls) == 1
+        args, _ = t.exec_in_calls[0]
+        assert args[0:2] == ["recoveryctl", "flash"]
+        assert "--force" in args
 
     def test_no_prompt_without_force(self, tmp_path):
         """非 force 路径不应触发 prompt。"""
@@ -122,6 +128,7 @@ class TestForceConfirmation:
         )
         assert rc == 0
         assert prompt_calls == []
+        assert len(t.exec_in_calls) == 1
 
 
 # ── 8.2 device 侧 --force + 必须 --sha256 ─────────────────────
@@ -138,11 +145,9 @@ class TestDeviceForceRequiresSha(object):
             ],
         }
 
-    def test_force_protected_without_sha_raises(self, rc, tmp_path):
-        img = tmp_path / "rec.img"
-        img.write_bytes(b"\x00" * 16)
+    def test_force_protected_without_sha_raises(self, rc):
         req = rc.FlashRequest(
-            partition="recovery", image_path=img,
+            partition="recovery", size_bytes=16,
             sha256_expected=None, force=True,
         )
         with pytest.raises(rc.RecoveryError, match="--sha256"):
@@ -153,13 +158,10 @@ class TestDeviceForceRequiresSha(object):
                 partition_resolver=lambda n: Path(f"/dev/{n}"),
             )
 
-    def test_force_protected_with_sha_passes(self, rc, tmp_path):
-        img = tmp_path / "rec.img"
-        img.write_bytes(b"\x00" * 16)
-        digest = rc.sha256_of_file(img)
+    def test_force_protected_with_sha_passes(self, rc):
         req = rc.FlashRequest(
-            partition="recovery", image_path=img,
-            sha256_expected=digest, force=True,
+            partition="recovery", size_bytes=16,
+            sha256_expected="a" * 64, force=True,
         )
         dev = rc.validate_flash(
             req, self._config(),
@@ -169,21 +171,19 @@ class TestDeviceForceRequiresSha(object):
         )
         assert dev == Path("/dev/recovery")
 
-    def test_unprotected_partition_unaffected(self, rc, tmp_path):
-        """rootfs 不是 protected，--force 也不强制要求 --sha256。"""
-        img = tmp_path / "rfs.img"
-        img.write_bytes(b"\x00" * 16)
+    def test_unprotected_partition_still_requires_sha(self, rc):
+        """stream flash 的完整性参数对所有分区都是控制面要求。"""
         req = rc.FlashRequest(
-            partition="rootfs", image_path=img,
+            partition="rootfs", size_bytes=16,
             sha256_expected=None, force=True,
         )
-        dev = rc.validate_flash(
-            req, self._config(),
-            block_size_lookup=lambda d: 1 << 30,
-            mounted_lookup=lambda d: None,
-            partition_resolver=lambda n: Path(f"/dev/{n}"),
-        )
-        assert dev == Path("/dev/rootfs")
+        with pytest.raises(rc.RecoveryError, match="--sha256"):
+            rc.validate_flash(
+                req, self._config(),
+                block_size_lookup=lambda d: 1 << 30,
+                mounted_lookup=lambda d: None,
+                partition_resolver=lambda n: Path(f"/dev/{n}"),
+            )
 
 
 # ── 8.5 ADB transport wait 超时 ────────────────────────────────
@@ -219,13 +219,10 @@ class TestAdbWaitTimeout:
 
 
 class TestRecoveryctlAdditionalErrors:
-    def test_image_too_large_for_protected_partition(self, rc, tmp_path):
-        img = tmp_path / "big.img"
-        img.write_bytes(b"\x00" * 1024)
-        digest = rc.sha256_of_file(img)
+    def test_image_too_large_for_protected_partition(self, rc):
         req = rc.FlashRequest(
-            partition="recovery", image_path=img,
-            sha256_expected=digest, force=True,
+            partition="recovery", size_bytes=1024,
+            sha256_expected="a" * 64, force=True,
         )
         with pytest.raises(rc.RecoveryError, match="超过分区"):
             rc.validate_flash(
@@ -239,14 +236,11 @@ class TestRecoveryctlAdditionalErrors:
                 partition_resolver=lambda n: Path(f"/dev/{n}"),
             )
 
-    def test_already_mounted_with_force(self, rc, tmp_path):
+    def test_already_mounted_with_force(self, rc):
         """挂载检查不被 --force 跳过。"""
-        img = tmp_path / "x.img"
-        img.write_bytes(b"\x00" * 16)
-        digest = rc.sha256_of_file(img)
         req = rc.FlashRequest(
-            partition="recovery", image_path=img,
-            sha256_expected=digest, force=True,
+            partition="recovery", size_bytes=16,
+            sha256_expected="a" * 64, force=True,
         )
         with pytest.raises(rc.RecoveryError, match="已挂载"):
             rc.validate_flash(

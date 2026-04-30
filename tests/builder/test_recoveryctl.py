@@ -7,6 +7,8 @@ subprocess 调用通过依赖注入参数替换，无需真实块设备。
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import io
 import json
 import sys
 import types
@@ -187,59 +189,77 @@ class TestExtlinuxSwitch:
         assert rc.read_extlinux_default(tmp_path / "missing.conf") is None
 
 
-# ── validate_flash 校验（§6.6） ───────────────────────────────
+# ── stream flash 校验与写入（recovery-stream-flash） ───────────
 
 
-def _flash_request(rc, tmp_path, *, name="rootfs", sha=None, force=False):
-    img = tmp_path / "in.img"
-    img.write_bytes(b"\x00" * 1024)
-    return rc.FlashRequest(
-        partition=name, image_path=img,
-        sha256_expected=sha, force=force,
-    )
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+class _FailingReadStream:
+    def read(self, size=-1):
+        raise AssertionError("preflight 失败时不应读取 stdin")
+
+
+class TestFlashArgparse:
+    def test_flash_required_args_are_stream_control_plane(self, rc):
+        ns = rc.build_argparser().parse_args([
+            "flash", "rootfs",
+            "--size", "1024",
+            "--sha256", "a" * 64,
+        ])
+        assert ns.cmd == "flash"
+        assert ns.partition == "rootfs"
+        assert ns.size == 1024
+        assert ns.sha256 == "a" * 64
+        assert ns.force is False
+        assert ns.verify_readback is False
+
+    def test_flash_optional_args(self, rc):
+        ns = rc.build_argparser().parse_args([
+            "flash", "recovery",
+            "--size", "4096",
+            "--sha256", "b" * 64,
+            "--force",
+            "--chunk-size", "1048576",
+            "--verify-readback",
+        ])
+        assert ns.force is True
+        assert ns.chunk_size == 1048576
+        assert ns.verify_readback is True
+
+    def test_flash_stream_subcommand_is_removed(self, rc):
+        with pytest.raises(SystemExit):
+            rc.build_argparser().parse_args([
+                "flash-stream", "rootfs",
+                "--size", "1024",
+                "--sha256", "a" * 64,
+            ])
+
+    def test_flash_rejects_old_image_positional(self, rc):
+        with pytest.raises(SystemExit):
+            rc.build_argparser().parse_args([
+                "flash", "rootfs", "/tmp/rootfs.img",
+                "--size", "1024",
+                "--sha256", "a" * 64,
+            ])
 
 
 class TestValidateFlash:
-    def test_protected_blocks_without_force(self, rc, tmp_path):
-        req = _flash_request(rc, tmp_path, name="recovery")
-        with pytest.raises(rc.ProtectedPartitionError):
-            rc.validate_flash(
-                req, _sample_config(),
-                block_size_lookup=lambda d: 1 << 30,
-                mounted_lookup=lambda d: None,
-                partition_resolver=lambda n: Path(f"/dev/disk/by-partlabel/{n}"),
-            )
-
-    def test_protected_passes_with_force_and_sha(self, rc, tmp_path):
-        # protected 分区强制写入要求 --sha256（设备端二次校验，§8.2）
-        req = _flash_request(rc, tmp_path, name="recovery", force=True)
-        req.sha256_expected = rc.sha256_of_file(req.image_path)
-        dev = rc.validate_flash(
-            req, _sample_config(),
-            block_size_lookup=lambda d: 1 << 30,
-            mounted_lookup=lambda d: None,
-            partition_resolver=lambda n: Path(f"/dev/disk/by-partlabel/{n}"),
+    def test_unknown_partition(self, rc):
+        req = rc.FlashRequest(
+            partition="garbage",
+            size_bytes=10,
+            sha256_expected="a" * 64,
         )
-        assert dev == Path("/dev/disk/by-partlabel/recovery")
-
-    def test_unknown_partition(self, rc, tmp_path):
-        req = _flash_request(rc, tmp_path, name="garbage")
         with pytest.raises(rc.RecoveryError, match="未知分区"):
             rc.validate_flash(req, _sample_config())
 
-    def test_image_not_found(self, rc, tmp_path):
-        req = rc.FlashRequest(partition="rootfs",
-                              image_path=tmp_path / "missing.img",
-                              sha256_expected=None)
-        with pytest.raises(rc.RecoveryError, match="镜像文件不存在"):
-            rc.validate_flash(req, _sample_config())
-
-    def test_sha256_mismatch(self, rc, tmp_path):
-        img = tmp_path / "in.img"
-        img.write_bytes(b"hello")
+    def test_invalid_sha256_rejected(self, rc):
         req = rc.FlashRequest(
-            partition="rootfs", image_path=img,
-            sha256_expected="00" * 32,
+            partition="rootfs",
+            size_bytes=10,
+            sha256_expected="not-a-hash",
         )
         with pytest.raises(rc.RecoveryError, match="sha256"):
             rc.validate_flash(
@@ -249,27 +269,172 @@ class TestValidateFlash:
                 partition_resolver=lambda n: Path(f"/dev/{n}"),
             )
 
-    def test_image_too_large(self, rc, tmp_path):
-        img = tmp_path / "in.img"
-        img.write_bytes(b"\xff" * 100)
-        req = rc.FlashRequest(partition="rootfs", image_path=img,
-                              sha256_expected=None)
-        with pytest.raises(rc.RecoveryError, match="超过分区"):
+    def test_size_too_large_rejected_before_stdin_read(self, rc, tmp_path):
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=100,
+            sha256_expected="a" * 64,
+        )
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 50)
+        with pytest.raises(rc.RecoveryError, match="未改动"):
+            rc.do_flash(
+                req, _sample_config(),
+                input_stream=_FailingReadStream(),
+                block_size_lookup=lambda d: 50,
+                mounted_lookup=lambda d: None,
+                partition_resolver=lambda n: target,
+                sync_runner=lambda *a, **k: None,
+                lock_path=tmp_path / "flash.lock",
+            )
+
+    def test_protected_blocks_without_force(self, rc):
+        req = rc.FlashRequest(
+            partition="recovery",
+            size_bytes=10,
+            sha256_expected="a" * 64,
+        )
+        with pytest.raises(rc.ProtectedPartitionError):
             rc.validate_flash(
                 req, _sample_config(),
-                block_size_lookup=lambda d: 50,  # smaller than image
+                block_size_lookup=lambda d: 1 << 30,
                 mounted_lookup=lambda d: None,
                 partition_resolver=lambda n: Path(f"/dev/{n}"),
             )
 
-    def test_already_mounted(self, rc, tmp_path):
-        req = _flash_request(rc, tmp_path)
+    def test_mounted_partition_rejected(self, rc):
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=10,
+            sha256_expected="a" * 64,
+        )
         with pytest.raises(rc.RecoveryError, match="已挂载"):
             rc.validate_flash(
                 req, _sample_config(),
                 block_size_lookup=lambda d: 1 << 30,
-                mounted_lookup=lambda d: "/mnt/x",
+                mounted_lookup=lambda d: "/mnt/rootfs",
                 partition_resolver=lambda n: Path(f"/dev/{n}"),
+            )
+
+
+class TestDoFlash:
+    def test_stream_writes_bytes_and_validates_sha256(self, rc, tmp_path):
+        data = b"flange-stream-data"
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 1024)
+        runs = []
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=len(data),
+            sha256_expected=_sha256(data),
+            chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
+        )
+
+        rc.do_flash(
+            req, _sample_config(),
+            input_stream=io.BytesIO(data),
+            block_size_lookup=lambda d: 1024,
+            mounted_lookup=lambda d: None,
+            partition_resolver=lambda n: target,
+            sync_runner=lambda cmd, **kw: runs.append((cmd, kw)),
+            lock_path=tmp_path / "flash.lock",
+        )
+
+        assert target.read_bytes()[:len(data)] == data
+        assert runs == [(["sync"], {"check": True})]
+
+    def test_stdin_early_eof_reports_written_bytes(self, rc, tmp_path):
+        data = b"short"
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 1024)
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=len(data) + 10,
+            sha256_expected=_sha256(data),
+            chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
+        )
+
+        with pytest.raises(rc.RecoveryError, match="已写入 5 bytes"):
+            rc.do_flash(
+                req, _sample_config(),
+                input_stream=io.BytesIO(data),
+                block_size_lookup=lambda d: 1024,
+                mounted_lookup=lambda d: None,
+                partition_resolver=lambda n: target,
+                sync_runner=lambda *a, **k: None,
+                lock_path=tmp_path / "flash.lock",
+            )
+
+    def test_sha256_mismatch_reports_partial_write_risk(self, rc, tmp_path):
+        data = b"payload"
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 1024)
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=len(data),
+            sha256_expected="0" * 64,
+            chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
+        )
+
+        with pytest.raises(rc.RecoveryError, match="可能已部分写入"):
+            rc.do_flash(
+                req, _sample_config(),
+                input_stream=io.BytesIO(data),
+                block_size_lookup=lambda d: 1024,
+                mounted_lookup=lambda d: None,
+                partition_resolver=lambda n: target,
+                sync_runner=lambda *a, **k: None,
+                lock_path=tmp_path / "flash.lock",
+            )
+
+    def test_verify_readback_mismatch(self, rc, tmp_path):
+        data = b"payload"
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 1024)
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=len(data),
+            sha256_expected=_sha256(data),
+            chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
+            verify_readback=True,
+        )
+
+        def corrupting_fsync(fd):
+            target.write_bytes(b"corrupt" + b"\x00" * 1017)
+
+        with pytest.raises(rc.RecoveryError, match="读回校验失败"):
+            rc.do_flash(
+                req, _sample_config(),
+                input_stream=io.BytesIO(data),
+                block_size_lookup=lambda d: 1024,
+                mounted_lookup=lambda d: None,
+                partition_resolver=lambda n: target,
+                sync_runner=lambda *a, **k: None,
+                fsync=corrupting_fsync,
+                lock_path=tmp_path / "flash.lock",
+            )
+
+    def test_flash_lock_rejects_concurrent_writer(self, rc, tmp_path):
+        data = b"payload"
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 1024)
+        lock = tmp_path / "flash.lock"
+        lock.write_text("busy")
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=len(data),
+            sha256_expected=_sha256(data),
+        )
+
+        with pytest.raises(rc.RecoveryError, match="已有刷写任务"):
+            rc.do_flash(
+                req, _sample_config(),
+                input_stream=io.BytesIO(data),
+                block_size_lookup=lambda d: 1024,
+                mounted_lookup=lambda d: None,
+                partition_resolver=lambda n: target,
+                sync_runner=lambda *a, **k: None,
+                lock_path=lock,
             )
 
 

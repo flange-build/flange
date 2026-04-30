@@ -109,7 +109,7 @@ product / variant、分区表与保护策略，是设备端 `recoveryctl` 与宿
 |------|------|
 | `flange recovery enter` | 让设备从 normal 进入 recovery |
 | `flange recovery list [--json]` | 列出分区清单与挂载状态 |
-| `flange recovery flash <part> <img>` | 上传镜像并写入分区 |
+| `flange recovery flash <part> <img>` | 流式传输镜像并写入分区 |
 | `flange recovery backup <part> <out>` | 备份分区到本机文件（默认 zstd 压缩） |
 | `flange recovery shell` | 打开 ADB 交互式 shell |
 | `flange recovery reboot [normal\|recovery\|loader]` | 请求目标模式并重启（默认 normal） |
@@ -127,7 +127,8 @@ product / variant、分区表与保护策略，是设备端 `recoveryctl` 与宿
 ```bash
 recoveryctl mode                                   # 输出 normal 或 recovery
 recoveryctl list --json                            # 分区清单（合并 recovery-config 与实时状态）
-recoveryctl flash <part> <img> --sha256 <hash>     # 校验并写入
+recoveryctl flash <part> --size <n> --sha256 <hash>
+                                                    # 从 stdin 流式写入并校验
 recoveryctl backup <part> <out> --compress zstd    # 读取分区并压缩备份
 recoveryctl recovery                               # 一次性进入 recovery 并重启
 recoveryctl loader                                 # 进入 loader/download 模式
@@ -150,19 +151,24 @@ recoveryctl normal                                 # 回 normal 系统
 
 1. **宿主机交互确认**：`flange recovery flash --force <p> <img>` 触发提示，
    必须输入字面量 `YES`（区分大小写）才放行。
-2. **设备端二次校验**：`recoveryctl flash --force <p> <img>` 在 protected
-   分区上要求同时提供 `--sha256`，避免误写损坏镜像。
+2. **设备端二次校验**：`recoveryctl flash <p> --force` 在 protected
+   分区上要求同时提供 `--sha256`，并默认做写后读回校验，避免误写损坏镜像。
 
 ### 写入前校验链
 
 - 分区在 `recovery-config.json` 中存在
 - 镜像文件存在
-- sha256 匹配（如提供）
-- 镜像大小不超过分区大小（`blockdev --getsize64`）
+- 宿主机计算镜像 size 与 sha256
+- 设备端确认 size 不超过分区大小（`blockdev --getsize64`）
 - 目标分区当前未挂载（`/proc/self/mountinfo` 检查）
+- protected / force 策略通过
 
-写入流程：`dd if=img of=/dev/disk/by-partlabel/<part> bs=4M conv=fsync` →
-`sync` → 若提供 sha256，做读回校验。
+默认写入流程：宿主机通过 `adb exec-in` 启动
+`recoveryctl flash <part> --size <bytes> --sha256 <hash>`，然后把本机
+镜像按 chunk 写入远端 stdin；设备端从 stdin 读多少就写多少到
+`/dev/disk/by-partlabel/<part>`，同时计算 sha256，最后执行 `fsync` / `sync`。
+普通分区默认只做输入流 sha256 校验；`--force` 写 protected 分区时默认增加
+写后读回校验。
 
 ## 典型工作流
 
@@ -193,7 +199,8 @@ flange recovery reboot
 入口；具体方法因板子而异）。进入 recovery 后：
 
 ```bash
-recoveryctl flash rootfs /tmp/flange-upload/rootfs.img --sha256 <hash>
+adb exec-in "recoveryctl flash rootfs --size <bytes> --sha256 <hash>" \
+  < rootfs.img
 recoveryctl normal
 ```
 
@@ -279,9 +286,10 @@ flange recovery flash rootfs ...
 
 ### `flash` 报 "sha256 不匹配"
 
-宿主机会在上传前算 sha256，设备端再次校验上传后的镜像。任一环节不一致
-都会拒绝写入。常见原因：上传中断、重复上传相同文件名但不同内容、镜像
-文件被实时修改。重新构建 → 重试 `flange recovery flash` 即可。
+宿主机会在传输前计算 sha256，设备端对 stdin 实际收到的数据同步计算
+sha256。任一环节不一致都会拒绝完成刷写。常见原因：USB/ADB 传输中断、镜像
+文件被实时修改、存储写入异常。此时目标分区可能已部分写入，应重新构建或确认
+镜像后重试 `flange recovery flash`。
 
 ### `flash` 报 "受保护"
 
@@ -292,7 +300,8 @@ bootloader / raw / recovery 类分区默认受保护，避免误操作让设备 
 flange recovery flash recovery <recovery.img> --force
 ```
 
-宿主机会要求输入 `YES` 确认，设备端会要求同时提供 `--sha256`。
+宿主机会要求输入 `YES` 确认，设备端会要求同时提供 `--sha256`，并默认做
+写后读回校验。
 
 ### A733 平台 recovery 行为
 

@@ -87,6 +87,9 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
   `flange_boot_once=recovery` 作为断电保持兜底，不持久修改 extlinux DEFAULT
 - **首版 transport = ADB over USB**：`flange recovery enter/list/flash/backup
   /shell/reboot` 通过 ADB 编排 `recoveryctl`；后续可扩展 USB DFU
+- **在线刷写默认流式写入**：`flange recovery flash` 通过 ADB `exec-in`
+  调用 `recoveryctl flash`，设备端从 stdin 读多少就写多少到目标分区，
+  不要求 recovery 文件系统暂存完整镜像
 - **安全策略**：bootloader/raw 与 recovery 自身默认 protected；强制写入
   需要 `--force` 双重确认（host 输入 `YES` + device 端要求 `--sha256`）
 - **不属于范围**：OTA / A/B 切换 / 网络烧录 / recovery 自升级

@@ -24,7 +24,7 @@ device 端 recovery CLI，运行于 recovery rootfs（也安装于 normal rootfs
 - **命令集**：`mode`、`list`、`flash`、`backup`、`recovery`、`loader`、`normal`、`reboot`；详见 [[recoveryctl 协议]]，本页不复刻
 - **实现语言**：Python 3，依赖标准库（`argparse`、`json`、`pathlib`、`hashlib`）；`app.yaml` 中 `depends: [python3, util-linux, e2fsprogs]`
 - **模式守卫**：`flash`、`backup` 等操作先调用 `_require_recovery_mode()` 检查 `/proc/cmdline`，normal 模式拒绝执行
-- **安全要求**：`flash` 强制要求 `--sha256 <hex>`，设备端 `validate_flash()` 核验写入数据完整性后才执行 dd
+- **安全要求**：`flash` 强制要求 `--size <n>` 与 `--sha256 <hex>`，设备端 `validate_flash()` 在读取 stdin 前完成 preflight，写入时同步核验数据完整性
 - **app.yaml 元数据**：`type: exec`，`arch: [aarch64, armhf]`，`build.system: none`（无编译步骤）
 - **安装路径**：`bin/recoveryctl → /usr/sbin/recoveryctl`
 - **打包入 rootfs**：由 [[deb 打包引擎]] 将 app.yaml 转为 .deb，[[recovery 构建器]] 在 chroot 阶段安装进 recovery rootfs

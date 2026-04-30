@@ -4,13 +4,13 @@
 
   flange recovery enter            -> 让设备从 normal 进入 recovery
   flange recovery list             -> 拉取并格式化分区清单
-  flange recovery flash <p> <img>  -> 上传镜像并触发 recoveryctl flash
+  flange recovery flash <p> <img>  -> 通过 exec-in 流式触发 recoveryctl flash
   flange recovery backup <p> <out> -> 触发 recoveryctl backup 并 pull 回宿主机
   flange recovery shell            -> 打开交互式 ADB shell
   flange recovery reboot [target]  -> recoveryctl normal|recovery|loader
 
 Transport 层（``AdbTransport``）抽象了 ``wait / push / pull / shell /
-interactive_shell``，便于后续替换 USB DFU 等其他通道，且测试时可注入
+exec_in / interactive_shell``，便于后续替换 USB DFU 等其他通道，且测试时可注入
 ``FakeTransport`` 不依赖真实 adb。
 """
 
@@ -23,17 +23,16 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 
 # Recovery rootfs 通常 < 512MB（base + apps + 内核模块后剩余 < 50MB），无法
-# 容纳数百 MB 的 backup 镜像或上传镜像。当前阶段先用 /tmp（受限于 recovery
-# rootfs 剩余空间），后续替换为流式刷写工具后该限制消失（数据直接 dd | adb
-# pipe 不在设备落盘，参见 docs/recovery.md）。
-REMOTE_UPLOAD_DIR = "/tmp/flange-upload"
+# 容纳数百 MB 的 backup 镜像。flash 已改为 exec-in 流式写入，不再依赖该目录。
 REMOTE_BACKUP_DIR = "/tmp/flange-backup"
+DEFAULT_STREAM_CHUNK_SIZE = 4 * 1024 * 1024
 
 
 class HostRecoveryError(RuntimeError):
@@ -67,6 +66,9 @@ class Transport:
     def shell(self, args: list[str], *, capture: bool = True) -> ShellResult:
         raise NotImplementedError
 
+    def exec_in(self, args: list[str], local_path: Path, **kwargs) -> ShellResult:
+        raise NotImplementedError
+
     def interactive_shell(self) -> int:
         raise NotImplementedError
 
@@ -96,6 +98,78 @@ class AdbTransport(Transport):
                 stdout=out, stderr=subprocess.PIPE, check=False,
             )
         return r.returncode
+
+    def exec_in(
+        self,
+        args: list[str],
+        local_path: Path,
+        *,
+        chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE,
+        progress=None,
+    ) -> ShellResult:
+        """``adb exec-in`` —— 把本地文件流式写到远端命令 stdin。
+
+        不能用 ``subprocess.run(input=...)``，否则 1GB 级镜像会被读入 host
+        内存。这里用 Popen + chunk 循环写 stdin，并用后台线程持续 drain
+        stdout/stderr，避免设备端少量输出阻塞传输。
+        """
+        cmdline = shlex.join(args)
+        proc = subprocess.Popen(
+            [self.adb, "exec-in", cmdline],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+
+        def _drain(pipe, chunks: list[bytes]) -> None:
+            if pipe is None:
+                return
+            data = pipe.read()
+            if data:
+                chunks.append(data)
+
+        stdout_thread = threading.Thread(
+            target=_drain, args=(proc.stdout, stdout_chunks), daemon=True)
+        stderr_thread = threading.Thread(
+            target=_drain, args=(proc.stderr, stderr_chunks), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        def _close_stdin() -> None:
+            if not proc.stdin:
+                return
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
+
+        sent = 0
+        total = local_path.stat().st_size
+        try:
+            with local_path.open("rb") as src:
+                while True:
+                    buf = src.read(chunk_size)
+                    if not buf:
+                        break
+                    assert proc.stdin is not None
+                    proc.stdin.write(buf)
+                    sent += len(buf)
+                    if progress:
+                        progress(sent, total)
+            _close_stdin()
+        except BrokenPipeError:
+            # 远端 preflight 失败时可能先退出并关闭 stdin；保留输出给上层。
+            _close_stdin()
+        finally:
+            rc = proc.wait()
+            stdout_thread.join()
+            stderr_thread.join()
+
+        stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+        return ShellResult(returncode=rc, stdout=stdout, stderr=stderr)
 
     def _run(self, args: list[str], *, capture: bool = True,
              stdin=None) -> subprocess.CompletedProcess:
@@ -312,9 +386,14 @@ def _sha256_of_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
+def _file_fingerprint(path: Path) -> tuple[int, int, int]:
+    st = path.stat()
+    return (st.st_size, st.st_mtime_ns, st.st_ino)
+
+
 def cmd_flash(t: Transport, *, partition: str, image: Path,
               force: bool = False, prompt=input) -> int:
-    """上传镜像 → 设备端 ``recoveryctl flash`` 校验后写入。
+    """流式传输镜像 → 设备端 ``recoveryctl flash`` 边收边写。
 
     宿主机不接受裸 block device 作为 partition 参数；分区名按
     recoveryctl 中 recovery-config.json 的 partitions[*].name 严格匹配。
@@ -339,28 +418,32 @@ def cmd_flash(t: Transport, *, partition: str, image: Path,
 
     require_recovery_mode(t)
 
+    before = _file_fingerprint(image)
     sha = _sha256_of_file(image)
-    remote = f"{REMOTE_UPLOAD_DIR}/{image.name}"
+    after = _file_fingerprint(image)
+    if before != after:
+        raise HostRecoveryError(
+            f"镜像文件在计算 sha256 传输前后发生变化：{image}。"
+            "请停止修改该文件后重试。"
+        )
 
-    t.shell(["mkdir", "-p", REMOTE_UPLOAD_DIR])
-    print(f"上传 {image.name} ...")
-    t.push(image, remote)
-
-    args = ["recoveryctl", "flash", partition, remote, "--sha256", sha]
+    args = [
+        "recoveryctl", "flash", partition,
+        "--size", str(after[0]),
+        "--sha256", sha,
+    ]
     if force:
-        args.append("--force")
+        args.extend(["--force", "--verify-readback"])
     print(f"recoveryctl flash {partition} ...")
-    # 用 capture=True 让 AdbTransport 的 __flange_rc__ marker 把远端真实 rc
-    # 透传到 host —— capture=False 仅传 adb 自身 rc，会吞掉远端失败。
-    r = t.shell(args, capture=True)
+    r = t.exec_in(args, image)
     if r.stdout:
         sys.stdout.write(r.stdout)
     if r.returncode != 0:
         raise HostRecoveryError(
             f"recoveryctl flash 失败 (rc={r.returncode}): "
-            f"{r.stderr.strip() or r.stdout.strip()}"
+            f"{r.stderr.strip() or r.stdout.strip()}。"
+            f"目标分区 {partition} 可能已部分写入，请重新刷写或从备份恢复。"
         )
-    t.shell(["rm", "-f", remote])
     print(f"✓ {partition} 已刷写")
     return 0
 
@@ -513,13 +596,12 @@ def build_argparser() -> argparse.ArgumentParser:
             "工作流：\n"
             "  1. 校验 partition 是分区名（不接受 /dev/... 路径）\n"
             "  2. 设备必须处于 recovery 模式（normal 模式硬性拒绝）\n"
-            "  3. host 计算镜像 sha256\n"
-            "  4. host mount userdata 当 scratch，push 镜像到设备\n"
-            "  5. 设备端 recoveryctl flash 校验：sha256 / size / 未挂载 / protected\n"
-            "  6. dd bs=4M conv=fsync 写入 → sync → 读回 sha256 校验\n"
-            "  7. host 清理 scratch\n\n"
+            "  3. host 计算镜像 size + sha256，并确认文件未变化\n"
+            "  4. adb exec-in 调用 recoveryctl flash\n"
+            "  5. 设备端 preflight：size / 未挂载 / protected / sha256 格式\n"
+            "  6. 设备端从 stdin 读多少写多少 → 校验 sha256 → fsync/sync\n\n"
             "受保护分区（raw 类、recovery 自身、recovery.protected_partitions 名单）\n"
-            "需要 --force：宿主端会要求输入字面量 YES，设备端额外要求 --sha256。"
+            "需要 --force：宿主端会要求输入字面量 YES，设备端额外要求 sha256 并读回校验。"
         ),
         epilog=(
             "示例：\n"
@@ -543,8 +625,7 @@ def build_argparser() -> argparse.ArgumentParser:
         formatter_class=_RAW,
         help="把分区备份到本机文件",
         description=(
-            "host mount userdata 当 scratch → 设备端 recoveryctl backup\n"
-            "（dd | zstd -c）写到 scratch → host adb pull 到本机 → 清理 scratch。\n\n"
+            "设备端 recoveryctl backup 生成备份文件 → host adb pull 到本机 → 清理临时文件。\n\n"
             "默认 zstd 压缩；--compress=none 输出原始未压缩镜像（占空间但便于离线挂载）。\n\n"
             "要求设备处于 recovery 模式。"
         ),

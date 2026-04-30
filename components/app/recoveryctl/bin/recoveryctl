@@ -10,8 +10,8 @@
     recoveryctl mode                 -> 输出 "normal" 或 "recovery"
     recoveryctl list [--json]        -> 分区清单（来自 /etc/flange/recovery-config.json
                                         + 实时块设备状态）
-    recoveryctl flash <part> <img>   -> 校验+写入指定分区，要求 recovery 模式
-                                        与 --sha256 校验
+    recoveryctl flash <part> --size <n> --sha256 <hash>
+                                     -> 从 stdin 流式写入指定分区，要求 recovery 模式
     recoveryctl backup <part> <out>  -> 读取分区到文件，可选 zstd 压缩
     recoveryctl recovery             -> 通过 reboot("recovery") 一次性进入 recovery
     recoveryctl loader               -> 通过 reboot("loader") 进入 loader/download
@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import json
@@ -51,6 +52,7 @@ PROC_CMDLINE = Path("/proc/cmdline")
 PROC_DEVICE_TREE_COMPATIBLE = Path("/proc/device-tree/compatible")
 PROC_MOUNTINFO = Path("/proc/self/mountinfo")
 DEV_BY_PARTLABEL = Path("/dev/disk/by-partlabel")
+FLASH_LOCK_PATH = Path("/run/flange-recovery-flash.lock")
 
 NORMAL_LABEL = "flange"
 RECOVERY_LABEL = "flange-recovery"
@@ -60,6 +62,10 @@ BOOT_ONCE_RECOVERY = "recovery"
 MODE_NORMAL = "normal"
 MODE_RECOVERY = "recovery"
 MODE_LOADER = "loader"
+
+DEFAULT_FLASH_CHUNK_SIZE = 4 * 1024 * 1024
+MIN_FLASH_CHUNK_SIZE = 64 * 1024
+MAX_FLASH_CHUNK_SIZE = 16 * 1024 * 1024
 
 LINUX_REBOOT_MAGIC1 = 0xFEE1DEAD
 LINUX_REBOOT_MAGIC2 = 672274793
@@ -313,20 +319,17 @@ def read_extlinux_default(path: Path = EXTLINUX_PATH) -> str | None:
 # Flash 校验 + 写入
 # ──────────────────────────────────────────────────────────────────
 
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
 @dataclass
 class FlashRequest:
     partition: str
-    image_path: Path
-    sha256_expected: str | None = None
+    size_bytes: int
+    sha256_expected: str
     force: bool = False
-
-
-def sha256_of_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for buf in iter(lambda: f.read(chunk), b""):
-            h.update(buf)
-    return h.hexdigest()
+    chunk_size: int = DEFAULT_FLASH_CHUNK_SIZE
+    verify_readback: bool = False
 
 
 def validate_flash(
@@ -337,92 +340,159 @@ def validate_flash(
     mounted_lookup=find_mountpoint,
     partition_resolver=partition_to_block_device,
 ) -> Path:
-    """对 FlashRequest 执行所有写入前校验，返回目标 block device。
+    """校验流式刷写请求，返回目标 block device。
 
-    依赖项以参数注入便于单测替换：``block_size_lookup``, ``mounted_lookup``,
-    ``partition_resolver``。
+    设备端不再支持从 recovery 文件系统读取完整镜像文件；``flash`` 唯一
+    数据面是 stdin，必须完全依赖 host 传入的 size/sha256 控制面。所有能
+    提前失败的检查都在读取 stdin 前完成，避免不可写场景下消费传输数据。
     """
     entry = find_partition_entry(config, req.partition)
 
-    # 受保护分区：raw 类 / recovery 自身 / 显式 protected_partitions
+    if req.size_bytes <= 0:
+        raise RecoveryError(
+            f"镜像大小必须为正整数，得到 {req.size_bytes}；目标分区未改动"
+        )
+    if not _SHA256_RE.match(req.sha256_expected or ""):
+        raise RecoveryError(
+            f"--sha256 格式非法：{req.sha256_expected!r}；目标分区未改动"
+        )
+    if not (MIN_FLASH_CHUNK_SIZE <= req.chunk_size <= MAX_FLASH_CHUNK_SIZE):
+        raise RecoveryError(
+            f"chunk size 必须在 {MIN_FLASH_CHUNK_SIZE}.."
+            f"{MAX_FLASH_CHUNK_SIZE} bytes 之间；目标分区未改动"
+        )
+
     if entry.get("protected") and not req.force:
         raise ProtectedPartitionError(
             f"分区 {req.partition} 受保护，禁止直接写入。"
-            "如确需强制写入请添加 --force（仍会再做二次确认）。"
+            "如确需强制写入请添加 --force（目标分区未改动）。"
         )
-
-    # 二次校验：强制写入受保护分区时必须同时提供 --sha256，
-    # 避免在最敏感的分区上误写损坏镜像。
-    if entry.get("protected") and req.force and not req.sha256_expected:
-        raise RecoveryError(
-            f"--force 写入受保护分区 {req.partition} 时必须同时提供 --sha256，"
-            "以确保镜像未损坏。"
-        )
-
-    if not req.image_path.is_file():
-        raise RecoveryError(f"镜像文件不存在：{req.image_path}")
-
-    # sha256 校验
-    if req.sha256_expected:
-        actual = sha256_of_file(req.image_path)
-        if actual.lower() != req.sha256_expected.lower():
-            raise RecoveryError(
-                f"sha256 不匹配：期望 {req.sha256_expected}，实际 {actual}"
-            )
 
     dev = partition_resolver(req.partition)
-
-    # 大小不超分区
-    image_size = req.image_path.stat().st_size
     part_size = block_size_lookup(dev)
-    if image_size > part_size:
+    if req.size_bytes > part_size:
         raise RecoveryError(
-            f"镜像 {image_size} bytes 超过分区 {req.partition} 大小 {part_size} bytes"
+            f"镜像 {req.size_bytes} bytes 超过分区 {req.partition} "
+            f"大小 {part_size} bytes；目标分区未改动"
         )
 
-    # 挂载检查
     mountpoint = mounted_lookup(dev)
     if mountpoint:
         raise RecoveryError(
             f"分区 {req.partition} 当前已挂载于 {mountpoint}，请先卸载后再写入"
+            "（目标分区未改动）"
         )
 
     return dev
+
+
+@contextlib.contextmanager
+def flash_lock(path: Path = FLASH_LOCK_PATH):
+    """用 O_EXCL 文件锁阻止并发刷写。
+
+    recovery 里无需跨主机复杂锁语义；一个原子创建的 lock file 足以防止同一
+    设备上多个 recoveryctl 进程同时写块设备。
+    """
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as e:
+        raise RecoveryError(
+            f"已有刷写任务正在运行：{path}。请等待其结束后再试。"
+        ) from e
+    try:
+        os.write(fd, str(os.getpid()).encode("ascii"))
+        os.close(fd)
+        yield
+    finally:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _sha256_of_device_range(dev: Path, size: int, *, chunk: int) -> str:
+    h = hashlib.sha256()
+    with open(dev, "rb") as f:
+        remaining = size
+        while remaining > 0:
+            buf = f.read(min(chunk, remaining))
+            if not buf:
+                break
+            h.update(buf)
+            remaining -= len(buf)
+    return h.hexdigest()
 
 
 def do_flash(
     req: FlashRequest,
     config: dict,
     *,
-    runner=subprocess.run,
-    verify_readback: bool = True,
+    input_stream=None,
+    block_size_lookup=block_device_size_bytes,
+    mounted_lookup=find_mountpoint,
+    partition_resolver=partition_to_block_device,
+    sync_runner=subprocess.run,
+    fsync=os.fsync,
+    lock_path: Path = FLASH_LOCK_PATH,
 ) -> None:
-    """执行 dd 写入并 sync；可选读回 sha256 校验。"""
-    dev = validate_flash(req, config)
-    runner(
-        ["dd", f"if={req.image_path}", f"of={dev}", "bs=4M", "conv=fsync",
-         "status=none"],
-        check=True,
-    )
-    runner(["sync"], check=True)
+    """从 stdin 流式读取镜像并写入目标分区。
 
-    if not verify_readback or not req.sha256_expected:
-        return
-    image_size = req.image_path.stat().st_size
+    该函数不在设备文件系统中保存完整镜像；内存占用由 ``chunk_size`` 约束。
+    """
+    dev = validate_flash(
+        req, config,
+        block_size_lookup=block_size_lookup,
+        mounted_lookup=mounted_lookup,
+        partition_resolver=partition_resolver,
+    )
+    if input_stream is None:
+        input_stream = sys.stdin.buffer
+
+    written = 0
     h = hashlib.sha256()
-    with open(dev, "rb") as f:
-        remaining = image_size
-        while remaining > 0:
-            buf = f.read(min(1024 * 1024, remaining))
-            if not buf:
-                break
-            h.update(buf)
-            remaining -= len(buf)
-    digest = h.hexdigest()
-    if digest.lower() != req.sha256_expected.lower():
-        raise RecoveryError(
-            f"写入后读回校验失败：期望 {req.sha256_expected}，实际 {digest}"
-        )
+
+    with flash_lock(lock_path):
+        with open(dev, "r+b", buffering=0) as out:
+            while written < req.size_bytes:
+                want = min(req.chunk_size, req.size_bytes - written)
+                buf = input_stream.read(want)
+                if not buf:
+                    raise RecoveryError(
+                        f"stdin 提前结束：已写入 {written} bytes / "
+                        f"期望 {req.size_bytes} bytes，目标分区可能已部分写入。"
+                        "请重新刷写或从备份恢复。"
+                    )
+                out.write(buf)
+                h.update(buf)
+                written += len(buf)
+
+            extra = input_stream.read(1)
+            if extra:
+                raise RecoveryError(
+                    f"stdin 数据超过声明大小 {req.size_bytes} bytes，"
+                    "目标分区可能已部分写入。请重新刷写或从备份恢复。"
+                )
+
+            digest = h.hexdigest()
+            if digest.lower() != req.sha256_expected.lower():
+                raise RecoveryError(
+                    f"sha256 不匹配：期望 {req.sha256_expected}，实际 {digest}；"
+                    "目标分区可能已部分写入。请重新刷写或从备份恢复。"
+                )
+
+            out.flush()
+            fsync(out.fileno())
+
+        sync_runner(["sync"], check=True)
+
+        if req.verify_readback:
+            digest = _sha256_of_device_range(
+                dev, req.size_bytes, chunk=req.chunk_size)
+            if digest.lower() != req.sha256_expected.lower():
+                raise RecoveryError(
+                    f"写入后读回校验失败：期望 {req.sha256_expected}，"
+                    f"实际 {digest}"
+                )
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -775,12 +845,14 @@ def cmd_flash(args) -> int:
     config = load_recovery_config()
     req = FlashRequest(
         partition=args.partition,
-        image_path=Path(args.image),
+        size_bytes=args.size,
         sha256_expected=args.sha256,
         force=args.force,
+        chunk_size=args.chunk_size,
+        verify_readback=args.verify_readback or args.force,
     )
     do_flash(req, config)
-    print(f"✓ {args.partition} 已写入并 sync")
+    print(f"✓ {args.partition} 已流式写入并 sync")
     return 0
 
 
@@ -821,12 +893,19 @@ def build_argparser() -> argparse.ArgumentParser:
     p_list = sub.add_parser("list", help="列出分区状态")
     p_list.add_argument("--json", action="store_true", help="输出 JSON 格式")
 
-    p_flash = sub.add_parser("flash", help="向指定分区写入镜像")
+    p_flash = sub.add_parser("flash", help="从 stdin 流式写入指定分区")
     p_flash.add_argument("partition")
-    p_flash.add_argument("image")
-    p_flash.add_argument("--sha256", help="期望的镜像 sha256（强烈建议）")
+    p_flash.add_argument("--size", type=int, required=True,
+                         help="期望从 stdin 接收的镜像字节数")
+    p_flash.add_argument("--sha256", required=True,
+                         help="期望的 stdin 数据 sha256")
     p_flash.add_argument("--force", action="store_true",
                          help="强制写入受保护分区（双重确认）")
+    p_flash.add_argument("--chunk-size", type=int,
+                         default=DEFAULT_FLASH_CHUNK_SIZE,
+                         help="流式读写 chunk 大小，默认 4MiB")
+    p_flash.add_argument("--verify-readback", action="store_true",
+                         help="写入后从分区读回并校验 sha256")
 
     p_backup = sub.add_parser("backup", help="把分区备份到文件")
     p_backup.add_argument("partition")

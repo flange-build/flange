@@ -30,12 +30,19 @@ class FakeTransport(Transport):
     def __init__(self, *, mode_sequence: list[str] | None = None,
                  list_payload: dict | None = None,
                  shell_returncode: int = 0,
-                 shell_stderr: str = ""):
+                 shell_stderr: str = "",
+                 exec_in_returncode: int = 0,
+                 exec_in_stdout: str = "",
+                 exec_in_stderr: str = ""):
         self.mode_sequence = list(mode_sequence) if mode_sequence else ["recovery"]
         self.list_payload = list_payload
         self.shell_returncode = shell_returncode
         self.shell_stderr = shell_stderr
+        self.exec_in_returncode = exec_in_returncode
+        self.exec_in_stdout = exec_in_stdout
+        self.exec_in_stderr = exec_in_stderr
         self.shell_calls: list[list[str]] = []
+        self.exec_in_calls: list[tuple[list[str], Path]] = []
         self.push_calls: list[tuple[Path, str]] = []
         self.pull_calls: list[tuple[str, Path]] = []
         self.wait_calls: list[int] = []
@@ -76,6 +83,14 @@ class FakeTransport(Transport):
             }
             return ShellResult(0, json.dumps(payload), "")
         return ShellResult(self.shell_returncode, "", self.shell_stderr)
+
+    def exec_in(self, args: list[str], local_path: Path, **kwargs) -> ShellResult:
+        self.exec_in_calls.append((list(args), local_path))
+        return ShellResult(
+            self.exec_in_returncode,
+            self.exec_in_stdout,
+            self.exec_in_stderr,
+        )
 
     def interactive_shell(self) -> int:
         self.interactive_calls += 1
@@ -204,23 +219,63 @@ class TestFlashModeGuard:
         with pytest.raises(HostRecoveryError, match="镜像文件"):
             cmd_flash(t, partition="rootfs", image=Path("/no/such.img"))
 
-    def test_flash_pushes_and_invokes_recoveryctl(self, tmp_path, capsys):
+    def test_flash_streams_and_invokes_recoveryctl(self, tmp_path, capsys):
         img = tmp_path / "rootfs.img"
         img.write_bytes(b"\x00" * 16)
         t = FakeTransport(mode_sequence=["recovery"])
         rc = cmd_flash(t, partition="rootfs", image=img)
         assert rc == 0
-        # push 调用一次
-        assert len(t.push_calls) == 1
-        local, remote = t.push_calls[0]
+        assert t.push_calls == []
+        assert len(t.exec_in_calls) == 1
+        args, local = t.exec_in_calls[0]
         assert local == img
-        assert remote.endswith("/rootfs.img")
-        # 至少有一条 shell 调用是 recoveryctl flash
-        flash_calls = [c for c in t.shell_calls
-                       if c and c[0:2] == ["recoveryctl", "flash"]]
-        assert len(flash_calls) == 1
-        # sha256 参数附带
-        assert "--sha256" in flash_calls[0]
+        assert args[:3] == ["recoveryctl", "flash", "rootfs"]
+        assert "--size" in args
+        assert str(img.stat().st_size) in args
+        assert "--sha256" in args
+
+    def test_flash_force_streams_force_and_readback(self, tmp_path):
+        img = tmp_path / "boot.img"
+        img.write_bytes(b"\x00" * 16)
+        t = FakeTransport(mode_sequence=["recovery"])
+        rc = cmd_flash(
+            t, partition="boot", image=img, force=True,
+            prompt=lambda _: "YES",
+        )
+        assert rc == 0
+        args, _ = t.exec_in_calls[0]
+        assert "--force" in args
+        assert "--verify-readback" in args
+
+    def test_flash_rejects_file_changed_during_hash(self, tmp_path, monkeypatch):
+        from builder import recovery_host as rh
+
+        img = tmp_path / "rootfs.img"
+        img.write_bytes(b"before")
+        real_sha = rh._sha256_of_file
+
+        def mutating_sha(path):
+            digest = real_sha(path)
+            path.write_bytes(b"after")
+            return digest
+
+        monkeypatch.setattr(rh, "_sha256_of_file", mutating_sha)
+        t = FakeTransport(mode_sequence=["recovery"])
+        with pytest.raises(HostRecoveryError, match="传输前后发生变化"):
+            cmd_flash(t, partition="rootfs", image=img)
+        assert t.exec_in_calls == []
+
+    def test_flash_exec_in_failure_reports_partial_write_risk(self, tmp_path):
+        img = tmp_path / "rootfs.img"
+        img.write_bytes(b"\x00" * 16)
+        t = FakeTransport(
+            mode_sequence=["recovery"],
+            exec_in_returncode=7,
+            exec_in_stdout="stream stdout",
+            exec_in_stderr="stream stderr",
+        )
+        with pytest.raises(HostRecoveryError, match="可能已部分写入"):
+            cmd_flash(t, partition="rootfs", image=img)
 
 
 # ── list 格式化（§7.10） ────────────────────────────────────
