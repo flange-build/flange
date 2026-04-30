@@ -38,6 +38,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -331,6 +332,21 @@ def _status(line: str) -> None:
     print(flat, flush=True)
 
 
+def _parse_listen_spec(spec: str) -> int:
+    """解析 ``tcp:<port>``，返回端口号；非法格式报 RecoveryError。"""
+    if not spec.startswith("tcp:"):
+        raise RecoveryError(
+            f"--listen 仅支持 tcp:<port> 形式，得到 {spec!r}"
+        )
+    try:
+        port = int(spec[len("tcp:"):])
+    except ValueError as e:
+        raise RecoveryError(f"--listen 端口非法：{spec!r}") from e
+    if port < 0 or port > 65535:
+        raise RecoveryError(f"--listen 端口越界：{spec!r}")
+    return port
+
+
 def _listen_and_accept(port: int, *, timeout: float = 30.0):
     """在 127.0.0.1:port 上 bind+listen，返回 (实际端口, accepter)。
 
@@ -376,6 +392,7 @@ class FlashRequest:
     force: bool = False
     chunk_size: int = DEFAULT_FLASH_CHUNK_SIZE
     verify_readback: bool = False
+    listen_port: int = 0  # 0 表示动态分配
 
 
 def validate_flash(
@@ -473,17 +490,21 @@ def do_flash(
     req: FlashRequest,
     config: dict,
     *,
-    input_stream=None,
+    listen_func=_listen_and_accept,
     block_size_lookup=block_device_size_bytes,
     mounted_lookup=find_mountpoint,
     partition_resolver=partition_to_block_device,
     sync_runner=subprocess.run,
     fsync=os.fsync,
     lock_path: Path = FLASH_LOCK_PATH,
+    accept_timeout: float = 30.0,
 ) -> None:
-    """从 stdin 流式读取镜像并写入目标分区。
+    """从 ``--listen`` 端口接受一次连接，把 socket 当数据流写入分区。
 
-    该函数不在设备文件系统中保存完整镜像；内存占用由 ``chunk_size`` 约束。
+    调用方负责处理：
+    - 抛出 RecoveryError 的转 ``STATUS:FAIL``（在 main() 统一）
+    - listen+accept 之前由 validate_flash 把所有静态错误失败掉
+    - PORT=/READY/STATUS 的输出由本函数内部 + main() 共同负责
     """
     dev = validate_flash(
         req, config,
@@ -491,54 +512,69 @@ def do_flash(
         mounted_lookup=mounted_lookup,
         partition_resolver=partition_resolver,
     )
-    if input_stream is None:
-        input_stream = sys.stdin.buffer
-
-    written = 0
-    h = hashlib.sha256()
 
     with flash_lock(lock_path):
-        with open(dev, "r+b", buffering=0) as out:
-            while written < req.size_bytes:
-                want = min(req.chunk_size, req.size_bytes - written)
-                buf = input_stream.read(want)
-                if not buf:
+        port, accept_one = listen_func(req.listen_port, timeout=accept_timeout)
+        _status(f"PORT={port}")
+        _status("READY")
+
+        conn = accept_one()  # 阻塞，超时抛 accept-timeout
+        try:
+            with open(dev, "r+b", buffering=0) as out:
+                written = 0
+                h = hashlib.sha256()
+                last_progress = 0.0
+
+                while written < req.size_bytes:
+                    want = min(req.chunk_size, req.size_bytes - written)
+                    buf = conn.recv(want)
+                    if not buf:
+                        raise RecoveryError(
+                            f"已写入 {written} bytes / 期望 {req.size_bytes} bytes，"
+                            "目标分区可能已部分写入。请重新刷写或从备份恢复。"
+                        )
+                    out.write(buf)
+                    h.update(buf)
+                    written += len(buf)
+
+                    now = time.monotonic()
+                    if now - last_progress > 1.0:
+                        _status(f"PROGRESS:{written}/{req.size_bytes}")
+                        last_progress = now
+
+                # 检查超长：socket 不再有数据
+                extra = conn.recv(1)
+                if extra:
                     raise RecoveryError(
-                        f"stdin 提前结束：已写入 {written} bytes / "
-                        f"期望 {req.size_bytes} bytes，目标分区可能已部分写入。"
-                        "请重新刷写或从备份恢复。"
+                        f"socket 数据超过声明大小 {req.size_bytes} bytes，"
+                        "目标分区可能已部分写入。请重新刷写或从备份恢复。"
                     )
-                out.write(buf)
-                h.update(buf)
-                written += len(buf)
 
-            extra = input_stream.read(1)
-            if extra:
-                raise RecoveryError(
-                    f"stdin 数据超过声明大小 {req.size_bytes} bytes，"
-                    "目标分区可能已部分写入。请重新刷写或从备份恢复。"
-                )
+                digest = h.hexdigest()
+                if digest.lower() != req.sha256_expected.lower():
+                    raise RecoveryError(
+                        f"sha256 不匹配：期望 {req.sha256_expected}，实际 {digest}；"
+                        "目标分区可能已部分写入。请重新刷写或从备份恢复。"
+                    )
 
-            digest = h.hexdigest()
-            if digest.lower() != req.sha256_expected.lower():
-                raise RecoveryError(
-                    f"sha256 不匹配：期望 {req.sha256_expected}，实际 {digest}；"
-                    "目标分区可能已部分写入。请重新刷写或从备份恢复。"
-                )
+                out.flush()
+                fsync(out.fileno())
 
-            out.flush()
-            fsync(out.fileno())
+            sync_runner(["sync"], check=True)
 
-        sync_runner(["sync"], check=True)
-
-        if req.verify_readback:
-            digest = _sha256_of_device_range(
-                dev, req.size_bytes, chunk=req.chunk_size)
-            if digest.lower() != req.sha256_expected.lower():
-                raise RecoveryError(
-                    f"写入后读回校验失败：期望 {req.sha256_expected}，"
-                    f"实际 {digest}"
-                )
+            if req.verify_readback:
+                digest = _sha256_of_device_range(
+                    dev, req.size_bytes, chunk=req.chunk_size)
+                if digest.lower() != req.sha256_expected.lower():
+                    raise RecoveryError(
+                        f"写入后读回校验失败：期望 {req.sha256_expected}，"
+                        f"实际 {digest}"
+                    )
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -896,9 +932,10 @@ def cmd_flash(args) -> int:
         force=args.force,
         chunk_size=args.chunk_size,
         verify_readback=args.verify_readback or args.force,
+        listen_port=_parse_listen_spec(args.listen),
     )
     do_flash(req, config)
-    print(f"✓ {args.partition} 已流式写入并 sync")
+    _status("STATUS:OK")
     return 0
 
 
@@ -939,12 +976,12 @@ def build_argparser() -> argparse.ArgumentParser:
     p_list = sub.add_parser("list", help="列出分区状态")
     p_list.add_argument("--json", action="store_true", help="输出 JSON 格式")
 
-    p_flash = sub.add_parser("flash", help="从 stdin 流式写入指定分区")
+    p_flash = sub.add_parser("flash", help="从 socket 流式写入指定分区（--listen 必填）")
     p_flash.add_argument("partition")
     p_flash.add_argument("--size", type=int, required=True,
-                         help="期望从 stdin 接收的镜像字节数")
+                         help="期望从 socket 接收的镜像字节数")
     p_flash.add_argument("--sha256", required=True,
-                         help="期望的 stdin 数据 sha256")
+                         help="期望的镜像数据 sha256")
     p_flash.add_argument("--force", action="store_true",
                          help="强制写入受保护分区（双重确认）")
     p_flash.add_argument("--chunk-size", type=int,
@@ -952,6 +989,10 @@ def build_argparser() -> argparse.ArgumentParser:
                          help="流式读写 chunk 大小，默认 4MiB")
     p_flash.add_argument("--verify-readback", action="store_true",
                          help="写入后从分区读回并校验 sha256")
+    p_flash.add_argument("--listen", required=True,
+                         metavar="tcp:<port>",
+                         help="监听控制：tcp:0 表示由内核分配端口，"
+                              "tcp:<n> 表示固定端口")
 
     p_backup = sub.add_parser("backup", help="把分区备份到文件")
     p_backup.add_argument("partition")
@@ -999,6 +1040,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return handler(args) or 0
     except RecoveryError as e:
+        # listen 模式：错误同时打到 STATUS 行（host 解析）与 stderr（人类排障）
+        _status(f"STATUS:FAIL:{e}")
         print(f"recoveryctl: {e}", file=sys.stderr)
         return 1
 

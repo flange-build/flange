@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
-import io
 import json
+import socket as _socket
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -196,17 +197,13 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-class _FailingReadStream:
-    def read(self, size=-1):
-        raise AssertionError("preflight 失败时不应读取 stdin")
-
-
 class TestFlashArgparse:
     def test_flash_required_args_are_stream_control_plane(self, rc):
         ns = rc.build_argparser().parse_args([
             "flash", "rootfs",
             "--size", "1024",
             "--sha256", "a" * 64,
+            "--listen", "tcp:0",
         ])
         assert ns.cmd == "flash"
         assert ns.partition == "rootfs"
@@ -223,6 +220,7 @@ class TestFlashArgparse:
             "--force",
             "--chunk-size", "1048576",
             "--verify-readback",
+            "--listen", "tcp:0",
         ])
         assert ns.force is True
         assert ns.chunk_size == 1048576
@@ -243,6 +241,32 @@ class TestFlashArgparse:
                 "--size", "1024",
                 "--sha256", "a" * 64,
             ])
+
+    def test_flash_requires_listen(self, rc):
+        with pytest.raises(SystemExit):
+            rc.build_argparser().parse_args([
+                "flash", "rootfs",
+                "--size", "1024",
+                "--sha256", "a" * 64,
+            ])
+
+    def test_flash_listen_dynamic_port(self, rc):
+        ns = rc.build_argparser().parse_args([
+            "flash", "rootfs",
+            "--size", "1024",
+            "--sha256", "a" * 64,
+            "--listen", "tcp:0",
+        ])
+        assert ns.listen == "tcp:0"
+
+    def test_flash_listen_explicit_port(self, rc):
+        ns = rc.build_argparser().parse_args([
+            "flash", "rootfs",
+            "--size", "1024",
+            "--sha256", "a" * 64,
+            "--listen", "tcp:5555",
+        ])
+        assert ns.listen == "tcp:5555"
 
 
 class TestValidateFlash:
@@ -269,7 +293,7 @@ class TestValidateFlash:
                 partition_resolver=lambda n: Path(f"/dev/{n}"),
             )
 
-    def test_size_too_large_rejected_before_stdin_read(self, rc, tmp_path):
+    def test_size_too_large_rejected_before_listen_starts(self, rc, tmp_path):
         req = rc.FlashRequest(
             partition="rootfs",
             size_bytes=100,
@@ -277,16 +301,23 @@ class TestValidateFlash:
         )
         target = tmp_path / "rootfs.dev"
         target.write_bytes(b"\x00" * 50)
+        listen_called = {"yes": False}
+
+        def fake_listen(port, *, timeout):
+            listen_called["yes"] = True
+            raise AssertionError("preflight 失败不应 listen")
+
         with pytest.raises(rc.RecoveryError, match="未改动"):
             rc.do_flash(
                 req, _sample_config(),
-                input_stream=_FailingReadStream(),
+                listen_func=fake_listen,
                 block_size_lookup=lambda d: 50,
                 mounted_lookup=lambda d: None,
                 partition_resolver=lambda n: target,
                 sync_runner=lambda *a, **k: None,
                 lock_path=tmp_path / "flash.lock",
             )
+        assert listen_called["yes"] is False
 
     def test_protected_blocks_without_force(self, rc):
         req = rc.FlashRequest(
@@ -317,6 +348,28 @@ class TestValidateFlash:
             )
 
 
+def _make_socket_listen(data: bytes, *, close_after: bool = False):
+    """构造 listen_func + 后台 writer：把 ``data`` 通过 socketpair 投喂。
+
+    返回 ``(fake_listen, start_writer)``：调用 ``start_writer()`` 启动喂数线程。
+    """
+    server, client = _socket.socketpair()
+
+    def fake_listen(port, *, timeout):
+        return 1, lambda: server
+
+    def writer():
+        client.sendall(data)
+        client.shutdown(_socket.SHUT_WR)
+        if close_after:
+            client.close()
+
+    def start_writer():
+        threading.Thread(target=writer, daemon=True).start()
+
+    return fake_listen, start_writer
+
+
 class TestDoFlash:
     def test_stream_writes_bytes_and_validates_sha256(self, rc, tmp_path):
         data = b"flange-stream-data"
@@ -330,9 +383,12 @@ class TestDoFlash:
             chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
         )
 
+        fake_listen, start_writer = _make_socket_listen(data)
+        start_writer()
+
         rc.do_flash(
             req, _sample_config(),
-            input_stream=io.BytesIO(data),
+            listen_func=fake_listen,
             block_size_lookup=lambda d: 1024,
             mounted_lookup=lambda d: None,
             partition_resolver=lambda n: target,
@@ -343,7 +399,7 @@ class TestDoFlash:
         assert target.read_bytes()[:len(data)] == data
         assert runs == [(["sync"], {"check": True})]
 
-    def test_stdin_early_eof_reports_written_bytes(self, rc, tmp_path):
+    def test_short_socket_read_reports_written_bytes(self, rc, tmp_path):
         data = b"short"
         target = tmp_path / "rootfs.dev"
         target.write_bytes(b"\x00" * 1024)
@@ -354,10 +410,13 @@ class TestDoFlash:
             chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
         )
 
+        fake_listen, start_writer = _make_socket_listen(data, close_after=True)
+        start_writer()
+
         with pytest.raises(rc.RecoveryError, match="已写入 5 bytes"):
             rc.do_flash(
                 req, _sample_config(),
-                input_stream=io.BytesIO(data),
+                listen_func=fake_listen,
                 block_size_lookup=lambda d: 1024,
                 mounted_lookup=lambda d: None,
                 partition_resolver=lambda n: target,
@@ -376,10 +435,13 @@ class TestDoFlash:
             chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
         )
 
+        fake_listen, start_writer = _make_socket_listen(data)
+        start_writer()
+
         with pytest.raises(rc.RecoveryError, match="可能已部分写入"):
             rc.do_flash(
                 req, _sample_config(),
-                input_stream=io.BytesIO(data),
+                listen_func=fake_listen,
                 block_size_lookup=lambda d: 1024,
                 mounted_lookup=lambda d: None,
                 partition_resolver=lambda n: target,
@@ -402,10 +464,13 @@ class TestDoFlash:
         def corrupting_fsync(fd):
             target.write_bytes(b"corrupt" + b"\x00" * 1017)
 
+        fake_listen, start_writer = _make_socket_listen(data)
+        start_writer()
+
         with pytest.raises(rc.RecoveryError, match="读回校验失败"):
             rc.do_flash(
                 req, _sample_config(),
-                input_stream=io.BytesIO(data),
+                listen_func=fake_listen,
                 block_size_lookup=lambda d: 1024,
                 mounted_lookup=lambda d: None,
                 partition_resolver=lambda n: target,
@@ -426,10 +491,13 @@ class TestDoFlash:
             sha256_expected=_sha256(data),
         )
 
+        def fake_listen(port, *, timeout):
+            raise AssertionError("被锁拒绝时不应 listen")
+
         with pytest.raises(rc.RecoveryError, match="已有刷写任务"):
             rc.do_flash(
                 req, _sample_config(),
-                input_stream=io.BytesIO(data),
+                listen_func=fake_listen,
                 block_size_lookup=lambda d: 1024,
                 mounted_lookup=lambda d: None,
                 partition_resolver=lambda n: target,
@@ -710,7 +778,24 @@ class TestStatusHelper:
         assert "at block 5" in out
 
 
-import socket as _socket
+class TestParseListen:
+    def test_dynamic(self, rc):
+        assert rc._parse_listen_spec("tcp:0") == 0
+
+    def test_explicit_port(self, rc):
+        assert rc._parse_listen_spec("tcp:5555") == 5555
+
+    def test_invalid_prefix(self, rc):
+        with pytest.raises(rc.RecoveryError, match="--listen"):
+            rc._parse_listen_spec("udp:5555")
+
+    def test_invalid_port(self, rc):
+        with pytest.raises(rc.RecoveryError, match="--listen"):
+            rc._parse_listen_spec("tcp:not-a-num")
+
+    def test_out_of_range(self, rc):
+        with pytest.raises(rc.RecoveryError, match="--listen"):
+            rc._parse_listen_spec("tcp:99999")
 
 
 class TestListenAndAccept:
@@ -745,3 +830,115 @@ class TestListenAndAccept:
         assert port > 0
         with pytest.raises(rc.RecoveryError, match="accept-timeout"):
             accepter()
+
+
+class TestFlashListenMode:
+    """do_flash 在 --listen 模式下从注入的 socket 读取数据，并经
+    _status 输出 PORT/READY/STATUS 序列。"""
+
+    def test_normal_flow_emits_port_ready_status_ok(self, rc, tmp_path, capfd):
+        import threading
+
+        data = b"flange-listen-payload"
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 1024)
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=len(data),
+            sha256_expected=_sha256(data),
+            chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
+        )
+
+        # 用 socketpair 模拟内核 listen+accept：把 server 端作为
+        # accepter 的返回值；client 端供测试线程写入数据
+        server_sock, client_sock = _socket.socketpair()
+
+        def fake_listen(port, *, timeout):
+            return 12345, lambda: server_sock
+
+        def writer():
+            client_sock.sendall(data)
+            client_sock.shutdown(_socket.SHUT_WR)
+
+        t = threading.Thread(target=writer)
+        t.start()
+
+        rc.do_flash(
+            req, _sample_config(),
+            listen_func=fake_listen,
+            block_size_lookup=lambda d: 1024,
+            mounted_lookup=lambda d: None,
+            partition_resolver=lambda n: target,
+            sync_runner=lambda *a, **k: None,
+            lock_path=tmp_path / "flash.lock",
+        )
+
+        t.join(timeout=2.0)
+        out, _ = capfd.readouterr()
+        assert "PORT=12345" in out
+        assert "READY" in out
+        assert target.read_bytes()[:len(data)] == data
+
+    def test_preflight_fail_emits_no_ready(self, rc, tmp_path, capfd):
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 50)
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=100,  # > block size
+            sha256_expected="a" * 64,
+            chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
+        )
+        listen_called = {"yes": False}
+        def fake_listen(port, *, timeout):
+            listen_called["yes"] = True
+            raise AssertionError("preflight 失败时不应进入 listen")
+
+        with pytest.raises(rc.RecoveryError, match="未改动"):
+            rc.do_flash(
+                req, _sample_config(),
+                listen_func=fake_listen,
+                block_size_lookup=lambda d: 50,
+                mounted_lookup=lambda d: None,
+                partition_resolver=lambda n: target,
+                sync_runner=lambda *a, **k: None,
+                lock_path=tmp_path / "flash.lock",
+            )
+        assert listen_called["yes"] is False
+        out, _ = capfd.readouterr()
+        assert "PORT=" not in out
+        assert "READY" not in out
+
+    def test_short_socket_read_reports_partial(self, rc, tmp_path):
+        import threading
+
+        data = b"only-part"
+        target = tmp_path / "rootfs.dev"
+        target.write_bytes(b"\x00" * 1024)
+        req = rc.FlashRequest(
+            partition="rootfs",
+            size_bytes=len(data) + 100,
+            sha256_expected=_sha256(data),
+            chunk_size=rc.MIN_FLASH_CHUNK_SIZE,
+        )
+        server_sock, client_sock = _socket.socketpair()
+
+        def fake_listen(port, *, timeout):
+            return 12345, lambda: server_sock
+
+        def writer():
+            client_sock.sendall(data)
+            client_sock.shutdown(_socket.SHUT_WR)
+            client_sock.close()
+
+        threading.Thread(target=writer).start()
+
+        with pytest.raises(rc.RecoveryError, match="可能已部分写入"):
+            rc.do_flash(
+                req, _sample_config(),
+                listen_func=fake_listen,
+                block_size_lookup=lambda d: 1024,
+                mounted_lookup=lambda d: None,
+                partition_resolver=lambda n: target,
+                sync_runner=lambda *a, **k: None,
+                lock_path=tmp_path / "flash.lock",
+            )
