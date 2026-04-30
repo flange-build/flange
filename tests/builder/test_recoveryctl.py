@@ -690,3 +690,58 @@ class TestPartitionListing:
         rootfs = next(p for p in listing["partitions"] if p["name"] == "rootfs")
         assert idb["protected"] is True
         assert rootfs["protected"] is False
+
+
+# ── 控制行 helper（recovery-forward-flash） ────────────────────
+
+
+class TestStatusHelper:
+    def test_status_writes_line_and_flushes(self, rc, capfd):
+        rc._status("READY")
+        out, _ = capfd.readouterr()
+        assert out == "READY\n"
+
+    def test_status_strips_embedded_newlines(self, rc, capfd):
+        rc._status("STATUS:FAIL:io error\nat block 5")
+        out, _ = capfd.readouterr()
+        assert "\n" not in out[:-1]  # 末尾保留一个 \n
+        assert out.endswith("\n")
+        assert "io error" in out
+        assert "at block 5" in out
+
+
+import socket as _socket
+
+
+class TestListenAndAccept:
+    def test_returns_port_and_accepts_connection(self, rc):
+        # 启动 helper，并发起一个 client 连接
+        import threading
+
+        captured = {}
+        def run_listen():
+            port, accepter = rc._listen_and_accept(0, timeout=2.0)
+            captured["port"] = port
+            # _listen_and_accept 返回 (port, callable)；callable 在调用时
+            # 完成 accept，返回 conn
+            captured["conn"] = accepter()
+
+        t = threading.Thread(target=run_listen)
+        t.start()
+        # 等到 listen 完成（poll captured['port']）
+        while "port" not in captured:
+            if not t.is_alive():
+                break
+        assert "port" in captured
+        c = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        c.connect(("127.0.0.1", captured["port"]))
+        t.join(timeout=3.0)
+        assert "conn" in captured
+        c.close()
+        captured["conn"].close()
+
+    def test_accept_timeout_raises(self, rc):
+        port, accepter = rc._listen_and_accept(0, timeout=0.2)
+        assert port > 0
+        with pytest.raises(rc.RecoveryError, match="accept-timeout"):
+            accepter()

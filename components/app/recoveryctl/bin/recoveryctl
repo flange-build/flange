@@ -34,6 +34,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -313,6 +314,51 @@ def read_extlinux_default(path: Path = EXTLINUX_PATH) -> str | None:
     if not matches:
         return None
     return matches[0].group(1)
+
+
+# ──────────────────────────────────────────────────────────────────
+# 控制行（host ↔ device 协议）
+# ──────────────────────────────────────────────────────────────────
+
+def _status(line: str) -> None:
+    """打印一行 ASCII 控制信息到 stdout，立即 flush。
+
+    多行 reason 会被压平为单行（换行替换为空格），保证 host 端可以按
+    ``\\n`` 切分逐行解析。所有 PORT/READY/PROGRESS/STATUS 输出必须走
+    该 helper，避免被 PTY 行缓冲推迟到进程退出。
+    """
+    flat = line.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    print(flat, flush=True)
+
+
+def _listen_and_accept(port: int, *, timeout: float = 30.0):
+    """在 127.0.0.1:port 上 bind+listen，返回 (实际端口, accepter)。
+
+    - port=0 表示让内核分配端口；返回值里始终是已分配的实际端口。
+    - 调用方拿到 port 后必须立刻输出 ``PORT=`` 与 ``READY``，再调用
+      ``accepter()`` 阻塞等待一次连接。
+    - 超时未连入抛 ``RecoveryError("accept-timeout")``，调用方负责把
+      它转成 ``STATUS:FAIL:accept-timeout``。
+    - 监听 socket 的所有权由 accepter 接管：accepter 返回前自动 close
+      listen socket，避免悬挂。
+    """
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", port))
+    srv.listen(1)
+    actual_port = srv.getsockname()[1]
+    srv.settimeout(timeout)
+
+    def accept_one():
+        try:
+            conn, _ = srv.accept()
+            return conn
+        except socket.timeout as e:
+            raise RecoveryError("accept-timeout") from e
+        finally:
+            srv.close()
+
+    return actual_port, accept_one
 
 
 # ──────────────────────────────────────────────────────────────────
