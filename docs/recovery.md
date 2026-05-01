@@ -109,8 +109,8 @@ product / variant、分区表与保护策略，是设备端 `recoveryctl` 与宿
 |------|------|
 | `flange recovery enter` | 让设备从 normal 进入 recovery |
 | `flange recovery list [--json]` | 列出分区清单与挂载状态 |
-| `flange recovery flash <part> <img>` | 流式传输镜像并写入分区 |
-| `flange recovery backup <part> <out>` | 备份分区到本机文件（默认 zstd 压缩） |
+| `flange recovery flash <part> <img>` | adb forward + TCP socket 流式传输镜像并写入分区 |
+| `flange recovery backup <part> <out>` | adb forward + TCP socket 拉取分区数据到本机文件（默认 zstd 压缩，原子改名 `.partial → <out>`） |
 | `flange recovery shell` | 打开 ADB 交互式 shell |
 | `flange recovery reboot [normal\|recovery\|loader]` | 请求目标模式并重启（默认 normal） |
 
@@ -127,9 +127,12 @@ product / variant、分区表与保护策略，是设备端 `recoveryctl` 与宿
 ```bash
 recoveryctl mode                                   # 输出 normal 或 recovery
 recoveryctl list --json                            # 分区清单（合并 recovery-config 与实时状态）
-recoveryctl flash <part> --size <n> --sha256 <hash>
-                                                    # 从 stdin 流式写入并校验
-recoveryctl backup <part> <out> --compress zstd    # 读取分区并压缩备份
+recoveryctl flash <part> --size <n> --sha256 <hash> --listen tcp:<port>
+                                                    # 监听 127.0.0.1:<port>，
+                                                    # 从 socket 流式写入并校验
+recoveryctl backup <part> --listen tcp:<port> [--compress zstd|none]
+                                                    # 监听 127.0.0.1:<port>，
+                                                    # 把分区数据写入 socket
 recoveryctl recovery                               # 一次性进入 recovery 并重启
 recoveryctl loader                                 # 进入 loader/download 模式
 recoveryctl normal                                 # 回 normal 系统
@@ -163,12 +166,77 @@ recoveryctl normal                                 # 回 normal 系统
 - 目标分区当前未挂载（`/proc/self/mountinfo` 检查）
 - protected / force 策略通过
 
-默认写入流程：宿主机通过 `adb exec-in` 启动
-`recoveryctl flash <part> --size <bytes> --sha256 <hash>`，然后把本机
-镜像按 chunk 写入远端 stdin；设备端从 stdin 读多少就写多少到
-`/dev/disk/by-partlabel/<part>`，同时计算 sha256，最后执行 `fsync` / `sync`。
-普通分区默认只做输入流 sha256 校验；`--force` 写 protected 分区时默认增加
-写后读回校验。
+默认写入流程（forward + TCP listen）：
+
+1. 宿主机本地计算镜像 size / sha256
+2. 宿主机 `adb shell` 起设备端监听器：
+   `recoveryctl flash <part> --size <bytes> --sha256 <hash> --listen tcp:0`
+3. 设备端 preflight（分区存在 / 未挂载 / 容量够 / 加 flash_lock）后
+   `bind+listen` 在 127.0.0.1:<随机端口>，stdout 输出
+   `PORT=<n>` + `READY` 控制行
+4. 宿主机解析控制行后调 `adb forward tcp:0 tcp:<n>`，拿到本地端口 L，
+   `connect 127.0.0.1:L`
+5. 设备端 `accept`（30s 超时），从 socket 读多少就写多少到
+   `/dev/disk/by-partlabel/<part>`，同步计算 sha256
+6. 写完 → `fsync` / `sync` → 可选写后读回校验 → `STATUS:OK` / `STATUS:FAIL:<reason>`
+7. 宿主机通过 `__flange_rc__=<n>` 拿到设备端 exit code，清理 `adb forward`
+
+普通分区默认只做输入流 sha256 校验；`--force` 写 protected 分区时默认
+增加写后读回校验（host 用 `--verify-readback` 触发设备端读回比对）。
+
+### 控制行规范（device → host，单向）
+
+设备端通过 `adb shell` 的 stdout 发送以 `\n` 终止的单行 ASCII 控制行；
+宿主机按 `\n` 切行、`strip('\r')`、忽略所有未识别行。
+
+| 控制行 | 含义 |
+|---|---|
+| `PORT=<n>` | 设备端监听端口（十进制） |
+| `READY` | 已 `bind+listen`，可被 connect |
+| `PROGRESS:<sent>/<total>` | 进度汇报（设备端边写边发；host 端自己也跟踪 sent，二者择一展示） |
+| `STATUS:OK` | 整个会话成功结束 |
+| `STATUS:FAIL:<reason>` | 失败原因，如 `mounted` / `lock-held` / `sha-mismatch` / `short` / `over` / `readback-mismatch` |
+| `__flange_rc__=<n>` | 由 host transport wrap 注入的 exit code 标记，host 端解析后剥离 |
+
+### 排障
+
+#### 没看到 `PORT=` 控制行
+
+设备端没有起 listener。检查：
+
+- 设备是否处于 recovery 模式：`flange recovery shell` + `cat /proc/cmdline | grep flange.mode`
+- `recoveryctl` 是否安装：`adb shell which recoveryctl`
+- 设备端日志：`adb shell journalctl -t recoveryctl` 或重跑命令看 stderr
+
+#### 看到 `READY` 但 connect 失败
+
+`adb forward` 状态混乱（被旧进程占用 / 未清理）。处理：
+
+```bash
+adb forward --list           # 列出当前 forward 表
+adb forward --remove-all     # 全清掉
+# 重试 flange recovery flash
+```
+
+#### 看到 `STATUS:FAIL:<reason>`
+
+按 reason 处理：
+
+| reason | 含义 / 处置 |
+|---|---|
+| `mounted` | 目标分区被挂载，`umount` 后重试 |
+| `lock-held` | 已有 flash 会话占用 flash_lock，等 / 检查残留进程 |
+| `sha-mismatch` | 写入完成但 sha256 与 host 给的不一致；目标分区可能已写入坏数据，需要重刷 |
+| `short` | 数据流提前结束（USB/ADB 断开或 host 异常退出）；目标分区已部分写入，需要重刷 |
+| `over` | 数据流字节数超过 `--size` 声明值；可能 host 计算错误，重新校对镜像 |
+| `readback-mismatch` | `--verify-readback` 读回时 sha256 不一致；存储异常，换设备或换分区位置 |
+
+### backup 流程（forward + TCP listen）
+
+宿主机端写入 `<output>.partial`，等设备端 `STATUS:OK` 后用 `os.replace`
+原子改名为 `<output>`；任何失败路径下 `<output>.partial` 被清理，原
+`<output>` 不被破坏。设备端不再使用 `/tmp/flange-backup` 中转，直接把
+`/dev/disk/by-partlabel/<part>` 的数据写入 socket（可选 zstd 压缩）。
 
 ## 典型工作流
 
@@ -199,10 +267,20 @@ flange recovery reboot
 入口；具体方法因板子而异）。进入 recovery 后：
 
 ```bash
-adb exec-in "recoveryctl flash rootfs --size <bytes> --sha256 <hash>" \
-  < rootfs.img
+# 本地计算 size / sha256
+SIZE=$(stat -c %s rootfs.img)
+SHA=$(sha256sum rootfs.img | awk '{print $1}')
+# 串口里手动跑（PC 端无 host CLI 可用时）
+recoveryctl flash rootfs --size $SIZE --sha256 $SHA --listen tcp:5555 &
+# PC 上 adb forward + nc 把镜像推过去
+adb forward tcp:5555 tcp:5555
+nc 127.0.0.1 5555 < rootfs.img
+# 设备端待命串口看 STATUS:OK 再
 recoveryctl normal
 ```
+
+更常见的路径仍是直接在 PC 上跑 `flange recovery flash`，由 host CLI
+自动完成 forward + TCP 编排。
 
 ## 排障
 
@@ -286,10 +364,10 @@ flange recovery flash rootfs ...
 
 ### `flash` 报 "sha256 不匹配"
 
-宿主机会在传输前计算 sha256，设备端对 stdin 实际收到的数据同步计算
-sha256。任一环节不一致都会拒绝完成刷写。常见原因：USB/ADB 传输中断、镜像
-文件被实时修改、存储写入异常。此时目标分区可能已部分写入，应重新构建或确认
-镜像后重试 `flange recovery flash`。
+宿主机会在传输前计算 sha256，设备端对 socket 实际收到的数据同步计算
+sha256。任一环节不一致都会拒绝完成刷写（`STATUS:FAIL:sha-mismatch`）。
+常见原因：USB/ADB 传输中断、镜像文件被实时修改、存储写入异常。此时目标
+分区可能已部分写入，应重新构建或确认镜像后重试 `flange recovery flash`。
 
 ### `flash` 报 "受保护"
 

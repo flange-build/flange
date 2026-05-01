@@ -87,9 +87,15 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
   `flange_boot_once=recovery` 作为断电保持兜底，不持久修改 extlinux DEFAULT
 - **首版 transport = ADB over USB**：`flange recovery enter/list/flash/backup
   /shell/reboot` 通过 ADB 编排 `recoveryctl`；后续可扩展 USB DFU
-- **在线刷写默认流式写入**：`flange recovery flash` 通过 ADB `exec-in`
-  调用 `recoveryctl flash`，设备端从 stdin 读多少就写多少到目标分区，
-  不要求 recovery 文件系统暂存完整镜像
+- **在线刷写默认流式写入**：`flange recovery flash` 通过 `adb forward
+  + 设备端 127.0.0.1 TCP listen` 把镜像数据流式写入目标分区，控制面走
+  `adb shell` 的 stdout 单行 ASCII 控制行；不要求 recovery 文件系统
+  暂存完整镜像
+- **硬约束（数据面）**：recovery 数据面（flash/backup）必须走 `adb forward
+  + 设备端 127.0.0.1 TCP listen`；控制面走 `adb shell` 的 stdout 单行
+  ASCII 控制行（`PORT=`/`READY`/`PROGRESS:`/`STATUS:OK`/`STATUS:FAIL:`）。
+  禁止依赖 `adb exec:` service 或 `shell:v2` protocol —— flange 选用的
+  adbd（android-tools-4.2.2）不支持这两个 service
 - **安全策略**：bootloader/raw 与 recovery 自身默认 protected；强制写入
   需要 `--force` 双重确认（host 输入 `YES` + device 端要求 `--sha256`）
 - **不属于范围**：OTA / A/B 切换 / 网络烧录 / recovery 自升级
