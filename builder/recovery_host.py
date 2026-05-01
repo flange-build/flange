@@ -538,19 +538,45 @@ def cmd_flash(t: Transport, *, partition: str, image: Path,
     if force:
         args.extend(["--force", "--verify-readback"])
 
-    print(f"recoveryctl flash {partition} ...")
+    total = after[0]
+    print(f"recoveryctl flash {partition} ({total / 1024 / 1024:.1f} MiB) ...")
 
     def _stream_image(sock: _socket.socket) -> None:
+        sent = 0
+        last_print = 0.0
+        start = time.monotonic()
         with image.open("rb") as src:
             while True:
                 buf = src.read(4 * 1024 * 1024)
                 if not buf:
                     break
                 sock.sendall(buf)
+                sent += len(buf)
+                now = time.monotonic()
+                if now - last_print >= 0.5:
+                    elapsed = max(now - start, 0.001)
+                    rate = sent / elapsed / 1024 / 1024
+                    pct = sent / total * 100 if total else 100
+                    sys.stdout.write(
+                        f"\r  发送 {sent / 1024 / 1024:7.1f} / "
+                        f"{total / 1024 / 1024:7.1f} MiB ({pct:5.1f}%) "
+                        f"@ {rate:5.1f} MiB/s"
+                    )
+                    sys.stdout.flush()
+                    last_print = now
+        elapsed = max(time.monotonic() - start, 0.001)
+        rate = sent / elapsed / 1024 / 1024
+        sys.stdout.write(
+            f"\r  发送 {sent / 1024 / 1024:7.1f} / "
+            f"{total / 1024 / 1024:7.1f} MiB (100.0%) "
+            f"@ {rate:5.1f} MiB/s\n"
+        )
+        sys.stdout.flush()
         try:
             sock.shutdown(_socket.SHUT_WR)
         except OSError:
             pass
+        print("  数据发送完成，等待设备端校验 + 写盘 sync...")
 
     run_listener_session(
         t,
