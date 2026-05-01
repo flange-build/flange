@@ -35,9 +35,14 @@ DEPENDENCY_GRAPH: dict[str, list[str]] = {
 # 缓存命中时校验这些文件存在，防止 .build_hash 有效但产物被误删导致下游失败。
 # app 组件不校验：custom_packages 为空时无 deb 输出是合法状态。
 # recovery 组件仅在 enabled 时校验：禁用时无产物是合法状态（运行时短路）。
-REQUIRED_ARTIFACTS: dict[str, list[str]] = {
+# 值可以是通用产物列表，也可以是按 platform 分派的产物列表。
+REQUIRED_ARTIFACTS: dict[str, list[str] | dict[str, list[str]]] = {
     "kernel":     ["Image", "*.dtb"],
-    "bootloader": ["u-boot.itb", "idbloader.img", "miniloader.bin"],
+    "bootloader": {
+        "rockchip": ["u-boot.itb", "idbloader.img", "miniloader.bin"],
+        "allwinnera733": ["boot0_sdcard.bin", "boot0_ufs.bin",
+                          "boot_package.fex"],
+    },
     "boot":       ["boot.img"],
     "rootfs":     ["rootfs.img"],
     "recovery":   ["recovery.img"],
@@ -116,6 +121,10 @@ class BuildCache:
         required = REQUIRED_ARTIFACTS.get(component)
         if not required:
             return True
+        if isinstance(required, dict):
+            required = required.get(self.config.get("platform", ""), [])
+            if not required:
+                return True
         component_dir = self.target_dir / component
         if not component_dir.is_dir():
             return False

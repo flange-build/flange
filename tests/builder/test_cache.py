@@ -57,6 +57,30 @@ class TestBuildCache:
             assert not cache.is_up_to_date("bootloader")
 
 
+class TestBootloaderArtifactCache:
+    """bootloader 缓存产物校验。"""
+
+    def test_allwinnera733_bootloader使用allwinner产物判断缓存命中(self, tmp_path):
+        """A733 bootloader 产物存在且 hash 匹配时应读取上次构建状态。"""
+        config = {
+            "board": "radxa-cubie-a7z",
+            "product": "default",
+            "variant": "debug",
+            "arch": "aarch64",
+            "platform": "allwinnera733",
+            "soc": "a733",
+            "bootloader": {"target": "radxa-cubie-a7z"},
+        }
+        cache = BuildCache(config, target_base=tmp_path)
+        bootloader_dir = cache.target_dir / "bootloader"
+        bootloader_dir.mkdir(parents=True)
+        for name in ("boot0_sdcard.bin", "boot0_ufs.bin", "boot_package.fex"):
+            (bootloader_dir / name).write_bytes(b"fake")
+        (bootloader_dir / ".build_hash").write_text(cache.compute_hash("bootloader"))
+
+        assert cache.is_up_to_date("bootloader")
+
+
 class TestDirectoryHash:
     """_hash_directory 工具方法测试。"""
 
