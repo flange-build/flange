@@ -511,29 +511,19 @@ class TestDoFlash:
 
 class TestBackup:
     def test_unknown_partition(self, rc, tmp_path):
-        req = rc.BackupRequest(partition="garbage",
-                               output=tmp_path / "out.img.zst")
+        req = rc.BackupRequest(partition="garbage", listen_port=0)
         with pytest.raises(rc.RecoveryError, match="未知分区"):
             rc.do_backup(req, _sample_config())
 
     def test_unknown_compress(self, rc, tmp_path):
-        # 走 partition_resolver 替身，避免触达真实块设备
-        called = {"runner": False}
-        def fake_runner(*a, **k):
-            called["runner"] = True
-            class R: returncode = 0
-            return R()
-        req = rc.BackupRequest(partition="rootfs",
-                               output=tmp_path / "out",
+        req = rc.BackupRequest(partition="rootfs", listen_port=0,
                                compress="lzma")
         with pytest.raises(rc.RecoveryError, match="未知压缩"):
             rc.do_backup(
                 req, _sample_config(),
-                runner=fake_runner,
                 partition_resolver=lambda n: Path(f"/dev/{n}"),
                 block_size_lookup=lambda d: 1 << 30,
             )
-        assert called["runner"] is False
 
 
 # ── do_reboot ────────────────────────────────────────────────

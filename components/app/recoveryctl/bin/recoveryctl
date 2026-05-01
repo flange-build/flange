@@ -589,69 +589,74 @@ def do_flash(
 @dataclass
 class BackupRequest:
     partition: str
-    output: Path
-    compress: str = "zstd"  # "zstd" or "none"
+    listen_port: int
+    compress: str = "zstd"
+    chunk_size: int = DEFAULT_FLASH_CHUNK_SIZE
 
 
 def do_backup(
     req: BackupRequest,
     config: dict,
     *,
-    runner=subprocess.run,
+    listen_func=_listen_and_accept,
     partition_resolver=partition_to_block_device,
     block_size_lookup=block_device_size_bytes,
+    accept_timeout: float = 30.0,
 ) -> None:
-    """从分区读取数据写到文件或 stdout。
+    """把分区数据流式写到 socket（compress=zstd 时由 zstd 子进程压缩）。
 
-    ``req.output`` 为 ``Path("-")`` 时把数据流写到 stdout，由宿主机的
-    ``adb exec-out`` 直接拉走，不在设备落盘——这是默认推荐路径，因为
-    recovery rootfs 与 /tmp 都受空间限制（不到几百 MB）。
+    不在设备文件系统中暂存任何中转文件；output 由 host 端从 socket 读
+    并写入本机文件，host 端负责 .partial 改名等原子化逻辑。
     """
-    find_partition_entry(config, req.partition)  # 仅用于触发未知分区报错
+    find_partition_entry(config, req.partition)
+    if req.compress not in ("zstd", "none"):
+        raise RecoveryError(f"未知压缩格式：{req.compress}")
     dev = partition_resolver(req.partition)
 
-    is_stream = (str(req.output) == "-")
-    if not is_stream:
-        req.output.parent.mkdir(parents=True, exist_ok=True)
+    port, accept_one = listen_func(req.listen_port, timeout=accept_timeout)
+    _status(f"PORT={port}")
+    _status("READY")
 
-    if req.compress == "none":
-        if is_stream:
-            # dd if=dev of=/dev/stdout, 写到 stdout
-            runner(
-                ["dd", f"if={dev}", "bs=4M", "status=none"],
-                check=True,
-            )
+    conn = accept_one()
+    try:
+        if req.compress == "none":
+            with open(dev, "rb", buffering=0) as src:
+                while True:
+                    buf = src.read(req.chunk_size)
+                    if not buf:
+                        break
+                    conn.sendall(buf)
         else:
-            runner(
-                ["dd", f"if={dev}", f"of={req.output}", "bs=4M", "status=none"],
-                check=True,
-            )
-    elif req.compress == "zstd":
-        # dd | zstd -c (写 stdout) > {output_file 或 stdout}。
-        # ``-c`` 让 zstd 显式写 stdout，避免 ``-o /dev/stdout`` 被拒。
-        out_fp = sys.stdout.buffer if is_stream else req.output.open("wb")
-        try:
-            dd = subprocess.Popen(
-                ["dd", f"if={dev}", "bs=4M", "status=none"],
-                stdout=subprocess.PIPE,
-            )
-            zstd = subprocess.Popen(
-                ["zstd", "-q", "-T0", "-c"],
-                stdin=dd.stdout, stdout=out_fp,
-            )
-            if dd.stdout:
-                dd.stdout.close()
-            zstd_rc = zstd.wait()
-            dd_rc = dd.wait()
-            if dd_rc != 0 or zstd_rc != 0:
-                raise RecoveryError(
-                    f"备份失败：dd rc={dd_rc}, zstd rc={zstd_rc}"
+            with open(dev, "rb", buffering=0) as src:
+                zstd = subprocess.Popen(
+                    ["zstd", "-q", "-T0", "-c"],
+                    stdin=subprocess.PIPE,
+                    stdout=conn.fileno(),
                 )
-        finally:
-            if not is_stream:
-                out_fp.close()
-    else:
-        raise RecoveryError(f"未知压缩格式：{req.compress}")
+                try:
+                    while True:
+                        buf = src.read(req.chunk_size)
+                        if not buf:
+                            break
+                        zstd.stdin.write(buf)
+                    zstd.stdin.close()
+                    rc_zstd = zstd.wait()
+                    if rc_zstd != 0:
+                        raise RecoveryError(f"zstd 退出 {rc_zstd}")
+                finally:
+                    try:
+                        zstd.stdin.close()
+                    except (BrokenPipeError, OSError):
+                        pass
+                    if zstd.poll() is None:
+                        zstd.terminate()
+                        zstd.wait()
+    finally:
+        try:
+            conn.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        conn.close()
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -949,11 +954,12 @@ def cmd_backup(args) -> int:
     config = load_recovery_config()
     req = BackupRequest(
         partition=args.partition,
-        output=Path(args.output),
+        listen_port=_parse_listen_spec(args.listen),
         compress=args.compress,
+        chunk_size=args.chunk_size,
     )
     do_backup(req, config)
-    print(f"✓ {args.partition} 已备份至 {req.output}")
+    _status("STATUS:OK")
     return 0
 
 
@@ -999,10 +1005,17 @@ def build_argparser() -> argparse.ArgumentParser:
                          help="监听控制：tcp:0 表示由内核分配端口，"
                               "tcp:<n> 表示固定端口")
 
-    p_backup = sub.add_parser("backup", help="把分区备份到文件")
+    p_backup = sub.add_parser("backup", help="把分区流式备份到 socket（--listen 必填）")
     p_backup.add_argument("partition")
-    p_backup.add_argument("output")
-    p_backup.add_argument("--compress", default="zstd", choices=["zstd", "none"])
+    p_backup.add_argument("--listen", required=True,
+                          metavar="tcp:<port>",
+                          help="监听控制：tcp:0 让内核分配端口")
+    p_backup.add_argument("--compress", default="zstd",
+                          choices=["zstd", "none"],
+                          help="压缩格式，默认 zstd")
+    p_backup.add_argument("--chunk-size", type=int,
+                          default=DEFAULT_FLASH_CHUNK_SIZE,
+                          help="读块大小")
 
     p_recovery = sub.add_parser(
         "recovery",
