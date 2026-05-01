@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
@@ -26,23 +27,49 @@ from builder.recovery_host import (
 # ── 假 transport：把所有调用记录下来 ────────────────────────────
 
 
+class _FakeStreamingProc:
+    """模拟 shell_streaming 返回的 Popen：按预设序列吐 stdout 行。"""
+
+    def __init__(self, lines: list[str], returncode: int = 0):
+        text = "".join((l if l.endswith("\n") else l + "\n") for l in lines)
+        self.stdout = io.StringIO(text)
+        self.stderr = io.StringIO("")
+        self._rc = returncode
+
+    def wait(self, timeout=None):
+        return self._rc
+
+    def kill(self):
+        self._rc = -9
+
+    def poll(self):
+        return self._rc
+
+
 class FakeTransport(Transport):
     def __init__(self, *, mode_sequence: list[str] | None = None,
                  list_payload: dict | None = None,
                  shell_returncode: int = 0,
                  shell_stderr: str = "",
-                 exec_in_returncode: int = 0,
-                 exec_in_stdout: str = "",
-                 exec_in_stderr: str = ""):
+                 streaming_lines: list[str] | None = None,
+                 streaming_returncode: int = 0,
+                 forward_local_port: int = 44321):
         self.mode_sequence = list(mode_sequence) if mode_sequence else ["recovery"]
         self.list_payload = list_payload
         self.shell_returncode = shell_returncode
         self.shell_stderr = shell_stderr
-        self.exec_in_returncode = exec_in_returncode
-        self.exec_in_stdout = exec_in_stdout
-        self.exec_in_stderr = exec_in_stderr
+        self.streaming_lines = list(streaming_lines or [
+            "PORT=7654",
+            "READY",
+            "STATUS:OK",
+            "__flange_rc__=0",
+        ])
+        self.streaming_returncode = streaming_returncode
+        self.forward_local_port = forward_local_port
         self.shell_calls: list[list[str]] = []
-        self.exec_in_calls: list[tuple[list[str], Path]] = []
+        self.shell_streaming_calls: list[list[str]] = []
+        self.forward_calls: list[int] = []
+        self.forward_remove_calls: list[int] = []
         self.push_calls: list[tuple[Path, str]] = []
         self.pull_calls: list[tuple[str, Path]] = []
         self.wait_calls: list[int] = []
@@ -84,13 +111,16 @@ class FakeTransport(Transport):
             return ShellResult(0, json.dumps(payload), "")
         return ShellResult(self.shell_returncode, "", self.shell_stderr)
 
-    def exec_in(self, args: list[str], local_path: Path, **kwargs) -> ShellResult:
-        self.exec_in_calls.append((list(args), local_path))
-        return ShellResult(
-            self.exec_in_returncode,
-            self.exec_in_stdout,
-            self.exec_in_stderr,
-        )
+    def shell_streaming(self, args: list[str]):
+        self.shell_streaming_calls.append(list(args))
+        return _FakeStreamingProc(self.streaming_lines, self.streaming_returncode)
+
+    def forward(self, remote_port: int) -> int:
+        self.forward_calls.append(remote_port)
+        return self.forward_local_port
+
+    def forward_remove(self, local_port: int) -> None:
+        self.forward_remove_calls.append(local_port)
 
     def interactive_shell(self) -> int:
         self.interactive_calls += 1
@@ -219,33 +249,65 @@ class TestFlashModeGuard:
         with pytest.raises(HostRecoveryError, match="镜像文件"):
             cmd_flash(t, partition="rootfs", image=Path("/no/such.img"))
 
-    def test_flash_streams_and_invokes_recoveryctl(self, tmp_path, capsys):
+    def test_flash_streams_and_invokes_recoveryctl(self, tmp_path, monkeypatch):
+        from builder import recovery_host as rh
+        import socket as _socket
+        import threading
+
         img = tmp_path / "rootfs.img"
         img.write_bytes(b"\x00" * 16)
         t = FakeTransport(mode_sequence=["recovery"])
+
+        server, client = _socket.socketpair()
+        monkeypatch.setattr(rh, "_connect_local", lambda h, p: client)
+
+        received = []
+
+        def reader():
+            while True:
+                buf = server.recv(4096)
+                if not buf:
+                    break
+                received.append(buf)
+
+        threading.Thread(target=reader, daemon=True).start()
+
         rc = cmd_flash(t, partition="rootfs", image=img)
         assert rc == 0
         assert t.push_calls == []
-        assert len(t.exec_in_calls) == 1
-        args, local = t.exec_in_calls[0]
-        assert local == img
+        assert len(t.shell_streaming_calls) == 1
+        args = t.shell_streaming_calls[0]
         assert args[:3] == ["recoveryctl", "flash", "rootfs"]
         assert "--size" in args
-        assert str(img.stat().st_size) in args
         assert "--sha256" in args
+        assert "--listen" in args
+        assert t.forward_calls == [7654]
 
-    def test_flash_force_streams_force_and_readback(self, tmp_path):
+    def test_flash_force_streams_force_and_readback(self, tmp_path, monkeypatch):
+        from builder import recovery_host as rh
+        import socket as _socket
+        import threading
+
         img = tmp_path / "boot.img"
         img.write_bytes(b"\x00" * 16)
         t = FakeTransport(mode_sequence=["recovery"])
+
+        server, client = _socket.socketpair()
+        monkeypatch.setattr(rh, "_connect_local", lambda h, p: client)
+        threading.Thread(
+            target=lambda: [server.recv(4096) for _ in range(4)],
+            daemon=True,
+        ).start()
+
         rc = cmd_flash(
             t, partition="boot", image=img, force=True,
             prompt=lambda _: "YES",
         )
         assert rc == 0
-        args, _ = t.exec_in_calls[0]
+        args = t.shell_streaming_calls[0]
         assert "--force" in args
         assert "--verify-readback" in args
+        assert "--listen" in args
 
     def test_flash_rejects_file_changed_during_hash(self, tmp_path, monkeypatch):
         from builder import recovery_host as rh
@@ -263,17 +325,30 @@ class TestFlashModeGuard:
         t = FakeTransport(mode_sequence=["recovery"])
         with pytest.raises(HostRecoveryError, match="传输前后发生变化"):
             cmd_flash(t, partition="rootfs", image=img)
-        assert t.exec_in_calls == []
+        assert t.shell_streaming_calls == []
 
-    def test_flash_exec_in_failure_reports_partial_write_risk(self, tmp_path):
+    def test_flash_failure_reports_partial_write_risk(self, tmp_path, monkeypatch):
+        from builder import recovery_host as rh
+        import socket as _socket
+        import threading
+
         img = tmp_path / "rootfs.img"
         img.write_bytes(b"\x00" * 16)
         t = FakeTransport(
             mode_sequence=["recovery"],
-            exec_in_returncode=7,
-            exec_in_stdout="stream stdout",
-            exec_in_stderr="stream stderr",
+            streaming_lines=[
+                "PORT=7654", "READY",
+                "STATUS:FAIL:sha-mismatch",
+                "__flange_rc__=1",
+            ],
+            streaming_returncode=1,
         )
+        server, client = _socket.socketpair()
+        monkeypatch.setattr(rh, "_connect_local", lambda h, p: client)
+        threading.Thread(
+            target=lambda: [server.recv(4096) for _ in range(4)],
+            daemon=True,
+        ).start()
         with pytest.raises(HostRecoveryError, match="可能已部分写入"):
             cmd_flash(t, partition="rootfs", image=img)
 
@@ -320,20 +395,38 @@ class TestList:
 
 
 class TestBackup:
-    def test_backup_pulls_remote(self, tmp_path):
+    def test_backup_streams_to_partial_then_renames(self, tmp_path, monkeypatch):
+        from builder import recovery_host as rh
+        import socket as _socket
+        import threading
+
         out = tmp_path / "rootfs-backup.img.zst"
+        payload = b"compressed-bytes" * 100
+
+        server, client = _socket.socketpair()
+
+        def writer():
+            server.sendall(payload)
+            server.shutdown(_socket.SHUT_WR)
+            server.close()
+
+        threading.Thread(target=writer).start()
+
+        monkeypatch.setattr(rh, "_connect_local", lambda h, p: client)
+
         t = FakeTransport(mode_sequence=["recovery"])
         rc = cmd_backup(t, partition="rootfs", output=out)
         assert rc == 0
-        # 远端 backup 命令调用
-        backup_calls = [c for c in t.shell_calls if c[0:2] == ["recoveryctl", "backup"]]
-        assert len(backup_calls) == 1
-        assert "--compress" in backup_calls[0]
-        # pull 调用一次
-        assert len(t.pull_calls) == 1
-        assert t.pull_calls[0][1] == out
-        # 文件已落盘
         assert out.exists()
+        assert out.read_bytes() == payload
+        assert not (tmp_path / "rootfs-backup.img.zst.partial").exists()
+        assert t.push_calls == []
+        assert t.pull_calls == []
+        backup_calls = [c for c in t.shell_streaming_calls
+                        if c[0:2] == ["recoveryctl", "backup"]]
+        assert len(backup_calls) == 1
+        assert "--listen" in backup_calls[0]
+        assert "--compress" in backup_calls[0]
 
     def test_backup_in_normal_mode_rejected(self, tmp_path):
         t = FakeTransport(mode_sequence=["normal"])

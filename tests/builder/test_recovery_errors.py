@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
 import types
 from pathlib import Path
@@ -53,11 +54,36 @@ def rc():
 # ── 重用 §7 中的 FakeTransport 雏形 ────────────────────────────
 
 
+class _FakeStreamingProc:
+    def __init__(self, lines, returncode=0):
+        text = "".join((l if l.endswith("\n") else l + "\n") for l in lines)
+        self.stdout = io.StringIO(text)
+        self.stderr = io.StringIO("")
+        self._rc = returncode
+
+    def wait(self, timeout=None):
+        return self._rc
+
+    def kill(self):
+        self._rc = -9
+
+    def poll(self):
+        return self._rc
+
+
 class FakeTransport(Transport):
-    def __init__(self, *, mode: str = "recovery"):
+    def __init__(self, *, mode: str = "recovery",
+                 streaming_lines=None,
+                 streaming_returncode: int = 0):
         self.mode = mode
+        self.streaming_lines = list(streaming_lines or [
+            "PORT=7654", "READY", "STATUS:OK", "__flange_rc__=0",
+        ])
+        self.streaming_returncode = streaming_returncode
         self.shell_calls: list[list[str]] = []
-        self.exec_in_calls: list[tuple[list[str], Path]] = []
+        self.shell_streaming_calls: list[list[str]] = []
+        self.forward_calls: list[int] = []
+        self.forward_remove_calls: list[int] = []
         self.push_calls: list = []
 
     def wait(self, timeout: int = 30) -> None:
@@ -75,9 +101,16 @@ class FakeTransport(Transport):
             return ShellResult(0, self.mode + "\n", "")
         return ShellResult(0, "", "")
 
-    def exec_in(self, args: list[str], local_path: Path, **kwargs) -> ShellResult:
-        self.exec_in_calls.append((list(args), local_path))
-        return ShellResult(0, "", "")
+    def shell_streaming(self, args):
+        self.shell_streaming_calls.append(list(args))
+        return _FakeStreamingProc(self.streaming_lines, self.streaming_returncode)
+
+    def forward(self, remote_port):
+        self.forward_calls.append(remote_port)
+        return 44321
+
+    def forward_remove(self, local_port):
+        self.forward_remove_calls.append(local_port)
 
     def interactive_shell(self) -> int:
         return 0
@@ -103,24 +136,44 @@ class TestForceConfirmation:
             cmd_flash(t, partition="rootfs", image=img, force=True,
                       prompt=lambda *_: "yes")
 
-    def test_uppercase_yes_proceeds(self, tmp_path):
+    def test_uppercase_yes_proceeds(self, tmp_path, monkeypatch):
+        from builder import recovery_host as rh
+        import socket as _socket
+        import threading
+
         img = tmp_path / "raw.img"
         img.write_bytes(b"\x00" * 8)
         t = FakeTransport()
+        server, client = _socket.socketpair()
+        monkeypatch.setattr(rh, "_connect_local", lambda h, p: client)
+        threading.Thread(
+            target=lambda: [server.recv(4096) for _ in range(4)],
+            daemon=True,
+        ).start()
         rc = cmd_flash(t, partition="rootfs", image=img, force=True,
                        prompt=lambda *_: "YES")
         assert rc == 0
         # --force 应被透传到 recoveryctl flash
-        assert len(t.exec_in_calls) == 1
-        args, _ = t.exec_in_calls[0]
+        assert len(t.shell_streaming_calls) == 1
+        args = t.shell_streaming_calls[0]
         assert args[0:2] == ["recoveryctl", "flash"]
         assert "--force" in args
 
-    def test_no_prompt_without_force(self, tmp_path):
+    def test_no_prompt_without_force(self, tmp_path, monkeypatch):
         """非 force 路径不应触发 prompt。"""
+        from builder import recovery_host as rh
+        import socket as _socket
+        import threading
+
         img = tmp_path / "raw.img"
         img.write_bytes(b"\x00" * 8)
         t = FakeTransport()
+        server, client = _socket.socketpair()
+        monkeypatch.setattr(rh, "_connect_local", lambda h, p: client)
+        threading.Thread(
+            target=lambda: [server.recv(4096) for _ in range(4)],
+            daemon=True,
+        ).start()
         prompt_calls = []
         rc = cmd_flash(
             t, partition="rootfs", image=img, force=False,
@@ -128,7 +181,7 @@ class TestForceConfirmation:
         )
         assert rc == 0
         assert prompt_calls == []
-        assert len(t.exec_in_calls) == 1
+        assert len(t.shell_streaming_calls) == 1
 
 
 # ── 8.2 device 侧 --force + 必须 --sha256 ─────────────────────

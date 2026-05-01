@@ -4,14 +4,14 @@
 
   flange recovery enter            -> 让设备从 normal 进入 recovery
   flange recovery list             -> 拉取并格式化分区清单
-  flange recovery flash <p> <img>  -> 通过 exec-in 流式触发 recoveryctl flash
-  flange recovery backup <p> <out> -> 触发 recoveryctl backup 并 pull 回宿主机
+  flange recovery flash <p> <img>  -> adb forward + 设备端 TCP listen 流式刷写
+  flange recovery backup <p> <out> -> adb forward + 设备端 TCP listen 流式备份
   flange recovery shell            -> 打开交互式 ADB shell
   flange recovery reboot [target]  -> recoveryctl normal|recovery|loader
 
 Transport 层（``AdbTransport``）抽象了 ``wait / push / pull / shell /
-exec_in / interactive_shell``，便于后续替换 USB DFU 等其他通道，且测试时可注入
-``FakeTransport`` 不依赖真实 adb。
+shell_streaming / forward / forward_remove / interactive_shell``，便于后续
+替换 USB DFU 等其他通道，且测试时可注入 ``FakeTransport`` 不依赖真实 adb。
 """
 
 from __future__ import annotations
@@ -19,20 +19,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import re
 import shlex
 import shutil
+import socket as _socket
 import subprocess
 import sys
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-
-# Recovery rootfs 通常 < 512MB（base + apps + 内核模块后剩余 < 50MB），无法
-# 容纳数百 MB 的 backup 镜像。flash 已改为 exec-in 流式写入，不再依赖该目录。
-REMOTE_BACKUP_DIR = "/tmp/flange-backup"
-DEFAULT_STREAM_CHUNK_SIZE = 4 * 1024 * 1024
 
 
 class HostRecoveryError(RuntimeError):
@@ -66,7 +62,21 @@ class Transport:
     def shell(self, args: list[str], *, capture: bool = True) -> ShellResult:
         raise NotImplementedError
 
-    def exec_in(self, args: list[str], local_path: Path, **kwargs) -> ShellResult:
+    def shell_streaming(self, args: list[str]) -> subprocess.Popen:
+        """启动 ``adb shell`` 但返回未结束的 Popen，调用方逐行读 stdout。
+
+        stdout/stderr 都被合并到 stdout（adb shell 默认行为），文本模式，
+        line-buffered。命令行包装 __flange_rc__ marker 以便 host 端拿到
+        远端真实退出码。
+        """
+        raise NotImplementedError
+
+    def forward(self, remote_port: int) -> int:
+        """``adb forward tcp:0 tcp:<remote>``，返回 host 本地端口号。"""
+        raise NotImplementedError
+
+    def forward_remove(self, local_port: int) -> None:
+        """``adb forward --remove tcp:<local>``，幂等。"""
         raise NotImplementedError
 
     def interactive_shell(self) -> int:
@@ -84,92 +94,51 @@ class AdbTransport(Transport):
                 " PATH 中加入 platform-tools 目录。"
             )
 
-    def exec_stream(self, args: list[str], local_path: Path) -> int:
-        """``adb exec-out`` —— 把远端命令的 stdout 直接写到本地文件。
+    def shell_streaming(self, args: list[str]) -> subprocess.Popen:
+        """启动 ``adb shell <wrapped>`` 并返回未结束的 Popen。
 
-        用于备份等"远端不能/不应在设备落盘"的场景。stderr 仍捕获到内存
-        以便诊断。返回远端命令退出码（exec-out 透传 rc）。
+        用法：调用方 readline() proc.stdout 至 EOF，然后 proc.wait()；
+        stdout 是文本模式（utf-8），含设备端进程合并 stderr 后的全部
+        输出 + 末行 ``__flange_rc__=<int>`` marker。
         """
         cmdline = shlex.join(args)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        with local_path.open("wb") as out:
-            r = subprocess.run(
-                [self.adb, "exec-out", cmdline],
-                stdout=out, stderr=subprocess.PIPE, check=False,
-            )
-        return r.returncode
-
-    def exec_in(
-        self,
-        args: list[str],
-        local_path: Path,
-        *,
-        chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE,
-        progress=None,
-    ) -> ShellResult:
-        """``adb exec-in`` —— 把本地文件流式写到远端命令 stdin。
-
-        不能用 ``subprocess.run(input=...)``，否则 1GB 级镜像会被读入 host
-        内存。这里用 Popen + chunk 循环写 stdin，并用后台线程持续 drain
-        stdout/stderr，避免设备端少量输出阻塞传输。
-        """
-        cmdline = shlex.join(args)
-        proc = subprocess.Popen(
-            [self.adb, "exec-in", cmdline],
-            stdin=subprocess.PIPE,
+        wrapped = f"{cmdline}; printf '\\n{self._RC_MARKER}=%d\\n' \"$?\""
+        return subprocess.Popen(
+            [self.adb, "shell", wrapped],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
-        stdout_chunks: list[bytes] = []
-        stderr_chunks: list[bytes] = []
 
-        def _drain(pipe, chunks: list[bytes]) -> None:
-            if pipe is None:
-                return
-            data = pipe.read()
-            if data:
-                chunks.append(data)
-
-        stdout_thread = threading.Thread(
-            target=_drain, args=(proc.stdout, stdout_chunks), daemon=True)
-        stderr_thread = threading.Thread(
-            target=_drain, args=(proc.stderr, stderr_chunks), daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
-
-        def _close_stdin() -> None:
-            if not proc.stdin:
-                return
-            try:
-                proc.stdin.close()
-            except BrokenPipeError:
-                pass
-
-        sent = 0
-        total = local_path.stat().st_size
+    def forward(self, remote_port: int) -> int:
+        """``adb forward tcp:0 tcp:<remote>``：让 host adb server 在
+        本机分配一个动态端口，转发到设备 127.0.0.1:<remote>。返回本地端口。
+        """
+        r = self._run(["forward", "tcp:0", f"tcp:{remote_port}"])
+        if r.returncode != 0:
+            raise HostRecoveryError(
+                f"adb forward 失败：{r.stderr.strip() or r.stdout.strip()}"
+            )
+        line = (r.stdout or "").strip()
         try:
-            with local_path.open("rb") as src:
-                while True:
-                    buf = src.read(chunk_size)
-                    if not buf:
-                        break
-                    assert proc.stdin is not None
-                    proc.stdin.write(buf)
-                    sent += len(buf)
-                    if progress:
-                        progress(sent, total)
-            _close_stdin()
-        except BrokenPipeError:
-            # 远端 preflight 失败时可能先退出并关闭 stdin；保留输出给上层。
-            _close_stdin()
-        finally:
-            rc = proc.wait()
-            stdout_thread.join()
-            stderr_thread.join()
+            return int(line)
+        except ValueError as e:
+            raise HostRecoveryError(
+                f"adb forward 输出不是端口号：{line!r}"
+            ) from e
 
-        stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
-        stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
-        return ShellResult(returncode=rc, stdout=stdout, stderr=stderr)
+    def forward_remove(self, local_port: int) -> None:
+        """``adb forward --remove tcp:<local>``。重复调用安全。"""
+        r = self._run(["forward", "--remove", f"tcp:{local_port}"])
+        if r.returncode == 0:
+            return
+        msg = (r.stderr or r.stdout or "").lower()
+        if "not found" in msg or "no listener" in msg:
+            return
+        raise HostRecoveryError(
+            f"adb forward --remove 失败：{r.stderr.strip() or r.stdout.strip()}"
+        )
 
     def _run(self, args: list[str], *, capture: bool = True,
              stdin=None) -> subprocess.CompletedProcess:
@@ -391,9 +360,142 @@ def _file_fingerprint(path: Path) -> tuple[int, int, int]:
     return (st.st_size, st.st_mtime_ns, st.st_ino)
 
 
+# ──────────────────────────────────────────────────────────────────
+# Forward + TCP listen 编排：控制行解析 / run_listener_session
+# ──────────────────────────────────────────────────────────────────
+
+
+_CTRL_PORT_RE = re.compile(r"^PORT=(\d+)$")
+_CTRL_STATUS_OK = "STATUS:OK"
+_CTRL_STATUS_FAIL_PREFIX = "STATUS:FAIL:"
+_CTRL_PROGRESS_PREFIX = "PROGRESS:"
+_CTRL_RC_RE = re.compile(r"^__flange_rc__=(-?\d+)$")
+
+
+def _connect_local(host: str, port: int) -> "_socket.socket":
+    """打开 TCP 连接到 host:port，返回 socket。可被测试 monkeypatch 替换。"""
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    s.connect((host, port))
+    return s
+
+
+def run_listener_session(
+    transport: Transport,
+    *,
+    shell_args: list[str],
+    on_data,
+    partition_label: str,
+    progress_cb=None,
+) -> int:
+    """编排 'shell 起 listener → 解析控制行 → forward → on_data → 等 rc'。
+
+    错误措辞按 socket 是否被 connect/写入字节划分：
+    - READY 之前任何 STATUS:FAIL → '目标分区 <label> 未改动'
+    - READY 之后任何 STATUS:FAIL，或 host 已经发出字节后失败 → '可能已部分写入'
+
+    on_data(sock) 在 host 已 connect 上 socket 后调用；它返回后 host
+    继续读 stdout 等待 STATUS。on_data 可能在传输中抛异常，本函数 finally
+    仍负责清理 forward。
+    """
+    proc = transport.shell_streaming(shell_args)
+    remote_port: int | None = None
+    local_port: int | None = None
+    ready = False
+    data_started = False
+    status_line: str | None = None
+    remote_rc: int | None = None
+    pending_exc: BaseException | None = None
+
+    try:
+        for raw in proc.stdout:
+            line = raw.rstrip("\r\n").rstrip("\r")
+            if not line:
+                continue
+            m = _CTRL_PORT_RE.match(line)
+            if m:
+                remote_port = int(m.group(1))
+                continue
+            if line == "READY":
+                ready = True
+                if remote_port is None:
+                    raise HostRecoveryError(
+                        "设备端 READY 早于 PORT="
+                    )
+                local_port = transport.forward(remote_port)
+                try:
+                    sock = _connect_local("127.0.0.1", local_port)
+                except OSError as e:
+                    raise HostRecoveryError(
+                        f"connect 127.0.0.1:{local_port} 失败：{e}"
+                    ) from e
+                try:
+                    data_started = True
+                    on_data(sock)
+                finally:
+                    try:
+                        sock.shutdown(_socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                    sock.close()
+                continue
+            if line.startswith(_CTRL_PROGRESS_PREFIX):
+                if progress_cb:
+                    progress_cb(line[len(_CTRL_PROGRESS_PREFIX):])
+                continue
+            if line == _CTRL_STATUS_OK:
+                status_line = line
+                continue
+            if line.startswith(_CTRL_STATUS_FAIL_PREFIX):
+                status_line = line
+                continue
+            m = _CTRL_RC_RE.match(line)
+            if m:
+                remote_rc = int(m.group(1))
+                continue
+            # 不识别的行：忽略
+    except BaseException as e:
+        pending_exc = e
+    finally:
+        if local_port is not None:
+            try:
+                transport.forward_remove(local_port)
+            except HostRecoveryError:
+                pass
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    if pending_exc is not None:
+        raise pending_exc
+
+    if status_line == _CTRL_STATUS_OK and (remote_rc in (None, 0)):
+        return 0
+
+    reason = ""
+    if status_line and status_line.startswith(_CTRL_STATUS_FAIL_PREFIX):
+        reason = status_line[len(_CTRL_STATUS_FAIL_PREFIX):]
+    elif remote_rc not in (None, 0):
+        reason = f"远端退出码 {remote_rc}"
+    else:
+        reason = "未收到 STATUS"
+
+    if data_started:
+        raise HostRecoveryError(
+            f"目标分区 {partition_label} 可能已部分写入，"
+            f"请重新刷写或从备份恢复：{reason}"
+        )
+    raise HostRecoveryError(
+        f"目标分区 {partition_label} 未改动：{reason}"
+    )
+
+
 def cmd_flash(t: Transport, *, partition: str, image: Path,
               force: bool = False, prompt=input) -> int:
-    """流式传输镜像 → 设备端 ``recoveryctl flash`` 边收边写。
+    """通过 run_listener_session 调度设备端 ``recoveryctl flash --listen``。
 
     宿主机不接受裸 block device 作为 partition 参数；分区名按
     recoveryctl 中 recovery-config.json 的 partitions[*].name 严格匹配。
@@ -431,50 +533,84 @@ def cmd_flash(t: Transport, *, partition: str, image: Path,
         "recoveryctl", "flash", partition,
         "--size", str(after[0]),
         "--sha256", sha,
+        "--listen", "tcp:0",
     ]
     if force:
         args.extend(["--force", "--verify-readback"])
+
     print(f"recoveryctl flash {partition} ...")
-    r = t.exec_in(args, image)
-    if r.stdout:
-        sys.stdout.write(r.stdout)
-    if r.returncode != 0:
-        raise HostRecoveryError(
-            f"recoveryctl flash 失败 (rc={r.returncode}): "
-            f"{r.stderr.strip() or r.stdout.strip()}。"
-            f"目标分区 {partition} 可能已部分写入，请重新刷写或从备份恢复。"
-        )
+
+    def _stream_image(sock: _socket.socket) -> None:
+        with image.open("rb") as src:
+            while True:
+                buf = src.read(4 * 1024 * 1024)
+                if not buf:
+                    break
+                sock.sendall(buf)
+        try:
+            sock.shutdown(_socket.SHUT_WR)
+        except OSError:
+            pass
+
+    run_listener_session(
+        t,
+        shell_args=args,
+        on_data=_stream_image,
+        partition_label=partition,
+    )
     print(f"✓ {partition} 已刷写")
     return 0
 
 
 def cmd_backup(t: Transport, *, partition: str, output: Path,
                compress: str = "zstd") -> int:
+    """通过 run_listener_session 从设备分区流式读到本机 ``output``。
+
+    host 把数据先写 ``output.partial``，STATUS:OK 后 ``os.replace`` 原子改名；
+    失败清理 ``.partial``。设备端不在 recovery 文件系统中暂存任何数据。
+    """
     if "/" in partition or partition.startswith("dev"):
         raise HostRecoveryError(
             f"partition 必须是分区名（如 rootfs）：{partition}"
         )
     require_recovery_mode(t)
 
-    remote = f"{REMOTE_BACKUP_DIR}/{output.name}"
-    t.shell(["mkdir", "-p", REMOTE_BACKUP_DIR])
-    print(f"recoveryctl backup {partition} → {remote} ...")
-    # capture=True 让 AdbTransport 的 __flange_rc__ marker 把远端真实 rc
-    # 透传到 host，避免远端失败被吞。
-    r = t.shell(
-        ["recoveryctl", "backup", partition, remote, "--compress", compress],
-        capture=True,
-    )
-    if r.stdout:
-        sys.stdout.write(r.stdout)
-    if r.returncode != 0:
-        raise HostRecoveryError(
-            f"recoveryctl backup 失败 (rc={r.returncode}): "
-            f"{r.stderr.strip() or r.stdout.strip()}"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    partial = output.with_suffix(output.suffix + ".partial")
+    if partial.exists():
+        partial.unlink()
+
+    args = [
+        "recoveryctl", "backup", partition,
+        "--listen", "tcp:0",
+        "--compress", compress,
+    ]
+    print(f"recoveryctl backup {partition} (compress={compress}) ...")
+
+    def _drain_to_partial(sock: _socket.socket) -> None:
+        with partial.open("wb") as dst:
+            while True:
+                buf = sock.recv(4 * 1024 * 1024)
+                if not buf:
+                    break
+                dst.write(buf)
+
+    try:
+        run_listener_session(
+            t,
+            shell_args=args,
+            on_data=_drain_to_partial,
+            partition_label=partition,
         )
-    print(f"拉取备份至 {output} ...")
-    t.pull(remote, output)
-    t.shell(["rm", "-f", remote])
+    except BaseException:
+        if partial.exists():
+            try:
+                partial.unlink()
+            except OSError:
+                pass
+        raise
+
+    os.replace(partial, output)
     print(f"✓ 备份完成：{output}")
     return 0
 
@@ -597,9 +733,9 @@ def build_argparser() -> argparse.ArgumentParser:
             "  1. 校验 partition 是分区名（不接受 /dev/... 路径）\n"
             "  2. 设备必须处于 recovery 模式（normal 模式硬性拒绝）\n"
             "  3. host 计算镜像 size + sha256，并确认文件未变化\n"
-            "  4. adb exec-in 调用 recoveryctl flash\n"
+            "  4. adb shell 启动 recoveryctl flash --listen + adb forward 建立 TCP 通道\n"
             "  5. 设备端 preflight：size / 未挂载 / protected / sha256 格式\n"
-            "  6. 设备端从 stdin 读多少写多少 → 校验 sha256 → fsync/sync\n\n"
+            "  6. 设备端从 socket 读多少写多少 → 校验 sha256 → fsync/sync\n\n"
             "受保护分区（raw 类、recovery 自身、recovery.protected_partitions 名单）\n"
             "需要 --force：宿主端会要求输入字面量 YES，设备端额外要求 sha256 并读回校验。"
         ),
@@ -625,7 +761,8 @@ def build_argparser() -> argparse.ArgumentParser:
         formatter_class=_RAW,
         help="把分区备份到本机文件",
         description=(
-            "设备端 recoveryctl backup 生成备份文件 → host adb pull 到本机 → 清理临时文件。\n\n"
+            "设备端 recoveryctl backup --listen 直接把分区数据写到 TCP socket，host\n"
+            "通过 adb forward 接管端口并落到本机文件，无需在 recovery rootfs 暂存。\n\n"
             "默认 zstd 压缩；--compress=none 输出原始未压缩镜像（占空间但便于离线挂载）。\n\n"
             "要求设备处于 recovery 模式。"
         ),
