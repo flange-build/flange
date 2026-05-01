@@ -614,12 +614,33 @@ def cmd_backup(t: Transport, *, partition: str, output: Path,
     print(f"recoveryctl backup {partition} (compress={compress}) ...")
 
     def _drain_to_partial(sock: _socket.socket) -> None:
+        received = 0
+        last_print = 0.0
+        start = time.monotonic()
         with partial.open("wb") as dst:
             while True:
                 buf = sock.recv(4 * 1024 * 1024)
                 if not buf:
                     break
                 dst.write(buf)
+                received += len(buf)
+                now = time.monotonic()
+                if now - last_print >= 0.5:
+                    elapsed = max(now - start, 0.001)
+                    rate = received / elapsed / 1024 / 1024
+                    sys.stdout.write(
+                        f"\r  已备份 {received / 1024 / 1024:7.1f} MiB "
+                        f"@ {rate:5.1f} MiB/s"
+                    )
+                    sys.stdout.flush()
+                    last_print = now
+        elapsed = max(time.monotonic() - start, 0.001)
+        rate = received / elapsed / 1024 / 1024
+        sys.stdout.write(
+            f"\r  已备份 {received / 1024 / 1024:7.1f} MiB "
+            f"@ {rate:5.1f} MiB/s\n"
+        )
+        sys.stdout.flush()
 
     try:
         run_listener_session(
