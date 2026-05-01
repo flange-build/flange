@@ -523,6 +523,8 @@ def do_flash(
             with open(dev, "r+b", buffering=0) as out:
                 written = 0
                 h = hashlib.sha256()
+                # last_progress=0.0 让第一个 chunk 之后必然过 1s 门槛触发 PROGRESS，
+                # 避免短数据流没有任何进度输出
                 last_progress = 0.0
 
                 while written < req.size_bytes:
@@ -556,6 +558,9 @@ def do_flash(
                         f"sha256 不匹配：期望 {req.sha256_expected}，实际 {digest}；"
                         "目标分区可能已部分写入。请重新刷写或从备份恢复。"
                     )
+
+                # 节流后可能没机会输出最后一笔进度，host 端 UI 会卡在 99%；这里补 1 行 100%
+                _status(f"PROGRESS:{req.size_bytes}/{req.size_bytes}")
 
                 out.flush()
                 fsync(out.fileno())
