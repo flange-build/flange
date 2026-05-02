@@ -37,12 +37,16 @@ class FakeSource:
         return self._map[component]
 
 
-def _make_overlay_repo(root: Path, vendor: str, stems: list[str]) -> Path:
-    """构造一份最小的 radxa-overlays 仓库结构。"""
+def _make_overlay_repo(root: Path, vendor: str, stems: list[str], *,
+                        ext: str = ".dts") -> Path:
+    """构造一份最小的 radxa-overlays 仓库结构。
+
+    ext: 源文件后缀，默认 ".dts"（rockchip 用），可传 ".dtso"（allwinner 用）
+    """
     overlays_dir = root / "arch" / "arm64" / "boot" / "dts" / vendor / "overlays"
     overlays_dir.mkdir(parents=True)
     for stem in stems:
-        (overlays_dir / f"{stem}.dts").write_text(f"// {stem}\n")
+        (overlays_dir / f"{stem}{ext}").write_text(f"// {stem}\n")
     return root
 
 
@@ -162,6 +166,36 @@ def test_compile_missing_vendor_subdir_raises(tmp_path):
     cfg = _cfg(vendor="allwinner", vendor_overlays=["x.dtbo"])
     with pytest.raises(FileNotFoundError, match="vendor 子目录"):
         b.build(cfg)
+
+
+def test_compile_accepts_dtso_extension(tmp_path):
+    """allwinner 子目录用 .dtso 后缀（kernel >= 6.2 新格式），需要支持。"""
+    overlay_src = _make_overlay_repo(
+        tmp_path / "ov", "allwinner",
+        ["sun60iw2p1-uart2", "cubie-a7z-reroute-audio-from-hdmi-to-typec-dp"],
+        ext=".dtso",
+    )
+    kernel_src = _make_kernel_src(tmp_path / "k")
+    b = _builder(tmp_path, kernel_src=kernel_src, overlay_src=overlay_src)
+
+    cfg = _cfg(
+        vendor="allwinner",
+        vendor_overlays=[
+            "sun60iw2p1-uart2.dtbo",
+            "cubie-a7z-reroute-audio-from-hdmi-to-typec-dp.dtbo",
+        ],
+    )
+    out = b.build(cfg)
+
+    dtbos = sorted(p.name for p in out["overlays"].glob("*.dtbo"))
+    assert dtbos == [
+        "cubie-a7z-reroute-audio-from-hdmi-to-typec-dp.dtbo",
+        "sun60iw2p1-uart2.dtbo",
+    ]
+    # cpp 输入应是 .dtso 文件
+    cpp_calls = [c for c in b.docker.calls if c[0] == "cpp"]
+    for call in cpp_calls:
+        assert any(p.endswith(".dtso") for p in call)
 
 
 def test_collect_outputs_to_overlays_dir(tmp_path):

@@ -30,11 +30,37 @@ def _vendor_overlays_dir(repo_src: Path, vendor: str) -> Path:
     return repo_src / "arch" / "arm64" / "boot" / "dts" / vendor / "overlays"
 
 
+# overlay 源文件后缀候选：radxa-overlays 仓库 rockchip 子目录用 .dts，
+# allwinner 子目录用 .dtso（kernel >= 6.2 引入的新格式）；两者在 dts 语法
+# 层等价，cpp + dtc 处理时不区分。
+_OVERLAY_SOURCE_EXTS = (".dts", ".dtso")
+
+
+def _find_overlay_source(overlays_dir: Path, stem: str) -> Path | None:
+    """按候选后缀查找 overlay 源文件，命中即返回。"""
+    for ext in _OVERLAY_SOURCE_EXTS:
+        candidate = overlays_dir / f"{stem}{ext}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _list_overlay_stems(overlays_dir: Path) -> list[str]:
+    """列出 overlays_dir 中所有可用 stem（去后缀，去重保持排序）。"""
+    if not overlays_dir.is_dir():
+        return []
+    stems: set[str] = set()
+    for ext in _OVERLAY_SOURCE_EXTS:
+        for p in overlays_dir.glob(f"*{ext}"):
+            stems.add(p.stem)
+    return sorted(stems)
+
+
 def _format_available_stems(overlays_dir: Path, limit: int = 20) -> str:
     """格式化"可用 stem 候选"提示文本，最多列出 limit 个，附总数。"""
     if not overlays_dir.is_dir():
         return f"{overlays_dir} 不存在"
-    stems = sorted(p.stem for p in overlays_dir.glob("*.dts"))
+    stems = _list_overlay_stems(overlays_dir)
     head = stems[:limit]
     extra = f"... 共 {len(stems)} 个" if len(stems) > limit else f"共 {len(stems)} 个"
     return ", ".join(head) + ("" if not head else f" ({extra})")
@@ -85,10 +111,11 @@ class OverlaysBuilder(ComponentBuilder):
         kernel_src = self._kernel_src_dir(config)
 
         for stem in (n.removesuffix(".dtbo") for n in names):
-            dts = overlays_dir / f"{stem}.dts"
-            if not dts.is_file():
+            dts = _find_overlay_source(overlays_dir, stem)
+            if dts is None:
                 raise FileNotFoundError(
-                    f"vendor overlay 源文件不存在: {dts}；"
+                    f"vendor overlay 源文件不存在: {overlays_dir}/{stem}"
+                    f"{{{','.join(_OVERLAY_SOURCE_EXTS)}}}；"
                     f"可用 stem 候选: {_format_available_stems(overlays_dir)}"
                 )
 
@@ -96,7 +123,8 @@ class OverlaysBuilder(ComponentBuilder):
             dtbo = self._build_dir / f"{stem}.dtbo"
 
             self._status(f"编译 vendor overlay: {stem}.dtbo")
-            # cpp 预处理：把 #include <dt-bindings/...> 展开
+            # cpp 预处理：把 #include <dt-bindings/...> 展开。dts/dtso 在
+            # 语法层等价，cpp + dtc 不区分后缀。
             self.docker.run([
                 "cpp", "-nostdinc", "-undef",
                 "-x", "assembler-with-cpp", "-E",

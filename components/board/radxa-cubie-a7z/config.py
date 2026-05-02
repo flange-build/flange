@@ -1,5 +1,37 @@
 """Radxa Cubie A7Z (Allwinner A733) 板级配置"""
 
+# radxa-overlays 仓库内与 A733 (sun60iw2p1) 兼容的 vendor overlay 全集。
+# 仓库 arch/arm64/boot/dts/allwinner/overlays/Makefile 用
+# CONFIG_ARCH_SUN60IW2 圈选这一组；A523 / A527 / A537 (sun55iw3p1) 那一组
+# 与本板 SoC 不兼容，故不打包。
+A733_VENDOR_OVERLAYS = [
+    # SoC 级（sun60iw2p1）— 通用外设 muxing
+    "sun60iw2p1-i2s0-2ch.dtbo",
+    "sun60iw2p1-i2s4-2ch.dtbo",
+    "sun60iw2p1-pwm1-1.dtbo",
+    "sun60iw2p1-pwm1-2.dtbo",
+    "sun60iw2p1-pwm1-3.dtbo",
+    "sun60iw2p1-pwm1-6.dtbo",
+    "sun60iw2p1-pwm1-7.dtbo",
+    "sun60iw2p1-spi1-spidev.dtbo",
+    "sun60iw2p1-spi3-spidev.dtbo",
+    "sun60iw2p1-twi2.dtbo",
+    "sun60iw2p1-twi7.dtbo",
+    "sun60iw2p1-uart2.dtbo",
+    "sun60iw2p1-uart3.dtbo",
+    "sun60iw2p1-uart4.dtbo",
+    # 板级（cubie-a7a 命名，但同基线 SoC，依 Makefile 归到 sun60iw2p1）
+    "cubie-a7a-enable-sunxi-ac101-sound-card.dtbo",
+    "cubie-a7a-radxa-25w-poe.dtbo",
+    "cubie-a7a-radxa-camera-8m-219.dtbo",
+    "cubie-a7a-radxa-camera-13m-214.dtbo",
+    "cubie-a7a-radxa-camera-4k-415.dtbo",
+    "cubie-a7a-radxa-display-8hd.dtbo",
+    "cubie-a7a-radxa-display-10fhd.dtbo",
+    # cubie-a7z 板级独有
+    "cubie-a7z-reroute-audio-from-hdmi-to-typec-dp.dtbo",
+]
+
 AIC8800_RADXA_REPO = "https://github.com/radxa-pkg/aic8800.git"
 AIC8800_RADXA_COMMIT = "7f42b22913b462ab6c658dfc075bae1dbfe9a71a"
 AIC8800_D80_USB_FIRMWARE_FILES = [
@@ -26,6 +58,12 @@ BOARD = {
     "platform": "allwinnera733",
     "kernel": {
         "dts": "sun60i-a733-cubie-a7z",
+    },
+    "boot": {
+        # 把 radxa-overlays 中与 A733 兼容的全部 overlay 打入 boot.img；
+        # 默认不应用（default_overlays 仍为空），运行时通过编辑
+        # /boot/extlinux/extlinux.conf 的 fdtoverlays 行选用。
+        "vendor_overlays": A733_VENDOR_OVERLAYS,
     },
     "wifi": {
         "aic8800_usb": True,
