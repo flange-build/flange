@@ -5,6 +5,7 @@ After=local-fs.target
 
 [Service]
 Type=forking
+Environment=TERM=xterm
 ExecStart=/usr/sbin/usbdevice start
 ExecStop=/usr/sbin/usbdevice stop
 
