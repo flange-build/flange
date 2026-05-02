@@ -19,7 +19,12 @@ def _write_fake_command(bin_dir: Path, name: str, body: str):
     path.chmod(0o755)
 
 
-def _fake_env(tmp_path: Path, *, fail_growpart: bool = False) -> dict:
+def _fake_env(
+    tmp_path: Path,
+    *,
+    growpart_nochange: bool = False,
+    fail_growpart: bool = False,
+) -> dict:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "commands.log"
@@ -35,6 +40,9 @@ def _fake_env(tmp_path: Path, *, fail_growpart: bool = False) -> dict:
         f"echo \"sgdisk $*\" >> {log}",
     )
     growpart_body = f"echo \"growpart $*\" >> {log}"
+    if growpart_nochange:
+        growpart_body += "\necho \"NOCHANGE: partition 5 is size 123. it cannot be grown\" >&2"
+        growpart_body += "\nexit 1"
     if fail_growpart:
         growpart_body += "\nexit 42"
     _write_fake_command(bin_dir, "growpart", growpart_body)
@@ -72,6 +80,22 @@ def test_app_spec_declares_service_and_dependencies():
 
 def test_script_expands_rootfs_and_writes_marker(tmp_path):
     env = _fake_env(tmp_path)
+
+    result = subprocess.run([str(SCRIPT)], env=env, text=True)
+
+    assert result.returncode == 0
+    assert Path(env["FLANGE_ROOTFS_GROW_MARKER"]).exists()
+    assert Path(env["FLANGE_ROOTFS_GROW_LOG"]).read_text().splitlines() == [
+        "lsblk -no PKNAME,PARTN /dev/mmcblk0p5",
+        "sgdisk -e /dev/mmcblk0",
+        "growpart /dev/mmcblk0 5",
+        "partx -u /dev/mmcblk0",
+        "resize2fs /dev/mmcblk0p5",
+    ]
+
+
+def test_script_resizes_filesystem_when_partition_is_already_grown(tmp_path):
+    env = _fake_env(tmp_path, growpart_nochange=True)
 
     result = subprocess.run([str(SCRIPT)], env=env, text=True)
 

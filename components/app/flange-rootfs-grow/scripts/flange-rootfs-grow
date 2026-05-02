@@ -26,9 +26,17 @@ if [ -z "${PARENT_DISK:-}" ] || [ -z "${PART_NUM:-}" ]; then
 fi
 
 DISK="/dev/${PARENT_DISK}"
+GROWPART_LOG="$(mktemp)"
+trap 'rm -f "${GROWPART_LOG}"' EXIT
 
 sgdisk -e "${DISK}"
-growpart "${DISK}" "${PART_NUM}"
+if ! growpart "${DISK}" "${PART_NUM}" 2>&1 | tee "${GROWPART_LOG}"; then
+    if grep -q "NOCHANGE:" "${GROWPART_LOG}"; then
+        echo "rootfs 分区已扩展到目标大小，继续扩展 ext4 文件系统"
+    else
+        exit 1
+    fi
+fi
 
 if ! partx -u "${DISK}"; then
     partprobe "${DISK}"
