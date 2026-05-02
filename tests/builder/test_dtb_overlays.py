@@ -8,6 +8,7 @@ import pytest
 
 from builder.dtb_overlay import (
     all_declared_overlays,
+    board_overlays,
     copy_declared_overlays,
     default_overlays,
     dtb_overlays,
@@ -59,12 +60,14 @@ class FakeCache:
 
 def _cfg(platform: str, *, overlays: list[str] | None = None,
          default: list[str] | None = None,
-         vendor: list[str] | None = None) -> dict:
+         vendor: list[str] | None = None,
+         board: list[str] | None = None) -> dict:
     dts = "rk3566-test" if platform == "rockchip" else "sun60i-a733-test"
     boot = {
         "kernel_args": "console=ttyS2,1500000",
         "dtb_overlays": overlays or [],
         "vendor_overlays": vendor or [],
+        "board_overlays": board or [],
         "default_overlays": default or [],
     }
     if platform == "allwinnera733":
@@ -441,6 +444,155 @@ def test_rockchip_boot_basename_collision_raises(tmp_path):
             overlays=["foo.dtbo"],
             vendor=["foo.dtbo"],
         ))
+
+
+# --- board_overlays（板私有源）---
+
+
+def test_board_overlays_default_empty():
+    cfg = {"boot": {}}
+    assert board_overlays(cfg) == []
+
+
+def test_board_overlays_format_violations():
+    bad_cases = [
+        ("foo", "只能声明 .dtbo 文件"),
+        ("a/b.dtbo", "只能声明 boot overlay 文件名"),
+        (".hidden.dtbo", "只能声明 boot overlay 文件名"),
+    ]
+    for name, msg in bad_cases:
+        cfg = {"boot": {"board_overlays": [name]}}
+        with pytest.raises((ValueError, TypeError), match=msg):
+            board_overlays(cfg)
+
+
+def test_all_declared_overlays_merges_three_sources_in_order():
+    cfg = _cfg(
+        "allwinnera733",
+        overlays=["intree.dtbo"],
+        vendor=["vendor.dtbo"],
+        board=["board.dtbo"],
+    )
+    assert all_declared_overlays(cfg) == [
+        "intree.dtbo",
+        "vendor.dtbo",
+        "board.dtbo",
+    ]
+
+
+def test_all_declared_overlays_intree_vs_board_collision():
+    cfg = _cfg(
+        "allwinnera733",
+        overlays=["foo.dtbo"],
+        board=["foo.dtbo"],
+    )
+    with pytest.raises(ValueError,
+                       match="dtb_overlays.*board_overlays.*foo.dtbo"):
+        all_declared_overlays(cfg)
+
+
+def test_all_declared_overlays_vendor_vs_board_collision():
+    cfg = _cfg(
+        "allwinnera733",
+        vendor=["foo.dtbo"],
+        board=["foo.dtbo"],
+    )
+    with pytest.raises(ValueError,
+                       match="vendor_overlays.*board_overlays.*foo.dtbo"):
+        all_declared_overlays(cfg)
+
+
+def test_default_overlays_can_reference_board_source():
+    cfg = _cfg(
+        "allwinnera733",
+        board=["my-display.dtbo"],
+        default=["my-display.dtbo"],
+    )
+    assert default_overlays(cfg) == ["my-display.dtbo"]
+
+
+def test_default_overlays_unknown_lists_three_candidates():
+    cfg = _cfg(
+        "allwinnera733",
+        overlays=["intree.dtbo"],
+        vendor=["vendor.dtbo"],
+        board=["my-display.dtbo"],
+        default=["missing.dtbo"],
+    )
+    with pytest.raises(ValueError) as excinfo:
+        default_overlays(cfg)
+    msg = str(excinfo.value)
+    assert "missing.dtbo" in msg
+    assert "intree.dtbo" in msg
+    assert "vendor.dtbo" in msg
+    assert "my-display.dtbo" in msg
+    assert "board_overlays" in msg
+
+
+def test_a733_boot_copies_board_overlay_to_dtbs_layout(tmp_path):
+    """board overlay 与 vendor 共用 target/device-tree-overlay/overlays/ 产物目录。"""
+    target_dir = tmp_path / "target"
+    _prepare_kernel_target(target_dir, "allwinnera733", [])
+    # board overlay 由 OverlaysBuilder 与 vendor overlay 一同写到该目录
+    _prepare_vendor_overlay_target(
+        target_dir, ["my-display.dtbo"]
+    )
+
+    builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
+    builder.cache = FakeCache(target_dir)
+
+    builder.compile(None, _cfg(
+        "allwinnera733",
+        board=["my-display.dtbo"],
+        default=["my-display.dtbo"],
+    ))
+
+    overlay_dir = (
+        builder._work_dir / "staging" / "dtbs" / "allwinner" / "overlay"
+    )
+    assert (overlay_dir / "my-display.dtbo").exists()
+
+
+def test_rockchip_boot_copies_board_overlay_to_dtbs_layout(tmp_path):
+    target_dir = tmp_path / "target"
+    _prepare_kernel_target(target_dir, "rockchip", [])
+    _prepare_vendor_overlay_target(
+        target_dir, ["my-display.dtbo"]
+    )
+
+    builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
+    builder.cache = FakeCache(target_dir)
+
+    builder.compile(None, _cfg(
+        "rockchip",
+        board=["my-display.dtbo"],
+        default=["my-display.dtbo"],
+    ))
+
+    overlay_dir = (
+        builder._work_dir / "staging" / "dtbs" / "rockchip" / "overlay"
+    )
+    assert (overlay_dir / "my-display.dtbo").exists()
+
+
+def test_a733_boot_basename_collision_vendor_vs_board(tmp_path):
+    """vendor 与 board 在 config 期就被 all_declared_overlays 拦截。"""
+    target_dir = tmp_path / "target"
+    _prepare_kernel_target(target_dir, "allwinnera733", [])
+
+    builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
+    builder.cache = FakeCache(target_dir)
+
+    cfg = _cfg(
+        "allwinnera733",
+        vendor=["foo.dtbo"],
+        board=["foo.dtbo"],
+        default=["foo.dtbo"],
+    )
+    # 必须在 _build_extlinux_conf -> default_overlays -> all_declared_overlays
+    # 路径上拦截
+    with pytest.raises(ValueError, match="重名.*foo.dtbo"):
+        builder._build_extlinux_conf(cfg, "sunxi.dtb")
 
 
 def test_copy_declared_overlays_collision_raises(tmp_path):

@@ -1,14 +1,18 @@
 """Device Tree Overlay（设备树覆盖）构建辅助函数。
 
-flange 支持两类 overlay 来源并存：
+flange 支持三类 overlay 来源并存：
 
 - ``boot.dtb_overlays``：来自内核源码树的 in-tree overlay，由 kernel make 编译
 - ``boot.vendor_overlays``：来自外部 vendor overlay 仓库（如 radxa-overlays），
   由 device-tree-overlay 组件用 cpp + dtc 单独编译
+- ``boot.board_overlays``：板私有 overlay，dtso 源文件位于
+  ``components/board/<board>/overlays/``，由 device-tree-overlay 组件复用同一
+  cpp + dtc 流水线编译。用于不属于上游 vendor 仓库、又不便落入内核 in-tree
+  的板级私有显示 / 外设 overlay。
 
-二者打包到 boot.img 同一目录 ``/dtbs/<vendor>/overlay/`` 下平铺，basename 必须
-全局唯一；撞名时构建立即失败。``boot.default_overlays`` 是 extlinux 默认应用
-的子集，必须出现在两源的并集中，不需要带前缀。
+三类都打包到 boot.img 同一目录 ``/dtbs/<vendor>/overlay/`` 下平铺，basename
+必须全局唯一；撞名时构建立即失败。``boot.default_overlays`` 是 extlinux 默认
+应用的子集，必须出现在三源的并集中，不需要带前缀。
 """
 
 from __future__ import annotations
@@ -45,23 +49,44 @@ def vendor_overlays(config: dict) -> list[str]:
     return _overlay_names(config, "vendor_overlays")
 
 
-def all_declared_overlays(config: dict) -> list[str]:
-    """返回 in-tree 与 vendor 两源的并集（保持声明顺序，先 in-tree 后 vendor）。
+def board_overlays(config: dict) -> list[str]:
+    """返回板私有 overlay 文件名列表（从 components/board/<board>/overlays/ 编译）。"""
+    return _overlay_names(config, "board_overlays")
 
-    两源 basename 撞名 → raise ValueError，错误信息列出冲突项。
+
+def all_declared_overlays(config: dict) -> list[str]:
+    """返回 in-tree / vendor / board 三源的并集。
+
+    顺序保留：先 in-tree、再 vendor、再 board。任何两源 basename 撞名 →
+    raise ValueError，错误信息列出冲突项与冲突来源。
     """
     intree = dtb_overlays(config)
     vendor = vendor_overlays(config)
+    private = board_overlays(config)
+
     intree_set = set(intree)
-    collisions = [name for name in vendor if name in intree_set]
-    if collisions:
+    vendor_set = set(vendor)
+
+    iv_collisions = [n for n in vendor if n in intree_set]
+    if iv_collisions:
         raise ValueError(
             "boot.dtb_overlays 与 boot.vendor_overlays 中存在重名: "
-            f"{', '.join(collisions)}；"
-            "boot.img 内 overlay 平铺到同一目录，basename 必须全局唯一，"
-            "请重命名 in-tree 的同名 overlay"
+            f"{', '.join(iv_collisions)}；"
+            "boot.img 内 overlay 平铺到同一目录，basename 必须全局唯一"
         )
-    return intree + vendor
+    ib_collisions = [n for n in private if n in intree_set]
+    if ib_collisions:
+        raise ValueError(
+            "boot.dtb_overlays 与 boot.board_overlays 中存在重名: "
+            f"{', '.join(ib_collisions)}；basename 必须全局唯一"
+        )
+    vb_collisions = [n for n in private if n in vendor_set]
+    if vb_collisions:
+        raise ValueError(
+            "boot.vendor_overlays 与 boot.board_overlays 中存在重名: "
+            f"{', '.join(vb_collisions)}；basename 必须全局唯一"
+        )
+    return intree + vendor + private
 
 
 def default_overlays(config: dict) -> list[str]:
@@ -72,10 +97,14 @@ def default_overlays(config: dict) -> list[str]:
     if missing:
         intree = dtb_overlays(config)
         vendor = vendor_overlays(config)
+        private = board_overlays(config)
         raise ValueError(
-            "boot.default_overlays 引用了未声明在 boot.dtb_overlays 或 "
-            f"boot.vendor_overlays 中的 DT overlay: {', '.join(missing)}；"
-            f"候选 dtb_overlays={intree}，候选 vendor_overlays={vendor}"
+            "boot.default_overlays 引用了未声明在 boot.dtb_overlays / "
+            "boot.vendor_overlays / boot.board_overlays 中的 DT overlay: "
+            f"{', '.join(missing)}；"
+            f"候选 dtb_overlays={intree}，"
+            f"候选 vendor_overlays={vendor}，"
+            f"候选 board_overlays={private}"
         )
     return defaults
 

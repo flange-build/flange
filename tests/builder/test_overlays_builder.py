@@ -56,15 +56,30 @@ def _make_kernel_src(root: Path) -> Path:
     return root
 
 
-def _cfg(*, vendor: str | None, vendor_overlays: list[str]) -> dict:
+def _cfg(*, vendor: str | None, vendor_overlays: list[str],
+         board: str = "test",
+         board_overlays: list[str] | None = None) -> dict:
     cfg: dict = {
-        "board": "test",
-        "boot": {"vendor_overlays": vendor_overlays},
+        "board": board,
+        "boot": {
+            "vendor_overlays": vendor_overlays,
+            "board_overlays": board_overlays or [],
+        },
         "device-tree-overlay": {"repo": "x", "branch": "y"},
     }
     if vendor is not None:
         cfg["vendor"] = vendor
     return cfg
+
+
+def _make_board_overlays_dir(root: Path, stems: list[str], *,
+                              ext: str = ".dts") -> Path:
+    """构造仓库内板私有 overlay 目录 components/board/<board>/overlays/。"""
+    overlays_dir = root / "overlays"
+    overlays_dir.mkdir(parents=True)
+    for stem in stems:
+        (overlays_dir / f"{stem}{ext}").write_text(f"// {stem}\n")
+    return overlays_dir
 
 
 def _builder(tmp_path: Path, *, kernel_src: Path, overlay_src: Path) -> OverlaysBuilder:
@@ -196,6 +211,144 @@ def test_compile_accepts_dtso_extension(tmp_path):
     cpp_calls = [c for c in b.docker.calls if c[0] == "cpp"]
     for call in cpp_calls:
         assert any(p.endswith(".dtso") for p in call)
+
+
+# --- board_overlays（板私有源）---
+
+
+def test_compile_board_overlays_from_components_dir(tmp_path, monkeypatch):
+    """板私有 overlay 从 components/board/<board>/overlays/ 取 dts，与
+    vendor 共用 cpp+dtc 流水线 + 同一产物目录。"""
+    # 构造仓库根：components/board/myboard/overlays/foo.dts
+    repo_root = tmp_path / "repo"
+    board_dir = repo_root / "components" / "board" / "myboard"
+    overlays_dir = _make_board_overlays_dir(board_dir, ["foo"])
+    monkeypatch.chdir(repo_root)
+
+    # vendor 仓库可以为空；只验证 board 路径
+    overlay_src = _make_overlay_repo(tmp_path / "ov", "rockchip", [])
+    kernel_src = _make_kernel_src(tmp_path / "k")
+    b = _builder(tmp_path, kernel_src=kernel_src, overlay_src=overlay_src)
+
+    cfg = _cfg(
+        vendor="rockchip",
+        vendor_overlays=[],
+        board="myboard",
+        board_overlays=["foo.dtbo"],
+    )
+    out = b.build(cfg)
+
+    # 应该有 cpp + dtc 各一次
+    assert len(b.docker.calls) == 2
+    cpp_cmd, dtc_cmd = b.docker.calls
+    assert cpp_cmd[0] == "cpp"
+    # cpp -I 用了 board overlays_dir
+    i_paths = [cpp_cmd[i + 1] for i, x in enumerate(cpp_cmd) if x == "-I"]
+    assert str(overlays_dir) in i_paths
+    # 输入 dts 是 board 私有目录里的
+    assert any(p.endswith("foo.dts") for p in cpp_cmd)
+    assert any(str(overlays_dir) in p for p in cpp_cmd)
+    # dtbo 写到产物目录
+    dtbos = sorted(p.name for p in out["overlays"].glob("*.dtbo"))
+    assert dtbos == ["foo.dtbo"]
+
+
+def test_compile_board_and_vendor_overlays_share_output_dir(tmp_path,
+                                                              monkeypatch):
+    """vendor 与 board 各自一个 overlay，产物落同一目录。"""
+    repo_root = tmp_path / "repo"
+    board_dir = repo_root / "components" / "board" / "myboard"
+    _make_board_overlays_dir(board_dir, ["board-only"])
+    monkeypatch.chdir(repo_root)
+
+    overlay_src = _make_overlay_repo(
+        tmp_path / "ov", "rockchip", ["vendor-only"])
+    kernel_src = _make_kernel_src(tmp_path / "k")
+    b = _builder(tmp_path, kernel_src=kernel_src, overlay_src=overlay_src)
+
+    cfg = _cfg(
+        vendor="rockchip",
+        vendor_overlays=["vendor-only.dtbo"],
+        board="myboard",
+        board_overlays=["board-only.dtbo"],
+    )
+    out = b.build(cfg)
+
+    dtbos = sorted(p.name for p in out["overlays"].glob("*.dtbo"))
+    assert dtbos == ["board-only.dtbo", "vendor-only.dtbo"]
+    # cpp + dtc 各两次（vendor + board 各一对）
+    cpp_calls = [c for c in b.docker.calls if c[0] == "cpp"]
+    assert len(cpp_calls) == 2
+
+
+def test_compile_board_overlays_short_circuits_when_empty(tmp_path,
+                                                           monkeypatch):
+    """vendor 与 board 都空时 short-circuit，docker 不被调用。"""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.chdir(repo_root)
+    overlay_src = _make_overlay_repo(tmp_path / "ov", "rockchip", [])
+    kernel_src = _make_kernel_src(tmp_path / "k")
+    b = _builder(tmp_path, kernel_src=kernel_src, overlay_src=overlay_src)
+
+    cfg = _cfg(vendor="rockchip", vendor_overlays=[],
+                board="myboard", board_overlays=[])
+    b.build(cfg)
+    assert b.docker.calls == []
+
+
+def test_compile_board_overlays_missing_dir_raises(tmp_path, monkeypatch):
+    """声明了 board_overlays 但目录不存在 → FileNotFoundError。"""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.chdir(repo_root)
+
+    overlay_src = _make_overlay_repo(tmp_path / "ov", "rockchip", [])
+    kernel_src = _make_kernel_src(tmp_path / "k")
+    b = _builder(tmp_path, kernel_src=kernel_src, overlay_src=overlay_src)
+
+    cfg = _cfg(vendor="rockchip", vendor_overlays=[],
+                board="myboard", board_overlays=["x.dtbo"])
+    with pytest.raises(FileNotFoundError, match="board overlay 源目录不存在"):
+        b.build(cfg)
+
+
+def test_compile_board_overlays_missing_stem_lists_candidates(tmp_path,
+                                                               monkeypatch):
+    repo_root = tmp_path / "repo"
+    board_dir = repo_root / "components" / "board" / "myboard"
+    _make_board_overlays_dir(board_dir, ["alpha", "beta"])
+    monkeypatch.chdir(repo_root)
+
+    overlay_src = _make_overlay_repo(tmp_path / "ov", "rockchip", [])
+    kernel_src = _make_kernel_src(tmp_path / "k")
+    b = _builder(tmp_path, kernel_src=kernel_src, overlay_src=overlay_src)
+
+    cfg = _cfg(vendor="rockchip", vendor_overlays=[],
+                board="myboard", board_overlays=["nonexistent.dtbo"])
+    with pytest.raises(FileNotFoundError) as excinfo:
+        b.build(cfg)
+    msg = str(excinfo.value)
+    assert "nonexistent" in msg
+    assert "alpha" in msg
+    assert "beta" in msg
+
+
+def test_compile_board_overlays_accepts_dtso_extension(tmp_path, monkeypatch):
+    """与 vendor 同样支持 .dtso 后缀。"""
+    repo_root = tmp_path / "repo"
+    board_dir = repo_root / "components" / "board" / "myboard"
+    _make_board_overlays_dir(board_dir, ["foo"], ext=".dtso")
+    monkeypatch.chdir(repo_root)
+
+    overlay_src = _make_overlay_repo(tmp_path / "ov", "allwinner", [])
+    kernel_src = _make_kernel_src(tmp_path / "k")
+    b = _builder(tmp_path, kernel_src=kernel_src, overlay_src=overlay_src)
+
+    cfg = _cfg(vendor="allwinner", vendor_overlays=[],
+                board="myboard", board_overlays=["foo.dtbo"])
+    out = b.build(cfg)
+    assert (out["overlays"] / "foo.dtbo").exists()
 
 
 def test_collect_outputs_to_overlays_dir(tmp_path):

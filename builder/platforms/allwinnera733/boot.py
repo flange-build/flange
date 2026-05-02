@@ -10,8 +10,10 @@
 Allwinner 首版仍由平台 boot reason 适配决定是否扫描 recovery.conf；boot 分区
 布局与 Rockchip 对齐：启动配置放在 /extlinux/，设备树放在 /dtbs/<vendor>/。
 
-Overlay 两源同 Rockchip：boot.dtb_overlays (in-tree) 与 boot.vendor_overlays
-(radxa-overlays) 平铺到同一 /dtbs/allwinner/overlay/ 目录；basename 全局唯一。
+Overlay 三源同 Rockchip：boot.dtb_overlays (in-tree) / boot.vendor_overlays
+(radxa-overlays) / boot.board_overlays (components/board/<board>/overlays/)
+平铺到同一 /dtbs/allwinner/overlay/ 目录；basename 全局唯一。vendor 与 board
+共用 device-tree-overlay 组件的 cpp+dtc 编译流水线与产物目录。
 """
 
 import shutil
@@ -19,6 +21,7 @@ import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.dtb_overlay import (
+    board_overlays,
     copy_declared_overlays,
     default_overlays,
     dtb_overlays,
@@ -71,8 +74,9 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         shutil.copy2(kernel_image, extlinux_dir / "Image")
         dtb_filename = config.get("boot", {}).get("dtb_filename", "sunxi.dtb")
         shutil.copy2(kernel_dtb, dtb_dir / dtb_filename)
-        # DTB overlay 两源都平铺到 /dtbs/allwinner/overlay/，撞名时
-        # copy_declared_overlays 立即报错。
+        # DTB overlay 三源都平铺到 /dtbs/allwinner/overlay/，撞名时
+        # copy_declared_overlays 立即报错。vendor + board 共用
+        # target/device-tree-overlay/overlays/ 产物目录。
         copy_declared_overlays(
             target_dir / "kernel" / "overlay",
             dtb_dir / "overlay",
@@ -82,6 +86,11 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
             target_dir / "device-tree-overlay" / "overlays",
             dtb_dir / "overlay",
             vendor_overlays(config),
+        )
+        copy_declared_overlays(
+            target_dir / "device-tree-overlay" / "overlays",
+            dtb_dir / "overlay",
+            board_overlays(config),
         )
 
         # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定。

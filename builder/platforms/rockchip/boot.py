@@ -13,13 +13,16 @@ U-Boot distro_bootcmd 默认扫描 /extlinux/extlinux.conf；flange 的 U-Boot
 
 运行时通过 fstab 中 `LABEL=boot /boot ext4 ...` 挂载到 rootfs 的 /boot。
 
-Overlay 两源：
+Overlay 三源：
   - boot.dtb_overlays    : in-tree (来自 kernel 源码树，target/kernel/overlay/)
-  - boot.vendor_overlays : 来自 device-tree-overlay 组件
+  - boot.vendor_overlays : 来自 device-tree-overlay 组件 vendor 仓库
+                           (target/device-tree-overlay/overlays/)
+  - boot.board_overlays  : 来自 device-tree-overlay 组件板私有源
                            (target/device-tree-overlay/overlays/)
 
-两源平铺到同一 /dtbs/<vendor>/overlay/ 目录；basename 全局唯一，
-撞名时 copy_declared_overlays 立即报错。
+三源平铺到同一 /dtbs/<vendor>/overlay/ 目录；basename 全局唯一，
+撞名时 copy_declared_overlays 立即报错。vendor 与 board 共用 device-tree-
+overlay 组件的产物目录，由 OverlaysBuilder 在编译期写入。
 """
 
 import shutil
@@ -27,6 +30,7 @@ import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.dtb_overlay import (
+    board_overlays,
     copy_declared_overlays,
     default_overlays,
     dtb_overlays,
@@ -84,9 +88,10 @@ class RockchipBootBuilder(ComponentBuilder):
         dtb_dir.mkdir(parents=True)
         shutil.copy2(kernel_src_dtb, dtb_dir / kernel_src_dtb.name)
 
-        # DTB overlay 两源都平铺到 /dtbs/rockchip/overlay/：
-        # 1) in-tree (from kernel 源码树编译 → target/kernel/overlay/)
-        # 2) vendor (from radxa-overlays 编译 → target/device-tree-overlay/overlays/)
+        # DTB overlay 三源都平铺到 /dtbs/rockchip/overlay/：
+        # 1) in-tree  (from kernel 源码树编译 → target/kernel/overlay/)
+        # 2) vendor   (from radxa-overlays 编译 → target/device-tree-overlay/overlays/)
+        # 3) board    (from components/board/<board>/overlays/ 编译，与 vendor 共用产物目录)
         # copy_declared_overlays 内置撞名检测（dst 已存在 → ValueError）。
         copy_declared_overlays(
             target_dir / "kernel" / "overlay",
@@ -97,6 +102,11 @@ class RockchipBootBuilder(ComponentBuilder):
             target_dir / "device-tree-overlay" / "overlays",
             dtb_dir / "overlay",
             vendor_overlays(config),
+        )
+        copy_declared_overlays(
+            target_dir / "device-tree-overlay" / "overlays",
+            dtb_dir / "overlay",
+            board_overlays(config),
         )
 
         # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定。

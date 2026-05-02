@@ -1,18 +1,26 @@
 """device-tree-overlay 组件构建策略 (vendor 无关)。
 
-flange 的"第二来源"DT overlay：从外部 vendor overlay 仓库（默认
-[radxa-overlays](https://github.com/radxa-pkg/radxa-overlays)）按
-``boot.vendor_overlays`` 列表用 ``cpp + dtc`` 单独编译 ``.dtbo``，与
-内核源码树的 in-tree overlay 形成两源，由 boot 组件平铺打包到同一
-``/dtbs/<vendor>/overlay/`` 目录。
+flange 的"非内核 in-tree" DT overlay 编译流水线，覆盖两类源：
 
-vendor 无关：从 ``config["vendor"]`` 读 vendor 名（如 ``rockchip`` /
-``allwinner``），决定从仓库中哪个子目录取 dts。
+1. **vendor 仓库**（``boot.vendor_overlays``）—— 来自外部 vendor overlay 仓库
+   （默认 [radxa-overlays](https://github.com/radxa-pkg/radxa-overlays)），
+   git fetch 后从 ``arch/arm64/boot/dts/<vendor>/overlays/`` 取 dts/dtso。
 
-依赖 kernel 组件的源码目录（KSRC）：``cpp`` 用 ``-I {kernel_src}/include``
-解析 dts 中的 ``#include <dt-bindings/...>``。
+2. **板私有**（``boot.board_overlays``）—— dts/dtso 文件直接落在仓库内
+   ``components/board/<board>/overlays/``，不依赖外部仓库。用于不属于上游
+   vendor 仓库、又不便落入内核 in-tree 的板级私有 overlay（典型场景：
+   板上某显示模块 / SPI 外设的接入 overlay）。
 
-产物：``target/device-tree-overlay/overlays/<stem>.dtbo`` 平铺单层。
+两源都由本组件用 ``cpp + dtc`` 编译，产物平铺到同一目录
+``target/device-tree-overlay/overlays/``，由 boot 组件分别 copy 到
+``/dtbs/<vendor>/overlay/`` —— basename 撞名由 ``all_declared_overlays`` 在
+config 解析期拦截。
+
+vendor 字段：从 ``config["vendor"]`` 读 vendor 名（``rockchip`` / ``allwinner``
+等），决定 vendor 仓库内 dts 子目录。板私有源不依赖此字段。
+
+依赖 kernel 组件的源码目录（KSRC）：``cpp -I {kernel_src}/include`` 解析
+dts/dtso 中的 ``#include <dt-bindings/...>``。
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ import tempfile
 from pathlib import Path
 
 from builder.base import ComponentBuilder
-from builder.dtb_overlay import vendor_overlays
+from builder.dtb_overlay import board_overlays, vendor_overlays
 
 
 def _vendor_overlays_dir(repo_src: Path, vendor: str) -> Path:
@@ -72,8 +80,9 @@ class OverlaysBuilder(ComponentBuilder):
     component = "device-tree-overlay"
 
     def build(self, config: dict) -> dict:
-        """空 ``vendor_overlays`` short-circuit：仍 fetch 源码（保持内容哈希
-        稳定），但不执行 cpp / dtc。这样 git ref 不变时 cache 仍命中。"""
+        """空 ``vendor_overlays`` + 空 ``board_overlays`` short-circuit：仍
+        fetch 源码（保持内容哈希稳定），但不执行 cpp / dtc。这样 git ref
+        不变时 cache 仍命中。"""
         src_dir = self.source.ensure(self.component, config)
         self._status("源码就绪")
         # 不走 reset / patch（外部仓库不允许本地修改）
@@ -84,14 +93,24 @@ class OverlaysBuilder(ComponentBuilder):
         pass  # 无需 configure
 
     def compile(self, src_dir: Path, config: dict):
-        names = vendor_overlays(config)
+        v_names = vendor_overlays(config)
+        b_names = board_overlays(config)
         self._work_dir = Path(tempfile.mkdtemp(prefix="flange-overlays-"))
         self._build_dir = self._work_dir / "overlays"
         self._build_dir.mkdir()
 
-        if not names:
+        if not v_names and not b_names:
             return  # short-circuit
 
+        kernel_src = self._kernel_src_dir(config)
+
+        if v_names:
+            self._compile_vendor_overlays(src_dir, kernel_src, config, v_names)
+        if b_names:
+            self._compile_board_overlays(kernel_src, config, b_names)
+
+    def _compile_vendor_overlays(self, src_dir: Path, kernel_src: Path,
+                                  config: dict, names: list[str]) -> None:
         vendor = config.get("vendor")
         if not vendor:
             raise ValueError(
@@ -108,8 +127,6 @@ class OverlaysBuilder(ComponentBuilder):
                 f"vendor={vendor!r} 是否拼写正确？"
             )
 
-        kernel_src = self._kernel_src_dir(config)
-
         for stem in (n.removesuffix(".dtbo") for n in names):
             dts = _find_overlay_source(overlays_dir, stem)
             if dts is None:
@@ -118,25 +135,56 @@ class OverlaysBuilder(ComponentBuilder):
                     f"{{{','.join(_OVERLAY_SOURCE_EXTS)}}}；"
                     f"可用 stem 候选: {_format_available_stems(overlays_dir)}"
                 )
+            self._compile_one(dts, stem, kernel_src, overlays_dir,
+                              kind="vendor")
 
-            tmp = self._build_dir / f"{stem}.dtbo.tmp"
-            dtbo = self._build_dir / f"{stem}.dtbo"
+    def _compile_board_overlays(self, kernel_src: Path, config: dict,
+                                 names: list[str]) -> None:
+        """从 ``components/board/<board>/overlays/`` 编译板私有 overlay。"""
+        board = config.get("board")
+        if not board:
+            raise ValueError(
+                "boot.board_overlays 非空但 config 缺少 board 字段（不应发生）"
+            )
+        overlays_dir = Path(f"components/board/{board}/overlays").resolve()
+        if not overlays_dir.is_dir():
+            raise FileNotFoundError(
+                f"board overlay 源目录不存在: {overlays_dir}；"
+                f"声明了 boot.board_overlays={names} 但目录缺失，"
+                "请创建该目录并放入对应 .dts/.dtso 文件"
+            )
 
-            self._status(f"编译 vendor overlay: {stem}.dtbo")
-            # cpp 预处理：把 #include <dt-bindings/...> 展开。dts/dtso 在
-            # 语法层等价，cpp + dtc 不区分后缀。
-            self.docker.run([
-                "cpp", "-nostdinc", "-undef",
-                "-x", "assembler-with-cpp", "-E",
-                "-I", str(kernel_src / "include"),
-                "-I", str(overlays_dir),
-                str(dts), "-o", str(tmp),
-            ])
-            # dtc 编译为 .dtbo（-@ 启用 phandle 标签，overlay 必备）
-            self.docker.run([
-                "dtc", "-@", "-I", "dts", "-O", "dtb",
-                "-o", str(dtbo), str(tmp),
-            ])
+        for stem in (n.removesuffix(".dtbo") for n in names):
+            dts = _find_overlay_source(overlays_dir, stem)
+            if dts is None:
+                raise FileNotFoundError(
+                    f"board overlay 源文件不存在: {overlays_dir}/{stem}"
+                    f"{{{','.join(_OVERLAY_SOURCE_EXTS)}}}；"
+                    f"可用 stem 候选: {_format_available_stems(overlays_dir)}"
+                )
+            self._compile_one(dts, stem, kernel_src, overlays_dir,
+                              kind="board")
+
+    def _compile_one(self, dts: Path, stem: str, kernel_src: Path,
+                     include_dir: Path, *, kind: str) -> None:
+        tmp = self._build_dir / f"{stem}.dtbo.tmp"
+        dtbo = self._build_dir / f"{stem}.dtbo"
+
+        self._status(f"编译 {kind} overlay: {stem}.dtbo")
+        # cpp 预处理：把 #include <dt-bindings/...> 展开。dts/dtso 在
+        # 语法层等价，cpp + dtc 不区分后缀。
+        self.docker.run([
+            "cpp", "-nostdinc", "-undef",
+            "-x", "assembler-with-cpp", "-E",
+            "-I", str(kernel_src / "include"),
+            "-I", str(include_dir),
+            str(dts), "-o", str(tmp),
+        ])
+        # dtc 编译为 .dtbo（-@ 启用 phandle 标签，overlay 必备）
+        self.docker.run([
+            "dtc", "-@", "-I", "dts", "-O", "dtb",
+            "-o", str(dtbo), str(tmp),
+        ])
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         """返回 overlays 产物目录，由 engine 拷贝到 target/device-tree-overlay/。"""

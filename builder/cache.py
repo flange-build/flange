@@ -183,8 +183,10 @@ class BuildCache:
             if component in ("boot", "image"):
                 self._mix_partitions(h)
 
-            # device-tree-overlay 组件输出集由 boot.vendor_overlays + vendor
-            # 共同决定，必须混入；否则 boot 子配置变化不会级联到此组件
+            # device-tree-overlay 组件输出集由 boot.vendor_overlays /
+            # boot.board_overlays + vendor 共同决定，并由板私有 dtso 源目录
+            # 内容驱动，必须全部混入；否则 boot 子配置或板私有源变化不会级联
+            # 到此组件。
             if component == "device-tree-overlay":
                 h.update(b"vendor:")
                 h.update(self.config.get("vendor", "").encode())
@@ -193,6 +195,17 @@ class BuildCache:
                     (self.config.get("boot") or {}).get("vendor_overlays") or []
                 )
                 h.update(json.dumps(vlist).encode())
+                h.update(b"board_overlays:")
+                blist = sorted(
+                    (self.config.get("boot") or {}).get("board_overlays") or []
+                )
+                h.update(json.dumps(blist).encode())
+                # 板私有 dtso 源目录内容（如有）：dtso 改动须触发重 build
+                board = self.config.get("board", "")
+                board_dts_dir = Path(f"components/board/{board}/overlays")
+                if board_dts_dir.exists():
+                    h.update(b"board_overlays_src:")
+                    self._hash_directory(h, board_dts_dir)
 
             # bootloader 额外依赖 rkbin firmware
             if component == "bootloader":
