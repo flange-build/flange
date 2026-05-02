@@ -104,6 +104,21 @@ def _load_rootfs_config(project_root: Path | None = None) -> dict:
     return _load_module_var(config_file, "ROOTFS")
 
 
+def _load_overlay_config(project_root: Path | None = None) -> dict:
+    """加载 device-tree-overlay 组件的基线配置。
+
+    该配置位于 ``components/device-tree-overlay/config.py``，声明 vendor
+    overlay 仓库的 git source（repo + ref）以及 ``boot.vendor_overlays``
+    默认空列表。多 vendor 共用同一仓库，source 声明放在这里以保持单一来源。
+    文件缺失时返回空 dict（保持旧项目布局兼容）。
+    """
+    root = Path(project_root) if project_root else _project_root()
+    config_file = components_dir(root) / "device-tree-overlay" / "config.py"
+    if not config_file.is_file():
+        return {}
+    return _load_module_var(config_file, "DEVICE_TREE_OVERLAY")
+
+
 def _project_root() -> Path:
     """返回项目根目录。"""
     return PROJECT_ROOT
@@ -194,11 +209,15 @@ def get_board_config(
     platform_name = board_cfg["platform"]
     soc_name = board_cfg["soc"]
 
-    # 平台无关的 rootfs 基线配置。
+    # 平台无关的基线配置：rootfs（包集合）+ device-tree-overlay（vendor overlay
+    # 仓库 source pin）。两者都是跨 platform 共享的"组件级默认"，先合并到一起
+    # 再被 platform / SoC / board 覆盖。
     rootfs_cfg = _load_rootfs_config(root)
+    overlay_cfg = _load_overlay_config(root)
+    baseline = deep_merge(rootfs_cfg, overlay_cfg)
     # 第一层：平台配置
     platform_cfg = _load_platform_config(platform_name, root)
-    merged = deep_merge(rootfs_cfg, platform_cfg)
+    merged = deep_merge(baseline, platform_cfg)
     # 第二层：SoC 配置合并到平台上
     soc_cfg = _load_soc_config(soc_name, root)
     merged = deep_merge(merged, soc_cfg)

@@ -6,6 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from builder.dtb_overlay import (
+    all_declared_overlays,
+    copy_declared_overlays,
+    default_overlays,
+    dtb_overlays,
+    vendor_overlays,
+)
 from builder.platforms.allwinnera733 import ARTIFACT_NAMES as A733_ARTIFACT_NAMES
 from builder.platforms.allwinnera733.boot import AllwinnerA733BootBuilder
 from builder.platforms.allwinnera733.kernel import AllwinnerA733KernelBuilder
@@ -51,11 +58,13 @@ class FakeCache:
 
 
 def _cfg(platform: str, *, overlays: list[str] | None = None,
-         default: list[str] | None = None) -> dict:
+         default: list[str] | None = None,
+         vendor: list[str] | None = None) -> dict:
     dts = "rk3566-test" if platform == "rockchip" else "sun60i-a733-test"
     boot = {
         "kernel_args": "console=ttyS2,1500000",
         "dtb_overlays": overlays or [],
+        "vendor_overlays": vendor or [],
         "default_overlays": default or [],
     }
     if platform == "allwinnera733":
@@ -91,6 +100,14 @@ def _prepare_kernel_target(target_dir: Path, platform: str,
     for name in overlays:
         (overlay_dir / name).write_bytes(b"dtbo")
     return dtb_name
+
+
+def _prepare_vendor_overlay_target(target_dir: Path, overlays: list[str]) -> None:
+    """模拟 device-tree-overlay 组件已构建：target/device-tree-overlay/overlays/"""
+    vendor_dir = target_dir / "device-tree-overlay" / "overlays"
+    vendor_dir.mkdir(parents=True, exist_ok=True)
+    for name in overlays:
+        (vendor_dir / name).write_bytes(b"vendor-dtbo")
 
 
 def test_default_overlay_must_be_declared_in_dtb_overlays():
@@ -285,3 +302,160 @@ def test_a733_artifact_names_collect_kernel_dtbos():
 )
 def test_uboot_patches_define_fdtoverlay_addr_r(patch_path):
     assert "fdtoverlay_addr_r=" in patch_path.read_text()
+
+
+# --- vendor_overlays / all_declared_overlays / cross-source default ---
+
+
+def test_vendor_overlays_format_violations():
+    bad_cases = [
+        ("foo", "只能声明 .dtbo 文件"),       # 缺后缀
+        ("foo.dts", "只能声明 .dtbo 文件"),   # 错后缀
+        ("a/b.dtbo", "只能声明 boot overlay 文件名"),  # 含路径
+        (".hidden.dtbo", "只能声明 boot overlay 文件名"),  # 以 . 起头
+    ]
+    for name, msg in bad_cases:
+        cfg = {"boot": {"vendor_overlays": [name]}}
+        with pytest.raises((ValueError, TypeError), match=msg):
+            vendor_overlays(cfg)
+
+
+def test_vendor_overlays_must_be_list():
+    cfg = {"boot": {"vendor_overlays": "rk3568-i2c1.dtbo"}}
+    with pytest.raises(TypeError, match="必须是字符串列表"):
+        vendor_overlays(cfg)
+
+
+def test_vendor_overlays_default_empty():
+    cfg = {"boot": {}}
+    assert vendor_overlays(cfg) == []
+    assert dtb_overlays(cfg) == []
+    assert all_declared_overlays(cfg) == []
+
+
+def test_all_declared_overlays_returns_union_in_order():
+    cfg = _cfg(
+        "rockchip",
+        overlays=["my-local.dtbo"],
+        vendor=["radxa-zero3-a.dtbo", "rk3568-i2c1.dtbo"],
+    )
+    assert all_declared_overlays(cfg) == [
+        "my-local.dtbo",
+        "radxa-zero3-a.dtbo",
+        "rk3568-i2c1.dtbo",
+    ]
+
+
+def test_all_declared_overlays_collision_raises():
+    cfg = _cfg(
+        "rockchip",
+        overlays=["foo.dtbo", "bar.dtbo"],
+        vendor=["foo.dtbo", "qux.dtbo"],
+    )
+    with pytest.raises(ValueError, match="重名.*foo.dtbo"):
+        all_declared_overlays(cfg)
+
+
+def test_default_overlays_can_reference_vendor_source():
+    cfg = _cfg(
+        "rockchip",
+        overlays=["local.dtbo"],
+        vendor=["rk3568-i2c1.dtbo"],
+        default=["rk3568-i2c1.dtbo"],   # 来自 vendor
+    )
+    assert default_overlays(cfg) == ["rk3568-i2c1.dtbo"]
+
+
+def test_default_overlays_unknown_lists_both_candidates():
+    cfg = _cfg(
+        "rockchip",
+        overlays=["local.dtbo"],
+        vendor=["rk3568-i2c1.dtbo"],
+        default=["missing.dtbo"],
+    )
+    with pytest.raises(ValueError) as excinfo:
+        default_overlays(cfg)
+    msg = str(excinfo.value)
+    assert "missing.dtbo" in msg
+    assert "local.dtbo" in msg          # 列出 dtb_overlays 候选
+    assert "rk3568-i2c1.dtbo" in msg    # 列出 vendor_overlays 候选
+
+
+def test_rockchip_boot_copies_both_intree_and_vendor_overlays(tmp_path):
+    target_dir = tmp_path / "target"
+    _prepare_kernel_target(target_dir, "rockchip", ["my-local.dtbo"])
+    _prepare_vendor_overlay_target(target_dir, ["rk3568-i2c1.dtbo"])
+
+    builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
+    builder.cache = FakeCache(target_dir)
+
+    builder.compile(None, _cfg(
+        "rockchip",
+        overlays=["my-local.dtbo"],
+        vendor=["rk3568-i2c1.dtbo"],
+        default=["rk3568-i2c1.dtbo"],
+    ))
+
+    overlay_dir = (
+        builder._work_dir / "staging" / "dtbs" / "rockchip" / "overlay"
+    )
+    assert (overlay_dir / "my-local.dtbo").exists()
+    assert (overlay_dir / "rk3568-i2c1.dtbo").exists()
+    assert (overlay_dir / "rk3568-i2c1.dtbo").read_bytes() == b"vendor-dtbo"
+
+
+def test_a733_boot_copies_both_intree_and_vendor_overlays(tmp_path):
+    target_dir = tmp_path / "target"
+    _prepare_kernel_target(target_dir, "allwinnera733", ["my-local.dtbo"])
+    _prepare_vendor_overlay_target(target_dir, ["a733-foo.dtbo"])
+
+    builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
+    builder.cache = FakeCache(target_dir)
+
+    builder.compile(None, _cfg(
+        "allwinnera733",
+        overlays=["my-local.dtbo"],
+        vendor=["a733-foo.dtbo"],
+        default=["a733-foo.dtbo"],
+    ))
+
+    overlay_dir = (
+        builder._work_dir / "staging" / "dtbs" / "allwinner" / "overlay"
+    )
+    assert (overlay_dir / "my-local.dtbo").exists()
+    assert (overlay_dir / "a733-foo.dtbo").exists()
+
+
+def test_rockchip_boot_basename_collision_raises(tmp_path):
+    target_dir = tmp_path / "target"
+    # 两源都声明 foo.dtbo
+    _prepare_kernel_target(target_dir, "rockchip", ["foo.dtbo"])
+    _prepare_vendor_overlay_target(target_dir, ["foo.dtbo"])
+
+    builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
+    builder.cache = FakeCache(target_dir)
+
+    with pytest.raises(ValueError, match="撞名.*foo.dtbo"):
+        builder.compile(None, _cfg(
+            "rockchip",
+            overlays=["foo.dtbo"],
+            vendor=["foo.dtbo"],
+        ))
+
+
+def test_copy_declared_overlays_collision_raises(tmp_path):
+    src_a = tmp_path / "a"
+    src_b = tmp_path / "b"
+    dst = tmp_path / "dst"
+    src_a.mkdir()
+    src_b.mkdir()
+    (src_a / "foo.dtbo").write_bytes(b"A")
+    (src_b / "foo.dtbo").write_bytes(b"B")
+
+    copy_declared_overlays(src_a, dst, ["foo.dtbo"])
+    assert (dst / "foo.dtbo").read_bytes() == b"A"
+
+    with pytest.raises(ValueError, match="撞名.*foo.dtbo"):
+        copy_declared_overlays(src_b, dst, ["foo.dtbo"])
+    # 原文件没被覆盖
+    assert (dst / "foo.dtbo").read_bytes() == b"A"

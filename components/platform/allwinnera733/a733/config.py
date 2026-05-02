@@ -4,6 +4,10 @@ SOC = {
     "platform": "allwinnera733",
     "soc": "a733",
     "arch": "aarch64",
+    # vendor 是 radxa-overlays 仓库内 SoC 家族子目录名（与 Linux 主线 dts 路径
+    # 约定一致），device-tree-overlay 组件用它定位 arch/arm64/boot/dts/<vendor>/
+    # overlays/<stem>.dts。allwinnera733 平台对应 vendor 子目录是 "allwinner"。
+    "vendor": "allwinner",
     # 命名仓库：多组件共享同一次 clone
     "repos": {
         "linux-a733": {
@@ -49,10 +53,15 @@ SOC = {
     },
     "boot": {
         "dtb_filename": "sunxi.dtb",
-        # Device Tree Overlay（设备树覆盖）分两层声明：
-        # dtb_overlays 是需要构建并打包进 boot.img 的全集，
-        # default_overlays 是 extlinux 默认启动时按顺序应用的子集。
+        # Device Tree Overlay（设备树覆盖）有两类来源：
+        # - dtb_overlays：内核源码树内 (in-tree)，由 kernel make 编译
+        # - vendor_overlays：来自 radxa-overlays 仓库，由 device-tree-overlay
+        #   组件用 cpp + dtc 编译
+        # 两源 basename 必须全局唯一；打包时平铺到 /dtbs/<vendor>/overlay/。
+        # default_overlays 是 extlinux 默认启动时按顺序应用的子集，
+        # 可跨两源引用，无需前缀。
         "dtb_overlays": [],
+        "vendor_overlays": [],
         "default_overlays": [],
         # Allwinner BSP 内核使用自定义 earlyprintk=sunxi-uart（非标准 earlycon）
         # CONFIG_AW_UART_NG 驱动注册设备名为 ttyAS（非标准 ttyS），

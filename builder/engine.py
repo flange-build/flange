@@ -166,6 +166,12 @@ class BuildEngine:
             self.output.warning(f"flash-config.json 生成失败: {e}")
 
     def _get_builder(self, component: str):
+        # device-tree-overlay 组件 vendor 无关，直接路由到统一 builder，
+        # 不进入 platform.create_builder 分派；vendor 通过 config["vendor"]
+        # 在 builder 内部解析。
+        if component == "device-tree-overlay":
+            from builder.overlays import OverlaysBuilder
+            return OverlaysBuilder(self.docker, self.source)
         platform = self.config["platform"]
         mod = importlib.import_module(f"builder.platforms.{platform}")
         return mod.create_builder(component, self.docker, self.source)

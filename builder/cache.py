@@ -20,13 +20,17 @@ from pathlib import Path
 # recovery 组件在 image 之前构建，依赖 app（recoveryctl/adbd 通过 deb 装入
 # recovery rootfs）与 kernel（共享 kernel/dtb，并安装内核模块）。
 DEPENDENCY_GRAPH: dict[str, list[str]] = {
-    "kernel":     [],
-    "bootloader": [],
-    "app":        [],
-    "rootfs":     ["app", "kernel"],
-    "boot":       ["kernel"],
-    "recovery":   ["app", "kernel"],
-    "image":      ["boot", "bootloader", "rootfs", "recovery"],
+    "kernel":               [],
+    "bootloader":           [],
+    "app":                  [],
+    # device-tree-overlay 组件依赖 kernel：编译 vendor overlay 时 cpp 需要内核
+    # 源码树的 include/ 目录解析 dt-bindings 头文件。kernel 源码或配置变化级联
+    # 触发 vendor overlay 重 build。
+    "device-tree-overlay":  ["kernel"],
+    "rootfs":               ["app", "kernel"],
+    "boot":                 ["kernel", "device-tree-overlay"],
+    "recovery":             ["app", "kernel"],
+    "image":                ["boot", "bootloader", "rootfs", "recovery"],
 }
 
 
@@ -169,7 +173,7 @@ class BuildCache:
         elif component == "recovery":
             self._mix_recovery(h)
         else:
-            # kernel / bootloader / boot / image
+            # kernel / bootloader / boot / image / device-tree-overlay
             h.update(json.dumps(
                 self.config.get(component, {}),
                 sort_keys=True, default=str).encode())
@@ -178,6 +182,17 @@ class BuildCache:
             # 构建产物需消费 partitions 布局的组件
             if component in ("boot", "image"):
                 self._mix_partitions(h)
+
+            # device-tree-overlay 组件输出集由 boot.vendor_overlays + vendor
+            # 共同决定，必须混入；否则 boot 子配置变化不会级联到此组件
+            if component == "device-tree-overlay":
+                h.update(b"vendor:")
+                h.update(self.config.get("vendor", "").encode())
+                h.update(b"vendor_overlays:")
+                vlist = sorted(
+                    (self.config.get("boot") or {}).get("vendor_overlays") or []
+                )
+                h.update(json.dumps(vlist).encode())
 
             # bootloader 额外依赖 rkbin firmware
             if component == "bootloader":

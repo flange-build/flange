@@ -4,6 +4,10 @@ SOC = {
     "platform": "rockchip",
     "soc": "rk3566",
     "arch": "aarch64",
+    # vendor 是 radxa-overlays 仓库内 SoC 家族子目录名（与 Linux 主线 dts 路径
+    # 约定一致），device-tree-overlay 组件用它定位 arch/arm64/boot/dts/<vendor>/
+    # overlays/<stem>.dts。对 rockchip 平台恰好与 platform 同名。
+    "vendor": "rockchip",
     "rkbin": {
         "ini_prefix": "RK3566",
         "trust_ini_prefix": "RK3568",
@@ -23,10 +27,15 @@ SOC = {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
     },
     "boot": {
-        # Device Tree Overlay（设备树覆盖）分两层声明：
-        # dtb_overlays 是需要构建并打包进 boot.img 的全集，
-        # default_overlays 是 extlinux 默认启动时按顺序应用的子集。
+        # Device Tree Overlay（设备树覆盖）有两类来源：
+        # - dtb_overlays：内核源码树内 (in-tree)，由 kernel make 编译
+        # - vendor_overlays：来自 radxa-overlays 仓库，由 device-tree-overlay
+        #   组件用 cpp + dtc 编译
+        # 两源 basename 必须全局唯一；打包时平铺到 /dtbs/<vendor>/overlay/。
+        # default_overlays 是 extlinux 默认启动时按顺序应用的子集，
+        # 可跨两源引用，无需前缀。
         "dtb_overlays": [],
+        "vendor_overlays": [],
         "default_overlays": [],
         "kernel_args": "console=ttyS2,1500000 loglevel=7",
     },
