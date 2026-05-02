@@ -208,12 +208,14 @@ class SourceManager:
     def _ensure_repo(self, repo_dir: Path, cfg: dict) -> None:
         """统一的 clone + 同步入口。
 
-        三种路径：
-          1. repo_dir 不存在 → 首次 clone（按 branch，可选 commit）
+        四种路径：
+          1. repo_dir 不存在 → 首次 clone（按 branch，可选 commit/tag）
           2. 声明了 commit → HEAD 不等时 fetch + checkout，固定到该 commit
-          3. 仅声明 branch → fetch + reset --hard origin/<branch>，追远端最新
+          3. 声明了 tag → 解析 tag 对应的 commit；HEAD 不等时 fetch tag +
+             checkout，固定到该 tag。tag 与 commit 互斥（声明 tag 时忽略 commit）
+          4. 仅声明 branch → fetch + reset --hard origin/<branch>，追远端最新
 
-        约定：声明 branch 不声明 commit 代表"跟随远端"语义，因此 reset --hard
+        约定：声明 branch 不声明 commit/tag 代表"跟随远端"语义，因此 reset --hard
         会丢弃本地修改。要在源码目录里 hack 请改用 local_path。
 
         recurse_submodules: True 时首次 clone 递归初始化子模块，
@@ -222,10 +224,14 @@ class SourceManager:
         clone_url = self._resolve_clone_url(cfg)
         branch = cfg.get("branch", "")
         commit = cfg.get("commit", "")
+        tag = cfg.get("tag", "")
         recurse = cfg.get("recurse_submodules", False)
 
         if not repo_dir.exists():
-            self._clone(clone_url, branch, repo_dir, commit, recurse=recurse)
+            # tag 与 commit 在 _clone 内复用同一个 fetch-then-checkout 路径，
+            # 因此都通过 commit_ref 参数传入。
+            ref = commit or tag
+            self._clone(clone_url, branch, repo_dir, ref, recurse=recurse)
             return
 
         if commit:
@@ -233,6 +239,17 @@ class SourceManager:
                 self._fetch_checkout(repo_dir, commit)
                 if recurse:
                     self._update_submodules(repo_dir)
+            return
+
+        if tag:
+            # tag 是不可变 ref（按约定）。先尝试解析本地 tag→commit，HEAD 已是
+            # 目标则跳过；本地无该 tag（或解析失败）则走 fetch + checkout。
+            tag_commit = self._rev_parse_ref(repo_dir, f"refs/tags/{tag}^{{}}")
+            if tag_commit and self._rev_parse(repo_dir) == tag_commit:
+                return
+            self._fetch_checkout(repo_dir, tag)
+            if recurse:
+                self._update_submodules(repo_dir)
             return
 
         if branch:
@@ -289,6 +306,21 @@ class SourceManager:
         result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir,
                                 capture_output=True, text=True, check=True)
         return result.stdout.strip()
+
+    def _rev_parse_ref(self, repo_dir: Path, ref: str) -> str:
+        """解析任意 ref（tag / branch / 表达式）到 commit hash；失败返回空字符串。
+
+        用于 tag 幂等性比对：若本地不含该 tag，rev-parse 退出非零，本函数
+        返回空字符串，调用方走 fetch + checkout 路径。
+        """
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", ref],
+                cwd=repo_dir, capture_output=True, text=True, check=True,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return ""
 
     def _fetch_checkout(self, repo_dir: Path, commit: str):
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}

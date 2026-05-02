@@ -17,9 +17,9 @@ deep_merge 走标准三层。
 DEVICE_TREE_OVERLAY = {
     "device-tree-overlay": {
         "repo": "https://github.com/radxa-pkg/radxa-overlays.git",
-        # branch 字段在 SourceManager 中等价于 git ref，可以是 tag / branch /
-        # commit。这里 pin 到具体 release tag，避免 main 漂移。
-        "branch": "0.2.21",
+        # tag 是不可变 ref：SourceManager 会在首次 clone 后 checkout 到该 tag，
+        # 后续 build 解析本地 tag→commit 与 HEAD 比对，幂等跳过 fetch。
+        "tag": "0.2.21",
     },
     "boot": {
         # 默认空：未声明则 device-tree-overlay 组件 short-circuit，仅 fetch
