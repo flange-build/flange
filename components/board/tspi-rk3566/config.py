@@ -10,9 +10,6 @@ BOARD = {
     "bootloader": {
         "commit": "3c60a711e61015c1a61247837afbeaa85bd7fbf2",
     },
-    "+rootfs": {
-        "+packages": ["wpasupplicant"],
-    },
     "rootfs": {
         "root_password": "1234",
         "extra_firmware": [

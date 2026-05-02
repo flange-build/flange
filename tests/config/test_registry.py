@@ -198,3 +198,50 @@ class TestResolveConfig:
         # 基础包仍然在
         assert "systemd" in rootfs_pkgs
         assert "openssh-server" in rootfs_pkgs
+
+    def test_rootfs_common_packages_are_platform_independent(self):
+        """rootfs 公共包应同时进入 Rockchip 与 A733 的最终配置。"""
+        configs = [
+            resolve_config("radxa-zero3w", product="default", variant="release"),
+            resolve_config("radxa-cubie-a7z", product="default", variant="release"),
+            resolve_config("tspi-rk3566", product="default", variant="release"),
+        ]
+
+        for resolved in configs:
+            rootfs_pkgs = set(resolved["rootfs"]["packages"])
+            assert {
+                "systemd", "systemd-sysv", "dbus", "network-manager",
+                "iputils-ping", "iproute2", "openssh-server", "sudo",
+                "bash", "ca-certificates", "locales",
+                "cloud-guest-utils", "gdisk", "e2fsprogs", "util-linux",
+                "python3", "kmod", "wpasupplicant", "usbutils",
+                "net-tools", "systemd-timesyncd", "btop",
+            } <= rootfs_pkgs
+
+    def test_rootfs_package_sets_select_variant_packages(self):
+        """rootfs 应按 variant 选择不同包集合。"""
+        release_cfg = resolve_config(
+            "radxa-zero3w", product="default", variant="release"
+        )
+        debug_cfg = resolve_config(
+            "radxa-zero3w", product="default", variant="debug"
+        )
+
+        release_pkgs = set(release_cfg["rootfs"]["packages"])
+        debug_pkgs = set(debug_cfg["rootfs"]["packages"])
+
+        assert "release" in release_cfg["rootfs"]["package_set"]
+        assert "debug" in debug_cfg["rootfs"]["package_set"]
+        assert {"gdb", "strace", "tcpdump", "valgrind"}.isdisjoint(
+            release_pkgs
+        )
+        assert {"gdb", "strace", "tcpdump", "valgrind"} <= debug_pkgs
+
+    def test_rootfs_packages_are_deduplicated(self):
+        """公共包上移后，板级追加不应造成重复安装参数。"""
+        resolved = resolve_config(
+            "tspi-rk3566", product="default", variant="release"
+        )
+        packages = resolved["rootfs"]["packages"]
+
+        assert len(packages) == len(set(packages))

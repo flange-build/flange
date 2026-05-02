@@ -166,10 +166,15 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
 - 配置引擎位于 `builder/config/` 子包（merge.py、registry.py、query.py）
 - 构建引擎位于 `builder/` 目录
 - 平台策略类位于 `builder/platforms/<vendor>/`（如 `builder/platforms/rockchip/kernel.py`）
+- 平台无关 rootfs 基线配置位于 `components/rootfs/config.py`
 - 平台/SoC/板级配置位于 `components/platform/` 和 `components/board/` 下的 `config.py` 文件
 - 分区表转换器位于 `builder/partition/`
 
 ### 6.2 配置体系
+- rootfs 基线：`components/rootfs/config.py` 可声明平台无关的 rootfs 字段，先于硬件配置继承合并
+- rootfs 包集合：`rootfs.package_sets` 定义命名包集合，`rootfs.package_set` 选择集合；
+  可用 `+package_set:debug` / `+package_set:release` 按 product/variant 追加集合。配置解析后展开为
+  `rootfs.packages`，构建器只消费最终包列表。
 - 三层继承：platform → SoC → board，通过 `deep_merge()` 合并
 - 条件标记：`+packages:debug`（追加语义）、`packages:smart-display`（条件覆盖）
 - 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`
@@ -292,7 +297,7 @@ flange/
 │   │       └── patches/    #     板级补丁
 │   ├── app/            #   App 定义
 │   ├── packages/       #   自定义软件包
-│   └── rootfs/         #   rootfs overlay
+│   └── rootfs/         #   rootfs 基线配置与 overlay
 │
 ├── docker/             # Docker 构建环境定义
 │   ├── Dockerfile
