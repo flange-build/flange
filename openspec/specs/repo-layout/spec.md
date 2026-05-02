@@ -41,7 +41,7 @@ flange 仓库根目录 MUST 将顶层目录按角色分为三层：**代码层**
 
 ### Requirement: 内容层职责边界
 
-`components/` 层 MUST 仅包含仓库携带的"原料型"内容：应用源码、软件包定义、rootfs 基线配置与 overlay、板型定义、平台数据（patches、配置清单、SoC 级子目录）。`components/` 下的目录 MUST 可被版本控制跟踪，MUST NOT 包含构建生成的派生物。
+`components/` 层 MUST 仅包含仓库携带的"原料型"内容：应用源码、软件包定义、rootfs 基线配置与 overlay、板型定义、平台数据（patches、配置清单、SoC 级子目录），以及外部 vendor 资源（包括但不限于 device tree overlay 仓库的 source pin）。`components/` 下的目录 MUST 可被版本控制跟踪，MUST NOT 包含构建生成的派生物。
 
 #### Scenario: 组件源码归属
 
@@ -57,6 +57,11 @@ flange 仓库根目录 MUST 将顶层目录按角色分为三层：**代码层**
 
 - **WHEN** 需要为某个 SoC 家族维护 patches、配置清单与 SoC 子目录
 - **THEN** 这些内容 MUST 位于 `components/platform/<soc>/`，与 `builder/platforms/<soc>/` 中的构建逻辑按"数据与代码分离"的原则分别维护
+
+#### Scenario: 外部 vendor overlay 仓库 source 归属
+
+- **WHEN** 仓库需要消费外部 vendor 维护的 device tree overlay 仓库（例如 radxa-overlays）
+- **THEN** 该 source pin（git URL + ref）与默认配置 MUST 位于 `components/device-tree-overlay/` 下，构建逻辑位于 `builder/overlays.py`，遵循"数据与代码分离"原则
 
 #### Scenario: 内容层不得存放运行时产物
 
