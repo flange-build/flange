@@ -85,6 +85,14 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
   （recovery）；进入 recovery 时通过 Linux reboot reason
   `reboot("recovery")` 让 U-Boot 本次选择 `recovery.conf`，可选
   `flange_boot_once=recovery` 作为断电保持兜底，不持久修改 extlinux DEFAULT
+- **Device Tree Overlay（设备树覆盖）**：平台可通过 `boot.dtb_overlays`
+  声明需要构建并打包进 boot 分区的 `.dtbo` 全集，通过
+  `boot.default_overlays` 声明 extlinux 默认启动按顺序应用的子集；
+  boot 分区统一使用 `/extlinux/` 存放 Image 和 extlinux 配置，使用
+  `/dtbs/<vendor>/` 存放 base DTB，overlay 位于
+  `/dtbs/<vendor>/overlay/`。extlinux 中的路径以 boot 分区根为基准，
+  不带 Linux 挂载后的 `/boot` 前缀。U-Boot 环境必须提供
+  `fdtoverlay_addr_r` 供 extlinux `fdtoverlays` 临时加载 overlay。
 - **首版 transport = ADB over USB**：`flange recovery enter/list/flash/backup
   /shell/reboot` 通过 ADB 编排 `recoveryctl`；后续可扩展 USB DFU
 - **在线刷写默认流式写入**：`flange recovery flash` 通过 `adb forward

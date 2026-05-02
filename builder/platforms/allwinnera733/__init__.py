@@ -5,6 +5,7 @@ from builder.source import SourceManager
 
 # 产物名映射：(组件, collect key) → target 目录下的文件名/目录名
 ARTIFACT_NAMES = {
+    ("kernel",     "dtbos"):         "overlay",
     ("kernel",     "modules"):       "modules",
     ("bootloader", "boot0_sdcard"):   "boot0_sdcard.bin",
     ("bootloader", "boot0_ufs"):      "boot0_ufs.bin",

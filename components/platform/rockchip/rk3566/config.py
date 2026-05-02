@@ -23,6 +23,9 @@ SOC = {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
     },
     "boot": {
+        # Device Tree Overlay（设备树覆盖）分两层声明：
+        # dtb_overlays 是需要构建并打包进 boot.img 的全集，
+        # default_overlays 是 extlinux 默认启动时按顺序应用的子集。
         "dtb_overlays": [],
         "default_overlays": [],
         "kernel_args": "console=ttyS2,1500000 loglevel=7",

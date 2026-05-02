@@ -19,6 +19,11 @@ U-Boot 根据该 one-shot 状态选择本次 sysboot 读取哪份 extlinux 配�
     并保存 env；如果清理或保存失败，本次不进入 recovery，避免重复进入；
   - 默认仍读取 extlinux.conf。
 
+Allwinner A733 的 sunxi-common 内存布局已经提供
+`fdtoverlay_addr_r=FDTOVERLAY_ADDR_R`，本补丁保留该地址用于 extlinux
+的 `fdtoverlays` 临时加载，不额外改动 kernel、FDT、script 或 ramdisk
+加载区。
+
 diff --git a/src/board/sunxi/board_helper.c b/src/board/sunxi/board_helper.c
 --- a/src/board/sunxi/board_helper.c
 +++ b/src/board/sunxi/board_helper.c
@@ -108,6 +113,12 @@ diff --git a/src/board/sunxi/board_helper.c b/src/board/sunxi/board_helper.c
  	switch (bootmode[0]) {
  	case SUNXI_EFEX_CMD_FLAG:
  		sunxi_board_run_fel();
+diff --git a/src/include/configs/sunxi-common.h b/src/include/configs/sunxi-common.h
+--- a/src/include/configs/sunxi-common.h
++++ b/src/include/configs/sunxi-common.h
+@@ -318,1 +318,2 @@
++/* flange extlinux fdtoverlays 依赖 fdtoverlay_addr_r，沿用平台内存布局。 */
+ #define MEM_LAYOUT_ENV_SETTINGS \
 diff --git a/src/include/config_distro_bootcmd.h b/src/include/config_distro_bootcmd.h
 --- a/src/include/config_distro_bootcmd.h
 +++ b/src/include/config_distro_bootcmd.h

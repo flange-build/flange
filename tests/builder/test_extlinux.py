@@ -187,7 +187,7 @@ class TestA733BootExtlinux:
             _a733_cfg(recovery_enabled=True),
             "sunxi.dtb",
         )
-        assert "  devicetree /extlinux/sunxi.dtb" in text
+        assert "  devicetree /dtbs/allwinner/sunxi.dtb" in text
         assert "  fdt /" not in text
 
     def test_normal_only_when_disabled(self):

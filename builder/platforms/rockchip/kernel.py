@@ -2,6 +2,12 @@
 
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.dtb_overlay import (
+    dtb_overlays,
+    kernel_overlay_dir,
+    overlay_make_targets,
+    require_overlay_files,
+)
 
 
 class RockchipKernelBuilder(ComponentBuilder):
@@ -25,7 +31,13 @@ class RockchipKernelBuilder(ComponentBuilder):
         # 目标设备树无需在子目录 Makefile 的 dtb-y 里登记。
         dts_dir = config["kernel"].get("dts_dir", "rockchip")
         dts = config["kernel"]["dts"]
-        self.make(src_dir, ["Image", f"{dts_dir}/{dts}.dtb", "modules"],
+        targets = [
+            "Image",
+            f"{dts_dir}/{dts}.dtb",
+            *overlay_make_targets(config, dts_dir),
+            "modules",
+        ]
+        self.make(src_dir, targets,
                   arch=self.ARCH, cross=self.CROSS, jobs=jobs,
                   extra=["KCFLAGS=-Wno-error"],
                   label="编译内核...")
@@ -48,9 +60,14 @@ class RockchipKernelBuilder(ComponentBuilder):
     def collect(self, src_dir: Path, config: dict) -> dict:
         dts_dir = config["kernel"].get("dts_dir", "rockchip")
         dts = config["kernel"]["dts"]
-        return {
+        outputs = {
             "image": src_dir / f"arch/{self.ARCH}/boot/Image",
             "dtb": src_dir / f"arch/{self.ARCH}/boot/dts/{dts_dir}/{dts}.dtb",
             "modules": src_dir / "_modules_staging",
-            "dtbos": src_dir / f"arch/{self.ARCH}/boot/dts/{dts_dir}/overlay",
         }
+        overlays = dtb_overlays(config)
+        if overlays:
+            overlay_dir = kernel_overlay_dir(src_dir, self.ARCH, dts_dir)
+            require_overlay_files(overlay_dir, overlays)
+            outputs["dtbos"] = overlay_dir
+        return outputs

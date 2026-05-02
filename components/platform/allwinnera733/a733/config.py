@@ -49,6 +49,11 @@ SOC = {
     },
     "boot": {
         "dtb_filename": "sunxi.dtb",
+        # Device Tree Overlay（设备树覆盖）分两层声明：
+        # dtb_overlays 是需要构建并打包进 boot.img 的全集，
+        # default_overlays 是 extlinux 默认启动时按顺序应用的子集。
+        "dtb_overlays": [],
+        "default_overlays": [],
         # Allwinner BSP 内核使用自定义 earlyprintk=sunxi-uart（非标准 earlycon）
         # CONFIG_AW_UART_NG 驱动注册设备名为 ttyAS（非标准 ttyS），
         # 所以 console 必须是 ttyAS0 才能从 earlycon 平滑切换

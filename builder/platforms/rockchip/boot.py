@@ -1,9 +1,9 @@
 """Rockchip Boot 分区镜像构建策略。
 
 产物：boot.img（ext4 文件系统镜像），内含：
-  /Image                          — kernel 二进制
-  /dtb/<vendor>/<dts>.dtb         — 设备树
-  /dtb/<vendor>/overlay/*.dtbo    — （可选）设备树 overlay
+  /extlinux/Image                 — kernel 二进制
+  /dtbs/rockchip/<dts>.dtb        — 设备树
+  /dtbs/rockchip/overlay/*.dtbo   — （可选）设备树 overlay
   /extlinux/extlinux.conf         — normal 启动配置
   /extlinux/recovery.conf         — recovery 启动配置（启用 recovery 时）
 
@@ -18,6 +18,11 @@ import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.dtb_overlay import (
+    copy_declared_overlays,
+    default_overlays,
+    dtb_overlays,
+)
 from builder.extlinux import (
     LabelSpec,
     NORMAL_CONFIG,
@@ -32,7 +37,7 @@ class RockchipBootBuilder(ComponentBuilder):
     component = "boot"
 
     # boot 分区内 DTB 存放目录（相对 boot.img 根）
-    DTB_VENDOR_DIR = "dtb/rockchip"
+    DTB_VENDOR_DIR = "dtbs/rockchip"
 
     def build(self, config: dict) -> dict:
         """boot 镜像无需克隆源码仓库，跳过 source.ensure / reset / patch。"""
@@ -63,20 +68,21 @@ class RockchipBootBuilder(ComponentBuilder):
 
         # 组织 boot 分区内容
         self._status("准备 boot 分区内容...")
-        shutil.copy2(kernel_src_image, staging / "Image")
+        extlinux_dir = staging / "extlinux"
+        extlinux_dir.mkdir()
+        shutil.copy2(kernel_src_image, extlinux_dir / "Image")
         dtb_dir = staging / self.DTB_VENDOR_DIR
         dtb_dir.mkdir(parents=True)
         shutil.copy2(kernel_src_dtb, dtb_dir / kernel_src_dtb.name)
 
-        # 可选：DTB overlay（若 kernel 产物目录下提供了 overlay/）
-        overlay_src = target_dir / "kernel" / "overlay"
-        if overlay_src.is_dir():
-            overlay_dst = dtb_dir / "overlay"
-            shutil.copytree(overlay_src, overlay_dst)
+        # 可选：DTB overlay（按 boot.dtb_overlays 声明复制）
+        copy_declared_overlays(
+            target_dir / "kernel" / "overlay",
+            dtb_dir / "overlay",
+            dtb_overlays(config),
+        )
 
         # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定。
-        extlinux_dir = staging / "extlinux"
-        extlinux_dir.mkdir()
         (extlinux_dir / NORMAL_CONFIG).write_text(
             self._build_extlinux_conf(config, kernel_src_dtb.name))
         if (config.get("recovery") or {}).get("enabled", False):
@@ -100,18 +106,18 @@ class RockchipBootBuilder(ComponentBuilder):
         """生成 U-Boot distro boot 使用的 normal extlinux.conf。"""
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
-        default_overlays = boot_cfg.get("default_overlays", []) or []
+        overlay_names = default_overlays(config)
 
         # 用 PARTLABEL= 而非 ext4 LABEL=：GPT partition name 由 parted mkpart
         # 设置为 "rootfs"/"recovery"，kernel 启动早期可直接从 GPT 表解析，
         # 不依赖文件系统 probe（避免 "Waiting for root device LABEL=..." 死等）。
         normal = LabelSpec(
             name=NORMAL_LABEL,
-            kernel="/Image",
+            kernel="/extlinux/Image",
             fdt=f"/{self.DTB_VENDOR_DIR}/{dtb_filename}",
             fdt_directive="fdt",
             fdtoverlays=[
-                f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in default_overlays
+                f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in overlay_names
             ],
             append=f"root=PARTLABEL=rootfs rootfstype=ext4 rootwait rw {kernel_args}".rstrip(),
         )
@@ -121,15 +127,15 @@ class RockchipBootBuilder(ComponentBuilder):
         """生成 U-Boot distro boot 使用的 recovery.conf。"""
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
-        default_overlays = boot_cfg.get("default_overlays", []) or []
+        overlay_names = default_overlays(config)
 
         recovery = LabelSpec(
             name=RECOVERY_LABEL,
-            kernel="/Image",
+            kernel="/extlinux/Image",
             fdt=f"/{self.DTB_VENDOR_DIR}/{dtb_filename}",
             fdt_directive="fdt",
             fdtoverlays=[
-                f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in default_overlays
+                f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in overlay_names
             ],
             append=(
                 f"root=PARTLABEL=recovery rootfstype=ext4 rootwait rw "
