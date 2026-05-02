@@ -12,8 +12,11 @@
   - lib32stdc++6 + lib32z1                        — 运行 32-bit x86 Allwinner 工具
 """
 
+import shutil
 from pathlib import Path
+
 from builder.base import ComponentBuilder
+from builder.paths import BUILD_ROOT, PROJECT_ROOT
 
 
 class AllwinnerA733BootloaderBuilder(ComponentBuilder):
@@ -83,8 +86,13 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
         通用化方案：传入 tarball 文件名、URL、目标目录，
         按 {dest_dir}/{tarball_stem}/ 判断是否已解压。
         """
-        tarball = dest_dir / tarball_name
-        extracted = dest_dir / tarball_name.replace(".tar.xz", "").replace(".tar.gz", "")
+        cache_dir = self._toolchain_cache_dir()
+        cache_tarball = cache_dir / tarball_name
+        legacy_tarball = dest_dir / tarball_name
+        extracted = (
+            dest_dir
+            / tarball_name.replace(".tar.xz", "").replace(".tar.gz", "")
+        )
 
         # 验证 bin/ 非空才认为已解压（空目录残留视为未完成）
         bin_dir = extracted / "bin"
@@ -92,17 +100,48 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
             return  # 已解压
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        if not tarball.exists():
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        if self._valid_tarball(cache_tarball):
+            self._status(f"使用缓存的 {label} 工具链")
+        elif self._valid_tarball(legacy_tarball):
+            shutil.copy2(legacy_tarball, cache_tarball)
+            self._status(f"缓存 {label} 工具链")
+        else:
+            partial_tarball = cache_tarball.with_suffix(
+                cache_tarball.suffix + ".download"
+            )
             self._status(f"下载 {label} 工具链...")
             self.docker.run(
-                ["wget", "-q", "-O", str(tarball), tarball_url],
+                ["wget", "-q", "-O", self._docker_path(partial_tarball),
+                 tarball_url],
                 label=f"下载 {label} 工具链...",
+            )
+            self.docker.run(
+                ["mv", self._docker_path(partial_tarball),
+                 self._docker_path(cache_tarball)],
             )
         self._status(f"解压 {label} 工具链...")
         self.docker.run(
-            ["tar", "xavf", str(tarball), "-C", str(dest_dir)],
+            ["tar", "xavf", self._docker_path(cache_tarball),
+             "-C", self._docker_path(dest_dir)],
             label=f"解压 {label} 工具链...",
         )
+
+    def _toolchain_cache_dir(self) -> Path:
+        """返回 A733 bootloader 工具链缓存目录。"""
+        return BUILD_ROOT / "cache" / "toolchains" / "allwinnera733"
+
+    def _valid_tarball(self, path: Path) -> bool:
+        return path.is_file() and path.stat().st_size > 0
+
+    def _docker_path(self, path: Path) -> str:
+        path = Path(path)
+        if not path.is_absolute():
+            return str(path)
+        try:
+            return str(path.relative_to(PROJECT_ROOT))
+        except ValueError:
+            return str(path)
 
     def configure(self, src_dir: Path, config: dict):
         pass
