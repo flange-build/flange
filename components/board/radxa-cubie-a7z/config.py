@@ -62,12 +62,23 @@ BOARD = {
     "boot": {
         # 把 radxa-overlays 中与 A733 兼容的全部 overlay 打入 boot.img。
         "vendor_overlays": A733_VENDOR_OVERLAYS,
+        # 板私有 overlay，源文件位于 components/board/radxa-cubie-a7z/overlays/，
+        # 由 device-tree-overlay 组件复用同一 cpp+dtc 流水线编译。
+        "board_overlays": [
+            "sun60iw2p1-spi1-st7789v-display.dtbo",
+        ],
         # 开机默认应用的 overlay（按声明顺序写入 extlinux fdtoverlays）；
         # 未列入此处的 overlay 仍可通过运行时编辑 /boot/extlinux/extlinux.conf
         # 启用。
+        #
+        # SPI1 当前绑定 ST7789V SPI LCD（出 /dev/fb0，fbcon 接管为系统主
+        # 显示）；如需改回 spidev1.0 用户态访问，把下面这行换成
+        # "sun60iw2p1-spi1-spidev.dtbo"（已在 vendor_overlays 中）。
         "default_overlays": [
-            "sun60iw2p1-spi1-spidev.dtbo",   # /dev/spidev1.0
+            "sun60iw2p1-spi1-st7789v-display.dtbo",
         ],
+        # 让内核 boot log 也输出到 LCD（与串口 ttyAS0 并存）。
+        "kernel_args": "console=tty1",
     },
     "wifi": {
         "aic8800_usb": True,
@@ -80,6 +91,15 @@ BOARD = {
     },
     "rootfs": {
         "root_password": "1234",
+        # 板级附加包：
+        #   kbd            — 提供 chvt / openvt / setfont 控制 fbcon
+        #   console-setup  — 应用 /etc/default/console-setup 的字体设置
+        #   fonts-terminus — Terminus 6×12 控制台字体（ST7789V 屏适配）
+        "packages": [
+            "kbd",
+            "console-setup",
+            "fonts-terminus",
+        ],
         # AIC8800 旧 BSP firmware helper 从 aic_fw_path 直接读取扁平文件；
         # Wi-Fi fdrv 又会在同一路径下拼接 aic8800D80/ 读取用户配置。
         # 因此同一批 Radxa D80 USB 固件同时安装为扁平目录和芯片子目录。

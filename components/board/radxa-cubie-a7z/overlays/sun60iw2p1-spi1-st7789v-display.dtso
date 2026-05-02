@@ -1,0 +1,82 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * 在 SPI1 上挂 ST7789V 240×280 SPI LCD（fbtft 路径），出 /dev/fb0。
+ *
+ * 接线（Cubie A7Z 40-pin header）：
+ *   MOSI    PD11 (PIN_19)  — SPI1 控制器输出
+ *   SCLK    PD12 (PIN_23)  — SPI1 控制器时钟
+ *   CS      PB3  (PIN_31)  — 软件 CS（PB3 的 SPI 复用是 SPI2_CS0，
+ *                            不能给 SPI1 做硬件片选；走 cs-gpios GPIO 翻转）
+ *   DC      PB5  (PIN_12)  — fbtft Data/Command
+ *   RES     PB6  (PIN_35)  — fbtft Reset，低有效
+ *   BLK     PB4 / PIN_1    — 背光（GPIO 控制或常 3.3V）
+ *
+ * 占用：spi1 (PD10-13 中的 PD11/PD12/PD13 三脚)、PB3、PB5、PB6。
+ * PD10 (SPI1_CS0 硬件片选脚) 不参与 pinmux —— LCD 物理上接到 PB3 软 CS，
+ * 让 PD10 保持悬空避免误响应。
+ */
+
+/ {
+	compatible = "allwinner,sun60i-a733";
+
+	metadata {
+		title = "Enable ST7789V 240x280 SPI1 LCD on Cubie A7Z";
+		compatible = "radxa,cubie-a7z";
+		category = "display";
+		exclusive = "spi1", "PD11", "PD12", "PD13", "PB3", "PB5", "PB6";
+		description = "Bind ST7789V fbtft on SPI1; software CS=PB3 (PIN_31), DC=PB5 (PIN_12), RES=PB6 (PIN_35); MOSI=PD11 (PIN_19), SCLK=PD12 (PIN_23). PD10 hardware CS unused.";
+	};
+
+	fragment@0 {
+		target = <&pio>;
+
+		__overlay__ {
+			spi1_pins_st7789v: spi1-st7789v@0 {
+				pins = "PD11", "PD12", "PD13";
+				function = "spi1";
+				drive-strength = <10>;
+			};
+
+			spi1_pins_st7789v_sleep: spi1-st7789v@1 {
+				pins = "PD11", "PD12", "PD13";
+				function = "gpio_in";
+				drive-strength = <10>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&spi1>;
+
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			clock-frequency = <50000000>;
+			pinctrl-0 = <&spi1_pins_st7789v>;
+			pinctrl-1 = <&spi1_pins_st7789v_sleep>;
+			pinctrl-names = "default", "sleep";
+			sunxi,spi-bus-mode = <1>;       /* master */
+			sunxi,spi-cs-mode = <1>;        /* software CS via cs-gpios */
+			cs-gpios = <&pio 1 3 1>;        /* PB3 ACTIVE_LOW */
+			status = "okay";
+
+			st7789v@0 {
+				compatible = "sitronix,st7789v";
+				reg = <0>;
+				spi-max-frequency = <40000000>;
+				rotate = <0>;
+				fps = <30>;
+				buswidth = <8>;
+				regwidth = <8>;
+				width = <240>;
+				height = <280>;
+				dc-gpios = <&pio 1 5 0>;     /* PB5, ACTIVE_HIGH */
+				reset-gpios = <&pio 1 6 1>;  /* PB6, ACTIVE_LOW */
+				debug = <0>;
+				status = "okay";
+			};
+		};
+	};
+};
