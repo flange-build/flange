@@ -60,10 +60,14 @@ BOARD = {
         "dts": "sun60i-a733-cubie-a7z",
     },
     "boot": {
-        # 把 radxa-overlays 中与 A733 兼容的全部 overlay 打入 boot.img；
-        # 默认不应用（default_overlays 仍为空），运行时通过编辑
-        # /boot/extlinux/extlinux.conf 的 fdtoverlays 行选用。
+        # 把 radxa-overlays 中与 A733 兼容的全部 overlay 打入 boot.img。
         "vendor_overlays": A733_VENDOR_OVERLAYS,
+        # 开机默认应用的 overlay（按声明顺序写入 extlinux fdtoverlays）；
+        # 未列入此处的 overlay 仍可通过运行时编辑 /boot/extlinux/extlinux.conf
+        # 启用。
+        "default_overlays": [
+            "sun60iw2p1-spi1-spidev.dtbo",   # /dev/spidev1.0
+        ],
     },
     "wifi": {
         "aic8800_usb": True,
