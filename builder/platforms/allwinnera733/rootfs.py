@@ -145,6 +145,12 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
             self._set_root_password(rootfs_dir, root_password)
 
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict):
+        """安装 kernel modules_install 产物到 rootfs 的 /lib/modules。
+
+        kernel 构建阶段通过 modules_install 产出标准 lib/modules 树；
+        rootfs 依赖 kernel 后，只需保持该目录结构原样复制，modprobe 才能
+        正确读取 modules.dep、modules.alias 等索引文件。
+        """
         product = config.get("product", "default")
         variant = config.get("variant", "release")
         target_dir = Path(".build/target") / config["board"] / product / variant

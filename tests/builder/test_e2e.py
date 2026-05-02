@@ -376,10 +376,14 @@ class TestEngineAppIntegration:
             f"期望 app 在 rootfs 之前，实际顺序：{order}"
         )
 
-    def test_构建rootfs时不含无关组件(self):
-        """构建 rootfs 路径不应包含 kernel、bootloader、image 等无关组件。"""
+    def test_构建rootfs时包含kernel但不含镜像组件(self):
+        """构建 rootfs 路径应包含 kernel 模块产物，但不包含刷写镜像组件。"""
         order = _topo_sort(DEPENDENCY_GRAPH, "rootfs")
-        for irrelevant in ("kernel", "bootloader", "boot", "image"):
+        assert "kernel" in order
+        assert order.index("kernel") < order.index("rootfs"), (
+            f"期望 kernel 在 rootfs 之前，实际顺序：{order}"
+        )
+        for irrelevant in ("bootloader", "boot", "image"):
             assert irrelevant not in order, (
                 f"{irrelevant} 不应出现在 rootfs 构建路径中，实际顺序：{order}"
             )

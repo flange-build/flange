@@ -50,9 +50,11 @@ class AllwinnerA733KernelBuilder(ComponentBuilder):
 
         # BSP 集成与 DTS 准备
         self._integrate_bsp(src_dir, bsp_dir, config)
+        self._write_aic8800_usb_firmware_path_override(bsp_dir)
         self._integrate_dts(src_dir, bsp_dir, device_dir, config)
 
         self._write_case_insensitive_fix(src_dir)
+        self._write_aic8800_wlan_override(src_dir)
         self._write_usb_gadget_override(src_dir)
         self.configure(src_dir, config)
         self.compile(src_dir, config)
@@ -309,7 +311,8 @@ class AllwinnerA733KernelBuilder(ComponentBuilder):
 
         合并顺序由 platform/allwinnera733/a733/config.py 的 kernel.defconfig 列表保证：
           defconfig → bsp_defconfig → radxa.config → radxa_custom.config
-          → usb_gadget.config (本 fragment) → case_insensitive_fix.config
+          → aic8800_wlan.config → usb_gadget.config (本 fragment)
+          → case_insensitive_fix.config
         """
         override = src_dir / "arch" / self.ARCH / "configs" / "usb_gadget.config"
         override.write_text(
@@ -321,6 +324,77 @@ class AllwinnerA733KernelBuilder(ComponentBuilder):
             "CONFIG_USB_CONFIGFS_F_FS=y\n"
         )
         self._status("usb_gadget.config 生成")
+
+    def _write_aic8800_wlan_override(self, src_dir: Path):
+        """生成 config fragment 启用 AIC8800 USB Wi-Fi 模块。
+
+        上游 radxa.config 将 CONFIG_AIC_WLAN_SUPPORT 关闭，以便使用
+        DKMS 包。flange 使用内核 modules_install 产物进入 rootfs，因此这里
+        重新启用 BSP 内的 USB Wi-Fi 驱动和 firmware helper。
+        """
+        override = src_dir / "arch" / self.ARCH / "configs" / "aic8800_wlan.config"
+        override.write_text(
+            "# AIC8800 USB Wi-Fi 启用覆盖（由 AllwinnerA733KernelBuilder 生成）\n"
+            "# 用途：覆盖 radxa.config 的 CONFIG_AIC_WLAN_SUPPORT=n，使用内核模块产物\n"
+            "CONFIG_AIC_WLAN_SUPPORT=y\n"
+            "CONFIG_AIC8800_USB=y\n"
+            "# CONFIG_AIC8800_SDIO is not set\n"
+            "CONFIG_AIC_LOADFW_SUPPORT=m\n"
+            "CONFIG_AIC8800_WLAN_SUPPORT=m\n"
+            "# CONFIG_AIC_BTUSB_SUPPORT is not set\n"
+        )
+        self._status("aic8800_wlan.config 生成")
+
+    def _write_aic8800_usb_firmware_path_override(self, bsp_dir: Path):
+        """修正 AIC8800 USB Wi-Fi 子模块中硬编码的固件路径。
+
+        USB 驱动源码仍带 Android 风格 `/vendor/etc/firmware` 默认值。
+        flange 在 A733 上使用 Radxa aic8800 仓库提供的 USB 固件，安装
+        到 `/lib/firmware/aic8800_fw/USB`；旧 BSP loader 从该目录读取
+        扁平 D80 固件，fdrv 再从其 `aic8800D80/` 子目录读取配置文件。
+        """
+        makefile = (
+            bsp_dir
+            / "drivers"
+            / "net"
+            / "wireless"
+            / "aic8800"
+            / "usb"
+            / "aic8800_fdrv"
+            / "Makefile"
+        )
+        if not makefile.exists():
+            return
+        old_paths = {
+            'CONFIG_AIC_FW_PATH = "/vendor/etc/firmware"',
+            'CONFIG_AIC_FW_PATH = "/lib/firmware/aic8800"',
+        }
+        new_path = 'CONFIG_AIC_FW_PATH = "/lib/firmware/aic8800_fw/USB"'
+        text = makefile.read_text()
+
+        lines = text.splitlines()
+        changed = False
+        has_new_active = False
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if line.lstrip().startswith("#"):
+                continue
+            if stripped == new_path:
+                has_new_active = True
+                continue
+            if stripped in old_paths:
+                lines[index] = line.replace(stripped, new_path)
+                changed = True
+
+        if not changed and has_new_active:
+            self._status("AIC8800 USB 固件路径已是 Radxa USB 目录")
+            return
+        if not changed:
+            raise RuntimeError(f"AIC8800 USB 固件路径配置格式非预期: {makefile}")
+
+        suffix = "\n" if text.endswith("\n") else ""
+        makefile.write_text("\n".join(lines) + suffix)
+        self._status("AIC8800 USB 固件路径修正到 Radxa USB 目录")
 
     def configure(self, src_dir: Path, config: dict):
         """支持多步 defconfig 合并。"""

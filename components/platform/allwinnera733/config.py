@@ -12,6 +12,7 @@ PLATFORM = {
             "iputils-ping", "iproute2", "openssh-server", "sudo",
             "bash", "ca-certificates", "locales",
             "cloud-guest-utils", "gdisk", "e2fsprogs", "util-linux",
+            "kmod", "usbutils", "net-tools", "wpasupplicant",
             # recoveryctl 依赖 python3 完整 stdlib（同 rockchip 平台说明）。
             "python3",
         ],
