@@ -44,9 +44,9 @@
 ## 7. 集成验证（手工）
 
 - [x] 7.1 ~~示例配置~~ 暂保留默认 `[]`，使用方法在 design / spec 中已说明；用户在自己的 board / product / variant config 中追加即可
-- [ ] 7.2 跑 `flange build`，完整链路成功；检查 `target/device-tree-overlay/overlays/*.dtbo` 已生成（**待用户在真实环境执行**）
-- [ ] 7.3 mount boot.img，确认 `/dtbs/rockchip/overlay/` 包含声明的 vendor dtbo（**待用户验证**）
-- [ ] 7.4 烧入 SD 启动，sshd 进入；编辑 `/boot/extlinux/extlinux.conf` 的 `fdtoverlays` 行加 vendor overlay 路径；reboot 后 `dmesg | grep overlay` 验证应用（**需要硬件**）
+- [x] 7.2 跑 `flange build` 完整链路成功；`target/.../device-tree-overlay/overlays/` 生成 22 个 dtbo（cubie-a7z A733 全集）
+- [x] 7.3 烧入板子启动，`/boot/dtbs/allwinner/overlay/` 包含声明的 22 个 vendor dtbo
+- [x] 7.4 通过 adb 编辑 `/boot/extlinux/extlinux.conf` 加 `fdtoverlays /dtbs/allwinner/overlay/sun60iw2p1-spi1-spidev.dtbo`，reboot 后 `sunxi-spi-ng 2541000.spi: probe success`，`/dev/spidev1.0` 出现，spidev xfer 调用通；overlay 生效路径完整跑通
 - [x] 7.5 验证不声明 `vendor_overlays` 时（其他 board）build 不变、不影响 — config loader sanity check 通过：vendor / device-tree-overlay 字段就位，vendor_overlays 默认 `[]`，OverlaysBuilder short-circuit；现有 31 项 dtb_overlays / overlays_builder 测试全通过
 
 ## 8. spec 增量与文档
