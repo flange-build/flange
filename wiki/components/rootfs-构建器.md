@@ -12,7 +12,7 @@ related:
   - "[[chroot 上下文]]"
   - "[[deb 打包引擎]]"
   - "[[app 打包系统]]"
-updated: 2026-04-26
+updated: 2026-05-03
 ---
 
 ## TL;DR
@@ -21,6 +21,7 @@ ubuntu-base + apt + overlay + deb 两阶段 rootfs 构建。Phase 1 可缓存（
 
 ## 关键设计要点
 
+- **package_sets 基线**：`components/rootfs/config.py` 定义 `ROOTFS["package_sets"]`（`base`/`debug`/`release`），平台和 board 通过 `rootfs.package_set` 选用，`+package_set` 按 variant 激活；`_expand_rootfs_package_sets()` 在 registry 展开为 `rootfs.packages` 扁平列表
 - **Phase 1 — base**（`_build_phase1`，L117）：解压 ubuntu-base，chroot 内 `apt-get install` `rootfs.packages`；tar 存 base cache，下次跳过
 - **Phase 2**（`_build_phase2`，L142）：board overlay；rsync _modules_staging；`dpkg -i` `custom_packages`（含 App deb）；`_set_root_password` + 校验
 - **fstab**（`_install_fstab`，L69）：按分区表写 `/etc/fstab`，rootfs PARTUUID 固定

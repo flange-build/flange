@@ -30,6 +30,46 @@ SOC = {
                       "radxa_custom.config", "aic8800_wlan.config",
                       "usb_gadget.config", "case_insensitive_fix.config"],
         "dts_dir": "allwinner",
+        # out-of-tree 内核模块：源码在内核树外，使用独立构建系统编译
+        # 每个声明包含：
+        #   dir         — 相对于内核源码树的构建入口目录
+        #   label       — 显示名
+        #   make_args   — 传给 make 的参数
+        #   ko_pattern  — glob 模式匹配编译产物 .ko（相对于 src_dir）
+        #   pre_build   — 编译前 shell 命令（如临时补丁）
+        #   post_build  — 编译后 shell 命令（如恢复补丁，无论成败都执行）
+        "oot_modules": [
+            {
+                "dir": "bsp/modules/gpu/img-bxm/linux/rogue_km/build/linux/sunxi_linux",
+                "label": "img-bxm (PowerVR BXM GPU)",
+                "make_args": [
+                    "BUILD=release",
+                    "KERNELDIR={kernel_src}",
+                    "KERNEL_CC=aarch64-linux-gnu-gcc",
+                    "KERNEL_LD=aarch64-linux-gnu-ld",
+                    "KERNEL_NM=aarch64-linux-gnu-nm",
+                    "KERNEL_OBJCOPY=aarch64-linux-gnu-objcopy",
+                    "CROSS_COMPILE=aarch64-linux-gnu-",
+                ],
+                "ko_pattern": [
+                    "bsp/modules/gpu/img-bxm/linux/rogue_km/"
+                    "binary_sunxi_linux_nulldrmws_release/"
+                    "target_aarch64/kbuild/pvrsrvkm.ko",
+                ],
+                # Rogue DDK kbuild.mk 未传 ARCH=arm64，交叉编译时需临时注入
+                "pre_build": [
+                    "sed -i"
+                    r" 's|M=$$(abspath $$(TARGET_PRIMARY_OUT)/kbuild)|ARCH=arm64"
+                    r" M=$$(abspath $$(TARGET_PRIMARY_OUT)/kbuild)|'"
+                    " bsp/modules/gpu/img-bxm/linux/rogue_km/build/linux/kbuild/kbuild.mk",
+                ],
+                "post_build": [
+                    "sed -i"
+                    r" 's|ARCH=arm64 M=|M=|'"
+                    " bsp/modules/gpu/img-bxm/linux/rogue_km/build/linux/kbuild/kbuild.mk",
+                ],
+            },
+        ],
     },
     "kernel_bsp": {
         "from_repo": "linux-a733",

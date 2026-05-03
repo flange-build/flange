@@ -25,3 +25,25 @@
 - schema §4.1/§6.3 字数阈值由「600 字」调整为「1200 非空白字符」（中英混排经验值）
 - §4.1 明确正文骨架按需选用，允许 history/roadmap 页用「关键里程碑」替代「关键设计要点」
 - §4.2 增加索引页 frontmatter 模板（精简三字段：title/type/updated）+ 字段语义说明
+
+## [2026-05-03] sync | out-of-tree 模块机制 + GPU 驱动落地
+
+- `wiki/concepts/out-of-tree模块.md` — 新建：OOT 模块配置声明 / 编译安装流程 / img-bxm 实例
+- `wiki/concepts/index.md` — 新增「内核与模块」分组 + [[out-of-tree 模块]] 链接
+- `wiki/platforms/allwinnera733-平台.md` — 易踩坑追加 BSP GPU 驱动 kbuild 不兼容说明
+- `wiki/boards/radxa-cubie-a7z.md` — 新增 GPU 段（PowerVR BXM-4-64 + OOT 模块 + userspace 驱动来源）
+- `wiki/workflows/新增平台支持.md` — 新增 Out-of-Tree 模块配置指引
+- `ProjectSpec.md` §11.4 — 追加 OOT modules 行
+- `docs/proposal/fb-gpu-test/fb-gpu-test.md` — GPU 驱动状态更新为已落地（pvrsrvkm.ko OOT 编译 + Radxa userspace 包）
+
+## [2026-05-03] sync | 04-26 以来代码变更全量同步
+
+对齐 04-26 初版后 15+ commits 的代码变更：
+- `wiki/boards/radxa-cubie-a7z.md` — 重写：新增 ST7789V LCD / AIC8800 Wi-Fi / DT overlays 三源 / overlay 文件清单
+- `wiki/apps/flange-rootfs-grow.md` — 新建：首次启动 rootfs 扩展 app
+- `wiki/apps/index.md` — 追加 flange-rootfs-grow
+- `wiki/subsystems/源码管理-SourceManager.md` — 新增 tag 字段 / ref 优先级 / _rev_parse_ref
+- `wiki/components/kernel-构建器.md` — 新增 OOT 模块编译流程 + related 链接
+- `wiki/components/rootfs-构建器.md` — 新增 package_sets 基线配置说明
+- `wiki/workflows/新增板级支持.md` — 新增 overlays/ 目录 + board_overlays 声明
+- `wiki/index.md` — 追加 out-of-tree 模块 / flange-rootfs-grow 入口

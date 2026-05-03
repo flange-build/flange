@@ -1,7 +1,7 @@
 ---
 title: App 索引
 type: index
-updated: 2026-04-26
+updated: 2026-05-03
 ---
 
 # App 索引
@@ -10,3 +10,4 @@ updated: 2026-04-26
 
 - [[recoveryctl]] — device 端 recovery CLI
 - [[adbd]] — USB ADB 服务，recovery rootfs 内运行
+- [[flange-rootfs-grow]] — 首次启动扩展 rootfs 分区与文件系统

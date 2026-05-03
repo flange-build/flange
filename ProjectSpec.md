@@ -422,6 +422,7 @@ feat(kernel): 添加内核编译支持
 ### 11.4 输出管理
 - 构建产物收集到 `.build/target/<board>/<product>/<variant>/`（git ignored，根目录 `target` 软链接直达）
 - 内核产出：Image、DTB、modules（INSTALL_MOD_STRIP=1）
+- 内核构建支持 out-of-tree 模块：通过 `kernel.oot_modules` 配置声明，在 `make modules` 后独立编译并统一安装到 rootfs
 - flash.sh 由 `builder/flash.py` 自动生成
 - 分区配置由 `builder/partition/` 从 config 自动转换
 - 使用 `flange clean` 清理当前配置的构建产物

@@ -30,9 +30,9 @@ EGL surfaceless + Mesa llvmpipe (软渲染)
 
 ## GPU 驱动状态
 
-- **Kernel 驱动**：IMG PowerVR 已加载（`/sys/devices/platform/soc@3000000/1800000.gpu`）
-- **Userspace 驱动**：**缺失**。无 libpvr/libIMG，Mesa 无开源 PowerVR 支持
-- **当前回退**：Mesa llvmpipe 软渲染（`EGL_PLATFORM=surfaceless`）
+- **Kernel 驱动**：`pvrsrvkm.ko`，通过 flange [[out-of-tree 模块]] 机制在 Docker 内编译，vermagic 与内核一致
+- **Userspace 驱动**：Radxa `xserver-xorg-img-bxm` 包（含 libVK_IMG.so、libsrv_um.so、GPU firmware），设备端 `apt install` 安装
+- **软渲染回退**：Mesa llvmpipe（`EGL_PLATFORM=surfaceless`），无需 GPU 驱动亦可运行
 
 ### 已安装的依赖包
 
@@ -83,6 +83,6 @@ killall fb_triangle
 
 ## 演进路径
 
-1. **PowerVR userspace 驱动**：部署 Allwinner BSP 提供的 PowerVR ROCm 驱动，启用硬件 GPU 加速
+1. ~~**PowerVR userspace 驱动**：部署 Allwinner BSP 提供的 PowerVR ROCm 驱动，启用硬件 GPU 加速~~ ✅ 已完成（Radxa xserver-xorg-img-bxm 包 + flange OOT 编译 pvrsrvkm.ko）
 2. **DRM/KMS 渲染**：将 LCD 接入 DRM 管道（`drm/tiny` 驱动），直接 `drmModeSetCrtc` 显示，无需 fb0 blit
 3. **零拷贝优化**：使用 GBM buffer + DMA-BUF 共享，避免 `glReadPixels` 回读

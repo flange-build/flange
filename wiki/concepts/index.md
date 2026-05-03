@@ -1,7 +1,7 @@
 ---
 title: 概念索引
 type: index
-updated: 2026-04-26
+updated: 2026-05-03
 ---
 
 # 概念索引
@@ -35,6 +35,9 @@ updated: 2026-04-26
 - [[FlashStrategy 抽象]]
 - [[分区表系统]]
 - [[USB 线刷协议]]
+
+## 内核与模块
+- [[out-of-tree 模块]]
 
 ## Recovery
 - [[recovery 系统]]

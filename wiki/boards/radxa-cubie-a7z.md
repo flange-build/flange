@@ -4,17 +4,23 @@ type: board
 status: wip
 sources:
   - components/board/radxa-cubie-a7z/config.py
+  - components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso
   - components/board/radxa-cubie-a7z/overlay/etc/usbdevice.conf
+  - components/board/radxa-cubie-a7z/overlay/etc/default/console-setup
+  - components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/st7789v.conf
+  - components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/aic8800.conf
+  - components/board/radxa-cubie-a7z/overlay/etc/modprobe.d/aic8800.conf
 related:
   - "[[allwinnera733 平台]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-04-26
+  - "[[out-of-tree 模块]]"
+updated: 2026-05-03
 ---
 
 ## TL;DR
 
-Radxa Cubie A7Z，Allwinner A733 SoC，A733 平台首块落地板，刷写工具为 `dd`（非 upgrade_tool），进行中。
+Radxa Cubie A7Z，Allwinner A733 SoC，A733 平台首块落地板。已集成 ST7789V SPI LCD、AIC8800 Wi-Fi、PowerVR GPU 驱动，刷写工具为 `dd`。
 
 ## product / variant
 
@@ -37,6 +43,22 @@ lunch radxa-cubie-a7z-default-release
 
 A733 平台使用 `kernel_device.board_dts_path` 指定设备树源文件路径，与 Rockchip 平台使用 `kernel.dts` 直接引用 DTB target 的机制不同。
 
+## ST7789V SPI LCD
+
+通过 board 私有 overlay `sun60iw2p1-spi1-st7789v-display.dtso` 绑定 fbtft 驱动，创建 `/dev/fb0` 并作为 fbcon 系统主显示。SPI1 引脚：MOSI=PD11, SCLK=PD12, CS=PB3(软CS), DC=PB5, RST=PB6, BLK=PB4。`boot.kernel_args` 追加 `console=tty1`；rootfs 安装 `fonts-terminus`（6x12，240×280 下 40×23 列行）。
+
+## AIC8800 USB Wi-Fi
+
+`wifi.aic8800_usb: True`，firmware 从 Radxa aic8800 仓库拉取，安装到 `lib/firmware/aic8800_fw/USB/`（平铺 + aic8800D80 子目录双份）。内核 defconfig 含 `aic8800_wlan.config`。
+
+## GPU
+
+IMG PowerVR BXM-4-64（`img,gpu` @ 0x1800000），通过 [[out-of-tree 模块]] 机制编译 `pvrsrvkm.ko`。Userspace 驱动来自 Radxa `xserver-xorg-img-bxm` 包。详见 [docs/proposal/fb-gpu-test/](../../docs/proposal/fb-gpu-test/fb-gpu-test.md)。
+
+## Device Tree Overlays
+
+28 个 vendor overlay（`boot.vendor_overlays`）+ 1 个 board overlay（ST7789V LCD，`boot.board_overlays`）。仅 ST7789V overlay 默认启用（`boot.default_overlays`）。其余运行时编辑 `extlinux.conf` 启用。
+
 ## overlay
 
-仅 `overlay/etc/usbdevice.conf`，hostname 未定制。
+`overlay/etc/usbdevice.conf`（ADB）、`overlay/etc/default/console-setup`（Terminus 6x12）、`overlay/etc/modules-load.d/`（st7789v、aic8800）、`overlay/etc/modprobe.d/aic8800.conf`。

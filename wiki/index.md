@@ -1,7 +1,7 @@
 ---
 title: flange 知识库
 type: index
-updated: 2026-04-26
+updated: 2026-05-03
 ---
 
 # flange 知识库
@@ -33,6 +33,7 @@ updated: 2026-04-26
 - 缓存：[[内容哈希与增量构建]] · [[Merkle 哈希]] · [[rootfs 两阶段缓存]]
 - 启动：[[U-Boot 启动链]] · [[双 extlinux 配置]] · [[boot-once 启动切换]] · [[reboot reason]]
 - 刷写：[[flash-config.json]] · [[FlashStrategy 抽象]] · [[分区表系统]] · [[USB 线刷协议]]
+- 内核：[[out-of-tree 模块]]
 - Recovery：[[recovery 系统]] · [[recoveryctl 协议]]
 
 ## 子系统 (subsystems/)
@@ -45,7 +46,7 @@ updated: 2026-04-26
 - [[新增板级支持]] · [[新增平台支持]] · [[OpenSpec 工作流]]
 
 ## App (apps/)
-- [[recoveryctl]] · [[adbd]]
+- [[recoveryctl]] · [[adbd]] · [[flange-rootfs-grow]]
 
 ## 项目演进
 - [[路线图与历史演进]] — v1 Bazel → v2 Python 概要 + 当前节点

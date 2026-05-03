@@ -57,4 +57,5 @@ A733 经 Allwinner RTC reboot flag 区分普通启动 vs recovery；`recoveryctl
 ## 易踩坑
 
 - kernel 源码为聚合仓库 `linux-a733`（含 bsp/ 与 device-a733/ 子路径），编译前需 `_integrate_bsp` 建 symlink；详见 [[kernel 构建器]]
+- BSP GPU 驱动（`bsp/modules/gpu/`）使用独立构建系统，不兼容内核 kbuild（kbuild 会静默跳过），需通过 [[out-of-tree 模块]] 机制编译
 - 刷写当前走 dd 整盘，不支持分区级更新；FEL 模式上线前现场维护依赖 SD 卡重刷
