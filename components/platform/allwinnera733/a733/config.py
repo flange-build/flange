@@ -60,6 +60,17 @@ SOC = {
             },
         ],
     },
+    "rootfs": {
+        # PowerVR BXM GPU X.Org 驱动 — 来自 radxa-pkg/allwinner-prebuilt-extra
+        # （该包不在 Ubuntu 官方源中，通过 URL 直下 + sha256 校验安装）
+        "+extra_debs": [
+            {
+                "name": "xserver-xorg-img-bxm",
+                "url": "https://github.com/radxa-pkg/allwinner-prebuilt-extra/releases/download/0.1.10/xserver-xorg-img-bxm_1.21.1-2_arm64.deb",
+                "sha256": "c8e606db1abdea40a5b97f7905ea86901b50c5fe1b76a55356ab70dde3304c3a",
+            },
+        ],
+    },
     "kernel_bsp": {
         "from_repo": "linux-a733",
         "subpath": "bsp",
