@@ -13,7 +13,7 @@ Cubie A7Z 上的 ST7789V2 SPI LCD 当前走 fbtft → `/dev/fb0` 路径，借 fb
 
 - **BREAKING**：放弃 LCD 当系统主控制台。`console=tty1` 不再写入 cmdline，`kbd / console-setup / fonts-terminus` 从 rootfs 包列表移除，`fb_st7789v` modules-load 兜底文件删除。LCD 不再显示内核 dmesg 与 systemd 启动消息，只服务 DRM 客户端。
 - 内核 in-tree backport：从 mainline v5.18 `commit 48b1f5440f8c` 拉 `drivers/gpu/drm/tiny/panel-mipi-dbi.c` 进 linux-a733 (5.15.147)，同步修改 drm/tiny 的 Kconfig/Makefile，新增 `CONFIG_TINYDRM_PANEL_MIPI_DBI=m`。
-- DTS overlay 就地重写 `components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso`：`compatible` 由 `sitronix,st7789v` 换成 `panel-mipi-dbi-spi`；删除 fbtft 风格属性（`buswidth/regwidth/fps/rotate/debug/width/height`）；新增 `width-mm` / `height-mm` / `panel-timing` 子节点；接线 cs/dc/reset 不变。**不**加 `firmware-name` 属性——v5.18 mainline driver 不读它，而是用 `<compatible[0]>.bin` 自动派生 firmware 文件名。
+- DTS overlay 就地重写 `components/board/radxa-cubie-a7z/dtso/sun60iw2p1-spi1-st7789v-display.dtso`：`compatible` 由 `sitronix,st7789v` 换成 `panel-mipi-dbi-spi`；删除 fbtft 风格属性（`buswidth/regwidth/fps/rotate/debug/width/height`）；新增 `width-mm` / `height-mm` / `panel-timing` 子节点；接线 cs/dc/reset 不变。**不**加 `firmware-name` 属性——v5.18 mainline driver 不读它，而是用 `<compatible[0]>.bin` 自动派生 firmware 文件名。
 - 新增 panel firmware 编译能力：在 `builder/firmware_panel.py` 实现 mainline `panel.bin` 二进制格式编码器（约 50–80 行 Python）；text init 源文件 `components/board/radxa-cubie-a7z/firmware/panel/st7789v2-240x280.txt` 包含 ST7789V2 init 命令序列。280 行圆角模块的 `(0, 20)` GRAM 偏移通过 DT `panel-timing.hback-porch / vback-porch` 表达——`drm_mipi_dbi.c` 的 `mipi_dbi_set_window_address` 每帧自动加 `left_offset / top_offset`，无需在 firmware 里写 CASET/RASET。
 - board 构建 hook：把生成的 `.bin` 落到 rootfs `lib/firmware/panel-mipi-dbi-spi.bin`（与 DT compatible 派生的 firmware 名一致）。
 - 同步更新 `docs/proposal/st7789v2-spi-lcd-cubie-a7z/st7789v2-spi-lcd-cubie-a7z.md`：路径 A 描述由 fbtft 改为 panel-mipi-dbi-spi；原"路径 B 不可行"段移除。
@@ -37,7 +37,7 @@ Cubie A7Z 上的 ST7789V2 SPI LCD 当前走 fbtft → `/dev/fb0` 路径，借 fb
 
 - **代码**
   - 新增：`builder/firmware_panel.py`、`components/board/radxa-cubie-a7z/firmware/panel/st7789v2-240x280.txt`、`components/platform/allwinnera733/patches/<NN>-tinydrm-panel-mipi-dbi.patch`
-  - 修改：`components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso`、`components/board/radxa-cubie-a7z/config.py`（去 console=tty1 + 减包）、`components/platform/allwinnera733/` 的 defconfig fragment（加 `CONFIG_TINYDRM_PANEL_MIPI_DBI=m`）、board 构建 hook（落 firmware）
+  - 修改：`components/board/radxa-cubie-a7z/dtso/sun60iw2p1-spi1-st7789v-display.dtso`、`components/board/radxa-cubie-a7z/config.py`（去 console=tty1 + 减包）、`components/platform/allwinnera733/` 的 defconfig fragment（加 `CONFIG_TINYDRM_PANEL_MIPI_DBI=m`）、board 构建 hook（落 firmware）
   - 删除：`components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/st7789v.conf`、`components/board/radxa-cubie-a7z/overlay/etc/default/console-setup`（若存在）
 
 - **依赖 / 系统**

@@ -4,7 +4,7 @@ type: board
 status: wip
 sources:
   - components/board/radxa-cubie-a7z/config.py
-  - components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso
+  - components/board/radxa-cubie-a7z/dtso/sun60iw2p1-spi1-st7789v-display.dtso
   - components/board/radxa-cubie-a7z/firmware/panel/st7789v2-240x280.txt
   - components/board/radxa-cubie-a7z/overlay/etc/usbdevice.conf
   - components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/aic8800.conf

@@ -62,7 +62,7 @@ BOARD = {
     "boot": {
         # 把 radxa-overlays 中与 A733 兼容的全部 overlay 打入 boot.img。
         "vendor_overlays": A733_VENDOR_OVERLAYS,
-        # 板私有 overlay，源文件位于 components/board/radxa-cubie-a7z/overlays/，
+        # 板私有 overlay，源文件位于 components/board/radxa-cubie-a7z/dtso/，
         # 由 device-tree-overlay 组件复用同一 cpp+dtc 流水线编译。
         "board_overlays": [
             "sun60iw2p1-spi1-st7789v-display.dtbo",

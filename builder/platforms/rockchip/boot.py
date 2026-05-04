@@ -91,7 +91,7 @@ class RockchipBootBuilder(ComponentBuilder):
         # DTB overlay 三源都平铺到 /dtbs/rockchip/overlay/：
         # 1) in-tree  (from kernel 源码树编译 → target/kernel/overlay/)
         # 2) vendor   (from radxa-overlays 编译 → target/device-tree-overlay/overlays/)
-        # 3) board    (from components/board/<board>/overlays/ 编译，与 vendor 共用产物目录)
+        # 3) board    (from components/board/<board>/dtso/ 编译，与 vendor 共用产物目录)
         # copy_declared_overlays 内置撞名检测（dst 已存在 → ValueError）。
         copy_declared_overlays(
             target_dir / "kernel" / "overlay",

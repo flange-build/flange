@@ -15,7 +15,7 @@ spidev1.0 (DT compatible="sitronix,st7789v")
 ```
 
 依赖项：
-- `components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso`：DTS overlay，绑 fbtft 风格属性
+- `components/board/radxa-cubie-a7z/dtso/sun60iw2p1-spi1-st7789v-display.dtso`：DTS overlay，绑 fbtft 风格属性
 - `components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/st7789v.conf`：`fb_st7789v` 兜底 modprobe
 - `components/board/radxa-cubie-a7z/overlay/etc/default/console-setup`：Terminus 6×12 字体
 - `components/board/radxa-cubie-a7z/config.py`：`boot.kernel_args = "console=tty1"` + `rootfs.packages = [kbd, console-setup, fonts-terminus]`

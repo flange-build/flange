@@ -74,8 +74,8 @@ def _cfg(*, vendor: str | None, vendor_overlays: list[str],
 
 def _make_board_overlays_dir(root: Path, stems: list[str], *,
                               ext: str = ".dts") -> Path:
-    """构造仓库内板私有 overlay 目录 components/board/<board>/overlays/。"""
-    overlays_dir = root / "overlays"
+    """构造仓库内板私有 overlay 目录 components/board/<board>/dtso/。"""
+    overlays_dir = root / "dtso"
     overlays_dir.mkdir(parents=True)
     for stem in stems:
         (overlays_dir / f"{stem}{ext}").write_text(f"// {stem}\n")
@@ -217,9 +217,9 @@ def test_compile_accepts_dtso_extension(tmp_path):
 
 
 def test_compile_board_overlays_from_components_dir(tmp_path, monkeypatch):
-    """板私有 overlay 从 components/board/<board>/overlays/ 取 dts，与
+    """板私有 overlay 从 components/board/<board>/dtso/ 取 dts，与
     vendor 共用 cpp+dtc 流水线 + 同一产物目录。"""
-    # 构造仓库根：components/board/myboard/overlays/foo.dts
+    # 构造仓库根：components/board/myboard/dtso/foo.dts
     repo_root = tmp_path / "repo"
     board_dir = repo_root / "components" / "board" / "myboard"
     overlays_dir = _make_board_overlays_dir(board_dir, ["foo"])

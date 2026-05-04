@@ -34,7 +34,7 @@
 
 ## 5. DTS overlay 重写
 
-- [x] 5.1 就地覆盖 `components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso`：保留顶部接线注释（更新为 panel-mipi-dbi-spi 路径说明）；保留 fragment@0 的 spi1 pinmux 配置
+- [x] 5.1 就地覆盖 `components/board/radxa-cubie-a7z/dtso/sun60iw2p1-spi1-st7789v-display.dtso`：保留顶部接线注释（更新为 panel-mipi-dbi-spi 路径说明）；保留 fragment@0 的 spi1 pinmux 配置
 - [x] 5.2 fragment@1 `&spi1` 下的 panel 节点：`compatible = "panel-mipi-dbi-spi"`（单字符串；driver 用此名派生 firmware `/lib/firmware/panel-mipi-dbi-spi.bin`）；删除 `buswidth/regwidth/fps/rotate/debug/width/height`；新增 `width-mm = <23>`、`height-mm = <27>`；**不**加 `firmware-name` 属性（v5.18 driver 不读）
 - [x] 5.3 加 `panel-timing` 子节点：`hactive = <240>`、`vactive = <280>`、`hback-porch = <0>`、**`vback-porch = <20>`**（钉死 280 行圆角模块的 GRAM y 偏移；driver 用此 → `top_offset` → 每帧 CASET/RASET）；其它 timing 字段（hsync/vsync/clock）按 mainline `panel-mipi-dbi-spi.yaml` binding 最小化
 - [x] 5.4 接线属性 `cs-gpios = <&pio 1 3 1>` / `dc-gpios = <&pio 1 5 0>` / `reset-gpios = <&pio 1 6 1>` 不变；`spi-max-frequency = <40000000>` 不变；`sunxi,spi-cs-mode = <1>` 不变

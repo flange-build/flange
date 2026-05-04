@@ -185,7 +185,7 @@ cubie-a7z 现行实现。change `st7789v2-tinydrm-cutover` 把 mainline v5.18 �
 2. 不与 mesa/wayland/kmscube 等现代 GUI 栈兼容
 3. 一屏一驱动的耦合形态——换屏要写新内核驱动
 
-git 历史保留：`git log -- components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso` 可见迁移 commit。
+git 历史保留：`git log -- components/board/radxa-cubie-a7z/dtso/sun60iw2p1-spi1-st7789v-display.dtso` 可见迁移 commit。
 
 ### 路径 C：用户态 dashboard（**待激活**）
 

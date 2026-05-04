@@ -202,7 +202,7 @@ class BuildCache:
                 h.update(json.dumps(blist).encode())
                 # 板私有 dtso 源目录内容（如有）：dtso 改动须触发重 build
                 board = self.config.get("board", "")
-                board_dts_dir = Path(f"components/board/{board}/overlays")
+                board_dts_dir = Path(f"components/board/{board}/dtso")
                 if board_dts_dir.exists():
                     h.update(b"board_overlays_src:")
                     self._hash_directory(h, board_dts_dir)

@@ -6,7 +6,7 @@ flange 支持三类 overlay 来源并存：
 - ``boot.vendor_overlays``：来自外部 vendor overlay 仓库（如 radxa-overlays），
   由 device-tree-overlay 组件用 cpp + dtc 单独编译
 - ``boot.board_overlays``：板私有 overlay，dtso 源文件位于
-  ``components/board/<board>/overlays/``，由 device-tree-overlay 组件复用同一
+  ``components/board/<board>/dtso/``，由 device-tree-overlay 组件复用同一
   cpp + dtc 流水线编译。用于不属于上游 vendor 仓库、又不便落入内核 in-tree
   的板级私有显示 / 外设 overlay。
 
@@ -50,7 +50,7 @@ def vendor_overlays(config: dict) -> list[str]:
 
 
 def board_overlays(config: dict) -> list[str]:
-    """返回板私有 overlay 文件名列表（从 components/board/<board>/overlays/ 编译）。"""
+    """返回板私有 overlay 文件名列表（从 components/board/<board>/dtso/ 编译）。"""
     return _overlay_names(config, "board_overlays")
 
 

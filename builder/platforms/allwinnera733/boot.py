@@ -11,7 +11,7 @@ Allwinner 首版仍由平台 boot reason 适配决定是否扫描 recovery.conf�
 布局与 Rockchip 对齐：启动配置放在 /extlinux/，设备树放在 /dtbs/<vendor>/。
 
 Overlay 三源同 Rockchip：boot.dtb_overlays (in-tree) / boot.vendor_overlays
-(radxa-overlays) / boot.board_overlays (components/board/<board>/overlays/)
+(radxa-overlays) / boot.board_overlays (components/board/<board>/dtso/)
 平铺到同一 /dtbs/allwinner/overlay/ 目录；basename 全局唯一。vendor 与 board
 共用 device-tree-overlay 组件的 cpp+dtc 编译流水线与产物目录。
 """

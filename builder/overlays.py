@@ -7,7 +7,7 @@ flange 的"非内核 in-tree" DT overlay 编译流水线，覆盖两类源：
    git fetch 后从 ``arch/arm64/boot/dts/<vendor>/overlays/`` 取 dts/dtso。
 
 2. **板私有**（``boot.board_overlays``）—— dts/dtso 文件直接落在仓库内
-   ``components/board/<board>/overlays/``，不依赖外部仓库。用于不属于上游
+   ``components/board/<board>/dtso/``，不依赖外部仓库。用于不属于上游
    vendor 仓库、又不便落入内核 in-tree 的板级私有 overlay（典型场景：
    板上某显示模块 / SPI 外设的接入 overlay）。
 
@@ -140,13 +140,13 @@ class OverlaysBuilder(ComponentBuilder):
 
     def _compile_board_overlays(self, kernel_src: Path, config: dict,
                                  names: list[str]) -> None:
-        """从 ``components/board/<board>/overlays/`` 编译板私有 overlay。"""
+        """从 ``components/board/<board>/dtso/`` 编译板私有 overlay。"""
         board = config.get("board")
         if not board:
             raise ValueError(
                 "boot.board_overlays 非空但 config 缺少 board 字段（不应发生）"
             )
-        overlays_dir = Path(f"components/board/{board}/overlays").resolve()
+        overlays_dir = Path(f"components/board/{board}/dtso").resolve()
         if not overlays_dir.is_dir():
             raise FileNotFoundError(
                 f"board overlay 源目录不存在: {overlays_dir}；"
