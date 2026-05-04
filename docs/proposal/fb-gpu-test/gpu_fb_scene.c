@@ -18,11 +18,6 @@
 #include <linux/fb.h>
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
-#include <gbm.h>
-
-#ifndef EGL_PLATFORM_GBM_KHR
-#define EGL_PLATFORM_GBM_KHR 0x31D7
-#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -147,13 +142,13 @@ static void mat4_translate(Mat4 m, float x, float y, float z) {
 
 static int gen_torus(float R, float r, int seg_major, int seg_minor,
                      float **out_v, float **out_n, float **out_c,
-                     int **out_idx, int *out_idx_count) {
+                     unsigned short **out_idx, int *out_idx_count) {
     int vcount = (seg_major + 1) * (seg_minor + 1);
     int tcount = seg_major * seg_minor * 6;
     *out_v = malloc(vcount * 3 * sizeof(float));
     *out_n = malloc(vcount * 3 * sizeof(float));
     *out_c = malloc(vcount * 3 * sizeof(float));
-    *out_idx = malloc(tcount * sizeof(int));
+    *out_idx = malloc(tcount * sizeof(unsigned short));
     *out_idx_count = tcount;
 
     float palette[][3] = {
@@ -183,10 +178,10 @@ static int gen_torus(float R, float r, int seg_major, int seg_minor,
     }
     for (int i = 0; i < seg_major; i++) {
         for (int j = 0; j < seg_minor; j++) {
-            int a = i * (seg_minor + 1) + j;
-            int b = a + seg_minor + 1;
-            (*out_idx)[ii++] = a; (*out_idx)[ii++] = b; (*out_idx)[ii++] = a + 1;
-            (*out_idx)[ii++] = a + 1; (*out_idx)[ii++] = b; (*out_idx)[ii++] = b + 1;
+            unsigned short a = (unsigned short)(i * (seg_minor + 1) + j);
+            unsigned short b = (unsigned short)(a + seg_minor + 1);
+            (*out_idx)[ii++] = a; (*out_idx)[ii++] = b; (*out_idx)[ii++] = (unsigned short)(a + 1);
+            (*out_idx)[ii++] = (unsigned short)(a + 1); (*out_idx)[ii++] = b; (*out_idx)[ii++] = (unsigned short)(b + 1);
         }
     }
     return vcount;
@@ -233,40 +228,48 @@ static GLuint link_program(const char *vert_src, const char *frag_src) {
 
 static int init_egl(EGLDisplay *out_d, EGLContext *out_c, EGLSurface *out_s,
                     int width, int height) {
-    int fd = open("/dev/dri/renderD128", O_RDWR);
-    if (fd < 0) { fprintf(stderr, "renderD128 打开失败\n"); return -1; }
-
-    struct gbm_device *gbm = gbm_create_device(fd);
-    if (!gbm) { fprintf(stderr, "gbm_create_device 失败\n"); close(fd); return -1; }
-
-    EGLDisplay display = eglGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, gbm, NULL);
-    if (display == EGL_NO_DISPLAY || !eglInitialize(display, NULL, NULL))
-        return -1;
-
-    printf("EGL Vendor: %s\n", eglQueryString(display, EGL_VENDOR));
+    EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (display == EGL_NO_DISPLAY) {
+        fprintf(stderr, "eglGetDisplay 失败\n"); return -1;
+    }
+    EGLint major, minor;
+    if (!eglInitialize(display, &major, &minor)) {
+        fprintf(stderr, "eglInitialize 失败: 0x%x\n", eglGetError()); return -1;
+    }
+    printf("EGL %d.%d, Vendor: %s\n", major, minor,
+           eglQueryString(display, EGL_VENDOR));
     eglBindAPI(EGL_OPENGL_ES_API);
 
     static const EGLint config_attrs[] = {
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_SURFACE_TYPE,    EGL_PBUFFER_BIT,
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+        EGL_DEPTH_SIZE, 16,
         EGL_NONE,
     };
     EGLConfig config; EGLint num_config;
-    if (!eglChooseConfig(display, config_attrs, &config, 1, &num_config) || !num_config)
+    if (!eglChooseConfig(display, config_attrs, &config, 1, &num_config) || !num_config) {
+        fprintf(stderr, "eglChooseConfig 失败\n"); return -1;
+    }
+
+    const EGLint pbuf_attrs[] = {
+        EGL_WIDTH, width, EGL_HEIGHT, height, EGL_NONE,
+    };
+    EGLSurface surface = eglCreatePbufferSurface(display, config, pbuf_attrs);
+    if (surface == EGL_NO_SURFACE) {
+        fprintf(stderr, "eglCreatePbufferSurface 失败: 0x%x\n", eglGetError());
         return -1;
-
-    struct gbm_surface *gbm_surf = gbm_surface_create(
-        gbm, width, height, GBM_FORMAT_ARGB8888, GBM_BO_USE_RENDERING);
-    if (!gbm_surf) return -1;
-
-    EGLSurface surface = eglCreatePlatformWindowSurface(display, config, gbm_surf, NULL);
-    if (surface == EGL_NO_SURFACE) return -1;
+    }
 
     static const EGLint ctx_attrs[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
     EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, ctx_attrs);
-    if (context == EGL_NO_CONTEXT) return -1;
+    if (context == EGL_NO_CONTEXT) {
+        fprintf(stderr, "eglCreateContext 失败: 0x%x\n", eglGetError()); return -1;
+    }
 
-    if (!eglMakeCurrent(display, surface, surface, context)) return -1;
+    if (!eglMakeCurrent(display, surface, surface, context)) {
+        fprintf(stderr, "eglMakeCurrent 失败: 0x%x\n", eglGetError()); return -1;
+    }
 
     *out_d = display; *out_c = context; *out_s = surface;
     return 0;
@@ -312,6 +315,7 @@ static void fb_blit(const unsigned char *rgba, int w, int h) {
 /* --- main --- */
 
 int main(void) {
+    setenv("EGL_PLATFORM", "surfaceless", 1);
     if (fb_init() < 0) return 1;
     int W = fb_width, H = fb_height;
 
@@ -335,7 +339,7 @@ int main(void) {
 
     /* 圆环几何体 */
     float *torus_v, *torus_n, *torus_c;
-    int *torus_idx; int torus_idx_count;
+    unsigned short *torus_idx; int torus_idx_count;
     int torus_vcount = gen_torus(0.7f, 0.3f, 48, 24,
                                   &torus_v, &torus_n, &torus_c,
                                   &torus_idx, &torus_idx_count);
@@ -352,7 +356,7 @@ int main(void) {
     glBufferData(GL_ARRAY_BUFFER, torus_vcount*3*sizeof(float), torus_c, GL_STATIC_DRAW);
     glGenBuffers(1, &ibo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, torus_idx_count*sizeof(int),
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, torus_idx_count*sizeof(unsigned short),
                  torus_idx, GL_STATIC_DRAW);
 
     GLint obj_a_pos = glGetAttribLocation(obj_prog, "a_pos");
@@ -403,12 +407,10 @@ int main(void) {
         glClear(GL_DEPTH_BUFFER_BIT);
         glUseProgram(obj_prog);
 
-        Mat4 ry, rx, t, model, mvp;
+        Mat4 ry, rx, model, mvp;
         mat4_rotate_y(ry, time_s * 0.8f);
         mat4_rotate_x(rx, time_s * 0.5f);
-        mat4_multiply(t, ry, rx);
-        mat4_translate(model, 0, 0, 0);
-        mat4_multiply(model, model, t);
+        mat4_multiply(model, ry, rx);
         mat4_multiply(mvp, vp, model);
 
         glUniformMatrix4fv(obj_u_mvp, 1, GL_FALSE, mvp);
@@ -429,7 +431,7 @@ int main(void) {
         glEnableVertexAttribArray(obj_a_color);
         glVertexAttribPointer(obj_a_color, 3, GL_FLOAT, GL_FALSE, 0, 0);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-        glDrawElements(GL_TRIANGLES, torus_idx_count, GL_UNSIGNED_INT, 0);
+        glDrawElements(GL_TRIANGLES, torus_idx_count, GL_UNSIGNED_SHORT, 0);
         glDisableVertexAttribArray(obj_a_pos);
         glDisableVertexAttribArray(obj_a_norm);
         glDisableVertexAttribArray(obj_a_color);
