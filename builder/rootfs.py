@@ -4,6 +4,7 @@
   - apply_overlays：platform overlay → board overlay 两层覆盖
   - extra_debs：下载第三方 deb 并安装
   - extra_firmware：从外部仓库拉取固件文件并写入 rootfs
+  - panel_firmware：把板级 panel init 文本源编译为 panel.bin 写入 rootfs
 """
 
 import math
@@ -12,6 +13,7 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.chroot import ChrootContext
 from builder.docker import BuildError
+from builder.firmware_panel import encode_file as _encode_panel_file
 from builder.partition.size import resolve_image_size
 
 
@@ -142,3 +144,39 @@ class RootfsBuilder(ComponentBuilder):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
             self._status(f"已安装 {len(fw.get('files', []))} 个固件文件 ({name})")
+
+    def _install_panel_firmware(self, rootfs_dir: Path, config: dict):
+        """编译并安装 panel firmware（mainline panel-mipi-dbi-spi 兼容）。
+
+        config["rootfs"]["panel_firmware"] 格式：
+          [
+            {
+              "src":  "firmware/panel/<name>.txt",   # 相对 components/board/<board>/
+              "dest": "<compatible[0]>.bin",         # 相对 rootfs /lib/firmware/
+            }
+          ]
+
+        text 源由 builder.firmware_panel 编码为 mainline panel.bin 二进制。
+        dest 与 DT compatible 的最具体字符串相符——driver 不读 firmware-name
+        属性，而是用 ``<compatible[0]>.bin`` 在 /lib/firmware/ 下查找。
+
+        缺源文件 → 直接 raise FileNotFoundError，错误信息含 board 名 + 路径。
+        """
+        panel_firmwares = config.get("rootfs", {}).get("panel_firmware", [])
+        if not panel_firmwares:
+            return
+        board = config["board"]
+        board_root = Path(f"components/board/{board}")
+        dest_base = rootfs_dir / "lib" / "firmware"
+        for fw in panel_firmwares:
+            src = board_root / fw["src"]
+            if not src.exists():
+                raise FileNotFoundError(
+                    f"panel firmware 文本源不存在: {src} (board: {board})")
+            payload = _encode_panel_file(src)
+            dest = dest_base / fw["dest"]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
+            self._status(
+                f"panel firmware: {src.name} → /lib/firmware/{fw['dest']} "
+                f"({len(payload)} 字节)")

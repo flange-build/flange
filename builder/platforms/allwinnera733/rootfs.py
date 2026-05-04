@@ -139,6 +139,7 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
         self._install_extra_debs(rootfs_dir, config)
         self._install_kernel_modules(rootfs_dir, config)
         self._install_extra_firmware(rootfs_dir, config)
+        self._install_panel_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)
 
         root_password = config.get("rootfs", {}).get("root_password")

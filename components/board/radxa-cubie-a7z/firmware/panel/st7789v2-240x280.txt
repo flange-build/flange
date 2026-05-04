@@ -1,0 +1,59 @@
+# ST7789V2 240x280 SPI LCD init sequence
+#
+# 由 builder/firmware_panel.py 在构建期编码为 panel.bin 二进制，落 rootfs
+# /lib/firmware/panel-mipi-dbi-spi.bin（驱动从 DT compatible="panel-mipi-dbi-spi"
+# 派生 firmware 文件名）。
+#
+# 280 行圆角模块的 (0, 20) GRAM 偏移**不**在此文件里写 CASET/RASET——
+# drm_mipi_dbi.c::mipi_dbi_set_window_address 每帧自动用 top_offset/left_offset
+# 写 CASET/RASET，offset 由 DT panel-timing.hback-porch / vback-porch 提供
+# (见 sun60iw2p1-spi1-st7789v-display.dtso)。
+
+# Sleep Out — 退出睡眠（必须等 ≥120 ms 才能继续）
+command 0x11
+delay 120
+
+# MADCTL — Memory Access Control = 0x00 (默认 portrait, RGB 顺序)
+command 0x36 0x00
+
+# COLMOD — Pixel Format = 0x55 (RGB565, 16bpp)
+command 0x3A 0x55
+
+# PORCTRL — Porch Setting (front porch / back porch / separate enable)
+command 0xB2 0x0C 0x0C 0x00 0x33 0x33
+
+# GCTRL — Gate Control = 0x35 (VGH=13.26V, VGL=-10.43V)
+command 0xB7 0x35
+
+# VCOMS — VCOM Setting = 0x19 (~0.725V)
+command 0xBB 0x19
+
+# LCMCTRL — LCM Control = 0x2C
+command 0xC0 0x2C
+
+# VDV/VRH Enable — 用 register 而非 NVM
+command 0xC2 0x01
+
+# VRHS — VAP/VAN Voltage = 0x12
+command 0xC3 0x12
+
+# VDVS — VDV = 0x20 (默认)
+command 0xC4 0x20
+
+# FRCTRL2 — Frame Rate Control = 0x0F (60 Hz)
+command 0xC6 0x0F
+
+# PWCTRL1 — Power Control 1
+command 0xD0 0xA4 0xA1
+
+# PVGAMCTRL — Positive Voltage Gamma Control
+command 0xE0 0xD0 0x04 0x0D 0x11 0x13 0x2B 0x3F 0x54 0x4C 0x18 0x0D 0x0B 0x1F 0x23
+
+# NVGAMCTRL — Negative Voltage Gamma Control
+command 0xE1 0xD0 0x04 0x0C 0x11 0x13 0x2C 0x3F 0x44 0x51 0x2F 0x1F 0x1F 0x20 0x23
+
+# Inversion ON — ST7789 IPS 面板必需，不开会反色
+command 0x21
+
+# Display ON
+command 0x29

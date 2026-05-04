@@ -4,9 +4,12 @@
 
 为 Radxa Cubie A7Z (Allwinner A733) 外接一块 ST7789V2 240×280 SPI LCD 屏幕。
 
-**当前状态**：已通过 **SPI1 + 用户态 spidev + libgpiod (软 CS)** 点亮，7 色彩条显示验证通过（kernel 5.15.147+，ubuntu-base，2026-05-03）。
+**当前状态**：走 **drm/tiny `panel-mipi-dbi-spi`**（mainline v5.18 backport 到 linux-a733 5.15.147，见 change `st7789v2-tinydrm-cutover`），LCD 暴露为 `/dev/dri/card*`，init 序列由构建期生成的 `/lib/firmware/panel-mipi-dbi-spi.bin` 加载。LCD 不再充当系统主控制台。
 
-后续可视场景演进到 fbtft（出 `/dev/fb1`）或 drm/tiny mipi-dbi（出 `/dev/dri/card1`），见末节"演进路径"。
+历史阶段（按时间顺序）：
+1. **Phase 0**（已停用）：SPI1 + 用户态 spidev + libgpiod (软 CS)，dashboard PoC
+2. **Phase 1**（已下线）：fbtft (`fb_st7789v`) + fbcon + `console=tty1`，LCD 当主控台
+3. **Phase 2**（**当前**）：drm/tiny `panel-mipi-dbi-spi`，纯 DRM 设备
 
 ## 硬件信息
 
@@ -113,13 +116,13 @@ python3 st7789.py --xoff 0 --yoff 20       # 圆角模块偏移（默认）
 
 ### 已验证
 
-用户态 spidev 阶段（Phase 0，已被 Phase 1 取代）：
+用户态 spidev 阶段（Phase 0，PoC 历史）：
 
 - ✅ 7 色横向彩条显示（红 / 绿 / 蓝 / 黄 / 青 / 紫 / 白）
 - ✅ Apple "博物馆画廊"风 dashboard 实时刷新（hero 圆环 + 二分指标，单一 Action Blue accent）
 - ✅ SpaceX "Falcon HUD"风 dashboard 实时刷新（黑底 + Spectral White 单色 + 6 区块 + 同屏 30+ 数据维度）
 
-fbtft 内核驱动阶段（Phase 1，**当前主路径**）：
+fbtft 内核驱动阶段（Phase 1，已下线）：
 
 - ✅ ST7789V 通过 fbtft 注册为 `/dev/fb0` (`fb_st7789v 240x280 16bpp` @ SPI 40 MHz)
 - ✅ fbcon attached（vtcon1 master frame buffer device），`getty@tty1` 在 LCD 上启动 login
@@ -127,58 +130,68 @@ fbtft 内核驱动阶段（Phase 1，**当前主路径**）：
 - ✅ `console=tty1` cmdline 让内核 boot dmesg 与 systemd 启动消息也输出到 LCD（与串口 ttyAS0 并存）
 - ✅ 框架侧 `boot.board_overlays` 三源机制 + cubie-a7z config 改动通过 48 个 overlay 单元/集成测试（含 16 个新 case）
 
-入仓固化（Phase 2，**当前主路径**）：
+drm/tiny `panel-mipi-dbi-spi` 阶段（Phase 2，**当前**）：
 
-- ✅ 板私有 overlay 落点：`components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso`
-- ✅ console-setup file overlay：`components/board/radxa-cubie-a7z/overlay/etc/default/console-setup`
-- ✅ fb_st7789v 兜底 modprobe：`components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/st7789v.conf`
-- ✅ `boot.kernel_args = "console=tty1"` + `rootfs.packages = [kbd, console-setup, fonts-terminus]`
+- ✅ 内核 backport patch 干净 apply 到 linux-a733 5.15.147（`git apply --check` 通过）
+- ✅ Python firmware 编码器 12 个单元测试覆盖（header / 多参命令 / delay / 错误路径）
+- ✅ `RootfsBuilder._install_panel_firmware` 4 个集成单测覆盖（编码落地 / 缺源报错 / no-op / 子目录 dest）
+- ⏳ 在板冒烟（dmesg probe / `/dev/dri/card*` / modetest 显图）—— 待 `flange flash` + 上电验证
 
 ## 演进路径
 
-### 路径 A（**已实施**）：fbtft 内核驱动 + fbcon 终端 → `/dev/fb0`
+### 路径 A（**当前主路径**）：drm/tiny `panel-mipi-dbi-spi` → `/dev/dri/card*`
 
-cubie-a7z 当前主路径。LCD 作为系统主显示，开机即看到内核 dmesg 滚动 → systemd 启动消息 → login 提示，全程 Terminus 6×12 小字（240×280 屏密度上限：40 列 × 23 行）。
+cubie-a7z 现行实现。change `st7789v2-tinydrm-cutover` 把 mainline v5.18 的通用 SPI MIPI DBI panel driver backport 到 linux-a733（5.15.147），LCD 暴露为标准 DRM 设备，可被 modetest / kmscube / weston / 用户态 DRM 客户端直接驱动。
 
-**落地的板私有 overlay**（`components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso`）：
+**内核 backport**：`components/platform/allwinnera733/patches/kernel/01-tinydrm-panel-mipi-dbi.patch`
+- 取自 mainline v5.18 commit `48b1f5440f8c`（在 tspi-rk3566 6.1 BSP 中能直接复用源码作蓝本）
+- 5.15 适配点：`drm_gem_dma_helper.h` → `drm_gem_cma_helper.h`、`DEFINE_DRM_GEM_DMA_FOPS` → `..._CMA_FOPS`、`DRM_GEM_DMA_DRIVER_OPS_VMAP` → `..._CMA_VMAP`、移除 `.mode_valid` 字段（5.15 未导出）、`of_get_drm_panel_display_mode` → `of_get_drm_display_mode`、`spi_driver.remove` 返 int
+- 启用：`CONFIG_DRM_PANEL_MIPI_DBI=m` 通过 a733 平台 defconfig fragment `panel_mipi_dbi.config` 注入
 
-- 释放 SPI1 上的 spidev1.0，在 `&spi1` 下挂 `compatible = "sitronix,st7789v"` 节点
-- `cs-gpios = <&pio 1 3 1>`（PB3 软 CS，与 dashboard 阶段同接线，**完全不改板线**）
-- `dc-gpios = <&pio 1 5 0>`（PB5）、`reset-gpios = <&pio 1 6 1>`（PB6）
-- `sunxi,spi-cs-mode = <1>`（软件 CS 模式）
+**Init 序列固件化**：`components/board/radxa-cubie-a7z/firmware/panel/st7789v2-240x280.txt`
+- 可读文本源（`command 0xNN [0xPP ...]` / `delay <ms>`）
+- 构建期由 `builder/firmware_panel.py` 编码为 mainline `panel.bin` 二进制（16 字节 magic header + 命令条目 + delay NOP）
+- 落 rootfs `/lib/firmware/panel-mipi-dbi-spi.bin`（driver 用 `<compatible[0]>.bin` 派生，**不**读 `firmware-name` DT 属性）
 
-**框架扩展**：原 device-tree-overlay 组件只支持两源（in-tree + vendor 仓库）。这个板级私有 overlay 既不属于上游 vendor 仓库，又不便落入内核 in-tree —— 因此在 `builder/dtb_overlay.py` 新增第三类 overlay 源 `boot.board_overlays`，源文件位于 `components/board/<board>/overlays/`，复用 vendor overlays 同一 cpp+dtc 编译流水线。三源（`dtb_overlays` / `vendor_overlays` / `board_overlays`）在 boot.img 同一 `/dtbs/<vendor>/overlay/` 目录平铺，basename 全局唯一，撞名时构建期立即报错。
+**DTS overlay**（同名文件就地覆盖）：
+- `compatible = "panel-mipi-dbi-spi"`
+- 接线 cs/dc/reset 不变（PB3 软 CS、PB5 DC、PB6 RES）
+- `panel-timing.hback-porch = <0>` / `vback-porch = <20>` 表达 280 行圆角模块的 (0, 20) GRAM 偏移——`drm_mipi_dbi.c::mipi_dbi_set_window_address` 每帧自动用 `top_offset/left_offset` 写 CASET/RASET
+- `write-only` 标记（DBI 单向写，无 MISO）
 
-**cubie-a7z 板级配置同步改动**（`components/board/radxa-cubie-a7z/config.py`）：
+**板级 config**（`components/board/radxa-cubie-a7z/config.py`）：
 
 ```python
-"boot": {
-    "vendor_overlays": A733_VENDOR_OVERLAYS,
-    "board_overlays": ["sun60iw2p1-spi1-st7789v-display.dtbo"],
-    "default_overlays": ["sun60iw2p1-spi1-st7789v-display.dtbo"],  # 原 spidev1
-    "kernel_args": "console=tty1",                                  # 新增
-},
 "rootfs": {
-    "packages": ["kbd", "console-setup", "fonts-terminus"],         # 新增
-    ...
+    "panel_firmware": [
+        {"src": "firmware/panel/st7789v2-240x280.txt",
+         "dest": "panel-mipi-dbi-spi.bin"},
+    ],
+    # console=tty1 / kbd / console-setup / fonts-terminus 全部移除
 },
 ```
 
-**板级 rootfs file overlay**：
-- `overlay/etc/default/console-setup` —— `FONTSIZE="6x12"` Terminus
-- `overlay/etc/modules-load.d/st7789v.conf` —— `fb_st7789v` 兜底 modprobe
+**框架能力新增**：
+- `RootfsBuilder._install_panel_firmware`（`builder/rootfs.py`）：通用 panel firmware 编译落地 hook，所有平台 rootfs 子类调用
+- `builder/firmware_panel.py`：mainline `panel.bin` 二进制格式编码器 + 单元测试覆盖
 
-> **fb 编号注**：dmesg 显示 `graphics fb0` 因为当前内核启动时 sunxi-drm 没启用 fbdev emulation（HDMI 未接），fbtft 抢到了 fb 编号 0；如未来 sunxi-drm 也注册 fb，fbtft 会顺延到 fb1。任何编号下 fbcon 都能正常 attach。
+> **代价**：LCD 不再充当系统主控制台。开机不再在 LCD 上看到 dmesg/systemd 启动消息/login，必须通过 DRM 客户端（modetest / kmscube / 用户态应用）才能渲染。串口 `ttyAS0` 仍是主控台，调试不受影响。
 
-### 路径 B：drm/tiny mipi-dbi → `/dev/dri/card1`（**不可行，记录**）
+### 路径 B（已下线）：fbtft + fbcon → `/dev/fb0`
 
-板上 5.15 内核虽然 `CONFIG_DRM_FBDEV_EMULATION=y`，但 drm/tiny 目录里**只有 `ili9486.ko`** 一个驱动，没有 `panel-mipi-dbi-spi.ko` 也没有 ST7789 的 drm 通用驱动。要走 drm 路径必须重编内核加上对应模块，工作量远大于路径 A，且收益不显著（fbcon 在 fbtft 上一样可用）。**已搁置**，待未来内核升级或更换 BSP 再评估。
+历史实现（Phase 1，已被路径 A 替换）。原方案借 `fb_st7789v` 让 LCD 当系统主控台，问题：
 
-### 路径 C：用户态 dashboard（**当前不可用，PoC 历史保留**）
+1. fbtft 框架老旧、上游已停止接受新驱动
+2. 不与 mesa/wayland/kmscube 等现代 GUI 栈兼容
+3. 一屏一驱动的耦合形态——换屏要写新内核驱动
+
+git 历史保留：`git log -- components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso` 可见迁移 commit。
+
+### 路径 C：用户态 dashboard（**待激活**）
 
 dashboard 包装为 board-level Python 包：字体 / blit / 图像加载 / 帧率管理，适合"仪表盘 / 自定义 UI"型场景。
 
-> 路径 A 实施后，`/dev/spidev1.0` 已被 fbtft 内核驱动占用，dashboard 需改写 SPI blit 后端为 `mmap /dev/fb0` 才能继续运行；与 fbcon 终端共享同一物理屏幕需要应用层做让出/接管协调（如类似 Linux console 的 `KDSETMODE`）。**当前 dashboard 处于不可用状态，作为 PoC 历史保留**，是否复活看是否有具体应用场景。
+> 路径 A 落地后 LCD 已是 DRM 设备，dashboard 可基于 `pydrm` / `libdrm` / `drm_fb` mmap `/dev/dri/card*` 重构（不再走 `/dev/spidev1.0` 直 blit）。Phase 0 spidev 版本作为 PoC 历史保留，复活时机视具体场景。
 
 ## 应用层 PoC：系统遥测 dashboard
 

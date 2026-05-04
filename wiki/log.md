@@ -6,6 +6,13 @@
 
 ---
 
+## [2026-05-04] sync | ST7789V2 fbtft → panel-mipi-dbi-spi cutover
+
+- `wiki/boards/radxa-cubie-a7z.md` — ST7789V LCD 段重写：fbtft + fbcon → drm/tiny `panel-mipi-dbi-spi`；接线注释化（240×280 (0,20) 偏移走 `panel-timing.vback-porch`）
+- frontmatter `sources` 同步：移除 `console-setup` / `st7789v.conf` modules-load；新增 `firmware/panel/st7789v2-240x280.txt`
+- overlay 段：去掉已删除的 fbtft 兜底 modprobe 与 console-setup 引用
+- 关联 change：`openspec/changes/st7789v2-tinydrm-cutover/`
+
 ## [2026-04-26] init | 初版构建：63 页 + schema
 
 按 [docs/superpowers/specs/2026-04-26-flange-wiki-knowledge-base-design.md](../docs/superpowers/specs/2026-04-26-flange-wiki-knowledge-base-design.md) 一次性产出。实施计划见 [docs/superpowers/plans/2026-04-26-flange-wiki-knowledge-base-build.md](../docs/superpowers/plans/2026-04-26-flange-wiki-knowledge-base-build.md)。

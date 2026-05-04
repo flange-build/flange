@@ -2,31 +2,39 @@
 /plugin/;
 
 /*
- * 在 SPI1 上挂 ST7789V 240×280 SPI LCD（fbtft 路径），出 /dev/fb0。
+ * 在 SPI1 上挂 ST7789V2 240×280 SPI LCD，走 drm/tiny `panel-mipi-dbi-spi`
+ * 通用驱动（mainline v5.18 commit 48b1f5440f8c 的 backport，见
+ * components/platform/allwinnera733/patches/kernel/01-tinydrm-panel-mipi-dbi.patch）。
+ * 暴露为 /dev/dri/card*，init 序列从 /lib/firmware/panel-mipi-dbi-spi.bin 加载
+ * （driver 用 compatible[0] 派生，**不**读 firmware-name 属性）。
  *
  * 接线（Cubie A7Z 40-pin header）：
  *   MOSI    PD11 (PIN_19)  — SPI1 控制器输出
  *   SCLK    PD12 (PIN_23)  — SPI1 控制器时钟
  *   CS      PB3  (PIN_31)  — 软件 CS（PB3 的 SPI 复用是 SPI2_CS0，
  *                            不能给 SPI1 做硬件片选；走 cs-gpios GPIO 翻转）
- *   DC      PB5  (PIN_12)  — fbtft Data/Command
- *   RES     PB6  (PIN_35)  — fbtft Reset，低有效
- *   BLK     PB4 / PIN_1    — 背光（GPIO 控制或常 3.3V）
+ *   DC      PB5  (PIN_12)  — Data/Command
+ *   RES     PB6  (PIN_35)  — Reset，低有效
+ *   BLK     PB4 / PIN_1    — 背光（GPIO 控制或常 3.3V，本 overlay 不接管）
  *
  * 占用：spi1 (PD10-13 中的 PD11/PD12/PD13 三脚)、PB3、PB5、PB6。
  * PD10 (SPI1_CS0 硬件片选脚) 不参与 pinmux —— LCD 物理上接到 PB3 软 CS，
  * 让 PD10 保持悬空避免误响应。
+ *
+ * 280 行圆角模块的 (0, 20) GRAM 偏移通过 panel-timing.hback-porch /
+ * vback-porch 表达；driver 的 mipi_dbi_set_window_address 每帧自动用
+ * left_offset/top_offset 写 CASET/RASET，无需在 firmware init seq 里钉死。
  */
 
 / {
 	compatible = "allwinner,sun60i-a733";
 
 	metadata {
-		title = "Enable ST7789V 240x280 SPI1 LCD on Cubie A7Z";
+		title = "Enable ST7789V2 240x280 SPI1 LCD on Cubie A7Z (panel-mipi-dbi-spi)";
 		compatible = "radxa,cubie-a7z";
 		category = "display";
 		exclusive = "spi1", "PD11", "PD12", "PD13", "PB3", "PB5", "PB6";
-		description = "Bind ST7789V fbtft on SPI1; software CS=PB3 (PIN_31), DC=PB5 (PIN_12), RES=PB6 (PIN_35); MOSI=PD11 (PIN_19), SCLK=PD12 (PIN_23). PD10 hardware CS unused.";
+		description = "Bind ST7789V2 panel-mipi-dbi-spi on SPI1; software CS=PB3 (PIN_31), DC=PB5 (PIN_12), RES=PB6 (PIN_35); MOSI=PD11 (PIN_19), SCLK=PD12 (PIN_23). Init seq loaded from /lib/firmware/panel-mipi-dbi-spi.bin. PD10 hardware CS unused.";
 	};
 
 	fragment@0 {
@@ -62,20 +70,39 @@
 			cs-gpios = <&pio 1 3 1>;        /* PB3 ACTIVE_LOW */
 			status = "okay";
 
-			st7789v@0 {
-				compatible = "sitronix,st7789v";
+			panel@0 {
+				compatible = "panel-mipi-dbi-spi";
 				reg = <0>;
 				spi-max-frequency = <40000000>;
-				rotate = <0>;
-				fps = <30>;
-				buswidth = <8>;
-				regwidth = <8>;
-				width = <240>;
-				height = <280>;
 				dc-gpios = <&pio 1 5 0>;     /* PB5, ACTIVE_HIGH */
-				reset-gpios = <&pio 1 6 1>;  /* PB6, ACTIVE_LOW */
-				debug = <0>;
+				/*
+				 * 上游 mipi_dbi_hw_reset() 用 gpiod_set_value(reset, 0/1)
+				 * 触发 reset 脉冲并最终 set(1) 释放 reset。这函数假设
+				 * "1 = released, 0 = asserted" 物理直写语义——对应 GPIO 标
+				 * 注 ACTIVE_HIGH。即使 ST7789V 物理上是低电平 reset，DT 这
+				 * 里也必须按 mainline 惯例声明为 ACTIVE_HIGH，否则 gpiolib
+				 * 的 active_low 翻转会把 set(1) 反为物理 LOW，panel 永远停
+				 * 在 reset 中（fbtft 路径用的 legacy gpio API 不做这翻转，
+				 * 所以两种 polarity 它都吞）。
+				 */
+				reset-gpios = <&pio 1 6 0>;  /* PB6, ACTIVE_HIGH (see note) */
+				write-only;                  /* DBI 单向写，无 MISO */
+				width-mm = <23>;             /* 240 px ≈ 23 mm @ ~10 px/mm */
+				height-mm = <27>;            /* 280 px ≈ 27 mm */
 				status = "okay";
+
+				panel-timing {
+					hactive = <240>;
+					vactive = <280>;
+					hback-porch = <0>;       /* left_offset = 0 */
+					vback-porch = <20>;      /* top_offset = 20，280 行圆角模块 GRAM 起点 */
+					hfront-porch = <0>;
+					vfront-porch = <0>;
+					hsync-len = <0>;
+					vsync-len = <0>;
+					/* driver 不用像素时钟，但 binding 必填，按 60Hz 估算 */
+					clock-frequency = <4032000>;
+				};
 			};
 		};
 	};

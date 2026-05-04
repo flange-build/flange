@@ -54,6 +54,13 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         if not config.get("_local_mode", {}).get(self.component):
             self._reset_aggregate_repo(repo_root)
             self._apply_upstream_patches(repo_root)
+            # 平台/板级补丁（components/platform/<p>/patches/kernel/*.patch
+            # 与 components/board/<b>/patches/kernel/*.patch）。
+            # 上游 series 之后再应用，确保我们的 backport 不被随后 reset 撤销。
+            patches_count = self._count_patches(config)
+            self.apply_patches(src_dir, config)
+            if patches_count:
+                self._status(f"平台/板级补丁应用 ({patches_count} patches)")
 
         # BSP 集成与 DTS 准备
         self._integrate_bsp(src_dir, bsp_dir, config)
@@ -63,6 +70,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         self._write_case_insensitive_fix(src_dir)
         self._write_aic8800_wlan_override(src_dir)
         self._write_usb_gadget_override(src_dir)
+        self._write_panel_mipi_dbi_override(src_dir)
         self.configure(src_dir, config)
         self.compile(src_dir, config)
         result = self.collect(src_dir, config)
@@ -308,6 +316,21 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
             "CONFIG_IP6_NF_MATCH_HL=n\n"
         )
         self._status("FS 大小写不敏感，启用 case_insensitive_fix")
+
+    def _write_panel_mipi_dbi_override(self, src_dir: Path):
+        """生成 config fragment 启用 backport 的 panel-mipi-dbi-spi 驱动。
+
+        backport patch（components/platform/allwinnera733/patches/kernel/
+        01-tinydrm-panel-mipi-dbi.patch）从 mainline v5.18 拉来 panel-mipi-dbi.c
+        + Kconfig/Makefile 改动；本 fragment 只是把对应的 CONFIG 启用为模块。
+        """
+        override = src_dir / "arch" / self.ARCH / "configs" / "panel_mipi_dbi.config"
+        override.write_text(
+            "# panel-mipi-dbi-spi（backport from mainline v5.18 commit 48b1f5440f8c）\n"
+            "# 用途：通用 MIPI DBI SPI 屏 DRM 驱动，init seq 由 firmware 提供。\n"
+            "CONFIG_DRM_PANEL_MIPI_DBI=m\n"
+        )
+        self._status("panel_mipi_dbi.config 生成")
 
     def _write_usb_gadget_override(self, src_dir: Path):
         """生成 config fragment 强制 USB gadget + FunctionFS 为内建。

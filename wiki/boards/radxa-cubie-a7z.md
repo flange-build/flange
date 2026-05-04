@@ -5,9 +5,8 @@ status: wip
 sources:
   - components/board/radxa-cubie-a7z/config.py
   - components/board/radxa-cubie-a7z/overlays/sun60iw2p1-spi1-st7789v-display.dtso
+  - components/board/radxa-cubie-a7z/firmware/panel/st7789v2-240x280.txt
   - components/board/radxa-cubie-a7z/overlay/etc/usbdevice.conf
-  - components/board/radxa-cubie-a7z/overlay/etc/default/console-setup
-  - components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/st7789v.conf
   - components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/aic8800.conf
   - components/board/radxa-cubie-a7z/overlay/etc/modprobe.d/aic8800.conf
 related:
@@ -43,9 +42,9 @@ lunch radxa-cubie-a7z-default-release
 
 A733 平台使用 `kernel_device.board_dts_path` 指定设备树源文件路径，与 Rockchip 平台使用 `kernel.dts` 直接引用 DTB target 的机制不同。
 
-## ST7789V SPI LCD
+## ST7789V2 SPI LCD
 
-通过 board 私有 overlay `sun60iw2p1-spi1-st7789v-display.dtso` 绑定 fbtft 驱动，创建 `/dev/fb0` 并作为 fbcon 系统主显示。SPI1 引脚：MOSI=PD11, SCLK=PD12, CS=PB3(软CS), DC=PB5, RST=PB6, BLK=PB4。`boot.kernel_args` 追加 `console=tty1`；rootfs 安装 `fonts-terminus`（6x12，240×280 下 40×23 列行）。
+通过 board 私有 overlay `sun60iw2p1-spi1-st7789v-display.dtso` 绑定 mainline `panel-mipi-dbi-spi`（v5.18 → 5.15.147 backport，见 [`01-tinydrm-panel-mipi-dbi.patch`](../../components/platform/allwinnera733/patches/kernel/01-tinydrm-panel-mipi-dbi.patch)），LCD 暴露为 `/dev/dri/card*`。SPI1 引脚：MOSI=PD11, SCLK=PD12, CS=PB3(软CS), DC=PB5, RST=PB6, BLK=PB4(常 3.3V)。Init 序列由 [`firmware/panel/st7789v2-240x280.txt`](../../components/board/radxa-cubie-a7z/firmware/panel/st7789v2-240x280.txt) 经 `builder.firmware_panel` 编码为 `/lib/firmware/panel-mipi-dbi-spi.bin`。280 行圆角模块 (0,20) GRAM 偏移通过 `panel-timing.vback-porch=20` 表达。LCD 不再当系统主控制台。
 
 ## AIC8800 USB Wi-Fi
 
@@ -57,8 +56,8 @@ IMG PowerVR BXM-4-64，`pvrsrvkm.ko` 走 [[out-of-tree 模块]] 编译；userspa
 
 ## Device Tree Overlays
 
-28 个 vendor overlay（`boot.vendor_overlays`）+ 1 个 board overlay（ST7789V LCD，`boot.board_overlays`）。仅 ST7789V overlay 默认启用（`boot.default_overlays`）。其余运行时编辑 `extlinux.conf` 启用。
+28 个 vendor overlay（`boot.vendor_overlays`）+ 1 个 board overlay（ST7789V2 LCD，`boot.board_overlays`）。仅 ST7789V2 overlay 默认启用（`boot.default_overlays`）。其余运行时编辑 `extlinux.conf` 启用。
 
 ## overlay
 
-`overlay/etc/usbdevice.conf`（ADB）、`overlay/etc/default/console-setup`（Terminus 6x12）、`overlay/etc/modules-load.d/`（st7789v、aic8800）、`overlay/etc/modprobe.d/aic8800.conf`。
+`overlay/etc/usbdevice.conf`（ADB）、`overlay/etc/modules-load.d/aic8800.conf`、`overlay/etc/modprobe.d/aic8800.conf`。fbtft 阶段的 `console-setup` / `st7789v.conf` modules-load 已随 panel-mipi-dbi-spi 切换移除。
