@@ -1,5 +1,6 @@
 """源码仓库管理 — 替代 Bazel module extensions。"""
 
+import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -98,6 +99,52 @@ class SourceManager:
         fw_dir = self.sources_dir / "extra-firmware" / name
         self._ensure_repo(fw_dir, cfg)
         return fw_dir
+
+    def ensure_extra_deb(self, name: str, cfg: dict) -> Path:
+        """确保外部 deb 包已下载，返回 deb 文件路径。
+
+        存储路径：.build/sources/extra-debs/<name>/<filename>
+        cfg 格式：
+          - url:     下载地址（必须）
+          - sha256:  校验哈希（必须）
+          - filename: 本地文件名（可选，默认从 URL 提取）
+        下载使用原子写入（.download 后缀），sha256 不匹配则删除重下。
+        """
+        url = cfg["url"]
+        sha256 = cfg["sha256"]
+        filename = cfg.get("filename", url.rsplit("/", 1)[-1])
+        deb_dir = self.sources_dir / "extra-debs" / name
+        deb_dir.mkdir(parents=True, exist_ok=True)
+        deb_path = deb_dir / filename
+
+        # 已存在且校验通过则跳过
+        if deb_path.is_file() and self._sha256_file(deb_path) == sha256:
+            return deb_path
+
+        # 原子下载：先写 .download，完成后 rename；
+        # 失败时清理残留 partial 文件，避免污染缓存目录。
+        partial = deb_path.with_suffix(deb_path.suffix + ".download")
+        try:
+            subprocess.run(
+                ["wget", "-q", "--show-progress", "-O", str(partial), url],
+                check=True, timeout=600,
+            )
+            if self._sha256_file(partial) != sha256:
+                raise RuntimeError(
+                    f"extra_deb {name}: sha256 校验失败（URL: {url}）")
+            partial.rename(deb_path)
+        except Exception:
+            partial.unlink(missing_ok=True)
+            raise
+        return deb_path
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
     def ensure_rootfs_tarball(self, config: dict) -> Path:
         """确保 rootfs base tarball 已下载。"""

@@ -136,6 +136,7 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
                                label=f"dpkg -i ({len(deb_files)} 个包)...")
                 shutil.rmtree(deb_tmp)
 
+        self._install_extra_debs(rootfs_dir, config)
         self._install_kernel_modules(rootfs_dir, config)
         self._install_extra_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)

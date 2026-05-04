@@ -450,3 +450,138 @@ class TestRootfsDebInstallIntegration:
         assert dpkg_calls == [], (
             f"不期望 dpkg -i 被调用，实际调用：{dpkg_calls}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 单元测试：extra_debs（第三方 deb 包下载安装）
+# ---------------------------------------------------------------------------
+
+class TestExtraDebs:
+    """测试 RootfsBuilder._install_extra_debs 下载安装第三方 deb 包。"""
+
+    def test_config为空时不调用dpkg(self, tmp_path: Path):
+        """rootfs.extra_debs 为空列表时，不应调用 dpkg。"""
+        builder = _make_builder(tmp_path)
+        rootfs_dir = tmp_path / "rootfs"
+        rootfs_dir.mkdir()
+
+        config = _make_config(tmp_path)
+        config["rootfs"]["extra_debs"] = []
+
+        builder._install_extra_debs(rootfs_dir, config)
+        builder.docker.run.assert_not_called()
+
+    def test_config无extra_debs键时不调用dpkg(self, tmp_path: Path):
+        """config 中无 extra_debs 键时，不应调用 dpkg。"""
+        builder = _make_builder(tmp_path)
+        rootfs_dir = tmp_path / "rootfs"
+        rootfs_dir.mkdir()
+
+        config = _make_config(tmp_path)
+        # 删除 extra_debs 键（如果有的话）
+        config["rootfs"].pop("extra_debs", None)
+
+        builder._install_extra_debs(rootfs_dir, config)
+        builder.docker.run.assert_not_called()
+
+    def test_有extra_debs时调用source下载并dpkg安装(self, tmp_path: Path):
+        """extra_debs 声明后，应下载 deb 并调用 dpkg -i 安装。"""
+        builder = _make_builder(tmp_path)
+        rootfs_dir = tmp_path / "rootfs"
+        rootfs_dir.mkdir(parents=True)
+
+        # 模拟 source.ensure_extra_deb 返回本地 deb 路径
+        fake_deb = tmp_path / "test-pkg_1.0_arm64.deb"
+        fake_deb.write_bytes(b"fake deb content")
+        builder.source.ensure_extra_deb.return_value = fake_deb
+
+        # 模拟 ChrootContext（__enter__ 返回自身）
+        mock_chroot = MagicMock()
+        mock_chroot.__enter__ = MagicMock(return_value=mock_chroot)
+        mock_chroot.__exit__ = MagicMock(return_value=False)
+        with patch("builder.rootfs.ChrootContext", return_value=mock_chroot):
+            config = _make_config(tmp_path)
+            config["rootfs"]["extra_debs"] = [
+                {
+                    "name": "test-pkg",
+                    "url": "https://example.com/test-pkg_1.0_arm64.deb",
+                    "sha256": "abc123",
+                },
+            ]
+            builder._install_extra_debs(rootfs_dir, config)
+
+        # 验证 ensure_extra_deb 被调用
+        builder.source.ensure_extra_deb.assert_called_once_with(
+            "test-pkg",
+            {
+                "name": "test-pkg",
+                "url": "https://example.com/test-pkg_1.0_arm64.deb",
+                "sha256": "abc123",
+            },
+        )
+        # 验证 chroot 内先后调了 dpkg -i 与 ldconfig
+        assert mock_chroot.run.call_count == 2
+        dpkg_cmd = mock_chroot.run.call_args_list[0][0][0]
+        assert dpkg_cmd[0] == "dpkg"
+        assert "-i" in dpkg_cmd
+        assert any("test-pkg_1.0_arm64.deb" in arg for arg in dpkg_cmd)
+        ldconfig_cmd = mock_chroot.run.call_args_list[1][0][0]
+        assert ldconfig_cmd == ["ldconfig"]
+
+    def test_临时目录安装后清理(self, tmp_path: Path):
+        """dpkg 安装完成后，临时目录 /tmp/flange-extra-debs 应被清理。"""
+        builder = _make_builder(tmp_path)
+        rootfs_dir = tmp_path / "rootfs"
+        rootfs_dir.mkdir(parents=True)
+
+        fake_deb = tmp_path / "test-pkg_1.0_arm64.deb"
+        fake_deb.write_bytes(b"fake deb content")
+        builder.source.ensure_extra_deb.return_value = fake_deb
+
+        with patch("builder.rootfs.ChrootContext", return_value=MagicMock()):
+            config = _make_config(tmp_path)
+            config["rootfs"]["extra_debs"] = [
+                {
+                    "name": "test-pkg",
+                    "url": "https://example.com/test-pkg_1.0_arm64.deb",
+                    "sha256": "abc123",
+                },
+            ]
+            builder._install_extra_debs(rootfs_dir, config)
+
+        # 临时目录应被清理
+        assert not (rootfs_dir / "tmp" / "flange-extra-debs").exists()
+
+    def test_多个extra_debs批量安装(self, tmp_path: Path):
+        """多个 extra_debs 应在一次 dpkg -i 调用中批量安装。"""
+        builder = _make_builder(tmp_path)
+        rootfs_dir = tmp_path / "rootfs"
+        rootfs_dir.mkdir(parents=True)
+
+        deb1 = tmp_path / "pkg-a_1.0_arm64.deb"
+        deb2 = tmp_path / "pkg-b_2.0_arm64.deb"
+        deb1.write_bytes(b"a")
+        deb2.write_bytes(b"b")
+
+        def fake_ensure(name, cfg):
+            return deb1 if name == "pkg-a" else deb2
+
+        builder.source.ensure_extra_deb.side_effect = fake_ensure
+
+        mock_chroot = MagicMock()
+        mock_chroot.__enter__ = MagicMock(return_value=mock_chroot)
+        mock_chroot.__exit__ = MagicMock(return_value=False)
+        with patch("builder.rootfs.ChrootContext", return_value=mock_chroot):
+            config = _make_config(tmp_path)
+            config["rootfs"]["extra_debs"] = [
+                {"name": "pkg-a", "url": "https://ex.com/a.deb", "sha256": "a"},
+                {"name": "pkg-b", "url": "https://ex.com/b.deb", "sha256": "b"},
+            ]
+            builder._install_extra_debs(rootfs_dir, config)
+
+        # 应一次 dpkg -i 安装两个 deb，再跟一次 ldconfig
+        assert mock_chroot.run.call_count == 2
+        dpkg_cmd = mock_chroot.run.call_args_list[0][0][0]
+        deb_args = [a for a in dpkg_cmd if a.endswith(".deb")]
+        assert len(deb_args) == 2
+        assert mock_chroot.run.call_args_list[1][0][0] == ["ldconfig"]

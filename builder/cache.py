@@ -279,6 +279,9 @@ class BuildCache:
         # extra_firmware 配置（repo/branch/files 变化须触发重建）
         extra_fw = rootfs_cfg.get("extra_firmware", [])
         h.update(json.dumps(extra_fw, sort_keys=True, default=str).encode())
+        # extra_debs 配置（url/sha256/name 变化须触发重建）
+        extra_debs = rootfs_cfg.get("extra_debs", [])
+        h.update(json.dumps(extra_debs, sort_keys=True, default=str).encode())
         # partitions 影响 rootfs.img 大小
         self._mix_partitions(h)
 

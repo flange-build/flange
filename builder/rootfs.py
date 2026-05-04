@@ -2,6 +2,7 @@
 
 通用能力（与平台无关）：
   - apply_overlays：platform overlay → board overlay 两层覆盖
+  - extra_debs：下载第三方 deb 并安装
   - extra_firmware：从外部仓库拉取固件文件并写入 rootfs
 """
 
@@ -9,6 +10,7 @@ import math
 import shutil
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.chroot import ChrootContext
 from builder.docker import BuildError
 from builder.partition.size import resolve_image_size
 
@@ -63,6 +65,44 @@ class RootfsBuilder(ComponentBuilder):
                 f"{required_mb}MB；当前 image_size 仅 {image_size_mb}MB，"
                 f"请增大 rootfs 分区 image_size。"
             )
+
+    def _install_extra_debs(self, rootfs_dir: Path, config: dict):
+        """下载并安装第三方 deb 包到 rootfs。
+
+        config["rootfs"]["extra_debs"] 格式：
+          [
+            {
+              "name": "xserver-xorg-img-bxm",
+              "url": "https://github.com/.../xserver-xorg-img-bxm_1.21.1-2_arm64.deb",
+              "sha256": "<hex>",
+              "filename": "xserver-xorg-img-bxm_1.21.1-2_arm64.deb",  # 可选
+            },
+          ]
+
+        name 用于缓存目录隔离，必须全局唯一。deb 在 app deb 之后、
+        kernel modules 之前安装，与 Phase 2 其他 deb 共享 dpkg -i 流程。
+        """
+        extra_debs = config.get("rootfs", {}).get("extra_debs", [])
+        if not extra_debs:
+            return
+        deb_files = []
+        for deb_cfg in extra_debs:
+            name = deb_cfg["name"]
+            self._status(f"下载外部 deb: {name}")
+            deb_path = self.source.ensure_extra_deb(name, deb_cfg)
+            deb_files.append(deb_path)
+        deb_names = [d.name for d in deb_files]
+        self._status(f"安装 {len(deb_files)} 个外部 deb: {', '.join(deb_names)}")
+        deb_tmp = rootfs_dir / "tmp" / "flange-extra-debs"
+        deb_tmp.mkdir(parents=True, exist_ok=True)
+        for deb in deb_files:
+            shutil.copy2(deb, deb_tmp)
+        with ChrootContext(rootfs_dir, self.docker) as chroot:
+            deb_list = [f"/tmp/flange-extra-debs/{d.name}" for d in deb_files]
+            chroot.run(["dpkg", "-i", "--force-confnew"] + deb_list,
+                       label=f"dpkg -i ({len(deb_files)} 个外部包)...")
+            chroot.run(["ldconfig"], label="ldconfig...")
+        shutil.rmtree(deb_tmp)
 
     def _install_extra_firmware(self, rootfs_dir: Path, config: dict):
         """安装额外固件文件到 rootfs。
