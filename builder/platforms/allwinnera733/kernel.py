@@ -9,7 +9,7 @@
 import os
 import shutil
 from pathlib import Path
-from builder.base import ComponentBuilder
+from builder.kernel_base import KernelBuilder
 from builder.dtb_overlay import (
     dtb_overlays,
     kernel_overlay_dir,
@@ -18,7 +18,7 @@ from builder.dtb_overlay import (
 )
 
 
-class AllwinnerA733KernelBuilder(ComponentBuilder):
+class AllwinnerA733KernelBuilder(KernelBuilder):
     component = "kernel"
     ARCH = "arm64"
     CROSS = "aarch64-linux-gnu-"
@@ -448,109 +448,6 @@ class AllwinnerA733KernelBuilder(ComponentBuilder):
                     f"*/{link_name}"):
                 if link.is_symlink():
                     link.unlink()
-
-    # ---- out-of-tree 内核模块 ----
-
-    def _oot_modules_config(self, config: dict) -> list[dict]:
-        """从配置中提取 out-of-tree 模块声明列表。
-
-        每个声明是 dict，包含：
-          - dir: str        — 相对于内核源码树的构建入口目录
-          - label: str      — 状态显示名
-          - make_args: list — 传给 make 的额外参数
-          - ko_pattern: str — glob 模式，匹配编译产物 .ko（相对于 src_dir）
-          - pre_build: list|None  — 编译前执行的 shell 命令列表
-          - post_build: list|None — 编译后执行的 shell 命令列表（无论成败）
-
-        配置来源：config["kernel"]["oot_modules"]，在 SoC config.py 中声明。
-        """
-        return config.get("kernel", {}).get("oot_modules", [])
-
-    def _compile_oot_modules(self, src_dir: Path, config: dict, jobs: int):
-        """遍历配置中的 out-of-tree 模块并逐个编译。"""
-        oot_modules = self._oot_modules_config(config)
-        if not oot_modules:
-            return
-
-        njobs = jobs or max((os.cpu_count() or 1) - 4, 1)
-        for mod in oot_modules:
-            build_dir = src_dir / mod["dir"]
-            if not build_dir.is_dir():
-                self._status(f"跳过 {mod['label']}：目录不存在 {mod['dir']}")
-                continue
-
-            label = f"编译 {mod['label']}..."
-            self._status(label)
-
-            # 模板变量替换
-            tmpl = {"kernel_src": str(src_dir)}
-
-            # 编译前钩子
-            for cmd in mod.get("pre_build") or []:
-                self.docker.run(
-                    ["bash", "-c", cmd.format(**tmpl)],
-                    cwd=str(src_dir))
-
-            try:
-                make_cmd = ["make", f"-j{njobs}"]
-                make_cmd.extend(
-                    a.format(**tmpl) for a in mod.get("make_args", []))
-                self.docker.run(make_cmd, cwd=str(build_dir), label=label)
-            finally:
-                # 编译后钩子（用于恢复补丁等，无论成败都执行）
-                for cmd in mod.get("post_build") or []:
-                    self.docker.run(
-                        ["bash", "-c", cmd.format(**tmpl)],
-                        cwd=str(src_dir), check=False)
-
-            # 验证产物
-            ko_found = False
-            for pattern in mod.get("ko_pattern", []):
-                for ko in src_dir.glob(pattern):
-                    if ko.exists():
-                        ko_found = True
-                        break
-            if ko_found:
-                self._status(f"{mod['label']} 编译完成")
-            else:
-                self._status(f"警告：{mod['label']} 编译失败，未生成 .ko")
-
-    def _install_oot_modules(self, src_dir: Path, config: dict,
-                              modules_staging: Path):
-        """将 out-of-tree 模块 .ko 安装到 modules staging 目录。"""
-        oot_modules = self._oot_modules_config(config)
-        if not oot_modules:
-            return
-
-        kernel_release = self.docker.run(
-            ["cat", "include/config/kernel.release"],
-            cwd=str(src_dir), capture=True).stdout.strip()
-
-        mod_base = modules_staging / "lib" / "modules" / kernel_release
-        dep_file = mod_base / "modules.dep"
-
-        installed = []
-        for mod in oot_modules:
-            for pattern in mod.get("ko_pattern", []):
-                for ko in src_dir.glob(pattern):
-                    if not ko.exists():
-                        continue
-                    rel = f"updates/{ko.name}"
-                    dst = mod_base / "updates" / ko.name
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    self.docker.run(
-                        ["aarch64-linux-gnu-strip", "--strip-debug",
-                         "-o", str(dst), str(ko)],
-                        cwd=str(src_dir))
-                    installed.append(rel)
-                    self._status(f"OOT 模块安装: {rel}")
-
-        # 追加 modules.dep 条目
-        if installed and dep_file.exists():
-            existing = dep_file.read_text()
-            entries = "".join(f"{r}:\n" for r in installed if r not in existing)
-            if entries:
-                dep_file.write_text(existing + entries)
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         dts_dir = config["kernel"].get("dts_dir", "allwinner")

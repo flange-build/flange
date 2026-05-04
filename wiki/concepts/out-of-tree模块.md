@@ -3,7 +3,7 @@ title: out-of-tree 模块
 type: concept
 status: stable
 sources:
-  - builder/platforms/allwinnera733/kernel.py
+  - builder/kernel_base.py
   - components/platform/allwinnera733/a733/config.py
   - builder/config/merge.py
 related:
@@ -20,14 +20,15 @@ out-of-tree（OOT）内核模块指源码在内核树外、使用独立构建系
 ## 关键设计要点
 
 - **配置声明**：在 SoC 或 board 的 `config.py` 中，`kernel.oot_modules` 列表声明每个 OOT 模块：
-  - `dir`：构建入口目录（相对内核源码树）
+  - `dir`：构建入口目录，支持 `{kernel_src}` 模板变量（绝对路径，自文档化）
   - `label`：显示名
   - `make_args`：传给 make 的参数，支持 `{kernel_src}` 模板变量
-  - `ko_pattern`：glob 模式匹配编译产物 .ko
-  - `pre_build` / `post_build`：编译前后 shell 钩子（如临时补丁）
-- **编译流程**：`kernel.py` 的 `compile()` 在 `make modules` 完成后调用 `_compile_oot_modules()`，遍历声明列表逐个编译
-- **安装流程**：`_install_oot_modules()` 扫描 `ko_pattern` 产物，strip 后安装到 `_modules_staging/lib/modules/<version>/updates/`，并更新 `modules.dep`
+  - `ko_pattern`：glob 模式匹配编译产物 .ko，支持 `{kernel_src}`
+  - `pre_build` / `post_build`：编译前后 shell 钩子（如临时补丁），支持 `{kernel_src}`
+- **编译流程**：`KernelBuilder.compile()` 在 `make modules` 完成后调用 `_compile_oot_modules()`，遍历声明列表逐个编译
+- **安装流程**：`_install_oot_modules()` 扫描 `ko_pattern` 产物，用 `CROSS.strip` strip 后安装到 `_modules_staging/lib/modules/<version>/updates/`，并更新 `modules.dep`
 - **三层继承**：SoC 层声明的 `oot_modules` 自动被 board 继承；board 追加额外模块需用 `+oot_modules`（`deep_merge` 的 list 追加语义）
+- **跨平台**：OOT 逻辑在 `KernelBuilder` 基类中，Rockchip 和 Allwinner 平台均支持
 
 ## 实例
 
@@ -39,5 +40,5 @@ Allwinner A733 的 PowerVR BXM GPU 驱动（img-bxm / Rogue DDK）：
 
 ## 关键代码位置
 
-- [`builder/platforms/allwinnera733/kernel.py:_compile_oot_modules`](../../builder/platforms/allwinnera733/kernel.py) — OOT 编译流程
+- [`builder/kernel_base.py:KernelBuilder`](../../builder/kernel_base.py) — OOT 编译与安装方法
 - [`builder/config/merge.py:deep_merge`](../../builder/config/merge.py) — `+key` 追加语义

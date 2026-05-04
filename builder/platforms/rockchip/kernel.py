@@ -1,7 +1,7 @@
 """Rockchip 内核构建策略 -- 替代 kernel/rockchip/build.sh"""
 
 from pathlib import Path
-from builder.base import ComponentBuilder
+from builder.kernel_base import KernelBuilder
 from builder.dtb_overlay import (
     dtb_overlays,
     kernel_overlay_dir,
@@ -10,7 +10,7 @@ from builder.dtb_overlay import (
 )
 
 
-class RockchipKernelBuilder(ComponentBuilder):
+class RockchipKernelBuilder(KernelBuilder):
     component = "kernel"
     ARCH = "arm64"
     CROSS = "aarch64-linux-gnu-"
@@ -41,7 +41,10 @@ class RockchipKernelBuilder(ComponentBuilder):
                   arch=self.ARCH, cross=self.CROSS, jobs=jobs,
                   extra=["KCFLAGS=-Wno-error"],
                   label="编译内核...")
-        # 安装模块（带 strip）
+        # 编译 out-of-tree 模块
+        self._compile_oot_modules(src_dir, config, jobs)
+
+        # 安装 in-tree 模块（带 strip）
         modules_staging = src_dir / "_modules_staging"
         modules_staging.mkdir(exist_ok=True)
         self.make(src_dir, ["modules_install"],
@@ -56,6 +59,8 @@ class RockchipKernelBuilder(ComponentBuilder):
                     f"*/{link_name}"):
                 if link.is_symlink():
                     link.unlink()
+        # 安装 out-of-tree 模块到同一 staging 目录
+        self._install_oot_modules(src_dir, config, modules_staging)
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         dts_dir = config["kernel"].get("dts_dir", "rockchip")
