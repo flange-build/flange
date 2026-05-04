@@ -15,7 +15,7 @@ related:
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
   - "[[out-of-tree 模块]]"
-updated: 2026-05-03
+updated: 2026-05-04
 ---
 
 ## TL;DR
@@ -53,7 +53,7 @@ A733 平台使用 `kernel_device.board_dts_path` 指定设备树源文件路径�
 
 ## GPU
 
-IMG PowerVR BXM-4-64（`img,gpu` @ 0x1800000），通过 [[out-of-tree 模块]] 机制编译 `pvrsrvkm.ko`。Userspace 驱动来自 Radxa `xserver-xorg-img-bxm` 包。详见 [docs/proposal/fb-gpu-test/](../../docs/proposal/fb-gpu-test/fb-gpu-test.md)。
+IMG PowerVR BXM-4-64，`pvrsrvkm.ko` 走 [[out-of-tree 模块]] 编译；userspace 驱动 `xserver-xorg-img-bxm` 通过 SoC 层 `rootfs.+extra_debs` 声明（GitHub release + sha256 锁定，构建时直下 + `dpkg -i`）。PoC 见 [docs/proposal/fb-gpu-test/](../../docs/proposal/fb-gpu-test/fb-gpu-test.md)。
 
 ## Device Tree Overlays
 

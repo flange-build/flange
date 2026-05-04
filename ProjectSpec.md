@@ -183,6 +183,10 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
 - rootfs 包集合：`rootfs.package_sets` 定义命名包集合，`rootfs.package_set` 选择集合；
   可用 `+package_set:debug` / `+package_set:release` 按 product/variant 追加集合。配置解析后展开为
   `rootfs.packages`，构建器只消费最终包列表。
+- rootfs 第三方资源声明式安装：
+  - `rootfs.extra_firmware`：从外部 git 仓库拉取固件文件（如 `radxa-firmware`）
+  - `rootfs.extra_debs`：从 URL 直下不在 Ubuntu 官方源的预编译 deb，必须声明 `sha256` 校验
+  - 两者均支持 `+` 追加语义（platform → SoC → board 叠加），缓存哈希纳入配置变更，改动会触发 Phase 2 重建
 - 三层继承：platform → SoC → board，通过 `deep_merge()` 合并
 - 条件标记：`+packages:debug`（追加语义）、`packages:smart-display`（条件覆盖）
 - 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`

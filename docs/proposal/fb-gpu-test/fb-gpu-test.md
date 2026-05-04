@@ -31,7 +31,7 @@ EGL surfaceless + Mesa llvmpipe (软渲染)
 ## GPU 驱动状态
 
 - **Kernel 驱动**：`pvrsrvkm.ko`，通过 flange [[out-of-tree 模块]] 机制在 Docker 内编译，vermagic 与内核一致
-- **Userspace 驱动**：Radxa `xserver-xorg-img-bxm` 包（含 libVK_IMG.so、libsrv_um.so、GPU firmware），设备端 `apt install` 安装
+- **Userspace 驱动**：Radxa `xserver-xorg-img-bxm` 包（含 libVK_IMG.so、libsrv_um.so、GPU firmware），通过 SoC 层 `rootfs.+extra_debs` 声明，构建时 wget 直下 + sha256 校验 + `dpkg -i` 装入 rootfs
 - **软渲染回退**：Mesa llvmpipe（`EGL_PLATFORM=surfaceless`），无需 GPU 驱动亦可运行
 
 ### 已安装的依赖包
@@ -65,6 +65,8 @@ killall fb_triangle
 | 文件 | 说明 |
 |---|---|
 | `main.c` | 主程序：fb0 mmap + EGL surfaceless + GLES2 旋转三角形 |
+| `gpu_compute_test.c` | GPU 计算可用性自检（小样例 shader / readback） |
+| `gpu_fb_scene.c` | 进阶场景：旋转 3D 圆环 + 顶点光照 + 动态背景，EGL+GBM 离屏渲染 → fb0 |
 | `run.sh` | adb 推送 + 设备端编译运行脚本 |
 
 ### main.c 关键设计
