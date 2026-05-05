@@ -31,6 +31,7 @@ ubuntu-base + apt + overlay + deb 两阶段 rootfs 构建。Phase 1 可缓存（
 - **`extra_firmware`**（基类 `_install_extra_firmware`）：`source` 多类型（`repo` 默认 / `kernel` / `bootloader` / `oot:<name>`），后三种复用同 build 已 ensure 的源不重复 clone（如 `oot:rkwifibt` 复用 [[out-of-tree 模块]] 已有源拷 BT 固件）；`files` 元素支持 `str` 或 `{src, dest}` dict 形态做重命名（如给无后缀 vendor 固件统一补 `.bin`）
 - **继承**：`RockchipRootfsBuilder` / `AllwinnerA733RootfsBuilder` → `RootfsBuilder` → `ComponentBuilder`；`apply_overlays` / `_install_extra_debs` / `_install_extra_firmware` 复用基类
 - **chroot**：`ChrootContext` bind-mount proc/sys/dev/pts + QEMU；`__exit__` umount
+- **`root_password`**：`components/rootfs/config.py` 在 base 层默认 `1234`（开发期密码），所有板继承；板级可在 `BOARD["rootfs"]["root_password"]` 覆盖。生产镜像必须改为强密码，由 `_set_root_password` chroot 内 `chpasswd` 写 `/etc/shadow`
 
 ## 关键代码位置
 

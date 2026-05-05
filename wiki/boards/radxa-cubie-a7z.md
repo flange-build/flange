@@ -14,12 +14,12 @@ related:
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
   - "[[out-of-tree 模块]]"
-updated: 2026-05-04
+updated: 2026-05-06
 ---
 
 ## TL;DR
 
-Radxa Cubie A7Z，Allwinner A733 SoC，A733 平台首块落地板。已集成 ST7789V SPI LCD、AIC8800 Wi-Fi、PowerVR GPU 驱动，刷写工具为 `dd`。
+Radxa Cubie A7Z，Allwinner A733 SoC，A733 平台首块落地板。已集成 ST7789V SPI LCD、AIC8800 Wi-Fi、PowerVR GPU 驱动、CedarC VE 硬解，刷写工具为 `dd`。
 
 ## product / variant
 
@@ -53,6 +53,10 @@ A733 平台使用 `kernel_device.board_dts_path` 指定设备树源文件路径�
 ## GPU
 
 IMG PowerVR BXM-4-64，`pvrsrvkm.ko` 走 [[out-of-tree 模块]] 编译；userspace 驱动 `xserver-xorg-img-bxm` 通过 SoC 层 `rootfs.+extra_debs` 声明（GitHub release + sha256 锁定，构建时直下 + `dpkg -i`）。PoC 见 [docs/proposal/fb-gpu-test/](../../docs/proposal/fb-gpu-test/fb-gpu-test.md)。
+
+## VPU
+
+CedarC VE 硬件解码：内核 `sunxi-ve` 自动 probe（DT compatible），用户态走 `libcedarc-dev v2.0`（SoC 层 `+extra_debs`），覆盖 H.264/H.265/VP9/VP8/MPEG2/MPEG4/MJPEG/AVS/AVS2 与 OMX 组件。
 
 ## Device Tree Overlays
 

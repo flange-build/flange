@@ -19,7 +19,7 @@ related:
   - "[[bootloader 构建器]]"
   - "[[USB 线刷协议]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-04-26
+updated: 2026-05-06
 ---
 
 ## TL;DR
@@ -53,6 +53,14 @@ A733 经 Allwinner RTC reboot flag 区分普通启动 vs recovery；`recoveryctl
 **patches**
 
 `components/platform/allwinnera733/patches/bootloader/` 已存在；kernel 补丁目录同结构预留。
+
+**SoC 层默认 deb（`+extra_debs`）**
+
+a733 SoC 层声明 `+extra_debs` 给所有 a733 板默认安装：
+- `xserver-xorg-img-bxm`：PowerVR BXM userspace driver（X 服务器 DDX）
+- `libcedarc-dev v2.0`：Allwinner CedarC VE 硬件解码用户态库（OMX 组件、VDecoder/VEncoder API、H.264/H.265/VP9/VP8/MPEG2/MPEG4/MJPEG/AVS/AVS2 解码插件）。VE 内核模块 `sunxi-ve` 通过 DT compatible 自动 probe 加载，无需 modules-load 条目
+
+均来自 `radxa-pkg/allwinner-prebuilt-extra` GitHub release，sha256 锁定。
 
 ## 易踩坑
 

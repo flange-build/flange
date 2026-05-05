@@ -12,22 +12,25 @@ sources:
   - builder/platforms/rockchip/image.py
   - components/platform/rockchip/config.py
   - components/platform/rockchip/rk3566/config.py
+  - components/platform/rockchip/rk3588/config.py
+  - components/platform/rockchip/rk3588s/config.py
   - ProjectSpec.md#164-三层继承
 related:
   - "[[radxa-zero3w]]"
   - "[[tspi-rk3566]]"
   - "[[neons-core3566-nanob]]"
   - "[[orangepi-cm4]]"
+  - "[[radxa-rock5b]]"
   - "[[kernel 构建器]]"
   - "[[bootloader 构建器]]"
   - "[[USB 线刷协议]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-04-26
+updated: 2026-05-06
 ---
 
 ## TL;DR
 
-Rockchip 系列平台；当前已落地 SoC 为 RK3566，覆盖 4 块板子。flange 的首选打样平台，构建流程与刷写工具均已验证。
+Rockchip 系列平台；当前已落地 SoC：RK3566（4×A55，4 块板）+ RK3588（4×A76+4×A55，1 块板 ROCK 5B），共 5 块板。flange 的首选打样平台，构建流程与刷写工具均已验证。
 
 ## 关键设计要点
 
@@ -38,8 +41,13 @@ Rockchip 系列平台；当前已落地 SoC 为 RK3566，覆盖 4 块板子。fl
 **平台数据（`components/platform/rockchip/`）**
 
 - `config.py`：第一层（platform 层），声明 `vendor`、`flash_tool: "upgrade_tool"`、arch、rkbin 仓库、packages 基线
-- `rk3566/config.py`：第二层（SoC 层），声明 rkbin ini 前缀、U-Boot defconfig、kernel 仓库/分支/dts_dir、分区表
+- `rk3566/config.py` / `rk3588/config.py` / `rk3588s/config.py`：第二层（SoC 层），声明 rkbin ini 前缀、U-Boot defconfig、kernel 仓库/分支/defconfig list、分区表
 - 第三层（board 层）：位于 `components/board/<board>/config.py`，三层经 `deep_merge()` 合并
+
+**SoC 分支差异**
+
+- RK3566 系列：`linux-6.1-stan-rkr4.1-buildroot`（GPU 走 BSP mali_kbase）
+- RK3588/RK3588S：`linux-6.1-stan-rkr5.1`，dts 已切到 mainline panthor (`arm,mali-valhall-csf`)；SoC 配置通过 `rk3588_panthor.config` fragment 关 mali_kbase 启 `CONFIG_DRM_PANTHOR=m`，固件 blob `mali_csffw.bin` 走 `extra_firmware source: kernel` 从 BSP 内 vendor 子目录拷贝。**不能用 rkr4.1**——其 mali_kbase fork 不识别 RK3588 r0p0 status 5 silicon，会在 `kbase_hwaccess_pm_powerup` mutex 死锁
 
 **刷写工具：`upgrade_tool`**
 
@@ -53,3 +61,4 @@ Rockchip 系列平台；当前已落地 SoC 为 RK3566，覆盖 4 块板子。fl
 
 - rkbin 的 `RKTRUST.ini` 区分 BL31/BL32；RK3566 使用 `RK3568TRUST.ini`（ini_prefix 与 trust_ini_prefix 不同，见 `rk3566/config.py`）
 - DTB target 使用子目录相对路径（`rockchip/<dts>.dtb`），非内核完整路径，详见 [[kernel 构建器]]
+- RK3588 板不要用 vendor `<board>-rk3588_defconfig`（含 androidboot 风格固定 bootargs，绕过 extlinux），统一用 generic `rk3588_defconfig`
