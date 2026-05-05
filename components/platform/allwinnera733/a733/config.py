@@ -62,13 +62,21 @@ SOC = {
         ],
     },
     "rootfs": {
-        # PowerVR BXM GPU X.Org 驱动 — 来自 radxa-pkg/allwinner-prebuilt-extra
-        # （该包不在 Ubuntu 官方源中，通过 URL 直下 + sha256 校验安装）
+        # 以下 deb 不在 Ubuntu 官方源中，通过 URL 直下 + sha256 校验安装
+        # — 来自 radxa-pkg/allwinner-prebuilt-extra
         "+extra_debs": [
             {
                 "name": "xserver-xorg-img-bxm",
                 "url": "https://github.com/radxa-pkg/allwinner-prebuilt-extra/releases/download/0.1.10/xserver-xorg-img-bxm_1.21.1-2_arm64.deb",
                 "sha256": "c8e606db1abdea40a5b97f7905ea86901b50c5fe1b76a55356ab70dde3304c3a",
+            },
+            {
+                # Allwinner CedarC VE 硬件解码用户态库（libcedarc v2.0）：
+                # OMX 组件、VDecoder/VEncoder API、各格式解码插件（H.264/H.265/
+                # VP9/VP8/MPEG2/MPEG4/MJPEG/AVS/AVS2）、demo 程序
+                "name": "libcedarc-dev",
+                "url": "https://github.com/radxa-pkg/allwinner-prebuilt-extra/releases/download/0.1.10/libcedarc-dev_2.0.0_arm64_new-f7cf8b546b8a5337c1ea19451972b3f1.deb",
+                "sha256": "24a5d7669cc382f79ec51ba6139be0ef3a54fc54d8843dbe150a4426d3dc6a99",
             },
         ],
     },
