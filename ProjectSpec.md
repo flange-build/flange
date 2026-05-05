@@ -184,7 +184,7 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
   可用 `+package_set:debug` / `+package_set:release` 按 product/variant 追加集合。配置解析后展开为
   `rootfs.packages`，构建器只消费最终包列表。
 - rootfs 第三方资源声明式安装：
-  - `rootfs.extra_firmware`：从外部 git 仓库拉取固件文件（如 `radxa-firmware`）
+  - `rootfs.extra_firmware`：从外部 git 仓库拉取固件文件（如 `radxa-firmware`）；`source` 字段支持 `repo`（默认）/ `kernel` / `bootloader` / `oot:<name>` 复用同 build 已 ensure 的源，避免重复 clone；`files` 元素支持 `str` 或 `{src, dest}` dict 形态做重命名（如给无后缀 vendor 固件统一补 `.bin`）
   - `rootfs.extra_debs`：从 URL 直下不在 Ubuntu 官方源的预编译 deb，必须声明 `sha256` 校验
   - 两者均支持 `+` 追加语义（platform → SoC → board 叠加），缓存哈希纳入配置变更，改动会触发 Phase 2 重建
 - 三层继承：platform → SoC → board，通过 `deep_merge()` 合并
@@ -426,7 +426,7 @@ feat(kernel): 添加内核编译支持
 ### 11.4 输出管理
 - 构建产物收集到 `.build/target/<board>/<product>/<variant>/`（git ignored，根目录 `target` 软链接直达）
 - 内核产出：Image、DTB、modules（INSTALL_MOD_STRIP=1）
-- 内核构建支持 out-of-tree 模块：通过 `kernel.oot_modules` 配置声明，在 `make modules` 后独立编译并统一安装到 rootfs
+- 内核构建支持 out-of-tree 模块：通过 `kernel.oot_modules` 配置声明，在 `make modules` 后独立编译并统一安装到 rootfs；OOT 编译入口若是独立 git 仓库（如 vendor WiFi/BT 包），通过 `kernel.oot_sources` 声明源（每次 ensure 后路径作为 `{<name>_src}` 模板变量注入），仓库 git HEAD 入 kernel hash；安装末尾跑 `depmod -b` 重建 modules.{dep,alias,symbols}+`.bin` 索引，开机 PCI/USB hotplug 才能自动 load
 - flash.sh 由 `builder/flash.py` 自动生成
 - 分区配置由 `builder/partition/` 从 config 自动转换
 - 使用 `flange clean` 清理当前配置的构建产物

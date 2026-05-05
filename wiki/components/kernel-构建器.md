@@ -14,7 +14,7 @@ related:
   - "[[Docker 执行封装]]"
   - "[[内容哈希与增量构建]]"
   - "[[out-of-tree 模块]]"
-updated: 2026-05-03
+updated: 2026-05-06
 ---
 
 ## TL;DR
@@ -25,7 +25,7 @@ updated: 2026-05-03
 
 - **configure**：`make <defconfig>`；defconfig 来自 `config["kernel"]["defconfig"]`
 - **compile**：目标为 `Image`、`<dts_dir>/<dts>.dtb`、`modules`；`KCFLAGS=-Wno-error`；`modules_install` 加 `INSTALL_MOD_STRIP=1`
-- **OOT 模块**：`make modules` 后调用 `_compile_oot_modules()`，遍历 `config["kernel"]["oot_modules"]` 列表逐个编译；`modules_install` 后调用 `_install_oot_modules()`，`ko_pattern` 匹配产物 → strip → 安装到 `updates/` → 更新 `modules.dep`。详见 [[out-of-tree 模块]]
+- **OOT 模块**：`make modules` 后调用 `_compile_oot_modules()`，先 ensure `kernel.oot_sources` 各独立源构造 `{kernel_src}` + `{<name>_src}` 模板字典，再遍历 `oot_modules` 逐个 make；`modules_install` 后调用 `_install_oot_modules()`，strip → 装到 `updates/` → 末尾 `depmod -b <staging> <release>` 重建 modules.{dep,alias,symbols}+`.bin` 全索引（不刷 alias 开机就不自动 load）。详见 [[out-of-tree 模块]]
 - **symlink 清理**：`modules_install` 产出的 `source/build` 链接指向容器绝对路径，deploy 会报错；编译后遍历删除
 - **collect 产物**：`image`、`dtb`、`modules`（_modules_staging）、`dtbos`
 - **Allwinner A733**：linux-a733 聚合仓库（kernel + bsp + device）；`_integrate_bsp` symlink bsp/；所有 make 加 `BSP_TOP=bsp/`（`AllwinnerA733KernelBuilder`，L14）
