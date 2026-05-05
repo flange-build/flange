@@ -215,12 +215,19 @@ class BuildCache:
         self._hash_cache[component] = result
         return result
 
-    # --- rootfs 分阶段缓存接口（Phase 1 base snapshot） ---
+    # --- rootfs / recovery 分阶段缓存接口（Phase 1 base snapshot） ---
 
     def compute_phase_hash(self, component: str, phase: str) -> str:
-        """计算组件指定阶段的哈希。目前仅支持 ("rootfs", "base")。"""
+        """计算组件指定阶段的哈希。
+
+        rootfs/recovery 的 base 阶段哈希分别按各自 packages 集合计算 ——
+        recovery.packages 与 rootfs.packages 通常不同（recovery 维护系统
+        是精简集合），各自独立缓存避免互相污染。
+        """
         if component == "rootfs" and phase == "base":
             return self._compute_rootfs_base_hash()
+        if component == "recovery" and phase == "base":
+            return self._compute_recovery_base_hash()
         raise ValueError(f"不支持的分阶段哈希: {component}.{phase}")
 
     def is_phase_up_to_date(self, component: str, phase: str) -> bool:
@@ -248,6 +255,22 @@ class BuildCache:
         rootfs_cfg = self.config.get("rootfs", {})
         h.update(rootfs_cfg.get("url", "").encode())
         packages = sorted(rootfs_cfg.get("packages", []))
+        h.update(json.dumps(packages).encode())
+        h.update(self.config.get("arch", "").encode())
+        return h.hexdigest()[:16]
+
+    def _compute_recovery_base_hash(self) -> str:
+        """recovery Phase 1 哈希：rootfs.url（与 normal rootfs 共用 base
+        tarball） + sorted(recovery.packages) + arch。
+
+        与 rootfs 同源 ubuntu-base tarball，但安装的 apt 包集合是 recovery
+        维护系统专属（typically 精简：systemd / udev / e2fsprogs / dosfstools
+        / parted / gdisk / zstd 等），独立于 rootfs.packages。
+        """
+        h = hashlib.sha256()
+        h.update(self.config.get("rootfs", {}).get("url", "").encode())
+        recovery_cfg = self.config.get("recovery", {})
+        packages = sorted(recovery_cfg.get("packages", []))
         h.update(json.dumps(packages).encode())
         h.update(self.config.get("arch", "").encode())
         return h.hexdigest()[:16]

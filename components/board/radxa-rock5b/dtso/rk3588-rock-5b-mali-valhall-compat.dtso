@@ -1,0 +1,42 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * 覆盖 GPU 节点 compatible，去掉 "-csf" 后缀。
+ *
+ * argon BSP linux-6.1-stan-rkr5.1 的 rk3588 dts 把 GPU 节点 compatible 列为
+ *   arm,mali-valhall-csf
+ *   rockchip,rk3588-mali
+ * 但同源内核里的 mali_kbase fork（drivers/gpu/arm/bifrost/）of_match 表
+ * （mali_kbase_core_linux.c:5961）只声明：
+ *   arm,malit6xx / arm,mali-midgard / arm,mali-bifrost / arm,mali-valhall
+ * **没有** arm,mali-valhall-csf。结果驱动完全不识别该节点，platform bus
+ * 连 probe 都不发起；GPU 节点没有 driver 绑定，也不进入 deferred probe 队列。
+ *
+ * 修复：把 compatible 改回 arm,mali-valhall（kbase of_match 能命中），
+ * 让 kbase 进入 probe 流程；驱动编译时 MALI_USE_CSF=1 + CONFIG_MALI_CSF_SUPPORT=y
+ * 已具备 CSF 模式能力，配套 CSF firmware (mali_csffw.bin) 装到 rootfs 后
+ * GPU 即可工作。
+ *
+ * 注意：覆盖会丢掉 "rockchip,rk3588-mali"；但 kbase 平台 glue 通过 platform_data
+ * 注入 RK 适配，不依赖该 compatible，可接受。
+ */
+
+/ {
+	compatible = "rockchip,rk3588";
+
+	metadata {
+		title = "Override GPU compatible to arm,mali-valhall (drop -csf suffix)";
+		compatible = "radxa,rock-5b";
+		category = "gpu";
+		exclusive = "&gpu";
+		description = "rkr5.1 BSP dts declares arm,mali-valhall-csf, but kbase of_match only matches arm,mali-valhall. Override compatible so kbase binds.";
+	};
+
+	fragment@0 {
+		target = <&gpu>;
+		__overlay__ {
+			compatible = "arm,mali-valhall";
+		};
+	};
+};

@@ -90,15 +90,46 @@ class SourceManager:
         self._ensure_repo(fw_dir, rkbin_config)
         return fw_dir
 
-    def ensure_extra_firmware(self, name: str, cfg: dict) -> Path:
-        """确保额外固件仓库就绪，返回仓库根目录路径。
+    # extra_firmware source 类型注册表 —— 复用其他组件已 ensure 的源码树
+    # 而非独立 clone。调用方（_install_extra_firmware）需在 component_sources
+    # dict 中提供对应路径。新增 source 类型只需在此添加，无需扩展 API。
+    _COMPONENT_FIRMWARE_SOURCES = frozenset({"kernel", "bootloader"})
 
-        存储路径：.build/sources/extra-firmware/<name>/
-        cfg 格式与 rkbin 相同（repo/local_repo/branch/commit）。
+    def ensure_extra_firmware(self, name: str, cfg: dict,
+                              component_sources: dict[str, Path]
+                              | None = None) -> Path:
+        """确保额外固件来源就绪，返回固件根目录路径。
+
+        cfg 的 ``source`` 字段决定来源类型（默认 ``"repo"``）：
+
+        - ``"repo"``：从外部 git 仓库 clone（沿用历史行为）。其他字段按
+          rkbin 格式：``repo`` / ``local_repo`` / ``branch`` / ``commit``。
+          存储路径 ``.build/sources/extra-firmware/<name>/``。
+        - ``"kernel"`` / ``"bootloader"``：复用对应 component 已 ensure 的
+          源码树作为 fw_dir，**不**独立 clone。调用方需在 ``component_sources``
+          中提供 ``{"kernel": <kernel_src_path>, ...}``。适用于 firmware
+          blob 在 BSP 源码内 vendor 的场景（如 RK3588 的
+          ``drivers/gpu/arm/bifrost/mali_csffw.bin``）。
+
+        将来扩展：``"url"`` / 其他 component 类型只需在此函数与
+        ``_COMPONENT_FIRMWARE_SOURCES`` 中添加分支，调用方按需在
+        ``component_sources`` 注入对应 path。
         """
-        fw_dir = self.sources_dir / "extra-firmware" / name
-        self._ensure_repo(fw_dir, cfg)
-        return fw_dir
+        source_type = cfg.get("source", "repo")
+        if source_type == "repo":
+            fw_dir = self.sources_dir / "extra-firmware" / name
+            self._ensure_repo(fw_dir, cfg)
+            return fw_dir
+        if source_type in self._COMPONENT_FIRMWARE_SOURCES:
+            if not component_sources or source_type not in component_sources:
+                raise ValueError(
+                    f"extra_firmware {name} 声明 source={source_type!r}，"
+                    f"但调用方未在 component_sources 中提供对应路径")
+            return component_sources[source_type]
+        raise ValueError(
+            f"extra_firmware {name} 不支持的 source 类型: {source_type!r}；"
+            f"可选: 'repo' / "
+            f"{' / '.join(sorted(repr(s) for s in self._COMPONENT_FIRMWARE_SOURCES))}")
 
     def ensure_extra_deb(self, name: str, cfg: dict) -> Path:
         """确保外部 deb 包已下载，返回 deb 文件路径。
@@ -394,10 +425,18 @@ class SourceManager:
 
         shallow clone 场景下 `--depth=1` 保持仓库始终是浅的，不会因为
         历次 fetch 逐步长成完整历史。
+
+        fetch 必须显式指定 refspec ``<branch>:refs/remotes/origin/<branch>``：
+        ``git clone -b <X>`` 默认建出 single-branch 仓库，``remote.origin.fetch``
+        被 pin 到原始分支；后续切到新 branch 时纯 ``git fetch origin <new>``
+        只更新 FETCH_HEAD，不建 ``refs/remotes/origin/<new>``，导致下一步
+        ``git reset --mixed origin/<new>`` 找不到 ref。显式 refspec 强制建出
+        remote tracking ref，single-branch 仓库下首次切 branch 也能成功。
         """
         env = {**os.environ,
                "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
-        subprocess.run(["git", "fetch", "--depth=1", "origin", branch],
+        refspec = f"{branch}:refs/remotes/origin/{branch}"
+        subprocess.run(["git", "fetch", "--depth=1", "origin", refspec],
                        cwd=repo_dir, env=env, check=True, timeout=600)
         subprocess.run(["git", "reset", "--mixed", f"origin/{branch}"],
                        cwd=repo_dir, check=True)

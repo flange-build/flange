@@ -114,7 +114,19 @@ class RecoveryBuilder(ComponentBuilder):
         recovery_dir = self._work_dir / "recovery"
         recovery_dir.mkdir()
 
-        self._build_phase1(recovery_dir, config)
+        # Phase 1：与 rootfs 同款 base snapshot 缓存机制 —— 按
+        # rootfs.url + recovery.packages + arch 算 hash 命名 .cache/
+        # recovery-base-<hash>.tar.gz。命中即解压跳过 apt-get update +
+        # install；packages 集合不变时多次 build 共享同一份 base。
+        base_cache_path = self._get_base_cache_path(config)
+        if base_cache_path and base_cache_path.exists():
+            self._status("Phase 1: recovery base 缓存命中")
+            self._extract_base(base_cache_path, recovery_dir)
+        else:
+            self._build_phase1(recovery_dir, config)
+            if base_cache_path:
+                self._save_base_snapshot(recovery_dir, base_cache_path)
+
         self._build_phase2(recovery_dir, config)
         self._install_fstab(recovery_dir)
         self._install_recovery_config(recovery_dir, config)
@@ -132,6 +144,36 @@ class RecoveryBuilder(ComponentBuilder):
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         return {"recovery": self._output}
+
+    # ---- Phase 1 缓存（与 rootfs 同款 base snapshot 机制） -----------
+
+    def _get_base_cache_path(self, config: dict) -> Path | None:
+        """获取 recovery-base.tar.gz 快照路径。
+
+        哈希按 ``rootfs.url + recovery.packages + arch`` 计算（详见
+        BuildCache._compute_recovery_base_hash），与 rootfs base hash
+        独立 —— recovery.packages 通常是 rootfs.packages 的精简子集。
+
+        路径在 ``.build/target/<board>/.cache/`` 下，跨 product/variant
+        共享。
+        """
+        if not self.cache:
+            return None
+        base_hash = self.cache.compute_phase_hash("recovery", "base")
+        return (self.cache.target_dir.parent.parent.parent / ".cache"
+                / f"recovery-base-{base_hash}.tar.gz")
+
+    def _save_base_snapshot(self, recovery_dir: Path, cache_path: Path):
+        """将 Phase 1 产物保存为 base.tar.gz 快照。"""
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        self._status(f"保存 recovery base 快照到 {cache_path.name}")
+        self.docker.run_privileged(
+            ["tar", "-czf", str(cache_path), "-C", str(recovery_dir), "."])
+
+    def _extract_base(self, cache_path: Path, recovery_dir: Path):
+        """从 base.tar.gz 快照解压到 recovery_dir。"""
+        self.docker.run_privileged(
+            ["tar", "xf", str(cache_path), "-C", str(recovery_dir)])
 
     # ---- Phase 1: base 解压 + apt install ---------------------------
 

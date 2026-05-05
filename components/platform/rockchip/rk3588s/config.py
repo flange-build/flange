@@ -31,12 +31,28 @@ SOC = {
     },
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
-        "branch": "linux-6.1-stan-rkr4.1-buildroot",
-        "defconfig": "rockchip_linux_defconfig",
+        # 与 RK3588 同 branch（详见 rk3588/config.py 的注释）。
+        "branch": "linux-6.1-stan-rkr5.1",
+        # 同 RK3588 — fragment 详见 rk3588/config.py 注释。
+        "defconfig": [
+            "rockchip_linux_defconfig",
+            "case_insensitive_fix.config",
+            "rk3588_panthor.config",
+        ],
         "dts_dir": "rockchip",
     },
     "rootfs": {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        "extra_firmware": [
+            # 同 RK3588 — Mali-G610 CSF firmware 见 rk3588/config.py 注释。
+            {
+                "name": "mali-csf",
+                "source": "kernel",
+                "repo_subdir": "drivers/gpu/arm/bifrost",
+                "files": ["mali_csffw.bin"],
+                "dest": "lib/firmware/arm/mali/arch10.8",
+            },
+        ],
     },
     "boot": {
         "dtb_overlays": [],

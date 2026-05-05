@@ -59,18 +59,45 @@ class TestRK3588SoCDiscovery:
         assert soc["bootloader"]["branch"] == "next-dev-v2024.10"
         assert soc["bootloader"]["defconfig"] == "rk3588_defconfig"
 
-    def test_kernel_fields_match_rk3566(self):
-        """RK3588 与 RK3566 沿用同一 argon BSP 分支与 defconfig。"""
+    def test_kernel_branch_rkr5_1(self):
+        """RK3588 走 rkr5.1（不带 -buildroot 后缀）以拿到识别 r0p0 status 5
+        的 mali_kbase。RK3566 系仍在 rkr4.1-buildroot，刻意分流。"""
         rk3588 = _load_soc_config("rk3588")
         rk3566 = _load_soc_config("rk3566")
+        # repo / dts_dir 仍与 RK3566 一致
         assert rk3588["kernel"]["repo"] == rk3566["kernel"]["repo"]
-        assert rk3588["kernel"]["branch"] == rk3566["kernel"]["branch"]
-        assert rk3588["kernel"]["defconfig"] == rk3566["kernel"]["defconfig"]
         assert rk3588["kernel"]["dts_dir"] == rk3566["kernel"]["dts_dir"]
+        # branch 刻意分流
+        assert rk3588["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
+        assert rk3588["kernel"]["branch"] != rk3566["kernel"]["branch"]
+        # defconfig 形态分流：RK3566 旧 buildroot 默认 defconfig 不启用
+        # 冲突 netfilter 模块，无需 fragment；RK3588 用 generic
+        # rockchip_linux_defconfig 启用了，必须叠 case_insensitive_fix；
+        # 此外 RK3588 还要叠 rk3588_panthor.config 切到 mainline panthor 驱动。
+        assert rk3588["kernel"]["defconfig"] == [
+            "rockchip_linux_defconfig",
+            "case_insensitive_fix.config",
+            "rk3588_panthor.config",
+        ]
+        assert rk3566["kernel"]["defconfig"] == "rockchip_linux_defconfig"
 
     def test_kernel_args_uart2(self):
         soc = _load_soc_config("rk3588")
         assert "ttyS2,1500000" in soc["boot"]["kernel_args"]
+
+    def test_extra_firmware_mali_csf_source_kernel(self):
+        """RK3588 / RK3588S 必须声明 mali-csf firmware（panthor 必需），
+        通过 source="kernel" 从 BSP kernel src 内 vendor 的 blob 取，
+        不依赖外部固件仓库。"""
+        for soc_name in ("rk3588", "rk3588s"):
+            soc = _load_soc_config(soc_name)
+            extra = soc.get("rootfs", {}).get("extra_firmware", [])
+            mali = next((e for e in extra if e.get("name") == "mali-csf"), None)
+            assert mali is not None, f"{soc_name} 缺 mali-csf extra_firmware"
+            assert mali["source"] == "kernel"
+            assert mali["repo_subdir"] == "drivers/gpu/arm/bifrost"
+            assert mali["files"] == ["mali_csffw.bin"]
+            assert mali["dest"] == "lib/firmware/arm/mali/arch10.8"
 
     def test_partitions_layout(self):
         """首版沿用 RK3566 5 分区布局。"""

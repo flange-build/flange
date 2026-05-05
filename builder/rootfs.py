@@ -109,16 +109,32 @@ class RootfsBuilder(ComponentBuilder):
     def _install_extra_firmware(self, rootfs_dir: Path, config: dict):
         """安装额外固件文件到 rootfs。
 
-        config["rootfs"]["extra_firmware"] 格式：
+        config["rootfs"]["extra_firmware"] 是声明 list，每条 entry：
+
+          - 必填：``name`` / ``files`` / ``dest``
+          - 可选：``source``（来源类型，默认 ``"repo"``）；其余字段按 source
+            类型语义化，详见 ``SourceManager.ensure_extra_firmware`` 的注释。
+
+        典型形态：
+
           [
+            # source="repo"（默认） — 从外部 git 仓库取
             {
               "name": "radxa",
               "repo": "https://github.com/radxa-pkg/radxa-firmware",
               "branch": "main",
-              "repo_subdir": "radxa-firmware/lib/firmware",  # 可选，仓库内子目录作为 files 的根
+              "repo_subdir": "radxa-firmware/lib/firmware",  # 仓库内子目录作为 files 的根
               "files": ["brcm/brcmfmac43430-sdio.txt", ...],
               "dest": "lib/firmware",   # 相对 rootfs 根目录，默认 lib/firmware
-            }
+            },
+            # source="kernel" — 从 BSP 内核源码内已 vendor 的 blob 取
+            {
+              "name": "mali-csf",
+              "source": "kernel",
+              "repo_subdir": "drivers/gpu/arm/bifrost",
+              "files": ["mali_csffw.bin"],
+              "dest": "lib/firmware/arm/mali/arch10.8",
+            },
           ]
 
         files 中每条路径相对于仓库根目录（或 repo_subdir 指定的子目录），复制时保留目录结构。
@@ -128,10 +144,22 @@ class RootfsBuilder(ComponentBuilder):
         extra_firmware = config.get("rootfs", {}).get("extra_firmware", [])
         if not extra_firmware:
             return
+        # 收集所有 entry 用到的 component source 类型，按需 ensure 对应组件
+        # 源码树。已被 cache 依赖图保证 kernel/bootloader 先于 rootfs build，
+        # 此处只是拿 path，幂等。
+        needed_sources = {fw.get("source", "repo") for fw in extra_firmware}
+        component_sources: dict[str, Path] = {}
+        for st in needed_sources & {"kernel", "bootloader"}:
+            component_sources[st] = self.source.ensure(st, config)
         for fw in extra_firmware:
             name = fw["name"]
-            self._status(f"同步固件仓库: {name}")
-            fw_dir = self.source.ensure_extra_firmware(name, fw)
+            source_type = fw.get("source", "repo")
+            if source_type == "repo":
+                self._status(f"同步固件仓库: {name}")
+            else:
+                self._status(f"同步固件源（{source_type} 内 vendor）: {name}")
+            fw_dir = self.source.ensure_extra_firmware(
+                name, fw, component_sources=component_sources)
             repo_subdir = fw.get("repo_subdir", "")
             fw_base = fw_dir / repo_subdir if repo_subdir else fw_dir
             dest_base = rootfs_dir / fw.get("dest", "lib/firmware")

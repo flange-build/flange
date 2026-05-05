@@ -16,8 +16,80 @@ class RockchipKernelBuilder(KernelBuilder):
     CROSS = "aarch64-linux-gnu-"
 
     def configure(self, src_dir: Path, config: dict):
+        """支持单 defconfig 字符串或多步 defconfig 合并 list。
+
+        list 形式按顺序逐个 ``make <dc>``，后者覆盖前者已设置的 CONFIG。
+        典型用例：``["rockchip_linux_defconfig", "case_insensitive_fix.config",
+        "rk3588_panthor.config"]``。
+
+        合并步骤前先生成两个 fragment 到 ``arch/<ARCH>/configs/``：
+
+        - ``case_insensitive_fix.config`` —— 由基类生成。大小写不敏感 FS 上
+          禁用 netfilter 冲突模块；敏感 FS 上为空 fragment（保留功能）。
+        - ``rk3588_panthor.config`` —— RK3588/RK3588S 上启用 mainline panthor
+          DRM 驱动并关闭 BSP mali_kbase；其他 SoC 上为空 fragment。
+
+        两个 fragment 都始终生成，由 SoC config 决定是否在 defconfig list 中
+        引入来生效。
+        """
+        self._write_case_insensitive_fix(src_dir)
+        self._write_panthor_fragment(src_dir, config)
         defconfig = config["kernel"]["defconfig"]
-        self.make(src_dir, [defconfig], arch=self.ARCH, cross=self.CROSS)
+        if isinstance(defconfig, list):
+            for dc in defconfig:
+                self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
+        else:
+            self.make(src_dir, [defconfig], arch=self.ARCH, cross=self.CROSS)
+
+    def _write_panthor_fragment(self, src_dir: Path, config: dict):
+        """生成 rk3588_panthor.config fragment。
+
+        RK3588/RK3588S 上：关闭 BSP mali_kbase（Bifrost fork）+ mali400/450
+        utgard，启用 mainline panthor DRM 驱动。dts 上 GPU 节点 compatible
+        是 ``arm,mali-valhall-csf``（rkr5.1 已切，commit ba07b020ea7d），与
+        panthor of_match 直接对位。
+
+        其他 SoC 上：写空 fragment（满足 make <name>.config 的合并要求）。
+
+        firmware 部署不在本 fragment 内：panthor 运行时 ``request_firmware``
+        会查 ``/lib/firmware/arm/mali/arch10.8/mali_csffw.bin``。BSP 内核源码
+        ``drivers/gpu/arm/bifrost/mali_csffw.bin`` 已自带同 blob，后续可走
+        CONFIG_EXTRA_FIRMWARE 或 rootfs overlay 部署。
+        """
+        fragment = src_dir / "arch" / self.ARCH / "configs" / "rk3588_panthor.config"
+        soc = config.get("soc", "")
+        if soc not in ("rk3588", "rk3588s"):
+            fragment.write_text(
+                "# 非 RK3588 系 SoC — panthor fragment 不生效\n"
+            )
+            self._status(f"SoC={soc}，跳过 panthor fragment")
+            return
+        fragment.write_text(
+            "# RK3588 G610 GPU 切换到 mainline panthor 驱动\n"
+            "# rkr5.1 dts 已默认走 panthor 节点 (arm,mali-valhall-csf)；\n"
+            "# 但 rockchip_linux_defconfig 仍编 mali_kbase，本 fragment 把这部分\n"
+            "# 翻成 panthor。\n"
+            "\n"
+            "# 关闭 BSP mali_kbase（Bifrost fork）—— rockchip_linux_defconfig 设为 =y\n"
+            "# CONFIG_MALI_BIFROST is not set\n"
+            "# CONFIG_MALI_MIDGARD is not set\n"
+            "# CONFIG_MALI_CSF_SUPPORT is not set\n"
+            "# CONFIG_MALI_DEBUG is not set\n"
+            "# CONFIG_MALI_FENCE_DEBUG is not set\n"
+            "# CONFIG_MALI_DEVFREQ is not set\n"
+            "# CONFIG_MALI_DT is not set\n"
+            "# CONFIG_MALI_EXPERT is not set\n"
+            "# CONFIG_MALI_PLATFORM_THIRDPARTY is not set\n"
+            "# CONFIG_MALI_SHARED_INTERRUPTS is not set\n"
+            "# CONFIG_MALI_PWRSOFT_765 is not set\n"
+            "# 关闭 mali400/450 utgard（老款 GPU 驱动，RK3588 不需要）\n"
+            "# CONFIG_MALI400 is not set\n"
+            "# CONFIG_MALI450 is not set\n"
+            "\n"
+            "# 启用 mainline panthor (DRM driver for ARM Mali CSF GPUs)\n"
+            "CONFIG_DRM_PANTHOR=m\n"
+        )
+        self._status(f"SoC={soc}，启用 panthor fragment")
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)
@@ -44,8 +116,11 @@ class RockchipKernelBuilder(KernelBuilder):
         # 编译 out-of-tree 模块
         self._compile_oot_modules(src_dir, config, jobs)
 
-        # 安装 in-tree 模块（带 strip）
+        # 安装 in-tree 模块（带 strip）。
+        # _clean_modules_staging 清旧 kernel.release 残留，避免累积撑爆
+        # 下游分区，详见基类注释。
         modules_staging = src_dir / "_modules_staging"
+        self._clean_modules_staging(modules_staging)
         modules_staging.mkdir(exist_ok=True)
         self.make(src_dir, ["modules_install"],
                   arch=self.ARCH, cross=self.CROSS,

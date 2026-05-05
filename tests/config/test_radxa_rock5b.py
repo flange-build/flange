@@ -60,11 +60,13 @@ class TestROCK5BMergedConfig:
         assert merged["board"] == "radxa-rock5b"
         assert merged["kernel"]["dts"] == "rk3588-rock-5b"
 
-    def test_kernel_repo_branch_match_rk3566(self, merged, boards):
-        """ROCK 5B 与 RK3566 板共用同一 argon BSP 分支。"""
+    def test_kernel_repo_match_rk3566_branch_diverged(self, merged, boards):
+        """ROCK 5B 与 RK3566 板共用同一 argon BSP 仓库，但 branch 刻意分流：
+        RK3588 走 rkr5.1（修复 mali_kbase r0p0 status 5），RK3566 仍 rkr4.1。"""
         zero3w = get_board_config("radxa-zero3w", boards=boards)
         assert merged["kernel"]["repo"] == zero3w["kernel"]["repo"]
-        assert merged["kernel"]["branch"] == zero3w["kernel"]["branch"]
+        assert merged["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
+        assert merged["kernel"]["branch"] != zero3w["kernel"]["branch"]
 
     def test_kernel_args_uart2(self, merged):
         assert "ttyS2,1500000" in merged["boot"]["kernel_args"]
@@ -72,6 +74,30 @@ class TestROCK5BMergedConfig:
     def test_partitions_5_entries(self, merged):
         names = [e["name"] for e in merged["partitions"]["entries"]]
         assert names == ["idbloader", "uboot", "boot", "recovery", "rootfs"]
+
+    def test_extra_firmware_mali_csf_inherited(self, merged):
+        """ROCK 5B 必须继承 SoC 层的 mali-csf firmware 声明，确保 panthor
+        驱动 request_firmware 能命中 /lib/firmware/arm/mali/arch10.8/。"""
+        extra = merged.get("rootfs", {}).get("extra_firmware", [])
+        names = [e.get("name") for e in extra]
+        assert "mali-csf" in names, (
+            f"ROCK 5B merged config 应包含 mali-csf extra_firmware；实际: {names}")
+
+    def test_root_password_set(self, merged):
+        """ROCK 5B 必须设 rootfs.root_password。
+        ubuntu-base 默认 root 是锁定态（/etc/shadow 字段为 *），不设此字段
+        rootfs build 后 root 无法登录。值与其他 rockchip 板（tspi-rk3566 /
+        radxa-cubie-a7z）保持一致 1234，方便开发期切板调试。"""
+        assert merged["rootfs"]["root_password"] == "1234"
+
+    def test_mali_valhall_compat_overlay_built_but_not_default(self, merged):
+        """mali-valhall-compat overlay 仍编进 boot 分区作 emergency rollback，
+        但不默认应用。主线已切 mainline panthor，dts 原始 arm,mali-valhall-csf
+        compatible 直接被 panthor of_match 命中，无需 overlay；overlay 留作
+        万一 panthor 起不来时手动改 extlinux 切回 mali_kbase 用。"""
+        compat = "rk3588-rock-5b-mali-valhall-compat.dtbo"
+        assert compat in merged["boot"].get("board_overlays", [])
+        assert compat not in merged["boot"].get("default_overlays", [])
 
 
 class TestROCK5BLunchTargets:

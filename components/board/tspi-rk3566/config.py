@@ -8,7 +8,8 @@ BOARD = {
         "dts": "tspi-rk3566-user-v10-ext39-linux",
     },
     "rootfs": {
-        "root_password": "1234",
+        # root_password 已由 components/rootfs/config.py base 层设为 "1234"，
+        # 此板继承默认；如需特殊密码在此处覆盖。
         "extra_firmware": [
             {
                 "name": "radxa",

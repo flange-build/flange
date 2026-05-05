@@ -232,91 +232,6 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
                 raise FileNotFoundError(
                     f"bsp_defconfig 不存在: {bsp_dc_src}")
 
-    def _is_case_insensitive_fs(self, path: Path) -> bool:
-        """通过 git config core.ignoreCase 判断 FS 是否大小写不敏感。
-
-        git clone 时会自动探测并写入 core.ignoreCase，这正是我们需要的语义
-        ——"git checkout 是否会因大小写碰撞丢文件"。比自建探针更可靠，
-        不受 Docker volume 元数据缓存影响。
-
-        path 可以是仓库任意子路径，git config 会向上查找 .git 目录。
-        若 path 不在 git 仓库内或探测失败，默认返回 True（保守禁用模块）。
-        """
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["git", "config", "--get", "core.ignoreCase"],
-                cwd=str(path), capture_output=True, text=True, check=False,
-                timeout=10,
-            )
-            value = result.stdout.strip().lower()
-            if value in ("true", "false"):
-                return value == "true"
-        except Exception as e:
-            self._status(f"git config 探测失败（{e}），默认启用 fix")
-        return True  # 保守策略
-
-    def _write_case_insensitive_fix(self, src_dir: Path):
-        """生成 config fragment 禁用大小写不敏感 FS 上文件名冲突的模块。
-
-        Linux 内核中存在仅大小写不同的 .c/.h 文件对（xt_MARK.c / xt_mark.c 等），
-        在 macOS (HFS+/APFS 默认) 上是同一个文件，git checkout 后只保留一个，
-        导致模块编译失败。
-
-        只在检测到大小写不敏感 FS 时才禁用这些模块；在 Linux ext4 等
-        大小写敏感 FS 上写入空 fragment，保留这些功能。
-
-        冲突文件对（git checkout warning 显示的完整列表）：
-          xt_CONNMARK.h/c     xt_connmark.h/c
-          xt_DSCP.h/c         xt_dscp.h/c
-          xt_MARK.h/c         xt_mark.h/c
-          xt_RATEEST.h/c      xt_rateest.h/c
-          xt_TCPMSS.h/c       xt_tcpmss.h/c
-          ipt_ECN.h/c         ipt_ecn.h/c
-          ipt_TTL.h/c         ipt_ttl.h/c
-          ip6t_HL.h/c         ip6t_hl.h/c
-        """
-        fix_config = src_dir / "arch" / self.ARCH / "configs" / "case_insensitive_fix.config"
-        if not self._is_case_insensitive_fs(src_dir):
-            # 大小写敏感 FS — 无需禁用，保留 netfilter 功能。
-            # 写入空 fragment 以满足 defconfig 合并步骤（make <name>.config 需要文件存在）。
-            fix_config.write_text(
-                "# 大小写敏感文件系统 — 无需禁用冲突模块\n"
-            )
-            self._status("FS 大小写敏感，跳过 case_insensitive_fix")
-            return
-        fix_config.write_text(
-            "# macOS 大小写不敏感 FS 上文件名冲突的 netfilter 模块 — 全部禁用\n"
-            "# 伞形配置（实际驱动构建规则的入口）——优先禁用\n"
-            "# xt_mark.c / xt_mark.h 冲突 xt_MARK.h\n"
-            "CONFIG_NETFILTER_XT_MARK=n\n"
-            "CONFIG_NETFILTER_XT_TARGET_MARK=n\n"
-            "CONFIG_NETFILTER_XT_MATCH_MARK=n\n"
-            "# xt_connmark.c / xt_connmark.h 冲突 xt_CONNMARK.h\n"
-            "CONFIG_NETFILTER_XT_CONNMARK=n\n"
-            "CONFIG_NETFILTER_XT_TARGET_CONNMARK=n\n"
-            "CONFIG_NETFILTER_XT_MATCH_CONNMARK=n\n"
-            "# xt_DSCP.c / xt_dscp.c 冲突\n"
-            "CONFIG_NETFILTER_XT_TARGET_DSCP=n\n"
-            "CONFIG_NETFILTER_XT_MATCH_DSCP=n\n"
-            "# xt_HL.c / xt_hl.c 冲突\n"
-            "CONFIG_NETFILTER_XT_TARGET_HL=n\n"
-            "CONFIG_NETFILTER_XT_MATCH_HL=n\n"
-            "# xt_RATEEST.c / xt_rateest.c 冲突\n"
-            "CONFIG_NETFILTER_XT_TARGET_RATEEST=n\n"
-            "CONFIG_NETFILTER_XT_MATCH_RATEEST=n\n"
-            "# xt_TCPMSS.c / xt_tcpmss.c 冲突\n"
-            "CONFIG_NETFILTER_XT_TARGET_TCPMSS=n\n"
-            "# ipt/ip6t 头文件冲突（ipt_ECN.h vs ipt_ecn.h 等）\n"
-            "CONFIG_IP_NF_TARGET_ECN=n\n"
-            "CONFIG_IP_NF_MATCH_ECN=n\n"
-            "CONFIG_IP_NF_TARGET_TTL=n\n"
-            "CONFIG_IP_NF_MATCH_TTL=n\n"
-            "CONFIG_IP6_NF_TARGET_HL=n\n"
-            "CONFIG_IP6_NF_MATCH_HL=n\n"
-        )
-        self._status("FS 大小写不敏感，启用 case_insensitive_fix")
-
     def _write_panel_mipi_dbi_override(self, src_dir: Path):
         """生成 config fragment 启用 backport 的 panel-mipi-dbi-spi 驱动。
 
@@ -455,8 +370,11 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         # 编译 out-of-tree 模块
         self._compile_oot_modules(src_dir, config, jobs)
 
-        # 安装 in-tree 模块（带 strip）
+        # 安装 in-tree 模块（带 strip）。
+        # _clean_modules_staging 清旧 kernel.release 残留，避免累积撑爆
+        # 下游分区，详见基类注释。
         modules_staging = src_dir / "_modules_staging"
+        self._clean_modules_staging(modules_staging)
         modules_staging.mkdir(exist_ok=True)
         self.make(src_dir, ["modules_install"],
                   arch=self.ARCH, cross=self.CROSS,
