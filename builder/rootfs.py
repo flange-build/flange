@@ -135,11 +135,28 @@ class RootfsBuilder(ComponentBuilder):
               "files": ["mali_csffw.bin"],
               "dest": "lib/firmware/arm/mali/arch10.8",
             },
+            # source="oot:<name>" — 从同 build 已 ensure 的 OOT 模块源取，
+            # 适用于 vendor WiFi/BT 包同时携带固件 blob 的场景（如 rkwifibt）
+            {
+              "name": "rkwifibt-rtl8852be",
+              "source": "oot:rkwifibt",
+              "repo_subdir": "firmware/realtek/RTL8852BE",
+              # files 元素支持 dict 形态做重命名（例如补 .bin 后缀）
+              "files": [
+                {"src": "rtl8852bu_fw",     "dest": "rtl8852bu_fw.bin"},
+                {"src": "rtl8852bu_config", "dest": "rtl8852bu_config.bin"},
+              ],
+              "dest": "lib/firmware/rtl_bt",
+            },
           ]
 
-        files 中每条路径相对于仓库根目录（或 repo_subdir 指定的子目录），复制时保留目录结构。
-        例：repo_subdir="radxa-firmware/lib/firmware", files=["brcm/foo.txt"], dest="lib/firmware"
-            → rootfs/lib/firmware/brcm/foo.txt
+        files 元素两种形态：
+          - str：路径同时作 src 和 dest 相对路径，原名拷贝（保留目录结构）
+          - dict {src, dest}：src 是相对 repo_subdir 的源路径，dest 是相对
+            ``dest`` 字段的目标路径（用于重命名或扁平化）
+
+        例：repo_subdir="radxa-firmware/lib/firmware", files=["brcm/foo.txt"],
+            dest="lib/firmware" → rootfs/lib/firmware/brcm/foo.txt
         """
         extra_firmware = config.get("rootfs", {}).get("extra_firmware", [])
         if not extra_firmware:
@@ -151,6 +168,23 @@ class RootfsBuilder(ComponentBuilder):
         component_sources: dict[str, Path] = {}
         for st in needed_sources & {"kernel", "bootloader"}:
             component_sources[st] = self.source.ensure(st, config)
+        # OOT 源：source="oot:<name>" 引用 kernel.oot_sources 中已声明的源。
+        # 过滤 resolve_conditions 递归注入的 product/variant 伪 key（详见
+        # KernelBuilder._oot_sources_config 注释）。
+        raw_oot = config.get("kernel", {}).get("oot_sources", {}) or {}
+        oot_sources = {k: v for k, v in raw_oot.items()
+                       if k not in ("product", "variant")
+                       and isinstance(v, dict)}
+        for st in needed_sources:
+            if not st.startswith("oot:"):
+                continue
+            oot_name = st.split(":", 1)[1]
+            if oot_name not in oot_sources:
+                raise ValueError(
+                    f"extra_firmware 引用 source={st!r}，但 kernel.oot_sources "
+                    f"未声明 {oot_name!r}")
+            component_sources[st] = self.source.ensure_oot_source(
+                oot_name, oot_sources[oot_name])
         for fw in extra_firmware:
             name = fw["name"]
             source_type = fw.get("source", "repo")
@@ -163,12 +197,16 @@ class RootfsBuilder(ComponentBuilder):
             repo_subdir = fw.get("repo_subdir", "")
             fw_base = fw_dir / repo_subdir if repo_subdir else fw_dir
             dest_base = rootfs_dir / fw.get("dest", "lib/firmware")
-            for rel_path in fw.get("files", []):
-                src = fw_base / rel_path
+            for entry in fw.get("files", []):
+                if isinstance(entry, dict):
+                    src_rel, dest_rel = entry["src"], entry["dest"]
+                else:
+                    src_rel = dest_rel = entry
+                src = fw_base / src_rel
                 if not src.exists():
                     raise FileNotFoundError(
                         f"固件文件不存在: {src}（仓库: {name}）")
-                dest = dest_base / rel_path
+                dest = dest_base / dest_rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
             self._status(f"已安装 {len(fw.get('files', []))} 个固件文件 ({name})")

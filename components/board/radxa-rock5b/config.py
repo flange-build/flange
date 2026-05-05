@@ -7,6 +7,40 @@ BOARD = {
     "kernel": {
         # argon BSP linux-6.1-stan-rkr5.1 已包含 rk3588-rock-5b.dts。
         "dts": "rk3588-rock-5b",
+        # ---- M.2 E-Key 槽位 RTL8852BE WiFi6+BT5.2 combo 卡支持 ----
+        # 走 OOT 路线（rkr5.1 in-tree rtw89 driver 不含 8852BE 子驱动：
+        # Kconfig 没有 RTW89_8852B/BE，Makefile 也没引用 rtw8852b/be 源文件，
+        # 配套 _rfk/_table 文件缺失。8852BE 是 mainline 6.2 才进的，6.1 LTS
+        # 没回移）。直接用 Radxa 维护的 rkwifibt 仓库——内含 vendor 私有
+        # WiFi/BT stack（不依赖 mac80211/rtw89），编出 8852be.ko 即可。
+        # 板载 BT 驱动走 in-tree btusb（CONFIG_BT_HCIBTUSB=y +
+        # CONFIG_BT_HCIBTUSB_RTL=y 在 rockchip_linux_defconfig 已启用）。
+        "oot_sources": {
+            "rkwifibt": {
+                "repo": "https://github.com/radxa/rkwifibt.git",
+                # develop 分支跟踪远端最新；cache._mix_kernel_oot_sources
+                # 用 git HEAD 触发 kernel 重 build。锁 commit 改成
+                # "commit": "<sha>" 即可。
+                "branch": "develop",
+            },
+        },
+        "+oot_modules": [
+            {
+                "dir": "{rkwifibt_src}/drivers/rtl8852be",
+                "label": "rtl8852be (rkwifibt vendor driver)",
+                "make_args": [
+                    "ARCH=arm64",
+                    "CROSS_COMPILE=aarch64-linux-gnu-",
+                    "KSRC={kernel_src}",
+                    # M= 指定 OOT 模块源 = 编译目录。Makefile 默认开关
+                    # CONFIG_RTL8852B=y + CONFIG_PCI_HCI=y → 输出 8852be.ko
+                    "M={rkwifibt_src}/drivers/rtl8852be",
+                ],
+                "ko_pattern": [
+                    "{rkwifibt_src}/drivers/rtl8852be/8852be.ko",
+                ],
+            },
+        ],
     },
     # rootfs.root_password 由 components/rootfs/config.py base 层默认为 "1234"，
     # 此板无特殊需求继承默认。生产前如需强密码可在此处加 rootfs 块覆盖。
@@ -38,5 +72,26 @@ BOARD = {
         ],
         # default_overlays 留空：panthor 路径下不需要默认应用任何板级 overlay。
         "default_overlays": [],
+    },
+    "rootfs": {
+        # RTL8852BE BT 部分固件：rkwifibt 仓库 firmware/realtek/RTL8852BE/
+        # 提供 ``rtl8852bu_fw`` 和 ``rtl8852bu_config``（命名沿用 USB 接口
+        # 历史，内容是 PCIe 卡通用的 BT8852B blob）。in-tree btusb-rtl 驱动
+        # 加载路径硬编码 /lib/firmware/rtl_bt/<name>.bin，因此安装时统一
+        # 补 .bin 后缀。
+        # WiFi 部分固件 baked-in 进 8852be.ko（rkwifibt 编译期 firmware-
+        # binary linkage），不需要 /lib/firmware 部署。
+        "+extra_firmware": [
+            {
+                "name": "rkwifibt-rtl8852be",
+                "source": "oot:rkwifibt",  # 复用 kernel.oot_sources 已 ensure 的源
+                "repo_subdir": "firmware/realtek/RTL8852BE",
+                "files": [
+                    {"src": "rtl8852bu_fw",     "dest": "rtl8852bu_fw.bin"},
+                    {"src": "rtl8852bu_config", "dest": "rtl8852bu_config.bin"},
+                ],
+                "dest": "lib/firmware/rtl_bt",
+            },
+        ],
     },
 }

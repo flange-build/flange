@@ -149,8 +149,44 @@ class KernelBuilder(ComponentBuilder):
           - post_build: list|None — 编译后执行的 shell 命令，支持 {kernel_src}
 
         配置来源：config["kernel"]["oot_modules"]，在 SoC config.py 中声明。
+
+        若 ``dir`` / ``make_args`` / ``ko_pattern`` 引用了独立 git 源（如
+        ``{rkwifibt_src}``），需在同 ``config["kernel"]["oot_sources"]`` 字典
+        中声明该源（``{<name>: {repo, branch, ...}}``），由 ``_oot_template_vars``
+        统一 ensure 后注入模板字典。``{kernel_src}`` 始终可用。
         """
         return config.get("kernel", {}).get("oot_modules", [])
+
+    def _oot_sources_config(self, config: dict) -> dict:
+        """OOT 模块独立源声明字典。键是源名（如 ``rkwifibt``），值是 git
+        仓库 cfg（_ensure_repo 可识别的字段）。返回空字典表示无独立源，
+        OOT 模块只引用 ``{kernel_src}``。
+
+        过滤 ``product`` / ``variant`` 这两个 reserved key —— 它们被
+        ``resolve_conditions`` 递归注入到所有 dict 子树（详见
+        ``builder/config/merge.py``），对 oot_sources 这种"源名 → cfg"
+        语义的 dict 是脏数据。其余子 cfg dict 内层多出来的 product/variant
+        不影响 _ensure_repo（只读已知字段）。
+        """
+        raw = (config.get("kernel", {}) or {}).get("oot_sources", {}) or {}
+        return {k: v for k, v in raw.items()
+                if k not in ("product", "variant") and isinstance(v, dict)}
+
+    def _oot_template_vars(self, src_dir: Path, config: dict) -> dict[str, str]:
+        """构造 OOT 模块字段格式化用的模板字典。
+
+        始终包含 ``kernel_src``。对每个 ``kernel.oot_sources`` 声明的源
+        ``<name>``，先 ``ensure_oot_source`` 拿到本地路径，再注入键
+        ``<name>_src``（``-`` 替换为 ``_`` 以满足 Python format 标识符规则）。
+
+        幂等：cache 依赖图保证 kernel build 入口先于本调用，重复 ensure
+        只是 git fetch + reset --hard，无副作用。
+        """
+        tmpl: dict[str, str] = {"kernel_src": str(src_dir)}
+        for name, cfg in self._oot_sources_config(config).items():
+            path = self.source.ensure_oot_source(name, cfg)
+            tmpl[f"{name.replace('-', '_')}_src"] = str(path)
+        return tmpl
 
     def _compile_oot_modules(self, src_dir: Path, config: dict, jobs: int):
         """遍历配置中的 out-of-tree 模块并逐个编译。"""
@@ -159,9 +195,8 @@ class KernelBuilder(ComponentBuilder):
             return
 
         njobs = jobs or max((os.cpu_count() or 1) - 4, 1)
+        tmpl = self._oot_template_vars(src_dir, config)
         for mod in oot_modules:
-            tmpl = {"kernel_src": str(src_dir)}
-
             build_dir = Path(mod["dir"].format(**tmpl))
             if not build_dir.is_dir():
                 self._status(f"跳过 {mod['label']}：目录不存在 {mod['dir']}")
@@ -203,14 +238,13 @@ class KernelBuilder(ComponentBuilder):
         if not oot_modules:
             return
 
-        tmpl = {"kernel_src": str(src_dir)}
+        tmpl = self._oot_template_vars(src_dir, config)
 
         kernel_release = self.docker.run(
             ["cat", "include/config/kernel.release"],
             cwd=str(src_dir), capture=True).stdout.strip()
 
         mod_base = modules_staging / "lib" / "modules" / kernel_release
-        dep_file = mod_base / "modules.dep"
 
         strip = f"{self.CROSS}strip"
         installed = []
@@ -230,8 +264,18 @@ class KernelBuilder(ComponentBuilder):
                     installed.append(rel)
                     self._status(f"OOT 模块安装: {rel}")
 
-        if installed and dep_file.exists():
-            existing = dep_file.read_text()
-            entries = "".join(f"{r}:\n" for r in installed if r not in existing)
-            if entries:
-                dep_file.write_text(existing + entries)
+        if not installed:
+            return
+
+        # 重新生成 modules.{dep,alias,symbols,...} 与 .bin 索引：
+        # ``make modules_install`` 只覆盖 in-tree 模块，新增的 updates/<name>.ko
+        # 没被纳入 modules.alias —— PCI/USB hotplug 拿到 MODALIAS 后查不到
+        # 对应 module，开机不自动 load（表面现象：lsmod 不见 module，但
+        # 手动 ``depmod -a && modprobe <name>`` 后能正常 bind 设备）。
+        # ``depmod -b <staging> <release>`` 扫描 ``<staging>/lib/modules/<release>/``
+        # 下所有 .ko（含 updates/）重写全部索引。手写追加 modules.dep 不够，
+        # 因为 alias / symbols / bin 索引同样要刷新。
+        self.docker.run(
+            ["depmod", "-b", str(modules_staging), kernel_release],
+            cwd=str(src_dir),
+            label=f"刷新 OOT 模块索引（{len(installed)} 个）...")

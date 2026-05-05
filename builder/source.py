@@ -95,6 +95,25 @@ class SourceManager:
     # dict 中提供对应路径。新增 source 类型只需在此添加，无需扩展 API。
     _COMPONENT_FIRMWARE_SOURCES = frozenset({"kernel", "bootloader"})
 
+    def ensure_oot_source(self, name: str, cfg: dict) -> Path:
+        """确保 out-of-tree 模块源码就绪，返回源码根目录路径。
+
+        存储路径：``.build/sources/oot-modules/<name>/``。cfg 字段与 rkbin
+        相同（``repo`` / ``local_repo`` / ``branch`` / ``commit`` / ``tag`` /
+        ``recurse_submodules``），_ensure_repo 复用同一套语义：
+
+        - 仅声明 branch（无 commit/tag）：每次 ensure 跟踪远端最新（reset --hard）
+        - 声明 commit/tag：固定锁定
+
+        与 extra_firmware 的 source="repo" 形态平行，但语义不同：本函数返回
+        的路径是**编译输入**（make M=<path>），而 extra_firmware 是**rootfs
+        内容来源**。强行复用 extra_firmware 会把 .build/sources/extra-firmware/
+        目录当编译目录，造成增量构建残留 .o/.ko 污染固件部署。
+        """
+        repo_dir = self.sources_dir / "oot-modules" / name
+        self._ensure_repo(repo_dir, cfg)
+        return repo_dir
+
     def ensure_extra_firmware(self, name: str, cfg: dict,
                               component_sources: dict[str, Path]
                               | None = None) -> Path:
@@ -110,6 +129,10 @@ class SourceManager:
           中提供 ``{"kernel": <kernel_src_path>, ...}``。适用于 firmware
           blob 在 BSP 源码内 vendor 的场景（如 RK3588 的
           ``drivers/gpu/arm/bifrost/mali_csffw.bin``）。
+        - ``"oot:<name>"``：复用同 build 内已 ensure 的 OOT 模块源码作为
+          fw_dir。调用方需在 ``component_sources`` 中以同 key
+          （``"oot:<name>"``）提供路径。适用于 vendor WiFi/BT 包内自带固件
+          blob 的场景（如 rkwifibt 的 ``firmware/realtek/RTL8852BE/``）。
 
         将来扩展：``"url"`` / 其他 component 类型只需在此函数与
         ``_COMPONENT_FIRMWARE_SOURCES`` 中添加分支，调用方按需在
@@ -120,7 +143,8 @@ class SourceManager:
             fw_dir = self.sources_dir / "extra-firmware" / name
             self._ensure_repo(fw_dir, cfg)
             return fw_dir
-        if source_type in self._COMPONENT_FIRMWARE_SOURCES:
+        if (source_type in self._COMPONENT_FIRMWARE_SOURCES
+                or source_type.startswith("oot:")):
             if not component_sources or source_type not in component_sources:
                 raise ValueError(
                     f"extra_firmware {name} 声明 source={source_type!r}，"
@@ -128,7 +152,7 @@ class SourceManager:
             return component_sources[source_type]
         raise ValueError(
             f"extra_firmware {name} 不支持的 source 类型: {source_type!r}；"
-            f"可选: 'repo' / "
+            f"可选: 'repo' / 'oot:<name>' / "
             f"{' / '.join(sorted(repr(s) for s in self._COMPONENT_FIRMWARE_SOURCES))}")
 
     def ensure_extra_deb(self, name: str, cfg: dict) -> Path:

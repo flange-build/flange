@@ -211,6 +211,14 @@ class BuildCache:
             if component == "bootloader":
                 self._mix_rkbin(h)
 
+            # kernel 额外依赖 OOT 模块独立源 git HEAD —— branch 跟踪
+            # 场景下（如 rkwifibt develop 分支），仓库 HEAD 推进必须级联
+            # 失效 kernel build。json.dumps 已覆盖声明本身的变化（repo
+            # url / branch 改动），但 HEAD commit 是 ensure 后才知道的
+            # 运行时事实，要单独混入。
+            if component == "kernel":
+                self._mix_kernel_oot_sources(h)
+
         result = h.hexdigest()[:16]
         self._hash_cache[component] = result
         return result
@@ -407,6 +415,35 @@ class BuildCache:
         if fw_dir.exists():
             h.update(b"rkbin:")
             h.update(self._git_head(fw_dir).encode())
+
+    # --- 哈希输入混合：kernel.oot_sources ---
+
+    def _mix_kernel_oot_sources(self, h: "hashlib._Hash") -> None:
+        """混入 kernel.oot_sources 各独立源仓库的 git HEAD。
+
+        典型场景：rkwifibt 仓库声明为 ``branch: develop`` 跟踪远端，仓库
+        每次 ensure 时 reset 到 origin/develop 最新 commit。声明 dict 本身
+        没变，但 HEAD 改了，必须靠这里把 HEAD 混入触发 kernel 重 build
+        （含 OOT 模块重编 + 拷入 lib/modules 的 .ko 替换）。
+
+        oot_sources 目录路径与 SourceManager.ensure_oot_source 一致。
+        """
+        raw = (self.config.get("kernel", {}) or {}).get("oot_sources", {})
+        # 过滤 resolve_conditions 注入的 product/variant 伪 key（详见
+        # KernelBuilder._oot_sources_config 注释）
+        oot_sources = {k: v for k, v in raw.items()
+                       if k not in ("product", "variant")
+                       and isinstance(v, dict)}
+        if not oot_sources:
+            return
+        h.update(b"oot_sources:")
+        for name in sorted(oot_sources):
+            repo_dir = Path(f".build/sources/oot-modules/{name}")
+            if repo_dir.exists():
+                h.update(name.encode())
+                h.update(b"=")
+                h.update(self._git_head(repo_dir).encode())
+                h.update(b";")
 
     # --- 工具函数 ---
 
