@@ -18,7 +18,7 @@ updated: 2026-05-06
 
 ## TL;DR
 
-Radxa ROCK 5B，RK3588 SoC（4×A76 + 4×A55），项目首块 RK3588 适配板。已落地：eMMC 启动 + UART2 串口 + GbE/SSH + GPU（mainline panthor）+ M.2 E-Key RTL8852BE WiFi6/BT。HDMI / NPU / VPU / NVMe 不在范围。
+Radxa ROCK 5B，RK3588 SoC（4×A76 + 4×A55），项目首块 RK3588 适配板。已落地：eMMC 启动 + UART2 串口 + GbE/SSH + GPU（mainline panthor）+ M.2 E-Key RTL8852BE WiFi6/BT + VPU 硬解（mpp / RGA / GStreamer-rockchip）。HDMI / NPU / NVMe 不在范围。
 
 ## product / variant
 
@@ -49,6 +49,10 @@ M.2 E-Key 槽位（`pcie2x1l0`，dts 默认 okay，PCIe ID `10ec:b852`）走 RTL
 - `kernel.oot_sources.rkwifibt`：`radxa/rkwifibt @ develop` —— vendor 私有 stack 不依赖 mac80211
 - `+oot_modules` 编 `drivers/rtl8852be` → `8852be.ko`（默认 `CONFIG_RTL8852B=y` + `CONFIG_PCI_HCI=y`，无需额外 make 参数）
 - BT 走 in-tree btusb（rockchip_linux_defconfig 已 `BT_HCIBTUSB=y` + `BT_HCIBTUSB_RTL=y`）+ `+rootfs.extra_firmware` `source: oot:rkwifibt` 复用同源拷 `rtl8852bu_fw.bin` / `rtl8852bu_config.bin` 到 `/lib/firmware/rtl_bt/`
+
+## VPU / 多媒体加速
+
+继承 SoC 层 rk3588 默认安装的 Rockchip 多媒体栈（`+extra_debs` 9 个 deb，详见 [[rockchip 平台]]）：`rockchip-mpp` + `librga2` + `gstreamer1.0-rockchip` 全套。GStreamer element 含 `mppvideodec`（HEVC/AVC/VP8/VP9 多解）、`mpph264enc` / `mpph265enc` / `mppvp8enc` / `mppjpegenc` / `mppjpegdec`。/dev/mpp_service + /dev/rga 内核节点存在；实测 720p H264 编码 ~10× realtime、解码 ~40× realtime。
 
 ## 板私有 overlay
 

@@ -40,9 +40,20 @@ Rockchip 系列平台；当前已落地 SoC：RK3566（4×A55，4 块板）+ RK3
 
 **平台数据（`components/platform/rockchip/`）**
 
-- `config.py`：第一层（platform 层），声明 `vendor`、`flash_tool: "upgrade_tool"`、arch、rkbin 仓库、packages 基线
+- `config.py`：第一层（platform 层），声明 `vendor`、`flash_tool: "upgrade_tool"`、arch、rkbin 仓库、packages 基线（含 `+packages: [libdrm2, libdrm-common]`，所有 panthor / mali_kbase / mpp / RGA 用户态客户端的强依赖，ubuntu-base 不带）
 - `rk3566/config.py` / `rk3588/config.py` / `rk3588s/config.py`：第二层（SoC 层），声明 rkbin ini 前缀、U-Boot defconfig、kernel 仓库/分支/defconfig list、分区表
 - 第三层（board 层）：位于 `components/board/<board>/config.py`，三层经 `deep_merge()` 合并
+
+**SoC 层默认 deb（`+extra_debs`）**
+
+RK3588 SoC 层声明 `+extra_debs` 给所有 RK3588 板默认安装多媒体加速栈（来自 `CmST0us/rockchip-multimedia-ubuntu` release 1.0.0，sha256 锁定）：
+
+- `rockchip-mpp` + `rockchip-mpp-dev` 1.3.9 — VPU 编解码核心库
+- `librga2` + `librga-dev` 2.1.0 — 2D 加速 / 颜色空间转换
+- `libgstreamer1.0-0` + `gstreamer1.0-plugins-{base,good,bad}` 1.24.2 — 与厂商 plugin ABI 锁定的 gstreamer 核心库重打包（noble base 自带版本号同但缺 plugin 锁定 ABI）
+- `gstreamer1.0-rockchip` 1.0-1 — 封装 mpp 为 gstreamer element（mppvideodec / mpph264enc / mpph265enc / mppjpegdec/enc / mppvp8enc / mppvpxalphadecodebin）
+
+dpkg -i 一次性传入 9 个 deb，按依赖拓扑顺序排列（mpp → rga → gstreamer core → plugins → 厂商插件）。RK3566 系暂未集成（VPU 接口不同）。
 
 **SoC 分支差异**
 
