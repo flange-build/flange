@@ -88,10 +88,15 @@ class TestGetBoardConfig:
         merged = get_board_config("neons-core3566-nanob", boards=boards)
         assert merged["kernel"]["commit"] == "e62b45adc7f89f5c8ea1918960b8c78e7c97ebf5"
 
-    def test_tspi_bootloader_commit(self, boards):
-        """tspi-rk3566 应有非空 bootloader commit。"""
+    def test_tspi_bootloader_no_commit_pin(self, boards):
+        """tspi-rk3566 不再 pin bootloader commit（跟 SoC 层 v2024.10 HEAD）。
+
+        原 pin（3c60a711）实际位于 next-dev-buildroot 分支，与 SoC 层声明
+        的 branch 字段语义矛盾；统一 v2024.10 后已删除。
+        """
         merged = get_board_config("tspi-rk3566", boards=boards)
-        assert merged["bootloader"]["commit"] == "3c60a711e61015c1a61247837afbeaa85bd7fbf2"
+        assert "commit" not in merged["bootloader"]
+        assert merged["bootloader"]["branch"] == "next-dev-v2024.10"
 
     def test_orangepi_empty_commits(self, boards):
         """orangepi-cm4 的 kernel/bootloader commit 应为空。"""

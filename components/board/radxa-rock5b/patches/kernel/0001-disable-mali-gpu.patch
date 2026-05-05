@@ -1,0 +1,42 @@
+From: flange <flange@localhost>
+Subject: [PATCH] dts: rock-5b: 临时禁用 Mali-G610 GPU
+
+argon BSP 内核的 mali_kbase (Bifrost) 驱动在 RK3588 ROCK 5B 上 power up
+阶段死锁：
+  rcu: INFO: rcu_sched self-detected stall on CPU
+  pc : queued_spin_lock_slowpath+0x298/0x420
+  lr : __mutex_lock.constprop.0+0x8b8/0x8d4
+  ...
+  kbase_hwaccess_pm_powerup+0x3c/0x260
+  kbase_backend_late_init+0x50/0x15c
+  kbase_device_init+0x6c/0xf4
+  kbase_platform_device_probe+0x4c/0x134
+
+启动日志同时报告 dts 缺关键属性：
+  W : kbase_platform_rk_init(); power-off-delay-ms not available.
+  mali fb000000.gpu: r0p0 status 5 not found in HW issues table;
+                     falling back to closest match: r0p0 status 0
+
+死锁导致 async_run_entry_fn 全部阻塞，systemd 无法继续，板子在 65 秒后
+RCU stall 失活。
+
+flange 首版（add-rk3588-radxa-rock5b 提案）的 ROCK 5B 验收范围明确不含
+GPU/HDMI/DP/NPU/VPU——仅串口 + SSH。临时把 GPU 节点 status 从 "okay"
+改为 "disabled"，绕过 mali_kbase probe 死锁。
+
+后续：如需启用 GPU，需 BSP 侧补 dts power-off-delay-ms 等属性，并核对
+mali_kbase 驱动与 G610 r0p0 status 5 的兼容性。本 patch 应在 GPU 启用
+专项变更中删除。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3588-rock-5b.dts b/arch/arm64/boot/dts/rockchip/rk3588-rock-5b.dts
+--- a/arch/arm64/boot/dts/rockchip/rk3588-rock-5b.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3588-rock-5b.dts
+@@ -259,7 +259,7 @@
+ &gpu {
+ 	mali-supply = <&vdd_gpu_s0>;
+ 	mem-supply = <&vdd_gpu_mem_s0>;
+-	status = "okay";
++	status = "disabled";
+ };
+
+ &rknpu {

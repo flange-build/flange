@@ -15,9 +15,16 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         self.make(src_dir, [defconfig], arch=self.ARCH, cross=self.CROSS)
 
     def compile(self, src_dir: Path, config: dict):
-        firmware_dir = self.source.ensure_firmware("rockchip", config)
         ini_prefix = config["rkbin"]["ini_prefix"]
         trust_prefix = config["rkbin"].get("trust_ini_prefix", ini_prefix)
+        mkimage_chip = config["rkbin"].get("mkimage_chip")
+        if not mkimage_chip:
+            raise KeyError(
+                "Rockchip SoC 配置缺少 rkbin.mkimage_chip 字段；"
+                "该字段是 mkimage 打包 idbloader 时传给 BootROM 的 chip 标签，"
+                "必须在 SoC config 显式声明（如 RK3566 用 'rk3568'，RK3588 用 'rk3588'）。"
+            )
+        firmware_dir = self.source.ensure_firmware("rockchip", config)
         jobs = config.get("jobs", 0)
 
         # 解析 RKTRUST INI -- 提取 BL31/BL32
@@ -47,7 +54,7 @@ class RockchipBootloaderBuilder(ComponentBuilder):
 
         self.docker.run([
             str(src_dir / "tools" / "mkimage"),
-            "-n", "rk3568", "-T", "rksd",
+            "-n", mkimage_chip, "-T", "rksd",
             "-d", f"{ddr_bin}:{spl_bin}",
             str(src_dir / "idbloader.img"),
         ])

@@ -1,0 +1,34 @@
+From: flange <flange@localhost>
+Subject: [PATCH] mach-rockchip: bootargs_add_dtb_dtbo 跳过 dtb 默认 bootargs
+
+Rockchip BSP 在 board_fdt_chosen_bootargs() 里调用 bootargs_add_dtb_dtbo()，
+该函数会把 dtb 的 chosen/bootargs 按 key 合并到环境变量 bootargs，导致
+extlinux.conf 的 APPEND 设置（如 root=PARTLABEL=rootfs / console=ttyS2,
+1500000）被 dtb 自带的 chosen/bootargs（root=PARTUUID=614e0000-0000 /
+console=ttyFIQ0 / 一堆 androidboot.* / earlycon= / irqchip.gicv3_pseudo_nmi
+等）按 key 覆盖。
+
+flange 走 Generic Distro Boot（extlinux.conf）作为 boot 入口，APPEND 必须
+有最终决定权，否则 root= 与 console= 都会被静默替换，最终 kernel rootwait
+找不到根设备永久卡死。
+
+修复方式：保留 bootargs_ext（dtbo apply 后的扩展项，正常用例）的合并，
+跳过 bootargs（dtb 自带默认值）的合并。让 sysboot 设置的 env bootargs
+不再被 dtb 默认 bootargs 污染。
+
+仅影响 Rockchip 平台所有板（patch 位于 platform 共享目录）；对 RK3566 板
+也生效——它们的 dts 通常没有 chosen/bootargs（或值为空），无可见行为变化。
+
+diff --git a/arch/arm/mach-rockchip/board.c b/arch/arm/mach-rockchip/board.c
+--- a/arch/arm/mach-rockchip/board.c
++++ b/arch/arm/mach-rockchip/board.c
+@@ -1435,6 +1435,9 @@ static void bootargs_add_dtb_dtbo(void *fdt, bool verbose)
+ 		bootargs = fdt_getprop(fdt, noffset, arr_bootargs[i], NULL);
+ 		if (!bootargs)
+ 			continue;
++		/* flange: dtb 默认 bootargs 不合并到 env，避免覆盖 extlinux APPEND */
++		if (!strcmp(arr_bootargs[i], "bootargs"))
++			continue;
+ 		if (verbose)
+ 			printf("## bootargs(%s-%s): %s\n\n",
+ 			       msg, arr_bootargs[i], bootargs);

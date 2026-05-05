@@ -1,29 +1,28 @@
-"""RK3566 SoC 配置 -- 第二层继承"""
+"""RK3588 SoC 配置 -- 第二层继承"""
 
 SOC = {
     "platform": "rockchip",
-    "soc": "rk3566",
+    "soc": "rk3588",
     "arch": "aarch64",
     # vendor 是 radxa-overlays 仓库内 SoC 家族子目录名（与 Linux 主线 dts 路径
     # 约定一致），device-tree-overlay 组件用它定位 arch/arm64/boot/dts/<vendor>/
     # overlays/<stem>.dts。对 rockchip 平台恰好与 platform 同名。
     "vendor": "rockchip",
     "rkbin": {
-        "ini_prefix": "RK3566",
-        "trust_ini_prefix": "RK3568",
+        "ini_prefix": "RK3588",
+        "trust_ini_prefix": "RK3588",
         # mkimage 打包 idbloader 时塞给 BootROM 的 chip 标签。
-        # RK3566 与 RK3568 同 die，BootROM 识别为 rk3568。
-        "mkimage_chip": "rk3568",
+        # RK3588 与 RK3588S 同 die，BootROM 识别为 rk3588。
+        "mkimage_chip": "rk3588",
     },
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
-        # 选 next-dev-v2024.10 而非 v2026.01：v2024.10 同时含 generic
-        # rk3568_defconfig 与 rock-3c-rk3566_defconfig / radxa-zero3-rk3566
-        # 等板级 defconfig，并保留 decode_bl31.py 的 python2 shebang（与
-        # platform 层 0001 patch 配套）。v2026.01 已 backport python3，
-        # 但缺 RK3588 板级 defconfig（如 rock-5b），不利后续扩展。
+        # 与 RK3566 SoC 同分支，保持 patch 应用一致性（详见 rk3566/config.py）。
         "branch": "next-dev-v2024.10",
-        "defconfig": "rk3568_defconfig",
+        # SoC 层 generic 默认值；建议各 RK3588 板在 board 层覆盖为板级专用
+        # defconfig（如 rock-5b-rk3588_defconfig），获得更稳的 u-boot 初始化
+        # 路径。无 board 覆盖时退回到 generic（DEFAULT_DEVICE_TREE=rk3588-evb）。
+        "defconfig": "rk3588_defconfig",
     },
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
@@ -45,11 +44,13 @@ SOC = {
         "dtb_overlays": [],
         "vendor_overlays": [],
         "default_overlays": [],
+        # RK3588 调试串口同样在 UART2（与 RK3566 一致）。
         "kernel_args": "console=ttyS2,1500000 loglevel=7",
     },
     "partitions": {
         "format": "gpt",
         "sector_size": 512,
+        # 沿用 RK3566 布局，待 ROCK 5B 实测 idbloader.img 体积后视情况调整。
         # 顺序：boot → recovery → rootfs；recovery 紧随 boot 便于维护工具固定
         # 偏移找到。userdata 移除，rootfs 直接拉到 emmc 末尾（remaining）。
         # 首次升级到该布局必须整盘刷写。
