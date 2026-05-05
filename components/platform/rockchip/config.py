@@ -15,6 +15,12 @@ PLATFORM = {
         # 通过 reboot reason 从 normal 进入 recovery，由 `flange recovery enter`
         # 通过 ADB 触发）；flash/backup 子命令会在 normal 模式下硬性拒绝，安全。
         "custom_packages": ["adbd", "recoveryctl", "flange-rootfs-grow"],
+        # libdrm 用户态库 —— Mali GPU（panthor / mali_kbase）+ Rockchip VPU
+        # （mpp）+ RGA 都通过 DRM render node / 私有 ioctl 与内核交互，需要
+        # libdrm2 暴露的 ABI（drmGetDevice2 / drmIoctl 等）；libdrm-common
+        # 是 libdrm2 的 dpkg 强依赖（提供 /usr/share/libdrm/）。ubuntu-base
+        # tarball 不带，必须显式追加进 packages 基线。
+        "+packages": ["libdrm2", "libdrm-common"],
     },
     # Recovery 维护系统（独立 rootfs，独立分区）默认开启；
     # 如某个板子存储紧张可在 board 配置覆盖 enabled: False。

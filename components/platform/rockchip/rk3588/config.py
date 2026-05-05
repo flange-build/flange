@@ -70,6 +70,62 @@ SOC = {
                 "dest": "lib/firmware/arm/mali/arch10.8",
             },
         ],
+        # Rockchip 多媒体加速栈（VPU + RGA + GStreamer-rockchip 插件），来自
+        # CmST0us/rockchip-multimedia-ubuntu release 1.0.0 的 prebuilt deb。
+        # noble 24.04 base 自带的 gstreamer 是 1.24.2-1ubuntu* 上游版本，但缺
+        # gstreamer1.0-rockchip 私有 plugin（封装 rockchip-mpp 硬解为 gstreamer
+        # element），且作者打包的 1.24.2 版本与 plugin ABI 锁定，因此核心库
+        # libgstreamer1.0-0 + plugins-{base,good,bad} 必须用本仓库重打包以
+        # 保持 ABI 一致。dev 包（mpp-dev / rga-dev）保留供应用层编译用。
+        # 安装顺序：runtime 库 → 开发头 → gstreamer core → plugins → 厂商插件，
+        # dpkg -i 一次性传入会做依赖 unrolling，但仍按依赖顺序排列稳妥。
+        "+extra_debs": [
+            {
+                "name": "rockchip-mpp",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/rockchip-mpp_1.3.9_arm64.deb",
+                "sha256": "f1bc1826e054821bf268eb6fb31958695909f35807e25445dced1b6e4fc2a9e2",
+            },
+            {
+                "name": "rockchip-mpp-dev",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/rockchip-mpp-dev_1.3.9_arm64.deb",
+                "sha256": "fcaa62bb7d35b028ea01b904e9c928c222d89bdf5b0eacc448e0d043215ec7fd",
+            },
+            {
+                "name": "librga2",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/librga2_2.1.0_arm64.deb",
+                "sha256": "ec2343f42a323bf518c1bb4f36dbfd94349fad24a3e1a9c620e47aedd6ee2b54",
+            },
+            {
+                "name": "librga-dev",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/librga-dev_2.1.0_arm64.deb",
+                "sha256": "ac6530b803e3606394006a93d60998846ca318c65df2ec57bd3b6e68ad2b73d4",
+            },
+            {
+                "name": "libgstreamer1.0-0",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/libgstreamer1.0-0_1.24.2_arm64.deb",
+                "sha256": "23cd246e5c5472936c596d314ca8e9e887cd323a586c22b90224467198262e69",
+            },
+            {
+                "name": "gstreamer1.0-plugins-base",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/gstreamer1.0-plugins-base_1.24.2_arm64.deb",
+                "sha256": "c736643550e5b9922c5020281d96e39cfee82b42de996484f330e10c2e5fe409",
+            },
+            {
+                "name": "gstreamer1.0-plugins-good",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/gstreamer1.0-plugins-good_1.24.2_arm64.deb",
+                "sha256": "5324e07b23a90510024454b96eb98e6c64c76c85e54e15d6a2c9077c2239033b",
+            },
+            {
+                "name": "gstreamer1.0-plugins-bad",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/gstreamer1.0-plugins-bad_1.24.2_arm64.deb",
+                "sha256": "6854bb699b4bb7fcc4fe23e51306c6c57c2e69dea3aaa9776cba537f6d46c3c2",
+            },
+            {
+                "name": "gstreamer1.0-rockchip",
+                "url": "https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/gstreamer1.0-rockchip_1.0-1_arm64.deb",
+                "sha256": "4e8a6fdb195d3acd7b16c59c81b3b9a263d16324753fba4f700b2217d5139c32",
+            },
+        ],
     },
     "boot": {
         # Device Tree Overlay（设备树覆盖）有两类来源：
