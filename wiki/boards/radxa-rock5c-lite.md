@@ -57,6 +57,34 @@ RPi 40-pin 堆叠，mainline `panel-mipi-dbi-spi`，SPI4_M2 硬件 CS，init 序
 - **背光不可调光**：GPIO1_B0 所有 mux 均无 PWM，R2 上拉常亮，backlight sysfs 无效。
 - **摇杆右键不可用**：pin 37 = SARADC_VIN2，无 GPIO mux，已从 overlay 删除。
 - **RST 必须 ACTIVE_HIGH**：`mipi_dbi_hw_reset()` 直写（deassert=拉高）；声明 ACTIVE_LOW 则 panel 永停 reset 无法出图。
+- **init seq 必须用 ST7789VM 参数**：cubie-a7z 那份 ST7789V2 init 不通用（gamma/VCOMS/GCTRL 不同）；用 V2 参数会导致**下面 1/3 行花屏**。本板 firmware 已照 Waveshare 官方 LCD_1in3 demo 校好，commit `367f9be`。
+
+**用户态出图**：
+
+```bash
+# 一次性：解 fbcon (raw fb 写入不会触发 SPI flush；fbcon 也会抢屏)
+echo 0 > /sys/class/vtconsole/vtcon1/bind
+
+# modetest（最简，一帧静态图）
+modetest -M panel-mipi-dbi -s 31@34:240x240 -F smpte
+```
+
+```bash
+# GStreamer (videotestsrc / mpp 解码 / v4l2 摄像头通用)
+gst-launch-1.0 videotestsrc pattern=ball ! videoconvert ! \
+  video/x-raw,width=240,height=240,format=BGRx,framerate=10/1 ! \
+  kmssink driver-name=panel-mipi-dbi connector-id=31 plane-id=32 \
+  force-modesetting=true sync=false
+```
+
+GStreamer 这条管线 6 个参数缺一不可：
+
+- `driver-name=panel-mipi-dbi`：不指会枚举到 card0 (HDMI)
+- `connector-id` / `plane-id`：用 `modetest -M panel-mipi-dbi -p` 查
+- `force-modesetting=true`：让 kmssink 真去 setCRTC
+- `sync=false`：drm/tiny `async page flip (✗)`，开 sync 卡死
+- `format=BGRx`（DRM XR24）：**不要用 RGB16**，kmssink RG16 路径在 drm/tiny 上有 bug 出黑屏；XR24 由 driver 自动转 RG16 给 SPI
+- 帧率 ≤15fps：SPI 40MHz × 240×240×2B 实测上限 ~28fps（modetest -v 报）
 
 ## Overlays
 
