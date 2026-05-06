@@ -218,7 +218,7 @@ metadata {
 
 文件：`components/board/radxa-rock5c-lite/firmware/panel/st7789vm-240x240.txt`
 
-构建期由 `builder.firmware_panel` 编为 mainline 兼容的 panel.bin（16B magic header + cmd 序列），落 rootfs `/lib/firmware/panel-mipi-dbi-spi.bin`。Driver 不读 DT `firmware-name` 属性，固定按 `<compatible[0]>.bin` 在 `/lib/firmware/` 下查找——dest 名称固定不可改。
+构建期由 `builder.firmware_panel` 编为 mainline 兼容的 panel.bin（15B magic header `MIPI DBI\x00...` + cmd 序列），落 rootfs `/lib/firmware/panel-mipi-dbi-spi.bin`。Driver 不读 DT `firmware-name` 属性，固定按 `<compatible[0]>.bin` 在 `/lib/firmware/` 下查找——dest 名称固定不可改。
 
 ```text
 # ST7789VM 240x240 (Waveshare 1.3" LCD HAT) — 横屏 (MADCTL=0x70)
