@@ -1,0 +1,186 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Bind Waveshare 1.3" LCD HAT (ST7789VM, 240x240) on Rock 5C Lite via
+ * RPi-compatible 40-pin GPIO header. Three subsystems:
+ *
+ *   1. SPI4 (Function7 mux on header pins 19/21/23/24, "SPI4_M2"):
+ *      MOSI = pin 19 / GPIO1_A1
+ *      MISO = pin 21 / GPIO1_A0
+ *      CLK  = pin 23 / GPIO1_A2
+ *      CS0  = pin 24 / GPIO1_A3   (hardware CS, no cs-gpios needed)
+ *
+ *   2. ST7789VM panel via mainline drm/tiny panel-mipi-dbi-spi (linux v5.18+,
+ *      rkr5.1 6.1 in-tree). Init seq loaded from
+ *      /lib/firmware/panel-mipi-dbi-spi.bin (driver derives filename from
+ *      compatible[0]; firmware-name DT property is NOT consulted).
+ *      DC  = pin 22 / GPIO1_B5
+ *      RST = pin 13 / GPIO4_B2
+ *
+ *      RST GPIO MUST be declared GPIO_ACTIVE_HIGH (even though ST7789 reset
+ *      is physically low-active): mipi_dbi_hw_reset() uses gpiod_set_value()
+ *      with "1 = released, 0 = asserted" direct-write semantics. Declaring
+ *      ACTIVE_LOW makes gpiolib invert the final set(1) into a physical LOW
+ *      and the panel stalls in reset forever.
+ *
+ *   3. 7 GPIO buttons via gpio-keys:
+ *      K1 = pin 40 / GPIO4_B1  → KEY_F1
+ *      K2 = pin 38 / GPIO4_A5  → KEY_F2
+ *      K3 = pin 36 / GPIO4_A2  → KEY_F3
+ *      Joy UP    = pin 31 / GPIO1_B1 → KEY_UP
+ *      Joy DOWN  = pin 35 / GPIO4_A0 → KEY_DOWN
+ *      Joy LEFT  = pin 29 / GPIO1_B2 → KEY_LEFT
+ *      Joy PRESS = pin 33 / GPIO1_B4 → KEY_ENTER
+ *
+ *      All keys are external-pulldown-via-button-to-GND; pinctrl declares
+ *      pcfg_pull_up because the HAT has no external pull resistors.
+ *
+ *      Joy RIGHT (BCM26 → header pin 37) is intentionally absent: pin 37 on
+ *      Rock 5C Lite is SARADC_VIN2, with no GPIO mux available — physically
+ *      unusable as a digital input.
+ *
+ *   Backlight (BLK / pin 18 / GPIO1_B0) is intentionally NOT managed in this
+ *   overlay: no PWM mux available on this pin, and the schematic R2=10K
+ *   pull-up to 3.3V on Q1's base means the BL defaults to ON when BLK is
+ *   floating. Leaving GPIO1_B0 at default mux state preserves this behavior.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+
+/ {
+	compatible = "rockchip,rk3588s";
+
+	metadata {
+		title = "Enable Waveshare 1.3\" LCD HAT (ST7789VM 240x240) + 7 keys on Rock 5C Lite";
+		compatible = "radxa,rock-5c-lite";
+		category = "display";
+		exclusive = "spi4",
+			    "GPIO1_A0", "GPIO1_A1", "GPIO1_A2", "GPIO1_A3",
+			    "GPIO1_B5", "GPIO4_B2",
+			    "GPIO4_B1", "GPIO4_A5", "GPIO4_A2",
+			    "GPIO1_B1", "GPIO4_A0", "GPIO1_B2", "GPIO1_B4";
+		description = "Bind Waveshare 1.3\" LCD HAT (ST7789VM) on SPI4_M2 with hardware CS; 7 GPIO keys via gpio-keys (KEY_F1..F3 + arrow keys + ENTER). BL (pin 18 = GPIO1_B0) intentionally not managed (no PWM mux; default ON via 10K pull-up on Q1 base). Joy RIGHT (pin 37 = SARADC_VIN2) intentionally absent (no GPIO mux). Init seq from /lib/firmware/panel-mipi-dbi-spi.bin.";
+	};
+
+	fragment@0 {
+		target = <&spi4>;
+
+		__overlay__ {
+			status = "okay";
+			pinctrl-names = "default";
+			pinctrl-0 = <&spi4m2_cs0 &spi4m2_pins>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			panel@0 {
+				compatible = "panel-mipi-dbi-spi";
+				reg = <0>;
+				spi-max-frequency = <40000000>;
+				dc-gpios    = <&gpio1 RK_PB5 GPIO_ACTIVE_HIGH>;
+				reset-gpios = <&gpio4 RK_PB2 GPIO_ACTIVE_HIGH>;
+				write-only;
+				width-mm  = <23>;
+				height-mm = <23>;
+				status = "okay";
+
+				panel-timing {
+					hactive = <240>;
+					vactive = <240>;
+					hback-porch  = <0>;
+					vback-porch  = <0>;
+					hfront-porch = <0>;
+					vfront-porch = <0>;
+					hsync-len = <0>;
+					vsync-len = <0>;
+					/* binding requires this; driver does not use pixel clock */
+					clock-frequency = <3456000>;
+				};
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/";
+
+		__overlay__ {
+			keys-st7789vm-hat {
+				compatible = "gpio-keys";
+				pinctrl-names = "default";
+				pinctrl-0 = <&keys_st7789vm_pins>;
+				autorepeat;
+
+				key-k1 {
+					label = "K1";
+					linux,code = <KEY_F1>;
+					gpios = <&gpio4 RK_PB1 GPIO_ACTIVE_LOW>;
+					debounce-interval = <20>;
+				};
+				key-k2 {
+					label = "K2";
+					linux,code = <KEY_F2>;
+					gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>;
+					debounce-interval = <20>;
+				};
+				key-k3 {
+					label = "K3";
+					linux,code = <KEY_F3>;
+					gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>;
+					debounce-interval = <20>;
+				};
+				key-up {
+					label = "Joy UP";
+					linux,code = <KEY_UP>;
+					gpios = <&gpio1 RK_PB1 GPIO_ACTIVE_LOW>;
+					debounce-interval = <20>;
+				};
+				key-down {
+					label = "Joy DOWN";
+					linux,code = <KEY_DOWN>;
+					gpios = <&gpio4 RK_PA0 GPIO_ACTIVE_LOW>;
+					debounce-interval = <20>;
+				};
+				key-left {
+					label = "Joy LEFT";
+					linux,code = <KEY_LEFT>;
+					gpios = <&gpio1 RK_PB2 GPIO_ACTIVE_LOW>;
+					debounce-interval = <20>;
+				};
+				key-press {
+					label = "Joy PRESS";
+					linux,code = <KEY_ENTER>;
+					gpios = <&gpio1 RK_PB4 GPIO_ACTIVE_LOW>;
+					debounce-interval = <20>;
+				};
+
+				/*
+				 * Joy RIGHT (HAT BCM26 → header pin 37) maps to SARADC_VIN2
+				 * on Rock 5C Lite — no GPIO mux exists for this pin. Cannot
+				 * be wired as digital input. Intentionally absent.
+				 */
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <&pinctrl>;
+
+		__overlay__ {
+			keys-st7789vm-hat {
+				keys_st7789vm_pins: keys-st7789vm-pins {
+					rockchip,pins =
+						<4 RK_PB1 RK_FUNC_GPIO &pcfg_pull_up>,   /* K1 */
+						<4 RK_PA5 RK_FUNC_GPIO &pcfg_pull_up>,   /* K2 */
+						<4 RK_PA2 RK_FUNC_GPIO &pcfg_pull_up>,   /* K3 */
+						<1 RK_PB1 RK_FUNC_GPIO &pcfg_pull_up>,   /* Joy UP */
+						<4 RK_PA0 RK_FUNC_GPIO &pcfg_pull_up>,   /* Joy DOWN */
+						<1 RK_PB2 RK_FUNC_GPIO &pcfg_pull_up>,   /* Joy LEFT */
+						<1 RK_PB4 RK_FUNC_GPIO &pcfg_pull_up>;   /* Joy PRESS */
+				};
+			};
+		};
+	};
+};
