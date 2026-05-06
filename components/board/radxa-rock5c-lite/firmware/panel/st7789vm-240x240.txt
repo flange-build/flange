@@ -1,6 +1,10 @@
 # ST7789VM 240x240 (Waveshare 1.3" LCD HAT) — 横屏 (MADCTL=0x70)
 #
-# 严格照抄 Waveshare 官方 demo LCD_1in3.c init seq，仅 MADCTL 钉成 0x70 横屏。
+# 参数严格照抄 Waveshare 官方 demo
+# 1.3inch_LCD_HAT_code/python/ST7789.py::Init() 中的写入序列。仅 MADCTL
+# 改为 0x70（landscape，MX=1 MV=1）—— Waveshare 官方默认是 0x00 portrait，
+# 我们的方向以 PCB 上摇杆/按键朝向为"上"。
+#
 # 由 builder.firmware_panel 在构建期编为 mainline 兼容的 panel.bin
 # （16B header = "MIPI DBI" magic 8B + 7B 0x00 reserved + file_format_version
 # 1B，0x01；然后 cmd 序列与 NOP-encoded delay），落 rootfs
@@ -12,38 +16,55 @@
 # 不写 CASET/RASET：driver mipi_dbi_set_window_address 每帧自动按
 # panel-timing.{hback,vback}-porch (此板均 = 0) 计算窗口起点。
 
-# MADCTL — 横屏 (MX=1, MV=1)；竖屏改 0x00
+# Sleep Out — 必须早做，让电荷泵稳定后再写寄存器
+command 0x11
+delay 120
+
+# MADCTL — 横屏 (MX=1 MV=1 ML=1)；竖屏改 0x00
 command 0x36 0x70
-# COLMOD — 0x05 (Waveshare demo 默认；与 0x55 等效，均为 16bpp 65K RGB)
+
+# COLMOD — 0x05 (16bpp 65K RGB；与 0x55 等效)
 command 0x3A 0x05
 
-# PORCTRL — Porch Setting
+# PORCTRL — Porch Setting (BPA=0x0C, FPA=0x0C, PSEN=0, BPB/FPB=0x33, BPC/FPC=0x33)
 command 0xB2 0x0C 0x0C 0x00 0x33 0x33
-# GCTRL — Gate Control = 0x35 (VGH=13.26V, VGL=-10.43V)
-command 0xB7 0x35
-# VCOMS — VCOM Setting = 0x19 (~0.725V)
-command 0xBB 0x19
-# LCMCTRL — LCM Control = 0x2C
+
+# GCTRL — Gate Control (Waveshare ST7789VM 实测值)
+command 0xB7 0x00
+
+# VCOMS — VCOM Setting (Waveshare ST7789VM 实测值)
+command 0xBB 0x3F
+
+# LCMCTRL — LCM Control
 command 0xC0 0x2C
-# VDV/VRH Enable — 用 register 而非 NVM
+
+# VDV/VRH Enable — 用寄存器而非 NVM
 command 0xC2 0x01
-# VRHS — VAP/VAN Voltage = 0x12
-command 0xC3 0x12
-# VDVS — VDV = 0x20 (默认)
-command 0xC4 0x20
+
+# VRHS — VAP/VAN Voltage (Waveshare ST7789VM 实测值)
+command 0xC3 0x0D
+
 # FRCTRL2 — Frame Rate Control = 0x0F (60 Hz)
 command 0xC6 0x0F
-# PWCTRL1 — Power Control 1
+
+# PWCTRL1 — Waveshare 序列里先写一次 0xA7
+command 0xD0 0xA7
+
+# PWCTRL1 — 再写正式值 0xA4 0xA1（覆盖前一次）
 command 0xD0 0xA4 0xA1
-# PVGAMCTRL — Positive Voltage Gamma Control
-command 0xE0 0xD0 0x04 0x0D 0x11 0x13 0x2B 0x3F 0x54 0x4C 0x18 0x0D 0x0B 0x1F 0x23
-# NVGAMCTRL — Negative Voltage Gamma Control
-command 0xE1 0xD0 0x04 0x0C 0x11 0x13 0x2C 0x3F 0x44 0x51 0x2F 0x1F 0x1F 0x20 0x23
+
+# 0xD6 — ST7789VM 特有寄存器（非 standard ST7789 datasheet 中），
+# Waveshare 实测必须设为 0xA1
+command 0xD6 0xA1
+
+# PVGAMCTRL — Positive Voltage Gamma Control（Waveshare ST7789VM 校好的曲线）
+command 0xE0 0xF0 0x00 0x02 0x01 0x00 0x00 0x27 0x43 0x3F 0x33 0x0E 0x0E 0x26 0x2E
+
+# NVGAMCTRL — Negative Voltage Gamma Control（Waveshare ST7789VM 校好的曲线）
+command 0xE1 0xF0 0x07 0x0D 0x0D 0x0B 0x16 0x26 0x43 0x3E 0x3F 0x19 0x19 0x31 0x3A
 
 # Display Inversion ON — ST7789 IPS 必需，不开会反色
 command 0x21
-# Sleep Out — 退出睡眠（必须等 ≥120 ms 才能继续）
-command 0x11
-delay 120
+
 # Display ON
 command 0x29
