@@ -330,10 +330,12 @@ class SourceManager:
         recurse = cfg.get("recurse_submodules", False)
 
         if not repo_dir.exists():
-            # tag 与 commit 在 _clone 内复用同一个 fetch-then-checkout 路径，
-            # 因此都通过 commit_ref 参数传入。
+            # tag 与 commit 在 _clone 内复用 fetch-then-checkout 路径；is_tag
+            # 区分两者以决定 fetch 时是否用 ``+refs/tags/<n>:refs/tags/<n>``
+            # refspec（非 tag 路径用 commit hash 直接 fetch 即可）。
             ref = commit or tag
-            self._clone(clone_url, branch, repo_dir, ref, recurse=recurse)
+            self._clone(clone_url, branch, repo_dir, ref, recurse=recurse,
+                        is_tag=bool(tag) and not commit)
             return
 
         if commit:
@@ -349,7 +351,7 @@ class SourceManager:
             tag_commit = self._rev_parse_ref(repo_dir, f"refs/tags/{tag}^{{}}")
             if tag_commit and self._rev_parse(repo_dir) == tag_commit:
                 return
-            self._fetch_checkout(repo_dir, tag)
+            self._fetch_checkout(repo_dir, tag, is_tag=True)
             if recurse:
                 self._update_submodules(repo_dir)
             return
@@ -385,7 +387,7 @@ class SourceManager:
         return cfg["repo"]
 
     def _clone(self, repo: str, branch: str, dest: Path, commit: str = "",
-               recurse: bool = False):
+               recurse: bool = False, is_tag: bool = False):
         dest.parent.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
         # recurse_submodules 场景下避免 --depth=1（浅克隆 + 子模块常出问题）
@@ -398,8 +400,7 @@ class SourceManager:
         cmd += [repo, str(dest)]
         subprocess.run(cmd, env=env, check=True, timeout=3600)
         if commit:
-            subprocess.run(["git", "fetch", "--depth=1", "origin", commit],
-                           cwd=dest, env=env, check=True, timeout=600)
+            self._fetch_ref(dest, commit, env=env, is_tag=is_tag)
             subprocess.run(["git", "checkout", commit], cwd=dest, check=True)
             if recurse:
                 self._update_submodules(dest)
@@ -424,11 +425,31 @@ class SourceManager:
         except subprocess.CalledProcessError:
             return ""
 
-    def _fetch_checkout(self, repo_dir: Path, commit: str):
+    def _fetch_checkout(self, repo_dir: Path, commit: str, is_tag: bool = False):
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
-        subprocess.run(["git", "fetch", "--depth=1", "origin", commit],
-                       cwd=repo_dir, env=env, check=True, timeout=600)
+        self._fetch_ref(repo_dir, commit, env=env, is_tag=is_tag)
         subprocess.run(["git", "checkout", commit], cwd=repo_dir, check=True)
+
+    def _fetch_ref(self, repo_dir: Path, ref: str, env: dict, is_tag: bool):
+        """fetch 单个 ref。
+
+        commit hash / branch name 直接 ``git fetch origin <ref>`` 即可，git
+        会把它写到 FETCH_HEAD，后续 checkout 用同一字符串能命中。
+
+        但 tag name 在浅克隆 + 不带 ``--tags`` 的 fetch 下不会被写到本地
+        ``refs/tags/<name>``——只更新 FETCH_HEAD。后续 ``git checkout
+        <tagname>`` 找不到 ref 直接失败。修法是用显式 refspec
+        ``+refs/tags/<name>:refs/tags/<name>`` 把 tag 拉到本地 ref 空间，
+        既能让 checkout 命中，又支持 ``_rev_parse_ref(refs/tags/<tag>)``
+        幂等比对（避免每次 build 都重 fetch）。
+        """
+        if is_tag:
+            refspec = f"+refs/tags/{ref}:refs/tags/{ref}"
+            subprocess.run(["git", "fetch", "--depth=1", "origin", refspec],
+                           cwd=repo_dir, env=env, check=True, timeout=600)
+        else:
+            subprocess.run(["git", "fetch", "--depth=1", "origin", ref],
+                           cwd=repo_dir, env=env, check=True, timeout=600)
 
     def _fetch_reset_branch(self, repo_dir: Path, branch: str):
         """追远端最新：fetch origin/<branch> 后两步重置（mixed + checkout）。
