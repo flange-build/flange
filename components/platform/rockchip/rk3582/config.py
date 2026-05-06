@@ -51,6 +51,11 @@ SOC = {
         "defconfig": [
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
+            # 启用 mainline panel-mipi-dbi-spi 驱动 (CONFIG_DRM_PANEL_MIPI_DBI=m)，
+            # 用于 Rock 5C Lite + Waveshare 1.3" LCD HAT (ST7789VM SPI 屏) 等
+            # 板级 SPI display；fragment 由 RockchipKernelBuilder 在
+            # configure() 阶段写到 arch/arm64/configs/panel_mipi_dbi.config。
+            "panel_mipi_dbi.config",
         ],
         "dts_dir": "rockchip",
     },
