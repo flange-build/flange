@@ -416,18 +416,18 @@ command 0x29
 
 ```bash
 cd /Users/eki/Project/Embedded_Project/flange && python -c "
-from builder.firmware_panel import compile_panel_firmware
+from builder.firmware_panel import encode_file, MAGIC, HEADER
 from pathlib import Path
 src = Path('components/board/radxa-rock5c-lite/firmware/panel/st7789vm-240x240.txt')
-out = compile_panel_firmware(src)
-assert out[:15] == b'MIPI DBI\x00\x00\x00\x00\x00\x00\x00', out[:16].hex()
-print('OK: panel.bin size =', len(out), 'bytes, magic header valid')
+out = encode_file(src)
+assert out[:len(HEADER)] == HEADER, out[:len(HEADER)].hex()
+print(f'OK: panel.bin = {len(out)} bytes, header valid ({len(HEADER)}B = MAGIC {len(MAGIC)}B + VERSION 1B)')
 "
 ```
 
-> 上面的 import 路径假设是 `compile_panel_firmware`。如果实际函数名不同（例如 `encode_panel_firmware` / `compile_firmware`），先 `grep -E '^def ' builder/firmware_panel.py` 看一眼，按实际名字调即可。Magic header 字节序与长度按实际 mainline panel-mipi-dbi.c 的 `MIPI_DBI_FW_MAGIC` 字符串实现核对：先看 `builder/firmware_panel.py` 顶部常量名（cubie-a7z 那次有定义），按它的常量比对，不要硬编码。
+> 实际 API 是 `encode_panel_firmware(text)` / `encode_file(src)`，常量是 `MAGIC` (15B) 与完整 `HEADER` (16B = MAGIC + version 1B)。`builder/firmware_panel.py` 顶部即定义。
 
-预期：解析无异常，输出 panel.bin 字节数大致 ≥ 16(magic) + 命令字节数；magic header 与 builder 内常量一致。
+预期：解析无异常，输出形如 `panel.bin = <N> bytes, header valid (16B = MAGIC 15B + VERSION 1B)`，N ≥ 16 (header) + 命令字节数。
 
 ### Step 3.3 — Commit
 

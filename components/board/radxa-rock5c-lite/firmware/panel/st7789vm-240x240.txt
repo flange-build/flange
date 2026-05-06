@@ -1,8 +1,10 @@
 # ST7789VM 240x240 (Waveshare 1.3" LCD HAT) — 横屏 (MADCTL=0x70)
 #
 # 严格照抄 Waveshare 官方 demo LCD_1in3.c init seq，仅 MADCTL 钉成 0x70 横屏。
-# 由 builder.firmware_panel 在构建期编为 mainline 兼容的 panel.bin（15B magic
-# header + cmd 序列 + delay NOP），落 rootfs /lib/firmware/panel-mipi-dbi-spi.bin。
+# 由 builder.firmware_panel 在构建期编为 mainline 兼容的 panel.bin
+# （16B header = "MIPI DBI" magic 8B + 7B 0x00 reserved + file_format_version
+# 1B，0x01；然后 cmd 序列与 NOP-encoded delay），落 rootfs
+# /lib/firmware/panel-mipi-dbi-spi.bin。
 #
 # dest 文件名固定不可改：driver 不读 DT firmware-name 属性，固定按
 # <compatible[0]>.bin 在 /lib/firmware/ 下查找。
