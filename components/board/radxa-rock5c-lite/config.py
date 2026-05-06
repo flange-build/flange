@@ -133,13 +133,20 @@ BOARD = {
             # 无法 bind。本 overlay 切回 peripheral 模式以恢复 OTG device
             # 角色（详见 dtso 文件头注释）。
             "rk3588s-rock-5c-otg-peripheral.dtbo",
+            # Waveshare 1.3" LCD HAT (ST7789VM SPI 屏 + 3 键 + 5 向摇杆)
+            # 通过 RPi 40-pin GPIO header 直接堆叠；走 mainline drm/tiny
+            # panel-mipi-dbi-spi (SPI4_M2 硬件 CS) + gpio-keys。详见
+            # dtso 文件头说明（含 RST 极性、BL 不接管、Joy RIGHT 缺失原因）。
+            "rk3588s-rock-5c-st7789vm-lcd-keys.dtbo",
         ],
         # 默认启用 USB OTG peripheral overlay：lunch target 出来的整机镜像
         # 默认走 device 模式，方便 adbd / 镜像更新流程。需要 host-only 用法
         # 时从 default_overlays 中剔除即可（运行时编辑 extlinux.conf
         # fdtoverlays，或 lunch 不同 product/variant 走条件配置）。
+        # LCD HAT overlay 也默认启用：开机即出图，无需手工启用。
         "default_overlays": [
             "rk3588s-rock-5c-otg-peripheral.dtbo",
+            "rk3588s-rock-5c-st7789vm-lcd-keys.dtbo",
         ],
     },
     "rootfs": {
@@ -157,6 +164,17 @@ BOARD = {
                 "repo_subdir": "src/USB/driver_fw/fw/aic8800D80",
                 "files": AIC8800_D80_USB_FIRMWARE_FILES,
                 "dest": "lib/firmware/aic8800D80",
+            },
+        ],
+        # ST7789VM panel-mipi-dbi-spi 的 init 序列：构建期由
+        # builder.firmware_panel 把文本源编为 mainline 兼容 panel.bin，
+        # 落 rootfs /lib/firmware/panel-mipi-dbi-spi.bin。dest 名固定不可改：
+        # driver 不读 DT firmware-name 属性，固定按 <compatible[0]>.bin
+        # 在 /lib/firmware/ 下查找。
+        "panel_firmware": [
+            {
+                "src": "firmware/panel/st7789vm-240x240.txt",
+                "dest": "panel-mipi-dbi-spi.bin",
             },
         ],
     },
