@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Rock 5C / 5C Lite USB-C OTG 控制器切到 peripheral（device）模式
+ *
+ * 基线 rk3588s-rock-5c.dts 把 &usbdrd_dwc3_0 的 dr_mode 钉成 "host"
+ * （dts 第 583 行覆写了 rk3588s.dtsi 默认的 "otg"），dwc3 driver 据此
+ * 启动 host 模式并挂内置 xHCI（dmesg 中表现为 xhci-hcd 在 0xfc000000
+ * 上注册）—— 这条路径下 ``/sys/class/udc/`` 永远是空的，gadget
+ * （adbd / FunctionFS / mass-storage 等）无 UDC 可绑。
+ *
+ * 本 overlay 把 dr_mode 切到 "peripheral"，让 dwc3 注册为 UDC，userspace
+ * 通过 configfs 创建的 gadget 可正常 bind 到 ``fc000000.dwc3``。切换为
+ * peripheral 后 USB-C 口只作为 device，板子从 host 端取电；host-only
+ * 用法（插 U 盘 / 键盘）将失效。
+ *
+ * 注：rk3588s 上 USB3 OTG 与内置 xHCI 是同一控制器（共用 0xfc000000），
+ * 不是两个独立节点（看过 rk3588s.dtsi 已确认无 usb_host0_xhci label），
+ * 因此本 overlay 不需要再 disable 别的节点。
+ */
+
+/dts-v1/;
+/plugin/;
+
+&usbdrd_dwc3_0 {
+	dr_mode = "peripheral";
+};
