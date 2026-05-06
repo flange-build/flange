@@ -17,7 +17,7 @@
 
 1. **LCD**：暴露为标准 DRM 设备 `/dev/dri/card*`，`modetest` / weston / Qt / fbcon 通用接口可直接出图，分辨率 240×240、默认横屏（MADCTL=0x70）。
 2. **按键输入**：3 个 KEY + 5 向摇杆中实际可用的 7 个键全部以单一 `gpio-keys` input device 暴露；`evtest` 可观测标准 `KEY_F1/F2/F3/UP/DOWN/LEFT/ENTER` event。
-3. **零侵入**：不动框架层（Python builder）、不动平台 kernel patch；完全复用 cubie-a7z 已建好的 `firmware_panel.py` + `RootfsBuilder._install_panel_firmware` hook。
+3. **轻侵入**：不动平台 kernel patch；复用 cubie-a7z 已建好的 `firmware_panel.py` + `RootfsBuilder._install_panel_firmware` hook + DTBO 编译流水线。**唯一需要在 Python builder 中新增的代码**：`RockchipKernelBuilder` 中加 `_write_panel_mipi_dbi_fragment(src_dir)` 方法（约 5 行 `Path.write_text`），与现有 `_write_panthor_fragment` 同模式，与 `AllwinnerA733KernelBuilder._write_panel_mipi_dbi_override` 同语义——Rockchip kernel builder 的 fragment 体系是**代码生成而非文件加载**（参照 `_write_case_insensitive_fix`），因此无法仅靠"放一个 .config 文件"完成 fragment 注入。
 4. **默认启用**：lunch 出来的整机镜像开机即可见屏，不需要运行时手工启用 overlay。
 
 ### 1.2 非目标（YAGNI）
@@ -58,15 +58,16 @@ components/board/radxa-rock5c-lite/
 └── firmware/panel/
     └── st7789vm-240x240.txt                           [新增]
 
-components/platform/rockchip/
-├── rk3582/config.py                                   [修改]
-│   └── kernel.defconfig += "panel_mipi_dbi.config"
-└── patches/kernel/configs/panel_mipi_dbi.config       [新增]
-    ├── CONFIG_DRM_KMS_HELPER=y
-    ├── CONFIG_DRM_MIPI_DBI=m
-    └── CONFIG_DRM_PANEL_MIPI_DBI=m
-    # 实际路径以 rockchip kernel builder 现行 fragment 查找规则为准；
-    # 实施阶段用 builder/paths.py 常量定位，不在此 spec 写死路径字面量。
+components/platform/rockchip/rk3582/config.py          [修改]
+└── kernel.defconfig += "panel_mipi_dbi.config"
+    # fragment 文件本身**不放在** components/ 下，而是在构建期由
+    # RockchipKernelBuilder._write_panel_mipi_dbi_fragment 写入
+    # arch/$ARCH/configs/panel_mipi_dbi.config（与 case_insensitive_fix /
+    # panthor 同机制；详见 §6.2）
+
+builder/platforms/rockchip/kernel.py                   [修改]
+├── 新增方法 _write_panel_mipi_dbi_fragment(src_dir)   # 写 5 行 fragment
+└── 在 configure() 中追加调用                            # 与既有 _write_* 同位置
 
 wiki/
 ├── boards/radxa-rock5c-lite.md                        [修改]
@@ -80,7 +81,6 @@ wiki/
 - `builder/firmware_panel.py` — cubie-a7z 那次新建，文本 → panel.bin 编码器，本次直接复用
 - `builder/rootfs.py::RootfsBuilder._install_panel_firmware` — 通用 hook，本次直接复用
 - `builder/platforms/rockchip/rootfs.py` — 已挂上 `_install_panel_firmware` hook，本次无需动
-- `builder/platforms/rockchip/kernel.py` — defconfig fragment 注入机制已存在
 - `openspec/specs/panel-firmware-build/spec.md` — capability 已建，本次复用
 
 ## 4. DTS Overlay 详解
@@ -277,17 +277,35 @@ command 0x29
 ],
 ```
 
-### 6.2 Kernel config fragment
+### 6.2 Kernel config fragment（builder 代码生成）
 
-新增文件，内容三行：
+`RockchipKernelBuilder` 现行做法是在 `configure()` 阶段把 fragment 文本**直接写入** `arch/$ARCH/configs/<name>.config`（参见现有 `_write_case_insensitive_fix` / `_write_panthor_fragment`），SoC 配置在 `kernel.defconfig` list 中按需引入。**rockchip 体系下没有"放 .config 文件到 components/ 就能注入"的路径**——必须加一个新方法。
 
-```kconfig
-CONFIG_DRM_KMS_HELPER=y
-CONFIG_DRM_MIPI_DBI=m
-CONFIG_DRM_PANEL_MIPI_DBI=m
+新增 `RockchipKernelBuilder._write_panel_mipi_dbi_fragment(src_dir)`，与 a733 那边 `_write_panel_mipi_dbi_override` 完全同语义，仅文件名同 a733 复用：
+
+```python
+def _write_panel_mipi_dbi_fragment(self, src_dir: Path):
+    """生成 config fragment 启用 mainline panel-mipi-dbi-spi 驱动（v5.18 in-tree，rkr5.1 6.1 自带，无需 backport）。"""
+    fragment = src_dir / "arch" / self.ARCH / "configs" / "panel_mipi_dbi.config"
+    fragment.write_text(
+        "# panel-mipi-dbi-spi 通用 SPI DBI 屏 DRM 驱动\n"
+        "# mainline v5.18 已 in-tree，rkr5.1 (linux 6.1) 自带，无需 backport\n"
+        "CONFIG_DRM_PANEL_MIPI_DBI=m\n"
+    )
+    self._status("panel_mipi_dbi.config 生成")
 ```
 
-具体路径以 rockchip kernel builder 现行 fragment 查找规则为准。实施阶段用 `builder/paths.py` 常量定位（已有 cubie-a7z 那次 a733 平台的 `panel_mipi_dbi.config` 可参考，rockchip 这边按 `components/platform/rockchip/patches/kernel/configs/` 一类约定，实施时确认）。
+并在 `configure()` 顶部追加一行调用，与既有 `_write_case_insensitive_fix(src_dir)` / `_write_panthor_fragment(src_dir, config)` 同位置：
+
+```python
+def configure(self, src_dir: Path, config: dict):
+    self._write_case_insensitive_fix(src_dir)
+    self._write_panthor_fragment(src_dir, config)
+    self._write_panel_mipi_dbi_fragment(src_dir)   # 新增
+    ...
+```
+
+> 与 a733 不同，**这里只需要 `CONFIG_DRM_PANEL_MIPI_DBI=m` 一行**：`CONFIG_DRM_KMS_HELPER` 在 rockchip_linux_defconfig 中已 =y，`CONFIG_DRM_MIPI_DBI` 由 Kconfig `select` 自动拉入，无需显式声明。
 
 ## 7. 板级 config 改动
 
