@@ -20,20 +20,24 @@ class RockchipKernelBuilder(KernelBuilder):
 
         list 形式按顺序逐个 ``make <dc>``，后者覆盖前者已设置的 CONFIG。
         典型用例：``["rockchip_linux_defconfig", "case_insensitive_fix.config",
-        "rk3588_panthor.config"]``。
+        "rk3588_panthor.config", "panel_mipi_dbi.config"]``。
 
-        合并步骤前先生成两个 fragment 到 ``arch/<ARCH>/configs/``：
+        合并步骤前先生成三个 fragment 到 ``arch/<ARCH>/configs/``：
 
         - ``case_insensitive_fix.config`` —— 由基类生成。大小写不敏感 FS 上
           禁用 netfilter 冲突模块；敏感 FS 上为空 fragment（保留功能）。
         - ``rk3588_panthor.config`` —— RK3588/RK3588S 上启用 mainline panthor
           DRM 驱动并关闭 BSP mali_kbase；其他 SoC 上为空 fragment。
+        - ``panel_mipi_dbi.config`` —— 启用 mainline panel-mipi-dbi-spi 驱动
+          （``CONFIG_DRM_PANEL_MIPI_DBI=m``）；mainline v5.18 已 in-tree，
+          rkr5.1 (linux 6.1) 自带，无需 backport patch。
 
-        两个 fragment 都始终生成，由 SoC config 决定是否在 defconfig list 中
+        三个 fragment 都始终生成，由 SoC config 决定是否在 defconfig list 中
         引入来生效。
         """
         self._write_case_insensitive_fix(src_dir)
         self._write_panthor_fragment(src_dir, config)
+        self._write_panel_mipi_dbi_fragment(src_dir)
         defconfig = config["kernel"]["defconfig"]
         if isinstance(defconfig, list):
             for dc in defconfig:
@@ -90,6 +94,26 @@ class RockchipKernelBuilder(KernelBuilder):
             "CONFIG_DRM_PANTHOR=m\n"
         )
         self._status(f"SoC={soc}，启用 panthor fragment")
+
+    def _write_panel_mipi_dbi_fragment(self, src_dir: Path):
+        """生成 config fragment 启用 mainline panel-mipi-dbi-spi 驱动。
+
+        Mainline v5.18 已 in-tree（drivers/gpu/drm/tiny/panel-mipi-dbi.c，
+        commit 48b1f5440f8c），rkr5.1 (linux 6.1) 自带，**无需 backport
+        patch**——与 a733 (5.15) 那边的同名 fragment 是同语义但不同来源。
+
+        该 fragment **总是写入**（不像 panthor 有 SoC 条件分支）；SoC 配置
+        决定是否在 kernel.defconfig list 中引入。CONFIG_DRM_KMS_HELPER 在
+        rockchip_linux_defconfig 中已 =y，CONFIG_DRM_MIPI_DBI 由 Kconfig
+        select 自动拉入，无需在此显式声明。
+        """
+        fragment = src_dir / "arch" / self.ARCH / "configs" / "panel_mipi_dbi.config"
+        fragment.write_text(
+            "# panel-mipi-dbi-spi 通用 SPI DBI 屏 DRM 驱动\n"
+            "# mainline v5.18 已 in-tree，rkr5.1 (linux 6.1) 自带，无需 backport\n"
+            "CONFIG_DRM_PANEL_MIPI_DBI=m\n"
+        )
+        self._status("panel_mipi_dbi.config 生成")
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)
