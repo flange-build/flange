@@ -19,9 +19,9 @@ Rockchip 的 boot_mode.c 已经会在读取 reboot-mode register 后清除寄存
 因此 `reboot recovery` 是 one-shot，不会反复进入 recovery。
 
 extlinux 的 `fdtoverlays` 需要 `fdtoverlay_addr_r` 作为 overlay 临时加载
-地址。RK3568 默认内存布局已有 fdt_addr_r=0x08300000 和
-ramdisk_addr_r=0x0a200000，这里选择 0x09000000，避开 kernel、FDT、
-script 和 ramdisk 加载区。
+地址。next-dev-v2024.10 的 include/configs/rk3568_common.h 已自带
+``fdtoverlay_addr_r=0x08200000``（位于 ENV_MEM_LAYOUT_SETTINGS 块内，
+fdt_addr_r=0x08300000 之前 1MB），无须额外 patch。
 
 diff --git a/arch/arm/mach-rockchip/boot_mode.c b/arch/arm/mach-rockchip/boot_mode.c
 --- a/arch/arm/mach-rockchip/boot_mode.c
@@ -102,11 +102,6 @@ diff --git a/arch/arm/mach-rockchip/boot_mode.c b/arch/arm/mach-rockchip/boot_mo
  	case BOOT_MODE_BOOTLOADER:
  		printf("enter fastboot!\n");
  #if defined(CONFIG_FASTBOOT_FLASH_MMC_DEV)
-diff --git a/include/configs/rk3568_common.h b/include/configs/rk3568_common.h
---- a/include/configs/rk3568_common.h
-+++ b/include/configs/rk3568_common.h
-@@ -85,0 +86,1 @@
-+	"fdtoverlay_addr_r=0x09000000\0" \
 diff --git a/include/config_distro_bootcmd.h b/include/config_distro_bootcmd.h
 --- a/include/config_distro_bootcmd.h
 +++ b/include/config_distro_bootcmd.h

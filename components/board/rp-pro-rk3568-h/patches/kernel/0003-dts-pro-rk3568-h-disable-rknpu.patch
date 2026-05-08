@@ -1,0 +1,39 @@
+From: flange <flange@localhost>
+Subject: [PATCH] dts: pro-rk3568-h: 禁用 rknpu / rknpu_mmu
+
+板载实测 NPU power domain ack 寄存器不响应（很可能 die 内 NPU
+上电链未连，常见于 RK3568 板 PCB 简化版）：
+
+  rockchip-pm-domain fdd90000.power-management:power-controller:
+    failed to get ack on domain 'npu',
+    target_idle = 0, target_ack = 0, val=0x6
+  Kernel panic - not syncing: panic_on_set_idle set ...
+
+调用栈 rk_iommu_driver_init → platform_probe → __genpd_dev_pm_attach
+→ genpd_power_on → rockchip_pd_power → rockchip_pmu_set_idle_request，
+panic 来自 rk_iommu attach NPU 的 power domain 时强制 idle 失败。BSP
+启用 panic_on_set_idle 调试模式，PD ack 超时直接 panic 阻断启动。
+
+rk3568.dtsi 默认 ``rknpu`` 与 ``rknpu_mmu`` status = "disabled"，但
+``rk3568-evb-rpdzkj-rk809-pwm-pcie-wifi.dtsi:737-744`` 把它们 override
+为 "okay"，被 ``pro-rk3568-h.dts:11`` 顶部 ``#include`` 链命中。在 dts
+末尾补两个 ``&rknpu`` / ``&rknpu_mmu`` block 把 status 再 override 回
+"disabled"——dts 单文件内 override 按声明顺序覆盖，最后一个生效。
+
+不改 dtsi（``rp-rk3568.dts`` 等其它 dts 也 include 该 dtsi，他们的板
+若 NPU 物理可用应保留默认）。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts b/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
+--- a/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
++++ b/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
+@@ -471 +471,10 @@
+ };
++
++/* 板载 NPU 上电链未连，BSP panic_on_set_idle 模式下 PD ack 超时直接 panic */
++&rknpu {
++    status = "disabled";
++};
++
++&rknpu_mmu {
++    status = "disabled";
++};

@@ -1,0 +1,41 @@
+From: flange <flange@localhost>
+Subject: [PATCH] dt-bindings: drm_mipi_dsi: 旧名 MIPI_DSI_MODE_EOT_PACKET 兼容定义
+
+mainline linux 5.11 commit 4da4232c4cd5 把 MIPI_DSI_MODE_EOT_PACKET
+重命名为 MIPI_DSI_MODE_NO_EOT_PACKET 并反转含义：
+- 旧 flag「启用 EOT」(bit 9 = 1 → 发 EOT)
+- 新 flag「禁用 EOT」(bit 9 = 1 → 不发 EOT)
+- 默认行为也从「不发」改为「发」
+
+argon BSP linux-6.1 已沿用 mainline 新命名（include/dt-bindings/display/
+drm_mipi_dsi.h 仅有 MIPI_DSI_MODE_NO_EOT_PACKET），但 vendor BSP 的
+arch/arm64/boot/dts/rockchip/rp-rk356x/rp-lcd-*.dtsi 仍用旧名
+MIPI_DSI_MODE_EOT_PACKET。pro-rk3568-h.dts 直接 #include 了
+rp-lcd-mipi0-8-800-1280-v3.dtsi，dtc 编译期 cpp 找不到该宏定义，DTC
+报 syntax error 失败。
+
+最低入侵修复：在 dt-bindings header 末尾加兼容宏，把旧名映射成 0
+（no-op）——语义上与新默认行为一致（默认就发 EOT），与旧 dts 期望
+「启用 EOT」效果相同。
+
+不改 LCD dtsi 本身：rp-rk356x/ 下 25+ 个 LCD dtsi 都用了旧名，逐个
+替换成 MIPI_DSI_MODE_NO_EOT_PACKET 不仅工作量大，且语义需逐个分析
+（新名是「禁用」，机械替换会反转所有 panel 的 EOT 行为）。映射为 0
+更安全。
+
+drm/drm_mipi_dsi.h（driver 端）只用新名 MIPI_DSI_MODE_NO_EOT_PACKET，
+不会因兼容宏受影响——driver 编译路径与 dts 预处理路径独立。
+
+diff --git a/include/dt-bindings/display/drm_mipi_dsi.h b/include/dt-bindings/display/drm_mipi_dsi.h
+--- a/include/dt-bindings/display/drm_mipi_dsi.h
++++ b/include/dt-bindings/display/drm_mipi_dsi.h
+@@ -50,4 +50,9 @@
+ #define MIPI_CSI_FMT_RAW8		0x10
+ #define MIPI_CSI_FMT_RAW10		0x11
+
++/* Backward compat: linux 5.11 renamed and inverted this flag. Vendor BSP
++ * dts (e.g. rp-rk356x/rp-lcd-*.dtsi) still uses the old name. Map to 0
++ * so dtc preprocessing succeeds; new default behavior already sends EOT. */
++#define MIPI_DSI_MODE_EOT_PACKET	0
++
+ #endif /* __DRM_MIPI_DSI__ */

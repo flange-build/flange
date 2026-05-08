@@ -1,0 +1,28 @@
+From: flange <flange@localhost>
+Subject: [PATCH] dts: pro-rk3568-h: 修正 chosen.bootargs
+
+两处修改：
+
+1. firmware_class.path 改为 /lib/firmware
+   原值 /system/etc/firmware 是 Android 路径，标准 Linux rootfs 上不存在，
+   导致内核 firmware_class 加载器找不到任何 vendor 固件。本板 AP6275P
+   依赖该路径加载 fw_bcm43752a2_pcie_ag.bin / clm_bcm43752a2_pcie_ag.blob
+   / nvram_ap6275p.txt（由 board rootfs.+extra_firmware 部署到
+   /lib/firmware/）。
+
+2. 移除 root=PARTUUID=614e0000-0000
+   该硬编码 root 通过 U-Boot 的 bootargs_add_dtb_dtbo + env_update 把
+   extlinux APPEND 中的 root=PARTLABEL=... 覆盖掉，导致 normal/recovery
+   切换无效。删除后由 boot 分区的 extlinux 配置 APPEND 自行决定 root，
+   配合 U-Boot 在 extlinux.conf / recovery.conf 之间选择启动入口。
+   其它 console=ttyFIQ0 / earlycon / firmware_class.path 仍由 DTB 提供
+   作为板级合理默认。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts b/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
+--- a/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
++++ b/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
+@@ -110,3 +110,3 @@
+         chosen: chosen {
+-            bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rw rootwait firmware_class.path=/system/etc/firmware";
++            bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 rw rootwait firmware_class.path=/lib/firmware";
+         };

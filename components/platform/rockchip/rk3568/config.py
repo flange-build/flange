@@ -1,18 +1,34 @@
-"""RK3566 SoC 配置 -- 第二层继承"""
+"""RK3568 SoC 配置 -- 第二层继承
+
+RK3568 与 RK3566 同 die，BootROM 给出的 chip ID 都是 ``rk3568``，因此
+``mkimage_chip`` / ``trust_ini_prefix`` / u-boot ``defconfig`` 与 rk3566
+SoC 一致。
+
+唯一关键差别在 ``rkbin.ini_prefix``：
+
+- RK3566（裁剪版）走 ``RK3566MINIALL.ini`` → ``rk3566_ddr_1056MHz_v1.23.bin``
+- RK3568（完整版）走 ``RK3568MINIALL.ini`` → ``rk3568_ddr_1560MHz_v1.23.bin``
+
+把 RK3568 板挂到 rk3566 SoC 下会被强制以 1056MHz DDR 起 chip，性能损失
+约 33%。所以 RK3568 板必须用本 SoC 配置。
+"""
 
 SOC = {
     "platform": "rockchip",
-    "soc": "rk3566",
+    "soc": "rk3568",
     "arch": "aarch64",
     # vendor 是 radxa-overlays 仓库内 SoC 家族子目录名（与 Linux 主线 dts 路径
     # 约定一致），device-tree-overlay 组件用它定位 arch/arm64/boot/dts/<vendor>/
     # overlays/<stem>.dts。对 rockchip 平台恰好与 platform 同名。
     "vendor": "rockchip",
     "rkbin": {
-        "ini_prefix": "RK3566",
+        # RK3568MINIALL.ini 选 1560MHz DDR4 训练参数，对应 RK3568 完整版
+        # 硬件规格；与 rk3566 SoC 的 RK3566MINIALL.ini (1056MHz) 是关键
+        # 区分点。
+        "ini_prefix": "RK3568",
         "trust_ini_prefix": "RK3568",
         # mkimage 打包 idbloader 时塞给 BootROM 的 chip 标签。
-        # RK3566 与 RK3568 同 die，BootROM 识别为 rk3568。
+        # RK3568 BootROM 自身就识别为 rk3568。
         "mkimage_chip": "rk3568",
     },
     "bootloader": {
