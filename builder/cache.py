@@ -65,7 +65,8 @@ class BuildCache:
       - partitions 配置（boot/rootfs/image）
       - rkbin firmware git HEAD（bootloader）
       - App 源码目录递归哈希（app）
-      - rootfs base 阶段哈希 + overlay + root_password 等（rootfs）
+      - rootfs base 阶段哈希 + overlay + 账号子树（root_password /
+        disable_root_login / users / default_user / groups）等（rootfs）
     """
 
     def __init__(self, config: dict, target_base: Path = None):
@@ -305,8 +306,20 @@ class BuildCache:
         # custom_packages 列表（排序后 JSON）
         custom_packages = sorted(rootfs_cfg.get("custom_packages", []))
         h.update(json.dumps(custom_packages).encode())
-        # root 密码
-        h.update(rootfs_cfg.get("root_password", "").encode())
+        # 账号子树：root_password / disable_root_login / users / default_user
+        # / groups。任一改动须触发 rootfs 重建（旧实现仅 hash root_password，
+        # 新增用户或改 sudo 配置不会失效缓存，会产出陈旧镜像）。
+        # json.dumps(sort_keys=True) 保证 dict 键顺序无关、嵌套结构稳定。
+        account_subtree = {
+            "root_password":      rootfs_cfg.get("root_password", ""),
+            "disable_root_login": bool(rootfs_cfg.get("disable_root_login")),
+            "users":              rootfs_cfg.get("users") or {},
+            "default_user":       rootfs_cfg.get("default_user"),
+            "groups":             rootfs_cfg.get("groups") or [],
+        }
+        h.update(b"account:")
+        h.update(json.dumps(account_subtree, sort_keys=True,
+                            default=str).encode())
         # extra_firmware 配置（repo/branch/files 变化须触发重建）
         extra_fw = rootfs_cfg.get("extra_firmware", [])
         h.update(json.dumps(extra_fw, sort_keys=True, default=str).encode())

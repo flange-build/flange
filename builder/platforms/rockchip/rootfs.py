@@ -158,10 +158,8 @@ class RockchipRootfsBuilder(RootfsBuilder):
         self._install_panel_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)
 
-        # 设置 root 密码（若 config 中声明）
-        root_password = config.get("rootfs", {}).get("root_password")
-        if root_password:
-            self._set_root_password(rootfs_dir, root_password)
+        # 用户 / sudo / root 账号一体化配置（基类实现，跨平台共享）
+        self._configure_users(rootfs_dir, config)
 
 
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict):
@@ -183,50 +181,6 @@ class RockchipRootfsBuilder(RootfsBuilder):
         dest.mkdir(parents=True, exist_ok=True)
         self.docker.run_privileged(
             ["cp", "-a", f"{modules_src}/.", str(dest)])
-
-    def _set_root_password(self, rootfs_dir: Path, password: str):
-        """设置 root 账号密码，精确匹配旧 Bazel 方案：
-
-            echo "root:<password>" | chroot <rootfs> chpasswd
-
-        chpasswd 在 chroot 内执行（通过 qemu-user-static 模拟 arm64），
-        读 stdin 的 user:password 行写入 /etc/shadow。
-
-        使用 ChrootContext 确保 /proc /sys /dev 已挂载：chpasswd 通过
-        libcrypt 生成盐值时可能读 /dev/urandom，缺失时会静默失败或
-        产生无效哈希。
-
-        执行后立即读 /etc/shadow 硬校验 root 行：若密码字段仍是
-        锁定态（!/*/空）或格式非法，抛错而非静默产生不可登录镜像。
-        """
-        self._status("设置 root 密码...")
-        with ChrootContext(rootfs_dir, self.docker) as chroot:
-            chroot.run(["chpasswd"], input=f"root:{password}\n")
-        self._verify_root_password(rootfs_dir)
-
-    def _verify_root_password(self, rootfs_dir: Path):
-        """校验 /etc/shadow 中 root 行密码字段已被正确设置。"""
-        shadow = rootfs_dir / "etc" / "shadow"
-        if not shadow.exists():
-            raise RuntimeError(f"/etc/shadow 不存在: {shadow}")
-        for line in shadow.read_text().splitlines():
-            if not line.startswith("root:"):
-                continue
-            fields = line.split(":")
-            if len(fields) < 2:
-                raise RuntimeError(
-                    f"/etc/shadow root 行格式错误: {line!r}")
-            pw_hash = fields[1]
-            if pw_hash in ("", "!", "*", "!!", "x"):
-                raise RuntimeError(
-                    f"root 密码未生效：/etc/shadow 字段仍为 {pw_hash!r}，"
-                    f"chpasswd 未成功写入（检查 chroot/qemu 环境）")
-            if not pw_hash.startswith("$"):
-                raise RuntimeError(
-                    f"root 密码哈希格式非预期: {pw_hash[:40]!r}")
-            self._status(f"root 密码已写入 (hash: {pw_hash[:12]}...)")
-            return
-        raise RuntimeError("/etc/shadow 中未找到 root 账号行")
 
     def _save_base_snapshot(self, rootfs_dir: Path, cache_path: Path):
         """将 Phase 1 产物保存为 base.tar.gz 快照。"""

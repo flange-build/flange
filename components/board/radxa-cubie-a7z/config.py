@@ -89,8 +89,8 @@ BOARD = {
         "target": "radxa-cubie-a7z",
     },
     "rootfs": {
-        # root_password 已由 components/rootfs/config.py base 层设为 "1234"，
-        # 此板继承默认；如需特殊密码在此处覆盖。
+        # 账号体系沿用 components/rootfs/config.py base 层默认：root 完全
+        # 锁定 + 默认用户 flange/flange。如需开放 root 在此处覆盖。
         # ST7789V2 panel-mipi-dbi-spi 的 init 序列：构建期由
         # builder.firmware_panel 把文本源编译为 mainline 兼容的 panel.bin，
         # 落 rootfs /lib/firmware/panel-mipi-dbi-spi.bin。dest 与 DTS overlay

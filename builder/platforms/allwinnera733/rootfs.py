@@ -142,9 +142,8 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
         self._install_panel_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)
 
-        root_password = config.get("rootfs", {}).get("root_password")
-        if root_password:
-            self._set_root_password(rootfs_dir, root_password)
+        # 用户 / sudo / root 账号一体化配置（基类实现，跨平台共享）
+        self._configure_users(rootfs_dir, config)
 
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict):
         """安装 kernel modules_install 产物到 rootfs 的 /lib/modules。
@@ -163,32 +162,6 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
         dest = rootfs_dir / "lib" / "modules"
         dest.mkdir(parents=True, exist_ok=True)
         self.docker.run_privileged(["cp", "-a", f"{modules_src}/.", str(dest)])
-
-    def _set_root_password(self, rootfs_dir: Path, password: str):
-        self._status("设置 root 密码...")
-        with ChrootContext(rootfs_dir, self.docker) as chroot:
-            chroot.run(["chpasswd"], input=f"root:{password}\n")
-        self._verify_root_password(rootfs_dir)
-
-    def _verify_root_password(self, rootfs_dir: Path):
-        shadow = rootfs_dir / "etc" / "shadow"
-        if not shadow.exists():
-            raise RuntimeError(f"/etc/shadow 不存在: {shadow}")
-        for line in shadow.read_text().splitlines():
-            if not line.startswith("root:"):
-                continue
-            fields = line.split(":")
-            if len(fields) < 2:
-                raise RuntimeError(f"/etc/shadow root 行格式错误: {line!r}")
-            pw_hash = fields[1]
-            if pw_hash in ("", "!", "*", "!!", "x"):
-                raise RuntimeError(
-                    f"root 密码未生效：/etc/shadow 字段仍为 {pw_hash!r}")
-            if not pw_hash.startswith("$"):
-                raise RuntimeError(f"root 密码哈希格式非预期: {pw_hash[:40]!r}")
-            self._status(f"root 密码已写入 (hash: {pw_hash[:12]}...)")
-            return
-        raise RuntimeError("/etc/shadow 中未找到 root 账号行")
 
     def _save_base_snapshot(self, rootfs_dir: Path, cache_path: Path):
         cache_path.parent.mkdir(parents=True, exist_ok=True)

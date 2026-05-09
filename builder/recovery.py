@@ -214,8 +214,10 @@ class RecoveryBuilder(ComponentBuilder):
     def _build_phase2(self, recovery_dir: Path, config: dict):
         """安装 recovery.custom_packages 的 deb，以及 kernel modules 与 overlay。
 
-        与 normal rootfs 不同，recovery 不安装 root_password，也不安装
-        extra_firmware（recovery 维护场景不需要 Wi-Fi 等驱动固件）。
+        与 normal rootfs 不同，recovery 不安装 root_password，不调用
+        ``_configure_users``（不创建普通用户、不写 sudoers.d、不锁 root），
+        也不安装 extra_firmware（recovery 维护场景不需要 Wi-Fi 等驱动固件）。
+        recovery 仅通过 adb 通道交互运行，账号体系无意义。
         """
         self._status("Phase 2: recovery customize")
         if self.output:

@@ -42,8 +42,9 @@ BOARD = {
             },
         ],
     },
-    # rootfs.root_password 由 components/rootfs/config.py base 层默认为 "1234"，
-    # 此板无特殊需求继承默认。生产前如需强密码可在此处加 rootfs 块覆盖。
+    # 账号体系沿用 components/rootfs/config.py base 层默认：root 完全锁定
+    # (root_password=None + disable_root_login=True)，默认用户 flange/flange
+    # 入 sudo group。如需开放 root 或改用户在此处加 rootfs 块覆盖。
     # 不在 board 层覆盖 bootloader.defconfig：沿用 SoC 层 generic
     # rk3588_defconfig，走 Generic Distro Boot（extlinux.conf）流程，
     # 与 RK3566 板保持一致。

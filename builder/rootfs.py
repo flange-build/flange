@@ -5,6 +5,9 @@
   - extra_debs：下载第三方 deb 并安装
   - extra_firmware：从外部仓库拉取固件文件并写入 rootfs
   - panel_firmware：把板级 panel init 文本源编译为 panel.bin 写入 rootfs
+  - configure_users：创建 group / 普通用户 / sudo 配置 / root 密码 /
+                     disable_root_login（含 chroot 内 chpasswd / passwd -l /
+                     /etc/sudoers.d 写入 / sshd_config drop-in 写入）
 """
 
 import math
@@ -15,6 +18,11 @@ from builder.chroot import ChrootContext
 from builder.docker import BuildError
 from builder.firmware_panel import encode_file as _encode_panel_file
 from builder.partition.size import resolve_image_size
+
+
+# 写入 /etc/sudoers.d/ 时统一使用 0440，与 visudo 默认权限和 sudo 自身的
+# 严格性检查一致；权限错则 sudo 直接拒绝读该文件，提权静默失败。
+_SUDOERS_D_MODE = 0o440
 
 
 class RootfsBuilder(ComponentBuilder):
@@ -210,6 +218,262 @@ class RootfsBuilder(ComponentBuilder):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
             self._status(f"已安装 {len(fw.get('files', []))} 个固件文件 ({name})")
+
+    # ------------------------------------------------------------------
+    # 用户 / sudo / root 账号一体化配置
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _real_users(rootfs_cfg: dict) -> dict:
+        """过滤 rootfs.users 字典，去掉 resolve_conditions 在每层 dict 上
+        注入的 ``product`` / ``variant`` 伪 key（merge.py:141-142），仅保留
+        值为 dict 的真正用户条目。
+
+        与 KernelBuilder._oot_sources_config 同病同治；不过滤就会在
+        ``for name, spec in users.items()`` 循环里取到字符串 spec。
+        """
+        raw = rootfs_cfg.get("users") or {}
+        return {k: v for k, v in raw.items()
+                if k not in ("product", "variant")
+                and isinstance(v, dict)}
+
+    def _validate_account_config(self, rootfs_cfg: dict) -> None:
+        """对账号子树做编译期校验。
+
+        - default_user 非 None 时必须存在于 users 键集（过滤伪 key 后）
+        - disable_root_login=True 且 users 为空时拒绝构建（避免镜像无任何
+          普通用户可登录、串口/SSH 全失联；adb 仍可达不算"可登录"）
+        """
+        users = self._real_users(rootfs_cfg)
+        default_user = rootfs_cfg.get("default_user")
+        if default_user is not None and default_user not in users:
+            raise ValueError(
+                f"rootfs.default_user={default_user!r} 不在 rootfs.users 中；"
+                f"已声明用户: {sorted(users.keys()) or '(空)'}")
+        if rootfs_cfg.get("disable_root_login") and not users:
+            raise ValueError(
+                "rootfs.disable_root_login=True 但 rootfs.users 为空 — "
+                "镜像将无任何普通用户可登录、串口/SSH 全失联（adb 仍可达"
+                "但不构成可登录通道），请至少声明一个 user 后再启用。")
+
+    def _configure_users(self, rootfs_dir: Path, config: dict):
+        """创建 group / 用户 / 设密码 / sudo / 锁 root / sshd drop-in。
+
+        编排顺序（与 spec rootfs-user-system 对齐）：
+          1) 配置校验（_validate_account_config）
+          2) groupadd -f 全部顶层 groups（幂等）
+          3) for each user:
+               useradd -m -s <shell> -U <name>
+               usermod -aG <merged> <name>
+               chpasswd 写密码
+               若 sudo=={"nopasswd": True} 写 /etc/sudoers.d/90-<name>
+          4) 若声明 root_password 则调用 _set_root_password
+          5) 若 disable_root_login 则 passwd -l root 并写 sshd drop-in
+          6) 末尾硬校验：shadow root 行 + sshd drop-in 文件 + visudo -cf
+
+        旧 board（不写 users / default_user / disable_root_login）行为：
+        仅走 (1) (2) (4)，与本次改造前完全一致。
+        """
+        rootfs_cfg = config.get("rootfs") or {}
+        self._validate_account_config(rootfs_cfg)
+
+        groups = list(rootfs_cfg.get("groups") or [])
+        users = self._real_users(rootfs_cfg)
+        root_password = rootfs_cfg.get("root_password")
+        disable_root_login = bool(rootfs_cfg.get("disable_root_login"))
+
+        with ChrootContext(rootfs_dir, self.docker) as chroot:
+            # (2) 预创顶层 groups（即便没有 user，下游 udev rule 也可能
+            #     依赖 i2c / spi / gpio 等 group 存在）
+            if groups:
+                self._status(f"创建 group ({len(groups)} 个): "
+                             f"{', '.join(groups)}")
+                for g in groups:
+                    chroot.run(["groupadd", "-f", g])
+
+            # (3) 创建用户
+            sudoers_d_written: list[str] = []
+            for name, spec in users.items():
+                spec = spec or {}
+                shell = spec.get("shell", "/bin/bash")
+                self._status(f"创建用户 {name!r} (shell={shell})")
+                # -m 创家目录（自动从 /etc/skel 拷贝）；-U 创建同名主组；
+                # -s 显式 shell；--badname 容忍非传统命名规则
+                chroot.run(["useradd", "-m", "-U", "-s", shell, name])
+
+                merged = self._merge_user_groups(groups, spec)
+                if merged:
+                    chroot.run(["usermod", "-aG", ",".join(merged), name])
+
+                password = spec.get("password")
+                if password is not None:
+                    chroot.run(["chpasswd"], input=f"{name}:{password}\n")
+
+                sudo_spec = spec.get("sudo", True)
+                if isinstance(sudo_spec, dict) and sudo_spec.get("nopasswd"):
+                    self._write_sudoers_nopasswd(rootfs_dir, name)
+                    sudoers_d_written.append(name)
+
+            # (4) root 密码
+            if root_password:
+                self._set_root_password_in_chroot(chroot, root_password)
+
+            # (5) disable_root_login：锁 shadow + 写 sshd drop-in
+            if disable_root_login:
+                self._status("锁定 root 登录通道（passwd -l root + sshd drop-in）")
+                chroot.run(["passwd", "-l", "root"])
+                self._write_sshd_no_root_drop_in(rootfs_dir)
+
+            # (6) 硬校验
+            if root_password:
+                self._verify_root_password(rootfs_dir,
+                                          expect_locked=disable_root_login)
+            elif disable_root_login:
+                # 无 root_password 但锁了 root：shadow 字段应当以 ! 起首
+                self._verify_root_locked(rootfs_dir)
+            if disable_root_login:
+                self._verify_sshd_no_root(rootfs_dir)
+            for name in sudoers_d_written:
+                # visudo -cf 在 chroot 内对 drop-in 单文件做语法校验；语法错时
+                # 整个 sudoers.d 被 sudo 拒绝读取，提权失效。
+                chroot.run(["visudo", "-cf", f"/etc/sudoers.d/90-{name}"])
+
+    def _merge_user_groups(self, top_groups: list, spec: dict) -> list:
+        """合并 user 实际入组集合：
+          - 先取顶层 groups
+          - 若 user.sudo == False 则从中扣除 "sudo"
+          - 再追加 user.groups 中的额外项（去重保序）
+        """
+        sudo_spec = spec.get("sudo", True)
+        merged: list[str] = []
+        for g in top_groups:
+            if g == "sudo" and sudo_spec is False:
+                continue
+            merged.append(g)
+        for g in (spec.get("groups") or []):
+            if g not in merged:
+                merged.append(g)
+        return merged
+
+    def _write_sudoers_nopasswd(self, rootfs_dir: Path, name: str):
+        """写入 /etc/sudoers.d/90-<name>，单行 NOPASSWD ALL，0440 root:root。"""
+        path = rootfs_dir / "etc" / "sudoers.d" / f"90-{name}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{name} ALL=(ALL:ALL) NOPASSWD:ALL\n")
+        # docker 内文件已是 root 所有；权限设 0440
+        self.docker.run_privileged(["chmod", "0440", str(path)])
+        self.docker.run_privileged(["chown", "root:root", str(path)])
+
+    def _write_sshd_no_root_drop_in(self, rootfs_dir: Path):
+        """写入 /etc/ssh/sshd_config.d/10-flange.conf，禁 root SSH 登录。
+
+        sshd 加载顺序：/etc/ssh/sshd_config 末尾 ``Include sshd_config.d/*.conf``，
+        drop-in 设定覆盖主配置；ubuntu-base 默认即如此。
+        """
+        path = rootfs_dir / "etc" / "ssh" / "sshd_config.d" / "10-flange.conf"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# flange: disable_root_login=true 下禁止 root 通过 SSH 登录。\n"
+            "# adb 调试通道不受影响（adbd 不走 PAM）。\n"
+            "PermitRootLogin no\n"
+        )
+
+    def _set_root_password_in_chroot(self, chroot, password: str):
+        """在已打开的 chroot 上下文中设置 root 密码。
+
+        与 _set_root_password 不同：不重复打开 ChrootContext，避免
+        嵌套挂载。供 _configure_users 内部统一使用。
+        """
+        self._status("设置 root 密码...")
+        chroot.run(["chpasswd"], input=f"root:{password}\n")
+
+    def _set_root_password(self, rootfs_dir: Path, password: str):
+        """设置 root 密码（独立入口，会自开 ChrootContext）。
+
+        历史接口；新代码应优先走 _configure_users 一次性完成全部账号编排。
+        保留此方法仅为内部复用与可能的极小路径调用。
+
+        chpasswd 在 chroot 内执行（通过 qemu-user-static 模拟 arm64），
+        读 stdin 的 user:password 行写入 /etc/shadow。
+
+        使用 ChrootContext 确保 /proc /sys /dev 已挂载：chpasswd 通过
+        libcrypt 生成盐值时可能读 /dev/urandom，缺失时会静默失败或
+        产生无效哈希。
+
+        执行后立即读 /etc/shadow 硬校验 root 行：若密码字段仍是
+        锁定态（!/*/空）或格式非法，抛错而非静默产生不可登录镜像。
+        """
+        with ChrootContext(rootfs_dir, self.docker) as chroot:
+            self._set_root_password_in_chroot(chroot, password)
+        self._verify_root_password(rootfs_dir)
+
+    def _verify_root_password(self, rootfs_dir: Path,
+                               expect_locked: bool = False):
+        """校验 /etc/shadow 中 root 行密码字段。
+
+        expect_locked=True 时：允许字段以 ``!`` 起首（passwd -l 后正常状态），
+        但去掉 ``!`` 后剩余部分仍应是合法 hash（即"先设密码再锁定"路径）。
+        expect_locked=False 时：字段必须是合法 hash。
+        """
+        shadow = rootfs_dir / "etc" / "shadow"
+        if not shadow.exists():
+            raise RuntimeError(f"/etc/shadow 不存在: {shadow}")
+        for line in shadow.read_text().splitlines():
+            if not line.startswith("root:"):
+                continue
+            fields = line.split(":")
+            if len(fields) < 2:
+                raise RuntimeError(
+                    f"/etc/shadow root 行格式错误: {line!r}")
+            pw_hash = fields[1]
+            if expect_locked:
+                if not pw_hash.startswith("!"):
+                    raise RuntimeError(
+                        f"disable_root_login=True 但 /etc/shadow root 字段未锁定: "
+                        f"{pw_hash[:40]!r}")
+                inner = pw_hash.lstrip("!")
+                if not inner.startswith("$"):
+                    raise RuntimeError(
+                        f"root 密码哈希格式非预期（去 ! 前缀后）: "
+                        f"{inner[:40]!r}")
+                self._status(
+                    f"root 密码已写入并锁定 (hash: {pw_hash[:13]}...)")
+                return
+            if pw_hash in ("", "!", "*", "!!", "x"):
+                raise RuntimeError(
+                    f"root 密码未生效：/etc/shadow 字段仍为 {pw_hash!r}，"
+                    f"chpasswd 未成功写入（检查 chroot/qemu 环境）")
+            if not pw_hash.startswith("$"):
+                raise RuntimeError(
+                    f"root 密码哈希格式非预期: {pw_hash[:40]!r}")
+            self._status(f"root 密码已写入 (hash: {pw_hash[:12]}...)")
+            return
+        raise RuntimeError("/etc/shadow 中未找到 root 账号行")
+
+    def _verify_root_locked(self, rootfs_dir: Path):
+        """无 root_password 但 disable_root_login=True 时的轻量校验：
+        仅要求 root 行的密码字段以 ! 起首，对内容形式不做要求。"""
+        shadow = rootfs_dir / "etc" / "shadow"
+        for line in shadow.read_text().splitlines():
+            if line.startswith("root:"):
+                pw = line.split(":")[1] if ":" in line else ""
+                if not pw.startswith("!"):
+                    raise RuntimeError(
+                        f"disable_root_login=True 但 /etc/shadow root 字段未锁定: "
+                        f"{pw[:40]!r}")
+                return
+        raise RuntimeError("/etc/shadow 中未找到 root 账号行")
+
+    def _verify_sshd_no_root(self, rootfs_dir: Path):
+        path = rootfs_dir / "etc" / "ssh" / "sshd_config.d" / "10-flange.conf"
+        if not path.exists():
+            raise RuntimeError(
+                f"disable_root_login=True 但 sshd drop-in 缺失: {path}")
+        content = path.read_text()
+        if "PermitRootLogin no" not in content:
+            raise RuntimeError(
+                f"sshd drop-in 内容异常，缺少 'PermitRootLogin no': "
+                f"{path}")
 
     def _install_panel_firmware(self, rootfs_dir: Path, config: dict):
         """编译并安装 panel firmware（mainline panel-mipi-dbi-spi 兼容）。
