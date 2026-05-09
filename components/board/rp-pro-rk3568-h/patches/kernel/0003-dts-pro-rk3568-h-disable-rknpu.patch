@@ -1,24 +1,52 @@
 From: flange <flange@localhost>
-Subject: [PATCH] dts: pro-rk3568-h: 禁用 rknpu / rknpu_mmu
+Subject: [PATCH] dts: pro-rk3568-h: 禁用 rknpu / rknpu_mmu (NPU 物理不可用)
 
-板载实测 NPU power domain ack 寄存器不响应（很可能 die 内 NPU
-上电链未连，常见于 RK3568 板 PCB 简化版）：
+NPU enable 后 boot 触发 ``Kernel panic - not syncing: panic_on_set_idle``，
+根因是 NPU power domain 的 PD ack 寄存器物理上不响应：
 
-  rockchip-pm-domain fdd90000.power-management:power-controller:
-    failed to get ack on domain 'npu',
-    target_idle = 0, target_ack = 0, val=0x6
-  Kernel panic - not syncing: panic_on_set_idle set ...
+  rk_iommu_driver_init (rknpu_mmu) probe → __genpd_dev_pm_attach
+    → genpd_power_on → rockchip_pmu_set_idle_request(NPU PD)
+    → 等 ack 10ms 超时 → BSP pm_domains.c:636 无条件 panic
 
-调用栈 rk_iommu_driver_init → platform_probe → __genpd_dev_pm_attach
-→ genpd_power_on → rockchip_pd_power → rockchip_pmu_set_idle_request，
-panic 来自 rk_iommu attach NPU 的 power domain 时强制 idle 失败。BSP
-启用 panic_on_set_idle 调试模式，PD ack 超时直接 panic 阻断启动。
+时序证据（取自串口）::
 
-rk3568.dtsi 默认 ``rknpu`` 与 ``rknpu_mmu`` status = "disabled"，但
-``rk3568-evb-rpdzkj-rk809-pwm-pcie-wifi.dtsi:737-744`` 把它们 override
-为 "okay"，被 ``pro-rk3568-h.dts:11`` 顶部 ``#include`` 链命中。在 dts
-末尾补两个 ``&rknpu`` / ``&rknpu_mmu`` block 把 status 再 override 回
-"disabled"——dts 单文件内 override 按声明顺序覆盖，最后一个生效。
+    [    7.633] failed to get ack on domain 'npu', target_idle=0,
+                target_ack=0, val=0x6
+    [    7.633] Kernel panic - not syncing: panic_on_set_idle set ...
+    PMU dump:
+      ack  0x0060: 00000006  00000000  00000006  00000000
+
+注意此 panic 是 BSP 在 ``rockchip_pmu_set_idle_request`` error 路径硬编
+码的 ``panic("...")`` (``drivers/soc/rockchip/pm_domains.c:636``)，没有
+可关 sysctl，与历史误传的"BSP 调试模式开关"无关。
+
+== vdd_npu 电压排除实验 ==
+
+最初怀疑根因是 RK809 DCDC4 (``vdd_npu``) 上电默认 0.5V 不足以让 NPU
+power switch 释放 ack（NPU OPP 表最低 0.85V）。kernel-side 没法修——
+``rk_iommu_driver_init`` 远早于 RK809 driver probe，``machine_constraints_
+voltage`` 来不及在 NPU PD power-on 之前 set_voltage。在 U-Boot 阶段做
+了三轮 i2c 直写 RK809 BUCK4_ON_VSEL 的实验：
+
+* 0.5V (BUCK4_VSEL=0x00, RK809 reset 默认): panic, val=0x6
+* 0.9V (BUCK4_VSEL=0x20): panic, val=0x6（reg 0x9C 读回 0x20 验证电压
+  确实写入硬件）
+* 1.0V (BUCK4_VSEL=0x28): panic, val=0x6
+
+三次实验 ``val=0x6`` 完全一致，PMU dump 的 ack/idle 寄存器值也一致。
+这是确凿证据：**电压不是根因**。NPU PD ack 是 die 内 NPU 子系统 power
+switch 状态机的反馈，与 vdd_npu rail 是物理上不同的 signal——die 内
+NPU power switch 损坏或 PCB 上电链未连时，ack 永远不来。
+
+== 结论 ==
+
+这块板（rp-pro-rk3568-h）的 NPU 物理不可用，无法通过软件 enable。常
+见于 RK3568 PCB 简化版没把 NPU 上电链连出来，或 die 内 NPU 上电模块
+失效（不影响 SoC 其它功能）。
+
+dts 末尾把 ``rknpu`` / ``rknpu_mmu`` override 为 ``status = "disabled"``，
+让 rknpu_mmu 不被 probe，避免 boot panic。如果将来换硬件确认 NPU 物理
+可用，再移除本 patch。
 
 不改 dtsi（``rp-rk3568.dts`` 等其它 dts 也 include 该 dtsi，他们的板
 若 NPU 物理可用应保留默认）。
@@ -26,10 +54,11 @@ rk3568.dtsi 默认 ``rknpu`` 与 ``rknpu_mmu`` status = "disabled"，但
 diff --git a/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts b/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
 --- a/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
 +++ b/arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts
-@@ -471 +471,10 @@
+@@ -471 +471,11 @@
  };
 +
-+/* 板载 NPU 上电链未连，BSP panic_on_set_idle 模式下 PD ack 超时直接 panic */
++/* 板载 NPU 物理不可用 (PD ack 永不返回，三轮 vdd_npu 电压实验排除电
++ * 压因素，详见 commit message)，强行 enable 会触发 BSP 硬编码 panic。 */
 +&rknpu {
 +    status = "disabled";
 +};
