@@ -78,8 +78,19 @@ class FlashPartition:
 
 @dataclass
 class PreFlashConfig:
-    """刷写前准备操作配置。"""
-    download_boot: str = ""  # miniloader 路径（相对于 target_dir）
+    """刷写前准备操作配置。
+
+    各平台共享字段：
+    - ``download_boot``：第一阶段需推送到 SoC 的引导镜像（rockchip 的
+      ``miniloader.bin``、amlogic 的 ``u-boot.bin.sd.bin``）路径，相对于
+      ``target_dir``。
+    - ``usb_vid`` / ``usb_pid``：MaskROM 阶段 host 端用来识别 SoC 的 USB
+      VID/PID（小写 hex 字符串，例如 amlogic = ``"1b8e"`` / ``"c003"``）。
+      为兼容现有 flash-config.json，默认为空字符串。
+    """
+    download_boot: str = ""  # 第一阶段引导镜像路径（相对于 target_dir）
+    usb_vid: str = ""        # MaskROM USB Vendor ID，hex 不带 0x
+    usb_pid: str = ""        # MaskROM USB Product ID，hex 不带 0x
 
 
 @dataclass
@@ -352,10 +363,217 @@ class AllwinnerA733FlashStrategy(FlashStrategy):
         return m
 
 
+class AmlogicFlashStrategy(FlashStrategy):
+    """Amlogic 刷写策略 — 两段式 USB Burning。
+
+    流程（详见 design.md Decision 5）：
+
+    pre_flash 阶段：板上按住 KEY1 + USB-C 上电 → 设备以 MaskROM 模式枚举
+    （USB ``1b8e:c003``）。host 端调 ``boot-g12.py``（pyamlboot 提供的
+    G12A/G12B/SM1 系列入口脚本，VIM3L 的 S905D3 属 SM1，复用 G12 协议）
+    把 ``bootloader/u-boot.bin.sd.bin`` 推到 SoC DDR；BL2 在 SRAM 解密执行
+    → BL31 → u-boot proper；u-boot 启动后自动进入 fastboot gadget 模式
+    （由 mainline ``khadas-vim3l_defconfig`` + ``flange_fastboot.config``
+    fragment 启用）。
+
+    flash 主流程：host 端 ``fastboot`` 命令依次写各分区，``bootloader``
+    分区由 u-boot 端 ``CONFIG_FASTBOOT_FLASH_MMC_DEV=1`` 指向 eMMC hw
+    boot0 分区，offset 0x200；其他分区写 user area GPT。最后
+    ``fastboot reboot``。
+
+    host 端依赖：
+    - ``pyamlboot``（pip install pyamlboot 或 git clone superna9999/pyamlboot），
+      实际入口脚本 ``boot-g12.py``（不是 ``python3 -m pyamlboot.pyamlboot``）
+    - ``android-tools-fastboot``（Ubuntu apt 包）
+    """
+
+    # MaskROM 模式 USB VID/PID（Amlogic 通用 BootROM 描述符）
+    MASKROM_VID = "1b8e"
+    MASKROM_PID = "c003"
+
+    # pyamlboot 入口脚本名（由 pip install pyamlboot 暴露到 PATH，或在
+    # 本地 git clone 后位于 repo 根）。SM1 family 的 S905D3 复用 G12
+    # 协议（同代加密 v3），与 G12A/G12B/S905X3 共用。
+    PYAMLBOOT_ENTRY = "boot-g12.py"
+
+    # 进入 fastboot 模式后，host 端等待设备出现的超时（秒）。与
+    # RockchipFlashStrategy.wait_for_device 默认 30s 对齐。
+    FASTBOOT_WAIT_TIMEOUT = 30
+
+    def find_tool(self, project_dir: Path) -> Path:
+        """查找 host 端 fastboot 工具。
+
+        amlogic 主流程靠 host fastboot；pyamlboot 在 pre_flash 单独走
+        ``shutil.which("boot-g12.py")``，不进 ``find_tool`` 路径。
+        """
+        from shutil import which
+        fastboot = which("fastboot")
+        if not fastboot:
+            raise FlashError(
+                "未找到 fastboot 命令。请安装：\n"
+                "  Ubuntu: sudo apt install android-tools-fastboot\n"
+                "  macOS:  brew install android-platform-tools"
+            )
+        return Path(fastboot)
+
+    def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
+        """检测 fastboot 设备（pre_flash 之后才会出现）。
+
+        pre_flash 之前设备处于 MaskROM 模式（``1b8e:c003``），不被
+        ``fastboot devices`` 识别；调用方一般直接走 pre_flash，跳过
+        ``wait_for_device``。本方法保留作为 fastboot 模式下的探测。
+        """
+        try:
+            result = subprocess.run(
+                [str(tool), "devices"],
+                capture_output=True, text=True, timeout=5,
+            )
+            output = result.stdout.strip()
+            if output and "fastboot" in output.lower():
+                return DeviceInfo("amlogic", "fastboot", "Amlogic fastboot 设备")
+            # `fastboot devices` 在有设备时仅输出 `<serial>\tfastboot`；
+            # 简单判定：非空 stdout 视为有设备。
+            if output:
+                return DeviceInfo("amlogic", "fastboot", "Amlogic fastboot 设备")
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+        return None
+
+    def _wait_maskrom_device(self, timeout: int = 30) -> None:
+        """等待 ``lsusb`` 列出 MaskROM 设备 ``1b8e:c003``。
+
+        Linux host 用 ``lsusb`` 探测；macOS host 走 ``system_profiler
+        SPUSBDataType``。两者都失败时仅打印提示，不阻塞 —— pyamlboot
+        本身会在没有设备时报错，让其错误冒泡更直观。
+        """
+        _info(f"等待 MaskROM 设备（USB {self.MASKROM_VID}:{self.MASKROM_PID}）...")
+        deadline = time.time() + timeout
+        vid_pid = f"{self.MASKROM_VID}:{self.MASKROM_PID}"
+        while time.time() < deadline:
+            try:
+                result = subprocess.run(
+                    ["lsusb"], capture_output=True, text=True, timeout=3,
+                )
+                if vid_pid.lower() in result.stdout.lower():
+                    _ok("MaskROM 设备已就绪")
+                    return
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                # 没有 lsusb（macOS）或调用失败时直接放行，让 pyamlboot 报错。
+                _info("无法用 lsusb 探测，直接尝试 pyamlboot")
+                return
+            time.sleep(1)
+        _warn(f"等待 MaskROM 设备超时（{timeout}s），仍尝试 pyamlboot")
+
+    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
+                  device: Optional["DeviceInfo"] = None):
+        """调 pyamlboot 把 u-boot 推送到 SoC DDR。"""
+        from shutil import which
+
+        if not config.pre_flash.download_boot:
+            raise FlashError(
+                "amlogic pre_flash 缺少 download_boot 字段；请检查 flash-config.json"
+            )
+        boot_image = target_dir / config.pre_flash.download_boot
+        if not boot_image.exists():
+            raise FlashError(f"未找到引导镜像: {boot_image}")
+
+        pyamlboot = which(self.PYAMLBOOT_ENTRY)
+        if not pyamlboot:
+            raise FlashError(
+                f"未找到 {self.PYAMLBOOT_ENTRY}。请安装：\n"
+                "  pip install pyamlboot\n"
+                "  或 git clone https://github.com/superna9999/pyamlboot.git\n"
+                "    并把仓库根目录加入 PATH"
+            )
+
+        # MaskROM 设备探测（best-effort）
+        self._wait_maskrom_device(timeout=30)
+
+        _info(f"上传 u-boot 到 SoC DDR（{boot_image.name}）...")
+        # boot-g12.py 通常需要 root 权限访问 USB raw endpoint；
+        # 若用户已配置 udev rule，sudo 可省略。这里默认带 sudo 与
+        # Rockchip upgrade_tool 一致心智（rockchip 也需要 udev 或 sudo）。
+        subprocess.run(
+            ["sudo", str(pyamlboot), str(boot_image)],
+            check=True,
+        )
+        # u-boot 已进 DDR；提示用户松开 KEY1，避免 fastboot reboot 后再次
+        # 进 MaskROM（按住 KEY1 状态下 BootROM 优先尝试 USB Burning）。
+        _info("u-boot 已推入 DDR — 现在可松开 KEY1，等待 fastboot 设备枚举...")
+        # u-boot 主线 USB 枚举需要 ~1.5s，留出余量到 3s。
+        time.sleep(3)
+        _ok("u-boot 已推送，等待 fastboot 设备")
+
+    def _run_fastboot(self, tool: Path, *args: str) -> None:
+        """执行 fastboot 子命令，带 stdout/stderr 透传。"""
+        cmd = [str(tool), *args]
+        subprocess.run(cmd, check=True)
+
+    def write_partition(self, tool: Path, offset: int, image: Path):
+        """通过 fastboot flash <name> <image> 写入分区。
+
+        amlogic 的分区路由由 u-boot 端 ``CONFIG_FASTBOOT_GPT_NAME`` +
+        ``CONFIG_FASTBOOT_FLASH_MMC_DEV=1`` 决定，不依赖 host 端 offset。
+        分区名通过 ``image`` 文件路径反推 —— 在 ``flash_all`` 主流程中
+        ``FlashExecutor`` 已按分区名调用，但抽象基类签名只给 offset，故
+        这里从镜像路径反推分区名。
+        """
+        # 从镜像路径反推分区名：bootloader/u-boot.bin.sd.bin → bootloader,
+        # boot/boot.img → boot, recovery/recovery.img → recovery,
+        # rootfs/rootfs.img → rootfs。
+        parent_name = image.parent.name
+        partition_name = "bootloader" if parent_name == "bootloader" else parent_name
+
+        try:
+            size_mb = image.stat().st_size / (1024 * 1024)
+            size_str = f", {size_mb:.1f}MB"
+        except OSError:
+            size_str = ""
+        _info(f"fastboot flash {partition_name} ({image.name}{size_str})...")
+        self._run_fastboot(tool, "flash", partition_name, str(image))
+        _ok(f"{partition_name}")
+
+    def reboot(self, tool: Path):
+        """通过 fastboot reboot 触发 SoC 重启。"""
+        _info("fastboot reboot...")
+        self._run_fastboot(tool, "reboot")
+
+    def partition_image_map(self, config: dict) -> dict[str, str]:
+        """amlogic 平台分区 → 镜像路径映射。
+
+        ``bootloader`` 指向 FIP 封装的 SD/eMMC 启动镜像
+        （``u-boot.bin.sd.bin``），由 fastboot 写入 eMMC hw boot0 分区
+        （u-boot ``CONFIG_FASTBOOT_FLASH_MMC_DEV=1`` 路由）。
+        """
+        m = {
+            "bootloader": "bootloader/u-boot.bin.sd.bin",
+            "boot": "boot/boot.img",
+            "rootfs": "rootfs/rootfs.img",
+        }
+        if (config.get("recovery") or {}).get("enabled", False):
+            m["recovery"] = "recovery/recovery.img"
+        return m
+
+    def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
+        """生成 amlogic 平台的 pre_flash 配置。
+
+        - ``download_boot``：FIP 封装的 SD/eMMC 启动镜像，pyamlboot 把它
+          推到 SoC DDR 后即可启动到 fastboot 模式。
+        - ``usb_vid`` / ``usb_pid``：amlogic MaskROM 通用 USB 描述符
+          ``1b8e:c003``。
+        """
+        return PreFlashConfig(
+            download_boot="bootloader/u-boot.bin.sd.bin",
+            usb_vid=self.MASKROM_VID,
+            usb_pid=self.MASKROM_PID,
+        )
+
+
 # 策略注册表
 _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
     "rockchip": RockchipFlashStrategy,
     "allwinnera733": AllwinnerA733FlashStrategy,
+    "amlogic": AmlogicFlashStrategy,
 }
 
 

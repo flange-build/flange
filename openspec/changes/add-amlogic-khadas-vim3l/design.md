@@ -137,7 +137,10 @@ eMMC user area (GPT, sector size 512B)：
 
 ```
 pre_flash 阶段 (pyamlboot 推 u-boot 到 DDR):
-  python3 -m pyamlboot.pyamlboot khadas-vim3l --img target/u-boot.bin
+  # 注：早期 brief 假设 `python3 -m pyamlboot.pyamlboot khadas-vim3l --img ...` —
+  # 实际 pyamlboot 入口是 boot-g12.py（覆盖 G12A/G12B/SM1 含 S905D3），无 board
+  # 参数（board 信息已隐含在 FIP 板级打包的 binary 里）。详见 tasks.md §7.2。
+  sudo boot-g12.py target/bootloader/u-boot.bin.sd.bin
   → SoC 接收完整 u-boot 镜像，bl2 在 SRAM 解密执行 → BL31 → u-boot proper
   → u-boot 自动进入 fastboot 模式（u-boot 内置 USB gadget）
 

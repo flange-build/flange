@@ -8,6 +8,15 @@
 #
 # 目标格式: <board>-<product>-<variant>
 #   例: radxa-zero3w-default-release
+#
+# ── host 端刷写依赖（按平台）─────────────────────────────────────────────
+# Rockchip:      tools/linux/upgrade_tool/upgrade_tool（仓库自带，无须安装）
+# Allwinner:     dd（系统自带；SD 卡 dd 模式）
+# Amlogic:       pip install pyamlboot                  # 提供 boot-g12.py 入口
+#                sudo apt install android-tools-fastboot # 提供 fastboot 命令
+#                （macOS: brew install android-platform-tools）
+#                pyamlboot 详见 https://github.com/superna9999/pyamlboot
+# ────────────────────────────────────────────────────────────────────────
 
 # --- 项目根目录 ---
 if [[ -n "${BASH_SOURCE[0]}" ]]; then
