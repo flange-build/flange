@@ -22,22 +22,22 @@
 
 ## 4. bootloader builder（FIP 打包流程）
 
-- [ ] 4.1 在 `builder/platforms/amlogic/bootloader.py` 实现 `prepare_source()`：通过 `SourceManager` ensure `repos.u-boot` 与 `repos.amlogic-boot-fip` 两个仓库到 `.build/sources/`
-- [ ] 4.2 实现 `apply_patches()`：把 `components/platform/amlogic/patches/bootloader/` 与 `components/platform/amlogic/s905d3/patches/bootloader/` 的 patch 顺序 apply 到 u-boot 源码；写入 `flange-fastboot.config` defconfig fragment（含 fastboot 配置项）到 SoC 层 patches 目录或独立 fragment 目录
-- [ ] 4.3 实现 `compile()`：在 Docker 容器内 `make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- <defconfig_fragments_合并>` + `make`，产出 `u-boot.bin`。defconfig fragment 合并机制参考 a733 平台（`make defconfig bsp_defconfig radxa.config ...`）
-- [ ] 4.4 实现 FIP 打包阶段：在 Docker 容器内 `cd <amlogic-boot-fip_src> && ./build-fip.sh khadas-vim3l <u-boot.bin> <out>`；该步骤产出 `<out>/u-boot.bin`（FIP 镜像，已含 BL2 SIG / BL30 加密 / BL31 加密 / BL33 加密 / DDR fw 嵌入）
-- [ ] 4.5 实现 SD-bootable 派生：`<amlogic-boot-fip_src>/khadas-vim3l/aml_encrypt_g12a --bootsd --infile <out>/u-boot.bin --output <out>/u-boot.bin.sd.bin`；可选派生 USB BL2/TPL（`--bootusb`，pyamlboot 推送用）
-- [ ] 4.6 实现 `collect_artifacts()`：把 `u-boot.bin.sd.bin` 与（可选）`u-boot.bin.usb.bl2` / `u-boot.bin.usb.tpl` 收集到 target 目录；ARTIFACT_NAMES `(bootloader, fip)` 映射到 `u-boot.bin.sd.bin`
-- [ ] 4.7 单元测试 mock build-fip.sh 与 aml_encrypt_g12a 调用，验证命令行参数构造正确（含 board_dir 来自 board config `bootloader.fip_board_dir`）
+- [x] 4.1 在 `builder/platforms/amlogic/bootloader.py` 实现源码准备：u-boot 走 `ComponentBuilder.build()` 既有的 `source.ensure(component, config)` 流程（识别 `bootloader.from_repo="u-boot"`），fip blobs 在 compile 阶段通过 `source.ensure_extra("amlogic-boot-fip", {"from_repo": "amlogic-boot-fip"}, config=config)` 路由到同一份命名仓库缓存，避免重复 clone
+- [x] 4.2 实现 fragment 写入：`AmlogicBootloaderBuilder.configure()` 中 `_stage_fragments()` 按 board → SoC → platform 顺序在 `components/.../patches/bootloader/` 搜索 `*.config` 名（与 `bootloader.defconfig` list 中第二项一致），找到则 `shutil.copy2` 到 `<u-boot_src>/configs/`；缺失时 fail-fast 报 FileNotFoundError。`flange_fastboot.config` 已落地 `components/platform/amlogic/s905d3/patches/bootloader/`
+- [x] 4.3 实现 `configure()`：按 SoC config 中 `bootloader.defconfig` list 顺序逐个 `make <name>`（先 base defconfig，再 fragment），u-boot Kbuild 的 `%.config` 规则自动合并；`compile()` 第一段 `make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-` 产出 `u-boot.bin`
+- [x] 4.4 实现 FIP 打包：`compile()` 第二段 `bash <fip_src>/build-fip.sh <board_dir> <u-boot.bin> <src_dir>/fip/<board_dir>/`；`board_dir` 从 `bootloader.fip_board_dir` 读取（缺失报含字段名的 KeyError），产出 `<out>/u-boot.bin` FIP 镜像
+- [x] 4.5 实现 SD-bootable 与 USB BL2/TPL 派生：第三/四段调 `<fip_src>/<board_dir>/<fip_tool> --bootsd --infile <fip>/u-boot.bin --output .../u-boot.bin.sd.bin`；`--bootusb` 派生 `u-boot.bin.usb.bl2` / `u-boot.bin.usb.tpl`（同次 `--bootusb` 一次产出两个文件，输出名以 `.usb` 为前缀）
+- [x] 4.6 实现 `collect()`：返回 `{"fip": ..., "usb_bl2": ..., "usb_tpl": ...}` 三个产物路径，与 `__init__.py` 内 `ARTIFACT_NAMES` 三个 `(bootloader, *)` 键 `u-boot.bin.sd.bin` / `u-boot.bin.usb.bl2` / `u-boot.bin.usb.tpl` 对位
+- [x] 4.7 单元测试 `tests/builder/test_amlogic_bootloader.py`（7 tests，全绿）：覆盖 fragment staging / 缺失 fragment fail-fast / 单字符串 defconfig 兼容 / build-fip.sh 与 aml_encrypt_g12a 命令行参数（含 board_dir 来自 board config、fip_tool 来自 SoC config）/ 缺 fip_board_dir 报 KeyError / collect 三个产物路径正确
 
 ## 5. kernel / boot / rootfs / recovery / image builders
 
-- [ ] 5.1 `kernel.py`：mainline 6.12 kernel 编译，产出 `Image` + `arch/arm64/boot/dts/amlogic/meson-sm1-khadas-vim3l.dtb` + modules tarball
-- [ ] 5.2 `boot.py`：构造 ext4 boot 分区镜像，含 `extlinux/extlinux.conf` + `Image` + `dtbs/amlogic/meson-sm1-khadas-vim3l.dtb`；extlinux APPEND 拼装 `boot.kernel_args`
-- [ ] 5.3 `rootfs.py`：与 Rockchip / Allwinner 同形，从 `rootfs.url`（ubuntu-base 24.04 arm64 tarball）展开 + apt 包 + overlay；处理 `rootfs.+extra_firmware` 三件套部署到 `/lib/firmware/brcm/`
-- [ ] 5.4 `recovery.py`：与现有 recovery 同形，复用 `recovery-boot` capability
-- [ ] 5.5 `image.py`：构造完整 raw 镜像，user area GPT + 各分区数据；hw boot0 不写在镜像里（由 flash 阶段单独处理）
-- [ ] 5.6 单元测试覆盖各 builder 的命令行构造与产物名映射
+- [x] 5.1 `kernel.py`：实现 `AmlogicKernelBuilder`（mainline 6.12 LTS arm64）。configure 走 case_insensitive_fix fragment + defconfig（兼容单字符串与 list 合并）；compile 编译 Image + amlogic/<dts>.dtb + overlay + modules，KCFLAGS=-Wno-error 透传；OOT 模块接口保留（首版无声明）；collect 输出 image / dtb / modules（+ overlay 时 dtbos）
+- [x] 5.2 `boot.py`：实现 `AmlogicBootBuilder`，`DTB_VENDOR_DIR="dtbs/amlogic"`；从 kernel 产物 + config 拼装 ext4 boot.img（含 extlinux.conf + Image + dtb + 三源 overlay 平铺 + 可选 recovery.conf）；APPEND 通过 LabelSpec 注入 PARTLABEL=rootfs + boot.kernel_args（含 ttyAML0 console）；mke2fs -L boot 与 fstab LABEL=boot 对齐
+- [x] 5.3 `rootfs.py`：实现 `AmlogicRootfsBuilder`，与 rockchip / a733 同形：两阶段缓存（base / customize）+ kernel modules 安装 + extra_debs / extra_firmware / panel_firmware（基类）+ apply_overlays + _configure_users；fstab LABEL=rootfs / LABEL=boot；首版无 GPU firmware 部署（panthor mali_csffw.bin 是 Non-Goal）
+- [x] 5.4 `recovery.py`：已在任务 2.2 用 3 行 shim 完成（继承 RecoveryBuilder），复用 LABEL=boot fstab 行为
+- [x] 5.5 `image.py`：实现 `AmlogicImageBuilder`；`PARTITION_IMAGES` 仅含 boot/rootfs/recovery（**不含 bootloader** —— Amlogic eMMC 启动靠 hw boot0，bootloader 由 flash 阶段单独写 fastboot bootloader 目标，不进 raw.img）；GPT 起点 0x40，rootfs 设固定 PARTUUID
+- [x] 5.6 单元测试新增 `tests/platforms/{__init__.py,test_amlogic_kernel.py,test_amlogic_boot.py,test_amlogic_rootfs.py,test_amlogic_image.py}`（25 tests，全绿）：覆盖 builder 实例化、make / parted / mke2fs / dd 命令行构造、collect 返回 dict、关键差异点（DTB_VENDOR_DIR=dtbs/amlogic、PARTITION_IMAGES 不含 bootloader、fstab LABEL）
 
 ## 6. board khadas-vim3l 配置
 
@@ -50,19 +50,19 @@
 
 ## 7. AmlogicFlashStrategy
 
-- [ ] 7.1 在 `builder/flash.py` 添加 `AmlogicFlashStrategy(FlashStrategy)` 类
-- [ ] 7.2 实现 `pre_flash(tool, target_dir, config, device)`：调 `pyamlboot` 推 `target_dir/bootloader/u-boot.bin.sd.bin` 到 SoC DDR；超时与重试策略与现有 RockchipFlashStrategy 对齐
-- [ ] 7.3 实现 flash 主流程：等待 fastboot 设备出现 → `fastboot flash bootloader/boot/recovery/rootfs` → `fastboot reboot`
-- [ ] 7.4 实现 `generate_pre_flash_config(config)`：返回 `PreFlashConfig` 含 download_boot 路径与 USB vid/pid `1b8e:c003`
-- [ ] 7.5 注册 `_FLASH_STRATEGIES["amlogic"] = AmlogicFlashStrategy`
-- [ ] 7.6 单元测试 mock pyamlboot 与 fastboot 子进程，验证命令行构造与错误路径
-- [ ] 7.7 在 envsetup.sh 或 docs 中记录 host 端依赖：`pip install pyamlboot` 与 `apt install android-tools-fastboot`
+- [x] 7.1 在 `builder/flash.py` 添加 `AmlogicFlashStrategy(FlashStrategy)` 类 — 完整实现 `find_tool` (host fastboot)、`detect_device` (`fastboot devices`)、`pre_flash`、`write_partition` (走 `fastboot flash <name> <image>`)、`reboot` (`fastboot reboot`)、`partition_image_map`、`generate_pre_flash_config`，docstring 中文。
+- [x] 7.2 实现 `pre_flash(tool, target_dir, config, device)`：先 `lsusb` best-effort 探测 MaskROM `1b8e:c003`（30s 超时，与 Rockchip `wait_for_device` 一致），找到后调 `sudo boot-g12.py <download_boot>` 推送 u-boot 到 DDR；推送后 `time.sleep(3)` 等 u-boot 切到 fastboot gadget。**实际 pyamlboot 入口是 `boot-g12.py`（不是 brief 中的 `python3 -m pyamlboot.pyamlboot khadas-vim3l --img ...`）**：pyamlboot 仓库提供 `boot-g12.py` 与 `boot.py` 两个独立脚本，前者覆盖 G12A/G12B/SM1（含 S905D3），命令形式 `boot-g12.py <binary>`，无 board 参数。design.md Decision 5 与 spec scenario 中的命令样式按真实接口可读为：pyamlboot 推 SD-bootable u-boot 到 DDR，board 信息隐含在 binary 里（FIP blobs 已板级打包）。
+- [x] 7.3 实现 flash 主流程：复用现有 `FlashExecutor.flash_all`（pre_flash → 逐分区 `write_partition` → `reboot`）。`write_partition` 从 `image.parent.name` 反推分区名（bootloader/boot/recovery/rootfs），命令形如 `fastboot flash <name> <image>`，分区路由由 u-boot 端 `CONFIG_FASTBOOT_FLASH_MMC_DEV=1` 决定（bootloader → eMMC hw boot0 offset 0x200，其他 → user area GPT）。
+- [x] 7.4 实现 `generate_pre_flash_config(config)`：返回 `PreFlashConfig(download_boot="bootloader/u-boot.bin.sd.bin", usb_vid="1b8e", usb_pid="c003")`。**扩展 `PreFlashConfig` dataclass**：新增 `usb_vid` / `usb_pid` 字段（默认 ""，向后兼容现有 rockchip / a733 flash-config.json）。
+- [x] 7.5 注册 `_FLASH_STRATEGIES["amlogic"] = AmlogicFlashStrategy`，与 rockchip / allwinnera733 同级。验收命令 `get_flash_strategy('amlogic')` 返回 `AmlogicFlashStrategy` 实例 ✓。
+- [x] 7.6 `tests/builder/test_amlogic_flash.py` 24 个测试全绿，覆盖：注册表（含 4 个用例确保 rockchip/a733 不回归）、`generate_pre_flash_config` 字段、`find_tool` 缺 fastboot 报错、`pre_flash` mock subprocess 验证 boot-g12.py 命令构造 + 缺镜像/缺 pyamlboot/缺 download_boot 三条错误路径、`write_partition` 验证 bootloader/boot/rootfs/recovery 四种分区命令、`reboot` 命令、`partition_image_map`（recovery 开/关）、`detect_device`（无设备/有设备/超时）。`tests/builder/test_flash.py` 与 `tests/builder/test_recovery_flash.py` 全绿无回归。
+- [x] 7.7 在 `envsetup.sh` 头部注释块新增"host 端刷写依赖"段，按平台列出依赖：rockchip 的 `upgrade_tool`（仓库自带）、allwinner 的 `dd`（系统自带）、amlogic 的 `pip install pyamlboot` + `sudo apt install android-tools-fastboot`（macOS 的 `brew install android-platform-tools`），含 pyamlboot 仓库链接。
 
 ## 8. 知识库与文档
 
-- [ ] 8.1 创建 `wiki/boards/khadas-vim3l.md`，参考 `wiki/boards/radxa-rock5b.md` 结构：SoC、存储、串口、首版验证范围、KEY1 进 MaskROM 操作步骤
-- [ ] 8.2 在 `wiki/boards/index.md` 增加 khadas-vim3l 索引项
-- [ ] 8.3 在 `wiki/platforms/` 创建 `amlogic.md`（若该目录约定存在），简述 FIP 打包链路与 fip blobs 来源
+- [x] 8.1 创建 `wiki/boards/khadas-vim3l.md`，参考 `wiki/boards/radxa-rock5b.md` 结构：SoC、存储、串口、首版验证范围、KEY1 进 MaskROM 操作步骤 — **已完成**：frontmatter 含 sources（board config + overlay + 平台/SoC config + 本变更 design.md）+ related（[[amlogic 平台]] / [[FlashStrategy 抽象]] / [[USB 线刷协议]] / [[新增板级支持]]），TL;DR 段写明首版范围（eMMC/串口/GbE/SSH/WiFi 关联/BT scan）与 Non-Goals（GPU/HDMI/VPU/NPU/USB OTG/SD 卡启动），含 eMMC 布局图（hw boot0 + user area GPT 三分区）、KEY1 → MaskROM → pyamlboot → fastboot 完整 ASCII 流程图、WiFi/BT 三件套来源表（firmware-brcm80211 通用固件 + fenix `_ap6398s` rename 板级 NVRAM/patchram，附"为何不用 LibreELEC/wlan-firmware"说明）、板私有 overlay 与 bluetooth-vim3l.service、实测 TODO 占位（启动时间 / WiFi 关联 / BT scan / Decision 6 fallback 触发条件）
+- [x] 8.2 在 `wiki/boards/index.md` 增加 khadas-vim3l 索引项 — **已完成**：按"SoC + 关键模块 + status"既有格式追加 `[[khadas-vim3l]] — S905D3（首颗 Amlogic 板，AP6398S WiFi/BT，status: wip）`，updated 同步到 2026-05-10
+- [x] 8.3 在 `wiki/platforms/` 创建 `amlogic.md`（若该目录约定存在），简述 FIP 打包链路与 fip blobs 来源 — **已完成**：目录约定存在（既有 `rockchip-平台.md` / `allwinnera733-平台.md`），按命名约定创建 `wiki/platforms/amlogic-平台.md`。覆盖：vendor-wide 命名理由（Decision 1/8）、FIP 打包链路 ASCII 图（u-boot → build-fip.sh → aml_encrypt_g12a --bootsd → u-boot.bin.sd.bin）、SoC 层 vs board 层字段分层（fip_family_inc / fip_tool 在 SoC 层、fip_board_dir 在 board 层）、与 Rockchip/A733 三家平台对照表（第一阶段 blob / 拼装工具 / 写入位置 / 主刷写工具）、AmlogicFlashStrategy 两段式 pseudo code、5 条易踩坑（fastboot fragment 不默认开 / `aml_encrypt_sm1` 不存在 / x86_64 二进制限制 / KEY1 松开时序 / SD 卡优先级）。同步更新 `wiki/platforms/index.md` 加 amlogic 平台条目并写明刷写工具链
 
 ## 9. 构建验证（容器内）
 

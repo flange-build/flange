@@ -6,6 +6,14 @@
 
 ---
 
+## [2026-05-10] sync | amlogic 平台 + Khadas VIM3L 首板（add-amlogic-khadas-vim3l 实施中）
+
+- `wiki/boards/khadas-vim3l.md`（新建）— S905D3 (SM1) 第一块板，硬件规格 + 技术栈 + MaskROM (KEY1 + USB-C, 1b8e:c003) 操作步骤 + 刷写流程图（pyamlboot → fastboot 两段式）+ eMMC 布局（hw boot0 + user area GPT 三分区）+ Wi-Fi/BT 三件套（firmware-brcm80211 + fenix `_ap6398s` 板级覆盖）+ 首版验收范围 + Non-Goals + 实测 TODO
+- `wiki/platforms/amlogic-平台.md`（新建）— vendor-wide 平台（对标 rockchip / allwinnera733）；FIP 打包链路（mainline u-boot v2024.10 + LibreELEC/amlogic-boot-fip 仓库内 board 子目录 + `aml_encrypt_g12a` 工具，SM1 复用 G12A 工具链）；boot0 hw 分区与 user area GPT 区分
+- `wiki/boards/index.md` / `wiki/platforms/index.md` — 加 khadas-vim3l / amlogic 索引；rockchip 条目补全为 RK3566 / RK3568 / RK3582 / RK3588 / RK3588S
+- 关联 change：`openspec/changes/add-amlogic-khadas-vim3l/`（实施中）
+- 关联 spec：`amlogic-platform`（新 capability）+ `amlogic-flash`（新 capability）
+
 ## [2026-05-10] sync | rootfs 用户/sudo 体系（rootfs-user-system change 落地）
 
 - `wiki/components/rootfs-构建器.md` — sources 追加 `components/rootfs/config.py` 与三个 overlay bashrc；关键设计要点把"`root_password`"段重写为"用户与 sudo 体系"（schema、sudo 三态、`disable_root_login` 与 adb 共存、bash-completion 进 base 包、ssh 与 adb shell 体验对齐）；关键代码位置加 `_configure_users`；易踩坑追加两条（disable_root_login 不锁 adb、账号子树进 cache hash）；再补一条 adb shell 体验依赖 `/etc/bash.bashrc`（POSIX-bash 不读 `~/.bashrc`、`HOME` 等环境补齐放该文件、winsize 0×0 时硬塞 200×50）

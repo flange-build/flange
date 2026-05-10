@@ -1,7 +1,7 @@
 ---
 title: 板级索引
 type: index
-updated: 2026-05-09
+updated: 2026-05-10
 ---
 
 # 板级索引
@@ -15,3 +15,4 @@ updated: 2026-05-09
 - [[rp-pro-rk3568-h]] — RK3568（首颗真 RK3568，AP6275P PCIe WiFi6/BT5.2，status: wip）
 - [[radxa-cubie-a7z]] — A733（status: wip）
 - [[radxa-rock5b]] — RK3588（首颗 RK3588 板，status: wip）
+- [[khadas-vim3l]] — S905D3（首颗 Amlogic 板，AP6398S WiFi/BT，status: wip）
