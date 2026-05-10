@@ -60,8 +60,17 @@ def _handle_append_key(result: dict, plus_key: str, value: Any) -> None:
         elif base_key in result and isinstance(result[base_key], dict) and isinstance(value, dict):
             # 字典追加合并：将 +key 的内容深度合并到 base_key
             result[base_key] = deep_merge(result[base_key], value)
+        elif plus_key in result and isinstance(result[plus_key], list) and isinstance(value, list):
+            # base 一直没 plain key，但更早层已留下同名 +key 列表 ——
+            # 必须继续追加，否则连续两层 +key 时后者会覆盖前者，违反 +key
+            # "追加而非替换" 的语义（典型场景：platform 层与 board 层都
+            # +packages，等到 resolve_conditions 折叠时只能拿到一层数据）。
+            result[plus_key] = result[plus_key] + value
+        elif plus_key in result and isinstance(result[plus_key], dict) and isinstance(value, dict):
+            # 同上，但 dict 形态的 +key 走深度合并
+            result[plus_key] = deep_merge(result[plus_key], value)
         else:
-            # base 无对应 key，原样保留
+            # base 与同名 +key 都不存在，原样保留
             result[plus_key] = value
 
 

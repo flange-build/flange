@@ -79,6 +79,34 @@ class TestDeepMergeAppend:
         result = deep_merge(base, override)
         assert result == {"+packages:debug": ["valgrind", "gdb"]}
 
+    def test_append_chains_when_no_plain_base_key(self):
+        """连续两层 +key 在 base 一直没 plain key 时也应追加而非覆盖。
+
+        典型场景：platform 层 +packages: [A]，board 层 +packages: [B]，
+        基础 rootfs 无 plain packages（由 package_set 动态展开）。两层
+        +key 必须都到达 resolve_conditions 折叠阶段，否则后者会覆盖
+        前者，违反 +key "追加而非替换" 的语义。
+        """
+        base = {"kernel": "5.10"}  # 无 packages，无 +packages
+        platform = {"+packages": ["firmware-brcm80211"]}
+        board = {"+packages": ["bluez"]}
+
+        merged = deep_merge(base, platform)
+        merged = deep_merge(merged, board)
+
+        # 两层 +packages 都应在结果中，list 已拼接
+        assert merged["+packages"] == ["firmware-brcm80211", "bluez"]
+        # plain packages 不应被错误生成
+        assert "packages" not in merged
+
+    def test_append_chains_dict_form(self):
+        """同上，但 +key 是 dict 形态时走 deep_merge。"""
+        base = {"kernel": "5.10"}
+        a = {"+config": {"opt_a": True}}
+        b = {"+config": {"opt_b": False}}
+        merged = deep_merge(deep_merge(base, a), b)
+        assert merged["+config"] == {"opt_a": True, "opt_b": False}
+
 
 class TestDeepMergePreservation:
     """base 中独有的键在合并后保留。"""
