@@ -3,10 +3,24 @@
 mainline kernel 6.12 LTS arm64，DT 路径 ``arch/arm64/boot/dts/amlogic/``。
 首版聚焦 VIM3L 串口 + SSH + Wi-Fi + BT，所有驱动走 mainline in-tree
 （无 OOT 模块），defconfig 直接用 arm64 generic ``defconfig``。
+
+与 rockchip 的差异：
+- 无 vendor patch 链；configure 直接 ``make defconfig``
+- 无 panthor / mali_kbase 复杂度（GPU 首版 Non-Goal，用 in-tree panfrost 即可）
+- defconfig 默认是单字符串 ``"defconfig"``；同时兼容 list 形态以便后续叠加
+  ``case_insensitive_fix.config`` 之类的 fragment（list 时按序合并）
+- ``dts_dir`` 默认 ``"amlogic"``
+- ``KCFLAGS=-Wno-error`` 仍加，防 mainline 偶发 warning 当 error
 """
 
 from pathlib import Path
 from builder.kernel_base import KernelBuilder
+from builder.dtb_overlay import (
+    dtb_overlays,
+    kernel_overlay_dir,
+    overlay_make_targets,
+    require_overlay_files,
+)
 
 
 class AmlogicKernelBuilder(KernelBuilder):
@@ -15,19 +29,73 @@ class AmlogicKernelBuilder(KernelBuilder):
     CROSS = "aarch64-linux-gnu-"
 
     def configure(self, src_dir: Path, config: dict):
-        raise NotImplementedError(
-            "AmlogicKernelBuilder.configure 待实现（tasks 5.1）：mainline "
-            "arm64 generic defconfig + 可选 Amlogic-specific fragment"
-        )
+        """defconfig 应用：单字符串或 list 合并。
+
+        list 形态便于将来挂 ``case_insensitive_fix.config`` 等 fragment；
+        基类 ``_write_case_insensitive_fix`` 始终生成对应 fragment 文件，
+        list 中是否引入由 SoC config 决定。
+        """
+        self._write_case_insensitive_fix(src_dir)
+        defconfig = config["kernel"]["defconfig"]
+        if isinstance(defconfig, list):
+            for dc in defconfig:
+                self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
+        else:
+            self.make(src_dir, [defconfig], arch=self.ARCH, cross=self.CROSS)
 
     def compile(self, src_dir: Path, config: dict):
-        raise NotImplementedError(
-            "AmlogicKernelBuilder.compile 待实现（tasks 5.1）：编译 Image + "
-            "amlogic/meson-sm1-khadas-vim3l.dtb + modules"
-        )
+        jobs = config.get("jobs", 0)
+        # 单文件 dtb 目标：用 "<dts_dir>/<dts>.dtb" 的子目录相对路径，
+        # kbuild 的 ``%.dtb: dtbs_prepare`` 规则会展开成
+        # ``$(MAKE) $(build)=$(dtstree) $(dtstree)/<dts_dir>/<dts>.dtb``，
+        # 不需要在子目录 Makefile 的 dtb-y 中登记。
+        dts_dir = config["kernel"].get("dts_dir", "amlogic")
+        dts = config["kernel"]["dts"]
+        targets = [
+            "Image",
+            f"{dts_dir}/{dts}.dtb",
+            *overlay_make_targets(config, dts_dir),
+            "modules",
+        ]
+        self.make(src_dir, targets,
+                  arch=self.ARCH, cross=self.CROSS, jobs=jobs,
+                  extra=["KCFLAGS=-Wno-error"],
+                  label="编译内核...")
+
+        # OOT 模块（首版 amlogic 无声明，但接口保留）
+        self._compile_oot_modules(src_dir, config, jobs)
+
+        # in-tree 模块安装到 staging 目录（带 strip）。先清掉旧 release 残留，
+        # 避免跨 build kernel.release 变化导致 lib/modules/ 下累积多版本撑爆
+        # 下游 rootfs / recovery 分区（详见基类注释）。
+        modules_staging = src_dir / "_modules_staging"
+        self._clean_modules_staging(modules_staging)
+        modules_staging.mkdir(exist_ok=True)
+        self.make(src_dir, ["modules_install"],
+                  arch=self.ARCH, cross=self.CROSS,
+                  extra=[f"INSTALL_MOD_PATH={modules_staging}",
+                         "INSTALL_MOD_STRIP=1"])
+        # ``modules_install`` 在 lib/modules/<ver>/ 下创建 source/build symlink
+        # 指向容器内绝对路径，部署不需要且会让 shutil.copytree 报错，删掉。
+        for link_name in ("source", "build"):
+            for link in (modules_staging / "lib" / "modules").glob(
+                    f"*/{link_name}"):
+                if link.is_symlink():
+                    link.unlink()
+        # OOT 模块安装到同一 staging（首版无声明时为 no-op）
+        self._install_oot_modules(src_dir, config, modules_staging)
 
     def collect(self, src_dir: Path, config: dict) -> dict:
-        raise NotImplementedError(
-            "AmlogicKernelBuilder.collect 待实现（tasks 5.1）：返回 image / "
-            "dtb / modules 路径"
-        )
+        dts_dir = config["kernel"].get("dts_dir", "amlogic")
+        dts = config["kernel"]["dts"]
+        outputs = {
+            "image": src_dir / f"arch/{self.ARCH}/boot/Image",
+            "dtb": src_dir / f"arch/{self.ARCH}/boot/dts/{dts_dir}/{dts}.dtb",
+            "modules": src_dir / "_modules_staging",
+        }
+        overlays = dtb_overlays(config)
+        if overlays:
+            overlay_dir = kernel_overlay_dir(src_dir, self.ARCH, dts_dir)
+            require_overlay_files(overlay_dir, overlays)
+            outputs["dtbos"] = overlay_dir
+        return outputs
