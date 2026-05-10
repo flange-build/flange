@@ -3,7 +3,6 @@
 import glob
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from builder.base import ComponentBuilder
 
@@ -24,27 +23,29 @@ class KernelBuilder(ComponentBuilder):
     # ---- 大小写不敏感 FS 适配 ----
 
     def _is_case_insensitive_fs(self, path: Path) -> bool:
-        """通过 git config core.ignoreCase 判断 FS 是否大小写不敏感。
+        """实地探针：在 path 下创建大写命名文件，看小写名能否命中同一 inode。
 
-        git clone 时会自动探测并写入 core.ignoreCase，这正是我们需要的语义
-        ——"git checkout 是否会因大小写碰撞丢文件"。比自建探针更可靠，
-        不受 Docker volume 元数据缓存影响。
+        Why: 早期实现读 git config core.ignoreCase，但该键只在 clone 当时探测
+        一次写入；仓库被跨 FS 拷贝/挂载后值不会更新，且 git 在敏感 FS 上**不写**
+        这个键（缺失即默认 false），原实现把"键缺失"误判为"探测失败 → 保守禁用"，
+        在区分大小写分区上仍会启用 case_insensitive_fix。
 
-        path 可以是仓库任意子路径，git config 会向上查找 .git 目录。
-        若 path 不在 git 仓库内或探测失败，默认返回 True（保守禁用模块）。
+        实地探针反映"当下文件系统对 git checkout 的实际行为"，正是我们需要的
+        语义。探针失败时仍保守返回 True。
         """
+        probe_upper = path / ".flange_case_probe_UPPER"
+        probe_lower = path / ".flange_case_probe_upper"
         try:
-            result = subprocess.run(
-                ["git", "config", "--get", "core.ignoreCase"],
-                cwd=str(path), capture_output=True, text=True, check=False,
-                timeout=10,
-            )
-            value = result.stdout.strip().lower()
-            if value in ("true", "false"):
-                return value == "true"
-        except Exception as e:
-            self._status(f"git config 探测失败（{e}），默认启用 fix")
-        return True  # 保守策略
+            probe_upper.touch()
+            return probe_lower.exists()
+        except OSError as e:
+            self._status(f"FS 大小写探针失败（{e}），默认启用 fix")
+            return True
+        finally:
+            # 不敏感 FS 上 upper/lower 是同一文件，删一次即可；
+            # 敏感 FS 上 lower 从未创建，missing_ok 兜底。
+            probe_upper.unlink(missing_ok=True)
+            probe_lower.unlink(missing_ok=True)
 
     def _write_case_insensitive_fix(self, src_dir: Path):
         """生成 config fragment 禁用大小写不敏感 FS 上文件名冲突的模块。
