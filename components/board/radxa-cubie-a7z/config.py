@@ -105,7 +105,7 @@ BOARD = {
         # AIC8800 旧 BSP firmware helper 从 aic_fw_path 直接读取扁平文件；
         # Wi-Fi fdrv 又会在同一路径下拼接 aic8800D80/ 读取用户配置。
         # 因此同一批 Radxa D80 USB 固件同时安装为扁平目录和芯片子目录。
-        "extra_firmware": [
+        "+extra_firmware": [
             {
                 "name": "radxa-aic8800",
                 "repo": AIC8800_RADXA_REPO,

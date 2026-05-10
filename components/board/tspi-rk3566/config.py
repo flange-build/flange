@@ -12,7 +12,7 @@ BOARD = {
         # root 完全锁定 (root_password=None + disable_root_login=True)，
         # 默认用户 flange/flange 入 sudo group。如需开放 root 或换用户
         # 在此处覆盖（参见 base config docstring 字段速查）。
-        "extra_firmware": [
+        "+extra_firmware": [
             {
                 "name": "radxa",
                 "repo": "https://github.com/radxa-pkg/radxa-firmware",
