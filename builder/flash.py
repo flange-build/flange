@@ -440,7 +440,7 @@ class FlashExecutor:
         self.project_dir = project_dir or Path.cwd()
         self.strategy = get_flash_strategy(self.config.platform)
 
-    def flash_all(self, no_wait: bool = False):
+    def flash_all(self, no_wait: bool = False, no_reboot: bool = False):
         """全量刷写所有分区。"""
         cfg = self.config
         _header(f"flange flash · {cfg.board} · {cfg.product}-{cfg.variant}")
@@ -462,7 +462,10 @@ class FlashExecutor:
                 continue
             offset = int(part.offset, 0)
             self.strategy.write_partition(tool, offset, image)
-        self.strategy.reboot(tool)
+        if no_reboot:
+            _info("跳过重启（--no-reboot）")
+        else:
+            self.strategy.reboot(tool)
         elapsed = time.time() - start
 
         sep = "─" * 58
@@ -472,7 +475,7 @@ class FlashExecutor:
         print(_c(_WHITE, sep))
         print()
 
-    def flash_partition(self, name: str, no_wait: bool = False):
+    def flash_partition(self, name: str, no_wait: bool = False, no_reboot: bool = False):
         """刷写指定分区。"""
         part = None
         for p in self.config.partitions:
@@ -494,7 +497,10 @@ class FlashExecutor:
         self.strategy.pre_flash(tool, self.target_dir, self.config)
         offset = int(part.offset, 0)
         self.strategy.write_partition(tool, offset, image)
-        self.strategy.reboot(tool)
+        if no_reboot:
+            _info("跳过重启（--no-reboot）")
+        else:
+            self.strategy.reboot(tool)
         print()
         print(_c(_GREEN, f" ✓ 分区 {name} 刷写完成"))
 
@@ -551,6 +557,7 @@ def _cli_main():
     run_parser.add_argument("--target-dir", required=True, help="构建产物目录")
     run_parser.add_argument("--project-dir", default=".", help="项目根目录")
     run_parser.add_argument("--no-wait", action="store_true", help="跳过设备等待")
+    run_parser.add_argument("--no-reboot", action="store_true", help="刷写完成后不触发设备重启")
     run_parser.add_argument("--raw", metavar="DEVICE", help="dd 整盘刷写到指定设备")
     run_parser.add_argument("--list", action="store_true", dest="list_parts", help="列出可刷写分区")
     run_parser.add_argument("partition", nargs="?", help="指定分区名（不指定则全量刷写）")
@@ -572,9 +579,9 @@ def _cli_main():
         elif args.raw:
             executor.flash_raw(args.raw)
         elif args.partition:
-            executor.flash_partition(args.partition, no_wait=args.no_wait)
+            executor.flash_partition(args.partition, no_wait=args.no_wait, no_reboot=args.no_reboot)
         else:
-            executor.flash_all(no_wait=args.no_wait)
+            executor.flash_all(no_wait=args.no_wait, no_reboot=args.no_reboot)
 
     elif args.command == "generate":
         config = json.loads(Path(args.config).read_text())
