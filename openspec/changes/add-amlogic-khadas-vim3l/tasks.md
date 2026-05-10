@@ -41,12 +41,13 @@
 
 ## 6. board khadas-vim3l 配置
 
-- [ ] 6.1 创建目录 `components/board/khadas-vim3l/{overlay/etc,overlay/etc/systemd/system}`
-- [ ] 6.2 编写 `config.py`：`BOARD = {board, soc, platform, kernel.dts, bootloader.fip_board_dir="khadas-vim3l", rootfs.+packages=["firmware-brcm80211"], rootfs.+extra_firmware: [NVRAM 板级覆盖, BT patchram 板级覆盖]}`；两件覆盖各自声明 `source` 仓库（khadas-fenix）+ `repo_subdir`（archives/hwpacks/wlan-firmware/brcm）+ `files`（带 _ap6398s 后缀，rename 落地为通用名）+ `dest=lib/firmware/brcm`
-- [ ] 6.3 编写 `overlay/etc/hostname` 内容 `khadas-vim3l`
-- [ ] 6.4 编写 `overlay/etc/systemd/system/bluetooth-vim3l.service`：Unit 描述 BT UART 启动；Service ExecStart=`/usr/bin/btattach -B /dev/ttyAML6 -P bcm`；Before=bluetooth.target；Install WantedBy=multi-user.target
-- [ ] 6.5 在 rootfs `+extra_packages` 里加上 `bluez`（含 bluetoothd / btattach）；wireless-tools 与 iw 已在 base 默认中确认
-- [ ] 6.6 单元测试 `tests/config/test_khadas_vim3l.py` 覆盖三层合并、firmware 列表完整、systemd 单元路径正确
+- [x] 6.1 创建目录 `components/board/khadas-vim3l/{overlay/etc,overlay/etc/systemd/system}` — **完成**：board 目录树就位（无 dtso/，首版无板级 overlay）。
+- [x] 6.2 编写 `config.py` — **完成**：`BOARD` 仅声明真正特有字段（board/soc/platform/kernel.dts/bootloader.fip_board_dir/rootfs.+packages/rootfs.+extra_firmware）；vendor / arch / fip_tool / fip_family_inc / dts_dir / kernel_args / partitions / repos 全部由 platform + SoC 两层提供，board 不重复。`+extra_firmware` 走默认 `source="repo"`（独立 clone 到 `.build/sources/extra-firmware/khadas-fenix-ap6398s/`），`SourceManager.ensure_extra_firmware` 已支持该形态，无需扩展。
+- [x] 6.3 编写 `overlay/etc/hostname` — **完成**：单行 `khadas-vim3l\n`（与 rock5b 同形）。
+- [x] 6.4 编写 `overlay/etc/systemd/system/bluetooth-vim3l.service` — **完成**：ExecStart=`/usr/bin/btattach -B /dev/ttyAML6 -P bcm`；Before=bluetooth.target / After=systemd-modules-load.service / WantedBy=multi-user.target。**校正：BT 实际接 UART_A**（mainline v6.12 `meson-khadas-vim3.dtsi` 的 `&uart_A` 子节点 compatible="brcm,bcm43438-bt"），并非 brief 文案中提到的 UART_C。dts 仅声明 `serial0 = &uart_AO`，UART_A 无 serialN 别名；`drivers/tty/serial/meson_uart.c` probe 路径下 `of_alias_get_id` 返回 -1 时从 `AML_UART_PORT_OFFSET=6` 起 fallback 分配，因此 UART_A 在 userspace 仍暴露为 `/dev/ttyAML6`（与 brief 端值一致）。service 单元注释如实记录该来源链路。
+- [x] 6.5 board 层 `rootfs.+packages` 加 `bluez` — **完成**：`config.py` 中 `+packages: ["bluez"]`。
+  - **flag**：现有 `builder/config/merge.py:_handle_append_key` 在 base 含字面量 `+key`、override 也含 `+key` 且 base 无 `key` 列表时，line 65 直接覆盖前者（pre-existing 合并 bug，本变更未触发其他 board）。结果：platform 层 `+packages: ["firmware-brcm80211"]` 在合并到 board 层时被 `["bluez"]` 顶替，`firmware-brcm80211` apt 包目前不会进入 VIM3L final packages list。建议主 agent 决定是否在本变更内顺修 merge.py，或改在 board 层显式声明 `+packages: ["firmware-brcm80211", "bluez"]`。
+- [x] 6.6 单元测试 `tests/config/test_khadas_vim3l.py` — **完成**（15 tests，全绿）：覆盖板发现 / 三层 identity 合并 / repos 三件 / bootloader.defconfig list 含 fastboot fragment / fip_tool=aml_encrypt_g12a / fip_board_dir=khadas-vim3l / dts=meson-sm1-khadas-vim3l / kernel_args 含 ttyAML0 / 三分区无 raw / rootfs grow / ubuntu-base 24.04 arm64 / custom_packages 继承 platform / +packages 含 bluez / +extra_firmware ap6398s 两件 rename / overlay 文件存在且 ExecStart 命令构造正确 / lunch target 默认 debug+release。`tests/config/test_amlogic_platform.py` 26/26 仍全绿无回归。
 
 ## 7. AmlogicFlashStrategy
 

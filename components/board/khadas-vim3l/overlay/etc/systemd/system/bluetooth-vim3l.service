@@ -1,0 +1,21 @@
+[Unit]
+Description=Khadas VIM3L Bluetooth UART attach (BCM4359 / AP6398S)
+# 板载 AP6398S 的 BT 走 UART_A（meson-khadas-vim3.dtsi 的 &uart_A 子节点
+# compatible="brcm,bcm43438-bt"）。UART_A 在 mainline v6.12 dts 中**无**
+# serialN 别名（aliases 仅声明 serial0 = &uart_AO → ttyAML0），meson_uart
+# 驱动 fallback 路径从 AML_UART_PORT_OFFSET=6 起分配，因此该 UART 节点
+# 在 userspace 暴露为 /dev/ttyAML6（drivers/tty/serial/meson_uart.c）。
+# btattach 走 hci_uart + btbcm，attach 时由 btbcm 自动加载
+# /lib/firmware/brcm/BCM4359C0.hcd patchram；patchram 完成后由 bluez
+# bluetoothd 接管。波特率默认 115200，btbcm 探测后会与芯片协商升速到
+# dts max-speed = <2000000>。
+Before=bluetooth.target
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/btattach -B /dev/ttyAML6 -P bcm
+
+[Install]
+WantedBy=multi-user.target
