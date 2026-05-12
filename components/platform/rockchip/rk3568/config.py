@@ -33,12 +33,9 @@ SOC = {
     },
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
-        # 选 next-dev-v2024.10 而非 v2026.01：v2024.10 同时含 generic
-        # rk3568_defconfig 与 rock-3c-rk3566_defconfig / radxa-zero3-rk3566
-        # 等板级 defconfig，并保留 decode_bl31.py 的 python2 shebang（与
-        # platform 层 0001 patch 配套）。v2026.01 已 backport python3，
-        # 但缺 RK3588 板级 defconfig（如 rock-5b），不利后续扩展。
-        "branch": "next-dev-v2024.10",
+        # 与 RK3566 SoC 同分支（详见 rk3566/config.py 的 bootloader.branch
+        # 注释，记录整平台从 v2024.10 切到 v2026.01 的原因）。
+        "branch": "next-dev-v2026.01",
         "defconfig": "rk3568_defconfig",
     },
     "kernel": {

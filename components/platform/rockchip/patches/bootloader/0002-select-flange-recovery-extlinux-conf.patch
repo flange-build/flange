@@ -19,7 +19,7 @@ Rockchip 的 boot_mode.c 已经会在读取 reboot-mode register 后清除寄存
 因此 `reboot recovery` 是 one-shot，不会反复进入 recovery。
 
 extlinux 的 `fdtoverlays` 需要 `fdtoverlay_addr_r` 作为 overlay 临时加载
-地址。next-dev-v2024.10 的 include/configs/rk3568_common.h 已自带
+地址。next-dev-v2026.01 的 include/configs/rk3568_common.h 已自带
 ``fdtoverlay_addr_r=0x08200000``（位于 ENV_MEM_LAYOUT_SETTINGS 块内，
 fdt_addr_r=0x08300000 之前 1MB），无须额外 patch。
 

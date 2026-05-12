@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-05-13] sync | rockchip u-boot 整平台从 v2024.10 切到 v2026.01
+
+- 触发：tspi-rk3566 在 `next-dev-v2024.10` 上 USB OTG configfs gadget 不枚举（`/sys/class/udc/fcc00000.usb/state` 走不到 `configured`，host 端 `adb devices` 看不到），rp-pro-rk3568-h 同 binary 正常。两板差异落在 vendor BSP DTS + DDR ini，generic v2024.10 不带 TSpi vendor BSP 兜底 OTG 初始化路径
+- `components/platform/rockchip/config.py` — `rkbin.branch`: `develop-v2024.10` → `develop-v2026.01`（与 u-boot 版本配套）
+- `components/platform/rockchip/rk3566/config.py` — `bootloader.branch`: `next-dev-v2024.10` → `next-dev-v2026.01`；注释重写记录切换原因与 v2026.01 已用 python3 shebang 调 decode_bl31
+- `components/platform/rockchip/rk3568/config.py` / `rk3582/config.py` / `rk3588/config.py` / `rk3588s/config.py` — 同步切到 `next-dev-v2026.01`
+- `components/platform/rockchip/patches/bootloader/0001-decode_bl31-use-python3-shebang.patch` — 删除（v2026.01 上游已 python3 shebang）
+- `components/platform/rockchip/patches/bootloader/0002-select-flange-recovery-extlinux-conf.patch` — 仅注释把"v2024.10 已自带 fdtoverlay_addr_r"改为 v2026.01；patch 体 dry-run 在 v2026.01 上 clean apply
+- `components/board/tspi-rk3566/config.py` — 保留 `bootloader.commit = 3c60a711...`（位于 `next-dev-buildroot` 分支，实测唯一 ADB 可枚举的 U-Boot），不跟随整平台切换。merged config 的 branch 字段继承 SoC 层 v2026.01，但 commit 字段覆盖最终 checkout，按 builder/source.py:341 规则 `commit` 优先
+- `components/board/radxa-rock5b/config.py` — 注释里 `next-dev-v2024.10` 同步改 `next-dev-v2026.01`
+- `wiki/boards/radxa-rock5b.md` — u-boot 分支条目同步更新
+- 测试：`tests/config/test_rk3588_soc.py` / `tests/config/test_radxa_rock5b.py` / `tests/config/test_registry.py` 三处 branch 断言同步切到 v2026.01；`test_tspi_bootloader_commit_pin` 注释新增 commit 覆盖 SoC 层 branch 字段的解释
+
 ## [2026-05-10] sync | amlogic 平台 + Khadas VIM3L 首板（add-amlogic-khadas-vim3l 实施中）
 
 - `wiki/boards/khadas-vim3l.md`（新建）— S905D3 (SM1) 第一块板，硬件规格 + 技术栈 + MaskROM (KEY1 + USB-C, 1b8e:c003) 操作步骤 + 刷写流程图（pyamlboot → fastboot 两段式）+ eMMC 布局（hw boot0 + user area GPT 三分区）+ Wi-Fi/BT 三件套（firmware-brcm80211 + fenix `_ap6398s` 板级覆盖）+ 首版验收范围 + Non-Goals + 实测 TODO

@@ -35,8 +35,8 @@ SOC = {
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
         # 与 RK3566/RK3588/RK3588S SoC 同分支（详见 rk3566/config.py 的注释）。
-        "branch": "next-dev-v2024.10",
-        # SoC 层 generic 默认值；RK3582 板级 defconfig 在 v2024.10 上完整可用
+        "branch": "next-dev-v2026.01",
+        # SoC 层 generic 默认值；RK3582 板级 defconfig 在 v2026.01 上完整可用
         # （rock-5c-rk3588s_defconfig 与 rock-5c-lite 共用），真适配时由 board
         # 层覆盖。本 SoC 通路占位仍走 generic rk3588_defconfig（同 die，
         # u-boot 阶段对禁用大核/GPU 不敏感）。

@@ -54,9 +54,10 @@ class TestRK3588SoCDiscovery:
     def test_bootloader_fields(self):
         soc = _load_soc_config("rk3588")
         assert soc["bootloader"]["repo"] == "https://github.com/radxa/u-boot"
-        # next-dev-v2024.10：含完整 RK3588 板级 defconfig 与 python2 shebang
-        # （配套 platform 层 decode_bl31 patch）。详见 rk3588/config.py 注释。
-        assert soc["bootloader"]["branch"] == "next-dev-v2024.10"
+        # next-dev-v2026.01：含完整 RK3588 板级 defconfig 与 python3 shebang
+        # decode_bl31.py（platform 层 decode_bl31 patch 已删除）。详见
+        # rk3566/config.py 关于整平台切到 v2026.01 的原因记录。
+        assert soc["bootloader"]["branch"] == "next-dev-v2026.01"
         assert soc["bootloader"]["defconfig"] == "rk3588_defconfig"
 
     def test_kernel_branch_rkr5_1(self):

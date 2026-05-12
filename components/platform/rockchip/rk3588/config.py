@@ -18,7 +18,7 @@ SOC = {
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
         # 与 RK3566 SoC 同分支，保持 patch 应用一致性（详见 rk3566/config.py）。
-        "branch": "next-dev-v2024.10",
+        "branch": "next-dev-v2026.01",
         # SoC 层 generic 默认值；建议各 RK3588 板在 board 层覆盖为板级专用
         # defconfig（如 rock-5b-rk3588_defconfig），获得更稳的 u-boot 初始化
         # 路径。无 board 覆盖时退回到 generic（DEFAULT_DEVICE_TREE=rk3588-evb）。

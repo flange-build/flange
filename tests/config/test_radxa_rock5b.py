@@ -52,7 +52,7 @@ class TestROCK5BMergedConfig:
         assert merged["rkbin"]["ini_prefix"] == "RK3588"
         assert merged["rkbin"]["trust_ini_prefix"] == "RK3588"
         assert merged["bootloader"]["repo"] == "https://github.com/radxa/u-boot"
-        assert merged["bootloader"]["branch"] == "next-dev-v2024.10"
+        assert merged["bootloader"]["branch"] == "next-dev-v2026.01"
         assert merged["bootloader"]["defconfig"] == "rk3588_defconfig"
 
     def test_board_layer_fields(self, merged):

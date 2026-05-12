@@ -88,15 +88,21 @@ class TestGetBoardConfig:
         merged = get_board_config("neons-core3566-nanob", boards=boards)
         assert merged["kernel"]["commit"] == "e62b45adc7f89f5c8ea1918960b8c78e7c97ebf5"
 
-    def test_tspi_bootloader_no_commit_pin(self, boards):
-        """tspi-rk3566 不再 pin bootloader commit（跟 SoC 层 v2024.10 HEAD）。
+    def test_tspi_bootloader_commit_pin(self, boards):
+        """tspi-rk3566 必须 pin 到实机验证 ADB 可枚举的 U-Boot commit。
 
-        原 pin（3c60a711）实际位于 next-dev-buildroot 分支，与 SoC 层声明
-        的 branch 字段语义矛盾；统一 v2024.10 后已删除。
+        SoC 层已切到 next-dev-v2026.01，merged branch 字段继承该值；但本板
+        commit 字段覆盖 SoC 默认，实际 checkout 仍为 3c60a711（位于
+        next-dev-buildroot 分支，是该板 USB OTG configfs gadget 实测唯一
+        枚举成功的 U-Boot 版本）。branch 字段只用于首次 clone tracking ref，
+        不影响 commit checkout 路径（见 builder/source.py:341）。
         """
         merged = get_board_config("tspi-rk3566", boards=boards)
-        assert "commit" not in merged["bootloader"]
-        assert merged["bootloader"]["branch"] == "next-dev-v2024.10"
+        assert (
+            merged["bootloader"]["commit"]
+            == "3c60a711e61015c1a61247837afbeaa85bd7fbf2"
+        )
+        assert merged["bootloader"]["branch"] == "next-dev-v2026.01"
 
     def test_orangepi_empty_commits(self, boards):
         """orangepi-cm4 的 kernel/bootloader commit 应为空。"""
@@ -141,7 +147,7 @@ class TestGetBoardConfig:
         """rkbin 应合并平台层 repo/branch 和 SoC 层 ini_prefix。"""
         merged = get_board_config("radxa-zero3w", boards=boards)
         assert merged["rkbin"]["repo"] == "https://github.com/radxa/rkbin"
-        assert merged["rkbin"]["branch"] == "develop-v2024.10"
+        assert merged["rkbin"]["branch"] == "develop-v2026.01"
         assert merged["rkbin"]["ini_prefix"] == "RK3566"
 
     def test_unknown_board_raises(self, boards):

@@ -8,7 +8,10 @@ PLATFORM = {
     "variants": ["debug", "release"],
     "rkbin": {
         "repo": "https://github.com/radxa/rkbin",
-        "branch": "develop-v2024.10",
+        # rkbin 与 u-boot 版本对应：bootloader 切到 next-dev-v2026.01 后，
+        # rkbin 同步切到 develop-v2026.01（含配套 DDR firmware / BL31 /
+        # OPTEE blob）。详见 rk3566/config.py 的 bootloader.branch 注释。
+        "branch": "develop-v2026.01",
     },
     "rootfs": {
         # recoveryctl 需要在 normal 系统中也能调用（`recoveryctl recovery`

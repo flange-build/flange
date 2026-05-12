@@ -35,7 +35,7 @@ lunch radxa-rock5b-default-release
 |---|---|
 | SoC | RK3588（首颗，BSP 分支 `linux-6.1-stan-rkr5.1`；rkr4.1-buildroot 的 mali_kbase 在 r0p0 silicon 上 RCU stall，必须 rkr5+） |
 | DTB | `rk3588-rock-5b` |
-| u-boot 分支 | `radxa/u-boot @ next-dev-v2024.10`（RK3566/RK3588 全平台统一） |
+| u-boot 分支 | `radxa/u-boot @ next-dev-v2026.01`（RK3566/RK3588 全平台统一；v2024.10 在 tspi-rk3566 上 USB OTG configfs gadget 不枚举，整平台切到 v2026.01） |
 | u-boot defconfig | `rk3588_defconfig`（沿用 SoC generic，走 extlinux.conf；不用 board-specific 因其内置 androidboot 风格 bootargs 绕过 extlinux） |
 | GPU | mainline panthor（rkr5.1 dts 已 `arm,mali-valhall-csf`，SoC fragment 关 mali_kbase 启 panthor）；emergency rollback overlay 在板私有 dtso |
 | 调试串口 | UART2，1500000 bps（与 RK3566 一致） |
