@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev \
         libgnutls28-dev \
         libncurses-dev \
+        uuid-dev \
         lz4 \
         zstd \
         e2fsprogs \
