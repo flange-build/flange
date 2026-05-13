@@ -82,6 +82,15 @@ def _config(*, fragment_dir: Path | None = None,
     }
 
 
+def test_arch_is_arm_not_arm64():
+    """u-boot 把 ARM32/ARM64 板都放在 arch/arm/，ARCH 必须传 ``arm`` ——
+    误传 ``arm64`` 会让 u-boot Makefile 找不到 arch/arm64/include/asm/arch-...
+    目录，create_symlink 阶段 ln 失败。kernel 才用 ARCH=arm64。"""
+    from builder.platforms.amlogic.bootloader import AmlogicBootloaderBuilder
+    assert AmlogicBootloaderBuilder.ARCH == "arm"
+    assert AmlogicBootloaderBuilder.CROSS == "aarch64-linux-gnu-"
+
+
 def test_configure_stages_fragment_into_configs(tmp_path, monkeypatch):
     """configure 把 fragment 从 components/.../patches/bootloader/ 复制到
     u-boot ``configs/``，并按序逐个 make defconfig 列表。"""

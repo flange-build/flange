@@ -21,7 +21,11 @@ from builder.paths import COMPONENTS_ROOT
 
 class AmlogicBootloaderBuilder(ComponentBuilder):
     component = "bootloader"
-    ARCH = "arm64"
+    # u-boot 把 ARM32 / ARM64 板都放在 arch/arm/ 树下，ARCH 总是传 ``arm``；
+    # 64-bit 由 CROSS_COMPILE 区分（仅 kernel 走 ARCH=arm64）。误传
+    # ARCH=arm64 时 u-boot Makefile 找不到 arch/arm64/include/asm/arch-...
+    # 目录，create_symlink 阶段 ln 失败。
+    ARCH = "arm"
     CROSS = "aarch64-linux-gnu-"
 
     def configure(self, src_dir: Path, config: dict):
