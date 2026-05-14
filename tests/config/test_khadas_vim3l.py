@@ -87,14 +87,24 @@ class TestVIM3LMergedConfig:
         """VIM3L 板首版不交付 recovery 维护系统，board 层 enabled=False。"""
         assert merged["recovery"]["enabled"] is False
 
-    def test_partitions_two_entries(self, merged):
-        """board 层覆盖 SoC 三分区布局（deep_merge 对 list 是替换语义），
-        只剩 boot + rootfs；recovery 关 enabled 同时把那 512MB 收回给 rootfs。
+    def test_partitions_three_entries(self, merged):
+        """board 层覆盖 SoC 分区布局（deep_merge 对 list 是替换语义）：
+        bootloader (raw 占位，hw boot0 → fastboot 路由) + boot + rootfs；
+        无 recovery（VIM3L 关 enabled，省 512MB 给 rootfs）。
         """
         names = [e["name"] for e in merged["partitions"]["entries"]]
-        assert names == ["boot", "rootfs"], (
-            f"VIM3L 应只有 boot + rootfs 两个分区；实际: {names}"
+        assert names == ["bootloader", "boot", "rootfs"], (
+            f"VIM3L 应为 bootloader + boot + rootfs；实际: {names}"
         )
+
+    def test_bootloader_is_raw_partition(self, merged):
+        """bootloader 类型必须是 raw —— image.py GPT 写入时跳过 raw 类型
+        （Amlogic BootROM 走 mmc1 hw boot0 而非 user area），仅靠该 entry
+        让 FlashConfigGenerator 把 bootloader 纳入 flash-config，fastboot
+        flash bootloader 路由到 hw boot0。"""
+        entries = merged["partitions"]["entries"]
+        bl = next(e for e in entries if e["name"] == "bootloader")
+        assert bl["type"] == "raw"
 
     def test_partitions_rootfs_grows(self, merged):
         rootfs_entry = next(

@@ -631,13 +631,16 @@ class AmlogicFlashStrategy(FlashStrategy):
     def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
         """生成 amlogic 平台的 pre_flash 配置。
 
-        - ``download_boot``：FIP 封装的 SD/eMMC 启动镜像，pyamlboot 把它
-          推到 SoC DDR 后即可启动到 fastboot 模式。
+        - ``download_boot`` 指向**裸 FIP**（``u-boot.bin``，build-fip.sh 直接
+          产出）而非 SD 格式（``u-boot.bin.sd.bin``）。boot-g12.py 在
+          SRAM 解第一个 64KB 后会通过 AMLC 控制传输请求剩余 chunks，需要
+          binary 的 BL2 位于 offset 0；SD 格式前置了 block-1 header，BL2
+          被推到错误偏移，BL2 起来后 AMLC 握手超时。
         - ``usb_vid`` / ``usb_pid``：amlogic MaskROM 通用 USB 描述符
           ``1b8e:c003``。
         """
         return PreFlashConfig(
-            download_boot="bootloader/u-boot.bin.sd.bin",
+            download_boot="bootloader/u-boot.bin",
             usb_vid=self.MASKROM_VID,
             usb_pid=self.MASKROM_PID,
         )

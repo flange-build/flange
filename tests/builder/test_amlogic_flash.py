@@ -65,10 +65,15 @@ class TestGeneratePreFlashConfig:
         cfg = s.generate_pre_flash_config({})
         assert isinstance(cfg, PreFlashConfig)
 
-    def test_download_boot_points_to_fip_sd_image(self):
+    def test_download_boot_points_to_bare_fip_image(self):
+        """boot-g12.py 通过 AMLC chunk 协议从单一 binary 拉数据，需要 BL2
+        位于 binary offset 0；SD 格式的 .sd.bin 前置了 block-1 header，BL2
+        被推到错位置，BL2 起来后 AMLC 握手超时。所以 download_boot 必须
+        指向 build-fip.sh 直接产出的裸 FIP ``u-boot.bin``（非 .sd.bin）。"""
         s = AmlogicFlashStrategy()
         cfg = s.generate_pre_flash_config({})
-        assert cfg.download_boot == "bootloader/u-boot.bin.sd.bin"
+        assert cfg.download_boot == "bootloader/u-boot.bin"
+        assert not cfg.download_boot.endswith(".sd.bin")
 
     def test_usb_vid_pid_is_amlogic_maskrom(self):
         s = AmlogicFlashStrategy()

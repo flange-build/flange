@@ -14,7 +14,13 @@ from builder.source import SourceManager
 ARTIFACT_NAMES = {
     ("kernel",     "dtbos"):     "overlay",
     ("kernel",     "modules"):   "modules",
-    ("bootloader", "fip"):       "u-boot.bin.sd.bin",
+    # bootloader 产出 4 个变体：
+    #   fip      —— 裸 FIP（build-fip.sh 产出），pyamlboot 推 MaskROM 用
+    #   sd       —— SD/eMMC dd 格式（aml_encrypt_g12a --bootsd 派生），
+    #               fastboot flash bootloader 写 mmc1 hw boot0 用
+    #   usb_bl2/usb_tpl —— 旧式两段 USB 上传（备用，本流程不使用）
+    ("bootloader", "fip"):       "u-boot.bin",
+    ("bootloader", "sd"):        "u-boot.bin.sd.bin",
     ("bootloader", "usb_bl2"):   "u-boot.bin.usb.bl2",
     ("bootloader", "usb_tpl"):   "u-boot.bin.usb.tpl",
     ("boot",       "boot"):      "boot.img",

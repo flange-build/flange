@@ -159,16 +159,18 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         self._fip_image = fip_image
 
     def collect(self, src_dir: Path, config: dict) -> dict:
-        """收集 FIP / USB 产物路径供 engine 复制到 target 目录。
+        """收集 FIP / SD / USB 产物路径供 engine 复制到 target 目录。
 
-        ARTIFACT_NAMES 映射：
-          - (bootloader, fip)     → u-boot.bin.sd.bin
-          - (bootloader, usb_bl2) → u-boot.bin.usb.bl2
-          - (bootloader, usb_tpl) → u-boot.bin.usb.tpl
+        ARTIFACT_NAMES 映射（详见 builder/platforms/amlogic/__init__.py）：
+          - (bootloader, fip)     → u-boot.bin       （裸 FIP，pyamlboot 推送用）
+          - (bootloader, sd)      → u-boot.bin.sd.bin（SD/eMMC dd 格式，fastboot flash bootloader → mmc1 hw boot0）
+          - (bootloader, usb_bl2) → u-boot.bin.usb.bl2（备用：旧式两段 USB 上传 BL2 stub）
+          - (bootloader, usb_tpl) → u-boot.bin.usb.tpl（备用：旧式两段 USB 上传 TPL）
         """
         fip_image = self._fip_image
         return {
-            "fip":     Path(str(fip_image) + ".sd.bin"),
+            "fip":     fip_image,                          # build-fip.sh 直接产出
+            "sd":      Path(str(fip_image) + ".sd.bin"),
             "usb_bl2": Path(str(fip_image) + ".usb.bl2"),
             "usb_tpl": Path(str(fip_image) + ".usb.tpl"),
         }

@@ -209,15 +209,19 @@ def test_compile_uses_custom_fip_tool(tmp_path):
     assert any(c[:1] == [custom] and "--bootsd" in c for c in cmds)
 
 
-def test_collect_returns_three_artifacts(tmp_path):
-    """collect 返回 fip / usb_bl2 / usb_tpl 三个 key，路径相对 fip_image。"""
+def test_collect_returns_four_artifacts(tmp_path):
+    """collect 返回 fip / sd / usb_bl2 / usb_tpl 四个 key：fip 是裸 FIP
+    （build-fip.sh 直接产出，pyamlboot 推 MaskROM 用），sd 是 SD/eMMC dd
+    格式（aml_encrypt_g12a --bootsd 派生，fastboot flash bootloader 用），
+    usb_bl2/usb_tpl 是备用的旧式两段 USB 上传产物。"""
     builder, _, _, src_dir, _ = _make_builder(tmp_path)
     cfg = _config()
     builder.compile(src_dir, cfg)
 
     artifacts = builder.collect(src_dir, cfg)
-    assert set(artifacts.keys()) == {"fip", "usb_bl2", "usb_tpl"}
+    assert set(artifacts.keys()) == {"fip", "sd", "usb_bl2", "usb_tpl"}
     out = src_dir / "fip" / "khadas-vim3l"
-    assert artifacts["fip"] == out / "u-boot.bin.sd.bin"
+    assert artifacts["fip"] == out / "u-boot.bin"
+    assert artifacts["sd"] == out / "u-boot.bin.sd.bin"
     assert artifacts["usb_bl2"] == out / "u-boot.bin.usb.bl2"
     assert artifacts["usb_tpl"] == out / "u-boot.bin.usb.tpl"

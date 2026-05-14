@@ -40,13 +40,19 @@ BOARD = {
     },
     "partitions": {
         # 覆盖 SoC 层的三分区布局（deep_merge 对 list 是替换语义）。
-        # 顺序与字段格式仍与 rk3566 user area 同形（GPT，无 raw 分区，
-        # 因 Amlogic BootROM 走 hw boot0 而非 user area）。
+        # 顺序与字段格式与 rk3566 user area 同形，差别：
+        #   - ``bootloader`` raw 占位 ——不进 user area GPT（image.py 跳过
+        #     type==raw），但要让 FlashConfigGenerator 把它纳入 flash-config，
+        #     fastboot flash bootloader → mmc1 hw boot0（u-boot
+        #     ``CONFIG_FASTBOOT_FLASH_MMC_DEV=1`` 路由）。size 仅作 raw
+        #     占位标记，无 GPT 写入语义。
+        #   - boot / rootfs 走 user area GPT。
         "format": "gpt",
         "sector_size": 512,
         "entries": [
-            {"name": "boot",   "offset": "0x40",    "size": "0x20000",  "type": "ext4"},
-            {"name": "rootfs", "offset": "0x20040", "size": "remaining",
+            {"name": "bootloader", "offset": "0",      "size": "0x1000",   "type": "raw"},
+            {"name": "boot",       "offset": "0x40",   "size": "0x20000",  "type": "ext4"},
+            {"name": "rootfs",     "offset": "0x20040","size": "remaining",
              "type": "ext4", "image_size": "2G", "grow_on_first_boot": True},
         ],
     },
