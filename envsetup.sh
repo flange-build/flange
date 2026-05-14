@@ -326,20 +326,28 @@ _flange_cmd_build() {
         return 0
     fi
     # 解析 -v / -q / -f 参数
+    # 注：不用 ${args[0]} 取首个 positional —— bash 数组 0-indexed，zsh 默认
+    # 1-indexed，下标语义不一致。envsetup.sh 同时被 bash 与 zsh source，所以
+    # 边解析边捕获 positional，避开数组下标。
     local verbose=""
     local quiet=""
     local force=""
-    local args=()
+    local component_arg=""
+    local app_name=""
     for arg in "$@"; do
         case "$arg" in
             -v|--verbose) verbose="True" ;;
             -q|--quiet)   quiet="True" ;;
             -f|--force)   force="1" ;;
-            *)            args+=("$arg") ;;
+            *)
+                if [[ -z "$component_arg" ]]; then
+                    component_arg="$arg"
+                elif [[ -z "$app_name" ]]; then
+                    app_name="$arg"
+                fi
+                ;;
         esac
     done
-
-    local component_arg="${args[0]:-}"
 
     # -f：删除 .build_hash 触发强制重建
     if [[ -n "$force" ]]; then
@@ -372,7 +380,6 @@ _flange_cmd_build() {
 
     # 特殊处理: flange build app [name]
     if [[ "$component" == "app" ]]; then
-        local app_name="${args[1]:-}"
         if [[ -n "$app_name" ]]; then
             _flange_docker_run python3 -c "
 from builder.app import AppBuilder
