@@ -583,46 +583,28 @@ class AmlogicFlashStrategy(FlashStrategy):
         cmd = [str(tool), *args]
         subprocess.run(cmd, check=True)
 
-    # GPT 头部抽取布局（与 image.py 的 raw.img 输出对齐）：
-    #   LBA 0:       protective MBR        (512B)
-    #   LBA 1:       primary GPT header     (512B)
-    #   LBA 2..33:   partition entries     (128 entries × 128B = 16 KiB)
-    # 共 34 sectors = 17408 B；secondary GPT 在 disk 尾部，u-boot 写 primary
-    # 时同时刷新，本侧只推 primary 段。
-    GPT_HEADER_BYTES = 34 * 512  # 17 KiB
-
     def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
-        """从 raw.img 头部抽 GPT 镜像段，``fastboot flash gpt`` 写到 mmc2。
+        """通过 ``fastboot oem run "gpt write mmc 2 ${partitions}"`` 让
+        u-boot 按实际 eMMC 容量重建 GPT。
 
-        u-boot 端 ``CONFIG_FASTBOOT_GPT_NAME="gpt"`` 把 "gpt" 这个 partition
-        name 路由到 GPT 重建路径：收到的 binary 视为完整的 GPT 镜像
-        （protective MBR + primary GPT header + entries），写到 mmc 起点
-        并自动维护 secondary GPT。
-
-        本步骤必须在 ``fastboot flash boot/rootfs`` 之前 —— 否则 u-boot
-        在 user area 找不到 "boot" / "rootfs" 分区，报 "Bad device
-        specification mmc boot"。
+        u-boot 端约定（详见 components/platform/amlogic/s905d3/patches/
+        bootloader/flange_fastboot.config）：
+          - PREBOOT 设 ``partitions`` env，含 user area GPT 分区描述
+            （boot + rootfs；bootloader 在 hw boot0 不入 user area GPT）
+          - ``CONFIG_FASTBOOT_OEM_RUN=y`` 允许 host 端 ``fastboot oem run``
+            执行 u-boot 命令脚本
+          - ``CONFIG_CMD_GPT=y`` + ``CONFIG_RANDOM_UUID=y`` 提供 gpt write
+            子命令与 UUID 生成
+        ``gpt write`` 按当前 mmc dev 容量计算 LBA / size，避开"raw.img
+        GPT 字段指向 2GB 位置但 eMMC 14.6GB"的尺寸不匹配问题，写完后
+        u-boot 自动 rescan 分区表，后续 ``flash boot/rootfs`` 立即可找到
+        分区。本步骤必须在 ``fastboot flash boot/rootfs`` 之前。
         """
-        raw_img = target_dir / "image" / "raw.img"
-        if not raw_img.exists():
-            _warn(f"未找到 raw.img: {raw_img}，跳过 GPT 刷新（u-boot user "
-                  "area 没分区表，flash boot/rootfs 会失败）")
-            return
-
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".gpt.bin", delete=False) as tmp:
-            with raw_img.open("rb") as f:
-                tmp.write(f.read(self.GPT_HEADER_BYTES))
-            tmp_path = Path(tmp.name)
-        try:
-            _info(f"刷新 GPT 表（{self.GPT_HEADER_BYTES // 1024} KiB）...")
-            self._run_fastboot(tool, "flash", "gpt", str(tmp_path))
-            _ok("GPT")
-        finally:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+        _info("用 u-boot gpt write 按实际 eMMC 容量重建 GPT...")
+        self._run_fastboot(
+            tool, "oem", "run", "gpt write mmc 2 ${partitions}",
+        )
+        _ok("GPT")
 
     def write_partition(self, tool: Path, offset: int, image: Path):
         """通过 fastboot flash <name> <image> 写入分区。
