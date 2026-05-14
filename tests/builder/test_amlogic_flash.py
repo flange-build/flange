@@ -290,3 +290,44 @@ class TestDetectDevice:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="", timeout=5)
             info = s.detect_device(Path("/fastboot"))
             assert info is None
+
+    def test_maskrom_device_detected_via_lsusb(self):
+        """pre_flash 之前板在 MaskROM 阶段，fastboot 看不到但 USB 总线上
+        有 1b8e:c003 ——必须把这种状态识别为"设备就绪"，否则首刷会卡
+        在 wait_for_device 死循环。
+        """
+        s = AmlogicFlashStrategy()
+        with patch("builder.flash.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="Bus 003 Device 042: ID 1b8e:c003 Amlogic, Inc.\n",
+                stderr="",
+            )
+            info = s.detect_device(Path("/fastboot"))
+            assert info is not None
+            assert info.mode == "maskrom", (
+                f"应识别 MaskROM 阶段，实际 mode={info.mode}"
+            )
+            assert "1b8e:c003" in info.description
+
+    def test_maskrom_device_detected_via_ioreg_macos(self):
+        """macOS 用 ioreg 而非 lsusb；同样要被识别为 maskrom。"""
+        s = AmlogicFlashStrategy()
+        ioreg_output = '''
+        +-o GX-CHIP@01120000  <class IOUSBHostDevice, id 0x10006044e>
+            "idProduct" = 49155
+            "idVendor" = 7054
+            "kUSBProductString" = "GX-CHIP"
+        '''
+        def fake_run(cmd, **kwargs):
+            if cmd[0] == "lsusb":
+                # macOS 上 lsusb 不存在
+                raise FileNotFoundError("lsusb")
+            if cmd[0] == "ioreg":
+                return MagicMock(returncode=0, stdout=ioreg_output, stderr="")
+            # fastboot devices 兜底
+            return MagicMock(returncode=0, stdout="", stderr="")
+        with patch("builder.flash.subprocess.run", side_effect=fake_run):
+            info = s.detect_device(Path("/fastboot"))
+            assert info is not None
+            assert info.mode == "maskrom"

@@ -417,49 +417,84 @@ class AmlogicFlashStrategy(FlashStrategy):
         return Path(fastboot)
 
     def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
-        """检测 fastboot 设备（pre_flash 之后才会出现）。
+        """检测 amlogic 设备（MaskROM 或 fastboot 任一即可）。
 
-        pre_flash 之前设备处于 MaskROM 模式（``1b8e:c003``），不被
-        ``fastboot devices`` 识别；调用方一般直接走 pre_flash，跳过
-        ``wait_for_device``。本方法保留作为 fastboot 模式下的探测。
+        amlogic 刷写两段式：刚上电按 KEY1 时设备在 MaskROM 模式
+        （``1b8e:c003``），``fastboot devices`` 看不到；pre_flash 推完
+        u-boot 后才切到 fastboot gadget。``FlashExecutor.flash_all`` 在
+        pre_flash 之前调 wait_for_device，所以这里必须把 MaskROM 也算
+        "设备就绪"，否则首刷会卡死直到超时。
+
+        探测顺序：MaskROM USB → fastboot devices（pre_flash 后用）。
         """
+        # 1) MaskROM 阶段（pre_flash 前的常态）
+        if self._probe_maskrom():
+            return DeviceInfo("amlogic", "maskrom",
+                              f"Amlogic MaskROM 设备 "
+                              f"({self.MASKROM_VID}:{self.MASKROM_PID})")
+
+        # 2) fastboot 阶段（pre_flash 推完 u-boot 之后）
         try:
             result = subprocess.run(
                 [str(tool), "devices"],
                 capture_output=True, text=True, timeout=5,
             )
             output = result.stdout.strip()
-            if output and "fastboot" in output.lower():
-                return DeviceInfo("amlogic", "fastboot", "Amlogic fastboot 设备")
-            # `fastboot devices` 在有设备时仅输出 `<serial>\tfastboot`；
-            # 简单判定：非空 stdout 视为有设备。
             if output:
+                # `fastboot devices` 在有设备时仅输出 `<serial>\tfastboot`
                 return DeviceInfo("amlogic", "fastboot", "Amlogic fastboot 设备")
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
         return None
 
-    def _wait_maskrom_device(self, timeout: int = 30) -> None:
-        """等待 ``lsusb`` 列出 MaskROM 设备 ``1b8e:c003``。
+    def _probe_maskrom(self) -> bool:
+        """探测 USB 总线上是否有 MaskROM 设备（``1b8e:c003``）。
 
-        Linux host 用 ``lsusb`` 探测；macOS host 走 ``system_profiler
-        SPUSBDataType``。两者都失败时仅打印提示，不阻塞 —— pyamlboot
-        本身会在没有设备时报错，让其错误冒泡更直观。
+        Linux 用 ``lsusb``；macOS 用 ``ioreg -p IOUSB -l``（system_profiler
+        在某些非交互 shell 下输出为空，ioreg 更可靠）。任一工具不在或
+        返回非零都视为"没找到"，由调用方决定是否继续等待。
+        """
+        vid = int(self.MASKROM_VID, 16)
+        pid = int(self.MASKROM_PID, 16)
+        # Linux 路径：lsusb 输出 `Bus xxx Device yyy: ID 1b8e:c003 Amlogic, Inc.`
+        try:
+            res = subprocess.run(
+                ["lsusb"], capture_output=True, text=True, timeout=3,
+            )
+            if res.returncode == 0 and (
+                f"{self.MASKROM_VID}:{self.MASKROM_PID}".lower()
+                in res.stdout.lower()
+            ):
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        # macOS 路径：ioreg 把 idVendor / idProduct 暴露为十进制
+        try:
+            res = subprocess.run(
+                ["ioreg", "-p", "IOUSB", "-l"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if res.returncode == 0:
+                out = res.stdout
+                if (f'"idVendor" = {vid}' in out
+                        and f'"idProduct" = {pid}' in out):
+                    return True
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        return False
+
+    def _wait_maskrom_device(self, timeout: int = 30) -> None:
+        """等待 USB 总线列出 MaskROM 设备。
+
+        探测沿用 ``_probe_maskrom``（Linux lsusb / macOS ioreg）。两者都
+        没找到或调用失败时仅打印 warning，不阻塞 —— pyamlboot 本身会在
+        没有设备时报错，让其错误冒泡更直观。
         """
         _info(f"等待 MaskROM 设备（USB {self.MASKROM_VID}:{self.MASKROM_PID}）...")
         deadline = time.time() + timeout
-        vid_pid = f"{self.MASKROM_VID}:{self.MASKROM_PID}"
         while time.time() < deadline:
-            try:
-                result = subprocess.run(
-                    ["lsusb"], capture_output=True, text=True, timeout=3,
-                )
-                if vid_pid.lower() in result.stdout.lower():
-                    _ok("MaskROM 设备已就绪")
-                    return
-            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-                # 没有 lsusb（macOS）或调用失败时直接放行，让 pyamlboot 报错。
-                _info("无法用 lsusb 探测，直接尝试 pyamlboot")
+            if self._probe_maskrom():
+                _ok("MaskROM 设备已就绪")
                 return
             time.sleep(1)
         _warn(f"等待 MaskROM 设备超时（{timeout}s），仍尝试 pyamlboot")
