@@ -483,6 +483,34 @@ class AmlogicFlashStrategy(FlashStrategy):
             pass
         return False
 
+    @staticmethod
+    def _darwin_dyld_lib_path() -> Optional[str]:
+        """在 macOS 上返回应注入子进程 DYLD_FALLBACK_LIBRARY_PATH 的路径。
+
+        pyamlboot 的 pyusb 通过 ctypes 加载 libusb；macOS 上 brew 装的
+        libusb 在 /opt/homebrew/lib（Apple Silicon）或 /usr/local/lib
+        （Intel）。前者不在 dyld 默认搜索路径，后者虽在但若残留 x86_64
+        老 dylib 会与 arm64 Python arch 失配。把 brew 的 lib 路径强行
+        加入 fallback 搜索路径即可。
+
+        非 macOS 返回 None（Linux 走 udev rule / sudo 不需要这层）。
+        """
+        if sys.platform != "darwin":
+            return None
+        # brew --prefix 是权威；进程不存在时退到 Apple Silicon / Intel 默认路径
+        try:
+            prefix = subprocess.check_output(
+                ["brew", "--prefix"], text=True, timeout=3,
+            ).strip()
+            return f"{prefix}/lib"
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError,
+                subprocess.CalledProcessError):
+            pass
+        for guess in ("/opt/homebrew", "/usr/local"):
+            if (Path(guess) / "lib" / "libusb-1.0.dylib").exists():
+                return f"{guess}/lib"
+        return None
+
     def _wait_maskrom_device(self, timeout: int = 30) -> None:
         """等待 USB 总线列出 MaskROM 设备。
 
@@ -528,10 +556,21 @@ class AmlogicFlashStrategy(FlashStrategy):
         # boot-g12.py 通常需要 root 权限访问 USB raw endpoint；
         # 若用户已配置 udev rule，sudo 可省略。这里默认带 sudo 与
         # Rockchip upgrade_tool 一致心智（rockchip 也需要 udev 或 sudo）。
-        subprocess.run(
-            ["sudo", str(pyamlboot), str(boot_image)],
-            check=True,
-        )
+        #
+        # macOS Apple Silicon 特殊处理：brew 装的 libusb 在
+        # /opt/homebrew/lib/，不在 dyld 默认搜索路径（/usr/local/lib，
+        # /usr/lib）。若系统遗留 /usr/local/lib/libusb-1.0.dylib（Intel
+        # x86_64 老 brew 或 Rosetta 工具留下的），ctypes find_library 会
+        # 撞到 arch 失配的那一份，pyusb 报 "No backend available"。
+        # 通过 ``env DYLD_FALLBACK_LIBRARY_PATH=<brew>/lib`` 透给子进程
+        # 解决（DYLD_* 直接传给 sudo 会被 SIP 剥；走 env 作为新命令的
+        # 第一参数，env 自身的 args 不在 SIP 剥除范围内）。
+        cmd = ["sudo"]
+        dyld_extra = self._darwin_dyld_lib_path()
+        if dyld_extra:
+            cmd += ["env", f"DYLD_FALLBACK_LIBRARY_PATH={dyld_extra}"]
+        cmd += [str(pyamlboot), str(boot_image)]
+        subprocess.run(cmd, check=True)
         # u-boot 已进 DDR；提示用户松开 KEY1，避免 fastboot reboot 后再次
         # 进 MaskROM（按住 KEY1 状态下 BootROM 优先尝试 USB Burning）。
         _info("u-boot 已推入 DDR — 现在可松开 KEY1，等待 fastboot 设备枚举...")
