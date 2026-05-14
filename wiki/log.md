@@ -19,6 +19,22 @@
 - `wiki/boards/radxa-rock5b.md` — u-boot 分支条目同步更新
 - 测试：`tests/config/test_rk3588_soc.py` / `tests/config/test_radxa_rock5b.py` / `tests/config/test_registry.py` 三处 branch 断言同步切到 v2026.01；`test_tspi_bootloader_commit_pin` 注释新增 commit 覆盖 SoC 层 branch 字段的解释
 
+## [2026-05-15] sync | khadas-vim3l 实板验收 + flash 体验全自动化
+
+- 实板验收（板 IP 172.17.1.157）8 类全过：启动 9 秒，rootfs 自扩 13G，
+  brcmfmac + BCM4359 fw 加载，BT 自动 attach（mainline dts `&uart_A`
+  声明 brcm BT，hci_uart_bcm auto-probe），Khadas MCU IR keymap + LED
+  暴露。详见 `wiki/boards/khadas-vim3l.md` "实测结果" 段。
+- adb 通：board overlay 加 modules-load.d 自动 modprobe libcomposite
+  （mainline 6.12 把 USB gadget framework 编 m），+ 板级 usbdevice.conf
+  USB_VENDOR_ID=0x18d1（Google AOSP），host 端 ``adb devices`` 直接见。
+- ``flange flash`` 全自动化：u-boot fragment CONFIG_PREBOOT 检测
+  ``${boot_source}=usb``（mainline meson 已在 board_late_init setenv）
+  自动进 fastboot；host 端 AmlogicFlashStrategy.detect_device 把 fastboot
+  模式也算"设备就绪"，pre_flash 看到 fastboot 直接跳过 pyamlboot。**首次
+  MaskROM 与后续重刷都无需接串口**。
+- 关联 commits：055d223..576636e（add-amlogic-khadas-vim3l 变更链）
+
 ## [2026-05-10] sync | amlogic 平台 + Khadas VIM3L 首板（add-amlogic-khadas-vim3l 实施中）
 
 - `wiki/boards/khadas-vim3l.md`（新建）— S905D3 (SM1) 第一块板，硬件规格 + 技术栈 + MaskROM (KEY1 + USB-C, 1b8e:c003) 操作步骤 + 刷写流程图（pyamlboot → fastboot 两段式）+ eMMC 布局（hw boot0 + user area GPT 三分区）+ Wi-Fi/BT 三件套（firmware-brcm80211 + fenix `_ap6398s` 板级覆盖）+ 首版验收范围 + Non-Goals + 实测 TODO

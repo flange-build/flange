@@ -66,7 +66,7 @@ VIM3L 走 KEY1（板上"Function"键，靠近 USB-C）按键进 USB Burning：
 1. 拔电源
 2. **按住** KEY1 + 插 USB-C 上电
 3. host 端 `lsusb` 应见 `1b8e:c003`（Amlogic MaskROM）；macOS 用 `ioreg -p IOUSB -l | grep -A2 1b8e` 等价探测
-4. 跑 `flange flash`
+4. 跑 `flange flash` —— **无需接串口、无需手动 `fastboot usb 0`**：u-boot fragment 的 `CONFIG_PREBOOT` 检测 `${boot_source}=usb` 自动进 fastboot gadget
 5. **fastboot reboot 之前松开 KEY1**，否则板会反复回到 MaskROM
 
 host 端依赖（详见 envsetup.sh 顶部注释）：
@@ -80,17 +80,43 @@ host 端依赖（详见 envsetup.sh 顶部注释）：
 host                                          board
   │ 按住 KEY1 + 插 USB-C 上电
   │                                       ──▶ MaskROM (1b8e:c003)
-  │ flange flash all khadas-vim3l-default-debug
-  │   ├─ pyamlboot 推 u-boot.bin 到 SoC DDR
+  │ flange flash
+  │   ├─ pyamlboot 推 u-boot.bin (FIP) 到 DDR
   │   │                                   ──▶ BL2 (SRAM) → BL31 → u-boot proper (DDR)
-  │   ├─ u-boot 自动进 fastboot gadget
-  │   ├─ fastboot flash bootloader → eMMC hw boot0 offset 0x200
-  │   ├─ fastboot flash boot       → GPT boot 分区
-  │   ├─ fastboot flash rootfs     → GPT rootfs 分区
+  │   │                                       u-boot board_late_init setenv boot_source=usb
+  │   │                                       PREBOOT 检 boot_source=usb → 自动 fastboot usb 0
+  │   ├─ host 等 fastboot device 出现
+  │   ├─ fastboot oem format        → mmc2 GPT 重建（按实际 14.6 GiB 容量）
+  │   ├─ fastboot flash bootloader  → eMMC hw boot0 (mmc2 boot0) offset 0x200
+  │   ├─ fastboot flash boot        → GPT boot 分区
+  │   ├─ fastboot flash rootfs      → GPT rootfs 分区
   │   └─ fastboot reboot
   │ 用户松开 KEY1
-  │                                       ──▶ BootROM 从 hw boot0 起 BL2 → 启动到 systemd
+  │                                       ──▶ 冷启动 BootROM 从 hw boot0 起 BL2 → u-boot
+  │                                           board_late_init setenv boot_source=emmc
+  │                                           PREBOOT 不触发 fastboot → Distroboot →
+  │                                           extlinux.conf → Linux 6.12
 ```
+
+### 重刷工作流（板已刷过 u-boot 到 eMMC）
+
+不用每次断电按 KEY1 重进 MaskROM。两条快路径：
+
+**A. 板在 Linux**：
+
+```bash
+# host 端
+adb reboot bootloader     # 走 adb 协议；板冷启动 → u-boot 读 reboot reason → 进 fastboot
+flange flash              # detect_device 看到 fastboot device，跳过 pyamlboot
+```
+
+**B. 板已在 fastboot 模式**（上一轮刷完后用 `fastboot reboot bootloader` 等留下）：
+
+```bash
+flange flash              # 直接进 flash 分区流程（连 pyamlboot 都不跑）
+```
+
+两条都不需要接串口。`AmlogicFlashStrategy.pre_flash` 看到 `device.mode == "fastboot"` 立即 return，省 sudo 提示 + ~3s pyamlboot 推送等待。
 
 host 端依赖：`pip install pyamlboot` + `apt install android-tools-fastboot`。
 
@@ -159,6 +185,11 @@ fenix 仓库内路径：`archives/hwpacks/wlan-firmware/brcm/`。三件套由 bo
 
 ### Non-Goal 验证（确认这些是预期不工作的）
 - GPU (Mali-G31) / HDMI / VPU (amvdec) / NPU / USB OTG gadget / SD 卡启动模式：未配置，预期不可用 ✓
+
+## 已落地的体验改进
+
+- ✓ **flange flash 全自动**：u-boot `CONFIG_PREBOOT` 检测 `${boot_source}=usb` 自动进 fastboot；host 端 `AmlogicFlashStrategy.detect_device` 把 fastboot 模式也算"设备就绪"，`pre_flash` 看到 fastboot 直接跳过 pyamlboot。首次 MaskROM 刷入与后续重刷都**无需接串口**，无需手动 `fastboot usb 0`。详见 commits `fc8aa3c` + `576636e`。
+- ✓ **adbd 通过 USB gadget 暴露**：board overlay 加 `/etc/modules-load.d/flange-usbgadget.conf` 自动 `modprobe libcomposite`（mainline 6.12 模块化），加板级 `/etc/usbdevice.conf`（USB_VENDOR_ID=0x18d1 Google AOSP / USB_PRODUCT_NAME=khadas-vim3l）。host 端 `adb devices` 直接见。详见 commit `<待 commit>`。
 
 ## 后续优化项（不阻塞首版交付）
 

@@ -79,23 +79,26 @@ out/u-boot.bin.usb.bl2 + out/u-boot.bin.usb.tpl   (pyamlboot USB 推送用)
 
 Amlogic 把 BootROM 入口完全放进 hw boot0 分区，user area 仅承载内容分区（`boot` / `recovery` / `rootfs`）；与 Rockchip / Allwinner 都把 bootloader 放 user area 形成对照。详见 design Decision 4。
 
-**AmlogicFlashStrategy 两段式**
+**AmlogicFlashStrategy 两段式 + 自动化路径**
 
 ```
-pre_flash (pyamlboot 推 u-boot 到 DDR):
-  sudo boot-g12.py target/bootloader/u-boot.bin.sd.bin
-  → SoC 接收完整 u-boot 镜像，BL2 SRAM 解密执行 → BL31 → u-boot proper
-  → u-boot 自动进 fastboot 模式（USB gadget）
+pre_flash:
+  - device.mode == "maskrom": 调 boot-g12.py 推裸 FIP u-boot.bin 到 DDR
+                              u-boot 板级 init setenv boot_source=usb
+                              PREBOOT 检 boot_source → 自动 fastboot usb 0
+  - device.mode == "fastboot": SKIP（u-boot 已在 DDR 跑着，省 pyamlboot 推送）
 
 flash 主流程 (host fastboot 写各分区):
-  fastboot flash bootloader → eMMC hw boot0 offset 0x200
+  fastboot oem format       → u-boot gpt write，按 mmc2 实际容量重建 GPT
+  fastboot flash bootloader → eMMC hw boot0 (mmc2 boot0) offset 0x200
   fastboot flash boot       → GPT boot 分区
-  fastboot flash recovery   → GPT recovery 分区
   fastboot flash rootfs     → GPT rootfs 分区
   fastboot reboot
 ```
 
-USB vid/pid `1b8e:c003`（MaskROM），host 端依赖 `pip install pyamlboot` + `apt install android-tools-fastboot`。详见 design Decision 5。
+**全自动化关键**：mainline u-boot `arch/arm/mach-meson/board-common.c:meson_set_boot_source()` 在 `board_late_init` 已暴露 `${boot_source}` env，板级 fragment `flange_fastboot.config` 的 `CONFIG_PREBOOT` 据此条件进 fastboot —— USB MaskROM 加载触发，eMMC 冷启动不触发，**无需用户接串口手动 `fastboot usb 0`**。
+
+USB vid/pid `1b8e:c003`（MaskROM），host 端依赖 `pip install pyamlboot` + `apt install android-tools-fastboot`（macOS 还需 `brew install libusb`）。详见 design Decision 5 + `wiki/boards/khadas-vim3l.md` 的"重刷工作流"段。
 
 **为何不用 Khadas 下游 u-boot**
 
