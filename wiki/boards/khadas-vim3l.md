@@ -65,9 +65,14 @@ VIM3L 走 KEY1（板上"Function"键，靠近 USB-C）按键进 USB Burning：
 
 1. 拔电源
 2. **按住** KEY1 + 插 USB-C 上电
-3. host 端 `lsusb` 应见 `1b8e:c003`（Amlogic MaskROM）
-4. 跑 `flange flash all khadas-vim3l-default-debug`
+3. host 端 `lsusb` 应见 `1b8e:c003`（Amlogic MaskROM）；macOS 用 `ioreg -p IOUSB -l | grep -A2 1b8e` 等价探测
+4. 跑 `flange flash`
 5. **fastboot reboot 之前松开 KEY1**，否则板会反复回到 MaskROM
+
+host 端依赖（详见 envsetup.sh 顶部注释）：
+- `pip install pyamlboot`（boot-g12.py 入口）
+- `fastboot`（macOS `brew install android-platform-tools`；Linux `apt install android-tools-fastboot`）
+- **libusb**（pyusb 底层）：macOS `brew install libusb`；Linux `apt install libusb-1.0-0`。缺会报 `usb.core.NoBackendError: No backend available`
 
 完整链路：
 

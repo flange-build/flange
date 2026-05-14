@@ -14,7 +14,10 @@
 # Allwinner:     dd（系统自带；SD 卡 dd 模式）
 # Amlogic:       pip install pyamlboot                  # 提供 boot-g12.py 入口
 #                sudo apt install android-tools-fastboot # 提供 fastboot 命令
-#                （macOS: brew install android-platform-tools）
+#                Linux：  sudo apt install libusb-1.0-0  # pyusb 底层 USB 库
+#                macOS：  brew install libusb android-platform-tools
+#                         （pyusb 在 macOS 上不自带 libusb，缺会报 No backend
+#                         available）
 #                pyamlboot 详见 https://github.com/superna9999/pyamlboot
 # ────────────────────────────────────────────────────────────────────────
 
