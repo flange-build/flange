@@ -12,10 +12,13 @@ PLATFORM = {
         # 与 Rockchip / Allwinner 同样：normal 系统也安装 recoveryctl，便于
         # ADB 触发模式切换；flange-rootfs-grow 处理 rootfs 首启自扩展。
         "custom_packages": ["adbd", "recoveryctl", "flange-rootfs-grow"],
-        # WiFi/BT 通用固件来自 linux-firmware tree，Ubuntu 重打包为
-        # firmware-brcm80211（提供 brcm/* 全集）。VIM3L 板级 NVRAM 与 BT
-        # patchram 的覆盖在 board 层 +extra_firmware 完成。
-        "+packages": ["firmware-brcm80211"],
+        # 不在平台层挂 WiFi/BT 通用固件包 —— 不同 amlogic 板的 WiFi/BT
+        # combo 各异（VIM3L 板载 AP6398S，其他 amlogic 板可能 RTL/realtek
+        # 等），无法在平台层共享。各 board 在 +extra_firmware 中按需声明
+        # 自己的固件来源（VIM3L 走 khadas/fenix 板级 AP6398S 三件套）。
+        # 注：Ubuntu 24.04 也没有 Debian 风格的 firmware-brcm80211 切片包
+        # （Ubuntu 把 brcm firmware 打在 monolithic linux-firmware 里，
+        # 整包 ~500MB），不适合 embedded 默认拉。
     },
     # Recovery 子系统：默认开启，与 Rockchip / Allwinner 平台等价。
     # boards 可通过 enabled: False 关闭。

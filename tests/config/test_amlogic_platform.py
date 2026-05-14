@@ -57,10 +57,17 @@ class TestAmlogicPlatformDiscovery:
         cfg = _load_platform_config("amlogic", PROJECT_ROOT)
         assert cfg["flash_tool"] == "fastboot"
 
-    def test_platform_default_packages_include_brcm_firmware(self):
-        """通用 WiFi/BT 固件来自 firmware-brcm80211 apt 包，必须在平台默认 +packages 中。"""
+    def test_platform_does_not_declare_wifi_firmware_pkg(self):
+        """平台层不挂 WiFi/BT 通用固件包 —— 不同 amlogic 板的 WiFi/BT chip
+        各异（VIM3L 是 BCM4359/AP6398S，其他板可能 RTL 等），无法共享。
+        Ubuntu 24.04 也没有 Debian 切片包 firmware-brcm80211（实测）。
+        各 board 在 +extra_firmware 自行声明固件来源。
+        """
         cfg = _load_platform_config("amlogic", PROJECT_ROOT)
-        assert "firmware-brcm80211" in cfg["rootfs"]["+packages"]
+        plus_pkgs = cfg.get("rootfs", {}).get("+packages", [])
+        assert "firmware-brcm80211" not in plus_pkgs
+        # 平台层 rootfs 不应有任何 +packages（custom_packages 例外）
+        assert plus_pkgs == [] or "+packages" not in cfg["rootfs"]
 
     def test_platform_recovery_enabled_by_default(self):
         cfg = _load_platform_config("amlogic", PROJECT_ROOT)

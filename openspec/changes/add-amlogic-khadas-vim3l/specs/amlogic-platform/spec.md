@@ -138,29 +138,29 @@
 
 ### Requirement: khadas-vim3l Wi-Fi/BT 固件部署
 
-khadas-vim3l 的合并配置必须（SHALL）通过两层机制把 WiFi/BT 固件落到 rootfs 的 `/lib/firmware/brcm/`：
+khadas-vim3l 的 `rootfs.+extra_firmware` 必须（SHALL）声明从 `khadas/fenix` 仓库 `archives/hwpacks/wlan-firmware/brcm/` 路径拉取 AP6398S 板级三件套，rename 落地为 mainline 标准通用名：
 
-**通用固件层**（apt 包提供）：khadas-vim3l 的合并配置 `rootfs.+packages` 必须（SHALL）含 `firmware-brcm80211`，由该包提供 `brcmfmac4359-sdio.bin`（WiFi 固件）与 `BCM4359C0.hcd`（BT 通用 patchram）。
+| 源文件 | 落地名 | 用途 |
+|---|---|---|
+| `brcmfmac4359-sdio_ap6398s.bin` | `/lib/firmware/brcm/brcmfmac4359-sdio.bin` | WiFi 固件（brcmfmac 主固件加载名）|
+| `brcmfmac4359-sdio_ap6398s.txt` | `/lib/firmware/brcm/brcmfmac4359-sdio.txt` | NVRAM（brcmfmac fallback 通用名）|
+| `BCM4359C0_ap6398s.hcd` | `/lib/firmware/brcm/BCM4359C0.hcd` | BT patchram（btbcm 标准名）|
 
-**板级覆盖层**（fenix 仓库）：board 的 `rootfs.+extra_firmware` 必须（SHALL）声明两个文件，覆盖 apt 包默认版：
-
-| 源文件 | 落地名 |
-|---|---|
-| `khadas/fenix:archives/hwpacks/wlan-firmware/brcm/brcmfmac4359-sdio_ap6398s.txt` | `/lib/firmware/brcm/brcmfmac4359-sdio.txt`（NVRAM，rename 为 brcmfmac fallback 通用名）|
-| `khadas/fenix:archives/hwpacks/wlan-firmware/brcm/BCM4359C0_ap6398s.hcd` | `/lib/firmware/brcm/BCM4359C0.hcd`（覆盖 apt 包默认版，AP6398S 板级 patchram）|
+平台层（amlogic）不得（MUST NOT）在 `rootfs.+packages` 声明 WiFi/BT 通用固件 apt 包（不同 amlogic 板的 WiFi/BT chip 各异；Ubuntu 24.04 也无 `firmware-brcm80211` 切片包）。
 
 驱动必须（SHALL）使用 mainline in-tree `brcmfmac`（SDIO Wi-Fi）与 `hci_uart` + `btbcm`（BT over UART），不得（MUST NOT）引入 OOT 模块。BT 启动通过 systemd 单元 `bluetooth-vim3l.service` 在 `bluetooth.target` 之前调用 `btattach -B /dev/ttyAML6 -P bcm` 完成。
 
-#### Scenario: rootfs 含通用固件（apt 包提供）
+#### Scenario: rootfs 含三件套固件全集
 
 - **WHEN** 构建 khadas-vim3l rootfs 并解开 rootfs.img
-- **THEN** `/lib/firmware/brcm/brcmfmac4359-sdio.bin` 存在（来自 firmware-brcm80211 包）
+- **THEN** `/lib/firmware/brcm/brcmfmac4359-sdio.bin` 存在（内容来自 fenix `_ap6398s.bin` 源）
+- **AND** `/lib/firmware/brcm/brcmfmac4359-sdio.txt` 存在（内容来自 fenix `_ap6398s.txt` 源）
+- **AND** `/lib/firmware/brcm/BCM4359C0.hcd` 存在（内容来自 fenix `_ap6398s.hcd` 源）
 
-#### Scenario: rootfs 板级 NVRAM 与 BT patchram 已覆盖
+#### Scenario: 平台层不挂通用固件 apt 包
 
-- **WHEN** 构建 khadas-vim3l rootfs 并解开 rootfs.img
-- **THEN** `/lib/firmware/brcm/brcmfmac4359-sdio.txt` 内容来自 fenix `_ap6398s.txt` 源
-- **AND** `/lib/firmware/brcm/BCM4359C0.hcd` 内容来自 fenix `_ap6398s.hcd` 源（覆盖 apt 包默认版）
+- **WHEN** 加载 amlogic 平台配置 `_load_platform_config("amlogic")`
+- **THEN** `rootfs.+packages` 不得包含 `firmware-brcm80211` 或其他 WiFi/BT 固件 apt 包名
 
 #### Scenario: BT systemd 单元随 rootfs 部署
 

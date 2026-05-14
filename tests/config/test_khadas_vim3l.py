@@ -135,10 +135,13 @@ class TestVIM3LMergedConfig:
         assert entry["repo_subdir"] == "archives/hwpacks/wlan-firmware/brcm"
         assert entry["dest"] == "lib/firmware/brcm"
 
-        # files 必须含 NVRAM + BT patchram 两件覆盖，源名带 _ap6398s 后缀，
-        # 落地名是 brcmfmac/btbcm 标准通用名（覆盖 firmware-brcm80211 包默认）。
+        # files 必须含 WiFi 固件 + NVRAM + BT patchram 三件套，源名带
+        # _ap6398s 后缀（Khadas 为 VIM3L 上 BCM4359 模组的板级调校版），
+        # 落地名是 mainline brcmfmac/btbcm 标准通用名。Ubuntu 24.04 没有
+        # firmware-brcm80211 切片包，整套都从 fenix 拉。
         files = {f["src"]: f["dest"] for f in entry["files"]}
         assert files == {
+            "brcmfmac4359-sdio_ap6398s.bin": "brcmfmac4359-sdio.bin",
             "brcmfmac4359-sdio_ap6398s.txt": "brcmfmac4359-sdio.txt",
             "BCM4359C0_ap6398s.hcd": "BCM4359C0.hcd",
         }

@@ -17,8 +17,7 @@ Amlogic 的引导链是三家中最厚的：BL2 / BL30 / BL301 / BL31 全部 ven
 | u-boot | `u-boot/u-boot @ v2024.10` | 主线 u-boot，含 `khadas-vim3l_defconfig`（自 v2019.10） |
 | FIP blobs + 工具 | `LibreELEC/amlogic-boot-fip @ master`，**board** 子目录 `khadas-vim3l/` | bl2.bin / bl30.bin / bl301.bin / bl31.img / DDR fw（多种）+ `aml_encrypt_g12a` 工具（SM1 复用 G12A 工具链）+ `acs.bin` / `acs_tool.py` / `blx_fix.sh` 辅助工具 + `Makefile`（`include ../g12a.inc`）|
 | kernel | `torvalds/linux @ v6.12`（mainline LTS） | 含 `arch/arm64/boot/dts/amlogic/meson-sm1-khadas-vim3l.dts`，支持到 2030 |
-| WLAN/BT 通用固件 | Ubuntu `firmware-brcm80211` apt 包（来自 linux-firmware） | `brcmfmac4359-sdio.bin`（WiFi 固件本体）+ 通用 `BCM4359C0.hcd`（备用） |
-| AP6398S 板级覆盖 | `khadas/fenix @ master`，路径 `archives/hwpacks/wlan-firmware/brcm/` | `brcmfmac4359-sdio_ap6398s.txt`（VIM3L NVRAM）+ `BCM4359C0_ap6398s.hcd`（AP6398S 模块板级 BT patchram） |
+| WLAN/BT 三件套（全部从 Khadas 板级版拉）| `khadas/fenix @ master`，路径 `archives/hwpacks/wlan-firmware/brcm/` | `brcmfmac4359-sdio_ap6398s.bin`（WiFi 固件）+ `brcmfmac4359-sdio_ap6398s.txt`（NVRAM）+ `BCM4359C0_ap6398s.hcd`（BT patchram）|
 
 实板硬件：Khadas VIM3L（S905D3，4×Cortex-A55 @ 1.9GHz，2GB DDR4，16GB eMMC，板载 GbE，板载 AP6398S WLAN/BT M.2 模块，UART_AO @ 921600bps 调试串口）。
 
@@ -169,19 +168,19 @@ flash 阶段 (host fastboot 写各分区):
 
 **选择**：
 
-- WiFi/BT **通用固件**通过 Ubuntu apt 包 `firmware-brcm80211` 取得（来自 linux-firmware，含完整 brcm/* tree），加进 SoC/board 的 rootfs `+packages`。
-- VIM3L **板级覆盖**两件套（NVRAM + BT patchram）通过 board config 的 `rootfs.+extra_firmware` 从 `khadas/fenix` 拉取并覆盖到 `/lib/firmware/brcm/`。
+- VIM3L **三件套**（WiFi 固件 + NVRAM + BT patchram）全部通过 board config 的 `rootfs.+extra_firmware` 从 `khadas/fenix` 仓库的 AP6398S `_ap6398s` 调校版拉取，落地到 `/lib/firmware/brcm/` 并 rename 为 mainline 标准通用名。
+- 平台层（amlogic）**不**挂任何 WiFi/BT 通用固件包 —— 不同 amlogic 板的 WiFi/BT chip 各异，无法共享。
 - systemd 单元 `bluetooth-vim3l.service` 在 bluetooth.target 之前 `btattach -B /dev/ttyAML6 -P bcm` 把 BT UART 注册为 HCI 设备。
 
-| 文件 | 来源 | 落地路径 | 动作 |
-|---|---|---|---|
-| `brcmfmac4359-sdio.bin` | Ubuntu `firmware-brcm80211` 包 | `/lib/firmware/brcm/brcmfmac4359-sdio.bin` | apt 安装即在位 |
-| `brcmfmac4359-sdio.txt`（NVRAM）| `khadas/fenix:archives/hwpacks/wlan-firmware/brcm/brcmfmac4359-sdio_ap6398s.txt` | `/lib/firmware/brcm/brcmfmac4359-sdio.txt` | rename 为通用名（mainline brcmfmac fallback 永远加载该名）|
-| `BCM4359C0.hcd`（BT patchram）| `khadas/fenix:archives/hwpacks/wlan-firmware/brcm/BCM4359C0_ap6398s.hcd` | `/lib/firmware/brcm/BCM4359C0.hcd` | rename 覆盖 firmware-brcm80211 默认版（板级 patchram）|
+| 源文件（fenix） | 落地路径 | 用途 |
+|---|---|---|
+| `brcmfmac4359-sdio_ap6398s.bin` | `/lib/firmware/brcm/brcmfmac4359-sdio.bin` | WiFi 固件本体（brcmfmac 主固件加载名）|
+| `brcmfmac4359-sdio_ap6398s.txt` | `/lib/firmware/brcm/brcmfmac4359-sdio.txt` | NVRAM（brcmfmac fallback 通用名）|
+| `BCM4359C0_ap6398s.hcd` | `/lib/firmware/brcm/BCM4359C0.hcd` | BT patchram（btbcm 标准名）|
 
-**为何不用 LibreELEC/wlan-firmware**：早期 design 假设 LibreELEC/wlan-firmware 含 `.bin` / `.hcd` 固件本体，实测它仅含 NVRAM `.txt` 覆盖文件（11 个）。固件本体的 canonical 来源是 linux-firmware，Ubuntu 已封装为 `firmware-brcm80211` 包，直接 apt 安装最干净。
+**演化备注**：早期 design 想"通用固件用 Ubuntu apt 包，fenix 仅覆盖板级 NVRAM/patchram"，实测 Ubuntu 24.04 没有 Debian 风格的 `firmware-brcm80211` 切片包（Ubuntu 把 brcm 固件打在 monolithic `linux-firmware` 包内，整包约 500MB，不适合 embedded 默认拉），fenix 反而提供完整三件套且全是板级调校版。切到"全部走 fenix"既不再依赖 apt 切片包，又能拿到更精准的 RF tuning（Khadas 为 VIM3L 上的实际 BCM4359 模组校准过）。
 
-**为何 NVRAM/patchram 取 fenix `_ap6398s` 后缀版**：AP6398S 是 VIM3L 实际板上的 Broadcom WiFi/BT combo 模块，板级校准与 patchram 由 Khadas 维护。通用版（无 `_ap6398s` 后缀）可能首启可用但 RF 性能不达标。
+**为何取 fenix `_ap6398s` 后缀版**：AP6398S 是 VIM3L 板上的 Broadcom WiFi/BT combo 模块（Ampak 封装 BCM4359），板级校准与 patchram 由 Khadas 维护。通用版（无 `_ap6398s` 后缀）可能首启可用但 RF 性能不达标。
 
 驱动走 mainline in-tree（`brcmfmac` for SDIO WiFi，`hci_uart` + `btbcm` for BT over UART），不引入 OOT 模块。
 

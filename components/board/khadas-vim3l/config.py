@@ -6,9 +6,10 @@
   自身真正特有的字段，避免重复（deep_merge 行为见 builder/config/merge.py）。
 - WiFi/BT 模块：板载 AP6398S（Ampak 模组，封装 Broadcom BCM4359）走 SDIO
   接 brcmfmac、UART_A 接 hci_uart/btbcm。mainline arm64 generic defconfig
-  已含全部 in-tree 驱动（无 OOT），通用固件来自 firmware-brcm80211 apt 包
-  （platform 层 +packages 已声明）；本板 +extra_firmware 仅做 NVRAM 与 BT
-  patchram 两件板级覆盖（Khadas fenix 仓库内的 _ap6398s 调校版）。
+  已含全部 in-tree 驱动（无 OOT），但 Ubuntu 24.04 没有 Debian 风格的
+  ``firmware-brcm80211`` 切片包（monolithic ``linux-firmware`` 约 500MB
+  不适合 embedded 默认拉）。改为完整三件套都从 khadas/fenix 仓库的板级
+  ``_ap6398s`` 调校版拉：WiFi 固件 + NVRAM + BT patchram。
 """
 
 BOARD = {
@@ -37,13 +38,15 @@ BOARD = {
         # WiFi 通用栈（iw / wpasupplicant）已在 ubuntu-base 默认包内。
         "+packages": ["bluez"],
 
-        # AP6398S 板级覆盖：覆盖 firmware-brcm80211 包默认的 BCM4359 通用
-        # NVRAM 与 BT patchram。Khadas fenix 仓库内带 _ap6398s 后缀的版本
-        # 是 Khadas 为 VIM3L 板上 Broadcom WiFi/BT combo 模组校准过的（通用
-        # 版可能首启可用但 RF 性能不达标）。落地时 rename 成 mainline
-        # brcmfmac/btbcm 加载路径上的通用名：
+        # AP6398S 板级三件套：完整 WiFi + NVRAM + BT patchram 都从 Khadas
+        # fenix 仓库的 _ap6398s 调校版本拉。Ubuntu 24.04 没有切片版
+        # firmware-brcm80211（详见 docstring），用 fenix 板级版反而比通用
+        # linux-firmware 更精准（Khadas 为 VIM3L 上的实际 BCM4359 模组校
+        # 准过 RF tuning）。落地时 rename 成 mainline brcmfmac/btbcm 加载路径
+        # 上的通用名：
+        #   - brcmfmac4359-sdio.bin  WiFi 固件，brcmfmac 主固件加载名
         #   - brcmfmac4359-sdio.txt  NVRAM，brcmfmac fallback 通用名
-        #   - BCM4359C0.hcd          BT patchram，btbcm 标准名（覆盖 apt 包默认版）
+        #   - BCM4359C0.hcd          BT patchram，btbcm 标准名
         # 注：source 默认 "repo"，由 SourceManager.ensure_extra_firmware 独立
         # clone 到 .build/sources/extra-firmware/khadas-fenix-ap6398s/。
         "+extra_firmware": [
@@ -54,6 +57,10 @@ BOARD = {
                 # fenix 仓库内 WiFi/BT 固件实际路径（task 1.4 探查结论）。
                 "repo_subdir": "archives/hwpacks/wlan-firmware/brcm",
                 "files": [
+                    {
+                        "src": "brcmfmac4359-sdio_ap6398s.bin",
+                        "dest": "brcmfmac4359-sdio.bin",
+                    },
                     {
                         "src": "brcmfmac4359-sdio_ap6398s.txt",
                         "dest": "brcmfmac4359-sdio.txt",
