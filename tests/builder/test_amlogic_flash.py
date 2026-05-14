@@ -23,6 +23,7 @@ import pytest
 from builder.flash import (
     AllwinnerA733FlashStrategy,
     AmlogicFlashStrategy,
+    DeviceInfo,
     FlashConfig,
     FlashError,
     FlashPartition,
@@ -164,6 +165,21 @@ class TestPreFlash:
             with patch("shutil.which", return_value=None):
                 with pytest.raises(FlashError, match="boot-g12.py"):
                     s.pre_flash(Path("/usr/bin/fastboot"), target_dir, cfg)
+
+    def test_pre_flash_skips_pyamlboot_when_already_fastboot(self):
+        """如果 detect_device 已识别为 fastboot 模式（u-boot 在 DDR 跑着），
+        pre_flash 应直接返回，跳过 pyamlboot 推送 ——避免要求用户接串口
+        手动 ``fastboot usb 0``，也省一次 sudo 提示与 3s 推送等待。"""
+        s = AmlogicFlashStrategy()
+        cfg = self._make_config()
+        fb_device = DeviceInfo(
+            platform="amlogic", mode="fastboot",
+            description="Amlogic fastboot 设备",
+        )
+        # 关键断言：subprocess.run 与 which 都不应被调用（没下载、没 sudo）
+        with patch("builder.flash.subprocess.run") as mock_run:
+            s.pre_flash(Path("/fastboot"), Path("/target"), cfg, device=fb_device)
+            mock_run.assert_not_called()
 
     def test_pre_flash_missing_download_boot_field_raises(self):
         s = AmlogicFlashStrategy()

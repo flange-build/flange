@@ -529,7 +529,26 @@ class AmlogicFlashStrategy(FlashStrategy):
 
     def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
                   device: Optional["DeviceInfo"] = None):
-        """调 pyamlboot 把 u-boot 推送到 SoC DDR。"""
+        """pyamlboot 把 u-boot 推到 SoC DDR；板已在 fastboot 模式时跳过。
+
+        ``detect_device`` 已能区分 MaskROM 与 fastboot 两种模式：
+          - ``mode="maskrom"``：板刚通过 KEY1 + USB-C 进 BootROM，需要走完整
+            的 pyamlboot 推送流程把 u-boot 上 DDR；
+          - ``mode="fastboot"``：板已经在 u-boot fastboot gadget 模式（典型
+            场景：上一轮 ``flange flash`` 用 ``fastboot reboot bootloader``
+            重回 fastboot，或 Linux 跑 ``reboot bootloader`` 后 u-boot
+            PREBOOT 检测 reboot_mode 自动进 fastboot）。此时 u-boot 已在
+            DDR 跑，直接进 flash 分区流程即可。
+
+        跳过 pyamlboot 不仅省一次 sudo 提示 + ~3s 推送时间，更关键的是
+        避免要求用户接串口手动敲 ``fastboot usb 0`` —— PREBOOT 条件触发
+        让 u-boot 自动进 fastboot，host 端 ``flange flash`` 就能纯 USB
+        无人值守完成。
+        """
+        if device is not None and device.mode == "fastboot":
+            _info("板已在 fastboot 模式（u-boot 已在 DDR），跳过 pyamlboot 推送")
+            return
+
         from shutil import which
 
         if not config.pre_flash.download_boot:
