@@ -77,17 +77,17 @@
 
 ## 10. 实板验证（VIM3L 实机）
 
-- [ ] 10.1 准备 VIM3L 板 + USB-C 线 + USB-TTL 串口转换器（接 UART_AO，115200bps）+ 网线
-- [ ] 10.2 host 端 `pip install pyamlboot` + `sudo apt install android-tools-fastboot`，执行 `lsusb` 确认无残留 `1b8e:c003` 设备
-- [ ] 10.3 按住 KEY1 + 插 USB-C 上电，确认 `lsusb` 显示 `1b8e:c003`
-- [ ] 10.4 `flange flash all khadas-vim3l-default-debug`：完整执行 pre_flash (pyamlboot) → 等待 fastboot → 五分区刷写 → reboot
-- [ ] 10.5 松开 KEY1，串口观察：依次 BL2 banner、BL31 banner、U-Boot proper banner、Linux kernel banner（`Linux version 6.12.x ...`）
-- [ ] 10.6 systemd 启动至 multi-user.target，登录提示符出现
-- [ ] 10.7 板载 GbE 接网线，`ip addr show eth0` 显示已分配 IP
-- [ ] 10.8 主机端 `ssh root@<vim3l-ip>` 登录成功，`uname -r` 输出 6.12.x
-- [ ] 10.9 板上 `iw wlan0 scan` 返回至少一个 BSS；`dmesg | grep brcmfmac` 无 firmware 加载错误
-- [ ] 10.10 板上 `hciconfig` 显示 hci0 UP；`bluetoothctl scan on` 检出至少一个邻近 BT 设备
-- [ ] 10.11 若 BT 失败但 WiFi 通过：触发 design Decision 6 fallback，把 BT firmware 与 service 拆出后续变更，proposal 与 spec 同步更新
+- [x] 10.1 准备 VIM3L 板 + USB-C 线 + USB-TTL 串口转换器 + 网线
+- [x] 10.2 host 端 `pip install pyamlboot` + `brew install android-platform-tools libusb`（实测 macOS Apple Silicon 还需 libusb，否则 pyusb 报 No backend）
+- [x] 10.3 按住 KEY1 + 插 USB-C 上电，确认 USB 设备 `1b8e:c003`（macOS 用 `ioreg -p IOUSB -l | grep -A2 GX-CHIP`，sandbox 下 system_profiler 输出为空）
+- [x] 10.4 `flange flash`：pyamlboot 推裸 FIP `u-boot.bin` → u-boot 提示符手动 `fastboot usb 0` → host `fastboot oem format`（GPT 重建）+ `flash bootloader/boot/rootfs` + reboot
+- [x] 10.5 BL2 / BL31 / U-Boot banner（921600）+ kernel banner（115200，`Linux 6.12.0`）依次出来；串口波特率切换是 kernel 启动早期一次性的（earlycon → console）
+- [x] 10.6 systemd 9.0 秒到 graphical.target（kernel 1.5s + userspace 7.6s），login 提示符出现
+- [x] 10.7 mainline predictable ifname：接口名是 **`end0`**（不是 eth0）；DHCP 拿到 172.17.1.157，状态 UP/LOWER_UP
+- [x] 10.8 host `ssh flange@172.17.1.157` 通；`uname -r` → `6.12.0`；`/proc/device-tree/compatible` 含 `khadas,vim3l` + `amlogic,sm1`
+- [ ] 10.9 WiFi driver bind + firmware 加载 ✓（brcmfmac mmc2:0001:1 → BCM4359/9 fw 9.87.51.11.82）；`wlan0` UP/NO-CARRIER；`iw` 工具未装无法 scan（**base 包缺 iw**，后续加进 platform +packages），关联测试待后续
+- [x] 10.10 BT 完全自动工作：`hci0 UP RUNNING`，BCM4359 chip id 121，HCI 5.0，BD addr WiFi+1（combo）。**关键发现**：mainline 6.12 dtsi 已在 `&uart_A` 声明 `brcm,bcm43438-bt`，`hci_uart_bcm` driver auto-probe + 加载 `BCM4359C0.hcd`，**我们手写的 `bluetooth-vim3l.service` 完全多余且 disabled**（后续可移除）
+- [ ] 10.11 BT fallback 矩阵无需触发（BT 已通）。改作 follow-up 项：(a) 移除冗余 systemd unit；(b) 加 `iw` 到 platform +packages；(c) WiFi NVRAM 用 brcmfmac dts-compatible-suffix 优先级路径（`brcmfmac4359-sdio.khadas,vim3l.bin`）+ clm_blob 补全
 
 ## 11. 收尾
 

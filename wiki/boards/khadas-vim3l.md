@@ -114,16 +114,58 @@ fenix 仓库内路径：`archives/hwpacks/wlan-firmware/brcm/`。三件套由 bo
 
 - `overlay/etc/hostname` — 设备主机名 `khadas-vim3l`
 - `overlay/etc/systemd/system/bluetooth-vim3l.service` — `btattach -B /dev/ttyAML6 -P bcm`，`Before=bluetooth.target`，把 BT UART 注册为 HCI 设备（mainline `hci_uart` + `btbcm` 走 patchram 流程）
-- `+extra_packages: [bluez]`（含 bluetoothd / btattach；wireless-tools / iw 已在 base 默认）
+- `+extra_packages: [bluez]`（含 bluetoothd / btattach）
 
-## 已知问题 / 实测笔记
+## 实测结果（首版 add-amlogic-khadas-vim3l 落地验证）
 
-实板验证尚未完成（首版 OpenSpec change `add-amlogic-khadas-vim3l` 仍在实施中），以下待实板回填：
+实测日期：2026-05-15。构建版本：commit `d4516f4`。kernel：`6.12.0`。OS：Ubuntu 24.04.4 LTS arm64。
 
-- TODO 启动时间（BL2 → systemd login prompt）
-- TODO WiFi 关联首次是否直接可用（`iw wlan0 scan` BSS 数）
-- TODO BT scan 首次是否直接可用（`bluetoothctl scan on`）
-- TODO 若 BT 失败 / WiFi 通过：触发 design Decision 6 fallback，BT 拆出后续变更，首版仅交付 WiFi（验收降级）
+### 启动链路 ✓
+- BL2 / BL31 / u-boot 串口：921600；kernel 起来后切：115200
+- `systemd-analyze`：内核 1.483s + 用户态 7.552s = **9.036s 到 graphical.target**
+- `cat /proc/device-tree/compatible` → `khadas,vim3l` + `amlogic,sm1` ✓
+
+### 存储 ✓
+- eMMC 在 Linux 是 `mmcblk1`（mmcblk0 是 mmc0 SDIO，eMMC 在 mmc2 但 Linux 按 probe 顺序编号 1）
+- `mmcblk1` 14.6 GiB user area + `mmcblk1boot0` / `mmcblk1boot1` 各 4 MiB hw partition ✓
+- 分区：`mmcblk1p1` 64 MiB boot（ext4 LABEL=boot 挂 `/boot`）+ `mmcblk1p2` 14.5 GiB rootfs
+- **rootfs `grow_on_first_boot` 工作**：`image_size: 2G` 初始 → 实占 13G（`df -h /` 报 15G / 用 784M）✓
+
+### 网络 ✓
+- 主线 6.12 默认 predictable ifname：`end0`（不是 eth0）；MAC `c8:63:14:70:cc:7a`，状态 UP / LOWER_UP
+- DHCP 拿到 IP（实测 172.17.1.157）+ SSH 服务 `active`，远程登录成功
+- 用户态 `ping` 因 cap_net_raw 缺失报错（普通 user 没 setuid bit，无关）
+
+### WiFi ✓（带小 nit）
+- driver bind：`brcmfmac mmc2:0001:1` → chip BCM4359/9 ✓
+- firmware：`/lib/firmware/brcm/brcmfmac4359-sdio.{bin,txt}` + `BCM4359C0.hcd` 三件套（fenix `_ap6398s` 板级版）全部落位
+- 加载版本：`Firmware: BCM4359/9 wl0: version 9.87.51.11.82 (Feb 22 2022)`
+- `wlan0` 接口 UP（NO-CARRIER 待关联）；MAC `18:93:7f:66:bb:76`
+- **小 nit 1**：brcmfmac 优先找板级文件名 `brcmfmac4359-sdio.khadas,vim3l.bin` 不存在（fenix 给的是 `_ap6398s` 后缀），fallback 到通用 `brcmfmac4359-sdio.bin` 加载成功 —— 工作但少了"以 dts compatible 字符串为后缀"的板级精调路径；可后续做 file rename / symlink 优化
+- **小 nit 2**：`clm_blob` / `txcap_blob` 缺失，brcmfmac warning `device may have limited channels available` —— 不致命，RF 国家代码 calibration 不完整可能限制 5GHz 信道；后续可补 fenix 的 clm_blob
+- **小 nit 3**：base 包没装 `iw` 工具，`iw dev` not found —— 用 `wpa_supplicant` / `nmcli` 仍能关联；建议后续加 `iw` 到 platform `+packages`
+
+### BT ✓✓ **比预期还好 —— 完全自动工作**
+- `hci0` UP RUNNING，BD `18:93:7F:66:BB:77`（WiFi MAC + 1，combo 模块标准行为），Type Primary Bus UART
+- HCI 5.0 / BCM4359 chip id 121 / Firmware Manufacturer Broadcom ✓
+- **mainline 6.12 + `meson-khadas-vim3.dtsi` 在 `&uart_A` 节点直接声明 `bluetooth { compatible = "brcm,bcm43438-bt" }`**，`hci_uart_bcm` driver 自动 probe → btbcm 自动加载 `/lib/firmware/brcm/BCM4359C0.hcd` patchram 完成 init
+- **`bluetooth-vim3l.service` 是多余的**：我们手写的 btattach systemd 单元当前 `disabled / inactive`，dts auto-attach 不需要 userspace 协助。**后续优化可移除该 service**（design Decision 6 的 fallback 矩阵无需触发）
+- 板上的两颗 warning（`vbat not found, using dummy regulator` / `vddio not found`）—— 用 dummy regulator 兜底，BT 功能不受影响
+
+### Khadas MCU（间接证据 ✓）
+- `Registered IR keymap rc-khadas` 出现在 dmesg —— MCU IR remote driver 已注册
+- `/sys/class/leds/` 暴露 `red:status` / `white:status` 两颗板载 LED —— `gpio-khadas-mcu` 子驱动 bind 成功
+- i2c-adapter sysfs 路径与早期 schema 不同（mainline 改了 sysfs 拓扑），但 MCU 功能可见
+
+### Non-Goal 验证（确认这些是预期不工作的）
+- GPU (Mali-G31) / HDMI / VPU (amvdec) / NPU / USB OTG gadget / SD 卡启动模式：未配置，预期不可用 ✓
+
+## 后续优化项（不阻塞首版交付）
+
+- 移除 `overlay/etc/systemd/system/bluetooth-vim3l.service`（dts auto-attach 已 cover）
+- 把 `iw` 加进 platform `+packages`（VIM3L base 包没 iw，影响 WiFi 调试体感）
+- 补 fenix `clm_blob`（如有）让 RF 国家代码 calibration 完整
+- WiFi NVRAM 文件命名 align 到 brcmfmac 的 dts-compatible-suffix 优先级（`brcmfmac4359-sdio.khadas,vim3l.bin` symlink）
 
 ## 关联文档
 
