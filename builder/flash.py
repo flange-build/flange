@@ -584,26 +584,23 @@ class AmlogicFlashStrategy(FlashStrategy):
         subprocess.run(cmd, check=True)
 
     def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
-        """通过 ``fastboot oem run "gpt write mmc 2 ${partitions}"`` 让
-        u-boot 按实际 eMMC 容量重建 GPT。
+        """``fastboot oem format`` 让 u-boot 按实际 eMMC 容量重建 GPT。
 
         u-boot 端约定（详见 components/platform/amlogic/s905d3/patches/
         bootloader/flange_fastboot.config）：
           - PREBOOT 设 ``partitions`` env，含 user area GPT 分区描述
             （boot + rootfs；bootloader 在 hw boot0 不入 user area GPT）
-          - ``CONFIG_FASTBOOT_OEM_RUN=y`` 允许 host 端 ``fastboot oem run``
-            执行 u-boot 命令脚本
+          - ``CONFIG_FASTBOOT_CMD_OEM_FORMAT=y`` 启 ``oem format`` 子命令
           - ``CONFIG_CMD_GPT=y`` + ``CONFIG_RANDOM_UUID=y`` 提供 gpt write
             子命令与 UUID 生成
-        ``gpt write`` 按当前 mmc dev 容量计算 LBA / size，避开"raw.img
-        GPT 字段指向 2GB 位置但 eMMC 14.6GB"的尺寸不匹配问题，写完后
+        ``oem format`` 内部直接调 ``gpt write mmc <FASTBOOT_FLASH_MMC_DEV>
+        ${partitions}`` —— 按当前 mmc dev 容量计算 LBA / size，避开
+        "raw.img GPT 字段指向 2GB 但 eMMC 14.6GB" 的尺寸不匹配问题，写完
         u-boot 自动 rescan 分区表，后续 ``flash boot/rootfs`` 立即可找到
         分区。本步骤必须在 ``fastboot flash boot/rootfs`` 之前。
         """
-        _info("用 u-boot gpt write 按实际 eMMC 容量重建 GPT...")
-        self._run_fastboot(
-            tool, "oem", "run", "gpt write mmc 2 ${partitions}",
-        )
+        _info("用 u-boot oem format 按实际 eMMC 容量重建 GPT...")
+        self._run_fastboot(tool, "oem", "format")
         _ok("GPT")
 
     def write_partition(self, tool: Path, offset: int, image: Path):
