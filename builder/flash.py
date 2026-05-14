@@ -583,11 +583,52 @@ class AmlogicFlashStrategy(FlashStrategy):
         cmd = [str(tool), *args]
         subprocess.run(cmd, check=True)
 
+    # GPT 头部抽取布局（与 image.py 的 raw.img 输出对齐）：
+    #   LBA 0:       protective MBR        (512B)
+    #   LBA 1:       primary GPT header     (512B)
+    #   LBA 2..33:   partition entries     (128 entries × 128B = 16 KiB)
+    # 共 34 sectors = 17408 B；secondary GPT 在 disk 尾部，u-boot 写 primary
+    # 时同时刷新，本侧只推 primary 段。
+    GPT_HEADER_BYTES = 34 * 512  # 17 KiB
+
+    def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
+        """从 raw.img 头部抽 GPT 镜像段，``fastboot flash gpt`` 写到 mmc2。
+
+        u-boot 端 ``CONFIG_FASTBOOT_GPT_NAME="gpt"`` 把 "gpt" 这个 partition
+        name 路由到 GPT 重建路径：收到的 binary 视为完整的 GPT 镜像
+        （protective MBR + primary GPT header + entries），写到 mmc 起点
+        并自动维护 secondary GPT。
+
+        本步骤必须在 ``fastboot flash boot/rootfs`` 之前 —— 否则 u-boot
+        在 user area 找不到 "boot" / "rootfs" 分区，报 "Bad device
+        specification mmc boot"。
+        """
+        raw_img = target_dir / "image" / "raw.img"
+        if not raw_img.exists():
+            _warn(f"未找到 raw.img: {raw_img}，跳过 GPT 刷新（u-boot user "
+                  "area 没分区表，flash boot/rootfs 会失败）")
+            return
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".gpt.bin", delete=False) as tmp:
+            with raw_img.open("rb") as f:
+                tmp.write(f.read(self.GPT_HEADER_BYTES))
+            tmp_path = Path(tmp.name)
+        try:
+            _info(f"刷新 GPT 表（{self.GPT_HEADER_BYTES // 1024} KiB）...")
+            self._run_fastboot(tool, "flash", "gpt", str(tmp_path))
+            _ok("GPT")
+        finally:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
     def write_partition(self, tool: Path, offset: int, image: Path):
         """通过 fastboot flash <name> <image> 写入分区。
 
         amlogic 的分区路由由 u-boot 端 ``CONFIG_FASTBOOT_GPT_NAME`` +
-        ``CONFIG_FASTBOOT_FLASH_MMC_DEV=1`` 决定，不依赖 host 端 offset。
+        ``CONFIG_FASTBOOT_FLASH_MMC_DEV=2`` 决定，不依赖 host 端 offset。
         分区名通过 ``image`` 文件路径反推 —— 在 ``flash_all`` 主流程中
         ``FlashExecutor`` 已按分区名调用，但抽象基类签名只给 offset，故
         这里从镜像路径反推分区名。
