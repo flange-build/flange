@@ -83,11 +83,18 @@ class TestVIM3LMergedConfig:
         assert "console=ttyAML0,115200n8" in args
         assert "earlycon" in args
 
-    def test_partitions_three_entries(self, merged):
-        """与 SoC 层声明一致：boot / recovery / rootfs，无 idbloader/uboot raw
-        （Amlogic eMMC 启动靠 hw boot0，不在 user area GPT 内）。"""
+    def test_recovery_disabled(self, merged):
+        """VIM3L 板首版不交付 recovery 维护系统，board 层 enabled=False。"""
+        assert merged["recovery"]["enabled"] is False
+
+    def test_partitions_two_entries(self, merged):
+        """board 层覆盖 SoC 三分区布局（deep_merge 对 list 是替换语义），
+        只剩 boot + rootfs；recovery 关 enabled 同时把那 512MB 收回给 rootfs。
+        """
         names = [e["name"] for e in merged["partitions"]["entries"]]
-        assert names == ["boot", "recovery", "rootfs"]
+        assert names == ["boot", "rootfs"], (
+            f"VIM3L 应只有 boot + rootfs 两个分区；实际: {names}"
+        )
 
     def test_partitions_rootfs_grows(self, merged):
         rootfs_entry = next(

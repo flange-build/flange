@@ -46,19 +46,18 @@ lunch khadas-vim3l-default-release
 
 ## eMMC 布局
 
-与 rk3566 user area 同形（无 idbloader / uboot raw 分区），但 BootROM 入口走 **eMMC hw boot0 分区**而非 user area：
+BootROM 入口走 **eMMC hw boot0 分区**而非 user area，user area 只有 boot + rootfs 两块（board 关掉了 recovery）：
 
 ```
 eMMC hw boot0 (4 MiB)
   └ offset 0x200  u-boot.bin.sd.bin (FIP + u-boot proper)
 
 eMMC user area (GPT, sector size 512B)
-  ├ boot      offset 0x40,     size 0x20000   (64 MiB ext4，extlinux.conf + Image + meson-sm1-khadas-vim3l.dtb)
-  ├ recovery  offset 0x20040,  size 0x100000  (512 MiB ext4)
-  └ rootfs    offset 0x120040, size remaining (ext4, image_size 2G, grow_on_first_boot=True)
+  ├ boot     offset 0x40,    size 0x20000  (64 MiB ext4，extlinux.conf + Image + meson-sm1-khadas-vim3l.dtb)
+  └ rootfs   offset 0x20040, size remaining (ext4, image_size 2G, grow_on_first_boot=True)
 ```
 
-env 分区暂不引入：mainline u-boot 默认走 mmc raw offset 存 env，无单独分区也能工作。
+VIM3L 不交付 recovery 维护系统：首启失败直接 KEY1 + USB-C 进 MaskROM 重刷比 adb 拉 recovery 简单，板级 `recovery.enabled = False` 关掉之后 SoC 层默认的 512MB recovery 分区也一并去掉，让位给 rootfs。env 分区也不引入：mainline u-boot 默认走 mmc raw offset 存 env，无单独分区也能工作。
 
 ## MaskROM 进入与刷写流程
 
@@ -82,7 +81,6 @@ host                                          board
   │   ├─ u-boot 自动进 fastboot gadget
   │   ├─ fastboot flash bootloader → eMMC hw boot0 offset 0x200
   │   ├─ fastboot flash boot       → GPT boot 分区
-  │   ├─ fastboot flash recovery   → GPT recovery 分区
   │   ├─ fastboot flash rootfs     → GPT rootfs 分区
   │   └─ fastboot reboot
   │ 用户松开 KEY1

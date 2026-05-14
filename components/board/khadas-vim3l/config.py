@@ -31,6 +31,26 @@ BOARD = {
         "fip_board_dir": "khadas-vim3l",
     },
 
+    # VIM3L 板载 16/32GB eMMC，首版不交付 recovery 维护系统（adb 触发的
+    # recovery 模式不是验收范围；首启失败用 KEY1 + USB-C 进 MaskROM 重刷
+    # 更直接）。关 recovery 同时收回 512MB 给 rootfs，并把分区表收敛到
+    # 只剩 boot + rootfs 两块。
+    "recovery": {
+        "enabled": False,
+    },
+    "partitions": {
+        # 覆盖 SoC 层的三分区布局（deep_merge 对 list 是替换语义）。
+        # 顺序与字段格式仍与 rk3566 user area 同形（GPT，无 raw 分区，
+        # 因 Amlogic BootROM 走 hw boot0 而非 user area）。
+        "format": "gpt",
+        "sector_size": 512,
+        "entries": [
+            {"name": "boot",   "offset": "0x40",    "size": "0x20000",  "type": "ext4"},
+            {"name": "rootfs", "offset": "0x20040", "size": "remaining",
+             "type": "ext4", "image_size": "2G", "grow_on_first_boot": True},
+        ],
+    },
+
     "rootfs": {
         # bluez 提供 btattach + bluetoothd；board overlay 内的
         # bluetooth-vim3l.service 在 bluetooth.target 之前调 btattach -P bcm
