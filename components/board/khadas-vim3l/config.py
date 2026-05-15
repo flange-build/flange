@@ -31,6 +31,17 @@ BOARD = {
         "fip_board_dir": "khadas-vim3l",
     },
 
+    "boot": {
+        # board 私有 overlay：dtso 源在 components/board/khadas-vim3l/dtso/，
+        # 由 device-tree-overlay 组件用 cpp + dtc 编译。SoC 层 boot.dtb_overlays /
+        # vendor_overlays / default_overlays 默认为空 list，本字段以 deep_merge 的
+        # list-replace 语义只覆盖 board_overlays 与 default_overlays 两条键；
+        # SoC 层的 kernel_args 与 dtb_overlays / vendor_overlays 字段保持不变。
+        "board_overlays": ["vim3l-spidev-spicc1.dtbo"],
+        # 默认应用：开机即把 spicc1 enable，/dev/spidev* 首启可用。
+        "default_overlays": ["vim3l-spidev-spicc1.dtbo"],
+    },
+
     # VIM3L 板载 16/32GB eMMC，首版不交付 recovery 维护系统（adb 触发的
     # recovery 模式不是验收范围；首启失败用 KEY1 + USB-C 进 MaskROM 重刷
     # 更直接）。关 recovery 同时收回 512MB 给 rootfs，并把分区表收敛到

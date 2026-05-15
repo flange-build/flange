@@ -196,6 +196,53 @@ class TestVIM3LOverlayFiles:
         assert "WantedBy=multi-user.target" in content
 
 
+class TestVIM3LSpidev:
+    """板私有 DT overlay：vim3l-spidev-spicc1 在 spicc1 上挂 spidev，
+    覆盖 amlogic-platform spec "khadas-vim3l SPI 用户态访问" requirement。
+    """
+
+    @pytest.fixture()
+    def merged(self, boards):
+        return get_board_config("khadas-vim3l", boards=boards)
+
+    def test_board_overlays_contains_spidev(self, merged):
+        assert merged["boot"]["board_overlays"] == [
+            "vim3l-spidev-spicc1.dtbo"
+        ]
+
+    def test_default_overlays_contains_spidev(self, merged):
+        assert merged["boot"]["default_overlays"] == [
+            "vim3l-spidev-spicc1.dtbo"
+        ]
+
+    def test_dtso_source_exists(self):
+        from builder.paths import COMPONENTS_ROOT
+        path = (
+            COMPONENTS_ROOT
+            / "board" / "khadas-vim3l"
+            / "dtso" / "vim3l-spidev-spicc1.dtso"
+        )
+        assert path.is_file(), f"缺少 dtso 源文件: {path}"
+
+    def test_dtso_content_contract(self):
+        """dtso 必须满足 amlogic-platform spec 的 "dtso 源文件存在并满足契约"
+        scenario 列出的全部 token：plugin 头 / &spicc1 / status okay /
+        rohm,dh2228fv 借壳 / 24 MHz 上限。"""
+        from builder.paths import COMPONENTS_ROOT
+        path = (
+            COMPONENTS_ROOT
+            / "board" / "khadas-vim3l"
+            / "dtso" / "vim3l-spidev-spicc1.dtso"
+        )
+        text = path.read_text()
+        assert "/dts-v1/;" in text
+        assert "/plugin/;" in text
+        assert "&spicc1" in text
+        assert 'status = "okay";' in text
+        assert 'compatible = "rohm,dh2228fv";' in text
+        assert "spi-max-frequency = <24000000>;" in text
+
+
 class TestVIM3LLunchTargets:
     """khadas-vim3l lunch target 自动出现在可用目标列表。"""
 
