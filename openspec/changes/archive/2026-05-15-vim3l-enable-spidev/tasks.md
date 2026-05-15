@@ -37,4 +37,4 @@
 
 - [x] 6.1 跑 `openspec validate vim3l-enable-spidev --strict` 通过
 - [x] 6.2 commit 全部改动；commit message 引用本 change 名 `vim3l-enable-spidev`
-- [ ] 6.3 实施完成后执行 `/opsx:archive vim3l-enable-spidev`
+- [x] 6.3 实施完成后执行 `/opsx:archive vim3l-enable-spidev`
