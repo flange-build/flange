@@ -1,0 +1,30 @@
+From: flange <flange@localhost>
+Subject: [PATCH] dts: neons-core3566-nanob: 禁用 tc358743 HDMI-rx 桥
+
+板载 cm4-cam1 carrier dtsi (``rk3566-neons-core-csi-cm4-cam1.dtsi``) 默认
+打开 i2c1 上的 Toshiba TC358743 HDMI-to-CSI 桥 (i2c addr 0x0f)。当前
+产品形态下该桥未挂模块，kernel 起来后 tc35874x 驱动反复 i2c 读 chip-id
+全部 timeout，串口被 "rk3x-i2c fe5a0000.i2c: timeout / SCL hold by slave"
+风暴刷屏，每次 ~200ms，rkisp / v4l2 拓扑也会因 subdev 不响应反复重试。
+现象级表现是 kernel 起来后用户态迟迟不出 banner。
+
+直接把 tc358743 节点 ``status`` 改为 ``disabled``，让驱动不 probe；
+i2c1 本身保持 okay（总线上可能还有别的器件）。日后若物理挂上 HDMI-rx
+桥，移除本 patch 即可。
+
+不删 ``#include "rk3566-neons-core-csi-cm4-cam1.dtsi"``：dtsi 里还引入
+了 dphy1 / csi 链路上的 clk / ext_hdmirx_tc358743_clk 等设施，保留无副
+作用，单点禁用 tc358743 更精确。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3566-neons-core-csi-cm4-cam1.dtsi b/arch/arm64/boot/dts/rockchip/rk3566-neons-core-csi-cm4-cam1.dtsi
+--- a/arch/arm64/boot/dts/rockchip/rk3566-neons-core-csi-cm4-cam1.dtsi
++++ b/arch/arm64/boot/dts/rockchip/rk3566-neons-core-csi-cm4-cam1.dtsi
+@@ -129,7 +129,7 @@
+ 	status = "okay";
+ 	
+ 	tc358743: tc358743@f {
+-		status = "okay";
++		status = "disabled";
+ 		compatible = "toshiba,tc358743";
+ 		reg = <0x0f>;
+ 		clocks = <&ext_hdmirx_tc358743_clk>;

@@ -1,0 +1,60 @@
+From: flange <flange@localhost>
+Subject: [PATCH] dts: neons-core 模块: PMIC pmic-reset 状态不武装 SLP-RST
+
+现象: kernel 起来 PMIC probe 走到 ``rk817_pinctrl_init`` 末尾就触发整片
+power cycle，串口立刻看到 DDR init 重新打印，构成 reboot loop。
+
+根因链 (drivers/mfd/rk808.c, drivers/pinctrl/pinctrl-rk805.c)::
+
+  rk817_of_property_prepare()        # rk808 driver
+    └─ regmap_update_bits(SYS_CFG3, SLPPIN_FUNC|RST_FUNC, NULL|0)
+                                    # SLPPIN=NULL, RST_FUNC=0 (整 PMIC reset)
+                                    # pmic-reset-func=<0> 的语义
+  rk817_pinctrl_init()
+    └─ platform_device_add(rk805-pinctrl)
+    └─ pinctrl_select_state("default")          # 安全：写 SoC GPIO 的 pmic_int
+    └─ pinctrl_select_state("pmic-reset")       # ★ 这里
+         └─ _rk817_pinctrl_set_mux(0, pin_fun3)
+              └─ regmap_update_bits(SYS_CFG3, SLPPIN_FUNC, 3<<3)
+                                    # SLPPIN_FUNC=RST 模式
+
+写入 SLPPIN_FUNC=RST 的瞬间，只要 SLP 引脚（GPIO0_PA2）此时不是 PMIC
+视角下的 inactive 电平，PMIC 立刻执行 RST_FUNC=0 动作 → 整片 NPOR
+reset → SoC power cycle → reboot loop。
+
+板载比对：tspi-rk3566 用与本板一字不差的 PMIC + pinctrl DTS（包括
+``pmic-reset-func = <0>`` 和 ``pinctrl-3 = <&soc_slppin_gpio>,
+<&rk817_slppin_rst>``），实测能稳定 boot。差异只能落在 PCB 物理层：
+neons-core 模块或本 carrier 走线导致 GPIO0_PA2 在 probe 那一刻不在
+PMIC inactive 电平上（外部 pull-up / 走线长悬空浮高 / core 模块设计），
+而 tspi 该引脚物理上是 inactive。无法在内核侧验证硬件状态，只能 软件
+兜底。
+
+修法：把 ``pinctrl-3`` 中的 ``rk817_slppin_rst`` 换成 ``rk817_slppin_null``
+（它定义为 ``function = "pin_fun0"``，set_mux 写出 SLPPIN_FUNC=NULL）。
+这样 driver 仍然能找到并 select "pmic-reset" 状态（满足
+``pinctrl_lookup_state`` 不为 IS_ERR），不破坏 rk808_pinctrl_init 的
+return-0 路径；但实际向 PMIC 写入的 SLPPIN_FUNC 是 NULL，PMIC 不响应
+SLP 信号——RST 通路被釜底抽薪。
+
+反向影响：失去 PMIC 触发的硬件应急复位能力（如 SoC 死锁仍能被 PMIC
+拉起的场景）。但 ``reboot``/``shutdown`` 用户路径走 PSCI ``SYSTEM_RESET``
++ ATF BL31，与 PMIC SLP 通路无关，功能不损失。``pmic-reset-func=<0>``
+保持不动——RST_FUNC 寄存器状态只在 SLPPIN_FUNC=RST 时才起作用，现在
+SLPPIN_FUNC 永不为 RST，配置值无副作用。
+
+后续 TODO：硬件层确认 GPIO0_PA2 走线 / 上拉，定位 SLP 异常的真实电气
+原因，再决定是否恢复 PMIC RST 通路（届时同步移除本 patch）。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3566-neons-core.dtsi b/arch/arm64/boot/dts/rockchip/rk3566-neons-core.dtsi
+--- a/arch/arm64/boot/dts/rockchip/rk3566-neons-core.dtsi
++++ b/arch/arm64/boot/dts/rockchip/rk3566-neons-core.dtsi
+@@ -343,7 +343,7 @@
+ 		pinctrl-0 = <&pmic_int>;
+ 		pinctrl-1 = <&soc_slppin_slp>, <&rk817_slppin_slp>;
+ 		pinctrl-2 = <&soc_slppin_gpio>, <&rk817_slppin_pwrdn>;
+-		pinctrl-3 = <&soc_slppin_gpio>, <&rk817_slppin_rst>;
++		pinctrl-3 = <&soc_slppin_gpio>, <&rk817_slppin_null>;
+
+ 		rockchip,system-power-controller;
+ 		wakeup-source;

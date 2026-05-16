@@ -1,0 +1,42 @@
+From: flange <flange@localhost>
+Subject: [PATCH] dts: neons-core 模块: 禁用 rknpu / rknpu_mmu (NPU 物理不可用)
+
+NPU enable 后 boot 触发 ``Kernel panic - not syncing: panic_on_set_idle``，
+根因是 NPU power domain 的 PD ack 寄存器物理上不响应：
+
+  rk_iommu_driver_init (rknpu_mmu) probe → __genpd_dev_pm_attach
+    → genpd_power_on → rockchip_pmu_set_idle_request(NPU PD)
+    → 等 ack 10ms 超时 → BSP pm_domains.c:636 无条件 panic
+
+panic 由 BSP 在 ``rockchip_pmu_set_idle_request`` error 路径硬编码
+（``drivers/soc/rockchip/pm_domains.c``），没有可关 sysctl。
+
+rk356x.dtsi 默认就把 ``rknpu`` 标为 ``status = "disabled"``，问题出在
+neons-core 模块 dtsi 又把它 override 成 ``okay``——neons-core 这块核心
+板的 NPU 物理上不可用（同 rp-pro-rk3568-h 现象，常见于 PCB 简化版未
+连 NPU 上电链，或 die 内 NPU power switch 失效）。
+
+直接把 neons-core dtsi 内的两处 ``status = "okay"`` 改回 ``disabled``
+（rknpu 与 rknpu_mmu），让 rknpu_mmu 不被 probe，避免 boot panic。改 dtsi
+而非在板级 dts 末尾追加 override：neons-core 模块所有 carrier（含
+wavesharecm4-nano-b）共用同一物理核心板，NPU 不可用是模块级别属性。
+如果将来换硬件确认 NPU 可用，再移除本 patch。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3566-neons-core.dtsi b/arch/arm64/boot/dts/rockchip/rk3566-neons-core.dtsi
+--- a/arch/arm64/boot/dts/rockchip/rk3566-neons-core.dtsi
++++ b/arch/arm64/boot/dts/rockchip/rk3566-neons-core.dtsi
+@@ -736,12 +736,12 @@
+ //神经网络处理
+ &rknpu {
+ 	rknpu-supply = <&vdd_npu>;
+-	status = "okay";
++	status = "disabled";
+ };
+
+ //神经网络内存管理
+ &rknpu_mmu {
+-	status = "okay";
++	status = "disabled";
+ };
+
+ //ADC
