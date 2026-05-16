@@ -471,16 +471,23 @@ class SourceManager:
         shallow clone 场景下 `--depth=1` 保持仓库始终是浅的，不会因为
         历次 fetch 逐步长成完整历史。
 
-        fetch 必须显式指定 refspec ``<branch>:refs/remotes/origin/<branch>``：
+        fetch 必须显式指定 refspec ``+<branch>:refs/remotes/origin/<branch>``：
         ``git clone -b <X>`` 默认建出 single-branch 仓库，``remote.origin.fetch``
         被 pin 到原始分支；后续切到新 branch 时纯 ``git fetch origin <new>``
         只更新 FETCH_HEAD，不建 ``refs/remotes/origin/<new>``，导致下一步
         ``git reset --mixed origin/<new>`` 找不到 ref。显式 refspec 强制建出
         remote tracking ref，single-branch 仓库下首次切 branch 也能成功。
+
+        refspec 前缀 ``+`` 是 force flag——允许 non-fast-forward 更新本地
+        ``refs/remotes/origin/<branch>``。上游分支被 rebase / force-push
+        （rkbin 这类 vendor binary 仓库常见）时，没有 ``+`` 会被 git 以
+        ``! [rejected] ... (non-fast-forward)`` 拒掉。remote tracking ref
+        语义上就是镜像远端 tip，跟随 rewind 是预期行为；``git clone`` 默认
+        写入 ``remote.origin.fetch`` 的 refspec 同样带 ``+``。
         """
         env = {**os.environ,
                "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
-        refspec = f"{branch}:refs/remotes/origin/{branch}"
+        refspec = f"+{branch}:refs/remotes/origin/{branch}"
         subprocess.run(["git", "fetch", "--depth=1", "origin", refspec],
                        cwd=repo_dir, env=env, check=True, timeout=600)
         subprocess.run(["git", "reset", "--mixed", f"origin/{branch}"],
