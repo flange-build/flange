@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -858,6 +859,17 @@ class AppBuilder:
             elif system == "meson":
                 # Meson 的 sysroot 通过 cross-file 管理，此处不做额外注入
                 pass
+
+        # ------------------------------------------------------------------
+        # $(nproc) 占位符替换为实际 CPU 数
+        #
+        # _BUILD_SYSTEMS 模板里写的是 "-j$(nproc)" 字面量，沿 shell 习惯保留；
+        # 但 DockerRunner.run 用 argv 直跑、不经 shell，cmake/make 会把
+        # "$(nproc)" 当成字面字符串而报 "invalid number"。这里在生成命令时
+        # 把所有 token 内的 "$(nproc)" 替换成 os.cpu_count() 的字符串值。
+        # ------------------------------------------------------------------
+        nproc = str(os.cpu_count() or 1)
+        commands = [[tok.replace("$(nproc)", nproc) for tok in cmd] for cmd in commands]
 
         return commands
 

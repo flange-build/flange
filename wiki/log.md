@@ -6,6 +6,30 @@
 
 ---
 
+## [2026-05-17] sync | C++ app 构建链路实测：$(nproc) 热修 + scaffold 模板"空 deb"问题定位
+
+- 触发：刚补完容器工具链（[[2026-05-16 fix-dockerfile-cpp-toolchain]]），实跑 `flange build app hello_world_cpp` 检验闭环，连撞两个 flange 历史 bug
+- **bug 1（已热修，不开 change）**：`builder/app.py:53` 的 `_BUILD_SYSTEMS["cmake"]` / `["make"]` 模板里 `"-j$(nproc)"` 是 shell 字面占位，但 `DockerRunner.run` 用 argv 直跑、不经 shell，cmake/make 拿到字面字符串报 `invalid number '$(nproc)' given`
+  - 修：`_build_commands` 末尾加 token-级替换 `$(nproc) → str(os.cpu_count() or 1)`，常量保留（语义不变）
+  - 暴露原因：除 `none`/`custom` 路径外历史从无人真正跑过 cmake/make 模板（环境本来就缺 cmake/meson，连 configure 都到不了），$(nproc) 这一步从未触达，此次环境修齐后才"出土"
+- **bug 2（已定位，未修，scaffold 模板全军覆没）**：`builder/templates/` 下 9 个 cmake/meson/make 模板里写的 `install(TARGETS ...)` / `install: true` / `make install` 全是死代码——flange 的 `collect_files` 从不调对应构建系统的 install 钩子，只扫 app 工程根目录下的约定子目录。所有 scaffold 出来的 exec/lib/service × cmake/meson/make 工程默认编出空 deb（仅 `./` 根目录），等于 scaffold 这条路径上的 C/C++ 模板**从来没人真用过**
+  - 当前 workaround：在每个 app 工程里手动加 `set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)`（cmake）或换 `build.system: custom`（meson）；hello_world_cpp 已按此修，编出 3186 字节正常 deb
+  - 长期解：将来开新 change 改 `builder/app.py._compile`，跑完构建后调 `--prefix=<staging>` / `DESTDIR=<staging>` 落到 staging，让 `collect_files` 从 staging 扫——scaffold 模板里的 `install(...)` 即可正常生效
+- 关联文件：`builder/app.py`（$(nproc) 热修 + `import os`）、`components/app/hello_world_cpp/CMakeLists.txt`（RUNTIME_OUTPUT_DIRECTORY 修）
+- 不开 change：bug 1 是 5 行热修，bug 2 留作后续；本笔在 `wiki/subsystems/scaffold-生成器.md` 易踩坑段与 `wiki/subsystems/Docker-构建环境.md` 易踩坑段并行落地
+
+## [2026-05-16] sync | Docker 构建环境补 C/C++ 工具链（fix-dockerfile-cpp-toolchain）
+
+- 触发：`builder/app.py` 的 `_BUILD_SYSTEMS` 写好了 cmake/meson 模板，但容器里 cmake/meson/ninja 都没装，meson 引用的 `/etc/meson/cross-aarch64.ini` 不存在，加上没启 dpkg multiarch，导致除 `none`/`custom` 外所有 app 构建路径**实际跑不起来**
+- `docker/Dockerfile` — apt 清单追加 `cmake meson ninja-build pkg-config ccache gdb-multiarch`；RUN 前置 `dpkg --add-architecture arm64/armhf`；追加 `libc6-dev:arm64 libc6-dev:armhf` 作最小交叉链接骨架；新增 `COPY docker/meson/*.ini /etc/meson/`
+- `docker/meson/cross-aarch64.ini` / `cross-armhf.ini` — 新增 meson cross-file，源码落仓可审可改；只声明 `[binaries]` 与 `[host_machine]`，不固化 cflags
+- 范围内三件套（A 工具链 + B multiarch + C cross-file）；明确不在范围：swift、ccache 默认劫持、`collect_files` 识别 `build/` 产物、示例 C++ app、`flange run --fast` / gdbserver 链路
+- `wiki/subsystems/Docker-构建环境.md` 新增综合页；`wiki/subsystems/index.md` 加挂
+- **实施期间撞坑两个，已在本变更内一并修**：
+  - `docker/apt/ubuntu.sources` 新增：`dpkg --add-architecture arm64/armhf` 之后 `archive.ubuntu.com` 不托管 arm64 索引返 404；必须替换 sources 把 amd64 限到 archive、arm64/armhf 走 `ports.ubuntu.com`
+  - Dockerfile 追加 `gcc/g++/binutils-arm-linux-gnueabihf`：原 Dockerfile 只有 `crossbuild-essential-armel`（armel ≠ armhf，前缀不同），与 `_CROSS_COMPILE_PREFIX["armhf"] = arm-linux-gnueabihf-` 对不上，armhf 路径自创建以来就没装过工具链，本次借机补齐
+- 镜像构建 + 容器内 hello-world (aarch64/armhf) + meson cross setup 三项 sanity 全部通过
+
 ## [2026-05-13] sync | rockchip u-boot 整平台从 v2024.10 切到 v2026.01
 
 - 触发：tspi-rk3566 在 `next-dev-v2024.10` 上 USB OTG configfs gadget 不枚举（`/sys/class/udc/fcc00000.usb/state` 走不到 `configured`，host 端 `adb devices` 看不到），rp-pro-rk3568-h 同 binary 正常。两板差异落在 vendor BSP DTS + DDR ini，generic v2024.10 不带 TSpi vendor BSP 兜底 OTG 初始化路径

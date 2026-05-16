@@ -8,7 +8,7 @@ sources:
 related:
   - "[[scaffold 新建 app 流程]]"
   - "[[app 打包系统]]"
-updated: 2026-04-26
+updated: 2026-05-17
 ---
 
 ## TL;DR
@@ -30,3 +30,12 @@ updated: 2026-04-26
 - [`builder/scaffold.py:AppScaffold._render_dir`](../../builder/scaffold.py) — 模板遍历，L257
 - [`builder/scaffold.py:AppScaffold._render_file`](../../builder/scaffold.py) — 变量替换，L289
 - [`builder/scaffold.py:AppScaffold._validate`](../../builder/scaffold.py) — 输入校验，L186
+
+## 易踩坑
+
+- **scaffold 生成的 9 个 cmake/meson/make 模板里的 `install(...)` / `install: true` / `make install` 都是死代码**：flange 的 `collect_files`（[builder/app.py:213](../../builder/app.py#L213)）只扫 app 工程根目录下的约定子目录（`bin/ lib/ include/ conf/ scripts/ systemd/ udev/ res/`），**从不调** `cmake --install` / `ninja install` / `make install`。所以 scaffold 模板默认生成的工程编出来产物落在 `build/<name>` 或 app 根目录散文件，进 deb 时被全部丢掉，得到空 deb（仅 `./` 根目录）
+- 当前 workaround（每个 app 工程自己改）：
+  - **cmake**：CMakeLists.txt 顶部加 `set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)`（lib 类型用 `CMAKE_LIBRARY_OUTPUT_DIRECTORY`）
+  - **meson**：在 `executable(...)` 加 `install_dir` 不行（仍走 install 钩子）；目前没好解，建议改用 `build.system: custom` 自己拷
+  - **make**：把规则里的 `$@` 改成 `bin/$@` 并 `mkdir -p bin`
+- 长期解（待开 change）：在 `builder/app.py._compile` 跑完后调对应构建系统的 install staging（`--prefix=<staging>` / `--destdir=<staging>`），让 `collect_files` 从 staging 扫；scaffold 模板里的 `install(...)` 即可正常生效
