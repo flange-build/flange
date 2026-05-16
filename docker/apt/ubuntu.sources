@@ -1,0 +1,30 @@
+# Ubuntu noble (24.04) APT sources —— flange Docker 构建容器专用
+#
+# 与原始 ubuntu:24.04 镜像默认 /etc/apt/sources.list.d/ubuntu.sources 的差异：
+#   1. 主源（archive.ubuntu.com + security.ubuntu.com）显式限制 Architectures: amd64
+#      —— 因为这些镜像只托管 amd64/i386 二进制，未限制时 apt 会对 arm64/armhf 索引发 404
+#   2. 追加 ports.ubuntu.com 源，限制 Architectures: arm64 armhf
+#      —— 这是 Ubuntu 给 amd64/i386 之外架构的官方镜像
+#
+# 由 docker/Dockerfile 通过 COPY 投放，替换镜像默认 ubuntu.sources。
+
+Types: deb
+URIs: http://archive.ubuntu.com/ubuntu/
+Suites: noble noble-updates noble-backports
+Components: main restricted universe multiverse
+Architectures: amd64
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.ubuntu.com/ubuntu/
+Suites: noble-security
+Components: main restricted universe multiverse
+Architectures: amd64
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: http://ports.ubuntu.com/ubuntu-ports/
+Suites: noble noble-updates noble-backports noble-security
+Components: main restricted universe multiverse
+Architectures: arm64 armhf
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg

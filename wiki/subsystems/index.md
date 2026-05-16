@@ -12,6 +12,7 @@ updated: 2026-04-26
 - [[构建引擎 BuildEngine]] — 依赖图 + 调度 + cache 注入
 - [[ComponentBuilder 基类]] — 阶段生命周期框架
 - [[Docker 执行封装]] — 容器内执行命令
+- [[Docker 构建环境]] — 容器内预装的工具链 / multiarch / meson cross-file
 - [[源码管理 SourceManager]] — git / tarball 克隆与缓存
 - [[缓存系统]] — 哈希接口与阶段缓存
 - [[chroot 上下文]] — mount / umount 自动管理
