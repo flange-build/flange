@@ -1,0 +1,3 @@
+# cmake 构建临时产物：CMAKE_RUNTIME_OUTPUT_DIRECTORY 把可执行文件输出到本目录的 bin/，
+# 与 flange collect_files 的目录约定对齐，但 bin/ 内容是每次构建重生的，不入仓。
+bin/

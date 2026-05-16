@@ -1,0 +1,14 @@
+app:
+  name: hello_world_cpp
+  version: 1.0.0
+  description: Hello Flange
+  type: exec
+  arch:
+    - aarch64
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: cmake
