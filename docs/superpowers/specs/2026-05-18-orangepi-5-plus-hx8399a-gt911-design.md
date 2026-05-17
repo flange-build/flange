@@ -57,17 +57,27 @@ orangepi-cm4 DSI 屏适配撤回 change 的四层踩坑教训对应，规避复�
 
 ```
 components/board/orangepi-5-plus/
-├── config.py                                                # 改：加 boot.board_overlays/default_overlays 与 rootfs.+extra_firmware
+├── config.py                                                # 改：加 boot.board_overlays / default_overlays
 ├── dtso/
 │   └── rk3588-orangepi-5-plus-hx8399a-gt911.dtso            # 新增
-└── firmware/
-    └── touch/
-        ├── goodix_911_cfg.cfg                               # 新增：原 ASCII，186 hex token，仅 review 用
-        └── goodix_911_cfg.bin                               # 新增：186B 二进制，部署用
+├── firmware/
+│   └── touch/
+│       └── goodix_911_cfg.cfg                               # 新增：原 ASCII，186 hex token，仅 review 用
+└── overlay/
+    └── lib/
+        └── firmware/
+            └── goodix_911_cfg.bin                           # 新增：186B 二进制，部署用
 ```
 
 > `.bin` 由人手用 `python -c` 转一次性 commit、不自动生成（参考 wiki rock5c-lite
 > `st7789vm-240x240.txt` 模式但选择直接落 binary）。
+>
+> **实施期精化**：原设计草稿试图通过 `rootfs.+extra_firmware` 加 `source="board"`
+> 部署 cfg blob，但 builder/source.py:ensure_extra_firmware 仅支持
+> `repo / kernel / bootloader / oot:<name>` 四类 source。改走 board
+> `overlay/lib/firmware/` 目录——`builder/rootfs.py:42-50 _install_overlays`
+> 已有 `cp -a` 机制把整棵 `components/board/<board>/overlay/` 拷贝到 rootfs。
+> 零 builder 改动；与 board 自有 `overlay/etc/hostname` 同模式。
 
 ## dtso 内容
 
@@ -189,28 +199,15 @@ components/board/orangepi-5-plus/
         "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
     ],
 },
-
-"rootfs": {
-    "+extra_firmware": [
-        # 既有 rkwifibt-rtl8852be 不动
-        { ... },
-
-        {
-            "name": "orangepi-5-plus-gt911-cfg",
-            "source": "board",
-            "repo_subdir": "components/board/orangepi-5-plus/firmware/touch",
-            "files": [
-                {"src": "goodix_911_cfg.bin", "dest": "goodix_911_cfg.bin"},
-            ],
-            "dest": "lib/firmware",
-        },
-    ],
-},
 ```
 
-> `source: "board"` 的精确字段名以 builder 现有 `extra_firmware` loader 接口为准
-> （参考 orangepi-cm4 用 `"repo"`、rock5b 用 `"oot:..."`）。如发现需新增"board
-> 本地目录" source 类型，实施阶段单独走小提议；不属于设计变动。
+GT911 cfg blob **不**走 `rootfs.+extra_firmware`——blob 直接放在
+`components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin`，
+由 `builder/rootfs.py:_install_overlays` 现成 `cp -a` 机制把整棵 board
+overlay 目录拷贝到 rootfs；零 builder 改动，与 board 自有 `overlay/etc/hostname`
+同模式。`extra_firmware` 框架（`repo / kernel / bootloader / oot:<name>` 四类
+source）不适用此场景——它是 vendor 仓库/外部源 firmware 部署接口，不是
+board-local blob 接口。
 
 ## 风险与对策
 
