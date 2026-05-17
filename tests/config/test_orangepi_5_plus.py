@@ -104,13 +104,20 @@ class TestOrangePi5PlusMergedConfig:
         assert src.is_file(), f"缺失 dtso 源: {src}"
 
     def test_gt911_cfg_blob_in_overlay_tree(self):
-        """GT911 cfg blob 必须放在 board overlay/lib/firmware/，否则
+        """GT911 cfg blob 必须放在 board overlay/usr/lib/firmware/，否则
         rootfs cp -a 不会带它进 /lib/firmware/，goodix.c request_firmware
-        会失败。文件大小必须 = 186 字节（mainline GOODIX_CONFIG_911_LENGTH）。"""
+        会失败。文件大小必须 = 186 字节（mainline GOODIX_CONFIG_911_LENGTH）。
+
+        路径走 usr/lib 而非 lib：ubuntu-base rootfs 已 usrmerge，根 /lib 是
+        指向 /usr/lib 的 symlink；cp -a 把 overlay/lib/ 覆盖到 rootfs/lib
+        时会撞 'cannot overwrite non-directory' 失败。改走 overlay/usr/lib/
+        与 symlink 同源路径，kernel firmware_loader 搜索路径含 /lib/firmware
+        以及（usrmerge 下等价的）/usr/lib/firmware，driver 仍能加载。
+        """
         from pathlib import Path
         blob = Path(
             "components/board/orangepi-5-plus/overlay/"
-            "lib/firmware/goodix_911_cfg.bin"
+            "usr/lib/firmware/goodix_911_cfg.bin"
         )
         assert blob.is_file(), f"缺失 cfg blob: {blob}"
         assert blob.stat().st_size == 186, (

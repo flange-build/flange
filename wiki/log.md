@@ -11,7 +11,7 @@
 软件链路落地，未实机验收。spec/plan 文档在 `docs/superpowers/{specs,plans}/2026-05-18-orangepi-5-plus-hx8399a-gt911-{design,…}.md`，5 条 feature commit（不含 doc 同步）：
 
 - `19bc4d2` 入库 GT911 cfg ASCII 源（commit 标题误写 "184B"，实为 186B；后续 `1e24881` 已勘误所有引用，源文件内容始终正确）
-- `a71be0e` GT911 186B cfg 二进制部署到 `components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin`（走 `builder/rootfs.py:_install_overlays` 现成 `cp -a` 机制，**零** builder 改动）
+- `a71be0e` GT911 186B cfg 二进制部署到 `components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin`（走 `builder/rootfs.py:_install_overlays` 现成 `cp -a` 机制，**零** builder 改动）。初版误放 `overlay/lib/firmware/`，完整 `flange build` 时撞 `cp: cannot overwrite non-directory ...` —— ubuntu-base 已 usrmerge，根 `/lib` 是 symlink → `/usr/lib`；fix 把路径起点提到 `usr/lib`，kernel firmware_loader 搜两处等价
 - `6d5fb3f` 板私有 overlay `rk3588-orangepi-5-plus-hx8399a-gt911.dtso`：HX8399-A 4-lane DSI panel + GT911 5-point 触摸 5 个 `&label{}` fragment（dsi1 / dsi1_in_vp3 / route_dsi1 / dsi1_panel / i2c7），根级 `/{}` 仅含 metadata 不引入裸节点
 - `d434747` `config.py` 加 `boot.board_overlays / default_overlays` + 测试加 3 项断言
 
@@ -21,7 +21,7 @@
 - Touch 走 mainline `goodix.c`（compatible `"goodix,gt911"`），与 vendor `gt9xx`（`"goodix,gt9xx"`）字符串不撞、零冲突。Cfg 走 `request_firmware("goodix_911_cfg.bin")` 加载，blob 大小 186B 与 mainline `GOODIX_CONFIG_911_LENGTH` 一致
 - VOP3 → DSI1 路由独立于 HDMI VP0/VP1，双显并存
 - 不引用 `MIPI_DSI_MODE_EOT_PACKET`：argon BSP 6.1 头文件已只剩反语义新名 `_NO_EOT_PACKET`；不引用即走"默认发 EOT"（HX8399-A 实测兼容），避免引入 board 私有 binding patch（与 [[rp-pro-rk3568-h]] 的 `0002-dt-bindings-mipi-dsi-eot-packet-compat.patch` 不同选择——那个板的 25+ LCD dtsi 仍引用旧名，绕不开 patch；本板从零写 dtso 可主动规避）
-- cfg blob 不走 `rootfs.+extra_firmware`：实施期发现 `builder/source.py:ensure_extra_firmware` 仅支持 `repo / kernel / bootloader / oot:<name>` 四类 source（vendor 仓库或外部源接口，不是 board-local 接口）。`overlay/lib/firmware/` 是更合适的现成机制，与 `overlay/etc/hostname` 同模式
+- cfg blob 不走 `rootfs.+extra_firmware`：实施期发现 `builder/source.py:ensure_extra_firmware` 仅支持 `repo / kernel / bootloader / oot:<name>` 四类 source（vendor 仓库或外部源接口，不是 board-local 接口）。`overlay/usr/lib/firmware/` 是更合适的现成机制，与 `overlay/etc/hostname` 同模式（**起点必须 `usr/lib` 而非 `lib`**——ubuntu-base usrmerge，根 `/lib` symlink，`cp -a` 无法 dir-overwrite-symlink）
 
 **dtso → dtbo 静态校验已过**：`flange build device-tree-overlay` 3.2s 通过，dtbo 3210B 落 `.build/target/orangepi-5-plus/default/debug/device-tree-overlay/overlays/`，无 `MIPI_DSI_MODE_EOT_PACKET undeclared`、无 `cannot find label` / `FDT_ERR_BADOVERLAY` 等错。
 
@@ -33,7 +33,7 @@
 - panel 花屏/无同步 → 调 porch → clock-frequency；首版 timing 是 60Hz 经验值（148.5 MHz pixel clock + 50/100/30 H-porch + 14/8/2 V-porch），未据 HX8399-A datasheet 校
 - GT911 cfg version 比对：driver 仅在 host blob byte0=`0x47` > chip 内 cfg version 时下发；若 chip 内已 ≥0x47 host blob 被忽略——`i2cset` 强写 chip cfg version=`0x00` 触发强发
 
-**wiki 同步**：`wiki/boards/orangepi-5-plus.md` `sources` 加 3 项（dtso / firmware/touch/cfg / overlay/lib/firmware/bin），与 [[radxa-rock5b]] 差异表 "板私有 dtso" 行从"不携带"改为"默认应用 hx8399a-gt911 dtbo"，正文加 "DSI 屏 + 触摸" 完整 section。
+**wiki 同步**：`wiki/boards/orangepi-5-plus.md` `sources` 加 3 项（dtso / firmware/touch/cfg / overlay/usr/lib/firmware/bin），与 [[radxa-rock5b]] 差异表 "板私有 dtso" 行从"不携带"改为"默认应用 hx8399a-gt911 dtbo"，正文加 "DSI 屏 + 触摸" 完整 section。
 
 ## [2026-05-18] sync | 新增 orangepi-cm5-tablet 板（首块原生 RK3588S 实板，AP6256 复用 cm4 路径）
 

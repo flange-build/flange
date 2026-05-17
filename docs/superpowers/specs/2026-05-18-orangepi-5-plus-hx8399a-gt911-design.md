@@ -75,7 +75,9 @@ components/board/orangepi-5-plus/
 > **实施期精化**：原设计草稿试图通过 `rootfs.+extra_firmware` 加 `source="board"`
 > 部署 cfg blob，但 builder/source.py:ensure_extra_firmware 仅支持
 > `repo / kernel / bootloader / oot:<name>` 四类 source。改走 board
-> `overlay/lib/firmware/` 目录——`builder/rootfs.py:42-50 _install_overlays`
+> `overlay/usr/lib/firmware/` 目录（**走 `usr/lib` 不走 `lib`**：ubuntu-base
+> rootfs 已 usrmerge，根 `/lib` 是 symlink → `/usr/lib`；`cp -a` 不能覆盖
+> non-directory）——`builder/rootfs.py:42-50 _install_overlays`
 > 已有 `cp -a` 机制把整棵 `components/board/<board>/overlay/` 拷贝到 rootfs。
 > 零 builder 改动；与 board 自有 `overlay/etc/hostname` 同模式。
 
@@ -202,7 +204,7 @@ components/board/orangepi-5-plus/
 ```
 
 GT911 cfg blob **不**走 `rootfs.+extra_firmware`——blob 直接放在
-`components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin`，
+`components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin`，
 由 `builder/rootfs.py:_install_overlays` 现成 `cp -a` 机制把整棵 board
 overlay 目录拷贝到 rootfs；零 builder 改动，与 board 自有 `overlay/etc/hostname`
 同模式。`extra_firmware` 框架（`repo / kernel / bootloader / oot:<name>` 四类

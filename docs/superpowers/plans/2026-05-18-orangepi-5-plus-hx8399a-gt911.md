@@ -8,7 +8,7 @@ GT911 5-point 电容触摸适配，开机即点亮、触摸事件 5 点可用、
 **Architecture:** board overlay (`.dtso → .dtbo`) 走 extlinux fdtoverlays 路径；
 panel driver 复用 BSP `simple-panel-dsi` + `panel-init-sequence` 字节流；触摸
 走 mainline `goodix.c` 并通过 `request_firmware("goodix_911_cfg.bin")` 加载
-cfg；cfg blob 通过 board `overlay/lib/firmware/` 现成 cp -a 机制部署，**零
+cfg；cfg blob 通过 board `overlay/usr/lib/firmware/` 现成 cp -a 机制部署，**零
 内核 patch、零 driver 新增、零 builder 改动**。
 
 **Tech Stack:**
@@ -23,7 +23,7 @@ cfg；cfg blob 通过 board `overlay/lib/firmware/` 现成 cp -a 机制部署，
 - spec §5 试图通过 `rootfs.+extra_firmware` 加 `source: "board"` 部署 cfg blob，
   但实测 `builder/source.py:ensure_extra_firmware()` 仅支持 `"repo"` / `"kernel"`
   / `"bootloader"` / `"oot:<name>"` 四类 source。spec 同节已留兜底脚注。
-- 实施期精化：改走 `components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin`，
+- 实施期精化：改走 `components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin`，
   由现有 `_install_overlays` (`builder/rootfs.py:42-50`) 整棵子树 cp -a 到
   rootfs。零 builder 改动；与 board 自有 `overlay/etc/hostname` 同模式。
 - 其他章节（dtso 内容、init-sequence 字节流、风险列表等）原样落地。
@@ -42,9 +42,10 @@ components/board/orangepi-5-plus/
 │   └── touch/
 │       └── goodix_911_cfg.cfg                            # 原 ASCII cfg，review 用
 └── overlay/
-    └── lib/
-        └── firmware/
-            └── goodix_911_cfg.bin                        # 186B 二进制，部署用
+    └── usr/
+        └── lib/
+            └── firmware/
+                └── goodix_911_cfg.bin                    # 186B 二进制，部署用
 ```
 
 **修改文件：**
@@ -58,7 +59,7 @@ tests/config/test_orangepi_5_plus.py                       # +board_overlays 测
 
 - `dtso/*.dtso`：单文件描述全部硬件接线（dsi1 enable / panel override / i2c7 + GT911）
 - `firmware/touch/*.cfg`：原 ASCII 文本，仅供 review；不被 build 系统读取
-- `overlay/lib/firmware/*.bin`：二进制，build 时 cp 到 rootfs `/lib/firmware/`
+- `overlay/usr/lib/firmware/*.bin`：二进制，build 时 cp 到 rootfs `/lib/firmware/`
 - `config.py`：声明 board overlay 名 + 默认应用
 - `tests/config/test_orangepi_5_plus.py`：合并配置 invariants（新增 board_overlays 字段）
 
@@ -116,14 +117,14 @@ source of truth (review 可读)：mainline goodix.c request_firmware 实际
 ## Task 2: 生成并落 GT911 cfg 二进制部署 blob
 
 **Files:**
-- Create: `components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin`
+- Create: `components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin`
 
 mainline `goodix.c:1402` 读 `/lib/firmware/goodix_<id>_cfg.bin`，GT911 chip `id="911"` → 文件名 `goodix_911_cfg.bin`。
 
 - [ ] **Step 1: 建目录**
 
 ```bash
-mkdir -p components/board/orangepi-5-plus/overlay/lib/firmware
+mkdir -p components/board/orangepi-5-plus/overlay/usr/lib/firmware
 ```
 
 - [ ] **Step 2: 从 ASCII 源生成 186B binary**
@@ -134,7 +135,7 @@ import re, pathlib
 src = pathlib.Path('components/board/orangepi-5-plus/firmware/touch/goodix_911_cfg.cfg').read_text()
 data = bytes(int(t, 16) for t in re.findall(r'0x([0-9A-Fa-f]{2})', src))
 assert len(data) == 186, f'expected 186 bytes, got {len(data)}'
-pathlib.Path('components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin').write_bytes(data)
+pathlib.Path('components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin').write_bytes(data)
 print(f'wrote {len(data)} bytes')
 "
 ```
@@ -143,9 +144,9 @@ Expected output: `wrote 186 bytes`
 - [ ] **Step 3: 校验文件大小与首尾字节**
 
 ```bash
-ls -l components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin
-xxd components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin | head -1
-xxd components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin | tail -1
+ls -l components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin
+xxd components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin | head -1
+xxd components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin | tail -1
 ```
 Expected:
 - size = 186
@@ -155,10 +156,10 @@ Expected:
 - [ ] **Step 4: Commit**
 
 ```bash
-git add components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin
+git add components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin
 git commit -m "feat(board/orangepi-5-plus): 部署 GT911 186B cfg blob 到 rootfs
 
-放在 board overlay/lib/firmware/，由 builder/rootfs.py _install_overlays
+放在 board overlay/usr/lib/firmware/，由 builder/rootfs.py _install_overlays
 机制 cp -a 到 rootfs；mainline goodix.c probe 时
 request_firmware('goodix_911_cfg.bin') 拉文件，按 chip 内 cfg version 与
 host (0x47) 比对，host 高即下发覆盖 chip flash 默认。"
@@ -416,7 +417,7 @@ Expected: 看到 `BOARD = { ... }` 结构，末尾 `"rootfs": { "+extra_firmware
         # rollback：改 /boot/extlinux/extlinux.conf 去掉 fdtoverlays 一行，
         # 或重刷无此 overlay 的镜像。
         # 接线依据 vendor rk3588-orangepi-5-plus-lcd.dtsi；触摸 cfg blob
-        # 通过 board overlay/lib/firmware/goodix_911_cfg.bin 走 _install_overlays
+        # 通过 board overlay/usr/lib/firmware/goodix_911_cfg.bin 走 _install_overlays
         # 现成 cp -a 机制部署，mainline goodix.c 启动时 request_firmware
         # 拉文件下发。
         "board_overlays": [
@@ -511,7 +512,7 @@ RTL8852BE OOT 链路、HX8399-A + GT911 board overlay、lunch target
         assert src.is_file(), f"缺失 dtso 源: {src}"
 
     def test_gt911_cfg_blob_in_overlay_tree(self):
-        """GT911 cfg blob 必须放在 board overlay/lib/firmware/，否则
+        """GT911 cfg blob 必须放在 board overlay/usr/lib/firmware/，否则
         rootfs cp -a 不会带它进 /lib/firmware/，goodix.c request_firmware
         会失败。文件大小必须 = 186 字节（cfg 寄存器区 186B）。"""
         from pathlib import Path
@@ -546,7 +547,7 @@ git commit -m "feat(board/orangepi-5-plus): 接入 HX8399-A DSI 屏 + GT911 触�
 
 config.py 加 boot.board_overlays / default_overlays 指向新 dtbo；
 test 加 3 项断言：overlay 列表、dtso 源文件存在、GT911 cfg blob 186B
-正确部署在 overlay/lib/firmware/。"
+正确部署在 overlay/usr/lib/firmware/。"
 ```
 
 ---
@@ -668,7 +669,7 @@ evtest /dev/input/eventN   # N = goodix-ts 对应设备
 | §2 dtso 内容（5 个 &label fragment） | Task 3 |
 | §3 panel-init-sequence + display-timings | Task 3 + Task 3 Step 3 校验 |
 | §4 GT911 cfg ASCII + bin + 文件命名 | Task 1 + Task 2 |
-| §4.5 部署到 /lib/firmware/ | Task 2（实施期精化为 overlay/lib/firmware/）|
+| §4.5 部署到 /lib/firmware/ | Task 2（实施期精化为 overlay/usr/lib/firmware/）|
 | §5 config.py 增量 | Task 4 |
 | §6 R1 EOT_PACKET 兜底 | Task 3 dtso 不引用旧名（dtso 注释 + dsi,flags 行已落实）|
 | §6 R3 init-sequence 字节校验 | Task 3 Step 3 |

@@ -6,7 +6,7 @@ sources:
   - components/board/orangepi-5-plus/config.py
   - components/board/orangepi-5-plus/overlay/etc/hostname
   - components/board/orangepi-5-plus/overlay/etc/usbdevice.conf
-  - components/board/orangepi-5-plus/overlay/lib/firmware/goodix_911_cfg.bin
+  - components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hx8399a-gt911.dtso
   - components/board/orangepi-5-plus/firmware/touch/goodix_911_cfg.cfg
   - components/platform/rockchip/rk3588/config.py
@@ -49,7 +49,7 @@ lunch orangepi-5-plus-default-release
 
 - Panel 走 BSP `panel-simple.c` 的 `simple-panel-dsi` + `panel-init-sequence` 路径——LCD 厂 init `.c` 与 dts 字节流 1:1 对应（16 cmd / 319 字节）。零 driver / 零 kernel patch
 - Touch 走 mainline `goodix.c`（compatible `"goodix,gt911"`）；与 vendor `gt9xx` (`"goodix,gt9xx"`) 不撞。启动 `request_firmware("goodix_911_cfg.bin")` 拉 186B cfg（= `GOODIX_CONFIG_911_LENGTH`）
-- cfg blob 走 `overlay/lib/firmware/`（不走 `+extra_firmware`，那是 vendor 仓库 source 接口、非 board-local 接口；现有 `_install_overlays` cp -a 机制覆盖此场景）
+- cfg blob 走 `overlay/usr/lib/firmware/`（不走 `+extra_firmware`，那是 vendor 仓库 source 接口、非 board-local 接口；现有 `_install_overlays` cp -a 机制覆盖此场景）。**走 `usr/lib` 不走 `lib`**：ubuntu-base rootfs 已 usrmerge，根 `/lib` 是 symlink → `/usr/lib`，`cp -a` 不能用目录覆盖 non-directory，所以 board overlay 必须从 usrmerge 后路径起手
 - VOP3 → DSI1 路由独立于 HDMI VP0/VP1，双显可并存
 - dtso 全 `&label{}` fragment，规避 [[orangepi-cm4]] 屏适配撤回 change 的根级裸节点 → `FDT_ERR_BADOVERLAY` 坑
 - `MIPI_DSI_MODE_EOT_PACKET` 旧宏 BSP 6.1 头文件已删，本案选择"不引用"走默认发 EOT（与 [[rp-pro-rk3568-h]] 的 `0002-...-eot-packet-compat.patch` 不同选择——那板 25+ LCD dtsi 引用旧名绕不开 patch，本板从零写 dtso 主动规避）
