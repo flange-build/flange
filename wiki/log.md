@@ -6,6 +6,16 @@
 
 ---
 
+## [2026-05-17] sync | 新增 orangepi-5-plus 板（RK3588 第二块板，复用 rock5b 模板）
+
+[[add-rk3588-orangepi-5-plus]] change 落地：
+
+- 新增 `components/board/orangepi-5-plus/{config.py,overlay/etc/{hostname,usbdevice.conf}}`：逐字段复用 ROCK 5B 模板（同 RK3588 / 同 rkwifibt OOT 链路 / 同 UART2 console），仅改 `board`、`kernel.dts`、删除板级 `boot` 块
+- 不携带板私有 dtso：SoC 已切 mainline panthor，第二块板不再背 emergency rollback overlay
+- 新增 `wiki/boards/orangepi-5-plus.md`（参考 [[radxa-rock5b]]）；`wiki/boards/index.md` 加索引项
+- 新增 `tests/config/test_orangepi_5_plus.py`（19 项断言全部通过）
+- 容器内构建与实板验证留待用户后续执行（见 change tasks 4.x / 6.x）
+
 ## [2026-05-17] sync | orangepi-cm4 基础适配（WiFi + NPU 禁用 + bootargs）；DSI 屏适配撤回单独立项
 
 **最终交付**：[[2026-05-17 orangepi-cm4-bringup-wifi-and-npu-fix]] change（原名 `orangepi-cm4-7inch-dsi-and-ap6256-wifi`，撤回屏适配后改名）落地：
