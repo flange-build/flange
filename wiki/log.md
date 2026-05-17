@@ -6,6 +6,34 @@
 
 ---
 
+## [2026-05-17] sync | orangepi-cm4 基础适配（WiFi + NPU 禁用 + bootargs）；DSI 屏适配撤回单独立项
+
+**最终交付**：[[2026-05-17 orangepi-cm4-bringup-wifi-and-npu-fix]] change（原名 `orangepi-cm4-7inch-dsi-and-ap6256-wifi`，撤回屏适配后改名）落地：
+
+- 加 `rootfs.+extra_firmware`：从 radxa-pkg/radxa-firmware 拉 AP6256 三件套（fw_bcm43456c5_ag.bin / nvram_ap6256.txt / BCM4345C5.hcd）→ `/lib/firmware/brcm/`
+- 加三条 board 私有 kernel patch —— `0001` 改 dtsi chosen.bootargs（删硬编码 root=PARTUUID + 加 firmware_class.path）、`0002` 启用 bcmdhd FW_AMPAK_PATH="brcm"、`0003` 禁用 `rknpu` / `rknpu_mmu` 避免 `panic_on_set_idle`
+- 更新 `wiki/boards/orangepi-cm4.md` 写实差异点；保留 DSI 屏适配踩坑路标段，指向本条 log 条目
+
+**踩坑足迹**（屏适配尝试，本轮撤回，留给后续 change 起点）：
+
+实机底板是 Waveshare CM4-DISP-BASE-5A 5" DSI 屏，原理图确认桥芯片是 Chipone ICN6211（U9）在 i2c1@0x2c，EN 通过 0R + 上拉死高、CM4 接口侧没引出独立 reset/enable GPIO。该屏适配在本 change 中推进时连撞 4 层 BSP 缺陷：
+
+1. **dtsi 错抄 RPi 7" 模板**：vendor 写了 `raspits_panel@45` (`raspberrypi,7inch-touchscreen-panel`) + `raspits_touch_ft5426@38`，与实际 ICN6211 硬件链路完全对不上。原先 v1 overlay 直接 enable 这两个节点 → mainline `panel-raspberrypi-touchscreen.c` driver probe 读 i2c 0x45 的 ATTiny88 REG_ID（板上根本没有该 MCU）→ panel 永不 `drm_panel_add` → DSI controller 永久 defer
+2. **BSP DSI defer cleanup NULL deref**：dw-mipi-dsi-rockchip probe 因 panel 没注册走 -EPROBE_DEFER 错误路径，调 `mipi_dsi_host_unregister` → `device_for_each_child` 无 bus 过滤遍历 DSI 平台设备的所有子设备 → 对非 DSI bus 子设备（如 phy provider）做 `to_mipi_dsi_device` container_of 强转 → 解伪 `dsi->host` 拿 NULL → 解 `host->ops` (offset 8) NULL deref。上游 commit `7977c539e9b1` 等价 fix（callback 入口加 `dev->bus != &mipi_dsi_bus_type` 过滤）Rockchip BSP linux-6.1 一直未合
+3. **ICN6211 driver 未启用**：`drivers/gpu/drm/bridge/chipone-icn6211.c` 源码在 BSP 中存在，但 `rockchip_linux_defconfig` 缺 `CONFIG_DRM_CHIPONE_ICN6211=y`，driver 编不进
+4. **ICN6211 driver `enable-gpios` 强约束**：mainline 用 `devm_gpiod_get`（非 optional），本板 EN 板上拉死高、CM4 接口侧没 GPIO 可配 → driver 永远 probe 失败。需改 `devm_gpiod_get_optional`
+
+外加 **dtso 根级节点 fragment-wrap 行为**：dtc 只对 `&label { }` 自动包 fragment，根级新增 `/{ panel { }; }` 不会被包，dtbo 里出现"裸根节点"，u-boot fdt_overlay_apply 直接 `FDT_ERR_BADOVERLAY`。必须用 `&{/} { panel { }; }` 显式 target-path 包成 fragment。
+
+实测过程中关键诊断点：
+- `mipi_dsi_detach+0x14` 处 NULL deref，寄存器 x0=0、断在 `ldr x2,[x0,#8]` 解 `host->ops` —— bug 2 的指纹
+- 修了 bug 2 后变成每秒 ~250 次 DSI probe 风暴（HDMI/VOP 反复重 bind）—— bug 1 的指纹
+- 改用 ICN6211 + panel-dpi overlay 后 u-boot 报 `FDT_ERR_BADOVERLAY` —— dtso 根级裸节点指纹
+
+撤回原因：四层 fix 全部到位后实机仍未点亮屏（疑似 panel timing 或 ICN6211 init seq 还差细节），单 change 难以闭环；且尝试启用 overlay 后实机不能正常启动。决定屏适配单独立项，本 change 收敛到"无屏可启动 + WiFi/BT 就绪"。
+
+下次开屏适配 change 时直接复用上述四层 fix 框架 + 重点排查 panel timing / ICN6211 init seq / data-lanes 配置。可参考 git history 中本 change 已删除的 0004/0005/0006 三条 patch 与 `orangepicm4-waveshare-cm4-disp-base-5a.dtso` 实现，作为起点。
+
 ## [2026-05-17] sync | C++ app 构建链路实测：$(nproc) 热修 + scaffold 模板"空 deb"问题定位
 
 - 触发：刚补完容器工具链（[[2026-05-16 fix-dockerfile-cpp-toolchain]]），实跑 `flange build app hello_world_cpp` 检验闭环，连撞两个 flange 历史 bug

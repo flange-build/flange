@@ -1,0 +1,38 @@
+From: flange <flange@localhost>
+Subject: [PATCH 3/3] dts: rk3566-orangepi-cm4: 禁用 rknpu / rknpu_mmu
+
+Orange Pi CM4 首启在 rk_iommu_driver_init 绑定 rknpu_mmu 时触发 NPU
+power domain 上电，PMU 等不到 npu ack 后被 BSP 硬编码 panic：
+
+  rockchip-pm-domain fdd90000.power-management:power-controller:
+    failed to get ack on domain 'npu', target_idle = 0, target_ack = 0, val=0x6
+  Kernel panic - not syncing: panic_on_set_idle set ...
+
+调用链为：
+
+  rk_iommu_driver_init (rknpu_mmu) probe → __genpd_dev_pm_attach
+    → genpd_power_on → rockchip_pmu_set_idle_request(NPU PD)
+    → ack 超时 → panic_on_set_idle
+
+rk356x.dtsi 默认把 rknpu 与 rknpu_mmu 标为 disabled，问题出在
+rk3566-orangepi-cm4.dtsi 又把两处 override 为 okay。当前板级目标优先保
+证系统可启动；在确认该板 NPU 上电链可用前，禁用 rknpu / rknpu_mmu，避
+免 rknpu_mmu 被 probe 后拉起 NPU power domain。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3566-orangepi-cm4.dtsi b/arch/arm64/boot/dts/rockchip/rk3566-orangepi-cm4.dtsi
+--- a/arch/arm64/boot/dts/rockchip/rk3566-orangepi-cm4.dtsi
++++ b/arch/arm64/boot/dts/rockchip/rk3566-orangepi-cm4.dtsi
+@@ -809,11 +809,11 @@
+ 
+ &rknpu {
+ 	rknpu-supply = <&vdd_npu>;
+-	status = "okay";
++	status = "disabled";
+ };
+ 
+ &rknpu_mmu {
+-	status = "okay";
++	status = "disabled";
+ };
+ 
+ &route_hdmi {
