@@ -139,10 +139,12 @@ SOC = {
         "vendor_overlays": [],
         "default_overlays": [],
         # RK3588 调试串口同样在 UART2（与 RK3566 一致）。
-        # initcall_debug + ignore_loglevel：临时打开用于排查 mali_kbase probe
-        # 死锁前的 SCMI / regulator / power-domain init 顺序（GPU 启用调试期）。
-        # 死锁定位完成后应回退到不带这两项的最小 cmdline。
-        "kernel_args": "console=ttyS2,1500000 loglevel=7 initcall_debug ignore_loglevel",
+        # loglevel=4 (KERN_WARNING)：rkwifibt RTL8852BE 的 PHL/RTW 驱动连接后
+        # 持续打 KERN_INFO/KERN_DEBUG 喷 console（_dist_box_plot /
+        # _get_bcn_tracking_info / ADDBA / BACAM 每数秒一次），把 ttyS2
+        # 淹没到无法交互。回退到不带 initcall_debug / ignore_loglevel 的最小
+        # cmdline，仅保留 WARNING 及以上上 console；要看完整日志走 dmesg。
+        "kernel_args": "console=ttyS2,1500000 loglevel=4",
     },
     "partitions": {
         "format": "gpt",
