@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-05-18] sync | 新增 orangepi-cm5-tablet 板（首块原生 RK3588S 实板，AP6256 复用 cm4 路径）
+
+[[add-rk3588s-orangepi-cm5-tablet]] change 落地：
+
+- 新增 `components/board/orangepi-cm5-tablet/{config.py,overlay/etc/hostname,patches/kernel/0001-bcmdhd-set-fw-ampak-path-brcm.patch}`：板骨架复用 [[orangepi-5-plus]] 模板（顶层字段 + 不携带 boot 块），AP6256 三件套 `+extra_firmware` 完整复用 [[orangepi-cm4]]，bcmdhd 路径 patch 逐字节复用 cm4 `0002`
+- AP6256 走 in-tree Rockchip bcmdhd（同 cm4 路径），不引入 OOT 链路
+- 不携带 cm4 `0001`（dtsi bootargs，dts 路径不通用）与 `0003`（NPU disable，apply 阶段 dmesg 判断）
+- 不点 DSI LCD / 触屏 / 相机 / 电池 PMIC：tablet 形态特有外设全部留待后续 change
+- 承担 RK3588S SoC 通路首次原生实板验证职责（之前仅 RK3582 via [[radxa-rock5c-lite]] 共享 dts 覆盖）
+- 新增 `wiki/boards/orangepi-cm5-tablet.md`，`wiki/boards/index.md` 加索引项
+- 新增 `tests/config/test_orangepi_cm5_tablet.py`（22 项断言全部通过，零回归——加我前后 config 套件失败数稳定为 16 项 stale baseline）
+- 容器内构建与实板验证留待用户后续执行（见 change tasks 4.x / 6.x）
+
 ## [2026-05-17] sync | 新增 orangepi-5-plus 板（RK3588 第二块板，复用 rock5b 模板）
 
 [[add-rk3588-orangepi-5-plus]] change 落地：

@@ -1,0 +1,27 @@
+From: flange <flange@localhost>
+Subject: [PATCH 2/3] bcmdhd: 启用 FW_AMPAK_PATH 指向 brcm 子目录
+
+dhd_conf_add_filepath() 使用 FW_AMPAK_PATH 构造固件路径前缀。
+未定义时固件名仅为 "/fw_bcm43456c5_ag.bin"，内核固件加载器在
+/lib/firmware/ 下找不到该文件。
+
+启用 FW_AMPAK_PATH="brcm" 后，固件名变为 "/brcm/fw_bcm43456c5_ag.bin"，
+配合 firmware_class.path=/lib/firmware（见 0001-dts-orangepi-cm4-bootargs-fix.patch），
+最终搜索路径为 /lib/firmware/brcm/fw_bcm43456c5_ag.bin，符合标准 Linux
+固件布局，与 rootfs.extra_firmware 把 brcm/* 落到 /lib/firmware/brcm/ 一致。
+
+与 tspi-rk3566 同款修复（同一 driver、同一行），按 board 各自一份是
+flange patches 隔离的现状。
+
+diff --git a/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile b/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile
+--- a/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile
++++ b/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile
+@@ -389,7 +389,7 @@
+ ifeq ($(CONFIG_BCMDHD_AUTO_SELECT),y)
+ 	DHDCFLAGS += -DUPDATE_MODULE_NAME
+ ifeq ($(CONFIG_BCMDHD_REQUEST_FW),y)
+-#	DHDCFLAGS += -DFW_AMPAK_PATH="\"ampak\""
++	DHDCFLAGS += -DFW_AMPAK_PATH="\"brcm\""
+ #	DHDCFLAGS += -DMODULE_PATH
+ endif
+ ifneq ($(CONFIG_BCMDHD_SDIO),)
