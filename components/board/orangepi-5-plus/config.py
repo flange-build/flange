@@ -50,6 +50,23 @@ BOARD = {
             },
         ],
     },
+    "boot": {
+        # 30-pin DSI FPC 板载接口的 HX8399-A 1080×1920 portrait 面板 +
+        # GT911 5-point 电容触摸 overlay。默认即应用（写进 extlinux.conf
+        # 的 fdtoverlays）。
+        # rollback：改 /boot/extlinux/extlinux.conf 去掉 fdtoverlays 一行，
+        # 或重刷无此 overlay 的镜像。
+        # 接线依据 vendor rk3588-orangepi-5-plus-lcd.dtsi；触摸 cfg blob
+        # 通过 board overlay/lib/firmware/goodix_911_cfg.bin 走 _install_overlays
+        # 现成 cp -a 机制部署，mainline goodix.c 启动时 request_firmware
+        # 拉文件下发。
+        "board_overlays": [
+            "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
+        ],
+        "default_overlays": [
+            "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
+        ],
+    },
     # 账号体系沿用 components/rootfs/config.py base 层默认：root 完全锁定
     # (root_password=None + disable_root_login=True)，默认用户 flange/flange
     # 入 sudo group。如需开放 root 或改用户在此处加 rootfs 块覆盖。

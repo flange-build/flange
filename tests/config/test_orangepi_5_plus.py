@@ -1,7 +1,7 @@
 """OrangePi 5 Plus 板级配置三层合并验证。
 
 覆盖 rockchip-orangepi-5-plus spec 中的 board 字段、SoC 层不被覆盖、
-RTL8852BE OOT 链路、无板级 dtso/board_overlays、lunch target 自动生成
+RTL8852BE OOT 链路、HX8399-A DSI 屏 + GT911 触摸 board overlay、lunch target 自动生成
 五项 requirement。WiFi/BT OOT 链路与 radxa-rock5b 逐字段等价（按值比较）。
 """
 
@@ -87,6 +87,35 @@ class TestOrangePi5PlusMergedConfig:
         assert "mali-csf" in names, (
             f"OrangePi 5 Plus merged config 应包含 mali-csf extra_firmware；实际: {names}")
 
+    def test_board_overlays_hx8399a_gt911(self, merged):
+        """HX8399-A 1080×1920 DSI 屏 + GT911 触摸 overlay 列表正确。"""
+        overlays = merged["boot"]["board_overlays"]
+        default_overlays = merged["boot"]["default_overlays"]
+        assert "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo" in overlays
+        assert "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo" in default_overlays
+
+    def test_board_overlay_dtso_source_exists(self):
+        """对应 .dtso 源文件必须存在，否则 device-tree-overlay 编不出 dtbo。"""
+        from pathlib import Path
+        src = Path(
+            "components/board/orangepi-5-plus/dtso/"
+            "rk3588-orangepi-5-plus-hx8399a-gt911.dtso"
+        )
+        assert src.is_file(), f"缺失 dtso 源: {src}"
+
+    def test_gt911_cfg_blob_in_overlay_tree(self):
+        """GT911 cfg blob 必须放在 board overlay/lib/firmware/，否则
+        rootfs cp -a 不会带它进 /lib/firmware/，goodix.c request_firmware
+        会失败。文件大小必须 = 186 字节（mainline GOODIX_CONFIG_911_LENGTH）。"""
+        from pathlib import Path
+        blob = Path(
+            "components/board/orangepi-5-plus/overlay/"
+            "lib/firmware/goodix_911_cfg.bin"
+        )
+        assert blob.is_file(), f"缺失 cfg blob: {blob}"
+        assert blob.stat().st_size == 186, (
+            f"GT911 cfg 必须 186 字节，实际 {blob.stat().st_size}")
+
 
 class TestOrangePi5PlusRTL8852BEOOTChain:
     """RTL8852BE OOT 链路三块字段与 radxa-rock5b 等价（按值比较）。"""
@@ -131,26 +160,6 @@ class TestOrangePi5PlusRTL8852BEOOTChain:
                            if e.get("name") == "rkwifibt-rtl8852be"]
         assert merged_rkwifibt == rock5b_rkwifibt
 
-
-class TestOrangePi5PlusNoBoardOverlays:
-    """OrangePi 5 Plus 不携带板级 dtso 与 boot.board_overlays。"""
-
-    @pytest.fixture()
-    def merged(self, boards):
-        return get_board_config("orangepi-5-plus", boards=boards)
-
-    def test_no_board_overlays(self, merged):
-        """boot.board_overlays 不存在或为空列表。"""
-        board_overlays = merged.get("boot", {}).get("board_overlays", [])
-        assert board_overlays == [], (
-            f"orangepi-5-plus 不应携带 board_overlays；实际: {board_overlays}")
-
-    def test_no_dtso_directory(self):
-        """组件目录下不存在 dtso/ 子目录与任何 .dtso 文件。"""
-        from pathlib import Path
-        board_dir = Path(__file__).resolve().parents[2] / "components/board/orangepi-5-plus"
-        assert not (board_dir / "dtso").exists(), "components/board/orangepi-5-plus/dtso/ 不应存在"
-        assert list(board_dir.rglob("*.dtso")) == [], "orangepi-5-plus 目录下不应有 .dtso 文件"
 
 
 class TestOrangePi5PlusLunchTargets:
