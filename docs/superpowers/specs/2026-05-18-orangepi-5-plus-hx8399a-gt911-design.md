@@ -15,7 +15,7 @@ orangepi-cm4 DSI 屏适配撤回 change 的四层踩坑教训对应，规避复�
 ## 非目标
 
 - 不实现 HDMI/DSI 双屏同步显示策略调整
-- 不实现亮度策略（首版背光走 base dtsi `&backlight_1` 默认 PWM）
+- 不实现亮度策略（首版背光走 base dtsi `&backlight` 默认 PWM）
 - 不调整 panel 旋转 / 多分辨率切换
 - 不为同板第二款 DSI 屏预留 abstraction
 
@@ -27,7 +27,7 @@ orangepi-cm4 DSI 屏适配撤回 change 的四层踩坑教训对应，规避复�
 | Panel reset | `GPIO2_C1` active-low |
 | Panel VCC_LCD enable | `GPIO1_D2` active-high |
 | pinctrl | `&lcd_rst_gpio` |
-| 背光 | `&backlight_1`（base dtsi 已存在 PWM-backlight） |
+| 背光 | `&backlight`（base dtsi 已存在 PWM-backlight） |
 | 触摸 I2C | `i2c7` @ `0x14` |
 | 触摸 INT | `GPIO2_B2` 上升沿（与 cfg byte 6 = `0x35` bit[0]=1 一致） |
 | 触摸 RST | `GPIO2_B5` active-high |
@@ -51,7 +51,7 @@ orangepi-cm4 DSI 屏适配撤回 change 的四层踩坑教训对应，规避复�
 |--------|--------|----------|
 | Panel | BSP `drivers/gpu/drm/panel/panel-simple.c`，匹配 `compatible = "simple-panel-dsi"` | 已支持 `panel-init-sequence`（格式与 LCD 厂 `.c` 文件 1:1 对应）；已在默认 defconfig 编入；零 patch |
 | Touch | mainline `drivers/input/touchscreen/goodix.c`，匹配 `compatible = "goodix,gt911"` | 自带 `request_firmware("goodix_911_cfg.bin")` 路径；`rockchip_linux_defconfig` 已 `CONFIG_TOUCHSCREEN_GOODIX=y`；与 vendor `gt9xx`（compatible `"goodix,gt9xx"`）字符串不重叠不冲突 |
-| Backlight | base dtsi `&backlight_1`（PWM-backlight） | 复用，不动 |
+| Backlight | base dtsi `&backlight`（PWM-backlight） | 复用，不动 |
 
 ## 文件 layout
 
@@ -117,7 +117,7 @@ components/board/orangepi-5-plus/
     enable-gpios = <&gpio1 RK_PD2 GPIO_ACTIVE_HIGH>;
     pinctrl-names = "default";
     pinctrl-0 = <&lcd_rst_gpio>;
-    backlight = <&backlight_1>;
+    backlight = <&backlight>;
 
     /* MIPI_DSI_MODE_EOT_PACKET：见 §风险 R1，实施时按 BSP 头文件实际宏定义选 (a)/(b) */
     dsi,flags  = <(MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST | MIPI_DSI_MODE_LPM)>;

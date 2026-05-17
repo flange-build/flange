@@ -46,7 +46,7 @@ lunch orangepi-5-plus-default-release
 
 ## DSI 屏 + 触摸（HX8399-A + GT911）
 
-30-pin DSI FPC 接 HX8399-A 1080×1920 portrait 4-lane MIPI DSI 面板 + GT911 5-point 电容触摸（**软件落地完成，实机验收 pending**）。接线复用 vendor `rk3588-orangepi-5-plus-lcd.dtsi`：panel reset GPIO2_C1 / VCC_LCD EN GPIO1_D2 / backlight `&backlight_1` PWM / touch i2c7@0x14 INT GPIO2_B2(rising) RST GPIO2_B5。
+30-pin DSI FPC 接 HX8399-A 1080×1920 portrait 4-lane MIPI DSI 面板 + GT911 5-point 电容触摸（**软件落地完成，实机验收 pending**）。接线复用 vendor `rk3588-orangepi-5-plus-lcd.dtsi`：panel reset GPIO2_C1 / VCC_LCD EN GPIO1_D2 / backlight `&backlight` PWM / touch i2c7@0x14 INT GPIO2_B2(rising) RST GPIO2_B5。
 
 - Panel 走 BSP `panel-simple.c` 的 `simple-panel-dsi` + `panel-init-sequence` 路径——LCD 厂 init `.c` 与 dts 字节流 1:1 对应（16 cmd / 319 字节）。零 driver / 零 kernel patch
 - Touch 走 mainline `goodix.c`（compatible `"goodix,gt911"`）；与 vendor `gt9xx` (`"goodix,gt9xx"`) 不撞。启动 `request_firmware("goodix_911_cfg.bin")` 拉 186B cfg（= `GOODIX_CONFIG_911_LENGTH`）

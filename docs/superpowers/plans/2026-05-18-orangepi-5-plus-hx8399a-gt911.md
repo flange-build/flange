@@ -198,7 +198,7 @@ Write `components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hx8399a-gt91
  *   - DSI 控制器：&dsi1（4-lane，VOP3 → dsi1_in_vp3）
  *   - Panel reset：GPIO2_C1 active-low
  *   - Panel VCC_LCD EN：GPIO1_D2 active-high
- *   - Panel backlight：&backlight_1（base dtsi 已存在的 PWM-backlight）
+ *   - Panel backlight：&backlight（base dtsi 已存在的 PWM-backlight）
  *   - Touch I2C：i2c7 @ 0x14
  *   - Touch INT：GPIO2_B2 rising edge（与 cfg byte6=0x35 bit[0]=1 一致）
  *   - Touch RST：GPIO2_B5 active-high
@@ -263,7 +263,7 @@ Write `components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hx8399a-gt91
     enable-gpios = <&gpio1 RK_PD2 GPIO_ACTIVE_HIGH>;
     pinctrl-names = "default";
     pinctrl-0 = <&lcd_rst_gpio>;
-    backlight = <&backlight_1>;
+    backlight = <&backlight>;
 
     dsi,flags  = <(MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST | MIPI_DSI_MODE_LPM)>;
     dsi,format = <MIPI_DSI_FMT_RGB888>;

@@ -6,7 +6,10 @@
  *   - DSI 控制器：&dsi1（4-lane，VOP3 → dsi1_in_vp3）
  *   - Panel reset：GPIO2_C1 active-low
  *   - Panel VCC_LCD EN：GPIO1_D2 active-high
- *   - Panel backlight：&backlight_1（base dtsi 已存在的 PWM-backlight）
+ *   - Panel backlight：&backlight（rk3588-orangepi.dtsi:48 定义的 PWM-backlight；
+ *     注意是 &backlight 不是 &backlight_1—— RK3588 全核版 dtsi 是单背光 label，
+ *     与 RK3588S 的 rk3588s-orangepi.dtsi 双背光命名 backlight_1/backlight_2 不同；
+ *     第一次实机 boot 时这条写错踩了 fdt_overlay_apply FDT_ERR_NOTFOUND 坑）
  *   - Touch I2C：i2c7 @ 0x14
  *   - Touch INT：GPIO2_B2 rising edge（与 cfg byte6=0x35 bit[0]=1 一致）
  *   - Touch RST：GPIO2_B5 active-high
@@ -71,7 +74,7 @@
     enable-gpios = <&gpio1 RK_PD2 GPIO_ACTIVE_HIGH>;
     pinctrl-names = "default";
     pinctrl-0 = <&lcd_rst_gpio>;
-    backlight = <&backlight_1>;
+    backlight = <&backlight>;
 
     dsi,flags  = <(MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST | MIPI_DSI_MODE_LPM)>;
     dsi,format = <MIPI_DSI_FMT_RGB888>;
