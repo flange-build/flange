@@ -62,8 +62,8 @@ components/board/orangepi-5-plus/
 │   └── rk3588-orangepi-5-plus-hx8399a-gt911.dtso            # 新增
 └── firmware/
     └── touch/
-        ├── goodix_911_cfg.cfg                               # 新增：原 ASCII，184 hex token，仅 review 用
-        └── goodix_911_cfg.bin                               # 新增：184B 二进制，部署用
+        ├── goodix_911_cfg.cfg                               # 新增：原 ASCII，186 hex token，仅 review 用
+        └── goodix_911_cfg.bin                               # 新增：186B 二进制，部署用
 ```
 
 > `.bin` 由人手用 `python -c` 转一次性 commit、不自动生成（参考 wiki rock5c-lite
@@ -172,7 +172,7 @@ components/board/orangepi-5-plus/
 
 ## GT911 cfg blob
 
-184B raw cfg（GT911 寄存器 `0x8047`–`0x80FE` + 末尾 2B `checksum/Config_Fresh`），与 mainline `goodix.c` 期望的 `request_firmware()` payload 格式完全一致。
+186B raw cfg（GT911 寄存器 `0x8047`–`0x80FE` + 末尾 2B `checksum/Config_Fresh`），与 mainline `goodix.c` 期望的 `request_firmware()` payload 格式完全一致。
 
 - Firmware 文件名：`goodix_911_cfg.bin`（mainline `goodix.c:1402` 命名规则：`goodix_<id>_cfg.bin`，GT911 chip 上电后报 `id = "911"`）
 - 装载路径：`/lib/firmware/goodix_911_cfg.bin`
@@ -238,7 +238,7 @@ components/board/orangepi-5-plus/
 
 - [ ] `flange build` 通过；boot 分区含 `dtbs/rockchip/overlay/rk3588-orangepi-5-plus-hx8399a-gt911.dtbo`
 - [ ] `extlinux.conf` 含该 overlay 的 `fdtoverlays`
-- [ ] rootfs `/lib/firmware/goodix_911_cfg.bin` 存在且大小 = 184
+- [ ] rootfs `/lib/firmware/goodix_911_cfg.bin` 存在且大小 = 186
 - [ ] `dmesg | grep -i panel-simple` 见 probe 成功，无 `failed to parse init sequence`
 - [ ] `dmesg | grep -i Goodix` 见 `firmware loaded` 与 `New device registered`，无 `Failed to invoke firmware loader`
 - [ ] `/dev/dri/cardN` 出 1080×1920 connector；`modetest` 显示 mode 含 1080x1920@60
