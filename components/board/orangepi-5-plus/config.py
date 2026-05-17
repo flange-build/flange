@@ -51,20 +51,34 @@ BOARD = {
         ],
     },
     "boot": {
-        # 30-pin DSI FPC 板载接口的 HX8399-A 1080×1920 portrait 面板 +
-        # GT911 5-point 电容触摸 overlay。默认即应用（写进 extlinux.conf
-        # 的 fdtoverlays）。
-        # rollback：改 /boot/extlinux/extlinux.conf 去掉 fdtoverlays 一行，
-        # 或重刷无此 overlay 的镜像。
-        # 接线依据 vendor rk3588-orangepi-5-plus-lcd.dtsi；触摸 cfg blob
-        # 通过 board overlay/lib/firmware/goodix_911_cfg.bin 走 _install_overlays
-        # 现成 cp -a 机制部署，mainline goodix.c 启动时 request_firmware
-        # 拉文件下发。
+        # 板私有 overlay 集合。两条独立 dtbo 默认即应用（写进 extlinux.conf
+        # 的 fdtoverlays），节点层面互不重叠：
+        #
+        # 1. hx8399a-gt911：30-pin DSI FPC 板载接口的 HX8399-A 1080×1920
+        #    portrait 面板 + GT911 5-point 电容触摸。接线依据 vendor
+        #    rk3588-orangepi-5-plus-lcd.dtsi；触摸 cfg blob 通过 board
+        #    overlay/usr/lib/firmware/goodix_911_cfg.bin 走 _install_overlays
+        #    现成 cp -a 机制部署，mainline goodix.c 启动时 request_firmware
+        #    拉文件下发。改 dsi1/panel/touch/route 节点。注意 overlay 起点
+        #    走 usr/lib 不走 lib——ubuntu-base 已 usrmerge，根 /lib 是 symlink
+        #    → /usr/lib，cp -a 不能把目录覆盖到 non-directory。
+        #
+        # 2. hdmirx-enable：板载 HDMI IN 口启用。argon kernel 已编入
+        #    CONFIG_VIDEO_ROCKCHIP_HDMIRX=y、板 dtsi 已写齐 hdmirx_ctrler
+        #    的 HPD/det-gpio/pinctrl，但板 dts:323 显式 status="disabled"。
+        #    本 overlay 一句话翻 status="okay"，driver 自动 probe，hdmiin-sound
+        #    （dtsi 内无 status 默认 okay）audio 链路跟随激活。改 hdmirx_ctrler
+        #    一个节点。
+        #
+        # rollback：改 /boot/extlinux/extlinux.conf 去掉 fdtoverlays 行内
+        # 对应 dtbo 条目，或重刷无此 overlay 的镜像。两条 overlay 可独立 rollback。
         "board_overlays": [
             "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
+            "rk3588-orangepi-5-plus-hdmirx-enable.dtbo",
         ],
         "default_overlays": [
             "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
+            "rk3588-orangepi-5-plus-hdmirx-enable.dtbo",
         ],
     },
     # 账号体系沿用 components/rootfs/config.py base 层默认：root 完全锁定

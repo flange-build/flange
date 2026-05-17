@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * OrangePi 5 Plus HDMI RX (HDMI IN) 启用 overlay
+ *
+ * argon BSP linux-6.1-stan-rkr5.1 已编入 driver
+ * （CONFIG_VIDEO_ROCKCHIP_HDMIRX=y 与 CONFIG_VIDEO_ROCKCHIP_HDMIRX_CLASS=y），
+ * 板 dtsi rk3588-orangepi-5-plus.dtsi:394-404 也写齐了板级 hdmirx 配置：
+ * HPD trigger level=high、hdmirx-det-gpios=<&gpio1 RK_PC6 GPIO_ACTIVE_LOW>、
+ * pinctrl=<&hdmim1_rx_cec &hdmim1_rx_hpdin &hdmim1_rx_scl &hdmim1_rx_sda
+ * &hdmirx_det>。SoC dtsi rk3588.dtsi:492-541 含完整 hdmirx_ctrler 节点定义
+ * （reg / 7 路 clocks / 3 个 interrupts / 4 个 resets / RK3588_PD_VO1 power-domain）。
+ *
+ * 但 BSP 板 dts rk3588-orangepi-5-plus.dts:323-325 显式：
+ *     &hdmirx_ctrler { status = "disabled"; };
+ * driver 见 disabled 不 probe，导致 /dev/video* 空、dmesg 无 hdmirx 任何输出。
+ *
+ * 本 overlay 仅翻 status 为 "okay"。其他属性（HPD/det-gpio/pinctrl）由
+ * 板 dtsi 维护，本 overlay 不重申，避免与 dtsi 字段重复维护。
+ *
+ * hdmiin-sound 节点（dtsi:85-95）无 status 属性 → driver 默认按 okay 处理；
+ * 其 codec 指向 <&hdmirx_ctrler 0>，hdmirx_ctrler probe 起来后 audio 链路
+ * 自动跟随。本 overlay 不显式翻 hdmiin-sound（节点是匿名声明，无 label，
+ * 也无法用 &label 引用）。
+ *
+ * Rollback：板上改 /boot/extlinux/extlinux.conf 删 fdtoverlays 行中本条 dtbo
+ * 即可恢复到 HDMI RX disabled 状态，不影响其他 overlay。
+ */
+
+/dts-v1/;
+/plugin/;
+
+&hdmirx_ctrler {
+	status = "okay";
+};

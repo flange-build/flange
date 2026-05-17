@@ -6,6 +6,23 @@
 
 ---
 
+## [2026-05-18] sync | orangepi-5-plus HDMI IN（HDMI RX）启用（一句 overlay 翻 status，软件落地）
+
+[[add-rk3588-opi5plus-hdmirx-overlay]] change 落地：
+
+- 根因：BSP 三层 `&hdmirx_ctrler { status="disabled"; }`（`rk3588.dtsi:541` / `rk3588-orangepi-5-plus.dtsi:395` / `rk3588-orangepi-5-plus.dts:323-325`），driver `CONFIG_VIDEO_ROCKCHIP_HDMIRX=y` 已 in-tree built-in 但见 disabled 不 probe → adb 实板 `/dev/video*` 空 / `/sys/class/video4linux/` 空 / `dmesg | grep hdmirx` 空
+- 板 dtsi 已写齐 HPD trigger level=high、`hdmirx-det-gpios=<&gpio1 RK_PC6 GPIO_ACTIVE_LOW>`、pinctrl `&hdmim1_rx_*`；本 overlay 仅翻 status，不重申其他属性（single source of truth 留给 dtsi）
+- 新增 `components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hdmirx-enable.dtso`：plugin overlay，`&hdmirx_ctrler { status = "okay"; };` 一句
+- `config.py` 的 `boot.board_overlays` / `default_overlays` 各追加一条；两条 overlay（DSI 屏 + HDMI IN）节点层面互不重叠（DSI 改 dsi/panel/touch/route，HDMI 改 hdmirx_ctrler），可独立 rollback
+- `hdmiin-sound` 节点（dtsi:85-95，匿名无 label）无 status 默认 okay，codec 指 `<&hdmirx_ctrler 0>`，controller 起来后 audio 链路自动跟随
+- 不引入 patch / kconfig fragment / 新 firmware；零 builder 改动
+- 新增 5 项测试到 `TestOrangePi5PlusHdmirxOverlay` 类（dtso 存在 / 仅翻 status / 不重申 dtsi 属性 / board_overlays + default_overlays 含本条）；opi5plus 全套件 25/25 通过
+- 实机验收 pending：dmesg hdmirx probe 行、`/dev/video*` 至少一个节点、`/sys/.../hdmirx-controller@fdee0000/status == "okay"`
+
+并：
+
+- `components/platform/rockchip/rk3588/config.py` 清理 mali_kbase 调试期遗留 `loglevel=7 initcall_debug ignore_loglevel` → `loglevel=4`（rkwifibt PHL/RTW KERN_DEBUG 喷 ttyS2 淹没的根因，详见 commit `6a3e5dd`）
+
 ## [2026-05-18] sync | orangepi-5-plus HX8399-A 1080×1920 DSI 屏 + GT911 触摸适配（软件落地，硬件验收 pending）
 
 软件链路落地，未实机验收。spec/plan 文档在 `docs/superpowers/{specs,plans}/2026-05-18-orangepi-5-plus-hx8399a-gt911-{design,…}.md`，5 条 feature commit（不含 doc 同步）：

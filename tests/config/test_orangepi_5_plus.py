@@ -124,6 +124,61 @@ class TestOrangePi5PlusMergedConfig:
             f"GT911 cfg 必须 186 字节，实际 {blob.stat().st_size}")
 
 
+class TestOrangePi5PlusHdmirxOverlay:
+    """HDMI RX (HDMI IN) 启用 overlay 文件 + config 接入。
+
+    BSP rk3588-orangepi-5-plus.dts:323-325 显式 status="disabled"；本 overlay
+    仅翻 status="okay"。CONFIG_VIDEO_ROCKCHIP_HDMIRX=y 已 in-tree built-in。
+    """
+
+    @pytest.fixture()
+    def merged(self, boards):
+        return get_board_config("orangepi-5-plus", boards=boards)
+
+    @pytest.fixture()
+    def dtso_path(self):
+        from pathlib import Path
+        return Path(
+            "components/board/orangepi-5-plus/dtso/"
+            "rk3588-orangepi-5-plus-hdmirx-enable.dtso"
+        )
+
+    def test_dtso_source_exists(self, dtso_path):
+        assert dtso_path.is_file(), f"缺失 dtso 源: {dtso_path}"
+
+    def test_dtso_only_flips_status(self, dtso_path):
+        """dtso 内容仅含一处 &hdmirx_ctrler reference + status="okay"。"""
+        text = dtso_path.read_text()
+        assert "&hdmirx_ctrler" in text
+        assert 'status = "okay"' in text
+        # 必须用 plugin overlay 模式（否则 dtc 不会把 &label{} 包成 fragment）
+        assert "/dts-v1/;" in text
+        assert "/plugin/;" in text
+
+    def test_dtso_does_not_redeclare_dtsi_props(self, dtso_path):
+        """dtso 不应重申板 dtsi 已写齐的属性（HPD/det-gpio/pinctrl），避免重复维护。"""
+        text = dtso_path.read_text()
+        # 检查非注释行（粗略 grep — dtso 注释用 // 与 /* ... */，不在 hot path 上）
+        # 用简单子串扫描足够：这三个 token 在 dtsi 出现，overlay 翻 status 不该重申
+        # 仅检查非注释正文中的出现：通过去掉块注释 + 行注释后判断
+        import re
+        # 去掉 /* ... */ 块注释
+        stripped = re.sub(r"/\*[\s\S]*?\*/", "", text)
+        # 去掉 // 行注释
+        stripped = re.sub(r"//.*", "", stripped)
+        for token in ("hpd-trigger-level", "hdmirx-det-gpios", "pinctrl-0", "pinctrl-names"):
+            assert token not in stripped, (
+                f"dtso 正文（去注释后）不应包含 {token!r}，由板 dtsi 维护")
+
+    def test_board_overlays_includes_hdmirx(self, merged):
+        overlays = merged["boot"]["board_overlays"]
+        assert "rk3588-orangepi-5-plus-hdmirx-enable.dtbo" in overlays
+
+    def test_default_overlays_includes_hdmirx(self, merged):
+        default_overlays = merged["boot"]["default_overlays"]
+        assert "rk3588-orangepi-5-plus-hdmirx-enable.dtbo" in default_overlays
+
+
 class TestOrangePi5PlusRTL8852BEOOTChain:
     """RTL8852BE OOT 链路三块字段与 radxa-rock5b 等价（按值比较）。"""
 
