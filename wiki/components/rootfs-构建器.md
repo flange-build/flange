@@ -9,6 +9,7 @@ sources:
   - builder/chroot.py
   - components/rootfs/config.py
   - components/rootfs/overlay/etc/bash.bashrc
+  - components/rootfs/overlay/etc/sysctl.d/10-console-quiet.conf
   - components/rootfs/overlay/etc/skel/.bashrc
   - components/rootfs/overlay/root/.bashrc
 related:

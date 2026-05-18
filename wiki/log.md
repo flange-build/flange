@@ -6,6 +6,19 @@
 
 ---
 
+## [2026-05-18] refactor | console 安静策略上提到 base rootfs（全板生效）
+
+`10-console-quiet.conf` 从 `components/board/orangepi-5-plus/overlay/etc/sysctl.d/` 上提到 `components/rootfs/overlay/etc/sysctl.d/`，所有板默认开启 console 安静策略——理由：原本只为 [[orangepi-5-plus]] HDMI RX spam 适配，但 vendor BSP 系列 driver 把"运行时状态"按 KERN_ERR 报的习惯普遍存在（[[radxa-rock5b]] rkwifibt PHL/RTW 调试期同款），与板/SoC 无关，属 OS-level 偏好。
+
+迁移：
+
+- 文件 `git mv` 到 base 路径，注释段去 board-local 表述、加普适触发场景说明（HDMI RX + rkwifibt PHL/RTW 都列在已知触发点）
+- 编号 `10-` 保留，留出 `20-` 空间给 board 级 override（如调试期某板想看 ERR）
+- `wiki/boards/orangepi-5-plus.md` frontmatter.sources 移除本文件路径，HDMI RX 段"Console 安静策略"小节改写为引用 base rootfs 路径
+- `wiki/components/rootfs-构建器.md` frontmatter.sources 加本文件路径
+
+回滚策略不变（删本文件重启 / runtime sysctl）。如某板需要更宽松 console，写 `components/board/<board>/overlay/etc/sysctl.d/20-console-debug.conf` 设 `kernel.printk = 4 4 1 7` 即可（编号 > 10 覆盖）。
+
 ## [2026-05-18] sync | orangepi-5-plus console 安静策略（systemd-sysctl 抬高 console_loglevel）
 
 实机点亮 DSI 屏 + 启用 HDMI RX 后，`rk_hdmirx.c:1685` driver 在无 HDMI 源时按 `v4l2_err`（KERN_ERR=3）每秒数次刷 "HDMI pull out, return!"。kernel cmdline `loglevel=4` 压不住——3 < 4 命中 console 路径。降 cmdline 到 3 会吞其他 driver 真实 ERR（mmc / disk / oom），不可取。
