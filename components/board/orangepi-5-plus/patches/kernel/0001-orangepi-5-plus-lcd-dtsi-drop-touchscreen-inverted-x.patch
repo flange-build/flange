@@ -1,0 +1,36 @@
+From: flange <flange@localhost>
+Subject: [PATCH] dts: orangepi-5-plus-lcd: 删 touchscreen-inverted-x
+
+vendor BSP rk3588-orangepi-5-plus-lcd.dtsi 的 GT 触摸节点是针对 OrangePi
+官方 LCD05 (10.1" 1280×800 横屏) 的物理旋转方向预设 `touchscreen-inverted-x`。
+本板搭的是 HX8399-A 1080×1920 portrait，触摸 IC 物理安装相对 panel 旋转
+不同，evtest 实测验证需要的 transform 组合是：
+
+  touchscreen-swapped-x-y + touchscreen-inverted-y
+
+只单 invert，inverted-x 必须**不存在**。但 board overlay `/delete-property/`
+经 dtc 编出 dtbo 后 u-boot fdt_overlay_apply 不支持 base property 删除
+（fdt overlay 标准是 additive merge，没有 delete-property marker；libfdt
+的 fdt_overlay_apply 也不解析），所以必须在 base dts 编译期就把它去掉。
+
+最低入侵修法：把这一行注释掉（保留行的位置 + 解释，方便后续如果换屏
+要回退时知道改了什么）。其他属性（swapped-x-y / size-x / size-y）由
+board overlay 重申 / 覆盖。
+
+不修 vendor compatible="goodix,gt9271"：board overlay 已 override 成
+"goodix,gt911" 命中 mainline driver，不重叠不冲突。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus-lcd.dtsi b/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus-lcd.dtsi
+--- a/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus-lcd.dtsi
++++ b/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus-lcd.dtsi
+@@ -35,7 +35,9 @@
+ 		interrupts = <RK_PB2 IRQ_TYPE_LEVEL_LOW>;
+ 		irq-gpios = <&gpio2 RK_PB2 IRQ_TYPE_LEVEL_LOW>;
+ 		reset-gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_HIGH>;
+-		touchscreen-inverted-x;
++		/* touchscreen-inverted-x; — removed by board patch (orangepi-5-plus
++		 * HX8399-A portrait 物理安装方向与 vendor 1280×800 横屏假设不同；
++		 * board overlay 用 swap-x-y + inverted-y 单 invert) */
+ 		//touchscreen-inverted-y;
+ 		touchscreen-swapped-x-y;
+ 		touchscreen-size-x = <1280>;

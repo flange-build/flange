@@ -162,13 +162,20 @@
         touchscreen-swapped-x-y;
         touchscreen-inverted-y;
         /*
-         * 显式删除 vendor rk3588-orangepi-5-plus-lcd.dtsi 注入的
-         * touchscreen-inverted-x（针对 1280×800 横屏调的，与本 HX8399-A
-         * 1080×1920 portrait 物理旋转方向不一致）。
-         * touchscreen-swapped-x-y vendor 也有、我们也要 ——上面直接重申
-         * 即可，不需删（dts merge 时同名 boolean 属性 idempotent）。
+         * vendor rk3588-orangepi-5-plus-lcd.dtsi 注入了 touchscreen-inverted-x
+         * （针对 OrangePi 官方 1280×800 横屏 LCD05 的物理旋转方向预设），
+         * 与本 HX8399-A 1080×1920 portrait 物理旋转方向不一致——保留它会
+         * 让 X 方向再翻一次，evtest 实测左右反向。
+         *
+         * 早期尝试在本 overlay 加 `/delete-property/ touchscreen-inverted-x`
+         * 走不通：dtc 编 overlay 时不把 delete marker 传进 dtbo，u-boot
+         * fdt_overlay_apply 也不解析（fdt overlay 标准是 additive merge）。
+         * 故 base dts 编译期就需把 vendor inverted-x 去掉——见 board
+         * kernel patch `0001-orangepi-5-plus-lcd-dtsi-drop-touchscreen-inverted-x.patch`。
+         *
+         * touchscreen-swapped-x-y vendor 也有、本 overlay 也要——直接重申
+         * 即可（boolean 属性 dts merge idempotent，不需 delete-then-add）。
          */
-        /delete-property/ touchscreen-inverted-x;
         status = "okay";
     };
 };
