@@ -19,10 +19,20 @@ class RockchipKernelBuilder(KernelBuilder):
         """支持单 defconfig 字符串或多步 defconfig 合并 list。
 
         list 形式按顺序逐个 ``make <dc>``，后者覆盖前者已设置的 CONFIG。
-        典型用例：``["rockchip_linux_defconfig", "case_insensitive_fix.config",
-        "rk3588_panthor.config", "panel_mipi_dbi.config"]``。
+        每项可以是：
 
-        合并步骤前先生成三个 fragment 到 ``arch/<ARCH>/configs/``：
+        - **fragment 文件名**（如 ``rockchip_linux_defconfig`` /
+          ``case_insensitive_fix.config``）：当 ``make`` target，需对应文件
+          已存在于 ``arch/<ARCH>/configs/``。
+        - **raw kernel option 字符串**（如 ``"CONFIG_TOUCHSCREEN_GOODIX=y"``
+          / ``"# CONFIG_FOO is not set"``）：识别规则——含 ``=`` 或形如
+          ``# CONFIG_...``——同 build 内的所有 raw option 项聚合写入动态
+          fragment ``arch/<ARCH>/configs/flange_inline.config``，并把
+          ``flange_inline.config`` 追加到 list 末尾（保证后处理、CONFIG
+          冲突时覆盖前序）。板级 +defconfig 写一行 ``CONFIG_X=y`` 即生效，
+          无需 builder 端预先写专用 fragment 函数。
+
+        合并步骤前先生成三个 SoC/平台级 fragment 到 ``arch/<ARCH>/configs/``：
 
         - ``case_insensitive_fix.config`` —— 由基类生成。大小写不敏感 FS 上
           禁用 netfilter 冲突模块；敏感 FS 上为空 fragment（保留功能）。
@@ -32,19 +42,33 @@ class RockchipKernelBuilder(KernelBuilder):
           （``CONFIG_DRM_PANEL_MIPI_DBI=m``）；mainline v5.18 已 in-tree，
           rkr5.1 (linux 6.1) 自带，无需 backport patch。
 
-        三个 fragment 都始终生成，由 SoC config 决定是否在 defconfig list 中
-        引入来生效。
+        三个 fragment 始终生成，由 SoC config 决定是否在 defconfig list 中
+        引入。
         """
         self._write_case_insensitive_fix(src_dir)
         self._write_panthor_fragment(src_dir, config)
         self._write_panel_mipi_dbi_fragment(src_dir)
-        self._write_mainline_goodix_fragment(src_dir)
         defconfig = config["kernel"]["defconfig"]
-        if isinstance(defconfig, list):
-            for dc in defconfig:
-                self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
-        else:
-            self.make(src_dir, [defconfig], arch=self.ARCH, cross=self.CROSS)
+        if isinstance(defconfig, str):
+            defconfig = [defconfig]
+
+        # 分类：raw kernel option 字符串与 fragment 文件名分开处理。
+        # raw option 识别：含 "=" 或形如 "# CONFIG_X is not set"；
+        # 否则视为 fragment 文件名（即原行为）。
+        raw_options: list[str] = []
+        targets: list[str] = []
+        for item in defconfig:
+            if "=" in item or item.lstrip().startswith("# CONFIG_"):
+                raw_options.append(item)
+            else:
+                targets.append(item)
+
+        if raw_options:
+            self._write_inline_options_fragment(src_dir, raw_options)
+            targets.append("flange_inline.config")
+
+        for dc in targets:
+            self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
 
     def _write_panthor_fragment(self, src_dir: Path, config: dict):
         """生成 rk3588_panthor.config fragment。
@@ -116,35 +140,33 @@ class RockchipKernelBuilder(KernelBuilder):
         )
         self._status("panel_mipi_dbi.config 生成")
 
-    def _write_mainline_goodix_fragment(self, src_dir: Path):
-        """生成 config fragment 启用 mainline Goodix touchscreen driver。
+    def _write_inline_options_fragment(self, src_dir: Path,
+                                       options: list[str]) -> None:
+        """把 kernel.defconfig list 里的 raw CONFIG_X= 行聚合写入动态 fragment。
 
-        argon BSP `rockchip_linux_defconfig` 默认 `# CONFIG_TOUCHSCREEN_GOODIX
-        is not set`，只启了 vendor `gt9xx` (`CONFIG_TOUCHSCREEN_GT9XX=y`)。
-        vendor driver 仅匹配 compatible `"goodix,gt9xx"`，把 cfg 数组硬编进
-        二进制，不读 firmware blob；mainline `goodix.c` 匹配 `"goodix,gt911"`
-        等具体型号、走 `request_firmware("goodix_<id>_cfg.bin")` 加载 cfg。
+        触发：板/SoC 配置直接在 ``kernel.+defconfig`` 写一行
+        ``"CONFIG_TOUCHSCREEN_GOODIX=y"``（或 ``"# CONFIG_FOO is not set"``）
+        而不是先在 builder 加一个 ``_write_xxx_fragment`` 函数 + 单独
+        ``.config`` 文件。这样板级 opt-in 一行直达 kernel option，零 builder
+        改动。
 
-        两 driver 在 i2c 总线上靠 compatible 字符串区分、不会撞——所以可
-        共存。需要 mainline 路径的板（如 [[orangepi-5-plus]] HX8399-A DSI
-        屏 + GT911 触摸）在 `kernel.+defconfig` 加 `"mainline_goodix.config"`
-        opt-in；不需要的板不引入，kernel binary 不变（mainline goodix
-        driver ~10KB built-in 增量可忽略）。
-
-        该 fragment **总是写入**（满足 `make <name>.config` 文件存在要求）；
-        board 配置决定是否在 kernel.defconfig list 中引入。
+        生成路径：``arch/<ARCH>/configs/flange_inline.config``。被
+        ``configure()`` 追加到 defconfig list 末尾，由 ``make
+        flange_inline.config`` 最后处理，因此 inline options 覆盖前序
+        fragment 的同名 CONFIG。
         """
-        fragment = src_dir / "arch" / self.ARCH / "configs" / "mainline_goodix.config"
-        fragment.write_text(
-            "# mainline drivers/input/touchscreen/goodix.c 触摸驱动\n"
-            "# 匹配 compatible \"goodix,gt911\" / gt9271 / 等型号；走\n"
-            "# request_firmware(\"goodix_<id>_cfg.bin\") 加载 cfg blob。\n"
-            "# 与 vendor gt9xx (CONFIG_TOUCHSCREEN_GT9XX) 不撞 compatible，\n"
-            "# 两 driver 可共存。板级 opt-in：在 kernel.+defconfig 列表中\n"
-            "# 引入 \"mainline_goodix.config\"。\n"
-            "CONFIG_TOUCHSCREEN_GOODIX=y\n"
+        fragment = src_dir / "arch" / self.ARCH / "configs" / "flange_inline.config"
+        body = (
+            "# 由 builder 从 kernel.defconfig list 中的 raw option 字符串聚合\n"
+            "# 生成；每行一条 CONFIG_X=y / =m / =n 或 '# CONFIG_X is not set'。\n"
+            "# 项的来源是 SoC / board config.py 直接在 +defconfig 写的 raw\n"
+            "# 字符串（区别于 .config fragment 文件名）。最后被 make 处理，\n"
+            "# 覆盖前序 fragment 中同名 CONFIG。\n"
         )
-        self._status("mainline_goodix.config 生成")
+        body += "\n".join(options) + "\n"
+        fragment.write_text(body)
+        self._status(
+            f"flange_inline.config 生成（{len(options)} 项 raw kernel option）")
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)

@@ -65,15 +65,17 @@ class TestOrangePi5PlusMergedConfig:
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "rk3588_panthor.config",
-            "mainline_goodix.config",
+            "CONFIG_TOUCHSCREEN_GOODIX=y",
         ]
 
-    def test_kernel_mainline_goodix_fragment_opt_in(self, merged):
-        """board 通过 kernel.+defconfig 引入 mainline_goodix.config 启用
-        mainline drivers/input/touchscreen/goodix.c，匹配 dtso 的
+    def test_kernel_mainline_goodix_inline_opt_in(self, merged):
+        """board 通过 kernel.+defconfig 写 raw CONFIG_TOUCHSCREEN_GOODIX=y
+        启用 mainline drivers/input/touchscreen/goodix.c，匹配 dtso 的
         compatible="goodix,gt911" GT911 触摸节点（vendor BSP 默认
-        # CONFIG_TOUCHSCREEN_GOODIX is not set，必须 fragment 补）。"""
-        assert "mainline_goodix.config" in merged["kernel"]["defconfig"]
+        # CONFIG_TOUCHSCREEN_GOODIX is not set，必须 fragment 补）。
+        Builder 会把 raw 字符串聚合到动态 flange_inline.config 喂给 make，
+        无需在 builder 端预生成专用 fragment 函数。"""
+        assert "CONFIG_TOUCHSCREEN_GOODIX=y" in merged["kernel"]["defconfig"]
 
     def test_board_layer_fields(self, merged):
         """合并后保留 board 层字段（board 名 / DTS）。"""
