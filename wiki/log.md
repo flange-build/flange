@@ -6,6 +6,28 @@
 
 ---
 
+## [2026-05-19] fix | orangepi-5-plus GT911 触摸坐标对齐 + 撤销 board kernel patch（vendor 已修源）
+
+DSI 屏首版 dtso 没加 transform，实机 evtest 测到 user(weston) 四向滑动与 reported X/Y 不对应，初判 chip 物理安装相对 panel CCW 90° → dtso 加 `touchscreen-swapped-x-y + touchscreen-inverted-y`。再测 X 方向反向 → 进一步发现 vendor `rk3588-orangepi-5-plus-lcd.dtsi` 注入了 `touchscreen-inverted-x` 与 `touchscreen-swapped-x-y`（针对 OrangePi LCD05 1280×800 横屏的方向预设），与本 panel 物理方向冲突。
+
+**主要踩坑 / 学习点**：
+
+1. **u-boot fdt_overlay_apply 不支持 delete marker**：本 BSP `next-dev-v2026.01` u-boot 的 `lib/libfdt/fdt_overlay.c::overlay_apply_node` (line 550-594) 只 additive merge —— `fdt_setprop()` 覆盖同名属性 + `fdt_add_subnode()` 加新节点，**完全没 `__delete_property__` / `__delete_node__` 处理**。dtso 中 `/delete-property/` dtc 当 dts AST 时操作消化（编出来的 dtbo 没 delete marker），u-boot apply 时 base 同名属性纹丝不动。verifies 实际：早期 dtso 加 `/delete-property/ touchscreen-inverted-x` 烧实机后 `/sys/firmware/devicetree/base/...touchscreen@14/touchscreen-inverted-x` 仍存在。mainline libfdt 2018+ 才加 delete-marker 支持，Rockchip BSP fork 没跟到那么新
+
+2. **mainline goodix.c 优先用 chip cfg blob size**：DT `touchscreen-size-x/-y` 通过 `touchscreen_parse_properties` override 进 input_dev absinfo，但顺序是 `goodix_read_config()` 先用 cfg 设 max → `touchscreen_parse_properties` 再读 DT 覆盖。后者执行后 swap-x-y 还会再 swap absinfo（line 144），导致 input ABS_X max / ABS_Y max 与实际 driver 报值范围错位，evtest header `Max` 与流中 `value` 可超出 declared max（input subsystem 不 clamp，只是 absinfo 元数据错）
+
+3. **chip raw 与 panel 物理方向调试方法**：dtso 临时只留 size、去掉所有 transform 后 evtest 抓四角 LU/RU/LD/RD，把 reported (X,Y) 推回 chip raw 各轴变化，能确认 chip 实际安装方向。本板 chip raw 与 panel 1080×1920 portrait 1:1 对齐，**不需任何 transform**
+
+**修法演进**：
+
+- 第一阶段：板级 kernel patch `0001-orangepi-5-plus-lcd-dtsi-drop-touchscreen-inverted-x.patch` 在 vendor lcd dtsi 编译期注释掉 inverted-x（commit `d9292d5`），dtso `swap-x-y + inverted-y`
+- 第二阶段：evtest 四角验证发现 chip raw 与 panel 1:1，扩展 patch 同时删 vendor `touchscreen-swapped-x-y`（commit `d9292d5` 之后扩展），dtso 拿掉所有 transform 只留 size 1080×1920
+- 第三阶段：upstream argon `linux-6.1-stan-rkr5.1` commit `b173d7a80 dts: orangepi-5-plus 注释 LCD dtsi 中 gt9271 触屏示例` 把 vendor demo touchscreen@14 节点整段注释。本 board kernel patch 失去存在意义、撤销（commit `b845bb6`）。最终 touchscreen@14 节点完全由 board overlay 提供，无 vendor 干扰
+
+**最终状态**：实机 evtest LU/RU/LD/RD ≈ (0,0) / (1080,0) / (0,1920) / (1080,1920)，weston 1080×1920 portrait 1:1 对齐，touch 通。
+
+更新 wiki/boards/orangepi-5-plus.md DSI 段去 "pending" 标注、加 fdt_overlay delete 不支持的易踩坑段。
+
 ## [2026-05-18] fix | usbdevice.service UDC bind race 加 Restart=on-failure + 脚本 verify
 
 实机 boot 后 adb 不通，ssh 登陆排查：journalctl 时间线还原显示

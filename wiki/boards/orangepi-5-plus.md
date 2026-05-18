@@ -21,7 +21,7 @@ updated: 2026-05-18
 
 ## TL;DR
 
-OrangePi 5 Plus，RK3588，项目第二块 RK3588 板。首版落地：eMMC + UART2 + SSH + M.2 E-Key RTL8852BE WiFi/BT，逐字段复用 [[radxa-rock5b]] 模板。第二批：30-pin DSI FPC 接 HX8399-A 1080×1920 portrait 4-lane MIPI DSI 面板 + GT911 5-point 电容触摸（软件落地完成，实机点屏验收 pending）。第三批：板载 HDMI IN 口启用（一句 overlay 翻 `hdmirx_ctrler.status` 即可，driver 已 in-tree）。HDMI TX / NPU / NVMe / 板载 AP6275P / 双 2.5G NIC 显式配置 / PWM 风扇 / RGB LED 不在范围（RTL8125 走 r8169 主线驱动零配置自动 probe）。
+OrangePi 5 Plus，RK3588，项目第二块 RK3588 板。首版落地：eMMC + UART2 + SSH + M.2 E-Key RTL8852BE WiFi/BT，逐字段复用 [[radxa-rock5b]] 模板。第二批：30-pin DSI FPC 接 HX8399-A 1080×1920 portrait 4-lane MIPI DSI 面板 + GT911 5-point 电容触摸（**实机已验**：DSI 屏出图 / 触摸 4 角与 weston 1:1 对齐）。第三批：板载 HDMI IN 口启用（一句 overlay 翻 `hdmirx_ctrler.status` 即可，driver 已 in-tree）。HDMI TX / NPU / NVMe / 板载 AP6275P / 双 2.5G NIC 显式配置 / PWM 风扇 / RGB LED 不在范围（RTL8125 走 r8169 主线驱动零配置自动 probe）。
 
 ## product / variant
 
@@ -46,14 +46,19 @@ lunch orangepi-5-plus-default-release
 
 ## DSI 屏 + 触摸（HX8399-A + GT911）
 
-30-pin DSI FPC 接 HX8399-A 1080×1920 portrait 4-lane MIPI DSI 面板 + GT911 5-point 电容触摸（**软件落地完成，实机验收 pending**）。接线复用 vendor `rk3588-orangepi-5-plus-lcd.dtsi`：panel reset GPIO2_C1 / VCC_LCD EN GPIO1_D2 / backlight `&backlight` PWM / touch i2c7@0x14 INT GPIO2_B2(rising) RST GPIO2_B5。
+30-pin DSI FPC 接 HX8399-A 1080×1920 portrait 4-lane MIPI DSI 面板 + GT911 5-point 电容触摸。接线复用 vendor `rk3588-orangepi-5-plus-lcd.dtsi`：panel reset GPIO2_C1 / VCC_LCD EN GPIO1_D2 / backlight `&backlight` PWM / touch i2c7@0x14 INT GPIO2_B2(rising) RST GPIO2_B5。
 
 - Panel 走 BSP `panel-simple.c` 的 `simple-panel-dsi` + `panel-init-sequence` 路径——LCD 厂 init `.c` 与 dts 字节流 1:1 对应（16 cmd / 319 字节）。零 driver / 零 kernel patch
 - Touch 走 mainline `goodix.c`（compatible `"goodix,gt911"`）；与 vendor `gt9xx` (`"goodix,gt9xx"`) 不撞。启动 `request_firmware("goodix_911_cfg.bin")` 拉 186B cfg（= `GOODIX_CONFIG_911_LENGTH`）
-- cfg blob 走 `overlay/usr/lib/firmware/`（不走 `+extra_firmware`，那是 vendor 仓库 source 接口、非 board-local 接口；现有 `_install_overlays` cp -a 机制覆盖此场景）。**走 `usr/lib` 不走 `lib`**：ubuntu-base rootfs 已 usrmerge，根 `/lib` 是 symlink → `/usr/lib`，`cp -a` 不能用目录覆盖 non-directory，所以 board overlay 必须从 usrmerge 后路径起手
+- cfg blob 走 `overlay/usr/lib/firmware/`（**走 `usr/lib` 不走 `lib`**：ubuntu-base rootfs 已 usrmerge，根 `/lib` 是 symlink → `/usr/lib`，`cp -a` 不能用目录覆盖 non-directory）
 - VOP3 → DSI1 路由独立于 HDMI VP0/VP1，双显可并存
 - dtso 全 `&label{}` fragment，规避 [[orangepi-cm4]] 屏适配撤回 change 的根级裸节点 → `FDT_ERR_BADOVERLAY` 坑
-- `MIPI_DSI_MODE_EOT_PACKET` 旧宏 BSP 6.1 头文件已删，本案选择"不引用"走默认发 EOT（与 [[rp-pro-rk3568-h]] 的 `0002-...-eot-packet-compat.patch` 不同选择——那板 25+ LCD dtsi 引用旧名绕不开 patch，本板从零写 dtso 主动规避）
+- `MIPI_DSI_MODE_EOT_PACKET` 旧宏 BSP 6.1 头文件已删，本案选择"不引用"走默认发 EOT
+- **触摸坐标 transform**：chip 物理安装与 panel 原生方向 1:1（实机 evtest 抓四角推回 chip raw 验证），不需任何 swap/invert；overlay 设 `touchscreen-size-x=<1080>; touchscreen-size-y=<1920>;`，input absinfo 与 chip cfg 报告范围对齐
+
+### 易踩坑
+
+- **u-boot fdt_overlay_apply 不支持 delete marker**：`overlay_apply_node()` (lib/libfdt/fdt_overlay.c:550) 只 additive merge —— 对每个 property 调 `fdt_setprop()`（覆盖/新增），对 subnode 递归 add；完全没 `__delete_property__` / `__delete_node__` 处理。所以 overlay 的 `/delete-property/` / `/delete-node/` **不生效**：dtc 编 overlay 时直接把 delete 当 dts AST 时操作（不存在的属性自然就不写进 dtbo），u-boot apply 时 base 的同名属性原封不动。要删 vendor 注入的 boolean transform 只能走 kernel patch 或上游修源。本板早期写过 board kernel patch 删 vendor `touchscreen-inverted-x / touchscreen-swapped-x-y`，upstream argon `linux-6.1-stan-rkr5.1` commit `b173d7a80` 整段注释 vendor demo 节点后 patch 撤销
 
 详见 `docs/superpowers/specs/2026-05-18-orangepi-5-plus-hx8399a-gt911-design.md`（设计 + 风险）与同名 `plans/` 实施计划。
 
