@@ -632,6 +632,21 @@ usb_start()
 	usb_msg "[DEBUG start] Writing UDC=$USB_UDC"
 	usb_write $USB_GADGET_DIR/UDC $USB_UDC
 
+	# Verify UDC bind 真的成功。背景：写 sysfs UDC attr 时 echo 的退出码
+	# 不一定反映 kernel 端写失败（stdio 缓冲 + sh builtin echo 差异）；
+	# 当底层 dwc3 controller 还没 ready（典型场景：Rockchip RK3588 上
+	# fusb302 USB-C PD 协商未完成），kernel 端 `udc_bind_to_driver` 返回
+	# -ENODEV，echo 可能仍报 0。读回 sysfs 文件即可断言——成功 bind 时
+	# 文件内容等于 $USB_UDC，失败时保持空。失败时 exit 1 让 systemd
+	# Restart=on-failure 自动重试（service unit 已配，2 秒后 cold restart，
+	# 那时 fusb302 通常已完成协商）；继续走 stale state 反而导致脏 daemon
+	# 残留 + udev event 再触发 stop+start 循环，更糟。
+	ACTUAL_UDC="$(cat $USB_GADGET_DIR/UDC 2>/dev/null || true)"
+	if [ "$ACTUAL_UDC" != "$USB_UDC" ]; then
+		usb_msg "[ERROR] UDC bind 失败：expected=$USB_UDC actual='$ACTUAL_UDC' —— 底层 controller 未 ready（dwc3/fusb302 PD 协商未完成？）。退出 1 触发 systemd Restart=on-failure。"
+		exit 1
+	fi
+
 	for func in $USB_FUNCS; do
 		for instance in $(usb_instances $func); do
 			cd $USB_FUNCTIONS_DIR/$instance &>/dev/null || continue

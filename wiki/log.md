@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-05-18] fix | usbdevice.service UDC bind race 加 Restart=on-failure + 脚本 verify
+
+实机 boot 后 adb 不通，ssh 登陆排查：journalctl 时间线还原显示
+`usbdevice.service` 在 sysinit 阶段（boot 后 ~1s）写 `/config/usb_gadget/.../UDC=fc000000.usb` 时 kernel 抛 `udc fc000000.usb: failed to start rockchip: -19`（`-ENODEV`）。底层 dwc3 controller 等 USB-C PD 控制器 `fusb302@22`（i2c-6 上）完成 Type-C 角色协商后才能接收 gadget binding，但 sysinit 早期 fusb302 probe / PD 协商还没完成。
+
+`set -e` 脚本中 `echo > /sys/.../UDC` 失败时 echo builtin 返回值不一定反映 kernel write 失败（stdio 缓冲 + dash/bash echo 实现差异），脚本继续走完 `Done start request`，systemd 视为 service active(running)；但实际 UDC attr 仍为空，adbd 没被 USB host 看到。4 分钟后用户手动 `systemctl restart usbdevice`，此时 fusb302 协商早已完成，cold restart 拿到干净状态、UDC bind 成功、adbd 起来。
+
+修法（双管齐下）：
+
+- `components/app/adbd/scripts/usbdevice` 在 `Writing UDC=` 后 read-back 校验 sysfs UDC attr，若写入未生效则 exit 1
+- `components/app/adbd/systemd/usbdevice.service` 加 `Restart=on-failure / RestartSec=2`，并 `StartLimitBurst=5 StartLimitIntervalSec=30` 限速（30s 窗口允许 5 次重试，覆盖 PD 协商典型时长 < 3s，超过即认 USB cable 断 / hub 异常的硬件真问题）
+
+这是历史 latent race：fusb302/dwc3 互相依赖 deferred probe，过去 boot 时序中 usbdevice service 启动得相对晚 / fusb302 probe 完成相对早，碰巧避开 race window。本次 orangepi-5-plus 镜像新启用 `CONFIG_TOUCHSCREEN_GOODIX=y` 与两条 dtbo（DSI + HDMI RX）改变 deferred probe queue 顺序，把窗口推到 ExecStart 之后命中。
+
+修后所有 board 受益，不需要板级特化（fusb302 不只 orangepi-5-plus 有；rock5b / cm5-tablet 都用 RK3588 + USB-C，理论同样 race window）。adbd wiki 易踩坑段加该项。
+
 ## [2026-05-18] refactor | console 安静策略上提到 base rootfs（全板生效）
 
 `10-console-quiet.conf` 从 `components/board/orangepi-5-plus/overlay/etc/sysctl.d/` 上提到 `components/rootfs/overlay/etc/sysctl.d/`，所有板默认开启 console 安静策略——理由：原本只为 [[orangepi-5-plus]] HDMI RX spam 适配，但 vendor BSP 系列 driver 把"运行时状态"按 KERN_ERR 报的习惯普遍存在（[[radxa-rock5b]] rkwifibt PHL/RTW 调试期同款），与板/SoC 无关，属 OS-level 偏好。

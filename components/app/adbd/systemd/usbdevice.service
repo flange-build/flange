@@ -2,12 +2,24 @@
 Description=Manage USB device functions
 DefaultDependencies=no
 After=local-fs.target
+# 限速 30s 内允许 5 次 restart，给底层 UDC controller (dwc3) + USB-C PD 控制器
+# (fusb302 typec 协商) 留出足够 ready 时间——典型 < 3s，超过即认为 board 上
+# 硬件有真问题（USB cable 断 / hub 异常），不再 burst 重试。
+StartLimitBurst=5
+StartLimitIntervalSec=30
 
 [Service]
 Type=forking
 Environment=TERM=xterm
 ExecStart=/usr/sbin/usbdevice start
 ExecStop=/usr/sbin/usbdevice stop
+# UDC bind 失败时脚本 exit 1（脚本在 "Writing UDC=" 后 read-back 校验 sysfs
+# UDC attr 是否真接收了 controller name；失败 typically 是 dwc3 等
+# fusb302 USB-C PD 协商未完成报 -ENODEV）。Restart=on-failure 让 systemd
+# 2s 后 cold restart，状态干净、UDC 通常已 ready。这是历史 race，新
+# kernel build 改变 deferred probe 顺序后暴露；加 Restart 是最低入侵 fix。
+Restart=on-failure
+RestartSec=2
 
 [Install]
 WantedBy=sysinit.target
