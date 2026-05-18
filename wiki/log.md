@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-05-18] sync | orangepi-5-plus console 安静策略（systemd-sysctl 抬高 console_loglevel）
+
+实机点亮 DSI 屏 + 启用 HDMI RX 后，`rk_hdmirx.c:1685` driver 在无 HDMI 源时按 `v4l2_err`（KERN_ERR=3）每秒数次刷 "HDMI pull out, return!"。kernel cmdline `loglevel=4` 压不住——3 < 4 命中 console 路径。降 cmdline 到 3 会吞其他 driver 真实 ERR（mmc / disk / oom），不可取。
+
+落地 `components/board/orangepi-5-plus/overlay/etc/sysctl.d/10-console-quiet.conf` 设 `kernel.printk = 1 4 1 7`：
+
+- 字段 1（console_loglevel）= 1 → 仅 KERN_EMERG (level 0) 上 console，其他全部静默到 ring buffer
+- 字段 3（min console_loglevel）= 1 → 用户态写 /proc/sys/kernel/printk 时不可调低
+- 字段 2 / 4 保持默认（4 / 7）
+
+systemd-sysctl.service 在 sysinit.target 早期 apply 本设置，**kernel boot 期间不受影响**（仍按 cmdline `loglevel=4` 显示关键 boot 信息），boot 完成后 console 切到安静模式；dmesg / journal 仍存全量日志可查。
+
+范围 board-local 不动 base rootfs：仅本板触发，避免对其他板隐藏 ERR 增加排查难度。如未来 rkwifibt PHL/RTW spam（[[radxa-rock5b]]）或 rp-rk356x LCD dtsi 类 BSP spam 复发，可上提到 `components/rootfs/overlay/etc/sysctl.d/` 走 base。
+
+回滚：删本文件重启 或 `sysctl -w kernel.printk="4 4 1 7"`（runtime 立即生效）。
+
 ## [2026-05-18] sync | orangepi-5-plus HDMI IN（HDMI RX）启用（一句 overlay 翻 status，软件落地）
 
 [[add-rk3588-opi5plus-hdmirx-overlay]] change 落地：

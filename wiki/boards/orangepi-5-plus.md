@@ -6,6 +6,7 @@ sources:
   - components/board/orangepi-5-plus/config.py
   - components/board/orangepi-5-plus/overlay/etc/hostname
   - components/board/orangepi-5-plus/overlay/etc/usbdevice.conf
+  - components/board/orangepi-5-plus/overlay/etc/sysctl.d/10-console-quiet.conf
   - components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hx8399a-gt911.dtso
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hdmirx-enable.dtso
@@ -76,3 +77,5 @@ driver `CONFIG_VIDEO_ROCKCHIP_HDMIRX=y` / `CONFIG_VIDEO_ROCKCHIP_HDMIRX_CLASS=y`
 Rollback：板上 `/boot/extlinux/extlinux.conf` 删 fdtoverlays 行内 `rk3588-orangepi-5-plus-hdmirx-enable.dtbo` 一项，重启即恢复 disabled，不影响 DSI 屏 overlay。
 
 实机验收 pending（adb 探测期间 `/sys/firmware/devicetree/base/hdmirx-controller@fdee0000/status` 仍是 `disabled`，待重刷镜像后验 `/dev/video*` 出现）。
+
+**Console 安静策略**：driver `rk_hdmirx.c:1685` 在无 HDMI 源时按 `v4l2_err`（KERN_ERR=3）刷 "HDMI pull out, return!"，cmdline `loglevel=4` 压不住（3 < 4）；降 cmdline 会吞其他真实 ERR。`overlay/etc/sysctl.d/10-console-quiet.conf` 设 `kernel.printk = 1 4 1 7`，systemd-sysctl 在 sysinit 早期 apply 后只 KERN_EMERG 上 console，kernel boot 期不影响、dmesg/journal 仍存全量日志。
