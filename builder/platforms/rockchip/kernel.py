@@ -38,6 +38,7 @@ class RockchipKernelBuilder(KernelBuilder):
         self._write_case_insensitive_fix(src_dir)
         self._write_panthor_fragment(src_dir, config)
         self._write_panel_mipi_dbi_fragment(src_dir)
+        self._write_mainline_goodix_fragment(src_dir)
         defconfig = config["kernel"]["defconfig"]
         if isinstance(defconfig, list):
             for dc in defconfig:
@@ -114,6 +115,36 @@ class RockchipKernelBuilder(KernelBuilder):
             "CONFIG_DRM_PANEL_MIPI_DBI=m\n"
         )
         self._status("panel_mipi_dbi.config 生成")
+
+    def _write_mainline_goodix_fragment(self, src_dir: Path):
+        """生成 config fragment 启用 mainline Goodix touchscreen driver。
+
+        argon BSP `rockchip_linux_defconfig` 默认 `# CONFIG_TOUCHSCREEN_GOODIX
+        is not set`，只启了 vendor `gt9xx` (`CONFIG_TOUCHSCREEN_GT9XX=y`)。
+        vendor driver 仅匹配 compatible `"goodix,gt9xx"`，把 cfg 数组硬编进
+        二进制，不读 firmware blob；mainline `goodix.c` 匹配 `"goodix,gt911"`
+        等具体型号、走 `request_firmware("goodix_<id>_cfg.bin")` 加载 cfg。
+
+        两 driver 在 i2c 总线上靠 compatible 字符串区分、不会撞——所以可
+        共存。需要 mainline 路径的板（如 [[orangepi-5-plus]] HX8399-A DSI
+        屏 + GT911 触摸）在 `kernel.+defconfig` 加 `"mainline_goodix.config"`
+        opt-in；不需要的板不引入，kernel binary 不变（mainline goodix
+        driver ~10KB built-in 增量可忽略）。
+
+        该 fragment **总是写入**（满足 `make <name>.config` 文件存在要求）；
+        board 配置决定是否在 kernel.defconfig list 中引入。
+        """
+        fragment = src_dir / "arch" / self.ARCH / "configs" / "mainline_goodix.config"
+        fragment.write_text(
+            "# mainline drivers/input/touchscreen/goodix.c 触摸驱动\n"
+            "# 匹配 compatible \"goodix,gt911\" / gt9271 / 等型号；走\n"
+            "# request_firmware(\"goodix_<id>_cfg.bin\") 加载 cfg blob。\n"
+            "# 与 vendor gt9xx (CONFIG_TOUCHSCREEN_GT9XX) 不撞 compatible，\n"
+            "# 两 driver 可共存。板级 opt-in：在 kernel.+defconfig 列表中\n"
+            "# 引入 \"mainline_goodix.config\"。\n"
+            "CONFIG_TOUCHSCREEN_GOODIX=y\n"
+        )
+        self._status("mainline_goodix.config 生成")
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)

@@ -58,13 +58,22 @@ class TestOrangePi5PlusMergedConfig:
         assert merged["rkbin"]["trust_ini_prefix"] == "RK3588"
 
     def test_soc_layer_kernel_not_overridden(self, merged):
-        """SoC 层 kernel.branch / defconfig list 不被 board 覆盖。"""
+        """SoC 层 kernel.branch 不被 board 覆盖；defconfig list 由 SoC 三项 +
+        board 一项追加构成（按合并顺序：SoC list 在前 + board +defconfig 在后）。"""
         assert merged["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
         assert merged["kernel"]["defconfig"] == [
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "rk3588_panthor.config",
+            "mainline_goodix.config",
         ]
+
+    def test_kernel_mainline_goodix_fragment_opt_in(self, merged):
+        """board 通过 kernel.+defconfig 引入 mainline_goodix.config 启用
+        mainline drivers/input/touchscreen/goodix.c，匹配 dtso 的
+        compatible="goodix,gt911" GT911 触摸节点（vendor BSP 默认
+        # CONFIG_TOUCHSCREEN_GOODIX is not set，必须 fragment 补）。"""
+        assert "mainline_goodix.config" in merged["kernel"]["defconfig"]
 
     def test_board_layer_fields(self, merged):
         """合并后保留 board 层字段（board 名 / DTS）。"""

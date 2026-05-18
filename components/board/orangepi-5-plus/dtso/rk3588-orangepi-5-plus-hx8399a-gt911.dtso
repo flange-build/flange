@@ -136,6 +136,15 @@
         reset-gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_HIGH>;
         touchscreen-size-x = <1080>;
         touchscreen-size-y = <1920>;
+        /*
+         * 删除 vendor rk3588-orangepi-5-plus-lcd.dtsi 给 touchscreen@14 注入
+         * 的两个 transform 属性。它们是针对 1280×800 横屏适配的，与本 HX8399-A
+         * 1080×1920 portrait 面板原生方向冲突。dt overlay merge 是 additive，
+         * compatible/size 等同名属性能 override，但 boolean 属性（仅靠"存在"
+         * 表达 true）只能用 /delete-property/ 显式剔除。
+         */
+        /delete-property/ touchscreen-inverted-x;
+        /delete-property/ touchscreen-swapped-x-y;
         status = "okay";
     };
 };

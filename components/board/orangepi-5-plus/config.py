@@ -15,6 +15,16 @@ BOARD = {
     "kernel": {
         # argon BSP linux-6.1-stan-rkr5.1 已包含 rk3588-orangepi-5-plus.dts。
         "dts": "rk3588-orangepi-5-plus",
+        # ---- mainline goodix touch driver opt-in（GT911 触摸用）----
+        # board overlay dtso 把 touchscreen@14 改成 compatible "goodix,gt911"，
+        # 匹配 mainline drivers/input/touchscreen/goodix.c。但 argon BSP 默认
+        # `# CONFIG_TOUCHSCREEN_GOODIX is not set`（只启了 vendor gt9xx），
+        # 不加 fragment 的话 device 节点会无 driver 接管。
+        # mainline_goodix.config 由 RockchipKernelBuilder._write_mainline_goodix_fragment
+        # 总是生成（内容 CONFIG_TOUCHSCREEN_GOODIX=y）；本板 +defconfig 引入即启用。
+        # 与 vendor CONFIG_TOUCHSCREEN_GT9XX=y 共存：compatible 字符串区分
+        # ("goodix,gt911" 命中 mainline，"goodix,gt9xx" 命中 vendor)，不撞。
+        "+defconfig": ["mainline_goodix.config"],
         # ---- M.2 E-Key 槽位 RTL8852BE WiFi6+BT5.2 combo 卡支持 ----
         # 走 OOT 路线（rkr5.1 in-tree rtw89 driver 不含 8852BE 子驱动：
         # Kconfig 没有 RTW89_8852B/BE，Makefile 也没引用 rtw8852b/be 源文件，
