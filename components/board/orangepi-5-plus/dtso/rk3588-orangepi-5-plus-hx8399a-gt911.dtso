@@ -134,17 +134,41 @@
         interrupts = <RK_PB2 IRQ_TYPE_EDGE_RISING>;
         irq-gpios   = <&gpio2 RK_PB2 GPIO_ACTIVE_HIGH>;
         reset-gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_HIGH>;
-        touchscreen-size-x = <1080>;
-        touchscreen-size-y = <1920>;
+
         /*
-         * 删除 vendor rk3588-orangepi-5-plus-lcd.dtsi 给 touchscreen@14 注入
-         * 的两个 transform 属性。它们是针对 1280×800 横屏适配的，与本 HX8399-A
-         * 1080×1920 portrait 面板原生方向冲突。dt overlay merge 是 additive，
-         * compatible/size 等同名属性能 override，但 boolean 属性（仅靠"存在"
-         * 表达 true）只能用 /delete-property/ 显式剔除。
+         * 触摸坐标 transform：实机首版（dtso 不加 transform）测到
+         *   physical UP   → reported LEFT    (X 减小)
+         *   physical RIGHT → reported UP     (Y 减小)
+         *   physical LEFT  → reported DOWN
+         *   physical DOWN  → reported RIGHT
+         * 即触摸 IC 物理安装相对 panel 旋转了 CCW 90°（chip 的 X 轴沿
+         * panel 短边、Y 轴沿 panel 长边，但与 panel 坐标系反向）。
+         *
+         * 修法（mainline `touchscreen_set_mt_pos` 应用顺序 = swap → invert）：
+         *   1. touchscreen-swapped-x-y       → (x, y) = (raw_y, raw_x)
+         *   2. touchscreen-inverted-y        → y = max_y - y = max_y - raw_x
+         * 等价于把 reported 坐标做 CW 90° 抵消 chip 的 CCW 90° 物理旋转。
+         *
+         * size 配合 swap 后的自然范围：chip cfg 报 X=1080 / Y=1920（chip
+         * 自己内部坐标），swap 后 reported X 来自 chip Y (范围 1920)，
+         * reported Y 来自 chip X (范围 1080)。touchscreen-size-{x,y} 是
+         * 给驱动 `prop.max_{x,y}` 用的——invert-y 用 max_y 做 (max_y - y)
+         * 必须等于 swap 后 new_y 的真实上限 (1080)，否则会 clip 一半坐标。
+         * Userspace 拿到 1920×1080 触摸范围后再按 panel 1080×1920 portrait
+         * 做比例映射（libinput / wlroots / X11 处理）。
+         */
+        touchscreen-size-x = <1920>;
+        touchscreen-size-y = <1080>;
+        touchscreen-swapped-x-y;
+        touchscreen-inverted-y;
+        /*
+         * 显式删除 vendor rk3588-orangepi-5-plus-lcd.dtsi 注入的
+         * touchscreen-inverted-x（针对 1280×800 横屏调的，与本 HX8399-A
+         * 1080×1920 portrait 物理旋转方向不一致）。
+         * touchscreen-swapped-x-y vendor 也有、我们也要 ——上面直接重申
+         * 即可，不需删（dts merge 时同名 boolean 属性 idempotent）。
          */
         /delete-property/ touchscreen-inverted-x;
-        /delete-property/ touchscreen-swapped-x-y;
         status = "okay";
     };
 };
