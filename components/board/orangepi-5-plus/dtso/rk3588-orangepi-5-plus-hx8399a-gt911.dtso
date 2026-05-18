@@ -136,46 +136,30 @@
         reset-gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_HIGH>;
 
         /*
-         * 触摸坐标 transform：实机首版（dtso 不加 transform）测到
-         *   physical UP   → reported LEFT    (X 减小)
-         *   physical RIGHT → reported UP     (Y 减小)
-         *   physical LEFT  → reported DOWN
-         *   physical DOWN  → reported RIGHT
-         * 即触摸 IC 物理安装相对 panel 旋转了 CCW 90°（chip 的 X 轴沿
-         * panel 短边、Y 轴沿 panel 长边，但与 panel 坐标系反向）。
+         * 触摸坐标：实机 evtest 抓 LU/RU/LD/RD 四角推回 chip raw 验证，
+         * chip raw_x ∈ [0, 1080) 已与 panel 横轴对齐、raw_y ∈ [0, 1920)
+         * 已与 panel 纵轴对齐——chip 物理安装与 panel 1:1 同向，**不需
+         * 任何 swap / invert**。
          *
-         * 修法（mainline `touchscreen_set_mt_pos` 应用顺序 = swap → invert）：
-         *   1. touchscreen-swapped-x-y       → (x, y) = (raw_y, raw_x)
-         *   2. touchscreen-inverted-y        → y = max_y - y = max_y - raw_x
-         * 等价于把 reported 坐标做 CW 90° 抵消 chip 的 CCW 90° 物理旋转。
+         * argon BSP 历史版本 rk3588-orangepi-5-plus-lcd.dtsi 把 GT9271
+         * touchscreen@14 节点（含 inverted-x + swapped-x-y + size 1280/800）
+         * 作为 OrangePi 官方 LCD05 (1280×800 横屏) demo 直接 enable。早期
+         * 想用 overlay `/delete-property/` 删 vendor transform 走不通：
+         * u-boot fdt_overlay_apply 不解析 delete marker（fdt overlay 标准
+         * additive merge）；曾用 board kernel patch 编译期删除两条 transform。
          *
-         * size 配合 swap 后的自然范围：chip cfg 报 X=1080 / Y=1920（chip
-         * 自己内部坐标），swap 后 reported X 来自 chip Y (范围 1920)，
-         * reported Y 来自 chip X (范围 1080)。touchscreen-size-{x,y} 是
-         * 给驱动 `prop.max_{x,y}` 用的——invert-y 用 max_y 做 (max_y - y)
-         * 必须等于 swap 后 new_y 的真实上限 (1080)，否则会 clip 一半坐标。
-         * Userspace 拿到 1920×1080 触摸范围后再按 panel 1080×1920 portrait
-         * 做比例映射（libinput / wlroots / X11 处理）。
+         * upstream argon `linux-6.1-stan-rkr5.1` commit b173d7a80 已把 vendor
+         * 那整个 demo 节点注释掉，故 board kernel patch 已撤销。**touchscreen@14
+         * 节点完全由本 overlay 提供**，无 vendor 默认值干扰，chip raw 直通
+         * input ABS。
+         *
+         * size 与 panel 原生 1080×1920 portrait 一致：driver mainline
+         * goodix.c 用 chip cfg blob 已经把 input ABS max 设成 1079/1919；
+         * 这里重申 touchscreen-size-x/y 让 input absinfo 与实际 chip 范围
+         * 对齐（不设的话 driver 默认值可能 8191 或类似）。
          */
-        touchscreen-size-x = <1920>;
-        touchscreen-size-y = <1080>;
-        touchscreen-swapped-x-y;
-        touchscreen-inverted-y;
-        /*
-         * vendor rk3588-orangepi-5-plus-lcd.dtsi 注入了 touchscreen-inverted-x
-         * （针对 OrangePi 官方 1280×800 横屏 LCD05 的物理旋转方向预设），
-         * 与本 HX8399-A 1080×1920 portrait 物理旋转方向不一致——保留它会
-         * 让 X 方向再翻一次，evtest 实测左右反向。
-         *
-         * 早期尝试在本 overlay 加 `/delete-property/ touchscreen-inverted-x`
-         * 走不通：dtc 编 overlay 时不把 delete marker 传进 dtbo，u-boot
-         * fdt_overlay_apply 也不解析（fdt overlay 标准是 additive merge）。
-         * 故 base dts 编译期就需把 vendor inverted-x 去掉——见 board
-         * kernel patch `0001-orangepi-5-plus-lcd-dtsi-drop-touchscreen-inverted-x.patch`。
-         *
-         * touchscreen-swapped-x-y vendor 也有、本 overlay 也要——直接重申
-         * 即可（boolean 属性 dts merge idempotent，不需 delete-then-add）。
-         */
+        touchscreen-size-x = <1080>;
+        touchscreen-size-y = <1920>;
         status = "okay";
     };
 };
