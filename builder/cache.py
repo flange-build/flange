@@ -323,6 +323,20 @@ class BuildCache:
         # extra_firmware 配置（repo/branch/files 变化须触发重建）
         extra_fw = rootfs_cfg.get("extra_firmware", [])
         h.update(json.dumps(extra_fw, sort_keys=True, default=str).encode())
+        # source="local" 条目：blob 文件内容随仓库携带，config JSON 不会变,
+        # 但 blob 字节变了必须重建。逐 entry 解析 components/board/<board>/
+        # <src_dir>/<file> 并把字节流混入。
+        board = self.config.get("board", "")
+        for fw in extra_fw:
+            if fw.get("source") != "local":
+                continue
+            src_dir = fw.get("src_dir", "")
+            if not src_dir or not board:
+                continue
+            fw_base = Path(f"components/board/{board}/{src_dir}")
+            if not fw_base.is_dir():
+                continue
+            self._hash_directory(h, fw_base)
         # extra_debs 配置（url/sha256/name 变化须触发重建）
         extra_debs = rootfs_cfg.get("extra_debs", [])
         h.update(json.dumps(extra_debs, sort_keys=True, default=str).encode())

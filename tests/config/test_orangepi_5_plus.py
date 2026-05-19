@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from builder.config.query import get_valid_targets
-from builder.config.registry import discover_boards, get_board_config
+from builder.config.registry import discover_boards, get_board_config, resolve_config
 
 
 @pytest.fixture(scope="module")
@@ -58,24 +58,32 @@ class TestOrangePi5PlusMergedConfig:
         assert merged["rkbin"]["trust_ini_prefix"] == "RK3588"
 
     def test_soc_layer_kernel_not_overridden(self, merged):
-        """SoC 层 kernel.branch 不被 board 覆盖；defconfig list 由 SoC 三项 +
-        board 一项追加构成（按合并顺序：SoC list 在前 + board +defconfig 在后）。"""
+        """SoC 层 kernel.branch 不被 board 覆盖；default product 下 defconfig
+        list 仅含 SoC 三项（board 把 GOODIX 移到 +defconfig:wks55fhd001wct-bringup
+        条件块，default 不命中）。"""
         assert merged["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
         assert merged["kernel"]["defconfig"] == [
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "rk3588_panthor.config",
-            "CONFIG_TOUCHSCREEN_GOODIX=y",
         ]
 
-    def test_kernel_mainline_goodix_inline_opt_in(self, merged):
-        """board 通过 kernel.+defconfig 写 raw CONFIG_TOUCHSCREEN_GOODIX=y
-        启用 mainline drivers/input/touchscreen/goodix.c，匹配 dtso 的
-        compatible="goodix,gt911" GT911 触摸节点（vendor BSP 默认
-        # CONFIG_TOUCHSCREEN_GOODIX is not set，必须 fragment 补）。
-        Builder 会把 raw 字符串聚合到动态 flange_inline.config 喂给 make，
-        无需在 builder 端预生成专用 fragment 函数。"""
-        assert "CONFIG_TOUCHSCREEN_GOODIX=y" in merged["kernel"]["defconfig"]
+    def test_kernel_goodix_only_on_bringup_product(self, boards):
+        """board 通过 kernel.+defconfig:wks55fhd001wct-bringup 写 raw
+        CONFIG_TOUCHSCREEN_GOODIX=y 启用 mainline drivers/input/touchscreen
+        /goodix.c，匹配 dtso compatible="goodix,gt911" GT911 触摸节点（vendor
+        BSP 默认 # CONFIG_TOUCHSCREEN_GOODIX is not set，必须 fragment 补）。
+        Builder 把 raw 字符串聚合到动态 flange_inline.config 喂给 make。
+
+        default product 是裸机不挂屏，不带 GOODIX 驱动；只有 wks55fhd001wct
+        -bringup product（屏模组 panel=HX8399-A, touch=GT911）才条件追加。
+        """
+        cfg_default = resolve_config(
+            "orangepi-5-plus", "default", "debug", boards=boards)
+        assert "CONFIG_TOUCHSCREEN_GOODIX=y" not in cfg_default["kernel"]["defconfig"]
+        cfg_bringup = resolve_config(
+            "orangepi-5-plus", "wks55fhd001wct-bringup", "debug", boards=boards)
+        assert "CONFIG_TOUCHSCREEN_GOODIX=y" in cfg_bringup["kernel"]["defconfig"]
 
     def test_board_layer_fields(self, merged):
         """合并后保留 board 层字段（board 名 / DTS）。"""
@@ -98,12 +106,23 @@ class TestOrangePi5PlusMergedConfig:
         assert "mali-csf" in names, (
             f"OrangePi 5 Plus merged config 应包含 mali-csf extra_firmware；实际: {names}")
 
-    def test_board_overlays_hx8399a_gt911(self, merged):
-        """HX8399-A 1080×1920 DSI 屏 + GT911 触摸 overlay 列表正确。"""
-        overlays = merged["boot"]["board_overlays"]
-        default_overlays = merged["boot"]["default_overlays"]
-        assert "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo" in overlays
-        assert "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo" in default_overlays
+    def test_board_overlays_hx8399a_gt911_bringup_only(self, boards):
+        """HX8399-A 1080×1920 DSI 屏 + GT911 触摸 overlay 仅在
+        wks55fhd001wct-bringup product 下加载；default 裸机不带这条 overlay。
+        board_overlays 与 default_overlays 同步追加（dtbo 既要编进 boot.img
+        又要写进 extlinux.conf 默认加载）。"""
+        cfg_default = resolve_config(
+            "orangepi-5-plus", "default", "debug", boards=boards)
+        assert "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo" \
+            not in cfg_default["boot"]["board_overlays"]
+        assert "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo" \
+            not in cfg_default["boot"]["default_overlays"]
+        cfg_bringup = resolve_config(
+            "orangepi-5-plus", "wks55fhd001wct-bringup", "debug", boards=boards)
+        assert "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo" \
+            in cfg_bringup["boot"]["board_overlays"]
+        assert "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo" \
+            in cfg_bringup["boot"]["default_overlays"]
 
     def test_board_overlay_dtso_source_exists(self):
         """对应 .dtso 源文件必须存在，否则 device-tree-overlay 编不出 dtbo。"""
@@ -114,25 +133,39 @@ class TestOrangePi5PlusMergedConfig:
         )
         assert src.is_file(), f"缺失 dtso 源: {src}"
 
-    def test_gt911_cfg_blob_in_overlay_tree(self):
-        """GT911 cfg blob 必须放在 board overlay/usr/lib/firmware/，否则
-        rootfs cp -a 不会带它进 /lib/firmware/，goodix.c request_firmware
-        会失败。文件大小必须 = 186 字节（mainline GOODIX_CONFIG_911_LENGTH）。
-
-        路径走 usr/lib 而非 lib：ubuntu-base rootfs 已 usrmerge，根 /lib 是
-        指向 /usr/lib 的 symlink；cp -a 把 overlay/lib/ 覆盖到 rootfs/lib
-        时会撞 'cannot overwrite non-directory' 失败。改走 overlay/usr/lib/
-        与 symlink 同源路径，kernel firmware_loader 搜索路径含 /lib/firmware
-        以及（usrmerge 下等价的）/usr/lib/firmware，driver 仍能加载。
+    def test_gt911_cfg_blob_in_board_firmware_tree(self):
+        """GT911 cfg blob 落在板目录 firmware/touch/goodix_911_cfg.bin，与
+        同目录的 .cfg 可读 hex 源同源；186 字节 = mainline GOODIX_CONFIG_911_
+        LENGTH。部署走 rootfs.extra_firmware source='local'（仅 wks55fhd001wct
+        -bringup product 启用，见下方 test_gt911_cfg_only_on_bringup_product）。
         """
         from pathlib import Path
         blob = Path(
-            "components/board/orangepi-5-plus/overlay/"
-            "usr/lib/firmware/goodix_911_cfg.bin"
+            "components/board/orangepi-5-plus/firmware/touch/goodix_911_cfg.bin"
         )
         assert blob.is_file(), f"缺失 cfg blob: {blob}"
         assert blob.stat().st_size == 186, (
             f"GT911 cfg 必须 186 字节，实际 {blob.stat().st_size}")
+
+    def test_gt911_cfg_only_on_bringup_product(self, boards):
+        """goodix-911-cfg extra_firmware 条目仅在 wks55fhd001wct-bringup
+        product 下出现；default 裸机镜像不携带该 blob。source='local' 直接
+        从板目录 firmware/touch/ 拷到 rootfs /lib/firmware/。"""
+        cfg_default = resolve_config(
+            "orangepi-5-plus", "default", "debug", boards=boards)
+        names = [e["name"] for e in cfg_default["rootfs"].get("extra_firmware", [])]
+        assert "goodix-911-cfg" not in names, (
+            f"default product 不该带触摸 blob；实际 extra_firmware={names}")
+        cfg_bringup = resolve_config(
+            "orangepi-5-plus", "wks55fhd001wct-bringup", "debug", boards=boards)
+        bringup_fw = {e["name"]: e
+                      for e in cfg_bringup["rootfs"].get("extra_firmware", [])}
+        assert "goodix-911-cfg" in bringup_fw
+        gt = bringup_fw["goodix-911-cfg"]
+        assert gt["source"] == "local"
+        assert gt["src_dir"] == "firmware/touch"
+        assert gt["files"] == ["goodix_911_cfg.bin"]
+        assert gt["dest"] == "lib/firmware"
 
 
 class TestOrangePi5PlusHdmirxOverlay:

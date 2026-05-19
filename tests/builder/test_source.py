@@ -1,9 +1,12 @@
-"""SourceManager.ensure_extra_deb 单元测试。
+"""SourceManager.ensure_extra_deb / ensure_extra_firmware 单元测试。
 
-覆盖三条主要路径：
+extra_deb 覆盖三条主要路径：
   1. 缓存命中（本地已存在且 sha256 匹配）
   2. 首次下载（wget → 校验 → rename）
   3. sha256 校验失败（清理 partial 并抛异常）
+
+extra_firmware 覆盖 source='local' 分支（其他 source 类型走仓库/复用，
+单独验证意义不大；'local' 涉及 board 目录解析与错误路径，重点覆盖）。
 """
 
 import hashlib
@@ -133,3 +136,78 @@ class TestEnsureExtraDeb:
 
         deb_dir = manager.sources_dir / "extra-debs" / "flaky"
         assert list(deb_dir.iterdir()) == []
+
+
+class TestEnsureExtraFirmwareLocal:
+    """ensure_extra_firmware(source='local')：解析 components/board/<board>/
+    <src_dir>，返回该目录。零网络、零 clone；只做路径解析与存在性校验。"""
+
+    @pytest.fixture
+    def fake_board_tree(self, tmp_path: Path):
+        """构造一个最小的板目录：components/board/fake-board/firmware/touch/。"""
+        board_root = tmp_path / "components" / "board" / "fake-board"
+        fw_dir = board_root / "firmware" / "touch"
+        fw_dir.mkdir(parents=True)
+        (fw_dir / "blob.bin").write_bytes(b"\x01\x02\x03")
+        return tmp_path
+
+    def test_返回板内_src_dir_路径(self, fake_board_tree: Path):
+        manager = SourceManager(
+            sources_dir=fake_board_tree / ".build/sources",
+            project_root=fake_board_tree,
+        )
+        cfg = {
+            "name": "fake-fw",
+            "source": "local",
+            "src_dir": "firmware/touch",
+            "files": ["blob.bin"],
+            "dest": "lib/firmware",
+        }
+        config = {"board": "fake-board"}
+        fw_dir = manager.ensure_extra_firmware("fake-fw", cfg, config=config)
+        assert fw_dir == (fake_board_tree / "components/board/fake-board"
+                          / "firmware/touch").resolve()
+        assert (fw_dir / "blob.bin").read_bytes() == b"\x01\x02\x03"
+
+    def test_缺_src_dir_抛异常(self, fake_board_tree: Path):
+        manager = SourceManager(
+            sources_dir=fake_board_tree / ".build/sources",
+            project_root=fake_board_tree,
+        )
+        cfg = {"source": "local", "files": ["x"], "dest": "y"}
+        with pytest.raises(ValueError, match="src_dir"):
+            manager.ensure_extra_firmware(
+                "no-src-dir", cfg, config={"board": "fake-board"})
+
+    def test_缺_config_board_抛异常(self, fake_board_tree: Path):
+        manager = SourceManager(
+            sources_dir=fake_board_tree / ".build/sources",
+            project_root=fake_board_tree,
+        )
+        cfg = {"source": "local", "src_dir": "firmware/touch"}
+        # config=None
+        with pytest.raises(ValueError, match="board"):
+            manager.ensure_extra_firmware("no-cfg", cfg)
+        # config 缺 board
+        with pytest.raises(ValueError, match="board"):
+            manager.ensure_extra_firmware("no-board", cfg, config={})
+
+    def test_src_dir_目录不存在抛(self, fake_board_tree: Path):
+        manager = SourceManager(
+            sources_dir=fake_board_tree / ".build/sources",
+            project_root=fake_board_tree,
+        )
+        cfg = {"source": "local", "src_dir": "firmware/nonexistent"}
+        with pytest.raises(FileNotFoundError):
+            manager.ensure_extra_firmware(
+                "missing", cfg, config={"board": "fake-board"})
+
+    def test_不支持的_source_类型抛(self, fake_board_tree: Path):
+        manager = SourceManager(
+            sources_dir=fake_board_tree / ".build/sources",
+            project_root=fake_board_tree,
+        )
+        cfg = {"source": "ftp", "src_dir": "firmware/touch"}
+        with pytest.raises(ValueError, match="不支持的 source 类型"):
+            manager.ensure_extra_firmware(
+                "weird", cfg, config={"board": "fake-board"})

@@ -201,7 +201,7 @@ class RootfsBuilder(ComponentBuilder):
             else:
                 self._status(f"同步固件源（{source_type} 内 vendor）: {name}")
             fw_dir = self.source.ensure_extra_firmware(
-                name, fw, component_sources=component_sources)
+                name, fw, component_sources=component_sources, config=config)
             repo_subdir = fw.get("repo_subdir", "")
             fw_base = fw_dir / repo_subdir if repo_subdir else fw_dir
             dest_base = rootfs_dir / fw.get("dest", "lib/firmware")

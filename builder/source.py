@@ -116,7 +116,8 @@ class SourceManager:
 
     def ensure_extra_firmware(self, name: str, cfg: dict,
                               component_sources: dict[str, Path]
-                              | None = None) -> Path:
+                              | None = None,
+                              config: dict | None = None) -> Path:
         """确保额外固件来源就绪，返回固件根目录路径。
 
         cfg 的 ``source`` 字段决定来源类型（默认 ``"repo"``）：
@@ -133,6 +134,11 @@ class SourceManager:
           fw_dir。调用方需在 ``component_sources`` 中以同 key
           （``"oot:<name>"``）提供路径。适用于 vendor WiFi/BT 包内自带固件
           blob 的场景（如 rkwifibt 的 ``firmware/realtek/RTL8852BE/``）。
+        - ``"local"``：板目录下随仓库携带的本地 blob，**不**走 git/网络。
+          cfg 需带 ``src_dir`` 字段，相对 ``components/board/<board>/`` 解析为
+          fw_dir。调用方需通过 ``config`` 参数提供顶层 config（取 ``board``
+          字段）。适用于触摸 cfg blob / 板私有 panel firmware 等小尺寸、
+          按 product 条件部署、不便走仓库的场景。
 
         将来扩展：``"url"`` / 其他 component 类型只需在此函数与
         ``_COMPONENT_FIRMWARE_SOURCES`` 中添加分支，调用方按需在
@@ -150,10 +156,38 @@ class SourceManager:
                     f"extra_firmware {name} 声明 source={source_type!r}，"
                     f"但调用方未在 component_sources 中提供对应路径")
             return component_sources[source_type]
+        if source_type == "local":
+            return self._ensure_local_firmware(name, cfg, config)
         raise ValueError(
             f"extra_firmware {name} 不支持的 source 类型: {source_type!r}；"
-            f"可选: 'repo' / 'oot:<name>' / "
+            f"可选: 'repo' / 'local' / 'oot:<name>' / "
             f"{' / '.join(sorted(repr(s) for s in self._COMPONENT_FIRMWARE_SOURCES))}")
+
+    def _ensure_local_firmware(self, name: str, cfg: dict,
+                               config: dict | None) -> Path:
+        """source='local' 分支：解析 components/board/<board>/<src_dir>。
+
+        与 source='repo' 平行的"零网络"通路；fw_dir 直接指向仓库内目录，
+        cache 层另行 hash 文件内容以保证 blob 变更触发 rootfs 重建。
+        """
+        if config is None or not config.get("board"):
+            raise ValueError(
+                f"extra_firmware {name} 声明 source='local'，"
+                f"但 ensure_extra_firmware 未收到含 'board' 字段的 config")
+        src_dir = cfg.get("src_dir")
+        if not src_dir:
+            raise ValueError(
+                f"extra_firmware {name} 声明 source='local' 但缺 'src_dir' 字段")
+        # PROJECT_ROOT 是 paths.py 暴露的仓库根；优先使用 self._project_root
+        # 让测试可注入临时根。
+        from builder.paths import COMPONENTS_DIRNAME, PROJECT_ROOT
+        root = self._project_root if self._project_root is not None else PROJECT_ROOT
+        fw_dir = (root / COMPONENTS_DIRNAME / "board"
+                  / config["board"] / src_dir).resolve()
+        if not fw_dir.is_dir():
+            raise FileNotFoundError(
+                f"extra_firmware {name} source='local' 引用的目录不存在: {fw_dir}")
+        return fw_dir
 
     def ensure_extra_deb(self, name: str, cfg: dict) -> Path:
         """确保外部 deb 包已下载，返回 deb 文件路径。

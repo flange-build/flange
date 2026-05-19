@@ -12,6 +12,19 @@ BOARD = {
     "board": "orangepi-5-plus",
     "soc": "rk3588",
     "platform": "rockchip",
+    # ---- 多 product 维度（屏幕模组） ----
+    # variants 沿用 platform 层默认 ["debug", "release"]。
+    # 笛卡尔积:
+    #   orangepi-5-plus-default-debug / -release
+    #     →  板出厂硬件配置（HX8399-A + GT911 5.5" 1080×1920 portrait DSI 屏 +
+    #        HDMI IN），适配已完成。
+    #   orangepi-5-plus-wks55fhd001wct-bringup-debug / -release
+    #     →  待 bring up 的 wks55fhd001wct MIPI 屏的承载 slot。本 product 关闭
+    #        hx8399a 的默认 overlay 加载（同一 DSI bus 上 panel 节点会撞，不能
+    #        共存），其余配置（kernel、bootloader、firmware）暂时沿用 default。
+    #        wks55fhd001wct 的 panel dtso / touch driver / firmware 在适配过程
+    #        中按需追加到本 product 的条件键里，逐步把屏点亮。
+    "products": ["default", "wks55fhd001wct-bringup"],
     "kernel": {
         # argon BSP linux-6.1-stan-rkr5.1 已包含 rk3588-orangepi-5-plus.dts。
         "dts": "rk3588-orangepi-5-plus",
@@ -28,7 +41,8 @@ BOARD = {
         #
         # 与 vendor CONFIG_TOUCHSCREEN_GT9XX=y 共存：compatible 字符串不撞
         # ("goodix,gt911" 命中 mainline，"goodix,gt9xx" 命中 vendor)。
-        "+defconfig": ["CONFIG_TOUCHSCREEN_GOODIX=y"],
+        "+defconfig:wks55fhd001wct-bringup": ["CONFIG_TOUCHSCREEN_GOODIX=y"],
+        
         # ---- M.2 E-Key 槽位 RTL8852BE WiFi6+BT5.2 combo 卡支持 ----
         # 走 OOT 路线（rkr5.1 in-tree rtw89 driver 不含 8852BE 子驱动：
         # Kconfig 没有 RTW89_8852B/BE，Makefile 也没引用 rtw8852b/be 源文件，
@@ -65,34 +79,42 @@ BOARD = {
         ],
     },
     "boot": {
-        # 板私有 overlay 集合。两条独立 dtbo 默认即应用（写进 extlinux.conf
-        # 的 fdtoverlays），节点层面互不重叠：
+        # 板私有 overlay 集合。两类 dtbo 节点层面互不重叠：
         #
-        # 1. hx8399a-gt911：30-pin DSI FPC 板载接口的 HX8399-A 1080×1920
-        #    portrait 面板 + GT911 5-point 电容触摸。接线依据 vendor
-        #    rk3588-orangepi-5-plus-lcd.dtsi；触摸 cfg blob 通过 board
-        #    overlay/usr/lib/firmware/goodix_911_cfg.bin 走 _install_overlays
-        #    现成 cp -a 机制部署，mainline goodix.c 启动时 request_firmware
-        #    拉文件下发。改 dsi1/panel/touch/route 节点。注意 overlay 起点
-        #    走 usr/lib 不走 lib——ubuntu-base 已 usrmerge，根 /lib 是 symlink
-        #    → /usr/lib，cp -a 不能把目录覆盖到 non-directory。
+        # 1. hx8399a-gt911（仅 wks55fhd001wct-bringup product 加载）：
+        #    30-pin DSI FPC 板载接口的 wks55fhd001wct 屏模组——panel IC 是
+        #    HX8399-A（1080×1920 portrait），touch IC 是 GT911 5-point 电容
+        #    触摸。接线依据 vendor rk3588-orangepi-5-plus-lcd.dtsi；触摸
+        #    cfg blob 走 rootfs.+extra_firmware:wks55fhd001wct-bringup（见
+        #    本文件 rootfs 段，source='local' 从板内 firmware/touch/ 拷贝）
+        #    部署到 /lib/firmware/，mainline goodix.c 启动时 request_firmware
+        #    拉文件下发。改 dsi1/panel/touch/route 节点。
         #
-        # 2. hdmirx-enable：板载 HDMI IN 口启用。argon kernel 已编入
-        #    CONFIG_VIDEO_ROCKCHIP_HDMIRX=y、板 dtsi 已写齐 hdmirx_ctrler
-        #    的 HPD/det-gpio/pinctrl，但板 dts:323 显式 status="disabled"。
-        #    本 overlay 一句话翻 status="okay"，driver 自动 probe，hdmiin-sound
-        #    （dtsi 内无 status 默认 okay）audio 链路跟随激活。改 hdmirx_ctrler
-        #    一个节点。
+        # 2. hdmirx-enable（所有 product 默认加载）：板载 HDMI IN 口启用。
+        #    argon kernel 已编入 CONFIG_VIDEO_ROCKCHIP_HDMIRX=y、板 dtsi 已
+        #    写齐 hdmirx_ctrler 的 HPD/det-gpio/pinctrl，但板 dts:323 显式
+        #    status="disabled"。本 overlay 一句话翻 status="okay"，driver
+        #    自动 probe，hdmiin-sound（dtsi 内无 status 默认 okay）audio 链路
+        #    跟随激活。改 hdmirx_ctrler 一个节点。
         #
         # rollback：改 /boot/extlinux/extlinux.conf 去掉 fdtoverlays 行内
         # 对应 dtbo 条目，或重刷无此 overlay 的镜像。两条 overlay 可独立 rollback。
         "board_overlays": [
-            "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
             "rk3588-orangepi-5-plus-hdmirx-enable.dtbo",
         ],
         "default_overlays": [
-            "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
             "rk3588-orangepi-5-plus-hdmirx-enable.dtbo",
+        ],
+
+        # wks55fhd001wct-bringup product：在 DSI1 上 bring up wks55fhd001wct
+        # （HX8399-A + GT911）屏模组。board_overlays 与 default_overlays
+        # 同步追加：dtbo 既要编译进 boot.img，又要写进 extlinux.conf 默认
+        # 加载。default product 不挂屏，不带这条 overlay。
+        "+board_overlays:wks55fhd001wct-bringup": [
+            "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
+        ],
+        "+default_overlays:wks55fhd001wct-bringup": [
+            "rk3588-orangepi-5-plus-hx8399a-gt911.dtbo",
         ],
     },
     # 账号体系沿用 components/rootfs/config.py base 层默认：root 完全锁定
@@ -125,6 +147,24 @@ BOARD = {
                     {"src": "rtl8852bu_config", "dest": "rtl8852bu_config.bin"},
                 ],
                 "dest": "lib/firmware/rtl_bt",
+            },
+        ],
+        # wks55fhd001wct-bringup product：GT911 触摸控制器 cfg blob
+        # （186 字节，mainline GOODIX_CONFIG_911_LENGTH）。文件随板目录
+        # 携带（firmware/touch/goodix_911_cfg.{bin,cfg}，.cfg 是同字节的
+        # 可读 hex 表，便于 review），通过 source='local' 直接从板目录拷到
+        # rootfs /lib/firmware/。default product 不挂屏 / 不开 GOODIX
+        # 触摸驱动（CONFIG_TOUCHSCREEN_GOODIX 仅在 bringup 才追加进
+        # defconfig），blob 跟着不部署，避免 default 镜像里残留 dead bytes。
+        # cache.py _mix_rootfs 对 source='local' 条目额外 hash 文件内容,
+        # blob 改动会触发 rootfs 重建，无需手动改 config。
+        "+extra_firmware:wks55fhd001wct-bringup": [
+            {
+                "name": "goodix-911-cfg",
+                "source": "local",
+                "src_dir": "firmware/touch",
+                "files": ["goodix_911_cfg.bin"],
+                "dest": "lib/firmware",
             },
         ],
     },
