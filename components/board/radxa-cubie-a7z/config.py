@@ -77,6 +77,7 @@ BOARD = {
         # 中）。
         "default_overlays": [
             "sun60iw2p1-spi1-st7789v-display.dtbo",
+            "cubie-a7a-radxa-camera-13m-214.dtbo",
         ],
     },
     "wifi": {
