@@ -78,7 +78,8 @@ lunch
 | `flange build rootfs` | 只构建根文件系统 |
 | `flange build recovery` | 只构建 recovery 维护镜像 |
 | `flange build app` | 构建当前配置所需的所有 App |
-| `flange build app <name>` | 构建指定 App |
+| `flange build app <name-or-path>` | 构建指定 App，参数可为名称或宿主机目录路径（ad-hoc 路径无需注册到 config） |
+| `flange push app <name-or-path>` / `flange run app <name-or-path>` | 热部署 / 运行单个 App，同样支持位置参数传路径 |
 | `flange flash` | 全量刷写到设备（自动检测设备） |
 | `flange flash <partition>` | 刷写指定分区（如 rootfs, boot, uboot） |
 | `flange flash --list` | 列出可刷写分区及镜像路径 |

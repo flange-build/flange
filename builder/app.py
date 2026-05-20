@@ -456,36 +456,41 @@ class AppBuilder:
 
         return results
 
-    def build_one(self, app_name: str) -> Path:
+    def build_one(self, name_or_path: str) -> Path:
         """构建单个 App，返回生成的运行时 .deb 路径。
 
+        入参既可以是 App 名称（沿用 SourceManager 三层查找），也可以是宿主机上的
+        路径（ad-hoc 模式，跳过 registry 直接编译）。路径判定见 _resolve_app_dir。
+
         流程：
-        1. 查找 App 目录
-        2. 加载 app.yaml 规格
-        3. 编译（build.system != "none" 时，当前为占位实现，Task 5 完成）
+        1. 解析参数为 App 目录（name → SourceManager，path → 直接定位）
+        2. 加载 app.yaml 规格（以其中 app.name 为权威身份）
+        3. 编译（build.system != "none" 时）
         4. 收集安装文件
         5a. 若为 lib 类型：调用 _build_lib() 生成双包（运行时包 + 开发包）
         5b. 其余类型：打包为单个 .deb
 
         参数：
-            app_name: App 名称（与目录名一致）
+            name_or_path: App 名称或路径
 
         返回：
             运行时 .deb 文件路径（lib 类型返回运行时包路径，其余类型返回唯一 .deb 路径）
 
         抛出：
-            FileNotFoundError: App 目录或 app.yaml 不存在
+            FileNotFoundError: 路径不存在或缺失 app.yaml
+            ValueError:        名称在三层查找中未命中（来自 SourceManager）
         """
         from builder.app_spec import load_spec
         from builder.deb import DebBuilder
 
-        self._status(f"开始构建 App '{app_name}'")
+        # 步骤 1：解析参数为 App 目录
+        app_dir = self._resolve_app_dir(name_or_path)
 
-        # 步骤 1：查找 App 目录
-        app_dir = self._find_app_dir(app_name)
-
-        # 步骤 2：加载规格
+        # 步骤 2：加载规格（app.name 为权威身份）
         spec = load_spec(app_dir)
+        app_name = spec.app.name
+
+        self._status(f"开始构建 App '{app_name}' (来源: {app_dir})")
 
         # 步骤 3：编译
         self._compile(app_dir, spec, self._config)
@@ -685,6 +690,43 @@ class AppBuilder:
 
         self._status(f"lib '{app_name}' sysroot 安装完成")
 
+    def _resolve_app_dir(self, name_or_path: str) -> Path:
+        """解析入参为 App 目录的绝对路径。
+
+        判定为路径分支的条件（满足任一即可）：
+          - 字符串含有 ``/``
+          - 字符串以 ``.`` 开头
+          - 字符串解析后是一个存在的目录，且其下含 ``app.yaml``
+
+        路径分支：``Path(arg).expanduser().resolve()`` 后校验 ``app.yaml`` 存在，
+        失败抛 ``FileNotFoundError``（错误信息含原始字符串）。
+        名称分支：委托 ``_find_app_dir`` 走 SourceManager 三层查找。
+
+        参数：
+            name_or_path: App 名称或路径字符串
+
+        返回：
+            App 目录的绝对路径
+
+        抛出：
+            FileNotFoundError: 路径分支下路径不存在或缺失 app.yaml
+            ValueError:        名称分支下三层查找均未命中（由 SourceManager 抛出）
+        """
+        candidate = Path(name_or_path).expanduser()
+        is_path = (
+            "/" in name_or_path
+            or name_or_path.startswith(".")
+            or (candidate.is_dir() and (candidate / "app.yaml").is_file())
+        )
+        if is_path:
+            resolved = candidate.resolve()
+            if not (resolved.is_dir() and (resolved / "app.yaml").is_file()):
+                raise FileNotFoundError(
+                    f"App 路径 '{name_or_path}' 不存在或缺失 app.yaml"
+                )
+            return resolved
+        return self._find_app_dir(name_or_path)
+
     def _find_app_dir(self, app_name: str) -> Path:
         """查找 App 目录——完全委托给 SourceManager.ensure_app()。
 
@@ -882,6 +924,8 @@ class AppBuilder:
         - 其余（cmake/meson/make/swift）：通过 _build_commands 生成命令后逐步执行
 
         所有命令均通过 DockerRunner 在容器内执行，工作目录设为 app_dir。
+        当 app_dir 不在项目根目录子树内（out-of-tree 模式）时，把 app_dir 作为
+        extra_mounts 注入，让 DockerRunner 在 docker compose run 时动态挂入容器。
 
         参数：
             app_dir: App 目录（容器内的工作目录）
@@ -899,7 +943,14 @@ class AppBuilder:
         # 生成命令列表
         commands = self._build_commands(spec, config)
 
+        # out-of-tree 检测：app_dir 不在 project_dir 子树时需动态挂入容器
+        extra_mounts = None
+        try:
+            app_dir.resolve().relative_to(self._project_dir.resolve())
+        except ValueError:
+            extra_mounts = [app_dir]
+
         # 逐步执行编译命令
         cwd = str(app_dir)
         for cmd in commands:
-            self._docker.run(cmd, cwd=cwd)
+            self._docker.run(cmd, cwd=cwd, extra_mounts=extra_mounts)

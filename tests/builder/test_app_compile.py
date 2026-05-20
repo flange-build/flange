@@ -523,9 +523,10 @@ class TestCompileExecution:
 
         assert builder._docker.run.call_count == 3
         calls = builder._docker.run.call_args_list
-        assert calls[0] == call(["./autogen.sh"], cwd=str(app_dir))
-        assert calls[1] == call(["./configure", "--prefix=/usr"], cwd=str(app_dir))
-        assert calls[2] == call(["make"], cwd=str(app_dir))
+        # 仓库内 App，_compile 不应注入 extra_mounts（None）
+        assert calls[0] == call(["./autogen.sh"], cwd=str(app_dir), extra_mounts=None)
+        assert calls[1] == call(["./configure", "--prefix=/usr"], cwd=str(app_dir), extra_mounts=None)
+        assert calls[2] == call(["make"], cwd=str(app_dir), extra_mounts=None)
 
     def test_meson系统调用两次docker_run(self, tmp_path):
         """meson 构建系统应调用 DockerRunner.run 两次（setup + ninja）。"""

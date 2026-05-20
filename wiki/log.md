@@ -370,3 +370,12 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 **wiki 更新**
 
 - `wiki/platforms/rockchip-平台.md` — sources 追加 rk3568/config.py；TL;DR 6 块板；SoC 层段加 RK3566↔RK3568 同 die 但 ini_prefix 区分；多媒体 deb 段从"仅 RK3588"改"rk3566/rk3568/rk3588 共享"；易踩坑追加 3 条（rk3568 SoC 必选、平台 patch 历史 zero-context bug、上游 OPTEE_CLIENT 卡死）
+
+## [2026-05-21] sync | flange build/push/run app 支持 out-of-tree 路径
+
+新增 `wiki/workflows/out-of-tree-app-构建.md`：覆盖位置参数路径判定（含 / 或 . 或目录存在且含 app.yaml）、Docker 动态挂载（DockerRunner.extra_mounts，realpath:realpath:rw）、产物落地（.deb 统一仓库 .build/，外部目录只接收 cmake/meson 中间物）。
+
+`wiki/workflows/index.md` 增条目，updated → 2026-05-21。
+
+相关变更：openspec/changes/out-of-tree-app-build/（proposal/design/specs/tasks 已 done）；源码改动覆盖 builder/{docker,app,deploy}.py 与 envsetup.sh，顺手修复 `AppBuilder(source=None)` bug 让已注册 external_apps[name].local_path 也能编通。
+

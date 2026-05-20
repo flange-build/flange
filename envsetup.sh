@@ -313,10 +313,11 @@ _flange_cmd_build() {
         echo "  构建指定的组件，或者构建整个系统镜像。"
         echo ""
         echo "  组件:"
-        echo "    image (默认)   构建完整的系统镜像 (包含所有依赖)"
-        echo "    app            构建所有的应用"
-        echo "    app <name>     构建单个应用"
-        echo "    <component>    构建指定的组件 (如: kernel, u-boot, rootfs)"
+        echo "    image (默认)         构建完整的系统镜像 (包含所有依赖)"
+        echo "    app                  构建所有的应用"
+        echo "    app <name-or-path>   构建单个应用，参数可为名称或宿主机目录路径"
+        echo "                         （含 / 或 . 或目录存在且含 app.yaml 时视为路径）"
+        echo "    <component>          构建指定的组件 (如: kernel, u-boot, rootfs)"
         echo ""
         echo "  选项:"
         echo "    -f, --force    清除缓存并强制重新构建"
@@ -378,30 +379,36 @@ _flange_cmd_build() {
         output_cfg="cfg['quiet'] = True"
     fi
 
-    # 特殊处理: flange build app [name]
+    # 特殊处理: flange build app [name-or-path]
     if [[ "$component" == "app" ]]; then
         if [[ -n "$app_name" ]]; then
             _flange_docker_run python3 -c "
+from pathlib import Path
 from builder.app import AppBuilder
 from builder.docker import DockerRunner
+from builder.source import SourceManager
 from builder.config.loader import load_current_config
 import logging
 logging.basicConfig(level=logging.WARNING)
 cfg = load_current_config()
 ${output_cfg}
-builder = AppBuilder(DockerRunner(), None, cfg)
+source = SourceManager(project_root=Path('.').resolve())
+builder = AppBuilder(DockerRunner(), source, cfg)
 builder.build_one('$app_name')
 "
         else
             _flange_docker_run python3 -c "
+from pathlib import Path
 from builder.app import AppBuilder
 from builder.docker import DockerRunner
+from builder.source import SourceManager
 from builder.config.loader import load_current_config
 import logging
 logging.basicConfig(level=logging.WARNING)
 cfg = load_current_config()
 ${output_cfg}
-builder = AppBuilder(DockerRunner(), None, cfg)
+source = SourceManager(project_root=Path('.').resolve())
+builder = AppBuilder(DockerRunner(), source, cfg)
 builder.build_all()
 "
         fi
@@ -728,9 +735,11 @@ except ScaffoldError as e:
 # --- flange push 子命令 ---
 _flange_cmd_push() {
     if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-        echo "  用法: flange push app <name> [options]"
+        echo "  用法: flange push app <name-or-path> [options]"
         echo ""
         echo "  将单体应用热部署到通过 ADB 连接的目标设备。"
+        echo "  参数可以是应用名（走 registry 三层查找），也可以是宿主机上的目录路径"
+        echo "  （含 / 或 . 或目录存在且含 app.yaml 时视为路径）。"
         echo ""
         echo "  选项:"
         echo "    --no-build    跳过构建步骤，直接推送最后一次构建的 .deb 产物"
@@ -741,20 +750,20 @@ _flange_cmd_push() {
     _flange_check_target || return 1
     local target="$1"
     shift 2>/dev/null
-    
+
     if [[ "$target" == "app" ]]; then
-        local app_name="${1:-}"
-        if [[ -z "$app_name" ]]; then
-            _flange_error "用法: flange push app <name>"
+        local app_arg="${1:-}"
+        if [[ -z "$app_arg" ]]; then
+            _flange_error "用法: flange push app <name-or-path>"
             return 1
         fi
-        
+
         # 传递剩余参数（如 --no-build）
         shift 1 2>/dev/null
-        _flange_step "热部署 App: $app_name"
-        python3 -m builder.deploy "$app_name" "$@"
+        _flange_step "热部署 App: $app_arg"
+        python3 -m builder.deploy "$app_arg" "$@"
     else
-        _flange_error "用法: flange push app <name>"
+        _flange_error "用法: flange push app <name-or-path>"
         return 1
     fi
 }
@@ -762,9 +771,11 @@ _flange_cmd_push() {
 # --- flange run 子命令 ---
 _flange_cmd_run() {
     if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-        echo "  用法: flange run app <name> [options]"
+        echo "  用法: flange run app <name-or-path> [options]"
         echo ""
-        echo "  热部署并立即运行指定的单体应用。"
+        echo "  热部署并立即运行指定的单体应用。参数可以是应用名（走 registry"
+        echo "  三层查找），也可以是宿主机上的目录路径（含 / 或 . 或目录存在且"
+        echo "  含 app.yaml 时视为路径）。"
         echo "  - 如果是 exec 类型的应用，将在设备端前台执行（可按 Ctrl+C 退出）。"
         echo "  - 如果是 service 类型的应用，将重启其 systemd 服务并显示状态。"
         echo ""
@@ -777,20 +788,20 @@ _flange_cmd_run() {
     _flange_check_target || return 1
     local target="$1"
     shift 2>/dev/null
-    
+
     if [[ "$target" == "app" ]]; then
-        local app_name="${1:-}"
-        if [[ -z "$app_name" ]]; then
-            _flange_error "用法: flange run app <name>"
+        local app_arg="${1:-}"
+        if [[ -z "$app_arg" ]]; then
+            _flange_error "用法: flange run app <name-or-path>"
             return 1
         fi
-        
+
         # 传递剩余参数（如 --no-build）并加上 --run
         shift 1 2>/dev/null
-        _flange_step "热部署并运行 App: $app_name"
-        python3 -m builder.deploy "$app_name" --run "$@"
+        _flange_step "热部署并运行 App: $app_arg"
+        python3 -m builder.deploy "$app_arg" --run "$@"
     else
-        _flange_error "用法: flange run app <name>"
+        _flange_error "用法: flange run app <name-or-path>"
         return 1
     fi
 }

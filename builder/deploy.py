@@ -45,40 +45,77 @@ def find_latest_deb(app_name: str, config) -> Path | None:
     return deb_files[0]
 
 
-def deploy_app(app_name: str, build_deb: bool, run: bool):
+def _resolve_app_arg(name_or_path: str, project_root: Path, config) -> tuple[Path, str]:
+    """解析入参为 (app_dir, app_name)。
+
+    判定为路径分支的条件（满足任一即可）：
+      - 字符串含有 ``/``
+      - 字符串以 ``.`` 开头
+      - 字符串解析后是一个存在的目录，且其下含 ``app.yaml``
+
+    路径分支直接定位目录，从 ``app.yaml`` 读 ``app.name``。
+    名称分支走 ``list_all`` 三层查找。
+    """
+    candidate = Path(name_or_path).expanduser()
+    is_path = (
+        "/" in name_or_path
+        or name_or_path.startswith(".")
+        or (candidate.is_dir() and (candidate / "app.yaml").is_file())
+    )
+    if is_path:
+        resolved = candidate.resolve()
+        if not (resolved.is_dir() and (resolved / "app.yaml").is_file()):
+            print(f"  [错误] App 路径 '{name_or_path}' 不存在或缺失 app.yaml")
+            sys.exit(1)
+        spec = load_spec(resolved)
+        return resolved, spec.app.name
+
+    # 名称分支：在 list_all 中匹配
+    entries = list_all(project_root, config)
+    app_entry = next((e for e in entries if e.name == name_or_path), None)
+    if not app_entry:
+        print(f"  [错误] 找不到名为 '{name_or_path}' 的 App")
+        sys.exit(1)
+    return app_entry.source_path, name_or_path
+
+
+def deploy_app(name_or_path: str, build_deb: bool, run: bool):
     project_root = Path(".").resolve()
-    
+
     try:
         config = load_current_config()
     except Exception as e:
         print(f"  [错误] 无法加载目标配置: {e}")
         print("  请先执行 lunch 选择目标配置。")
         sys.exit(1)
-        
-    # 1. 验证 App 是否存在
-    entries = list_all(project_root, config)
-    app_entry = next((e for e in entries if e.name == app_name), None)
-    
-    if not app_entry:
-        print(f"  [错误] 找不到名为 '{app_name}' 的 App")
-        sys.exit(1)
-        
-    spec_path = app_entry.path
+
+    # 1. 解析入参，拿到 app_dir、app_name、spec
+    spec_path, app_name = _resolve_app_arg(name_or_path, project_root, config)
     try:
         spec = load_spec(spec_path)
     except Exception as e:
         print(f"  [错误] 无法解析 {app_name} 的 app.yaml: {e}")
         sys.exit(1)
-    
-    # 2. 若需要，触发构建
+
+    # 2. 若需要，触发构建（透传原始参数，让 AppBuilder 自行决定走名称还是路径分支）
     if build_deb:
         print(f"==> 构建 App '{app_name}' ...")
-        # 调用 envsetup 中的 flange build app <name> 命令，保持环境一致
-        # 由于我们不在 shell 脚本中，直接调用 docker run
+        # 调用 docker run 在容器内编译；外部目录由 AppBuilder._compile 通过
+        # extra_mounts 动态挂入容器，因此 deploy.py 这里不需要额外处理 -v。
         cmd = [
             "docker", "compose", "run", "--rm", "build",
             "python3", "-c",
-            f"from builder.app import AppBuilder; from builder.docker import DockerRunner; from builder.config.loader import load_current_config; cfg = load_current_config(); builder = AppBuilder(DockerRunner(), None, cfg); builder.build_one('{app_name}')"
+            (
+                "from pathlib import Path; "
+                "from builder.app import AppBuilder; "
+                "from builder.docker import DockerRunner; "
+                "from builder.source import SourceManager; "
+                "from builder.config.loader import load_current_config; "
+                "cfg = load_current_config(); "
+                "source = SourceManager(project_root=Path('.').resolve()); "
+                "builder = AppBuilder(DockerRunner(), source, cfg); "
+                f"builder.build_one({name_or_path!r})"
+            ),
         ]
         result = subprocess.run(cmd)
         if result.returncode != 0:
@@ -178,12 +215,15 @@ def deploy_app(app_name: str, build_deb: bool, run: bool):
 
 def main():
     parser = argparse.ArgumentParser(description="Flange 单应用热部署工具")
-    parser.add_argument("app_name", help="App 的名称")
+    parser.add_argument(
+        "app",
+        help="App 名称或宿主机目录路径（含 / 或 . 或目录存在且含 app.yaml 时视为路径）",
+    )
     parser.add_argument("--no-build", action="store_true", help="跳过构建步骤，直接推送现有的 .deb")
     parser.add_argument("--run", action="store_true", help="部署完成后立即运行 (exec) 或重启 (service)")
-    
+
     args = parser.parse_args()
-    deploy_app(args.app_name, build_deb=not args.no_build, run=args.run)
+    deploy_app(args.app, build_deb=not args.no_build, run=args.run)
 
 if __name__ == "__main__":
     main()

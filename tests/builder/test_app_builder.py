@@ -386,3 +386,150 @@ class TestBuildAll:
         builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
         with pytest.raises(CircularDependencyError):
             builder.build_all()
+
+
+# ---------------------------------------------------------------------------
+# AppBuilder._resolve_app_dir 测试（out-of-tree 路径支持）
+# ---------------------------------------------------------------------------
+
+class TestResolveAppDir:
+    """_resolve_app_dir 三种路径判定规则与名称分支兜底。"""
+
+    def test_含斜杠的路径直接定位(self, tmp_path):
+        """字符串含 / 时按路径分支处理。"""
+        ext_dir = tmp_path / "ext" / "foo"
+        _make_app_dir_at(ext_dir, "foo")
+        builder = _make_builder(tmp_path)
+        result = builder._resolve_app_dir(str(ext_dir))
+        assert result == ext_dir.resolve()
+
+    def test_点开头的路径直接定位(self, tmp_path, monkeypatch):
+        """字符串以 . 开头时按路径分支处理（cwd 切到含目标 App 的位置）。"""
+        ext_dir = tmp_path / "myapp"
+        _make_app_dir_at(ext_dir, "myapp")
+        monkeypatch.chdir(tmp_path)
+        builder = _make_builder(tmp_path)
+        result = builder._resolve_app_dir("./myapp")
+        assert result == ext_dir.resolve()
+
+    def test_目录存在且含app_yaml的纯名称走路径分支(self, tmp_path, monkeypatch):
+        """当 cwd 下恰好有一个同名目录且含 app.yaml 时，视为路径。"""
+        # 在 tmp_path 下创建一个不在 components/app/ 下的同名目录
+        adhoc = tmp_path / "adhoc-bar"
+        _make_app_dir_at(adhoc, "adhoc-bar")
+        monkeypatch.chdir(tmp_path)
+        builder = _make_builder(tmp_path)
+        result = builder._resolve_app_dir("adhoc-bar")
+        assert result == adhoc.resolve()
+
+    def test_纯名称走_SourceManager_三层查找(self, tmp_path):
+        """字符串不含 / . 且 cwd 下无同名目录时，走 SourceManager 三层查找。"""
+        _make_app_dir(tmp_path, "myapp")
+        builder = _make_builder(tmp_path)
+        result = builder._resolve_app_dir("myapp")
+        assert result == tmp_path / "components" / "app" / "myapp"
+
+    def test_路径不存在时抛_FileNotFoundError_含原始字符串(self, tmp_path):
+        """路径分支下目录或 app.yaml 缺失时，错误信息包含原始入参字符串。"""
+        builder = _make_builder(tmp_path)
+        with pytest.raises(FileNotFoundError, match="/tmp/nonexistent-abc"):
+            builder._resolve_app_dir("/tmp/nonexistent-abc")
+
+    def test_存在的目录但缺_app_yaml_抛错(self, tmp_path):
+        """目录存在但缺 app.yaml 时按路径判定（含 /）后报错。"""
+        empty = tmp_path / "empty-dir"
+        empty.mkdir()
+        builder = _make_builder(tmp_path)
+        with pytest.raises(FileNotFoundError, match="empty-dir"):
+            builder._resolve_app_dir(str(empty))
+
+
+def _make_app_dir_at(target: Path, name: str) -> Path:
+    """在任意路径 target 处创建一个最小 App，写入 app.yaml。"""
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "app.yaml").write_text(
+        "app:\n"
+        f"  name: {name}\n"
+        "  version: 1.0.0\n"
+        f"  description: {name} 测试\n"
+        "  type: exec\n"
+        "  arch:\n"
+        "    - aarch64\n"
+        "\n"
+        "maintainer:\n"
+        "  name: tester\n"
+        "  email: tester@localhost\n"
+        "\n"
+        "build:\n"
+        "  system: none\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+# ---------------------------------------------------------------------------
+# AppBuilder.build_one(path) 与 extra_mounts 注入测试
+# ---------------------------------------------------------------------------
+
+class TestBuildOneWithPath:
+    """build_one 接受路径入参，_compile 对外部目录注入 extra_mounts。"""
+
+    def test_build_one_接受外部路径走_path_分支(self, tmp_path):
+        """build_one(<外部路径>) 正确加载 spec 并生成 .deb。"""
+        ext_dir = tmp_path / "ext" / "demo"
+        _make_app_dir_at(ext_dir, "demo")
+        builder = _make_builder(tmp_path)
+        deb_path = builder.build_one(str(ext_dir))
+        # .deb 应落在仓库内 .build/target/.../app/，不在外部目录
+        assert deb_path.parent == (
+            tmp_path / ".build" / "target" / "test-board" / "default" / "release" / "app"
+        )
+        assert not list(ext_dir.glob("*.deb"))
+
+    def test_纯名称_build_one_不注入_extra_mounts(self, tmp_path):
+        """build_one(<纯 name>) 时 _compile 不应给出 extra_mounts（None）。
+
+        通过把 build.system 改成 cmake 让 _compile 走到 docker.run 调用，
+        然后断言传给 docker.run 的 extra_mounts 为 None。
+        """
+        _make_app_dir(tmp_path, "namedapp", build_system="cmake")
+        builder = _make_builder(tmp_path)
+        # docker 已是 MagicMock；触发编译
+        builder.build_one("namedapp")
+        # 找出所有 docker.run 调用，确保 extra_mounts 全是 None
+        for call_obj in builder._docker.run.call_args_list:
+            assert call_obj.kwargs.get("extra_mounts") is None
+
+    def test_外部路径_build_one_注入_extra_mounts(self, tmp_path):
+        """build_one(<外部路径>) 触发编译时，extra_mounts 含外部目录。"""
+        ext_dir = tmp_path.parent / f"ext-build-{tmp_path.name}"
+        try:
+            _make_app_dir_at(ext_dir, "extbuild")
+            # 把 build.system 改成 cmake 触发 _compile
+            (ext_dir / "app.yaml").write_text(
+                (ext_dir / "app.yaml").read_text().replace("system: none", "system: cmake"),
+                encoding="utf-8",
+            )
+            builder = _make_builder(tmp_path)
+            try:
+                builder.build_one(str(ext_dir))
+            except Exception:
+                # 编译命令是 MagicMock，本测试只关心 extra_mounts 参数
+                pass
+            # 至少有一次 docker.run 调用，extra_mounts 含 ext_dir
+            calls = builder._docker.run.call_args_list
+            assert any(
+                c.kwargs.get("extra_mounts") and ext_dir.resolve()
+                in [Path(p).resolve() for p in c.kwargs["extra_mounts"]]
+                for c in calls
+            )
+        finally:
+            import shutil
+            if ext_dir.exists():
+                shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_build_one_不存在的路径报错(self, tmp_path):
+        """build_one(<不存在路径>) 抛 FileNotFoundError，错误信息含原始字符串。"""
+        builder = _make_builder(tmp_path)
+        with pytest.raises(FileNotFoundError, match="/tmp/abs-not-exist-xyz"):
+            builder.build_one("/tmp/abs-not-exist-xyz")
