@@ -207,6 +207,19 @@ class BuildCache:
                 if board_dts_dir.exists():
                     h.update(b"board_overlays_src:")
                     self._hash_directory(h, board_dts_dir)
+                # package overlay：名单 + 各 .dtso 源文件内容
+                h.update(b"package_overlays:")
+                plist = sorted(
+                    (self.config.get("boot") or {}).get("package_overlays")
+                    or [])
+                h.update(json.dumps(plist).encode())
+                for rel in sorted((self.config.get("packages_meta") or {})
+                                  .get("overlay_src_paths") or []):
+                    p = Path(rel)
+                    if p.is_file():
+                        h.update(b"package_overlay_src:")
+                        h.update(rel.encode())
+                        h.update(p.read_bytes())
 
             # bootloader 额外依赖 rkbin firmware
             if component == "bootloader":
@@ -219,6 +232,16 @@ class BuildCache:
             # 运行时事实，要单独混入。
             if component == "kernel":
                 self._mix_kernel_oot_sources(h)
+                # package OOT 驱动源目录内容：被选中编译的 driver 源改动须
+                # 级联失效 kernel build（json.dumps(kernel) 已覆盖路径/名单，
+                # 这里补内容）。
+                for rel in sorted((self.config.get("packages_meta") or {})
+                                  .get("kernel_src_paths") or []):
+                    d = Path(rel)
+                    if d.is_dir():
+                        h.update(b"package_driver_src:")
+                        h.update(rel.encode())
+                        self._hash_directory(h, d)
 
         result = h.hexdigest()[:16]
         self._hash_cache[component] = result

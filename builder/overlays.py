@@ -30,7 +30,11 @@ import tempfile
 from pathlib import Path
 
 from builder.base import ComponentBuilder
-from builder.dtb_overlay import board_overlays, vendor_overlays
+from builder.dtb_overlay import (
+    board_overlays,
+    package_overlays,
+    vendor_overlays,
+)
 
 
 def _vendor_overlays_dir(repo_src: Path, vendor: str) -> Path:
@@ -95,11 +99,12 @@ class OverlaysBuilder(ComponentBuilder):
     def compile(self, src_dir: Path, config: dict):
         v_names = vendor_overlays(config)
         b_names = board_overlays(config)
+        p_names = package_overlays(config)
         self._work_dir = Path(tempfile.mkdtemp(prefix="flange-overlays-"))
         self._build_dir = self._work_dir / "overlays"
         self._build_dir.mkdir()
 
-        if not v_names and not b_names:
+        if not v_names and not b_names and not p_names:
             return  # short-circuit
 
         kernel_src = self._kernel_src_dir(config)
@@ -108,6 +113,8 @@ class OverlaysBuilder(ComponentBuilder):
             self._compile_vendor_overlays(src_dir, kernel_src, config, v_names)
         if b_names:
             self._compile_board_overlays(kernel_src, config, b_names)
+        if p_names:
+            self._compile_package_overlays(kernel_src, config, p_names)
 
     def _compile_vendor_overlays(self, src_dir: Path, kernel_src: Path,
                                   config: dict, names: list[str]) -> None:
@@ -164,6 +171,31 @@ class OverlaysBuilder(ComponentBuilder):
                 )
             self._compile_one(dts, stem, kernel_src, overlays_dir,
                               kind="board")
+
+    def _compile_package_overlays(self, kernel_src: Path, config: dict,
+                                   names: list[str]) -> None:
+        """编译 package overlay。源 .dtso 路径由 builder/packages.py 注入到
+        ``boot.package_overlay_sources``（``{name.dtbo: 绝对 .dtso 路径}``），
+        无需按目录约定查找——硬件特性包的 device-tree 子目录布局自描述。"""
+        sources = (config.get("boot") or {}).get(
+            "package_overlay_sources") or {}
+        for name in names:
+            src = sources.get(name)
+            if not src:
+                raise FileNotFoundError(
+                    f"package overlay {name} 缺少源路径映射；"
+                    "boot.package_overlay_sources 未注入对应项"
+                    "（builder/packages.py 展开是否正常？）"
+                )
+            dts = Path(src)
+            if not dts.is_file():
+                raise FileNotFoundError(
+                    f"package overlay 源文件不存在: {dts}"
+                )
+            stem = name.removesuffix(".dtbo")
+            # include_dir 取 .dtso 所在目录，支持 overlay 同目录的相对 #include
+            self._compile_one(dts, stem, kernel_src, dts.parent,
+                              kind="package")
 
     def _compile_one(self, dts: Path, stem: str, kernel_src: Path,
                      include_dir: Path, *, kind: str) -> None:

@@ -67,6 +67,14 @@ BOARD = {
     # 成短形（如 614e0000-0000）且 console 强制切到 ttyFIQ0。
     # generic rk3588_defconfig 在 v2026.01 上完整支持 ROCK 5B 板级初始化
     # （eMMC/HS400/PMIC/USB/PCIe 全部 probe 通过），实测可用。
+    #
+    # ---- 魅族 E3 39pin MIPI-DSI 屏（显示 + 触摸 + 背光）----
+    # 启用 meizu-e3-panel 硬件特性包。这块屏自带 SGM37604A I2C 背光芯片
+    # （@0x36 挂 i2c6，与 rock-5c 同），**不**走 rock5b 板载 MP3302/pwm-backlight。
+    # 故 opt-in 同时选 sec_ts 触摸 + sgm37604a 背光两个 OOT 驱动。
+    "packages": [
+        {"name": "meizu-e3-panel", "drivers": ["sec_ts", "sgm37604a"]},
+    ],
     "boot": {
         # 板私有 overlay：源文件位于 components/board/radxa-rock5b/dtso/<stem>.dtso，
         # 由 device-tree-overlay 组件用 cpp+dtc 编译为 <stem>.dtbo，打到 boot 分区
@@ -83,8 +91,11 @@ BOARD = {
             # 可手动改 /boot/extlinux/extlinux.conf 加 fdtoverlays 启用。
             "rk3588-rock-5b-mali-valhall-compat.dtbo",
         ],
-        # default_overlays 留空：panthor 路径下不需要默认应用任何板级 overlay。
-        "default_overlays": [],
+        # meizu-e3-panel 的 panel overlay 由 packages 机制注入 boot.package_overlays，
+        # 在此声明为默认应用，开机即点亮屏（extlinux fdtoverlays）。
+        "default_overlays": [
+            "rk3588-rock-5b-meizu-e3-panel.dtbo",
+        ],
     },
     "rootfs": {
         # RTL8852BE BT 部分固件：rkwifibt 仓库 firmware/realtek/RTL8852BE/

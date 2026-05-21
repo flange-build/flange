@@ -25,6 +25,7 @@ from builder.dtb_overlay import (
     copy_declared_overlays,
     default_overlays,
     dtb_overlays,
+    package_overlays,
     vendor_overlays,
 )
 from builder.extlinux import (
@@ -91,6 +92,11 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
             target_dir / "device-tree-overlay" / "overlays",
             dtb_dir / "overlay",
             board_overlays(config),
+        )
+        copy_declared_overlays(
+            target_dir / "device-tree-overlay" / "overlays",
+            dtb_dir / "overlay",
+            package_overlays(config),
         )
 
         # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定。

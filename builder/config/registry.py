@@ -245,6 +245,11 @@ def resolve_config(
     )
     resolved = resolve_conditions(merged, product=product, variant=variant)
     resolved = _expand_rootfs_package_sets(resolved)
+    # 硬件特性包展开：把 board.packages opt-in 的包按 component 类型注入
+    # kernel.oot_modules / boot.package_overlays 等既有结构。延迟 import
+    # 避免与 builder.packages 形成模块环。
+    from builder.packages import expand_hardware_packages
+    resolved = expand_hardware_packages(resolved, project_root=root)
     # App 来源字段归一化：校验 external_apps 互斥 + 解析 local_path / external_app_dirs
     # 到绝对路径，确保下游模块（SourceManager、app_list）拿到一致的形态。
     return normalize_app_sources(resolved, project_root=root)

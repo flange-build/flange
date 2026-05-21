@@ -38,6 +38,7 @@ updated: 2026-05-03
 
 ## 内核与模块
 - [[out-of-tree 模块]]
+- [[硬件特性包]]
 
 ## Recovery
 - [[recovery 系统]]

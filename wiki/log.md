@@ -379,3 +379,11 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 
 相关变更：openspec/changes/out-of-tree-app-build/（proposal/design/specs/tasks 已 done）；源码改动覆盖 builder/{docker,app,deploy}.py 与 envsetup.sh，顺手修复 `AppBuilder(source=None)` bug 让已注册 external_apps[name].local_path 也能编通。
 
+
+## [2026-05-22] sync | 新增「硬件特性包」概念 + rock5b MIPI-DSI 屏
+
+新增 `wiki/concepts/硬件特性包.md`：components/packages 机制（package.py 清单 + type 分发 oot-driver/devicetree/deb + board opt-in 按需编译 + 内容哈希）；`concepts/index.md` 加条目。
+
+`wiki/boards/radxa-rock5b.md` 加「MIPI-DSI 屏（meizu-e3-panel）」一节（dsi1/vp3、i2c6 触摸+sgm37604a 背光、OF-graph 端口、LCD_PWREN 供电、亮度参数），frontmatter sources/related 补包文件与原理图，updated → 2026-05-22。
+
+相关变更：openspec/changes/archive/2026-05-21-add-meizu-e3-panel-package/（已归档，主 specs 同步：hardware-feature-packages 新建、meizu-e3-panel 新建、extlinux-dtb-overlays 加 package overlay 第四源）。实机点亮坑：U-Boot 2017.09 overlay 根节点须包 fragment、背光是 sgm37604a I2C 非 pwm-backlight、默认亮度别用极低值。

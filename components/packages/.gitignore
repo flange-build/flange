@@ -1,0 +1,14 @@
+# OOT 内核模块在包内原地编译（make M=<driver dir>）产生的构建产物，不入库。
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.cmd
+.*.cmd
+*.d
+*.symvers
+Module.symvers
+modules.order
+.tmp_versions/
+__pycache__/

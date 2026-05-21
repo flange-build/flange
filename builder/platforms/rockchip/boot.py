@@ -34,6 +34,7 @@ from builder.dtb_overlay import (
     copy_declared_overlays,
     default_overlays,
     dtb_overlays,
+    package_overlays,
     vendor_overlays,
 )
 from builder.extlinux import (
@@ -88,10 +89,11 @@ class RockchipBootBuilder(ComponentBuilder):
         dtb_dir.mkdir(parents=True)
         shutil.copy2(kernel_src_dtb, dtb_dir / kernel_src_dtb.name)
 
-        # DTB overlay 三源都平铺到 /dtbs/rockchip/overlay/：
+        # DTB overlay 四源都平铺到 /dtbs/rockchip/overlay/：
         # 1) in-tree  (from kernel 源码树编译 → target/kernel/overlay/)
         # 2) vendor   (from radxa-overlays 编译 → target/device-tree-overlay/overlays/)
         # 3) board    (from components/board/<board>/dtso/ 编译，与 vendor 共用产物目录)
+        # 4) package  (from components/packages/<pkg>/device-tree/ 编译，同上产物目录)
         # copy_declared_overlays 内置撞名检测（dst 已存在 → ValueError）。
         copy_declared_overlays(
             target_dir / "kernel" / "overlay",
@@ -107,6 +109,11 @@ class RockchipBootBuilder(ComponentBuilder):
             target_dir / "device-tree-overlay" / "overlays",
             dtb_dir / "overlay",
             board_overlays(config),
+        )
+        copy_declared_overlays(
+            target_dir / "device-tree-overlay" / "overlays",
+            dtb_dir / "overlay",
+            package_overlays(config),
         )
 
         # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定。

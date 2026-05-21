@@ -1,0 +1,206 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * radxa-rock5b 魅族 E3 39pin MIPI-DSI 屏 overlay（显示 + 触摸 + 背光）。
+ *
+ * 接线依据 radxa-rock5b 原理图 v1.423
+ * （components/board/radxa-rock5b/docs/radxa_rock_5b_v1423_sch.pdf）+ 对照
+ * rock-5c 同屏 dtsi（背光走面板自带 SGM37604A I2C 芯片，非 rock5b 板载 MP3302）：
+ *   显示  : MIPI_DPHY1_TX ×4lane → dsi1，经 VOP VP3 路由
+ *   背光  : SGM37604A I2C 背光芯片 @0x36 挂 i2c6；使能 = GPIO0-A0 = gpio0 RK_PA0
+ *   触摸  : sec_ts@0x48 挂 i2c6；irq = TP_INT_L = gpio0 RK_PD3；
+ *           reset = TP_RST_L = gpio0 RK_PC6（驱动不管理，gpio-hog 拉高解复位）
+ *   屏复位: LCD_RESET = gpio2 RK_PC1
+ *   LCD 供电: VCC_3V3_S0 经板载负载开关 → LCD_3V3，使能 LCD_PWREN_H = gpio1 RK_PC4
+ *   vccio : VCC_1V8_S0
+ *
+ * 屏 timing / init-exit sequence 移植自魅族 E3 同屏适配（rk3576 rock-4d / rock-5c）。
+ *
+ * 注意：新增根级节点必须包进显式 fragment + target-path="/"。本板 U-Boot 是
+ * 2017.09（Rockchip BSP），其 libfdt overlay_symbol_update() 要求 overlay 内每个
+ * 带 label 节点符号为 /<fragment>/__overlay__/...；根相对符号会 FDT_ERR_BADOVERLAY
+ * 致 boot 挂死。
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+#include <dt-bindings/display/drm_mipi_dsi.h>
+
+/ {
+	fragment@100 {
+		target-path = "/";
+
+		__overlay__ {
+			/* LCD_3V3 供电轨：VCC_3V3_S0 经板载负载开关产生，使能脚
+			 * LCD_PWREN_H = gpio1 RK_PC4。always-on + boot-on：regulator
+			 * 注册即开，保证 panel/触摸/背光在各自 probe 前已上电。 */
+			vcc_lcd: vcc-lcd-mipi1 {
+				compatible = "regulator-fixed";
+				regulator-name = "vcc_lcd_mipi1";
+				regulator-boot-on;
+				regulator-always-on;
+				enable-active-high;
+				gpio = <&gpio1 RK_PC4 GPIO_ACTIVE_HIGH>;
+				vin-supply = <&vcc_3v3_s0>;
+			};
+		};
+	};
+};
+
+&dsi1 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dsi1_panel: panel@0 {
+		status = "okay";
+		compatible = "simple-panel-dsi";
+		reg = <0>;
+		backlight = <&sgm37604_bl>;
+		vdd-supply = <&vcc_lcd>;
+		vccio-supply = <&vcc_1v8_s0>;
+		reset-gpios = <&gpio2 RK_PC1 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&lcd_rst_gpio>;
+
+		prepare-delay-ms = <40>;
+		reset-delay-ms = <60>;
+		init-delay-ms = <80>;
+		stbyb-delay-ms = <20>;
+		enable-delay-ms = <60>;
+		disable-delay-ms = <20>;
+		unprepare-delay-ms = <20>;
+
+		width-mm = <135>;
+		height-mm = <216>;
+
+		dsi,flags = <(MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
+			      MIPI_DSI_MODE_LPM | MIPI_DSI_MODE_NO_EOT_PACKET |
+			      MIPI_DSI_CLOCK_NON_CONTINUOUS)>;
+		dsi,format = <MIPI_DSI_FMT_RGB888>;
+		dsi,lanes  = <4>;
+
+		panel-init-sequence = [
+			05 78 01 11
+			05 0A 01 29
+		];
+
+		panel-exit-sequence = [
+			05 10 01 28
+			05 78 01 10
+		];
+
+		disp_timings0: display-timings {
+			native-mode = <&dsi_timing0>;
+			dsi_timing0: timing0 {
+				clock-frequency = <157000000>;
+				hactive = <1080>;
+				hfront-porch = <115>;
+				hback-porch = <13>;
+				hsync-len = <3>;
+				vactive = <2160>;
+				vfront-porch = <10>;
+				vback-porch = <10>;
+				vsync-len = <2>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+			};
+		};
+
+		/* OF-graph：rk3588 BSP dw-mipi-dsi2 用
+		 * drm_of_find_panel_or_bridge(np, port=1) 经 OF-graph 找 panel，
+		 * 缺 port@1↔panel/port@0 端点会 "Failed to find panel or bridge: -19"。 */
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi: endpoint {
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+		};
+	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi>;
+			};
+		};
+	};
+};
+
+/* VOP VP3 → dsi1 路由使能 */
+&dsi1_in_vp3 {
+	status = "okay";
+};
+
+&route_dsi1 {
+	status = "okay";
+	connect = <&vp3_out_dsi1>;
+};
+
+/* 触摸 + 背光都挂 i2c6（保留既有 hym8563 RTC@0x51） */
+&i2c6 {
+	status = "okay";
+
+	sec_ts: sec_ts@48 {
+		compatible = "sec,sec_ts";
+		reg = <0x48>;
+		status = "okay";
+		pinctrl-names = "default";
+		pinctrl-0 = <&ts_irq_gpio>;
+		sec,irq_gpio = <&gpio0 RK_PD3 GPIO_ACTIVE_LOW>;
+		sec,max_coords = <1080>, <2160>;
+	};
+
+	/* SGM37604A I2C 背光（面板自带），使能 = GPIO0-A0 = gpio0 RK_PA0。
+	 * 实机调试确认的亮度参数：
+	 *  - led-channels=0x1F：bit0 dev_en + bit1~4 全 4 路 LED 通道（仅开 2 路偏暗）
+	 *  - max-current=0x03：40mA 最大档（00=25mA 太暗）
+	 *  - default-brightness-level=2048：约 50%（4095 满量程）。原值 128≈3% 极暗。
+	 *    可经 /sys/class/backlight/sgm37604a/brightness 在线调节。 */
+	sgm37604_bl: backlight@36 {
+		compatible = "sgmicro,sgm37604a";
+		reg = <0x36>;
+		status = "okay";
+		sgmicro,led-channels = <0x1f>;
+		sgmicro,max-current = <0x03>;
+		default-brightness-level = <2048>;
+		enable-gpios = <&gpio0 RK_PA0 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* TP_RST_L = gpio0 RK_PC6：sec_ts 驱动不管理 reset，hog 输出高解复位 */
+&gpio0 {
+	ts_reset_hog {
+		gpio-hog;
+		gpios = <RK_PC6 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "tp-reset-deassert";
+	};
+};
+
+&pinctrl {
+	meizu-panel {
+		lcd_rst_gpio: lcd-rst-gpio {
+			rockchip,pins = <2 RK_PC1 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	meizu-touch {
+		ts_irq_gpio: ts-irq-gpio {
+			rockchip,pins = <0 RK_PD3 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+};

@@ -54,18 +54,26 @@ def board_overlays(config: dict) -> list[str]:
     return _overlay_names(config, "board_overlays")
 
 
-def all_declared_overlays(config: dict) -> list[str]:
-    """返回 in-tree / vendor / board 三源的并集。
+def package_overlays(config: dict) -> list[str]:
+    """返回 package overlay 文件名列表（来自 board 启用的硬件特性包的
+    devicetree component，由 builder/packages.py 注入 boot.package_overlays）。"""
+    return _overlay_names(config, "package_overlays")
 
-    顺序保留：先 in-tree、再 vendor、再 board。任何两源 basename 撞名 →
-    raise ValueError，错误信息列出冲突项与冲突来源。
+
+def all_declared_overlays(config: dict) -> list[str]:
+    """返回 in-tree / vendor / board / package 四源的并集。
+
+    顺序保留：先 in-tree、再 vendor、再 board、再 package。任何两源 basename
+    撞名 → raise ValueError，错误信息列出冲突项与冲突来源。
     """
     intree = dtb_overlays(config)
     vendor = vendor_overlays(config)
     private = board_overlays(config)
+    package = package_overlays(config)
 
     intree_set = set(intree)
     vendor_set = set(vendor)
+    private_set = set(private)
 
     iv_collisions = [n for n in vendor if n in intree_set]
     if iv_collisions:
@@ -86,7 +94,17 @@ def all_declared_overlays(config: dict) -> list[str]:
             "boot.vendor_overlays 与 boot.board_overlays 中存在重名: "
             f"{', '.join(vb_collisions)}；basename 必须全局唯一"
         )
-    return intree + vendor + private
+    pkg_collisions = [
+        n for n in package
+        if n in intree_set or n in vendor_set or n in private_set
+    ]
+    if pkg_collisions:
+        raise ValueError(
+            "boot.package_overlays 与其他源中存在重名: "
+            f"{', '.join(pkg_collisions)}；"
+            "boot.img 内 overlay 平铺到同一目录，basename 必须全局唯一"
+        )
+    return intree + vendor + private + package
 
 
 def default_overlays(config: dict) -> list[str]:
@@ -98,13 +116,16 @@ def default_overlays(config: dict) -> list[str]:
         intree = dtb_overlays(config)
         vendor = vendor_overlays(config)
         private = board_overlays(config)
+        package = package_overlays(config)
         raise ValueError(
             "boot.default_overlays 引用了未声明在 boot.dtb_overlays / "
-            "boot.vendor_overlays / boot.board_overlays 中的 DT overlay: "
+            "boot.vendor_overlays / boot.board_overlays / boot.package_overlays "
+            "中的 DT overlay: "
             f"{', '.join(missing)}；"
             f"候选 dtb_overlays={intree}，"
             f"候选 vendor_overlays={vendor}，"
-            f"候选 board_overlays={private}"
+            f"候选 board_overlays={private}，"
+            f"候选 package_overlays={package}"
         )
     return defaults
 

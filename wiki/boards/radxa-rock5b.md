@@ -7,13 +7,17 @@ sources:
   - components/board/radxa-rock5b/dtso/rk3588-rock-5b-mali-valhall-compat.dtso
   - components/board/radxa-rock5b/overlay/etc/hostname
   - components/board/radxa-rock5b/overlay/etc/usbdevice.conf
+  - components/board/radxa-rock5b/docs/radxa_rock_5b_v1423_sch.pdf
+  - components/packages/meizu-e3-panel/package.py
+  - components/packages/meizu-e3-panel/device-tree/rk3588-rock-5b-meizu-e3-panel.dtso
   - components/platform/rockchip/rk3588/config.py
 related:
   - "[[rockchip 平台]]"
   - "[[out-of-tree 模块]]"
+  - "[[硬件特性包]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-05-06
+updated: 2026-05-22
 ---
 
 ## TL;DR
@@ -53,6 +57,20 @@ M.2 E-Key 槽位（`pcie2x1l0`，dts 默认 okay，PCIe ID `10ec:b852`）走 RTL
 ## VPU / 多媒体加速
 
 继承 SoC 层 rk3588 默认安装的 Rockchip 多媒体栈（`+extra_debs` 9 个 deb，详见 [[rockchip 平台]]）：`rockchip-mpp` + `librga2` + `gstreamer1.0-rockchip` 全套。GStreamer element 含 `mppvideodec`（HEVC/AVC/VP8/VP9 多解）、`mpph264enc` / `mpph265enc` / `mppvp8enc` / `mppjpegenc` / `mppjpegdec`。/dev/mpp_service + /dev/rga 内核节点存在；实测 720p H264 编码 ~10× realtime、解码 ~40× realtime。
+
+## MIPI-DSI 屏（meizu-e3-panel）
+
+经 [[硬件特性包]] 启用魅族 E3 39pin MIPI-DSI 屏（显示+触摸+背光），`packages: [{name: meizu-e3-panel, drivers: [sec_ts, sgm37604a]}]`。接线按原理图 v1.423：
+
+| 功能 | rock5b 落点 |
+|---|---|
+| DSI | dsi1（DPHY1 4lane）→ VP3 路由；panel↔dsi1 需 OF-graph port@1/port@0 |
+| 触摸 | `sec_ts` OOT @i2c6 0x48；irq gpio0 PD3；TP_RST gpio0 PC6（gpio-hog 解复位） |
+| 背光 | `sgm37604a` OOT I2C @i2c6 0x36（**非** 板载 MP3302/pwm-backlight）；使能 gpio0 PA0 |
+| 屏复位 | LCD_RESET gpio2 PC1 |
+| LCD 供电 | LCD_PWREN_H gpio1 PC4 → GPIO 使能 always-on regulator |
+
+实机已点亮。易踩坑：U-Boot 2017.09 overlay 根节点须包 `fragment`；默认亮度别用极低值（led 4 路+40mA+default 2048）。详见 `openspec/changes/archive/2026-05-21-add-meizu-e3-panel-package/`。
 
 ## 板私有 overlay
 

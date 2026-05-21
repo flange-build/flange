@@ -61,13 +61,15 @@ class FakeCache:
 def _cfg(platform: str, *, overlays: list[str] | None = None,
          default: list[str] | None = None,
          vendor: list[str] | None = None,
-         board: list[str] | None = None) -> dict:
+         board: list[str] | None = None,
+         package: list[str] | None = None) -> dict:
     dts = "rk3566-test" if platform == "rockchip" else "sun60i-a733-test"
     boot = {
         "kernel_args": "console=ttyS2,1500000",
         "dtb_overlays": overlays or [],
         "vendor_overlays": vendor or [],
         "board_overlays": board or [],
+        "package_overlays": package or [],
         "default_overlays": default or [],
     }
     if platform == "allwinnera733":
@@ -573,6 +575,52 @@ def test_rockchip_boot_copies_board_overlay_to_dtbs_layout(tmp_path):
         builder._work_dir / "staging" / "dtbs" / "rockchip" / "overlay"
     )
     assert (overlay_dir / "my-display.dtbo").exists()
+
+
+def test_rockchip_boot_copies_package_overlay_to_dtbs_layout(tmp_path):
+    """package overlay 与 vendor/board 同走 device-tree-overlay 产物目录，
+    boot 组件须把它平铺到 /dtbs/<vendor>/overlay/ 并被 extlinux 引用。
+    回归：boot.py 曾漏拷 package_overlays，导致 extlinux 引用了不存在的 dtbo。"""
+    target_dir = tmp_path / "target"
+    _prepare_kernel_target(target_dir, "rockchip", [])
+    _prepare_vendor_overlay_target(target_dir, ["pkg-panel.dtbo"])
+
+    builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
+    builder.cache = FakeCache(target_dir)
+
+    builder.compile(None, _cfg(
+        "rockchip",
+        package=["pkg-panel.dtbo"],
+        default=["pkg-panel.dtbo"],
+    ))
+
+    overlay_dir = (
+        builder._work_dir / "staging" / "dtbs" / "rockchip" / "overlay"
+    )
+    assert (overlay_dir / "pkg-panel.dtbo").exists()
+    extlinux = (builder._work_dir / "staging" / "extlinux"
+                / "extlinux.conf").read_text()
+    assert "/dtbs/rockchip/overlay/pkg-panel.dtbo" in extlinux
+
+
+def test_a733_boot_copies_package_overlay_to_dtbs_layout(tmp_path):
+    target_dir = tmp_path / "target"
+    _prepare_kernel_target(target_dir, "allwinnera733", [])
+    _prepare_vendor_overlay_target(target_dir, ["pkg-panel.dtbo"])
+
+    builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
+    builder.cache = FakeCache(target_dir)
+
+    builder.compile(None, _cfg(
+        "allwinnera733",
+        package=["pkg-panel.dtbo"],
+        default=["pkg-panel.dtbo"],
+    ))
+
+    overlay_dir = (
+        builder._work_dir / "staging" / "dtbs" / "allwinner" / "overlay"
+    )
+    assert (overlay_dir / "pkg-panel.dtbo").exists()
 
 
 def test_a733_boot_basename_collision_vendor_vs_board(tmp_path):

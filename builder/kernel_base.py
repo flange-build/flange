@@ -183,14 +183,26 @@ class KernelBuilder(ComponentBuilder):
     def _oot_template_vars(self, src_dir: Path, config: dict) -> dict[str, str]:
         """构造 OOT 模块字段格式化用的模板字典。
 
-        始终包含 ``kernel_src``。对每个 ``kernel.oot_sources`` 声明的源
-        ``<name>``，先 ``ensure_oot_source`` 拿到本地路径，再注入键
-        ``<name>_src``（``-`` 替换为 ``_`` 以满足 Python format 标识符规则）。
+        始终包含 ``kernel_src``、``kernel_src_abs``、``arch``、``cross_compile``。
+        ``kernel_src_abs`` 是 ``kernel_src`` 的绝对化形式——hardware-feature
+        package 合成的 OOT 条目用它做 ``KSRC=`` / ``-C``，因为这些条目以驱动
+        目录为 cwd 编译，相对的 ``kernel_src`` 在该 cwd 下无法解析。``arch`` /
+        ``cross_compile`` 来自平台 kernel builder 的类属性，让 package 条目
+        无需感知具体平台即可拿到正确交叉前缀。
+
+        对每个 ``kernel.oot_sources`` 声明的源 ``<name>``，先 ``ensure_oot_source``
+        拿到本地路径，再注入键 ``<name>_src``（``-`` 替换为 ``_`` 以满足 Python
+        format 标识符规则）。
 
         幂等：cache 依赖图保证 kernel build 入口先于本调用，重复 ensure
         只是 git fetch + reset --hard，无副作用。
         """
-        tmpl: dict[str, str] = {"kernel_src": str(src_dir)}
+        tmpl: dict[str, str] = {
+            "kernel_src": str(src_dir),
+            "kernel_src_abs": str(Path(src_dir).resolve()),
+            "arch": self.ARCH,
+            "cross_compile": self.CROSS,
+        }
         for name, cfg in self._oot_sources_config(config).items():
             path = self.source.ensure_oot_source(name, cfg)
             tmpl[f"{name.replace('-', '_')}_src"] = str(path)
