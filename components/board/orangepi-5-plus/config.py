@@ -71,6 +71,18 @@ BOARD = {
                     # M= 指定 OOT 模块源 = 编译目录。Makefile 默认开关
                     # CONFIG_RTL8852B=y + CONFIG_PCI_HCI=y → 输出 8852be.ko
                     "M={rkwifibt_src}/drivers/rtl8852be",
+                    # 关闭 PHL/RTW 调试日志总开关：vendor Makefile 默认
+                    # CONFIG_RTW_DEBUG=y（L154），连带把 PHL/RTW 两套日志默认
+                    # 等级烧成 4=INFO（CONFIG_RTW_LOG_LEVEL / _PHL_LOG_LEVEL，
+                    # L157-158），导致扫描期 [DBG_RFK]/[SCAN]/[cmd_scan]/
+                    # MSG_EVT_*/scan_ch_ready_cb 等 INFO 级日志持续刷屏。
+                    # 命令行赋值优先级高于 Makefile 内 `=`，置 n 后
+                    # `-DCONFIG_RTW_DEBUG` 不再注入，phl_debug.h / rtw_debug.h
+                    # 里所有 PHL_*/RTW_* 宏退化为 no-op，日志全部编译期消除
+                    # （.ko 更小、零运行开销）。两套 log_level 符号的定义与全部
+                    # 引用都一致包在 #ifdef CONFIG_RTW_DEBUG 内（rtw_cfg.c
+                    # L1372/1745、wifi_regd.c L760），关掉不会产生未定义符号。
+                    "CONFIG_RTW_DEBUG=n",
                 ],
                 "ko_pattern": [
                     "{rkwifibt_src}/drivers/rtl8852be/8852be.ko",
