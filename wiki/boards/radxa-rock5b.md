@@ -70,7 +70,7 @@ M.2 E-Key 槽位（`pcie2x1l0`，dts 默认 okay，PCIe ID `10ec:b852`）走 RTL
 | 屏复位 | LCD_RESET gpio2 PC1 |
 | LCD 供电 | LCD_PWREN_H gpio1 PC4 → GPIO 使能 always-on regulator |
 
-实机已点亮。易踩坑：U-Boot 2017.09 overlay 根节点须包 `fragment`；默认亮度别用极低值（led 4 路+40mA+default 2048）。详见 `openspec/changes/archive/2026-05-21-add-meizu-e3-panel-package/`。
+实机已点亮。易踩坑：U-Boot 2017.09 overlay 根节点须包 `fragment`；默认亮度别用极低值（led 4 路+40mA+default 2048）；**sgm37604a 驱动 probe 时机太早（LCD_3V3 刚上电）写 MODE(0x11)/CURRENT(0x1B) 寄存器不生效，芯片停在 0x11=0x65 错误调光模式致背光极暗——驱动改为在 `update_status`（panel 使能后）重写 MODE/LED/CURRENT 才稳**。详见 `openspec/changes/archive/2026-05-21-add-meizu-e3-panel-package/`。
 
 ## 板私有 overlay
 

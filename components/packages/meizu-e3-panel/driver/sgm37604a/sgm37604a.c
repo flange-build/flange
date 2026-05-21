@@ -237,6 +237,24 @@ int sgm37604a_set_backlight_level(unsigned int level)
 
 static int sgm37604a_bled_update_status(struct backlight_device *bl)
 {
+	unsigned char data;
+
+	/* probe 期（LCD_3V3 刚上电、芯片尚未就绪）写 MODE(0x11)/CURRENT(0x1B)
+	 * 寄存器常不生效，芯片停在 0x11 默认值(实测 0x65)的错误调光模式，导致
+	 * 背光极暗。在 update_status（panel 使能后、芯片已就绪时调用）重新应用
+	 * MODE/LED/CURRENT 配置，确保生效，并抗芯片掉电/模式复位。 */
+	if (pchip) {
+		data = 0x00;
+		SGM37604A_smbus_write_byte(pchip->client,
+			SGM37604A_CTL_BACKLIGHT_MODE_REG, &data);
+		data = pchip->led_channels;
+		SGM37604A_smbus_write_byte(pchip->client,
+			SGM37604A_CTL_BACKLIGHT_LED_REG, &data);
+		data = pchip->max_current;
+		SGM37604A_smbus_write_byte(pchip->client,
+			SGM37604A_CTL_BACKLIGHT_CURRENT_REG, &data);
+	}
+
 	sgm37604a_set_backlight_level(bl->props.brightness);
 
 	return 0;
@@ -336,8 +354,19 @@ static int SGM37604A_probe(struct i2c_client *client, const struct i2c_device_id
 	SGM37604A_set_backlight_reg_init();
 
 	props.type = BACKLIGHT_RAW;
-	props.brightness = 2000;
 	props.max_brightness = 4095;
+	/* 开机默认亮度取 DT default-brightness-level（缺省回退 2000），不再写死。 */
+	{
+		u32 dft_brightness;
+
+		if (of_property_read_u32(client->dev.of_node,
+					 "default-brightness-level",
+					 &dft_brightness) == 0)
+			props.brightness = (dft_brightness > 4095)
+					   ? 4095 : dft_brightness;
+		else
+			props.brightness = 2000;
+	}
 
 	pchip->bled =
 	    devm_backlight_device_register(&client->dev, "sgm37604a",
