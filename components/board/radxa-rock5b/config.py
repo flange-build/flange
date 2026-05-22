@@ -4,6 +4,19 @@ BOARD = {
     "board": "radxa-rock5b",
     "soc": "rk3588",
     "platform": "rockchip",
+    # ---- 多 product 维度（屏幕模组） ----
+    # variants 沿用 platform 层默认 ["debug", "release"]。
+    # 笛卡尔积:
+    #   radxa-rock5b-default-debug / -release
+    #     →  板出厂裸机配置：仅板载 RTL8852BE WiFi/BT，不挂屏（不启用
+    #        meizu-e3-panel 包 / 不编 sec_ts+sgm37604a OOT 驱动 / 不加 panel
+    #        overlay）。
+    #   radxa-rock5b-meizu-e3-bringup-debug / -release
+    #     →  挂载魅族 E3 39pin MIPI-DSI 屏（显示 + 触摸 + 背光）的 product。
+    #        meizu-e3-panel 硬件特性包、panel default overlay 统一收编进
+    #        :meizu-e3-bringup 条件键（见下方 +packages / +default_overlays）。
+    #        其余配置（kernel、bootloader、firmware）与 default 共用。
+    "products": ["default", "meizu-e3-bringup"],
     "kernel": {
         # argon BSP linux-6.1-stan-rkr5.1 已包含 rk3588-rock-5b.dts。
         "dts": "rk3588-rock-5b",
@@ -69,10 +82,11 @@ BOARD = {
     # （eMMC/HS400/PMIC/USB/PCIe 全部 probe 通过），实测可用。
     #
     # ---- 魅族 E3 39pin MIPI-DSI 屏（显示 + 触摸 + 背光）----
-    # 启用 meizu-e3-panel 硬件特性包。这块屏自带 SGM37604A I2C 背光芯片
-    # （@0x36 挂 i2c6，与 rock-5c 同），**不**走 rock5b 板载 MP3302/pwm-backlight。
-    # 故 opt-in 同时选 sec_ts 触摸 + sgm37604a 背光两个 OOT 驱动。
-    "packages": [
+    # 仅 meizu-e3-bringup product 启用 meizu-e3-panel 硬件特性包；default 裸机
+    # 不挂屏，不带这些 OOT 驱动。这块屏自带 SGM37604A I2C 背光芯片（@0x36 挂
+    # i2c6，与 rock-5c 同），**不**走 rock5b 板载 MP3302/pwm-backlight。故 opt-in
+    # 同时选 sec_ts 触摸 + sgm37604a 背光两个 OOT 驱动。
+    "+packages:meizu-e3-bringup": [
         {"name": "meizu-e3-panel", "drivers": ["sec_ts", "sgm37604a"]},
     ],
     "boot": {
@@ -91,9 +105,10 @@ BOARD = {
             # 可手动改 /boot/extlinux/extlinux.conf 加 fdtoverlays 启用。
             "rk3588-rock-5b-mali-valhall-compat.dtbo",
         ],
-        # meizu-e3-panel 的 panel overlay 由 packages 机制注入 boot.package_overlays，
-        # 在此声明为默认应用，开机即点亮屏（extlinux fdtoverlays）。
-        "default_overlays": [
+        # meizu-e3-panel 的 panel overlay 由 packages 机制注入 boot.package_overlays
+        # （仅 meizu-e3-bringup product 启用包时注入）。在此声明为默认应用，开机即
+        # 点亮屏（extlinux fdtoverlays）。default 裸机不挂屏，不带这条 overlay。
+        "+default_overlays:meizu-e3-bringup": [
             "rk3588-rock-5b-meizu-e3-panel.dtbo",
         ],
     },

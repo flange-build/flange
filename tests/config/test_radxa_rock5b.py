@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from builder.config.query import get_valid_targets
-from builder.config.registry import discover_boards, get_board_config
+from builder.config.registry import discover_boards, get_board_config, resolve_config
 
 
 @pytest.fixture(scope="module")
@@ -107,3 +107,52 @@ class TestROCK5BLunchTargets:
         targets = set(get_valid_targets(boards=boards))
         assert "radxa-rock5b-default-debug" in targets
         assert "radxa-rock5b-default-release" in targets
+
+    def test_targets_include_meizu_e3_bringup(self, boards):
+        """meizu-e3-bringup product 的两个 variant 目标也应出现。"""
+        targets = set(get_valid_targets(boards=boards))
+        assert "radxa-rock5b-meizu-e3-bringup-debug" in targets
+        assert "radxa-rock5b-meizu-e3-bringup-release" in targets
+
+
+class TestROCK5BMeizuE3ProductSplit:
+    """魅族 E3 屏栈仅在 meizu-e3-bringup product 下生效；default 裸机不带。"""
+
+    @pytest.fixture()
+    def cfg_default(self, boards):
+        return resolve_config("radxa-rock5b", "default", "debug", boards=boards)
+
+    @pytest.fixture()
+    def cfg_bringup(self, boards):
+        return resolve_config(
+            "radxa-rock5b", "meizu-e3-bringup", "debug", boards=boards)
+
+    def test_panel_overlay_bringup_only(self, cfg_default, cfg_bringup):
+        """panel dtbo 经 packages 机制注入 package_overlays 并声明为默认应用，
+        仅 meizu-e3-bringup product 启用包时出现；default 裸机不带。"""
+        panel = "rk3588-rock-5b-meizu-e3-panel.dtbo"
+        assert panel not in cfg_default["boot"].get("package_overlays", [])
+        assert panel not in cfg_default["boot"].get("default_overlays", [])
+        assert panel in cfg_bringup["boot"]["package_overlays"]
+        assert panel in cfg_bringup["boot"]["default_overlays"]
+
+    def test_panel_oot_drivers_bringup_only(self, cfg_default, cfg_bringup):
+        """sec_ts 触摸 + sgm37604a 背光两个 OOT 驱动仅 bringup 编译；default
+        不挂屏不带（避免裸机镜像里编入 dead modules）。"""
+        def labels(cfg):
+            return [m.get("label", "") for m in cfg["kernel"].get("oot_modules", [])]
+        default_labels = " ".join(labels(cfg_default))
+        bringup_labels = " ".join(labels(cfg_bringup))
+        assert "meizu-e3-panel/sec_ts" not in default_labels
+        assert "meizu-e3-panel/sgm37604a" not in default_labels
+        assert "meizu-e3-panel/sec_ts" in bringup_labels
+        assert "meizu-e3-panel/sgm37604a" in bringup_labels
+
+    def test_rtl8852be_shared_by_both_products(self, cfg_default, cfg_bringup):
+        """板载 RTL8852BE WiFi/BT 是裸机基础能力，两个 product 都带（OOT 模块 +
+        BT 固件均与屏无关）。"""
+        for cfg in (cfg_default, cfg_bringup):
+            labels = " ".join(m.get("label", "") for m in cfg["kernel"]["oot_modules"])
+            assert "rtl8852be" in labels
+            fw_names = [e["name"] for e in cfg["rootfs"].get("extra_firmware", [])]
+            assert "rkwifibt-rtl8852be" in fw_names

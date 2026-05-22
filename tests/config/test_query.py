@@ -26,10 +26,11 @@ class TestGetValidTargets:
         assert isinstance(targets, list)
 
     def test_expected_count(self, boards):
-        """11 板 x 1 product x 2 variants = 22；orangepi-5-plus 额外的
-        wks55fhd001wct-bringup product 再贡献 2，合计 24。"""
+        """12 板 x 1 product x 2 variants = 24；orangepi-5-plus 的
+        wks55fhd001wct-bringup 与 radxa-rock5b 的 meizu-e3-bringup 两个额外
+        product 各再贡献 2，合计 28。"""
         targets = get_valid_targets(boards=boards)
-        assert len(targets) == 24
+        assert len(targets) == 28
 
     def test_contains_radxa_targets(self, boards):
         targets = get_valid_targets(boards=boards)
