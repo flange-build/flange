@@ -214,7 +214,7 @@ class KernelBuilder(ComponentBuilder):
         if not oot_modules:
             return
 
-        njobs = jobs or max((os.cpu_count() or 1) - 4, 1)
+        njobs = jobs or max((os.cpu_count() or 1) - 6, 1)
         tmpl = self._oot_template_vars(src_dir, config)
         for mod in oot_modules:
             build_dir = Path(mod["dir"].format(**tmpl))
