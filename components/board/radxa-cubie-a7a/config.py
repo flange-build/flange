@@ -55,6 +55,26 @@ BOARD = {
     "board": "radxa-cubie-a7a",
     "soc": "a733",
     "platform": "allwinnera733",
+    # ---- 多 product 维度（屏幕模组） ----
+    # variants 沿用 platform 层默认 ["debug", "release"]。
+    #   radxa-cubie-a7a-default-{debug,release}
+    #     →  板出厂裸机：HDMI 直出 + 板载 AC101B 音频，不挂屏（不启用
+    #        meizu-e3-panel 包 / 不编 sec_ts+sgm37604a / 不加 panel overlay）。
+    #   radxa-cubie-a7a-meizu-e3-bringup-{debug,release}
+    #     →  挂载魅族 E3 39pin MIPI-DSI 屏（显示 + 触摸 + 背光）。同一硬件特性
+    #        包 meizu-e3-panel 跨 SoC 复用（rock5b=RK3588 → 本板=A733）：
+    #        OOT 驱动 sec_ts/sgm37604a 零改动，仅 panel overlay 按 sunxi 显示栈
+    #        重写。包 opt-in 与 panel default overlay 收编进 :meizu-e3-bringup
+    #        条件键（见下方 +packages / +default_overlays）。
+    "products": ["default", "meizu-e3-bringup"],
+    # ---- 魅族 E3 39pin MIPI-DSI 屏（显示 + 触摸 + 背光）----
+    # 仅 meizu-e3-bringup product 启用 meizu-e3-panel 硬件特性包；default 裸机
+    # 不挂屏、不带这些 OOT 驱动。屏自带 SGM37604A I2C 背光芯片（@0x36 挂 twi2，
+    # 与载板无关），故 opt-in 同时选 sec_ts 触摸 + sgm37604a 背光两个 OOT 驱动，
+    # 与 rock5b 一致。
+    "+packages:meizu-e3-bringup": [
+        {"name": "meizu-e3-panel", "drivers": ["sec_ts", "sgm37604a"]},
+    ],
     "kernel": {
         "dts": "sun60i-a733-cubie-a7a",
     },
@@ -70,6 +90,13 @@ BOARD = {
         # 等外设按需运行时编辑 /boot/extlinux/extlinux.conf 启用。
         "default_overlays": [
             "cubie-a7a-enable-sunxi-ac101-sound-card.dtbo",
+        ],
+        # meizu-e3-panel 的 panel overlay 由 packages 机制注入
+        # boot.package_overlays（仅 meizu-e3-bringup product 启用包时注入）。
+        # 在此声明为默认应用，开机即点亮屏（extlinux fdtoverlays）。
+        # default 裸机不挂屏，不带这条 overlay。
+        "+default_overlays:meizu-e3-bringup": [
+            "sun60i-a733-cubie-a7a-meizu-e3-panel.dtbo",
         ],
     },
     "wifi": {

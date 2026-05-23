@@ -28,7 +28,8 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/slab.h>
-#include <linux/wakelock.h>
+/* wakelock 兼容垫片，见 sec_ts_wakelock.h（A733 等无 <linux/wakelock.h> 时回退）。 */
+#include "sec_ts_wakelock.h"
 
 #ifdef SAMSUNG_PROJECT
 #include <linux/sec_sysfs.h>

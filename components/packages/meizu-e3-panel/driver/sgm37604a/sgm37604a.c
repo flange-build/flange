@@ -1,5 +1,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
+#include <linux/version.h>
 #include <linux/i2c.h>
 #include <linux/input.h>
 #include <linux/workqueue.h>
@@ -386,11 +387,19 @@ static int SGM37604A_probe(struct i2c_client *client, const struct i2c_device_id
 }
 
 
+/* i2c_driver.remove 返回类型：内核 6.1 起为 void，此前（A733 5.15）为 int。 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 static void SGM37604A_remove(struct i2c_client *client)
+#else
+static int SGM37604A_remove(struct i2c_client *client)
+#endif
 {
 	if (pchip && pchip->bled) {
 		backlight_device_unregister(pchip->bled);
 	}
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
+	return 0;
+#endif
 }
 
 

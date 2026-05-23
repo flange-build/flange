@@ -38,6 +38,10 @@ PACKAGE = {
             "name": "panel",
             "overlays": {
                 "radxa-rock5b": "device-tree/rk3588-rock-5b-meizu-e3-panel.dtso",
+                # radxa-cubie-a7a（A733/sun60iw2p1）：同屏不同 SoC，按 Allwinner
+                # sunxi 显示栈重写（allwinner,panel-dsi + dsi0 + virtual-panel
+                # OF-graph 中转），见该 .dtso 顶部注释。
+                "radxa-cubie-a7a": "device-tree/sun60i-a733-cubie-a7a-meizu-e3-panel.dtso",
             },
         },
     ],

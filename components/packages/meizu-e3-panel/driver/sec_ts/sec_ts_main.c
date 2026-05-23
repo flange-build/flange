@@ -29,7 +29,10 @@
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
-#include <linux/wakelock.h>
+#include <linux/version.h>
+/* wakelock 兼容垫片：rock5b BSP 走原生 <linux/wakelock.h>，A733 等无此头的
+ * 主线系内核回退到 wakeup_source 映射。见 sec_ts_wakelock.h。 */
+#include "sec_ts_wakelock.h"
 
 #ifdef SAMSUNG_PROJECT
 #include <linux/sec_sysfs.h>
@@ -2039,7 +2042,13 @@ static void sec_ts_input_close(struct input_dev *dev) {
 	}
 }
 
+/* i2c_driver.remove 返回类型：内核 6.1 起改为 void（rock5b 6.1 BSP），
+ * 此前（A733 5.15 等）返回 int。按内核版本分流签名。 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 static void sec_ts_remove(struct i2c_client *client) {
+#else
+static int sec_ts_remove(struct i2c_client *client) {
+#endif
 	struct sec_ts_data *ts = i2c_get_clientdata(client);
 
 	pr_err("%s\n", __func__);
@@ -2059,7 +2068,9 @@ static void sec_ts_remove(struct i2c_client *client) {
 	ts->plat_data->power(ts, false);
 
 	kfree(ts);
-	// return 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
+	return 0;
+#endif
 }
 
 static void sec_ts_shutdown(struct i2c_client *client) {

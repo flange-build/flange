@@ -6,6 +6,14 @@
 
 ---
 
+## [2026-05-23] sync | radxa-cubie-a7a 新增 meizu-e3-bringup product（魅族 E3 屏跨 SoC 复用）
+
+`wiki/boards/radxa-cubie-a7a.md`：product/variant 加 meizu-e3-bringup、主显示行更新、新增「魅族 E3 屏」一节（overlay 由来 + LCD FPC(J10) 引脚表 + init/timing 平移 + 实测项），DSI 主屏从「未启用项」移出，易踩坑补 twi2 与 8hd 互斥，frontmatter related 补 [[硬件特性包]]、updated → 2026-05-23。
+
+`wiki/concepts/硬件特性包.md`：实例段补「跨 SoC 复用范例」——同包 a7a(A733) 驱动零改动、仅 panel overlay 按 Allwinner sunxi 栈（allwinner,panel-dsi + virtual-panel OF-graph）重写，frontmatter sources/related 补 a7a config。
+
+相关变更：openspec/changes/add-meizu-e3-panel-radxa-cubie-a7a/（实施中）。关键点：A733 显示栈与 Rockchip 完全不同不可移植；allwinner,panel-dsi 与 simple-panel-dsi 消费同一种 panel-init-sequence DCS 字节格式；引脚与同连接器 radxa-display-8hd vendor overlay 1:1 印证。
+
 ## [2026-05-19] fix | orangepi-5-plus GT911 触摸坐标对齐 + 撤销 board kernel patch（vendor 已修源）
 
 DSI 屏首版 dtso 没加 transform，实机 evtest 测到 user(weston) 四向滑动与 reported X/Y 不对应，初判 chip 物理安装相对 panel CCW 90° → dtso 加 `touchscreen-swapped-x-y + touchscreen-inverted-y`。再测 X 方向反向 → 进一步发现 vendor `rk3588-orangepi-5-plus-lcd.dtsi` 注入了 `touchscreen-inverted-x` 与 `touchscreen-swapped-x-y`（针对 OrangePi LCD05 1280×800 横屏的方向预设），与本 panel 物理方向冲突。

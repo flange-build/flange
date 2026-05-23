@@ -1,0 +1,239 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * radxa-cubie-a7a (Allwinner A733 / sun60iw2p1) 魅族 E3 39pin MIPI-DSI 屏
+ * overlay（显示 + 触摸 + 背光）。
+ *
+ * 与 rock5b 同屏不同 SoC：rock5b 走 Rockchip DRM 栈（&dsi1 / VOP VP3 /
+ * simple-panel-dsi），本板走 Allwinner sunxi 栈，无法移植。显示骨架照搬同一
+ * LCD FPC 连接器的官方 vendor overlay `cubie-a7a-radxa-display-8hd.dtso`：
+ *   &dsi0combophy + &dlcd0 + &dsi0(4-lane) + allwinner,virtual-panel 的
+ *   OF-graph 中转 → allwinner,panel-dsi 真实 panel。
+ *
+ * 接线依据 radxa-cubie-a7a 原理图 v1.10 的 LCD FPC（J10）
+ * （components/board/radxa-cubie-a7a/docs/radxa_cubie_a7a_v1.10_schematic.pdf），
+ * 引脚与 radxa-display-8hd 同连接器 1:1 印证：
+ *   显示  : DSI0 4-lane（PD0~PD9: MIPI-DSI0-DP0..DP3 + CKP/CKN）
+ *   屏复位: LCD-RST  = PD21（panel-dsi 驱动管理复位时序）
+ *   电源  : VCC33-LCD = reg_dc1sw1(3.3V) / VCC18-LCD = reg_bldo2(1.8V)
+ *   I2C   : 触摸 + 背光同挂 twi2（TWI2-SCK=PD16 / TWI2-SDA=PD17）
+ *   触摸  : sec_ts@0x48；irq = TP-INT = PD18；reset = TP-RST = PD19
+ *           （sec_ts 驱动不管理 reset，&pio gpio-hog 拉高解复位）
+ *   背光  : 屏自带 SGM37604A I2C 背光芯片 @0x36；使能 = LCD_light_EN = PD23
+ *
+ * panel timing / init-exit 序列移植自 rock5b 的魅族 E3 适配（同屏，
+ * allwinner,panel-dsi 与 simple-panel-dsi 消费同一种 panel-init-sequence
+ * DCS 字节格式 [data_type delay payload_len payload...]）。
+ *
+ * 注意：DSI flags/format 用 <dt-bindings/display/sunxi-lcd.h> 的 sunxi 位
+ * 定义，非 Rockchip 的 drm_mipi_dsi.h。
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/gpio/sun4i-gpio.h>
+#include <dt-bindings/display/sunxi-lcd.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+&{/} {
+	/* TP-RST = PD19：sec_ts 驱动不管理 reset，用 regulator-fixed（always-on +
+	 * boot-on）在注册时把 PD19 拉高解复位。
+	 * 注意：sunxi pinctrl 的 &pio 子节点必须是 pinmux group（pins/function），
+	 * 不能放 Rockchip 风格的 gpio-hog——否则 sunxi pinctrl 驱动按 pinmux 解析失败、
+	 * 整个主 pinctrl probe 挂掉、连带 MMC 等外设失去引脚导致内核找不到 rootfs。
+	 * 故改用 board.dts 同款 regulator-fixed 惯例（参见 wifi_power_en）。 */
+	reg_tp_reset: tp-reset-deassert {
+		compatible = "regulator-fixed";
+		regulator-name = "tp-reset-deassert";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&pio PD 19 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	/* 真实 panel：allwinner,panel-dsi 通用 DSI panel 驱动
+	 * （bsp/drivers/drm/panel/panel-dsi.c）。经 board.dts 既有
+	 * allwinner,virtual-panel 的 OF-graph 中转挂到 dsi0。 */
+	dsi_panel: dsi_panel@1 {
+		compatible = "allwinner,panel-dsi";
+		status = "okay";
+
+		/* LCD 供电：VCC33-LCD(3.3V) + VCC18-LCD(1.8V)，驱动按 power-num
+		 * 顺序 enable/disable（power%d-supply，optional）。 */
+		power-num = <2>;
+		power-delay-ms = <10>;
+		power0-supply = <&reg_dc1sw1>;
+		power1-supply = <&reg_bldo2>;
+
+		/* 屏复位 LCD-RST = PD21，驱动管理复位时序 */
+		reset-num = <1>;
+		reset-delay-ms = <20>;
+		reset-gpios = <&pio PD 21 GPIO_ACTIVE_HIGH>;
+
+		/* 背光指向屏自带的 SGM37604A I2C 芯片（见 &twi2 下 backlight@36） */
+		backlight = <&sgm37604_bl>;
+
+		/* DSI 模式：非 burst video（同板可工作的 radxa-display-10fhd 用的就是
+		 * 这个）。早先测非 burst「不出图」是在 timing 还错(htotal1211)时测的、
+		 * 结论无效；现 timing 正确后重测。format=0 ⇒ RGB888。 */
+		dsi,flags = <(MIPI_DSI_MODE_VIDEO)>;
+		dsi,format = <0>;
+		dsi,lanes = <4>;
+
+		/* 魅族 E3 是 IC 自配置「傻」屏，序列仅 sleep-out + display-on，
+		 * 逐字节平移自 rock5b 适配（已实机点亮）。 */
+		panel-init-sequence = [
+			05 78 01 11
+			05 0A 01 29
+		];
+
+		panel-exit-sequence = [
+			05 10 01 28
+			05 78 01 10
+		];
+
+		disp_timings0: display-timings {
+			native-mode = <&dsi_timing0>;
+			dsi_timing0: timing0 {
+				/* 依据 E3 屏原厂高通 panel DT（s6d6ft0 Tianma FHD，60Hz）：
+				 * htotal=1080+229+4+4=1317, vtotal=2160+8+6+2=2176,
+				 * pixel_clk=1317*2176*60≈171.95MHz。
+				 * （之前抄 rock5b 的 hfp115/hbp13/hsync3→htotal1211 是斜纹根因） */
+				clock-frequency = <171947520>;
+				hactive = <1080>;
+				hfront-porch = <229>;
+				hback-porch = <4>;
+				hsync-len = <4>;
+				vactive = <2160>;
+				vfront-porch = <8>;
+				vback-porch = <6>;
+				vsync-len = <2>;
+			};
+		};
+
+		port {
+			panel0_in: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&panel_output_0>;
+			};
+		};
+	};
+};
+
+&dsi0combophy {
+	status = "okay";
+};
+
+&dlcd0 {
+	status = "okay";
+};
+
+&dsi0 {
+	status = "okay";
+	pinctrl-0 = <&dsi0_4lane_pins_a>;
+	pinctrl-1 = <&dsi0_4lane_pins_b>;
+	pinctrl-names = "active", "sleep";
+
+	ports {
+		dsi0_out: port@1 {
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_input>;
+			};
+		};
+	};
+
+	/* 复用 board.dts 既有的 allwinner,virtual-panel 占位作为
+	 * dsi0 ↔ 真实 panel 的 OF-graph 中转：扩出 port@1 接 dsi_panel。 */
+	panel: panel@0 {
+		compatible = "allwinner,virtual-panel";
+		status = "okay";
+		reg = <0>;
+		ports {
+			panel_in: port@0 {
+				reg = <0>;
+				panel_input: endpoint@0 {
+					reg = <0>;
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+			panel_out: port@1 {
+				reg = <1>;
+				panel_output_0: endpoint@0 {
+					reg = <0>;
+					remote-endpoint = <&panel0_in>;
+				};
+			};
+		};
+	};
+};
+
+/* 触摸 + 背光同挂 twi2（PD16/PD17）。twi2 设置照搬 radxa-display-8hd。 */
+&twi2 {
+	clock-frequency = <400000>;
+	pinctrl-0 = <&twi2_pins_default>;
+	pinctrl-1 = <&twi2_pins_sleep>;
+	pinctrl-names = "default", "sleep";
+	twi_drv_used = <1>;
+	no_suspend = <1>;
+	twi-supply = <&reg_dc1sw1>;
+	status = "okay";
+
+	sec_ts: sec_ts@48 {
+		compatible = "sec,sec_ts";
+		reg = <0x48>;
+		status = "okay";
+		/* sec_ts 驱动 devm_pinctrl_get 强制要 pinctrl；状态名固定
+		 * on_state/off_state（查找失败仅告警非致命）。把 TP-INT=PD18
+		 * 配为输入上拉。 */
+		pinctrl-names = "on_state", "off_state";
+		pinctrl-0 = <&ts_int_active>;
+		pinctrl-1 = <&ts_int_sleep>;
+		sec,irq_gpio = <&pio PD 18 GPIO_ACTIVE_LOW>;
+		/* E3 物理分辨率 1080x2160；X/Y 翻转/镜像方向待实机 evtest 标定。 */
+		sec,max_coords = <1080>, <2160>;
+	};
+
+	/* SGM37604A I2C 背光（屏自带），使能 = LCD_light_EN = PD23。
+	 * 亮度参数平移 rock5b 实机调好的档位：
+	 *  - led-channels=0x1F：dev_en + 全 4 路 LED 通道
+	 *  - max-current=0x03：40mA 最大档
+	 *  - default-brightness-level=2048：约半量程（4095 满量程）
+	 *    可经 /sys/class/backlight/sgm37604a/brightness 在线调节。 */
+	sgm37604_bl: backlight@36 {
+		compatible = "sgmicro,sgm37604a";
+		reg = <0x36>;
+		status = "okay";
+		sgmicro,led-channels = <0x1f>;
+		sgmicro,max-current = <0x03>;
+		default-brightness-level = <2048>;
+		enable-gpios = <&pio PD 23 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&pio {
+	twi2_pins_default: twi2@0 {
+		pins = "PD16", "PD17";
+		function = "twi2";
+		drive-strength = <10>;
+		bias-pull-up;
+	};
+
+	twi2_pins_sleep: twi2@1 {
+		pins = "PD16", "PD17";
+		function = "gpio_in";
+	};
+
+	ts_int_active: ts-int-active {
+		pins = "PD18";
+		function = "gpio_in";
+		bias-pull-up;
+	};
+
+	ts_int_sleep: ts-int-sleep {
+		pins = "PD18";
+		function = "gpio_in";
+	};
+};

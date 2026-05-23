@@ -12,7 +12,8 @@ related:
   - "[[allwinnera733 平台]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-05-21
+  - "[[硬件特性包]]"
+updated: 2026-05-23
 ---
 
 ## TL;DR
@@ -21,12 +22,14 @@ Radxa Cubie A7A，Allwinner A733（sun60iw2p1）SoC，A7 家族主线板。AXP31
 
 ## product / variant
 
-继承 allwinnera733 平台默认：`products: [default]`，`variants: [debug, release]`。
+`products: [default, meizu-e3-bringup]`，`variants: [debug, release]`（variants 继承平台默认）。
 
 ```
-lunch radxa-cubie-a7a-default-debug
-lunch radxa-cubie-a7a-default-release
+lunch radxa-cubie-a7a-default-debug            # 裸机：HDMI 直出 + AC101B 音频
+lunch radxa-cubie-a7a-meizu-e3-bringup-debug   # + 魅族 E3 MIPI-DSI 屏（显示+触摸+背光）
 ```
+
+`default` 产物与加 product 前 byte-identical；`meizu-e3-bringup` 经条件键注入 [[硬件特性包]] `meizu-e3-panel`。
 
 ## 关键差异点
 
@@ -37,7 +40,7 @@ lunch radxa-cubie-a7a-default-release
 | bootloader target | `radxa-cubie-a7a` |
 | PMIC | AXP318（vs a7z 不同型号） |
 | 板载音频 | AC101B 直挂 i2c@3e |
-| 主显示 | MIPI DSI + HDMI 直出（首版仅 HDMI） |
+| 主显示 | HDMI 直出（default）；MIPI DSI 魅族 E3 屏（meizu-e3-bringup） |
 
 ## vs [[radxa-cubie-a7z]] 差异
 
@@ -55,9 +58,25 @@ lunch radxa-cubie-a7a-default-release
 - AC101B 板载音频（`aplay -l` 含 `sunxi-ac101b`）
 - SSH 登录（`flange/flange`）
 
+## 魅族 E3 屏（meizu-e3-bringup product）
+
+同屏跨 SoC 复用 [[硬件特性包]]：`sec_ts`/`sgm37604a` 两 OOT 驱动零改动，仅 panel overlay 按 sunxi 显示栈重写（rock5b 是 Rockchip 栈，不可移植）。overlay = `sun60i-a733-cubie-a7a-meizu-e3-panel.dtso`，骨架抄同连接器的 `cubie-a7a-radxa-display-8hd`：`allwinner,panel-dsi` 经 board.dts `allwinner,virtual-panel` 的 OF-graph 中转挂 `&dsi0`。背光走屏自带 SGM37604A I2C 芯片（非 8hd 的 pwm-backlight）。
+
+LCD FPC（J10）引脚（原理图 v1.10，与 8hd 1:1 印证）：
+
+| 信号 | A733 PIO / 总线 |
+|---|---|
+| DSI 数据 | DSI0 4-lane（PD0–PD9） |
+| 屏复位 LCD-RST | `&pio PD 21` |
+| 触摸+背光 I2C | twi2（PD16/PD17） |
+| 触摸 IRQ / RST | PD18 / PD19（RST 走 gpio-hog 解复位） |
+| 背光使能 | `&pio PD 23` |
+| 电源 3.3V/1.8V | `reg_dc1sw1` / `reg_bldo2` |
+
+init/exit 序列与 timing（1080×2160@157MHz）平移自 rock5b。点屏后实测项：`evtest` 标定触摸 `sec,max_coords` 与 X/Y 翻转；若不亮先查 reset 时序与 DSI PHY 时钟（DE `assigned-clock-rates`）。
+
 ## 未启用项
 
-- **MIPI DSI 主屏**：`board.dts` 中 `panel: panel@0` 为 `allwinner,virtual-panel` placeholder，需具体面板 init 序列方可点亮，独立变更承接
 - GPU（IMG BXM PowerVR）/ NPU / VPU 硬解
 - PoE / camera / display overlay 默认启用（仅作 vendor_overlays 候选）
 
@@ -73,4 +92,4 @@ lunch radxa-cubie-a7a-default-release
 
 - vendor overlay 列表与 a7z 显式重复 20 行（决策：[[../openspec/changes/add-a733-radxa-cubie-a7a/design.md]] 决策 2）。上游加新 sun60iw2p1 overlay 时需在两块板各自补一行。
 - AXP318 PMIC 若内核驱动未启用，apply 阶段 `dmesg | grep axp` 会报 unbound，需 SoC 层补 fragment（独立变更）。
-- a7a board.dts 的 `allwinner,virtual-panel` placeholder 是 BSP 标准，DSI host 启动行为为 nodev，正常情况下不会卡死。
+- meizu-e3-bringup overlay 的 panel/触摸/背光节点共用 twi2（PD16/PD17）；该总线同时是 8hd display overlay 的触摸总线，二者互斥不可同时启。
