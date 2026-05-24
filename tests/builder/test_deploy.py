@@ -105,8 +105,8 @@ class TestDeployAppPathEntry:
         # cwd 设为 tmp_path 让 find_latest_deb 的相对路径解析正确
         monkeypatch.chdir(tmp_path)
 
-        # mock load_current_config 返回带 board/product/variant 的对象
-        fake_config = SimpleNamespace(board="test-board", product="default", variant="release")
+        # mock load_current_config 返回 dict（与真实返回类型一致；find_latest_deb 用下标访问）
+        fake_config = {"board": "test-board", "product": "default", "variant": "release"}
         monkeypatch.setattr(deploy, "load_current_config", lambda: fake_config)
 
         # mock check_adb / get_adb_device 让流程在 adb 之前结束（或 mock 整条 adb）
@@ -128,7 +128,7 @@ class TestDeployAppNamePreservedBehavior:
         """纯名称入参时应调用 list_all 查找。"""
         local = _write_app(tmp_path / "components" / "app" / "adbd", "adbd")
 
-        fake_config = SimpleNamespace(board="test-board", product="default", variant="release")
+        fake_config = {"board": "test-board", "product": "default", "variant": "release"}
         monkeypatch.setattr(deploy, "load_current_config", lambda: fake_config)
         monkeypatch.setattr(deploy, "check_adb", lambda: False)
         monkeypatch.chdir(tmp_path)

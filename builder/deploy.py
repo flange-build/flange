@@ -31,7 +31,9 @@ def get_adb_device() -> str | None:
 
 def find_latest_deb(app_name: str, config) -> Path | None:
     """在构建产物目录中查找最新的 app .deb 文件。"""
-    target_dir = Path(f".build/target/{config.board}/{config.product}/{config.variant}/app").resolve()
+    # config 是 load_current_config() 返回的 dict（与 base.py/app.py 一致用下标），
+    # 不是对象——此前误用 config.board 属性访问会抛 AttributeError。
+    target_dir = Path(f".build/target/{config['board']}/{config['product']}/{config['variant']}/app").resolve()
     if not target_dir.exists():
         return None
     
