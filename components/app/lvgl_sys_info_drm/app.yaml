@@ -1,0 +1,41 @@
+app:
+  name: lvgl_sys_info_drm
+  version: 1.0.0
+  description: 基于 LVGL + libdrm/GBM/EGL 的系统信息面板（nothing-design，触摸交互）
+  type: service
+  arch:
+    - aarch64
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+# 运行时依赖：仅声明真正由 dpkg 管理的库。
+# GL 栈（libgbm/libEGL/libGLESv2）在 vendor-GL SoC（如 A7A PowerVR）上由 BSP
+# 装在 /usr/local/lib 并经 ld.so.conf.d 生效，不归 dpkg 管——硬 Depends 既无法
+# 满足（dpkg -i 会失败），强装 Mesa 包还会盖掉 vendor 驱动，故不列入。
+depends:
+  - libdrm2
+  - libfreetype6
+
+# systemd：常驻 enable，ExecStart 指向 wrapper（读 config 标志位决定是否拉起面板）
+systemd:
+  unit: systemd/lvgl_sys_info_drm.service
+  auto_start: true
+
+# 字体：res/ 约定只收直下文件、跳过子目录，故 res/fonts/ 下的 TTF 需显式映射。
+# FreeType 运行时从 /usr/share/lvgl_sys_info_drm/fonts/ 加载（见 ui_theme.c）。
+install:
+  res/fonts/Doto-Variable.ttf: /usr/share/lvgl_sys_info_drm/fonts/Doto-Variable.ttf
+  res/fonts/SpaceGrotesk-Variable.ttf: /usr/share/lvgl_sys_info_drm/fonts/SpaceGrotesk-Variable.ttf
+  res/fonts/SpaceMono-Regular.ttf: /usr/share/lvgl_sys_info_drm/fonts/SpaceMono-Regular.ttf
+  res/fonts/OFL-Doto.txt: /usr/share/lvgl_sys_info_drm/fonts/OFL-Doto.txt
+  res/fonts/OFL-SpaceGrotesk.txt: /usr/share/lvgl_sys_info_drm/fonts/OFL-SpaceGrotesk.txt
+  res/fonts/OFL-SpaceMono.txt: /usr/share/lvgl_sys_info_drm/fonts/OFL-SpaceMono.txt
+
+# 运行时可写状态目录：持久化设置 config.json
+data_dirs:
+  - /var/lib/lvgl_sys_info_drm
+
+build:
+  system: cmake

@@ -1,0 +1,4 @@
+# CMake 交叉构建中间产物（含 FetchContent 拉取的 LVGL 源码）
+/build/
+# flange 约定捡走的产物目录，由构建生成
+/bin/

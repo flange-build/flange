@@ -1,0 +1,19 @@
+[Unit]
+Description=LVGL 系统信息面板（libdrm/GBM/EGL 直绘）
+# 关键：不依赖 dev-dri-card*.device —— 该依赖会卡死 boot（A7A weston 踩过的坑）。
+# 仅要求基础系统起来即可；DRM 设备由 App 启动时自行枚举选择。
+After=multi-user.target
+# 与 compositor 互斥：本 App 独占 DRM master，部署时须停用 weston 自启
+Conflicts=weston.service
+
+[Service]
+Type=simple
+# ExecStart 指向 wrapper：由它读 config.json 的 autostart 标志位决定是否拉起面板
+ExecStart=/usr/lib/lvgl_sys_info_drm/start.sh
+Restart=on-failure
+RestartSec=2
+# 需要 DRM master、读取 /proc /sys、写 /sys/class/backlight，以 root 运行
+User=root
+
+[Install]
+WantedBy=multi-user.target

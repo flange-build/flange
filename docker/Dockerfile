@@ -75,6 +75,18 @@ RUN dpkg --add-architecture arm64 \
     && mkdir -p /etc/meson \
     && rm -rf /var/lib/apt/lists/*
 
+# GUI App（LVGL + libdrm/GBM/EGL/GLESv2 + FreeType）交叉编译所需 arm64 dev 库。
+# 单独成层：不动上面的工具链大层，保留其缓存、省磁盘与重建时间。
+# Ubuntu 交叉走 multiarch sysroot 模型——headers 落 /usr/include，libs 落
+# /usr/lib/aarch64-linux-gnu，aarch64-linux-gnu-gcc 配合 :arm64 dev 包即可定位。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libdrm-dev:arm64 \
+        libgbm-dev:arm64 \
+        libegl-dev:arm64 \
+        libgles-dev:arm64 \
+        libfreetype-dev:arm64 \
+    && rm -rf /var/lib/apt/lists/*
+
 # meson cross-file：路径与 builder/app.py 中 _BUILD_SYSTEMS["meson"] 模板引用
 # 的 --cross-file /etc/meson/cross-<arch>.ini 一致。源文件可见于 docker/meson/。
 COPY docker/meson/cross-aarch64.ini /etc/meson/cross-aarch64.ini
