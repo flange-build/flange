@@ -1348,6 +1348,14 @@ static int sec_ts_parse_dt(struct i2c_client *client) {
 	pdata->max_x = coords[0];
 	pdata->max_y = coords[1];
 
+	/* a7a：sunxi twi2 drv 模式下 SW_RESET 后无法恢复与 0x48 的通信，置位则跳过
+	 * on-probe 的软复位+强刷（见 sec_ts_fwupdate_work）。rock-5b 不带此属性。 */
+	pdata->skip_fwup_on_probe =
+			of_property_read_bool(np, "sec,skip-fw-update-on-probe");
+	if (pdata->skip_fwup_on_probe)
+		input_info(true, &client->dev,
+							 "sec,skip-fw-update-on-probe set: skip sw-reset & on-probe fw update\n");
+
 	if (of_property_read_u32_array(np, "sec,num_lines", lines, 2))
 		input_info(true, &client->dev, "skipped to get num_lines property\n");
 	else {
@@ -1941,35 +1949,47 @@ static void sec_ts_fwupdate_work(struct work_struct *work) {
 	/* Enable Power */
 	ts->plat_data->power(ts, true);
 	ts->power_status = SEC_TS_STATE_POWER_ON;
-	ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SW_RESET, NULL, 0);
-	sec_ts_delay(500);
-	sec_ts_wait_for_ready(ts, SEC_TS_ACK_BOOT_COMPLETE);
+
+	if (ts->plat_data->skip_fwup_on_probe) {
+		/* a7a：芯片出厂已带可用固件(device_id=0xAC=ID_ON_FW)，无需 on-probe 强刷；
+		 * 也跳过 SW_RESET + wait_for_ready 引导握手——实测该握手并不能消除 idle 持续
+		 * 拉 INT(根因在芯片/模组侧而非此握手)，反因 SW_RESET 后芯片不回 BOOT_COMPLETE
+		 * 致 wait_for_ready 超时、白加 ~2.8s 开机延时。直接读信息后使能中断即可：触摸
+		 * 正常(engine 模式下 read_event 轮询取坐标)。rock-5b 不置该属性、走下面完整
+		 * SW_RESET + fw flash 路径(实测可用)。 */
+		input_info(true, &ts->client->dev,
+							 "%s: skip sw-reset & fw flash on probe (a7a)\n", __func__);
+	} else {
+		ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SW_RESET, NULL, 0);
+		sec_ts_delay(500);
+		sec_ts_wait_for_ready(ts, SEC_TS_ACK_BOOT_COMPLETE);
 
 #ifndef CONFIG_FW_UPDATE_ON_PROBE
-	input_info(true, &ts->client->dev, "%s: fw update on probe disabled!\n",
-						 __func__);
-	sec_ts_check_firmware_version(ts, sec_get_fwdata());
+		input_info(true, &ts->client->dev, "%s: fw update on probe disabled!\n",
+							 __func__);
+		sec_ts_check_firmware_version(ts, sec_get_fwdata());
 
-	ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_CALIBRATION_OFFSET_SDC, NULL, 0);
-	if (ret < 0) {
-		input_err(true, &ts->client->dev, "%s: calibration fail\n", __func__);
-	}
-	sec_ts_delay(1000);
+		ret = ts->sec_ts_i2c_write(ts, SEC_TS_CMD_CALIBRATION_OFFSET_SDC, NULL, 0);
+		if (ret < 0) {
+			input_err(true, &ts->client->dev, "%s: calibration fail\n", __func__);
+		}
+		sec_ts_delay(1000);
 
-	ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SW_RESET, NULL, 0);
-	sec_ts_delay(500);
+		ts->sec_ts_i2c_write(ts, SEC_TS_CMD_SW_RESET, NULL, 0);
+		sec_ts_delay(500);
 #endif
 
 #ifdef CONFIG_FW_UPDATE_ON_PROBE
-	ret = sec_ts_firmwarei_update_on_probe(ts);
-	if (ret < 0) {
-		input_err(true, &ts->client->dev, "%s: fw update fail, ret = %d!\n",
-							__func__, ret);
-		goto err_init;
-	} else
-		input_err(true, &ts->client->dev, "%s: fw update success, ret = %d!\n",
-							__func__, ret);
+		ret = sec_ts_firmwarei_update_on_probe(ts);
+		if (ret < 0) {
+			input_err(true, &ts->client->dev, "%s: fw update fail, ret = %d!\n",
+								__func__, ret);
+			goto err_init;
+		} else
+			input_err(true, &ts->client->dev, "%s: fw update success, ret = %d!\n",
+								__func__, ret);
 #endif
+	}
 
 	ret = sec_ts_read_information(ts);
 	if ((ts->tx_count == 0) || (ts->rx_count == 0)) {
@@ -2060,6 +2080,12 @@ static int sec_ts_remove(struct i2c_client *client) {
 #endif
 
 	free_irq(client->irq, ts);
+
+	/* 对称释放 sec_ts_parse_dt 里 gpio_request_one(pdata->gpio,"sec,tsp_int")
+	 * 申请的 IRQ GPIO（PD18）。原驱动漏 free → rmmod 后 GPIO 残留、重新 probe
+	 * 申请同一引脚失败(-EINVAL)、无法热重载（必须重启）。 */
+	if (gpio_is_valid(ts->plat_data->gpio))
+		gpio_free(ts->plat_data->gpio);
 
 	input_mt_destroy_slots(ts->input_dev);
 	input_unregister_device(ts->input_dev);

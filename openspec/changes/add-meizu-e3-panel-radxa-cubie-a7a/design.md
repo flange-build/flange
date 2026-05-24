@@ -140,9 +140,12 @@ DSI 数据走 DSI0 4-lane（PD0–PD9：`MIPI-DSI0-DP0..DP3` + `CKP/CKN`），�
 - **远程隔屏调显示低效**：用 `modetest -s 147:1080x2160`（libdrm-tests）出稳定测试图 + 保持管线活跃，是远程判断画质的关键手段（用户态写 /dev/fb0、/dev/tty0 唤不醒已 gate 的 DRM 管线）。
 - **fbcon 默认在 dummy**：本镜像 `vtcon0=dummy` 占用控制台、`vtcon1=frame buffer device` 未绑，故开机后/modetest 退出后面板黑。`echo 1 > /sys/class/vtconsole/vtcon1/bind` 可让控制台常驻面板（开机自动绑定属独立 console 配置，待收尾）。
 
-### 触摸（未完成，待续）
+### 触摸（已实板通过，2026-05-24）
 
-- 触摸 `sec_ts@0x48`(twi2) 引脚已对原理图核实正确（TP-INT=PD18、TP-RST=PD19、TP-SCL/SDA=PD16/17、TP-VCC=VCC18-LCD 1.8V 已供电、I2C 上拉 2.2K 已贴）。
-- 现象：芯片 I2C **NACK 不应答**（同总线背光 sgm37604a@0x36 正常），驱动注册了 input 但运行期 `i2c read one event failed` 刷屏。
-- 已排除：电源（TP-VCC=VCC18-LCD 已上）、复位（PD19 实测 out hi 已解除）、总线/上拉、地址（rock5b 同模组 @0x48 验证）。
-- 头号嫌疑：s6d6ft0 是 TDDI（触显一体），触摸 I2C 可能需显示**活动扫描**时才唤醒；待干净验证（开机即让显示活动后再看 NACK 是否停）。次选：上电后需复位**脉冲**而非常高、或 IRQ 极性。
+`evtest` 出真坐标、多点 tracking 正常。排查推翻多个假设，最终三处修复（均 a7a 专属，rock5b 零改动）：
+
+1. **开机自动刷固件刷死芯片** → 跳过。boot dmesg 实证：芯片开机正常（`read_device_id: AC`=`SEC_TS_ID_ON_FW`，出厂带 FW），但探针后 4s 的 `sec_ts_fwupdate_work` 无条件发 `SEC_TS_CMD_SW_RESET` + 强刷 → 芯片永久 NACK 卡死。先前误判「从头 NACK / TDDI 需显示扫描」是 dmesg 缓冲被刷屏滚掉开机段所致。修复：DT 加 `sec,skip-fw-update-on-probe`，驱动按板跳过（`sec_ts.h` 加 `plat_data->skip_fwup_on_probe`，`CONFIG_FW_UPDATE_ON_PROBE` 保持定义，rock5b 走原路径）。
+2. **sunxi TWI drv 模式扛不住运行时高频读** → 切 engine 模式。芯片救活后 `enable_irq` 进 `read_event` 高频背靠背 write-then-read，约 0.5s drv 引擎进 `TWI BUS error 0x18/0x20` 不自恢复。修复：a7a `&twi2` `twi_drv_used` 从 1 改 **0**（engine 模式，与 rock5b Rockchip i2c6 行为一致；底板 twi0 亦用 0）。
+3. **`sec_ts_remove` 漏 `gpio_free(PD18)`** → 补上（旁支，修 rmmod 后无法重 probe -22）。
+
+**已知非阻塞项**：idle 时 INT(PD18) 被芯片侧一直拉低 → level 中断空涨 ~1850/s（触摸靠 read_event 轮询工作）。试过加内部上拉、补 SW_RESET 引导握手均无效（已回退）；非 SoC 引脚配置问题（PD18 GPIO 模式/level/上拉均正常）。根因在芯片固件(boot status=0x20 watchdog)或屏模组硬件，软件层无 datasheet 难治，接受。

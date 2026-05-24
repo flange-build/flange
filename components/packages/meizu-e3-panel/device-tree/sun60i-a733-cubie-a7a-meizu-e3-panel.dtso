@@ -176,7 +176,13 @@
 	pinctrl-0 = <&twi2_pins_default>;
 	pinctrl-1 = <&twi2_pins_sleep>;
 	pinctrl-names = "default", "sleep";
-	twi_drv_used = <1>;
+	/* engine 模式（=0），不用 drv 引擎模式（=1）。drv 模式能扛 probe/fwupdate
+	 * 那种有间隔、互斥保护的零散读，但扛不住 sec_ts IRQ 驱动的高频背靠背
+	 * write-then-read：实测 enable_irq 进入 read_event 循环后约 0.5s，drv 引擎即
+	 * 进 TWI BUS error(0x18/0x20) 且不自恢复→对 0x48 持续 NACK、触摸无事件。
+	 * engine 模式逐字节中断、NACK/总线恢复走经典路径，与能跑通的 rock-5b
+	 * Rockchip 控制器行为一致。底板 twi0 亦用 twi_drv_used=0，本板支持该模式。 */
+	twi_drv_used = <0>;
 	no_suspend = <1>;
 	twi-supply = <&reg_dc1sw1>;
 	status = "okay";
@@ -185,15 +191,26 @@
 		compatible = "sec,sec_ts";
 		reg = <0x48>;
 		status = "okay";
-		/* sec_ts 驱动 devm_pinctrl_get 强制要 pinctrl；状态名固定
-		 * on_state/off_state（查找失败仅告警非致命）。把 TP-INT=PD18
-		 * 配为输入上拉。 */
+		/* TP-INT=PD18：状态名必须用驱动私有的 "on_state"/"off_state"，不能用
+		 * "default"。sunxi pinctrl 上同一引脚无法同时存在 pinmux 状态 + gpio_request
+		 * （二者互斥，无论谁先）：driver core 若先自动应用 "default" 把 PD18 占为
+		 * pinmux，随后 sec_ts_parse_dt 的 gpio_request_one(PD18) 就 claim 不到、
+		 * probe 直接 -EINVAL 挂掉（实测）。用 "on_state" 时 gpio_request 先成功，
+		 * 之后 pinctrl_select_state("on_state") 配 bias-pull-up 会因引脚已被 GPIO
+		 * 占用而失败（仅告警、上拉不生效，非致命）。on_state 仍保留供
+		 * devm_pinctrl_get 不报错。 */
 		pinctrl-names = "on_state", "off_state";
 		pinctrl-0 = <&ts_int_active>;
 		pinctrl-1 = <&ts_int_sleep>;
 		sec,irq_gpio = <&pio PD 18 GPIO_ACTIVE_LOW>;
 		/* E3 物理分辨率 1080x2160；X/Y 翻转/镜像方向待实机 evtest 标定。 */
 		sec,max_coords = <1080>, <2160>;
+		/* a7a 专用：跳过 on-probe 的 SW_RESET 引导握手 + 固件强刷。芯片出厂已带可用
+		 * 固件(无需重刷)；SW_RESET 在 drv 模式会刷死、在 engine 模式虽安全但既不能消
+		 * 除 idle 持续拉 INT(根因在芯片/模组侧)、又因芯片不回 BOOT_COMPLETE 致
+		 * wait_for_ready 超时白加 ~2.8s 开机延时，故一并跳过。触摸靠 read_event 轮询
+		 * 正常工作。rock-5b overlay 不设此属性，走完整 SW_RESET + fw-update 路径。 */
+		sec,skip-fw-update-on-probe;
 	};
 
 	/* SGM37604A I2C 背光（屏自带），使能 = LCD_light_EN = PD23。

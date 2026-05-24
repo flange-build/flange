@@ -73,7 +73,7 @@ LCD FPC（J10）引脚（原理图 v1.10，与 8hd 1:1 印证）：
 | 背光使能 | `&pio PD 23` |
 | 电源 3.3V/1.8V | `reg_dc1sw1` / `reg_bldo2` |
 
-init/exit 序列与 timing（1080×2160@157MHz）平移自 rock5b。点屏后实测项：`evtest` 标定触摸 `sec,max_coords` 与 X/Y 翻转；若不亮先查 reset 时序与 DSI PHY 时钟（DE `assigned-clock-rates`）。
+init/exit 序列平移自 rock5b；timing 用 E3 原厂高通权威值 **htot1317 / 171.95MHz / 60Hz** + **非 burst** `MIPI_DSI_MODE_VIDEO`（抄 rock5b 的 157MHz/htot1211 出斜纹、burst 出细条纹）。触摸已实板通过（`evtest` 出坐标，X/Y 翻转待标定）。
 
 ## 未启用项
 
@@ -93,3 +93,4 @@ init/exit 序列与 timing（1080×2160@157MHz）平移自 rock5b。点屏后实
 - vendor overlay 列表与 a7z 显式重复 20 行（决策：[[../openspec/changes/add-a733-radxa-cubie-a7a/design.md]] 决策 2）。上游加新 sun60iw2p1 overlay 时需在两块板各自补一行。
 - AXP318 PMIC 若内核驱动未启用，apply 阶段 `dmesg | grep axp` 会报 unbound，需 SoC 层补 fragment（独立变更）。
 - meizu-e3-bringup overlay 的 panel/触摸/背光节点共用 twi2（PD16/PD17）；该总线同时是 8hd display overlay 的触摸总线，二者互斥不可同时启。
+- 触摸 `sec_ts@0x48` 的 a7a 专属两改（rock5b 都不需要）：① `&twi2` 必须 `twi_drv_used=<0>`（engine 模式）——drv 模式扛不住 `read_event` 高频读会 bus-error 卡死；② DT 加 `sec,skip-fw-update-on-probe` 跳过开机自动刷固件——其 `SW_RESET`+强刷会把出厂带 FW 的芯片刷死成永久 NACK。idle 时 sec_ts 中断 ~1850/s 空涨是芯片侧 INT 持续拉低的已知非阻塞项（触摸靠轮询，功能正常）。

@@ -395,3 +395,7 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 `wiki/boards/radxa-rock5b.md` 加「MIPI-DSI 屏（meizu-e3-panel）」一节（dsi1/vp3、i2c6 触摸+sgm37604a 背光、OF-graph 端口、LCD_PWREN 供电、亮度参数），frontmatter sources/related 补包文件与原理图，updated → 2026-05-22。
 
 相关变更：openspec/changes/archive/2026-05-21-add-meizu-e3-panel-package/（已归档，主 specs 同步：hardware-feature-packages 新建、meizu-e3-panel 新建、extlinux-dtb-overlays 加 package overlay 第四源）。实机点亮坑：U-Boot 2017.09 overlay 根节点须包 fragment、背光是 sgm37604a I2C 非 pwm-backlight、默认亮度别用极低值。
+
+## [2026-05-24] sync | radxa-cubie-a7a 魅族 E3 触摸实板通过 + 三处 a7a 专属修复
+
+`wiki/boards/radxa-cubie-a7a.md`：触摸段从「待测」更新为「已通」，订正显示 timing（htot1317/171.95MHz/非 burst，原误写 157MHz）；易踩坑补触摸两坑——① `&twi2` 必须 engine 模式 `twi_drv_used=<0>`（drv 模式扛不住 read_event 高频读会 bus-error 卡死），② DT 加 `sec,skip-fw-update-on-probe` 跳过开机自动刷固件（SW_RESET+强刷会刷死出厂带 FW 的芯片）；idle 中断空涨记为已知非阻塞项。相关变更：openspec/changes/add-meizu-e3-panel-radxa-cubie-a7a/（design.md 触摸段 + tasks 组 7）。

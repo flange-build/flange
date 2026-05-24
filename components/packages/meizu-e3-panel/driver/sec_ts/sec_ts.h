@@ -68,6 +68,9 @@
 #define SEC_TS_DRV_VERSION 								"g_6ft0.v00"
 
 #define SEC_TS_FW_MAX_BURSTSIZE 					256
+/* on-probe 固件升级：rock-5b（Rockchip i2c6）路径实测可用，保持开启。
+ * a7a（sunxi twi2 drv 模式）上软复位后无法恢复与 0x48 的通信→芯片卡死 NACK，
+ * 由 DT 属性 "sec,skip-fw-update-on-probe" 按板跳过，见 sec_ts_fwupdate_work。 */
 #define CONFIG_FW_UPDATE_ON_PROBE
 
 //#define POR_AFTER_I2C_RETRY
@@ -467,6 +470,11 @@ struct sec_ts_plat_data {
 	unsigned gpio_det;
 	int irq_type;
 	int i2c_burstmax;
+
+	/* a7a（sunxi twi2 drv 模式）专用：DT 属性 "sec,skip-fw-update-on-probe"。
+	 * 置位时 sec_ts_fwupdate_work 跳过 SW_RESET + wait_for_ready + on-probe 强刷，
+	 * 直接读信息并使能中断（芯片出厂已带可用固件）。rock-5b 不置位、行为不变。 */
+	bool skip_fwup_on_probe;
 
 	const char *firmware_name;
 	const char *parameter_name;

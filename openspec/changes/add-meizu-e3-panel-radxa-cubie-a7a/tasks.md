@@ -23,7 +23,7 @@
 
 - [x] 4.1 实板点亮：`allwinner,panel-dsi` 绑定、屏显示**清晰稳定**（modetest SMPTE + fbcon 控制台验证）。**获胜配置**：timing 用高通权威值(htot1317/60Hz) + **非 burst** `MIPI_DSI_MODE_VIDEO`（详见 design.md「Bring-up 实测结论」）
 - [x] 4.2 背光：`/sys/class/backlight/sgm37604a` 出现、brightness 可调（实测 2048/4095 亮）
-- [ ] 4.3 触摸（**未完成，明天续**）：`sec_ts@0x48` I2C **NACK 不应答**（同总线背光正常）；引脚已对原理图核实正确；头号嫌疑 TDDI 触摸需显示活动扫描时唤醒，待干净验证（见 design.md 触摸段）
+- [x] 4.3 触摸（**已实板通过**）：`evtest` 出真坐标、多点 tracking 正常。先前「NACK 不应答」是被开机自动刷固件刷死所致（非 TDDI/总线/地址问题）；三处修复见组 7。idle 中断空涨为已知非阻塞项（见 design.md 触摸段）
 - [x] 4.4 闪屏根因已定位：斜纹=timing 错(htot1211 应 1317)；细条纹+抖动=burst 模式（改非 burst 解决）。均为 overlay 层修复，未碰 SoC platform
 - [ ] 4.5 收尾（待续）：fbcon 开机自动绑定（控制台常驻面板）；清理设备调试改动（extlinux `console=tty0 consoleblank=0`）
 
@@ -37,3 +37,11 @@
 - [x] 6.1 `sec_ts`：A733 linux-5.15 无 `<linux/wakelock.h>`（rock5b 6.1 BSP 自带 Android 兼容头）。新增 `driver/sec_ts/sec_ts_wakelock.h` 兼容垫片（`__has_include` 守卫：有则用原生、无则映射到现代 wakeup_source）；两处 `#include <linux/wakelock.h>` 改为 `"sec_ts_wakelock.h"`。已验证 a733 编译通过、rock5b 走原生路径零变化
 - [x] 6.2 `sec_ts` + `sgm37604a`：i2c_driver `.remove` 返回类型 6.1 改 void、5.15 为 int。两驱动的 remove 函数加 `LINUX_VERSION_CODE >= KERNEL_VERSION(6,1,0)` 版本守卫（含 `<linux/version.h>`），已验证两边各自正确
 - [x] 6.3 用 Docker 内 `make M=` 单独编译 + `flange build kernel` 双重验证：`sec_ts.ko` / `sgm37604a.ko` 在 a733 5.15 干净编译并安装到 `updates/`
+
+## 7. 触摸 bring-up 修复（实板调试发现，原假设「驱动零改动」再次证伪）
+
+- [x] 7.1 跳过开机自动刷固件（根因：`sec_ts_fwupdate_work` 无条件 `SW_RESET`+强刷把出厂带 FW 的芯片刷死）：`sec_ts.h` 加 `plat_data->skip_fwup_on_probe`；`sec_ts_parse_dt` 读 `of_property_read_bool(np,"sec,skip-fw-update-on-probe")`；`sec_ts_fwupdate_work` 按板分流（a7a 跳过 SW_RESET+wait+强刷直接 read_information；rock5b 走原 `CONFIG_FW_UPDATE_ON_PROBE` 路径不变）；a7a overlay `sec_ts@48` 加 `sec,skip-fw-update-on-probe;`
+- [x] 7.2 a7a `&twi2` `twi_drv_used` 从 `<1>` 改 `<0>`（engine 模式）：drv 模式扛不住 `read_event` 高频背靠背读、约 0.5s 进 `TWI BUS error 0x18/0x20` 卡死；engine 模式逐字节中断+经典 NACK/总线恢复，与 rock5b Rockchip i2c6 一致（底板 twi0 亦用 0）
+- [x] 7.3 `sec_ts_remove` 补 `gpio_free(ts->plat_data->gpio)`（对称 parse_dt 的 gpio_request_one），修 rmmod 后重 probe -22
+- [ ] 7.4 idle 中断空涨（~1850/s，非阻塞）：INT(PD18) 被芯片侧持续拉低、触摸靠轮询工作。加内部上拉 / 补 SW_RESET 引导握手均无效（已回退）；非 SoC 引脚配置问题；根因在芯片固件(watchdog 0x20)或屏模组硬件，无 datasheet 难根治，**接受为已知限制**
+- [x] 7.5 实板验证两板互不回退：a7a `evtest` 出坐标、0x48 零 NACK、idle 输入层零事件；rock5b 路径（`CONFIG_FW_UPDATE_ON_PROBE` + drv 模式 + 完整 reset/flash）源码与编译条件分支均零改动
