@@ -62,6 +62,19 @@ SOC = {
         ],
     },
     "rootfs": {
+        "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        # PowerVR DDK（下方 xserver-xorg-img-bxm）的运行时依赖：该 deb 的
+        # control 没有 Depends 字段，dpkg -i 又不解析依赖，ubuntu-base 也不带，
+        # 故必须在此显式 apt 安装，否则 libEGL.so.1 因 libdrm.so.2 等缺失而
+        # 根本无法 dlopen（实板 ldd 验证缺 12 个 .so）。这些都是低层库（libdrm /
+        # xcb / x11-xcb / xshmfence / wayland），非 GL 实现，不与 PVR EGL 冲突。
+        "+packages": [
+            "libdrm2",
+            "libxcb1", "libxcb-dri2-0", "libxcb-dri3-0", "libxcb-randr0",
+            "libxcb-xfixes0", "libxcb-present0", "libxcb-sync1",
+            "libx11-xcb1", "libxshmfence1",
+            "libwayland-server0", "libwayland-client0",
+        ],
         # 以下 deb 不在 Ubuntu 官方源中，通过 URL 直下 + sha256 校验安装
         # — 来自 radxa-pkg/allwinner-prebuilt-extra
         "+extra_debs": [
@@ -96,9 +109,6 @@ SOC = {
         "toolchain_url": "https://github.com/radxa/allwinner-toolchain/releases/download/aiot-linux-v1.4.6/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi.tar.xz",
         "riscv_tarball": "riscv64-elf-x86_64-20201104.tar.gz",
         "riscv_url": "https://github.com/radxa/allwinner-toolchain/releases/download/aiot-linux-v1.4.6/riscv64-elf-x86_64-20201104.tar.gz",
-    },
-    "rootfs": {
-        "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
     },
     "boot": {
         "dtb_filename": "sunxi.dtb",
