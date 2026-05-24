@@ -30,12 +30,12 @@
 
 - 显示链路 MUST 使能 `&dsi0combophy`、`&dlcd0`、`&dsi0`（4-lane，`pinctrl` 用 `dsi0_4lane_pins_a`/`dsi0_4lane_pins_b`，`pinctrl-names = "active","sleep"`）。
 - 真实 panel 节点 MUST 用 `compatible = "allwinner,panel-dsi"`，并经 board.dts 既有 `panel: panel@0`（`allwinner,virtual-panel`）的 OF-graph 中转：virtual-panel 的 `port@1` 端点 MUST 与真实 panel 节点的 `port` 端点互连。
-- DSI 模式属性 MUST 使用 `<dt-bindings/display/sunxi-lcd.h>` 常量（`dsi,flags`、`dsi,format`、`dsi,lanes = <4>`），MUST NOT 使用 Rockchip 的 `<dt-bindings/display/drm_mipi_dsi.h>`。
-- `panel-init-sequence` / `panel-exit-sequence` MUST 沿用魅族 E3 的 DCS 字节序列（与 rock5b 同格式 `[data_type delay payload_length payload...]`：init 为 sleep-out `05 78 01 11` + display-on `05 0A 01 29`）；`display-timings` MUST 为 1080×2160 @ 157MHz。
+- DSI 模式属性 MUST 使用 `<dt-bindings/display/sunxi-lcd.h>` 常量（`dsi,flags`、`dsi,format`、`dsi,lanes = <4>`），MUST NOT 使用 Rockchip 的 `<dt-bindings/display/drm_mipi_dsi.h>`。`dsi,flags` MUST 为**非 burst** `MIPI_DSI_MODE_VIDEO`（实测 burst 在 A733 出细密竖条纹+抖动；高通原厂写 burst_mode 但 Allwinner burst 实现不等价）。
+- `panel-init-sequence` / `panel-exit-sequence` MUST 沿用魅族 E3 的 DCS 字节序列（与 rock5b 同格式 `[data_type delay payload_length payload...]`：init 为 sleep-out `05 78 01 11` + display-on `05 0A 01 29`）；`display-timings` MUST 用 E3 原厂高通权威值 **1080×2160 @ 60Hz、htotal=1317（hfp229/hbp4/hsync4）/ vtotal=2176（vfp8/vbp6/vsync2）/ pixel-clock≈171.95MHz**（抄 rock5b 的 157MHz/htotal1211 是斜纹根因）。
 - 屏复位 MUST 接 `&pio PD 21`（LCD-RST），`reset-num`/`reset-delay-ms` 由 panel 节点声明（驱动管理复位时序）。
 - 电源 MUST 由 `power0-supply = <&reg_dc1sw1>`（VCC33-LCD，3.3V）与 `power1-supply = <&reg_bldo2>`（VCC18-LCD，1.8V）提供，`power-num = <2>`。
-- 触摸 `sec_ts@0x48` 与背光 `backlight@0x36` MUST 挂 `&twi2`（PD16/PD17，`function="twi2"`），`twi_drv_used = <1>`。
-- 触摸节点 `compatible = "sec,sec_ts"`，`sec,irq_gpio = <&pio PD 18 ...>`（TP-INT，驱动内部 `gpio_to_irq`），`sec,max_coords = <1080>, <2160>`；复位脚 `&pio PD 19`（TP-RST），因 sec_ts 驱动不管理 reset，MUST 用 `&pio` gpio-hog 输出高解复位。
+- 触摸 `sec_ts@0x48` 与背光 `backlight@0x36` MUST 挂 `&twi2`（PD16/PD17，`function="twi2"`），`twi_drv_used` MUST 为 **`<0>`（engine 模式）**：drv 模式（`<1>`）扛不住 `sec_ts` 运行时 `read_event` 的高频背靠背 write-then-read，约 0.5s 进 `TWI BUS error 0x18/0x20` 卡死；engine 模式逐字节中断 + 经典 NACK/总线恢复，与 rock5b Rockchip i2c6 行为一致。
+- 触摸节点 `compatible = "sec,sec_ts"`，`sec,irq_gpio = <&pio PD 18 ...>`（TP-INT，驱动内部 `gpio_to_irq`），`sec,max_coords = <1080>, <2160>`；复位脚 `&pio PD 19`（TP-RST），因 sec_ts 驱动不管理 reset，MUST 用 `regulator-fixed`（`gpio = <&pio PD 19>`、`enable-active-high`、`always-on`、`boot-on`）在注册时拉高解复位——MUST NOT 用 `&pio` gpio-hog（sunxi pinctrl 按 pinmux group 解析 gpio-hog 会致主 pinctrl probe 挂掉、连带 MMC 失引脚找不到 rootfs）。
 - 背光节点 `compatible = "sgmicro,sgm37604a"`，使能脚 `&pio PD 23`（LCD_light_EN），panel `backlight` phandle MUST 引用之；亮度参数（`led-channels`/`max-current`/`default-brightness-level`）MUST 取实机可见档位（沿用 rock5b 调好的 `default-brightness-level = <2048>` 等）。
 - MUST NOT 使用 `pwm-backlight`（E3 屏自带 SGM37604A I2C 背光，不走 8hd 模板的 PD22/PWM0-4）。
 
@@ -49,8 +49,8 @@
 #### Scenario: 触摸与背光挂 twi2
 
 - **WHEN** overlay 应用到 radxa-cubie-a7a
-- **THEN** `&twi2`（PD16/PD17）上出现 `sec_ts@0x48`（irq-gpio = `<&pio PD 18>`）与 `backlight@0x36`（`sgmicro,sgm37604a`，enable = `<&pio PD 23>`）
-- **AND** TP-RST（`&pio PD 19`）经 gpio-hog 输出高解复位
+- **THEN** `&twi2`（PD16/PD17，`twi_drv_used = <0>` engine 模式）上出现 `sec_ts@0x48`（irq-gpio = `<&pio PD 18>`）与 `backlight@0x36`（`sgmicro,sgm37604a`，enable = `<&pio PD 23>`）
+- **AND** TP-RST（`&pio PD 19`）经 `regulator-fixed`（always-on/boot-on）拉高解复位，overlay 中不出现 `gpio-hog`
 - **AND** panel `backlight` phandle 引用 `backlight@0x36`，overlay 中不出现 `pwm-backlight`
 
 #### Scenario: 电源轨与复位
@@ -109,3 +109,23 @@
 - **WHEN** 在 Rockchip 6.1 BSP 下编译 `sec_ts` / `sgm37604a`
 - **THEN** `__has_include` 命中原生 `<linux/wakelock.h>`、remove 取 `void` 分支
 - **AND** 编译产物功能与本变更前等价（垫片不介入既有路径）
+
+### Requirement: radxa-cubie-a7a 触摸 bring-up 处理（a7a 专属，rock5b 不受影响）
+
+包 MUST 在 a7a 上对 `sec_ts` 额外做两处 a7a 专属处理（DT 按板分流，rock5b 源码与编译条件分支零改动；engine 模式另见「overlay 接线」要求的 `twi_drv_used=<0>`）：
+
+- **跳过 on-probe 自动刷固件**：`sec_ts_fwupdate_work` 默认（`CONFIG_FW_UPDATE_ON_PROBE`）无条件发 `SEC_TS_CMD_SW_RESET` + 强刷内置固件；本板触摸无 HW reset 通路（`sec_ts_power()` 空壳、RESETB 静态高），软复位后芯片无法重新引导 → 对 0x48 永久 NACK 卡死（芯片出厂已带可用固件 `device_id=0xAC=ID_ON_FW`，无需重刷）。包 MUST 提供 DT 布尔属性 `sec,skip-fw-update-on-probe`（驱动 `plat_data->skip_fwup_on_probe`）；a7a overlay 的 `sec_ts@48` MUST 置位（跳过 SW_RESET+强刷、直接 `read_information`），rock5b overlay MUST NOT 置位（走原路径）。`CONFIG_FW_UPDATE_ON_PROBE` MUST 保持定义（MUST NOT 全局禁用，否则破坏 rock5b）。
+- **`sec_ts_remove` 资源释放**：MUST 补 `gpio_free(plat_data->gpio)`（对称 `sec_ts_parse_dt` 的 `gpio_request_one`），否则 rmmod 后 IRQ GPIO 残留、重 probe -EINVAL。
+
+#### Scenario: a7a 跳过刷固件后触摸可用
+
+- **WHEN** a7a（meizu-e3-bringup）开机，`sec_ts` probe + `sec_ts_fwupdate_work` 运行
+- **THEN** 因 `sec,skip-fw-update-on-probe` 跳过 SW_RESET+强刷，芯片保持存活（`read_information` 读到 `device_id=0xAC`、Tx/Rx、分辨率 1080×2160）
+- **AND** `evtest` 触摸出真坐标、多点 tracking 正常（0x48 无持续 NACK）
+
+#### Scenario: rock5b 触摸路径不回归
+
+- **WHEN** rock5b（不置 `sec,skip-fw-update-on-probe`）编译运行 `sec_ts`
+- **THEN** 走原 `CONFIG_FW_UPDATE_ON_PROBE` + SW_RESET + 完整 fw flash 路径，源码与编译条件分支零改动
+
+**已知非阻塞限制**：a7a idle 时 INT(PD18) 被芯片侧持续拉低、`sec_ts` level 中断空涨 ~1850/s（触摸靠 `read_event` 轮询工作、功能正常）。经核实非 SoC 引脚配置问题（PD18 GPIO 模式 / level 触发 / 上拉均正常）；根因在芯片固件（boot status=0x20 watchdog）或屏模组硬件，加内部上拉、补 SW_RESET 引导握手均无效（已排除），无芯片 datasheet 难根治，接受为已知限制。
