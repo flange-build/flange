@@ -685,11 +685,87 @@ class AmlogicFlashStrategy(FlashStrategy):
         )
 
 
+class QualcommFlashStrategy(FlashStrategy):
+    """Qualcomm QCS6490 刷写策略 —— EDL 模式 + edl-ng（flange 首个高通刷写）。
+
+    - 系统盘：``edl-ng --memory UFS write-sector 0 raw.img``（整盘，契合 flange raw.img）。
+    - SPI EDK2 固件（bring-up 一次）：``edl-ng --loader prog_firehose_ddr.elf
+      --memory spinor rawprogram rawprogram0.xml patch0.xml``。
+    - EDL 模式需手动进入（按住 EDL 按钮 + USB3 上电）。
+    """
+
+    EDL_USB = "05c6:9008"  # Qualcomm HS-USB QDLoader 9008
+
+    def find_tool(self, project_dir: Path) -> Path:
+        import shutil
+        exe = shutil.which("edl-ng")
+        if exe:
+            return Path(exe)
+        for cand in (project_dir / "tools" / "edl-ng" / "edl-ng",
+                     project_dir / ".build" / "tools" / "edl-ng" / "edl-ng"):
+            if cand.exists():
+                return cand
+        raise FlashError(
+            "未找到 edl-ng。请从 Radxa 下载放入 PATH 或 tools/edl-ng/：\n"
+            "  https://dl.radxa.com/q6a/images/edl-ng-dist.zip")
+
+    def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
+        """探测处于 EDL 模式的 Qualcomm 设备（9008）。未命中给进入 EDL 的诊断。"""
+        try:
+            r = subprocess.run([str(tool), "detect"], capture_output=True,
+                               text=True, timeout=10)
+            out = (r.stdout + r.stderr).lower()
+            if any(k in out for k in ("9008", "qualcomm", "sahara", "firehose")):
+                return DeviceInfo(platform="qualcommqcs6490", mode="edl",
+                                  description="Qualcomm HS-USB QDLoader 9008")
+        except Exception:
+            pass
+        return None
+
+    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
+                  device: Optional["DeviceInfo"] = None):
+        # 系统盘刷写无需 pre_flash；SPI EDK2 固件单刷见 flash_spi_firmware（bring-up）。
+        pass
+
+    def write_partition(self, tool: Path, offset: int, image: Path):
+        # Qualcomm 走整盘 write-sector（见 write_system_image），不逐分区写入。
+        pass
+
+    def reboot(self, tool: Path):
+        try:
+            subprocess.run([str(tool), "reset"], timeout=15)
+        except Exception:
+            _info("请手动断电重启 Q6A（退出 EDL 模式）")
+
+    def partition_image_map(self, config: dict) -> dict[str, str]:
+        # 整盘 raw.img 经 edl-ng write-sector 刷入；映射仅作 flash-config 元数据。
+        return {"system": "image/raw.img"}
+
+    # ---- Qualcomm 专有（供 flash 编排 edl-ng 分支调用；非 ABC）----
+
+    def write_system_image(self, tool: Path, raw_img: Path, memory: str = "UFS"):
+        """整盘写系统镜像到 UFS/eMMC。"""
+        _step(f"edl-ng write-sector → {memory}")
+        cmd = [str(tool), "--memory", memory, "write-sector", "0", str(raw_img)]
+        if subprocess.run(cmd).returncode != 0:
+            raise FlashError("edl-ng write-sector 失败")
+
+    def flash_spi_firmware(self, tool: Path, edk2_dir: Path, memory: str = "spinor"):
+        """bring-up 一次性：刷 Radxa 预编 EDK2 SPI 固件。"""
+        loader = edk2_dir / "prog_firehose_ddr.elf"
+        _step("edl-ng rawprogram → SPI EDK2 固件")
+        cmd = [str(tool), "--loader", str(loader), "--memory", memory,
+               "rawprogram", "rawprogram0.xml", "patch0.xml"]
+        if subprocess.run(cmd, cwd=str(edk2_dir)).returncode != 0:
+            raise FlashError("edl-ng SPI 固件刷写失败")
+
+
 # 策略注册表
 _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
     "rockchip": RockchipFlashStrategy,
     "allwinnera733": AllwinnerA733FlashStrategy,
     "amlogic": AmlogicFlashStrategy,
+    "qualcommqcs6490": QualcommFlashStrategy,
 }
 
 
