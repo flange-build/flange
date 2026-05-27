@@ -144,6 +144,8 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
 
         # 用户 / sudo / root 账号一体化配置（基类实现，跨平台共享）
         self._configure_users(rootfs_dir, config)
+        # /etc/hostname + /etc/hosts，治 sudo 解析告警（基类，跨平台共享）
+        self._install_hostname(rootfs_dir, config)
 
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict):
         """安装 kernel modules_install 产物到 rootfs 的 /lib/modules。

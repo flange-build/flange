@@ -510,3 +510,29 @@ class RootfsBuilder(ComponentBuilder):
             self._status(
                 f"panel firmware: {src.name} → /lib/firmware/{fw['dest']} "
                 f"({len(payload)} 字节)")
+
+    def _install_hostname(self, rootfs_dir: Path, config: dict):
+        """写 /etc/hostname 为 board 名，并补 /etc/hosts 一行让 sudo/glibc 解析通。
+
+        ubuntu-base tarball 默认无 /etc/hostname → systemd-hostnamed 取
+        `localhost.localdomain`；sudo 每次启动会延迟约 1s 输出
+        `sudo: unable to resolve host localhost.localdomain` 警告（glibc
+        getaddrinfo 找不到本机名）。写入 board 名 + /etc/hosts 127.0.1.1
+        指向 board 名后告警消失。
+
+        config["rootfs"]["hostname"] 可显式覆盖；否则用 config["board"]。
+        """
+        rootfs_cfg = config.get("rootfs") or {}
+        hostname = rootfs_cfg.get("hostname") or config.get("board") or "flange"
+        (rootfs_dir / "etc" / "hostname").write_text(f"{hostname}\n")
+
+        hosts = rootfs_dir / "etc" / "hosts"
+        existing = hosts.read_text() if hosts.exists() else ""
+        # 已有针对该 hostname 的解析行 → 不动（幂等，允许 overlay/包预置）
+        if f" {hostname}\n" in existing or f"\t{hostname}\n" in existing:
+            return
+        # ubuntu-base 的 /etc/hosts 通常已有 127.0.0.1 localhost；没有也兜底
+        if "127.0.0.1" not in existing:
+            existing = "127.0.0.1\tlocalhost\n" + existing
+        hosts.write_text(existing.rstrip("\n") + f"\n127.0.1.1\t{hostname}\n")
+        self._status(f"hostname: {hostname}")

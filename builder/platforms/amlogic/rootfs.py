@@ -160,6 +160,8 @@ class AmlogicRootfsBuilder(RootfsBuilder):
 
         # 用户 / sudo / root 账号一体化配置（基类实现，跨平台共享）
         self._configure_users(rootfs_dir, config)
+        # /etc/hostname + /etc/hosts，治 sudo 解析告警（基类，跨平台共享）
+        self._install_hostname(rootfs_dir, config)
 
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict):
         """将 kernel 产物中的 modules 安装到 rootfs /lib/modules/。

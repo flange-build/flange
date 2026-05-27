@@ -2,7 +2,8 @@
 
 复用 RootfsBuilder 基类的 overlay / extra_debs / extra_firmware / users 等通用能力。
 与 U-Boot 平台的差异：
-  - UEFI 启动 → fstab 用 ESP(LABEL=efi) 挂 /boot/efi，无独立 /boot ext4 分区；
+  - UEFI 启动，但 fstab 只挂 rootfs；ESP 由 UEFI/GRUB 在启动期读取，flange 不在
+    运行时 mount /boot/efi（重刷模型不走 grub-update / kernel package post-install）；
   - 内核 Image/dtb 安装到 rootfs 的 /boot，供 GRUB(grub-with-dtb) 经 devicetree 加载。
 编排逻辑与 allwinnera733 rootfs 同构（两阶段 + 缓存），故有意显式复制。
 """
@@ -114,6 +115,7 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
         self._install_panel_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)
         self._configure_users(rootfs_dir, config)
+        self._install_hostname(rootfs_dir, config)
 
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict):
         product = config.get("product", "default")
@@ -148,7 +150,16 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
             self.docker.run_privileged(["cp", str(dtb), str(boot / dtb.name)])
 
     def _install_fstab(self, rootfs_dir: Path):
-        """UEFI 布局 fstab：rootfs 在 /，ESP(LABEL=efi) 挂 /boot/efi。"""
+        """UEFI 布局 fstab：只挂 rootfs。
+
+        ⚠️ 不挂 /boot/efi：ESP 由 UEFI/GRUB 在启动期读，flange 不在运行时挂。
+        实测 Q6A 4096 字节 LBA UFS 上 mkfs.vfat 默认 512-sector FAT 内核 vfat
+        驱动会判 superblock 无效（`can't read superblock on /dev/sda1`，强行写
+        4K-sector FAT 又不被 EDK2 UEFI 识别），且 flange 模型本就不需要运行时
+        修改 ESP（重刷模型，不走 grub-update / kernel package post-install）。
+        删了 ESP 行后 boot-efi.mount 不存在 → local-fs.target 干净 → systemd
+        is-system-running 不 degraded。
+        """
         fstab = rootfs_dir / "etc" / "fstab"
         if fstab.exists():
             existing = fstab.read_text()
@@ -156,11 +167,9 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
                 return
         fstab.parent.mkdir(parents=True, exist_ok=True)
         fstab.write_text(
-            "# <file system>  <mount point>  <type>  <options>        <dump>  <pass>\n"
-            "LABEL=rootfs     /              ext4    defaults         0       1\n"
-            "LABEL=efi        /boot/efi      vfat    umask=0077       0       2\n"
+            "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>\n"
+            "LABEL=rootfs     /              ext4    defaults   0       1\n"
         )
-        (rootfs_dir / "boot" / "efi").mkdir(parents=True, exist_ok=True)
 
     def collect(self, src_dir, config: dict) -> dict:
         return {"rootfs": self._output}

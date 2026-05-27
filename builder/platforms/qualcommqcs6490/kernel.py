@@ -28,6 +28,19 @@ class Qcs6490KernelBuilder(KernelBuilder):
         # 合并大小写适配 fragment（敏感 FS 上为空，无副作用）
         self.make(src_dir, ["case_insensitive_fix.config"],
                   arch=self.ARCH, cross=self.CROSS)
+        # 裁剪 Q6A 用不到的大驱动（如 DRM_NOUVEAU），加速编译
+        self._apply_disable_configs(src_dir, config)
+
+    def _apply_disable_configs(self, src_dir: Path, config: dict):
+        """把 kernel.disable_configs 写成 config 片段并合并（# CONFIG_X is not set）。"""
+        disable = config["kernel"].get("disable_configs") or []
+        if not disable:
+            return
+        frag = src_dir / f"arch/{self.ARCH}/configs/flange_trim.config"
+        frag.write_text(
+            "".join(f"# CONFIG_{sym} is not set\n" for sym in disable))
+        self.make(src_dir, ["flange_trim.config"],
+                  arch=self.ARCH, cross=self.CROSS)
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)

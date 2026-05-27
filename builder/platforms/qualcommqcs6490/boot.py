@@ -15,10 +15,12 @@ from pathlib import Path
 
 from builder.base import ComponentBuilder
 
-# grub-mkimage 嵌入的模块集：GPT/FAT/ext2 读盘 + label 搜索 + linux/devicetree 加载
+# grub-mkimage 嵌入的模块集：GPT/FAT/ext2 读盘 + label 搜索 + linux/devicetree 加载。
+# 注：Ubuntu 的 grub-efi-arm64-bin 把 `devicetree` 命令打包在 fdt.mod 里
+# （上游 GRUB 模块命名不一致），故此处模块名是 `fdt`，但 grub.cfg 里命令仍写 `devicetree`。
 GRUB_MODULES = [
     "part_gpt", "fat", "ext2", "search", "search_label", "search_fs_uuid",
-    "linux", "devicetree", "normal", "configfile", "boot", "echo", "ls",
+    "linux", "fdt", "normal", "configfile", "boot", "echo", "ls",
     "cat", "test", "all_video", "gfxterm", "serial", "terminal",
 ]
 
@@ -78,12 +80,12 @@ class Qcs6490BootBuilder(ComponentBuilder):
                          str(grub_cfg), "::/EFI/BOOT/grub.cfg"])
 
     def _esp_size_mb(self, config: dict) -> int:
-        """ESP 分区扇区数 × 扇区大小 → MB（不足时给 256MB 兜底）。"""
+        """ESP 大小 → MB。config 的 size 按 flange 约定是 **512 字节扇区**计，
+        故直接 ×512 转字节（与介质 sector_size 无关）。不足 64MB 兜底。"""
         parts = config.get("partitions", {})
-        sector = int(parts.get("sector_size", 4096))
         for e in parts.get("entries", []):
             if e["name"] == "esp" and e.get("size"):
-                mb = int(e["size"], 0) * sector // (1024 * 1024)
+                mb = int(e["size"], 0) * 512 // (1024 * 1024)
                 return max(mb, 64)
         return 256
 

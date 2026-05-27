@@ -528,3 +528,12 @@ class SourceManager:
                        cwd=repo_dir, check=True)
         subprocess.run(["git", "checkout", "-f", "."],
                        cwd=repo_dir, check=False)
+        # 切 branch 后清残留：reset --mixed + checkout -f 只把 index 同步到新
+        # HEAD，工作树里上一 branch 才有的 tracked 文件会留为 untracked，污染
+        # 新 branch 构建（实测：kernel 从 linux-6.18.2 切到 qclinux 6.6 BSP，
+        # 残留 8721 个文件；arch/arm64/include/asm/cpucaps.h 是其一，新 BSP
+        # Makefile 不再生成 cpucap-defs.h，残留 cpucaps.h 强引用它致编译失败）。
+        # `-fd` 不带 `-x`：清未跟踪但保留 gitignored 构建产物（generated/、
+        # .o、.cmd），同 branch 增量重建不受影响。
+        subprocess.run(["git", "clean", "-fd"],
+                       cwd=repo_dir, check=False)

@@ -20,6 +20,24 @@ fi
 
 read -r PARENT_DISK PART_NUM < <(lsblk -no PKNAME,PARTN "${ROOT_SOURCE}" | head -n1)
 
+# 兜底：某些内核/util-linux 组合下 lsblk PARTN 列不暴露（已实测：
+# QCS6490 QCLINUX 6.6 BSP + util-linux 2.39 上 /dev/sda2 的 PARTN 空），
+# 直接读 sysfs /sys/class/block/<dev>/partition（kernel-provided，权威）。
+if [ -z "${PART_NUM:-}" ]; then
+    LEAF="$(basename "${ROOT_SOURCE}")"
+    if [ -r "/sys/class/block/${LEAF}/partition" ]; then
+        PART_NUM="$(cat "/sys/class/block/${LEAF}/partition")"
+    fi
+fi
+
+# 兜底：PKNAME 也可能空（极少见但同样从 sysfs 解析）。
+if [ -z "${PARENT_DISK:-}" ]; then
+    LEAF="$(basename "${ROOT_SOURCE}")"
+    if [ -L "/sys/class/block/${LEAF}" ]; then
+        PARENT_DISK="$(basename "$(dirname "$(readlink -f "/sys/class/block/${LEAF}")")")"
+    fi
+fi
+
 if [ -z "${PARENT_DISK:-}" ] || [ -z "${PART_NUM:-}" ]; then
     echo "无法从 ${ROOT_SOURCE} 解析父磁盘和分区号" >&2
     exit 1

@@ -45,25 +45,30 @@ class Qcs6490ImageBuilder(ComponentBuilder):
         self._status(f"创建空镜像 ({total_bytes // (1024*1024)}MB, 扇区 {self._sector})...")
         self.docker.run(["truncate", "-s", str(total_bytes), str(raw_img)])
 
-        # GPT 分区表（parted 按字节偏移，故 4K/512 通用）
-        self._status("写 GPT 分区表...")
-        self.docker.run(["parted", "-s", str(raw_img), "mklabel", "gpt"])
+        # GPT 分区表：parted/sfdisk 对 regular file 默认 512-LBA，写入 4K UFS 后
+        # LBA 数值含义错位 8x → UEFI 找 ESP 找不到（实板已踩坑）。
+        # 装 util-linux 2.39 的 sfdisk 还没 --sector-size；sgdisk 1.0.10 也无。
+        # 解法：losetup -b <sector_size> 把 raw.img 挂成报告 self._sector LBA 的
+        # loop 设备，parted/sgdisk 自动按 loop 报告的 LBA 写 GPT，结果与 UFS 4K 对齐。
+        self._status(f"写 GPT 分区表（loop -b {self._sector} + parted）...")
+        loop_setup = f"losetup -b {self._sector} -f --show {raw_img}"
+        parted_cmds = [f"parted -s $LOOP mklabel gpt"]
         gpt_index = 0
         for entry in entries:
             gpt_index += 1
             start = entry["_offset_sectors"] * self._sector
             end = start + entry["_size_sectors"] * self._sector - 1
-            self.docker.run([
-                "parted", "-s", str(raw_img), "mkpart",
-                entry.get("label", entry["name"]), entry["type"],
-                f"{start}B", f"{end}B",
-            ])
+            label = entry.get("label", entry["name"])
+            parted_cmds.append(
+                f"parted -s $LOOP mkpart {label} {entry['type']} {start}B {end}B")
             if entry["name"] == "esp":
-                # 标记 ESP：设 EFI System Partition 类型 GUID + boot/esp flag
-                self.docker.run(["parted", "-s", str(raw_img), "set",
-                                 str(gpt_index), "esp", "on"])
-                self.docker.run(["sfdisk", "--part-type", str(raw_img),
-                                 str(gpt_index), ESP_TYPE_GUID])
+                parted_cmds.append(f"parted -s $LOOP set {gpt_index} esp on")
+                parted_cmds.append(
+                    f"sfdisk --part-type $LOOP {gpt_index} {ESP_TYPE_GUID}")
+        script = (f"set -e; LOOP=$({loop_setup}); "
+                  f"trap 'losetup -d $LOOP' EXIT; "
+                  + "; ".join(parted_cmds))
+        self.docker.run_privileged(["sh", "-c", script])
 
         # dd 各分区镜像（bs=扇区大小，seek=扇区偏移，4K/512 通用）
         for entry in entries:
@@ -85,11 +90,17 @@ class Qcs6490ImageBuilder(ComponentBuilder):
         self._raw_img = raw_img
 
     def _resolve_entries(self, entries: list) -> list:
+        """flange 约定 config 的 offset/size 以 512 字节扇区计；4K 介质上
+        要按 self._sector 重算（offset_512 × 512 ÷ sector_size，size 同理），
+        否则 rootfs "3G" 会被当作 3G/512=6.3M 个 4K 扇区 → 24GiB 整盘虚胖。"""
+        FLANGE_SECTOR = 512
         resolved = []
         for entry in entries:
             e = dict(entry)
-            e["_offset_sectors"] = int(entry.get("offset", "0"), 0) if entry.get("offset") else 0
-            e["_size_sectors"] = resolve_image_size(entry).sectors
+            off_512 = int(entry.get("offset", "0"), 0) if entry.get("offset") else 0
+            e["_offset_sectors"] = off_512 * FLANGE_SECTOR // self._sector
+            psize = resolve_image_size(entry)
+            e["_size_sectors"] = psize.bytes // self._sector
             resolved.append(e)
         return resolved
 

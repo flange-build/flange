@@ -87,6 +87,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libfreetype-dev:arm64 \
     && rm -rf /var/lib/apt/lists/*
 
+# Qualcomm QCS6490 平台 boot 组装所需：GRUB EFI 工具链（arm64 目标）+ FAT 工具。
+# 单独成层保留上面缓存。grub-efi-arm64-bin 提供 /usr/lib/grub/arm64-efi/ 模块，
+# grub-common 提供 grub-mkimage 二进制；mtools 提供 mcopy/mmd 免特权写 FAT 镜像。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        grub-efi-arm64-bin \
+        grub-common \
+        mtools \
+    && rm -rf /var/lib/apt/lists/*
+
 # meson cross-file：路径与 builder/app.py 中 _BUILD_SYSTEMS["meson"] 模板引用
 # 的 --cross-file /etc/meson/cross-<arch>.ini 一致。源文件可见于 docker/meson/。
 COPY docker/meson/cross-aarch64.ini /etc/meson/cross-aarch64.ini

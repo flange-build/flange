@@ -185,6 +185,16 @@ class FlashStrategy(ABC):
         """生成平台特定的 pre_flash 配置。默认返回空配置。"""
         return PreFlashConfig()
 
+    def flash_whole_disk(self, tool: Path, target_dir: Path,
+                         config: "FlashConfig") -> bool:
+        """整盘刷写钩子（如 edl-ng write-sector 整 raw.img）。
+
+        返回 True 表示已处理（FlashExecutor 跳过 per-partition 循环）；
+        默认返回 False，走传统的逐分区 write_partition 流程。
+        Qualcomm 等"整盘写"平台覆盖此方法即可，零侵入现有平台。
+        """
+        return False
+
     def wait_for_device(self, tool: Path, timeout: int = 30) -> DeviceInfo:
         """等待设备就绪，超时抛 FlashError。"""
         _step("等待设备连接...")
@@ -697,29 +707,52 @@ class QualcommFlashStrategy(FlashStrategy):
     EDL_USB = "05c6:9008"  # Qualcomm HS-USB QDLoader 9008
 
     def find_tool(self, project_dir: Path) -> Path:
+        """按 rockchip 同款约定 ``tools/<os>/<tool>/<tool>`` 定位；PATH 兜底。"""
         import shutil
+        platform = "macos" if sys.platform == "darwin" else "linux"
+        tool = project_dir / "tools" / platform / "edl-ng" / "edl-ng"
+        if tool.exists():
+            return tool
         exe = shutil.which("edl-ng")
         if exe:
             return Path(exe)
-        for cand in (project_dir / "tools" / "edl-ng" / "edl-ng",
-                     project_dir / ".build" / "tools" / "edl-ng" / "edl-ng"):
-            if cand.exists():
-                return cand
         raise FlashError(
-            "未找到 edl-ng。请从 Radxa 下载放入 PATH 或 tools/edl-ng/：\n"
-            "  https://dl.radxa.com/q6a/images/edl-ng-dist.zip")
+            f"未找到 edl-ng。预期 {tool} 或 PATH。\n"
+            "Radxa 下载：https://dl.radxa.com/q6a/images/edl-ng-dist.zip")
 
     def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
-        """探测处于 EDL 模式的 Qualcomm 设备（9008）。未命中给进入 EDL 的诊断。"""
-        try:
-            r = subprocess.run([str(tool), "detect"], capture_output=True,
-                               text=True, timeout=10)
-            out = (r.stdout + r.stderr).lower()
-            if any(k in out for k in ("9008", "qualcomm", "sahara", "firehose")):
-                return DeviceInfo(platform="qualcommqcs6490", mode="edl",
-                                  description="Qualcomm HS-USB QDLoader 9008")
-        except Exception:
-            pass
+        """被动 USB 枚举探测 EDL 9008（不调 edl-ng，避免抢 USB 会话）。
+
+        起因：macOS 上若 detect 先用 edl-ng 开一次 USB 会话，紧接 write-sector
+        再开一次，libusb darwin 偶发 transfer timed out + Sahara 握手失败、
+        设备进入 Unknown 模式。这里只读 USB 拓扑信息（VID 05c6/PID 9008），
+        不触碰设备，让 edl-ng 在真正刷写时独占会话。
+        """
+        if sys.platform == "darwin":
+            # 用 ioreg（底层实时）而非 system_profiler（有缓存延迟、可能漏报）；
+            # 匹配 idVendor=1478(0x05c6) + idProduct=36872(0x9008)。
+            try:
+                r = subprocess.run(["ioreg", "-p", "IOUSB", "-l"],
+                                   capture_output=True, text=True, timeout=5)
+                out = r.stdout
+                if '"idVendor" = 1478' in out and '"idProduct" = 36872' in out:
+                    return DeviceInfo(platform="qualcommqcs6490", mode="edl",
+                                      description="Qualcomm HS-USB QDLoader 9008")
+            except Exception:
+                pass
+        else:  # linux：读 /sys/bus/usb/devices
+            try:
+                for dev in Path("/sys/bus/usb/devices").glob("*"):
+                    vid = dev / "idVendor"
+                    pid = dev / "idProduct"
+                    if vid.exists() and pid.exists():
+                        if vid.read_text().strip() == "05c6" and \
+                           pid.read_text().strip() == "9008":
+                            return DeviceInfo(platform="qualcommqcs6490",
+                                              mode="edl",
+                                              description="Qualcomm HS-USB QDLoader 9008")
+            except Exception:
+                pass
         return None
 
     def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
@@ -741,12 +774,36 @@ class QualcommFlashStrategy(FlashStrategy):
         # 整盘 raw.img 经 edl-ng write-sector 刷入；映射仅作 flash-config 元数据。
         return {"system": "image/raw.img"}
 
+    def flash_whole_disk(self, tool: Path, target_dir: Path,
+                         config: "FlashConfig") -> bool:
+        """整盘 edl-ng write-sector raw.img 到 UFS/eMMC（先 Sahara 上传 firehose loader）。"""
+        raw = target_dir / "image" / "raw.img"
+        if not raw.exists():
+            raise FlashError(f"未找到整盘镜像 {raw}；请先执行 flange build")
+        loader = self._locate_loader(target_dir)
+        # 目标存储介质：v1 仅 UFS（板子默认）；后续可经 board/SoC config 覆盖。
+        memory = "UFS"
+        self.write_system_image(tool, raw, loader=loader, memory=memory)
+        return True
+
+    def _locate_loader(self, target_dir: Path) -> Path:
+        """定位 firehose loader（Radxa EDK2 SPI 固件包内）。"""
+        loader = target_dir / "bootloader" / "edk2-spi-firmware" / "prog_firehose_ddr.elf"
+        if not loader.exists():
+            raise FlashError(
+                f"未找到 firehose loader {loader}；请先执行 flange build "
+                "（bootloader 组件会下载并解压 Radxa EDK2 SPI 固件包，含此 loader）")
+        return loader
+
     # ---- Qualcomm 专有（供 flash 编排 edl-ng 分支调用；非 ABC）----
 
-    def write_system_image(self, tool: Path, raw_img: Path, memory: str = "UFS"):
-        """整盘写系统镜像到 UFS/eMMC。"""
-        _step(f"edl-ng write-sector → {memory}")
-        cmd = [str(tool), "--memory", memory, "write-sector", "0", str(raw_img)]
+    def write_system_image(self, tool: Path, raw_img: Path,
+                           loader: Path, memory: str = "UFS"):
+        """整盘写系统镜像。EDL 启动后处于 Sahara 模式，需先上传 firehose loader
+        让设备进入 firehose 模式，再发 write-sector 指令。"""
+        _step(f"edl-ng write-sector → {memory}（loader: {loader.name}）")
+        cmd = [str(tool), "--loader", str(loader),
+               "--memory", memory, "write-sector", "0", str(raw_img)]
         if subprocess.run(cmd).returncode != 0:
             raise FlashError("edl-ng write-sector 失败")
 
@@ -865,13 +922,16 @@ class FlashExecutor:
         # 全量刷写时分区表可能变化（如新增 recovery），先把 GPT 表写下去；
         # 平台默认实现是 no-op，rockchip 通过 raw.img 前几个 sector 刷写 GPT。
         self.strategy.write_gpt(tool, self.target_dir, cfg)
-        for part in cfg.partitions:
-            image = self.target_dir / part.image
-            if not image.exists():
-                _warn(f"跳过 {part.name}: 镜像不存在")
-                continue
-            offset = int(part.offset, 0)
-            self.strategy.write_partition(tool, offset, image)
+        # 整盘刷写钩子（如 Qualcomm edl-ng write-sector raw.img）：返回 True
+        # 表示已处理，跳过 per-partition 循环；默认 False，走逐分区流程。
+        if not self.strategy.flash_whole_disk(tool, self.target_dir, cfg):
+            for part in cfg.partitions:
+                image = self.target_dir / part.image
+                if not image.exists():
+                    _warn(f"跳过 {part.name}: 镜像不存在")
+                    continue
+                offset = int(part.offset, 0)
+                self.strategy.write_partition(tool, offset, image)
         if no_reboot:
             _info("跳过重启（--no-reboot）")
         else:
@@ -970,6 +1030,8 @@ def _cli_main():
     run_parser.add_argument("--no-reboot", action="store_true", help="刷写完成后不触发设备重启")
     run_parser.add_argument("--raw", metavar="DEVICE", help="dd 整盘刷写到指定设备")
     run_parser.add_argument("--list", action="store_true", dest="list_parts", help="列出可刷写分区")
+    run_parser.add_argument("--spi-firmware", action="store_true", dest="spi_firmware",
+                            help="刷 SPI boot 固件（Qualcomm bring-up 一次性；需在 EDL 模式）")
     run_parser.add_argument("partition", nargs="?", help="指定分区名（不指定则全量刷写）")
 
     # generate 子命令（构建引擎调用）
@@ -988,6 +1050,16 @@ def _cli_main():
             executor.list_partitions()
         elif args.raw:
             executor.flash_raw(args.raw)
+        elif args.spi_firmware:
+            # Qualcomm bring-up：edl-ng 刷 SPI EDK2 固件（仅支持该方法的策略）
+            if not hasattr(executor.strategy, "flash_spi_firmware"):
+                raise FlashError(
+                    f"平台 {executor.config.platform} 不支持 --spi-firmware")
+            tool = executor.strategy.find_tool(executor.project_dir)
+            if not args.no_wait:
+                executor.strategy.wait_for_device(tool)
+            edk2_dir = executor.target_dir / "bootloader" / "edk2-spi-firmware"
+            executor.strategy.flash_spi_firmware(tool, edk2_dir)
         elif args.partition:
             executor.flash_partition(args.partition, no_wait=args.no_wait, no_reboot=args.no_reboot)
         else:

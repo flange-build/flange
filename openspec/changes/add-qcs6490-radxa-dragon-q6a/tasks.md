@@ -28,7 +28,7 @@
 - [x] 4.3 `image.py`：GPT = ESP(FAT,"efi",EFI GUID) + rootfs(ext4,"rootfs")，无 p1 config ✅
 - [x] 4.4 UFS 4096 扇区对齐（sector_size 取自配置，dd bs/seek 按扇区）✅
 - [x] 4.5 `recovery.py`：v1 stub ✅ Qcs6490RecoveryBuilder 继承基类
-- [ ] 4.6 构建 Docker 镜像补 `grub-efi-arm64-bin`/`grub-common`/`mtools`（boot.py grub-mkimage/mcopy 依赖）⏳ 重构建前置
+- [x] 4.6 构建 Docker 镜像补 `grub-efi-arm64-bin`/`grub-common`/`mtools`（boot.py grub-mkimage/mcopy 依赖）✅ 独立 RUN 层追加；重建后容器内 grub-mkimage 2.12 + mtools 4.0.43 + 221 arm64-efi 模块齐
 
 ## 5. bootloader（EDK2 固件消费）
 
@@ -42,18 +42,31 @@
 - [x] 6.2 `find_tool` 定位 `edl-ng`；`detect_device` 探测 EDL（9008）+ 未命中诊断 ✅
 - [x] 6.3 系统盘：`edl-ng --memory UFS write-sector 0 raw.img` ✅ write_system_image
 - [x] 6.4 SPI 固件单刷：`edl-ng --loader prog_firehose_ddr.elf --memory spinor rawprogram ...` ✅ flash_spi_firmware
-- [ ] 6.5 host 工具 `edl-ng` 获取/接入方式 ⏳ find_tool 已给下载提示；正式接入待定
-- [ ] 6.6 flash 编排在 edl-ng 分支调用整盘 write-sector（编排层接线，待读 flash 主流程）
+- [x] 6.5 host 工具 `edl-ng` 随仓 vendor + 按 rockchip 同款约定 `tools/<os>/edl-ng/edl-ng` 定位 ✅ `tools/{linux,macos}/edl-ng/` 各含 binary + 依赖库 + LICENSE；mac arm64 实测 `edl-ng --version` 正常
+- [x] 6.6 flash 编排：`FlashStrategy.flash_whole_disk` 钩子（默认 False 不影响现有平台）+ Qualcomm 重写整盘 edl-ng write-sector；CLI 新增 `--spi-firmware` 供 SPI bring-up ✅
 
 ## 7. board + 知识库
 
 - [x] 7.1 新建 `components/board/radxa-dragon-q6a/config.py`（`soc/platform/dtb` + AIC8800 USB Wi-Fi 复用 a7a）✅
 - [x] 7.2 验证 lunch target `radxa-dragon-q6a-default-{debug,release}` 自动生成 ✅
-- [ ] 7.3 `wiki/platforms/qualcommqcs6490.md` + `wiki/boards/radxa-dragon-q6a.md` + index 索引
+- [x] 7.3 `wiki/platforms/qualcommqcs6490-平台.md` + `wiki/boards/radxa-dragon-q6a.md` + index 索引 ✅ 2026-05-28 同步（含 bring-up 完成清单 / patches / 易踩坑）
 
 ## 8. 实板验证（UFS）
 
-- [ ] 8.1 EDL 模式刷 Radxa EDK2 SPI 固件（edl-ng 通路验证）
-- [ ] 8.2 `flange build` 出 UFS raw.img；EDL `write-sector` 刷 UFS
-- [ ] 8.3 实板启动链：GRUB → 内核 → `console=ttyMSM0` → 进 noble rootfs
-- [ ] 8.4 验 GPU（freedreno/turnip，eglinfo/glmark）、AIC8800 Wi-Fi、网络/存储
+- [x] 8.1 EDL 模式刷 Radxa EDK2 SPI 固件（edl-ng 通路验证）✅
+- [x] 8.2 `flange build` 出 UFS raw.img；EDL `write-sector` 刷 UFS ✅
+- [x] 8.3 实板启动链：GRUB → 内核 → `console=ttyMSM0` → 进 noble rootfs ✅ 2026-05-28：systemd is-system-running=running，hostname=radxa-dragon-q6a，无 failed unit
+- [x] 8.4 验 GPU/Wi-Fi/网络/存储/ADB/PIL ✅
+  - GPU: freedreno FD643 OpenGL 4.6 + GLES 3.2 + turnip Vulkan 1.3.318（eglinfo / vulkaninfo 实测）
+  - WiFi: AIC8800 D80 USB（path `/lib/firmware/aic8800D80/`），iw scan 2.4G+5G 全通；regdb 加载 OK
+  - 网络: enp1s0 (r8169) DHCP 通
+  - 存储: rootfs 首启扩容至 119 G（flange-rootfs-grow sysfs 兜底）
+  - ADB: dwc3 clear-stall patch（port 自 bsp/kernel d77dbaa）治 Mac host ENDPOINT_HALT 杀 adbd
+  - PIL: ADSP/CDSP `.mbn` running（DTS patch + radxa-firmware-qcs6490 deb），/dev/fastrpc-cdsp 可用；IPA/MPSS disabled（无硬件）
+  - 已知小遗憾: ADSP 侧 qcom_smd_qrtr glink endpoint -12 ENOMEM，fastrpc-adsp 缺失（非阻断，留后续优化 reserved-mem）
+
+## 9. 通用改动（顺手治痛点）
+
+- [x] 9.1 基类 `RootfsBuilder._install_hostname`：四平台 phase2 接入，治所有 board `sudo: unable to resolve host` 警告 + hostname=`localhost.localdomain`
+- [x] 9.2 `flange-rootfs-grow` 脚本：`/sys/class/block/<dev>/{partition,..}` sysfs 兜底（QCLINUX BSP lsblk PARTN 列不暴露）
+- [x] 9.3 `builder/source.py`：branch 切换后 `git clean -fd` 清残留 tracked 文件（治 kernel 从 6.18 切到 qclinux 6.6 残留 8721 文件污染）

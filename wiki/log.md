@@ -399,3 +399,16 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 ## [2026-05-24] sync | radxa-cubie-a7a 魅族 E3 触摸实板通过 + 三处 a7a 专属修复
 
 `wiki/boards/radxa-cubie-a7a.md`：触摸段从「待测」更新为「已通」，订正显示 timing（htot1317/171.95MHz/非 burst，原误写 157MHz）；易踩坑补触摸两坑——① `&twi2` 必须 engine 模式 `twi_drv_used=<0>`（drv 模式扛不住 read_event 高频读会 bus-error 卡死），② DT 加 `sec,skip-fw-update-on-probe` 跳过开机自动刷固件（SW_RESET+强刷会刷死出厂带 FW 的芯片）；idle 中断空涨记为已知非阻塞项。相关变更：openspec/changes/add-meizu-e3-panel-radxa-cubie-a7a/（design.md 触摸段 + tasks 组 7）。
+
+
+## [2026-05-28] sync | flange 首个 Qualcomm 平台 + Radxa Dragon Q6A 实板 bring-up
+
+新增 `wiki/platforms/qualcommqcs6490-平台.md`：UEFI/GRUB 引导链（EDK2 SPI blob → grub-mkimage BOOTAA64.EFI → kernel `console=ttyMSM0 acpi=off root=PARTLABEL=rootfs`）、4K LBA UFS（`losetup -b 4096` + parted）、fstab 不挂 ESP、kernel 走 `radxa/kernel@kernel.qclinux.1.0.r1-rel` (6.6.90 vendor BSP) + `qcom_defconfig` + `jobs=2`、刷写 `QualcommFlashStrategy` 走 edl-ng（EDL 9008）；列出与 Rockchip/Allwinner/Amlogic 的关键差异对照表与平台 patches（dwc3 clear-stall）。
+
+新增 `wiki/boards/radxa-dragon-q6a.md`：首块板 bring-up 完成清单（ADB / WiFi / GPU / ADSP / CDSP 全通过），板级 patch（DTS firmware-name → `qcom/qcs6490/radxa/dragon-q6a/{adsp,cdsp}.mbn`，IPA/MPSS disable），AIC8800 路径与 a7a 不同（QCLINUX BSP driver 写死 `/lib/firmware/aic8800D80/`），易踩坑（vfat 在 4K LBA 上 superblock 无效、ADSP qrtr -12 ENOMEM 待优化）。
+
+`wiki/platforms/index.md` + `wiki/boards/index.md` 各加一条索引，updated → 2026-05-28。
+
+通用改动：基类 `RootfsBuilder._install_hostname` 写 `/etc/hostname` + `/etc/hosts 127.0.1.1 <board>`（治所有平台 sudo `unable to resolve host` 警告，四个平台 phase2 均接入）；`flange-rootfs-grow` 兜底 sysfs `/sys/class/block/<dev>/partition` 解析（lsblk PARTN 列在 QCLINUX 6.6 BSP 上不暴露）。
+
+相关变更：openspec/changes/add-qcs6490-radxa-dragon-q6a/（task 1–6 已完成 + 7.3 wiki + 8.* 实板验证）；源码新增/改动覆盖 `builder/platforms/qualcommqcs6490/*`、`builder/rootfs.py`、`builder/source.py`（branch 切换后 `git clean -fd`）、`builder/flash.py` (QualcommFlashStrategy)、`components/platform/qualcommqcs6490/`、`components/board/radxa-dragon-q6a/`、`components/app/flange-rootfs-grow/scripts/`。
