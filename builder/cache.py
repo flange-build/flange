@@ -27,7 +27,11 @@ DEPENDENCY_GRAPH: dict[str, list[str]] = {
     # 源码树的 include/ 目录解析 dt-bindings 头文件。kernel 源码或配置变化级联
     # 触发 vendor overlay 重 build。
     "device-tree-overlay":  ["kernel"],
-    "rootfs":               ["app", "kernel"],
+    # rootfs 依赖 device-tree-overlay：grub-with-dtb 平台（无运行时 overlay）
+    # 在 rootfs 装内核 dtb 时需消费 .dtbo 经 fdtoverlay 预合并到 base dtb；
+    # U-Boot/extlinux 平台 device-tree-overlay 产物在无 overlay 声明时为空，
+    # 此依赖在那些平台是 no-op（多一条拓扑边、不增加实际工作）。
+    "rootfs":               ["app", "kernel", "device-tree-overlay"],
     "boot":                 ["kernel", "device-tree-overlay"],
     "recovery":             ["app", "kernel"],
     "image":                ["boot", "bootloader", "rootfs", "recovery"],

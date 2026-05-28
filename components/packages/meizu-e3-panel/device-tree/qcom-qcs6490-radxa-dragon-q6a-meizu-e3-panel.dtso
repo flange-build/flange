@@ -1,0 +1,205 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * radxa-dragon-q6a (Qualcomm QCS6490 / mainline drm/msm) 魅族 E3 39pin
+ * MIPI-DSI 屏 overlay（显示 + 触摸 + 背光）。
+ *
+ * 与 rock5b / a7a 同屏不同 SoC：
+ *   rock5b：Rockchip BSP `simple-panel-dsi` + DPHY1 + VP3 路由
+ *   a7a   ：Allwinner BSP `allwinner,panel-dsi` + virtual-panel OF-graph
+ *   q6a   ：mainline drm/msm + 包内新增 OOT panel-meizu-e3（`meizu,e3-panel`）
+ *
+ * QCLINUX BSP 6.6.90 `drivers/gpu/drm/panel/` 91 个驱动全是一型一驱，没有
+ * 通用 DSI panel driver 可用，故本变更随包发 OOT panel-meizu-e3。
+ *
+ * 接线依据 radxa-dragon-q6a 原理图 v1.21 sheet 31（J10 LCD MIPI 39pin FPC）：
+ *
+ *   信号           FPC pin   SoC net               备注
+ *   ─────────────  ───────   ───────────────────   ────────────────
+ *   VDD3V3         2         VCC_3V3_LCD          ← SGM2578AAD load-switch
+ *                                                  由 LCD_VCC_EN (tlmm 80) 控
+ *   IOVCC1V8       3         VCC_1V8              ← 板载常上电 1V8
+ *   RESET          5         DISP0_RESET_N        ← tlmm 44 (active-low)
+ *   DSI 4-lane     7..21     mdss_dsi0            ← 4 data lanes + clock
+ *   TP-RESET       23        TS_RESET_N           ← tlmm 105（经 UM3204H 电平转换）
+ *   TP-INT         25        TS_INT_N             ← tlmm 81
+ *   TP-SDA/SCL     26/27     i2c13 (QUP1_SE5)     ← qupv3_id_1；触摸 + 背光共用
+ *   LCD VCC3V31/32 30/31     VCC_3V3_LCD          ← 与 pin 2 并联
+ *   LED-/+         35/39     VCC_LEDA/LEDK        ← 板载 SY7203 boost（本 overlay
+ *                                                  不引用，与 SGM37604A 互斥）
+ *
+ * 背光路径选择 ⚠️：
+ *   Q6A 板原理图把两条背光通道都引到 FPC：
+ *     (a) 板载 SY7203DBC boost LED 驱动 → VCC_LEDA/LEDK → FPC pin 35/39 直驱
+ *         屏 LED 串（EN/PWM 控制 = EDP_BLPWM ← PM7350C GPIO_08）
+ *     (b) FPC pin 26/27 = i2c13 → 屏自带 SGM37604A I2C 背光芯片（panel 内部）
+ *   E3 屏 LED 串接 SGM37604A 内部，FPC LED+/- 引脚悬空 → 两条通道功能互斥。
+ *   本 overlay 选 (b)：不引用 EDP_BLPWM / `&pm8350c_pwm` / `&pm8350c_gpios`、
+ *   不声明 `pwm-backlight`；SY7203 EN 默认悬置 → boost 不工作 → FPC LED+/-
+ *   悬空安全。
+ *
+ * 触摸复位选 regulator-fixed 路径（与 a7a 对称、不用 gpio-hog）：
+ *   sec_ts 驱动不管理 TP reset；Q6A mainline tlmm 虽然支持标准 gpio-hog，
+ *   但为统一两 SoC 行为、降低维护心智，沿用 a7a 的 regulator-fixed +
+ *   always-on/boot-on 在驱动注册前完成解复位。
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+&{/} {
+	/* LCD 主供电 3V3：经板载 SGM2578AAD load-switch（U14），由 tlmm 80
+	 * (LCD_VCC_EN) 控制；与 radxa-display-8hd Q6A overlay 同链路。
+	 * 注意：vin-supply 不引用 &vcc_3v3——QCLINUX BSP base dts 不声明
+	 * 该 label（mainline radxa 分支有，BSP 无）；板上 VCC_3V3 是 SY7120RAC
+	 * buck 输出的 always-on 板载固定 rail，DT 不建模即可。 */
+	vcc_3v3_lcd: vcc-3v3-lcd-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_3v3_lcd";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&tlmm 80 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	/* TP-RST = tlmm 105：sec_ts 驱动不管理 reset，用 regulator-fixed
+	 * （always-on + boot-on）在驱动注册时把 tlmm 105 拉高解复位。
+	 * 与 a7a 同款做法（参见 [[meizu-e3-panel]] radxa-cubie-a7a 章节）。 */
+	reg_tp_reset: tp-reset-deassert {
+		compatible = "regulator-fixed";
+		regulator-name = "tp-reset-deassert";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&tlmm 105 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&mdss {
+	status = "okay";
+};
+
+&mdss_dsi {
+	vdda-supply = <&vreg_l6b_1p2>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "meizu,e3-panel";
+		reg = <0>;
+
+		vdd-supply = <&vcc_3v3_lcd>;
+		/* vccio 取 PMIC PM7325 LDO L1C（1.8V，PMIC 直出）——QCLINUX BSP
+		 * 不声明聚合 vcc_1v8 label，直接挂源 LDO 即可（FPC pin 3 IOVCC1V8
+		 * 经 R312 0R 接板上 1V8 rail，L1C 也供给其他在树消费者，always-on）。 */
+		vccio-supply = <&vreg_l1c_1p8>;
+		reset-gpios = <&tlmm 44 GPIO_ACTIVE_LOW>;
+
+		/* 背光指向屏自带的 SGM37604A I2C 芯片（见 &i2c13 下 backlight@36） */
+		backlight = <&sgm37604_bl>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&lcd_panel_reset>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in: endpoint {
+					remote-endpoint = <&mdss_dsi0_out>;
+				};
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	remote-endpoint = <&panel_in>;
+	data-lanes = <0 1 2 3>;
+};
+
+&mdss_dsi_phy {
+	vdds-supply = <&vreg_l10c_0p88>;
+	status = "okay";
+};
+
+&qupv3_id_1 {
+	status = "okay";
+};
+
+/* i2c13 = QUP1_SE5：触摸 sec_ts @ 0x48 + 屏自带背光 sgm37604a @ 0x36 共用 */
+&i2c13 {
+	clock-frequency = <100000>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	/* QCLINUX BSP `i2c-qcom-geni.c::geni_check_fw_validity` 在 SE proto 寄存器
+	 * 读到非 I2C 时调 `geni_load_se_firmware`；该函数若节点没 `qcom,load-firmware`
+	 * 直接 `return -EINVAL` → 上层报 "Cannot load firmware from linux for i2c
+	 * error: -22"，i2c probe 失败、整条 bus 不上线。
+	 * 仅 qcs9075-radxa-airbox-q900.dts 显式声明此属性；Q6A 必须自己补。
+	 * 配 `qupv3fw.elf` 由 linux-firmware 提供（`/lib/firmware/qcom/qcs6490/`，
+	 * 而 request_firmware 走 `/lib/firmware/qupv3fw.elf*` 标准路径，需 rootfs
+	 * overlay 加 symlink 兜底，见 board config）。 */
+	qcom,load-firmware;
+
+	touchscreen@48 {
+		compatible = "sec,sec_ts";
+		reg = <0x48>;
+		/* sec_ts 驱动用自家 `sec,irq_gpio` 属性（`of_get_named_gpio` + 内部
+		 * `gpio_to_irq`）而非 i2c 子系统的 `interrupts-extended`；后者写了
+		 * 无害但驱动不读，前者缺则 `Failed to get irq gpio` probe -EINVAL。
+		 * gpio cell 顺序 = <控制器 引脚 flags>；flags 由 sec_ts 内部固定为
+		 * IRQF_TRIGGER_LOW | IRQF_ONESHOT，DT flags 占位即可。 */
+		sec,irq_gpio = <&tlmm 81 0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&ts_int_conn>, <&ts_rst_conn>;
+		sec,max_coords = <1080>, <2160>;
+		/* 跳过开机软复位+强刷固件流程：a7a 实板验证 SW_RESET 后 sec_ts 与
+		 * 0x48 的 I2C 通信无法恢复，需跳过；Q6A i2c-geni 行为虽未必相同，
+		 * 但跳过本身对功能无副作用（panel 自带固件无需 host 刷写），稳态优先。 */
+		sec,skip-fw-update-on-probe;
+		/* sec_ts 驱动不解析 reset-gpios；TP-RST 由 reg_tp_reset
+		 * regulator-fixed 在驱动注册前完成解复位（见 / 下声明）。 */
+	};
+
+	sgm37604_bl: backlight@36 {
+		compatible = "sgmicro,sgm37604a";
+		reg = <0x36>;
+		/* 沿用 a7a 实板调好的亮度参数；E3 屏自带 SGM37604A
+		 * 内部直驱 LED 串，无外部 enable gpio（Q6A FPC 不引出）。 */
+		led-channels = <0x0f>;
+		max-current = <40000>;
+		default-brightness-level = <2048>;
+	};
+};
+
+&tlmm {
+	lcd_panel_reset: lcd-panel-reset-state {
+		pins = "gpio44";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	ts_int_conn: ts-int-conn-state {
+		pins = "gpio81";
+		function = "gpio";
+		bias-disable;
+	};
+
+	ts_rst_conn: ts-rst-conn-state {
+		pins = "gpio105";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};

@@ -47,8 +47,16 @@ SOC = {
         "dtb": "qcs6490-radxa-dragon-q6a",
         # 开源 GPU 走内核 drm/msm（in-tree），无 out-of-tree 模块
         "oot_modules": [],
-        # vendor BSP 已是 Radxa 生产配置，不再做 disable trim —— 等基线启起来
-        # 再回头评估编译耗时与裁剪空间（先求"能 boot"）。
+        # 关 MODULE_SIG_FORCE：qcom_defconfig 默认 `MODULE_SIG_FORCE=y` 强制
+        # 所有 .ko 带有效签名才能加载（modprobe: "Key was rejected by service"
+        # / dmesg: "Loading of unsigned module is rejected"）。in-tree 模块
+        # 由 MODULE_SIG_ALL 自动签所以工作（典型如 aic8800），但 flange OOT
+        # 流水线把 OOT 模块当一等公民、直拷 .ko 不签名（典型如本平台首批接入的
+        # meizu-e3-panel 三件套：panel_meizu_e3 / sec_ts / sgm37604a）。
+        # rk/all/aml 三平台内核都不开 SIG_FORCE，本平台与之对齐。关掉后未签名
+        # 模块加载会 taint kernel `E`，不阻塞功能；MODULE_SIG 本身保留（允许
+        # 签名模块，仅不强制）。
+        "disable_configs": ["MODULE_SIG_FORCE"],
     },
 
     "rootfs": {

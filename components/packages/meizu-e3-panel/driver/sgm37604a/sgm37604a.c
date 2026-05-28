@@ -295,7 +295,13 @@ static const struct backlight_ops sgm37604a_bled_ops = {
 
 
 
+/* i2c_driver.probe 签名 6.6 起去掉 id 参数（commit b8a1a4cd5e93 合并 probe_new
+ * 到 probe）。原驱动从不使用 id 形参，按版本守卫分流（参 sec_ts 同款修法）。 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+static int SGM37604A_probe(struct i2c_client *client)
+#else
 static int SGM37604A_probe(struct i2c_client *client, const struct i2c_device_id *id)
+#endif
 {
 	struct backlight_properties props;
 	int rc = 0;

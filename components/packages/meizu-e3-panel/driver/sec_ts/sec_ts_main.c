@@ -30,6 +30,10 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/version.h>
+/* 6.6 内核某些链路不再间接 include pinctrl/consumer.h（5.15/6.1 仍走间接 OK）。
+ * 显式 include 让 devm_pinctrl_get / pinctrl_lookup_state / pinctrl_select_state
+ * 在所有目标内核版本均能正常声明。 */
+#include <linux/pinctrl/consumer.h>
 /* wakelock 兼容垫片：rock5b BSP 走原生 <linux/wakelock.h>，A733 等无此头的
  * 主线系内核回退到 wakeup_source 映射。见 sec_ts_wakelock.h。 */
 #include "sec_ts_wakelock.h"
@@ -110,7 +114,13 @@ EXPORT_SYMBOL(sec_ts_dev);
 #ifndef SAMSUNG_PROJECT
 struct class *sec_class;
 static int sec_class_create(void) {
+	/* class_create 签名 6.4 起去掉首参 THIS_MODULE（commit 1aaba11da9aa）。
+	 * a7a (5.15) / rock5b (6.1) 走旧签名；Q6A QCLINUX BSP (6.6.90) 走新签名。 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+	sec_class = class_create("sec");
+#else
 	sec_class = class_create(THIS_MODULE, "sec");
+#endif
 	if (IS_ERR_OR_NULL(sec_class)) {
 		pr_err("%s:Failed to create class(sec) %ld\n", __func__,
 					 PTR_ERR(sec_class));
@@ -1625,8 +1635,14 @@ static int sec_ts_read_device_id(struct sec_ts_data *ts) {
 
 #define T_BUFF_SIZE 5
 /**/
+/* i2c_driver.probe 签名 6.6 起去掉 id 参数（commit b8a1a4cd5e93 合并 probe_new
+ * 到 probe）。原驱动从不使用 id 形参，直接按版本守卫分流即可。 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+static int sec_ts_probe(struct i2c_client *client) {
+#else
 static int sec_ts_probe(struct i2c_client *client,
 												const struct i2c_device_id *id) {
+#endif
 #ifdef SEC_TS_WAKEUP_GESTURE
 	int i;
 #endif

@@ -412,3 +412,28 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 通用改动：基类 `RootfsBuilder._install_hostname` 写 `/etc/hostname` + `/etc/hosts 127.0.1.1 <board>`（治所有平台 sudo `unable to resolve host` 警告，四个平台 phase2 均接入）；`flange-rootfs-grow` 兜底 sysfs `/sys/class/block/<dev>/partition` 解析（lsblk PARTN 列在 QCLINUX 6.6 BSP 上不暴露）。
 
 相关变更：openspec/changes/add-qcs6490-radxa-dragon-q6a/（task 1–6 已完成 + 7.3 wiki + 8.* 实板验证）；源码新增/改动覆盖 `builder/platforms/qualcommqcs6490/*`、`builder/rootfs.py`、`builder/source.py`（branch 切换后 `git clean -fd`）、`builder/flash.py` (QualcommFlashStrategy)、`components/platform/qualcommqcs6490/`、`components/board/radxa-dragon-q6a/`、`components/app/flange-rootfs-grow/scripts/`。
+
+## [2026-05-28] sync | meizu-e3-panel 扩到 radxa-dragon-q6a + 构建期 fdtoverlay 合并
+
+把 [[meizu-e3-panel]] 硬件特性包扩到第三块板 [[radxa-dragon-q6a]]（QCS6490 / mainline drm/msm）。包内新增第 3 个 OOT 驱动 `panel_meizu_e3`（drm_panel 风格 ~250 行，`compatible = "meizu,e3-panel"`），补齐 QCLINUX BSP 6.6.90 缺通用 DSI panel driver 的缺口；新增 Q6A overlay `qcom-qcs6490-radxa-dragon-q6a-meizu-e3-panel.dtso` 按原理图 v1.21 sheet 31 接线（tlmm 44 LCD-RST / tlmm 80 LCD_VCC_EN / tlmm 81 TP-INT / tlmm 105 TP-RST / i2c13 触摸+背光复用），背光沿用 SGM37604A I2C 路径（板载 SY7203 boost 因 EDP_BLPWM 不被引用而保持 disabled，与屏自带 SGM37604A 电气并联但功能互斥）。
+
+新增概念 [[构建期 dtb overlay 合并]]：grub-with-dtb 启动链（不支持运行时 overlay）走 `fdtoverlay` 在 rootfs 装内核 dtb 阶段把 `boot.package_overlays` 与 base dtb 合并到 `/boot/<dtb>.dtb`。落点：`builder/platforms/qualcommqcs6490/rootfs.py::_install_kernel_boot`；依赖图 `cache.py:DEPENDENCY_GRAPH["rootfs"]` 加 `device-tree-overlay`（对 U-Boot 三平台 no-op）。
+
+相关变更：openspec/changes/add-q6a-meizu-e3-panel/（提案 + 设计 + spec delta + 28 task）。源码改动：`builder/cache.py`、`builder/platforms/qualcommqcs6490/rootfs.py`、`components/packages/meizu-e3-panel/{package.py, driver/panel_meizu_e3/, device-tree/qcom-qcs6490-radxa-dragon-q6a-meizu-e3-panel.dtso}`、`components/board/radxa-dragon-q6a/config.py`（增 `meizu-e3-bringup` product）。OOT 编译验证 / 实板 bring-up 留后续步骤。
+
+## [2026-05-29] sync | radxa-dragon-q6a 魅族 E3 屏实板通过 + 9 个 bring-up 坑收齐
+
+`add-q6a-meizu-e3-panel` 实板 bring-up 完成：DSI-1 connector connected @ 1080×2160、背光 SGM37604A 半量程 2048/4095、触摸 sec_ts probe 成功（device_id AC 6F 70）、input `Samsung Electronics Touchscreen 1223` 注册。display + backlight + touch 三件套全活；坐标 X/Y 标定留 follow-up。
+
+按命中顺序收齐 9 个 Q6A 特有坑（详见 [[radxa-dragon-q6a]] 专门章节）：
+1. `Qcs6490KernelBuilder.compile` 漏调 OOT pipeline（旧帐）
+2. QCLINUX BSP `dtb-y` 默认不带 `-@` → base dtb 缺 `__symbols__`，fdtoverlay `FDT_ERR_NOTFOUND`
+3. dtso 误抄 mainline radxa branch label `&vcc_3v3` / `&vcc_1v8`（QCLINUX BSP base 不声明）
+4. `MODULE_SIG_FORCE=y` 拒绝未签名 OOT（与 rk/all/aml 三平台对齐，关掉）
+5. sec_ts / sgm37604a 跨 6.6 ABI 漂移（`class_create` 6.4 / `i2c probe` 6.6 / pinctrl include 6.6），用 `LINUX_VERSION_CODE` 守卫吸收
+6. QCLINUX i2c-geni 要 DT 属性 `qcom,load-firmware;`（仅 q900 板有）
+7. QUP firmware 路径错位（顶层 vs `qcom/qcs6490/`），用平台 overlay symlink
+8. Ubuntu noble usrmerge：overlay 顶层 `lib/` 撞 rootfs `/lib -> /usr/lib`，改走 `usr/lib/...`
+9. sec_ts DT prop 私有命名 `sec,irq_gpio` + `sec,skip-fw-update-on-probe`（不读 `interrupts-extended`）
+
+源码改动汇总：`builder/platforms/qualcommqcs6490/kernel.py`（OOT pipeline + DTC_FLAGS）、`components/platform/qualcommqcs6490/qcs6490/config.py`（disable MODULE_SIG_FORCE）、`components/platform/qualcommqcs6490/overlay/usr/lib/firmware/qupv3fw.elf.zst`（symlink）、`components/packages/meizu-e3-panel/driver/{sec_ts/sec_ts_main.c, sgm37604a/sgm37604a.c}`（跨内核 ABI 守卫）、对应 dtso 补 `qcom,load-firmware;` + `sec,irq_gpio` + `sec,skip-fw-update-on-probe`、PMIC LDO label 修正。
