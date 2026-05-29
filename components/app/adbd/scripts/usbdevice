@@ -123,6 +123,31 @@ usb_release_files()
 	done
 }
 
+# 等待 UDC gadget state 达到目标值（$1=目标 state, $2=最多重试次数 ×0.1s，默认 30=3s）
+usb_wait_state()
+{
+	UDC_STATE_FILE=/sys/class/udc/$USB_UDC/state
+	for i in $(seq ${2:-30}); do
+		[ "$(cat $UDC_STATE_FILE 2>/dev/null)" = "$1" ] && return 0
+		sleep .1
+	done
+	return 1
+}
+
+# 用 soft_connect 纯翻转 D+ 上拉（disconnect→connect），强制主机重新枚举。
+# 不动 ConfigFS symlink / FFS，因此不会触发 functionfs_unbind 破坏 adbd 持有的
+# ep fd（参见 usb_prepare 里"UDC unbound"分支的注释）——比 stop+start 安全。
+usb_bounce_connection()
+{
+	SC=/sys/class/udc/$USB_UDC/soft_connect
+	[ -w "$SC" ] || { usb_msg "[DEBUG bounce] 无 soft_connect ($SC)，跳过"; return 1; }
+	usb_msg "[DEBUG bounce] soft_connect disconnect -> connect"
+	echo disconnect > "$SC" 2>/dev/null || return 1
+	sleep .3
+	echo connect > "$SC" 2>/dev/null || return 1
+	return 0
+}
+
 # usage: usb_mount <src> <mountpoint> <options>
 usb_mount()
 {
@@ -655,6 +680,28 @@ usb_start()
 			usb_run_stage $func start
 		done
 	done
+
+	# 校验主机真的枚举成功 —— 仅 readback UDC 只能确认 gadget 已 bind，
+	# 确认不了枚举。QCS6490 实测：开机首次 bind 后主机枚举撞 dwc3 ep0
+	# 竞态（dmesg "request was not queued to ep0out"），UDC state 卡在非
+	# configured、adb 上不来，必须手动 systemctl restart。这里把"手动
+	# restart"自动化：bind 后总是做一次 soft_connect bounce（等同 restart
+	# 的干净重新枚举，adbd/FFS 此时已 ready；无主机时翻转 pullup 也无副作用），
+	# 再校验 state==configured。仍卡住且确有主机连接时 exit 1，交给 systemd
+	# Restart=on-failure 冷重试（StartLimitBurst 兜底）。
+	usb_bounce_connection || true
+	if usb_wait_state configured 30; then
+		usb_msg "[DEBUG start] 枚举成功：state=configured"
+	else
+		ENUM_STATE="$(cat /sys/class/udc/$USB_UDC/state 2>/dev/null || echo unknown)"
+		if [ "$ENUM_STATE" = "not attached" ]; then
+			# 无 VBUS / 未接主机，属正常；保持 gadget bind，插线即枚举。
+			usb_msg "[DEBUG start] 无主机连接 (state=$ENUM_STATE)，保持 bind"
+		else
+			usb_msg "[ERROR] 枚举失败 (state=$ENUM_STATE)：底层 ep0/枚举竞态未恢复。退出 1 触发 systemd Restart=on-failure。"
+			exit 1
+		fi
+	fi
 
 	# Store started functions
 	usb_set_started

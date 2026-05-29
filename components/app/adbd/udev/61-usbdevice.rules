@@ -1,1 +1,9 @@
-SUBSYSTEM=="android_usb",ACTION=="change",RUN+="/usr/bin/usbdevice update"
+# Rockchip 等带 android_usb vendor class 的平台：每次 USB 状态变化都重跑
+# usbdevice update 做自愈。
+SUBSYSTEM=="android_usb", ACTION=="change", RUN+="/usr/bin/usbdevice update"
+
+# 高通 QCS6490 等 mainline dwc3 平台没有 android_usb class，上面的规则永不触发。
+# UDC 设备出现/变化时重跑 usbdevice，作为 gadget bind 的兜底触发（与 service
+# 的 WantedBy=usb-gadget.target 互补；usbdevice update 内部 flock + 幂等守卫，
+# 重复触发安全）。
+SUBSYSTEM=="udc", ACTION=="add|change", RUN+="/usr/bin/usbdevice update"

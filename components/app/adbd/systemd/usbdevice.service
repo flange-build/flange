@@ -22,4 +22,11 @@ Restart=on-failure
 RestartSec=2
 
 [Install]
-WantedBy=sysinit.target
+# sysinit.target：保持 Rockchip 等平台的早期启动路径不回归。
+# usb-gadget.target：systemd 自带 udev 规则在 UDC 设备就绪时
+#   (SUBSYSTEM=="udc", ENV{SYSTEMD_WANTS}+="usb-gadget.target") 拉起此 target。
+#   高通 QCS6490 等 mainline dwc3 平台没有 android_usb class、61-usbdevice.rules
+#   的 android_usb change 规则永不触发，改靠这条链路在 controller ready 时
+#   (重新)启动 gadget，替代失效的 android_usb 自愈机制。两条并存 = 早启 +
+#   UDC-ready 兜底重启；usb_start 的"已运行则跳过"守卫保证幂等。
+WantedBy=sysinit.target usb-gadget.target
