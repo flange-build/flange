@@ -62,6 +62,23 @@
 		regulator-max-microvolt = <3300000>;
 		gpio = <&tlmm 80 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
+		/* always-on + boot-on：触摸 IC（i2c-13 0x48 sec_ts）实际供电链路
+		 * 是 VCC_3V3_LCD rail → FPC pin 2 → panel 模组内 sec_ts IC，但
+		 * sec_ts 驱动是 OEM 老代码不调 regulator_get/enable、节点本身也
+		 * 没 vdd-supply 表达此依赖（驱动加了也没人消费）。VCC_3V3_LCD 名
+		 * 义上由 panel@0 的 vdd-supply 引用，但 panel_meizu_e3 只在
+		 * `.prepare`（DRM modeset 时）才 regulator_enable(vdd)，时机远
+		 * 晚于 sec_ts probe → sec_ts probe 时触摸 IC 还没电 → i2c 0x48
+		 * 无 ACK（-ENXIO）→ probe 失败。
+		 * 故 boot-on + always-on：regulator core 起来即拉高 tlmm 80，rail
+		 * 在 sec_ts probe 前已稳定上电。panel 的 enable/disable ref-count
+		 * 仍正常工作（仅不会真关 rail，bringup 阶段可接受；后续要做精细
+		 * 电源策略时再让 sec_ts 节点声明 vdd-supply 并改 sec_ts 驱动主动
+		 * 消费）。a7a 之所以无此问题：a7a 的 panel power0/1 走 reg_dc1sw1
+		 * / reg_bldo2，是 Allwinner BSP 系统级 rail（近似 always-on），
+		 * sec_ts probe 时已有电。 */
+		regulator-always-on;
+		regulator-boot-on;
 	};
 
 	/* TP-RST = tlmm 105：sec_ts 驱动不管理 reset，用 regulator-fixed

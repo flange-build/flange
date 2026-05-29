@@ -1353,6 +1353,10 @@ static int sec_ts_parse_dt(struct i2c_client *client) {
 	pdata->irq_type = IRQF_TRIGGER_LOW | IRQF_ONESHOT;
 	if (of_property_read_u32_array(np, "sec,max_coords", coords, 2)) {
 		input_err(true, &client->dev, "Failed to get max_coords property\n");
+		/* 对称释放上面 gpio_request_one(pdata->gpio,"sec,tsp_int") 申请
+		 * 的 IRQ GPIO；原 OEM 代码漏 free → DT 缺该属性时 gpio 残留、
+		 * 二次 probe 申请同一引脚必失败（"Unable to request tsp_int"）。 */
+		gpio_free(pdata->gpio);
 		return -EINVAL;
 	}
 	pdata->max_x = coords[0];
@@ -1422,13 +1426,15 @@ static int sec_ts_setup_drv_data(struct i2c_client *client) {
 	}
 	if (!pdata->power) {
 		input_err(true, &client->dev, "No power contorl found\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto err_free_gpio;
 	}
 
 	pdata->pinctrl = devm_pinctrl_get(&client->dev);
 	if (IS_ERR(pdata->pinctrl)) {
 		input_err(true, &client->dev, "could not get pinctrl\n");
-		return PTR_ERR(pdata->pinctrl);
+		ret = PTR_ERR(pdata->pinctrl);
+		goto err_free_gpio;
 	}
 
 	pdata->pins_default = pinctrl_lookup_state(pdata->pinctrl, "on_state");
@@ -1440,8 +1446,10 @@ static int sec_ts_setup_drv_data(struct i2c_client *client) {
 		input_err(true, &client->dev, "could not get sleep pinstate\n");
 
 	ts = kzalloc(sizeof(struct sec_ts_data), GFP_KERNEL);
-	if (!ts)
-		return -ENOMEM;
+	if (!ts) {
+		ret = -ENOMEM;
+		goto err_free_gpio;
+	}
 
 	ts->client = client;
 	ts->plat_data = pdata;
@@ -1460,6 +1468,13 @@ static int sec_ts_setup_drv_data(struct i2c_client *client) {
 
 	i2c_set_clientdata(client, ts);
 
+	return ret;
+
+err_free_gpio:
+	/* parse_dt 之后任何失败路径：对称释放 parse_dt 里 gpio_request_one
+	 * 申请的 IRQ GPIO，防止二次 probe 时申请同一引脚失败。 */
+	if (gpio_is_valid(pdata->gpio))
+		gpio_free(pdata->gpio);
 	return ret;
 }
 
@@ -1876,6 +1891,15 @@ err_input_register_device:
 err_allocate_device:
 err_get_drv_data:
 	kfree(ts);
+	{
+		/* 此分支表示 sec_ts_setup_drv_data 已成功（parse_dt 内已
+		 * gpio_request_one），但后续 input/IRQ/device_id 等失败：必须
+		 * 对称释放 IRQ GPIO，否则下次 probe 申请同一引脚必失败
+		 * （"Unable to request tsp_int"）。 */
+		struct sec_ts_plat_data *pdata = client->dev.platform_data;
+		if (pdata && gpio_is_valid(pdata->gpio))
+			gpio_free(pdata->gpio);
+	}
 err_setup_drv_data:
 	return ret;
 }

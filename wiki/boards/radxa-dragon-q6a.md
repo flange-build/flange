@@ -14,7 +14,7 @@ related:
   - "[[FlashStrategy 抽象]]"
   - "[[meizu-e3-panel]]"
   - "[[构建期 dtb overlay 合并]]"
-updated: 2026-05-28
+updated: 2026-05-29
 ---
 
 ## TL;DR
@@ -75,7 +75,7 @@ lunch radxa-dragon-q6a-meizu-e3-bringup-debug   # + 魅族 E3 MIPI-DSI 屏（显
 | 显示 DSI-1 connector | ✓ connected @ 1080×2160 | `/sys/class/drm/card0-DSI-1/status` + `modes` |
 | `panel_meizu_e3` attach msm_dsi | ✓ | drm card0 + renderD128 + `/dev/dri/card0` |
 | 背光 SGM37604A I2C | ✓ brightness 2048/4095 | `/sys/class/backlight/sgm37604a/{,actual_,max_}brightness` |
-| 触摸 sec_ts probe | ✓ device_id AC 6F 70 | input `Samsung Electronics Touchscreen 1223` on event2；坐标实测留 follow-up |
+| 触摸 sec_ts probe | ✓ device_id AC 6F 70 | input `Samsung Electronics Touchscreen 1223` on event2；IRQ 201 (msmgpio 81) 实测累计中断（手摸时涨）；坐标 X/Y 翻转/镜像方向标定留 follow-up |
 | 三 OOT 模块加载 | ✓ loaded（kernel taint `E`） | `lsmod` 含 panel_meizu_e3 + sec_ts + sgm37604a |
 | i2c-13 bus | ✓ Firmware load Success | dmesg `Firmware load for I2C protocol is Success for xfer mode 1`；13-0036 + 13-0048 client |
 
@@ -107,6 +107,7 @@ LCD FPC（J10，原理图 v1.21 sheet 31）引脚：
 7. **QUP firmware 路径错位**：`request_firmware("qupv3fw.elf")` 找顶层；linux-firmware 装在 `/lib/firmware/qcom/qcs6490/qupv3fw.elf.zst`。修：平台 overlay symlink `qupv3fw.elf.zst -> qcom/qcs6490/qupv3fw.elf.zst`（`FW_LOADER_COMPRESS_ZSTD=y` 自动解压）。
 8. **usrmerge 冲突**：overlay 顶层 `lib/` 撞 rootfs `/lib -> /usr/lib` symlink，`cp -a` 报 `cannot overwrite non-directory ... with directory`。修：所有平台 overlay 走 `usr/lib/...` 路径而非 `lib/...`。
 9. **sec_ts DT prop 私有命名**：sec_ts 不读 `interrupts-extended`，用 `sec,irq_gpio` + `gpio_to_irq()`。修：dtso 加 `sec,irq_gpio = <&tlmm 81 0>` + `sec,skip-fw-update-on-probe`（a7a 同款 workaround）。
+10. **sec_ts probe 时 vcc_3v3_lcd 未上电（首次 probe -ENXIO）**（2026-05-29 后补）：触摸 IC 实际供电链路 = `vcc_3v3_lcd` rail → FPC pin 2 → panel 模组内 sec_ts IC，但 sec_ts 驱动是 OEM 老代码不调 `regulator_get/enable`、节点本身没 `vdd-supply`（驱动不消费）。`vcc_3v3_lcd` 名义上由 `panel@0` 引用，而 `panel_meizu_e3` 只在 `.prepare()`（DRM modeset 时）才 enable vdd，时机远晚于 sec_ts probe (6.86 s) → 触摸 IC 无电、i2c 0x48 -ENXIO、probe 退出 -ENOMEM。次生：`sec_ts_parse_dt` 错误路径无 `gpio_free`，首次失败后 gpio 81 残留，unbind/bind 与 rmmod/modprobe 二次重试均报 `Unable to request tsp_int`。修（双管齐下）：dtso `vcc_3v3_lcd` 加 `regulator-always-on; regulator-boot-on;`（regulator core 起来即 tlmm 80 拉高，rail 在 sec_ts probe 前已稳定上电；panel `enable/disable` ref-count 仍正常工作，仅 unprepare 时不真关电，bringup 阶段可接受）+ `sec_ts_main.c` 在 `parse_dt` / `setup_drv_data` / `probe::err_get_drv_data` 三处错误路径补 `gpio_free`（健壮性）。a7a 无此问题：a7a 的 panel `power0/1-supply` 走 Allwinner BSP 系统级 rail（`reg_dc1sw1`/`reg_bldo2`，近似 always-on），sec_ts probe 时已有电。Follow-up：让 `touchscreen@48` 显式声明 `vdd-supply = <&vcc_3v3_lcd>` 并改 sec_ts 驱动主动 `regulator_get/enable` 后即可去掉 always-on（power policy 阶段处理）。
 
 ## 易踩坑
 

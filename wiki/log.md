@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-05-29] sync | radxa-dragon-q6a 魅族 E3 屏触摸实板通过（修首次 probe -ENXIO 根因 + 次生 gpio leak）
+
+`wiki/boards/radxa-dragon-q6a.md`：bring-up 表内触摸 sec_ts 行补充 IRQ 201 (msmgpio 81) 实测累计中断证据；「9 个坑」扩展为「10 个坑」，新增第 10 个 = sec_ts probe 时 `vcc_3v3_lcd` 未上电（首次 probe -ENXIO），含根因、双管齐下修法（dtso `regulator-always-on/boot-on` + sec_ts 三处 gpio_free）、a7a 无此问题的对照（Allwinner BSP 系统级 rail 近似 always-on）、follow-up 方向（让 `touchscreen@48` 显式声明 `vdd-supply` 并改驱动主动消费即可去 always-on）。updated → 2026-05-29。
+
+相关代码：`components/packages/meizu-e3-panel/device-tree/qcom-qcs6490-radxa-dragon-q6a-meizu-e3-panel.dtso`（`vcc_3v3_lcd` 节点补 always-on/boot-on + 长注释）、`components/packages/meizu-e3-panel/driver/sec_ts/sec_ts_main.c`（`sec_ts_parse_dt::max_coords fail` + `sec_ts_setup_drv_data::err_free_gpio` + `sec_ts_probe::err_get_drv_data` 三处补 `gpio_free`）。验证：reboot 后 dmesg `sec_ts_read_device_id: AC, 6F, 70 ret=1` + `regulator_summary` `vcc_3v3_lcd use=2`（boot-on 拉到 2）+ input `event2` 注册 + 手摸 IRQ 计数实测涨。
+
 ## [2026-05-23] sync | radxa-cubie-a7a 新增 meizu-e3-bringup product（魅族 E3 屏跨 SoC 复用）
 
 `wiki/boards/radxa-cubie-a7a.md`：product/variant 加 meizu-e3-bringup、主显示行更新、新增「魅族 E3 屏」一节（overlay 由来 + LCD FPC(J10) 引脚表 + init/timing 平移 + 实测项），DSI 主屏从「未启用项」移出，易踩坑补 twi2 与 8hd 互斥，frontmatter related 补 [[硬件特性包]]、updated → 2026-05-23。
