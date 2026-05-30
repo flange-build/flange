@@ -9,7 +9,12 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#include <asm/fb.h>
+/* 注：原始 OEM 代码 #include <asm/fb.h>，但本驱动并不使用 asm/fb.h 提供的
+ * arch 私有符号（fb_pgprotect / fb_is_primary_device）；它用到的 fb_event /
+ * FB_EVENT_BLANK / fb_{un}register_client 全部来自下方 <linux/fb.h>。
+ * mainline 6.11+ 在 arm64 上移除了 per-arch <asm/fb.h>（QCS6490 linux-6.18.2
+ * 即报 "asm/fb.h: No such file or directory"），而 rock5b/a7a 的旧 BSP 内核
+ * 也无需此头，故直接删除该 include，三板通用。 */
 #include <linux/notifier.h>
 #include <linux/delay.h>
 
@@ -47,6 +52,14 @@
 #if defined(CONFIG_FB)
 #include <linux/fb.h>
 #include <linux/notifier.h>
+/* mainline 6.18 的 <linux/fb.h> 已移除 fbdev blank notifier 事件宏 FB_EVENT_BLANK
+ * （仅保留 FB_EVENT_FB_{,UN}REGISTERED）。本驱动 fb_notifier_callback 是死代码
+ * （fb_register_client 在 probe 中被注释，从未注册），但仍参与编译，故仿照上方
+ * FB_EARLY_EVENT_BLANK 的兜底，按历史值 0x09 补一个；旧 BSP 内核 fb.h 已定义则
+ * #ifndef 自动跳过。 */
+#ifndef FB_EVENT_BLANK
+#define FB_EVENT_BLANK 0x09
+#endif
 #elif defined(CONFIG_HAS_EARLYSUSPEND)
 #include <linux/earlysuspend.h>
 #endif
@@ -1215,7 +1228,7 @@ static ssize_t sec_ts_enter_recovery_store(struct device *dev,
 		gpio_free(pdata->gpio);
 
 		if (gpio_is_valid(pdata->gpio)) {
-			ret = gpio_request_one(pdata->gpio, GPIOF_DIR_IN, "sec,tsp_int");
+			ret = gpio_request_one(pdata->gpio, GPIOF_IN, "sec,tsp_int");
 			if (ret) {
 				input_err(true, &ts->client->dev, "Unable to request tsp_int [%d]\n",
 									pdata->gpio);
@@ -1338,7 +1351,7 @@ static int sec_ts_parse_dt(struct i2c_client *client) {
 
 	pdata->gpio = of_get_named_gpio(np, "sec,irq_gpio", 0);
 	if (gpio_is_valid(pdata->gpio)) {
-		ret = gpio_request_one(pdata->gpio, GPIOF_DIR_IN, "sec,tsp_int");
+		ret = gpio_request_one(pdata->gpio, GPIOF_IN, "sec,tsp_int");
 		if (ret) {
 			input_err(true, &client->dev, "Unable to request tsp_int [%d]\n",
 								pdata->gpio);

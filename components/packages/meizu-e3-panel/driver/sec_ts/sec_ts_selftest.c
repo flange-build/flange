@@ -38,7 +38,8 @@
 #include <linux/of_gpio.h>
 #include <linux/time.h>
 #if defined(CONFIG_FB)
-#include <asm/fb.h>
+/* 原 OEM 代码 #include <asm/fb.h>，本文件未使用其符号；mainline 6.11+ arm64
+ * 已移除该头（见 sec_ts_main.c 顶部注释）。仅保留 notifier.h。 */
 #include <linux/notifier.h>
 #elif defined(CONFIG_HAS_EARLYSUSPEND)
 #include <linux/earlysuspend.h>

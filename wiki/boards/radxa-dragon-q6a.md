@@ -34,13 +34,15 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 | 子系统（mainline 6.18.2 实板 2026-05-30）| 状态 |
 |---|---|
 | 启动链 → Kernel 6.18.2 + UFS（**无复位**）| ✓ |
-| **硬件视频编解码 venus** | ✓ `/dev/video0` 编 H.264 · `/dev/video1` 解 H.264/VP8/VP9（v4l2 验收）|
+| **硬件视频解码 venus** | ✓ `/dev/video1` 解 H.264/HEVC/MPEG2/VP9（gst `v4l2h264dec` → NV12 1280×720 实跑 ~328fps）|
+| **硬件视频编码 venus** | ⚠️ `/dev/video0` 节点 + 固件声明 H264/HEVC，但发起编码 streaming 即**硬复位 SoC**（配置无关、Linux 零日志=firmware/HFI 级，待 ttyMSM0 串口定位）|
 | GPU Adreno 643（`/dev/dri/card0`+`renderD128`，a660 fw）| ✓ |
 | 有线网 enp1s0（r8169 + REALTEK_PHY）| ✓ |
 | GENI i2c（qupv3fw.elf.zst 加载）| ✓ |
 | **AIC8800 wifi** | ✓ OOT 模块 `aic8800_fdrv`+`aic_load_fw`，iface `wlx<MAC>` 扫到 23 AP |
 | **adb-gadget** | ✓ `usb_1` 改 peripheral → UDC `a600000.usb` configured，Mac `adb devices` 可见 |
-| 音频 / 魅族屏 | ⏳ 待在 mainline 逐项重验 |
+| **魅族 E3 屏**（meizu-e3-bringup product）| ✓ 实板**有画面 + 可触摸 + 背光可控**（2026-05-30）；mainline 适配见下节坑 #6/#11 |
+| 音频 | ⏳ 待在 mainline 重验（LPASS soundwire codec）|
 
 **AIC8800 wifi + adb（2026-05-30 实板）**：mainline 不带 in-tree aic8800 → 以 OOT 模块从 `radxa-pkg/aic8800` 编（`oot_sources`+`oot_modules`，见 `qcs6490/config.py`）。三处治理：① `get_tx_power` cfg80211 6.18 新增 `radio_idx`/`link_id` 参数（`patches/aic8800/0001`）；② 顶层 Makefile 强制 `-j$(nproc)` + 父 jobserver 继承 → 大 cc1 并发 OOM，配方改 **`MAKEFLAGS= make -j1`** 真串行；③ sed `{}` 要 `{{}}` 转义避开 `str.format`。固件 `/lib/firmware/aic8800D80/` 与驱动 `aic_default_fw_path` 吻合。adb 真根因：mainline 两个 USB 控制器都 `dr_mode=host` → 无 UDC；`patches/kernel/0002` 把 `usb_1`(usb@a600000, USB-A SS 口) 改 peripheral（HDMI 走 qmpphy lane0/1 独立、不受影响；usb_2 hub+wifi 保持 host）+ gadget 栈 builtin。配合 0001 dwc3 stall patch + usbdevice 自愈，开机自动上线（NRestarts=1）。
 
@@ -125,12 +127,13 @@ LCD FPC（J10，原理图 v1.21 sheet 31）引脚：
 2. **base dtb 无 `__symbols__`**：QCLINUX BSP `scripts/Makefile.lib:372` 仅对 `base-dtb-y` 加 `-@`；`dtb-y` 默认不带。修：kernel.py 传 `DTC_FLAGS_<dtb>=-@` 经 per-target hook 启用。
 3. **dtso 错抄 mainline radxa branch label**：`&vcc_3v3` / `&vcc_1v8` 在 QCLINUX BSP base 不声明 → fdtoverlay `FDT_ERR_NOTFOUND`。修：dtso 删 `vin-supply`、`vccio-supply` 改 `&vreg_l1c_1p8`（PMIC 直出）。
 4. **`MODULE_SIG_FORCE=y` 拒绝未签名 OOT**：modprobe `Key was rejected by service` + dmesg `Loading of unsigned module is rejected`。修：SoC config 加 `disable_configs: ["MODULE_SIG_FORCE"]`。Follow-up 正向方案是 `_install_oot_modules` 接 `sign-file` + 内核 `certs/signing_key.pem`，跨平台单独立项。
-5. **sec_ts / sgm37604a 6.6 ABI 漂移**：`class_create` 6.4 去首参、`i2c_driver.probe` 6.6 删 id 参数、pinctrl/consumer.h 不再间接 include。修：`LINUX_VERSION_CODE` 守卫 + 显式 include。
-6. **i2c-geni 要 `qcom,load-firmware;`**：QCLINUX BSP `qcom-geni-se.c::geni_load_se_firmware` 缺此 DT 属性直接 `return -EINVAL` → bus 不上线。修：dtso `&i2c13` 加 `qcom,load-firmware;`。
+5. **sec_ts / sgm37604a ABI 漂移**：`class_create` 6.4 去首参、`i2c_driver.probe` 6.6 删 id 参数、pinctrl/consumer.h 不再间接 include；**mainline 6.18 续增**：`<asm/fb.h>` 6.11 arm64 移除（驱动本不用其符号，删）、`<asm/unaligned.h>` 6.12 迁 `<linux/unaligned.h>`（`__has_include` 分流）、`GPIOF_DIR_IN` 删 → 用 `GPIOF_IN`、`FB_EVENT_BLANK` 6.18 fb.h 移除（fb_notifier 是死代码，按历史值 0x09 `#ifndef` 兜底）。修：`LINUX_VERSION_CODE`/`__has_include`/`#ifndef` 守卫，三板（rock5b/a7a/q6a）通用。
+6. **i2c-geni firmware 加载（BSP↔mainline 反转）**：QCLINUX BSP `geni_load_se_firmware` 缺 DT 属性 `return -EINVAL` 故 dtso 曾加 `qcom,load-firmware;`；**mainline `i2c-qcom-geni` 不读该属性**，`geni_se_read_proto()` 返回 `INVALID_PROTO` 时**自动** load，故 mainline overlay 已删 `qcom,load-firmware`。
 7. **QUP firmware 路径错位**：`request_firmware("qupv3fw.elf")` 找顶层；linux-firmware 装在 `/lib/firmware/qcom/qcs6490/qupv3fw.elf.zst`。修：平台 overlay symlink `qupv3fw.elf.zst -> qcom/qcs6490/qupv3fw.elf.zst`（`FW_LOADER_COMPRESS_ZSTD=y` 自动解压）。
 8. **usrmerge 冲突**：overlay 顶层 `lib/` 撞 rootfs `/lib -> /usr/lib` symlink，`cp -a` 报 `cannot overwrite non-directory ... with directory`。修：所有平台 overlay 走 `usr/lib/...` 路径而非 `lib/...`。
 9. **sec_ts DT prop 私有命名**：sec_ts 不读 `interrupts-extended`，用 `sec,irq_gpio` + `gpio_to_irq()`。修：dtso 加 `sec,irq_gpio = <&tlmm 81 0>` + `sec,skip-fw-update-on-probe`（a7a 同款 workaround）。
 10. **sec_ts probe 时 vcc_3v3_lcd 未上电（首次 probe -ENXIO）**（2026-05-29 后补）：触摸 IC 实际供电链路 = `vcc_3v3_lcd` rail → FPC pin 2 → panel 模组内 sec_ts IC，但 sec_ts 驱动是 OEM 老代码不调 `regulator_get/enable`、节点本身没 `vdd-supply`（驱动不消费）。`vcc_3v3_lcd` 名义上由 `panel@0` 引用，而 `panel_meizu_e3` 只在 `.prepare()`（DRM modeset 时）才 enable vdd，时机远晚于 sec_ts probe (6.86 s) → 触摸 IC 无电、i2c 0x48 -ENXIO、probe 退出 -ENOMEM。次生：`sec_ts_parse_dt` 错误路径无 `gpio_free`，首次失败后 gpio 81 残留，unbind/bind 与 rmmod/modprobe 二次重试均报 `Unable to request tsp_int`。修（双管齐下）：dtso `vcc_3v3_lcd` 加 `regulator-always-on; regulator-boot-on;`（regulator core 起来即 tlmm 80 拉高，rail 在 sec_ts probe 前已稳定上电；panel `enable/disable` ref-count 仍正常工作，仅 unprepare 时不真关电，bringup 阶段可接受）+ `sec_ts_main.c` 在 `parse_dt` / `setup_drv_data` / `probe::err_get_drv_data` 三处错误路径补 `gpio_free`（健壮性）。a7a 无此问题：a7a 的 panel `power0/1-supply` 走 Allwinner BSP 系统级 rail（`reg_dc1sw1`/`reg_bldo2`，近似 always-on），sec_ts probe 时已有电。Follow-up：让 `touchscreen@48` 显式声明 `vdd-supply = <&vcc_3v3_lcd>` 并改 sec_ts 驱动主动 `regulator_get/enable` 后即可去掉 always-on（power policy 阶段处理）。
+11. **i2c13 `qcom,enable-gsi-dma` 致触摸/背光全失败（mainline 6.18.2，2026-05-30）**：mainline base board dts 给 i2c13（"External touchscreen" bus）声明了 `qcom,enable-gsi-dma`，GSI/GPI DMA 模式对 sec_ts(0x48)/sgm37604a(0x36) 的小事务**全部 `GPI transfer failed: -5`** → sec_ts 读 device id 全 0（应 AC,6F,70）、背光写失败。default 产物 i2c13 无从机不触发传输故不暴露。`fdtoverlay` 不支持 `/delete-property/`（libfdt overlay apply 纯加性、无删除编码），且布尔属性没法用赋值中和，故只能 patch base dts：`patches/kernel/0003` 删该行 → geni i2c 回退 FIFO 模式，触摸/背光恢复（对 default 无害）。
 
 ## 易踩坑
 

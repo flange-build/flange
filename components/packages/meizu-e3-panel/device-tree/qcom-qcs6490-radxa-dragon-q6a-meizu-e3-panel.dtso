@@ -158,15 +158,12 @@
 	#size-cells = <0>;
 	status = "okay";
 
-	/* QCLINUX BSP `i2c-qcom-geni.c::geni_check_fw_validity` 在 SE proto 寄存器
-	 * 读到非 I2C 时调 `geni_load_se_firmware`；该函数若节点没 `qcom,load-firmware`
-	 * 直接 `return -EINVAL` → 上层报 "Cannot load firmware from linux for i2c
-	 * error: -22"，i2c probe 失败、整条 bus 不上线。
-	 * 仅 qcs9075-radxa-airbox-q900.dts 显式声明此属性；Q6A 必须自己补。
-	 * 配 `qupv3fw.elf` 由 linux-firmware 提供（`/lib/firmware/qcom/qcs6490/`，
-	 * 而 request_firmware 走 `/lib/firmware/qupv3fw.elf*` 标准路径，需 rootfs
-	 * overlay 加 symlink 兜底，见 board config）。 */
-	qcom,load-firmware;
+	/* 注：mainline（radxa/kernel@linux-6.18.2）`i2c-qcom-geni.c` 在
+	 * `geni_se_read_proto()` 返回 `GENI_SE_INVALID_PROTO` 时**自动**调
+	 * `geni_load_se_firmware(&gi2c->se, GENI_SE_I2C)`，不再依赖 BSP 时代的
+	 * `qcom,load-firmware` DT 属性（驱动根本不读它）；且 `&i2c13` 已在 base
+	 * board dts 中 `status="okay"`（含 `qcom,enable-gsi-dma`），本 overlay 仅
+	 * 往该节点追加触摸/背光子节点。故不再声明 `qcom,load-firmware`。 */
 
 	touchscreen@48 {
 		compatible = "sec,sec_ts";

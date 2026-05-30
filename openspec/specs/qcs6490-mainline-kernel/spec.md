@@ -39,6 +39,14 @@
 - **WHEN** 执行 `v4l2-ctl --list-devices` 与对各节点 `v4l2-ctl -d <node> --all`
 - **THEN** 列出解码器/编码器设备并可枚举受支持的 codec 像素格式
 
+#### Scenario: 硬件解码端到端可用
+- **WHEN** 安装 GStreamer 并对 8-bit 4:2:0 H.264 流执行 `filesrc ! h264parse ! v4l2h264dec ! fakesink`
+- **THEN** 管线跑完到 EOS、`v4l2h264dec` src caps 为 `video/x-raw,format=NV12`，无报错、设备不复位
+
+#### Scenario: 硬件编码当前触发 SoC 复位（已知缺陷）
+- **WHEN** 通过 `v4l2h264enc` 发起任意配置的硬件编码 streaming
+- **THEN** 设备硬复位、Linux 层无任何日志（firmware/HFI 级故障）；编码器节点 `/dev/video0` 与固件仍声明 H264/HEVC 能力，故判定为运行时缺陷而非能力缺失，定位需 ttyMSM0 串口
+
 ### Requirement: 既有功能重验门槛
 
 迁移 SHALL 以"default 启动 + UFS + codec"为首个完成里程碑；BSP 上已验证的功能（魅族 E3 屏、aic8800 wifi、adb 自愈、GPU drm/msm）SHALL 作为后续独立任务在新内核上逐项重新验证，并 SHALL 在文档中记录各项重验状态。
@@ -66,4 +74,16 @@ mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模
 #### Scenario: 开机自动上线无需手动干预
 - **WHEN** USB 口接到主机并开机
 - **THEN** `/sys/class/udc/a600000.usb/state` 为 `configured`，主机 `adb devices` 可见该设备；usbdevice 服务经自愈最终 active（无需手动 restart）
+
+### Requirement: 魅族 E3 屏（meizu-e3-bringup product）在 mainline 重验通过
+
+`radxa-dragon-q6a-meizu-e3-bringup-*` 产物 SHALL 在 mainline 6.18.2 基线上完成魅族 E3 39pin MIPI-DSI 屏的显示 + 触摸 + 背光 bring-up：经 `meizu-e3-panel` 包注入的 `panel_meizu_e3`/`sec_ts`/`sgm37604a` 三个 OOT 驱动 SHALL 能对 mainline 6.18 内核编译通过（适配 `asm/fb.h`/`asm/unaligned.h` 移除、`GPIOF_DIR_IN`→`GPIOF_IN`、`FB_EVENT_BLANK` 移除等 ABI 漂移，并 SHALL 同时保持 rock5b/a7a 旧 BSP 内核可编）。触摸/背光所在 `i2c13` SHALL 去除 base board dts 的 `qcom,enable-gsi-dma`（`patches/kernel/0003`），使 geni i2c 走 FIFO 模式、避免 GPI DMA 传输失败；该改动 SHALL NOT 影响 default 产物。
+
+#### Scenario: 显示 + 触摸 + 背光实板可用
+- **WHEN** 刷入 meizu-e3-bringup 产物并上电、屏接到 J10 LCD FPC
+- **THEN** `/sys/class/drm/card0-DSI-1` 为 `connected`/`enabled` @ 1080×2160 且面板有画面、`sec_ts` 读到 device id `AC,6F,70` 且手指触摸使其 IRQ(gpio81) 计数累增、`/sys/class/backlight/sgm37604a` 亮度可写且生效
+
+#### Scenario: i2c13 无 GPI DMA 传输失败
+- **WHEN** meizu-e3-bringup 产物开机、`sec_ts`/`sgm37604a` 在 `i2c13` 上 probe
+- **THEN** `dmesg` 无 `geni_i2c ... GPI transfer failed`，触摸与背光的 i2c 读写均成功
 

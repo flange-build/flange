@@ -13,7 +13,14 @@
  *
  */
 
+/* mainline 6.12+ 把 <asm/unaligned.h> 统一迁移为 <linux/unaligned.h>（arm64 上
+ * QCS6490 linux-6.18.2 已无 asm/unaligned.h）；rock5b/a7a 旧 BSP 内核仍是旧路径。
+ * 用 __has_include 在编译期分流，三板通用（与 sec_ts_wakelock.h 同款做法）。 */
+#if defined(__has_include) && __has_include(<linux/unaligned.h>)
+#include <linux/unaligned.h>
+#else
 #include <asm/unaligned.h>
+#endif
 #include <linux/ctype.h>
 #include <linux/delay.h>
 #include <linux/firmware.h>
