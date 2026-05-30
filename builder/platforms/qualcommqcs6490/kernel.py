@@ -28,19 +28,35 @@ class Qcs6490KernelBuilder(KernelBuilder):
         # 合并大小写适配 fragment（敏感 FS 上为空，无副作用）
         self.make(src_dir, ["case_insensitive_fix.config"],
                   arch=self.ARCH, cross=self.CROSS)
-        # 裁剪 Q6A 用不到的大驱动（如 DRM_NOUVEAU），加速编译
-        self._apply_disable_configs(src_dir, config)
+        # 应用 enable(=y builtin) / disable(裁剪) 配置覆盖。
+        # ⚠️ 用「追加进 .config + olddefconfig」而非 `make <frag>.config`
+        # (即 scripts/kconfig/merge_config.sh)：后者对每个 "redefined" 符号在
+        # CWD(=bind 挂载的源码树) 的临时文件上反复 `sed -i`，大片段(720 项裁剪)
+        # 在 Docker-for-Mac bind FS 上的 rename churn 不可靠 → 临时文件中途消失
+        # ("sed: can't read ./.tmp.config.XXX: No such file or directory" → exit 2)。
+        # append + olddefconfig 只对 .config 一次读、一次写，对 bind 挂载友好；
+        # kconfig 解析 .config 时后值覆盖前值(disable 覆盖 base 的 =m/=y)，且被
+        # select 的依赖会被 olddefconfig 自动纠正回来(不会破坏依赖)。
+        self._apply_config_overrides(src_dir, config)
 
-    def _apply_disable_configs(self, src_dir: Path, config: dict):
-        """把 kernel.disable_configs 写成 config 片段并合并（# CONFIG_X is not set）。"""
+    def _apply_config_overrides(self, src_dir: Path, config: dict):
+        """把 enable_configs(CONFIG_X=y) 与 disable_configs(# CONFIG_X is not set)
+        追加进 .config 末尾后 olddefconfig 归一化。根因见 configure() 注释。
+        """
+        enable = config["kernel"].get("enable_configs") or []
         disable = config["kernel"].get("disable_configs") or []
-        if not disable:
+        if not enable and not disable:
             return
-        frag = src_dir / f"arch/{self.ARCH}/configs/flange_trim.config"
-        frag.write_text(
-            "".join(f"# CONFIG_{sym} is not set\n" for sym in disable))
-        self.make(src_dir, ["flange_trim.config"],
-                  arch=self.ARCH, cross=self.CROSS)
+        lines = [f"CONFIG_{sym}=y" for sym in enable]
+        lines += [f"# CONFIG_{sym} is not set" for sym in disable]
+        frag_rel = f"arch/{self.ARCH}/configs/flange_overrides.config"
+        (src_dir / frag_rel).write_text("\n".join(lines) + "\n")
+        # 追加到 .config 末尾（kconfig 后值覆盖前值）
+        self.docker.run(["sh", "-c", f"cat {frag_rel} >> .config"],
+                        cwd=str(src_dir), label="追加 config 覆盖")
+        # olddefconfig 归一化：解析 select/依赖，写出最终 .config
+        # （conf 二进制一次读写，规避 merge_config.sh 在 bind FS 上的不稳定）
+        self.make(src_dir, ["olddefconfig"], arch=self.ARCH, cross=self.CROSS)
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)

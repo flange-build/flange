@@ -524,7 +524,13 @@ class SourceManager:
         refspec = f"+{branch}:refs/remotes/origin/{branch}"
         subprocess.run(["git", "fetch", "--depth=1", "origin", refspec],
                        cwd=repo_dir, env=env, check=True, timeout=600)
-        subprocess.run(["git", "reset", "--mixed", f"origin/{branch}"],
+        # `--no-refresh`：跳过 reset 后的 index stat 刷新。kernel 级大树
+        # （~90k 文件）在 macOS bind-mount（virtiofs/gRPC-FUSE）下于容器内
+        # 刷 index 极慢且会被 SIGKILL（exit 137，git 自身 hint 即建议
+        # --no-refresh）。后续 `checkout -f .` 会重新物化工作树，stat 信息
+        # 随之更新，跳过刷新无副作用。
+        subprocess.run(["git", "reset", "--mixed", "--no-refresh",
+                        f"origin/{branch}"],
                        cwd=repo_dir, check=True)
         subprocess.run(["git", "checkout", "-f", "."],
                        cwd=repo_dir, check=False)

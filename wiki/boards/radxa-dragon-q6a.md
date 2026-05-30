@@ -4,22 +4,39 @@ type: board
 status: wip
 sources:
   - components/board/radxa-dragon-q6a/config.py
-  - components/board/radxa-dragon-q6a/patches/kernel/0001-dts-radxa-dragon-q6a-PIL-firmware-paths.patch
   - components/platform/qualcommqcs6490/qcs6490/config.py
   - components/platform/qualcommqcs6490/patches/kernel/0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch
   - builder/platforms/qualcommqcs6490/
+  - builder/source.py
 related:
   - "[[qualcommqcs6490 平台]]"
   - "[[radxa-cubie-a7a]]"
   - "[[FlashStrategy 抽象]]"
   - "[[meizu-e3-panel]]"
   - "[[构建期 dtb overlay 合并]]"
-updated: 2026-05-29
+updated: 2026-05-30
 ---
 
 ## TL;DR
 
 Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG4UHGC-B0E1 UFS，板载 RTL8168 PCIe 千兆 + AIC8800 D80 USB Wi-Fi/BT 模组（与 [[radxa-cubie-a7a]] 同款）。flange 首个 Qualcomm 板，验证 UEFI/GRUB + EDL 刷写 + Adreno 643 freedreno 全栈。
+
+> ⚠️ **内核基线已从 vendor BSP 6.6.90 迁到 mainline 6.18.2**（2026-05-30，见下节）。本页大量章节（魅族屏 / 9 个坑 / AIC8800 路径等）是 **6.6.90 BSP 时代**记录，部分需在 mainline 重验。
+
+## 内核基线：mainline 6.18.2（2026-05-30 迁移）
+
+**动机**：原 vendor BSP `kernel.qclinux.1.0.r1-rel`(6.6.90) 的 `qcm6490-addons.dtsi` 删了 venus `iommus` 适配 downstream 驱动 → mainline `qcom-venus` 硬件编解码在 BSP 上是死路（`dma_set_mask -EIO`；补 iommus 即 SoC 复位）。改用 Armbian 同款 **`radxa/kernel@linux-6.18.2`**（mainline，同仓库换分支，grub-with-dtb 启动模型不变）。
+
+**切换要点**（`qcs6490/config.py`）：mainline 只有通用 `defconfig`（无 qcom_defconfig）；`enable_configs` 强制 builtin：UFS/QMP-PHY（root-on-UFS 无 initramfs 必需）+ **`FW_LOADER_COMPRESS`/`_ZSTD`**（`/lib/firmware` 全 `.zst`，不开则 venus/i2c-qupv3fw/GPU-a660 全 `-2`）；**R8169 不可裁**（板载 RTL8168）；删 board PIL-firmware patch（mainline DTS 自带 radxa .mbn 路径）。构建侧两个坑修复：`source.py` git reset 加 `--no-refresh`（大树在 macOS bind-mount 刷 index 被 SIGKILL）；`kernel.py` config 片段改 **append `.config` + olddefconfig**（merge_config.sh 在 bind-mount 对大片段 sed-churn 丢临时文件）。
+
+| 子系统（mainline 6.18.2 实板 2026-05-30）| 状态 |
+|---|---|
+| 启动链 → Kernel 6.18.2 + UFS（**无复位**）| ✓ |
+| **硬件视频编解码 venus** | ✓ `/dev/video0` 编 H.264 · `/dev/video1` 解 H.264/VP8/VP9（v4l2 验收）|
+| GPU Adreno 643（`/dev/dri/card0`+`renderD128`，a660 fw）| ✓ |
+| 有线网 enp1s0（r8169 + REALTEK_PHY）| ✓ |
+| GENI i2c（qupv3fw.elf.zst 加载）| ✓ |
+| 音频 / AIC8800 wifi / adb-gadget / 魅族屏 | ⏳ 待在 mainline 逐项重验 |
 
 ## bring-up 完成清单（2026-05-29 实板更新）
 
