@@ -23,13 +23,13 @@ Amlogic 平台 USB Burning 刷写契约。`AmlogicFlashStrategy` 在 pre_flash �
 
 ### Requirement: AmlogicFlashStrategy 两段式 USB Burning 流程
 
-`AmlogicFlashStrategy.pre_flash()` 必须（SHALL）调用 `pyamlboot` 把 target 目录下的 `bootloader/u-boot.bin.sd.bin` 推入 SoC DDR；u-boot 进入 fastboot 模式后，主 flash 流程必须（SHALL）通过 host 端 `fastboot` 工具写入各分区。整个过程 host 端依赖：`pyamlboot`（pip 安装或 git submodule）+ `android-tools-fastboot`（Ubuntu apt 包），不得（MUST NOT）依赖 vendor 闭源工具。
+`AmlogicFlashStrategy.pre_flash()` 必须（SHALL）调用 `pyamlboot` 把 target 目录下的**裸 FIP** `bootloader/u-boot.bin`（build-fip.sh 直接产出，BL2 位于 binary offset 0）推入 SoC DDR；**不得**推送 SD 格式 `u-boot.bin.sd.bin`（其前置了 block-1 header，BL2 被推到错误偏移，boot-g12.py 的 AMLC chunk 握手会超时）。u-boot 进入 fastboot 模式后，主 flash 流程必须（SHALL）通过 host 端 `fastboot` 工具写入各分区（其中 `fastboot flash bootloader` 写的才是 SD 格式 `u-boot.bin.sd.bin`，落 eMMC hw boot0）。整个过程 host 端依赖：`pyamlboot`（pip 安装或 git submodule）+ `android-tools-fastboot`（Ubuntu apt 包），不得（MUST NOT）依赖 vendor 闭源工具。
 
 #### Scenario: pre_flash 阶段调用 pyamlboot
 
 - **WHEN** `AmlogicFlashStrategy.pre_flash(tool, target_dir, config, device)` 被调用
 - **AND** 板已按住 KEY1 上电，进入 MaskROM (USB device 1b8e:c003)
-- **THEN** 实现调用 `pyamlboot` 把 `target_dir/bootloader/u-boot.bin.sd.bin` 推入 SoC DDR
+- **THEN** 实现调用 `pyamlboot` 把裸 FIP `target_dir/bootloader/u-boot.bin` 推入 SoC DDR
 - **AND** SoC 接收完整 u-boot 镜像后自动跳转到 BL2 → BL31 → u-boot proper
 - **AND** u-boot 在 host 端注册为 fastboot 设备
 
@@ -57,7 +57,7 @@ Amlogic 平台 USB Burning 刷写契约。`AmlogicFlashStrategy` 在 pre_flash �
 #### Scenario: 生成 amlogic flash-config
 
 - **WHEN** 生成 khadas-vim3l 的 flash-config.json
-- **THEN** `AmlogicFlashStrategy.generate_pre_flash_config(config)` 返回的 `PreFlashConfig` 包含 `download_boot` 字段指向 `bootloader/u-boot.bin.sd.bin`（或等价键，用于 pre_flash 阶段定位 u-boot 镜像）
+- **THEN** `AmlogicFlashStrategy.generate_pre_flash_config(config)` 返回的 `PreFlashConfig` 包含 `download_boot` 字段指向裸 FIP `bootloader/u-boot.bin`（用于 pre_flash 阶段 boot-g12.py 定位 u-boot 镜像；非 SD 格式 `.sd.bin`）
 - **AND** flash-config.json 中含有 amlogic MaskROM USB 设备 vid/pid（`1b8e:c003`）以便 host 端检测板进入 MaskROM
 
 #### Scenario: 配置生成无平台硬编码
