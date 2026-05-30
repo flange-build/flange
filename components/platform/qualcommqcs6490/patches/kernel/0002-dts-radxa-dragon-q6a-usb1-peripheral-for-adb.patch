@@ -1,0 +1,31 @@
+dts: radxa-dragon-q6a: USB-A SS 口 (usb_1) 设 peripheral 供 adb
+
+把 usb@a600000 (usb_1, USB3 + DP altmode 单 USB-A 口) 的 dr_mode 从 host
+改 peripheral，使 dwc3 在该控制器注册 UDC（/sys/class/udc/），供 adbd 经
+configfs/functionfs 建立 gadget。
+
+约束与无副作用论证：
+- usb_2 (usb@8c00000, 板载 3 口 Terminus hub + AIC8800 USB wifi) 必须保持
+  host，本补丁不动它（wifi 依赖 host 枚举）。
+- HDMI 经 usb_1 的 qmpphy DP altmode 输出，走独立 lane (0/1 → RA620 bridge)，
+  USB SS 走 lane (2/3 → USB-A)。dr_mode 仅改 USB 数据角色，不触及 DP lane，
+  故不影响 HDMI 显示。
+
+背景：mainline 6.18.2 默认把两个 USB 控制器都设 host（无 adb 能力）。本补丁
+恢复 flange 在 vendor BSP 上验证过的 adb-over-USB 默认能力——纯 peripheral，
+无 typec/role-switch/extcon/vbus 依赖，开机即注册 UDC。配合平台
+0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch（治开机首次
+枚举 ep0 竞态）与 adbd 组件 usbdevice 自愈脚本（soft_connect bounce）共同生效。
+
+diff --git a/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts b/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts
+--- a/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts
++++ b/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts
+@@ -1041,7 +1041,7 @@
+ };
+
+ &usb_1 {
+-	dr_mode = "host";
++	dr_mode = "peripheral";
+
+ 	status = "okay";
+ };

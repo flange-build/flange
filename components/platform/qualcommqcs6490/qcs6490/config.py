@@ -56,8 +56,78 @@ SOC = {
         "defconfig": ["defconfig"],
         "dts_dir": "qcom",
         "dtb": "qcs6490-radxa-dragon-q6a",
-        # 开源 GPU 走内核 drm/msm（in-tree），无 out-of-tree 模块
-        "oot_modules": [],
+        # 开源 GPU 走内核 drm/msm（in-tree），无需 OOT 模块。
+        # AIC8800 D80 USB Wi-Fi 是 mainline 不带的 vendor 驱动 → 以 OOT 模块
+        # 从 radxa-pkg/aic8800 编译（aic_load_fw + aic8800_fdrv 两个 .ko）。
+        # 走 Makefile 的 CONFIG_PLATFORM_UBUNTU 分支：默认 KDIR=
+        # /lib/modules/$(uname -r)/build，交叉编译时用 make 命令行覆盖
+        # KDIR/ARCH/CROSS_COMPILE（命令行赋值优先级高于 Makefile 内 = 赋值）。
+        # 固件由 board 层 +extra_firmware 装到 /lib/firmware/aic8800D80/，与
+        # 驱动 aic_default_fw_path="/lib/firmware" + 芯片子目录 "aic8800D80"
+        # 的拼接路径一致（aicbluetooth.c get_fw_path / 拼 path）。
+        "oot_modules": [
+            {
+                "label": "aic8800 USB Wi-Fi (aic_load_fw + aic8800_fdrv)",
+                "dir": "{aic8800_src}/src/USB/driver_fw/drivers/aic8800",
+                "pre_build": [
+                    # ① 复位 oot_source 到 pristine。commit-pinned 源在 HEAD 已
+                    #    等于目标 commit 时 ensure 不做 reset（见 source.py），
+                    #    下面的 sed/patch 改动会跨构建残留 → 二次 git apply 撞
+                    #    "already applied" 失败。先 checkout 复位保证幂等。
+                    "git -C {aic8800_src} checkout -- .",
+                    # ② 强制 aic8800 内层 kernel-module 编译 -j1 串行。
+                    #    aic8800_fdrv 的大 .c（aicwf_compat_8800dc 3500+ 行等）
+                    #    在 amd64-on-arm64 QEMU 下交叉编译，每个 cc1 内存开销很大；
+                    #    顶层 Makefile 的 `modules:` 配方 `make -C $(KDIR) ...`
+                    #    会继承父 make 的 jobserver 并行编译（即便父 make 名义
+                    #    -j1，jobserver 仍并发）→ 两个大 cc1 并发 OOM（实测
+                    #    "Cannot allocate memory" 读内核头）。两处治理：
+                    #      a) 注释顶层 `MAKEFLAGS += -j$(nproc)`（否则强制 nproc）
+                    #      b) 给 `modules:` 配方内层 make 显式 -j1 **并清空
+                    #         MAKEFLAGS**：仅加 -j1 不够——父 make 是 -j2 带
+                    #         jobserver，内层即便写 -j1 仍经 MAKEFLAGS 继承
+                    #         jobserver 并发（GNU make 已知行为，jobserver 压过
+                    #         显式 -j，实测仍 OOM）。`MAKEFLAGS= ` 前缀清空继承的
+                    #         jobserver，-j1 才真正串行（一次只一个 cc1）。
+                    "sed -i 's/^MAKEFLAGS +=-j/#&/' "
+                    "{aic8800_src}/src/USB/driver_fw/drivers/aic8800/Makefile",
+                    # 注：sed 的 `{...}` 地址块花括号要写成 `{{ }}` 转义——
+                    # _compile_oot_modules 对本命令做 str.format(**tmpl) 注入
+                    # {aic8800_src}，未转义的 `{n;...}` 会被当成格式占位符报
+                    # KeyError。format 后 `{{`→`{`、`}}`→`}` 还原为合法 sed。
+                    "sed -i '/^modules:/{{n;s/^\\(\\t*\\)make /\\1MAKEFLAGS= make -j1 /}}' "
+                    "{aic8800_src}/src/USB/driver_fw/drivers/aic8800/Makefile",
+                    # ③ 适配 mainline 6.18 cfg80211 get_tx_power 新增的
+                    #    radio_idx/link_id 参数（vendor 驱动按 ~5.15 API 写）。
+                    #    路径用容器内绝对路径：构建在容器内跑，仓库根挂载于
+                    #    /workspace（PROJECT_ROOT 在容器内即 /workspace）。
+                    "git -C {aic8800_src} apply "
+                    "/workspace/components/platform/qualcommqcs6490/patches/"
+                    "aic8800/0001-cfg80211-get-tx-power-6.18-signature.patch",
+                ],
+                "make_args": [
+                    "KDIR={kernel_src_abs}",
+                    "ARCH={arch}",
+                    "CROSS_COMPILE={cross_compile}",
+                    "modules",
+                ],
+                "ko_pattern": [
+                    "{aic8800_src}/src/USB/driver_fw/drivers/aic8800/"
+                    "aic_load_fw/aic_load_fw.ko",
+                    "{aic8800_src}/src/USB/driver_fw/drivers/aic8800/"
+                    "aic8800_fdrv/aic8800_fdrv.ko",
+                ],
+            },
+        ],
+        # OOT 模块独立 git 源：aic8800 驱动 + 固件同仓库（与 board 层
+        # +extra_firmware 的 radxa-aic8800 同一 repo/commit，仅用途不同——
+        # 这里取 src/ 下驱动源码编译，board 层取 fw/ 下固件二进制）。
+        "oot_sources": {
+            "aic8800": {
+                "repo": "https://github.com/radxa-pkg/aic8800.git",
+                "commit": "7f42b22913b462ab6c658dfc075bae1dbfe9a71a",
+            },
+        },
         # 强制 builtin（=y）：本平台无 initramfs、rootfs 在 UFS 上，UFS HCD/
         # QCOM controller 与 QMP UFS PHY 必须 builtin 才能在挂根前就绪；
         # 通用 defconfig 把它们留成 =m → 无 initramfs 下挂根失败。已验证
@@ -77,6 +147,17 @@ SOC = {
             # GENI i2c / GPU 全挂）。BSP qcom_defconfig 本来开着。补上即修全部。
             "FW_LOADER_COMPRESS",
             "FW_LOADER_COMPRESS_ZSTD",
+            # ── USB gadget 栈 builtin（adb-over-USB 默认能力）─────────────
+            # 配合 0002-dts-...-usb1-peripheral-for-adb.patch（把 usb_1 设
+            # peripheral 让 dwc3 注册 UDC）。通用 defconfig 把 gadget 组合栈
+            # 留成 =m（USB_CONFIGFS / USB_F_FS / USB_LIBCOMPOSITE），开机时
+            # adbd 的 usbdevice 脚本 mount configfs + 建 functionfs gadget 时
+            # 这些模块未必已 modprobe → gadget 建不起来。强制 builtin 让
+            # gadget 框架开机即就绪，消除 modprobe 竞态（dwc3 DUAL_ROLE 与
+            # CONFIGFS_F_FS 在通用 defconfig 已 =y）。adb 走 functionfs(ffs.adb)。
+            "USB_LIBCOMPOSITE",
+            "USB_CONFIGFS",
+            "USB_F_FS",
         ],
         # 关 MODULE_SIG_FORCE：mainline 通用 defconfig 默认未开（此项现为冗余
         # 保险，防回退到 BSP qcom_defconfig 时漏掉）。SIG_FORCE 会强制所有 .ko

@@ -1,0 +1,28 @@
+aic8800_fdrv: 适配 mainline 6.18 cfg80211 get_tx_power 签名
+
+radxa-pkg/aic8800 (commit 7f42b229) 的 cfg80211_ops.get_tx_power 回调按
+~5.15 API 写作 (wiphy, wdev, int *mbm)。mainline 6.18 给该回调新增
+`int radio_idx`(多 radio) 与 `unsigned int link_id`(MLO) 两个参数：
+
+  int (*get_tx_power)(struct wiphy *wiphy, struct wireless_dev *wdev,
+                      int radio_idx, unsigned int link_id, int *dbm);
+
+函数指针类型不匹配 → -Wincompatible-pointer-types。这不是单纯告警，调用
+约定不符会在运行时取错参数，必须补齐签名。新增参数本驱动不使用。
+
+版本守卫按 flange 锁定的内核分支 linux-6.18.2 设定（>= 6.18.0 取 5 参形式，
+其余保持原 3 参形式）。本补丁由 qcs6490 平台 oot_modules 的 pre_build 阶段
+对 aic8800 oot_source 应用（每次构建 reset --hard 后重打），见 SoC config.py。
+
+diff --git a/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_main.c b/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_main.c
+--- a/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_main.c
++++ b/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_main.c
+@@ -4513,5 +4513,8 @@
+ static int rwnx_cfg80211_get_tx_power(struct wiphy *wiphy,
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
+  struct wireless_dev *wdev,
+ #endif
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
++	int radio_idx, unsigned int link_id,
++#endif
+ 	int *mbm)

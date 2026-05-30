@@ -6,6 +6,8 @@ sources:
   - components/board/radxa-dragon-q6a/config.py
   - components/platform/qualcommqcs6490/qcs6490/config.py
   - components/platform/qualcommqcs6490/patches/kernel/0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch
+  - components/platform/qualcommqcs6490/patches/kernel/0002-dts-radxa-dragon-q6a-usb1-peripheral-for-adb.patch
+  - components/platform/qualcommqcs6490/patches/aic8800/0001-cfg80211-get-tx-power-6.18-signature.patch
   - builder/platforms/qualcommqcs6490/
   - builder/source.py
 related:
@@ -36,7 +38,11 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 | GPU Adreno 643（`/dev/dri/card0`+`renderD128`，a660 fw）| ✓ |
 | 有线网 enp1s0（r8169 + REALTEK_PHY）| ✓ |
 | GENI i2c（qupv3fw.elf.zst 加载）| ✓ |
-| 音频 / AIC8800 wifi / adb-gadget / 魅族屏 | ⏳ 待在 mainline 逐项重验 |
+| **AIC8800 wifi** | ✓ OOT 模块 `aic8800_fdrv`+`aic_load_fw`，iface `wlx<MAC>` 扫到 23 AP |
+| **adb-gadget** | ✓ `usb_1` 改 peripheral → UDC `a600000.usb` configured，Mac `adb devices` 可见 |
+| 音频 / 魅族屏 | ⏳ 待在 mainline 逐项重验 |
+
+**AIC8800 wifi + adb（2026-05-30 实板）**：mainline 不带 in-tree aic8800 → 以 OOT 模块从 `radxa-pkg/aic8800` 编（`oot_sources`+`oot_modules`，见 `qcs6490/config.py`）。三处治理：① `get_tx_power` cfg80211 6.18 新增 `radio_idx`/`link_id` 参数（`patches/aic8800/0001`）；② 顶层 Makefile 强制 `-j$(nproc)` + 父 jobserver 继承 → 大 cc1 并发 OOM，配方改 **`MAKEFLAGS= make -j1`** 真串行；③ sed `{}` 要 `{{}}` 转义避开 `str.format`。固件 `/lib/firmware/aic8800D80/` 与驱动 `aic_default_fw_path` 吻合。adb 真根因：mainline 两个 USB 控制器都 `dr_mode=host` → 无 UDC；`patches/kernel/0002` 把 `usb_1`(usb@a600000, USB-A SS 口) 改 peripheral（HDMI 走 qmpphy lane0/1 独立、不受影响；usb_2 hub+wifi 保持 host）+ gadget 栈 builtin。配合 0001 dwc3 stall patch + usbdevice 自愈，开机自动上线（NRestarts=1）。
 
 ## bring-up 完成清单（2026-05-29 实板更新）
 

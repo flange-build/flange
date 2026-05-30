@@ -1,7 +1,7 @@
 # qcs6490-mainline-kernel Specification
 
 ## Purpose
-TBD - created by archiving change migrate-qcs6490-mainline-kernel. Update Purpose after archive.
+定义 qcs6490 SoC 在 mainline `radxa/kernel@linux-6.18.2` 基线上的能力契约：内核基线切换、default 产物启动与 UFS 稳定、硬件视频编解码（venus），以及在该基线上重新验证通过的板载外设默认能力（AIC8800 USB Wi-Fi、adb-over-USB gadget）。
 ## Requirements
 ### Requirement: 内核基线切换到 mainline linux-6.18.2
 
@@ -50,4 +50,20 @@ TBD - created by archiving change migrate-qcs6490-mainline-kernel. Update Purpos
 #### Scenario: 任意阶段可回退到 BSP
 - **WHEN** 迁移过程中某阶段在 mainline 上无法通过
 - **THEN** 将 `repos.kernel.branch` 改回 `kernel.qclinux.1.0.r1-rel` 重建即可恢复已知可用的 BSP 基线
+
+### Requirement: AIC8800 USB Wi-Fi 默认可用
+
+mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模块从 `radxa-pkg/aic8800` 编译 `aic_load_fw` 与 `aic8800_fdrv` 并随 rootfs 安装，使板载 AIC8800 D80 USB Wi-Fi 作为 qcs6490 平台默认能力开机即可用。OOT 编译 SHALL 适配该内核版本的 cfg80211 API（`get_tx_power` 新增 `radio_idx`/`link_id` 参数），并 SHALL 串行编译（`MAKEFLAGS= make -j1`）以规避大文件交叉编译在受限容器内的 OOM。固件 SHALL 安装到驱动查找路径 `/lib/firmware/aic8800D80/`。
+
+#### Scenario: 驱动加载且射频工作
+- **WHEN** default 产物开机
+- **THEN** `lsmod` 含 `aic8800_fdrv`/`aic_load_fw`、出现 `wlx<MAC>` 无线接口，`iw dev <iface> scan` 能扫到周边 AP
+
+### Requirement: adb-over-USB gadget 默认可用
+
+系统 SHALL 使 `radxa-dragon-q6a` 的 `usb_1`(usb@a600000, USB-A SS 口) 在 DT 中以 `dr_mode = "peripheral"` 注册 UDC，并 SHALL 把 USB gadget 组合栈（`USB_LIBCOMPOSITE`/`USB_CONFIGFS`/`USB_F_FS`）编为 builtin，使 adbd 经 configfs/functionfs 在开机时建立 adb gadget。`usb_2`(板载 hub + AIC8800) SHALL 保持 host；改 `usb_1` 数据角色 SHALL NOT 影响经 qmpphy 独立 lane 输出的 HDMI。
+
+#### Scenario: 开机自动上线无需手动干预
+- **WHEN** USB 口接到主机并开机
+- **THEN** `/sys/class/udc/a600000.usb/state` 为 `configured`，主机 `adb devices` 可见该设备；usbdevice 服务经自愈最终 active（无需手动 restart）
 
