@@ -123,6 +123,22 @@ usb_release_files()
 	done
 }
 
+# 等待 UDC controller 注册到 /sys/class/udc/。
+# mainline dwc3（如高通 QCS6490 a600000.usb）走 deferred probe，依赖 phy /
+# fusb302 USB-C PD 协商，注册时机晚于 sysinit.target。sysinit 早期拉起本服务时
+# 目录可能为空，若直接读取会得到空 USB_UDC、写空 UDC、枚举超时 exit 1，启动
+# 输出里报一次 [FAILED] 再靠 Restart=on-failure 自愈。这里先有界等待（默认
+# 200×0.025s≈5s）把竞态转成等待，正常路径不再首败；超时仍返回让后续逻辑
+# 兜底（Restart 保留为最终防线）。
+usb_wait_udc()
+{
+	for i in $(seq ${1:-200}); do
+		[ -n "$(ls /sys/class/udc/ 2>/dev/null)" ] && return 0
+		sleep .025
+	done
+	return 1
+}
+
 # 等待 UDC gadget state 达到目标值（$1=目标 state, $2=最多重试次数 ×0.1s，默认 30=3s）
 usb_wait_state()
 {
@@ -569,6 +585,8 @@ usb_prepare()
 	fi
 
 	USB_STATE=$(cat /sys/class/android_usb/android0/state 2>/dev/null || echo "DISCONNECTED")
+	# 等 UDC controller 就绪再读，避免 deferred probe 竞态下取到空 UDC（详见函数注释）
+	usb_wait_udc || usb_msg "[WARN] 等待 UDC 超时，/sys/class/udc/ 仍为空——底层 controller 可能未 probe"
 	USB_UDC=$(ls /sys/class/udc/ | head -n 1)
 
 	# Parse started USB functions
