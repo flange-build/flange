@@ -79,7 +79,7 @@ mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模
 
 mainline `vpu20_p1.mbn`（约 2MB，来自 `linux-firmware`）SHALL 成功加载（远低于 DTS video_mem 5MB 与驱动 VENUS_FW_MEM_SIZE 6MB 限制）。
 
-> 注：硬件**编码**经实板 venus + iris 两驱动验证均喂帧即整机复位（根在固件/TZ-CP 契约，驱动层无解），不在本基线能力范围；详见记忆 `qcs6490-venus-encode-soc-reset`。
+> 注：硬件**编码**亦可用，但**前提是系统以 EL2 启动**（UEFI `Hypervisor Settings → Hypervisor Override` 开启、Gunyah hypervisor 激活、`/dev/kvm` 出现）：此时 mainline venus `/dev/video1` 端到端硬件编码 H.264/HEVC 通过、零复位（`v4l2h264enc` 720p NV12→6.46MB 有效 H264）。EL1（默认）下喂帧即整机复位——真根因是 hypervisor 介导编码器的 CP/secure 内存，**与驱动(venus/iris)/固件/发行版无关**（此前"固件/TZ 死路"结论已据此修正）。flange 默认 EL2（UEFI 变量持久化或定制 flat_build）为待解项。详见记忆 `qcs6490-venus-encode-soc-reset`。
 
 #### Scenario: venus probe 成功且出现运行时节点
 - **WHEN** 系统启动完成

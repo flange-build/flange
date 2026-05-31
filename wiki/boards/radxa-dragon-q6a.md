@@ -20,7 +20,7 @@ related:
   - "[[FlashStrategy 抽象]]"
   - "[[meizu-e3-panel]]"
   - "[[构建期 dtb overlay 合并]]"
-updated: 2026-05-31
+updated: 2026-06-01
 ---
 
 ## TL;DR
@@ -37,7 +37,7 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 
 **⚠️ UFS 开机整机复位（QHEE `PM: Reset by PSHOLD`）双根因 + 修复**：① 早期只用 `defconfig radxa.config`、漏 `qcom_module.config` → UFS probe 缺 qcom 平台驱动；② **板上 SPI 固件过旧**（`251013`/00364-KODIAKLA），与 7.0.2 `kodiak` DTB 资源/握手不匹配。两者都必修——补四段 config + `flange flash --spi-firmware` 刷 `260120`/00549-KODIAKWP。⚠️ `flange flash` 默认只刷 UFS、**不碰 SPI**，大版本内核/DTB 迁移极易漏固件。决策档见 openspec `migrate-qcs6490-kernel-702`。
 
-**硬件编码 = 死路（彻底坐实）**：venus/iris 两驱动 × flange/radxa 官方两镜像 × gst/裸 v4l2-ctl 两工具，真喂帧给硬件编码器一律整机复位——根在固件/TZ-CP 契约，软件层（内核/驱动/发行版/命令）无解；见下表编码行。
+**硬件编码 = 可用（真根因＝UEFI Hypervisor Override，2026-06-01 修正）**：此前"喂帧即整机复位"的根因是 **UEFI `Hypervisor Settings → Hypervisor Override` 未开 → 系统以 EL1 启动（无 Gunyah hypervisor）→ 编码器访问 CP/secure 内存 fault → 复位**，并非固件/TZ/驱动。开机 F2 进 UEFI 开启后系统以 **EL2** 启动（`/dev/kvm` 出现、`/dev/mtd0` 消失），**flange 现有 mainline 7.0.2 venus + 通用固件直接编码通过**（`v4l2h264enc` 720p→6.46MB 有效 H264、零复位）。flange 默认 EL2 为待解项。见下表编码行。
 
 ## 内核基线：mainline 6.18.2（2026-05-30，前一步）
 
@@ -51,7 +51,7 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 |---|---|
 | 启动链 → Kernel 6.18.2 + UFS（**无复位**）| ✓ |
 | **硬件视频解码 venus** | ✓ `/dev/video1` 解 H.264/HEVC/MPEG2/VP9（gst `v4l2h264dec` → NV12 1280×720 实跑 ~328fps）|
-| **硬件视频编码** | ❌ **死路（已彻底坐实）**：真把帧喂进 venus 硬件编码器即整机复位、设备自恢复。证据矩阵 **2 内核(6.18.2/7.0.2) × 2 驱动(venus/iris) × 2 发行版(flange / radxa 官方 noble_gnome_r2) × 2 工具(gst `v4l2h264enc` / 裸 `v4l2-ctl` ioctl)** 全部复位 → 根在**固件/TZ-CP 契约**，与内核/驱动/发行版/命令均无关（用户态命令写错只会自己崩、不会重启 SoC；ffmpeg `h264_v4l2m2m` 是喂帧前自身 segfault，非硬件信号）。编码只能软件 x264/openh264 或下游 6.6 BSP+厂商固件。详见记忆 `qcs6490-venus-encode-soc-reset` |
+| **硬件视频编码** | ✓（**需 EL2**）：venus `/dev/video1` 出 H.264/HEVC。**前提＝UEFI `Hypervisor Override` 开启、系统以 EL2 启动**（`/dev/kvm` 在、`/dev/mtd0` 失）；EL1（默认）下喂帧即整机复位。EL2 实测 `v4l2h264enc` 720p NV12→6.46MB 有效 H264（NAL 1/5/7/8、Baseline）、零复位。真根因是 EL1↔EL2（hypervisor 介导编码器 CP/secure 内存），**与驱动/固件/发行版无关**——此前"死路"证据矩阵（2 内核×2 驱动×2 发行版×2 工具）全是 EL1。详见记忆 `qcs6490-venus-encode-soc-reset` |
 | GPU Adreno 643（`/dev/dri/card0`+`renderD128`，a660 fw）| ✓ |
 | 有线网 enp1s0（r8169 + REALTEK_PHY）| ✓ |
 | GENI i2c（qupv3fw.elf.zst 加载）| ✓ |

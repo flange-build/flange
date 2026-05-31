@@ -451,3 +451,7 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 ## [2026-05-31] sync | qcs6490 硬件编码定论：固件/TZ 级死路（多栈交叉验证排除 gst）
 
 刷 radxa **官方** `noble_gnome_r2`（内核 `6.18.2-3-qcom` + `qcom-venus` + 通用 `vpu20_p1` 固件，与 flange 同套）反证编码：实测硬件 H264 编码同样喂帧即整机复位——**radxa 自家出厂镜像也不支持 q6a 硬件编码**。针对"是否 gst 命令问题"的质疑，用三套独立栈交叉验证：① gst `v4l2h264enc` 复位；② 裸 `v4l2-ctl` M2M（纯 VIDIOC ioctl，无框架）**同样复位**；③ ffmpeg `h264_v4l2m2m` 自身 segfault（喂帧前崩、设备不复位，是 ffmpeg wrapper 已知脆，非硬件信号）。判据：用户态命令写错只会自己崩、绝不能重启 SoC。证据矩阵 2 内核 × 2 驱动(venus/iris) × 2 发行版(flange/radxa) × 2 工具(gst/v4l2-ctl) 全部复位 → 编码受限于**固件/TZ-CP 契约**，软件层无解。波及 [[radxa-dragon-q6a]]；记忆 `qcs6490-venus-encode-soc-reset`。
+
+## [2026-06-01] sync | qcs6490 硬件编码真根因＝EL2/Hypervisor（推翻"固件/TZ 死路"旧结论）
+
+**纠正前两条编码"死路"结论**：q6a 硬件编码喂帧整机复位的唯一真因是 **UEFI `Hypervisor Settings → Hypervisor Override` 未开 → 系统以 EL1 启动（无 Gunyah hypervisor）→ 编码器访问 CP/secure 内存 fault → 整机复位**（来源：radxa 官方文档）。开机 F2 进 UEFI 开启后系统以 **EL2** 启动（`dmesg`:"CPU: All CPU(s) started at EL2" + KVM 嵌套；`/dev/kvm` 出现；`/dev/mtd0` 消失＝不能板上直刷 SPI），**flange 现有 mainline 7.0.2 venus + 通用固件 `vpu20_p1.mbn` 直接编码通过**：`v4l2h264enc` 720p NV12→6.46MB 有效 H264（NAL 类型 1/5/7/8、Baseline）、零复位（uptime 单调递增）。⇒ **编码复位与驱动(venus/iris/msm_vidc)、固件、发行版全都无关，唯一变量是 EL1↔EL2**；此前"2 内核×2 驱动×2 发行版×2 工具全复位"证据矩阵全是 EL1。RUBIK Pi 3（同 SoC）能编码也只因 QLI 默认 EL2（`xbl_config_gunyah`）。旁证：vendor BSP `kernel.qclinux.1.0.r1-rel`(6.6.90 + 下游 msm_vidc) 全栈虽可编码，但 flange **无需换 qclinux 内核**——只需 q6a 默认 EL2（待解：UEFI 变量持久化 / 定制 flat_build 默认开）。波及 [[radxa-dragon-q6a]]；记忆 `qcs6490-venus-encode-soc-reset`。
