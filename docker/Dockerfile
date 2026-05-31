@@ -26,6 +26,7 @@ RUN dpkg --add-architecture arm64 \
         crossbuild-essential-armel \
         ca-certificates \
         curl \
+        gnupg \
         git \
         openssh-client \
         python3 \

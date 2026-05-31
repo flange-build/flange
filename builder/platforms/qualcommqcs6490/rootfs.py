@@ -79,8 +79,20 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
             apt_cache = rootfs_dir / "var" / "cache" / "apt" / "archives"
             apt_cache.mkdir(parents=True, exist_ok=True)
             chroot.bind_mount("/cache/apt", apt_cache)
-            self._status("apt-get update...")
-            chroot.run(["apt-get", "update"], label="apt-get update...")
+            # Step 1：只用 Ubuntu 官方源更新并装 ca-certificates，
+            # ubuntu-base 最小系统无 CA 证书，否则 HTTPS PPA 验证失败。
+            self._status("apt-get update（基础源）...")
+            chroot.run(["apt-get", "update"], label="apt-get update（基础源）...")
+            if self._has_extra_apt_sources(config):
+                chroot.run(["apt-get", "install", "-y", "--no-install-recommends",
+                            "ca-certificates"], label="安装 ca-certificates...")
+                # postinst 在 chroot 环境可能未触发 update-ca-certificates，
+                # 显式调用确保 /etc/ssl/certs/ca-certificates.crt 生成。
+                chroot.run(["update-ca-certificates"], label="update-ca-certificates...")
+                # Step 2：写入额外 APT 源（此时 CA 证书已就绪），再次 update
+                self._setup_extra_apt_sources(rootfs_dir, config)
+                self._status("apt-get update（含额外源）...")
+                chroot.run(["apt-get", "update"], label="apt-get update（含额外源）...")
             packages = config["rootfs"].get("packages", [])
             if packages:
                 self._status(f"apt-get install ({len(packages)} 个包)...")

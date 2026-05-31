@@ -3,49 +3,23 @@
 ## Purpose
 定义 qcs6490 SoC 在 mainline `radxa/kernel@linux-6.18.2` 基线上的能力契约：内核基线切换、default 产物启动与 UFS 稳定、硬件视频编解码（venus），以及在该基线上重新验证通过的板载外设默认能力（AIC8800 USB Wi-Fi、adb-over-USB gadget）。
 ## Requirements
-### Requirement: 内核基线切换到 mainline linux-6.18.2
-
-系统 SHALL 将 qcs6490 SoC 的内核源分支配置为 `radxa/kernel.git` 的 `linux-6.18.2`（mainline 6.18 系），并 SHALL 复用现有 `grub-with-dtb` 的 boot/image/EDL 刷写流水线；构建出的内核 Image 与 dtb SHALL 来自该分支。MODULE_SIG_FORCE 等 flange 既有 `disable_configs` 约定 SHALL 在新基线上复核保持一致行为。
-
-#### Scenario: 内核从 linux-6.18.2 构建成功
-- **WHEN** 配置 `repos.kernel.branch = linux-6.18.2` 并执行 `flange build kernel`
-- **THEN** 成功检出该分支并编出 `Image` 与 `qcs6490-radxa-dragon-q6a` 对应的 dtb，无构建中断
-
-#### Scenario: venus DT 在 mainline 基线带 iommus
-- **WHEN** 反查构建出的 dtb 中 `video-codec@aa00000`
-- **THEN** 其 `status` 为 `okay` 且保留 `iommus`、`video-decoder`/`video-encoder` 子节点（不被 addons 类节点删除）
-
 ### Requirement: default 产物启动与 UFS 稳定
 
-系统 SHALL 保证 `radxa-dragon-q6a-default-*` 在 mainline 基线上能正常启动到 rootfs，且 UFS 链路稳定、不发生 HS-G4 PHY 训练导致的 SoC 复位。
+系统 SHALL 保证 `radxa-dragon-q6a-default-*` 在 linux-7.0.2 基线上能正常启动到 rootfs，且 UFS 链路稳定、不发生 SoC 复位。
+
+> 根因（实板）：UFS probe 早期 QHEE `PM: Reset by PSHOLD` 整机复位有**双根因**，二者都须修复：① 内核 config 漏 `qcom_module.config`（缺 `QCOM_AOSS_QMP`/`QCOM_LLCC`/`ARM_SMMU_V3`/`QCOM_IOMMU`/`QCOM_QSEECOM` 等 qcom 平台驱动）——由四段配方修复；② 板上 SPI EDK2/XBL 固件过旧（`251013`/00364-KODIAKLA）与 7.0.2 `kodiak` DTB 资源/握手不匹配——须刷新到 `260120`/00549-KODIAKWP。实板坐实 rootfs 挂载于 UFS `/dev/sda2`、零复位。
 
 #### Scenario: default 启动到 rootfs
-- **WHEN** 刷入 mainline 基线镜像并上电
+- **WHEN** 刷入 linux-7.0.2 基线镜像并上电
 - **THEN** 串口（ttyMSM0）可见内核启动到 systemd、rootfs 挂载成功、adb/控制台可登录
 
 #### Scenario: UFS 不复位
 - **WHEN** 系统启动并访问 UFS 存储
-- **THEN** 无 `ufs_qcom` probe 复位 / HS-G4 PHY 训练失败导致的 SoC reset，存储读写正常
+- **THEN** 无 `ufs_qcom` probe 复位导致的 SoC reset，存储读写正常
 
-### Requirement: 硬件视频编解码可用
-
-系统 SHALL 在 mainline 基线上使 venus 视频编解码 probe 成功并暴露 V4L2 运行时节点。
-
-#### Scenario: venus probe 成功且出现运行时节点
-- **WHEN** 系统启动完成
-- **THEN** `dmesg` 中 venus 驱动 probe 成功无 fatal 错误，`/dev/video*` 与 `/dev/media*` 出现
-
-#### Scenario: 可枚举编解码能力
-- **WHEN** 执行 `v4l2-ctl --list-devices` 与对各节点 `v4l2-ctl -d <node> --all`
-- **THEN** 列出解码器/编码器设备并可枚举受支持的 codec 像素格式
-
-#### Scenario: 硬件解码端到端可用
-- **WHEN** 安装 GStreamer 并对 8-bit 4:2:0 H.264 流执行 `filesrc ! h264parse ! v4l2h264dec ! fakesink`
-- **THEN** 管线跑完到 EOS、`v4l2h264dec` src caps 为 `video/x-raw,format=NV12`，无报错、设备不复位
-
-#### Scenario: 硬件编码当前触发 SoC 复位（已知缺陷）
-- **WHEN** 通过 `v4l2h264enc` 发起任意配置的硬件编码 streaming
-- **THEN** 设备硬复位、Linux 层无任何日志（firmware/HFI 级故障）；编码器节点 `/dev/video0` 与固件仍声明 H264/HEVC 能力，故判定为运行时缺陷而非能力缺失，定位需 ttyMSM0 串口
+#### Scenario: SPI 固件须与 7.0.2/kodiak DTB 匹配
+- **WHEN** 迁移到 7.0.2（kodiak DTB）
+- **THEN** SPI EDK2/XBL 固件 SHALL 刷新到配套版本（`260120`/00549-KODIAKWP 或更新，`flange flash --spi-firmware`）；停留旧版（`251013`/00364-KODIAKLA）会因资源/握手不匹配致 UFS probe QHEE PSHOLD 复位（`flange flash` 默认只刷 UFS、不动 SPI）
 
 ### Requirement: 既有功能重验门槛
 
@@ -67,14 +41,6 @@ mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模
 - **WHEN** default 产物开机
 - **THEN** `lsmod` 含 `aic8800_fdrv`/`aic_load_fw`、出现 `wlx<MAC>` 无线接口，`iw dev <iface> scan` 能扫到周边 AP
 
-### Requirement: adb-over-USB gadget 默认可用
-
-系统 SHALL 使 `radxa-dragon-q6a` 的 `usb_1`(usb@a600000, USB-A SS 口) 在 DT 中以 `dr_mode = "peripheral"` 注册 UDC，并 SHALL 把 USB gadget 组合栈（`USB_LIBCOMPOSITE`/`USB_CONFIGFS`/`USB_F_FS`）编为 builtin，使 adbd 经 configfs/functionfs 在开机时建立 adb gadget。`usb_2`(板载 hub + AIC8800) SHALL 保持 host；改 `usb_1` 数据角色 SHALL NOT 影响经 qmpphy 独立 lane 输出的 HDMI。
-
-#### Scenario: 开机自动上线无需手动干预
-- **WHEN** USB 口接到主机并开机
-- **THEN** `/sys/class/udc/a600000.usb/state` 为 `configured`，主机 `adb devices` 可见该设备；usbdevice 服务经自愈最终 active（无需手动 restart）
-
 ### Requirement: 魅族 E3 屏（meizu-e3-bringup product）在 mainline 重验通过
 
 `radxa-dragon-q6a-meizu-e3-bringup-*` 产物 SHALL 在 mainline 6.18.2 基线上完成魅族 E3 39pin MIPI-DSI 屏的显示 + 触摸 + 背光 bring-up：经 `meizu-e3-panel` 包注入的 `panel_meizu_e3`/`sec_ts`/`sgm37604a` 三个 OOT 驱动 SHALL 能对 mainline 6.18 内核编译通过（适配 `asm/fb.h`/`asm/unaligned.h` 移除、`GPIOF_DIR_IN`→`GPIOF_IN`、`FB_EVENT_BLANK` 移除等 ABI 漂移，并 SHALL 同时保持 rock5b/a7a 旧 BSP 内核可编）。触摸/背光所在 `i2c13` SHALL 去除 base board dts 的 `qcom,enable-gsi-dma`（`patches/kernel/0003`），使 geni i2c 走 FIFO 模式、避免 GPI DMA 传输失败；该改动 SHALL NOT 影响 default 产物。
@@ -86,4 +52,64 @@ mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模
 #### Scenario: i2c13 无 GPI DMA 传输失败
 - **WHEN** meizu-e3-bringup 产物开机、`sec_ts`/`sgm37604a` 在 `i2c13` 上 probe
 - **THEN** `dmesg` 无 `geni_i2c ... GPI transfer failed`，触摸与背光的 i2c 读写均成功
+
+### Requirement: 内核基线切换到 mainline linux-7.0.2
+
+系统 SHALL 将 qcs6490 SoC 的内核源分支配置为 `radxa/kernel.git` 的 `linux-7.0.2`（mainline 7.0 系，Radxa linux-qcom 官方包同款分支），并 SHALL 复用现有 `grub-with-dtb` 的 boot/image/EDL 刷写流水线；构建出的内核 Image 与 dtb SHALL 来自该分支。
+
+内核源 SHALL 在 `branch=linux-7.0.2` 基础上 pin `commit=7473a9fca2b08623319e497f4f811746baddb7bc`（= radxa linux-qcom 7.0.2-2 的 `src` 子模块），不跟随分支 tip（tip 已前移到会触发 UFS 复位的 commit）。
+
+内核 config SHALL 对齐 radxa rsdk/linux-qcom 的**四段叠加**配方：`make defconfig qcom_module.config radxa.config radxa_custom.config`（顺序固定，后者覆盖前者）。其中 `qcom_module.config` 为内核 in-tree（软链 radxa `radxa_qcom_7_0_defconfig` 的 qcom 全量平台 config），`radxa.config` / `radxa_custom.config` 分别由 `0004` / `0005` patch 注入。flange 特定 `enable_configs`（`FW_LOADER_COMPRESS*`、USB gadget `configfs`/`F_FS`）SHALL 在四段后追加覆盖，`disable_configs` 仅保留 `MODULE_SIG_FORCE`。
+
+#### Scenario: 内核从 linux-7.0.2 构建成功
+- **WHEN** 配置 `repos.kernel.branch = linux-7.0.2` + `commit = 7473a9f` 并执行 `flange build kernel`
+- **THEN** 成功检出该 commit 并编出 `Image` 与 `qcs6490-radxa-dragon-q6a` 对应的 dtb，无构建中断
+
+#### Scenario: 四段 config 片段被正确合并
+- **WHEN** 内核构建完成
+- **THEN** 最终 `.config` 中 `qcom_module.config` 的 qcom 平台驱动均为 `=y`（如 `CONFIG_QCOM_AOSS_QMP`、`CONFIG_QCOM_LLCC`、`CONFIG_QCOM_QSEECOM`、`CONFIG_SCSI_UFS_QCOM`、`CONFIG_ARM_SMMU_V3`），radxa.config 典型项（`CONFIG_DMABUF_HEAPS=y` 等）与 radxa_custom.config 项（`CONFIG_MODULE_COMPRESS_ZSTD=y`、`CONFIG_EFI_ZBOOT` 未设）齐备
+
+#### Scenario: kodiak.dtsi 基础上 patch 正确应用
+- **WHEN** 内核构建时按序应用 0001–0005 patch（含同 commit 重建：`reset_source` 先 `git clean -fd` 清未跟踪残留）
+- **THEN** `qcs6490-radxa-dragon-q6a.dts` 中 `usb_1` 的 `dr_mode` 为 `peripheral`、`i2c13` 不含 `qcom,enable-gsi-dma`，`radxa.config`/`radxa_custom.config` 被创建，全部 patch 无 `already exists` / 冲突报错
+
+### Requirement: 硬件视频解码可用
+
+系统 SHALL 在 linux-7.0.2 基线上使 venus 视频驱动 probe 成功并暴露 V4L2 节点，硬件解码 SHALL 端到端可用。
+
+mainline `vpu20_p1.mbn`（约 2MB，来自 `linux-firmware`）SHALL 成功加载（远低于 DTS video_mem 5MB 与驱动 VENUS_FW_MEM_SIZE 6MB 限制）。
+
+> 注：硬件**编码**经实板 venus + iris 两驱动验证均喂帧即整机复位（根在固件/TZ-CP 契约，驱动层无解），不在本基线能力范围；详见记忆 `qcs6490-venus-encode-soc-reset`。
+
+#### Scenario: venus probe 成功且出现运行时节点
+- **WHEN** 系统启动完成
+- **THEN** `dmesg` 中 venus 驱动 probe 成功无 fatal 错误，`/dev/video*` 出现（`qcom-venus-decoder`/`-encoder`）
+
+#### Scenario: 硬件解码端到端可用
+- **WHEN** 对 8-bit 4:2:0 H.264 流执行 GStreamer `v4l2h264dec` 硬解管线
+- **THEN** 管线跑完到 EOS（解出 NV12）、无报错、设备不复位
+
+#### Scenario: venus 固件加载成功
+- **WHEN** 系统启动，venus 驱动尝试加载 `qcom/vpu-2.0/venus.mbn`
+- **THEN** `dmesg` 无固件加载失败（`-EINVAL` / size exceeded）日志，固件 probe 完成
+
+### Requirement: ADB USB gadget 在 7.0.2 持续工作
+
+DWC3 clear-stall patch SHALL 针对 linux-7.0.2 代码库重写，确保 macOS 主机发送 `ClearFeature(ENDPOINT_HALT)` 后 adbd 不退出。patch 逻辑（以 `DWC3_EP_DELAY_START` 替代取消 pending requests）不变，仅更新目标行号和 context。
+
+#### Scenario: macOS 连接后 ADB 持续工作
+- **WHEN** 将 Q6A 接入 macOS，macOS 完成 USB 配置并发送 ClearFeature
+- **THEN** `adbd` 不退出，`adb devices` 持续显示设备，USB gadget 不注销重注册
+
+### Requirement: QCS6490 专属固件通过 qcom-ppa 安装
+
+rootfs SHALL 包含来自 `ubuntu-qcom-iot/qcom-ppa` 的 `linux-firmware-dragonwing` 包，该包将 QCS6490 ADSP/CDSP/GPU 固件更新置于 `/lib/firmware/updates/qcom/qcs6490/`，优先级高于 `linux-firmware` 提供的版本。
+
+#### Scenario: rootfs 含 qcom-ppa 固件更新
+- **WHEN** 构建 qcs6490 rootfs
+- **THEN** rootfs 内 `/lib/firmware/updates/qcom/qcs6490/` 目录存在且含 `a660_zap.mbn`、`a660_gmu.bin` 等 GPU 固件
+
+#### Scenario: GPU 固件从 updates/ 优先加载
+- **WHEN** 系统启动，drm/msm 驱动加载 GPU 固件
+- **THEN** `dmesg` 显示从 `/lib/firmware/updates/` 路径加载固件，无 firmware load 失败
 

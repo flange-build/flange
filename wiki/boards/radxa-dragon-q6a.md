@@ -7,23 +7,39 @@ sources:
   - components/platform/qualcommqcs6490/qcs6490/config.py
   - components/platform/qualcommqcs6490/patches/kernel/0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch
   - components/platform/qualcommqcs6490/patches/kernel/0002-dts-radxa-dragon-q6a-usb1-peripheral-for-adb.patch
+  - components/platform/qualcommqcs6490/patches/kernel/0003-dts-radxa-dragon-q6a-i2c13-drop-gsi-dma-for-panel.patch
+  - components/platform/qualcommqcs6490/patches/kernel/0004-feat-radxa-common-kernel-config.patch
+  - components/platform/qualcommqcs6490/patches/kernel/0005-feat-radxa-custom-kernel-config.patch
   - components/platform/qualcommqcs6490/patches/aic8800/0001-cfg80211-get-tx-power-6.18-signature.patch
   - builder/platforms/qualcommqcs6490/
   - builder/source.py
+  - openspec/changes/migrate-qcs6490-kernel-702/
 related:
   - "[[qualcommqcs6490 平台]]"
   - "[[radxa-cubie-a7a]]"
   - "[[FlashStrategy 抽象]]"
   - "[[meizu-e3-panel]]"
   - "[[构建期 dtb overlay 合并]]"
-updated: 2026-05-30
+updated: 2026-05-31
 ---
 
 ## TL;DR
 
 Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG4UHGC-B0E1 UFS，板载 RTL8168 PCIe 千兆 + AIC8800 D80 USB Wi-Fi/BT 模组（与 [[radxa-cubie-a7a]] 同款）。flange 首个 Qualcomm 板，验证 UEFI/GRUB + EDL 刷写 + Adreno 643 freedreno 全栈。
 
-> ⚠️ **内核基线已从 vendor BSP 6.6.90 迁到 mainline 6.18.2**（2026-05-30，见下节）。本页大量章节（魅族屏 / 9 个坑 / AIC8800 路径等）是 **6.6.90 BSP 时代**记录，部分需在 mainline 重验。
+> ⚠️ **内核基线：vendor BSP 6.6.90 → mainline 6.18.2（2026-05-30）→ mainline 7.0.2（2026-05-31，当前，见下节）**。本页部分章节（魅族屏 / 9 个坑 / AIC8800 路径等）是早期记录，部分需在 7.0.2 重验。
+
+## 内核基线：mainline 7.0.2（2026-05-31，rsdk 对齐，当前）
+
+继 6.18.2 后再升 **`radxa/kernel@linux-7.0.2`**，pin commit `7473a9f`（= radxa `linux-qcom` 7.0.2-2 子模块；`linux-7.0.2` 分支 tip 会回归 UFS 复位，故固定）。
+
+**config 对齐 rsdk 四段**（`qcs6490/config.py` defconfig）：`defconfig qcom_module.config radxa.config radxa_custom.config`（同 radxa `.github/local/Makefile.local`）。`qcom_module.config`（软链 `radxa_qcom_7_0_defconfig`）是 qcom 全量平台 config——补齐 `QCOM_AOSS_QMP`/`LLCC`/`ARM_SMMU_V3`/`QSEECOM`/UFS 等数百项 `=y`。`enable_configs` 收敛为 `FW_LOADER_COMPRESS*` + USB gadget；`Qcs6490KernelBuilder.reset_source` 加 `git clean -fd`（修同 commit 重建时 new-file 补丁 `already exists`）。
+
+**⚠️ UFS 开机整机复位（QHEE `PM: Reset by PSHOLD`）双根因 + 修复**：① 早期只用 `defconfig radxa.config`、漏 `qcom_module.config` → UFS probe 缺 qcom 平台驱动；② **板上 SPI 固件过旧**（`251013`/00364-KODIAKLA），与 7.0.2 `kodiak` DTB 资源/握手不匹配。两者都必修——补四段 config + `flange flash --spi-firmware` 刷 `260120`/00549-KODIAKWP。⚠️ `flange flash` 默认只刷 UFS、**不碰 SPI**，大版本内核/DTB 迁移极易漏固件。决策档见 openspec `migrate-qcs6490-kernel-702`。
+
+**硬件编码（venus + iris 双驱动实测）= 死路**：见下表编码行——根在固件/TZ-CP 契约，驱动层无解。
+
+## 内核基线：mainline 6.18.2（2026-05-30，前一步）
 
 ## 内核基线：mainline 6.18.2（2026-05-30 迁移）
 
@@ -35,7 +51,7 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 |---|---|
 | 启动链 → Kernel 6.18.2 + UFS（**无复位**）| ✓ |
 | **硬件视频解码 venus** | ✓ `/dev/video1` 解 H.264/HEVC/MPEG2/VP9（gst `v4l2h264dec` → NV12 1280×720 实跑 ~328fps）|
-| **硬件视频编码 venus** | ⚠️ `/dev/video0` 节点 + 固件声明 H264/HEVC，但发起编码 streaming 即**硬复位 SoC**（配置无关、Linux 零日志=firmware/HFI 级，待 ttyMSM0 串口定位）|
+| **硬件视频编码** | ❌ **死路**（7.0.2 实测 venus+iris 两驱动）：`v4l2h264enc` 真喂帧给硬件编码器即整机复位、设备自恢复。iris（`VIDEO_QCOM_VENUS=n` 重编）能绑定 q6a 且解码可用，但编码同样复位 → 根在固件/TZ-CP 契约（驱动层之下），换 iris 无解。编码只能软件 x264/openh264 或下游 6.6 BSP。详见记忆 `qcs6490-venus-encode-soc-reset` |
 | GPU Adreno 643（`/dev/dri/card0`+`renderD128`，a660 fw）| ✓ |
 | 有线网 enp1s0（r8169 + REALTEK_PHY）| ✓ |
 | GENI i2c（qupv3fw.elf.zst 加载）| ✓ |
@@ -152,4 +168,4 @@ LCD FPC（J10，原理图 v1.21 sheet 31）引脚：
 
 ## 刷写
 
-平台 `QualcommFlashStrategy`，整盘 `edl-ng --memory UFS write-sector 0 raw.img`；SPI 固件单刷 `flange flash --spi-firmware`（消费 Radxa 预编 `flat_build_wp_260120.zip`）。
+平台 `QualcommFlashStrategy`，整盘 `edl-ng --memory UFS write-sector 0 raw.img`（`flange flash`）。**SPI 固件单刷 `flange flash --spi-firmware`（Radxa 预编 `flat_build_wp_260120.zip` / 00549-KODIAKWP）——迁到 7.0.2/kodiak DTB 必须配套刷新，旧 `251013` 固件会致 UFS probe 整机复位**；注意 `flange flash` 默认只刷 UFS、不碰 SPI。

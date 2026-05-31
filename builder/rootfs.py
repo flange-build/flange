@@ -2,6 +2,7 @@
 
 通用能力（与平台无关）：
   - apply_overlays：platform overlay → board overlay 两层覆盖
+  - extra_apt_sources：写入外部 APT 源和 GPG key，供 Phase 1 apt-get update 前使用
   - extra_debs：下载第三方 deb 并安装
   - extra_firmware：从外部仓库拉取固件文件并写入 rootfs
   - panel_firmware：把板级 panel init 文本源编译为 panel.bin 写入 rootfs
@@ -75,6 +76,47 @@ class RootfsBuilder(ComponentBuilder):
                 f"{required_mb}MB；当前 image_size 仅 {image_size_mb}MB，"
                 f"请增大 rootfs 分区 image_size。"
             )
+
+    def _has_extra_apt_sources(self, config: dict) -> bool:
+        return bool(config.get("rootfs", {}).get("extra_apt_sources"))
+
+    def _setup_extra_apt_sources(self, rootfs_dir: Path, config: dict):
+        """在 Phase 1 apt-get update 前写入额外 APT 源和 GPG key。
+
+        config["rootfs"]["extra_apt_sources"] 格式：
+          [
+            {
+              "name": "qcom-ppa",
+              "key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x<fp>",
+              "source": "deb [arch=arm64 signed-by=/etc/apt/keyrings/qcom-ppa.gpg] "
+                        "https://ppa.launchpadcontent.net/.../ubuntu noble main",
+            },
+          ]
+
+        GPG key 经 gpg --dearmor 写入 rootfs /etc/apt/keyrings/<name>.gpg；
+        source 行写入 /etc/apt/sources.list.d/<name>.list。
+        须在 _build_phase1 的 apt-get update 之前调用。
+        """
+        sources = config.get("rootfs", {}).get("extra_apt_sources", [])
+        if not sources:
+            return
+        keyrings_dir = rootfs_dir / "etc" / "apt" / "keyrings"
+        sources_dir = rootfs_dir / "etc" / "apt" / "sources.list.d"
+        keyrings_dir.mkdir(parents=True, exist_ok=True)
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        for src in sources:
+            name = src["name"]
+            key_url = src["key_url"]
+            source_line = src["source"]
+            key_path = keyrings_dir / f"{name}.gpg"
+            self._status(f"导入 APT key: {name}")
+            self.docker.run(
+                ["sh", "-c",
+                 f"curl -fsSL '{key_url}' | gpg --dearmor -o '{key_path}'"],
+                label=f"导入 APT key: {name}",
+            )
+            (sources_dir / f"{name}.list").write_text(source_line + "\n")
+            self._status(f"添加 APT 源: {name}")
 
     def _install_extra_debs(self, rootfs_dir: Path, config: dict):
         """下载并安装第三方 deb 包到 rootfs。

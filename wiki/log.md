@@ -443,3 +443,7 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 9. sec_ts DT prop 私有命名 `sec,irq_gpio` + `sec,skip-fw-update-on-probe`（不读 `interrupts-extended`）
 
 源码改动汇总：`builder/platforms/qualcommqcs6490/kernel.py`（OOT pipeline + DTC_FLAGS）、`components/platform/qualcommqcs6490/qcs6490/config.py`（disable MODULE_SIG_FORCE）、`components/platform/qualcommqcs6490/overlay/usr/lib/firmware/qupv3fw.elf.zst`（symlink）、`components/packages/meizu-e3-panel/driver/{sec_ts/sec_ts_main.c, sgm37604a/sgm37604a.c}`（跨内核 ABI 守卫）、对应 dtso 补 `qcom,load-firmware;` + `sec,irq_gpio` + `sec,skip-fw-update-on-probe`、PMIC LDO label 修正。
+
+## [2026-05-31] sync | qcs6490 内核 6.18.2 → 7.0.2 + UFS 开机复位修复 + 编码定论
+
+内核升 **7.0.2**（pin commit `7473a9f` = radxa `linux-qcom` 7.0.2-2 子模块）。**UFS 开机整机复位（QHEE `PM: Reset by PSHOLD`）双根因修复**：① config 对齐 rsdk **四段** `defconfig qcom_module.config radxa.config radxa_custom.config`——补回 `qcom_module.config`（软链 `radxa_qcom_7_0_defconfig`）的数百项 qcom 平台驱动 `=y`（AOSS_QMP/LLCC/SMMU-v3/QSEECOM/UFS…）；② **SPI 固件 `251013`→`260120`**（`flange flash --spi-firmware`；旧固件↔kodiak DTB 资源/握手不匹配）。`flange flash` 默认只刷 UFS 不碰 SPI，故迁移大版本易漏固件。构建侧 `Qcs6490KernelBuilder.reset_source` 加 `git clean -fd`（同 commit 重建 new-file 补丁 already-exists）。实板验证：UFS 启动稳定 / 硬件解码 / GPU(GL ES 3.2 + Vulkan Turnip) / WiFi / ADB 全过。**硬件编码：venus + iris 两驱动实测均喂帧即整机复位 = 死路**（根在固件/TZ-CP 契约，驱动层无解；iris 经 `VIDEO_QCOM_VENUS=n` 能绑定+解码但编码仍复位）。波及 [[radxa-dragon-q6a]]；决策档 openspec `migrate-qcs6490-kernel-702`。

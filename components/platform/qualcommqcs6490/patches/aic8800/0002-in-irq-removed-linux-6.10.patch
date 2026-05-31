@@ -1,0 +1,25 @@
+aic8800_fdrv: 替换已移除的 in_irq() → in_hardirq()（linux >= 6.10）
+
+in_irq() 在 linux 6.10 被移除（commit: "remove in_irq()"），
+替换为语义等价的 in_hardirq()。
+
+仅 rwnx_rx.c:1641 一处调试日志用到该函数，用版本守卫适配：
+  >= 6.10.0 → in_hardirq()
+  其余保持 in_irq()
+
+diff --git a/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_rx.c b/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_rx.c
+--- a/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_rx.c
++++ b/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_rx.c
+@@ -1638,7 +1638,11 @@ void reord_deinit_sta(struct aicwf_rx_priv *rx_priv, struct reord_ctrl_info *re
+             reord_rxframe_free(&rx_priv->freeq_lock, &rx_priv->rxframes_freequeue, &req->rxframe_list);
+         }
+
+-		AICWFDBG(LOGINFO, "reord dinit in_irq():%d in_atomic:%d in_softirq:%d\r\n", (int)in_irq()
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
++		AICWFDBG(LOGINFO, "reord dinit in_irq():%d in_atomic:%d in_softirq:%d\r\n", (int)in_hardirq()
++#else
++		AICWFDBG(LOGINFO, "reord dinit in_irq():%d in_atomic:%d in_softirq:%d\r\n", (int)in_irq()
++#endif
+ 			,(int)in_atomic(), (int)in_softirq());
+         spin_unlock_bh(&preorder_ctrl->reord_list_lock);
+     }
