@@ -447,3 +447,7 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 ## [2026-05-31] sync | qcs6490 内核 6.18.2 → 7.0.2 + UFS 开机复位修复 + 编码定论
 
 内核升 **7.0.2**（pin commit `7473a9f` = radxa `linux-qcom` 7.0.2-2 子模块）。**UFS 开机整机复位（QHEE `PM: Reset by PSHOLD`）双根因修复**：① config 对齐 rsdk **四段** `defconfig qcom_module.config radxa.config radxa_custom.config`——补回 `qcom_module.config`（软链 `radxa_qcom_7_0_defconfig`）的数百项 qcom 平台驱动 `=y`（AOSS_QMP/LLCC/SMMU-v3/QSEECOM/UFS…）；② **SPI 固件 `251013`→`260120`**（`flange flash --spi-firmware`；旧固件↔kodiak DTB 资源/握手不匹配）。`flange flash` 默认只刷 UFS 不碰 SPI，故迁移大版本易漏固件。构建侧 `Qcs6490KernelBuilder.reset_source` 加 `git clean -fd`（同 commit 重建 new-file 补丁 already-exists）。实板验证：UFS 启动稳定 / 硬件解码 / GPU(GL ES 3.2 + Vulkan Turnip) / WiFi / ADB 全过。**硬件编码：venus + iris 两驱动实测均喂帧即整机复位 = 死路**（根在固件/TZ-CP 契约，驱动层无解；iris 经 `VIDEO_QCOM_VENUS=n` 能绑定+解码但编码仍复位）。波及 [[radxa-dragon-q6a]]；决策档 openspec `migrate-qcs6490-kernel-702`。
+
+## [2026-05-31] sync | qcs6490 硬件编码定论：固件/TZ 级死路（多栈交叉验证排除 gst）
+
+刷 radxa **官方** `noble_gnome_r2`（内核 `6.18.2-3-qcom` + `qcom-venus` + 通用 `vpu20_p1` 固件，与 flange 同套）反证编码：实测硬件 H264 编码同样喂帧即整机复位——**radxa 自家出厂镜像也不支持 q6a 硬件编码**。针对"是否 gst 命令问题"的质疑，用三套独立栈交叉验证：① gst `v4l2h264enc` 复位；② 裸 `v4l2-ctl` M2M（纯 VIDIOC ioctl，无框架）**同样复位**；③ ffmpeg `h264_v4l2m2m` 自身 segfault（喂帧前崩、设备不复位，是 ffmpeg wrapper 已知脆，非硬件信号）。判据：用户态命令写错只会自己崩、绝不能重启 SoC。证据矩阵 2 内核 × 2 驱动(venus/iris) × 2 发行版(flange/radxa) × 2 工具(gst/v4l2-ctl) 全部复位 → 编码受限于**固件/TZ-CP 契约**，软件层无解。波及 [[radxa-dragon-q6a]]；记忆 `qcs6490-venus-encode-soc-reset`。
