@@ -1,0 +1,59 @@
+i2c: qcom-geni: 失配时把 i2c13(SE5) 重 provision 回 FIFO（魅族 E3 屏触摸/背光）
+
+radxa-dragon-q6a 魅族 E3 屏的触摸（sec_ts @0x48）与背光（sgm37604a @0x36）挂在
+i2c13（QUP1 SE5 @a94000）上。该 SE 被 bootloader（对齐 radxa rsdk）预 provision
+成 I2C-GSI/GPI-DMA 模式（FIFO_IF_DISABLE 置位）。geni_i2c probe 读到 proto 已是
+I2C（SE 已初始化）便跳过 geni_load_se_firmware()，而 qcom,enable-gsi-dma 的唯一
+读取点恰在该函数内——于是 patches/kernel/0003 从 dts 删除该属性在 linux-7.0.2
+上形同死代码，SE 仍停留 GSI。
+
+GSI/GPI 对 SE5 是坏的：
+
+  geni_i2c a94000.i2c: DMA txn failed:3
+  geni_i2c a94000.i2c: GPI transfer failed: -5   (-EIO)
+  gpi a00000.dma-controller: Error in Transaction
+
+后果：sec_ts device id 读成 0,0,0（应 AC,6F,70）、触摸坐标读不出、屏触摸不响应。
+对照 i2c10（RTC，dts 声明 qcom,enable-gsi-dma）的 GSI 正常，可知是 SE5 的 GSI
+provision 坏；FIFO 模式对触摸/背光已在 linux-6.18.2 实板证明可用。
+
+本补丁在 probe 的 proto 判断后增加一分支：当 SE 已被 bootloader 初始化为 I2C、
+但 dts 未声明 qcom,enable-gsi-dma、且硬件 FIFO_IF_DISABLE 置位（即"DT 要 FIFO 但
+HW 是 GSI"失配）时，强制重调 geni_load_se_firmware(GENI_SE_I2C)。该函数在
+qcom,enable-gsi-dma 缺席时按默认 GENI_SE_FIFO 重 provision、清除 FIFO_IF_DISABLE，
+后续 fifo_disable 读回为假 → gpi_mode=false → 走 FIFO/SE-DMA，触摸/背光恢复。
+
+触发面仅命中失配的 SE（即 i2c13）：i2c10 因声明 qcom,enable-gsi-dma 被排除、保持
+GSI；default 产物 i2c13 无从机、不受影响。patches/kernel/0003 仍保留（删 flag 是
+本分支触发条件之一）。
+
+参考根因记忆：qcs6490-touch-i2c13-gsi-fifo。
+
+diff --git a/drivers/i2c/busses/i2c-qcom-geni.c b/drivers/i2c/busses/i2c-qcom-geni.c
+--- a/drivers/i2c/busses/i2c-qcom-geni.c
++++ b/drivers/i2c/busses/i2c-qcom-geni.c
+@@ -1078,7 +1078,23 @@ static int geni_i2c_probe(struct platform_device *pdev)
+ 		}
+ 	} else if (proto != GENI_SE_I2C) {
+ 		ret = dev_err_probe(dev, -ENXIO, "Invalid proto %d\n", proto);
+ 		goto err_resources;
+-	}
++	} else if (!device_property_read_bool(dev, "qcom,enable-gsi-dma") &&
++		   (readl_relaxed(gi2c->se.base + GENI_IF_DISABLE_RO) & FIFO_IF_DISABLE)) {
++		/*
++		 * The bootloader pre-provisioned this SE in GSI/GPI-DMA mode,
++		 * but the device tree does not request GSI DMA. On QUP1 SE5
++		 * (i2c13, @a94000) GPI is broken for the meizu-e3 touch and
++		 * backlight slaves, so re-load the SE firmware to fall back to
++		 * FIFO mode (geni_load_se_firmware() defaults to FIFO when
++		 * "qcom,enable-gsi-dma" is absent).
++		 */
++		ret = geni_load_se_firmware(&gi2c->se, GENI_SE_I2C);
++		if (ret) {
++			dev_err_probe(dev, ret,
++				      "i2c FIFO re-provision failed ret: %d\n", ret);
++			goto err_resources;
++		}
++	}
+
+ 	if (desc && desc->no_dma_support) {
