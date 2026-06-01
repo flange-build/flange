@@ -27,5 +27,5 @@
 
 ## 6. 收尾
 
-- [ ] 6.1 `openspec validate fix-qcs6490-touch-i2c13-fifo` 通过；按 ProjectSpec 提交（中文 commit message）
-- [ ] 6.2 实板验证通过后运行 `/opsx:archive` 归档本 change
+- [x] 6.1 `openspec validate` 通过；按 ProjectSpec §10.1 建 `fix/qcs6490-touch-i2c13-fifo` 分支，§10.3 拆两 commit：`fe35a05` fix(qcs6490) 修复+change、`f84bdc2` docs(wiki) 坑#11
+- [x] 6.2 运行 `/opsx:archive` 归档本 change（实板验证已通过）
