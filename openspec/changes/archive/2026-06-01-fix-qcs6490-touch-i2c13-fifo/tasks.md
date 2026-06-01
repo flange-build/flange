@@ -16,7 +16,7 @@
 
 ## 4. 整机刷写实板验证（对照 spec scenario）
 
-- [ ] 4.1 正式 `flange flash` `radxa-dragon-q6a-meizu-e3-bringup-*` 完整镜像（生产部署）；**验证阶段已用手动部署等效达成**（换 `/lib/modules` 模块+`/boot/vmlinuz`+重启，实机 boot 新内核#14+补丁模块）
+- [x] 4.1 正式 `flange flash` `radxa-dragon-q6a-meizu-e3-bringup-*` 完整镜像（生产部署）已完成（2026-06-01）；此前验证阶段用手动部署等效达成（换 `/lib/modules` 模块+`/boot/vmlinuz`+重启）
 - [x] 4.2 spec 场景"i2c13 走 FIFO、无 GPI DMA 传输失败"已实机通过：device id `AC,6F,70`、`GPI transfer failed`=0、触摸响应（IRQ 430+evtest 坐标）、背光 brightness=2048
 - [x] 4.3 回归验证通过：`i2c10` RTC 读 `15:01:20` 正常、无内核 oops（`default` 产物 i2c13 无从机、本就不触发该分支）
 
