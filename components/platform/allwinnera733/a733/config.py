@@ -26,10 +26,13 @@ SOC = {
         "subpath": "src",
         # bsp_defconfig 包含 CONFIG_AW_BSP / CONFIG_ARCH_SUN60IW2 /
         # CONFIG_AW_UART_NG 等关键 SoC 驱动；必须合并否则 UART 等外设不工作
+        # pd_test_disable.config 必须在列表末尾合并（最后写入 = 覆盖生效），
+        # 关掉 AW_POWER_DOMAIN_TEST 电源域测试驱动，详见 kernel.py
+        # _write_pd_test_disable_override。
         "defconfig": ["defconfig", "bsp_defconfig", "radxa.config",
                       "radxa_custom.config", "aic8800_wlan.config",
                       "usb_gadget.config", "panel_mipi_dbi.config",
-                      "case_insensitive_fix.config"],
+                      "case_insensitive_fix.config", "pd_test_disable.config"],
         "dts_dir": "allwinner",
         # out-of-tree 内核模块：源码在内核树外，使用独立构建系统编译
         # 每个声明包含：

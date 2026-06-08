@@ -71,6 +71,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         self._write_aic8800_wlan_override(src_dir)
         self._write_usb_gadget_override(src_dir)
         self._write_panel_mipi_dbi_override(src_dir)
+        self._write_pd_test_disable_override(src_dir)
         self.configure(src_dir, config)
         self.compile(src_dir, config)
         result = self.collect(src_dir, config)
@@ -269,6 +270,34 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
             "CONFIG_USB_CONFIGFS_F_FS=y\n"
         )
         self._status("usb_gadget.config 生成")
+
+    def _write_pd_test_disable_override(self, src_dir: Path):
+        """生成 config fragment 关闭 Allwinner 电源域测试驱动。
+
+        根因（radxa-cubie-a7a + 魅族 E3 屏实板定位）：
+        AW_POWER_DOMAIN_TEST 是 vendor 的电源域自测试驱动（sunxi_pd_test），
+        作为 consumer 挂在 VO 显示电源域（pd_vo / pd_vo1）上并按 runtime-PM
+        自动挂起。panel 点亮后约开机 22s，该驱动把 VO 域 runtime_suspend、
+        关掉显示时钟，连带把同在 LCD FPC 上、依附显示模组供电的 twi2 总线
+        （i2c-2，挂 sec_ts@0x48 触摸 + sgm37604a@0x36 背光）拖死：SDA 被钉死
+        在低电平，控制器 9-clock 总线恢复（bus barrier）也拉不起来，触摸/背光
+        全部失效。设备侧已用 `echo on > .../pd_vo_test@0/power/control` 强制
+        VO 域常开验证因果（错误特征随之改变）。
+
+        生产固件本不该带此测试模块。在 defconfig 合并尾部显式关闭，使 VO 域
+        不再被测试 consumer 自动挂起，twi2 总线稳定。
+
+        合并顺序由 platform/allwinnera733/a733/config.py 的 kernel.defconfig
+        列表保证本 fragment 位于末尾（最后写入 = 覆盖 Kconfig 的 default y）。
+        """
+        override = src_dir / "arch" / self.ARCH / "configs" / "pd_test_disable.config"
+        override.write_text(
+            "# 关闭电源域测试驱动（由 AllwinnerA733KernelBuilder 生成）\n"
+            "# 用途：AW_POWER_DOMAIN_TEST 自动挂起 VO 显示电源域，拖死 twi2\n"
+            "# （i2c-2）总线 → 触摸/背光失效；生产固件移除该测试模块。\n"
+            "# CONFIG_AW_POWER_DOMAIN_TEST is not set\n"
+        )
+        self._status("pd_test_disable.config 生成")
 
     def _write_aic8800_wlan_override(self, src_dir: Path):
         """生成 config fragment 启用 AIC8800 USB Wi-Fi 模块。
