@@ -217,15 +217,19 @@
 	 * 亮度参数平移 rock5b 实机调好的档位：
 	 *  - led-channels=0x1F：dev_en + 全 4 路 LED 通道
 	 *  - max-current=0x03：40mA 最大档
-	 *  - default-brightness-level=2048：约半量程（4095 满量程）
-	 *    可经 /sys/class/backlight/sgm37604a/brightness 在线调节。 */
+	 *  - default-brightness-level=1200：开机默认亮度（满量程 4095，约 30%）。
+	 *    sgm 驱动 probe 时按此设 props.brightness，可经
+	 *    /sys/class/backlight/sgm37604a/brightness 在线调节。
+	 *    注意：systemd-backlight 服务会在关机保存、开机恢复上次亮度，覆盖
+	 *    此默认值——仅新刷镜像（无 /var/lib/systemd/backlight 保存态）才以
+	 *    本值开机；如需每次开机都固定本值，另需 mask systemd-backlight@.service。 */
 	sgm37604_bl: backlight@36 {
 		compatible = "sgmicro,sgm37604a";
 		reg = <0x36>;
 		status = "okay";
 		sgmicro,led-channels = <0x1f>;
 		sgmicro,max-current = <0x03>;
-		default-brightness-level = <2048>;
+		default-brightness-level = <1200>;
 		enable-gpios = <&pio PD 23 GPIO_ACTIVE_HIGH>;
 	};
 };
