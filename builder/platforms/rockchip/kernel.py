@@ -47,6 +47,7 @@ class RockchipKernelBuilder(KernelBuilder):
         """
         self._write_case_insensitive_fix(src_dir)
         self._write_panthor_fragment(src_dir, config)
+        self._write_panfrost_fragment(src_dir, config)
         self._write_panel_mipi_dbi_fragment(src_dir)
         defconfig = config["kernel"]["defconfig"]
         if isinstance(defconfig, str):
@@ -119,6 +120,54 @@ class RockchipKernelBuilder(KernelBuilder):
             "CONFIG_DRM_PANTHOR=m\n"
         )
         self._status(f"SoC={soc}，启用 panthor fragment")
+
+    def _write_panfrost_fragment(self, src_dir: Path, config: dict):
+        """生成 rk3576_panfrost.config fragment。
+
+        RK3576 上：关闭 BSP mali_kbase（Bifrost fork）+ mali400/450 utgard，
+        启用 mainline panfrost DRM 驱动。RK3576 GPU 是 Mali-G52（Bifrost，
+        无 CSF），dts ``gpu@27800000`` 节点 compatible 为 ``arm,mali-bifrost``，
+        与 panfrost of_match 直接对位（panthor 只认 valhall-csf，带不动 G52）。
+
+        其他 SoC 上：写空 fragment（满足 make <name>.config 的合并要求）。
+
+        与 panthor 不同：panfrost 无 CSF 固件依赖，不走 request_firmware，
+        rootfs 侧无需部署 mali_csffw.bin。
+        """
+        fragment = src_dir / "arch" / self.ARCH / "configs" / "rk3576_panfrost.config"
+        soc = config.get("soc", "")
+        if soc != "rk3576":
+            fragment.write_text(
+                "# 非 RK3576 SoC — panfrost fragment 不生效\n"
+            )
+            self._status(f"SoC={soc}，跳过 panfrost fragment")
+            return
+        fragment.write_text(
+            "# RK3576 G52 GPU 切换到 mainline panfrost 驱动\n"
+            "# rk3576.dtsi 的 gpu 节点 compatible 为 arm,mali-bifrost，与 panfrost\n"
+            "# of_match 对位；但 rockchip_linux_defconfig 仍编闭源 mali_kbase，\n"
+            "# 本 fragment 把这部分翻成 panfrost。\n"
+            "\n"
+            "# 关闭 BSP mali_kbase（Bifrost fork）—— rockchip_linux_defconfig 设为 =y\n"
+            "# CONFIG_MALI_BIFROST is not set\n"
+            "# CONFIG_MALI_MIDGARD is not set\n"
+            "# CONFIG_MALI_CSF_SUPPORT is not set\n"
+            "# CONFIG_MALI_DEBUG is not set\n"
+            "# CONFIG_MALI_FENCE_DEBUG is not set\n"
+            "# CONFIG_MALI_DEVFREQ is not set\n"
+            "# CONFIG_MALI_DT is not set\n"
+            "# CONFIG_MALI_EXPERT is not set\n"
+            "# CONFIG_MALI_PLATFORM_THIRDPARTY is not set\n"
+            "# CONFIG_MALI_SHARED_INTERRUPTS is not set\n"
+            "# CONFIG_MALI_PWRSOFT_765 is not set\n"
+            "# 关闭 mali400/450 utgard（老款 GPU 驱动，RK3576 不需要）\n"
+            "# CONFIG_MALI400 is not set\n"
+            "# CONFIG_MALI450 is not set\n"
+            "\n"
+            "# 启用 mainline panfrost (DRM driver for ARM Mali Midgard/Bifrost GPUs)\n"
+            "CONFIG_DRM_PANFROST=m\n"
+        )
+        self._status(f"SoC={soc}，启用 panfrost fragment")
 
     def _write_panel_mipi_dbi_fragment(self, src_dir: Path):
         """生成 config fragment 启用 mainline panel-mipi-dbi-spi 驱动。

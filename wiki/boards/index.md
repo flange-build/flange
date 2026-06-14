@@ -13,6 +13,7 @@ updated: 2026-05-28
 - [[neons-core3566-nanob]] — RK3566
 - [[orangepi-cm4]] — RK3566
 - [[rp-pro-rk3568-h]] — RK3568（首颗真 RK3568，AP6275P PCIe WiFi6/BT5.2，status: wip）
+- [[armsom-cm5-io]] — RK3576（首颗 RK3576，Mali-G52 panfrost 开源 GPU，OP-TEE 打包，BW3752/AP6275S WiFi/BT，status: wip）
 - [[radxa-cubie-a7z]] — A733（首块 A733，ST7789V SPI 小屏 + AIC8800 USB，status: wip）
 - [[radxa-cubie-a7a]] — A733（A7 家族主线板，AXP318 + AC101B 直挂 + DSI/HDMI，沿用 a7z AIC8800 USB，status: wip）
 - [[radxa-rock5b]] — RK3588（首颗 RK3588 板，status: wip）

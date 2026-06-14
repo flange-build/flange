@@ -13,6 +13,7 @@ sources:
   - components/platform/rockchip/config.py
   - components/platform/rockchip/rk3566/config.py
   - components/platform/rockchip/rk3568/config.py
+  - components/platform/rockchip/rk3576/config.py
   - components/platform/rockchip/rk3588/config.py
   - components/platform/rockchip/rk3588s/config.py
   - ProjectSpec.md#164-三层继承
@@ -23,16 +24,17 @@ related:
   - "[[orangepi-cm4]]"
   - "[[rp-pro-rk3568-h]]"
   - "[[radxa-rock5b]]"
+  - "[[armsom-cm5-io]]"
   - "[[kernel 构建器]]"
   - "[[bootloader 构建器]]"
   - "[[USB 线刷协议]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-05-09
+updated: 2026-06-15
 ---
 
 ## TL;DR
 
-Rockchip 系列平台；当前已落地 SoC：RK3566（4×A55，4 块板）+ RK3568（4×A55，1 块 rp-pro-rk3568-h）+ RK3588（4×A76+4×A55，1 块 ROCK 5B），共 6 块板。flange 的首选打样平台，构建流程与刷写工具均已验证。
+Rockchip 系列平台；已落地 SoC：RK3566 / RK3568（4×A55）+ RK3576（4×A72+4×A53，Mali-G52，[[armsom-cm5-io]]）+ RK3588/RK3588S（4×A76+4×A55，Mali-G610）。flange 的首选打样平台。开源 GPU 按架构分流：RK3576/Bifrost 走 panfrost、RK3588/Valhall 走 panthor（详见 GPU 段）。
 
 ## 关键设计要点
 
@@ -76,5 +78,5 @@ dpkg -i 一次性传入 9 个 deb，按依赖拓扑顺序排列（mpp → rga �
 - DTB target 使用子目录相对路径（`rockchip/<dts>.dtb`），非内核完整路径，详见 [[kernel 构建器]]
 - RK3588 板不要用 vendor `<board>-rk3588_defconfig`（含 androidboot 风格固定 bootargs，绕过 extlinux），统一用 generic `rk3588_defconfig`
 - **真 RK3568 板必须挂 rk3568 SoC** 不是 rk3566：两者同 die，但 rkbin 的 `RK3568MINIALL.ini` 选 1560MHz DDR、`RK3566MINIALL.ini` 选 1056MHz，挂错砍 33% 性能
-- 平台 patch `0002-select-flange-recovery-extlinux-conf.patch` / `0003-rk3588-disable-optee-client.patch` 历史上含 zero-context hunk 与缺 context 行，git apply 严格解析报 "corrupt patch at line 26"，base.py fallback 到 `patch -p1` 模糊匹配会**错位插入**（如往 `rk3568_common.h` 文件末尾乱写 fdtoverlay_addr_r 行，rock5b 走 rk3588_common.h 不读所以一直没暴露，rp-pro-rk3568-h 触雷才修齐）。所有平台 patch hunk header 必须含完整 context，文件 trailing whitespace 行也要精确保留
-- 上游 `rk3568_defconfig` / `rk3588_defconfig` 都启用 `CONFIG_OPTEE_CLIENT=y` 但缺 `CONFIG_SPL_OPTEE`，BL31 报 "No OPTEE provided by BL2"，u-boot proper 阶段卡 "optee check api revision fail: -1.0" → "ERROR: Please RESET the board"。平台 patch 0003 / 0005 分别针对两个 defconfig 关掉 OPTEE_CLIENT 三件套
+- 平台 patch `0002-select-flange-recovery-extlinux-conf.patch`（及已删除的旧 disable-optee patch）历史上含 zero-context hunk 与缺 context 行，git apply 严格解析报 "corrupt patch at line 26"，base.py fallback 到 `patch -p1` 模糊匹配会**错位插入**（如往 `rk3568_common.h` 文件末尾乱写 fdtoverlay_addr_r 行，rock5b 走 rk3588_common.h 不读所以一直没暴露，rp-pro-rk3568-h 触雷才修齐）。所有平台 patch hunk header 必须含完整 context，文件 trailing whitespace 行也要精确保留
+- **OP-TEE 全平台打包**：上游 `rk35xx` defconfig 都启用 `CONFIG_OPTEE_CLIENT`（u-boot 开机强制查 OP-TEE）。平台 patch `0006-rockchip-fit-uncomment-bl32-node.patch` 取消注释 FIT 生成器 `make_fit_atf.sh` 的 `gen_bl32_node`，把 rkbin BL32（tee.bin）打进 u-boot.itb，SPL 加载交 BL31、client 检查通过正常启动。arm64 下**不可**启 `CONFIG_SPL_OPTEE`（会拉 armv7 专用 `spl_optee.S` 编不过；`fit_args.sh` 令 ARCH=arm64 时 `gen_bl32_node` 自动跳过该门槛）。早期曾用 patch 0003/0005 关 `OPTEE_CLIENT` 绕过 halt，现已删除、改为打包 OP-TEE
