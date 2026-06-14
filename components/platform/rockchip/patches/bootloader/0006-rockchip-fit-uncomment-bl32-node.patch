@@ -1,0 +1,37 @@
+From: flange <flange@localhost>
+Subject: [PATCH] make_fit_atf.sh: 取消注释 gen_bl32_node，全平台把 OP-TEE 打进 FIT
+
+radxa/rockchip u-boot 的 SPL FIT 生成器 make_fit_atf.sh 默认注释掉
+gen_bl32_node，u-boot.itb 永远不含 OP-TEE(BL32) 节点。本 patch 取消该注释，
+使所有 rockchip SoC（RK3566/RK3568/RK3576/RK3582/RK3588/RK3588S）的
+u-boot.itb 都把 rkbin 提供的 tee.bin 打进 FIT。
+
+arm64 路径无需 CONFIG_SPL_OPTEE：fit_args.sh 在 CONFIG_ARM64=y 时令生成器
+ARCH=arm64，gen_bl32_node 内 `[ "${ARCH}" == "arm" ]` 分支被跳过，仅靠
+TEE_LOAD_ADDR 非空（fit_args.sh 默认按 DRAM_BASE + 0x08400000 计算）即生成
+optee 节点并设 LOADABLE_OPTEE，经 gen_arm64_configurations 接入 config
+loadables，SPL 加载交 BL31。
+
+（注意：CONFIG_SPL_OPTEE=y 不可用于 arm64——它会拉入 armv7 专用汇编
+common/spl/spl_optee.S，arm64 SPL 编不过。本 patch 不依赖该符号。）
+
+tee.bin 由 flange bootloader 既有逻辑从 rkbin RKTRUST 的 BL32 段复制到位
+（各 rockchip SoC 的 RKTRUST.ini 均含 BL32_OPTION），flange Python 代码零改动。
+
+与 0003/0005（关闭 RK3588/RK3568 的 OPTEE_CLIENT）的关系：那两个 patch 当初
+是因"client 开着但 OP-TEE 未打包 → halt"而关 client；本 patch 已把 OP-TEE
+打包，halt 根因消除。0003/0005 是否回退（重新启用 client 让 u-boot 也使用
+OP-TEE）为独立决策，不在本 patch 范围。
+
+diff --git a/arch/arm/mach-rockchip/make_fit_atf.sh b/arch/arm/mach-rockchip/make_fit_atf.sh
+--- a/arch/arm/mach-rockchip/make_fit_atf.sh
++++ b/arch/arm/mach-rockchip/make_fit_atf.sh
+@@ -10,7 +10,7 @@
+ gen_header
+ gen_uboot_node
+ gen_bl31_node
+-#gen_bl32_node
++gen_bl32_node
+ gen_mcu_node
+ gen_loadable_node
+ gen_kfdt_node
