@@ -23,6 +23,14 @@ BOARD = {
         # 屏 overlay，dsi1 / panel 节点维持 dtsi 默认 disabled。
         "dts": "rk3566-orangepi-cm4-base",
     },
+    "boot": {
+        # i2c2 切到 m1 引脚组：i2c2_sda_m1=GPIO4_B4 / i2c2_scl_m1=GPIO4_B5。
+        # overlay 源自 radxa-overlays（device-tree-overlay 组件统一拉取），
+        # rk356x 全系 pinctrl 同源，rk3568- 前缀文件适用于 rk3566；编译为
+        # .dtbo 后由 extlinux 挂载。值必须带 .dtbo 后缀（dtb_overlay 校验），
+        # 编译时去后缀回仓库取 rk3568-i2c2-m1.dts。
+        "vendor_overlays": ["rk3568-i2c2-m1.dtbo"],
+    },
     "rootfs": {
         # 账号体系沿用 components/rootfs/config.py base 层默认。
         # AP6256 三件套（BCM4345C5 chipset）：
