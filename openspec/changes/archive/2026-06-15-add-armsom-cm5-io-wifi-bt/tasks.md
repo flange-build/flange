@@ -25,9 +25,9 @@
 
 - [x] 4.1 `patches/kernel/0001-dts-armsom-cm5-wifi-chip-ap6275s.patch`：`wifi_chip_type` `rtl8852bs`→`ap6275s`（实机确认 `wlan_platdata: wifi_chip_type = ap6275s`）
 
-## 5. 实机验证（端到端已过；纯净 flash 待最终确认）
+## 5. 实机验证（纯净 flash 端到端通过）
 
-- [~] 5.1 `flange flash` 刷入全新 default-debug build（不带手动修改）——上一 build + config 同款 overlay 已 reboot 端到端验证，全新镜像 debugfs 确认含全部产物；纯净 flash 留作最终确认
+- [x] 5.1 `flange flash` 刷入全新 default-debug build（不带任何手动修改）——纯净镜像实机验证通过：开机即扫到 AP、wlan0 可用
 - [x] 5.2 实机 `lsmod` 仅 OOT bcmdhd（`updates/bcmdhd.ko`），无 brcmfmac、无 HT timeout
 - [x] 5.3 `dmesg` 确认 `Final fw_path=/lib/firmware/brcm/fw_bcm43752a2_ag.bin`、`country CN`、`Firmware up`
 - [x] 5.4 `nmcli dev wifi list` 扫到 2.4G+5G AP（wlan0 disconnected 可用）
