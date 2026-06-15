@@ -92,7 +92,8 @@ static bool recv_out(uint8_t rhport, tusb_control_request_t const *req)
 {
     uint16_t len = req->wLength;
     if (len > sizeof(s_set_buf))
-        len = sizeof(s_set_buf); /* 多余部分 host 会被 STALL，但 probe 不触发 SET */
+        len = sizeof(s_set_buf); /* 截断为缓冲大小；host 会短收(short transfer)。
+                                  * probe 阶段所有 SET payload ≤ 26 字节，此路径不会触发 */
     return tud_control_xfer(rhport, req, s_set_buf, len);
 }
 

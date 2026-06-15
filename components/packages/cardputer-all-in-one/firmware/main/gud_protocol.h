@@ -26,7 +26,7 @@
 #endif
 
 /*
- * struct gud_display_descriptor_req - Display descriptor (26 字节, packed)
+ * struct gud_display_descriptor_req - Display descriptor (30 字节, packed)
  */
 struct gud_display_descriptor_req {
 	uint32_t magic;
