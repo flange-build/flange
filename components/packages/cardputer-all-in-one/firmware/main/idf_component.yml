@@ -1,2 +1,3 @@
 dependencies:
-  espressif/esp_tinyusb: "^1.4.0"
+  # 实测 1.7.6；锁到 1.7.x 避免次版本 API 漂移（如 string_descriptor_count 字段）
+  espressif/esp_tinyusb: "~1.7.0"

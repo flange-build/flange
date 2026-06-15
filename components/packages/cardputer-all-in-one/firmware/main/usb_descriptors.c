@@ -30,8 +30,9 @@ const uint8_t aio_desc_configuration[] = {
  * 字符串描述符：交由 esp_tinyusb 完成 UTF-16 转换与 langid 处理。
  * 索引 0 = langid（English, 0x0409），1=厂商 2=产品 3=序列号。
  */
+static const char k_langid[] = {0x09, 0x04, 0x00};
 const char *aio_string_desc_arr[] = {
-    (const char[]){0x09, 0x04},
+    k_langid,
     "flange",
     "Cardputer GUD Display",
     "AIO-0001",
