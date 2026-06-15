@@ -4,9 +4,7 @@
 #include "display_st7789.h"
 #include <string.h>
 
-#define LCD_W 240
-#define LCD_H 135
-
+/* TODO(GUD): Task 4 引入真实帧时评估是否需移至 PSRAM */
 static uint16_t fb[LCD_W * LCD_H];
 
 static void fill_bars(void)

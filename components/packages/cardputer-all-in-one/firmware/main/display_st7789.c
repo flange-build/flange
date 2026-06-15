@@ -1,6 +1,7 @@
 #include "display_st7789.h"
 #include "cardputer_pins.h"
 #include "esp_lcd_panel_io.h"
+#include <assert.h>
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_ops.h"
 #include "driver/spi_master.h"
@@ -14,7 +15,7 @@ esp_err_t display_init(void)
 {
     gpio_config_t bk = { .mode = GPIO_MODE_OUTPUT,
                          .pin_bit_mask = 1ULL << PIN_LCD_BL };
-    gpio_config(&bk);
+    ESP_ERROR_CHECK(gpio_config(&bk));
     gpio_set_level(PIN_LCD_BL, 1);
 
     spi_bus_config_t buscfg = {
@@ -45,8 +46,8 @@ esp_err_t display_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true)); /* ST7789 常需反色 */
-    esp_lcd_panel_swap_xy(s_panel, true);
-    esp_lcd_panel_mirror(s_panel, false, true);
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, false, true));
     esp_lcd_panel_set_gap(s_panel, LCD_X_OFFSET, LCD_Y_OFFSET);
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
     ESP_LOGI(TAG, "ST7789 %dx%d ready", LCD_W, LCD_H);
@@ -55,5 +56,6 @@ esp_err_t display_init(void)
 
 void display_blit(int x, int y, int w, int h, const void *pixels)
 {
+    assert(s_panel);
     esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, pixels);
 }
