@@ -6,19 +6,31 @@ GPU 走 mainline panfrost（Mali-G52 Bifrost）。板载 dts
 ``&gpu { status = "okay"; mali-supply = ...; }``，无需板级 overlay 使能）。
 
 WiFi/BT（add-armsom-cm5-io-wifi-bt 变更）：板载模组 BW3752-50B1（Iton，
-基于 Broadcom BCM43752，2T2R combo，等价 AP6275S）——WiFi 走 SDIO 接
-Rockchip OOT bcmdhd、BT 走 UART4(ttyS4)。dtsi 已声明 wireless-wlan /
-wireless-bluetooth / &sdio / &uart4 节点；本 board 层补三件套固件
-（rootfs.+extra_firmware，落到 /lib/firmware/brcm/）+ 一条 kernel patch
-（dts wifi_chip_type rtl8852bs→ap6275s）。bcmdhd 默认 CONFIG_BCMDHD_FW_PATH
-已是 /lib/firmware/brcm/（Kconfig default，无 cm4 那种 Android 路径污染），
-固件实际请求文件名由 SDIO OTP/module-name 机制决定，以实机 dmesg 为准对齐；
-不复刻 cm4 的 FW_AMPAK_PATH patch（该 patch 在 REQUEST_FW=n 下是 no-op）。
-不预装 BT 用户态栈。
+基于 Broadcom BCM43752，2T2R combo，等价 AP6275S）——WiFi 走 SDIO、BT 走
+UART4(ttyS4)。走 OOT 路线（对齐 radxa-rock5b 的 rkwifibt 模式）：
+
+- kernel.oot_sources/+oot_modules：用 Radxa rkwifibt 仓的 bcmdhd 驱动编出
+  OOT ``bcmdhd.ko``。
+- kernel.+defconfig：关掉内建 ``CONFIG_BCMDHD``（与 OOT 同名冲突）与 mainline
+  ``CONFIG_BRCMFMAC``（实测 brcmfmac 先 bind SDIO func1、固件加载失败、HT
+  Avail timeout 污染芯片状态，导致 bcmdhd 虽注册 wlan0 但 set country 失败、
+  扫不到 AP）。
+- rootfs.+extra_firmware：从同一 rkwifibt 仓部署 AP6275S 固件，**含关键的
+  clm_bcm43752a2_ag.blob**——固件内置 Generic.Min CLM 不接受 set country，缺
+  CLM blob 则 ``country setting failed -2``、无可用信道、扫不到 AP；实测补上
+  后 country CN 成功、扫到 2.4G+5G AP。
+- overlay/etc/modprobe.d/bcmdhd.conf：OOT bcmdhd 编译默认固件路径是
+  ``/vendor/etc/firmware/``（Android），而固件部署在 ``/lib/firmware/brcm/``；
+  用 module param ``firmware_path`` 覆盖到 brcm 目录（bcmdhd 经 SDIO MODALIAS
+  自动 modprobe 时读 modprobe.d，实测开机自动加载即生效）。
+
+dtsi 已声明 wireless-wlan / wireless-bluetooth / &sdio / &uart4 节点；另一条
+kernel patch 把 dts wifi_chip_type rtl8852bs→ap6275s（与实物对齐）。不预装 BT
+用户态栈。
 
 其余暂不纳入验收的外设（HDMI/MIPI 屏/摄像头/音频/NPU/VPU）均不在 board
 层显式配置，留待后续独立变更。不携带板级 dtso / board_overlays。
-不覆盖 SoC 层 GPU/defconfig/bootloader 字段（沿用 rk3576 generic）。
+不覆盖 SoC 层 GPU/bootloader 字段（沿用 rk3576 generic）。
 """
 
 BOARD = {
@@ -32,33 +44,70 @@ BOARD = {
         # argon BSP linux-6.1-stan-rkr5.1 已包含 rk3576-armsom-cm5-io.dts。
         # GPU panfrost 路线由 SoC 层 rk3576_panfrost.config 决定，board 不覆盖。
         "dts": "rk3576-armsom-cm5-io",
+        # ---- BW3752-50B1 (BCM43752 / AP6275S) WiFi6+BT5.3 走 rkwifibt OOT ----
+        # 与 radxa-rock5b 同 repo/同机制（rock5b 编 rtl8852be，本板编 bcmdhd）。
+        "oot_sources": {
+            "rkwifibt": {
+                "repo": "https://github.com/radxa/rkwifibt.git",
+                # develop 分支跟踪远端最新；cache._mix_kernel_oot_sources 用
+                # git HEAD 触发 kernel 重 build。锁 commit 改 "commit": "<sha>"。
+                "branch": "develop",
+            },
+        },
+        "+oot_modules": [
+            {
+                "dir": "{rkwifibt_src}/drivers/bcmdhd",
+                "label": "bcmdhd (rkwifibt BCM43752/AP6275S SDIO driver)",
+                "make_args": [
+                    # 不用 bcmdhd Makefile 的 bcmdhd_sdio target——它内部硬编码
+                    # M=$(PWD)，而容器里 $(PWD)=/workspace 非 bcmdhd 目录，导致
+                    # M= 指错。直接走 kernel kbuild 的 -C/M= external module 机制
+                    # （bcmdhd Makefile 有无条件 obj-m += $(MODULE_NAME).o）。
+                    # CONFIG_BCMDHD_SDIO=y → MODULE_NAME=bcmdhd → 输出 bcmdhd.ko。
+                    "-C", "{kernel_src}",
+                    "M={rkwifibt_src}/drivers/bcmdhd",
+                    "modules",
+                    "CONFIG_BCMDHD=m",
+                    "CONFIG_BCMDHD_SDIO=y",
+                    "ARCH=arm64",
+                    "CROSS_COMPILE=aarch64-linux-gnu-",
+                ],
+                "ko_pattern": [
+                    "{rkwifibt_src}/drivers/bcmdhd/bcmdhd.ko",
+                ],
+            },
+        ],
+        # 关内建 bcmdhd（与 OOT 同名）+ mainline brcmfmac（抢同一 SDIO 芯片）。
+        # raw CONFIG 行经 flange_inline.config 追加到 defconfig 末尾覆盖 SoC 设置。
+        "+defconfig": [
+            "# CONFIG_BCMDHD is not set",
+            "# CONFIG_BRCMFMAC is not set",
+        ],
     },
     "rootfs": {
         # ubuntu-base 默认 root 锁定（/etc/shadow 为 *），不设此字段则 root
         # 无法登录。值与其他 rockchip 板（radxa-rock5b / tspi-rk3566）一致 1234，
         # 方便首版 bring-up 切板调试（spec 首版验收要求 ssh 登录）。
         "root_password": "1234",
-        # BCM43752 / AP6275S 三件套（与 orangepi-cm4 的 AP6256 同仓同机制）：
-        #   - fw_bcm43752a2_ag.bin  SDIO WiFi 主固件，Rockchip bcmdhd
-        #                           CONFIG_BCMDHD_AUTO_SELECT 按 chip-id 拼名后实际加载
-        #   - nvram_ap6275s.txt     NVRAM 校准参数
-        #   - BCM4362A2.hcd         BT patchram（btbcm；BCM43752 的 BT 子系统标识）
-        # source 默认 "repo"，由 SourceManager.ensure_extra_firmware 独立 clone 到
-        # .build/sources/extra-firmware/radxa/。bcmdhd 默认固件目录已是
-        # /lib/firmware/brcm/（CONFIG_BCMDHD_FW_PATH Kconfig default），三件套
-        # 落点与之对齐；实际请求文件名以实机 dmesg 为准（必要时加 symlink）。
+        # AP6275S 固件从 rkwifibt 仓部署（复用 kernel.oot_sources 已 ensure 的源）：
+        #   wifi/fw_bcm43752a2_ag.bin   SDIO WiFi 主固件
+        #   wifi/nvram_ap6275s.txt      NVRAM 校准参数
+        #   wifi/clm_bcm43752a2_ag.blob CLM（Country Locale Matrix）—— 关键，缺它
+        #                               set country failed、扫不到 AP（见 docstring）
+        #   bt/BCM4362A2.hcd            BT patchram
+        # dest=lib/firmware/brcm，与 bcmdhd 固件搜索目录对齐。
         "+extra_firmware": [
             {
-                "name": "radxa",
-                "repo": "https://github.com/radxa-pkg/radxa-firmware",
-                "branch": "main",
-                "repo_subdir": "radxa-firmware/lib/firmware",
+                "name": "rkwifibt-ap6275s",
+                "source": "oot:rkwifibt",  # 复用 kernel.oot_sources 已 ensure 的源
+                "repo_subdir": "firmware/broadcom/AP6275S",
                 "files": [
-                    "brcm/fw_bcm43752a2_ag.bin",
-                    "brcm/nvram_ap6275s.txt",
-                    "brcm/BCM4362A2.hcd",
+                    {"src": "wifi/fw_bcm43752a2_ag.bin",   "dest": "fw_bcm43752a2_ag.bin"},
+                    {"src": "wifi/nvram_ap6275s.txt",      "dest": "nvram_ap6275s.txt"},
+                    {"src": "wifi/clm_bcm43752a2_ag.blob", "dest": "clm_bcm43752a2_ag.blob"},
+                    {"src": "bt/BCM4362A2.hcd",            "dest": "BCM4362A2.hcd"},
                 ],
-                "dest": "lib/firmware",
+                "dest": "lib/firmware/brcm",
             },
         ],
     },

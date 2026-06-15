@@ -4,10 +4,13 @@ type: board
 status: wip
 sources:
   - components/board/armsom-cm5-io/config.py
+  - components/board/armsom-cm5-io/patches/kernel/0001-dts-armsom-cm5-wifi-chip-ap6275s.patch
+  - components/board/armsom-cm5-io/overlay/etc/modprobe.d/bcmdhd.conf
   - components/platform/rockchip/rk3576/config.py
 related:
   - "[[rockchip 平台]]"
   - "[[radxa-rock5b]]"
+  - "[[orangepi-cm4]]"
 updated: 2026-06-15
 ---
 
@@ -31,11 +34,21 @@ panfrost 渲染（GLES 3.1）通过。
   仅需补 kernel-rockchip `Makefile` 的 dtb 条目（commit 3d55028）。
 - **OP-TEE**：随全平台 patch `0006` 打包进 u-boot.itb（详见 [[rockchip 平台]]
   OP-TEE 段）。console = `ttyS0,1500000`（UART0，rk3576 serial-id=0）。
-- **WiFi/BT**（独立 change `add-armsom-cm5-io-wifi-bt`，进行中）：板载
-  BW3752-50B1（≈AP6275S/BCM43752），WiFi SDIO 走 Rockchip OOT bcmdhd、BT
-  UART4，board 层补三件套固件 + 两条 kernel patch。
+- **WiFi/BT**（change `add-armsom-cm5-io-wifi-bt`）：板载 BW3752-50B1
+  （BCM43752/≈AP6275S）。WiFi 走 **rkwifibt OOT bcmdhd**——`+defconfig` 关内建
+  `CONFIG_BCMDHD`+`CONFIG_BRCMFMAC`、`+oot_modules` 编 OOT `bcmdhd.ko`（对齐
+  rock5b 模式）；固件含关键 `clm_bcm43752a2_ag.blob` 从 rkwifibt 仓
+  （`firmware/broadcom/AP6275S`）部署到 `/lib/firmware/brcm/`；overlay
+  `modprobe.d/bcmdhd.conf` 用 `firmware_path` 覆盖 OOT 默认 Android 路径。实测
+  country CN、扫到 2.4G+5G AP。BT(UART4) 固件就绪、不预装用户态栈。
 
 ## 易踩坑
 
 - `CONFIG_SPL_OPTEE=y` 会拉 armv7 `spl_optee.S`，arm64 SPL 编不过——OP-TEE 打包
   靠 `0006` 取消注释 `gen_bl32_node`，不靠该符号。
+- WiFi 扫不到 AP 的三连坑：① mainline brcmfmac 抢 BCM43752 SDIO（先 bind func1、
+  `HT Avail timeout` 污染芯片）→ 关 `CONFIG_BRCMFMAC`；② 缺 CLM blob → `set
+  country failed -2` → 无可用信道；③ OOT bcmdhd 固件路径默认 `/vendor/etc/
+  firmware/`（Android）→ `modprobe.d` 传 `firmware_path` 改 `/lib/firmware/brcm/`。
+- OOT bcmdhd 编译别用仓里 `bcmdhd_sdio` target（内部 `M=$(PWD)` 在容器里指错
+  到 `/workspace`）→ 直接 `make -C {kernel_src} M=.../bcmdhd modules`。
