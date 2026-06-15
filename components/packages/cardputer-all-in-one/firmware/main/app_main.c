@@ -4,6 +4,7 @@
 #include "display_st7789.h"
 #include "tinyusb.h"
 #include "usb_descriptors.h"
+#include "gud_device.h"
 #include <string.h>
 
 /* TODO(GUD): Task 4 引入真实帧时评估是否需移至 PSRAM */
@@ -23,8 +24,12 @@ void app_main(void)
     fill_bars();
     display_blit(0, 0, LCD_W, LCD_H, fb);
 
+    /* GUD 控制协议状态机初始化（须在 TinyUSB 安装前，回调可能立即触发） */
+    gud_device_init();
+
     /* 安装 TinyUSB：vendor 类设备 16d0:10a9，供 mainline gud 驱动绑定。
-     * 描述符经 tinyusb_config_t 注入，回调由 esp_tinyusb 内部实现。 */
+     * 描述符经 tinyusb_config_t 注入；vendor EP0 控制回调
+     * tud_vendor_control_xfer_cb 由 gud_device.c 提供。 */
     const tinyusb_config_t tusb_cfg = {
         .device_descriptor = &aio_desc_device,
         .configuration_descriptor = aio_desc_configuration,
