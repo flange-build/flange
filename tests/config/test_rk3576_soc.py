@@ -79,7 +79,7 @@ class TestRK3576KernelAlignsRK3588:
         assert rk3576["kernel"]["defconfig"] == [
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
-            "rk3576_panfrost.config",
+            "panfrost.config",
         ]
 
     def test_no_mali_csf_firmware(self):
@@ -100,8 +100,8 @@ class TestRK3576NotPollutingOthers:
     def test_gpu_fragment_distinct(self):
         rk3576 = _load_soc_config("rk3576")
         rk3588 = _load_soc_config("rk3588")
-        assert "rk3576_panfrost.config" in rk3576["kernel"]["defconfig"]
+        assert "panfrost.config" in rk3576["kernel"]["defconfig"]
         assert "rk3588_panthor.config" in rk3588["kernel"]["defconfig"]
-        assert "rk3576_panfrost.config" not in rk3588["kernel"]["defconfig"]
+        assert "panfrost.config" not in rk3588["kernel"]["defconfig"]
         # rk3588 的 panthor 路线不受本变更影响
         assert "rk3588_panthor.config" not in rk3576["kernel"]["defconfig"]

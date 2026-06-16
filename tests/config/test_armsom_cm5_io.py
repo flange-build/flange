@@ -57,7 +57,7 @@ class TestArmsomCM5IOMergedConfig:
 
     def test_gpu_panfrost_fragment_inherited(self, merged):
         """board 不覆盖 SoC GPU 路线，合并后仍带 panfrost fragment。"""
-        assert "rk3576_panfrost.config" in merged["kernel"]["defconfig"]
+        assert "panfrost.config" in merged["kernel"]["defconfig"]
         # 不串入 rk3588 的 panthor fragment
         assert "rk3588_panthor.config" not in merged["kernel"]["defconfig"]
 

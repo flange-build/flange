@@ -30,8 +30,15 @@ SOC = {
     },
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
-        "branch": "linux-6.1-stan-rkr4.1-buildroot",
-        "defconfig": "rockchip_linux_defconfig",
+        "branch": "linux-6.1-stan-rkr5.1",
+        # GPU 走 mainline panfrost：RK3566 GPU 为 Mali-G52（Bifrost），dts gpu
+        # 节点（rk356x.dtsi gpu@fde60000）compatible 为 arm,mali-bifrost，与
+        # panfrost of_match 对位。panfrost.config 由 _write_panfrost_fragment
+        # 生成（rk3566/rk3568/rk3576 共用），关闭闭源 mali_kbase 并启用 panfrost。
+        "defconfig": [
+            "rockchip_linux_defconfig",
+            "panfrost.config",
+        ],
         "dts_dir": "rockchip",
     },
     "rootfs": {

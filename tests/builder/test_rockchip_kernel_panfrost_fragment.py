@@ -1,7 +1,8 @@
 """测试 RockchipKernelBuilder._write_panfrost_fragment 行为。
 
-RK3576（Mali-G52 Bifrost）走 mainline panfrost：关闭闭源 mali_kbase + 启用
-CONFIG_DRM_PANFROST；其他 SoC 写空 fragment（不污染 panthor 路线）。
+rk3566 / rk3568 / rk3576（GPU 均 Mali-G52 Bifrost）走 mainline panfrost：
+关闭闭源 mali_kbase + 启用 CONFIG_DRM_PANFROST；其他 SoC 写空 fragment
+（不污染 panthor 路线）。
 覆盖 rockchip-platform spec "Rockchip GPU 开源驱动 fragment 按 SoC GPU 架构选型"。
 """
 
@@ -27,12 +28,13 @@ def _src_with_configs(tmp_path: Path) -> Path:
 
 
 def _fragment(src: Path) -> Path:
-    return src / "arch" / "arm64" / "configs" / "rk3576_panfrost.config"
+    return src / "arch" / "arm64" / "configs" / "panfrost.config"
 
 
-def test_rk3576_enables_panfrost_disables_kbase(builder, tmp_path):
+@pytest.mark.parametrize("soc", ["rk3566", "rk3568", "rk3576"])
+def test_g52_soc_enables_panfrost_disables_kbase(builder, tmp_path, soc):
     src = _src_with_configs(tmp_path)
-    builder._write_panfrost_fragment(src, {"soc": "rk3576"})
+    builder._write_panfrost_fragment(src, {"soc": soc})
     text = _fragment(src).read_text()
     assert "CONFIG_DRM_PANFROST=m" in text
     assert "# CONFIG_MALI_BIFROST is not set" in text
@@ -41,7 +43,7 @@ def test_rk3576_enables_panfrost_disables_kbase(builder, tmp_path):
     assert "CONFIG_MALI_BIFROST=y" not in text
 
 
-def test_non_rk3576_writes_empty_fragment(builder, tmp_path):
+def test_non_g52_writes_empty_fragment(builder, tmp_path):
     """rk3588 上 panfrost fragment 为空，panthor 路线不受影响。"""
     src = _src_with_configs(tmp_path)
     builder._write_panfrost_fragment(src, {"soc": "rk3588"})

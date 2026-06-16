@@ -40,8 +40,19 @@ SOC = {
     },
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
-        "branch": "linux-6.1-stan-rkr4.1-buildroot",
-        "defconfig": "rockchip_linux_defconfig",
+        "branch": "linux-6.1-stan-rkr5.1",
+        # list 形态（而非裸字符串）：①支持 board 层 ``+defconfig`` 追加——
+        # deep_merge/resolve_conditions 的 ``+key`` 追加语义只对 list base 生效，
+        # 追加到字符串 base 会整段覆盖（丢掉 base defconfig）；②引入 GPU
+        # fragment。与 rk3576/rk3588 SoC 的 list 形态保持一致。
+        # GPU 走 mainline panfrost：RK3568 GPU 为 Mali-G52（Bifrost），dts gpu
+        # 节点（rk356x.dtsi gpu@fde60000）compatible 为 arm,mali-bifrost，与
+        # panfrost of_match 对位。panfrost.config 由 _write_panfrost_fragment
+        # 生成（rk3566/rk3568/rk3576 共用），关闭闭源 mali_kbase 并启用 panfrost。
+        "defconfig": [
+            "rockchip_linux_defconfig",
+            "panfrost.config",
+        ],
         "dts_dir": "rockchip",
     },
     "rootfs": {

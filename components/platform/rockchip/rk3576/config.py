@@ -3,8 +3,9 @@
 与 RK3588 对齐：复用同一 argon BSP 内核 linux-6.1-stan-rkr5.1 与 base
 rockchip_linux_defconfig（该分支为全 SoC BSP 树，已自带 RK3576 全套 dts、
 驱动、Kconfig）。差异仅在 GPU fragment：RK3576 GPU 为 Mali-G52（Bifrost），
-走 mainline panfrost（rk3576_panfrost.config，由 RockchipKernelBuilder.
-_write_panfrost_fragment 生成），而非 RK3588 的 panthor（Valhall-CSF）。
+走 mainline panfrost（panfrost.config，由 RockchipKernelBuilder.
+_write_panfrost_fragment 生成，与 rk3566/rk3568 共用），而非 RK3588 的
+panthor（Valhall-CSF）。
 panfrost 无需 CSF firmware，故 rootfs 不带 mali-csf extra_firmware。
 """
 
@@ -37,7 +38,7 @@ SOC = {
         "defconfig": [
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
-            "rk3576_panfrost.config",
+            "panfrost.config",
         ],
         "dts_dir": "rockchip",
     },

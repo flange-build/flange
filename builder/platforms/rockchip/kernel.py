@@ -121,30 +121,37 @@ class RockchipKernelBuilder(KernelBuilder):
         )
         self._status(f"SoC={soc}，启用 panthor fragment")
 
-    def _write_panfrost_fragment(self, src_dir: Path, config: dict):
-        """生成 rk3576_panfrost.config fragment。
+    # mainline panfrost 适用的 SoC：GPU 均为 Mali-G52（Bifrost，无 CSF），
+    # dts gpu 节点 compatible 为 ``arm,mali-bifrost``，与 panfrost of_match
+    # 对位（panthor 只认 valhall-csf，带不动 G52）。
+    # - rk3576：gpu@27800000（rk3576.dtsi）
+    # - rk3566/rk3568：gpu@fde60000（共享 rk356x.dtsi）
+    PANFROST_SOCS = ("rk3566", "rk3568", "rk3576")
 
-        RK3576 上：关闭 BSP mali_kbase（Bifrost fork）+ mali400/450 utgard，
-        启用 mainline panfrost DRM 驱动。RK3576 GPU 是 Mali-G52（Bifrost，
-        无 CSF），dts ``gpu@27800000`` 节点 compatible 为 ``arm,mali-bifrost``，
-        与 panfrost of_match 直接对位（panthor 只认 valhall-csf，带不动 G52）。
+    def _write_panfrost_fragment(self, src_dir: Path, config: dict):
+        """生成 panfrost.config fragment。
+
+        PANFROST_SOCS（rk3566 / rk3568 / rk3576，GPU 均 Mali-G52 Bifrost）上：
+        关闭 BSP mali_kbase（Bifrost fork）+ mali400/450 utgard，启用 mainline
+        panfrost DRM 驱动。这些 SoC 的 dts gpu 节点 compatible 均为
+        ``arm,mali-bifrost``，与 panfrost of_match 直接对位。
 
         其他 SoC 上：写空 fragment（满足 make <name>.config 的合并要求）。
 
         与 panthor 不同：panfrost 无 CSF 固件依赖，不走 request_firmware，
         rootfs 侧无需部署 mali_csffw.bin。
         """
-        fragment = src_dir / "arch" / self.ARCH / "configs" / "rk3576_panfrost.config"
+        fragment = src_dir / "arch" / self.ARCH / "configs" / "panfrost.config"
         soc = config.get("soc", "")
-        if soc != "rk3576":
+        if soc not in self.PANFROST_SOCS:
             fragment.write_text(
-                "# 非 RK3576 SoC — panfrost fragment 不生效\n"
+                "# 非 Mali-G52 Bifrost SoC — panfrost fragment 不生效\n"
             )
             self._status(f"SoC={soc}，跳过 panfrost fragment")
             return
         fragment.write_text(
-            "# RK3576 G52 GPU 切换到 mainline panfrost 驱动\n"
-            "# rk3576.dtsi 的 gpu 节点 compatible 为 arm,mali-bifrost，与 panfrost\n"
+            "# Mali-G52 GPU 切换到 mainline panfrost 驱动\n"
+            "# 对应 SoC 的 dts gpu 节点 compatible 为 arm,mali-bifrost，与 panfrost\n"
             "# of_match 对位；但 rockchip_linux_defconfig 仍编闭源 mali_kbase，\n"
             "# 本 fragment 把这部分翻成 panfrost。\n"
             "\n"
