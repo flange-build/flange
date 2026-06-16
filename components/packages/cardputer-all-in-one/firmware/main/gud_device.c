@@ -81,9 +81,12 @@ static uint8_t s_fb[GUD_FB_CAP];
 /*
  * "待收帧"状态机：
  *   s_frame_active=false → idle，bulk OUT 数据视为异常丢弃；
- *   SET_BUFTER(未压缩) 解析成功后 → active，记下 damage 矩形与 length，received=0；
+ *   SET_BUFFER(未压缩) 解析成功后 → active，记下 damage 矩形与 length，received=0；
  *   tud_vendor_rx_cb 按 received 偏移累积，收满 length 即 blit 并回 idle。
  */
+/* control 回调(arm)与 rx_cb(consume)同处 TinyUSB 单任务上下文，无真正并发；
+ * 仅 s_frame_active 作为 arm/disarm 门控声明 volatile 以防寄存器缓存，
+ * 其余 s_frame_* 受 active 门控、无需 volatile。 */
 static volatile bool s_frame_active = false;
 static uint32_t s_frame_x, s_frame_y, s_frame_w, s_frame_h;
 static uint32_t s_frame_length;   /* 期望像素字节数(=w*h*2) */
@@ -270,8 +273,10 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 
     uint32_t remain = s_frame_length - s_frame_received;
     uint32_t n = bufsize;
-    if (n > remain)
+    if (n > remain) {
+        ESP_LOGW(TAG, "bulk OUT 超出 remain=%u 截断", (unsigned)remain);
         n = remain; /* 防御：理论不应超，超出部分截断不写垃圾 */
+    }
 
     memcpy(s_fb + s_frame_received, buffer, n);
     s_frame_received += n;
