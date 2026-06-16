@@ -45,9 +45,9 @@ esp_err_t display_init(void)
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io, &pcfg, &s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true)); /* ST7789 常需反色 */
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, false)); /* Cardputer 面板实测无需反色（GUD 真机图案验证） */
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, false, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, true, false)); /* 实测需 180° */
     esp_lcd_panel_set_gap(s_panel, LCD_X_OFFSET, LCD_Y_OFFSET);
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
     ESP_LOGI(TAG, "ST7789 %dx%d ready", LCD_W, LCD_H);
