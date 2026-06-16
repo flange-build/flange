@@ -1,6 +1,7 @@
 #include "gud_device.h"
 #include "gud_protocol.h"
 #include "cardputer_pins.h" /* LCD_W / LCD_H */
+#include "display_st7789.h" /* display_blit */
 #include "esp_log.h"
 #include <string.h>
 
@@ -64,10 +65,75 @@ static const uint8_t k_status_ok = GUD_STATUS_OK;
 static const uint8_t k_connector_connected = GUD_CONNECTOR_STATUS_CONNECTED;
 
 /*
- * SET 请求 payload 的接收缓冲。当前仅接收并丢弃（让 host 认为成功），
- * 真正驱动显示在 Task 4。最大 payload = gud_state_req(SET_STATE_CHECK)。
+ * SET 请求 payload 的接收缓冲。SET_BUFFER 的 payload(gud_set_buffer_req, 25 字节)
+ * 在控制传输的 DATA 阶段收进此处，ACK 阶段解析。最大 payload =
+ * gud_state_req(SET_STATE_CHECK)，仍 ≤ 64。
  */
 static uint8_t s_set_buf[64];
+
+/*
+ * 帧累积缓冲：整屏 RGB565 = 240*135*2 ≈ 63KB。放内部 SRAM。
+ * TODO(PSRAM): 若后续要双缓冲或更大分辨率，迁到 PSRAM 并用 heap_caps 分配。
+ */
+#define GUD_FB_CAP (GUD_W * GUD_H * 2)
+static uint8_t s_fb[GUD_FB_CAP];
+
+/*
+ * "待收帧"状态机：
+ *   s_frame_active=false → idle，bulk OUT 数据视为异常丢弃；
+ *   SET_BUFTER(未压缩) 解析成功后 → active，记下 damage 矩形与 length，received=0；
+ *   tud_vendor_rx_cb 按 received 偏移累积，收满 length 即 blit 并回 idle。
+ */
+static volatile bool s_frame_active = false;
+static uint32_t s_frame_x, s_frame_y, s_frame_w, s_frame_h;
+static uint32_t s_frame_length;   /* 期望像素字节数(=w*h*2) */
+static uint32_t s_frame_received; /* 已累积字节数 */
+
+/* 解析刚收进 s_set_buf 的 SET_BUFFER 请求并武装一次收帧 */
+static void gud_arm_set_buffer(void)
+{
+    struct gud_set_buffer_req req;
+    /* s_set_buf 可能未对齐到 4 字节边界且结构体 packed，用 memcpy 安全取出 */
+    memcpy(&req, s_set_buf, sizeof(req));
+
+    /* P0 只支持未压缩。descriptor flags/compression=0，host 本不该发压缩帧。 */
+    if (req.compression != 0) {
+        ESP_LOGW(TAG, "SET_BUFFER compression=0x%02x 非0(未声明) 丢弃",
+                 req.compression);
+        s_frame_active = false;
+        return;
+    }
+
+    /* 矩形越界防御 */
+    if (req.x + req.width > GUD_W || req.y + req.height > GUD_H ||
+        req.width == 0 || req.height == 0) {
+        ESP_LOGW(TAG, "SET_BUFFER 矩形越界 x=%u y=%u w=%u h=%u 丢弃",
+                 (unsigned)req.x, (unsigned)req.y,
+                 (unsigned)req.width, (unsigned)req.height);
+        s_frame_active = false;
+        return;
+    }
+
+    /* length 防御：必须 == w*h*2 且不超过缓冲容量 */
+    uint32_t expect = req.width * req.height * 2;
+    if (req.length != expect || req.length > GUD_FB_CAP) {
+        ESP_LOGW(TAG, "SET_BUFFER length=%u 异常(期望 %u, 容量 %u) 丢弃",
+                 (unsigned)req.length, (unsigned)expect, (unsigned)GUD_FB_CAP);
+        s_frame_active = false;
+        return;
+    }
+
+    s_frame_x = req.x;
+    s_frame_y = req.y;
+    s_frame_w = req.width;
+    s_frame_h = req.height;
+    s_frame_length = req.length;
+    s_frame_received = 0;
+    s_frame_active = true;
+    ESP_LOGD(TAG, "SET_BUFFER 武装: %ux%u @(%u,%u) length=%u",
+             (unsigned)req.width, (unsigned)req.height,
+             (unsigned)req.x, (unsigned)req.y, (unsigned)req.length);
+}
 
 void gud_device_init(void)
 {
@@ -107,6 +173,14 @@ bool gud_handle_control(uint8_t rhport, uint8_t stage,
                  req->bRequest, req->wValue, req->wIndex, req->wLength,
                  dev_to_host ? "IN(dev->host)" : "OUT(host->dev)");
     } else {
+        /*
+         * ACK 阶段：SET_BUFFER 的 payload 此时已收进 s_set_buf，解析并武装收帧。
+         * 在 ACK(而非 DATA)解析，确保数据阶段已完整落入缓冲。随后 host 发 bulk OUT。
+         */
+        if (stage == CONTROL_STAGE_ACK && req->bRequest == GUD_REQ_SET_BUFFER &&
+            req->wLength >= sizeof(struct gud_set_buffer_req)) {
+            gud_arm_set_buffer();
+        }
         /* DATA / ACK：放行（SETUP 已 tud_control_xfer 的传输由 stack 推进） */
         return true;
     }
@@ -179,12 +253,42 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
 }
 
 /*
- * bulk OUT 数据回调（framebuffer）。Task 4 才搬运；此处丢弃，避免干扰 probe。
- * 仍需读出 FIFO 否则后续传输阻塞。
+ * bulk OUT 数据回调（framebuffer 像素）。
+ * SET_BUFFER 武装后，host 经 bulk OUT 发 length 字节未压缩 RGB565。
+ * FS EP 一次回调通常只带 ≤64 字节，要跨多次回调累积；收满即 blit 并回 idle。
+ * 无"待收帧"状态时收到数据视为异常，丢弃并告警。
+ *
+ * 注意：buffer/bufsize 是 esp_tinyusb 已读入的一段；仍 read_flush 以推进 FIFO。
  */
 void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 {
-    (void)buffer;
+    if (!s_frame_active) {
+        tud_vendor_n_read_flush(itf);
+        ESP_LOGW(TAG, "bulk OUT %u bytes 无待收帧 丢弃", bufsize);
+        return;
+    }
+
+    uint32_t remain = s_frame_length - s_frame_received;
+    uint32_t n = bufsize;
+    if (n > remain)
+        n = remain; /* 防御：理论不应超，超出部分截断不写垃圾 */
+
+    memcpy(s_fb + s_frame_received, buffer, n);
+    s_frame_received += n;
     tud_vendor_n_read_flush(itf);
-    ESP_LOGD(TAG, "bulk OUT %u bytes discarded (Task4 will handle)", bufsize);
+
+    if (s_frame_received >= s_frame_length) {
+        /*
+         * 收满一帧。字节序：GUD RGB565 直接当 esp_lcd 期望的格式传，未做 byteswap。
+         * 若真机颜色错位(红蓝互换/发灰)，是字节序问题，迭代时在此对 s_fb 做
+         * 16-bit byteswap(逐 uint16_t 高低字节互换)后再 blit。
+         */
+        display_blit((int)s_frame_x, (int)s_frame_y,
+                     (int)s_frame_w, (int)s_frame_h, s_fb);
+        ESP_LOGD(TAG, "帧收满 %u 字节 blit %ux%u @(%u,%u)",
+                 (unsigned)s_frame_length, (unsigned)s_frame_w,
+                 (unsigned)s_frame_h, (unsigned)s_frame_x, (unsigned)s_frame_y);
+        s_frame_active = false;
+        s_frame_received = 0;
+    }
 }
