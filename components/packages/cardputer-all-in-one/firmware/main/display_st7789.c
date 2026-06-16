@@ -39,13 +39,13 @@ esp_err_t display_init(void)
 
     esp_lcd_panel_dev_config_t pcfg = {
         .reset_gpio_num = PIN_LCD_RST,
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR, /* 实测红蓝互换，用 BGR 顺序面板级交换 */
         .bits_per_pixel = 16,
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io, &pcfg, &s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, false)); /* Cardputer 面板实测无需反色（GUD 真机图案验证） */
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true)); /* ST7789 实测需反色 */
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, true));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, true, false)); /* 实测需 180° */
     esp_lcd_panel_set_gap(s_panel, LCD_X_OFFSET, LCD_Y_OFFSET);
