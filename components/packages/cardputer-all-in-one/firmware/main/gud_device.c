@@ -284,10 +284,20 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 
     if (s_frame_received >= s_frame_length) {
         /*
-         * 收满一帧。字节序：GUD RGB565 直接当 esp_lcd 期望的格式传，未做 byteswap。
-         * 若真机颜色错位(红蓝互换/发灰)，是字节序问题，迭代时在此对 s_fb 做
-         * 16-bit byteswap(逐 uint16_t 高低字节互换)后再 blit。
+         * 收满一帧。颜色修正：真机实测当前管道(BGR+面板)净效果是 G/B 通道对调
+         * (黄→品红、绿→蓝、红/白/青不变)。在此对每个 RGB565 像素再软件对调 G、B
+         * 一次以抵消(swap∘swap=identity)。G 为 6bit、B 为 5bit，互换时做位宽重缩放。
          */
+        uint16_t *px = (uint16_t *)s_fb;
+        uint32_t npx = s_frame_length / 2;
+        for (uint32_t i = 0; i < npx; i++) {
+            uint16_t v = px[i];
+            uint16_t r = (v >> 11) & 0x1F; /* 5bit */
+            uint16_t g = (v >> 5) & 0x3F;  /* 6bit */
+            uint16_t b = v & 0x1F;         /* 5bit */
+            /* G(6)→新B(5): g>>1; B(5)→新G(6): b<<1 */
+            px[i] = (uint16_t)((r << 11) | ((b << 1) << 5) | (g >> 1));
+        }
         display_blit((int)s_frame_x, (int)s_frame_y,
                      (int)s_frame_w, (int)s_frame_h, s_fb);
         ESP_LOGD(TAG, "帧收满 %u 字节 blit %ux%u @(%u,%u)",
