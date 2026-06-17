@@ -5,10 +5,50 @@
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"
 #include "esp_log.h"
+#include "tusb.h"
 #include <string.h>
-#include <stdio.h>
 
 static const char *TAG = "hid_kbd";
+
+/*
+ * 键位 → HID usage 映射（坐标 [y][x] 与 M5Cardputer _key_value_map 一致）。
+ * HID 键盘只需"键的身份"：shift 作为 modifier 发给 host，由 host 产生大写/符号，
+ * 故不需要 M5 的 value_second(Aa 层)。
+ *   hid_base：基础层(M5 value_first 的键身份)
+ *   hid_fn  ：fn 层(M5 value_third)，0=该键 fn 层无定义
+ * 修饰键位(FN/SHIFT/CTRL/OPT/ALT)在表里填 0，由 is_modifier_pos() 单独处理。
+ */
+static const uint8_t hid_base[4][14] = {
+    {HID_KEY_GRAVE, HID_KEY_1, HID_KEY_2, HID_KEY_3, HID_KEY_4, HID_KEY_5,
+     HID_KEY_6, HID_KEY_7, HID_KEY_8, HID_KEY_9, HID_KEY_0, HID_KEY_MINUS,
+     HID_KEY_EQUAL, HID_KEY_BACKSPACE},
+    {HID_KEY_TAB, HID_KEY_Q, HID_KEY_W, HID_KEY_E, HID_KEY_R, HID_KEY_T,
+     HID_KEY_Y, HID_KEY_U, HID_KEY_I, HID_KEY_O, HID_KEY_P, HID_KEY_BRACKET_LEFT,
+     HID_KEY_BRACKET_RIGHT, HID_KEY_BACKSLASH},
+    {0 /*FN*/, 0 /*SHIFT*/, HID_KEY_A, HID_KEY_S, HID_KEY_D, HID_KEY_F,
+     HID_KEY_G, HID_KEY_H, HID_KEY_J, HID_KEY_K, HID_KEY_L, HID_KEY_SEMICOLON,
+     HID_KEY_APOSTROPHE, HID_KEY_ENTER},
+    {0 /*CTRL*/, 0 /*OPT*/, 0 /*ALT*/, HID_KEY_Z, HID_KEY_X, HID_KEY_C,
+     HID_KEY_V, HID_KEY_B, HID_KEY_N, HID_KEY_M, HID_KEY_COMMA, HID_KEY_PERIOD,
+     HID_KEY_SLASH, HID_KEY_SPACE},
+};
+
+static const uint8_t hid_fn[4][14] = {
+    {HID_KEY_ESCAPE, HID_KEY_F1, HID_KEY_F2, HID_KEY_F3, HID_KEY_F4, HID_KEY_F5,
+     HID_KEY_F6, HID_KEY_F7, HID_KEY_F8, HID_KEY_F9, HID_KEY_F10, HID_KEY_F11,
+     HID_KEY_F12, HID_KEY_DELETE},
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, HID_KEY_ARROW_UP, 0, 0},
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, HID_KEY_ARROW_LEFT, HID_KEY_ARROW_DOWN,
+     HID_KEY_ARROW_RIGHT, 0},
+};
+
+/* 修饰/层键位置（x,y）：FN(0,2) SHIFT(1,2) CTRL(0,3) OPT(1,3) ALT(2,3) */
+static bool is_modifier_pos(int x, int y)
+{
+    return (x == 0 && y == 2) || (x == 1 && y == 2) || (x == 0 && y == 3) ||
+           (x == 1 && y == 3) || (x == 2 && y == 3);
+}
 
 static void kbd_gpio_init(void)
 {
@@ -36,8 +76,7 @@ static void kbd_gpio_init(void)
     ESP_ERROR_CHECK(gpio_config(&in_cfg));
 }
 
-/* 把 3 位列选值写到 74HC138 地址线 A0/A1/A2（KBD_COL_PINS[0..2]）。
- * 74HC138 据此把选中列拉低，其余列为高。 */
+/* 把 3 位列选值写到 74HC138 地址线 A0/A1/A2（KBD_COL_PINS[0..2]）。 */
 static void kbd_set_col(int sel)
 {
     gpio_set_level(KBD_COL_PINS[0], (sel >> 0) & 1);
@@ -46,7 +85,7 @@ static void kbd_set_col(int sel)
 }
 
 /* 一次原始扫描 → 按下键位列表(坐标系同 M5 库)，返回数量。
- * 坐标：x = (i>3)?x_1:x_2；y = 3 - (i%4)（与 M5 库 update() 的 Y 取反+偏移一致）。 */
+ * x = (i>3)?x_1:x_2；y = 3 - (i%4)（与 M5 库 update() 的 Y 取反+偏移一致）。 */
 static int kbd_scan_raw(KbdPos_t *out, int max)
 {
     int n = 0;
@@ -66,24 +105,41 @@ static int kbd_scan_raw(KbdPos_t *out, int max)
     return n;
 }
 
-/* 扫描顺序固定(外层 i 升序、内层 j 升序)，故同一组按下键的列表逐字节可比。
- * 若将来改变扫描顺序，此 memcmp 假设失效，需改为集合比较。 */
+/* 扫描顺序固定，故同一组按下键的列表逐字节可比。 */
 static bool pos_eq(const KbdPos_t *a, int na, const KbdPos_t *b, int nb)
 {
     return na == nb && memcmp(a, b, (size_t)na * sizeof(KbdPos_t)) == 0;
 }
 
-static void log_pressed(const KbdPos_t *p, int n)
+/* 把按下键位集合映射为 HID 报告并上报（在扫描任务内联调用，无跨任务共享）。 */
+static void kbd_report(const KbdPos_t *p, int n)
 {
-    if (n == 0) {
-        ESP_LOGI(TAG, "all released");
-        return;
+    uint8_t modifier = 0;
+    bool fn = false;
+
+    /* 第一遍：修饰/层键 */
+    for (int k = 0; k < n; k++) {
+        int x = p[k].x, y = p[k].y;
+        if (x == 0 && y == 2) fn = true;                               /* FN(本地层) */
+        else if (x == 1 && y == 2) modifier |= KEYBOARD_MODIFIER_LEFTSHIFT;
+        else if (x == 0 && y == 3) modifier |= KEYBOARD_MODIFIER_LEFTCTRL;
+        else if (x == 2 && y == 3) modifier |= KEYBOARD_MODIFIER_LEFTALT;
+        else if (x == 1 && y == 3) modifier |= KEYBOARD_MODIFIER_LEFTGUI; /* OPT→GUI */
     }
-    char buf[128];
-    int o = 0;
-    for (int k = 0; k < n && o < (int)sizeof(buf) - 8; k++)
-        o += snprintf(buf + o, sizeof(buf) - o, " (%d,%d)", p[k].x, p[k].y);
-    ESP_LOGI(TAG, "pressed%s", buf);
+
+    /* 第二遍：普通键 → usage（最多 6KRO） */
+    uint8_t keys[6] = {0};
+    int nk = 0;
+    for (int k = 0; k < n && nk < 6; k++) {
+        int x = p[k].x, y = p[k].y;
+        if (x < 0 || x > 13 || y < 0 || y > 3) continue;
+        if (is_modifier_pos(x, y)) continue;
+        uint8_t u = fn ? hid_fn[y][x] : hid_base[y][x]; /* fn 层无定义(0)则该键不发，与 M5 一致 */
+        if (u != 0) keys[nk++] = u;
+    }
+
+    if (tud_hid_ready())
+        tud_hid_keyboard_report(0, modifier, nk ? keys : NULL);
 }
 
 static void hid_keyboard_task(void *arg)
@@ -97,14 +153,11 @@ static void hid_keyboard_task(void *arg)
     while (1) {
         ncur = kbd_scan_raw(cur, KBD_MAX_PRESSED);
 
-        /* 去抖：连续两次扫描一致才认作稳定状态 */
+        /* 去抖：连续两次扫描一致才认作稳定状态；变化时映射上报 */
         if (pos_eq(cur, ncur, prev, nprev) && !pos_eq(cur, ncur, stable, nstable)) {
             memcpy(stable, cur, (size_t)ncur * sizeof(KbdPos_t));
             nstable = ncur;
-
-            log_pressed(stable, nstable);
-            /* 键值映射上报(后续在此任务内联实现，无跨任务共享)：把 stable[0..nstable)
-             * 映射成 HID keycode + modifier，再 tud_hid_keyboard_report()。 */
+            kbd_report(stable, nstable);
         }
 
         memcpy(prev, cur, (size_t)ncur * sizeof(KbdPos_t));
