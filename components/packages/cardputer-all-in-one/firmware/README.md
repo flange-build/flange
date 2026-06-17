@@ -1,0 +1,77 @@
+# Cardputer AIO 固件（ESP32-S3）
+
+M5Stack Cardputer 作为 **USB 设备**，让嵌入式 Linux 主机把它当成一块标准 DRM 显示器（mainline `gud` 驱动，`/dev/dri/cardN`）。本固件为 **P0 阶段**：GUD 显示链路打通（未压缩 RGB565 上屏）。音频/键盘见仓库根 spec 的 P1–P5 路线。
+
+> ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
+
+## 能力（P0）
+
+- USB vendor-class 设备，**VID/PID = `16d0:10a9`**（mainline `gud` 绑定的固定 ID）。
+- 实现 GUD 设备协议最小子集：单 connector / 单模式 **240×135** / **RGB565**（未压缩）。
+- 收 host 帧（SET_BUFFER + bulk OUT）→ blit 到板载 ST7789。
+- 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）。
+
+尚未实现（后续阶段）：LZ4/脏矩形、UAC 音频、HID 键盘。
+
+## 构建 / 烧录
+
+```bash
+get_idf_551                       # 激活宿主机 ESP-IDF 5.5.1
+idf.py set-target esp32s3         # 首次
+idf.py build
+```
+
+**烧录要点：固件用 TinyUSB 接管了 native USB(GPIO19/20)，普通自动复位下载不可用**，需手动进 ROM 下载模式：
+
+1. **按住 G0(BOOT)** 同时插 USB-C / 复位，松开 → 下载模式（host `lsusb` 见 `303a:1001`）。
+2. `idf.py -p /dev/ttyACM0 flash`（端口以实际为准）。
+3. 拔插一次 USB-C 正常上电启动 → 枚举为 `16d0:10a9`。
+
+## 日志
+
+native USB 归 TinyUSB 后，**USB-C 上的串口控制台失效**，日志改走 **UART0：G43=U0TXD / G44=U0RXD @115200**（外接 USB-UART）。`gud` 协议每个控制请求与收帧都有日志，便于调试。
+
+## Host 侧验证（主机需 mainline `gud`，内核 ≥5.13，发行版一般自带 `CONFIG_DRM_GUD=m`）
+
+```bash
+lsusb | grep 16d0                      # 16d0:10a9
+sudo dmesg | grep -iE "gud|drm"        # [drm] Initialized gud ... + /dev/dri/cardN
+ls /dev/dri/
+sudo apt-get install -y libdrm-tests   # 若无 modetest
+modetest -M gud                        # 列出 connector + 240x135 模式
+modetest -M gud -s <connector_id>:240x135   # 送测试图上屏
+```
+
+实时内容（GStreamer，kmssink 直驱 GUD 卡）：
+
+```bash
+# 注意：modetest -s 与 kmssink 都需 DRM master，二选一（先停掉另一个）
+gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
+  video/x-raw,width=240,height=135 ! \
+  kmssink driver-name=gud connector-id=<id> force-modesetting=true
+```
+
+## 板级显示参数（`main/display_st7789.c`，按真机实测确定）
+
+| 项 | 值 | 说明 |
+|----|----|------|
+| `rgb_ele_order` | `BGR` | Cardputer 面板红蓝顺序 |
+| `invert_color` | `true` | ST7789 需反色 |
+| `swap_xy` / `mirror` | `true` / `(true,false)` | 旋转 180° |
+| `set_gap` | `(40, 52)` | 240×135 GRAM 偏移 |
+| 软件 G/B 对调 | 收帧后 blit 前 | 实测净管道为 G/B 通道互换，软件再换一次抵消 |
+
+> 上述是 Cardputer 这块屏 + 当前 GUD 字节路径联合实测的结果；换屏/换路径需重新校。
+
+## 文件
+
+| 文件 | 职责 |
+|------|------|
+| `main/app_main.c` | 初始化 + TinyUSB 安装 + 编排 |
+| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（P0：单 vendor 接口）|
+| `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8）|
+| `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧上屏 |
+| `main/display_st7789.{c,h}` | ST7789 显示 HAL（esp_lcd）|
+| `main/cardputer_pins.h` | 板级 GPIO / 尺寸常量 |
+
+设计与路线：见仓库 `docs/superpowers/specs/2026-06-14-cardputer-usb-all-in-one-design.md` 与 `docs/superpowers/plans/`。
