@@ -60,13 +60,13 @@ class TestROCK5BMergedConfig:
         assert merged["board"] == "radxa-rock5b"
         assert merged["kernel"]["dts"] == "rk3588-rock-5b"
 
-    def test_kernel_repo_match_rk3566_branch_diverged(self, merged, boards):
-        """ROCK 5B 与 RK3566 板共用同一 argon BSP 仓库，但 branch 刻意分流：
-        RK3588 走 rkr5.1（修复 mali_kbase r0p0 status 5），RK3566 仍 rkr4.1。"""
+    def test_kernel_repo_and_branch_match_rk3566(self, merged, boards):
+        """ROCK 5B 与 RK3566 板共用同一 argon BSP 仓库，且统一 rkr5.1 分支
+        （原 RK3566 留 rkr4.1 的分流已取消，全系切 rkr5.1）。"""
         zero3w = get_board_config("radxa-zero3w", boards=boards)
         assert merged["kernel"]["repo"] == zero3w["kernel"]["repo"]
         assert merged["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
-        assert merged["kernel"]["branch"] != zero3w["kernel"]["branch"]
+        assert merged["kernel"]["branch"] == zero3w["kernel"]["branch"]
 
     def test_kernel_args_uart2(self, merged):
         assert "ttyS2,1500000" in merged["boot"]["kernel_args"]

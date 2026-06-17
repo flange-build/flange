@@ -111,9 +111,12 @@ class TestGetBoardConfig:
         assert merged["bootloader"]["commit"] == ""
 
     def test_kernel_merges_soc_defconfig(self, boards):
-        """板级 kernel 应继承 SoC 的 defconfig。"""
+        """板级 kernel 应继承 SoC 的 defconfig（rk3566 系统一 rkr5.1 后叠 panfrost）。"""
         merged = get_board_config("radxa-zero3w", boards=boards)
-        assert merged["kernel"]["defconfig"] == "rockchip_linux_defconfig"
+        assert merged["kernel"]["defconfig"] == [
+            "rockchip_linux_defconfig",
+            "panfrost.config",
+        ]
 
     def test_bootloader_merges_soc_defconfig(self, boards):
         """板级 bootloader 应继承 SoC 的 defconfig。"""

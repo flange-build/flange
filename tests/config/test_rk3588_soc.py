@@ -61,26 +61,27 @@ class TestRK3588SoCDiscovery:
         assert soc["bootloader"]["defconfig"] == "rk3588_defconfig"
 
     def test_kernel_branch_rkr5_1(self):
-        """RK3588 走 rkr5.1（不带 -buildroot 后缀）以拿到识别 r0p0 status 5
-        的 mali_kbase。RK3566 系仍在 rkr4.1-buildroot，刻意分流。"""
+        """RK3566/3568/3588 统一走 rkr5.1（不带 -buildroot 后缀），共用同一
+        argon BSP 仓库；GPU 驱动按 SoC 用 defconfig fragment 分流：RK3566/3568
+        叠 panfrost.config，RK3588 叠 rk3588_panthor.config 切 mainline panthor。"""
         rk3588 = _load_soc_config("rk3588")
         rk3566 = _load_soc_config("rk3566")
-        # repo / dts_dir 仍与 RK3566 一致
+        # repo / dts_dir / branch 全系一致（rkr5.1 统一）
         assert rk3588["kernel"]["repo"] == rk3566["kernel"]["repo"]
         assert rk3588["kernel"]["dts_dir"] == rk3566["kernel"]["dts_dir"]
-        # branch 刻意分流
         assert rk3588["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
-        assert rk3588["kernel"]["branch"] != rk3566["kernel"]["branch"]
-        # defconfig 形态分流：RK3566 旧 buildroot 默认 defconfig 不启用
-        # 冲突 netfilter 模块，无需 fragment；RK3588 用 generic
-        # rockchip_linux_defconfig 启用了，必须叠 case_insensitive_fix；
-        # 此外 RK3588 还要叠 rk3588_panthor.config 切到 mainline panthor 驱动。
+        assert rk3588["kernel"]["branch"] == rk3566["kernel"]["branch"]
+        # defconfig 形态按 GPU 驱动分流：RK3588 叠 case_insensitive_fix + panthor；
+        # RK3566/3568 叠 panfrost。
         assert rk3588["kernel"]["defconfig"] == [
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "rk3588_panthor.config",
         ]
-        assert rk3566["kernel"]["defconfig"] == "rockchip_linux_defconfig"
+        assert rk3566["kernel"]["defconfig"] == [
+            "rockchip_linux_defconfig",
+            "panfrost.config",
+        ]
 
     def test_kernel_args_uart2(self):
         soc = _load_soc_config("rk3588")
