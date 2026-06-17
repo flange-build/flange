@@ -19,11 +19,20 @@ const tusb_desc_device_t aio_desc_device = {
     .bNumConfigurations = 0x01,
 };
 
-/* 配置描述符：单个 vendor 接口 + bulk IN/OUT 端点（包大小 64，FS） */
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN)
+/* HID report 描述符：标准键盘（report id = 0） */
+static const uint8_t aio_hid_report_desc[] = {
+    TUD_HID_REPORT_DESC_KEYBOARD()};
+
+/*
+ * 配置描述符：vendor 接口(GUD, bulk IN/OUT) + HID 键盘接口(中断 IN 端点 0x82)。
+ * 接口数 = ITF_NUM_TOTAL(2)；总长含 vendor + HID 两段。
+ */
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_HID_DESC_LEN)
 const uint8_t aio_desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
     TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
+    TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_KEYBOARD,
+                       sizeof(aio_hid_report_desc), EPNUM_HID, CFG_TUD_HID_EP_BUFSIZE, 10),
 };
 
 /*
@@ -38,3 +47,35 @@ const char *aio_string_desc_arr[] = {
     "AIO-0001",
 };
 const int aio_string_desc_count = sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]);
+
+/*
+ * HID 回调：esp_tinyusb 仅实现 tud_descriptor_*_cb，不实现以下 HID 弱回调，
+ * 故由本固件提供（与 gud_device.c 提供 tud_vendor_control_xfer_cb 同理）。
+ * report 描述符直接返回静态数组；get/set report 本任务无需处理。
+ */
+uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
+{
+    (void)instance;
+    return aio_hid_report_desc;
+}
+
+uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
+                               hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen)
+{
+    (void)instance;
+    (void)report_id;
+    (void)report_type;
+    (void)buffer;
+    (void)reqlen;
+    return 0;
+}
+
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+                           hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize)
+{
+    (void)instance;
+    (void)report_id;
+    (void)report_type;
+    (void)buffer;
+    (void)bufsize;
+}

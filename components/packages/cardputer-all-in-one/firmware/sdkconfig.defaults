@@ -9,3 +9,5 @@ CONFIG_FREERTOS_HZ=1000
 # TinyUSB vendor 类：esp_tinyusb 用 *_COUNT(int) 启用，>0 即开启 CFG_TUD_VENDOR
 # （注：vendor RX/TX bufsize 在 esp_tinyusb tusb_config.h 中硬编码，无 Kconfig 选项）
 CONFIG_TINYUSB_VENDOR_COUNT=1
+# TinyUSB HID 键盘接口：>0 即开启 CFG_TUD_HID
+CONFIG_TINYUSB_HID_COUNT=1

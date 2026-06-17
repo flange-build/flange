@@ -6,8 +6,8 @@
 #define GUD_VID 0x16D0
 #define GUD_PID 0x10A9
 
-enum { ITF_NUM_VENDOR = 0, ITF_NUM_TOTAL };
-enum { EPNUM_VENDOR_OUT = 0x01, EPNUM_VENDOR_IN = 0x81 };
+enum { ITF_NUM_VENDOR = 0, ITF_NUM_HID, ITF_NUM_TOTAL };
+enum { EPNUM_VENDOR_OUT = 0x01, EPNUM_VENDOR_IN = 0x81, EPNUM_HID = 0x82 };
 
 /*
  * 描述符仅暴露“数据”，由 app_main 通过 tinyusb_config_t 注入。

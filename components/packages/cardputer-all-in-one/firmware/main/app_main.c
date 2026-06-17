@@ -5,6 +5,7 @@
 #include "tinyusb.h"
 #include "usb_descriptors.h"
 #include "gud_device.h"
+#include "hid_keyboard.h"
 #include <string.h>
 
 /* TODO(GUD): Task 4 引入真实帧时评估是否需移至 PSRAM */
@@ -39,6 +40,9 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
     ESP_LOGI("aio", "tinyusb installed (16d0:10a9)");
+
+    /* HID 键盘：TinyUSB 安装后启动测试上报任务 */
+    hid_keyboard_start();
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }
