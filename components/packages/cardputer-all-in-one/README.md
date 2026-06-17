@@ -13,11 +13,14 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 
 ## 状态
 
-- ✅ **P0：GUD 显示链路打通** —— Cardputer 枚举为 `16d0:10a9`，host `gud` 出 `/dev/dri/cardN`，未压缩 RGB565 收帧上 ST7789。详见 `firmware/README.md`。
-- ⏳ P1 UAC 音频 / P2 HID 键盘 / P3 LZ4+脏矩形 / P4 Linux flange 组件 / P5 flash 集成。
+- ✅ **GUD 显示链路打通** —— Cardputer 枚举为 `16d0:10a9`，host `gud` 出 `/dev/dri/cardN`，未压缩 RGB565 收帧上 ST7789。
+- ✅ **HID 键盘** —— 74HC138 矩阵扫描 → HID usage 映射上报，与 GUD 同一复合设备，host 出 `/dev/input/eventN`。
+- ⏳ UAC 音频（需迁底层 tinyusb + GPIO43 三重冲突/半双工）/ LZ4+脏矩形 / Linux flange 组件 / flash 集成。
+
+详见 `firmware/README.md`。
 
 ## 文档
 
 - 设计/可行性：`docs/superpowers/specs/2026-06-14-cardputer-usb-all-in-one-design.md`
-- 实施计划：`docs/superpowers/plans/2026-06-14-cardputer-usb-all-in-one-p0-gud-display.md`
+- 实施计划：`docs/superpowers/plans/2026-06-14-cardputer-usb-all-in-one-p0-gud-display.md`（GUD 显示）、`docs/superpowers/plans/2026-06-17-cardputer-usb-hid-keyboard.md`（HID 键盘）
 - 固件细节与构建/烧录/验证：`firmware/README.md`

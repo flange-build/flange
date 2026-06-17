@@ -1,17 +1,17 @@
 # Cardputer AIO 固件（ESP32-S3）
 
-M5Stack Cardputer 作为 **USB 设备**，让嵌入式 Linux 主机把它当成一块标准 DRM 显示器（mainline `gud` 驱动，`/dev/dri/cardN`）。本固件为 **P0 阶段**：GUD 显示链路打通（未压缩 RGB565 上屏）。音频/键盘见仓库根 spec 的 P1–P5 路线。
+M5Stack Cardputer 作为 **USB 设备**，让嵌入式 Linux 主机把它当成一块标准 DRM 显示器（mainline `gud` 驱动，`/dev/dri/cardN`）**+ 一个 USB 键盘**（mainline `usbhid`，`/dev/input/eventN`），同处一个 USB 复合设备。音频(UAC)见仓库根 spec 的路线。
 
 > ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
 
-## 能力（P0）
+## 能力
 
-- USB vendor-class 设备，**VID/PID = `16d0:10a9`**（mainline `gud` 绑定的固定 ID）。
-- 实现 GUD 设备协议最小子集：单 connector / 单模式 **240×135** / **RGB565**（未压缩）。
-- 收 host 帧（SET_BUFFER + bulk OUT）→ blit 到板载 ST7789。
-- 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）。
+- USB 复合设备，**VID/PID = `16d0:10a9`**（mainline `gud` 绑定的固定 ID）。
+  - **IF0 Vendor(GUD) 显示**：GUD 设备协议最小子集，单 connector / 单模式 **240×135** / **RGB565**（未压缩）；收 host 帧（SET_BUFFER + bulk OUT）→ blit 到板载 ST7789。
+  - **IF1 HID 键盘**：扫描 74HC138 矩阵键盘（列选 GPIO{8,9,11}/行 GPIO{13,15,3,4,5,6,7}）→ 映射为 HID usage（含 Shift/Ctrl/Alt/Opt 修饰 + Fn 层 F1-12/方向/Esc/Del）→ 中断 IN 上报。
+- 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）；键盘引脚/键值表照搬 M5Cardputer 库。
 
-尚未实现（后续阶段）：LZ4/脏矩形、UAC 音频、HID 键盘。
+尚未实现（后续阶段）：LZ4/脏矩形、UAC 音频（需迁底层 tinyusb + 处理 GPIO43 三重冲突/半双工）。
 
 ## 构建 / 烧录
 
@@ -51,6 +51,12 @@ gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
   kmssink driver-name=gud connector-id=<id> force-modesetting=true
 ```
 
+键盘（HID）：
+```bash
+cat /proc/bus/input/devices | grep -B1 -A5 -i "16d0\|Cardputer"   # 找 eventN
+sudo evtest /dev/input/eventN     # 在 Cardputer 上打字，看 KEY_* 事件
+```
+
 ## 板级显示参数（`main/display_st7789.c`，按真机实测确定）
 
 | 项 | 值 | 说明 |
@@ -68,10 +74,12 @@ gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
 | 文件 | 职责 |
 |------|------|
 | `main/app_main.c` | 初始化 + TinyUSB 安装 + 编排 |
-| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（P0：单 vendor 接口）|
+| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 Vendor/GUD + IF1 HID）+ HID 回调 |
 | `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8）|
 | `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧上屏 |
 | `main/display_st7789.{c,h}` | ST7789 显示 HAL（esp_lcd）|
-| `main/cardputer_pins.h` | 板级 GPIO / 尺寸常量 |
+| `main/hid_keyboard.{c,h}` | 74HC138 矩阵扫描 + 键值→HID usage 映射上报 |
+| `main/cardputer_kbd_map.h` | 键盘引脚/坐标/X_map（源自 M5Cardputer 库）|
+| `main/cardputer_pins.h` | 显示等板级 GPIO / 尺寸常量 |
 
 设计与路线：见仓库 `docs/superpowers/specs/2026-06-14-cardputer-usb-all-in-one-design.md` 与 `docs/superpowers/plans/`。

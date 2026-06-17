@@ -105,7 +105,8 @@ static int kbd_scan_raw(KbdPos_t *out, int max)
     return n;
 }
 
-/* 扫描顺序固定，故同一组按下键的列表逐字节可比。 */
+/* 扫描顺序固定(外层 i 升序、内层 j 升序)，故同一组按下键的列表逐字节可比。
+ * 若将来改变扫描顺序，此 memcmp 假设失效，需改为集合比较。 */
 static bool pos_eq(const KbdPos_t *a, int na, const KbdPos_t *b, int nb)
 {
     return na == nb && memcmp(a, b, (size_t)na * sizeof(KbdPos_t)) == 0;
@@ -137,6 +138,9 @@ static void kbd_report(const KbdPos_t *p, int n)
         uint8_t u = fn ? hid_fn[y][x] : hid_base[y][x]; /* fn 层无定义(0)则该键不发，与 M5 一致 */
         if (u != 0) keys[nk++] = u;
     }
+
+    ESP_LOGI(TAG, "HID report mod=0x%02x fn=%d keys=%02x %02x %02x %02x %02x %02x",
+             modifier, fn, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5]);
 
     if (tud_hid_ready())
         tud_hid_keyboard_report(0, modifier, nk ? keys : NULL);
