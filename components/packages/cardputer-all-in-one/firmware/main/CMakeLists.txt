@@ -1,2 +1,6 @@
-idf_component_register(SRCS "app_main.c" "display_st7789.c" "usb_descriptors.c" "gud_device.c" "hid_keyboard.c"
+idf_component_register(SRCS "app_main.c" "display_st7789.c" "usb_descriptors.c" "gud_device.c" "hid_keyboard.c" "lz4.c"
                        INCLUDE_DIRS ".")
+
+# 官方 LZ4 v1.9.4 参考实现(lz4/lz4, BSD-2-Clause)，仅用 LZ4_decompress_safe 解 GUD
+# host 端 LZ4 压缩帧。第三方源码放宽告警，避免 main 的 -Werror 因其内部告警失败。
+set_source_files_properties(lz4.c PROPERTIES COMPILE_FLAGS "-Wno-error -Wno-unused-function")

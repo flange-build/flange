@@ -3,6 +3,7 @@
 #include "cardputer_pins.h" /* LCD_W / LCD_H */
 #include "display_st7789.h" /* display_blit */
 #include "esp_log.h"
+#include "lz4.h" /* LZ4_decompress_safe：解 GUD host 端 LZ4 压缩帧 */
 #include <string.h>
 
 static const char *TAG = "gud";
@@ -19,14 +20,17 @@ static const uint8_t k_formats[] = {GUD_PIXEL_FORMAT_RGB565};
 
 /*
  * 显示描述符。max_buffer_size=0 让 host 自行按 format×尺寸 计算（240x135xRGB565
- * ≈64KB，远小于驱动 64MB 上限）。单模式设备 min==max。flags=0：P0 不声明压缩、
- * 不声明 STATUS_ON_SET（probe 全是 GET，无需 SET 后状态轮询）。
+ * ≈64KB，远小于驱动 64MB 上限）。单模式设备 min==max。flags=0：不声明
+ * STATUS_ON_SET（probe 全是 GET，无需 SET 后状态轮询）。
+ * compression=GUD_COMPRESSION_LZ4：声明支持 LZ4，host(CONFIG_LZ4_COMPRESS) 会对
+ * 划算的帧压缩后再发，FS 12Mbps 下显著提升有效帧率(UI 内容收益大)。host 逐帧择优，
+ * 不划算时仍发未压缩(compression=0)，故收帧两条路径都要处理。
  */
 static const struct gud_display_descriptor_req k_descriptor = {
     .magic = GUD_DISPLAY_MAGIC,
     .version = 1,
     .flags = 0,
-    .compression = 0,
+    .compression = GUD_COMPRESSION_LZ4,
     .max_buffer_size = 0,
     .min_width = GUD_W,
     .max_width = GUD_W,
@@ -72,25 +76,32 @@ static const uint8_t k_connector_connected = GUD_CONNECTOR_STATUS_CONNECTED;
 static uint8_t s_set_buf[64];
 
 /*
- * 帧累积缓冲：整屏 RGB565 = 240*135*2 ≈ 63KB。放内部 SRAM。
+ * 帧缓冲：整屏 RGB565 = 240*135*2 ≈ 63KB。放内部 SRAM。
+ * s_fb   : 解压后/未压缩的像素帧(最终 byteswap+blit 的目标)。
+ * s_cbuf : 压缩帧的接收缓冲。host 仅在压缩更小时才发压缩帧，故 compressed_length
+ *          < 该矩形未压缩大小 ≤ GUD_FB_CAP，按整屏容量足够。
  * TODO(PSRAM): 若后续要双缓冲或更大分辨率，迁到 PSRAM 并用 heap_caps 分配。
  */
 #define GUD_FB_CAP (GUD_W * GUD_H * 2)
 static uint8_t s_fb[GUD_FB_CAP];
+static uint8_t s_cbuf[GUD_FB_CAP];
 
 /*
  * "待收帧"状态机：
  *   s_frame_active=false → idle，bulk OUT 数据视为异常丢弃；
- *   SET_BUFFER(未压缩) 解析成功后 → active，记下 damage 矩形与 length，received=0；
- *   tud_vendor_rx_cb 按 received 偏移累积，收满 length 即 blit 并回 idle。
+ *   SET_BUFFER 解析成功后 → active，记下 damage 矩形/未压缩长度/本次 bulk 传输长度，
+ *   received=0；tud_vendor_rx_cb 按 received 偏移累积到目标缓冲，收满 xferlen 即
+ *   (压缩则先解压)→byteswap→blit 并回 idle。
  */
 /* control 回调(arm)与 rx_cb(consume)同处 TinyUSB 单任务上下文，无真正并发；
  * 仅 s_frame_active 作为 arm/disarm 门控声明 volatile 以防寄存器缓存，
  * 其余 s_frame_* 受 active 门控、无需 volatile。 */
 static volatile bool s_frame_active = false;
 static uint32_t s_frame_x, s_frame_y, s_frame_w, s_frame_h;
-static uint32_t s_frame_length;   /* 期望像素字节数(=w*h*2) */
+static uint32_t s_frame_length;   /* 未压缩像素字节数(=w*h*2)，即 blit 数据量 */
+static uint32_t s_frame_xferlen;  /* 本次 bulk 应收字节数(压缩=compressed_length，否则=length) */
 static uint32_t s_frame_received; /* 已累积字节数 */
+static bool s_frame_compressed;   /* 本帧是否 LZ4 压缩 */
 
 /* 解析刚收进 s_set_buf 的 SET_BUFFER 请求并武装一次收帧 */
 static void gud_arm_set_buffer(void)
@@ -99,9 +110,9 @@ static void gud_arm_set_buffer(void)
     /* s_set_buf 可能未对齐到 4 字节边界且结构体 packed，用 memcpy 安全取出 */
     memcpy(&req, s_set_buf, sizeof(req));
 
-    /* P0 只支持未压缩。descriptor flags/compression=0，host 本不该发压缩帧。 */
-    if (req.compression != 0) {
-        ESP_LOGW(TAG, "SET_BUFFER compression=0x%02x 非0(未声明) 丢弃",
+    /* 只支持未压缩与 LZ4(descriptor 已声明 LZ4)；其它压缩类型丢弃 */
+    if (req.compression != 0 && req.compression != GUD_COMPRESSION_LZ4) {
+        ESP_LOGW(TAG, "SET_BUFFER compression=0x%02x 不支持 丢弃",
                  req.compression);
         s_frame_active = false;
         return;
@@ -117,13 +128,28 @@ static void gud_arm_set_buffer(void)
         return;
     }
 
-    /* length 防御：必须 == w*h*2 且不超过缓冲容量 */
+    /* length 防御：必须 == w*h*2 且不超过缓冲容量(length 恒为未压缩大小) */
     uint32_t expect = req.width * req.height * 2;
     if (req.length != expect || req.length > GUD_FB_CAP) {
         ESP_LOGW(TAG, "SET_BUFFER length=%u 异常(期望 %u, 容量 %u) 丢弃",
                  (unsigned)req.length, (unsigned)expect, (unsigned)GUD_FB_CAP);
         s_frame_active = false;
         return;
+    }
+
+    /* 本次 bulk 应收字节数：压缩取 compressed_length，否则取 length。
+     * compressed_length 防御：>0 且不超过缓冲容量(host 压缩更小时才用，理应 < length)。 */
+    s_frame_compressed = (req.compression == GUD_COMPRESSION_LZ4);
+    if (s_frame_compressed) {
+        if (req.compressed_length == 0 || req.compressed_length > GUD_FB_CAP) {
+            ESP_LOGW(TAG, "SET_BUFFER compressed_length=%u 异常(容量 %u) 丢弃",
+                     (unsigned)req.compressed_length, (unsigned)GUD_FB_CAP);
+            s_frame_active = false;
+            return;
+        }
+        s_frame_xferlen = req.compressed_length;
+    } else {
+        s_frame_xferlen = req.length;
     }
 
     s_frame_x = req.x;
@@ -133,9 +159,10 @@ static void gud_arm_set_buffer(void)
     s_frame_length = req.length;
     s_frame_received = 0;
     s_frame_active = true;
-    ESP_LOGD(TAG, "SET_BUFFER 武装: %ux%u @(%u,%u) length=%u",
+    ESP_LOGD(TAG, "SET_BUFFER 武装: %ux%u @(%u,%u) length=%u xfer=%u %s",
              (unsigned)req.width, (unsigned)req.height,
-             (unsigned)req.x, (unsigned)req.y, (unsigned)req.length);
+             (unsigned)req.x, (unsigned)req.y, (unsigned)req.length,
+             (unsigned)s_frame_xferlen, s_frame_compressed ? "LZ4" : "raw");
 }
 
 void gud_device_init(void)
@@ -257,8 +284,9 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
 
 /*
  * bulk OUT 数据回调（framebuffer 像素）。
- * SET_BUFFER 武装后，host 经 bulk OUT 发 length 字节未压缩 RGB565。
- * FS EP 一次回调通常只带 ≤64 字节，要跨多次回调累积；收满即 blit 并回 idle。
+ * SET_BUFFER 武装后，host 经 bulk OUT 发 s_frame_xferlen 字节(压缩=LZ4 数据，
+ * 否则=未压缩 RGB565)。FS EP 一次回调通常只带 ≤64 字节，要跨多次回调累积；
+ * 收满后(压缩则先解压)→byteswap→blit 并回 idle。
  * 无"待收帧"状态时收到数据视为异常，丢弃并告警。
  *
  * 注意：buffer/bufsize 是 esp_tinyusb 已读入的一段；仍 read_flush 以推进 FIFO。
@@ -271,20 +299,36 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
         return;
     }
 
-    uint32_t remain = s_frame_length - s_frame_received;
+    /* 压缩帧累积到 s_cbuf，未压缩直接累积到 s_fb */
+    uint8_t *dst = s_frame_compressed ? s_cbuf : s_fb;
+    uint32_t remain = s_frame_xferlen - s_frame_received;
     uint32_t n = bufsize;
     if (n > remain) {
         ESP_LOGW(TAG, "bulk OUT 超出 remain=%u 截断", (unsigned)remain);
         n = remain; /* 防御：理论不应超，超出部分截断不写垃圾 */
     }
 
-    memcpy(s_fb + s_frame_received, buffer, n);
+    memcpy(dst + s_frame_received, buffer, n);
     s_frame_received += n;
     tud_vendor_n_read_flush(itf);
 
-    if (s_frame_received >= s_frame_length) {
+    if (s_frame_received >= s_frame_xferlen) {
+        /* 压缩帧：先 LZ4 解压到 s_fb，得到 s_frame_length 字节未压缩 RGB565。
+         * 用 _safe 变体带边界检查；解压长度必须恰为期望未压缩大小，否则丢帧。 */
+        if (s_frame_compressed) {
+            int dlen = LZ4_decompress_safe((const char *)s_cbuf, (char *)s_fb,
+                                           (int)s_frame_xferlen, (int)GUD_FB_CAP);
+            if (dlen < 0 || (uint32_t)dlen != s_frame_length) {
+                ESP_LOGW(TAG, "LZ4 解压失败 ret=%d 期望=%u 丢帧",
+                         dlen, (unsigned)s_frame_length);
+                s_frame_active = false;
+                s_frame_received = 0;
+                return;
+            }
+        }
+
         /*
-         * 收满一帧。字节序修正：每像素一次 16bit 字节交换。
+         * 字节序修正：每像素一次 16bit 字节交换。
          *
          * 根因(三段链路逐段核对)：
          *   ① GUD 按小端发送 RGB565(低字节先)；
@@ -303,9 +347,10 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
         }
         display_blit((int)s_frame_x, (int)s_frame_y,
                      (int)s_frame_w, (int)s_frame_h, s_fb);
-        ESP_LOGD(TAG, "帧收满 %u 字节 blit %ux%u @(%u,%u)",
-                 (unsigned)s_frame_length, (unsigned)s_frame_w,
-                 (unsigned)s_frame_h, (unsigned)s_frame_x, (unsigned)s_frame_y);
+        ESP_LOGD(TAG, "帧收满 xfer=%u(%s) blit %ux%u @(%u,%u)",
+                 (unsigned)s_frame_xferlen, s_frame_compressed ? "LZ4" : "raw",
+                 (unsigned)s_frame_w, (unsigned)s_frame_h,
+                 (unsigned)s_frame_x, (unsigned)s_frame_y);
         s_frame_active = false;
         s_frame_received = 0;
     }
