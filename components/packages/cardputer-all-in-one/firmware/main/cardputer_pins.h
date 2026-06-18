@@ -9,4 +9,4 @@
 #define LCD_W          240
 #define LCD_H          135
 #define LCD_X_OFFSET   40   /* ST7789 240x135 GRAM 偏移，按图案微调 */
-#define LCD_Y_OFFSET   52   /* 同上 */
+#define LCD_Y_OFFSET   53   /* 同上；240-135=105 不对称(52/53)，mirror_x 翻转此轴，取 53 否则底部留 1px 未写花屏 */
