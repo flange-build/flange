@@ -284,19 +284,22 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 
     if (s_frame_received >= s_frame_length) {
         /*
-         * 收满一帧。颜色修正：真机实测当前管道(BGR+面板)净效果是 G/B 通道对调
-         * (黄→品红、绿→蓝、红/白/青不变)。在此对每个 RGB565 像素再软件对调 G、B
-         * 一次以抵消(swap∘swap=identity)。G 为 6bit、B 为 5bit，互换时做位宽重缩放。
+         * 收满一帧。字节序修正：每像素一次 16bit 字节交换。
+         *
+         * 根因(三段链路逐段核对)：
+         *   ① GUD 按小端发送 RGB565(低字节先)；
+         *   ② 固件在小端的 ESP32-S3 上按 uint16 读得正确的 RGB565 值；
+         *   ③ 但 ST7789 经 4-line SPI 固定把"先收到的字节"当作高字节(数据手册
+         *      §8.8.42；RAMCTRL 的 ENDIAN 位仅在 8/9-bit 并口有效、SPI 下无效)。
+         * 故 ESP32 小端内存里的像素送到屏上会被整体字节交换。此处对每像素做一次
+         * 16bit byteswap 抵消之(等价于 LovyanGFX 的 swap565 / LVGL 的
+         * LV_COLOR_16_SWAP)。通道顺序(R↔B)由面板 MADCTL 的 BGR 位解决，不在软件做
+         * 通道交换——与 M5GFX 官方驱动一致。byteswap 不跨通道混位，故灰阶严格中性。
          */
         uint16_t *px = (uint16_t *)s_fb;
         uint32_t npx = s_frame_length / 2;
         for (uint32_t i = 0; i < npx; i++) {
-            uint16_t v = px[i];
-            uint16_t r = (v >> 11) & 0x1F; /* 5bit */
-            uint16_t g = (v >> 5) & 0x3F;  /* 6bit */
-            uint16_t b = v & 0x1F;         /* 5bit */
-            /* G(6)→新B(5): g>>1; B(5)→新G(6): b<<1 */
-            px[i] = (uint16_t)((r << 11) | ((b << 1) << 5) | (g >> 1));
+            px[i] = __builtin_bswap16(px[i]);
         }
         display_blit((int)s_frame_x, (int)s_frame_y,
                      (int)s_frame_w, (int)s_frame_h, s_fb);
