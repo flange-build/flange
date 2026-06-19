@@ -14,7 +14,8 @@ related:
   - "[[out-of-tree 模块]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-05-08
+  - "[[GUD 屏作 X11 显示]]"
+updated: 2026-06-19
 ---
 
 ## TL;DR
