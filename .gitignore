@@ -26,6 +26,7 @@ docker-compose.override.yml
 
 # Claude Code 本地运行时状态（.claude/commands/ 与 .claude/skills/ 仍入库）
 .claude/scheduled_tasks.lock
+.claude/projects/
 
 # C/C++ app 构建临时目录（cmake/meson out-of-source builddir）
 # 注意：bin/ 不能在此 ignore——对 build.system: none 的 app，bin/ 是预编译
