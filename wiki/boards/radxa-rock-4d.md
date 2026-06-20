@@ -1,7 +1,7 @@
 ---
 title: radxa-rock-4d
 type: board
-status: wip
+status: done
 sources:
   - components/board/radxa-rock-4d/config.py
   - components/platform/rockchip/rk3576/config.py
@@ -51,7 +51,8 @@ boot_merger + `rk3576_boost` 替掉 mkimage（详见 design Decision 6）。
 `flash_whole_disk`（`upgrade_tool di -p`，loader 按设备 LBA 建 GPT；实测设备报
 512 逻辑块）。
 
-## 验收（上板，follow-up）
+## 验收
 
-`flange build` → `flange flash`（WL spi.img + di -p UFS）→ 串口看 U-Boot 枚举
-UFS → 挂 rootfs + SSH → WiFi/BT。上板验证为 follow-up（tasks §4/§6）。
+**2026-06-20 上板全通**：刷写（WL spi.img + `di -p` UFS）→ U-Boot 枚举 UFS → rootfs 挂载
++ SSH → AIC8800D80 WiFi/BT 可用。§4 `flange build` 全链路校验（4K GPT + 512 回归）
+为 follow-up（tasks §4）。

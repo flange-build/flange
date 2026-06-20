@@ -1,4 +1,4 @@
-> ⚠️ **归档说明（2026-06，用户决定）**：本变更以**代码 + spec 完成**归档 —— §1–§3、§5 已完成（其中 2.3 / 3.1 / 3.2 的描述按实施期演进改用 `prebuilt_spi_image` + `flash_whole_disk`，见各项与 design Decision 6）。**§4 构建验证 + §6 上板验证（串口 / SSH / AIC8800 WiFi/BT）整体推迟为后续 follow-up**：调试期已用**官方 spi.img** 实测 U-Boot 枚举 UFS、extlinux、挂 rootfs、串口 + SSH（design「正面收获」），但最终这套 **prebuilt-URL config** 的 `flange build` + `flange flash` 全链路尚未实跑一遍。下列 §4 / §6 的 `[ ]` 项即该 follow-up 范围（已知缺口，非本次归档阻塞）。
+> ⚠️ **归档说明（2026-06，用户决定）**：本变更以**代码 + spec 完成**归档 —— §1–§3、§5 已完成（其中 2.3 / 3.1 / 3.2 的描述按实施期演进改用 `prebuilt_spi_image` + `flash_whole_disk`，见各项与 design Decision 6）。**§6 上板验证已于 2026-06-20 完成**（刷写 + UFS 启动 + SSH + AIC8800D80 WiFi/BT 全通）。**§4 构建验证**（`flange build` 全链路 + 4K GPT 校验 + 512 回归）仍为后续 follow-up（pipeline 级验证，与上板功能正交）。
 
 ## 1. image.py 扇区参数化（默认 512 不变）
 
@@ -36,7 +36,7 @@
 
 ## 6. 上板验证（固件构建后实测，本变更交付边界）
 
-- [ ] 6.1 maskrom → `flange flash radxa-rock-4d-default-debug` → 实测 `upgrade_tool` 能否写入 UFS（验证 WL offset 单位假设）。验证：刷写命令成功返回，或记录失败现象触发 dd 回退变更
-- [ ] 6.2 串口观察 U-Boot 枚举 UFS + 加载 u-boot.itb + kernel banner（UART0 1500000）。验证：串口可见完整 boot log
-- [ ] 6.3 内核挂载 UFS rootfs + systemd 起来 + sshd 可登录。验证：SSH 登入成功
-- [ ] 6.4 AIC8800D80 USB WiFi/BT bring-up：aic_load_fw/aic8800_fdrv/aic_btusb 加载，`/lib/firmware/aic8800D80/` 固件命中，WiFi 能扫到 AP、BT 能 hciconfig up。验证：dmesg 无固件缺失 + `nmcli dev wifi` 有结果
+- [x] 6.1 maskrom → `flange flash radxa-rock-4d-default-debug` → 实测 `upgrade_tool` 能否写入 UFS（验证 WL offset 单位假设）。验证：刷写命令成功返回，或记录失败现象触发 dd 回退变更
+- [x] 6.2 串口观察 U-Boot 枚举 UFS + 加载 u-boot.itb + kernel banner（UART0 1500000）。验证：串口可见完整 boot log
+- [x] 6.3 内核挂载 UFS rootfs + systemd 起来 + sshd 可登录。验证：SSH 登入成功
+- [x] 6.4 AIC8800D80 USB WiFi/BT bring-up：aic_load_fw/aic8800_fdrv/aic_btusb 加载，`/lib/firmware/aic8800D80/` 固件命中，WiFi 能扫到 AP、BT 能 hciconfig up。验证：dmesg 无固件缺失 + `nmcli dev wifi` 有结果（2026-06-20 上板验收通过）
