@@ -10,8 +10,11 @@ CONFIG_SCSI_UFSHCD/_PLATFORM/SCSI_UFS_ROCKCHIP。
 启动链：BootROM → SPI:idbloader(@32KiB) → SPI:u-boot.itb(@8MiB=sector 0x4000)
 → u-boot proper → 读 UFS 的 4K GPT → UFS:boot/rootfs → kernel。
 
-- **SPI NOR**：`flash_spi_loader=True` 让构建期合成 spi.img（idbloader+u-boot.itb），
-  `flange flash --spi-firmware` 写入 SPI（DB→SSD SPINOR→WL 0 spi.img）。
+- **SPI NOR**：`bootloader.prebuilt_spi_image`（`{url, sha256}`，构建期从 radxa
+  官方下载、不入库）用 radxa 预编的整体 spi.img（根因：RK3576 idbloader 须 boot_merger
+  装配含 rk3576_boost，flange 通用 mkimage rksd 路径缺 boost → SPL 环境不全 →
+  u-boot 读 UFS 崩；6 次上板坐实，见 design Decision 6），`flange flash --spi-firmware`
+  写入 SPI（DB→SSD SPINOR→WL 0 spi.img）。
 - **UFS（4K）**：`flash_storage="SATA"` + `partitions.sector_size=4096`，刷写走
   `upgrade_tool di -p parameter.txt` + `di`，由 loader 按 4K 落盘。UFS 只放
   boot/recovery/rootfs —— **不放 uboot**（u-boot.itb 在 SPI；实板日志确认 SPL 从
@@ -52,9 +55,6 @@ BOARD = {
     # `upgrade_tool SSD <No>` 切到它，否则 loader 默认写 SPI NOR（本板从 SPI
     # 启动，默认存储就是 SPI）。eMMC/SD 板不设此键，沿用默认。
     "flash_storage": "SATA",
-    # 架构 A2：构建期合成 SPI 启动固件 spi.img（idbloader@32KiB + u-boot.itb@8MiB），
-    # 用 `flange flash --spi-firmware` 刷进 SPI NOR。
-    "flash_spi_loader": True,
     "kernel": {
         # argon BSP linux-6.1-stan-rkr5.1 已含 rk3576-rock-4d.dts（已入 Makefile）。
         "dts": "rk3576-rock-4d",
@@ -116,11 +116,29 @@ BOARD = {
         "+default_overlays": ["rk3576-dwc3-otg.dtbo"],
     },
     "bootloader": {
-        # 必须覆盖 SoC 层通用 rk3576_defconfig —— 后者不开 UFS。板级
-        # rock-4d-rk3576_defconfig（radxa/u-boot next-dev-v2026.01）含
-        # CONFIG_UFS/ROCKCHIP_UFS/SPL_UFS_SUPPORT + drivers/ufs/ufs-rockchip*.c，
-        # SPL 才能从 UFS 加载 u-boot proper。repo/branch 沿用 SoC 层。
-        "defconfig": "rock-4d-rk3576_defconfig",
+        # == RK3576 ROCK 4D 锁官方预编 spi.img,u-boot 不自编 ==
+        # 根因(6 次上板 + 构建链路审计坐实):**RK3576 的 idbloader 必须用 boot_merger
+        # 按 RK3576MINIALL.ini 装配**(含 rk3576_boost / usbplug 组件)。flange 通用路径
+        # 用 `mkimage -T rksd -d ddr:spl`——而 RK35xx 里 RK3576 是**唯一不走 mkimage**
+        # 的 SoC(armbian rockchip64_common.inc 对 BOOT_SOC==rk3576 专走 boot_merger
+        # 分支,其余 RK35xx 才走 else 的 mkimage rksd)。flange 自编 idbloader **缺
+        # boost**、头布局也非 BootROM 对 RK3576 的预期 → SPL 运行环境不完整 → UFS 链路
+        # 能 up 到 gear3 FAST 但 SCSI READ 数据不落 buffer → 读 GPT 拿内存残渣 →
+        # part_get_info_efi 解引用 Synchronous Abort。
+        # 与 BL31 版本(v1.24/v1.20/真 v1.19 全崩)、OPTEE、u-boot 分支均**无关**(已逐一
+        # 证伪;早期"python2 shebang 唯一根因"论断只解释了 BL31 漏出那 1 个 EL3 变体,
+        # 无法解释其余 5 个 BL31 在位的 EL2 崩溃,已废弃)。
+        # 故直接刷 radxa 官方预编整体 spi.img;miniloader 仍由 rkbin 产出(DB 刷写阶段
+        # 用)。详见 openspec design Decision 6。
+        #
+        # spi.img 构建期从 radxa 官方下载(url+sha256,经 ensure_prebuilt_image 原子
+        # 下载+校验、缓存到 .build/sources/prebuilt;不入库 16MB blob)。下载页:
+        # https://docs.radxa.com/en/rock4/rock4d/download
+        "prebuilt_spi_image": {
+            "url": "https://dl.radxa.com/rock4/4d/images/rock-4d-spi-flash-image.img",
+            "sha256":
+                "b4f3686a7e2da245c33daf496cd3d6403cd6e691dfa7ab85ce63059bde1c9368",
+        },
     },
     "rootfs": {
         # 与其他 rockchip bring-up 板（rock5b / tspi-rk3566 / cubie-a7z）一致，

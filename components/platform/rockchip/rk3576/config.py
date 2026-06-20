@@ -25,6 +25,9 @@ SOC = {
         # 与 RK3588 同分支，保持 patch 应用一致性。SoC 层用 generic
         # rk3576_defconfig；若 bring-up 时该分支无 generic defconfig，可在
         # board 层覆盖为板级 armsom-cm5-io-rk3576_defconfig（armbian 实测用此）。
+        # 注：radxa-rock-4d 因 UFS 走 prebuilt spi.img（不自编 u-boot，见 board
+        # config bootloader 段），repo/branch/defconfig 对该板不参与构建；不影响
+        # 本 SoC 默认与 armsom-cm5-io。
         "branch": "next-dev-v2026.01",
         "defconfig": "rk3576_defconfig",
     },

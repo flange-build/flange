@@ -227,6 +227,42 @@ class SourceManager:
             raise
         return deb_path
 
+    def ensure_prebuilt_image(self, name: str, cfg: dict) -> Path:
+        """确保预编固件镜像（如 SPI bootloader spi.img）已下载，返回文件路径。
+
+        存储路径：.build/sources/prebuilt/<name>/<filename>
+        cfg 格式（与 ensure_extra_deb 同款）：
+          - url:      下载地址（必须）
+          - sha256:   校验哈希（必须）
+          - filename: 本地文件名（可选，默认从 URL 提取）
+        原子写入（.download 后缀）+ sha256 校验；缓存命中（文件在且哈希匹配）则
+        跳过下载——故同一构建/刷写多次调用幂等、无网亦可复用已下产物。
+        """
+        url = cfg["url"]
+        sha256 = cfg["sha256"]
+        filename = cfg.get("filename", url.rsplit("/", 1)[-1])
+        img_dir = self.sources_dir / "prebuilt" / name
+        img_dir.mkdir(parents=True, exist_ok=True)
+        img_path = img_dir / filename
+
+        if img_path.is_file() and self._sha256_file(img_path) == sha256:
+            return img_path
+
+        partial = img_path.with_suffix(img_path.suffix + ".download")
+        try:
+            subprocess.run(
+                ["wget", "-q", "--show-progress", "-O", str(partial), url],
+                check=True, timeout=600,
+            )
+            if self._sha256_file(partial) != sha256:
+                raise RuntimeError(
+                    f"prebuilt_image {name}: sha256 校验失败（URL: {url}）")
+            partial.rename(img_path)
+        except Exception:
+            partial.unlink(missing_ok=True)
+            raise
+        return img_path
+
     @staticmethod
     def _sha256_file(path: Path) -> str:
         h = hashlib.sha256()
