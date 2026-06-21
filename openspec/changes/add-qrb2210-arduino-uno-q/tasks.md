@@ -51,6 +51,16 @@
 - [x] 7.2 验证 lunch target `arduino-uno-q-default-{debug,release}` 自动生成 ✅ 实测 get_valid_targets
 - [x] 7.3 `wiki/platforms/qualcommqrb2210-平台.md` + `wiki/boards/arduino-uno-q.md` + index + log ✅
 
+## 8b. `flange build` 真实构建验证（Docker，本会话）
+
+- [x] 8b.1 kernel：engine 全量构建 ✅ clone mainline v7.0 + defconfig + 编译 → Image(50MB) + `qrb2210-arduino-imola.dtb`(50KB) + modules（~44min，exit 0）
+- [x] 8b.2 boot：engine 构建 ✅ 128MiB **FAT32**（label efi）含 `/extlinux/Image` + `/dtbs/qcom/qrb2210-arduino-imola.dtb` + `extlinux.conf`（实测内容：devicetree→imola dtb、root=PARTLABEL=rootfs、console=ttyMSM0）
+- [x] 8b.3 image：构建 ✅ flange rawprogram 实测对齐 vendor 布局（efi@985408 / rootfs@2033984）
+- [x] 8b.4 bootloader：engine 构建 ✅ 空 URL 跳过路径
+- [x] 8b.5 flash-config（edl-ng）：FlashConfigGenerator ✅ platform=qualcommqrb2210 / flash_tool=edl-ng / boot(fat32@0xF0940)+rootfs(ext4@0x1F0940)
+- [~] 8b.6 rootfs：chroot+qemu binfmt+base apt(ports.ubuntu.com)+extra_apt_sources(key 导入/源添加) 均通过；**qcom-ppa HTTPS 被 sandbox egress 代理 MITM 阻塞**（新建 noble chroot 不信任代理 CA）—— 环境限制，非 flange 代码问题。dragonwing/a702 固件实装核对随实板（见 §8.4）
+- 注：sandbox 需在构建容器内注册 qemu-aarch64 binfmt + 挂宿主 CA bundle（运行时，未改任何提交文件）
+
 ## 8. 实板验证（eMMC）⏳ 待硬件
 
 - [ ] 8.1 JCTL 进 EDL，edl-ng 刷 vendor bootloader 固件（edl-ng 通路验证）
