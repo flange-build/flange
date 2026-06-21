@@ -142,10 +142,11 @@ class Qrb2210RootfsBuilder(RootfsBuilder):
         self.docker.run_privileged(["cp", "-a", f"{modules_src}/.", str(dest)])
 
     def _install_fstab(self, rootfs_dir: Path):
-        """extlinux 布局 fstab：挂载 rootfs 与 boot（均 LABEL）。
+        """extlinux 布局 fstab：只挂 rootfs。
 
-        内核 Image/dtb/extlinux.conf 在独立 boot 分区（boot.py 产 boot.img），
-        U-Boot sysboot 启动期读取；运行时把 boot 分区挂到 /boot 便于查看/更新。
+        内核 Image/dtb/extlinux.conf 在 vendor `efi` 分区（boot.py 产 FAT boot.img），
+        U-Boot sysboot 启动期读取；flange 重刷模型不在运行时挂 /boot（且该分区是
+        FAT、FS label 与 GPT label 不一）。只挂 rootfs，避免 systemd degraded。
         """
         fstab = rootfs_dir / "etc" / "fstab"
         if fstab.exists():
@@ -156,9 +157,7 @@ class Qrb2210RootfsBuilder(RootfsBuilder):
         fstab.write_text(
             "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>\n"
             "LABEL=rootfs     /              ext4    defaults   0       1\n"
-            "LABEL=boot       /boot          ext4    defaults   0       2\n"
         )
-        (rootfs_dir / "boot").mkdir(exist_ok=True)
 
     def collect(self, src_dir, config: dict) -> dict:
         return {"rootfs": self._output}

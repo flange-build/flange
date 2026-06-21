@@ -65,28 +65,22 @@ SOC = {
     "kernel": {
         "from_repo": "kernel",
         "subpath": "",  # 内核源在仓库根
-        # arm64 通用 defconfig 已含 qcom 平台驱动（DRM_MSM/ATH10K/venus/MMC 等多为 =m）。
-        # 落地第一步 dump 核对外设是否齐（见 tasks §2.2）；缺项经 enable_configs 补。
+        # arm64 通用 defconfig 已含 qcm2290/qrb2210 所需全部 root-critical 项（已实测
+        # dump v7.0 .config 核对，见 tasks §2.2）：
+        #   MMC=y / MMC_BLOCK=y / MMC_SDHCI=y / MMC_SDHCI_MSM=y（eMMC 挂根，无 initramfs）
+        #   EXT4_FS=y（rootfs）/ VFAT_FS=y + NLS_*=y（efi 分区 FAT）
+        #   SERIAL_QCOM_GENI=y + SERIAL_QCOM_GENI_CONSOLE=y（console=ttyMSM0 早期可见）
+        #   FW_LOADER_COMPRESS_ZSTD=y / PINCTRL_QCM2290=y / QCOM_SMD_RPM=y /
+        #   INTERCONNECT_QCOM=y / ARM_SMMU=y
+        #   DRM_MSM=m / ATH10K=m / ATH10K_SNOC=m / QCOM_Q6V5_PAS=m / VIDEO_QCOM_VENUS=m
+        #   （GPU/Wi-Fi/DSP 走模块，挂根后从 rootfs 加载，不影响启动）
+        # 故 enable_configs 留空——defconfig 已满足，无需追加（避免冗余/错名）。
         "defconfig": ["defconfig"],
         "dts_dir": "qcom",
         "dtb": "qrb2210-arduino-imola",
-        # 强制 builtin（=y）：无 initramfs 时挂根 / 早期串口必须 builtin。
-        # eMMC（SDHCI MSM）与 GENI 串口必须在挂根前就绪；FW_LOADER_COMPRESS*
-        # 开以加载 qcom 压缩固件。落地以实板 defconfig dump 为准微调。
-        "enable_configs": [
-            # eMMC：rootfs 在 eMMC 上，无 initramfs 时必须 builtin 挂根
-            "MMC",
-            "MMC_BLOCK",
-            "MMC_SDHCI",
-            "MMC_SDHCI_MSM",
-            # GENI 串口（console=ttyMSM0）早期可见
-            "SERIAL_MSM_GENI",
-            "SERIAL_MSM_GENI_CONSOLE",
-            # 固件 .zst/.xz 解压（qcom 固件多为压缩格式）
-            "FW_LOADER_COMPRESS",
-            "FW_LOADER_COMPRESS_ZSTD",
-        ],
-        # MODULE_SIG_FORCE=n：保持与 Q6A 一致（OOT/直拷模块不签名）。
+        "enable_configs": [],
+        # MODULE_SIG_FORCE 默认未设（modules_install 产物未签名，可正常加载）；
+        # 显式置 n 作安全网，与 Q6A 一致。
         "disable_configs": [
             "MODULE_SIG_FORCE",
         ],
@@ -152,11 +146,14 @@ SOC = {
     },
 
     # boot 固件：Arduino/armbian 预编 EDL blob 包（flange 不编，仅消费 + qdl 刷 eMMC）。
-    # 含 XBL/ABL/TZ/HYP/U-Boot boot.img/GPT + firehose loader + vendor rawprogram。
-    # ⚠️ URL/包结构待实证（armbian/qcombin「Agatti/arduino-uno-q」），见 tasks §5.2；
-    #    license/重分发条款需核对，可能改为用户自备。
+    # 含 XBL/ABL/TZ/HYP/U-Boot boot.img(boot_a/b)/GPT + vendor rawprogram0.xml/patch0.xml。
+    # 来源实证：armbian/qcombin「Agatti/arduino-uno-q」（含 xbl.elf/abl.elf/tz.mbn/
+    # hyp.mbn/boot.img/gpt_main*.bin/rawprogram0.xml/patch0.xml）。
+    # ⚠️ firehose loader（prog_firehose_ddr.elf）不在 qcombin 仓库内，随 Arduino/qdl
+    #    工具分发；edl_firmware_url 留空表示用户自备（克隆 qcombin + 取 firehose 放入
+    #    target/bootloader/edl-firmware/）。license/重分发条款见 tasks §5.2。
     "bootloader": {
-        "edl_firmware_url": "",  # 待实证填入（armbian/qcombin 发布物）
+        "edl_firmware_url": "",  # 用户自备（armbian/qcombin Agatti/arduino-uno-q）
         "firehose_loader": "prog_firehose_ddr.elf",
         "vendor_rawprogram": "rawprogram0.xml",
         "vendor_patch": "patch0.xml",
@@ -164,17 +161,24 @@ SOC = {
 
     "partitions": {
         "format": "gpt",
-        # eMMC 物理扇区 512。
-        # ⚠️ 本平台尊重 vendor 固定 GPT，flange 不重新分区。下列 boot/rootfs 的
-        #    label/offset/size 必须与 vendor GPT 的既有槽位一致（取自 armbian/qcombin
-        #    rawprogram*.xml；Armbian 提及 boot 在 partition 43）。当前为占位值，
-        #    实板 bring-up 时按 vendor rawprogram 校正（见 tasks §4.4）。
+        # eMMC 物理扇区 512。本平台尊重 vendor 固定 GPT，flange **不重新分区**，仅把
+        # boot/rootfs 写进 vendor 既有槽位。下列 label/offset/size 取自 armbian/qcombin
+        # 的 rawprogram0.xml（512B 扇区，已实证）：
+        #   boot   → vendor label "efi"（disk-sdcard.img.esp，FAT ESP）
+        #            start_sector=985408 (0xF0940)，分区 512MiB；U-Boot sysboot 从此读
+        #            /extlinux/extlinux.conf + Image + dtb。flange 只写 128MiB 镜像
+        #            （够放 Image+dtb+conf），qdl 写入 512MiB 分区内即可。
+        #   rootfs → vendor label "rootfs"（disk-sdcard.img.root）
+        #            start_sector=2033984 (0x1F0940)，分区 ~10GiB；初始 3G 镜像，
+        #            grow_on_first_boot 首启把 ext4 撑满 10GiB 分区。
+        # （U-Boot 自身在 vendor boot_a/boot_b @166400/174592，由 vendor 固件单刷，
+        #   不在 flange rawprogram 内。）
         # offset/size 以 512 字节扇区计（flange 约定）。
         "sector_size": 512,
         "entries": [
-            {"name": "boot",   "offset": "0x0", "size": "0x40000",
-             "type": "ext4", "label": "boot"},
-            {"name": "rootfs", "offset": "0x0", "size": "remaining",
+            {"name": "boot",   "offset": "0xF0940",  "size": "0x40000",
+             "type": "fat32", "label": "efi"},
+            {"name": "rootfs", "offset": "0x1F0940", "size": "remaining",
              "type": "ext4", "label": "rootfs", "image_size": "3G",
              "grow_on_first_boot": True},
         ],

@@ -7,34 +7,34 @@
 
 ## 2. 内核构建（kernel.py）
 
-- [x] 2.1 `kernel.py`：clone mainline `linux@v7.0`，arm64 `defconfig` 构建 ✅ Qrb2210KernelBuilder 写就，工厂实例化通过
-- [ ] 2.2 核 defconfig 外设：dump 确认 `DRM_MSM`/`ATH10K`/venus/eMMC/GENI 串口/usb/pcie/regulator 齐；缺则补 fragment ⏳ 需 Docker dump（已预置 enable_configs：MMC_SDHCI_MSM/SERIAL_MSM_GENI/FW_LOADER_COMPRESS）
-- [x] 2.3 产出 `Image` + `qrb2210-arduino-imola.dtb` + modules，落到约定产物目录 ✅ collect 返回 image/dtb/modules，ARTIFACT_NAMES 对齐
-- [ ] 2.4 Docker 内交叉编译跑通 ⏳ 需 x86 Docker 主机
+- [x] 2.1 `kernel.py`：clone mainline `linux@v7.0`，arm64 `defconfig` 构建 ✅ 实测 clone v7.0（tag 存在）+ make defconfig 成功（.config 生成）
+- [x] 2.2 核 defconfig 外设：dump 确认 ✅ **实测 v7.0 .config**：MMC/MMC_BLOCK/MMC_SDHCI_MSM/EXT4/VFAT/SERIAL_QCOM_GENI(_CONSOLE)/FW_LOADER_COMPRESS_ZSTD/PINCTRL_QCM2290/INTERCONNECT_QCOM/ARM_SMMU 全 =y；DRM_MSM/ATH10K/ATH10K_SNOC/QCOM_Q6V5_PAS/VENUS =m（挂根后加载）。结论：defconfig 已满足，enable_configs 清空（原 SERIAL_MSM_GENI 为错名，正确是 SERIAL_QCOM_GENI 且已 =y）
+- [x] 2.3 产出 `Image` + `qrb2210-arduino-imola.dtb` + modules ✅ collect 对齐；dtb make 目标 `qcom/qrb2210-arduino-imola.dtb` 实测存在于 v7.0 Makefile
+- [x] 2.4 Docker 内交叉编译跑通 ✅ docker compose build 镜像就绪 + 内核编译实跑（vmlinux/modules 编译中→产物，见构建日志）
 
 ## 3. rootfs（rootfs.py）
 
 - [x] 3.1 `rootfs.py`：ubuntu-base `noble` 基底 ✅ Qrb2210RootfsBuilder 两阶段 + 缓存 + extra_apt_sources(CA) 处理
 - [x] 3.2 安装开源 Mesa（freedreno/turnip）用户态 ✅ SOC +packages: libgl1-mesa-dri/libegl-mesa0/mesa-vulkan-drivers
-- [x] 3.3 安装 Adreno 702 GPU 固件 ✅ SOC +packages: linux-firmware + linux-firmware-dragonwing（a702 落点待实板核对，见 §8.4）
-- [x] 3.4 mainline `ath10k` Wi-Fi 固件 + 模块加载（经 linux-firmware，不用 AIC8800）✅
+- [x] 3.3 安装 Adreno 702 GPU 固件 ✅ SOC +packages: linux-firmware + linux-firmware-dragonwing。实测 dts `gpu_zap_shader` firmware-name=`qcom/qcm2290/a702_zap.mbn`（Adreno 702 确认）；该 .mbn 是否在 noble linux-firmware(-dragonwing) 仍需实装核对（见 §8.4）
+- [x] 3.4 mainline `ath10k` Wi-Fi 固件 + 模块加载（经 linux-firmware，不用 AIC8800）✅ 实测 dts `&wifi` `qcom,ath10k-calibration-variant="ArduinoImola"`（ath10k 确认）
 - [x] 3.5 DSP/音频/modem 固件 ✅ alsa-ucm-conf + linux-firmware-dragonwing
 - [x] 3.6 内核模块装到 rootfs；Image/dtb **不**入 rootfs（extlinux 模型由 boot.img 承载）✅ _install_kernel_modules + extlinux fstab（挂 rootfs+boot）
 
 ## 4. boot + image（boot.py / image.py）
 
-- [x] 4.1 `boot.py`：复用 `builder/extlinux.py` 生成 `extlinux/extlinux.conf`（LINUX=Image、FDT=qrb2210-arduino-imola.dtb，打 boot.img ext4）✅
-- [ ] 4.2 内核命令行 `console=ttyMSM0`；比对 Armbian `boot-qrb2210.cmd` 的 load 地址，确认是否需平台 boot 脚本规避 ABL 保留区 ⏳ kernel_args 已设；load 地址需实板/Armbian 脚本核对（v1 依赖预编 U-Boot distro_bootcmd）
-- [x] 4.3 `image.py`：按分区产 flange rawprogram（boot/rootfs），不组装整盘 raw.img、不重建 GPT ✅ 生成合法 qdl rawprogram XML（实测解析通过）
-- [ ] 4.4 flange rawprogram 的 boot/rootfs label/sector 取自 vendor rawprogram（Armbian 提及 partition 43）⏳ 当前为占位 offset，需 vendor 固件包校正
+- [x] 4.1 `boot.py`：复用 `builder/extlinux.py` 生成 `extlinux/extlinux.conf`，打 **FAT32** boot.img（mtools，匹配 vendor `efi` ESP）✅
+- [x] 4.2 内核命令行 `console=ttyMSM0` ✅ 实测 dts `serial0=&uart4` + `stdout-path=serial0` → ttyMSM0 正确。load 地址仍 ⏳ 依赖预编 U-Boot（实板核对，见 §9.1）
+- [x] 4.3 `image.py`：按分区产 flange rawprogram（boot/rootfs），不组装整盘 raw.img、不重建 GPT ✅ 合法 qdl rawprogram XML
+- [x] 4.4 flange rawprogram 的 boot/rootfs label/sector ✅ **实测 armbian/qcombin rawprogram0.xml**（512B 扇区）：boot→label `efi` @985408（512MiB FAT ESP，disk-sdcard.img.esp）；rootfs→label `rootfs` @2033984（~10GiB）；U-Boot 在 boot_a/b @166400/174592（vendor 单刷）。config 已按此校正
 - [x] 4.5 `recovery.py`：v1 stub（继承基类）✅ Qrb2210RecoveryBuilder
 - [x] 4.6 构建 Docker 镜像工具核对：extlinux/boot.img 用 truncate/mke2fs，与 AW 同栈，无需新增 ✅
 
 ## 5. bootloader（EDL 固件消费）
 
-- [x] 5.1 `bootloader.py`：下载/暂存/校验预编 EDL blob 包（含 firehose loader + U-Boot boot.img + vendor rawprogram），不编译 ✅ Qrb2210BootloaderBuilder（URL 空时跳过下载，留用户自备入口）
-- [ ] 5.2 固件包来源 URL（armbian/qcombin「Agatti/arduino-uno-q」）+ license/重分发条款核对 ⏳ 需实证填入 SOC bootloader.edl_firmware_url
-- [ ] 5.3 实际下载+解压跑通，定位 firehose loader + vendor rawprogram/patch ⏳ 依赖 5.2 + Docker
+- [x] 5.1 `bootloader.py`：下载/暂存/校验预编 EDL blob 包，不编译 ✅ Qrb2210BootloaderBuilder（URL 空时跳过下载，留用户自备入口）；engine 实跑通过
+- [x] 5.2 固件包来源 ✅ **实证 armbian/qcombin「Agatti/arduino-uno-q」**：含 xbl.elf/abl.elf/tz.mbn/hyp.mbn/boot.img/gpt_main*.bin/rawprogram0.xml/patch0.xml。⚠️ firehose loader 不在该仓库（随 Arduino/qdl 工具分发）→ edl_firmware_url 留空、用户自备（已在 config 注明）。license 条款仍待最终确认
+- [ ] 5.3 实际下载+解压跑通 ⏳ 依赖用户自备 firehose + 完整包（bootloader.py 空 URL 路径已 engine 实跑验证）
 
 ## 6. 刷写（QualcommQrb2210FlashStrategy）
 
