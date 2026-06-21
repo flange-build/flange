@@ -4,7 +4,6 @@ type: concept
 status: stable
 sources:
   - builder/flash.py
-  - roadmap.md
 related:
   - "[[FlashStrategy 抽象]]"
   - "[[image 构建器]]"

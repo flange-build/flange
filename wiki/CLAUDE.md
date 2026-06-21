@@ -13,7 +13,7 @@
 
 | 层 | 落位 | 写权限 |
 |---|---|---|
-| Raw sources | `builder/`、`components/`、`docs/`、`openspec/`、`ProjectSpec.md`、`README.md`、`roadmap.md`、git commit、`tests/` | 用户 + 贡献者 |
+| Raw sources | `builder/`、`components/`、`docs/`、`openspec/`、`ProjectSpec.md`、`README.md`、git commit、`tests/` | 用户 + 贡献者 |
 | Wiki | `wiki/` 下除本文件与 `llm-wiki.md` 外的所有 `.md` | LLM 写、用户审 |
 | Schema | 本文件 | 用户与 LLM 共同演化 |
 
