@@ -1,5 +1,6 @@
 """Rockchip Bootloader 构建策略 -- 替代 bootloader/rockchip/build.sh"""
 
+import re
 import shutil
 from pathlib import Path
 from builder.base import ComponentBuilder
@@ -8,7 +9,6 @@ from builder.base import ComponentBuilder
 class RockchipBootloaderBuilder(ComponentBuilder):
     component = "bootloader"
     ARCH = "arm"
-    CROSS = "aarch64-linux-gnu-"
 
     def configure(self, src_dir: Path, config: dict):
         # 预编 spi.img 板（见 compile）不自编 u-boot，跳过 defconfig 配置。
@@ -48,11 +48,9 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         trust_ini = firmware_dir / "RKTRUST" / f"{trust_prefix}TRUST.ini"
         bl31, bl32 = self._parse_trust_ini(trust_ini, firmware_dir)
 
-        # v2024.10 等老 u-boot 的 decode_bl31.py shebang 写死 python2，而构建容器只装
-        # python3 → 该脚本跑不起来、拆不出 bl31_0x*.bin、BL31 漏出 FIT。这是独立于任何
-        # 板的通用构建缺陷，改 shebang 即修（脚本内容 py3 完全兼容，幂等：python3 版
-        # no-op）。注：RK3576 ROCK 4D **不走自编路线**（锁 prebuilt spi.img），不受此
-        # 影响；其 UFS 崩溃的真因是 idbloader 缺 rk3576_boost，与 BL31 无关（见 board）。
+        # 老 rockchip u-boot 的 decode_bl31.py shebang 写死 python2，而构建容器只装
+        # python3 → 该脚本跑不起来、拆不出 bl31_0x*.bin、BL31 漏出 FIT。独立于任何板的
+        # 通用构建缺陷，改 shebang 即修（脚本内容 py3 完全兼容，幂等：python3 版 no-op）。
         decode = src_dir / "arch" / "arm" / "mach-rockchip" / "decode_bl31.py"
         if decode.exists():
             _t = decode.read_text()
@@ -77,35 +75,65 @@ class RockchipBootloaderBuilder(ComponentBuilder):
                   arch=self.ARCH, cross=self.CROSS, jobs=jobs, extra=extra,
                   label="打包 u-boot.itb...")
 
-        # 解析 RKBOOT INI -- 生成 idbloader.img
         loader_ini = firmware_dir / "RKBOOT" / f"{ini_prefix}MINIALL.ini"
-        ddr_bin, spl_bin = self._parse_loader_ini(loader_ini, firmware_dir)
+        run_ini = loader_ini
 
-        # SPL 来源：默认用 rkbin 预编 SPL（vendor miniloader 风格，eMMC/SD 板可用）。
-        # UFS 板须用 u-boot **自编** SPL（spl/u-boot-spl.bin）：保证 SPL 与 proper
-        # 同源，UFS 控制器从 SPL 到 proper 的交接状态自洽。混用「rkbin 预编 SPL +
-        # 自编 proper」时，proper 的 ufshcd-rockchip 清不掉 rkbin SPL 残留的控制器
-        # 状态 → UIC 超时、SCSI scan 不完成 → 读 UFS GPT 拿到垃圾 → part_test_efi
-        # 崩（RK3576 ROCK 4D 实测）。board 设 bootloader.idbloader_spl="uboot" 切换。
-        if config["bootloader"].get("idbloader_spl") == "uboot":
-            spl_bin = src_dir / "spl" / "u-boot-spl.bin"
-            if not spl_bin.exists():
+        # RK3576: idbloader 的 SPL 改用**自编**（与 proper 同源），复刻官方 prebuilt。
+        # 根因（机制 + 寄存器证据，上板实测）：RK3576 让 UFS DMA 能访问 DDR 的私有
+        # 防火墙 SGRF_DOMAIN_CON3（FW_SYS_SGRF）只在 SPL 阶段 arch_cpu_init 设置、
+        # proper 永不重设 —— 故 UFS 读 buffer 能否被 DMA 落由跑过的 SPL 决定。混用
+        # rkbin 预编 SPL（另一棵 u-boot 树）+ 自编 proper → SGRF 域授权与 proper 不
+        # 自洽 → SCSI READ 数据静默不落 buffer → proper 读 UFS GPT 拿残渣 →
+        # Synchronous Abort。官方 bsp 即 sed RK3576MINIALL.ini 的 FlashBoot=自编
+        # spl/u-boot-spl.bin（FlashBoost/FlashData 仍 rkbin），再 boot_merger。详见
+        # openspec selfbuild-rk3576-spi-image design。
+        if config["bootloader"].get("idbloader_method") == "boot_merger":
+            self_spl = src_dir / "spl" / "u-boot-spl.bin"
+            if not self_spl.exists():
                 raise FileNotFoundError(
-                    f"idbloader_spl=uboot 但未找到自编 SPL: {spl_bin}"
-                    "（需 defconfig 开 CONFIG_SPL，且 make 已构建 SPL）")
+                    f"boot_merger 须自编 SPL 但未找到 {self_spl}"
+                    "（需 defconfig 开 CONFIG_SPL，make 已产 spl/u-boot-spl.bin）")
+            # 仅把 FlashBoot 段换成自编 SPL 绝对路径；FlashBoost(boost)/FlashData(DDR)
+            # 仍 rkbin、相对 firmware_dir（boot_merger cwd=firmware_dir）。写到 src_dir
+            # 副本 ini，不污染 rkbin 仓库的 stock ini。^FlashBoot= 不会误匹配 FlashBoost=。
+            text = re.sub(r"(?m)^FlashBoot=.*$",
+                          f"FlashBoot={self_spl}", loader_ini.read_text())
+            run_ini = src_dir / f"{ini_prefix}MINIALL_selfspl.ini"
+            run_ini.write_text(text)
 
-        self.docker.run([
-            str(src_dir / "tools" / "mkimage"),
-            "-n", mkimage_chip, "-T", "rksd",
-            "-d", f"{ddr_bin}:{spl_bin}",
-            str(src_dir / "idbloader.img"),
-        ])
+        # idbloader 装配方式按 SoC 分流：
+        #  - RK3576（idbloader_method=="boot_merger"）：boot_merger 按（改了 FlashBoot
+        #    的）ini 装配 idbloader（含 boost + 自编 SPL）；此处整段跳过 mkimage。
+        #  - 其他 RK35xx：mkimage -T rksd -d ddr:spl 产 idbloader.img（rkbin 预编 blob）。
+        # 详见 openspec selfbuild-rk3576-spi-image design Decision 1。
+        if config["bootloader"].get("idbloader_method") != "boot_merger":
+            ddr_bin, spl_bin = self._parse_loader_ini(loader_ini, firmware_dir)
+            self.docker.run([
+                str(src_dir / "tools" / "mkimage"),
+                "-n", mkimage_chip, "-T", "rksd",
+                "-d", f"{ddr_bin}:{spl_bin}",
+                str(src_dir / "idbloader.img"),
+            ])
 
-        # 生成 miniloader.bin
+        # 生成 miniloader.bin（DB 刷写阶段用）；boot_merger 同时产出 [OUTPUT] IDB_PATH
+        # 的 NEWIDB idblock，供 RK3576 idbloader 取用。run_ini：RK3576=改过 FlashBoot 的
+        # 副本（自编 SPL），其他 SoC=stock。
         self.docker.run([
             str(firmware_dir / "tools" / "boot_merger"),
-            str(loader_ini),
+            str(run_ini),
         ], cwd=str(firmware_dir))
+
+        # RK3576：idbloader = boot_merger 产出的 idblock（含 boost + 自编 SPL），拷为
+        # idbloader.img 供 collect → build_spi_image 取用。IDB_PATH 含版本号，动态解析。
+        if config["bootloader"].get("idbloader_method") == "boot_merger":
+            idb_name = self._extract_idb_path(run_ini.read_text())
+            if not idb_name:
+                raise ValueError(
+                    f"idbloader_method=boot_merger 但 {run_ini} 无 [OUTPUT] IDB_PATH")
+            idb_src = firmware_dir / idb_name
+            if not idb_src.exists():
+                raise FileNotFoundError(f"boot_merger 未产出 idblock: {idb_src}")
+            shutil.copy2(idb_src, src_dir / "idbloader.img")
 
         self._firmware_dir = firmware_dir
         self._ini_prefix = ini_prefix
@@ -182,5 +210,24 @@ class RockchipBootloaderBuilder(ComponentBuilder):
                 in_section = False
                 continue
             if in_section and line.startswith("PATH="):
+                return line.split("=", 1)[1].strip()
+        return None
+
+    def _extract_idb_path(self, content: str):
+        """从 INI [OUTPUT] 段提取 IDB_PATH（boot_merger 产出的 idblock 文件名）。
+
+        用精确 `IDB_PATH=` 前缀匹配，与 `_extract_output_path` 的 `PATH=`
+        互不误命中（'IDB_PATH='.startswith('PATH=') 为 False，反之亦然）。
+        """
+        in_section = False
+        for line in content.splitlines():
+            line = line.strip()
+            if line == "[OUTPUT]":
+                in_section = True
+                continue
+            if in_section and line.startswith("["):
+                in_section = False
+                continue
+            if in_section and line.startswith("IDB_PATH="):
                 return line.split("=", 1)[1].strip()
         return None

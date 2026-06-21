@@ -13,7 +13,6 @@ from builder.dtb_overlay import (
 class RockchipKernelBuilder(KernelBuilder):
     component = "kernel"
     ARCH = "arm64"
-    CROSS = "aarch64-linux-gnu-"
 
     def configure(self, src_dir: Path, config: dict):
         """支持单 defconfig 字符串或多步 defconfig 合并 list。

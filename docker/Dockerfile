@@ -97,6 +97,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         mtools \
     && rm -rf /var/lib/apt/lists/*
 
+# RK3576 老 rockchip u-boot（2017.09 基 next-dev-v2024.10）必须用 gcc-10 编：Ubuntu 24.04
+# 自带 gcc-13，编出的二进制整体布局会让 RK3576 UFS DMA 读 buffer 落到坏物理地址 → proper
+# 读 UFS GPT 拿堆残渣崩（上板逐次实测坐实；radxa bsp 即用 Debian gcc-10，实测能引导 UFS）。
+# Ubuntu 24.04 仓库无 gcc-10，装独立可重定位的 kernel.org crosstool gcc-10.5 aarch64
+# （prefix aarch64-linux-）；rk3576 SoC config 的 bootloader.cross_compile 指向
+# /opt/aarch64-gcc10/bin/aarch64-linux-。单独成层保留上面 apt 大层缓存。详见 openspec
+# selfbuild-rk3576-spi-image。
+RUN curl -fsSL "https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/10.5.0/x86_64-gcc-10.5.0-nolibc-aarch64-linux.tar.xz" \
+        | tar -xJ -C /opt \
+    && ln -sfn /opt/gcc-10.5.0-nolibc/aarch64-linux /opt/aarch64-gcc10 \
+    && /opt/aarch64-gcc10/bin/aarch64-linux-gcc --version | head -1
+
 # meson cross-file：路径与 builder/app.py 中 _BUILD_SYSTEMS["meson"] 模板引用
 # 的 --cross-file /etc/meson/cross-<arch>.ini 一致。源文件可见于 docker/meson/。
 COPY docker/meson/cross-aarch64.ini /etc/meson/cross-aarch64.ini

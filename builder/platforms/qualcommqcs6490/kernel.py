@@ -14,7 +14,6 @@ from builder.kernel_base import KernelBuilder
 class Qcs6490KernelBuilder(KernelBuilder):
     component = "kernel"
     ARCH = "arm64"
-    CROSS = "aarch64-linux-gnu-"
 
     def reset_source(self, src_dir: Path):
         """复位源码树：基类 `git checkout -f .`（跟踪文件）+ 清未跟踪残留。

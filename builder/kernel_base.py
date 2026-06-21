@@ -10,15 +10,14 @@ from builder.base import ComponentBuilder
 class KernelBuilder(ComponentBuilder):
     """内核构建器基类。
 
-    子类仍需实现 configure / compile / collect，
-    并声明 ARCH / CROSS 类属性。
+    子类仍需实现 configure / compile / collect，并声明 ARCH 类属性
+    （CROSS 默认继承 base ComponentBuilder = gcc-10，子类如需别的工具链可覆盖）。
     基类提供 OOT 模块的编译与安装方法，以及大小写不敏感 FS 适配
     fragment 生成逻辑（macOS / Windows）。子类在 build() 流程中按
     需调用 _write_case_insensitive_fix。
     """
 
     ARCH: str = ""
-    CROSS: str = ""
 
     # ---- 大小写不敏感 FS 适配 ----
 

@@ -350,22 +350,18 @@ _flange_cmd_build() {
         esac
     done
 
-    # -f：删除 .build_hash 触发强制重建
+    # -f：强制重建 —— 交给引擎跳过 is_up_to_date 缓存校验（引擎在容器内以 root 跑、
+    # 构建后照常 store 覆盖 .build_hash），不再由宿主用户删 root 拥有的 .build_hash：
+    # 该文件及其父目录均由 Docker 以 root 建，宿主普通用户删不动（权限不够）。
+    # force_py 注入下面的 engine.build(...)：None=正常缓存 / '组件'=只强制该组件 / 'all'=全部。
+    local force_py="None"
     if [[ -n "$force" ]]; then
-        local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
         if [[ -n "$component_arg" ]]; then
-            # 指定了组件：只删该组件的 .build_hash，下游由 Merkle 级联自动失效
-            local hash_file="$target_dir/$component_arg/.build_hash"
-            if [[ -f "$hash_file" ]]; then
-                rm "$hash_file"
-                _flange_info "已清除 $component_arg 缓存，强制重建"
-            fi
+            force_py="'$component_arg'"
+            _flange_info "强制重建 $component_arg（跳过缓存）"
         else
-            # 无组件：删除所有 .build_hash 触发全量重建
-            if [[ -d "$target_dir" ]]; then
-                find "$target_dir" -name ".build_hash" -delete
-                _flange_info "已清除缓存，强制重建所有组件"
-            fi
+            force_py="'all'"
+            _flange_info "强制重建所有组件（跳过缓存）"
         fi
     fi
 
@@ -423,7 +419,7 @@ logging.basicConfig(level=logging.WARNING)
 cfg = load_current_config()
 ${output_cfg}
 engine = BuildEngine(cfg)
-engine.build('$component')
+engine.build('$component', force=$force_py)
 "
 }
 

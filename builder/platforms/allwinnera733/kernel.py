@@ -21,7 +21,6 @@ from builder.dtb_overlay import (
 class AllwinnerA733KernelBuilder(KernelBuilder):
     component = "kernel"
     ARCH = "arm64"
-    CROSS = "aarch64-linux-gnu-"
     # BSP Kconfig 通过 $(BSP_TOP) 引用路径，必须在所有 make 调用中传递。
     # KERNEL_SRC 供 bsp/modules/nand/ Makefile 使用（需要知道内核源码路径）。
     BSP_MAKE_VARS = ["BSP_TOP=bsp/", "KERNEL_SRC=."]

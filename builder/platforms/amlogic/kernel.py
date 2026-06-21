@@ -26,7 +26,6 @@ from builder.dtb_overlay import (
 class AmlogicKernelBuilder(KernelBuilder):
     component = "kernel"
     ARCH = "arm64"
-    CROSS = "aarch64-linux-gnu-"
 
     def configure(self, src_dir: Path, config: dict):
         """defconfig 应用：单字符串或 list 合并。

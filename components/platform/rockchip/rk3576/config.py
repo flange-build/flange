@@ -22,14 +22,23 @@ SOC = {
     },
     "bootloader": {
         "repo": "https://github.com/radxa/u-boot",
-        # 与 RK3588 同分支，保持 patch 应用一致性。SoC 层用 generic
-        # rk3576_defconfig；若 bring-up 时该分支无 generic defconfig，可在
-        # board 层覆盖为板级 armsom-cm5-io-rk3576_defconfig（armbian 实测用此）。
-        # 注：radxa-rock-4d 因 UFS 走 prebuilt spi.img（不自编 u-boot，见 board
-        # config bootloader 段），repo/branch/defconfig 对该板不参与构建；不影响
-        # 本 SoC 默认与 armsom-cm5-io。
+        # 与其他 rockchip SoC 统一用 next-dev-v2026.01（rk3576 UFS 控制器驱动仍是
+        # ufs-rockchip.c）。SoC 层用 generic rk3576_defconfig（DT=rk3576-evb）；板级（如
+        # radxa-rock-4d）须在 board 层覆盖为对板 defconfig（rock-4d-spi-rk3576_defconfig，
+        # DT=rk3576-rock-4d-spi），否则产「错板」proper u-boot。详见 openspec
+        # selfbuild-rk3576-spi-image。
         "branch": "next-dev-v2026.01",
         "defconfig": "rk3576_defconfig",
+        # RK3576 的 idbloader 必须用 boot_merger 按 RK3576MINIALL.ini 装配（含引导级
+        # rk3576_boost），而非 mkimage -T rksd —— RK35xx 里 RK3576 唯一不走 mkimage
+        # （armbian rockchip64_common.inc 对 BOOT_SOC==rk3576 专走 boot_merger 分支）。
+        # bootloader.py 据此分流：拾取 boot_merger 的 [OUTPUT] IDB_PATH 产物为
+        # idbloader.img。SoC 级声明（与存储介质无关，所有 RK3576 板通用）。详见
+        # openspec selfbuild-rk3576-spi-image。
+        "idbloader_method": "boot_merger",
+        # 注：u-boot 用 gcc-10 编（base ComponentBuilder.CROSS 全平台默认）——老 rockchip
+        # u-boot 在 gcc-13 下二进制布局会让 RK3576 UFS DMA 读 buffer 落坏地址 → 上板崩，
+        # 2026-06 逐次上板 + 反汇编坐实。详见 openspec selfbuild-rk3576-spi-image。
     },
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",

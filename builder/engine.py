@@ -53,10 +53,13 @@ class BuildEngine:
         )
         self._outputs = {}
 
-    def build(self, target: str = "image"):
+    def build(self, target: str = "image", force=None):
+        """force：强制重建（绕过缓存校验）。None=正常缓存；组件名=只强制该组件；
+        "all"=强制所有组件。由 `flange build -f` 传入——不再由宿主用户删 root 拥有的
+        .build_hash（删不动），改在引擎跳过 is_up_to_date，构建后照常 store 覆盖 hash。"""
         self.output.build_start(target, self.config)
         try:
-            self._build_components(target)
+            self._build_components(target, force)
         except BuildError as e:
             self.output.build_end()
             raise
@@ -70,14 +73,15 @@ class BuildEngine:
 
         self.output.build_end()
 
-    def _build_components(self, target: str):
+    def _build_components(self, target: str, force=None):
         for component in _topo_sort(DEPENDENCY_GRAPH, target):
             if self._component_disabled(component):
                 # 静默跳过；image 等下游会感知到 recovery 缺产物从而跳过
                 # 对应分区的 dd / flash-config 注入。
                 self.output.phase_skip(component)
                 continue
-            if self.cache.is_up_to_date(component):
+            forced = force == "all" or force == component
+            if not forced and self.cache.is_up_to_date(component):
                 self.output.phase_skip(component)
                 continue
             self.output.phase_start(component)

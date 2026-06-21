@@ -51,7 +51,8 @@ def _config(defconfig="defconfig", dts_dir="amlogic", overlays=None):
 def test_instantiate(builder):
     assert builder.component == "kernel"
     assert builder.ARCH == "arm64"
-    assert builder.CROSS == "aarch64-linux-gnu-"
+    # CROSS 继承 base ComponentBuilder 全平台默认 gcc-10（见 builder/base.py）
+    assert builder.CROSS == "/opt/aarch64-gcc10/bin/aarch64-linux-"
 
 
 def test_configure_single_defconfig_calls_make_once(builder, tmp_path,
@@ -67,7 +68,7 @@ def test_configure_single_defconfig_calls_make_once(builder, tmp_path,
 
     assert builder.make_calls == [(["defconfig"],
                                    {"arch": "arm64",
-                                    "cross": "aarch64-linux-gnu-"})]
+                                    "cross": "/opt/aarch64-gcc10/bin/aarch64-linux-"})]
 
 
 def test_configure_list_defconfig_merges_in_order(builder, tmp_path,

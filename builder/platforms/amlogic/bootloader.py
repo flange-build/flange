@@ -26,7 +26,6 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
     # ARCH=arm64 时 u-boot Makefile 找不到 arch/arm64/include/asm/arch-...
     # 目录，create_symlink 阶段 ln 失败。
     ARCH = "arm"
-    CROSS = "aarch64-linux-gnu-"
 
     def configure(self, src_dir: Path, config: dict):
         """合并 defconfig 列表。

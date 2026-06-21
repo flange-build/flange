@@ -48,26 +48,27 @@ class TestROCK4DMergedConfig:
         assert merged["soc"] == "rk3576"
         assert merged["rkbin"]["mkimage_chip"] == "rk3576"
         assert merged["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
-        # bootloader 走 prebuilt spi.img（不自编 u-boot）：repo/branch 沿用 SoC 层默认
-        # （branch 对该板不参与构建，故 board 不再覆盖 → 继承 SoC v2026.01）。
+        # 自编 u-boot.itb：repo + branch 沿用 SoC 层默认（与其他 rockchip SoC 统一
+        # next-dev-v2026.01）。
         assert merged["bootloader"]["repo"] == "https://github.com/radxa/u-boot"
         assert merged["bootloader"]["branch"] == "next-dev-v2026.01"
+        # RK3576 idbloader 经 boot_merger（SoC 级声明，board 继承）。
+        assert merged["bootloader"]["idbloader_method"] == "boot_merger"
 
-    def test_board_uses_prebuilt_spi(self, merged):
-        """RK3576 idbloader 须 boot_merger 装配含 rk3576_boost；flange 通用 mkimage
-        rksd 路径缺 boost → SPL 环境不全、u-boot 读 UFS 崩（6 次上板 + 构建链路审计
-        坐实，与 BL31/OPTEE/u-boot 分支均无关）。故锁 radxa bsp 预编整体 spi.img、
-        不自编 u-boot；详见 design Decision 6。"""
+    def test_board_selfbuilds_spi(self, merged):
+        """flange 自编 spi.img：idbloader 经 boot_merger 装配（含 rk3576_boost，SoC 层
+        idbloader_method），u-boot proper 用**对板** defconfig
+        rock-4d-spi-rk3576_defconfig（DT=rk3576-rock-4d-spi，含 SPI NOR pinmux + 板级
+        节点）—— 修「错板」proper（SoC generic rk3576_defconfig 的 DT 是 rk3576-evb）。
+        不下载 prebuilt。详见 design Decision 1/5。"""
         bl = merged["bootloader"]
-        # 构建期从 radxa 官方下载（url+sha256，不入库 16MB blob）
-        prebuilt = bl["prebuilt_spi_image"]
-        assert prebuilt["url"].endswith("rock-4d-spi-flash-image.img")
-        assert len(prebuilt["sha256"]) == 64
-        # 不自编 → board 不带自编 SPL / BL31 覆盖键；defconfig 仅继承 SoC generic
-        # （prebuilt 路径不使用），未被 board 覆盖成板级 rock-4d-spi。
-        assert bl.get("defconfig") == "rk3576_defconfig"
+        # 不再下载 prebuilt 整体 spi.img
+        assert "prebuilt_spi_image" not in bl
+        # board 覆盖对板 defconfig（修「错板」proper）
+        assert bl["defconfig"] == "rock-4d-spi-rk3576_defconfig"
+        # idbloader 经 boot_merger（SoC 层继承），不自编 SPL
+        assert bl["idbloader_method"] == "boot_merger"
         assert "idbloader_spl" not in bl
-        assert "bl31_override" not in bl
 
     def test_partitions_sector_size_4096(self, merged):
         # UFS 强制 4K 逻辑块（Radxa 要求）；board 仅覆盖 sector_size，
@@ -82,12 +83,12 @@ class TestROCK4DMergedConfig:
         for required in ("boot", "recovery", "rootfs"):
             assert required in names
 
-    def test_spi_firmware_via_prebuilt_not_selfsynth(self, merged):
-        # SPI 启动固件来源 = prebuilt_spi_image（见 test_board_uses_prebuilt_spi），
-        # 不走自编合成；故 board 不设 flash_spi_loader（flash.py prebuilt 分支优先于
-        # flash_spi_loader 的 build_spi_image 自编合成路径）。
-        assert "flash_spi_loader" not in merged
-        # UFS 刷写走 upgrade_tool di -p（flash_storage="SATA"）。
+    def test_spi_firmware_via_selfbuild(self, merged):
+        # SPI 启动固件来源 = 自编 spi.img：board 设 flash_spi_loader=True →
+        # flash.py 经 build_spi_image 合成 idbloader + u-boot.itb（不走 prebuilt 下载）。
+        assert merged.get("flash_spi_loader") is True
+        assert "prebuilt_spi_image" not in merged.get("bootloader", {})
+        # UFS 刷写仍走 upgrade_tool di -p（flash_storage="SATA"）。
         assert merged.get("flash_storage") == "SATA"
 
 

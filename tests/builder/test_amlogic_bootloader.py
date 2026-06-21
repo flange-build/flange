@@ -88,7 +88,8 @@ def test_arch_is_arm_not_arm64():
     目录，create_symlink 阶段 ln 失败。kernel 才用 ARCH=arm64。"""
     from builder.platforms.amlogic.bootloader import AmlogicBootloaderBuilder
     assert AmlogicBootloaderBuilder.ARCH == "arm"
-    assert AmlogicBootloaderBuilder.CROSS == "aarch64-linux-gnu-"
+    # CROSS 继承 base ComponentBuilder 全平台默认 gcc-10（见 builder/base.py）
+    assert AmlogicBootloaderBuilder.CROSS == "/opt/aarch64-gcc10/bin/aarch64-linux-"
 
 
 def test_configure_stages_fragment_into_configs(tmp_path, monkeypatch):

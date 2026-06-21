@@ -17,6 +17,14 @@ class ComponentBuilder(ABC):
     cache: "BuildCache | None" = None   # 由 engine 注入，供子类使用分阶段缓存
     output: "BuildOutput | None" = None  # 由 engine 注入，统一输出
 
+    # 全平台 u-boot/kernel 交叉编译默认工具链前缀 = gcc-10（容器内 /opt/aarch64-gcc10，见
+    # docker/Dockerfile）。Ubuntu 24.04 默认 gcc-13 编老 rockchip u-boot（2017.09 基）会让
+    # 整体二进制布局变化 → RK3576 UFS DMA 读 buffer 落到坏物理地址 → proper 读 GPT 拿残渣崩
+    # （2026-06 逐次上板 + 反汇编坐实；radxa bsp 全程用 gcc-10）。为统一与稳妥，全平台
+    # u-boot/kernel 默认用 gcc-10（kernel.org crosstool gcc-10.5，亦为内核官方推荐工具链）。
+    # 子类如需别的工具链可覆盖 CROSS。详见 openspec selfbuild-rk3576-spi-image。
+    CROSS: str = "/opt/aarch64-gcc10/bin/aarch64-linux-"
+
     def __init__(self, docker: DockerRunner, source: SourceManager):
         self.docker = docker
         self.source = source

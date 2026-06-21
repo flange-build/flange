@@ -1,29 +1,23 @@
 From: flange <flange@localhost>
-Subject: [PATCH] make_fit_atf.sh: 取消注释 gen_bl32_node，全平台把 OP-TEE 打进 FIT
+Subject: [PATCH] make_fit_atf.sh: 取消注释 gen_bl32_node，把 OP-TEE 打进 u-boot.itb FIT
 
-radxa/rockchip u-boot 的 SPL FIT 生成器 make_fit_atf.sh 默认注释掉
-gen_bl32_node，u-boot.itb 永远不含 OP-TEE(BL32) 节点。本 patch 取消该注释，
-使所有 rockchip SoC（RK3566/RK3568/RK3576/RK3582/RK3588/RK3588S）的
-u-boot.itb 都把 rkbin 提供的 tee.bin 打进 FIT。
+radxa/rockchip u-boot 的 SPL FIT 生成器 make_fit_atf.sh 默认注释掉 gen_bl32_node，
+u-boot.itb 不含 OP-TEE(BL32) 节点。本 patch 取消该注释，使 rockchip SoC 的 u-boot.itb
+把 rkbin 提供的 tee.bin(OP-TEE) 打进 FIT，供 secure 世界服务。
 
-arm64 路径无需 CONFIG_SPL_OPTEE：fit_args.sh 在 CONFIG_ARM64=y 时令生成器
-ARCH=arm64，gen_bl32_node 内 `[ "${ARCH}" == "arm" ]` 分支被跳过，仅靠
-TEE_LOAD_ADDR 非空（fit_args.sh 默认按 DRAM_BASE + 0x08400000 计算）即生成
-optee 节点并设 LOADABLE_OPTEE，经 gen_arm64_configurations 接入 config
-loadables，SPL 加载交 BL31。
+说明（2026-06 实测）：OP-TEE 进 FIT 与 RK3576 UFS 启动崩溃**无关**——崩溃真因是
+gcc-13 编老 rockchip u-boot 的整体二进制布局让 UFS DMA 读 buffer 落到坏物理地址（须用
+gcc-10，见 base ComponentBuilder.CROSS）。曾一度删此 patch 排查 OP-TEE，证伪后恢复。
 
-（注意：CONFIG_SPL_OPTEE=y 不可用于 arm64——它会拉入 armv7 专用汇编
-common/spl/spl_optee.S，arm64 SPL 编不过。本 patch 不依赖该符号。）
+arm64 路径无需 CONFIG_SPL_OPTEE：fit_args.sh 在 CONFIG_ARM64=y 时令生成器 ARCH=arm64，
+gen_bl32_node 内 `[ "${ARCH}" == "arm" ]` 分支被跳过，仅靠 TEE_LOAD_ADDR 非空（fit_args.sh
+默认按 DRAM_BASE + 0x08400000 计算）即生成 optee 节点并设 LOADABLE_OPTEE，经
+gen_arm64_configurations 接入 config loadables，SPL 加载交 BL31。（注意：CONFIG_SPL_OPTEE=y
+不可用于 arm64——会拉入 armv7 专用汇编 common/spl/spl_optee.S 编不过；本 patch 不依赖它。）
 
-tee.bin 由 flange bootloader 既有逻辑从 rkbin RKTRUST 的 BL32 段复制到位
-（各 rockchip SoC 的 RKTRUST.ini 均含 BL32_OPTION），flange Python 代码零改动。
-
-与 0003/0005（关闭 RK3588/RK3568 的 OPTEE_CLIENT）的关系：那两个 patch 当初
-是因"client 开着但 OP-TEE 未打包 → halt"而关 client；本 patch 已把 OP-TEE
-打包，halt 根因消除。0003/0005 是否回退（重新启用 client 让 u-boot 也使用
-OP-TEE）为独立决策，不在本 patch 范围。
-
-diff --git a/arch/arm/mach-rockchip/make_fit_atf.sh b/arch/arm/mach-rockchip/make_fit_atf.sh
+tee.bin 由 flange bootloader 既有逻辑从 rkbin RKTRUST 的 BL32 段复制到位（各 rockchip SoC
+的 RKTRUST.ini 均含 BL32_OPTION），Python 代码零改动。详见 openspec selfbuild-rk3576-spi-image。
+---
 --- a/arch/arm/mach-rockchip/make_fit_atf.sh
 +++ b/arch/arm/mach-rockchip/make_fit_atf.sh
 @@ -10,7 +10,7 @@
