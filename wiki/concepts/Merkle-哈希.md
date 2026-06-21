@@ -20,7 +20,7 @@ updated: 2026-04-26
 - **符号链接处理**：symlink 哈希其目标路径字符串（`os.readlink`），而非解引用内容 — 保持链接语义
 - **排序稳定性**：`sorted(entries)` 按绝对路径字典序排序后迭代，任何 OS / 文件系统遍历顺序无关
 - **应用场景**：overlay 目录哈希、App 源码目录哈希、recovery overlay 哈希
-- **历史修复**：App 源码哈希曾只 hash `app.yaml`，改为递归 hash 整个 app 目录后修复了"源码改了但哈希没变"的正确性 bug（见 roadmap 构建优化节）
+- **历史修复**：App 源码哈希曾只 hash `app.yaml`，改为递归 hash 整个 app 目录后修复了"源码改了但哈希没变"的正确性 bug（见 [[路线图与历史演进]] 构建优化节）
 
 ## 关键代码位置
 

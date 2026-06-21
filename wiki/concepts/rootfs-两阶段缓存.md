@@ -5,7 +5,6 @@ status: stable
 sources:
   - builder/platforms/rockchip/rootfs.py
   - builder/cache.py
-  - roadmap.md
 related:
   - "[[rootfs 构建器]]"
   - "[[内容哈希与增量构建]]"

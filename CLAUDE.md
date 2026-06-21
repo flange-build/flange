@@ -39,9 +39,66 @@ flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建�
 - **依赖自动推断**：组件间依赖由构建引擎自动推断（builder/engine.py），变更后基于内容哈希仅增量重建
 - **多平台支持**：Rockchip、Allwinner、Qualcomm、Amlogic 等平台各有对应的刷写工具
 - 构建规则使用 Python 编写（`builder/platforms/`），平台数据（patches / 配置）位于 `components/platform/`，两者严格分离；遵循 PEP 8
-- Shell 脚本必须使用 `set -xe`
+- Shell 脚本开头必须设置 `set -euo pipefail`（构建/编排脚本用 `set -xeuo pipefail`，详见 ProjectSpec.md §5.2）
 - **Product/Variant 支持**：lunch target 格式为 `<board>-<product>-<variant>`，支持 debug/release 变体和多产品配置
 - 每个任务不超过 2 小时工作量
+
+## 使用 flange（Agent 操作手册）
+
+所有操作通过 shell 函数 `flange` 暴露。**任何构建/刷写前，先在仓库根目录加载环境并选好配置：**
+
+```bash
+source envsetup.sh            # 加载 flange / lunch 函数（每个新 shell 都要重新 source）
+lunch <board>                 # 选配置，例：lunch radxa-zero3w
+                              # 完整格式 <board>-<product>-<variant>；省略时 product=default、variant=release
+lunch                         # 不带参数 → 交互式列出全部可选 target
+```
+
+配置持久化到 `.flange/current_config`，后续 `source envsetup.sh` 会自动恢复，无需重复 lunch。
+用 `flange status` 查看当前生效的配置与构建状态。
+
+### 构建（在 Docker 容器内执行，宿主机零编译依赖）
+
+```bash
+flange build                  # 构建完整镜像（等同 flange build image）；首次会自动构建 Docker 镜像
+flange build kernel           # 只构建单个组件（可选：bootloader / rootfs / recovery）
+flange build app              # 构建当前配置所需的全部 App
+flange build app <name|path>  # 构建指定 App（参数为名称，或宿主机目录路径）
+```
+
+- **产物位置**：`.build/target/<board>/<product>/<variant>/`，根目录 `target` 软链接直达
+- **增量构建**：只有 config / 源码 commit / patch 变化才重建对应组件及其下游，**无需手动 clean**
+- **输出控制**：`-v` 全量工具输出，`-q` 仅摘要；构建失败先看 `.build/target/.../build.log`
+
+### 刷写（在宿主机执行，需 USB 连接目标设备）
+
+```bash
+flange flash                  # 全量刷写（重写分区表 + 所有分区镜像）
+flange flash rootfs           # 只刷指定分区（如 boot / rootfs / uboot）
+flange flash --list           # 列出目标设备可刷分区及状态
+flange flash --raw /dev/sdX   # dd 整盘刷写
+```
+
+设备在线时，`flange recovery enter|list|flash|backup|shell|reboot` 经 USB ADB 做在线维护与分区级线刷（详见 [docs/recovery.md](./docs/recovery.md)）。
+
+### 其他常用命令
+
+| 命令 | 用途 |
+|------|------|
+| `flange clean` | 清理当前配置的构建产物 |
+| `flange shell` | 进入 Docker 构建环境交互式 shell |
+| `flange create app <name>` | 生成 App 工程脚手架 |
+| `flange list apps` | 列出全部可用 App |
+| `flange docker build` / `rebuild` / `status` | 管理 Docker 构建镜像 |
+
+完整命令表、参数语义，以及添加新板子 / SoC / 平台的指引见 [README.md](./README.md)。
+
+### Agent 硬性约束
+
+- **不要绕过 flange** 直接调用 `docker` / `make` / `dd`；构建一律走 `flange build`，刷写一律走 `flange flash`
+- **不要手编辑 `.build/`**（纯派生物，可随时 `rm -rf` 重建）；切换配置改用 `lunch`，不要手改 `.flange/current_config`
+- 改 config 后**无需** `flange clean`，增量系统会处理；仅当切换组件的 git `branch` 字段时需手动删 `.build/sources/<component>/<board>/`
+- `flange flash` 是对真实硬件的破坏性操作，执行前务必确认 `flange status` 显示的配置与所连目标设备一致
 
 ## 知识库
 

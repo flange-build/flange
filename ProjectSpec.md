@@ -36,13 +36,13 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 │  内核/bootloader/rootfs 构建  │────▶│  USB 连接目标设备          │
 │  镜像打包                    │     │  分区级刷写               │
 │                             │     │                          │
-│  输出: output/              │     │  读取: output/            │
+│  输出: .build/target/        │     │  读取: .build/target/     │
 └─────────────────────────────┘     └──────────────────────────┘
 ```
 
 - **构建环境**：所有编译、打包操作在 Docker 容器内完成，确保环境一致性和可复现性
 - **部署环境**：镜像刷写在宿主机执行，通过 USB 连接目标设备
-- `output/` 目录作为容器与宿主机之间的数据桥梁（通过 volume mount）
+- `.build/target/` 目录作为容器与宿主机之间的产物桥梁（通过 volume mount；根目录 `target` 软链接直达）
 
 ### 2.2 支持平台
 
@@ -51,10 +51,12 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 | 平台 | 刷写工具 | 连接方式 |
 |------|---------|---------|
 | Rockchip | `upgrade_tool` | USB |
-| Allwinner | `sunxi-fel` / `PhoenixSuit` | USB / FEL |
-| Qualcomm | `QDL` / `QFIL` | USB / EDL |
+| Amlogic | `fastboot` | USB |
+| Allwinner | `dd` | SD 卡 / USB |
+| Qualcomm | `edl-ng` | USB（EDL） |
 
-刷写工具运行在宿主机上，不纳入 Docker 构建环境。
+刷写工具运行在宿主机上，不纳入 Docker 构建环境。各平台 `flash_tool` 在
+`components/platform/<vendor>/config.py` 声明。
 
 ### 2.3 组件级构建与刷写
 
@@ -146,7 +148,7 @@ Shell 脚本是构建系统的核心语言。
 - 文件扩展名：可执行脚本使用 `.sh`，被 source 的库文件无扩展名或使用 `.inc`
 
 ### 5.2 安全与健壮性
-- 脚本开头必须设置：`set -euo pipefail`
+- 脚本开头必须设置：`set -euo pipefail`（构建/编排脚本建议追加 `-x` 输出执行轨迹，即 `set -xeuo pipefail`）
 - 临时文件使用 `mktemp`，并通过 `trap` 确保清理
 - 路径变量必须用双引号包裹：`"${variable}"`
 - 禁止使用 `eval`，除非有充分理由并附注释说明
@@ -171,7 +173,7 @@ Shell 脚本是构建系统的核心语言。
 Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 Python 编写。
 
 ### 6.1 文件组织
-- 配置引擎位于 `builder/config/` 子包（merge.py、registry.py、query.py）
+- 配置引擎位于 `builder/config/` 子包（merge.py、registry.py、query.py、loader.py、apps.py、validate.py）
 - 构建引擎位于 `builder/` 目录
 - 平台策略类位于 `builder/platforms/<vendor>/`（如 `builder/platforms/rockchip/kernel.py`）
 - 平台无关 rootfs 基线配置位于 `components/rootfs/config.py`
@@ -245,7 +247,7 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
 用于构建工具、脚本辅助等场景。
 
 ### 8.1 基本要求
-- 最低支持 Python 3.10
+- 最低支持 Python 3.12（见 `pyproject.toml` 的 `requires-python`）
 - 解释器声明：`#!/usr/bin/env python3`
 - 使用 `pyproject.toml` 管理项目元数据和依赖
 
@@ -326,6 +328,11 @@ flange/
 ├── target -> .build/target  # envsetup.sh 创建的便捷软链接（git ignored）
 └── .flange/            # 运行时状态（git ignored）
 ```
+
+> 上述目录树仅示意核心模块。`builder/` 下另有 app/deb 打包、deploy、output、
+> recovery、overlays、scaffold 等支撑模块；各 `builder/platforms/<vendor>/` 除
+> kernel/bootloader/rootfs/image 外还可有 boot.py、recovery.py。完整列表执行
+> `find builder -name '*.py'` 查看。
 
 分层契约：
 - **代码层** 仅放可 import 的 Python 模块；`builder/` 是项目唯一顶层包。

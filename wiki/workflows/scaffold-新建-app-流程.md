@@ -5,7 +5,6 @@ status: stable
 sources:
   - builder/scaffold.py
   - builder/templates/
-  - roadmap.md
 related:
   - "[[scaffold 生成器]]"
   - "[[app 打包系统]]"
