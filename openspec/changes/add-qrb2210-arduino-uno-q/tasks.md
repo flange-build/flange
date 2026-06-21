@@ -16,7 +16,7 @@
 
 - [x] 3.1 `rootfs.py`：ubuntu-base `noble` 基底 ✅ Qrb2210RootfsBuilder 两阶段 + 缓存 + extra_apt_sources(CA) 处理
 - [x] 3.2 安装开源 Mesa（freedreno/turnip）用户态 ✅ SOC +packages: libgl1-mesa-dri/libegl-mesa0/mesa-vulkan-drivers
-- [x] 3.3 安装 Adreno 702 GPU 固件 ✅ SOC +packages: linux-firmware + linux-firmware-dragonwing。实测 dts `gpu_zap_shader` firmware-name=`qcom/qcm2290/a702_zap.mbn`（Adreno 702 确认）；该 .mbn 是否在 noble linux-firmware(-dragonwing) 仍需实装核对（见 §8.4）
+- [x] 3.3 安装 Adreno 702 GPU 固件 ✅ SOC +packages: linux-firmware + linux-firmware-dragonwing。dts `gpu_zap_shader` firmware-name=`qcom/qcm2290/a702_zap.mbn`；**实测 rootfs.img 内 `/lib/firmware/qcom/qcm2290/a702_zap.mbn.zst` 存在**（经 linux-firmware-dragonwing，已落地确认，见 §8b.6）
 - [x] 3.4 mainline `ath10k` Wi-Fi 固件 + 模块加载（经 linux-firmware，不用 AIC8800）✅ 实测 dts `&wifi` `qcom,ath10k-calibration-variant="ArduinoImola"`（ath10k 确认）
 - [x] 3.5 DSP/音频/modem 固件 ✅ alsa-ucm-conf + linux-firmware-dragonwing
 - [x] 3.6 内核模块装到 rootfs；Image/dtb **不**入 rootfs（extlinux 模型由 boot.img 承载）✅ _install_kernel_modules + extlinux fstab（挂 rootfs+boot）
@@ -58,8 +58,9 @@
 - [x] 8b.3 image：构建 ✅ flange rawprogram 实测对齐 vendor 布局（efi@985408 / rootfs@2033984）
 - [x] 8b.4 bootloader：engine 构建 ✅ 空 URL 跳过路径
 - [x] 8b.5 flash-config（edl-ng）：FlashConfigGenerator ✅ platform=qualcommqrb2210 / flash_tool=edl-ng / boot(fat32@0xF0940)+rootfs(ext4@0x1F0940)
-- [~] 8b.6 rootfs：chroot+qemu binfmt+base apt(ports.ubuntu.com)+extra_apt_sources(key 导入/源添加) 均通过；**qcom-ppa HTTPS 被 sandbox egress 代理 MITM 阻塞**（新建 noble chroot 不信任代理 CA）—— 环境限制，非 flange 代码问题。dragonwing/a702 固件实装核对随实板（见 §8.4）
-- 注：sandbox 需在构建容器内注册 qemu-aarch64 binfmt + 挂宿主 CA bundle（运行时，未改任何提交文件）
+- [x] 8b.6 rootfs：✅ **完整构建通过**（3GB ext4，exit 0）。chroot+qemu binfmt+base apt + qcom-ppa（HTTPS）+ 38 包安装全通过。实测产物含：`linux-firmware-dragonwing`(install ok)、**`/lib/firmware/qcom/qcm2290/a702_zap.mbn.zst`（Adreno 702 zap，dts 引用项）**、`/lib/firmware/ath10k/` 树、Mesa `msm_dri.so`+`libvulkan_freedreno.so`。
+  - 注：sandbox egress 代理 MITM 用**临时**手段绕过（构建容器内注册 qemu binfmt + 把宿主 egress CA 注入 chroot 信任库，让 qcom-ppa HTTPS 通过）—— 均运行时操作 + 已 `git checkout` 还原的临时 rootfs.py 改动，**未提交任何 sandbox 专属代码**。真实主机走公网 CA 无需此步。
+- [x] 8b.7 完整 `flange build image` 端到端 ✅ 全组件链通过（kernel/bootloader/rootfs/boot 缓存命中 → image + flash-config.json 生成，exit 0）。产物齐：kernel Image/dtb + boot.img(FAT) + rootfs.img(3G) + flange_rawprogram.xml + flash-config.json
 
 ## 8. 实板验证（eMMC）⏳ 待硬件
 
