@@ -1,7 +1,7 @@
 ---
 title: radxa-rock-4d
 type: board
-status: done
+status: wip
 sources:
   - components/board/radxa-rock-4d/config.py
   - components/platform/rockchip/rk3576/config.py

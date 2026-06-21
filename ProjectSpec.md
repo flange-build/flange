@@ -420,13 +420,14 @@ feat(kernel): 添加内核编译支持
 
 ### 11.2 Docker 构建环境
 - 所有编译构建操作**必须在 Docker 容器内**完成
-- Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖
+- Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖；另装 kernel.org crosstool gcc-10.5 到 `/opt/aarch64-gcc10`，作 u-boot/kernel 默认交叉工具链（见 §11.3）
 - 项目根目录通过 volume mount 映射到容器内
 - 源码仓库目录 `.build/sources/` 和 APT 缓存 `.build/cache/apt/` 通过 volume 持久化
 - 宿主机 `~/.ssh` 以只读方式挂载，通过 entrypoint 脚本修正权限
 
 ### 11.3 交叉编译
-- 交叉编译器由 Docker 容器内的系统包提供（gcc-aarch64-linux-gnu）
+- **u-boot / kernel 构建**默认用容器内独立安装的 kernel.org crosstool **gcc-10.5**（前缀 `/opt/aarch64-gcc10/bin/aarch64-linux-`），由基类 `builder/base.py` 的 `ComponentBuilder.CROSS` 全平台统一声明，各平台策略类继承不覆盖（子类如需别的工具链可 override `CROSS` 类属性）。改用 gcc-10 的原因：老 rockchip u-boot 在 Ubuntu 24.04 系统 gcc-13 下整体二进制布局变化，会让 RK3576 UFS DMA 读 buffer 落到坏物理地址而上板崩（详见 openspec `selfbuild-rk3576-spi-image`）
+- **app / deb 组件构建**（`builder/app.py`）仍用 Docker 系统包交叉编译器（`gcc-aarch64-linux-gnu` / `gcc-arm-linux-gnueabihf`）
 - 平台策略类（builder/platforms/）直接调用交叉编译器，无需额外工具链注册机制
 - 板级配置通过 config.py 中的 dict 声明（platform/SoC/board 三层继承）
 
