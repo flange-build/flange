@@ -7,7 +7,7 @@ flange 已有四个 U-Boot 世界平台（rockchip/allwinnera733/amlogic 均 U-B
 - **启动链**（Armbian PR #9623）：PBL→XBL→TZ/HYP→**ABL→U-Boot(Android boot.img)→Linux**；U-Boot 经 `sysboot`/extlinux 从 eMMC GPT 分区读 kernel+initrd，定制 `boot-qrb2210.cmd` 规避 ABL 保留内存区的 load 地址。
 - **存储/分区**：eMMC，512 字节扇区，**固定 vendor GPT 约 67 分区**（bootloader + OS 同盘）。
 - **bootloader blob**：`armbian/qcombin`「Agatti/arduino-uno-q」+ `armbian/firmware#123` 含 XBL/ABL/TZ/HYP/GPT/rawprogram/firehose loader + U-Boot boot.img。
-- **刷写**：`qdl --allow-missing --storage emmc prog_firehose_ddr.elf rawprogram[0-9].xml patch[0-9].xml`（linux-msm/qdl ≥2.1，Debian/Ubuntu apt 可装）；EDL 经 JCTL 跳线，VID:PID `05c6:9008`。
+- **刷写**：与 Q6A 同一份 `edl-ng`（随仓 tools/）；`edl-ng --loader prog_firehose_ddr.elf --memory emmc rawprogram <rawprogram>.xml`；EDL 经 JCTL 跳线，VID:PID `05c6:9008`。
 - **外设**：GPU Adreno 702（Mesa freedreno + 固件）、Wi-Fi **ath10k**（mainline）、BT、DSP/modem 固件随 linux-firmware/dragonwing。
 
 约束：高通启动固件（XBL/ABL/TZ/HYP/U-Boot boot.img）是签名/平台 blob，flange 不编；bootloader 与 OS 共享同一块 eMMC 固定 vendor GPT，flange 只能按分区写 `boot`/`rootfs`。
@@ -19,7 +19,7 @@ flange 已有四个 U-Boot 世界平台（rockchip/allwinnera733/amlogic 均 U-B
 - 新增 flange 第二个 Qualcomm 平台 `qualcommqrb2210`，经 registry 自动发现接入，零改引擎。
 - 内核从 **mainline Linux v7.0** git 编（含 `qrb2210-arduino-imola.dtb` + drm/msm/ath10k）。
 - **U-Boot extlinux/sysboot** 启动（复用 `builder/extlinux.py`），开源 Mesa（freedreno）GPU、mainline ath10k Wi-Fi。
-- **qdl 按分区刷**：`boot`/`rootfs` 写进固定 vendor GPT 既有槽位；vendor bootloader blob rawprogram 单刷（bring-up）。
+- **edl-ng 按分区刷**：`boot`/`rootfs` 写进固定 vendor GPT 既有槽位；vendor bootloader blob rawprogram 单刷（bring-up）。
 - 接入 `arduino-uno-q` 板，eMMC 首发。
 
 **Non-Goals:**
@@ -46,7 +46,7 @@ UNO Q 的 U-Boot 经 `sysboot`（即 extlinux）引导，与 flange 现有 RK/AW
 ### 决策 3：bootloader 消费 Arduino/armbian 预编 EDL blob，不编（含 U-Boot boot.img）
 
 - XBL/ABL/TZ/HYP 为高通签名 blob；U-Boot 虽可自编，但首发风险最低的做法是消费 `armbian/qcombin` 预编 U-Boot Android boot.img。
-- `bootloader.py` 仅下载/暂存/校验 EDL blob 包（含 firehose loader `prog_firehose_ddr.elf` + vendor rawprogram/patch + U-Boot boot.img），经 qdl 单刷 vendor 槽（bring-up 一次）。
+- `bootloader.py` 仅下载/暂存/校验 EDL blob 包（含 firehose loader `prog_firehose_ddr.elf` + vendor rawprogram/patch + U-Boot boot.img），经 edl-ng 单刷 vendor 槽（bring-up 一次）。
 - U-Boot 自编 + mkbootimg（qcom-deb-images `build-u-boot-rb1.sh` 路径）留作后续增量。
 
 ### 决策 4：image 按分区（boot + rootfs），不重建整盘 GPT
@@ -55,12 +55,13 @@ UNO Q 的 U-Boot 经 `sysboot`（即 extlinux）引导，与 flange 现有 RK/AW
 - 对比 Q6A：Q6A 的 bootloader 在**独立 SPI NOR**、OS 在**独立 UFS**，故能整盘 write-sector 重建 OS 盘 GPT。UNO Q 无此独立介质，**必须按分区**。
 - `image.py` 不组装 monolithic raw.img、不写 GPT；产出 `boot/boot.img`（extlinux 内容的分区镜像）+ `rootfs/rootfs.img`，并生成 flange rawprogram 片段（仅 `boot`/`rootfs` 两个 FILE 条目，指向既有 vendor 分区 label/sector）。
 
-### 决策 5：刷写经 qdl 按分区，非 edl-ng 整盘
+### 决策 5：刷写经 edl-ng 按分区 rawprogram（与 Q6A 同一份工具）
 
-- 系统：`qdl --allow-missing --storage emmc prog_firehose_ddr.elf <flange rawprogram>.xml <patch>.xml` —— `--allow-missing` 跳过未提供镜像的 vendor 槽，仅写 `boot`/`rootfs`。
-- vendor bootloader：bring-up 一次性 `qdl ... <vendor rawprogram*.xml> <patch*.xml>` 刷 XBL/ABL/TZ/HYP/U-Boot/GPT。
-- 工具选 **qdl**（apt 可装、Arduino/Armbian/qcom 官方一致）而非 Q6A 的 edl-ng（需手动下载）；新增独立 `QualcommQrb2210FlashStrategy`，不复用 Q6A 的 `QualcommFlashStrategy`（整盘 write-sector 语义不同）。
-- EDL 经 **JCTL 跳线** 进入；`detect_device` 探测 9008（复用 Q6A 同款 USB 拓扑探测），未命中给 JCTL 诊断。
+- 工具沿用 Q6A 的 **edl-ng**（随仓 `tools/<os>/edl-ng/`，无需新增依赖）；`QualcommQrb2210FlashStrategy` **继承** `QualcommFlashStrategy`，复用 find_tool/detect_device/reboot/pre_flash，仅覆盖刷写形态。edl-ng 本就支持 `rawprogram` 子命令（Q6A 的 SPI 固件单刷即用它），故按分区 rawprogram 与整盘 write-sector 共用一套工具。
+- 系统：`edl-ng --loader <firehose> --memory emmc rawprogram <flange rawprogram>.xml` —— flange rawprogram 仅含 `boot`(label efi)/`rootfs` 两条目。镜像分散在 target/boot 与 target/rootfs，刷写前在临时目录建 boot.img/rootfs.img 符号链接，让 edl-ng 同目录按 basename 定位。
+- vendor bootloader：bring-up 一次性 `edl-ng --loader <firehose> --memory emmc rawprogram <vendor rawprogram*.xml> <patch*.xml>` 刷 XBL/ABL/TZ/HYP/U-Boot/GPT，复用 CLI `--spi-firmware` 入口。
+- EDL 经 **JCTL 跳线** 进入；`detect_device` 复用 Q6A 的 9008 USB 拓扑探测，未命中给 JCTL 诊断。
+- 对比整盘（Q6A write-sector）：本平台 eMMC 上 bootloader 与 OS 同盘固定 GPT，只能按分区写 boot/rootfs，不可整盘重建。
 
 ### 决策 6：分区模型尊重 vendor 固定 GPT
 
@@ -88,8 +89,8 @@ UNO Q 的 U-Boot 经 `sysboot`（即 extlinux）引导，与 flange 现有 RK/AW
 3. rootfs.py：ubuntu-base noble + mesa freedreno + linux-firmware(-dragonwing)（Adreno 702 + ath10k）。
 4. boot.py：复用 `builder/extlinux.py` 生成 extlinux.conf + Image + dtb + initrd（按需平台 load 地址）；image.py 按分区产 boot.img + rootfs.img + flange rawprogram。
 5. bootloader.py：下载/暂存 armbian/qcombin EDL blob 包（含 U-Boot boot.img + firehose + vendor rawprogram）。
-6. flash.py：`QualcommQrb2210FlashStrategy`（qdl）；先 vendor rawprogram 单刷 bootloader 验证 qdl 通路，再按分区刷 boot/rootfs。
-7. 实板：JCTL 进 EDL → qdl 刷 vendor + boot/rootfs → ABL→U-Boot→extlinux→内核 → console ttyMSM0 → 进 rootfs → 验 GPU(freedreno)/Wi-Fi(ath10k)。
+6. flash.py：`QualcommQrb2210FlashStrategy`（继承 Q6A，edl-ng）；先 vendor rawprogram 单刷 bootloader 验证 edl-ng 通路，再按分区刷 boot/rootfs。
+7. 实板：JCTL 进 EDL → edl-ng 刷 vendor + boot/rootfs → ABL→U-Boot→extlinux→内核 → console ttyMSM0 → 进 rootfs → 验 GPU(freedreno)/Wi-Fi(ath10k)。
 
 回滚：纯增量平台/板；删除新增目录即恢复，不影响现有平台（含 Q6A）。
 

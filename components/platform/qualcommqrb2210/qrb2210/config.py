@@ -26,19 +26,19 @@ def _kernel_jobs() -> int:
 启动模型（实证自 Armbian PR #9623/#9710 / armbian-qcombin / Qualcomm 文档）：
   eMMC 固定 vendor GPT（约 67 分区，bootloader + OS 同盘）：
     XBL → TZ/HYP → ABL → U-Boot(Android boot.img)   （高通签名/平台 blob，flange 不编）
-    boot 分区（ext4）：extlinux.conf + Image + dtb + initrd
+    boot 分区（vendor label efi，FAT ESP）：extlinux.conf + Image + dtb
     rootfs 分区（ext4）：根文件系统
-  U-Boot 经 sysboot（= extlinux）从 boot 分区读 kernel+initrd 引导 Linux。
+  U-Boot 经 sysboot（= extlinux）从 boot 分区读 kernel + dtb 引导 Linux（无 initrd）。
   内核   : mainline Linux v7.0（qrb2210-arduino-imola.dts 已上游进 7.0）
-           + arm64 通用 defconfig（含 qcom），按需追加 enable_configs。
+           + arm64 通用 defconfig（含 qcom，已实测覆盖 root-critical，见下）。
   GPU    : 开源 Mesa freedreno/turnip（Adreno 702）+ linux-firmware 固件
   Wi-Fi  : mainline ath10k（+ linux-firmware），非 AIC8800 OOT
 
-刷写（详见 QualcommQrb2210FlashStrategy）：
-  qdl --allow-missing --storage emmc <firehose> <flange rawprogram>.xml <patch>.xml
+刷写（详见 QualcommQrb2210FlashStrategy，与 Q6A 同一份 edl-ng）：
+  edl-ng --loader <firehose> --memory emmc rawprogram <flange rawprogram>.xml
   仅写 boot/rootfs 到既有 vendor 槽位，vendor bootloader 分区原样保留。
   vendor bootloader blob（XBL/ABL/TZ/HYP/U-Boot boot.img）由 bootloader.py
-  下载的预编包经 qdl + vendor rawprogram 单刷（bring-up 一次性）。
+  下载/自备的预编包经 edl-ng + vendor rawprogram 单刷（bring-up 一次性）。
 """
 
 SOC = {
@@ -145,11 +145,11 @@ SOC = {
         ),
     },
 
-    # boot 固件：Arduino/armbian 预编 EDL blob 包（flange 不编，仅消费 + qdl 刷 eMMC）。
+    # boot 固件：Arduino/armbian 预编 EDL blob 包（flange 不编，仅消费 + edl-ng 刷 eMMC）。
     # 含 XBL/ABL/TZ/HYP/U-Boot boot.img(boot_a/b)/GPT + vendor rawprogram0.xml/patch0.xml。
     # 来源实证：armbian/qcombin「Agatti/arduino-uno-q」（含 xbl.elf/abl.elf/tz.mbn/
     # hyp.mbn/boot.img/gpt_main*.bin/rawprogram0.xml/patch0.xml）。
-    # ⚠️ firehose loader（prog_firehose_ddr.elf）不在 qcombin 仓库内，随 Arduino/qdl
+    # ⚠️ firehose loader（prog_firehose_ddr.elf）不在 qcombin 仓库内，随 Arduino flasher/qdl
     #    工具分发；edl_firmware_url 留空表示用户自备（克隆 qcombin + 取 firehose 放入
     #    target/bootloader/edl-firmware/）。license/重分发条款见 tasks §5.2。
     "bootloader": {
@@ -167,7 +167,7 @@ SOC = {
         #   boot   → vendor label "efi"（disk-sdcard.img.esp，FAT ESP）
         #            start_sector=985408 (0xF0940)，分区 512MiB；U-Boot sysboot 从此读
         #            /extlinux/extlinux.conf + Image + dtb。flange 只写 128MiB 镜像
-        #            （够放 Image+dtb+conf），qdl 写入 512MiB 分区内即可。
+        #            （够放 Image+dtb+conf），edl-ng 写入 512MiB 分区内即可。
         #   rootfs → vendor label "rootfs"（disk-sdcard.img.root）
         #            start_sector=2033984 (0x1F0940)，分区 ~10GiB；初始 3G 镜像，
         #            grow_on_first_boot 首启把 ext4 撑满 10GiB 分区。

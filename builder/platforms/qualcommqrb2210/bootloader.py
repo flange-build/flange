@@ -2,7 +2,7 @@
 
 高通启动固件（XBL / ABL / TZ / HYP / U-Boot Android boot.img / firehose loader）
 是签名 / 平台 blob，flange 不编译：仅下载预编 EDL 包并解压暂存，供
-QualcommQrb2210FlashStrategy 经 qdl 刷写 eMMC vendor 槽（bring-up 一次性）。
+QualcommQrb2210FlashStrategy 经 edl-ng 刷写 eMMC vendor 槽（bring-up 一次性）。
 
 ⚠️ 固件包 URL（armbian/qcombin「Agatti/arduino-uno-q」）与 license/重分发条款
    待实证（见 openspec tasks §5.2）。bootloader.edl_firmware_url 为空时本步骤

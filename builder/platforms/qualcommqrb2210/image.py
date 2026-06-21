@@ -2,9 +2,9 @@
 
 UNO Q 的 bootloader 与 OS 共享同一块 eMMC 的固定 vendor GPT（约 67 分区），
 flange 不重新分区、不组装 monolithic raw.img；本构建器仅生成 **flange
-rawprogram**（qdl 格式），把 boot.img / rootfs.img 映射到 vendor GPT 既有的
+rawprogram**（firehose 格式），把 boot.img / rootfs.img 映射到 vendor GPT 既有的
 boot / rootfs 槽位，供 QualcommQrb2210FlashStrategy 经
-`qdl --allow-missing` 按分区刷写。
+`edl-ng ... rawprogram` 按分区刷写。
 
 ⚠️ rawprogram 的 start_sector / num_partition_sectors 取自 partitions 配置；
    该配置的 boot/rootfs offset/size 必须与 vendor GPT 既有槽位一致（取自
@@ -53,7 +53,7 @@ class Qrb2210ImageBuilder(ComponentBuilder):
             label = entry.get("label", name)
             start_sector = int(entry.get("offset", "0"), 0)
             num_sectors = resolve_image_size(entry).sectors
-            filename = Path(image_rel).name  # qdl 经 --include 搜索目录定位 basename
+            filename = Path(image_rel).name  # edl-ng 在符号链接 staging 目录按 basename 定位
             if not image_path.exists():
                 self._status(f"提示：{name} 镜像 {image_path} 暂不存在（构建后生成）")
             programs.append({
@@ -70,7 +70,7 @@ class Qrb2210ImageBuilder(ComponentBuilder):
             f"{', '.join(p['label'] for p in programs)}")
 
     def _render_rawprogram(self, programs: list[dict], sector: int) -> str:
-        """渲染 qdl rawprogram XML（仅 boot/rootfs 两条目）。
+        """渲染 firehose rawprogram XML（仅 boot/rootfs 两条目，edl-ng 消费）。
 
         physical_partition_number=0（eMMC user 区）。start_sector 为 vendor GPT
         既有槽位起始扇区——务必与 vendor rawprogram 一致（见文件头 ⚠️）。

@@ -6,16 +6,16 @@ flange 第二个 Qualcomm 平台（Arduino UNO Q / QRB2210 / QCM2290，代号 Im
   启动链 PBL→XBL→TZ/HYP→ABL→U-Boot(Android boot.img)→extlinux(sysboot)→Linux
   bootloader 与 OS 共享同一块 eMMC 的固定 vendor GPT（约 67 分区），flange 只
   按分区把 boot/rootfs 写进既有槽位，不重建整盘 GPT。
-  刷写走 qdl（apt 可装）+ rawprogram/firehose，EDL 经 JCTL 跳线进入。
+  刷写走 edl-ng（与 Q6A 同一份工具）+ rawprogram/firehose，EDL 经 JCTL 跳线进入。
 
 详见 design.md / proposal.md（openspec change add-qrb2210-arduino-uno-q）。
 """
 
 PLATFORM = {
     "vendor": "qualcommqrb2210",
-    # 刷写工具：Qualcomm EDL（qdl，Debian/Ubuntu apt 可装）。详见
-    # QualcommQrb2210FlashStrategy。区别于 Q6A 的 edl-ng（整盘 write-sector）。
-    "flash_tool": "qdl",
+    # 刷写工具：Qualcomm EDL（edl-ng，与 Q6A 同一份，随仓 tools/）。详见
+    # QualcommQrb2210FlashStrategy。区别于 Q6A：按分区 rawprogram，而非整盘 write-sector。
+    "flash_tool": "edl-ng",
     "arch": "aarch64",
     "products": ["default"],
     "variants": ["debug", "release"],

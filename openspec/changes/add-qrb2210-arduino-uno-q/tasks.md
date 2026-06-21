@@ -1,6 +1,6 @@
 ## 1. 平台/SoC 骨架与自动发现
 
-- [x] 1.1 新建 `components/platform/qualcommqrb2210/config.py`（导出 `PLATFORM`，flash_tool=qdl，variants debug/release）✅
+- [x] 1.1 新建 `components/platform/qualcommqrb2210/config.py`（导出 `PLATFORM`，flash_tool=edl-ng，variants debug/release）✅
 - [x] 1.2 新建 `components/platform/qualcommqrb2210/qrb2210/config.py`（导出 `SOC`：kernel mainline `linux`@`v7.0`、arm64 defconfig、dtb `qrb2210-arduino-imola`、rootfs noble、freedreno/ath10k、bootloader EDL blob 占位、partitions boot+rootfs、storage emmc 512）✅
 - [x] 1.3 新建 `builder/platforms/qualcommqrb2210/__init__.py`（导出 `ARTIFACT_NAMES` 与 `create_builder`）✅
 - [x] 1.4 验证 registry 自动发现：`_load_platform_config("qualcommqrb2210")` / `_load_soc_config("qrb2210")` 成功，不影响 Q6A ✅ Python 级实测
@@ -25,7 +25,7 @@
 
 - [x] 4.1 `boot.py`：复用 `builder/extlinux.py` 生成 `extlinux/extlinux.conf`，打 **FAT32** boot.img（mtools，匹配 vendor `efi` ESP）✅
 - [x] 4.2 内核命令行 `console=ttyMSM0` ✅ 实测 dts `serial0=&uart4` + `stdout-path=serial0` → ttyMSM0 正确。load 地址仍 ⏳ 依赖预编 U-Boot（实板核对，见 §9.1）
-- [x] 4.3 `image.py`：按分区产 flange rawprogram（boot/rootfs），不组装整盘 raw.img、不重建 GPT ✅ 合法 qdl rawprogram XML
+- [x] 4.3 `image.py`：按分区产 flange rawprogram（boot/rootfs），不组装整盘 raw.img、不重建 GPT ✅ 合法 rawprogram XML（edl-ng/firehose 格式）
 - [x] 4.4 flange rawprogram 的 boot/rootfs label/sector ✅ **实测 armbian/qcombin rawprogram0.xml**（512B 扇区）：boot→label `efi` @985408（512MiB FAT ESP，disk-sdcard.img.esp）；rootfs→label `rootfs` @2033984（~10GiB）；U-Boot 在 boot_a/b @166400/174592（vendor 单刷）。config 已按此校正
 - [x] 4.5 `recovery.py`：v1 stub（继承基类）✅ Qrb2210RecoveryBuilder
 - [x] 4.6 构建 Docker 镜像工具核对：extlinux/boot.img 用 truncate/mke2fs，与 AW 同栈，无需新增 ✅
@@ -39,10 +39,10 @@
 ## 6. 刷写（QualcommQrb2210FlashStrategy）
 
 - [x] 6.1 `builder/flash.py` 新增 `QualcommQrb2210FlashStrategy`（注册 `qualcommqrb2210`，不动现有策略含 Q6A）✅ 6 抽象方法满足，实测注册
-- [x] 6.2 `find_tool` 定位 `qdl`（tools/<os> + PATH）；缺失给 `apt install qdl` 诊断 ✅ 实测诊断文本
+- [x] 6.2 `find_tool` 定位 `edl-ng`（tools/<os> + PATH，与 Q6A 同一份）；缺失给预期路径诊断 ✅ 实测
 - [x] 6.3 `detect_device` 探测 EDL（9008，复用 Q6A USB 拓扑探测）；超时给 JCTL 跳线诊断 ✅
-- [x] 6.4 按分区刷系统：`qdl --allow-missing --storage emmc --include … <loader> flange_rawprogram.xml`（flash_whole_disk 钩子）✅
-- [x] 6.5 vendor 固件单刷（bring-up）：`qdl --storage emmc <loader> rawprogram*.xml patch*.xml`（flash_spi_firmware）✅
+- [x] 6.4 按分区刷系统：`edl-ng --loader <firehose> --memory emmc rawprogram flange_rawprogram.xml`（flash_whole_disk 钩子 + 临时符号链接目录）✅
+- [x] 6.5 vendor 固件单刷（bring-up）：`edl-ng --loader <firehose> --memory emmc rawprogram rawprogram*.xml patch*.xml`（flash_spi_firmware）✅
 - [x] 6.6 flash 编排：复用现有 `flash_whole_disk` 钩子 + CLI `--spi-firmware` 作 vendor 固件 bring-up 入口 ✅
 
 ## 7. board + 知识库
@@ -53,8 +53,8 @@
 
 ## 8. 实板验证（eMMC）⏳ 待硬件
 
-- [ ] 8.1 JCTL 进 EDL，qdl 刷 vendor bootloader 固件（qdl 通路验证）
-- [ ] 8.2 `flange build` 出 boot/rootfs 分区镜像 + flange rawprogram；qdl 按分区刷 eMMC
+- [ ] 8.1 JCTL 进 EDL，edl-ng 刷 vendor bootloader 固件（edl-ng 通路验证）
+- [ ] 8.2 `flange build` 出 boot/rootfs 分区镜像 + flange rawprogram；edl-ng 按分区刷 eMMC
 - [ ] 8.3 实板启动链：ABL→U-Boot→extlinux/sysboot → 内核 → `console=ttyMSM0` → 进 noble rootfs
 - [ ] 8.4 验 GPU（freedreno/turnip）/ Wi-Fi（ath10k）/ 网络 / 存储 / DSP（含 Adreno 702 固件落点）
 

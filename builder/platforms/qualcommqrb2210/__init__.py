@@ -2,7 +2,7 @@
 
 Arduino UNO Q（QRB2210/QCM2290，代号 Imola）。启动/刷写模型见
 components/platform/qualcommqrb2210/qrb2210/config.py：U-Boot extlinux 世界，
-eMMC 固定 vendor GPT，qdl 按分区刷。各组件构建器在同目录子模块中实现；
+eMMC 固定 vendor GPT，edl-ng 按分区刷。各组件构建器在同目录子模块中实现；
 create_builder 懒加载以便分组落地。
 """
 
@@ -18,7 +18,7 @@ ARTIFACT_NAMES = {
     ("rootfs",     "rootfs"):     "rootfs.img",
     ("recovery",   "recovery"):   "recovery.img",
     # image 组件不组装整盘 raw.img（vendor 固定 GPT），仅生成 flange rawprogram，
-    # 供 qdl 按分区刷 boot/rootfs。
+    # 供 edl-ng 按分区刷 boot/rootfs。
     ("image",      "rawprogram"): "flange_rawprogram.xml",
 }
 

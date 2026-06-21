@@ -20,7 +20,7 @@ updated: 2026-06-21
 
 Arduino UNO Q，Qualcomm Dragonwing **QRB2210 / QCM2290**（代号 Imola/UnoQ）单板，
 eMMC 存储，板载 ath10k Wi-Fi/BT。SoC（QRB2210 MPU）+ STM32U585 MCU 双芯架构（flange
-只管 Linux/QRB2210 侧）。flange 第二块 Qualcomm 板，验证 **U-Boot extlinux + qdl 按分区
+只管 Linux/QRB2210 侧）。flange 第二块 Qualcomm 板，验证 **U-Boot extlinux + edl-ng 按分区
 刷 + Adreno 702 freedreno** 全栈——与 [[radxa-dragon-q6a]]（UEFI/GRUB）互补的高通形态。
 
 > ⚠️ 尚未实板 bring-up。配置/构建器/刷写策略已落地并经 Python 级验证；Docker 编译、
@@ -37,9 +37,9 @@ lunch target：`arduino-uno-q-default-{debug,release}`（product/variant 机制�
 ## 启动与刷写
 
 - 启动链：`PBL→XBL→TZ/HYP→ABL→U-Boot(Android boot.img)→extlinux(sysboot)→Linux`
-- boot 分区（ext4，label `boot`）：`/extlinux/extlinux.conf` + Image + dtb
+- boot 分区（vendor label `efi`，FAT32 ESP @扇区 985408）：`/extlinux/extlinux.conf` + Image + dtb
 - rootfs 分区（ext4，label `rootfs`）：ubuntu-base noble + Mesa freedreno + ath10k 固件
-- 刷写：JCTL 跳线进 EDL → `qdl --allow-missing --storage emmc` 按分区刷 boot/rootfs；
+- 刷写：JCTL 跳线进 EDL → `edl-ng --loader <firehose> --memory emmc rawprogram` 按分区刷 boot/rootfs；
   vendor 固件（XBL/ABL/TZ/HYP/U-Boot/GPT）bring-up 一次性 `flange flash --spi-firmware`
 
 ## 外设
