@@ -477,3 +477,7 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 ## [2026-06-20] sync | radxa-rock-4d UFS bootloader 根因订正 + prebuilt URL 下载
 
 板级页重写（2160→~1200 字符，订正陈旧 `defconfig` 覆盖 /「`bootloader.py` 无须改」断言）。bootloader 改 **prebuilt SPI**：`prebuilt_spi_image={url,sha256}` 构建期从 radxa 官方下载（`source.py` `ensure_prebuilt_image` 校验缓存、**不入库 16MB blob**）。**根因**（6 次上板 + 构建链路审计坐实）：RK3576 idbloader 须用 `boot_merger` 装配含 `rk3576_boost`，flange 通用 `mkimage -T rksd` 路径缺该组件 → u-boot 读 UFS 崩（link up gear3 但 SCSI 数据不回）；与 BL31 版本 / OPTEE / u-boot 分支 / python2 shebang 均**无关**（逐一证伪）。UFS 刷写走 `flash_whole_disk`（`upgrade_tool di -p`，loader 按设备 LBA 建 GPT）。change `add-rk3576-radxa-rock-4d-ufs` 已归档（commit 2793e1a / ea6b68e），上板验证（串口/SSH/WiFi-BT）为 follow-up。波及 [[radxa-rock-4d]]。
+
+## [2026-06-21] refactor | 删除 roadmap.md 与过时 Bazel 规格 + 引用清理
+
+文档审核续作：删除根目录 `roadmap.md`（其历史已由 [[路线图与历史演进]] 综合页承载，git log 存细节）及两份描述已废弃 Bazel 骨架的当前规格 `openspec/specs/bazel-project-skeleton`、`openspec/specs/bazel-config-routing`。同步清理 6 处 wiki 页 frontmatter `sources: roadmap.md` 悬挂引用、[[路线图与历史演进]] 的失效外链与陈旧「当前节点」（A733 已落地→改为四平台 16 板）、[[Merkle 哈希]] 内联指向、本 schema Raw sources 列表。openspec/specs/repo-layout 中 roadmap.md 仅作允许根文件示例（含「等」），不违规，留待 openspec 流程处置。

@@ -98,6 +98,7 @@ lunch
 | `flange list apps` | 列出所有可用 App（本地 + external_apps + external_app_dirs） |
 | `flange docker build` | 构建 Docker 镜像 |
 | `flange docker rebuild` | 无缓存重建 Docker 镜像 |
+| `flange docker status` | 显示 Docker 镜像状态 |
 
 ## Recovery 维护系统
 
@@ -166,6 +167,20 @@ rootfs 分区可以同时声明设备最终容量和构建产物初始大小：
 | neons-core3566-nanob | RK3566 | Rockchip |
 | tspi-rk3566 | RK3566 | Rockchip |
 | orangepi-cm4 | RK3566 | Rockchip |
+| rp-pro-rk3568-h | RK3568 | Rockchip |
+| radxa-rock-4d | RK3576 | Rockchip |
+| armsom-cm5-io | RK3576 | Rockchip |
+| radxa-rock5c-lite | RK3582 | Rockchip |
+| radxa-rock5b | RK3588 | Rockchip |
+| orangepi-5-plus | RK3588 | Rockchip |
+| orangepi-cm5-tablet | RK3588s | Rockchip |
+| khadas-vim3l | S905D3 | Amlogic |
+| radxa-zero | S905Y2 | Amlogic |
+| radxa-cubie-a7a | A733 | Allwinner |
+| radxa-cubie-a7z | A733 | Allwinner |
+| radxa-dragon-q6a | QCS6490 | Qualcomm |
+
+> 完整列表随 `components/board/*/config.py` 自动发现，可执行 `lunch`（无参数）查看当前所有可选 target。
 
 ## 添加新配置
 
@@ -241,14 +256,15 @@ board/<board-name>/
 
 ### 组件源码模式
 
-kernel / bootloader / rkbin 等 git 组件支持 4 种源码来源，优先级为
-`local_path > local_repo > repo`。4 种模式对应 4 种开发场景，互斥使用：
+kernel / bootloader / rkbin 等 git 组件支持多种源码来源，优先级为
+`local_path > from_repo > local_repo/repo`，互斥使用：
 
 | 字段组合 | 行为 | 适用场景 |
 |---------|------|---------|
 | `repo` + `branch` + `commit` | 克隆后固定到 `commit`，每次 build 校验 HEAD | 钉版本，精确复现 |
 | `repo` + `branch`（无 `commit`） | 每次 build `fetch --depth=1 origin <branch>` + `reset --hard` | 跟随远端开发分支 |
 | `local_repo` + `branch`（± `commit`） | 以本地 git 仓库为 origin clone，后续 fetch 同上 | 离线构建 / 内部镜像 |
+| `from_repo` + `subpath` | 复用 config 顶层 `repos` 字典声明的命名仓库的子路径，多个组件共享同一次 clone | 单仓库多组件（如同源 kernel/dts） |
 | `local_path` | 直接把指定目录当源码用，**完全不碰 git** | 本地 hack 调试 |
 
 哈希缓存会把 `git rev-parse HEAD` 和补丁文件内容混进组件哈希
@@ -352,14 +368,8 @@ SOC = {
 }
 ```
 
-然后在 `builder/config/registry.py` 的 `_SOC_CONFIGS` 中注册：
-
-```python
-_SOC_CONFIGS = {
-    "rk3566": "components/platform/rockchip/rk3566/config.py",
-    "<soc-name>": "components/platform/<vendor>/<soc>/config.py",  # 新增
-}
-```
+无需注册。新 SoC 会被 `builder/config/registry.py` 自动扫描
+`components/platform/<vendor>/<soc>/config.py` 发现（`_discover_soc_configs()`）。
 
 ### 添加新平台
 
@@ -385,14 +395,8 @@ PLATFORM = {
 }
 ```
 
-2. 在 `builder/config/registry.py` 的 `_PLATFORM_CONFIGS` 中注册：
-
-```python
-_PLATFORM_CONFIGS = {
-    "rockchip": "components/platform/rockchip/config.py",
-    "<vendor>": "components/platform/<vendor>/config.py",  # 新增
-}
-```
+2. 平台配置无需注册。`builder/config/registry.py` 会自动扫描
+   `components/platform/<vendor>/config.py` 发现新平台（`_discover_platform_configs()`）。
 
 3. 创建平台构建策略 `builder/platforms/<vendor>/`：
 
@@ -402,10 +406,13 @@ builder/platforms/<vendor>/
 ├── kernel.py         # <Vendor>KernelBuilder(ComponentBuilder)
 ├── bootloader.py     # <Vendor>BootloaderBuilder(ComponentBuilder)
 ├── rootfs.py         # <Vendor>RootfsBuilder(ComponentBuilder)
-└── image.py          # <Vendor>ImageBuilder(ComponentBuilder)
+├── image.py          # <Vendor>ImageBuilder(ComponentBuilder)
+├── boot.py           # 可选：boot 分区构建（extlinux + DTB/overlay）
+└── recovery.py       # 可选：recovery 镜像构建
 ```
 
 每个 Builder 继承 `ComponentBuilder`，实现 `configure()`、`compile()`、`collect()` 三个方法。
+参见现有的 `builder/platforms/rockchip/`。
 
 ### 添加 product/variant 条件配置
 
