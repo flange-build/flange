@@ -11,7 +11,7 @@ on:
       target:
         description: "lunch target（格式 <board>-<product>-<variant>）"
         required: true
-        default: "radxa-zero3w-default-release"
+        default: "radxa-cubie-a7a-default-release"
         type: string
       component:
         description: "构建组件（image=完整镜像；亦可填 kernel / bootloader / rootfs 等单组件）"
