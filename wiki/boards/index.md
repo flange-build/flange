@@ -23,3 +23,4 @@ updated: 2026-05-28
 - [[khadas-vim3l]] — S905D3（首颗 Amlogic 板，AP6398S WiFi/BT，status: wip）
 - [[radxa-zero]] — S905Y2（第二块 Amlogic 板，G12A，AW-CM256SM WiFi/BT，关 recovery，macOS host，status: wip）
 - [[radxa-dragon-q6a]] — QCS6490（首颗 Qualcomm 板，UEFI/GRUB + UFS 4K LBA + Adreno 643 freedreno + AIC8800 USB，status: wip）
+- [[arduino-uno-q]] — QRB2210/QCM2290（第二块 Qualcomm 板，U-Boot extlinux + eMMC 固定 GPT + Adreno 702 freedreno + ath10k，qdl 按分区刷，status: wip）

@@ -1057,12 +1057,155 @@ class QualcommFlashStrategy(FlashStrategy):
             raise FlashError("edl-ng SPI 固件刷写失败")
 
 
+class QualcommQrb2210FlashStrategy(FlashStrategy):
+    """Qualcomm QRB2210 刷写策略 —— EDL 模式 + qdl（flange 第二个高通平台）。
+
+    与 Q6A 的 QualcommFlashStrategy（edl-ng 整盘 write-sector）根本不同：
+    UNO Q 的 bootloader 与 OS 共享同一块 eMMC 的固定 vendor GPT（约 67 分区），
+    flange 只能**按分区**把 boot/rootfs 写进既有槽位，不重建整盘 GPT。
+
+    - 系统：``qdl --allow-missing --storage emmc <loader> <flange rawprogram>.xml``
+      —— flange rawprogram（image.py 生成）仅含 boot/rootfs 两条目，
+      ``--allow-missing`` 跳过未提供镜像的 vendor 分区。
+    - vendor bootloader（bring-up 一次）：``qdl --storage emmc <loader>
+      <vendor rawprogram*.xml> <patch*.xml>`` 刷 XBL/ABL/TZ/HYP/U-Boot/GPT。
+    - EDL 经 **JCTL 跳线** 进入；工具 ``qdl`` 由 apt 安装（≥2.1）。
+    """
+
+    EDL_USB = "05c6:9008"  # Qualcomm HS-USB QDLoader 9008
+
+    def find_tool(self, project_dir: Path) -> Path:
+        """定位 qdl：随仓 ``tools/<os>/qdl/qdl`` 优先，PATH（apt 安装）兜底。"""
+        import shutil
+        platform = "macos" if sys.platform == "darwin" else "linux"
+        tool = project_dir / "tools" / platform / "qdl" / "qdl"
+        if tool.exists():
+            return tool
+        exe = shutil.which("qdl")
+        if exe:
+            return Path(exe)
+        raise FlashError(
+            "未找到 qdl。请安装（Debian/Ubuntu，需 ≥2.1）：\n"
+            "  sudo apt install qdl")
+
+    def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
+        """被动 USB 枚举探测 EDL 9008（与 Q6A 同款，不调 qdl 抢 USB 会话）。"""
+        if sys.platform == "darwin":
+            try:
+                r = subprocess.run(["ioreg", "-p", "IOUSB", "-l"],
+                                   capture_output=True, text=True, timeout=5)
+                out = r.stdout
+                if '"idVendor" = 1478' in out and '"idProduct" = 36872' in out:
+                    return DeviceInfo(platform="qualcommqrb2210", mode="edl",
+                                      description="Qualcomm HS-USB QDLoader 9008")
+            except Exception:
+                pass
+        else:  # linux：读 /sys/bus/usb/devices
+            try:
+                for dev in Path("/sys/bus/usb/devices").glob("*"):
+                    vid = dev / "idVendor"
+                    pid = dev / "idProduct"
+                    if vid.exists() and pid.exists():
+                        if vid.read_text().strip() == "05c6" and \
+                           pid.read_text().strip() == "9008":
+                            return DeviceInfo(platform="qualcommqrb2210",
+                                              mode="edl",
+                                              description="Qualcomm HS-USB QDLoader 9008")
+            except Exception:
+                pass
+        return None
+
+    def wait_for_device(self, tool: Path, timeout: int = 30) -> DeviceInfo:
+        """等待 EDL 设备；超时给 JCTL 跳线诊断。"""
+        try:
+            return super().wait_for_device(tool, timeout)
+        except FlashError:
+            raise FlashError(
+                f"等待 EDL 设备超时（{timeout}s）。\n"
+                "请用 JCTL 跳线进入 EDL 模式（短接后上电），设备应枚举为 "
+                "Qualcomm HS-USB QDLoader 9008（05c6:9008）。")
+
+    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
+                  device: Optional["DeviceInfo"] = None):
+        # 按分区刷写无需 pre_flash；vendor 固件单刷见 flash_spi_firmware（bring-up）。
+        pass
+
+    def write_partition(self, tool: Path, offset: int, image: Path):
+        # 走 qdl rawprogram（见 flash_whole_disk），不逐分区按 offset 写。
+        pass
+
+    def reboot(self, tool: Path):
+        # qdl 无 reset 子命令；提示手动断电退出 EDL。
+        _info("请手动断电重启 UNO Q（退出 EDL 模式）")
+
+    def partition_image_map(self, config: dict) -> dict[str, str]:
+        # flange rawprogram 仅映射 boot/rootfs 两个 vendor 既有槽位。
+        return {
+            "boot":   "boot/boot.img",
+            "rootfs": "rootfs/rootfs.img",
+        }
+
+    def _locate_loader(self, target_dir: Path) -> Path:
+        """定位 firehose loader（bootloader.py 下载的 EDL 固件包内）。"""
+        bl_dir = target_dir / "bootloader" / "edl-firmware"
+        matches = list(bl_dir.rglob("prog_firehose_ddr.elf"))
+        if not matches:
+            raise FlashError(
+                f"未找到 firehose loader（prog_firehose_ddr.elf）于 {bl_dir}；"
+                "请确认 bootloader.edl_firmware_url 已配置并重新 flange build，"
+                "或自备 vendor 固件包放入该目录。")
+        return matches[0]
+
+    def flash_whole_disk(self, tool: Path, target_dir: Path,
+                         config: "FlashConfig") -> bool:
+        """按分区刷 boot/rootfs：qdl + flange rawprogram（--allow-missing）。
+
+        返回 True 跳过基类逐分区 write_partition 循环。"""
+        rawprogram = target_dir / "image" / "flange_rawprogram.xml"
+        if not rawprogram.exists():
+            raise FlashError(
+                f"未找到 flange rawprogram {rawprogram}；请先执行 flange build")
+        loader = self._locate_loader(target_dir)
+        _step(f"qdl rawprogram → eMMC（loader: {loader.name}）")
+        cmd = [str(tool), "--allow-missing", "--storage", "emmc",
+               "--include", str(target_dir / "boot"),
+               "--include", str(target_dir / "rootfs"),
+               str(loader), str(rawprogram)]
+        if subprocess.run(cmd).returncode != 0:
+            raise FlashError("qdl rawprogram 刷写失败")
+        return True
+
+    def flash_spi_firmware(self, tool: Path, target_dir: Path,
+                           device: Optional["DeviceInfo"] = None):
+        """bring-up 一次性：刷 vendor bootloader 固件（XBL/ABL/TZ/HYP/U-Boot/GPT）。
+
+        经 qdl + vendor rawprogram*.xml + patch*.xml（armbian/qcombin 预编包）。
+        device 参数与其他策略签名对齐（qdl 不用它）。复用 CLI ``--spi-firmware``
+        作为 vendor 固件 bring-up 入口（UNO Q 固件在 eMMC，非 SPI）。"""
+        bl_dir = target_dir / "bootloader" / "edl-firmware"
+        loader = self._locate_loader(target_dir)
+        vendor_dir = loader.parent
+        raws = sorted(vendor_dir.glob("rawprogram*.xml"))
+        patches = sorted(vendor_dir.glob("patch*.xml"))
+        if not raws:
+            raise FlashError(
+                f"未找到 vendor rawprogram*.xml 于 {vendor_dir}；"
+                "请确认 vendor 固件包已下载/自备。")
+        _step("qdl rawprogram → vendor bootloader 固件（eMMC，bring-up）")
+        cmd = [str(tool), "--storage", "emmc", str(loader)]
+        cmd += [str(p) for p in raws]
+        cmd += [str(p) for p in patches]
+        if subprocess.run(cmd, cwd=str(vendor_dir)).returncode != 0:
+            raise FlashError("qdl vendor 固件刷写失败")
+
+
 # 策略注册表
 _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
     "rockchip": RockchipFlashStrategy,
     "allwinnera733": AllwinnerA733FlashStrategy,
     "amlogic": AmlogicFlashStrategy,
     "qualcommqcs6490": QualcommFlashStrategy,
+    "qualcommqrb2210": QualcommQrb2210FlashStrategy,
 }
 
 
