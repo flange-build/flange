@@ -39,7 +39,7 @@ flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建�
 - **依赖自动推断**：组件间依赖由构建引擎自动推断（builder/engine.py），变更后基于内容哈希仅增量重建
 - **多平台支持**：Rockchip、Allwinner、Qualcomm、Amlogic 等平台各有对应的刷写工具
 - 构建规则使用 Python 编写（`builder/platforms/`），平台数据（patches / 配置）位于 `components/platform/`，两者严格分离；遵循 PEP 8
-- Shell 脚本必须使用 `set -xe`
+- Shell 脚本开头必须设置 `set -euo pipefail`（构建/编排脚本用 `set -xeuo pipefail`，详见 ProjectSpec.md §5.2）
 - **Product/Variant 支持**：lunch target 格式为 `<board>-<product>-<variant>`，支持 debug/release 变体和多产品配置
 - 每个任务不超过 2 小时工作量
 
