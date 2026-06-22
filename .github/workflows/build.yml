@@ -48,6 +48,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      # rootfs 构建在容器内以 chroot 执行 arm64 二进制（apt-get 等），
+      # x86 runner 默认未注册 arm64 binfmt 模拟器，否则报
+      # "chroot: failed to run command 'apt-get': Exec format error"。
+      # 该步在宿主内核注册 QEMU（带 fix-binary 标志，chroot 内同样生效）。
+      - name: 注册 QEMU binfmt（arm64 模拟）
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       # docker compose 会挂载 ~/.ssh（用于私有源码仓库的 SSH 鉴权），
       # runner 上默认不存在该目录，先创建空目录避免挂载失败
       - name: 准备 SSH 目录
