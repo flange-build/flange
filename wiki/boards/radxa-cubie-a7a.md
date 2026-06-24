@@ -93,4 +93,5 @@ init/exit 序列平移自 rock5b；timing 用 E3 原厂高通权威值 **htot131
 - vendor overlay 列表与 a7z 显式重复 20 行（决策：[[../openspec/changes/add-a733-radxa-cubie-a7a/design.md]] 决策 2）。上游加新 sun60iw2p1 overlay 时需在两块板各自补一行。
 - AXP318 PMIC 若内核驱动未启用，apply 阶段 `dmesg | grep axp` 会报 unbound，需 SoC 层补 fragment（独立变更）。
 - meizu-e3-bringup overlay 的 panel/触摸/背光节点共用 twi2（PD16/PD17）；该总线同时是 8hd display overlay 的触摸总线，二者互斥不可同时启。
-- 触摸 `sec_ts@0x48` 的 a7a 专属两改（rock5b 都不需要）：① `&twi2` 必须 `twi_drv_used=<0>`（engine 模式）——drv 模式扛不住 `read_event` 高频读会 bus-error 卡死；② DT 加 `sec,skip-fw-update-on-probe` 跳过开机自动刷固件——其 `SW_RESET`+强刷会把出厂带 FW 的芯片刷死成永久 NACK。idle 时 sec_ts 中断 ~1850/s 空涨是芯片侧 INT 持续拉低的已知非阻塞项（触摸靠轮询，功能正常）。
+- 触摸 `sec_ts@0x48` 的 a7a 专属两改（rock5b 都不需要）：① `&twi2` 用 `twi_drv_used=<0>`（engine 模式）；② DT 加 `sec,skip-fw-update-on-probe` 跳过开机自动刷固件（`SW_RESET`+强刷会把出厂带 FW 的芯片刷死成永久 NACK）。
+- ⚠️ **触摸实际不可用，订正旧「功能正常/非阻塞」结论**：根因 = **触摸 IC 开机浪涌欠压锁死（硬件）**——稳态 1.8V 正常但 boot 浪涌把它拽欠压、芯片锁死（i2cdetect 看不到 0x48），~1748/s 中断风暴 clock-stretch 钳死共享 i2c-2、拖垮背光(0x36)变暗/卡死。软件全套（硬复位/上拉/drv+DMA/power-cycle/关背光）实测无效，根治需硬件加 100µF bulk 电容；软件缓解 = IRQ 限速 100Hz + 钉小核（总线放空、背光恢复，触摸仍死）。详见 [[sec_ts 触摸 a7a 供电欠压]]。
