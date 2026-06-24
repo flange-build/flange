@@ -22,6 +22,7 @@
 	#define FB_EARLY_EVENT_BLANK 0x10  // 通常的值是 0x10 (16)
 #endif
 
+#include <linux/cpumask.h>
 #include <linux/firmware.h>
 #include <linux/gpio.h>
 #include <linux/i2c.h>
@@ -29,6 +30,7 @@
 #include <linux/input/mt.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -940,8 +942,20 @@ static void sec_ts_read_event(struct sec_ts_data *ts) {
 
 static irqreturn_t sec_ts_irq_thread(int irq, void *ptr) {
 	struct sec_ts_data *ts;
+	static unsigned long last_jiffies;
 
 	ts = (struct sec_ts_data *)ptr;
+
+	/* a7a 防御性限速到 100Hz：触摸 IC 开机浪涌欠压锁死（根因见
+	 * docs/proposal/t6_dsi_power_analysis.md 与 [[sec_ts 触摸 a7a 供电欠压]]）会把 INT
+	 * 钉低引发中断风暴（engine 模式实测 ~1748/s）狂读共享 i2c-2 拖垮背光。距上次"处理"不足
+	 * HZ/100(10ms) 的中断直接返回、不读事件 → 不碰 i2c → 总线放空、背光不被拖死锁。代价：
+	 * level-low 下硬中断仍快速重触发占一个核，故配套把本 IRQ 亲和性钉到小核(见 probe)。
+	 * 仅 sec,irq-storm-guard(a7a) 启用，不影响 rock-5b/q6a 正常上报率。 */
+	if (ts->plat_data->irq_storm_guard &&
+			time_before(jiffies, last_jiffies + HZ / 100))
+		return IRQ_HANDLED;
+	last_jiffies = jiffies;
 
 #ifdef SEC_TS_WAKEUP_GESTURE
 	if (ts->lowpower_mode)
@@ -1382,6 +1396,13 @@ static int sec_ts_parse_dt(struct i2c_client *client) {
 	if (pdata->skip_fwup_on_probe)
 		input_info(true, &client->dev,
 							 "sec,skip-fw-update-on-probe set: skip sw-reset & on-probe fw update\n");
+
+	/* a7a：故障态(触摸 IC 欠压锁死→INT 钉低 storm)中断保护——irq_thread 限速 100Hz +
+	 * IRQ 钉小核。见 sec_ts_plat_data.irq_storm_guard 注释。 */
+	pdata->irq_storm_guard = of_property_read_bool(np, "sec,irq-storm-guard");
+	if (pdata->irq_storm_guard)
+		input_info(true, &client->dev,
+							 "sec,irq-storm-guard set: irq rate-limit 100Hz + pin to little cores\n");
 
 	if (of_property_read_u32_array(np, "sec,num_lines", lines, 2))
 		input_info(true, &client->dev, "skipped to get num_lines property\n");
@@ -1824,6 +1845,19 @@ static int sec_ts_probe(struct i2c_client *client,
 	}
 	disable_irq(ts->client->irq);
 	ts->interrupt_enable = SEC_TS_INTERRUPT_EN;
+
+	/* a7a：把触摸 IRQ 亲和性钉到小核(A55=cpu0-5)，避免故障态欠压 storm 占用大核
+	 * (A76=cpu6-7)。掩码 0x3f 为 A733 拓扑专属，故仅 sec,irq-storm-guard(a7a) 启用，
+	 * 不误伤 rock-5b(rk3588 小核=cpu0-3) / q6a。详见 [[sec_ts 触摸 a7a 供电欠压]]。 */
+	if (ts->plat_data->irq_storm_guard) {
+		struct cpumask little;
+		int cpu;
+
+		cpumask_clear(&little);
+		for (cpu = 0; cpu < 6; cpu++)
+			cpumask_set_cpu(cpu, &little);
+		irq_set_affinity_hint(ts->client->irq, &little);
+	}
 	input_info(true, &ts->client->dev, "sec_ts_probe request_irq done\n");
 
 #ifdef SEC_TS_SUPPORT_TA_MODE

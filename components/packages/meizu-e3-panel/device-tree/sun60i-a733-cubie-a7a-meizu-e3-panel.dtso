@@ -211,6 +211,10 @@
 		 * wait_for_ready 超时白加 ~2.8s 开机延时，故一并跳过。触摸靠 read_event 轮询
 		 * 正常工作。rock-5b overlay 不设此属性，走完整 SW_RESET + fw-update 路径。 */
 		sec,skip-fw-update-on-probe;
+		/* a7a：触摸 IC 开机浪涌欠压锁死后 INT 钉低引发中断风暴拖垮共享 i2c-2 背光
+		 * （根因见 docs/proposal/t6_dsi_power_analysis.md）。启用故障态中断保护：
+		 * sec_ts_irq_thread 限速 100Hz + IRQ 亲和性钉小核。根治仍需硬件加 bulk 电容。 */
+		sec,irq-storm-guard;
 	};
 
 	/* SGM37604A I2C 背光（屏自带），使能 = LCD_light_EN = PD23。

@@ -476,6 +476,12 @@ struct sec_ts_plat_data {
 	 * 直接读信息并使能中断（芯片出厂已带可用固件）。rock-5b 不置位、行为不变。 */
 	bool skip_fwup_on_probe;
 
+	/* a7a：触摸 IC 开机浪涌欠压锁死后 INT 钉低引发中断风暴拖垮共享 i2c-2 背光（根因见
+	 * docs/proposal/t6_dsi_power_analysis.md）。置位时启用故障态中断保护：sec_ts_irq_thread
+	 * 限速 100Hz（跳读不碰 i2c、放空总线）+ probe 把 IRQ 亲和性钉小核。DT 属性
+	 * "sec,irq-storm-guard"。rock-5b/q6a 不置位、行为不变。 */
+	bool irq_storm_guard;
+
 	const char *firmware_name;
 	const char *parameter_name;
 	const char *model_name;
