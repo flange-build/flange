@@ -56,6 +56,9 @@ SOC = {
             # 板级 SPI display；fragment 由 RockchipKernelBuilder 在
             # configure() 阶段写到 arch/arm64/configs/panel_mipi_dbi.config。
             "panel_mipi_dbi.config",
+            # GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
+            # USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。
+            "CONFIG_DRM_GUD=y",
         ],
         "dts_dir": "rockchip",
     },

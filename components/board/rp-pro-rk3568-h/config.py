@@ -27,16 +27,8 @@ BOARD = {
         # <basename>.dtb``，因此 ``dts`` 字段必须保持 basename 不带斜杠。
         "dts_dir": "rockchip/rp-rk356x",
         "dts": "pro-rk3568-h",
-        # GUD (Generic USB Display) host 侧 DRM 驱动 —— 把 USB display 设备
-        # （如本仓 Cardputer GUD 固件枚举出的 vendor 接口）当作 DRM 设备驱动。
-        # depends on DRM && USB（rk3568 SoC 层 rockchip_linux_defconfig 两者
-        # 均 =y），select 的 LZ4_COMPRESS / DRM_GEM_SHMEM_HELPER /
-        # BACKLIGHT_CLASS_DEVICE 等依赖由 Kconfig 自动拉入，无需显式声明
-        # （make flange_inline.config 末尾跑 olddefconfig 解析 select）。
-        # raw CONFIG 行经 flange_inline.config 追加到 defconfig 末尾覆盖 SoC 设置。
-        "+defconfig": [
-            "CONFIG_DRM_GUD=y",
-        ],
+        # 注：CONFIG_DRM_GUD=y 已上移到 rk3568 SoC 层（全平台默认启用 GUD），
+        # board 层不再单独声明，避免重复来源。
         # ---- AP6275P WiFi6+BT5.2 PCIe 模组支持 ----
         # in-tree bcmdhd 默认 SDIO 不抢 PCIe，OOT bcmdhd_pcie 接管 14e4:449d。
         # 走 rkwifibt 仓库，与 rock5b RTL8852BE 同一条 OOT 路线。

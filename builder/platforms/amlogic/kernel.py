@@ -30,17 +30,16 @@ class AmlogicKernelBuilder(KernelBuilder):
     def configure(self, src_dir: Path, config: dict):
         """defconfig 应用：单字符串或 list 合并。
 
-        list 形态便于将来挂 ``case_insensitive_fix.config`` 等 fragment；
-        基类 ``_write_case_insensitive_fix`` 始终生成对应 fragment 文件，
-        list 中是否引入由 SoC config 决定。
+        list 形态便于挂 ``case_insensitive_fix.config`` 等 fragment，或直接写
+        raw ``CONFIG_X=y`` 行——后者由基类 ``_resolve_defconfig_targets`` 聚合进
+        ``flange_inline.config``（区别于 fragment 文件名）。基类
+        ``_write_case_insensitive_fix`` 始终生成对应 fragment 文件，list 中是否
+        引入由 SoC config 决定。
         """
         self._write_case_insensitive_fix(src_dir)
-        defconfig = config["kernel"]["defconfig"]
-        if isinstance(defconfig, list):
-            for dc in defconfig:
-                self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
-        else:
-            self.make(src_dir, [defconfig], arch=self.ARCH, cross=self.CROSS)
+        for dc in self._resolve_defconfig_targets(
+                src_dir, config["kernel"]["defconfig"]):
+            self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)

@@ -51,6 +51,9 @@ SOC = {
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "panfrost.config",
+            # GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
+            # USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。
+            "CONFIG_DRM_GUD=y",
         ],
         "dts_dir": "rockchip",
     },

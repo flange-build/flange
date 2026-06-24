@@ -29,10 +29,14 @@ SOC = {
         # pd_test_disable.config 必须在列表末尾合并（最后写入 = 覆盖生效），
         # 关掉 AW_POWER_DOMAIN_TEST 电源域测试驱动，详见 kernel.py
         # _write_pd_test_disable_override。
+        # 末尾 CONFIG_DRM_GUD=y 是 raw option（非 fragment 文件名），由基类
+        # _resolve_defconfig_targets 抽出聚合进 flange_inline.config 追加到最后；
+        # 只点亮 GUD，不影响 pd_test_disable.config 对 AW_POWER_DOMAIN_TEST 的覆盖。
         "defconfig": ["defconfig", "bsp_defconfig", "radxa.config",
                       "radxa_custom.config", "aic8800_wlan.config",
                       "usb_gadget.config", "panel_mipi_dbi.config",
-                      "case_insensitive_fix.config", "pd_test_disable.config"],
+                      "case_insensitive_fix.config", "pd_test_disable.config",
+                      "CONFIG_DRM_GUD=y"],
         "dts_dir": "allwinner",
         # out-of-tree 内核模块：源码在内核树外，使用独立构建系统编译
         # 每个声明包含：

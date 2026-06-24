@@ -3,18 +3,21 @@ title: kernel 构建器
 type: component
 status: stable
 sources:
+  - builder/kernel_base.py
   - builder/platforms/rockchip/kernel.py
   - builder/platforms/allwinnera733/kernel.py
+  - builder/platforms/amlogic/kernel.py
   - builder/base.py
   - ProjectSpec.md#63-框架与策略分离
 related:
   - "[[ComponentBuilder 基类]]"
   - "[[rockchip 平台]]"
   - "[[allwinnera733 平台]]"
+  - "[[amlogic 平台]]"
   - "[[Docker 执行封装]]"
   - "[[内容哈希与增量构建]]"
   - "[[out-of-tree 模块]]"
-updated: 2026-05-06
+updated: 2026-06-25
 ---
 
 ## TL;DR
@@ -23,7 +26,8 @@ updated: 2026-05-06
 
 ## 关键设计要点
 
-- **configure**：`make <defconfig>`；defconfig 来自 `config["kernel"]["defconfig"]`
+- **configure**：`make <defconfig>`；defconfig 来自 `config["kernel"]["defconfig"]`，支持单字符串或 list（按序合并，后写覆盖先写）
+- **defconfig inline option**：list 项写 raw `CONFIG_X=y`（或 `# CONFIG_X is not set`）由基类 `_resolve_defconfig_targets`（`kernel_base.py`）聚合进 `flange_inline.config` 追加 make 末尾覆盖前序，fragment 名仍作 `make` target；一行 opt-in 零 builder 改动，rockchip/amlogic/allwinner 共用（qcs6490 走 `enable_configs`）。例：全平台默认 `CONFIG_DRM_GUD=y`
 - **compile**：目标为 `Image`、`<dts_dir>/<dts>.dtb`、`modules`；`KCFLAGS=-Wno-error`；`modules_install` 加 `INSTALL_MOD_STRIP=1`
 - **OOT 模块**：`make modules` 后调用 `_compile_oot_modules()`，先 ensure `kernel.oot_sources` 各独立源构造 `{kernel_src}` + `{<name>_src}` 模板字典，再遍历 `oot_modules` 逐个 make；`modules_install` 后调用 `_install_oot_modules()`，strip → 装到 `updates/` → 末尾 `depmod -b <staging> <release>` 重建 modules.{dep,alias,symbols}+`.bin` 全索引（不刷 alias 开机就不自动 load）。详见 [[out-of-tree 模块]]
 - **symlink 清理**：`modules_install` 产出的 `source/build` 链接指向容器绝对路径，deploy 会报错；编译后遍历删除

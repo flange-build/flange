@@ -120,6 +120,63 @@ class KernelBuilder(ComponentBuilder):
         )
         self._status("FS 大小写不敏感，启用 case_insensitive_fix")
 
+    # ---- defconfig inline option 解析 ----
+
+    def _resolve_defconfig_targets(self, src_dir: Path, defconfig) -> list[str]:
+        """把 ``kernel.defconfig``（单字符串或 list）解析成有序 ``make`` target。
+
+        list 中每项分两类：
+
+        - **raw kernel option**：含 ``=``（如 ``"CONFIG_DRM_GUD=y"`` /
+          ``"CONFIG_X=m"``）或形如 ``"# CONFIG_X is not set"``。这些聚合写入
+          动态 fragment ``arch/<ARCH>/configs/flange_inline.config``，该 fragment
+          追加到 target 列表**末尾**（最后 ``make``，故覆盖前序同名 CONFIG）。
+        - **fragment / defconfig 文件名**：其余原样作 ``make <name>`` target。
+
+        让 SoC / board config 直接在 ``kernel.defconfig``（或板级 ``+defconfig``）
+        写一行 ``CONFIG_X=y`` 即生效，无需为每个 option 预写专用 fragment 函数。
+        rockchip / amlogic / allwinner 三平台 configure 共用本方法。
+        """
+        if isinstance(defconfig, str):
+            defconfig = [defconfig]
+        raw_options: list[str] = []
+        targets: list[str] = []
+        for item in defconfig:
+            if "=" in item or item.lstrip().startswith("# CONFIG_"):
+                raw_options.append(item)
+            else:
+                targets.append(item)
+        if raw_options:
+            self._write_inline_options_fragment(src_dir, raw_options)
+            targets.append("flange_inline.config")
+        return targets
+
+    def _write_inline_options_fragment(self, src_dir: Path,
+                                       options: list[str]) -> None:
+        """把 defconfig 中的 raw ``CONFIG_X=`` 行聚合写入动态 fragment。
+
+        触发：SoC / board 配置直接在 ``kernel.defconfig`` / ``+defconfig`` 写一行
+        ``"CONFIG_TOUCHSCREEN_GOODIX=y"``（或 ``"# CONFIG_FOO is not set"``）而不是
+        先在 builder 加一个 ``_write_xxx_fragment`` 函数 + 单独 ``.config`` 文件。
+        这样板级 opt-in 一行直达 kernel option，零 builder 改动。
+
+        生成路径：``arch/<ARCH>/configs/flange_inline.config``，由
+        ``_resolve_defconfig_targets`` 追加到 target 列表末尾，最后 ``make``，
+        因此 inline option 覆盖前序 fragment 的同名 CONFIG。
+        """
+        fragment = src_dir / "arch" / self.ARCH / "configs" / "flange_inline.config"
+        body = (
+            "# 由 builder 从 kernel.defconfig list 中的 raw option 字符串聚合\n"
+            "# 生成；每行一条 CONFIG_X=y / =m / =n 或 '# CONFIG_X is not set'。\n"
+            "# 项的来源是 SoC / board config.py 直接在 defconfig 写的 raw\n"
+            "# 字符串（区别于 .config fragment 文件名）。最后被 make 处理，\n"
+            "# 覆盖前序 fragment 中同名 CONFIG。\n"
+        )
+        body += "\n".join(options) + "\n"
+        fragment.write_text(body)
+        self._status(
+            f"flange_inline.config 生成（{len(options)} 项 raw kernel option）")
+
     # ---- modules_install staging 清理 ----
 
     def _clean_modules_staging(self, modules_staging: Path) -> None:

@@ -370,14 +370,15 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         self._status("AIC8800 USB 固件路径修正到 Radxa USB 目录")
 
     def configure(self, src_dir: Path, config: dict):
-        """支持多步 defconfig 合并。"""
-        defconfig = config["kernel"]["defconfig"]
-        if isinstance(defconfig, list):
-            for dc in defconfig:
-                self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS,
-                          extra=self.BSP_MAKE_VARS)
-        else:
-            self.make(src_dir, [defconfig], arch=self.ARCH, cross=self.CROSS,
+        """支持多步 defconfig 合并。
+
+        defconfig list 中的 raw ``CONFIG_X=y`` 行由基类
+        ``_resolve_defconfig_targets`` 聚合进 ``flange_inline.config`` 并追加到
+        末尾（区别于 ``bsp_defconfig`` 等 fragment 文件名）。
+        """
+        for dc in self._resolve_defconfig_targets(
+                src_dir, config["kernel"]["defconfig"]):
+            self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS,
                       extra=self.BSP_MAKE_VARS)
 
     def compile(self, src_dir: Path, config: dict):

@@ -189,6 +189,9 @@ SOC = {
             "USB_LIBCOMPOSITE",
             "USB_CONFIGFS",
             "USB_F_FS",
+            # GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
+            # USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。
+            "DRM_GUD",
         ],
         # MODULE_SIG_FORCE=n：OOT 模块（aic8800、meizu-e3-panel 三件套等）
         # 走 flange 直拷 .ko 流水线，不签名；SIG_FORCE 会导致 modprobe 拒绝加载。

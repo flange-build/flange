@@ -78,7 +78,10 @@ SOC = {
         # mainline arm64 generic defconfig 已含 Radxa Zero 全部首版所需驱动：
         # MESON_GX_MMC / BRCMFMAC / BT_HCIUART / BT_BCM / MESON_SARADC /
         # MESON_GPIO / DWC3 USB 等。无需 fragment。
-        "defconfig": "defconfig",
+        # GUD（USB Display）host 驱动全平台默认启用；defconfig 改 list 形态以
+        # 追加 raw option（由基类 _resolve_defconfig_targets 聚合进
+        # flange_inline.config，区别于 fragment 文件名）。
+        "defconfig": ["defconfig", "CONFIG_DRM_GUD=y"],
         "dts_dir": "amlogic",
         # board 层声明 kernel.dts = "meson-g12a-radxa-zero"。
     },
