@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * tspi-rk3566 无刷电机 (BLDC/FOC) 引脚 overlay —— 可选，默认不应用
+ *
+ * 应用后把板级引脚改成无刷电机驱动布局：
+ *   - i2c2 (m0: gpio0_b5=SCL / gpio0_b6=SDA) 挂磁编码器(magnetic encoder)
+ *   - pwm12/pwm13/pwm14 (m0: gpio3_b7 / gpio3_c0 / gpio3_c4) 作三相 PWM
+ *   - gpio3_a5=EN / gpio3_a4=FLIP 纯 GPIO（motor_en / motor_flip 占位组）
+ *   - 关闭 uart3：uart3m1 占 gpio3_b7/c0，与 pwm12/pwm13 撞脚
+ *   - 关闭 xpt2046 电阻触摸：占 gpio3_a5，让给电机 EN
+ *
+ * 启用方式：在 components/board/tspi-rk3566/config.py 的
+ * boot.default_overlays 加入 "tspi-rk3566-bldc.dtbo"，或运行时在
+ * extlinux.conf 的 fdtoverlays 行追加该 .dtbo 路径后重启。
+ */
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+
+&i2c2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c2m0_xfer>;
+};
+
+&pwm12 {
+	status = "okay";
+};
+
+&pwm13 {
+	status = "okay";
+};
+
+&pwm14 {
+	status = "okay";
+};
+
+/* uart3m1 占 gpio3_b7/c0，与 pwm12/pwm13 三相撞脚，关闭让出引脚 */
+&uart3 {
+	status = "disabled";
+};
+
+/* xpt2046 电阻触摸占 gpio3_a5，关闭让给电机 EN */
+&spi3 {
+	xpt2046@1 {
+		status = "disabled";
+	};
+};
+
+&pinctrl {
+	motor {
+		motor_en: motor-en {
+			rockchip,pins = <3 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+		motor_flip: motor-flip {
+			rockchip,pins = <3 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+};
