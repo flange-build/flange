@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * rp-pro-rk3568-h：关 SPI0、改启 I2C2，复用 SPI0 的 spi0m0 引脚做 I2C 总线。
+ *
+ * 动机：板上 6 路 I2C 全满——i2c0=PMIC(rk809) / i2c1=触摸(gt9xx) /
+ * i2c3=磁编码器(AS5600 @0x36) / i2c4=MIPI 子板 FPC / i2c5=相机桥+RTC /
+ * i2c6=HDMI DDC，而 i2c2 控制器(fe5b0000)默认 disabled。i2c2 有两套引脚路由：
+ *   - i2c2m0 = GPIO0_B5/B6（恰好是 SPI0 spi0m0 的 MOSI/MISO 两脚）
+ *   - i2c2m1 = GPIO4_B4/B5（运行态空闲，但板上未必引出排针）
+ * SPI0(fe610000) 当前仅挂通用 spidev、无具体外设依赖，且其 CLK/CS 通常一并
+ * 引到排针，故选 i2c2m0：关 SPI0 → 把 GPIO0_B5/B6 翻成 I2C2 SCL/SDA。
+ *
+ * 引脚来源：rk3568-pinctrl.dtsi
+ *   i2c2m0_xfer = <0 RK_PB5 1 ...>, <0 RK_PB6 1 ...>   → GPIO0_B5/B6
+ *   spi0m0-pins 含 GPIO0_B5/B6(MOSI/MISO) + GPIO0_C5(CLK) + GPIO0_C6(CS0)
+ *
+ * 生效后：新增 /dev/i2c-2（`i2cdetect -y 2` 可扫）；SPI0 的 /dev/spidev0.0
+ * 消失，其 CLK=GPIO0_C5 / CS0=GPIO0_C6 回落为普通 GPIO。
+ *
+ * 回滚：从 /boot/extlinux/extlinux.conf 的 fdtoverlays 行去掉本 dtbo 条目，
+ * 或刷不带本 overlay 的镜像。
+ */
+
+/dts-v1/;
+/plugin/;
+
+&spi0 {
+	status = "disabled";
+};
+
+&i2c2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c2m0_xfer>;	/* GPIO0_B5 = SCL, GPIO0_B6 = SDA */
+	clock-frequency = <100000>;
+};

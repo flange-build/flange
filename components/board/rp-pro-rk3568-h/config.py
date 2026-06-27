@@ -16,6 +16,18 @@ BOARD = {
     "board": "rp-pro-rk3568-h",
     "soc": "rk3568",
     "platform": "rockchip",
+    # 板私有 overlay：关 SPI0、改启 I2C2（i2c2m0 复用 spi0m0 引脚 GPIO0_B5/B6），
+    # 给板子腾出一条可用 I2C 总线 /dev/i2c-2。dtso 源见
+    # dtso/rk3568-pro-rk3568-h-spi0-to-i2c2.dtso。
+    # board_overlays = 编译进 boot.img；default_overlays = extlinux 默认加载。
+    "boot": {
+        "board_overlays": [
+            "rk3568-pro-rk3568-h-spi0-to-i2c2.dtbo",
+        ],
+        "default_overlays": [
+            "rk3568-pro-rk3568-h-spi0-to-i2c2.dtbo",
+        ],
+    },
     "kernel": {
         # DTS 源文件路径：arch/arm64/boot/dts/rockchip/rp-rk356x/pro-rk3568-h.dts。
         # rp-rk356x 是 rockchip vendor 子目录的下一级目录，已在内核源码侧登记
