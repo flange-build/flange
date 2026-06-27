@@ -1,0 +1,30 @@
+app:
+  name: fan_control
+  version: 1.0.0
+  description: 温控风扇控制——按 SoC/GPU 最高温动态开关 GPIO 风扇（带滞回防抖）
+  type: service
+  arch:
+    - aarch64
+    - armhf
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+install:
+  scripts/fan_control: /usr/local/bin/fan_control
+  conf/fan_control.conf: /etc/fan_control.conf
+
+systemd:
+  unit: systemd/fan_control.service
+  auto_start: true
+
+depends: []
+
+conffiles:
+  - /etc/fan_control.conf
+
+data_dirs: []

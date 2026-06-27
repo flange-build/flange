@@ -85,6 +85,10 @@ BOARD = {
         ],
     },
     "rootfs": {
+        # 温控风扇：风扇接 GPIO3_B6（全局 gpio-110，高电平开），由 fan_control
+        # App 按 SoC/GPU 最高温动态开关。pin/阈值经 overlay/etc/fan_control.conf
+        # 覆盖 App 默认值。追加到 platform 层 custom_packages，不覆盖 adbd 等。
+        "+custom_packages": ["fan_control"],
         # AP6275P 固件来自 rkwifibt 仓库（已由 kernel.oot_sources 拉取用于
         # 编译 bcmdhd_pcie.ko，复用同一份源 = 0 额外 clone）。
         #

@@ -1,0 +1,56 @@
+#!/bin/sh
+# fan_control — 按 SoC/GPU 最高温动态开关 GPIO 风扇（带滞回防抖）
+# 配置见 /etc/fan_control.conf，可被板级 overlay 覆盖。
+set -eu
+
+CONF=/etc/fan_control.conf
+[ -r "$CONF" ] && . "$CONF"
+
+# conf 缺省时的兜底默认值
+FAN_GPIO="${FAN_GPIO:-110}"
+FAN_ACTIVE="${FAN_ACTIVE:-high}"
+TEMP_ON="${TEMP_ON:-55000}"
+TEMP_OFF="${TEMP_OFF:-45000}"
+INTERVAL="${INTERVAL:-5}"
+
+SYS="/sys/class/gpio/gpio${FAN_GPIO}"
+
+# 有效电平 → 开/关时写入的电平值
+if [ "$FAN_ACTIVE" = "low" ]; then
+    ON_VAL=0; OFF_VAL=1
+else
+    ON_VAL=1; OFF_VAL=0
+fi
+
+# 导出并设为输出
+[ -d "$SYS" ] || echo "$FAN_GPIO" > /sys/class/gpio/export
+echo out > "$SYS/direction"
+
+# 读所有 thermal zone，取最高温（毫摄氏度）
+max_temp() {
+    max=0
+    for z in /sys/class/thermal/thermal_zone*/temp; do
+        [ -r "$z" ] || continue
+        t=$(cat "$z")
+        [ "$t" -gt "$max" ] && max=$t
+    done
+    echo "$max"
+}
+
+# 退出时关风扇并复位
+cleanup() { echo "$OFF_VAL" > "$SYS/value" 2>/dev/null || true; }
+trap cleanup INT TERM EXIT
+
+state=0
+echo "$OFF_VAL" > "$SYS/value"
+while true; do
+    t=$(max_temp)
+    if [ "$state" -eq 0 ] && [ "$t" -ge "$TEMP_ON" ]; then
+        echo "$ON_VAL" > "$SYS/value"; state=1
+        echo "[fan] ON  temp=$((t/1000))C"
+    elif [ "$state" -eq 1 ] && [ "$t" -le "$TEMP_OFF" ]; then
+        echo "$OFF_VAL" > "$SYS/value"; state=0
+        echo "[fan] OFF temp=$((t/1000))C"
+    fi
+    sleep "$INTERVAL"
+done

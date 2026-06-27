@@ -1,0 +1,12 @@
+[Unit]
+Description=温控风扇控制（按温度动态开关 GPIO 风扇）
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fan_control
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
