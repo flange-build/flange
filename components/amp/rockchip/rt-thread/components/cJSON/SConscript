@@ -1,0 +1,15 @@
+# RT-Thread building script for bridge
+
+import os
+from building import *
+
+cwd = GetCurrentDir()
+objs = []
+list = os.listdir(cwd)
+
+src = Glob('*.c')
+CPPPATH = [cwd]
+
+obj = DefineGroup('cjson', src, depend = ['RT_USING_CJSON'], CPPPATH = CPPPATH)
+
+Return('obj')

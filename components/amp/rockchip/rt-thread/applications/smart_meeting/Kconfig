@@ -1,0 +1,29 @@
+config SMART_MEETING_UAC_ENABLE
+    bool "Enable UAC function in smart metting"
+    default y
+
+    if SMART_MEETING_UAC_ENABLE
+        config SMART_MEETING_CAPTURE_CARD
+            string "capture card name"
+            default "combc"
+        config SMART_MEETING_PLAYBACK_CARD
+            string "playback card name"
+            default "es8156p"
+    endif
+
+config SMART_MEETING_RKAUDIO
+    bool "Enable RK Audio function"
+    default y
+
+config SMART_MEETING_RKSTUDIO_GAIN
+    bool "Enable RK Studio gain function"
+    default y
+
+config SMART_MEETING_RKSTUDIO_EQDRC
+    bool "Enable RK Studio eq & drc function"
+    default y
+
+config SMART_MEETING_WDT_ENABLE
+    bool "Enable WDT function"
+    select RT_USING_WDT
+    default y

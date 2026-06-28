@@ -1,0 +1,19 @@
+Import('RTT_ROOT')
+Import('rtconfig')
+from building import *
+
+cwd = GetCurrentDir()
+src = Glob('*.c') \
+        + Glob('dsp/*.c') \
+        + Glob('rkaudio/*.c') \
+        + Glob('rkaudio/*/*.c') \
+        + Glob('rkstudio/*.c') \
+        + Glob('uac/uac1.c')
+libs = ['librkaudio_gain']
+libpath = [cwd + '/rkstudio']
+
+CPPPATH = [cwd] + [cwd + '/dsp'] + [cwd + '/rkaudio'] + [cwd + '/rkstudio'] + [cwd + '/uac']
+
+group = DefineGroup('Applications', src, depend = ['RT_USING_SMART_MEETING'], CPPPATH = CPPPATH, LIBS = libs, LIBPATH = libpath)
+
+Return('group')

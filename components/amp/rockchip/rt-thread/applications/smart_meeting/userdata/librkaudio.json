@@ -1,0 +1,124 @@
+{
+    "rkaudio":{
+        "aec":{
+            "enable":true,
+            "pos":1,
+            "drop_ref_channel":0,
+            "model_aec_en":0,
+            "delay_len":0,
+            "look_ahead":0,
+            "Array_list":[
+                1,
+                0,
+                3,
+                2,
+                5,
+                4,
+                6,
+                7
+            ]
+        },
+        "rx":{
+            "enable":false,
+            "anr":{
+                "enable":false,
+                "noiseFactor":0.88,
+                "swU":10,
+                "PsiMin":0.01,
+                "PsiMax":0.516,
+                "fGmin":0.05
+            }
+        },
+        "bf":{
+            "enable":true,
+            "Targ": 0,
+            "ref_pos": 1,
+            "num_ref_channel": 2,
+            "drop_ref_channel": 0,
+            "fastaec": false,
+            "wakeup": false,
+            "gsc": true,
+            "gsc_method": false,
+            "fix": false,
+            "chn_select": false,
+            "dereverb":{
+                "enable":true,
+                "rlsLg":4,
+                "curveLg":30,
+                "delay":2,
+                "forgetting":0.98,
+                "T60":2,
+                "coCoeff":1
+            },
+            "aes":{
+                "enable":true,
+                "Beta_Up":0.0005,
+                "Beta_Down":0.008
+            },
+            "nlp":{
+                "enable":false,
+                "g_ashwAecBandNlpPara_16k":[
+                    [10, 6],
+                    [10, 10],
+                    [10, 10],
+                    [5, 10],
+                    [5, 10],
+                    [5, 10],
+                    [0, 6],
+                    [0, 6]
+                ]
+            },
+            "anr":{
+                "enable":true,
+                "noiseFactor":1,
+                "swU":10,
+                "PsiMin":0.05,
+                "PsiMax":0.516,
+                "fGmin":0.02
+            },
+            "agc":{
+                "enable":true,
+                "attack_time":100,
+                "release_time":200,
+                "attenuate_time":1000,
+                "max_gain":42,
+                "max_peak":-5,
+                "fRth0":-78,
+                "fRth1":-73,
+                "fRth2":-53,
+                "fRk0":2,
+                "fRk1":0.8,
+                "fRk2":0.4,
+                "fLineGainDb":-25,
+                "swSmL0":40,
+                "swSmL1":80,
+                "swSmL2":80,
+                "fs":16000,
+                "frmlen":256
+            },
+            "cng":{
+                "enable":false,
+                "fGain":20,
+                "fMpy":20,
+                "fSmoothAlpha":0.99,
+                "fSpeechGain":0
+            },
+            "dtd":{
+                "enable":true,
+                "ksiThd_high":0.6,
+                "ksiThd_low":0.3
+            },
+            "eq":{
+                "enable":false,
+                "shwParaLen":65,
+                "pfCoeff":[
+                    [-1, -1, -1, -1, -2, -1, -1, -1, -1, -1, -1, -2, -3],
+                    [-1, -1, -1, -1, -2, -2, -3, -5, -3, -2, -1, -1, -2],
+                    [-2, -5, -9, -4, -2, -2, -1, -5, -5, -11, -20, -11, -5],
+                    [-5, -1, -7, -7, -19, -40, -20, -9, -10, -1, -20, -24, -60],
+                    [-128, -76, -40, -44, -1, -82, -111, -383, -1161, -1040, -989, -3811, 32764]
+                ]
+            }
+        }
+    }
+}

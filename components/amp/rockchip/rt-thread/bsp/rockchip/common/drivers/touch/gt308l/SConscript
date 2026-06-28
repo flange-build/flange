@@ -1,0 +1,13 @@
+# RT-Thread building script for component
+Import('RTT_ROOT')
+Import('rtconfig')
+
+from building import *
+
+cwd = GetCurrentDir()
+src = Glob('*.c')
+CPPPATH = [cwd]
+
+obj = DefineGroup('touch', src, depend = ['RT_USING_GT308L'], CPPPATH = CPPPATH)
+
+Return('obj')
