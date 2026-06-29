@@ -67,7 +67,7 @@ flange 交付的 amp product（dts + amp app 固件 + 内核）SHALL 共同满�
 
 **(b) 从核不接管 GIC 分发器（amp app 固件）。** amp app 固件的 `GIC_IRQ_AMP_CTRL.cpuAff`/`defRouteAff` SHALL 设为**非本核**（Linux master 所在 cpu0），使 `HAL_GIC_Init` 判定 `gicInit=0`——从核仅等待 Linux 配置好 AMP 路由后使能自身 IRQ，SHALL NOT 重初始化 GIC 分发器。设为本核会令 `gicInit=1`、从核与 Linux 抢 GICD 致挂死（即「把 222 加进 amp-irqs 却停止打印」的真因）。
 
-**(c) 反向通道唤醒接收 vring（内核 rockchip_rpmsg_mbox patch）。** rpmsg-lite `platform_notify` 对所有 vq 恒用同一 mailbox 通道（= remote cpu id），即从核的新消息（name-service 通告/数据）与 consume 通知都发往同一通道（DT `rpmsg-tx`），而非 rx/tx 各走一条。Linux `rockchip_rpmsg_mbox` 该通道的回调 SHALL 同时唤醒接收 vring（`vring_interrupt(vq[0])`），否则从核的 NS 通告不被 virtio 处理、Linux 无对应 rpmsg 通道与 `/dev/rpmsgN`。（rockchip mailbox 每 channel 双向、mbox 框架不允许同 channel 双绑，故无纯 DTS 改法。）
+**(c) 反向通道（从核→Linux 新消息）经 link-id 命中 stock 驱动，内核 rpmsg 驱动保持 stock。** rpmsg-lite `platform_notify` 用 `RL_GET_R_CPU_ID(link-id)`（link-id 低4位）作从核发送的 mailbox 通道号；stock `rockchip_rpmsg_mbox` 把"新消息"通道定为 `rpmsg-rx`(ch0)→`rk_rpmsg_rx_callback`→vq[0]、"consume"通道定为 `rpmsg-tx`(ch3)→`rk_rpmsg_tx_callback`→vq[1]。故 link-id 的低4位(R) SHALL 取 **0**，使从核把新消息（name-service 通告/数据）发到 ch0、命中 stock 的 rx 回调；高4位(M) 取任意 ≠ 从核物理 cpu 的值（用于 `platform_init_interrupt` 的 `cpu_id==M_CPU_ID` 主/从判定）。amp app 固件的 `RL_PLATFORM_SET_LINK_ID(M,R)` 与 board dts override 的 `rockchip,link-id` SHALL 同步为该值（如 **0x10**，M=1/R=0）——二者不一致会令握手 `env_isr` 命中空槽、链路不起。flange SHALL NOT 为此 patch 内核 rpmsg 驱动（取 R=从核物理 cpu 会让新消息落 tx 通道被丢，是早期一度 patch `tx_callback` 补 `vring_interrupt(vq[0])` 的根因；改 link-id 后驱动 100% stock，与上游 radxa/rockchip-linux 一致）。注：接收方向（Linux→从核）仍走 A2B ch3 / INTID 222，由物理 cpu_id 决定，与 link-id 无关。前提：`RL_ALLOW_CONSUMED_BUFFERS_NOTIFICATION=0`（默认），从核不发 consume 通知、tx 通道无流量。
 
 #### Scenario: 从核 link-up 成功
 

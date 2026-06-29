@@ -2,14 +2,16 @@ From: flange <flange@localhost>
 Subject: [PATCH] arm64: dts: rockchip: 新增 tspi-rk3566-amp.dts（AMP product）
 
 amp product 专用 dts：基础板 + rk3568-amp.dtsi + 固件区 reserved-memory
-(amp@7000000) + amp-cpu3 entry=0x07000000 + amp-irqs 追加 rpmsg 邮箱中断
-(MBOX0_CH3_A2B) + arm_pmu 去 cpu3 + delete cpu3。中断号按固件 soc.h 命名重述。
+(amp@7000000) + amp-cpu3 entry=0x07000000 + rpmsg link-id 覆盖为 0x10（与从核
+固件同步，使其新消息发 mailbox ch0、命中 stock 驱动，Linux rpmsg 驱动无需 patch）
++ amp-irqs 追加 rpmsg link-up 邮箱中断(MBOX0_CH3_A2B) + arm_pmu 去 cpu3 + delete
+cpu3。中断号按固件 soc.h 命名重述。
 
 diff --git a/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts b/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts
 new file mode 100644
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,79 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * tspi-rk3566 AMP product 专用设备树。仅 amp product 经 kernel.dts 选用，
@@ -18,7 +20,9 @@ new file mode 100644
 + *     rpmsg、使能 &mailbox。SHMEM/rpmsg 地址与 board 配置 amp.memory 一致。
 + *   - reserved-memory amp@7000000：保留从核固件代码区（避开内核占用的低地址）。
 + *   - &amp_cpus/amp-cpu3 entry 覆盖为 0x07000000（与固件 load 一致）。
-+ *   - &rockchip_amp：amp-irqs 追加 MBOX0_CH3_A2B（rpmsg link-up 邮箱中断），把它
++ *   - &rpmsg：rockchip,link-id 覆盖为 0x10（与从核固件同步，使从核新消息发
++ *     mailbox ch0、命中 stock 驱动 rx 回调，Linux rpmsg 驱动无需 patch）。
++ *   - &rockchip_amp：amp-irqs 追加 MBOX0_CH3_A2B（rpmsg link-up 邮箱中断），
 + *     路由到 cpu3（否则被 Linux 改回 cpu0，固件 wait_for_link_up 卡死）。
 + *   - &arm_pmu：删 cpu3 前去掉对它的 interrupt/affinity（否则 pmu probe 失败）。
 + *   - /delete-node/ &cpu3：把第 4 核摘给 AMP，Linux 跑 3 核。
@@ -59,11 +63,18 @@ new file mode 100644
 +	};
 +};
 +
++/* rpmsg link-id：从 stock rk3568-amp.dtsi 的 0x03 改为 0x10（与从核固件
++ * rk3568_amp_demo 同步）。link-id 低4位 R=0 使从核 rpmsg-lite 把"新消息"发到
++ * mailbox ch0 = 驱动 rpmsg-rx 通道 → stock rk_rpmsg_rx_callback → vq[0]，从而
++ * Linux rockchip_rpmsg_mbox 驱动 100% 保持 stock、无需 patch（取 R=3 则发 ch3
++ * 落 tx 回调被丢）。rk3568-amp.dtsi 被多板共享，故在此 board 产品 dts override。 */
++&rpmsg {
++	rockchip,link-id = <0x10>;
++};
++
 +/* MBOX0_CH3_A2B(INTID 222) = Linux→cpu3 的 rpmsg link-up 邮箱中断，必须列进
 + * amp-irqs，否则 Linux gic_dist_init 把它路由回 cpu0、固件永远收不到 →
-+ * rpmsg_lite_wait_for_link_up 卡死。属性赋值是整体替换，须含原三项。
-+ * （之前"覆盖 amp-irqs 就停打印"的真因是固件 gicInit=1 抢 GICD，已在 app
-+ *  main.c 改 cpuAff 为非本核修掉。） */
++ * rpmsg_lite_wait_for_link_up 卡死。属性赋值是整体替换，须含原三项。 */
 +&rockchip_amp {
 +	amp-irqs = /bits/ 64 <
 +		GIC_AMP_IRQ_CFG_ROUTE(UART4_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0))

@@ -19,9 +19,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Linux = cpu0（master），本核 = cpu3（remote）。端点名/号需与 Linux 侧约定一致。 */
-#define LINK_MASTER_ID  0U
-#define LINK_REMOTE_ID  3U
+/* Linux = cpu0（master），本核 = cpu3（remote）。
+ *
+ * link-id 编码 (M<<4)|R，这里取 0x10（M=1, R=0）——刻意不直接表征物理核号：
+ *   - R（低4位）被 rpmsg-lite platform_notify 当作"从核→主核"的 mailbox 发送
+ *     通道号（RL_GET_R_CPU_ID）。stock rockchip_rpmsg_mbox 把"新消息"通道定为
+ *     rpmsg-rx=ch0、"consume"通道定为 rpmsg-tx=ch3，故取 R=0 让从核新消息发到
+ *     ch0 → 命中驱动 rx 回调 → vq[0]（取 R=3 则发 ch3 落 tx 回调被丢，详见
+ *     docs/amp.md；这样可保 Linux 驱动 100% stock，无需 patch tx_callback）。
+ *   - M（高4位）仅用于 platform_init_interrupt 的 cpu_id==M_CPU_ID 主/从判定，
+ *     取任意 ≠ 本核 cpu3 的值即可，这里 1。
+ *   - 接收方向（Linux→从核）仍走 A2B ch3 / INTID 222，由物理 cpu_id=3 决定，
+ *     与 link-id 无关。Linux dts 的 rockchip,link-id 必须同步为 0x10（握手 CMD）。
+ * 端点名/号需与 Linux 侧约定一致。 */
+#define LINK_ID_M       1U   /* link-id 高4位：仅作主/从判定，≠本核 cpu3 */
+#define LINK_ID_R       0U   /* link-id 低4位：从核发送 mailbox 通道，0 → 命中驱动 rpmsg-rx(ch0) */
 #define DEMO_EPT_ADDR   0x3003U
 #define DEMO_EPT_NAME   "rpmsg-ap3-ch0"
 #define DEMO_ECHO_MSG   "Rockchip rpmsg linux test!"
@@ -137,7 +149,7 @@ static void rpmsg_linux_demo(void)
 
     info->instance = rpmsg_lite_remote_init(
         LINUX_RPMSG_MEM,
-        RL_PLATFORM_SET_LINK_ID(LINK_MASTER_ID, LINK_REMOTE_ID),
+        RL_PLATFORM_SET_LINK_ID(LINK_ID_M, LINK_ID_R),
         RL_NO_FLAGS);
     rpmsg_lite_wait_for_link_up(info->instance);
     printf("rpmsg: link up (link_id 0x%lx)\n", info->instance->link_id);
