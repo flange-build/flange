@@ -3,13 +3,13 @@ Subject: [PATCH] arm64: dts: rockchip: 新增 tspi-rk3566-amp.dts（AMP product�
 
 amp product 专用 dts：基础板 + rk3568-amp.dtsi + 固件区 reserved-memory
 (amp@7000000) + amp-cpu3 entry=0x07000000 + amp-irqs 追加 rpmsg 邮箱中断
-(222) + arm_pmu 去 cpu3 + delete cpu3。
+(MBOX0_CH3_A2B) + arm_pmu 去 cpu3 + delete cpu3。中断号按固件 soc.h 命名重述。
 
 diff --git a/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts b/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts
 new file mode 100644
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,70 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * tspi-rk3566 AMP product 专用设备树。仅 amp product 经 kernel.dts 选用，
@@ -18,8 +18,8 @@ new file mode 100644
 + *     rpmsg、使能 &mailbox。SHMEM/rpmsg 地址与 board 配置 amp.memory 一致。
 + *   - reserved-memory amp@7000000：保留从核固件代码区（避开内核占用的低地址）。
 + *   - &amp_cpus/amp-cpu3 entry 覆盖为 0x07000000（与固件 load 一致）。
-+ *   - &rockchip_amp：amp-irqs 追加 MBOX0_CH3_A2B(INTID 222)，把 rpmsg link-up
-+ *     邮箱中断路由到 cpu3（否则被 Linux 改回 cpu0，固件 wait_for_link_up 卡死）。
++ *   - &rockchip_amp：amp-irqs 追加 MBOX0_CH3_A2B（rpmsg link-up 邮箱中断），把它
++ *     路由到 cpu3（否则被 Linux 改回 cpu0，固件 wait_for_link_up 卡死）。
 + *   - &arm_pmu：删 cpu3 前去掉对它的 interrupt/affinity（否则 pmu probe 失败）。
 + *   - /delete-node/ &cpu3：把第 4 核摘给 AMP，Linux 跑 3 核。
 + *
@@ -28,6 +28,17 @@ new file mode 100644
 +
 +#include "tspi-rk3566-user-v10-ext39-linux.dts"
 +#include "rk3568-amp.dtsi"
++
++/* amp-irqs 用的中断号 = GIC INTID（= SPI + 32），取值同 AMP HAL SDK 的 soc.h
++ * IRQn 枚举。dts 无法 #include 固件 soc.h，故在此按 soc.h 命名重述（单点、可
++ * 对照），避免散落裸数字。查法：固件 lib/CMSIS/Device/RK3568/Include/soc.h 的
++ * IRQn 枚举，或 SoC TRM 中断分配表，或把 INTID-32 得 SPI 号后在 rk356x.dtsi
++ * 搜 GIC_SPI <n>。
++ *   UART4_IRQn         = 152（SPI 120）       AMP 从核 console
++ *   MBOX0_CHn_A2B_IRQn = 219 + n（SPI 187+n）  rpmsg A2B(主→从)邮箱中断 */
++#define UART4_IRQn          152
++#define MBOX0_CH0_A2B_IRQn  219
++#define MBOX0_CH3_A2B_IRQn  (MBOX0_CH0_A2B_IRQn + 3)
 +
 +/ {
 +	reserved-memory {
@@ -55,10 +66,10 @@ new file mode 100644
 + *  main.c 改 cpuAff 为非本核修掉。） */
 +&rockchip_amp {
 +	amp-irqs = /bits/ 64 <
-+		GIC_AMP_IRQ_CFG_ROUTE(152, 0xd0, CPU_GET_AFFINITY(3, 0))
++		GIC_AMP_IRQ_CFG_ROUTE(UART4_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0))
 +		GIC_AMP_IRQ_CFG_ROUTE(AMP_CPUOFF_REQ_IRQ(3), 0xd0, CPU_GET_AFFINITY(3, 0))
 +		GIC_AMP_IRQ_CFG_ROUTE(GIC_TOUCH_REQ_IRQ(3), 0xd0, CPU_GET_AFFINITY(3, 0))
-+		GIC_AMP_IRQ_CFG_ROUTE(222, 0xd0, CPU_GET_AFFINITY(3, 0))>;
++		GIC_AMP_IRQ_CFG_ROUTE(MBOX0_CH3_A2B_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0))>;
 +};
 +
 +&arm_pmu {
