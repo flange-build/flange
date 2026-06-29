@@ -1,11 +1,15 @@
 """App 脚手架生成器 — 根据 type × build-system 组合生成 App 工程目录。
 
 支持的组合矩阵：
-  type \\ build-system | none | cmake | meson | make | swift
-  exec               |  Y   |   Y   |   Y   |   Y  |   Y
-  service            |  Y   |   Y   |   Y   |   Y  |   Y
-  lib                |  -   |   Y   |   Y   |   Y  |   -
-  test               |  Y   |   -   |   -   |   -  |   -
+  type \\ build-system | none | cmake | meson | make | swift | amp
+  exec               |  Y   |   Y   |   Y   |   Y  |   Y   |  -
+  service            |  Y   |   Y   |   Y   |   Y  |   Y   |  -
+  lib                |  -   |   Y   |   Y   |   Y  |   -   |  -
+  test               |  Y   |   -   |   -   |   -  |   -   |  -
+  amp                |  -   |   -   |   -   |   -  |   -   |  Y
+
+amp 类型 = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户应用），其 src/
+被 amp 组件 stage 进 SDK 应用槽位、打进 amp.img；不打 deb、不进 rootfs。
 """
 
 from __future__ import annotations
@@ -41,6 +45,8 @@ _VALID_COMBINATIONS: set[tuple[str, str]] = {
     ("lib",     "make"),
     # test（仅 none）
     ("test",    "none"),
+    # amp（协处理器固件，仅 amp 构建系统）
+    ("amp",     "amp"),
 }
 
 

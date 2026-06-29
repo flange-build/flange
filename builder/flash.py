@@ -565,6 +565,10 @@ class RockchipFlashStrategy(FlashStrategy):
         }
         if (config.get("recovery") or {}).get("enabled", False):
             m["recovery"] = "recovery/recovery.img"
+        # amp 协处理器固件：启用时纳入刷写映射，使 flash-config.json 含 amp、
+        # `flange flash amp` 可单刷（仿 recovery 的 enabled gate）。
+        if (config.get("amp") or {}).get("enabled", False):
+            m["amp"] = "amp/amp.img"
         return m
 
     def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:

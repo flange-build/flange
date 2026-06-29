@@ -43,7 +43,10 @@ def get_valid_targets(
             for variant in variants:
                 targets.append(f"{board_name}-{product}-{variant}")
 
-    return targets
+    # 兑现"按字母序排列"契约：board 已排序，但单板内 products 按声明序
+    # （default 须为 products[0] 供 lunch 缺省选用），二者未必字母序——
+    # 故对最终列表整体排序（仅影响展示/校验枚举顺序，不影响默认 product 选择）。
+    return sorted(targets)
 
 
 def parse_target(

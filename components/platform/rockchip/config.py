@@ -44,4 +44,11 @@ PLATFORM = {
         # raw 类型分区由设备端按 type 自动保护，这里补充 recovery 自身。
         "protected_partitions": ["recovery"],
     },
+    # AMP 协处理器固件（裸机 HAL / RT-Thread）默认全平台关闭；需要的板在 board
+    # 配置 opt-in（如 tspi-rk3566 的 amp product）。启用时 SoC/board 须提供
+    # amp.mode、amp.soc_project、amp.memory，并在 partitions.entries 提供非 raw
+    # 的 amp 分区，否则 validate_amp 拒绝配置。
+    "amp": {
+        "enabled": False,
+    },
 }

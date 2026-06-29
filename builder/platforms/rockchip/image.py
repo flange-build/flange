@@ -49,6 +49,11 @@ class RockchipImageBuilder(ComponentBuilder):
         # recovery 镜像不存在时（recovery.enabled=False 或构建跳过），
         # ImageBuilder.compile 中已有"image_path 不存在则跳过"逻辑，安全。
         "recovery":  "recovery/recovery.img",
+        # amp 协处理器固件 FIT（amp.enabled=False 时无 amp.img，compile 的
+        # "image_path 不存在则跳过"逻辑安全跳过 amp 分区写入）。amp 分区为
+        # 非 raw（ext4 占位）→ 进 GPT 具名条目，U-Boot 按名 part_get_info_by_name
+        # ("amp") 定位；dd 进去的裸 FIT 块原样保留（image 全程不 mkfs）。
+        "amp":       "amp/amp.img",
     }
 
     def build(self, config: dict) -> dict:

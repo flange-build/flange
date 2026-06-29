@@ -1,6 +1,7 @@
 """Rockchip Bootloader 构建策略 -- 替代 bootloader/rockchip/build.sh"""
 
 import re
+import shlex
 import shutil
 from pathlib import Path
 from builder.base import ComponentBuilder
@@ -14,8 +15,34 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         # 预编 spi.img 板（见 compile）不自编 u-boot，跳过 defconfig 配置。
         if config["bootloader"].get("prebuilt_spi_image"):
             return
+        # bootloader.defconfig 支持单字符串或 list（对齐 kernel.defconfig）：
+        # list 中含 "=" 或 "# CONFIG_" 的项是 raw u-boot option（聚合后追加进
+        # .config 再 olddefconfig 归一化），其余是 defconfig/fragment make 目标。
+        # 让 SoC/board 直接在 bootloader.defconfig（或板级 +defconfig:<product>）
+        # 写一行 CONFIG_X=y 即开 u-boot 选项，无需 patch 上游 defconfig 文件。
         defconfig = config["bootloader"]["defconfig"]
-        self.make(src_dir, [defconfig], arch=self.ARCH, cross=self.CROSS)
+        if isinstance(defconfig, str):
+            defconfig = [defconfig]
+        targets = [d for d in defconfig
+                   if "=" not in d and not d.lstrip().startswith("# CONFIG_")]
+        raw_options = [d for d in defconfig
+                       if "=" in d or d.lstrip().startswith("# CONFIG_")]
+        self.make(src_dir, targets, arch=self.ARCH, cross=self.CROSS)
+        if raw_options:
+            self._apply_inline_defconfig(src_dir, raw_options)
+
+    def _apply_inline_defconfig(self, src_dir: Path, options: list):
+        """把 bootloader.defconfig 里的 raw u-boot option 追加进 .config 再
+        olddefconfig 归一化。u-boot 与内核同用 Kconfig，但其 defconfig 在 configs/、
+        无内核 arch/<ARCH>/configs 的 fragment 布局，故用「append + olddefconfig」
+        （而非 make <frag>.config）跨工具稳妥：olddefconfig 按 Kconfig 依赖解析
+        select、丢弃 unmet-deps 项。在容器内追加（.config 由容器内 make 生成）。"""
+        payload = "".join(o.rstrip("\n") + "\n" for o in options)
+        self.docker.run(
+            ["sh", "-c", "printf '%s' " + shlex.quote(payload) + " >> .config"],
+            cwd=str(src_dir))
+        self.make(src_dir, ["olddefconfig"], arch=self.ARCH, cross=self.CROSS)
+        self._status(f"u-boot inline defconfig（{len(options)} 项 option）")
 
     def compile(self, src_dir: Path, config: dict):
         ini_prefix = config["rkbin"]["ini_prefix"]

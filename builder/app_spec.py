@@ -8,11 +8,14 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
-# 允许的 App 类型
-VALID_APP_TYPES = {"exec", "service", "lib", "test"}
+# 允许的 App 类型。amp = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户
+# 应用），产物是固件而非装进 rootfs 的 deb，走独立构建路径（见 app.py
+# build_one 的 amp 分叉与 platforms/rockchip/amp.py 的应用槽位 staging）。
+VALID_APP_TYPES = {"exec", "service", "lib", "test", "amp"}
 
-# 允许的构建系统取值
-VALID_BUILD_SYSTEMS = {"none", "cmake", "meson", "make", "swift", "custom"}
+# 允许的构建系统取值。amp = 经 SDK（HAL Makefile / RT-Thread scons）+ mkimage
+# 打 FIT，由 amp 组件驱动，不复用 _BUILD_SYSTEMS 的 host 交叉编译模板。
+VALID_BUILD_SYSTEMS = {"none", "cmake", "meson", "make", "swift", "custom", "amp"}
 
 
 class AppSpecError(ValueError):

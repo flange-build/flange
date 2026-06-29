@@ -116,7 +116,65 @@ def validate_rootfs_auto_grow(config: dict) -> None:
             )
 
 
+def _is_amp_enabled(config: dict) -> bool:
+    """读取 ``config["amp"]["enabled"]``，缺省视为 False。"""
+    return bool((config.get("amp") or {}).get("enabled", False))
+
+
+def validate_amp(config: dict) -> None:
+    """amp 启用时，强制配置自洽：mode 合法、soc_project 存在、partitions.entries
+    含非 raw 的 amp 分区，且 amp 分区排在 remaining rootfs 之前。
+
+    amp 分区必须非 raw：U-Boot 的 AMP loader 按 GPT 分区名 part_get_info_by_name
+    ("amp") 定位 FIT，而 raw 分区不进 GPT（image.py 跳过）→ 声明 raw 会让 U-Boot
+    永远 -ENODEV、从核不被拉起。
+    """
+    if not _is_amp_enabled(config):
+        return
+
+    amp = config.get("amp") or {}
+    mode = amp.get("mode")
+    if mode not in ("hal", "rt-thread"):
+        raise ConfigError(
+            f"amp.enabled=True 但 amp.mode 非法: {mode!r}（须为 'hal' 或 'rt-thread'）。"
+        )
+    if not amp.get("soc_project"):
+        raise ConfigError(
+            "amp.enabled=True 但缺少 amp.soc_project（如 rk3566 应设为 'rk3568'）。"
+        )
+
+    entry = _find_partition(config, "amp")
+    if entry is None:
+        raise ConfigError(
+            "amp.enabled=True 但 partitions.entries 中缺少 amp 分区；请加入 "
+            "{name: 'amp', type: 'ext4', offset, size}（须排在 remaining rootfs 之前）。"
+        )
+    if entry.get("type") == "raw":
+        raise ConfigError(
+            "amp 分区 type 不得为 raw（U-Boot 按 GPT 分区名定位 FIT，raw 不进 GPT）；"
+            "请用 ext4 占位（image 不会格式化它，dd 进的裸 FIT 块原样保留）。"
+        )
+    for field in ("offset", "size"):
+        if not entry.get(field):
+            raise ConfigError(f"amp 分区缺少 {field}；offset 与 size 都必须显式声明。")
+
+    # amp 分区必须排在 remaining rootfs 之前（grow rootfs 之后不可有非 raw 分区，
+    # 否则连 validate_rootfs_auto_grow 也会拒绝）。
+    entries = (config.get("partitions") or {}).get("entries") or []
+    amp_idx = next((i for i, e in enumerate(entries)
+                    if e.get("name") == "amp"), None)
+    rootfs_idx = next((i for i, e in enumerate(entries)
+                       if e.get("name") == "rootfs"), None)
+    if (amp_idx is not None and rootfs_idx is not None
+            and amp_idx > rootfs_idx
+            and entries[rootfs_idx].get("size") == "remaining"):
+        raise ConfigError(
+            "amp 分区必须排在 remaining rootfs 之前（grow rootfs 之后不可有非 raw 分区）。"
+        )
+
+
 def validate_config(config: dict) -> None:
     """对 FINAL_CONFIG 执行全部已知校验，第一项失败即抛 ConfigError。"""
     validate_recovery_partition(config)
     validate_rootfs_auto_grow(config)
+    validate_amp(config)

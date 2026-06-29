@@ -26,7 +26,10 @@ SOC = {
         # v2026.01 上游已用 python3 shebang 调 decode_bl31.py，platform 层
         # 旧 0001-decode_bl31-use-python3-shebang.patch 已删除。
         "branch": "next-dev-v2026.01",
-        "defconfig": "rk3568_defconfig",
+        # list 形态（对齐 kernel.defconfig）：首项为 base defconfig make 目标，
+        # board 可经 +defconfig:<product> 追加 raw u-boot option（如 amp product
+        # 加 CONFIG_AMP=y），builder 聚合后 append 进 .config + olddefconfig。
+        "defconfig": ["rk3568_defconfig"],
     },
     "kernel": {
         "repo": "ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git",
@@ -131,5 +134,34 @@ SOC = {
             {"name": "rootfs",    "offset": "0x128000", "size": "remaining",
              "type": "ext4", "image_size": "2G", "grow_on_first_boot": True},
         ],
+    },
+    # AMP 协处理器固件的 SoC 级事实（仅在 board opt-in amp 时生效；amp.enabled
+    # 默认关）。soc_project：RK3566 与 RK3568 同 die、复用 rk3568 SDK 工程。
+    # memory：内存布局单一事实源（权威值对齐 amp_linux.its + rk3568-amp.dtsi），
+    # 由 RockchipAmpBuilder 注入 make 命令行 + 断言 .its load 一致，并由 board
+    # 的 amp dts patch 取同一组地址（dts 交叉校验）。cpu_base 必须 == amp_linux.its
+    # 的 load；从核 = cpu3（amp3，mpidr 0x300）。amp 分区不在此声明——它是
+    # product 作用域，由 tspi-rk3566 的 amp product 经 "partitions:amp" 提供，
+    # 避免改动 default product 的分区布局。
+    "amp": {
+        "soc_project": "rk3568",
+        "memory": {
+            "cpu": 3,
+            # 从核固件 link/load 地址。不能用 SDK 默认 0x02800000——flange 的
+            # ~37MB 内核(code 0x410000-0x1cfffff + data 0x24b0000-0x295ffff)会
+            # 压到 0x2800000，致 reserved-memory 保留失败、固件被 Linux 覆盖
+            # （实测 dmesg "failed to reserve memory for node amp@2800000"）。
+            # 改放 0x07000000（112MB，紧贴 SHMEM 0x7800000 之下，远离内核镜像、
+            # 可被 no-map 保留）。该值同时驱动:make 的 FIRMWARE_CPU_BASE、
+            # amp_linux.its 的 load、dts 的 amp-cpu3 entry + 固件保留区。
+            "cpu_base": 0x07000000,
+            "dram_size": 0x00800000,
+            "sram_base": 0xFF000000,
+            "sram_size": 0x00100000,
+            "shmem_base": 0x07800000,
+            "shmem_size": 0x00400000,
+            "rpmsg_base": 0x07C00000,
+            "rpmsg_size": 0x00500000,
+        },
     },
 }

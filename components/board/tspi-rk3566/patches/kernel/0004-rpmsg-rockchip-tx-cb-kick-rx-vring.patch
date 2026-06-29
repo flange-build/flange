@@ -1,0 +1,29 @@
+From: flange <flange@localhost>
+Subject: [PATCH] rpmsg: rockchip: tx 通道回调同时唤醒接收 vring(vq[0])
+
+AMP 从核(AArch32 裸机 HAL)用 rpmsg-lite，其 platform_notify 恒用 R_CPU_ID 作
+mailbox 通道号：新消息(NS 通告/数据)与 consume 通知都发同一通道（本平台 link-id
+=0x03 → 通道 3，即 DT 的 "rpmsg-tx" 通道），而非按 rx/tx 各走一条通道。
+
+因此 rk_rpmsg_rx_callback 绑定的 "rpmsg-rx" 通道(ch0)永不触发，从核发来的新消息
+全部落到 "rpmsg-tx" 通道的 rk_rpmsg_tx_callback。原实现该回调只唤醒 vq[1]
+(consume 路径)，导致从核的 NS 通告永远不被 virtio 处理 → Linux 看不到 rpmsg
+通道、无 /dev/rpmsgN。此处补唤醒接收 vring vq[0]（多余唤醒为空操作，安全）。
+
+diff --git a/drivers/rpmsg/rockchip_rpmsg_mbox.c b/drivers/rpmsg/rockchip_rpmsg_mbox.c
+--- a/drivers/rpmsg/rockchip_rpmsg_mbox.c
++++ b/drivers/rpmsg/rockchip_rpmsg_mbox.c
+@@ -79,6 +79,13 @@
+ 	 *  Enabled RL_ALLOW_CONSUMED_BUFFERS_NOTIFICATION in rpmsg-lite
+ 	 */
+ 	vring_interrupt(0, rpvdev->vq[1]);
++
++	/*
++	 * 从核 rpmsg-lite 所有通知(含新消息/NS 通告)都发同一 mailbox 通道(本平台 ch3 =
++	 * 本 tx 通道)，故新消息也落到这里。需唤醒接收 vring vq[0]，否则 Linux 收不到
++	 * 从核 NS 通告、无 rpmsg 通道。RL_ALLOW_CONSUMED_BUFFERS_NOTIFICATION=0 时只走新消息。
++	 */
++	vring_interrupt(0, rpvdev->vq[0]);
+ }
+
+ static void rk_rpmsg_rx_callback(struct mbox_client *client, void *message)

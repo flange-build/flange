@@ -492,6 +492,13 @@ class AppBuilder:
 
         self._status(f"开始构建 App '{app_name}' (来源: {app_dir})")
 
+        # amp 类型：协处理器固件，独立分叉——不打 deb、不进 rootfs，也不走
+        # host 交叉编译模板（_compile/_BUILD_SYSTEMS）与约定路径收集
+        # （collect_files/_CONVENTION_MAP）。固件由 amp 组件在 `flange build`
+        # 时把本 app 的 src stage 进 SDK 应用槽位后打进 amp.img。
+        if spec.app.type == "amp":
+            return self._build_amp(app_dir, spec)
+
         # 步骤 3：编译
         self._compile(app_dir, spec, self._config)
 
@@ -514,6 +521,21 @@ class AppBuilder:
         self._status(f"App '{app_name}' 打包完成 → {deb_path.name}")
 
         return deb_path
+
+    def _build_amp(self, app_dir: Path, spec) -> Optional[Path]:
+        """amp 类型 app 的独立构建路径：不打 deb、不进 rootfs。
+
+        amp app 是协处理器固件源（裸机 HAL / RT-Thread 之上的用户应用）。其固件
+        由 amp 组件（`flange build` → RockchipAmpBuilder）把本 app 的 src stage
+        进 SDK 应用槽位、连同 SDK 一起编进 amp.img——故 standalone
+        `flange build app <amp>` 不产出 deb（返回 None）。要把它打进固件：在 board
+        配置把 amp.app 指向该 app（如 tspi-rk3566 的 amp product），再
+        `lunch <board>-amp` + `flange build`。
+        """
+        self._status(
+            f"amp app '{spec.app.name}'：协处理器固件，不打 deb。由 amp 组件经 "
+            f"amp.app 打进 amp.img（用 `lunch <board>-amp` + `flange build`）。")
+        return None
 
     # -----------------------------------------------------------------------
     # 内部辅助方法

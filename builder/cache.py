@@ -7,6 +7,7 @@
 """
 
 import hashlib
+import importlib
 import json
 import os
 import subprocess
@@ -34,7 +35,12 @@ DEPENDENCY_GRAPH: dict[str, list[str]] = {
     "rootfs":               ["app", "kernel", "device-tree-overlay"],
     "boot":                 ["kernel", "device-tree-overlay"],
     "recovery":             ["app", "kernel"],
-    "image":                ["boot", "bootloader", "rootfs", "recovery"],
+    # amp 协处理器固件（裸机 HAL / RT-Thread）是叶子组件：无上游（不需 kernel
+    # 头），按 config.amp.enabled 门控（仿 recovery）。image 依赖它，使 amp.img
+    # 在整盘组装前就绪；amp 关闭时 engine 短路跳过、下游 image 因 amp.img 缺失
+    # 自动跳过 amp 分区。
+    "amp":                  [],
+    "image":                ["boot", "bootloader", "rootfs", "recovery", "amp"],
 }
 
 
@@ -54,6 +60,7 @@ REQUIRED_ARTIFACTS: dict[str, list[str] | dict[str, list[str]]] = {
     "boot":       ["boot.img"],
     "rootfs":     ["rootfs.img"],
     "recovery":   ["recovery.img"],
+    "amp":        ["amp.img"],
     "image":      ["raw.img"],
 }
 
@@ -177,6 +184,8 @@ class BuildCache:
             self._mix_app_sources(h)
         elif component == "recovery":
             self._mix_recovery(h)
+        elif component == "amp":
+            self._mix_amp_sources(h)
         else:
             # kernel / bootloader / boot / image / device-tree-overlay
             h.update(json.dumps(
@@ -422,6 +431,63 @@ class BuildCache:
                 self._hash_directory(h, app_dir)
             else:
                 h.update(f"missing:{pkg}".encode())
+
+    # --- 哈希输入混合：amp ---
+
+    def _mix_amp_sources(self, h: "hashlib._Hash") -> None:
+        """amp 组件特化哈希。
+
+        amp 源在 components/amp/ 仓库内（不走 .build/sources），现有
+        _mix_source_tree 抓不到，故单独混入。为避免给每块板（amp 默认关）都
+        遍历庞大 SDK 目录，仅在 amp.enabled 时哈希实际用到的工程子树：
+          - config.amp 子树（enabled/mode/soc_project/memory/app）—— 始终（廉价）
+          - 启用时：平台专属的 amp 工程目录 + amp.app 指向的源码目录
+
+        AMP 非 Rockchip/rk3568 专属——amp 源的目录布局是**平台专属知识**
+        （rockchip 是 hal/project/<soc> 或 rt-thread/bsp/...，别的平台不同）。
+        故 cache 保持平台无关：委托平台模块的可选 ``amp_source_dirs(config)``
+        返回需哈希的目录（无该函数则不混入 SDK 目录，仅靠 config.amp 哈希）。
+        """
+        amp_cfg = self.config.get("amp", {})
+        h.update(b"amp:")
+        h.update(json.dumps(amp_cfg, sort_keys=True, default=str).encode())
+        if not amp_cfg.get("enabled"):
+            return  # 禁用：仅 hash 配置，跳过 SDK 目录遍历（既有板零开销）
+
+        for proj in self._amp_source_dirs():
+            if proj.is_dir():
+                h.update(b"amp_proj:")
+                h.update(str(proj).encode())
+                self._hash_directory(h, proj)
+        # amp.app 用户工程源（平台无关，复用 app 体系的 components/app/<name>）
+        app_name = amp_cfg.get("app")
+        if app_name:
+            app_dir = Path("components/app") / app_name
+            if app_dir.is_dir():
+                h.update(b"amp_app:")
+                self._hash_directory(h, app_dir)
+
+    def _amp_source_dirs(self) -> list:
+        """委托平台模块解析 amp 工程源目录（平台专属布局知识）。
+
+        平台模块可选导出 ``amp_source_dirs(config) -> list[str]``；未导出则返回
+        空（cache 不混入 SDK 目录，仅靠 config.amp 哈希）。仿 engine 用
+        importlib 取平台模块，保持 cache 平台无关。
+        """
+        platform = self.config.get("platform", "")
+        if not platform:
+            return []
+        try:
+            mod = importlib.import_module(f"builder.platforms.{platform}")
+        except Exception:
+            return []
+        fn = getattr(mod, "amp_source_dirs", None)
+        if fn is None:
+            return []
+        try:
+            return [Path(p) for p in fn(self.config)]
+        except Exception:
+            return []
 
     # --- 哈希输入混合：源码树 + 补丁（kernel/bootloader） ---
 

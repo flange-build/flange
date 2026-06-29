@@ -4,8 +4,65 @@ BOARD = {
     "board": "tspi-rk3566",
     "soc": "rk3566",
     "platform": "rockchip",
+    # 多 product 维度：
+    #   tspi-rk3566-default-{debug,release} → 板出厂常规配置（4 核 Linux，无 AMP）。
+    #   tspi-rk3566-amp-{debug,release}     → AMP 配置：cpu3 切 AArch32 当协处理器
+    #       从核（裸机 HAL），Linux 跑 3 核。仅 amp product 经条件键开 amp、选专用
+    #       amp dts、加 rpmsg 字符设备、并用 product 作用域的分区表（含 amp 分区）。
+    #       default product 完全不受影响（不选 amp dts、amp.enabled 缺省关、分区
+    #       沿用 SoC 默认 5 分区布局）。
+    "products": ["default", "amp"],
+    # AMP 启用（仅 amp product）。用 amp dict 内的嵌套条件键（enabled:amp /
+    # mode:amp），与 SoC（rk3566）提供的 amp.soc_project / amp.memory 深度合并
+    # ——不能用顶层 "amp:amp" 条件 dict（条件 dict 是整体覆盖、会冲掉 SoC 的
+    # soc_project/memory）。从核 console = UART4（HAL 固件默认 + rk3568-amp.dtsi
+    # 既有，零固件改动；tspi uart4 默认空闲、Linux 不占）。如需把用户工程打进
+    # amp.img，加 "app:amp": "<name>"。
+    "amp": {
+        "enabled:amp": True,
+        "mode:amp": "hal",
+        # amp 固件 = 这个 amp 类型 app（自带 CMake，引用 HAL SDK 的
+        # rockchip-hal.cmake）；amp 组件 cmake 构建它产出 firmware.bin → amp.img。
+        "app:amp": "rk3568_amp_demo",
+    },
+    # amp product 经 +defconfig:amp 给 u-boot 开 AMP loader（CONFIG_AMP +
+    # CONFIG_ROCKCHIP_AMP），使 U-Boot 从 amp 分区读 FIT、拉起 cpu3 从核。走
+    # bootloader.defconfig 的 raw inline option（builder append + olddefconfig），
+    # 取代早期 board bootloader patch——配置增加走配置、不走 patch。两选项须成对
+    # （仅 CONFIG_AMP 会因 amp_cpus_on/arm64_switch_amp_pe 未定义而链接失败）。
+    # 仅 amp product 生效；default product 的 u-boot 不含 AMP（rk3566 SoC base
+    # defconfig 仅 rk3568_defconfig）。
+    "bootloader": {
+        "+defconfig:amp": ["CONFIG_AMP=y", "CONFIG_ROCKCHIP_AMP=y"],
+    },
     "kernel": {
         "dts": "tspi-rk3566-user-v10-ext39-linux",
+        # amp product 改用专用 amp dts（基础板 dts + rk3568-amp.dtsi +
+        # /delete-node/ &cpu3; + uart4 留给 AMP），经 board kernel patch 新增到
+        # 内核树。default product 仍用上面的基础板 dts，不受影响。
+        "dts:amp": "tspi-rk3566-amp",
+        # amp product 追加 rpmsg 字符设备（用户态经 /dev/rpmsg_ctrlN、/dev/rpmsgN
+        # 与从核收发）。没有任何已开选项会 select 这两项，必须显式开。走
+        # RockchipKernelBuilder 的 raw inline 机制（含 "=" 的项聚合进动态 fragment）。
+        "+defconfig:amp": ["CONFIG_RPMSG_CHAR=y", "CONFIG_RPMSG_CTRL=y"],
+    },
+    # amp product 专用分区表（product 作用域，整块覆盖 SoC 默认 partitions）：
+    # 在 recovery 与 rootfs 之间插入非 raw 的 amp 分区（16MiB），rootfs offset
+    # 相应从 0x128000 上移到 0x130000。amp 必须排在 remaining rootfs 之前
+    # （grow rootfs 之后不可有非 raw 分区）。default product 不应用此键、分区
+    # 布局不变——保「default 不受影响」。首次升级到 amp 布局需整盘刷写。
+    "partitions:amp": {
+        "format": "gpt",
+        "sector_size": 512,
+        "entries": [
+            {"name": "idbloader", "offset": "0x40",     "size": "0x2000",   "type": "raw"},
+            {"name": "uboot",     "offset": "0x4000",   "size": "0x2000",   "type": "raw"},
+            {"name": "boot",      "offset": "0x8000",   "size": "0x20000",  "type": "ext4"},
+            {"name": "recovery",  "offset": "0x28000",  "size": "0x100000", "type": "ext4"},
+            {"name": "amp",       "offset": "0x128000", "size": "0x8000",   "type": "ext4"},
+            {"name": "rootfs",    "offset": "0x130000", "size": "remaining",
+             "type": "ext4", "image_size": "2G", "grow_on_first_boot": True},
+        ],
     },
     "boot": {
         # 无刷电机 (BLDC/FOC) 引脚 overlay：源在 dtso/tspi-rk3566-bldc.dtso，

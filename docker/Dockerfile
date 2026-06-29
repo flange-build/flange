@@ -109,6 +109,20 @@ RUN curl -fsSL "https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x8
     && ln -sfn /opt/gcc-10.5.0-nolibc/aarch64-linux /opt/aarch64-gcc10 \
     && /opt/aarch64-gcc10/bin/aarch64-linux-gcc --version | head -1
 
+# AMP 协处理器裸机固件（Cortex-A55 AArch32 HAL / RT-Thread）须用 newlib 版
+# arm-none-eabi 工具链（提供 --specs=nosys.specs；glibc 向的 arm-linux-gnueabihf
+# / aarch64-linux-gnu 编不出裸核）。钉官方 gcc-arm-none-eabi-10-2020-q4-major
+# （gcc-10）：与 SDK Makefile/rtconfig 默认版本一致、与 flange u-boot/kernel 的
+# gcc-10 约定一致，规避 gcc-13 在 Rockchip 低层代码上的隐蔽 miscompile。SDK
+# Makefile 优先探测 prebuilts 路径、否则回退 PATH 上的 arm-none-eabi-；故软链
+# 进 /usr/local/bin。rt-thread rtconfig 走 RTT_EXEC_PATH=/opt/arm-none-eabi-gcc10/bin
+# 覆盖（见 builder/platforms/rockchip/amp.py）。单独成层保留上面 apt 大层缓存。
+RUN curl -fsSL "https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2" \
+        | tar -xj -C /opt \
+    && ln -sfn /opt/gcc-arm-none-eabi-10-2020-q4-major /opt/arm-none-eabi-gcc10 \
+    && for t in /opt/arm-none-eabi-gcc10/bin/arm-none-eabi-*; do ln -sf "$t" /usr/local/bin/; done \
+    && arm-none-eabi-gcc --version | head -1
+
 # meson cross-file：路径与 builder/app.py 中 _BUILD_SYSTEMS["meson"] 模板引用
 # 的 --cross-file /etc/meson/cross-<arch>.ini 一致。源文件可见于 docker/meson/。
 COPY docker/meson/cross-aarch64.ini /etc/meson/cross-aarch64.ini

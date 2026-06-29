@@ -104,11 +104,15 @@ class BuildEngine:
     def _component_disabled(self, component: str) -> bool:
         """组件是否被 config 显式关闭。
 
-        目前仅 recovery 受配置开关控制：当 ``config.recovery.enabled is False``
+        recovery 与 amp 受配置开关控制：当 ``config.<comp>.enabled is False``
         时不进入构建图执行，也不为其收集产物。
         """
         if component == "recovery":
             return not (self.config.get("recovery") or {}).get("enabled", False)
+        # amp 协处理器固件按 config.amp.enabled 门控（默认关）：未启用时静默跳过，
+        # 下游 image/flash 因 amp.img 缺失自动跳过 amp 分区。
+        if component == "amp":
+            return not (self.config.get("amp") or {}).get("enabled", False)
         return False
 
     def _build_app(self) -> dict:

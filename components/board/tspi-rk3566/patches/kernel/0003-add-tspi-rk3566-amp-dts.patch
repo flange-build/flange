@@ -1,0 +1,71 @@
+From: flange <flange@localhost>
+Subject: [PATCH] arm64: dts: rockchip: 新增 tspi-rk3566-amp.dts（AMP product）
+
+amp product 专用 dts：基础板 + rk3568-amp.dtsi + 固件区 reserved-memory
+(amp@7000000) + amp-cpu3 entry=0x07000000 + amp-irqs 追加 rpmsg 邮箱中断
+(222) + arm_pmu 去 cpu3 + delete cpu3。
+
+diff --git a/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts b/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts
+new file mode 100644
+--- /dev/null
++++ b/arch/arm64/boot/dts/rockchip/tspi-rk3566-amp.dts
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * tspi-rk3566 AMP product 专用设备树。仅 amp product 经 kernel.dts 选用，
++ * default product 不受影响。在基础板 dts 之上：
++ *   - #include rk3568-amp.dtsi：reserved-memory（SHMEM/rpmsg）、rockchip-amp、
++ *     rpmsg、使能 &mailbox。SHMEM/rpmsg 地址与 board 配置 amp.memory 一致。
++ *   - reserved-memory amp@7000000：保留从核固件代码区（避开内核占用的低地址）。
++ *   - &amp_cpus/amp-cpu3 entry 覆盖为 0x07000000（与固件 load 一致）。
++ *   - &rockchip_amp：amp-irqs 追加 MBOX0_CH3_A2B(INTID 222)，把 rpmsg link-up
++ *     邮箱中断路由到 cpu3（否则被 Linux 改回 cpu0，固件 wait_for_link_up 卡死）。
++ *   - &arm_pmu：删 cpu3 前去掉对它的 interrupt/affinity（否则 pmu probe 失败）。
++ *   - /delete-node/ &cpu3：把第 4 核摘给 AMP，Linux 跑 3 核。
++ *
++ * AMP 从核 console = UART4（GPIO3_B1/B2，1500000）。Linux console 仍 UART2。
++ */
++
++#include "tspi-rk3566-user-v10-ext39-linux.dts"
++#include "rk3568-amp.dtsi"
++
++/ {
++	reserved-memory {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
++
++		amp_firmware_reserved: amp@7000000 {
++			reg = <0x0 0x07000000 0x0 0x00800000>;
++			no-map;
++		};
++	};
++};
++
++&amp_cpus {
++	amp-cpu3 {
++		entry = <0x0 0x07000000>;
++	};
++};
++
++/* MBOX0_CH3_A2B(INTID 222) = Linux→cpu3 的 rpmsg link-up 邮箱中断，必须列进
++ * amp-irqs，否则 Linux gic_dist_init 把它路由回 cpu0、固件永远收不到 →
++ * rpmsg_lite_wait_for_link_up 卡死。属性赋值是整体替换，须含原三项。
++ * （之前"覆盖 amp-irqs 就停打印"的真因是固件 gicInit=1 抢 GICD，已在 app
++ *  main.c 改 cpuAff 为非本核修掉。） */
++&rockchip_amp {
++	amp-irqs = /bits/ 64 <
++		GIC_AMP_IRQ_CFG_ROUTE(152, 0xd0, CPU_GET_AFFINITY(3, 0))
++		GIC_AMP_IRQ_CFG_ROUTE(AMP_CPUOFF_REQ_IRQ(3), 0xd0, CPU_GET_AFFINITY(3, 0))
++		GIC_AMP_IRQ_CFG_ROUTE(GIC_TOUCH_REQ_IRQ(3), 0xd0, CPU_GET_AFFINITY(3, 0))
++		GIC_AMP_IRQ_CFG_ROUTE(222, 0xd0, CPU_GET_AFFINITY(3, 0))>;
++};
++
++&arm_pmu {
++	interrupts = <GIC_SPI 228 IRQ_TYPE_LEVEL_HIGH>,
++		     <GIC_SPI 229 IRQ_TYPE_LEVEL_HIGH>,
++		     <GIC_SPI 230 IRQ_TYPE_LEVEL_HIGH>;
++	interrupt-affinity = <&cpu0>, <&cpu1>, <&cpu2>;
++};
++
++/delete-node/ &cpu3;
