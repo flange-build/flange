@@ -6,13 +6,16 @@ sources:
   - components/board/tspi-rk3566/config.py
   - components/board/tspi-rk3566/patches/kernel/0001-dts-firmware_class-path-fix.patch
   - components/board/tspi-rk3566/patches/kernel/0002-bcmdhd-set-fw-ampak-path-brcm.patch
+  - components/board/tspi-rk3566/patches/kernel/0003-add-tspi-rk3566-amp-dts.patch
   - components/board/tspi-rk3566/overlay/etc/hostname
   - components/board/tspi-rk3566/overlay/etc/usbdevice.conf
 related:
   - "[[rockchip 平台]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-04-26
+  - "[[AMP 协处理器与 rpmsg]]"
+  - "[[amp 构建器]]"
+updated: 2026-06-30
 ---
 
 ## TL;DR
@@ -21,12 +24,14 @@ TSpi RK3566 开发板，板载 AP6212A WiFi/BT 模组（AMPAK），需要 kernel
 
 ## product / variant
 
-继承平台默认：`products: [default]`，`variants: [debug, release]`。
+`products: [default, amp]`，`variants: [debug, release]`。
 
 ```
-lunch tspi-rk3566-default-debug
-lunch tspi-rk3566-default-release
+lunch tspi-rk3566-default-debug    # 常规 4 核 Linux
+lunch tspi-rk3566-amp-debug        # AMP：cpu3 切 AArch32 当从核，Linux 跑 3 核
 ```
+
+**amp product**：经条件键开 amp（`config.amp`，复用 rk3568 SDK，同 die）、选专用 amp dts（patch 0003）、加 rpmsg 字符设备、用含非 raw `amp` 分区的 product 作用域分区表、U-Boot 经 `bootloader.+defconfig:amp` 开 AMP loader。default product 完全不受影响。机制详见 [[AMP 协处理器与 rpmsg]]、构建见 [[amp 构建器]]。
 
 ## 关键差异点
 

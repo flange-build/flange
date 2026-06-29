@@ -19,7 +19,7 @@ updated: 2026-05-03
 - [[OpenSpec 工作流]] — 变更管理流程
 
 ## 组件 (components/)
-- [[kernel 构建器]] · [[bootloader 构建器]] · [[rootfs 构建器]] · [[recovery 构建器]] · [[image 构建器]] · [[app 打包系统]]
+- [[kernel 构建器]] · [[bootloader 构建器]] · [[rootfs 构建器]] · [[recovery 构建器]] · [[image 构建器]] · [[app 打包系统]] · [[amp 构建器]]
 
 ## 平台 (platforms/)
 - [[rockchip 平台]] — RK3566 已落地
@@ -34,6 +34,7 @@ updated: 2026-05-03
 - 启动：[[U-Boot 启动链]] · [[双 extlinux 配置]] · [[boot-once 启动切换]] · [[reboot reason]]
 - 刷写：[[flash-config.json]] · [[FlashStrategy 抽象]] · [[分区表系统]] · [[USB 线刷协议]]
 - 内核：[[out-of-tree 模块]]
+- AMP：[[AMP 协处理器与 rpmsg]]
 - Recovery：[[recovery 系统]] · [[recoveryctl 协议]]
 
 ## 子系统 (subsystems/)

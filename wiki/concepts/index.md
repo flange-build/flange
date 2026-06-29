@@ -41,6 +41,9 @@ updated: 2026-05-03
 - [[硬件特性包]]
 - [[sec_ts 触摸 a7a 供电欠压]] — a7a 魅族 E3 触摸不可用真根因＝硬件开机浪涌欠压，软件无解
 
+## AMP / 协处理器
+- [[AMP 协处理器与 rpmsg]] — cpu3 切 AArch32 当从核 + Linux↔AMP rpmsg 链路三约束
+
 ## Recovery
 - [[recovery 系统]]
 - [[recoveryctl 协议]]

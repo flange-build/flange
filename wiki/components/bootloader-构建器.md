@@ -21,7 +21,7 @@ U-Boot + SPL 编译及固件打包。Rockchip 解析 RKTRUST/RKBOOT INI → `idb
 ## 关键设计要点
 
 **Rockchip**（`RockchipBootloaderBuilder`，L8）：
-- configure：`make <defconfig>`（ARCH=arm）；compile：默认 target → `u-boot.itb`
+- configure：`make <defconfig>`（ARCH=arm）。`bootloader.defconfig` 支持单字符串或 list（对齐 `kernel.defconfig`）：list 中含 `=` / `# CONFIG_` 的项是 raw u-boot option，`_apply_inline_defconfig` append 进 `.config` 后 `make olddefconfig` 归一化，其余作 defconfig/fragment make 目标。让 board 经 `+defconfig:<product>` 一行开 u-boot 选项（如 amp product 的 `CONFIG_AMP=y`），无需 patch 上游 defconfig。compile：默认 target → `u-boot.itb`
 - `_parse_trust_ini`（L64）取 BL31/BL32；`_parse_loader_ini`（L75）取 DDR/SPL → `idbloader.img`；miniloader 名从 `[OUTPUT]` 读；collect：`bootloader`、`idbloader`、`miniloader`
 
 **Allwinner A733**（`AllwinnerA733BootloaderBuilder`，L19）：
