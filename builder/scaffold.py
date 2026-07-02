@@ -45,8 +45,10 @@ _VALID_COMBINATIONS: set[tuple[str, str]] = {
     ("lib",     "make"),
     # test（仅 none）
     ("test",    "none"),
-    # amp（协处理器固件，仅 amp 构建系统）
+    # amp（协处理器固件）：amp=hal（CMake 引用 HAL SDK），scons=rt-thread
+    # （叠到 RT-Thread BSP 模板的轻量 overlay）
     ("amp",     "amp"),
+    ("amp",     "scons"),
 }
 
 

@@ -15,7 +15,7 @@ VALID_APP_TYPES = {"exec", "service", "lib", "test", "amp"}
 
 # 允许的构建系统取值。amp = 经 SDK（HAL Makefile / RT-Thread scons）+ mkimage
 # 打 FIT，由 amp 组件驱动，不复用 _BUILD_SYSTEMS 的 host 交叉编译模板。
-VALID_BUILD_SYSTEMS = {"none", "cmake", "meson", "make", "swift", "custom", "amp"}
+VALID_BUILD_SYSTEMS = {"none", "cmake", "meson", "make", "swift", "custom", "amp", "scons"}
 
 
 class AppSpecError(ValueError):

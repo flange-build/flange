@@ -1,5 +1,23 @@
 """TSpi RK3566 板级配置"""
 
+# amp 分区布局：amp（HAL）与 amp-rtt（RT-Thread）两 product 完全复用同一布局。
+# 条件键不支持「一键多 product」（resolve_conditions 是单值精确匹配），故抽成共享
+# 常量，两处 partitions:<product> 各引用一次（DRY，避免复制整块）。在 recovery 与
+# rootfs 间插入非 raw 的 amp 分区（16MiB）；amp 须排在 remaining rootfs 之前。
+_AMP_PARTITIONS = {
+    "format": "gpt",
+    "sector_size": 512,
+    "entries": [
+        {"name": "idbloader", "offset": "0x40",     "size": "0x2000",   "type": "raw"},
+        {"name": "uboot",     "offset": "0x4000",   "size": "0x2000",   "type": "raw"},
+        {"name": "boot",      "offset": "0x8000",   "size": "0x20000",  "type": "ext4"},
+        {"name": "recovery",  "offset": "0x28000",  "size": "0x100000", "type": "ext4"},
+        {"name": "amp",       "offset": "0x128000", "size": "0x8000",   "type": "ext4"},
+        {"name": "rootfs",    "offset": "0x130000", "size": "remaining",
+         "type": "ext4", "image_size": "2G", "grow_on_first_boot": True},
+    ],
+}
+
 BOARD = {
     "board": "tspi-rk3566",
     "soc": "rk3566",
@@ -11,7 +29,11 @@ BOARD = {
     #       amp dts、加 rpmsg 字符设备、并用 product 作用域的分区表（含 amp 分区）。
     #       default product 完全不受影响（不选 amp dts、amp.enabled 缺省关、分区
     #       沿用 SoC 默认 5 分区布局）。
-    "products": ["default", "amp"],
+    #   tspi-rk3566-amp-rtt-{debug,release} → 同 amp，但 cpu3 从核跑 RT-Thread
+    #       （RTOS，mode=rt-thread）。复用 amp 的全部下游（同 amp dts、同 amp 分区、
+    #       同 U-Boot AMP loader、同内核 rpmsg 驱动），仅 amp.img 从核固件不同
+    #       （scons 构建 rk3568-32 BSP + overlay，而非 HAL CMake firmware）。
+    "products": ["default", "amp", "amp-rtt"],
     # AMP 启用（仅 amp product）。用 amp dict 内的嵌套条件键（enabled:amp /
     # mode:amp），与 SoC（rk3566）提供的 amp.soc_project / amp.memory 深度合并
     # ——不能用顶层 "amp:amp" 条件 dict（条件 dict 是整体覆盖、会冲掉 SoC 的
@@ -24,6 +46,12 @@ BOARD = {
         # amp 固件 = 这个 amp 类型 app（自带 CMake，引用 HAL SDK 的
         # rockchip-hal.cmake）；amp 组件 cmake 构建它产出 firmware.bin → amp.img。
         "app:amp": "rk3568_amp_demo",
+        # amp-rtt product：cpu3 从核跑 RT-Thread。mode=rt-thread → amp 组件走 scons
+        # 构建 rk3568-32 BSP + 这个轻量 overlay app（build.system=scons）。soc_project
+        # / memory 由 SoC 层无条件提供，两 product 共用（rk3568 → rk3568-32 BSP）。
+        "enabled:amp-rtt": True,
+        "mode:amp-rtt": "rt-thread",
+        "app:amp-rtt": "rk3568_amp_rtt_demo",
     },
     # amp product 经 +defconfig:amp 给 u-boot 开 AMP loader（CONFIG_AMP +
     # CONFIG_ROCKCHIP_AMP），使 U-Boot 从 amp 分区读 FIT、拉起 cpu3 从核。走
@@ -34,6 +62,9 @@ BOARD = {
     # defconfig 仅 rk3568_defconfig）。
     "bootloader": {
         "+defconfig:amp": ["CONFIG_AMP=y", "CONFIG_ROCKCHIP_AMP=y"],
+        # amp-rtt 复用同一 U-Boot AMP loader（mode 无关，U-Boot 只管从 amp 分区
+        # 读 FIT 拉起 cpu3，不关心从核跑 HAL 还是 RTOS）。
+        "+defconfig:amp-rtt": ["CONFIG_AMP=y", "CONFIG_ROCKCHIP_AMP=y"],
     },
     "kernel": {
         "dts": "tspi-rk3566-user-v10-ext39-linux",
@@ -41,29 +72,22 @@ BOARD = {
         # /delete-node/ &cpu3; + uart4 留给 AMP），经 board kernel patch 新增到
         # 内核树。default product 仍用上面的基础板 dts，不受影响。
         "dts:amp": "tspi-rk3566-amp",
+        # amp-rtt 复用同一 amp dts（link-id 0x10 与 RT-Thread BSP 默认一致、
+        # amp-irqs/reserved-memory/amp-cpus entry 全 mode 无关）。
+        "dts:amp-rtt": "tspi-rk3566-amp",
         # amp product 追加 rpmsg 字符设备（用户态经 /dev/rpmsg_ctrlN、/dev/rpmsgN
         # 与从核收发）。没有任何已开选项会 select 这两项，必须显式开。走
         # RockchipKernelBuilder 的 raw inline 机制（含 "=" 的项聚合进动态 fragment）。
         "+defconfig:amp": ["CONFIG_RPMSG_CHAR=y", "CONFIG_RPMSG_CTRL=y"],
+        "+defconfig:amp-rtt": ["CONFIG_RPMSG_CHAR=y", "CONFIG_RPMSG_CTRL=y"],
     },
     # amp product 专用分区表（product 作用域，整块覆盖 SoC 默认 partitions）：
     # 在 recovery 与 rootfs 之间插入非 raw 的 amp 分区（16MiB），rootfs offset
     # 相应从 0x128000 上移到 0x130000。amp 必须排在 remaining rootfs 之前
     # （grow rootfs 之后不可有非 raw 分区）。default product 不应用此键、分区
     # 布局不变——保「default 不受影响」。首次升级到 amp 布局需整盘刷写。
-    "partitions:amp": {
-        "format": "gpt",
-        "sector_size": 512,
-        "entries": [
-            {"name": "idbloader", "offset": "0x40",     "size": "0x2000",   "type": "raw"},
-            {"name": "uboot",     "offset": "0x4000",   "size": "0x2000",   "type": "raw"},
-            {"name": "boot",      "offset": "0x8000",   "size": "0x20000",  "type": "ext4"},
-            {"name": "recovery",  "offset": "0x28000",  "size": "0x100000", "type": "ext4"},
-            {"name": "amp",       "offset": "0x128000", "size": "0x8000",   "type": "ext4"},
-            {"name": "rootfs",    "offset": "0x130000", "size": "remaining",
-             "type": "ext4", "image_size": "2G", "grow_on_first_boot": True},
-        ],
-    },
+    "partitions:amp": _AMP_PARTITIONS,
+    "partitions:amp-rtt": _AMP_PARTITIONS,
     "boot": {
         # 无刷电机 (BLDC/FOC) 引脚 overlay：源在 dtso/tspi-rk3566-bldc.dtso，
         # 由 device-tree-overlay 组件编译进 boot.img。仅构建、默认不应用——

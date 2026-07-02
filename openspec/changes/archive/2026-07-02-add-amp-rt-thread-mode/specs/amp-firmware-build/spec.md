@@ -1,22 +1,6 @@
-# amp-firmware-build Specification
+# amp-firmware-build Specification (delta)
 
-## Purpose
-TBD - created by archiving change add-amp-firmware-support. Update Purpose after archive.
-## Requirements
-### Requirement: amp 组件注册进依赖图并作为 image 上游
-
-`builder/cache.py` 的 `DEPENDENCY_GRAPH` SHALL 新增 `"amp": []` 叶子节点（amp 固件是裸机/RTOS 镜像，无上游组件依赖），并 SHALL 把 `"amp"` 追加进 `"image"` 的依赖列表，使 `amp.img` 在整盘组装前就绪。`REQUIRED_ARTIFACTS` SHALL 新增 `"amp": ["amp.img"]`，在缓存命中时校验产物存在。
-
-#### Scenario: 拓扑排序中 amp 先于 image 构建
-
-- **WHEN** 以 `image` 为目标对 `DEPENDENCY_GRAPH` 做拓扑排序
-- **THEN** `amp` 出现在 `image` 之前
-- **AND** `amp` 的上游依赖列表为空
-
-#### Scenario: amp 产物缺失时缓存判定失效
-
-- **WHEN** `amp` 组件 `.build_hash` 有效但 `target/<...>/amp/amp.img` 不存在
-- **THEN** `BuildCache.is_up_to_date("amp")` 返回 `False`，触发重建
+## MODIFIED Requirements
 
 ### Requirement: amp 构建器按 mode 二选一产出 FIT 格式 amp.img
 
@@ -44,46 +28,6 @@ flange SHALL 新增 `builder/platforms/rockchip/amp.py` 中的 `RockchipAmpBuild
 - **WHEN** 对收集后的 `amp.img` 执行 `mkimage -l` 或 `fdtdump`
 - **THEN** 识别为 FIT 镜像，含一个 `firmware` 类型从核 image 节点（声明 `load` 地址与 `cpu` mpidr）
 - **AND** 含 `linux` 配置节点（`arch = arm64`、`cpu = 0x000`），而非 4 个全裸核节点（证明用了 `amp_linux.its` 而非 `amp.its`）
-
-### Requirement: amp 组件按配置 enabled 开关可选
-
-`builder/engine.py` 的 `_component_disabled` SHALL 新增 amp 分支：当 `config.amp.enabled` 不为真时返回 `True`，使引擎静默跳过 amp 构建且不收集产物（仿 recovery 模式）。平台层 `components/platform/rockchip/config.py` SHALL 默认 `amp = {"enabled": False}`；board 层按需 opt-in。amp 关闭时下游 `image` 因 `amp.img` 缺失自动跳过 amp 分区写入。
-
-#### Scenario: amp 关闭时跳过构建
-
-- **WHEN** `config.amp.enabled` 为 `False` 且构建 `image`
-- **THEN** 引擎对 `amp` 组件 `phase_skip`，不产出 `amp.img`
-- **AND** `image` 整盘组装不写入 amp 分区
-
-#### Scenario: 平台默认关、board 开
-
-- **WHEN** 解析仅平台/SoC 层（未 opt-in amp）的合并配置
-- **THEN** `config.amp.enabled` 为 `False`
-- **AND** 当 board 配置声明 `amp.enabled = True` 时合并结果为 `True`
-
-### Requirement: amp 目标工程按 SoC 映射，mode 表达 hal/rt-thread 互斥
-
-`config.amp.mode` SHALL 为单一枚举字段，取值 SHALL 限于 `"hal"` 与 `"rt-thread"`（一个字段天然互斥，整张 amp.img 单一固件来源）。SoC 配置 SHALL 提供 amp 目标工程标识 `amp.soc_project`（如 rk3566 配置设为 `"rk3568"`，因两者同 die、BootROM 识别为 rk3568）；构建器 SHALL 读取 `config.amp.soc_project` 定位工程目录，SHALL NOT 在代码内硬编码板级映射（数据放配置、不放代码，遵循框架/平台数据分离）。
-
-#### Scenario: rk3566 复用 rk3568 amp 工程
-
-- **WHEN** 为 board `tspi-rk3566`（soc=rk3566）构建 amp 组件
-- **THEN** 构建器使用 `hal/project/rk3568`（或 `rt-thread/bsp/rockchip/rk3568-32`）工程
-- **AND** 产出 amp.img 的从核 `arch` 为 `arm`（32 位 AArch32）
-
-### Requirement: amp 源码纳入增量内容哈希
-
-`builder/cache.py` 的 `compute_hash` SHALL 为 amp 组件混入 `amp.app` 指向的 app 目录（`components/app/<name>`）的内容哈希（经平台层 `amp_source_dirs(config)` 委托返回，`cache._mix_amp_sources` 调用），连同 `config.amp` 与内存布局常量一起参与哈希。因 amp app 源在 `components/app/` 仓库内、不走 `.build/sources`，现有 `_mix_source_tree` 抓不到其改动，此哈希为正确性必需，否则增量会假命中。HAL SDK 本体（`components/amp/lib/middleware`，vendored 稳定）改动罕见、不纳入默认哈希以省时；SDK 或 `rockchip-hal.cmake` 变更时用 `flange build -f amp` 强制重建。
-
-#### Scenario: 改 amp app 源触发 amp 重建
-
-- **WHEN** 修改 `amp.app` 指向的 `components/app/<name>/` 下的源码后重新构建
-- **THEN** `BuildCache.is_up_to_date("amp")` 返回 `False`，amp 被重建
-
-#### Scenario: 切换 mode 触发 amp 重建
-
-- **WHEN** `config.amp.mode` 由 `"hal"` 改为 `"rt-thread"` 后重新构建
-- **THEN** amp 组件哈希变化，触发重建
 
 ### Requirement: 内存布局作为单一事实源由构建注入
 
@@ -142,4 +86,3 @@ amp 固件的从核应用逻辑 SHALL 来自 `config.amp.app` 指向的 amp 类�
 
 - **WHEN** 修改被 `amp.app` 指向的 app 源码后重新构建
 - **THEN** amp 组件哈希变化（`amp_source_dirs` 含 `components/app/<name>`），触发重建
-

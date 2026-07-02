@@ -1,0 +1,14 @@
+app:
+  name: rk3568_amp_rtt_demo
+  version: 0.1.0
+  description: AMP 协处理器固件 demo（RT-Thread，Linux↔AMP rpmsg echo；echo 由厂商 Linux-rpmsg 测试提供）
+  type: amp
+  arch:
+    - aarch64
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: scons

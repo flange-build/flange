@@ -138,21 +138,31 @@ class RockchipAmpBuilder(ComponentBuilder):
     def _amp_app_dir(self, config: dict) -> Path:
         """解析 config.amp.app → amp app 工程目录（components/app/<name>）。
 
-        新模型：amp app 是自带 CMake 的独立工程，引用 components/amp 的 HAL SDK
-        （经 rockchip-hal.cmake），产出从核 firmware.bin。SDK 只读引用、不就地
-        构建（不再 stage 进 SDK）。amp.app 必填。
+        amp app 按 mode 二分：
+          - hal：自带 CMake 的独立工程，经 rockchip-hal.cmake 引用 HAL SDK，产
+            firmware.bin（要求有 CMakeLists.txt）。
+          - rt-thread：叠到 RT-Thread BSP 模板的轻量 overlay（applications/ +
+            可选 .config），无 CMakeLists.txt。
+        两 mode 均 SDK 只读引用、不就地构建。amp.app 必填。
         """
         app_name = self._amp_cfg(config).get("app")
         if not app_name:
             raise ValueError(
-                "amp.app 未声明：amp 固件由一个 amp 类型 app（自带 CMake、引用 HAL "
-                "SDK）提供。在 board 的 amp 段设 \"app:amp\": \"<name>\"；"
-                "新建用 `flange create app --type amp <name>`。")
+                "amp.app 未声明：amp 固件由一个 amp 类型 app 提供。在 board 的 amp "
+                "段设 \"app:amp\": \"<name>\"；新建用 "
+                "`flange create app --type amp --mode <hal|rt-thread> <name>`。")
         app_dir = Path("components/app") / app_name
-        if not (app_dir / "CMakeLists.txt").is_file():
-            raise FileNotFoundError(
-                f"amp.app '{app_name}' 缺 CMakeLists.txt（{app_dir}）；amp app 须是"
-                " 引用 rockchip-hal.cmake 的 CMake 工程。")
+        mode = self._mode(config)
+        if mode == "hal":
+            if not (app_dir / "CMakeLists.txt").is_file():
+                raise FileNotFoundError(
+                    f"amp.app '{app_name}' 缺 CMakeLists.txt（{app_dir}）；hal amp "
+                    "app 须是引用 rockchip-hal.cmake 的 CMake 工程。")
+        else:  # rt-thread
+            if not (app_dir / "applications").is_dir():
+                raise FileNotFoundError(
+                    f"amp.app '{app_name}' 缺 applications/ 目录（{app_dir}）；"
+                    "rt-thread amp app 须是叠到 BSP 模板的 overlay。")
         return app_dir
 
     def _compile_hal(self, config: dict) -> Path:
@@ -196,23 +206,31 @@ class RockchipAmpBuilder(ComponentBuilder):
         return self._mkimage_fit(soc, firmware_bin, cpu, mem)
 
     def _mkimage_fit(self, soc: str, firmware_bin: Path, cpu: int,
-                     mem: dict) -> Path:
-        """用 SDK 自带 mkimage 把从核 firmware.bin 打成 FIT amp.img。
+                     mem: dict, its_path=None, incbin_name=None) -> Path:
+        """用 SDK 自带 mkimage 把从核固件 .bin 打成 FIT amp.img。
 
-        amp_linux.its 的 load 改成 config.cpu_base（单一事实源），与 firmware 的
-        链接地址(rockchip-hal.cmake 注入的 FIRMWARE_BASE)一致；渲染到独立 tmpdir
-        （不污染 git 跟踪的 SDK Image/amp_linux.its）。firmware.bin 改名为 .its
-        incbin 引用的 hal<cpu>.bin（incbin 相对 .its 所在目录解析，故同放 tmpdir）。
+        amp_linux.its 的 load 改成 config.cpu_base（单一事实源），与固件链接地址
+        （hal: rockchip-hal.cmake 的 FIRMWARE_BASE；rt-thread: RTT_PRMEM_BASE）一致；
+        渲染到独立 tmpdir（不污染 git 跟踪的 SDK .its）。firmware.bin 改名为 .its
+        incbin 引用名（incbin 相对 .its 所在目录解析，故同放 tmpdir）。
+
+        参数化：its_path 缺省 = HAL project 的 amp_linux.its、incbin_name 缺省 =
+        hal<cpu>.bin（保持 hal 原行为）；rt-thread 传 BSP 的 amp_linux.its +
+        rtt<cpu>.bin。mkimage 为通用 U-Boot 工具，两 mode 复用 HAL SDK 内置的。
         """
-        its_txt = (Path(f"{_HAL_ROOT}/project/{soc}")
-                   / "Image" / "amp_linux.its").read_text()
+        if its_path is None:
+            its_path = (Path(f"{_HAL_ROOT}/project/{soc}")
+                        / "Image" / "amp_linux.its")
+        if incbin_name is None:
+            incbin_name = f"hal{cpu}.bin"
+        its_txt = Path(its_path).read_text()
         its_txt = re.sub(
             r"(\bload\s*=\s*<\s*)0x[0-9a-fA-F]+(\s*>)",
             lambda m: m.group(1) + hex(mem["cpu_base"]) + m.group(2),
             its_txt)
         work = Path(tempfile.mkdtemp(prefix="flange-amp-"))
         (work / "amp_linux.its").write_text(its_txt)
-        shutil.copy2(firmware_bin, work / f"hal{cpu}.bin")
+        shutil.copy2(firmware_bin, work / incbin_name)
         mkimage = os.path.abspath(f"{_HAL_ROOT}/tools/mkimage")
         self._status(f"AMP 打包 amp.img（FIT, load={hex(mem['cpu_base'])}）...")
         self.docker.run(
@@ -220,17 +238,147 @@ class RockchipAmpBuilder(ComponentBuilder):
             cwd=str(work), label="amp:mkimage")
         return work / "amp.img"
 
-    def _compile_rtthread(self, config: dict) -> Path:
-        """RT-Thread 路径：尚未接入新的 CMake-app 模型。
+    def _rtt_bsp_dir(self, soc: str) -> Path:
+        """定位 RT-Thread BSP 模板目录：<soc>-32（-32 = Cortex-A55 AArch32）。"""
+        bsp = Path(_RTT_ROOT) / "bsp" / "rockchip" / f"{soc}-32"
+        if not (bsp / "SConstruct").is_file():
+            raise FileNotFoundError(
+                f"RT-Thread BSP 模板不存在或不完整: {bsp}（缺 SConstruct）")
+        return bsp
 
-        RT-Thread 自带 scons + Kconfig 构建体系，与 hal 的 CMake-app 模型不同，
-        需要单独设计（app 引用 rt-thread SDK、地址 config 驱动、产出 rttN.bin →
-        mkimage）。首板 tspi-rk3566 走 mode=hal；rt-thread 留待后续在 rt-thread
-        目标板上设计 + 验证。
+    @staticmethod
+    def _merge_kconfig_fragment(base_config: Path, fragment: Path) -> None:
+        """把 app 的 .config 片段按符号名合并进 staged BSP 的 .config。
+
+        片段每行形如 `CONFIG_X=y` 或 `# CONFIG_X is not set`：同符号替换 base 中
+        既有行，base 无则追加。让 rt-thread app 只需声明 Kconfig 增量（轻量 overlay）
+        而非整份 .config；合并后由 scons --useconfig 从结果重生成 rtconfig.h。
         """
-        raise NotImplementedError(
-            "amp.mode='rt-thread' 暂未接入 CMake-app 模型；当前仅支持 mode='hal'"
-            "（amp app 经 rockchip-hal.cmake 引用 HAL SDK）。")
+        def _sym(line: str):
+            m = re.match(r"\s*#?\s*(CONFIG_[A-Za-z0-9_]+)", line)
+            return m.group(1) if m else None
+
+        frag_by_sym = {}
+        for line in fragment.read_text().splitlines():
+            s = _sym(line)
+            if s:
+                frag_by_sym[s] = line
+        out, seen = [], set()
+        for line in base_config.read_text().splitlines():
+            s = _sym(line)
+            if s and s in frag_by_sym:
+                out.append(frag_by_sym[s])
+                seen.add(s)
+            else:
+                out.append(line)
+        for s, line in frag_by_sym.items():
+            if s not in seen:
+                out.append(line)
+        base_config.write_text("\n".join(out) + "\n")
+
+    def _compile_rtthread(self, config: dict) -> Path:
+        """mode=rt-thread：把 RT-Thread BSP 模板 stage 到 tmpdir、叠加 amp app
+        overlay、由 config.amp.memory 注入 scons 环境变量后 scons 构建产出
+        rtthread.bin → rtt<cpu>.bin，再 mkimage 打 amp.img。
+
+        SDK 只读：只 stage BSP 目录（小）到 tmpdir，RTT_ROOT 指向原地只读 SDK 根；
+        scons 的 variant_dir（相对 BSP 启动目录）保证 .o/产物全落 tmpdir，SDK 树
+        零写入（PYTHONDONTWRITEBYTECODE=1 兜住 import SConscript 的 __pycache__）。
+
+        内存布局单一事实源（config.amp.memory）经环境变量注入，与 hal 的 CMake -D
+        落到同名下游宏：cpu_base→RTT_PRMEM_BASE→FIRMWARE_BASE，dram_size→
+        RTT_PRMEM_SIZE→DRAM_SIZE，其余同名（见 rtconfig.py）。
+        """
+        soc = self._soc_project(config)
+        mem = self._memory(config)
+        cpu = mem["cpu"]
+        app_dir = self._amp_app_dir(config)
+        bsp_src = self._rtt_bsp_dir(soc)
+
+        # --- stage 可写 RTT_ROOT 镜像 → tmpdir（保 SDK 只读语义）---
+        # 只读庞大内核树（src/components/libcpu/include/third_party/tools）symlink 到真
+        # SDK：scons 以 building.py 显式 variant_dir 把对象重定向到 tmpdir（实测不逃逸）。
+        # bsp/rockchip 须整段 copy 成可写：其 common/drivers、tests 经 RTT_ROOT 绝对路径
+        # 编译，且 rpmsg-lite 的 SConscript 用 GetCurrentDir()+绝对 Glob 逃逸 variant_dir
+        # 就地生成 .o —— copy 后落 tmpdir 而非 SDK。bsp/rockchip/tools 仅取 buildutil.py
+        # （stdlib-only；其余 32MB 是 Rockchip 刷机工具，与构建无关）。common/hal symlink
+        # 复用 HAL SDK：RT-Thread SDK 未随仓 vendor 其 common/hal 子模块（HalSConscript
+        # 期望 <common>/hal/lib/ 提供 hal_base.h 等），而 _HAL_ROOT 的 lib/ 布局与之逐一
+        # 匹配；HAL 源经 variant_dir='common/hal' 编译、对象落 tmpdir，HAL SDK 只读。
+        _ignore = shutil.ignore_patterns(
+            "build", ".sconsign.dblite", "*.o", "*.pyc", "__pycache__",
+            "rtthread.*", "gcc_arm.ld", "amp*.img")
+        sdk_root = Path(_RTT_ROOT)
+        staged_root = Path(tempfile.mkdtemp(prefix="flange-amp-rtt-"))
+
+        def _mirror(src_dir: Path, dst_dir: Path, skip: set) -> None:
+            """dst_dir 下逐项 symlink 到 src_dir（skip 的项留给调用方 copy）。"""
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            for entry in os.listdir(src_dir):
+                if entry not in skip:
+                    os.symlink(os.path.abspath(src_dir / entry),
+                               dst_dir / entry)
+
+        # 顶层：除 bsp 外全 symlink（examples/documentation/… 也被部分 SConscript 引用）
+        _mirror(sdk_root, staged_root, skip={"bsp"})
+        # bsp：除 rockchip 外全 symlink（其它 arch，本构建不用，symlink 无害）
+        _mirror(sdk_root / "bsp", staged_root / "bsp", skip={"rockchip"})
+        # bsp/rockchip：仅 common + 本板 BSP 须可写（copy），其余（tools/其它板）symlink。
+        # tools symlink 即可：SConstruct 以 ../tools 加 sys.path 只读导入 buildutil
+        # （PYTHONDONTWRITEBYTECODE=1 兜 __pycache__）。
+        bsp_rk = staged_root / "bsp" / "rockchip"
+        _mirror(sdk_root / "bsp" / "rockchip", bsp_rk,
+                skip={"common", f"{soc}-32"})
+        bsp_tmp = bsp_rk / f"{soc}-32"
+        shutil.copytree(bsp_src, bsp_tmp, ignore=_ignore)
+        shutil.copytree(bsp_src.parent / "common", bsp_rk / "common",
+                        ignore=_ignore)
+        os.symlink(os.path.abspath(_HAL_ROOT), bsp_rk / "common" / "hal")
+
+        # --- 叠加 app overlay：applications/ + 可选 .config 片段（合并进 BSP .config）---
+        app_apps = app_dir / "applications"
+        if app_apps.is_dir():
+            shutil.copytree(app_apps, bsp_tmp / "applications",
+                            dirs_exist_ok=True)
+        overlaid_config = (app_dir / ".config").is_file()
+        if overlaid_config:
+            self._merge_kconfig_fragment(bsp_tmp / ".config",
+                                         app_dir / ".config")
+
+        # --- scons 环境：只读 SDK 根 + 裸机工具链 + 内存布局（单一事实源）---
+        env = {
+            "RTT_ROOT": str(staged_root),
+            "RTT_EXEC_PATH": _RTT_EXEC_PATH,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "RTT_PRMEM_BASE": hex(mem["cpu_base"]),
+            "RTT_PRMEM_SIZE": hex(mem["dram_size"]),
+            "RTT_SHMEM_BASE": hex(mem["shmem_base"]),
+            "RTT_SHMEM_SIZE": hex(mem["shmem_size"]),
+            "LINUX_RPMSG_BASE": hex(mem["rpmsg_base"]),
+            "LINUX_RPMSG_SIZE": hex(mem["rpmsg_size"]),
+            "CUR_CPU": str(cpu),
+        }
+        self._status(
+            f"AMP(scons) 配置 {app_dir.name}（RT-Thread {soc}-32, cpu{cpu}, "
+            f"base={hex(mem['cpu_base'])}）...")
+        # overlay .config 后必须从 .config 重生成 rtconfig.h（编译实际读 rtconfig.h，
+        # .config 仅是 Kconfig 状态；scons --useconfig 调 mk_rtconfig 做文本转换）。
+        if overlaid_config:
+            self.docker.run(
+                ["scons", "--useconfig=.config"],
+                cwd=str(bsp_tmp), env=env, label="amp:rtt:config")
+        self.docker.run(
+            ["scons", f"-j{self._jobs()}"],
+            cwd=str(bsp_tmp), env=env, label=f"amp:rtt:build:{app_dir.name}")
+
+        rtt_bin = bsp_tmp / "rtthread.bin"
+        if not rtt_bin.is_file():
+            raise FileNotFoundError(
+                f"RT-Thread 未产出 rtthread.bin（{rtt_bin}）；检查 scons 日志。")
+        its_path = bsp_tmp / "Image" / "amp_linux.its"
+        return self._mkimage_fit(soc, rtt_bin, cpu, mem,
+                                 its_path=its_path,
+                                 incbin_name=f"rtt{cpu}.bin")
 
     # --- collect ---
 

@@ -35,6 +35,14 @@ def amp_source_dirs(config: dict) -> list:
     # rockchip-hal.cmake 是 amp app 的构建接口，改动须触发重建（虽是单文件，
     # _hash_directory 接受目录——故指其所在 hal 根的该文件不便单列；改放 app
     # 目录哈希为主，.cmake 变更走 -f）。
+    # rt-thread：BSP 模板（链接脚本/Kconfig/board_base/rpmsg_base 直接决定产物）
+    # 随构建纳入哈希；庞大稳定的 RTOS 内核树（src/components/libcpu）不纳入，改动
+    # 罕见时走 `flange build -f amp`。
+    if amp.get("mode") == "rt-thread":
+        soc = amp.get("soc_project", "")
+        if soc:
+            dirs.append(
+                f"components/amp/rockchip/rt-thread/bsp/rockchip/{soc}-32")
     return dirs
 
 

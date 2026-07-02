@@ -35,6 +35,7 @@ RUN dpkg --add-architecture arm64 \
         python3-setuptools \
         python3-dev \
         python-is-python3 \
+        scons \
         device-tree-compiler \
         wget \
         zip \

@@ -1,8 +1,7 @@
-# amp-app-scaffold Specification
+# amp-app-scaffold Specification (delta)
 
-## Purpose
-TBD - created by archiving change add-amp-firmware-support. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: amp 作为合法 app 类型与构建系统
 
 `builder/app_spec.py` 的 `VALID_APP_TYPES` SHALL 含 `"amp"`，使 `app.yaml` 声明 `app.type: amp` 时通过 `load_spec` 校验。
@@ -50,33 +49,3 @@ amp app 的固件构建模型 SHALL 按 `config.amp.mode` 二分，两形态共�
 
 - **WHEN** amp app 脚手架在渲染中途失败
 - **THEN** 目标目录被清理（rmtree），不留半成品
-
-### Requirement: amp app 走独立构建路径，不打 deb、不进 rootfs
-
-`builder/app.py` 的 `build_one` SHALL 在顶部按 `spec.app.type == "amp"` 提前分叉到独立的 amp 构建路径（如 `_build_amp()`），该路径 SHALL NOT 调用 `collect_files`/`_build_lib`/`DebBuilder`（不打 deb），SHALL NOT 使用面向 rootfs 的 `_CONVENTION_MAP` 路径映射，且 SHALL NOT 使用面向 Linux 用户态的 `_CROSS_COMPILE_PREFIX`（应使用裸机 `arm-none-eabi-` 工具链）。amp app 产物 SHALL 为固件（`.bin`/`.elf`/FIT），而非 `.deb`。
-
-#### Scenario: amp app 构建产出固件而非 deb
-
-- **WHEN** 构建一个 `type: amp` 的 app
-- **THEN** 产物为固件镜像（`.bin`/`.elf`/`amp.img`）
-- **AND** 不产出 `.deb` 包
-
-#### Scenario: amp app 不进入 rootfs 安装集合
-
-- **WHEN** 解析构建集合
-- **THEN** amp app 不出现在 `rootfs.custom_packages`/`recovery.custom_packages`（不会被 rootfs Phase2 `dpkg -i` 安装）
-
-### Requirement: amp app 构建集合用独立声明键收集
-
-flange SHALL 用一个独立于 `rootfs.custom_packages` 的声明键（如 `amp.app`）收集 amp app（避免污染 host deb 安装链）。该键 SHALL 由 amp 组件消费（见 `amp-firmware-build` 的「amp app 源码经应用槽位纳入 amp.img」需求），而 SHALL NOT 进入 `AppBuilder.build_all` 经 `gather_custom_packages` 迭代的 deb 构建集合。`flange list apps` SHALL 正确展示 `type` 为 `amp` 的 app 及其来源标签。
-
-#### Scenario: amp app 列在独立键
-
-- **WHEN** 配置声明某 amp app 需构建
-- **THEN** 它出现在 amp 专属收集键中，不出现在 `rootfs.custom_packages`
-
-#### Scenario: list apps 展示 amp 类型
-
-- **WHEN** 执行 `flange list apps`
-- **THEN** `type: amp` 的 app 被列出并标注其来源（local / external 等）
-
