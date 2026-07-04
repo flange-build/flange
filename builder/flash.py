@@ -613,6 +613,41 @@ class AllwinnerA733FlashStrategy(FlashStrategy):
         return m
 
 
+class AllwinnerH3FlashStrategy(FlashStrategy):
+    """Allwinner H3 刷写策略 — SD 卡 dd 模式（MBR 分区表）。"""
+
+    def find_tool(self, project_dir: Path) -> Path:
+        # SD 卡 dd 模式使用系统 dd，返回占位路径
+        return Path("/usr/bin/dd")
+
+    def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
+        # SD 卡模式不依赖 USB 设备检测
+        return None
+
+    def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
+                  device: Optional["DeviceInfo"] = None):
+        # SD 卡模式无需 pre_flash
+        pass
+
+    def write_partition(self, tool: Path, offset: int, image: Path):
+        # SD 卡模式通过 raw.img dd，不逐分区写入
+        pass
+
+    def reboot(self, tool: Path):
+        _info("SD 卡模式：请手动插入 SD 卡并重启设备")
+
+    def partition_image_map(self, config: dict) -> dict[str, str]:
+        # SD 卡模式整体 dd raw.img；此映射仅用于生成 flash-config.json 元数据。
+        m = {
+            "spl":    "bootloader/u-boot-sunxi-with-spl.bin",
+            "boot":   "boot/boot.img",
+            "rootfs": "rootfs/rootfs.img",
+        }
+        if (config.get("recovery") or {}).get("enabled", False):
+            m["recovery"] = "recovery/recovery.img"
+        return m
+
+
 class AmlogicFlashStrategy(FlashStrategy):
     """Amlogic 刷写策略 — 两段式 USB Burning。
 
@@ -1065,6 +1100,7 @@ class QualcommFlashStrategy(FlashStrategy):
 _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
     "rockchip": RockchipFlashStrategy,
     "allwinnera733": AllwinnerA733FlashStrategy,
+    "allwinnerh3": AllwinnerH3FlashStrategy,
     "amlogic": AmlogicFlashStrategy,
     "qualcommqcs6490": QualcommFlashStrategy,
 }

@@ -100,6 +100,11 @@ class RecoveryBuilder(ComponentBuilder):
     # 文件系统 label
     fs_label = FS_LABEL
 
+    # chroot 内跨架构模拟二进制（QEMU user-mode static），Phase 1 解压 base
+    # tarball 后复制进 recovery /usr/bin/。默认 aarch64（现有 4 个平台均为
+    # aarch64），32 位 armv7 平台（如 allwinnerh3）覆盖为 "qemu-arm-static"。
+    QEMU_STATIC_BIN = "qemu-aarch64-static"
+
     # ---- 主入口：与 RootfsBuilder 一致，跳过源码克隆 -----------------
 
     def build(self, config: dict) -> dict:
@@ -188,7 +193,7 @@ class RecoveryBuilder(ComponentBuilder):
             self.docker.run_privileged(
                 ["tar", "xf", str(tarball_path), "-C", str(recovery_dir)])
             self.docker.run_privileged(
-                ["cp", "/usr/bin/qemu-aarch64-static",
+                ["cp", f"/usr/bin/{self.QEMU_STATIC_BIN}",
                  str(recovery_dir / "usr" / "bin" / "")])
 
             with ChrootContext(recovery_dir, self.docker) as chroot:

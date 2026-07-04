@@ -99,7 +99,7 @@ class AllwinnerA733RootfsBuilder(RootfsBuilder):
         self.docker.run_privileged(
             ["tar", "xf", str(tarball_path), "-C", str(rootfs_dir)])
         self.docker.run_privileged(
-            ["cp", "/usr/bin/qemu-aarch64-static",
+            ["cp", f"/usr/bin/{self.QEMU_STATIC_BIN}",
              str(rootfs_dir / "usr" / "bin" / "")])
 
         with ChrootContext(rootfs_dir, self.docker) as chroot:

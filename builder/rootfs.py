@@ -32,6 +32,11 @@ class RootfsBuilder(ComponentBuilder):
     各平台子类继承此类，获得通用 rootfs 能力，再叠加平台特定逻辑。
     """
 
+    # chroot 内跨架构模拟二进制（QEMU user-mode static），Phase 1 解压 base
+    # tarball 后复制进 rootfs /usr/bin/。默认 aarch64（现有 4 个平台均为
+    # aarch64），32 位 armv7 平台（如 allwinnerh3）覆盖为 "qemu-arm-static"。
+    QEMU_STATIC_BIN = "qemu-aarch64-static"
+
     def apply_overlays(self, rootfs_dir: Path, config: dict):
         """按优先级顺序应用 overlay 文件：rootfs → platform → board。
 

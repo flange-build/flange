@@ -1,0 +1,100 @@
+From: flange <flange@localhost>
+Subject: [PATCH] sunxi: 按 flange_boot_once env 选择 recovery extlinux 配置
+
+flange 的 boot 分区生成两份 extlinux 配置：
+
+  - /extlinux/extlinux.conf：normal 系统；
+  - /extlinux/recovery.conf：recovery 系统。
+
+Allwinner H3 芯片没有 RTC IP，也没有对应的 BSP/mainline reboot-mode
+driver，无法像 Rockchip / Allwinner A733 那样走"内核 reboot(2) 写硬件
+boot-reason 寄存器 → U-Boot 读取"的链路。因此 H3 走 recoveryctl 已经内置
+的 env-only 兜底路径：`recoveryctl recovery --persistent` 通过用户态
+`fw_setenv` 写入 `flange_boot_once=recovery`，不经过 reboot(2) 参数、不
+依赖任何内核 driver。
+
+本补丁在 board_late_init() 中读取并消费该一次性 env：
+
+  - 命中 flange_boot_once=recovery 时，清空该 env 并 saveenv 持久化，
+    然后把 mainline 的 boot_syslinux_conf env（include/
+    config_distro_bootcmd.h 中 boot_extlinux / scan_dev_for_extlinux 已
+    引用该变量，默认值 extlinux/extlinux.conf）改写为
+    extlinux/recovery.conf；
+  - 清理或保存失败时不切换，避免反复进入 recovery；
+  - 默认（未命中）保持 mainline 默认值 extlinux/extlinux.conf。
+
+当前 mainline 的 config_distro_bootcmd.h 已经把 extlinux 配置文件名重构
+成 env 变量形式，本补丁无需再触碰该文件（与 Rockchip / A733 现有补丁基于
+的旧版 u-boot 不同）。
+
+board/sunxi/board.c 已 #include <env.h>，env_get/env_set/env_save 均已
+声明，无需额外 include。
+
+diff --git a/board/sunxi/board.c b/board/sunxi/board.c
+--- a/board/sunxi/board.c
++++ b/board/sunxi/board.c
+@@ -866,12 +866,64 @@
+ 	return 0;
+ }
+ 
++#define FLANGE_BOOT_ONCE_ENV		"flange_boot_once"
++#define FLANGE_BOOT_ONCE_RECOVERY	"recovery"
++#define FLANGE_SYSLINUX_CONF_ENV	"boot_syslinux_conf"
++#define FLANGE_RECOVERY_CONF		"extlinux/recovery.conf"
++
++static bool flange_boot_once_env_requests_recovery(void)
++{
++	const char *boot_once;
++
++	boot_once = env_get(FLANGE_BOOT_ONCE_ENV);
++	if (!boot_once || strcmp(boot_once, FLANGE_BOOT_ONCE_RECOVERY))
++		return false;
++
++	printf("flange: %s=%s\n", FLANGE_BOOT_ONCE_ENV, boot_once);
++	if (env_set(FLANGE_BOOT_ONCE_ENV, NULL)) {
++		printf("flange: failed to clear %s\n", FLANGE_BOOT_ONCE_ENV);
++		return false;
++	}
++	if (env_save()) {
++		printf("flange: failed to persist clearing %s\n",
++		       FLANGE_BOOT_ONCE_ENV);
++		return false;
++	}
++
++	return true;
++}
++
++static void flange_select_extlinux_conf(void)
++{
++	/*
++	 * H3 无 RTC/BSP reboot-mode driver，进入 recovery 完全依赖
++	 * recoveryctl 的 env-only 路径（recoveryctl recovery --persistent
++	 * -> fw_setenv flange_boot_once recovery）。这里只消费一次性状态，
++	 * 不做任何硬件 boot-reason 判断。mainline
++	 * include/config_distro_bootcmd.h 已把 extlinux 配置文件名做成
++	 * boot_syslinux_conf env（默认值 extlinux/extlinux.conf），无需
++	 * 另行 patch 该文件。
++	 */
++	if (flange_boot_once_env_requests_recovery()) {
++		printf("flange: boot-once selects %s\n", FLANGE_RECOVERY_CONF);
++		if (env_set(FLANGE_SYSLINUX_CONF_ENV, FLANGE_RECOVERY_CONF))
++			printf("flange: failed to set %s=%s\n",
++			       FLANGE_SYSLINUX_CONF_ENV, FLANGE_RECOVERY_CONF);
++	}
++}
++
+ int board_late_init(void)
+ {
+ #ifdef CONFIG_USB_ETHER
+ 	usb_ether_init();
+ #endif
+ 
++	/*
++	 * flange 只让 U-Boot 消费一次性启动状态，然后选择 sysboot 读取的
++	 * extlinux 配置文件。extlinux 文件自身只描述如何启动对应系统。
++	 */
++	flange_select_extlinux_conf();
++
+ 	return 0;
+ }
+ 

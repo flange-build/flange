@@ -73,7 +73,7 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
         self._status("解压 base tarball...")
         self.docker.run_privileged(["tar", "xf", str(tarball_path), "-C", str(rootfs_dir)])
         self.docker.run_privileged(
-            ["cp", "/usr/bin/qemu-aarch64-static", str(rootfs_dir / "usr" / "bin" / "")])
+            ["cp", f"/usr/bin/{self.QEMU_STATIC_BIN}", str(rootfs_dir / "usr" / "bin" / "")])
 
         with ChrootContext(rootfs_dir, self.docker) as chroot:
             apt_cache = rootfs_dir / "var" / "cache" / "apt" / "archives"

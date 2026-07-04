@@ -124,6 +124,17 @@ RUN curl -fsSL "https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020
     && for t in /opt/arm-none-eabi-gcc10/bin/arm-none-eabi-*; do ln -sf "$t" /usr/local/bin/; done \
     && arm-none-eabi-gcc --version | head -1
 
+# 32 位 ARM（armv7）glibc 向 U-Boot/kernel 用的 gcc-10：与上面 aarch64 那套同源
+# （kernel.org crosstool gcc-10.5 nolibc，prefix arm-linux-gnueabi-）。用途同理——
+# 规避 Ubuntu 24.04 gcc-13 在低层 u-boot 代码上的隐蔽布局类 miscompile（ROCK 4D
+# 前科）。allwinnerh3(NanoPi NEO)的 U-Boot 若用系统 gcc-13 出问题即切到此工具链。
+# U-Boot/内核均 freestanding、soft-float，arm-linux-gnueabi(soft-float) 天然匹配。
+# 单独成层保留上面缓存。
+RUN curl -fsSL "https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/10.5.0/x86_64-gcc-10.5.0-nolibc-arm-linux-gnueabi.tar.xz" \
+        | tar -xJ -C /opt \
+    && ln -sfn /opt/gcc-10.5.0-nolibc/arm-linux-gnueabi /opt/arm-gcc10 \
+    && /opt/arm-gcc10/bin/arm-linux-gnueabi-gcc --version | head -1
+
 # meson cross-file：路径与 builder/app.py 中 _BUILD_SYSTEMS["meson"] 模板引用
 # 的 --cross-file /etc/meson/cross-<arch>.ini 一致。源文件可见于 docker/meson/。
 COPY docker/meson/cross-aarch64.ini /etc/meson/cross-aarch64.ini
