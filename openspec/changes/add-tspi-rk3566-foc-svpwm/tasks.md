@@ -69,7 +69,7 @@
 
 ## 9. 收尾
 
-- [ ] 9.1 更新 `wiki/log.md` / `wiki/boards/tspi-rk3566.md` 记录 foc product、里程碑 1+2 结果
+- [x] 9.1 更新 `wiki/log.md` / `wiki/boards/tspi-rk3566.md` 记录 foc product、里程碑 1+2 结果
 
 ## 10. 闭环速度/位置控制（里程碑 3）
 
@@ -80,4 +80,5 @@
 - [x] 10.5 模式重构：删开环 spin，新增 voltage/speed/position 三模式分发；dis 时 bumpless 复位
 - [x] 10.6 命令扩展：foc mode/spd/pos/gain（spd.kp/ki、pos.kp/ki/kd、vlim、slew）；status 打印增益
 - [x] 10.7 编译验证
-- [ ] 10.8 上板整定：speed 模式先调 spd.kp/ki 到平稳跟随；position 模式调 pos.kp（必要时 pos.ki）到准确到位、不超调
+- [x] 10.8a 写经验默认增益（spd.kp=0.01/ki=0.1、pos.kp=5、vlim=20、slew=0.1；保守起步、安全）
+- [ ] 10.8b 上板精细整定到满意手感（用户进行中）
