@@ -1,0 +1,58 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * tspi-rk3566 FOC 电机 (AMP) 引脚 overlay —— 仅 foc product 应用
+ *
+ * 与 tspi-rk3566-bldc.dtso 语义相反：bldc overlay 把电机引脚打开给 Linux 驱动；
+ * 本 overlay 把整组电机引脚从 Linux **摘掉**，交给 cpu3 上的 RT-Thread 从核独占
+ * （由 rk3568_amp_rtt_foc app 经 HAL_PINCTRL/HAL_PWM/HAL_I2C 自行配置与驱动）。
+ * 若两核同时 claim 同一组 pinctrl/GRF 寄存器会互相踩踏，故 Linux 侧一律释放：
+ *   - i2c2  (m0: gpio0_b5=SCL / gpio0_b6=SDA) → disabled（RT-Thread 读磁编码器，里程碑 2）
+ *   - pwm12/pwm13/pwm14 (m0: gpio3_b7 / gpio3_c0 / gpio3_c4) → disabled（RT-Thread 三相 SVPWM）
+ *   - gpio3_a5=EN / gpio3_a4=FLIP → 纯 GPIO，由 RT-Thread 驱动；Linux 不建 pinctrl 组、不 claim
+ *   - uart3：uart3m1 占 gpio3_b7/c0（与 pwm12/pwm13 撞脚），关闭
+ *   - xpt2046 电阻触摸：占 gpio3_a5（与 EN 撞脚），关闭
+ *
+ * 叠加基准：foc product 的内核 dts = tspi-rk3566-amp（含 i2c2/pwm12 等 label），
+ * boot 时经 extlinux fdtoverlays 应用。启用由 config.py 的 default_overlays:foc 控制。
+ */
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+
+/* i2c2：磁编码器挂在此，交给 RT-Thread；Linux 侧关闭 */
+&i2c2 {
+	status = "disabled";
+};
+
+/* pwm12/13/14：三相 SVPWM，交给 RT-Thread；Linux 侧关闭 */
+&pwm12 {
+	status = "disabled";
+};
+
+&pwm13 {
+	status = "disabled";
+};
+
+&pwm14 {
+	status = "disabled";
+};
+
+/* uart3m1 占 gpio3_b7/c0，与 pwm12/pwm13 三相撞脚，关闭让出引脚 */
+&uart3 {
+	status = "disabled";
+};
+
+/* xpt2046 电阻触摸占 gpio3_a5，与电机 EN 撞脚，关闭让出引脚 */
+&spi3 {
+	xpt2046@1 {
+		status = "disabled";
+	};
+};
+
+/*
+ * 注意：不在 &pinctrl 建 motor_en/motor_flip 组——gpio3_a5(EN)/gpio3_a4(FLIP)
+ * 由 RT-Thread 从核经 HAL_PINCTRL 配为 GPIO 并驱动。Linux 侧只需不 claim 这两脚，
+ * 关掉上面占用它们的 xpt2046（gpio3_a5）即可；gpio3_a4 默认无 Linux 节点占用。
+ */

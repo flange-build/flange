@@ -62,6 +62,12 @@
 #define HAL_CANFD_MODULE_ENABLED
 #endif
 
+/* 补厂商遗漏：PWM 模块门控（原文件缺，与上面 GPIO/I2C 等同模式）。
+ * flange FOC app 需经此使能 HAL_PWM 直驱 PWM3 三相输出。 */
+#ifdef RT_USING_PWM
+#define HAL_PWM_MODULE_ENABLED
+#endif
+
 #ifdef RT_USING_GMAC
 #define HAL_GMAC_MODULE_ENABLED
 #endif

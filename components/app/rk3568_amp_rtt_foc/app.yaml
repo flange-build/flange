@@ -1,0 +1,14 @@
+app:
+  name: rk3568_amp_rtt_foc
+  version: 0.1.0
+  description: AMP 协处理器 FOC 电机驱动固件（RT-Thread，开环 SVPWM 起步，直驱 PWM3 三相）
+  type: amp
+  arch:
+    - aarch64
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: scons
