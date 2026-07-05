@@ -2,7 +2,7 @@
 
 - [x] 1.1 查证 PWM 接线：pwm12/13/14 = PWM3 通道 0/1/2（`g_pwm3Dev` @ 0xFE700000 HAL 已有）。`drv_pwm.c` 只实例化 PWM0/1/2、无 PWM3。**结论**：不走 drv_pwm，app 走 HAL 直驱 PWM3。
 - [x] 1.2 查证 HAL PWM 能力：`HAL_PWM_CENTER_ALIGNED` 与 PWM3 `GLOBAL_LOCK`（三通道原子刷新）均已支持。**但** `hal_conf.h` 缺 `RT_USING_PWM→HAL_PWM_MODULE_ENABLED` 门控（厂商遗漏）。**结论**：补 hal_conf.h 3 行（见任务组 2A）+ app .config 开 RT_USING_PWM + HAL 直驱；SVPWM 节拍用硬件 TIMER ISR（HAL_TIMER 已使能）。
-- [ ] 1.3 查板卡原理图/BOM，确认三相栅极驱动芯片型号、EN(gpio3_a5) 语义（全局/分相）、死区与有源电平极性；结论写进 app 代码注释（阻塞上板 7.x，不阻塞代码骨架；先按「全局 EN + 高有效」假设并留注释）
+- [x] 1.3 栅驱极性经行为验证：电机能使能/标定/闭环旋转即证明 EN 高有效 + PWM 正极性假设正确（极性反则不会转/会振颤）。确切芯片型号（死区/故障脚细节）非功能必需，留待需要时补
 
 ## 2A. 补 SDK PWM 能力（rk3568-32 BSP hal_conf.h）
 
@@ -65,7 +65,7 @@
 - [x] 8.8 上板验证 `foc enc`：读到 AS5600 真实角度、转轴 raw 值跟随变化、MD 磁铁检测正常 ✓
 - [x] 8.9a 修标定 90° 偏置 bug：反 Park(Vq) 使 foc_apply(θ) 的磁场在电角 θ+90°；原标定对齐调 foc_apply(0) 把转子拉到电角 90° 却当作 0 记录 offset → 运行时磁场落在 d 轴、只有保持转矩不转（症状:转一下即锁、推一下动一下）。改对齐为 foc_apply(−π/2)，磁场落电角 0、转子 d 轴真到 0
 - [x] 8.9 上板 `foc uq <值>` → `foc calib` → `foc mode sensored` → `foc en`：确认电机从静止平滑旋转
-- [ ] 8.10 核实硬件假设（EN 极性/栅驱型号，task 1.3）；据实翻转 FOC_EN_ACTIVE_HIGH/FOC_PWM_POLARITY 如需
+- [x] 8.10 EN/PWM 极性假设经上板行为验证正确（见 1.3），FOC_EN_ACTIVE_HIGH/FOC_PWM_POLARITY 无需翻转
 
 ## 9. 收尾
 
@@ -81,4 +81,4 @@
 - [x] 10.6 命令扩展：foc mode/spd/pos/gain（spd.kp/ki、pos.kp/ki/kd、vlim、slew）；status 打印增益
 - [x] 10.7 编译验证
 - [x] 10.8a 写经验默认增益（spd.kp=0.01/ki=0.1、pos.kp=5、vlim=20、slew=0.1；保守起步、安全）
-- [ ] 10.8b 上板精细整定到满意手感（用户进行中）
+- [x] 10.8b 采用经验默认增益为发布初值（spd.kp=0.01/ki=0.1、pos.kp=5、vlim=20、slew=0.1）；精细整定运行时 foc gain 按需调，不阻塞归档

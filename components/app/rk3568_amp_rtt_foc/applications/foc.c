@@ -47,10 +47,13 @@ struct foc_runtime g_foc = {
     .omega_meas     = 0.0f,
     .target_speed   = 0.0f,
     .target_pos     = 0.0f,
-    .spd_kp = 0.0f, .spd_ki = 0.0f,
-    .pos_kp = 0.0f, .pos_ki = 0.0f, .pos_kd = 0.0f,
-    .vlim      = 30.0f,   /* 位置环默认限速 30 rad/s（增益为 0 时不产生运动）*/
-    .ema_alpha = 0.1f,    /* 速度估计滤波（非控制增益，给合理默认使测速可用）*/
+    /* 经验起步值（保守）：目标默认 0/当前位置，故 en 不会乱动。上板从这组往上调：
+     * 弱/跟不动→加 kp；有稳态差→加 ki；抖/超调→降 kp 或加滤波。Uq 为 Vdc 归一
+     * [0,0.55]，故速度环增益偏小。*/
+    .spd_kp = 0.01f, .spd_ki = 0.10f,        /* 速度环 PI */
+    .pos_kp = 5.0f,  .pos_ki = 0.0f, .pos_kd = 0.0f,  /* 位置环默认纯 P */
+    .vlim      = 20.0f,   /* 位置环限速 20 rad/s */
+    .ema_alpha = 0.1f,    /* 速度估计 EMA（非控制增益，使测速可用）*/
 };
 
 static struct PWM_HANDLE s_pwm;
