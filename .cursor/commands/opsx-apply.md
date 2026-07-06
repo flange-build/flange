@@ -1,19 +1,15 @@
 ---
-name: openspec-apply-change
-description: Implement tasks from an OpenSpec change. Use when the user wants to start implementing, continue implementation, or work through tasks.
-license: MIT
-compatibility: Requires openspec CLI.
-metadata:
-  author: openspec
-  version: "1.0"
-  generatedBy: "1.5.0"
+name: /opsx-apply
+id: opsx-apply
+category: Workflow
+description: Implement tasks from an OpenSpec change (Experimental)
 ---
 
 Implement tasks from an OpenSpec change.
 
 **Store selection:** If the user names a store (a store is a standalone OpenSpec repo registered on this machine) or the work lives in one, run `openspec store list --json` to discover registered store ids, then pass `--store <id>` on the commands that read or write specs and changes (`new change`, `status`, `instructions`, `list`, `show`, `validate`, `archive`, `doctor`, `context`). Other commands do not take the flag. Hints printed by commands already carry the flag; keep it on follow-ups. Without a store, commands act on the nearest local `openspec/` root.
 
-**Input**: Optionally specify a change name. If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
+**Input**: Optionally specify a change name (e.g., `/opsx:apply add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
 **Steps**
 
@@ -42,13 +38,13 @@ Implement tasks from an OpenSpec change.
    ```
 
    This returns:
-   - `contextFiles`: artifact ID -> array of concrete file paths (varies by schema - could be proposal/specs/design/tasks or spec/tests/implementation/docs)
+   - `contextFiles`: artifact ID -> array of concrete file paths (varies by schema)
    - Progress (total, complete, remaining)
    - Task list with status
    - Dynamic instruction based on current state
 
    **Handle states:**
-   - If `state: "blocked"` (missing artifacts): show message, suggest using openspec-continue-change
+   - If `state: "blocked"` (missing artifacts): show message, suggest using `/opsx:continue`
    - If `state: "all_done"`: congratulate, suggest archive
    - Otherwise: proceed to implementation
 
@@ -118,7 +114,7 @@ Working on task 4/7: <task description>
 - [x] Task 2
 ...
 
-All tasks complete! Ready to archive this change.
+All tasks complete! You can archive this change with `/opsx:archive`.
 ```
 
 **Output On Pause (Issue Encountered)**
