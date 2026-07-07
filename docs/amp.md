@@ -13,8 +13,8 @@ HAL 或 RT-Thread，与 Linux 主系统并行，二者经 rpmsg 通信。
 
 ## 形态
 
-- **承载方式**：板级 `amp` / `amp-rtt` product（如 `lunch tspi-rk3566-amp`、
-  `lunch orangepi-cm4-amp-rtt`）。
+- **承载方式**：板级 `amp` / `amp-rtt` product（如
+  `lunch tspi-rk3566-amp-debug`、`lunch orangepi-cm4-amp-rtt-debug`）。
   `default` product 不受影响（4 核、无 amp 分区/节点）。
 - **核分工**：4 核里 cpu0/1/2 给 Linux（启用 amp 后 **Linux 跑 3 核**），
   **cpu3 专给 AMP**（DTS `/delete-node/ &cpu3;` 把它从 Linux 摘掉）。
@@ -29,7 +29,7 @@ HAL 或 RT-Thread，与 Linux 主系统并行，二者经 rpmsg 通信。
 
 ```bash
 source envsetup.sh
-lunch tspi-rk3566-amp        # 选 amp product
+lunch tspi-rk3566-amp-debug  # 选 amp product
 flange build                # 整盘构建（含 amp 组件产出 amp.img + amp 分区）
 flange build amp            # 只构建 amp 固件
 flange flash                # 全量刷写
@@ -41,8 +41,8 @@ Orange Pi CM4：
 
 ```bash
 source envsetup.sh
-lunch orangepi-cm4-amp       # HAL，从核 UART7_M2，1500000 baud
-lunch orangepi-cm4-amp-rtt   # RT-Thread，从核 UART7_M2，115200 baud
+lunch orangepi-cm4-amp-debug      # HAL，从核 UART7_M2，1500000 baud
+lunch orangepi-cm4-amp-rtt-debug  # RT-Thread，从核 UART7_M2，115200 baud
 flange build amp
 flange build kernel
 ```

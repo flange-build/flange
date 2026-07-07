@@ -1,6 +1,6 @@
 # Orange Pi CM4 AMP 使用说明
 
-Orange Pi CM4 提供两个 AMP product：
+Orange Pi CM4 提供两个 AMP product（每个 product 均有 `debug` / `release` variant）：
 
 - `orangepi-cm4-amp`：cpu3 运行裸机 HAL demo，Linux 跑 cpu0/1/2。
 - `orangepi-cm4-amp-rtt`：cpu3 运行 RT-Thread demo，Linux 跑 cpu0/1/2。
@@ -30,11 +30,11 @@ baud rate：
 ```bash
 source envsetup.sh
 
-lunch orangepi-cm4-amp
+lunch orangepi-cm4-amp-debug
 flange build amp
 flange build kernel
 
-lunch orangepi-cm4-amp-rtt
+lunch orangepi-cm4-amp-rtt-debug
 flange build amp
 flange build kernel
 ```

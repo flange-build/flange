@@ -7,37 +7,45 @@ sources:
   - components/board/orangepi-cm4/patches/kernel/0001-dts-orangepi-cm4-bootargs-fix.patch
   - components/board/orangepi-cm4/patches/kernel/0002-bcmdhd-set-fw-ampak-path-brcm.patch
   - components/board/orangepi-cm4/patches/kernel/0003-dts-orangepi-cm4-disable-rknpu.patch
+  - components/board/orangepi-cm4/patches/kernel/0004-add-orangepi-cm4-amp-dts.patch
+  - components/board/orangepi-cm4/docs/amp.md
   - components/board/orangepi-cm4/overlay/etc/hostname
   - components/board/orangepi-cm4/overlay/etc/usbdevice.conf
 related:
   - "[[rockchip 平台]]"
+  - "[[amp 构建器]]"
+  - "[[AMP 协处理器与 rpmsg]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-05-17
+updated: 2026-07-08
 ---
 
 ## TL;DR
 
-Orange Pi CM4，RK3566 计算模块。当前交付范围：**无屏可启动 + AP6256 WiFi/BT 即插即用**，禁用不可用 NPU。DSI 屏适配（实机用 Waveshare CM4-DISP-BASE-5A）尚未交付，单独立项推进。
+Orange Pi CM4，RK3566 计算模块。当前交付范围：**无屏可启动 + AP6256 WiFi/BT 即插即用**，禁用不可用 NPU，并提供可选 `amp` / `amp-rtt` product。DSI 屏适配（实机用 Waveshare CM4-DISP-BASE-5A）尚未交付，单独立项推进。
 
 ## product / variant
 
-继承平台默认：`products: [default]`，`variants: [debug, release]`。
+板级声明：`products: [default, amp, amp-rtt]`，`variants: [debug, release]`。
 
 ```
 lunch orangepi-cm4-default-debug
 lunch orangepi-cm4-default-release
+lunch orangepi-cm4-amp-debug
+lunch orangepi-cm4-amp-release
+lunch orangepi-cm4-amp-rtt-debug
+lunch orangepi-cm4-amp-rtt-release
 ```
 
 ## 关键差异点
 
 | 项 | 值 |
 |---|---|
-| DTB | `rk3566-orangepi-cm4-base`（保持空壳） |
+| DTB | default 用 `rk3566-orangepi-cm4-base`（保持空壳）；AMP products 用 `rk3566-orangepi-cm4-amp` |
 | board overlay | 无（dsi1 维持 dtsi 默认 disabled） |
-| kernel patches | `0001` bootargs、`0002` bcmdhd FW_AMPAK_PATH、`0003` disable rknpu |
+| kernel patches | `0001` bootargs、`0002` bcmdhd FW_AMPAK_PATH、`0003` disable rknpu、`0004` AMP dts |
 | extra_firmware | radxa-firmware 仓拉 AP6256 三件套到 `/lib/firmware/brcm/` |
-| bootloader | 使用平台/SoC 默认 commit |
+| bootloader | default 使用平台/SoC 默认；AMP products 追加 `CONFIG_AMP=y` / `CONFIG_ROCKCHIP_AMP=y` |
 
 ## AP6256 WiFi/BT
 
@@ -51,6 +59,30 @@ BT 仅做"硬件就绪 + patchram 到位"，未预装 bluez 等用户态包，�
 ## NPU
 
 `rk356x.dtsi` 默认禁用 `rknpu` / `rknpu_mmu`，但 Orange Pi CM4 dtsi 又改成 `okay`。实机日志显示 `rknpu_mmu` probe 拉起 NPU power domain 后，PMU 等不到 `npu` ack，会触发 BSP `panic_on_set_idle`。`0003` 把两处状态改回 `disabled`，优先保证默认镜像可启动。
+
+## AMP
+
+`orangepi-cm4-amp-debug` / `orangepi-cm4-amp-release` 使用 HAL AMP demo；
+`orangepi-cm4-amp-rtt-debug` / `orangepi-cm4-amp-rtt-release` 使用 RT-Thread demo。
+两个 AMP product 都把 cpu3 交给从核固件，Linux 跑 cpu0/1/2，并在分区表里追加非 raw 的
+`amp` ext4 分区。
+
+Orange Pi CM4 40pin 未引出 `tspi-rk3566` 默认使用的 UART4_M1，因此本板 AMP 从核 console 固定用
+UART7_M2：
+
+| 40pin | SoC GPIO | 功能 |
+|---|---|---|
+| 15 | GPIO4_A2 | UART7_TX_M2 |
+| 16 | GPIO4_A3 | UART7_RX_M2 |
+
+实现位置：
+
+- `0004-add-orangepi-cm4-amp-dts.patch` 新增 `rk3566-orangepi-cm4-amp.dts`，把 `rockchip-amp` 的
+  clock / pinctrl / console IRQ 切到 `SCLK_UART7`、`PCLK_UART7`、`uart7m2_xfer`、`UART7_IRQn`。
+- `components/app/rk3568_amp_uart7_demo` 初始化 UART7_M2，HAL console baud rate 为 1500000。
+- `components/app/rk3568_amp_uart7_rtt_demo/.config` 选择
+  `CONFIG_RT_CONSOLE_DEVICE_NAME="uart7"`，关闭 `RT_USING_UART4`，启用 `RT_USING_UART7`，
+  RT-Thread console baud rate 为 115200。
 
 ## DSI 屏适配（未交付，单独立项）
 

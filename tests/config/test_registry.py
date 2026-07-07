@@ -6,6 +6,8 @@
 - resolve_config 完整条件解析（product/variant）
 """
 
+from pathlib import Path
+
 import pytest
 
 from builder.config.registry import discover_boards, get_board_config, resolve_config
@@ -284,12 +286,16 @@ class TestResolveConfig:
         assert partition_names == [
             "idbloader", "uboot", "boot", "recovery", "amp", "rootfs"]
 
-    def test_orangepi_cm4_rtthread_amp_config(self, boards):
+    @pytest.mark.parametrize("variant", ["debug", "release"])
+    def test_orangepi_cm4_rtthread_amp_config(self, boards, variant):
         """orangepi-cm4 amp-rtt product 应启用 RT-Thread AMP 与 UART7 RT-Thread app。"""
         resolved = resolve_config(
-            "orangepi-cm4", product="amp-rtt", variant="release", boards=boards
+            "orangepi-cm4", product="amp-rtt", variant=variant, boards=boards
         )
         partition_names = [p["name"] for p in resolved["partitions"]["entries"]]
+        rtt_fragment = Path(
+            "components/app/rk3568_amp_uart7_rtt_demo/.config"
+        ).read_text()
 
         assert resolved["amp"]["enabled"] is True
         assert resolved["amp"]["mode"] == "rt-thread"
@@ -301,6 +307,9 @@ class TestResolveConfig:
             resolved["kernel"]["defconfig"])
         assert partition_names == [
             "idbloader", "uboot", "boot", "recovery", "amp", "rootfs"]
+        assert 'CONFIG_RT_CONSOLE_DEVICE_NAME="uart7"' in rtt_fragment
+        assert "# CONFIG_RT_USING_UART4 is not set" in rtt_fragment
+        assert "CONFIG_RT_USING_UART7=y" in rtt_fragment
 
     def test_tspi_amp_apps_stay_uart4(self, boards):
         """新增 Orange Pi CM4 UART7 app 不应改变 tspi-rk3566 已有 AMP app。"""
