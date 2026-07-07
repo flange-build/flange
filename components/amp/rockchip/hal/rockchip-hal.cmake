@@ -101,10 +101,22 @@ function(rockchip_hal_target target)
          "${_hal}/lib/CMSIS/Device/${HAL_SOC}/Source/Templates/GCC/*.c"
          "${_hal}/lib/CMSIS/Device/${HAL_SOC}/Source/Templates/GCC/*.S")
     set(_rpmsg "${_hal}/middleware/rpmsg-lite/lib")
+    set(_rpmsg_platform_src
+        "${_rpmsg}/rpmsg_lite/porting/platform/${HAL_SOC}/*.c")
+    if(NOT EXISTS "${_rpmsg}/rpmsg_lite/rpmsg_lite.c")
+        get_filename_component(_rockchip_amp_root "${_hal}/.." ABSOLUTE)
+        set(_rpmsg
+            "${_rockchip_amp_root}/rt-thread/bsp/rockchip/common/drivers/rpmsg-lite/lib")
+        set(_rpmsg_platform_src
+            "${_hal}/rpmsg-lite-port/platform/${HAL_SOC}/*.c")
+    endif()
+    if(NOT EXISTS "${_rpmsg}/rpmsg_lite/rpmsg_lite.c")
+        message(FATAL_ERROR "rockchip_hal_target: 未找到 rpmsg-lite 源码目录: ${_rpmsg}")
+    endif()
     file(GLOB _rpmsg_src
          "${_rpmsg}/common/*.c"
          "${_rpmsg}/rpmsg_lite/*.c"
-         "${_rpmsg}/rpmsg_lite/porting/platform/${HAL_SOC}/*.c"
+         ${_rpmsg_platform_src}
          "${_rpmsg}/init/platform/${HAL_SOC}/*.c"
          "${_rpmsg}/virtio/*.c")
     list(APPEND _rpmsg_src

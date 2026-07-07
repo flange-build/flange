@@ -142,6 +142,19 @@ RT_WEAK RT_UNUSED void uart4_m1_iomux_config(void)
 }
 
 /**
+ * @brief  Config iomux m2 for UART7
+ */
+RT_WEAK RT_UNUSED void uart7_m2_iomux_config(void)
+{
+    /* UART7 M2 RX-4A3 TX-4A2 */
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK4,
+                         GPIO_PIN_A3 |
+                         GPIO_PIN_A2,
+                         PIN_CONFIG_MUX_FUNC4);
+    HAL_PINCTRL_IOFuncSelForUART7(IOFUNC_SEL_M2);
+}
+
+/**
  * @brief  Config io domian for board of rk3568 evb1
  */
 RT_WEAK RT_UNUSED void rt_hw_iodomain_config(void)
@@ -161,6 +174,9 @@ RT_WEAK RT_UNUSED void rt_hw_iomux_config(void)
 #endif
 #ifdef RT_USING_UART4
     uart4_m1_iomux_config();
+#endif
+#ifdef RT_USING_UART7
+    uart7_m2_iomux_config();
 #endif
 #endif
 

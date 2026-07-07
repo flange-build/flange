@@ -49,8 +49,11 @@ SOC = {
         # 节点（rk356x.dtsi gpu@fde60000）compatible 为 arm,mali-bifrost，与
         # panfrost of_match 对位。panfrost.config 由 _write_panfrost_fragment
         # 生成（rk3566/rk3568/rk3576 共用），关闭闭源 mali_kbase 并启用 panfrost。
+        # case_insensitive_fix.config 由基类生成，macOS 默认大小写不敏感 FS 上
+        # 禁用 netfilter 中仅大小写不同的源码对，避免 ipt_ECN/ipt_ecn 等互踩。
         "defconfig": [
             "rockchip_linux_defconfig",
+            "case_insensitive_fix.config",
             "panfrost.config",
             # GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
             # USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。

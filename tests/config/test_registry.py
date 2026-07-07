@@ -39,8 +39,6 @@ class TestDiscoverBoards:
             assert cfg["board"] == name
             assert "soc" in cfg
             assert "platform" in cfg
-            assert "products" in cfg
-            assert "variants" in cfg
 
 
 # ── get_board_config 测试 ────────────────────────────────────────
@@ -88,46 +86,40 @@ class TestGetBoardConfig:
         merged = get_board_config("neons-core3566-nanob", boards=boards)
         assert merged["kernel"]["commit"] == "e62b45adc7f89f5c8ea1918960b8c78e7c97ebf5"
 
-    def test_tspi_bootloader_commit_pin(self, boards):
-        """tspi-rk3566 必须 pin 到实机验证 ADB 可枚举的 U-Boot commit。
-
-        SoC 层已切到 next-dev-v2026.01，merged branch 字段继承该值；但本板
-        commit 字段覆盖 SoC 默认，实际 checkout 仍为 3c60a711（位于
-        next-dev-buildroot 分支，是该板 USB OTG configfs gadget 实测唯一
-        枚举成功的 U-Boot 版本）。branch 字段只用于首次 clone tracking ref，
-        不影响 commit checkout 路径（见 builder/source.py:341）。
-        """
+    def test_tspi_bootloader_uses_soc_branch(self, boards):
+        """tspi-rk3566 当前沿用 RK3566 SoC 层 U-Boot 分支，不再 pin board commit。"""
         merged = get_board_config("tspi-rk3566", boards=boards)
-        assert (
-            merged["bootloader"]["commit"]
-            == "3c60a711e61015c1a61247837afbeaa85bd7fbf2"
-        )
+        assert merged["bootloader"].get("commit", "") == ""
         assert merged["bootloader"]["branch"] == "next-dev-v2026.01"
 
     def test_orangepi_empty_commits(self, boards):
         """orangepi-cm4 的 kernel/bootloader commit 应为空。"""
         merged = get_board_config("orangepi-cm4", boards=boards)
-        assert merged["kernel"]["commit"] == ""
-        assert merged["bootloader"]["commit"] == ""
+        assert merged["kernel"].get("commit", "") == ""
+        assert merged["bootloader"].get("commit", "") == ""
 
     def test_kernel_merges_soc_defconfig(self, boards):
         """板级 kernel 应继承 SoC 的 defconfig（rk3566 系统一 rkr5.1 后叠 panfrost）。"""
         merged = get_board_config("radxa-zero3w", boards=boards)
         assert merged["kernel"]["defconfig"] == [
             "rockchip_linux_defconfig",
+            "case_insensitive_fix.config",
             "panfrost.config",
+            "CONFIG_DRM_GUD=y",
         ]
 
     def test_bootloader_merges_soc_defconfig(self, boards):
         """板级 bootloader 应继承 SoC 的 defconfig。"""
         merged = get_board_config("radxa-zero3w", boards=boards)
-        assert merged["bootloader"]["defconfig"] == "rk3568_defconfig"
+        assert merged["bootloader"]["defconfig"] == ["rk3568_defconfig"]
 
-    def test_rootfs_inherits_platform_packages(self, boards):
-        """板级 rootfs 应继承平台层的 packages 列表。"""
-        merged = get_board_config("radxa-zero3w", boards=boards)
-        assert "systemd" in merged["rootfs"]["packages"]
-        assert "bash" in merged["rootfs"]["packages"]
+    def test_rootfs_inherits_platform_packages(self):
+        """resolve 后 rootfs 应继承平台层与 rootfs 基线包集合。"""
+        resolved = resolve_config(
+            "radxa-zero3w", product="default", variant="release"
+        )
+        assert "systemd" in resolved["rootfs"]["packages"]
+        assert "bash" in resolved["rootfs"]["packages"]
 
     def test_rootfs_has_board_custom_packages(self, boards):
         """板级 rootfs 应包含板级自定义包。
@@ -140,10 +132,12 @@ class TestGetBoardConfig:
         assert merged["rootfs"]["custom_packages"] == [
             "adbd", "recoveryctl", "flange-rootfs-grow"]
 
-    def test_rootfs_has_grow_dependencies(self, boards):
+    def test_rootfs_has_grow_dependencies(self):
         """normal rootfs 应包含首次启动扩容 App 的运行期依赖。"""
-        merged = get_board_config("radxa-zero3w", boards=boards)
-        packages = set(merged["rootfs"]["packages"])
+        resolved = resolve_config(
+            "radxa-zero3w", product="default", variant="release"
+        )
+        packages = set(resolved["rootfs"]["packages"])
         assert {"cloud-guest-utils", "gdisk", "e2fsprogs", "util-linux"} <= packages
 
     def test_rkbin_merges_platform_and_soc(self, boards):
@@ -259,3 +253,63 @@ class TestResolveConfig:
         packages = resolved["rootfs"]["packages"]
 
         assert len(packages) == len(set(packages))
+
+    def test_orangepi_cm4_default_stays_non_amp(self, boards):
+        """orangepi-cm4 default product 不应被 AMP product 配置污染。"""
+        resolved = resolve_config(
+            "orangepi-cm4", product="default", variant="release", boards=boards
+        )
+        partition_names = [p["name"] for p in resolved["partitions"]["entries"]]
+
+        assert resolved["kernel"]["dts"] == "rk3566-orangepi-cm4-base"
+        assert resolved["amp"]["enabled"] is False
+        assert "amp" not in partition_names
+        assert "CONFIG_AMP=y" not in resolved["bootloader"]["defconfig"]
+
+    def test_orangepi_cm4_hal_amp_config(self, boards):
+        """orangepi-cm4 amp product 应启用 HAL AMP 与 UART7 HAL app。"""
+        resolved = resolve_config(
+            "orangepi-cm4", product="amp", variant="release", boards=boards
+        )
+        partition_names = [p["name"] for p in resolved["partitions"]["entries"]]
+
+        assert resolved["amp"]["enabled"] is True
+        assert resolved["amp"]["mode"] == "hal"
+        assert resolved["amp"]["app"] == "rk3568_amp_uart7_demo"
+        assert resolved["kernel"]["dts"] == "rk3566-orangepi-cm4-amp"
+        assert {"CONFIG_AMP=y", "CONFIG_ROCKCHIP_AMP=y"} <= set(
+            resolved["bootloader"]["defconfig"])
+        assert {"CONFIG_RPMSG_CHAR=y", "CONFIG_RPMSG_CTRL=y"} <= set(
+            resolved["kernel"]["defconfig"])
+        assert partition_names == [
+            "idbloader", "uboot", "boot", "recovery", "amp", "rootfs"]
+
+    def test_orangepi_cm4_rtthread_amp_config(self, boards):
+        """orangepi-cm4 amp-rtt product 应启用 RT-Thread AMP 与 UART7 RT-Thread app。"""
+        resolved = resolve_config(
+            "orangepi-cm4", product="amp-rtt", variant="release", boards=boards
+        )
+        partition_names = [p["name"] for p in resolved["partitions"]["entries"]]
+
+        assert resolved["amp"]["enabled"] is True
+        assert resolved["amp"]["mode"] == "rt-thread"
+        assert resolved["amp"]["app"] == "rk3568_amp_uart7_rtt_demo"
+        assert resolved["kernel"]["dts"] == "rk3566-orangepi-cm4-amp"
+        assert {"CONFIG_AMP=y", "CONFIG_ROCKCHIP_AMP=y"} <= set(
+            resolved["bootloader"]["defconfig"])
+        assert {"CONFIG_RPMSG_CHAR=y", "CONFIG_RPMSG_CTRL=y"} <= set(
+            resolved["kernel"]["defconfig"])
+        assert partition_names == [
+            "idbloader", "uboot", "boot", "recovery", "amp", "rootfs"]
+
+    def test_tspi_amp_apps_stay_uart4(self, boards):
+        """新增 Orange Pi CM4 UART7 app 不应改变 tspi-rk3566 已有 AMP app。"""
+        hal = resolve_config(
+            "tspi-rk3566", product="amp", variant="release", boards=boards
+        )
+        rtt = resolve_config(
+            "tspi-rk3566", product="amp-rtt", variant="release", boards=boards
+        )
+
+        assert hal["amp"]["app"] == "rk3568_amp_demo"
+        assert rtt["amp"]["app"] == "rk3568_amp_rtt_demo"

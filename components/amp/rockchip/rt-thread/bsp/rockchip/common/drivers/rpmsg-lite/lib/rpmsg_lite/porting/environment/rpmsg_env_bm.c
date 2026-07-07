@@ -54,7 +54,9 @@
 static int32_t env_init_counter = 0;
 
 /* Max supported ISR counts */
+#ifndef ISR_COUNT
 #define ISR_COUNT (12U)
+#endif
 /*!
  * Structure to keep track of registered ISR's.
  */

@@ -71,16 +71,19 @@ class TestRK3588SoCDiscovery:
         assert rk3588["kernel"]["dts_dir"] == rk3566["kernel"]["dts_dir"]
         assert rk3588["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
         assert rk3588["kernel"]["branch"] == rk3566["kernel"]["branch"]
-        # defconfig 形态按 GPU 驱动分流：RK3588 叠 case_insensitive_fix + panthor；
-        # RK3566/3568 叠 panfrost。
+        # defconfig 形态按 GPU 驱动分流：RK3588 叠 panthor；RK3566/3568
+        # 叠 panfrost；大小写不敏感 FS 修复 fragment 全系一致保留。
         assert rk3588["kernel"]["defconfig"] == [
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "rk3588_panthor.config",
+            "CONFIG_DRM_GUD=y",
         ]
         assert rk3566["kernel"]["defconfig"] == [
             "rockchip_linux_defconfig",
+            "case_insensitive_fix.config",
             "panfrost.config",
+            "CONFIG_DRM_GUD=y",
         ]
 
     def test_kernel_args_uart2(self):
@@ -154,5 +157,5 @@ class TestRK3588NotPollutingRK3566:
     def test_defconfig_distinct(self):
         rk3566 = _load_soc_config("rk3566")
         rk3588 = _load_soc_config("rk3588")
-        assert rk3566["bootloader"]["defconfig"] == "rk3568_defconfig"
+        assert rk3566["bootloader"]["defconfig"] == ["rk3568_defconfig"]
         assert rk3588["bootloader"]["defconfig"] == "rk3588_defconfig"

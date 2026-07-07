@@ -69,6 +69,16 @@ RT_WEAK const struct uart_board g_uart4_board =
 };
 #endif /* RT_USING_UART4 */
 
+#if defined(RT_USING_UART7)
+RT_WEAK const struct uart_board g_uart7_board =
+{
+    .baud_rate = UART_BR_115200,
+    .dev_flag = ROCKCHIP_UART_SUPPORT_FLAG_DEFAULT,
+    .bufer_size = RT_SERIAL_RB_BUFSZ,
+    .name = "uart7",
+};
+#endif /* RT_USING_UART7 */
+
 extern void SysTick_Handler(void);
 RT_WEAK void tick_isr(int vector, void *param)
 {
@@ -98,8 +108,14 @@ static struct GIC_AMP_IRQ_INIT_CFG irqsConfig[] =
 {
     /* TODO: Config the irqs here. */
 
-    /* TODO: By default, UART2 is used for master core CPU1, and UART4 is used for remote core CPU0 */
+    /* AMP 从核 console IRQ 按启用的 UART 选择。默认 UART4 保持原行为；
+     * Orange Pi CM4 的 app 片段选择 UART7_M2。 */
+#if defined(RT_USING_UART4)
     GIC_AMP_IRQ_CFG_ROUTE(UART4_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0)),
+#endif
+#if defined(RT_USING_UART7)
+    GIC_AMP_IRQ_CFG_ROUTE(UART7_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0)),
+#endif
 
 #ifdef HAL_GIC_WAIT_LINUX_INIT_ENABLED
     GIC_AMP_IRQ_CFG_ROUTE(AMP_CPUOFF_REQ_IRQ(3), 0xd0, CPU_GET_AFFINITY(3, 0)),
@@ -226,4 +242,3 @@ void rt_hw_board_init(void)
     rt_components_board_init();
 #endif
 }
-

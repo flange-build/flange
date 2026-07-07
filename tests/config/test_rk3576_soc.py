@@ -80,6 +80,7 @@ class TestRK3576KernelAlignsRK3588:
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "panfrost.config",
+            "CONFIG_DRM_GUD=y",
         ]
 
     def test_no_mali_csf_firmware(self):

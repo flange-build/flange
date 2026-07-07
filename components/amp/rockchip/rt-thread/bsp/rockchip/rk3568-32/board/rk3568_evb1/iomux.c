@@ -45,6 +45,9 @@ void rt_hw_iomux_config(void)
 #ifdef RT_USING_UART4
     uart4_m1_iomux_config();
 #endif
+#ifdef RT_USING_UART7
+    uart7_m2_iomux_config();
+#endif
 #endif
 
 #ifdef RT_USING_CAN

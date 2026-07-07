@@ -26,11 +26,9 @@ class TestGetValidTargets:
         assert isinstance(targets, list)
 
     def test_expected_count(self, boards):
-        """12 板 x 1 product x 2 variants = 24；orangepi-5-plus 的
-        wks55fhd001wct-bringup 与 radxa-rock5b 的 meizu-e3-bringup 两个额外
-        product 各再贡献 2，合计 28。"""
+        """当前 16 个 board 的全部 product/variant 组合应完整枚举。"""
         targets = get_valid_targets(boards=boards)
-        assert len(targets) == 28
+        assert len(targets) == 48
 
     def test_contains_radxa_targets(self, boards):
         targets = get_valid_targets(boards=boards)
@@ -51,6 +49,10 @@ class TestGetValidTargets:
         targets = get_valid_targets(boards=boards)
         assert "orangepi-cm4-default-debug" in targets
         assert "orangepi-cm4-default-release" in targets
+        assert "orangepi-cm4-amp-debug" in targets
+        assert "orangepi-cm4-amp-release" in targets
+        assert "orangepi-cm4-amp-rtt-debug" in targets
+        assert "orangepi-cm4-amp-rtt-release" in targets
 
     def test_sorted_order(self, boards):
         """结果应按字母序排列。"""
@@ -74,6 +76,15 @@ class TestParseTarget:
         assert result == {
             "board": "orangepi-cm4",
             "product": "default",
+            "variant": "release",
+        }
+
+    def test_parse_orangepi_amp_rtt(self, boards):
+        """解析含连字符 product 的 Orange Pi CM4 AMP RT-Thread 目标。"""
+        result = parse_target("orangepi-cm4-amp-rtt-release", boards=boards)
+        assert result == {
+            "board": "orangepi-cm4",
+            "product": "amp-rtt",
             "variant": "release",
         }
 

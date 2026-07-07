@@ -14,6 +14,7 @@
 void rt_hw_iodomain_config(void);
 void uart2_m0_iomux_config(void);
 void uart4_m1_iomux_config(void);
+void uart7_m2_iomux_config(void);
 void can1_m1_iomux_config(void);
 void gmac0_iomux_config(void);
 void gmac1_m1_iomux_config(void);

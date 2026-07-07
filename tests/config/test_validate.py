@@ -8,6 +8,7 @@ from builder.config.validate import (
     validate_recovery_partition,
     validate_rootfs_auto_grow,
 )
+from builder.config.registry import resolve_config
 
 
 # ── recovery 分区存在性 ─────────────────────────────────────────────
@@ -81,6 +82,19 @@ class TestValidateConfig:
     def test_minimal_disabled_config_passes(self):
         validate_config({"recovery": {"enabled": False}})  # no raise
         validate_config({})  # no raise (recovery 缺省即关闭)
+
+    @pytest.mark.parametrize("product", ["default", "amp", "amp-rtt"])
+    def test_orangepi_cm4_products_pass_validation(self, product):
+        cfg = resolve_config("orangepi-cm4", product=product, variant="release")
+        validate_config(cfg)  # no raise
+
+    @pytest.mark.parametrize("product", ["amp", "amp-rtt"])
+    def test_orangepi_cm4_amp_partition_before_remaining_rootfs(self, product):
+        cfg = resolve_config("orangepi-cm4", product=product, variant="release")
+        names = [entry["name"] for entry in cfg["partitions"]["entries"]]
+
+        assert names.index("amp") < names.index("rootfs")
+        assert cfg["partitions"]["entries"][names.index("amp")]["type"] != "raw"
 
 
 # ── rootfs 首次启动扩容布局校验 ───────────────────────────────────
