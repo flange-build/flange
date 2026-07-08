@@ -11,6 +11,7 @@ from builder.app_spec import (
     BuildConfig,
     LibConfig,
     SystemdConfig,
+    SwiftBuildConfig,
     load_spec,
 )
 
@@ -175,6 +176,34 @@ build:
     - bin/legacy-app
 """
 
+# RT-Thread AMP + Embedded Swift
+_AMP_SCONS_SWIFT = """\
+app:
+  name: amp-swift-demo
+  version: 0.1.0
+  description: AMP Swift 示例
+  type: amp
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: scons
+  swift:
+    enabled: true
+    package_path: .
+    product: AmpLogic
+    c_header: include/swift_bridge.h
+    target_triple: armv7-none-none-eabi
+    extra_flags:
+      - -Xswiftc
+      - -Osize
+    allowed_undefined:
+      - rt_kprintf
+"""
+
 
 # ---------------------------------------------------------------------------
 # 测试：4 种 App 类型正常解析
@@ -271,6 +300,22 @@ class TestFullFieldParsing:
         assert spec.build.system == "custom"
         assert spec.build.commands[0] == ["./configure", "--host=aarch64-linux-gnu"]
         assert spec.build.commands[1] == ["make", "-j4"]
+
+    def test_amp_scons_swift_build_fields(self):
+        """amp+scons 可声明 Embedded Swift / SwiftPM 构建配置。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = load_spec(_write_yaml(tmpdir, _AMP_SCONS_SWIFT))
+
+        assert spec.app.type == "amp"
+        assert spec.build.system == "scons"
+        assert isinstance(spec.build.swift, SwiftBuildConfig)
+        assert spec.build.swift.enabled is True
+        assert spec.build.swift.package_path == "."
+        assert spec.build.swift.product == "AmpLogic"
+        assert spec.build.swift.c_header == "include/swift_bridge.h"
+        assert spec.build.swift.target_triple == "armv7-none-none-eabi"
+        assert spec.build.swift.extra_flags == ["-Xswiftc", "-Osize"]
+        assert spec.build.swift.allowed_undefined == ["rt_kprintf"]
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +577,61 @@ class TestBuildSystemValues:
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, yaml_content))
         assert spec.build.system == "none"
+
+
+# ---------------------------------------------------------------------------
+# 测试：build.swift 约束
+# ---------------------------------------------------------------------------
+
+class TestSwiftBuildValidation:
+    """验证 build.swift 仅能用于 amp+scons，且路径不得逃逸。"""
+
+    def test_exec_declaring_build_swift_rejected(self):
+        yaml_content = (
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n"
+            "  type: exec\n  arch: [aarch64]\n"
+            "maintainer:\n  name: flange\n  email: a@b.com\n"
+            "build:\n  system: swift\n  swift:\n    enabled: true\n"
+            "    package_path: .\n    product: AmpLogic\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match="build.swift"):
+                load_spec(_write_yaml(tmpdir, yaml_content))
+
+    def test_amp_non_scons_declaring_build_swift_rejected(self):
+        yaml_content = (
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n"
+            "  type: amp\n  arch: [aarch64]\n"
+            "maintainer:\n  name: flange\n  email: a@b.com\n"
+            "build:\n  system: amp\n  swift:\n    enabled: true\n"
+            "    package_path: .\n    product: AmpLogic\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match="build.swift"):
+                load_spec(_write_yaml(tmpdir, yaml_content))
+
+    @pytest.mark.parametrize("field,value", [
+        ("package_path", "../outside"),
+        ("package_path", "/abs/package"),
+        ("c_header", "../swift_bridge.h"),
+        ("c_header", "/abs/swift_bridge.h"),
+    ])
+    def test_swift_paths_must_stay_in_app_root(self, field, value):
+        yaml_content = _AMP_SCONS_SWIFT.replace(
+            f"    {field}: " + (
+                "." if field == "package_path" else "include/swift_bridge.h"
+            ),
+            f"    {field}: {value}",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match=field):
+                load_spec(_write_yaml(tmpdir, yaml_content))
+
+    def test_enabled_swift_requires_product(self):
+        yaml_content = _AMP_SCONS_SWIFT.replace("    product: AmpLogic\n", "")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match="product"):
+                load_spec(_write_yaml(tmpdir, yaml_content))
 
 
 # ---------------------------------------------------------------------------

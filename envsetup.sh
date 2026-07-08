@@ -656,8 +656,9 @@ _flange_cmd_create_app() {
         echo "    <name>                  应用名称"
         echo ""
         echo "  选项:"
-        echo "    --type=<type>           应用类型 (exec/service/lib/test)，默认: exec"
-        echo "    --build-system=<sys>    构建系统 (none/cmake/meson/make/swift)，默认: cmake"
+        echo "    --type=<type>           应用类型 (exec/service/lib/test/amp)，默认: exec"
+        echo "    --build-system=<sys>    构建系统 (none/cmake/meson/make/swift/amp/scons)，默认: cmake"
+        echo "    --embedded-swift        amp+scons 专用，生成 Embedded Swift / SwiftPM 骨架"
         echo "    --dir=<path>            应用生成的父目录，默认: components/app/"
         echo "    --version=<ver>         应用初始版本，默认: 0.1.0"
         echo "    --description=<desc>    应用描述"
@@ -678,6 +679,7 @@ _flange_cmd_create_app() {
     local app_version="0.1.0"
     local app_description=""
     local app_parent_dir=""       # --dir 指向的父目录；空 = 使用默认 components/app/
+    local embedded_swift="false"
     for arg in "$@"; do
         case "$arg" in
             --type=*)         app_type="${arg#--type=}"              ;;
@@ -685,6 +687,7 @@ _flange_cmd_create_app() {
             --version=*)      app_version="${arg#--version=}"        ;;
             --description=*)  app_description="${arg#--description=}";;
             --dir=*)          app_parent_dir="${arg#--dir=}"         ;;
+            --embedded-swift) embedded_swift="true"                  ;;
         esac
     done
 
@@ -695,7 +698,11 @@ _flange_cmd_create_app() {
         app_parent_dir=$(eval echo "$app_parent_dir")
     fi
 
-    _flange_step "生成 App 脚手架：name=$app_name  type=$app_type  build-system=$build_system${app_parent_dir:+  dir=$app_parent_dir}"
+    local embedded_swift_hint=""
+    if [[ "$embedded_swift" == "true" ]]; then
+        embedded_swift_hint="  embedded-swift=true"
+    fi
+    _flange_step "生成 App 脚手架：name=$app_name  type=$app_type  build-system=$build_system${embedded_swift_hint}${app_parent_dir:+  dir=$app_parent_dir}"
 
     # 调用 Python 脚手架生成器
     python3 -c "
@@ -713,6 +720,7 @@ try:
         parent_dir=parent,
         version='$app_version',
         description='$app_description',
+        embedded_swift=('$embedded_swift' == 'true'),
     )
     print(dest)
 except ScaffoldError as e:

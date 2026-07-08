@@ -10,6 +10,7 @@
 
 amp 类型 = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户应用），其 src/
 被 amp 组件 stage 进 SDK 应用槽位、打进 amp.img；不打 deb、不进 rootfs。
+amp+scons 可通过 embedded_swift=True 额外生成 SwiftPM static library 骨架。
 """
 
 from __future__ import annotations
@@ -87,6 +88,7 @@ class AppScaffold:
         parent_dir: Optional[Path] = None,
         version: str = "0.1.0",
         description: str = "",
+        embedded_swift: bool = False,
     ) -> Path:
         """生成 App 工程目录。
 
@@ -100,6 +102,7 @@ class AppScaffold:
                           与 target_dir 互斥（同时指定将报错）
             version:      版本字符串，默认 0.1.0
             description:  描述字符串，默认空
+            embedded_swift: amp+scons 专用；生成 SwiftPM static library 骨架
 
         返回：
             已创建的 App 目录路径（Path）
@@ -109,6 +112,8 @@ class AppScaffold:
         """
         # 1. 参数校验
         self._validate(name, app_type, build_system)
+        if embedded_swift and (app_type, build_system) != ("amp", "scons"):
+            raise ScaffoldError("embedded_swift 仅支持 type=amp 且 build_system=scons")
         if target_dir is not None and parent_dir is not None:
             raise ScaffoldError(
                 "target_dir 与 parent_dir 不能同时指定，请二选一"
@@ -126,13 +131,16 @@ class AppScaffold:
             raise ScaffoldError(f"目标目录已存在：{dest}")
 
         # 3. 构建模板变量映射
-        variables = self._make_variables(name, app_type, build_system, version, description)
+        variables = self._make_variables(
+            name, app_type, build_system, version, description, embedded_swift)
 
         # 4. 渲染并写入文件
         try:
             dest.mkdir(parents=True, exist_ok=False)
             self._render_app_yaml(dest, variables)
-            self._render_type_templates(dest, app_type, build_system, variables)
+            self._render_type_templates(
+                dest, app_type, build_system, variables,
+                embedded_swift=embedded_swift)
         except Exception:
             # 出错时清理已创建目录，保证原子性
             if dest.exists():
@@ -218,6 +226,7 @@ class AppScaffold:
         build_system: str,
         version: str,
         description: str,
+        embedded_swift: bool = False,
     ) -> dict[str, str]:
         """构造模板变量字典。"""
         # 将 name 中的连字符替换为下划线作为 C 标识符
@@ -230,6 +239,7 @@ class AppScaffold:
             "description":  description or f"{name} App",
             "type":         app_type,
             "build_system": build_system,
+            "embedded_swift": "true" if embedded_swift else "false",
         }
 
     def _render_app_yaml(self, dest: Path, variables: dict[str, str]) -> None:
@@ -237,7 +247,20 @@ class AppScaffold:
         tpl_path = _TEMPLATES_DIR / "app.yaml.tpl"
         if not tpl_path.exists():
             raise ScaffoldError(f"模板文件不存在：{tpl_path}")
-        self._render_file(tpl_path, dest / "app.yaml", variables)
+        out_path = dest / "app.yaml"
+        self._render_file(tpl_path, out_path, variables)
+        if variables.get("embedded_swift") == "true":
+            content = out_path.read_text(encoding="utf-8")
+            content += (
+                "  swift:\n"
+                "    enabled: true\n"
+                "    package_path: .\n"
+                "    product: AmpLogic\n"
+                "    c_header: include/swift_bridge.h\n"
+                "    target_triple: armv7-none-none-eabi\n"
+                "    extra_flags: []\n"
+            )
+            out_path.write_text(content, encoding="utf-8")
 
     def _render_type_templates(
         self,
@@ -245,6 +268,8 @@ class AppScaffold:
         app_type: str,
         build_system: str,
         variables: dict[str, str],
+        *,
+        embedded_swift: bool = False,
     ) -> None:
         """渲染类型专属模板目录下的所有文件。
 
@@ -255,6 +280,11 @@ class AppScaffold:
 
         if type_bs_dir.exists():
             self._render_dir(type_bs_dir, dest, variables)
+        if embedded_swift:
+            swift_dir = _TEMPLATES_DIR / app_type / f"{build_system}-swift"
+            if not swift_dir.exists():
+                raise ScaffoldError(f"模板目录不存在：{swift_dir}")
+            self._render_dir(swift_dir, dest, variables)
         # service 类型附加 systemd/ 和 conf/ 共享模板
         if app_type == "service":
             for shared in ("systemd", "conf"):

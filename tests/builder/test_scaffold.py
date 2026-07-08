@@ -266,6 +266,49 @@ class TestTestType:
 
 
 # ---------------------------------------------------------------------------
+# amp 类型测试
+# ---------------------------------------------------------------------------
+
+class TestAmpType:
+    """amp 类型支持 HAL 与 RT-Thread overlay 脚手架。"""
+
+    def test_amp_scons_default_is_c_overlay(self, tmp_path):
+        """amp+scons 默认保持纯 C overlay，不隐式启用 Swift。"""
+        dest = _create(tmp_path, "myamp", "amp", "scons")
+        assert (dest / "applications" / "main.c").exists()
+        assert not (dest / "Package.swift").exists()
+        assert "swift:" not in (dest / "app.yaml").read_text()
+
+    def test_amp_scons_embedded_swift_files(self, tmp_path):
+        """显式 embedded_swift=True 时生成 SwiftPM static library 骨架。"""
+        dest = _create(
+            tmp_path, "myamp", "amp", "scons",
+            embedded_swift=True,
+        )
+
+        assert (dest / "Package.swift").exists()
+        assert (dest / "Sources" / "AmpLogic" / "AmpLogic.swift").exists()
+        assert (dest / "include" / "swift_bridge.h").exists()
+        assert (dest / "applications" / "main.c").exists()
+
+        app_yaml = (dest / "app.yaml").read_text()
+        assert "system: scons" in app_yaml
+        assert "swift:" in app_yaml
+        assert "enabled: true" in app_yaml
+        assert "product: AmpLogic" in app_yaml
+
+    def test_embedded_swift_only_for_amp_scons(self, tmp_path):
+        """embedded_swift 只能配合 amp+scons 使用。"""
+        s = _make_scaffold(tmp_path)
+        with pytest.raises(ScaffoldError, match="embedded_swift"):
+            s.create(
+                "bad", "exec", "swift",
+                target_dir=tmp_path / "out" / "bad",
+                embedded_swift=True,
+            )
+
+
+# ---------------------------------------------------------------------------
 # 无效组合测试
 # ---------------------------------------------------------------------------
 

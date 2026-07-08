@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import yaml
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional
+
+import yaml
 
 
 # 允许的 App 类型。amp = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户
@@ -42,6 +43,27 @@ class BuildConfig:
     deps: List[str] = field(default_factory=list)
     # custom 构建专用命令列表，每项为字符串列表
     commands: List[List[str]] = field(default_factory=list)
+    # Embedded Swift 配置；仅 app.type=amp + build.system=scons 可用
+    swift: Optional["SwiftBuildConfig"] = None
+
+
+@dataclass
+class SwiftBuildConfig:
+    """Embedded Swift / SwiftPM 构建配置段（build.swift:）。"""
+    # 是否启用 SwiftPM 构建
+    enabled: bool = False
+    # Swift package 路径（相对于 App 根目录）
+    package_path: str = "."
+    # SwiftPM static library product 名称
+    product: str = ""
+    # C ABI bridge 头文件路径（相对于 App 根目录，可选）
+    c_header: str = ""
+    # SwiftPM baremetal target triple；默认由 RK3568 A55 AArch32 使用
+    target_triple: str = "armv7-none-none-eabi"
+    # 追加到 swift build 后的原始参数
+    extra_flags: List[str] = field(default_factory=list)
+    # 允许 Swift archive 暴露给最终 RT-Thread 链接器解析的额外未定义符号
+    allowed_undefined: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -150,7 +172,79 @@ def _parse_maintainer(raw: dict) -> MaintainerInfo:
     return MaintainerInfo(name=raw["name"].strip(), email=raw["email"].strip())
 
 
-def _parse_build(raw: dict) -> BuildConfig:
+def _parse_str_list_value(value, field: str) -> List[str]:
+    """把字符串或字符串列表解析成 List[str]。"""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    raise AppSpecError(f"{field} 必须是字符串或列表")
+
+
+def _validate_relative_path(value, field: str, *, allow_empty: bool = False) -> str:
+    """校验相对 App 根目录的路径，禁止绝对路径和 `..` 逃逸。"""
+    if not isinstance(value, str):
+        raise AppSpecError(f"{field} 必须是字符串")
+    path = value.strip()
+    if not path:
+        if allow_empty:
+            return ""
+        raise AppSpecError(f"{field} 不能为空")
+
+    pure = PurePosixPath(path)
+    if pure.is_absolute() or ".." in pure.parts:
+        raise AppSpecError(f"{field} 必须是相对 app 根目录且不得包含 '..'")
+    return path
+
+
+def _parse_swift_build(raw, app_info: AppInfo, system: str) -> Optional[SwiftBuildConfig]:
+    """解析 build.swift 子段。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise AppSpecError("build.swift 必须是字典")
+    if app_info.type != "amp" or system != "scons":
+        raise AppSpecError("build.swift 仅允许用于 app.type=amp 且 build.system=scons")
+
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise AppSpecError("build.swift.enabled 必须是布尔值")
+
+    package_path = _validate_relative_path(
+        raw.get("package_path", "."),
+        "build.swift.package_path",
+    )
+    product = str(raw.get("product", "")).strip()
+    if enabled and not product:
+        raise AppSpecError("build.swift.product 在 enabled=true 时必须是非空字符串")
+
+    c_header = _validate_relative_path(
+        raw.get("c_header", ""),
+        "build.swift.c_header",
+        allow_empty=True,
+    )
+    target_triple = str(raw.get("target_triple", "armv7-none-none-eabi")).strip()
+    if enabled and not target_triple:
+        raise AppSpecError("build.swift.target_triple 在 enabled=true 时必须是非空字符串")
+
+    return SwiftBuildConfig(
+        enabled=enabled,
+        package_path=package_path,
+        product=product,
+        c_header=c_header,
+        target_triple=target_triple,
+        extra_flags=_parse_str_list_value(
+            raw.get("extra_flags", []),
+            "build.swift.extra_flags",
+        ),
+        allowed_undefined=_parse_str_list_value(
+            raw.get("allowed_undefined", []),
+            "build.swift.allowed_undefined",
+        ),
+    )
+
+
+def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
     """解析 build: 段，校验 system 取值，填充默认值。"""
     if not isinstance(raw, dict):
         raise AppSpecError("build: 段必须是字典")
@@ -167,21 +261,8 @@ def _parse_build(raw: dict) -> BuildConfig:
         raise AppSpecError("build.options 必须是字典")
     options = {str(k): str(v) for k, v in options.items()}
 
-    # 解析 outputs
-    outputs = raw.get("outputs", [])
-    if isinstance(outputs, str):
-        outputs = [outputs]
-    elif not isinstance(outputs, list):
-        raise AppSpecError("build.outputs 必须是列表")
-    outputs = [str(o) for o in outputs]
-
-    # 解析 deps
-    deps = raw.get("deps", [])
-    if isinstance(deps, str):
-        deps = [deps]
-    elif not isinstance(deps, list):
-        raise AppSpecError("build.deps 必须是列表")
-    deps = [str(d) for d in deps]
+    outputs = _parse_str_list_value(raw.get("outputs", []), "build.outputs")
+    deps = _parse_str_list_value(raw.get("deps", []), "build.deps")
 
     # 解析 commands（custom 专用）
     commands = raw.get("commands", [])
@@ -203,6 +284,7 @@ def _parse_build(raw: dict) -> BuildConfig:
         outputs=outputs,
         deps=deps,
         commands=parsed_commands,
+        swift=_parse_swift_build(raw.get("swift"), app_info, system),
     )
 
 
@@ -268,7 +350,7 @@ def load_spec(app_dir: Path) -> AppSpec:
         raise AppSpecError("capabilities 必须是字符串或列表")
 
     # 解析可选段：build
-    build = _parse_build(raw["build"]) if "build" in raw else BuildConfig()
+    build = _parse_build(raw["build"], app_info) if "build" in raw else BuildConfig()
 
     # 解析可选段：install（文件映射）
     raw_install = raw.get("install", {})
@@ -283,12 +365,7 @@ def load_spec(app_dir: Path) -> AppSpec:
 
     # 解析可选段：depends / conffiles / data_dirs
     def _parse_str_list(key: str) -> List[str]:
-        val = raw.get(key, [])
-        if isinstance(val, str):
-            return [val]
-        if isinstance(val, list):
-            return [str(v) for v in val]
-        raise AppSpecError(f"{key} 必须是字符串或列表")
+        return _parse_str_list_value(raw.get(key, []), key)
 
     depends = _parse_str_list("depends")
     conffiles = _parse_str_list("conffiles")
