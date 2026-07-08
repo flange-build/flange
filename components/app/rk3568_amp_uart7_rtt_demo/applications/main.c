@@ -9,6 +9,7 @@
  * 内存布局（从核链接地址、SHMEM、LINUX_RPMSG）由 flange 的 config.amp.memory
  * 经环境变量注入，勿在此硬编。
  */
+#include <stdint.h>
 #include <rtthread.h>
 #include <rtdevice.h>
 #include "hal_base.h"
@@ -16,6 +17,7 @@
 #include "rpmsg_lite.h"
 #include "rpmsg_queue.h"
 #include "rpmsg_ns.h"
+#include "swift_bridge.h"
 
 /* link-id 必须与 board dts 的 rockchip,link-id 一致（0x10）：M=1（主/从判定，取
  * 非本核 cpu3 即可）、R=0（从核新消息发 mailbox ch0，命中 stock 内核 rpmsg-rx）。*/
@@ -37,7 +39,6 @@ static struct GIC_IRQ_AMP_CTRL amp_extra_gic = {
 
 #define ECHO_EPT_ID     0x3003U
 #define ECHO_EPT_NAME   "rpmsg-ap3-ch0"
-#define ECHO_MSG        "Rockchip rpmsg linux test!"
 
 extern uint32_t __linux_share_rpmsg_start__[];
 #define LINUX_RPMSG_MEM ((void *)&__linux_share_rpmsg_start__)
@@ -56,11 +57,22 @@ static void rpmsg_echo_entry(void *param)
     rpmsg_queue_handle queue;
     void *ns_cb_data;
     uint32_t src;
+    uint32_t rx_len;
+    uint32_t reply_len;
     char *rx = (char *)rt_malloc(RL_BUFFER_PAYLOAD_SIZE);
+    char *tx = (char *)rt_malloc(RL_BUFFER_PAYLOAD_SIZE);
 
-    if (rx == RT_NULL)
+    if (rx == RT_NULL || tx == RT_NULL)
     {
-        rt_kprintf("rpmsg echo: rx buffer malloc failed\n");
+        rt_kprintf("rpmsg echo: buffer malloc failed\n");
+        if (rx != RT_NULL)
+        {
+            rt_free(rx);
+        }
+        if (tx != RT_NULL)
+        {
+            rt_free(tx);
+        }
         return;
     }
 
@@ -81,10 +93,15 @@ static void rpmsg_echo_entry(void *param)
     while (1)
     {
         if (rpmsg_queue_recv(inst, queue, &src, rx, RL_BUFFER_PAYLOAD_SIZE,
-                             RL_NULL, RL_BLOCK) == RL_SUCCESS)
+                             &rx_len, RL_BLOCK) == RL_SUCCESS)
         {
-            rpmsg_lite_send(inst, ept, src, ECHO_MSG,
-                            (uint32_t)rt_strlen(ECHO_MSG), RL_BLOCK);
+            reply_len = swift_handle_message((const uint8_t *)rx, rx_len,
+                                             (uint8_t *)tx,
+                                             RL_BUFFER_PAYLOAD_SIZE);
+            if (reply_len > 0U)
+            {
+                rpmsg_lite_send(inst, ept, src, tx, reply_len, RL_BLOCK);
+            }
         }
     }
 }

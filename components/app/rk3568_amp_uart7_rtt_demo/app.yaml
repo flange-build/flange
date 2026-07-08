@@ -1,7 +1,7 @@
 app:
   name: rk3568_amp_uart7_rtt_demo
   version: 0.1.0
-  description: Orange Pi CM4 AMP 协处理器固件 demo（RT-Thread，UART7_M2 console，Linux↔AMP rpmsg echo）
+  description: Orange Pi CM4 AMP 协处理器固件 demo（RT-Thread，UART7_M2 console，Swift rpmsg echo/I2C shell）
   type: amp
   arch:
     - aarch64
@@ -12,3 +12,14 @@ maintainer:
 
 build:
   system: scons
+  swift:
+    enabled: true
+    package_path: .
+    product: AmpLogic
+    c_header: include/swift_bridge.h
+    target_triple: armv7-none-none-eabi
+    extra_flags: []
+    allowed_undefined:
+      - rt_i2c_bus_device_find
+      - rt_i2c_transfer
+      - rt_kputs
