@@ -62,8 +62,6 @@ class SwiftBuildConfig:
     target_triple: str = "armv7-none-none-eabi"
     # 追加到 swift build 后的原始参数
     extra_flags: List[str] = field(default_factory=list)
-    # 允许 Swift archive 暴露给最终 RT-Thread 链接器解析的额外未定义符号
-    allowed_undefined: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -236,10 +234,6 @@ def _parse_swift_build(raw, app_info: AppInfo, system: str) -> Optional[SwiftBui
         extra_flags=_parse_str_list_value(
             raw.get("extra_flags", []),
             "build.swift.extra_flags",
-        ),
-        allowed_undefined=_parse_str_list_value(
-            raw.get("allowed_undefined", []),
-            "build.swift.allowed_undefined",
         ),
     )
 

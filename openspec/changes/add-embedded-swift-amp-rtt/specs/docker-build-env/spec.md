@@ -42,7 +42,7 @@ Swift 工具链安装路径 SHALL 稳定为 `/opt/swift-embedded/` 或等价路�
 - SwiftPM 能把最小 `Package.swift` 构建为 static archive；
 - `file` 或 `readelf -h` 显示 archive 内 object 为 ARM ELF relocatable object；
 - 产物可由现有 `arm-none-eabi-gcc` / RT-Thread SCons 链接进 `rtthread.elf`；
-- `nm -u` 未定义符号集合只包含实现允许的白名单。
+- 最终链接失败时保留 linker 对无法解析符号的真实诊断。
 
 #### Scenario: 最小 Swift archive 可链接
 
@@ -50,7 +50,8 @@ Swift 工具链安装路径 SHALL 稳定为 `/opt/swift-embedded/` 或等价路�
 - **THEN** `scons` 链接成功产出 `rtthread.elf`
 - **AND** `rtthread.bin` 可继续由 `mkimage` 打成 `amp.img`
 
-#### Scenario: 未定义符号超出白名单时报错
+#### Scenario: 最终链接暴露无法解析符号
 
-- **WHEN** Swift archive 的 `nm -u` 输出包含未被允许的 runtime 或 libc 符号
-- **THEN** 构建系统 SHALL 报错终止，并列出超出白名单的符号名
+- **WHEN** Swift archive 引入 RT-Thread SCons 链接环境无法解析的 runtime 或 libc 符号
+- **THEN** `rtthread.elf` 链接 SHALL 失败
+- **AND** linker 输出 SHALL 暴露无法解析的符号名

@@ -16,14 +16,13 @@ build:
     c_header: include/swift_bridge.h
     target_triple: armv7-none-none-eabi
     extra_flags: []
-    allowed_undefined: []
 ```
 
 `package_path` SHALL 相对 app 根目录解析，且不得逃逸 app 根目录。`product` SHALL 为非空字符串。
 `c_header` 为可选字段，若声明也 SHALL 相对 app 根目录解析。`target_triple` 用于声明 SwiftPM
-baremetal target triple；首版默认值为 `armv7-none-none-eabi`。`allowed_undefined` 用于声明
-少量由最终 RT-Thread 链接环境提供的额外未定义符号，默认空。若 Swift package 使用远端依赖，
-app SHALL 提交 `Package.resolved` 或等价锁文件，正常构建 SHALL NOT 执行 `swift package update`。
+baremetal target triple；首版默认值为 `armv7-none-none-eabi`。Swift archive 中对 RT-Thread
+和 newlib 的外部符号引用 SHALL 由最终 SCons 链接解析。若 Swift package 使用远端依赖，app SHALL
+提交 `Package.resolved` 或等价锁文件，正常构建 SHALL NOT 执行 `swift package update`。
 
 #### Scenario: 合法 amp+scons Swift 声明通过解析
 

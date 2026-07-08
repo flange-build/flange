@@ -200,8 +200,6 @@ build:
     extra_flags:
       - -Xswiftc
       - -Osize
-    allowed_undefined:
-      - rt_kprintf
 """
 
 
@@ -315,7 +313,6 @@ class TestFullFieldParsing:
         assert spec.build.swift.c_header == "include/swift_bridge.h"
         assert spec.build.swift.target_triple == "armv7-none-none-eabi"
         assert spec.build.swift.extra_flags == ["-Xswiftc", "-Osize"]
-        assert spec.build.swift.allowed_undefined == ["rt_kprintf"]
 
 
 # ---------------------------------------------------------------------------

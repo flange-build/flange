@@ -32,7 +32,7 @@
 - [x] 4.4 构建前删除旧 archive，避免旧 object 残留
 - [x] 4.5 生成 staged `applications/SConscript`，把 Swift archive 注入 `Applications` group
 - [x] 4.6 若 app 自带 `applications/SConscript` 且启用 Swift，报明确错误
-- [x] 4.7 用 `nm -u` 对 Swift archive 未定义符号做白名单检查
+- [x] 4.7 移除 Swift archive 级未定义符号白名单拦截，改由最终 SCons 链接暴露真实 unresolved 符号
 - [x] 4.8 增加 builder 单元测试：无 Swift app 行为不变，Swift app 生成正确 `swift build` 与 SConscript
 
 ## 5. Orange Pi CM4 demo

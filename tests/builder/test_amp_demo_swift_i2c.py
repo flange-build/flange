@@ -40,9 +40,7 @@ def test_swift_targets_bind_rtthread_symbols_directly():
     assert '@_silgen_name("rt_i2c_transfer")' in i2c
     assert "rtt_shell_" not in app_yaml
     assert "rtt_i2c_" not in app_yaml
-    assert "- rt_kputs" in app_yaml
-    assert "- rt_i2c_bus_device_find" in app_yaml
-    assert "- rt_i2c_transfer" in app_yaml
+    assert "allowed_undefined" not in app_yaml
 
 
 def test_swift_i2c_command_uses_typed_throws_for_error_flow():

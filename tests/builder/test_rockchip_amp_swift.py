@@ -6,16 +6,14 @@ from pathlib import Path
 import pytest
 
 from builder.app_spec import SwiftBuildConfig
-from builder.docker import BuildError
 from builder.platforms.rockchip.amp import RockchipAmpBuilder
 
 
 class FakeDocker:
     """记录命令，并在 swift build 时伪造 SwiftPM static archive。"""
 
-    def __init__(self, nm_stdout: str = ""):
+    def __init__(self):
         self.calls = []
-        self.nm_stdout = nm_stdout
 
     def run(self, cmd, **kwargs):
         self.calls.append((list(cmd), kwargs))
@@ -25,9 +23,6 @@ class FakeDocker:
             out = scratch / "armv7-none-none-eabi" / "release"
             out.mkdir(parents=True, exist_ok=True)
             (out / f"lib{product}.a").write_bytes(b"!<arch>\n")
-        if cmd[:2] == ["arm-none-eabi-nm", "-u"]:
-            return subprocess.CompletedProcess(
-                cmd, 0, stdout=self.nm_stdout, stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
 
@@ -43,7 +38,6 @@ def _swift_cfg(**overrides) -> SwiftBuildConfig:
         "c_header": "include/swift_bridge.h",
         "target_triple": "armv7-none-none-eabi",
         "extra_flags": [],
-        "allowed_undefined": [],
     }
     values.update(overrides)
     return SwiftBuildConfig(**values)
@@ -60,7 +54,7 @@ def _make_app(tmp_path: Path) -> Path:
 
 def test_prepare_rtthread_swift_builds_archive_and_sconscript(tmp_path):
     """SwiftPM archive 应复制到 staged BSP，并由 generated SConscript 链接。"""
-    fake = FakeDocker(nm_stdout="         U memcpy\n")
+    fake = FakeDocker()
     builder = _builder(fake)
     app_dir = _make_app(tmp_path)
     bsp_tmp = tmp_path / "bsp"
@@ -93,6 +87,22 @@ def test_prepare_rtthread_swift_builds_archive_and_sconscript(tmp_path):
     assert "include" in sconscript
 
 
+def test_prepare_rtthread_swift_does_not_run_archive_undefined_policy(tmp_path):
+    """Swift archive 未定义符号不再由 builder 预检查，交给最终链接器处理。"""
+    fake = FakeDocker()
+    builder = _builder(fake)
+    app_dir = _make_app(tmp_path)
+    bsp_tmp = tmp_path / "bsp"
+    (bsp_tmp / "applications").mkdir(parents=True)
+
+    builder._prepare_rtthread_swift(app_dir, bsp_tmp, _swift_cfg())
+
+    assert not any(
+        cmd[:2] == ["arm-none-eabi-nm", "-u"]
+        for cmd, _ in fake.calls
+    )
+
+
 def test_prepare_rtthread_swift_rejects_custom_sconscript(tmp_path):
     """启用 Swift 时 app 自带 applications/SConscript 会被明确拒绝。"""
     builder = _builder(FakeDocker())
@@ -103,27 +113,3 @@ def test_prepare_rtthread_swift_rejects_custom_sconscript(tmp_path):
 
     with pytest.raises(ValueError, match="applications/SConscript"):
         builder._prepare_rtthread_swift(app_dir, bsp_tmp, _swift_cfg())
-
-
-def test_swift_archive_unexpected_undefined_symbol_rejected(tmp_path):
-    """未列入白名单的 Swift runtime 符号应在最终链接前失败。"""
-    fake = FakeDocker(nm_stdout="         U swift_allocObject\n")
-    builder = _builder(fake)
-    app_dir = _make_app(tmp_path)
-    bsp_tmp = tmp_path / "bsp"
-    (bsp_tmp / "applications").mkdir(parents=True)
-
-    with pytest.raises(BuildError, match="未列入白名单"):
-        builder._prepare_rtthread_swift(app_dir, bsp_tmp, _swift_cfg())
-
-
-def test_parse_nm_undefined_output_skips_archive_member_headers():
-    output = """
-foo.o:
-         U memcpy
-         U swift_handle_message
-"""
-    assert RockchipAmpBuilder._parse_nm_undefined_output(output) == [
-        "memcpy",
-        "swift_handle_message",
-    ]

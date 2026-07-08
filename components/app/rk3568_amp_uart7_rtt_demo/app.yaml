@@ -19,7 +19,3 @@ build:
     c_header: include/swift_bridge.h
     target_triple: armv7-none-none-eabi
     extra_flags: []
-    allowed_undefined:
-      - rt_i2c_bus_device_find
-      - rt_i2c_transfer
-      - rt_kputs

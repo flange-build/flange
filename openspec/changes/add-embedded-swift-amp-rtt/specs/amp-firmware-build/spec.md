@@ -53,23 +53,23 @@ RT-Thread、Rockchip HAL 或 rpmsg-lite 的复杂头文件。
 
 ---
 
-### Requirement: Swift archive 未定义符号必须受控
+### Requirement: Swift archive 未定义符号由最终链接解析
 
-`RockchipAmpBuilder` SHALL 在 Swift archive 生成后执行未定义符号检查。允许的未定义符号集合 SHALL
-只包含当前 RT-Thread/newlib 链接环境可解析的符号。app 可通过 `build.swift.allowed_undefined`
-显式声明额外允许符号。若 Swift archive 引入未允许的 runtime、heap、panic 或 libc 符号，构建
-SHALL 失败并输出明确错误。
+`RockchipAmpBuilder` SHALL NOT 在 Swift archive 生成后用独立白名单拦截未定义符号。Swift archive
+中对 RT-Thread、newlib 或 ARM EABI 的外部符号引用 SHALL 交由最终 RT-Thread SCons 链接解析。
+若 Swift archive 引入最终链接环境无法满足的 runtime、heap、panic 或 libc 符号，构建 SHALL 在
+最终 `rtthread.elf` 链接阶段失败，并保留 linker 的真实诊断。
 
-#### Scenario: Swift archive 未定义符号均在白名单内
+#### Scenario: Swift archive 引用 RT-Thread API 时继续链接
 
-- **WHEN** Swift archive 仅引用可由现有链接环境解析的符号
+- **WHEN** Swift archive 引用 `rt_kputs` 或 `rt_i2c_transfer` 等由 RT-Thread 提供的 API
 - **THEN** 构建继续执行 `scons`
 
 #### Scenario: Swift archive 引入不受支持 runtime 符号
 
-- **WHEN** Swift archive 引用未在白名单中的符号
-- **THEN** 构建失败
-- **AND** 错误信息列出这些符号，提示当前 Embedded Swift MVP 不支持相关 runtime 能力
+- **WHEN** Swift archive 引用最终链接环境无法解析的 runtime 或 libc 符号
+- **THEN** `scons` 链接 `rtthread.elf` 时构建失败
+- **AND** linker 诊断列出无法解析的符号
 
 ---
 

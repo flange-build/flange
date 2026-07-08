@@ -93,12 +93,12 @@ build:
     c_header: include/swift_bridge.h
     target_triple: armv7-none-none-eabi
     extra_flags: []
-    allowed_undefined: []
 ```
 
 Swift 源、target 和依赖由 `Package.swift` 管理。`c_header` 为 C 侧手写声明头，供 `main.c` include。
-`target_triple` 固化当前 SwiftPM baremetal 目标，`allowed_undefined` 用于少量由最终 RT-Thread
-链接环境提供的额外符号。若 package 有远端依赖，必须提交 `Package.resolved` 或等价锁文件。
+`target_triple` 固化当前 SwiftPM baremetal 目标。Swift archive 中对 RT-Thread / newlib 的外部符号
+引用交由最终 SCons 链接解析，避免在 archive 预检查阶段误判合法的 RT-Thread API 绑定。若 package
+有远端依赖，必须提交 `Package.resolved` 或等价锁文件。
 
 **理由**：
 
@@ -183,8 +183,9 @@ target flags 产生：
 ```
 
 `-no-allocations` 让 Swift 编译器在代码触发 heap 分配时报错；`-disable-stack-protector`
-避免引入 `__stack_chk_guard` / `__stack_chk_fail`。当前 demo archive 的 `nm -u` 只剩
-`__aeabi_memclr`，由 ARM EABI/libgcc 链接环境提供。
+避免引入 `__stack_chk_guard` / `__stack_chk_fail`。当前 demo archive 会引用少量
+`__aeabi_*` / libc 符号以及 `rt_kputs`、`rt_i2c_bus_device_find`、`rt_i2c_transfer` 等
+RT-Thread API；这些符号由最终 RT-Thread SCons 链接环境解析。
 
 **理由**：
 
@@ -233,9 +234,8 @@ C 侧新增 `applications/swift_rtthread_bridge.c`，只负责：
 
 - 用 `MSH_CMD_EXPORT` 注册 `swift_i2c` 命令并把 `argc/argv` 转交给 Swift。
 
-这些 RT-Thread C 符号由最终 SCons 链接提供，demo 的 `build.swift.allowed_undefined`
-需要显式列出 `rt_kputs`、`rt_i2c_bus_device_find` 与 `rt_i2c_transfer`，避免 Swift archive
-未定义符号检查误判为 runtime 缺口。
+这些 RT-Thread C 符号由最终 SCons 链接提供；builder 不再对 Swift archive 做单独的
+`allowed_undefined` 预检查，避免把模块内部合法绑定误判为 runtime 缺口。
 
 `swift_i2c` 命令支持以下形式：
 
@@ -257,7 +257,8 @@ swift_i2c <i2cN|N> <addr> wr <byte...> -- <len>
 - **[Risk] SwiftPM/Swift 工具链不支持目标 AArch32 static archive**
   - Mitigation：第一任务即 spike，失败则停止实现并更新 proposal。
 - **[Risk] Swift archive 引入未满足的 runtime 符号**
-  - Mitigation：MVP 限制无堆分配；构建时用 `nm -u` 检查未定义符号白名单。
+  - Mitigation：MVP 限制无堆分配并关闭 stack protector；若仍引入未满足符号，由最终
+    RT-Thread SCons 链接阶段失败并暴露真实 linker 诊断。
 - **[Risk] SConscript 注入破坏既有 RT-Thread overlay**
   - Mitigation：只在 `build.swift.enabled` 时生成 staged SConscript；未启用时完全沿用现有 vendor SConscript。
 - **[Risk] Docker 镜像体积明显增大**

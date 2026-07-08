@@ -55,36 +55,6 @@ _RTT_ROOT = "components/amp/rockchip/rt-thread"
 _RTT_EXEC_PATH = "/opt/arm-none-eabi-gcc10/bin"
 _SWIFT_ARCHIVE_SUBDIR = "flange_swift"
 
-_SWIFT_UNDEFINED_ALLOWED_NAMES = {
-    "__aeabi_idiv",
-    "__aeabi_idivmod",
-    "__aeabi_ldivmod",
-    "__aeabi_memclr",
-    "__aeabi_memcpy",
-    "__aeabi_memmove",
-    "__aeabi_memset",
-    "__aeabi_uidiv",
-    "__aeabi_uidivmod",
-    "__aeabi_uldivmod",
-    "__gnu_ldivmod_helper",
-    "__gnu_uldivmod_helper",
-    "__stack_chk_fail",
-    "abort",
-    "bzero",
-    "memcmp",
-    "memcpy",
-    "memmove",
-    "memset",
-    "strlen",
-}
-_SWIFT_UNDEFINED_ALLOWED_PREFIXES = (
-    "__aeabi_",
-    "__gnu_",
-    "__atomic_",
-    "__sync_",
-    "_Unwind_",
-)
-
 
 class RockchipAmpBuilder(ComponentBuilder):
     component = "amp"
@@ -403,7 +373,6 @@ class RockchipAmpBuilder(ComponentBuilder):
             raise FileNotFoundError(
                 f"SwiftPM 未产出 {archive_name}（scratch={scratch_dir}）")
         shutil.copy2(candidates[-1], staged_archive)
-        self._assert_swift_archive_undefineds(staged_archive, swift_cfg)
         return staged_archive
 
     def _stage_swift_bridge_header(
@@ -479,52 +448,6 @@ Return('group')
             app_dir, applications_dir, swift_cfg)
         self._write_swift_sconscript(applications_dir, swift_cfg, include_dirs)
         return archive
-
-    def _assert_swift_archive_undefineds(
-        self,
-        archive: Path,
-        swift_cfg: SwiftBuildConfig,
-    ) -> None:
-        """检查 Swift archive 的未定义符号，避免把 runtime 缺口拖到最终链接。"""
-        result = self.docker.run(
-            ["arm-none-eabi-nm", "-u", str(archive)],
-            capture=True,
-            check=False,
-            extra_mounts=[archive.parent],
-        )
-        if result.returncode != 0:
-            raise BuildError(f"arm-none-eabi-nm 检查 Swift archive 失败: {archive}")
-
-        allowed = set(_SWIFT_UNDEFINED_ALLOWED_NAMES)
-        allowed.update(swift_cfg.allowed_undefined)
-        symbols = self._parse_nm_undefined_output(result.stdout or "")
-        unexpected = [
-            sym for sym in symbols
-            if sym not in allowed
-            and not any(sym.startswith(prefix)
-                        for prefix in _SWIFT_UNDEFINED_ALLOWED_PREFIXES)
-        ]
-        if unexpected:
-            preview = ", ".join(sorted(unexpected)[:12])
-            raise BuildError(
-                f"Swift archive 存在未列入白名单的未定义符号: {preview}；"
-                "请避免 Swift runtime/heap 依赖，或在 build.swift.allowed_undefined "
-                "中显式声明由 RT-Thread 最终链接提供的符号。")
-
-    @staticmethod
-    def _parse_nm_undefined_output(output: str) -> list[str]:
-        """解析 `arm-none-eabi-nm -u` 输出中的符号名。"""
-        symbols = []
-        for line in output.splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.endswith(":"):
-                continue
-            parts = stripped.split()
-            if len(parts) >= 2 and parts[-2] == "U":
-                symbols.append(parts[-1])
-            elif parts[0] == "U" and len(parts) >= 2:
-                symbols.append(parts[1])
-        return symbols
 
     def _compile_rtthread(self, config: dict) -> Path:
         """mode=rt-thread：把 RT-Thread BSP 模板 stage 到 tmpdir、叠加 amp app
