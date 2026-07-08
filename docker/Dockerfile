@@ -46,10 +46,15 @@ RUN dpkg --add-architecture arm64 \
         flex \
         kmod \
         libelf-dev \
+        libcurl4-openssl-dev \
+        libedit2 \
         libssl-dev \
         libgnutls28-dev \
         libncurses-dev \
+        libsqlite3-0 \
         uuid-dev \
+        libz3-dev \
+        zlib1g-dev \
         lz4 \
         zstd \
         e2fsprogs \
@@ -123,6 +128,27 @@ RUN curl -fsSL "https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020
     && ln -sfn /opt/gcc-arm-none-eabi-10-2020-q4-major /opt/arm-none-eabi-gcc10 \
     && for t in /opt/arm-none-eabi-gcc10/bin/arm-none-eabi-*; do ln -sf "$t" /usr/local/bin/; done \
     && arm-none-eabi-gcc --version | head -1
+
+# Embedded Swift / SwiftPM 工具链。SwiftPM 仅负责把 RT-Thread AMP app 的
+# Swift package 构建为 static archive，最终固件链接仍由 RT-Thread SCons
+# 和 arm-none-eabi-gcc 完成。版本固定到 swift.org Ubuntu 24.04 tarball，
+# 以 SHA256 校验保证 Docker 构建可复现。
+ARG SWIFT_VERSION=6.3.3
+ARG SWIFT_RELEASE=swift-${SWIFT_VERSION}-RELEASE
+ARG SWIFT_PLATFORM=ubuntu24.04
+ARG SWIFT_TARBALL=${SWIFT_RELEASE}-${SWIFT_PLATFORM}.tar.gz
+ARG SWIFT_URL=https://download.swift.org/swift-${SWIFT_VERSION}-release/ubuntu2404/${SWIFT_RELEASE}/${SWIFT_TARBALL}
+ARG SWIFT_SHA256=da8272a5fddccd65b1529ed0e52e04526e2eadd4237d58d6220efeb973c6cd19
+RUN curl -fsSL "${SWIFT_URL}" -o "/tmp/${SWIFT_TARBALL}" \
+    && echo "${SWIFT_SHA256}  /tmp/${SWIFT_TARBALL}" | sha256sum -c - \
+    && tar -xzf "/tmp/${SWIFT_TARBALL}" -C /opt \
+    && ln -sfn "/opt/${SWIFT_RELEASE}-${SWIFT_PLATFORM}/usr" /opt/swift-embedded \
+    && rm -f "/tmp/${SWIFT_TARBALL}" \
+    && /opt/swift-embedded/bin/swift --version \
+    && /opt/swift-embedded/bin/swiftc --version
+
+ENV SWIFT_HOME=/opt/swift-embedded
+ENV PATH="${SWIFT_HOME}/bin:${PATH}"
 
 # meson cross-file：路径与 builder/app.py 中 _BUILD_SYSTEMS["meson"] 模板引用
 # 的 --cross-file /etc/meson/cross-<arch>.ini 一致。源文件可见于 docker/meson/。
