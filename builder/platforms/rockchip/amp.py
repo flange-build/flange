@@ -30,6 +30,8 @@ import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.docker import BuildError
+from builder.app_spec import AppSpecError, SwiftBuildConfig, load_spec
 
 # AMP 内存布局默认值（单一事实源应由 SoC 配置 config.amp.memory 提供；此处为
 # 兜底默认）。cpu_base 不用 SDK 默认 0x2800000——会与 flange ~37MB 内核镜像
@@ -51,6 +53,37 @@ _RTT_ROOT = "components/amp/rockchip/rt-thread"
 # 容器内官方裸机工具链（docker/Dockerfile 安装），供 rt-thread rtconfig.py 的
 # os.getenv("RTT_EXEC_PATH") 覆盖其写死的 prebuilts 路径。
 _RTT_EXEC_PATH = "/opt/arm-none-eabi-gcc10/bin"
+_SWIFT_ARCHIVE_SUBDIR = "flange_swift"
+
+_SWIFT_UNDEFINED_ALLOWED_NAMES = {
+    "__aeabi_idiv",
+    "__aeabi_idivmod",
+    "__aeabi_ldivmod",
+    "__aeabi_memclr",
+    "__aeabi_memcpy",
+    "__aeabi_memmove",
+    "__aeabi_memset",
+    "__aeabi_uidiv",
+    "__aeabi_uidivmod",
+    "__aeabi_uldivmod",
+    "__gnu_ldivmod_helper",
+    "__gnu_uldivmod_helper",
+    "__stack_chk_fail",
+    "abort",
+    "bzero",
+    "memcmp",
+    "memcpy",
+    "memmove",
+    "memset",
+    "strlen",
+}
+_SWIFT_UNDEFINED_ALLOWED_PREFIXES = (
+    "__aeabi_",
+    "__gnu_",
+    "__atomic_",
+    "__sync_",
+    "_Unwind_",
+)
 
 
 class RockchipAmpBuilder(ComponentBuilder):
@@ -235,7 +268,7 @@ class RockchipAmpBuilder(ComponentBuilder):
         self._status(f"AMP 打包 amp.img（FIT, load={hex(mem['cpu_base'])}）...")
         self.docker.run(
             [mkimage, "-f", "amp_linux.its", "-E", "-p", "0xe00", "amp.img"],
-            cwd=str(work), label="amp:mkimage")
+            cwd=str(work), extra_mounts=[work], label="amp:mkimage")
         return work / "amp.img"
 
     def _rtt_bsp_dir(self, soc: str) -> Path:
@@ -276,6 +309,223 @@ class RockchipAmpBuilder(ComponentBuilder):
                 out.append(line)
         base_config.write_text("\n".join(out) + "\n")
 
+    def _load_amp_app_spec(self, app_dir: Path):
+        """加载 amp app 的 app.yaml，并把 AppSpecError 转成带路径的错误。"""
+        try:
+            return load_spec(app_dir)
+        except AppSpecError as exc:
+            raise ValueError(f"amp app 描述文件无效（{app_dir}/app.yaml）：{exc}") from exc
+
+    @staticmethod
+    def _swift_cfg_enabled(swift_cfg) -> bool:
+        return bool(swift_cfg and swift_cfg.enabled)
+
+    def _build_swift_package(
+        self,
+        app_dir: Path,
+        bsp_tmp: Path,
+        swift_cfg: SwiftBuildConfig,
+    ) -> Path:
+        """用 SwiftPM 构建 Embedded Swift static archive 并复制进 staged BSP。"""
+        package_dir = app_dir / swift_cfg.package_path
+        if not package_dir.is_dir():
+            raise FileNotFoundError(
+                f"build.swift.package_path 不存在或不是目录: {package_dir}")
+        if not (package_dir / "Package.swift").is_file():
+            raise FileNotFoundError(
+                f"SwiftPM package 缺 Package.swift: {package_dir}")
+
+        archive_name = f"lib{swift_cfg.product}.a"
+        scratch_dir = bsp_tmp / "build" / "flange-swiftpm"
+        pch_dir = bsp_tmp / "build" / "flange-swift-pch"
+        archive_dir = bsp_tmp / "applications" / _SWIFT_ARCHIVE_SUBDIR
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        staged_archive = archive_dir / archive_name
+
+        # Swift archive 曾出现重命名 object 后旧成员残留的问题；每次构建前清掉
+        # scratch 与 staged archive，保证 SCons 链接的是本轮 SwiftPM 结果。
+        shutil.rmtree(scratch_dir, ignore_errors=True)
+        shutil.rmtree(pch_dir, ignore_errors=True)
+        if staged_archive.exists():
+            staged_archive.unlink()
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        pch_dir.mkdir(parents=True, exist_ok=True)
+
+        self._status(
+            f"AMP(scons) 构建 Embedded Swift package "
+            f"{package_dir.name}:{swift_cfg.product}...")
+        try:
+            self.docker.run(["swift", "--version"], capture=True)
+        except Exception as exc:
+            raise BuildError(
+                "build.swift.enabled=true 但 Docker build 容器内不可调用 swift；"
+                "请先在 docker/Dockerfile 固定安装 Embedded Swift 工具链。") from exc
+
+        cmd = [
+            "swift", "build",
+            "-c", "release",
+            "--package-path", str(package_dir),
+            "--scratch-path", str(scratch_dir),
+            "--product", swift_cfg.product,
+            "--triple", swift_cfg.target_triple,
+            "-Xswiftc", "-target",
+            "-Xswiftc", swift_cfg.target_triple,
+            "-Xswiftc", "-enable-experimental-feature",
+            "-Xswiftc", "Embedded",
+            "-Xswiftc", "-wmo",
+            "-Xswiftc", "-parse-as-library",
+            "-Xswiftc", "-Osize",
+            "-Xswiftc", "-no-allocations",
+            "-Xswiftc", "-Xfrontend",
+            "-Xswiftc", "-disable-stack-protector",
+            "-Xswiftc", "-Xfrontend",
+            "-Xswiftc", "-function-sections",
+            "-Xswiftc", "-Xfrontend",
+            "-Xswiftc", "-enable-single-module-llvm-emission",
+            "-Xswiftc", "-pch-output-dir",
+            "-Xswiftc", str(pch_dir),
+            "-Xcc", "-mcpu=cortex-a55+crypto",
+            "-Xcc", "-mfloat-abi=hard",
+            "-Xcc", "-marm",
+            "-Xcc", "-fno-pic",
+            "-Xcc", "-fno-pie",
+            "-Xcc", f"-I{app_dir / 'include'}",
+            "-Xcc", f"-I{bsp_tmp}",
+        ]
+        cmd.extend(swift_cfg.extra_flags)
+        self.docker.run(
+            cmd,
+            extra_mounts=[bsp_tmp.parent],
+            label=f"amp:rtt:swift:{swift_cfg.product}")
+
+        candidates = sorted(scratch_dir.rglob(archive_name))
+        if not candidates:
+            raise FileNotFoundError(
+                f"SwiftPM 未产出 {archive_name}（scratch={scratch_dir}）")
+        shutil.copy2(candidates[-1], staged_archive)
+        self._assert_swift_archive_undefineds(staged_archive, swift_cfg)
+        return staged_archive
+
+    def _stage_swift_bridge_header(
+        self,
+        app_dir: Path,
+        applications_dir: Path,
+        swift_cfg: SwiftBuildConfig,
+    ) -> list[str]:
+        """把 C bridge header 复制到 staged applications 并返回 SConscript include 目录。"""
+        if not swift_cfg.c_header:
+            return []
+
+        header_src = app_dir / swift_cfg.c_header
+        if not header_src.is_file():
+            raise FileNotFoundError(
+                f"build.swift.c_header 不存在: {header_src}")
+
+        rel_parent = Path(swift_cfg.c_header).parent
+        if str(rel_parent) == ".":
+            header_dst_dir = applications_dir
+        else:
+            header_dst_dir = applications_dir / rel_parent
+        header_dst_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(header_src, header_dst_dir / header_src.name)
+        return [str(rel_parent)] if str(rel_parent) != "." else []
+
+    def _write_swift_sconscript(
+        self,
+        applications_dir: Path,
+        swift_cfg: SwiftBuildConfig,
+        include_dirs: list[str],
+    ) -> None:
+        """在 staged applications 目录生成 SConscript，把 Swift archive 注入链接。"""
+        include_exprs = ["cwd", "str(Dir('#'))"]
+        for rel_dir in include_dirs:
+            include_exprs.append(
+                f"os.path.abspath(os.path.join(cwd, {rel_dir!r}))")
+        include_exprs.append(
+            f"os.path.abspath(os.path.join(cwd, {_SWIFT_ARCHIVE_SUBDIR!r}))")
+        include_text = "[" + ", ".join(include_exprs) + "]"
+        content = f"""from building import *
+import os
+
+cwd = GetCurrentDir()
+src = Glob('*.c') + Glob('*.cpp')
+CPPPATH = {include_text}
+LIBPATH = [os.path.abspath(os.path.join(cwd, {_SWIFT_ARCHIVE_SUBDIR!r}))]
+LIBS = [{swift_cfg.product!r}]
+
+group = DefineGroup('Applications', src, depend = [''],
+                    CPPPATH = CPPPATH, LIBPATH = LIBPATH, LIBS = LIBS)
+
+Return('group')
+"""
+        (applications_dir / "SConscript").write_text(content)
+
+    def _prepare_rtthread_swift(
+        self,
+        app_dir: Path,
+        bsp_tmp: Path,
+        swift_cfg: SwiftBuildConfig,
+    ) -> Path:
+        """准备 RT-Thread staged BSP 的 SwiftPM archive、头文件与 SConscript。"""
+        app_sconscript = app_dir / "applications" / "SConscript"
+        if app_sconscript.exists():
+            raise ValueError(
+                "启用 build.swift 时暂不支持 app 自带 applications/SConscript；"
+                f"请删除或改由 builder 生成（{app_sconscript}）。")
+
+        applications_dir = bsp_tmp / "applications"
+        archive = self._build_swift_package(app_dir, bsp_tmp, swift_cfg)
+        include_dirs = self._stage_swift_bridge_header(
+            app_dir, applications_dir, swift_cfg)
+        self._write_swift_sconscript(applications_dir, swift_cfg, include_dirs)
+        return archive
+
+    def _assert_swift_archive_undefineds(
+        self,
+        archive: Path,
+        swift_cfg: SwiftBuildConfig,
+    ) -> None:
+        """检查 Swift archive 的未定义符号，避免把 runtime 缺口拖到最终链接。"""
+        result = self.docker.run(
+            ["arm-none-eabi-nm", "-u", str(archive)],
+            capture=True,
+            check=False,
+            extra_mounts=[archive.parent],
+        )
+        if result.returncode != 0:
+            raise BuildError(f"arm-none-eabi-nm 检查 Swift archive 失败: {archive}")
+
+        allowed = set(_SWIFT_UNDEFINED_ALLOWED_NAMES)
+        allowed.update(swift_cfg.allowed_undefined)
+        symbols = self._parse_nm_undefined_output(result.stdout or "")
+        unexpected = [
+            sym for sym in symbols
+            if sym not in allowed
+            and not any(sym.startswith(prefix)
+                        for prefix in _SWIFT_UNDEFINED_ALLOWED_PREFIXES)
+        ]
+        if unexpected:
+            preview = ", ".join(sorted(unexpected)[:12])
+            raise BuildError(
+                f"Swift archive 存在未列入白名单的未定义符号: {preview}；"
+                "请避免 Swift runtime/heap 依赖，或在 build.swift.allowed_undefined "
+                "中显式声明由 RT-Thread 最终链接提供的符号。")
+
+    @staticmethod
+    def _parse_nm_undefined_output(output: str) -> list[str]:
+        """解析 `arm-none-eabi-nm -u` 输出中的符号名。"""
+        symbols = []
+        for line in output.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.endswith(":"):
+                continue
+            parts = stripped.split()
+            if len(parts) >= 2 and parts[-2] == "U":
+                symbols.append(parts[-1])
+            elif parts[0] == "U" and len(parts) >= 2:
+                symbols.append(parts[1])
+        return symbols
+
     def _compile_rtthread(self, config: dict) -> Path:
         """mode=rt-thread：把 RT-Thread BSP 模板 stage 到 tmpdir、叠加 amp app
         overlay、由 config.amp.memory 注入 scons 环境变量后 scons 构建产出
@@ -293,6 +543,7 @@ class RockchipAmpBuilder(ComponentBuilder):
         mem = self._memory(config)
         cpu = mem["cpu"]
         app_dir = self._amp_app_dir(config)
+        app_spec = self._load_amp_app_spec(app_dir)
         bsp_src = self._rtt_bsp_dir(soc)
 
         # --- stage 可写 RTT_ROOT 镜像 → tmpdir（保 SDK 只读语义）---
@@ -345,6 +596,10 @@ class RockchipAmpBuilder(ComponentBuilder):
             self._merge_kconfig_fragment(bsp_tmp / ".config",
                                          app_dir / ".config")
 
+        swift_cfg = app_spec.build.swift
+        if self._swift_cfg_enabled(swift_cfg):
+            self._prepare_rtthread_swift(app_dir, bsp_tmp, swift_cfg)
+
         # --- scons 环境：只读 SDK 根 + 裸机工具链 + 内存布局（单一事实源）---
         env = {
             "RTT_ROOT": str(staged_root),
@@ -366,10 +621,12 @@ class RockchipAmpBuilder(ComponentBuilder):
         if overlaid_config:
             self.docker.run(
                 ["scons", "--useconfig=.config"],
-                cwd=str(bsp_tmp), env=env, label="amp:rtt:config")
+                cwd=str(bsp_tmp), env=env, extra_mounts=[staged_root],
+                label="amp:rtt:config")
         self.docker.run(
             ["scons", f"-j{self._jobs()}"],
-            cwd=str(bsp_tmp), env=env, label=f"amp:rtt:build:{app_dir.name}")
+            cwd=str(bsp_tmp), env=env, extra_mounts=[staged_root],
+            label=f"amp:rtt:build:{app_dir.name}")
 
         rtt_bin = bsp_tmp / "rtthread.bin"
         if not rtt_bin.is_file():
