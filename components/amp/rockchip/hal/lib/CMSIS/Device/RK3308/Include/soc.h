@@ -133,6 +133,8 @@ typedef enum {
     USB2OTG_ID_IRQn             = 100,           /*!< USB2OTG_ID Interrupt         */
     USB2OTG_LINESTATE_IRQn      = 101,           /*!< USB2OTG_LINESTATE Interrupt  */
     USB2OTG_DISCONNECT_IRQn     = 102,           /*!< USB2OTG_DISCONNECT Interrupt */
+    EHCI_IRQn                   = 103,           /*!< USB2HOST EHCI Interrupt      */
+    OHCI_IRQn                   = 104,           /*!< USB2HOST OHCI Interrupt      */
     SDMMC_IRQn                  = 108,           /*!< SDMMC Interrupt              */
     EMMC_IRQn                   = 109,           /*!< EMMC Interrupt               */
     SDIO_IRQn                   = 110,           /*!< SDIO Interrupt               */
@@ -200,6 +202,8 @@ typedef enum {
 #define GIC_CPU_INTERFACE_BASE (0xFF582000)
 #define USB_OTG_BASE           (0xFF400000U) /* USB OTG base address */
 #define USB_INNO_PHY_BASE      (0xFF008000U) /* USB INNO PHY base address */
+#define EHCI_BASE              (0xff440000U) /* EHCI base address */
+#define OHCI_BASE              (0xff450000U) /* OHCI base address */
 
 /****************************************************************************************/
 /*                                                                                      */
@@ -208,6 +212,8 @@ typedef enum {
 /****************************************************************************************/
 /* Module Variable Define */
 #define USB_OTG                ((struct USB_GLOBAL_REG *) USB_OTG_BASE)
+#define EHCI                   ((struct EHCI_REG *) EHCI_BASE)
+#define OHCI                   ((struct OHCI_REG *) OHCI_BASE)
 
 /****************************************************************************************/
 /*                                                                                      */
@@ -1426,6 +1432,8 @@ typedef enum PD_Id {
 
 #define PCLK_WDT                 PCLK_BUS
 #define PCLK_WDT0_GATE           FAKE_CLOCK_GATE
+#define GLB_RST_SND_WDT GLB_RST_SND_WDT0
+#define GLB_RST_FST_WDT GLB_RST_FST_WDT0
 
 #define DCLK_VOP_GATE            DCLKVOP_CLK_GATE
 

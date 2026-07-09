@@ -4,10 +4,10 @@
  */
 
 #include "hal_base.h"
-#include "hal_bsp.h"
 
 #ifdef HAL_DDR_ECC_MODULE_ENABLED
 
+#include "hal_bsp.h"
 #include "hal_ddr_ecc.h"
 
 /** @addtogroup RK_HAL_Driver
@@ -79,16 +79,16 @@ static void DDR_ECC_GetCEInfo(struct DDR_ECC_SHARE_MEM *p,
         return;
     }
     if (pShareMemCfg->ceAddr) {
-        HAL_DBG_WRN("DDR ECC error: %s, %lu errors, the last is in DDR cs %lu, "
-                    "Row 0x%lx, ChipID 0x%lx, BankGroup 0x%lx, Bank 0x%lx, "
-                    "Col 0x%lx, Bit position 0x%lx(physical address 0x%llx)\n",
+        HAL_DBG_WRN("DDR ECC error: %s, %" PRIu32 " errors, the last is in DDR cs %" PRIu32 ", "
+                    "Row 0x%" PRIx32 ", ChipID 0x%" PRIx32 ", BankGroup 0x%" PRIx32 ", Bank 0x%" PRIx32 ", "
+                    "Col 0x%" PRIx32 ", Bit position 0x%" PRIx32 "(physical address 0x%" PRIx64 ")\n",
                     "CE", p->ceInfo.errCnt, p->ceInfo.rank, p->ceInfo.row,
                     p->ceInfo.chipID, p->ceInfo.bankGroup, p->ceInfo.bank,
                     p->ceInfo.col, p->ceInfo.bitPos, pShareMemCfg->ceAddr);
     } else {
-        HAL_DBG_WRN("DDR ECC error: %s, %lu errors, the last is in DDR cs %lu, "
-                    "Row 0x%lx, ChipID 0x%lx, BankGroup 0x%lx, Bank 0x%lx, "
-                    "Col 0x%lx, Bit position 0x%lx\n",
+        HAL_DBG_WRN("DDR ECC error: %s, %" PRIu32 " errors, the last is in DDR cs %" PRIu32 ", "
+                    "Row 0x%" PRIx32 ", ChipID 0x%" PRIx32 ", BankGroup 0x%" PRIx32 ", Bank 0x%" PRIx32 ", "
+                    "Col 0x%" PRIx32 ", Bit position 0x%" PRIx32 "\n",
                     "CE", p->ceInfo.errCnt, p->ceInfo.rank, p->ceInfo.row,
                     p->ceInfo.chipID, p->ceInfo.bankGroup, p->ceInfo.bank,
                     p->ceInfo.col, p->ceInfo.bitPos);
@@ -103,16 +103,16 @@ static void DDR_ECC_GetUEInfo(struct DDR_ECC_SHARE_MEM *p,
         return;
     }
     if (pShareMemCfg->ueAddr) {
-        HAL_DBG_ERR("DDR ECC error: %s, %lu errors, the last is in DDR cs %lu, "
-                    "Row 0x%lx, ChipID 0x%lx, bankGroup 0x%lx, Bank 0x%lx, "
-                    "Col 0x%lx(physical address 0x%llx)\n",
+        HAL_DBG_ERR("DDR ECC error: %s, %" PRIu32 " errors, the last is in DDR cs %" PRIu32 ", "
+                    "Row 0x%" PRIx32 ", ChipID 0x%" PRIx32 ", bankGroup 0x%" PRIx32 ", Bank 0x%" PRIx32 ", "
+                    "Col 0x%" PRIx32 "(physical address 0x%" PRIx64 ")\n",
                     "UE", p->ueInfo.errCnt, p->ueInfo.rank, p->ueInfo.row,
                     p->ueInfo.chipID, p->ueInfo.bankGroup, p->ueInfo.bank,
                     p->ueInfo.col, pShareMemCfg->ueAddr);
     } else {
-        HAL_DBG_ERR("DDR ECC error: %s, %lu errors, the last is in DDR cs %lu, "
-                    "Row 0x%lx, ChipID 0x%lx, bankGroup 0x%lx, Bank 0x%lx, "
-                    "Col 0x%lx\n",
+        HAL_DBG_ERR("DDR ECC error: %s, %" PRIu32 " errors, the last is in DDR cs %" PRIu32 ", "
+                    "Row 0x%" PRIx32 ", ChipID 0x%" PRIx32 ", bankGroup 0x%" PRIx32 ", Bank 0x%" PRIx32 ", "
+                    "Col 0x%" PRIx32 "\n",
                     "UE", p->ueInfo.errCnt, p->ueInfo.rank, p->ueInfo.row,
                     p->ueInfo.chipID, p->ueInfo.bankGroup, p->ueInfo.bank,
                     p->ueInfo.col);

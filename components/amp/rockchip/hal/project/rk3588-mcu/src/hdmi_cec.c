@@ -98,7 +98,7 @@ static void Disable_CecGpio(void)
     cec_mask = READ_REG(gpio0_base->INT_MASK_H);
     cec_int = READ_REG(gpio0_base->INT_EN_H);
 
-    printf("cec config:%lx, %lx, %lx, %lx, %lx\n", cec_ddr, cec_int_type, cec_mask, cec_int);
+    printf("cec config:%" PRIx32 ", %" PRIx32 ", %" PRIx32 ", %" PRIx32 ", %" PRIx32 "\n", cec_ddr, cec_int_type, cec_mask, cec_int);
 #endif
 
 #endif

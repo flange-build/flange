@@ -241,6 +241,7 @@ struct HAL_USBH_DEV {
     IRQn_Type ohciIrqNum;                /**< OHCI interrupt Number                           */
     uint32_t usbhGateID;                 /**< USB Host Gate ID                                */
     uint32_t usbhArbGateID;              /**< USB Host ARB Gate ID                            */
+    uint32_t utmiclkGateID;              /**< USB Host utmi Gate ID                           */
 };
 
 /** @} */
@@ -277,10 +278,14 @@ HAL_Status HAL_USBH_QuitXfer(struct USB_HCD_HANDLE *hcdHdl, struct USB_DEV *udev
 HAL_Status HAL_USBH_QuitUtr(struct USB_HCD_HANDLE *hcdHdl, struct UTR *utr);
 
 /* USB Host memory management functions */
-void *HAL_USBH_AllocPool();
+void *HAL_USBH_AllocPool(void);
 HAL_Status HAL_USBH_FreePool(void *pool);
-uint32_t *HAL_USBH_AssignEhciPfList();
-uint8_t *HAL_USBH_AssignOhciHcca();
+uint32_t *HAL_USBH_AssignEhciPfList(void);
+uint8_t *HAL_USBH_AssignOhciHcca(void);
+
+/* USB Host PM functions */
+HAL_Status HAL_USBH_Supsend(struct USB_HCD_HANDLE *hcdHdl, uint8_t isEhci);
+HAL_Status HAL_USBH_Resume(struct USB_HCD_HANDLE *hcdHdl, uint8_t isEhci);
 
 /** @} */
 

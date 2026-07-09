@@ -4,9 +4,10 @@
  */
 
 #include "hal_base.h"
-#include <hal_bsp.h>
 
 #if defined(RKMCU_RK2108)
+
+#include <hal_bsp.h>
 
 /** @addtogroup RK_HAL_Driver
  *  @{

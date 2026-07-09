@@ -42,7 +42,7 @@ static HAL_Check EHCI_ReviewItd(struct EHCI_REG *pReg, struct EHCI_ITD *itd)
     uint32_t frameCurr = (pReg->FRINDEX >> 3) & 0x3FF;
     int i, fidx;
 
-    // HAL_DBG("R - %d %d, 0x%lx\n", frameCurr, frameIdx, itd->transaction[0]);
+    // HAL_DBG("R - %d %d, 0x%" PRIx32 "\n", frameCurr, frameIdx, itd->transaction[0]);
 
     if (frameCurr == frameIdx) {
         for (i = 0; i < 8; i++) {
@@ -191,7 +191,7 @@ static void EHCI_WriteItdMicroFrame(struct UTR *utr, int fidx, struct EHCI_ITD *
     uint32_t bufAddr;
 
     /* Xfer buffer start address of this frame */
-    bufAddr = (uint32_t)(utr->isoBuff[fidx]);
+    bufAddr = (uintptr_t)(utr->isoBuff[fidx]);
 
     itd->transaction[mf] = ITD_STATUS_ACTIVE | /* Status */
                            ((utr->isoXlen[fidx] & 0xFFF) << ITD_XLEN_SHIFT) | /* Transaction Length */
@@ -268,7 +268,7 @@ static void EHCI_WriteSitdInfo(struct UTR *utr, struct EHCI_SITD *sitd)
 {
     struct USB_DEV *udev = utr->udev;
     struct USB_EP_INFO *ep = utr->ep; /* Reference to isochronous endpoint */
-    uint32_t bufPageAddr;
+    uintptr_t bufPageAddr;
     int xlen = utr->isoXlen[sitd->fIdx];
     int scnt;
 
@@ -277,9 +277,17 @@ static void EHCI_WriteSitdInfo(struct UTR *utr, struct EHCI_SITD *sitd)
                   ((ep->bEndpointAddress & 0xF) << SITD_EP_NUM_SHIFT) |
                   (udev->devNum << SITD_DEV_ADDR_SHIFT);
 
-    bufPageAddr = ((uint32_t)utr->isoBuff[sitd->fIdx]) & 0xFFFFF000;
-    sitd->bufPage[0] = (uint32_t)(utr->isoBuff[sitd->fIdx]);
-    sitd->bufPage[1] = bufPageAddr + 0x1000;
+    bufPageAddr = (uintptr_t)(utr->isoBuff[sitd->fIdx]);
+#ifdef USB_DEBUG
+    if ((bufPageAddr > UINT32_MAX) ||
+        (((bufPageAddr & 0xFFFFF000) + 0x1000) > UINT32_MAX)) {
+        HAL_DBG_ERR("EHCI sitd buf is not a 32-bit address!\n");
+
+        return;
+    }
+#endif
+    sitd->bufPage[0] = (uint32_t)(bufPageAddr);
+    sitd->bufPage[1] = ((uint32_t)bufPageAddr & 0xFFFFF000) + 0x1000;
 
     scnt = (xlen + 187) / 188;
 
@@ -297,7 +305,7 @@ static void EHCI_WriteSitdInfo(struct UTR *utr, struct EHCI_SITD *sitd)
         sitd->bufPage[1] |= scnt; /* Transaction count (T-Count) */
     }
 
-    if (sitd->fIdx == IF_PER_UTR) {
+    if (sitd->fIdx + 1 == IF_PER_UTR) {
         sitd->sched |= SITD_IOC;
     }
 
@@ -308,7 +316,7 @@ static void EHCI_WriteSitdInfo(struct UTR *utr, struct EHCI_SITD *sitd)
 static void EHCI_SitdAdjustSchedule(struct EHCI_HCD *ehci,
                                     struct EHCI_SITD *sitd)
 {
-    struct EHCI_SITD *hlink = (struct EHCI_SITD *)ehci->pfList[sitd->schedFrameIdx];
+    struct EHCI_SITD *hlink = (struct EHCI_SITD *)(uintptr_t)ehci->pfList[sitd->schedFrameIdx];
     uint32_t uframeMask = 0x00;
 
     while (hlink && !HLINK_IS_TERMINATED(hlink) && HLINK_IS_SITD(hlink)) {
@@ -348,7 +356,8 @@ static HAL_Status EHCI_IsoSplitXfer(struct UTR *utr, struct ECHI_ISO_EP *isoEp)
     int fidx; /* Index to the 8 iso frames of UTR */
 
 /*    if (utr->udev->parent == NULL) */
-    {
+    // TODO: split xfer need to further debug.
+    if (utr->udev->speed == USB_SPEED_FULL) {
         HAL_DBG_ERR("siso xfer - parent lost!\n");
 
         return HAL_INVAL;
@@ -432,6 +441,7 @@ HAL_Status HAL_EHCI_IsoXfer(struct UTR *utr)
     int transMask; /* Bit mask of used xfer in an iTD */
     int fidx; /* Index to the 8 iso frames of UTR */
     int interval; /* Frame interval of iTD */
+    uintptr_t bufBase;
 
     if (ep->hwPipe != NULL) {
         /* Get reference of the isochronous endpoint */
@@ -526,7 +536,14 @@ HAL_Status HAL_EHCI_IsoXfer(struct UTR *utr)
         itd->utr = utr;
         itd->fIdx = fidx; /* index to UTR's n'th IF_PER_UTR frame */
         /* iTD buffer base is buffer of the first UTR iso frame serviced by this iTD */
-        itd->bufBase = (uint32_t)(utr->isoBuff[fidx]);
+        bufBase = (uintptr_t)(utr->isoBuff[fidx]);
+#ifdef USB_DEBUG
+        if (bufBase > UINT32_MAX) {
+            HAL_DBG_ERR("EHCI itd buf is not a 32-bit address!\n");
+            goto error;
+        }
+#endif
+        itd->bufBase = (uint32_t)bufBase;
         itd->transMask = transMask;
 
         EHCI_WriteItdInfo(utr, itd);
@@ -648,12 +665,12 @@ HAL_Status HAL_EHCI_QuitIsoXfer(struct UTR *utr, struct USB_EP_INFO *ep)
             ehci->pfList[frameIdx] = itd->nextLink;
         } else {
             p = ITD_PTR(ehci->pfList[frameIdx]); /* find the preceding iTD */
-            while ((ITD_PTR(p->nextLink) != itd) && (p != NULL)) {
+            while ((p != NULL) && (ITD_PTR(p->nextLink) != itd)) {
                 p = ITD_PTR(p->nextLink);
             }
 
             if (p == NULL) { /* link list out of control! */
-                HAL_DBG_ERR("%s: An iTD lost reference to periodic frame list! 0x%lx on %ld\n", __func__, (uint32_t)itd, frameIdx);
+                HAL_DBG_ERR("%s: An iTD lost reference to periodic frame list! 0x%" PRIxPTR " on %" PRId32 "\n", __func__, (uintptr_t)itd, frameIdx);
             } else { /* Remove iTD from list */
                 p->nextLink = itd->nextLink;
             }
@@ -712,12 +729,12 @@ HAL_Status HAL_EHCI_ScanIsochronousList(struct EHCI_HCD *ehci)
                     ehci->pfList[frameIdx] = itd->nextLink;
                 } else {
                     p = ITD_PTR(ehci->pfList[frameIdx]); /* Find the preceding iTD */
-                    while ((ITD_PTR(p->nextLink) != itd) && (p != NULL)) {
+                    while ((p != NULL) && (ITD_PTR(p->nextLink) != itd)) {
                         p = ITD_PTR(p->nextLink);
                     }
 
                     if (p == NULL) { /* Link list out of control */
-                        HAL_DBG_ERR("An iTD lost refernece to periodic frame list! 0x%lx -> %ld\n", (uint32_t)itd, frameIdx);
+                        HAL_DBG_ERR("An iTD lost refernece to periodic frame list! 0x%" PRIxPTR " -> %" PRId32 "\n", (uintptr_t)itd, frameIdx);
                     } else { /* Remove iTD from list */
                         p->nextLink = itd->nextLink;
                     }
@@ -750,12 +767,12 @@ HAL_Status HAL_EHCI_ScanIsochronousList(struct EHCI_HCD *ehci)
                     ehci->pfList[frameIdx] = sitd->nextLink;
                 } else {
                     sp = SITD_PTR(ehci->pfList[frameIdx]); /* Find the preceding siTD */
-                    while ((SITD_PTR(sp->nextLink) != sitd) && (sp != NULL)) {
+                    while ((sp != NULL) && (SITD_PTR(sp->nextLink) != sitd)) {
                         sp = SITD_PTR(sp->nextLink);
                     }
 
                     if (sp == NULL) { /* Link list out of control */
-                        HAL_DBG_ERR("An siTD lost reference to periodic frame list! 0x%lx -> %ld\n", (uint32_t)sitd, frameIdx);
+                        HAL_DBG_ERR("An siTD lost reference to periodic frame list! 0x%" PRIxPTR " -> %" PRId32 "\n", (uintptr_t)sitd, frameIdx);
                     } else { /* remove iTD from list */
                         sp->nextLink = sitd->nextLink;
                     }

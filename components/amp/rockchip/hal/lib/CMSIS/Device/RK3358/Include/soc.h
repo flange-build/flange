@@ -207,6 +207,8 @@ typedef enum PD_Id {
 #define PCLK_UART4_GATE          PCLK_UART4_CLK_GATE
 #define PCLK_UART5_GATE          PCLK_UART5_CLK_GATE
 #define PCLK_WDT0_GATE           PCLK_WDT_NS_GATE
+#define GLB_RST_SND_WDT          GLB_RST_SND_WDT0
+#define GLB_RST_FST_WDT          GLB_RST_FST_WDT0
 
 #define PLL_INPUT_OSC_RATE (24 * 1000 * 1000)
 

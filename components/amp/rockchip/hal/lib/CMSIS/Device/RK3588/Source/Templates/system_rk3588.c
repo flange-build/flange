@@ -36,10 +36,12 @@ void SystemInit (void)
     // Invalidate entire Unified TLB
     __set_TLBIALL(0);
 
-    // Invalidate entire branch predictor array
+    // TODO: aarch64 doesn't have this instruction
+#ifndef __aarch64__
     __set_BPIALL(0);
     __DSB();
     __ISB();
+#endif
 
     //  Invalidate instruction cache and flush branch target cache
     __set_ICIALLU(0);
@@ -62,9 +64,11 @@ void SystemInit (void)
     // Enable MMU
     MMU_Enable();
 
+#ifndef __aarch64__
     // Enable Caches
     L1C_EnableCaches();
     L1C_EnableBTAC();
+#endif
 #endif
 }
 

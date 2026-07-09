@@ -95,7 +95,7 @@ static HAL_Status DSI_WaitFifoNotFull(struct DSI_REG *pReg, uint32_t flag)
 
     while (DSI_CheckFifoStatus(pReg, flag)) {
         if (++retries > CMD_PKT_STATUS_TIMEOUT_RETRIES) {
-            HAL_DBG_ERR("%s: flag:%lx timeout for wait not full\n", __func__, flag);
+            HAL_DBG_ERR("%s: flag:%" PRIx32 " timeout for wait not full\n", __func__, flag);
 
             return HAL_TIMEOUT;
         }

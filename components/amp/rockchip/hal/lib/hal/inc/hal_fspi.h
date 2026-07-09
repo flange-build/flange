@@ -33,6 +33,7 @@
 #define FSPI_LINES_X1 (0)
 #define FSPI_LINES_X2 (1)
 #define FSPI_LINES_X4 (2)
+#define FSPI_LINES_X8 (3)
 
 /** FSPI_CTRL bit union */
 typedef union {
@@ -40,14 +41,27 @@ typedef union {
     struct {
         unsigned mode : 1; /**< spi mode select */
         unsigned sps : 1; /**< shift in phase at: posedge 1: negedge */
-        unsigned reserved3_2 : 2;
+        unsigned dtr_mode : 1;
+        unsigned dat_mode : 1;
         unsigned scic : 4; /**< sclk_idle_level_cycles */
         unsigned cmdlines : 2; /**< cmd bits number */
         unsigned addrlines : 2; /**< address bits number */
         unsigned datalines : 2; /**< data bits number */
-        unsigned reserved14_15 : 2;
-        unsigned addrbits : 5;
-        unsigned reserved31_21 : 11;
+        unsigned cmdb16 : 1;
+        unsigned adrb16 : 1;
+        unsigned datab16 : 1;
+        unsigned dqs_mode : 1;
+        unsigned dtr_rdc_sel : 1;
+        unsigned cmd_str : 1;
+        unsigned addr_str : 1;
+        unsigned dbl_dumm_ctrl : 1;
+        unsigned dumm_ovlp : 2;
+        unsigned reserved24 : 1;
+        unsigned hyper_addr_en : 1;
+        unsigned hyper_rsvd_en : 1;
+        unsigned cmd_ctrl : 2;
+        unsigned wp_en : 1;
+        unsigned reserved31_30 : 2;
     } b;
 } FSPICTRL_DATA;
 
@@ -100,10 +114,12 @@ struct HAL_FSPI_HOST {
     IRQn_Type irqNum;
     uint32_t xipMemCode; /**< Better under icache */
     uint32_t xipMemData; /**< Better under dcache */
+    uint32_t maxDllCells; /**< Maximum delayline cells */
     uint8_t cs; /**< Should be defined by user in each operation */
-    uint8_t mode; /**< Should be defined by user, referring to hal_spi_mem.h */
+    uint32_t mode; /**< Should be defined by user, referring to hal_spi_mem.h */
     uint8_t cell; /**< Record DLL cell for PM resume, Set depend on corresponding device */
     uint32_t xmmcCtrl; /**< Set depend on corresponding device */
+    uint32_t xmmcDummyCtrl; /**< Set depend on corresponding device */
     struct HAL_FSPI_XMMC_DEV xmmcDev[FSPI_CHIP_CNT]; /**< Set depend on corresponding device */
 };
 
@@ -136,6 +152,11 @@ HAL_Status HAL_FSPI_DLLDisable(struct HAL_FSPI_HOST *host);
 uint32_t HAL_FSPI_GetXMMCStatus(struct HAL_FSPI_HOST *host);
 uint32_t HAL_FSPI_GetMaxIoSize(struct HAL_FSPI_HOST *host);
 uint32_t HAL_FSPI_GetMaxDllCells(struct HAL_FSPI_HOST *host);
+HAL_Status HAL_FSPI_SpiXferHWPolling(struct HAL_FSPI_HOST *host, struct HAL_SPI_MEM_OP *op);
+HAL_Status HAL_FSPI_IsPollFinished(struct HAL_FSPI_HOST *host);
+HAL_Status HAL_FSPI_APS6404lQpiHighSpeedInit(struct FSPI_REG *pReg, uintptr_t xipBase, uint32_t dll);
+HAL_Status HAL_FSPI_APS6404lQpiLowSpeedInit(struct FSPI_REG *pReg, uintptr_t xipBase, bool div2);
+HAL_Status HAL_FSPI_APS6404lSpiInit(struct FSPI_REG *pReg, uintptr_t xipBase, bool div2);
 
 /** @} */
 

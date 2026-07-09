@@ -26,6 +26,18 @@
 
 /***************************** MACRO Definition ******************************/
 
+#if (MBOX_B2A_INTEN_OFFSET == 0x28U)
+#define MBOX_REVISION 0x100U
+#elif (MBOX_B2A_INTEN_OFFSET == 0x10U)
+#define MBOX_REVISION 0x200U
+#else
+#error "MBOX_REVISION is required"
+#endif
+
+#if (MBOX_REVISION >= 0x200U)
+#define MBOX_CHAN_CNT 1
+#endif
+
 typedef enum {
     MBOX_CH_0 = 0,
     MBOX_CH_1,
@@ -35,6 +47,13 @@ typedef enum {
 } eMBOX_CH;
 
 /***************************** Structure Definition **************************/
+
+#if (MBOX_REVISION >= 0x200U)
+struct MBOX_CMD_DAT {
+    __IO uint32_t CMD;
+    __IO uint32_t DATA;
+};
+#endif
 
 struct MBOX_CLIENT {
     char name[16];

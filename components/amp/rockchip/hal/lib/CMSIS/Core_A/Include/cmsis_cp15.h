@@ -271,8 +271,7 @@ __STATIC_FORCEINLINE void __set_MVBAR(uint32_t mvbar)
   __set_CP(15, 0, mvbar, 12, 0, 1);
 }
 
-#if (defined(__CORTEX_A) && (__CORTEX_A == 7U) && \
-    defined(__TIM_PRESENT) && (__TIM_PRESENT == 1U)) || \
+#if (defined(__TIM_PRESENT) && (__TIM_PRESENT == 1U)) || \
     defined(DOXYGEN)
 
 /** \brief  Set CNTFRQ

@@ -72,7 +72,7 @@ typedef enum {
 /* ================                       IRQ                      ================ */
 /* ================================================================================ */
 #ifdef HAL_MCU_CORE
-#if defined(RKMCU_RK3562_BUS)
+#if defined(HAL_BUS_MCU_CORE)
 
 #define INTMUX_NUM_INT_PER_CON    256
 #define INTMUX_NUM_OUT_PER_CON    4
@@ -152,13 +152,14 @@ typedef enum {
   SPI0_IRQn                 =  84 + NUM_INTERRUPTS,     /*!< SPI0 Interrupt                 */
   SPI1_IRQn                 =  85 + NUM_INTERRUPTS,     /*!< SPI1 Interrupt                 */
   SPI2_IRQn                 =  86 + NUM_INTERRUPTS,     /*!< SPI2 Interrupt                 */
+  GMAC0_IRQn                =  105 + NUM_INTERRUPTS,    /*!< GMAC0 Interrupt                */
   WDT0_IRQn                 =  134 + NUM_INTERRUPTS,    /*!< WDT0 Interrupt                 */
   SARADC1_IRQn              =  156 + NUM_INTERRUPTS,    /*!< SARADC1 Interrupt              */
   FSPI0_IRQn                =  160 + NUM_INTERRUPTS,    /*!< FSPI0 Interrupt                */
   TOTAL_INTERRUPTS          =  (INTMUX_IRQ_START_NUM + NUM_INTERRUPTS + NUM_EXT_INTERRUPTS),
 } IRQn_Type;
 
-#elif defined(RKMCU_RK3562_PMU)
+#elif defined(HAL_PMU_MCU_CORE)
 
 typedef enum {
 /* -------------------  Processor Exceptions Numbers  ----------------------------- */
@@ -187,7 +188,7 @@ typedef enum {
 #error missing IRQn_Type define for interrupt
 #endif
 
-#if defined(RKMCU_RK3562_BUS)
+#if defined(HAL_BUS_MCU_CORE)
 
 #define RSVD_MCU_IRQn(_N)               (RSVD0_MCU_IRQn + (_N))
 #define HAS_CUSTOME_INTC
@@ -268,15 +269,19 @@ typedef enum {
   SPI0_IRQn                 =  84,      /*!< SPI0 Interrupt                */
   SPI1_IRQn                 =  85,      /*!< SPI1 Interrupt                */
   SPI2_IRQn                 =  86,      /*!< SPI2 Interrupt                */
+  GMAC0_IRQn                =  105,     /*!< GMAC0 Interrupt               */
   WDT0_IRQn                 =  134,     /*!< WDT Interrupt                 */
   DMAC_ABORT_IRQn           =  142,     /*!< DMAC Abort Interrupt          */
   DMAC_IRQn                 =  143,     /*!< DMAC Interrupt                */
   MBOX_AP_IRQn              =  146,     /*!< MBOX AP Interrupt             */
   MBOX_BB_IRQn              =  147,     /*!< MBOX BB Interrupt             */
   SARADC1_IRQn              =  156,     /*!< SARADC1 Interrupt             */
+  SPDIFTX0_IRQn             =  159,     /*!< SPDIFTX0 Interrupt            */
   FSPI0_IRQn                =  160,     /*!< FSPI0 Interrupt               */
+  PCIE_LEGACY_IRQn          =  175,     /*!< PCIe_legacy Interrupt         */
+  PCIE_SYS_IRQn             =  176,     /*!< PCIe_sys Interrupt            */
   RSVD0_IRQn                =  280,     /*!< RSVD0 Interrupt               */
-  NUM_INTERRUPTS            =  282,
+  NUM_INTERRUPTS            =  288,
 } IRQn_Type;
 
 #define RSVD_IRQn(_N)               (RSVD0_IRQn + (_N))
@@ -340,8 +345,11 @@ typedef enum {
 /*                                                                                      */
 /****************************************************************************************/
 /* Memory Base */
+#define PCIE_MMIO_BASE                  (0xFC000000) /* PCIe mmio base address */
+#define PCIE_DBI_BASE                   (0xFE000000) /* PCIe dbi base address */
 #define GIC_DISTRIBUTOR_BASE            (0xFE901000) /* GICD base address */
 #define GIC_CPU_INTERFACE_BASE          (0xFE902000) /* GICC base address */
+#define PCIE_APB_BASE                   (0xFF500000) /* PCIe apb base address */
 
 /****************************************************************************************/
 /*                                                                                      */
@@ -376,7 +384,7 @@ typedef enum {
 #define CACHE_M_INVALID_ALL             0x6U
 #define CACHE_REVISION                  (0x00000100U)
 
-#if defined(RKMCU_RK3562_BUS) && !defined(HAL_CACHE_DECODED_ADDR_BASE)
+#if defined(HAL_BUS_MCU_CORE) && !defined(HAL_CACHE_DECODED_ADDR_BASE)
 #error "Please define HAL_CACHE_DECODED_ADDR_BASE on hal_conf.h"
 #endif
 
@@ -387,11 +395,25 @@ typedef enum {
 /*                           Platform Differences Section                               */
 /*                                                                                      */
 /****************************************************************************************/
+#if defined(HAL_AP_CORE)
+
+#undef DCACHE
+#undef ICACHE
+
+#endif
 
 /******************************************CRU*******************************************/
 
 #define PCLK_WDT0_GATE           PCLK_WDTNS_GATE
 #define PCLK_WDT                 PCLK_BUS
+
+#define PCLK_SARADC_CONTROL_GATE_MULTI
+
+#define PCLK_SARADC_CONTROL_GATE0 PCLK_SARADC_GATE
+#define CLK_SARADC_GATE0 CLK_SARADC_GATE
+
+#define PCLK_SARADC_CONTROL_GATE1 PCLK_SARADC_VCCIO156_GATE
+#define CLK_SARADC_GATE1 CLK_SARADC_VCCIO156_GATE
 
 #define CRU_CLK_USE_CON_BANK
 #define CLK64(mux, div) ((((mux) & 0xffffffffULL) << 32) | ((div) & 0xffffffffULL))
@@ -406,6 +428,7 @@ typedef enum CLOCK_Name {
     PLL_HPLL,
     PLL_CPLL,
     PLL_DPLL,
+    ARMCLK,
 
     HCLK_BUS             = CLK64(HCLK_BUS_SEL, HCLK_BUS_DIV),
     PCLK_BUS             = CLK64(PCLK_BUS_SEL, PCLK_BUS_DIV),
@@ -496,11 +519,6 @@ typedef enum CLOCK_Name {
 #define MBOX_CNT                (2)
 #define MBOX_CHAN_CNT           (4)
 
-/****************************************GPIO********************************************/
-#ifdef GPIO_VER_ID
-#undef GPIO_VER_ID
-#define GPIO_VER_ID             (0x01000C2BU)
-#endif
 /****************************************PMU*********************************************/
 #ifndef __ASSEMBLY__
 typedef enum PD_Id {
@@ -509,6 +527,10 @@ typedef enum PD_Id {
 #endif
 /****************************************FSPI********************************************/
 #define FSPI_CHIP_CNT           (2)
+
+/****************************************WDT*********************************************/
+#define GLB_RST_SND_WDT GLB_RST_SND_WDT0
+#define GLB_RST_FST_WDT GLB_RST_FST_WDT0
 
 #ifdef __cplusplus
 }

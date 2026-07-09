@@ -28,6 +28,12 @@
 #define GPIO_VER_ID (0U)
 #endif
 
+#define GPIO0_EXP_REG GPIO_REG
+#define GPIO1_EXP_REG GPIO_REG
+#define GPIO2_EXP_REG GPIO_REG
+#define GPIO3_EXP_REG GPIO_REG
+#define GPIO4_EXP_REG GPIO_REG
+
 #define PIN_NUMBER_PER_BANK (32)
 
 #define GPIO_PIN_SHIFT  (0) /**< Bits 0-4: GPIO Pin number: 0 - 31 */
@@ -36,6 +42,12 @@
 #define GPIO_BANK_MASK  (0x7 << GPIO_BANK_SHIFT)
 
 #define BANK_PIN(BANK, PIN) ((((BANK) << GPIO_BANK_SHIFT) & GPIO_BANK_MASK) + (((PIN) << GPIO_PIN_SHIFT) & GPIO_PIN_MASK))
+
+#ifdef IS_GPIO_EXP_INSTANCE
+#define IS_GPIO_OR_GPIO_EXP_INSTANCE(instance) (IS_GPIO_INSTANCE(instance) || IS_GPIO_EXP_INSTANCE(instance))
+#else
+#define IS_GPIO_OR_GPIO_EXP_INSTANCE(instance) IS_GPIO_INSTANCE(instance)
+#endif
 
 /***************************** Structure Definition **************************/
 /** GPIO pin level definition */

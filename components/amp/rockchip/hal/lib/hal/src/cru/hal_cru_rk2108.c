@@ -28,6 +28,7 @@
 static struct PLL_CONFIG PLL_TABLE[] = {
     /* _mhz, _refDiv, _fbDiv, _postdDv1, _postDiv2, _dsmpd, _frac */
     RK_PLL_RATE(1188000000, 2, 99, 1, 1, 1, 0),
+    RK_PLL_RATE(983040000, 1, 40, 1, 1, 0, 16106127),
     RK_PLL_RATE(600000000, 3, 75, 1, 1, 1, 0),
     RK_PLL_RATE(282240000, 1, 35, 3, 1, 0, 4697620),
     RK_PLL_RATE(245760000, 1, 40, 4, 1, 0, 16106127),

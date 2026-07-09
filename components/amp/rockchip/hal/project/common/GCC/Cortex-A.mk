@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause */
 
-# Copyright (c) 2021 Rockchip Electronics Co., Ltd.
+# Copyright (c) 2024 Rockchip Electronics Co., Ltd.
 
 ROOT_PATH	:= ../../..
 
@@ -25,12 +25,12 @@ OBJDUMP		= $(CROSS_COMPILE)objdump
 
 CPU		+= -ftree-vectorize -ffast-math -marm
 ASFLAGS		+= $(CPU) -c -x assembler-with-cpp -D__ASSEMBLY__
-CFLAGS		+= $(CPU) -std=gnu99 -O2 -g
-CFLAGS		+= -Wformat=2 -Wall -Wno-unused-parameter
-CFLAGS		+= -Wstrict-prototypes -Wmissing-prototypes -nostartfiles
-LDFLAGS		+= $(CPU) -Wl,--gc-sections --specs=nosys.specs -lm -lgcc
+CFLAGS		+= $(CPU) -std=gnu99 -O2 -g -ffunction-sections -fdata-sections
+LDFLAGS		+= -nostartfiles $(CPU) -Wl,--gc-sections --specs=nosys.specs -lm -lgcc
 OCFLAGS		= -R .note -R .note.gnu.build-id -R .comment -S
 
+HAL_CFLAGS	+= -Wformat=2 -Wall -Wno-unused-parameter
+HAL_CFLAGS	+= -Wstrict-prototypes -Wmissing-prototypes -Wimplicit-fallthrough
 HAL_CFLAGS	+= -Werror
 
 LINKER_SCRIPT	?= $(ROOT_PATH)/lib/CMSIS/Device/$(SOC)/Source/Templates/GCC/gcc_arm.ld

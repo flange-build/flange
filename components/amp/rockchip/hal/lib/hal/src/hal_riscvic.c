@@ -178,7 +178,7 @@ static void HAL_RISCVIC_ExtIRQHandle(void)
 #ifdef HAL_INTMUX_MODULE_ENABLED
     HAL_INTMUX_DirectDispatch(HAL_RISCVIC_GetActiveIRQ());
 #else
-    printf("Irq is %ld, please open HAL_INTMUX_MODULE_ENABLED!\n", HAL_RISCVIC_GetActiveIRQ());
+    printf("Irq is %" PRId32 ", please open HAL_INTMUX_MODULE_ENABLED!\n", HAL_RISCVIC_GetActiveIRQ());
 #endif
     /* Any value can be written in IPIC_EOI to end process */
     HAL_RISCVIC_WriteCSR(IPIC_EOI, 0x0);

@@ -97,6 +97,7 @@ typedef enum
   MIPI_ISP_IRQn          = 103,     /*!< MIPI ISP Interrupt          */
   MI_ISP_IRQn            = 104,     /*!< MI ISP Interrupt            */
   ISP_IRQn               = 105,     /*!< ISP Interrupt               */
+  VICAP_IRQn             = 106,     /*!< VICAP Interrupt             */
   NUM_INTERRUPTS         = 128,
 } IRQn_Type;
 #else
@@ -327,13 +328,11 @@ typedef enum CLOCK_Name {
 
 #endif
 
-/****************************************GPIO********************************************/
-#ifdef GPIO_VER_ID
-#undef GPIO_VER_ID
-#define GPIO_VER_ID             (0x01000C2BU)
-#endif
-
 #define PCLK_SARADC_CONTROL_GATE PCLK_SARADC_GATE
+
+/****************************************WDT*********************************************/
+#define GLB_RST_SND_WDT GLB_RST_SND_WDT0
+#define GLB_RST_FST_WDT GLB_RST_FST_WDT0
 
 #ifdef __cplusplus
 }

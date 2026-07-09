@@ -208,14 +208,149 @@ HAL_Status HAL_PCDEx_BcdDetect(struct PCD_HANDLE *pPCD)
 
 #if defined(USB_M31PHY_BASE)
     msg = USB_M31phyBcdDetect(pPCD);
-#else
-    /* TODO: the other PHYs (e.g. INNO, NaNeng...) */
 #endif
 
     HAL_PCDEx_BcdCallback(pPCD, msg);
 
     return HAL_OK;
 }
+
+#ifdef USB_INNO_PHY_BCD_DETECT
+uint8_t HAL_USB_InnoPhy_GetBvalid()
+{
+    uint8_t bvalid;
+
+    bvalid = READ_BIT(USB_PHY_STATUS_BASE, USB_OTG_UTMI_BVALID_MASK) >>
+             USB_OTG_UTMI_BVALID_SHIFT;
+
+    return bvalid;
+}
+
+/**
+ * @brief Set USB Inno Phy Battery Charger mode.
+ * @param enable: active or inactive Battery Charger mode.
+ */
+void HAL_USB_InnoPhy_SetChgMode(uint8_t enable)
+{
+    if (enable) {
+        WRITE_REG_MASK_WE(USB_PHY_CON_BASE, USB_PHY_CHG_MODE_MASK,
+                          USB_PHY_CHG_MODE_VAL);
+    } else {
+        WRITE_REG_MASK_WE(USB_PHY_CON_BASE, USB_PHY_CHG_MODE_MASK,
+                          0);
+    }
+}
+
+/**
+ * @brief Enable USB Inno Phy Battery Charger DCD detect.
+ * @param enable: active or inactive DCD detect circuitry.
+ */
+void HAL_USB_InnoPhy_DCD_Det(uint8_t enable)
+{
+    if (enable) {
+        WRITE_REG_MASK_WE(USB_PHY_BCD_DET_CON,
+                          USB_PHY_RDM_PDWN_MASK | USB_PHY_IDP_SRC_MASK,
+                          USB_PHY_RDM_PDWN_EN | USB_PHY_IDP_SRC_EN);
+    } else {
+        WRITE_REG_MASK_WE(USB_PHY_BCD_DET_CON,
+                          USB_PHY_RDM_PDWN_MASK | USB_PHY_IDP_SRC_MASK,
+                          0);
+    }
+}
+
+/**
+ * @brief  Get USB Inno Phy DCD detect state.
+ * @param  msg: bcd message.
+ * @return HAL status.
+ */
+ePCD_bcdMsg HAL_USB_InnoPhy_DCD_State()
+{
+    ePCD_bcdMsg msg;
+
+    if (READ_BIT(USB_PHY_BCD_DET_BASE, USB_PHY_DP_DET_BIT)) {
+        msg = PCD_BCD_CONTACT_DETECTION;
+        HAL_DBG("HAL USB DCD Detected\n");
+    } else {
+        msg = PCD_BCD_DEFAULT_STATE;
+    }
+
+    return msg;
+}
+
+/**
+ * @brief Enable USB Inno Phy Battery Charger Primary detect.
+ * @param enable: active or inactive Primary detect circuitry.
+ */
+void HAL_USB_InnoPhy_Primary_Det(uint8_t enable)
+{
+    if (enable) {
+        WRITE_REG_MASK_WE(USB_PHY_BCD_DET_CON,
+                          USB_PHY_VDP_SRC_MASK | USB_PHY_IDM_SINK_MASK,
+                          USB_PHY_VDP_SRC_EN | USB_PHY_IDM_SINK_EN);
+    } else {
+        WRITE_REG_MASK_WE(USB_PHY_BCD_DET_CON,
+                          USB_PHY_VDP_SRC_MASK | USB_PHY_IDM_SINK_MASK,
+                          0);
+    }
+}
+
+/**
+ * @brief  Get USB Inno Phy Primary detect state to distinguish
+ *         between SDP and CDP/DCP.
+ * @param  msg: bcd message.
+ * @return HAL status.
+ */
+ePCD_bcdMsg HAL_USB_InnoPhy_Primary_State()
+{
+    ePCD_bcdMsg msg;
+
+    if (READ_BIT(USB_PHY_BCD_DET_BASE, USB_PHY_CP_DET_BIT)) {
+        msg = PCD_BCD_DEFAULT_STATE;
+    } else {
+        HAL_DBG("HAL USB SDP Detected\n");
+        msg = PCD_BCD_STD_DOWNSTREAM_PORT;
+    }
+
+    return msg;
+}
+
+/**
+ * @brief Enable USB Inno Phy Battery Charger Secondary detect.
+ * @param enable: active or inactive Secondary detect circuitry.
+ */
+void HAL_USB_InnoPhy_Secondary_Det(uint8_t enable)
+{
+    if (enable) {
+        WRITE_REG_MASK_WE(USB_PHY_BCD_DET_CON,
+                          USB_PHY_VDM_SRC_MASK | USB_PHY_IDP_SINK_MASK,
+                          USB_PHY_VDM_SRC_EN | USB_PHY_IDP_SINK_EN);
+    } else {
+        WRITE_REG_MASK_WE(USB_PHY_BCD_DET_CON,
+                          USB_PHY_VDM_SRC_MASK | USB_PHY_IDP_SINK_MASK,
+                          0);
+    }
+}
+
+/**
+ * @brief  Get USB Inno Phy Secondary Detect State.
+ * @param  pmsg： bcd message
+ * @return HAL status.
+ */
+ePCD_bcdMsg HAL_USB_InnoPhy_Secondary_State()
+{
+    ePCD_bcdMsg msg;
+
+    if (READ_BIT(USB_PHY_BCD_DET_BASE, USB_PHY_DCP_DET_BIT)) {
+        HAL_DBG("HAL USB DCP Detected\n");
+        msg = PCD_BCD_DEDICATED_CHARGING_PORT;
+    } else {
+        HAL_DBG("HAL USB CDP Detected\n");
+        msg = PCD_BCD_CHARGING_DOWNSTREAM_PORT;
+    }
+
+    return msg;
+}
+#endif
 
 /** @} */
 

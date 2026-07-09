@@ -35,12 +35,12 @@
 
 /********************* Private Function Definition ***************************/
 
-static inline void writel(uint32_t address, uint32_t value)
+static inline void writel(uintptr_t address, uint32_t value)
 {
     *((volatile uint32_t *)address) = value;
 }
 
-static inline uint32_t readl(uint32_t address)
+static inline uint32_t readl(uintptr_t address)
 {
     return *((volatile uint32_t *)address);
 }
@@ -87,7 +87,7 @@ static uint32_t pci_conv_size_to_32(uint32_t old, uint32_t value, uint32_t offse
     return value;
 }
 
-static int32_t HAL_PCI_WriteConfig(uint32_t cfgBase, int32_t offset, uint32_t value, uint8_t size)
+static int32_t HAL_PCI_WriteConfig(uintptr_t cfgBase, int32_t offset, uint32_t value, uint8_t size)
 {
     uint32_t va, old;
 
@@ -99,7 +99,7 @@ static int32_t HAL_PCI_WriteConfig(uint32_t cfgBase, int32_t offset, uint32_t va
     return 0;
 }
 
-static int32_t HAL_PCI_ReadConfig(uint32_t cfgBase, int32_t offset, uint32_t *valuep, uint8_t size)
+static int32_t HAL_PCI_ReadConfig(uintptr_t cfgBase, int32_t offset, uint32_t *valuep, uint8_t size)
 {
     uint32_t va, value;
 
@@ -126,7 +126,7 @@ static int32_t HAL_PCI_ReadConfig(uint32_t cfgBase, int32_t offset, uint32_t *va
  * @param  value: value
  * @return 0 for ok.
  */
-int32_t HAL_PCI_WriteConfigDWord(uint32_t cfgBase, int32_t offset, uint32_t value)
+int32_t HAL_PCI_WriteConfigDWord(uintptr_t cfgBase, int32_t offset, uint32_t value)
 {
     return HAL_PCI_WriteConfig(cfgBase, offset, value, PCI_SIZE_32);
 }
@@ -138,7 +138,7 @@ int32_t HAL_PCI_WriteConfigDWord(uint32_t cfgBase, int32_t offset, uint32_t valu
  * @param  valuep: value point
  * @return 0 for ok.
  */
-int32_t HAL_PCI_ReadConfigDWord(uint32_t cfgBase, int32_t offset, uint32_t *valuep)
+int32_t HAL_PCI_ReadConfigDWord(uintptr_t cfgBase, int32_t offset, uint32_t *valuep)
 {
     return HAL_PCI_ReadConfig(cfgBase, offset, valuep, PCI_SIZE_32);
 }
@@ -150,7 +150,7 @@ int32_t HAL_PCI_ReadConfigDWord(uint32_t cfgBase, int32_t offset, uint32_t *valu
  * @param  value: value
  * @return 0 for ok.
  */
-int32_t HAL_PCI_WriteConfigWord(uint32_t cfgBase, int32_t offset, uint32_t value)
+int32_t HAL_PCI_WriteConfigWord(uintptr_t cfgBase, int32_t offset, uint32_t value)
 {
     return HAL_PCI_WriteConfig(cfgBase, offset, value, PCI_SIZE_16);
 }
@@ -162,7 +162,7 @@ int32_t HAL_PCI_WriteConfigWord(uint32_t cfgBase, int32_t offset, uint32_t value
  * @param  valuep: value point
  * @return 0 for ok.
  */
-int32_t HAL_PCI_ReadConfigWord(uint32_t cfgBase, int32_t offset, uint32_t *valuep)
+int32_t HAL_PCI_ReadConfigWord(uintptr_t cfgBase, int32_t offset, uint32_t *valuep)
 {
     return HAL_PCI_ReadConfig(cfgBase, offset, valuep, PCI_SIZE_16);
 }
@@ -174,7 +174,7 @@ int32_t HAL_PCI_ReadConfigWord(uint32_t cfgBase, int32_t offset, uint32_t *value
  * @param  value: value
  * @return 0 for ok.
  */
-int32_t HAL_PCI_WriteConfigByte(uint32_t cfgBase, int32_t offset, uint32_t value)
+int32_t HAL_PCI_WriteConfigByte(uintptr_t cfgBase, int32_t offset, uint32_t value)
 {
     return HAL_PCI_WriteConfig(cfgBase, offset, value, PCI_SIZE_8);
 }
@@ -186,7 +186,7 @@ int32_t HAL_PCI_WriteConfigByte(uint32_t cfgBase, int32_t offset, uint32_t value
  * @param  valuep: value point
  * @return 0 for ok.
  */
-int32_t HAL_PCI_ReadConfigByte(uint32_t cfgBase, int32_t offset, uint32_t *valuep)
+int32_t HAL_PCI_ReadConfigByte(uintptr_t cfgBase, int32_t offset, uint32_t *valuep)
 {
     return HAL_PCI_ReadConfig(cfgBase, offset, valuep, PCI_SIZE_8);
 }

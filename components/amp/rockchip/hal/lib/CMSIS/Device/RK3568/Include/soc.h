@@ -52,6 +52,27 @@ typedef enum {
     DMA_REQ_SPI2_RX = 25,
     DMA_REQ_SPI3_TX = 26,
     DMA_REQ_SPI3_RX = 27,
+    DMA_REQ_PWM0 = 28,
+    DMA_REQ_PWM1 = 29,
+    DMA_REQ_PWM2 = 30,
+    DMA_REQ_PWM3 = 31,
+    DMA_REQ_I2S0_8CH_TX = 0,
+    DMA_REQ_SPDIF = 1,
+    DMA_REQ_I2S1_8CH_TX = 2,
+    DMA_REQ_I2S1_8CH_RX = 3,
+    DMA_REQ_I2S2_2CH_TX = 4,
+    DMA_REQ_I2S2_2CH_RX = 5,
+    DMA_REQ_I2S3_2CH_TX = 6,
+    DMA_REQ_I2S3_2CH_RX = 7,
+    DMA_REQ_AUPWM = 8,
+    DMA_REQ_PDM = 9,
+    DMA_REQ_SDMMC_BUFFER = 10,
+    DMA_REQ_CAN0_TX = 11,
+    DMA_REQ_CAN0_RX = 12,
+    DMA_REQ_CAN1_TX = 13,
+    DMA_REQ_CAN1_RX = 14,
+    DMA_REQ_CAN2_TX = 15,
+    DMA_REQ_CAN2_RX = 16,
 } DMA_REQ_Type;
 
 /* ================================================================================ */
@@ -93,7 +114,8 @@ typedef enum
     PWM1_PWR_IRQn          = 119,      /*!< PWM1 PWR Interrupt          */
     PWM2_PWR_IRQn          = 120,      /*!< PWM2 PWR Interrupt          */
     PWM3_PWR_IRQn          = 121,      /*!< PWM3 PWR Interrupt          */
-    SARADC_IRQn            = 125,       /*!< SARADC Interrupt            */
+    SARADC_IRQn            = 125,      /*!< SARADC Interrupt            */
+    SDMMC0_IRQn            = 130,      /*!< SDMMC0 Interrupt            */
     FSPI0_IRQn             = 133,      /*!< FSPI Interrupt              */
     SPI0_IRQn              = 135,      /*!< SPI0 Interrupt              */
     SPI1_IRQn              = 136,      /*!< SPI1 Interrupt              */
@@ -115,6 +137,10 @@ typedef enum
     UART7_IRQn             = 155,      /*!< UART7  Interrupt            */
     UART8_IRQn             = 156,      /*!< UART8  Interrupt            */
     UART9_IRQn             = 157,      /*!< UART9  Interrupt            */
+    USB2HOST0_EHCI_IRQn    = 162,      /*!< USB2HOST0 EHCI Interrupt    */
+    USB2HOST0_OHCI_IRQn    = 163,      /*!< USB2HOST0 OHCI Interrupt    */
+    USB2HOST1_EHCI_IRQn    = 165,      /*!< USB2HOST1 EHCI Interrupt    */
+    USB2HOST1_OHCI_IRQn    = 166,      /*!< USB2HOST1 OHCI Interrupt    */
     WDT0_IRQn              = 181,      /*!< WDT0  Interrupt             */
     MBOX0_CH0_B2A_IRQn     = 215,      /*!< MBOX0 CH0 B2A Interrupt     */
     MBOX0_CH1_B2A_IRQn     = 216,      /*!< MBOX0 CH1 B2A Interrupt     */
@@ -185,6 +211,7 @@ typedef enum
     PWM2_PWR_IRQn          = 120,      /*!< PWM2 PWR Interrupt          */
     PWM3_PWR_IRQn          = 121,      /*!< PWM3 PWR Interrupt          */
     SARADC_IRQn            = 125,      /*!< SARADC Interrupt            */
+    SDMMC0_IRQn            = 130,      /*!< SDMMC0 Interrupt            */
     FSPI0_IRQn             = 133,      /*!< FSPI Interrupt              */
     SPI0_IRQn              = 135,      /*!< SPI0 Interrupt              */
     SPI1_IRQn              = 136,      /*!< SPI1 Interrupt              */
@@ -206,8 +233,14 @@ typedef enum
     UART7_IRQn             = 155,      /*!< UART7  Interrupt            */
     UART8_IRQn             = 156,      /*!< UART8  Interrupt            */
     UART9_IRQn             = 157,      /*!< UART9  Interrupt            */
+    USB2HOST0_EHCI_IRQn    = 162,      /*!< USB2HOST0 EHCI Interrupt    */
+    USB2HOST0_OHCI_IRQn    = 163,      /*!< USB2HOST0 OHCI Interrupt    */
+    USB2HOST1_EHCI_IRQn    = 165,      /*!< USB2HOST1 EHCI Interrupt    */
+    USB2HOST1_OHCI_IRQn    = 166,      /*!< USB2HOST1 OHCI Interrupt    */
+    VOP2_IRQn              = 180,      /*!< VOP2 Interrupt              */
     WDT0_IRQn              = 181,      /*!< WDT0  Interrupt             */
     PCIE30x2_LEGACY_IRQn   = 194,      /*!< PCIe3x2_legacy Interrupt    */
+    PCIE30x2_SYS_IRQn      = 197,      /*!< PCIe3x2_sys Interrupt       */
     DDR_ECC_CE_IRQn        = 205,      /*!< DDR ECC correctable fault Interrupt */
     DDR_ECC_UE_IRQn        = 207,      /*!< DDR ECC uncorrectable fault Interrupt */
     MBOX0_CH0_B2A_IRQn     = 215,      /*!< MBOX0 CH0 B2A Interrupt     */
@@ -288,6 +321,7 @@ typedef enum
 #include "system_rk3568.h"
 #endif /* __ASSEMBLY__ */
 #include "rk3568.h"
+#include "rk3568_usb.h"
 
 /****************************************************************************************/
 /*                                                                                      */
@@ -300,6 +334,22 @@ typedef enum
 #define GIC_REDISTRIBUTOR_BASE  0xFD460000 /* GICR base address */
 #define PCIE3PHY_GRF_BASE       0xFDCB8000 /* S-PHY_GRF base address */
 #define PCIE3X2_APB_BASE        0xFE280000 /* PCIe apb base address */
+#define USB2HOST0_EHCI_BASE     0xFD800000 /* USB2HOST0 EHCI base address */
+#define USB2HOST0_OHCI_BASE     0xFD840000 /* USB2HOST0 OHCI base address */
+#define USB2HOST1_EHCI_BASE     0xFD880000 /* USB2HOST1 EHCI base address */
+#define USB2HOST1_OHCI_BASE     0xFD8C0000 /* USB2HOST1 OHCI base address */
+#define USBPHY_U2_GRF_BASE      0xFDCA8000 /* USBPHY USB2 GRF base address */
+
+/****************************************************************************************/
+/*                                                                                      */
+/*                               Module Variable Section                                */
+/*                                                                                      */
+/****************************************************************************************/
+/* Module Variable Define */
+#define USB2HOST0_EHCI          ((struct EHCI_REG *) USB2HOST0_EHCI_BASE)
+#define USB2HOST0_OHCI          ((struct OHCI_REG *) USB2HOST0_OHCI_BASE)
+#define USB2HOST1_EHCI          ((struct EHCI_REG *) USB2HOST1_EHCI_BASE)
+#define USB2HOST1_OHCI          ((struct OHCI_REG *) USB2HOST1_OHCI_BASE)
 
 /****************************************************************************************/
 /*                                                                                      */
@@ -415,8 +465,46 @@ typedef enum CLOCK_Name {
     ACLK_USB               = CLK(ACLK_USB_SEL, 0U),
     HCLK_USB               = CLK(HCLK_USB_SEL, 0U),
     PCLK_USB               = CLK(0U, PCLK_USB_DIV),
+    CLK_SDMMC0             = CLK(CLK_SDMMC0_SEL, 0U),
+    DCLK_VOP0              = CLK(DCLK0_VOP_SEL, DCLK0_VOP_DIV),
+    DCLK_VOP1              = CLK(DCLK1_VOP_SEL, DCLK1_VOP_DIV),
+    DCLK_VOP2              = CLK(DCLK2_VOP_SEL, DCLK2_VOP_DIV),
+    CLK_I2S0_8CH_TX_SRC  = CLK(CLK_I2S0_8CH_TX_SRC_SEL, CLK_I2S0_8CH_TX_SRC_DIV),
+    CLK_I2S0_8CH_TX_FRAC = CLK(0U, CLK_I2S0_8CH_TX_FRAC_DIV),
+    CLK_I2S0_8CH_TX      = CLK(MCLK_I2S0_8CH_TX_SEL, 0U),
+    I2S0_MCLKOUT_TX      = CLK(I2S0_MCLKOUT_TX_SEL, 0U),
+    CLK_I2S0_8CH_RX_SRC  = CLK(CLK_I2S0_8CH_RX_SRC_SEL, CLK_I2S0_8CH_RX_SRC_DIV),
+    CLK_I2S0_8CH_RX_FRAC = CLK(0U, CLK_I2S0_8CH_RX_FRAC_DIV),
+    CLK_I2S0_8CH_RX      = CLK(MCLK_I2S0_8CH_RX_SEL, 0U),
+    I2S0_MCLKOUT_RX      = CLK(I2S0_MCLKOUT_RX_SEL, 0U),
+    CLK_I2S1_8CH_TX_SRC  = CLK(CLK_I2S1_8CH_TX_SRC_SEL, CLK_I2S1_8CH_TX_SRC_DIV),
+    CLK_I2S1_8CH_TX_FRAC = CLK(0U, CLK_I2S1_8CH_TX_FRAC_DIV),
+    CLK_I2S1_8CH_TX      = CLK(MCLK_I2S1_8CH_TX_SEL, 0U),
+    I2S1_MCLKOUT_TX      = CLK(I2S1_MCLKOUT_TX_SEL, 0U),
+    CLK_I2S1_8CH_RX_SRC  = CLK(CLK_I2S1_8CH_RX_SRC_SEL, CLK_I2S1_8CH_RX_SRC_DIV),
+    CLK_I2S1_8CH_RX_FRAC = CLK(0U, CLK_I2S1_8CH_RX_FRAC_DIV),
+    CLK_I2S1_8CH_RX      = CLK(MCLK_I2S1_8CH_RX_SEL, 0U),
+    I2S1_MCLKOUT_RX      = CLK(I2S1_MCLKOUT_RX_SEL, 0U),
+    CLK_I2S2_2CH_SRC     = CLK(CLK_I2S2_2CH_SRC_SEL, CLK_I2S2_2CH_SRC_DIV),
+    CLK_I2S2_2CH_FRAC    = CLK(0U, CLK_I2S2_2CH_FRAC_DIV),
+    CLK_I2S2_2CH         = CLK(MCLK_I2S2_2CH_SEL, 0U),
+    I2S2_MCLKOUT         = CLK(I2S2_MCLKOUT_SEL, 0U),
+    CLK_I2S3_2CH_TX_SRC  = CLK(CLK_I2S3_2CH_TX_SRC_SEL, CLK_I2S3_2CH_TX_SRC_DIV),
+    CLK_I2S3_2CH_TX_FRAC = CLK(0U, CLK_I2S3_2CH_TX_FRAC_DIV),
+    CLK_I2S3_2CH_TX      = CLK(MCLK_I2S3_2CH_TX_SEL, 0U),
+    I2S3_MCLKOUT_TX      = CLK(I2S3_MCLKOUT_TX_SEL, 0U),
+    CLK_I2S3_2CH_RX_SRC  = CLK(CLK_I2S3_2CH_RX_SRC_SEL, CLK_I2S3_2CH_RX_SRC_DIV),
+    CLK_I2S3_2CH_RX_FRAC = CLK(0U, CLK_I2S3_2CH_RX_FRAC_DIV),
+    CLK_I2S3_2CH_RX      = CLK(MCLK_I2S3_2CH_RX_SEL, 0U),
+    I2S3_MCLKOUT_RX      = CLK(I2S3_MCLKOUT_RX_SEL, 0U),
+    CLK_SPDIF_8CH_SRC    = CLK(MCLK_SPDIF_8CH_SRC_SEL, MCLK_SPDIF_8CH_SRC_DIV),
+    CLK_SPDIF_8CH_FRAC   = CLK(0U, MCLK_SPDIF_8CH_FRAC_DIV),
+    MCLK_SPDIF_8CH       = CLK(MCLK_SPDIF_8CH_SEL, 0U),
 } eCLOCK_Name;
 #endif
+/****************************************CRU********************************************/
+#define HCLK_SDIO_GATE HCLK_SDMMC0_GATE
+#define CLK_SDIO_GATE  CLK_SDMMC0_GATE
 /****************************************MBOX********************************************/
 #define MBOX_CNT             2
 #define MBOX_CHAN_CNT        4
@@ -424,19 +512,21 @@ typedef enum CLOCK_Name {
 #define GRF_IOMUX_BIT_PER_PIN	(4)
 #define GRF_DS_BIT_PER_PIN	(8)
 #define GRF_PULL_BIT_PER_PIN	(2)
-/****************************************GPIO********************************************/
-#ifdef GPIO_VER_ID
-#undef GPIO_VER_ID
-#define GPIO_VER_ID             (0x01000C2BU)
-#endif
 /****************************************PMU*********************************************/
 #ifndef __ASSEMBLY__
 typedef enum PD_Id {
     PD_INVALID = 0U,
 } ePD_Id;
+/******************************************USB*******************************************/
+#define USB_PHY_SUSPEND_VAL     0x01FF01D1U
+#define USB_PHY_RESUME_VAL      0x01FF01D2U
 #endif
 /****************************************FSPI********************************************/
 #define FSPI_CHIP_CNT                            (2)
+
+/****************************************WDT*********************************************/
+#define GLB_RST_SND_WDT GLB_RST_SND_WDT0
+#define GLB_RST_FST_WDT GLB_RST_FST_WDT0
 
 #ifdef __cplusplus
 }

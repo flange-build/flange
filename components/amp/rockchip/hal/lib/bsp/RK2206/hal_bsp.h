@@ -23,6 +23,10 @@ extern struct HAL_AUDIOPWM_DEV g_audioPwmDev;
 extern struct HAL_DWDMA_DEV g_dwDmaDev;
 #endif
 
+#ifdef HAL_HCD_MODULE_ENABLED
+extern const struct HAL_USB_DEV g_usbotgh0Dev;
+#endif
+
 #ifdef HAL_HYPERPSRAM_MODULE_ENABLED
 extern struct HAL_HYPERPSRAM_DEV g_hyperpsramDev;
 #endif
@@ -31,6 +35,10 @@ extern struct HAL_HYPERPSRAM_DEV g_hyperpsramDev;
 extern const struct HAL_I2C_DEV g_i2c0Dev;
 extern const struct HAL_I2C_DEV g_i2c1Dev;
 extern const struct HAL_I2C_DEV g_i2c2Dev;
+#endif
+
+#ifdef HAL_PCD_MODULE_ENABLED
+extern const struct HAL_USB_DEV g_usbdDev;
 #endif
 
 #ifdef HAL_PDM_MODULE_ENABLED
@@ -69,10 +77,6 @@ extern struct HAL_FSPI_HOST g_fspi1Dev;
 
 #ifdef HAL_PVTM_MODULE_ENABLED
 extern const struct HAL_PVTM_DEV g_pvtmDev;
-#endif
-
-#if defined(HAL_PCD_MODULE_ENABLED) || defined(HAL_HCD_MODULE_ENABLED)
-extern const struct HAL_USB_DEV g_usbdDev;
 #endif
 
 #ifdef HAL_VAD_MODULE_ENABLED

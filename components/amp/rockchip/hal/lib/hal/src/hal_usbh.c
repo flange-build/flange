@@ -166,10 +166,10 @@ static void *USBH_MemAlign(void *ptr, uint32_t align)
     void *alignPtr;
 
     /* the allocated memory block is aligned */
-    if (((uint32_t)ptr & (align - 1)) == 0) {
-        alignPtr = (void *)((uint32_t)ptr + align);
+    if (((uintptr_t)ptr & (align - 1)) == 0) {
+        alignPtr = (void *)((uintptr_t)ptr + align);
     } else {
-        alignPtr = (void *)(((uint32_t)ptr + (align - 1)) & ~(align - 1));
+        alignPtr = (void *)(((uintptr_t)ptr + (align - 1)) & ~(align - 1));
     }
 
     return alignPtr;
@@ -180,7 +180,9 @@ static HAL_Status USBH_MemInit(uint8_t *memStart)
     int i;
     uint8_t *base;
 
-    if (!memStart) {
+    if (!memStart || (uintptr_t)memStart > UINT32_MAX) {
+        HAL_DBG_ERR("%s invalid memStart 0x%" PRIxPTR "\n", __func__, (uintptr_t)memStart);
+
         return HAL_INVAL;
     }
 
@@ -194,11 +196,11 @@ static HAL_Status USBH_MemInit(uint8_t *memStart)
 
     for (i = 0; i < MEM_POOL_UNIT_NUM; i++) {
         g_usbMem.poolUsed[i] = 0;
-        g_usbMem.pools[i] = (uint8_t *)((uint32_t)&memStart[i * MEM_POOL_UNIT_SIZE]);
+        g_usbMem.pools[i] = (uint8_t *)((uintptr_t)&memStart[i * MEM_POOL_UNIT_SIZE]);
     }
 
     /* Assign OHCI Hcca address */
-    base = (uint8_t *)((uint32_t)&memStart[MEM_POOL_UNIT_NUM * MEM_POOL_UNIT_SIZE]);
+    base = (uint8_t *)((uintptr_t)&memStart[MEM_POOL_UNIT_NUM * MEM_POOL_UNIT_SIZE]);
     g_usbMem.hccaAddr = USBH_MemAlign(base, 256);
 
     /* Assign EHCI pfList address */
@@ -545,6 +547,12 @@ HAL_Status HAL_USBH_CoreInit(struct USB_HCD_HANDLE *hcdHdl, void * *coherentMem)
         return HAL_INVAL;
     }
 
+#if defined(SOC_RK3568)
+    /* Initialize the USB PHY */
+    WRITE_REG(*(uint32_t *)(USBPHY_U2_GRF_BASE), USB_PHY_RESUME_VAL);
+    WRITE_REG(*(uint32_t *)(USBPHY_U2_GRF_BASE + 0x0004U), USB_PHY_RESUME_VAL);
+#endif
+
     hcdHdl->coherentMem = *coherentMem;
     ret = USBH_MemInit(hcdHdl->coherentMem);
     if (ret) {
@@ -565,7 +573,7 @@ HAL_Status HAL_USBH_CoreInit(struct USB_HCD_HANDLE *hcdHdl, void * *coherentMem)
  * @brief  Pool Memory alloc
  * @return pool memory pointer
  */
-void *HAL_USBH_AllocPool()
+void *HAL_USBH_AllocPool(void)
 {
     int i;
     void *pool;
@@ -576,7 +584,7 @@ void *HAL_USBH_AllocPool()
             pool = (void *)g_usbMem.pools[i];
             memset(pool, 0, MEM_POOL_UNIT_SIZE);
 
-            HAL_DBG("%s: 0x%08lx\n", __func__, (uint32_t)pool);
+            HAL_DBG("%s: 0x%" PRIxPTR "\n", __func__, (uintptr_t)pool);
 
             return pool;
         }
@@ -596,16 +604,16 @@ HAL_Status HAL_USBH_FreePool(void *pool)
     int i;
 
     for (i = 0; i < MEM_POOL_UNIT_NUM; i++) {
-        if ((uint32_t)g_usbMem.pools[i] == (uint32_t)pool) {
+        if ((uintptr_t)g_usbMem.pools[i] == (uintptr_t)pool) {
             g_usbMem.poolUsed[i] = 0; /* unmark */
 
-            HAL_DBG("%s: 0x%08lx\n", __func__, (uint32_t)pool);
+            HAL_DBG("%s: 0x%" PRIxPTR "\n", __func__, (uintptr_t)pool);
 
             return HAL_OK;
         }
     }
 
-    HAL_DBG_ERR("%s pool cell 0x%08lx not found!\n", __func__, (uint32_t)pool);
+    HAL_DBG_ERR("%s pool cell 0x%08" PRIxPTR " not found!\n", __func__, (uintptr_t)pool);
 
     return HAL_INVAL;
 }
@@ -614,7 +622,7 @@ HAL_Status HAL_USBH_FreePool(void *pool)
  * @brief  Assign EHCI PF List Memory address
  * @return pf list memory address
  */
-uint32_t *HAL_USBH_AssignEhciPfList()
+uint32_t *HAL_USBH_AssignEhciPfList(void)
 {
     return (uint32_t *)g_usbMem.pfListAddr;
 }
@@ -623,7 +631,7 @@ uint32_t *HAL_USBH_AssignEhciPfList()
  * @brief  Assign OHCI HCCA Memory address
  * @return HCCA memory address
  */
-uint8_t *HAL_USBH_AssignOhciHcca()
+uint8_t *HAL_USBH_AssignOhciHcca(void)
 {
     return (uint8_t *)g_usbMem.hccaAddr;
 }

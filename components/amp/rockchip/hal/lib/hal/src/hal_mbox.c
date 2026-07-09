@@ -71,16 +71,54 @@ static struct MBOX_DEV *MBOX_FindEntry(const struct MBOX_REG *pReg)
     return NULL;
 }
 
-static uint32_t MBOX_A2BIntStGet(struct MBOX_REG *pReg)
+#if (MBOX_REVISION >= 0x200U)
+static void MBOX_ChanEnable(struct MBOX_REG *pReg, eMBOX_CH chan, uint8_t isA2B)
 {
-    return pReg->A2B_STATUS & 0x0f;
+    if (isA2B) {
+        pReg->B2A_STATUS = 1UL;
+        pReg->B2A_INTEN = (1UL << 16 | 1UL);
+    } else {
+        pReg->A2B_STATUS = 1UL;
+        pReg->A2B_INTEN = (1UL << 16 | 1UL);
+    }
 }
 
-static uint32_t MBOX_B2AIntStGet(struct MBOX_REG *pReg)
+static void MBOX_ChanDisable(struct MBOX_REG *pReg, eMBOX_CH chan,
+                             uint8_t isA2B)
 {
-    return pReg->B2A_STATUS & 0x0f;
+    if (isA2B) {
+        pReg->B2A_INTEN = 1UL << 16;
+        pReg->B2A_STATUS = 1UL;
+    } else {
+        pReg->A2B_INTEN = 1UL << 16;
+        pReg->A2B_STATUS = 1UL;
+    }
 }
 
+static void MBOX_ChanSendMsg(struct MBOX_REG *pReg, eMBOX_CH chan,
+                             uint8_t isA2B, const struct MBOX_CMD_DAT *msg)
+{
+    if (isA2B) {
+        pReg->A2B_CMD = msg->CMD;
+        pReg->A2B_DATA = msg->DATA;
+    } else {
+        pReg->B2A_CMD = msg->CMD;
+        pReg->B2A_DATA = msg->DATA;
+    }
+}
+
+static void MBOX_ChanRecvMsg(struct MBOX_CMD_DAT *msg, struct MBOX_REG *pReg,
+                             eMBOX_CH chan, uint8_t isA2B)
+{
+    if (isA2B) {
+        msg->CMD = pReg->B2A_CMD;
+        msg->DATA = pReg->B2A_DATA;
+    } else {
+        msg->CMD = pReg->A2B_CMD;
+        msg->DATA = pReg->A2B_DATA;
+    }
+}
+#else
 static void MBOX_ChanEnable(struct MBOX_REG *pReg, eMBOX_CH chan, uint8_t isA2B)
 {
     if (isA2B) {
@@ -100,26 +138,6 @@ static void MBOX_ChanDisable(struct MBOX_REG *pReg, eMBOX_CH chan,
         pReg->B2A_STATUS = 1UL << chan;
     } else {
         pReg->A2B_INTEN &= ~(1UL << chan);
-        pReg->A2B_STATUS = 1UL << chan;
-    }
-}
-
-static uint32_t MBOX_ChanIntStGet(struct MBOX_REG *pReg, eMBOX_CH chan,
-                                  uint8_t isA2B)
-{
-    if (isA2B) {
-        return pReg->B2A_STATUS & (1UL << chan);
-    }
-
-    return pReg->A2B_STATUS & (1UL << chan);
-}
-
-static void MBOX_ChanIntStClear(struct MBOX_REG *pReg, eMBOX_CH chan,
-                                uint8_t isA2B)
-{
-    if (isA2B) {
-        pReg->B2A_STATUS = 1UL << chan;
-    } else {
         pReg->A2B_STATUS = 1UL << chan;
     }
 }
@@ -145,6 +163,27 @@ static void MBOX_ChanRecvMsg(struct MBOX_CMD_DAT *msg, struct MBOX_REG *pReg,
     } else {
         msg->CMD = pReg->A2B[chan].CMD;
         msg->DATA = pReg->A2B[chan].DATA;
+    }
+}
+#endif
+
+static uint32_t MBOX_ChanIntStGet(struct MBOX_REG *pReg, eMBOX_CH chan,
+                                  uint8_t isA2B)
+{
+    if (isA2B) {
+        return pReg->B2A_STATUS & (1UL << chan);
+    }
+
+    return pReg->A2B_STATUS & (1UL << chan);
+}
+
+static void MBOX_ChanIntStClear(struct MBOX_REG *pReg, eMBOX_CH chan,
+                                uint8_t isA2B)
+{
+    if (isA2B) {
+        pReg->B2A_STATUS = 1UL << chan;
+    } else {
+        pReg->A2B_STATUS = 1UL << chan;
     }
 }
 
@@ -226,14 +265,9 @@ HAL_Status HAL_MBOX_SendMsg2(struct MBOX_REG *pReg, eMBOX_CH chan,
 
     HAL_ASSERT(IS_MBOX_INSTANCE(pReg) && IS_VALID_CHAN(chan) && msg);
 
-    if (isA2B) {
-        status = MBOX_A2BIntStGet(pReg);
-    } else {
-        status = MBOX_B2AIntStGet(pReg);
-    }
-
-    /* Previous message has not been consumed. */
-    if (status & (1UL << chan)) {
+    status = MBOX_ChanIntStGet(pReg, chan, !isA2B); /* Check RX side status */
+    if (status) {
+        /* Previous message has not been consumed. */
         return HAL_BUSY;
     }
 

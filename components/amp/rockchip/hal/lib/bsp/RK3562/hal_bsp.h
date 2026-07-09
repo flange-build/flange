@@ -18,24 +18,34 @@ extern struct HAL_PL330_DEV g_pl330Dev;
 
 #ifdef HAL_I2C_MODULE_ENABLED
 extern const struct HAL_I2C_DEV g_i2c0Dev;
-#if defined(RKMCU_RK3562_BUS) || defined(HAL_AP_CORE)
+#if defined(HAL_BUS_MCU_CORE) || defined(HAL_AP_CORE)
 extern const struct HAL_I2C_DEV g_i2c1Dev;
 extern const struct HAL_I2C_DEV g_i2c2Dev;
 extern const struct HAL_I2C_DEV g_i2c3Dev;
 extern const struct HAL_I2C_DEV g_i2c4Dev;
 extern const struct HAL_I2C_DEV g_i2c5Dev;
-#endif /* RKMCU_RK3562_BUS || HAL_AP_CORE */
+#endif /* HAL_BUS_MCU_CORE || HAL_AP_CORE */
+#endif
+
+#ifdef HAL_SAI_MODULE_ENABLED
+extern struct HAL_SAI_DEV g_sai0Dev;
+extern struct HAL_SAI_DEV g_sai1Dev;
+extern struct HAL_SAI_DEV g_sai2Dev;
+#endif
+
+#ifdef HAL_SPDIFTX_MODULE_ENABLED
+extern struct HAL_SPDIFTX_DEV g_spdiftx0Dev;
 #endif
 
 #ifdef HAL_SPI_MODULE_ENABLED
 extern const struct HAL_SPI_DEV g_spi0Dev;
-#if defined(RKMCU_RK3562_BUS) || defined(HAL_AP_CORE)
+#if defined(HAL_BUS_MCU_CORE) || defined(HAL_AP_CORE)
 extern const struct HAL_SPI_DEV g_spi1Dev;
 extern const struct HAL_SPI_DEV g_spi2Dev;
-#endif /* RKMCU_RK3562_BUS || HAL_AP_CORE */
+#endif /* HAL_BUS_MCU_CORE || HAL_AP_CORE */
 #endif
 
-#if defined(RKMCU_RK3562_BUS) || defined(HAL_AP_CORE)
+#if defined(HAL_BUS_MCU_CORE) || defined(HAL_AP_CORE)
 
 #ifdef HAL_UART_MODULE_ENABLED
 extern const struct HAL_UART_DEV g_uart0Dev;
@@ -53,21 +63,29 @@ extern const struct HAL_UART_DEV g_uart9Dev;
 extern struct HAL_FSPI_HOST g_fspi0Dev;
 #endif
 
-#endif /* RKMCU_RK3562_BUS || HAL_AP_CORE */
+#endif /* HAL_BUS_MCU_CORE || HAL_AP_CORE */
 
-#ifdef RKMCU_RK3562_PMU
+#ifdef HAL_PMU_MCU_CORE
 
 #ifdef HAL_UART_MODULE_ENABLED
 extern const struct HAL_UART_DEV g_uart0Dev;
 #endif
 
-#endif /* RKMCU_RK3562_PMU */
+#endif /* HAL_PMU_MCU_CORE */
 
 #ifdef HAL_PWM_MODULE_ENABLED
 extern const struct HAL_PWM_DEV g_pwm0Dev;
 extern const struct HAL_PWM_DEV g_pwm1Dev;
 extern const struct HAL_PWM_DEV g_pwm2Dev;
 extern const struct HAL_PWM_DEV g_pwm3Dev;
+#endif
+
+#ifdef HAL_GMAC_MODULE_ENABLED
+extern const struct HAL_GMAC_DEV g_gmac0Dev;
+#endif
+
+#ifdef HAL_PCIE_MODULE_ENABLED
+extern struct HAL_PCIE_DEV g_pcieDev;
 #endif
 
 /***************************** Function Declare ******************************/

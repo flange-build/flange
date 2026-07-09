@@ -50,7 +50,7 @@ static void OHCI_MoveEdToRemovList(struct OHCI_HCD *ohci, struct OHCI_ED *ed)
     struct OHCI_REG *pReg = HCD_HANDLE_TO_REG(ohci);
     struct OHCI_ED *p;
 
-    HAL_DBG("%s: 0x%lx (0x%lx)\n", __func__, (uint32_t)ed, ed->info);
+    HAL_DBG("%s: 0x%" PRIxPTR " (0x%" PRIx32 ")\n", __func__, (uintptr_t)ed, ed->info);
     DISABLE_OHCI_IRQ();
 
     /* Check if this ED found in edRemoveList */
@@ -89,19 +89,19 @@ static void OHCI_InitHccaIntrTable(struct OHCI_HCD *ohci)
 
         for (idx = interval - 1; idx < 32; idx += interval) {
             if (ohci->hcca->intrTable[idx] == 0) { /* is empty list, insert directly */
-                ohci->hcca->intrTable[idx] = (uint32_t)ohci->iED[i];
+                ohci->hcca->intrTable[idx] = (uintptr_t)ohci->iED[i];
             } else {
-                ed = (struct OHCI_ED *)ohci->hcca->intrTable[idx];
+                ed = (struct OHCI_ED *)(uintptr_t)ohci->hcca->intrTable[idx];
 
                 while (1) {
                     if (ed == ohci->iED[i]) {
                         break; /* already chained by previous visit */
                     }
                     if (ed->nextED == 0) { /* reach end of list? */
-                        ed->nextED = (uint32_t)ohci->iED[i];
+                        ed->nextED = (uintptr_t)ohci->iED[i];
                         break;
                     }
-                    ed = (struct OHCI_ED *)ed->nextED;
+                    ed = (struct OHCI_ED *)(uintptr_t)ed->nextED;
                 }
             }
         }
@@ -190,7 +190,7 @@ static HAL_Status OHCI_Init(void *pHCD)
     pReg->ED_CONTROLHEAD = 0; /* control ED list head */
     pReg->ED_BULKHEAD = 0; /* bulk ED list head */
 
-    pReg->HCCA = (uint32_t)ohci->hcca; /* HCCA area */
+    pReg->HCCA = (uintptr_t)ohci->hcca; /* HCCA area */
 
     /* periodic start 90% of frame interval */
     fmInterval = 0x2edf; /* 11,999 */
@@ -340,10 +340,10 @@ static void OHCI_WriteTd(struct OHCI_TD *td, uint32_t info,
                          uint8_t *buff, uint32_t dataLen)
 {
     td->info = info;
-    td->cbp = (uint32_t)((!buff || !dataLen) ? 0 : buff);
-    td->be = (uint32_t)((!buff || !dataLen) ? 0 : (uint32_t)buff + dataLen - 1);
+    td->cbp = (uintptr_t)((!buff || !dataLen) ? 0 : buff);
+    td->be = (uintptr_t)((!buff || !dataLen) ? 0 : (uintptr_t)buff + dataLen - 1);
     td->bufStart = td->cbp;
-    // HAL_DBG("TD [0x%lx]: 0x%lx, 0x%lx, 0x%lx\n", (uint32_t)td, td->info, td->cbp, td->be);
+    // HAL_DBG("TD [0x%" PRIx32 "]: 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 "\n", (uint32_t)td, td->info, td->cbp, td->be);
 }
 
 static HAL_Status OHCI_CtrlXfer(struct UTR *utr)
@@ -352,43 +352,33 @@ static HAL_Status OHCI_CtrlXfer(struct UTR *utr)
     struct OHCI_REG *pReg = HCD_HANDLE_TO_REG(ohci);
     struct USB_DEV *udev;
     struct OHCI_ED *ed;
-    struct OHCI_TD *tdSetup, *tdData, *tdStatus;
+    struct OHCI_TD *tdSetup, *tdData, *tdStatus, *tdCurrent, *tdHead;
     uint32_t info;
+    uint32_t rmSize, sdSize, maxPacketLen;
+    uint32_t toogle;
+
+#ifdef USB_DEBUG
+    if ((uintptr_t)utr->buff > UINT32_MAX) {
+        HAL_DBG_ERR("OHCI ctrl buf is not a 32-bit address!\n");
+
+        return HAL_INVAL;
+    }
+#endif
 
     udev = utr->udev;
+    maxPacketLen = utr->udev->ep0.wMaxPacketSize;
 
     /* Allocate ED and TDs */
     tdSetup = (struct OHCI_TD *)HAL_USBH_AllocPool();
     OHCI_TD_INIT(tdSetup, utr);
-
-    if (utr->dataLen > 0) {
-        tdData = (struct OHCI_TD *)HAL_USBH_AllocPool();
-        OHCI_TD_INIT(tdData, utr);
-    } else {
-        tdData = NULL;
-    }
-
-    tdStatus = (struct OHCI_TD *)HAL_USBH_AllocPool();
-    if (tdStatus == NULL) {
-        HAL_USBH_FreePool(tdSetup);
-        if (utr->dataLen > 0) {
-            HAL_USBH_FreePool(tdData);
-        }
-
-        return HAL_ERROR;
-    }
-
-    OHCI_TD_INIT(tdStatus, utr);
+    tdCurrent = tdSetup;
+    tdHead = tdSetup;
 
     /* Check if there's any transfer pending on this endpoint... */
     if (udev->ep0.hwPipe == NULL) {
         ed = (struct OHCI_ED *)HAL_USBH_AllocPool();
         if (ed == NULL) {
             HAL_USBH_FreePool(tdSetup);
-            HAL_USBH_FreePool(tdStatus);
-            if (utr->dataLen > 0) {
-                HAL_USBH_FreePool(tdData);
-            }
 
             return HAL_ERROR;
         }
@@ -401,35 +391,65 @@ static HAL_Status OHCI_CtrlXfer(struct UTR *utr)
     OHCI_WriteTd(tdSetup, info, (uint8_t *)&utr->setup, 8);
     tdSetup->ed = ed;
 
+    rmSize = utr->dataLen;
+    sdSize = rmSize;
+    toogle = TD_T_DATA1;
     /* prepare DATA stage TD */
-    if (utr->dataLen > 0) {
+    while (rmSize > 0) {
+        sdSize = rmSize;
+        if (rmSize > maxPacketLen) {
+            sdSize = maxPacketLen;
+        }
+        tdData = (struct OHCI_TD *)HAL_USBH_AllocPool();
+        if (tdData == NULL) {
+            while (tdHead != NULL) {
+                tdCurrent = tdHead;
+                tdHead = tdHead->next;
+                HAL_USBH_FreePool(tdCurrent);
+            }
+
+            return HAL_ERROR;
+        }
+        OHCI_TD_INIT(tdData, utr);
         if (!(utr->setup.bmRequestType & 0x80)) { /* REQ_TYPE_OUT */
-            info = (TD_CC | TD_R | TD_DP_OUT | TD_T_DATA1 |
+            info = (TD_CC | TD_R | TD_DP_OUT | toogle |
                     TD_TYPE_CTRL | TD_CTRL_DATA);
         } else {
-            info = (TD_CC | TD_R | TD_DP_IN | TD_T_DATA1 |
+            info = (TD_CC | TD_R | TD_DP_IN | toogle |
                     TD_TYPE_CTRL | TD_CTRL_DATA);
         }
-
-        OHCI_WriteTd(tdData, info, utr->buff, utr->dataLen);
+        OHCI_WriteTd(tdData, info, utr->buff, sdSize);
         tdData->ed = ed;
-        tdSetup->nextTD = (uint32_t)tdData;
-        tdSetup->next = tdData;
-        tdData->nextTD = (uint32_t)tdStatus;
-        tdData->next = tdStatus;
-    } else {
-        tdSetup->nextTD = (uint32_t)tdStatus;
-        tdSetup->next = tdStatus;
+        tdCurrent->nextTD = (uintptr_t)tdData;
+        tdCurrent->next = tdData;
+        tdCurrent = tdData;
+        rmSize -= sdSize;
+        toogle ^= (0x1 << 24);
+        utr->tdCnt++;
     }
 
     /* prepare STATUS stage TD */
+    tdStatus = (struct OHCI_TD *)HAL_USBH_AllocPool();
+    if (tdStatus == NULL) {
+        while (tdHead != NULL) {
+            tdCurrent = tdHead;
+            tdHead = tdHead->next;
+            HAL_USBH_FreePool(tdCurrent);
+        }
+
+        return HAL_ERROR;
+    }
+    OHCI_TD_INIT(tdStatus, utr)
+
     ed->info = OHCI_MakeEdInfo(udev, NULL);
     if (!(utr->setup.bmRequestType & 0x80)) { /* REQ_TYPE_OUT */
         info = (TD_CC | TD_DP_IN | TD_T_DATA1 | TD_TYPE_CTRL);
     } else {
         info = (TD_CC | TD_DP_OUT | TD_T_DATA1 | TD_TYPE_CTRL);
     }
-
+    tdCurrent->nextTD = (uintptr_t)tdStatus;
+    tdCurrent->next = tdStatus;
+    tdCurrent = tdStatus;
     OHCI_WriteTd(tdStatus, info, NULL, 0);
     tdStatus->ed = ed;
     tdStatus->nextTD = 0;
@@ -437,18 +457,18 @@ static HAL_Status OHCI_CtrlXfer(struct UTR *utr)
 
     /* prepare ED */
     ed->tailP = 0;
-    ed->headP = (uint32_t)tdSetup;
+    ed->headP = (uintptr_t)tdSetup;
     ed->info = OHCI_MakeEdInfo(udev, NULL);
     ed->nextED = 0;
 
-    //HAL_DBG("TD SETUP [0x%lx]: 0x%lx, 0x%lx, 0x%lx, 0x%lx\n", (uint32_t)tdSetup, tdSetup->Info, tdSetup->CBP, tdSetup->BE, tdSetup->NextTD);
+    //HAL_DBG("TD SETUP [0x%" PRIx32 "]: 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 "\n", (uint32_t)tdSetup, tdSetup->Info, tdSetup->CBP, tdSetup->BE, tdSetup->NextTD);
     //if (tdData)
-    //    HAL_DBG("TD DATA  [0x%lx]: 0x%lx, 0x%lx, 0x%lx, 0x%lx\n", (uint32_t)tdData, tdData->Info, tdData->CBP, tdData->BE, tdData->NextTD);
-    //HAL_DBG("TD STATUS [0x%lx]: 0x%lx, 0x%lx, 0x%lx, 0x%lx\n", (uint32_t)tdStatus, tdStatus->Info, tdStatus->CBP, tdStatus->BE, tdStatus->NextTD);
-    HAL_DBG("Xfer ED 0x%lx: 0x%lx 0x%lx 0x%lx 0x%lx\n", (uint32_t)ed, ed->info, ed->tailP, ed->headP, ed->nextED);
+    //    HAL_DBG("TD DATA  [0x%" PRIx32 "]: 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 "\n", (uint32_t)tdData, tdData->Info, tdData->CBP, tdData->BE, tdData->NextTD);
+    //HAL_DBG("TD STATUS [0x%" PRIx32 "]: 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 "\n", (uint32_t)tdStatus, tdStatus->Info, tdStatus->CBP, tdStatus->BE, tdStatus->NextTD);
+    HAL_DBG("Xfer ED 0x%" PRIxPTR ": 0x%" PRIx32 " 0x%" PRIx32 " 0x%" PRIx32 " 0x%" PRIx32 "\n", (uintptr_t)ed, ed->info, ed->tailP, ed->headP, ed->nextED);
 
     if (utr->dataLen > 0) {
-        utr->tdCnt = 3;
+        utr->tdCnt += 2;
     } else {
         utr->tdCnt = 2;
     }
@@ -458,7 +478,7 @@ static HAL_Status OHCI_CtrlXfer(struct UTR *utr)
 
     /* Start transfer */
     DISABLE_OHCI_IRQ();
-    pReg->ED_CONTROLHEAD = (uint32_t)ed; /* Link ED to OHCI */
+    pReg->ED_CONTROLHEAD = (uintptr_t)ed; /* Link ED to OHCI */
     pReg->CONTROL |= OHCI_CONTROL_CLE_MASK; /* enable control list */
     ENABLE_OHCI_IRQ();
     pReg->CMDSTATUS = OHCI_CMDSTATUS_CLF_MASK; /* start Control list */
@@ -479,10 +499,18 @@ static HAL_Status OHCI_BulkXfer(struct UTR *utr)
     int8_t bIsNewED = 0;
     uint8_t *buff;
 
+#ifdef USB_DEBUG
+    if ((uintptr_t)utr->buff > UINT32_MAX) {
+        HAL_DBG_ERR("OHCI bulk buf is not a 32-bit address!\n");
+
+        return HAL_INVAL;
+    }
+#endif
+
     info = OHCI_MakeEdInfo(udev, ep);
 
     /* Check if there's any transfer pending on this endpoint... */
-    ed = (struct OHCI_ED *)pReg->ED_BULKHEAD; /* get the head of bulk endpoint list */
+    ed = (struct OHCI_ED *)(uintptr_t)pReg->ED_BULKHEAD; /* get the head of bulk endpoint list */
     while (ed != NULL) {
         if (ed->info == info) { /* have transfer of this EP not completed? */
             if ((ed->headP & 0xFFFFFFF0) != (ed->tailP & 0xFFFFFFF0)) {
@@ -491,7 +519,7 @@ static HAL_Status OHCI_BulkXfer(struct UTR *utr)
                 break; /* ED already there... */
             }
         }
-        ed = (struct OHCI_ED *)ed->nextED;
+        ed = (struct OHCI_ED *)(uintptr_t)ed->nextED;
     }
 
     if (ed == NULL) {
@@ -502,7 +530,7 @@ static HAL_Status OHCI_BulkXfer(struct UTR *utr)
         }
         ed->info = info;
         ed->headP = 0;
-        HAL_DBG("Link BULK ED 0x%lx: 0x%lx 0x%lx 0x%lx 0x%lx\n", (uint32_t)ed, ed->info, ed->tailP, ed->headP, ed->nextED);
+        HAL_DBG("Link BULK ED 0x%" PRIxPTR ": 0x%" PRIx32 " 0x%" PRIx32 " 0x%" PRIx32 " 0x%" PRIx32 "\n", (uintptr_t)ed, ed->info, ed->tailP, ed->headP, ed->nextED);
     }
 
     ep->hwPipe = (void *)ed;
@@ -545,21 +573,21 @@ static HAL_Status OHCI_BulkXfer(struct UTR *utr)
         } else {
             tdPrev = tdList;
             while (tdPrev->nextTD != 0) {
-                tdPrev = (struct OHCI_TD *)tdPrev->nextTD;
+                tdPrev = (struct OHCI_TD *)(uintptr_t)tdPrev->nextTD;
             }
-            tdPrev->nextTD = (uint32_t)td;
+            tdPrev->nextTD = (uintptr_t)td;
         }
     } while (dataLen > 0);
 
     /* Start transfer */
     utr->status = 0;
     DISABLE_OHCI_IRQ();
-    ed->headP = (ed->headP & 0x2) | (uint32_t)tdList; /* keep toggleCarry bit */
+    ed->headP = (ed->headP & 0x2) | (uintptr_t)tdList; /* keep toggleCarry bit */
     if (bIsNewED) {
-        ed->headP = (uint32_t)tdList;
+        ed->headP = (uintptr_t)tdList;
         /* Link ED to OHCI Bulk List */
         ed->nextED = pReg->ED_BULKHEAD;
-        pReg->ED_BULKHEAD = (uint32_t)ed;
+        pReg->ED_BULKHEAD = (uintptr_t)ed;
     }
     ENABLE_OHCI_IRQ();
     pReg->CONTROL |= OHCI_CONTROL_BLE_MASK; /* enable bulk list */
@@ -570,7 +598,7 @@ static HAL_Status OHCI_BulkXfer(struct UTR *utr)
 Error:
     while (tdList != NULL) {
         td = tdList;
-        tdList = (struct OHCI_TD *)tdList->nextTD;
+        tdList = (struct OHCI_TD *)(uintptr_t)tdList->nextTD;
         HAL_USBH_FreePool(td);
     }
     HAL_USBH_FreePool((void *)ed);
@@ -588,6 +616,14 @@ static HAL_Status OHCI_IntrXfer(struct UTR *utr)
     struct OHCI_TD *td, *tdNew;
     uint32_t info;
     int8_t bIsNewED = 0;
+
+#ifdef USB_DEBUG
+    if ((uintptr_t)utr->buff > UINT32_MAX) {
+        HAL_DBG_ERR("OHCI intr buf is not a 32-bit address!\n");
+
+        return HAL_INVAL;
+    }
+#endif
 
     if (utr->dataLen > 64) { /* USB 1.1 interrupt transfer maximum packet size is 64 */
         return HAL_INVAL;
@@ -608,7 +644,7 @@ static HAL_Status OHCI_IntrXfer(struct UTR *utr)
         if (ed->info == info) {
             break;
         }
-        ed = (struct OHCI_ED *)ed->nextED;
+        ed = (struct OHCI_ED *)(uintptr_t)ed->nextED;
     }
 
     if (ed == NULL) { /* ED not found, create it */
@@ -629,10 +665,10 @@ static HAL_Status OHCI_IntrXfer(struct UTR *utr)
             return HAL_ERROR;
         }
         td->utr = NULL;
-        ed->headP = (uint32_t)td; /* Let both HeadP and TailP point to dummy TD */
+        ed->headP = (uintptr_t)td; /* Let both HeadP and TailP point to dummy TD */
         ed->tailP = ed->headP;
     } else {
-        td = (struct OHCI_TD *)(ed->tailP & ~0xf); /* TailP always point to the dummy TD */
+        td = (struct OHCI_TD *)(uintptr_t)(ed->tailP & ~0xf); /* TailP always point to the dummy TD */
     }
     ep->hwPipe = (void *)ed;
 
@@ -649,7 +685,7 @@ static HAL_Status OHCI_IntrXfer(struct UTR *utr)
     /* fill this TD */
     OHCI_WriteTd(td, info, utr->buff, utr->dataLen);
     td->ed = ed;
-    td->nextTD = (uint32_t)tdNew;
+    td->nextTD = (uintptr_t)tdNew;
     td->utr = utr;
     utr->tdCnt = 1; /* increase TD count, for recalim counter */
     utr->status = 0;
@@ -657,11 +693,11 @@ static HAL_Status OHCI_IntrXfer(struct UTR *utr)
     /* Hook ED and TD list to HCCA interrupt table */
     DISABLE_OHCI_IRQ();
 
-    ed->tailP = (uint32_t)tdNew;
+    ed->tailP = (uintptr_t)tdNew;
     if (bIsNewED) {
         /* Add to list of the same interval */
         ed->nextED = ied->nextED;
-        ied->nextED = (uint32_t)ed;
+        ied->nextED = (uintptr_t)ed;
     }
 
     ENABLE_OHCI_IRQ();
@@ -683,7 +719,7 @@ static HAL_Status OHCI_IsoXfer(struct UTR *utr)
     struct OHCI_TD *td, *tdList, *lastTd;
     int i;
     uint32_t info;
-    uint32_t bufAddr;
+    uintptr_t bufAddr;
     int8_t bIsNewED = 0;
 
     ied = OHCI_GetIntTreeHeadNode(ohci, ep->bInterval);  /* get head node of this interval */
@@ -695,7 +731,7 @@ static HAL_Status OHCI_IsoXfer(struct UTR *utr)
         if (ed->info == info) {
             break;
         }
-        ed = (struct OHCI_ED *)ed->nextED;
+        ed = (struct OHCI_ED *)(uintptr_t)ed->nextED;
     }
 
     if (ed == NULL) { /* ED not found, create it */
@@ -731,12 +767,18 @@ static HAL_Status OHCI_IsoXfer(struct UTR *utr)
         }
         /* fill this TD*/
         OHCI_TD_INIT(td, utr);
-        bufAddr = (uint32_t)(utr->isoBuff[i]);
+        bufAddr = (uintptr_t)(utr->isoBuff[i]);
+#ifdef USB_DEBUG
+        if (bufAddr > UINT32_MAX) {
+            HAL_DBG_ERR("OHCI iso buf is not a 32-bit address!\n");
+            goto Error;
+        }
+#endif
         td->info = (TD_CC | TD_TYPE_ISO) | ed->nextSF;
         ed->nextSF += OHCI_GetInterval(ed->bInterval);
-        td->cbp = bufAddr & ~0xFFF;
-        td->be = bufAddr + utr->isoXlen[i] - 1;
-        td->psw[0] = 0xE000 | (bufAddr & 0xFFF);
+        td->cbp = (uintptr_t)bufAddr & ~0xFFF;
+        td->be = (uintptr_t)bufAddr + utr->isoXlen[i] - 1;
+        td->psw[0] = 0xE000 | ((uintptr_t)bufAddr & 0xFFF);
 
         td->ed = ed;
         utr->tdCnt++; /* increase TD count, for reclaim counter */
@@ -745,7 +787,7 @@ static HAL_Status OHCI_IsoXfer(struct UTR *utr)
         if (tdList == NULL) {
             tdList = td;
         } else {
-            lastTd->nextTD = (uint32_t)td;
+            lastTd->nextTD = (uintptr_t)td;
         }
 
         lastTd = td;
@@ -756,24 +798,24 @@ static HAL_Status OHCI_IsoXfer(struct UTR *utr)
     DISABLE_OHCI_IRQ();
 
     if ((ed->headP & ~0x3) == 0) {
-        ed->headP = (ed->headP & 0x2) | (uint32_t)tdList; /* keep toggleCarry bit */
+        ed->headP = (ed->headP & 0x2) | (uintptr_t)tdList; /* keep toggleCarry bit */
     } else {
         /* find the tail of TDs under this ED */
-        td = (struct OHCI_TD *)(ed->headP & ~0x3);
+        td = (struct OHCI_TD *)(uintptr_t)(ed->headP & ~0x3);
         while (td->nextTD != 0) {
-            td = (struct OHCI_TD *)td->nextTD;
+            td = (struct OHCI_TD *)(uintptr_t)td->nextTD;
         }
-        td->nextTD = (uint32_t)tdList;
+        td->nextTD = (uintptr_t)tdList;
     }
 
     if (bIsNewED) {
         /* Add to list of the same interval */
         ed->nextED = ied->nextED;
-        ied->nextED = (uint32_t)ed;
+        ied->nextED = (uintptr_t)ed;
     }
 
     ENABLE_OHCI_IRQ();
-    HAL_DBG("Link ISO ED 0x%lx: 0x%lx 0x%lx 0x%lx 0x%lx\n", (uint32_t)ed, ed->info, ed->tailP, ed->headP, ed->nextED);
+    HAL_DBG("Link ISO ED 0x%" PRIxPTR ": 0x%" PRIx32 " 0x%" PRIx32 " 0x%" PRIx32 " 0x%" PRIx32 "\n", (uintptr_t)ed, ed->info, ed->tailP, ed->headP, ed->nextED);
     /* enable periodic list and isochronous transfer */
     pReg->CONTROL |= OHCI_CONTROL_PLE_MASK | OHCI_CONTROL_IE_MASK;
 
@@ -782,7 +824,7 @@ static HAL_Status OHCI_IsoXfer(struct UTR *utr)
 Error:
     while (tdList != NULL) {
         td = tdList;
-        tdList = (struct OHCI_TD *)tdList->nextTD;
+        tdList = (struct OHCI_TD *)(uintptr_t)tdList->nextTD;
         HAL_USBH_FreePool(td);
     }
     HAL_USBH_FreePool((void *)ed);
@@ -855,7 +897,7 @@ static int OHCI_RtHubPolling(void *pHCD)
         goto Out;
     }
 
-    HAL_DBG("OHCI port 1 status change: 0x%lx\n", pReg->RH_PORTSTATUS[0]);
+    HAL_DBG("OHCI port 1 status change: 0x%" PRIx32 "\n", pReg->RH_PORTSTATUS[0]);
 
     /* connect status change */
     pReg->RH_PORTSTATUS[0] = OHCI_RH_PORTSTATUS_CSC_MASK; /* clear CSC */
@@ -882,7 +924,7 @@ static void OHCI_TdDone(struct OHCI_TD *td)
 
     info = td->info;
 
-    HAL_DBG("OHCI TD Done: 0x%lx, 0x%lx, 0x%lx, 0x%lx, 0x%lx\n", (uint32_t)td, td->info, td->cbp, td->nextTD, td->be);
+    HAL_DBG("OHCI TD Done: 0x%" PRIxPTR ", 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 "\n", (uintptr_t)td, td->info, td->cbp, td->nextTD, td->be);
 
     /* ISO ... drivers see per-TD length/status */
     if ((info & TD_TYPE_MASK) == TD_TYPE_ISO) {
@@ -965,23 +1007,23 @@ static void OHCI_RemoveEd(struct OHCI_HCD *ohci)
     int found;
 
     while (ohci->edRemoveList != NULL) {
-        HAL_DBG("Remove ED: 0x%lx, %d\n", (uint32_t)ohci->edRemoveList, ohci->edRemoveList->bInterval);
+        HAL_DBG("Remove ED: 0x%" PRIxPTR ", %d\n", (uintptr_t)ohci->edRemoveList, ohci->edRemoveList->bInterval);
         edPre = ohci->edRemoveList;
         found = 0;
 
         /* Remove endpoint from Control List if found */
         if ((edPre->info & ED_EP_ADDR_MASK) == 0) {
-            if (pReg->ED_CONTROLHEAD == (uint32_t)edPre) {
-                pReg->ED_CONTROLHEAD = (uint32_t)edPre->nextED;
+            if (pReg->ED_CONTROLHEAD == (uintptr_t)edPre) {
+                pReg->ED_CONTROLHEAD = edPre->nextED;
                 found = 1;
             } else {
-                ed = (struct OHCI_ED *)pReg->ED_CONTROLHEAD;
+                ed = (struct OHCI_ED *)(uintptr_t)pReg->ED_CONTROLHEAD;
                 while (ed != NULL) {
-                    if (ed->nextED == (uint32_t)edPre) {
+                    if (ed->nextED == (uintptr_t)edPre) {
                         ed->nextED = edPre->nextED;
                         found = 1;
                     }
-                    ed = (struct OHCI_ED *)ed->nextED;
+                    ed = (struct OHCI_ED *)(uintptr_t)ed->nextED;
                 }
             }
         }
@@ -991,39 +1033,39 @@ static void OHCI_RemoveEd(struct OHCI_HCD *ohci)
 
             ed = ied;
             while (ed != NULL) {
-                if (ed->nextED == (uint32_t)edPre) {
+                if (ed->nextED == (uintptr_t)edPre) {
                     ed->nextED = edPre->nextED;
                     found = 1;
                     break;
                 }
-                ed = (struct OHCI_ED *)ed->nextED;
+                ed = (struct OHCI_ED *)(uintptr_t)ed->nextED;
             }
         }
         /* Remove endpoint from Bulk List if found */
         else {
-            if (pReg->ED_BULKHEAD == (uint32_t)edPre) {
+            if (pReg->ED_BULKHEAD == (uintptr_t)edPre) {
                 ed = (struct OHCI_ED *)edPre;
                 pReg->ED_BULKHEAD = edPre->nextED;
                 found = 1;
             } else {
-                ed = (struct OHCI_ED *)pReg->ED_BULKHEAD;
+                ed = (struct OHCI_ED *)(uintptr_t)pReg->ED_BULKHEAD;
                 while (ed != NULL) {
-                    if (ed->nextED == (uint32_t)edPre) {
+                    if (ed->nextED == (uintptr_t)edPre) {
                         ed->nextED = edPre->nextED;
                         found = 1;
                     }
-                    ed = (struct OHCI_ED *)ed->nextED;
+                    ed = (struct OHCI_ED *)(uintptr_t)ed->nextED;
                 }
             }
         }
 
         /* Remove and free all TDs under this endpoint */
         if (found) {
-            td = (struct OHCI_TD *)(edPre->headP & ~0x3);
+            td = (struct OHCI_TD *)(uintptr_t)(edPre->headP & ~0x3);
             if (td != NULL) {
                 while (td != NULL) {
                     utr = td->utr;
-                    tdNext = (struct OHCI_TD *)td->nextTD;
+                    tdNext = (struct OHCI_TD *)(uintptr_t)td->nextTD;
                     HAL_USBH_FreePool(td);
                     td = tdNext;
 
@@ -1071,7 +1113,7 @@ HAL_Status HAL_OHCI_IRQHandler(void *pHCD)
 
     intrSts = pReg->INTRSTATUS;
 
-    HAL_DBG("ohci intrSts = 0x%lx\n", intrSts);
+    HAL_DBG("ohci intrSts = 0x%" PRIx32 "\n", intrSts);
 
     if ((pReg->INTRENABLE & OHCI_INTRENABLE_SF_MASK) &&
         (intrSts & OHCI_INTRSTATUS_SF_MASK)) {
@@ -1086,15 +1128,15 @@ HAL_Status HAL_OHCI_IRQHandler(void *pHCD)
         //HAL_DBG("!%02x\n", pReg->FMNUMBER & 0xff);
         intrSts &= ~OHCI_INTRSTATUS_WDH_MASK;
         /* reverse done list */
-        td = (struct OHCI_TD *)(ohci->hcca->doneHead & TD_ADDR_MASK);
+        td = (struct OHCI_TD *)(uintptr_t)(ohci->hcca->doneHead & TD_ADDR_MASK);
         ohci->hcca->doneHead = 0;
         tdPrev = NULL;
         pReg->INTRSTATUS = OHCI_INTRSTATUS_WDH_MASK;
 
         while (td != NULL) {
-            //HAL_DBG("Done list TD 0x%lx => 0x%lx\n", (uint32_t)td, (uint32_t)td->nextTD);
-            tdNext = (struct OHCI_TD *)(td->nextTD & TD_ADDR_MASK);
-            td->nextTD = (uint32_t)tdPrev;
+            //HAL_DBG("Done list TD 0x%" PRIx32 " => 0x%" PRIx32 "\n", (uint32_t)td, (uint32_t)td->nextTD);
+            tdNext = (struct OHCI_TD *)(uintptr_t)(td->nextTD & TD_ADDR_MASK);
+            td->nextTD = (uintptr_t)tdPrev;
             tdPrev = td;
             td = tdNext;
         }
@@ -1102,8 +1144,8 @@ HAL_Status HAL_OHCI_IRQHandler(void *pHCD)
 
         /* Reclaim TDs */
         while (td != NULL) {
-            HAL_DBG("Reclaim TD 0x%lx, next 0x%lx\n", (uint32_t)td, td->nextTD);
-            tdNext = (struct OHCI_TD *)td->nextTD;
+            HAL_DBG("Reclaim TD 0x%" PRIxPTR ", next 0x%" PRIx32 "\n", (uintptr_t)td, td->nextTD);
+            tdNext = (struct OHCI_TD *)(uintptr_t)td->nextTD;
             OHCI_TdDone(td);
             HAL_USBH_FreePool(td);
             td = tdNext;

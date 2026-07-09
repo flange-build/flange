@@ -6,6 +6,9 @@ PROJECT := RK3308
 SOC := RK3308
 CPU = -mcpu=cortex-a35+crypto -mfloat-abi=hard
 
+# Parameter check...
+# $(error $(AMP_PRIMARY_CORE))
+
 FIRMWARE_CPU_BASE ?= 0x02600000
 DRAM_SIZE ?= 0x00900000
 SHMEM_BASE ?= 0x02f00000
@@ -35,7 +38,7 @@ CFLAGS += -DAMP_LINUX_ENABLE
 endif
 
 # Define the primary CPU
-ifeq ("$(origin AMP_PRIMARY_CORE)", "undefined")
+ifeq ($(AMP_PRIMARY_CORE),)     # undefined "AMP_PRIMARY_CORE"
 AMP_PRIMARY_CPU ?=1
 else
 AMP_PRIMARY_CPU ?=$(AMP_PRIMARY_CORE)

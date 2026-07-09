@@ -70,8 +70,7 @@
  */
 __STATIC_FORCEINLINE void HAL_ARCHTIMER_SetCNTFRQ(uint32_t value)
 {
-    __set_CP(15, 0, value, 14, 0, 0);
-    __ISB();
+    __set_CNTFRQ(value);
 }
 
 /**
@@ -81,11 +80,7 @@ __STATIC_FORCEINLINE void HAL_ARCHTIMER_SetCNTFRQ(uint32_t value)
  */
 __STATIC_FORCEINLINE uint32_t HAL_ARCHTIMER_GetCNTFRQ(void)
 {
-    uint32_t result;
-
-    __get_CP(15, 0, result, 14, 0, 0);
-
-    return result;
+    return __get_CNTFRQ();
 }
 
 /**
@@ -95,7 +90,7 @@ __STATIC_FORCEINLINE uint32_t HAL_ARCHTIMER_GetCNTFRQ(void)
  */
 __STATIC_FORCEINLINE void HAL_ARCHTIMER_SetCNTPTVAL(uint32_t value)
 {
-    __set_CP(15, 0, value, 14, 2, 0);
+    __set_CNTP_TVAL(value);
     __ISB();
 }
 
@@ -106,11 +101,7 @@ __STATIC_FORCEINLINE void HAL_ARCHTIMER_SetCNTPTVAL(uint32_t value)
  */
 __STATIC_FORCEINLINE uint32_t HAL_ARCHTIMER_GetCNTPTVAL(void)
 {
-    uint32_t result;
-
-    __get_CP(15, 0, result, 14, 2, 0);
-
-    return result;
+    return __get_CNTP_TVAL();
 }
 
 /**
@@ -120,11 +111,7 @@ __STATIC_FORCEINLINE uint32_t HAL_ARCHTIMER_GetCNTPTVAL(void)
  */
 __STATIC_FORCEINLINE uint64_t HAL_ARCHTIMER_GetCNTPCT(void)
 {
-    uint64_t result;
-
-    __get_CP64(15, 0, result, 14);
-
-    return result;
+    return __get_CNTPCT();
 }
 
 /**
@@ -134,7 +121,7 @@ __STATIC_FORCEINLINE uint64_t HAL_ARCHTIMER_GetCNTPCT(void)
  */
 __STATIC_FORCEINLINE void HAL_ARCHTIMER_SetCNTPCVAL(uint64_t value)
 {
-    __set_CP64(15, 2, value, 14);
+    __set_CNTP_CVAL(value);
     __ISB();
 }
 
@@ -145,11 +132,7 @@ __STATIC_FORCEINLINE void HAL_ARCHTIMER_SetCNTPCVAL(uint64_t value)
  */
 __STATIC_FORCEINLINE uint64_t HAL_ARCHTIMER_GetCNTPCVAL(void)
 {
-    uint64_t result;
-
-    __get_CP64(15, 2, result, 14);
-
-    return result;
+    return __get_CNTP_CVAL();
 }
 
 /**
@@ -159,7 +142,7 @@ __STATIC_FORCEINLINE uint64_t HAL_ARCHTIMER_GetCNTPCVAL(void)
  */
 __STATIC_FORCEINLINE void HAL_ARCHTIMER_SetCNTPCTL(uint32_t value)
 {
-    __set_CP(15, 0, value, 14, 2, 1);
+    __set_CNTP_CTL(value);
     __ISB();
 }
 
@@ -170,11 +153,7 @@ __STATIC_FORCEINLINE void HAL_ARCHTIMER_SetCNTPCTL(uint32_t value)
  */
 __STATIC_FORCEINLINE uint32_t HAL_ARCHTIMER_GetCNTPCTL(void)
 {
-    uint32_t result;
-
-    __get_CP(15, 0, result, 14, 2, 1);
-
-    return result;
+    return __get_CNTP_CTL();
 }
 
 /** @} */

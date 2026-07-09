@@ -111,7 +111,7 @@ static void perf_test(void)
         }
         time_end = HAL_GetTick();
         time_ms = time_end - time_start;
-        printf("memset bw=%ldKB/s, time_ms=%d\n",
+        printf("memset bw=%" PRId32 "KB/s, time_ms=%d\n",
                1000 * (size * loop / 1024) / time_ms, time_ms);
 
         /* prevent optimization */
@@ -189,13 +189,13 @@ static void wdt_test(void)
 
     HAL_WDT_Init(WDT_TEST_FREQ, pWdt);
     HAL_WDT_SetTimeout(wdt_timeout);
-    printf("wdt_test: timeout set-%ds, get-%ds, TORR-0x%lx\n",
+    printf("wdt_test: timeout set-%ds, get-%ds, TORR-0x%" PRIx32 "\n",
            wdt_timeout, HAL_WDT_GetTimeout(), pWdt->TORR);
     HAL_WDT_Start(INDIRECT_SYSTEM_RESET);
     wdt_left_start = HAL_WDT_GetTimeLeft();
     HAL_DelayMs(1000);
     wdt_left_end = HAL_WDT_GetTimeLeft();
-    printf("wdt_test: 1s(delay) = %ldus(wdt)\n",
+    printf("wdt_test: 1s(delay) = %" PRId32 "us(wdt)\n",
            (wdt_left_start - wdt_left_end) / (WDT_TEST_FREQ / 1000000));
 }
 #endif

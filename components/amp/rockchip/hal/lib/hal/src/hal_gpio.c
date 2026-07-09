@@ -58,7 +58,7 @@
  */
 static void GPIO_SetEOI(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin)
 {
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     if (IS_GPIO_HIGH_PIN(pin)) {
         pin &= 0xFFFF0000;
         pGPIO->PORT_EOI_H = pin | (pin >> 16);
@@ -82,7 +82,7 @@ static uint32_t GPIO_GetIntType(struct GPIO_REG *pGPIO)
 {
     uint32_t type;
 
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     type = (pGPIO->INT_TYPE_L & 0xffff);
     type |= ((pGPIO->INT_TYPE_H & 0xffff) << 16);
     type |= (pGPIO->INT_BOTHEDGE_L & 0xffff);
@@ -161,7 +161,7 @@ HAL_Status HAL_GPIO_SetIntType(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin, e
         return HAL_INVAL;
     }
 
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     if (IS_GPIO_HIGH_PIN(pin)) {
         pin &= 0xFFFF0000;
         pGPIO->INT_TYPE_H = (type) ? (pin | (pin >> 16)) : (pin);
@@ -195,7 +195,7 @@ HAL_Status HAL_GPIO_SetIntType(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin, e
  */
 HAL_Status HAL_GPIO_SetPinDirection(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin, eGPIO_pinDirection direction)
 {
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     if (IS_GPIO_HIGH_PIN(pin)) {
         pin &= 0xFFFF0000;
         pGPIO->SWPORT_DDR_H = (direction == GPIO_OUT) ? (pin | (pin >> 16)) : (pin);
@@ -226,7 +226,7 @@ HAL_Status HAL_GPIO_SetPinsDirection(struct GPIO_REG *pGPIO, uint32_t mPins, eGP
     uint8_t pin;
     HAL_Status rc;
 
-    HAL_ASSERT(IS_GPIO_INSTANCE(pGPIO));
+    HAL_ASSERT(IS_GPIO_OR_GPIO_EXP_INSTANCE(pGPIO));
 
     for (pin = 0; pin < 32; pin++) {
         if (mPins & (1 << pin)) {
@@ -251,7 +251,7 @@ eGPIO_pinDirection HAL_GPIO_GetPinDirection(struct GPIO_REG *pGPIO, ePINCTRL_GPI
     eGPIO_pinDirection direction;
     uint32_t value;
 
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     value = IS_GPIO_HIGH_PIN(pin) ? (pGPIO->SWPORT_DDR_H & (pin >> 16)) : (pGPIO->SWPORT_DDR_L & pin);
 #else
     value = pGPIO->SWPORTA_DDR & pin;
@@ -275,7 +275,7 @@ eGPIO_pinDirection HAL_GPIO_GetPinDirection(struct GPIO_REG *pGPIO, ePINCTRL_GPI
  */
 HAL_Status HAL_GPIO_SetPinLevel(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin, eGPIO_pinLevel level)
 {
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     if (IS_GPIO_HIGH_PIN(pin)) {
         pin &= 0xFFFF0000;
         pGPIO->SWPORT_DR_H = (level == GPIO_HIGH) ? (pin | (pin >> 16)) : (pin);
@@ -306,7 +306,7 @@ HAL_Status HAL_GPIO_SetPinsLevel(struct GPIO_REG *pGPIO, uint32_t mPins, eGPIO_p
     uint8_t pin;
     HAL_Status rc;
 
-    HAL_ASSERT(IS_GPIO_INSTANCE(pGPIO));
+    HAL_ASSERT(IS_GPIO_OR_GPIO_EXP_INSTANCE(pGPIO));
 
     for (pin = 0; pin < 32; pin++) {
         if (mPins & (1 << pin)) {
@@ -340,7 +340,7 @@ eGPIO_pinLevel HAL_GPIO_GetPinData(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pi
     eGPIO_pinLevel level;
     uint32_t value;
 
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     value = IS_GPIO_HIGH_PIN(pin) ? (pGPIO->SWPORT_DR_H & (pin >> 16)) : (pGPIO->SWPORT_DR_L & pin);
 #else
     value = pGPIO->SWPORTA_DR & pin;
@@ -365,7 +365,7 @@ eGPIO_pinLevel HAL_GPIO_GetPinLevel(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS p
 {
     uint32_t value;
 
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     value = (pGPIO->EXT_PORT & pin);
 #else
     value = (pGPIO->EXT_PORTA & pin);
@@ -383,7 +383,7 @@ uint32_t HAL_GPIO_GetBankLevel(struct GPIO_REG *pGPIO)
 {
     uint32_t value;
 
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     value = (pGPIO->EXT_PORT);
 #else
     value = (pGPIO->EXT_PORTA);
@@ -404,7 +404,7 @@ uint32_t HAL_GPIO_GetBankLevel(struct GPIO_REG *pGPIO)
  */
 void HAL_GPIO_EnableIRQ(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin)
 {
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     if (IS_GPIO_HIGH_PIN(pin)) {
         pin &= 0xFFFF0000;
 #ifndef HAL_GPIO_IRQ_GROUP_MODULE_ENABLED
@@ -433,7 +433,7 @@ void HAL_GPIO_EnableIRQ(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin)
  */
 void HAL_GPIO_DisableIRQ(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin)
 {
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     if (IS_GPIO_HIGH_PIN(pin)) {
         pin &= 0xFFFF0000;
         pGPIO->INT_EN_H = pin;
@@ -511,7 +511,7 @@ void HAL_GPIO_IRQHandler(struct GPIO_REG *pGPIO, eGPIO_bankId bank)
  */
 HAL_Status HAL_GPIO_EnableVirtualModel(struct GPIO_REG *pGPIO)
 {
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     pGPIO->GPIO_VIRTUAL_EN = 0x10001;
 
     return HAL_OK;
@@ -527,7 +527,7 @@ HAL_Status HAL_GPIO_EnableVirtualModel(struct GPIO_REG *pGPIO)
  */
 HAL_Status HAL_GPIO_DisableVirtualModel(struct GPIO_REG *pGPIO)
 {
-#if (GPIO_VER_ID == 0x01000C2BU)
+#if (GPIO_VER_ID >= 0x01000C2BU)
     pGPIO->GPIO_VIRTUAL_EN = 0x10000;
 
     return HAL_OK;
@@ -539,28 +539,65 @@ HAL_Status HAL_GPIO_DisableVirtualModel(struct GPIO_REG *pGPIO)
 /**
  * @brief  GPIO Configure pins for virtual model.
  * @param  pGPIO: The pointer of GPIO struct.
- * @param  pins: The pin bit defined in @ref ePINCTRL_GPIO_PINS.
- * @param  vmode: The value defined in @ref eGPIO_VirtualModel.
+ * @param  pin: The pin bit defined in @ref ePINCTRL_GPIO_PINS.
+ * @param  vmodel: The value defined in @ref eGPIO_VirtualModel.
  * @return HAL_Status.
  */
 HAL_Status HAL_GPIO_SetVirtualModel(struct GPIO_REG *pGPIO, ePINCTRL_GPIO_PINS pin, eGPIO_VirtualModel vmodel)
 {
-#if (GPIO_VER_ID == 0x01000C2BU)
-    uint32_t low_pins, high_pins;
+#if (GPIO_VER_ID >= 0x01000C2BU)
+    uint32_t lowPins, highPins;
 
-    low_pins = pin & 0x0000ffff;
-    high_pins = (pin & 0xffff0000) >> 16;
+    lowPins = pin & 0x0000ffff;
+    highPins = (pin & 0xffff0000) >> 16;
 
+#if defined(GPIO0_EXP)
     /* Support OS_A and OS_B */
     if (vmodel == GPIO_VIRTUAL_MODEL_OS_B) {
-        pGPIO->GPIO_REG_GROUP_L = low_pins << 16;
-        pGPIO->GPIO_REG_GROUP_H = high_pins << 16;
+        pGPIO->GPIO_REG_GROUP_L = lowPins << 16;
+        pGPIO->GPIO_REG_GROUP_H = highPins << 16;
     } else {
-        pGPIO->GPIO_REG_GROUP_L = low_pins | (low_pins << 16);
-        pGPIO->GPIO_REG_GROUP_H = high_pins | (high_pins << 16);
+        pGPIO->GPIO_REG_GROUP_L = lowPins | (lowPins << 16);
+        pGPIO->GPIO_REG_GROUP_H = highPins | (highPins << 16);
     }
 
     return HAL_OK;
+#elif defined(GPIO0_EXP3)
+    /* Support 4 OS */
+    pGPIO->GPIO_REG_GROUP_L = lowPins << 16;
+    pGPIO->GPIO_REG_GROUP_H = highPins << 16;
+    pGPIO->GPIO_REG_GROUP1_L = lowPins << 16;
+    pGPIO->GPIO_REG_GROUP1_H = highPins << 16;
+    pGPIO->GPIO_REG_GROUP2_L = lowPins << 16;
+    pGPIO->GPIO_REG_GROUP2_H = highPins << 16;
+    pGPIO->GPIO_REG_GROUP3_L = lowPins << 16;
+    pGPIO->GPIO_REG_GROUP3_H = highPins << 16;
+    switch (vmodel) {
+    case GPIO_VIRTUAL_MODEL_OS_A:
+        pGPIO->GPIO_REG_GROUP_L = lowPins | (lowPins << 16);
+        pGPIO->GPIO_REG_GROUP_H = highPins | (highPins << 16);
+        break;
+    case GPIO_VIRTUAL_MODEL_OS_B:
+        pGPIO->GPIO_REG_GROUP1_L = lowPins | (lowPins << 16);
+        pGPIO->GPIO_REG_GROUP1_H = highPins | (highPins << 16);
+        break;
+    case GPIO_VIRTUAL_MODEL_OS_C:
+        pGPIO->GPIO_REG_GROUP2_L = lowPins | (lowPins << 16);
+        pGPIO->GPIO_REG_GROUP2_H = highPins | (highPins << 16);
+        break;
+    case GPIO_VIRTUAL_MODEL_OS_D:
+        pGPIO->GPIO_REG_GROUP3_L = lowPins | (lowPins << 16);
+        pGPIO->GPIO_REG_GROUP3_H = highPins | (highPins << 16);
+        break;
+    default:
+        HAL_DBG("unknown gpio virtual model-%d\n", vmodel);
+        break;
+    }
+
+    return HAL_OK;
+#else
+#error missing GPIO EXP register definition!
+#endif
 #endif
 
     return HAL_ERROR;

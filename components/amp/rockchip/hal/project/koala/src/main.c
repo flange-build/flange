@@ -93,7 +93,7 @@ static void ClkInit(const struct CLK_INIT *clkInits, int clkInitNum, bool clkDum
             HAL_CRU_ClkSetFreq(clkInits[i].clkId, clkInits[i].initRate);
         }
         if (clkDump) {
-            HAL_DBG("%s: %s = %ld\n", __func__, clkInits[i].name, HAL_CRU_ClkGetFreq(clkInits[i].clkId));
+            HAL_DBG("%s: %s = %" PRId32 "\n", __func__, clkInits[i].name, HAL_CRU_ClkGetFreq(clkInits[i].clkId));
         }
     }
 }

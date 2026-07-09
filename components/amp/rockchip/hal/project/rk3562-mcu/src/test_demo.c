@@ -81,27 +81,27 @@ static void gpio_test(void)
     HAL_PINCTRL_SetParam(GPIO_BANK1,
                          GPIO_PIN_B7,
                          PIN_CONFIG_PUL_UP);
-    printf("GPIO1B_P: %p = 0x%lx\n", &GPIO1_IOC->GPIO1B_P, GPIO1_IOC->GPIO1B_P);
+    printf("GPIO1B_P: %p = 0x%" PRIx32 "\n", &GPIO1_IOC->GPIO1B_P, GPIO1_IOC->GPIO1B_P);
     HAL_DelayMs(3000);
     printf("test_gpio pull DOWN\n");
     HAL_PINCTRL_SetParam(GPIO_BANK1,
                          GPIO_PIN_B7,
                          PIN_CONFIG_PUL_DOWN);
     HAL_DelayMs(3000);
-    printf("GPIO1B_P: %p = 0x%lx\n", &GPIO1_IOC->GPIO1B_P, GPIO1_IOC->GPIO1B_P);
+    printf("GPIO1B_P: %p = 0x%" PRIx32 "\n", &GPIO1_IOC->GPIO1B_P, GPIO1_IOC->GPIO1B_P);
 
     /* Test GPIO output */
     HAL_GPIO_SetPinDirection(GPIO1, GPIO_PIN_B7, GPIO_OUT);
     level = HAL_GPIO_GetPinLevel(GPIO1, GPIO_PIN_B7);
-    printf("test_gpio 1b7 level = %ld\n", level);
+    printf("test_gpio 1b7 level = %" PRId32 "\n", level);
     HAL_DelayMs(3000);
     HAL_GPIO_SetPinLevel(GPIO1, GPIO_PIN_B7, GPIO_HIGH);
     level = HAL_GPIO_GetPinLevel(GPIO1, GPIO_PIN_B7);
-    printf("test_gpio 1b7 output high level = %ld\n", level);
+    printf("test_gpio 1b7 output high level = %" PRId32 "\n", level);
     HAL_DelayMs(3000);
     HAL_GPIO_SetPinLevel(GPIO1, GPIO_PIN_B7, GPIO_LOW);
     level = HAL_GPIO_GetPinLevel(GPIO1, GPIO_PIN_B7);
-    printf("test_gpio 1b7 output low level = %ld\n", level);
+    printf("test_gpio 1b7 output low level = %" PRId32 "\n", level);
     HAL_DelayMs(3000);
 
     /* Test GPIO interrupt */
@@ -161,15 +161,15 @@ static void gpio_virtual_model_test(void)
     /* Test GPIO output */
     HAL_GPIO_SetPinDirection(GPIO1_EXP, GPIO_PIN_B7, GPIO_OUT);
     level = HAL_GPIO_GetPinLevel(GPIO1_EXP, GPIO_PIN_B7);
-    printf("test gpio 1b7 level = %ld\n", level);
+    printf("test gpio 1b7 level = %" PRId32 "\n", level);
     HAL_DelayMs(3000);
     HAL_GPIO_SetPinLevel(GPIO1_EXP, GPIO_PIN_B7, GPIO_HIGH);
     level = HAL_GPIO_GetPinLevel(GPIO1_EXP, GPIO_PIN_B7);
-    printf("test_gpio 1b7 output high level = %ld\n", level);
+    printf("test_gpio 1b7 output high level = %" PRId32 "\n", level);
     HAL_DelayMs(3000);
     HAL_GPIO_SetPinLevel(GPIO1_EXP, GPIO_PIN_B7, GPIO_LOW);
     level = HAL_GPIO_GetPinLevel(GPIO1_EXP, GPIO_PIN_B7);
-    printf("test_gpio 1b7 output low level = %ld\n", level);
+    printf("test_gpio 1b7 output low level = %" PRId32 "\n", level);
     HAL_DelayMs(3000);
 
     /* Test GPIO interrupt */
@@ -266,7 +266,7 @@ static void perf_test(void)
         }
         time_end = HAL_GetTick();
         time_ms = time_end - time_start;
-        printf("memset bw=%ldKB/s, time_ms=%d\n",
+        printf("memset bw=%" PRId32 "KB/s, time_ms=%d\n",
                1000 * (size * loop / 1024) / time_ms, time_ms);
 
         /* prevent optimization */
@@ -357,6 +357,7 @@ static void pwm_isr(uint32_t irq, void *args)
 
 static void pwm_test(void)
 {
+    uint64_t result;
     uint8_t channel_mask;
 
     printf("pwm_test: test start:\n");
@@ -388,17 +389,15 @@ static void pwm_test(void)
 
     HAL_PWM_GlobalUnlock(&hal_pwm1_handle, channel_mask);
 
-    printf("pwm_test: 1s pos/neg counter\n", __func__);
-    HAL_PWM_EnableCaptureCnt(&hal_pwm1_handle, hal_channel1_config.channel,
-                             HAL_PWM_POS_NEG_CAPTURE);
+    printf("pwm_test: 1s counter\n", __func__);
+    HAL_PWM_EnableCounter(&hal_pwm1_handle, hal_channel1_config.channel);
 
     HAL_DelayMs(1000);
-    printf("pwm test: pwm counter res, pos = 0x%08x, neg = 0x%08x\n",
-           HAL_PWM_GetPosCaptureCnt(&hal_pwm1_handle, hal_channel1_config.channel),
-           HAL_PWM_GetNegCaptureCnt(&hal_pwm1_handle, hal_channel1_config.channel));
 
-    HAL_PWM_DisableCaptureCnt(&hal_pwm1_handle, hal_channel1_config.channel,
-                              HAL_PWM_POS_NEG_CAPTURE);
+    HAL_PWM_GetCounterRes(&hal_pwm1_handle, hal_channel1_config.channel, &result);
+    printf("pwm test: pwm counter res = 0x%08" PRIx32 "\n", result);
+
+    HAL_PWM_DisableCounter(&hal_pwm1_handle, hal_channel1_config.channel);
 
     HAL_INTMUX_SetIRQHandler(g_pwm1Dev.irqNum, pwm_isr, &hal_pwm1_handle);
     HAL_INTMUX_EnableIRQ(g_pwm1Dev.irqNum);
@@ -461,7 +460,7 @@ rpmsg_ns_new_ept_cb rpmsg_ns_cb(uint32_t new_ept, const char *new_ept_name, uint
     char ept_name[RL_NS_NAME_SIZE];
 
     strncpy(ept_name, new_ept_name, RL_NS_NAME_SIZE);
-    printf("rpmsg remote: new_ept-0x%lx name-%s\n", new_ept, ept_name);
+    printf("rpmsg remote: new_ept-0x%" PRIx32 " name-%s\n", new_ept, ept_name);
 }
 
 static int32_t remote_ept_cb(void *payload, uint32_t payload_len, uint32_t src, void *priv)
@@ -495,8 +494,8 @@ static void rpmsg_linux_test(void)
     rpmsg_share_mem_check();
     master_id = MASTER_ID;
     remote_id = REMOTE_ID;
-    printf("rpmsg remote: remote core cpu_id-%ld\n", remote_id);
-//    printf("rpmsg remote: shmem_base-0x%lx shmem_end-%lx\n", RPMSG_LINUX_MEM_BASE, RPMSG_LINUX_MEM_END);
+    printf("rpmsg remote: remote core cpu_id-%" PRId32 "\n", remote_id);
+//    printf("rpmsg remote: shmem_base-0x%" PRIx32 " shmem_end-%" PRIx32 "\n", RPMSG_LINUX_MEM_BASE, RPMSG_LINUX_MEM_END);
 
     info = malloc(sizeof(struct rpmsg_info_t));
     if (info == NULL) {
@@ -515,7 +514,7 @@ static void rpmsg_linux_test(void)
 
     info->instance = rpmsg_lite_remote_init((void *)RPMSG_LINUX_MEM_BASE, RL_PLATFORM_SET_LINK_ID(master_id, remote_id), RL_NO_FLAGS);
     rpmsg_lite_wait_for_link_up(info->instance);
-    printf("rpmsg remote: link up! link_id-0x%lx\n", info->instance->link_id);
+    printf("rpmsg remote: link up! link_id-0x%" PRIx32 "\n", info->instance->link_id);
     rpmsg_ns_bind(info->instance, rpmsg_ns_cb, &ns_cb_data);
     info->ept = rpmsg_lite_create_ept(info->instance, RPMSG_HAL_REMOTE_TEST_EPT, remote_ept_cb, info);
     ept_flags = RL_NS_CREATE;
@@ -571,7 +570,7 @@ static void timer_isr(uint32_t irq, void *args)
     }
     /* 24M timer: 41.67ns per count */
     latency = count * 41;
-    printf("timer_test: latency=%ldns(count=%ld)\n", latency, count);
+    printf("timer_test: latency=%" PRId32 "ns(count=%" PRId32 ")\n", latency, count);
     timer_int_count++;
     latency_sum += latency;
     latency_max = latency_max > latency ? latency_max : latency;
@@ -598,7 +597,7 @@ static void timer_test(void)
     end = HAL_GetSysTimerCount();
     /* sys_timer: TIMER5 is a increment count TIMER */
     count = (uint32_t)(end - start);
-    printf("sys_timer 1s count: %ld(%lld, %lld)\n", count, start, end);
+    printf("sys_timer 1s count: %" PRId32 "(%lld, %lld)\n", count, start, end);
 
     HAL_TIMER_Init(test_timer, TIMER_FREE_RUNNING);
     HAL_TIMER_SetCount(test_timer, 2000000000);
@@ -610,7 +609,7 @@ static void timer_test(void)
     /* test_timer: TIMER4 is a decrement count TIMER */
     desc_timer = true;
     count = (uint32_t)(start - end);
-    printf("test_timer 1s count: %ld(%lld, %lld)\n", count, start, end);
+    printf("test_timer 1s count: %" PRId32 "(%lld, %lld)\n", count, start, end);
     HAL_TIMER_Stop(test_timer);
 
     HAL_INTMUX_SetIRQHandler(TIMER4_IRQn, timer_isr, NULL);

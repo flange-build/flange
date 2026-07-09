@@ -51,22 +51,6 @@ void FIQ_Handler   (void) __attribute__ ((weak, alias("Default_Handler")));
 void IRQ_Handler   (void) __attribute__ ((weak, alias("Default_Handler")));
 #else
 #ifdef HAL_GIC_PREEMPT_FEATURE_ENABLED
-static void GIC_CPUInterTouch(void)
-{
-    uint32_t cpu_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
-    uint32_t irq = GIC_TOUCH_REQ_IRQ(cpu_id);
-
-    if (HAL_GIC_GetPending(irq)) {
-        HAL_GIC_ClearPending(irq);
-        __DSB();
-    }
-
-    HAL_GIC_SetPending(irq);
-    __DSB();
-    HAL_GIC_ClearPending(irq);
-    __DSB();
-}
-
 void IRQ_HardIrqPreemptHandler(void)
 {
     uint32_t irqn;
@@ -76,7 +60,7 @@ void IRQ_HardIrqPreemptHandler(void)
     if ((irqn >= 1020 && irqn <= 1023))
         return;
 
-    GIC_CPUInterTouch();
+    HAL_GIC_TouchICC();
 
 #ifdef HAL_GPIO_IRQ_GROUP_MODULE_ENABLED
     HAL_GPIO_IRQ_GROUP_DispatchGIRQs(irqn);
@@ -94,7 +78,6 @@ void IRQ_HardIrqPreemptHandler(void)
 void IRQ_HardIrqHandler(void)
 {
     uint32_t irqn;
-    GIC_IRQHandler handler;
 
     irqn = HAL_GIC_GetActiveIRQ();
 
@@ -119,7 +102,135 @@ void IRQ_HardIrqHandler(void)
 #pragma -fomit-frame-pointer
 #endif
 
+#ifdef __aarch64__
 void IRQ_Handler(void)
+{
+#ifdef HAL_GIC_PREEMPT_FEATURE_ENABLED
+    __ASM volatile (
+        "stp    x0, x1, [sp, #-16]!           \n" //save x0~x30
+        "stp    x2, x3, [sp, #-16]!           \n"
+        "stp    x4, x5, [sp, #-16]!           \n"
+        "stp    x6, x7, [sp, #-16]!           \n"
+        "stp    x8, x9, [sp, #-16]!           \n"
+        "stp    x10, x11, [sp, #-16]!         \n"
+        "stp    x12, x13, [sp, #-16]!         \n"
+        "stp    x14, x15, [sp, #-16]!         \n"
+        "stp    x16, x17, [sp, #-16]!         \n"
+        "stp    x18, x19, [sp, #-16]!         \n"
+        "stp    x20, x21, [sp, #-16]!         \n"
+        "stp    x22, x23, [sp, #-16]!         \n"
+        "stp    x24, x25, [sp, #-16]!         \n"
+        "stp    x26, x27, [sp, #-16]!         \n"
+        "stp    x28, x29, [sp, #-16]!         \n"
+        "stp    x30, xzr, [sp, #-16]!         \n"
+        "mrs    x0, elr_el1                   \n"
+        "mrs    x1, spsr_el1                  \n"
+        "stp    x0, x1, [sp, #-16]!           \n" //save elr_el1,spsr_el1
+#if (__FPU_USED == 1)
+        "mrs    x28, fpcr                     \n" //save fpu
+        "mrs    x29, fpsr                     \n"
+        "stp    x28, x29, [sp, #-16]!         \n"
+        "str    q0, [sp, #-16]!               \n" //save q0~q15
+        "str    q1, [sp, #-16]!               \n"
+        "str    q2, [sp, #-16]!               \n"
+        "str    q3, [sp, #-16]!               \n"
+        "str    q4, [sp, #-16]!               \n"
+        "str    q5, [sp, #-16]!               \n"
+        "str    q6, [sp, #-16]!               \n"
+        "str    q7, [sp, #-16]!               \n"
+        "str    q8, [sp, #-16]!               \n"
+        "str    q9, [sp, #-16]!               \n"
+        "str    q10, [sp, #-16]!              \n"
+        "str    q11, [sp, #-16]!              \n"
+        "str    q12, [sp, #-16]!              \n"
+        "str    q13, [sp, #-16]!              \n"
+        "str    q14, [sp, #-16]!              \n"
+        "str    q15, [sp, #-16]!              \n"
+#endif
+        "bl     IRQ_HardIrqPreemptHandler     \n"
+#if (__FPU_USED == 1)
+        "ldr    q15, [sp], #16                \n" //restore q0~q15
+        "ldr    q14, [sp], #16                \n"
+        "ldr    q13, [sp], #16                \n"
+        "ldr    q12, [sp], #16                \n"
+        "ldr    q11, [sp], #16                \n"
+        "ldr    q10, [sp], #16                \n"
+        "ldr    q9, [sp], #16                 \n"
+        "ldr    q8, [sp], #16                 \n"
+        "ldr    q7, [sp], #16                 \n"
+        "ldr    q6, [sp], #16                 \n"
+        "ldr    q5, [sp], #16                 \n"
+        "ldr    q4, [sp], #16                 \n"
+        "ldr    q3, [sp], #16                 \n"
+        "ldr    q2, [sp], #16                 \n"
+        "ldr    q1, [sp], #16                 \n"
+        "ldr    q0, [sp], #16                 \n"
+        "ldp    x28, x29, [sp], #16           \n" //restore fpu
+        "msr    fpcr, x28                     \n"
+        "msr    fpsr, x29                     \n"
+#endif
+        "ldp    x0, x1, [sp], #16             \n" //restore elr_el1,spsr_el1
+        "msr    elr_el1, x0                   \n"
+        "msr    spsr_el1, x1                  \n"
+        "ldp    x30, xzr, [sp], #16           \n"
+        "ldp    x28, x29, [sp], #16           \n"
+        "ldp    x26, x27, [sp], #16           \n"
+        "ldp    x24, x25, [sp], #16           \n"
+        "ldp    x22, x23, [sp], #16           \n"
+        "ldp    x20, x21, [sp], #16           \n"
+        "ldp    x18, x19, [sp], #16           \n"
+        "ldp    x16, x17, [sp], #16           \n"
+        "ldp    x14, x15, [sp], #16           \n"
+        "ldp    x12, x13, [sp], #16           \n"
+        "ldp    x10, x11, [sp], #16           \n"
+        "ldp    x8, x9, [sp], #16             \n"
+        "ldp    x6, x7, [sp], #16             \n"
+        "ldp    x4, x5, [sp], #16             \n"
+        "ldp    x2, x3, [sp], #16             \n"
+        "ldp    x0, x1, [sp], #16             \n"
+        "eret                                 \n"
+        );
+#else
+    __ASM volatile (
+        "stp     x0, x1, [sp, #-16]!                      \n" // save x0~x30
+        "stp     x2, x3, [sp, #-16]!                      \n"
+        "stp     x4, x5, [sp, #-16]!                      \n"
+        "stp     x6, x7, [sp, #-16]!                      \n"
+        "stp     x8, x9, [sp, #-16]!                      \n"
+        "stp     x10, x11, [sp, #-16]!                    \n"
+        "stp     x12, x13, [sp, #-16]!                    \n"
+        "stp     x14, x15, [sp, #-16]!                    \n"
+        "stp     x16, x17, [sp, #-16]!                    \n"
+        "stp     x18, x19, [sp, #-16]!                    \n"
+        "stp     x20, x21, [sp, #-16]!                    \n"
+        "stp     x22, x23, [sp, #-16]!                    \n"
+        "stp     x24, x25, [sp, #-16]!                    \n"
+        "stp     x26, x27, [sp, #-16]!                    \n"
+        "stp     x28, x29, [sp, #-16]!                    \n"
+        "stp     x30, xzr, [sp, #-16]!                    \n"
+        "bl      IRQ_HardIrqHandler                       \n"
+        "ldp     x30, xzr, [sp], #16                      \n" // restore x0~x30
+        "ldp     x28, x29, [sp], #16                      \n"
+        "ldp     x26, x27, [sp], #16                      \n"
+        "ldp     x24, x25, [sp], #16                      \n"
+        "ldp     x22, x23, [sp], #16                      \n"
+        "ldp     x20, x21, [sp], #16                      \n"
+        "ldp     x18, x19, [sp], #16                      \n"
+        "ldp     x16, x17, [sp], #16                      \n"
+        "ldp     x14, x15, [sp], #16                      \n"
+        "ldp     x12, x13, [sp], #16                      \n"
+        "ldp     x10, x11, [sp], #16                      \n"
+        "ldp     x8, x9, [sp], #16                        \n"
+        "ldp     x6, x7, [sp], #16                        \n"
+        "ldp     x4, x5, [sp], #16                        \n"
+        "ldp     x2, x3, [sp], #16                        \n"
+        "ldp     x0, x1, [sp], #16                        \n"
+        "eret                                             \n"
+        );
+#endif /* HAL_GIC_PREEMPT_FEATURE_ENABLED */
+}
+#else
+HAL_VISIBLE void IRQ_Handler(void)
 {
 #ifdef HAL_GIC_PREEMPT_FEATURE_ENABLED
     __ASM volatile (
@@ -151,7 +262,10 @@ void IRQ_Handler(void)
     "stmfd  sp!, {r9}                                 \n"
     "1:                                               \n"
     "stmfd  sp!, {r8}                                 \n"
+    "mov    r8,  sp                                   \n"
+    "bic    sp,  sp, #(1<<2)                          \n"
     "bl     IRQ_HardIrqPreemptHandler                 \n"
+    "mov    sp,  r8                                   \n"
     "ldmfd  sp!, {r8}                                 \n"
     "vmsr   fpexc, r8                                 \n"
     "tst    r8, #(1<<30)                              \n"
@@ -176,8 +290,164 @@ void IRQ_Handler(void)
     );
 #endif /* HAL_GIC_PREEMPT_FEATURE_ENABLED */
 }
+#endif
 #endif /* HAL_GIC_MODULE_ENABLED */
 
+#ifdef __aarch64__
+#define vector_table_align .align 11    /* Vector tables must be placed at a 2KB-aligned address */
+#define vector_entry_align .align 7     /* Each entry is 128B */
+
+void Sync_Handler(void) __attribute__ ((weak, alias("Default_Handler")));
+void SError_Handler(void) __attribute__ ((weak, alias("Default_Handler")));
+/*----------------------------------------------------------------------------
+  Exception / Interrupt Vector Table
+ *----------------------------------------------------------------------------*/
+void Vectors(void)
+{
+    __ASM volatile (
+        ".align 11                                        \n"
+        // Current EL with SP0
+        ".align 7                                         \n"
+        "B      Reset_Handler                             \n" // Synchronous
+        ".align 7                                         \n"
+        "B      IRQ_Handler                               \n" // IRQ/vIRQ
+        ".align 7                                         \n"
+        "B      FIQ_Handler                               \n" // FIQ/vFIQ
+        ".align 7                                         \n"
+        "B      SError_Handler                            \n" // SError
+
+        // Current EL with SPx
+        ".align 7                                         \n"
+        "B      Sync_Handler                              \n" // Synchronous
+        ".align 7                                         \n"
+        "B      IRQ_Handler                               \n" // IRQ/vIRQ
+        ".align 7                                         \n"
+        "B      FIQ_Handler                               \n" // FIQ/vFIQ
+        ".align 7                                         \n"
+        "B      SError_Handler                            \n" // SError
+
+        // Lower EL using AArch64
+        ".align 7                                         \n"
+        "B      .                                         \n" // Synchronous
+        ".align 7                                         \n"
+        "B      .                                         \n" // IRQ/vIRQ
+        ".align 7                                         \n"
+        "B      .                                         \n" // FIQ/vFIQ
+        ".align 7                                         \n"
+        "B      .                                         \n" // SError
+
+        // Lower EL using AArch32
+        ".align 7                                         \n"
+        "B      .                                         \n" // Synchronous
+        ".align 7                                         \n"
+        "B      .                                         \n" // IRQ/vIRQ
+        ".align 7                                         \n"
+        "B      .                                         \n" // FIQ/vFIQ
+        ".align 7                                         \n"
+        "B      .                                         \n" // SError
+        );
+}
+
+/*----------------------------------------------------------------------------
+  Reset Handler called on controller reset
+ *----------------------------------------------------------------------------*/
+void Reset_Handler(void)
+{
+    __ASM volatile (
+
+        // Mask interrupts
+        "MSR     DAIFSet, #3                             \n"
+
+        // Check exception level, only support EL1
+        "MRS     x0, CurrentEL                           \n"
+        "AND     x0, x0, #(3 << 2)                       \n"
+        "CMP     x0, #(1 << 2)                           \n"
+        "BNE     cpu_not_in_el1                          \n"
+
+        //Reset SCTLR Settings
+        "cpu_in_el1:                                     \n"
+        "MRS     x0, SCTLR_EL1                           \n" // Read SCTLR_EL1 System Control register
+        "BIC     x0, x0, #(1 << 12)                      \n" // Clear I bit 12 to disable I Cache
+        "BIC     x0, x0, #(1 << 2)                       \n" // Clear C bit 2 to disable D Cache
+        "BIC     x0, x0, #1                              \n" // Clear M bit 0 to disable MMU
+        "BIC     x0, x0, #(1 << 11)                      \n" // Clear Z bit 11 to disable branch prediction
+        "BIC     x0, x0, #(1 << 13)                      \n" // Clear V bit 13 to disable hives
+        "MSR     SCTLR_EL1, x0                           \n" // Write value back to SCTLR_EL1 System Control register
+        "ISB                                             \n" // Ensure changes take effect
+
+        // Set Vector Base Address Register (VBAR) to point to this application's vector table
+        "LDR     x0, =Vectors                            \n"
+        "MSR     VBAR_EL1, x0                            \n"
+
+        // Setup Stack for EL1
+        "LDR     x1, =__StackTop                         \n"
+        "MOV     SP, x1                                  \n"
+
+        // Call DataInit
+        "BL     DataInit                                 \n"
+
+        // Call SystemInit
+        "BL     SystemInit                               \n"
+
+        // Unmask interrupts
+        "MSR    DAIFClr, #3                              \n"
+
+        // Call _start
+        "BL     _start                                   \n"
+
+        "cpu_not_in_el1:                                 \n"
+        "CMP     x0, #(2 << 2)                           \n"
+        "BEQ	 cpu_in_el2                              \n"
+
+        // Cpu in EL3
+        "mov 	x2, #(1 << 0)                            \n"
+        "orr 	x2, x2, #(1 << 4)                        \n"
+        "orr 	x2, x2, #(1 << 5)                        \n"
+        "bic 	x2, x2, #(1 << 7)                        \n"
+        "orr 	x2, x2, #(1 << 8)                        \n"
+        "orr 	x2, x2, #(1 << 10)                       \n"
+        "msr 	scr_el3, x2                              \n"
+
+        "mov 	x2, #9                                   \n"
+        "orr 	x2, x2, #(1 << 6)                        \n"
+        "orr 	x2, x2, #(1 << 7)                        \n"
+        "orr 	x2, x2, #(1 << 8)                        \n"
+        "orr 	x2, x2, #(1 << 9)                        \n"
+        "msr 	spsr_el3, x2                             \n"
+        "adr 	x2, cpu_in_el2                           \n"
+        "msr 	elr_el3, x2                              \n"
+        "eret                                            \n"
+
+        "cpu_in_el2:                                     \n"
+        "mrs     x0, cnthctl_el2                         \n"
+        "orr     x0, x0, #3                              \n"
+        "msr     cnthctl_el2, x0                         \n"
+        "msr     cntvoff_el2, xzr                        \n"
+
+        "mov     x0, #(1 << 31)                          \n"
+        "orr     x0, x0, #(1 << 1)                       \n"
+        "msr     hcr_el2, x0                             \n"
+
+        "mov     x2, #5                                  \n"
+        "orr     x2, x2, #(1 << 6)                       \n"
+        "orr     x2, x2, #(1 << 7)                       \n"
+        "orr     x2, x2, #(1 << 8)                       \n"
+        "orr     x2, x2, #(1 << 9)                       \n"
+        "msr     spsr_el2, x2                            \n"
+        "adr     x2, cpu_in_el1                          \n"
+        "msr     elr_el2, x2                             \n"
+        "eret                                            \n"
+        );
+}
+
+void Default_Handler(void)
+{
+    while (1) {
+        ;
+    }
+}
+
+#else
 /*----------------------------------------------------------------------------
   Exception / Interrupt Vector Table
  *----------------------------------------------------------------------------*/
@@ -270,14 +540,14 @@ void Dump_Regs(uint32_t *regs, uint32_t mode)
         printf("fiq mode:\n");
         break;
     default:
-        printf("unknow mode:%ld\n", mode);
+        printf("unknow mode:%" PRId32 "\n", mode);
     }
 
-    printf("pc : %08lx  lr : %08lx cpsr: %08lx\n", regs[15], regs[14], regs[16]);
-    printf("sp : %08lx  ip : %08lx  fp : %08lx\n", regs[13], regs[12], regs[11]);
-    printf("r10: %08lx  r9 : %08lx  r8 : %08lx\n", regs[10], regs[9], regs[8]);
-    printf("r7 : %08lx  r6 : %08lx  r5 : %08lx  r4 : %08lx\n", regs[7], regs[6], regs[5], regs[4]);
-    printf("r3 : %08lx  r2 : %08lx  r1 : %08lx  r0 : %08lx\n", regs[3], regs[2], regs[1], regs[0]);
+    printf("pc : %08" PRIx32 "  lr : %08" PRIx32 " cpsr: %08" PRIx32 "\n", regs[15], regs[14], regs[16]);
+    printf("sp : %08" PRIx32 "  ip : %08" PRIx32 "  fp : %08" PRIx32 "\n", regs[13], regs[12], regs[11]);
+    printf("r10: %08" PRIx32 "  r9 : %08" PRIx32 "  r8 : %08" PRIx32 "\n", regs[10], regs[9], regs[8]);
+    printf("r7 : %08" PRIx32 "  r6 : %08" PRIx32 "  r5 : %08" PRIx32 "  r4 : %08" PRIx32 "\n", regs[7], regs[6], regs[5], regs[4]);
+    printf("r3 : %08" PRIx32 "  r2 : %08" PRIx32 "  r1 : %08" PRIx32 "  r0 : %08" PRIx32 "\n", regs[3], regs[2], regs[1], regs[0]);
 
     printf("\nstack: \n");
 
@@ -288,19 +558,19 @@ void Dump_Regs(uint32_t *regs, uint32_t mode)
             printf("\n");
         }
         if (i % 4 == 0) {
-            printf("0x%08lx: ", stack + i * 4);
+            printf("0x%08" PRIx32 ": ", stack + i * 4);
         }
 
-        printf("0x%08lx  ", buf[i]);
+        printf("0x%08" PRIx32 "  ", buf[i]);
         if ((buf[i] >= STEXT && buf[i] < ETEXT) && j < 16) {
             call_stack[j++] = buf[i];
         }
     }
 
     printf("\n\n");
-    printf("Show more call stack info by run: addr2line -e hal0.elf -a -f %08lx %08lx ", regs[15], regs[14]);
+    printf("Show more call stack info by run: addr2line -e hal0.elf -a -f %08" PRIx32 " %08" PRIx32 " ", regs[15], regs[14]);
     for (i = 0; i < j; i++) {
-        printf("%08lx ", call_stack[i]);
+        printf("%08" PRIx32 " ", call_stack[i]);
     }
     printf("\n");
 }
@@ -333,6 +603,7 @@ void Default_Handler(void)
         "b      .                                          \n"
         );
 }
+#endif
 
 #if defined(__GNUC__) && ! defined(__ARMCC_VERSION)
 #pragma GCC pop_options

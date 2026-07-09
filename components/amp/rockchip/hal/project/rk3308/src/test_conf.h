@@ -8,6 +8,7 @@
 
 /* SRAM Usage Test Config */
 //#define SRAM_USAGE
+//#define TEST_USE_UART1M0
 
 /* Unity HAL Test Config */
 #define UNITY_HAL_I2C

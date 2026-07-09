@@ -363,12 +363,12 @@ static int ACODEC_GetVersion(struct HAL_ACODEC_DEV *acodec)
         acodecPriv->codecVer = ACODEC_VERSION_C;
         break;
     default:
-        HAL_DBG_ERR("Unknown chipID: 0x%lx\n", chipID);
+        HAL_DBG_ERR("Unknown chipID: 0x%" PRIx32 "\n", chipID);
 
         return HAL_INVAL;
     }
 
-    HAL_DBG("The acodec version is: 0x%lx\n", acodecPriv->codecVer);
+    HAL_DBG("The acodec version is: 0x%" PRIx32 "\n", acodecPriv->codecVer);
 
     return HAL_OK;
 }

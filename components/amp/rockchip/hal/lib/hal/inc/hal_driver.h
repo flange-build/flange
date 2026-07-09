@@ -12,12 +12,20 @@
 #include "hal_acdcdig.h"
 #endif
 
+#ifdef HAL_ACDCDIG_DSM_MODULE_ENABLED
+#include "hal_acdcdig_dsm.h"
+#endif
+
 #ifdef HAL_ACODEC_MODULE_ENABLED
 #include "hal_acodec.h"
 #endif
 
 #ifdef HAL_ARCHTIMER_MODULE_ENABLED
 #include "hal_archtimer.h"
+#endif
+
+#ifdef HAL_ASRC_MODULE_ENABLED
+#include "hal_asrc.h"
 #endif
 
 #ifdef HAL_AUDIOPWM_MODULE_ENABLED
@@ -30,16 +38,16 @@
 #include "hal_bufmgr.h"
 #endif
 
+#ifdef HAL_CACHE_ECC_MODULE_ENABLED
+#include "hal_cache_ecc.h"
+#endif
+
 #ifdef HAL_CANFD_MODULE_ENABLED
 #include "hal_canfd.h"
 #endif
 
 #ifdef HAL_CKCAL_MODULE_ENABLED
 #include "hal_ckcal.h"
-#endif
-
-#ifdef HAL_CACHE_ECC_MODULE_ENABLED
-#include "hal_cache_ecc.h"
 #endif
 
 #ifdef HAL_CPU_TOPOLOGY_MODULE_ENABLED
@@ -54,17 +62,30 @@
 #include "hal_crypto.h"
 #endif
 
-#ifdef HAL_DSI_MODULE_ENABLED
-#include "hal_display.h"
-#include "hal_dsi.h"
+#ifdef HAL_DDR_ECC_MODULE_ENABLED
+#include "hal_ddr_ecc.h"
 #endif
 
 #ifdef HAL_DEMO_MODULE_ENABLED
 #include "hal_demo.h"
 #endif
 
-#ifdef HAL_DDR_ECC_MODULE_ENABLED
-#include "hal_ddr_ecc.h"
+#ifdef HAL_DSI_MODULE_ENABLED
+#include "hal_display.h"
+#include "hal_dsi.h"
+#endif
+
+#ifdef HAL_DSMC_HOST_MODULE_ENABLED
+#include "hal_dsmc_host.h"
+#endif
+
+#ifdef HAL_DSMC_SLAVE_MODULE_ENABLED
+#include "hal_dsmc_slave.h"
+#endif
+
+#ifdef HAL_DW_MIPI_DSI_MODULE_ENABLED
+#include "hal_display.h"
+#include "hal_dw_mipi_dsi.h"
 #endif
 
 #ifdef HAL_DSP_MODULE_ENABLED
@@ -81,6 +102,32 @@
 #include "hal_efuse.h"
 #endif
 
+#if defined(HAL_FACC_FIR_MODULE_ENABLED) || defined(HAL_FACC_IIR_MODULE_ENABLED)
+#include "hal_facc.h"
+#endif
+
+#ifdef HAL_FLEXBUS_MODULE_ENABLED
+#include "hal_flexbus.h"
+#ifdef HAL_FLEXBUS_ADC_MODULE_ENABLED
+#include "hal_flexbus_adc.h"
+#endif
+#ifdef HAL_FLEXBUS_DAC_MODULE_ENABLED
+#include "hal_flexbus_dac.h"
+#endif
+#ifdef HAL_FLEXBUS_SPI_MODULE_ENABLED
+#include "hal_flexbus_spi.h"
+#endif
+#endif
+
+#ifdef HAL_FSPI_MODULE_ENABLED
+#include "hal_spi_mem.h"
+#include "hal_fspi.h"
+#endif
+
+#ifdef HAL_GIC_MODULE_ENABLED
+#include "hal_gic.h"
+#endif
+
 #if defined(HAL_GMAC_MODULE_ENABLED) || defined(HAL_GMAC1000_MODULE_ENABLED)
 #include "hal_gmac.h"
 #endif
@@ -91,10 +138,6 @@
 
 #ifdef HAL_GPIO_IRQ_GROUP_MODULE_ENABLED
 #include "hal_gpio_irq_group.h"
-#endif
-
-#ifdef HAL_PINCTRL_MODULE_ENABLED
-#include "hal_pinctrl.h"
 #endif
 
 #if defined(HAL_HCD_MODULE_ENABLED) || defined(HAL_PCD_MODULE_ENABLED)
@@ -130,6 +173,10 @@
 #include "hal_i2stdm.h"
 #endif
 
+#ifdef HAL_INNO_MIPI_DPHY_MODULE_ENABLED
+#include "hal_inno_mipi_dphy.h"
+#endif
+
 #ifdef HAL_INTC_MODULE_ENABLED
 #include "hal_intc.h"
 #endif
@@ -142,16 +189,24 @@
 #include "hal_irq_handler.h"
 #endif
 
-#ifdef HAL_GIC_MODULE_ENABLED
-#include "hal_gic.h"
+#ifdef HAL_KEYCTRL_MODULE_ENABLED
+#include "hal_keyctrl.h"
 #endif
 
 #ifdef HAL_MBOX_MODULE_ENABLED
 #include "hal_mbox.h"
 #endif
 
+#ifdef HAL_NPOR_MODULE_ENABLED
+#include "hal_npor.h"
+#endif
+
 #ifdef HAL_NVIC_MODULE_ENABLED
 #include "hal_nvic.h"
+#endif
+
+#ifdef HAL_OTP_MODULE_ENABLED
+#include "hal_otp.h"
 #endif
 
 #ifdef HAL_PCD_MODULE_ENABLED
@@ -164,16 +219,20 @@
 #include "hal_pcie.h"
 #endif
 
+#ifdef HAL_PD_MODULE_ENABLED
+#include "hal_pd.h"
+#endif
+
 #ifdef HAL_PDM_MODULE_ENABLED
 #include "hal_pdm.h"
 #endif
 
-#ifdef HAL_PL330_MODULE_ENABLED
-#include "hal_pl330.h"
+#ifdef HAL_PINCTRL_MODULE_ENABLED
+#include "hal_pinctrl.h"
 #endif
 
-#ifdef HAL_PMU_MODULE_ENABLED
-#include "hal_pd.h"
+#ifdef HAL_PL330_MODULE_ENABLED
+#include "hal_pl330.h"
 #endif
 
 #ifdef HAL_PVTM_MODULE_ENABLED
@@ -186,25 +245,64 @@
 
 #include "hal_pwr.h"
 
+#ifdef HAL_QPIPSRAM_MODULE_ENABLED
+#include "hal_spi_mem.h"
+#include "hal_qpipsram.h"
+#endif
+
 #ifdef HAL_RISCVIC_MODULE_ENABLED
 #include "hal_riscvic.h"
+#endif
+
+#ifdef HAL_RKNPU_MODULE_ENABLED
+#include "hal_rknpu.h"
+#endif
+
+#ifdef HAL_SAI_MODULE_ENABLED
+#include "hal_sai.h"
+#endif
+
+#ifdef HAL_SARADC_MODULE_ENABLED
+#include "hal_saradc.h"
 #endif
 
 #ifdef HAL_SDIO_MODULE_ENABLED
 #include "hal_sdio.h"
 #endif
 
-#ifdef HAL_SNOR_MODULE_ENABLED
-#include "hal_spi_mem.h"
-#include "hal_snor.h"
-#endif
-
-#ifdef HAL_SFC_MODULE_ENABLED
+#if defined(HAL_SFC_MODULE_ENABLED) && (defined(HAL_SNOR_MODULE_ENABLED) || defined(HAL_SPINAND_MODULE_ENABLED))
 #include "hal_sfc.h"
 #endif
 
+#ifdef HAL_SMCCC_MODULE_ENABLED
+#include "hal_smccc.h"
+#endif
+
+#ifdef HAL_SNOR_MODULE_ENABLED
+#include "hal_snor.h"
+#endif
+
+#ifdef HAL_SPDIFRX_MODULE_ENABLED
+#include "hal_spdifrx.h"
+#endif
+
+#ifdef HAL_SPDIFTX_MODULE_ENABLED
+#include "hal_spdiftx.h"
+#endif
+
+#ifdef HAL_SPI2AHB_MODULE_ENABLED
+#include "hal_spi2ahb.h"
+#endif
+
+#ifdef HAL_SPI2APB_MODULE_ENABLED
+#include "hal_spi2apb.h"
+#endif
+
+#ifdef HAL_SPI_MODULE_ENABLED
+#include "hal_spi.h"
+#endif
+
 #ifdef HAL_SPINAND_MODULE_ENABLED
-#include "hal_spi_mem.h"
 #include "hal_spinand.h"
 #endif
 
@@ -216,46 +314,20 @@
 #include "hal_systick.h"
 #endif
 
-#ifdef HAL_FSPI_MODULE_ENABLED
-#include "hal_spi_mem.h"
-#include "hal_fspi.h"
-#endif
-
-#ifdef HAL_QPIPSRAM_MODULE_ENABLED
-#include "hal_spi_mem.h"
-#include "hal_qpipsram.h"
+#ifdef HAL_TIMER_MODULE_ENABLED
+#include "hal_timer.h"
 #endif
 
 #ifdef HAL_TOUCHKEY_MODULE_ENABLED
 #include "hal_touchkey.h"
 #endif
 
+#ifdef HAL_TRNG_MODULE_ENABLED
+#include "hal_trng.h"
+#endif
+
 #ifdef HAL_TSADC_MODULE_ENABLED
 #include "hal_tsadc.h"
-#endif
-
-#ifdef HAL_SARADC_MODULE_ENABLED
-#include "hal_saradc.h"
-#endif
-
-#ifdef HAL_SMCCC_MODULE_ENABLED
-#include "hal_smccc.h"
-#endif
-
-#ifdef HAL_KEYCTRL_MODULE_ENABLED
-#include "hal_keyctrl.h"
-#endif
-
-#ifdef HAL_SPI_MODULE_ENABLED
-#include "hal_spi.h"
-#endif
-
-#ifdef HAL_SPI2APB_MODULE_ENABLED
-#include "hal_spi2apb.h"
-#endif
-
-#ifdef HAL_TIMER_MODULE_ENABLED
-#include "hal_timer.h"
 #endif
 
 #ifdef HAL_UART_MODULE_ENABLED
@@ -266,6 +338,10 @@
 #include "hal_vad.h"
 #endif
 
+#ifdef HAL_VDMA_MODULE_ENABLED
+#include "hal_vdma.h"
+#endif
+
 #ifdef HAL_VICAP_MODULE_ENABLED
 #include "hal_vicap.h"
 #endif
@@ -273,6 +349,11 @@
 #ifdef HAL_VOP_MODULE_ENABLED
 #include "hal_display.h"
 #include "hal_vop.h"
+#endif
+
+#ifdef HAL_VOP2_MODULE_ENABLED
+#include "hal_display.h"
+#include "hal_vop2.h"
 #endif
 
 #ifdef HAL_WDT_MODULE_ENABLED

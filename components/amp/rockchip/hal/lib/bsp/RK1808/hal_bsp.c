@@ -71,7 +71,7 @@ struct HAL_I2S_DEV g_i2s1Dev =
     .bclkFs = 64,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(I2S1->RXDR),
+        .addr = I2S1_BASE + I2S_RXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S1_RX,
@@ -79,7 +79,7 @@ struct HAL_I2S_DEV g_i2s1Dev =
     },
     .txDmaData =
     {
-        .addr = (uint32_t)&(I2S1->TXDR),
+        .addr = I2S1_BASE + I2S_TXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S1_TX,
@@ -100,7 +100,7 @@ struct HAL_I2STDM_DEV g_i2sTdm0Dev =
     .bclkFs = 64,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(I2STDM0->RXDR),
+        .addr = I2STDM0_BASE + I2S_RXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S0_RX,
@@ -108,7 +108,7 @@ struct HAL_I2STDM_DEV g_i2sTdm0Dev =
     },
     .txDmaData =
     {
-        .addr = (uint32_t)&(I2STDM0->TXDR),
+        .addr = I2STDM0_BASE + I2S_TXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S0_TX,
@@ -128,7 +128,7 @@ struct HAL_PDM_DEV g_pdm0Dev =
     .reset = SRST_PDM_SRSTN,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(PDM0->RXFIFO_DATA_REG),
+        .addr = PDM0_BASE + PDM_RXFIFO_DATA_REG_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_PDM,

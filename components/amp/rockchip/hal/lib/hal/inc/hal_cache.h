@@ -49,25 +49,25 @@ struct CACHE_PMU_CNT {
  *  @{
  */
 
-uint32_t HAL_CpuAddrToDmaAddr(uint32_t cpuAddr);
+uintptr_t HAL_CpuAddrToDmaAddr(uintptr_t cpuAddr);
 HAL_Status HAL_ICACHE_Enable(void);
 HAL_Status HAL_ICACHE_Disable(void);
 HAL_Status HAL_ICACHE_Invalidate(void);
-HAL_Status HAL_ICACHE_InvalidateByRange(uint32_t address, uint32_t sizeByte);
+HAL_Status HAL_ICACHE_InvalidateByRange(uintptr_t address, uint32_t sizeByte);
 HAL_Status HAL_ICACHE_EnablePMU(void);
 HAL_Status HAL_ICACHE_DisablePMU(void);
 HAL_Status HAL_ICACHE_GetPMU(struct CACHE_PMU_CNT *stat);
 HAL_Status HAL_ICACHE_EnableInt(void);
 HAL_Status HAL_ICACHE_DisableInt(void);
 HAL_Check HAL_ICACHE_GetInt(void);
-uint32_t HAL_ICACHE_GetErrAddr(void);
+uintptr_t HAL_ICACHE_GetErrAddr(void);
 HAL_Status HAL_ICACHE_ClearInt(void);
 HAL_Status HAL_DCACHE_Enable(void);
 HAL_Status HAL_DCACHE_Disable(void);
 HAL_Status HAL_DCACHE_Invalidate(void);
-HAL_Status HAL_DCACHE_InvalidateByRange(uint32_t address, uint32_t sizeByte);
-HAL_Status HAL_DCACHE_CleanByRange(uint32_t address, uint32_t sizeByte);
-HAL_Status HAL_DCACHE_CleanInvalidateByRange(uint32_t address, uint32_t sizeByte);
+HAL_Status HAL_DCACHE_InvalidateByRange(uintptr_t address, uint32_t sizeByte);
+HAL_Status HAL_DCACHE_CleanByRange(uintptr_t address, uint32_t sizeByte);
+HAL_Status HAL_DCACHE_CleanInvalidateByRange(uintptr_t address, uint32_t sizeByte);
 HAL_Status HAL_DCACHE_CleanInvalidate(void);
 HAL_Status HAL_DCACHE_EnablePMU(void);
 HAL_Status HAL_DCACHE_DisablePMU(void);
@@ -76,7 +76,7 @@ HAL_Status HAL_DCACHE_EnableInt(void);
 HAL_Status HAL_DCACHE_DisableInt(void);
 HAL_Check HAL_DCACHE_GetInt(void);
 HAL_Status HAL_DCACHE_ClearInt(void);
-uint32_t HAL_DCACHE_GetErrAddr(void);
+uintptr_t HAL_DCACHE_GetErrAddr(void);
 
 /** @} */
 

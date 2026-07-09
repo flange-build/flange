@@ -72,9 +72,9 @@ static void EHCI_InitPeriodicFrameList(struct EHCI_HCD *ehci)
     for (i = NUM_IQH - 1; i >= 0; i--) {
         ehci->iQH[i] = (struct EHCI_QH *)HAL_USBH_AllocPool();
         ehci->iQH[i]->hLink = QH_HLNK_END;
-        ehci->iQH[i]->qTDCurr = (uint32_t)ehci->qTDGhost;
+        ehci->iQH[i]->qTDCurr = (uintptr_t)ehci->qTDGhost;
         ehci->iQH[i]->qTDNextOL = QTD_LIST_END;
-        ehci->iQH[i]->qTDAltNextOL = (uint32_t)ehci->qTDGhost;
+        ehci->iQH[i]->qTDAltNextOL = (uintptr_t)ehci->qTDGhost;
         ehci->iQH[i]->tokenOL = QTD_STS_HALT;
 
         interval = 0x1 << i; /* interval = i^2 */
@@ -217,19 +217,19 @@ static HAL_Status EHCI_Init(void *pHCD)
     ehci->hQH->hLink = QH_HLNK_QH(ehci->hQH);
     /* it's the head of reclamation list */
     ehci->hQH->chrst = QH_RCLM_LIST_HEAD;
-    ehci->hQH->qTDCurr = (uint32_t)ehci->qTDGhost;
+    ehci->hQH->qTDCurr = (uintptr_t)ehci->qTDGhost;
     ehci->hQH->qTDNextOL = QTD_LIST_END;
-    ehci->hQH->qTDAltNextOL = (uint32_t)ehci->qTDGhost;
+    ehci->hQH->qTDAltNextOL = (uintptr_t)ehci->qTDGhost;
     ehci->hQH->tokenOL = QTD_STS_HALT;
 
     /* Set the Current Asynchronous List Address */
-    pReg->ASYNCLISTADDR = (uint32_t)ehci->hQH;
+    pReg->ASYNCLISTADDR = (uintptr_t)ehci->hQH;
 
     /* Initialize periodic list */
     EHCI_InitPeriodicFrameList(ehci);
 
     /* Set the Periodic Frame List Base Address */
-    pReg->PERIODICLISTBASE = (uint32_t)ehci->pfList;
+    pReg->PERIODICLISTBASE = (uintptr_t)ehci->pfList;
 
     regVal |= UCMDR_INT_THR_CTRL;
     if (FL_SIZE == 256) {
@@ -291,7 +291,7 @@ static void EHCI_MoveQhToRemoveList(struct EHCI_HCD *ehci, struct EHCI_QH *qh)
     struct EHCI_REG *pReg = HCD_HANDLE_TO_REG(ehci);
     struct EHCI_QH *q;
 
-    // HAL_DBG("%s: 0x%lx (0x%lx)\n", __func__, (uint32_t)qh, qh->chrst);
+    // HAL_DBG("%s: 0x%" PRIx32 " (0x%" PRIx32 ")\n", __func__, (uint32_t)qh, qh->chrst);
 
     /* Check if this ED found in ed_remove_list */
     q = ehci->qhRemoveList;
@@ -363,7 +363,7 @@ static void EHCI_AppendQtdToQhList(struct EHCI_QH *qh, struct EHCI_QTD *qtd)
 static void EHCI_WriteQh(struct USB_DEV *udev, struct USB_EP_INFO *ep,
                          struct EHCI_QH *qh)
 {
-    uint32_t chrst, cap;
+    uint32_t chrst;
     uint8_t ep0MaxPacketSize; /* should be global? */
 
     /* Write QH DWord 1 - Endpoint Characteristics */
@@ -394,10 +394,8 @@ static void EHCI_WriteQh(struct USB_DEV *udev, struct USB_EP_INFO *ep,
 
     /* Write QH DWord 2 - Endpoint Capabilities */
     if (udev->speed == USB_SPEED_HIGH) {
-        cap = 1U << QH_MULT_SHIFT;
+        qh->cap = 1U << QH_MULT_SHIFT;
     }
-
-    qh->cap = cap;
 }
 
 static void EHCI_WriteQtdBufPage(struct EHCI_QTD *qtd, uint32_t bufAddr,
@@ -426,9 +424,17 @@ static HAL_Status EHCI_CtrlXfer(struct UTR *utr)
     uint32_t token;
     int isNewQh = 0;
 
+#ifdef USB_DEBUG
+    if ((uintptr_t)utr->buff > UINT32_MAX) {
+        HAL_DBG_ERR("EHCI ctrl buf is not a 32-bit address!\n");
+
+        return HAL_INVAL;
+    }
+#endif
+
     if (utr->dataLen > 0) {
-        if (((uint32_t)utr->buff + utr->dataLen) >
-            (((uint32_t)utr->buff & ~0xFFF) + 0x5000)) {
+        if (((uintptr_t)utr->buff + utr->dataLen) >
+            (((uintptr_t)utr->buff & ~0xFFF) + 0x5000)) {
             return HAL_INVAL;
         }
     }
@@ -455,10 +461,27 @@ static HAL_Status EHCI_CtrlXfer(struct UTR *utr)
 
     /* Allocate qTDs */
     qtdSetup = (struct EHCI_QTD *)HAL_USBH_AllocPool();
+    if (!qtdSetup) {
+        if (isNewQh) {
+            HAL_USBH_FreePool(qh);
+            udev->ep0.hwPipe = NULL;
+        }
+
+        return HAL_ERROR;
+    }
     EHCI_QTD_INIT(qtdSetup, utr);
 
     if (utr->dataLen > 0) {
         qtdData = (struct EHCI_QTD *)HAL_USBH_AllocPool();
+        if (!qtdData) {
+            HAL_USBH_FreePool(qtdSetup);
+            if (isNewQh) {
+                HAL_USBH_FreePool(qh);
+                udev->ep0.hwPipe = NULL;
+            }
+
+            return HAL_ERROR;
+        }
         EHCI_QTD_INIT(qtdData, utr);
     } else {
         qtdData = NULL;
@@ -467,30 +490,34 @@ static HAL_Status EHCI_CtrlXfer(struct UTR *utr)
     qtdStatus = (struct EHCI_QTD *)HAL_USBH_AllocPool();
     if (qtdStatus == NULL) {
         /* out of memory? */
-        if (qtdSetup) {
-            HAL_USBH_FreePool(qtdSetup);
-        }
+        HAL_USBH_FreePool(qtdSetup);
+
         if (qtdData) {
             HAL_USBH_FreePool(qtdData);
+        }
+
+        if (isNewQh) {
+            HAL_USBH_FreePool(qh);
+            udev->ep0.hwPipe = NULL;
         }
 
         return HAL_ERROR; /* out of memory */
     }
 
     EHCI_QTD_INIT(qtdStatus, utr);
-    HAL_DBG("qh=0x%lx, qtdSetup=0x%lx, qtdData=0x%lx, qtdStatus=0x%lx\n", (uint32_t)qh, (uint32_t)qtdSetup, (uint32_t)qtdData, (uint32_t)qtdStatus);
+    HAL_DBG("qh=0x%" PRIxPTR ", qtdSetup=0x%" PRIxPTR ", qtdData=0x%" PRIxPTR ", qtdStatus=0x%" PRIxPTR "\n", (uintptr_t)qh, (uintptr_t)qtdSetup, (uintptr_t)qtdData, (uintptr_t)qtdStatus);
 
     /* Prepare SETUP stage qTD */
     qtdSetup->qh = qh;
     //qtdSetup->utr = utr;
-    EHCI_WriteQtdBufPage(qtdSetup, (uint32_t)&utr->setup, 8);
+    EHCI_WriteQtdBufPage(qtdSetup, (uintptr_t)&utr->setup, 8);
     EHCI_AppendQtdToQhList(qh, qtdSetup);
     qtdSetup->token = (8 << 16) | QTD_ERR_COUNTER | QTD_PID_SETUP | QTD_STS_ACTIVE;
 
     /* Prepare DATA stage qTD */
     if (utr->dataLen > 0) {
-        qtdSetup->qTDNext = (uint32_t)qtdData;
-        qtdData->qTDNext = (uint32_t)qtdStatus;
+        qtdSetup->qTDNext = (uintptr_t)qtdData;
+        qtdData->qTDNext = (uintptr_t)qtdStatus;
 
         if (!(utr->setup.bmRequestType & 0x80)) {
             /* REQ_TYPE_OUT */
@@ -501,15 +528,15 @@ static HAL_Status EHCI_CtrlXfer(struct UTR *utr)
 
         qtdData->qh = qh;
         //qtdData->utr = utr;
-        EHCI_WriteQtdBufPage(qtdData, (uint32_t)utr->buff, utr->dataLen);
+        EHCI_WriteQtdBufPage(qtdData, (uintptr_t)utr->buff, utr->dataLen);
         EHCI_AppendQtdToQhList(qh, qtdData);
         qtdData->token = QTD_DT | (utr->dataLen << 16) | token;
     } else {
-        qtdSetup->qTDNext = (uint32_t)qtdStatus;
+        qtdSetup->qTDNext = (uintptr_t)qtdStatus;
     }
 
     /* Prepare USTSR stage qTD */
-    qtdStatus->qTDNext = (uint32_t)ehci->qTDGhost;
+    qtdStatus->qTDNext = (uintptr_t)ehci->qTDGhost;
     qtdStatus->qTDAltNext = QTD_LIST_END;
 
     if (!(utr->setup.bmRequestType & 0x80)) {
@@ -526,7 +553,7 @@ static HAL_Status EHCI_CtrlXfer(struct UTR *utr)
 
     /* Update QH overlay */
     qh->qTDCurr = 0;
-    qh->qTDNextOL = (uint32_t)qtdSetup;
+    qh->qTDNextOL = (uintptr_t)qtdSetup;
     qh->qTDAltNextOL = QTD_LIST_END;
     qh->tokenOL = 0;
 
@@ -554,6 +581,14 @@ static HAL_Status EHCI_BulkXfer(struct UTR *utr)
     uint8_t *buff;
     uint32_t token;
     int isNewQh = 0;
+
+#ifdef USB_DEBUG
+    if ((uintptr_t)utr->buff > UINT32_MAX) {
+        HAL_DBG_ERR("EHCI bulk buf is not a 32-bit address!\n");
+
+        return HAL_INVAL;
+    }
+#endif
 
     if (ep->hwPipe != NULL) {
         qh = (struct EHCI_QH *)ep->hwPipe;
@@ -611,9 +646,9 @@ static HAL_Status EHCI_BulkXfer(struct UTR *utr)
         }
 
         qtd->qh = qh;
-        qtd->qTDNext = (uint32_t)ehci->qTDGhost;
+        qtd->qTDNext = (uintptr_t)ehci->qTDGhost;
         qtd->qTDAltNext = QTD_LIST_END; //(uint32_t)ehci->qTDGhost;
-        EHCI_WriteQtdBufPage(qtd, (uint32_t)buff, xferLen);
+        EHCI_WriteQtdBufPage(qtd, (uintptr_t)buff, xferLen);
         EHCI_AppendQtdToQhList(qh, qtd);
         qtd->token = (xferLen << 16) | token;
 
@@ -622,27 +657,27 @@ static HAL_Status EHCI_BulkXfer(struct UTR *utr)
         if (dataLen == 0) {
             /* Is this the latest qTD? */
             qtd->token |= QTD_IOC; /* Ask to raise an interrupt on the last qTD */
-            qtd->qTDNext = (uint32_t)ehci->qTDGhost; /* qTD list end */
+            qtd->qTDNext = (uintptr_t)ehci->qTDGhost; /* qTD list end */
         }
 
         if (qtdPrev != NULL) {
-            qtdPrev->qTDNext = (uint32_t)qtd;
+            qtdPrev->qTDNext = (uintptr_t)qtd;
         }
         qtdPrev = qtd;
     }
 
-    //HAL_DBG("utr=0x%lx, qh=0x%lx, qtd=0x%lx\n", (uint32_t)utr, (uint32_t)qh, (uint32_t)qh->qTDList);
+    //HAL_DBG("utr=0x%" PRIx32 ", qh=0x%" PRIx32 ", qtd=0x%" PRIx32 "\n", (uint32_t)utr, (uint32_t)qh, (uint32_t)qh->qTDList);
 
     qtd = qh->qTDList;
 
 //  qh->qTDCurr = 0; //(uint32_t)qtd;
-    qh->qTDNextOL = (uint32_t)qtd;
+    qh->qTDNextOL = (uintptr_t)qtd;
 //  qh->qTDAltNextOL = QTD_LIST_END;
 
     /* Link QH and start asynchronous transfer */
     if (isNewQh) {
         memcpy(&(qh->bufPageOL[0]), &(qtd->bufPage[0]), 20);
-        qh->qTDCurr = (uint32_t)qtd;
+        qh->qTDCurr = (uintptr_t)qtd;
         qh->tokenOL = 0; /* qtd->token; */
 
         if (utr->ep->bToggle) {
@@ -668,6 +703,14 @@ static HAL_Status EHCI_IntrXfer(struct UTR *utr)
     struct EHCI_QH *qh, *iqh;
     struct EHCI_QTD *qtd, *qtdDummy;
     uint32_t token;
+
+#ifdef USB_DEBUG
+    if ((uintptr_t)utr->buff > UINT32_MAX) {
+        HAL_DBG_ERR("EHCI intr buf is not a 32-bit address!\n");
+
+        return HAL_INVAL;
+    }
+#endif
 
     qtdDummy = (struct EHCI_QTD *)HAL_USBH_AllocPool();
     if (qtdDummy == NULL) {
@@ -710,7 +753,7 @@ static HAL_Status EHCI_IntrXfer(struct UTR *utr)
         qtd->token &= ~(QTD_STS_ACTIVE | QTD_STS_HALT);
 
         qh->dummy = qtdDummy;
-        qh->qTDNextOL = (uint32_t)qtdDummy;
+        qh->qTDNextOL = (uintptr_t)qtdDummy;
         qh->tokenOL = 0; /* !Active & !Halted */
 
         /* link QH */
@@ -727,7 +770,7 @@ static HAL_Status EHCI_IntrXfer(struct UTR *utr)
     }
 
     qtd = qh->dummy; /* Use the current dummy qTD */
-    qtd->qTDNext = (uint32_t)qtdDummy;
+    qtd->qTDNext = (uintptr_t)qtdDummy;
     qtd->utr = utr;
     qh->dummy = qtdDummy; /* Give the new dummy qTD */
 
@@ -740,11 +783,11 @@ static HAL_Status EHCI_IntrXfer(struct UTR *utr)
 
     qtd->qh = qh;
     qtd->qTDAltNext = QTD_LIST_END;
-    EHCI_WriteQtdBufPage(qtd, (uint32_t)utr->buff, utr->dataLen);
+    EHCI_WriteQtdBufPage(qtd, (uintptr_t)utr->buff, utr->dataLen);
     EHCI_AppendQtdToQhList(qh, qtd);
     qtd->token = QTD_IOC | (utr->dataLen << 16) | token | QTD_STS_ACTIVE;
 
-    // HAL_DBG("%s: qh 0x%lx, 0x%lx, 0x%lx\n", __func__, (uint32_t)qh, (uint32_t)qh->chrst, (uint32_t)qh->cap);
+    // HAL_DBG("%s: qh 0x%" PRIx32 ", 0x%" PRIx32 ", 0x%" PRIx32 "\n", __func__, (uint32_t)qh, (uint32_t)qh->chrst, (uint32_t)qh->cap);
 
     pReg->USBCMD |= EHCI_USBCMD_PSEN_MASK; /* periodic list enable */
 
@@ -758,7 +801,7 @@ static HAL_Status EHCI_QuitXfer(void *pHCD, struct UTR *utr,
     struct EHCI_HCD *ehci = (struct EHCI_HCD *)pHCD;
     struct EHCI_QH *qh;
 
-    // HAL_DBG("%s: utr 0x%lx, ep 0x%lx\n", __func__, (uint32_t)utr, (uint32_t)ep);
+    // HAL_DBG("%s: utr 0x%" PRIx32 ", ep 0x%" PRIx32 "\n", __func__, (uint32_t)utr, (uint32_t)ep);
 
     DISABLE_EHCI_IRQ();
     if (HAL_EHCI_QuitIsoXfer(utr, ep) == HAL_OK) {
@@ -799,19 +842,19 @@ static HAL_Check EHCI_VisitQtd(struct EHCI_QTD *qtd)
     if ((qtd->token == 0x11197B3F) || (qtd->token == 0x1197B3F)) {
         return HAL_FALSE; /* A Dummy qTD or qTD on writing, don't touch it. */
     }
-    // HAL_DBG("Visit qtd 0x%lx - 0x%lx\n", (uint32_t)qtd, qtd->token);
+    // HAL_DBG("Visit qtd 0x%" PRIx32 " - 0x%" PRIx32 "\n", (uint32_t)qtd, qtd->token);
 
     if ((qtd->token & QTD_STS_ACTIVE) == 0) {
         if (qtd->token & (QTD_STS_HALT | QTD_STS_DATA_BUFF_ERR |
                           QTD_STS_BABBLE | QTD_STS_XactErr | QTD_STS_MISS_MF)) {
-            HAL_DBG_ERR("qTD 0x%lx error token 0x%lx, bufPage 0x%lx\n", (uint32_t)qtd, qtd->token, qtd->bufPage[0]);
+            HAL_DBG_ERR("qTD 0x%" PRIxPTR " error token 0x%" PRIx32 ", bufPage 0x%" PRIx32 "\n", (uintptr_t)qtd, qtd->token, qtd->bufPage[0]);
             if (qtd->utr->status == 0) {
                 qtd->utr->status = USBH_ERR_TRANSACTION;
             }
         } else {
             if ((qtd->token & QTD_PID_MASK) != QTD_PID_SETUP) {
                 qtd->utr->xferLen += qtd->xferLen - QTD_TODO_LEN(qtd->token);
-                // HAL_DBG("0x%lx  utr->xferLen += %d\n", qtd->token, qtd->xferLen - QTD_TODO_LEN(qtd->token));
+                // HAL_DBG("0x%" PRIx32 "  utr->xferLen += %d\n", qtd->token, qtd->xferLen - QTD_TODO_LEN(qtd->token));
             }
         }
 
@@ -830,7 +873,7 @@ static void EHCI_ScanAsynchronousList(struct EHCI_HCD *ehci)
 
     qh = QH_PTR(ehci->hQH->hLink);
     while (qh != ehci->hQH) {
-        HAL_DBG("Scan qh=0x%lx, 0x%lx\n", (uint32_t)qh, qh->tokenOL);
+        HAL_DBG("Scan qh=0x%" PRIxPTR ", 0x%" PRIx32 "\n", (uintptr_t)qh, qh->tokenOL);
 
         utr = NULL;
         qtd = qh->qTDList;
@@ -942,7 +985,7 @@ static void EHCI_IaadRemoveQh(struct EHCI_HCD *ehci)
         qh = ehci->qhRemoveList;
         ehci->qhRemoveList = qh->next;
 
-        // HAL_DBG("%s: remove QH 0x%lx\n", __func__, (uint32_t)qh);
+        // HAL_DBG("%s: remove QH 0x%" PRIx32 "\n", __func__, (uint32_t)qh);
 
         while (qh->doneList) { /* We can free the qTDs now */
             qtd = qh->doneList;
@@ -1049,7 +1092,7 @@ static int EHCI_RtHubPolling(void *pHCD)
     int change = 0;
 
     /* Connect status change */
-    HAL_DBG("EHCI port1 status change: 0x%lx\n", pReg->PORTSC[0]);
+    HAL_DBG("EHCI port1 status change: 0x%" PRIx32 "\n", pReg->PORTSC[0]);
 
     /* Port de-bounce */
     debounceTime = HUB_DEBOUNCE_TIME * 1000;
@@ -1105,7 +1148,7 @@ HAL_Status HAL_EHCI_IRQHandler(void *pHCD)
     intrSts = pReg->USBSTS;
     pReg->USBSTS = intrSts; /* Clear interrupt status */
 
-    HAL_DBG("ehci intrSts = 0x%lx\n\n", intrSts);
+    HAL_DBG("ehci intrSts = 0x%" PRIx32 "\n\n", intrSts);
 
     if (intrSts & EHCI_USBSTS_UERRINT_MASK) {
         HAL_DBG_ERR("Transfer error!\n");

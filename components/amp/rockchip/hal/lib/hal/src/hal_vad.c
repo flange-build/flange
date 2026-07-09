@@ -439,7 +439,7 @@ HAL_Status HAL_VAD_IrqHandler(struct HAL_VAD_DEV *vad)
     val = READ_REG(reg->INT);
     WRITE_REG(reg->INT, val);
 
-    //HAL_DBG("%s: irq status: 0x%lx\n", __func__, val);
+    //HAL_DBG("%s: irq status: 0x%" PRIx32 "\n", __func__, val);
 
     return HAL_OK;
 }

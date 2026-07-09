@@ -90,8 +90,8 @@ static void gpio_test(void)
                          GPIO_PIN_C0,
                          PIN_CONFIG_MUX_FUNC0 |
                          PIN_CONFIG_PUL_UP);
-    printf("GPIO3B_P: %p = 0x%lx\n", &VCCIO3_5_IOC->GPIO3B_P, VCCIO3_5_IOC->GPIO3B_P);
-    printf("GPIO3C_P: %p = 0x%lx\n", &VCCIO3_5_IOC->GPIO3C_P, VCCIO3_5_IOC->GPIO3C_P);
+    printf("GPIO3B_P: %p = 0x%" PRIx32 "\n", &VCCIO3_5_IOC->GPIO3B_P, VCCIO3_5_IOC->GPIO3B_P);
+    printf("GPIO3C_P: %p = 0x%" PRIx32 "\n", &VCCIO3_5_IOC->GPIO3C_P, VCCIO3_5_IOC->GPIO3C_P);
     HAL_DelayMs(3000);
     printf("test_gpio pull DOWN\n");
     HAL_PINCTRL_SetParam(GPIO_BANK3,
@@ -100,30 +100,30 @@ static void gpio_test(void)
                          PIN_CONFIG_MUX_FUNC0 |
                          PIN_CONFIG_PUL_DOWN);
     HAL_DelayMs(3000);
-    printf("GPIO3B_P: %p = 0x%lx\n", &VCCIO3_5_IOC->GPIO3B_P, VCCIO3_5_IOC->GPIO3B_P);
-    printf("GPIO3C_P: %p = 0x%lx\n", &VCCIO3_5_IOC->GPIO3C_P, VCCIO3_5_IOC->GPIO3C_P);
+    printf("GPIO3B_P: %p = 0x%" PRIx32 "\n", &VCCIO3_5_IOC->GPIO3B_P, VCCIO3_5_IOC->GPIO3B_P);
+    printf("GPIO3C_P: %p = 0x%" PRIx32 "\n", &VCCIO3_5_IOC->GPIO3C_P, VCCIO3_5_IOC->GPIO3C_P);
 
     /* Test GPIO output */
     HAL_GPIO_SetPinDirection(GPIO3, GPIO_PIN_B2, GPIO_OUT);
     HAL_GPIO_SetPinDirection(GPIO3, GPIO_PIN_C0, GPIO_OUT);
     level1 = HAL_GPIO_GetPinLevel(GPIO3, GPIO_PIN_B2);
     level2 = HAL_GPIO_GetPinLevel(GPIO3, GPIO_PIN_C0);
-    printf("test_gpio 3b2 level = %ld\n", level1);
-    printf("test_gpio 3c0 level = %ld\n", level2);
+    printf("test_gpio 3b2 level = %" PRId32 "\n", level1);
+    printf("test_gpio 3c0 level = %" PRId32 "\n", level2);
     HAL_DelayMs(3000);
     HAL_GPIO_SetPinLevel(GPIO3, GPIO_PIN_B2, GPIO_HIGH);
     HAL_GPIO_SetPinLevel(GPIO3, GPIO_PIN_C0, GPIO_HIGH);
     level1 = HAL_GPIO_GetPinLevel(GPIO3, GPIO_PIN_B2);
     level2 = HAL_GPIO_GetPinLevel(GPIO3, GPIO_PIN_C0);
-    printf("test_gpio 3b2 output high level = %ld\n", level1);
-    printf("test_gpio 3c0 output high level = %ld\n", level2);
+    printf("test_gpio 3b2 output high level = %" PRId32 "\n", level1);
+    printf("test_gpio 3c0 output high level = %" PRId32 "\n", level2);
     HAL_DelayMs(3000);
     HAL_GPIO_SetPinLevel(GPIO3, GPIO_PIN_B2, GPIO_LOW);
     HAL_GPIO_SetPinLevel(GPIO3, GPIO_PIN_C0, GPIO_LOW);
     level1 = HAL_GPIO_GetPinLevel(GPIO3, GPIO_PIN_B2);
     level2 = HAL_GPIO_GetPinLevel(GPIO3, GPIO_PIN_C0);
-    printf("test_gpio 3b2 output low level = %ld\n", level1);
-    printf("test_gpio 3c0 output low level = %ld\n", level2);
+    printf("test_gpio 3b2 output low level = %" PRId32 "\n", level1);
+    printf("test_gpio 3c0 output low level = %" PRId32 "\n", level2);
     HAL_DelayMs(3000);
 
     /* Test GPIO interrupt */
@@ -308,7 +308,7 @@ rpmsg_ns_new_ept_cb rpmsg_ns_cb(uint32_t new_ept, const char *new_ept_name, uint
 
     cpu_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
     strncpy(ept_name, new_ept_name, RL_NS_NAME_SIZE);
-    printf("rpmsg remote: new_ept-0x%lx name-%s\n", new_ept, ept_name);
+    printf("rpmsg remote: new_ept-0x%" PRIx32 " name-%s\n", new_ept, ept_name);
 }
 
 static int32_t remote_ept_cb(void *payload, uint32_t payload_len, uint32_t src, void *priv)
@@ -345,8 +345,8 @@ static void rpmsg_linux_test(void)
     rpmsg_share_mem_check();
     master_id = MASTER_ID;
     remote_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
-    printf("rpmsg remote: remote core cpu_id-%ld\n", remote_id);
-//    printf("rpmsg remote: shmem_base-0x%lx shmem_end-%lx\n", RPMSG_LINUX_MEM_BASE, RPMSG_LINUX_MEM_END);
+    printf("rpmsg remote: remote core cpu_id-%" PRId32 "\n", remote_id);
+//    printf("rpmsg remote: shmem_base-0x%" PRIx32 " shmem_end-%" PRIx32 "\n", RPMSG_LINUX_MEM_BASE, RPMSG_LINUX_MEM_END);
 
     info = malloc(sizeof(struct rpmsg_info_t));
     if (info == NULL) {
@@ -365,7 +365,7 @@ static void rpmsg_linux_test(void)
 
     info->instance = rpmsg_lite_remote_init((void *)RPMSG_LINUX_MEM_BASE, RL_PLATFORM_SET_LINK_ID(master_id, remote_id), RL_NO_FLAGS);
     rpmsg_lite_wait_for_link_up(info->instance);
-    printf("rpmsg remote: link up! link_id-0x%lx\n", info->instance->link_id);
+    printf("rpmsg remote: link up! link_id-0x%" PRIx32 "\n", info->instance->link_id);
     rpmsg_ns_bind(info->instance, rpmsg_ns_cb, &ns_cb_data);
     info->ept = rpmsg_lite_create_ept(info->instance, RPMSG_HAL_REMOTE_TEST3_EPT, remote_ept_cb, info);
     ept_flags = RL_NS_CREATE;

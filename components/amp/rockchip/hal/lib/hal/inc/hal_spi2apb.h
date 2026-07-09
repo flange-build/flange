@@ -29,8 +29,8 @@
 #define SPI2APB_LSB (0 << SPI2APB_CTRL0_FBM_SHIFT)          /**< LSB */
 #define SPI2APB_MSB (1 << SPI2APB_CTRL0_FBM_SHIFT)          /**< MSB */
 
-#define SPI2APB_BIG_ENDIAN    (0 << SPI2APB_CTRL0_EM_SHIFT)   /**< Big endian */
-#define SPI2APB_LITTLE_ENDIAN (1 << SPI2APB_CTRL0_EM_SHIFT)   /**< Little endian */
+#define SPI2APB_LITTLE_ENDIAN (0 << SPI2APB_CTRL0_EM_SHIFT)   /**< Little endian */
+#define SPI2APB_BIG_ENDIAN    (1 << SPI2APB_CTRL0_EM_SHIFT)   /**< Big endian */
 
 #define SPI2APB_RXCP        (0 << SPI2APB_CTRL0_RXCP_SHIFT)   /**< RX clock is not inverted */
 #define SPI2APB_RXCP_INVERT (1 << SPI2APB_CTRL0_RXCP_SHIFT)   /**< RX clock is inverted */

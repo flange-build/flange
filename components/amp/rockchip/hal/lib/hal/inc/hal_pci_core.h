@@ -40,6 +40,31 @@ typedef int32_t HAL_PCI_DevT;
 #define PCI_ADD_BUS(bus, devfn) (((bus) << 16) | (devfn))
 #define PCI_BDF(b, d, f)        ((b) << 16 | PCI_DEVFN(d, f))
 
+#define PCI_BASE_ADDRESS_0 0x10
+#define PCI_BASE_ADDRESS_1 0x14
+#define PCI_BASE_ADDRESS_2 0x18
+#define PCI_BASE_ADDRESS_3 0x1C
+#define PCI_BASE_ADDRESS_4 0x20
+#define PCI_BASE_ADDRESS_5 0x24
+
+#define PCI_BASE_ADDRESS_MEM_TYPE_32  0x00
+#define PCI_BASE_ADDRESS_MEM_TYPE_64  0x04
+#define PCI_BASE_ADDRESS_MEM_PREFETCH 0x08
+
+#define PCIE_TYPE0_HDR_DBI2_OFFSET 0x100
+#define PCIE_ELBI_LOCAL_BASE       0x1000
+#define PCIE_ELBI_LOCAL_ENABLE_OFF 0x08
+
+enum PCI_BARNO {
+    NO_BAR = -1,
+    BAR_0,
+    BAR_1,
+    BAR_2,
+    BAR_3,
+    BAR_4,
+    BAR_5,
+};
+
 /**
  * @brief PCI size type
  */
@@ -57,12 +82,12 @@ typedef enum {
  *  @{
  */
 
-int32_t HAL_PCI_WriteConfigDWord(uint32_t cfgBase, int32_t offset, uint32_t value);
-int32_t HAL_PCI_ReadConfigDWord(uint32_t cfgBase, int32_t offset, uint32_t *valuep);
-int32_t HAL_PCI_WriteConfigWord(uint32_t cfgBase, int32_t offset, uint32_t value);
-int32_t HAL_PCI_ReadConfigWord(uint32_t cfgBase, int32_t offset, uint32_t *valuep);
-int32_t HAL_PCI_WriteConfigByte(uint32_t cfgBase, int32_t offset, uint32_t value);
-int32_t HAL_PCI_ReadConfigByte(uint32_t cfgBase, int32_t offset, uint32_t *valuep);
+int32_t HAL_PCI_WriteConfigDWord(uintptr_t cfgBase, int32_t offset, uint32_t value);
+int32_t HAL_PCI_ReadConfigDWord(uintptr_t cfgBase, int32_t offset, uint32_t *valuep);
+int32_t HAL_PCI_WriteConfigWord(uintptr_t cfgBase, int32_t offset, uint32_t value);
+int32_t HAL_PCI_ReadConfigWord(uintptr_t cfgBase, int32_t offset, uint32_t *valuep);
+int32_t HAL_PCI_WriteConfigByte(uintptr_t cfgBase, int32_t offset, uint32_t value);
+int32_t HAL_PCI_ReadConfigByte(uintptr_t cfgBase, int32_t offset, uint32_t *valuep);
 
 /** @} */
 

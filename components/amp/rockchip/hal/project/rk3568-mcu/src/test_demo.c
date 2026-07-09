@@ -112,7 +112,7 @@ static void gpio_test(void)
     /* Test GPIO output */
     HAL_GPIO_SetPinDirection(GPIO4, GPIO_PIN_C5, GPIO_OUT);
     level = HAL_GPIO_GetPinLevel(GPIO4, GPIO_PIN_C5);
-    printf("test_gpio 4c5 level = %ld\n", level);
+    printf("test_gpio 4c5 level = %" PRId32 "\n", level);
     HAL_DelayMs(5000);
     if (level == GPIO_HIGH) {
         HAL_GPIO_SetPinLevel(GPIO4, GPIO_PIN_C5, GPIO_LOW);
@@ -120,7 +120,7 @@ static void gpio_test(void)
         HAL_GPIO_SetPinLevel(GPIO4, GPIO_PIN_C5, GPIO_HIGH);
     }
     level = HAL_GPIO_GetPinLevel(GPIO4, GPIO_PIN_C5);
-    printf("test_gpio 4c5 level = %ld\n", level);
+    printf("test_gpio 4c5 level = %" PRId32 "\n", level);
     HAL_DelayMs(5000);
 
     /* Test GPIO interrupt */
@@ -162,7 +162,7 @@ static void perf_test(void)
         }
         time_end = HAL_GetTick();
         time_ms = time_end - time_start;
-        printf("memset bw=%ldKB/s, time_ms=%d\n",
+        printf("memset bw=%" PRId32 "KB/s, time_ms=%d\n",
                1000 * (size * loop / 1024) / time_ms, time_ms);
 
         /* prevent optimization */
@@ -284,7 +284,7 @@ static void timer_isr(uint32_t irq, void *args)
     }
     /* 24M timer: 41.67ns per count */
     latency = count * 41;
-    printf("timer_test: latency=%ldns(count=%ld)\n", latency, count);
+    printf("timer_test: latency=%" PRId32 "ns(count=%" PRId32 ")\n", latency, count);
     timer_int_count++;
     latency_sum += latency;
     latency_max = latency_max > latency ? latency_max : latency;
@@ -311,7 +311,7 @@ static void timer_test(void)
     end = HAL_GetSysTimerCount();
     /* sys_timer: TIMER5 is a increment count TIMER */
     count = (uint32_t)(end - start);
-    printf("sys_timer 1s count: %ld(%lld, %lld)\n", count, start, end);
+    printf("sys_timer 1s count: %" PRId32 "(%lld, %lld)\n", count, start, end);
 
     HAL_TIMER_Init(test_timer, TIMER_FREE_RUNNING);
     HAL_TIMER_SetCount(test_timer, 2000000000);
@@ -323,7 +323,7 @@ static void timer_test(void)
     /* test_timer: TIMER4 is a decrement count TIMER */
     desc_timer = true;
     count = (uint32_t)(start - end);
-    printf("test_timer 1s count: %ld(%lld, %lld)\n", count, start, end);
+    printf("test_timer 1s count: %" PRId32 "(%lld, %lld)\n", count, start, end);
     HAL_TIMER_Stop(test_timer);
 
     HAL_INTMUX_SetIRQHandler(TIMER4_IRQn, timer_isr, NULL);
@@ -362,7 +362,7 @@ static void mbox_remote_cb(struct MBOX_CMD_DAT *msg, void *args)
 
     tx_msg.CMD = cpu_id & 0xFU;
     tx_msg.DATA = 0x98765432;
-    printf("mbox receive: cmd=0x%lx data=0x%lx\n", msg->CMD, msg->DATA);
+    printf("mbox receive: cmd=0x%" PRIx32 " data=0x%" PRIx32 "\n", msg->CMD, msg->DATA);
     HAL_MBOX_SendMsg(pMBox, mbox_chan, &tx_msg);
 }
 

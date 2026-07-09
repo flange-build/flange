@@ -26,7 +26,7 @@
  */
 
 #define HAL_SPI_MASTER_MAX_SCLK_OUT 50000000 /**< Max io clock in master mode */
-#define HAL_SPI_SLAVE_MAX_SCLK_OUT  20000000 /**< Max io in clock in slave mode */
+#define HAL_SPI_SLAVE_MAX_SCLK_OUT  50000000 /**< Max io in clock in slave mode */
 
 #define CR0_DATA_FRAME_SIZE_4BIT  (0x00 << SPI_CTRLR0_DFS_SHIFT)
 #define CR0_DATA_FRAME_SIZE_8BIT  (0x01 << SPI_CTRLR0_DFS_SHIFT)
@@ -73,6 +73,12 @@
 #define CR0_CSM_2CYCLES  CR0_CSM(2)
 #define CR0_CSM_3CYCLES  CR0_CSM(3)
 
+#define CR0_RSD(nCycles) (((nCycles) << SPI_CTRLR0_RSD_SHIFT) & SPI_CTRLR0_RSD_MASK)
+#define CR0_RSD_0CYCLE   CR0_RSD(0)
+#define CR0_RSD_1CYCLE   CR0_RSD(1)
+#define CR0_RSD_2CYCLES  CR0_RSD(2)
+#define CR0_RSD_3CYCLES  CR0_RSD(3)
+
 /***************************** Structure Definition **************************/
 
 /** @brief  SPI Type definition */
@@ -104,6 +110,8 @@ struct SPI_CONFIG {
                                   used to configure the transmit and receive SCK clock. */
     uint32_t ssiType;          /**< Specifies if the TI mode is enabled or not.*/
     uint32_t csm;              /**< Specifies Motorola SPI Master SS_N high cycles for each frame data is transfer. */
+    uint32_t rsd;              /**< Specifies rx sample delay number. */
+    bool configured;           /**< Indicate the configure status. */
 };
 
 /* We have 2 DMA channels per SPI, one for RX and one for TX */
@@ -115,11 +123,12 @@ struct HAL_SPI_DMA_INFO {
 };
 
 struct HAL_SPI_DEV {
-    const uint32_t base;
+    const uintptr_t base;
     const eCLOCK_Name clkId;
     const uint32_t clkGateID;
     const uint32_t pclkGateID;
-    const uint8_t irqNum;
+    const uint32_t maxFreq;
+    const uint32_t irqNum;
     const uint8_t isSlave;
     const struct HAL_SPI_DMA_INFO txDma;
     const struct HAL_SPI_DMA_INFO rxDma;
@@ -146,13 +155,14 @@ struct SPI_HANDLE {
  *  @{
  */
 
-HAL_Status HAL_SPI_Init(struct SPI_HANDLE *pSPI, uint32_t base, bool slave);
+HAL_Status HAL_SPI_Init(struct SPI_HANDLE *pSPI, uintptr_t base, bool slave);
 HAL_Status HAL_SPI_DeInit(struct SPI_HANDLE *pSPI);
 HAL_Status HAL_SPI_FlushFifo(struct SPI_HANDLE *pSPI);
 HAL_Status HAL_SPI_SetCS(struct SPI_HANDLE *pSPI, char select, bool enable);
 HAL_Status HAL_SPI_QueryBusState(struct SPI_HANDLE *pSPI);
 HAL_Status HAL_SPI_PioTransfer(struct SPI_HANDLE *pSPI);
 HAL_Status HAL_SPI_IrqHandler(struct SPI_HANDLE *pSPI);
+int HAL_SPI_DMACyclicCallBackHandler(struct SPI_HANDLE *pSPI);
 HAL_Status HAL_SPI_ItTransfer(struct SPI_HANDLE *pSPI);
 HAL_Status HAL_SPI_DmaTransfer(struct SPI_HANDLE *pSPI);
 HAL_Status HAL_SPI_Stop(struct SPI_HANDLE *pSPI);
@@ -162,6 +172,7 @@ uint32_t HAL_SPI_CalculateTimeout(struct SPI_HANDLE *pSPI);
 bool HAL_SPI_CanDma(struct SPI_HANDLE *pSPI);
 bool HAL_SPI_IsSlave(struct SPI_HANDLE *pSPI);
 bool HAL_SPI_IsDmaXfer(struct SPI_HANDLE *pSPI);
+bool HAL_SPI_IsCsInactive(struct SPI_HANDLE *pSPI);
 
 /** @} */
 

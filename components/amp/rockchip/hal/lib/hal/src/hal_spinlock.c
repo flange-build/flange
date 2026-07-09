@@ -50,7 +50,7 @@ static uint32_t g_ownerID;
 static HAL_Status HAL_SW_SPINLOCK_Init(uint32_t ownerID)
 {
     g_spinlock = (SPINLOCK_t *)__spinlock_mem_start__;
-    g_spinlock_max = ((uint32_t)__spinlock_mem_end__ - (uint32_t)__spinlock_mem_start__) / sizeof(SPINLOCK_t);
+    g_spinlock_max = ((uintptr_t)__spinlock_mem_end__ - (uintptr_t)__spinlock_mem_start__) / sizeof(SPINLOCK_t);
     if (g_spinlock_max <= 0 || ownerID == 0) {
         HAL_DBG("there is no memory for spinlock, or ownerID is zero, spinlock init failed\n");
         g_spinlock = NULL;
@@ -219,6 +219,8 @@ static HAL_Check HAL_SW_SPINLOCK_TryLock(SPINLOCK_t *lock)
 
     return tmp ? HAL_FALSE : HAL_TRUE;
 #endif
+
+    return HAL_FALSE;
 }
 
 static void HAL_SW_SPINLOCK_Unlock(SPINLOCK_t *lock)

@@ -97,7 +97,7 @@ static HAL_Status PINCTRL_AcquireMuxRoute(const struct PINCTRL_BANK_INFO *pBank,
     reg = pBank->grfBase + data->routeReg;
     *(volatile uint32_t *)(reg) = data->routeVal;
 
-    HAL_DBG("setting route %08lx = %08lx, %08lx\n", reg, data->routeVal, *(volatile uint32_t *)(reg));
+    HAL_DBG("setting route %08" PRIx32 " = %08" PRIx32 ", %08" PRIx32 "\n", reg, data->routeVal, *(volatile uint32_t *)(reg));
 exit:
 
     return rc;

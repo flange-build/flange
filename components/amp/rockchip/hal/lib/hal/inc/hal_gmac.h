@@ -85,6 +85,11 @@
 #define HAL_GMAC_MAX_FRAME_SIZE   1518
 #define HAL_GMAC_MAX_PACKET_SIZE  HAL_GMAC_ALIGN(HAL_GMAC_MAX_FRAME_SIZE, HAL_GMAC_BUFFER_ALIGN)
 
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+#define HAL_GMAC_PTP_FINEUPDATE   1       /*!< Fine Update method */
+#define HAL_GMAC_PTP_COARSEUPDATE 0       /*!< Coarse Update method */
+#endif
+
 /***************************** Structure Definition **************************/
 struct GMAC_HANDLE;
 
@@ -276,6 +281,15 @@ struct GMAC_HANDLE {
     uint32_t rxDescIdx;                   /**< Current Rx descriptor pointer */
     uint32_t txSize;                      /**< Tx descriptor size*/
     uint32_t rxSize;                      /**< Rx descriptor size */
+
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+    /* ptp */
+    bool hwtsTx;
+    bool hwtsRx;
+    uint32_t subSecondInc;
+    uint32_t defaultAddend;
+    uint32_t cdcErrorAdj;
+#endif
 };
 
 /**
@@ -283,13 +297,37 @@ struct GMAC_HANDLE {
   */
 struct HAL_GMAC_DEV {
     struct GMAC_REG *pReg;
-    eCLOCK_Name clkID;
-    uint32_t clkGateID;
+    eCLOCK_Name clkID125M;
+    eCLOCK_Name clkID50M;
+    uint32_t clkGateID125M;
+    uint32_t clkGateID50M;
     eCLOCK_Name pclkID;
     uint32_t pclkGateID;
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+    eCLOCK_Name ptpClkID;
+    uint32_t ptpClkGateID;
+#endif
     IRQn_Type irqNum;
     ePM_RUNTIME_ID runtimeID;
 };
+
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+/**
+ * @brief  GMAC PTP Timestamp Definition
+ */
+struct PTP_TIME {
+    uint32_t sec;
+    uint32_t nsec;
+};
+
+/**
+ * @brief  GMAC PTP Timestamp Offset Definition
+ */
+struct PTP_TIME_OFFSET {
+    int32_t sec;
+    int32_t nsec;
+};
+#endif
 
 /** @} */
 
@@ -338,6 +376,21 @@ void HAL_GMAC_SetToRMII(struct GMAC_HANDLE *pGMAC);
 void HAL_GMAC_SetRGMIISpeed(struct GMAC_HANDLE *pGMAC, int32_t speed);
 void HAL_GMAC_SetRMIISpeed(struct GMAC_HANDLE *pGMAC, int32_t speed);
 void HAL_GMAC_SetExtclkSrc(struct GMAC_HANDLE *pGMAC, bool extClk);
+
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+HAL_Status HAL_GMAC_PTPStart(struct GMAC_HANDLE *pGMAC, uint32_t rate, uint32_t UpdateMethod);
+HAL_Status HAL_GMAC_PTPStop(struct GMAC_HANDLE *pGMAC);
+HAL_Status HAL_GMAC_PTPGetTime(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *timestamp);
+HAL_Status HAL_GMAC_PTPSetTime(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *timestamp);
+HAL_Status HAL_GMAC_PTPUpdateTimeOffset(struct GMAC_HANDLE *pGMAC,
+                                        struct PTP_TIME_OFFSET *timeOffset);
+HAL_Status HAL_GMAC_PTPAdjFreq(struct GMAC_HANDLE *pGMAC, int32_t ppb);
+HAL_Status HAL_GMAC_PTPEnablePPS(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *start,
+                                 struct PTP_TIME *periods);
+HAL_Status HAL_GMAC_PTPDisablePPS(struct GMAC_HANDLE *pGMAC);
+HAL_Status HAL_GMAC_GetTxTimestamp(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *time);
+HAL_Status HAL_GMAC_GetRxTimestamp(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *time);
+#endif
 
 /** @} */
 

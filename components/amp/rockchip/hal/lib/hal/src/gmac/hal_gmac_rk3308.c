@@ -73,7 +73,7 @@ void HAL_GMAC_SetToRMII(struct GMAC_HANDLE *pGMAC)
     WRITE_REG(GRF->MAC_CON0, RK3308_MAC_PHY_INTF_SEL_RMII | RK3308_MAC_SPEED_100M);
     ret = HAL_CRU_ClkSetFreq(CLK_MAC, 50000000);
     if (ret) {
-        HAL_DBG_ERR("%s: set clk_mac rate 50M failed %ld\n",
+        HAL_DBG_ERR("%s: set clk_mac rate 50M failed %" PRId32 "\n",
                     __func__, ret);
     }
 }
@@ -128,7 +128,7 @@ void HAL_GMAC_SetRMIISpeed(struct GMAC_HANDLE *pGMAC, int32_t speed)
         clksel = 1;
         break;
     default:
-        HAL_DBG_ERR("unknown speed value for GMAC speed=%ld", speed);
+        HAL_DBG_ERR("unknown speed value for GMAC speed=%" PRId32 "", speed);
 
         return;
     }

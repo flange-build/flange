@@ -85,7 +85,7 @@ HAL_Status HAL_HCD_HCSubmitRequest(struct HCD_HANDLE *pHCD,
                                    uint8_t epType,
                                    uint8_t token,
                                    uint8_t *pbuff,
-                                   uint16_t length,
+                                   uint32_t length,
                                    uint8_t doPing);
 void HAL_HCD_IRQHandler(struct HCD_HANDLE *pHCD);
 void HAL_HCD_SOF_Callback(struct HCD_HANDLE *pHCD);
@@ -99,6 +99,7 @@ void HAL_HCD_HCNotifyURBChange_Callback(struct HCD_HANDLE *pHCD,
 HAL_Status HAL_HCD_ResetPort(struct HCD_HANDLE *pHCD);
 HAL_Status HAL_HCD_Start(struct HCD_HANDLE *pHCD);
 HAL_Status HAL_HCD_Stop(struct HCD_HANDLE *pHCD);
+uint8_t HAL_HCD_GetConnStatus(struct HCD_HANDLE *pHCD);
 eHCD_state HAL_HCD_GetState(struct HCD_HANDLE *pHCD);
 eUSB_OTG_urbState HAL_HCD_HCGetURBState(struct HCD_HANDLE *pHCD, uint8_t chNum);
 eUSB_OTG_hcState HAL_HCD_HCGetState(struct HCD_HANDLE *pHCD, uint8_t chNum);

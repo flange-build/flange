@@ -54,10 +54,11 @@ struct CRYPTO_DEV {
     uint32_t privDataSize;
     uint32_t privAlign;
     uint32_t dataAlign;
+    uint32_t hashMidDataSize;
 };
 
 /**
- * struct CRYPTO_BIGNUM - crypto bignum struct.
+ * struct CRYPTO_BIGNUM - crypto bignum struct with little endian
  */
 struct CRYPTO_BIGNUM {
     uint32_t nWords;
@@ -119,6 +120,7 @@ struct CRYPTO_DMA_CONFIG {
     uint32_t dstAddr;
     uint32_t dstLen;
     uint32_t isLast;
+    uint32_t forceRestart;
 };
 
 typedef enum {
@@ -291,6 +293,26 @@ HAL_Status HAL_CRYPTO_ExptMod(struct CRYPTO_DEV *pCrypto,
  * @return HAL_Status
  */
 HAL_Status HAL_CRYPTO_Trng(struct CRYPTO_DEV *pCrypto, uint8_t *pTrng, uint32_t len);
+
+/**
+ * @brief  store calculation mid data to buffer
+ * @param  pCrypto     : the handle of crypto.
+ * @param  algo        : cipher algo.
+ * @param  buffer      : buffer to save middle data.
+ * @param  bufferSize  : buffer size.
+ * @return HAL_Status
+ */
+HAL_Status HAL_CRYPTO_StoreMidData(struct CRYPTO_DEV *pCrypto, uint32_t algo, uint8_t *buffer, uint32_t bufferSize);
+
+/**
+ * @brief  restore calculation mid data from buffer
+ * @param  pCrypto     : the handle of crypto.
+ * @param  algo        : cipher algo.
+ * @param  buffer      : buffer to save middle data.
+ * @param  bufferSize  : buffer size.
+ * @return HAL_Status
+ */
+HAL_Status HAL_CRYPTO_RestoreMidData(struct CRYPTO_DEV *pCrypto, uint32_t algo, uint8_t *buffer, uint32_t bufferSize);
 
 /** @} */
 

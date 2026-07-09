@@ -56,8 +56,8 @@
 #define RK_GEN_VAL(p, v, w) ((_TO_MASK(w) << (_TO_OFFSET(p, w) + 16)) | (((v) & _TO_MASK(w)) << _TO_OFFSET(p, w)))
 
 /*
- * Use HAL_DBG("pinctrl: write val = 0x%lx to register %p\n", VAL, &REG);
- * and HAL_DBG("pinctrl: readback register %p = 0x%lx\n", &REG, REG);
+ * Use HAL_DBG("pinctrl: write val = 0x%" PRIx32 " to register %p\n", VAL, &REG);
+ * and HAL_DBG("pinctrl: readback register %p = 0x%" PRIx32 "\n", &REG, REG);
  * for debug
  */
 #define _PINCTRL_WRITE(REG, DATA) \

@@ -45,6 +45,17 @@ HAL_Status HAL_PCDEx_BcdDetect(struct PCD_HANDLE *pPCD);
 void HAL_PCDEx_LpmCallback(struct PCD_HANDLE *pPCD, ePCD_lpmMsg msg);
 void HAL_PCDEx_BcdCallback(struct PCD_HANDLE *pPCD, ePCD_bcdMsg msg);
 
+#ifdef USB_INNO_PHY_BCD_DETECT
+uint8_t HAL_USB_InnoPhy_GetBvalid();
+void HAL_USB_InnoPhy_SetChgMode(uint8_t enable);
+void HAL_USB_InnoPhy_DCD_Det(uint8_t enable);
+void HAL_USB_InnoPhy_Primary_Det(uint8_t enable);
+void HAL_USB_InnoPhy_Secondary_Det(uint8_t enable);
+ePCD_bcdMsg HAL_USB_InnoPhy_DCD_State();
+ePCD_bcdMsg HAL_USB_InnoPhy_Primary_State();
+ePCD_bcdMsg HAL_USB_InnoPhy_Secondary_State();
+#endif
+
 /** @} */
 
 #endif /* _HAL_PCD_EX_H_ */

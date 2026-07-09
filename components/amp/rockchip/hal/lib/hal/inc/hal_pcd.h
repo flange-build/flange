@@ -31,6 +31,13 @@
 #define PCD_SPEED_LOW          2U
 #define PCD_SPEED_FULL         3U
 
+/** Battery Charger Detect Time */
+#define CHG_DCD_DET_TIME_MS       (10)
+#define CHG_DCD_DET_DBNC          (2 * CHG_DCD_DET_TIME_MS)
+#define CHG_DCD_DET_TIMEOUT       (60 * CHG_DCD_DET_TIME_MS)
+#define CHG_PRIMARY_DET_TIME_MS   (80)
+#define CHG_SECONDARY_DET_TIME_MS (80)
+
 /** PCD Interrupts Handle */
 #define __HAL_PCD_ENABLE(__HANDLE__)  USB_EnableGlobalInt((__HANDLE__)->pReg)
 #define __HAL_PCD_DISABLE(__HANDLE__) USB_DisableGlobalInt((__HANDLE__)->pReg)
@@ -122,6 +129,10 @@ uint16_t HAL_PCD_EPGetRxCount(struct PCD_HANDLE *pPCD, uint8_t epAddr);
 HAL_Status HAL_PCD_EPSetStall(struct PCD_HANDLE *pPCD, uint8_t epAddr);
 HAL_Status HAL_PCD_EPClrStall(struct PCD_HANDLE *pPCD, uint8_t epAddr);
 HAL_Status HAL_PCD_EPFlush(struct PCD_HANDLE *pPCD, uint8_t epAddr);
+HAL_Status HAL_PCD_EPPollEn(struct PCD_HANDLE *pPCD, uint8_t epAddr);
+HAL_Status HAL_PCD_EPXferStartPoll(struct PCD_HANDLE *pPCD, uint8_t epAddr);
+HAL_Status HAL_PCD_EPXferCompletePoll(struct PCD_HANDLE *pPCD, uint8_t epAddr);
+HAL_Status HAL_PCD_EPFrameToggle(struct PCD_HANDLE *pPCD, uint8_t epAddr);
 HAL_Status HAL_PCD_ActivateRemoteWakeup(struct PCD_HANDLE *pPCD);
 HAL_Status HAL_PCD_DeActivateRemoteWakeup(struct PCD_HANDLE *pPCD);
 ePCD_state HAL_PCD_GetState(struct PCD_HANDLE *pPCD);

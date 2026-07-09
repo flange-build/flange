@@ -1,8 +1,8 @@
 # Rockchip HAL PCIe User Guide {#Rockchip_User_Guide_HAL_PCIe}
 
-Release Version: V1.0.0
+Release Version: V1.2.0
 
-Release Date: 2023-04-04
+Release Date: 2025-02-13
 
 Security Level: □Top-Secret   □Secret   □Internal   ■Public
 
@@ -14,7 +14,7 @@ THIS DOCUMENT IS PROVIDED “AS IS”. ROCKCHIP ELECTRONICS CO., LTD.(“ROCKCHI
 
 "Rockchip", "瑞芯微", "瑞芯" shall be Rockchip’s registered trademarks and owned by Rockchip. All the other trademarks or registered trademarks mentioned in this document shall be owned by their respective owners.
 
-**All rights reserved. ©2023. Rockchip Electronics Co., Ltd.**
+**All rights reserved. ©2025. Rockchip Electronics Co., Ltd.**
 
 Beyond the scope of fair use, neither any entity nor individual shall extract, copy, or distribute this document in any form in whole or in part without the written approval of Rockchip.
 
@@ -28,7 +28,7 @@ Customer service Tel:  +86-4007-700-590
 
 Customer service Fax:  +86-591-83951833
 
-Customer service e-Mail:  [fae@rock-chips.com]
+Customer service e-Mail:  [fae@rock-chips.com](mailto:fae@rock-chips.com)
 
 ---
 
@@ -42,7 +42,7 @@ This article introduces the instructions for using HAL PCIe. The HAL source code
 
 | **Chipset** | **Kernel Version** |
 | ----------- | ------------------ |
-| RK2206      | FreeRTOS V10.0.1   |
+| ALL SOC     | HAL/RTOS           |
 
 **Intended Audience**
 
@@ -56,13 +56,15 @@ Software development engineers
 
 **Revision History**
 
-| **Version** | **Author** | **Date**   | **Change Description** |
-| ----------- | ---------- | ---------- | ---------------------- |
-| V1.0.0      | Jon Lin    | 2023-04-04 | Initial version        |
+| **Version** | **Author** | **Date**   | **Change Description**                 |
+| ----------- | ---------- | ---------- | -------------------------------------- |
+| V1.0.0      | Jon Lin    | 2023-04-04 | Initial version                        |
+| V1.1.0      | Jon Lin    | 2024-08-08 | Add reference document                 |
+| V1.2.0      | Jon Lin    | 2025-02-13 | Add software configuration instruction |
 
 ---
 
-**目录**
+**Contents**
 
 [TOC]
 
@@ -77,11 +79,19 @@ Due to the lack of complete PCIe framework code under the bare metal or RTOS pro
 - uDMA transfer
 - INTx legacy interrupt
 
-Refer to the detailed interface in the application note.
+So in addition to the HAL interface introduced in this document, the following development work is also needed:
+
+- On the RC side, develop the PCIe initialization and enumeration process under u-boot or Linux:
+    - Refer to Rockchip_Developer_Guide_UBoot_Nextdev_EN.pdf
+    - Refer to Rockchip_Developer_Guide_PCIe_CN.pdf
+- On the EP side, for RK EP reference only, optional initialization of PCIe during the SPL phase or during the Linux phase:
+    - Refer to Rockchip_Developer_Guide_PCIE_EP_Stardard_Card_CN.pdf, it is recommended to first refer to the RK EP demo version of the drawing for hardware design specifications, such as:
+        - The PCIe interconnection has a master-slave relationship, and the enumeration is guided by the RC to reset the EP timing sequence. The RK EP solution suggests controlling the EP device NPOR through the PERST# signal.
+        - The same source clock scheme.
 
 ## Specification
 
-### Booting Process
+### RK EP Software Configuration And Booting Process
 
 **PCIe Initialization Scheme with Kernel (Recommended)**
 
@@ -100,6 +110,10 @@ Explanation:
 - Refer to the "Rockchip_Developer_Guide_UBoot_Nextdev_CN.pdf" document, PCIe chapter, for u-boot PCIe development, mainly involving:
     - Configuration instructions for "using PCIe before loading kernel dtb"
     - Pci cmd to obtain PCIe peripheral information, including important information such as bdf and bar mapping.
+
+### RK EP Software Configuration
+
+If RK EP is used as a PCIe endpoint and there is a need for bare-metal development, it is recommended to refer to the manual "Rockchip_Developer_Guide_PCIE_EP_Stardard_Card_CN.pdf" and use the "Flash Boot" boot scheme. Integrate the PCIe Bin driver to complete PCIe initialization and enumeration during the loader stage, and develop the RK EP device driver in the bare-metal environment.
 
 ### Resource Allocation
 

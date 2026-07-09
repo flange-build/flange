@@ -56,7 +56,7 @@ static void amp_msg_isr(int vector, void *param)
     IPC_DATA_T *ipc_dat = (IPC_DATA_T *)param;
 
     cpu_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
-    //rk_printf("cpu_id=%ld: master_isr, vector = %d\n", cpu_id, vector);
+    //rk_printf("cpu_id=%" PRId32 ": master_isr, vector = %d\n", cpu_id, vector);
 
     if (ipc_dat->rx_cb[cpu_id]) {
         retval = ipc_dat->rx_cb[cpu_id]();

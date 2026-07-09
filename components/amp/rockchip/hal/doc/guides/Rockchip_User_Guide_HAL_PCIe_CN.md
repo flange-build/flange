@@ -1,8 +1,8 @@
 # Rockchip HAL PCIe 用户指南 {#Rockchip_User_Guide_HAL_PCIe}
 
-发布版本：V1.0.0
+发布版本：V1.2.0
 
-日期：2023-04-04
+日期：2025-02-13
 
 文件密级：□绝密   □秘密   □内部资料   ■公开
 
@@ -18,7 +18,7 @@
 
 本文档可能提及的其他所有注册商标或商标，由其各自拥有者所有。
 
-**版权所有 © 2023 瑞芯微电子股份有限公司**
+**版权所有 © 2025 瑞芯微电子股份有限公司**
 
 超越合理使用范畴，非经本公司书面许可，任何单位和个人不得擅自摘抄、复制本文档内容的部分或全部，并不得以任何形式传播。
 
@@ -58,9 +58,11 @@ Rockchip Electronics Co., Ltd.
 
 **修订记录**
 
-| **版本号** | **作者** | **修改日期** | **修改说明** |
-| ---------- | -------- | ------------ | ------------ |
-| V1.0.0     | 林鼎强   | 2023-04-04   | 初始版本     |
+| **版本号** | **作者** | **修改日期** | **修改说明**     |
+| ---------- | -------- | ------------ | ---------------- |
+| V1.0.0     | 林鼎强   | 2023-04-04   | 初始版本         |
+| V1.1.0     | 林鼎强   | 2024-08-08   | 添加开发参考文档 |
+| V1.2.0     | 林鼎强   | 2025-02-13   | 添加软件配置说明 |
 
 ---
 
@@ -79,11 +81,19 @@ Rockchip Electronics Co., Ltd.
 - uDMA 传输
 - INTx legacy 中断
 
-详细接口参考应用说明。
+所以除了该文档所介绍的 HAL 接口，还需要准备以下开发工作：
+
+- RC 侧，开发 u-boot 或 Linux 下的 PCIe 初始化及枚举流程：
+    - 参考 Rockchip_Developer_Guide_UBoot_Nextdev_CN.pdf
+    - 参考 Rockchip_Developer_Guide_PCIe_CN.pdf
+- EP 侧，仅供 RK EP 参考，可选 spl 阶段初始化 PCIe、或 Linux 阶段初始化 PCIe：
+    - 参考 Rockchip_Developer_Guide_PCIE_EP_Stardard_Card_CN.pdf，建议先参考 RK EP demo 版图纸做硬件设计规范，例如：
+        - PCIe 互联存在主从关系，枚举由 RC 引导 EP 复位时序，RK EP 方案建议通过 PERST# 信号控制 EP 设备 NPOR
+        - 同源时钟方案
 
 ## 规范说明
 
-### 启动流程
+### RK RC 软件配置及启动方案
 
 **kernel 初始化 PCIe 方案（推荐）**
 
@@ -102,6 +112,10 @@ Rockchip Electronics Co., Ltd.
 - u-boot PCIe 开发参考《Rockchip_Developer_Guide_UBoot_Nextdev_CN.pdf》文档 PCIe 章节，主要涉及：
     - “加载 kernel dtb 之前使用 PCIe” 配置说明
     - pci cmd 获取 PCIe 外设信息，包括 bdf、bar 映射 等重要信息
+
+### RK EP 软件配置
+
+如果使用 RK EP 作为外设，且有裸核开发需求，建议阅读《Rockchip_Developer_Guide_PCIE_EP_Stardard_Card_CN.pdf》手册，使用“Flash Boot”启动方案，集成 PCIe Bin 驱动，在 loader 阶段完成 PCIe 初始化、枚举，在裸核中开发 RK EP 设备驱动。
 
 ### 资源分配
 

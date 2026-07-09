@@ -41,25 +41,15 @@
 static IPC_DATA_T *p_gshare = &share_t;
 
 static struct GIC_AMP_IRQ_INIT_CFG irqsConfig[] = {
-    /* The priority higher than 0x80 is non-secure interrupt. */
+    /* Config the irqs here. */
+    // todo...
 
-#if defined(TIMER_TEST) || defined(CPU_USAGE_TEST)
-    GIC_AMP_IRQ_CFG_ROUTE(TIMER0_IRQn, 0xd0, CPU_GET_AFFINITY(0, 0)),
-    GIC_AMP_IRQ_CFG_ROUTE(TIMER1_IRQn, 0xd0, CPU_GET_AFFINITY(1, 0)),
-    GIC_AMP_IRQ_CFG_ROUTE(TIMER2_IRQn, 0xd0, CPU_GET_AFFINITY(2, 0)),
-    GIC_AMP_IRQ_CFG_ROUTE(TIMER3_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0)),
-#endif
-
-#ifdef GPIO_TEST
-    GIC_AMP_IRQ_CFG_ROUTE(GPIO0_IRQn, 0xd0, CPU_GET_AFFINITY(1, 0)),
-#endif
-
-#ifdef SOFTIRQ_TEST
-    GIC_AMP_IRQ_CFG_ROUTE(RSVD0_IRQn, 0xd0, CPU_GET_AFFINITY(1, 0)),
-#endif
-
+    /* The following config must keep same with main.c-->irqsConfig[] */
 #ifdef AMP_LINUX_ENABLE
     GIC_AMP_IRQ_CFG_ROUTE(RPMSG_03_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0)),
+#if defined(TEST_USE_UART1M0)
+    GIC_AMP_IRQ_CFG_ROUTE(UART1_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0)),
+#endif
 #else // #ifdef AMP_LINUX_ENABLE
     GIC_AMP_IRQ_CFG_ROUTE(AMP0_IRQn, 0xd0, CPU_GET_AFFINITY(0, 0)),
     GIC_AMP_IRQ_CFG_ROUTE(AMP1_IRQn, 0xd0, CPU_GET_AFFINITY(1, 0)),
@@ -83,7 +73,23 @@ static struct GIC_AMP_IRQ_INIT_CFG irqsConfig[] = {
     GIC_AMP_IRQ_CFG_ROUTE(RPMSG_32_IRQn, 0xd0, CPU_GET_AFFINITY(2, 0)),
 #endif
 
-    GIC_AMP_IRQ_CFG_ROUTE(UART1_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0)),
+    /* The following config used for HAL mode test only */
+#if defined(TIMER_TEST) || defined(CPU_USAGE_TEST)
+    GIC_AMP_IRQ_CFG_ROUTE(TIMER0_IRQn, 0xd0, CPU_GET_AFFINITY(0, 0)),
+    GIC_AMP_IRQ_CFG_ROUTE(TIMER1_IRQn, 0xd0, CPU_GET_AFFINITY(1, 0)),
+    GIC_AMP_IRQ_CFG_ROUTE(TIMER2_IRQn, 0xd0, CPU_GET_AFFINITY(2, 0)),
+    GIC_AMP_IRQ_CFG_ROUTE(TIMER3_IRQn, 0xd0, CPU_GET_AFFINITY(3, 0)),
+#endif
+
+#ifdef GPIO_TEST
+    GIC_AMP_IRQ_CFG_ROUTE(GPIO0_IRQn, 0xd0, CPU_GET_AFFINITY(1, 0)),
+#endif
+
+#ifdef SOFTIRQ_TEST
+    GIC_AMP_IRQ_CFG_ROUTE(RSVD0_IRQn, 0xd0, CPU_GET_AFFINITY(1, 0)),
+#endif
+
+    /* Endoff irq configs */
     GIC_AMP_IRQ_CFG_ROUTE(0, 0, CPU_GET_AFFINITY(DEFAULT_IRQ_CPU, 0)),   /* sentinel */
 };
 
@@ -242,24 +248,24 @@ static void spinlock_test(void)
     HAL_Check ret;
 
     cpu_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
-    printf("begin spinlock test: cpu=%ld\n", cpu_id);
+    printf("begin spinlock test: cpu=%" PRId32 "\n", cpu_id);
 
     while (1) {
         ret = HAL_SPINLOCK_TryLock(0);
         if (ret) {
-            printf("try lock success: %ld\n", cpu_id);
+            printf("try lock success: %" PRId32 "\n", cpu_id);
             HAL_SPINLOCK_Unlock(0);
         } else {
-            printf("try lock failed: %ld\n", cpu_id);
+            printf("try lock failed: %" PRId32 "\n", cpu_id);
         }
         HAL_SPINLOCK_Lock(0);
-        printf("enter cpu%ld\n", cpu_id);
+        printf("enter cpu%" PRId32 "\n", cpu_id);
         HAL_CPUDelayUs(rand() % 2000000);
         owner = HAL_SPINLOCK_GetOwner(0);
         if ((owner >> 1) != cpu_id) {
-            printf("owner id is not matched(%ld, %ld)\n", cpu_id, owner);
+            printf("owner id is not matched(%" PRId32 ", %" PRId32 ")\n", cpu_id, owner);
         }
-        printf("leave cpu%ld\n", cpu_id);
+        printf("leave cpu%" PRId32 "\n", cpu_id);
         HAL_SPINLOCK_Unlock(0);
         HAL_CPUDelayUs(10);
     }
@@ -325,9 +331,9 @@ static void timer_test(void)
     HAL_CPUDelayUs(1000000);
     end = HAL_GetSysTimerCount();
     count = (uint32_t)(end - start);
-    printf("systimer 1s count: %ld(%lld, %lld)\n", count, start, end);
+    printf("systimer 1s count: %" PRId32 "(%lld, %lld)\n", count, start, end);
 
-    printf("\n\ncpu_id=%ld: test internal irq\n", cpu_id);
+    printf("\n\ncpu_id=%" PRId32 ": test internal irq\n", cpu_id);
     timer = g_timer[cpu_id];
     desc_timer = false;
     HAL_TIMER_Init(timer, TIMER_FREE_RUNNING);
@@ -338,7 +344,7 @@ static void timer_test(void)
     end = HAL_TIMER_GetCount(timer);
     count = (uint32_t)(end - start);
     fixed_spend = start;
-    printf("cpu_id=%ld: internal timer 1s count: %ld(%lld, %lld), fixed_spend=%d\n",
+    printf("cpu_id=%" PRId32 ": internal timer 1s count: %" PRId32 "(%lld, %lld), fixed_spend=%d\n",
            cpu_id, count, start, end, fixed_spend);
     HAL_TIMER_Stop(timer);
 
@@ -391,7 +397,7 @@ static void gpio_test(void)
     /* Test GPIO output */
     HAL_GPIO_SetPinDirection(GPIO0, GPIO_PIN_C4, GPIO_OUT);
     level = HAL_GPIO_GetPinLevel(GPIO0, GPIO_PIN_C4);
-    printf("test_gpio level = %ld\n", level);
+    printf("test_gpio level = %" PRId32 "\n", level);
     HAL_DelayMs(5000);
     if (level == GPIO_HIGH) {
         HAL_GPIO_SetPinLevel(GPIO0, GPIO_PIN_C4, GPIO_LOW);
@@ -399,7 +405,7 @@ static void gpio_test(void)
         HAL_GPIO_SetPinLevel(GPIO0, GPIO_PIN_C4, GPIO_HIGH);
     }
     level = HAL_GPIO_GetPinLevel(GPIO0, GPIO_PIN_C4);
-    printf("test_gpio level = %ld\n", level);
+    printf("test_gpio level = %" PRId32 "\n", level);
     HAL_DelayMs(5000);
 
     /* Test GPIO input */
@@ -473,7 +479,7 @@ void i2stdm0_demo(void)
     struct AUDIO_INIT_CONFIG config;
 
     printf("zzz---i2stdm0_demo\n");
-    params.channels = AUDIO_CHANNELS_2;
+    params.channels = 2;
     params.sampleBits = AUDIO_SAMPLEBITS_16;
     params.sampleRate = AUDIO_SAMPLERATE_48000;
     /* iomux init */
@@ -636,7 +642,7 @@ static void dmalinklist_test(void)
     __ALIGNED(64) uint8_t buf[PL330_CHAN_BUF_LEN] = { 0 };
     __ALIGNED(64) static uint8_t pxferList[XFER_LIST_SIZE] = { 0 };
     __ALIGNED(64) static uint8_t pdesc[XFER_LIST_SIZE * 2] = { 0 };
-    uint32_t timeout = 1000;
+    int timeout = 1000;
     struct PL330_CHAN *pchan;
     int ret, i;
 
@@ -679,14 +685,14 @@ static void dmalinklist_test(void)
     }
 
     while (timeout--) {
-        if (pl330->pReg->INTEN & (1 << DMA_TEST_CHANNEL) == 0) {
+        if ((pl330->pReg->INTEN & (1 << DMA_TEST_CHANNEL)) == 0) {
             break;
         }
 
         HAL_DelayUs(10);
     }
 
-    if (!timeout) {
+    if (timeout < 0) {
         printf("Wait DMA finish timeout\n");
 
         return;
@@ -1315,7 +1321,7 @@ static void rpmsg_perf_master_test(void)
     struct rpmsg_lite_instance *master_rpmsg;
 
     cpu_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
-    rk_printf("rpmsg master: master core cpu_id-%ld\n", cpu_id);
+    rk_printf("rpmsg master: master core cpu_id-%" PRId32 "\n", cpu_id);
     master_rpmsg = rpmsg_lite_master_init((void *)RPMSG_PERF_MEM_BASE, RPMSG_PERF_MEM_SIZE,
                                           RL_PLATFORM_SET_LINK_ID(0, 3), RL_NO_FLAGS);
 
@@ -1329,11 +1335,11 @@ static void rpmsg_perf_remote_test(void)
     struct rpmsg_lite_instance *remote_rpmsg;
 
     cpu_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
-    rk_printf("rpmsg remote: remote core cpu_id-%ld\n", cpu_id);
+    rk_printf("rpmsg remote: remote core cpu_id-%" PRId32 "\n", cpu_id);
     remote_rpmsg = rpmsg_lite_remote_init((void *)RPMSG_PERF_MEM_BASE,
                                           RL_PLATFORM_SET_LINK_ID(0, 3), RL_NO_FLAGS);
     rpmsg_lite_wait_for_link_up(remote_rpmsg);
-    rk_printf("rpmsg remote: link up! link_id-0x%lx\n", remote_rpmsg->link_id);
+    rk_printf("rpmsg remote: link up! link_id-0x%" PRIx32 "\n", remote_rpmsg->link_id);
     rpmsg_perf_remote_main(remote_rpmsg);
 }
 #endif
@@ -1365,7 +1371,7 @@ static void usage_isr(int vector, void *param)
     t1 = HAL_GetSysTimerCount();
     HAL_CPUDelayUs((cpu_id + 1) * 100000);
     t2 = HAL_GetSysTimerCount();
-    rk_printf("cpu:%ld, irq: %d, HAL_GetCPUUsage: %ld, t=%lld\n", cpu_id, vector, HAL_GetCPUUsage(), t2 - t1);
+    rk_printf("cpu:%" PRId32 ", irq: %d, HAL_GetCPUUsage: %" PRId32 ", t=%lld\n", cpu_id, vector, HAL_GetCPUUsage(), t2 - t1);
 
     HAL_TIMER_ClrInt(info->timer);
     HAL_GIC_EndOfInterrupt(info->irq);
@@ -1377,7 +1383,7 @@ static void usage_test(void)
 
     cpu_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
 
-    printf("cpu: %ld, usage_test\n", cpu_id);
+    printf("cpu: %" PRId32 ", usage_test\n", cpu_id);
     HAL_IRQ_HANDLER_SetIRQHandler(g_timer_info[cpu_id].irq, usage_isr, &g_timer_info[cpu_id]);
     HAL_GIC_Enable(g_timer_info[cpu_id].irq);
     HAL_TIMER_Init(g_timer_info[cpu_id].timer, TIMER_FREE_RUNNING);

@@ -42,7 +42,7 @@
 
 /*************************** Bit definition for qTD **************************/
 #define QTD_LIST_END 0x1                      /**< Indicate the terminate of qTD list.        */
-#define QTD_PTR(x)   ((struct EHCI_QTD *)((uint32_t)(x) & ~0x1F))
+#define QTD_PTR(x)   ((struct EHCI_QTD *)((uintptr_t)(x) & ~0x1F))
 
 /* Status: qTD Token[7:0] */
 #define QTD_STS_PS_OUT         (0U << 0)      /**< directs the HC to issue an OUT PID         */
@@ -72,11 +72,11 @@
 #define QH_HLNK_END 0x1
 
 /* HLink[2:1] Typ field of "Queue Head Horizontal Link Pointer" */
-#define QH_HLNK_ITD(x)  (((uint32_t)(x) & ~0x1F) | 0x0)
-#define QH_HLNK_QH(x)   (((uint32_t)(x) & ~0x1F) | 0x2)
-#define QH_HLNK_SITD(x) (((uint32_t)(x) & ~0x1F) | 0x4)
-#define QH_HLNK_FSTN(x) (((uint32_t)(x) & ~0x1F) | 0x6)
-#define QH_PTR(x)       ((struct EHCI_QH *)((uint32_t)(x) & ~0x1F))
+#define QH_HLNK_ITD(x)  (((uintptr_t)(x) & ~0x1F) | 0x0)
+#define QH_HLNK_QH(x)   (((uintptr_t)(x) & ~0x1F) | 0x2)
+#define QH_HLNK_SITD(x) (((uintptr_t)(x) & ~0x1F) | 0x4)
+#define QH_HLNK_FSTN(x) (((uintptr_t)(x) & ~0x1F) | 0x6)
+#define QH_PTR(x)       ((struct EHCI_QH *)((uintptr_t)(x) & ~0x1F))
 
 /* Bit fields of "Endpoint Characteristics" */
 #define QH_NAK_RL         (4U << 28)          /**< Chrst[31:28] - NAK Count Reload             */
@@ -97,11 +97,11 @@
 
 /*************************  Bit definition for iTD  **************************/
 /* Next_Link[2:1] Typ field of "Next Schedule Element Pointer"  Typ field */
-#define ITD_HLNK_ITD(x)  (((uint32_t)(x) & ~0x1F) | 0x0)
-#define ITD_HLNK_QH(x)   (((uint32_t)(x) & ~0x1F) | 0x2)
-#define ITD_HLNK_SITD(x) (((uint32_t)(x) & ~0x1F) | 0x4)
-#define ITD_HLNK_FSTN(x) (((uint32_t)(x) & ~0x1F) | 0x6)
-#define ITD_PTR(x)       ((struct EHCI_ITD *)((uint32_t)(x) & ~0x1F))
+#define ITD_HLNK_ITD(x)  (((uintptr_t)(x) & ~0x1F) | 0x0)
+#define ITD_HLNK_QH(x)   (((uintptr_t)(x) & ~0x1F) | 0x2)
+#define ITD_HLNK_SITD(x) (((uintptr_t)(x) & ~0x1F) | 0x4)
+#define ITD_HLNK_FSTN(x) (((uintptr_t)(x) & ~0x1F) | 0x6)
+#define ITD_PTR(x)       ((struct EHCI_ITD *)((uintptr_t)(x) & ~0x1F))
 
 /* Transaction[8] */
 #define ITD_STATUS(x)       (((x) >> 28) & 0xF)
@@ -155,14 +155,14 @@
 #define SITD_STATUS_ERROR_MASK 0x78
 
 /* Next_Link[2:1] Typ field of "Next Schedule Element Pointer"  Typ field */
-#define SITD_HLNK_ITD(x)  (((uint32_t)(x) & ~0x1F) | 0x0)
-#define SITD_HLNK_QH(x)   (((uint32_t)(x) & ~0x1F) | 0x2)
-#define SITD_HLNK_SITD(x) (((uint32_t)(x) & ~0x1F) | 0x4)
-#define SITD_HLNK_FSTN(x) (((uint32_t)(x) & ~0x1F) | 0x6)
-#define SITD_PTR(x)       ((struct EHCI_SITD *)((uint32_t)(x) & ~0x1F))
+#define SITD_HLNK_ITD(x)  (((uintptr_t)(x) & ~0x1F) | 0x0)
+#define SITD_HLNK_QH(x)   (((uintptr_t)(x) & ~0x1F) | 0x2)
+#define SITD_HLNK_SITD(x) (((uintptr_t)(x) & ~0x1F) | 0x4)
+#define SITD_HLNK_FSTN(x) (((uintptr_t)(x) & ~0x1F) | 0x6)
+#define SITD_PTR(x)       ((struct EHCI_SITD *)((uintptr_t)(x) & ~0x1F))
 
-#define HLINK_IS_TERMINATED(x) (((uint32_t)(x) & 0x1) ? 1 : 0)
-#define HLINK_IS_SITD(x)       ((((uint32_t)(x) & 0x6) == 0x4) ? 1 : 0)
+#define HLINK_IS_TERMINATED(x) (((uintptr_t)(x) & 0x1) ? 1 : 0)
+#define HLINK_IS_SITD(x)       ((((uintptr_t)(x) & 0x6) == 0x4) ? 1 : 0)
 
 /***************************** Structure Definition **************************/
 

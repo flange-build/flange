@@ -16,6 +16,8 @@
 
 /***************************** MACRO Definition ******************************/
 
+#include <inttypes.h> /* Macros for printing format specifiers */
+
 /* Run only for debugging, please refer to how-to-use for the definition of the specification. */
 //#define HAL_DBG_USING_RTT_SERIAL
 //#define HAL_DBG_USING_LIBC_PRINTF

@@ -24,7 +24,7 @@
  */
 #define GROUP_PRIO_LEVEL_MAX HAL_GPIO_IRQ_GROUP_PRIO_LEVEL_MAX
 
-#if (GPIO_VER_ID != 0x01000C2BU)
+#if (GPIO_VER_ID < 0x01000C2BU)
  #warning : Not support this gpio vervion
 #endif
 

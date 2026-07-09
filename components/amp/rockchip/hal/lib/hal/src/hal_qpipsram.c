@@ -147,7 +147,7 @@ static HAL_Status QPIPSRAM_WriteReg(struct QPI_PSRAM *psram, uint8_t opcode, uin
                                                      HAL_SPI_MEM_OP_NO_DUMMY,
                                                      HAL_SPI_MEM_OP_DATA_OUT(len, NULL, 1));
 
-    /* HAL_QPIPSRAM_DBG("%s %x %ld\n", __func__, opcode, len); */
+    /* HAL_QPIPSRAM_DBG("%s %x %" PRId32 "\n", __func__, opcode, len); */
 
     return QPIPSRAM_ReadWriteReg(psram, &op, buf);
 }
@@ -166,7 +166,7 @@ static int32_t QPIPSRAM_ReadData(struct QPI_PSRAM *psram, uint32_t from, uint32_
     op.dummy.buswidth = op.addr.buswidth;
     op.data.buswidth = QPIPSRAM_GET_PROTOCOL_DATA_BITS(psram->readProto);
 
-    /* HAL_QPIPSRAM_DBG("%s %x %lx %lx %lx\n", __func__, psram->readDummy, op.data.nbytes, from, op.addr.val); */
+    /* HAL_QPIPSRAM_DBG("%s %x %" PRIx32 " %" PRIx32 " %" PRIx32 "\n", __func__, psram->readDummy, op.data.nbytes, from, op.addr.val); */
     /* convert the dummy cycles to the number of bytes */
     op.dummy.nbytes = (psram->readDummy * op.dummy.buswidth) / 8;
 
@@ -359,7 +359,7 @@ int32_t HAL_QPIPSRAM_ReadData(struct QPI_PSRAM *psram, uint32_t from, void *buf,
     uint32_t size, remain = len;
     uint32_t off;
 
-    /* HAL_QPIPSRAM_DBG("%s from 0x%08lx, len %lx\n", __func__, from, len); */
+    /* HAL_QPIPSRAM_DBG("%s from 0x%08" PRIx32 ", len %" PRIx32 "\n", __func__, from, len); */
     if (from >= psram->size || len > psram->size || (from + len) > psram->size) {
         return HAL_INVAL;
     }
@@ -374,7 +374,7 @@ int32_t HAL_QPIPSRAM_ReadData(struct QPI_PSRAM *psram, uint32_t from, void *buf,
         }
         ret = psram->read(psram, from, size, pBuf);
         if (ret != (int32_t)size) {
-            HAL_QPIPSRAM_DBG("%s %lu ret= %ld %ld\n", __func__, from >> 9, ret, (int32_t)size);
+            HAL_QPIPSRAM_DBG("%s %" PRIu32 " ret= %" PRId32 " %" PRId32 "\n", __func__, from >> 9, ret, (int32_t)size);
 
             return ret;
         }
@@ -401,7 +401,7 @@ int32_t HAL_QPIPSRAM_ProgData(struct QPI_PSRAM *psram, uint32_t to, void *buf, u
     uint32_t size, remain = len;
     uint32_t off;
 
-    /* HAL_QPIPSRAM_DBG("%s to 0x%08lx, len %lx\n", __func__, to, len); */
+    /* HAL_QPIPSRAM_DBG("%s to 0x%08" PRIx32 ", len %" PRIx32 "\n", __func__, to, len); */
     if (to >= psram->size || len > psram->size || (to + len) > psram->size) {
         return HAL_INVAL;
     }
@@ -416,7 +416,7 @@ int32_t HAL_QPIPSRAM_ProgData(struct QPI_PSRAM *psram, uint32_t to, void *buf, u
         }
         ret = psram->write(psram, to, size, pBuf);
         if (ret != (int32_t)size) {
-            HAL_QPIPSRAM_DBG("%s %lu ret= %ld %ld\n", __func__, to >> 9, ret, (int32_t)size);
+            HAL_QPIPSRAM_DBG("%s %" PRIu32 " ret= %" PRId32 " %" PRId32 "\n", __func__, to >> 9, ret, (int32_t)size);
 
             return ret;
         }
@@ -544,8 +544,8 @@ reinit:
         }
     }
 
-    HAL_QPIPSRAM_DBG("QPIPsram size= 0x%lx Bytes\n", psram->size);
-    HAL_QPIPSRAM_DBG("QPIPsram page size= 0x%lx Bytes\n", psram->pageSize);
+    HAL_QPIPSRAM_DBG("QPIPsram size= 0x%" PRIx32 " Bytes\n", psram->size);
+    HAL_QPIPSRAM_DBG("QPIPsram page size= 0x%" PRIx32 " Bytes\n", psram->pageSize);
 
     QPIPSRAM_XmmcInit(psram);
     if (psram->spi->mode & HAL_SPI_XIP) {

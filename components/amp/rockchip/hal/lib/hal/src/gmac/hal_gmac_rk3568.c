@@ -165,7 +165,7 @@ void HAL_GMAC_SetRGMIISpeed(struct GMAC_HANDLE *pGMAC, int32_t speed)
         rate = 125000000;
         break;
     default:
-        HAL_DBG_ERR("unknown speed value for GMAC speed=%ld", speed);
+        HAL_DBG_ERR("unknown speed value for GMAC speed=%" PRId32 "", speed);
 
         return;
     }
@@ -180,7 +180,7 @@ void HAL_GMAC_SetRGMIISpeed(struct GMAC_HANDLE *pGMAC, int32_t speed)
 
     ret = HAL_CRU_ClkSetFreq(clkID, rate);
     if (ret) {
-        HAL_DBG_ERR("%s: set clk_mac_speed rate %ld failed %ld\n",
+        HAL_DBG_ERR("%s: set clk_mac_speed rate %" PRId32 " failed %" PRId32 "\n",
                     __func__, rate, ret);
     }
 }

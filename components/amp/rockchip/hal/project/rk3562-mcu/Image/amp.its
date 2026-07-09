@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 Rockchip Electronics Co., Ltd
+ * Copyright (C) 2023 Rockchip Electronics Co., Ltd.
  *
  * SPDX-License-Identifier: GPL-2.0
  */
@@ -16,7 +16,7 @@
 			type         = "standalone";	// must be "standalone"
 			compression  = "none";
 			arch         = "arm";		// "arm64" or "arm", the same as U-Boot state
-			load         = <0x08200000>;
+			load         = <0x07b00000>;
 			udelay       = <1000000>;
 			hash {
 				algo = "sha256";

@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2023 Rockchip Electronics Co., Ltd.
  */
-#ifdef RKMCU_RK3562_BUS
+#ifdef HAL_BUS_MCU_CORE
 
 #include <stdio.h>
 #include "hal_base.h"

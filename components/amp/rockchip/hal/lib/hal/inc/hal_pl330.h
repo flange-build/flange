@@ -56,11 +56,17 @@
  * For typical scenario, at 1word/burst, 10MB and 20MB xfers per req
  * should be enough for P<->M and M<->M respectively.
  */
-#define MCODE_BUFF_PER_REQ     256
-#define PL330_MAX_CHAN_BUFS    2
-#define PL330_CHAN_BUF_LEN     128
+#define MCODE_BUFF_PER_REQ  256
+#define PL330_MAX_CHAN_BUFS 2
+#ifndef PL330_CHAN_BUF_LEN
+#define PL330_CHAN_BUF_LEN 128
+#endif
+#ifndef PL330_CHANNELS_PER_DEV
 #define PL330_CHANNELS_PER_DEV 8
-#define PL330_NR_IRQS          2
+#endif
+#ifndef PL330_NR_IRQS
+#define PL330_NR_IRQS 2
+#endif
 
 /***************************** Structure Definition **************************/
 
@@ -121,6 +127,7 @@ struct PL330_REQCFG {
     bool privileged;
     bool insnaccess;
     uint32_t brstLen;
+    uint32_t brstLenN;
     uint32_t brstSize; /**< bytes */
 
     ePL330_CACHECTRL dcctl;
@@ -180,6 +187,7 @@ struct HAL_PL330_DEV;
 struct PL330_CHAN {
     uint16_t periId;
     uint16_t chanId;
+    uint16_t trigId;
     uint32_t fifoAddr;
     uint32_t brstSz;
     uint32_t brstLen;
@@ -191,6 +199,8 @@ struct PL330_CHAN {
     struct HAL_PL330_DEV *pl330;
     void *mcBuf;
     bool used;
+    bool trigMst;
+    DMA_ToDmaAddrFunc toDmaAddrFunc;
 };
 
 /**
@@ -226,10 +236,17 @@ HAL_Status HAL_PL330_Stop(struct PL330_CHAN *pchan);
 struct PL330_CHAN *HAL_PL330_RequestChannel(struct HAL_PL330_DEV *pl330, DMA_REQ_Type id);
 HAL_Status HAL_PL330_ReleaseChannel(struct PL330_CHAN *pchan);
 
+int HAL_PL330_GetChanId(struct PL330_CHAN *pchan);
+HAL_Status HAL_PL330_SetTriggerMaster(struct PL330_CHAN *pchan);
+HAL_Status HAL_PL330_SetTriggerSlave(struct PL330_CHAN *pchan, int trigMstCh);
+
 HAL_Status HAL_PL330_Config(struct PL330_CHAN *pchan, struct DMA_SLAVE_CONFIG *config);
 HAL_Status HAL_PL330_PrepDmaMemcpy(struct PL330_CHAN *pchan, uint32_t dst,
                                    uint32_t src, uint32_t len,
                                    PL330_Callback callback, void *cparam);
+HAL_Status HAL_PL330_PrepDmaMemcpyCyclic(struct PL330_CHAN *pchan, uint32_t dst,
+                                         uint32_t src, uint32_t len, uint32_t periodLen,
+                                         PL330_Callback callback, void *cparam);
 HAL_Status HAL_PL330_PrepDmaCyclic(struct PL330_CHAN *pchan, uint32_t dmaAddr,
                                    uint32_t len, uint32_t periodLen,
                                    eDMA_TRANSFER_DIRECTION direction,
@@ -244,6 +261,8 @@ uint32_t HAL_PL330_IrqHandler(struct HAL_PL330_DEV *pl330);
 uint32_t HAL_PL330_GetRawIrqStatus(struct HAL_PL330_DEV *pl330);
 HAL_Status HAL_PL330_ClearIrq(struct HAL_PL330_DEV *pl330, uint32_t irq);
 
+HAL_Status HAL_PL330_SetMcBufAddrXlateFunc(struct PL330_CHAN *pchan,
+                                           DMA_ToDmaAddrFunc toDmaAddrFunc);
 HAL_Status HAL_PL330_SetMcBuf(struct PL330_CHAN *pchan, void *buf);
 void *HAL_PL330_GetMcBuf(struct PL330_CHAN *pchan);
 const struct PL330_DESC *HAL_PL330_GetDesc(struct PL330_CHAN *pchan);

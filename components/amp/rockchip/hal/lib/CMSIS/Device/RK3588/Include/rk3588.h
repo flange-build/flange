@@ -701,6 +701,26 @@ struct DSUCRU_REG {
          uint32_t RESERVED0F04[3];                    /* Address Offset: 0x0F04 */
     __IO uint32_t SMOTH_DIVFREE_CON[4];               /* Address Offset: 0x0F10 */
 };
+/* I2C Register Structure Define */
+struct I2C_REG {
+    __IO uint32_t CON;                                /* Address Offset: 0x0000 */
+    __IO uint32_t CLKDIV;                             /* Address Offset: 0x0004 */
+    __IO uint32_t MRXADDR;                            /* Address Offset: 0x0008 */
+    __IO uint32_t MRXRADDR;                           /* Address Offset: 0x000C */
+    __IO uint32_t MTXCNT;                             /* Address Offset: 0x0010 */
+    __IO uint32_t MRXCNT;                             /* Address Offset: 0x0014 */
+    __IO uint32_t IEN;                                /* Address Offset: 0x0018 */
+    __IO uint32_t IPD;                                /* Address Offset: 0x001C */
+    __I  uint32_t FCNT;                               /* Address Offset: 0x0020 */
+    __IO uint32_t SCL_OE_DB;                          /* Address Offset: 0x0024 */
+         uint32_t RESERVED0028[54];                   /* Address Offset: 0x0028 */
+    __IO uint32_t TXDATA[8];                          /* Address Offset: 0x0100 */
+         uint32_t RESERVED0120[56];                   /* Address Offset: 0x0120 */
+    __I  uint32_t RXDATA[8];                          /* Address Offset: 0x0200 */
+    __I  uint32_t ST;                                 /* Address Offset: 0x0220 */
+    __IO uint32_t DBGCTRL;                            /* Address Offset: 0x0224 */
+    __IO uint32_t CON1;                               /* Address Offset: 0x0228 */
+};
 /* UART Register Structure Define */
 struct UART_REG {
     union {
@@ -783,6 +803,35 @@ struct GPIO_REG {
     __IO uint32_t GPIO_REG_GROUP_L;                   /* Address Offset: 0x0100 */
     __IO uint32_t GPIO_REG_GROUP_H;                   /* Address Offset: 0x0104 */
     __IO uint32_t GPIO_VIRTUAL_EN;                    /* Address Offset: 0x0108 */
+};
+/* PWM Register Structure Define */
+struct PWM_CHANNEL {
+    __I  uint32_t CNT;
+    __IO uint32_t PERIOD_HPR;
+    __IO uint32_t DUTY_LPR;
+    __IO uint32_t CTRL;
+};
+struct PWM_REG {
+         struct PWM_CHANNEL CHANNELS[4];              /* Address Offset: 0x0000 */
+    __IO uint32_t INTSTS;                             /* Address Offset: 0x0040 */
+    __IO uint32_t INT_EN;                             /* Address Offset: 0x0044 */
+         uint32_t RESERVED0048[2];                    /* Address Offset: 0x0048 */
+    __IO uint32_t FIFO_CTRL;                          /* Address Offset: 0x0050 */
+    __IO uint32_t FIFO_INTSTS;                        /* Address Offset: 0x0054 */
+    __IO uint32_t FIFO_TOUTTHR;                       /* Address Offset: 0x0058 */
+    __IO uint32_t VERSION_ID;                         /* Address Offset: 0x005C */
+    __I  uint32_t FIFO;                               /* Address Offset: 0x0060 */
+         uint32_t RESERVED0064[7];                    /* Address Offset: 0x0064 */
+    __IO uint32_t PWRMATCH_CTRL;                      /* Address Offset: 0x0080 */
+    __IO uint32_t PWRMATCH_LPRE;                      /* Address Offset: 0x0084 */
+    __IO uint32_t PWRMATCH_HPRE;                      /* Address Offset: 0x0088 */
+    __IO uint32_t PWRMATCH_LD;                        /* Address Offset: 0x008C */
+    __IO uint32_t PWRMATCH_HD_ZERO;                   /* Address Offset: 0x0090 */
+    __IO uint32_t PWRMATCH_HD_ONE;                    /* Address Offset: 0x0094 */
+    __IO uint32_t PWRMATCH_VALUE[10];                 /* Address Offset: 0x0098 */
+         uint32_t RESERVED00C0[3];                    /* Address Offset: 0x00C0 */
+    __I  uint32_t PWM3_PWRCAPTURE_VALUE;              /* Address Offset: 0x00CC */
+    __IO uint32_t CHANNEL_IO_CTRL;                    /* Address Offset: 0x00D0 */
 };
 /* PMU Register Structure Define */
 struct PMU_REG {
@@ -973,15 +1022,6 @@ struct PMU_REG {
     __I  uint32_t BISR_STS3;                          /* Address Offset: 0x828C */
     __I  uint32_t PWR_REPAIR_ST[2];                   /* Address Offset: 0x8290 */
 };
-/* WDT Register Structure Define */
-struct WDT_REG {
-    __IO uint32_t CR;                                 /* Address Offset: 0x0000 */
-    __IO uint32_t TORR;                               /* Address Offset: 0x0004 */
-    __I  uint32_t CCVR;                               /* Address Offset: 0x0008 */
-    __O  uint32_t CRR;                                /* Address Offset: 0x000C */
-    __I  uint32_t STAT;                               /* Address Offset: 0x0010 */
-    __I  uint32_t EOI;                                /* Address Offset: 0x0014 */
-};
 /* I2STDM Register Structure Define */
 struct I2STDM_REG {
     __IO uint32_t TXCR;                               /* Address Offset: 0x0000 */
@@ -1117,6 +1157,66 @@ struct TIMER_REG {
          uint32_t RESERVED0014;                       /* Address Offset: 0x0014 */
     __IO uint32_t INTSTATUS;                          /* Address Offset: 0x0018 */
 };
+/* WDT Register Structure Define */
+struct WDT_REG {
+    __IO uint32_t CR;                                 /* Address Offset: 0x0000 */
+    __IO uint32_t TORR;                               /* Address Offset: 0x0004 */
+    __I  uint32_t CCVR;                               /* Address Offset: 0x0008 */
+    __O  uint32_t CRR;                                /* Address Offset: 0x000C */
+    __I  uint32_t STAT;                               /* Address Offset: 0x0010 */
+    __I  uint32_t EOI;                                /* Address Offset: 0x0014 */
+};
+/* SPI Register Structure Define */
+struct SPI_REG {
+    __IO uint32_t CTRLR[2];                           /* Address Offset: 0x0000 */
+    __IO uint32_t ENR;                                /* Address Offset: 0x0008 */
+    __IO uint32_t SER;                                /* Address Offset: 0x000C */
+    __IO uint32_t BAUDR;                              /* Address Offset: 0x0010 */
+    __IO uint32_t TXFTLR;                             /* Address Offset: 0x0014 */
+    __IO uint32_t RXFTLR;                             /* Address Offset: 0x0018 */
+    __I  uint32_t TXFLR;                              /* Address Offset: 0x001C */
+    __I  uint32_t RXFLR;                              /* Address Offset: 0x0020 */
+    __I  uint32_t SR;                                 /* Address Offset: 0x0024 */
+    __IO uint32_t IPR;                                /* Address Offset: 0x0028 */
+    __IO uint32_t IMR;                                /* Address Offset: 0x002C */
+    __IO uint32_t ISR;                                /* Address Offset: 0x0030 */
+    __IO uint32_t RISR;                               /* Address Offset: 0x0034 */
+    __O  uint32_t ICR;                                /* Address Offset: 0x0038 */
+    __IO uint32_t DMACR;                              /* Address Offset: 0x003C */
+    __IO uint32_t DMATDLR;                            /* Address Offset: 0x0040 */
+    __IO uint32_t DMARDLR;                            /* Address Offset: 0x0044 */
+    __I  uint32_t VERSION;                            /* Address Offset: 0x0048 */
+    __IO uint32_t TIMEOUT;                            /* Address Offset: 0x004C */
+    __IO uint32_t BYPASS;                             /* Address Offset: 0x0050 */
+         uint32_t RESERVED0054[235];                  /* Address Offset: 0x0054 */
+    __O  uint32_t TXDR;                               /* Address Offset: 0x0400 */
+         uint32_t RESERVED0404[255];                  /* Address Offset: 0x0404 */
+    __I  uint32_t RXDR;                               /* Address Offset: 0x0800 */
+};
+/* SARADC Register Structure Define */
+struct SARADC_REG {
+    __IO uint32_t CONV_CON;                           /* Address Offset: 0x0000 */
+    __IO uint32_t T_PD_SOC;                           /* Address Offset: 0x0004 */
+    __IO uint32_t T_AS_SOC;                           /* Address Offset: 0x0008 */
+    __IO uint32_t T_DAS_SOC;                          /* Address Offset: 0x000C */
+    __IO uint32_t T_SEL_SOC;                          /* Address Offset: 0x0010 */
+    __IO uint32_t HIGH_COMP[16];                      /* Address Offset: 0x0014 */
+    __IO uint32_t LOW_COMP[16];                       /* Address Offset: 0x0054 */
+    __IO uint32_t DEBOUNCE;                           /* Address Offset: 0x0094 */
+    __IO uint32_t HT_INT_EN;                          /* Address Offset: 0x0098 */
+    __IO uint32_t LT_INT_EN;                          /* Address Offset: 0x009C */
+         uint32_t RESERVED00A0[24];                   /* Address Offset: 0x00A0 */
+    __IO uint32_t MT_INT_EN;                          /* Address Offset: 0x0100 */
+    __IO uint32_t END_INT_EN;                         /* Address Offset: 0x0104 */
+    __IO uint32_t ST_CON;                             /* Address Offset: 0x0108 */
+    __I  uint32_t STATUS;                             /* Address Offset: 0x010C */
+    __IO uint32_t END_INT_ST;                         /* Address Offset: 0x0110 */
+    __IO uint32_t HT_INT_ST;                          /* Address Offset: 0x0114 */
+    __IO uint32_t LT_INT_ST;                          /* Address Offset: 0x0118 */
+    __IO uint32_t MT_INT_ST;                          /* Address Offset: 0x011C */
+    __I  uint32_t DATA[16];                           /* Address Offset: 0x0120 */
+    __IO uint32_t AUTO_CH_EN;                         /* Address Offset: 0x0160 */
+};
 /* MBOX Register Structure Define */
 struct MBOX_CMD_DAT {
     __IO uint32_t CMD;
@@ -1165,11 +1265,12 @@ struct MBOX_REG {
 #define BIGCORE0CRU_BASE               0xFD810000U /* BIGCORE0CRU base address */
 #define BIGCORE1CRU_BASE               0xFD812000U /* BIGCORE1CRU base address */
 #define DSUCRU_BASE                    0xFD818000U /* DSUCRU base address */
+#define I2C0_BASE                      0xFD880000U /* I2C0 base address */
 #define UART0_BASE                     0xFD890000U /* UART0 base address */
 #define GPIO0_BASE                     0xFD8A0000U /* GPIO0 base address */
 #define GPIO0_EXP_BASE                 0xFD8A1000U /* GPIO0_EXP OSB base address */
+#define PWM0_BASE                      0xFD8B0000U /* PWM0 base address */
 #define PMU_BASE                       0xFD8D0000U /* PMU base address */
-#define WDT_BASE                       0xFD8E0000U /* WDT base address */
 #define I2STDM0_BASE                   0xFE470000U /* I2STDM0 base address */
 #define I2STDM1_BASE                   0xFE480000U /* I2STDM1 base address */
 #define I2S2_BASE                      0xFE490000U /* I2S2 base address */
@@ -1180,6 +1281,11 @@ struct MBOX_REG {
 #define SPINLOCK_BASE                  0xFE5A0000U /* SPINLOCK base address */
 #define DMA0_BASE                      0xFEA10000U /* DMA0 base address */
 #define DMA1_BASE                      0xFEA30000U /* DMA1 base address */
+#define I2C1_BASE                      0xFEA90000U /* I2C1 base address */
+#define I2C2_BASE                      0xFEAA0000U /* I2C2 base address */
+#define I2C3_BASE                      0xFEAB0000U /* I2C3 base address */
+#define I2C4_BASE                      0xFEAC0000U /* I2C4 base address */
+#define I2C5_BASE                      0xFEAD0000U /* I2C5 base address */
 #define TIMER0_BASE                    0xFEAE0000U /* TIMER0 base address */
 #define TIMER1_BASE                    0xFEAE0020U /* TIMER1 base address */
 #define TIMER2_BASE                    0xFEAE0040U /* TIMER2 base address */
@@ -1192,6 +1298,11 @@ struct MBOX_REG {
 #define TIMER9_BASE                    0xFEAE8060U /* TIMER9 base address */
 #define TIMER10_BASE                   0xFEAE8080U /* TIMER10 base address */
 #define TIMER11_BASE                   0xFEAE80A0U /* TIMER11 base address */
+#define WDT_BASE                       0xFEAF0000U /* WDT base address */
+#define SPI0_BASE                      0xFEB00000U /* SPI0 base address */
+#define SPI1_BASE                      0xFEB10000U /* SPI1 base address */
+#define SPI2_BASE                      0xFEB20000U /* SPI2 base address */
+#define SPI3_BASE                      0xFEB30000U /* SPI3 base address */
 #define UART1_BASE                     0xFEB40000U /* UART1 base address */
 #define UART2_BASE                     0xFEB50000U /* UART2 base address */
 #define UART3_BASE                     0xFEB60000U /* UART3 base address */
@@ -1201,6 +1312,10 @@ struct MBOX_REG {
 #define UART7_BASE                     0xFEBA0000U /* UART7 base address */
 #define UART8_BASE                     0xFEBB0000U /* UART8 base address */
 #define UART9_BASE                     0xFEBC0000U /* UART9 base address */
+#define PWM1_BASE                      0xFEBD0000U /* PWM1 base address */
+#define PWM2_BASE                      0xFEBE0000U /* PWM2 base address */
+#define PWM3_BASE                      0xFEBF0000U /* PWM3 base address */
+#define SARADC_BASE                    0xFEC10000U /* SARADC base address */
 #define GPIO1_BASE                     0xFEC20000U /* GPIO1 base address */
 #define GPIO1_EXP_BASE                 0xFEC21000U /* GPIO1_EXP OSB base address */
 #define GPIO2_BASE                     0xFEC30000U /* GPIO2 base address */
@@ -1210,6 +1325,10 @@ struct MBOX_REG {
 #define GPIO4_BASE                     0xFEC50000U /* GPIO4 base address */
 #define GPIO4_EXP_BASE                 0xFEC51000U /* GPIO4_EXP OSB base address */
 #define MBOX0_BASE                     0xFEC60000U /* MBOX0 base address */
+#define I2C6_BASE                      0xFEC80000U /* I2C6 base address */
+#define I2C7_BASE                      0xFEC90000U /* I2C7 base address */
+#define I2C8_BASE                      0xFECA0000U /* I2C8 base address */
+#define SPI4_BASE                      0xFECB0000U /* SPI4 base address */
 /****************************************************************************************/
 /*                                                                                      */
 /*                               Module Variable Section                                */
@@ -1243,11 +1362,12 @@ struct MBOX_REG {
 #define BIGCORE0CRU         ((struct BIGCORE0CRU_REG *) BIGCORE0CRU_BASE)
 #define BIGCORE1CRU         ((struct BIGCORE1CRU_REG *) BIGCORE1CRU_BASE)
 #define DSUCRU              ((struct DSUCRU_REG *) DSUCRU_BASE)
+#define I2C0                ((struct I2C_REG *) I2C0_BASE)
 #define UART0               ((struct UART_REG *) UART0_BASE)
 #define GPIO0               ((struct GPIO_REG *) GPIO0_BASE)
 #define GPIO0_EXP           ((struct GPIO_REG *) GPIO0_EXP_BASE)
+#define PWM0                ((struct PWM_REG *) PWM0_BASE)
 #define PMU                 ((struct PMU_REG *) PMU_BASE)
-#define WDT                 ((struct WDT_REG *) WDT_BASE)
 #define I2STDM0             ((struct I2STDM_REG *) I2STDM0_BASE)
 #define I2STDM1             ((struct I2STDM_REG *) I2STDM1_BASE)
 #define I2S2                ((struct I2S_REG *) I2S2_BASE)
@@ -1258,6 +1378,11 @@ struct MBOX_REG {
 #define SPINLOCK            ((struct SPINLOCK_REG *) SPINLOCK_BASE)
 #define DMA0                ((struct DMA_REG *) DMA0_BASE)
 #define DMA1                ((struct DMA_REG *) DMA1_BASE)
+#define I2C1                ((struct I2C_REG *) I2C1_BASE)
+#define I2C2                ((struct I2C_REG *) I2C2_BASE)
+#define I2C3                ((struct I2C_REG *) I2C3_BASE)
+#define I2C4                ((struct I2C_REG *) I2C4_BASE)
+#define I2C5                ((struct I2C_REG *) I2C5_BASE)
 #define TIMER0              ((struct TIMER_REG *) TIMER0_BASE)
 #define TIMER1              ((struct TIMER_REG *) TIMER1_BASE)
 #define TIMER2              ((struct TIMER_REG *) TIMER2_BASE)
@@ -1270,6 +1395,11 @@ struct MBOX_REG {
 #define TIMER9              ((struct TIMER_REG *) TIMER9_BASE)
 #define TIMER10             ((struct TIMER_REG *) TIMER10_BASE)
 #define TIMER11             ((struct TIMER_REG *) TIMER11_BASE)
+#define WDT                 ((struct WDT_REG *) WDT_BASE)
+#define SPI0                ((struct SPI_REG *) SPI0_BASE)
+#define SPI1                ((struct SPI_REG *) SPI1_BASE)
+#define SPI2                ((struct SPI_REG *) SPI2_BASE)
+#define SPI3                ((struct SPI_REG *) SPI3_BASE)
 #define UART1               ((struct UART_REG *) UART1_BASE)
 #define UART2               ((struct UART_REG *) UART2_BASE)
 #define UART3               ((struct UART_REG *) UART3_BASE)
@@ -1279,6 +1409,10 @@ struct MBOX_REG {
 #define UART7               ((struct UART_REG *) UART7_BASE)
 #define UART8               ((struct UART_REG *) UART8_BASE)
 #define UART9               ((struct UART_REG *) UART9_BASE)
+#define PWM1                ((struct PWM_REG *) PWM1_BASE)
+#define PWM2                ((struct PWM_REG *) PWM2_BASE)
+#define PWM3                ((struct PWM_REG *) PWM3_BASE)
+#define SARADC              ((struct SARADC_REG *) SARADC_BASE)
 #define GPIO1               ((struct GPIO_REG *) GPIO1_BASE)
 #define GPIO1_EXP           ((struct GPIO_REG *) GPIO1_EXP_BASE)
 #define GPIO2               ((struct GPIO_REG *) GPIO2_BASE)
@@ -1288,6 +1422,10 @@ struct MBOX_REG {
 #define GPIO4               ((struct GPIO_REG *) GPIO4_BASE)
 #define GPIO4_EXP           ((struct GPIO_REG *) GPIO4_EXP_BASE)
 #define MBOX0               ((struct MBOX_REG *) MBOX0_BASE)
+#define I2C6                ((struct I2C_REG *) I2C6_BASE)
+#define I2C7                ((struct I2C_REG *) I2C7_BASE)
+#define I2C8                ((struct I2C_REG *) I2C8_BASE)
+#define SPI4                ((struct SPI_REG *) SPI4_BASE)
 
 #define IS_DCACHE_INSTANCE(instance) ((instance) == DCACHE)
 #define IS_ICACHE_INSTANCE(instance) ((instance) == ICACHE)
@@ -1316,16 +1454,20 @@ struct MBOX_REG {
 #define IS_BIGCORE1CRU_INSTANCE(instance) ((instance) == BIGCORE1CRU)
 #define IS_DSUCRU_INSTANCE(instance) ((instance) == DSUCRU)
 #define IS_PMU_INSTANCE(instance) ((instance) == PMU)
-#define IS_WDT_INSTANCE(instance) ((instance) == WDT)
 #define IS_VAD_INSTANCE(instance) ((instance) == VAD)
 #define IS_SPINLOCK_INSTANCE(instance) ((instance) == SPINLOCK)
+#define IS_WDT_INSTANCE(instance) ((instance) == WDT)
+#define IS_SARADC_INSTANCE(instance) ((instance) == SARADC)
+#define IS_I2C_INSTANCE(instance) (((instance) == I2C0) || ((instance) == I2C1) || ((instance) == I2C2) || ((instance) == I2C3) || ((instance) == I2C4) || ((instance) == I2C5) || ((instance) == I2C6) || ((instance) == I2C7) || ((instance) == I2C8))
 #define IS_UART_INSTANCE(instance) (((instance) == UART0) || ((instance) == UART1) || ((instance) == UART2) || ((instance) == UART3) || ((instance) == UART4) || ((instance) == UART5) || ((instance) == UART6) || ((instance) == UART7) || ((instance) == UART8) || ((instance) == UART9))
 #define IS_GPIO_INSTANCE(instance) (((instance) == GPIO0) || ((instance) == GPIO1) || ((instance) == GPIO2) || ((instance) == GPIO3) || ((instance) == GPIO4) || ((instance) == GPIO0_EXP) || ((instance) == GPIO1_EXP) || ((instance) == GPIO2_EXP) || ((instance) == GPIO3_EXP) || ((instance) == GPIO4_EXP))
+#define IS_PWM_INSTANCE(instance) (((instance) == PWM0) || ((instance) == PWM1) || ((instance) == PWM2) || ((instance) == PWM3))
 #define IS_I2STDM_INSTANCE(instance) (((instance) == I2STDM0) || ((instance) == I2STDM1))
 #define IS_I2S_INSTANCE(instance) (((instance) == I2S2) || ((instance) == I2S3))
 #define IS_PDM_INSTANCE(instance) (((instance) == PDM0) || ((instance) == PDM1))
 #define IS_DMA_INSTANCE(instance) (((instance) == DMA0) || ((instance) == DMA1))
 #define IS_TIMER_INSTANCE(instance) (((instance) == TIMER0) || ((instance) == TIMER1) || ((instance) == TIMER2) || ((instance) == TIMER3) || ((instance) == TIMER4) || ((instance) == TIMER5) || ((instance) == TIMER6) || ((instance) == TIMER7) || ((instance) == TIMER8) || ((instance) == TIMER9) || ((instance) == TIMER10) || ((instance) == TIMER11))
+#define IS_SPI_INSTANCE(instance) (((instance) == SPI0) || ((instance) == SPI1) || ((instance) == SPI2) || ((instance) == SPI3) || ((instance) == SPI4))
 #define IS_MBOX_INSTANCE(instance) ((instance) == MBOX0)
 /****************************************************************************************/
 /*                                                                                      */
@@ -12720,6 +12862,209 @@ struct MBOX_REG {
 #define DSUCRU_SMOTH_DIVFREE_CON03_CLK_CORE_L3_UC_BYPASS_MASK (0x1U << DSUCRU_SMOTH_DIVFREE_CON03_CLK_CORE_L3_UC_BYPASS_SHIFT) /* 0x00008000 */
 #define DSUCRU_SMOTH_DIVFREE_CON03_CLK_CORE_L3_UC_FREQ_KEEP_SHIFT (16U)
 #define DSUCRU_SMOTH_DIVFREE_CON03_CLK_CORE_L3_UC_FREQ_KEEP_MASK (0xFFFFU << DSUCRU_SMOTH_DIVFREE_CON03_CLK_CORE_L3_UC_FREQ_KEEP_SHIFT) /* 0xFFFF0000 */
+/******************************************I2C*******************************************/
+/* CON */
+#define I2C_CON_OFFSET                                     (0x0U)
+#define I2C_CON_I2C_EN_SHIFT                               (0U)
+#define I2C_CON_I2C_EN_MASK                                (0x1U << I2C_CON_I2C_EN_SHIFT)                               /* 0x00000001 */
+#define I2C_CON_I2C_MODE_SHIFT                             (1U)
+#define I2C_CON_I2C_MODE_MASK                              (0x3U << I2C_CON_I2C_MODE_SHIFT)                             /* 0x00000006 */
+#define I2C_CON_START_SHIFT                                (3U)
+#define I2C_CON_START_MASK                                 (0x1U << I2C_CON_START_SHIFT)                                /* 0x00000008 */
+#define I2C_CON_STOP_SHIFT                                 (4U)
+#define I2C_CON_STOP_MASK                                  (0x1U << I2C_CON_STOP_SHIFT)                                 /* 0x00000010 */
+#define I2C_CON_ACK_SHIFT                                  (5U)
+#define I2C_CON_ACK_MASK                                   (0x1U << I2C_CON_ACK_SHIFT)                                  /* 0x00000020 */
+#define I2C_CON_ACT2NAK_SHIFT                              (6U)
+#define I2C_CON_ACT2NAK_MASK                               (0x1U << I2C_CON_ACT2NAK_SHIFT)                              /* 0x00000040 */
+#define I2C_CON_DATA_UPD_ST_SHIFT                          (8U)
+#define I2C_CON_DATA_UPD_ST_MASK                           (0xFU << I2C_CON_DATA_UPD_ST_SHIFT)                          /* 0x00000F00 */
+#define I2C_CON_START_SETUP_SHIFT                          (12U)
+#define I2C_CON_START_SETUP_MASK                           (0x3U << I2C_CON_START_SETUP_SHIFT)                          /* 0x00003000 */
+#define I2C_CON_STOP_SETUP_SHIFT                           (14U)
+#define I2C_CON_STOP_SETUP_MASK                            (0x3U << I2C_CON_STOP_SETUP_SHIFT)                           /* 0x0000C000 */
+#define I2C_CON_VERSION_SHIFT                              (16U)
+#define I2C_CON_VERSION_MASK                               (0xFFFFU << I2C_CON_VERSION_SHIFT)                           /* 0xFFFF0000 */
+/* CLKDIV */
+#define I2C_CLKDIV_OFFSET                                  (0x4U)
+#define I2C_CLKDIV_CLKDIVL_SHIFT                           (0U)
+#define I2C_CLKDIV_CLKDIVL_MASK                            (0xFFFFU << I2C_CLKDIV_CLKDIVL_SHIFT)                        /* 0x0000FFFF */
+#define I2C_CLKDIV_CLKDIVH_SHIFT                           (16U)
+#define I2C_CLKDIV_CLKDIVH_MASK                            (0xFFFFU << I2C_CLKDIV_CLKDIVH_SHIFT)                        /* 0xFFFF0000 */
+/* MRXADDR */
+#define I2C_MRXADDR_OFFSET                                 (0x8U)
+#define I2C_MRXADDR_SADDR_SHIFT                            (0U)
+#define I2C_MRXADDR_SADDR_MASK                             (0xFFFFFFU << I2C_MRXADDR_SADDR_SHIFT)                       /* 0x00FFFFFF */
+#define I2C_MRXADDR_ADDLVLD_SHIFT                          (24U)
+#define I2C_MRXADDR_ADDLVLD_MASK                           (0x1U << I2C_MRXADDR_ADDLVLD_SHIFT)                          /* 0x01000000 */
+#define I2C_MRXADDR_ADDMVLD_SHIFT                          (25U)
+#define I2C_MRXADDR_ADDMVLD_MASK                           (0x1U << I2C_MRXADDR_ADDMVLD_SHIFT)                          /* 0x02000000 */
+#define I2C_MRXADDR_ADDHVLD_SHIFT                          (26U)
+#define I2C_MRXADDR_ADDHVLD_MASK                           (0x1U << I2C_MRXADDR_ADDHVLD_SHIFT)                          /* 0x04000000 */
+/* MRXRADDR */
+#define I2C_MRXRADDR_OFFSET                                (0xCU)
+#define I2C_MRXRADDR_SRADDR_SHIFT                          (0U)
+#define I2C_MRXRADDR_SRADDR_MASK                           (0xFFFFFFU << I2C_MRXRADDR_SRADDR_SHIFT)                     /* 0x00FFFFFF */
+#define I2C_MRXRADDR_SRADDLVLD_SHIFT                       (24U)
+#define I2C_MRXRADDR_SRADDLVLD_MASK                        (0x1U << I2C_MRXRADDR_SRADDLVLD_SHIFT)                       /* 0x01000000 */
+#define I2C_MRXRADDR_SRADDMVLD_SHIFT                       (25U)
+#define I2C_MRXRADDR_SRADDMVLD_MASK                        (0x1U << I2C_MRXRADDR_SRADDMVLD_SHIFT)                       /* 0x02000000 */
+#define I2C_MRXRADDR_SRADDHVLD_SHIFT                       (26U)
+#define I2C_MRXRADDR_SRADDHVLD_MASK                        (0x1U << I2C_MRXRADDR_SRADDHVLD_SHIFT)                       /* 0x04000000 */
+/* MTXCNT */
+#define I2C_MTXCNT_OFFSET                                  (0x10U)
+#define I2C_MTXCNT_MTXCNT_SHIFT                            (0U)
+#define I2C_MTXCNT_MTXCNT_MASK                             (0x3FU << I2C_MTXCNT_MTXCNT_SHIFT)                           /* 0x0000003F */
+/* MRXCNT */
+#define I2C_MRXCNT_OFFSET                                  (0x14U)
+#define I2C_MRXCNT_MRXCNT_SHIFT                            (0U)
+#define I2C_MRXCNT_MRXCNT_MASK                             (0x3FU << I2C_MRXCNT_MRXCNT_SHIFT)                           /* 0x0000003F */
+/* IEN */
+#define I2C_IEN_OFFSET                                     (0x18U)
+#define I2C_IEN_BTFIEN_SHIFT                               (0U)
+#define I2C_IEN_BTFIEN_MASK                                (0x1U << I2C_IEN_BTFIEN_SHIFT)                               /* 0x00000001 */
+#define I2C_IEN_BRFIEN_SHIFT                               (1U)
+#define I2C_IEN_BRFIEN_MASK                                (0x1U << I2C_IEN_BRFIEN_SHIFT)                               /* 0x00000002 */
+#define I2C_IEN_MBTFIEN_SHIFT                              (2U)
+#define I2C_IEN_MBTFIEN_MASK                               (0x1U << I2C_IEN_MBTFIEN_SHIFT)                              /* 0x00000004 */
+#define I2C_IEN_MBRFIEN_SHIFT                              (3U)
+#define I2C_IEN_MBRFIEN_MASK                               (0x1U << I2C_IEN_MBRFIEN_SHIFT)                              /* 0x00000008 */
+#define I2C_IEN_STARTIEN_SHIFT                             (4U)
+#define I2C_IEN_STARTIEN_MASK                              (0x1U << I2C_IEN_STARTIEN_SHIFT)                             /* 0x00000010 */
+#define I2C_IEN_STOPIEN_SHIFT                              (5U)
+#define I2C_IEN_STOPIEN_MASK                               (0x1U << I2C_IEN_STOPIEN_SHIFT)                              /* 0x00000020 */
+#define I2C_IEN_NAKRCVIEN_SHIFT                            (6U)
+#define I2C_IEN_NAKRCVIEN_MASK                             (0x1U << I2C_IEN_NAKRCVIEN_SHIFT)                            /* 0x00000040 */
+#define I2C_IEN_SLAVEHDSCLEN_SHIFT                         (7U)
+#define I2C_IEN_SLAVEHDSCLEN_MASK                          (0x1U << I2C_IEN_SLAVEHDSCLEN_SHIFT)                         /* 0x00000080 */
+/* IPD */
+#define I2C_IPD_OFFSET                                     (0x1CU)
+#define I2C_IPD_BTFIPD_SHIFT                               (0U)
+#define I2C_IPD_BTFIPD_MASK                                (0x1U << I2C_IPD_BTFIPD_SHIFT)                               /* 0x00000001 */
+#define I2C_IPD_BRFIPD_SHIFT                               (1U)
+#define I2C_IPD_BRFIPD_MASK                                (0x1U << I2C_IPD_BRFIPD_SHIFT)                               /* 0x00000002 */
+#define I2C_IPD_MBTFIPD_SHIFT                              (2U)
+#define I2C_IPD_MBTFIPD_MASK                               (0x1U << I2C_IPD_MBTFIPD_SHIFT)                              /* 0x00000004 */
+#define I2C_IPD_MBRFIPD_SHIFT                              (3U)
+#define I2C_IPD_MBRFIPD_MASK                               (0x1U << I2C_IPD_MBRFIPD_SHIFT)                              /* 0x00000008 */
+#define I2C_IPD_STARTIPD_SHIFT                             (4U)
+#define I2C_IPD_STARTIPD_MASK                              (0x1U << I2C_IPD_STARTIPD_SHIFT)                             /* 0x00000010 */
+#define I2C_IPD_STOPIPD_SHIFT                              (5U)
+#define I2C_IPD_STOPIPD_MASK                               (0x1U << I2C_IPD_STOPIPD_SHIFT)                              /* 0x00000020 */
+#define I2C_IPD_NAKRCVIPD_SHIFT                            (6U)
+#define I2C_IPD_NAKRCVIPD_MASK                             (0x1U << I2C_IPD_NAKRCVIPD_SHIFT)                            /* 0x00000040 */
+#define I2C_IPD_SLAVEHDSCLIPD_SHIFT                        (7U)
+#define I2C_IPD_SLAVEHDSCLIPD_MASK                         (0x1U << I2C_IPD_SLAVEHDSCLIPD_SHIFT)                        /* 0x00000080 */
+/* FCNT */
+#define I2C_FCNT_OFFSET                                    (0x20U)
+#define I2C_FCNT                                           (0x0U)
+#define I2C_FCNT_FCNT_SHIFT                                (0U)
+#define I2C_FCNT_FCNT_MASK                                 (0x3FU << I2C_FCNT_FCNT_SHIFT)                               /* 0x0000003F */
+/* SCL_OE_DB */
+#define I2C_SCL_OE_DB_OFFSET                               (0x24U)
+#define I2C_SCL_OE_DB_SCL_OE_DB_SHIFT                      (0U)
+#define I2C_SCL_OE_DB_SCL_OE_DB_MASK                       (0xFFU << I2C_SCL_OE_DB_SCL_OE_DB_SHIFT)                     /* 0x000000FF */
+/* TXDATA0 */
+#define I2C_TXDATA0_OFFSET                                 (0x100U)
+#define I2C_TXDATA0_TXDATA0_SHIFT                          (0U)
+#define I2C_TXDATA0_TXDATA0_MASK                           (0xFFFFFFFFU << I2C_TXDATA0_TXDATA0_SHIFT)                   /* 0xFFFFFFFF */
+/* TXDATA1 */
+#define I2C_TXDATA1_OFFSET                                 (0x104U)
+#define I2C_TXDATA1_TXDATA1_SHIFT                          (0U)
+#define I2C_TXDATA1_TXDATA1_MASK                           (0xFFFFFFFFU << I2C_TXDATA1_TXDATA1_SHIFT)                   /* 0xFFFFFFFF */
+/* TXDATA2 */
+#define I2C_TXDATA2_OFFSET                                 (0x108U)
+#define I2C_TXDATA2_TXDATA2_SHIFT                          (0U)
+#define I2C_TXDATA2_TXDATA2_MASK                           (0xFFFFFFFFU << I2C_TXDATA2_TXDATA2_SHIFT)                   /* 0xFFFFFFFF */
+/* TXDATA3 */
+#define I2C_TXDATA3_OFFSET                                 (0x10CU)
+#define I2C_TXDATA3_TXDATA3_SHIFT                          (0U)
+#define I2C_TXDATA3_TXDATA3_MASK                           (0xFFFFFFFFU << I2C_TXDATA3_TXDATA3_SHIFT)                   /* 0xFFFFFFFF */
+/* TXDATA4 */
+#define I2C_TXDATA4_OFFSET                                 (0x110U)
+#define I2C_TXDATA4_TXDATA4_SHIFT                          (0U)
+#define I2C_TXDATA4_TXDATA4_MASK                           (0xFFFFFFFFU << I2C_TXDATA4_TXDATA4_SHIFT)                   /* 0xFFFFFFFF */
+/* TXDATA5 */
+#define I2C_TXDATA5_OFFSET                                 (0x114U)
+#define I2C_TXDATA5_TXDATA5_SHIFT                          (0U)
+#define I2C_TXDATA5_TXDATA5_MASK                           (0xFFFFFFFFU << I2C_TXDATA5_TXDATA5_SHIFT)                   /* 0xFFFFFFFF */
+/* TXDATA6 */
+#define I2C_TXDATA6_OFFSET                                 (0x118U)
+#define I2C_TXDATA6_TXDATA6_SHIFT                          (0U)
+#define I2C_TXDATA6_TXDATA6_MASK                           (0xFFFFFFFFU << I2C_TXDATA6_TXDATA6_SHIFT)                   /* 0xFFFFFFFF */
+/* TXDATA7 */
+#define I2C_TXDATA7_OFFSET                                 (0x11CU)
+#define I2C_TXDATA7_TXDATA7_SHIFT                          (0U)
+#define I2C_TXDATA7_TXDATA7_MASK                           (0xFFFFFFFFU << I2C_TXDATA7_TXDATA7_SHIFT)                   /* 0xFFFFFFFF */
+/* RXDATA0 */
+#define I2C_RXDATA0_OFFSET                                 (0x200U)
+#define I2C_RXDATA0                                        (0x0U)
+#define I2C_RXDATA0_RXDATA0_SHIFT                          (0U)
+#define I2C_RXDATA0_RXDATA0_MASK                           (0xFFFFFFFFU << I2C_RXDATA0_RXDATA0_SHIFT)                   /* 0xFFFFFFFF */
+/* RXDATA1 */
+#define I2C_RXDATA1_OFFSET                                 (0x204U)
+#define I2C_RXDATA1                                        (0x0U)
+#define I2C_RXDATA1_RXDATA1_SHIFT                          (0U)
+#define I2C_RXDATA1_RXDATA1_MASK                           (0xFFFFFFFFU << I2C_RXDATA1_RXDATA1_SHIFT)                   /* 0xFFFFFFFF */
+/* RXDATA2 */
+#define I2C_RXDATA2_OFFSET                                 (0x208U)
+#define I2C_RXDATA2                                        (0x0U)
+#define I2C_RXDATA2_RXDATA2_SHIFT                          (0U)
+#define I2C_RXDATA2_RXDATA2_MASK                           (0xFFFFFFFFU << I2C_RXDATA2_RXDATA2_SHIFT)                   /* 0xFFFFFFFF */
+/* RXDATA3 */
+#define I2C_RXDATA3_OFFSET                                 (0x20CU)
+#define I2C_RXDATA3                                        (0x0U)
+#define I2C_RXDATA3_RXDATA3_SHIFT                          (0U)
+#define I2C_RXDATA3_RXDATA3_MASK                           (0xFFFFFFFFU << I2C_RXDATA3_RXDATA3_SHIFT)                   /* 0xFFFFFFFF */
+/* RXDATA4 */
+#define I2C_RXDATA4_OFFSET                                 (0x210U)
+#define I2C_RXDATA4                                        (0x0U)
+#define I2C_RXDATA4_RXDATA4_SHIFT                          (0U)
+#define I2C_RXDATA4_RXDATA4_MASK                           (0xFFFFFFFFU << I2C_RXDATA4_RXDATA4_SHIFT)                   /* 0xFFFFFFFF */
+/* RXDATA5 */
+#define I2C_RXDATA5_OFFSET                                 (0x214U)
+#define I2C_RXDATA5                                        (0x0U)
+#define I2C_RXDATA5_RXDATA5_SHIFT                          (0U)
+#define I2C_RXDATA5_RXDATA5_MASK                           (0xFFFFFFFFU << I2C_RXDATA5_RXDATA5_SHIFT)                   /* 0xFFFFFFFF */
+/* RXDATA6 */
+#define I2C_RXDATA6_OFFSET                                 (0x218U)
+#define I2C_RXDATA6                                        (0x0U)
+#define I2C_RXDATA6_RXDATA6_SHIFT                          (0U)
+#define I2C_RXDATA6_RXDATA6_MASK                           (0xFFFFFFFFU << I2C_RXDATA6_RXDATA6_SHIFT)                   /* 0xFFFFFFFF */
+/* RXDATA7 */
+#define I2C_RXDATA7_OFFSET                                 (0x21CU)
+#define I2C_RXDATA7                                        (0x0U)
+#define I2C_RXDATA7_RXDATA7_SHIFT                          (0U)
+#define I2C_RXDATA7_RXDATA7_MASK                           (0xFFFFFFFFU << I2C_RXDATA7_RXDATA7_SHIFT)                   /* 0xFFFFFFFF */
+/* ST */
+#define I2C_ST_OFFSET                                      (0x220U)
+#define I2C_ST                                             (0x0U)
+#define I2C_ST_SDA_ST_SHIFT                                (0U)
+#define I2C_ST_SDA_ST_MASK                                 (0x1U << I2C_ST_SDA_ST_SHIFT)                                /* 0x00000001 */
+#define I2C_ST_SCL_ST_SHIFT                                (1U)
+#define I2C_ST_SCL_ST_MASK                                 (0x1U << I2C_ST_SCL_ST_SHIFT)                                /* 0x00000002 */
+/* DBGCTRL */
+#define I2C_DBGCTRL_OFFSET                                 (0x224U)
+#define I2C_DBGCTRL_FLT_F_SHIFT                            (0U)
+#define I2C_DBGCTRL_FLT_F_MASK                             (0xFU << I2C_DBGCTRL_FLT_F_SHIFT)                            /* 0x0000000F */
+#define I2C_DBGCTRL_FLT_R_SHIFT                            (4U)
+#define I2C_DBGCTRL_FLT_R_MASK                             (0xFU << I2C_DBGCTRL_FLT_R_SHIFT)                            /* 0x000000F0 */
+#define I2C_DBGCTRL_SLV_HOLD_SCL_TH_SHIFT                  (8U)
+#define I2C_DBGCTRL_SLV_HOLD_SCL_TH_MASK                   (0xFU << I2C_DBGCTRL_SLV_HOLD_SCL_TH_SHIFT)                  /* 0x00000F00 */
+#define I2C_DBGCTRL_FLT_EN_SHIFT                           (12U)
+#define I2C_DBGCTRL_FLT_EN_MASK                            (0x1U << I2C_DBGCTRL_FLT_EN_SHIFT)                           /* 0x00001000 */
+#define I2C_DBGCTRL_NAK_RELEASE_SCL_SHIFT                  (13U)
+#define I2C_DBGCTRL_NAK_RELEASE_SCL_MASK                   (0x1U << I2C_DBGCTRL_NAK_RELEASE_SCL_SHIFT)                  /* 0x00002000 */
+#define I2C_DBGCTRL_H0_CHECK_SCL_SHIFT                     (14U)
+#define I2C_DBGCTRL_H0_CHECK_SCL_MASK                      (0x1U << I2C_DBGCTRL_H0_CHECK_SCL_SHIFT)                     /* 0x00004000 */
+/* CON1 */
+#define I2C_CON1_OFFSET                                    (0x228U)
+#define I2C_CON1_AUTO_STOP_SHIFT                           (0U)
+#define I2C_CON1_AUTO_STOP_MASK                            (0x1U << I2C_CON1_AUTO_STOP_SHIFT)                           /* 0x00000001 */
+#define I2C_CON1_AUTO_STOP_TX_END_SHIFT                    (1U)
+#define I2C_CON1_AUTO_STOP_TX_END_MASK                     (0x1U << I2C_CON1_AUTO_STOP_TX_END_SHIFT)                    /* 0x00000002 */
+#define I2C_CON1_AUTO_STOP_NAK_SHIFT                       (2U)
+#define I2C_CON1_AUTO_STOP_NAK_MASK                        (0x1U << I2C_CON1_AUTO_STOP_NAK_SHIFT)                       /* 0x00000004 */
 /******************************************UART******************************************/
 /* RBR */
 #define UART_RBR_OFFSET                                    (0x0U)
@@ -13086,6 +13431,369 @@ struct MBOX_REG {
 #define GPIO_GPIO_VIRTUAL_EN_OFFSET                        (0x108U)
 #define GPIO_GPIO_VIRTUAL_EN_GPIO_VIRTUAL_EN_SHIFT         (0U)
 #define GPIO_GPIO_VIRTUAL_EN_GPIO_VIRTUAL_EN_MASK          (0x1U << GPIO_GPIO_VIRTUAL_EN_GPIO_VIRTUAL_EN_SHIFT)         /* 0x00000001 */
+/******************************************PWM*******************************************/
+/* PWM0_CNT */
+#define PWM_PWM0_CNT_OFFSET                                (0x0U)
+#define PWM_PWM0_CNT                                       (0x0U)
+#define PWM_PWM0_CNT_CNT_SHIFT                             (0U)
+#define PWM_PWM0_CNT_CNT_MASK                              (0xFFFFFFFFU << PWM_PWM0_CNT_CNT_SHIFT)                      /* 0xFFFFFFFF */
+/* PWM0_PERIOD_HPR */
+#define PWM_PWM0_PERIOD_HPR_OFFSET                         (0x4U)
+#define PWM_PWM0_PERIOD_HPR_PERIOD_HPR_SHIFT               (0U)
+#define PWM_PWM0_PERIOD_HPR_PERIOD_HPR_MASK                (0xFFFFFFFFU << PWM_PWM0_PERIOD_HPR_PERIOD_HPR_SHIFT)        /* 0xFFFFFFFF */
+/* PWM0_DUTY_LPR */
+#define PWM_PWM0_DUTY_LPR_OFFSET                           (0x8U)
+#define PWM_PWM0_DUTY_LPR_DUTY_LPR_SHIFT                   (0U)
+#define PWM_PWM0_DUTY_LPR_DUTY_LPR_MASK                    (0xFFFFFFFFU << PWM_PWM0_DUTY_LPR_DUTY_LPR_SHIFT)            /* 0xFFFFFFFF */
+/* PWM0_CTRL */
+#define PWM_PWM0_CTRL_OFFSET                               (0xCU)
+#define PWM_PWM0_CTRL_PWM_EN_SHIFT                         (0U)
+#define PWM_PWM0_CTRL_PWM_EN_MASK                          (0x1U << PWM_PWM0_CTRL_PWM_EN_SHIFT)                         /* 0x00000001 */
+#define PWM_PWM0_CTRL_PWM_MODE_SHIFT                       (1U)
+#define PWM_PWM0_CTRL_PWM_MODE_MASK                        (0x3U << PWM_PWM0_CTRL_PWM_MODE_SHIFT)                       /* 0x00000006 */
+#define PWM_PWM0_CTRL_DUTY_POL_SHIFT                       (3U)
+#define PWM_PWM0_CTRL_DUTY_POL_MASK                        (0x1U << PWM_PWM0_CTRL_DUTY_POL_SHIFT)                       /* 0x00000008 */
+#define PWM_PWM0_CTRL_INACTIVE_POL_SHIFT                   (4U)
+#define PWM_PWM0_CTRL_INACTIVE_POL_MASK                    (0x1U << PWM_PWM0_CTRL_INACTIVE_POL_SHIFT)                   /* 0x00000010 */
+#define PWM_PWM0_CTRL_OUTPUT_MODE_SHIFT                    (5U)
+#define PWM_PWM0_CTRL_OUTPUT_MODE_MASK                     (0x1U << PWM_PWM0_CTRL_OUTPUT_MODE_SHIFT)                    /* 0x00000020 */
+#define PWM_PWM0_CTRL_CONLOCK_SHIFT                        (6U)
+#define PWM_PWM0_CTRL_CONLOCK_MASK                         (0x1U << PWM_PWM0_CTRL_CONLOCK_SHIFT)                        /* 0x00000040 */
+#define PWM_PWM0_CTRL_CH_CNT_EN_SHIFT                      (7U)
+#define PWM_PWM0_CTRL_CH_CNT_EN_MASK                       (0x1U << PWM_PWM0_CTRL_CH_CNT_EN_SHIFT)                      /* 0x00000080 */
+#define PWM_PWM0_CTRL_FORCE_CLK_EN_SHIFT                   (8U)
+#define PWM_PWM0_CTRL_FORCE_CLK_EN_MASK                    (0x1U << PWM_PWM0_CTRL_FORCE_CLK_EN_SHIFT)                   /* 0x00000100 */
+#define PWM_PWM0_CTRL_CLK_SEL_SHIFT                        (9U)
+#define PWM_PWM0_CTRL_CLK_SEL_MASK                         (0x1U << PWM_PWM0_CTRL_CLK_SEL_SHIFT)                        /* 0x00000200 */
+#define PWM_PWM0_CTRL_CLK_SRC_SEL_SHIFT                    (10U)
+#define PWM_PWM0_CTRL_CLK_SRC_SEL_MASK                     (0x1U << PWM_PWM0_CTRL_CLK_SRC_SEL_SHIFT)                    /* 0x00000400 */
+#define PWM_PWM0_CTRL_PRESCALE_SHIFT                       (12U)
+#define PWM_PWM0_CTRL_PRESCALE_MASK                        (0x7U << PWM_PWM0_CTRL_PRESCALE_SHIFT)                       /* 0x00007000 */
+#define PWM_PWM0_CTRL_SCALE_SHIFT                          (16U)
+#define PWM_PWM0_CTRL_SCALE_MASK                           (0xFFU << PWM_PWM0_CTRL_SCALE_SHIFT)                         /* 0x00FF0000 */
+#define PWM_PWM0_CTRL_RPT_SHIFT                            (24U)
+#define PWM_PWM0_CTRL_RPT_MASK                             (0xFFU << PWM_PWM0_CTRL_RPT_SHIFT)                           /* 0xFF000000 */
+/* PWM1_CNT */
+#define PWM_PWM1_CNT_OFFSET                                (0x10U)
+#define PWM_PWM1_CNT                                       (0x0U)
+#define PWM_PWM1_CNT_CNT_SHIFT                             (0U)
+#define PWM_PWM1_CNT_CNT_MASK                              (0xFFFFFFFFU << PWM_PWM1_CNT_CNT_SHIFT)                      /* 0xFFFFFFFF */
+/* PWM1_PERIOD_HPR */
+#define PWM_PWM1_PERIOD_HPR_OFFSET                         (0x14U)
+#define PWM_PWM1_PERIOD_HPR_PERIOD_HPR_SHIFT               (0U)
+#define PWM_PWM1_PERIOD_HPR_PERIOD_HPR_MASK                (0xFFFFFFFFU << PWM_PWM1_PERIOD_HPR_PERIOD_HPR_SHIFT)        /* 0xFFFFFFFF */
+/* PWM1_DUTY_LPR */
+#define PWM_PWM1_DUTY_LPR_OFFSET                           (0x18U)
+#define PWM_PWM1_DUTY_LPR_DUTY_LPR_SHIFT                   (0U)
+#define PWM_PWM1_DUTY_LPR_DUTY_LPR_MASK                    (0xFFFFFFFFU << PWM_PWM1_DUTY_LPR_DUTY_LPR_SHIFT)            /* 0xFFFFFFFF */
+/* PWM1_CTRL */
+#define PWM_PWM1_CTRL_OFFSET                               (0x1CU)
+#define PWM_PWM1_CTRL_PWM_EN_SHIFT                         (0U)
+#define PWM_PWM1_CTRL_PWM_EN_MASK                          (0x1U << PWM_PWM1_CTRL_PWM_EN_SHIFT)                         /* 0x00000001 */
+#define PWM_PWM1_CTRL_PWM_MODE_SHIFT                       (1U)
+#define PWM_PWM1_CTRL_PWM_MODE_MASK                        (0x3U << PWM_PWM1_CTRL_PWM_MODE_SHIFT)                       /* 0x00000006 */
+#define PWM_PWM1_CTRL_DUTY_POL_SHIFT                       (3U)
+#define PWM_PWM1_CTRL_DUTY_POL_MASK                        (0x1U << PWM_PWM1_CTRL_DUTY_POL_SHIFT)                       /* 0x00000008 */
+#define PWM_PWM1_CTRL_INACTIVE_POL_SHIFT                   (4U)
+#define PWM_PWM1_CTRL_INACTIVE_POL_MASK                    (0x1U << PWM_PWM1_CTRL_INACTIVE_POL_SHIFT)                   /* 0x00000010 */
+#define PWM_PWM1_CTRL_OUTPUT_MODE_SHIFT                    (5U)
+#define PWM_PWM1_CTRL_OUTPUT_MODE_MASK                     (0x1U << PWM_PWM1_CTRL_OUTPUT_MODE_SHIFT)                    /* 0x00000020 */
+#define PWM_PWM1_CTRL_CONLOCK_SHIFT                        (6U)
+#define PWM_PWM1_CTRL_CONLOCK_MASK                         (0x1U << PWM_PWM1_CTRL_CONLOCK_SHIFT)                        /* 0x00000040 */
+#define PWM_PWM1_CTRL_CH_CNT_EN_SHIFT                      (7U)
+#define PWM_PWM1_CTRL_CH_CNT_EN_MASK                       (0x1U << PWM_PWM1_CTRL_CH_CNT_EN_SHIFT)                      /* 0x00000080 */
+#define PWM_PWM1_CTRL_FORCE_CLK_EN_SHIFT                   (8U)
+#define PWM_PWM1_CTRL_FORCE_CLK_EN_MASK                    (0x1U << PWM_PWM1_CTRL_FORCE_CLK_EN_SHIFT)                   /* 0x00000100 */
+#define PWM_PWM1_CTRL_CLK_SEL_SHIFT                        (9U)
+#define PWM_PWM1_CTRL_CLK_SEL_MASK                         (0x1U << PWM_PWM1_CTRL_CLK_SEL_SHIFT)                        /* 0x00000200 */
+#define PWM_PWM1_CTRL_CLK_SRC_SEL_SHIFT                    (10U)
+#define PWM_PWM1_CTRL_CLK_SRC_SEL_MASK                     (0x1U << PWM_PWM1_CTRL_CLK_SRC_SEL_SHIFT)                    /* 0x00000400 */
+#define PWM_PWM1_CTRL_PRESCALE_SHIFT                       (12U)
+#define PWM_PWM1_CTRL_PRESCALE_MASK                        (0x7U << PWM_PWM1_CTRL_PRESCALE_SHIFT)                       /* 0x00007000 */
+#define PWM_PWM1_CTRL_SCALE_SHIFT                          (16U)
+#define PWM_PWM1_CTRL_SCALE_MASK                           (0xFFU << PWM_PWM1_CTRL_SCALE_SHIFT)                         /* 0x00FF0000 */
+#define PWM_PWM1_CTRL_RPT_SHIFT                            (24U)
+#define PWM_PWM1_CTRL_RPT_MASK                             (0xFFU << PWM_PWM1_CTRL_RPT_SHIFT)                           /* 0xFF000000 */
+/* PWM2_CNT */
+#define PWM_PWM2_CNT_OFFSET                                (0x20U)
+#define PWM_PWM2_CNT                                       (0x0U)
+#define PWM_PWM2_CNT_CNT_SHIFT                             (0U)
+#define PWM_PWM2_CNT_CNT_MASK                              (0xFFFFFFFFU << PWM_PWM2_CNT_CNT_SHIFT)                      /* 0xFFFFFFFF */
+/* PWM2_PERIOD_HPR */
+#define PWM_PWM2_PERIOD_HPR_OFFSET                         (0x24U)
+#define PWM_PWM2_PERIOD_HPR_PERIOD_HPR_SHIFT               (0U)
+#define PWM_PWM2_PERIOD_HPR_PERIOD_HPR_MASK                (0xFFFFFFFFU << PWM_PWM2_PERIOD_HPR_PERIOD_HPR_SHIFT)        /* 0xFFFFFFFF */
+/* PWM2_DUTY_LPR */
+#define PWM_PWM2_DUTY_LPR_OFFSET                           (0x28U)
+#define PWM_PWM2_DUTY_LPR_DUTY_LPR_SHIFT                   (0U)
+#define PWM_PWM2_DUTY_LPR_DUTY_LPR_MASK                    (0xFFFFFFFFU << PWM_PWM2_DUTY_LPR_DUTY_LPR_SHIFT)            /* 0xFFFFFFFF */
+/* PWM2_CTRL */
+#define PWM_PWM2_CTRL_OFFSET                               (0x2CU)
+#define PWM_PWM2_CTRL_PWM_EN_SHIFT                         (0U)
+#define PWM_PWM2_CTRL_PWM_EN_MASK                          (0x1U << PWM_PWM2_CTRL_PWM_EN_SHIFT)                         /* 0x00000001 */
+#define PWM_PWM2_CTRL_PWM_MODE_SHIFT                       (1U)
+#define PWM_PWM2_CTRL_PWM_MODE_MASK                        (0x3U << PWM_PWM2_CTRL_PWM_MODE_SHIFT)                       /* 0x00000006 */
+#define PWM_PWM2_CTRL_DUTY_POL_SHIFT                       (3U)
+#define PWM_PWM2_CTRL_DUTY_POL_MASK                        (0x1U << PWM_PWM2_CTRL_DUTY_POL_SHIFT)                       /* 0x00000008 */
+#define PWM_PWM2_CTRL_INACTIVE_POL_SHIFT                   (4U)
+#define PWM_PWM2_CTRL_INACTIVE_POL_MASK                    (0x1U << PWM_PWM2_CTRL_INACTIVE_POL_SHIFT)                   /* 0x00000010 */
+#define PWM_PWM2_CTRL_OUTPUT_MODE_SHIFT                    (5U)
+#define PWM_PWM2_CTRL_OUTPUT_MODE_MASK                     (0x1U << PWM_PWM2_CTRL_OUTPUT_MODE_SHIFT)                    /* 0x00000020 */
+#define PWM_PWM2_CTRL_CONLOCK_SHIFT                        (6U)
+#define PWM_PWM2_CTRL_CONLOCK_MASK                         (0x1U << PWM_PWM2_CTRL_CONLOCK_SHIFT)                        /* 0x00000040 */
+#define PWM_PWM2_CTRL_CH_CNT_EN_SHIFT                      (7U)
+#define PWM_PWM2_CTRL_CH_CNT_EN_MASK                       (0x1U << PWM_PWM2_CTRL_CH_CNT_EN_SHIFT)                      /* 0x00000080 */
+#define PWM_PWM2_CTRL_FORCE_CLK_EN_SHIFT                   (8U)
+#define PWM_PWM2_CTRL_FORCE_CLK_EN_MASK                    (0x1U << PWM_PWM2_CTRL_FORCE_CLK_EN_SHIFT)                   /* 0x00000100 */
+#define PWM_PWM2_CTRL_CLK_SEL_SHIFT                        (9U)
+#define PWM_PWM2_CTRL_CLK_SEL_MASK                         (0x1U << PWM_PWM2_CTRL_CLK_SEL_SHIFT)                        /* 0x00000200 */
+#define PWM_PWM2_CTRL_CLK_SRC_SEL_SHIFT                    (10U)
+#define PWM_PWM2_CTRL_CLK_SRC_SEL_MASK                     (0x1U << PWM_PWM2_CTRL_CLK_SRC_SEL_SHIFT)                    /* 0x00000400 */
+#define PWM_PWM2_CTRL_PRESCALE_SHIFT                       (12U)
+#define PWM_PWM2_CTRL_PRESCALE_MASK                        (0x7U << PWM_PWM2_CTRL_PRESCALE_SHIFT)                       /* 0x00007000 */
+#define PWM_PWM2_CTRL_SCALE_SHIFT                          (16U)
+#define PWM_PWM2_CTRL_SCALE_MASK                           (0xFFU << PWM_PWM2_CTRL_SCALE_SHIFT)                         /* 0x00FF0000 */
+#define PWM_PWM2_CTRL_RPT_SHIFT                            (24U)
+#define PWM_PWM2_CTRL_RPT_MASK                             (0xFFU << PWM_PWM2_CTRL_RPT_SHIFT)                           /* 0xFF000000 */
+/* PWM3_CNT */
+#define PWM_PWM3_CNT_OFFSET                                (0x30U)
+#define PWM_PWM3_CNT                                       (0x0U)
+#define PWM_PWM3_CNT_CNT_SHIFT                             (0U)
+#define PWM_PWM3_CNT_CNT_MASK                              (0xFFFFFFFFU << PWM_PWM3_CNT_CNT_SHIFT)                      /* 0xFFFFFFFF */
+/* PWM3_PERIOD_HPR */
+#define PWM_PWM3_PERIOD_HPR_OFFSET                         (0x34U)
+#define PWM_PWM3_PERIOD_HPR_PERIOD_HPR_SHIFT               (0U)
+#define PWM_PWM3_PERIOD_HPR_PERIOD_HPR_MASK                (0xFFFFFFFFU << PWM_PWM3_PERIOD_HPR_PERIOD_HPR_SHIFT)        /* 0xFFFFFFFF */
+/* PWM3_DUTY_LPR */
+#define PWM_PWM3_DUTY_LPR_OFFSET                           (0x38U)
+#define PWM_PWM3_DUTY_LPR_DUTY_LPR_SHIFT                   (0U)
+#define PWM_PWM3_DUTY_LPR_DUTY_LPR_MASK                    (0xFFFFFFFFU << PWM_PWM3_DUTY_LPR_DUTY_LPR_SHIFT)            /* 0xFFFFFFFF */
+/* PWM3_CTRL */
+#define PWM_PWM3_CTRL_OFFSET                               (0x3CU)
+#define PWM_PWM3_CTRL_PWM_EN_SHIFT                         (0U)
+#define PWM_PWM3_CTRL_PWM_EN_MASK                          (0x1U << PWM_PWM3_CTRL_PWM_EN_SHIFT)                         /* 0x00000001 */
+#define PWM_PWM3_CTRL_PWM_MODE_SHIFT                       (1U)
+#define PWM_PWM3_CTRL_PWM_MODE_MASK                        (0x3U << PWM_PWM3_CTRL_PWM_MODE_SHIFT)                       /* 0x00000006 */
+#define PWM_PWM3_CTRL_DUTY_POL_SHIFT                       (3U)
+#define PWM_PWM3_CTRL_DUTY_POL_MASK                        (0x1U << PWM_PWM3_CTRL_DUTY_POL_SHIFT)                       /* 0x00000008 */
+#define PWM_PWM3_CTRL_INACTIVE_POL_SHIFT                   (4U)
+#define PWM_PWM3_CTRL_INACTIVE_POL_MASK                    (0x1U << PWM_PWM3_CTRL_INACTIVE_POL_SHIFT)                   /* 0x00000010 */
+#define PWM_PWM3_CTRL_OUTPUT_MODE_SHIFT                    (5U)
+#define PWM_PWM3_CTRL_OUTPUT_MODE_MASK                     (0x1U << PWM_PWM3_CTRL_OUTPUT_MODE_SHIFT)                    /* 0x00000020 */
+#define PWM_PWM3_CTRL_CONLOCK_SHIFT                        (6U)
+#define PWM_PWM3_CTRL_CONLOCK_MASK                         (0x1U << PWM_PWM3_CTRL_CONLOCK_SHIFT)                        /* 0x00000040 */
+#define PWM_PWM3_CTRL_CH_CNT_EN_SHIFT                      (7U)
+#define PWM_PWM3_CTRL_CH_CNT_EN_MASK                       (0x1U << PWM_PWM3_CTRL_CH_CNT_EN_SHIFT)                      /* 0x00000080 */
+#define PWM_PWM3_CTRL_FORCE_CLK_EN_SHIFT                   (8U)
+#define PWM_PWM3_CTRL_FORCE_CLK_EN_MASK                    (0x1U << PWM_PWM3_CTRL_FORCE_CLK_EN_SHIFT)                   /* 0x00000100 */
+#define PWM_PWM3_CTRL_CLK_SEL_SHIFT                        (9U)
+#define PWM_PWM3_CTRL_CLK_SEL_MASK                         (0x1U << PWM_PWM3_CTRL_CLK_SEL_SHIFT)                        /* 0x00000200 */
+#define PWM_PWM3_CTRL_CLK_SRC_SEL_SHIFT                    (10U)
+#define PWM_PWM3_CTRL_CLK_SRC_SEL_MASK                     (0x1U << PWM_PWM3_CTRL_CLK_SRC_SEL_SHIFT)                    /* 0x00000400 */
+#define PWM_PWM3_CTRL_PRESCALE_SHIFT                       (12U)
+#define PWM_PWM3_CTRL_PRESCALE_MASK                        (0x7U << PWM_PWM3_CTRL_PRESCALE_SHIFT)                       /* 0x00007000 */
+#define PWM_PWM3_CTRL_SCALE_SHIFT                          (16U)
+#define PWM_PWM3_CTRL_SCALE_MASK                           (0xFFU << PWM_PWM3_CTRL_SCALE_SHIFT)                         /* 0x00FF0000 */
+#define PWM_PWM3_CTRL_RPT_SHIFT                            (24U)
+#define PWM_PWM3_CTRL_RPT_MASK                             (0xFFU << PWM_PWM3_CTRL_RPT_SHIFT)                           /* 0xFF000000 */
+/* INTSTS */
+#define PWM_INTSTS_OFFSET                                  (0x40U)
+#define PWM_INTSTS_CH0_INTSTS_SHIFT                        (0U)
+#define PWM_INTSTS_CH0_INTSTS_MASK                         (0x1U << PWM_INTSTS_CH0_INTSTS_SHIFT)                        /* 0x00000001 */
+#define PWM_INTSTS_CH1_INTSTS_SHIFT                        (1U)
+#define PWM_INTSTS_CH1_INTSTS_MASK                         (0x1U << PWM_INTSTS_CH1_INTSTS_SHIFT)                        /* 0x00000002 */
+#define PWM_INTSTS_CH2_INTSTS_SHIFT                        (2U)
+#define PWM_INTSTS_CH2_INTSTS_MASK                         (0x1U << PWM_INTSTS_CH2_INTSTS_SHIFT)                        /* 0x00000004 */
+#define PWM_INTSTS_CH3_INTSTS_SHIFT                        (3U)
+#define PWM_INTSTS_CH3_INTSTS_MASK                         (0x1U << PWM_INTSTS_CH3_INTSTS_SHIFT)                        /* 0x00000008 */
+#define PWM_INTSTS_CH0_PWR_INTSTS_SHIFT                    (4U)
+#define PWM_INTSTS_CH0_PWR_INTSTS_MASK                     (0x1U << PWM_INTSTS_CH0_PWR_INTSTS_SHIFT)                    /* 0x00000010 */
+#define PWM_INTSTS_CH1_PWR_INTSTS_SHIFT                    (5U)
+#define PWM_INTSTS_CH1_PWR_INTSTS_MASK                     (0x1U << PWM_INTSTS_CH1_PWR_INTSTS_SHIFT)                    /* 0x00000020 */
+#define PWM_INTSTS_CH2_PWR_INTSTS_SHIFT                    (6U)
+#define PWM_INTSTS_CH2_PWR_INTSTS_MASK                     (0x1U << PWM_INTSTS_CH2_PWR_INTSTS_SHIFT)                    /* 0x00000040 */
+#define PWM_INTSTS_CH3_PWR_INTSTS_SHIFT                    (7U)
+#define PWM_INTSTS_CH3_PWR_INTSTS_MASK                     (0x1U << PWM_INTSTS_CH3_PWR_INTSTS_SHIFT)                    /* 0x00000080 */
+#define PWM_INTSTS_CH0_POL_SHIFT                           (8U)
+#define PWM_INTSTS_CH0_POL_MASK                            (0x1U << PWM_INTSTS_CH0_POL_SHIFT)                           /* 0x00000100 */
+#define PWM_INTSTS_CH1_POL_SHIFT                           (9U)
+#define PWM_INTSTS_CH1_POL_MASK                            (0x1U << PWM_INTSTS_CH1_POL_SHIFT)                           /* 0x00000200 */
+#define PWM_INTSTS_CH2_POL_SHIFT                           (10U)
+#define PWM_INTSTS_CH2_POL_MASK                            (0x1U << PWM_INTSTS_CH2_POL_SHIFT)                           /* 0x00000400 */
+#define PWM_INTSTS_CH3_POL_SHIFT                           (11U)
+#define PWM_INTSTS_CH3_POL_MASK                            (0x1U << PWM_INTSTS_CH3_POL_SHIFT)                           /* 0x00000800 */
+/* INT_EN */
+#define PWM_INT_EN_OFFSET                                  (0x44U)
+#define PWM_INT_EN_CH0_INT_EN_SHIFT                        (0U)
+#define PWM_INT_EN_CH0_INT_EN_MASK                         (0x1U << PWM_INT_EN_CH0_INT_EN_SHIFT)                        /* 0x00000001 */
+#define PWM_INT_EN_CH1_INT_EN_SHIFT                        (1U)
+#define PWM_INT_EN_CH1_INT_EN_MASK                         (0x1U << PWM_INT_EN_CH1_INT_EN_SHIFT)                        /* 0x00000002 */
+#define PWM_INT_EN_CH2_INT_EN_SHIFT                        (2U)
+#define PWM_INT_EN_CH2_INT_EN_MASK                         (0x1U << PWM_INT_EN_CH2_INT_EN_SHIFT)                        /* 0x00000004 */
+#define PWM_INT_EN_CH3_INT_EN_SHIFT                        (3U)
+#define PWM_INT_EN_CH3_INT_EN_MASK                         (0x1U << PWM_INT_EN_CH3_INT_EN_SHIFT)                        /* 0x00000008 */
+#define PWM_INT_EN_CH0_PWR_INT_EN_SHIFT                    (4U)
+#define PWM_INT_EN_CH0_PWR_INT_EN_MASK                     (0x1U << PWM_INT_EN_CH0_PWR_INT_EN_SHIFT)                    /* 0x00000010 */
+#define PWM_INT_EN_CH1_PWR_INT_EN_SHIFT                    (5U)
+#define PWM_INT_EN_CH1_PWR_INT_EN_MASK                     (0x1U << PWM_INT_EN_CH1_PWR_INT_EN_SHIFT)                    /* 0x00000020 */
+#define PWM_INT_EN_CH2_PWR_INT_EN_SHIFT                    (6U)
+#define PWM_INT_EN_CH2_PWR_INT_EN_MASK                     (0x1U << PWM_INT_EN_CH2_PWR_INT_EN_SHIFT)                    /* 0x00000040 */
+#define PWM_INT_EN_CH3_PWR_INT_EN_SHIFT                    (7U)
+#define PWM_INT_EN_CH3_PWR_INT_EN_MASK                     (0x1U << PWM_INT_EN_CH3_PWR_INT_EN_SHIFT)                    /* 0x00000080 */
+/* FIFO_CTRL */
+#define PWM_FIFO_CTRL_OFFSET                               (0x50U)
+#define PWM_FIFO_CTRL_FIFO_MODE_SEL_SHIFT                  (0U)
+#define PWM_FIFO_CTRL_FIFO_MODE_SEL_MASK                   (0x1U << PWM_FIFO_CTRL_FIFO_MODE_SEL_SHIFT)                  /* 0x00000001 */
+#define PWM_FIFO_CTRL_FULL_INT_EN_SHIFT                    (1U)
+#define PWM_FIFO_CTRL_FULL_INT_EN_MASK                     (0x1U << PWM_FIFO_CTRL_FULL_INT_EN_SHIFT)                    /* 0x00000002 */
+#define PWM_FIFO_CTRL_OVERFLOW_INT_EN_SHIFT                (2U)
+#define PWM_FIFO_CTRL_OVERFLOW_INT_EN_MASK                 (0x1U << PWM_FIFO_CTRL_OVERFLOW_INT_EN_SHIFT)                /* 0x00000004 */
+#define PWM_FIFO_CTRL_WATERMARK_INT_EN_SHIFT               (3U)
+#define PWM_FIFO_CTRL_WATERMARK_INT_EN_MASK                (0x1U << PWM_FIFO_CTRL_WATERMARK_INT_EN_SHIFT)               /* 0x00000008 */
+#define PWM_FIFO_CTRL_ALMOST_FULL_WATERMARK_SHIFT          (4U)
+#define PWM_FIFO_CTRL_ALMOST_FULL_WATERMARK_MASK           (0x7U << PWM_FIFO_CTRL_ALMOST_FULL_WATERMARK_SHIFT)          /* 0x00000070 */
+#define PWM_FIFO_CTRL_DMA_MODE_EN_SHIFT                    (8U)
+#define PWM_FIFO_CTRL_DMA_MODE_EN_MASK                     (0x1U << PWM_FIFO_CTRL_DMA_MODE_EN_SHIFT)                    /* 0x00000100 */
+#define PWM_FIFO_CTRL_TIMEOUT_EN_SHIFT                     (9U)
+#define PWM_FIFO_CTRL_TIMEOUT_EN_MASK                      (0x1U << PWM_FIFO_CTRL_TIMEOUT_EN_SHIFT)                     /* 0x00000200 */
+#define PWM_FIFO_CTRL_DMA_CH_SEL_EN_SHIFT                  (10U)
+#define PWM_FIFO_CTRL_DMA_CH_SEL_EN_MASK                   (0x1U << PWM_FIFO_CTRL_DMA_CH_SEL_EN_SHIFT)                  /* 0x00000400 */
+#define PWM_FIFO_CTRL_DMA_CH_SEL_SHIFT                     (12U)
+#define PWM_FIFO_CTRL_DMA_CH_SEL_MASK                      (0x3U << PWM_FIFO_CTRL_DMA_CH_SEL_SHIFT)                     /* 0x00003000 */
+/* FIFO_INTSTS */
+#define PWM_FIFO_INTSTS_OFFSET                             (0x54U)
+#define PWM_FIFO_INTSTS_FIFO_FULL_INTSTS_SHIFT             (0U)
+#define PWM_FIFO_INTSTS_FIFO_FULL_INTSTS_MASK              (0x1U << PWM_FIFO_INTSTS_FIFO_FULL_INTSTS_SHIFT)             /* 0x00000001 */
+#define PWM_FIFO_INTSTS_FIFO_OVERFLOW_INTSTS_SHIFT         (1U)
+#define PWM_FIFO_INTSTS_FIFO_OVERFLOW_INTSTS_MASK          (0x1U << PWM_FIFO_INTSTS_FIFO_OVERFLOW_INTSTS_SHIFT)         /* 0x00000002 */
+#define PWM_FIFO_INTSTS_FIFO_WATERMARK_FULL_INTSTS_SHIFT   (2U)
+#define PWM_FIFO_INTSTS_FIFO_WATERMARK_FULL_INTSTS_MASK    (0x1U << PWM_FIFO_INTSTS_FIFO_WATERMARK_FULL_INTSTS_SHIFT)   /* 0x00000004 */
+#define PWM_FIFO_INTSTS_TIMIEOUT_INTSTS_SHIFT              (3U)
+#define PWM_FIFO_INTSTS_TIMIEOUT_INTSTS_MASK               (0x1U << PWM_FIFO_INTSTS_TIMIEOUT_INTSTS_SHIFT)              /* 0x00000008 */
+#define PWM_FIFO_INTSTS_FIFO_EMPTY_STATUS_SHIFT            (4U)
+#define PWM_FIFO_INTSTS_FIFO_EMPTY_STATUS_MASK             (0x1U << PWM_FIFO_INTSTS_FIFO_EMPTY_STATUS_SHIFT)            /* 0x00000010 */
+/* FIFO_TOUTTHR */
+#define PWM_FIFO_TOUTTHR_OFFSET                            (0x58U)
+#define PWM_FIFO_TOUTTHR_TIMEOUT_THRESHOLD_SHIFT           (0U)
+#define PWM_FIFO_TOUTTHR_TIMEOUT_THRESHOLD_MASK            (0xFFFFFU << PWM_FIFO_TOUTTHR_TIMEOUT_THRESHOLD_SHIFT)       /* 0x000FFFFF */
+/* VERSION_ID */
+#define PWM_VERSION_ID_OFFSET                              (0x5CU)
+#define PWM_VERSION_ID_SVN_VERSION_SHIFT                   (0U)
+#define PWM_VERSION_ID_SVN_VERSION_MASK                    (0xFFFFU << PWM_VERSION_ID_SVN_VERSION_SHIFT)                /* 0x0000FFFF */
+#define PWM_VERSION_ID_MINOR_VERSION_SHIFT                 (16U)
+#define PWM_VERSION_ID_MINOR_VERSION_MASK                  (0xFFU << PWM_VERSION_ID_MINOR_VERSION_SHIFT)                /* 0x00FF0000 */
+#define PWM_VERSION_ID_MAIN_VERSION_SHIFT                  (24U)
+#define PWM_VERSION_ID_MAIN_VERSION_MASK                   (0xFFU << PWM_VERSION_ID_MAIN_VERSION_SHIFT)                 /* 0xFF000000 */
+/* FIFO */
+#define PWM_FIFO_OFFSET                                    (0x60U)
+#define PWM_FIFO                                           (0x0U)
+#define PWM_FIFO_CYCLE_CNT_SHIFT                           (0U)
+#define PWM_FIFO_CYCLE_CNT_MASK                            (0x7FFFFFFFU << PWM_FIFO_CYCLE_CNT_SHIFT)                    /* 0x7FFFFFFF */
+#define PWM_FIFO_POL_SHIFT                                 (31U)
+#define PWM_FIFO_POL_MASK                                  (0x1U << PWM_FIFO_POL_SHIFT)                                 /* 0x80000000 */
+/* PWRMATCH_CTRL */
+#define PWM_PWRMATCH_CTRL_OFFSET                           (0x80U)
+#define PWM_PWRMATCH_CTRL_CH3_PWRKEY_ENABLE_SHIFT          (3U)
+#define PWM_PWRMATCH_CTRL_CH3_PWRKEY_ENABLE_MASK           (0x1U << PWM_PWRMATCH_CTRL_CH3_PWRKEY_ENABLE_SHIFT)          /* 0x00000008 */
+#define PWM_PWRMATCH_CTRL_CH3_PWRKEY_POLARITY_SHIFT        (7U)
+#define PWM_PWRMATCH_CTRL_CH3_PWRKEY_POLARITY_MASK         (0x1U << PWM_PWRMATCH_CTRL_CH3_PWRKEY_POLARITY_SHIFT)        /* 0x00000080 */
+#define PWM_PWRMATCH_CTRL_CH3_PWRKEY_CAPTURE_CTRL_SHIFT    (11U)
+#define PWM_PWRMATCH_CTRL_CH3_PWRKEY_CAPTURE_CTRL_MASK     (0x1U << PWM_PWRMATCH_CTRL_CH3_PWRKEY_CAPTURE_CTRL_SHIFT)    /* 0x00000800 */
+#define PWM_PWRMATCH_CTRL_CH3_PWRKEY_INT_CTRL_SHIFT        (15U)
+#define PWM_PWRMATCH_CTRL_CH3_PWRKEY_INT_CTRL_MASK         (0x1U << PWM_PWRMATCH_CTRL_CH3_PWRKEY_INT_CTRL_SHIFT)        /* 0x00008000 */
+/* PWRMATCH_LPRE */
+#define PWM_PWRMATCH_LPRE_OFFSET                           (0x84U)
+#define PWM_PWRMATCH_LPRE_CNT_MIN_SHIFT                    (0U)
+#define PWM_PWRMATCH_LPRE_CNT_MIN_MASK                     (0xFFFFU << PWM_PWRMATCH_LPRE_CNT_MIN_SHIFT)                 /* 0x0000FFFF */
+#define PWM_PWRMATCH_LPRE_CNT_MAX_SHIFT                    (16U)
+#define PWM_PWRMATCH_LPRE_CNT_MAX_MASK                     (0xFFFFU << PWM_PWRMATCH_LPRE_CNT_MAX_SHIFT)                 /* 0xFFFF0000 */
+/* PWRMATCH_HPRE */
+#define PWM_PWRMATCH_HPRE_OFFSET                           (0x88U)
+#define PWM_PWRMATCH_HPRE_CNT_MIN_SHIFT                    (0U)
+#define PWM_PWRMATCH_HPRE_CNT_MIN_MASK                     (0xFFFFU << PWM_PWRMATCH_HPRE_CNT_MIN_SHIFT)                 /* 0x0000FFFF */
+#define PWM_PWRMATCH_HPRE_CNT_MAX_SHIFT                    (16U)
+#define PWM_PWRMATCH_HPRE_CNT_MAX_MASK                     (0xFFFFU << PWM_PWRMATCH_HPRE_CNT_MAX_SHIFT)                 /* 0xFFFF0000 */
+/* PWRMATCH_LD */
+#define PWM_PWRMATCH_LD_OFFSET                             (0x8CU)
+#define PWM_PWRMATCH_LD_CNT_MIN_SHIFT                      (0U)
+#define PWM_PWRMATCH_LD_CNT_MIN_MASK                       (0xFFFFU << PWM_PWRMATCH_LD_CNT_MIN_SHIFT)                   /* 0x0000FFFF */
+#define PWM_PWRMATCH_LD_CNT_MAX_SHIFT                      (16U)
+#define PWM_PWRMATCH_LD_CNT_MAX_MASK                       (0xFFFFU << PWM_PWRMATCH_LD_CNT_MAX_SHIFT)                   /* 0xFFFF0000 */
+/* PWRMATCH_HD_ZERO */
+#define PWM_PWRMATCH_HD_ZERO_OFFSET                        (0x90U)
+#define PWM_PWRMATCH_HD_ZERO_CNT_MIN_SHIFT                 (0U)
+#define PWM_PWRMATCH_HD_ZERO_CNT_MIN_MASK                  (0xFFFFU << PWM_PWRMATCH_HD_ZERO_CNT_MIN_SHIFT)              /* 0x0000FFFF */
+#define PWM_PWRMATCH_HD_ZERO_CNT_MAX_SHIFT                 (16U)
+#define PWM_PWRMATCH_HD_ZERO_CNT_MAX_MASK                  (0xFFFFU << PWM_PWRMATCH_HD_ZERO_CNT_MAX_SHIFT)              /* 0xFFFF0000 */
+/* PWRMATCH_HD_ONE */
+#define PWM_PWRMATCH_HD_ONE_OFFSET                         (0x94U)
+#define PWM_PWRMATCH_HD_ONE_CNT_MIN_SHIFT                  (0U)
+#define PWM_PWRMATCH_HD_ONE_CNT_MIN_MASK                   (0xFFFFU << PWM_PWRMATCH_HD_ONE_CNT_MIN_SHIFT)               /* 0x0000FFFF */
+#define PWM_PWRMATCH_HD_ONE_CNT_MAX_SHIFT                  (16U)
+#define PWM_PWRMATCH_HD_ONE_CNT_MAX_MASK                   (0xFFFFU << PWM_PWRMATCH_HD_ONE_CNT_MAX_SHIFT)               /* 0xFFFF0000 */
+/* PWRMATCH_VALUE0 */
+#define PWM_PWRMATCH_VALUE0_OFFSET                         (0x98U)
+#define PWM_PWRMATCH_VALUE0_PWRKEY_MATCH_VALUE0_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE0_PWRKEY_MATCH_VALUE0_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE0_PWRKEY_MATCH_VALUE0_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE1 */
+#define PWM_PWRMATCH_VALUE1_OFFSET                         (0x9CU)
+#define PWM_PWRMATCH_VALUE1_PWRKEY_MATCH_VALUE1_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE1_PWRKEY_MATCH_VALUE1_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE1_PWRKEY_MATCH_VALUE1_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE2 */
+#define PWM_PWRMATCH_VALUE2_OFFSET                         (0xA0U)
+#define PWM_PWRMATCH_VALUE2_PWRKEY_MATCH_VALUE2_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE2_PWRKEY_MATCH_VALUE2_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE2_PWRKEY_MATCH_VALUE2_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE3 */
+#define PWM_PWRMATCH_VALUE3_OFFSET                         (0xA4U)
+#define PWM_PWRMATCH_VALUE3_PWRKEY_MATCH_VALUE3_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE3_PWRKEY_MATCH_VALUE3_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE3_PWRKEY_MATCH_VALUE3_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE4 */
+#define PWM_PWRMATCH_VALUE4_OFFSET                         (0xA8U)
+#define PWM_PWRMATCH_VALUE4_PWRKEY_MATCH_VALUE4_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE4_PWRKEY_MATCH_VALUE4_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE4_PWRKEY_MATCH_VALUE4_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE5 */
+#define PWM_PWRMATCH_VALUE5_OFFSET                         (0xACU)
+#define PWM_PWRMATCH_VALUE5_PWRKEY_MATCH_VALUE5_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE5_PWRKEY_MATCH_VALUE5_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE5_PWRKEY_MATCH_VALUE5_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE6 */
+#define PWM_PWRMATCH_VALUE6_OFFSET                         (0xB0U)
+#define PWM_PWRMATCH_VALUE6_PWRKEY_MATCH_VALUE6_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE6_PWRKEY_MATCH_VALUE6_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE6_PWRKEY_MATCH_VALUE6_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE7 */
+#define PWM_PWRMATCH_VALUE7_OFFSET                         (0xB4U)
+#define PWM_PWRMATCH_VALUE7_PWRKEY_MATCH_VALUE7_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE7_PWRKEY_MATCH_VALUE7_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE7_PWRKEY_MATCH_VALUE7_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE8 */
+#define PWM_PWRMATCH_VALUE8_OFFSET                         (0xB8U)
+#define PWM_PWRMATCH_VALUE8_PWRKEY_MATCH_VALUE8_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE8_PWRKEY_MATCH_VALUE8_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE8_PWRKEY_MATCH_VALUE8_SHIFT) /* 0xFFFFFFFF */
+/* PWRMATCH_VALUE9 */
+#define PWM_PWRMATCH_VALUE9_OFFSET                         (0xBCU)
+#define PWM_PWRMATCH_VALUE9_PWRKEY_MATCH_VALUE9_SHIFT      (0U)
+#define PWM_PWRMATCH_VALUE9_PWRKEY_MATCH_VALUE9_MASK       (0xFFFFFFFFU << PWM_PWRMATCH_VALUE9_PWRKEY_MATCH_VALUE9_SHIFT) /* 0xFFFFFFFF */
+/* PWM3_PWRCAPTURE_VALUE */
+#define PWM_PWM3_PWRCAPTURE_VALUE_OFFSET                   (0xCCU)
+#define PWM_PWM3_PWRCAPTURE_VALUE                          (0x0U)
+#define PWM_PWM3_PWRCAPTURE_VALUE_PWRKEY_CAPTURE_VALUE_SHIFT (0U)
+#define PWM_PWM3_PWRCAPTURE_VALUE_PWRKEY_CAPTURE_VALUE_MASK (0xFFFFFFFFU << PWM_PWM3_PWRCAPTURE_VALUE_PWRKEY_CAPTURE_VALUE_SHIFT) /* 0xFFFFFFFF */
+/* CHANNEL_IO_CTRL */
+#define PWM_CHANNEL_IO_CTRL_OFFSET                         (0xD0U)
+#define PWM_CHANNEL_IO_CTRL_CH0_INPUT_FILTER_ENABLE_SHIFT  (0U)
+#define PWM_CHANNEL_IO_CTRL_CH0_INPUT_FILTER_ENABLE_MASK   (0x1U << PWM_CHANNEL_IO_CTRL_CH0_INPUT_FILTER_ENABLE_SHIFT)  /* 0x00000001 */
+#define PWM_CHANNEL_IO_CTRL_CH1_INPUT_FILTER_ENABLE_SHIFT  (1U)
+#define PWM_CHANNEL_IO_CTRL_CH1_INPUT_FILTER_ENABLE_MASK   (0x1U << PWM_CHANNEL_IO_CTRL_CH1_INPUT_FILTER_ENABLE_SHIFT)  /* 0x00000002 */
+#define PWM_CHANNEL_IO_CTRL_CH2_INPUT_FILTER_ENABLE_SHIFT  (2U)
+#define PWM_CHANNEL_IO_CTRL_CH2_INPUT_FILTER_ENABLE_MASK   (0x1U << PWM_CHANNEL_IO_CTRL_CH2_INPUT_FILTER_ENABLE_SHIFT)  /* 0x00000004 */
+#define PWM_CHANNEL_IO_CTRL_CH3_INPUT_FILTER_ENABLE_SHIFT  (3U)
+#define PWM_CHANNEL_IO_CTRL_CH3_INPUT_FILTER_ENABLE_MASK   (0x1U << PWM_CHANNEL_IO_CTRL_CH3_INPUT_FILTER_ENABLE_SHIFT)  /* 0x00000008 */
+#define PWM_CHANNEL_IO_CTRL_FILTER_NUMBER_SHIFT            (4U)
+#define PWM_CHANNEL_IO_CTRL_FILTER_NUMBER_MASK             (0x1FFU << PWM_CHANNEL_IO_CTRL_FILTER_NUMBER_SHIFT)          /* 0x00001FF0 */
+#define PWM_CHANNEL_IO_CTRL_CH0_AND_CH3_SWITCH_EN_SHIFT    (16U)
+#define PWM_CHANNEL_IO_CTRL_CH0_AND_CH3_SWITCH_EN_MASK     (0x1U << PWM_CHANNEL_IO_CTRL_CH0_AND_CH3_SWITCH_EN_SHIFT)    /* 0x00010000 */
+#define PWM_CHANNEL_IO_CTRL_CH1_AND_CH3_SWITCH_EN_SHIFT    (17U)
+#define PWM_CHANNEL_IO_CTRL_CH1_AND_CH3_SWITCH_EN_MASK     (0x1U << PWM_CHANNEL_IO_CTRL_CH1_AND_CH3_SWITCH_EN_SHIFT)    /* 0x00020000 */
+#define PWM_CHANNEL_IO_CTRL_CH2_AND_CH3_SWITCH_EN_SHIFT    (18U)
+#define PWM_CHANNEL_IO_CTRL_CH2_AND_CH3_SWITCH_EN_MASK     (0x1U << PWM_CHANNEL_IO_CTRL_CH2_AND_CH3_SWITCH_EN_SHIFT)    /* 0x00040000 */
 /******************************************PMU*******************************************/
 /* PWR_CON0 */
 #define PMU_PWR_CON0_OFFSET                                (0x0U)
@@ -16666,38 +17374,6 @@ struct MBOX_REG {
 #define PMU_BISR_STS5_HDMIRXPHY_REPAIR_PWR_REPAIR_STAT_MASK (0x1U << PMU_BISR_STS5_HDMIRXPHY_REPAIR_PWR_REPAIR_STAT_SHIFT) /* 0x00010000 */
 #define PMU_BISR_STS5_PCIEPHY_REPAIR_PWR_REPAIR_STAT_SHIFT (17U)
 #define PMU_BISR_STS5_PCIEPHY_REPAIR_PWR_REPAIR_STAT_MASK  (0x1U << PMU_BISR_STS5_PCIEPHY_REPAIR_PWR_REPAIR_STAT_SHIFT) /* 0x00020000 */
-/******************************************WDT*******************************************/
-/* CR */
-#define WDT_CR_OFFSET                                      (0x0U)
-#define WDT_CR_EN_SHIFT                                    (0U)
-#define WDT_CR_EN_MASK                                     (0x1U << WDT_CR_EN_SHIFT)                                    /* 0x00000001 */
-#define WDT_CR_RESP_MODE_SHIFT                             (1U)
-#define WDT_CR_RESP_MODE_MASK                              (0x1U << WDT_CR_RESP_MODE_SHIFT)                             /* 0x00000002 */
-#define WDT_CR_RST_PLUSE_LENGTH_SHIFT                      (2U)
-#define WDT_CR_RST_PLUSE_LENGTH_MASK                       (0x7U << WDT_CR_RST_PLUSE_LENGTH_SHIFT)                      /* 0x0000001C */
-/* TORR */
-#define WDT_TORR_OFFSET                                    (0x4U)
-#define WDT_TORR_TIMEOUT_PERIOD_SHIFT                      (0U)
-#define WDT_TORR_TIMEOUT_PERIOD_MASK                       (0xFU << WDT_TORR_TIMEOUT_PERIOD_SHIFT)                      /* 0x0000000F */
-/* CCVR */
-#define WDT_CCVR_OFFSET                                    (0x8U)
-#define WDT_CCVR                                           (0xFFFFU)
-#define WDT_CCVR_CUR_CNT_SHIFT                             (0U)
-#define WDT_CCVR_CUR_CNT_MASK                              (0xFFFFFFFFU << WDT_CCVR_CUR_CNT_SHIFT)                      /* 0xFFFFFFFF */
-/* CRR */
-#define WDT_CRR_OFFSET                                     (0xCU)
-#define WDT_CRR_CNT_RESTART_SHIFT                          (0U)
-#define WDT_CRR_CNT_RESTART_MASK                           (0xFFU << WDT_CRR_CNT_RESTART_SHIFT)                         /* 0x000000FF */
-/* STAT */
-#define WDT_STAT_OFFSET                                    (0x10U)
-#define WDT_STAT                                           (0x0U)
-#define WDT_STAT_STATUS_SHIFT                              (0U)
-#define WDT_STAT_STATUS_MASK                               (0x1U << WDT_STAT_STATUS_SHIFT)                              /* 0x00000001 */
-/* EOI */
-#define WDT_EOI_OFFSET                                     (0x14U)
-#define WDT_EOI                                            (0x0U)
-#define WDT_EOI_INT_CLR_SHIFT                              (0U)
-#define WDT_EOI_INT_CLR_MASK                               (0x1U << WDT_EOI_INT_CLR_SHIFT)                              /* 0x00000001 */
 /*****************************************I2STDM*****************************************/
 /* TXCR */
 #define I2STDM_TXCR_OFFSET                                 (0x0U)
@@ -18345,6 +19021,752 @@ struct MBOX_REG {
 #define TIMER_INTSTATUS_OFFSET                             (0x18U)
 #define TIMER_INTSTATUS_INT_PD_SHIFT                       (0U)
 #define TIMER_INTSTATUS_INT_PD_MASK                        (0x1U << TIMER_INTSTATUS_INT_PD_SHIFT)                       /* 0x00000001 */
+/******************************************WDT*******************************************/
+/* CR */
+#define WDT_CR_OFFSET                                      (0x0U)
+#define WDT_CR_EN_SHIFT                                    (0U)
+#define WDT_CR_EN_MASK                                     (0x1U << WDT_CR_EN_SHIFT)                                    /* 0x00000001 */
+#define WDT_CR_RESP_MODE_SHIFT                             (1U)
+#define WDT_CR_RESP_MODE_MASK                              (0x1U << WDT_CR_RESP_MODE_SHIFT)                             /* 0x00000002 */
+#define WDT_CR_RST_PLUSE_LENGTH_SHIFT                      (2U)
+#define WDT_CR_RST_PLUSE_LENGTH_MASK                       (0x7U << WDT_CR_RST_PLUSE_LENGTH_SHIFT)                      /* 0x0000001C */
+/* TORR */
+#define WDT_TORR_OFFSET                                    (0x4U)
+#define WDT_TORR_TIMEOUT_PERIOD_SHIFT                      (0U)
+#define WDT_TORR_TIMEOUT_PERIOD_MASK                       (0xFU << WDT_TORR_TIMEOUT_PERIOD_SHIFT)                      /* 0x0000000F */
+/* CCVR */
+#define WDT_CCVR_OFFSET                                    (0x8U)
+#define WDT_CCVR                                           (0xFFFFU)
+#define WDT_CCVR_CUR_CNT_SHIFT                             (0U)
+#define WDT_CCVR_CUR_CNT_MASK                              (0xFFFFFFFFU << WDT_CCVR_CUR_CNT_SHIFT)                      /* 0xFFFFFFFF */
+/* CRR */
+#define WDT_CRR_OFFSET                                     (0xCU)
+#define WDT_CRR_CNT_RESTART_SHIFT                          (0U)
+#define WDT_CRR_CNT_RESTART_MASK                           (0xFFU << WDT_CRR_CNT_RESTART_SHIFT)                         /* 0x000000FF */
+/* STAT */
+#define WDT_STAT_OFFSET                                    (0x10U)
+#define WDT_STAT                                           (0x0U)
+#define WDT_STAT_STATUS_SHIFT                              (0U)
+#define WDT_STAT_STATUS_MASK                               (0x1U << WDT_STAT_STATUS_SHIFT)                              /* 0x00000001 */
+/* EOI */
+#define WDT_EOI_OFFSET                                     (0x14U)
+#define WDT_EOI                                            (0x0U)
+#define WDT_EOI_INT_CLR_SHIFT                              (0U)
+#define WDT_EOI_INT_CLR_MASK                               (0x1U << WDT_EOI_INT_CLR_SHIFT)                              /* 0x00000001 */
+/******************************************SPI*******************************************/
+/* CTRLR0 */
+#define SPI_CTRLR0_OFFSET                                  (0x0U)
+#define SPI_CTRLR0_DFS_SHIFT                               (0U)
+#define SPI_CTRLR0_DFS_MASK                                (0x3U << SPI_CTRLR0_DFS_SHIFT)                               /* 0x00000003 */
+#define SPI_CTRLR0_CFS_SHIFT                               (2U)
+#define SPI_CTRLR0_CFS_MASK                                (0xFU << SPI_CTRLR0_CFS_SHIFT)                               /* 0x0000003C */
+#define SPI_CTRLR0_SCPH_SHIFT                              (6U)
+#define SPI_CTRLR0_SCPH_MASK                               (0x1U << SPI_CTRLR0_SCPH_SHIFT)                              /* 0x00000040 */
+#define SPI_CTRLR0_SCPOL_SHIFT                             (7U)
+#define SPI_CTRLR0_SCPOL_MASK                              (0x1U << SPI_CTRLR0_SCPOL_SHIFT)                             /* 0x00000080 */
+#define SPI_CTRLR0_CSM_SHIFT                               (8U)
+#define SPI_CTRLR0_CSM_MASK                                (0x3U << SPI_CTRLR0_CSM_SHIFT)                               /* 0x00000300 */
+#define SPI_CTRLR0_SSD_SHIFT                               (10U)
+#define SPI_CTRLR0_SSD_MASK                                (0x1U << SPI_CTRLR0_SSD_SHIFT)                               /* 0x00000400 */
+#define SPI_CTRLR0_EM_SHIFT                                (11U)
+#define SPI_CTRLR0_EM_MASK                                 (0x1U << SPI_CTRLR0_EM_SHIFT)                                /* 0x00000800 */
+#define SPI_CTRLR0_FBM_SHIFT                               (12U)
+#define SPI_CTRLR0_FBM_MASK                                (0x1U << SPI_CTRLR0_FBM_SHIFT)                               /* 0x00001000 */
+#define SPI_CTRLR0_BHT_SHIFT                               (13U)
+#define SPI_CTRLR0_BHT_MASK                                (0x1U << SPI_CTRLR0_BHT_SHIFT)                               /* 0x00002000 */
+#define SPI_CTRLR0_RSD_SHIFT                               (14U)
+#define SPI_CTRLR0_RSD_MASK                                (0x3U << SPI_CTRLR0_RSD_SHIFT)                               /* 0x0000C000 */
+#define SPI_CTRLR0_FRF_SHIFT                               (16U)
+#define SPI_CTRLR0_FRF_MASK                                (0x3U << SPI_CTRLR0_FRF_SHIFT)                               /* 0x00030000 */
+#define SPI_CTRLR0_XFM_SHIFT                               (18U)
+#define SPI_CTRLR0_XFM_MASK                                (0x3U << SPI_CTRLR0_XFM_SHIFT)                               /* 0x000C0000 */
+#define SPI_CTRLR0_OPM_SHIFT                               (20U)
+#define SPI_CTRLR0_OPM_MASK                                (0x1U << SPI_CTRLR0_OPM_SHIFT)                               /* 0x00100000 */
+#define SPI_CTRLR0_MTM_SHIFT                               (21U)
+#define SPI_CTRLR0_MTM_MASK                                (0x1U << SPI_CTRLR0_MTM_SHIFT)                               /* 0x00200000 */
+#define SPI_CTRLR0_SM_SHIFT                                (22U)
+#define SPI_CTRLR0_SM_MASK                                 (0x1U << SPI_CTRLR0_SM_SHIFT)                                /* 0x00400000 */
+#define SPI_CTRLR0_SOI_SHIFT                               (23U)
+#define SPI_CTRLR0_SOI_MASK                                (0x3U << SPI_CTRLR0_SOI_SHIFT)                               /* 0x01800000 */
+#define SPI_CTRLR0_LBK_SHIFT                               (25U)
+#define SPI_CTRLR0_LBK_MASK                                (0x1U << SPI_CTRLR0_LBK_SHIFT)                               /* 0x02000000 */
+/* CTRLR1 */
+#define SPI_CTRLR1_OFFSET                                  (0x4U)
+#define SPI_CTRLR1_NDM_SHIFT                               (0U)
+#define SPI_CTRLR1_NDM_MASK                                (0xFFFFFFFFU << SPI_CTRLR1_NDM_SHIFT)                        /* 0xFFFFFFFF */
+/* ENR */
+#define SPI_ENR_OFFSET                                     (0x8U)
+#define SPI_ENR_ENR_SHIFT                                  (0U)
+#define SPI_ENR_ENR_MASK                                   (0x1U << SPI_ENR_ENR_SHIFT)                                  /* 0x00000001 */
+/* SER */
+#define SPI_SER_OFFSET                                     (0xCU)
+#define SPI_SER_SER_SHIFT                                  (0U)
+#define SPI_SER_SER_MASK                                   (0x3U << SPI_SER_SER_SHIFT)                                  /* 0x00000003 */
+/* BAUDR */
+#define SPI_BAUDR_OFFSET                                   (0x10U)
+#define SPI_BAUDR_BAUDR_SHIFT                              (0U)
+#define SPI_BAUDR_BAUDR_MASK                               (0xFFFFU << SPI_BAUDR_BAUDR_SHIFT)                           /* 0x0000FFFF */
+/* TXFTLR */
+#define SPI_TXFTLR_OFFSET                                  (0x14U)
+#define SPI_TXFTLR_XFTLR_SHIFT                             (0U)
+#define SPI_TXFTLR_XFTLR_MASK                              (0x3FU << SPI_TXFTLR_XFTLR_SHIFT)                            /* 0x0000003F */
+/* RXFTLR */
+#define SPI_RXFTLR_OFFSET                                  (0x18U)
+#define SPI_RXFTLR_RXFTLR_SHIFT                            (0U)
+#define SPI_RXFTLR_RXFTLR_MASK                             (0x3FU << SPI_RXFTLR_RXFTLR_SHIFT)                           /* 0x0000003F */
+/* TXFLR */
+#define SPI_TXFLR_OFFSET                                   (0x1CU)
+#define SPI_TXFLR                                          (0x0U)
+#define SPI_TXFLR_TXFLR_SHIFT                              (0U)
+#define SPI_TXFLR_TXFLR_MASK                               (0x7FU << SPI_TXFLR_TXFLR_SHIFT)                             /* 0x0000007F */
+/* RXFLR */
+#define SPI_RXFLR_OFFSET                                   (0x20U)
+#define SPI_RXFLR                                          (0x0U)
+#define SPI_RXFLR_RXFLR_SHIFT                              (0U)
+#define SPI_RXFLR_RXFLR_MASK                               (0x7FU << SPI_RXFLR_RXFLR_SHIFT)                             /* 0x0000007F */
+/* SR */
+#define SPI_SR_OFFSET                                      (0x24U)
+#define SPI_SR                                             (0x4CU)
+#define SPI_SR_BSF_SHIFT                                   (0U)
+#define SPI_SR_BSF_MASK                                    (0x1U << SPI_SR_BSF_SHIFT)                                   /* 0x00000001 */
+#define SPI_SR_TFF_SHIFT                                   (1U)
+#define SPI_SR_TFF_MASK                                    (0x1U << SPI_SR_TFF_SHIFT)                                   /* 0x00000002 */
+#define SPI_SR_TFE_SHIFT                                   (2U)
+#define SPI_SR_TFE_MASK                                    (0x1U << SPI_SR_TFE_SHIFT)                                   /* 0x00000004 */
+#define SPI_SR_RFE_SHIFT                                   (3U)
+#define SPI_SR_RFE_MASK                                    (0x1U << SPI_SR_RFE_SHIFT)                                   /* 0x00000008 */
+#define SPI_SR_RFF_SHIFT                                   (4U)
+#define SPI_SR_RFF_MASK                                    (0x1U << SPI_SR_RFF_SHIFT)                                   /* 0x00000010 */
+#define SPI_SR_STB_SHIFT                                   (5U)
+#define SPI_SR_STB_MASK                                    (0x1U << SPI_SR_STB_SHIFT)                                   /* 0x00000020 */
+#define SPI_SR_SSI_SHIFT                                   (6U)
+#define SPI_SR_SSI_MASK                                    (0x1U << SPI_SR_SSI_SHIFT)                                   /* 0x00000040 */
+/* IPR */
+#define SPI_IPR_OFFSET                                     (0x28U)
+#define SPI_IPR_IPR_SHIFT                                  (0U)
+#define SPI_IPR_IPR_MASK                                   (0x1U << SPI_IPR_IPR_SHIFT)                                  /* 0x00000001 */
+/* IMR */
+#define SPI_IMR_OFFSET                                     (0x2CU)
+#define SPI_IMR_TFEIM_SHIFT                                (0U)
+#define SPI_IMR_TFEIM_MASK                                 (0x1U << SPI_IMR_TFEIM_SHIFT)                                /* 0x00000001 */
+#define SPI_IMR_TFOIM_SHIFT                                (1U)
+#define SPI_IMR_TFOIM_MASK                                 (0x1U << SPI_IMR_TFOIM_SHIFT)                                /* 0x00000002 */
+#define SPI_IMR_RFUIM_SHIFT                                (2U)
+#define SPI_IMR_RFUIM_MASK                                 (0x1U << SPI_IMR_RFUIM_SHIFT)                                /* 0x00000004 */
+#define SPI_IMR_RFOIM_SHIFT                                (3U)
+#define SPI_IMR_RFOIM_MASK                                 (0x1U << SPI_IMR_RFOIM_SHIFT)                                /* 0x00000008 */
+#define SPI_IMR_RFFIM_SHIFT                                (4U)
+#define SPI_IMR_RFFIM_MASK                                 (0x1U << SPI_IMR_RFFIM_SHIFT)                                /* 0x00000010 */
+#define SPI_IMR_TOIM_SHIFT                                 (5U)
+#define SPI_IMR_TOIM_MASK                                  (0x1U << SPI_IMR_TOIM_SHIFT)                                 /* 0x00000020 */
+#define SPI_IMR_SSPIM_SHIFT                                (6U)
+#define SPI_IMR_SSPIM_MASK                                 (0x1U << SPI_IMR_SSPIM_SHIFT)                                /* 0x00000040 */
+#define SPI_IMR_TXFIM_SHIFT                                (7U)
+#define SPI_IMR_TXFIM_MASK                                 (0x1U << SPI_IMR_TXFIM_SHIFT)                                /* 0x00000080 */
+/* ISR */
+#define SPI_ISR_OFFSET                                     (0x30U)
+#define SPI_ISR_TFEIS_SHIFT                                (0U)
+#define SPI_ISR_TFEIS_MASK                                 (0x1U << SPI_ISR_TFEIS_SHIFT)                                /* 0x00000001 */
+#define SPI_ISR_TFOIS_SHIFT                                (1U)
+#define SPI_ISR_TFOIS_MASK                                 (0x1U << SPI_ISR_TFOIS_SHIFT)                                /* 0x00000002 */
+#define SPI_ISR_RFUIS_SHIFT                                (2U)
+#define SPI_ISR_RFUIS_MASK                                 (0x1U << SPI_ISR_RFUIS_SHIFT)                                /* 0x00000004 */
+#define SPI_ISR_RFOIS_SHIFT                                (3U)
+#define SPI_ISR_RFOIS_MASK                                 (0x1U << SPI_ISR_RFOIS_SHIFT)                                /* 0x00000008 */
+#define SPI_ISR_RFFIS_SHIFT                                (4U)
+#define SPI_ISR_RFFIS_MASK                                 (0x1U << SPI_ISR_RFFIS_SHIFT)                                /* 0x00000010 */
+#define SPI_ISR_TOIS_SHIFT                                 (5U)
+#define SPI_ISR_TOIS_MASK                                  (0x1U << SPI_ISR_TOIS_SHIFT)                                 /* 0x00000020 */
+#define SPI_ISR_SSPIS_SHIFT                                (6U)
+#define SPI_ISR_SSPIS_MASK                                 (0x1U << SPI_ISR_SSPIS_SHIFT)                                /* 0x00000040 */
+#define SPI_ISR_TXFIS_SHIFT                                (7U)
+#define SPI_ISR_TXFIS_MASK                                 (0x1U << SPI_ISR_TXFIS_SHIFT)                                /* 0x00000080 */
+/* RISR */
+#define SPI_RISR_OFFSET                                    (0x34U)
+#define SPI_RISR_TFERIS_SHIFT                              (0U)
+#define SPI_RISR_TFERIS_MASK                               (0x1U << SPI_RISR_TFERIS_SHIFT)                              /* 0x00000001 */
+#define SPI_RISR_TFORIS_SHIFT                              (1U)
+#define SPI_RISR_TFORIS_MASK                               (0x1U << SPI_RISR_TFORIS_SHIFT)                              /* 0x00000002 */
+#define SPI_RISR_RFURIS_SHIFT                              (2U)
+#define SPI_RISR_RFURIS_MASK                               (0x1U << SPI_RISR_RFURIS_SHIFT)                              /* 0x00000004 */
+#define SPI_RISR_RFORIS_SHIFT                              (3U)
+#define SPI_RISR_RFORIS_MASK                               (0x1U << SPI_RISR_RFORIS_SHIFT)                              /* 0x00000008 */
+#define SPI_RISR_RFFRIS_SHIFT                              (4U)
+#define SPI_RISR_RFFRIS_MASK                               (0x1U << SPI_RISR_RFFRIS_SHIFT)                              /* 0x00000010 */
+#define SPI_RISR_TORIS_SHIFT                               (5U)
+#define SPI_RISR_TORIS_MASK                                (0x1U << SPI_RISR_TORIS_SHIFT)                               /* 0x00000020 */
+#define SPI_RISR_SSPRIS_SHIFT                              (6U)
+#define SPI_RISR_SSPRIS_MASK                               (0x1U << SPI_RISR_SSPRIS_SHIFT)                              /* 0x00000040 */
+#define SPI_RISR_TXFRIS_SHIFT                              (7U)
+#define SPI_RISR_TXFRIS_MASK                               (0x1U << SPI_RISR_TXFRIS_SHIFT)                              /* 0x00000080 */
+/* ICR */
+#define SPI_ICR_OFFSET                                     (0x38U)
+#define SPI_ICR_CCI_SHIFT                                  (0U)
+#define SPI_ICR_CCI_MASK                                   (0x1U << SPI_ICR_CCI_SHIFT)                                  /* 0x00000001 */
+#define SPI_ICR_CRFUI_SHIFT                                (1U)
+#define SPI_ICR_CRFUI_MASK                                 (0x1U << SPI_ICR_CRFUI_SHIFT)                                /* 0x00000002 */
+#define SPI_ICR_CRFOI_SHIFT                                (2U)
+#define SPI_ICR_CRFOI_MASK                                 (0x1U << SPI_ICR_CRFOI_SHIFT)                                /* 0x00000004 */
+#define SPI_ICR_CTFOI_SHIFT                                (3U)
+#define SPI_ICR_CTFOI_MASK                                 (0x1U << SPI_ICR_CTFOI_SHIFT)                                /* 0x00000008 */
+#define SPI_ICR_CTOI_SHIFT                                 (4U)
+#define SPI_ICR_CTOI_MASK                                  (0x1U << SPI_ICR_CTOI_SHIFT)                                 /* 0x00000010 */
+#define SPI_ICR_CSSPI_SHIFT                                (5U)
+#define SPI_ICR_CSSPI_MASK                                 (0x1U << SPI_ICR_CSSPI_SHIFT)                                /* 0x00000020 */
+#define SPI_ICR_CTXFI_SHIFT                                (6U)
+#define SPI_ICR_CTXFI_MASK                                 (0x1U << SPI_ICR_CTXFI_SHIFT)                                /* 0x00000040 */
+/* DMACR */
+#define SPI_DMACR_OFFSET                                   (0x3CU)
+#define SPI_DMACR_RDE_SHIFT                                (0U)
+#define SPI_DMACR_RDE_MASK                                 (0x1U << SPI_DMACR_RDE_SHIFT)                                /* 0x00000001 */
+#define SPI_DMACR_TDE_SHIFT                                (1U)
+#define SPI_DMACR_TDE_MASK                                 (0x1U << SPI_DMACR_TDE_SHIFT)                                /* 0x00000002 */
+/* DMATDLR */
+#define SPI_DMATDLR_OFFSET                                 (0x40U)
+#define SPI_DMATDLR_TDL_SHIFT                              (0U)
+#define SPI_DMATDLR_TDL_MASK                               (0x3FU << SPI_DMATDLR_TDL_SHIFT)                             /* 0x0000003F */
+/* DMARDLR */
+#define SPI_DMARDLR_OFFSET                                 (0x44U)
+#define SPI_DMARDLR_RDL_SHIFT                              (0U)
+#define SPI_DMARDLR_RDL_MASK                               (0x3FU << SPI_DMARDLR_RDL_SHIFT)                             /* 0x0000003F */
+/* VERSION */
+#define SPI_VERSION_OFFSET                                 (0x48U)
+#define SPI_VERSION                                        (0x110002U)
+#define SPI_VERSION_VERSION_SHIFT                          (0U)
+#define SPI_VERSION_VERSION_MASK                           (0xFFFFFFFFU << SPI_VERSION_VERSION_SHIFT)                   /* 0xFFFFFFFF */
+/* TIMEOUT */
+#define SPI_TIMEOUT_OFFSET                                 (0x4CU)
+#define SPI_TIMEOUT_DTSR_SHIFT                             (18U)
+#define SPI_TIMEOUT_DTSR_MASK                              (0x1U << SPI_TIMEOUT_DTSR_SHIFT)                             /* 0x00040000 */
+#define SPI_TIMEOUT_TSB_SHIFT                              (0U)
+#define SPI_TIMEOUT_TSB_MASK                               (0x1U << SPI_TIMEOUT_TSB_SHIFT)                              /* 0x00000001 */
+#define SPI_TIMEOUT_TOE_SHIFT                              (16U)
+#define SPI_TIMEOUT_TOE_MASK                               (0x1U << SPI_TIMEOUT_TOE_SHIFT)                              /* 0x00010000 */
+#define SPI_TIMEOUT_TOV_SHIFT                              (0U)
+#define SPI_TIMEOUT_TOV_MASK                               (0xFFFFU << SPI_TIMEOUT_TOV_SHIFT)                           /* 0x0000FFFF */
+/* BYPASS */
+#define SPI_BYPASS_OFFSET                                  (0x50U)
+#define SPI_BYPASS_BYEN_SHIFT                              (0U)
+#define SPI_BYPASS_BYEN_MASK                               (0x1U << SPI_BYPASS_BYEN_SHIFT)                              /* 0x00000001 */
+#define SPI_BYPASS_FBM_SHIFT                               (1U)
+#define SPI_BYPASS_FBM_MASK                                (0x1U << SPI_BYPASS_FBM_SHIFT)                               /* 0x00000002 */
+#define SPI_BYPASS_END_SHIFT                               (2U)
+#define SPI_BYPASS_END_MASK                                (0x1U << SPI_BYPASS_END_SHIFT)                               /* 0x00000004 */
+#define SPI_BYPASS_RXCP_SHIFT                              (3U)
+#define SPI_BYPASS_RXCP_MASK                               (0x1U << SPI_BYPASS_RXCP_SHIFT)                              /* 0x00000008 */
+#define SPI_BYPASS_TXCP_SHIFT                              (4U)
+#define SPI_BYPASS_TXCP_MASK                               (0x1U << SPI_BYPASS_TXCP_SHIFT)                              /* 0x00000010 */
+/* TXDR */
+#define SPI_TXDR_OFFSET                                    (0x400U)
+#define SPI_TXDR_TXDR_SHIFT                                (0U)
+#define SPI_TXDR_TXDR_MASK                                 (0xFFFFU << SPI_TXDR_TXDR_SHIFT)                             /* 0x0000FFFF */
+/* RXDR */
+#define SPI_RXDR_OFFSET                                    (0x800U)
+#define SPI_RXDR                                           (0x0U)
+#define SPI_RXDR_RXDR_SHIFT                                (0U)
+#define SPI_RXDR_RXDR_MASK                                 (0xFFFFU << SPI_RXDR_RXDR_SHIFT)                             /* 0x0000FFFF */
+/*****************************************SARADC*****************************************/
+/* CONV_CON */
+#define SARADC_CONV_CON_OFFSET                             (0x0U)
+#define SARADC_CONV_CON_CHANNEL_SEL_SHIFT                  (0U)
+#define SARADC_CONV_CON_CHANNEL_SEL_MASK                   (0xFU << SARADC_CONV_CON_CHANNEL_SEL_SHIFT)                  /* 0x0000000F */
+#define SARADC_CONV_CON_START_ADC_SHIFT                    (4U)
+#define SARADC_CONV_CON_START_ADC_MASK                     (0x1U << SARADC_CONV_CON_START_ADC_SHIFT)                    /* 0x00000010 */
+#define SARADC_CONV_CON_SINGLE_PD_MODE_SHIFT               (5U)
+#define SARADC_CONV_CON_SINGLE_PD_MODE_MASK                (0x1U << SARADC_CONV_CON_SINGLE_PD_MODE_SHIFT)               /* 0x00000020 */
+#define SARADC_CONV_CON_AUTO_CHANNEL_MODE_SHIFT            (6U)
+#define SARADC_CONV_CON_AUTO_CHANNEL_MODE_MASK             (0x1U << SARADC_CONV_CON_AUTO_CHANNEL_MODE_SHIFT)            /* 0x00000040 */
+#define SARADC_CONV_CON_END_CONV_SHIFT                     (7U)
+#define SARADC_CONV_CON_END_CONV_MASK                      (0x1U << SARADC_CONV_CON_END_CONV_SHIFT)                     /* 0x00000080 */
+#define SARADC_CONV_CON_AS_PD_MODE_SHIFT                   (8U)
+#define SARADC_CONV_CON_AS_PD_MODE_MASK                    (0x1U << SARADC_CONV_CON_AS_PD_MODE_SHIFT)                   /* 0x00000100 */
+#define SARADC_CONV_CON_INT_LOCK_SHIFT                     (9U)
+#define SARADC_CONV_CON_INT_LOCK_MASK                      (0x1U << SARADC_CONV_CON_INT_LOCK_SHIFT)                     /* 0x00000200 */
+/* T_PD_SOC */
+#define SARADC_T_PD_SOC_OFFSET                             (0x4U)
+#define SARADC_T_PD_SOC_T_PD_SOC_SHIFT                     (13U)
+#define SARADC_T_PD_SOC_T_PD_SOC_MASK                      (0xFFU << SARADC_T_PD_SOC_T_PD_SOC_SHIFT)                    /* 0x001FE000 */
+/* T_AS_SOC */
+#define SARADC_T_AS_SOC_OFFSET                             (0x8U)
+#define SARADC_T_AS_SOC_T_AS_SOC_SHIFT                     (0U)
+#define SARADC_T_AS_SOC_T_AS_SOC_MASK                      (0xFFFFFFFFU << SARADC_T_AS_SOC_T_AS_SOC_SHIFT)              /* 0xFFFFFFFF */
+/* T_DAS_SOC */
+#define SARADC_T_DAS_SOC_OFFSET                            (0xCU)
+#define SARADC_T_DAS_SOC_T_DAS_SOC_SHIFT                   (0U)
+#define SARADC_T_DAS_SOC_T_DAS_SOC_MASK                    (0xFFFFFFFFU << SARADC_T_DAS_SOC_T_DAS_SOC_SHIFT)            /* 0xFFFFFFFF */
+/* T_SEL_SOC */
+#define SARADC_T_SEL_SOC_OFFSET                            (0x10U)
+#define SARADC_T_SEL_SOC_T_SEL_SOC_SHIFT                   (0U)
+#define SARADC_T_SEL_SOC_T_SEL_SOC_MASK                    (0xFFFFU << SARADC_T_SEL_SOC_T_SEL_SOC_SHIFT)                /* 0x0000FFFF */
+/* HIGH_COMP0 */
+#define SARADC_HIGH_COMP0_OFFSET                           (0x14U)
+#define SARADC_HIGH_COMP0_HIGH_COMP0_SHIFT                 (0U)
+#define SARADC_HIGH_COMP0_HIGH_COMP0_MASK                  (0xFFFU << SARADC_HIGH_COMP0_HIGH_COMP0_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP1 */
+#define SARADC_HIGH_COMP1_OFFSET                           (0x18U)
+#define SARADC_HIGH_COMP1_HIGH_COMP1_SHIFT                 (0U)
+#define SARADC_HIGH_COMP1_HIGH_COMP1_MASK                  (0xFFFU << SARADC_HIGH_COMP1_HIGH_COMP1_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP2 */
+#define SARADC_HIGH_COMP2_OFFSET                           (0x1CU)
+#define SARADC_HIGH_COMP2_HIGH_COMP2_SHIFT                 (0U)
+#define SARADC_HIGH_COMP2_HIGH_COMP2_MASK                  (0xFFFU << SARADC_HIGH_COMP2_HIGH_COMP2_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP3 */
+#define SARADC_HIGH_COMP3_OFFSET                           (0x20U)
+#define SARADC_HIGH_COMP3_HIGH_COMP3_SHIFT                 (0U)
+#define SARADC_HIGH_COMP3_HIGH_COMP3_MASK                  (0xFFFU << SARADC_HIGH_COMP3_HIGH_COMP3_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP4 */
+#define SARADC_HIGH_COMP4_OFFSET                           (0x24U)
+#define SARADC_HIGH_COMP4_HIGH_COMP4_SHIFT                 (0U)
+#define SARADC_HIGH_COMP4_HIGH_COMP4_MASK                  (0xFFFU << SARADC_HIGH_COMP4_HIGH_COMP4_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP5 */
+#define SARADC_HIGH_COMP5_OFFSET                           (0x28U)
+#define SARADC_HIGH_COMP5_HIGH_COMP5_SHIFT                 (0U)
+#define SARADC_HIGH_COMP5_HIGH_COMP5_MASK                  (0xFFFU << SARADC_HIGH_COMP5_HIGH_COMP5_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP7 */
+#define SARADC_HIGH_COMP7_OFFSET                           (0x30U)
+#define SARADC_HIGH_COMP7_HIGH_COMP7_SHIFT                 (0U)
+#define SARADC_HIGH_COMP7_HIGH_COMP7_MASK                  (0xFFFU << SARADC_HIGH_COMP7_HIGH_COMP7_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP8 */
+#define SARADC_HIGH_COMP8_OFFSET                           (0x34U)
+#define SARADC_HIGH_COMP8_HIGH_COMP8_SHIFT                 (0U)
+#define SARADC_HIGH_COMP8_HIGH_COMP8_MASK                  (0xFFFU << SARADC_HIGH_COMP8_HIGH_COMP8_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP9 */
+#define SARADC_HIGH_COMP9_OFFSET                           (0x38U)
+#define SARADC_HIGH_COMP9_HIGH_COMP9_SHIFT                 (0U)
+#define SARADC_HIGH_COMP9_HIGH_COMP9_MASK                  (0xFFFU << SARADC_HIGH_COMP9_HIGH_COMP9_SHIFT)               /* 0x00000FFF */
+/* HIGH_COMP10 */
+#define SARADC_HIGH_COMP10_OFFSET                          (0x3CU)
+#define SARADC_HIGH_COMP10_HIGH_COMP10_SHIFT               (0U)
+#define SARADC_HIGH_COMP10_HIGH_COMP10_MASK                (0xFFFU << SARADC_HIGH_COMP10_HIGH_COMP10_SHIFT)             /* 0x00000FFF */
+/* HIGH_COMP11 */
+#define SARADC_HIGH_COMP11_OFFSET                          (0x40U)
+#define SARADC_HIGH_COMP11_HIGH_COMP11_SHIFT               (0U)
+#define SARADC_HIGH_COMP11_HIGH_COMP11_MASK                (0xFFFU << SARADC_HIGH_COMP11_HIGH_COMP11_SHIFT)             /* 0x00000FFF */
+/* HIGH_COMP12 */
+#define SARADC_HIGH_COMP12_OFFSET                          (0x44U)
+#define SARADC_HIGH_COMP12_HIGH_COMP12_SHIFT               (0U)
+#define SARADC_HIGH_COMP12_HIGH_COMP12_MASK                (0xFFFU << SARADC_HIGH_COMP12_HIGH_COMP12_SHIFT)             /* 0x00000FFF */
+/* HIGH_COMP13 */
+#define SARADC_HIGH_COMP13_OFFSET                          (0x48U)
+#define SARADC_HIGH_COMP13_HIGH_COMP13_SHIFT               (0U)
+#define SARADC_HIGH_COMP13_HIGH_COMP13_MASK                (0xFFFU << SARADC_HIGH_COMP13_HIGH_COMP13_SHIFT)             /* 0x00000FFF */
+/* HIGH_COMP14 */
+#define SARADC_HIGH_COMP14_OFFSET                          (0x4CU)
+#define SARADC_HIGH_COMP14_HIGH_COMP14_SHIFT               (0U)
+#define SARADC_HIGH_COMP14_HIGH_COMP14_MASK                (0xFFFU << SARADC_HIGH_COMP14_HIGH_COMP14_SHIFT)             /* 0x00000FFF */
+/* HIGH_COMP15 */
+#define SARADC_HIGH_COMP15_OFFSET                          (0x50U)
+#define SARADC_HIGH_COMP15_HIGH_COMP15_SHIFT               (0U)
+#define SARADC_HIGH_COMP15_HIGH_COMP15_MASK                (0xFFFU << SARADC_HIGH_COMP15_HIGH_COMP15_SHIFT)             /* 0x00000FFF */
+/* LOW_COMP0 */
+#define SARADC_LOW_COMP0_OFFSET                            (0x54U)
+#define SARADC_LOW_COMP0_LOW_COMP0_SHIFT                   (0U)
+#define SARADC_LOW_COMP0_LOW_COMP0_MASK                    (0xFFFU << SARADC_LOW_COMP0_LOW_COMP0_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP1 */
+#define SARADC_LOW_COMP1_OFFSET                            (0x58U)
+#define SARADC_LOW_COMP1_LOW_COMP1_SHIFT                   (0U)
+#define SARADC_LOW_COMP1_LOW_COMP1_MASK                    (0xFFFU << SARADC_LOW_COMP1_LOW_COMP1_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP2 */
+#define SARADC_LOW_COMP2_OFFSET                            (0x5CU)
+#define SARADC_LOW_COMP2_LOW_COMP2_SHIFT                   (0U)
+#define SARADC_LOW_COMP2_LOW_COMP2_MASK                    (0xFFFU << SARADC_LOW_COMP2_LOW_COMP2_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP3 */
+#define SARADC_LOW_COMP3_OFFSET                            (0x60U)
+#define SARADC_LOW_COMP3_LOW_COMP3_SHIFT                   (0U)
+#define SARADC_LOW_COMP3_LOW_COMP3_MASK                    (0xFFFU << SARADC_LOW_COMP3_LOW_COMP3_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP4 */
+#define SARADC_LOW_COMP4_OFFSET                            (0x64U)
+#define SARADC_LOW_COMP4_LOW_COMP4_SHIFT                   (0U)
+#define SARADC_LOW_COMP4_LOW_COMP4_MASK                    (0xFFFU << SARADC_LOW_COMP4_LOW_COMP4_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP5 */
+#define SARADC_LOW_COMP5_OFFSET                            (0x68U)
+#define SARADC_LOW_COMP5_LOW_COMP5_SHIFT                   (0U)
+#define SARADC_LOW_COMP5_LOW_COMP5_MASK                    (0xFFFU << SARADC_LOW_COMP5_LOW_COMP5_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP6 */
+#define SARADC_LOW_COMP6_OFFSET                            (0x6CU)
+#define SARADC_LOW_COMP6_LOW_COMP6_SHIFT                   (0U)
+#define SARADC_LOW_COMP6_LOW_COMP6_MASK                    (0xFFFU << SARADC_LOW_COMP6_LOW_COMP6_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP7 */
+#define SARADC_LOW_COMP7_OFFSET                            (0x70U)
+#define SARADC_LOW_COMP7_LOW_COMP7_SHIFT                   (0U)
+#define SARADC_LOW_COMP7_LOW_COMP7_MASK                    (0xFFFU << SARADC_LOW_COMP7_LOW_COMP7_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP8 */
+#define SARADC_LOW_COMP8_OFFSET                            (0x74U)
+#define SARADC_LOW_COMP8_LOW_COMP8_SHIFT                   (0U)
+#define SARADC_LOW_COMP8_LOW_COMP8_MASK                    (0xFFFU << SARADC_LOW_COMP8_LOW_COMP8_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP9 */
+#define SARADC_LOW_COMP9_OFFSET                            (0x78U)
+#define SARADC_LOW_COMP9_LOW_COMP9_SHIFT                   (0U)
+#define SARADC_LOW_COMP9_LOW_COMP9_MASK                    (0xFFFU << SARADC_LOW_COMP9_LOW_COMP9_SHIFT)                 /* 0x00000FFF */
+/* LOW_COMP10 */
+#define SARADC_LOW_COMP10_OFFSET                           (0x7CU)
+#define SARADC_LOW_COMP10_LOW_COMP10_SHIFT                 (0U)
+#define SARADC_LOW_COMP10_LOW_COMP10_MASK                  (0x1U << SARADC_LOW_COMP10_LOW_COMP10_SHIFT)                 /* 0x00000001 */
+/* LOW_COMP11 */
+#define SARADC_LOW_COMP11_OFFSET                           (0x80U)
+#define SARADC_LOW_COMP11_LOW_COMP11_SHIFT                 (0U)
+#define SARADC_LOW_COMP11_LOW_COMP11_MASK                  (0xFFFU << SARADC_LOW_COMP11_LOW_COMP11_SHIFT)               /* 0x00000FFF */
+/* LOW_COMP12 */
+#define SARADC_LOW_COMP12_OFFSET                           (0x84U)
+#define SARADC_LOW_COMP12_LOW_COMP12_SHIFT                 (0U)
+#define SARADC_LOW_COMP12_LOW_COMP12_MASK                  (0xFFFU << SARADC_LOW_COMP12_LOW_COMP12_SHIFT)               /* 0x00000FFF */
+/* LOW_COMP13 */
+#define SARADC_LOW_COMP13_OFFSET                           (0x88U)
+#define SARADC_LOW_COMP13_LOW_COMP13_SHIFT                 (0U)
+#define SARADC_LOW_COMP13_LOW_COMP13_MASK                  (0x1U << SARADC_LOW_COMP13_LOW_COMP13_SHIFT)                 /* 0x00000001 */
+/* LOW_COMP14 */
+#define SARADC_LOW_COMP14_OFFSET                           (0x8CU)
+#define SARADC_LOW_COMP14_LOW_COMP14_SHIFT                 (0U)
+#define SARADC_LOW_COMP14_LOW_COMP14_MASK                  (0xFFFU << SARADC_LOW_COMP14_LOW_COMP14_SHIFT)               /* 0x00000FFF */
+/* LOW_COMP15 */
+#define SARADC_LOW_COMP15_OFFSET                           (0x90U)
+#define SARADC_LOW_COMP15_LOW_COMP15_SHIFT                 (0U)
+#define SARADC_LOW_COMP15_LOW_COMP15_MASK                  (0xFFFU << SARADC_LOW_COMP15_LOW_COMP15_SHIFT)               /* 0x00000FFF */
+/* DEBOUNCE */
+#define SARADC_DEBOUNCE_OFFSET                             (0x94U)
+#define SARADC_DEBOUNCE_DEBOUNCE_SHIFT                     (0U)
+#define SARADC_DEBOUNCE_DEBOUNCE_MASK                      (0xFFU << SARADC_DEBOUNCE_DEBOUNCE_SHIFT)                    /* 0x000000FF */
+/* HT_INT_EN */
+#define SARADC_HT_INT_EN_OFFSET                            (0x98U)
+#define SARADC_HT_INT_EN_HT_INT_EN0_SHIFT                  (0U)
+#define SARADC_HT_INT_EN_HT_INT_EN0_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN0_SHIFT)                  /* 0x00000001 */
+#define SARADC_HT_INT_EN_HT_INT_EN1_SHIFT                  (1U)
+#define SARADC_HT_INT_EN_HT_INT_EN1_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN1_SHIFT)                  /* 0x00000002 */
+#define SARADC_HT_INT_EN_HT_INT_EN2_SHIFT                  (2U)
+#define SARADC_HT_INT_EN_HT_INT_EN2_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN2_SHIFT)                  /* 0x00000004 */
+#define SARADC_HT_INT_EN_HT_INT_EN3_SHIFT                  (3U)
+#define SARADC_HT_INT_EN_HT_INT_EN3_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN3_SHIFT)                  /* 0x00000008 */
+#define SARADC_HT_INT_EN_HT_INT_EN4_SHIFT                  (4U)
+#define SARADC_HT_INT_EN_HT_INT_EN4_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN4_SHIFT)                  /* 0x00000010 */
+#define SARADC_HT_INT_EN_HT_INT_EN5_SHIFT                  (5U)
+#define SARADC_HT_INT_EN_HT_INT_EN5_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN5_SHIFT)                  /* 0x00000020 */
+#define SARADC_HT_INT_EN_HT_INT_EN6_SHIFT                  (6U)
+#define SARADC_HT_INT_EN_HT_INT_EN6_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN6_SHIFT)                  /* 0x00000040 */
+#define SARADC_HT_INT_EN_HT_INT_EN7_SHIFT                  (7U)
+#define SARADC_HT_INT_EN_HT_INT_EN7_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN7_SHIFT)                  /* 0x00000080 */
+#define SARADC_HT_INT_EN_HT_INT_EN8_SHIFT                  (8U)
+#define SARADC_HT_INT_EN_HT_INT_EN8_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN8_SHIFT)                  /* 0x00000100 */
+#define SARADC_HT_INT_EN_HT_INT_EN9_SHIFT                  (9U)
+#define SARADC_HT_INT_EN_HT_INT_EN9_MASK                   (0x1U << SARADC_HT_INT_EN_HT_INT_EN9_SHIFT)                  /* 0x00000200 */
+#define SARADC_HT_INT_EN_HT_INT_EN10_SHIFT                 (10U)
+#define SARADC_HT_INT_EN_HT_INT_EN10_MASK                  (0x1U << SARADC_HT_INT_EN_HT_INT_EN10_SHIFT)                 /* 0x00000400 */
+#define SARADC_HT_INT_EN_HT_INT_EN11_SHIFT                 (11U)
+#define SARADC_HT_INT_EN_HT_INT_EN11_MASK                  (0x1U << SARADC_HT_INT_EN_HT_INT_EN11_SHIFT)                 /* 0x00000800 */
+#define SARADC_HT_INT_EN_HT_INT_EN12_SHIFT                 (12U)
+#define SARADC_HT_INT_EN_HT_INT_EN12_MASK                  (0x1U << SARADC_HT_INT_EN_HT_INT_EN12_SHIFT)                 /* 0x00001000 */
+#define SARADC_HT_INT_EN_HT_INT_EN13_SHIFT                 (13U)
+#define SARADC_HT_INT_EN_HT_INT_EN13_MASK                  (0x1U << SARADC_HT_INT_EN_HT_INT_EN13_SHIFT)                 /* 0x00002000 */
+#define SARADC_HT_INT_EN_HT_INT_EN14_SHIFT                 (14U)
+#define SARADC_HT_INT_EN_HT_INT_EN14_MASK                  (0x1U << SARADC_HT_INT_EN_HT_INT_EN14_SHIFT)                 /* 0x00004000 */
+#define SARADC_HT_INT_EN_HT_INT_EN15_SHIFT                 (15U)
+#define SARADC_HT_INT_EN_HT_INT_EN15_MASK                  (0x1U << SARADC_HT_INT_EN_HT_INT_EN15_SHIFT)                 /* 0x00008000 */
+/* LT_INT_EN */
+#define SARADC_LT_INT_EN_OFFSET                            (0x9CU)
+#define SARADC_LT_INT_EN_LT_INT_EN0_SHIFT                  (0U)
+#define SARADC_LT_INT_EN_LT_INT_EN0_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN0_SHIFT)                  /* 0x00000001 */
+#define SARADC_LT_INT_EN_LT_INT_EN1_SHIFT                  (1U)
+#define SARADC_LT_INT_EN_LT_INT_EN1_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN1_SHIFT)                  /* 0x00000002 */
+#define SARADC_LT_INT_EN_LT_INT_EN2_SHIFT                  (2U)
+#define SARADC_LT_INT_EN_LT_INT_EN2_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN2_SHIFT)                  /* 0x00000004 */
+#define SARADC_LT_INT_EN_LT_INT_EN3_SHIFT                  (3U)
+#define SARADC_LT_INT_EN_LT_INT_EN3_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN3_SHIFT)                  /* 0x00000008 */
+#define SARADC_LT_INT_EN_LT_INT_EN4_SHIFT                  (4U)
+#define SARADC_LT_INT_EN_LT_INT_EN4_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN4_SHIFT)                  /* 0x00000010 */
+#define SARADC_LT_INT_EN_LT_INT_EN5_SHIFT                  (5U)
+#define SARADC_LT_INT_EN_LT_INT_EN5_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN5_SHIFT)                  /* 0x00000020 */
+#define SARADC_LT_INT_EN_LT_INT_EN6_SHIFT                  (6U)
+#define SARADC_LT_INT_EN_LT_INT_EN6_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN6_SHIFT)                  /* 0x00000040 */
+#define SARADC_LT_INT_EN_LT_INT_EN7_SHIFT                  (7U)
+#define SARADC_LT_INT_EN_LT_INT_EN7_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN7_SHIFT)                  /* 0x00000080 */
+#define SARADC_LT_INT_EN_LT_INT_EN8_SHIFT                  (8U)
+#define SARADC_LT_INT_EN_LT_INT_EN8_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN8_SHIFT)                  /* 0x00000100 */
+#define SARADC_LT_INT_EN_LT_INT_EN9_SHIFT                  (9U)
+#define SARADC_LT_INT_EN_LT_INT_EN9_MASK                   (0x1U << SARADC_LT_INT_EN_LT_INT_EN9_SHIFT)                  /* 0x00000200 */
+#define SARADC_LT_INT_EN_LT_INT_EN10_SHIFT                 (10U)
+#define SARADC_LT_INT_EN_LT_INT_EN10_MASK                  (0x1U << SARADC_LT_INT_EN_LT_INT_EN10_SHIFT)                 /* 0x00000400 */
+#define SARADC_LT_INT_EN_LT_INT_EN11_SHIFT                 (11U)
+#define SARADC_LT_INT_EN_LT_INT_EN11_MASK                  (0x1U << SARADC_LT_INT_EN_LT_INT_EN11_SHIFT)                 /* 0x00000800 */
+#define SARADC_LT_INT_EN_LT_INT_EN12_SHIFT                 (12U)
+#define SARADC_LT_INT_EN_LT_INT_EN12_MASK                  (0x1U << SARADC_LT_INT_EN_LT_INT_EN12_SHIFT)                 /* 0x00001000 */
+#define SARADC_LT_INT_EN_LT_INT_EN13_SHIFT                 (13U)
+#define SARADC_LT_INT_EN_LT_INT_EN13_MASK                  (0x1U << SARADC_LT_INT_EN_LT_INT_EN13_SHIFT)                 /* 0x00002000 */
+#define SARADC_LT_INT_EN_LT_INT_EN14_SHIFT                 (14U)
+#define SARADC_LT_INT_EN_LT_INT_EN14_MASK                  (0x1U << SARADC_LT_INT_EN_LT_INT_EN14_SHIFT)                 /* 0x00004000 */
+#define SARADC_LT_INT_EN_LT_INT_EN15_SHIFT                 (15U)
+#define SARADC_LT_INT_EN_LT_INT_EN15_MASK                  (0x1U << SARADC_LT_INT_EN_LT_INT_EN15_SHIFT)                 /* 0x00008000 */
+/* MT_INT_EN */
+#define SARADC_MT_INT_EN_OFFSET                            (0x100U)
+#define SARADC_MT_INT_EN_MT_INT_EN0_SHIFT                  (0U)
+#define SARADC_MT_INT_EN_MT_INT_EN0_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN0_SHIFT)                  /* 0x00000001 */
+#define SARADC_MT_INT_EN_MT_INT_EN1_SHIFT                  (1U)
+#define SARADC_MT_INT_EN_MT_INT_EN1_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN1_SHIFT)                  /* 0x00000002 */
+#define SARADC_MT_INT_EN_MT_INT_EN2_SHIFT                  (2U)
+#define SARADC_MT_INT_EN_MT_INT_EN2_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN2_SHIFT)                  /* 0x00000004 */
+#define SARADC_MT_INT_EN_MT_INT_EN3_SHIFT                  (3U)
+#define SARADC_MT_INT_EN_MT_INT_EN3_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN3_SHIFT)                  /* 0x00000008 */
+#define SARADC_MT_INT_EN_MT_INT_EN4_SHIFT                  (4U)
+#define SARADC_MT_INT_EN_MT_INT_EN4_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN4_SHIFT)                  /* 0x00000010 */
+#define SARADC_MT_INT_EN_MT_INT_EN5_SHIFT                  (5U)
+#define SARADC_MT_INT_EN_MT_INT_EN5_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN5_SHIFT)                  /* 0x00000020 */
+#define SARADC_MT_INT_EN_MT_INT_EN6_SHIFT                  (6U)
+#define SARADC_MT_INT_EN_MT_INT_EN6_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN6_SHIFT)                  /* 0x00000040 */
+#define SARADC_MT_INT_EN_MT_INT_EN7_SHIFT                  (7U)
+#define SARADC_MT_INT_EN_MT_INT_EN7_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN7_SHIFT)                  /* 0x00000080 */
+#define SARADC_MT_INT_EN_MT_INT_EN8_SHIFT                  (8U)
+#define SARADC_MT_INT_EN_MT_INT_EN8_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN8_SHIFT)                  /* 0x00000100 */
+#define SARADC_MT_INT_EN_MT_INT_EN9_SHIFT                  (9U)
+#define SARADC_MT_INT_EN_MT_INT_EN9_MASK                   (0x1U << SARADC_MT_INT_EN_MT_INT_EN9_SHIFT)                  /* 0x00000200 */
+#define SARADC_MT_INT_EN_MT_INT_EN10_SHIFT                 (10U)
+#define SARADC_MT_INT_EN_MT_INT_EN10_MASK                  (0x1U << SARADC_MT_INT_EN_MT_INT_EN10_SHIFT)                 /* 0x00000400 */
+#define SARADC_MT_INT_EN_MT_INT_EN11_SHIFT                 (11U)
+#define SARADC_MT_INT_EN_MT_INT_EN11_MASK                  (0x1U << SARADC_MT_INT_EN_MT_INT_EN11_SHIFT)                 /* 0x00000800 */
+#define SARADC_MT_INT_EN_MT_INT_EN12_SHIFT                 (12U)
+#define SARADC_MT_INT_EN_MT_INT_EN12_MASK                  (0x1U << SARADC_MT_INT_EN_MT_INT_EN12_SHIFT)                 /* 0x00001000 */
+#define SARADC_MT_INT_EN_MT_INT_EN13_SHIFT                 (13U)
+#define SARADC_MT_INT_EN_MT_INT_EN13_MASK                  (0x1U << SARADC_MT_INT_EN_MT_INT_EN13_SHIFT)                 /* 0x00002000 */
+#define SARADC_MT_INT_EN_MT_INT_EN14_SHIFT                 (14U)
+#define SARADC_MT_INT_EN_MT_INT_EN14_MASK                  (0x1U << SARADC_MT_INT_EN_MT_INT_EN14_SHIFT)                 /* 0x00004000 */
+#define SARADC_MT_INT_EN_MT_INT_EN15_SHIFT                 (15U)
+#define SARADC_MT_INT_EN_MT_INT_EN15_MASK                  (0x1U << SARADC_MT_INT_EN_MT_INT_EN15_SHIFT)                 /* 0x00008000 */
+/* END_INT_EN */
+#define SARADC_END_INT_EN_OFFSET                           (0x104U)
+#define SARADC_END_INT_EN_END_INT_EN_SHIFT                 (0U)
+#define SARADC_END_INT_EN_END_INT_EN_MASK                  (0x1U << SARADC_END_INT_EN_END_INT_EN_SHIFT)                 /* 0x00000001 */
+/* ST_CON */
+#define SARADC_ST_CON_OFFSET                               (0x108U)
+#define SARADC_ST_CON_CCTRL_SHIFT                          (0U)
+#define SARADC_ST_CON_CCTRL_MASK                           (0x7U << SARADC_ST_CON_CCTRL_SHIFT)                          /* 0x00000007 */
+#define SARADC_ST_CON_ICTRL_SHIFT                          (3U)
+#define SARADC_ST_CON_ICTRL_MASK                           (0x7U << SARADC_ST_CON_ICTRL_SHIFT)                          /* 0x00000038 */
+/* STATUS */
+#define SARADC_STATUS_OFFSET                               (0x10CU)
+#define SARADC_STATUS                                      (0x2U)
+#define SARADC_STATUS_CONV_ST_SHIFT                        (0U)
+#define SARADC_STATUS_CONV_ST_MASK                         (0x1U << SARADC_STATUS_CONV_ST_SHIFT)                        /* 0x00000001 */
+#define SARADC_STATUS_PD_SHIFT                             (1U)
+#define SARADC_STATUS_PD_MASK                              (0x1U << SARADC_STATUS_PD_SHIFT)                             /* 0x00000002 */
+#define SARADC_STATUS_SEL_SHIFT                            (2U)
+#define SARADC_STATUS_SEL_MASK                             (0xFU << SARADC_STATUS_SEL_SHIFT)                            /* 0x0000003C */
+/* END_INT_ST */
+#define SARADC_END_INT_ST_OFFSET                           (0x110U)
+#define SARADC_END_INT_ST_END_INT_ST_SHIFT                 (0U)
+#define SARADC_END_INT_ST_END_INT_ST_MASK                  (0x1U << SARADC_END_INT_ST_END_INT_ST_SHIFT)                 /* 0x00000001 */
+/* HT_INT_ST */
+#define SARADC_HT_INT_ST_OFFSET                            (0x114U)
+#define SARADC_HT_INT_ST_HT_INT_ST0_SHIFT                  (0U)
+#define SARADC_HT_INT_ST_HT_INT_ST0_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST0_SHIFT)                  /* 0x00000001 */
+#define SARADC_HT_INT_ST_HT_INT_ST1_SHIFT                  (1U)
+#define SARADC_HT_INT_ST_HT_INT_ST1_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST1_SHIFT)                  /* 0x00000002 */
+#define SARADC_HT_INT_ST_HT_INT_ST2_SHIFT                  (2U)
+#define SARADC_HT_INT_ST_HT_INT_ST2_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST2_SHIFT)                  /* 0x00000004 */
+#define SARADC_HT_INT_ST_HT_INT_ST3_SHIFT                  (3U)
+#define SARADC_HT_INT_ST_HT_INT_ST3_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST3_SHIFT)                  /* 0x00000008 */
+#define SARADC_HT_INT_ST_HT_INT_ST4_SHIFT                  (4U)
+#define SARADC_HT_INT_ST_HT_INT_ST4_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST4_SHIFT)                  /* 0x00000010 */
+#define SARADC_HT_INT_ST_HT_INT_ST5_SHIFT                  (5U)
+#define SARADC_HT_INT_ST_HT_INT_ST5_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST5_SHIFT)                  /* 0x00000020 */
+#define SARADC_HT_INT_ST_HT_INT_ST6_SHIFT                  (6U)
+#define SARADC_HT_INT_ST_HT_INT_ST6_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST6_SHIFT)                  /* 0x00000040 */
+#define SARADC_HT_INT_ST_HT_INT_ST7_SHIFT                  (7U)
+#define SARADC_HT_INT_ST_HT_INT_ST7_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST7_SHIFT)                  /* 0x00000080 */
+#define SARADC_HT_INT_ST_HT_INT_ST8_SHIFT                  (8U)
+#define SARADC_HT_INT_ST_HT_INT_ST8_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST8_SHIFT)                  /* 0x00000100 */
+#define SARADC_HT_INT_ST_HT_INT_ST9_SHIFT                  (9U)
+#define SARADC_HT_INT_ST_HT_INT_ST9_MASK                   (0x1U << SARADC_HT_INT_ST_HT_INT_ST9_SHIFT)                  /* 0x00000200 */
+#define SARADC_HT_INT_ST_HT_INT_ST10_SHIFT                 (10U)
+#define SARADC_HT_INT_ST_HT_INT_ST10_MASK                  (0x1U << SARADC_HT_INT_ST_HT_INT_ST10_SHIFT)                 /* 0x00000400 */
+#define SARADC_HT_INT_ST_HT_INT_ST11_SHIFT                 (11U)
+#define SARADC_HT_INT_ST_HT_INT_ST11_MASK                  (0x1U << SARADC_HT_INT_ST_HT_INT_ST11_SHIFT)                 /* 0x00000800 */
+#define SARADC_HT_INT_ST_HT_INT_ST12_SHIFT                 (12U)
+#define SARADC_HT_INT_ST_HT_INT_ST12_MASK                  (0x1U << SARADC_HT_INT_ST_HT_INT_ST12_SHIFT)                 /* 0x00001000 */
+#define SARADC_HT_INT_ST_HT_INT_ST13_SHIFT                 (13U)
+#define SARADC_HT_INT_ST_HT_INT_ST13_MASK                  (0x1U << SARADC_HT_INT_ST_HT_INT_ST13_SHIFT)                 /* 0x00002000 */
+#define SARADC_HT_INT_ST_HT_INT_ST14_SHIFT                 (14U)
+#define SARADC_HT_INT_ST_HT_INT_ST14_MASK                  (0x1U << SARADC_HT_INT_ST_HT_INT_ST14_SHIFT)                 /* 0x00004000 */
+#define SARADC_HT_INT_ST_HT_INT_ST15_SHIFT                 (15U)
+#define SARADC_HT_INT_ST_HT_INT_ST15_MASK                  (0x1U << SARADC_HT_INT_ST_HT_INT_ST15_SHIFT)                 /* 0x00008000 */
+/* LT_INT_ST */
+#define SARADC_LT_INT_ST_OFFSET                            (0x118U)
+#define SARADC_LT_INT_ST_LT_INT_ST0_SHIFT                  (0U)
+#define SARADC_LT_INT_ST_LT_INT_ST0_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST0_SHIFT)                  /* 0x00000001 */
+#define SARADC_LT_INT_ST_LT_INT_ST1_SHIFT                  (1U)
+#define SARADC_LT_INT_ST_LT_INT_ST1_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST1_SHIFT)                  /* 0x00000002 */
+#define SARADC_LT_INT_ST_LT_INT_ST2_SHIFT                  (2U)
+#define SARADC_LT_INT_ST_LT_INT_ST2_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST2_SHIFT)                  /* 0x00000004 */
+#define SARADC_LT_INT_ST_LT_INT_ST3_SHIFT                  (3U)
+#define SARADC_LT_INT_ST_LT_INT_ST3_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST3_SHIFT)                  /* 0x00000008 */
+#define SARADC_LT_INT_ST_LT_INT_ST4_SHIFT                  (4U)
+#define SARADC_LT_INT_ST_LT_INT_ST4_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST4_SHIFT)                  /* 0x00000010 */
+#define SARADC_LT_INT_ST_LT_INT_ST5_SHIFT                  (5U)
+#define SARADC_LT_INT_ST_LT_INT_ST5_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST5_SHIFT)                  /* 0x00000020 */
+#define SARADC_LT_INT_ST_LT_INT_ST6_SHIFT                  (6U)
+#define SARADC_LT_INT_ST_LT_INT_ST6_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST6_SHIFT)                  /* 0x00000040 */
+#define SARADC_LT_INT_ST_LT_INT_ST7_SHIFT                  (7U)
+#define SARADC_LT_INT_ST_LT_INT_ST7_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST7_SHIFT)                  /* 0x00000080 */
+#define SARADC_LT_INT_ST_LT_INT_ST8_SHIFT                  (8U)
+#define SARADC_LT_INT_ST_LT_INT_ST8_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST8_SHIFT)                  /* 0x00000100 */
+#define SARADC_LT_INT_ST_LT_INT_ST9_SHIFT                  (9U)
+#define SARADC_LT_INT_ST_LT_INT_ST9_MASK                   (0x1U << SARADC_LT_INT_ST_LT_INT_ST9_SHIFT)                  /* 0x00000200 */
+#define SARADC_LT_INT_ST_LT_INT_ST10_SHIFT                 (10U)
+#define SARADC_LT_INT_ST_LT_INT_ST10_MASK                  (0x1U << SARADC_LT_INT_ST_LT_INT_ST10_SHIFT)                 /* 0x00000400 */
+#define SARADC_LT_INT_ST_LT_INT_ST11_SHIFT                 (11U)
+#define SARADC_LT_INT_ST_LT_INT_ST11_MASK                  (0x1U << SARADC_LT_INT_ST_LT_INT_ST11_SHIFT)                 /* 0x00000800 */
+#define SARADC_LT_INT_ST_LT_INT_ST12_SHIFT                 (12U)
+#define SARADC_LT_INT_ST_LT_INT_ST12_MASK                  (0x1U << SARADC_LT_INT_ST_LT_INT_ST12_SHIFT)                 /* 0x00001000 */
+#define SARADC_LT_INT_ST_LT_INT_ST13_SHIFT                 (13U)
+#define SARADC_LT_INT_ST_LT_INT_ST13_MASK                  (0x1U << SARADC_LT_INT_ST_LT_INT_ST13_SHIFT)                 /* 0x00002000 */
+#define SARADC_LT_INT_ST_LT_INT_ST14_SHIFT                 (14U)
+#define SARADC_LT_INT_ST_LT_INT_ST14_MASK                  (0x1U << SARADC_LT_INT_ST_LT_INT_ST14_SHIFT)                 /* 0x00004000 */
+#define SARADC_LT_INT_ST_LT_INT_ST15_SHIFT                 (15U)
+#define SARADC_LT_INT_ST_LT_INT_ST15_MASK                  (0x1U << SARADC_LT_INT_ST_LT_INT_ST15_SHIFT)                 /* 0x00008000 */
+/* MT_INT_ST */
+#define SARADC_MT_INT_ST_OFFSET                            (0x11CU)
+#define SARADC_MT_INT_ST_MT_INT_ST0_SHIFT                  (0U)
+#define SARADC_MT_INT_ST_MT_INT_ST0_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST0_SHIFT)                  /* 0x00000001 */
+#define SARADC_MT_INT_ST_MT_INT_ST1_SHIFT                  (1U)
+#define SARADC_MT_INT_ST_MT_INT_ST1_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST1_SHIFT)                  /* 0x00000002 */
+#define SARADC_MT_INT_ST_MT_INT_ST2_SHIFT                  (2U)
+#define SARADC_MT_INT_ST_MT_INT_ST2_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST2_SHIFT)                  /* 0x00000004 */
+#define SARADC_MT_INT_ST_MT_INT_ST3_SHIFT                  (3U)
+#define SARADC_MT_INT_ST_MT_INT_ST3_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST3_SHIFT)                  /* 0x00000008 */
+#define SARADC_MT_INT_ST_MT_INT_ST4_SHIFT                  (4U)
+#define SARADC_MT_INT_ST_MT_INT_ST4_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST4_SHIFT)                  /* 0x00000010 */
+#define SARADC_MT_INT_ST_MT_INT_ST5_SHIFT                  (5U)
+#define SARADC_MT_INT_ST_MT_INT_ST5_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST5_SHIFT)                  /* 0x00000020 */
+#define SARADC_MT_INT_ST_MT_INT_ST6_SHIFT                  (6U)
+#define SARADC_MT_INT_ST_MT_INT_ST6_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST6_SHIFT)                  /* 0x00000040 */
+#define SARADC_MT_INT_ST_MT_INT_ST7_SHIFT                  (7U)
+#define SARADC_MT_INT_ST_MT_INT_ST7_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST7_SHIFT)                  /* 0x00000080 */
+#define SARADC_MT_INT_ST_MT_INT_ST8_SHIFT                  (8U)
+#define SARADC_MT_INT_ST_MT_INT_ST8_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST8_SHIFT)                  /* 0x00000100 */
+#define SARADC_MT_INT_ST_MT_INT_ST9_SHIFT                  (9U)
+#define SARADC_MT_INT_ST_MT_INT_ST9_MASK                   (0x1U << SARADC_MT_INT_ST_MT_INT_ST9_SHIFT)                  /* 0x00000200 */
+#define SARADC_MT_INT_ST_MT_INT_ST10_SHIFT                 (10U)
+#define SARADC_MT_INT_ST_MT_INT_ST10_MASK                  (0x1U << SARADC_MT_INT_ST_MT_INT_ST10_SHIFT)                 /* 0x00000400 */
+#define SARADC_MT_INT_ST_MT_INT_ST11_SHIFT                 (11U)
+#define SARADC_MT_INT_ST_MT_INT_ST11_MASK                  (0x1U << SARADC_MT_INT_ST_MT_INT_ST11_SHIFT)                 /* 0x00000800 */
+#define SARADC_MT_INT_ST_MT_INT_ST12_SHIFT                 (12U)
+#define SARADC_MT_INT_ST_MT_INT_ST12_MASK                  (0x1U << SARADC_MT_INT_ST_MT_INT_ST12_SHIFT)                 /* 0x00001000 */
+#define SARADC_MT_INT_ST_MT_INT_ST13_SHIFT                 (13U)
+#define SARADC_MT_INT_ST_MT_INT_ST13_MASK                  (0x1U << SARADC_MT_INT_ST_MT_INT_ST13_SHIFT)                 /* 0x00002000 */
+#define SARADC_MT_INT_ST_MT_INT_ST14_SHIFT                 (14U)
+#define SARADC_MT_INT_ST_MT_INT_ST14_MASK                  (0x1U << SARADC_MT_INT_ST_MT_INT_ST14_SHIFT)                 /* 0x00004000 */
+#define SARADC_MT_INT_ST_MT_INT_ST15_SHIFT                 (15U)
+#define SARADC_MT_INT_ST_MT_INT_ST15_MASK                  (0x1U << SARADC_MT_INT_ST_MT_INT_ST15_SHIFT)                 /* 0x00008000 */
+/* DATA0 */
+#define SARADC_DATA0_OFFSET                                (0x120U)
+#define SARADC_DATA0                                       (0x0U)
+#define SARADC_DATA0_DATA0_SHIFT                           (0U)
+#define SARADC_DATA0_DATA0_MASK                            (0xFFFU << SARADC_DATA0_DATA0_SHIFT)                         /* 0x00000FFF */
+/* DATA1 */
+#define SARADC_DATA1_OFFSET                                (0x124U)
+#define SARADC_DATA1                                       (0x0U)
+#define SARADC_DATA1_DATA1_SHIFT                           (0U)
+#define SARADC_DATA1_DATA1_MASK                            (0xFFFU << SARADC_DATA1_DATA1_SHIFT)                         /* 0x00000FFF */
+/* DATA2 */
+#define SARADC_DATA2_OFFSET                                (0x128U)
+#define SARADC_DATA2                                       (0x0U)
+#define SARADC_DATA2_DATA2_SHIFT                           (0U)
+#define SARADC_DATA2_DATA2_MASK                            (0xFFFU << SARADC_DATA2_DATA2_SHIFT)                         /* 0x00000FFF */
+/* DATA3 */
+#define SARADC_DATA3_OFFSET                                (0x12CU)
+#define SARADC_DATA3                                       (0x0U)
+#define SARADC_DATA3_DATA3_SHIFT                           (0U)
+#define SARADC_DATA3_DATA3_MASK                            (0xFFFU << SARADC_DATA3_DATA3_SHIFT)                         /* 0x00000FFF */
+/* DATA4 */
+#define SARADC_DATA4_OFFSET                                (0x130U)
+#define SARADC_DATA4                                       (0x0U)
+#define SARADC_DATA4_DATA4_SHIFT                           (0U)
+#define SARADC_DATA4_DATA4_MASK                            (0xFFFU << SARADC_DATA4_DATA4_SHIFT)                         /* 0x00000FFF */
+/* DATA5 */
+#define SARADC_DATA5_OFFSET                                (0x134U)
+#define SARADC_DATA5                                       (0x0U)
+#define SARADC_DATA5_DATA5_SHIFT                           (0U)
+#define SARADC_DATA5_DATA5_MASK                            (0xFFFU << SARADC_DATA5_DATA5_SHIFT)                         /* 0x00000FFF */
+/* DATA6 */
+#define SARADC_DATA6_OFFSET                                (0x138U)
+#define SARADC_DATA6                                       (0x0U)
+#define SARADC_DATA6_DATA6_SHIFT                           (0U)
+#define SARADC_DATA6_DATA6_MASK                            (0xFFFU << SARADC_DATA6_DATA6_SHIFT)                         /* 0x00000FFF */
+/* DATA7 */
+#define SARADC_DATA7_OFFSET                                (0x13CU)
+#define SARADC_DATA7                                       (0x0U)
+#define SARADC_DATA7_DATA7_SHIFT                           (0U)
+#define SARADC_DATA7_DATA7_MASK                            (0xFFFU << SARADC_DATA7_DATA7_SHIFT)                         /* 0x00000FFF */
+/* DATA8 */
+#define SARADC_DATA8_OFFSET                                (0x140U)
+#define SARADC_DATA8                                       (0x0U)
+#define SARADC_DATA8_DATA8_SHIFT                           (0U)
+#define SARADC_DATA8_DATA8_MASK                            (0xFFFU << SARADC_DATA8_DATA8_SHIFT)                         /* 0x00000FFF */
+/* DATA9 */
+#define SARADC_DATA9_OFFSET                                (0x144U)
+#define SARADC_DATA9                                       (0x0U)
+#define SARADC_DATA9_DATA9_SHIFT                           (0U)
+#define SARADC_DATA9_DATA9_MASK                            (0xFFFU << SARADC_DATA9_DATA9_SHIFT)                         /* 0x00000FFF */
+/* DATA10 */
+#define SARADC_DATA10_OFFSET                               (0x148U)
+#define SARADC_DATA10                                      (0x0U)
+#define SARADC_DATA10_DATA10_SHIFT                         (0U)
+#define SARADC_DATA10_DATA10_MASK                          (0xFFFU << SARADC_DATA10_DATA10_SHIFT)                       /* 0x00000FFF */
+/* DATA11 */
+#define SARADC_DATA11_OFFSET                               (0x14CU)
+#define SARADC_DATA11                                      (0x0U)
+#define SARADC_DATA11_DATA11_SHIFT                         (0U)
+#define SARADC_DATA11_DATA11_MASK                          (0xFFFU << SARADC_DATA11_DATA11_SHIFT)                       /* 0x00000FFF */
+/* DATA12 */
+#define SARADC_DATA12_OFFSET                               (0x150U)
+#define SARADC_DATA12                                      (0x0U)
+#define SARADC_DATA12_DATA12_SHIFT                         (0U)
+#define SARADC_DATA12_DATA12_MASK                          (0xFFFU << SARADC_DATA12_DATA12_SHIFT)                       /* 0x00000FFF */
+/* DATA13 */
+#define SARADC_DATA13_OFFSET                               (0x154U)
+#define SARADC_DATA13                                      (0x0U)
+#define SARADC_DATA13_DATA13_SHIFT                         (0U)
+#define SARADC_DATA13_DATA13_MASK                          (0xFFFU << SARADC_DATA13_DATA13_SHIFT)                       /* 0x00000FFF */
+/* DATA14 */
+#define SARADC_DATA14_OFFSET                               (0x158U)
+#define SARADC_DATA14                                      (0x0U)
+#define SARADC_DATA14_DATA14_SHIFT                         (0U)
+#define SARADC_DATA14_DATA14_MASK                          (0xFFFU << SARADC_DATA14_DATA14_SHIFT)                       /* 0x00000FFF */
+/* DATA15 */
+#define SARADC_DATA15_OFFSET                               (0x15CU)
+#define SARADC_DATA15                                      (0x0U)
+#define SARADC_DATA15_DATA15_SHIFT                         (0U)
+#define SARADC_DATA15_DATA15_MASK                          (0xFFFU << SARADC_DATA15_DATA15_SHIFT)                       /* 0x00000FFF */
+/* AUTO_CH_EN */
+#define SARADC_AUTO_CH_EN_OFFSET                           (0x160U)
+#define SARADC_AUTO_CH_EN_AUTO_CH0_EN_SHIFT                (0U)
+#define SARADC_AUTO_CH_EN_AUTO_CH0_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH0_EN_SHIFT)                /* 0x00000001 */
+#define SARADC_AUTO_CH_EN_AUTO_CH1_EN_SHIFT                (1U)
+#define SARADC_AUTO_CH_EN_AUTO_CH1_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH1_EN_SHIFT)                /* 0x00000002 */
+#define SARADC_AUTO_CH_EN_AUTO_CH2_EN_SHIFT                (2U)
+#define SARADC_AUTO_CH_EN_AUTO_CH2_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH2_EN_SHIFT)                /* 0x00000004 */
+#define SARADC_AUTO_CH_EN_AUTO_CH3_EN_SHIFT                (3U)
+#define SARADC_AUTO_CH_EN_AUTO_CH3_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH3_EN_SHIFT)                /* 0x00000008 */
+#define SARADC_AUTO_CH_EN_AUTO_CH4_EN_SHIFT                (4U)
+#define SARADC_AUTO_CH_EN_AUTO_CH4_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH4_EN_SHIFT)                /* 0x00000010 */
+#define SARADC_AUTO_CH_EN_AUTO_CH5_EN_SHIFT                (5U)
+#define SARADC_AUTO_CH_EN_AUTO_CH5_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH5_EN_SHIFT)                /* 0x00000020 */
+#define SARADC_AUTO_CH_EN_AUTO_CH6_EN_SHIFT                (6U)
+#define SARADC_AUTO_CH_EN_AUTO_CH6_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH6_EN_SHIFT)                /* 0x00000040 */
+#define SARADC_AUTO_CH_EN_AUTO_CH7_EN_SHIFT                (7U)
+#define SARADC_AUTO_CH_EN_AUTO_CH7_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH7_EN_SHIFT)                /* 0x00000080 */
+#define SARADC_AUTO_CH_EN_AUTO_CH8_EN_SHIFT                (8U)
+#define SARADC_AUTO_CH_EN_AUTO_CH8_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH8_EN_SHIFT)                /* 0x00000100 */
+#define SARADC_AUTO_CH_EN_AUTO_CH9_EN_SHIFT                (9U)
+#define SARADC_AUTO_CH_EN_AUTO_CH9_EN_MASK                 (0x1U << SARADC_AUTO_CH_EN_AUTO_CH9_EN_SHIFT)                /* 0x00000200 */
+#define SARADC_AUTO_CH_EN_AUTO_CH10_EN_SHIFT               (10U)
+#define SARADC_AUTO_CH_EN_AUTO_CH10_EN_MASK                (0x1U << SARADC_AUTO_CH_EN_AUTO_CH10_EN_SHIFT)               /* 0x00000400 */
+#define SARADC_AUTO_CH_EN_AUTO_CH11_EN_SHIFT               (11U)
+#define SARADC_AUTO_CH_EN_AUTO_CH11_EN_MASK                (0x1U << SARADC_AUTO_CH_EN_AUTO_CH11_EN_SHIFT)               /* 0x00000800 */
+#define SARADC_AUTO_CH_EN_AUTO_CH12_EN_SHIFT               (12U)
+#define SARADC_AUTO_CH_EN_AUTO_CH12_EN_MASK                (0x1U << SARADC_AUTO_CH_EN_AUTO_CH12_EN_SHIFT)               /* 0x00001000 */
+#define SARADC_AUTO_CH_EN_AUTO_CH13_EN_SHIFT               (13U)
+#define SARADC_AUTO_CH_EN_AUTO_CH13_EN_MASK                (0x1U << SARADC_AUTO_CH_EN_AUTO_CH13_EN_SHIFT)               /* 0x00002000 */
+#define SARADC_AUTO_CH_EN_AUTO_CH14_EN_SHIFT               (14U)
+#define SARADC_AUTO_CH_EN_AUTO_CH14_EN_MASK                (0x1U << SARADC_AUTO_CH_EN_AUTO_CH14_EN_SHIFT)               /* 0x00004000 */
+#define SARADC_AUTO_CH_EN_AUTO_CH15_EN_SHIFT               (15U)
+#define SARADC_AUTO_CH_EN_AUTO_CH15_EN_MASK                (0x1U << SARADC_AUTO_CH_EN_AUTO_CH15_EN_SHIFT)               /* 0x00008000 */
 /******************************************MBOX******************************************/
 /* A2B_INTEN */
 #define MBOX_A2B_INTEN_OFFSET                              (0x0U)

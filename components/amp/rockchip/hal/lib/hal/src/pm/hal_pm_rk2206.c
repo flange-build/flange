@@ -429,7 +429,7 @@ static void PMU_BusIdleReq(ePMU_BusId bus, ePMU_BusState state)
     }
 
     if (PMU_BusIdleSt(bus) != state) {
-        HAL_DBG_WRN("%s:idle_st=0x%lx, bus_id=%d\n",
+        HAL_DBG_WRN("%s:idle_st=0x%" PRIx32 ", bus_id=%d\n",
                     __func__,
                     pPmu->BUS_IDLE_ST,
                     bus);
@@ -677,7 +677,7 @@ static inline void SOC_PllWaitLock(uint32_t pllId)
     }
 
     if (delay == 0) {
-        HAL_DBG_ERR("Can't wait pll:%lu lock\n", pllId);
+        HAL_DBG_ERR("Can't wait pll:%" PRIu32 " lock\n", pllId);
     }
 }
 

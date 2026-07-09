@@ -21,7 +21,78 @@
  *  @{
  */
 
+#define AUDIO_FRAMES_TO_BYTES(frames, channels, width) \
+    ((frames) * (channels) * (width) / 8)
+
 /***************************** Structure Definition **************************/
+
+/**
+ * enum eAUDIO_daiID - unique digital audio interface ID.
+ */
+typedef enum {
+    DAI_ID_SAI0 = 0,
+    DAI_ID_SAI1,
+    DAI_ID_SAI2,
+    DAI_ID_SAI3,
+    DAI_ID_SAI4,
+    DAI_ID_SAI5,
+    DAI_ID_SAI6,
+    DAI_ID_SAI7,
+    DAI_ID_SAI8,
+    DAI_ID_SAI9,
+    DAI_ID_SAI10,
+    DAI_ID_SAI11,
+    DAI_ID_SAI12,
+    DAI_ID_SAI13,
+    DAI_ID_SAI14,
+    DAI_ID_SAI15,
+    DAI_ID_SAIMAX,
+    DAI_ID_ASRC0,
+    DAI_ID_ASRC1,
+    DAI_ID_ASRC2,
+    DAI_ID_ASRC3,
+    DAI_ID_ASRC4,
+    DAI_ID_ASRC5,
+    DAI_ID_ASRC6,
+    DAI_ID_ASRC7,
+    DAI_ID_ASRC8,
+    DAI_ID_ASRC9,
+    DAI_ID_ASRC10,
+    DAI_ID_ASRC11,
+    DAI_ID_ASRC12,
+    DAI_ID_ASRC13,
+    DAI_ID_ASRC14,
+    DAI_ID_ASRC15,
+    DAI_ID_ASRCMAX,
+    DAI_ID_PDM0,
+    DAI_ID_PDM1,
+    DAI_ID_PDM2,
+    DAI_ID_PDM3,
+    DAI_ID_PDM4,
+    DAI_ID_PDM5,
+    DAI_ID_PDM6,
+    DAI_ID_PDM7,
+    DAI_ID_PDMMAX,
+    DAI_ID_SPDIFTX0,
+    DAI_ID_SPDIFTX1,
+    DAI_ID_SPDIFTX2,
+    DAI_ID_SPDIFTX3,
+    DAI_ID_SPDIFTX4,
+    DAI_ID_SPDIFTX5,
+    DAI_ID_SPDIFTX6,
+    DAI_ID_SPDIFTX7,
+    DAI_ID_SPDIFTXMAX,
+    DAI_ID_SPDIFRX0,
+    DAI_ID_SPDIFRX1,
+    DAI_ID_SPDIFRX2,
+    DAI_ID_SPDIFRX3,
+    DAI_ID_SPDIFRX4,
+    DAI_ID_SPDIFRX5,
+    DAI_ID_SPDIFRX6,
+    DAI_ID_SPDIFRX7,
+    DAI_ID_SPDIFRXMAX,
+    DAI_ID_NONE,
+} eAUDIO_daiID;
 
 /**
  * enum AUDIO_sampleRate - audio samplerate: up to 192k.
@@ -57,16 +128,6 @@ typedef enum {
 } eAUDIO_sampleBits;
 
 /**
- * enum AUDIO_channels - audio channels: up to 8 channels.
- */
-typedef enum {
-    AUDIO_CHANNELS_2 = 2,
-    AUDIO_CHANNELS_4 = 4,
-    AUDIO_CHANNELS_6 = 6,
-    AUDIO_CHANNELS_8 = 8,
-} eAUDIO_channels;
-
-/**
  * enum AUDIO_streamType - audio stream is playback or capture.
  */
 typedef enum {
@@ -78,9 +139,20 @@ typedef enum {
  * enum AUDIO_fmtType - audio format.
  */
 typedef enum {
+    /** common format */
     AUDIO_FMT_I2S,
+    AUDIO_FMT_I2S_INV,
     AUDIO_FMT_RIGHT_J,
     AUDIO_FMT_LEFT_J,
+    AUDIO_FMT_DSP_A,
+    AUDIO_FMT_DSP_B,
+    AUDIO_FMT_TDM_I2S,
+    AUDIO_FMT_TDM_I2S_INV,
+    AUDIO_FMT_TDM_LEFT_J,
+    AUDIO_FMT_TDM_RIGHT_J,
+    AUDIO_FMT_TDM_DSP_A,
+    AUDIO_FMT_TDM_DSP_B,
+    /** i2stdm controller format */
     AUDIO_FMT_PCM,
     AUDIO_FMT_PCM_DELAY1,
     AUDIO_FMT_PCM_DELAY2,
@@ -96,6 +168,7 @@ typedef enum {
     AUDIO_FMT_TDM_RIGHT_J_ONE_FRAME,
     AUDIO_FMT_TDM_LEFT_J_HALF_FRAME,
     AUDIO_FMT_TDM_LEFT_J_ONE_FRAME,
+    /** pdm format */
     AUDIO_FMT_PDM,
 } eAUDIO_fmtType;
 
@@ -118,6 +191,18 @@ typedef enum {
 } ePDM_mode;
 
 /**
+ * enum eASRC_mode - ASRC modes
+ */
+typedef enum {
+    ASRC_REAL_TIME_INV_MODE = 0,
+    ASRC_REAL_TIME_M2M_MODE,
+    ASRC_REAL_TIME_S2M_MODE,
+    ASRC_REAL_TIME_M2D_MODE,
+    ASRC_REAL_TIME_S2D_MODE,
+    ASRC_FILE_MODE,
+} eASRC_mode;
+
+/**
  * struct AUDIO_INIT_CONFIG - init config for dai/codec init.
  */
 struct AUDIO_INIT_CONFIG {
@@ -127,6 +212,7 @@ struct AUDIO_INIT_CONFIG {
     eAUDIO_fmtType format;
     eTRCM_modeType trcmMode;
     ePDM_mode pdmMode;
+    eASRC_mode asrcMode;
     uint16_t txMap; /**< route mapping of PATHx to SDOx, 4 bits per path.
                       *  |15:12|11:8|7:4|3:0|-->|p3|p2|p1|p0|
                       *  each path can choose one sdo as its sink.
@@ -150,8 +236,10 @@ struct AUDIO_INIT_CONFIG {
  */
 struct AUDIO_PARAMS {
     eAUDIO_sampleRate sampleRate; /**< sample rate: from 8k ~ 192k. */
+    eAUDIO_sampleRate reSampleRate; /**< resample rate: from 8k ~ 192k. */
     eAUDIO_sampleBits sampleBits; /**< bit per sample: 8bits, 16bits, 32bits. */
-    eAUDIO_channels channels; /**< channels: up to 8ch. */
+    uint16_t channels; /**< channels: e.g. 32ch */
+    uint16_t slots; /**< slots: e.g. 32slot */
 };
 
 /**
@@ -187,6 +275,76 @@ struct AUDIO_DB_CONFIG {
 /** @defgroup AUDIO_Public_Function_Declare Public Function Declare
  *  @{
  */
+
+/**
+ * @brief  Get dai type name of id
+ * @param  id: eAUDIO_daiID
+ * @return name.
+ */
+__STATIC_INLINE char *HAL_AUDIO_GetDaiTypeName(eAUDIO_daiID id)
+{
+    switch (id) {
+    case DAI_ID_SAI0... DAI_ID_SAIMAX:
+        return "SAI";
+    case DAI_ID_ASRC0... DAI_ID_ASRCMAX:
+        return "ASRC";
+    case DAI_ID_PDM0... DAI_ID_PDMMAX:
+        return "PDM";
+    case DAI_ID_SPDIFTX0... DAI_ID_SPDIFTXMAX:
+        return "SPDIFTX";
+    case DAI_ID_SPDIFRX0... DAI_ID_SPDIFRXMAX:
+        return "SPDIFRX";
+    case DAI_ID_NONE:
+        return "NONE";
+    default:
+        return "INVAL";
+    }
+}
+
+/**
+ * @brief  Convert to idx of the dai
+ * @param  id: eAUDIO_daiID
+ * @return idx.
+ */
+__STATIC_INLINE int HAL_AUDIO_GetDaiIdx(eAUDIO_daiID id)
+{
+    switch (id) {
+    case DAI_ID_SAI0... DAI_ID_SAIMAX:
+        return id - DAI_ID_SAI0;
+    case DAI_ID_ASRC0... DAI_ID_ASRCMAX:
+        return id - DAI_ID_ASRC0;
+    case DAI_ID_PDM0... DAI_ID_PDMMAX:
+        return id - DAI_ID_PDM0;
+    case DAI_ID_SPDIFTX0... DAI_ID_SPDIFTXMAX:
+        return id - DAI_ID_SPDIFTX0;
+    case DAI_ID_SPDIFRX0... DAI_ID_SPDIFRXMAX:
+        return id - DAI_ID_SPDIFRX0;
+    default:
+        return -1;
+    }
+}
+
+/**
+ * @brief  Convert sample bits to physical bits
+ * @param  bits: eAUDIO_sampleBits
+ * @return physical bits.
+ */
+__STATIC_INLINE uint8_t HAL_AUDIO_GetPhysicalWidth(eAUDIO_sampleBits bits)
+{
+    switch (bits) {
+    case AUDIO_SAMPLEBITS_8:
+        return 8;
+    case AUDIO_SAMPLEBITS_16:
+        return 16;
+    case AUDIO_SAMPLEBITS_18:
+    case AUDIO_SAMPLEBITS_20:
+    case AUDIO_SAMPLEBITS_24:
+    case AUDIO_SAMPLEBITS_32:
+        return 32;
+    default:
+        return 32;
+    }
+}
 
 /** @} */
 

@@ -974,7 +974,7 @@ static void ACODEC_SetPll(struct HAL_ACODEC_DEV *acodec,
         return;
     }
 
-    switch (acodec->mclk) {
+    switch (acodec->mclkRate) {
     case 24000000:
         MODIFY_REG(reg->PLLCFG0,
                    ACODEC_PLL_CLKIN_SEL_MASK,
@@ -1013,11 +1013,11 @@ static void ACODEC_SetPll(struct HAL_ACODEC_DEV *acodec,
         return;
     }
 
-    for (; ap->srcRate && ap->srcRate != acodec->mclk; ap++) {
+    for (; ap->srcRate && ap->srcRate != acodec->mclkRate; ap++) {
         ;
     }
 
-    if (ap->srcRate != acodec->mclk) {
+    if (ap->srcRate != acodec->mclkRate) {
         return;
     }
 

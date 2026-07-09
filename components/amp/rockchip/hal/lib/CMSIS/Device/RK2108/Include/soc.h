@@ -203,6 +203,8 @@ typedef enum PD_Id {
 #define CLK_SDIO_PLL                             CLK_SDIO_SRC
 /****************************************WDT*********************************************/
 #define PCLK_WDT                                 PCLK_LOGIC
+#define GLB_RST_SND_WDT GLB_RST_SND_WDT0
+#define GLB_RST_FST_WDT GLB_RST_FST_WDT0
 /****************************************CRU*********************************************/
 #define CPU_CLK_ID                               HCLK_M4
 #define MEM_CLK_ID                               SCLK_SHRM

@@ -159,6 +159,10 @@ typedef enum {
     GLB_RST_SND_WDT1,
     GLB_RST_FST_WDT2,
     GLB_RST_SND_WDT2,
+    GLB_RST_FST_WDT3,
+    GLB_RST_SND_WDT3,
+    GLB_RST_FST_WDT4,
+    GLB_RST_SND_WDT4,
 } eCRU_WdtRstType;
 
 struct CRU_BANK_INFO {
@@ -171,6 +175,12 @@ struct CRU_BANK_INFO {
 struct HAL_CRU_DEV {
     const struct CRU_BANK_INFO *banks;
     uint8_t banksNum;
+};
+
+struct HAL_PVT_CFG {
+    eCLOCK_Name clk;
+    uint64_t rate;
+    uint32_t length;
 };
 
 extern const struct HAL_CRU_DEV g_cruDev;
@@ -192,12 +202,14 @@ int HAL_CRU_FreqGetMux4(uint32_t freq, uint32_t freq0, uint32_t freq1,
 int HAL_CRU_FreqGetMux3(uint32_t freq, uint32_t freq0, uint32_t freq1,
                         uint32_t freq2);
 int HAL_CRU_FreqGetMux2(uint32_t freq, uint32_t freq0, uint32_t freq1);
+int HAL_CRU_FreqGetMuxArray(uint32_t freq, uint32_t *table, int num);
 
 uint32_t HAL_CRU_MuxGetFreq4(uint32_t muxName, uint32_t freq0, uint32_t freq1,
                              uint32_t freq2, uint32_t freq3);
 uint32_t HAL_CRU_MuxGetFreq3(uint32_t muxName, uint32_t freq0, uint32_t freq1,
                              uint32_t freq2);
 uint32_t HAL_CRU_MuxGetFreq2(uint32_t muxName, uint32_t freq0, uint32_t freq1);
+uint32_t HAL_CRU_MuxGetFreqArray(uint32_t muxName, uint32_t *table, int num);
 
 int HAL_CRU_RoundFreqGetMux4(uint32_t freq, uint32_t pFreq0, uint32_t pFreq1,
                              uint32_t pFreq2, uint32_t pFreq3, uint32_t *pFreqOut);
@@ -205,6 +217,7 @@ int HAL_CRU_RoundFreqGetMux3(uint32_t freq, uint32_t pFreq0, uint32_t pFreq1,
                              uint32_t pFreq2, uint32_t *pFreqOut);
 int HAL_CRU_RoundFreqGetMux2(uint32_t freq, uint32_t pFreq0, uint32_t pFreq1,
                              uint32_t *pFreqOut);
+int HAL_CRU_RoundFreqGetMuxArray(uint32_t freq, uint32_t *table, int num, uint32_t *pFreqOut, bool is_div);
 
 /** @} */
 
@@ -371,6 +384,18 @@ uint32_t HAL_CRU_ClkGetMux(uint32_t muxName);
 HAL_Status HAL_CRU_FracdivGetConfig(uint32_t rateOut, uint32_t rate,
                                     uint32_t *numerator,
                                     uint32_t *denominator);
+
+/**
+ * @brief  Get frac div config V2(24bit).
+ * @param  rateOut: clk out rate.
+ * @param  rate: clk src rate.
+ * @param  numerator: the returned numerator.
+ * @param  denominator: the returned denominator.
+ * @return HAL_Status.
+ */
+HAL_Status HAL_CRU_FracdivGetConfigV2(uint32_t rateOut, uint32_t rate,
+                                      uint32_t *numerator,
+                                      uint32_t *denominator);
 /**
  * @brief Get clk freq.
  * @param  clockName: CLOCK_Name id.
@@ -405,6 +430,14 @@ HAL_Status HAL_CRU_VopDclkEnable(uint32_t gateId);
 HAL_Status HAL_CRU_VopDclkDisable(uint32_t gateId);
 
 /**
+ * @brief change pvt config.
+ * @param  pvtCfg: pvt config.
+ * @return HAL_Status.
+ * @attention these APIs allow direct use in the HAL layer.
+ */
+HAL_Status HAL_CRU_PvtConfig(struct HAL_PVT_CFG *pvtCfg);
+
+/**
  * @brief  Get Np5 best div.
  * @param  clockName: clk id.
  * @param  rate: clk rate.
@@ -437,6 +470,16 @@ HAL_Status HAL_CRU_WdtGlbRstEnable(eCRU_WdtRstType wdtType);
  * @attention these APIs allow direct use in the HAL layer.
  */
 HAL_Status HAL_CRU_PllCompensation(eCLOCK_Name clockName, int ppm);
+
+/**
+ * @brief vpll io in.
+ * @param  clockName: CLOCK_Name id.
+ * @param  ioRate: io input rate
+ * @param  rate: pll output rate
+ * @return HAL_Status.
+ * @attention these APIs allow direct use in the HAL layer.
+ */
+HAL_Status HAL_CRU_PllIoIn(eCLOCK_Name clockName, uint32_t ioRate, uint32_t rate);
 
 /**
  * @brief CRU suspend.

@@ -44,8 +44,8 @@
  */
 /********************* Private MACRO Definition ******************************/
 #define RESERVED(N, T)         T RESERVED##N;
-#define GICR_CPU_BASE(cpu)     (GIC_REDISTRIBUTOR_BASE + (0x20000 * (cpu)))
-#define GICR_SGI_CPU_BASE(cpu) (GICR_CPU_BASE(cpu) + 0x10000)
+#define GICR_CPU_BASE(cpu)     (GIC_REDISTRIBUTOR_BASE + (0x20000UL * (cpu)))
+#define GICR_SGI_CPU_BASE(cpu) (GICR_CPU_BASE(cpu) + 0x10000UL)
 
 #define ICC_SGI1R_TARGET_LIST_SHIFT    0
 #define ICC_SGI1R_TARGET_LIST_MASK     (0xffff << ICC_SGI1R_TARGET_LIST_SHIFT)
@@ -207,92 +207,174 @@ static struct GIC_REDISTRIBUTOR_SGI_REG *pGICRSGI;
 #endif
 /********************* Private Function Definition ***************************/
 #ifndef HAL_GIC_V2
+
+static inline void GIC_WriteNonAtomic(volatile void *addr, uint64_t val)
+{
+#ifdef __aarch64__
+    *(volatile uint64_t *)addr = val;
+#else
+    volatile uint32_t *p_32 = addr;
+
+    *p_32 = (uint32_t)(val & 0xffffffff);
+    p_32++;
+    *p_32 = (uint32_t)(val >> 32);
+#endif
+}
+
+static inline uint64_t GIC_ReadNonAtomic(const volatile void *addr)
+{
+#ifdef __aarch64__
+
+    return *(volatile uint64_t *)addr;
+#else
+    uint64_t val;
+    const volatile uint32_t *p_32 = addr;
+
+    val = (uint64_t)*p_32;
+    val |= (uint64_t)*(p_32 + 1) << 32;
+
+    return val;
+#endif
+}
+
 static inline uint32_t GIC_GetIccCtlr(void)
 {
     uint32_t val;
 
+#ifdef __aarch64__
+    __ASM volatile ("mrs %0, S3_0_C12_C12_4" : "=r" (val));
+#else
     __get_CP(15, 0, val, 12, 12, 4);
+#endif
 
     return val;
 }
 
 static inline void GIC_SetIccCtlr(uint32_t val)
 {
+#ifdef __aarch64__
+    __ASM volatile ("msr S3_0_C12_C12_4, %0" : : "r" (val));
+#else
     __set_CP(15, 0, val, 12, 12, 4);
+#endif
 }
 
 static inline void GIC_SetIccDir_EL1(uint32_t val)
 {
+#ifdef __aarch64__
+    __ASM volatile ("msr S3_0_C12_C11_1, %0" : : "r" (val));
+#else
     __set_CP(15, 0, val, 12, 11, 1);
+#endif
 }
 
 static inline uint32_t GIC_GetIccIGrpen1_EL1(void)
 {
     uint32_t val;
 
+#ifdef __aarch64__
+    __ASM volatile ("mrs %0, S3_0_C12_C12_7" : "=r" (val));
+#else
     __get_CP(15, 0, val, 12, 12, 7);
+#endif
 
     return val;
 }
 
 static void GIC_SetIccIGrpen1_EL1(uint32_t val)
 {
+#ifdef __aarch64__
+    __ASM volatile ("msr S3_0_C12_C12_7, %0" : : "r" (val));
+#else
     __set_CP(15, 0, val, 12, 12, 7);
+#endif
 }
 
 static uint32_t GIC_GetIccIar1_EL1(void)
 {
     uint32_t val;
 
+#ifdef __aarch64__
+    __ASM volatile ("mrs %0, S3_0_C12_C12_0" : "=r" (val));
+#else
     __get_CP(15, 0, val, 12, 12, 0);
+#endif
 
     return val;
 }
 
 static void GIC_SetIccEoir1_EL1(uint32_t val)
 {
+#ifdef __aarch64__
+    __ASM volatile ("msr S3_0_C12_C12_1, %0" : : "r" (val));
+#else
     __set_CP(15, 0, val, 12, 12, 1);
+#endif
 }
 
 static inline uint32_t GIC_GetIccPmr_EL1(void)
 {
     uint32_t val;
 
+#ifdef __aarch64__
+    __ASM volatile ("mrs %0, S3_0_C4_C6_0" : "=r" (val));
+#else
     __get_CP(15, 0, val, 4, 6, 0);
+#endif
 
     return val;
 }
 
 static inline void GIC_SetIccPmr_EL1(uint32_t val)
 {
+#ifdef __aarch64__
+    __ASM volatile ("msr S3_0_C4_C6_0, %0" : : "r" (val));
+#else
     __set_CP(15, 0, val, 4, 6, 0);
+#endif
 }
 
 static inline uint32_t GIC_GetIccbpr1(void)
 {
     uint32_t val;
 
+#ifdef __aarch64__
+    __ASM volatile ("mrs %0, S3_0_C12_C12_3" : "=r" (val));
+#else
     __get_CP(15, 0, val, 12, 12, 3);
+#endif
 
     return val;
 }
 static inline void GIC_SetIccbpr1(uint32_t val)
 {
+#ifdef __aarch64__
+    __ASM volatile ("msr S3_0_C12_C12_3, %0" : : "r" (val));
+#else
     __set_CP(15, 0, val, 12, 12, 3);
+#endif
 }
 
 static inline uint32_t GIC_GetIccHppir1_EL1(void)
 {
     uint32_t val;
 
+#ifdef __aarch64__
+    __ASM volatile ("mrs %0, S3_0_C12_C12_2" : "=r" (val));
+#else
     __get_CP(15, 0, val, 12, 12, 2);
+#endif
 
     return val;
 }
 
 static inline void GIC_SetIccSgi1r(uint64_t val)
 {
+#ifdef __aarch64__
+    __ASM volatile ("msr S3_0_C12_C11_5, %0" : : "r" (val));
+#else
     __set_CP64(15, 0, val, 12);
+#endif
 }
 #endif
 
@@ -638,7 +720,7 @@ static inline void GIC_SetIRouter(uint32_t irq, uint32_t aff)
     }
 #else
     if (irq > 31) {
-        pGICD->IROUTER[irq - 32U] = aff;
+        GIC_WriteNonAtomic(&pGICD->IROUTER[irq - 32U], aff);
     }
 #endif
 }
@@ -657,7 +739,7 @@ static inline uint32_t GIC_GetITargetRouter(uint32_t irq)
     }
 #else
     if (irq > 31) {
-        return (uint32_t)pGICD->IROUTER[irq - 32U];
+        return (uint32_t)GIC_ReadNonAtomic(&pGICD->IROUTER[irq - 32U]);
     } else {
         return 0xffff;
     }
@@ -784,11 +866,11 @@ static bool GIC_AMPCheckIRouter(uint32_t irq, uint32_t aff)
         mask = pGICD->ITARGETSR[irq / 4U] & (0xFFUL << ((irq % 4U) * 8U));
         cpu_target = (cpu_target & 0xFFUL) << ((irq % 4U) * 8U);
 
-        GIC_DBG(" GIC_AMPCheckIRouter:irq-%ld(%lx) %lx-%lx\n",
+        GIC_DBG(" GIC_AMPCheckIRouter:irq-%" PRId32 "(%" PRIx32 ") %" PRIx32 "-%" PRIx32 "\n",
                 irq, (irq % 4U), mask, cpu_target);
 
         if (!(mask & cpu_target)) {
-            GIC_WRN("GIC_AMPCheckIRouter error,irq-%ld(%lx) %lx %lx\n",
+            GIC_WRN("GIC_AMPCheckIRouter error,irq-%" PRId32 "(%" PRIx32 ") %" PRIx32 " %" PRIx32 "\n",
                     irq, (irq % 4U), mask, cpu_target);
 
             return false;
@@ -796,7 +878,7 @@ static bool GIC_AMPCheckIRouter(uint32_t irq, uint32_t aff)
 
         mask = mask & ~cpu_target;
         if (mask) {
-            GIC_DBG(" AMPCheckIRouter error: mult cpus = %lx\n", mask);
+            GIC_DBG(" AMPCheckIRouter error: mult cpus = %" PRIx32 "\n", mask);
 
             return false;
         }
@@ -813,9 +895,9 @@ static bool GIC_AMPCheckIRouter(uint32_t irq, uint32_t aff)
     HAL_ASSERT(irq < NUM_INTERRUPTS);
 
     if (irq > 31) {
-        irqAff = pGICD->IROUTER[irq - 32U] & MPIDR_LEVEL01_MASK;
+        irqAff = (uint32_t)(GIC_ReadNonAtomic(&pGICD->IROUTER[irq - 32U]) & MPIDR_LEVEL01_MASK);
         if ((uint32_t)irqAff != aff) {
-            GIC_DBG("GIC_AMPCheckIRouter: irq-%ld %lx != %lx\n", irq, aff, (uint32_t)irqAff);
+            GIC_DBG("GIC_AMPCheckIRouter: irq-%" PRId32 " %" PRIx32 " != %" PRIx32 "\n", irq, aff, (uint32_t)irqAff);
 
             return false;
         }
@@ -867,7 +949,7 @@ static int GIC_AMPGpioGroupGIrqCfg(struct GPIO_IRQ_GROUP_CFG const *gpioIrqCfg,
             irq = prioGroup->GIRQId[cpu];
 
             if (valid->checkConfig[irq].flag) {
-                GIC_WRN("GIC_AMPGpioGroupGIrqCfg irq-%ld has been set-(%lx %lx) irqCur-%ld\n",
+                GIC_WRN("GIC_AMPGpioGroupGIrqCfg irq-%" PRId32 " has been set-(%" PRIx32 " %" PRIx32 ") irqCur-%" PRId32 "\n",
                         irq, valid->checkConfig[irq].aff,
                         valid->checkConfig[irq].prio, valid->checkConfig[irq].irqCur);
 
@@ -882,7 +964,7 @@ static int GIC_AMPGpioGroupGIrqCfg(struct GPIO_IRQ_GROUP_CFG const *gpioIrqCfg,
             }
             valid->checkConfig[irq].flag = 1;
 
-            GIC_DBG(" GIC_AMPGpioGroupGIrqCfg: level(%ld %lx) cpu-%ld irq-%ld aff-%lx (%ld %d)\n",
+            GIC_DBG(" GIC_AMPGpioGroupGIrqCfg: level(%" PRId32 " %" PRIx32 ") cpu-%" PRId32 " irq-%" PRId32 " aff-%" PRIx32 " (%" PRId32 " %d)\n",
                     prioLevel, valid->checkConfig[irq].prio, cpu, irq, valid->checkConfig[irq].aff,
                     valid->checkConfig[irq].irqCur, valid->checkConfig[irq].flag);
         }
@@ -899,7 +981,7 @@ static int GIC_AMPGpioGroupBankIrqCfg(struct GPIO_IRQ_GROUP_CFG const *gpioIrqCf
     irq = gpioIrqCfg->hwIrq;
 
     if (valid->checkConfig[irq].flag) {
-        GIC_WRN("GIC_AMPGpioGroupBankIrqCfg irq-%ld has been set-(%lx %lx) irqCur-%ld\n",
+        GIC_WRN("GIC_AMPGpioGroupBankIrqCfg irq-%" PRId32 " has been set-(%" PRIx32 " %" PRIx32 ") irqCur-%" PRId32 "\n",
                 irq, valid->checkConfig[irq].aff, valid->checkConfig[irq].prio,
                 valid->checkConfig[irq].irqCur);
 
@@ -915,7 +997,7 @@ static int GIC_AMPGpioGroupBankIrqCfg(struct GPIO_IRQ_GROUP_CFG const *gpioIrqCf
     }
     valid->checkConfig[irq].flag = 1;
 
-    GIC_DBG(" GIC_AMPGpioGroupBankIrqCfg: hwirq-%ld aff-%lx prio-%lx (%ld %d))\n",
+    GIC_DBG(" GIC_AMPGpioGroupBankIrqCfg: hwirq-%" PRId32 " aff-%" PRIx32 " prio-%" PRIx32 " (%" PRId32 " %d))\n",
             irq, valid->checkConfig[irq].aff, valid->checkConfig[irq].prio,
             valid->checkConfig[irq].irqCur, valid->checkConfig[irq].flag);
 
@@ -933,7 +1015,7 @@ static void GIC_AMPGetGroupGpioIrqInfo(struct GPIO_IRQ_GROUP_CFG const *gpioCfg,
 
     for (bank = 0; bank < GPIO_BANK_NUM; bank++) {
         gpioIrqCfg = &gpioCfg[bank];
-        GIC_DBG("GIC_AMPGetGroupGpioIrqInfo: bank-%ld\n", bank);
+        GIC_DBG("GIC_AMPGetGroupGpioIrqInfo: bank-%" PRId32 "\n", bank);
         if (gpioIrqCfg->groupIrqEn == GPIO_IRQ_GROUP_EN_GROUP_TYPE) {
             GIC_AMPGpioGroupGIrqCfg(gpioIrqCfg, valid);
         } else if (gpioIrqCfg->groupIrqEn == GPIO_IRQ_GROUP_EN_BANK_TYPE) {
@@ -958,7 +1040,7 @@ static void GIC_AMPGetValidConfig(struct GIC_IRQ_AMP_CTRL *ampCtrl,
 
     while (config->prio && config->irq) {
         if (valid->checkConfig[config->irq].flag) {
-            GIC_WRN("GIC_AMPGetValidConfig irq-%d has been set-(%lx %lx) irqCur-%ld\n",
+            GIC_WRN("GIC_AMPGetValidConfig irq-%d has been set-(%" PRIx32 " %" PRIx32 ") irqCur-%" PRId32 "\n",
                     config->irq, valid->checkConfig[config->irq].aff,
                     valid->checkConfig[config->irq].prio, valid->checkConfig[config->irq].irqCur);
             break;
@@ -971,7 +1053,7 @@ static void GIC_AMPGetValidConfig(struct GIC_IRQ_AMP_CTRL *ampCtrl,
         }
 
         valid->checkConfig[config->irq].flag = 1;
-        GIC_DBG("GIC_AMPGetValidConfig: irq-%d(%lx %lx) irqCur-%ld\n", config->irq,
+        GIC_DBG("GIC_AMPGetValidConfig: irq-%d(%" PRIx32 " %" PRIx32 ") irqCur-%" PRId32 "\n", config->irq,
                 valid->checkConfig[config->irq].aff, valid->checkConfig[config->irq].prio,
                 valid->checkConfig[config->irq].irqCur);
         config++;
@@ -990,7 +1072,7 @@ static void GIC_AMPGetValidConfig(struct GIC_IRQ_AMP_CTRL *ampCtrl,
                 valid->checkConfig[i].irqCur = 1;
             }
             valid->checkConfig[i].flag = 1;
-            GIC_DBG("GIC_AMPGetValidConfig default: irq-%d(%lx %lx) irqCur-%ld\n",
+            GIC_DBG("GIC_AMPGetValidConfig default: irq-%d(%" PRIx32 " %" PRIx32 ") irqCur-%" PRId32 "\n",
                     i, valid->checkConfig[i].aff, valid->checkConfig[i].prio,
                     valid->checkConfig[i].irqCur);
         }
@@ -1018,10 +1100,10 @@ static void GIC_AmpCheckIrqInit(void)
                 HAL_DelayUs(AMP_WAIT_INIT_ONCE_US);
                 loops--;
                 if (loops == 0 && GIC_AMP_CheckCurIRouter(i) == false) {
-                    GIC_WRN("GIC_AmpCheckIrqInit:irq-%d router error %lx != %lx\n",
+                    GIC_WRN("GIC_AmpCheckIrqInit:irq-%d router error %" PRIx32 " != %" PRIx32 "\n",
                             i, GIC_AMP_GetValidAff(i), GIC_GetITargetRouter(i));
                 } else if (!(loops % AMP_WAIT_INIT_WRN_LOOPS)) {
-                    GIC_WRN("GIC_AmpCheckIrqInit: waitting irq-%d router %lx == %lx\n",
+                    GIC_WRN("GIC_AmpCheckIrqInit: waitting irq-%d router %" PRIx32 " == %" PRIx32 "\n",
                             i, GIC_AMP_GetValidAff(i), GIC_GetITargetRouter(i));
                 }
             } while (loops);
@@ -1036,15 +1118,15 @@ static void GIC_AmpCheckIrqInit(void)
                 loops--;
 
                 if (loops == 0 && GIC_AMPCheckValidPrio(i) == false) {
-                    GIC_WRN("GIC_AmpCheckIrqInit: irq-%d prio (%lx != %lx)\n",
+                    GIC_WRN("GIC_AmpCheckIrqInit: irq-%d prio (%" PRIx32 " != %" PRIx32 ")\n",
                             i, GIC_GetPriority(i), GIC_AMP_GetValidPrio(i));
                 } else if (!(loops % AMP_WAIT_INIT_WRN_LOOPS)) {
-                    GIC_WRN("GIC_AmpCheckIrqInit: waitting irq-%d prio (%lx == %lx)\n",
+                    GIC_WRN("GIC_AmpCheckIrqInit: waitting irq-%d prio (%" PRIx32 " == %" PRIx32 ")\n",
                             i, GIC_GetPriority(i), GIC_AMP_GetValidPrio(i));
                 }
             } while (loops);
 
-            GIC_DBG("GIC_AmpCheckIrqInit end irq-%d: aff-%lx %lx %lx prio-%lx == %lx\n",
+            GIC_DBG("GIC_AmpCheckIrqInit end irq-%d: aff-%" PRIx32 " %" PRIx32 " %" PRIx32 " prio-%" PRIx32 " == %" PRIx32 "\n",
                     i, ampValid.curAff, GIC_AMP_GetValidAff(i), GIC_GetITargetRouter(i),
                     GIC_AMP_GetValidPrio(i), GIC_GetPriority(i));
         }
@@ -1060,10 +1142,11 @@ static void GIC_DistInit(uint32_t initGicd, uint32_t amp, uint32_t priority, uin
     numIrq = 32 * ((GIC_DistributorInfo() & 0x1F) + 1);
 
     if (!initGicd) {
+        GIC_AmpCheckIrqInit();
+
         while (!(pGICD->CTLR & 0x3)) {
             ;
         }
-        GIC_AmpCheckIrqInit();
 
         return;
     }
@@ -1165,7 +1248,7 @@ static void GIC_AMPConfigIRQs(struct GIC_IRQ_AMP_VALID_CTRL *ampValid)
         if (ampValid->checkConfig[i].flag) {
             GIC_SetPriority(i, ampValid->checkConfig[i].prio);
             GIC_SetIRouter(i, ampValid->checkConfig[i].aff);
-            GIC_DBG("GIC_AMPConfigIRQs-%d: prio:%lx-%lx, aff:%lx-%lx\n",
+            GIC_DBG("GIC_AMPConfigIRQs-%d: prio:%" PRIx32 "-%" PRIx32 ", aff:%" PRIx32 "-%" PRIx32 "\n",
                     i, ampValid->checkConfig[i].prio, GIC_GetPriority(i),
                     ampValid->checkConfig[i].aff, GIC_GetITargetRouter(i));
         }
@@ -1190,7 +1273,7 @@ HAL_Status HAL_GIC_Enable(uint32_t irq)
     HAL_ASSERT(irq < NUM_INTERRUPTS);
 
     if (!GIC_AmpCheckIrqValid(irq)) {
-        GIC_WRN("HAL_GIC_Enable: invalid irq-%ld\n", irq);
+        GIC_WRN("HAL_GIC_Enable: invalid irq-%" PRId32 "\n", irq);
 
         return HAL_INVAL;
     }
@@ -1199,15 +1282,15 @@ HAL_Status HAL_GIC_Enable(uint32_t irq)
     GIC_SetIRouter(irq, GET_CUR_MPIDR_AFF());
 #else
     if (!GIC_AMP_CheckCurIRouter(irq)) {
-        GIC_WRN("HAL_GIC_Enable irq-%ld invalid router %lx != %lx \n",
-                irq, GET_CUR_MPIDR_AFF(), GIC_GetITargetRouter(irq));
+        GIC_WRN("HAL_GIC_Enable irq-%" PRId32 " invalid router %" PRIx32 " != %" PRIx32 " \n",
+                irq, (uint32_t)GET_CUR_MPIDR_AFF(), GIC_GetITargetRouter(irq));
 
         return HAL_ERROR;
     }
 #endif
 
     if (!GIC_AMPCheckValidPrio(irq)) {
-        GIC_WRN("HAL_GIC_Enable irq-%ld invalid prio %lx != %lx\n",
+        GIC_WRN("HAL_GIC_Enable irq-%" PRId32 " invalid prio %" PRIx32 " != %" PRIx32 "\n",
                 irq, GIC_GetPriority(irq), GIC_AMP_GetValidPrio(irq));
 
         return HAL_ERROR;
@@ -1226,7 +1309,7 @@ HAL_Status HAL_GIC_Enable(uint32_t irq)
 HAL_Status HAL_GIC_Disable(uint32_t irq)
 {
     if (!GIC_AmpCheckIrqValid(irq)) {
-        GIC_DBG("HAL_GIC_Disable: invalid irq-%ld\n", irq);
+        GIC_DBG("HAL_GIC_Disable: invalid irq-%" PRId32 "\n", irq);
 
         return HAL_INVAL;
     }
@@ -1346,7 +1429,7 @@ HAL_Status HAL_GIC_SetPriority(uint32_t irq, uint32_t priority)
     }
 
     if (GIC_GetPriority(irq) != priority) {
-        GIC_DBG("HAL_GIC_SetPriority: invalid irq-%ld\n", irq);
+        GIC_DBG("HAL_GIC_SetPriority: invalid irq-%" PRId32 "\n", irq);
 
         return HAL_INVAL;
     } else {
@@ -1414,12 +1497,31 @@ HAL_Status HAL_GIC_SetIRouter(uint32_t irq, uint32_t aff)
 HAL_Status HAL_GIC_SetDir(uint32_t irq)
 {
     if (!GIC_AmpCheckIrqValid(irq)) {
-        GIC_DBG("HAL_GIC_SetDir: invalid irq-%ld\n", irq);
+        GIC_DBG("HAL_GIC_SetDir: invalid irq-%" PRId32 "\n", irq);
 
         return HAL_INVAL;
     }
 
     GIC_SetDir(irq);
+
+    return HAL_OK;
+}
+
+/**
+ * @brief Touch GICC of this cpu. This interface can only be invoked when the interrupt is closed.
+ *        It sends a unblock event to GICC which is used to workaround "errata 2384374" for GICV3.
+ * @return HAL_Status.
+ */
+HAL_Status HAL_GIC_TouchICC(void)
+{
+#ifndef HAL_GIC_V2
+    uint32_t ctlr = pGICR->CTLR;
+
+    pGICR->CTLR = ctlr | GICR_CTLR_DPG1NS;
+    __DSB();
+    pGICR->CTLR = ctlr & ~GICR_CTLR_DPG1NS;
+    __DSB();
+#endif
 
     return HAL_OK;
 }

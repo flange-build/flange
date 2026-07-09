@@ -129,7 +129,7 @@ union PCIE_DMA_ENB {
 };
 
 /**
- * The Interrupt Status Register for read and write.
+ * The Interrupt Status Register for DMA read and write.
  */
 union PCIE_DMA_INT_STATUS {
     struct {
@@ -139,6 +139,15 @@ union PCIE_DMA_INT_STATUS {
         uint32_t rsvd1       : 8;
     };
     uint32_t asdword;
+};
+
+/**
+ * The transmission result for DMA read and write.
+ */
+enum PCIE_DMA_RESULT {
+    PCIE_DMA_NO_STATUS,
+    PCIE_DMA_FAIL = -1,
+    PCIE_DMA_OK   = 1,
 };
 
 /**
@@ -155,21 +164,35 @@ union PCIE_DMA_INI_CLEAR {
 };
 
 /**
- * The DMA table for transmission.
+ * The DMA table for transmission:
+ *  - rc udma wr: rc #local ram -> pcie #bus -> ep inbound ram for pcie #bus
+ *  - rc udma rd: rc #local ram <- ep inbound ram for pcie #bus
+ *  - ep udma wr: rc #bus ram <- ep #local ram
+ *  - ep udma rd: rc #bus ram -> rc #local ram
+ *
+ * The following variables are configured by user:
+ *  - chn/dir/local/bus/bufSize
+ *
+ * The following variables are DMA register cache and not user configured:
+ *  - type/enb/ctxReg/weilo/weihi/start
+ *
+ * The following variables are reserved for DMA link list:
+ *  - descs/type
  */
 struct DMA_TABLE {
     uint32_t *descs;
-    int chn; /**< DMA channel */
-    enum HAL_PCIE_DMA_DIR dir;
+    int chn;                         /**< DMA channel. */
+    enum HAL_PCIE_DMA_DIR dir;       /**< DMA direction. */
     uint32_t type;
     union PCIE_DMA_ENB enb;
     struct PCIE_DMA_CTX_REGS ctxReg;
     union PCIE_DMA_WEIGHT weilo;
     union PCIE_DMA_WEIGHT weihi;
     union PCIE_DMA_DB start;
-    uint64_t local; /**< DMA transfer local device's memory address */
-    uint64_t bus; /**< DMA transfer remote device's memory address */
-    uint32_t bufSize; /**< DMA transfer size */
+    uint64_t local;                  /**< DMA transfer local device's memory address, it's alwary being ram space. */
+    uint64_t bus;                    /**< DMA transfer remote device's memory address, it's bus address when using rc
+                                          udma, but remote ram space for ep udma.*/
+    uint32_t bufSize;                /**< DMA transfer size. */
 };
 
 /** @} */

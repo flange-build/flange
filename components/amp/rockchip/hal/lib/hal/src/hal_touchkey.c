@@ -204,6 +204,51 @@ uint32_t HAL_TouchKey_GetRawCount(uint32_t idx, struct TOUCH_SENSOR_REG *touchke
     case 4:
         count = touchkey->CH4_CNT;
         break;
+    case 5:
+        count = touchkey->CH5_CNT;
+        break;
+    case 6:
+        count = touchkey->CH6_CNT;
+        break;
+    case 7:
+        count = touchkey->CH7_CNT;
+        break;
+    case 8:
+        count = touchkey->CH8_CNT;
+        break;
+    case 9:
+        count = touchkey->CH9_CNT;
+        break;
+    case 10:
+        count = touchkey->CH10_CNT;
+        break;
+    case 11:
+        count = touchkey->CH11_CNT;
+        break;
+    case 12:
+        count = touchkey->CH12_CNT;
+        break;
+    case 13:
+        count = touchkey->CH13_CNT;
+        break;
+    case 14:
+        count = touchkey->CH14_CNT;
+        break;
+    case 15:
+        count = touchkey->CH15_CNT;
+        break;
+    case 16:
+        count = touchkey->CH16_CNT;
+        break;
+    case 17:
+        count = touchkey->CH17_CNT;
+        break;
+    case 18:
+        count = touchkey->CH18_CNT;
+        break;
+    case 19:
+        count = touchkey->CH19_CNT;
+        break;
     default:
         HAL_DBG("%s, %d, error idx\n", __func__, __LINE__);
     }
@@ -238,6 +283,51 @@ uint32_t HAL_TouchKey_GetDcCount(uint32_t idx, struct TOUCH_SENSOR_REG *touchkey
         break;
     case 4:
         count = touchkey->CH4_CNT_DC;
+        break;
+    case 5:
+        count = touchkey->CH5_CNT_DC;
+        break;
+    case 6:
+        count = touchkey->CH6_CNT_DC;
+        break;
+    case 7:
+        count = touchkey->CH7_CNT_DC;
+        break;
+    case 8:
+        count = touchkey->CH8_CNT_DC;
+        break;
+    case 9:
+        count = touchkey->CH9_CNT_DC;
+        break;
+    case 10:
+        count = touchkey->CH10_CNT_DC;
+        break;
+    case 11:
+        count = touchkey->CH11_CNT_DC;
+        break;
+    case 12:
+        count = touchkey->CH12_CNT_DC;
+        break;
+    case 13:
+        count = touchkey->CH13_CNT_DC;
+        break;
+    case 14:
+        count = touchkey->CH14_CNT_DC;
+        break;
+    case 15:
+        count = touchkey->CH15_CNT_DC;
+        break;
+    case 16:
+        count = touchkey->CH16_CNT_DC;
+        break;
+    case 17:
+        count = touchkey->CH17_CNT_DC;
+        break;
+    case 18:
+        count = touchkey->CH18_CNT_DC;
+        break;
+    case 19:
+        count = touchkey->CH19_CNT_DC;
         break;
     default:
         HAL_DBG("%s, %d, error idx\n", __func__, __LINE__);
@@ -274,6 +364,51 @@ uint32_t HAL_TouchKey_GetDoCount(uint32_t idx, struct TOUCH_SENSOR_REG *touchkey
     case 4:
         count = touchkey->CH4_CNT_DO;
         break;
+    case 5:
+        count = touchkey->CH5_CNT_DO;
+        break;
+    case 6:
+        count = touchkey->CH6_CNT_DO;
+        break;
+    case 7:
+        count = touchkey->CH7_CNT_DO;
+        break;
+    case 8:
+        count = touchkey->CH8_CNT_DO;
+        break;
+    case 9:
+        count = touchkey->CH9_CNT_DO;
+        break;
+    case 10:
+        count = touchkey->CH10_CNT_DO;
+        break;
+    case 11:
+        count = touchkey->CH11_CNT_DO;
+        break;
+    case 12:
+        count = touchkey->CH12_CNT_DO;
+        break;
+    case 13:
+        count = touchkey->CH13_CNT_DO;
+        break;
+    case 14:
+        count = touchkey->CH14_CNT_DO;
+        break;
+    case 15:
+        count = touchkey->CH15_CNT_DO;
+        break;
+    case 16:
+        count = touchkey->CH16_CNT_DO;
+        break;
+    case 17:
+        count = touchkey->CH17_CNT_DO;
+        break;
+    case 18:
+        count = touchkey->CH18_CNT_DO;
+        break;
+    case 19:
+        count = touchkey->CH19_CNT_DO;
+        break;
     default:
         HAL_DBG("%s, %d, error idx\n", __func__, __LINE__);
     }
@@ -308,6 +443,51 @@ uint32_t HAL_TouchKey_GetFilterCount(uint32_t idx, struct TOUCH_SENSOR_REG *touc
         break;
     case 4:
         count = touchkey->CH4_CNT_FILTER;
+        break;
+    case 5:
+        count = touchkey->CH5_CNT_FILTER;
+        break;
+    case 6:
+        count = touchkey->CH6_CNT_FILTER;
+        break;
+    case 7:
+        count = touchkey->CH7_CNT_FILTER;
+        break;
+    case 8:
+        count = touchkey->CH8_CNT_FILTER;
+        break;
+    case 9:
+        count = touchkey->CH9_CNT_FILTER;
+        break;
+    case 10:
+        count = touchkey->CH10_CNT_FILTER;
+        break;
+    case 11:
+        count = touchkey->CH11_CNT_FILTER;
+        break;
+    case 12:
+        count = touchkey->CH12_CNT_FILTER;
+        break;
+    case 13:
+        count = touchkey->CH13_CNT_FILTER;
+        break;
+    case 14:
+        count = touchkey->CH14_CNT_FILTER;
+        break;
+    case 15:
+        count = touchkey->CH15_CNT_FILTER;
+        break;
+    case 16:
+        count = touchkey->CH16_CNT_FILTER;
+        break;
+    case 17:
+        count = touchkey->CH17_CNT_FILTER;
+        break;
+    case 18:
+        count = touchkey->CH18_CNT_FILTER;
+        break;
+    case 19:
+        count = touchkey->CH19_CNT_FILTER;
         break;
     default:
         HAL_DBG("%s, %d, error idx\n", __func__, __LINE__);

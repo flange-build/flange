@@ -47,12 +47,12 @@
 /********************* Private Structure Definition **************************/
 /********************* Private Variable Definition ***************************/
 /********************* Private Function Definition ***************************/
+/** @} */
 static void HCD_HC_IN_IRQHandler(struct HCD_HANDLE *pHCD, uint8_t chNum);
 static void HCD_HC_OUT_IRQHandler(struct HCD_HANDLE *pHCD, uint8_t chNum);
 static void HCD_RXQLVL_IRQHandler(struct HCD_HANDLE *pHCD);
 static void HCD_Port_IRQHandler(struct HCD_HANDLE *pHCD);
 
-/** @} */
 /********************* Public Function Definition ****************************/
 /** @defgroup HCD_Exported_Functions_Group2 State and Errors Functions
  *  @brief    HCD State functions
@@ -62,6 +62,23 @@ static void HCD_Port_IRQHandler(struct HCD_HANDLE *pHCD);
 
  *  @{
  */
+
+/**
+ * @brief  Return the HCD Port connect status.
+ * @param  pHCD HCD handle
+ * @return Connect status
+ */
+uint8_t HAL_HCD_GetConnStatus(struct HCD_HANDLE *pHCD)
+{
+    struct USB_GLOBAL_REG *pUSB = pHCD->pReg;
+    uint8_t connSts;
+    uint32_t hprt0;
+
+    hprt0 = USB_HPRT0;
+    connSts = (hprt0 & USB_OTG_HPRT_PCSTS) >> USB_OTG_HPRT_PCSTS_SHIFT;
+
+    return connSts;
+}
 
 /**
  * @brief  Return the HCD handle state.
@@ -186,16 +203,27 @@ HAL_Status HAL_HCD_HCSubmitRequest(struct HCD_HANDLE *pHCD,
                                    uint8_t epType,
                                    uint8_t token,
                                    uint8_t *pbuff,
-                                   uint16_t length,
+                                   uint32_t length,
                                    uint8_t doPing)
 {
+    static bool setupXfer;
+    uintptr_t dmaAddr;
+
     pHCD->hc[chNum].epIsIn = direction;
     pHCD->hc[chNum].epType = epType;
 
     if (token == 0) {
         pHCD->hc[chNum].dataPID = HC_PID_SETUP;
+        setupXfer = true;
     } else {
-        pHCD->hc[chNum].dataPID = HC_PID_DATA1;
+        if (setupXfer) {
+            setupXfer = false;
+            if (direction == 0) {
+                pHCD->hc[chNum].toggleOut = 1;
+            } else {
+                pHCD->hc[chNum].toggleIn = 1;
+            }
+        }
     }
 
     /* Manage Data Toggle */
@@ -211,6 +239,17 @@ HAL_Status HAL_HCD_HCSubmitRequest(struct HCD_HANDLE *pHCD,
             if (pHCD->hc[chNum].toggleOut == 0) {  /* Put the PID 0 */
                 pHCD->hc[chNum].dataPID = HC_PID_DATA0;
             } else {  /* Put the PID 1 */
+                pHCD->hc[chNum].dataPID = HC_PID_DATA1;
+            }
+        } else if ((token == 1) && (direction == 1)) {
+            if (length == 0) {
+                /* For Status IN stage, Length==0, Status IN PID = 1 */
+                pHCD->hc[chNum].toggleIn = 1;
+            }
+
+            if (pHCD->hc[chNum].toggleIn == 0) {
+                pHCD->hc[chNum].dataPID = HC_PID_DATA0;
+            } else {
                 pHCD->hc[chNum].dataPID = HC_PID_DATA1;
             }
         }
@@ -270,7 +309,20 @@ HAL_Status HAL_HCD_HCSubmitRequest(struct HCD_HANDLE *pHCD,
     pHCD->hc[chNum].hcState = HC_IDLE;
 
     if (pHCD->cfg.dmaEnable == 1) {
-        pHCD->hc[chNum].dmaAddr = HAL_CpuAddrToDmaAddr((uint32_t)pbuff);
+        dmaAddr = HAL_CpuAddrToDmaAddr((uintptr_t)pbuff);
+#ifdef USB_DEBUG
+        if (dmaAddr > UINT32_MAX) {
+            HAL_DBG_ERR("DWC2 HCD dma buf is not a 32-bit address!\n");
+
+            return HAL_INVAL;
+        }
+#endif
+
+        pHCD->hc[chNum].dmaAddr = (uint32_t)dmaAddr;
+
+        if ((uint32_t)pHCD->hc[chNum].dmaAddr & (DWC2_USB_DMA_ALIGN - 1)) {
+            HAL_SYSLOG("%s: Non-aligned addr 0x%08" PRIx32 " for USB DWC2!\n", __func__, pHCD->hc[chNum].dmaAddr);
+        }
     }
 
     return USB_HCStartXfer(pHCD->pReg, &(pHCD->hc[chNum]), (uint8_t)pHCD->cfg.dmaEnable);
@@ -655,7 +707,7 @@ static void HCD_HC_IN_IRQHandler(struct HCD_HANDLE *pHCD, uint8_t chNum)
             pHCD->hc[chNum].xferCount = pHCD->hc[chNum].xferLen -
                                         (USB_HC(chNum)->HCTSIZ &
                                          USB_OTG_HCTSIZ_XFRSIZ);
-            HAL_DCACHE_InvalidateByRange((uint32_t)pHCD->hc[chNum].pxferBuff,
+            HAL_DCACHE_InvalidateByRange((uintptr_t)pHCD->hc[chNum].pxferBuff,
                                          pHCD->hc[chNum].xferCount);
         }
 
@@ -674,7 +726,16 @@ static void HCD_HC_IN_IRQHandler(struct HCD_HANDLE *pHCD, uint8_t chNum)
             HAL_HCD_HCNotifyURBChange_Callback(pHCD, chNum,
                                                pHCD->hc[chNum].urbState);
         }
-        pHCD->hc[chNum].toggleIn ^= 1;
+
+        if (pHCD->hc[chNum].xferLen > pHCD->hc[chNum].maxPacket) {
+            if ((USB_HC(chNum)->HCTSIZ & USB_OTG_HCTSIZ_DPID) >> 29) {
+                pHCD->hc[chNum].toggleIn = 1;
+            } else {
+                pHCD->hc[chNum].toggleIn = 0;
+            }
+        } else {
+            pHCD->hc[chNum].toggleIn ^= 1;
+        }
     } else if ((USB_HC(chNum)->HCINT) & USB_OTG_HCINT_CHH) {
         __HAL_HCD_MASK_HALT_HC_INT(chNum);
 
@@ -808,8 +869,17 @@ static void HCD_HC_OUT_IRQHandler(struct HCD_HANDLE *pHCD, uint8_t chNum)
         if (pHCD->hc[chNum].hcState == HC_XFRC) {
             pHCD->hc[chNum].urbState = URB_DONE;
             if ((pHCD->hc[chNum].epType == EP_TYPE_BULK) ||
-                (pHCD->hc[chNum].epType == EP_TYPE_INTR)) {
-                pHCD->hc[chNum].toggleOut ^= 1;
+                (pHCD->hc[chNum].epType == EP_TYPE_INTR) ||
+                (pHCD->hc[chNum].epType == EP_TYPE_CTRL)) {
+                if (pHCD->hc[chNum].xferLen > pHCD->hc[chNum].maxPacket) {
+                    if ((USB_HC(chNum)->HCTSIZ & USB_OTG_HCTSIZ_DPID) >> 29) {
+                        pHCD->hc[chNum].toggleOut = 1;
+                    } else {
+                        pHCD->hc[chNum].toggleOut = 0;
+                    }
+                } else {
+                    pHCD->hc[chNum].toggleOut ^= 1;
+                }
             }
         } else if (pHCD->hc[chNum].hcState == HC_NAK) {
             pHCD->hc[chNum].urbState = URB_NOTREADY;

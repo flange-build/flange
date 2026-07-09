@@ -24,7 +24,7 @@ struct HAL_AUDIOPWM_DEV g_audioPwmDev =
     .hclk = HCLK_AUDIOPWM_GATE,
     .txDmaData =
     {
-        .addr = (uint32_t)&(AUDIOPWM->FIFO_ENTRY),
+        .addr = AUDIOPWM_BASE + AUDIOPWM_FIFO_ENTRY_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_AUDIOPWM,
@@ -46,6 +46,27 @@ struct HAL_DWDMA_DEV g_dwDmaDev =
     .maxChans = DMA_NUM_CHANNELS,
     .dataWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
     .blockSize = 0xfff, /** ref to trm */
+};
+#endif
+
+#ifdef HAL_HCD_MODULE_ENABLED
+const struct HAL_USB_DEV g_usbotgh0Dev =
+{
+    .pReg = USB,
+    .hclkGateID = HCLK_USBOTG_GATE,
+    .utmiclkGateID = HCLK_USBOTG_PMU_GATE,
+    .usbPhyGateID = CLK_OTG_USBPHY_PLL_GATE,
+    .irqNum = USB2OTG_IRQn,
+    .cfg =
+    {
+        .phyif = USB_PHY_UTMI_WIDTH_16,
+        .speed = USB_OTG_SPEED_HIGH,
+        .hcNum = 8,
+        .dmaEnable = true,
+        .sofEnable = false,
+        .lpmEnable = false,
+        .suspendEnable = false,
+    },
 };
 #endif
 
@@ -92,6 +113,29 @@ const struct HAL_I2C_DEV g_i2c2Dev =
 };
 #endif
 
+#ifdef HAL_PCD_MODULE_ENABLED
+const struct HAL_USB_DEV g_usbdDev =
+{
+    .pReg = USB,
+    .hclkGateID = HCLK_USBOTG_GATE,
+    .utmiclkGateID = HCLK_USBOTG_PMU_GATE,
+    .usbPhyGateID = CLK_OTG_USBPHY_PLL_GATE,
+    .irqNum = USB2OTG_IRQn,
+    .cfg =
+    {
+        .epNum = 10,
+        .ep0Mps = USB_OTG_MAX_EP0_SIZE,
+        .phyif = USB_PHY_UTMI_WIDTH_16,
+        .speed = USB_OTG_SPEED_HIGH,
+        .dmaEnable = true,
+        .sofEnable = false,
+        .lpmEnable = false,
+        .vbusSensingEnable = false,
+        .suspendEnable = false,
+    },
+};
+#endif
+
 #ifdef HAL_PDM_MODULE_ENABLED
 struct HAL_PDM_DEV g_pdm0Dev =
 {
@@ -107,7 +151,7 @@ struct HAL_PDM_DEV g_pdm0Dev =
     .reset = SRST_M_PDM,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(PDM0->RXFIFO_DATA_REG),
+        .addr = PDM0_BASE + PDM_RXFIFO_DATA_REG_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_PDM,
@@ -292,7 +336,7 @@ const struct HAL_PWM_DEV g_pwm0Dev =
     .clkID = CLK_PWM0,
     .clkGateID = CLK_PWM0_PLL_GATE,
     .pclkGateID = PCLK_PWM0_GATE,
-    .irqNum = PWM_4CH_0_IRQn,
+    .irqNum[0] = PWM_4CH_0_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm1Dev =
@@ -301,7 +345,7 @@ const struct HAL_PWM_DEV g_pwm1Dev =
     .clkID = CLK_PWM1,
     .clkGateID = CLK_PWM1_PLL_GATE,
     .pclkGateID = PCLK_PWM1_GATE,
-    .irqNum = PWM_4CH_1_IRQn,
+    .irqNum[0] = PWM_4CH_1_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm2Dev =
@@ -310,7 +354,7 @@ const struct HAL_PWM_DEV g_pwm2Dev =
     .clkID = CLK_PWM2,
     .clkGateID = CLK_PWM2_PLL_GATE,
     .pclkGateID = PCLK_PWM2_GATE,
-    .irqNum = PWM_4CH_2_IRQn,
+    .irqNum[0] = PWM_4CH_2_IRQn,
 };
 #endif
 
@@ -368,7 +412,7 @@ struct HAL_I2STDM_DEV g_i2sTdm0Dev =
     .bclkFs = 64,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(I2STDM0->RXDR),
+        .addr = I2STDM0_BASE + I2STDM_RXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S0_RX,
@@ -376,7 +420,7 @@ struct HAL_I2STDM_DEV g_i2sTdm0Dev =
     },
     .txDmaData =
     {
-        .addr = (uint32_t)&(I2STDM0->TXDR),
+        .addr = I2STDM0_BASE + I2STDM_TXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S0_TX,
@@ -395,7 +439,7 @@ struct HAL_I2STDM_DEV g_i2sTdm1Dev =
     .bclkFs = 64,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(I2STDM1->RXDR),
+        .addr = I2STDM1_BASE + I2STDM_RXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S1_RX,
@@ -403,7 +447,7 @@ struct HAL_I2STDM_DEV g_i2sTdm1Dev =
     },
     .txDmaData =
     {
-        .addr = (uint32_t)&(I2STDM1->TXDR),
+        .addr = I2STDM1_BASE + I2STDM_TXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S1_TX,
@@ -437,6 +481,7 @@ struct HAL_FSPI_HOST g_fspi0Dev =
     .irqNum = FSPI0_IRQn,
     .xipMemCode = XIP_MAP0_BASE0,
     .xipMemData = XIP_MAP0_BASE1,
+    .maxDllCells = 0xFF,
     .xmmcDev[0] =
     {
         .type = DEV_NOR,
@@ -451,6 +496,7 @@ struct HAL_FSPI_HOST g_fspi1Dev =
     .sclkID = CLK_XIP_SFC1,
     .irqNum = FSPI1_IRQn,
     .xipMemData = XIP_MAP1_BASE1,
+    .maxDllCells = 0xFF,
     .xmmcDev[0] =
     {
         .type = DEV_PSRAM,
@@ -485,30 +531,6 @@ const struct HAL_PVTM_DEV g_pvtmDev =
 {
     .info = pvtmInfo,
     .num = HAL_ARRAY_SIZE(pvtmInfo),
-};
-#endif
-
-#if defined(HAL_PCD_MODULE_ENABLED) || defined(HAL_HCD_MODULE_ENABLED)
-const struct HAL_USB_DEV g_usbdDev =
-{
-    .pReg = USB,
-    .hclkGateID = HCLK_USBOTG_GATE,
-    .utmiclkGateID = HCLK_USBOTG_PMU_GATE,
-    .usbPhyGateID = CLK_OTG_USBPHY_PLL_GATE,
-    .irqNum = USB2OTG_IRQn,
-    .cfg =
-    {
-        .epNum = 10,
-        .ep0Mps = USB_OTG_MAX_EP0_SIZE,
-        .phyif = USB_PHY_UTMI_WIDTH_16,
-        .speed = USB_OTG_SPEED_HIGH,
-        .hcNum = 8,
-        .dmaEnable = true,
-        .sofEnable = false,
-        .lpmEnable = false,
-        .vbusSensingEnable = false,
-        .suspendEnable = false,
-    },
 };
 #endif
 

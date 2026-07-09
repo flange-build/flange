@@ -333,7 +333,7 @@ static HAL_Status I2C_HandleStart(struct I2C_HANDLE *pI2C, uint32_t ipd)
 {
     if (!(ipd & REG_INT_START)) {
         I2C_Stop(pI2C, HAL_ERROR);
-        HAL_DBG_ERR("unexpected irq in START: 0x%lx\n", ipd);
+        HAL_DBG_ERR("unexpected irq in START: 0x%" PRIx32 "\n", ipd);
         I2C_CleanIPD(pI2C);
 
         return HAL_BUSY;
@@ -375,7 +375,7 @@ static HAL_Status I2C_HandleWrite(struct I2C_HANDLE *pI2C, uint32_t ipd)
 {
     if (!(ipd & REG_INT_MBTF)) {
         I2C_Stop(pI2C, HAL_ERROR);
-        HAL_DBG_ERR("unexpected irq in WRITE: 0x%lx\n", ipd);
+        HAL_DBG_ERR("unexpected irq in WRITE: 0x%" PRIx32 "\n", ipd);
         I2C_CleanIPD(pI2C);
 
         return HAL_BUSY;
@@ -453,7 +453,7 @@ static HAL_Status I2C_HandleStop(struct I2C_HANDLE *pI2C, uint32_t ipd)
 
     if (!(ipd & REG_INT_STOP)) {
         I2C_Stop(pI2C, HAL_ERROR);
-        HAL_DBG_ERR("unexpected irq in STOP: 0x%lx\n", ipd);
+        HAL_DBG_ERR("unexpected irq in STOP: 0x%" PRIx32 "\n", ipd);
         I2C_CleanIPD(pI2C);
 
         return HAL_BUSY;
@@ -566,7 +566,7 @@ HAL_Status HAL_I2C_IRQHandler(struct I2C_HANDLE *pI2C)
     HAL_Status result = HAL_BUSY;
 
     if (pI2C->state == STATE_IDLE) {
-        HAL_DBG_WRN("irq in STATE_IDLE, ipd = 0x%lx\n", ipd);
+        HAL_DBG_WRN("irq in STATE_IDLE, ipd = 0x%" PRIx32 "\n", ipd);
         I2C_CleanIPD(pI2C);
         /* Terminate this transfer. */
         result = HAL_INVAL;

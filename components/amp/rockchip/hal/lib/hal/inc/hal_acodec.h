@@ -32,8 +32,11 @@
 struct HAL_ACODEC_DEV {
     struct ACODEC_REG *pReg;
     eCLOCK_Name hclk;
-    uint32_t mclk;
+    eCLOCK_Name mclk;
+    uint32_t mclkRate;
     uint32_t micBias;
+    uint32_t mclkRxOutGate;
+    uint32_t mclkTxOutGate;
     bool micDifferential;
     void *privateData;
 };

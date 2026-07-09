@@ -69,7 +69,7 @@
   */
 __WEAK void HAL_AssertFailed(const char *file, uint32_t line)
 {
-    HAL_DBG_ERR("assert failed at %s %lu\n", file, line);
+    HAL_DBG_ERR("assert failed at %s %" PRIu32 "\n", file, line);
     while (1) {
         ;
     }
@@ -95,11 +95,11 @@ HAL_Status HAL_DBG_HEX(char *s, void *buf, uint32_t width, uint32_t len)
     j = 0;
     for (i = 0; i < len; i++) {
         if (j == 0) {
-            HAL_SYSLOG("[HAL_DBG_HEX] %s %p + 0x%lx:", s, buf, i * width);
+            HAL_SYSLOG("[HAL_DBG_HEX] %s %p + 0x%" PRIx32 ":", s, buf, i * width);
         }
 
         if (width == 4) {
-            HAL_SYSLOG("0x%08lx,", p32[i]);
+            HAL_SYSLOG("0x%08" PRIx32 ",", p32[i]);
         } else if (width == 2) {
             HAL_SYSLOG("0x%04x,", p16[i]);
         } else {
@@ -133,17 +133,77 @@ static void reverse(char *start, char *end)
 extern int _write(int fd, char *ptr, int len);
 #endif
 
+static int int2str(int num, char *str, int d)
+{
+    int i = 0;
+
+    do {
+        str[i++] = (num % 10) + '0';
+        num = num / 10;
+    } while (num > 0);
+
+    while (i < d) {
+        str[i++] = '0';
+    }
+
+    reverse(str, &str[i - 1]);
+    str[i] = '\0';
+
+    return i;
+}
+
+#if defined(HAL_DBG_USING_HAL_PRINTF_TIMESTAMP) || defined(HAL_DBG_USING_HAL_PRINTF_FLOAT)
+static int float2str(float value, char *str, uint8_t precision)
+{
+    uint32_t i_value = (int)value;
+    float f_value = value - (float)i_value;
+    int len;
+
+    len = int2str(i_value, str, 8);
+    str = &str[len];
+
+    if (precision > 0) {
+        int i;
+
+        *str = '.';
+
+        for (i = 0; i < precision; i++) {
+            f_value *= 10;
+        }
+        int2str((int)f_value, ++str, precision);
+        len += precision + 1;
+    }
+
+    return len;
+}
+#endif /* defined(HAL_DBG_USING_HAL_PRINTF_TIMESTAMP) || defined(HAL_DBG_USING_HAL_PRINTF_FLOAT) */
+
 /**
  * @brief  format and print data
- * @param  format: format printf param. only support: \%d, \%s, \%ld, \%lld
+ * @param  format: format printf param. only support: \%d, \%x, \%s, \%ld, \%lx, \%lld, \%llx, \%f
  * @return int32_t.
  */
 __WEAK int32_t HAL_DBG_Printf(const char *format, ...)
 {
-    static char g_printf_buf[HAL_PRINTF_BUF_SIZE];
+    char g_printf_buf[HAL_PRINTF_BUF_SIZE];
     char *str = g_printf_buf;
     int32_t len = 0;
     va_list args;
+
+#if defined(HAL_SHARED_DEBUG_UART_LOCK_ID) && defined(HAL_SPINLOCK_MODULE_ENABLED)
+    bool locked = false;
+#endif
+
+#ifdef HAL_DBG_USING_HAL_PRINTF_TIMESTAMP
+    uint64_t now;
+    float timestamp;
+
+    now = HAL_GetSysTimerCount();
+    timestamp = (now * 1.0) / PLL_INPUT_OSC_RATE;
+    len = float2str(timestamp, str, 3);
+    str = &g_printf_buf[len];
+    *str++ = ' ';
+#endif
 
     va_start(args, format);
 
@@ -152,10 +212,27 @@ __WEAK int32_t HAL_DBG_Printf(const char *format, ...)
             format++;
             if (*format == 'd') {
                 int i = va_arg(args, int);
-                char *start = str;
+                i = int2str(i, str, 0);
+                str = &str[i];
+#ifdef HAL_DBG_USING_HAL_PRINTF_FLOAT
+            } else if (*format == 'f') {
+                int i;
+
+                float f = va_arg(args, double);
+                i = float2str(f, str, 3);
+                str = &str[i];
+#endif
+            } else if (*format == 'x') {
+                unsigned int i = va_arg(args, unsigned int);
+                char *start = str, c;
                 do {
-                    *str++ = '0' + (i % 10);
-                    i /= 10;
+                    c = i % 16;
+                    if (c < 10) {
+                        *str++ = '0' + c;
+                    } else {
+                        *str++ = 'a' - 10 + c;
+                    }
+                    i /= 16;
                 } while (i > 0);
                 reverse(start, str - 1);
             } else if (*format == 's') {
@@ -173,6 +250,19 @@ __WEAK int32_t HAL_DBG_Printf(const char *format, ...)
                         i /= 10;
                     } while (i > 0);
                     reverse(start, str - 1);
+                } else if (*format == 'x') {
+                    unsigned long i = va_arg(args, unsigned long);
+                    char *start = str, c;
+                    do {
+                        c = i % 16;
+                        if (c < 10) {
+                            *str++ = '0' + c;
+                        } else {
+                            *str++ = 'a' - 10 + c;
+                        }
+                        i /= 16;
+                    } while (i > 0);
+                    reverse(start, str - 1);
                 } else if (*format == 'l') {
                     format++;
                     if (*format == 'd') {
@@ -181,6 +271,19 @@ __WEAK int32_t HAL_DBG_Printf(const char *format, ...)
                         do {
                             *str++ = '0' + (i % 10);
                             i /= 10;
+                        } while (i > 0);
+                        reverse(start, str - 1);
+                    } else if (*format == 'x') {
+                        unsigned long long int i = va_arg(args, unsigned long long int);
+                        char *start = str, c;
+                        do {
+                            c = i % 16;
+                            if (c < 10) {
+                                *str++ = '0' + c;
+                            } else {
+                                *str++ = 'a' - 10 + c;
+                            }
+                            i /= 16;
                         } while (i > 0);
                         reverse(start, str - 1);
                     }
@@ -197,16 +300,38 @@ __WEAK int32_t HAL_DBG_Printf(const char *format, ...)
     va_end(args);
     len = str - g_printf_buf;
 
-#ifdef __GNUC__
+#if defined(HAL_SHARED_DEBUG_UART_LOCK_ID) && defined(HAL_SPINLOCK_MODULE_ENABLED)
+    {
+        HAL_Check ret;
+        uint64_t timeout = PLL_INPUT_OSC_RATE / 1000; /* 1ms */
 
-    return _write(2, g_printf_buf, len);
+        timeout += HAL_GetSysTimerCount();
+        do {
+            ret = HAL_SPINLOCK_TryLock(HAL_SHARED_DEBUG_UART_LOCK_ID);
+        } while(!ret && HAL_GetSysTimerCount() < timeout);
+
+        if (ret) {
+            locked = true;
+        }
+    }
+#endif
+
+#if defined(__GNUC__) && !defined(__ARMCC_VERSION)
+
+    len = _write(2, g_printf_buf, len);
 #else
     for (int i = 0; i < len; i++) {
         fputc(g_printf_buf[i], stdout);
     }
+#endif
+
+#if defined(HAL_SHARED_DEBUG_UART_LOCK_ID) && defined(HAL_SPINLOCK_MODULE_ENABLED)
+    if (locked) {
+        HAL_SPINLOCK_Unlock(HAL_SHARED_DEBUG_UART_LOCK_ID);
+    }
+#endif
 
     return len;
-#endif
 }
 #else
 /**

@@ -909,9 +909,7 @@ struct PDM_REG {
     __I  uint32_t DATA0L_REG;                         /* Address Offset: 0x0038 */
          uint32_t RESERVED003C[6];                    /* Address Offset: 0x003C */
     __I  uint32_t DATA_VALID;                         /* Address Offset: 0x0054 */
-    __IO uint32_t VERSION;                            /* Address Offset: 0x0058 */
-         uint32_t RESERVED005C[233];                  /* Address Offset: 0x005C */
-    __IO uint32_t INCR_RXDR;                          /* Address Offset: 0x0400 */
+    __I  uint32_t VERSION;                            /* Address Offset: 0x0058 */
 };
 /* VAD Register Structure Define */
 struct VAD_REG {
@@ -8790,6 +8788,7 @@ struct SPI2APB_REG {
 #define PDM_DATA_VALID_PATH0_VLD_MASK                      (0x1U << PDM_DATA_VALID_PATH0_VLD_SHIFT)                     /* 0x00000008 */
 /* VERSION */
 #define PDM_VERSION_OFFSET                                 (0x58U)
+#define PDM_VERSION                                        (0x59313030U)
 #define PDM_VERSION_VERSION_SHIFT                          (0U)
 #define PDM_VERSION_VERSION_MASK                           (0xFFFFFFFFU << PDM_VERSION_VERSION_SHIFT)                   /* 0xFFFFFFFF */
 /* INCR_RXDR */
@@ -9996,6 +9995,7 @@ struct SPI2APB_REG {
 #define CRYPTO_HASH_VALID_HASH_VALID_MASK                  (0x1U << CRYPTO_HASH_VALID_HASH_VALID_SHIFT)                 /* 0x00000001 */
 /* VERSION */
 #define CRYPTO_VERSION_OFFSET                              (0x3F0U)
+#define CRYPTO_CRYPTO_VERSION                              (0x01000001U)
 #define CRYPTO_VERSION_VERSION_NUM_SHIFT                   (0U)
 #define CRYPTO_VERSION_VERSION_NUM_MASK                    (0xFFFFFFFFU << CRYPTO_VERSION_VERSION_NUM_SHIFT)            /* 0xFFFFFFFF */
 /* RNG_CTL */
@@ -10214,16 +10214,16 @@ struct SPI2APB_REG {
 #define CRYPTO_PKA_OPCODE_LEN_MASK                         (0x7U << CRYPTO_PKA_OPCODE_LEN_SHIFT)                        /* 0x07000000 */
 #define CRYPTO_PKA_OPCODE_OPCODE_SHIFT                     (27U)
 #define CRYPTO_PKA_OPCODE_OPCODE_MASK                      (0x1FU << CRYPTO_PKA_OPCODE_OPCODE_SHIFT)                    /* 0xF8000000 */
-/* N_NP_TO_T1_ADDR */
-#define CRYPTO_N_NP_TO_T1_ADDR_OFFSET                      (0x884U)
-#define CRYPTO_N_NP_TO_T1_ADDR_REG_N_SHIFT                 (0U)
-#define CRYPTO_N_NP_TO_T1_ADDR_REG_N_MASK                  (0x1FU << CRYPTO_N_NP_TO_T1_ADDR_REG_N_SHIFT)                /* 0x0000001F */
-#define CRYPTO_N_NP_TO_T1_ADDR_REG_NP_SHIFT                (5U)
-#define CRYPTO_N_NP_TO_T1_ADDR_REG_NP_MASK                 (0x1FU << CRYPTO_N_NP_TO_T1_ADDR_REG_NP_SHIFT)               /* 0x000003E0 */
-#define CRYPTO_N_NP_TO_T1_ADDR_REG_T0_SHIFT                (10U)
-#define CRYPTO_N_NP_TO_T1_ADDR_REG_T0_MASK                 (0x1FU << CRYPTO_N_NP_TO_T1_ADDR_REG_T0_SHIFT)               /* 0x00007C00 */
-#define CRYPTO_N_NP_TO_T1_ADDR_REG_T1_SHIFT                (15U)
-#define CRYPTO_N_NP_TO_T1_ADDR_REG_T1_MASK                 (0x1FU << CRYPTO_N_NP_TO_T1_ADDR_REG_T1_SHIFT)               /* 0x000F8000 */
+/* N_NP_T0_T1_ADDR */
+#define CRYPTO_N_NP_T0_T1_ADDR_OFFSET                      (0x884U)
+#define CRYPTO_N_NP_T0_T1_ADDR_REG_N_SHIFT                 (0U)
+#define CRYPTO_N_NP_T0_T1_ADDR_REG_N_MASK                  (0x1FU << CRYPTO_N_NP_T0_T1_ADDR_REG_N_SHIFT)                /* 0x0000001F */
+#define CRYPTO_N_NP_T0_T1_ADDR_REG_NP_SHIFT                (5U)
+#define CRYPTO_N_NP_T0_T1_ADDR_REG_NP_MASK                 (0x1FU << CRYPTO_N_NP_T0_T1_ADDR_REG_NP_SHIFT)               /* 0x000003E0 */
+#define CRYPTO_N_NP_T0_T1_ADDR_REG_T0_SHIFT                (10U)
+#define CRYPTO_N_NP_T0_T1_ADDR_REG_T0_MASK                 (0x1FU << CRYPTO_N_NP_T0_T1_ADDR_REG_T0_SHIFT)               /* 0x00007C00 */
+#define CRYPTO_N_NP_T0_T1_ADDR_REG_T1_SHIFT                (15U)
+#define CRYPTO_N_NP_T0_T1_ADDR_REG_T1_MASK                 (0x1FU << CRYPTO_N_NP_T0_T1_ADDR_REG_T1_SHIFT)               /* 0x000F8000 */
 /* PKA_STATUS */
 #define CRYPTO_PKA_STATUS_OFFSET                           (0x888U)
 #define CRYPTO_PKA_STATUS                                  (0x1U)

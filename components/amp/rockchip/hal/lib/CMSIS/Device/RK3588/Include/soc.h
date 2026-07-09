@@ -97,7 +97,7 @@ typedef enum {
 /* ================                       IRQ                      ================ */
 /* ================================================================================ */
 #if defined(HAL_MCU_CORE)
-#if defined(RKMCU_RK3588_PMU)
+#if defined(HAL_PMU_MCU_CORE)
 #define INTMUX_NUM_INT_PER_CON    256
 #define INTMUX_NUM_OUT_PER_CON    4
 #define INTMUX_NUM_INT_PER_OUT    64
@@ -184,6 +184,20 @@ typedef enum {
   TIMER9_IRQn               =  330 + NUM_INTERRUPTS,     /*!< TIMER9 Interrupt              */
   TIMER10_IRQn              =  331 + NUM_INTERRUPTS,     /*!< TIMER10 Interrupt             */
   TIMER11_IRQn              =  332 + NUM_INTERRUPTS,     /*!< TIMER11 Interrupt             */
+  WDT0_IRQn                 =  346 + NUM_INTERRUPTS,     /*!< WDT Interrupt                 */
+  I2C1_IRQn                 =  350 + NUM_INTERRUPTS,     /*!< I2C1 Interrupt                */
+  I2C2_IRQn                 =  351 + NUM_INTERRUPTS,     /*!< I2C2 Interrupt                */
+  I2C3_IRQn                 =  352 + NUM_INTERRUPTS,     /*!< I2C3 Interrupt                */
+  I2C4_IRQn                 =  353 + NUM_INTERRUPTS,     /*!< I2C4 Interrupt                */
+  I2C5_IRQn                 =  354 + NUM_INTERRUPTS,     /*!< I2C5 Interrupt                */
+  I2C6_IRQn                 =  355 + NUM_INTERRUPTS,     /*!< I2C6 Interrupt                */
+  I2C7_IRQn                 =  356 + NUM_INTERRUPTS,     /*!< I2C7 Interrupt                */
+  I2C8_IRQn                 =  357 + NUM_INTERRUPTS,     /*!< I2C8 Interrupt                */
+  SPI0_IRQn                 =  358 + NUM_INTERRUPTS,     /*!< SPI0 Interrupt                */
+  SPI1_IRQn                 =  359 + NUM_INTERRUPTS,     /*!< SPI1 Interrupt                */
+  SPI2_IRQn                 =  360 + NUM_INTERRUPTS,     /*!< SPI2 Interrupt                */
+  SPI3_IRQn                 =  361 + NUM_INTERRUPTS,     /*!< SPI3 Interrupt                */
+  SPI4_IRQn                 =  362 + NUM_INTERRUPTS,     /*!< SPI4 Interrupt                */
   UART1_IRQn                =  364 + NUM_INTERRUPTS,     /*!< UART1 Interrupt               */
   UART2_IRQn                =  365 + NUM_INTERRUPTS,     /*!< UART2 Interrupt               */
   UART3_IRQn                =  366 + NUM_INTERRUPTS,     /*!< UART3 Interrupt               */
@@ -193,9 +207,16 @@ typedef enum {
   UART7_IRQn                =  370 + NUM_INTERRUPTS,     /*!< UART7 Interrupt               */
   UART8_IRQn                =  371 + NUM_INTERRUPTS,     /*!< UART8 Interrupt               */
   UART9_IRQn                =  372 + NUM_INTERRUPTS,     /*!< UART9 Interrupt               */
+  PWM1_IRQn                 =  378 + NUM_INTERRUPTS,     /*!< PWM1 Interrupt                */
+  PWM1_PWR_IRQn             =  379 + NUM_INTERRUPTS,     /*!< PWM1 PWR Interrupt            */
+  PWM2_IRQn                 =  380 + NUM_INTERRUPTS,     /*!< PWM2 Interrupt                */
+  PWM2_PWR_IRQn             =  381 + NUM_INTERRUPTS,     /*!< PWM2 PWR Interrupt            */
+  PWM3_IRQn                 =  382 + NUM_INTERRUPTS,     /*!< PWM3 Interrupt                */
+  PWM3_PWR_IRQn             =  383 + NUM_INTERRUPTS,     /*!< PWM3 PWR Interrupt            */
+  SARADC_IRQn               =  430 + NUM_INTERRUPTS,     /*!< SARADC Interrupt              */
   TOTAL_INTERRUPTS          =  (INTMUX_IRQ_START_NUM + NUM_INTERRUPTS + NUM_EXT_INTERRUPTS),
 } IRQn_Type;
-#elif defined(RKMCU_RK3588_NPU)
+#elif defined(HAL_NPU_MCU_CORE)
 typedef enum {
 /* -------------------  Processor Exceptions Numbers  ----------------------------- */
   NonMaskableInt_IRQn       = -14,     /*  2 Non Maskable Interrupt */
@@ -228,7 +249,7 @@ typedef enum {
   NUM_INTERRUPTS            =  16,     /*!< Number of internal IRQ        */
   DUMMY_IRQn                =  256,    /*!< Avoid compile warning: overflow in conversion   */
 } IRQn_Type;
-#elif defined(RKMCU_RK3588_DDR)
+#elif defined(HAL_DDR_MCU_CORE)
 typedef enum
 {
 /* -------------------  Processor Exceptions Numbers  ----------------------------- */
@@ -263,7 +284,7 @@ typedef enum
 #error missing IRQn_Type define for interrupt
 #endif
 
-#if defined(RKMCU_RK3588_PMU) || defined(RKMCU_RK3588_DDR)
+#if defined(HAL_PMU_MCU_CORE) || defined(HAL_DDR_MCU_CORE)
 #define HAS_CUSTOME_INTC
 #endif
 #endif /* HAL_MCU_CORE */
@@ -355,6 +376,21 @@ typedef enum
     TIMER9_IRQn            = 330,      /*!< TIMER9 Interrupt            */
     TIMER10_IRQn           = 331,      /*!< TIMER10 Interrupt           */
     TIMER11_IRQn           = 332,      /*!< TIMER11 Interrupt           */
+    WDT0_IRQn              = 347,      /*!< WDT0    Interrupt           */
+    I2C0_IRQn              = 349,      /*!< I2C0 Interrupt              */
+    I2C1_IRQn              = 350,      /*!< I2C1 Interrupt              */
+    I2C2_IRQn              = 351,      /*!< I2C2 Interrupt              */
+    I2C3_IRQn              = 352,      /*!< I2C3 Interrupt              */
+    I2C4_IRQn              = 353,      /*!< I2C4 Interrupt              */
+    I2C5_IRQn              = 354,      /*!< I2C5 Interrupt              */
+    I2C6_IRQn              = 355,      /*!< I2C6 Interrupt              */
+    I2C7_IRQn              = 356,      /*!< I2C7 Interrupt              */
+    I2C8_IRQn              = 357,      /*!< I2C8 Interrupt              */
+    SPI0_IRQn              = 358,      /*!< SPI0 Interrupt              */
+    SPI1_IRQn              = 359,      /*!< SPI1 Interrupt              */
+    SPI2_IRQn              = 360,      /*!< SPI2 Interrupt              */
+    SPI3_IRQn              = 361,      /*!< SPI3 Interrupt              */
+    SPI4_IRQn              = 362,      /*!< SPI4 Interrupt              */
     UART0_IRQn             = 363,      /*!< UART0  Interrupt            */
     UART1_IRQn             = 364,      /*!< UART1  Interrupt            */
     UART2_IRQn             = 365,      /*!< UART2  Interrupt            */
@@ -365,6 +401,15 @@ typedef enum
     UART7_IRQn             = 370,      /*!< UART7  Interrupt            */
     UART8_IRQn             = 371,      /*!< UART8  Interrupt            */
     UART9_IRQn             = 372,      /*!< UART9  Interrupt            */
+    PWM0_IRQn              = 376,      /*!< PWM0 Interrupt              */
+    PWM0_PWR_IRQn          = 377,      /*!< PWM0 PWR Interrupt          */
+    PWM1_IRQn              = 378,      /*!< PWM1 Interrupt              */
+    PWM1_PWR_IRQn          = 379,      /*!< PWM1 PWR Interrupt          */
+    PWM2_IRQn              = 380,      /*!< PWM2 Interrupt              */
+    PWM2_PWR_IRQn          = 381,      /*!< PWM2 PWR Interrupt          */
+    PWM3_IRQn              = 382,      /*!< PWM3 Interrupt              */
+    PWM3_PWR_IRQn          = 383,      /*!< PWM3 PWR Interrupt          */
+    SARADC_IRQn            = 430,      /*!< SARADC Interrupt            */
     RSVD0_IRQn             = 454,      /*!< RSVD0  Interrupt            */
     NUM_INTERRUPTS         = 512,
 } IRQn_Type;
@@ -435,8 +480,8 @@ typedef enum
 /*                                                                                      */
 /****************************************************************************************/
 /* Memory Base */
-#define GIC_DISTRIBUTOR_BASE    0xFE600000 /* GICD base address */
-#define GIC_REDISTRIBUTOR_BASE  0xFE660000 /* GICR base address */
+#define GIC_DISTRIBUTOR_BASE    (0xFE600000UL) /* GICD base address */
+#define GIC_REDISTRIBUTOR_BASE  (0xFE680000UL) /* GICR base address */
 
 /****************************************************************************************/
 /*                                                                                      */
@@ -477,6 +522,7 @@ typedef enum
 #endif /* HAL_MCU_CORE */
 
 /******************************************CRU*******************************************/
+#define PCLK_WDT PCLK_CENTER_ROOT
 #define CRU_CLK_USE_CON_BANK
 #define CLK64(mux, div) ((((mux) & 0xffffffffULL) << 32) | ((div) & 0xffffffffULL))
 
@@ -641,6 +687,7 @@ typedef enum CLOCK_Name {
     CLK_PWM1             = CLK64(CLK_PWM1_SEL, 0U),
     CLK_PWM2             = CLK64(CLK_PWM2_SEL, 0U),
     CLK_PWM3             = CLK64(CLK_PWM3_SEL, 0U),
+    CLK_PMU1PWM          = CLK64(CLK_PMU1PWM_SEL, 0U),
 
     CLK_SPI0             = CLK64(CLK_SPI0_SEL, 0U),
     CLK_SPI1             = CLK64(CLK_SPI1_SEL, 0U),
@@ -652,6 +699,7 @@ typedef enum CLOCK_Name {
     CLK_AUX16M_1         = CLK64(0U, CLK_AUX16MHZ_1_DIV),
 
     HCLK_PMU_CM0         = CLK64(HCLK_PMU_CM0_ROOT_I_SEL, 0U),
+    PCLK_CENTER_ROOT     = CLK64(PCLK_CENTER_ROOT_SEL, 0U),
 } eCLOCK_Name;
 #endif /* __ASSEMBLY__ */
 /****************************************MBOX********************************************/
@@ -670,10 +718,10 @@ struct INTMUX_REG {
     __IO uint32_t INT_FLAG_GROUP[32];                 /* Address Offset: 0x0080 */
 };
 
-#if defined(RKMCU_RK3588_PMU)
+#if defined(HAL_PMU_MCU_CORE)
 #define INTMUX0             ((struct INTMUX_REG *) INTMUX0_PMU_BASE)
 #define INTMUX1             ((struct INTMUX_REG *) INTMUX1_PMU_BASE)
-#elif defined(RKMCU_RK3588_DDR)
+#elif defined(HAL_DDR_MCU_CORE)
 #define INTMUX0             ((struct INTMUX_REG *) INTMUX0_DDR_BASE)
 #define INTMUX1             ((struct INTMUX_REG *) INTMUX1_DDR_BASE)
 #endif
@@ -695,12 +743,12 @@ struct INTMUX_REG {
 
 #if defined(HAL_MCU_CORE)
 
-#if defined(RKMCU_RK3588_PMU)
+#if defined(HAL_PMU_MCU_CORE)
 #undef TIMER0_BASE
 #undef TIMER1_BASE
 #define TIMER0_BASE                    0xFD8F0000U /* TIMER0 base address */
 #define TIMER1_BASE                    0xFD8F0020U /* TIMER1 base address */
-#elif defined(RKMCU_RK3588_DDR)
+#elif defined(HAL_DDR_MCU_CORE)
 #undef DCACHE
 #undef ICACHE
 #undef MBOX0_BASE
@@ -711,7 +759,7 @@ struct INTMUX_REG {
 #undef TIMER1_BASE
 #define TIMER0_BASE                    0xFE118000U /* TIMER0_BASE*/
 #define TIMER1_BASE                    0xFE118020U /* TIMER1_BASE*/
-#elif defined(RKMCU_RK3588_NPU)
+#elif defined(HAL_NPU_MCU_CORE)
 #undef MBOX0_BASE
 #define MBOX0_BASE                     0xFECE0000U /* MBOX0 base address */
 #undef WDT_BASE
@@ -724,11 +772,6 @@ struct INTMUX_REG {
 
 #endif
 
-/****************************************GPIO********************************************/
-#ifdef GPIO_VER_ID
-#undef GPIO_VER_ID
-#define GPIO_VER_ID             (0x01000C2BU)
-#endif
 /****************************************PCIE********************************************/
 #define PCIE3_4L_S_BASE                0xF0000000U /* PCIE 32btis mmio base address */
 #define PCIE3_4L_DBI_BASE              0xF5000000U /* PCIE dbi base address */
@@ -804,6 +847,11 @@ typedef enum PD_Id {
     PD_SDMMC   = PD_RK3588(RK3588_PD_SDMMC),
 } ePD_Id;
 #endif
+
+/****************************************WDT*********************************************/
+#define WDT_CR_WDT_EN_MASK WDT_CR_EN_MASK
+#define GLB_RST_SND_WDT GLB_RST_SND_WDT0
+#define GLB_RST_FST_WDT GLB_RST_FST_WDT0
 
 #ifdef __cplusplus
 }

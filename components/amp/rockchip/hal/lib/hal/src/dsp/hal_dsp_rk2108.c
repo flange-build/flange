@@ -222,7 +222,7 @@ HAL_Status HAL_DSP_PowerOn(struct DSP_DEV *dsp)
 {
     HAL_CRU_ClkEnable(ACLK_DSP_GATE);
     HAL_CRU_ClkEnable(PCLK_DSP_GATE);
-#if defined(RT_USING_PMU)
+#if defined(HAL_PD_MODULE_ENABLED)
     HAL_PD_On(PD_DSP);
 #endif
     HAL_DSP_SetTcmMode(DSP_TCM, NOR_MODE);
@@ -233,7 +233,7 @@ HAL_Status HAL_DSP_PowerOn(struct DSP_DEV *dsp)
 HAL_Status HAL_DSP_PowerOff(struct DSP_DEV *dsp)
 {
     HAL_DSP_SetTcmMode(DSP_TCM, PWR_DOWN_MODE);
-#if defined(RT_USING_PMU)
+#if defined(HAL_PD_MODULE_ENABLED)
     HAL_PD_Off(PD_DSP);
 #endif
     HAL_CRU_ClkDisable(ACLK_DSP_GATE);

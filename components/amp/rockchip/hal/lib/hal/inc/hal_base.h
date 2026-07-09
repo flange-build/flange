@@ -14,6 +14,10 @@
 #ifndef _HAL_BASE_H_
 #define _HAL_BASE_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "hal_conf.h"
 #include "hal_driver.h"
 #include "hal_debug.h"
@@ -97,6 +101,10 @@ __STATIC_INLINE uint32_t HAL_DivRoundClosest(uint32_t numerator, uint32_t denomi
 }
 
 /** @} */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

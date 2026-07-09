@@ -61,18 +61,54 @@
 
 #define HAL_DIV_ROUND_UP(x, y) (((x) + (y) - 1) / (y))
 
+#define HAL_DIV_ROUND_CLOSEST(x, divisor)(         \
+{                                                  \
+    __typeof__(x) __x = x;                         \
+    __typeof__(divisor) __d = divisor;             \
+    (((__typeof__(x))-1) > 0 ||                    \
+     ((__typeof__(divisor))-1) > 0 || (__x) > 0) ? \
+        (((__x) + ((__d) / 2)) / (__d)) :          \
+        (((__x) - ((__d) / 2)) / (__d));           \
+}                                                  \
+)
+
+/** round up to the next specified multiple */
+#define HAL_ROUND_UP(x, y) (         \
+{                                    \
+    __typeof__(y) __y = y;           \
+    (((x) + (__y - 1)) / __y) * __y; \
+}                                    \
+)
+
+/** round down to the next specified multiple */
+#define HAL_ROUND_DOWN(x, y) ( \
+{                              \
+    __typeof__(x) __x = (x);   \
+    __x - (__x % (y));         \
+}                              \
+)
+
 #define HAL_IS_ALIGNED(x, a) (((x) & (a - 1)) == 0)
 #ifdef CACHE_LINE_SIZE
-#define HAL_IS_CACHELINE_ALIGNED(x) HAL_IS_ALIGNED((uint32_t)(x), CACHE_LINE_SIZE)
+#define HAL_IS_CACHELINE_ALIGNED(x) HAL_IS_ALIGNED((uintptr_t)(x), CACHE_LINE_SIZE)
 #else
-#define HAL_IS_CACHELINE_ALIGNED(x) HAL_IS_ALIGNED((uint32_t)(x), 4)
+#define HAL_IS_CACHELINE_ALIGNED(x) HAL_IS_ALIGNED((uintptr_t)(x), 4)
 #endif
+
+#define HAL_ALIGN(x, val)      HAL_ALIGN_MASK(x, (__typeof__(x))(val) - 1)
+#define HAL_ALIGN_MASK(x, msk) (((x) + (msk)) & ~(msk))
 
 /* Compiller Macro */
 #if defined(__GNUC__) || defined(__clang__) || defined(__CC_ARM) || defined(__ICCARM__)
 #define HAL_UNUSED __attribute__((__unused__))
 #else
 #define HAL_UNUSED
+#endif
+
+#if __has_attribute(__externally_visible__)
+#define HAL_VISIBLE __attribute__((__externally_visible__))
+#else
+#define HAL_VISIBLE
 #endif
 
 #ifdef CACHE_LINE_SIZE
@@ -188,6 +224,51 @@ typedef enum {
 #endif
 #ifdef GPIO4_EXP
     GPIO_BANK4_EXP = 9,
+#endif
+#ifdef GPIO0_EXP1
+    GPIO_BANK0_EXP1 = 5,
+#endif
+#ifdef GPIO1_EXP1
+    GPIO_BANK1_EXP1 = 6,
+#endif
+#ifdef GPIO2_EXP1
+    GPIO_BANK2_EXP1 = 7,
+#endif
+#ifdef GPIO3_EXP1
+    GPIO_BANK3_EXP1 = 8,
+#endif
+#ifdef GPIO4_EXP1
+    GPIO_BANK4_EXP1 = 9,
+#endif
+#ifdef GPIO0_EXP2
+    GPIO_BANK0_EXP2 = 10,
+#endif
+#ifdef GPIO1_EXP2
+    GPIO_BANK1_EXP2 = 11,
+#endif
+#ifdef GPIO2_EXP2
+    GPIO_BANK2_EXP2 = 12,
+#endif
+#ifdef GPIO3_EXP2
+    GPIO_BANK3_EXP2 = 13,
+#endif
+#ifdef GPIO4_EXP2
+    GPIO_BANK4_EXP2 = 14,
+#endif
+#ifdef GPIO0_EXP3
+    GPIO_BANK0_EXP3 = 15,
+#endif
+#ifdef GPIO1_EXP3
+    GPIO_BANK1_EXP3 = 16,
+#endif
+#ifdef GPIO2_EXP3
+    GPIO_BANK2_EXP3 = 17,
+#endif
+#ifdef GPIO3_EXP3
+    GPIO_BANK3_EXP3 = 18,
+#endif
+#ifdef GPIO4_EXP3
+    GPIO_BANK4_EXP3 = 19,
 #endif
     GPIO_BANK_NUM
 } eGPIO_bankId;

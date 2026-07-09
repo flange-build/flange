@@ -114,6 +114,14 @@ __PACKED_STRUCT T_UINT32_READ { uint32_t v; };
   #define __RESTRICT __restrict
 #endif
 
+#if defined(SYNTACORE)
+/**
+  \brief   Wait For Interrupt
+  \details Wait For Interrupt is a hint instruction that suspends execution until one of a number of events occurs.
+ */
+#define __WFI()                             __ASM volatile ("wfi":::"memory")
+#endif
+
 /**
   \brief   Count leading zeros
   \details Counts the number of leading zeros of a data value.
@@ -136,28 +144,6 @@ __STATIC_FORCEINLINE uint8_t __CLZ(uint32_t value)
     return 32U;
   }
   return __builtin_clz(value);
-}
-
-/* ###########################  Core Function Access  ########################### */
-
-/**
-  \brief   Enable IRQ Interrupts
-  \details Enables IRQ interrupts by clearing the I-bit in the mstatus.
-           Can only be executed in Privileged modes.
- */
-__STATIC_FORCEINLINE void __enable_irq(void)
-{
-    __ASM volatile("csrrsi a0, mstatus, 8");
-}
-
-/**
-  \brief   Disable IRQ Interrupts
-  \details Disables IRQ interrupts by setting the I-bit in the mstatus.
-  Can only be executed in Privileged modes.
- */
-__STATIC_FORCEINLINE  void __disable_irq(void)
-{
-    __ASM volatile("csrrci a0, mstatus, 8");
 }
 
 #pragma GCC diagnostic pop

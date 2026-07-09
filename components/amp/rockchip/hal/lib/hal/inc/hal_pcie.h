@@ -46,14 +46,17 @@ struct HAL_PHY_SNPS_PCIE3_DEV {
 
 /** PCIe handler */
 struct HAL_PCIE_DEV {
-    uint32_t apbBase;
-    uint32_t dbiBase;
-    uint32_t cfgBase;
+    uintptr_t apbBase;
+    uintptr_t dbiBase;
+    uintptr_t cfgBase;
     uint8_t lanes;
     uint8_t gen;
     uint8_t firstBusNo;
     uint32_t legacyIrqNum;
+    uint32_t sysIrqNum;
     void *phy;
+    uint32_t resdesBase;
+    uint32_t resbarBase;
 };
 
 struct HAL_PCIE_HANDLE {
@@ -65,7 +68,16 @@ struct HAL_PCIE_HANDLE {
  *  @{
  */
 
-int HAL_PCIE_GetDmaStatus(struct HAL_PCIE_HANDLE *pcie, uint8_t chn, enum HAL_PCIE_DMA_DIR dir);
+uint32_t HAL_PCIE_GetELBI(struct HAL_PCIE_HANDLE *pcie, uint8_t index);
+uint32_t HAL_PCIE_GetMiscStatus(struct HAL_PCIE_HANDLE *pcie);
+union PCIE_DMA_INT_STATUS HAL_PCIE_GetDmaStatus(struct HAL_PCIE_HANDLE *pcie, uint8_t chn,
+                                                enum HAL_PCIE_DMA_DIR dir);
+union PCIE_DMA_INT_STATUS HAL_PCIE_GetDmaStatusRaw(struct HAL_PCIE_HANDLE *pcie, uint8_t chn,
+                                                   enum HAL_PCIE_DMA_DIR dir);
+enum PCIE_DMA_RESULT HAL_PCIE_CheckDmaStatus(struct HAL_PCIE_HANDLE *pcie, uint8_t chn,
+                                             union PCIE_DMA_INT_STATUS status);
+HAL_Status HAL_PCIE_WaitForHotRstDly2Ready(struct HAL_PCIE_HANDLE *pcie);
+HAL_Status HAL_PCIE_RaiseMSI(struct HAL_PCIE_HANDLE *pcie, uint8_t interrupt);
 HAL_Status HAL_PCIE_ConfigDma(struct HAL_PCIE_HANDLE *pcie, struct DMA_TABLE *table);
 HAL_Status HAL_PCIE_StartDma(struct HAL_PCIE_HANDLE *pcie, struct DMA_TABLE *table);
 HAL_Check HAL_PCIE_LinkUp(struct HAL_PCIE_HANDLE *pcie);
@@ -73,8 +85,13 @@ uint32_t HAL_PCIE_GetLTSSM(struct HAL_PCIE_HANDLE *pcie);
 HAL_Status HAL_PCIE_Init(struct HAL_PCIE_HANDLE *pcie, struct HAL_PCIE_DEV *dev);
 HAL_Status HAL_PCIE_DeInit(struct HAL_PCIE_HANDLE *pcie);
 HAL_Status HAL_PCIE_InboundConfig(struct HAL_PCIE_HANDLE *pcie, int32_t index, int32_t bar, uint64_t cpuAddr);
-HAL_Status HAL_PCIE_OutboundConfig(struct HAL_PCIE_HANDLE *pcie, int32_t index, int type, uint64_t cpuAddr, uint64_t busAddr, uint32_t size);
+HAL_Status HAL_PCIE_OutboundConfig(struct HAL_PCIE_HANDLE *pcie, int32_t index, int type, uint64_t cpuAddr,
+                                   uint64_t busAddr, uint32_t size);
 int32_t HAL_PCIE_OutboundConfigCFG0(struct HAL_PCIE_HANDLE *pcie, HAL_PCI_DevT bdf, uint32_t size);
+HAL_Status HAL_PCIE_EnableELBIIndex0(struct HAL_PCIE_HANDLE *pcie);
+HAL_Status HAL_PCIE_EnableRstInt(struct HAL_PCIE_HANDLE *pcie);
+HAL_Status HAL_PCIE_SetBar(struct HAL_PCIE_HANDLE *pcie, uint32_t barno, int flags, int log2);
+HAL_Status HAL_PCIE_DisableBar(struct HAL_PCIE_HANDLE *pcie, uint32_t barno);
 
 /** @} */
 

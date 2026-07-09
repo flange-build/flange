@@ -817,6 +817,7 @@ struct VOP_REG {
 /* Memory Base */
 #define PMUGRF_BASE                    0xFF020000U /* PMUGRF base address */
 #define COREGRF_BASE                   0xFF040000U /* COREGRF base address */
+#define VIGRF_BASE                     0xFF050000U /* VIGRF base address */
 #define PMUSGRF_BASE                   0xFF080000U /* PMUSGRF base address */
 #define PVTM0_BASE                     0xFF240000U /* PVTM0 base address */
 #define TIMER_HP_BASE                  0xFF2F0000U /* TIMER_HP base address */
@@ -7732,8 +7733,6 @@ struct VOP_REG {
 #define VOP_DSP_CTRL2_INTERLACE_FIELD_POL_MASK             (0x1U << VOP_DSP_CTRL2_INTERLACE_FIELD_POL_SHIFT)            /* 0x00000002 */
 #define VOP_DSP_CTRL2_DITHER_UP_SHIFT                      (2U)
 #define VOP_DSP_CTRL2_DITHER_UP_MASK                       (0x1U << VOP_DSP_CTRL2_DITHER_UP_SHIFT)                      /* 0x00000004 */
-#define VOP_DSP_CTRL2_SW_OVERLAY_MODE_SHIFT                (4U)
-#define VOP_DSP_CTRL2_SW_OVERLAY_MODE_MASK                 (0x1U << VOP_DSP_CTRL2_SW_OVERLAY_MODE_SHIFT)                /* 0x00000010 */
 #define VOP_DSP_CTRL2_DITHER_DOWN_MODE_SHIFT               (6U)
 #define VOP_DSP_CTRL2_DITHER_DOWN_MODE_MASK                (0x1U << VOP_DSP_CTRL2_DITHER_DOWN_MODE_SHIFT)               /* 0x00000040 */
 #define VOP_DSP_CTRL2_DITHER_DOWN_SEL_SHIFT                (7U)
@@ -7890,8 +7889,6 @@ struct VOP_REG {
 #define VOP_WIN1_CTRL0_OFFSET                              (0x90U)
 #define VOP_WIN1_CTRL0_WIN1_EN_SHIFT                       (0U)
 #define VOP_WIN1_CTRL0_WIN1_EN_MASK                        (0x1U << VOP_WIN1_CTRL0_WIN1_EN_SHIFT)                       /* 0x00000001 */
-#define VOP_WIN1_CTRL0_WIN1_CSC_MODE_SHIFT                 (2U)
-#define VOP_WIN1_CTRL0_WIN1_CSC_MODE_MASK                  (0x1U << VOP_WIN1_CTRL0_WIN1_CSC_MODE_SHIFT)                 /* 0x00000004 */
 #define VOP_WIN1_CTRL0_WIN1_DATA_FMT_SHIFT                 (4U)
 #define VOP_WIN1_CTRL0_WIN1_DATA_FMT_MASK                  (0x7U << VOP_WIN1_CTRL0_WIN1_DATA_FMT_SHIFT)                 /* 0x00000070 */
 #define VOP_WIN1_CTRL0_WIN1_INTERLACE_READ_SHIFT           (8U)

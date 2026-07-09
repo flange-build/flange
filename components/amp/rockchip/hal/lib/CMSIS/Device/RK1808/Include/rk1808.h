@@ -711,8 +711,6 @@ struct PDM_REG {
     __I  uint32_t DATA3L_REG;                         /* Address Offset: 0x0050 */
     __I  uint32_t DATA_VALID;                         /* Address Offset: 0x0054 */
     __I  uint32_t VERSION;                            /* Address Offset: 0x0058 */
-         uint32_t RESERVED005C[233];                  /* Address Offset: 0x005C */
-    __I  uint32_t INCR_RXDR;                          /* Address Offset: 0x0400 */
 };
 /* VAD Register Structure Define */
 struct VAD_REG {
@@ -8873,6 +8871,7 @@ struct TIMER_REG {
 #define PDM_INT_ST_RXOI_SHIFT                              (1U)
 #define PDM_INT_ST_RXOI_MASK                               (0x1U << PDM_INT_ST_RXOI_SHIFT)                              /* 0x00000002 */
 /* RXFIFO_DATA_REG */
+#define PDM_RXFIFO_DATA_REG_OFFSET                         (0x30U)
 #define PDM_RXFIFO_DATA_REG_RXDR_SHIFT                     (0U)
 #define PDM_RXFIFO_DATA_REG_RXDR_MASK                      (0xFFFFFFFFU << PDM_RXFIFO_DATA_REG_RXDR_SHIFT)              /* 0xFFFFFFFF */
 /* DATA0R_REG */
@@ -8910,6 +8909,7 @@ struct TIMER_REG {
 #define PDM_DATA_VALID_PATH0_VLD_MASK                      (0x1U << PDM_DATA_VALID_PATH0_VLD_SHIFT)                     /* 0x00000008 */
 /* VERSION */
 #define PDM_VERSION_VERSION_SHIFT                          (0U)
+#define PDM_VERSION                                        (0x59313030U)
 #define PDM_VERSION_VERSION_MASK                           (0xFFFFFFFFU << PDM_VERSION_VERSION_SHIFT)                   /* 0xFFFFFFFF */
 /* INCR_RXDR */
 #define PDM_INCR_RXDR_RECEIVE_FIFO_DATA_SHIFT              (0U)

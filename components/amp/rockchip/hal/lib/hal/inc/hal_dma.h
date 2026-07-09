@@ -76,6 +76,12 @@ struct DMA_SLAVE_CONFIG {
  */
 typedef void (*DMA_Callback)(void *cparam);
 
+/**
+ * translate the mc buffer address to be accessible for DMA.
+ * e.g. dsp internal address(DTCM) to public address.
+ */
+typedef uint32_t (*DMA_ToDmaAddrFunc)(uint32_t mem_addr);
+
 /** @} */
 
 /********************* Public Function Definition ****************************/

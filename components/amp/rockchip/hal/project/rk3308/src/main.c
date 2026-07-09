@@ -10,7 +10,6 @@
 /********************* Private MACRO Definition ******************************/
 //#define TEST_DEMO
 //#define TEST_USE_RPMSG_INIT
-//#define TEST_USE_UART1M0
 
 /********************* Private Structure Definition **************************/
 
@@ -61,7 +60,7 @@ static struct GIC_IRQ_AMP_CTRL irqConfig = {
 #if defined(TEST_USE_UART1M0) && defined(PRIMARY_CPU)
 static struct UART_REG *pUart = UART1;
 #else
-static struct UART_REG *pUart = UART4;      // UART2 or UART4, selected depend on hardware board
+static struct UART_REG *pUart = UART4;      // UART2、UART3 or UART4, selected depend on hardware board
 #endif
 
 /********************* Private Function Definition ***************************/
@@ -83,6 +82,20 @@ static void HAL_IOMUX_Uart2M1Config(void)
                          GPIO_PIN_D2 |
                          GPIO_PIN_D3,
                          PIN_CONFIG_MUX_FUNC2);
+}
+
+static void HAL_IOMUX_Uart3M1Config(void)
+{
+    /* UART3 M1 RX-0C1 TX-0C2 */
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
+                         GPIO_PIN_C1 |
+                         GPIO_PIN_C2,
+                         PIN_CONFIG_MUX_FUNC3);
+
+    /* set UART master 1 IOMUX selection to M1 */
+    WRITE_REG_MASK_WE(GRF->SOC_CON5,
+                      GRF_SOC_CON5_GRF_UART3_MULTI_IOFUNC_SRC_SEL_MASK,
+                      (1 << GRF_SOC_CON5_GRF_UART3_MULTI_IOFUNC_SRC_SEL_SHIFT));
 }
 
 static void HAL_IOMUX_Uart4M0Config(void)
@@ -213,6 +226,9 @@ void main(void)
         if (UART2 == pUart) {
             HAL_IOMUX_Uart2M1Config();
             HAL_UART_Init(&g_uart2Dev, &hal_uart_config);
+        } else if (UART3 == pUart) {
+            HAL_IOMUX_Uart3M1Config();
+            HAL_UART_Init(&g_uart3Dev, &hal_uart_config);
         } else if (UART4 == pUart) {
             HAL_IOMUX_Uart4M0Config();
             HAL_UART_Init(&g_uart4Dev, &hal_uart_config);
@@ -222,7 +238,7 @@ void main(void)
 
     /* SPINLOCK Init */
 #ifdef HAL_SPINLOCK_MODULE_ENABLED
-    ownerID = HAL_CPU_TOPOLOGY_GetCurrentCpuId() << 1 | 1;
+    ownerID = HAL_CPU_TOPOLOGY_GetCurrentCpuId() + 1;
     HAL_SPINLOCK_Init(ownerID);
 #endif
 

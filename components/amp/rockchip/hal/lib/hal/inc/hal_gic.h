@@ -25,6 +25,7 @@
 #define HAL_GIC_IRQ_LINE_COUNT     (1020U)
 #define GICR_WAKER_PROCESSOR_SLEEP (1U << 1)
 #define GICR_WAKER_CHILDREN_ASLEEP (1U << 2)
+#define GICR_CTLR_DPG1NS           (1U << 25)
 
 typedef void (*GIC_IRQHandler) (uint32_t irq);
 
@@ -78,6 +79,7 @@ HAL_Status HAL_GIC_SetIRouter(uint32_t irq, uint32_t aff);
 HAL_Status HAL_GIC_Init(struct GIC_IRQ_AMP_CTRL *ampCtrl);
 HAL_Status HAL_GIC_SendSGI(IRQn_Type irq, uint32_t targetList, uint32_t routMode);
 HAL_Status HAL_GIC_SetDir(uint32_t irq);
+HAL_Status HAL_GIC_TouchICC(void);
 
 /** @} */
 

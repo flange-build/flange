@@ -424,9 +424,10 @@ static HAL_Status ACDCDIG_I2C_Disable(struct HAL_ACDCDIG_DEV *acdcDig)
  */
 static HAL_Status ACDCDIG_I2C_Start(struct HAL_ACDCDIG_DEV *acdcDig)
 {
-    uint32_t val, ret;
-
     return HAL_OK; /* FIXME: the i2c is used by MCU */
+
+#if 0
+    uint32_t val, ret;
 
     ret = HAL_ACDCDIG_RequestI2C(acdcDig, CODEC_USE_I2C);
     if (ret != HAL_OK) {
@@ -446,6 +447,7 @@ static HAL_Status ACDCDIG_I2C_Start(struct HAL_ACDCDIG_DEV *acdcDig)
     WRITE_REG(acdcDig->pReg->I2C_CON[0], val);
 
     return HAL_OK;
+#endif
 }
 
 /**
@@ -456,9 +458,10 @@ static HAL_Status ACDCDIG_I2C_Start(struct HAL_ACDCDIG_DEV *acdcDig)
  */
 static HAL_Status ACDCDIG_I2C_Stop(struct HAL_ACDCDIG_DEV *acdcDig)
 {
-    uint32_t ctrl, ret;
-
     return HAL_OK; /* FIXME: the i2c is used by MCU */
+
+#if 0
+    uint32_t ctrl, ret;
 
     ret = HAL_ACDCDIG_RequestI2C(acdcDig, CODEC_USE_I2C);
     if (ret != HAL_OK) {
@@ -474,6 +477,7 @@ static HAL_Status ACDCDIG_I2C_Stop(struct HAL_ACDCDIG_DEV *acdcDig)
     WRITE_REG(acdcDig->pReg->I2C_CON[0], ctrl);
 
     return HAL_OK;
+#endif
 }
 
 /**

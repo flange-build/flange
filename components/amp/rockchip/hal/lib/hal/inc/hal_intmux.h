@@ -32,6 +32,8 @@ extern uint32_t g_intmuxFastIrqTable[];
 /** @defgroup INTMUX_Public_Function_Declare Public Function Declare
  *  @{
  */
+HAL_Status HAL_INTMUX_SetPendingIRQ(uint32_t irq);
+HAL_Status HAL_INTMUX_ClearPendingIRQ(uint32_t irq);
 HAL_Status HAL_INTMUX_EnableIRQ(uint32_t irq);
 HAL_Status HAL_INTMUX_DisableIRQ(uint32_t irq);
 HAL_Status HAL_INTMUX_SetIRQHandler(uint32_t irq, HAL_INTMUX_HANDLER handler, void *args);

@@ -130,7 +130,7 @@ static const struct HYPER_PSTRAM psramInfo[] =
  * @param  psramBase: Choose psram map base addr.
  * @return PsramID: psram device id
  */
-static uint16_t HYPERPSRAM_GetDevId(struct HYPERBUS_REG *pReg, uint32_t psramBase)
+static uint16_t HYPERPSRAM_GetDevId(struct HYPERBUS_REG *pReg, uintptr_t psramBase)
 {
     uint16_t psramId;
 
@@ -224,8 +224,10 @@ static HAL_Status HYPERPSRAM_ModifyCR0(struct HAL_HYPERPSRAM_DEV *pHyperPsramDev
  * @return HAL_Status.
  */
 static HAL_Status HYPERBUS_Init(struct HYPERBUS_REG *pReg,
-                                uint32_t hyperMem)
+                                uintptr_t hyperMem)
 {
+    HAL_ASSERT(hyperMem <= 0xffffffff);
+
     WRITE_REG(pReg->MBR[0], hyperMem & HYPERBUS_MBR0_BASE_ADDR_MASK);
     WRITE_REG(pReg->RWDSIC, HYPERBUS_RWDSIC_RXEND_CTRL_MASK |
               HYPERBUS_RWDSIC_RXSTART_CTRL_MASK);

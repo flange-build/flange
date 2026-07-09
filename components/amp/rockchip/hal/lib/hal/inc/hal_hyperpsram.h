@@ -48,9 +48,9 @@ struct HAL_HYPERPSRAM_DEV {
     eCLOCK_Name clkID; /**< The hyperbus clk id */
     uint32_t aclkGateID; /**< The hyperbus aclk gate id */
     uint32_t sclkGateID; /**< The hyperbus sclk gate id */
-    uint32_t hyperMem[2]; /**< The hyperbus psram base address
-                            *  which should be initialized by device.
-                            */
+    uintptr_t hyperMem[2]; /**< The hyperbus psram base address
+                             *  which should be initialized by device.
+                             */
     uint32_t hyperMaxFreq; /**< The user setting hyperbus max frequency, unit Hz */
     uint32_t psramFreq; /**< The hyperbus psram frequency which
                           *  should initialized by device.

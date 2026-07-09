@@ -57,7 +57,7 @@
 #define PLL_DSMPD_MASK     1 << PLL_DSMPD_SHIFT
 #define PLL_FRAC_SHIFT     0
 #define PLL_FRAC_MASK      0xffffff << PLL_FRAC_SHIFT
-#elif defined(SOC_RK3588)
+#elif defined(SOC_RK3588) || defined(SOC_RK3576)
 #define PLLCON0_M_SHIFT     0
 #define PLLCON0_M_MASK      0x3ff << PLLCON0_M_SHIFT
 #define PLLCON1_P_SHIFT     0
@@ -115,8 +115,8 @@
 
 #define CRU_PLL_ROUND_UP_TO_KHZ(x) (HAL_DIV_ROUND_UP((x), KHZ) * KHZ)
 
-#define CRU_READ(r)           (*(volatile uint32_t *)(r))
-#define CRU_WRITE(r, b, w, v) (*(volatile uint32_t *)(r) = ((w) << (16) | (v) << (b)))
+#define CRU_READ(r)           (*(volatile uint32_t *)((uintptr_t)(r)))
+#define CRU_WRITE(r, b, w, v) (*(volatile uint32_t *)((uintptr_t)(r)) = ((w) << (16) | (v) << (b)))
 
 /********************* Private Structure Definition **************************/
 static struct PLL_CONFIG g_rockchipAutoTable;
@@ -145,6 +145,22 @@ static uint32_t CRU_Gcd(uint32_t m, uint32_t n)
 static int isBetterFreq(uint32_t now, uint32_t new, uint32_t best)
 {
     return (new <= now && new > best);
+}
+
+int HAL_CRU_FreqGetMuxArray(uint32_t freq, uint32_t *table, int num)
+{
+    uint32_t best = 0, mux = 0;
+    int i;
+
+    for (i = 0; i < num; i++) {
+        if (isBetterFreq(freq, table[i], best)) {
+            best = table[i];
+            mux = i;
+            break;
+        }
+    }
+
+    return mux;
 }
 
 int HAL_CRU_FreqGetMux4(uint32_t freq, uint32_t freq0, uint32_t freq1,
@@ -191,6 +207,17 @@ int HAL_CRU_FreqGetMux2(uint32_t freq, uint32_t freq0, uint32_t freq1)
     return HAL_CRU_FreqGetMux4(freq, freq0, freq1, freq1, freq1);
 }
 
+uint32_t HAL_CRU_MuxGetFreqArray(uint32_t muxName, uint32_t *table, int num)
+{
+    uint32_t mux = HAL_CRU_ClkGetMux(muxName);
+
+    if (mux <= (uint32_t)num) {
+        return table[mux];
+    } else {
+        return HAL_INVAL;
+    }
+}
+
 uint32_t HAL_CRU_MuxGetFreq4(uint32_t muxName, uint32_t freq0, uint32_t freq1,
                              uint32_t freq2, uint32_t freq3)
 {
@@ -221,6 +248,30 @@ uint32_t HAL_CRU_MuxGetFreq3(uint32_t muxName, uint32_t freq0,
 uint32_t HAL_CRU_MuxGetFreq2(uint32_t muxName, uint32_t freq0, uint32_t freq1)
 {
     return HAL_CRU_MuxGetFreq4(muxName, freq0, freq1, freq1, freq1);
+}
+
+int HAL_CRU_RoundFreqGetMuxArray(uint32_t freq, uint32_t *table, int num, uint32_t *pFreqOut, bool is_div)
+{
+    uint32_t mux = 0;
+    int i = 0;
+
+    for (i = 0; i < num; i++) {
+        if (is_div) {
+            if (table[i] && (table[i] % freq == 0)) {
+                mux = i;
+                break;
+            }
+        } else {
+            if (table[i] && (table[i] == freq)) {
+                mux = i;
+                break;
+            }
+        }
+    }
+
+    *pFreqOut = table[mux];
+
+    return mux;
 }
 
 int HAL_CRU_RoundFreqGetMux4(uint32_t freq, uint32_t pFreq0,
@@ -257,7 +308,7 @@ int HAL_CRU_RoundFreqGetMux2(uint32_t freq, uint32_t pFreq0, uint32_t pFreq1, ui
     return HAL_CRU_RoundFreqGetMux4(freq, pFreq0, pFreq1, 0, 0, pFreqOut);
 }
 
-#if defined(SOC_RK3588)
+#if defined(SOC_RK3588) || defined(SOC_RK3576)
 /**
  * @brief Get pll parameter by auto.
  * @param  finHz: pll intput freq
@@ -640,7 +691,7 @@ HAL_Status HAL_CRU_SetPllPowerDown(struct PLL_SETUP *pSetup)
     return HAL_OK;
 }
 
-#elif defined(SOC_RK3588)
+#elif defined(SOC_RK3588) || defined(SOC_RK3576)
 /*
  * Formulas also embedded within the fractional PLL Verilog model:
  * If K = 0 (DSM is disabled, "integer mode")
@@ -692,6 +743,12 @@ uint32_t HAL_CRU_GetPllFreq(struct PLL_SETUP *pSetup)
         rate = 32768;
         break;
     }
+
+#if defined(SOC_RK3576)
+    if (!(pSetup->modeMask)) {
+        rate = rate * 2;
+    }
+#endif
 
     return rate;
 }
@@ -811,7 +868,7 @@ HAL_Status HAL_CRU_SetPllPowerDown(struct PLL_SETUP *pSetup)
  */
 uint32_t HAL_CRU_GetPllFreq(struct PLL_SETUP *pSetup)
 {
-    uint32_t refDiv, fbDiv, postdDv1, postDiv2, frac, dsmpd;
+    uint64_t refDiv, fbDiv, postdDv1, postDiv2, frac, dsmpd;
     uint32_t mode = 0, rate = PLL_INPUT_OSC_RATE;
 
     mode = PLL_GET_PLLMODE(READ_REG(*(pSetup->modeOffset)), pSetup->modeShift,
@@ -888,9 +945,7 @@ HAL_Status HAL_CRU_SetPllFreq(struct PLL_SETUP *pSetup, uint32_t rate)
     WRITE_REG_MASK_WE(*(pSetup->conOffset0), PLL_FBDIV_MASK, pConfig->fbDiv << PLL_FBDIV_SHIFT);
     WRITE_REG_MASK_WE(*(pSetup->conOffset1), PLL_DSMPD_MASK, pConfig->dsmpd << PLL_DSMPD_SHIFT);
 
-    if (pConfig->frac) {
-        WRITE_REG(*(pSetup->conOffset2), (READ_REG(*(pSetup->conOffset2)) & 0xff000000) | pConfig->frac);
-    }
+    WRITE_REG(*(pSetup->conOffset2), (READ_REG(*(pSetup->conOffset2)) & 0xff000000) | pConfig->frac);
 
     /* Pll Power up */
     WRITE_REG_MASK_WE(*(pSetup->conOffset1), PWRDOWN_MASK, 0 << PWRDOWN_SHIFT);
@@ -977,6 +1032,7 @@ HAL_Check HAL_CRU_ClkIsEnabled(uint32_t clk)
     return ret;
 }
 
+HAL_SECTION_SRAM_CODE
 HAL_Status HAL_CRU_ClkEnable(uint32_t clk)
 {
     const struct HAL_CRU_DEV *ctrl = CRU_GetInfo();
@@ -1079,7 +1135,7 @@ HAL_Status HAL_CRU_ClkResetSyncAssert(int numClks, uint32_t *clks)
 
     reg = ctrl->banks[bank].cruBase + ctrl->banks[bank].softOffset + index * 4;
     CRU_WRITE(reg, 0, val, val);
-    HAL_DBG("%s: index: 0x%lx, val: 0x%lx\n", __func__, index, val);
+    HAL_DBG("%s: index: 0x%" PRIx32 ", val: 0x%" PRIx32 "\n", __func__, index, val);
 
     return HAL_OK;
 }
@@ -1102,23 +1158,25 @@ HAL_Status HAL_CRU_ClkResetSyncDeassert(int numClks, uint32_t *clks)
 
     reg = ctrl->banks[bank].cruBase + ctrl->banks[bank].softOffset + index * 4;
     CRU_WRITE(reg, 0, val, 0);
-    HAL_DBG("%s: index: 0x%lx, val: 0x%lx\n", __func__, index, val);
+    HAL_DBG("%s: index: 0x%" PRIx32 ", val: 0x%" PRIx32 "\n", __func__, index, val);
 
     return HAL_OK;
 }
 
+HAL_SECTION_SRAM_CODE
 HAL_Status HAL_CRU_ClkSetDiv(uint32_t divName, uint32_t divValue)
 {
     const struct HAL_CRU_DEV *ctrl = CRU_GetInfo();
     uint32_t shift, mask, index;
-    uint32_t reg, bank;
+    uint32_t reg, bank, maxDiv;
 
     index = CLK_DIV_GET_REG_OFFSET(divName);
     shift = CLK_DIV_GET_BITS_SHIFT(divName);
     HAL_ASSERT(shift < 16);
     mask = CLK_DIV_GET_MASK(divName);
-    if (divValue > mask) {
-        divValue = mask;
+    maxDiv = CLK_DIV_GET_MAXDIV(divName) + 1;
+    if (divValue > maxDiv) {
+        divValue = maxDiv;
     }
 
     bank = CLK_DIV_GET_BANK(divName);
@@ -1383,7 +1441,7 @@ HAL_Status HAL_CRU_ClkResetSyncAssert(int numClks, uint32_t *clks)
 #else
     CRU->CRU_SOFTRST_CON[index] = VAL_MASK_WE(val, val);
 #endif
-    HAL_DBG("%s: index: 0x%lx, val: 0x%lx\n", __func__, index, val);
+    HAL_DBG("%s: index: 0x%" PRIx32 ", val: 0x%" PRIx32 "\n", __func__, index, val);
 
     return HAL_OK;
 }
@@ -1410,21 +1468,23 @@ HAL_Status HAL_CRU_ClkResetSyncDeassert(int numClks, uint32_t *clks)
 #else
     CRU->CRU_SOFTRST_CON[index] = VAL_MASK_WE(val, 0);
 #endif
-    HAL_DBG("%s: index: 0x%lx, val: 0x%lx\n", __func__, index, val);
+    HAL_DBG("%s: index: 0x%" PRIx32 ", val: 0x%" PRIx32 "\n", __func__, index, val);
 
     return HAL_OK;
 }
 
+HAL_SECTION_SRAM_CODE
 HAL_Status HAL_CRU_ClkSetDiv(uint32_t divName, uint32_t divValue)
 {
-    uint32_t shift, mask, index;
+    uint32_t shift, mask, index, maxDiv;
 
     index = CLK_DIV_GET_REG_OFFSET(divName);
     shift = CLK_DIV_GET_BITS_SHIFT(divName);
     HAL_ASSERT(shift < 16);
     mask = CLK_DIV_GET_MASK(divName);
-    if (divValue > mask) {
-        divValue = mask;
+    maxDiv = CLK_DIV_GET_MAXDIV(divName) + 1;
+    if (divValue > maxDiv) {
+        divValue = maxDiv;
     }
 
 #ifdef CRU_CLK_DIV_CON_CNT
@@ -1602,6 +1662,31 @@ HAL_Status HAL_CRU_FracdivGetConfig(uint32_t rateOut, uint32_t rate,
     return HAL_OK;
 }
 
+HAL_Status HAL_CRU_FracdivGetConfigV2(uint32_t rateOut, uint32_t rate,
+                                      uint32_t *numerator,
+                                      uint32_t *denominator)
+{
+    uint32_t gcdVal;
+
+    gcdVal = CRU_Gcd(rate, rateOut);
+    if (!gcdVal) {
+        return HAL_ERROR;
+    }
+
+    *numerator = rateOut / gcdVal;
+    *denominator = rate / gcdVal;
+
+    if (*numerator < 4) {
+        *numerator *= 4;
+        *denominator *= 4;
+    }
+    if (*numerator > 0xffffff || *denominator > 0xffffff) {
+        return HAL_INVAL;
+    }
+
+    return HAL_OK;
+}
+
 HAL_Status HAL_CRU_ClkNp5BestDiv(eCLOCK_Name clockName, uint32_t rate, uint32_t pRate, uint32_t *bestdiv)
 {
     uint32_t div = CLK_GET_DIV(clockName);
@@ -1633,6 +1718,11 @@ __WEAK HAL_Status HAL_CRU_VopDclkDisable(uint32_t gateId)
     return HAL_OK;
 }
 
+__WEAK HAL_Status HAL_CRU_PvtConfig(struct HAL_PVT_CFG *pvtCfg)
+{
+    return HAL_OK;
+}
+
 HAL_Status HAL_CRU_SetGlbSrst(eCRU_GlbSrstType type)
 {
 #ifdef CRU_GLB_SRST_FST_VALUE_OFFSET
@@ -1643,6 +1733,17 @@ HAL_Status HAL_CRU_SetGlbSrst(eCRU_GlbSrstType type)
 #ifdef CRU_GLB_SRST_SND_VALUE_OFFSET
     if (type == GLB_SRST_SND) {
         CRU->GLB_SRST_SND_VALUE = GLB_SRST_SND;
+    }
+#endif
+
+#ifdef TOPCRU_GLB_SRST_FST_OFFSET
+    if (type == GLB_SRST_FST) {
+        TOPCRU->GLB_SRST_FST = GLB_SRST_FST;
+    }
+#endif
+#ifdef TOPCRU_GLB_SRST_SND_OFFSET
+    if (type == GLB_SRST_SND) {
+        TOPCRU->GLB_SRST_SND = GLB_SRST_SND;
     }
 #endif
 

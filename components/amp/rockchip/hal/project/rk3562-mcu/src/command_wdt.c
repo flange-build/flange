@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2023 Rockchip Electronics Co., Ltd.
  */
-#ifdef RKMCU_RK3562_BUS
+#ifdef HAL_BUS_MCU_CORE
 
 #include <stdio.h>
 #include "hal_base.h"
@@ -94,7 +94,7 @@ static void command_wdt_process(uint8_t *in, int len)
     }
 
     HAL_WDT_SetTimeout(command.time_s);
-    printf("wdt_test: timeout (%s) set-%ds, get-%ds, TORR-0x%lx\n",
+    printf("wdt_test: timeout (%s) set-%ds, get-%ds, TORR-0x%" PRIx32 "\n",
            command.auto_mode ? "auto_mode" : "normal_mode",
            command.time_s, HAL_WDT_GetTimeout(), WDT->TORR);
     if (command.auto_mode) {

@@ -99,7 +99,7 @@ static void gpio_test(void)
     /* Test GPIO output */
     HAL_GPIO_SetPinDirection(GPIO2, GPIO_PIN_B0, GPIO_OUT);
     level = HAL_GPIO_GetPinLevel(GPIO2, GPIO_PIN_B0);
-    printf("test_gpio level = %ld\n", level);
+    printf("test_gpio level = %" PRId32 "\n", level);
     HAL_DelayMs(5000);
     if (level == GPIO_HIGH) {
         HAL_GPIO_SetPinLevel(GPIO2, GPIO_PIN_B0, GPIO_LOW);
@@ -107,7 +107,7 @@ static void gpio_test(void)
         HAL_GPIO_SetPinLevel(GPIO2, GPIO_PIN_B0, GPIO_HIGH);
     }
     level = HAL_GPIO_GetPinLevel(GPIO2, GPIO_PIN_B0);
-    printf("test_gpio level = %ld\n", level);
+    printf("test_gpio level = %" PRId32 "\n", level);
     HAL_DelayMs(5000);
 
     /* Test GPIO input */
@@ -139,7 +139,7 @@ static void mbox_rx_callback(struct MBOX_CMD_DAT *msg, void *args)
     struct MBOX_CMD_DAT rx_msg = *msg;
 
     printf("MBOX callback!\n");
-    printf("test_mbox receive cmd=0x%lx data=0x%lx\n", rx_msg.CMD, rx_msg.DATA);
+    printf("test_mbox receive cmd=0x%" PRIx32 " data=0x%" PRIx32 "\n", rx_msg.CMD, rx_msg.DATA);
 }
 
 static void mbox_test(void)
@@ -166,7 +166,7 @@ static void mbox_test(void)
     HAL_RISCVIC_EnableIRQ(MAILBOX0_BB_IRQn);
 
     HAL_DelayMs(1000);
-    printf("test_mbox send cmd=0x%lx data=0x%lx\n", tx_msg.CMD, tx_msg.DATA);
+    printf("test_mbox send cmd=0x%" PRIx32 " data=0x%" PRIx32 "\n", tx_msg.CMD, tx_msg.DATA);
     HAL_MBOX_SendMsg2(pMBox, tx_chan, &tx_msg, MBOX_B2A);
 }
 #endif

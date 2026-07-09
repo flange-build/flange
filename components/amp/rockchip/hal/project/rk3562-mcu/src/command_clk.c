@@ -3,7 +3,7 @@
  * Copyright (c) 2023 Rockchip Electronics Co., Ltd.
  */
 
-#ifdef RKMCU_RK3562_BUS
+#ifdef HAL_BUS_MCU_CORE
 
 #include <stdio.h>
 #include "hal_base.h"
@@ -124,7 +124,7 @@ static void command_clk_dump_all_clk(void)
     int i;
 
     for (i = 0; i < (sizeof(clk) / sizeof(clk[1])); i++) {
-        printf("    %-20s %ld\n", clk[i], HAL_CRU_ClkGetFreq(string_to_clk(clk[i])));
+        printf("    %-20s %" PRId32 "\n", clk[i], HAL_CRU_ClkGetFreq(string_to_clk(clk[i])));
     }
 }
 
@@ -143,7 +143,7 @@ static void command_clk_process(uint8_t *in, int len)
         HAL_CRU_ClkSetFreq(command.clk_id, command.rate);
         break;
     case CLK_OPERATION_GET:
-        printf("%ld\n", HAL_CRU_ClkGetFreq(command.clk_id));
+        printf("%" PRId32 "\n", HAL_CRU_ClkGetFreq(command.clk_id));
         break;
     case CLK_OPERATION_GET_ALL:
         command_clk_dump_all_clk();

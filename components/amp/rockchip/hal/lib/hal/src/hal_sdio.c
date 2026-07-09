@@ -425,7 +425,7 @@ HAL_Status HAL_MMC_SetCardWidth(struct HAL_MMC_HOST *host, int32_t width)
         WRITE_REG(pReg->CTYPE, 0x10000);
         break;
     default:
-        HAL_DBG_ERR("%s: card width %ld is not supported\n", __func__, width);
+        HAL_DBG_ERR("%s: card width %" PRId32 " is not supported\n", __func__, width);
 
         return HAL_INVAL;
         break;

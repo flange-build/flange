@@ -5,6 +5,26 @@
 
 #include "hal_bsp.h"
 
+#ifdef HAL_HCD_MODULE_ENABLED
+const struct HAL_USB_DEV g_usbotgh0Dev =
+{
+    .pReg = OTG,
+    .hclkGateID = HCLK_USB2OTG_CLK_GATE,
+    .utmiclkGateID = USBPHY_REF_CLK_GATE,
+    .irqNum = OTG_IRQn,
+    .cfg =
+    {
+        .phyif = USB_PHY_UTMI_WIDTH_16,
+        .speed = USB_OTG_SPEED_HIGH,
+        .hcNum = 8,
+        .dmaEnable = true,
+        .sofEnable = false,
+        .lpmEnable = false,
+        .suspendEnable = false,
+    },
+};
+#endif
+
 #ifdef HAL_I2C_MODULE_ENABLED
 const struct HAL_I2C_DEV g_i2c0Dev =
 {
@@ -47,6 +67,28 @@ const struct HAL_I2C_DEV g_i2c3Dev =
 };
 #endif
 
+#ifdef HAL_PCD_MODULE_ENABLED
+const struct HAL_USB_DEV g_usbdDev =
+{
+    .pReg = OTG,
+    .hclkGateID = HCLK_USB2OTG_CLK_GATE,
+    .utmiclkGateID = USBPHY_REF_CLK_GATE,
+    .irqNum = OTG_IRQn,
+    .cfg =
+    {
+        .epNum = 10,
+        .ep0Mps = USB_OTG_MAX_EP0_SIZE,
+        .phyif = USB_PHY_UTMI_WIDTH_16,
+        .speed = USB_OTG_SPEED_HIGH,
+        .dmaEnable = true,
+        .sofEnable = false,
+        .lpmEnable = false,
+        .vbusSensingEnable = false,
+        .suspendEnable = false,
+    },
+};
+#endif
+
 #ifdef HAL_PL330_MODULE_ENABLED
 struct HAL_PL330_DEV g_pl330Dev0 =
 {
@@ -65,7 +107,7 @@ const struct HAL_PWM_DEV g_pwm0Dev =
     .clkID = CLK_PWM,
     .clkGateID = CLK_PWM_PLL_CLK_GATE,
     .pclkGateID = PCLK_PWM_GATE,
-    .irqNum = PWM0_PWR_IRQn,
+    .irqNum[0] = PWM0_PWR_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm1Dev =
@@ -74,7 +116,7 @@ const struct HAL_PWM_DEV g_pwm1Dev =
     .clkID = CLK_PWM1,
     .clkGateID = CLK_PWM1_PLL_CLK_GATE,
     .pclkGateID = PCLK_PWM1_GATE,
-    .irqNum = PWM1_PWR_IRQn,
+    .irqNum[0] = PWM1_PWR_IRQn,
 };
 #endif
 
@@ -97,6 +139,7 @@ const struct HAL_SPI_DEV g_spi0Dev = {
     .clkId = CLK_SPI0,
     .clkGateID = CLK_SPI0_PLL_CLK_GATE,
     .pclkGateID = PCLK_SPI0_GATE,
+    .maxFreq = 100000000,
     .irqNum = SPI0_IRQn,
     .isSlave = false,
     .txDma = {
@@ -118,6 +161,7 @@ const struct HAL_SPI_DEV g_spi1Dev = {
     .clkId = CLK_SPI1,
     .clkGateID = CLK_SPI1_PLL_CLK_GATE,
     .pclkGateID = PCLK_SPI1_GATE,
+    .maxFreq = 100000000,
     .irqNum = SPI1_IRQn,
     .isSlave = false,
     .txDma = {
@@ -182,29 +226,6 @@ const struct HAL_UART_DEV g_uart4Dev =
 };
 #endif
 
-#if defined(HAL_PCD_MODULE_ENABLED) || defined(HAL_HCD_MODULE_ENABLED)
-const struct HAL_USB_DEV g_usbdDev =
-{
-    .pReg = OTG,
-    .hclkGateID = HCLK_USB2OTG_CLK_GATE,
-    .utmiclkGateID = USBPHY_REF_CLK_GATE,
-    .irqNum = OTG_IRQn,
-    .cfg =
-    {
-        .epNum = 10,
-        .ep0Mps = USB_OTG_MAX_EP0_SIZE,
-        .phyif = USB_PHY_UTMI_WIDTH_16,
-        .speed = USB_OTG_SPEED_HIGH,
-        .hcNum = 8,
-        .dmaEnable = true,
-        .sofEnable = false,
-        .lpmEnable = false,
-        .vbusSensingEnable = false,
-        .suspendEnable = false,
-    },
-};
-#endif
-
 #if defined(HAL_EHCI_MODULE_ENABLED) || defined(HAL_OHCI_MODULE_ENABLED)
 const struct HAL_USBH_DEV g_usbhDev =
 {
@@ -221,8 +242,10 @@ const struct HAL_USBH_DEV g_usbhDev =
 const struct HAL_GMAC_DEV g_gmacDev =
 {
     .pReg = GMAC,
-    .clkID = CLK_GMAC,
-    .clkGateID = ACLK_PDGMAC_CLK_GATE,
+    .clkID125M = CLK_GMAC,
+    .clkID50M = CLK_GMAC,
+    .clkGateID125M = ACLK_PDGMAC_CLK_GATE,
+    .clkGateID50M = ACLK_PDGMAC_CLK_GATE,
     .pclkID = PCLK_GMAC,
     .pclkGateID = PCLK_GMAC_CLK_GATE,
     .irqNum = GMAC0_IRQn,

@@ -277,8 +277,8 @@ static uint32_t HAL_CRU_ClkGetUartFreq(eCLOCK_Name clockName)
 
     rate = HAL_CRU_MuxGetFreq3(mux, pRate, (pRate / m) * n, PLL_INPUT_OSC_RATE);
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX) => (0x%08lX|0U): rate=%ld, mux=%ld, "
-                "prate0=%ld, prate1=%ld, prate2=%d\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 ") => (0x%08" PRIX32 "|0U): rate=%" PRId32 ", mux=%" PRId32 ", "
+                "prate0=%" PRId32 ", prate1=%" PRId32 ", prate2=%d\n",
                 __func__, muxSrc, divSrc, mux, rate, HAL_CRU_ClkGetMux(mux),
                 pRate, pRate / m * n, PLL_INPUT_OSC_RATE);
 
@@ -406,9 +406,9 @@ static HAL_Status HAL_CRU_ClkSetUartFreq(eCLOCK_Name clockName, uint32_t rate)
         HAL_CRU_ClkSetMux(mux, 1);
     }
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX) => (0x%08lX|0U): "
-                "rate=%ld, pRate=%ld, muxSrc=%ld, divSrc=%ld, mux=%ld, "
-                "maxdiv=%ld, n/m=%ld/%ld\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 ") => (0x%08" PRIX32 "|0U): "
+                "rate=%" PRId32 ", pRate=%" PRId32 ", muxSrc=%" PRId32 ", divSrc=%" PRId32 ", mux=%" PRId32 ", "
+                "maxdiv=%" PRId32 ", n/m=%" PRId32 "/%" PRId32 "\n",
                 __func__, muxSrc, divSrc, mux,
                 rate, m ? (rate * m / n) : (rate * HAL_CRU_ClkGetDiv(divSrc)),
                 HAL_CRU_ClkGetMux(muxSrc), HAL_CRU_ClkGetDiv(divSrc),
@@ -549,6 +549,15 @@ static uint32_t HAL_CRU_ClkGetAudioFreq(eCLOCK_Name clockName)
         return HAL_INVAL;
     }
 
+    if (clockName == CLK_I2S1_8CH_TX || clockName == CLK_I2S1_8CH_RX) {
+        pRate = s_cpllFreq / HAL_CRU_ClkGetDiv(divSrc);
+        HAL_CRU_ClkGetFracDiv(divFrac, &n, &m);
+        rate = HAL_CRU_MuxGetFreq3(mux, pRate, pRate / m * n,
+                                   PLL_INPUT_OSC_RATE / 2);
+
+        return rate;
+    }
+
     pRate = HAL_CRU_MuxGetFreq2(muxSrc,
                                 s_gpllFreq / HAL_CRU_ClkGetDiv(divSrc),
                                 s_aupllFreq / HAL_CRU_ClkGetDiv(divSrc));
@@ -556,8 +565,8 @@ static uint32_t HAL_CRU_ClkGetAudioFreq(eCLOCK_Name clockName)
     rate = HAL_CRU_MuxGetFreq4(mux, pRate, pRate / m * n,
                                HAL_INVAL, PLL_INPUT_OSC_RATE / 2);
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX) => (0x%08lX|0U): rate=%ld, mux=%ld, "
-                "prate0=%ld, prate1=%ld, prate2=%d, prate3=%d\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 ") => (0x%08" PRIX32 "|0U): rate=%" PRId32 ", mux=%" PRId32 ", "
+                "prate0=%" PRId32 ", prate1=%" PRId32 ", prate2=%d, prate3=%d\n",
                 __func__, muxSrc, divSrc, mux, rate, HAL_CRU_ClkGetMux(mux),
                 pRate, pRate / m * n, HAL_INVAL, PLL_INPUT_OSC_RATE / 2);
 
@@ -742,6 +751,25 @@ static HAL_Status HAL_CRU_ClkSetAudioFreq(eCLOCK_Name clockName, uint32_t rate)
     HAL_CRU_ClkEnable(gateId);
     HAL_CRU_ClkEnable(fracGateId);
 
+    if (clockName == CLK_I2S1_8CH_TX || clockName == CLK_I2S1_8CH_RX) {
+        if (PLL_INPUT_OSC_RATE / 2 == rate) {
+            HAL_CRU_ClkSetMux(mux, 2);
+            HAL_CRU_ClkDisable(fracGateId);
+        } else if (DIV_NO_REM(s_cpllFreq, rate, maxDiv)) {
+            HAL_CRU_ClkSetDiv(divSrc, s_cpllFreq / rate);
+            HAL_CRU_ClkSetMux(mux, 0);
+            HAL_CRU_ClkDisable(fracGateId);
+        } else {
+            HAL_CRU_FracdivGetConfig(rate, s_cpllFreq, &n, &m);
+            HAL_CRU_ClkSetDiv(divSrc, 1);
+            HAL_CRU_ClkSetFracDiv(divFrac, n, m);
+            HAL_CRU_ClkSetMux(mux, 1);
+            HAL_CRU_ClkGetFracDiv(divFrac, &n, &m);
+        }
+
+        return HAL_OK;
+    }
+
     if (PLL_INPUT_OSC_RATE / 2 == rate) {
         HAL_CRU_ClkSetMux(mux, 3);
         HAL_CRU_ClkDisable(fracGateId);
@@ -769,9 +797,9 @@ static HAL_Status HAL_CRU_ClkSetAudioFreq(eCLOCK_Name clockName, uint32_t rate)
         HAL_CRU_ClkGetFracDiv(divFrac, &n, &m);
     }
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX) => (0x%08lX|0U): "
-                "rate=%ld, pRate=%ld, muxSrc=%ld, divSrc=%ld, mux=%ld, "
-                "maxdiv=%ld, n/m=%ld/%ld\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 ") => (0x%08" PRIX32 "|0U): "
+                "rate=%" PRId32 ", pRate=%" PRId32 ", muxSrc=%" PRId32 ", divSrc=%" PRId32 ", mux=%" PRId32 ", "
+                "maxdiv=%" PRId32 ", n/m=%" PRId32 "/%" PRId32 "\n",
                 __func__, muxSrc, divSrc, mux, rate,
                 m ? (rate * m / n) : (rate * HAL_CRU_ClkGetDiv(divSrc)),
                 HAL_CRU_ClkGetMux(muxSrc),
@@ -822,8 +850,8 @@ static uint32_t HAL_CRU_ClkGetVopFreq(eCLOCK_Name clockName)
         freq /= HAL_CRU_ClkGetDiv(divSrc);
     }
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX) => (0x%08lX|0U): srcMux=%ld, mux=%ld, "
-                "rate=%ld, div=%ld, prate0=%ld, prate1=%ld, prate2=%ld, prate3=%ld\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 ") => (0x%08" PRIX32 "|0U): srcMux=%" PRId32 ", mux=%" PRId32 ", "
+                "rate=%" PRId32 ", div=%" PRId32 ", prate0=%" PRId32 ", prate1=%" PRId32 ", prate2=%" PRId32 ", prate3=%" PRId32 "\n",
                 __func__, muxSrc, divSrc, muxVal, HAL_CRU_ClkGetMux(muxSrc),
                 HAL_CRU_ClkGetMux(mux), freq, HAL_CRU_ClkGetDiv(divSrc),
                 s_gpllFreq, s_cpllFreq, s_v0pllFreq, s_aupllFreq);
@@ -924,8 +952,8 @@ static uint32_t HAL_CRU_ClkSetVopFreq(eCLOCK_Name clockName, uint32_t rate)
         }
     }
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX) => (0x%08lX|0U): best=%d, "
-                "rate=%ld, pRate=%ld, muxSrc=%ld, divSrc=%ld, mux=%ld, maxdiv=%ld\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 ") => (0x%08" PRIX32 "|0U): best=%d, "
+                "rate=%" PRId32 ", pRate=%" PRId32 ", muxSrc=%" PRId32 ", divSrc=%" PRId32 ", mux=%" PRId32 ", maxdiv=%" PRId32 "\n",
                 __func__, muxSrc, divSrc, mux, best, rate,
                 rate * HAL_CRU_ClkGetDiv(divSrc), HAL_CRU_ClkGetMux(muxSrc),
                 HAL_CRU_ClkGetDiv(divSrc), HAL_CRU_ClkGetMux(mux), maxDiv);
@@ -1049,7 +1077,7 @@ static void CRU_InitPlls(void)
     s_lpllFreq = HAL_CRU_GetPllFreq(&LPLL);
     s_npllFreq = HAL_CRU_GetPllFreq(&NPLL);
 
-    HAL_CRU_DBG("%s: cpll=%ld, gpll=%ld, v0pll=%ld, aupll=%ld, ppll=%ld, lpll=%ld, npll=%ld\n",
+    HAL_CRU_DBG("%s: cpll=%" PRId32 ", gpll=%" PRId32 ", v0pll=%" PRId32 ", aupll=%" PRId32 ", ppll=%" PRId32 ", lpll=%" PRId32 ", npll=%" PRId32 "\n",
                 __func__, s_cpllFreq, s_gpllFreq, s_v0pllFreq, s_aupllFreq, s_ppllFreq, s_lpllFreq, s_npllFreq);
 }
 
@@ -1059,8 +1087,8 @@ uint32_t HAL_CRU_ClkGetFreq(eCLOCK_Name clockName)
     uint32_t clkDiv = CLK_GET_DIV(clockName);
     uint32_t freq = 0;
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX)\n", __func__, clkMux, clkDiv);
-    HAL_CRU_DBG("%s: cpll=%ld, gpll=%ld, v0pll=%ld, aupll=%ld, ppll=%ld\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 ")\n", __func__, clkMux, clkDiv);
+    HAL_CRU_DBG("%s: cpll=%" PRId32 ", gpll=%" PRId32 ", v0pll=%" PRId32 ", aupll=%" PRId32 ", ppll=%" PRId32 "\n",
                 __func__, s_cpllFreq, s_gpllFreq, s_v0pllFreq, s_aupllFreq, s_ppllFreq);
 
     if (cru_suspend) {
@@ -1148,6 +1176,7 @@ uint32_t HAL_CRU_ClkGetFreq(eCLOCK_Name clockName)
         break;
 
     case HCLK_VAD:
+    case PCLK_CENTER_ROOT:
         freq = HAL_CRU_MuxGetFreq4(clkMux, _MHZ(200), _MHZ(100), _MHZ(50), PLL_INPUT_OSC_RATE);
         break;
 
@@ -1221,7 +1250,7 @@ uint32_t HAL_CRU_ClkGetFreq(eCLOCK_Name clockName)
         freq /= (HAL_CRU_ClkGetDiv(clkDiv));
     }
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX): freq: %ld=%ld/%ld\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 "): freq: %" PRId32 "=%" PRId32 "/%" PRId32 "\n",
                 __func__, clkMux, clkDiv, freq, freq * HAL_CRU_ClkGetDiv(clkDiv),
                 HAL_CRU_ClkGetDiv(clkDiv));
 
@@ -1235,8 +1264,8 @@ HAL_Status HAL_CRU_ClkSetFreq(eCLOCK_Name clockName, uint32_t rate)
     uint32_t clkDiv = CLK_GET_DIV(clockName);
     uint32_t mux = 0, div = 1, pRate = 0;
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX): rate=%ld\n", __func__, clkMux, clkDiv, rate);
-    HAL_CRU_DBG("%s: cpll=%ld, gpll=%ld, v0pll=%ld, aupll=%ld, ppll=%ld\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 "): rate=%" PRId32 "\n", __func__, clkMux, clkDiv, rate);
+    HAL_CRU_DBG("%s: cpll=%" PRId32 ", gpll=%" PRId32 ", v0pll=%" PRId32 ", aupll=%" PRId32 ", ppll=%" PRId32 "\n",
                 __func__, s_cpllFreq, s_gpllFreq, s_v0pllFreq, s_aupllFreq, s_ppllFreq);
 
     if (cru_suspend) {
@@ -1355,6 +1384,7 @@ HAL_Status HAL_CRU_ClkSetFreq(eCLOCK_Name clockName, uint32_t rate)
         break;
 
     case HCLK_VAD:
+    case PCLK_CENTER_ROOT:
         mux = HAL_CRU_FreqGetMux4(rate, _MHZ(200), _MHZ(100), _MHZ(50), PLL_INPUT_OSC_RATE);
         break;
 
@@ -1387,6 +1417,7 @@ HAL_Status HAL_CRU_ClkSetFreq(eCLOCK_Name clockName, uint32_t rate)
     case CLK_PWM1:
     case CLK_PWM2:
     case CLK_PWM3:
+    case CLK_PMU1PWM:
         mux = HAL_CRU_FreqGetMux3(rate, _MHZ(100), _MHZ(50), PLL_INPUT_OSC_RATE);
         break;
 
@@ -1447,7 +1478,7 @@ HAL_Status HAL_CRU_ClkSetFreq(eCLOCK_Name clockName, uint32_t rate)
         HAL_CRU_ClkSetMux(clkMux, mux);
     }
 
-    HAL_CRU_DBG("%s: (0x%08lX|0x%08lX): mux=%ld, rate=%ld, pRate=%ld, div=%ld, maxdiv=%d\n",
+    HAL_CRU_DBG("%s: (0x%08" PRIX32 "|0x%08" PRIX32 "): mux=%" PRId32 ", rate=%" PRId32 ", pRate=%" PRId32 ", div=%" PRId32 ", maxdiv=%d\n",
                 __func__, clkMux, clkDiv, mux, rate, pRate, div, CLK_DIV_GET_MAXDIV(clkDiv));
 
     return HAL_OK;
@@ -1499,6 +1530,36 @@ HAL_Status HAL_CRU_Resume(void)
     HAL_CRU_ClkSetMux(HCLK_PMU1_ROOT_I_SEL, hclk_pmu1_root_i_sel);
 
     cru_suspend = 0;
+
+    return HAL_OK;
+}
+
+/**
+ * @brief wdt glbrst enable.
+ * @param  wdtType: wdt reset type.
+ * @return HAL_OK.
+ * @attention these APIs allow direct use in the HAL layer.
+ */
+HAL_Status HAL_CRU_WdtGlbRstEnable(eCRU_WdtRstType wdtType)
+{
+    uint32_t mask = 0, val = 0;
+
+    switch (wdtType) {
+    case GLB_RST_FST_WDT0:
+        mask = CRU_GLB_RST_CON_WDT_TRIG_GLBRST_SEL_MASK | CRU_GLB_RST_CON_OSC_CHK_TRIG_GLBRST_EN_MASK;
+        val = (1 << CRU_GLB_RST_CON_WDT_TRIG_GLBRST_SEL_SHIFT) | (1 << CRU_GLB_RST_CON_OSC_CHK_TRIG_GLBRST_EN_SHIFT);
+        break;
+    case GLB_RST_SND_WDT0:
+        mask = CRU_GLB_RST_CON_WDT_TRIG_GLBRST_SEL_MASK | CRU_GLB_RST_CON_OSC_CHK_TRIG_GLBRST_EN_MASK;
+        val = (1 << CRU_GLB_RST_CON_OSC_CHK_TRIG_GLBRST_EN_SHIFT);
+        break;
+
+    default:
+
+        return HAL_INVAL;
+    }
+
+    CRU->GLB_RST_CON = VAL_MASK_WE(mask, val);
 
     return HAL_OK;
 }

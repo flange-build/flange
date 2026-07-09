@@ -5,6 +5,21 @@
 #include "soc.h"
 
 #if defined(HAL_AP_CORE) && defined(HAL_DCACHE_MODULE_ENABLED)
+#ifdef __aarch64__
+
+extern uint64_t MMUTable[];
+void MMU_CreateTranslationTable(void)
+{
+    MMU_InitTable(MMUTable);
+    MMU_Map(MMUTable, FIRMWARE_BASE, DRAM_SIZE, NORMAL);
+    MMU_Map(MMUTable, SHMEM_BASE, SHMEM_SIZE, SHARED_NORMAL);
+#ifdef LINUX_RPMSG_BASE
+    MMU_Map(MMUTable, LINUX_RPMSG_BASE, LINUX_RPMSG_SIZE, UNCACHE_NORMAL);
+#endif
+    MMU_Map(MMUTable, 0xF0000000, 0xE900000, DEVICE);
+    __ISB();
+}
+#else
 static uint32_t Sect_Normal;        // outer & inner wb/wa, non-shareable, executable, rw, domain 0
 static uint32_t Sect_Normal_SH;     // as Sect_Normal, but shareable
 static uint32_t Sect_Device_RW;     // as Sect_Device_RO, but writeable
@@ -67,4 +82,5 @@ void MMU_CreateTranslationTable(void)
     __set_DACR(1);
     __ISB();
 }
+#endif
 #endif

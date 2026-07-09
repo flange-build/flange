@@ -19,6 +19,7 @@
 #define _HAL_SFC_H_
 
 #include "hal_def.h"
+#include "hal_spi_mem.h"
 
 /***************************** MACRO Definition ******************************/
 /** @defgroup SFC_Exported_Definition_Group1 Basic Definition
@@ -32,6 +33,9 @@
 #define SFC_LINES_X1 (0)
 #define SFC_LINES_X2 (1)
 #define SFC_LINES_X4 (2)
+
+struct SNOR_HOST;
+struct SPI_NAND_HOST;
 
 /** SFC_CTRL bit union */
 typedef union {
@@ -101,9 +105,8 @@ struct HAL_SFC_HOST {
  */
 HAL_Status HAL_SFC_Init(struct HAL_SFC_HOST *host);
 HAL_Status HAL_SFC_DeInit(struct HAL_SFC_HOST *host);
-#ifdef HAL_SNOR_MODULE_ENABLED
 HAL_Status HAL_SFC_SpiXfer(struct SNOR_HOST *spi, struct HAL_SPI_MEM_OP *op);
-#endif
+HAL_Status HAL_SFC_SPINandSpiXfer(struct SPI_NAND_HOST *spi, struct HAL_SPI_MEM_OP *op);
 HAL_Status HAL_SFC_IRQHelper(struct HAL_SFC_HOST *host);
 HAL_Status HAL_SFC_MaskDMAInterrupt(struct HAL_SFC_HOST *host);
 HAL_Status HAL_SFC_UnmaskDMAInterrupt(struct HAL_SFC_HOST *host);

@@ -186,7 +186,7 @@ void main(void)
 
     /* SPINLOCK Init */
 #ifdef HAL_SPINLOCK_MODULE_ENABLED
-    ownerID = HAL_CPU_TOPOLOGY_GetCurrentCpuId() << 1 | 1;
+    ownerID = HAL_CPU_TOPOLOGY_GetCurrentCpuId() + 1;
     HAL_SPINLOCK_Init(ownerID);
 #endif
 

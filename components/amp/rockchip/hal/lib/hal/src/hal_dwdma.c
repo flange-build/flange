@@ -66,7 +66,7 @@
 
 __STATIC_INLINE void DWC_DumpRegs(struct DWDMA_CHAN *dwc)
 {
-    HAL_DBG("SAR: 0x%08lx DAR: 0x%08lx LLP: 0x%08lx CTL: 0x%08lx:%08lx\n",
+    HAL_DBG("SAR: 0x%08" PRIx32 " DAR: 0x%08" PRIx32 " LLP: 0x%08" PRIx32 " CTL: 0x%08" PRIx32 ":%08" PRIx32 "\n",
             READ_REG(dwc->creg->SAR), READ_REG(dwc->creg->DAR),
             READ_REG(dwc->creg->LLP), READ_REG(dwc->creg->CTL_HI),
             READ_REG(dwc->creg->CTL_LO));
@@ -801,7 +801,7 @@ HAL_Status HAL_DWDMA_PrepDmaCyclic(struct DWDMA_CHAN *dwc, uint32_t dmaAddr,
     dwc->callback = callback;
     dwc->cparam = cparam;
 
-    HAL_DCACHE_CleanByRange((uint32_t)dwc->desc,
+    HAL_DCACHE_CleanByRange((uintptr_t)dwc->desc,
                             NR_DESCS_PER_CHANNEL * sizeof(*(dwc->desc)));
 
     return HAL_OK;
@@ -897,7 +897,7 @@ HAL_Status HAL_DWDMA_PrepDmaSingle(struct DWDMA_CHAN *dwc, uint32_t dmaAddr,
     dwc->callback = callback;
     dwc->cparam = cparam;
 
-    HAL_DCACHE_CleanByRange((uint32_t)dwc->desc,
+    HAL_DCACHE_CleanByRange((uintptr_t)dwc->desc,
                             NR_DESCS_PER_CHANNEL * sizeof(*(dwc->desc)));
 
     return HAL_OK;
@@ -975,7 +975,7 @@ HAL_Status HAL_DWDMA_PrepDmaMemcpy(struct DWDMA_CHAN *dwc, uint32_t dst,
     dwc->callback = callback;
     dwc->cparam = cparam;
 
-    HAL_DCACHE_CleanByRange((uint32_t)dwc->desc,
+    HAL_DCACHE_CleanByRange((uintptr_t)dwc->desc,
                             NR_DESCS_PER_CHANNEL * sizeof(*(dwc->desc)));
 
     return HAL_OK;

@@ -6,7 +6,7 @@
 MEMORY
 {
     RAM(rxw) : ORIGIN = 0x00000000, LENGTH = 0x100000
-    LINUX_RPMSG (rxw) : ORIGIN = 0xa0000000, LENGTH = 0x00500000
+    LINUX_RPMSG (rxw) : ORIGIN = 0x00100000, LENGTH = 0x00500000
 }
 
 ENTRY(Reset_Handler)
@@ -51,7 +51,7 @@ SECTIONS
         . = ALIGN(4);
         __zero_table_start__ = .;
         LONG (__bss_start__)
-        LONG (__bss_end__ - __bss_start__ / 4)
+        LONG (__bss_end__ - __bss_start__)
         __zero_table_end__ = .;
     } > RAM
 

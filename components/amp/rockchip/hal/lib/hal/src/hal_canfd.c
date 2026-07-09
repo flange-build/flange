@@ -38,6 +38,16 @@
  *  @{
  */
 /********************* Private MACRO Definition ******************************/
+#if defined(RKMCU_RK2118) || defined(SOC_RK3576) || defined(SOC_RK3506)
+#define CANFD_RX_MAX_DATA        18
+#define ISM_WATERMASK_CAN        0x50/* word */
+#define ISM_WATERMASK_CANFD      0x7e/* word */
+#define RETX_TIME_LIMIT_CNT      0x12c/* 300 */
+#define BUSOFF_RCY_CNT_FAST      4
+#define BUSOFF_RCY_CNT_SLOW      5
+#define BUSOFF_RCY_TIME_CNT_FAST 0x3d0900 /* 40ms : cnt * (1 / can_clk) */
+#define BUSOFF_RCY_TIME_CNT_SLOW 0x1312d00 /* 200ms : cnt * (1 / can_clk) */
+#endif
 /********************* Private Structure Definition **************************/
 /********************* Private Variable Definition ***************************/
 
@@ -302,10 +312,21 @@ HAL_Status HAL_CANFD_SetDBps(struct CAN_REG *pReg, eCANFD_Bps bps)
               (brq << CAN_FD_DATA_BITTIMING_BRQ_SHIFT) |
               (tseg1 << CAN_FD_DATA_BITTIMING_TSEG1_SHIFT) |
               (tseg2 << CAN_FD_DATA_BITTIMING_TSEG2_SHIFT));
+#if defined(SOC_RK3568) || defined(SOC_RK3358)
     if (tdc) {
         WRITE_REG(pReg->TRANSMIT_DELAY_COMPENSATION,
                   (tdc << CAN_TRANSMIT_DELAY_COMPENSATION_TDC_OFFSET_SHIFT) | CAN_TRANSMIT_DELAY_COMPENSATION_TDC_ENABLE_MASK);
     }
+#elif defined(RKMCU_RK2118) || defined(SOC_RK3576) || defined(SOC_RK3506)
+    if (tdc) {
+        WRITE_REG(pReg->FD_TDC,
+                  (tdc << CAN_FD_TDC_TDC_OFFSET_SHIFT) | CAN_FD_TDC_TDC_ENABLE_MASK);
+    }
+    WRITE_REG(pReg->FD_DATA_BITTIMING,
+              CAN_FD_DATA_BITTIMING_BRS_MODE_MASK |
+              ((tseg1 - 4) << CAN_FD_DATA_BITTIMING_BRS_TSEG1_SHIFT) |
+              pReg->FD_DATA_BITTIMING);
+#endif
 
     return HAL_OK;
 }
@@ -333,6 +354,7 @@ HAL_Status HAL_CANFD_Config(struct CAN_REG *pReg, eCANFD_Bps nbps, eCANFD_Bps db
  * @param  initStrust: can init parameter
  * @return HAL_OK.
  */
+#if defined(SOC_RK3568) || defined(SOC_RK3358)
 HAL_Status HAL_CANFD_Init(struct CAN_REG *pReg, struct CANFD_CONFIG *initStrust)
 {
     uint32_t filterID, filterIDMask;
@@ -383,7 +405,46 @@ HAL_Status HAL_CANFD_Init(struct CAN_REG *pReg, struct CANFD_CONFIG *initStrust)
 
     return HAL_OK;
 }
+#elif defined(RKMCU_RK2118) || defined(SOC_RK3576) || defined(SOC_RK3506)
+HAL_Status HAL_CANFD_Init(struct CAN_REG *pReg, struct CANFD_CONFIG *initStrust)
+{
+    HAL_ASSERT(IS_CAN_INSTANCE(pReg));
+    HAL_ASSERT(initStrust != NULL);
 
+    CANFD_SetResetMode(pReg);
+    pReg->INT_MASK = CAN_INT_RXSTR_TIMEOUT_INT_MASK | CAN_INT_ISM_WTM_INT_MASK;
+
+    WRITE_REG(pReg->STR_CTL, CAN_STR_CTL_STR_TIMEOUT_MODE_MASK | (1 << CAN_STR_CTL_ISM_SEL_SHIFT));
+    WRITE_REG(pReg->STR_WTM, ISM_WATERMASK_CAN);
+
+    WRITE_REG(pReg->ERROR_MASK, 0);
+    if ((initStrust->canfdMode & CANFD_MODE_LOOPBACK) == CANFD_MODE_LOOPBACK) {
+        SET_BIT(pReg->MODE, CAN_MODE_LBACK_MODE_MASK);
+        WRITE_REG(pReg->ERROR_MASK, CAN_ERROR_MASK_ACK_ERROR_MASK);
+    }
+    if ((initStrust->canfdMode & CANFD_MODE_FD) == CANFD_MODE_FD) {
+        WRITE_REG(pReg->STR_CTL, CAN_STR_CTL_STR_TIMEOUT_MODE_MASK | (2 << CAN_STR_CTL_ISM_SEL_SHIFT));
+        WRITE_REG(pReg->STR_WTM, ISM_WATERMASK_CANFD);
+    }
+    if ((initStrust->canfdMode & CANFD_MODE_LISTENONLY) == CANFD_MODE_LISTENONLY) {
+        SET_BIT(pReg->MODE, CAN_MODE_SILENT_MODE_MASK);
+        SET_BIT(pReg->ERROR_MASK, CAN_ERROR_MASK_ACK_ERROR_MASK);
+    }
+    if ((initStrust->canfdMode & CANFD_MODE_3_SAMPLES) == CANFD_MODE_3_SAMPLES) {
+        SET_BIT(pReg->FD_NOMINAL_BITTIMING, CAN_FD_NOMINAL_BITTIMING_SAMPLE_MODE_MASK);
+    }
+    WRITE_REG(pReg->AUTO_RETX_CFG, CAN_AUTO_RETX_CFG_AUTO_RETX_MODE_MASK | CAN_AUTO_RETX_CFG_RETX_LIMIT_EN_MASK | (RETX_TIME_LIMIT_CNT << CAN_AUTO_RETX_CFG_RETX_TIME_LIMIT_SHIFT));
+    WRITE_REG(pReg->FD_BRS_CFG, 0x7);
+    WRITE_REG(pReg->BUSOFF_RCY_CFG, CAN_BUSOFF_RCY_CFG_RCY_EN_MASK | BUSOFF_RCY_CNT_FAST);
+    WRITE_REG(pReg->BUSOFF_RCY_THR, BUSOFF_RCY_TIME_CNT_FAST);
+    SET_BIT(pReg->MODE, CAN_MODE_WORK_MODE_MASK);
+
+    HAL_CANFD_Config(pReg, initStrust->bps, initStrust->bps);
+
+    return HAL_OK;
+}
+
+#endif
 /**
  * @brief CANFD start.
  * @param  pReg: can base
@@ -431,6 +492,7 @@ HAL_Status HAL_CANFD_Transmit(struct CAN_REG *pReg, struct CANFD_MSG *TxMsg)
         cmd = CAN_CMD_TX1_REQ_MASK;
     }
 
+    WRITE_REG(pReg->FD_TXFRAMEINFO, 0);
     if (TxMsg->ide == CANFD_ID_EXTENDED) {
         WRITE_REG(pReg->FD_TXID, TxMsg->extId);
         SET_BIT(pReg->FD_TXFRAMEINFO, CAN_FD_TXFRAMEINFO_TXFRAME_FORMAT_MASK);
@@ -472,12 +534,18 @@ HAL_Status HAL_CANFD_Receive(struct CAN_REG *pReg, struct CANFD_MSG *RxMsg)
 
     info = READ_REG(pReg->RX_FIFO_RDATA);
     id = READ_REG(pReg->RX_FIFO_RDATA);
+
+#if defined(SOC_RK3568) || defined(SOC_RK3358)
     READ_REG(pReg->RX_FIFO_RDATA);
     for (i = 0; i < 16; i++) {
         data[i] = READ_REG(pReg->RX_FIFO_RDATA);
     }
-
-    len = info & CAN_FD_RXFRAMEINFO_RXDATA_LENGTH_MASK;
+#elif defined(RKMCU_RK2118) || defined(SOC_RK3576) || defined(SOC_RK3506)
+    for (i = 0; i < (CANFD_RX_MAX_DATA - 2); i++) {
+        data[i] = READ_REG(pReg->RX_FIFO_RDATA);
+    }
+#endif
+    len = (info & CAN_FD_RXFRAMEINFO_RXDATA_LENGTH_MASK) >> CAN_FD_RXFRAMEINFO_RXDATA_LENGTH_SHIFT;
     RxMsg->ide = (info & CAN_FD_RXFRAMEINFO_RXFRAME_FORMAT_MASK) >> CAN_FD_RXFRAMEINFO_RXFRAME_FORMAT_SHIFT;
     RxMsg->rtr = (info & CAN_FD_RXFRAMEINFO_RX_RTR_MASK) >> CAN_FD_RXFRAMEINFO_RX_RTR_SHIFT;
     RxMsg->fdf = (info & CAN_FD_RXFRAMEINFO_RX_FDF_MASK) >> CAN_FD_RXFRAMEINFO_RX_FDF_SHIFT;
@@ -485,7 +553,7 @@ HAL_Status HAL_CANFD_Receive(struct CAN_REG *pReg, struct CANFD_MSG *RxMsg)
     if (RxMsg->ide == CANFD_ID_EXTENDED) {
         RxMsg->extId = id & CAN_FD_RXID_RX_ID_MASK;
     } else {
-        RxMsg->stdId = id & 0x3ff;
+        RxMsg->stdId = id & 0x7ff;
     }
 
     for (i = 0; i < RxMsg->dlc; i += 4) {
@@ -497,6 +565,25 @@ HAL_Status HAL_CANFD_Receive(struct CAN_REG *pReg, struct CANFD_MSG *RxMsg)
 
     return HAL_OK;
 }
+
+#if defined(RKMCU_RK2118) || defined(SOC_RK3576) || defined(SOC_RK3506)
+/**
+ * @brief CANFD busoff recovery.
+ * @param  pReg: can base
+ * @param  isr: can interrupt status
+ * @return HAL_OK.
+ */
+static HAL_Status HAL_CANFD_BusOffRcy(struct CAN_REG *pReg, uint32_t isr)
+{
+    WRITE_REG(pReg->INT_MASK, 0xffff);
+    WRITE_REG(pReg->BUSOFF_RCY_CFG, CAN_BUSOFF_RCY_CFG_RCY_SCLR_MASK);
+    WRITE_REG(pReg->BUSOFF_RCY_THR, BUSOFF_RCY_TIME_CNT_SLOW);
+    WRITE_REG(pReg->BUSOFF_RCY_CFG, CAN_BUSOFF_RCY_CFG_RCY_EN_MASK | BUSOFF_RCY_CNT_SLOW);
+    WRITE_REG(pReg->INT_MASK, CAN_INT_RXSTR_TIMEOUT_INT_MASK | CAN_INT_ISM_WTM_INT_MASK);
+
+    return HAL_OK;
+}
+#endif
 
 /**
  * @brief CANFD get interrupt.
@@ -511,6 +598,12 @@ uint32_t HAL_CANFD_GetInterrupt(struct CAN_REG *pReg)
 
     isr = READ_REG(pReg->INT);
 
+#if defined(RKMCU_RK2118) || defined(SOC_RK3576) || defined(SOC_RK3506)
+    if (isr & CAN_INT_BUSOFF_RCY_INT_MASK) {
+        HAL_CANFD_BusOffRcy(pReg, isr);
+    }
+#endif
+
     /* set 1 to clear interrupt */
     WRITE_REG(pReg->INT, isr);
 
@@ -522,6 +615,7 @@ uint32_t HAL_CANFD_GetInterrupt(struct CAN_REG *pReg)
  * @param type: interrupt type
  * @return err interrupt mask combin.
  */
+#if defined(SOC_RK3568) || defined(SOC_RK3358)
 uint32_t HAL_CANFD_GetErrInterruptMaskCombin(eCANFD_IntType type)
 {
     uint32_t isr = 0;
@@ -550,7 +644,37 @@ uint32_t HAL_CANFD_GetErrInterruptMaskCombin(eCANFD_IntType type)
 
     return isr;
 }
+#elif defined(RKMCU_RK2118) || defined(SOC_RK3576) || defined(SOC_RK3506)
+uint32_t HAL_CANFD_GetErrInterruptMaskCombin(eCANFD_IntType type)
+{
+    uint32_t isr = 0;
 
+    switch (type) {
+    case CANFD_INT_ERR:
+        isr = CAN_INT_BUS_OFF_INT_MASK |
+              CAN_INT_ERROR_INT_MASK |
+              CAN_INT_TX_ARBIT_FAIL_INT_MASK |
+              CAN_INT_PASSIVE_ERROR_INT_MASK |
+              CAN_INT_OVERLOAD_INT_MASK |
+              CAN_INT_ERROR_WARNING_INT_MASK;
+        break;
+    case CANFD_INT_RX_OF:
+        isr = CAN_INT_RXSTR_OVERFLOW_INT_MASK | CAN_INT_RXSTR_FULL_INT_MASK;
+        break;
+    case CANFD_INT_TX_FINISH:
+        isr = CAN_INT_TX_FINISH_INT_MASK;
+        break;
+    case CANFD_INT_RX_FINISH:
+        isr = CAN_INT_RX_FINISH_INT_MASK;
+        break;
+    default:
+        break;
+    }
+
+    return isr;
+}
+
+#endif
 /** @} */
 
 /** @} */

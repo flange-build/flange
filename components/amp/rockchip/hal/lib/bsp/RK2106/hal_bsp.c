@@ -11,7 +11,7 @@ struct HAL_ACODEC_DEV g_acodecDev =
 {
     .pReg = ACODEC,
     .hclk = PCLK_ACODEC_GATE,
-    .mclk = 24000000,
+    .mclkRate = 24000000,
     .micBias = ACODEC_MICBIAS_SEL2V0,
     .micDifferential = true,
 };
@@ -38,7 +38,7 @@ struct HAL_I2S_DEV g_i2s0Dev =
     .bclkFs = 64,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(I2S0->RXDR),
+        .addr = I2S0_BASE + I2S_RXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S0_RX,
@@ -46,7 +46,7 @@ struct HAL_I2S_DEV g_i2s0Dev =
     },
     .txDmaData =
     {
-        .addr = (uint32_t)&(I2S0->TXDR),
+        .addr = I2S0_BASE + I2S_TXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S0_TX,
@@ -63,7 +63,7 @@ struct HAL_I2S_DEV g_i2s1Dev =
     .bclkFs = 64,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(I2S1->RXDR),
+        .addr = I2S1_BASE + I2S_RXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S1_RX,
@@ -71,7 +71,7 @@ struct HAL_I2S_DEV g_i2s1Dev =
     },
     .txDmaData =
     {
-        .addr = (uint32_t)&(I2S1->TXDR),
+        .addr = I2S1_BASE + I2S_TXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S1_TX,

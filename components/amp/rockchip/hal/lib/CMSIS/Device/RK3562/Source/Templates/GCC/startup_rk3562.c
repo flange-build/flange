@@ -260,14 +260,14 @@ void Dump_Regs(uint32_t *regs, uint32_t mode)
         printf("fiq mode:\n");
         break;
     default:
-        printf("unknow mode:%ld\n", mode);
+        printf("unknow mode:%" PRId32 "\n", mode);
     }
 
-    printf("pc : %08lx  lr : %08lx cpsr: %08lx\n", regs[15], regs[14], regs[16]);
-    printf("sp : %08lx  ip : %08lx  fp : %08lx\n", regs[13], regs[12], regs[11]);
-    printf("r10: %08lx  r9 : %08lx  r8 : %08lx\n", regs[10], regs[9], regs[8]);
-    printf("r7 : %08lx  r6 : %08lx  r5 : %08lx  r4 : %08lx\n", regs[7], regs[6], regs[5], regs[4]);
-    printf("r3 : %08lx  r2 : %08lx  r1 : %08lx  r0 : %08lx\n", regs[3], regs[2], regs[1], regs[0]);
+    printf("pc : %08" PRIx32 "  lr : %08" PRIx32 " cpsr: %08" PRIx32 "\n", regs[15], regs[14], regs[16]);
+    printf("sp : %08" PRIx32 "  ip : %08" PRIx32 "  fp : %08" PRIx32 "\n", regs[13], regs[12], regs[11]);
+    printf("r10: %08" PRIx32 "  r9 : %08" PRIx32 "  r8 : %08" PRIx32 "\n", regs[10], regs[9], regs[8]);
+    printf("r7 : %08" PRIx32 "  r6 : %08" PRIx32 "  r5 : %08" PRIx32 "  r4 : %08" PRIx32 "\n", regs[7], regs[6], regs[5], regs[4]);
+    printf("r3 : %08" PRIx32 "  r2 : %08" PRIx32 "  r1 : %08" PRIx32 "  r0 : %08" PRIx32 "\n", regs[3], regs[2], regs[1], regs[0]);
 
     printf("\nstack: \n");
 
@@ -278,19 +278,19 @@ void Dump_Regs(uint32_t *regs, uint32_t mode)
             printf("\n");
         }
         if (i % 4 == 0) {
-            printf("0x%08lx: ", stack + i * 4);
+            printf("0x%08" PRIx32 ": ", stack + i * 4);
         }
 
-        printf("0x%08lx  ", buf[i]);
+        printf("0x%08" PRIx32 "  ", buf[i]);
         if ((buf[i] >= STEXT && buf[i] < ETEXT) && j < 16) {
             call_stack[j++] = buf[i];
         }
     }
 
     printf("\n\n");
-    printf("Show more call stack info by run: addr2line -e hal0.elf -a -f %08lx %08lx ", regs[15], regs[14]);
+    printf("Show more call stack info by run: addr2line -e hal0.elf -a -f %08" PRIx32 " %08" PRIx32 " ", regs[15], regs[14]);
     for (i = 0; i < j; i++) {
-        printf("%08lx ", call_stack[i]);
+        printf("%08" PRIx32 " ", call_stack[i]);
     }
     printf("\n");
 }

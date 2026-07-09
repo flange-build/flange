@@ -93,6 +93,9 @@
 #define GMAC_CORE_INIT (GMAC_CONFIG_JD | GMAC_CONFIG_PS | GMAC_CONFIG_ACS | \
                         GMAC_CONFIG_BE | GMAC_CONFIG_DCRS)
 
+/* Filter */
+#define GMAC_PACKET_FILTER_PM (1 << GMAC_MAC_PACKET_FILTER_PM_SHIFT)
+
 /* GMAC HW features1 bitmap */
 #define GMAC_HW_FEAT_AVSEL       (1 << GMAC_MAC_HW_FEATURE1_AVSEL_SHIFT)
 #define GMAC_HW_TSOEN            (1 << GMAC_MAC_HW_FEATURE1_TSOEN_SHIFT)
@@ -277,15 +280,65 @@
 #define DMA_CHAN_INTR_DEFAULT_MASK (DMA_CHAN_INTR_NORMAL | \
                                     DMA_CHAN_INTR_ABNORMAL)
 
+/* PTP related */
+#define GMAC_TSCR_TSENA       (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSENA_SHIFT)
+#define GMAC_TSCR_TSCFUPDT    (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSCFUPDT_SHIFT)
+#define GMAC_TSCR_TSINIT      (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSINIT_SHIFT)
+#define GMAC_TSCR_TSUPDT      (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSUPDT_SHIFT)
+#define GMAC_TSCR_TSTRIG      (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSTRIG_SHIFT)
+#define GMAC_TSCR_TSADDREG    (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSADDREG_SHIFT)
+#define GMAC_TSCR_TSENALL     (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSENALL_SHIFT)
+#define GMAC_TSCR_TSCTRLSSR   (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSCTRLSSR_SHIFT)
+#define GMAC_TSCR_TSVER2ENA   (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSVER2ENA_SHIFT)
+#define GMAC_TSCR_TSIPENA     (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSIPENA_SHIFT)
+#define GMAC_TSCR_TSIPV6ENA   (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSIPV6ENA_SHIFT)
+#define GMAC_TSCR_TSIPV4ENA   (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSIPV4ENA_SHIFT)
+#define GMAC_TSCR_TSEVNTENA   (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSEVNTENA_SHIFT)
+#define GMAC_TSCR_TSMSTRENA   (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSMSTRENA_SHIFT)
+#define GMAC_TSCR_SNAPTYPSEL  (1 << GMAC_MAC_TIMESTAMP_CONTROL_SNAPTYPSEL_SHIFT)
+#define GMAC_TSCR_TSENMACADDR (1 << GMAC_MAC_TIMESTAMP_CONTROL_TSENMACADDR_SHIFT)
+#define GMAC_TSCR_ESTI        (1 << GMAC_MAC_TIMESTAMP_CONTROL_ESTI_SHIFT)
+#define GMAC_TSCR_TXTSSTSM    (1 << GMAC_MAC_TIMESTAMP_CONTROL_TXTSSTSM_SHIFT)
+#define GMAC_TSCR_AV8021ASMEN (1 << GMAC_MAC_TIMESTAMP_CONTROL_AV8021ASMEN_SHIFT)
+
+#define PTP_STNSUR_ADDSUB_SHIFT   31
+#define PTP_DIGITAL_ROLLOVER_MODE 0x3B9ACA00           /* 10e9-1 ns */
+#define PTP_BINARY_ROLLOVER_MODE  0x80000000           /* ~0.466 ns */
+
+/* SSIR defines */
+#define PTP_SSIR_SSINC_MAX         0xff
+#define GMAC4_PTP_SSIR_SSINC_SHIFT 16
+
+/* pps0 */
+#define PPS_MASK       0xff
+#define PPSEN0         (1 << GMAC_MAC_PPS_CONTROL_PPSEN0_SHIFT)
+#define TRGTMODSEL0(x) (x << GMAC_MAC_PPS_CONTROL_TRGTMODSEL0_SHIFT)
+#define TRGTBUSY0      (1 << GMAC_MAC_PPS0_TARGET_TIME_NS_TRGTBUSY0_SHIFT)
+
 /* Description related */
+#define TDES2_TIMESTAMP_ENABLE (0x1 << 30)
+
 #define GMAC_DESC3_OWN   (0x1 << 31)
 #define GMAC_DESC3_IOC   (0x1 << 30)
 #define GMAC_DESC3_FD    (0x1 << 29)
 #define GMAC_DESC3_LD    (0x1 << 28)
 #define GMAC_DESC3_BUF1V (0x1 << 24)
+#define GMAC_DESC3_CIC   (0x3 << 16)
 
 #define DES3_ERROR_SUMMARY (1 << 15)
-#define DES3_ERROR_SUMMARY (1 << 15)
+
+/* RDES3 (write back format) */
+#define RDES3_CONTEXT_DESCRIPTOR_SHIFT 30
+#define RDES1_TIMESTAMP_AVAILABLE      (1 << 14)
+#define RDES3_RDES1_VALID              (1 << 26)
+#define RDES3_CONTEXT_DESCRIPTOR       (1 << 30)
+
+/* TDES3 (write back format) */
+#define TDES3_TIMESTAMP_STATUS (1 << 17)
+#define TDES3_CONTEXT_TYPE     (1 << 30)
+
+/* TDS3 use for both format (read and write back) */
+#define RDES3_OWN (1 << 31)
 
 /* Generic MII registers. */
 #define MII_BMCR        0x00    /* Basic mode control register */
@@ -465,11 +518,20 @@
 
 #define ETH_FCS_LEN 4 /* Octets in the FCS */
 
+#define NSEC_PER_SEC 1000000000L
+
+#define GMAC_GET_ENTRY(x, size) ((x + 1) & (size - 1))
+
 /********************* Private Structure Definition **************************/
 
 /********************* Private Variable Definition ***************************/
 
 /********************* Private Function Definition ***************************/
+
+static inline uint64_t div_u64(uint64_t dividend, uint32_t divisor)
+{
+    return dividend / divisor;
+}
 
 /**
   * @brief  Wait for Mdio to idle state.
@@ -893,6 +955,528 @@ static HAL_Status PHY_Config(struct GMAC_HANDLE *pGMAC)
     return HAL_OK;
 }
 
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+/**
+  * @brief  Enables or disables multicast for ptp1588
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  enable: enable or disable multicast.
+  * @return None
+  */
+static void GMAC_PTPEnableMulticast(struct GMAC_HANDLE *pGMAC, bool enable)
+{
+    uint32_t val;
+
+    val = READ_REG(pGMAC->pReg->MAC_PACKET_FILTER);
+    if (enable) {
+        val |= GMAC_PACKET_FILTER_PM;
+    } else {
+        val &= ~GMAC_PACKET_FILTER_PM;
+    }
+    WRITE_REG(pGMAC->pReg->MAC_PACKET_FILTER, val);
+}
+
+/**
+  * @brief  Enables or disables the PTP timestamp control for transmit and receive frames.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  enable: ENABLE or DISABLE.
+  * @return None
+  */
+static void GMAC_PTPEnableControl(struct GMAC_HANDLE *pGMAC, bool enable)
+{
+    uint32_t control;
+
+    if (enable) {
+        /* Enable the PTP time stamp for transmit and receive frames */
+        control = GMAC_TSCR_TSENA | GMAC_TSCR_TSCTRLSSR | GMAC_TSCR_TSENALL;
+        WRITE_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL, control);
+    } else {
+        /* Disable the PTP time stamp for transmit and receive frames */
+        control = READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL);
+        control &= ~GMAC_TSCR_TSENA;
+        WRITE_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL, control);
+    }
+}
+
+/**
+  * @brief  Selects the PTP Update method
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  updateMethod: the PTP Update method
+  *                       This parameter can be one of the following values:
+  *                       @arg HAL_GMAC_PTP_FINEUPDATE: Fine update method
+  *                       @arg HAL_GMAC_PTP_COARSEUPDATE: Coarse update method
+  * @return None
+  */
+static void GMAC_PTPUpdateMethodConfig(struct GMAC_HANDLE *pGMAC, uint32_t updateMethod)
+{
+    uint32_t control;
+
+    control = READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL);
+    if (updateMethod != HAL_GMAC_PTP_COARSEUPDATE) {
+        /* Enable the PTP Fine Update method */
+        control |= GMAC_TSCR_TSCFUPDT;
+    } else {
+        /* Disable the PTP Fine Update method */
+        control &= (~(uint32_t)GMAC_TSCR_TSCFUPDT);
+    }
+    WRITE_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL, control);
+}
+
+/**
+  * @brief  Sets the system time Sub-Second increment value.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module
+  * @param  ptpClock: ptp clock rate.
+  * @param  SubSecondValue: specifies the PTP Sub-Second Increment Register value
+  * @return None
+  */
+static void GMAC_PTPSetSubSecondIncrement(struct GMAC_HANDLE *pGMAC, uint32_t ptpClock,
+                                          uint32_t *subSecondValue)
+{
+    uint32_t value = READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL);
+    uint32_t data, regValue;
+
+    /* For GMAC3.x, 4.x versions, in "fine adjustement mode" set sub-second
+     * increment to twice the number of nanoseconds of a clock cycle.
+     * The calculation of the default_addend value by the caller will set it
+     * to mid-range = 2^31 when the remainder of this division is zero,
+     * which will make the accumulator overflow once every 2 ptp_clock
+     * cycles, adding twice the number of nanoseconds of a clock cycle :
+     * 2000000000ULL / ptp_clock.
+     */
+    if (value & GMAC_TSCR_TSCFUPDT) {
+        data = (2000000000ULL / ptpClock);
+    } else {
+        data = (1000000000ULL / ptpClock);
+    }
+
+    /* 0.465ns accuracy */
+    if (!(value & GMAC_TSCR_TSCTRLSSR)) {
+        data = (data * 1000) / 465;
+    }
+
+    if (data > PTP_SSIR_SSINC_MAX) {
+        data = PTP_SSIR_SSINC_MAX;
+    }
+
+    regValue = data;
+    regValue <<= GMAC4_PTP_SSIR_SSINC_SHIFT;
+
+    WRITE_REG(pGMAC->pReg->MAC_SUB_SECOND_INCREMENT, regValue);
+
+    if (subSecondValue) {
+        *subSecondValue = data;
+    }
+}
+
+/**
+  * @brief  Sets the timestamp addend value.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  addend: specifies the PTP Time Stamp Addend Register value.
+  * @return HAL status
+  */
+static HAL_Status GMAC_PTPSetTimestampAddend(struct GMAC_HANDLE *pGMAC, uint32_t addend)
+{
+    uint32_t value;
+    int32_t limit;
+
+    WRITE_REG(pGMAC->pReg->MAC_TIMESTAMP_ADDEND, addend);
+
+    /* issue command to update the addend value */
+    value = READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL);
+    value |= GMAC_TSCR_TSADDREG;
+    WRITE_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL, value);
+
+    /* wait for present addend update to complete */
+    limit = 100;
+    while (limit--) {
+        if (!(READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL) & GMAC_TSCR_TSADDREG)) {
+            break;
+        }
+        HAL_DelayMs(1);
+    }
+
+    if (limit < 0) {
+        return HAL_BUSY;
+    }
+
+    return HAL_OK;
+}
+
+/**
+  * @brief  Sets the timestamp update sign and values.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  addSub: specifies the PTP Time update value sign.
+  * @param  secondValue: specifies the PTP Time update second value.
+  * @param  subSecondValue: specifies the PTP Time update sub-second value.
+  * @return None
+  */
+static void GMAC_PTPUpdateTimestamp(struct GMAC_HANDLE *pGMAC, uint32_t addSub,
+                                    uint32_t secondValue, uint32_t subSecondValue)
+{
+    uint32_t value;
+
+    /* Set the PTP Time Update High Register */
+    WRITE_REG(pGMAC->pReg->MAC_SYS_TIME_SECS_UPDATE, secondValue);
+    value = (addSub << PTP_STNSUR_ADDSUB_SHIFT) | subSecondValue;
+    WRITE_REG(pGMAC->pReg->MAC_SYS_TIME_NS_UPDATE, value);
+}
+
+/**
+  * @brief  Initialize the PTP timestamp.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @return HAL status
+  */
+static HAL_Status GMAC_PTPInitTimestamp(struct GMAC_HANDLE *pGMAC)
+{
+    uint32_t control;
+    int32_t limit;
+
+    /* Initialize the PTP Time Stamp */
+    control = READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL);
+    control |= GMAC_TSCR_TSINIT;
+    WRITE_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL, control);
+
+    /* wait for present system time initialize to complete */
+    limit = 100;
+    while (limit--) {
+        if (!(READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL) & GMAC_TSCR_TSINIT)) {
+            break;
+        }
+        HAL_DelayMs(1);
+    }
+
+    if (limit < 0) {
+        return HAL_BUSY;
+    }
+
+    return HAL_OK;
+}
+
+/**
+  * @brief  Start PTP function
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module
+  * @param  rate: ptp clock rate
+  * @param  updateMethod: Fine or Coarse update method
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_PTPStart(struct GMAC_HANDLE *pGMAC, uint32_t rate, uint32_t updateMethod)
+{
+    uint32_t secInc = 0;
+    uint64_t temp = 0;
+
+    HAL_ASSERT(pGMAC != NULL);
+    HAL_ASSERT(rate != 0);
+
+    pGMAC->cdcErrorAdj = (2 * NSEC_PER_SEC) / rate;
+
+    /* Enable multicast */
+    GMAC_PTPEnableMulticast(pGMAC, true);
+
+    /* Program Time stamp control register to enable time stamping. */
+    GMAC_PTPEnableControl(pGMAC, true);
+
+    /* To select the Fine correction method (if required),
+     * program Time stamp control register bit1. */
+    GMAC_PTPUpdateMethodConfig(pGMAC, updateMethod);
+
+    /* Program the Subsecond increment register based on the PTP clock frequency.
+     * to achieve 20 ns accuracy, the value is ~ 43 */
+    GMAC_PTPSetSubSecondIncrement(pGMAC, rate, &secInc);
+
+    temp = div_u64(1000000000ULL, secInc);
+    /* Store sub second increment for later use */
+    pGMAC->subSecondInc = secInc;
+
+    /* calculate default added value:
+     * formula is :
+     * addend = (2^32)/freq_div_ratio;
+     * where, freq_div_ratio = 1e9ns/sec_inc
+     */
+    temp = (uint64_t)(temp << 32);
+    pGMAC->defaultAddend = div_u64(temp, rate);
+
+    /* If you are using the Fine correction method, program the Time stamp addend register
+     * and set Time stamp control register bit5 (addend register update). */
+    if (GMAC_PTPSetTimestampAddend(pGMAC, pGMAC->defaultAddend)) {
+        HAL_DBG("set PTP timeStamp addend failed\n");
+
+        return HAL_BUSY;
+    }
+
+    /* Program the Time stamp high update and Time stamp low update registers
+     * with the appropriate time value. */
+    GMAC_PTPUpdateTimestamp(pGMAC, 0, 0, 0);
+    /* Set Time stamp control register bit2 (Time stamp init). */
+    if (GMAC_PTPInitTimestamp(pGMAC)) {
+        HAL_DBG("initialize PTP timeStamp failed\n");
+
+        return HAL_BUSY;
+    }
+
+    pGMAC->hwtsRx = true;
+    pGMAC->hwtsTx = true;
+
+    return HAL_OK;
+}
+
+/**
+  * @brief  Stop PTP function
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_PTPStop(struct GMAC_HANDLE *pGMAC)
+{
+    HAL_ASSERT(pGMAC != NULL);
+
+    /* Disable ptp control */
+    GMAC_PTPEnableControl(pGMAC, false);
+
+    /* Disable multicast */
+    GMAC_PTPEnableMulticast(pGMAC, false);
+
+    return HAL_OK;
+}
+
+/**
+  * @brief  Get timestamp form register
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module
+  * @param  timestamp: current time desired
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_PTPGetTime(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *timestamp)
+{
+    uint32_t ns, sec0, sec1;
+
+    HAL_ASSERT(pGMAC != NULL);
+    HAL_ASSERT(timestamp != NULL);
+
+    /* Get the TSS value */
+    sec1 = READ_REG(pGMAC->pReg->MAC_SYSTEM_TIME_SECS);
+    do {
+        sec0 = sec1;
+        /* Get the TSSS value */
+        ns = READ_REG(pGMAC->pReg->MAC_SYSTEM_TIME_NS);
+        /* Get the TSS value */
+        sec1 = READ_REG(pGMAC->pReg->MAC_SYSTEM_TIME_SECS);
+    } while (sec0 != sec1);
+
+    timestamp->sec = sec1;
+    timestamp->nsec = ns;
+
+    return HAL_OK;
+}
+
+/**
+  * @brief  Set time base
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module
+  * @param  timestamp: set register with timestamp value
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_PTPSetTime(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *timestamp)
+{
+    HAL_ASSERT(pGMAC != NULL);
+    HAL_ASSERT(timestamp != NULL);
+
+    GMAC_PTPUpdateTimestamp(pGMAC, 0, timestamp->sec, timestamp->nsec);
+    if (GMAC_PTPInitTimestamp(pGMAC)) {
+        HAL_DBG("GMAC_PTPInitTimestamp: failed\n");
+
+        return HAL_BUSY;
+    }
+
+    return HAL_OK;
+}
+
+/**
+  * @brief  Update timestamp register with offset
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module
+  * @param  timeOffset: updated time base with offset
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_PTPUpdateTimeOffset(struct GMAC_HANDLE *pGMAC,
+                                        struct PTP_TIME_OFFSET *timeOffset)
+{
+    uint32_t value;
+    int32_t limit, addSub = 0;
+    uint32_t secondValue;
+    uint32_t nanoSecondValue;
+
+    HAL_ASSERT(pGMAC != NULL);
+    HAL_ASSERT(timeOffset != NULL);
+
+    /* determine sign and correct Second and Nanosecond values */
+    if (timeOffset->sec < 0 || (timeOffset->sec == 0 && timeOffset->nsec < 0)) {
+        addSub = 1;
+        secondValue = -timeOffset->sec;
+        nanoSecondValue = -timeOffset->nsec;
+    } else {
+        addSub = 0;
+        secondValue = timeOffset->sec;
+        nanoSecondValue = timeOffset->nsec;
+    }
+
+    if (addSub) {
+        /* If the new sec value needs to be subtracted with
+         * the system time, then MAC_STSUR reg should be
+         * programmed with (2^32 – <new_sec_value>)
+         */
+        secondValue = -timeOffset->sec;
+
+        value = READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL);
+        if (value & GMAC_TSCR_TSCTRLSSR) {
+            nanoSecondValue = (PTP_DIGITAL_ROLLOVER_MODE - timeOffset->nsec);
+        } else {
+            nanoSecondValue = (PTP_BINARY_ROLLOVER_MODE - timeOffset->nsec);
+        }
+    }
+
+    GMAC_PTPUpdateTimestamp(pGMAC, addSub, secondValue, nanoSecondValue);
+    /* issue command to update the system time value */
+    value = READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL);
+    value |= GMAC_TSCR_TSUPDT;
+    WRITE_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL, value);
+
+    /* wait for present system time adjust/update to complete */
+    limit = 100;
+    while (limit--) {
+        if (!(READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL) & GMAC_TSCR_TSUPDT)) {
+            break;
+        }
+        HAL_DelayMs(1);
+    }
+
+    if (limit < 0) {
+        return HAL_BUSY;
+    }
+
+    return HAL_OK;
+}
+
+/**
+  * @brief  Updates time stamp addend register
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module
+  * @param  ppb: correction value in thousandth of ppm (Adj*10^9)
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_PTPAdjFreq(struct GMAC_HANDLE *pGMAC, int32_t ppb)
+{
+    uint32_t diff, addEnd;
+    int negAdj = 0;
+    uint64_t adj;
+
+    HAL_ASSERT(pGMAC != NULL);
+
+    if (!ppb) {
+        return HAL_OK;
+    } else if (ppb < 0) {
+        negAdj = 1;
+        ppb = -ppb;
+    }
+
+    addEnd = pGMAC->defaultAddend;
+    adj = addEnd;
+    adj *= ppb;
+    diff = div_u64(adj, 1000000000U);
+    addEnd = negAdj ? (addEnd - diff) : (addEnd + diff);
+
+    return GMAC_PTPSetTimestampAddend(pGMAC, (uint32_t)addEnd);
+}
+
+/**
+  * @brief  Sets the PPS output.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  start: specifies the start time of the PPS output.
+  * @param  periods: specifies the frequency of the PPS output.
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_PTPEnablePPS(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *start,
+                                 struct PTP_TIME *periods)
+{
+    uint32_t control, tnsec, val;
+    uint64_t period;
+
+    HAL_ASSERT(pGMAC != NULL);
+    HAL_ASSERT(start != NULL);
+    HAL_ASSERT(periods != NULL);
+
+    val = READ_REG(pGMAC->pReg->MAC_PPS_CONTROL);
+    control = READ_REG(pGMAC->pReg->MAC_TIMESTAMP_CONTROL);
+    tnsec = READ_REG(pGMAC->pReg->MAC_PPS0_TARGET_TIME_NS);
+    if (tnsec & TRGTBUSY0) {
+        return HAL_BUSY;
+    }
+
+    val &= ~PPS_MASK;
+    val |= TRGTMODSEL0(0x2);
+    val |= PPSEN0;
+    WRITE_REG(pGMAC->pReg->MAC_PPS_CONTROL, val);
+
+    WRITE_REG(pGMAC->pReg->MAC_PPS0_TARGET_TIME_SECONDS, start->sec);
+    if (!(control & GMAC_TSCR_TSCTRLSSR)) {
+        start->nsec = (start->nsec * 1000) / 465;
+    }
+    WRITE_REG(pGMAC->pReg->MAC_PPS0_TARGET_TIME_NS, start->nsec);
+
+    /* 1second@1plus default */
+    if (!periods->sec && !periods->nsec) {
+        periods->sec = 1;
+        periods->nsec = 1;
+    }
+    period = periods->sec * 1000000000;
+    period += periods->nsec;
+    period = period / pGMAC->subSecondInc;
+
+    if (period <= 1) {
+        return HAL_ERROR;
+    }
+    WRITE_REG(pGMAC->pReg->MAC_PPS0_INTERVAL, period - 1);
+
+    period >>= 1;
+    if (period <= 1) {
+        return HAL_ERROR;
+    }
+    WRITE_REG(pGMAC->pReg->MAC_PPS0_WIDTH, period - 1);
+
+    /* Finally, activate it */
+    val |= 0x2;
+    WRITE_REG(pGMAC->pReg->MAC_PPS_CONTROL, val);
+
+    return HAL_OK;
+}
+
+/**
+  * @brief  Disable the PPS output.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_PTPDisablePPS(struct GMAC_HANDLE *pGMAC)
+{
+    uint32_t val;
+
+    HAL_ASSERT(pGMAC != NULL);
+
+    val = READ_REG(pGMAC->pReg->MAC_PPS_CONTROL);
+    val &= ~PPS_MASK;
+    WRITE_REG(pGMAC->pReg->MAC_PPS_CONTROL, val);
+
+    return HAL_OK;
+}
+#endif
+
 /**
   * @brief  Configure GMAC flow ctrl
   * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
@@ -919,7 +1503,7 @@ static HAL_Status GMAC_FlowCtrl(struct GMAC_HANDLE *pGMAC, int32_t duplex,
         HAL_DBG("\tTransmit Flow-Control ON\n");
 
         if (duplex) {
-            HAL_DBG("\tduplex mode: PAUSE %ld\n", pauseTime);
+            HAL_DBG("\tduplex mode: PAUSE %" PRId32 "\n", pauseTime);
         }
 
         flow = GMAC_Q0_TX_FLOW_CTRL_TFE;
@@ -955,7 +1539,7 @@ static HAL_Status GMAC_DMARXOpMode(struct GMAC_HANDLE *pGMAC, int32_t mode,
         HAL_DBG("GMAC: enable RX store and forward mode\n");
         mtlRXOP |= MTL_RXQ0_OPERATION_MODE_RSF;
     } else {
-        HAL_DBG("GMAC: disable RX SF mode (threshold %ld)\n", mode);
+        HAL_DBG("GMAC: disable RX SF mode (threshold %" PRId32 ")\n", mode);
         mtlRXOP &= ~MTL_RXQ0_OPERATION_MODE_RSF;
         mtlRXOP &= MTL_OP_MODE_RTC_MASK;
         if (mode <= 32) {
@@ -1053,7 +1637,7 @@ static HAL_Status GMAC_DMATXOpMode(struct GMAC_HANDLE *pGMAC, int32_t mode,
         /* Transmit COE type 2 cannot be done in cut-through mode. */
         mtlTXOP |= MTL_OP_MODE_TSF;
     } else {
-        HAL_DBG("GMAC: disabling TX SF (threshold %ld)\n", mode);
+        HAL_DBG("GMAC: disabling TX SF (threshold %" PRId32 ")\n", mode);
         mtlTXOP &= ~MTL_OP_MODE_TSF;
         mtlTXOP &= MTL_OP_MODE_TTC_MASK;
         /* Set the transmit threshold */
@@ -1124,7 +1708,6 @@ int32_t HAL_GMAC_MDIORead(struct GMAC_HANDLE *pGMAC, int32_t mdioAddr,
 
     HAL_ASSERT(pGMAC != NULL);
 
-    HAL_DBG("Mdio Read addr=%ld, reg=%ld\n", mdioAddr, mdioReg);
     status = Mdio_WaitIdle(pGMAC);
     if (status) {
         HAL_DBG("MDIO not idle at entry");
@@ -1174,8 +1757,6 @@ HAL_Status HAL_GMAC_MDIOWrite(struct GMAC_HANDLE *pGMAC, int32_t mdioAddr,
 
     HAL_ASSERT(pGMAC != NULL);
 
-    HAL_DBG("%s(addr=%lx, reg=%ld, val=%x):\n", __func__,
-            mdioAddr, mdioReg, mdioVal);
     status = Mdio_WaitIdle(pGMAC);
     if (status) {
         HAL_DBG("MDIO not idle at entry");
@@ -1278,7 +1859,7 @@ HAL_Status HAL_GMAC_PHYInit(struct GMAC_HANDLE *pGMAC, struct GMAC_PHY_Config *c
 
         return HAL_NODEV;
     } else {
-        HAL_DBG("PHY found ID: 0x%lx\n", pGMAC->phyStatus.phyID);
+        HAL_DBG("PHY found ID: 0x%" PRIx32 "\n", pGMAC->phyStatus.phyID);
     }
 
     if (pGMAC->phyOps.init) {
@@ -1523,6 +2104,10 @@ HAL_Status HAL_GMAC_DMATxDescInit(struct GMAC_HANDLE *pGMAC,
     HAL_ASSERT(pGMAC != NULL);
     HAL_ASSERT(txDescs != NULL);
     HAL_ASSERT(txBuff != NULL);
+    HAL_ASSERT((uintptr_t)txDescs <= UINT32_MAX);
+    HAL_ASSERT((uintptr_t)(txDescs + count) <= UINT32_MAX);
+    HAL_ASSERT((uintptr_t)txBuff <= UINT32_MAX);
+    HAL_ASSERT((uintptr_t)(txBuff + count * HAL_GMAC_MAX_PACKET_SIZE) <= UINT32_MAX);
 
     pGMAC->txDescIdx = 0;
 
@@ -1565,6 +2150,10 @@ HAL_Status HAL_GMAC_DMARxDescInit(struct GMAC_HANDLE *pGMAC,
     HAL_ASSERT(pGMAC != NULL);
     HAL_ASSERT(rxDescs != NULL);
     HAL_ASSERT(rxBuff != NULL);
+    HAL_ASSERT((uintptr_t)rxDescs <= UINT32_MAX);
+    HAL_ASSERT((uintptr_t)(rxDescs + count) <= UINT32_MAX);
+    HAL_ASSERT((uintptr_t)rxBuff <= UINT32_MAX);
+    HAL_ASSERT((uintptr_t)(rxBuff + count * HAL_GMAC_MAX_PACKET_SIZE) <= UINT32_MAX);
 
     pGMAC->rxDescIdx = 0;
 
@@ -1577,7 +2166,7 @@ HAL_Status HAL_GMAC_DMARxDescInit(struct GMAC_HANDLE *pGMAC,
         /* Get the pointer on the ith member of the Rx Desc list */
         desc = rxDescs + i;
 
-        desc->des0 = (uint32_t)(rxBuff + i * HAL_GMAC_MAX_PACKET_SIZE);
+        desc->des0 = (uintptr_t)(rxBuff + i * HAL_GMAC_MAX_PACKET_SIZE);
         desc->des1 = 0;
         desc->des2 = 0;
         desc->des3 = GMAC_DESC3_OWN | GMAC_DESC3_BUF1V | GMAC_DESC3_IOC;
@@ -1787,9 +2376,9 @@ HAL_Status HAL_GMAC_Start(struct GMAC_HANDLE *pGMAC, uint8_t *addr)
     value |= (rxFifosz << DMA_CH0_RX_CONTROL_RBSZ_SHIFT) & DMA_CH0_RX_CONTROL_RBSZ_MASK;
     value = value | (8 << DMA_CH0_RX_CONTROL_RXPBL_SHIFT);
     WRITE_REG(pGMAC->pReg->DMA_CH0_RX_CONTROL, value);
-    WRITE_REG(pGMAC->pReg->DMA_CH0_RXDESC_LIST_ADDRESS, (uint32_t)pGMAC->rxDescs);
+    WRITE_REG(pGMAC->pReg->DMA_CH0_RXDESC_LIST_ADDRESS, (uintptr_t)pGMAC->rxDescs);
     WRITE_REG(pGMAC->pReg->DMA_CH0_RXDESC_TAIL_POINTER,
-              (uint32_t)(pGMAC->rxDescs + pGMAC->rxSize));
+              (uintptr_t)(pGMAC->rxDescs + pGMAC->rxSize));
 
     /* init tx chan */
     value = READ_REG(pGMAC->pReg->DMA_CH0_TX_CONTROL);
@@ -1797,8 +2386,8 @@ HAL_Status HAL_GMAC_Start(struct GMAC_HANDLE *pGMAC, uint8_t *addr)
     value |= DMA_CH0_TX_CONTROL_OSF;
     WRITE_REG(pGMAC->pReg->DMA_CH0_TX_CONTROL, value);
 
-    WRITE_REG(pGMAC->pReg->DMA_CH0_TXDESC_LIST_ADDRESS, (uint32_t)pGMAC->txDescs);
-    WRITE_REG(pGMAC->pReg->DMA_CH0_TXDESC_TAIL_POINTER, (uint32_t)pGMAC->txDescs);
+    WRITE_REG(pGMAC->pReg->DMA_CH0_TXDESC_LIST_ADDRESS, (uintptr_t)pGMAC->txDescs);
+    WRITE_REG(pGMAC->pReg->DMA_CH0_TXDESC_TAIL_POINTER, (uintptr_t)pGMAC->txDescs);
 
     HAL_GMAC_WriteHWAddr(pGMAC, addr);
 
@@ -1949,6 +2538,80 @@ uint8_t *HAL_GMAC_GetRXBuffer(struct GMAC_HANDLE *pGMAC)
     return pGMAC->rxBuf + pGMAC->rxDescIdx * HAL_GMAC_MAX_PACKET_SIZE;
 }
 
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+/**
+  * @brief  Get hareware timestamp for current TX packet by desc.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  desc: current DMA description.
+  * @param  time: pointer to timestamp.
+  *
+  * @return HAL status
+  */
+static HAL_Status HAL_GMAC_GetTXHWtimestamp(struct GMAC_HANDLE *pGMAC, struct GMAC_Desc *desc,
+                                            struct PTP_TIME *time)
+{
+    int32_t i = 0;
+
+    if (!pGMAC->hwtsTx) {
+        return HAL_ERROR;
+    }
+
+    /* Check if timestamp is OK */
+    do {
+        if (!(desc->des3 & GMAC_DESC3_OWN)) {
+            break;
+        }
+        HAL_DelayUs(1);
+        i++;
+    } while (i < 100);
+
+    if (i == 100) {
+        return HAL_TIMEOUT;
+    }
+
+    if (!(desc->des3 & TDES3_CONTEXT_TYPE)) {
+        if (desc->des3 & TDES3_TIMESTAMP_STATUS) {
+            time->sec = desc->des1;
+            time->nsec = desc->des0;
+            /* nsec is less than cdcErrorAdj? */
+            if (time->nsec < pGMAC->cdcErrorAdj) {
+                time->nsec = NSEC_PER_SEC + time->nsec - pGMAC->cdcErrorAdj;
+                time->sec = time->sec - 1;
+            } else {
+                time->nsec -= pGMAC->cdcErrorAdj;
+            }
+
+            return HAL_OK;
+        }
+    }
+
+    return HAL_BUSY;
+}
+
+/**
+  * @brief  Get a Tx packet hardware timestamp.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  time: pointer to timestamp.
+  *
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_GetTxTimestamp(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *time)
+{
+    struct GMAC_Desc *desc;
+    uint32_t prev;
+
+    HAL_ASSERT(pGMAC != NULL);
+    HAL_ASSERT(time != NULL);
+
+    prev = (!pGMAC->txDescIdx) ? (pGMAC->txSize - 1) : (pGMAC->txDescIdx - 1);
+    desc = pGMAC->txDescs + prev;
+
+    return HAL_GMAC_GetTXHWtimestamp(pGMAC, desc, time);
+}
+#endif
+
 /**
   * @brief  Send a packet with the length, clean packet' dcached memory before send.
   * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
@@ -1962,49 +2625,177 @@ HAL_Status HAL_GMAC_Send(struct GMAC_HANDLE *pGMAC, void *packet,
                          uint32_t length)
 {
     struct GMAC_Desc *desc;
-    uint32_t i;
+    uint32_t entry;
 
     HAL_ASSERT(pGMAC != NULL);
     HAL_ASSERT(packet != NULL);
 
-    desc = pGMAC->txDescs + pGMAC->txDescIdx;
+    entry = pGMAC->txDescIdx;
+    desc = pGMAC->txDescs + entry;
     if (desc->des3 & GMAC_DESC3_OWN) {
-        HAL_DBG("%s(desc=%p, index=%ld) is busy\n", __func__, desc,
+        HAL_DBG("%s(desc=%p, index=%" PRId32 ") is busy\n", __func__, desc,
                 pGMAC->txDescIdx);
 
-        return HAL_TIMEOUT;
+        return HAL_BUSY;
+    } else {
+        if (desc->des3 & DES3_ERROR_SUMMARY) {
+            pGMAC->extraStatus.txErrors++;
+        }
     }
 
-    pGMAC->txDescIdx++;
-    pGMAC->txDescIdx %= pGMAC->txSize;
+    pGMAC->txDescIdx = GMAC_GET_ENTRY(entry, pGMAC->txSize);
 
-    desc->des0 = (uint32_t)packet;
+    desc->des0 = (uintptr_t)packet;
     desc->des1 = 0;
     desc->des2 = length;
     /*
      * Make sure that if HW sees the _OWN write below, it will see all the
      * writes to the rest of the descriptor too.
      */
-    desc->des3 = GMAC_DESC3_OWN | GMAC_DESC3_FD | GMAC_DESC3_LD;
+    desc->des3 = GMAC_DESC3_OWN | GMAC_DESC3_FD | GMAC_DESC3_LD | GMAC_DESC3_CIC;
+
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+    /* timestamp */
+    desc->des2 |= TDES2_TIMESTAMP_ENABLE;
+#endif
 
     WRITE_REG(pGMAC->pReg->DMA_CH0_TXDESC_TAIL_POINTER,
-              (uint32_t)(pGMAC->txDescs + pGMAC->txDescIdx));
+              (uintptr_t)(pGMAC->txDescs + pGMAC->txDescIdx));
 
-    for (i = 0; i < 1000000; i++) {
-        if (!(desc->des3 & GMAC_DESC3_OWN)) {
-            return HAL_BUSY;
-        }
-    }
-
-    if (desc->des3 & DES3_ERROR_SUMMARY) {
-        pGMAC->extraStatus.txErrors++;
-    } else {
-        pGMAC->extraStatus.txPktN++;
-        pGMAC->extraStatus.txBytesN += length;
-    }
+    pGMAC->extraStatus.txPktN++;
+    pGMAC->extraStatus.txBytesN += length;
 
     return HAL_OK;
 }
+
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+/**
+  * @brief  Check timestamp status for current RX packet.
+  * @param  desc: current DMA description.
+  *
+  * @return int32_t
+  */
+static int32_t HAL_GMAC_CheckTimestamp(struct GMAC_Desc *desc)
+{
+    struct GMAC_Desc *p = (struct GMAC_Desc *)desc;
+    uint32_t rdes0 = p->des0;
+    uint32_t rdes1 = p->des1;
+    uint32_t rdes3 = p->des3;
+    uint32_t own, ctxt;
+    int32_t ret = 1;
+
+    own = rdes3 & RDES3_OWN;
+    ctxt = ((rdes3 & RDES3_CONTEXT_DESCRIPTOR)
+            >> RDES3_CONTEXT_DESCRIPTOR_SHIFT);
+
+    if (!own && ctxt) {
+        if ((rdes0 == 0xffffffff) && (rdes1 == 0xffffffff)) {
+            /* Corrupted value */
+            ret = -1;
+        } else {
+            /* A valid Timestamp is ready to be read */
+            ret = 0;
+        }
+    }
+
+    return ret;
+}
+
+/**
+  * @brief  Check timestamp has written in next desc by DMA for current RX packet.
+  * @param  desc: current DMA description.
+  * @param  nextDesc: next DMA description.
+  *
+  * @return HAL status
+  */
+static HAL_Status HAL_GMAC_RXTimestampStatus(struct GMAC_Desc *desc,
+                                             struct GMAC_Desc *nextDesc)
+{
+    struct GMAC_Desc *p = (struct GMAC_Desc *)desc;
+    int32_t ret = HAL_ERROR;
+
+    /* Get the status from normal w/b descriptor */
+    if (p->des3 & RDES3_RDES1_VALID) {
+        if (p->des1 & RDES1_TIMESTAMP_AVAILABLE) {
+            int32_t i = 0;
+
+            /* Check if timestamp is OK from context descriptor */
+            do {
+                ret = HAL_GMAC_CheckTimestamp(nextDesc);
+                if (ret < 0) {
+                    goto exit;
+                }
+                i++;
+            } while ((ret == 1) && (i < 10));
+
+            if (i == 10 && ret) {
+                ret = HAL_BUSY;
+            }
+        }
+    }
+exit:
+
+    return ret;
+}
+
+/**
+  * @brief  Get hareware timestamp for current RX packet.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  desc: current DMA description.
+  * @param  nextDesc: next DMA description.
+  * @param  time: pointer to timestamp.
+  *
+  * @return HAL status
+  */
+static HAL_Status HAL_GMAC_getRXHWtimestamp(struct GMAC_HANDLE *pGMAC, struct GMAC_Desc *desc,
+                                            struct GMAC_Desc *nextDesc, struct PTP_TIME *time)
+{
+    if (!pGMAC->hwtsRx) {
+        return HAL_ERROR;
+    }
+
+    /* Check if timestamp is available */
+    if (!HAL_GMAC_RXTimestampStatus(desc, nextDesc)) {
+        time->nsec = nextDesc->des0;
+        time->sec = nextDesc->des1;
+        /* nsec is less than cdcErrorAdj? */
+        if (time->nsec < pGMAC->cdcErrorAdj) {
+            time->nsec = NSEC_PER_SEC + time->nsec - pGMAC->cdcErrorAdj;
+            time->sec = time->sec - 1;
+        } else {
+            time->nsec -= pGMAC->cdcErrorAdj;
+        }
+
+        return HAL_OK;
+    }
+
+    return HAL_BUSY;
+}
+
+/**
+  * @brief  Get a Rx packet hardware timestamp.
+  * @param  pGMAC: pointer to a GMAC_HANDLE structure that contains
+  *                the information for GMAC module.
+  * @param  time: pointer to timestamp.
+  *
+  * @return HAL status
+  */
+HAL_Status HAL_GMAC_GetRxTimestamp(struct GMAC_HANDLE *pGMAC, struct PTP_TIME *time)
+{
+    struct GMAC_Desc *desc, *nextDesc;
+    uint32_t next;
+
+    HAL_ASSERT(pGMAC != NULL);
+    HAL_ASSERT(time != NULL);
+
+    desc = pGMAC->rxDescs + pGMAC->rxDescIdx;
+    next = (pGMAC->rxDescIdx + 1) % pGMAC->rxSize;
+    nextDesc = pGMAC->rxDescs + next;
+
+    return HAL_GMAC_getRXHWtimestamp(pGMAC, desc, nextDesc, time);
+}
+#endif
 
 /**
   * @brief  Recvive a packet, invalidate packet's dcached memory after received.
@@ -2017,18 +2808,17 @@ HAL_Status HAL_GMAC_Send(struct GMAC_HANDLE *pGMAC, void *packet,
 uint8_t *HAL_GMAC_Recv(struct GMAC_HANDLE *pGMAC, int32_t *length)
 {
     struct GMAC_Desc *desc;
+    uint32_t entry, des3;
     uint8_t *packet;
-    uint32_t des3;
 
     HAL_ASSERT(pGMAC != NULL);
     HAL_ASSERT(length != NULL);
 
     *length = 0;
-    desc = pGMAC->rxDescs + pGMAC->rxDescIdx;
+    entry = pGMAC->rxDescIdx;
+    desc = pGMAC->rxDescs + entry;
     des3 = desc->des3;
     if (des3 & GMAC_DESC3_OWN) {
-        HAL_DBG("%s: RX packet not available\n", __func__);
-
         return NULL;
     }
 
@@ -2048,7 +2838,7 @@ uint8_t *HAL_GMAC_Recv(struct GMAC_HANDLE *pGMAC, int32_t *length)
      * ignored
      */
     if (*length > HAL_GMAC_MAX_FRAME_SIZE || *length <= ETH_FCS_LEN) {
-        HAL_DBG("len %ld is incorrect for max size (%d)\n",
+        HAL_DBG("len %" PRId32 " is incorrect for max size (%d)\n",
                 *length, HAL_GMAC_MAX_FRAME_SIZE);
         *length = 0;
         pGMAC->extraStatus.rxErrors++;
@@ -2072,21 +2862,40 @@ uint8_t *HAL_GMAC_Recv(struct GMAC_HANDLE *pGMAC, int32_t *length)
 void HAL_GMAC_CleanRX(struct GMAC_HANDLE *pGMAC)
 {
     struct GMAC_Desc *desc;
+    uint32_t entry;
 
     HAL_ASSERT(pGMAC != NULL);
 
-    /* Get the pointer on the ith member of the Tx Desc list */
-    desc = pGMAC->rxDescs + pGMAC->rxDescIdx;
+    /* Get the pointer on the ith member of the Rx Desc list */
+    entry = pGMAC->rxDescIdx;
+    desc = pGMAC->rxDescs + entry;
 
-    desc->des0 = (uint32_t)(pGMAC->rxBuf + (pGMAC->rxDescIdx *
-                                            HAL_GMAC_MAX_PACKET_SIZE));
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+    if (desc->des3 & RDES3_RDES1_VALID) {
+        if (desc->des1 & RDES1_TIMESTAMP_AVAILABLE) {
+            desc->des0 = (uintptr_t)(pGMAC->rxBuf + (entry * HAL_GMAC_MAX_PACKET_SIZE));
+            desc->des1 = 0;
+            desc->des2 = 0;
+            desc->des3 = GMAC_DESC3_OWN | GMAC_DESC3_BUF1V | GMAC_DESC3_IOC;
+
+            pGMAC->rxDescIdx = GMAC_GET_ENTRY(entry, pGMAC->rxSize);
+            entry = pGMAC->rxDescIdx;
+            /* Get the pointer on the ith member of the Rx Desc list */
+            desc = pGMAC->rxDescs + entry;
+        }
+    }
+#endif
+
+    desc->des0 = (uintptr_t)(pGMAC->rxBuf + (pGMAC->rxDescIdx *
+                                             HAL_GMAC_MAX_PACKET_SIZE));
     desc->des1 = 0;
     desc->des2 = 0;
     desc->des3 = GMAC_DESC3_OWN | GMAC_DESC3_BUF1V | GMAC_DESC3_IOC;
-    WRITE_REG(pGMAC->pReg->DMA_CH0_RXDESC_TAIL_POINTER, (uint32_t)desc);
 
-    pGMAC->rxDescIdx++;
-    pGMAC->rxDescIdx %= pGMAC->rxSize;
+    pGMAC->rxDescIdx = GMAC_GET_ENTRY(entry, pGMAC->rxSize);
+
+    WRITE_REG(pGMAC->pReg->DMA_CH0_RXDESC_TAIL_POINTER,
+              (uintptr_t)(pGMAC->rxDescs + pGMAC->rxDescIdx));
 }
 
 /**

@@ -715,8 +715,6 @@ struct PDM_REG {
     __I  uint32_t DATA3L_REG;                         /* Address Offset: 0x0050 */
     __I  uint32_t DATA_VALID;                         /* Address Offset: 0x0054 */
     __I  uint32_t VERSION;                            /* Address Offset: 0x0058 */
-         uint32_t RESERVED005C[233];                  /* Address Offset: 0x005C */
-    __I  uint32_t INCR_RXDR;                          /* Address Offset: 0x0400 */
 };
 /* I2STDM Register Structure Define */
 struct I2STDM_REG {

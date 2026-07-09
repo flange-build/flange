@@ -168,6 +168,18 @@ HAL_Status HAL_SYSTICK_Enable(void)
     return HAL_OK;
 }
 
+/**
+ * @brief  Disable SysTick.
+ * @return HAL_Status.
+ */
+HAL_Status HAL_SYSTICK_Disable(void)
+{
+    SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk |
+                       SysTick_CTRL_ENABLE_Msk);                       /* Disable SysTick IRQ and SysTick Timer */
+
+    return HAL_OK;
+}
+
 /** @} */
 
 /** @} */

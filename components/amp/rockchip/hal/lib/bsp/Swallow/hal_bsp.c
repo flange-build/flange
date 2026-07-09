@@ -128,6 +128,7 @@ struct HAL_FSPI_HOST g_fspi0Dev =
     .irqNum = FSPI0_IRQn,
     .xipMemCode = XIP_MAP_BASE,
     .xipMemData = XIP_MAP_BASE,
+    .maxDllCells = 0xFF,
     .xmmcDev[0] =
     {
         .type = DEV_NOR,
@@ -166,7 +167,7 @@ const struct HAL_PWM_DEV g_pwm0Dev =
     .clkID = CLK_PWM,
     .clkGateID = CLK_PWM_PLL_GATE,
     .pclkGateID = PCLK_PWM_GATE,
-    .irqNum = PWM_IRQn,
+    .irqNum[0] = PWM_IRQn,
 };
 #endif
 

@@ -24,6 +24,15 @@
 #define IS_VALID_LOCKID(n)     ((uint32_t)(n) < 64U)
 #define IS_VALID_OWNERID(n)    ((n) > 0U && (n) < 16U)
 
+#ifdef SPINLOCK
+#define SPINLOCK_STATUS(n) SPINLOCK->STATUS[n]
+#elif defined(SPINLOCK0)
+#define SPINLOCK_STATUS(n) \
+  (((struct SPINLOCK_REG *)(SPINLOCK0_BASE + (n / 8 * 0x1000U)))->STATUS[n % 8])
+#else
+#error "SPINLOCK base address is required"
+#endif
+
 /********************* Private Variable Definition ***************************/
 
 /*
@@ -56,7 +65,7 @@ HAL_Check HAL_HWSPINLOCK_TryLock(uint32_t lockID)
         return HAL_FALSE;
     }
 
-    WRITE_REG(SPINLOCK->STATUS[lockID], g_ownerID);
+    WRITE_REG(SPINLOCK_STATUS(lockID), g_ownerID);
 
     /*
      * Get only first 4 bits and compare to HWSPINLOCK_OWNER_ID,
@@ -64,7 +73,7 @@ HAL_Check HAL_HWSPINLOCK_TryLock(uint32_t lockID)
      * someone else has it.
      */
     return (g_ownerID == (HWSPINLOCK_STATUS_MASK &
-                          READ_REG(SPINLOCK->STATUS[lockID])));
+                          READ_REG(SPINLOCK_STATUS(lockID))));
 }
 
 /**
@@ -73,10 +82,17 @@ HAL_Check HAL_HWSPINLOCK_TryLock(uint32_t lockID)
  */
 void HAL_HWSPINLOCK_Unlock(uint32_t lockID)
 {
+    uint32_t owner;
+
     HAL_ASSERT(IS_VALID_LOCKID(lockID));
 
+    owner = READ_REG(SPINLOCK_STATUS(lockID)) & HWSPINLOCK_STATUS_MASK;
+    if (g_ownerID != owner) {
+        return;
+    }
+
     /* Release the lock by writing 0 to it */
-    WRITE_REG(SPINLOCK->STATUS[lockID], 0);
+    WRITE_REG(SPINLOCK_STATUS(lockID), 0);
 }
 
 /**
@@ -89,7 +105,7 @@ uint32_t HAL_HWSPINLOCK_GetOwner(uint32_t lockID)
     HAL_ASSERT(IS_VALID_LOCKID(lockID));
 
     return (HWSPINLOCK_STATUS_MASK &
-            READ_REG(SPINLOCK->STATUS[lockID]));
+            READ_REG(SPINLOCK_STATUS(lockID)));
 }
 
 /**

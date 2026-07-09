@@ -10,22 +10,22 @@
 #define SOC_RK3562
 #define HAL_MCU_CORE
 
-#define RKMCU_RK3562_BUS
-//#define RKMCU_RK3562_PMU
+#define HAL_BUS_MCU_CORE
+//#define HAL_PMU_MCU_CORE
 
-#if defined(RKMCU_RK3562_BUS)
+#if defined(HAL_BUS_MCU_CORE)
 
 /* TODO: Cache maintain need the decoded addr,
  * it must be matched with pre-loader!
- * default: 0x08200000
+ * default: 0x07b00000
  */
-#define HAL_CACHE_DECODED_ADDR_BASE 0x08200000
+#define HAL_CACHE_DECODED_ADDR_BASE 0x07b00000
 /* System timer designation (RK TIMER) */
 #define SYS_TIMER TIMER5
 
 #define HAL_DBG_ON
 
-#endif /* RKMCU_RK3562_BUS */
+#endif /* HAL_BUS_MCU_CORE */
 
 /* HAL Driver Config */
 #define HAL_CRU_MODULE_ENABLED
@@ -34,7 +34,7 @@
 #define HAL_SYSTICK_MODULE_ENABLED
 #define HAL_UART_MODULE_ENABLED
 
-#if defined(RKMCU_RK3562_BUS)
+#if defined(HAL_BUS_MCU_CORE)
 
 #define HAL_DCACHE_MODULE_ENABLED
 #define HAL_GPIO_MODULE_ENABLED
@@ -58,7 +58,7 @@
 //#define HAL_INTMUX_CUSTOM_DISTRIBUTION_FEATURE_ENABLED
 #endif
 
-#endif /* RKMCU_RK3562_BUS */
+#endif /* HAL_BUS_MCU_CORE */
 
 /* HAL_DBG SUB CONFIG */
 

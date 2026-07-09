@@ -121,19 +121,21 @@
 #define USB_OTG_FIFO_BASE         0x1000U
 #define USB_OTG_FIFO_SIZE         0x1000U
 
-#define USB_PCGCCTL  (*(__IO uint32_t *)((uint32_t)pUSB + USB_OTG_PCGCCTL_BASE))
-#define USB_HPRT0    (*(__IO uint32_t *)((uint32_t)pUSB + USB_OTG_HOST_PORT_BASE))
-#define USB_DEVICE   ((struct USB_DEVICE_REG *)((uint32_t)pUSB + USB_OTG_DEVICE_BASE))
-#define USB_INEP(i)  ((struct USB_IN_EP_REG *)((uint32_t)pUSB + USB_OTG_IN_ENDPOINT_BASE + (i) * USB_OTG_EP_REG_SIZE))
-#define USB_OUTEP(i) ((struct USB_OUT_EP_REG *)((uint32_t)pUSB + USB_OTG_OUT_ENDPOINT_BASE + (i) * USB_OTG_EP_REG_SIZE))
-#define USB_DFIFO(i) (*(__IO uint32_t *)((uint32_t)pUSB + USB_OTG_FIFO_BASE + (i) * USB_OTG_FIFO_SIZE))
-#define USB_HC(i)    ((struct USB_HOST_CH_REG *)((uint32_t)pUSB + USB_OTG_HOST_CHANNEL_BASE + (i) * USB_OTG_HOST_CHANNEL_SIZE))
-#define USB_HOST     ((struct USB_HOST_REG *)((uint32_t)pUSB + USB_OTG_HOST_BASE))
+#define USB_PCGCCTL  (*(__IO uint32_t *)((uintptr_t)pUSB + USB_OTG_PCGCCTL_BASE))
+#define USB_HPRT0    (*(__IO uint32_t *)((uintptr_t)pUSB + USB_OTG_HOST_PORT_BASE))
+#define USB_DEVICE   ((struct USB_DEVICE_REG *)((uintptr_t)pUSB + USB_OTG_DEVICE_BASE))
+#define USB_INEP(i)  ((struct USB_IN_EP_REG *)((uintptr_t)pUSB + USB_OTG_IN_ENDPOINT_BASE + (i) * USB_OTG_EP_REG_SIZE))
+#define USB_OUTEP(i) ((struct USB_OUT_EP_REG *)((uintptr_t)pUSB + USB_OTG_OUT_ENDPOINT_BASE + (i) * USB_OTG_EP_REG_SIZE))
+#define USB_DFIFO(i) (*(__IO uint32_t *)((uintptr_t)pUSB + USB_OTG_FIFO_BASE + (i) * USB_OTG_FIFO_SIZE))
+#define USB_HC(i)    ((struct USB_HOST_CH_REG *)((uintptr_t)pUSB + USB_OTG_HOST_CHANNEL_BASE + (i) * USB_OTG_HOST_CHANNEL_SIZE))
+#define USB_HOST     ((struct USB_HOST_REG *)((uintptr_t)pUSB + USB_OTG_HOST_BASE))
 
 #define USB_MASK_INTERRUPT(__INSTANCE__, __INTERRUPT__)   ((__INSTANCE__)->GINTMSK &= ~(__INTERRUPT__))
 #define USB_UNMASK_INTERRUPT(__INSTANCE__, __INTERRUPT__) ((__INSTANCE__)->GINTMSK |= (__INTERRUPT__))
 #define CLEAR_IN_EP_INTR(__EPNUM__, __INTERRUPT__)        (USB_INEP(__EPNUM__)->DIEPINT = (__INTERRUPT__))
 #define CLEAR_OUT_EP_INTR(__EPNUM__, __INTERRUPT__)       (USB_OUTEP(__EPNUM__)->DOEPINT = (__INTERRUPT__))
+
+#define DWC2_USB_DMA_ALIGN 4
 
 /***************************** Structure Definition **************************/
 /** OTG Mode definition */
@@ -194,6 +196,10 @@ struct USB_OTG_EP {
                                  This parameter must be a number between Min_Data = 0 and Max_Data = 1    */
     uint8_t isocStart;      /*!< Enable high speed isoc transfer                                          */
     uint8_t isocPending;    /*!< Pending high speed isoc transfer                                         */
+    uint8_t isocXferCompl;  /*!< Complete high speed isoc transfer                                        */
+    uint8_t isocPollCount;  /*!< Poll ISOC Endpoint status count                                          */
+    uint8_t isocEvenFr;     /*!< Initial ISOC Endpoint even frame                                         */
+    uint8_t isPoll;         /*!< Enable poll Endpoint status                                              */
     uint8_t type;           /*!< Endpoint type                                                            */
     uint8_t dataPID;        /*!< Initial data PID
                                  This parameter must be a number between Min_Data = 0 and Max_Data = 1    */
@@ -244,6 +250,7 @@ struct HAL_USB_DEV {
     uint32_t utmiclkGateID;
     uint32_t usbPhyGateID;
     IRQn_Type irqNum;
+    IRQn_Type BvalidIrqNum;
     struct USB_OTG_CFG cfg;
 };
 

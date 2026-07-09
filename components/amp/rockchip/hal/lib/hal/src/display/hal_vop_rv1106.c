@@ -374,7 +374,7 @@ HAL_Status HAL_VOP_SetPlane(struct VOP_REG *pReg,
     uint32_t regOffset = 0;
     uint16_t xVirByte = ALIGN_BIT(pWinState->xVir * VOP_GetFormatLength(pWinState->hwFormat), 32) >> 3;
 
-    if (!IS_Valid_Win(pWinState->winId) || !pWinState->winEn) {
+    if (!IS_Valid_Win(pWinState->winId)) {
         return HAL_INVAL;
     }
 

@@ -45,12 +45,12 @@
 #define WDT_DYNFREQ_MARGIN_MS (100)
 /********************* Private Structure Definition **************************/
 
-struct DW_WDT {
+struct RK_WDT {
     uint32_t freq;
 };
 
 #ifdef HAL_WDT_DYNFREQ_FEATURE_ENABLED
-struct DW_WDT_DYNFREQ {
+struct RK_WDT_DYNFREQ {
     uint32_t targetTick;
     uint32_t targetTickMargin;
     uint32_t limitVal;
@@ -59,11 +59,11 @@ struct DW_WDT_DYNFREQ {
 #endif
 /********************* Private Variable Definition ***************************/
 
-static struct DW_WDT dwWdt;
+static struct RK_WDT rkWdt;
 static struct WDT_REG *pWDT = NULL;
 
 #ifdef HAL_WDT_DYNFREQ_FEATURE_ENABLED
-static struct DW_WDT_DYNFREQ wdtDynFreq;
+static struct RK_WDT_DYNFREQ wdtDynFreq;
 #endif
 /********************* Private Function Definition ***************************/
 
@@ -75,7 +75,7 @@ __STATIC_INLINE uint32_t WDT_TopInSeconds(uint32_t top)
      */
     uint32_t cycles = 1 << (16 + top);
 
-    return cycles / dwWdt.freq;
+    return cycles / rkWdt.freq;
 }
 
 static void WDT_SetTop(uint32_t top_s)
@@ -155,7 +155,7 @@ HAL_Status HAL_WDT_Init(uint32_t freq, struct WDT_REG *wdt)
 
     pWDT = wdt;
 
-    dwWdt.freq = freq;
+    rkWdt.freq = freq;
 
 #ifdef HAL_WDT_DYNFREQ_FEATURE_ENABLED
     wdtDynFreq.targetTick = 0;
@@ -301,7 +301,7 @@ HAL_Status HAL_WDT_DynFreqUpdata(uint32_t freq)
 HAL_Status HAL_WDT_DynFreqResume(void)
 {
 #ifdef HAL_WDT_DYNFREQ_FEATURE_ENABLED
-    if (HAL_WDT_DynFreqUpdata(dwWdt.freq) == HAL_OK) {
+    if (HAL_WDT_DynFreqUpdata(rkWdt.freq) == HAL_OK) {
         WDT_SetTop(wdtDynFreq.topSec);
     }
 #endif
@@ -329,7 +329,7 @@ uint32_t HAL_WDT_GetIntStatus(void)
 
 /**
  * @brief  Get timeleft
- * @return Current count value that indicate Timeleft(second) = pWDT->CCVR / dwWdt.freq
+ * @return Current count value that indicate Timeleft(second) = pWDT->CCVR / rkWdt.freq
  */
 uint32_t HAL_WDT_GetTimeLeft(void)
 {

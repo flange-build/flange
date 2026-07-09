@@ -5,7 +5,7 @@
 
 #include "hal_base.h"
 
-#ifdef HAL_PMU_MODULE_ENABLED
+#ifdef HAL_PD_MODULE_ENABLED
 
 /** @addtogroup RK_HAL_Driver
  *  @{
@@ -619,4 +619,4 @@ HAL_Status HAL_PD_Off(ePD_Id pd)
 
 /** @} */
 
-#endif /* HAL_PMU_MODULE_ENABLED */
+#endif /* HAL_PD_MODULE_ENABLED */

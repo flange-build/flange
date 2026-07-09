@@ -10,11 +10,11 @@
 #define SOC_RK3588
 #define HAL_MCU_CORE
 
-#define RKMCU_RK3588_PMU
-//#define RKMCU_RK3588_DDR
-//#define RKMCU_RK3588_NPU
+#define HAL_PMU_MCU_CORE
+//#define HAL_DDR_MCU_CORE
+//#define HAL_NPU_MCU_CORE
 
-#if defined(RKMCU_RK3588_PMU)
+#if defined(HAL_PMU_MCU_CORE)
 
 /* TODO: Cache maintain need the decoded addr,
  * it must be matched with pre-loader!
@@ -27,9 +27,9 @@
 
 #define HAL_DBG_ON
 
-#elif defined(RKMCU_RK3588_DDR)
+#elif defined(HAL_DDR_MCU_CORE)
 #define HAL_CACHE_DECODED_ADDR_BASE 0x300000           /* Not really necessary */
-#elif defined(RKMCU_RK3588_NPU)
+#elif defined(HAL_NPU_MCU_CORE)
 #define HAL_CACHE_DECODED_ADDR_BASE 0x400000
 #endif
 
@@ -40,16 +40,17 @@
 #define HAL_SYSTICK_MODULE_ENABLED
 #define HAL_UART_MODULE_ENABLED
 
-#if defined(RKMCU_RK3588_PMU)
+#if defined(HAL_PMU_MCU_CORE)
 
 #define HAL_DCACHE_MODULE_ENABLED
 #define HAL_GPIO_MODULE_ENABLED
 #define HAL_ICACHE_MODULE_ENABLED
 #define HAL_INTMUX_MODULE_ENABLED
 #define HAL_IRQ_HANDLER_MODULE_ENABLED
+#define HAL_PD_MODULE_ENABLED
 #define HAL_PDM_MODULE_ENABLED
 #define HAL_PINCTRL_MODULE_ENABLED
-#define HAL_PMU_MODULE_ENABLED
+#define HAL_PWM_MODULE_ENABLED
 #define HAL_TIMER_MODULE_ENABLED
 #define HAL_VAD_MODULE_ENABLED
 
@@ -61,7 +62,7 @@
 #ifdef HAL_INTMUX_MODULE_ENABLED
 //#define HAL_INTMUX_CUSTOM_DISTRIBUTION_FEATURE_ENABLED
 #endif
-#endif /* RKMCU_RK3588_PMU */
+#endif /* HAL_PMU_MCU_CORE */
 
 /* HAL_DBG SUB CONFIG */
 

@@ -45,8 +45,8 @@
      - Blocking mode: The communication is performed in polling mode by calling HAL_SPI_PioTransfer().
      - No-Blocking mode: The communication is performed using Interrupts or DMA.
          - The HAL_SPI_ItTransfer(), HAL_SPI_IrqHandler() is used for Interrupt mode.
-         - The HAL_SPI_DmaTransfer() is used for DMA mode, and Hal driver dones not
-         - provide more DMA functions.
+         - The HAL_SPI_DmaTransfer() is used for DMA mode, and Hal driver dones not provide more DMA functions.
+             - Calling HAL_SPI_DMACyclicCallBackHandler() in the DMA cyclic callback to check SPI work well.
 
  - Invoke HAL_SPI_DeInit() if necessary.
 
@@ -88,6 +88,8 @@
 #define SPI_INT_TXFIM (1 << SPI_IMR_TXFIM_SHIFT)
 #endif
 
+#define SPI_INT_ERROR_ALL (SPI_INT_TXOI | SPI_INT_RXOI | SPI_INT_RXUI)
+
 /* Bit fields in ICR */
 #define SPI_CLEAR_INT_ALL  (1 << SPI_ICR_CCI_SHIFT)
 #define SPI_CLEAR_INT_RXUI (1 << SPI_ICR_CRFUI_SHIFT)
@@ -111,6 +113,8 @@
 
 #define IS_SPI_MODE(__MODE__) (((__MODE__) == CR0_OPM_SLAVE) || \
                                ((__MODE__) == CR0_OPM_MASTER))
+
+#define IS_SPI_SLAVE_MODE(__MODE__) ((__MODE__) == CR0_OPM_SLAVE)
 
 #define IS_SPI_DIRECTION(__MODE__) (((__MODE__) == CR0_XFM_TR)        || \
                                     ((__MODE__) == CR0_XFM_TO) ||        \
@@ -143,6 +147,11 @@
                                  ((__NCYCLES__) == CR0_CSM_2CYCLES) || \
                                  ((__NCYCLES__) == CR0_CSM_3CYCLES))
 
+#define IS_SPI_RSD(__NCYCLES__) (((__NCYCLES__) == CR0_CSM_0CYCLE) ||  \
+                                 ((__NCYCLES__) == CR0_CSM_1CYCLE) ||  \
+                                 ((__NCYCLES__) == CR0_CSM_2CYCLES) || \
+                                 ((__NCYCLES__) == CR0_CSM_3CYCLES))
+
 /*
  * About 200us cost for calling DMA function in each SPI DMA xfer in whtch it
  * can transfer 10Kbps in 50MHz IO rate. Unless DMA large data, or it's CPU waste.
@@ -167,7 +176,7 @@
   * @param  slave: working at slave or master.
   * @return HAL status
   */
-HAL_Status HAL_SPI_Init(struct SPI_HANDLE *pSPI, uint32_t base, bool slave)
+HAL_Status HAL_SPI_Init(struct SPI_HANDLE *pSPI, uintptr_t base, bool slave)
 {
     /* Check the SPI handle allocation */
     HAL_ASSERT(pSPI != NULL);
@@ -186,6 +195,7 @@ HAL_Status HAL_SPI_Init(struct SPI_HANDLE *pSPI, uint32_t base, bool slave)
     pSPI->config.endianMode = CR0_EM_BIG;
     pSPI->config.ssd = CR0_SSD_ONE;
     pSPI->config.csm = CR0_CSM_0CYCLE;
+    pSPI->config.configured = false;
     pSPI->dmaBurstSize = 1;
 
     return HAL_OK;
@@ -223,6 +233,11 @@ HAL_Status HAL_SPI_DeInit(struct SPI_HANDLE *pSPI)
   */
 static inline HAL_Status HAL_SPI_EnableChip(struct SPI_HANDLE *pSPI, int enable)
 {
+#ifdef SPI_BPENR_OFFSET
+    if (IS_SPI_SLAVE_MODE(pSPI->config.opMode)) {
+        WRITE_REG(pSPI->pReg->BPENR, (enable ? 1 : 0));
+    }
+#endif
     WRITE_REG(pSPI->pReg->ENR, (enable ? 1 : 0));
 
     return HAL_OK;
@@ -320,7 +335,7 @@ HAL_Status HAL_SPI_QueryBusState(struct SPI_HANDLE *pSPI)
 {
     HAL_ASSERT(pSPI != NULL);
 
-    if (pSPI->config.opMode == CR0_OPM_SLAVE) {
+    if (IS_SPI_SLAVE_MODE(pSPI->config.opMode)) {
 #if (SPI_VERSION == SPI_VER1_TYPE1)
         if (READ_REG(pSPI->pReg->SR) & SPI_SR_TFE_MASK) {
             uint32_t div, speed, us;
@@ -372,7 +387,7 @@ static inline uint32_t HAL_SPI_TxMax(struct SPI_HANDLE *pSPI)
 static HAL_Status HAL_SPI_PioWrite(struct SPI_HANDLE *pSPI)
 {
     uint32_t max = HAL_SPI_TxMax(pSPI);
-    uint32_t txw = 0;
+    uint32_t txw;
 
     while (max--) {
         if (pSPI->config.nBytes == 1) {
@@ -574,15 +589,19 @@ HAL_Status HAL_SPI_PioTransfer(struct SPI_HANDLE *pSPI)
     do {
         if (pSPI->pTxBuffer) {
             remain = pSPI->pTxBufferEnd - pSPI->pTxBuffer;
-            HAL_SPI_PioWrite(pSPI);
+            if (remain) {
+                HAL_SPI_PioWrite(pSPI);
+            }
         }
 
         if (pSPI->pRxBuffer) {
             remain = pSPI->pRxBufferEnd - pSPI->pRxBuffer;
-            if (pSPI->config.nBytes == 1) {
-                HAL_SPI_PioReadByte(pSPI);
-            } else {
-                HAL_SPI_PioReadShort(pSPI);
+            if (remain) {
+                if (pSPI->config.nBytes == 1) {
+                    HAL_SPI_PioReadByte(pSPI);
+                } else {
+                    HAL_SPI_PioReadShort(pSPI);
+                }
             }
         }
     } while (remain);
@@ -632,12 +651,14 @@ static inline HAL_Status HAL_SPI_UnmaskIntr(struct SPI_HANDLE *pSPI, uint32_t ma
   */
 HAL_Status HAL_SPI_IrqHandler(struct SPI_HANDLE *pSPI)
 {
-    uint32_t irqStatus = READ_REG(pSPI->pReg->ISR);
+    uint32_t irqStatus;
     uint32_t int_level = HAL_SPI_FIFO_LENGTH / 2;
     uint32_t left;
     HAL_Status result;
 
     HAL_ASSERT(pSPI != NULL);
+
+    irqStatus = READ_REG(pSPI->pReg->ISR);
 
     if (!irqStatus) {
         result = HAL_NODEV;
@@ -650,7 +671,7 @@ HAL_Status HAL_SPI_IrqHandler(struct SPI_HANDLE *pSPI)
     }
 
     /* Error handling */
-    if (irqStatus & (SPI_INT_TXOI | SPI_INT_RXOI | SPI_INT_RXUI)) {
+    if (irqStatus & SPI_INT_ERROR_ALL) {
         WRITE_REG(pSPI->pReg->ICR, SPI_CLEAR_INT_TXOI | SPI_CLEAR_INT_RXOI | SPI_CLEAR_INT_RXUI);
         result = HAL_ERROR;
         goto out;
@@ -706,6 +727,13 @@ HAL_Status HAL_SPI_IrqHandler(struct SPI_HANDLE *pSPI)
     }
 #endif
 
+#ifdef HAL_SPI_SLAVE_FLEXIBLE_LENGTH_ENABLED
+    if (irqStatus & SPI_INT_SSPI) {
+        result = HAL_OK;
+        goto out;
+    }
+#endif
+
     return HAL_BUSY;
 
 out:
@@ -713,6 +741,36 @@ out:
     WRITE_REG(pSPI->pReg->ICR, SPI_CLEAR_INT_ALL);
 
     return result;
+}
+
+/**
+  * @brief  Handle SPI DMA cyclic mode callback handler.
+  * @param  pSPI: pointer to a SPI_Handle structure that contains
+  *               the configuration information for the specified SPI module.
+  * @return If the IRQ status is normal, return 0, or error ISR register status.
+  */
+int HAL_SPI_DMACyclicCallBackHandler(struct SPI_HANDLE *pSPI)
+{
+    uint32_t irqStatus;
+
+    HAL_ASSERT(pSPI != NULL);
+
+    irqStatus = READ_REG(pSPI->pReg->RISR);
+
+    /* Error handling */
+    if (irqStatus & (SPI_INT_TXOI | SPI_INT_RXOI)) {
+        WRITE_REG(pSPI->pReg->ICR, SPI_CLEAR_INT_ALL);
+
+        return irqStatus;
+    }
+
+#ifdef HAL_SPI_SLAVE_FLEXIBLE_LENGTH_ENABLED
+    if (irqStatus & SPI_INT_SSPI) {
+        WRITE_REG(pSPI->pReg->ICR, SPI_CLEAR_INT_ALL);
+    }
+#endif
+
+    return 0;
 }
 
 /**
@@ -727,6 +785,11 @@ HAL_Status HAL_SPI_ItTransfer(struct SPI_HANDLE *pSPI)
     uint32_t newMask;
 
     HAL_ASSERT(pSPI != NULL);
+
+    /* SPI slave only support transfer DMA or IT in one irq */
+    if (IS_SPI_SLAVE_MODE(pSPI->config.opMode) && (pSPI->len > HAL_SPI_FIFO_LENGTH / 2)) {
+        return HAL_INVAL;
+    }
 
     pSPI->type = SPI_IT;
     if (pSPI->config.xfmMode == CR0_XFM_RO || pSPI->config.xfmMode == CR0_XFM_TR) {
@@ -762,6 +825,12 @@ HAL_Status HAL_SPI_ItTransfer(struct SPI_HANDLE *pSPI)
 #endif
     }
 
+#ifdef HAL_SPI_SLAVE_FLEXIBLE_LENGTH_ENABLED
+    if (IS_SPI_SLAVE_MODE(pSPI->config.opMode)) {
+        newMask |= SPI_INT_SSPI;
+    }
+#endif
+
     WRITE_REG(pSPI->pReg->IMR, newMask);
 
     return HAL_OK;
@@ -777,7 +846,7 @@ bool HAL_SPI_IsSlave(struct SPI_HANDLE *pSPI)
 {
     HAL_ASSERT(pSPI != NULL);
 
-    return (pSPI->config.opMode == CR0_OPM_SLAVE);
+    return IS_SPI_SLAVE_MODE(pSPI->config.opMode);
 }
 
 /**
@@ -811,7 +880,37 @@ bool HAL_SPI_CanDma(struct SPI_HANDLE *pSPI)
     }
 #endif
 
-    return (pSPI->len > HAL_SPI_DMA_SIZE_MIN);
+    if (IS_SPI_SLAVE_MODE(pSPI->config.opMode)) {
+#ifdef HAL_SPI_SLAVE_FLEXIBLE_LENGTH_ENABLED
+
+        return true;
+#else
+
+        return (pSPI->len > HAL_SPI_FIFO_LENGTH / 2);
+#endif
+    } else {
+        return (pSPI->len > HAL_SPI_DMA_SIZE_MIN);
+    }
+}
+
+/**
+  * @brief  Check SPI cs status.
+  * @param  pSPI: pointer to a SPI_Handle structure that contains
+  *               the configuration information for SPI module.
+  * @return Bool
+  */
+bool HAL_SPI_IsCsInactive(struct SPI_HANDLE *pSPI)
+{
+    HAL_ASSERT(pSPI != NULL);
+
+#if SPI_SR_SSI_MASK
+
+    return READ_REG(pSPI->pReg->SR) & SPI_SR_SSI_MASK;
+#else
+    HAL_ASSERT(0);
+
+    return HAL_FALSE;
+#endif
 }
 
 /**
@@ -826,6 +925,11 @@ HAL_Status HAL_SPI_DmaTransfer(struct SPI_HANDLE *pSPI)
 
     HAL_ASSERT(pSPI != NULL);
 
+#ifdef HAL_SPI_SLAVE_FLEXIBLE_LENGTH_ENABLED
+    if (IS_SPI_SLAVE_MODE(pSPI->config.opMode)) {
+        HAL_SPI_UnmaskIntr(pSPI, SPI_INT_SSPI | SPI_INT_ERROR_ALL);
+    }
+#endif
     pSPI->type = SPI_DMA;
     if (HAL_SPI_CanDma(pSPI)) {
         if (pSPI->pTxBuffer) {
@@ -864,35 +968,6 @@ HAL_Status HAL_SPI_Stop(struct SPI_HANDLE *pSPI)
 }
 
 /**
-  * @brief  Configure the SPI transfer mode depend on the tx/rx buffer.
-  * @param  pSPI: pointer to a SPI_Handle structure that contains
-  *               the configuration information for SPI module.
-  * @return HAL status
-  */
-static HAL_Status HAL_SPI_ConfigureTransferMode(struct SPI_HANDLE *pSPI)
-{
-    uint32_t cr0;
-
-    if (pSPI->pTxBuffer && pSPI->pRxBuffer) {
-        pSPI->config.xfmMode = CR0_XFM_TR;
-    } else if (pSPI->pTxBuffer) {
-        pSPI->config.xfmMode = CR0_XFM_TO;
-    } else if (pSPI->pRxBuffer) {
-        pSPI->config.xfmMode = CR0_XFM_RO;
-    }
-
-    cr0 = READ_REG(pSPI->pReg->CTRLR[0]);
-    cr0 &= ~SPI_CTRLR0_XFM_MASK;
-    cr0 |= pSPI->config.xfmMode;
-
-    WRITE_REG(pSPI->pReg->DMARDLR, pSPI->dmaBurstSize - 1);
-
-    WRITE_REG(pSPI->pReg->CTRLR[0], cr0);
-
-    return HAL_OK;
-}
-
-/**
   * @brief  Program the SPI config via this api.
   * @param  pSPI: pointer to a SPI_Handle structure that contains
   *               the configuration information for SPI module.
@@ -905,9 +980,42 @@ HAL_Status HAL_SPI_Configure(struct SPI_HANDLE *pSPI, const uint8_t *pTxData, ui
 {
     uint32_t cr0 = 0;
     uint32_t div = 0;
+    uint32_t mode;
 
+    /* Partitial register configure */
     HAL_ASSERT(pSPI != NULL);
     HAL_ASSERT((pTxData != NULL) || (pRxData != NULL));
+
+    mode = pSPI->config.xfmMode;
+
+    pSPI->pTxBuffer = pTxData;
+    pSPI->pTxBufferEnd = pTxData + size;
+    pSPI->pRxBuffer = pRxData;
+    pSPI->pRxBufferEnd = pRxData + size;
+    pSPI->len = size;
+
+    if (pSPI->pTxBuffer && pSPI->pRxBuffer) {
+        pSPI->config.xfmMode = CR0_XFM_TR;
+    } else if (pSPI->pTxBuffer) {
+        pSPI->config.xfmMode = CR0_XFM_TO;
+    } else if (pSPI->pRxBuffer) {
+        pSPI->config.xfmMode = CR0_XFM_RO;
+        if (pSPI->config.nBytes == 1) {
+            WRITE_REG(pSPI->pReg->CTRLR[1], pSPI->len - 1);
+        } else if (pSPI->config.nBytes == 2) {
+            WRITE_REG(pSPI->pReg->CTRLR[1], (pSPI->len / 2) - 1);
+        } else {
+            WRITE_REG(pSPI->pReg->CTRLR[1], (pSPI->len * 2) - 1);
+        }
+    }
+    WRITE_REG(pSPI->pReg->DMARDLR, pSPI->dmaBurstSize - 1);
+
+    if (pSPI->config.opMode == CR0_OPM_MASTER && pSPI->config.configured && mode == pSPI->config.xfmMode) {
+        return HAL_OK;
+    }
+    /* Partitial register configure end */
+
+    /* Complete register configure begin */
     HAL_ASSERT(IS_SPI_MODE(pSPI->config.opMode));
     HAL_ASSERT(IS_SPI_DIRECTION(pSPI->config.xfmMode));
     HAL_ASSERT(IS_SPI_DATASIZE(pSPI->config.nBytes));
@@ -918,50 +1026,42 @@ HAL_Status HAL_SPI_Configure(struct SPI_HANDLE *pSPI, const uint8_t *pTxData, ui
     HAL_ASSERT(IS_SPI_APBTRANSFORM(pSPI->config.apbTransform));
     HAL_ASSERT(IS_SPI_SSD_BIT(pSPI->config.ssd));
     HAL_ASSERT(IS_SPI_CSM(pSPI->config.csm));
+    HAL_ASSERT(IS_SPI_RSD(pSPI->config.rsd));
 
+    /* Controller configuration */
+    cr0 |= pSPI->config.xfmMode;
     cr0 |= pSPI->config.opMode;
-
     cr0 |= pSPI->config.apbTransform | pSPI->config.endianMode | pSPI->config.ssd;
-    /* Data width */
     cr0 |= pSPI->config.nBytes;
-
-    /* Mode for polarity, phase, first bit and endian */
     cr0 |= pSPI->config.clkPolarity | pSPI->config.clkPhase | pSPI->config.firstBit;
-
-    /* Config CSM cycles */
     cr0 |= pSPI->config.csm;
-
-    /* div doesn't support odd number */
-    div = HAL_DIV_ROUND_UP(pSPI->maxFreq, pSPI->config.speed);
-    div = (div + 1) & 0xfffe;
-
+    cr0 |= pSPI->config.rsd;
     WRITE_REG(pSPI->pReg->CTRLR[0], cr0);
 
+    /* Fifo configuration */
     WRITE_REG(pSPI->pReg->TXFTLR, HAL_SPI_FIFO_LENGTH / 2 - 1);
     WRITE_REG(pSPI->pReg->RXFTLR, HAL_SPI_FIFO_LENGTH / 2 - 1);
-
+#ifdef HAL_SPI_SLAVE_FLEXIBLE_LENGTH_ENABLED
+    WRITE_REG(pSPI->pReg->DMATDLR, pSPI->dmaBurstSize - 1);
+#else
     WRITE_REG(pSPI->pReg->DMATDLR, HAL_SPI_FIFO_LENGTH / 2 - 1);
-    WRITE_REG(pSPI->pReg->DMARDLR, 0);
+#endif
 
+    /* Clock configuration */
+    div = HAL_DIV_ROUND_UP(pSPI->maxFreq, pSPI->config.speed);
+    div = (div + 1) & 0xfffe;
     HAL_SPI_SetClock(pSPI, div);
 
-    pSPI->pTxBuffer = pTxData;
-    pSPI->pTxBufferEnd = pTxData + size;
-    pSPI->pRxBuffer = pRxData;
-    pSPI->pRxBufferEnd = pRxData + size;
-    pSPI->len = size;
-
-    HAL_SPI_ConfigureTransferMode(pSPI);
-
-    if (pSPI->config.xfmMode == CR0_XFM_RO) {
-        if (pSPI->config.nBytes == 1) {
-            WRITE_REG(pSPI->pReg->CTRLR[1], pSPI->len - 1);
-        } else if (pSPI->config.nBytes == 2) {
-            WRITE_REG(pSPI->pReg->CTRLR[1], (pSPI->len / 2) - 1);
-        } else {
-            WRITE_REG(pSPI->pReg->CTRLR[1], (pSPI->len * 2) - 1);
-        }
+    /* Slave configuration */
+#ifdef SPI_BPENR_OFFSET
+    if (IS_SPI_SLAVE_MODE(pSPI->config.opMode)) {
+        WRITE_REG(pSPI->pReg->BYPASS, SPI_BYPASS_TXFIE_MASK | SPI_BYPASS_BYEN_MASK);
+    } else {
+        WRITE_REG(pSPI->pReg->BYPASS, 0);
     }
+#endif
+    pSPI->config.configured = true;
+    /* Complete register configure end */
 
     return HAL_OK;
 }

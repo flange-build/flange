@@ -42,7 +42,7 @@ const struct HAL_I2C_DEV g_i2c0Dev =
     .pclkGateID = CLK_PMU0_I2C0_GATE,
 };
 
-#if defined(RKMCU_RK3562_BUS) || defined(HAL_AP_CORE)
+#if defined(HAL_BUS_MCU_CORE) || defined(HAL_AP_CORE)
 const struct HAL_I2C_DEV g_i2c1Dev =
 {
     .pReg = I2C1,
@@ -87,8 +87,114 @@ const struct HAL_I2C_DEV g_i2c5Dev =
     .clkGateID = CLK_I2C5_GATE,
     .pclkGateID = PCLK_I2C5_GATE,
 };
-#endif /* RKMCU_RK3562_BUS || HAL_AP_CORE */
+#endif /* HAL_BUS_MCU_CORE || HAL_AP_CORE */
 #endif /* HAL_I2C_MODULE_ENABLED */
+
+#ifdef HAL_PCIE_MODULE_ENABLED
+struct HAL_PCIE_DEV g_pcieDev =
+{
+    .apbBase = PCIE_APB_BASE,
+    .dbiBase = PCIE_DBI_BASE,
+    .cfgBase = PCIE_MMIO_BASE,
+    .lanes = 1,
+    .gen = 2,
+    .firstBusNo = 0x0,
+    .legacyIrqNum = PCIE_LEGACY_IRQn,
+    .sysIrqNum = PCIE_SYS_IRQn,
+    .resdesBase = 0x170,
+};
+#endif
+
+#ifdef HAL_SAI_MODULE_ENABLED
+struct HAL_SAI_DEV g_sai0Dev =
+{
+    .pReg = SAI0,
+    .mclk = CLK_SAI0,
+    .mclkGate = MCLK_SAI0_GATE,
+    .bclkFs = 64,
+    .rxDmaData =
+    {
+        .addr = SAI0_BASE + SAI_RXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_SAI0_RX,
+        .dmac = DMA,
+    },
+    .txDmaData =
+    {
+        .addr = SAI0_BASE + SAI_TXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_SAI0_TX,
+        .dmac = DMA,
+    },
+};
+
+struct HAL_SAI_DEV g_sai1Dev =
+{
+    .pReg = SAI1,
+    .mclk = CLK_SAI1,
+    .mclkGate = MCLK_SAI1_GATE,
+    .bclkFs = 64,
+    .rxDmaData =
+    {
+        .addr = SAI1_BASE + SAI_RXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_SAI1_RX,
+        .dmac = DMA,
+    },
+    .txDmaData =
+    {
+        .addr = SAI1_BASE + SAI_TXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_SAI1_TX,
+        .dmac = DMA,
+    },
+};
+
+struct HAL_SAI_DEV g_sai2Dev =
+{
+    .pReg = SAI2,
+    .mclk = CLK_SAI2,
+    .mclkGate = MCLK_SAI2_GATE,
+    .bclkFs = 64,
+    .rxDmaData =
+    {
+        .addr = SAI2_BASE + SAI_RXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_SAI2_RX,
+        .dmac = DMA,
+    },
+    .txDmaData =
+    {
+        .addr = SAI2_BASE + SAI_TXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_SAI2_TX,
+        .dmac = DMA,
+    },
+};
+#endif
+
+#ifdef HAL_SPDIFTX_MODULE_ENABLED
+struct HAL_SPDIFTX_DEV g_spdiftx0Dev =
+{
+    .pReg = SPDIFTX0,
+    .mclk = CLK_SPDIF,
+    .irqNum = SPDIFTX0_IRQn,
+    .txDmaData =
+    {
+        .addr = SPDIFTX0_BASE + SPDIFTX_SMPDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_SPDIF,
+        .dmac = DMA,
+    },
+};
+#endif
 
 #ifdef HAL_SPI_MODULE_ENABLED
 const struct HAL_SPI_DEV g_spi0Dev = {
@@ -96,37 +202,43 @@ const struct HAL_SPI_DEV g_spi0Dev = {
     .clkId = CLK_PMU1_SPI0,
     .clkGateID = CLK_PMU1_SPI0_GATE,
     .pclkGateID = PCLK_PMU1_SPI0_GATE,
+    .maxFreq = 200000000,
     .irqNum = SPI0_IRQn,
     .isSlave = false,
     .txDma = {
         .channel = DMA_REQ_SPI0_TX,
         .direction = DMA_MEM_TO_DEV,
         .addr = SPI0_BASE + 0x400,
+        .dmac = DMA,
     },
     .rxDma = {
         .channel = DMA_REQ_SPI0_RX,
         .direction = DMA_DEV_TO_MEM,
         .addr = SPI0_BASE + 0x800,
+        .dmac = DMA,
     },
 };
 
-#if defined(RKMCU_RK3562_BUS) || defined(HAL_AP_CORE)
+#if defined(HAL_BUS_MCU_CORE) || defined(HAL_AP_CORE)
 const struct HAL_SPI_DEV g_spi1Dev = {
     .base = SPI1_BASE,
     .clkId = CLK_SPI1,
     .clkGateID = CLK_SPI1_GATE,
     .pclkGateID = PCLK_SPI1_GATE,
+    .maxFreq = 200000000,
     .irqNum = SPI1_IRQn,
     .isSlave = false,
     .txDma = {
         .channel = DMA_REQ_SPI1_TX,
         .direction = DMA_MEM_TO_DEV,
         .addr = SPI1_BASE + 0x400,
+        .dmac = DMA,
     },
     .rxDma = {
         .channel = DMA_REQ_SPI1_RX,
         .direction = DMA_DEV_TO_MEM,
         .addr = SPI1_BASE + 0x800,
+        .dmac = DMA,
     },
 };
 
@@ -141,17 +253,19 @@ const struct HAL_SPI_DEV g_spi2Dev = {
         .channel = DMA_REQ_SPI2_TX,
         .direction = DMA_MEM_TO_DEV,
         .addr = SPI2_BASE + 0x400,
+        .dmac = DMA,
     },
     .rxDma = {
         .channel = DMA_REQ_SPI2_RX,
         .direction = DMA_DEV_TO_MEM,
         .addr = SPI2_BASE + 0x800,
+        .dmac = DMA,
     },
 };
-#endif /* RKMCU_RK3562_BUS || HAL_AP_CORE */
+#endif /* HAL_BUS_MCU_CORE || HAL_AP_CORE */
 #endif /* HAL_SPI_MODULE_ENABLED */
 
-#if defined(RKMCU_RK3562_BUS) || defined(HAL_AP_CORE)
+#if defined(HAL_BUS_MCU_CORE) || defined(HAL_AP_CORE)
 
 #ifdef HAL_FSPI_MODULE_ENABLED
 struct HAL_FSPI_HOST g_fspi0Dev =
@@ -164,6 +278,7 @@ struct HAL_FSPI_HOST g_fspi0Dev =
     .irqNum = FSPI0_IRQn,
     .xipMemCode = 0,
     .xipMemData = 0,
+    .maxDllCells = 0x1FF,
     .xmmcDev[0] =
     {
         .type = 0,
@@ -273,9 +388,9 @@ const struct HAL_UART_DEV g_uart9Dev =
 };
 #endif
 
-#endif /* RKMCU_RK3562_BUS || HAL_AP_CORE */
+#endif /* HAL_BUS_MCU_CORE || HAL_AP_CORE */
 
-#ifdef RKMCU_RK3562_PMU
+#ifdef HAL_PMU_MCU_CORE
 
 #ifdef HAL_UART_MODULE_ENABLED
 const struct HAL_UART_DEV g_uart0Dev =
@@ -289,7 +404,7 @@ const struct HAL_UART_DEV g_uart0Dev =
 };
 #endif
 
-#endif /* RKMCU_RK3562_PMU */
+#endif /* HAL_PMU_MCU_CORE */
 
 #ifdef HAL_PWM_MODULE_ENABLED
 const struct HAL_PWM_DEV g_pwm0Dev =
@@ -298,7 +413,7 @@ const struct HAL_PWM_DEV g_pwm0Dev =
     .clkID = CLK_PMU1_PWM0,
     .clkGateID = CLK_PMU1_PWM0_GATE,
     .pclkGateID = PCLK_PMU1_PWM0_GATE,
-    .irqNum = PWM0_IRQn,
+    .irqNum[0] = PWM0_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm1Dev =
@@ -307,7 +422,7 @@ const struct HAL_PWM_DEV g_pwm1Dev =
     .clkID = CLK_PWM1_PERI,
     .clkGateID = CLK_PWM1_PERI_GATE,
     .pclkGateID = PCLK_PWM1_PERI_GATE,
-    .irqNum = PWM1_IRQn,
+    .irqNum[0] = PWM1_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm2Dev =
@@ -316,7 +431,7 @@ const struct HAL_PWM_DEV g_pwm2Dev =
     .clkID = CLK_PWM2_PERI,
     .clkGateID = CLK_PWM2_PERI_GATE,
     .pclkGateID = PCLK_PWM2_PERI_GATE,
-    .irqNum = PWM2_IRQn,
+    .irqNum[0] = PWM2_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm3Dev =
@@ -325,7 +440,21 @@ const struct HAL_PWM_DEV g_pwm3Dev =
     .clkID = CLK_PWM3_PERI,
     .clkGateID = CLK_PWM3_PERI_GATE,
     .pclkGateID = PCLK_PWM3_PERI_GATE,
-    .irqNum = PWM3_IRQn,
+    .irqNum[0] = PWM3_IRQn,
+};
+#endif
+
+#ifdef HAL_GMAC_MODULE_ENABLED
+const struct HAL_GMAC_DEV g_gmac0Dev =
+{
+    .pReg = GMAC0,
+    .clkID125M = CLK_GMAC_125M_CRU_I,
+    .clkID50M = CLK_GMAC_50M_CRU_I,
+    .clkGateID125M = CLK_GMAC_125M_CRU_GATE,
+    .clkGateID50M = CLK_GMAC_50M_CRU_GATE,
+    .pclkID = PCLK_BUS,
+    .pclkGateID = PCLK_GMAC_GATE,
+    .irqNum = GMAC0_IRQn,
 };
 #endif
 

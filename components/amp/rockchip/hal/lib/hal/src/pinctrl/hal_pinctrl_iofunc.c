@@ -55,13 +55,13 @@ examples:
 #define _DEF(x)            _IS_PAREN(x)
 
 /* IOFUNC Select Setting Definitions */
-#define _IOMUX_WRITE(REG, DATA, SHIFT, MASK)                       \
-{                                                                  \
-    HAL_ASSERT((uint32_t)((DATA) << (SHIFT)) <= (uint32_t)(MASK)); \
-    HAL_DBG("PINCTRL Write before set reg val=0x%lx\n", REG);      \
-    REG = ((DATA) << (SHIFT)) | ((MASK) << 16);                    \
-    HAL_DBG("PINCTRL Write after  set reg val=0x%lx\n", REG);      \
-    ret = HAL_OK;                                                  \
+#define _IOMUX_WRITE(REG, DATA, SHIFT, MASK)                          \
+{                                                                     \
+    HAL_ASSERT((uint32_t)((DATA) << (SHIFT)) <= (uint32_t)(MASK));    \
+    HAL_DBG("PINCTRL Write before set reg val=0x%" PRIx32 "\n", REG); \
+    REG = ((DATA) << (SHIFT)) | ((MASK) << 16);                       \
+    HAL_DBG("PINCTRL Write after  set reg val=0x%" PRIx32 "\n", REG); \
+    ret = HAL_OK;                                                     \
 }
 
 /* IOFUNC Select Basic Definition */

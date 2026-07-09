@@ -58,7 +58,7 @@ static __IO uint32_t uwTick;
 static eHAL_tickFreq uwTickFreq = HAL_TICK_FREQ_DEFAULT;
 
 /********************* Private Function Definition ***************************/
-#if defined(__CORTEX_A) || defined(__CORTEX_M)
+#if defined(__CORTEX_A) || defined(__CORTEX_M) || defined(__STAR_MC)
 #if __CORTEX_M == 0U || !defined(__GNUC__)
 static void CPUCycleLoop(uint32_t cycles)
 {
@@ -95,11 +95,11 @@ static void CPUCycleLoop(uint32_t cycles)
 #elif defined(__RISC_V)
 static void CPUCycleLoop(uint32_t cycles)
 {
+    cycles /= 4;
+
     asm volatile (
         "mv   a0, %0\n\t"
         "addi a0, a0, 2\n\t"   //    1    2    Round to the nearest multiple of 4.
-        "li   a1, 4\n\t"
-        "div  a0, a0, a1\n\t"  //    1    2    Divide by 4 and set flags.
         "li   a1, 2\n\t"
         "bnez a0, 1f\n\t"      //    2    2    Skip if 0.
         "j    2f\n\t"
@@ -111,6 +111,20 @@ static void CPUCycleLoop(uint32_t cycles)
         "nop\n\t"              //    1    2    Loop alignment padding.
         "2:"
         : : "r" (cycles)
+        );
+}
+#elif defined(__xtensa__)
+static void CPUCycleLoop(uint32_t cycles)
+{
+    cycles /= 2;                  // 一次loop两个cycles
+
+    __asm__ volatile (
+        "1:                 \n"
+        "   addi %0, %0, -1 \n"   // 减少计数器
+        "   bnez %0, 1b     \n"   // 如果计数器不为0，跳回到1
+        : "+r" (cycles)           // 输入+输出操作数（读写）
+        :                         // 无输入
+        : "cc"                    // clobber 条目
         );
 }
 #endif
@@ -394,7 +408,7 @@ void HAL_CPU_EnterIdle(void)
     g_last_enter_idle_time = HAL_GetSysTimerCount();
 #endif
 
-    __asm volatile ("wfi");
+    __WFI();
 
 #if defined(HAL_CPU_USAGE_ENABLED)
     idle_time = HAL_GetSysTimerCount() - g_last_enter_idle_time;

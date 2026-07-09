@@ -5,6 +5,116 @@
 
 #include "hal_bsp.h"
 
+#ifdef HAL_I2STDM_MODULE_ENABLED
+struct HAL_I2STDM_DEV g_i2sTdm0Dev =
+{
+    .pReg = I2STDM0,
+    .mclkTx = CLK_I2S0_8CH_TX,
+    .mclkTxGate = MCLK_I2S0_8CH_TX_GATE,
+    .mclkRx = CLK_I2S0_8CH_RX,
+    .mclkRxGate = MCLK_I2S0_8CH_RX_GATE,
+    .hclk = HCLK_I2S0_8CH_GATE,
+    .rsts[0] = SRST_M_I2S0_8CH_TX,
+    .rsts[1] = SRST_M_I2S0_8CH_RX,
+    .bclkFs = 64,
+    .txDmaData =
+    {
+        .addr = I2STDM0_BASE + I2STDM_TXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_I2S0_8CH_TX,
+        .dmac = DMA1,
+    },
+};
+
+struct HAL_I2STDM_DEV g_i2sTdm1Dev =
+{
+    .pReg = I2STDM1,
+    .mclkTx = CLK_I2S1_8CH_TX,
+    .mclkTxGate = MCLK_I2S1_8CH_TX_GATE,
+    .mclkRx = CLK_I2S1_8CH_RX,
+    .mclkRxGate = MCLK_I2S1_8CH_RX_GATE,
+    .hclk = HCLK_I2S1_8CH_GATE,
+    .rsts[0] = SRST_M_I2S1_8CH_TX,
+    .rsts[1] = SRST_M_I2S1_8CH_RX,
+    .bclkFs = 64,
+    .rxDmaData =
+    {
+        .addr = I2STDM1_BASE + I2STDM_RXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_I2S1_8CH_RX,
+        .dmac = DMA1,
+    },
+    .txDmaData =
+    {
+        .addr = I2STDM1_BASE + I2STDM_TXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_I2S1_8CH_TX,
+        .dmac = DMA1,
+    },
+};
+
+struct HAL_I2STDM_DEV g_i2sTdm2Dev =
+{
+    .pReg = I2STDM2,
+    .mclkTx = CLK_I2S2_2CH,
+    .mclkTxGate = MCLK_I2S2_2CH_GATE,
+    .mclkRx = CLK_I2S2_2CH,
+    .mclkRxGate = MCLK_I2S2_2CH_GATE,
+    .hclk = HCLK_I2S2_2CH_GATE,
+    .rsts[0] = SRST_M_I2S2_2CH,
+    .rsts[1] = SRST_M_I2S2_2CH,
+    .bclkFs = 64,
+    .rxDmaData =
+    {
+        .addr = I2STDM2_BASE + I2STDM_RXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_I2S2_2CH_RX,
+        .dmac = DMA1,
+    },
+    .txDmaData =
+    {
+        .addr = I2STDM2_BASE + I2STDM_TXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_I2S2_2CH_TX,
+        .dmac = DMA1,
+    },
+};
+
+struct HAL_I2STDM_DEV g_i2sTdm3Dev =
+{
+    .pReg = I2STDM3,
+    .mclkTx = CLK_I2S3_2CH_TX,
+    .mclkTxGate = MCLK_I2S3_2CH_TX_GATE,
+    .mclkRx = CLK_I2S3_2CH_RX,
+    .mclkRxGate = MCLK_I2S3_2CH_RX_GATE,
+    .hclk = HCLK_I2S3_2CH_GATE,
+    .rsts[0] = SRST_M_I2S3_2CH_TX,
+    .rsts[1] = SRST_M_I2S3_2CH_RX,
+    .bclkFs = 64,
+    .rxDmaData =
+    {
+        .addr = I2STDM3_BASE + I2STDM_RXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_I2S3_2CH_RX,
+        .dmac = DMA1,
+    },
+    .txDmaData =
+    {
+        .addr = I2STDM3_BASE + I2STDM_TXDR_OFFSET,
+        .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
+        .maxBurst = 8,
+        .dmaReqCh = DMA_REQ_I2S3_2CH_TX,
+        .dmac = DMA1,
+    },
+};
+#endif
+
 #ifdef HAL_PL330_MODULE_ENABLED
 struct HAL_PL330_DEV g_pl330Dev0 =
 {
@@ -31,6 +141,7 @@ const struct HAL_SPI_DEV g_spi0Dev = {
     .clkId = CLK_SPI0,
     .clkGateID = CLK_SPI0_GATE,
     .pclkGateID = PCLK_SPI0_GATE,
+    .maxFreq = 200000000,
     .irqNum = SPI0_IRQn,
     .isSlave = false,
     .txDma = {
@@ -52,6 +163,7 @@ const struct HAL_SPI_DEV g_spi1Dev = {
     .clkId = CLK_SPI1,
     .clkGateID = CLK_SPI1_GATE,
     .pclkGateID = PCLK_SPI1_GATE,
+    .maxFreq = 200000000,
     .irqNum = SPI1_IRQn,
     .isSlave = false,
     .txDma = {
@@ -284,6 +396,7 @@ struct HAL_FSPI_HOST g_fspi0Dev =
     .irqNum = FSPI0_IRQn,
     .xipMemCode = 0,
     .xipMemData = 0,
+    .maxDllCells = 0x1FF,
     .xmmcDev[0] =
     {
         .type = 0,
@@ -324,20 +437,32 @@ const struct HAL_CANFD_DEV g_can2Dev =
 const struct HAL_GMAC_DEV g_gmac0Dev =
 {
     .pReg = GMAC0,
-    .clkID = CLK_MAC0_2TOP,
-    .clkGateID = CLK_MAC0_2TOP_GATE,
+    .clkID125M = CLK_MAC0_2TOP,
+    .clkID50M = CLK_MAC0_2TOP,
+    .clkGateID125M = CLK_MAC0_2TOP_GATE,
+    .clkGateID50M = CLK_MAC0_2TOP_GATE,
     .pclkID = PCLK_PHP,
     .pclkGateID = PCLK_GMAC0_GATE,
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+    .ptpClkID = CLK_GMAC0_PTP_REF,
+    .ptpClkGateID = CLK_GMAC0_PTP_REF_GATE,
+#endif
     .irqNum = GMAC0_IRQn,
 };
 
 const struct HAL_GMAC_DEV g_gmac1Dev =
 {
     .pReg = GMAC1,
-    .clkID = CLK_MAC1_2TOP,
-    .clkGateID = CLK_MAC1_2TOP_GATE,
+    .clkID125M = CLK_MAC1_2TOP,
+    .clkID50M = CLK_MAC1_2TOP,
+    .clkGateID125M = CLK_MAC1_2TOP_GATE,
+    .clkGateID50M = CLK_MAC1_2TOP_GATE,
     .pclkID = PCLK_USB,
     .pclkGateID = PCLK_GMAC1_GATE,
+#ifdef HAL_GMAC_PTP_FEATURE_ENABLED
+    .ptpClkID = CLK_GMAC1_PTP_REF,
+    .ptpClkGateID = CLK_GMAC1_PTP_REF_GATE,
+#endif
     .irqNum = GMAC1_IRQn,
 };
 #endif
@@ -352,6 +477,9 @@ struct HAL_PCIE_DEV g_pcieDev =
     .gen = 3,
     .firstBusNo = 0x20,
     .legacyIrqNum = PCIE30x2_LEGACY_IRQn,
+    .sysIrqNum = PCIE30x2_SYS_IRQn,
+    .resdesBase = 0x1a0,
+    .resbarBase = 0x2b8,
 };
 #endif
 
@@ -362,7 +490,7 @@ const struct HAL_PWM_DEV g_pwm0Dev =
     .clkID = 0,
     .clkGateID = CLK_PWM0_GATE,
     .pclkGateID = PCLK_PWM0_GATE,
-    .irqNum = PWM_PMU_IRQn,
+    .irqNum[0] = PWM_PMU_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm1Dev =
@@ -371,7 +499,7 @@ const struct HAL_PWM_DEV g_pwm1Dev =
     .clkID = CLK_PWM1,
     .clkGateID = CLK_PWM1_GATE,
     .pclkGateID = PCLK_PWM1_GATE,
-    .irqNum = PWM1_IRQn,
+    .irqNum[0] = PWM1_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm2Dev =
@@ -380,7 +508,7 @@ const struct HAL_PWM_DEV g_pwm2Dev =
     .clkID = CLK_PWM2,
     .clkGateID = CLK_PWM2_GATE,
     .pclkGateID = PCLK_PWM2_GATE,
-    .irqNum = PWM2_IRQn,
+    .irqNum[0] = PWM2_IRQn,
 };
 
 const struct HAL_PWM_DEV g_pwm3Dev =
@@ -389,7 +517,20 @@ const struct HAL_PWM_DEV g_pwm3Dev =
     .clkID = CLK_PWM3,
     .clkGateID = CLK_PWM3_GATE,
     .pclkGateID = PCLK_PWM3_GATE,
-    .irqNum = PWM3_IRQn,
+    .irqNum[0] = PWM3_IRQn,
+};
+#endif
+
+#if defined(HAL_EHCI_MODULE_ENABLED) || defined(HAL_OHCI_MODULE_ENABLED)
+const struct HAL_USBH_DEV g_usbhDev =
+{
+    .ehciReg = USB2HOST0_EHCI,
+    .ohciReg = USB2HOST0_OHCI,
+    .ehciIrqNum = USB2HOST0_EHCI_IRQn,
+    .ohciIrqNum = USB2HOST0_OHCI_IRQn,
+    .usbhGateID = HCLK_USB2HOST0_GATE,
+    .usbhArbGateID = HCLK_USB2HOST0_ARB_GATE,
+    .utmiclkGateID = XIN_OSC0_USBPHY0_GATE,
 };
 #endif
 

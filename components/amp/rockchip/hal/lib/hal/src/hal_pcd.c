@@ -42,6 +42,12 @@
    HAL_PCD_Start();
    ```
 
+ - Poll an Endpoint transfer status and Toggle even/odd frame:
+     - Call HAL_PCD_EPPollEn() API to enable poll Endpoint status;
+     - Call HAL_PCD_EPXferStartPoll() API to poll Endpoint transfer start status;
+     - Call HAL_PCD_EPXferCompletePoll() API to poll Endpoint transfer completion status;
+     - Call HAL_PCD_EPFrameToggle() API to toggle even/odd frame.
+
  @} */
 
 /** @defgroup PCD_Private_Definition Private Definition
@@ -54,9 +60,9 @@
 /********************* Private Variable Definition ***************************/
 
 /********************* Private Function Definition ***************************/
+/** @} */
 static HAL_Status PCD_WriteEmptyTxFifo(struct PCD_HANDLE *pPCD, uint32_t epNum);
 
-/** @} */
 /********************* Public Function Definition ****************************/
 /** @defgroup PCD_Exported_Functions_Group2 State and Errors Functions
  *  @brief    Peripheral State functions
@@ -161,7 +167,7 @@ void HAL_PCD_IRQHandler(struct PCD_HANDLE *pPCD)
                                 pktCnt = HAL_DIV_ROUND_UP(pPCD->outEp[epNum].xferLen,
                                                           pPCD->outEp[epNum].maxPacket);
                                 pPCD->outEp[epNum].xferCount = (USB_OTG_DOEPTSIZ_XFRSIZ & (pPCD->outEp[epNum].maxPacket * pktCnt)) - (USB_OUTEP(epNum)->DOEPTSIZ & USB_OTG_DOEPTSIZ_XFRSIZ);
-                                HAL_DCACHE_InvalidateByRange((uint32_t)pPCD->outEp[epNum].dmaAddr,
+                                HAL_DCACHE_InvalidateByRange((uintptr_t)pPCD->outEp[epNum].dmaAddr,
                                                              pPCD->outEp[epNum].xferCount);
                             } else {
                                 pPCD->outEp[epNum].xferCount = pPCD->outEp[epNum].maxPacket -
@@ -175,6 +181,7 @@ void HAL_PCD_IRQHandler(struct PCD_HANDLE *pPCD)
                                 USB_EP0_OutStart(pPCD->pReg, 1, pPCD->setupBuf);
                             } else {
                                 pPCD->outEp[epNum].xferLen = 0;
+                                pPCD->outEp[epNum].isocXferCompl = 1;
                                 HAL_PCD_DataOutStageCallback(pPCD, epNum);
                             }
                         }
@@ -182,7 +189,7 @@ void HAL_PCD_IRQHandler(struct PCD_HANDLE *pPCD)
 
                     if ((epInt & USB_OTG_DOEPINT_STUP) == USB_OTG_DOEPINT_STUP) {
                         if (pPCD->cfg.dmaEnable == 1) {
-                            HAL_DCACHE_InvalidateByRange((uint32_t)(pPCD->setupBuf), sizeof(pPCD->setupBuf));
+                            HAL_DCACHE_InvalidateByRange((uintptr_t)(pPCD->setupBuf), sizeof(pPCD->setupBuf));
                             /* Inform the upper layer that a setup packet is available */
                             HAL_PCD_SetupStageCallback(pPCD);
                         }
@@ -199,7 +206,7 @@ void HAL_PCD_IRQHandler(struct PCD_HANDLE *pPCD)
                      */
                     if (((epInt & USB_OTG_DOEPINT_OTEPDIS) == USB_OTG_DOEPINT_OTEPDIS) &&
                         (pPCD->outEp[epNum].type == EP_TYPE_ISOC) &&
-                        (pPCD->outEp[epNum].isocStart == 0) &&
+                        (pPCD->outEp[epNum].isocStart == 0) && (pPCD->outEp[epNum].isPoll == 0) &&
                         (USB_GetDevSpeed(pUSB) == USB_OTG_SPEED_HIGH)) {
                         if ((USB_DEVICE->DSTS & (1 << 8)) == 0) {
                             USB_OUTEP(epNum)->DOEPCTL |= USB_OTG_DOEPCTL_SD0PID_SEVNFRM;
@@ -247,6 +254,7 @@ void HAL_PCD_IRQHandler(struct PCD_HANDLE *pPCD)
                             USB_EP0_OutStart(pPCD->pReg, 1, pPCD->setupBuf);
                         } else {
                             pPCD->inEp[epNum].xferLen = 0;
+                            pPCD->inEp[epNum].isocXferCompl = 1;
                             HAL_PCD_DataInStageCallback(pPCD, epNum);
                         }
                     }
@@ -267,7 +275,7 @@ void HAL_PCD_IRQHandler(struct PCD_HANDLE *pPCD)
                      */
                     if (((epInt & USB_OTG_DIEPINT_NAK) == USB_OTG_DIEPINT_NAK) &&
                         (pPCD->inEp[epNum].type == EP_TYPE_ISOC) &&
-                        (pPCD->inEp[epNum].isocStart == 0) &&
+                        (pPCD->inEp[epNum].isocStart == 0) && (pPCD->inEp[epNum].isPoll == 0) &&
                         (USB_GetDevSpeed(pUSB) == USB_OTG_SPEED_HIGH)) {
                         if ((USB_DEVICE->DSTS & (1 << 8)) == 0) {
                             USB_INEP(epNum)->DIEPCTL |= USB_OTG_DIEPCTL_SD0PID_SEVNFRM;
@@ -310,7 +318,7 @@ void HAL_PCD_IRQHandler(struct PCD_HANDLE *pPCD)
                  * If the Bvalid signal is always high, the usb core
                  * will enter suspend state when disconnet from Host.
                  */
-                HAL_DBG("USB Disconnect! DSTS: 0x%08lx\n", USB_DEVICE->DSTS);
+                HAL_DBG("USB Disconnect! DSTS: 0x%08" PRIx32 "\n", USB_DEVICE->DSTS);
                 HAL_PCD_DisconnectCallback(pPCD);
                 USB_StopDevice(pUSB);
             } else {
@@ -402,7 +410,7 @@ void HAL_PCD_IRQHandler(struct PCD_HANDLE *pPCD)
                 /* Inform the upper layer that a setup packet is available */
                 HAL_PCD_SetupStageCallback(pPCD);
             } else {
-                HAL_DBG_WRN("unknown status 0x%08lx\n", temp);
+                HAL_DBG_WRN("unknown status 0x%08" PRIx32 "\n", temp);
             }
             USB_UNMASK_INTERRUPT(pPCD->pReg, USB_OTG_GINTSTS_RXFLVL);
         }
@@ -631,6 +639,7 @@ HAL_Status HAL_PCD_Init(struct PCD_HANDLE *pPCD)
     for (i = 0; i < 15; i++) {
         /* Init ep structure */
         pPCD->inEp[i].isIn = 1;
+        pPCD->inEp[i].isPoll = 0;
         pPCD->inEp[i].num = i;
         pPCD->inEp[i].txFIFONum = i;
         /* Control until ep is activated */
@@ -643,6 +652,7 @@ HAL_Status HAL_PCD_Init(struct PCD_HANDLE *pPCD)
 
     for (i = 0; i < 15; i++) {
         pPCD->outEp[i].isIn = 0;
+        pPCD->outEp[i].isPoll = 0;
         pPCD->outEp[i].num = i;
         /* Control until ep is activated */
         pPCD->outEp[i].type = EP_TYPE_CTRL;
@@ -803,6 +813,7 @@ HAL_Status HAL_PCD_EPClose(struct PCD_HANDLE *pPCD, uint8_t epAddr)
 HAL_Status HAL_PCD_EPReceive(struct PCD_HANDLE *pPCD, uint8_t epAddr, uint8_t *pBuf, uint32_t len)
 {
     struct USB_OTG_EP *pEP;
+    uintptr_t dmaAddr;
 
     pEP = &pPCD->outEp[epAddr & 0x7F];
 
@@ -814,7 +825,19 @@ HAL_Status HAL_PCD_EPReceive(struct PCD_HANDLE *pPCD, uint8_t epAddr, uint8_t *p
     pEP->num = epAddr & 0x7F;
 
     if (pPCD->cfg.dmaEnable == 1) {
-        pEP->dmaAddr = HAL_CpuAddrToDmaAddr((uint32_t)pBuf);
+        dmaAddr = HAL_CpuAddrToDmaAddr((uintptr_t)pBuf);
+#ifdef USB_DEBUG
+        if (dmaAddr > UINT32_MAX) {
+            HAL_DBG_ERR("DWC2 PCD EPReceive dma buf is not a 32-bit address!\n");
+
+            return HAL_INVAL;
+        }
+#endif
+        pEP->dmaAddr = (uint32_t)dmaAddr;
+
+        if ((uint32_t)pEP->dmaAddr & (DWC2_USB_DMA_ALIGN - 1)) {
+            HAL_SYSLOG("%s: Non-aligned addr 0x%08" PRIx32 " for USB DWC2!\n", __func__, pEP->dmaAddr);
+        }
     }
 
     if ((epAddr & 0x7F) == 0) {
@@ -849,6 +872,7 @@ HAL_Status HAL_PCD_EPTransmit(struct PCD_HANDLE *pPCD, uint8_t epAddr,
                               uint8_t *pBuf, uint32_t len)
 {
     struct USB_OTG_EP *pEP;
+    uintptr_t dmaAddr;
 
     pEP = &pPCD->inEp[epAddr & 0x7F];
 
@@ -860,7 +884,19 @@ HAL_Status HAL_PCD_EPTransmit(struct PCD_HANDLE *pPCD, uint8_t epAddr,
     pEP->num = epAddr & 0x7F;
 
     if (pPCD->cfg.dmaEnable == 1) {
-        pEP->dmaAddr = HAL_CpuAddrToDmaAddr((uint32_t)pBuf);
+        dmaAddr = HAL_CpuAddrToDmaAddr((uintptr_t)pBuf);
+#ifdef USB_DEBUG
+        if (dmaAddr > UINT32_MAX) {
+            HAL_DBG_ERR("DWC2 PCD EPTransmit dma buf is not a 32-bit address!\n");
+
+            return HAL_INVAL;
+        }
+#endif
+        pEP->dmaAddr = (uint32_t)dmaAddr;
+
+        if ((uint32_t)pEP->dmaAddr & (DWC2_USB_DMA_ALIGN - 1)) {
+            HAL_SYSLOG("%s: Non-aligned addr 0x%08" PRIx32 " for USB DWC2!\n", __func__, pEP->dmaAddr);
+        }
     }
 
     if ((epAddr & 0x7F) == 0) {
@@ -954,6 +990,153 @@ HAL_Status HAL_PCD_EPFlush(struct PCD_HANDLE *pPCD, uint8_t epAddr)
         USB_FlushTxFifo(pPCD->pReg, epAddr & 0x7F);
     } else {
         USB_FlushRxFifo(pPCD->pReg);
+    }
+
+    return HAL_OK;
+}
+
+/**
+ * @brief  Enable to poll an endpoint status
+ * @param  pPCD PCD handle
+ * @param  epAddr endpoint address
+ * @return HAL status
+ */
+HAL_Status HAL_PCD_EPPollEn(struct PCD_HANDLE *pPCD, uint8_t epAddr)
+{
+    struct USB_OTG_EP *pEP;
+
+    if ((epAddr & 0x80) == 0x80) {
+        pEP = &pPCD->inEp[epAddr & 0x7F];
+    } else {
+        pEP = &pPCD->outEp[epAddr & 0x7F];
+    }
+
+    pEP->isPoll = 1;
+
+    return HAL_OK;
+}
+
+/**
+ * @brief  Poll an endpoint transfer start status
+ * @param  pPCD PCD handle
+ * @param  epAddr endpoint address
+ * @return HAL status
+ */
+HAL_Status HAL_PCD_EPXferStartPoll(struct PCD_HANDLE *pPCD, uint8_t epAddr)
+{
+    struct USB_GLOBAL_REG *pUSB = pPCD->pReg;
+    struct USB_OTG_EP *pEP;
+    uint32_t epInt;
+
+    if ((epAddr & 0x80) == 0x80) {
+        pEP = &pPCD->inEp[epAddr & 0x7F];
+    } else {
+        pEP = &pPCD->outEp[epAddr & 0x7F];
+    }
+
+    if (pEP->type != EP_TYPE_ISOC || pEP->isPoll == 0) {
+        return HAL_ERROR;
+    }
+
+    if (pEP->isocStart == 0) {
+        if (pEP->isIn) {
+            epInt = USB_INEP(pEP->num)->DIEPINT;
+
+            if ((epInt & USB_OTG_DIEPINT_NAK) == USB_OTG_DIEPINT_NAK &&
+                (USB_GetDevSpeed(pUSB) == USB_OTG_SPEED_HIGH)) {
+                USB_INEP(pEP->num)->DIEPCTL |= USB_OTG_DIEPCTL_SD0PID_SEVNFRM;
+
+                if (pEP->isocPending == 1) {
+                    USB_INEP(pEP->num)->DIEPCTL |= (USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA);
+                    pEP->isocPending = 0;
+                }
+
+                pEP->isocEvenFr = 1;
+                pEP->isocStart = 1;
+                pEP->isocXferCompl = 0;
+                pEP->isocPollCount = 0;
+                USB_INEP(pEP->num)->DIEPINT &= ~USB_OTG_DIEPINT_NAK;
+            }
+        } else {
+            epInt = USB_OUTEP(pEP->num)->DOEPINT;
+
+            if ((epInt & USB_OTG_DOEPINT_OTEPDIS) == USB_OTG_DOEPINT_OTEPDIS &&
+                (USB_GetDevSpeed(pUSB) == USB_OTG_SPEED_HIGH)) {
+                USB_OUTEP(pEP->num)->DOEPCTL |= USB_OTG_DOEPCTL_SD0PID_SEVNFRM;
+
+                if (pEP->isocPending == 1) {
+                    USB_OUTEP(pEP->num)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);
+                    pEP->isocPending = 0;
+                }
+
+                pEP->isocEvenFr = 1;
+                pEP->isocStart = 1;
+                pEP->isocXferCompl = 0;
+                pEP->isocPollCount = 0;
+                USB_OUTEP(pEP->num)->DOEPINT &= ~USB_OTG_DOEPINT_OTEPDIS;
+            }
+        }
+    }
+
+    return pEP->isocStart ? HAL_OK : HAL_ERROR;
+}
+
+/**
+ * @brief  Poll an endpoint transfer completion status
+ * @param  pPCD PCD handle
+ * @param  epAddr endpoint address
+ * @return HAL status
+ */
+HAL_Status HAL_PCD_EPXferCompletePoll(struct PCD_HANDLE *pPCD, uint8_t epAddr)
+{
+    struct USB_OTG_EP *pEP;
+
+    if ((epAddr & 0x80) == 0x80) {
+        pEP = &pPCD->inEp[epAddr & 0x7F];
+    } else {
+        pEP = &pPCD->outEp[epAddr & 0x7F];
+    }
+
+    if (pEP->type != EP_TYPE_ISOC || pEP->isPoll == 0 || pEP->isocStart == 0) {
+        return HAL_ERROR;
+    }
+
+    return pEP->isocXferCompl ? HAL_OK : HAL_ERROR;
+}
+
+/**
+ * @brief  Toggle an endpoint even/odd frame
+ * @param  pPCD PCD handle
+ * @param  epAddr endpoint address
+ * @return HAL status
+ */
+HAL_Status HAL_PCD_EPFrameToggle(struct PCD_HANDLE *pPCD, uint8_t epAddr)
+{
+    struct USB_GLOBAL_REG *pUSB = pPCD->pReg;
+    struct USB_OTG_EP *pEP;
+
+    if ((epAddr & 0x80) == 0x80) {
+        pEP = &pPCD->inEp[epAddr & 0x7F];
+    } else {
+        pEP = &pPCD->outEp[epAddr & 0x7F];
+    }
+
+    if (pEP->type != EP_TYPE_ISOC || pEP->isPoll == 0 || pEP->isocStart == 0) {
+        return HAL_ERROR;
+    }
+
+    if (pEP->isIn) {
+        if (pEP->isocEvenFr == 1) {
+            USB_INEP(pEP->num)->DIEPCTL |= USB_OTG_DIEPCTL_SODDFRM;
+        } else {
+            USB_INEP(pEP->num)->DIEPCTL |= USB_OTG_DIEPCTL_SD0PID_SEVNFRM;
+        }
+    } else {
+        if (pEP->isocEvenFr == 1) {
+            USB_OUTEP(pEP->num)->DOEPCTL |= USB_OTG_DOEPCTL_SODDFRM;
+        } else {
+            USB_OUTEP(pEP->num)->DOEPCTL |= USB_OTG_DOEPCTL_SD0PID_SEVNFRM;
+        }
     }
 
     return HAL_OK;

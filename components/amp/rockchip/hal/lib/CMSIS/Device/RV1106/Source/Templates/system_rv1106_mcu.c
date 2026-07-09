@@ -20,7 +20,7 @@ static void BssInit(void)
     size = (__BSS_END__ - __BSS_START__ + 1) * 4;
 
     memset(p, 0x0, size);
-    HAL_DCACHE_CleanByRange((uint32_t)p, size);
+    HAL_DCACHE_CleanByRange((uintptr_t)p, size);
 }
 
 /*----------------------------------------------------------------------------

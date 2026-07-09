@@ -18,7 +18,7 @@ struct HAL_I2STDM_DEV g_i2sTdm0Dev =
     .bclkFs = 64,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(I2STDM0->RXDR),
+        .addr = I2STDM0_BASE + I2STDM_RXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S0_RX,
@@ -26,7 +26,7 @@ struct HAL_I2STDM_DEV g_i2sTdm0Dev =
     },
     .txDmaData =
     {
-        .addr = (uint32_t)&(I2STDM0->TXDR),
+        .addr = I2STDM0_BASE + I2STDM_TXDR_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_I2S0_TX,
@@ -47,7 +47,7 @@ struct HAL_PDM_DEV g_pdm0Dev =
     .reset = SRST_PDM,
     .rxDmaData =
     {
-        .addr = (uint32_t)&(PDM0->RXFIFO_DATA_REG),
+        .addr = PDM0_BASE + PDM_RXFIFO_DATA_REG_OFFSET,
         .addrWidth = DMA_SLAVE_BUSWIDTH_4_BYTES,
         .maxBurst = 8,
         .dmaReqCh = DMA_REQ_PDM0,
@@ -152,7 +152,7 @@ const struct HAL_PWM_DEV g_pwm0Dev =
     .clkID = CLK_PWM,
     .clkGateID = CLK_PWM_SRC_GATE,
     .pclkGateID = PCLK_PWM_GATE,
-    .irqNum = PWM_IRQn,
+    .irqNum[0] = PWM_IRQn,
 };
 #endif
 

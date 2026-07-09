@@ -57,6 +57,7 @@ HAL_Status HAL_TSADC_Enable_AUTO(int chn, eTSADC_tshutPolarity polarity, eTSADC_
 HAL_Status HAL_TSADC_Disable_AUTO(int chn);
 HAL_Check HAL_TSADC_IsEnabled_AUTO(int chn);
 int HAL_TSADC_GetTemperature_AUTO(int chn);
+int HAL_TSADC_CodeToTemp(uint32_t code);
 
 /** @} */
 
