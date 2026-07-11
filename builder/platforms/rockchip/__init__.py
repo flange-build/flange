@@ -39,6 +39,7 @@ def amp_source_dirs(config: dict) -> list:
     # 随构建纳入哈希；庞大稳定的 RTOS 内核树（src/components/libcpu）不纳入，改动
     # 罕见时走 `flange build -f amp`。
     if amp.get("mode") == "rt-thread":
+        dirs.append("components/platform/rockchip/amp")
         soc = amp.get("soc_project", "")
         if soc:
             dirs.append(

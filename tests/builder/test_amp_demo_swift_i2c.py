@@ -60,6 +60,14 @@ def test_swift_i2c_demo_enables_i2c0_fragment():
     assert "CONFIG_RT_USING_UART7=y" in config
 
 
+def test_rtthread_app_keeps_cpu_startup_log_in_main():
+    main = (DEMO / "applications/main.c").read_text()
+
+    assert "rk3568_amp_uart7_rtt_demo: cpu%d up" in main
+    assert "flange_rtthread_amp_console_ready" not in main
+    assert "rt_show_version();" not in main
+
+
 def test_swift_i2c_command_usage_documented():
     doc = (ROOT / "components/board/orangepi-cm4/docs/amp.md").read_text()
 

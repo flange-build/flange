@@ -50,6 +50,7 @@ _DEFAULT_MEMORY = {
 
 _HAL_ROOT = "components/amp/rockchip/hal"
 _RTT_ROOT = "components/amp/rockchip/rt-thread"
+_RTT_AMP_BASE_CONFIG = "components/platform/rockchip/amp/rt-thread.config"
 # 容器内官方裸机工具链（docker/Dockerfile 安装），供 rt-thread rtconfig.py 的
 # os.getenv("RTT_EXEC_PATH") 覆盖其写死的 prebuilts 路径。
 _RTT_EXEC_PATH = "/opt/arm-none-eabi-gcc10/bin"
@@ -482,6 +483,11 @@ Return('group')
         _ignore = shutil.ignore_patterns(
             "build", ".sconsign.dblite", "*.o", "*.pyc", "__pycache__",
             "rtthread.*", "gcc_arm.ld", "amp*.img")
+        # common/hal 由下方统一链接到 flange 的 HAL SDK；源 SDK 中的同名链接
+        # 可能指向带断链 .git 的 vendor repo，不能在 staging 时跟随复制。
+        _ignore_common = shutil.ignore_patterns(
+            "build", ".sconsign.dblite", "*.o", "*.pyc", "__pycache__",
+            "rtthread.*", "gcc_arm.ld", "amp*.img", "hal")
         sdk_root = Path(_RTT_ROOT)
         staged_root = Path(tempfile.mkdtemp(prefix="flange-amp-rtt-"))
 
@@ -504,20 +510,29 @@ Return('group')
         _mirror(sdk_root / "bsp" / "rockchip", bsp_rk,
                 skip={"common", f"{soc}-32"})
         bsp_tmp = bsp_rk / f"{soc}-32"
-        shutil.copytree(bsp_src, bsp_tmp, ignore=_ignore)
+        shutil.copytree(bsp_src, bsp_tmp, ignore=_ignore,
+                        ignore_dangling_symlinks=True)
         shutil.copytree(bsp_src.parent / "common", bsp_rk / "common",
-                        ignore=_ignore)
+                        ignore=_ignore_common,
+                        ignore_dangling_symlinks=True)
         os.symlink(os.path.abspath(_HAL_ROOT), bsp_rk / "common" / "hal")
 
-        # --- 叠加 app overlay：applications/ + 可选 .config 片段（合并进 BSP .config）---
+        # --- 配置叠加：BSP 默认 → flange AMP 基线 → app 差异配置 ---
+        base_config = Path(_RTT_AMP_BASE_CONFIG)
+        if not base_config.is_file():
+            raise FileNotFoundError(
+                f"RT-Thread AMP 基线配置不存在: {base_config}")
+        self._merge_kconfig_fragment(bsp_tmp / ".config", base_config)
+
+        # app overlay：applications/ + 可选 .config 差异配置。
         app_apps = app_dir / "applications"
         if app_apps.is_dir():
             shutil.copytree(app_apps, bsp_tmp / "applications",
                             dirs_exist_ok=True)
-        overlaid_config = (app_dir / ".config").is_file()
-        if overlaid_config:
+        app_config = app_dir / ".config"
+        if app_config.is_file():
             self._merge_kconfig_fragment(bsp_tmp / ".config",
-                                         app_dir / ".config")
+                                         app_config)
 
         swift_cfg = app_spec.build.swift
         if self._swift_cfg_enabled(swift_cfg):
@@ -539,13 +554,12 @@ Return('group')
         self._status(
             f"AMP(scons) 配置 {app_dir.name}（RT-Thread {soc}-32, cpu{cpu}, "
             f"base={hex(mem['cpu_base'])}）...")
-        # overlay .config 后必须从 .config 重生成 rtconfig.h（编译实际读 rtconfig.h，
-        # .config 仅是 Kconfig 状态；scons --useconfig 调 mk_rtconfig 做文本转换）。
-        if overlaid_config:
-            self.docker.run(
-                ["scons", "--useconfig=.config"],
-                cwd=str(bsp_tmp), env=env, extra_mounts=[staged_root],
-                label="amp:rtt:config")
+        # 合并基线/app 配置后必须从 .config 重生成 rtconfig.h（编译实际读
+        # rtconfig.h，.config 仅是 Kconfig 状态）。
+        self.docker.run(
+            ["scons", "--useconfig=.config"],
+            cwd=str(bsp_tmp), env=env, extra_mounts=[staged_root],
+            label="amp:rtt:config")
         self.docker.run(
             ["scons", f"-j{self._jobs()}"],
             cwd=str(bsp_tmp), env=env, extra_mounts=[staged_root],

@@ -81,7 +81,7 @@ static void rpmsg_echo_entry(void *param)
     inst = rpmsg_lite_remote_init(LINUX_RPMSG_MEM, ECHO_LINK_ID, RL_NO_FLAGS);
     rt_kprintf("rpmsg: remote init (link_id 0x%x), waiting for link up...\n",
                ECHO_LINK_ID);
-    rpmsg_lite_wait_for_link_up(inst);
+    rpmsg_lite_wait_for_link_up(inst, RL_BLOCK);
     rt_kprintf("rpmsg: link up! link_id-0x%x\n", inst->link_id);
 
     rpmsg_ns_bind(inst, rpmsg_ns_cb, &ns_cb_data);
