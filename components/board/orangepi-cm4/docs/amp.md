@@ -98,3 +98,7 @@ swift_i2c i2c0 0x50 wr 0x00 -- 4
 - 日志出现 `rpmsg: link up` 与 endpoint announce。
 - Linux 侧出现 `/dev/rpmsg_ctrlN`，创建 `rpmsg-ap3-ch0` 端点后可经 `/dev/rpmsgN`
   与从核 echo。
+
+RT-Thread SDK 升级后若出现“MSH 可用但启动 banner 缺失”，按
+[Rockchip AMP SDK 升级与排障记录](../../../../docs/amp-sdk-upgrade.md)检查最终 Kconfig 与
+GPIO4_A2/A3 pinmux，不能用手工执行 `version` 代替启动期验证。

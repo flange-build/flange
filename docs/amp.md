@@ -11,6 +11,9 @@ HAL 或 RT-Thread，与 Linux 主系统并行，二者经 rpmsg 通信。
 
 两者均为 RK3566（与 RK3568 同 die），复用 rk3568 SDK 工程 + `rk3568-amp.dtsi`。
 
+SDK 同步、兼容改动与启动问题的维护方法见
+[Rockchip AMP SDK 升级与排障记录](amp-sdk-upgrade.md)。
+
 ## 形态
 
 - **承载方式**：板级 `amp` / `amp-rtt` product（如
@@ -67,6 +70,11 @@ flange create app --type amp --build-system amp my-amp-app
 再 `lunch tspi-rk3566-amp` + `flange build`。HAL app 是独立 CMake 工程，引用
 `components/amp/rockchip/hal` 的只读 HAL SDK；RT-Thread app 是叠到 BSP 模板上的
 overlay（`applications/` + 可选 `.config` 片段）。`amp.app` 必须显式声明。
+
+RT-Thread 配置按 `BSP .config → flange AMP 基线 → app .config` 的顺序合并。
+公共的单核、rpmsg-lite 与 Linux 协同选项由
+`components/platform/rockchip/amp/rt-thread.config` 统一维护；app `.config` 只声明
+console、I2C 等应用或板级差异。基线目录已纳入 amp 内容哈希，修改后会触发增量重建。
 
 ## 配置（HAL / RT-Thread 互斥）
 
