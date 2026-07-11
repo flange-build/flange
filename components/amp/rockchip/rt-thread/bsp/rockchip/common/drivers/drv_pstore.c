@@ -46,7 +46,7 @@ static void init_pstore(void)
     struct persistent_ram_buffer *rb = (struct persistent_ram_buffer *)PERSISTENT_RAM_ADDR;
 
     RT_ASSERT(rb != RT_NULL);
-    RT_ASSERT(((uintptr_t)rb & 0x3) == 0);
+    RT_ASSERT((rb & 0x3) == 0);
 
     if (rb->sig != PERSISTENT_RAM_SIG)
     {

@@ -19,11 +19,16 @@
 
 #ifdef RT_USING_COMMON_TEST_SPINAND
 
-#include <drivers/mtd.h>
+#include <drivers/mtd_nand.h>
+#include <dfs_fs.h>
 #include "hal_base.h"
+#include "mini_ftl.h"
+#include "../drivers/drv_flash_partition.h"
 
 #define NAND_PAGE_SIZE  4096
 #define NAND_SPARE_SIZE 64
+
+#define RK_PARTITION_MAX_PARTITION 16
 
 #ifndef EUCLEAN
 #define EUCLEAN                         117
@@ -45,20 +50,28 @@ static uint32_t *pspare_read;
 static uint32_t bad_blk_num;
 static uint32_t bad_page_num;
 static struct nand_ops_t g_nand_ops;
-struct mtd_info *mtd_dev = RT_NULL;
+struct rt_mtd_nand_device *mtd_dev = RT_NULL;
 
 static void spinand_test_show_usage()
 {
-    rt_kprintf("1. spinand_test write offset size\n");
-    rt_kprintf("2. spinand_test read offset size loop\n");
-    rt_kprintf("3. spinand_test erase offset\n");
-    rt_kprintf("3. spinand_test erase_all\n");
-    rt_kprintf("4. spinand_test stress loop\n");
+    rt_kprintf("1. spinand_test write <page_addr> <page_num>\n");
+    rt_kprintf("2. spinand_test read <page_addr> <page_nun>\n");
+    rt_kprintf("3. spinand_test erase <blk_addr>\n");
+    rt_kprintf("4. spinand_test erase_all <blk_addr>\n");
+    rt_kprintf("5. spinand_test stress <loop> <blk_addr> <blks>\n");
+    rt_kprintf("6. spinand_test bbt\n");
+    rt_kprintf("7. spinand_test markbad <blk_addr>\n");
+    rt_kprintf("8. spinand_test mini_ftl_test <byte_offset>\n");
+    rt_kprintf("9. spinand_test part_list\n");
     rt_kprintf("like:\n");
-    rt_kprintf("\tspinand_test write 2097152 4096\n");
-    rt_kprintf("\tspinand_test read 2097152 4096 2000\n");
-    rt_kprintf("\tspinand_test erase_all\n");
-    rt_kprintf("\tspinand_test stress 5000\n");
+    rt_kprintf("\tspinand_test write 1024 1\n");
+    rt_kprintf("\tspinand_test read 1024 1\n");
+    rt_kprintf("\tspinand_test erase 16\n");
+    rt_kprintf("\tspinand_test erase_all 512\n");
+    rt_kprintf("\tspinand_test stress 5000 512 256\n");
+    rt_kprintf("\tspinand_test bbt\n");
+    rt_kprintf("\tspinand_test mini_ftl_test 67108864\n");
+    rt_kprintf("\tspinand_test part_list\n");
 }
 
 HAL_Status spinand_dbg_hex(char *s, void *buf, uint32_t width, uint32_t len)
@@ -151,32 +164,30 @@ static uint32_t nand_flash_test(uint32_t blk_begin, uint32_t blk_end, uint32_t i
     return 0;
 }
 
-static void flash_erase_all_block(uint32_t firstblk)
+static void flash_erase_all_block(uint32_t firstblk, uint32_t end_blk)
 {
     uint32_t blk;
-    uint32_t end_blk = mtd_dev->size >> mtd_dev->erasesize_shift;
 
     for (blk = firstblk; blk < end_blk; blk++)
     {
         rt_kprintf("erase blk %d\n", blk);
-        g_nand_ops.erase_blk(0, blk << (mtd_dev->erasesize_shift -
-                                        mtd_dev->writesize_shift));
+        rt_mtd_nand_erase_block(mtd_dev, blk);
     }
 
 }
 
-static uint32_t nand_flash_stress_test(void)
+static uint32_t nand_flash_stress_test(uint32_t blk_begin, uint32_t block_end)
 {
     uint32_t ret = 0;
 
     rt_kprintf("%s\n", __func__);
-    flash_erase_all_block(0);
+    flash_erase_all_block(blk_begin, block_end);
     rt_kprintf("Flash prog/read test\n");
-    ret = nand_flash_test(0, mtd_dev->size >> mtd_dev->erasesize_shift, 0);
+    ret = nand_flash_test(blk_begin, block_end, 0);
     if (ret)
         return -1;
     rt_kprintf("Flash read recheck test\n");
-    ret = nand_flash_test(0, mtd_dev->size >> mtd_dev->erasesize_shift, 1);
+    ret = nand_flash_test(blk_begin, block_end, 1);
     if (ret)
         return -1;
     rt_kprintf("%s success\n", __func__);
@@ -185,7 +196,7 @@ static uint32_t nand_flash_stress_test(void)
 
 static uint32_t erase_blk(uint8_t cs, uint32_t page_addr)
 {
-    if (rt_mtd_erase(mtd_dev, page_addr << mtd_dev->writesize_shift, mtd_dev->block_size))
+    if (mini_ftl_erase(mtd_dev, page_addr * mtd_dev->page_size, mtd_dev->pages_per_block * mtd_dev->page_size))
         return -1;
     else
         return 0;
@@ -194,21 +205,11 @@ static uint32_t erase_blk(uint8_t cs, uint32_t page_addr)
 static uint32_t prog_page(uint8_t cs, uint32_t page_addr, uint32_t *data, uint32_t *spare)
 {
     int ret;
-    struct mtd_io_desc ops;
 
-    memset(&ops, 0, sizeof(struct mtd_io_desc));
-    ops.mode = MTD_OPM_AUTO_OOB;
-    ops.datlen = mtd_dev->sector_size;
-    ops.datbuf = (uint8_t *)data;
-    ops.ooblen = 0;
-    ops.ooboffs = 0;
-    ops.oobbuf = RT_NULL;
-
-    ret = rt_mtd_write_oob(mtd_dev, (loff_t)(page_addr << mtd_dev->writesize_shift), &ops);
-    if (ops.datretlen != ops.datlen)
+    ret = mini_ftl_write(mtd_dev, (const rt_uint8_t *)data, page_addr * mtd_dev->page_size, mtd_dev->page_size);
+    if (ret != mtd_dev->page_size)
     {
-        rt_kprintf("%s %x %d %d %d\n", __func__, page_addr, ops.datretlen,
-                   ops.oobretlen, ret);
+        rt_kprintf("%s 0x=%x %d\n", __func__, page_addr, ret);
         return -RT_EIO;
     }
     else
@@ -220,20 +221,11 @@ static uint32_t prog_page(uint8_t cs, uint32_t page_addr, uint32_t *data, uint32
 static uint32_t read_page(uint8_t cs, uint32_t page_addr, uint32_t *data, uint32_t *spare)
 {
     int ret;
-    struct mtd_io_desc ops;
 
-    memset(&ops, 0, sizeof(struct mtd_io_desc));
-    ops.mode = MTD_OPM_AUTO_OOB;
-    ops.datlen = mtd_dev->sector_size;
-    ops.datbuf = (uint8_t *)data;
-    ops.ooblen = 0;
-    ops.ooboffs = 0;
-    ops.oobbuf = RT_NULL;
-
-    ret = rt_mtd_read_oob(mtd_dev, (loff_t)(page_addr << mtd_dev->writesize_shift), &ops);
-    if (ops.datretlen != ops.datlen)
+    ret = mini_ftl_read(mtd_dev, (rt_uint8_t *)data, page_addr * mtd_dev->page_size, mtd_dev->page_size);
+    if (ret != mtd_dev->page_size)
     {
-        rt_kprintf("%s %x %d %d %d\n", __func__, page_addr, ops.datretlen, ops.oobretlen, ret);
+        rt_kprintf("%s 0x=%x %d\n", __func__, page_addr, ret);
         return -RT_EIO;
     }
     else
@@ -242,7 +234,7 @@ static uint32_t read_page(uint8_t cs, uint32_t page_addr, uint32_t *data, uint32
     }
 }
 
-static RT_UNUSED int nand_flash_misc_test(void)
+static __attribute__((__unused__)) int nand_flash_misc_test(void)
 {
     int ret = 0;
     uint32_t blk;
@@ -253,14 +245,14 @@ static RT_UNUSED int nand_flash_misc_test(void)
     for (blk = 10; blk < 60; blk++)
     {
         rt_kprintf("%s mark bad block %d\n", __func__, blk);
-        ret = rt_mtd_block_markbad(mtd_dev, blk);
+        ret = rt_mtd_nand_mark_badblock(mtd_dev, blk);
         if (ret)
         {
             rt_kprintf("%s mark bad fail %d\n", __func__, ret);
             while (1)
                 ;
         }
-        ret = rt_mtd_block_isbad(mtd_dev, blk);
+        ret = rt_mtd_nand_check_block(mtd_dev, blk);
         if (!ret)
         {
             rt_kprintf("%s mark bad check fail %d\n", __func__, ret);
@@ -275,11 +267,12 @@ static RT_UNUSED int nand_flash_misc_test(void)
     return ret;
 }
 
-void nand_utils_test(uint32_t loop)
+void nand_utils_test(uint32_t loop, uint32_t blk_begin, uint32_t block_end)
 {
-    rt_kprintf("size %d MB\n", (uint32_t)(mtd_dev->size / 1024 / 1024));
-    rt_kprintf("block_size%d KB\n", (uint32_t)(mtd_dev->block_size / 1024));
-    rt_kprintf("block_size%d KB\n", (uint32_t)(mtd_dev->sector_size / 1024));
+    rt_uint32_t size;
+
+    size = mtd_dev->block_total * mtd_dev->pages_per_block * mtd_dev->page_size;
+    rt_kprintf("size %d MB\n", (uint32_t)(size / 1024 / 1024));
 
     pwrite = malloc(NAND_PAGE_SIZE);
     pspare_write = malloc(NAND_SPARE_SIZE);
@@ -290,9 +283,14 @@ void nand_utils_test(uint32_t loop)
     g_nand_ops.read_page = read_page;
     g_nand_ops.prog_page = prog_page;
 
+    if (block_end > mtd_dev->block_total)
+    {
+        block_end = mtd_dev->block_total;
+    }
+
     while (loop--)
     {
-        nand_flash_stress_test();
+        nand_flash_stress_test(blk_begin, block_end);
     }
 
     free(pwrite);
@@ -301,18 +299,172 @@ void nand_utils_test(uint32_t loop)
     free(pspare_read);
 }
 
+void nand_bbt(void)
+{
+    rt_uint32_t blk;
+
+    rt_kprintf("bad block:\n");
+    for (blk = 0; blk < mtd_dev->block_total; blk++)
+    {
+        if (rt_mtd_nand_check_block(mtd_dev, blk))
+        {
+            rt_kprintf("0x%x\n", blk);
+        }
+    }
+}
+
+rt_err_t mini_ftl_test_one_flash_block(rt_uint32_t addr)
+{
+    rt_uint8_t *buffer = NULL;
+    rt_uint32_t block_size = mtd_dev->pages_per_block * mtd_dev->page_size;
+    rt_uint32_t i, j;
+    rt_err_t ret;
+
+    if (addr % block_size)
+    {
+        rt_kprintf("addr not block aligned, block_size=%x\n", addr, block_size);
+        return -RT_EINVAL;
+    }
+
+    buffer = (rt_uint8_t *)rt_malloc(block_size);
+    if (!buffer)
+    {
+        rt_kprintf("alloc block buf size %d fail\n", block_size);
+        return -RT_EINVAL;
+    }
+    for (i = 0; i < mtd_dev->pages_per_block; i++)
+    {
+        rt_memset(buffer + i * mtd_dev->page_size, i, mtd_dev->page_size);
+    }
+
+    ret = mini_ftl_erase(mtd_dev, addr, block_size);
+    if (ret)
+    {
+        rt_kprintf("mini_ftl_erase failed, ret=%d\n", ret);
+        goto out;
+    }
+
+    ret = mini_ftl_write(mtd_dev, buffer, addr, block_size);
+    if (ret != block_size)
+    {
+        rt_kprintf("mini_ftl_write failed, ret=%d\n", ret);
+        goto out;
+    }
+
+    ret = mini_ftl_read(mtd_dev, buffer, addr, block_size);
+    if (ret != block_size)
+    {
+        rt_kprintf("mini_ftl_read failed, ret=%d\n", ret);
+        goto out;
+    }
+
+    for (i = 0; i < mtd_dev->pages_per_block; i++)
+    {
+        for (j = 0; j < mtd_dev->page_size; j++)
+        {
+            if (buffer[i * mtd_dev->page_size + j] != i)
+            {
+                rt_kprintf("%s page=0x%x, index=0x%x buffer=0x%x\n", __func__, i, j, buffer[j]);
+                ret = -RT_ERROR;
+                break;
+            }
+        }
+    }
+
+    if (!ret)
+    {
+        rt_kprintf("%s success!\n", __func__);
+    }
+out:
+    rt_free(buffer);
+
+    return ret;
+}
+
+#ifdef RT_USING_DFS
+static rt_err_t dfs_part_list(void)
+{
+    rt_uint8_t *buffer = NULL;
+    rt_uint32_t page_size = mtd_dev->page_size;
+    rt_uint32_t i;
+    rt_err_t ret;
+    struct dfs_partition part;
+
+    buffer = (rt_uint8_t *)rt_malloc(page_size);
+    if (!buffer)
+    {
+        rt_kprintf("alloc page buf size %d fail\n", page_size);
+        return -RT_EINVAL;
+    }
+
+    ret = mini_ftl_read(mtd_dev, buffer, 0, page_size);
+    if (ret != page_size)
+    {
+        rt_kprintf("mini_ftl_read failed, ret=%d\n", ret);
+        goto out;
+    }
+
+    for (i = 0; i < RK_PARTITION_MAX_PARTITION; i++)
+    {
+        ret = dfs_filesystem_get_partition(&part, buffer, 4, i);
+        if (ret == RT_EOK)
+        {
+            rt_kprintf("part%d type=%x off=%x size=%x\n", i, part.type, part.offset, part.size);
+        }
+        else
+        {
+            break;
+        }
+    }
+out:
+    rt_free(buffer);
+
+    return ret;
+}
+#else
+static rt_err_t dfs_part_list(void)
+{
+    rt_kprintf("define RT_USING_DFS firstly!\n");
+
+    return 0;
+}
+#endif
+
+static int32_t rk_part_list(void)
+{
+    struct rt_flash_partition *part;
+    uint32_t partnum, i;
+
+    partnum = get_rk_partition(&part);
+    if (partnum)
+    {
+        for (i = 0; i < partnum; i++)
+        {
+            rt_kprintf("rt_flash_partition flags=%08x type= %08x off=%08x size=%08x %s\n",
+                       part[i].mask_flags,
+                       part[i].type,
+                       part[i].offset,
+                       part[i].size,
+                       part[i].name);
+        }
+    }
+
+    return 0;
+}
+
 void spinand_test(int argc, char **argv)
 {
     char *cmd;
-    rt_uint8_t *txbuf = NULL, *rxbuf = NULL;
-    uint32_t offset, size, loop, start_time, end_time, cost_time;
+    rt_uint8_t *buffer = NULL;
+    uint32_t page_addr, page_num, block_addr, blocks, loop, start_time, end_time, cost_time, addr;
     int i;
+    rt_err_t ret;
 
-    if (argc < 3)
+    if (argc < 2)
         goto out;
 
-    mtd_dev = (struct mtd_info *)rt_device_find("spinand0");
-    if (mtd_dev ==  RT_NULL)
+    mtd_dev = (struct rt_mtd_nand_device *)rt_device_find("spinand0");
+    if (mtd_dev == RT_NULL)
     {
         rt_kprintf("Did not find device: spinand0....\n");
         return;
@@ -323,124 +475,168 @@ void spinand_test(int argc, char **argv)
     {
         if (argc != 4)
             goto out;
-        offset = atoi(argv[2]);
-        size = atoi(argv[3]);
+        page_addr = atoi(argv[2]);
+        page_num = atoi(argv[3]);
 
-        if (size > NAND_PAGE_SIZE)
+        if ((page_addr + page_num) / mtd_dev->pages_per_block > mtd_dev->block_end)
         {
-            rt_kprintf("write size 0x%lx, limit \n", size, NAND_PAGE_SIZE);
+            rt_kprintf("write over block end=%d\n", mtd_dev->block_end);
             return;
         }
 
-        if ((offset + size) > mtd_dev->size)
+        buffer = (rt_uint8_t *)rt_malloc_align(mtd_dev->page_size, 64);
+        if (!buffer)
         {
-            rt_kprintf("write over: 0x%lx 0x%lx\n", (offset + size), mtd_dev->size);
+            rt_kprintf("spi write alloc buf size %d fail\n", mtd_dev->page_size);
             return;
         }
 
-        txbuf = (rt_uint8_t *)rt_malloc_align(size, 64);
-        if (!txbuf)
-        {
-            rt_kprintf("spi write alloc buf size %d fail\n", size);
-            return;
-        }
-
-        for (i = 0; i < size; i++)
-            txbuf[i] = i % 256;
+        for (i = 0; i < mtd_dev->page_size; i++)
+            buffer[i] = i % 256;
 
         start_time = HAL_GetTick();
-        rt_mtd_write(mtd_dev, offset, (const rt_uint8_t *)txbuf, size);
+        for (i = 0; i < page_num; i++)
+        {
+            ret = rt_mtd_nand_write(mtd_dev, page_addr + i,
+                                    (const rt_uint8_t *)buffer, mtd_dev->page_size,
+                                    RT_NULL, 0);
+            if (ret)
+            {
+                rt_kprintf("%s write failed, ret=%d\n", __func__, ret);
+                break;
+            }
+        }
         end_time = HAL_GetTick();
         cost_time = (end_time - start_time); /* ms */
 
-        spinand_dbg_hex("write: ", txbuf, 4, 16);
-        rt_kprintf("spinand write speed: %ld KB/s\n", size / cost_time);
+        spinand_dbg_hex("write: ", buffer, 4, 16);
+        rt_kprintf("spinand write speed: %ld KB/s\n", mtd_dev->page_size / cost_time);
 
-        rt_free_align(txbuf);
+        rt_free_align(buffer);
     }
     else if (!rt_strcmp(cmd, "read"))
     {
-
-        if (argc != 5)
+        if (argc != 4)
             goto out;
-        offset = atoi(argv[2]);
-        size = atoi(argv[3]);
-        loop = atoi(argv[4]);
+        page_addr = atoi(argv[2]);
+        page_num = atoi(argv[3]);
 
-        if (size > NAND_PAGE_SIZE)
+        if ((page_addr + page_num) / mtd_dev->pages_per_block > mtd_dev->block_end)
         {
-            rt_kprintf("read size 0x%lx, limit \n", size, NAND_PAGE_SIZE);
+            rt_kprintf("write over block end=%d\n", mtd_dev->block_end);
             return;
         }
 
-        if ((offset + size) > mtd_dev->size)
+        buffer = (rt_uint8_t *)rt_malloc_align(mtd_dev->page_size, 64);
+        if (!buffer)
         {
-            rt_kprintf("write over: 0x%lx 0x%lx\n", (offset + size), mtd_dev->size);
+            rt_kprintf("spi read alloc buf size %d fail\n", mtd_dev->page_size);
             return;
         }
 
-        rxbuf = (rt_uint8_t *)rt_malloc_align(size, 64);
-        if (!rxbuf)
-        {
-            rt_kprintf("spi write alloc buf size %d fail\n", size);
-            return;
-        }
-
-        rt_memset(rxbuf, 0, size);;
+        for (i = 0; i < mtd_dev->page_size; i++)
+            buffer[i] = i % 256;
 
         start_time = HAL_GetTick();
-        for (i = 0; i < loop; i++)
-            rt_mtd_read(mtd_dev, offset, rxbuf, size);
+        for (i = 0; i < page_num; i++)
+        {
+            ret = rt_mtd_nand_read(mtd_dev, page_addr + i,
+                                   (rt_uint8_t *)buffer, mtd_dev->page_size,
+                                   RT_NULL, 0);
+            if (ret)
+            {
+                rt_kprintf("%s write failed, ret=%d\n", __func__, ret);
+                break;
+            }
+        }
         end_time = HAL_GetTick();
         cost_time = (end_time - start_time); /* ms */
 
-        spinand_dbg_hex("read: ", rxbuf, 4, 16);
-        rt_kprintf("spinand read speed: %ld KB/s\n", size * loop / cost_time);
+        spinand_dbg_hex("read: ", buffer, 4, 16);
+        rt_kprintf("spinand read speed: %ld KB/s\n", mtd_dev->page_size / cost_time);
 
-        rt_free_align(rxbuf);
+        rt_free_align(buffer);
     }
     else if (!rt_strcmp(cmd, "erase"))
     {
         if (argc != 3)
             goto out;
-        offset = atoi(argv[2]);
+        block_addr = atoi(argv[2]);
 
-        if ((offset + mtd_dev->block_size) > mtd_dev->size)
+        if (block_addr > mtd_dev->block_end)
         {
-            rt_kprintf("erase over: 0x%lx 0x%lx\n", offset, mtd_dev->size);
+            rt_kprintf("write over block end=%d\n", mtd_dev->block_end);
             return;
         }
 
         start_time = HAL_GetTick();
-        rt_mtd_erase(mtd_dev, offset, mtd_dev->block_size);
+        rt_mtd_nand_erase_block(mtd_dev, block_addr);
         end_time = HAL_GetTick();
         cost_time = (end_time - start_time); /* ms */
 
-        rt_kprintf("spinand erase speed: %ld KB/s\n", mtd_dev->block_size / cost_time);
+        rt_kprintf("spinand erase speed: %ld KB/s\n", mtd_dev->page_size * mtd_dev->pages_per_block / cost_time);
     }
     else if (!rt_strcmp(cmd, "erase_all"))
     {
         if (argc != 3)
             goto out;
+        block_addr = atoi(argv[2]);
 
         g_nand_ops.erase_blk = erase_blk;
         g_nand_ops.read_page = read_page;
         g_nand_ops.prog_page = prog_page;
 
-        flash_erase_all_block(0);
+        flash_erase_all_block(block_addr, mtd_dev->block_total);
         rt_kprintf("erase all finished\n");
     }
     else if (!rt_strcmp(cmd, "stress"))
     {
-        if (argc != 3)
+        if (argc != 5)
             goto out;
         loop = atoi(argv[2]);
+        block_addr = atoi(argv[3]);
+        blocks = atoi(argv[4]);
 
-        nand_utils_test(loop);
+        nand_utils_test(loop, block_addr, block_addr + blocks);
+    }
+    else if (!rt_strcmp(cmd, "bbt"))
+    {
+        if (argc != 2)
+            goto out;
+
+        nand_bbt();
+    }
+    else if (!rt_strcmp(cmd, "markbad"))
+    {
+        if (argc != 3)
+            goto out;
+        block_addr = atoi(argv[2]);
+
+        ret = rt_mtd_nand_mark_badblock(mtd_dev, block_addr);
+        if (ret)
+        {
+            rt_kprintf("markbad failed, ret=%d\n", ret);
+        }
+    }
+    else if (!rt_strcmp(cmd, "mini_ftl_test"))
+    {
+        if (argc != 3)
+            goto out;
+        addr = atoi(argv[2]);
+
+        ret = mini_ftl_test_one_flash_block(addr);
+        if (ret)
+        {
+            rt_kprintf("mini_ftl test failed, ret=%d\n", ret);
+        }
+    }
+    else if (!rt_strcmp(cmd, "part_list"))
+    {
+        dfs_part_list();
+        rk_part_list();
     }
     else
     {
-
         goto out;
     }
 

@@ -66,29 +66,13 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2017 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright (c) 2017 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under Apache License, Version 2.0,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/Apache-2.0
   *
   ******************************************************************************
   */
@@ -107,18 +91,6 @@
 
 #include "stm32l4xx.h"
 
-#if !defined  (HSE_VALUE)
-  #define HSE_VALUE    8000000U  /*!< Value of the External oscillator in Hz */
-#endif /* HSE_VALUE */
-
-#if !defined  (MSI_VALUE)
-  #define MSI_VALUE    4000000U  /*!< Value of the Internal oscillator in Hz*/
-#endif /* MSI_VALUE */
-
-#if !defined  (HSI_VALUE)
-  #define HSI_VALUE    16000000U /*!< Value of the Internal oscillator in Hz*/
-#endif /* HSI_VALUE */
-
 /**
   * @}
   */
@@ -135,12 +107,43 @@
   * @{
   */
 
-/************************* Miscellaneous Configuration ************************/
-/*!< Uncomment the following line if you need to relocate your vector Table in
-     Internal SRAM. */
+#if !defined  (HSE_VALUE)
+  #define HSE_VALUE    8000000U  /*!< Value of the External oscillator in Hz */
+#endif /* HSE_VALUE */
+
+#if !defined  (MSI_VALUE)
+  #define MSI_VALUE    4000000U  /*!< Value of the Internal oscillator in Hz*/
+#endif /* MSI_VALUE */
+
+#if !defined  (HSI_VALUE)
+  #define HSI_VALUE    16000000U /*!< Value of the Internal oscillator in Hz*/
+#endif /* HSI_VALUE */
+
+/* Note: Following vector table addresses must be defined in line with linker
+         configuration. */
+/*!< Uncomment the following line if you need to relocate the vector table
+     anywhere in Flash or Sram, else the vector table is kept at the automatic
+     remap of boot address selected */
+/* #define USER_VECT_TAB_ADDRESS */
+
+#if defined(USER_VECT_TAB_ADDRESS)
+/*!< Uncomment the following line if you need to relocate your vector Table
+     in Sram else user remap will be done in Flash. */
 /* #define VECT_TAB_SRAM */
-#define VECT_TAB_OFFSET  0x00 /*!< Vector Table base offset field.
-                                   This value must be a multiple of 0x200. */
+
+#if defined(VECT_TAB_SRAM)
+#define VECT_TAB_BASE_ADDRESS   SRAM1_BASE      /*!< Vector Table base address field.
+                                                     This value must be a multiple of 0x200. */
+#define VECT_TAB_OFFSET         0x00000000U     /*!< Vector Table base offset field.
+                                                     This value must be a multiple of 0x200. */
+#else
+#define VECT_TAB_BASE_ADDRESS   FLASH_BASE      /*!< Vector Table base address field.
+                                                     This value must be a multiple of 0x200. */
+#define VECT_TAB_OFFSET         0x00000000U     /*!< Vector Table base offset field.
+                                                     This value must be a multiple of 0x200. */
+#endif /* VECT_TAB_SRAM */
+#endif /* USER_VECT_TAB_ADDRESS */
+
 /******************************************************************************/
 /**
   * @}
@@ -189,16 +192,20 @@
 
 /**
   * @brief  Setup the microcontroller system.
-  * @param  None
   * @retval None
   */
 
 void SystemInit(void)
 {
+#if defined(USER_VECT_TAB_ADDRESS)
+  /* Configure the Vector Table location -------------------------------------*/
+  SCB->VTOR = VECT_TAB_BASE_ADDRESS | VECT_TAB_OFFSET;
+#endif
+
   /* FPU settings ------------------------------------------------------------*/
-  #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
-    SCB->CPACR |= ((3UL << 10*2)|(3UL << 11*2));  /* set CP10 and CP11 Full Access */
-  #endif
+#if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
+  SCB->CPACR |= ((3UL << 20U)|(3UL << 22U));  /* set CP10 and CP11 Full Access */
+#endif
 
   /* Reset the RCC clock configuration to the default reset state ------------*/
   /* Set MSION bit */
@@ -218,13 +225,6 @@ void SystemInit(void)
 
   /* Disable all interrupts */
   RCC->CIER = 0x00000000U;
-
-  /* Configure the Vector Table location add offset address ------------------*/
-#ifdef VECT_TAB_SRAM
-  SCB->VTOR = SRAM_BASE | VECT_TAB_OFFSET; /* Vector Table Relocation in Internal SRAM */
-#else
-  SCB->VTOR = FLASH_BASE | VECT_TAB_OFFSET; /* Vector Table Relocation in Internal FLASH */
-#endif
 }
 
 /**
@@ -266,15 +266,14 @@ void SystemInit(void)
   *         - The result of this function could be not correct when using fractional
   *           value for HSE crystal.
   *
-  * @param  None
   * @retval None
   */
 void SystemCoreClockUpdate(void)
 {
-  uint32_t tmp = 0U, msirange = 0U, pllvco = 0U, pllr = 2U, pllsource = 0U, pllm = 2U;
+  uint32_t tmp, msirange, pllvco, pllsource, pllm, pllr;
 
   /* Get MSI Range frequency--------------------------------------------------*/
-  if((RCC->CR & RCC_CR_MSIRGSEL) == RESET)
+  if ((RCC->CR & RCC_CR_MSIRGSEL) == 0U)
   { /* MSISRANGE from RCC_CSR applies */
     msirange = (RCC->CSR & RCC_CSR_MSISRANGE) >> 8U;
   }

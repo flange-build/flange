@@ -10,8 +10,8 @@
 
 #include "rtdef.h"
 #include "iomux.h"
-#include "board.h"
 #include "hal_base.h"
+#include "board.h"
 
 /**
  * @brief  Config io domian for board of rk3308_ddr2p116sd4_v10
@@ -41,6 +41,10 @@ void rt_hw_iomux_config(void)
 {
     rt_hw_iodomain_config();
 
+#ifdef RT_USING_UART0
+    uart0_m0_iomux_config();
+#endif
+
 #ifdef RT_USING_UART1
     uart1_m0_iomux_config();
 #endif
@@ -57,9 +61,21 @@ void rt_hw_iomux_config(void)
     uart4_m0_iomux_config();
 #endif
 
+#ifdef RT_USING_I2C0
+    i2c0_m0_iomux_config();
+#endif
+
+#ifdef RT_USING_I2C1
     i2c1_m0_iomux_config();
-    i2s0_8ch_m0_iomux_config();
-    spkmute_iomux_config();
+#endif
+
+#ifdef RT_USING_I2C2
+    i2c2_m0_iomux_config();
+#endif
+
+#ifdef RT_USING_SPI0
+    spi0_m0_iomux_config();
+#endif
 
 #ifdef RT_USING_SPI1
     spi1_m0_iomux_config();
@@ -70,7 +86,7 @@ void rt_hw_iomux_config(void)
 #endif
 
 #ifdef RT_USING_SDIO0
-    sdio_iomux_config();
+    emmc_iomux_config();
 #endif
 
 #ifdef RT_USING_GMAC
@@ -79,4 +95,18 @@ void rt_hw_iomux_config(void)
 #endif
 #endif
 
+#ifdef RT_USING_AUDIO_CARD_I2S0
+    i2s0_8ch_m0_iomux_config();
+#endif
+
+    spkmute_iomux_config();
+
+#ifdef RT_USING_BACKLIGHT
+    pwm0_ch1_iomux_config();
+#endif
+
+#ifdef RT_USING_VOP
+    lcdc_ctrl_iomux_config();
+    lcdc_rgb888_m1_iomux_config();
+#endif
 }

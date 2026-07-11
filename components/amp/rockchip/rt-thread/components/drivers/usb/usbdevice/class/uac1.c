@@ -1,5 +1,5 @@
 /**
-  * Copyright (c) 2019 Fuzhou Rockchip Electronics Co., Ltd
+  * Copyright (c) 2024 Fuzhou Rockchip Electronics Co., Ltd
   *
   * SPDX-License-Identifier: Apache-2.0
   ******************************************************************************
@@ -11,6 +11,7 @@
   * Date           Author          Notes
   * 2019-10-15     Liangfeng Wu    first implementation
   * 2019-10-15     Zhihua Wang     first implementation
+  * 2024-08-06     Liangfeng Wu    make uac descriptors be adaptive to channels
   *
   ******************************************************************************
   */
@@ -20,24 +21,19 @@
 #include <rtdevice.h>
 #include "uac1.h"
 #include "dma.h"
-#include "rk_audio.h"
 #include "drv_heap.h"
+#include "rk_audio.h"
 
-#define F_AUDIO_NUM_INTERFACES      2 /* Number of streaming interfaces */
+#define UAC_NUM_INTERFACES          2 /* Number of streaming interfaces */
 #define USB_OUT_IT_ID               1
 #define USB_OUT_IT_FU_ID            2
 #define IO_OUT_OT_ID                3
 #define IO_IN_IT_ID                 4
 #define IO_IN_IT_FU_ID              5
 #define USB_IN_OT_ID                6
-#if defined(RKMCU_RK2106)
-#define IN_EP_MAX_PACKET_SIZE       64 /* Max SamFreq 48KHz in HS */
-#else
-#define IN_EP_MAX_PACKET_SIZE       384 /* Max SamFreq 96KHz in FS */
-#endif
-#define OUT_EP_MAX_PACKET_SIZE      384 /* Max SamFreq 96KHz in FS */
-#define SAMPLE_RATE_MAX             96000
+#define SAMPLE_RATE_MAX             48000
 #define SAMPLE_RATE_MIN             8000
+#define SAMPLERATE_NUM              5
 #define VOLUME_RES                  0x0080 /* 0.5 dB */
 #define VOLUME_MAX_USB              0x1900 /* 25 dB */
 #define VOLUME_MIN_USB              0xE700 /* -25 dB */
@@ -65,21 +61,30 @@
 #define C_MB_POOL_SIZE              (C_BUFFER_NUM + 8)
 #define C_TOTAL_SIZE                (C_AUDIO_PERIOD_SIZE * C_NR_CHANNEL * (C_AUDIO_SAMPLE_BITS >> 3))
 
-#define FREQ(f) { ((f) & 0xFF), ((f) >> 8 & 0xFF), ((f) >> 16 & 0xFF) }
-#define UAC_DT_AC_HEADER_LENGTH UAC_DT_AC_HEADER_SIZE(F_AUDIO_NUM_INTERFACES)
-/* 2 input terminal, 2 output terminal and 2 feature unit */
-#define UAC_DT_TOTAL_LENGTH (UAC_DT_AC_HEADER_LENGTH \
-        + UAC_DT_INPUT_TERMINAL_SIZE * 2 + UAC_DT_OUTPUT_TERMINAL_SIZE * 2 \
-        + UAC_DT_FEATURE_UNIT_SIZE(0) * 2)
+/* USB Interval is 1ms */
+#define IN_EP_MAX_PACKET_SIZE       (C_NR_CHANNEL * (C_AUDIO_SAMPLE_BITS >> 3) * SAMPLE_RATE_MAX / 1000)
+#define OUT_EP_MAX_PACKET_SIZE      (P_NR_CHANNEL * (P_AUDIO_SAMPLE_BITS >> 3) * SAMPLE_RATE_MAX / 1000)
+#define FREQ(f)                     { ((f) & 0xFF), ((f) >> 8 & 0xFF), ((f) >> 16 & 0xFF) }
+
+#define CHANNEL_CONFIG_MASK(n)          (((n) == 1) ? 0 : ((1ULL<<(n))-1))
+#define UAC_DT_P_CHANNEL_CONFIG         CHANNEL_CONFIG_MASK(P_NR_CHANNEL)
+#define UAC_DT_C_CHANNEL_CONFIG         CHANNEL_CONFIG_MASK(C_NR_CHANNEL)
+#define UAC_DT_AC_HEADER_LENGTH         UAC_DT_AC_HEADER_SIZE(UAC_NUM_INTERFACES)
+#define UAC_DT_FEATURE_UNIT_SIZE(ch)    (7 + ((ch) + 1) * 2)
+#define UAC_DT_TOTAL_LENGTH             (UAC_DT_AC_HEADER_LENGTH + \
+        UAC_DT_INPUT_TERMINAL_SIZE * 2 + UAC_DT_OUTPUT_TERMINAL_SIZE * 2 + \
+        UAC_DT_FEATURE_UNIT_SIZE(P_NR_CHANNEL) + \
+        UAC_DT_FEATURE_UNIT_SIZE(C_NR_CHANNEL))
+
 #define VOLUME_USB_TO_DB(v_usb) (v_usb <= 0x7FFF) ? v_usb: \
         (- (((rt_int16_t)0xFFFF - v_usb)+1))
 #define VOLUME_DB_TO_PERCENT(v_db, v_max_db, v_min_db) \
         ((rt_uint8_t)((((rt_int16_t)(v_db) - v_min_db)*100) /\
         ((rt_int16_t)v_max_db - v_min_db)))
-#define UAC_SET_VOL_MUTE_INTERVAL 1000
-#define UAC_SOF_COUNT 250000
+#define UAC_SET_VOL_MUTE_INTERVAL   1000
+#define UAC_SOF_COUNT               250000
 #undef  ABS
-#define ABS(X)              (((X) < 0) ? (-(X)) : (X))
+#define ABS(X)                      (((X) < 0) ? (-(X)) : (X))
 
 #ifdef RT_USB_AUDIO_PLL_COMPENSATION
 #define CPLL_COMPENSATION   10
@@ -88,6 +93,80 @@
 #define PLL_CPLL_44100      282240000
 #define I2S1_MCLKOUT_44100  28224000
 #endif
+
+#define UAC1_INTF_STR_INDEX 7
+
+/* 4.3.2  Class-Specific AC Interface Descriptor */
+#define DECLARE_UAC_AC_HEADER_DESCRIPTOR(n)     \
+struct uac1_ac_header_descriptor_##n {          \
+    rt_uint8_t  bLength;                        \
+    rt_uint8_t  bDescriptorType;                \
+    rt_uint8_t  bDescriptorSubtype;             \
+    rt_uint16_t bcdADC;                         \
+    rt_uint16_t wTotalLength;                   \
+    rt_uint8_t  bInCollection;                  \
+    rt_uint8_t  baInterfaceNr[n];               \
+} __attribute__ ((packed))
+
+/* 4.3.2.5 Feature Unit Descriptor */
+#define DECLARE_UAC_FEATURE_UNIT_DESCRIPTOR(ch)     \
+struct uac_feature_unit_descriptor_##ch {           \
+    rt_uint8_t  bLength;                            \
+    rt_uint8_t  bDescriptorType;                    \
+    rt_uint8_t  bDescriptorSubtype;                 \
+    rt_uint8_t  bUnitID;                            \
+    rt_uint8_t  bSourceID;                          \
+    rt_uint8_t  bControlSize;                       \
+    rt_uint16_t bmaControls[ch + 1];                \
+    rt_uint8_t  iFeature;                           \
+} __attribute__ ((packed))
+
+/* Formats - A.1.1 Audio Data Format Type I Codes */
+#define DECLARE_UAC_FORMAT_TYPE_I_DISCRETE_DESC(n)      \
+struct uac_format_type_i_discrete_descriptor_##n {      \
+    rt_uint8_t  bLength;                                \
+    rt_uint8_t  bDescriptorType;                        \
+    rt_uint8_t  bDescriptorSubtype;                     \
+    rt_uint8_t  bFormatType;                            \
+    rt_uint8_t  bNrChannels;                            \
+    rt_uint8_t  bSubframeSize;                          \
+    rt_uint8_t  bBitResolution;                         \
+    rt_uint8_t  bSamFreqType;                           \
+    rt_uint8_t  tSamFreq[n][3];                         \
+} __attribute__ ((packed))
+
+#define UAC_FORMAT_TYPE_I_DISCRETE_DESC_SIZE(n) (8 + (n * 3))
+
+DECLARE_UAC_AC_HEADER_DESCRIPTOR(UAC_NUM_INTERFACES);
+DECLARE_UAC_FEATURE_UNIT_DESCRIPTOR(P_NR_CHANNEL);
+DECLARE_UAC_FEATURE_UNIT_DESCRIPTOR(C_NR_CHANNEL);
+DECLARE_UAC_FORMAT_TYPE_I_DISCRETE_DESC(SAMPLERATE_NUM);
+
+struct uac1_control
+{
+#ifdef RT_USB_DEVICE_COMPOSITE
+    struct uiad_descriptor iad_desc;
+#endif
+    struct uinterface_descriptor interface_desc;
+    struct uac1_ac_header_descriptor_UAC_NUM_INTERFACES header_desc;
+    struct uac_input_terminal_descriptor usb_out_it_desc;
+    struct uac1_output_terminal_descriptor io_out_ot_desc;
+    struct uac_feature_unit_descriptor_P_NR_CHANNEL usb_out_it_feature_desc;
+    struct uac_input_terminal_descriptor io_in_it_desc;
+    struct uac1_output_terminal_descriptor usb_in_ot_desc;
+    struct uac_feature_unit_descriptor_C_NR_CHANNEL io_in_it_feature_desc;
+};
+typedef struct uac1_control *uac1_control_t;
+
+struct uac1_interface_alt
+{
+    struct uinterface_descriptor interface_desc;
+    struct uac1_as_header_descriptor as_header_desc;
+    struct uac_format_type_i_discrete_descriptor_SAMPLERATE_NUM type_i_desc;
+    struct uaudio_endpoint_descriptor endpoint_desc;
+    struct uac_iso_endpoint_descriptor iso_endpoint_desc;
+};
+typedef struct uac1_interface_alt *uac1_interface_alt_t;
 
 enum msg_type
 {
@@ -122,6 +201,7 @@ struct audio_play
     struct audio_buf abuf;
     struct usb_audio_buf pbuf[P_BUFFER_NUM];
     struct rt_mailbox mb;
+    rt_sem_t p_sem;
 };
 
 struct audio_capture
@@ -142,6 +222,7 @@ struct audio_capture
     struct audio_buf abuf;
     struct usb_audio_buf cbuf[C_BUFFER_NUM];
     struct rt_mailbox mb;
+    rt_sem_t c_sem;
 };
 
 struct uac1
@@ -153,6 +234,7 @@ struct uac1
     rt_uint8_t in_intf_alt;
     rt_uint8_t out_intf_alt;
     rt_uint8_t *ep0_buffer;
+    struct udevice *device;
     struct audio_play p;
     struct audio_capture c;
 };
@@ -204,7 +286,7 @@ static struct uac1_control _control_desc =
         0x03,
         USB_CLASS_AUDIO,
         USB_SUBCLASS_AUDIOSTREAMING,
-        0x00,
+        UAC_VERSION_1,
         0x00,
     },
 #endif
@@ -218,22 +300,27 @@ static struct uac1_control _control_desc =
         USB_CLASS_AUDIO,
         USB_SUBCLASS_AUDIOCONTROL,
         0x00,
+#ifdef RT_USB_DEVICE_COMPOSITE
+        UAC1_INTF_STR_INDEX,
+#else
         0x00,
+#endif
     },
     /* Audio Control Interface Header Descriptor */
     {
         UAC_DT_AC_HEADER_LENGTH,
         USB_DT_CS_INTERFACE,
         UAC_HEADER,
-        0x0100,
+        0x0100, /* Audio Device Class Specification Release Number */
         UAC_DT_TOTAL_LENGTH,
-        F_AUDIO_NUM_INTERFACES,
+        UAC_NUM_INTERFACES,
         {
             /* Interface number of the AudioStream interfaces */
             /* baInterfaceNr[0] = DYNAMIC, */
             /* baInterfaceNr[1] = DYNAMIC, */
         },
     },
+    /* USB Input Terminal Descriptor */
     {
         UAC_DT_INPUT_TERMINAL_SIZE,
         USB_DT_CS_INTERFACE,
@@ -242,7 +329,7 @@ static struct uac1_control _control_desc =
         UAC_TERMINAL_STREAMING,
         IO_OUT_OT_ID,
         P_NR_CHANNEL,
-        0x0003,
+        UAC_DT_P_CHANNEL_CONFIG,
         0x00,
         0x00,
     },
@@ -256,8 +343,9 @@ static struct uac1_control _control_desc =
         USB_OUT_IT_FU_ID,
         0x00,
     },
+    /* USB OUT Feature Unit Descriptor for Playback */
     {
-        UAC_DT_FEATURE_UNIT_SIZE(0),
+        UAC_DT_FEATURE_UNIT_SIZE(P_NR_CHANNEL),
         USB_DT_CS_INTERFACE,
         UAC_FEATURE_UNIT,
         USB_OUT_IT_FU_ID,
@@ -268,6 +356,7 @@ static struct uac1_control _control_desc =
         },
         0x00,
     },
+    /* USB Input Terminal Descriptor */
     {
         UAC_DT_INPUT_TERMINAL_SIZE,
         USB_DT_CS_INTERFACE,
@@ -276,10 +365,11 @@ static struct uac1_control _control_desc =
         UAC_INPUT_TERMINAL_MICROPHONE,
         USB_IN_OT_ID,
         C_NR_CHANNEL,
-        0x0003,
+        UAC_DT_C_CHANNEL_CONFIG,
         0x00,
         0x00,
     },
+    /* USB OUT Teminal Descriptor */
     {
         UAC_DT_OUTPUT_TERMINAL_SIZE,
         USB_DT_CS_INTERFACE,
@@ -290,8 +380,9 @@ static struct uac1_control _control_desc =
         IO_IN_IT_FU_ID,
         0x00,
     },
+    /* USB IN Feature Unit Descriptor for Capture*/
     {
-        UAC_DT_FEATURE_UNIT_SIZE(0),
+        UAC_DT_FEATURE_UNIT_SIZE(C_NR_CHANNEL),
         USB_DT_CS_INTERFACE,
         UAC_FEATURE_UNIT,
         IO_IN_IT_FU_ID,
@@ -341,16 +432,15 @@ static struct uac1_interface_alt _as_out_intf_alt1_desc =
         UAC_FORMAT_TYPE_I_PCM,
     },
     {
-        UAC_FORMAT_TYPE_I_DISCRETE_DESC_SIZE(6),
+        UAC_FORMAT_TYPE_I_DISCRETE_DESC_SIZE(SAMPLERATE_NUM),
         USB_DT_CS_INTERFACE,
         UAC_FORMAT_TYPE,
         UAC_FORMAT_TYPE_I,
         P_NR_CHANNEL,
         0x02,
         0x10,
-        0x06,
+        SAMPLERATE_NUM,
         {
-            FREQ(96000),
             FREQ(48000),
             FREQ(44100),
             FREQ(32000),
@@ -415,16 +505,15 @@ static struct uac1_interface_alt _as_in_intf_alt1_desc =
         UAC_FORMAT_TYPE_I_PCM,
     },
     {
-        UAC_FORMAT_TYPE_I_DISCRETE_DESC_SIZE(6),
+        UAC_FORMAT_TYPE_I_DISCRETE_DESC_SIZE(SAMPLERATE_NUM),
         USB_DT_CS_INTERFACE,
         UAC_FORMAT_TYPE,
         UAC_FORMAT_TYPE_I,
         C_NR_CHANNEL,
         0x02,
         0x10,
-        0x06,
+        SAMPLERATE_NUM,
         {
-            FREQ(96000),
             FREQ(48000),
             FREQ(44100),
             FREQ(32000),
@@ -787,6 +876,10 @@ static void _audio_start_playback(ufunction_t func)
 
     RT_DEBUG_LOG(RT_DEBUG_USB, ("%s\n", __func__));
 
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+    rt_sem_release(g_uac1->p.p_sem);
+#endif
+
     g_uac1->ep_out->request.buffer = g_uac1->ep_out->buffer;
     g_uac1->ep_out->request.size = EP_MAXPACKET(g_uac1->ep_out);
     g_uac1->ep_out->request.req_type = UIO_REQUEST_READ_BEST;
@@ -918,6 +1011,10 @@ static void _audio_start_capture(ufunction_t func)
     rt_uint32_t factor, interval;
     rt_uint8_t framesize;
 
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+    rt_sem_release(g_uac1->c.c_sem);
+#endif
+
     rt_memset(ep_in->buffer, 0, IN_EP_MAX_PACKET_SIZE);
     factor = (func->device->dcd->device_is_hs) ? 8000 : 1000;
     interval = factor / (1 << (_as_in_intf_alt1_desc.endpoint_desc.bInterval - 1));
@@ -947,7 +1044,19 @@ static void _audio_stop_capture(ufunction_t func)
 
 static rt_err_t _function_enable(ufunction_t func)
 {
-    return RT_EOK;
+    rt_err_t ret = RT_EOK;
+
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+    ret = dcd_ep_poll_enable(g_uac1->device->dcd, g_uac1->ep_in);
+    if (ret != RT_EOK)
+        rt_kprintf("%s: ep in poll enable fail!\n", __func__);
+
+    ret = dcd_ep_poll_enable(g_uac1->device->dcd, g_uac1->ep_out);
+    if (ret != RT_EOK)
+        rt_kprintf("%s: ep out poll enable fail!\n", __func__);
+#endif
+
+    return ret;
 }
 
 static rt_err_t _function_disable(ufunction_t func)
@@ -1038,7 +1147,6 @@ static struct ufunction_ops ops =
     _function_disable,
     RT_NULL,
     _function_setup,
-    _function_set_alt,
 };
 
 static rt_err_t _ep0_set_playback_mute_handler(udevice_t device, rt_size_t size)
@@ -1112,6 +1220,26 @@ static rt_err_t _interface_handler(ufunction_t func, ureq_t setup)
     RT_ASSERT(func != RT_NULL);
     RT_ASSERT(func->device != RT_NULL);
     RT_ASSERT(setup != RT_NULL);
+
+    if ((setup->request_type & USB_REQ_TYPE_MASK) == USB_REQ_TYPE_STANDARD)
+    {
+        switch (setup->bRequest)
+        {
+        case USB_REQ_GET_INTERFACE:
+            /* TODO */
+            rt_usbd_ep0_set_stall(func->device);
+            break;
+        case USB_REQ_SET_INTERFACE:
+            _function_set_alt(func, setup->wIndex & 0xFF, setup->wValue & 0xFF);
+            break;
+        default:
+            rt_usbd_ep0_set_stall(func->device);
+            rt_kprintf("%s: unknown uac request 0x%x", __func__, setup->bRequest);
+            break;
+        }
+
+        return RT_EOK;
+    }
 
     req = setup->bRequest;
     cs = setup->wValue >> 8;
@@ -1650,13 +1778,8 @@ static rt_err_t _uac1_descriptor_config(uac1_control_t uac1, rt_uint8_t cintf_nr
 
     as_out_intf_alt1->endpoint_desc.bInterval = device_is_hs ? 0x04 : 0x01;
     _as_out_intf_alt1_desc.endpoint_desc.bInterval = device_is_hs ? 0x04 : 0x01;
-#if defined(RKMCU_RK2106)
-    as_in_intf_alt1->endpoint_desc.bInterval = 0x02;
-    _as_in_intf_alt1_desc.endpoint_desc.bInterval = 0x02;
-#else
     as_in_intf_alt1->endpoint_desc.bInterval = device_is_hs ? 0x04 : 0x01;
     _as_in_intf_alt1_desc.endpoint_desc.bInterval = device_is_hs ? 0x04 : 0x01;
-#endif
 
     return RT_EOK;
 }
@@ -1775,11 +1898,36 @@ static void playback_thread_entry(void *parameter)
     }
 }
 
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+static void playback_ep_poll_thread_entry(void *parameter)
+{
+    struct audio_play *p = (struct audio_play *)parameter;
+    rt_err_t ret;
+
+    while (1)
+    {
+        ret = rt_sem_take(p->p_sem, RT_WAITING_FOREVER);
+        if (ret == RT_EOK)
+        {
+            dcd_ep_poll_status(g_uac1->device->dcd, g_uac1->ep_out);
+        }
+        else
+        {
+            rt_kprintf("%s: take a dynamic semaphore fail!\n", __func__);
+            return;
+        }
+    }
+}
+#endif
+
 static rt_err_t _audio_playback_setup(struct uac1 *uac1)
 {
     struct audio_play *p = &uac1->p;
     rt_thread_t play_thread;
-    rt_size_t size;
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+    rt_thread_t play_poll_thread;
+#endif
+//    rt_size_t size;
     rt_uint8_t i;
     rt_err_t ret = RT_EOK;
 
@@ -1788,7 +1936,7 @@ static rt_err_t _audio_playback_setup(struct uac1 *uac1)
     rt_list_init(&p->free_list);
     rt_list_init(&p->ready_list);
 
-    uac1->ep_out->buffer = rt_dma_malloc(OUT_EP_MAX_PACKET_SIZE);
+    uac1->ep_out->buffer = rt_malloc_align(RT_ALIGN(OUT_EP_MAX_PACKET_SIZE, USB_DMA_ALIGN_SIZE), USB_DMA_ALIGN_SIZE);
     if (!uac1->ep_out->buffer)
     {
         rt_kprintf("%s: alloc ep out buf fail!\n", __func__);
@@ -1796,6 +1944,7 @@ static rt_err_t _audio_playback_setup(struct uac1 *uac1)
         goto err0;
     }
 
+#if 0
     p->abuf.period_size = P_AUDIO_PERIOD_SIZE;
     p->abuf.buf_size = P_AUDIO_PERIOD_SIZE * P_AUDIO_PERIOD_COUNT;
     size = p->abuf.buf_size * P_NR_CHANNEL * (P_AUDIO_SAMPLE_BITS >> 3);
@@ -1810,7 +1959,7 @@ static rt_err_t _audio_playback_setup(struct uac1 *uac1)
         ret = -RT_ENOMEM;
         goto err1;
     }
-
+#endif
     for (i = 0; i < P_BUFFER_NUM; i++)
     {
         p->pbuf[i].buffer = rt_malloc(P_TOTAL_SIZE);
@@ -1846,8 +1995,37 @@ static rt_err_t _audio_playback_setup(struct uac1 *uac1)
         goto err4;
     }
 
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+    p->p_sem = rt_sem_create("uac1_play_sem", 0, RT_IPC_FLAG_PRIO);
+    if (p->p_sem == RT_NULL)
+    {
+        rt_kprintf("%s: create play semaphore fail!\n", __func__);
+        ret = -RT_ERROR;
+        goto err5;
+    }
+
+    play_poll_thread = rt_thread_create("play_ep_poll", playback_ep_poll_thread_entry, p, 512, 8, 10);
+    if (play_poll_thread != RT_NULL)
+    {
+        rt_thread_startup(play_poll_thread);
+    }
+    else
+    {
+        rt_kprintf("%s: create play poll thread fail!\n", __func__);
+        ret = -RT_ERROR;
+        goto err6;
+
+    }
+#endif
+
     return ret;
 
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+err6:
+    rt_sem_delete(p->p_sem);
+err5:
+    rt_thread_delete(play_thread);
+#endif
 err4:
     rt_mb_delete(&p->mb);
 err3:
@@ -1857,12 +2035,14 @@ err3:
             rt_free(p->pbuf[i].buffer);
     }
 err2:
+#if 0
 #ifdef RT_USING_CACHE
     rt_free_uncache(p->abuf.buf);
 #else
     rt_free(p->abuf.buf);
 #endif
 err1:
+#endif
     rt_dma_free(uac1->ep_out->buffer);
 err0:
     return ret;
@@ -1944,11 +2124,36 @@ static void capture_thread_entry(void *parameter)
     }
 }
 
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+static void capture_ep_poll_thread_entry(void *parameter)
+{
+    struct audio_capture *c = (struct audio_capture *)parameter;
+    rt_err_t ret;
+
+    while (1)
+    {
+        ret = rt_sem_take(c->c_sem, RT_WAITING_FOREVER);
+        if (ret == RT_EOK)
+        {
+            dcd_ep_poll_status(g_uac1->device->dcd, g_uac1->ep_in);
+        }
+        else
+        {
+            rt_kprintf("%s: take a dynamic semaphore fail!\n", __func__);
+            return;
+        }
+    }
+}
+#endif
+
 static rt_err_t _audio_capture_setup(struct uac1 *uac1)
 {
     struct audio_capture *c = &uac1->c;
-    rt_thread_t cap_thread;
-    rt_size_t size;
+    rt_thread_t capt_thread;
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+    rt_thread_t capt_poll_thread;
+#endif
+//    rt_size_t size;
     rt_uint8_t i;
     rt_err_t ret = RT_EOK;
 
@@ -1957,14 +2162,14 @@ static rt_err_t _audio_capture_setup(struct uac1 *uac1)
     rt_list_init(&c->free_list);
     rt_list_init(&c->ready_list);
 
-    uac1->ep_in->buffer = rt_dma_malloc(IN_EP_MAX_PACKET_SIZE);
+    uac1->ep_in->buffer = rt_malloc_align(RT_ALIGN(IN_EP_MAX_PACKET_SIZE, USB_DMA_ALIGN_SIZE), USB_DMA_ALIGN_SIZE);
     if (!uac1->ep_in->buffer)
     {
         rt_kprintf("%s: alloc ep in buf fail!\n", __func__);
         ret = -RT_ENOMEM;
         goto err0;
     }
-
+#if 0
     c->abuf.period_size = C_AUDIO_PERIOD_SIZE;
     c->abuf.buf_size = C_AUDIO_PERIOD_SIZE * C_AUDIO_PERIOD_COUNT;
     size = c->abuf.buf_size * C_NR_CHANNEL * (C_AUDIO_SAMPLE_BITS >> 3);
@@ -1979,7 +2184,7 @@ static rt_err_t _audio_capture_setup(struct uac1 *uac1)
         ret = -RT_ENOMEM;
         goto err1;
     }
-
+#endif
     for (i = 0; i < C_BUFFER_NUM; i++)
     {
         c->cbuf[i].buffer = rt_malloc(C_TOTAL_SIZE);
@@ -2003,10 +2208,10 @@ static rt_err_t _audio_capture_setup(struct uac1 *uac1)
         goto err3;
     }
 
-    cap_thread = rt_thread_create("capt_usb", capture_thread_entry, c, 2048, 0, 8);
-    if (cap_thread != RT_NULL)
+    capt_thread = rt_thread_create("capt_usb", capture_thread_entry, c, 2048, 0, 8);
+    if (capt_thread != RT_NULL)
     {
-        rt_thread_startup(cap_thread);
+        rt_thread_startup(capt_thread);
     }
     else
     {
@@ -2015,8 +2220,37 @@ static rt_err_t _audio_capture_setup(struct uac1 *uac1)
         goto err4;
     }
 
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+    c->c_sem = rt_sem_create("uac1_capt_sem", 0, RT_IPC_FLAG_PRIO);
+    if (c->c_sem == RT_NULL)
+    {
+        rt_kprintf("%s: create capture semaphore fail!\n", __func__);
+        ret = -RT_ERROR;
+        goto err5;
+    }
+
+    capt_poll_thread = rt_thread_create("capt_ep_poll", capture_ep_poll_thread_entry, c, 512, 8, 10);
+    if (capt_poll_thread != RT_NULL)
+    {
+        rt_thread_startup(capt_poll_thread);
+    }
+    else
+    {
+        rt_kprintf("%s: create capture poll thread fail!\n", __func__);
+        ret = -RT_ERROR;
+        goto err6;
+
+    }
+#endif
+
     return ret;
 
+#ifdef RT_USB_AUDIO_USING_EP_POLL
+err6:
+    rt_sem_delete(c->c_sem);
+err5:
+    rt_thread_delete(capt_thread);
+#endif
 err4:
     rt_mb_delete(&c->mb);
 err3:
@@ -2026,12 +2260,14 @@ err3:
             rt_free(c->cbuf[i].buffer);
     }
 err2:
+#if 0
 #ifdef RT_USING_CACHE
     rt_free_uncache(c->abuf.buf);
 #else
     rt_free(c->abuf.buf);
 #endif
 err1:
+#endif
     rt_dma_free(uac1->ep_in->buffer);
 err0:
     return ret;
@@ -2049,8 +2285,12 @@ ufunction_t rt_usbd_function_uac1_create(udevice_t device)
     /* parameter check */
     RT_ASSERT(device != RT_NULL);
 
+#ifdef RT_USB_DEVICE_COMPOSITE
+    rt_usbd_device_set_interface_string(device, UAC1_INTF_STR_INDEX, _ustring[2]);
+#else
     /* set usb device string description */
     rt_usbd_device_set_string(device, _ustring);
+#endif
 
     /* create an uac1 function */
     func = rt_usbd_function_new(device, &dev_desc, &ops);
@@ -2059,9 +2299,10 @@ ufunction_t rt_usbd_function_uac1_create(udevice_t device)
     g_uac1 = (struct uac1 *)rt_malloc(sizeof(struct uac1));
     rt_memset(g_uac1, 0, sizeof(struct uac1));
     func->user_data = (void *)g_uac1;
-    g_uac1->ep0_buffer = rt_dma_malloc(64);
+    g_uac1->ep0_buffer = rt_malloc_align(RT_ALIGN(64, USB_DMA_ALIGN_SIZE), USB_DMA_ALIGN_SIZE);
     g_uac1->p.sample_rate = P_DEFAULT_SAMPLE_RATE;
     g_uac1->c.sample_rate = C_DEFAULT_SAMPLE_RATE;
+    g_uac1->device = device;
 
     /*
      * create an uac audio control interface, an uac audio streaming

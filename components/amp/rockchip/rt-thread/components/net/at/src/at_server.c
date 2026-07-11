@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -38,6 +38,10 @@ static at_server_t at_server_local = RT_NULL;
 static at_cmd_t cmd_table = RT_NULL;
 static rt_size_t cmd_num;
 
+extern rt_size_t at_utils_send(rt_device_t dev,
+                               rt_off_t    pos,
+                               const void *buffer,
+                               rt_size_t   size);
 extern void at_vprintf(rt_device_t device, const char *format, va_list args);
 extern void at_vprintfln(rt_device_t device, const char *format, va_list args);
 
@@ -165,6 +169,79 @@ void rt_at_server_print_all_cmd(void)
             at_server_printf("%c%c", AT_CMD_CR, AT_CMD_LF);
         }
     }
+}
+
+/**
+ * Send data to AT Client by uart device.
+ *
+ * @param server current AT server object
+ * @param buf   send data buffer
+ * @param size  send fixed data size
+ *
+ * @return >0: send data size
+ *         =0: send failed
+ */
+rt_size_t at_server_send(at_server_t server, const char *buf, rt_size_t size)
+{
+    RT_ASSERT(buf);
+
+    if (server == RT_NULL)
+    {
+        LOG_E("input AT Server object is NULL, please create or get AT Server object!");
+        return 0;
+    }
+
+    return at_utils_send(server->device, 0, buf, size);
+}
+
+/**
+ * AT Server receive fixed-length data.
+ *
+ * @param client current AT Server object
+ * @param buf   receive data buffer
+ * @param size  receive fixed data size
+ * @param timeout  receive data timeout (ms)
+ *
+ * @note this function can only be used in execution function of AT commands
+ *
+ * @return >0: receive data size
+ *         =0: receive failed
+ */
+rt_size_t at_server_recv(at_server_t server, char *buf, rt_size_t size, rt_int32_t timeout)
+{
+    rt_size_t read_idx = 0;
+    rt_err_t result = RT_EOK;
+    char ch = 0;
+
+    RT_ASSERT(buf);
+
+    if (server == RT_NULL)
+    {
+        LOG_E("input AT Server object is NULL, please create or get AT Server object!");
+        return 0;
+    }
+
+    while (1)
+    {
+        if (read_idx < size)
+        {
+            /* check get data value */
+            result = server->get_char(server, &ch, timeout);
+            if (result != RT_EOK)
+            {
+                LOG_E("AT Server receive failed, uart device get data error.");
+                return 0;
+            }
+
+            buf[read_idx++] = ch;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    return read_idx;
 }
 
 at_server_t at_get_server(void)
@@ -329,7 +406,7 @@ static rt_err_t at_cmd_get_name(const char *cmd_buffer, char *cmd_name)
                 || (*(cmd_buffer + i) >= AT_CMD_CHAR_0 && *(cmd_buffer + i) <= AT_CMD_CHAR_9))
         {
             cmd_name_len = i;
-            memcpy(cmd_name, cmd_buffer, cmd_name_len);
+            rt_memcpy(cmd_name, cmd_buffer, cmd_name_len);
             *(cmd_name + cmd_name_len) = '\0';
 
             return RT_EOK;
@@ -339,17 +416,21 @@ static rt_err_t at_cmd_get_name(const char *cmd_buffer, char *cmd_name)
     return -RT_ERROR;
 }
 
-static char at_server_gerchar(void)
+static rt_err_t at_server_getchar(at_server_t server, char *ch, rt_int32_t timeout)
 {
-    char ch;
+    rt_err_t result = RT_EOK;
 
-    while (rt_device_read(at_server_local->device, 0, &ch, 1) == 0)
+    while (rt_device_read(at_server_local->device, 0, ch, 1) == 0)
     {
         rt_sem_control(at_server_local->rx_notice, RT_IPC_CMD_RESET, RT_NULL);
-        rt_sem_take(at_server_local->rx_notice, RT_WAITING_FOREVER);
+        result = rt_sem_take(at_server_local->rx_notice, rt_tick_from_millisecond(timeout));
+        if (result != RT_EOK)
+        {
+            return result;
+        }
     }
 
-    return ch;
+    return result;
 }
 
 static void server_parser(at_server_t server)
@@ -365,13 +446,23 @@ static void server_parser(at_server_t server)
     RT_ASSERT(server);
     RT_ASSERT(server->status != AT_STATUS_UNINITIALIZED);
 
-    while (ESC_KEY != (ch = server->get_char()))
+    while (1)
     {
+        server->get_char(server, &ch, RT_WAITING_FOREVER);
+        if (ESC_KEY == ch)
+        {
+            break;
+        }
+
         if (server->echo_mode)
         {
             if (ch == AT_CMD_CR || (ch == AT_CMD_LF && last_ch != AT_CMD_CR))
             {
                 at_server_printf("%c%c", AT_CMD_CR, AT_CMD_LF);
+            }
+            else if (ch == AT_CMD_LF)
+            {
+                // skip the end sign check
             }
             else if (ch == BACKSPACE_KEY || ch == DELECT_KEY)
             {
@@ -417,7 +508,7 @@ static void server_parser(at_server_t server)
         }
 
 __retry:
-        memset(server->recv_buffer, 0x00, AT_SERVER_RECV_BUFF_LEN);
+        rt_memset(server->recv_buffer, 0x00, AT_SERVER_RECV_BUFF_LEN);
         server->cur_recv_len = 0;
     }
 }
@@ -473,7 +564,7 @@ int at_server_init(void)
     at_server_local->echo_mode = 1;
     at_server_local->status = AT_STATUS_UNINITIALIZED;
 
-    memset(at_server_local->recv_buffer, 0x00, AT_SERVER_RECV_BUFF_LEN);
+    rt_memset(at_server_local->recv_buffer, 0x00, AT_SERVER_RECV_BUFF_LEN);
     at_server_local->cur_recv_len = 0;
 
     at_server_local->rx_notice = rt_sem_create("at_svr", 0, RT_IPC_FLAG_FIFO);
@@ -508,8 +599,8 @@ int at_server_init(void)
         goto __exit;
     }
 
-    at_server_local->get_char = at_server_gerchar;
-    memcpy(at_server_local->end_mark, AT_CMD_END_MARK, sizeof(AT_CMD_END_MARK));
+    at_server_local->get_char = at_server_getchar;
+    rt_memcpy(at_server_local->end_mark, AT_CMD_END_MARK, sizeof(AT_CMD_END_MARK));
 
     at_server_local->parser_entry = server_parser;
     at_server_local->parser = rt_thread_create("at_svr",

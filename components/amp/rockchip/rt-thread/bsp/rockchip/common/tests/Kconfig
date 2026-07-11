@@ -16,11 +16,16 @@ config RT_USING_COMMON_TEST
 
     config RT_USING_AUTO_TEST
         bool "Enable BSP AUTO TEST"
-        select RT_USING_COMMON_TEST_SNOR
         default n
 
     config RT_USING_COMMON_TEST_SUSPEND
         bool "Enable BSP Common Timer and GPIO Suspend/Resume TEST"
+        default n
+
+    config RT_USING_COMMON_TEST_ALARM
+        bool "Enable BSP ALARM TEST"
+        depends on RT_USING_ALARM
+        depends on RT_USING_RTC
         default n
 
     config RT_USING_COMMON_TEST_AUDIO
@@ -38,6 +43,11 @@ config RT_USING_COMMON_TEST
         bool "Enable BSP Common RK PM CPU Usage TEST"
         default n
 
+    config RT_USING_COMMON_TEST_CRYPTO
+        bool "Enable BSP CRYPTO TEST"
+        depends on RT_USING_HWCRYPTO
+        default n
+
     config RT_USING_COMMON_TEST_DCACHE
         bool "Enable BSP Common Dcache TEST"
         default n
@@ -48,6 +58,16 @@ config RT_USING_COMMON_TEST
 
     config RT_USING_COMMON_TEST_DISPLAY
         bool "Enable BSP Common DISPLAY TEST"
+        depends on RT_USING_VOP
+        default n
+
+    config RT_USING_COMMON_TEST_DSMC
+        bool "Enable BSP Common DSMC TEST"
+        depends on RT_USING_DSMC_HOST
+        default n
+
+    config RT_USING_COMMON_MODETEST
+        bool "Enable BSP Common Modetest"
         depends on RT_USING_VOP
         default n
 
@@ -77,6 +97,19 @@ config RT_USING_COMMON_TEST
         depends on RT_USING_PIN
         default n
 
+    choice
+        prompt "Pinctrl version"
+        default RT_USING_COMMON_TEST_GPIO_V1 if RKMCU_RK2108
+        default RT_USING_COMMON_TEST_GPIO_V2 if BSP_RK3308
+        default RT_USING_COMMON_TEST_GPIO_V2
+        depends on RT_USING_COMMON_TEST_GPIO
+
+        config RT_USING_COMMON_TEST_GPIO_V1
+            bool "Enalbe BSP Common GPIO with Pinctrl v1"
+        config RT_USING_COMMON_TEST_GPIO_V2
+            bool "Enalbe BSP Common GPIO with Pinctrl v2"
+    endchoice
+
     config RT_USING_COMMON_TEST_I2C
         bool "Enable BSP Common I2C TEST"
         depends on RT_USING_I2C
@@ -91,6 +124,11 @@ config RT_USING_COMMON_TEST
         depends on RT_USING_KEYCTRL
         default n
 
+    config RT_USING_COMMON_TEST_TOUCHKEY
+        bool "Enable BSP Common TOUCHKEY TEST"
+        depends on RT_USING_TOUCHKEY
+        default n
+
     config RT_USING_COMMON_TEST_MBOX
         bool "Enable BSP Common MBOX TEST"
         default n
@@ -101,6 +139,10 @@ config RT_USING_COMMON_TEST
 
     config RT_USING_COMMON_TEST_MPU
         bool "Enable BSP Common MPU TEST"
+        default n
+
+    config RT_USING_COMMON_TEST_NVIC
+        bool "Enable BSP Common NVIC TEST"
         default n
 
     config RT_USING_COMMON_TEST_PM
@@ -123,6 +165,15 @@ config RT_USING_COMMON_TEST
         depends on RT_USING_SPI2APB
         default n
 
+    config RT_USING_COMMON_TEST_SPI2APB_UPGRADE
+        bool "Enable BSP Common SPI2APB UPGRADE TEST"
+        select RT_USING_DFS
+
+    config RT_USING_COMMON_TEST_SPI2APB_FLASH_OBJ
+        bool "Enable BSP Common SPI2APB_FLASH_OBJ TEST"
+        depends on RT_USING_SPI
+        default n
+
     config RT_USING_COMMON_STRESS_TEST
         bool "Enable BSP Common STRESS TEST"
         select RT_USING_RESET
@@ -133,7 +184,8 @@ config RT_USING_COMMON_TEST
 
     config RT_USING_COMMON_TEST_UART
         bool "Enable BSP Common UART TEST"
-        depends on RT_USING_UART && RT_USING_POSIX_TERMIOS && RT_USING_POSIX
+        select RT_USING_POSIX
+        depends on RT_USING_UART && RT_USING_POSIX_TERMIOS
         default n
 
     config RT_USING_COMMON_TEST_USAGE
@@ -189,8 +241,16 @@ config RT_USING_COMMON_TEST
         bool "Enable BSP Common TIMER TEST"
         default n
 
+    if RT_USING_PWM_REMOTECTL
+    config RT_USING_PWM_REMOTECTL_TEST
+        bool "Enable BSP Common REMOTECTL TEST"
+        depends on RT_USING_PWM_REMOTECTL
+        default n
+    endif
+
     config RT_USING_COMMON_TEST_LINUX_RPMSG_LITE
         bool "Enable linux rpmsg lite test"
+        depends on RT_USING_LINUX_RPMSG
         default n
 
     config RT_USING_COMMON_TEST_RPMSG_LITE
@@ -209,6 +269,16 @@ config RT_USING_COMMON_TEST
     config RT_USING_COMMON_TEST_PCIE_DMA
         bool "Enable BSP Common PCIE DMA TEST"
         default n
-    endif
 
+    config RT_USING_COMMON_TEST_RGA
+        bool "Enable BSP Common RGA TEST"
+        depends on RT_USING_RGA
+        default n
+
+    config RT_USING_COMMON_TEST_PCIE_CC_SPEED_TEST_EP
+        bool "Enable BSP Common PCIE chips connect speed test"
+        depends on RT_USING_PCIE_CHIPS_CONNECT
+        default n
+
+    endif
 endmenu

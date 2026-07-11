@@ -39,7 +39,7 @@
 
 struct rt_wdt_dev
 {
-    rt_watchdog_t dw_wdt;
+    rt_watchdog_t wdt;
     uint32_t type;
     rt_uint32_t timeoutperiod; /* second */
     rt_uint32_t timeleft;
@@ -49,7 +49,7 @@ struct rt_wdt_dev
 
 static struct rt_wdt_dev *wdt_dev = RT_NULL;
 
-static rt_err_t dw_wdt_stop(void)
+static rt_err_t rk_wdt_stop(void)
 {
     HAL_Status ret;
 
@@ -61,10 +61,20 @@ static rt_err_t dw_wdt_stop(void)
         return RT_EINVAL;
     }
 
+#ifdef TCLK_WDT0_GATE
+    ret = HAL_CRU_ClkDisable(TCLK_WDT0_GATE);
+    if (ret)
+    {
+        rt_kprintf("failed to disable wdt tclk, ret=%d", ret);
+
+        return RT_EINVAL;
+    }
+#endif
+
     return RT_EOK;
 }
 
-static rt_err_t dw_wdt_start(uint32_t type)
+static rt_err_t rk_wdt_start(uint32_t type)
 {
     HAL_Status ret;
 
@@ -76,20 +86,30 @@ static rt_err_t dw_wdt_start(uint32_t type)
         return RT_EINVAL;
     }
 
+#ifdef TCLK_WDT0_GATE
+    ret = HAL_CRU_ClkEnable(TCLK_WDT0_GATE);
+    if (ret)
+    {
+        rt_kprintf("failed to enable wdt tclk, ret=%d", ret);
+
+        return RT_EINVAL;
+    }
+#endif
+
     HAL_WDT_Start(type);
 
     return RT_EOK;
 }
 
-static rt_err_t dw_wdt_init(rt_watchdog_t *wdt)
+static rt_err_t rk_wdt_init(rt_watchdog_t *wdt)
 {
     HAL_Status ret;
     uint32_t freq;
 
 #ifdef CONFIG_RT_USING_SND_GLB_RST
-    HAL_CRU_WdtGlbRstEnable(GLB_RST_SND_WDT0);
+    HAL_CRU_WdtGlbRstEnable(GLB_RST_SND_WDT);
 #else
-    HAL_CRU_WdtGlbRstEnable(GLB_RST_FST_WDT0);
+    HAL_CRU_WdtGlbRstEnable(GLB_RST_FST_WDT);
 #endif
 
     freq = HAL_CRU_ClkGetFreq(PCLK_WDT);
@@ -106,14 +126,14 @@ static rt_err_t dw_wdt_init(rt_watchdog_t *wdt)
     return RT_EOK;
 }
 
-rt_err_t dw_wdt_set_top(int top_msec)
+rt_err_t rk_wdt_set_top(int top_msec)
 {
     HAL_WDT_SetTopMsec(top_msec, wdt_dev->freq);
 
     return RT_EOK;
 }
 
-static rt_err_t dw_wdt_control(rt_watchdog_t *wdt, int cmd, void *arg)
+static rt_err_t rk_wdt_control(rt_watchdog_t *wdt, int cmd, void *arg)
 {
     rt_uint32_t top = 0;
     rt_uint32_t type;
@@ -134,12 +154,12 @@ static rt_err_t dw_wdt_control(rt_watchdog_t *wdt, int cmd, void *arg)
         break;
     case RT_DEVICE_CTRL_WDT_START:
         type = *(rt_uint32_t *)arg;
-        dw_wdt_start(type);
+        rk_wdt_start(type);
         wdt_dev->wdt_used = 1;
         wdt_dev->type = type;
         break;
     case RT_DEVICE_CTRL_WDT_STOP:
-        dw_wdt_stop();
+        rk_wdt_stop();
         break;
     default:
 
@@ -149,10 +169,10 @@ static rt_err_t dw_wdt_control(rt_watchdog_t *wdt, int cmd, void *arg)
     return RT_EOK;
 }
 
-static const struct rt_watchdog_ops dw_wdt_pos =
+static const struct rt_watchdog_ops rk_wdt_pos =
 {
-    .init = dw_wdt_init,
-    .control = dw_wdt_control,
+    .init = rk_wdt_init,
+    .control = rk_wdt_control,
 };
 
 static void rt_wdt_irqhandler(int irq, void *param)
@@ -173,21 +193,21 @@ static void rt_wdt_irqhandler(int irq, void *param)
     rt_interrupt_leave();
 }
 #if defined(RT_USING_PM)
-static int rt_wdt_pm_suspend(const struct rt_device *device)
+static int rt_wdt_pm_suspend(const struct rt_device *device, rt_uint8_t mode)
 {
     wdt_dev->timeleft = HAL_WDT_GetTimeLeft() / wdt_dev->freq;
-    dw_wdt_stop();
+    rk_wdt_stop();
     return RT_EOK;
 }
 
-static void rt_wdt_pm_resume(const struct rt_device *device)
+static void rt_wdt_pm_resume(const struct rt_device *device, rt_uint8_t mode)
 {
     rt_err_t err;
 
     if (!wdt_dev->wdt_used)
         return;
 
-    err = dw_wdt_init(&wdt_dev->dw_wdt);
+    err = rk_wdt_init(&wdt_dev->wdt);
     if (err)
     {
         rt_kprintf("failed to resume wdt\n");
@@ -196,7 +216,7 @@ static void rt_wdt_pm_resume(const struct rt_device *device)
 
     HAL_WDT_SetTimeout(wdt_dev->timeleft);
     HAL_WDT_KeepAlive();
-    dw_wdt_start(wdt_dev->type);
+    rk_wdt_start(wdt_dev->type);
 }
 
 static struct rt_device_pm_ops rk_wdt_pm_ops =
@@ -212,16 +232,16 @@ int wdt_dev_init(void)
     if (wdt_dev == RT_NULL)
         return -RT_ENOMEM;
 
-    wdt_dev->dw_wdt.ops = &dw_wdt_pos;
+    wdt_dev->wdt.ops = &rk_wdt_pos;
 
     rt_hw_interrupt_install(WDT0_IRQn, rt_wdt_irqhandler, RT_NULL, RT_NULL);
     rt_hw_interrupt_umask(WDT0_IRQn);
 
 #if defined(RT_USING_PM)
-    rt_pm_register_device(&wdt_dev->dw_wdt.parent, &rk_wdt_pm_ops);
+    rt_pm_device_register(&wdt_dev->wdt.parent, &rk_wdt_pm_ops);
 #endif
 
-    rt_hw_watchdog_register(&wdt_dev->dw_wdt, "dw_wdt",  0, RT_NULL);
+    rt_hw_watchdog_register(&wdt_dev->wdt, "wdt", RT_DEVICE_FLAG_RDWR, RT_NULL);
 
     return RT_EOK;
 }

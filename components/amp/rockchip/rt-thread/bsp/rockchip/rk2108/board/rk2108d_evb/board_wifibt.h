@@ -23,8 +23,13 @@
 
 #define BT_GPIO_PORT                (GPIO_BANK0)
 #define BT_POWER_GPIO_PIN           GPIO_PIN_B1
+#define BT_HOST_RX_PIN              GPIO_PIN_C7
+#define BT_HOST_TX_PIN              GPIO_PIN_D0
+#define BT_HOST_CTS_PIN             GPIO_PIN_D1
+#define BT_HOST_RTS_PIN             GPIO_PIN_D2
 #define BT_32K_CLK_OUT              GPIO_PIN_A7
 #define BT_GPIO_PORT_BASE           GPIO0
+#define BT_PIN_CONFIG_MUX_FUNC_NUM  PIN_CONFIG_MUX_FUNC1
 
 int rk_wifi_host_reg_on(void);
 void rk_wifi_host_wake_register(void (*call_back)(void *));

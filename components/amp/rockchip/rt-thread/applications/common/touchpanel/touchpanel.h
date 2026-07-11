@@ -48,5 +48,6 @@ rt_err_t rt_touchpanel_block_register(struct rt_touchpanel_block *block);
 rt_err_t rt_touchpanel_block_unregister(struct rt_touchpanel_block *block);
 rt_err_t rt_touchpoint_is_in_block(struct rt_touch_data *p, struct rt_touchpanel_block *block);
 rt_err_t rt_touchpoint_is_valid(struct rt_touch_data *p, struct rt_touchpanel_block *block);
+void rt_touchpoint_get_range(rt_int32_t *range_x, rt_int32_t *range_y);
 
 #endif

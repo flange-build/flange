@@ -107,23 +107,6 @@ menu "Enable Audio"
         help
           Say Y if you want to use AWINIC AW8896 audio card.
 
-    config RT_USING_AUDIO_CARD_ES7154
-        bool "Enable Everest Semi ES7154 audio card"
-        depends on RT_USING_AUDIO_CARD
-        select RT_USING_I2STDM1
-        default n
-        help
-          Say Y if you want to use Everest Semi ES7154 audio card.
-
-    config RT_USING_AUDIO_CARD_ES7202
-        bool "Enable Everest Semi ES7202 audio card"
-        depends on RT_USING_AUDIO_CARD
-        select RT_USING_PDM0
-        select RT_USING_CODEC_ES7202
-        default n
-        help
-          Say Y if you want to use Everest Semi ES7202 audio card.
-
     config RT_USING_AUDIO_CARD_ES7243
         bool "Enable Everest Semi ES7243 audio card"
         depends on RT_USING_AUDIO_CARD
@@ -178,25 +161,6 @@ menu "Enable Audio"
           Quad Capture - Internal ADC + External ES8311
 
           Internal ADC - stereo analog mics
-          External ES8311 - stereo loopback
-
-    config RT_USING_AUDIO_CARD_PDM_ES8311_ECHO
-        bool "Enable mix audio card with Interal PDM + ES8311"
-        depends on RT_USING_AUDIO_CARD
-        select RT_USING_I2STDM1
-        select RT_USING_PDM0
-        select RT_USING_MULTI_DAIS
-        select RT_USING_MULTI_PCM
-        select RT_USING_CODEC_ES8311
-        default n
-        help
-          Say Y if you want to use mix audio card which support 6 channels
-          capture and stereo channels playback.
-
-          Stereo Playback - ES8388
-          6chs Capture - Internal PDM + External ES8311
-
-          Internal PDM - quad digital mics
           External ES8311 - stereo loopback
 
     config RT_USING_AUDIO_CARD_PDM_ES8388_ECHO

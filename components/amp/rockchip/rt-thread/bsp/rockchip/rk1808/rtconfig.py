@@ -36,7 +36,7 @@ if PLATFORM == 'gcc':
     OBJCPY  = PREFIX + 'objcopy'
 
     DEVICE = ' -mfloat-abi=softfp -march=armv7-a -mtune=cortex-a35 -ftree-vectorize -ffast-math'
-    CFLAGS = DEVICE + ' -Wall' + ' -fno-common' + ' -fno-exceptions'
+    CFLAGS = DEVICE + ' -Wall' + ' -fno-common' + ' -fno-exceptions' + ' -D__RT_THREAD__'
     AFLAGS = DEVICE + ' -c' + ' -x assembler-with-cpp -D__ASSEMBLY__'
     LFLAGS = DEVICE + ' -nostartfiles -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,system_vectors -T link.lds'
     CPATH = ''

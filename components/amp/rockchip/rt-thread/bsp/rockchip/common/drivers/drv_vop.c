@@ -10,6 +10,7 @@
   * Change Logs:
   * Date           Author          Notes
   * 2019-02-20     Huang Jiachai   first implementation
+  * 2023-09-01     Damon Ding      add support for rk3308
   *
   ******************************************************************************
   */
@@ -100,6 +101,7 @@ static uint8_t rockchip_vop_convert_format(uint8_t data_format, uint8_t win_en)
         val = VOP_FMT_ARGB8888;
         break;
     case RTGRAPHIC_PIXEL_FORMAT_RGB888:
+    case RTGRAPHIC_PIXEL_FORMAT_BGR888:
         val = VOP_FMT_RGB888;
         break;
     case RTGRAPHIC_PIXEL_FORMAT_RGB565:
@@ -201,6 +203,12 @@ static void rockchip_vop_irq_handle(int irq, void *param)
     level = rt_hw_interrupt_disable();
 
     val = HAL_VOP_IrqHandler(VOP);
+    if (val & VOP_INTR_STATUS_FS0_INTR_STS_MASK)
+    {
+        rt_event_send(crtc_state->frm_st_event, true);
+        rt_event_send(state->vblank_event, true);
+    }
+
     if (val & VOP_INTR_STATUS_DSP_HOLD_VALID_INTR_STS_MASK)
     {
         rt_work_init(&state->work, rockchip_vop_isr_work, NULL);
@@ -220,35 +228,52 @@ static void rockchip_vop_irq_handle(int irq, void *param)
 /**
  * @brief  Commit one frame display.
  * @param  state: display state.
+ * @param  mode: nonblocking commit or blocking commit.
  */
-static void rockchip_vop_commit(struct display_state *state)
+static void rockchip_vop_commit(struct display_state *state, enum rockchip_display_commit_mode mode)
 {
     int i = 0;
     struct crtc_state *crtc_state = &state->crtc_state;
+    struct DISPLAY_MODE_INFO *mode_info = &state->mode;
+    uint32_t event = false;
+    uint32_t interframe_time = 1000000 / mode_info->vrefresh;
+    rt_err_t ret;
 
     HAL_VOP_Commit(crtc_state->hw_base);
-    if (state->panel_state.display_mode == DISPLAY_CMD_MODE)
-        HAL_VOP_EdpiFrmSt(crtc_state->hw_base);
-
-    /**
-     * In CMD mode, we must wait the current frame start to display
-     * and the next frame wait current display complete.
-     * we can use config done state to identify the frame start,
-     * and use dsp hold mode to identify the display complete state.
-     */
-    if (state->panel_state.display_mode == DISPLAY_CMD_MODE)
+    if (mode == DISPLAY_COMMIT_BLOCK)
     {
-        while (HAL_VOP_CommitPost(crtc_state->hw_base))
+        /* Set timeout to interframe_time * 1.5 for margin */
+        ret = rt_event_recv(crtc_state->frm_st_event,
+                            true,
+                            RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
+                            interframe_time * 3 / 2, &event);
+        if (!event)
+            rt_kprintf("Wait vblank timeout %d\n", ret);
+    }
+    else
+    {
+        if (state->panel_state.display_mode == DISPLAY_CMD_MODE)
+            HAL_VOP_EdpiFrmSt(crtc_state->hw_base);
+
+        /**
+         * In CMD mode, we must wait the current frame start to display
+         * and the next frame wait current display complete.
+         * we can use config done state to identify the frame start,
+         * and use dsp hold mode to identify the display complete state.
+         */
+        if (state->panel_state.display_mode == DISPLAY_CMD_MODE)
         {
-            if (i++ > RK_DISPLAY_TIME_OUT)
+            while (HAL_VOP_CommitPost(crtc_state->hw_base))
             {
-                rt_kprintf("rockchip_vop_commit wait vop display time out\n");
-                break;
+                if (i++ > RK_DISPLAY_TIME_OUT)
+                {
+                    rt_kprintf("rockchip_vop_commit wait vop display time out\n");
+                    break;
+                }
+                rt_thread_mdelay(1);
             }
-            rt_thread_mdelay(1);
         }
     }
-
 }
 
 /**
@@ -285,6 +310,8 @@ static void rockchip_vop_disable_lut(struct display_state *state, uint8_t winId)
 static void rockchip_vop_set_scale(struct display_state *state)
 {
     struct crtc_state *crtc_state = &state->crtc_state;
+
+#if (defined(RKMCU_RK2108) || defined(RKMCU_RK2206) || defined(RKMCU_PISCES))
     struct VOP_POST_SCALE_INFO *post_scale = &crtc_state->post_scale;
 
     if (post_scale->dstX % state->panel_state.xpos_align)
@@ -372,6 +399,27 @@ static void rockchip_vop_set_scale(struct display_state *state)
 
     HAL_VOP_ModeInit(crtc_state->hw_base, &state->mode, &crtc_state->post_scale);
     HAL_VOP_PostScaleInit(crtc_state->hw_base, &state->mode, &crtc_state->post_scale);
+#else
+    HAL_VOP_ModeInit(crtc_state->hw_base, &state->mode, &crtc_state->post_scale);
+#endif
+}
+
+/**
+ * @brief  Check whether userspace format needs rb swap.
+ * @param  data_format: userspace format.
+ * @return the result of rb swap check.
+ */
+static bool rockchip_vop_check_rb_swap(uint8_t data_format)
+{
+    switch (data_format)
+    {
+    case RTGRAPHIC_PIXEL_FORMAT_ABGR888:
+    case RTGRAPHIC_PIXEL_FORMAT_BGR888:
+    case RTGRAPHIC_PIXEL_FORMAT_BGR565:
+        return true;
+    default:
+        return false;
+    }
 }
 
 /**
@@ -388,6 +436,7 @@ static void rockchip_vop_set_plane(struct display_state *state,
 
     format = win_state->format;
     win_state->hwFormat = rockchip_vop_convert_format(format, win_state->winEn);
+    win_state->rbSwap = rockchip_vop_check_rb_swap(format);
 
     if (win_state->srcX + win_state->srcW > state->panel_state.vmode.xres)
     {
@@ -419,7 +468,6 @@ static void rockchip_vop_set_plane(struct display_state *state,
     if (ret)
         rt_kprintf("Error: rockchip_vop_set_plane failed, ret = %d\n", ret);
 }
-
 
 /**
  * @brief  Get cycles per pixel from bus format.
@@ -463,13 +511,16 @@ static void rockchip_vop_enable(struct display_state *state)
 
     rockchip_vop_power_on(state);
 #ifndef IS_FPGA
+#if defined(ACLK_VOP)
     ret = HAL_CRU_ClkSetFreq(ACLK_VOP, VOP_ACLK_FREQ);
     RT_ASSERT(ret == HAL_OK);
+#endif
     if (state->panel_state.cmd_type == CMD_TYPE_MCU)
         dclk_rate *= rockchip_vop_get_cycles_per_pixel(state->panel_state.bus_format) *
                      (crtc_state->mcu_timing.mcuPixelTotal + 1);
-    ret = HAL_CRU_ClkSetFreq(DCLK_VOP_S, state->mode.crtcClock * 1000);
+    ret = HAL_CRU_ClkSetFreq(DCLK_VOP, dclk_rate * 1000);
     RT_ASSERT(ret == HAL_OK);
+    rt_kprintf("VOP set dclk to %dKHz, get %d\n", dclk_rate, HAL_CRU_ClkGetFreq(DCLK_VOP));
 #endif
 
     HAL_VOP_Init(crtc_state->hw_base, &state->mode);
@@ -529,6 +580,7 @@ static void rockchip_vop_init(struct display_state *state)
     gstate = state;
 
     crtc_state->frm_fsh_event = rt_event_create("frm_fsh_event", RT_IPC_FLAG_FIFO);
+    crtc_state->frm_st_event = rt_event_create("frm_st_event", RT_IPC_FLAG_FIFO);
     crtc_state->wait_frm_fsh = RT_FALSE;
 
     rt_hw_interrupt_install(crtc_state->irqno, rockchip_vop_irq_handle, RT_NULL, RT_NULL);

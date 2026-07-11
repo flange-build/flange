@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -70,7 +70,7 @@ static rt_size_t rt_udisk_read(rt_device_t dev, rt_off_t pos, void* buffer,
     rt_err_t ret;
     struct uhintf* intf;
     struct ustor_data* data;
-    int timeout = USB_TIMEOUT_LONG;
+    int timeout = USB_TIMEOUT_BASIC * 3;
 
     /* check parameter */
     RT_ASSERT(dev != RT_NULL);
@@ -80,7 +80,8 @@ static rt_size_t rt_udisk_read(rt_device_t dev, rt_off_t pos, void* buffer,
 
     data = (struct ustor_data*)dev->user_data;
     intf = data->intf;
-
+    if (data->part.offset)
+        pos += data->part.offset;
     ret = rt_usbh_storage_read10(intf, (rt_uint8_t*)buffer, pos, size, timeout);
 
     if (ret != RT_EOK)
@@ -108,7 +109,7 @@ static rt_size_t rt_udisk_write (rt_device_t dev, rt_off_t pos, const void* buff
     rt_err_t ret;
     struct uhintf* intf;
     struct ustor_data* data;
-    int timeout = USB_TIMEOUT_LONG;
+    int timeout = USB_TIMEOUT_BASIC * 3;
 
     /* check parameter */
     RT_ASSERT(dev != RT_NULL);
@@ -118,6 +119,8 @@ static rt_size_t rt_udisk_write (rt_device_t dev, rt_off_t pos, const void* buff
 
     data = (struct ustor_data*)dev->user_data;
     intf = data->intf;
+    if (data->part.offset)
+        pos += data->part.offset;
 
     ret = rt_usbh_storage_write10(intf, (rt_uint8_t*)buffer, pos, size, timeout);
     if (ret != RT_EOK)
@@ -139,14 +142,28 @@ static rt_size_t rt_udisk_write (rt_device_t dev, rt_off_t pos, const void* buff
  */
 static rt_err_t rt_udisk_control(rt_device_t dev, int cmd, void *args)
 {
+    int i;
     ustor_t stor;
     struct ustor_data* data;
+    struct uhintf* intf;
 
     /* check parameter */
     RT_ASSERT(dev != RT_NULL);
 
     data = (struct ustor_data*)dev->user_data;
-    stor = (ustor_t)data->intf->user_data;
+    if (data == RT_NULL)
+    {
+        rt_kprintf("the ustor_data is not available\n");
+        return -RT_EIO;
+    }
+
+    intf = data->intf;
+    stor = (ustor_t)intf->user_data;
+    if (stor == RT_NULL)
+    {
+        rt_kprintf("the ustor is not available\n");
+        return -RT_EIO;
+    }
 
     if (cmd == RT_DEVICE_CTRL_BLK_GETGEOME)
     {
@@ -158,6 +175,73 @@ static rt_err_t rt_udisk_control(rt_device_t dev, int cmd, void *args)
         geometry->bytes_per_sector = SECTOR_SIZE;
         geometry->block_size = stor->capicity[1];
         geometry->sector_count = stor->capicity[0];
+    }
+    else if (cmd == RT_USBH_CLASS_CTRL_ENABLE)
+    {
+        if (!stor->udisk_connected)
+        {
+            rt_kprintf("the udisk is disconnected\n");
+            return RT_ERROR;
+        }
+
+        if (!stor->mount_status)
+        {
+            rt_kprintf("the udisk is in unmount status\n");
+            return RT_ERROR;
+        }
+
+        stor->use_cmd_unmount = 1;
+    }
+    else if (cmd == RT_USBH_CLASS_CTRL_CONNECTED)
+    {
+        if (stor->udisk_sem)
+        {
+            if (rt_sem_take(stor->udisk_sem, RT_WAITING_FOREVER) == RT_EOK)
+            {
+                if (stor->udisk_connected)
+                    return RT_EOK;
+                else
+                    return RT_ERROR;
+            }
+            else
+            {
+                return RT_ERROR;
+            }
+        }
+        else
+        {
+            if (stor->udisk_connected)
+                return RT_EOK;
+            else
+                return RT_ERROR;
+        }
+    }
+    else if (cmd == RT_USBH_CLASS_CTRL_STOP && stor->use_cmd_unmount)
+    {
+        if (stor->udisk_sem)
+            rt_sem_delete(stor->udisk_sem);
+
+        for(i=0; i<stor->dev_cnt; i++)
+        {
+            dev = &stor->dev[i];
+            data = (struct ustor_data*)dev->user_data;
+
+            /* unmount filesystem */
+            dfs_unmount(UDISK_MOUNTPOINT);
+            stor->mount_status = 0;
+            stor->use_cmd_unmount = 0;
+
+            /* delete semaphore */
+            rt_sem_delete(data->part.lock);
+            udisk_free_id(data->udisk_id);
+            rt_free(data);
+
+            /* unregister device */
+            rt_device_unregister(&stor->dev[i]);
+        }
+        rt_free(stor);
+
+        rt_completion_done(&intf->intf_completion);
     }
 
     return RT_EOK;
@@ -185,10 +269,12 @@ const static struct rt_device_ops udisk_device_ops =
 rt_err_t rt_udisk_run(struct uhintf* intf)
 {
     int i = 0;
+    int timeout = 50;
     rt_err_t ret;
-    char dname[4];
+    char dname[8];
     char sname[8];
-    rt_uint8_t max_lun, *sector, sense[18], inquiry[36];
+    USB_DMA_ALIGN rt_uint8_t max_lun, sense[18], inquiry[36];
+    rt_uint8_t *sector;
     struct dfs_partition part[MAX_PARTITION_COUNT];
     ustor_t stor;
 
@@ -199,9 +285,6 @@ rt_err_t rt_udisk_run(struct uhintf* intf)
 //    ret = rt_usbh_set_interface(intf->device, intf->intf_desc->bInterfaceNumber);
 //    if(ret != RT_EOK)
 //        rt_usbh_clear_feature(intf->device, 0, USB_FEATURE_ENDPOINT_HALT);
-    /* reset mass storage class device */
-    ret = rt_usbh_storage_reset(intf);
-    if(ret != RT_EOK) return ret;
 
     stor = (ustor_t)intf->user_data;
 
@@ -277,28 +360,41 @@ rt_err_t rt_udisk_run(struct uhintf* intf)
     stor->capicity[1] = uswap_32(stor->capicity[1]);
     stor->capicity[0] += 1;
 
-    RT_DEBUG_LOG(RT_DEBUG_USB, ("capicity %d, block size %d\n",
-        stor->capicity[0], stor->capicity[1]));
+    rt_kprintf("capacity %d %d-byte logical blocks: ",
+               stor->capicity[0], stor->capicity[1]);
+
+    /* capicity[0] is the number of 512-Byte */
+    if (stor->capicity[0] >> 11 == 0)
+        rt_kprintf("%d%s", stor->capicity[0] >> 1, "KB\n"); /* KB */
+    else
+    {
+        rt_uint32_t size;
+        size = stor->capicity[0] >> 11;                     /* MB */
+        if ((size >> 10) == 0)
+            rt_kprintf("%d.%d%s", size, (size >> 1) & 0x3FF, "MB\n");
+        else
+            rt_kprintf("%d.%d%s", size >> 10, size & 0x3FF, "GB\n");
+    }
 
     /* get the first sector to read partition table */
-    sector = (rt_uint8_t*) rt_malloc (SECTOR_SIZE);
+    sector = (rt_uint8_t*)rt_malloc_align(RT_ALIGN(SECTOR_SIZE * 8, USB_DMA_ALIGN_SIZE), USB_DMA_ALIGN_SIZE);
     if (sector == RT_NULL)
     {
         rt_kprintf("allocate partition sector buffer failed\n");
         return -RT_ERROR;
     }
 
-    rt_memset(sector, 0, SECTOR_SIZE);
+    rt_memset(sector, 0, SECTOR_SIZE * 8);
 
     RT_DEBUG_LOG(RT_DEBUG_USB, ("read partition table\n"));
 
     /* get the partition table */
-    ret = rt_usbh_storage_read10(intf, sector, 0, 1, USB_TIMEOUT_LONG);
+    ret = rt_usbh_storage_read10(intf, sector, 0, 8, USB_TIMEOUT_BASIC * 3);
     if(ret != RT_EOK)
     {
         rt_kprintf("read parition table error\n");
 
-        rt_free(sector);
+        rt_free_align(sector);
         return -RT_ERROR;
     }
 
@@ -307,11 +403,13 @@ rt_err_t rt_udisk_run(struct uhintf* intf)
     for(i=0; i<MAX_PARTITION_COUNT; i++)
     {
         /* get the first partition */
-        ret = dfs_filesystem_get_partition(&part[i], sector, i);
+        ret = dfs_filesystem_get_partition(&part[i], sector, 8, i);
         if (ret == RT_EOK)
         {
             struct ustor_data* data = rt_malloc(sizeof(struct ustor_data));
             rt_memset(data, 0, sizeof(struct ustor_data));
+            data->part.offset = part[i].offset;
+            data->part.size   = part[i].size;
             data->intf = intf;
             data->udisk_id = udisk_get_id();
             rt_snprintf(dname, 6, "ud%d-%d", data->udisk_id, i);
@@ -334,9 +432,23 @@ rt_err_t rt_udisk_run(struct uhintf* intf)
                 RT_DEVICE_FLAG_REMOVABLE | RT_DEVICE_FLAG_STANDALONE);
 
             stor->dev_cnt++;
-            if (dfs_mount(stor->dev[i].parent.name, UDISK_MOUNTPOINT, "elm",
-                0, 0) == 0)
+            while((ret = dfs_mount(stor->dev[i].parent.name, UDISK_MOUNTPOINT, "elm",
+                   0, 0)) != RT_EOK)
             {
+                if ((rt_get_errno() == -ENODEV || rt_get_errno() == -ENOTDIR) && timeout--)
+                {
+                    rt_thread_mdelay(100);
+                }
+                else
+                {
+                    RT_DEBUG_LOG(RT_DEBUG_USB, ("%s: dfs mount failed\n",  __func__));
+                    break;
+                }
+            }
+
+            if (ret == RT_EOK)
+            {
+                stor->mount_status = 1;
                 RT_DEBUG_LOG(RT_DEBUG_USB, ("udisk part %d mount successfully\n", i));
             }
             else
@@ -377,9 +489,23 @@ rt_err_t rt_udisk_run(struct uhintf* intf)
                     | RT_DEVICE_FLAG_STANDALONE);
 
                 stor->dev_cnt++;
-                if (dfs_mount(stor->dev[0].parent.name, UDISK_MOUNTPOINT,
-                    "elm", 0, 0) == 0)
+                while((ret = dfs_mount(stor->dev[0].parent.name, UDISK_MOUNTPOINT,
+                       "elm", 0, 0)) != RT_EOK)
                 {
+                    if ((rt_get_errno() == -ENODEV || rt_get_errno() == -ENOTDIR) && timeout--)
+                    {
+                        rt_thread_mdelay(100);
+                    }
+                    else
+                    {
+                        RT_DEBUG_LOG(RT_DEBUG_USB, ("%s: dfs mount failed\n",  __func__));
+                        break;
+                    }
+                }
+
+                if (ret == RT_EOK)
+                {
+                    stor->mount_status = 1;
                     rt_kprintf("Mount FAT on Udisk successful.\n");
                 }
                 else
@@ -392,7 +518,18 @@ rt_err_t rt_udisk_run(struct uhintf* intf)
         }
     }
 
-    rt_free(sector);
+    stor->udisk_connected = 1;
+
+    if (stor->mount_status)
+    {
+        stor->udisk_sem = rt_sem_create("udisksem", 0, RT_IPC_FLAG_PRIO);
+        if (stor->udisk_sem)
+            rt_sem_release(stor->udisk_sem);
+        else
+            rt_kprintf("%s: create dynamic semaphore failed.\n", __func__);
+    }
+
+    rt_free_align(sector);
 
     return RT_EOK;
 }
@@ -418,6 +555,14 @@ rt_err_t rt_udisk_stop(struct uhintf* intf)
     stor = (ustor_t)intf->user_data;
     RT_ASSERT(stor != RT_NULL);
 
+    stor->udisk_connected = 0;
+    if (stor->use_cmd_unmount) {
+         if (stor->udisk_sem)
+            rt_sem_release(stor->udisk_sem);
+
+         return RT_EOK;
+    }
+
     for(i=0; i<stor->dev_cnt; i++)
     {
         rt_device_t dev = &stor->dev[i];
@@ -425,6 +570,7 @@ rt_err_t rt_udisk_stop(struct uhintf* intf)
 
         /* unmount filesystem */
         dfs_unmount(UDISK_MOUNTPOINT);
+        stor->mount_status = 0;
 
         /* delete semaphore */
         rt_sem_delete(data->part.lock);
@@ -434,6 +580,9 @@ rt_err_t rt_udisk_stop(struct uhintf* intf)
         /* unregister device */
         rt_device_unregister(&stor->dev[i]);
     }
+
+    if (stor->udisk_sem)
+        rt_sem_delete(stor->udisk_sem);
 
     return RT_EOK;
 }

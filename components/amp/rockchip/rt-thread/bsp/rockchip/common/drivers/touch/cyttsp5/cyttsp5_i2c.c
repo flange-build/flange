@@ -145,7 +145,7 @@ static rt_size_t cyttsp5_read_point(struct rt_touch_device *touch, void *buf, rt
 
     if (length > TOUCH_INPUT_HEADER_SIZE + CY_MAX_INPUT)
     {
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     time = read_buf[3] | read_buf[4] << 8;

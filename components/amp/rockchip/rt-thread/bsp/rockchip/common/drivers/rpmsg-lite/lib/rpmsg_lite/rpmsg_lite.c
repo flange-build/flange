@@ -34,44 +34,6 @@
 #include "rpmsg_lite.h"
 #include "rpmsg_platform.h"
 
-/* rpmsg_std_hdr contains a reserved field,
- * this implementation of RPMSG uses this reserved
- * field to hold the idx and totlen of the buffer
- * not being returned to the vring in the receive
- * callback function. This way, the no-copy API
- * can use this field to return the buffer later.
- */
-struct rpmsg_hdr_reserved
-{
-    uint16_t rfu; /* reserved for future usage */
-    uint16_t idx;
-};
-
-RL_PACKED_BEGIN
-/*!
- * Common header for all rpmsg messages.
- * Every message sent/received on the rpmsg bus begins with this header.
- */
-struct rpmsg_std_hdr
-{
-    uint32_t src;                       /*!< source endpoint address */
-    uint32_t dst;                       /*!< destination endpoint address */
-    struct rpmsg_hdr_reserved reserved; /*!< reserved for future use */
-    uint16_t len;                       /*!< length of payload (in bytes) */
-    uint16_t flags;                     /*!< message flags */
-} RL_PACKED_END;
-
-RL_PACKED_BEGIN
-/*!
- * Common message structure.
- * Contains the header and the payload.
- */
-struct rpmsg_std_msg
-{
-    struct rpmsg_std_hdr hdr; /*!< RPMsg message header */
-    uint8_t data[1];          /*!< bytes of message payload data */
-} RL_PACKED_END;
-
 /* Interface which is used to interact with the virtqueue layer,
  * a different interface is used, when the local processor is the MASTER
  * and when it is the REMOTE.
@@ -325,10 +287,10 @@ static void vq_rx_free_remote(struct virtqueue *rvq, void *buffer, uint32_t len,
  * @brief
  * Places buffer on the virtqueue for consumption by the other side.
  *
- * @param vq      Virtqueue to use
+ * @param tvq     Virtqueue to use
  * @param buffer  Buffer pointer
  * @param len     Buffer length
- * @idx           Buffer index
+ * @param idx     Buffer index
  *
  * @return Status of function execution
  *
@@ -348,7 +310,7 @@ static void vq_tx_master(struct virtqueue *tvq, void *buffer, uint32_t len, uint
  * @brief
  * Provides buffer to transmit messages.
  *
- * @param vq      Virtqueue to use
+ * @param tvq     Virtqueue to use
  * @param len     Length of returned buffer
  * @param idx     Buffer index
  *
@@ -363,7 +325,7 @@ static void *vq_tx_alloc_master(struct virtqueue *tvq, uint32_t *len, uint16_t *
  * @brief
  * Retrieves the received buffer from the virtqueue.
  *
- * @param vq   Virtqueue to use
+ * @param rvq  Virtqueue to use
  * @param len  Size of received buffer
  * @param idx  Index of buffer
  *
@@ -379,9 +341,10 @@ static void *vq_rx_master(struct virtqueue *rvq, uint32_t *len, uint16_t *idx)
  * @brief
  * Places the used buffer back on the virtqueue.
  *
- * @param vq   Virtqueue to use
- * @param len  Size of received buffer
- * @param idx  Index of buffer
+ * @param rvq    Virtqueue to use
+ * @param buffer Buffer pointer
+ * @param len    Size of received buffer
+ * @param idx    Index of buffer
  *
  */
 static void vq_rx_free_master(struct virtqueue *rvq, void *buffer, uint32_t len, uint16_t idx)
@@ -588,14 +551,14 @@ uint32_t rpmsg_lite_is_link_up(struct rpmsg_lite_instance *rpmsg_lite_dev)
     return (RL_TRUE == rpmsg_lite_dev->link_state ? RL_TRUE : RL_FALSE);
 }
 
-void rpmsg_lite_wait_for_link_up(struct rpmsg_lite_instance *rpmsg_lite_dev)
+uint32_t rpmsg_lite_wait_for_link_up(struct rpmsg_lite_instance *rpmsg_lite_dev, uint32_t timeout)
 {
     if (rpmsg_lite_dev == RL_NULL)
     {
-        return;
+        return 0U;
     }
 
-    env_wait_for_link_up(&rpmsg_lite_dev->link_state, rpmsg_lite_dev->link_id);
+    return env_wait_for_link_up(&rpmsg_lite_dev->link_state, rpmsg_lite_dev->link_id, timeout);
 }
 
 /*!
@@ -619,7 +582,7 @@ static int32_t rpmsg_lite_format_message(struct rpmsg_lite_instance *rpmsg_lite_
                                          uint32_t dst,
                                          char *data,
                                          uint32_t size,
-                                         int32_t flags,
+                                         uint32_t flags,
                                          uint32_t timeout)
 {
     struct rpmsg_std_msg *rpmsg_msg;
@@ -673,7 +636,7 @@ static int32_t rpmsg_lite_format_message(struct rpmsg_lite_instance *rpmsg_lite_
     rpmsg_msg->hdr.dst   = dst;
     rpmsg_msg->hdr.src   = src;
     rpmsg_msg->hdr.len   = (uint16_t)size;
-    rpmsg_msg->hdr.flags = (uint16_t)flags;
+    rpmsg_msg->hdr.flags = (uint16_t)(flags & 0xFFFFU);
 
     /* Copy data to rpmsg buffer. */
     env_memcpy(rpmsg_msg->data, data, size);
@@ -693,7 +656,7 @@ int32_t rpmsg_lite_send(struct rpmsg_lite_instance *rpmsg_lite_dev,
                         uint32_t dst,
                         char *data,
                         uint32_t size,
-                        uint32_t timeout)
+                        uintptr_t timeout)
 {
     if (ept == RL_NULL)
     {
@@ -715,7 +678,7 @@ int32_t rpmsg_lite_send(struct rpmsg_lite_instance *rpmsg_lite_dev,
 
 #if defined(RL_API_HAS_ZEROCOPY) && (RL_API_HAS_ZEROCOPY == 1)
 
-void *rpmsg_lite_alloc_tx_buffer(struct rpmsg_lite_instance *rpmsg_lite_dev, uint32_t *size, uint32_t timeout)
+void *rpmsg_lite_alloc_tx_buffer(struct rpmsg_lite_instance *rpmsg_lite_dev, uint32_t *size, uintptr_t timeout)
 {
     struct rpmsg_std_msg *rpmsg_msg;
     void *buffer;
@@ -800,28 +763,23 @@ int32_t rpmsg_lite_send_nocopy(struct rpmsg_lite_instance *rpmsg_lite_dev,
 
     src = ept->addr;
 
-#if defined(RL_DEBUG_CHECK_BUFFERS) && (RL_DEBUG_CHECK_BUFFERS == 1)
-    RL_ASSERT(
-        /* master check */
-        ((rpmsg_lite_dev->vq_ops == &master_vq_ops) &&
-         (data >= (void *)(rpmsg_lite_dev->sh_mem_base +
-                           (rpmsg_lite_dev->rvq->vq_nentries * rpmsg_lite_dev->rvq->vq_ring.desc->len))) &&
-         (data <= (void *)(rpmsg_lite_dev->sh_mem_base +
-                           (2 * rpmsg_lite_dev->rvq->vq_nentries * rpmsg_lite_dev->rvq->vq_ring.desc->len)))) ||
-
-        /* remote check */
-        ((rpmsg_lite_dev->vq_ops == &remote_vq_ops) && (data >= (void *)rpmsg_lite_dev->sh_mem_base) &&
-         (data <= (void *)(rpmsg_lite_dev->sh_mem_base +
-                           (rpmsg_lite_dev->rvq->vq_nentries * rpmsg_lite_dev->rvq->vq_ring.desc->len)))))
-#endif
-
     rpmsg_msg = RPMSG_STD_MSG_FROM_BUF(data);
+
+#if defined(RL_DEBUG_CHECK_BUFFERS) && (RL_DEBUG_CHECK_BUFFERS == 1)
+    /* Check that the to-be-sent buffer is in the VirtIO ring descriptors list */
+    int32_t idx = rpmsg_lite_dev->tvq->vq_nentries - 1;
+    while ((idx >= 0) && (rpmsg_lite_dev->tvq->vq_ring.desc[idx].addr != (uint64_t)rpmsg_msg))
+    {
+        idx--;
+    }
+    RL_ASSERT(idx >= 0);
+#endif
 
     /* Initialize RPMSG header. */
     rpmsg_msg->hdr.dst   = dst;
     rpmsg_msg->hdr.src   = src;
     rpmsg_msg->hdr.len   = (uint16_t)size;
-    rpmsg_msg->hdr.flags = (uint16_t)RL_NO_FLAGS;
+    rpmsg_msg->hdr.flags = (uint16_t)(RL_NO_FLAGS & 0xFFFFU);
 
     env_lock_mutex(rpmsg_lite_dev->lock);
     /* Enqueue buffer on virtqueue. */
@@ -859,22 +817,17 @@ int32_t rpmsg_lite_release_rx_buffer(struct rpmsg_lite_instance *rpmsg_lite_dev,
         return RL_ERR_PARAM;
     }
 
-#if defined(RL_DEBUG_CHECK_BUFFERS) && (RL_DEBUG_CHECK_BUFFERS == 1)
-    RL_ASSERT(
-        /* master check */
-        ((rpmsg_lite_dev->vq_ops == &master_vq_ops) && (rxbuf >= (void *)rpmsg_lite_dev->sh_mem_base) &&
-         (rxbuf <= (void *)(rpmsg_lite_dev->sh_mem_base +
-                            (rpmsg_lite_dev->rvq->vq_nentries * rpmsg_lite_dev->rvq->vq_ring.desc->len)))) ||
-
-        /* remote check */
-        ((rpmsg_lite_dev->vq_ops == &remote_vq_ops) &&
-         (rxbuf >= (void *)(rpmsg_lite_dev->sh_mem_base +
-                            (rpmsg_lite_dev->rvq->vq_nentries * rpmsg_lite_dev->rvq->vq_ring.desc->len))) &&
-         (rxbuf <= (void *)(rpmsg_lite_dev->sh_mem_base +
-                            (2 * rpmsg_lite_dev->rvq->vq_nentries * rpmsg_lite_dev->rvq->vq_ring.desc->len)))))
-#endif
-
     rpmsg_msg = RPMSG_STD_MSG_FROM_BUF(rxbuf);
+
+#if defined(RL_DEBUG_CHECK_BUFFERS) && (RL_DEBUG_CHECK_BUFFERS == 1)
+    /* Check that the to-be-released buffer is in the VirtIO ring descriptors list */
+    int32_t idx = rpmsg_lite_dev->rvq->vq_nentries - 1;
+    while ((idx >= 0) && (rpmsg_lite_dev->rvq->vq_ring.desc[idx].addr != (uint64_t)rpmsg_msg))
+    {
+        idx--;
+    }
+    RL_ASSERT(idx >= 0);
+#endif
 
     env_lock_mutex(rpmsg_lite_dev->lock);
 
@@ -922,10 +875,10 @@ struct rpmsg_lite_instance *rpmsg_lite_master_init(void *shmem_addr,
 #endif
 {
     int32_t status;
-    void (*callback[2])(struct virtqueue * vq);
+    void (*callback[2])(struct virtqueue *vq);
     const char *vq_names[2];
     struct vring_alloc_info ring_info;
-    struct virtqueue *vqs[2];
+    struct virtqueue *vqs[2] = {0};
     void *buffer;
     uint32_t idx, j;
     struct rpmsg_lite_instance *rpmsg_lite_dev = RL_NULL;
@@ -994,14 +947,14 @@ struct rpmsg_lite_instance *rpmsg_lite_master_init(void *shmem_addr,
 #if defined(RL_USE_ENVIRONMENT_CONTEXT) && (RL_USE_ENVIRONMENT_CONTEXT == 1)
     status = env_init(&rpmsg_lite_dev->env, env_cfg);
 #else
-    status = env_init();
+    status                      = env_init();
 #endif
     if (status != RL_SUCCESS)
     {
 #if !(defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1))
-        env_free_memory(rpmsg_lite_dev);
+        env_free_memory(rpmsg_lite_dev); /* coco validated: not able to force the application to reach this line */
 #endif
-        return RL_NULL;
+        return RL_NULL;                  /* coco validated: not able to force the application to reach this line */
     }
 
     rpmsg_lite_dev->link_id = link_id;
@@ -1011,11 +964,12 @@ struct rpmsg_lite_instance *rpmsg_lite_master_init(void *shmem_addr,
      * shared buffers. Create shared memory pool to handle buffers.
      */
 #if defined(RL_ALLOW_CUSTOM_SHMEM_CONFIG) && (RL_ALLOW_CUSTOM_SHMEM_CONFIG == 1)
-    rpmsg_lite_dev->sh_mem_base = (char *)RL_WORD_ALIGN_UP((uint32_t)(char *)shmem_addr + 2U * shmem_config.vring_size);
+    rpmsg_lite_dev->sh_mem_base =
+        (char *)RL_WORD_ALIGN_UP((uintptr_t)(char *)shmem_addr + 2U * shmem_config.vring_size);
     rpmsg_lite_dev->sh_mem_remaining = (RL_WORD_ALIGN_DOWN(shmem_length - 2U * shmem_config.vring_size)) /
                                        (uint32_t)(shmem_config.buffer_payload_size + 16UL);
 #else
-    rpmsg_lite_dev->sh_mem_base = (char *)RL_WORD_ALIGN_UP((uint32_t)(char *)shmem_addr + (uint32_t)RL_VRING_OVERHEAD);
+    rpmsg_lite_dev->sh_mem_base = (char *)RL_WORD_ALIGN_UP((uintptr_t)(char *)shmem_addr + (uint32_t)RL_VRING_OVERHEAD);
     rpmsg_lite_dev->sh_mem_remaining =
         (RL_WORD_ALIGN_DOWN(shmem_length - (uint32_t)RL_VRING_OVERHEAD)) / (uint32_t)RL_BUFFER_SIZE;
 #endif /* defined(RL_ALLOW_CUSTOM_SHMEM_CONFIG) && (RL_ALLOW_CUSTOM_SHMEM_CONFIG == 1) */
@@ -1032,14 +986,14 @@ struct rpmsg_lite_instance *rpmsg_lite_master_init(void *shmem_addr,
     for (idx = 0U; idx < 2U; idx++)
     {
 #if defined(RL_ALLOW_CUSTOM_SHMEM_CONFIG) && (RL_ALLOW_CUSTOM_SHMEM_CONFIG == 1)
-        ring_info.phy_addr =
-            (void *)(char *)((uint32_t)(char *)shmem_addr + (uint32_t)((idx == 0U) ? (0U) : (shmem_config.vring_size)));
+        ring_info.phy_addr  = (void *)(char *)((uintptr_t)(char *)RL_WORD_ALIGN_UP((uintptr_t)(char *)shmem_addr) +
+                                              (uint32_t)((idx == 0U) ? (0U) : (shmem_config.vring_size)));
         ring_info.align     = shmem_config.vring_align;
         ring_info.num_descs = shmem_config.buffer_count;
 #else
-        ring_info.phy_addr =
-            (void *)(char *)((uint32_t)(char *)shmem_addr + (uint32_t)((idx == 0U) ? (0U) : (VRING_SIZE)));
-        ring_info.align = VRING_ALIGN;
+        ring_info.phy_addr  = (void *)(char *)((uintptr_t)(char *)RL_WORD_ALIGN_UP((uintptr_t)(char *)shmem_addr) +
+                                              (uint32_t)((idx == 0U) ? (0U) : (VRING_SIZE)));
+        ring_info.align     = VRING_ALIGN;
         ring_info.num_descs = RL_BUFFER_COUNT;
 #endif /* defined(RL_ALLOW_CUSTOM_SHMEM_CONFIG) && (RL_ALLOW_CUSTOM_SHMEM_CONFIG == 1) */
 
@@ -1067,6 +1021,14 @@ struct rpmsg_lite_instance *rpmsg_lite_master_init(void *shmem_addr,
         else
         {
 #if !(defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1))
+            /* Free all already allocated memory for virtqueues */
+            for (uint32_t a = 0U; a < 2U; a++)
+            {
+                if (RL_NULL != vqs[a])
+                {
+                    virtqueue_free(vqs[a]);
+                }
+            }
             env_free_memory(rpmsg_lite_dev);
 #endif
             return RL_NULL;
@@ -1087,6 +1049,11 @@ struct rpmsg_lite_instance *rpmsg_lite_master_init(void *shmem_addr,
     if (status != RL_SUCCESS)
     {
 #if !(defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1))
+        /* Free all already allocated memory for virtqueues */
+        for (uint32_t b = 0U; b < 2U; b++)
+        {
+            virtqueue_free(vqs[b]);
+        }
         env_free_memory(rpmsg_lite_dev);
 #endif
         return RL_NULL;
@@ -1139,7 +1106,7 @@ struct rpmsg_lite_instance *rpmsg_lite_master_init(void *shmem_addr,
             }
             else
             {
-                /* should not happen */
+                /* coco begin validated: this branch will never met unless RAM is corrupted */
             }
 
             if (status != RL_SUCCESS)
@@ -1147,10 +1114,15 @@ struct rpmsg_lite_instance *rpmsg_lite_master_init(void *shmem_addr,
                 /* Clean up! */
                 env_delete_mutex(rpmsg_lite_dev->lock);
 #if !(defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1))
+                for (uint32_t c = 0U; c < 2U; c++)
+                {
+                    virtqueue_free(vqs[c]);
+                }
                 env_free_memory(rpmsg_lite_dev);
 #endif
                 return RL_NULL;
             }
+            /* coco end */
         }
     }
 
@@ -1197,10 +1169,10 @@ struct rpmsg_lite_instance *rpmsg_lite_remote_init(void *shmem_addr, uint32_t li
 #endif
 {
     int32_t status;
-    void (*callback[2])(struct virtqueue * vq);
+    void (*callback[2])(struct virtqueue *vq);
     const char *vq_names[2];
     struct vring_alloc_info ring_info;
-    struct virtqueue *vqs[2];
+    struct virtqueue *vqs[2] = {0};
     uint32_t idx;
     struct rpmsg_lite_instance *rpmsg_lite_dev = RL_NULL;
 
@@ -1254,15 +1226,15 @@ struct rpmsg_lite_instance *rpmsg_lite_remote_init(void *shmem_addr, uint32_t li
 #if defined(RL_USE_ENVIRONMENT_CONTEXT) && (RL_USE_ENVIRONMENT_CONTEXT == 1)
     status = env_init(&rpmsg_lite_dev->env, env_cfg);
 #else
-    status = env_init();
+    status                      = env_init();
 #endif
 
     if (status != RL_SUCCESS)
     {
 #if !(defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1))
-        env_free_memory(rpmsg_lite_dev);
+        env_free_memory(rpmsg_lite_dev); /* coco validated: not able to force the application to reach this line */
 #endif
-        return RL_NULL;
+        return RL_NULL;                  /* coco validated: not able to force the application to reach this line */
     }
 
     rpmsg_lite_dev->link_id = link_id;
@@ -1273,23 +1245,24 @@ struct rpmsg_lite_instance *rpmsg_lite_remote_init(void *shmem_addr, uint32_t li
     callback[1]            = rpmsg_lite_rx_callback;
     rpmsg_lite_dev->vq_ops = &remote_vq_ops;
 #if defined(RL_ALLOW_CUSTOM_SHMEM_CONFIG) && (RL_ALLOW_CUSTOM_SHMEM_CONFIG == 1)
-    rpmsg_lite_dev->sh_mem_base = (char *)RL_WORD_ALIGN_UP((uint32_t)(char *)shmem_addr + 2U * shmem_config.vring_size);
+    rpmsg_lite_dev->sh_mem_base =
+        (char *)RL_WORD_ALIGN_UP((uintptr_t)(char *)shmem_addr + 2U * shmem_config.vring_size);
 #else
-    rpmsg_lite_dev->sh_mem_base = (char *)RL_WORD_ALIGN_UP((uint32_t)(char *)shmem_addr + (uint32_t)RL_VRING_OVERHEAD);
+    rpmsg_lite_dev->sh_mem_base = (char *)RL_WORD_ALIGN_UP((uintptr_t)(char *)shmem_addr + (uint32_t)RL_VRING_OVERHEAD);
 #endif /* defined(RL_ALLOW_CUSTOM_VRING_CONFIG) && (RL_ALLOW_CUSTOM_VRING_CONFIG == 1) */
 
     /* Create virtqueue for each vring. */
     for (idx = 0U; idx < 2U; idx++)
     {
 #if defined(RL_ALLOW_CUSTOM_SHMEM_CONFIG) && (RL_ALLOW_CUSTOM_SHMEM_CONFIG == 1)
-        ring_info.phy_addr =
-            (void *)(char *)((uint32_t)(char *)shmem_addr + (uint32_t)((idx == 0U) ? (0U) : (shmem_config.vring_size)));
+        ring_info.phy_addr  = (void *)(char *)((uintptr_t)(char *)RL_WORD_ALIGN_UP((uintptr_t)(char *)shmem_addr) +
+                                              (uint32_t)((idx == 0U) ? (0U) : (shmem_config.vring_size)));
         ring_info.align     = shmem_config.vring_align;
         ring_info.num_descs = shmem_config.buffer_count;
 #else
-        ring_info.phy_addr =
-            (void *)(char *)((uint32_t)(char *)shmem_addr + (uint32_t)((idx == 0U) ? (0U) : (VRING_SIZE)));
-        ring_info.align = VRING_ALIGN;
+        ring_info.phy_addr  = (void *)(char *)((uintptr_t)(char *)RL_WORD_ALIGN_UP((uintptr_t)(char *)shmem_addr) +
+                                              (uint32_t)((idx == 0U) ? (0U) : (VRING_SIZE)));
+        ring_info.align     = VRING_ALIGN;
         ring_info.num_descs = RL_BUFFER_COUNT;
 #endif /* defined(RL_ALLOW_CUSTOM_VRING_CONFIG) && (RL_ALLOW_CUSTOM_VRING_CONFIG == 1) */
 
@@ -1305,6 +1278,14 @@ struct rpmsg_lite_instance *rpmsg_lite_remote_init(void *shmem_addr, uint32_t li
         if (status != RL_SUCCESS)
         {
 #if !(defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1))
+            /* Free all already allocated memory for virtqueues */
+            for (uint32_t a = 0U; a < 2U; a++)
+            {
+                if (RL_NULL != vqs[a])
+                {
+                    virtqueue_free(vqs[a]);
+                }
+            }
             env_free_memory(rpmsg_lite_dev);
 #endif
             return RL_NULL;
@@ -1325,6 +1306,11 @@ struct rpmsg_lite_instance *rpmsg_lite_remote_init(void *shmem_addr, uint32_t li
     if (status != RL_SUCCESS)
     {
 #if !(defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1))
+        /* Free all already allocated memory for virtqueues */
+        for (uint32_t b = 0U; b < 2U; b++)
+        {
+            virtqueue_free(vqs[b]);
+        }
         env_free_memory(rpmsg_lite_dev);
 #endif
         return RL_NULL;
@@ -1381,24 +1367,13 @@ int32_t rpmsg_lite_deinit(struct rpmsg_lite_instance *rpmsg_lite_dev)
         return RL_ERR_PARAM;
     }
 #if defined(RL_USE_ENVIRONMENT_CONTEXT) && (RL_USE_ENVIRONMENT_CONTEXT == 1)
-    env_disable_interrupt(rpmsg_lite_dev->env, rpmsg_lite_dev->rvq->vq_queue_index);
-    env_disable_interrupt(rpmsg_lite_dev->env, rpmsg_lite_dev->tvq->vq_queue_index);
-    rpmsg_lite_dev->link_state = 0;
-    env_enable_interrupt(rpmsg_lite_dev->env, rpmsg_lite_dev->rvq->vq_queue_index);
-    env_enable_interrupt(rpmsg_lite_dev->env, rpmsg_lite_dev->tvq->vq_queue_index);
-
     env_deinit_interrupt(rpmsg_lite_dev->env, rpmsg_lite_dev->rvq->vq_queue_index);
     env_deinit_interrupt(rpmsg_lite_dev->env, rpmsg_lite_dev->tvq->vq_queue_index);
 #else
-    env_disable_interrupt(rpmsg_lite_dev->rvq->vq_queue_index);
-    env_disable_interrupt(rpmsg_lite_dev->tvq->vq_queue_index);
-    rpmsg_lite_dev->link_state = 0;
-    env_enable_interrupt(rpmsg_lite_dev->rvq->vq_queue_index);
-    env_enable_interrupt(rpmsg_lite_dev->tvq->vq_queue_index);
-
     (void)platform_deinit_interrupt(rpmsg_lite_dev->rvq->vq_queue_index);
     (void)platform_deinit_interrupt(rpmsg_lite_dev->tvq->vq_queue_index);
 #endif
+    rpmsg_lite_dev->link_state = 0;
 
 #if defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1)
     virtqueue_free_static(rpmsg_lite_dev->rvq);
@@ -1407,6 +1382,8 @@ int32_t rpmsg_lite_deinit(struct rpmsg_lite_instance *rpmsg_lite_dev)
     virtqueue_free(rpmsg_lite_dev->rvq);
     virtqueue_free(rpmsg_lite_dev->tvq);
 #endif /* RL_USE_STATIC_API */
+    rpmsg_lite_dev->rvq = RL_NULL;
+    rpmsg_lite_dev->tvq = RL_NULL;
 
     env_delete_mutex(rpmsg_lite_dev->lock);
 #if defined(RL_USE_ENVIRONMENT_CONTEXT) && (RL_USE_ENVIRONMENT_CONTEXT == 1)

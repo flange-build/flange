@@ -57,6 +57,74 @@
 
 #define BANK_PIN_DEFAULT (-1)
 
+#define GPIO_EXP_GROUP(bank, group) GPIO##bank##_EXP##group
+#define GPIO_EXP_GROUP_IRQ(bank, group) GPIO##bank##_EXP##group##_IRQn
+
+#define VIRT_GPIO(bank, group) GPIO_EXP_GROUP(bank, group)
+#define VIRT_GPIO_IRQ(bank, group) GPIO_EXP_GROUP_IRQ(bank, group)
+
+#ifdef HAL_GPIO_VIRTUAL_MODEL_FEATURE_ENABLED
+#ifdef GPIO0
+#undef GPIO0
+#undef GPIO0_IRQn
+#ifdef HAL_GPIO_VIRTUAL_GROUP_USED
+#define GPIO0 VIRT_GPIO(0, HAL_GPIO_VIRTUAL_GROUP_USED)
+#define GPIO0_IRQn VIRT_GPIO_IRQ(0, HAL_GPIO_VIRTUAL_GROUP_USED)
+#else
+#define GPIO0 GPIO0_EXP
+#define GPIO0_IRQn GPIO0_EXP_IRQn
+#endif
+#endif
+
+#ifdef GPIO1
+#undef GPIO1
+#undef GPIO1_IRQn
+#ifdef HAL_GPIO_VIRTUAL_GROUP_USED
+#define GPIO1 VIRT_GPIO(1, HAL_GPIO_VIRTUAL_GROUP_USED)
+#define GPIO1_IRQn VIRT_GPIO_IRQ(1, HAL_GPIO_VIRTUAL_GROUP_USED)
+#else
+#define GPIO1 GPIO1_EXP
+#define GPIO1_IRQn GPIO1_EXP_IRQn
+#endif
+#endif
+
+#ifdef GPIO2
+#undef GPIO2
+#undef GPIO2_IRQn
+#ifdef HAL_GPIO_VIRTUAL_GROUP_USED
+#define GPIO2 VIRT_GPIO(2, HAL_GPIO_VIRTUAL_GROUP_USED)
+#define GPIO2_IRQn VIRT_GPIO_IRQ(2, HAL_GPIO_VIRTUAL_GROUP_USED)
+#else
+#define GPIO2 GPIO2_EXP
+#define GPIO2_IRQn GPIO2_EXP_IRQn
+#endif
+#endif
+
+#ifdef GPIO3
+#undef GPIO3
+#undef GPIO3_IRQn
+#ifdef HAL_GPIO_VIRTUAL_GROUP_USED
+#define GPIO3 VIRT_GPIO(3, HAL_GPIO_VIRTUAL_GROUP_USED)
+#define GPIO3_IRQn VIRT_GPIO_IRQ(3, HAL_GPIO_VIRTUAL_GROUP_USED)
+#else
+#define GPIO3 GPIO3_EXP
+#define GPIO3_IRQn GPIO3_EXP_IRQn
+#endif
+#endif
+
+#ifdef GPIO4
+#undef GPIO4
+#undef GPIO4_IRQn
+#ifdef HAL_GPIO_VIRTUAL_GROUP_USED
+#define GPIO4 VIRT_GPIO(4, HAL_GPIO_VIRTUAL_GROUP_USED)
+#define GPIO4_IRQn VIRT_GPIO_IRQ(4, HAL_GPIO_VIRTUAL_GROUP_USED)
+#else
+#define GPIO4 GPIO4_EXP
+#define GPIO4_IRQn GPIO4_EXP_IRQn
+#endif
+#endif
+
+#endif
 /********************* Private Structure Definition **************************/
 
 static struct GPIO_REG *GPIO_GROUP[] =
@@ -233,16 +301,14 @@ static void pin_mode(struct rt_device *dev, rt_base_t pin, rt_base_t mode)
 
     case PIN_MODE_INPUT_PULLUP:
 #ifdef HAL_PINCTRL_MODULE_ENABLED
-        HAL_PINCTRL_SetIOMUX(PIN_BANK(pin), HAL_BIT(pin & 0x1f), PIN_CONFIG_MUX_FUNC0);
-        HAL_PINCTRL_SetParam(PIN_BANK(pin), HAL_BIT(pin & 0x1f), PIN_CONFIG_PUL_UP);
+        HAL_PINCTRL_SetIOMUX(PIN_BANK(pin), HAL_BIT(pin & 0x1f), PIN_CONFIG_MUX_FUNC0 | PIN_CONFIG_PUL_UP);
 #endif
         HAL_GPIO_SetPinDirection(get_st_gpio(pin), get_st_pin(pin), GPIO_IN);
         break;
 
     case PIN_MODE_INPUT_PULLDOWN:
 #ifdef HAL_PINCTRL_MODULE_ENABLED
-        HAL_PINCTRL_SetIOMUX(PIN_BANK(pin), HAL_BIT(pin & 0x1f), PIN_CONFIG_MUX_FUNC0);
-        HAL_PINCTRL_SetParam(PIN_BANK(pin), HAL_BIT(pin & 0x1f), PIN_CONFIG_PUL_DOWN);
+        HAL_PINCTRL_SetIOMUX(PIN_BANK(pin), HAL_BIT(pin & 0x1f), PIN_CONFIG_MUX_FUNC0 | PIN_CONFIG_PUL_DOWN);
 #endif
         HAL_GPIO_SetPinDirection(get_st_gpio(pin), get_st_pin(pin), GPIO_IN);
         break;
@@ -262,6 +328,56 @@ static int pin_read(struct rt_device *dev, rt_base_t pin)
 {
     RT_ASSERT(PIN_BANK(pin) < GPIO_BANK_NUM);
     return HAL_GPIO_GetPinLevel(get_st_gpio(pin), get_st_pin(pin));;
+}
+
+/**
+ * Px.y
+ *  x: gpio bank number, 0, 1, 2, ... valid num
+ *  y: gpio pin number, 0, 1, 2, ..., 31.
+ *
+ * Rockchip SoC trm or hardware maybe called GPIO0_A1, the '0' is 'x',
+ * and the A1 convert to 'y' by following rules:
+ *  A0~A7 is 0~7
+ *  B0~B7 is 8~15
+ *  C0~C7 is 16~23
+ *  D0~D7 is 24~31
+ *
+ * Example of use: Px.0 ~ Px.31, x:0,1,2,3,...
+ */
+static rt_base_t pin_get(const char *name)
+{
+    rt_base_t pin = 0;
+    int bank_num = 0, pin_num = 0;
+
+    if (name[0] != 'P' && name[0] != 'p')
+    {
+        return -RT_EINVAL;
+    }
+
+    bank_num = atoi(&name[1]);
+    if (bank_num >= GPIO_BANK_NUM)
+    {
+        return -RT_EINVAL;
+    }
+
+    if (name[2] == '.')
+    {
+        pin_num = atoi(&name[3]);
+    }
+    else
+    {
+        pin_num = atoi(&name[2]);
+    }
+    if (pin_num >= 32)
+    {
+        return -RT_EINVAL;
+    }
+
+    rt_kprintf("%s --> gpio%d.%02d --> gpio%d.%c%d\n", name, bank_num, pin_num, bank_num, 'A' + pin_num / 8, pin_num % 8);
+
+    pin = BANK_PIN(bank_num, pin_num);
+
+    return pin;
 }
 /** @} */
 
@@ -314,6 +430,7 @@ static const struct rt_pin_ops pin_ops =
     pin_attach_irq,
     pin_detach_irq,
     pin_irq_enable,
+    pin_get,
 };
 
 /** @defgroup GPIO_Public_Functions Public Functions
@@ -353,16 +470,17 @@ static void pin_irq_hdr(uint32_t pin)
 {
     RT_ASSERT(pin >= 0);
     RT_ASSERT(pin < HAL_ARRAY_SIZE(pin_irq_hdr_tab));
-    RT_ASSERT(pin_irq_hdr_tab[pin].hdr != RT_NULL);
 
     pin_irq_hdr_tab[pin].hdr(pin_irq_hdr_tab[pin].args);
 }
 
 void HAL_GPIO_IRQDispatch(eGPIO_bankId bank, uint32_t pin)
 {
+    uint32_t pin_num = BANK_PIN(bank, pin);
     RT_ASSERT(bank < GPIO_BANK_NUM);
 
-    pin_irq_hdr(BANK_PIN(bank, pin));
+    if (pin_irq_hdr_tab[pin_num].hdr != RT_NULL)
+        pin_irq_hdr(pin_num);
 }
 
 #endif

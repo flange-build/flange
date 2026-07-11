@@ -233,7 +233,7 @@ int rt_hw_cpu_cache_init(void)
 #if defined(ICACHE) || defined(DCACHE)
     HAL_ICACHE_EnableInt();
     HAL_DCACHE_EnableInt();
-#if defined(RKMCU_PISCES) || defined(RKMCU_RK2108) || defined(RKMCU_RK3588_PMU) || defined(RKMCU_RK3588_NPU)
+#if defined(RKMCU_PISCES) || defined(RKMCU_RK2108) || (defined(SOC_RK3588) && (defined(HAL_PMU_MCU_CORE) || defined(HAL_NPU_MCU_CORE)))
     rt_hw_interrupt_install(CACHE_IRQn, (rt_isr_handler_t)CACHE_IRQHandler, RT_NULL, RT_NULL);
     rt_hw_interrupt_umask(CACHE_IRQn);
 #elif defined(SOC_RV1106)

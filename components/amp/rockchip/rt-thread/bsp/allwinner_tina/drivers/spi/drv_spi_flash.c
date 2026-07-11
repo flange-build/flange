@@ -1,21 +1,7 @@
 /*
- * File      : drv_spi_flash.c
- * This file is part of RT-Thread RTOS
- * COPYRIGHT (C) 2017, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along
- *  with this program; if not, write to the Free Software Foundation, Inc.,
- *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
  * Date           Author       Notes
@@ -26,8 +12,8 @@
 #include <rthw.h>
 #include <rtdevice.h>
 
-#define DBG_SECTION_NAME  "FLASH"
-#define DBG_LEVEL         DBG_LOG
+#define DBG_TAG  "FLASH"
+#define DBG_LVL  DBG_LOG
 #include <rtdbg.h>
 
 #define SPI_FLASH_DEVICE_NAME       "spi00"
@@ -62,16 +48,6 @@ int rt_hw_spi_flash_with_sfud_init(void)
     return RT_EOK;
 }
 INIT_PREV_EXPORT(rt_hw_spi_flash_with_sfud_init);
-
-#elif defined(RT_USING_W25QXX)
-#include "spi_flash_w25qxx.h"
-
-int rt_hw_spi_flash_init(void)
-{
-    DEBUG_PRINTF("%s -> %d\n", __FUNCTION__, __LINE__);
-    return w25qxx_init(SPI_FLASH_CHIP, SPI_FLASH_DEVICE_NAME);
-}
-INIT_DEVICE_EXPORT(rt_hw_spi_flash_init);
 
 #endif
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -12,9 +12,6 @@
  */
 
 #include <rtthread.h>
-
-/* exception hook */
-static rt_err_t (*rt_exception_hook)(void *context) = RT_NULL;
 
 struct exception_stack_frame
 {
@@ -93,41 +90,15 @@ rt_uint8_t *rt_hw_stack_init(void       *tentry,
     return stk;
 }
 
+#if defined(RT_USING_FINSH) && defined(MSH_USING_BUILT_IN_COMMANDS)
 extern long list_thread(void);
+#endif
 extern rt_thread_t rt_current_thread;
-
-struct exception_info
-{
-    rt_uint32_t exc_return;
-    struct stack_frame stack_frame;
-};
-
-/**
- * This function set the hook, which is invoked on fault exception handling.
- *
- * @param exception_handle the exception handling hook function.
- */
-void rt_hw_exception_install(rt_err_t (*exception_handle)(void *context))
-{
-    rt_exception_hook = exception_handle;
-}
-
 /**
  * fault exception handling
  */
-void rt_hw_hard_fault_exception(struct exception_info *exception_info)
+void rt_hw_hard_fault_exception(struct exception_stack_frame *contex)
 {
-    extern long list_thread(void);
-    struct exception_stack_frame *contex = &exception_info->stack_frame.exception_stack_frame;
-
-    if (rt_exception_hook != RT_NULL)
-    {
-        rt_err_t result;
-
-        result = rt_exception_hook(exception_info);
-        if (result == RT_EOK) return;
-    }
-
     rt_kprintf("psr: 0x%08x\n", contex->psr);
     rt_kprintf(" pc: 0x%08x\n", contex->pc);
     rt_kprintf(" lr: 0x%08x\n", contex->lr);
@@ -139,7 +110,7 @@ void rt_hw_hard_fault_exception(struct exception_info *exception_info)
 
     rt_kprintf("hard fault on thread: %s\n", rt_current_thread->name);
 
-#ifdef RT_USING_FINSH
+#if defined(RT_USING_FINSH) && defined(MSH_USING_BUILT_IN_COMMANDS)
     list_thread();
 #endif
 
@@ -150,7 +121,7 @@ void rt_hw_hard_fault_exception(struct exception_info *exception_info)
 #define SCB_HFSR        (*(volatile const unsigned *)0xE000ED2C) /* HardFault Status Register */
 #define SCB_MMAR        (*(volatile const unsigned *)0xE000ED34) /* MemManage Fault Address register */
 #define SCB_BFAR        (*(volatile const unsigned *)0xE000ED38) /* Bus Fault Address Register */
-#define SCB_AIRCR       (*(volatile unsigned long *)0xE000ED00)  /* Reset control Address Register */
+#define SCB_AIRCR       (*(volatile unsigned long *)0xE000ED0C)  /* Reset control Address Register */
 #define SCB_RESET_VALUE 0x05FA0004                               /* Reset value, write to SCB_AIRCR can reset cpu */
 
 #define SCB_CFSR_MFSR   (*(volatile const unsigned char*)0xE000ED28)  /* Memory-management Fault Status Register */

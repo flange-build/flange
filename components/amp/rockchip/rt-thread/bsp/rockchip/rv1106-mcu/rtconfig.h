@@ -22,7 +22,7 @@
 #define RT_USING_HOOK
 #define RT_USING_IDLE_HOOK
 #define RT_IDEL_HOOK_LIST_SIZE 4
-#define IDLE_THREAD_STACK_SIZE 1024
+#define IDLE_THREAD_STACK_SIZE 256
 /* RT_USING_TIMER_SOFT is not set */
 #define RT_DEBUG
 #define RT_DEBUG_COLOR
@@ -172,8 +172,11 @@
 
 /* RT-Thread board config */
 
-#define RT_BOARD_NAME "rv1106_evb-SC3338-ADC"
-#define RT_USING_CAM_STREAM_ON_LATE
+#define RT_BOARD_NAME "rv1106_evb"
+
+/* RT-Thread rv1106_evb board config */
+
+#define RT_USING_SPL_RTT_SHARE_DDR_ADRESS 0x1e00000
 
 /* RT-Thread rockchip common drivers */
 
@@ -216,7 +219,7 @@
 
 /* RT_USING_ISP is not set */
 #define RT_USING_ISP3
-#define RT_USING_ISP_DDR_ADRESS 0x860000
+#define RT_USING_ISP_DDR_ADRESS 0x1e60000
 #define RT_USING_ISP_DDR_SIZE 0x600000
 #define RT_USING_CHANNEL_MIPI
 /* RT_USING_CHANNEL_DVP is not set */
@@ -240,9 +243,7 @@
 /* RT_USING_OV02k10 is not set */
 /* RT_USING_GC2053 is not set */
 /* RT_USING_F37 is not set */
-/* RT_USING_SC230AI is not set */
-/* RT_USING_SC3336 is not set */
-#define RT_USING_SC3338
+#define RT_USING_SC230AI
 
 /* RT-Thread rockchip vicap_lite driver */
 
@@ -266,8 +267,6 @@
 /* Enable PSTORE */
 
 /* RT_USING_PSTORE is not set */
-
-/* RT-Thread rockchip AMP driver */
 
 /* RT-Thread rockchip rv1106 drivers */
 
@@ -302,10 +301,6 @@
 /* RT_USING_LVGL_APP_DEMO is not set */
 /* RT_USING_ROCKCHIP_DEMO is not set */
 #define RT_USING_RK_BATTERY_IPC
-
-/* RT-Thread Application Rockchip Battery IPC */
-
-#define RT_USING_META_DDR_ADRESS 0x800000
 /* RT_USING_RK_IOT_APP is not set */
 /* ENABLE_DUAL_TRACKING is not set */
 

@@ -93,7 +93,7 @@ rt_err_t jpege_init(struct jpege_ctx **hal)
     if (!ctx->ioctl_info.regs)
     {
         jpege_dbg("failed to rt_malloc vdpu2 regs\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
     *hal = ctx;
     jpege_dbg("int done %p\n", hal);
@@ -144,7 +144,7 @@ static rt_err_t get_vepu_fmt(struct vepu_fmt_cfg *cfg, enum frame_format format)
     else
     {
         cfg->format = VEPU_FMT_BUTT;
-        ret = -RT_ERROR;
+        ret = RT_ERROR;
     }
 
     return ret;
@@ -386,7 +386,7 @@ rt_err_t jpege_end(void *hal)
 {
     struct jpege_ctx *ctx = (struct jpege_ctx *)hal;
     if (ctx == RT_NULL)
-        return -RT_ERROR;
+        return RT_ERROR;
     struct JPEG_ENC_REG *hw_reg = RT_NULL;
     uint32_t id = ctx->cfg->jpeg_dev_id;
     uint32_t *regs = ctx->ioctl_info.regs;
@@ -421,7 +421,7 @@ rt_err_t jpege_reset(void *hal)
 {
     struct jpege_ctx *ctx = (struct jpege_ctx *)hal;
     if (ctx == RT_NULL)
-        return -RT_ERROR;
+        return RT_ERROR;
     uint32_t val = 0;
     uint32_t id = ctx->cfg->jpeg_dev_id;
     uint32_t *reset_base = (uint32_t *)(CRU_JPEGE_RESET_BASE);
@@ -448,7 +448,7 @@ rt_err_t jpege_clear_interrupt(void *hal)
 {
     struct jpege_ctx *ctx = (struct jpege_ctx *)hal;
     if (ctx == RT_NULL)
-        return -RT_ERROR;
+        return RT_ERROR;
     struct JPEG_ENC_REG *hw_reg = RT_NULL;
     uint32_t id = ctx->cfg->jpeg_dev_id;
 

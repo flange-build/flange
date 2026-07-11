@@ -55,7 +55,13 @@ if [ $? != 0 ];then
     exit
 fi
 
-mkfs.fat -S 4096 $ROOT_NAME
+ROOTFS_SECTOR_SIZE=$(grep -r "RT_DFS_ELM_MAX_SECTOR_SIZE" rtconfig.h | cut -d ' ' -f 3)
+if [ -z $ROOTFS_SECTOR_SIZE ];then
+    ROOTFS_SECTOR_SIZE=512
+fi
+echo "rootfs sector size: $ROOTFS_SECTOR_SIZE"
+
+mkfs.fat -S $ROOTFS_SECTOR_SIZE $ROOT_NAME
 if [ $? != 0 ];then
     rm -rf $ROOT_NAME
     echo "Error2: making $ROOT_NAME error."

@@ -1,21 +1,12 @@
 /**
-  * Copyright (c) 2023 Fuzhou Rockchip Electronics Co., Ltd
+  * Copyright (c) 2025 Rockchip Electronics Co., Ltd
   *
   * SPDX-License-Identifier: Apache-2.0
-  ******************************************************************************
-  * @file    pcie_dma_test.c
-  * @version V1.0
-  * @brief   QPI Psram test
-  *
-  * Change Logs:
-  * Date           Author          Notes
-  * 2023-01-04     Dingqiang Lin   the first version
-  *
-  ******************************************************************************
   */
 
-#include <rtdevice.h>
+#include <rthw.h>
 #include <rtthread.h>
+#include <rtdevice.h>
 
 #ifdef RT_USING_COMMON_TEST_PCIE_DMA
 
@@ -71,13 +62,13 @@ HAL_Status pcie_dma_dbg_hex(char *s, void *buf, uint32_t width, uint32_t len)
     return HAL_OK;
 }
 
-int pcie_dma_simple_test(u32 chn, u32 local, u32 remote, u32 dir, u32 size, u32 loop)
+int pcie_dma_simple_test(uint32_t chn, uint64_t local, uint64_t remote, uint32_t dir, uint32_t size, uint32_t loop)
 {
-    struct dma_table *table;
+    struct DMA_TABLE *table;
     struct rk_pcie_dma_transfer *transfer;
     int i, ret;
 
-    rt_kprintf("%s %d local=%x remote=%x dir=%d size=%d\n", __func__, chn, local, remote, dir, size);
+    rt_kprintf("%s %d local=%llx remote=%llx dir=%d size=%d\n", __func__, chn, local, remote, dir, size);
 
     dma = (struct rk_pcie_dma_device *)rt_device_find("pcie_dma");
     if (dma == RT_NULL)
@@ -86,7 +77,7 @@ int pcie_dma_simple_test(u32 chn, u32 local, u32 remote, u32 dir, u32 size, u32 
         return -RT_EINVAL;
     }
 
-    table = rt_malloc(sizeof(struct dma_table));
+    table = rt_malloc(sizeof(struct DMA_TABLE));
     if (!table)
     {
         rt_kprintf("%s table malloc failed\n", __func__);
@@ -118,15 +109,19 @@ int pcie_dma_simple_test(u32 chn, u32 local, u32 remote, u32 dir, u32 size, u32 
         }
 #endif
 
-        memset(table, 0, sizeof(struct dma_table));
-        table->buf_size = size;
+        memset(table, 0, sizeof(struct DMA_TABLE));
+        table->bufSize = size;
         table->bus = remote;
         table->local = local;
         table->chn = chn;
         table->dir = dir;
         rk_pcie_dma_prepare(dma, transfer, table);
         rk_pcie_dma_start(dma, transfer);
-        rk_pcie_dma_wait_for_complete(dma, transfer, RT_UINT32_MAX);
+        ret = rk_pcie_dma_wait_for_complete(dma, transfer, RT_UINT32_MAX);
+        if (ret)
+        {
+            rt_kprintf("dma test failed, ret=%d\n", ret);
+        }
 
 #ifdef RT_USING_CACHE
         if (dir == DMA_FROM_BUS)
@@ -149,7 +144,7 @@ void pcie_dma_test(int argc, char **argv)
 {
     char *cmd, *ptr;
     uint32_t chn, loop, start_time, end_time, cost_time;
-    rt_off_t local, remote;
+    uint64_t local, remote;
     rt_uint32_t size = 0;
 
     if (argc < 3)
@@ -161,8 +156,8 @@ void pcie_dma_test(int argc, char **argv)
         if (argc != 7)
             goto out;
         chn = atoi(argv[2]);
-        local = strtoul(argv[3], &ptr, 0);
-        remote = strtoul(argv[4], &ptr, 0);
+        local = strtoull(argv[3], &ptr, 0);
+        remote = strtoull(argv[4], &ptr, 0);
         size = strtoul(argv[5], &ptr, 0);
         loop = atoi(argv[6]);
 
@@ -189,8 +184,8 @@ void pcie_dma_test(int argc, char **argv)
         if (argc != 7)
             goto out;
         chn = atoi(argv[2]);
-        local = strtoul(argv[3], &ptr, 0);
-        remote = strtoul(argv[4], &ptr, 0);
+        local = strtoull(argv[3], &ptr, 0);
+        remote = strtoull(argv[4], &ptr, 0);
         size = strtoul(argv[5], &ptr, 0);
         loop = atoi(argv[6]);
 

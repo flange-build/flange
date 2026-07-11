@@ -16,7 +16,7 @@
 /**
  * @brief  Config iomux m1 for CAN1
  */
-RT_WEAK RT_UNUSED void can1_m1_iomux_config(void)
+RT_WEAK void can1_m1_iomux_config(void)
 {
     /* CAN1 M1 RX TX */
     HAL_PINCTRL_SetIOMUX(GPIO_BANK4,
@@ -32,7 +32,7 @@ RT_WEAK RT_UNUSED void can1_m1_iomux_config(void)
 /**
  * @brief  Config iomux for GMAC0
  */
-RT_WEAK RT_UNUSED void gmac0_iomux_config(void)
+RT_WEAK void gmac0_iomux_config(void)
 {
     /* GMAC0 iomux */
     HAL_PINCTRL_SetIOMUX(GPIO_BANK2,
@@ -66,7 +66,7 @@ RT_WEAK RT_UNUSED void gmac0_iomux_config(void)
 /**
  * @brief  Config iomux for GMAC1
  */
-RT_WEAK RT_UNUSED void gmac1_m1_iomux_config(void)
+RT_WEAK void gmac1_m1_iomux_config(void)
 {
     /* GMAC1 M1 iomux */
     HAL_PINCTRL_SetIOMUX(GPIO_BANK4,
@@ -106,11 +106,51 @@ RT_WEAK RT_UNUSED void gmac1_m1_iomux_config(void)
 /**
  * @brief  Config iomux for I2C0
  */
-RT_WEAK RT_UNUSED void i2c0_m0_iomux_config(void)
+RT_WEAK void i2c0_m0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_B1 |
                          GPIO_PIN_B2,
+                         PIN_CONFIG_MUX_FUNC1);
+}
+#endif
+
+#ifdef RT_USING_I2C1
+/**
+ * @brief  Config iomux for I2C1
+ */
+RT_WEAK void i2c1_m0_iomux_config(void)
+{
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
+                         GPIO_PIN_B3 |
+                         GPIO_PIN_B4,
+                         PIN_CONFIG_MUX_FUNC1);
+}
+#endif
+#endif
+
+#ifdef RT_USING_SDIO
+#ifdef RT_USING_SDIO0
+/**
+ * @brief  Config iomux for SDMMC0
+ */
+RT_WEAK void sdmmc0_iomux_config(void)
+{
+    /* SDMMC D0 ~ D2*/
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
+                         GPIO_PIN_D5 |
+                         GPIO_PIN_D6 |
+                         GPIO_PIN_D7,
+                         PIN_CONFIG_MUX_FUNC1);
+    /* SDMMC0 CMD & CLK & D3 & PWR & DET*/
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK2,
+                         GPIO_PIN_A0 |  /* SDMMC0_D3 */
+                         GPIO_PIN_A1 |  /* CMD */
+                         GPIO_PIN_A2,   /* CLK */
+                         PIN_CONFIG_MUX_FUNC1);
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
+                         GPIO_PIN_A4 |  /* DET */
+                         GPIO_PIN_A5,   /* PWR */
                          PIN_CONFIG_MUX_FUNC1);
 }
 #endif
@@ -119,7 +159,7 @@ RT_WEAK RT_UNUSED void i2c0_m0_iomux_config(void)
 /**
  * @brief  Config iomux m0 for UART2
  */
-RT_WEAK RT_UNUSED void uart2_m0_iomux_config(void)
+RT_WEAK void uart2_m0_iomux_config(void)
 {
     /* UART2 M0 RX-0D0 TX-0D1 */
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
@@ -131,7 +171,7 @@ RT_WEAK RT_UNUSED void uart2_m0_iomux_config(void)
 /**
  * @brief  Config iomux m1 for UART4
  */
-RT_WEAK RT_UNUSED void uart4_m1_iomux_config(void)
+RT_WEAK void uart4_m1_iomux_config(void)
 {
     /* UART4 M1 RX-3B1 TX-3B2 */
     HAL_PINCTRL_SetIOMUX(GPIO_BANK3,
@@ -142,9 +182,9 @@ RT_WEAK RT_UNUSED void uart4_m1_iomux_config(void)
 }
 
 /**
- * @brief  Config iomux m2 for UART7
+ * @brief  配置 UART7 M2 iomux
  */
-RT_WEAK RT_UNUSED void uart7_m2_iomux_config(void)
+RT_WEAK void uart7_m2_iomux_config(void)
 {
     /* UART7 M2 RX-4A3 TX-4A2 */
     HAL_PINCTRL_SetIOMUX(GPIO_BANK4,
@@ -157,14 +197,14 @@ RT_WEAK RT_UNUSED void uart7_m2_iomux_config(void)
 /**
  * @brief  Config io domian for board of rk3568 evb1
  */
-RT_WEAK RT_UNUSED void rt_hw_iodomain_config(void)
+RT_WEAK void rt_hw_iodomain_config(void)
 {
 }
 
 /**
  * @brief  Config iomux for RK3568
  */
-RT_WEAK RT_UNUSED void rt_hw_iomux_config(void)
+RT_WEAK void rt_hw_iomux_config(void)
 {
     rt_hw_iodomain_config();
 
@@ -184,3 +224,18 @@ RT_WEAK RT_UNUSED void rt_hw_iomux_config(void)
     can1_m1_iomux_config();
 #endif
 }
+
+#ifdef RT_USING_FINSH
+#include <finsh.h>
+
+static void arm_jtag(void)
+{
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
+                         GPIO_PIN_D7,   /* TCK */
+                         PIN_CONFIG_MUX_FUNC2);
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK2,
+                         GPIO_PIN_A0,   /* TMS */
+                         PIN_CONFIG_MUX_FUNC2);
+}
+MSH_CMD_EXPORT(arm_jtag, enable arm jtag);
+#endif

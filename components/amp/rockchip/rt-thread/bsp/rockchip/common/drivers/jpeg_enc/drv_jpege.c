@@ -134,7 +134,7 @@ static rt_err_t jpeg_enc_reset(struct rt_jpege_device *dev)
     if (ctx == RT_NULL)
     {
         jpege_dbg("ctx is null, has been free\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
     JpegeBits *bits = ctx->bits;
     struct jpege_cfg *cfg = ctx->cfg;
@@ -166,7 +166,7 @@ static rt_err_t jpeg_enc_start(struct rt_jpege_device *dev)
 {
     struct jpege_ctx *ctx = (struct jpege_ctx *)dev->ctx;
     if (ctx == RT_NULL)
-        return -RT_ERROR;
+        return RT_ERROR;
     struct jpege_cfg *cfg = ctx->cfg;
     JpegeBits bits = ctx->bits;
 

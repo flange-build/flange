@@ -150,6 +150,12 @@ rt_err_t rt_touchpoint_is_valid(struct rt_touch_data *p, struct rt_touchpanel_bl
     return ret;
 }
 
+void rt_touchpoint_get_range(rt_int32_t *range_x, rt_int32_t *range_y)
+{
+    *range_x = g_tp_data->info.range_x;
+    *range_y = g_tp_data->info.range_y;
+}
+
 static void rt_touchpanel_blocks_handle(struct rt_touch_data *point, rt_uint8_t num)
 {
     struct rt_touchpanel_block *block;

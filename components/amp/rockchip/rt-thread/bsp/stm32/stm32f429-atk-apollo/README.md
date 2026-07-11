@@ -47,20 +47,21 @@
 | MPU9250九轴传感器 |     支持     |                                       |
 | SDRAM             |     支持     |                                       |
 | SD卡              |   支持   |                                       |
-| CAN               |   暂不支持   |                                       |
+| CAN               |   支持   |   和 USB Host 引脚冲突，如需使用该外设，请使用 CubeMX 重新配置                                     |
 | **片上外设**      | **支持情况** | **备注**                              |
 | GPIO              |     支持     | PA0, PA1... PK15 ---> PIN: 0, 1...176 |
 | UART              |     支持     | UART1/2/3                             |
 | SPI               |     支持     | SPI1/2/5                              |
 | I2C               |     支持     | 软件 I2C                              |
+| CAN               |     支持     | PA12->TX, PA11->RX                                   |
 | ADC               |     支持     |                                     |
-| RTC               |     支持     |                                      |
+| RTC               |     支持     | 支持外部晶振和内部低速时钟 |
 | WDT               |     支持     |                                       |
 | FLASH | 支持 | 已适配 [FAL](https://github.com/RT-Thread-packages/fal) |
 | SDIO              |   支持   |                               |
 | PWM               |   支持   |                               |
 | USB Device        |   暂不支持   | 即将支持                              |
-| USB Host          |   暂不支持   | 即将支持                              |
+| USB Host          |   支持   | 和 CAN1 引脚冲突，如需使用该外设，请使用 CubeMX 重新配置                         |
 | **扩展模块**      | **支持情况** | **备注**                              |
 | ATK-ESP8266 模块  |   暂不支持   | 即将支持                              |
 

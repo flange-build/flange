@@ -145,7 +145,7 @@ static int gt9760s_read_msg(
     }
     VCM_ERR(
         "%s: i2c write to failed with error %d\n", __FUNCTION__, ret);
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 
 static int gt9760s_write_msg(
@@ -185,7 +185,7 @@ static int gt9760s_write_msg(
     }
     VCM_ERR(
         "%s: i2c write to failed with error %d\n", __FUNCTION__, ret);
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 
 static inline struct rk_gt9760s_dev *rk_get_vcm_dev(struct rk_vcm_dev *dev)
@@ -411,7 +411,7 @@ int rk_vcm_gt9760s_init(void)
     if (!instance->i2c_bus)
     {
         VCM_DBG("Warning:not find i2c source:%s !!!\n", instance->i2c_name);
-        ret = -RT_ERROR;
+        ret = RT_ERROR;
         goto ERR;
     }
     else

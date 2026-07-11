@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2022, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -33,6 +33,7 @@
 .globl stack_start
 .globl stack_top
 
+.align 3
 stack_start:
 .rept ISR_Stack_Size
 .long 0
@@ -64,7 +65,7 @@ bss_loop:
     /* call C++ constructors of global objects                          */
     ldr     r0, =__ctors_start__
     ldr     r1, =__ctors_end__
-    
+
 ctor_loop:
     cmp     r0, r1
     beq     ctor_end
@@ -149,7 +150,7 @@ vector_undef:
 vector_swi:
     bl      rt_hw_trap_swi
 
-    .align	5
+    .align  5
 .globl vector_pabt
 vector_pabt:
     bl      rt_hw_trap_pabt

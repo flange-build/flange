@@ -15,7 +15,7 @@
   */
 
 #include <rtthread.h>
-#include <cmsis_gcc.h>
+#include <hal_base.h>
 #include <backtrace.h>
 
 #ifdef RT_USING_CMBACKTRACE

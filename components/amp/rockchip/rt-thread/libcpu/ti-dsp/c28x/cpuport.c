@@ -1,11 +1,13 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2022, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
  * Date           Author       Notes
  * 2018-09-01     xuzhuoyi     the first version.
+ * 2019-07-03     zhaoxiaowei  add support for __rt_ffs.
+ * 2019-12-05     xiaolifan    add support for hardware fpu32
  */
 
 #include <rtthread.h>
@@ -16,6 +18,11 @@ rt_uint32_t rt_interrupt_to_thread;
 rt_uint32_t rt_thread_switch_interrupt_flag;
 /* exception hook */
 static rt_err_t (*rt_exception_hook)(void *context) = RT_NULL;
+
+extern rt_uint16_t rt_hw_get_st0(void);
+extern rt_uint16_t rt_hw_get_st1(void);
+extern int rt_hw_calc_csb(int value);
+
 
 struct exception_stack_frame
 {
@@ -44,6 +51,18 @@ struct stack_frame
     rt_uint32_t xt;
     rt_uint32_t rpc;
 
+#ifdef __TMS320C28XX_FPU32__
+    rt_uint32_t rb;
+    rt_uint32_t stf;
+    rt_uint32_t r0h;
+    rt_uint32_t r1h;
+    rt_uint32_t r2h;
+    rt_uint32_t r3h;
+    rt_uint32_t r4h;
+    rt_uint32_t r5h;
+    rt_uint32_t r6h;
+    rt_uint32_t r7h;
+#endif
 
 };
 
@@ -59,6 +78,7 @@ rt_uint8_t *rt_hw_stack_init(void       *tentry,
     stk  = stack_addr;
     stk  = (rt_uint8_t *)RT_ALIGN((rt_uint32_t)stk, 8);
     //stk -= sizeof(struct stack_frame);
+    stk += 1;
 
     stack_frame = (struct stack_frame *)stk;
 
@@ -72,10 +92,15 @@ rt_uint8_t *rt_hw_stack_init(void       *tentry,
     stack_frame->exception_stack_frame.acc     = 0x33332222;
     stack_frame->exception_stack_frame.ar1_ar0 = 0x00001111 & (unsigned long)parameter; /* ar0 : argument */
     stack_frame->exception_stack_frame.p       = 0x55554444;                            /* p */
-    stack_frame->exception_stack_frame.dp_st1  = (0x00000000) | rt_hw_get_st1();        /* dp_st1 */
+    stack_frame->exception_stack_frame.dp_st1  = (0x00000000) | rt_hw_get_st1() & 0xFFFFFFFE;        /* dp_st1 */
     stack_frame->exception_stack_frame.dbgstat_ier    = 0;                              /* dbgstat_ier */
     stack_frame->exception_stack_frame.return_address = (unsigned long)tentry;          /* return_address */
     stack_frame->rpc = (unsigned long)texit;
+
+#ifdef __TMS320C28XX_FPU32__
+    stack_frame->stf = 0x00000200;
+    stack_frame->rb = 0;
+#endif
 
     /* return task's current stack address */
     return stk + sizeof(struct stack_frame);
@@ -98,11 +123,24 @@ struct exception_info
     struct stack_frame stack_frame;
 };
 
+#ifdef RT_USING_CPU_FFS
+/*
+ * This function called rt_hw_calc_csb to finds the first bit set in value.
+ * rt_hw_calc_csb is a native assembly program that use "CSB" instruction in C28x.
+ * When you use this function, remember that "int" is only 16-bit in C28x's C compiler.
+ * If value is a number bigger that 0xFFFF, trouble may be caused.
+ * Maybe change "int __rt_ffs(int value)" to "rt_int32_t __rt_ffs(rt_int32_t value)" will be better.
+ */
+int __rt_ffs(int value)
+{
+    return rt_hw_calc_csb(value);
+}
+#endif
 
 /**
  * shutdown CPU
  */
-void rt_hw_cpu_shutdown(void)
+RT_WEAK void rt_hw_cpu_shutdown(void)
 {
     rt_kprintf("shutdown...\n");
 

@@ -1,0 +1,20 @@
+menu "led driver"
+config RT_USING_LEDS
+    bool
+    default n
+
+    config RT_USING_WS28XX
+        depends on RT_USING_LEDS
+        bool "ws28xx (one wire protocol) driver select"
+        default n
+
+    config RT_USING_AW210XX
+        depends on RT_USING_LEDS
+        bool "aw210xx driver select"
+        default n
+
+    config RT_USING_IS31FL32XX
+        depends on RT_USING_LEDS
+        bool "is31fl32xx driver select"
+        default n
+endmenu

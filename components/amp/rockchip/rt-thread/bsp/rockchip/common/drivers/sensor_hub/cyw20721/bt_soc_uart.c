@@ -95,7 +95,7 @@ rt_err_t rk_uart_init(char *uart_name)
     if (!serial)
     {
         rt_kprintf("find %s failed!\n", uart_name);
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     config.baud_rate = BAUD_RATE_3000000;

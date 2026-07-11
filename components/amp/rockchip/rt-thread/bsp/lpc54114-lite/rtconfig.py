@@ -14,9 +14,9 @@ if  CROSS_TOOL == 'gcc':
     EXEC_PATH   = r'D:/Program Files/CodeSourcery/Sourcery_CodeBench_Lite_for_ARM_EABI/bin'
 elif CROSS_TOOL == 'keil':
     PLATFORM    = 'armcc'
-    EXEC_PATH   = 'D:/Keil_v5'
+    EXEC_PATH   = r'D:/Keil_v5'
 elif CROSS_TOOL == 'iar':
-    PLATFORM    = 'iar'
+    PLATFORM    = 'iccarm'
     EXEC_PATH  = 'C:/Program Files (x86)/IAR Systems/Embedded Workbench 7.2'
 
 if os.getenv('RTT_EXEC_PATH'):
@@ -40,7 +40,7 @@ if PLATFORM == 'gcc':
     DEVICE = ' -mcpu=cortex-m4 -mthumb -ffunction-sections -fdata-sections -mfpu=fpv4-sp-d16 -mfloat-abi=hard'
     CFLAGS = DEVICE + ' -g -Wall -eentry'
     AFLAGS = ' -c' + DEVICE + ' -x assembler-with-cpp -Wa,-mimplicit-it=thumb -D__STARTUP_CLEAR_BSS'
-    LFLAGS = DEVICE + ' -lm -lgcc -lc' + ' -nostartfiles  -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,ResetISR -T drivers\linker_scripts\link.lds'
+    LFLAGS = DEVICE + ' -lm -lgcc -lc' + ' -nostartfiles  -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,ResetISR -T drivers/linker_scripts/link.lds'
 
     CPATH = ''
     LPATH = ''
@@ -86,7 +86,7 @@ elif PLATFORM == 'armcc':
     
     POST_ACTION = 'fromelf --bin $TARGET --output rtthread.bin \nfromelf -z $TARGET'
     
-elif PLATFORM == 'iar':
+elif PLATFORM == 'iccarm':
     # toolchains
     CC = 'iccarm'
     AS = 'iasmarm'

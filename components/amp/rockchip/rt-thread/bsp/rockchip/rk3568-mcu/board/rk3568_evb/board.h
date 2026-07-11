@@ -16,13 +16,12 @@
 #define __BOARD__
 
 #include "drv_uart.h"
-#include "hal_base.h"
 #include "int_mux.h"
 #include "riscv_csr_encoding.h"
 #include "timer.h"
 
-#define MAX_HANDLERS       NUM_INTERRUPTS
-#define INTERRUPT_SEPERATE 64
+#define MAX_HANDLERS    32
+#define INTERRUPT_SEPERATE 8
 
 extern  void *_end;
 extern  void *_heap_end;

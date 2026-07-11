@@ -42,7 +42,7 @@ if PLATFORM == 'gcc':
     CFLAGS += ' -Wno-unused-parameter -Wno-unused-function -Wno-unused-value'
     CFLAGS += ' -Wno-implicit-fallthrough -Wno-cast-function-type -Wno-missing-field-initializers'
     AFLAGS = DEVICE + ' -c -x assembler-with-cpp -D__ASSEMBLY__'
-    LFLAGS = DEVICE + ' --specs=nano.specs -Wl,--gc-sections,-cref,-Map=' + MAP_FILE
+    LFLAGS = DEVICE + ' -Wl,--gc-sections,-cref,-Map=' + MAP_FILE
     LFLAGS += ' -T ' + LINK_FILE
 
     CPATH = ''
@@ -52,7 +52,7 @@ if PLATFORM == 'gcc':
         CFLAGS += ' -O0 -g3'
         AFLAGS += ' -g3'
     else:
-        CFLAGS += ' -Os'
+        CFLAGS += ' -O2'
 
     POST_ACTION = OBJCPY + ' -O binary $TARGET ' + TARGET_NAME + '\n'
     POST_ACTION += SIZE + ' $TARGET\n'

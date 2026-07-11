@@ -68,34 +68,18 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2016 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright(c) 2016 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************  
   */ 
 
-#if defined (STM32L021xx) || defined (STM32L041xx) || defined (STM32L061xx) || defined (STM32L062xx) || defined (STM32L063xx) || defined (STM32L081xx) || defined (STM32L082xx) || defined (STM32L083xx)
+#if defined (STM32L021xx) || defined (STM32L041xx) || defined (STM32L062xx) || defined (STM32L063xx) || defined (STM32L081xx) || defined (STM32L082xx) || defined (STM32L083xx)
 /* Includes ------------------------------------------------------------------*/
 #include "stm32l0xx_hal.h"
 
@@ -171,7 +155,7 @@ static void               CRYP_SetDMAConfig(CRYP_HandleTypeDef *hcryp, uint32_t 
 /**
   * @brief  Initializes the CRYP according to the specified
   *         parameters in the CRYP_InitTypeDef and creates the associated handle.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval HAL status
   */
@@ -231,7 +215,7 @@ HAL_StatusTypeDef HAL_CRYP_Init(CRYP_HandleTypeDef *hcryp)
 
 /**
   * @brief  DeInitializes the CRYP peripheral. 
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval HAL status
   */
@@ -271,7 +255,7 @@ HAL_StatusTypeDef HAL_CRYP_DeInit(CRYP_HandleTypeDef *hcryp)
 
 /**
   * @brief  Initializes the CRYP MSP.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval None
   */
@@ -286,7 +270,7 @@ __weak void HAL_CRYP_MspInit(CRYP_HandleTypeDef *hcryp)
 
 /**
   * @brief  DeInitializes CRYP MSP.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval None
   */
@@ -325,12 +309,12 @@ __weak void HAL_CRYP_MspDeInit(CRYP_HandleTypeDef *hcryp)
 /**
   * @brief  Initializes the CRYP peripheral in AES ECB encryption mode
   *         then encrypt pPlainData. The cypher data are available in pCypherData
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Timeout: Specify Timeout value 
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Timeout Specify Timeout value 
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData, uint32_t Timeout)
@@ -339,7 +323,7 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pP
   __HAL_LOCK(hcryp);
 
   /* Check that data aligned on u32 and Size multiple of 16*/
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -401,12 +385,12 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pP
 /**
   * @brief  Initializes the CRYP peripheral in AES CBC encryption mode
   *         then encrypt pPlainData. The cypher data are available in pCypherData
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Timeout: Specify Timeout value  
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Timeout Specify Timeout value  
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData, uint32_t Timeout)
@@ -415,7 +399,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pP
   __HAL_LOCK(hcryp);
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -480,12 +464,12 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pP
 /**
   * @brief  Initializes the CRYP peripheral in AES CTR encryption mode
   *         then encrypt pPlainData. The cypher data are available in pCypherData
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Timeout: Specify Timeout value  
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Timeout Specify Timeout value  
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData, uint32_t Timeout)
@@ -494,7 +478,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pP
   __HAL_LOCK(hcryp);
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -559,12 +543,12 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pP
 /**
   * @brief  Initializes the CRYP peripheral in AES ECB decryption mode
   *         then decrypted pCypherData. The cypher data are available in pPlainData
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Timeout: Specify Timeout value  
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Timeout Specify Timeout value  
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData, uint32_t Timeout)
@@ -573,7 +557,7 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pC
   __HAL_LOCK(hcryp);
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -635,12 +619,12 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pC
 /**
   * @brief  Initializes the CRYP peripheral in AES ECB decryption mode
   *         then decrypted pCypherData. The cypher data are available in pPlainData
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Timeout: Specify Timeout value  
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Timeout Specify Timeout value  
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData, uint32_t Timeout)
@@ -649,7 +633,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pC
   __HAL_LOCK(hcryp);
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -714,12 +698,12 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pC
 /**
   * @brief  Initializes the CRYP peripheral in AES CTR decryption mode
   *         then decrypted pCypherData. The cypher data are available in pPlainData
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Timeout: Specify Timeout value   
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Timeout Specify Timeout value   
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData, uint32_t Timeout)
@@ -728,7 +712,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pC
   __HAL_LOCK(hcryp);
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -780,11 +764,11 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt(CRYP_HandleTypeDef *hcryp, uint8_t *pC
 
 /**
   * @brief  Initializes the CRYP peripheral in AES ECB encryption mode using Interrupt.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16 bytes
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16 bytes
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData)
@@ -792,7 +776,7 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
   uint32_t inputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -866,11 +850,11 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
 
 /**
   * @brief  Initializes the CRYP peripheral in AES CBC encryption mode using Interrupt.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16 bytes
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16 bytes
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData)
@@ -878,7 +862,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
   uint32_t inputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -955,11 +939,11 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
 
 /**
   * @brief  Initializes the CRYP peripheral in AES CTR encryption mode using Interrupt.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16 bytes
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16 bytes
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData)
@@ -967,7 +951,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
   uint32_t inputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1044,11 +1028,11 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
 
 /**
   * @brief  Initializes the CRYP peripheral in AES ECB decryption mode using Interrupt.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData)
@@ -1056,7 +1040,7 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
   uint32_t inputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1130,11 +1114,11 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
 
 /**
   * @brief  Initializes the CRYP peripheral in AES CBC decryption mode using IT.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData)
@@ -1142,7 +1126,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
   uint32_t inputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1219,11 +1203,11 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
 
 /**
   * @brief  Initializes the CRYP peripheral in AES CTR decryption mode using Interrupt.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData)
@@ -1231,7 +1215,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
   uint32_t inputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1308,11 +1292,11 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt_IT(CRYP_HandleTypeDef *hcryp, uint8_t 
 
 /**
   * @brief  Initializes the CRYP peripheral in AES ECB encryption mode using DMA.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16 bytes
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16 bytes
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData)
@@ -1320,7 +1304,7 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
   uint32_t inputaddr = 0U, outputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1373,11 +1357,11 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
 
 /**
   * @brief  Initializes the CRYP peripheral in AES CBC encryption mode using DMA.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData)
@@ -1385,7 +1369,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
   uint32_t inputaddr = 0U, outputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1441,11 +1425,11 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
 
 /**
   * @brief  Initializes the CRYP peripheral in AES CTR encryption mode using DMA.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16.
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16.
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t *pPlainData, uint16_t Size, uint8_t *pCypherData)
@@ -1453,7 +1437,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
   uint32_t inputaddr = 0U, outputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1510,11 +1494,11 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Encrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
 
 /**
   * @brief  Initializes the CRYP peripheral in AES ECB decryption mode using DMA.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16 bytes
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16 bytes
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData)
@@ -1522,7 +1506,7 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
   uint32_t inputaddr = 0U, outputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1579,11 +1563,11 @@ HAL_StatusTypeDef HAL_CRYP_AESECB_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
 
 /**
   * @brief  Initializes the CRYP peripheral in AES CBC encryption mode using DMA.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16 bytes
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16 bytes
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData)
@@ -1591,7 +1575,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
   uint32_t inputaddr = 0U, outputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1651,11 +1635,11 @@ HAL_StatusTypeDef HAL_CRYP_AESCBC_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
 
 /**
   * @brief  Initializes the CRYP peripheral in AES CTR decryption mode using DMA.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  pCypherData: Pointer to the cyphertext buffer (aligned on u32)
-  * @param  Size: Length of the plaintext buffer, must be a multiple of 16
-  * @param  pPlainData: Pointer to the plaintext buffer (aligned on u32)
+  * @param  pCypherData Pointer to the cyphertext buffer (aligned on u32)
+  * @param  Size Length of the plaintext buffer, must be a multiple of 16
+  * @param  pPlainData Pointer to the plaintext buffer (aligned on u32)
   * @retval HAL status
   */
 HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t *pCypherData, uint16_t Size, uint8_t *pPlainData)
@@ -1663,7 +1647,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
   uint32_t inputaddr = 0U, outputaddr = 0U;
   
   /* Check that data aligned on u32 */
-  if((((uint32_t)pPlainData & (uint32_t)0x00000003U) != 0U) || (((uint32_t)pCypherData & (uint32_t)0x00000003U) != 0U) || ((Size & (uint16_t)0x000FU) != 0U))
+  if((((uint32_t)pPlainData & 0x00000003UL) != 0U) || (((uint32_t)pCypherData & 0x00000003UL) != 0U) || ((Size & 0x000FU) != 0U))
   {
     /* Process Locked */
     __HAL_UNLOCK(hcryp);
@@ -1740,7 +1724,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
 
 /**
   * @brief  CRYP error callback.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval None
   */
@@ -1756,7 +1740,7 @@ HAL_StatusTypeDef HAL_CRYP_AESCTR_Decrypt_DMA(CRYP_HandleTypeDef *hcryp, uint8_t
 
 /**
   * @brief  Input transfer completed callback.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval None
   */
@@ -1772,7 +1756,7 @@ __weak void HAL_CRYP_InCpltCallback(CRYP_HandleTypeDef *hcryp)
 
 /**
   * @brief  Output transfer completed callback.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval None
   */
@@ -1805,7 +1789,7 @@ __weak void HAL_CRYP_OutCpltCallback(CRYP_HandleTypeDef *hcryp)
 
 /**
   * @brief  This function handles CRYP interrupt request.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval None
   */
@@ -1872,7 +1856,7 @@ void HAL_CRYP_IRQHandler(CRYP_HandleTypeDef *hcryp)
 
 /**
   * @brief  Returns the CRYP state.
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval HAL state
   */
@@ -1895,7 +1879,7 @@ HAL_CRYP_STATETypeDef HAL_CRYP_GetState(CRYP_HandleTypeDef *hcryp)
 
 /**
   * @brief  IT function called under interruption context to continue encryption or decryption
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
   * @retval HAL status
   */
@@ -1954,7 +1938,7 @@ static HAL_StatusTypeDef CRYP_EncryptDecrypt_IT(CRYP_HandleTypeDef *hcryp)
 }
 /**
   * @brief  DMA CRYP Input Data process complete callback.
-  * @param  hdma: DMA handle
+  * @param  hdma DMA handle
   * @retval None
   */
 static void CRYP_DMAInCplt(DMA_HandleTypeDef *hdma)  
@@ -1970,7 +1954,7 @@ static void CRYP_DMAInCplt(DMA_HandleTypeDef *hdma)
 
 /**
   * @brief  DMA CRYP Output Data process complete callback.
-  * @param  hdma: DMA handle
+  * @param  hdma DMA handle
   * @retval None
   */
 static void CRYP_DMAOutCplt(DMA_HandleTypeDef *hdma)
@@ -1996,7 +1980,7 @@ static void CRYP_DMAOutCplt(DMA_HandleTypeDef *hdma)
 
 /**
   * @brief  DMA CRYP communication error callback. 
-  * @param  hdma: DMA handle
+  * @param  hdma DMA handle
   * @retval None
   */
 static void CRYP_DMAError(DMA_HandleTypeDef *hdma)
@@ -2008,9 +1992,9 @@ static void CRYP_DMAError(DMA_HandleTypeDef *hdma)
 
 /**
   * @brief  Writes the Key in Key registers. 
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  Key: Pointer to Key buffer
+  * @param  Key Pointer to Key buffer
   * @note Key must be written as little endian.
   *         If Key pointer points at address n, 
   *         n[15:0] contains key[96:127], 
@@ -2034,9 +2018,9 @@ static void CRYP_SetKey(CRYP_HandleTypeDef *hcryp, uint8_t *Key)
 
 /**
   * @brief  Writes the InitVector/InitCounter in IV registers. 
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  InitVector: Pointer to InitVector/InitCounter buffer
+  * @param  InitVector Pointer to InitVector/InitCounter buffer
   * @note Init Vector must be written as little endian.
   *         If Init Vector pointer points at address n, 
   *         n[15:0] contains Vector[96:127], 
@@ -2060,12 +2044,12 @@ static void CRYP_SetInitVector(CRYP_HandleTypeDef *hcryp, uint8_t *InitVector)
 
 /**
   * @brief  Process Data: Writes Input data in polling mode and reads the output data
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  Input: Pointer to the Input buffer
-  * @param  Ilength: Length of the Input buffer, must be a multiple of 16.
-  * @param  Output: Pointer to the returned buffer
-  * @param  Timeout: Specify Timeout value  
+  * @param  Input Pointer to the Input buffer
+  * @param  Ilength Length of the Input buffer, must be a multiple of 16.
+  * @param  Output Pointer to the returned buffer
+  * @param  Timeout Specify Timeout value  
   * @retval None
   */
 static HAL_StatusTypeDef CRYP_ProcessData(CRYP_HandleTypeDef *hcryp, uint8_t* Input, uint16_t Ilength, uint8_t* Output, uint32_t Timeout)
@@ -2127,11 +2111,11 @@ static HAL_StatusTypeDef CRYP_ProcessData(CRYP_HandleTypeDef *hcryp, uint8_t* In
 
 /**
   * @brief  Set the DMA configuration and start the DMA transfer
-  * @param  hcryp: pointer to a CRYP_HandleTypeDef structure that contains
+  * @param  hcryp pointer to a CRYP_HandleTypeDef structure that contains
   *         the configuration information for CRYP module
-  * @param  inputaddr: address of the Input buffer
-  * @param  Size: Size of the Input buffer, must be a multiple of 16.
-  * @param  outputaddr: address of the Output buffer
+  * @param  inputaddr address of the Input buffer
+  * @param  Size Size of the Input buffer, must be a multiple of 16.
+  * @param  outputaddr address of the Output buffer
   * @retval None
   */
 static void CRYP_SetDMAConfig(CRYP_HandleTypeDef *hcryp, uint32_t inputaddr, uint16_t Size, uint32_t outputaddr)
@@ -2172,6 +2156,6 @@ static void CRYP_SetDMAConfig(CRYP_HandleTypeDef *hcryp, uint32_t inputaddr, uin
   */
 
 #endif /* HAL_CRYP_MODULE_ENABLED */
-#endif /* STM32L021xx || STM32L041xx || STM32L061xx || STM32L062xx || STM32L063xx || STM32L081xx || STM32L082xx || STM32L083xx */
+#endif /* STM32L021xx || STM32L041xx || STM32L062xx || STM32L063xx || STM32L081xx || STM32L082xx || STM32L083xx */
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
 

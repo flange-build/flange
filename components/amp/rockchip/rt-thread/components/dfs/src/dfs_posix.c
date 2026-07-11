@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -7,17 +7,12 @@
  * Date           Author       Notes
  * 2009-05-27     Yi.qiu       The first version
  * 2018-02-07     Bernard      Change the 3rd parameter of open/fcntl/ioctl to '...'
+ * 2022-01-19     Meco Man     add creat()
  */
 
-#include <dfs.h>
-#include <dfs_posix.h>
-#include "dfs_private.h"
-
-/**
- * @addtogroup FsPosixApi
- */
-
-/*@{*/
+#include <dfs_file.h>
+#include <dfs_private.h>
+#include <sys/errno.h>
 
 /**
  * this function is a POSIX compliant version, which will open a file and
@@ -61,6 +56,21 @@ int open(const char *file, int flags, ...)
     return fd;
 }
 RTM_EXPORT(open);
+
+/**
+ * this function is a POSIX compliant version,
+ * which will create a new file or rewrite an existing one
+ *
+ * @param path the path name of file.
+ * @param mode the file permission bits to be used in creating the file (not used, can be 0)
+ *
+ * @return the non-negative integer on successful open, others for failed.
+ */
+int creat(const char *path, mode_t mode)
+{
+    return open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+}
+RTM_EXPORT(creat);
 
 /**
  * this function is a POSIX compliant version, which will close the open
@@ -110,10 +120,10 @@ RTM_EXPORT(close);
  * @return the actual read data buffer length. If the returned value is 0, it
  * may be reach the end of file, please check errno.
  */
-#if defined(RT_USING_NEWLIB) && defined(_EXFUN)
-_READ_WRITE_RETURN_TYPE _EXFUN(read, (int fd, void *buf, size_t len))
+#ifdef _READ_WRITE_RETURN_TYPE
+_READ_WRITE_RETURN_TYPE read(int fd, void *buf, size_t len) /* some gcc tool chains will use different data structure */
 #else
-int read(int fd, void *buf, size_t len)
+ssize_t read(int fd, void *buf, size_t len)
 #endif
 {
     int result;
@@ -154,10 +164,10 @@ RTM_EXPORT(read);
  *
  * @return the actual written data buffer length.
  */
-#if defined(RT_USING_NEWLIB) && defined(_EXFUN)
-_READ_WRITE_RETURN_TYPE _EXFUN(write, (int fd, const void *buf, size_t len))
+#ifdef _READ_WRITE_RETURN_TYPE
+_READ_WRITE_RETURN_TYPE write(int fd, const void *buf, size_t len) /* some gcc tool chains will use different data structure */
 #else
-int write(int fd, const void *buf, size_t len)
+ssize_t write(int fd, const void *buf, size_t len)
 #endif
 {
     int result;
@@ -254,6 +264,7 @@ off_t lseek(int fd, off_t offset, int whence)
 }
 RTM_EXPORT(lseek);
 
+#ifndef _WIN32
 /**
  * this function is a POSIX compliant version, which will rename old file name
  * to new file name.
@@ -265,11 +276,11 @@ RTM_EXPORT(lseek);
  *
  * note: the old and new file name must be belong to a same file system.
  */
-int rename(const char *old, const char *new)
+int rename(const char *old_file, const char *new_file)
 {
     int result;
 
-    result = dfs_file_rename(old, new);
+    result = dfs_file_rename(old_file, new_file);
     if (result < 0)
     {
         rt_set_errno(result);
@@ -280,6 +291,7 @@ int rename(const char *old, const char *new)
     return 0;
 }
 RTM_EXPORT(rename);
+#endif
 
 /**
  * this function is a POSIX compliant version, which will unlink (remove) a
@@ -305,7 +317,6 @@ int unlink(const char *pathname)
 }
 RTM_EXPORT(unlink);
 
-#ifndef _WIN32 /* we can not implement these functions */
 /**
  * this function is a POSIX compliant version, which will get file information.
  *
@@ -370,7 +381,6 @@ int fstat(int fildes, struct stat *buf)
     return RT_EOK;
 }
 RTM_EXPORT(fstat);
-#endif
 
 /**
  * this function is a POSIX compliant version, which shall request that all data
@@ -423,11 +433,11 @@ int fcntl(int fildes, int cmd, ...)
     d = fd_get(fildes);
     if (d)
     {
-        void* arg;
+        void *arg;
         va_list ap;
 
         va_start(ap, cmd);
-        arg = va_arg(ap, void*);
+        arg = va_arg(ap, void *);
         va_end(ap);
 
         ret = dfs_file_ioctl(d, cmd, arg);
@@ -459,17 +469,63 @@ RTM_EXPORT(fcntl);
  */
 int ioctl(int fildes, int cmd, ...)
 {
-    void* arg;
+    void *arg;
     va_list ap;
 
     va_start(ap, cmd);
-    arg = va_arg(ap, void*);
+    arg = va_arg(ap, void *);
     va_end(ap);
 
     /* we use fcntl for this API. */
     return fcntl(fildes, cmd, arg);
 }
 RTM_EXPORT(ioctl);
+
+/**
+ *
+ * this function is a POSIX compliant version, which cause the regular file
+ * referenced by fd to be truncated to a size of precisely length bytes.
+ * @param fd the file descriptor.
+ * @param length the length to be truncated.
+ *
+ * @return Upon successful completion, ftruncate() shall return 0;
+ * otherwise, -1 shall be returned and errno set to indicate the error.
+ */
+int ftruncate(int fd, off_t length)
+{
+    int result;
+    struct dfs_fd *d;
+
+    d = fd_get(fd);
+    if (d == NULL)
+    {
+        rt_set_errno(-EBADF);
+
+        return -1;
+    }
+
+    if (length < 0)
+    {
+        fd_put(d);
+        rt_set_errno(-EINVAL);
+
+        return -1;
+    }
+    result = dfs_file_ftruncate(d, length);
+    if (result < 0)
+    {
+        fd_put(d);
+        rt_set_errno(result);
+
+        return -1;
+    }
+
+    /* release the ref-count of fd */
+    fd_put(d);
+
+    return 0;
+}
+RTM_EXPORT(ftruncate);
 
 /**
  * this function is a POSIX compliant version, which will return the
@@ -539,11 +595,6 @@ int mkdir(const char *path, mode_t mode)
 }
 RTM_EXPORT(mkdir);
 
-#ifdef RT_USING_FINSH
-#include <finsh.h>
-FINSH_FUNCTION_EXPORT(mkdir, create a directory);
-#endif
-
 /**
  * this function is a POSIX compliant version, which will remove a directory.
  *
@@ -604,7 +655,7 @@ DIR *opendir(const char *name)
         }
         else
         {
-            memset(t, 0, sizeof(DIR));
+            rt_memset(t, 0, sizeof(DIR));
 
             t->fd = fd;
         }
@@ -645,8 +696,8 @@ struct dirent *readdir(DIR *d)
 
     if (d->num)
     {
-        struct dirent* dirent_ptr;
-        dirent_ptr = (struct dirent*)&d->buf[d->cur];
+        struct dirent *dirent_ptr;
+        dirent_ptr = (struct dirent *)&d->buf[d->cur];
         d->cur += dirent_ptr->d_reclen;
     }
 
@@ -654,7 +705,7 @@ struct dirent *readdir(DIR *d)
     {
         /* get a new entry */
         result = dfs_file_getdents(fd,
-                                   (struct dirent*)d->buf,
+                                   (struct dirent *)d->buf,
                                    sizeof(d->buf) - 1);
         if (result <= 0)
         {
@@ -670,7 +721,7 @@ struct dirent *readdir(DIR *d)
 
     fd_put(fd);
 
-    return (struct dirent *)(d->buf+d->cur);
+    return (struct dirent *)(d->buf + d->cur);
 }
 RTM_EXPORT(readdir);
 
@@ -900,5 +951,3 @@ char *getcwd(char *buf, size_t size)
     return buf;
 }
 RTM_EXPORT(getcwd);
-
-/* @} */

@@ -74,7 +74,20 @@ The user is responsible for destroying any RPMsg-Lite objects he has created in 
 
 ![RPMsg Lite copy and no-copy interface, multiple scenarios](./images/rpmsg_lite_send_receive.png)
 
-# Configuration options {#configuration}
+# Notes {#notes}
+## Environment layers implementation {#Environment_layers_implementation}
+Several environment layers are provided in lib/rpmsg_lite/porting/environment folder. Not all of them are fully tested however. Here is the list of environment layers that passed testing:
+- rpmsg_env_bm.c
+- rpmsg_env_freertos.c
+- rpmsg_env_xos.c
+- rpmsg_env_threadx.c
+
+The rest of environment layers has been created and used in some experimental projects, it has been running well at the time of creation but due to the lack of unit testing there is no guarantee it is still fully functional.
+
+## Shared memory configuration {#Shared_memory_configuration}
+It is important to correctly initialize/configure the shared memory for data exchange in the application. The shared memory must be accessible from both the master and the remote core and it needs to be configured as Non-Cacheable memory. Dedicated shared memory section in liker file is also a good practise, it is recommended to use linker files from MCUXpressSDK packages for NXP devices based applications. It needs to be ensured no other application part/component is unintentionally accessing this part of memory. 
+
+# Configuration options {#configuration_options}
 
 The RPMsg-Lite can be configured at the compile time. The default configuration is defined in the rpmsg_default_config.h header file. This configuration can be customized by the user by including rpmsg_config.h file with custom settings. The following table summarizes all possible RPMsg-Lite configuration options.
 
@@ -88,7 +101,7 @@ The RPMsg-Lite can be configured at the compile time. The default configuration 
 |RL_CLEAR_USED_BUFFERS         | (0)           | Clearing used buffers before returning back to the pool of free buffers enabled/disabled.   |
 |RL_USE_MCMGR_IPC_ISR_HANDLER  | (0)           | When enabled IPC interrupts are managed by the Multicore Manager (IPC interrupts router), when disabled RPMsg-Lite manages IPC interrupts by itself.   |
 |RL_USE_ENVIRONMENT_CONTEXT    | (0)           | When enabled the environment layer uses its own context. Required for some environments (QNX). The default value is 0 (no context, saves some RAM).    |
-|RL_DEBUG_CHECK_BUFFERS        | (0)           | When enabled buffer debug checks in rpmsg_lite_send_nocopy() and rpmsg_lite_release_rx_buffer() functions are disabled. Do not use in RPMsg-Lite to Linux configuration.    |
+|RL_DEBUG_CHECK_BUFFERS        | (0)           | When enabled buffer pointers passed to rpmsg_lite_send_nocopy() and rpmsg_lite_release_rx_buffer() functions (enabled by RL_API_HAS_ZEROCOPY config) are checked to avoid passing invalid buffer pointer. The default value is 0 (disabled). Do not use in RPMsg-Lite to Linux configuration.    |
 |RL_ALLOW_CONSUMED_BUFFERS_NOTIFICATION        | (0)           | When enabled the opposite side is notified each time received buffers are consumed and put into the queue of available buffers. Enable this option in RPMsg-Lite to Linux configuration to allow unblocking of the Linux blocking send. The default value is 0 (RPMsg-Lite to RPMsg-Lite communication).    |
 |RL_ALLOW_CUSTOM_SHMEM_CONFIG  | (0)           | It allows to define custom shared memory configuration and replacing the shared memory related global settings from rpmsg_config.h This is useful when multiple instances are running in parallel but different shared memory arrangement (vring size & alignment, buffers size & count) is required. The default value is 0 (all RPMsg_Lite instances use the same shared memory arrangement as defined by common config macros). |
 |RL_ASSERT                     | see rpmsg_default_config.h | Assert implementation.    |
@@ -116,4 +129,6 @@ This table summarizes revisions of this document.
 |11.0           | 12/2021 | Improve static allocations - allow OS-specific objects being allocated statically, GitHub PR #14 <p> RPMsg-Lite: Minor Misra and typo corrections, GitHub PR #19, #20.  |
 |12.0           | 01/2022 | Introduce RL_ALLOW_CUSTOM_SHMEM_CONFIG configuration option to support custom shared memory arangement per the RPMsg_Lite instance.  |
 |13.0           | 04/2022 | Introduced new rpmsg_lite_wait_for_link_up() API function - this allows to avoid using busy loops in rtos environments, GitHub PR #21. <p> Adjust rpmsg_lite_is_link_up() to return RL_TRUE/RL_FALSE.  |
+|14.0           | 10/2022 | Timeout parameter added to rpmsg_lite_wait_for_link_up API function. <p> VRING_SIZE is set based on number of used buffers now (as calculated in vring_init) - updated for all platforms that are not communicating to Linux rpmsg counterpart. <p> Improveed debug check buffers implementation - instead of checking the pointer fits into shared memory check the presence in the VirtIO ring descriptors list.  |
+|15.0           | 06/2023 | Resolved issues in ThreadX env. layer implementation. <p> Added aarch64 support. <p> Increased the queue size to (2 * RL_BUFFER_COUNT) to cover zero copy cases.  |
 

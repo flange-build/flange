@@ -28,6 +28,9 @@
 #include <drv_psram.h>
 #endif
 
+#include <tfm_ns_interface.h>
+#include <tfm_platform_api.h>
+
 struct pm_mode_ctrl
 {
     struct pm_mode_dvfs *pm_dvfs;
@@ -73,7 +76,6 @@ rt_uint32_t rk_pm_timer_to_tick(rt_uint64_t timer_count)
     return (rt_uint32_t)HAL_DivU64((rt_uint64_t)(timer_count * RT_TICK_PER_SECOND), PLL_INPUT_OSC_RATE);
 }
 
-#ifdef RT_USING_PM
 #ifdef RT_USING_PM_DVFS
 static void pm_mode_list_dvfs(struct rt_pm *pm, uint32_t run_flag)
 {
@@ -114,73 +116,28 @@ static void pm_mode_list_dvfs(struct rt_pm *pm, uint32_t run_flag)
 {
 }
 #endif
-static void rk_pm_enter(struct rt_pm *pm)
+
+static void _pm_sleep(struct rt_pm *pm, rt_uint8_t mode)
 {
-    struct PM_SUSPEND_INFO suspendInfo = {0};
-    int channel;
+    rt_base_t level;
 
-    if (pm->current_mode >= PM_RUN_MODE_HIGH &&
-            pm->current_mode <= PM_RUN_MODE_LOW)
+    if (mode != PM_SLEEP_MODE_DEEP)
     {
-        pm_mode_list_dvfs(pm, 1);
-        if (pm_ctrl.pm_func)
-            pm_ctrl.pm_func(pm->current_mode);
+        __DSB();
+        __WFI();
+        return;
     }
-    else if (pm->current_mode >= PM_SLEEP_MODE_SLEEP &&
-             pm->current_mode <= PM_SLEEP_MODE_TIMER)
-    {
-        pm_mode_list_dvfs(pm, 0);
-        if (pm_ctrl.pm_func)
-            pm_ctrl.pm_func(pm->current_mode);
-        pm_ctrl.has_enter_sleep = 1;
 
-#ifdef RT_USING_UART
-        channel = rt_hw_console_channel();
-        if (channel >= 0)
-        {
-            suspendInfo.flag.uartChannel = channel;
-            suspendInfo.flag.uartValid = 1;
-        }
-#endif
+    rt_kprintf("[PM: sleep]: enter\n");
+    level = rt_hw_interrupt_disable();
 
-#if defined(RT_USING_QPIPSRAM)
-        rk_psram_suspend();
-#endif
+    tfm_platform_system_suspend();
+    SystemInit();
+    pm_mode_list_dvfs(pm, mode);
 
-#ifdef RT_USING_SNOR
-        rk_snor_suspend();
-#endif
-        HAL_SYS_Suspend(&suspendInfo);
-#ifdef RT_USING_SNOR
-        rk_snor_resume();
-#endif
-
-#if defined(RT_USING_QPIPSRAM)
-        rk_psram_resume();
-#endif
-
-#ifdef RT_USING_PM_TICK_DELAY
-        pm_ref_timer_count_reinit();
-#endif
-    }
-    else if (pm->current_mode == PM_SLEEP_MODE_SHUTDOWN)
-    {
-        /* need be implemented */
-    }
-    pm_ctrl.mode = pm->current_mode;
+    rt_kprintf("[PM: sleep]: exit\n");
+    rt_hw_interrupt_enable(level);
 }
-
-static void rk_pm_exit(struct rt_pm *pm)
-{
-    /* need be implemented */
-    return;
-}
-
-static void rk_pm_frequency_change(struct rt_pm *pm, rt_uint32_t frequency)
-{
-    return;
-}
-
 
 #if defined(RT_USING_PM_TIMER) || defined(RT_USING_PM_TICK_DELAY)
 #ifdef PM_TIMER
@@ -289,16 +246,15 @@ uint64_t pm_ref_timer_get_count(void)
 
 static struct rt_pm_ops rk_pm_ops =
 {
-    .enter = rk_pm_enter,
-    .exit = rk_pm_exit,
+    .sleep = _pm_sleep,
 #if PM_RUN_MODE_COUNT > 1
     .frequency_change = rk_pm_frequency_change,
 #endif
+
     .timer_start = rk_pm_timer_start,
     .timer_stop = rk_pm_timer_stop,
     .timer_get_tick = rk_pm_timer_get_tick,
 };
-#endif
 
 static void rt_pm_task_idle_prepare(void)
 {
@@ -410,13 +366,16 @@ static int rkpm_dvfs_init(void)
 
 int rk_rt_pm_init(void)
 {
+    rt_uint8_t timer_mask = 0;
     rt_err_t ret;
 
     rt_thread_idle_sethook(rt_pm_task_idle_prepare);
 
 #ifdef RT_USING_PM
-    rt_system_pm_init(&rk_pm_ops, 1 << PM_SLEEP_MODE_SLEEP, NULL);
+    timer_mask = (1UL << PM_SLEEP_MODE_DEEP) | (1UL << PM_SLEEP_MODE_STANDBY);
+    rt_system_pm_init(&rk_pm_ops, timer_mask, NULL);
 #endif
+    tfm_ns_interface_init();
 
     ret = rt_thread_idle_sethook(rt_pm_task_idle_wfi);
     if (ret)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -11,13 +11,15 @@
 #include <rtthread.h>
 #include <wlan_cfg.h>
 
+#define DBG_TAG "WLAN.cfg"
 #ifdef RT_WLAN_CFG_DEBUG
-#define DBG_LEVEL DBG_LOG
+#define DBG_LVL DBG_LOG
 #else
-#define DBG_LEVEL DBG_INFO
-#endif
-#define DBG_SECTION_NAME  "WLAN.cfg"
+#define DBG_LVL DBG_INFO
+#endif /* RT_WLAN_CFG_DEBUG */
 #include <rtdbg.h>
+
+#ifdef RT_WLAN_CFG_ENABLE
 
 #define WLAN_CFG_LOCK()      (rt_mutex_take(&cfg_mutex, RT_WAITING_FOREVER))
 #define WLAN_CFG_UNLOCK()    (rt_mutex_release(&cfg_mutex))
@@ -55,9 +57,12 @@ static rt_uint16_t rt_wlan_cal_crc(rt_uint8_t *buff, int len)
 
     while (len--)
     {
+        int i;
+
         wChar = *(buff++);
         wCRCin ^= (wChar << 8);
-        for (int i = 0; i < 8; i++)
+
+        for (i = 0; i < 8; i++)
         {
             if (wCRCin & 0x8000)
                 wCRCin = (wCRCin << 1) ^ wCPoly;
@@ -79,7 +84,7 @@ void rt_wlan_cfg_init(void)
             rt_memset(cfg_cache, 0, sizeof(struct rt_wlan_cfg_des));
         }
         /* init mutex lock */
-        rt_mutex_init(&cfg_mutex, "wlan_cfg", RT_IPC_FLAG_FIFO);
+        rt_mutex_init(&cfg_mutex, "wlan_cfg", RT_IPC_FLAG_PRIO);
     }
 }
 
@@ -459,3 +464,5 @@ void rt_wlan_cfg_dump(void)
         rt_kprintf("%3d    \n", info->channel);
     }
 }
+
+#endif

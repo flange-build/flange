@@ -133,7 +133,7 @@ typedef struct
     snd_pcm_sframes_t (*mmap_commit)(snd_pcm_t *pcm, snd_pcm_uframes_t offset, snd_pcm_uframes_t size); /* locked */
 } snd_pcm_fast_ops_t;
 
-int snd_pcm_plugin_controls(snd_pcm_t *pcm, uint32 cmd, void *args);
+int snd_pcm_plugin_controls(snd_pcm_t *pcm, uint32 cmd, int stream, void *args);
 
 rt_size_t snd_pcm_plugin_write(snd_pcm_t *pcm, const void *buffer, int size);
 rt_size_t snd_pcm_plugin_read(snd_pcm_t *pcm, void *buffer, int size);

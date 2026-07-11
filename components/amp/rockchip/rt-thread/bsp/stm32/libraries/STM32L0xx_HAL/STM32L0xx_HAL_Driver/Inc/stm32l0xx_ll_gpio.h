@@ -6,29 +6,13 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2016 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright(c) 2016 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
@@ -150,7 +134,7 @@ typedef struct
 /** @defgroup GPIO_LL_EC_MODE Mode
   * @{
   */
-#define LL_GPIO_MODE_INPUT                 ((uint32_t)0x00000000U) /*!< Select input mode */
+#define LL_GPIO_MODE_INPUT                 (0x00000000U)       /*!< Select input mode */
 #define LL_GPIO_MODE_OUTPUT                GPIO_MODER_MODE0_0  /*!< Select output mode */
 #define LL_GPIO_MODE_ALTERNATE             GPIO_MODER_MODE0_1  /*!< Select alternate function mode */
 #define LL_GPIO_MODE_ANALOG                GPIO_MODER_MODE0    /*!< Select analog mode */
@@ -161,7 +145,7 @@ typedef struct
 /** @defgroup GPIO_LL_EC_OUTPUT Output Type
   * @{
   */
-#define LL_GPIO_OUTPUT_PUSHPULL            ((uint32_t)0x00000000U) /*!< Select push-pull as output type */
+#define LL_GPIO_OUTPUT_PUSHPULL            (0x00000000U)    /*!< Select push-pull as output type */
 #define LL_GPIO_OUTPUT_OPENDRAIN           GPIO_OTYPER_OT_0 /*!< Select open-drain as output type */
 /**
   * @}
@@ -170,7 +154,7 @@ typedef struct
 /** @defgroup GPIO_LL_EC_SPEED Output Speed
   * @{
   */
-#define LL_GPIO_SPEED_FREQ_LOW             ((uint32_t)0x00000000U) /*!< Select I/O low output speed    */
+#define LL_GPIO_SPEED_FREQ_LOW             (0x00000000U)           /*!< Select I/O low output speed    */
 #define LL_GPIO_SPEED_FREQ_MEDIUM          GPIO_OSPEEDER_OSPEED0_0 /*!< Select I/O medium output speed */
 #define LL_GPIO_SPEED_FREQ_HIGH            GPIO_OSPEEDER_OSPEED0_1 /*!< Select I/O fast output speed   */
 #define LL_GPIO_SPEED_FREQ_VERY_HIGH       GPIO_OSPEEDER_OSPEED0   /*!< Select I/O high output speed   */
@@ -185,7 +169,7 @@ typedef struct
 /** @defgroup GPIO_LL_EC_PULL Pull Up Pull Down
   * @{
   */
-#define LL_GPIO_PULL_NO                    ((uint32_t)0x00000000U) /*!< Select I/O no pull */
+#define LL_GPIO_PULL_NO                    (0x00000000U)      /*!< Select I/O no pull */
 #define LL_GPIO_PULL_UP                    GPIO_PUPDR_PUPD0_0 /*!< Select I/O pull up */
 #define LL_GPIO_PULL_DOWN                  GPIO_PUPDR_PUPD0_1 /*!< Select I/O pull down */
 /**
@@ -195,14 +179,14 @@ typedef struct
 /** @defgroup GPIO_LL_EC_AF Alternate Function
   * @{
   */
-#define LL_GPIO_AF_0                       ((uint32_t)0x0000000U) /*!< Select alternate function 0 */
-#define LL_GPIO_AF_1                       ((uint32_t)0x0000001U) /*!< Select alternate function 1 */
-#define LL_GPIO_AF_2                       ((uint32_t)0x0000002U) /*!< Select alternate function 2 */
-#define LL_GPIO_AF_3                       ((uint32_t)0x0000003U) /*!< Select alternate function 3 */
-#define LL_GPIO_AF_4                       ((uint32_t)0x0000004U) /*!< Select alternate function 4 */
-#define LL_GPIO_AF_5                       ((uint32_t)0x0000005U) /*!< Select alternate function 5 */
-#define LL_GPIO_AF_6                       ((uint32_t)0x0000006U) /*!< Select alternate function 6 */
-#define LL_GPIO_AF_7                       ((uint32_t)0x0000007U) /*!< Select alternate function 7 */
+#define LL_GPIO_AF_0                       (0x0000000U) /*!< Select alternate function 0 */
+#define LL_GPIO_AF_1                       (0x0000001U) /*!< Select alternate function 1 */
+#define LL_GPIO_AF_2                       (0x0000002U) /*!< Select alternate function 2 */
+#define LL_GPIO_AF_3                       (0x0000003U) /*!< Select alternate function 3 */
+#define LL_GPIO_AF_4                       (0x0000004U) /*!< Select alternate function 4 */
+#define LL_GPIO_AF_5                       (0x0000005U) /*!< Select alternate function 5 */
+#define LL_GPIO_AF_6                       (0x0000006U) /*!< Select alternate function 6 */
+#define LL_GPIO_AF_7                       (0x0000007U) /*!< Select alternate function 7 */
 /**
   * @}
   */
@@ -556,7 +540,7 @@ __STATIC_INLINE uint32_t LL_GPIO_GetPinPull(GPIO_TypeDef *GPIOx, uint32_t Pin)
   */
 __STATIC_INLINE void LL_GPIO_SetAFPin_0_7(GPIO_TypeDef *GPIOx, uint32_t Pin, uint32_t Alternate)
 {
-  MODIFY_REG(GPIOx->AFR[0], ((((Pin * Pin) * Pin) * Pin) * GPIO_AFRL_AFRL0),
+  MODIFY_REG(GPIOx->AFR[0], ((((Pin * Pin) * Pin) * Pin) * GPIO_AFRL_AFSEL0),
              ((((Pin * Pin) * Pin) * Pin) * Alternate));
 }
 
@@ -586,7 +570,7 @@ __STATIC_INLINE void LL_GPIO_SetAFPin_0_7(GPIO_TypeDef *GPIOx, uint32_t Pin, uin
 __STATIC_INLINE uint32_t LL_GPIO_GetAFPin_0_7(GPIO_TypeDef *GPIOx, uint32_t Pin)
 {
   return (uint32_t)(READ_BIT(GPIOx->AFR[0],
-                             ((((Pin * Pin) * Pin) * Pin) * GPIO_AFRL_AFRL0)) / (((Pin * Pin) * Pin) * Pin));
+                             ((((Pin * Pin) * Pin) * Pin) * GPIO_AFRL_AFSEL0)) / (((Pin * Pin) * Pin) * Pin));
 }
 
 /**
@@ -617,7 +601,7 @@ __STATIC_INLINE uint32_t LL_GPIO_GetAFPin_0_7(GPIO_TypeDef *GPIOx, uint32_t Pin)
   */
 __STATIC_INLINE void LL_GPIO_SetAFPin_8_15(GPIO_TypeDef *GPIOx, uint32_t Pin, uint32_t Alternate)
 {
-  MODIFY_REG(GPIOx->AFR[1], (((((Pin >> 8U) * (Pin >> 8U)) * (Pin >> 8U)) * (Pin >> 8U)) * GPIO_AFRH_AFRH0),
+  MODIFY_REG(GPIOx->AFR[1], (((((Pin >> 8U) * (Pin >> 8U)) * (Pin >> 8U)) * (Pin >> 8U)) * GPIO_AFRH_AFSEL8),
              (((((Pin >> 8U) * (Pin >> 8U)) * (Pin >> 8U)) * (Pin >> 8U)) * Alternate));
 }
 
@@ -648,7 +632,7 @@ __STATIC_INLINE void LL_GPIO_SetAFPin_8_15(GPIO_TypeDef *GPIOx, uint32_t Pin, ui
 __STATIC_INLINE uint32_t LL_GPIO_GetAFPin_8_15(GPIO_TypeDef *GPIOx, uint32_t Pin)
 {
   return (uint32_t)(READ_BIT(GPIOx->AFR[1],
-                             (((((Pin >> 8U) * (Pin >> 8U)) * (Pin >> 8U)) * (Pin >> 8U)) * GPIO_AFRH_AFRH0)) / ((((Pin >> 8U) *
+                             (((((Pin >> 8U) * (Pin >> 8U)) * (Pin >> 8U)) * (Pin >> 8U)) * GPIO_AFRH_AFSEL8)) / ((((Pin >> 8U) *
                                  (Pin >> 8U)) * (Pin >> 8U)) * (Pin >> 8U)));
 }
 
@@ -688,6 +672,7 @@ __STATIC_INLINE void LL_GPIO_LockPin(GPIO_TypeDef *GPIOx, uint32_t PinMask)
   WRITE_REG(GPIOx->LCKR, GPIO_LCKR_LCKK | PinMask);
   WRITE_REG(GPIOx->LCKR, PinMask);
   WRITE_REG(GPIOx->LCKR, GPIO_LCKR_LCKK | PinMask);
+  /* Read LCKK register. This read is mandatory to complete key lock sequence */
   temp = READ_REG(GPIOx->LCKR);
   (void) temp;
 }
@@ -916,7 +901,8 @@ __STATIC_INLINE void LL_GPIO_ResetOutputPin(GPIO_TypeDef *GPIOx, uint32_t PinMas
   */
 __STATIC_INLINE void LL_GPIO_TogglePin(GPIO_TypeDef *GPIOx, uint32_t PinMask)
 {
-  WRITE_REG(GPIOx->ODR, READ_REG(GPIOx->ODR) ^ PinMask);
+  uint32_t odr = READ_REG(GPIOx->ODR);
+  WRITE_REG(GPIOx->BSRR, ((odr & PinMask) << 16u) | (~odr & PinMask));
 }
 
 /**

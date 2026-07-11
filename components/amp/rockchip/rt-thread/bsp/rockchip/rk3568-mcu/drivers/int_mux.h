@@ -20,10 +20,9 @@
 #define INT_MUX 0xFE790000
 #define INT_MUX_FLAG_LEVEL2 0x0100
 #define INT_MUX_GROUP 0x80
-#define INT_GROUP 32
+#define INT_GROUP 16
 
 void rt_hw_interrupt_active(int vector);
-void rt_hw_interrupt_deactive(int vector);
 rt_uint32_t rt_hw_interrupt_get_active(void);
 
 #endif

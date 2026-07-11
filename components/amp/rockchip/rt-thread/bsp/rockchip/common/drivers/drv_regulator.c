@@ -74,7 +74,7 @@ static struct
  * @param descs: the power regulator description pointer.
  * @param num: count num.
  * @retval RT_EOK:  mutex create successfully
- * @retval -RT_ERROR: mutex create failed
+ * @retval RT_ERROR: mutex create failed
  */
 static rt_err_t regulator_mutex_new(struct regulator_desc *descs, int num)
 {
@@ -102,7 +102,7 @@ static rt_err_t regulator_mutex_new(struct regulator_desc *descs, int num)
  * @brief regulator mutex take.
  * @param descs: the power regulator description pointer.
  * @retval RT_EOK:  mutex take successfully
- * @retval -RT_ERROR: mutex take failed
+ * @retval RT_ERROR: mutex take failed
  */
 static rt_err_t regulator_mutex_take(struct regulator_desc *descs)
 {
@@ -118,7 +118,7 @@ static rt_err_t regulator_mutex_take(struct regulator_desc *descs)
  * @brief regulator mutex release.
  * @param descs: the power regulator description pointer.
  * @retval RT_EOK:  mutex release successfully
- * @retval -RT_ERROR: mutex release failed
+ * @retval RT_ERROR: mutex release failed
  */
 static rt_err_t regulator_mutex_release(struct regulator_desc *descs)
 {
@@ -132,7 +132,7 @@ static rt_err_t regulator_mutex_release(struct regulator_desc *descs)
 
 static int __regulator_get_voltage(struct regulator_desc *descs)
 {
-    int ret = -RT_ERROR;
+    int ret = RT_ERROR;
 
     regulator_mutex_take(descs);
 
@@ -668,6 +668,80 @@ static void regulator_dump(void)
 
 #include <finsh.h>
 MSH_CMD_EXPORT(regulator_dump, regulator drive dump. e.g: regulator_dump);
+
+/**
+ * @brief  regulator get voltage, used for debug.
+ */
+static void regulator_get(int argc, char **argv)
+{
+    const struct regulator_init *inits = regulator_inits;
+    struct regulator_desc *desc;
+
+    if (inits == NULL)
+        return;
+
+    if (argc != 2)
+    {
+        rt_kprintf("regulator_get <name>\n");
+        return;
+    }
+
+    while (inits->pwrId)
+    {
+        if (strcmp(inits->name, argv[1]))
+        {
+            inits++;
+            continue;
+        }
+        desc = regulator_get_desc_by_pwrid(inits->pwrId);
+        if (desc)
+        {
+            rt_kprintf("get %s = %d\n", inits->name, regulator_get_voltage(desc));
+            return;
+        }
+        inits++;
+    }
+}
+
+MSH_CMD_EXPORT(regulator_get, regulator drive get. e.g: regulator_get <name>);
+
+/**
+ * @brief  regulator set voltage, used for debug.
+ */
+static void regulator_set(int argc, char **argv)
+{
+    const struct regulator_init *inits = regulator_inits;
+    struct regulator_desc *desc;
+
+    if (inits == NULL)
+        return;
+
+    if (argc != 3)
+    {
+        rt_kprintf("regulator_set <name> <value>\n");
+        return;
+    }
+
+    while (inits->pwrId)
+    {
+        if (strcmp(inits->name, argv[1]))
+        {
+            inits++;
+            continue;
+        }
+        desc = regulator_get_desc_by_pwrid(inits->pwrId);
+        if (desc && atoi(argv[2]))
+        {
+            rt_kprintf("set %s = %d\n", inits->name, atoi(argv[2]));
+            regulator_set_voltage(desc, atoi(argv[2]));
+            rt_kprintf("get %s = %d\n", inits->name, regulator_get_voltage(desc));
+            return;
+        }
+        inits++;
+    }
+}
+
+MSH_CMD_EXPORT(regulator_set, regulator drive set. e.g: regulator_set <name> <value>);
 #endif
 
 /** @} */

@@ -1,0 +1,98 @@
+if RT_USING_SNOR
+
+config RT_SNOR_DEVICE_AUTOSELECT
+    bool "Autoselect SPI Nor flash"
+    default y
+    help
+      By default, auto-selects all SPI Nor flash chips.
+
+menu "SPI Nor flash"
+    visible if !RT_SNOR_DEVICE_AUTOSELECT
+
+config RT_SNOR_BOYA
+    bool "BOYA SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various BOYA SPI flash chips (BY25xxx)
+
+config RT_SNOR_DOSILICON
+    bool "DOSILICON SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various DOSILICON SPI flash chips (FM25xxx)
+
+config RT_SNOR_EON
+    bool "EON SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various EON SPI flash chips (EN25xxx)
+
+config RT_SNOR_ESMT
+    bool "ESMT SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various ESMT SPI flash chips (F25xxx and EN25)
+
+config RT_SNOR_FMSH
+    bool "FMSH SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various FMSH SPI flash chips (FM25xxx)
+
+config RT_SNOR_GIGADEVICE
+    bool "GigaDevice SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various GigaDevice SPI flash chips (GD25xxx)
+
+config RT_SNOR_ISSI
+    bool "ISSI SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various ISSI SPI flash chips (ISxxx)
+
+config RT_SNOR_MACRONIX
+    bool "Macronix SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various Macronix SPI flash chips (MX25Lxxx)
+
+config RT_SNOR_NORMEM
+    bool "NORMEM SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various NORMEM SPI flash chips (NM25xxx)
+
+config RT_SNOR_PUYA
+    bool "PUYA SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various PUYA SPI flash chips (PY25xxx)
+
+config RT_SNOR_WINBOND
+    bool "Winbond SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various WINBOND SPI flash chips (W25xxx)
+
+config RT_SNOR_XMC
+    bool "XMC SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various XMC SPI flash chips (XM25xxx)
+
+config RT_SNOR_XTX
+    bool "XTX SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various XTX SPI flash chips (XT25xxx)
+
+config RT_SNOR_ZBIT
+    bool "ZBIT SPI flash support"
+    default y if RT_SNOR_DEVICE_AUTOSELECT
+    help
+      Add support for various ZBIT SPI flash chips (ZB25xxx)
+
+endmenu
+
+endif # RT_SNOR

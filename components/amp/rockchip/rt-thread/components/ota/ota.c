@@ -7,7 +7,6 @@
 #include <rtdevice.h>
 #include <rtthread.h>
 
-#include <dfs_posix.h>
 #include <drivers/mtd_nor.h>
 #include "hal_base.h"
 #include "hal_bsp.h"

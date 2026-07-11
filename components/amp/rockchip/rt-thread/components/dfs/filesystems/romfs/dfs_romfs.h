@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2019, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -13,8 +13,8 @@
 
 #include <rtthread.h>
 
-#define ROMFS_DIRENT_FILE	0x00
-#define ROMFS_DIRENT_DIR	0x01
+#define ROMFS_DIRENT_FILE   0x00
+#define ROMFS_DIRENT_DIR    0x01
 
 struct romfs_dirent
 {

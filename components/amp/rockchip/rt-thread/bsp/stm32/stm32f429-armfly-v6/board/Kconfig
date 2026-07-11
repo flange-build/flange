@@ -3,6 +3,8 @@ menu "Hardware Drivers Config"
 config SOC_STM32F429BI
     bool
     select SOC_SERIES_STM32F4
+    select RT_USING_COMPONENTS_INIT
+    select RT_USING_USER_MAIN
     default y
 
 menu "Onboard Peripheral Drivers"
@@ -158,12 +160,12 @@ menu "On-chip Peripheral Drivers"
         endif
 
     menuconfig BSP_USING_PWM
-        bool "Enable pwm"
+        bool "Enable PWM"
         default n
         select RT_USING_PWM
         if BSP_USING_PWM
         menuconfig BSP_USING_PWM2
-            bool "Enable timer2 output pwm"
+            bool "Enable timer2 output PWM"
             default n
             if BSP_USING_PWM2
                 config BSP_USING_PWM2_CH1
@@ -182,11 +184,22 @@ menu "On-chip Peripheral Drivers"
                 default n
         endif
 
-    config BSP_USING_ONCHIP_RTC
+    menuconfig BSP_USING_ONCHIP_RTC
         bool "Enable RTC"
         select RT_USING_RTC
-        select RT_USING_LIBC
         default n
+        if BSP_USING_ONCHIP_RTC
+            choice
+                prompt "Select clock source"
+                default BSP_RTC_USING_LSE
+
+                config BSP_RTC_USING_LSE
+                    bool "RTC USING LSE"
+
+                config BSP_RTC_USING_LSI
+                    bool "RTC USING LSI"
+            endchoice
+        endif
 
     config BSP_USING_WDT
         bool "Enable Watchdog Timer"
@@ -206,6 +219,8 @@ menu "On-chip Peripheral Drivers"
     config BSP_USING_LTDC
         bool
         default n
+    source "../libraries/HAL_Drivers/Kconfig"
+    
 endmenu
 
 menu "Board extended module Drivers"

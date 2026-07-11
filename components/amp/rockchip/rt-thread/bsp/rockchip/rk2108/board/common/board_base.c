@@ -588,7 +588,7 @@ RT_WEAK const struct dvfs_table dvfs_core_table[] =
 {
     {
         .freq = 297000000,
-        .volt = 900000,
+        .volt = 800000,
     },
     {
         .freq = 396000000,
@@ -601,11 +601,11 @@ RT_WEAK const struct dvfs_table dvfs_shrm_table[] =
 {
     {
         .freq = 297000000,
-        .volt = 900000,
+        .volt = 800000,
     },
     {
         .freq = 396000000,
-        .volt = 900000,
+        .volt = 850000,
     },
     { /* sentinel */ },
 };
@@ -614,27 +614,23 @@ RT_WEAK const struct dvfs_table dvfs_dsp_table[] =
 {
     {
         .freq = 49500000,
-        .volt = 900000,
+        .volt = 800000,
     },
     {
         .freq = 99000000,
-        .volt = 900000,
+        .volt = 800000,
     },
     {
         .freq = 198000000,
-        .volt = 900000,
+        .volt = 800000,
     },
     {
         .freq = 297000000,
-        .volt = 900000,
+        .volt = 800000,
     },
     {
         .freq = 396000000,
-        .volt = 900000,
-    },
-    {
-        .freq = 594000000,
-        .volt = 950000,
+        .volt = 800000,
     },
     { /* sentinel */ },
 };

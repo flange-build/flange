@@ -62,9 +62,6 @@
 #define RK_DEVICE_CTRL_CID_OPEN_BLUE_LED            (21)
 #define RK_DEVICE_CTRL_CID_OPEN_RED_LED             (22)
 #define RK_DEVICE_CTRL_CID_GET_LIGHTS_SENSOR_VAL    (23)
-#define RK_DEVICE_CTRL_CID_MATCH_CAM_CONFIG         (24)
-#define RK_DEVICE_CTRL_CAMERA_STREAM_ON_LATE        (25)
-#define RK_DEVICE_CTRL_CAMERA_SET_VTS_VAL           (26)
 
 #define CSI2_DT_YUV420_8b   (0x18)
 #define CSI2_DT_YUV420_10b  (0x19)
@@ -161,159 +158,6 @@ enum v4l2_mbus_pixelcode
 };
 #define RK_CAMERA_HDREXP_NUM                        (3)
 /* Exported types ------------------------------------------------------------*/
-struct v4l2_fract
-{
-    uint32_t denominator;
-    uint16_t numerator;
-} __attribute__((__packed__));
-
-struct gpio_desc
-{
-    uint32_t gpio_pin;
-    struct GPIO_REG *gpio_group;
-};
-
-/**
-  * struct camera_board_desc
-  * @rst_gpio: reset gpio
-  * @pwdn_gpio: power_down gpio
-  * @pwren_gpio: power_enable gpio
-  * @isp_subdev_name: must be sensor_0[main] or sensor_1[secondary]
-  * @i2c_bus: the name of the i2s bus
-  * @i2c_addr: camera sensor i2c addr
-  * @time_valid_delay: the frame that camera exp time delays taking effect
-  * @gain_valid_delay: the frame that camera exp gain delays taking effect
-  * @mode_id: sensor initial resolution
-  * @rst_active: reset gpio active level
-  * @pwdn_active: power_down gpio active level
-  * @pwren_active: power_enable gpio active level
-  */
-
-#pragma pack(1)
-struct camera_board_desc
-{
-    struct gpio_desc rst_gpio;
-    struct gpio_desc pwdn_gpio;
-    struct gpio_desc pwren_gpio;
-    eCLOCK_Name mclk_id;
-    uint32_t mclk_out_gate_id;
-    char isp_subdev_name[RK_CAMERA_DEVICE_NAME_SIZE];
-    char i2c_bus[RK_CAMERA_I2C_NAME_SIZE];
-    uint8_t i2c_addr;
-    uint8_t time_valid_delay;
-    uint8_t gain_valid_delay;
-    uint8_t mode_id;
-    bool rst_active;
-    bool pwdn_active;
-    bool pwren_active;
-};
-#pragma pack()
-
-#ifdef RT_USING_SC3338
-enum sc3338_support_mode_id
-{
-    SC3338_320X240 = 0,
-    SC3338_640X480,
-    SC3338_1152X648,
-    SC3338_2304X1296,
-    SC3338_MODE_ID_MAX = SC3338_2304X1296,
-};
-extern const struct camera_board_desc camera_sc3338[];
-#endif
-#ifdef RT_USING_SC4336
-enum sc4336_support_mode_id
-{
-    SC4336_1280X720 = 0,
-    SC4336_2560X1440,
-    SC4336_MODE_ID_MAX = SC4336_2560X1440,
-};
-extern const struct camera_board_desc camera_sc4336;
-#endif
-
-#ifdef RT_USING_SC4336P
-enum sc4336p_support_mode_id
-{
-    SC4336P_1280X720 = 0,
-    SC4336P_2560X1440,
-    SC4336P_MODE_ID_MAX = SC4336P_2560X1440,
-};
-extern const struct camera_board_desc camera_sc4336p[];
-#endif
-
-#ifdef RT_USING_SC2336
-enum sc2336_support_mode_id
-{
-    SC2336_960X540 = 0,
-    SC2336_1920X1080,
-    SC2336_MODE_ID_MAX = SC2336_1920X1080,
-};
-extern const struct camera_board_desc camera_sc2336;
-#endif
-#ifdef RT_USING_SC301IOT
-enum sc301iot_support_mode_id
-{
-    SC301IOT_1000X750 = 0,
-    SC301IOT_2048X1536,
-    SC301IOT_MODE_ID_MAX = SC301IOT_2048X1536,
-};
-extern const struct camera_board_desc camera_sc301iot;
-#endif
-
-#ifdef RT_USING_SC200AI
-enum sc200ai_support_mode_id
-{
-    SC200AI_960X540 = 0,
-    SC200AI_1920X1080,
-    SC200AI_1920X1080_HDR,
-    SC200AI_MODE_ID_MAX = SC200AI_1920X1080_HDR,
-};
-extern const struct camera_board_desc camera_sc200ai[];
-#endif
-
-#ifdef RT_USING_SC230AI
-enum sc230ai_support_mode_id
-{
-    SC230AI_640X480 = 0,
-    SC230AI_1920X1080,
-    SC230AI_MODE_ID_MAX = SC230AI_1920X1080,
-};
-extern const struct camera_board_desc camera_sc230ai;
-#endif
-
-#ifdef RT_USING_GC3003
-enum gc3003_support_mode_id
-{
-    GC3003_1920X528 = 0,
-    GC3003_2304X1296,
-    GC3003_320X240,
-    GC3003_MODE_ID_MAX = GC3003_320X240,
-};
-extern const struct camera_board_desc camera_gc3003;
-#endif
-
-#ifdef RT_USING_GC2093
-enum gc2093_support_mode_id
-{
-    GC2093_1280X720 = 0,
-    GC2093_1920X1080_60FPS,
-    GC2093_1920X1080_30FPS,
-    GC2093_1920X1080_25FPS,
-    GC2093_1920X1080_30FPS_HDR,
-    GC2093_MODE_ID_MAX = GC2093_1920X1080_30FPS_HDR,
-};
-extern const struct camera_board_desc camera_gc2093;
-#endif
-
-#ifdef RT_USING_SC501AI
-enum sc501ai_support_mode_id
-{
-    SC501AI_1440X810 = 0,
-    SC501AI_2880X1616,
-    SC501AI_MODE_ID_MAX = SC501AI_2880X1616,
-};
-extern const struct camera_board_desc camera_sc501ai;
-#endif
-
 struct rk_camera_ctrl
 {
     void *ctrl_dev;
@@ -351,16 +195,6 @@ struct rk_camera_exp_info
     uint32_t gain_valid_delay;
 };
 
-struct rk_camera_dst_config
-{
-    bool is_match;
-    int32_t width;
-    int32_t height;
-    int32_t cam_fps_denominator;
-    int32_t cam_fps_numerator;
-    int32_t cam_mirror_flip;
-    int32_t cam_hdr;
-};
 struct rk_camera_exp_val
 {
     uint32_t reg_time[RK_CAMERA_HDREXP_NUM];
@@ -381,6 +215,7 @@ struct rk_camera_device
     char i2c_name[RK_CAMERA_I2C_NAME_SIZE];
     rk_i2c_bus_device *i2c_bus;
     struct rk_camera_ctrl *ctrl;
+    struct ae_init_info *cfg_ae_init;
 #if defined(__RK_OS__)
     uint8_t class_id;
     uint8_t object_id;

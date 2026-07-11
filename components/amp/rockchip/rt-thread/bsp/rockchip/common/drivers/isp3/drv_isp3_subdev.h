@@ -22,39 +22,37 @@
 
 #if defined(RT_USING_ISP3)
 
-#define CSI_MIPI0_ID0_CTRL0         (0x0100)
-#define CSI_MIPI0_ID0_CTRL1         (0x0104)
-#define CSI_MIPI0_CTRL              (0x0120)
-#define CSI_MIPI1_ID0_CTRL0         (0x0300)
-#define CSI_MIPI1_ID0_CTRL1         (0x0304)
-#define CSI_MIPI1_CTRL              (0x0320)
-#define TOISP0_CH_CTRL              (0x0780)
-#define TOISP0_CROP_SIZE            (0x0784)
+#define VICAP_REG_BASE              (0xffa10000)
+#define CSI_MIPI0_ID0_CTRL0         (VICAP_REG_BASE + 0x0100)
+#define CSI_MIPI0_ID0_CTRL1         (VICAP_REG_BASE + 0x0104)
+#define CSI_MIPI0_CTRL              (VICAP_REG_BASE + 0x0120)
+#define TOISP0_CH_CTRL              (VICAP_REG_BASE + 0x0780)
+#define TOISP0_CROP_SIZE            (VICAP_REG_BASE + 0x0784)
 
-#define CSIHOST_N_LANES             (0x04)
-#define CSIHOST_RESETN              (0x10)
-#define CSIHOST_ERR1                (0x20)
-#define CSIHOST_ERR2                (0x24)
-#define CSIHOST_CONTROL             (0x40)
+#define CSIHOST_REG_BASE            (0xffa20000)
+#define CSIHOST_N_LANES             (CSIHOST_REG_BASE + 0x04)
+#define CSIHOST_RESETN              (CSIHOST_REG_BASE + 0x10)
+#define CSIHOST_CONTROL             (CSIHOST_REG_BASE + 0x40)
 
-#define CSI2_DPHY_CTRL_LANE_ENABLE      (0x00)
-#define CSI2_DPHY_DUAL_CAL_EN           (0x80)
-#define CSI2_DPHY_CLK_INV               (0X84)
-#define CSI2_DPHY_CLK_MODE              (0x128)
-#define CSI2_DPHY_CLK_WR_THS_SETTLE     (0x160)
-#define CSI2_DPHY_CLK_CALIB_EN          (0x168)
-#define CSI2_DPHY_LANE0_WR_THS_SETTLE   (0x1e0)
-#define CSI2_DPHY_LANE0_CALIB_EN        (0x1e8)
-#define CSI2_DPHY_LANE1_WR_THS_SETTLE   (0x260)
-#define CSI2_DPHY_LANE1_CALIB_EN        (0x268)
-#define CSI2_DPHY_LANE2_WR_THS_SETTLE   (0x2e0)
-#define CSI2_DPHY_LANE2_CALIB_EN        (0x2e8)
-#define CSI2_DPHY_LANE3_WR_THS_SETTLE   (0x360)
-#define CSI2_DPHY_LANE3_CALIB_EN        (0x368)
-#define CSI2_DPHY_CLK1_WR_THS_SETTLE    (0x3e0)
-#define CSI2_DPHY_CLK1_CALIB_EN         (0x3e8)
-#define CSI2_DPHY_PATH0_MODE_SEL        (0x44C)
-#define CSI2_DPHY_PATH0_LVDS_MODE_SEL   (0x480)
+#define DPHY_REG_BASE               (0xff3e8000)
+#define CSI2_DPHY_CTRL_LANE_ENABLE      (DPHY_REG_BASE + 0x00)
+#define CSI2_DPHY_DUAL_CAL_EN           (DPHY_REG_BASE + 0x80)
+#define CSI2_DPHY_CLK_INV           (DPHY_REG_BASE + 0X84)
+#define CSI2_DPHY_CLK_MODE          (DPHY_REG_BASE + 0x128)
+#define CSI2_DPHY_CLK_WR_THS_SETTLE     (DPHY_REG_BASE + 0x160)
+#define CSI2_DPHY_CLK_CALIB_EN          (DPHY_REG_BASE + 0x168)
+#define CSI2_DPHY_LANE0_WR_THS_SETTLE       (DPHY_REG_BASE + 0x1e0)
+#define CSI2_DPHY_LANE0_CALIB_EN        (DPHY_REG_BASE + 0x1e8)
+#define CSI2_DPHY_LANE1_WR_THS_SETTLE       (DPHY_REG_BASE + 0x260)
+#define CSI2_DPHY_LANE1_CALIB_EN        (DPHY_REG_BASE + 0x268)
+#define CSI2_DPHY_LANE2_WR_THS_SETTLE       (DPHY_REG_BASE + 0x2e0)
+#define CSI2_DPHY_LANE2_CALIB_EN        (DPHY_REG_BASE + 0x2e8)
+#define CSI2_DPHY_LANE3_WR_THS_SETTLE       (DPHY_REG_BASE + 0x360)
+#define CSI2_DPHY_LANE3_CALIB_EN        (DPHY_REG_BASE + 0x368)
+#define CSI2_DPHY_CLK1_WR_THS_SETTLE        (DPHY_REG_BASE + 0x3e0)
+#define CSI2_DPHY_CLK1_CALIB_EN         (DPHY_REG_BASE + 0x3e8)
+#define CSI2_DPHY_PATH0_MODE_SEL        (DPHY_REG_BASE + 0x44C)
+#define CSI2_DPHY_PATH0_LVDS_MODE_SEL       (DPHY_REG_BASE + 0x480)
 
 #define VI_GRF_BASE             (0xff050000)
 #define VI_CSIPHY_CON5              (VI_GRF_BASE + 0x14)
@@ -89,12 +87,6 @@
 
 #define SW_CSI_RAW_PIC_V_OFF(a)                     (((a) & 0x3FFF) << 16)
 #define SW_CSI_RAW_PIC_H_OFF(a)                     ((a) & 0x3FFF)
-
-/* CSI2_DPHY *///todo
-#define CSI2_DPHY_DUAL_CLK_MODE_EN_SHIFT                   (6)
-#define CSI2_DPHY_DUAL_CLK_MODE_EN_MASK                    (0x1U << CSI2_DPHY_DUAL_CLK_MODE_EN_SHIFT)                   /* 0x00000040 */
-
-/* MIPI1_ID0_CTRL0 */
 
 /* MIPI0_ID0_CTRL0 */
 #define VICAP_MIPI0_ID0_CTRL0_OFFSET                       (0x100U)
@@ -131,19 +123,14 @@
 #define VICAP_MIPI0_ID0_CTRL0_SW_VC_HDR_ID_MAIN_ID0_SHIFT  (30U)
 #define VICAP_MIPI0_ID0_CTRL0_SW_VC_HDR_ID_MAIN_ID0_MASK   (0x3U << VICAP_MIPI0_ID0_CTRL0_SW_VC_HDR_ID_MAIN_ID0_SHIFT)  /* 0xC0000000 */
 
-#define VICAP_TOISP0_SEL_MIPI0                             (0x1)
-#define VICAP_TOISP0_SEL_MIPI1                             (0x21)
-
-int rk_isp_hw_vicap_init(struct rk_isp_dev *dev);
-int rk_isp_hw_vicap_reinit(struct rk_isp_dev *dev);
-int rk_isp_hw_csi_host_init(struct rk_isp_dev *dev);
-int rk_isp_hw_csi_host_reinit(struct rk_isp_dev *dev);
+void rk_isp_hw_vicap_init(struct rk_isp_dev *dev);
+void rk_isp_hw_vicap_reinit(struct rk_isp_dev *dev);
+void rk_isp_hw_csi_host_init(struct rk_isp_dev *dev);
 
 #if TEST_FPGA_MIPI_DPHY_ENABLE
 void mipidphy_fpga_stream_on(struct rk_isp_dev *dev);
 #else
-int rk_isp_hw_mipi_lvds_dphy_init(struct rk_isp_dev *dev);
-int rk_isp_hw_mipi_lvds_dphy_reinit(struct rk_isp_dev *dev);
+void rk_isp_hw_mipi_lvds_dphy_init(struct rk_isp_dev *dev);
 #endif
 
 #endif

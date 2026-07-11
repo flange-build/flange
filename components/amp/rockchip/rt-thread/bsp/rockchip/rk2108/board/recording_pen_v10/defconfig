@@ -251,9 +251,11 @@ CONFIG_RT_USING_POSIX=y
 # AT commands
 #
 # CONFIG_RT_USING_AT is not set
+
+#
+# System
+#
 CONFIG_RT_USING_LITTLEVGL2RTT=y
-CONFIG_RT_USING_LITTLEVGL2RTT_V7=y
-# CONFIG_RT_USING_LITTLEVGL2RTT_V8 is not set
 
 #
 # LittlevGL2RTT Component Options
@@ -352,8 +354,6 @@ CONFIG_RT_LV_USE_TEXTAREA=y
 #
 # LV FONTS config
 #
-# CONFIG_RT_LV_FONT_MONTSERRAT_8 is not set
-# CONFIG_RT_LV_FONT_MONTSERRAT_10 is not set
 # CONFIG_RT_LV_FONT_MONTSERRAT_12 is not set
 # CONFIG_RT_LV_FONT_MONTSERRAT_14 is not set
 # CONFIG_RT_LV_FONT_MONTSERRAT_16 is not set
@@ -442,7 +442,6 @@ CONFIG_PKG_CMBACKTRACE_PRINT_ENGLISH=y
 # CONFIG_RT_USING_BENCHMARK is not set
 # CONFIG_RT_USING_NET_HTTP is not set
 # CONFIG_RT_USING_OTA is not set
-# CONFIG_RT_USING_AUPIPE is not set
 
 #
 # RT-Thread third party package
@@ -547,8 +546,6 @@ CONFIG_RT_USING_BACKLIGHT=y
 CONFIG_RT_USING_SNOR=y
 CONFIG_RT_SNOR_SPEED=80000000
 # CONFIG_RT_SNOR_DUAL_IO is not set
-# CONFIG_RT_ROOT_DEF_PART_OFFSET is not set
-# CONFIG_RT_ROOT_DEF_PART_SIZE is not set
 CONFIG_RT_USING_SNOR_FSPI_HOST=y
 # CONFIG_RT_USING_SNOR_SFC_HOST is not set
 # CONFIG_RT_USING_SNOR_SPI_HOST is not set
@@ -579,7 +576,6 @@ CONFIG_RT_USING_PM_RUNTIME=y
 # RT-Thread rockchip isp driver
 #
 # CONFIG_RT_USING_ISP is not set
-# CONFIG_RT_USING_ISP3 is not set
 
 #
 # RT-Thread rockchip vcm driver
@@ -595,11 +591,6 @@ CONFIG_RT_USING_PM_RUNTIME=y
 # RT-Thread rockchip camera driver
 #
 # CONFIG_RT_USING_CAMERA is not set
-
-#
-# RT-Thread rockchip ambient light sensor driver
-#
-# CONFIG_RT_USING_ALS is not set
 
 #
 # RT-Thread rockchip vicap_lite driver
@@ -628,10 +619,6 @@ CONFIG_RT_USING_PM_RUNTIME=y
 # Enable PSTORE
 #
 # CONFIG_RT_USING_PSTORE is not set
-
-#
-# RT-Thread rockchip AMP driver
-#
 
 #
 # RT-Thread rockchip rk2108 drivers
@@ -739,7 +726,6 @@ CONFIG_RECPEN_PLAYBACK_SOUND_CARD="audpwmp"
 CONFIG_RECPEN_RECORD_FILE_DIR="/sdcard/record"
 CONFIG_RECPEN_RECORD_FILE_TYPE="opus"
 CONFIG_RECPEN_RECORD_MAX_DURATION=300
-# CONFIG_RT_USING_RK_BATTERY_IPC is not set
 # CONFIG_RT_USING_RK_IOT_APP is not set
 # CONFIG_ENABLE_DUAL_TRACKING is not set
 

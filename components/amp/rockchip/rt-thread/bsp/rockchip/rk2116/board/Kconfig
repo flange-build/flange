@@ -1,0 +1,27 @@
+menu "RT-Thread board config"
+
+config IS_FPGA
+    bool "Is FPGA Board"
+    default n
+
+choice
+    prompt "Board Type"
+    default RT_USING_BOARD_FPGA
+
+    config RT_USING_BOARD_FPGA
+        bool "Enable FPGA board"
+        select IS_FPGA
+endchoice
+
+config RT_USING_HIFI4
+    bool "Enable hifi4 driver"
+    default n
+
+    if RT_USING_HIFI4
+        config RT_USING_HIFI4_FW_BUILTIN
+        bool "hifi4 firmware builtin"
+        default n
+    endif
+
+source "$BSP_DIR/../common/fwmgr/Kconfig"
+endmenu

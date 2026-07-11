@@ -304,12 +304,7 @@ double gettime(void)
     gettimeofday (&tv, NULL);
     return (double)((int64_t)tv.tv_sec * 1000000 + tv.tv_usec) / 1000000.;
 #else
-    uint64_t count;
-    double time;
-
-    count = HAL_GetSysTimerCount();
-    time = (count * 1.0) / PLL_INPUT_OSC_RATE;
-    return time;
+    return (rt_tick_get() * 1.0) / RT_TICK_PER_SECOND;
 #endif
 }
 

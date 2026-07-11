@@ -22,10 +22,68 @@
 #define BOOT_FROM_SPL     1
 #define BOOT_FROM_UBOOT   2
 
+/* ISP CONFIG */
+#define AE_GAIN_RANGE_NUM     10
+#define AE_TIME_FACTOR_NUM    4
+#define AE_DOT_NO             6
+#define AE_HDR_EXP_NUM        3
+#define ADC_CALIB_NO          4
+#define ENV_CALIB_NO          2
+
+struct ae_gain_range
+{
+    uint32_t range_min;
+    uint32_t range_max;
+    uint32_t C1;
+    uint32_t C0;
+    uint32_t M0;
+    uint32_t minReg;
+    uint32_t maxReg;
+};
+
+struct ae_start_exp
+{
+    uint32_t start_exposure_light;
+    uint32_t start_exposure_dark;
+    uint32_t start_time_light[AE_HDR_EXP_NUM];
+    uint32_t start_gain_light[AE_HDR_EXP_NUM];
+    uint32_t start_time_dark[AE_HDR_EXP_NUM];
+    uint32_t start_gain_dark[AE_HDR_EXP_NUM];
+
+    uint32_t start_time_light_reg[AE_HDR_EXP_NUM];
+    uint32_t start_gain_light_reg[AE_HDR_EXP_NUM];
+    uint32_t start_time_dark_reg[AE_HDR_EXP_NUM];
+    uint32_t start_gain_dark_reg[AE_HDR_EXP_NUM];
+};
+
+struct ae_init_info
+{
+    uint32_t hts;
+    uint32_t vts;
+    uint32_t fps;
+    uint32_t hts_aiq;
+    uint32_t vts_aiq;
+    uint32_t fps_aiq;
+    uint32_t black_lvl;
+    uint32_t setpoint;
+    uint32_t tolerance;
+    uint32_t dampratio;
+    struct ae_start_exp start_exp;
+    struct ae_gain_range gain_range[AE_GAIN_RANGE_NUM];
+    uint32_t gain_range_size;
+    uint32_t time_factor[AE_TIME_FACTOR_NUM];
+    uint32_t time_dot[AE_DOT_NO];
+    uint32_t gain_dot[AE_DOT_NO];
+    uint32_t is_lux_en;
+    uint32_t adc_calib[ADC_CALIB_NO];
+    uint32_t env_calib[ENV_CALIB_NO];
+};
+
 struct isp_init_info
 {
     uint32_t share_mem_addr;
     uint32_t share_mem_size;
+    struct ae_init_info ae_init;
 };
 
 struct sensor_init_info
@@ -36,7 +94,6 @@ struct sensor_init_info
     int width;  /* image width */
     int height; /* image height */
     int hdr_mode; /* 0: liner, 1: hdr1, 2: hdr2, 3: hdr3... */
-    uint32_t dst_vts;
 };
 
 struct bord_init_info
@@ -75,7 +132,6 @@ struct config_param
     int boot_from;
     struct isp_init_info isp;
     struct sensor_init_info sensor;
-    struct sensor_init_info secondary_sensor;
     struct bord_init_info board;
     int hash;
 };

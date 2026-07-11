@@ -355,13 +355,16 @@ void rt_hw_interrupt_init(void)
 
 void rt_hw_interrupt_mask(int vector)
 {
-    /* only mask int_mux */
-    rt_hw_interrupt_deactive(vector);
+    write_csr_ipic(IPIC_IDX, vector / INTERRUPT_SEPERATE);
+    write_csr_ipic(IPIC_ICSR, 0);
 }
 
 void rt_hw_interrupt_umask(int vector)
 {
     rt_hw_interrupt_active(vector);
+    write_csr_ipic(IPIC_IDX, vector / INTERRUPT_SEPERATE);
+    /* enable, level trigger */
+    write_csr_ipic(IPIC_ICSR, IPIC_ICSR_IE);
 }
 
 rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
@@ -376,9 +379,6 @@ rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
         {
             irq_desc[vector].handler = (rt_isr_handler_t)handler;
             irq_desc[vector].param = param;
-            /* enable interrupt vector as default */
-            write_csr_ipic(IPIC_IDX, vector / INTERRUPT_SEPERATE);
-            write_csr_ipic(IPIC_ICSR, IPIC_ICSR_IE);
 #ifdef RT_USING_INTERRUPT_INFO
             rt_snprintf(irq_desc[vector].name, RT_NAME_MAX - 1, "%s", name);
             irq_desc[vector].counter = 0;

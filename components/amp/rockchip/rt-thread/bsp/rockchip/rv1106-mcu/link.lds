@@ -45,10 +45,8 @@ SECTIONS {
 
     /* data segment */
     .data : {
-        PROVIDE(__DATA_START__ = .);
         *(.data .data.*)
         . = ALIGN(CL_SIZE);
-        PROVIDE(__DATA_END__ = .);
     } > RAM
 
     .sdata : {
@@ -94,17 +92,6 @@ SECTIONS {
         PROVIDE(__C_STACK_TOP__ = .);
         PROVIDE(_sp = .);
         PROVIDE(__STACK_END__ = .);
-    } > RAM
-
-    .save_data (NOLOAD):
-    {
-        . = . + 8;
-        . = ALIGN(8);
-        SAVE_DATA_LENGTH = _tdata_end  - __TEXT_END__;
-        PROVIDE ( __SAVE_DATA_START__ = .);
-        . = . + SAVE_DATA_LENGTH;
-        . = ALIGN(8);
-        PROVIDE ( __SAVE_DATA_END__ = .);
     } > RAM
 
    /* End of uninitalized data segement */

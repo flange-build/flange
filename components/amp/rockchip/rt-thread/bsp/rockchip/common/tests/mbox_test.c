@@ -34,7 +34,7 @@ struct mbox_tdev
 {
     struct MBOX_REG *reg;
     struct MBOX_CLIENT *clt[MBOX_CHAN_CNT];
-    uint8_t single_irq;
+    uint8_t shared_irq;
     uint8_t a2b;
 };
 
@@ -56,27 +56,32 @@ static void mbox_test_isr##ID(int irq, void *param) \
 }
 
 MBOX_TEST_ISR_DEFINE(0)
+
+#if (MBOX_REVISION == 0x100U)
 MBOX_TEST_ISR_DEFINE(1)
 MBOX_TEST_ISR_DEFINE(2)
 MBOX_TEST_ISR_DEFINE(3)
+#endif
 
 static struct MBOX_CLIENT mbox_client[MBOX_CHAN_CNT] =
 {
     {"ch0", 0, mbox_test_callback, (void *)MBOX_CH_0},
+#if (MBOX_REVISION == 0x100U)
     {"ch1", 0, mbox_test_callback, (void *)MBOX_CH_1},
     {"ch2", 0, mbox_test_callback, (void *)MBOX_CH_2},
     {"ch3", 0, mbox_test_callback, (void *)MBOX_CH_3},
+#endif
 };
 
 static void mbox_test_show_usage()
 {
     /* mbox_test mbox_reg mbox_chan_irq_start mbox_is_single_irq mbox_is_a2b */
     rt_kprintf("Usage: \n");
-    rt_kprintf("mbox_test 0x44050000 10, 1, 1\n");
+    rt_kprintf("mbox_test 0x44050000 10 0 1\n");
     rt_kprintf("means: \n");
-    rt_kprintf("mbox ip address: 0x44050000\n");
-    rt_kprintf("mbox channel irq number start: 10\n");
-    rt_kprintf("mbox channel single irq flag: 1 means single, 0 means multi\n");
+    rt_kprintf("mbox base address: 0x44050000\n");
+    rt_kprintf("mbox irq number: 10\n");
+    rt_kprintf("mbox share 1 irq among channels: 0 means No, 1 means Yes\n");
     rt_kprintf("mbox send direction: 1 means A2B, 0 means B2A\n");
 }
 
@@ -138,12 +143,14 @@ static int mbox_test_init(struct mbox_tdev *mbox)
 
     MBOX_TEST_ISR_INSTALL(0);
 
-    if (!mbox->single_irq)
+#if (MBOX_REVISION == 0x100U)
+    if (!mbox->shared_irq)
     {
         MBOX_TEST_ISR_INSTALL(1);
         MBOX_TEST_ISR_INSTALL(2);
         MBOX_TEST_ISR_INSTALL(3);
     }
+#endif
 
     return ret;
 }
@@ -175,7 +182,7 @@ out:
 static int mbox_test_parse(struct mbox_tdev *mbox, int argc, char **argv)
 {
     uint32_t reg_addr, irqn, chan;
-    uint8_t single_irq, is_a2b;
+    uint8_t shared_irq, is_a2b;
 
     if (argc < MBOX_TEST_ARGC)
         goto err;
@@ -192,17 +199,17 @@ static int mbox_test_parse(struct mbox_tdev *mbox, int argc, char **argv)
     if (irqn < 0)
         goto err;
 
-    single_irq = strtol(argv[3], NULL, 10);
-    if (!IS_BOOL_VALUE(single_irq))
+    shared_irq = strtol(argv[3], NULL, 10);
+    if (!IS_BOOL_VALUE(shared_irq))
         goto err;
 
-    mbox->single_irq = single_irq;
+    mbox->shared_irq = shared_irq;
 
     for (chan = 0; chan < MBOX_CHAN_CNT; chan++)
     {
         mbox->clt[chan] = &mbox_client[chan];
 
-        if (single_irq)
+        if (shared_irq)
         {
             mbox_client[chan].irq = irqn;
             continue;

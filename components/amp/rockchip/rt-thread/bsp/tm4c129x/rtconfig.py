@@ -21,8 +21,8 @@ elif CROSS_TOOL == 'keil':
     PLATFORM     = 'armcc'
     EXEC_PATH    = r'C:\Keil_v5'
 elif CROSS_TOOL == 'iar':
-    PLATFORM     = 'iar'
-    EXEC_PATH    = 'C:/Program Files (x86)/IAR Systems/Embedded Workbench 8.0'
+    PLATFORM     = 'iccarm'
+    EXEC_PATH    = 'C:/Program Files (x86)/IAR Systems/Embedded Workbench 8.3'
     
 if os.getenv('RTT_EXEC_PATH'):
     EXEC_PATH = os.getenv('RTT_EXEC_PATH')
@@ -43,7 +43,7 @@ if PLATFORM == 'gcc':
     OBJCPY = PREFIX + 'objcopy'
     
     DEVICE = ' -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -ffunction-sections -fdata-sections'
-    CFLAGS = DEVICE + ' -std=c99 -Dgcc'
+    CFLAGS = DEVICE + ' -Dgcc'
     AFLAGS = ' -c' + DEVICE + ' -x assembler-with-cpp -Wa,-mimplicit-it=thumb '
     LFLAGS = DEVICE + ' -Wl,--gc-sections,-Map=rtthread-tm4c129x.map,-cref,-u,Reset_Handler -T tm4c_rom.ld'
 
@@ -84,7 +84,7 @@ elif PLATFORM == 'armcc':
 
     POST_ACTION = 'fromelf --bin $TARGET --output rtthread.bin \nfromelf -z $TARGET'
 
-elif PLATFORM == 'iar':
+elif PLATFORM == 'iccarm':
     # toolchains
     CC = 'iccarm'
     AS = 'iasmarm'

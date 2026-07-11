@@ -14,6 +14,7 @@
 
 #include <rtdevice.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifdef RT_USING_I2C
 
@@ -74,10 +75,15 @@ static int i2c_read(struct rt_i2c_bus_device *i2c_bus, rt_uint16_t addr,
     msgs[1].len   = data_len;
 
     ret = rt_i2c_transfer(i2c_bus, msgs, 2);
-    if (ret == 2)
-        return RT_EOK;
-    else
+    if (ret != 2)
+    {
+        rt_kprintf("%s: 0x%x 0x%x failed: (%d)\n", __func__, addr,
+                   *(rt_uint8_t *)cmd_buf, ret);
+
         return -RT_ERROR;
+    }
+
+    return RT_EOK;
 }
 
 static int i2c_write(struct rt_i2c_bus_device *i2c_bus, rt_uint16_t addr,
@@ -92,10 +98,15 @@ static int i2c_write(struct rt_i2c_bus_device *i2c_bus, rt_uint16_t addr,
     msgs[0].len   = data_len;
 
     ret = rt_i2c_transfer(i2c_bus, msgs, 1);
-    if (ret == 1)
-        return RT_EOK;
-    else
+    if (ret != 1)
+    {
+        rt_kprintf("%s: 0x%x 0x%x failed: (%d)\n", __func__, addr,
+                   *(rt_uint8_t *)data_buf, ret);
+
         return -RT_ERROR;
+    }
+
+    return RT_EOK;
 }
 
 static void scan_i2c_bus(struct rt_i2c_bus_device *i2c_bus)

@@ -31,6 +31,19 @@ void rt_hw_iodomain_config(void)
                       (0 << GRF_IO_VSEL1_POC_VCCIO6_SEL33_SHIFT));
 }
 
+void touch_iomux_config(void)
+{
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
+                         GPIO_PIN_B5 |  // TOUCH_INT
+                         GPIO_PIN_B6 |  // TOUCH_RST
+                         GPIO_PIN_C7,   // PANNEL_POWER(LCDC & TOUCH)
+                         PIN_CONFIG_MUX_FUNC0);
+
+    /* PANNEL & TOUCH POWER_EN ON */
+    HAL_GPIO_SetPinDirection(GPIO0, GPIO_PIN_C7, GPIO_OUT);
+    HAL_GPIO_SetPinLevel(GPIO0, GPIO_PIN_C7, GPIO_HIGH);
+}
+
 /**
  * @brief  Config iomux for RK3568
  */
@@ -67,5 +80,17 @@ void rt_hw_iomux_config(void)
 #ifdef RT_USING_I2C0
     i2c0_m0_iomux_config();
 #endif
+
+#ifdef RT_USING_I2C1
+    i2c1_m0_iomux_config();
+#endif
+#endif
+
+#ifdef RT_USING_TOUCH
+    touch_iomux_config();
+#endif
+
+#ifdef RT_USING_SDIO0
+    sdmmc0_iomux_config();
 #endif
 }

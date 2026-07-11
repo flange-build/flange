@@ -1,6 +1,6 @@
 /*-
  * Copyright Rusty Russell IBM Corporation 2007.
- * Copyright 2019 NXP
+ * Copyright 2019,2022 NXP
  * This header is BSD licensed so anyone can use the definitions to implement
  * compatible drivers/servers.
  *
@@ -144,7 +144,7 @@ static inline void vring_init(struct vring *vr, uint32_t num, uint8_t *p, uint32
     vr->num   = num;
     vr->desc  = (struct vring_desc *)(void *)p;
     vr->avail = (struct vring_avail *)(void *)(p + num * sizeof(struct vring_desc));
-    vr->used  = (struct vring_used *)(((uint32_t)&vr->avail->ring[num] + align - 1UL) & ~(align - 1UL));
+    vr->used  = (struct vring_used *)(((uintptr_t)&vr->avail->ring[num] + align - 1UL) & ~(align - 1UL));
 }
 
 /*
@@ -156,6 +156,8 @@ static inline void vring_init(struct vring *vr, uint32_t num, uint8_t *p, uint32
  */
 static inline int32_t vring_need_event(uint16_t event_idx, uint16_t new_idx, uint16_t old)
 {
+    /* coco begin validated: This function does not need to be tested because it is not used in rpmsg_lite
+     * implementation (only called from unused part of vq_ring_must_notify_host() ). */
     if ((uint16_t)(new_idx - event_idx - 1U) < (uint16_t)(new_idx - old))
     {
         return 1;
@@ -165,4 +167,5 @@ static inline int32_t vring_need_event(uint16_t event_idx, uint16_t new_idx, uin
         return 0;
     }
 }
+/* coco end */
 #endif /* VIRTIO_RING_H */

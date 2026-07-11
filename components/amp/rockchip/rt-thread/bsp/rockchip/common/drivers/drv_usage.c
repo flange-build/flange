@@ -14,8 +14,14 @@
 
 #ifdef RT_USING_CPU_USAGE
 
-static uint64_t g_last_idle_tick = 0;                     /* Last total tick for OS idle state. */
-static uint64_t g_last_elapsed_tick = 0;                  /* Last total tick since OS boot. */
+#ifdef RT_USING_SMP
+#define _CPUS_NR                RT_CPUS_NR
+#else
+#define _CPUS_NR                1
+#endif /* RT_USING_SMP */
+
+static uint64_t g_last_idle_tick[_CPUS_NR] = {0};                     /* Last total tick for OS idle state. */
+static uint64_t g_last_elapsed_tick[_CPUS_NR] = {0};                  /* Last total tick since OS boot. */
 
 static uint64_t g_last_enter_irq_time = 0;                /* Last time enter level 0 interrupt. */
 static uint64_t g_total_irq_consume_time = 0;             /* Toal time concume in IRQ. */
@@ -183,7 +189,15 @@ uint32_t rt_cpu_usage_get(void)
     rt_tick_t total_tick, idle_tick;
     uint32_t usage;
 
-    if (!g_last_elapsed_tick || !g_last_idle_tick)
+#ifdef RT_USING_SMP
+    int id = rt_hw_cpu_id();
+#else
+    int id = 0;
+#endif /* RT_USING_SMP */
+
+    rt_enter_critical();
+
+    if (!g_last_elapsed_tick[id] || !g_last_idle_tick[id])
     {
         /* For the first time, we return to the cpu usage so far. */
         idle_tick = rt_thread_idle_gethandler()->total_running_tick;
@@ -192,12 +206,15 @@ uint32_t rt_cpu_usage_get(void)
     else
     {
         /* At other times, we return the cpu usage since the last statistics. */
-        idle_tick = rt_thread_idle_gethandler()->total_running_tick - g_last_idle_tick;
-        total_tick = rt_tick_get() - g_last_elapsed_tick;
+        idle_tick = rt_thread_idle_gethandler()->total_running_tick - g_last_idle_tick[id];
+        total_tick = rt_tick_get() - g_last_elapsed_tick[id];
     }
 
-    g_last_idle_tick = idle_tick;
-    g_last_elapsed_tick = total_tick;
+    g_last_idle_tick[id] = idle_tick;
+    g_last_elapsed_tick[id] = total_tick;
+
+    rt_exit_critical();
+
     usage = ((total_tick - idle_tick) * 100) / total_tick;
     return usage;
 }
@@ -206,7 +223,7 @@ uint32_t rt_cpu_usage_get(void)
  * The cpu usage module init.
  *
  */
-void rt_cpu_usage_init(void)
+int rt_cpu_usage_init(void)
 {
     rt_base_t level;
 
@@ -215,13 +232,15 @@ void rt_cpu_usage_init(void)
     rt_interrupt_enter_sethook(rt_irq_enter_hook);
     rt_interrupt_leave_sethook(rt_irq_leave_hook);
     rt_hw_interrupt_enable(level);
+
+    return RT_EOK;
 }
 
 INIT_BOARD_EXPORT(rt_cpu_usage_init);
 
 #ifdef RT_USING_FINSH
 #include <finsh.h>
-FINSH_FUNCTION_EXPORT_ALIAS(rt_cpu_usage_top, __cmd_top, Execute command with top.);
+MSH_CMD_EXPORT_ALIAS(rt_cpu_usage_top, top, Execute command with top.);
 #endif
 
 #endif /* End of RT_USING_CPU_USAGE */

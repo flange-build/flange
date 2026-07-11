@@ -57,8 +57,14 @@ C**********************************************************************
 #include <string.h>
 #include <math.h>
 
+#define PRINTOUT
 /* the following is optional depending on the timing function used */
-#include <time.h>
+#include <rtthread.h>
+
+long time_internal(void)
+{
+    return (long)(rt_tick_get() / RT_TICK_PER_SECOND);
+}
 
 /* map the FORTRAN math functions, etc. to the C versions */
 #define DSIN	sin
@@ -120,7 +126,7 @@ C
 C	Start benchmark timing at this point.
 C
 */
-	startsec = time(0);
+	startsec = time_internal();
 
 /*
 C
@@ -355,7 +361,7 @@ C
 C      Stop benchmark timing at this point.
 C
 */
-	finisec = time(0);
+	finisec = time_internal();
 
 /*
 C----------------------------------------------------------------

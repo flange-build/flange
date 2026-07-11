@@ -6,7 +6,6 @@
  * Change Logs:
  * Date           Author            Notes
  * 2019-07-31     Xing Zheng        first version
- * 2022-12-07     Jun Zeng          second version
  */
 
 #ifndef __DRV_CODECS_H__
@@ -16,10 +15,6 @@
 
 #ifdef RT_USING_CODEC_AW8896
 extern const struct codec_desc codec_aw8896;
-#endif
-
-#ifdef RT_USING_CODEC_ES7202
-extern const struct codec_desc codec_es7202;
 #endif
 
 #ifdef RT_USING_CODEC_ES7243
@@ -36,10 +31,6 @@ extern const struct codec_desc codec_es8311;
 
 #ifdef RT_USING_CODEC_ES8388
 extern const struct codec_desc codec_es8388;
-#endif
-
-#ifdef RT_USING_CODEC_TDA7803
-#include "tda7803a.h"
 #endif
 
 /**

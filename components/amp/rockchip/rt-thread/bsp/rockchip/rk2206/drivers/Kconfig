@@ -180,4 +180,19 @@ config RT_USING_PSRAM
     bool "Enable QPI PSRAM"
     default n
 
+if RT_USING_USB_HOST
+menu "Enable USB HOST"
+    config RT_USING_DWC2_USBH
+        bool "Enable USB OTG HOST"
+        depends on !RT_USING_USB_DEVICE
+        default n
+
+    if RT_USING_DWC2_USBH
+    config RT_USING_DWC2_USBH0
+        bool "Enable USB OTG0 HOST"
+        default n
+    endif
+endmenu
+endif
+
 endmenu

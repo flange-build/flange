@@ -77,7 +77,7 @@ static rt_err_t mipi_dsi_dcs_write(struct display_state *state, uint8_t cmd,
     switch (size)
     {
     case 0:
-        return -EINVAL;
+        return -RT_EINVAL;
     case 1:
         type = MIPI_DSI_DCS_SHORT_WRITE;
         break;

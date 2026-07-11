@@ -40,6 +40,12 @@
 #define RT_HW_LCD_XPOS_ALIGN          1
 #define RT_HW_LCD_YPOS_ALIGN          1
 
+#define MCU_CS_STR 1
+#define MCU_CS_END 7
+#define MCU_WR_STR 4
+#define MCU_WR_END 6
+#define MCU_TOTAL  8
+
 const static struct rockchip_cmd cmd_on[] =
 {
     {0x00, 0x78, 0x01, {0x11}},

@@ -73,8 +73,14 @@ rt_err_t pwm_regulator_set_voltage(struct pwr_pwm_desc *desc,
         return -RT_EIO;
     }
 
+    if ((voltUv < minVolt) || (voltUv > maxVlot))
+    {
+        rt_kprintf("%s failed! the voltage: %d not in the range [%d, %d]!\n",
+                   __func__, voltUv, minVolt, maxVlot);
+        return -RT_EIO;
+    }
     period = desc->period;
-    pulse = (voltUv - minVolt) * period / (maxVlot - minVolt);
+    pulse = (voltUv - minVolt) / 1000 * period / ((maxVlot - minVolt) / 1000);
     if (pwm_info->invert)
         pulse = period - pulse;
 

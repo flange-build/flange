@@ -78,10 +78,7 @@ static ret_err_t rk_camera_control(rk_device *dev,
 
     MACRO_ASSERT(dev != RK_NULL);
     camera = (struct rk_camera_device *)dev;
-    if (cmd <= RK_DEVICE_CTRL_CAMERA_CTRL ||
-            cmd == RK_DEVICE_CTRL_CID_MATCH_CAM_CONFIG ||
-            cmd == RK_DEVICE_CTRL_CAMERA_STREAM_ON_LATE ||
-            cmd == RK_DEVICE_CTRL_CAMERA_SET_VTS_VAL)
+    if (cmd <= RK_DEVICE_CTRL_CAMERA_CTRL)
     {
         if (camera->ops)
             return (camera->ops->control(camera, cmd, args));

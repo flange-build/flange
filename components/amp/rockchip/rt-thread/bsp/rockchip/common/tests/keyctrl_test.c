@@ -193,7 +193,7 @@ int _at_keyctrl_test(void)
         timer = rt_timer_create("keyctrl_read", timer_func, keyctrl_dev,
                                 10, RT_TIMER_FLAG_PERIODIC);
         if (!timer)
-            return -RT_ERROR;
+            return RT_ERROR;
 
         rt_timer_start(timer);
     }

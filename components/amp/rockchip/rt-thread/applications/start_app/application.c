@@ -14,6 +14,8 @@
 #include <rtthread.h>
 #include <board.h>
 
+#ifndef RT_USING_USER_MAIN
+
 #ifdef  RT_USING_FINSH
 #include <finsh.h>
 #include <shell.h>
@@ -128,3 +130,5 @@ int rt_application_init()
 
     return 0;
 }
+#endif
+

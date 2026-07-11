@@ -249,7 +249,7 @@ int arm_timer_initialize(void)
     if (!cntfrq)
     {
         rt_kprintf("Failed to initialize timer, frequence is 0\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     rt_kprintf("cntfrq: 0x%08x, %u\n", cntfrq, cntfrq);

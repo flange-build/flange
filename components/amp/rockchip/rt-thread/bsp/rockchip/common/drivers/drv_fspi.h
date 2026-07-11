@@ -25,7 +25,9 @@ struct rt_fspi_cs_gpio
 {
     struct GPIO_REG *gpio;
     eGPIO_bankId bank;
+#ifdef HAL_GPIO_MODULE_ENABLED
     ePINCTRL_GPIO_PINS pin;
+#endif
 };
 
 struct rt_fspi_controller
@@ -56,7 +58,10 @@ extern struct rt_fspi_device g_fspi_spinand;
 
 rt_err_t rt_fspi_suspend(struct rt_fspi_device *fspi_device);
 rt_err_t rt_fspi_resume(struct rt_fspi_device *fspi_device);
+bool rt_fspi_is_poll_finished(struct rt_fspi_device *fspi_device);
+rt_err_t rt_fspi_irqhelper(struct rt_fspi_device *fspi_device);
 rt_err_t rt_fspi_xfer(struct rt_fspi_device *fspi_device, struct HAL_SPI_MEM_OP *op);
+rt_err_t rt_fspi_xfer_hw_polling(struct rt_fspi_device *fspi_device, struct HAL_SPI_MEM_OP *op);
 rt_err_t rt_fspi_xip_config(struct rt_fspi_device *fspi_device, struct HAL_SPI_MEM_OP *op, uint32_t on);
 uint32_t rt_fspi_get_max_dll_cells(struct rt_fspi_device *fspi_device);
 rt_err_t rt_fspi_set_delay_lines(struct rt_fspi_device *fspi_device, uint16_t cells);
@@ -66,6 +71,7 @@ rt_err_t rt_fspi_get_speed(struct rt_fspi_device *fspi_device);
 uint32_t rt_fspi_get_xip_mem_data_phys(struct rt_fspi_device *fspi_device);
 uint32_t rt_fspi_get_xip_mem_code_phys(struct rt_fspi_device *fspi_device);
 rt_err_t rt_fspi_set_mode(struct rt_fspi_device *fspi_device, uint32_t mode);
+int32_t rt_fspi_get_irqnum(struct rt_fspi_device *fspi_device);
 rt_err_t rt_fspi_controller_init(struct rt_fspi_device *fspi_device);
 int rt_hw_fspi_device_register(struct rt_fspi_device *fspi_device);
 

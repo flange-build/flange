@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) 2006-2021, RT-Thread Development Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author       Notes
+ * 2020/12/31     Bernard      Add license info
+ */
 #include <rthw.h>
 #include <rtthread.h>
 #include <rtdevice.h>
@@ -77,8 +86,8 @@
 #define PL180_CLR_DAT_END       (1 << 8)
 #define PL180_CLR_DAT_BLK_END   (1 << 10)
 
-#define DBG_SECTION_NAME "drv.sdio"
-#define DBG_LEVEL DBG_INFO
+#define DBG_TAG "drv.sdio"
+#define DBG_LVL DBG_INFO
 #include "rtdbg.h"
 
 struct sdhci_pl180_pdata_t
@@ -286,7 +295,7 @@ static rt_err_t sdhci_pl180_setclock(struct sdhci_t * sdhci, rt_uint32_t clock)
     if(clock)
     {
         temp = read32(pdat->virt + PL180_CLOCK) | (0x1<<8);
-        temp = temp; // skip warning 
+        temp = temp; // skip warning
         write32(pdat->virt + PL180_CLOCK, 0x100);
     }
     else
@@ -351,9 +360,6 @@ static void mmc_request_send(struct rt_mmcsd_host *host, struct rt_mmcsd_req *re
     req->cmd->resp[1] = cmd.response[1];
     req->cmd->resp[0] = cmd.response[0];
 
-    if(req->cmd->err)
-        LOG_E("transfer cmd err ");
-    
     if (req->stop)
     {
         stop.cmdidx = req->stop->cmd_code;
@@ -382,7 +388,7 @@ static void mmc_set_iocfg(struct rt_mmcsd_host *host, struct rt_mmcsd_io_cfg *io
     LOG_D("clock:%d bus_width:%d", io_cfg->clock, io_cfg->bus_width);
 }
 
-static const struct rt_mmcsd_host_ops ops = 
+static const struct rt_mmcsd_host_ops ops =
 {
     mmc_request_send,
     mmc_set_iocfg,
@@ -443,14 +449,11 @@ int pl180_init(void)
     sdhci->priv = pdat;
     write32(pdat->virt + PL180_POWER, 0xbf);
 
-    // rt_kprintf("power:0x%08x\n", read32(pdat->virt + PL180_POWER));
-
     host->ops = &ops;
     host->freq_min = 400000;
     host->freq_max = 50000000;
     host->valid_ocr = VDD_32_33 | VDD_33_34;
-    // host->flags = MMCSD_MUTBLKWRITE | MMCSD_SUP_HIGHSPEED | MMCSD_SUP_SDIO_IRQ | MMCSD_BUSWIDTH_4;
-    host->flags = MMCSD_MUTBLKWRITE | MMCSD_SUP_HIGHSPEED | MMCSD_SUP_SDIO_IRQ;
+    host->flags = MMCSD_MUTBLKWRITE | MMCSD_SUP_HIGHSPEED | MMCSD_SUP_SDIO_IRQ | MMCSD_BUSWIDTH_4;
     host->max_seg_size = 2048;
     host->max_dma_segs = 10;
     host->max_blk_size = 512;

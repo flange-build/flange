@@ -15,6 +15,7 @@
 #include "rtconfig.h"
 #include <stdint.h>
 #include "hal_base.h"
+#include "gic_port.h"
 
 #include "spinlock_id.h"
 
@@ -36,13 +37,13 @@ extern uint32_t __heap_begin[];
 extern uint32_t __heap_end[];
 
 #ifdef RT_USING_UNCACHE_HEAP
-#define RT_HW_HEAP_BEGIN        (void*)&__heap_begin
-#define RT_HW_HEAP_END          ((void*)&__heap_end - RT_UNCACHE_HEAP_SIZE)
+#define RT_HW_HEAP_BEGIN        (void*)__heap_begin
+#define RT_HW_HEAP_END          ((void*)__heap_end - RT_UNCACHE_HEAP_SIZE)
 #define FIRMWARE_SIZE           (DRAM_SIZE - RT_UNCACHE_HEAP_SIZE)
 #define RT_UNCACHE_HEAP_BASE    (FIRMWARE_BASE + FIRMWARE_SIZE)    // same as: RT_HW_HEAP_END
 #else
-#define RT_HW_HEAP_BEGIN        (void*)&__heap_begin
-#define RT_HW_HEAP_END          (void*)&__heap_end
+#define RT_HW_HEAP_BEGIN        (void*)__heap_begin
+#define RT_HW_HEAP_END          (void*)__heap_end
 #endif
 
 void rt_hw_board_init(void);

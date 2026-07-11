@@ -21,7 +21,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifdef __arm__
+#ifdef __ARM_NEON
 
 .text
 .fpu neon

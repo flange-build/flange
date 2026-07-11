@@ -124,4 +124,12 @@ int dhara_map_sync(struct dhara_map *m, dhara_error_t *err);
  */
 int dhara_map_gc(struct dhara_map *m, dhara_error_t *err);
 
+/* Dhara trace */
+extern int dhara_trace_p_count;
+extern int dhara_trace_e_count;
+extern int dhara_trace_r_count;
+
+/* Dhara simple test, enable it by define DHARA_RANDOM_TEST */
+// #define DHARA_RANDOM_TEST
+int dhara_rand_test(struct dhara_map *m, int seed);
 #endif

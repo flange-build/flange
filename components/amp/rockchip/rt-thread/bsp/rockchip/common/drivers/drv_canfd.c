@@ -113,7 +113,7 @@ static void rockchip_canfd_init(struct rt_can_device *can, rt_uint32_t baud, rt_
     case RT_CAN_MODE_NORMAL:
         rkcan->configs->canfdMode = CANFD_MODE_FD;
         break;
-    case RT_CAN_MODE_LISEN:
+    case RT_CAN_MODE_LISTEN:
         rkcan->configs->canfdMode = CANFD_MODE_LISTENONLY;
         break;
     case RT_CAN_MODE_LOOPBACK:
@@ -154,11 +154,11 @@ static rt_err_t rockchip_canfd_control(struct rt_can_device *can, int cmd, void 
     case RT_CAN_CMD_SET_MODE:
         argval = (rt_uint32_t) arg;
         if (argval != RT_CAN_MODE_NORMAL &&
-                argval != RT_CAN_MODE_LISEN &&
+                argval != RT_CAN_MODE_LISTEN &&
                 argval != RT_CAN_MODE_LOOPBACK &&
-                argval != RT_CAN_MODE_LOOPBACKANLISEN)
+                argval != RT_CAN_MODE_LOOPBACKANLISTEN)
         {
-            return -RT_ERROR;
+            return RT_ERROR;
         }
         if (argval != can->config.mode)
         {
@@ -183,8 +183,6 @@ static rt_err_t rockchip_canfd_control(struct rt_can_device *can, int cmd, void 
     }
     break;
     }
-
-    rockchip_canfd_configure(can, &can->config);
 
     return RT_EOK;
 }
@@ -408,7 +406,7 @@ int rockchip_canfd_dev_init(void)
 
     rt_hw_interrupt_install(rockchip_canfd0data.dev->irqNum, (rt_isr_handler_t)rockchip_canfd0data.irq, RT_NULL, "can0");
     rt_hw_interrupt_umask(rockchip_canfd0data.dev->irqNum);
-    HAL_CRU_ClkSetFreq(rockchip_canfd1data.dev->sclkID, ROCKCHIP_CAN_CLK_RATE);
+    HAL_CRU_ClkSetFreq(rockchip_canfd0data.dev->sclkID, ROCKCHIP_CAN_CLK_RATE);
 
 #endif
 
@@ -503,7 +501,7 @@ static void can_rx_thread(void *parameter)
         rt_sem_take(&rx_sem, RT_WAITING_FOREVER);
         rt_device_read(can_dev, 0, &rxmsg, sizeof(rxmsg));
         rt_kprintf("ID:%x , LEN:%x DATA:\n", rxmsg.id, rxmsg.len);
-        for (i = 0; i < 8; i++)
+        for (i = 0; i < rxmsg.len; i++)
         {
             rt_kprintf("%2x", rxmsg.data[i]);
         }
@@ -531,7 +529,7 @@ int can_sample(int argc, char *argv[])
     if (!can_dev)
     {
         rt_kprintf("find %s failed!\n", can_name);
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     rt_sem_init(&rx_sem, "rx_sem", 0, RT_IPC_FLAG_FIFO);

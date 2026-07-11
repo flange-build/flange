@@ -3,6 +3,8 @@ menu "Hardware Drivers Config"
 config SOC_STM32L496VG
     bool
     select SOC_SERIES_STM32L4
+    select RT_USING_COMPONENTS_INIT
+    select RT_USING_USER_MAIN
     default y
 
 menu "Onboard Peripheral Drivers"
@@ -61,6 +63,14 @@ menu "On-chip Peripheral Drivers"
 
     config BSP_USING_ON_CHIP_FLASH
         bool "Enable on-chip FLASH"
+        select RT_USING_FAL
+        default n
+        
+    config BSP_USING_ON_CHIP_FLASH_FATFS
+        bool "Enable onchip flash with FatFS"
+        depends on BSP_USING_ON_CHIP_FLASH
+        select RT_USING_DFS
+        select RT_USING_DFS_ELMFAT
         default n
 
     menuconfig BSP_USING_SPI
@@ -169,12 +179,12 @@ menu "On-chip Peripheral Drivers"
         endif
 
     menuconfig BSP_USING_PWM
-        bool "Enable pwm"
+        bool "Enable PWM"
         default n
         select RT_USING_PWM
         if BSP_USING_PWM
         menuconfig BSP_USING_PWM3
-            bool "Enable timer3 output pwm"
+            bool "Enable timer3 output PWM"
             default n
             if BSP_USING_PWM3
                 config BSP_USING_PWM3_CH2
@@ -196,16 +206,30 @@ menu "On-chip Peripheral Drivers"
         default n
         select RT_USING_ADC
 
-    config BSP_USING_ONCHIP_RTC
+    menuconfig BSP_USING_ONCHIP_RTC
         bool "Enable RTC"
         select RT_USING_RTC
         default n
+        if BSP_USING_ONCHIP_RTC
+            choice
+                prompt "Select clock source"
+                default BSP_RTC_USING_LSE
+
+                config BSP_RTC_USING_LSE
+                    bool "RTC USING LSE"
+
+                config BSP_RTC_USING_LSI
+                    bool "RTC USING LSI"
+            endchoice
+        endif
 
     config BSP_USING_WDT
         bool "Enable Watchdog Timer"
         select RT_USING_WDT
         default n
-
+        
+ source "../libraries/HAL_Drivers/Kconfig"
+    
 endmenu
 
 menu "Board extended module Drivers"

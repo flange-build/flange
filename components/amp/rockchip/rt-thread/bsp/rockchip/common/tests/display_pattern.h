@@ -53,10 +53,14 @@ enum util_fill_pattern
     UTIL_PATTERN_TILES,
     UTIL_PATTERN_PLAIN,
     UTIL_PATTERN_SMPTE,
+    UTIL_PATTERN_SOLID,
+    UTIL_PATTERN_BW,
 };
 
-void util_fill_pattern(uint32_t format,
+void util_fill_pattern(uint32_t format, enum util_fill_pattern pattern,
                        void *planes[3], unsigned int width,
-                       unsigned int height, unsigned int stride);
+                       unsigned int height, unsigned int stride, int value);
+
+enum util_fill_pattern util_pattern_enum(const char *name);
 
 #endif

@@ -93,7 +93,7 @@ RT_WEAK struct pwr_i2c_desc pmic_pwr_i2c_desc = {};
  * @brief  pmic i2c read.
  * @param pmic_i2c_bus: the i2c bus device pointer.
  * @retval RT_EOK: rt_i2c_transfer successfully
- * @retval -RT_ERROR: rt_i2c_transfer failed
+ * @retval RT_ERROR: rt_i2c_transfer failed
  */
 static rt_err_t pmic_i2c_read(struct rt_i2c_bus_device *pmic_i2c_bus,
                               rt_uint8_t addr, rt_uint16_t reg, rt_uint8_t *data)
@@ -133,7 +133,7 @@ static rt_err_t pmic_i2c_read(struct rt_i2c_bus_device *pmic_i2c_bus,
  * @param addr: the pmic i2c address.
  * @param reg: the pmic register .
  * @retval data[0]: i2c read regiter data
- * @retval -RT_ERROR: rt_i2c_transfer failed
+ * @retval RT_ERROR: rt_i2c_transfer failed
  */
 rt_uint32_t pmic_read(struct rt_i2c_bus_device *pmic_i2c_bus,
                       rt_uint8_t addr, rt_uint16_t reg)
@@ -153,7 +153,7 @@ rt_uint32_t pmic_read(struct rt_i2c_bus_device *pmic_i2c_bus,
  * @param reg: the pmic register .
  * @param data: set data.
  * @retval RT_EOK: rt_i2c_transfer successfully
- * @retval -RT_ERROR: rt_i2c_transfer failed
+ * @retval RT_ERROR: rt_i2c_transfer failed
  */
 rt_err_t pmic_write(struct rt_i2c_bus_device *pmic_i2c_bus,
                     rt_uint8_t addr, rt_uint16_t reg, rt_uint8_t data)

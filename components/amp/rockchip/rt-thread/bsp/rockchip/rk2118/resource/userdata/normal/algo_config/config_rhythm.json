@@ -1,0 +1,35 @@
+{
+	"lighting_configs": {
+		"drum": {
+			"status": "enable",
+			"bw": 1.5,
+			"lpf_freq": 120,
+			"drum_freq_low": 5,
+			"drum_freq_high": 500,
+			"drum_freq_correct": 250,
+			"threhold": 50,
+			"detect_num": 8,
+			"pre_num": 3,
+			"after_num": 4,
+			"pre_ratio": 1.6,
+			"after_ratio": 0.8,
+			"amp_ratio": 0.9
+		},
+		"level": {
+			"status": "enable",
+			"band_num": 10,
+			"start_band": 31.25,
+			"end_band": 16000,
+			"smooth_alpha": 0.8
+		},
+		"env": {
+			"status": "enable",
+			"band_num": 10,
+			"start_band": 50,
+			"end_band": 10000,
+			"energy_domain": 1,
+			"band_idx": -1,
+			"env_alpha": 0.99
+		}
+	}
+}

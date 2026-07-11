@@ -22,7 +22,6 @@
 #define INT_GROUP 4
 
 void rt_hw_interrupt_active(int vector);
-void rt_hw_interrupt_deactive(int vector);
 rt_uint32_t rt_hw_interrupt_get_active(void);
 
 #endif

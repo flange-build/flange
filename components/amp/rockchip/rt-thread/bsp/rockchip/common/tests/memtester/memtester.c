@@ -52,7 +52,7 @@ struct test tests[] =
 
 /* Global vars - so tests have access to this information */
 int use_phys = 0;
-off_t physaddrbase = 0;
+unsigned long physaddrbase = 0;
 
 #if 0
 #include <stddef.h>
@@ -529,7 +529,7 @@ void memtester(int argc, char **argv)
         return;
     }
 
-    physaddrbase = strtol(argv[1], NULL, 16);
+    physaddrbase = strtoul(argv[1], NULL, 16);
     bufsize = strtol(argv[2], NULL, 16);
     loops = atoi(argv[3]);
     use_phys = 1;

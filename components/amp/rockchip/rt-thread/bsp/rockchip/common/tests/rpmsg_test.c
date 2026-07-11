@@ -8,26 +8,13 @@
 #include "hal_base.h"
 #include "rpmsg_lite.h"
 #include "rpmsg_queue.h"
-
-
-#define MASTER_ID   ((uint32_t)1)
-#define REMOTE_ID_1 ((uint32_t)0)
-#define REMOTE_ID_2 ((uint32_t)2)
-#define REMOTE_ID_3 ((uint32_t)3)
+#include "board.h"
+#include "rpmsg_base.h"
 
 #define RPMSG_CMD_PROB ((uint8_t)0x80)
 #define RPMSG_ACK_PROB ((uint8_t)0x81)
 #define RPMSG_CMD_TEST ((uint8_t)0x82)
 #define RPMSG_ACK_TEST ((uint8_t)0x83)
-
-extern uint32_t __share_rpmsg_start__[];
-extern uint32_t __share_rpmsg_end__[];
-
-#define RPMSG_MEM_BASE ((uint32_t)&__share_rpmsg_start__)
-#define RPMSG_MEM_END  ((uint32_t)&__share_rpmsg_end__)
-
-#define EPT_M2R_ADDR(addr) (addr + VRING_SIZE)  // covert master endpoint number to remote endpoint number
-#define EPT_R2M_ADDR(addr) (addr - VRING_SIZE)  // covert remote endpoint number to master endpoint number
 
 struct rpmsg_block_t
 {
@@ -37,7 +24,7 @@ struct rpmsg_block_t
 
 struct rpmsg_ept_map_t
 {
-    uint32_t base;          // share memory base addr
+    uint64_t base;          // share memory base addr
     uint32_t size;          // share memory size
     uint32_t m_ept_addr;    // master endpoint number
     uint32_t r_ept_addr;    // remote endpoint number
@@ -86,7 +73,7 @@ static void rpmsg_share_mem_check(void)
     }
 }
 
-static uint32_t remote_id_table[3] = { REMOTE_ID_1, REMOTE_ID_2, REMOTE_ID_3 };
+static uint32_t remote_id_table[3] = { REMOTE_ID_0, REMOTE_ID_2, REMOTE_ID_3 };
 static uint32_t rpmsg_get_remote_index(uint32_t cpu_id)
 {
     uint32_t i;
@@ -104,7 +91,7 @@ static uint32_t rpmsg_get_remote_index(uint32_t cpu_id)
 
 #if defined(PRIMARY_CPU) /*CPU1*/
 static struct rpmsg_info_t *p_rpmsg_info[3];
-static void rpmsg_master_init(void)
+static int rpmsg_master_test_init(void)
 {
     uint32_t i;
     uint32_t master_id, remote_id;
@@ -138,13 +125,22 @@ static void rpmsg_master_init(void)
             }
         }
 
-        info->map = &rpmsg_ept_map_table[remote_id];
         info->instance = rpmsg_master_get_instance(master_id, remote_id);
+        if (info->instance == RT_NULL)
+        {
+            p_rpmsg_info[i] = RT_NULL;
+            rt_free(info);
+            continue;
+        }
+
+        info->map = &rpmsg_ept_map_table[remote_id];
         info->queue = rpmsg_queue_create(info->instance);
         info->ept = rpmsg_lite_create_ept(info->instance, info->map->m_ept_addr, rpmsg_queue_rx_cb, info->queue);
 
         p_rpmsg_info[i] = info;
     }
+
+    return RT_EOK;
 }
 
 static void rpmsg_master_deinit(void)
@@ -165,8 +161,6 @@ static void rpmsg_master_test(void)
     struct rpmsg_info_t *info;
     struct rpmsg_block_t block, *rblock;
 
-    rpmsg_master_init();
-
     master_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
 
     /** probe remote ept, wait for remote ept initialized **/
@@ -176,6 +170,8 @@ static void rpmsg_master_test(void)
 
     for (i = 0; i < 3; i++)
     {
+        if (p_rpmsg_info[i] == RT_NULL)
+            continue;
         info = p_rpmsg_info[i];
         remote_id = remote_id_table[i];
         rblock = (struct rpmsg_block_t *)info->private;
@@ -211,6 +207,8 @@ static void rpmsg_master_test(void)
     block.len = 5;
     for (i = 0; i < 3; i++)
     {
+        if (p_rpmsg_info[i] == RT_NULL)
+            continue;
         info = p_rpmsg_info[i];
         remote_id = remote_id_table[i];
         rt_kprintf("rpmsg_master_send: master[%d]-->remote[%d], remote ept addr = 0x%08x\n", master_id, remote_id, info->map->r_ept_addr);
@@ -229,6 +227,7 @@ static void rpmsg_master_test(void)
             {
                 rblock->len = recv_len;
                 rt_memcpy(rblock->buffer, recv_data, recv_len);   // user must copy data to buffer by use "nocopy"
+                rpmsg_lite_release_rx_buffer(info->instance, recv_data);
 
                 if (rblock->buffer[0] == RPMSG_ACK_TEST)
                 {
@@ -253,16 +252,15 @@ static void rpmsg_master_test(void)
     }
 }
 
+INIT_APP_EXPORT(rpmsg_master_test_init);
 #ifdef RT_USING_FINSH
 #include <finsh.h>
 MSH_CMD_EXPORT(rpmsg_master_test, rpmsg_test test for driver);
 #endif
 
-//#endif
 #else
-//#if defined(CPU0)// || defined(CPU2) || defined(CPU3)
 
-static void rpmsg_remote_test(void)
+static int rpmsg_remote_test(void)
 {
     uint32_t i, master_id, remote_id;
     uint32_t recv_len;
@@ -337,6 +335,8 @@ static void rpmsg_remote_test(void)
 
     rt_free(info->private);
     rt_free(info);
+
+    return RT_EOK;
 }
 
 INIT_APP_EXPORT(rpmsg_remote_test);
@@ -357,8 +357,13 @@ INIT_APP_EXPORT(rpmsg_remote_test);
 #define REMOTE_ID_3 ((uint32_t)3)
 
 // define endpoint id for test
+#ifdef HAL_AP_CORE
 #define RPMSG_RTT_REMOTE_TEST3_EPT_ID 0x3003U
 #define RPMSG_RTT_REMOTE_TEST_EPT3_NAME "rpmsg-ap3-ch0"
+#else
+#define RPMSG_RTT_REMOTE_TEST3_EPT_ID 0x3004U
+#define RPMSG_RTT_REMOTE_TEST_EPT3_NAME "rpmsg-mcu0-test"
+#endif
 
 #define RPMSG_RTT_TEST_MSG "Rockchip rpmsg linux test!"
 
@@ -401,9 +406,11 @@ rpmsg_ns_new_ept_cb rpmsg_ns_cb(uint32_t new_ept, const char *new_ept_name, uint
     uint32_t cpu_id;
     char ept_name[RL_NS_NAME_SIZE];
 
+#ifdef HAL_AP_CORE
     cpu_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
-    strncpy(ept_name, new_ept_name, RL_NS_NAME_SIZE);
     printf("rpmsg remote: name service callback cpu_id-%ld\n", cpu_id);
+#endif
+    strncpy(ept_name, new_ept_name, RL_NS_NAME_SIZE);
     printf("rpmsg remote: new_ept-0x%lx name-%s\n", new_ept, ept_name);
 }
 
@@ -421,9 +428,12 @@ static void rpmsg_linux_test(void)
 
     rpmsg_share_mem_check();
     master_id = MASTER_ID;
+#ifdef HAL_AP_CORE
     remote_id = HAL_CPU_TOPOLOGY_GetCurrentCpuId();
     rt_kprintf("rpmsg remote: remote core cpu_id-%ld\n", remote_id);
-    rt_kprintf("rpmsg remote: shmem_base-0x%lx shmem_end-%lx\n", RPMSG_LINUX_MEM_BASE, RPMSG_LINUX_MEM_END);
+#else
+    remote_id = 3;
+#endif
 
     info = malloc(sizeof(struct rpmsg_info_t));
     if (info == NULL)
@@ -444,8 +454,9 @@ static void rpmsg_linux_test(void)
         }
     }
 
+    rt_kprintf("rpmsg remote: shmem_base-0x%lx shmem_end-%lx\n", RPMSG_LINUX_MEM_BASE, RPMSG_LINUX_MEM_END);
     info->instance = rpmsg_lite_remote_init((void *)RPMSG_LINUX_MEM_BASE, RL_PLATFORM_SET_LINK_ID(master_id, remote_id), RL_NO_FLAGS);
-    rpmsg_lite_wait_for_link_up(info->instance);
+    rpmsg_lite_wait_for_link_up(info->instance, 10U);
     rt_kprintf("rpmsg remote: link up! link_id-0x%lx\n", info->instance->link_id);
     rpmsg_ns_bind(info->instance, rpmsg_ns_cb, &ns_cb_data);
     remote_queue  = rpmsg_queue_create(info->instance);
@@ -458,7 +469,7 @@ static void rpmsg_linux_test(void)
     {
         rpmsg_queue_recv(info->instance, remote_queue, (uint32_t *)&master_ept_id, rx_msg, RL_BUFFER_PAYLOAD_SIZE, RL_NULL, RL_BLOCK);
         //    rpmsg_queue_recv_nocopy(remote_rpmsg, remote_queue, (uint32_t *)&master_ept_id, (char **)&rx_msg, RL_NULL, RL_BLOCK);
-        //rt_kprintf("rpmsg remote: master_ept_id-0x%lx rx_msg: %s\n", master_ept_id, rx_msg);
+        rt_kprintf("rpmsg remote: master_ept_id-0x%lx rx_msg: %s\n", master_ept_id, rx_msg);
         rpmsg_lite_send(info->instance, info->ept, master_ept_id, RPMSG_RTT_TEST_MSG, strlen(RPMSG_RTT_TEST_MSG), RL_BLOCK);
     }
 }

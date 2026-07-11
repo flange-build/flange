@@ -99,6 +99,7 @@ dhrystone_main (void)
         FILE            *Ap;
 
   /* Initializations */
+#if 0
  #ifdef riscos
   if ((Ap = fopen("dhry/res","a+")) == NULL)
  #else
@@ -108,6 +109,7 @@ dhrystone_main (void)
        printf("Can not open dhry.res\n\n");
        exit(1);
     }
+#endif
 
   Next_Ptr_Glob = (Rec_Pointer) malloc (sizeof (Rec_Type));
   Ptr_Glob = (Rec_Pointer) malloc (sizeof (Rec_Type));
@@ -289,6 +291,7 @@ dhrystone_main (void)
     printf ("VAX MIPS rating = %10.3f \n",Vax_Mips);
     printf ("\n");
 
+#if 0
   fprintf(Ap,"\n");
   fprintf(Ap,"Dhrystone Benchmark, Version 2.1 (Language: C)\n");
   fprintf(Ap,"%s\n",Reg_Define);
@@ -296,6 +299,7 @@ dhrystone_main (void)
   fprintf(Ap,"Dhrystones per second: %10.1f\n",Dhrystones_Per_Second);
   fprintf(Ap,"VAX MIPS rating: %10.3f\n",Vax_Mips);
   fclose(Ap);
+#endif
 
   }
 

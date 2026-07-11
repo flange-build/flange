@@ -25,7 +25,7 @@
 #include "hal_base.h"
 #include "hal_bsp.h"
 
-#define WORK_QUEUE_STACK_SIZE       2048
+#define WORK_QUEUE_STACK_SIZE       1024
 #define WORK_QUEUE_PRIORITY         0
 
 typedef enum
@@ -46,7 +46,6 @@ struct rt_dma_pl330
 #if defined(RT_USING_PMU)
     struct pd *pd;
 #endif
-    struct clk_gate *clk_gate;
     struct HAL_PL330_DEV *pl330; /* hal layer */
 };
 
@@ -81,6 +80,30 @@ DEFINE_ROCKCHIP_PL330(0);
 DEFINE_ROCKCHIP_PL330(1);
 #endif /* RT_USING_DMA1 */
 
+#if defined(RT_USING_DMA2)
+DEFINE_ROCKCHIP_PL330(2);
+#endif /* RT_USING_DMA2 */
+
+#if defined(RT_USING_DMA3)
+DEFINE_ROCKCHIP_PL330(3);
+#endif /* RT_USING_DMA3 */
+
+#if defined(RT_USING_DMA4)
+DEFINE_ROCKCHIP_PL330(4);
+#endif /* RT_USING_DMA4 */
+
+#if defined(RT_USING_DMA5)
+DEFINE_ROCKCHIP_PL330(5);
+#endif /* RT_USING_DMA5 */
+
+#if defined(RT_USING_DMA6)
+DEFINE_ROCKCHIP_PL330(6);
+#endif /* RT_USING_DMA6 */
+
+#if defined(RT_USING_DMA7)
+DEFINE_ROCKCHIP_PL330(7);
+#endif /* RT_USING_DMA7 */
+
 static struct rt_dma_pl330 *rk_pl330_table[] =
 {
 #if defined(RT_USING_DMA0)
@@ -88,6 +111,24 @@ static struct rt_dma_pl330 *rk_pl330_table[] =
 #endif
 #if defined(RT_USING_DMA1)
     &rk_pl3301,
+#endif
+#if defined(RT_USING_DMA2)
+    &rk_pl3302,
+#endif
+#if defined(RT_USING_DMA3)
+    &rk_pl3303,
+#endif
+#if defined(RT_USING_DMA4)
+    &rk_pl3304,
+#endif
+#if defined(RT_USING_DMA5)
+    &rk_pl3305,
+#endif
+#if defined(RT_USING_DMA6)
+    &rk_pl3306,
+#endif
+#if defined(RT_USING_DMA7)
+    &rk_pl3307,
 #endif
 };
 
@@ -104,13 +145,14 @@ static inline struct rt_pl330_chan *to_pchan(struct rt_dma_chan *chan)
 static int pl330_start(struct rt_dma_chan *chan)
 {
     struct rt_pl330_chan *rt_pchan = to_pchan(chan);
+#if defined(RT_USING_PMU)
     struct rt_dma_pl330 *rt_pl330 = to_pl330(chan->device);
+#endif
     int ret;
 
     if (rt_pchan->state == DMA_STATE_RUNNING)
         return RT_EOK;
 
-    clk_enable(rt_pl330->clk_gate);
 #if defined(RT_USING_PMU)
     if (rt_pl330->pd)
         pd_on(rt_pl330->pd);
@@ -127,7 +169,9 @@ static int pl330_start(struct rt_dma_chan *chan)
 static int pl330_stop(struct rt_dma_chan *chan)
 {
     struct rt_pl330_chan *rt_pchan = to_pchan(chan);
+#if defined(RT_USING_PMU)
     struct rt_dma_pl330 *rt_pl330 = to_pl330(chan->device);
+#endif
     int ret;
 
     if (rt_pchan->state == DMA_STATE_STOP)
@@ -141,7 +185,6 @@ static int pl330_stop(struct rt_dma_chan *chan)
     if (rt_pl330->pd)
         pd_off(rt_pl330->pd);
 #endif
-    clk_disable(rt_pl330->clk_gate);
 
     if (!ret)
         rt_pchan->state = DMA_STATE_STOP;
@@ -274,7 +317,7 @@ static void pl330_work(struct rt_work *work, void *work_data)
         desc->callback(desc->cparam);
 }
 
-static int rockchip_pl330_irq(struct rt_dma_pl330 *rt_pl330)
+HAL_UNUSED static int rockchip_pl330_irq(struct rt_dma_pl330 *rt_pl330)
 {
     rt_uint32_t irqstatus, i;
 
@@ -318,9 +361,6 @@ int rt_hw_pl330_init(void)
             pd_off(rt_pl330->pd);
 #endif
 
-        if (rt_pl330->pl330->clkGate > 0)
-            rt_pl330->clk_gate = get_clk_gate_from_id(rt_pl330->pl330->clkGate);
-
         rt_snprintf(name, RT_NAME_MAX, "pl330-%d", i);
         rt_pl330->isr_workqueue = rt_workqueue_create(name, WORK_QUEUE_STACK_SIZE,
                                   WORK_QUEUE_PRIORITY);
@@ -333,7 +373,7 @@ int rt_hw_pl330_init(void)
         rt_mutex_init(&rt_pl330->chan_lock, name, RT_IPC_FLAG_FIFO);
 
         dma = &rt_pl330->dma;
-        dma->base = (uint32_t)rt_pl330->pl330->pReg;
+        dma->base = (rt_base_t)rt_pl330->pl330->pReg;
         dma->start = pl330_start;
         dma->stop = pl330_stop;
         dma->request_channel = pl330_request_channel;

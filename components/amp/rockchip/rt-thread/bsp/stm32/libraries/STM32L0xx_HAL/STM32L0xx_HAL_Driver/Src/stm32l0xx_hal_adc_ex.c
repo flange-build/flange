@@ -21,29 +21,13 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2016 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright(c) 2016 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
@@ -79,12 +63,12 @@
 /* Delay for VREFINT stabilization time. */
 /* Internal reference startup time max value is 3ms  (refer to device datasheet, parameter TVREFINT). */
 /* Unit: ms */
-#define SYSCFG_BUF_VREFINT_ENABLE_TIMEOUT       ((uint32_t) 3U)
+#define SYSCFG_BUF_VREFINT_ENABLE_TIMEOUT       (3U)
 
 /* Delay for TEMPSENSOR stabilization time. */
 /* Temperature sensor startup time max value is 10us  (refer to device datasheet, parameter tSTART). */
 /* Unit: ms */
-#define SYSCFG_BUF_TEMPSENSOR_ENABLE_TIMEOUT    ((uint32_t) 1U)
+#define SYSCFG_BUF_TEMPSENSOR_ENABLE_TIMEOUT    (1U)
 
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
@@ -115,7 +99,7 @@
   * @note   Calibration factor can be read after calibration, using function
   *         HAL_ADC_GetValue() (value on 7 bits: from DR[6;0]).
   * @param  hadc       ADC handle
-  * @param  SingleDiff: Selection of single-ended or differential input
+  * @param  SingleDiff Selection of single-ended or differential input
   *          This parameter can be only of the following values:
   *            @arg ADC_SINGLE_ENDED: Channel in mode input single ended
   * @retval HAL status
@@ -159,15 +143,19 @@ HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef* hadc, uint32_t 
     {
       if((HAL_GetTick() - tickstart) > ADC_CALIBRATION_TIMEOUT)
       {
-        /* Update ADC state machine to error */
-        ADC_STATE_CLR_SET(hadc->State,
-                          HAL_ADC_STATE_BUSY_INTERNAL,
-                          HAL_ADC_STATE_ERROR_INTERNAL);
-        
-        /* Process unlocked */
-        __HAL_UNLOCK(hadc);
-        
-        return HAL_ERROR;
+        /* New check to avoid false timeout detection in case of preemption */
+        if(HAL_IS_BIT_SET(hadc->Instance->CR, ADC_CR_ADCAL))
+        {
+          /* Update ADC state machine to error */
+          ADC_STATE_CLR_SET(hadc->State,
+                            HAL_ADC_STATE_BUSY_INTERNAL,
+                            HAL_ADC_STATE_ERROR_INTERNAL);
+
+          /* Process unlocked */
+          __HAL_UNLOCK(hadc);
+
+          return HAL_ERROR;
+        }
       }
     }
     
@@ -196,8 +184,8 @@ HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef* hadc, uint32_t 
 
 /**
   * @brief  Get the calibration factor.
-  * @param  hadc: ADC handle.
-  * @param  SingleDiff: This parameter can be only:
+  * @param  hadc ADC handle.
+  * @param  SingleDiff This parameter can be only:
   *           @arg ADC_SINGLE_ENDED: Channel in mode input single ended.
   * @retval Calibration value.
   */
@@ -214,10 +202,10 @@ uint32_t HAL_ADCEx_Calibration_GetValue(ADC_HandleTypeDef* hadc, uint32_t Single
 /**
   * @brief  Set the calibration factor to overwrite automatic conversion result.
   *         ADC must be enabled and no conversion is ongoing.
-  * @param  hadc: ADC handle
-  * @param  SingleDiff: This parameter can be only:
+  * @param  hadc ADC handle
+  * @param  SingleDiff This parameter can be only:
   *           @arg ADC_SINGLE_ENDED: Channel in mode input single ended.
-  * @param  CalibrationFactor: Calibration factor (coded on 7 bits maximum)
+  * @param  CalibrationFactor Calibration factor (coded on 7 bits maximum)
   * @retval HAL state
   */
 HAL_StatusTypeDef HAL_ADCEx_Calibration_SetValue(ADC_HandleTypeDef* hadc, uint32_t SingleDiff, uint32_t CalibrationFactor)
@@ -265,8 +253,9 @@ HAL_StatusTypeDef HAL_ADCEx_Calibration_SetValue(ADC_HandleTypeDef* hadc, uint32
   *         (in case of previous ADC operations: function HAL_ADC_DeInit() must be called first)
   *         For more details on procedure and buffer current consumption, refer to device reference manual.
   * @note   This is functional only if the LOCK is not set.
+  * @note   This API is obsolete. This configuration is done in HAL_ADC_ConfigChannel().
   * @retval None
-*/
+  */
 HAL_StatusTypeDef HAL_ADCEx_EnableVREFINT(void)
 {
   uint32_t tickstart = 0U;
@@ -281,8 +270,12 @@ HAL_StatusTypeDef HAL_ADCEx_EnableVREFINT(void)
   while(HAL_IS_BIT_CLR(SYSCFG->CFGR3, SYSCFG_CFGR3_VREFINT_RDYF))
   {
     if((HAL_GetTick() - tickstart) > SYSCFG_BUF_VREFINT_ENABLE_TIMEOUT)
-    { 
-      return HAL_ERROR;
+    {
+      /* New check to avoid false timeout detection in case of preemption */
+      if(HAL_IS_BIT_CLR(SYSCFG->CFGR3, SYSCFG_CFGR3_VREFINT_RDYF))
+      {
+        return HAL_ERROR;
+      }
     }
   }
   
@@ -292,6 +285,7 @@ HAL_StatusTypeDef HAL_ADCEx_EnableVREFINT(void)
 /**
   * @brief Disables the Buffer Vrefint for the ADC.
   * @note This is functional only if the LOCK is not set.
+  * @note This API is obsolete. This configuration is done in HAL_ADC_ConfigChannel().
   * @retval None
   */
 void HAL_ADCEx_DisableVREFINT(void)
@@ -301,13 +295,14 @@ void HAL_ADCEx_DisableVREFINT(void)
 }
 
 /**
-* @brief  Enables the buffer of temperature sensor for the ADC, required when device is in mode low-power (low-power run, low-power sleep or stop mode)
-*         This function must be called before function HAL_ADC_Init()
-*         (in case of previous ADC operations: function HAL_ADC_DeInit() must be called first)
-*         For more details on procedure and buffer current consumption, refer to device reference manual.
-* @note   This is functional only if the LOCK is not set.
-* @retval None
-*/
+  * @brief  Enables the buffer of temperature sensor for the ADC, required when device is in mode low-power (low-power run, low-power sleep or stop mode)
+  *         This function must be called before function HAL_ADC_Init()
+  *         (in case of previous ADC operations: function HAL_ADC_DeInit() must be called first)
+  *         For more details on procedure and buffer current consumption, refer to device reference manual.
+  * @note   This is functional only if the LOCK is not set.
+  * @note   This API is obsolete. This configuration is done in HAL_ADC_ConfigChannel().
+  * @retval None
+  */
 HAL_StatusTypeDef HAL_ADCEx_EnableVREFINTTempSensor(void)
 {
   uint32_t tickstart = 0U;
@@ -322,8 +317,12 @@ HAL_StatusTypeDef HAL_ADCEx_EnableVREFINTTempSensor(void)
   while(HAL_IS_BIT_CLR(SYSCFG->CFGR3, SYSCFG_CFGR3_VREFINT_RDYF))
   {
     if((HAL_GetTick() - tickstart) > SYSCFG_BUF_TEMPSENSOR_ENABLE_TIMEOUT)
-    { 
-      return HAL_ERROR;
+    {
+      /* New check to avoid false timeout detection in case of preemption */
+      if(HAL_IS_BIT_CLR(SYSCFG->CFGR3, SYSCFG_CFGR3_VREFINT_RDYF))
+      {
+        return HAL_ERROR;
+      }
     }
   }
   
@@ -333,6 +332,7 @@ HAL_StatusTypeDef HAL_ADCEx_EnableVREFINTTempSensor(void)
 /**
   * @brief Disables the VREFINT and Sensor for the ADC.
   * @note This is functional only if the LOCK is not set.
+  * @note This API is obsolete. This configuration is done in HAL_ADC_ConfigChannel().
   * @retval None
   */
 void HAL_ADCEx_DisableVREFINTTempSensor(void)
@@ -349,6 +349,9 @@ void HAL_ADCEx_DisableVREFINTTempSensor(void)
   * @}
   */
 
+/**
+  * @}
+  */
 #endif /* HAL_ADC_MODULE_ENABLED */
 /**
   * @}

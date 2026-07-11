@@ -33,7 +33,11 @@ struct rockchip_uart
     const struct uart_board *uart_board;
     /* HAL */
     const struct HAL_UART_DEV *dev;
-    struct UART_SAVE_CONFIG backup;
+
+#ifdef RT_USING_PM
+    struct UART_SAVE_CONFIG pUartSave;
+#endif
+
     /* irq handler */
     rt_isr_handler_t irq_handler;
 };
@@ -94,6 +98,26 @@ DEFINE_ROCKCHIP_UART(8);
 DEFINE_ROCKCHIP_UART(9);
 #endif /* RT_USING_UART9 */
 
+#if defined(RT_USING_UART10)
+DEFINE_ROCKCHIP_UART(10);
+#endif /* RT_USING_UART10 */
+
+#if defined(RT_USING_UART11)
+DEFINE_ROCKCHIP_UART(11);
+#endif /* RT_USING_UART11 */
+
+#if defined(RT_USING_UART12)
+DEFINE_ROCKCHIP_UART(12);
+#endif /* RT_USING_UART12 */
+
+#if defined(RT_USING_UART13)
+DEFINE_ROCKCHIP_UART(13);
+#endif /* RT_USING_UART13 */
+
+#if defined(RT_USING_UART14)
+DEFINE_ROCKCHIP_UART(14);
+#endif /* RT_USING_UART14 */
+
 static struct rockchip_uart *rk_uart_table[] =
 {
 #if defined(RT_USING_UART0)
@@ -125,6 +149,21 @@ static struct rockchip_uart *rk_uart_table[] =
 #endif
 #if defined(RT_USING_UART9)
     &rk_uart9,
+#endif
+#if defined(RT_USING_UART10)
+    &rk_uart10,
+#endif
+#if defined(RT_USING_UART11)
+    &rk_uart11,
+#endif
+#if defined(RT_USING_UART12)
+    &rk_uart12,
+#endif
+#if defined(RT_USING_UART13)
+    &rk_uart13,
+#endif
+#if defined(RT_USING_UART14)
+    &rk_uart14,
 #endif
 };
 
@@ -159,6 +198,21 @@ static struct rt_serial_device *rt_serial_table[] =
 #endif
 #if defined(RT_USING_UART9)
     &serial9,
+#endif
+#if defined(RT_USING_UART10)
+    &serial10,
+#endif
+#if defined(RT_USING_UART11)
+    &serial11,
+#endif
+#if defined(RT_USING_UART12)
+    &serial12,
+#endif
+#if defined(RT_USING_UART13)
+    &serial13,
+#endif
+#if defined(RT_USING_UART14)
+    &serial14,
 #endif
 };
 
@@ -239,6 +293,26 @@ int rt_hw_console_channel(void)
     if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart9"))
         return 9;
 #endif
+#if defined(RT_USING_UART10)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart10"))
+        return 10;
+#endif
+#if defined(RT_USING_UART11)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart11"))
+        return 11;
+#endif
+#if defined(RT_USING_UART12)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart12"))
+        return 12;
+#endif
+#if defined(RT_USING_UART13)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart13"))
+        return 13;
+#endif
+#if defined(RT_USING_UART14)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart14"))
+        return 14;
+#endif
 #endif
 
     return -RT_EINVAL;
@@ -289,6 +363,26 @@ void rt_hw_console_output(const char *str)
     if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart9"))
         uart = &rk_uart9;
 #endif
+#if defined(RT_USING_UART10)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart10"))
+        uart = &rk_uart10;
+#endif
+#if defined(RT_USING_UART11)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart11"))
+        uart = &rk_uart11;
+#endif
+#if defined(RT_USING_UART12)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart12"))
+        uart = &rk_uart12;
+#endif
+#if defined(RT_USING_UART13)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart13"))
+        uart = &rk_uart13;
+#endif
+#if defined(RT_USING_UART14)
+    if (!strcmp(RT_CONSOLE_DEVICE_NAME, "uart14"))
+        uart = &rk_uart14;
+#endif
 #endif
 
     if (!uart)
@@ -333,7 +427,7 @@ static rt_err_t rockchip_uart_configure(rt_serial_t *serial, struct serial_confi
 
     HAL_UART_Init(dev, &hal_uart_config);
 
-    if (dev->isAutoFlow && (cfg->flow_ctrl == RT_SERIAL_AUTO_FLOW_ENABLE))
+    if (dev->isAutoFlow && (cfg->flowcontrol == RT_SERIAL_FLOWCONTROL_CTSRTS))
         HAL_UART_EnableAutoFlowControl(dev->pReg);
     else
         HAL_UART_DisableAutoFlowControl(dev->pReg);
@@ -348,7 +442,7 @@ static rt_err_t rockchip_uart_control(rt_serial_t *serial, int cmd, void *arg)
     struct rockchip_uart *uart = RT_NULL;
     struct UART_REG *hw_base = RT_NULL;
     const struct HAL_UART_DEV *dev;
-    rt_uint32_t flag = (rt_uint32_t)arg;
+    rt_base_t flag = (rt_base_t)arg;
 
     RT_ASSERT(serial != RT_NULL);
     uart = (struct rockchip_uart *)serial->parent.user_data;
@@ -374,10 +468,10 @@ static rt_err_t rockchip_uart_control(rt_serial_t *serial, int cmd, void *arg)
         if (flag == RT_DEVICE_FLAG_DMA_RX)
             HAL_UART_EnableIrq(hw_base, UART_IER_RDI);
         break;
-    case RT_DEVICE_CTRL_HW_OPEN:
+    case RT_DEVICE_CTRL_OPEN:
         clk_enable_by_id(dev->sclkGateID);
         break;
-    case RT_DEVICE_CTRL_HW_CLOSE:
+    case RT_DEVICE_CTRL_CLOSE:
         clk_disable_by_id(dev->sclkGateID);
         break;
     }
@@ -387,10 +481,9 @@ static rt_err_t rockchip_uart_control(rt_serial_t *serial, int cmd, void *arg)
 
 static int rockchip_uart_irq(rt_serial_t *serial)
 {
-    rt_uint32_t iir = 0, status = 0, rfl = 0, usr = 0;
+    rt_uint32_t iir = 0;
     struct rockchip_uart *uart = RT_NULL;
     struct UART_REG *hw_base = RT_NULL;
-    rt_uint8_t c = 0;
 
     RT_ASSERT(serial != RT_NULL);
     uart = (struct rockchip_uart *)serial->parent.user_data;
@@ -399,23 +492,6 @@ static int rockchip_uart_irq(rt_serial_t *serial)
     rt_interrupt_enter();
 
     iir = HAL_UART_GetIrqID(hw_base);
-
-    /*
-     * There are ways to get Designware-based UARTs into a state where
-     * they are asserting UART_IIR_RX_TIMEOUT but there is no actual
-     * data available.  If we see such a case then we'll do a bogus
-     * read.  If we don't do this then the "RX TIMEOUT" interrupt will
-     * fire forever.
-     */
-    if ((iir & 0x3f) == UART_IIR_RX_TIMEOUT)
-    {
-        usr = HAL_UART_GetUsr(hw_base);
-        status = HAL_UART_GetLsr(hw_base);
-        rfl = hw_base->RFL;
-        if (!(status & (UART_LSR_DR | UART_LSR_BI)) && !(usr & 0x1) && (rfl == 0))
-            c = (uint8_t)hw_base->RBR;
-        c++;    /* just fix warning */
-    }
 
     switch (iir)
     {
@@ -446,7 +522,8 @@ static const struct rt_uart_ops rockchip_uart_ops =
 };
 
 #ifdef RT_USING_PM
-static int rockchip_uart_suspend(const struct rt_device *device)
+
+static int rockchip_uart_suspend(const struct rt_device *device, rt_uint8_t mode)
 {
     struct rockchip_uart *uart = RT_NULL;
     const struct HAL_UART_DEV *dev;
@@ -456,13 +533,13 @@ static int rockchip_uart_suspend(const struct rt_device *device)
     dev = uart->dev;
 
     rt_hw_interrupt_mask(dev->irqNum);
-    HAL_UART_Suspend(dev->pReg, &uart->backup);
+    HAL_UART_Suspend(dev->pReg, &(uart->pUartSave));
     clk_disable_by_id(dev->pclkGateID);
     clk_disable_by_id(dev->sclkGateID);
     return RT_EOK;
 }
 
-static void rockchip_uart_resume(const struct rt_device *device)
+static void rockchip_uart_resume(const struct rt_device *device, rt_uint8_t mode)
 {
     struct rockchip_uart *uart = RT_NULL;
     const struct HAL_UART_DEV *dev;
@@ -474,8 +551,7 @@ static void rockchip_uart_resume(const struct rt_device *device)
     clk_enable_by_id(dev->pclkGateID);
     clk_enable_by_id(dev->sclkGateID);
     HAL_UART_Reset(dev->pReg);
-    HAL_DelayUs(10);
-    HAL_UART_Resume(dev->pReg, &uart->backup);
+    HAL_UART_Resume(dev->pReg, &(uart->pUartSave));
     rt_hw_interrupt_umask(dev->irqNum);
 }
 
@@ -513,7 +589,7 @@ int rockchip_rt_hw_uart_pm_register(void)
             serial->ops = &rockchip_uart_ops;
 
             if (!is_console && !uart_board->en_irq_wake)
-                rt_pm_register_device(&serial->parent, &rockchip_uart_pm_ops);
+                rt_pm_device_register(&serial->parent, &rockchip_uart_pm_ops);
         }
     }
 

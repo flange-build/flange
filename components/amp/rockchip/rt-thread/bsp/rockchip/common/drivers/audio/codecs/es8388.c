@@ -21,6 +21,7 @@
 #include "drv_codecs.h"
 #include "hal_bsp.h"
 #include "es8388.h"
+#include "board.h"
 
 #define ARRAY_SIZE(ar) (sizeof(ar) / sizeof(ar[0]))
 
@@ -108,16 +109,17 @@ static rt_err_t es_rd_reg(struct rt_i2c_client *i2c_client,
 
 static rt_err_t es_pa_ctl(bool on)
 {
+#ifdef PA_MUTE_PIN
     if (on)
     {
-        HAL_GPIO_SetPinLevel(GPIO0, GPIO_PIN_B1, GPIO_HIGH);
+        HAL_GPIO_SetPinLevel(PA_MUTE_GPIO, PA_MUTE_PIN, PA_MUTE_SWITCH_ON);
         rt_thread_mdelay(PA_CTL_DELAY_MS);
     }
     else
     {
-        HAL_GPIO_SetPinLevel(GPIO0, GPIO_PIN_B1, GPIO_LOW);
+        HAL_GPIO_SetPinLevel(PA_MUTE_GPIO, PA_MUTE_PIN, PA_MUTE_SWITCH_OFF);
     }
-
+#endif
     return RT_EOK;
 }
 
@@ -182,10 +184,10 @@ static rt_err_t es8388_reg_init(struct es8388_priv *es8388)
     ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL20, 0x80); // only right DAC to right mixer enable 0db
     ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL21, 0x80); // set internal ADC and DAC use the same LRCK clock, ADC LRCK as internal LRCK
     ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL23, 0x00); // vroi=0
-    ret |= es_wr_reg(es8388->i2c_client, ES8388_DACPOWER, 0x0c);  // Just enable DAC LOUT1 and ROUT1
+    ret |= es_wr_reg(es8388->i2c_client, ES8388_DACPOWER, 0x3c);  // Just enable DAC LOUT1 and ROUT1
     /* ADC */
     ret |= es_wr_reg(es8388->i2c_client, ES8388_ADCPOWER, 0xff);
-    ret |= es_wr_reg(es8388->i2c_client, ES8388_ADCCONTROL1, 0xbb); // MIC Left and Right channel PGA gain
+    ret |= es_wr_reg(es8388->i2c_client, ES8388_ADCCONTROL1, 0x88); // MIC Left and Right channel PGA gain
     ret |= es_wr_reg(es8388->i2c_client, ES8388_ADCCONTROL2, 0xf0); // 0xf0 are differential for LINSEL & RINSEL. 0x00 LINSEL & RINSEL, LIN1/RIN1 as ADC Input; DSSEL,use one DS Reg11; DSR, LINPUT1-RINPUT1
     ret |= es_wr_reg(es8388->i2c_client, ES8388_ADCCONTROL3, 0x02);
     ret |= es_wr_reg(es8388->i2c_client, ES8388_ADCCONTROL4, 0x0d); // Left/Right data, Left/Right justified mode, Bits length, I2S format
@@ -200,7 +202,12 @@ static rt_err_t es8388_reg_init(struct es8388_priv *es8388)
     /* set LDACVOL and LDACVOR 0dB */
     ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL4, 0x00);
     ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL5, 0x00);
-    /* set the LOUT2VOL and ROUT2VOL -24dB */
+
+    /* set the LOUT1VOL and ROUT1VOL 0dB */
+    ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL24, 0x1e);
+    ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL25, 0x1e);
+
+    /* set the LOUT2VOL and ROUT2VOL 0dB */
     ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL26, 0x1e);
     ret |= es_wr_reg(es8388->i2c_client, ES8388_DACCONTROL27, 0x1e);
 
@@ -460,17 +467,6 @@ static const struct audio_codec_ops es8388_ops =
 
 static int misc_prepare(void)
 {
-    /* set SPK_MUTE(GPIO0_B1) to high */
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK0, GPIO_PIN_B1, PIN_CONFIG_MUX_FUNC0);
-    HAL_GPIO_SetPinDirection(GPIO0, GPIO_PIN_B1, GPIO_OUT);
-    HAL_GPIO_SetPinLevel(GPIO0, GPIO_PIN_B1, GPIO_LOW);
-
-    /* set iomux to sda and scl for rk2108 i2c0 from GPIO0D3 and GPIO0D4 */
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK0, GPIO_PIN_D3, PIN_CONFIG_MUX_FUNC2);
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK0, GPIO_PIN_D4, PIN_CONFIG_MUX_FUNC2);
-    /* Using i2c0 mux0 via GPIO0D3 GPIO0D4*/
-    WRITE_REG(GRF->SOC_CON5, 0x00030001);
-
     return RT_EOK;
 }
 

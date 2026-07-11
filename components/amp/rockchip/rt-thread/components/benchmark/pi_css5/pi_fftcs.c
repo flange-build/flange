@@ -32,6 +32,8 @@ Example compilation:
 #include <stdlib.h>
 #include <time.h>
 #include <ctype.h>
+#include <rtthread.h>
+
 
 void mp_load_0 (int n, int radix, int out[]);
 void mp_load_1 (int n, int radix, int out[]);
@@ -79,7 +81,7 @@ pi_css5_main (int argc, char *argv[])
   int *a, *b, *c, *e, *i1, *i2;
   double *d1, *d2, *d3;
   char *dgt, filename[100];
-  clock_t start_time;
+  rt_tick_t start_time;
   double elap_time, loop_time;
   FILE *f_out;
 #ifndef QUIET_OUT
@@ -100,7 +102,7 @@ pi_css5_main (int argc, char *argv[])
   fprintf (stdout, "initializing...\n");
 #endif
   nfft /= 4;
-  start_time = clock ();
+  start_time = rt_tick_get();
   for (log2_nfft = 1; (1 << log2_nfft) < nfft; log2_nfft++);
   nfft = 1 << log2_nfft;
   n = nfft + 2;
@@ -198,11 +200,11 @@ pi_css5_main (int argc, char *argv[])
   fprintf (stdout, "AGM iteration\n");
 #endif
   npow = 4;
-  elap_time = ((double) clock () - (double) start_time) / CLOCKS_PER_SEC;
+  elap_time = ((double) rt_tick_get() - (double) start_time) / RT_TICK_PER_SECOND;
 
   do
     {
-      clock_t start_loop_time = clock ();
+      rt_tick_t start_loop_time = rt_tick_get();
       npow *= 2;
       /* ---- e = (a + b) / 2 ---- */
       mp_add (n, radix, a, b, e);
@@ -225,7 +227,7 @@ pi_css5_main (int argc, char *argv[])
 	  nprc = n;
 	}
       loop_time =
-	((double) clock () - (double) start_loop_time) / CLOCKS_PER_SEC;
+	((double) rt_tick_get() - (double) start_loop_time) / RT_TICK_PER_SECOND;
       elap_time += loop_time;
 #ifndef QUIET_OUT
       fprintf (stdout, "precision= %d: %0.2f sec\n", 4 * nprc * log10_radix,
@@ -233,7 +235,7 @@ pi_css5_main (int argc, char *argv[])
 #endif
     }
   while (4 * nprc <= n);
-  start_time = clock ();
+  start_time = rt_tick_get();
   /* ---- e = e * e / 4 (half precision) ---- */
   mp_idiv_2 (n, radix, e, e);
   mp_squh (n, radix, e, e, nfft, d1);
@@ -252,10 +254,11 @@ pi_css5_main (int argc, char *argv[])
   /* ---- output ---- */
   dgt = (char *) d1;
   mp_sprintf (n - 1, log10_radix, a, dgt);
-  elap_time += ((double) clock () - (double) start_time) / CLOCKS_PER_SEC;
+  elap_time += ((double) rt_tick_get() - (double) start_time) / RT_TICK_PER_SECOND;
 
   sprintf (filename, "pi%i.txt", log10_radix * (n - 2));
 
+#if 0
   f_out = fopen (filename, "w");
 #ifndef QUIET_OUT
   fprintf (stdout, "writing %s...\n", filename);
@@ -301,6 +304,7 @@ pi_css5_main (int argc, char *argv[])
   fputc ('\n', f_out);
   fprintf (f_out, "%s\n", dgt);
   fclose (f_out);
+#endif
   free (d3);
   free (d2);
   free (d1);

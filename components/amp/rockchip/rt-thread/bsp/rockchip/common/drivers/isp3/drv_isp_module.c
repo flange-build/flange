@@ -45,22 +45,41 @@ static void isp_rawaelite_cfg(struct rk_isp_dev *dev)
           ((w / wnd_num - 2) & ~1);
     RKISP_WRITE(ISP3X_RAWAE_LITE_BLK_SIZ, val);
 
-    RKISP_WRITE(ISP3X_RAWAE_LITE_CTRL, 0x2);
+    RKISP_WRITE(ISP3X_RAWAE_LITE_CTRL, 0x3);
 }
 
 static void isp_rawaebig_cfg(struct rk_isp_dev *dev)
 {
     struct rk_camera_mbus_framefmt *mbus_fmt = &dev->input.cam_info.mbus_fmt;
     uint32_t w = mbus_fmt->width, h = mbus_fmt->height;
-    uint32_t val, wnd_num = 15;
+    uint32_t val, wnd_num = 5;
 
-    RKISP_WRITE(ISP3X_VI_ISP_PATH, 0x400000);
     RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_OFFSET, 0);
     val = ((h / wnd_num - 2) & ~1) << 16 |
           ((w / wnd_num - 2) & ~1);
     RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_BLK_SIZE, val);
 
-    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_CTRL, 0x5);
+    val = 2 << 16 | 2;
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_WND1_OFFSET, val);
+    val = 100 << 16 | 100;
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_WND1_SIZE, val);
+
+    val = 2 << 16 | 150;
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_WND2_OFFSET, val);
+    val = 100 << 16 | 100;
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_WND2_SIZE, val);
+
+    val = 150 << 16 | 2;
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_WND3_OFFSET, val);
+    val = 100 << 16 | 100;
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_WND3_SIZE, val);
+
+    val = 150 << 16 | 150;
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_WND4_OFFSET, val);
+    val = 100 << 16 | 100;
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_WND4_SIZE, val);
+
+    RKISP_WRITE(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_CTRL, 0xf3);
 }
 
 static void isp_awb_cfg(struct rk_isp_dev *dev)
@@ -160,245 +179,6 @@ static void isp_bls_cfg(struct rk_isp_dev *dev)
     RKISP_WRITE(ISP32_BLS_ISP_OB_PREDGAIN, 0);
 }
 
-static void isp_baynr_cfg(struct rk_isp_dev *dev)
-{
-    struct rkisp_params_buffer *buf = &dev->params;
-    struct isp_baynr_cfg *cfg = &buf->params.baynr;
-
-    uint32_t i, value;
-
-    //ISP32_MODULE_EN
-    value = 0x01;
-    value |= !!cfg->bay3d_gain_en << 16 |
-             (cfg->lg2_mode & 0x3) << 12 |
-             !!cfg->gauss_en << 8 |
-             !!cfg->log_bypass << 4;
-    RKISP_WRITE(ISP3X_BAYNR_CTRL, value);
-
-    value = ISP_PACK_2SHORT(cfg->dgain0, cfg->dgain1);
-    RKISP_WRITE(ISP3X_BAYNR_DGAIN0, value);
-
-    RKISP_WRITE(ISP3X_BAYNR_DGAIN1, cfg->dgain2);
-    RKISP_WRITE(ISP3X_BAYNR_PIXDIFF, cfg->pix_diff);
-
-    value = ISP_PACK_2SHORT(cfg->softthld, cfg->diff_thld);
-    RKISP_WRITE(ISP3X_BAYNR_THLD, value);
-
-    value = ISP_PACK_2SHORT(cfg->reg_w1, cfg->bltflt_streng);
-    RKISP_WRITE(ISP3X_BAYNR_W1_STRENG, value);
-
-    for (i = 0; i < ISP_BAYNR_XY_NUM / 2; i++)
-    {
-        value = ISP_PACK_2SHORT(cfg->sigma_x[2 * i], cfg->sigma_x[2 * i + 1]);
-        RKISP_WRITE(ISP3X_BAYNR_SIGMAX01 + 4 * i, value);
-    }
-
-    for (i = 0; i < ISP_BAYNR_XY_NUM / 2; i++)
-    {
-        value = ISP_PACK_2SHORT(cfg->sigma_y[2 * i], cfg->sigma_y[2 * i + 1]);
-        RKISP_WRITE(ISP3X_BAYNR_SIGMAY01 + 4 * i, value);
-    }
-
-    value = (cfg->weit_d2 & 0x3FF) << 20 |
-            (cfg->weit_d1 & 0x3FF) << 10 |
-            (cfg->weit_d0 & 0x3FF);
-    RKISP_WRITE(ISP3X_BAYNR_WRIT_D, value);
-
-    value = ISP_PACK_2SHORT(cfg->lg2_off, cfg->lg2_lgoff);
-    RKISP_WRITE(ISP3X_BAYNR_LG_OFF, value);
-
-    value = cfg->dat_max & 0xfffff;
-    RKISP_WRITE(ISP3X_BAYNR_DAT_MAX, value);
-
-    value = ISP_PACK_2SHORT(cfg->rgain_off, cfg->bgain_off);
-    RKISP_WRITE(ISP32_BAYNR_SIGOFF, value);
-
-    for (i = 0; i < ISP_BAYNR_GAIN_NUM / 4; i++)
-    {
-        value = ISP_PACK_4BYTE(cfg->gain_x[i * 4], cfg->gain_x[i * 4 + 1],
-                               cfg->gain_x[i * 4 + 2], cfg->gain_x[i * 4 + 3]);
-        RKISP_WRITE(ISP32_BAYNR_GAINX03 + i * 4, value);
-    }
-
-    for (i = 0; i < ISP_BAYNR_GAIN_NUM / 2; i++)
-    {
-        value = ISP_PACK_2SHORT(cfg->gain_y[i * 2], cfg->gain_y[i * 2 + 1]);
-        RKISP_WRITE(ISP32_BAYNR_GAINY01 + i * 4, value);
-    }
-
-
-}
-
-static void isp_bay3d_cfg(struct rk_isp_dev *dev)
-{
-    struct rk_camera_mbus_framefmt *mbus_fmt = &dev->input.cam_info.mbus_fmt;
-    uint32_t w = mbus_fmt->width, h = mbus_fmt->height;
-    struct rkisp_params_buffer *buf = &dev->params;
-    struct isp_bay3d_cfg *cfg = &buf->params.bay3d;
-    uint32_t cur_size, iir_size, ds_size, wrap_line, wsize, div;
-    bool is_hdr = false;
-    bool is_bwsaving = cfg->bwsaving_en;
-    bool is_glbpk = !!cfg->glbpk_en;
-    bool is_bwopt_dis = !!cfg->bwopt_gain_dis;
-    bool is_predgain = false;//isp_bls_cfg ISP32_BLS_ISP_OB_PREDGAIN=0
-    bool is_lo8x8 = !cfg->lo4x8_en && !cfg->lo4x4_en;
-    uint32_t i, value;
-
-    value = RKISP_READ(ISP3X_ISP_CTRL1);
-
-    if (cfg->is_first)
-    {
-        value |= ISP3X_RAW3D_FST_FRAME;
-        RKISP_WRITE(ISP3X_ISP_CTRL1, value);
-    }
-    else
-    {
-        value &= ~(ISP3X_RAW3D_FST_FRAME);
-        RKISP_WRITE(ISP3X_ISP_CTRL1, value);
-    }
-
-
-    w = (w + 15) / 16 * 16;
-    h = (h + 15) / 16 * 16;
-
-    /* bay3d iir buf size */
-    wsize = is_bwopt_dis ? w : w * 2;
-    if (is_bwsaving)
-        wsize = wsize * 3 / 4;
-    if (!is_glbpk)
-        wsize += w / 8;
-    wsize *= 2;
-    div = is_bwopt_dis ? 1 : 2;
-    iir_size = (wsize * h / div + 15) / 16 * 16;
-
-    /* bay3d ds buf size */
-    div = is_lo8x8 ? 64 : 16;
-    ds_size = w * h / div;
-    ds_size = (ds_size * 2 + 15) / 16 * 16;
-
-    /* bay3d cur buf size */
-    wrap_line = is_lo8x8 ? 76 : 36;
-    wsize = is_bwopt_dis ? w : w * 2;
-    if (is_bwsaving)
-        wsize = wsize * 3 / 4;
-    if (is_hdr || is_predgain)
-        wsize += w / 8;
-    wsize = (wsize * 2 + 15) / 16 * 16;
-    div = is_bwopt_dis ? 1 : 2;
-    cur_size = (wsize * wrap_line / div + 15) / 16 * 16;
-
-    RKISP_WRITE(ISP3X_MI_BAY3D_CUR_WR_LENGTH, wsize);
-    RKISP_WRITE(ISP3X_MI_BAY3D_CUR_RD_LENGTH, wsize);
-
-    RKISP_WRITE(ISP3X_MI_BAY3D_CUR_WR_SIZE, cur_size);
-    RKISP_WRITE(ISP32_MI_BAY3D_CUR_RD_SIZE, cur_size);
-    RKISP_WRITE(ISP3X_MI_BAY3D_IIR_WR_SIZE, iir_size);
-    RKISP_WRITE(ISP3X_MI_BAY3D_DS_WR_SIZE, ds_size);
-
-    // TODO ADD BUFFER ADDRESS
-    RKISP_WRITE(ISP3X_MI_BAY3D_IIR_WR_BASE, BAY3D_BUF_ADDR);
-    RKISP_WRITE(ISP3X_MI_BAY3D_IIR_RD_BASE, BAY3D_BUF_ADDR);
-
-    RKISP_WRITE(ISP3X_MI_BAY3D_DS_WR_BASE, BAY3D_BUF_ADDR + iir_size);
-    RKISP_WRITE(ISP3X_MI_BAY3D_DS_RD_BASE, BAY3D_BUF_ADDR + iir_size);
-
-    RKISP_WRITE(ISP3X_MI_BAY3D_CUR_WR_BASE, BAY3D_BUF_ADDR + iir_size + ds_size);
-    RKISP_WRITE(ISP3X_MI_BAY3D_CUR_RD_BASE, BAY3D_BUF_ADDR + iir_size + ds_size);
-
-    value = wrap_line << 16 | 28;
-    RKISP_WRITE(ISP3X_BAY3D_MI_ST, value);
-
-    RKISP_WRITE(ISP3X_BAY3D_IN_IRQ_LINECNT, 0x5fe004e);
-
-    value = ISP3X_BAY3D_IIR_WR_AUTO_UPD | ISP3X_BAY3D_CUR_WR_AUTO_UPD |
-            ISP3X_BAY3D_DS_WR_AUTO_UPD | ISP3X_BAY3D_IIRSELF_UPD |
-            ISP3X_BAY3D_CURSELF_UPD | ISP3X_BAY3D_DSSELF_UPD |
-            ISP3X_BAY3D_RDSELF_UPD;
-    RKISP_WRITE(MI_WR_CTRL2, value);
-
-    value |= !!cfg->loswitch_protect << 12 |
-             !!cfg->bwsaving_en << 13 |
-             !!cfg->glbpk_en << 11 |
-             !!cfg->logaus3_bypass_en << 10 |
-             !!cfg->logaus5_bypass_en << 9 |
-             !!cfg->lomed_bypass_en << 8 |
-             !!cfg->hichnsplit_en << 7 |
-             !!cfg->hiabs_possel << 6 |
-             !!cfg->higaus_bypass_en << 5 |
-             !!cfg->himed_bypass_en << 4 |
-             !!cfg->lobypass_en << 3 |
-             !!cfg->hibypass_en << 2 |
-             !!cfg->bypass_en << 1 | 1;
-    RKISP_WRITE(ISP3X_BAY3D_CTRL, value);
-
-    value = !!cfg->wgtmix_opt_en << 12 |
-            !!cfg->curds_high_en << 8 |
-            !!cfg->iirwr_rnd_en << 7 |
-            !!cfg->lo4x4_en << 4 |
-            !!cfg->lo4x8_en << 3 |
-            !!cfg->bwopt_gain_dis << 2 |
-            !!cfg->hiwgt_opt_en;
-
-    value |= !!cfg->higaus5x5_en << 11 |
-             (cfg->higaus3_mode & 0x3) << 9 |
-             !!cfg->pksig_ind_sel << 6 |
-             !!cfg->hisig_ind_sel << 5 |
-             !!cfg->hichncor_en << 1; //isp32
-    RKISP_WRITE(ISP32_BAY3D_CTRL1, value);
-
-    value = ISP_PACK_2SHORT(cfg->softwgt, cfg->hidif_th);
-    RKISP_WRITE(ISP3X_BAY3D_KALRATIO, value);
-
-    RKISP_WRITE(ISP3X_BAY3D_GLBPK2, cfg->glbpk2);
-
-    value = ISP_PACK_2SHORT(cfg->wgtlmt, cfg->wgtratio);
-    RKISP_WRITE(ISP3X_BAY3D_WGTLMT, value);
-
-    for (i = 0; i < ISP_BAY3D_XY_NUM / 2; i++)
-    {
-        value = ISP_PACK_2SHORT(cfg->sig0_x[2 * i],
-                                cfg->sig0_x[2 * i + 1]);
-        RKISP_WRITE(ISP3X_BAY3D_SIG0_X0 + 4 * i, value);
-
-        value = ISP_PACK_2SHORT(cfg->sig1_x[2 * i],
-                                cfg->sig1_x[2 * i + 1]);
-        RKISP_WRITE(ISP3X_BAY3D_SIG1_X0 + 4 * i, value);
-    }
-
-    for (i = 0; i < ISP_BAY3D_XY_NUM / 2; i++)
-    {
-        value = ISP_PACK_2SHORT(cfg->sig0_y[2 * i],
-                                cfg->sig0_y[2 * i + 1]);
-        RKISP_WRITE(ISP3X_BAY3D_SIG0_Y0 + 4 * i, value);
-
-        value = ISP_PACK_2SHORT(cfg->sig1_y[2 * i],
-                                cfg->sig1_y[2 * i + 1]);
-        RKISP_WRITE(ISP3X_BAY3D_SIG1_Y0 + 4 * i, value);
-
-        value = ISP_PACK_2SHORT(cfg->sig2_y[2 * i],
-                                cfg->sig2_y[2 * i + 1]);
-        RKISP_WRITE(ISP3X_BAY3D_SIG2_Y0 + 4 * i, value);
-    }
-
-    value = ISP_PACK_2SHORT(cfg->hisigrat0, cfg->hisigrat1);
-    RKISP_WRITE(ISP32_BAY3D_HISIGRAT, value);
-
-    value = ISP_PACK_2SHORT(cfg->hisigoff0, cfg->hisigoff1);
-    RKISP_WRITE(ISP32_BAY3D_HISIGOFF, value);
-
-    value = ISP_PACK_2SHORT(cfg->losigoff, cfg->losigrat);
-    RKISP_WRITE(ISP32_BAY3D_LOSIG, value);
-
-    value = ISP_PACK_2SHORT(cfg->rgain_off, cfg->bgain_off);
-    RKISP_WRITE(ISP32_BAY3D_SIGPK, value);
-
-    value = ISP_PACK_4BYTE(cfg->siggaus0, cfg->siggaus1, cfg->siggaus2, 0);
-    value |= (cfg->siggaus3 << 24); //isp32
-    RKISP_WRITE(ISP32_BAY3D_SIGGAUS, value);
-}
-
-
-
 static void rk_isp_read_stats(struct rk_isp_dev *dev)
 {
     struct rkisp_stats_buffer *buf = &dev->stats;
@@ -433,9 +213,10 @@ static void rk_isp_read_stats(struct rk_isp_dev *dev)
             ctrl = RKISP_READ(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_CTRL);
             if (ctrl & BIT(31))
             {
-                for (i = 0; i < ISP_RAWAEBIG_MEAN_NUM; i++)
+                for (i = 0; i < ISP_RAWAELITE_MEAN_NUM; i++)
                 {
-                    val = RKISP_READ(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_RO_MEAN_BASE_ADDR);
+
+                    val = RKISP_READ(ISP3X_RAWAE_BIG2_BASE + ISP3X_RAWAE_BIG_RO_MEAN_BASE_ADDR + i * 4);
                     buf->stats.rawae1.data[i].channelg_xy = val & 0xfff;
                     buf->stats.rawae1.data[i].channelb_xy = (val >> 12) & 0x3ff;
                     buf->stats.rawae1.data[i].channelr_xy = (val >> 22) & 0x3ff;
@@ -462,16 +243,6 @@ static void rk_isp_read_stats(struct rk_isp_dev *dev)
             }
         }
 
-#ifdef RT_USING_RK_AOV
-        ctrl = RKISP_READ(ISP3X_BAY3D_CTRL);
-        if (ctrl & BIT(0)) //check en bit
-        {
-            buf->stats.baytnr.sum_lodif_0 = RKISP_READ(ISP3X_BAY3D_LODIF_STAT0);
-            buf->stats.baytnr.sum_lodif_1 = RKISP_READ(ISP3X_BAY3D_LODIF_STAT1);
-            buf->stats.baytnr.sum_hidif_0 = RKISP_READ(ISP3X_BAY3D_HIDIF_STAT0);
-            buf->stats.baytnr.sum_hidif_1 = RKISP_READ(ISP3X_BAY3D_HIDIF_STAT1);
-        }
-#endif
         if (buf->meas_type)
             rt_sem_release(dev->stats_sem);
     }
@@ -524,12 +295,6 @@ rt_err_t rk_isp_module_init(struct rk_isp_dev *dev)
     isp_awb_cfg(dev);
     isp_awbgain_cfg(dev);
     isp_bls_cfg(dev);
-
-    // TODO: ADD 2DNR & 3DNR
-#ifdef RT_USING_RK_AOV
-    isp_bay3d_cfg(dev);
-    isp_baynr_cfg(dev);
-#endif
 
     rk_isp_function_exit();
 

@@ -30,6 +30,10 @@ extern void coremark_main(void);
 
 void benchmark(void)
 {
+#if defined(RT_USING_PI_CSS5) || defined(RT_USING_WHETSTONE)
+    char *argv[4];
+#endif
+
 #ifdef RT_USING_TINYMEMBENCH
     tinymembench_main();
 #endif
@@ -47,11 +51,15 @@ void benchmark(void)
 #endif
 
 #ifdef RT_USING_PI_CSS5
-    pi_css5_main(1, NULL);
+    argv[0] = "pi";
+    argv[1] = "1000000";
+    pi_css5_main(2, argv);
 #endif
 
 #ifdef RT_USING_WHETSTONE
-    whetstone_main(1, NULL);
+    argv[0] = "whetdc";
+    argv[1] = "1000000";
+    whetstone_main(2, argv);
 #endif
 
 #ifdef RT_USING_COREMARK

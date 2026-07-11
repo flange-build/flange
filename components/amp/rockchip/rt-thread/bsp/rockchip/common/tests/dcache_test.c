@@ -12,10 +12,6 @@
 
 #define CACHE_LINE_ALIGN  ALIGN(CACHE_LINE_SIZE)
 
-#ifdef ARCH_RISCV
-#define __ISB()
-#endif
-
 
 #if defined(RKMCU_RK2108) || defined(RKMCU_PISCES)
 /*-----------------------------------------------------------------------------
@@ -256,7 +252,7 @@ void TC_DCache_MaintainRange1()
 
     rt_free_align(value);
 }
-#elif defined(SOC_SWALLOW) || defined(RKMCU_RK3588_NPU) || defined(RKMCU_RK3588_PMU) || defined(SOC_RV1106)
+#elif defined(SOC_SWALLOW) || defined(SOC_RV1106) || (defined(SOC_RK3588) && (defined(HAL_PMU_MCU_CORE) || defined(HAL_NPU_MCU_CORE)))
 
 void TC_DCache_InvalidateAll()
 {

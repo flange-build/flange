@@ -18,17 +18,17 @@
 
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-#include <dfs_posix.h>
-#include <dfs_select.h>
+#include <sys/select.h>
 #include <termios.h>
 
 #define JOINT(x, y) x##y
 #define B(x) JOINT(B,x)
 #define Default_baud_rate   115200
 #define Default_parity      'n'
-#define BUFFER_SIZE         64
+#define BUFFER_SIZE         256
 
 struct termios_test_s
 {
@@ -68,6 +68,7 @@ static int _check_baud_rate(int baud_rate)
     BAUD_RATE(2000000);
     BAUD_RATE(3000000);
     BAUD_RATE(4000000);
+    BAUD_RATE(8000000);
     rt_kprintf("%d is not support,use default %d value.\n", baud_rate, Default_baud_rate);
     return B(Default_baud_rate);
 }
@@ -323,12 +324,12 @@ static void termios_loopback_entry(void *p)
     flush_comm(fd);
 
     len = BUFFER_SIZE;
-    rt_kprintf("send: 64 bytes 0x55..\n");
+    rt_kprintf("send: %d bytes 0x55..\n", len);
     send_comm(fd, pBuf, len);
 
     memset(pBuf, 0x0, BUFFER_SIZE);
-    rt_kprintf("Block recv 64 bytes.\n");
-    /* Block recv 64 bytes */
+    rt_kprintf("Block recv %d bytes.\n", len);
+    /* Block recv BUFFER_SIZE bytes */
     len = recv_comm(fd, pBuf, len, RT_NULL);
 
     rt_kprintf("Recv:\n");
@@ -405,7 +406,7 @@ static void termios_send_entry(void *p)
 
     flush_comm(fd);
 
-    rt_kprintf("send 0x55 in 128 times\n");
+    rt_kprintf("send 0x55 in %d times\n", len);
     send_comm(fd, pBuf, len);
     rt_kprintf("send finish\n");
 
@@ -467,7 +468,7 @@ static int termios_test(int argc, char **argv)
 
     if (argc < 2)
     {
-        rt_kprintf("Please input device name...\n");
+        rt_kprintf("e.g: termtest r /dev/uart4 115200\n");
         return -1;
     }
 
@@ -477,19 +478,19 @@ static int termios_test(int argc, char **argv)
     if (*cmd == 's')
         tid = rt_thread_create("termtest",
                                termios_send_entry, (void *)&term_param,
-                               512, RT_THREAD_PRIORITY_MAX / 3, 20);
+                               1024, RT_THREAD_PRIORITY_MAX / 3, 20);
     else if (*cmd == 'r')
         tid = rt_thread_create("termtest",
                                termios_recv_entry, (void *)&term_param,
-                               768, RT_THREAD_PRIORITY_MAX / 3, 20);
+                               1024, RT_THREAD_PRIORITY_MAX / 3, 20);
     else if (*cmd == 't')
         tid = rt_thread_create("termtest",
                                termios_test_entry, (void *)&term_param,
-                               512, RT_THREAD_PRIORITY_MAX / 3, 20);
+                               1024, RT_THREAD_PRIORITY_MAX / 3, 20);
     else if (*cmd == 'l')
         tid = rt_thread_create("termtest",
                                termios_loopback_entry, (void *)&term_param,
-                               512, RT_THREAD_PRIORITY_MAX / 3, 20);
+                               1024, RT_THREAD_PRIORITY_MAX / 3, 20);
 
     if (tid != RT_NULL)
         rt_thread_startup(tid);
@@ -500,7 +501,7 @@ static int termios_test(int argc, char **argv)
 #ifdef RT_USING_FINSH
 #include <finsh.h>
 #ifdef FINSH_USING_MSH
-MSH_CMD_EXPORT_ALIAS(termios_test, termtest, e.g: termtest r / dev / uart4 115200);
+MSH_CMD_EXPORT_ALIAS(termios_test, termtest, e.g: termtest r /dev/uart4 115200); // *NOPAD*
 #endif /* FINSH_USING_MSH */
 #endif /* RT_USING_FINSH */
 

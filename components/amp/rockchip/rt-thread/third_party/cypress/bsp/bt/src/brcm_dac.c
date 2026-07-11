@@ -155,10 +155,10 @@ static wiced_result_t brcm_dac_configure(void *driver_data, wiced_audio_config_t
         param.sampleRate = config->sample_rate;
         param.sampleBits = config->bits_per_sample;
 
-        ret = rt_device_control(audio_device, RK_AUDIO_CTL_HW_PARAMS, &param);
+        ret = rt_device_control(audio_device, RK_AUDIO_CTL_PCM_PREPARE, &abuf);
         RT_ASSERT(ret == RT_EOK);
 
-        ret = rt_device_control(audio_device, RK_AUDIO_CTL_PCM_PREPARE, &abuf);
+        ret = rt_device_control(audio_device, RK_AUDIO_CTL_HW_PARAMS, &param);
         RT_ASSERT(ret == RT_EOK);
     }
     printf("### brcm_dac_configure rate: %d, channels: %d, bits: %d ###\n",
@@ -273,10 +273,10 @@ static wiced_result_t rk_recorder_configure(void *driver_data, wiced_audio_confi
         r_param.sampleRate = config->sample_rate;
         r_param.sampleBits = config->bits_per_sample;
 
-        ret = rt_device_control(r_audio_device, RK_AUDIO_CTL_HW_PARAMS, &r_param);
+        ret = rt_device_control(r_audio_device, RK_AUDIO_CTL_PCM_PREPARE, &r_abuf);
         RT_ASSERT(ret == RT_EOK);
 
-        ret = rt_device_control(r_audio_device, RK_AUDIO_CTL_PCM_PREPARE, &r_abuf);
+        ret = rt_device_control(r_audio_device, RK_AUDIO_CTL_HW_PARAMS, &r_param);
         RT_ASSERT(ret == RT_EOK);
     }
     printf("### brcm_dac_configure rate: %d, channels: %d, bits: %d ###\n",

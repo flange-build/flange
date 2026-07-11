@@ -1,11 +1,7 @@
 /*
- * Copyright (c) 2022 Fuzhou Rockchip Electronic Co.,Ltd
+ * Copyright (c) 2024 Fuzhou Rockchip Electronic Co.,Ltd
  *
  * SPDX-License-Identifier: Apache-2.0
- *
- * Change Logs:
- * Date           Author       Notes
- * 2022-10-10     Chris Zhong      First version
  *
  */
 

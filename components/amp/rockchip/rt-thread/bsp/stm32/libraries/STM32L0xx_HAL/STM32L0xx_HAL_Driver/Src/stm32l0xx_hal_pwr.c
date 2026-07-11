@@ -12,29 +12,13 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2016 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright(c) 2016 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
@@ -55,16 +39,18 @@
   * @{
   */
   
+#if defined(PWR_PVD_SUPPORT)
 /** @defgroup PWR_PVD_Mode_Mask PWR PVD Mode Mask
   * @{
   */ 
-#define PVD_MODE_IT               ((uint32_t)0x00010000U)
-#define PVD_MODE_EVT              ((uint32_t)0x00020000U)
-#define PVD_RISING_EDGE           ((uint32_t)0x00000001U)
-#define PVD_FALLING_EDGE          ((uint32_t)0x00000002U)
+#define PVD_MODE_IT               (0x00010000U)
+#define PVD_MODE_EVT              (0x00020000U)
+#define PVD_RISING_EDGE           (0x00000001U)
+#define PVD_FALLING_EDGE          (0x00000002U)
 /**
   * @}
   */
+#endif
 
 /**
   * @}
@@ -135,6 +121,7 @@ void HAL_PWR_DeInit(void)
           line16 and can generate an interrupt if enabled. This is done through
           __HAL_PWR_PVD_EXTI_ENABLE_IT() macro.
       (+) The PVD is stopped in Standby mode.
+      (+) The PVD feature is not supported on L0 Value line.
 
     *** WakeUp pin configuration ***
     ================================
@@ -356,9 +343,10 @@ void HAL_PWR_DisableBkUpAccess(void)
   CLEAR_BIT(PWR->CR, PWR_CR_DBP);
 }
 
+#if defined(PWR_PVD_SUPPORT)
 /**
   * @brief  Configures the voltage threshold detected by the Power Voltage Detector(PVD).
-  * @param  sConfigPVD: pointer to an PWR_PVDTypeDef structure that contains the configuration
+  * @param  sConfigPVD pointer to an PWR_PVDTypeDef structure that contains the configuration
   *         information for the PVD.
   * @note   Refer to the electrical characteristics of your device datasheet for
   *         more details about the voltage threshold corresponding to each
@@ -423,6 +411,7 @@ void HAL_PWR_DisablePVD(void)
   /* Disable the power voltage detector */
   CLEAR_BIT(PWR->CR, PWR_CR_PVDE);
 }
+#endif /* PWR_PVD_SUPPORT */
 
 /**
   * @brief Enables the WakeUp PINx functionality.
@@ -476,9 +465,20 @@ void HAL_PWR_DisableWakeUpPin(uint32_t WakeUpPinx)
 void HAL_PWR_EnterSLEEPMode(uint32_t Regulator, uint8_t SLEEPEntry)
 {
    uint32_t tmpreg = 0U;
+   uint32_t ulpbit, vrefinbit;
+
   /* Check the parameters */
   assert_param(IS_PWR_REGULATOR(Regulator));
   assert_param(IS_PWR_SLEEP_ENTRY(SLEEPEntry));
+
+  /* It is forbidden to configure both EN_VREFINT=1 and ULP=1 if the device is
+     in Stop mode or in Sleep/Low-power sleep mode */
+  ulpbit = READ_BIT(PWR->CR, PWR_CR_ULP);
+  vrefinbit = READ_BIT(SYSCFG->CFGR3, SYSCFG_CFGR3_EN_VREFINT);
+  if((ulpbit != 0) && (vrefinbit != 0))
+  {
+    CLEAR_BIT(PWR->CR, PWR_CR_ULP);
+  }
 
   /* Select the regulator state in Sleep mode ---------------------------------*/
   tmpreg = PWR->CR;
@@ -508,6 +508,15 @@ void HAL_PWR_EnterSLEEPMode(uint32_t Regulator, uint8_t SLEEPEntry)
     __WFE();
     __WFE();
   }
+
+  if((ulpbit != 0) && (vrefinbit != 0))
+  {
+    SET_BIT(PWR->CR, PWR_CR_ULP);
+  }
+
+  /* Additional NOP to ensure all pending instructions are flushed before entering low power mode */
+  __NOP();
+
 }
 
 /**
@@ -537,10 +546,20 @@ void HAL_PWR_EnterSLEEPMode(uint32_t Regulator, uint8_t SLEEPEntry)
 void HAL_PWR_EnterSTOPMode(uint32_t Regulator, uint8_t STOPEntry)
 {
   uint32_t tmpreg = 0U;
+  uint32_t ulpbit, vrefinbit;
 
   /* Check the parameters */
   assert_param(IS_PWR_REGULATOR(Regulator));
   assert_param(IS_PWR_STOP_ENTRY(STOPEntry));
+
+  /* It is forbidden to configure both EN_VREFINT=1 and ULP=1 if the device is
+     in Stop mode or in Sleep/Low-power sleep mode */
+  ulpbit = READ_BIT(PWR->CR, PWR_CR_ULP);
+  vrefinbit = READ_BIT(SYSCFG->CFGR3, SYSCFG_CFGR3_EN_VREFINT);
+  if((ulpbit != 0) && (vrefinbit != 0))
+  {
+    CLEAR_BIT(PWR->CR, PWR_CR_ULP);
+  }
 
   /* Select the regulator state in Stop mode ---------------------------------*/
   tmpreg = PWR->CR;
@@ -574,6 +593,10 @@ void HAL_PWR_EnterSTOPMode(uint32_t Regulator, uint8_t STOPEntry)
   /* Reset SLEEPDEEP bit of Cortex System Control Register */
   CLEAR_BIT(SCB->SCR, SCB_SCR_SLEEPDEEP_Msk);
 
+  if((ulpbit != 0) && (vrefinbit != 0))
+  {
+    SET_BIT(PWR->CR, PWR_CR_ULP);
+  }
 }
 
 /**
@@ -658,6 +681,7 @@ void HAL_PWR_DisableSEVOnPend(void)
   CLEAR_BIT(SCB->SCR, ((uint32_t)SCB_SCR_SEVONPEND_Msk));
 }
 
+#if defined(PWR_PVD_SUPPORT)
 /**
   * @brief This function handles the PWR PVD interrupt request.
   * @note This API should be called under the PVD_IRQHandler().
@@ -686,6 +710,7 @@ __weak void HAL_PWR_PVDCallback(void)
             the HAL_PWR_PVDCallback could be implemented in the user file
    */ 
 }
+#endif /* PWR_PVD_SUPPORT */
 
 /**
   * @}

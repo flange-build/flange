@@ -13,7 +13,7 @@ define symbol __ICFEDIT_region_RAM2_end__   = 0x10007FFF;
 
 /*-Sizes-*/
 define symbol __ICFEDIT_size_cstack__ = 0x0400;
-define symbol __ICFEDIT_size_heap__   = 0x0000;
+define symbol __ICFEDIT_size_heap__   = 0x000;
 /**** End of ICF editor section. ###ICF###*/
 
 define memory mem with size = 4G;
@@ -29,5 +29,4 @@ do not initialize  { section .noinit };
 place at address mem:__ICFEDIT_intvec_start__ { readonly section .intvec };
 
 place in ROM_region   { readonly };
-place in RAM1_region  { section .sram };
-place in RAM2_region  { readwrite, last block CSTACK};
+place in RAM1_region  { section .sram , readwrite, last block CSTACK};

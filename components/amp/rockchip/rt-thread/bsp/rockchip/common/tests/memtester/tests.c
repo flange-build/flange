@@ -517,19 +517,6 @@ int test_bitflip_comparison(ulv *bufa, ulv *bufb, size_t count)
 }
 
 #ifdef TEST_NARROW_WRITES
-
-union
-{
-    unsigned char bytes[UL_LEN / 8];
-    ul val;
-} mword8;
-
-union
-{
-    unsigned short u16s[UL_LEN / 16];
-    ul val;
-} mword16;
-
 int test_8bit_wide_random(ulv *bufa, ulv *bufb, size_t count)
 {
     u8v *p1, *t;

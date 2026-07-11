@@ -52,13 +52,18 @@ typedef enum ota_status
 
 typedef enum ota_protocol_t
 {
-#if OTA_OPT_PROTOCOL_FILE
     OTA_PROTOCOL_FILE   = 0,
-#endif
-#if OTA_OPT_PROTOCOL_HTTP
     OTA_PROTOCOL_HTTP   = 1,
-#endif
+    OTA_PROTOCOL_SPI    = 2,
+    OTA_PROTOCOL_MEM    = 3,
 } ota_protocol;
+
+typedef enum ota_flash_type_t
+{
+    OTA_FLASH_SNOR      = 0,
+    OTA_FLASH_SNAND     = 1,
+    OTA_FLASH_EMMC      = 2,
+} ota_flash_type;
 
 typedef struct
 {
@@ -101,6 +106,33 @@ typedef struct image_cfg_t
 } image_cfg;
 
 
+#define RK_OTA_DBG_EN 1
+
+#if RK_OTA_DBG_EN
+#define RK_OTA_DBG(fmt, args...)     \
+    do                                  \
+    {                                   \
+        rt_kprintf("OTA: " fmt, ## args);       \
+    }                                   \
+    while(0)
+#else
+#define RK_OTA_DBG(fmt, args...)  do { } while (0)
+#endif
+
+#define RK_OTA_INF(fmt, args...)     \
+    do                                  \
+    {                                   \
+        rt_kprintf("OTA: " fmt, ## args);       \
+    }                                   \
+    while(0)
+
+#define RK_OTA_ERR(fmt, args...)     \
+    do                                  \
+    {                                   \
+        rt_kprintf("OTA: " fmt, ## args);       \
+    }                                   \
+    while(0)
+
 /*----------------------------------- Typedefs -------------------------------*/
 typedef ota_status(*ota_update_init)(void *url);
 typedef ota_status(*ota_update_get)(uint8_t *buf, uint32_t buf_size, uint32_t *recv_size, uint8_t *eof_flag);
@@ -110,6 +142,17 @@ extern void ota_deinit(void);
 extern ota_status ota_update_image(ota_protocol protocol, void *url);
 extern ota_status ota_verify_img(ota_verify verify);
 extern void ota_reboot(int system_running);
+
+void rk_ota_set_boot_success(void);
+int rk_ota_process(ota_protocol prot_type, char *url);
+int rk_ota_get_misc_recovery_flag(rt_uint32_t *recovery_flag);
+int rk_ota_set_misc_recovery_flag(rt_uint32_t recovery_flag);
+rt_bool_t rk_ota_download_loader(unsigned char *data_buf, int size, char *dest_path);
+int rk_ota_upgrade_loader_idb(char *name, rt_uint8_t *idb, rt_uint32_t offset, rt_uint32_t size);
+int rk_ota_source_init(char *url);
+int rk_ota_source_read(rt_uint8_t *buf, rt_uint32_t length);
+int rk_ota_source_seek(rt_uint32_t offset, int whence);
+int rk_ota_source_deinit(void);
 
 #ifdef __cplusplus
 }

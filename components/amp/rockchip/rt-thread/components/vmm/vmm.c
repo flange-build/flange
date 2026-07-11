@@ -1,9 +1,9 @@
 /*
  *  VMM startup file.
  *
- * COPYRIGHT (C) 2013-2014, Real-Thread Information Technology Ltd
+ * COPYRIGHT (C) 2011-2021, Real-Thread Information Technology Ltd
  * All rights reserved
- * 
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
@@ -22,17 +22,9 @@
 extern void rt_hw_interrupt_init(void);
 extern void rt_application_init(void);
 
-void vmm_entry(struct vmm_entry_param* param) SECTION(".vmm_init");
+void vmm_entry(struct vmm_entry_param* param) RT_SECTION(".vmm_init");
 
-#ifdef RT_USING_LOGTRACE
-#include <log_trace.h>
-static struct log_trace_session _lgs = {
-    .id  = {.name = "vmm"},
-    .lvl = LOG_TRACE_LEVEL_VERBOSE,
-};
-#endif
-
-struct rt_thread vmm_thread SECTION(".bss.share.vmm");
+struct rt_thread vmm_thread RT_SECTION(".bss.share.vmm");
 extern rt_uint8_t vmm_stack_start;
 extern rt_uint8_t vmm_stack_end;
 
@@ -83,7 +75,7 @@ static void vmm_entry_glue(rt_uint32_t level,
                            unsigned int kernel_domain)
     /* inline would make the section setting meaningless */
     __attribute__((noinline))
-    SECTION(".vmm_glue");
+    RT_SECTION(".vmm_glue");
 static void vmm_entry_glue(rt_uint32_t level,
                            unsigned int vmm_domain,
                            unsigned int kernel_domain)
@@ -104,7 +96,7 @@ static void vmm_entry_glue(rt_uint32_t level,
 
 void vmm_entry(struct vmm_entry_param *param)
 {
-    rt_uint32_t level;
+    rt_base_t level;
 
     level = rt_hw_interrupt_disable();
 
@@ -121,15 +113,6 @@ void vmm_entry(struct vmm_entry_param *param)
 
     /* init board */
     rt_hw_board_init();
-
-#ifdef RT_USING_LOGTRACE
-    /* Some parts of VMM use log_trace, so we need to init it right after
-     * board_init. */
-    log_trace_init();
-    log_trace_set_device(RT_CONSOLE_DEVICE_NAME);
-
-    log_trace_register_session(&_lgs);
-#endif
 
     /* show version */
     rt_show_version();

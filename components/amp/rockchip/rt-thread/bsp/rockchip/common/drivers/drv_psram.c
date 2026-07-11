@@ -31,6 +31,7 @@
 #include <rtthread.h>
 #include <rtdevice.h>
 
+#include "hal_base.h"
 #include "drv_psram.h"
 
 #ifdef RT_USING_QPIPSRAM

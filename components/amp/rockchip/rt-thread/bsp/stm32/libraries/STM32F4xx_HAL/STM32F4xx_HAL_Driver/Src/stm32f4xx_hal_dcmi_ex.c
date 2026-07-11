@@ -12,10 +12,10 @@
                ##### DCMI peripheral extension features  #####
   ==============================================================================
 
-  [..] Comparing to other previous devices, the DCMI interface for STM32F446xx 
+  [..] Comparing to other previous devices, the DCMI interface for STM32F446xx
        devices contains the following additional features :
 
-       (+) Support of Black and White cameras 
+       (+) Support of Black and White cameras
 
                      ##### How to use this driver #####
   ==============================================================================
@@ -25,29 +25,13 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2017 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright (c) 2017 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
@@ -118,7 +102,27 @@ HAL_StatusTypeDef HAL_DCMI_Init(DCMI_HandleTypeDef *hdcmi)
 #endif /* STM32F446xx || STM32F469xx || STM32F479xx */
   if(hdcmi->State == HAL_DCMI_STATE_RESET)
   {
+    /* Allocate lock resource and initialize it */
+    hdcmi->Lock = HAL_UNLOCKED;
     /* Init the low level hardware */
+  /* Init the DCMI Callback settings */
+#if (USE_HAL_DCMI_REGISTER_CALLBACKS == 1)
+    hdcmi->FrameEventCallback = HAL_DCMI_FrameEventCallback; /* Legacy weak FrameEventCallback  */
+    hdcmi->VsyncEventCallback = HAL_DCMI_VsyncEventCallback; /* Legacy weak VsyncEventCallback  */
+    hdcmi->LineEventCallback  = HAL_DCMI_LineEventCallback;  /* Legacy weak LineEventCallback   */
+    hdcmi->ErrorCallback      = HAL_DCMI_ErrorCallback;      /* Legacy weak ErrorCallback       */
+
+    if(hdcmi->MspInitCallback == NULL)
+    {
+      /* Legacy weak MspInit Callback        */
+      hdcmi->MspInitCallback = HAL_DCMI_MspInit;
+    }
+    /* Initialize the low level hardware (MSP) */
+    hdcmi->MspInitCallback(hdcmi);
+#else
+    /* Init the low level hardware : GPIO, CLOCK, NVIC and DMA */
+    HAL_DCMI_MspInit(hdcmi);
+#endif /* (USE_HAL_DCMI_REGISTER_CALLBACKS) */
     HAL_DCMI_MspInit(hdcmi);
   }
 
@@ -136,7 +140,7 @@ HAL_StatusTypeDef HAL_DCMI_Init(DCMI_HandleTypeDef *hdcmi)
   hdcmi->Instance->CR |=  (uint32_t)(hdcmi->Init.SynchroMode | hdcmi->Init.CaptureRate |\
                                      hdcmi->Init.VSPolarity  | hdcmi->Init.HSPolarity  |\
                                      hdcmi->Init.PCKPolarity | hdcmi->Init.ExtendedDataMode |\
-                                     hdcmi->Init.JPEGMode 
+                                     hdcmi->Init.JPEGMode
 #if defined(STM32F446xx) || defined(STM32F469xx) || defined(STM32F479xx)
                                      | hdcmi->Init.ByteSelectMode |\
                                      hdcmi->Init.ByteSelectStart | hdcmi->Init.LineSelectMode |\
@@ -163,7 +167,7 @@ HAL_StatusTypeDef HAL_DCMI_Init(DCMI_HandleTypeDef *hdcmi)
 
   return HAL_OK;
 }
-  
+
 /**
   * @}
   */

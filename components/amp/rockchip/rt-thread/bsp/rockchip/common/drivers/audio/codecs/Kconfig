@@ -18,10 +18,6 @@ config RT_USING_CODEC
         depends on RT_USING_CODEC
         bool
 
-    config RT_USING_CODEC_ES7202
-        depends on RT_USING_CODEC
-        bool
-
     config RT_USING_CODEC_ES8156
         depends on RT_USING_CODEC
         bool
@@ -31,9 +27,5 @@ config RT_USING_CODEC
         bool
 
     config RT_USING_CODEC_ES8388
-        depends on RT_USING_CODEC
-        bool
-
-    config RT_USING_CODEC_TDA7803
         depends on RT_USING_CODEC
         bool

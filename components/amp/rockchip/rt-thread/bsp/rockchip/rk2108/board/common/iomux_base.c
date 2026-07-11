@@ -68,7 +68,7 @@
 /**
  * @brief  Config iomux for PDM
  */
-RT_WEAK RT_UNUSED void pdm_input_iomux_config(void)
+RT_WEAK  void pdm_input_iomux_config(void)
 {
     // for pdm input
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
@@ -97,7 +97,7 @@ RT_WEAK RT_UNUSED void pdm_input_iomux_config(void)
 /**
  * @brief  Config iomux for I2S1
  */
-RT_WEAK RT_UNUSED void i2s1_input_iomux_config(void)
+RT_WEAK  void i2s1_input_iomux_config(void)
 {
     // for i2s input
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
@@ -128,7 +128,7 @@ RT_WEAK RT_UNUSED void i2s1_input_iomux_config(void)
 /**
  * @brief  Config iomux for I2S1
  */
-RT_WEAK RT_UNUSED void i2s1_output_iomux_config(void)
+RT_WEAK  void i2s1_output_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_A4 |  // I2S1_MCLK_MUX0
@@ -152,7 +152,7 @@ RT_WEAK RT_UNUSED void i2s1_output_iomux_config(void)
 /**
  * @brief  Config iomux for VICAP
  */
-RT_WEAK RT_UNUSED void vicap_iomux_config(void)
+RT_WEAK  void vicap_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_A0 |  // VICAP_D0
@@ -180,7 +180,7 @@ RT_WEAK RT_UNUSED void vicap_iomux_config(void)
 /**
  * @brief  Config iomux for LCDC
  */
-RT_WEAK RT_UNUSED void lcdc_iomux_config(void)
+RT_WEAK  void lcdc_iomux_config(void)
 {
 #ifdef RT_USING_VOP_MCU
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
@@ -230,7 +230,7 @@ RT_WEAK RT_UNUSED void lcdc_iomux_config(void)
 /**
  * @brief  Config iomux for SFC0
  */
-RT_WEAK RT_UNUSED void sfc0_iomux_config(void)
+RT_WEAK  void sfc0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_B2 |  // SFC_D3
@@ -248,7 +248,7 @@ RT_WEAK RT_UNUSED void sfc0_iomux_config(void)
 /**
  * @brief  Config iomux for SDIO
  */
-RT_WEAK RT_UNUSED void sdio_iomux_config(void)
+RT_WEAK  void sdio_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_C0 |  // SDIO_CLK
@@ -278,7 +278,7 @@ RT_WEAK RT_UNUSED void sdio_iomux_config(void)
 /**
  * @brief  Config iomux for DSP JTAG
  */
-RT_WEAK RT_UNUSED void dsp_jtag_iomux_config(void)
+RT_WEAK  void dsp_jtag_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_C0 |  // DSP_JTAG0_TCK
@@ -292,7 +292,7 @@ RT_WEAK RT_UNUSED void dsp_jtag_iomux_config(void)
 /**
  * @brief  Config iomux for UART2
  */
-RT_WEAK RT_UNUSED void uart2_iomux_config(void)
+RT_WEAK  void uart2_iomux_config(void)
 {
     // for uart2
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
@@ -303,7 +303,7 @@ RT_WEAK RT_UNUSED void uart2_iomux_config(void)
                          PIN_CONFIG_MUX_FUNC4);
 }
 
-RT_WEAK RT_UNUSED void uart2_rts_iomux_config(int uart_en)
+RT_WEAK  void uart2_rts_iomux_config(int uart_en)
 {
     if (uart_en)
     {
@@ -324,7 +324,7 @@ RT_WEAK RT_UNUSED void uart2_rts_iomux_config(int uart_en)
 /**
  * @brief  Config iomux for PCM_M0
  */
-RT_WEAK RT_UNUSED void pcm_m0_iomux_config(void)
+RT_WEAK  void pcm_m0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_D3 |  // PCM_CLK_M0
@@ -349,7 +349,7 @@ RT_WEAK RT_UNUSED void pcm_m0_iomux_config(void)
 /**
  * @brief  Config iomux for PCM_M1
  */
-RT_WEAK RT_UNUSED void pcm_m1_iomux_config(void)
+RT_WEAK  void pcm_m1_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_B0 |  // PCM_SYNC_M1
@@ -377,7 +377,7 @@ RT_WEAK RT_UNUSED void pcm_m1_iomux_config(void)
 /**
  * @brief  Config iomux for touch
  */
-RT_WEAK RT_UNUSED void touch_iomux_config(void)
+RT_WEAK  void touch_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_B0 |  // TOUCH_INT
@@ -397,7 +397,7 @@ RT_WEAK RT_UNUSED void touch_iomux_config(void)
 /**
  * @brief  Config iomux for KEY CTRL
  */
-RT_WEAK RT_UNUSED void key_ctrl_iomux_config(void)
+RT_WEAK  void key_ctrl_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_B6 |  // KEY_IN_M0
@@ -407,12 +407,13 @@ RT_WEAK RT_UNUSED void key_ctrl_iomux_config(void)
     HAL_PINCTRL_SetParam(GPIO_BANK1,
                          GPIO_PIN_B6,
                          PIN_CONFIG_PUL_NORMAL);
+>>>>>>> [BSP] Rockchip: Merge rockchip porting code
 }
 
 /**
  * @brief  Config iomux for UART0
  */
-RT_WEAK RT_UNUSED void uart0_iomux_config(void)
+RT_WEAK  void uart0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_C7 |  // UART0_RX
@@ -420,22 +421,10 @@ RT_WEAK RT_UNUSED void uart0_iomux_config(void)
                          PIN_CONFIG_MUX_FUNC1);
 }
 
-
-/**
- * @brief  config iomux for uart0_cts uart0_rts
- */
-void uart0_cts_rts_iomux_config(void)
-{
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
-                         GPIO_PIN_D1 |  // UART0_CTSN
-                         GPIO_PIN_D2,   // UART0_RTSN
-                         PIN_CONFIG_MUX_FUNC1);
-}
-
 /**
  * @brief  Config iomux for UART1
  */
-RT_WEAK RT_UNUSED void uart1_m0_iomux_config(void)
+RT_WEAK  void uart1_m0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_D1 |  // UART1_RX_M0
@@ -447,7 +436,7 @@ RT_WEAK RT_UNUSED void uart1_m0_iomux_config(void)
                       (0 << GRF_SOC_CON5_GRF_CON_UART1_IOMUX_SEL_SHIFT));
 }
 
-RT_WEAK RT_UNUSED void uart1_m1_iomux_config(void)
+RT_WEAK  void uart1_m1_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_A5 |  // UART1_RX_M1
@@ -459,7 +448,7 @@ RT_WEAK RT_UNUSED void uart1_m1_iomux_config(void)
                       (1 << GRF_SOC_CON5_GRF_CON_UART1_IOMUX_SEL_SHIFT));
 }
 
-RT_WEAK RT_UNUSED void uart1_m2_iomux_config(void)
+RT_WEAK  void uart1_m2_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_B1 |  // UART1_RX_M2
@@ -471,7 +460,7 @@ RT_WEAK RT_UNUSED void uart1_m2_iomux_config(void)
                       (2 << GRF_SOC_CON5_GRF_CON_UART1_IOMUX_SEL_SHIFT));
 }
 
-RT_WEAK RT_UNUSED void uart1_m3_iomux_config(void)
+RT_WEAK  void uart1_m3_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_A5,  // UART1_RX_M3
@@ -489,7 +478,7 @@ RT_WEAK RT_UNUSED void uart1_m3_iomux_config(void)
 /**
  * @brief  Config iomux for AUDIO PWM M0
  */
-RT_WEAK RT_UNUSED void audio_iomux_config(void)
+RT_WEAK  void audio_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_D1,   // AUDIO_LOUT_M0
@@ -499,7 +488,7 @@ RT_WEAK RT_UNUSED void audio_iomux_config(void)
 /**
  * @brief  Config iomux for M4 JTAG
  */
-RT_WEAK RT_UNUSED void m4_jtag_iomux_config(void)
+RT_WEAK  void m4_jtag_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_C7 |  // M4_JTAG_TCK
@@ -510,7 +499,7 @@ RT_WEAK RT_UNUSED void m4_jtag_iomux_config(void)
 /**
  * @brief  Config iomux for SFC1
  */
-RT_WEAK RT_UNUSED void sfc1_iomux_config(void)
+RT_WEAK  void sfc1_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_C4 |  // SFC1_CS
@@ -528,7 +517,7 @@ RT_WEAK RT_UNUSED void sfc1_iomux_config(void)
 /**
  * @brief  Config iomux for SPI1_m0
  */
-RT_WEAK RT_UNUSED void spi1_m0_iomux_config(void)
+RT_WEAK  void spi1_m0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_C2 |  // SPI_MST1_CS_M0
@@ -547,7 +536,7 @@ RT_WEAK RT_UNUSED void spi1_m0_iomux_config(void)
 /**
  * @brief  Config iomux for SPI1_m1
  */
-RT_WEAK RT_UNUSED void spi1_m1_iomux_config(void)
+RT_WEAK  void spi1_m1_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_C0 |  // SPI_MST1_CS_M1
@@ -566,7 +555,7 @@ RT_WEAK RT_UNUSED void spi1_m1_iomux_config(void)
 /**
  * @brief  Config iomux for SPI2_m0
  */
-RT_WEAK RT_UNUSED void spi2_m0_iomux_config(void)
+RT_WEAK  void spi2_m0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_A0 |  // SPI_MST2_CS0_M0
@@ -595,7 +584,7 @@ RT_WEAK RT_UNUSED void spi2_m0_iomux_config(void)
 /**
  * @brief  Config iomux for SPI2_m1
  */
-RT_WEAK RT_UNUSED void spi2_m1_iomux_config(void)
+RT_WEAK  void spi2_m1_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_C4 |  // SPI_MST2_CS0_M1
@@ -617,7 +606,7 @@ RT_WEAK RT_UNUSED void spi2_m1_iomux_config(void)
 /**
  * @brief  Config iomux for I2C1
  */
-RT_WEAK RT_UNUSED void i2c0_m0_iomux_config(void)
+RT_WEAK  void i2c0_m0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_C0 |  // I2C_MST0_SCL_M0
@@ -630,7 +619,7 @@ RT_WEAK RT_UNUSED void i2c0_m0_iomux_config(void)
 }
 
 
-RT_WEAK RT_UNUSED void i2c0_m1_iomux_config(void)
+RT_WEAK  void i2c0_m1_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_D3 |  // I2C_MST0_SCL_M1
@@ -642,7 +631,7 @@ RT_WEAK RT_UNUSED void i2c0_m1_iomux_config(void)
                       (1 << GRF_SOC_CON5_GRF_CON_I2C_MST0_IOMUX_SEL_SHIFT));
 }
 
-RT_WEAK RT_UNUSED void i2c0_m2_iomux_config(void)
+RT_WEAK  void i2c0_m2_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_A2 |  // I2C_MST0_SCL_M2
@@ -657,7 +646,7 @@ RT_WEAK RT_UNUSED void i2c0_m2_iomux_config(void)
 /**
  * @brief  Config iomux for I2C1
  */
-RT_WEAK RT_UNUSED void i2c1_m0_iomux_config(void)
+RT_WEAK  void i2c1_m0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_C2 |  // I2C_MST1_SCL_M0
@@ -669,7 +658,7 @@ RT_WEAK RT_UNUSED void i2c1_m0_iomux_config(void)
                       (0 << GRF_SOC_CON5_GRF_CON_I2C_MST1_IOMUX_SEL_SHIFT));
 }
 
-RT_WEAK RT_UNUSED void i2c1_m1_iomux_config(void)
+RT_WEAK  void i2c1_m1_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_B2 |  // I2C_MST1_SCL_M1
@@ -681,7 +670,7 @@ RT_WEAK RT_UNUSED void i2c1_m1_iomux_config(void)
                       (1 << GRF_SOC_CON5_GRF_CON_I2C_MST1_IOMUX_SEL_SHIFT));
 }
 
-RT_WEAK RT_UNUSED void i2c1_m2_iomux_config(void)
+RT_WEAK  void i2c1_m2_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_C0 |  // I2C_MST1_SCL_M2
@@ -700,7 +689,7 @@ RT_WEAK RT_UNUSED void i2c1_m2_iomux_config(void)
 /**
  * @brief  Config iomux for I2C2
  */
-RT_WEAK RT_UNUSED void i2c2_m0_iomux_config(void)
+RT_WEAK  void i2c2_m0_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_C4 |  // I2C_MST2_SCL_M0
@@ -712,7 +701,7 @@ RT_WEAK RT_UNUSED void i2c2_m0_iomux_config(void)
                       (0 << GRF_SOC_CON5_GRF_CON_I2C_MST2_IOMUX_SEL_SHIFT));
 }
 
-RT_WEAK RT_UNUSED void i2c2_m1_iomux_config(void)
+RT_WEAK  void i2c2_m1_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
                          GPIO_PIN_B4 |  // I2C_MST2_SCL_M1
@@ -724,7 +713,7 @@ RT_WEAK RT_UNUSED void i2c2_m1_iomux_config(void)
                       (1 << GRF_SOC_CON5_GRF_CON_I2C_MST2_IOMUX_SEL_SHIFT));
 }
 
-RT_WEAK RT_UNUSED void i2c2_m2_iomux_config(void)
+RT_WEAK  void i2c2_m2_iomux_config(void)
 {
     HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
                          GPIO_PIN_C2 |  // I2C_MST2_SCL_M2
@@ -739,7 +728,7 @@ RT_WEAK RT_UNUSED void i2c2_m2_iomux_config(void)
 /**
  * @brief  Config iomux for rk2108 evb board
  */
-RT_WEAK RT_UNUSED void rt_hw_iomux_config(void)
+RT_WEAK  void rt_hw_iomux_config(void)
 {
     pdm_input_iomux_config();
 

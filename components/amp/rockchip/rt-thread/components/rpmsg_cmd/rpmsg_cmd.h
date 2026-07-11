@@ -81,7 +81,7 @@ void rpmsg_cmd_ept_init(struct rpmsg_ept_handle_t *handle,
                         uint32_t stack_size, uint32_t priority);
 
 void rpmsg_cmd_ept_thread_init(struct rpmsg_ept_handle_t *handle,
-                               uint32_t stack_size, uint32_t priority);
+                                uint32_t stack_size, uint32_t priority);
 
 rt_err_t rpmsg_cmd_send(struct rpmsg_cmd_data_t *p_rpmsg_data, uint32_t timeout);
 

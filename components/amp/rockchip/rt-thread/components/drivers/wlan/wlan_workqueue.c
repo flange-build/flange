@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -13,9 +13,11 @@
 #include <wlan_workqueue.h>
 #include <ipc/workqueue.h>
 
-#define DBG_LEVEL DBG_INFO
-#define DBG_SECTION_NAME  "WLAN.work"
+#define DBG_TAG "WLAN.work"
+#define DBG_LVL DBG_INFO
 #include <rtdbg.h>
+
+#ifdef RT_WLAN_WORK_THREAD_ENABLE
 
 struct rt_wlan_work
 {
@@ -95,3 +97,5 @@ int rt_wlan_workqueue_init(void)
     return 0;
 }
 INIT_PREV_EXPORT(rt_wlan_workqueue_init);
+
+#endif

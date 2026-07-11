@@ -75,5 +75,13 @@ extern const struct rockchip_eth_config rockchip_eth_config_table[];
  * Public Functions
  ******************************************************************************/
 
+#ifdef RT_USING_GMAC_PTP
+int rt_rockchip_ptp_set_time(void *handle, struct PTP_TIME *timestamp);
+int rt_rockchip_ptp_get_time(void *handle, struct PTP_TIME *timestamp);
+int rt_rockchip_ptp_update_offset(void *handle, struct PTP_TIME_OFFSET *timeoffset);
+int rt_rockchip_ptp_adj_freq(void *handle, int32_t adj);
+int rt_rockchip_ptp_start(void *handle);
+void *rt_rockchip_ptp_get_handle(void);
+#endif
 #endif
 #endif /* _DRV_GMAC_H_ */

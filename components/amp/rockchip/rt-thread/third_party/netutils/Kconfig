@@ -30,6 +30,8 @@ if RT_USING_NETUTILS
         select RT_USING_LIBC
         select RT_USING_SAL
         select SAL_USING_POSIX
+        select RT_USING_POSIX_SELECT
+        select RT_USING_POSIX_POLL
         default n
 
     config RT_NETUTILS_NETIO

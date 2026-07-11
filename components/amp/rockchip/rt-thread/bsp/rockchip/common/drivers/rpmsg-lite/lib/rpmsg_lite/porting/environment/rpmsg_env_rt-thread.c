@@ -77,12 +77,13 @@ static int32_t env_in_isr(void)
  * Utilize events to avoid busy loop implementation.
  *
  */
-void env_wait_for_link_up(volatile uint32_t *link_state, uint32_t link_id)
+uint32_t env_wait_for_link_up(volatile uint32_t *link_state, uint32_t link_id, uint32_t timeout_ms)
 {
     if (*link_state != 1U)
     {
         rt_event_recv(&env_event, (1UL << link_id), RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR, RT_WAITING_FOREVER, RT_NULL);
     }
+    return 1U;
 }
 
 /*!
@@ -650,7 +651,7 @@ void env_delete_queue(void *queue)
  * @return - status of function execution
  */
 
-int32_t env_put_queue(void *queue, void *msg, uint32_t timeout_ms)
+int32_t env_put_queue(void *queue, void *msg, uintptr_t timeout_ms)
 {
     if (0 == rt_mq_send((rt_mq_t)queue, msg, sizeof(rpmsg_queue_rx_cb_data_t)))
     {
@@ -671,7 +672,7 @@ int32_t env_put_queue(void *queue, void *msg, uint32_t timeout_ms)
  * @return - status of function execution
  */
 
-int32_t env_get_queue(void *queue, void *msg, uint32_t timeout_ms)
+int32_t env_get_queue(void *queue, void *msg, uintptr_t timeout_ms)
 {
     if (0 == rt_mq_recv((rt_mq_t)queue, msg, sizeof(rpmsg_queue_rx_cb_data_t), timeout_ms))
     {

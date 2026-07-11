@@ -13,16 +13,6 @@
 #define __BOARD_BASE_H__
 
 #include "drv_uart.h"
-#include "int_mux.h"
-#include "riscv_csr_encoding.h"
-#include "timer.h"
-#include "hal_base.h"
-
-#ifdef RT_USING_CAMERA
-#include "board_cam.h"
-#endif
-
-#define MAX_HANDLERS       NUM_INTERRUPTS
 
 extern  void *_end;
 extern  void *_heap_end;
@@ -86,6 +76,5 @@ extern  void *_heap_end;
 #define SENSOR_DEVICE_NAME                  "sensor_0"
 
 void rt_hw_board_init(void);
-rt_bool_t sirq_status(void);
 
 #endif

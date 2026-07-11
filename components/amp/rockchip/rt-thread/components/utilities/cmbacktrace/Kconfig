@@ -1,12 +1,18 @@
 
 menuconfig RT_USING_CMBACKTRACE
     bool "CmBacktrace: Advanced fault backtrace library for ARM Cortex-M series MCU."
+    depends on !PKG_USING_CMBACKTRACE
     default n
 
 if RT_USING_CMBACKTRACE
 
     choice
         prompt "CPU Platform"
+        default PKG_CMBACKTRACE_PLATFORM_M0_M0PLUS if ARCH_ARM_CORTEX_M0
+        default PKG_CMBACKTRACE_PLATFORM_M3 if ARCH_ARM_CORTEX_M3
+        default PKG_CMBACKTRACE_PLATFORM_M4 if ARCH_ARM_CORTEX_M4
+        default PKG_CMBACKTRACE_PLATFORM_M7 if ARCH_ARM_CORTEX_M7
+        default PKG_CMBACKTRACE_PLATFORM_M33 if ARCH_ARM_CORTEX_M33
         default PKG_CMBACKTRACE_PLATFORM_NOT_SELECTED
         help
           Select the ARM Cortex-M CPU Platform of your device
@@ -18,6 +24,8 @@ if RT_USING_CMBACKTRACE
             bool "Cortex-M4"
         config PKG_CMBACKTRACE_PLATFORM_M7
             bool "Cortex-M7"
+        config PKG_CMBACKTRACE_PLATFORM_M33
+            bool "Cortex-M33"
         config PKG_CMBACKTRACE_PLATFORM_NOT_SELECTED
             bool "Not selected, please select"
     endchoice
@@ -37,17 +45,49 @@ if RT_USING_CMBACKTRACE
         config PKG_CMBACKTRACE_PRINT_ENGLISH
             bool "Engish"
         config PKG_CMBACKTRACE_PRINT_CHINESE
-            bool "Chinese"
+            bool "Chinese (zh_CN.GB18030)"
+        if PKG_CMBACKTRACE_VER_NUM > 0x10400
+            config PKG_CMBACKTRACE_PRINT_CHINESE_UTF8
+                bool "Chinese (zh_CN.UTF-8)"
+        endif
     endchoice
 
-    config PKG_CMBACKTRACE_FAULT_REBOOT
-        bool "force reboot after a fault occur"
-        default n
-        depends on RT_USING_RESET
+    if PKG_CMBACKTRACE_VER_NUM > 0x10300
+        config CMB_USING_FAL_FLASH_LOG
+            bool
+            prompt "Save the log to FAL flash partition"
+            default n
+            select PKG_USING_FAL if RT_VER_NUM < 0x40100
+            select RT_USING_FAL if RT_VER_NUM >= 0x40100
+            help
+              The log will save to the FAL flash partition when case hardfault and assert.
+
+        config CMB_USING_FAL_BACKUP_LOG_TO_FILE
+            bool
+            prompt "Backup the flash log to file when next reboot"
+            default y
+            depends on CMB_USING_FAL_FLASH_LOG
+            select RT_USING_DFS      if RT_VER_NUM < 0x40100
+            select RT_USING_POSIX_FS if RT_VER_NUM >= 0x40100
+
+        config CMB_FAL_FLASH_LOG_PART
+            string "The flash partition name for saving log"
+            default "cmb_log"
+            depends on CMB_USING_FAL_FLASH_LOG
+            help
+                The patition name is defined in FAL partiton table. Please make sure it has enough space.
+
+        config CMB_LOG_FILE_PATH
+            string "The backup log file's path"
+            default "/log/cmb.log"
+            depends on CMB_USING_FAL_BACKUP_LOG_TO_FILE
+    endif
 
     config PKG_CMBACKTRACE_FAULT_DUMP_TO_FLASH
         bool
         prompt "Dump the fault to flash"
+        select RT_USING_DFS
+        select DFS_USING_POSIX
         default n
         help
           Dump the fault information to flash, you need a breakpad partition.

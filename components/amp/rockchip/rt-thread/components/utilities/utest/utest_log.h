@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -15,14 +15,14 @@
 
 #define UTEST_DEBUG
 
-#undef DBG_SECTION_NAME
-#undef DBG_LEVEL
+#undef DBG_TAG
+#undef DBG_LVL
 
-#define DBG_SECTION_NAME          "testcase"
+#define DBG_TAG              "testcase"
 #ifdef UTEST_DEBUG
-#define DBG_LEVEL                 DBG_LOG
+#define DBG_LVL              DBG_LOG
 #else
-#define DBG_LEVEL                 DBG_INFO
+#define DBG_LVL              DBG_INFO
 #endif
 #include <rtdbg.h>
 

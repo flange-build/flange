@@ -3,12 +3,15 @@ menu "Hardware Drivers Config"
 config SOC_STM32L053R8
     bool
     select SOC_SERIES_STM32L0
+    select RT_USING_COMPONENTS_INIT
+    select RT_USING_USER_MAIN
     default y
 
 menu "Onboard Peripheral Drivers"
 
     config BSP_USING_USB_TO_USART
         bool "Enable USB TO USART (uart2)"
+        select BSP_USING_UART
         select BSP_USING_UART2
         default y
 
@@ -35,7 +38,8 @@ menu "On-chip Peripheral Drivers"
                 depends on BSP_USING_UART2 && RT_SERIAL_USING_DMA
                 default n
         endif
-
+    source "../libraries/HAL_Drivers/Kconfig"
+    
 endmenu
 
 menu "Board extended module Drivers"

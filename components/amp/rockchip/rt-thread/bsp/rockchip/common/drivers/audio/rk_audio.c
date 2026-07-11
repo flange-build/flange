@@ -130,13 +130,6 @@ static rt_err_t rk_audio_config(struct audio_stream *as, struct AUDIO_PARAMS *pa
             return ret;
     }
 
-#ifdef RT_USING_DRIVER_AUDIO_PCM_PLUGIN
-    /* Note: need to after rk_pcm_config() where has been prepared pcm params */
-    ret = pcm->plugin_ops->hw_params(pcm, stream, params);
-    if (ret)
-        return ret;
-#endif
-
     audio_stream_set_state(as, AUDIO_STREAM_STATE_PREPARED);
 
     return ret;
@@ -796,7 +789,7 @@ rt_err_t rk_audio_control(rt_device_t dev, int cmd, void *args)
 #ifdef RT_USING_DRIVER_AUDIO_PCM_PLUGIN
         if (cmd >= RK_AUDIO_CTL_PLUGIN_FIRST &&
                 cmd <= RK_AUDIO_CTL_PLUGIN_LAST)
-            ret = snd_pcm_plugin_controls(as->pcm, cmd, args);
+            ret = snd_pcm_plugin_controls(as->pcm, cmd, as->stream, args);
 #endif
         break;
     }

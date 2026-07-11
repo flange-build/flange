@@ -56,7 +56,30 @@ extern uint32_t __share_log3_end__[];
 #define RT_HW_HEAP_END          (void*)&__heap_end
 #endif
 
+#define GIC_IRQ_START               0
+#define ARM_GIC_NR_IRQS             NUM_INTERRUPTS
+#define ARM_GIC_MAX_NR              NUM_INTERRUPTS
+#define GIC_ACK_INTID_MASK          0x000003ff
+
+#ifdef RT_USING_BACKLIGHT
+#define LCD_BACKLIGHT_PWM           "pwm0"
+#define LCD_BACKLIGHT_PWM_CHANNEL   1
+#define LCD_BACKLIGHT_PWM_INVERT    1
+#endif
+
+rt_inline rt_uint32_t platform_get_gic_dist_base(void)
+{
+    return GIC_DISTRIBUTOR_BASE;
+}
+
+rt_inline rt_uint32_t platform_get_gic_cpu_base(void)
+{
+    return GIC_CPU_INTERFACE_BASE;
+}
+
 void rt_hw_board_init(void);
+
+#ifndef RT_USING_SMP
 
 #ifdef PRIMARY_CPU
 void *rt_malloc_shmem(rt_size_t size);
@@ -66,5 +89,7 @@ void rt_free_shmem(void *ptr);
 #ifdef RT_USING_LOGBUFFER
 struct ringbuffer_t *get_log_ringbuffer(void);
 #endif
+
+#endif //RT_USING_SMP
 
 #endif

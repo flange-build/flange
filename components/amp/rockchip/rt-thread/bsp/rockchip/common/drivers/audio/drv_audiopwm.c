@@ -139,12 +139,12 @@ static rt_err_t rk_audiopwm_stop(struct audio_dai *dai, eAUDIO_streamType stream
 }
 
 #if defined(RT_USING_PM)
-static int rk_audiopwm_pm_suspend(const struct rt_device *device)
+static int rk_audiopwm_pm_suspend(const struct rt_device *device, rt_uint8_t mode)
 {
     return RT_EOK;
 }
 
-static void rk_audiopwm_pm_resume(const struct rt_device *device)
+static void rk_audiopwm_pm_resume(const struct rt_device *device, rt_uint8_t mode)
 {
 }
 
@@ -179,7 +179,7 @@ static struct audio_dai *rk_audiopwm_init_dai(struct HAL_AUDIOPWM_DEV *hAudioPwm
 
 #if defined(RT_USING_PM)
     audiopwm->parent.user_data = audiopwm;
-    rt_pm_register_device(&audiopwm->parent, &rk_audiopwm_pm_ops);
+    rt_pm_device_register(&audiopwm->parent, &rk_audiopwm_pm_ops);
 #endif
 
     return &audiopwm->dai;

@@ -13,9 +13,6 @@
 #include "drv_cache_ecc.h"
 
 #ifdef RT_USING_CACHE_ECC
-
-#define ERXCTRL_EN_BITS (HAL_BIT(8) | HAL_BIT(3) | HAL_BIT(2) | HAL_BIT(0))
-
 static void l1_l2_ecc_print_status(void)
 {
     uint32_t status, misc0, misc1;
@@ -106,8 +103,6 @@ int rk_cache_ecc_init(uint32_t err1_irq_cpu)
                                 NULL, "dsu_l3_ecc_error");
         HAL_GIC_Enable(NERR0_IRQn);
     }
-
-    HAL_CACHE_ECC_SetErxctlr(ERXCTRL_EN_BITS, ERXCTRL_EN_BITS);
 
     return RT_EOK;
 }

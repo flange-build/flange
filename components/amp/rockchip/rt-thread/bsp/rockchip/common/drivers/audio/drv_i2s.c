@@ -118,12 +118,12 @@ static rt_err_t rk_i2s_stop(struct audio_dai *dai, eAUDIO_streamType stream)
 }
 
 #if defined(RT_USING_PM)
-static int rk_i2s_pm_suspend(const struct rt_device *device)
+static int rk_i2s_pm_suspend(const struct rt_device *device, rt_uint8_t mode)
 {
     return RT_EOK;
 }
 
-static void rk_i2s_pm_resume(const struct rt_device *device)
+static void rk_i2s_pm_resume(const struct rt_device *device, rt_uint8_t mode)
 {
 }
 
@@ -161,7 +161,7 @@ static struct audio_dai *rk_i2s_init_dai(struct HAL_I2S_DEV *hI2s)
 #endif
 #if defined(RT_USING_PM)
     i2s->parent.user_data = i2s;
-    rt_pm_register_device(&i2s->parent, &rk_i2s_pm_ops);
+    rt_pm_device_register(&i2s->parent, &rk_i2s_pm_ops);
 #endif
     i2s->hI2s = hI2s;
 

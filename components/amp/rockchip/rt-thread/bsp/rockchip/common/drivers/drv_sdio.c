@@ -158,6 +158,22 @@ static int rk_mmc_read_pio(struct mmc_driver *mmc_drv)
     return 0;
 }
 
+static void rk_mmc_control_power(struct mmc_driver *mmc_drv, bool on)
+{
+    struct HAL_MMC_HOST *hal_host = (struct HAL_MMC_HOST *)mmc_drv->priv;
+    struct rk_mmc_platform_data *pdata = mmc_drv->pdata;
+
+    if (!pdata->is_pwr_gpio)
+    {
+        HAL_MMC_PowerCtrl(hal_host, on);
+    }
+    else
+    {
+        HAL_GPIO_SetPinDirection(pdata->pwr_gpio, pdata->pwr_gpio_pin, GPIO_OUT);
+        HAL_GPIO_SetPinLevel(pdata->pwr_gpio, pdata->pwr_gpio_pin,
+                             on ? GPIO_HIGH : GPIO_LOW);
+    }
+}
 static void rk_mmc_set_iocfg(struct rt_mmcsd_host *host, struct rt_mmcsd_io_cfg *io_cfg)
 {
     rt_uint32_t clkdiv = 0;
@@ -208,10 +224,10 @@ static void rk_mmc_set_iocfg(struct rt_mmcsd_host *host, struct rt_mmcsd_io_cfg 
     switch (io_cfg->power_mode)
     {
     case MMCSD_POWER_OFF:
-        HAL_MMC_PowerCtrl(hal_host, false);
+        rk_mmc_control_power(mmc_drv, false);
         break;
     case MMCSD_POWER_UP:
-        HAL_MMC_PowerCtrl(hal_host, true);
+        rk_mmc_control_power(mmc_drv, true);
         break;
     case MMCSD_POWER_ON:
         break;
@@ -393,9 +409,7 @@ static void rk_mmc_prepare_data(struct mmc_driver *mmc_drv)
     }
     else
     {
-        /* Flush cache for read to prevent dirty cache swap out at the same time of DMA transmit */
-        if (!use_internal_buffer)
-            rt_hw_cpu_dcache_ops(RT_HW_CACHE_FLUSH, data->buf, data_size);
+        rt_hw_cpu_dcache_ops(RT_HW_CACHE_INVALIDATE, data->buf, data_size);
     }
 
     if (use_internal_buffer)
@@ -511,12 +525,47 @@ static int rk_mmc_get_response(struct mmc_driver *mmc_drv, struct rt_mmcsd_cmd *
     return 0;
 }
 
+static int rk_mmc_write_emergency_check(struct mmc_driver *mmc_drv, struct HAL_MMC_HOST *hal_host)
+{
+    rt_uint32_t status;
+    int loop;
+
+    for (loop = 10000; loop > 0; loop--)
+    {
+        status = HAL_MMC_GetRawInterrupt(hal_host);
+
+        if (status & MMC_INIT_STATUS_DATA_ERROR)
+        {
+            rt_kprintf("ERROR: %s, data error, status: 0x%x\n", __func__, status);
+            mmc_drv->transfer_state = MMC_INIT_STATUS_DATA_ERROR;
+            return -RT_ERROR;
+        }
+
+        if (status & MMC_INT_STATUS_TRANSFER_OVER)
+        {
+            mmc_drv->transfer_state = 0;
+            break;
+        }
+        HAL_DelayMs(1);
+    }
+
+    HAL_MMC_ClearRawInterrupt(hal_host, MMC_INT_STATUS_ALL);
+    if (loop <= 0)
+    {
+        rt_kprintf("ERROR: %s, dto timeout, status: 0x%x\n", __func__, status);
+        mmc_drv->transfer_state = MMC_INIT_STATUS_DATA_ERROR;
+        return -RT_ETIMEOUT;
+    }
+
+    return 0;
+}
+
 static int rk_mmc_start_transfer(struct mmc_driver *mmc_drv)
 {
     struct HAL_MMC_HOST *hal_host = (struct HAL_MMC_HOST *)mmc_drv->priv;
     struct rt_mmcsd_cmd *cmd = mmc_drv->cmd;
     struct rt_mmcsd_data *data = RT_NULL;
-    int ret = 0;
+    int ret;
     rt_uint32_t interrupt, status, reg;
 
     if (cmd)
@@ -529,13 +578,20 @@ static int rk_mmc_start_transfer(struct mmc_driver *mmc_drv)
 
     PRINT_MMC_DBG("%s, start\n", __func__);
 
-    //open data interrupts
-    reg = HAL_MMC_GetInterruptMask(hal_host);
-    reg |= MMC_INT_STATUS_DATA;
-    HAL_MMC_SetInterruptMask(hal_host, reg);
+    if (mmc_drv->is_write_emergency)
+    {
+        ret = rk_mmc_write_emergency_check(mmc_drv, hal_host);
+    }
+    else
+    {
+        //open data interrupts
+        reg = HAL_MMC_GetInterruptMask(hal_host);
+        reg |= MMC_INT_STATUS_DATA;
+        HAL_MMC_SetInterruptMask(hal_host, reg);
 
-    //fixme: spin_unlock_irqrestore(&host->lock, flags);
-    ret = rt_completion_wait(&mmc_drv->transfer_completion, RT_TICK_PER_SECOND * 5);
+        //fixme: spin_unlock_irqrestore(&host->lock, flags);
+        ret = rt_completion_wait(&mmc_drv->transfer_completion, RT_TICK_PER_SECOND * 50);
+    }
 
     reg = HAL_MMC_GetInterruptMask(hal_host);
     reg &= ~MMC_INT_STATUS_DATA;
@@ -632,6 +688,12 @@ static void rk_mmc_request(struct rt_mmcsd_host *host, struct rt_mmcsd_req *req)
         goto out;
     }
 
+    if (req->is_write_emergency)
+    {
+        HAL_MMC_ClearRawInterrupt(hal_host, MMC_INT_STATUS_ALL);
+        mmc_drv->is_write_emergency = req->is_write_emergency;
+    }
+
     rk_mmc_prepare_data(mmc_drv);
     rk_mmc_send_command(mmc_drv, cmd);
     ret = rk_mmc_get_response(mmc_drv, cmd);
@@ -656,7 +718,7 @@ out:
 }
 
 #if defined(RT_USING_PM)
-static int rt_mmc_pm_suspend(const struct rt_device *device)
+static int rt_mmc_pm_suspend(const struct rt_device *device, rt_uint8_t mode)
 {
     struct HAL_MMC_HOST *hal_host = device->user_data;
     rt_uint32_t cmd_flags = MMC_CMD_FLAG_WAIT_PREV_DATA;
@@ -714,7 +776,7 @@ out:
     return ret;
 }
 
-static void rt_mmc_pm_resume(const struct rt_device *device)
+static void rt_mmc_pm_resume(const struct rt_device *device, rt_uint8_t mode)
 {
     struct HAL_MMC_HOST *hal_host = device->user_data;
     rt_uint32_t cmd_flags = MMC_CMD_FLAG_WAIT_PREV_DATA;
@@ -851,7 +913,6 @@ int rk_mmc_probe(struct rk_mmc_platform_data *pdata)
     struct mmc_driver *mmc_drv;
     struct rt_mmcsd_host *host;
     struct HAL_MMC_HOST *hal_host;
-    struct rt_device *dev = RT_NULL;
 
     PRINT_MMC_DBG("%s start\n", __func__);
 
@@ -862,6 +923,7 @@ int rk_mmc_probe(struct rk_mmc_platform_data *pdata)
     rt_memset(mmc_drv, 0, sizeof(struct mmc_driver));
 
     mmc_drv->priv = hal_host;
+    mmc_drv->pdata = pdata;
 
     host = mmcsd_alloc_host();
     if (!host)
@@ -913,7 +975,7 @@ int rk_mmc_probe(struct rk_mmc_platform_data *pdata)
     if (!dev)
         return -RT_ENOMEM;
     dev->user_data = hal_host;
-    rt_pm_register_device(dev, &rk_mmc_pm_ops);
+    rt_pm_device_register(dev, &rk_mmc_pm_ops);
 #endif
 
     PRINT_MMC_DBG("%s end\n", __func__);
@@ -925,7 +987,7 @@ int rk_mmc_init(void)
 {
     int i;
     struct rk_mmc_platform_data *pdata;
-    struct clk_gate *clkgate;
+    struct clk_gate *clkgate = NULL;
 
     for (i = 0; i < MAX_ID_NUM; i++)
     {
@@ -936,10 +998,17 @@ int rk_mmc_init(void)
         rt_kprintf("base = 0x%x, irq = %d\n", pdata->base, pdata->irq);
         /* Adjust input card clock, and we have a hardware divider 2 */
         clk_set_rate(pdata->clk_id, pdata->freq_max * 2);
-        clkgate = get_clk_gate_from_id(HCLK_SDIO_GATE);
-        clk_enable(clkgate);
-        clkgate = get_clk_gate_from_id(CLK_SDIO_GATE);
-        clk_enable(clkgate);
+
+        if (pdata->hclk_gate)
+            clkgate = get_clk_gate_from_id(pdata->hclk_gate);
+        if (clkgate)
+            clk_enable(clkgate);
+
+        if (pdata->clk_gate)
+            clkgate = get_clk_gate_from_id(pdata->clk_gate);
+        if (clkgate)
+            clk_enable(clkgate);
+
         rk_mmc_probe(pdata);
     }
     return 0;

@@ -1,6 +1,6 @@
 /*
- * COPYRIGHT (C) 2018, Real-Thread Information Technology Ltd
- * 
+ * COPYRIGHT (C) 2011-2021, Real-Thread Information Technology Ltd
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
@@ -21,38 +21,11 @@
 #define RT_VBUS_RB_LOW_TICK   (RT_VMM_RB_BLK_NR * 2 / 3)
 #define RT_VBUS_RB_TICK_STEP  (100)
 
-#ifndef RT_USING_LOGTRACE
 /* console could be run on vbus. If we log on it, there will be oops. */
 #define vbus_debug(...)
 #define vbus_verbose(...)
 #define vbus_info(...)
 #define vbus_error(...)
-#else // have RT_USING_LOGTRACE
-#include <log_trace.h>
-
-#if defined(log_session_lvl)
-/* Define log_trace_session as const so the compiler could optimize some log
- * out. */
-const static struct log_trace_session _lgs = {
-    .id  = {.name = "vbus"},
-    .lvl = LOG_TRACE_LEVEL_VERBOSE,
-};
-
-#define vbus_debug(fmt, ...)   log_session_lvl(&_lgs, LOG_TRACE_LEVEL_DEBUG,   fmt, ##__VA_ARGS__)
-#define vbus_verbose(fmt, ...) log_session_lvl(&_lgs, LOG_TRACE_LEVEL_VERBOSE, fmt, ##__VA_ARGS__)
-#define vbus_info(fmt, ...)    log_session_lvl(&_lgs, LOG_TRACE_LEVEL_INFO,    fmt, ##__VA_ARGS__)
-#define vbus_error(fmt, ...)   log_session_lvl(&_lgs, LOG_TRACE_LEVEL_ERROR,    fmt, ##__VA_ARGS__)
-#else
-static struct log_trace_session _lgs = {
-    .id  = {.name = "vbus"},
-    .lvl = LOG_TRACE_LEVEL_VERBOSE,
-};
-#define vbus_debug(fmt, ...)   log_session(&_lgs, LOG_TRACE_DEBUG""fmt, ##__VA_ARGS__)
-#define vbus_verbose(fmt, ...) log_session(&_lgs, LOG_TRACE_VERBOSE""fmt, ##__VA_ARGS__)
-#define vbus_info(fmt, ...)    log_session(&_lgs, LOG_TRACE_INFO""fmt, ##__VA_ARGS__)
-#define vbus_error(fmt, ...)   log_session(&_lgs, LOG_TRACE_ERROR""fmt, ##__VA_ARGS__)
-#endif
-#endif // RT_USING_LOGTRACE
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(ar)     (sizeof(ar)/sizeof(ar[0]))
@@ -249,7 +222,7 @@ static void _bus_out_entry(void *param)
         /* wait for enough space */
         while (sp < dnr)
         {
-            rt_ubase_t lvl = rt_hw_interrupt_disable();
+            rt_base_t level = rt_hw_interrupt_disable();
 
             RT_VBUS_OUT_RING->blocked = 1;
             rt_vbus_smp_wmb();
@@ -262,7 +235,7 @@ static void _bus_out_entry(void *param)
 
             RT_VBUS_OUT_RING->blocked = 0;
 
-            rt_hw_interrupt_enable(lvl);
+            rt_hw_interrupt_enable(level);
 
             sp = _bus_ring_space_nr(RT_VBUS_OUT_RING);
         }
@@ -501,11 +474,11 @@ rt_err_t rt_vbus_listen_on(rt_uint8_t chnr,
 
 void rt_vbus_data_push(unsigned int id, struct rt_vbus_data *act)
 {
-    rt_ubase_t lvl;
+    rt_base_t level;
 
     RT_ASSERT(0 < id && id < RT_VBUS_CHANNEL_NR);
 
-    lvl = rt_hw_interrupt_disable();
+    level = rt_hw_interrupt_disable();
 
     if (_bus_in_action[id][_IN_ACT_HEAD] == RT_NULL)
     {
@@ -522,7 +495,7 @@ void rt_vbus_data_push(unsigned int id, struct rt_vbus_data *act)
     _bus_in_action_nr[id]++;
 #endif
 
-    rt_hw_interrupt_enable(lvl);
+    rt_hw_interrupt_enable(level);
 
 #ifdef RT_VBUS_USING_FLOW_CONTROL
     _chn_recv_wm[id].level++;
@@ -546,11 +519,11 @@ void rt_vbus_data_push(unsigned int id, struct rt_vbus_data *act)
 struct rt_vbus_data* rt_vbus_data_pop(unsigned int id)
 {
     struct rt_vbus_data *act;
-    rt_ubase_t lvl;
+    rt_base_t level;
 
     RT_ASSERT(0 < id && id < RT_VBUS_CHANNEL_NR);
 
-    lvl = rt_hw_interrupt_disable();
+    level = rt_hw_interrupt_disable();
 
     act = _bus_in_action[id][_IN_ACT_HEAD];
     if (act)
@@ -558,7 +531,7 @@ struct rt_vbus_data* rt_vbus_data_pop(unsigned int id)
         _bus_in_action[id][_IN_ACT_HEAD] = act->next;
     }
 
-    rt_hw_interrupt_enable(lvl);
+    rt_hw_interrupt_enable(level);
 
 #ifdef RT_VBUS_USING_FLOW_CONTROL
     if (_chn_recv_wm[id].level != 0)
@@ -926,11 +899,11 @@ int rt_vbus_request_chn(struct rt_vbus_request *req,
                         int timeout)
 {
     int i, chnr, err;
-	size_t plen = rt_strlen(req->name) + 2;
-	unsigned char *pbuf;
-    rt_ubase_t lvl;
+    size_t plen = rt_strlen(req->name) + 2;
+    unsigned char *pbuf;
+    rt_base_t level;
 
-    lvl = rt_hw_interrupt_disable();
+    level = rt_hw_interrupt_disable();
     for (i = 0; i < ARRAY_SIZE(_sess); i++)
     {
         if (_sess[i].st == SESSIOM_AVAILABLE)
@@ -938,7 +911,7 @@ int rt_vbus_request_chn(struct rt_vbus_request *req,
     }
     if (i == ARRAY_SIZE(_sess))
     {
-        rt_hw_interrupt_enable(lvl);
+        rt_hw_interrupt_enable(level);
         return -RT_ERROR;
     }
 
@@ -948,7 +921,7 @@ int rt_vbus_request_chn(struct rt_vbus_request *req,
     if (req->is_server)
     {
         _sess[i].st = SESSIOM_LISTENING;
-        rt_hw_interrupt_enable(lvl);
+        rt_hw_interrupt_enable(level);
 
         vbus_debug("request listening %s on %d\n", req->name, i);
 
@@ -957,21 +930,21 @@ int rt_vbus_request_chn(struct rt_vbus_request *req,
         goto _waitforcmp;
     }
 
-	pbuf = rt_malloc(plen);
-	if (!pbuf)
+    pbuf = rt_malloc(plen);
+    if (!pbuf)
     {
-        rt_hw_interrupt_enable(lvl);
+        rt_hw_interrupt_enable(level);
         return -RT_ENOMEM;
     }
 
     _sess[i].st = SESSIOM_ESTABLISHING;
-    rt_hw_interrupt_enable(lvl);
+    rt_hw_interrupt_enable(level);
 
     pbuf[0] = RT_VBUS_CHN0_CMD_ENABLE;
     rt_memcpy(pbuf+1, req->name, plen-1);
     vbus_verbose("%s --> remote\n", dump_cmd_pkt(pbuf, plen));
 
-	err = _chn0_post(pbuf, plen, RT_WAITING_FOREVER);
+    err = _chn0_post(pbuf, plen, RT_WAITING_FOREVER);
     rt_free(pbuf);
 
 _waitforcmp:
@@ -1158,10 +1131,6 @@ int rt_vbus_init(void *outr, void *inr)
 {
     int i;
 
-#ifdef RT_USING_LOGTRACE
-    log_trace_register_session(&_lgs);
-#endif
-
     if (outr > inr)
     {
         RT_ASSERT((char*)outr - (char*)inr >= sizeof(struct rt_vbus_ring));
@@ -1339,7 +1308,7 @@ void rt_vbus_chm_wm_dump(void)
 
 #ifdef RT_USING_FINSH
 #include <finsh.h>
-FINSH_FUNCTION_EXPORT_ALIAS(rt_vbus_rb_dump,    vbrb, dump vbus ringbuffer status);
+FINSH_FUNCTION_EXPORT_ALIAS(rt_vbus_rb_dump,   vbrb, dump vbus ringbuffer status);
 FINSH_FUNCTION_EXPORT_ALIAS(rt_vbus_chn_dump,  vbchn, dump vbus channel status);
 FINSH_FUNCTION_EXPORT_ALIAS(rt_vbus_sess_dump, vbses, dump vbus session status);
 FINSH_FUNCTION_EXPORT_ALIAS(rt_vbus_que_dump,  vbque, dump vbus out queue status);

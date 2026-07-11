@@ -31,15 +31,17 @@
 
  @} */
 
-#include <math.h>
-
-#include <rthw.h>
 #include <rtthread.h>
+
+#ifdef RT_USING_SPINAND
+#include <rthw.h>
 #include <rtdevice.h>
-#include <drivers/mtd.h>
+#include <drivers/mtd_nand.h>
+#include <dfs_fs.h>
 
 #include "board.h"
 #include "hal_bsp.h"
+#include "dma.h"
 #include "drv_clock.h"
 #include "drv_fspi.h"
 #include "hal_base.h"
@@ -50,7 +52,6 @@
 #include "map.h"
 #endif
 
-#ifdef RT_USING_SPINAND
 
 /********************* Private MACRO Definition ******************************/
 /** @defgroup SPINAND_Private_Macro Private Macro
@@ -66,15 +67,11 @@
 // #define DHARA_DEBUG
 #ifdef DHARA_DEBUG
 #define dhara_dbg(...)       rt_kprintf(__VA_ARGS__)
-#define dhara_abort(...)     abort(__VA_ARGS__)
 #else
 #define dhara_dbg(...)
-#define dhara_abort(...)
 #endif
 
-// #define DHARA_RANDOM_TEST
-
-#define MTD_TO_SPINAND(mtd) ((struct SPI_NAND *)mtd->priv)
+#define MTD_TO_SPINAND(mtd) ((struct SPI_NAND *)(mtd->priv))
 
 /** @} */  // SPINAND_Private_Macro
 
@@ -83,59 +80,128 @@
  *  @{
  */
 
+#define DHARA_DEFAULT_OFFSET (0x2000000) /* 32MB */
+#define RK_SPINAND_RESERVED_BBT_BLOCKS 4 /* 4 blks for bad block table extention */
+
 static struct rt_mutex spinand_lock;
 
-int spinand_read(rt_mtd_t *mtd, loff_t from, struct mtd_io_desc *ops)
+/** @} */  // SPINAND_Private_Structure
+
+/********************* Public Function Definition ****************************/
+/** @defgroup SPINAND_Public_Function Public Function
+ *  @{
+ */
+rt_err_t spinand_mtd_read(rt_mtd_nand_t mtd, rt_off_t page,
+                          rt_uint8_t *data, rt_uint32_t data_len,
+                          rt_uint8_t *spare, rt_uint32_t spare_len)
 {
+    struct SPI_NAND *spinand = MTD_TO_SPINAND(mtd);
     int ret;
 
-    spinand_dbg("%s addr= %lx len= %x %p\n", __func__, (uint32_t)from, (uint32_t)ops->datlen, ops->datbuf);
+    if (spare || spare_len)
+    {
+        rt_kprintf("%s oob is not supported\n", __func__);
+        return -RT_EINVAL;
+    }
 
+    if (!data || data_len != mtd->page_size)
+    {
+        rt_kprintf("%s data param input invalid, %p %d\n", __func__, data, data_len);
+        return -RT_EINVAL;
+    }
+
+    spinand_dbg("%s addr= %lx len= %x\n", __func__, (uint32_t)page, data_len);
     rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
-    ret = mftl_mtd_read(mtd, from, ops);
+    ret = HAL_SPINAND_ReadPageRaw(spinand, page, data, false);
     rt_mutex_release(&spinand_lock);
+    if (ret < 0)
+    {
+        rt_kprintf("%s addr %lx EIO, ret=%d\n", __func__, page, ret);
+        ret = -RT_EIO;
+    }
+    else if (ret == SPINAND_ECC_ERROR)
+    {
+        rt_kprintf("%s addr %lx ecc failed, ret=%d\n", __func__, page, ret);
+        ret = -RT_ERROR;
+    }
+    else if (ret == SPINAND_ECC_REFRESH)
+    {
+        spinand_dbg("%s addr %lx ecc reach flipping bits, ret=%d\n", __func__, page, ret);
+        ret = RT_EOK;
+    }
+    else
+    {
+        ret = RT_EOK;
+    }
 
     return ret;
 }
 
-int spinand_write(rt_mtd_t *mtd, loff_t to, struct mtd_io_desc *ops)
+rt_err_t spinand_mtd_write(rt_mtd_nand_t mtd, rt_off_t page,
+                           const rt_uint8_t *data, rt_uint32_t data_len,
+                           const rt_uint8_t *spare, rt_uint32_t spare_len)
 {
+    struct SPI_NAND *spinand = MTD_TO_SPINAND(mtd);
     int ret;
 
-    spinand_dbg("%s addr= %lx len= %x\n", __func__, (uint32_t)to, (uint32_t)ops->datlen);
+    if (spare && spare_len)
+    {
+        rt_kprintf("%s oob is not supported\n", __func__);
+        return -RT_EINVAL;
+    }
+
+    if (!data || data_len != mtd->page_size)
+    {
+        rt_kprintf("%s data param input invalid, %p %d\n", __func__, data, data_len);
+        return -RT_EINVAL;
+    }
+
+    spinand_dbg("%s addr= %lx len= %x\n", __func__, (uint32_t)page, data_len);
     rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
-    ret = mftl_mtd_write(mtd, to, ops);
+    ret = HAL_SPINAND_ProgPageRaw(spinand, page, (uint32_t *)data, false);
     rt_mutex_release(&spinand_lock);
+    if (ret)
+    {
+        rt_kprintf("%s addr %lx EIO, ret=%d\n", __func__, page, ret);
+        ret = -RT_EIO;
+    }
 
     return ret;
 }
 
-int spinand_erase(rt_mtd_t *mtd, loff_t addr, size_t len)
+rt_err_t spinand_mtd_erase(rt_mtd_nand_t mtd, rt_uint32_t block)
 {
+    struct SPI_NAND *spinand = MTD_TO_SPINAND(mtd);
     int ret;
 
-    spinand_dbg("%s addr= %lx len= %lx\n", __func__, (uint32_t)addr, (uint32_t)len);
+    spinand_dbg("%s addr= %lx\n", __func__, block);
     rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
-    ret = mftl_mtd_erase(mtd, addr, len);
+    ret = HAL_SPINAND_EraseBlock(spinand, block * mtd->pages_per_block);
     rt_mutex_release(&spinand_lock);
+    if (ret)
+    {
+        rt_kprintf("%s addr %lx EIO, ret=%d\n", __func__, block, ret);
+        ret = -RT_EIO;
+    }
 
     return ret;
 }
 
-int spinand_isbad(rt_mtd_t *mtd, uint32_t block)
+rt_err_t spinand_mtd_block_isbad(rt_mtd_nand_t mtd, rt_uint32_t block)
 {
     struct SPI_NAND *spinand = MTD_TO_SPINAND(mtd);
     int32_t ret = RT_EOK;
 
-    spinand_dbg("%s blk= %lx\n", __func__, block);
     rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
     ret = HAL_SPINAND_IsBad(spinand, block * spinand->pagePerBlk);
     rt_mutex_release(&spinand_lock);
 
+    spinand_dbg("%s blk= %lx %d\n", __func__, block, ret);
+
     return ret;
 }
 
-int spinand_markbad(rt_mtd_t *mtd, uint32_t block)
+rt_err_t spinand_mtd_block_markbad(rt_mtd_nand_t mtd, rt_uint32_t block)
 {
     struct SPI_NAND *spinand = MTD_TO_SPINAND(mtd);
     int32_t ret = RT_EOK;
@@ -144,19 +210,31 @@ int spinand_markbad(rt_mtd_t *mtd, uint32_t block)
     rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
     ret = HAL_SPINAND_MarkBad(spinand, block * spinand->pagePerBlk);
     rt_mutex_release(&spinand_lock);
+    if (ret)
+    {
+        rt_kprintf("%s addr %lx EIO, ret=%d\n", __func__, block, ret);
+        ret = -RT_EIO;
+    }
 
     return ret;
 }
 
-static const struct mtd_ops ops =
+static const struct rt_mtd_nand_driver_ops spinand_mtd_nand_ops =
 {
-    spinand_erase,
-    spinand_read,
-    spinand_write,
-    spinand_isbad,
-    spinand_markbad,
+    NULL,
+    spinand_mtd_read,
+    spinand_mtd_write,
+    NULL,
+    spinand_mtd_erase,
+    spinand_mtd_block_isbad,
+    spinand_mtd_block_markbad,
 };
+/** @} */  // SPINAND_Public_Function
 
+/********************* Private Function Definition ****************************/
+/** @defgroup SPINAND_Private_Function Private Function
+ *  @{
+ */
 #if defined(RT_USING_SPINAND_FSPI_HOST)
 static HAL_Status fspi_xfer(struct SPI_NAND_HOST *spi, struct HAL_SPI_MEM_OP *op)
 {
@@ -235,7 +313,7 @@ static int rockchip_sfc_delay_lines_tuning(struct SPI_NAND *spinand, struct rt_f
     }
     else
     {
-        rt_kprintf("spinor %d %d dll training failed in %dMHz, reduce the frequency\n",
+        rt_kprintf("spinand %d %d dll training failed in %dMHz, reduce the frequency\n",
                    left, right, spinand->spi->speed);
         rt_fspi_dll_disable(fspi_device);
         return -1;
@@ -244,9 +322,19 @@ static int rockchip_sfc_delay_lines_tuning(struct SPI_NAND *spinand, struct rt_f
 
 RT_WEAK struct rt_fspi_device g_fspi_spinand =
 {
+#ifdef RT_USING_SPINAND_FSPI_CS1
     .host_id = 0,
     .dev_type = DEV_SPINAND,
+    .chip_select = 1,
+#else
+#ifdef CONFIG_RT_USING_SNOR
+    .host_id = 1,
+#else
+    .host_id = 0,
+#endif
+    .dev_type = DEV_SPINAND,
     .chip_select = 0,
+#endif
 };
 
 static uint32_t spinand_adapt(struct SPI_NAND *spinand)
@@ -315,8 +403,34 @@ static uint32_t spinand_adapt(struct SPI_NAND *spinand)
 
     return ret;
 }
+#elif defined(RT_USING_SPINAND_SFC_HOST)
+static uint32_t spinand_adapt(struct SPI_NAND *spinand)
+{
+    struct HAL_SFC_HOST *host = (struct HAL_SFC_HOST *)rt_calloc(1, sizeof(*host));
+
+    RT_ASSERT(host);
+
+    /* Designated host to SPINAND */
+    host->instance = SFC;
+    HAL_SFC_Init(host);
+    spinand->spi->userdata = (void *)host;
+    spinand->spi->mode = HAL_SPI_MODE_3;
+    spinand->spi->mode |= (HAL_SPI_TX_QUAD | HAL_SPI_RX_QUAD);
+    spinand->spi->xfer = HAL_SFC_SPINandSpiXfer;
+
+    /* Init SPI Nand abstract */
+    if (HAL_SPINAND_Init(spinand))
+    {
+        rt_free(host);
+        return -RT_ERROR;
+    }
+    else
+    {
+        return RT_EOK;
+    }
+}
 #elif defined(RT_USING_SPINAND_SPI_HOST)
-static HAL_Status SPI_Xfer(struct SPI_NAND_HOST *spi, struct HAL_SPI_MEM_OP *op)
+static HAL_Status spi_xfer(struct SPI_NAND_HOST *spi, struct HAL_SPI_MEM_OP *op)
 {
     struct rt_spi_device *spi_device = (struct rt_spi_device *)spi->userdata;
     struct rt_spi_configuration cfg;
@@ -397,7 +511,7 @@ static uint32_t spinand_adapt(struct SPI_NAND *spinand)
     /* Designated host to SPI Nand */
     spinand->spi->userdata = (void *)spi_device;
     spinand->spi->mode = HAL_SPI_MODE_3;
-    spinand->spi->xfer = SPI_Xfer;
+    spinand->spi->xfer = spi_xfer;
     if (RT_SPINAND_SPEED > 0 && RT_SPINAND_SPEED <= HAL_SPI_MASTER_MAX_SCLK_OUT)
     {
         spinand->spi->speed = RT_SPINAND_SPEED;
@@ -417,25 +531,11 @@ static uint32_t spinand_adapt(struct SPI_NAND *spinandF)
 }
 #endif
 
-/** @} */  // SPINAND_Private_Function
-
-/********************* Public Function Definition ****************************/
-
-/** @defgroup SPINAND_Public_Functions Public Functions
- *  @{
- */
-
 #ifdef RT_USING_DHARA
-static int p_count;
-static int e_count;
-static int r_count;
-
 int dhara_nand_is_bad(const struct dhara_nand *n, dhara_block_t bno)
 {
     struct SPI_NAND *spinand = (struct SPI_NAND *)n->priv_data;
     int ret;
-
-    dhara_dbg("NAND_is_bad blk=0x%x\n", bno);
 
     if (bno >= n->num_blocks)
     {
@@ -444,7 +544,10 @@ int dhara_nand_is_bad(const struct dhara_nand *n, dhara_block_t bno)
 
     if (n->blocks[bno].bbm == NAND_BBT_BLOCK_STATUS_UNKNOWN)
     {
-        ret = HAL_SPINAND_IsBad(spinand, bno);
+        rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+        ret = HAL_SPINAND_IsBad(spinand, (bno + n->start_blocks) * spinand->pagePerBlk);
+        rt_mutex_release(&spinand_lock);
+        dhara_dbg("NAND_is_bad blk=0x%x ret=%d\n", bno + n->start_blocks, ret);
         if (ret)
         {
             dhara_dbg("NAND_is_bad blk 0x%x is bad block, ret=%d\n", bno, ret);
@@ -464,8 +567,6 @@ void dhara_nand_mark_bad(const struct dhara_nand *n, dhara_block_t bno)
     struct SPI_NAND *spinand = (struct SPI_NAND *)n->priv_data;
     int ret;
 
-    dhara_dbg("NAND_mark_bad blk=0x%x\n", bno);
-
     if (bno >= n->num_blocks)
     {
         rt_kprintf("NAND_mark_bad called on invalid block: %ld\n", bno);
@@ -473,7 +574,10 @@ void dhara_nand_mark_bad(const struct dhara_nand *n, dhara_block_t bno)
 
     n->blocks[bno].bbm = NAND_BBT_BLOCK_WORN;
 
-    ret = HAL_SPINAND_MarkBad(spinand, bno);
+    rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+    ret = HAL_SPINAND_MarkBad(spinand, bno + n->start_blocks);
+    rt_mutex_release(&spinand_lock);
+    dhara_dbg("NAND_mark_bad blk=0x%x, ret=%d\n", bno + n->start_blocks, ret);
     if (ret)
     {
         rt_kprintf("NAND_mark_bad blk 0x%x failed, ret=%d\n", bno, ret);
@@ -485,32 +589,29 @@ int dhara_nand_erase(const struct dhara_nand *n, dhara_block_t bno, dhara_error_
     struct SPI_NAND *spinand = (struct SPI_NAND *)n->priv_data;
     int ret;
 
-    dhara_dbg("NAND_erase blk=0x%x\n", bno);
-
     if (bno >= n->num_blocks)
     {
         rt_kprintf("NAND_erase called on invalid block: %ld\n", bno);
-        dhara_abort();
-
         return -RT_EINVAL;
     }
 
     if (n->blocks[bno].bbm == NAND_BBT_BLOCK_WORN)
     {
         rt_kprintf("NAND_erase called on block which is marked bad: %ld\n", bno);
-        dhara_abort();
-
         return -RT_EINVAL;
     }
 
     n->blocks[bno].next_page = 0;
 
-    ret = HAL_SPINAND_EraseBlock(spinand, bno << n->log2_ppb);
+    rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+    ret = HAL_SPINAND_EraseBlock(spinand, (bno + n->start_blocks) << n->log2_ppb);
+    rt_mutex_release(&spinand_lock);
+    dhara_dbg("NAND_erase blk=0x%x, ret=%d\n", bno + n->start_blocks, ret);
     if (ret)
     {
         rt_kprintf("NAND_erase blk 0x%x failed, ret=%d\n", bno, ret);
     }
-    e_count++;
+    dhara_trace_e_count++;
 
     return ret;
 }
@@ -524,21 +625,15 @@ int dhara_nand_prog(const struct dhara_nand *n, dhara_page_t p,
     uint32_t meta[SPINAND_META_WORDS_MAX] = { DHARA_NAND_META_MAGIC, 0, 0, 0 };
     int ret;
 
-    dhara_dbg("NAND_prog page=0x%x\n", p);
-
     if ((bno < 0) || (bno >= n->num_blocks))
     {
         rt_kprintf("NAND_prog called on invalid block: %ld\n", bno);
-        dhara_abort();
-
         return -RT_EINVAL;
     }
 
     if (n->blocks[bno].bbm == NAND_BBT_BLOCK_WORN)
     {
         rt_kprintf("NAND_prog called on block which is marked bad: %d\n", bno);
-        dhara_abort();
-
         return -RT_EINVAL;
     }
 
@@ -546,20 +641,21 @@ int dhara_nand_prog(const struct dhara_nand *n, dhara_page_t p,
     {
         rt_kprintf("NAND_prog out-of-order page programming. Block %d, page %d (expected %d)\n",
                    bno, pno, n->blocks[bno].next_page);
-        dhara_abort();
-
         return -RT_EINVAL;
     }
 
     n->blocks[bno].next_page = pno + 1;
 
-    ret = HAL_SPINAND_ProgPage(spinand, p, data, meta);
+    rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+    ret = HAL_SPINAND_ProgPage(spinand, p + n->start_blocks * n->page_per_block, data, meta);
+    rt_mutex_release(&spinand_lock);
+    dhara_dbg("NAND_prog page=0x%x, ret=%d\n", p + n->start_blocks * n->page_per_block, ret);
     if (ret != HAL_OK)
     {
         rt_kprintf("NAND_prog page 0x%x failed, ret=%d\n", p, ret);
         dhara_set_error(err, DHARA_E_BAD_BLOCK);
     }
-    p_count++;
+    dhara_trace_p_count++;
 
     return ret;
 }
@@ -569,24 +665,45 @@ int dhara_nand_is_free(const struct dhara_nand *n, dhara_page_t p)
     struct SPI_NAND *spinand = (struct SPI_NAND *)n->priv_data;
     const int bno = p >> n->log2_ppb;
     const uint16_t pno = p & ((n->page_per_block) - 1);
-    uint32_t meta[SPINAND_META_WORDS_MAX] = { 0 };
-    int ret;
+    int ret, i;
+    dhara_page_t read_page;
 
     if ((bno < 0) || (bno >= n->num_blocks))
     {
         rt_kprintf("NAND_is_free called on invalid block: %d\n", bno);
-        dhara_abort();
-
         return -RT_EINVAL;
     }
 
     if (n->blocks[bno].next_page == 0)
     {
-        ret = HAL_SPINAND_ReadPageMeta(spinand, p, meta);
-        if (ret != SPINAND_ECC_ERROR && meta[0] == 0xFFFFFFFF)
-            return true;
-        else
+        read_page = p + n->start_blocks * n->page_per_block;
+        rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+        ret = HAL_SPINAND_ReadPageAnyWhere(spinand, read_page, n->copy_buf, 0, n->page_size);
+        rt_mutex_release(&spinand_lock);
+        if (ret < 0)
+        {
+            rt_kprintf("%s addr %lx EIO, ret=%d\n", __func__, read_page, ret);
             return false;
+        }
+        else if (ret == SPINAND_ECC_ERROR)
+        {
+            rt_kprintf("%s addr %lx ecc failed, ret=%d\n", __func__, read_page, ret);
+            return false;
+        }
+        else if (ret == SPINAND_ECC_REFRESH)
+        {
+            dhara_dbg("%s addr %lx ecc reach flipping bits, ret=%d\n", __func__, read_page, ret);
+        }
+
+        dhara_dbg("NAND_is_free page=0x%x, ret=%d\n", read_page, ret);
+        for (i = 0; i < n->page_size / 4; i++)
+        {
+            if (((uint32_t *)n->copy_buf)[i] != 0xFFFFFFFF)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     return (int)(n->blocks[bno].next_page <= pno);
@@ -599,33 +716,56 @@ int dhara_nand_read(const struct dhara_nand *n, dhara_page_t p,
     struct SPI_NAND *spinand = (struct SPI_NAND *)n->priv_data;
     const int bno = p >> n->log2_ppb;
     int ret;
-
-    dhara_dbg("NAND_read page=0x%x offset=0x%x length=%x\n", p, offset, length);
+    dhara_page_t read_page;
 
     if ((bno < 0) || (bno >= n->num_blocks))
     {
         rt_kprintf("NAND_read called on invalid block: %d\n", bno);
-        dhara_abort();
-
         return -RT_EINVAL;
     }
 
     if (offset + length > n->page_size)
     {
         rt_kprintf("NAND_read called on invalid range: offset = %ld, length = %ld\n", offset, length);
-        dhara_abort();
-
         return -RT_EINVAL;
     }
 
-    ret = HAL_SPINAND_ReadPageAnyWhere(spinand, p, data, offset, length);
-    if (ret == SPINAND_ECC_ERROR)
+    rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+    read_page = p + n->start_blocks * n->page_per_block;
+    ret = HAL_SPINAND_ReadPageAnyWhere(spinand, read_page, data, offset, length);
+    rt_mutex_release(&spinand_lock);
+    dhara_dbg("NAND_read page=0x%x offset=0x%x length=%x\n", read_page, offset, length);
+    if (ret < 0)
+    {
+        rt_kprintf("%s addr %lx EIO, ret=%d\n", __func__, read_page, ret);
+        return false;
+    }
+    else if (ret == SPINAND_ECC_ERROR)
+    {
+        rt_kprintf("%s addr %lx ecc failed, ret=%d\n", __func__, read_page, ret);
+        return false;
+    }
+    else if (ret == SPINAND_ECC_REFRESH)
+    {
+        dhara_dbg("%s addr %lx ecc reach flipping bits, ret=%d\n", __func__, read_page, ret);
+    }
+    if (ret < 0 || ret == SPINAND_ECC_ERROR)
     {
         rt_kprintf("NAND_read page 0x%x failed, ret=%d\n", p, ret);
         dhara_set_error(err, DHARA_E_ECC);
+        ret = -RT_ERROR;
     }
-    *err = DHARA_E_NONE;
-    r_count++;
+    else if (ret == SPINAND_ECC_REFRESH)
+    {
+        dhara_set_error(err, DHARA_E_NONE);
+        ret = RT_EOK;
+    }
+    else
+    {
+        dhara_set_error(err, DHARA_E_NONE);
+        ret = RT_EOK;
+    }
+    dhara_trace_r_count++;
 
     return ret;
 }
@@ -641,25 +781,20 @@ int dhara_nand_copy(const struct dhara_nand *n,
     return 0;
 }
 
-static rt_err_t part_blk_init(rt_device_t dev)
-{
-    return RT_EOK;
-}
+/********************* Public Structure Definition **************************/
+/** @defgroup SPINAND_Public_Structure Public Structure
+ *  @{
+ */
+static struct rt_mutex dhara_blk_lock;
 
-static rt_err_t part_blk_open(rt_device_t dev, rt_uint16_t oflag)
-{
-    return RT_EOK;
-}
-
-static rt_err_t part_blk_close(rt_device_t dev)
-{
-    return RT_EOK;
-}
-
-static rt_err_t part_blk_control(rt_device_t dev, int cmd, void *args)
+static rt_err_t dhara_blk_control(rt_device_t dev, int cmd, void *args)
 {
     struct rt_flash_partition *blk_part = DEV_2_PART(dev);
     struct dhara_device *dhara_dev = (struct dhara_device *)dev->user_data;
+    struct dhara_map *map = &dhara_dev->map;
+    struct SPI_NAND *spinand = (struct SPI_NAND *)dhara_dev->nand.priv_data;
+    uint32_t blk;
+    int32_t ret;
 
     dhara_dbg("%s %ld\n", __func__, blk_part->size);
 
@@ -676,8 +811,46 @@ static rt_err_t part_blk_control(rt_device_t dev, int cmd, void *args)
         geometry->bytes_per_sector  = dhara_dev->sector_size;
         geometry->sector_count      = blk_part->size / geometry->bytes_per_sector;
         geometry->block_size        = geometry->bytes_per_sector;
+        dhara_dbg("%s sector=%x count=%x\n", __func__, geometry->bytes_per_sector, geometry->sector_count);
         break;
     }
+    case RT_DEVICE_CTRL_BLK_SYNC:
+    {
+        dhara_dbg("%s flush\n", __func__);
+        return dhara_map_sync(map, NULL);
+        break;
+    }
+    case RT_DEVICE_CTRL_MTD_FORMAT:
+        rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+        for (blk = 0; blk < dhara_dev->nand.num_blocks; blk++)
+        {
+            if (HAL_SPINAND_IsBad(spinand, (blk + dhara_dev->nand.start_blocks) * dhara_dev->nand.page_per_block))
+            {
+                continue;
+            }
+            ret = HAL_SPINAND_EraseBlock(spinand, (blk + dhara_dev->nand.start_blocks) * dhara_dev->nand.page_per_block);
+            if (ret)
+            {
+                rt_mutex_release(&spinand_lock);
+                return -RT_ERROR;
+            }
+        }
+        rt_mutex_release(&spinand_lock);
+
+        rt_kprintf("dhara format\n");
+        dhara_map_init(map, &dhara_dev->nand, map->journal.page_buf, GC_RATIO);
+        dhara_dbg("dhara resume\n");
+        dhara_map_resume(map, NULL);
+        dhara_dbg("dhara sync\n");
+
+        ret = dhara_map_sync(map, NULL);
+        if (ret)
+        {
+            rt_kprintf("dhara sync failed, ret=%d\n", ret);
+            return -RT_ERROR;
+        }
+        dhara_dev->capacity = dhara_map_capacity(map);
+        blk_part->size = dhara_dev->capacity * dhara_dev->sector_size;
     default:
         break;
     }
@@ -685,7 +858,7 @@ static rt_err_t part_blk_control(rt_device_t dev, int cmd, void *args)
     return RT_EOK;
 }
 
-static rt_size_t part_blk_read(rt_device_t dev, rt_off_t sec, void *buffer, rt_size_t nsec)
+static rt_size_t dhara_blk_read(rt_device_t dev, rt_off_t sec, void *buffer, rt_size_t nsec)
 {
     struct rt_flash_partition *blk_part = DEV_2_PART(dev);
     struct dhara_device *dhara_dev = (struct dhara_device *)dev->user_data;
@@ -713,9 +886,9 @@ static rt_size_t part_blk_read(rt_device_t dev, rt_off_t sec, void *buffer, rt_s
         }
 
         /* It'a BLOCK device */
-        rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+        rt_mutex_take(&dhara_blk_lock, RT_WAITING_FOREVER);
         ret = dhara_map_read(&dhara_dev->map, sec, ptr, &err);
-        rt_mutex_release(&spinand_lock);
+        rt_mutex_release(&dhara_blk_lock);
         if (ret)
             return read_count;
         sec++;
@@ -726,7 +899,7 @@ static rt_size_t part_blk_read(rt_device_t dev, rt_off_t sec, void *buffer, rt_s
     return nsec;
 }
 
-static rt_size_t part_blk_write(rt_device_t dev, rt_off_t sec, const void *buffer, rt_size_t nsec)
+static rt_size_t dhara_blk_write(rt_device_t dev, rt_off_t sec, const void *buffer, rt_size_t nsec)
 {
     struct rt_flash_partition *blk_part = DEV_2_PART(dev);
     struct dhara_device *dhara_dev = (struct dhara_device *)dev->user_data;
@@ -754,15 +927,17 @@ static rt_size_t part_blk_write(rt_device_t dev, rt_off_t sec, const void *buffe
             return write_count;
         }
         /* It'a BLOCK device */
-        rt_mutex_take(&spinand_lock, RT_WAITING_FOREVER);
+        rt_mutex_take(&dhara_blk_lock, RT_WAITING_FOREVER);
         ret = dhara_map_write(&dhara_dev->map, sec, ptr, &err);
         if (ret)
         {
-            rt_mutex_release(&spinand_lock);
+            rt_mutex_release(&dhara_blk_lock);
             return write_count;
         }
+#if !defined(RT_USING_DHARA_ENABLE_CACHE)
         ret = dhara_map_sync(&dhara_dev->map, NULL);
-        rt_mutex_release(&spinand_lock);
+#endif
+        rt_mutex_release(&dhara_blk_lock);
         if (ret)
             return write_count;
         sec++;
@@ -774,19 +949,19 @@ static rt_size_t part_blk_write(rt_device_t dev, rt_off_t sec, const void *buffe
 }
 
 #ifdef RT_USING_DEVICE_OPS
-const static struct rt_device_ops part_blk_ops =
+const static struct rt_device_ops dhara_blk_ops =
 {
-    part_blk_init,
-    part_blk_open,
-    part_blk_close,
-    part_blk_read,
-    part_blk_write,
-    part_blk_control,
+    RT_NULL,
+    RT_NULL,
+    RT_NULL,
+    dhara_blk_read,
+    dhara_blk_write,
+    dhara_blk_control,
 };
 #endif
 
 /* Register a partition as block partition */
-static rt_err_t spinand_blk_init_partition(struct dhara_device *dev, struct rt_flash_partition *blk_part)
+static rt_err_t dhara_blk_register(struct dhara_device *dev, struct rt_flash_partition *blk_part)
 {
     if (dev == RT_NULL)
         return -RT_EIO;
@@ -798,205 +973,47 @@ static rt_err_t spinand_blk_init_partition(struct dhara_device *dev, struct rt_f
     /* blk dev setting */
     blk_part->blk.type      = RT_Device_Class_Block;
 #ifdef RT_USING_DEVICE_OPS
-    blk_part->blk.ops       = &part_blk_ops;
+    blk_part->blk.ops       = &dhara_blk_ops;
 #else
-    blk_part->blk.init      = part_blk_init;
-    blk_part->blk.open      = part_blk_open;
-    blk_part->blk.read      = part_blk_read;
-    blk_part->blk.write     = part_blk_write;
-    blk_part->blk.close     = part_blk_close;
-    blk_part->blk.control   = part_blk_control;
+    blk_part->blk.read      = dhara_blk_read;
+    blk_part->blk.write     = dhara_blk_write;
+    blk_part->blk.control   = dhara_blk_control;
 #endif
-    blk_part->blk.user_data = dev;  /* snor blk dev for operation */
+    blk_part->blk.user_data = dev;  /* spinad blk dev for operation */
     /* register device */
     return rt_device_register(&blk_part->blk, blk_part->name, blk_part->mask_flags | RT_DEVICE_FLAG_STANDALONE);
 }
 
-static struct rt_flash_partition default_part[] =
+static struct rt_flash_partition dhara_blk_default_partition =
 {
-    {
-        .name = "part0",
-        .offset = 0,
-        .size = 48400 * 2048, /* 128MB maximum */
-        .type = 0x8,
-        .mask_flags = PART_FLAG_BLK | PART_FLAG_RDWR,
-    },
+    .name = "dhara",
+    .offset = 0,
+    .size = 48400 * 2048, /* 128MB maximum */
+    .type = 0x8,
+    .mask_flags = PART_FLAG_BLK | PART_FLAG_RDWR,
 };
-
-#ifdef DHARA_RANDOM_TEST
-static uint8_t buf[2048];
-static int recheck = 0;
-#define NUM_SECTORS     8192
-#define MAX_SECTORS     48400
-static dhara_sector_t sector_list[NUM_SECTORS];
-
-void seq_gen(unsigned int seed, uint8_t *buf, size_t length)
-{
-    size_t i;
-
-    srandom(seed);
-    for (i = 0; i < length; i++)
-        buf[i] = random();
-}
-
-void seq_assert(unsigned int seed, const uint8_t *buf, size_t length)
-{
-    size_t i;
-
-    srandom(seed);
-    for (i = 0; i < length; i++)
-    {
-        const uint8_t expect = random();
-
-        if (buf[i] != expect)
-        {
-            rt_kprintf("seq_assert: mismatch at %ld in sequence %d: 0x%02x (expected 0x%02x)\n", i, seed, buf[i], expect);
-            abort();
-        }
-    }
-}
-
-static void mt_write(struct dhara_map *m, dhara_sector_t s, int seed)
-{
-    dhara_error_t err;
-
-    seq_gen(seed, buf, sizeof(buf));
-    if (dhara_map_write(m, s, buf, &err) < 0)
-    {
-        rt_kprintf("map_write %d\n", err);
-        abort();
-    }
-}
-
-static void mt_assert(struct dhara_map *m, dhara_sector_t s, int seed, bool unknown)
-{
-    dhara_error_t err = DHARA_E_NOT_FOUND;
-
-    if (dhara_map_read(m, s, buf, &err) < 0)
-    {
-        rt_kprintf("map_read %d\n", err);
-        abort();
-    }
-
-    if (err != DHARA_E_NOT_FOUND)
-    {
-        seq_assert(seed, buf, sizeof(buf));
-        if (unknown)
-            recheck++;
-    }
-}
-
-static void shuffle(int seed)
-{
-    int i;
-
-    srandom(seed);
-    for (i = 0; i < NUM_SECTORS; i++)
-        sector_list[i] = random() % MAX_SECTORS;
-
-    for (i = NUM_SECTORS - 1; i > 0; i--)
-    {
-        const int j = random() % i;
-        const int tmp = sector_list[i];
-
-        sector_list[i] = sector_list[j];
-        sector_list[j] = tmp;
-    }
-}
-
-static int dhara_random_test(struct dhara_map *m, int seed)
-{
-    int i, loop = 0;
-    int a, b, c, d;
-    int gap = 0x200;
-    int i_cur = 0;
-    uint32_t start_time, end_time, cost_time, size;
-
-    shuffle(seed);
-    while (1)
-    {
-        loop++;
-        for (i_cur = 0; i_cur < NUM_SECTORS; i_cur += gap)
-        {
-            for (i = i_cur; i < i_cur + gap; i++)
-            {
-                const dhara_sector_t s = sector_list[i];
-
-                mt_assert(m, s, s, true);
-                mt_write(m, s, s);
-                mt_assert(m, s, s, false);
-                if (!(i & 0x2FF))
-                {
-                    rt_kprintf("%s loop=%d s=%d recheck=%d p=%d r=%d\n", __func__, loop, s, recheck, m->prog_total, m->read_total);
-                }
-            }
-
-            a = m->prog_total;
-            b = p_count;
-            c = e_count;
-            d = r_count;
-            start_time = HAL_GetTick();
-            for (i = i_cur; i < i_cur + gap; i++)
-            {
-                const dhara_sector_t s = sector_list[i];
-
-                mt_write(m, s, s);
-            }
-            end_time = HAL_GetTick();
-            cost_time = (end_time - start_time);
-            size = 2048 * gap;
-
-            a = m->prog_total - a;
-            b = p_count - b;
-            c = e_count - c;
-            d = r_count - d;
-            rt_kprintf("======= prog: p-P/E/R = %d-%d/%d/%d, speed %dKB/s\n", a, b, c, d, size / cost_time);
-
-            a = m->read_total;
-            b = p_count;
-            c = e_count;
-            d = r_count;
-            start_time = HAL_GetTick();
-            for (i = i_cur; i < i_cur + gap; i++)
-            {
-                const dhara_sector_t s = sector_list[i];
-
-                mt_assert(m, s, s, false);
-            }
-            end_time = HAL_GetTick();
-            cost_time = (end_time - start_time);
-            size = 2048 * gap;
-
-            a = m->read_total - a;
-            b = p_count - b;
-            c = e_count - c;
-            d = r_count - d;
-            rt_kprintf("======= read: r-P/E/R = %d-%d/%d/%d, speed %dKB/s\n", a, b, c, d, size / cost_time);
-        }
-    }
-
-    return 0;
-}
-#endif
 
 static int dhara_register(struct dhara_device *dhara_dev)
 {
     const size_t page_size = dhara_dev->nand.page_size;
     uint8_t *page_buf;
     struct dhara_map *map;
-    int ret, i, part_num;
+    int ret;
 
-    dhara_dev->nand.copy_buf = rt_calloc(1, dhara_dev->nand.page_size);
+    dhara_dev->nand.copy_buf = rt_dma_malloc(page_size);
     RT_ASSERT(dhara_dev->nand.copy_buf);
     dhara_dev->nand.blocks = rt_calloc(dhara_dev->nand.num_blocks, sizeof(struct block_status));
     RT_ASSERT(dhara_dev->nand.blocks);
-    page_buf = rt_malloc(page_size);
+    page_buf = rt_dma_malloc(page_size);
     RT_ASSERT(page_buf);
 
     map = &dhara_dev->map;
 
+    dhara_dbg("dhara init\n");
     dhara_map_init(map, &dhara_dev->nand, page_buf, GC_RATIO);
+    dhara_dbg("dhara resume\n");
     dhara_map_resume(map, NULL);
+    dhara_dbg("dhara sync\n");
 
     ret = dhara_map_sync(map, NULL);
     if (ret)
@@ -1006,50 +1023,36 @@ static int dhara_register(struct dhara_device *dhara_dev)
     }
     dhara_dev->sector_size = dhara_dev->nand.page_size;
     dhara_dev->capacity = dhara_map_capacity(map);
+    rt_kprintf("  log2_page_size: %d\n", dhara_dev->nand.log2_page_size);
+    rt_kprintf("  log2_ppb: %d\n", dhara_dev->nand.log2_ppb);
     rt_kprintf("  num_blocks: %d\n", dhara_dev->nand.num_blocks);
     rt_kprintf("  sector_size: %d\n", dhara_dev->sector_size);
+    rt_kprintf("  page_per_block: %d\n", dhara_dev->nand.page_per_block);
     rt_kprintf("  capacity(sec): %d\n", dhara_dev->capacity);
     rt_kprintf("  capacity(MB): %d\n", dhara_dev->capacity * dhara_dev->sector_size / 1024 / 1024);
+    rt_kprintf("  start_blocks: %d\n", dhara_dev->nand.start_blocks);
+    rt_kprintf("  num_blocks: %d\n", dhara_dev->nand.num_blocks);
     rt_kprintf("  use count: %d\n", dhara_map_size(map));
 #ifdef DHARA_RANDOM_TEST
-    dhara_random_test(map, dhara_map_size(map));
+    dhara_rand_test(map, dhara_map_size(map));
 #endif
 
-    part_num = HAL_ARRAY_SIZE(default_part);
     /* Register partitions */
-    for (i = 0; i < part_num; i++)
-    {
-        dhara_dbg("spinand_flash_partition flags=%08x type= %08x off=%08x size=%08x %s\n",
-                  default_part[i].mask_flags,
-                  default_part[i].type,
-                  default_part[i].offset,
-                  default_part[i].size,
-                  default_part[i].name);
-        if (default_part[i].mask_flags & PART_FLAG_RDWR)
-        {
-            ret = spinand_blk_init_partition(dhara_dev, &default_part[i]);
-            if (ret)
-                goto exit;
-        }
-    }
+    dhara_blk_default_partition.size = dhara_dev->capacity * dhara_dev->sector_size;
+    ret = dhara_blk_register(dhara_dev, &dhara_blk_default_partition);
 
 exit:
     if (ret)
     {
-        rt_free(dhara_dev->nand.copy_buf);
+        rt_free_align(dhara_dev->nand.copy_buf);
         rt_free(dhara_dev->nand.blocks);
-        rt_free(page_buf);
+        rt_free_align(page_buf);
     }
 
     return ret;
 }
 #endif /* #ifdef RT_USING_DHARA */
-
-/* define partitions to it, mtd_spinand reserved for spi nand dev */
-struct mtd_part spinand_parts[1] =
-{
-    { "spinand0", 0, 0, },
-};
+/** @} */  // SPINAND_Private_Function
 
 /**
  * @brief  Init SPI_NAND framwork and apply to use.
@@ -1058,15 +1061,22 @@ struct mtd_part spinand_parts[1] =
  */
 int rt_hw_spinand_init(void)
 {
-    struct mtd_info *mtd_dev;
+    struct rt_mtd_nand_device *mtd_dev;
     struct SPI_NAND *spinand;
     struct SPI_NAND_HOST *spi;
-    int32_t ret;
+    int32_t ret, i = 0;
+    int32_t part_num;
+    struct rt_flash_partition *part_info;
 #ifdef RT_USING_DHARA
+    uint32_t block_size;
+    uint32_t block_reserved;
     struct dhara_device *dhara_dev;
+    uint32_t dhara_part_offset;
+    uint32_t dhara_part_size;
 #endif
 
-    mtd_dev = (struct mtd_info *)rt_calloc(1, sizeof(*mtd_dev));
+    /* Initial spinand */
+    mtd_dev = (struct rt_mtd_nand_device *)rt_calloc(1, sizeof(*mtd_dev));
     RT_ASSERT(mtd_dev);
     spinand = (struct SPI_NAND *)rt_calloc(1, sizeof(*spinand));
     RT_ASSERT(spinand);
@@ -1078,79 +1088,129 @@ int rt_hw_spinand_init(void)
     if (ret)
     {
         rt_kprintf("SPI Nand init adapt error, ret= %ld\n", ret);
-        goto exit;
+        goto err_init;
     }
-
-    /* flash feature setting */
     if (rt_mutex_init(&(spinand_lock), "spinandLock", RT_IPC_FLAG_FIFO) != RT_EOK)
     {
         rt_kprintf("Init mutex error\n");
         RT_ASSERT(0);
     }
 
-    /* register mtd spinand */
-    mtd_dev->sector_size     = spinand->secPerPage * SPINAND_SECTOR_SIZE;
-    mtd_dev->writesize_shift = __rt_ffs(mtd_dev->sector_size) - 1;
-    mtd_dev->writesize_mask  = mtd_dev->sector_size - 1;
-    mtd_dev->block_size      = mtd_dev->sector_size  * spinand->pagePerBlk;
-    mtd_dev->erasesize_shift = __rt_ffs(mtd_dev->block_size) - 1;
-    mtd_dev->erasesize_mask  = mtd_dev->block_size - 1;
-    mtd_dev->oob_size        = spinand->secPerPage * 16;
-    mtd_dev->oob_avail        = spinand->secPerPage * 2;
-    mtd_dev->offset          = 0;
-    mtd_dev->size            = spinand->size;
-    mtd_dev->priv            = spinand;
-    mtd_dev->ops             = &ops;
-
-    spinand_dbg("sector_size %lx\n", mtd_dev->sector_size);
-    spinand_dbg("writesize_shift %lx\n", mtd_dev->writesize_shift);
-    spinand_dbg("writesize_mask %lx\n", mtd_dev->writesize_mask);
-    spinand_dbg("block_size %lx\n", mtd_dev->block_size);
-    spinand_dbg("erasesize_shift %lx\n", mtd_dev->erasesize_shift);
-    spinand_dbg("erasesize_mask %lx\n", mtd_dev->erasesize_mask);
-    spinand_dbg("oob_size %lx\n", mtd_dev->oob_size);
-    spinand_dbg("oob_avail %lx\n", mtd_dev->oob_avail);
-    spinand_dbg("size %lx\n", mtd_dev->size);
-
-    spinand_parts[0].size   = (uint32_t)mtd_dev->size;
-
-    ret = rt_mtd_register(mtd_dev, (const struct mtd_part *)spinand_parts, HAL_ARRAY_SIZE(spinand_parts));
-    if (ret < 0)
-    {
-        rt_kprintf("rt_mtd_register register fail %d\n", ret);
-        goto exit;
-    }
-
-    ret = mini_ftl_register(mtd_dev);
-    if (ret < 0)
-    {
-        rt_kprintf("mini_ftl_register register fail %d\n", ret);
-        goto exit;
-    }
-
 #ifdef RT_USING_DHARA
-    spinand->pageBuf = rt_calloc(1, spinand->secPerPage * SPINAND_SECTOR_FULL_SIZE);
+    if (rt_mutex_init(&(dhara_blk_lock), "dharaLock", RT_IPC_FLAG_FIFO) != RT_EOK)
+    {
+        rt_kprintf("Init mutex error\n");
+        RT_ASSERT(0);
+    }
+#endif
+
+    /* Register mtd spinand */
+    mtd_dev->page_size       = spinand->secPerPage * SPINAND_SECTOR_SIZE;
+    mtd_dev->oob_size        = spinand->secPerPage * 16;
+    mtd_dev->oob_free        = spinand->secPerPage * 2;
+    mtd_dev->plane_num       = spinand->planePerDie;
+    mtd_dev->pages_per_block = spinand->pagePerBlk;
+    mtd_dev->block_total     = spinand->blkPerPlane * spinand->planePerDie;
+    mtd_dev->block_start     = 0;
+    mtd_dev->block_end       = mtd_dev->block_total;
+    mtd_dev->ops             = &spinand_mtd_nand_ops;
+    mtd_dev->priv            = spinand;
+
+    spinand_dbg("page_size %lx\n", mtd_dev->page_size);
+    spinand_dbg("oob_size %lx\n", mtd_dev->oob_size);
+    spinand_dbg("oob_free %lx\n", mtd_dev->oob_free);
+    spinand_dbg("plane_num %lx\n", mtd_dev->plane_num);
+    spinand_dbg("pages_per_block %lx\n", mtd_dev->pages_per_block);
+    spinand_dbg("block_total %lx\n", mtd_dev->block_total);
+    spinand_dbg("block_start %lx\n", mtd_dev->block_start);
+    spinand_dbg("block_end %lx\n", mtd_dev->block_end);
+
+    ret = rt_mtd_nand_register_device("spinand0", mtd_dev);
+    if (ret < 0)
+    {
+        rt_kprintf("rt_mtd_register failed, ret=%d\n", ret);
+        goto err_init;
+    }
+
+    spinand->pageBuf = rt_dma_malloc(2 * spinand->secPerPage * SPINAND_SECTOR_SIZE);
     RT_ASSERT(spinand->pageBuf);
 
+    /* Parse the partition */
+    ret = mtd_nand_rk_partition_init(mtd_dev);
+    if (ret != RT_EOK)
+    {
+        rt_kprintf("Scan block in the tail, blk[%d]=%d\n", i, ret);
+        goto err_init;
+    }
+    part_num = get_rk_partition(&part_info);
+
+    /* Register mini ftl */
+#ifdef RT_USING_MINI_FTL
+    for (i = 0; i < part_num; i++)
+    {
+        mini_ftl_map_table_init(mtd_dev, part_info[i].offset, part_info[i].size, part_info[i].name);
+    }
+#endif
+
+    /* Register DHARA FTL, reserved blocks in the tail */
+#ifdef RT_USING_DHARA
     dhara_dev = (struct dhara_device *)rt_calloc(1, sizeof(*dhara_dev));
     RT_ASSERT(dhara_dev);
-    dhara_dev->nand.log2_page_size = log(spinand->secPerPage) + 9;
-    dhara_dev->nand.log2_ppb = log(spinand->pagePerBlk);
-    dhara_dev->nand.num_blocks = spinand->blkPerPlane * spinand->planePerDie;
-    dhara_dev->nand.page_size = 1 << dhara_dev->nand.log2_page_size;
-    dhara_dev->nand.page_per_block = spinand->pagePerBlk;
+
+    rt_strcpy(dhara_blk_default_partition.name, part_info[part_num - 1].name);
+    if (part_num)
+    {
+        dhara_part_offset = part_info[part_num - 1].offset >> 9;
+        dhara_part_size = part_info[part_num - 1].size >> 9;
+    }
+    else
+    {
+        dhara_part_offset = DHARA_DEFAULT_OFFSET;
+        dhara_part_size = 0xFFFFFFFF;
+    }
+
+    block_reserved = RK_SPINAND_RESERVED_BBT_BLOCKS + 1;
+    i = mtd_dev->block_total - block_reserved;
+    for (; i >= 0; i--)
+    {
+        ret = HAL_SPINAND_IsBad(spinand, i * mtd_dev->pages_per_block);
+        rt_kprintf("Scan block in the tail, blk[%d]=%d\n", i, ret);
+        if (!ret)
+        {
+            block_reserved = mtd_dev->block_total - i;
+            break;
+        }
+    }
+
+    block_size = mtd_dev->pages_per_block * mtd_dev->page_size;
+    dhara_dev->nand.start_blocks = dhara_part_offset * 512 / block_size;
+    dhara_dev->nand.num_blocks = mtd_dev->block_total - dhara_dev->nand.start_blocks - block_reserved;
+    if (dhara_part_size && dhara_part_size != 0xFFFFFFFF)
+    {
+        dhara_part_size = dhara_part_size * 512 / block_size;
+        if (dhara_part_size < (dhara_dev->nand.num_blocks))
+        {
+            dhara_dev->nand.num_blocks = dhara_part_size;
+        }
+    }
+
+    dhara_dev->nand.log2_page_size = __rt_ffs(mtd_dev->page_size) - 1;
+    dhara_dev->nand.log2_ppb = __rt_ffs(mtd_dev->pages_per_block) - 1;
+    dhara_dev->nand.page_size = mtd_dev->page_size;
+    dhara_dev->nand.page_per_block = mtd_dev->pages_per_block;
     dhara_dev->nand.priv_data = spinand;
     ret = dhara_register(dhara_dev);
     if (ret < 0)
     {
-        rt_free(spinand->pageBuf);
+        rt_free_align(spinand->pageBuf);
         rt_free(dhara_dev);
     }
 #endif
 
-exit:
+err_init:
     if (ret < 0)
     {
+        rt_kprintf("%s failed, ret=%d\n", __func__, ret);
         rt_free(spinand->spi);
         rt_free(spinand);
         rt_free(mtd_dev);

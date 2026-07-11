@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -18,10 +18,6 @@
 #include <shell.h>
 #endif
 
-#ifdef RT_USING_LOGTRACE
-#include <log_trace.h>
-#endif
-
 #ifdef RT_USING_VBUS
 #include <vbus.h>
 #endif
@@ -29,15 +25,12 @@
 /* thread phase init */
 void rt_init_thread_entry(void *parameter)
 {
-#ifdef RT_USING_LOGTRACE
-    log_trace_init();
-    log_trace_set_device(RT_CONSOLE_DEVICE_NAME);
-#endif
-
 #ifdef RT_USING_FINSH
     /* initialize finsh */
     finsh_system_init();
+#if !defined(RT_USING_POSIX_STDIO) && defined(RT_USING_DEVICE)
     finsh_set_device(RT_CONSOLE_DEVICE_NAME);
+#endif
 #endif
 
 #ifdef RT_USING_VBUS

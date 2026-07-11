@@ -101,6 +101,7 @@ void rt_hw_iomux_config(void)
 #ifdef RT_USING_AUDIOPWM
     audio_iomux_config();
 #endif
+    uart1_m0_iomux_config();
 }
 /** @} */  // IOMUX_Public_Functions
 

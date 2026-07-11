@@ -1,22 +1,21 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
  * Date           Author            Notes
  * 2017-11-19     ZYH               first version
+ * 2019-06-10     ZYH               fix hotplug
  */
 
 #include <rtdevice.h>
+#ifdef RT_USB_DEVICE_ECM
 #include "cdc.h"
 
-
-#ifdef  ECM_DEBUG
-#define ECM_PRINTF                rt_kprintf("[ECM] "); rt_kprintf
-#else
-#define ECM_PRINTF(...)
-#endif /* ECM_DEBUG */
+#define DBG_LEVEL           DBG_WARNING
+#define DBG_SECTION_NAME    "ECM"
+#include <rtdbg.h>
 
 /* RT-Thread LWIP ethernet interface */
 #include <netif/ethernetif.h>
@@ -25,6 +24,7 @@
 #define USB_ETH_MTU     1514
 #endif
 #define MAX_ADDR_LEN    6
+#define ECM_INTF_STR_INDEX 10
 
 struct rt_ecm_eth
 {
@@ -36,7 +36,7 @@ struct rt_ecm_eth
     rt_uint8_t              host_addr[MAX_ADDR_LEN];
     rt_uint8_t              dev_addr[MAX_ADDR_LEN];
 
-    ALIGN(CACHE_LINE_SIZE)
+    USB_DMA_ALIGN
     rt_uint8_t              rx_pool[512];
     ALIGN(4)
     rt_size_t               rx_size;
@@ -45,9 +45,9 @@ struct rt_ecm_eth
     ALIGN(4)
     char                    rx_buffer[USB_ETH_MTU];
     char                    tx_buffer[USB_ETH_MTU];
-    
+
     struct rt_semaphore     tx_buffer_free;
-    
+
 };
 typedef struct rt_ecm_eth * rt_ecm_eth_t;
 
@@ -97,7 +97,11 @@ const static struct ucdc_eth_descriptor _comm_desc =
         USB_CDC_CLASS_COMM,
         USB_CDC_SUBCLASS_ETH,
         USB_CDC_PROTOCOL_NONE,
+#ifdef RT_USB_DEVICE_COMPOSITE
+        ECM_INTF_STR_INDEX,
+#else
         0x00,
+#endif
     },
     /* Header Functional Descriptor */
     {
@@ -208,7 +212,7 @@ static rt_err_t _cdc_send_notifi(ufunction_t func,ucdc_notification_code_t notif
     _notifi.bNotificatinCode = notifi;
     _notifi.wValue = wValue;
     _notifi.wLength = wLength;
-    
+
     eps->ep_cmd->request.buffer = (void *)&_notifi;
     eps->ep_cmd->request.size = 8;
     eps->ep_cmd->request.req_type = UIO_REQUEST_WRITE;
@@ -216,15 +220,21 @@ static rt_err_t _cdc_send_notifi(ufunction_t func,ucdc_notification_code_t notif
     return RT_EOK;
 }
 
+
 static rt_err_t _ecm_set_eth_packet_filter(ufunction_t func, ureq_t setup)
 {
     rt_ecm_eth_t _ecm_eth = (rt_ecm_eth_t)func->user_data;
     dcd_ep0_send_status(func->device->dcd);
-    
 
     /* send link up. */
     eth_device_linkchange(&_ecm_eth->parent, RT_TRUE);
-    _cdc_send_notifi(func,UCDC_NOTIFI_NETWORK_CONNECTION,1,0);
+    _cdc_send_notifi(func, UCDC_NOTIFI_NETWORK_CONNECTION, 1, 0);
+
+#ifdef LWIP_USING_DHCPD
+    extern void dhcpd_start(const char *netif_name);
+    dhcpd_start("u0");
+#endif
+
     return RT_EOK;
 }
 /**
@@ -243,10 +253,11 @@ static rt_err_t _interface_handler(ufunction_t func, ureq_t setup)
     switch(setup->bRequest)
     {
     case CDC_SET_ETH_PACKET_FILTER:
+        LOG_D("CDC_SET_ETH_PACKET_FILTER");
         _ecm_set_eth_packet_filter(func, setup);
         break;
     default:
-        rt_kprintf("setup->bRequest:0x%02X",setup->bRequest);
+        LOG_E("Unknow setup->bRequest: 0x%02X", setup->bRequest);
         break;
     }
     return RT_EOK;
@@ -286,7 +297,7 @@ static rt_err_t _ep_out_handler(ufunction_t func, rt_size_t size)
         ecm_device->rx_size = ecm_device->rx_offset;
         ecm_device->rx_offset = 0;
         eth_device_ready(&ecm_device->parent);
-        
+
     }else
     {
         ecm_device->eps.ep_out->request.buffer = ecm_device->eps.ep_out->buffer;
@@ -402,22 +413,26 @@ rt_err_t rt_ecm_eth_tx(rt_device_t dev, struct pbuf* p)
 
     if(!ecm_eth_dev->parent.link_status)
     {
-        ECM_PRINTF("linkdown, drop pkg\r\n");
+        LOG_D("linkdown, drop pkg");
         return RT_EOK;
     }
 
-    // RT_ASSERT(p->tot_len < USB_ETH_MTU);
     if(p->tot_len > USB_ETH_MTU)
     {
-        ECM_PRINTF("RNDIS MTU is:%d, but the send packet size is %d\r\n",
+        LOG_W("ECM MTU is:%d, but the send packet size is %d",
                      USB_ETH_MTU, p->tot_len);
         p->tot_len = USB_ETH_MTU;
     }
-    result = rt_sem_take(&ecm_eth_dev->tx_buffer_free, RT_WAITING_FOREVER);
+
+    result = rt_sem_take(&ecm_eth_dev->tx_buffer_free, rt_tick_from_millisecond(1000));
     if(result != RT_EOK)
     {
+        LOG_W("wait for buffer free timeout");
+        /* if cost 1s to wait send done it said that connection is close . drop it */
+        rt_sem_release(&ecm_eth_dev->tx_buffer_free);
         return result;
     }
+
     pbuffer = (char *)&ecm_eth_dev->tx_buffer;
     for (q = p; q != NULL; q = q->next)
     {
@@ -461,11 +476,16 @@ static rt_err_t _function_enable(ufunction_t func)
 {
     cdc_eps_t eps;
     rt_ecm_eth_t ecm_device = (rt_ecm_eth_t)func->user_data;
+
+    LOG_D("plugged in");
+
     eps = (cdc_eps_t)&ecm_device->eps;
     eps->ep_out->buffer = ecm_device->rx_pool;
+
+    /* reset eth rx tx */
     ecm_device->rx_size = 0;
     ecm_device->rx_offset = 0;
-    
+
     eps->ep_out->request.buffer = (void *)eps->ep_out->buffer;
     eps->ep_out->request.size = EP_MAXPACKET(eps->ep_out);
     eps->ep_out->request.req_type = UIO_REQUEST_READ_BEST;
@@ -482,7 +502,14 @@ static rt_err_t _function_enable(ufunction_t func)
  */
 static rt_err_t _function_disable(ufunction_t func)
 {
+    LOG_D("plugged out");
+
     eth_device_linkchange(&((rt_ecm_eth_t)func->user_data)->parent, RT_FALSE);
+
+    /* reset eth rx tx */
+    ((rt_ecm_eth_t)func->user_data)->rx_size = 0;
+    ((rt_ecm_eth_t)func->user_data)->rx_offset = 0;
+
     return RT_EOK;
 }
 
@@ -533,17 +560,21 @@ ufunction_t rt_usbd_function_ecm_create(udevice_t device)
     ualtsetting_t comm_setting, data_setting;
     ucdc_data_desc_t data_desc;
     ucdc_eth_desc_t comm_desc;
-    
+
     /* parameter check */
     RT_ASSERT(device != RT_NULL);
 
     /* set usb device string description */
+#ifdef RT_USB_DEVICE_COMPOSITE
+    rt_usbd_device_set_interface_string(device, ECM_INTF_STR_INDEX, _ustring[2]);
+#else
     rt_usbd_device_set_string(device, _ustring);
-
+#endif
     /* create a cdc class */
     cdc = rt_usbd_function_new(device, &_dev_desc, &ops);
     rt_usbd_device_set_qualifier(device, &dev_qualifier);
-    _ecm_eth= rt_malloc(sizeof(struct rt_ecm_eth)); 
+    _ecm_eth= rt_malloc(sizeof(struct rt_ecm_eth));
+    RT_ASSERT(_ecm_eth != RT_NULL);
     rt_memset(_ecm_eth, 0, sizeof(struct rt_ecm_eth));
     cdc->user_data = _ecm_eth;
 
@@ -577,7 +608,7 @@ ufunction_t rt_usbd_function_ecm_create(udevice_t device)
     rt_usbd_set_altsetting(intf_comm, 0);
     /* add the communication interface to the cdc class */
     rt_usbd_function_add_interface(cdc, intf_comm);
-    
+
     /* create a bulk in and a bulk out endpoint */
     data_desc = (ucdc_data_desc_t)data_setting->desc;
     eps->ep_out = rt_usbd_endpoint_new(&data_desc->ep_out_desc, _ep_out_handler);
@@ -613,26 +644,30 @@ ufunction_t rt_usbd_function_ecm_create(udevice_t device)
     _ecm_eth->host_addr[4] = 0xEC;//*(const rt_uint8_t *)(0x1fff7a14);
     _ecm_eth->host_addr[5] = 0xAB;//*(const rt_uint8_t *)(0x1fff7a18);
 
+#ifdef RT_USING_DEVICE_OPS
+    _ecm_eth->parent.parent.ops = &ecm_device_ops;
+#else
     _ecm_eth->parent.parent.init       = rt_ecm_eth_init;
     _ecm_eth->parent.parent.open       = rt_ecm_eth_open;
     _ecm_eth->parent.parent.close      = rt_ecm_eth_close;
     _ecm_eth->parent.parent.read       = rt_ecm_eth_read;
     _ecm_eth->parent.parent.write      = rt_ecm_eth_write;
     _ecm_eth->parent.parent.control    = rt_ecm_eth_control;
+#endif
     _ecm_eth->parent.parent.user_data  = device;
 
     _ecm_eth->parent.eth_rx     = rt_ecm_eth_rx;
     _ecm_eth->parent.eth_tx     = rt_ecm_eth_tx;
     /* register eth device */
     eth_device_init(&_ecm_eth->parent, "u0");
-    
+
     /* send link up. */
     eth_device_linkchange(&_ecm_eth->parent, RT_FALSE);
-   
+
     return cdc;
 }
 
-struct udclass ecm_class = 
+struct udclass ecm_class =
 {
     .rt_usbd_function_create = rt_usbd_function_ecm_create
 };
@@ -643,3 +678,5 @@ int rt_usbd_ecm_class_register(void)
     return 0;
 }
 INIT_PREV_EXPORT(rt_usbd_ecm_class_register);
+
+#endif /* RT_USB_DEVICE_ECM */

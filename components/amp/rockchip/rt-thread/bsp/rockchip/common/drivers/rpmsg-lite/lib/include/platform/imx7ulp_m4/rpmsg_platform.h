@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016 Freescale Semiconductor, Inc.
- * Copyright 2016-2019 NXP
+ * Copyright 2016-2022 NXP
  * All rights reserved.
  *
  *
@@ -26,7 +26,7 @@
 #define VRING_SIZE (0x8000UL)
 #endif
 
-/* size of shared memory + 2*VRING size */
+/* define shared memory space for VRINGS per one channel */
 #define RL_VRING_OVERHEAD (2UL * VRING_SIZE)
 
 #define RL_GET_VQ_ID(link_id, queue_id) (((queue_id)&0x1U) | (((link_id) << 1U) & 0xFFFFFFFEU))
@@ -52,8 +52,8 @@ void platform_time_delay(uint32_t num_msec);
 void platform_map_mem_region(uint32_t vrt_addr, uint32_t phy_addr, uint32_t size, uint32_t flags);
 void platform_cache_all_flush_invalidate(void);
 void platform_cache_disable(void);
-uint32_t platform_vatopa(void *addr);
-void *platform_patova(uint32_t addr);
+uintptr_t platform_vatopa(void *addr);
+void *platform_patova(uintptr_t addr);
 
 /* platform init/deinit */
 int32_t platform_init(void);

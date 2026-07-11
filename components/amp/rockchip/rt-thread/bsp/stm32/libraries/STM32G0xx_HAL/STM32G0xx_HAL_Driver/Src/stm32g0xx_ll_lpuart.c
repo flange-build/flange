@@ -22,17 +22,17 @@
 #include "stm32g0xx_ll_lpuart.h"
 #include "stm32g0xx_ll_rcc.h"
 #include "stm32g0xx_ll_bus.h"
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 #include "stm32_assert.h"
 #else
 #define assert_param(expr) ((void)0U)
-#endif
+#endif /* USE_FULL_ASSERT */
 
 /** @addtogroup STM32G0xx_LL_Driver
   * @{
   */
 
-#if defined (LPUART1)
+#if defined (LPUART1) || defined (LPUART2)
 
 /** @addtogroup LPUART_LL
   * @{
@@ -58,17 +58,17 @@
 /* Check of parameters for configuration of LPUART registers                  */
 
 #define IS_LL_LPUART_PRESCALER(__VALUE__)  (((__VALUE__) == LL_LPUART_PRESCALER_DIV1) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV2) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV4) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV6) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV8) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV10) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV12) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV16) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV32) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV64) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV128) \
-                                        || ((__VALUE__) == LL_LPUART_PRESCALER_DIV256))
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV2) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV4) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV6) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV8) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV10) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV12) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV16) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV32) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV64) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV128) \
+                                            || ((__VALUE__) == LL_LPUART_PRESCALER_DIV256))
 
 /* __BAUDRATE__ Depending on constraints applicable for LPUART BRR register   */
 /*              value :                                                       */
@@ -85,25 +85,25 @@
 #define IS_LL_LPUART_BRR_MAX(__VALUE__)   ((__VALUE__) <= 0x000FFFFFU)
 
 #define IS_LL_LPUART_DIRECTION(__VALUE__) (((__VALUE__) == LL_LPUART_DIRECTION_NONE) \
-                                        || ((__VALUE__) == LL_LPUART_DIRECTION_RX) \
-                                        || ((__VALUE__) == LL_LPUART_DIRECTION_TX) \
-                                        || ((__VALUE__) == LL_LPUART_DIRECTION_TX_RX))
+                                           || ((__VALUE__) == LL_LPUART_DIRECTION_RX) \
+                                           || ((__VALUE__) == LL_LPUART_DIRECTION_TX) \
+                                           || ((__VALUE__) == LL_LPUART_DIRECTION_TX_RX))
 
 #define IS_LL_LPUART_PARITY(__VALUE__) (((__VALUE__) == LL_LPUART_PARITY_NONE) \
-                                     || ((__VALUE__) == LL_LPUART_PARITY_EVEN) \
-                                     || ((__VALUE__) == LL_LPUART_PARITY_ODD))
+                                        || ((__VALUE__) == LL_LPUART_PARITY_EVEN) \
+                                        || ((__VALUE__) == LL_LPUART_PARITY_ODD))
 
 #define IS_LL_LPUART_DATAWIDTH(__VALUE__) (((__VALUE__) == LL_LPUART_DATAWIDTH_7B) \
-                                        || ((__VALUE__) == LL_LPUART_DATAWIDTH_8B) \
-                                        || ((__VALUE__) == LL_LPUART_DATAWIDTH_9B))
+                                           || ((__VALUE__) == LL_LPUART_DATAWIDTH_8B) \
+                                           || ((__VALUE__) == LL_LPUART_DATAWIDTH_9B))
 
 #define IS_LL_LPUART_STOPBITS(__VALUE__) (((__VALUE__) == LL_LPUART_STOPBITS_1) \
-                                       || ((__VALUE__) == LL_LPUART_STOPBITS_2))
+                                          || ((__VALUE__) == LL_LPUART_STOPBITS_2))
 
 #define IS_LL_LPUART_HWCONTROL(__VALUE__) (((__VALUE__) == LL_LPUART_HWCONTROL_NONE) \
-                                       || ((__VALUE__) == LL_LPUART_HWCONTROL_RTS) \
-                                       || ((__VALUE__) == LL_LPUART_HWCONTROL_CTS) \
-                                       || ((__VALUE__) == LL_LPUART_HWCONTROL_RTS_CTS))
+                                           || ((__VALUE__) == LL_LPUART_HWCONTROL_RTS) \
+                                           || ((__VALUE__) == LL_LPUART_HWCONTROL_CTS) \
+                                           || ((__VALUE__) == LL_LPUART_HWCONTROL_RTS_CTS))
 
 /**
   * @}
@@ -142,6 +142,16 @@ ErrorStatus LL_LPUART_DeInit(USART_TypeDef *LPUARTx)
     /* Release reset of LPUART peripheral */
     LL_APB1_GRP1_ReleaseReset(LL_APB1_GRP1_PERIPH_LPUART1);
   }
+#if defined(LPUART2)
+  else if (LPUARTx == LPUART2)
+  {
+    /* Force reset of LPUART peripheral */
+    LL_APB1_GRP1_ForceReset(LL_APB1_GRP1_PERIPH_LPUART2);
+
+    /* Release reset of LPUART peripheral */
+    LL_APB1_GRP1_ReleaseReset(LL_APB1_GRP1_PERIPH_LPUART2);
+  }
+#endif /* LPUART2 */
   else
   {
     status = ERROR;
@@ -153,8 +163,10 @@ ErrorStatus LL_LPUART_DeInit(USART_TypeDef *LPUARTx)
 /**
   * @brief  Initialize LPUART registers according to the specified
   *         parameters in LPUART_InitStruct.
-  * @note   As some bits in LPUART configuration registers can only be written when the LPUART is disabled (USART_CR1_UE bit =0),
-  *         LPUART Peripheral should be in disabled state prior calling this function. Otherwise, ERROR result will be returned.
+  * @note   As some bits in LPUART configuration registers can only be written when
+  *         the LPUART is disabled (USART_CR1_UE bit =0),
+  *         LPUART Peripheral should be in disabled state prior calling this function.
+  *         Otherwise, ERROR result will be returned.
   * @note   Baud rate value stored in LPUART_InitStruct BaudRate field, should be valid (different from 0).
   * @param  LPUARTx LPUART Instance
   * @param  LPUART_InitStruct pointer to a @ref LL_LPUART_InitTypeDef structure
@@ -166,7 +178,11 @@ ErrorStatus LL_LPUART_DeInit(USART_TypeDef *LPUARTx)
 ErrorStatus LL_LPUART_Init(USART_TypeDef *LPUARTx, LL_LPUART_InitTypeDef *LPUART_InitStruct)
 {
   ErrorStatus status = ERROR;
+#if defined(LPUART2)
+  uint32_t periphclk = LL_RCC_PERIPH_FREQUENCY_NO;
+#else
   uint32_t periphclk;
+#endif /* LPUART2 */
 
   /* Check the parameters */
   assert_param(IS_LPUART_INSTANCE(LPUARTx));
@@ -200,14 +216,30 @@ ErrorStatus LL_LPUART_Init(USART_TypeDef *LPUARTx, LL_LPUART_InitTypeDef *LPUART
 
     /*---------------------------- LPUART CR3 Configuration -----------------------
      * Configure LPUARTx CR3 (Hardware Flow Control) with parameters:
-     * - HardwareFlowControl: USART_CR3_RTSE, USART_CR3_CTSE bits according to LPUART_InitStruct->HardwareFlowControl value.
+     * - HardwareFlowControl: USART_CR3_RTSE, USART_CR3_CTSE bits according
+     *   to LPUART_InitStruct->HardwareFlowControl value.
      */
     LL_LPUART_SetHWFlowCtrl(LPUARTx, LPUART_InitStruct->HardwareFlowControl);
 
     /*---------------------------- LPUART BRR Configuration -----------------------
      * Retrieve Clock frequency used for LPUART Peripheral
      */
+#if defined(LPUART2)
+    if (LPUARTx == LPUART1)
+    {
+      periphclk = LL_RCC_GetLPUARTClockFreq(LL_RCC_LPUART1_CLKSOURCE);
+    }
+    else if (LPUARTx == LPUART2)
+    {
+      periphclk = LL_RCC_GetLPUARTClockFreq(LL_RCC_LPUART2_CLKSOURCE);
+    }
+    else
+    {
+      /* Nothing to do, as error code is already assigned to ERROR value */
+    }
+#else
     periphclk = LL_RCC_GetLPUARTClockFreq(LL_RCC_LPUART1_CLKSOURCE);
+#endif /* LPUART2 */
 
     /* Configure the LPUART Baud Rate :
        - prescaler value is required
@@ -271,7 +303,7 @@ void LL_LPUART_StructInit(LL_LPUART_InitTypeDef *LPUART_InitStruct)
   * @}
   */
 
-#endif /* defined (LPUART1) */
+#endif /* LPUART1 || LPUART2 */
 
 /**
   * @}

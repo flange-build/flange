@@ -6,11 +6,11 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; Copyright (c) 2018 STMicroelectronics. 
+  * <h2><center>&copy; Copyright (c) 2018 STMicroelectronics.
   * All rights reserved.</center></h2>
   *
   * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the 
+  * the "License"; You may not use this file except in compliance with the
   * License. You may obtain a copy of the License at:
   *                        opensource.org/licenses/BSD-3-Clause
   *
@@ -64,9 +64,13 @@ typedef struct
   uint32_t *Header;                    /*!< used only in AES GCM and CCM Algorithm for authentication,
                                         GCM : also known as Additional Authentication Data
                                         CCM : named B1 composed of the associated data length and Associated Data. */
-  uint32_t HeaderSize;                /*!< The size of header buffer in word  */
-  uint32_t *B0;                       /*!< B0 is first authentication block used only  in AES CCM mode */
-  uint32_t DataWidthUnit;              /*!< Data With Unit, this parameter can be value of @ref CRYP_Data_Width_Unit*/
+  uint32_t HeaderSize;                 /*!< The size of header buffer */
+  uint32_t *B0;                        /*!< B0 is first authentication block used only  in AES CCM mode */
+  uint32_t DataWidthUnit;              /*!< Payload Data Width Unit, this parameter can be value of @ref CRYP_Data_Width_Unit*/
+  uint32_t HeaderWidthUnit;            /*!< Header Width Unit, this parameter can be value of @ref CRYP_Header_Width_Unit*/
+  uint32_t KeyIVConfigSkip;            /*!< CRYP peripheral Key and IV configuration skip, to config Key and Initialization
+                                           Vector only once and to skip configuration for consecutive processings.
+                                           This parameter can be a value of @ref CRYP_Configuration_Skip */
 
 } CRYP_ConfigTypeDef;
 
@@ -103,9 +107,9 @@ typedef enum
 typedef struct __CRYP_HandleTypeDef
 #else
 typedef struct
-#endif
+#endif /* USE_HAL_CRYP_REGISTER_CALLBACKS */
 {
-  AES_TypeDef                       *Instance;            /*!< AES Register base address */
+  AES_TypeDef                       *Instance;        /*!< AES Register base address */
 
   CRYP_ConfigTypeDef                Init;             /*!< CRYP required parameters */
 
@@ -116,13 +120,13 @@ typedef struct
 
   uint32_t                          *pCrypOutBuffPtr; /*!< Pointer to CRYP processing (encryption, decryption,...) buffer */
 
-  __IO uint16_t                     CrypHeaderCount;   /*!< Counter of header data */
+  __IO uint16_t                     CrypHeaderCount;  /*!< Counter of header data in words */
 
-  __IO uint16_t                     CrypInCount;      /*!< Counter of input data */
+  __IO uint16_t                     CrypInCount;      /*!< Counter of input data in words */
 
-  __IO uint16_t                     CrypOutCount;     /*!< Counter of output data */
+  __IO uint16_t                     CrypOutCount;     /*!< Counter of output data in words */
 
-  uint16_t                          Size;           /*!< length of input data in word */
+  uint16_t                          Size;             /*!< Length of input data */
 
   uint32_t                          Phase;            /*!< CRYP peripheral phase */
 
@@ -135,6 +139,13 @@ typedef struct
   __IO  HAL_CRYP_STATETypeDef       State;            /*!< CRYP peripheral state */
 
   __IO uint32_t                     ErrorCode;        /*!< CRYP peripheral error code */
+
+  uint32_t                          KeyIVConfig;      /*!< CRYP peripheral Key and IV configuration flag, used when
+                                                           configuration can be skipped */
+
+  uint32_t                          SizesSum;         /*!< Sum of successive payloads lengths (in bytes), stored
+                                                           for a single signature computation after several
+                                                           messages processing */
 
 #if (USE_HAL_CRYP_REGISTER_CALLBACKS == 1U)
   void (*InCpltCallback)(struct __CRYP_HandleTypeDef *hcryp);      /*!< CRYP Input FIFO transfer completed callback  */
@@ -161,7 +172,7 @@ typedef struct
   uint32_t                    CrypOutCount_saved;      /*!< copy of CRYP output data counter when processing is suspended */
 
   uint32_t                    Phase_saved;             /*!< copy of CRYP authentication phase when processing is suspended */
-  
+
   __IO HAL_CRYP_STATETypeDef  State_saved;             /*!< copy of CRYP peripheral state when processing is suspended */
 
   uint32_t                    IV_saved[4];             /*!< copy of Initialisation Vector registers */
@@ -172,9 +183,11 @@ typedef struct
 
   uint32_t                    Key_saved[8];            /*!< copy of key registers */
 
-  uint32_t                    Size_saved;              /*!< copy of input buffer size */
+  uint16_t                    Size_saved;              /*!< copy of input buffer size */
 
   uint16_t                    CrypHeaderCount_saved;   /*!< copy of CRYP header data counter when processing is suspended */
+
+  uint32_t                    SizesSum_saved;          /*!< copy of SizesSum when processing is suspended */
 
   uint32_t                    ResumingFlag;            /*!< resumption flag to bypass steps already carried out */
 
@@ -247,7 +260,18 @@ typedef  void (*pCRYP_CallbackTypeDef)(CRYP_HandleTypeDef *hcryp);    /*!< point
   */
 
 #define CRYP_DATAWIDTHUNIT_WORD   0x00000000U  /*!< By default, size unit is word */
-#define CRYP_DATAWIDTHUNIT_BYTE   0x00000001U  /*!< By default, size unit is word */
+#define CRYP_DATAWIDTHUNIT_BYTE   0x00000001U  /*!< By default, size unit is byte */
+
+/**
+  * @}
+  */
+
+/** @defgroup CRYP_Header_Width_Unit CRYP Header Width Unit
+  * @{
+  */
+
+#define CRYP_HEADERWIDTHUNIT_WORD   0x00000000U  /*!< By default, header size unit is word */
+#define CRYP_HEADERWIDTHUNIT_BYTE   0x00000001U  /*!< By default, header size unit is byte */
 
 /**
   * @}
@@ -321,6 +345,18 @@ typedef  void (*pCRYP_CallbackTypeDef)(CRYP_HandleTypeDef *hcryp);    /*!< point
 /**
   * @}
   */
+
+/** @defgroup CRYP_Configuration_Skip CRYP Key and IV Configuration Skip Mode
+  * @{
+  */
+
+#define CRYP_KEYIVCONFIG_ALWAYS        0x00000000U            /*!< Peripheral Key and IV configuration to do systematically */
+#define CRYP_KEYIVCONFIG_ONCE          0x00000001U            /*!< Peripheral Key and IV configuration to do only once      */
+
+/**
+  * @}
+  */
+
 
 /**
   * @}
@@ -539,6 +575,16 @@ uint32_t HAL_CRYP_GetError(CRYP_HandleTypeDef *hcryp);
                                    ((DATATYPE) == CRYP_DATATYPE_16B) || \
                                    ((DATATYPE) == CRYP_DATATYPE_8B)  || \
                                    ((DATATYPE) == CRYP_DATATYPE_1B))
+
+#define IS_CRYP_INIT(CONFIG)(((CONFIG) == CRYP_KEYIVCONFIG_ALWAYS) || \
+                             ((CONFIG) == CRYP_KEYIVCONFIG_ONCE))
+
+#define IS_CRYP_BUFFERSIZE(ALGO, DATAWIDTH, SIZE)                                             \
+       (((((ALGO) == CRYP_AES_CTR)) &&                                             \
+            ((((DATAWIDTH) == CRYP_DATAWIDTHUNIT_WORD) && (((SIZE) % 4U) == 0U))           || \
+             (((DATAWIDTH) == CRYP_DATAWIDTHUNIT_BYTE) && (((SIZE) % 16U) == 0U))))        || \
+         (((ALGO) == CRYP_AES_ECB) || ((ALGO) == CRYP_AES_CBC)                  || \
+          ((ALGO)== CRYP_AES_GCM_GMAC) || ((ALGO) == CRYP_AES_CCM)))
 
 /**
   * @}

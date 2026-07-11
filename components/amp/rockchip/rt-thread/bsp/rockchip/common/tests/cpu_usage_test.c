@@ -74,7 +74,7 @@ void test_cpu_usage_top(void)
     rt_thread_startup(thread1);
     rt_thread_startup(thread2);
 
-    rt_kprintf("top test init finish, please type the top command in shell.\n");
+    rt_kprintf("cpu usage top test init finish.\n");
 }
 
 void test_cpu_usage_get(void)
@@ -84,8 +84,8 @@ void test_cpu_usage_get(void)
 
 #ifdef RT_USING_FINSH
 #include <finsh.h>
-FINSH_FUNCTION_EXPORT_ALIAS(test_cpu_usage_top, __cmd_top_test, Execute command with top test.);
-FINSH_FUNCTION_EXPORT_ALIAS(test_cpu_usage_get, __cmd_cpu_usage, Execute command with cpu usage get.);
+MSH_CMD_EXPORT_ALIAS(test_cpu_usage_top, cpu_usage_top, Execute command with top test.);
+MSH_CMD_EXPORT_ALIAS(test_cpu_usage_get, cpu_usage_get, Execute command with cpu usage get.);
 #endif /* End of RT_USING_FINSH*/
 
 #endif  /* End of RT_USING_COMMON_TEST_USAGE */

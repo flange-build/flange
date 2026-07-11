@@ -110,14 +110,19 @@ err:
 static int es8156_reg_powerup(struct es8156_priv *es8156)
 {
     /*
+     * set clock: SCLK is as MCLK
+     */
+    es_update_bits(es8156->i2c_client, ES8156_SCLK_MODE_REG02, 0xEE, 0x84);
+    /*
      * set analog power
      */
-    es_wr_reg(es8156->i2c_client, ES8156_SCLK_MODE_REG02, 0x04);
+    es_wr_reg(es8156->i2c_client, ES8156_SCLK_MODE_REG02, 0x84);
     es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS1_REG20, 0x2A);
     es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS2_REG21, 0x3C);
-    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS3_REG22, 0x00);
+    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS3_REG22, 0x02);
     es_wr_reg(es8156->i2c_client, ES8156_ANALOG_LP_REG24, 0x07);
-    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS4_REG23, 0x4A);
+    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS4_REG23, 0xFA);
+    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS3_REG22, 0x00);
 
     /*
      * set powerup time
@@ -126,25 +131,18 @@ static int es8156_reg_powerup(struct es8156_priv *es8156)
     es_wr_reg(es8156->i2c_client, ES8156_TIME_CONTROL2_REG0B, 0x01);
 
     /*
-     * set digtal volume: ES8156_VOLUME_CONTROL_REG14: is 0xBD(-1dB) by default
+     * set digtal volume: ES8156_VOLUME_CONTROL_REG14: is 0xBF(0dB) by default
      */
-    es_wr_reg(es8156->i2c_client, ES8156_VOLUME_CONTROL_REG14, 0xBD);
 
     /*
      * set MCLK: just using sclk, mclk is not used, slave mode
      */
-    es_wr_reg(es8156->i2c_client, ES8156_MAINCLOCK_CTL_REG01, 0x21);
+    es_wr_reg(es8156->i2c_client, ES8156_MAINCLOCK_CTL_REG01, 0xE0);
     es_wr_reg(es8156->i2c_client, ES8156_P2S_CONTROL_REG0D, 0x14);
     es_wr_reg(es8156->i2c_client, ES8156_MISC_CONTROL3_REG18, 0x00);
     es_wr_reg(es8156->i2c_client, ES8156_CLOCK_ON_OFF_REG08, 0x3F);
     es_wr_reg(es8156->i2c_client, ES8156_RESET_REG00, 0x02);
     es_wr_reg(es8156->i2c_client, ES8156_RESET_REG00, 0x03);
-
-    HAL_DelayMs(10);
-
-    es_wr_reg(es8156->i2c_client, ES8156_MAINCLOCK_CTL_REG01, 0x21);
-    es_wr_reg(es8156->i2c_client, ES8156_SCLK_MODE_REG02, 0x04);
-    es_wr_reg(es8156->i2c_client, ES8156_MISC_CONTROL2_REG09, 0x00);
     es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS5_REG25, 0x20);
 
     return RT_EOK;
@@ -155,14 +153,16 @@ static int es8156_reg_powerdown(struct es8156_priv *es8156)
     /*
      * set digtal volume: skip set ES8156_VOLUME_CONTROL_REG14
      */
-    es_wr_reg(es8156->i2c_client, ES8156_EQ_CONTROL1_REG19, 0x72);
+    es_wr_reg(es8156->i2c_client, ES8156_EQ_CONTROL1_REG19, 0x02);
     es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS2_REG21, 0x1F);
-    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS3_REG22, 0x02);
-//    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS5_REG25, 0x21);
-//    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS5_REG25, 0x01);
-//    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS5_REG25, 0x87);
+    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS3_REG22, 0x03);
+    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS5_REG25, 0x21);
+    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS5_REG25, 0x01);
+    es_wr_reg(es8156->i2c_client, ES8156_ANALOG_SYS5_REG25, 0x87);
     es_wr_reg(es8156->i2c_client, ES8156_MISC_CONTROL3_REG18, 0x01);
-//    es_wr_reg(es8156->i2c_client, ES8156_CLOCK_ON_OFF_REG08, 0x00);
+    es_wr_reg(es8156->i2c_client, ES8156_MISC_CONTROL2_REG09, 0x02);
+    es_wr_reg(es8156->i2c_client, ES8156_MISC_CONTROL2_REG09, 0x01);
+    es_wr_reg(es8156->i2c_client, ES8156_CLOCK_ON_OFF_REG08, 0x00);
 
     return RT_EOK;
 }
@@ -170,9 +170,9 @@ static int es8156_reg_powerdown(struct es8156_priv *es8156)
 static int es8156_reg_mute(struct es8156_priv *es8156, rt_bool_t mute)
 {
     if (mute)
-        es_update_bits(es8156->i2c_client, ES8156_DAC_MUTE_REG13, 0x10, 0x10);
-    else
         es_update_bits(es8156->i2c_client, ES8156_DAC_MUTE_REG13, 0x10, 0x00);
+    else
+        es_update_bits(es8156->i2c_client, ES8156_DAC_MUTE_REG13, 0x10, 0x10);
 
     return RT_EOK;
 }
@@ -180,9 +180,6 @@ static int es8156_reg_mute(struct es8156_priv *es8156, rt_bool_t mute)
 static rt_err_t es8156_init(struct audio_codec *codec, struct AUDIO_INIT_CONFIG *config)
 {
     struct es8156_priv *es8156 = to_es8156_priv(codec);
-
-    if (codec->mclk_gate)
-        clk_enable(codec->mclk_gate);
 
     switch (config->format)
     {
@@ -220,9 +217,6 @@ static rt_err_t es8156_init(struct audio_codec *codec, struct AUDIO_INIT_CONFIG 
 
 static rt_err_t es8156_deinit(struct audio_codec *codec)
 {
-    if (codec->mclk_gate)
-        clk_disable(codec->mclk_gate);
-
     return RT_EOK;
 }
 
@@ -272,6 +266,8 @@ static rt_err_t es8156_config(struct audio_codec *codec,
         return ret;
     }
 
+    es8156_reg_mute(es8156, RT_FALSE);
+
     return RT_EOK;
 }
 
@@ -283,7 +279,6 @@ static rt_err_t es8156_start(struct audio_codec *codec, eAUDIO_streamType stream
         return RT_EOK;
 
     es8156_reg_powerup(es8156);
-    es8156_reg_mute(es8156, RT_FALSE);
 
     return RT_EOK;
 }
@@ -401,12 +396,6 @@ int rt_hw_codec_es8156_init(void)
     es8156->i2c_client->client_addr = codec_dev->i2c_addr;
     es8156->codec.ops = &es8156_ops;
     es8156->codec.id = (uint32_t)codec_dev;
-    if (codec_dev->mclk_gate)
-    {
-        es8156->codec.mclk_gate = get_clk_gate_from_id(codec_dev->mclk_gate);
-        if (es8156->codec.mclk_gate && codec_dev->mclk_always_on)
-            clk_enable(es8156->codec.mclk_gate);
-    }
 
     ret |= es_rd_reg(es8156->i2c_client, ES8156_CHIPID1_REGFD, &chip_id1);
     ret |= es_rd_reg(es8156->i2c_client, ES8156_CHIPID0_REGFE, &chip_id0);

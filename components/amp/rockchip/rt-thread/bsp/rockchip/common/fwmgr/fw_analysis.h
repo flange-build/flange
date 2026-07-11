@@ -167,6 +167,20 @@ typedef struct user_ab_data_t
     rt_uint32_t jshash;
 } user_ab_data;
 
+/* The AvbABData struct is stored 2048 bytes into the 'misc' partition
+ * following the 'struct bootloader_message' field. The struct is
+ * compatible with the guidelines in bootable/recovery/bootloader.h -
+ * e.g. it is stored in the |slot_suffix| field, starts with a
+ * NUL-byte, and is 32 bytes long.
+ *
+ * RK2118 is different from this, in misc offset 0
+ */
+#ifdef RT_USING_AVB_LIBAVB_AB
+#define AB_METADATA_MISC_PARTITION_OFFSET (2048)
+#else
+#define AB_METADATA_MISC_PARTITION_OFFSET (0)
+#endif
+
 /* Starting address of the A\B os boot data in memory. */
 #define     OS_AB_DATA_PART_OFFSET             (1024 * 24)
 
@@ -211,6 +225,7 @@ extern uint32_t  SysProgRawDiskCapacity;
 extern int32_t  FW1Valid, FW2Valid;
 extern uint32_t FwSysOffset;
 extern uint32_t IdbBlockOffset;
+extern uint32_t firmware_version;
 
 /*
 *---------------------------------------------------------------------------------------------------------------------
@@ -220,6 +235,7 @@ extern uint32_t IdbBlockOffset;
 *---------------------------------------------------------------------------------------------------------------------
 */
 extern unsigned int jshash(unsigned int hash, char *str, unsigned int len);
+extern unsigned int rt_fw_crc32(unsigned int hash, char *str, unsigned int len);
 extern void DumpData(char *buf, int bufSize, int radix);
 extern rt_err_t fw_GetWifiMac(void *pWifiMac);
 extern rt_err_t fw_GetBtMac(void *pBtMac);
@@ -256,6 +272,7 @@ extern int fw_ab_data_read(fw_ab_data *data);
 extern int fw_slot_set_pending(uint32_t slot);
 extern int fw_slot_set_active(uint32_t slot);
 extern int fw_slot_get_current_running(uint32_t *cur_slot);
+extern void fw_slot_get_ab_info(char *ab);
 extern int fw_slot_reset_flag(uint32_t slot);
 extern int fw_slot_change(uint32_t boot_slot);
 extern fw_ab_data *fw_ab_data_get(void);
@@ -272,4 +289,12 @@ extern int user_slot_get_current_running(uint32_t *cur_slot);
 extern user_ab_data *user_ab_data_get(void);
 #endif
 
+int fw_flash_init(void);
+void fw_flash_deinit(void);
+int fw_flash_read(rt_uint32_t offset, rt_uint8_t *buf, rt_uint32_t length);
+int fw_flash_write(rt_uint32_t offset, rt_uint8_t *buf, rt_uint32_t length);
+int fw_flash_erase(rt_uint32_t offset, rt_uint32_t length);
+int fw_flash_get_page_size(void);
+int fw_flash_get_block_size(void);
+int fw_flash_get_size(void);
 #endif

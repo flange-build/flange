@@ -531,7 +531,7 @@ rt_err_t clk_req_set_rate(struct req_clk_desc *req_clk, uint8_t req_id, uint32_t
         if (ret == HAL_OK)
             ret = RT_EOK;
         else
-            ret = -RT_ERROR;
+            ret = RT_ERROR;
     }
 
     dvfs_interrupt_enable(level);
@@ -653,7 +653,7 @@ static int dvfs_set_rate_volt(struct rk_dvfs_desc *dvfs_desc, uint32_t rate,
     if (ret == HAL_OK)
         ret = RT_EOK;
     else
-        ret = -RT_ERROR;
+        ret = RT_ERROR;
     if (ret)
         goto _set_exit;
 
@@ -726,7 +726,7 @@ static int dvfs_set_rate_chk_req_volt(struct rk_dvfs_desc *dvfs_desc,
 {
     uint8_t old_idx = dvfs_desc->tbl_idx;
     uint32_t old_freq, volt;
-    int ret = -RT_ERROR;
+    int ret = RT_ERROR;
 
     RT_ASSERT(dvfs_desc);
 
@@ -781,7 +781,7 @@ static int dvfs_req_set_clk_rate(struct rk_dvfs_desc *dvfs_desc, uint8_t req_id,
         if (ret == HAL_OK)
             ret = RT_EOK;
         else
-            ret = -RT_ERROR;
+            ret = RT_ERROR;
     }
     return ret;
 }
@@ -1170,17 +1170,17 @@ struct req_pwr_desc  *regulator_get_req_volt_id(ePWR_ID pwrid,
 rt_err_t regulator_req_set_voltage(struct req_pwr_desc *req_pwr,
                                    uint8_t req_id, uint32_t volt)
 {
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 
 rt_err_t regulator_req_voltage_release(struct req_pwr_desc *req_pwr, uint8_t req_id)
 {
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 
 rt_err_t regulator_req_release(struct req_pwr_desc *req_pwr, uint8_t req_id)
 {
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 uint32_t regulator_req_get_voltage(struct req_pwr_desc *req_pwr)
 {
@@ -1215,15 +1215,15 @@ struct req_clk_desc  *clk_get_req_rate_id(eCLOCK_Name clk_id, uint8_t *req_id)
 }
 rt_err_t clk_req_set_rate(struct req_clk_desc *req_clk, uint8_t req_id, uint32_t rate)
 {
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 rt_err_t clk_req_rate_release(struct req_clk_desc *req_clk, uint8_t req_id)
 {
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 rt_err_t clk_req_release(struct req_clk_desc *req_clk, uint8_t req_id)
 {
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 
 uint32_t clk_req_get_rate(struct req_clk_desc *req_clk)
@@ -1245,13 +1245,13 @@ uint32_t clk_req_get_set_rate(struct req_clk_desc *req_clk, uint8_t req_id)
 rt_err_t dvfs_set_rate(struct rk_dvfs_desc *dvfs_desc, uint8_t dvfs_clk_req_id,
                        uint32_t rate)
 {
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 
 rt_err_t dvfs_set_rate_by_idx(struct rk_dvfs_desc *dvfs_desc,
                               uint8_t tbl_idx, uint8_t dvfs_clk_req_id)
 {
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 
 struct rk_dvfs_desc *dvfs_get_by_clk(eCLOCK_Name clk_id, uint8_t  *dvfs_clk_req_id)

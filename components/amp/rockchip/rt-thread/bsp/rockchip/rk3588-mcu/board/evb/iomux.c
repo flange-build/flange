@@ -77,6 +77,50 @@
  */
 void uart_iomux_config(void)
 {
+#ifdef RT_USING_UART5
+    /* uart5_m0 */
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK4,
+                         GPIO_PIN_D4 | GPIO_PIN_D5,
+                         PIN_CONFIG_MUX_FUNC10);
+#endif
+}
+
+void i2c_iomux_config(void)
+{
+#ifdef RT_USING_I2C6
+    /* i2c6_m0 */
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
+                         GPIO_PIN_C7 | GPIO_PIN_D0,
+                         PIN_CONFIG_MUX_FUNC9);
+#endif
+}
+
+void pwm_iomux_config(void)
+{
+#ifdef RT_USING_PWM2
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK4,
+                         GPIO_PIN_D1,
+                         PIN_CONFIG_MUX_FUNC11);
+#endif
+}
+
+void gpio_iomux_config(void)
+{
+#ifdef RT_USING_AUTO_TEST
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK4,
+                         GPIO_PIN_D2 | GPIO_PIN_D3,
+                         PIN_CONFIG_MUX_FUNC0);
+#endif
+
+#ifdef HAL_GPIO_VIRTUAL_MODEL_FEATURE_ENABLED
+#ifdef RT_USING_AUTO_TEST
+    HAL_GPIO_SetVirtualModel(GPIO4, 0xffffffff, GPIO_VIRTUAL_MODEL_OS_A);
+    HAL_GPIO_SetVirtualModel(GPIO4,
+                             GPIO_PIN_D2 | GPIO_PIN_D3,
+                             GPIO_VIRTUAL_MODEL_OS_B);
+    HAL_GPIO_EnableVirtualModel(GPIO4);
+#endif
+#endif
 }
 
 /**
@@ -89,9 +133,12 @@ void jtag_iomux_config(void)
 /**
  * @brief  Config iomux for rk2108 evb board
  */
-RT_WEAK RT_UNUSED void rt_hw_iomux_config(void)
+RT_WEAK void rt_hw_iomux_config(void)
 {
     uart_iomux_config();
+    i2c_iomux_config();
+    pwm_iomux_config();
+    gpio_iomux_config();
 }
 
 /** @} */  // IOMUX_Public_Functions

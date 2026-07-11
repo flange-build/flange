@@ -51,7 +51,7 @@ void rpmsg_cmd_cpuusage(void *param)
 
         rpmsg_data.handle = rpmsg_cmd_master_get_handle(id);
 
-        head->type = RPMSG_TYPE_DIRECT;
+        head->type = RPMSG_TYPE_NORMAL;
         head->cmd  = RPMSG_CMD_GET_CPU_USAGE;
         head->addr = rt_malloc_shmem(sizeof(uint32_t));
         RT_ASSERT(head->addr != RT_NULL);

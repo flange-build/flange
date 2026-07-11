@@ -82,8 +82,8 @@
                                                                                 \
 static struct QPI_PSRAM s_qpipsram_dev##ID;                                     \
 static struct QPIPSRAM_HOST s_spi_port##ID;                                     \
-extern RT_UNUSED void rt_hw_qpipsram_cs##ID##_gpio_take(void);                  \
-extern RT_UNUSED void rt_hw_qpipsram_cs##ID##_gpio_release(void);               \
+extern HAL_UNUSED void rt_hw_qpipsram_cs##ID##_gpio_take(void);                  \
+extern HAL_UNUSED void rt_hw_qpipsram_cs##ID##_gpio_release(void);               \
 
 DEFINE_ROCKCHIP_PSRAM_DEV(0)
 

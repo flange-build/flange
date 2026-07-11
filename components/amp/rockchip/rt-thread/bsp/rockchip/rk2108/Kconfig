@@ -1,4 +1,4 @@
-mainmenu "RT-Thread Configuration"
+mainmenu "RT-Thread Project Configuration"
 
 config BSP_DIR
     string

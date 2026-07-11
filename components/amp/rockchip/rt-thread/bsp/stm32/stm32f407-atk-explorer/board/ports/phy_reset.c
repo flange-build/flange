@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -25,4 +25,4 @@ int phy_init(void)
     rt_pin_write(RESET_IO, PIN_HIGH);
     return RT_EOK;
 }
-INIT_APP_EXPORT(phy_init);
+INIT_BOARD_EXPORT(phy_init);

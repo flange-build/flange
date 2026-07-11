@@ -10,6 +10,7 @@
   * Change Logs:
   * Date           Author          Notes
   * 2019-02-20     Huang Jiachai   first implementation
+  * 2023-09-01     Damon Ding      update win scale and backlight configs
   *
   ******************************************************************************
   */
@@ -19,15 +20,16 @@
 #include <rtthread.h>
 
 #ifdef RT_USING_COMMON_TEST_DISPLAY
-#include "drv_display.h"
-#include "drv_heap.h"
-#include "display_pattern.h"
-
+#include <getopt.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+#include "display_pattern.h"
+#include "dma.h"
 #include "drv_display.h"
+#include "drv_heap.h"
 #include "hal_base.h"
 
 #define USR_M4_TO_CREATE_PATTERN
@@ -41,14 +43,14 @@
 #define X_ALIGNED   720
 #define Y_ALIGNED   65
 #else
-#define SRC_DATA_W  240
-#define SRC_DATA_H  320
+#define SRC_DATA_W  320
+#define SRC_DATA_H  480
 #define X_ALIGNED   1
-#define Y_ALIGNED   2
+#define Y_ALIGNED   1
 #endif
 #define SRC_DATA_ADDR   0x20080000
 #define SRC_CBCR_DATA_ADDR   0x200c0000
-#define SRC_DATA_FMT    RTGRAPHIC_PIXEL_FORMAT_RGB888
+#define SRC_DATA_FMT    RTGRAPHIC_PIXEL_FORMAT_ARGB888
 #elif defined(EBOOK_DEMO)
 #include "cn_white_ebook_demo.h"
 #define SRC_DATA_ADDR   cn_white_ebook_demo
@@ -80,6 +82,11 @@
 #elif defined(RT_USING_PANEL_SS)
 #define SRC_DATA_W  1080
 #define SRC_DATA_H  100
+#elif defined(RT_USING_PANEL_K350C4516T)
+#define SRC_DATA_W      320
+#define SRC_DATA_H      480
+#define X_ALIGNED   1
+#define Y_ALIGNED   1
 #else
 #define SRC_DATA_W      320
 #define SRC_DATA_H      240
@@ -222,7 +229,7 @@ static int32_t framebuffer_alloc(rt_size_t size)
 #if defined(RT_USING_LARGE_HEAP)
     return (uint32_t)rt_dma_malloc_large(size);
 #else
-    return 0;
+    return (uint32_t)rt_dma_malloc(size);;
 #endif
 }
 
@@ -1570,6 +1577,10 @@ static void test_color_bar(uint8_t win_id,
     win_config->srcY = (graphic_info->height - SRC_DATA_H) / 2;
     win_config->srcW = SRC_DATA_W;
     win_config->srcH = SRC_DATA_H;
+    win_config->crtcX = 0;
+    win_config->crtcY = 0;
+    win_config->crtcW = graphic_info->width;
+    win_config->crtcH = graphic_info->height;;
     win_config->srcY = AlignDown(win_config->srcY, Y_ALIGNED);
 
     post_scale->srcW = graphic_info->width;
@@ -1578,6 +1589,10 @@ static void test_color_bar(uint8_t win_id,
     post_scale->dstY = win_config->srcY;
     post_scale->dstW = graphic_info->width;
     post_scale->dstH = win_config->srcH;
+
+    rt_kprintf("Display test: color bar test [%dx%d->%dx%d@%dx%d]\n",
+               win_config->srcW, win_config->srcH, win_config->crtcW, win_config->crtcH,
+               win_config->crtcX, win_config->crtcY);
 
     for (i = 0; i < x_times; i++)
     {
@@ -1810,7 +1825,7 @@ static int display_test(int argc, char **argv)
         g_backlight_dev = rt_device_find("backlight");
         if (g_backlight_dev)
         {
-            int brightness = 0; /* todo: backlight driver only support this map for brightness control now */
+            int brightness = 100;
             rt_kprintf("Backlight power on\n");
             rt_device_control(g_backlight_dev, RTGRAPHIC_CTRL_POWERON, NULL);
             rt_device_control(g_backlight_dev, RTGRAPHIC_CTRL_RECT_UPDATE,
@@ -2002,7 +2017,7 @@ static int display_test(int argc, char **argv)
 
         if (g_backlight_dev)
         {
-            int brightness = 100; /* todo: backlight driver only support this map for brightness control now */
+            int brightness = 0;
             rt_kprintf("Backlight power off\n");
             rt_device_control(g_backlight_dev, RTGRAPHIC_CTRL_POWEROFF, NULL);
             rt_device_control(g_backlight_dev, RTGRAPHIC_CTRL_RECT_UPDATE,
@@ -2019,8 +2034,8 @@ static int display_test(int argc, char **argv)
         framebuffer_free((void *)rtt_framebuffer_test);
         if (SRC_DATA_FMT == RTGRAPHIC_PIXEL_FORMAT_YUV420)
             framebuffer_free((void *)rtt_framebuffer_uv);
-        rtt_framebuffer_test = NULL;
-        rtt_framebuffer_uv = NULL;
+        rtt_framebuffer_test = 0;
+        rtt_framebuffer_uv = 0;
         rt_kprintf("Exit display test!\n");
     }
     else

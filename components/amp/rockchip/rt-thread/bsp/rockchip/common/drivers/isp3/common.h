@@ -19,6 +19,7 @@
 #endif
 
 #define TEST_FPGA_MIPI_DPHY_ENABLE              0
+#define TEST_ISP_CLK_ENABLE                     1
 
 typedef void (*NVIC_IRQHandler)(void);
 

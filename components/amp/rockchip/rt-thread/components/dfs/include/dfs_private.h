@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -12,8 +12,8 @@
 
 #include <dfs.h>
 
-#define DBG_SECTION_NAME	"DFS"
-#define DBG_LEVEL			DBG_INFO
+#define DBG_TAG    "DFS"
+#define DBG_LVL    DBG_INFO
 #include <rtdbg.h>
 
 #define NO_WORKING_DIR  "system does not support working directory\n"

@@ -114,6 +114,7 @@ static void rpmsg_cmd(int argc, char *argv[])
                 for (uint32_t id = 0; id < PLATFORM_CORE_COUNT; id++)
                 {
                     rpmsg_cmd_cpuusage(&id);
+                    rt_thread_mdelay(1);
                 }
             }
         }

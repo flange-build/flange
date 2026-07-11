@@ -16,17 +16,20 @@ if GetDepend(['BSP_USING_ETH']):
 	
 if GetDepend(['BSP_USING_WIFI_OR_GPRS']):
     src += Glob('ports/esp02_device.c')	
+if GetDepend(['BSP_USING_ON_CHIP_FLASH']):
+	src += Glob('ports/on_chip_flash_init.c')
+	
 path =  [cwd]
 path += [cwd + '/CubeMX_Config/Inc']
 path += [cwd + '/ports']
 
 startup_path_prefix = SDK_LIB
 
-if rtconfig.CROSS_TOOL == 'gcc':
+if rtconfig.PLATFORM in ['gcc']:
     src += [startup_path_prefix + '/STM32F1xx_HAL/CMSIS/Device/ST/STM32F1xx/Source/Templates/gcc/startup_stm32f103xe.s']
-elif rtconfig.CROSS_TOOL == 'keil':
+elif rtconfig.PLATFORM in ['armcc', 'armclang']:
     src += [startup_path_prefix + '/STM32F1xx_HAL/CMSIS/Device/ST/STM32F1xx/Source/Templates/arm/startup_stm32f103xe.s']
-elif rtconfig.CROSS_TOOL == 'iar':
+elif rtconfig.PLATFORM in ['iccarm']:
     src += [startup_path_prefix + '/STM32F1xx_HAL/CMSIS/Device/ST/STM32F1xx/Source/Templates/iar/startup_stm32f103xe.s']
 
 # STM32F100xB || STM32F100xE || STM32F101x6

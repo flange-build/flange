@@ -889,7 +889,7 @@ static int rt_do_enum_rkisp_subdev_strm_fmts(void *dev, unsigned int index,
     else
     {
 __ERR:
-        ret = -RT_ERROR;
+        ret = RT_ERROR;
     }
     return ret;
 }
@@ -5445,7 +5445,7 @@ rt_err_t rk_isp_init(struct rk_isp_dev *dev)
     if (ret)
     {
         ISP_ERR("rt_do_init_rkisp_subdev failed, plz check\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
     else
     {
@@ -5461,7 +5461,7 @@ rt_err_t rk_isp_init(struct rk_isp_dev *dev)
     ret |= subdev->ops->control(subdev, RK_DEVICE_CTRL_CAMERA_GET_ITF_CFG, cam_itf);
 
     if (ret)
-        return -RT_ERROR;
+        return RT_ERROR;
 
     ispdev->isp_init->strm_desc[0].width = frame_fmt.width;
     ispdev->isp_init->strm_desc[0].height = frame_fmt.height;
@@ -5482,7 +5482,7 @@ rt_err_t rk_isp_init(struct rk_isp_dev *dev)
     if (ret)
     {
         ISP_ERR("rt_do_get_rkisp_stride failed, plz check\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
 #ifdef RK_ISP_USING_AWB
@@ -5510,7 +5510,7 @@ rt_err_t rk_isp_init(struct rk_isp_dev *dev)
     if (ret)
     {
         ISP_DBG("rt_do_set_rkisp_fmt failed, plz check\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
     else
         ISP_DBG("rt_do_set_rkisp_fmt success\n");
@@ -5651,7 +5651,7 @@ rt_err_t rk_isp_close(struct rk_isp_dev *dev)
     if (ret)
     {
         ISP_ERR("rk isp data path is streaming, can not close\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     if (dev_object->open_flag & RT_DEVICE_OFLAG_OPEN)

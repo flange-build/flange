@@ -13,9 +13,9 @@
 #include <drivers/mtd_nor.h>
 #include "hal_base.h"
 #include "fw_analysis.h"
+#include "rk_vendor_storage.h"
 
 #include "rkpart.h"
-#include "vendor_ops.h"
 
 #define RK_PARTITION_TAG 0x50464B52
 
@@ -256,53 +256,24 @@ End:
 
 int get_device_sn(dev_sn_type_t dev_sn_type, char *strBuf, int len)
 {
-    int ret;
-    if (!strBuf)
+    if (is_rk_vendor_ready() == RT_FALSE)
         return -1;
-    rt_memset(strBuf, 0, len);
 
-    ret = vendor_storage_init();
-    if (ret < 0)
-    {
-        rt_kprintf("vendor_storage_init fail \n");
-        return  -RT_ERROR;
-    }
+    if (rk_vendor_read(dev_sn_type, strBuf, len) != len)
+        return -1;
 
-    ret =  vendor_storage_read(dev_sn_type, strBuf, len);
-    if (ret < 0)
-    {
-        rt_kprintf("vendor_storage_read fail \n");
-        return  -RT_ERROR;
-    }
-
-    rt_kprintf("vendor read Type %d :%s \n", (int)dev_sn_type, strBuf);
-
-    vendor_storage_deinit();
-    return ret;
+    return len;
 }
 
 int write_device_sn(dev_sn_type_t dev_sn_type, char *strBuf, int len)
 {
-    int ret;
-    if (!strBuf)
-        return -RT_ERROR;
+    if (is_rk_vendor_ready() == RT_FALSE)
+        return -1;
 
-    ret = vendor_storage_init();
-    if (ret < 0)
-    {
-        rt_kprintf("vendor_storage_init fail\n");
-        return  -RT_ERROR;
-    }
+    if (rk_vendor_write(dev_sn_type, strBuf, len) != 0)
+        return -1;
 
-    ret =  vendor_storage_write(dev_sn_type, strBuf, len);
-    if (ret < 0)
-    {
-        rt_kprintf("vendor_storage_read fail\n");
-        return  -RT_ERROR;
-    }
-
-    rt_kprintf("vendor write %d :%s\n", (int)dev_sn_type, strBuf);
-    vendor_storage_deinit();
     return RT_EOK;
 }
+
 

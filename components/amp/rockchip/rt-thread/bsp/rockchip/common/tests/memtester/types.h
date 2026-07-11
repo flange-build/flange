@@ -11,6 +11,8 @@
  * This file contains typedefs, structure, and union definitions.
  *
  */
+#ifndef __TYPES__H__
+#define __TYPES__H__
 
 #include "sizes.h"
 
@@ -25,3 +27,19 @@ struct test
     char *name;
     int (*fp)();
 };
+
+#if 0
+union
+{
+    unsigned char bytes[UL_LEN / 8];
+    ul val;
+} mword8;
+
+union
+{
+    unsigned short u16s[UL_LEN / 16];
+    ul val;
+} mword16;
+#endif
+
+#endif

@@ -118,6 +118,13 @@ static void audio_init(void)
     ret = rt_device_control(vad_dev, RK_AUDIO_CTL_VAD_EN_BUSMODE, NULL);
     RT_ASSERT(ret == RT_EOK);
 
+    /* TODO: temp */
+    abuf.buf = vadbuf.buf;
+    abuf.buf_size = AUDIO_VAD_BUFFER_SIZE / 4;
+    abuf.period_size = abuf.buf_size / 16;
+    ret = rt_device_control(audio_dev, RK_AUDIO_CTL_PCM_PREPARE, &abuf);
+    RT_ASSERT(ret == RT_EOK);
+
     /* config stream */
     rt_memset(&aparams, 0x0, sizeof(aparams));
     aparams.channels = ASR_RECORD_CHANNELS;
@@ -125,13 +132,6 @@ static void audio_init(void)
     aparams.sampleBits = ASR_RECORD_BITS;
 
     ret = rt_device_control(audio_dev, RK_AUDIO_CTL_HW_PARAMS, &aparams);
-    RT_ASSERT(ret == RT_EOK);
-
-    /* TODO: temp */
-    abuf.buf = vadbuf.buf;
-    abuf.buf_size = AUDIO_VAD_BUFFER_SIZE / 4;
-    abuf.period_size = abuf.buf_size / 16;
-    ret = rt_device_control(audio_dev, RK_AUDIO_CTL_PCM_PREPARE, &abuf);
     RT_ASSERT(ret == RT_EOK);
 
     ret = rt_device_control(audio_dev, RK_AUDIO_CTL_START, NULL);

@@ -229,11 +229,6 @@ static rt_err_t es8311_init(struct audio_codec *codec, struct AUDIO_INIT_CONFIG 
 
 static rt_err_t es8311_deinit(struct audio_codec *codec)
 {
-    struct es8311_priv *es8311 = to_es8311_priv(codec);
-
-    if (es8311->work_cnt <= 0)
-        es8311_codec_standby(es8311);
-
     return RT_EOK;
 }
 
@@ -281,6 +276,9 @@ static rt_err_t es8311_config(struct audio_codec *codec, eAUDIO_streamType strea
                           ES8311_SDPOUT_REG0A_ADCWL_MASK,
                           wl << ES8311_SDPOUT_REG0A_ADCWL_SHIFT);
 
+    if (stream == AUDIO_STREAM_PLAYBACK)
+        es_pa_ctl(1);
+
     if (ret != RT_EOK)
         rt_kprintf("ERR: %s, something wrong: %d\n", __func__, ret);
 
@@ -290,28 +288,28 @@ static rt_err_t es8311_config(struct audio_codec *codec, eAUDIO_streamType strea
 static rt_err_t es8311_start(struct audio_codec *codec, eAUDIO_streamType stream)
 {
     struct es8311_priv *es8311 = to_es8311_priv(codec);
-
     rt_mutex_take(&lock, RT_WAITING_FOREVER);
     es8311->work_cnt++;
     rt_mutex_release(&lock);
-    if (stream == AUDIO_STREAM_PLAYBACK)
-        es_pa_ctl(1);
-
     return RT_EOK;
 }
 
 static rt_err_t es8311_stop(struct audio_codec *codec, eAUDIO_streamType stream)
 {
     struct es8311_priv *es8311 = to_es8311_priv(codec);
+    rt_err_t ret = RT_EOK;
 
     rt_mutex_take(&lock, RT_WAITING_FOREVER);
     if (es8311->work_cnt)
         es8311->work_cnt--;
     rt_mutex_release(&lock);
+    if (es8311->work_cnt <= 0)
+        es8311_codec_standby(es8311);
     if (stream == AUDIO_STREAM_PLAYBACK)
         es_pa_ctl(0);
 
-    return RT_EOK;
+
+    return ret;
 }
 
 static const struct audio_codec_ops es8311_ops =

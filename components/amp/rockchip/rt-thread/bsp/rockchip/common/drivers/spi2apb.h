@@ -23,6 +23,12 @@
 extern "C" {
 #endif
 
+/**
+ * SPI configuration structure variable "reserved"
+ */
+#define RK_SPI_RESERVED_LITTLE_ENDIAN     (0)
+#define RK_SPI_RESERVED_BIG_ENDIAN        (1)
+
 /* ctrl */
 #define RT_DEVICE_CTRL_SPI2APB_CONFIGURATION (1)
 #define RT_DEVICE_CTRL_SPI2APB_QUERY_STATUS  (2)
@@ -30,19 +36,6 @@ extern "C" {
 #define RT_DEVICE_CTRL_SPI2APB_READ_REG0     (4)
 #define RT_DEVICE_CTRL_SPI2APB_READ_REG1     (5)
 #define RT_DEVICE_CTRL_SPI2APB_WRITE_REG2    (6)
-
-/* configuratin */
-#define RT_CONFIG_SPI2APB_LSB     SPI2APB_LSB
-#define RT_CONFIG_SPI2APB_MSB     SPI2APB_MSB
-
-#define RT_CONFIG_SPI2APB_BIG_ENDIAN     SPI2APB_BIG_ENDIAN
-#define RT_CONFIG_SPI2APB_LITTLE_ENDIAN  SPI2APB_LITTLE_ENDIAN
-
-#define RT_CONFIG_SPI2APB_RXCP           SPI2APB_RXCP
-#define RT_CONFIG_SPI2APB_RXCP_INVERT    SPI2APB_RXCP_INVERT
-
-#define RT_CONFIG_SPI2APB_TXCP           SPI2APB_TXCP
-#define RT_CONFIG_SPI2APB_TXCP_INVERT    SPI2APB_TXCP_INVERT
 
 /* state */
 #define RT_STATE_SPI2APB_BUSY           SPI2APB_BUSY
@@ -52,24 +45,6 @@ extern "C" {
 #define RT_STATE_SPI2APB_RX_EMPTY       SPI2APB_RX_EMPTY
 
 typedef void (*spi2apb_callback)(rt_uint32_t cparam);
-
-/**
- * SPI2APB configuration structure
- */
-struct rt_spi2apb_configuration
-{
-    rt_uint8_t mode;
-    rt_uint8_t clock_polarity;
-};
-
-/**
- * SPI2APB device structure
- */
-struct rt_spi2apb_device
-{
-    struct rt_device parent;
-    struct rt_spi2apb_configuration config;
-};
 
 #ifdef __cplusplus
 }

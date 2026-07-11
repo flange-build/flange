@@ -3,6 +3,8 @@ menu "Hardware Drivers Config"
 config SOC_STM32F767IG
     bool
     select SOC_SERIES_STM32F7
+    select RT_USING_COMPONENTS_INIT
+    select RT_USING_USER_MAIN
     default y
 
 menu "Onboard Peripheral Drivers"
@@ -15,7 +17,7 @@ menu "Onboard Peripheral Drivers"
 
     config BSP_USING_RS232
         bool "Enable RS232 (uart2 pin conflict with Ethernet)"
-	    select BSP_USING_UART
+        select BSP_USING_UART
         select BSP_USING_UART2
         default n
 
@@ -24,7 +26,7 @@ menu "Onboard Peripheral Drivers"
         default n
 
     config BSP_USING_QSPI_FLASH
-        bool "Enable QSPI FLASH (w25q128 qspi)"
+        bool "Enable QSPI FLASH (W25Q256 qspi)"
         select BSP_USING_QSPI
         select RT_USING_SFUD
         select RT_SFUD_USING_QSPI
@@ -58,6 +60,11 @@ menu "Onboard Peripheral Drivers"
         select BSP_USING_SDIO
         select RT_USING_DFS
         select RT_USING_DFS_ELMFAT
+        default n
+    config BSP_USING_LCD
+        bool "Enable LCD"
+        select BSP_USING_LTDC
+        select BSP_USING_SDRAM
         default n
 
 endmenu
@@ -103,21 +110,6 @@ menu "On-chip Peripheral Drivers"
         default n
         select RT_USING_SPI
         if BSP_USING_SPI
-            config BSP_USING_SPI1
-                bool "Enable SPI1 BUS"
-                default n
-
-            config BSP_SPI1_TX_USING_DMA
-                bool "Enable SPI1 TX DMA"
-                depends on BSP_USING_SPI1
-                default n
-                
-            config BSP_SPI1_RX_USING_DMA
-                bool "Enable SPI1 RX DMA"
-                depends on BSP_USING_SPI1
-                select BSP_SPI1_TX_USING_DMA
-                default n
-
             config BSP_USING_SPI2
                 bool "Enable SPI2 BUS"
                 default n  
@@ -156,12 +148,12 @@ menu "On-chip Peripheral Drivers"
         endif
 
     menuconfig BSP_USING_PWM
-        bool "Enable pwm"
+        bool "Enable PWM"
         default n
         select RT_USING_PWM
         if BSP_USING_PWM
         menuconfig BSP_USING_PWM3
-            bool "Enable timer3 output pwm"
+            bool "Enable timer3 output PWM"
             default n
             if BSP_USING_PWM3
                 config BSP_USING_PWM3_CH3
@@ -216,16 +208,42 @@ menu "On-chip Peripheral Drivers"
                 default 117
         endif
 
-    config BSP_USING_ONCHIP_RTC
+    menuconfig BSP_USING_ONCHIP_RTC
         bool "Enable RTC"
         select RT_USING_RTC
-        select RT_USING_LIBC
         default n
+        if BSP_USING_ONCHIP_RTC
+            choice
+                prompt "Select clock source"
+                default BSP_RTC_USING_LSE
+
+                config BSP_RTC_USING_LSE
+                    bool "RTC USING LSE"
+
+                config BSP_RTC_USING_LSI
+                    bool "RTC USING LSI"
+            endchoice
+        endif
 
     config BSP_USING_WDT
         bool "Enable Watchdog Timer"
         select RT_USING_WDT
         default n
+
+    menuconfig BSP_USING_USBH
+        bool "Enable USB Host"
+        select RT_USING_USB_HOST
+        default n
+        if BSP_USING_USBH
+            menuconfig RT_USBH_MSTORAGE
+                bool "Enable Udisk Drivers"
+                default n
+                if RT_USBH_MSTORAGE
+                    config UDISK_MOUNTPOINT
+                    string "Udisk mount dir"
+                    default "/"
+                endif
+        endif
 
     config BSP_USING_SDIO
         bool "Enable SDIO"
@@ -233,6 +251,12 @@ menu "On-chip Peripheral Drivers"
         select RT_USING_DFS
         default n
 
+    config BSP_USING_LTDC
+        bool "Enable LTDC"
+        default n
+
+ source "../libraries/HAL_Drivers/Kconfig"
+    
 endmenu
 
 menu "Board extended module Drivers"

@@ -37,7 +37,6 @@
 #define HAL_GIC_MODULE_ENABLED
 #define HAL_SPINLOCK_MODULE_ENABLED
 #define HAL_TIMER_MODULE_ENABLED
-
 #ifdef HAL_GIC_MODULE_ENABLED
 #define HAL_GIC_AMP_FEATURE_ENABLED
 #define HAL_GIC_PREEMPT_FEATURE_ENABLED
@@ -48,6 +47,10 @@
 
 #ifdef RT_USING_CRU
 #define HAL_CRU_MODULE_ENABLED
+#endif
+
+#ifdef RT_USING_DMA_PL330
+#define HAL_PL330_MODULE_ENABLED
 #endif
 
 #ifdef RT_USING_PIN
@@ -67,6 +70,10 @@
 #define HAL_I2C_MODULE_ENABLED
 #endif
 
+#ifdef RT_USING_I2STDM
+#define HAL_I2STDM_MODULE_ENABLED
+#endif
+
 #ifdef RT_USING_MAILBOX
 #define HAL_MBOX_MODULE_ENABLED
 #endif
@@ -75,8 +82,32 @@
 #define HAL_UART_MODULE_ENABLED
 #endif
 
-#ifdef RT_USING_DW_PCIE
+#ifdef RT_USING_PCIE_EP
 #define HAL_PCIE_MODULE_ENABLED
+#endif
+
+#ifdef RT_USING_SDIO
+#define HAL_SDIO_MODULE_ENABLED
+#endif
+
+#ifdef RT_USING_SPI
+#define HAL_SPI_MODULE_ENABLED
+#endif
+
+#ifdef RT_USING_USBH_EHCI
+#define HAL_EHCI_MODULE_ENABLED
+#endif
+
+#ifdef RT_USING_USBH_OHCI
+#define HAL_OHCI_MODULE_ENABLED
+#endif
+
+#ifdef RT_USING_PWM
+#define HAL_PWM_MODULE_ENABLED
+#endif
+
+#ifdef RT_USING_VOP2
+#define HAL_VOP2_MODULE_ENABLED
 #endif
 
 #endif

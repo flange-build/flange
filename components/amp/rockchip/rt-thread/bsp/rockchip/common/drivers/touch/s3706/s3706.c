@@ -69,7 +69,7 @@ static rt_err_t s3706_touch_read(struct rt_i2c_client *dev, void *cmd_buf, size_
         return RT_EOK;
     }
 
-    return -RT_ERROR;
+    return RT_ERROR;
 }
 
 static rt_err_t s3706_touch_read_word(struct rt_i2c_client *dev, uint16_t addr, int32_t *value)
@@ -79,7 +79,7 @@ static rt_err_t s3706_touch_read_word(struct rt_i2c_client *dev, uint16_t addr, 
     uint8_t buf[2] = {0};
 
     retval = s3706_touch_read(dev, &regaddr, 1, buf, 2);
-    if (retval != -RT_ERROR)
+    if (retval != RT_ERROR)
     {
         *value = buf[1] << 8 | buf[0];
         return RT_EOK;
@@ -87,7 +87,7 @@ static rt_err_t s3706_touch_read_word(struct rt_i2c_client *dev, uint16_t addr, 
     else
     {
         *value = 0;
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 }
 
@@ -102,7 +102,7 @@ static rt_err_t s3706_touch_write(struct rt_i2c_client *dev, uint16_t regaddr, s
     if (!data_buf)
     {
         s3706_tp_dbg("spi write alloc buf size %d fail\n", data_len);
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     for (i = 0; i < cmd_len; i++)
@@ -130,7 +130,7 @@ static rt_err_t s3706_touch_write(struct rt_i2c_client *dev, uint16_t regaddr, s
     if (ret == 1)
         return RT_EOK;
     else
-        return -RT_ERROR;
+        return RT_ERROR;
 }
 
 static void print_s3706_reg(s3706_device_t *dev)
@@ -296,7 +296,7 @@ static rt_err_t s3706_get_touch_points(s3706_device_t *dev, struct point_info *p
     if (ret_code != RT_EOK)
     {
         rt_kprintf("s3706_touch_read_word error, ret_code = %d\n", ret_code);
-        return -RT_ERROR;
+        return RT_ERROR;
     }
     s3706_tp_dbg("obj_attention = 0x%x\n", obj_attention);
 
@@ -314,10 +314,10 @@ static rt_err_t s3706_get_touch_points(s3706_device_t *dev, struct point_info *p
 
     memset(buf, 0, sizeof(dev->point_buf));
     ret_code = s3706_touch_read(dev->i2c_client, &dev->reg.F12_2D_DATA_BASE, 1, buf, 8 * fingers_to_process);
-    if (ret_code == -RT_ERROR)
+    if (ret_code == RT_ERROR)
     {
         rt_kprintf("touch i2c read block failed\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     rt_mutex_take(dev->read_mutex, RT_WAITING_FOREVER);
@@ -361,7 +361,7 @@ static rt_err_t s3706_touch_handle(s3706_device_t *dev)
     if (ret != RT_EOK)
     {
         s3706_tp_dbg("Invalid points, ignore..\n");
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     /* indicate to read data */

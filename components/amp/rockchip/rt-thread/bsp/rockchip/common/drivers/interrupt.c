@@ -17,126 +17,7 @@
 #include <rthw.h>
 #include "hal_base.h"
 
-#if (defined(ARCH_ARM_CORTEX_M0) || defined(ARCH_ARM_CORTEX_M3) || defined(ARCH_ARM_CORTEX_M4) || defined(ARCH_ARM_CORTEX_M7)) && !defined(HAS_CUSTOME_INTC)
-
-#if EXT_INTERRUPT
-
-struct rk_intc
-{
-    void *intc_base;
-    rt_isr_handler_t irq_handler;
-};
-
-static rt_isr_handler_t ext_vector[NUM_EXT_INTERRUPTS];
-
-static void intc_irq_dispatch(void *intc, uint32_t offset)
-{
-    uint32_t i, irq_no;
-
-    for (i = 0; i < NUM_EXT_INTERRUPTS; i++)
-    {
-        if (HAL_INTC_GetFinalStatus(intc, i))
-        {
-            irq_no = i + offset * NUM_INT_PER_CONTROLLER;
-            ext_vector[irq_no](NUM_INTERRUPTS + irq_no, NULL);
-        }
-    }
-}
-
-#define DEFINE_RK_INTC_IRQ(ID)                                 \
-static void rk_intc##ID##_irq_dispatch(int irq, void *param);  \
-static struct rk_intc rk_intc##ID =                            \
-{                                                              \
-    .intc_base = INTC##ID,                                     \
-    .irq_handler = rk_intc##ID##_irq_dispatch,                 \
-};                                                             \
-static void rk_intc##ID##_irq_dispatch(int irq, void *param)   \
-{                                                              \
-    intc_irq_dispatch(INTC##ID, ID);                               \
-}
-
-#ifdef INTC0
-DEFINE_RK_INTC_IRQ(0);
-#endif
-#ifdef INTC1
-DEFINE_RK_INTC_IRQ(1);
-#endif
-#ifdef INTC2
-DEFINE_RK_INTC_IRQ(2);
-#endif
-#ifdef INTC3
-DEFINE_RK_INTC_IRQ(3);
-#endif
-
-static struct rk_intc *rk_intc_table[] =
-{
-#ifdef INTC0
-    &rk_intc0,
-#endif
-#ifdef INTC1
-    &rk_intc1,
-#endif
-#ifdef INTC2
-    &rk_intc2,
-#endif
-#ifdef INTC3
-    &rk_intc3,
-#endif
-};
-
-static void rk_intc_init(void)
-{
-    uint32_t i;
-
-    memset(ext_vector, 0, sizeof(ext_vector));
-    for (i = 0; i < HAL_ARRAY_SIZE(rk_intc_table); i++)
-    {
-        HAL_NVIC_SetIRQHandler(INTC0_IRQn + i, (NVIC_IRQHandler)rk_intc_table[i]->irq_handler);
-        HAL_NVIC_EnableIRQ(INTC0_IRQn + i);
-        HAL_INTC_EnableAllRQ(rk_intc_table[i]->intc_base);
-    }
-}
-
-static void rk_intc_mask(uint32_t vector)
-{
-    uint32_t intc, irq;
-
-    if (vector >= TOTAL_INTERRUPTS)
-        return;
-
-    if (vector < NUM_INTERRUPTS)
-        HAL_NVIC_DisableIRQ(vector);
-    else
-    {
-        intc = (vector - NUM_INTERRUPTS) / NUM_INT_PER_CONTROLLER;
-        irq = (vector - NUM_INTERRUPTS) % NUM_INT_PER_CONTROLLER;
-        if (intc >= HAL_ARRAY_SIZE(rk_intc_table))
-            return;
-        HAL_INTC_MaskIRQ(rk_intc_table[intc]->intc_base, irq);
-    }
-}
-
-static void rk_intc_unmask(uint32_t vector)
-{
-    uint32_t intc, irq;
-
-    if (vector >= TOTAL_INTERRUPTS)
-        return;
-
-    if (vector < NUM_INTERRUPTS)
-        HAL_NVIC_EnableIRQ(vector);
-    else
-    {
-        intc = (vector - NUM_INTERRUPTS) / NUM_INT_PER_CONTROLLER;
-        irq = (vector - NUM_INTERRUPTS) % NUM_INT_PER_CONTROLLER;
-        if (intc >= HAL_ARRAY_SIZE(rk_intc_table))
-            return;
-        HAL_INTC_UnmaskIRQ(rk_intc_table[intc]->intc_base, irq);
-    }
-}
-
-
-#endif /* end of EXT_INTERRUPT */
+#if defined(ARCH_ARM_CORTEX_M0) || defined(ARCH_ARM_CORTEX_M3) || defined(ARCH_ARM_CORTEX_M4) || defined(ARCH_ARM_CORTEX_M7) || defined(ARCH_ARM_CORTEX_M33)
 
 #ifdef RT_USING_PROF_IRQ
 
@@ -218,8 +99,8 @@ void rt_hw_interrupt_init(void)
         HAL_NVIC_SetPriority(i, NVIC_PERIPH_PRIO_DEFAULT, NVIC_PERIPH_SUB_PRIO_DEFAULT);
     }
 
-#if EXT_INTERRUPT
-    rk_intc_init();
+#if defined(HAL_INTMUX_MODULE_ENABLED)
+    HAL_INTMUX_Init();
 #endif
 
 #ifdef RT_USING_PROF_IRQ
@@ -230,20 +111,24 @@ void rt_hw_interrupt_init(void)
 
 void rt_hw_interrupt_mask(int vector)
 {
-#if EXT_INTERRUPT
-    rk_intc_mask(vector);
-#else
-    HAL_NVIC_DisableIRQ(vector);
+#ifdef HAL_INTMUX_MODULE_ENABLED
+    if (vector >= NUM_INTERRUPTS) {
+        HAL_INTMUX_DisableIRQ(vector);
+        return;
+    }
 #endif
+    HAL_NVIC_DisableIRQ(vector);
 }
 
 void rt_hw_interrupt_umask(int vector)
 {
-#if EXT_INTERRUPT
-    rk_intc_unmask(vector);
-#else
-    HAL_NVIC_EnableIRQ(vector);
+#ifdef HAL_INTMUX_MODULE_ENABLED
+    if (vector >= NUM_INTERRUPTS) {
+        HAL_INTMUX_EnableIRQ(vector);
+        return;
+    }
 #endif
+    HAL_NVIC_EnableIRQ(vector);
 }
 
 rt_isr_handler_t rt_hw_interrupt_install(int              vector,
@@ -251,14 +136,14 @@ rt_isr_handler_t rt_hw_interrupt_install(int              vector,
         void            *param,
         const char      *name)
 {
-#if EXT_INTERRUPT
-    if (vector < NUM_INTERRUPTS)
-        HAL_NVIC_SetIRQHandler(vector, (NVIC_IRQHandler)handler);
-    else
-        ext_vector[vector - NUM_INTERRUPTS] = handler;
-#else
-    HAL_NVIC_SetIRQHandler(vector, (NVIC_IRQHandler)handler);
+#ifdef HAL_INTMUX_MODULE_ENABLED
+    if (vector >= NUM_INTERRUPTS) {
+        HAL_INTMUX_SetIRQHandler(vector, (HAL_INTMUX_HANDLER)handler, param);
+        return handler;
+    }
 #endif
+    HAL_NVIC_SetIRQHandler(vector, (NVIC_IRQHandler)handler);
+
     return handler;
 }
 

@@ -32,8 +32,10 @@
 
 #define TIMER_EXT_1_IRQ               (322 + NUM_INTERRUPTS)
 
+#ifdef RT_USING_WDT
 static int wdt_int_count = 0;
 static int wdt_time_out = 8;
+#endif
 static int timer_int_count = 0;
 static float latency_sum = 0.0;
 struct TIMER_REG *timer = NULL;
@@ -42,7 +44,7 @@ static int fixed_spend = 0;
 static float latency_max = 0.0;
 
 extern void write_reg(uint32_t addr, uint32_t val);
-
+#ifdef RT_USING_WDT
 void wdt_isr(int vector, void *param)
 {
     if (++wdt_int_count <= 3)
@@ -61,8 +63,8 @@ void wdt_isr(int vector, void *param)
 void wdt_test(void)
 {
     /* register wdt handler */
-    rt_hw_interrupt_install(WDT_PMU_IRQn, wdt_isr, NULL, "wdt");
-    rt_hw_interrupt_umask(WDT_PMU_IRQn);
+    rt_hw_interrupt_install(WDT0_IRQn, wdt_isr, NULL, "wdt");
+    rt_hw_interrupt_umask(WDT0_IRQn);
 
     /* WDT_TORR[0:3]=1, set timeout_period */
     WDT->TORR = wdt_time_out;
@@ -75,7 +77,7 @@ void wdt_test(void)
     rt_thread_delay(10);
     rt_kprintf("2s: %d\n", WDT->CCVR);
 }
-
+#endif
 void tick_test(void)
 {
     rt_kprintf("begin 10s test\n");
@@ -126,7 +128,7 @@ void timer_test(void)
     rt_kprintf("systimer 1s count: %ld(%lld, %lld)\n", count, start, end);
     RT_ASSERT(PLL_INPUT_OSC_RATE - count < 1000000);
 
-#if !defined(RKMCU_RK3588_NPU)
+#if !defined(HAL_NPU_MCU_CORE)
     rt_kprintf("test external irq\n");
     timer = TIMER_EXT_1;
     desc_timer = true;
@@ -289,7 +291,9 @@ extern void test_dcache();
 int main(void)
 {
     //struct rt_thread tcb;
+#ifdef RT_USING_WDT
     //wdt_test();
+#endif
     //tick_test();
     //irq_test();
     //benchmark();

@@ -1,7 +1,7 @@
-[![Version](https://img.shields.io/github/v/release/NXPmicro/rpmsg-lite)](https://github.com/NXPmicro/rpmsg-lite/releases/latest)
-[![Contributors](https://img.shields.io/github/contributors/NXPmicro/rpmsg-lite)](https://github.com/NXPmicro/rpmsg-lite/graphs/contributors)
-[![Issues](https://img.shields.io/github/issues/NXPmicro/rpmsg-lite)](https://github.com/NXPmicro/rpmsg-lite/issues)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](https://github.com/NXPmicro/rpmsg-lite/pulls)
+[![Version](https://img.shields.io/github/v/release/nxp-mcuxpresso/rpmsg-lite)](https://github.com/nxp-mcuxpresso/rpmsg-lite/releases/latest)
+[![Contributors](https://img.shields.io/github/contributors/nxp-mcuxpresso/rpmsg-lite)](https://github.com/nxp-mcuxpresso/rpmsg-lite/graphs/contributors)
+[![Issues](https://img.shields.io/github/issues/nxp-mcuxpresso/rpmsg-lite)](https://github.com/nxp-mcuxpresso/rpmsg-lite/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](https://github.com/nxp-mcuxpresso/rpmsg-lite/pulls)
 
 RPMsg Component
 ===============
@@ -12,7 +12,7 @@ Compared to the RPMsg implementation of the Open Asymmetric Multi Processing (Op
 
 The RPMsg-Lite is an open-source component developed by NXP Semiconductors and released under the BSD-compatible license.
 
-For Further documentation, please look at doxygen documentation at: https://nxpmicro.github.io/rpmsg-lite/
+For Further documentation, please look at doxygen documentation at: https://nxp-mcuxpresso.github.io/rpmsg-lite/
 
 # Motivation to create RPMsg-Lite
 
@@ -81,6 +81,31 @@ The user is responsible for destroying any RPMsg-Lite objects he has created in 
 
 ![RPMsg Lite copy and no-copy interface, multiple scenarios](./doxygen/images/rpmsg_lite_send_receive.png)
 
+## Examples
+
+RPMsg_Lite multicore examples are part of NXP MCUXpressoSDK packages. Visit [https://mcuxpresso.nxp.com](https://mcuxpresso.nxp.com) to configure, build and download these packages. To get the board list with multicore support (RPMsg_Lite included) use filtering based on Middleware and search for 'multicore' string. Once the selected package with the multicore middleware is downloaded, see
+
+<MCUXpressoSDK_install_dir>/boards/<board_name>/multicore_examples for RPMsg_Lite multicore examples with 'rpmsg_lite_' name prefix.
+
+Another way of getting NXP MCUXpressoSDK RPMsg_Lite multicore examples is using the [mcux-sdk](https://github.com/nxp-mcuxpresso/mcux-sdk) Github repo. Follow the description how to use the West tool to clone and update the mcuxsdk repo in [readme Overview section](https://github.com/nxp-mcuxpresso/mcux-sdk#overview). Once done the armgcc rpmsg_lite examples can be found in
+
+mcuxsdk/examples/<board_name>/multicore_examples 
+
+You can use the evkmimxrt1170 as the board_name for instance. Similar to MCUXpressoSDK packages the RPMsg_Lite examples use the 'rpmsg_lite_' name prefix.
+
+# Notes
+## Environment layers implementation
+Several environment layers are provided in lib/rpmsg_lite/porting/environment folder. Not all of them are fully tested however. Here is the list of environment layers that passed testing:
+- rpmsg_env_bm.c
+- rpmsg_env_freertos.c
+- rpmsg_env_xos.c
+- rpmsg_env_threadx.c
+
+The rest of environment layers has been created and used in some experimental projects, it has been running well at the time of creation but due to the lack of unit testing there is no guarantee it is still fully functional.
+
+## Shared memory configuration
+It is important to correctly initialize/configure the shared memory for data exchange in the application. The shared memory must be accessible from both the master and the remote core and it needs to be configured as Non-Cacheable memory. Dedicated shared memory section in liker file is also a good practise, it is recommended to use linker files from MCUXpressSDK packages for NXP devices based applications. It needs to be ensured no other application part/component is unintentionally accessing this part of memory. 
+
 # Configuration options
 
 The RPMsg-Lite can be configured at the compile time. The default configuration is defined in the rpmsg_default_config.h header file. This configuration can be customized by the user by including rpmsg_config.h file with custom settings. The following table summarizes all possible RPMsg-Lite configuration options.
@@ -95,7 +120,7 @@ The RPMsg-Lite can be configured at the compile time. The default configuration 
 |RL_CLEAR_USED_BUFFERS         | (0)           | Clearing used buffers before returning back to the pool of free buffers enabled/disabled.   |
 |RL_USE_MCMGR_IPC_ISR_HANDLER  | (0)           | When enabled IPC interrupts are managed by the Multicore Manager (IPC interrupts router), when disabled RPMsg-Lite manages IPC interrupts by itself.   |
 |RL_USE_ENVIRONMENT_CONTEXT    | (0)           | When enabled the environment layer uses its own context. Required for some environments (QNX). The default value is 0 (no context, saves some RAM).    |
-|RL_DEBUG_CHECK_BUFFERS        | (0)           | When enabled buffer debug checks in rpmsg_lite_send_nocopy() and rpmsg_lite_release_rx_buffer() functions are disabled. Do not use in RPMsg-Lite to Linux configuration.    |
+|RL_DEBUG_CHECK_BUFFERS        | (0)           | When enabled buffer pointers passed to rpmsg_lite_send_nocopy() and rpmsg_lite_release_rx_buffer() functions (enabled by RL_API_HAS_ZEROCOPY config) are checked to avoid passing invalid buffer pointer. The default value is 0 (disabled). Do not use in RPMsg-Lite to Linux configuration.    |
 |RL_ALLOW_CONSUMED_BUFFERS_NOTIFICATION        | (0)           | When enabled the opposite side is notified each time received buffers are consumed and put into the queue of available buffers. Enable this option in RPMsg-Lite to Linux configuration to allow unblocking of the Linux blocking send. The default value is 0 (RPMsg-Lite to RPMsg-Lite communication).    |
 |RL_ALLOW_CUSTOM_SHMEM_CONFIG  | (0)           | It allows to define custom shared memory configuration and replacing the shared memory related global settings from rpmsg_config.h This is useful when multiple instances are running in parallel but different shared memory arrangement (vring size & alignment, buffers size & count) is required. The default value is 0 (all RPMsg_Lite instances use the same shared memory arrangement as defined by common config macros). |
 |RL_ASSERT                     | see rpmsg_default_config.h | Assert implementation.    |
@@ -113,4 +138,4 @@ This script executes the application named *clang-format.exe*. You need to have 
 
 ---
 Copyright © 2016 Freescale Semiconductor, Inc.
-Copyright © 2016-2022 NXP
+Copyright © 2016-2023 NXP

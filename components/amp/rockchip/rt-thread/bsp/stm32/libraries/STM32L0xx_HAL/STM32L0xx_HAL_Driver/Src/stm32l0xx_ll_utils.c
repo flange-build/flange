@@ -6,29 +6,13 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2016 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright(c) 2016 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
@@ -57,23 +41,23 @@
 /** @addtogroup UTILS_LL_Private_Constants
   * @{
   */
-#define UTILS_MAX_FREQUENCY_SCALE1  ((uint32_t)32000000U)        /*!< Maximum frequency for system clock at power scale1, in Hz */
-#define UTILS_MAX_FREQUENCY_SCALE2  ((uint32_t)16000000U)        /*!< Maximum frequency for system clock at power scale2, in Hz */
-#define UTILS_MAX_FREQUENCY_SCALE3  ((uint32_t)4000000U)         /*!< Maximum frequency for system clock at power scale3, in Hz */
+#define UTILS_MAX_FREQUENCY_SCALE1  (32000000U)        /*!< Maximum frequency for system clock at power scale1, in Hz */
+#define UTILS_MAX_FREQUENCY_SCALE2  (16000000U)        /*!< Maximum frequency for system clock at power scale2, in Hz */
+#define UTILS_MAX_FREQUENCY_SCALE3  (4194304U)         /*!< Maximum frequency for system clock at power scale3, in Hz */
 
 /* Defines used for PLL range */
-#define UTILS_PLLVCO_OUTPUT_SCALE1  ((uint32_t)96000000U)        /*!< Frequency max for PLLVCO output at power scale1, in Hz  */
-#define UTILS_PLLVCO_OUTPUT_SCALE2  ((uint32_t)48000000U)        /*!< Frequency max for PLLVCO output at power scale2, in Hz  */
-#define UTILS_PLLVCO_OUTPUT_SCALE3  ((uint32_t)24000000U)        /*!< Frequency max for PLLVCO output at power scale3, in Hz  */
+#define UTILS_PLLVCO_OUTPUT_SCALE1  (96000000U)        /*!< Frequency max for PLLVCO output at power scale1, in Hz  */
+#define UTILS_PLLVCO_OUTPUT_SCALE2  (48000000U)        /*!< Frequency max for PLLVCO output at power scale2, in Hz  */
+#define UTILS_PLLVCO_OUTPUT_SCALE3  (24000000U)        /*!< Frequency max for PLLVCO output at power scale3, in Hz  */
 
 /* Defines used for HSE range */
-#define UTILS_HSE_FREQUENCY_MIN     ((uint32_t)1000000U)         /*!< Frequency min for HSE frequency, in Hz   */
-#define UTILS_HSE_FREQUENCY_MAX     ((uint32_t)24000000U)        /*!< Frequency max for HSE frequency, in Hz   */
+#define UTILS_HSE_FREQUENCY_MIN     (1000000U)         /*!< Frequency min for HSE frequency, in Hz   */
+#define UTILS_HSE_FREQUENCY_MAX     (24000000U)        /*!< Frequency max for HSE frequency, in Hz   */
 
 /* Defines used for FLASH latency according to HCLK Frequency */
-#define UTILS_SCALE1_LATENCY1_FREQ  ((uint32_t)16000000U)        /*!< HCLK frequency to set FLASH latency 1 in power scale 1 */
-#define UTILS_SCALE2_LATENCY1_FREQ  ((uint32_t)8000000U)         /*!< HCLK frequency to set FLASH latency 1 in power scale 2 */
-#define UTILS_SCALE3_LATENCY1_FREQ  ((uint32_t)2000000U)         /*!< HCLK frequency to set FLASH latency 1 in power scale 3 */
+#define UTILS_SCALE1_LATENCY1_FREQ  (16000000U)        /*!< HCLK frequency to set FLASH latency 1 in power scale 1 */
+#define UTILS_SCALE2_LATENCY1_FREQ  (8000000U)         /*!< HCLK frequency to set FLASH latency 1 in power scale 2 */
+#define UTILS_SCALE3_LATENCY1_FREQ  (2000000U)         /*!< HCLK frequency to set FLASH latency 1 in power scale 3 */
 /**
   * @}
   */
@@ -137,7 +121,6 @@
   */
 static uint32_t    UTILS_GetPLLOutputFrequency(uint32_t PLL_InputFrequency,
                                                LL_UTILS_PLLInitTypeDef *UTILS_PLLInitStruct);
-static ErrorStatus UTILS_SetFlashLatency(uint32_t Frequency);
 static ErrorStatus UTILS_EnablePLLAndSwitchSystem(uint32_t SYSCLK_Frequency, LL_UTILS_ClkInitTypeDef *UTILS_ClkInitStruct);
 static ErrorStatus UTILS_PLL_IsBusy(void);
 /**
@@ -246,14 +229,103 @@ void LL_SetSystemCoreClock(uint32_t HCLKFrequency)
 }
 
 /**
+  * @brief  Update number of Flash wait states in line with new frequency and current
+            voltage range.
+  * @param  Frequency  HCLK frequency
+  * @retval An ErrorStatus enumeration value:
+  *          - SUCCESS: Latency has been modified
+  *          - ERROR: Latency cannot be modified
+  */
+ErrorStatus LL_SetFlashLatency(uint32_t Frequency)
+{
+  uint32_t timeout;
+  uint32_t getlatency;
+  uint32_t latency;
+  ErrorStatus status = SUCCESS;
+
+  /* Frequency cannot be equal to 0 */
+  if ((Frequency == 0U) || (Frequency > UTILS_MAX_FREQUENCY_SCALE1))
+  {
+    status = ERROR;
+  }
+  else
+  {
+    if (LL_PWR_GetRegulVoltageScaling() == LL_PWR_REGU_VOLTAGE_SCALE1)
+    {
+      if (Frequency > UTILS_SCALE1_LATENCY1_FREQ)
+      {
+        /* 16 < HCLK <= 32 => 1WS (2 CPU cycles) */
+        latency = LL_FLASH_LATENCY_1;
+      }
+      else
+      {
+        /* else HCLK < 16MHz default LL_FLASH_LATENCY_0 0WS */
+        latency = LL_FLASH_LATENCY_0;
+      }
+    }
+    else if (LL_PWR_GetRegulVoltageScaling() == LL_PWR_REGU_VOLTAGE_SCALE2)
+    {
+      if (Frequency > UTILS_SCALE2_LATENCY1_FREQ)
+      {
+        /* 8 < HCLK <= 16 => 1WS (2 CPU cycles) */
+        latency = LL_FLASH_LATENCY_1;
+      }
+      else
+      {
+        /* else HCLK < 8MHz default LL_FLASH_LATENCY_0 0WS */
+        latency = LL_FLASH_LATENCY_0;
+      }
+    }
+    else
+    {
+      if (Frequency > UTILS_SCALE3_LATENCY1_FREQ)
+      {
+        /* 2 < HCLK <= 4 => 1WS (2 CPU cycles) */
+        latency = LL_FLASH_LATENCY_1;
+      }
+      else
+      {
+        /* else HCLK < 2MHz default LL_FLASH_LATENCY_0 0WS */
+        latency = LL_FLASH_LATENCY_0;
+      }
+    }
+
+    if (status != ERROR)
+    {
+      LL_FLASH_SetLatency(latency);
+
+      /* Check that the new number of wait states is taken into account to access the Flash
+           memory by reading the FLASH_ACR register */
+      timeout = 2;
+      do
+      {
+      /* Wait for Flash latency to be updated */
+      getlatency = LL_FLASH_GetLatency();
+      timeout--;
+      } while ((getlatency != latency) && (timeout > 0));
+
+      if(getlatency != latency)
+      {
+        status = ERROR;
+      }
+      else
+      {
+        status = SUCCESS;
+      }
+    }
+  }
+  return status;
+}
+
+/**
   * @brief  This function configures system clock with HSI as clock source of the PLL
   * @note   The application need to ensure that PLL is disabled.
   * @note   Function is based on the following formula:
   *         - PLL output frequency = ((HSI frequency * PLLMul) / PLLDiv)
-  *         - PLLMul: The application software must set correctly the PLL multiplication factor to avoid exceeding
-  *           - 96 MHz as PLLVCO when the product is in range 1,
-  *           - 48 MHz as PLLVCO when the product is in range 2,
-  *           - 24 MHz when the product is in range 3
+  *         - PLLMul: The application software must set correctly the PLL multiplication factor to ensure
+  *           - PLLVCO does not exceed 96 MHz when the product is in range 1,
+  *           - PLLVCO does not exceed 48 MHz when the product is in range 2,
+  *           - PLLVCO does not exceed 24 MHz when the product is in range 3
   * @note   FLASH latency can be modified through this function. 
   * @param  UTILS_PLLInitStruct pointer to a @ref LL_UTILS_PLLInitTypeDef structure that contains
   *                             the configuration information for the PLL.
@@ -305,10 +377,10 @@ ErrorStatus LL_PLL_ConfigSystemClock_HSI(LL_UTILS_PLLInitTypeDef *UTILS_PLLInitS
   * @note   The application need to ensure that PLL is disabled.
   * @note   Function is based on the following formula:
   *         - PLL output frequency = ((HSE frequency * PLLMul) / PLLDiv)
-  *         - PLLMul: The application software must set correctly the PLL multiplication factor to avoid exceeding
-  *           - 96 MHz as PLLVCO when the product is in range 1,
-  *           - 48 MHz as PLLVCO when the product is in range 2,
-  *           - 24 MHz when the product is in range 3
+  *         - PLLMul: The application software must set correctly the PLL multiplication factor to to ensure
+  *           - PLLVCO does not exceed 96 MHz when the product is in range 1,
+  *           - PLLVCO does not exceed 48 MHz when the product is in range 2,
+  *           - PLLVCO does not exceed 24 MHz when the product is in range 3
   * @note   FLASH latency can be modified through this function. 
   * @param  HSEFrequency Value between Min_Data = 1000000 and Max_Data = 24000000
   * @param  HSEBypass This parameter can be one of the following values:
@@ -386,67 +458,6 @@ ErrorStatus LL_PLL_ConfigSystemClock_HSE(uint32_t HSEFrequency, uint32_t HSEBypa
   * @{
   */
 /**
-  * @brief  Update number of Flash wait states in line with new frequency and current
-            voltage range.
-  * @param  Frequency  HCLK frequency
-  * @retval An ErrorStatus enumeration value:
-  *          - SUCCESS: Latency has been modified
-  *          - ERROR: Latency cannot be modified
-  */
-static ErrorStatus UTILS_SetFlashLatency(uint32_t Frequency)
-{
-  ErrorStatus status = SUCCESS;
-
-  uint32_t latency = LL_FLASH_LATENCY_0;  /* default value 0WS */
-
-  /* Frequency cannot be equal to 0 */
-  if (Frequency == 0U)
-  {
-    status = ERROR;
-  }
-  else
-  {
-    if (LL_PWR_GetRegulVoltageScaling() == LL_PWR_REGU_VOLTAGE_SCALE1)
-    {
-      if (Frequency > UTILS_SCALE1_LATENCY1_FREQ)
-      {
-        /* 16 < HCLK <= 32 => 1WS (2 CPU cycles) */
-        latency = LL_FLASH_LATENCY_1;
-      }
-      /* else HCLK < 16MHz default LL_FLASH_LATENCY_0 0WS */
-     }
-    else if (LL_PWR_GetRegulVoltageScaling() == LL_PWR_REGU_VOLTAGE_SCALE2)
-    {
-      if (Frequency > UTILS_SCALE2_LATENCY1_FREQ)
-      {
-        /* 8 < HCLK <= 16 => 1WS (2 CPU cycles) */
-        latency = LL_FLASH_LATENCY_1;
-      }
-      /* else HCLK < 8MHz default LL_FLASH_LATENCY_0 0WS */
-    }
-    else
-    {
-      if (Frequency > UTILS_SCALE3_LATENCY1_FREQ)
-      {
-        /* 2 < HCLK <= 4 => 1WS (2 CPU cycles) */
-        latency = LL_FLASH_LATENCY_1;
-      }
-      /* else HCLK < 4MHz default LL_FLASH_LATENCY_0 0WS */
-    }
-
-    LL_FLASH_SetLatency(latency);
-
-    /* Check that the new number of wait states is taken into account to access the Flash
-       memory by reading the FLASH_ACR register */
-    if (LL_FLASH_GetLatency() != latency)
-    {
-      status = ERROR;
-    }
-  }
-  return status;
-}
-
-/**
   * @brief  Function to check that PLL can be modified
   * @param  PLL_InputFrequency  PLL input frequency (in Hz)
   * @param  UTILS_PLLInitStruct pointer to a @ref LL_UTILS_PLLInitTypeDef structure that contains
@@ -466,12 +477,12 @@ static uint32_t UTILS_GetPLLOutputFrequency(uint32_t PLL_InputFrequency, LL_UTIL
      96 MHz as PLLVCO when the product is in range 1,
      48 MHz as PLLVCO when the product is in range 2,
      24 MHz when the product is in range 3. */
-  pllfreq = PLL_InputFrequency * (PLLMulTable[UTILS_PLLInitStruct->PLLMul >> RCC_POSITION_PLLMUL]);
+  pllfreq = PLL_InputFrequency * (PLLMulTable[UTILS_PLLInitStruct->PLLMul >> RCC_CFGR_PLLMUL_Pos]);
   assert_param(IS_LL_UTILS_PLLVCO_OUTPUT(pllfreq));
 
   /* The application software must set correctly the PLL multiplication factor to avoid exceeding 
      maximum frequency 32000000 in range 1 */
-  pllfreq = pllfreq / ((UTILS_PLLInitStruct->PLLDiv >> RCC_POSITION_PLLDIV)+1U);
+  pllfreq = pllfreq / ((UTILS_PLLInitStruct->PLLDiv >> RCC_CFGR_PLLDIV_Pos)+1U);
   assert_param(IS_LL_UTILS_PLL_FREQUENCY(pllfreq));
 
   return pllfreq;
@@ -523,7 +534,7 @@ static ErrorStatus UTILS_EnablePLLAndSwitchSystem(uint32_t SYSCLK_Frequency, LL_
   if (SystemCoreClock < hclk_frequency)
   {
     /* Set FLASH latency to highest latency */
-    status = UTILS_SetFlashLatency(hclk_frequency);
+    status = LL_SetFlashLatency(hclk_frequency);
   }
 
   /* Update system clock configuration */
@@ -553,7 +564,7 @@ static ErrorStatus UTILS_EnablePLLAndSwitchSystem(uint32_t SYSCLK_Frequency, LL_
   if (SystemCoreClock > hclk_frequency)
   {
     /* Set FLASH latency to lowest latency */
-    status = UTILS_SetFlashLatency(hclk_frequency);
+    status = LL_SetFlashLatency(hclk_frequency);
   }
 
   /* Update SystemCoreClock variable */

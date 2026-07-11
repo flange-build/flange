@@ -45,7 +45,7 @@
 /* #define POSIX       */
 /* #define WIN32       */
 /* #define POSIX1      */
-#define RISCOS
+/* #define RISCOS      */
 /***********************/
 
 /*********************************/
@@ -480,6 +480,19 @@ double dtime(void)
 
     time_now = clock();
     q = (double)time_now / (double)HZ;
+    return (q);
+}
+#endif
+
+#ifdef __RT_THREAD__
+#include <rtthread.h>
+
+
+double dtime(void)
+{
+    register double q;
+
+    q = (double)rt_tick_get() / (double)RT_TICK_PER_SECOND;
     return (q);
 }
 #endif

@@ -110,7 +110,7 @@ void es8388_test(int argc, char * *argv)
 
     /* config stream */
     rt_memset(&aparams, 0x0, sizeof(aparams));
-    aparams.channels = AUDIO_CHANNELS_2;
+    aparams.channels = 2;
     aparams.sampleRate = AUDIO_SAMPLERATE_16000;
     aparams.sampleBits = AUDIO_SAMPLEBITS_16;
 

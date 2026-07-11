@@ -42,6 +42,18 @@
 #include "panel_cfg/am014rt90327v0_panel_cfg.h"
 #elif defined(RT_USING_PANEL_H245QBN02)
 #include "panel_cfg/h245qbn02_panel_cfg.h"
+#elif defined(RT_USING_PANEL_FX070_DHM11BOE)
+#include "panel_cfg/fx070_dhm11boe_panel_cfg.h"
+#elif defined(RT_USING_PANEL_K350C4516T)
+#include "panel_cfg/k350c4516t_panel_cfg.h"
+#elif defined(RT_USING_PANEL_Q7050ITH2641AA1T)
+#include "panel_cfg/q7050ith2641aa1t_panel_cfg.h"
+#elif defined(RT_USING_PANEL_CLAA070WP03XG)
+#include "panel_cfg/claa070wp03xg_panel_cfg.h"
+#elif defined(RT_USING_PANEL_ILI9881D)
+#include "panel_cfg/ili9881d_panel_cfg.h"
+#elif defined(RT_USING_PANEL_QV068Y0Q)
+#include "panel_cfg/qv068y0q_n10_panel_cfg.h"
 #endif
 
 #if defined(RT_USING_PANEL_KGM281G44PVAA)

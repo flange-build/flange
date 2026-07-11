@@ -34,14 +34,7 @@ const struct codec_desc codec_es8311 =
 #endif
 
 #ifdef RT_USING_AUDIO
-#ifdef RT_USING_MULTI_DAIS
-const struct audio_mdais_desc rk_mdais =
-{
-    .dais = { PDM0, I2STDM1 },
-    .capture_mapping = { 4, 2 },
-    .playback_mapping = { 0, 2 },
-};
-#endif
+extern const struct audio_mdais_desc rk_mdais;
 const struct audio_card_desc rk_board_audio_cards[] =
 {
 #ifdef RT_USING_AUDIO_CARD_ADC_ES8311_ECHO
@@ -52,19 +45,6 @@ const struct audio_card_desc rk_board_audio_cards[] =
         .capture = true,
         .playback = false,
         .multi_dais = true,
-        .rxMap = 0x3012,
-        .format = AUDIO_FMT_PDM,
-        .trcm_mode = TRCM_TXONLY,
-    },
-#endif
-#ifdef RT_USING_AUDIO_CARD_PDM_ES8311_ECHO
-    {
-        .name = "echo",
-        .dai = (void *) &rk_mdais,
-        .capture = true,
-        .playback = false,
-        .multi_dais = true,
-        .rxMap = 0x3012,
         .format = AUDIO_FMT_PDM,
         .trcm_mode = TRCM_TXONLY,
     },
@@ -138,8 +118,6 @@ const struct audio_card_desc rk_board_audio_cards[] =
         .playback = true,
         .mclkfs = 256,
         .format = AUDIO_FMT_I2S,
-        .rxMap = 0x3012,
-        .trcm_mode = TRCM_TXONLY,
     },
 #endif
     { /* sentinel */ }

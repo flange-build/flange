@@ -1,9 +1,9 @@
 /*
  * File      : hid.c
- * COPYRIGHT (C) 2008 - 2018, RT-Thread Development Team
+ * COPYRIGHT (C) 2006 - 2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * Change Logs:
  * Date           Author       Notes
  * 2017-03-13     Urey         the first version
@@ -11,18 +11,13 @@
  */
 
 #include <rthw.h>
-#include <rtthread.h>
-#include <rtservice.h>
 #include <rtdevice.h>
-
 #include "drivers/usb_common.h"
 #include "drivers/usb_device.h"
-
 #include "hid.h"
-#include "dma.h"
 
 #ifdef RT_USB_DEVICE_HID
-
+#define HID_INTF_STR_INDEX 7
 struct hid_s
 {
     struct rt_device parent;
@@ -30,13 +25,13 @@ struct hid_s
     uep_t ep_in;
     uep_t ep_out;
     int status;
-    ALIGN(4) rt_uint8_t protocol;
-    ALIGN(4) rt_uint8_t report_buf[MAX_REPORT_SIZE];
-    ALIGN(4) rt_uint8_t idle;
+    USB_DMA_ALIGN rt_uint8_t protocol;
+    USB_DMA_ALIGN rt_uint8_t report_buf[MAX_REPORT_SIZE];
+    USB_DMA_ALIGN rt_uint8_t idle;
     struct rt_messagequeue hid_mq;
 };
 
-ALIGN(4) static struct uhid_descriptor hid_desc_buf;
+USB_DMA_ALIGN static struct uhid_descriptor hid_desc_buf;
 
 /* CustomHID_ConfigDescriptor */
 ALIGN(4)
@@ -296,7 +291,7 @@ const static struct uhid_comm_descriptor _hid_comm_desc =
 #else
         USB_HID_SUBCLASS_NOBOOT,    /* bInterfaceSubClass : 1=BOOT, 0=no boot */
 #endif
-#if !defined(RT_USB_DEVICE_HID_KEYBOARD)||!defined(RT_USB_DEVICE_HID_MOUSE)||!defined(RT_USB_DEVICE_HID_MEDIA)
+#if !defined(RT_USB_DEVICE_HID_KEYBOARD) && !defined(RT_USB_DEVICE_HID_MOUSE) && !defined(RT_USB_DEVICE_HID_MEDIA)
         USB_HID_PROTOCOL_NONE,      /* nInterfaceProtocol : 0=none, 1=keyboard, 2=mouse */
 #elif !defined(RT_USB_DEVICE_HID_MOUSE)
         USB_HID_PROTOCOL_KEYBOARD,  /* nInterfaceProtocol : 0=none, 1=keyboard, 2=mouse */
@@ -326,7 +321,11 @@ const static struct uhid_comm_descriptor _hid_comm_desc =
 #else
         USB_HID_PROTOCOL_MOUSE,     /* nInterfaceProtocol : 0=none, 1=keyboard, 2=mouse */
 #endif
-        0,                          /* iInterface: Index of string descriptor */
+#ifdef RT_USB_DEVICE_COMPOSITE
+        HID_INTF_STR_INDEX,         /* iInterface: Index of string descriptor */
+#else
+        0,
+#endif
     },
 
     /* HID Descriptor */
@@ -376,7 +375,7 @@ const static char* _ustring[] =
     "Interface",
 };
 
-static void dump_data(uint8_t *data, rt_size_t size)
+static void dump_data(rt_uint8_t *data, rt_size_t size)
 {
     rt_size_t i;
     for (i = 0; i < size; i++)
@@ -534,7 +533,7 @@ static rt_err_t _function_enable(ufunction_t func)
 //
     if(data->ep_out->buffer == RT_NULL)
     {
-        data->ep_out->buffer        = rt_dma_malloc(HID_RX_BUFSIZE);
+        data->ep_out->buffer = rt_malloc_align(RT_ALIGN(HID_RX_BUFSIZE, USB_DMA_ALIGN_SIZE), USB_DMA_ALIGN_SIZE);
     }
     data->ep_out->request.buffer    = data->ep_out->buffer;
     data->ep_out->request.size      = EP_MAXPACKET(data->ep_out);
@@ -564,7 +563,7 @@ static rt_err_t _function_disable(ufunction_t func)
 
     if(data->ep_out->buffer != RT_NULL)
     {
-        rt_dma_free(data->ep_out->buffer);
+        rt_free_align(data->ep_out->buffer);
         data->ep_out->buffer = RT_NULL;
     }
 
@@ -600,7 +599,7 @@ static rt_err_t _hid_descriptor_config(uhid_comm_desc_t hid, rt_uint8_t cintf_nr
 static rt_size_t _hid_write(rt_device_t dev, rt_off_t pos, const void *buffer, rt_size_t size)
 {
     struct hid_s *hiddev = (struct hid_s *)dev;
-    ALIGN(4) struct hid_report report;
+    USB_DMA_ALIGN struct hid_report report;
     if (hiddev->func->device->state == USB_STATE_CONFIGURED)
     {
         report.report_id = pos;
@@ -628,12 +627,12 @@ static void hid_thread_entry(void* parameter)
     struct hid_report report;
     struct hid_s *hiddev;
     hiddev = (struct hid_s *)parameter;
-	while(1)
-	{
-		if(rt_mq_recv(&hiddev->hid_mq, &report, sizeof(report),RT_WAITING_FOREVER) != RT_EOK )
+    while(1)
+    {
+        if(rt_mq_recv(&hiddev->hid_mq, &report, sizeof(report),RT_WAITING_FOREVER) != RT_EOK )
             continue;
-		HID_Report_Received(&report);
-	}
+        HID_Report_Received(&report);
+    }
 }
 
 #ifdef RT_USING_DEVICE_OPS
@@ -666,7 +665,7 @@ static void rt_usb_hid_init(struct ufunction *func)
     rt_device_register(&hiddev->parent, "hidd", RT_DEVICE_FLAG_RDWR);
     rt_mq_init(&hiddev->hid_mq, "hiddmq", hid_mq_pool, sizeof(struct hid_report),
                             sizeof(hid_mq_pool), RT_IPC_FLAG_FIFO);
-                            
+
     rt_thread_init(&hid_thread, "hidd", hid_thread_entry, hiddev,
             hid_thread_stack, sizeof(hid_thread_stack), RT_USBD_THREAD_PRIO, 20);
     rt_thread_startup(&hid_thread);
@@ -693,8 +692,11 @@ ufunction_t rt_usbd_function_hid_create(udevice_t device)
     RT_ASSERT(device != RT_NULL);
 
     /* set usb device string description */
+#ifdef RT_USB_DEVICE_COMPOSITE
+    rt_usbd_device_set_interface_string(device, HID_INTF_STR_INDEX, _ustring[2]);
+#else
     rt_usbd_device_set_string(device, _ustring);
-
+#endif
     /* create a cdc function */
     func = rt_usbd_function_new(device, &_dev_desc, &ops);
 
@@ -738,7 +740,7 @@ ufunction_t rt_usbd_function_hid_create(udevice_t device)
     rt_usb_hid_init(func);
     return func;
 }
-struct udclass hid_class = 
+struct udclass hid_class =
 {
     .rt_usbd_function_create = rt_usbd_function_hid_create
 };

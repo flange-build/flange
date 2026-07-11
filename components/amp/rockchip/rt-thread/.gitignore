@@ -11,8 +11,6 @@
 *.ilk
 *.old
 build
-Debug
-documentation/html
 *~
 *.o
 *.obj
@@ -25,21 +23,7 @@ documentation/html
 *.patch
 *.swo
 *.swp
-tools/kconfig-frontends/kconfig-mconf
-packages
-cconfig.h
-GPUCache
-bsp/rockchip/common/hal
-bsp/rockchip/*/documents/html
-bsp/rockchip/*/documents/latex
-bsp/rockchip/*/auto_version.h
-bsp/rockchip/*/Image/Firmware.*
-bsp/rockchip/*/Image/rtthread.img
-bsp/rockchip/tools/log
-components/hifi3
 third_party/audio/audio_server/source
-applications/wearable
-
 # Ignore OS X Desktop Services Store files
 .DS_Store
 ._.DS_Store
@@ -54,14 +38,3 @@ tags
 # Ignore repo
 .repo
 
-# Ignore pisces
-bsp/rockchip/pisces
-
-# Ignore swallow
-bsp/rockchip/swallow
-
-# Ignore apps
-applications/rtthread-apps
-
-# Ignore documents
-Rockchip-docs*

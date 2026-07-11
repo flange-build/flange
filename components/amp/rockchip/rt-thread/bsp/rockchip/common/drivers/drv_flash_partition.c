@@ -18,21 +18,27 @@
 #include <rtthread.h>
 #include <rtdevice.h>
 #include <drivers/mtd_nor.h>
+#ifdef RT_USING_DFS
+#include <dfs_fs.h>
+#endif
 
 #include "drv_flash_partition.h"
 
-#ifdef RT_USING_SNOR
+#if defined(RT_USING_SNOR) || defined(RT_USING_SPINAND)
+#include "hal_base.h"
 
-//#define PART_DEBUG
+//define PART_DEBUG
 #ifdef PART_DEBUG
 #define PART_DBG(...)     rt_kprintf(__VA_ARGS__)
 #else
 #define PART_DBG(...)
 #endif
 
-static struct rt_flash_partition *nor_parts;
-static int32_t part_num = 0;
+static struct rt_flash_partition *flash_parts;
+static int32_t part_num;
+static uint32_t fw_ver;
 
+#ifdef RT_USING_SNOR
 static rt_err_t part_blk_init(rt_device_t dev)
 {
     return RT_EOK;
@@ -170,7 +176,7 @@ const static struct rt_device_ops part_blk_ops =
 #endif
 
 /* Register a partition as block partition */
-rt_err_t blk_init_partition(struct rt_mtd_nor_device *dev, struct rt_flash_partition *blk_part)
+static rt_err_t blk_init_partition(struct rt_mtd_nor_device *dev, struct rt_flash_partition *blk_part)
 {
     if (dev == RT_NULL)
         return -RT_EIO;
@@ -206,7 +212,7 @@ static rt_base_t part_mtd_nor_read_id(struct rt_mtd_nor_device *dev)
     return rt_mtd_nor_read_id(mtd_nor);
 }
 
-static rt_size_t part_mtd_nor_read(struct rt_mtd_nor_device *dev, rt_off_t offset, rt_uint8_t *buffer, rt_size_t length)
+static rt_size_t part_mtd_nor_read(struct rt_mtd_nor_device *dev, rt_off_t offset, rt_uint8_t *buffer, rt_uint32_t length)
 {
     struct rt_flash_partition *mtd_part = DEV_2_PART(dev);
     struct rt_mtd_nor_device *mtd_nor = (struct rt_mtd_nor_device *)mtd_part->user_data;
@@ -232,7 +238,7 @@ static rt_size_t part_mtd_nor_read(struct rt_mtd_nor_device *dev, rt_off_t offse
     return rt_mtd_nor_read(mtd_nor, (mtd_part->offset + offset), buffer, length);
 }
 
-static rt_size_t part_mtd_nor_write(struct rt_mtd_nor_device *dev, rt_off_t offset, const rt_uint8_t *buffer, rt_size_t length)
+static rt_size_t part_mtd_nor_write(struct rt_mtd_nor_device *dev, rt_off_t offset, const rt_uint8_t *buffer, rt_uint32_t length)
 {
     struct rt_flash_partition *mtd_part = DEV_2_PART(dev);
     struct rt_mtd_nor_device *mtd_nor = (struct rt_mtd_nor_device *)mtd_part->user_data;
@@ -286,7 +292,7 @@ const static struct rt_mtd_nor_driver_ops mtd_part_mtd_ops =
 };
 
 /* Register a partition as mtd nor partition */
-rt_err_t mtd_nor_init_partition(struct rt_mtd_nor_device *dev, struct rt_flash_partition *mtd_part)
+static rt_err_t mtd_nor_init_partition(struct rt_mtd_nor_device *dev, struct rt_flash_partition *mtd_part)
 {
     if (dev == RT_NULL)
         return -RT_EIO;
@@ -302,17 +308,144 @@ rt_err_t mtd_nor_init_partition(struct rt_mtd_nor_device *dev, struct rt_flash_p
     mtd_part->user_data             = dev;   /* snor mtd dev for operation */
     return rt_mtd_nor_register_device(mtd_part->name, &mtd_part->mtd_nor);
 }
+#endif /* RT_USING_SNOR */
 
 /* Parse RK_PARTITION for rk flash partition and register it */
-uint32_t rk_partition_init(struct rt_mtd_nor_device *mtd)
+uint32_t rk_partition_init(struct rk_partition_info *part_temp, uint32_t flash_size)
+{
+#ifdef RT_USING_DFS
+    struct dfs_partition part;
+    int ret;
+#endif
+    int32_t i;
+
+    if (flash_parts)
+    {
+        rt_kprintf("flash_parts(%p) is available already\n", flash_parts);
+        return RT_EOK;
+    }
+
+    /* Parse RK_PARTITION for rk partition */
+    if (part_temp->hdr.ui_fw_tag == RK_PARTITION_TAG)
+    {
+        fw_ver = part_temp->hdr.ui_fw_ver;
+        part_num = part_temp->hdr.ui_part_entry_count;
+        flash_parts = rt_malloc(sizeof(struct rt_flash_partition) * part_num);
+        rt_memset(flash_parts, 0, sizeof(struct rt_flash_partition) * part_num);
+
+        RT_ASSERT(flash_parts);
+        for (i = 0; i < part_num; i++)
+        {
+            rt_strncpy(flash_parts[i].name, (const char *)part_temp->part[i].sz_name,
+                       RK_PARTITION_NAME_SIZE);
+            PART_DBG("rk_partition flags=%08x type= %08x off=%08x size=%08x %s\n",
+                     part_temp->part[i].ui_part_property,
+                     part_temp->part[i].em_part_type,
+                     part_temp->part[i].ui_pt_off,
+                     part_temp->part[i].ui_pt_sz,
+                     &flash_parts[i].name[0]);
+            flash_parts[i].offset = (uint32_t)part_temp->part[i].ui_pt_off << 9;
+            if (part_temp->part[i].ui_pt_sz == 0xFFFFFFFF || (part_temp->part[i].ui_part_property & RK_PARTITION_NO_PARTITION_SIZE))
+            {
+                flash_parts[i].size = flash_size - flash_parts[i].offset;
+                PART_DBG(">>>>>>>>>>>[%d] size change=%08x\n", i, flash_parts[i].size);
+            }
+            else
+                flash_parts[i].size = (uint32_t)part_temp->part[i].ui_pt_sz << 9;
+            flash_parts[i].type = (uint32_t)part_temp->part[i].em_part_type;
+            flash_parts[i].mask_flags = (part_temp->part[i].ui_part_property &
+                                         RK_PARTITION_PROPERTY_MASK) >>
+                                        RK_PARTITION_PROPERTY_SHIFT;
+            if (part_temp->part[i].ui_part_property & RK_PARTITION_REGISTER_TYPE_MTD)
+                flash_parts[i].mask_flags |= PART_FLAG_MTD;
+            else
+                flash_parts[i].mask_flags |= PART_FLAG_BLK;
+        }
+#ifdef RT_USING_DFS
+    }
+    else if (dfs_filesystem_get_partition(&part, (uint8_t *)(part_temp), RK_PARTITION_SEC, 0) == 0)
+    {
+        for (i = 0; i < RK_PARTITION_MAX_PARTITION; i++)
+        {
+            ret = dfs_filesystem_get_partition(&part, (uint8_t *)(part_temp), RK_PARTITION_SEC, i);
+            if (ret != RT_EOK)
+            {
+                break;
+            }
+        }
+        part_num = i;
+        flash_parts = rt_malloc(sizeof(struct rt_flash_partition) * part_num);
+        rt_memset(flash_parts, 0, sizeof(struct rt_flash_partition) * part_num);
+        RT_ASSERT(flash_parts);
+        for (i = 0; i < part_num; i++)
+        {
+            dfs_filesystem_get_partition(&part, (uint8_t *)(part_temp), 8, i);
+            rt_strncpy(flash_parts[i].name, part.name, RK_PARTITION_NAME_SIZE);
+            flash_parts[i].offset = part.offset << 9;
+            if (part.size == 0xFFFFFFFF)
+            {
+                flash_parts[i].size = flash_size - (part.offset << 9);
+            }
+            else if ((part.offset + part.size + 64) >= (flash_size >> 9))     /* reserved 64KB for gpt backup */
+            {
+                flash_parts[i].size = (flash_size - 0x10000) - (part.offset << 9);
+                rt_kprintf("part: name=%s off=%08x size=%08x type=%08x flags=%08x\n",
+                           flash_parts[i].name,
+                           flash_parts[i].offset,
+                           flash_parts[i].size,
+                           flash_parts[i].type,
+                           flash_parts[i].mask_flags);
+            }
+            else
+            {
+                flash_parts[i].size = part.size << 9;
+            }
+            flash_parts[i].type = PART_USER1;
+            if (!rt_strncmp(flash_parts[i].name, "mtd_", 4))
+            {
+                flash_parts[i].mask_flags = PART_FLAG_MTD | PART_FLAG_RDWR;
+            }
+            else
+            {
+                flash_parts[i].mask_flags = PART_FLAG_BLK | PART_FLAG_RDWR;
+            }
+            PART_DBG("part: name=%s off=%08x size=%08x type=%08x flags=%08x\n",
+                     flash_parts[i].name,
+                     flash_parts[i].offset,
+                     flash_parts[i].size,
+                     flash_parts[i].type,
+                     flash_parts[i].mask_flags);
+        }
+#endif
+    }
+    else
+    {
+#if defined(RT_ROOT_PART_OFFSET) && defined(RT_ROOT_PART_SIZE)
+        flash_parts = rt_malloc(sizeof(struct rt_flash_partition));
+        part_num = 1;
+        rt_strncpy(flash_parts->name, "root", 5);
+        flash_parts->offset = RT_ROOT_PART_OFFSET * 512;
+        flash_parts->size = RT_ROOT_PART_SIZE * 512;
+        flash_parts->mask_flags = PART_FLAG_BLK | PART_FLAG_RDWR;
+        flash_parts->type = 0x8;
+        rt_kprintf("%s register root in config\n", __func__);
+#endif
+    }
+
+    return RT_EOK;
+}
+
+#ifdef RT_USING_SNOR
+/* Parse RK_PARTITION for rk flash partition and register it */
+uint32_t mtd_nor_rk_partition_init(struct rt_mtd_nor_device *mtd)
 {
     uint32_t ret;
     struct rk_partition_info *part_temp;
     int32_t i;
 
-    if (nor_parts)
+    if (flash_parts)
     {
-        rt_kprintf("nor_parts(%p) is available already\n", nor_parts);
+        rt_kprintf("flash_parts(%p) is available already\n", flash_parts);
         return RT_EOK;
     }
 
@@ -321,54 +454,7 @@ uint32_t rk_partition_init(struct rt_mtd_nor_device *mtd)
     RT_ASSERT(part_temp);
     if (rt_mtd_nor_read(mtd, 0, (rt_uint8_t *)part_temp, RK_PARTITION_SIZE) == RK_PARTITION_SIZE)
     {
-        if (part_temp->hdr.ui_fw_tag == RK_PARTITION_TAG)
-        {
-            part_num = part_temp->hdr.ui_part_entry_count;
-            nor_parts = rt_malloc(sizeof(struct rt_flash_partition) * part_num);
-            rt_memset(nor_parts, 0, sizeof(struct rt_flash_partition) * part_num);
-
-            RT_ASSERT(nor_parts);
-            for (i = 0; i < part_num; i++)
-            {
-                rt_strncpy(nor_parts[i].name, (const char *)part_temp->part[i].sz_name,
-                           RK_PARTITION_NAME_SIZE);
-                PART_DBG("rk_partition flags=%08x type= %08x off=%08x size=%08x %s\n",
-                         part_temp->part[i].ui_part_property,
-                         part_temp->part[i].em_part_type,
-                         part_temp->part[i].ui_pt_off,
-                         part_temp->part[i].ui_pt_sz,
-                         &nor_parts[i].name[0]);
-                nor_parts[i].offset = (uint32_t)part_temp->part[i].ui_pt_off << 9;
-                if (part_temp->part[i].ui_pt_sz == 0xFFFFFFFF || (part_temp->part[i].ui_part_property & RK_PARTITION_NO_PARTITION_SIZE))
-                {
-                    PART_DBG(">>>>>>>>>>>[%d] size change\n", i);
-                    nor_parts[i].size = mtd->block_end * mtd->block_size - nor_parts[i].offset;
-                }
-                else
-                    nor_parts[i].size = (uint32_t)part_temp->part[i].ui_pt_sz << 9;
-                nor_parts[i].type = (uint32_t)part_temp->part[i].em_part_type;
-                nor_parts[i].mask_flags = (part_temp->part[i].ui_part_property &
-                                           RK_PARTITION_PROPERTY_MASK) >>
-                                          RK_PARTITION_PROPERTY_SHIFT;
-                if (part_temp->part[i].ui_part_property & RK_PARTITION_REGISTER_TYPE_MTD)
-                    nor_parts[i].mask_flags |= PART_FLAG_MTD;
-                else
-                    nor_parts[i].mask_flags |= PART_FLAG_BLK;
-            }
-        }
-        else
-        {
-#if defined(RT_ROOT_PART_OFFSET) && defined(RT_ROOT_PART_SIZE)
-            nor_parts = rt_malloc(sizeof(struct rt_flash_partition));
-            part_num = 1;
-            rt_strncpy(nor_parts->name, "root", 5);
-            nor_parts->offset = RT_ROOT_PART_OFFSET * 512;
-            nor_parts->size = RT_ROOT_PART_SIZE * 512;
-            nor_parts->mask_flags = PART_FLAG_BLK | PART_FLAG_RDWR;
-            nor_parts->type = 0x8;
-            rt_kprintf("%s register root in config\n", __func__);
-#endif
-        }
+        rk_partition_init(part_temp, mtd->block_end * mtd->block_size);
     }
     rt_free(part_temp);
 
@@ -376,17 +462,17 @@ uint32_t rk_partition_init(struct rt_mtd_nor_device *mtd)
     for (i = 0; i < part_num; i++)
     {
         PART_DBG("rt_flash_partition flags=%08x type= %08x off=%08x size=%08x %s\n",
-                 nor_parts[i].mask_flags,
-                 nor_parts[i].type,
-                 nor_parts[i].offset,
-                 nor_parts[i].size,
-                 nor_parts[i].name);
-        if (nor_parts[i].mask_flags & PART_FLAG_RDWR)
+                 flash_parts[i].mask_flags,
+                 flash_parts[i].type,
+                 flash_parts[i].offset,
+                 flash_parts[i].size,
+                 flash_parts[i].name);
+        if (flash_parts[i].mask_flags & PART_FLAG_RDWR)
         {
-            if (nor_parts[i].mask_flags & PART_FLAG_MTD)
-                ret = mtd_nor_init_partition(mtd, &nor_parts[i]);
+            if (flash_parts[i].mask_flags & PART_FLAG_MTD)
+                ret = mtd_nor_init_partition(mtd, &flash_parts[i]);
             else
-                ret = blk_init_partition(mtd, &nor_parts[i]);
+                ret = blk_init_partition(mtd, &flash_parts[i]);
             if (ret)
                 return ret;
         }
@@ -394,18 +480,84 @@ uint32_t rk_partition_init(struct rt_mtd_nor_device *mtd)
 
     return RT_EOK;
 }
+#endif /* RT_USING_SNOR */
+
+#ifdef RT_USING_SPINAND
+/* Parse RK_PARTITION for rk flash partition */
+uint32_t mtd_nand_rk_partition_init(struct rt_mtd_nand_device *mtd)
+{
+    struct rk_partition_info *part_temp;
+    uint32_t part_size = RK_PARTITION_SIZE;
+    uint32_t i, page_count;
+    rt_err_t ret = 0;
+
+    if (flash_parts)
+    {
+        rt_kprintf("flash_parts(%p) is available already\n", flash_parts);
+        return RT_EOK;
+    }
+
+    /* Parse RK_PARTITION for rk flash partition */
+    part_temp = rt_malloc(part_size);
+    RT_ASSERT(part_temp);
+    page_count = (RK_PARTITION_SIZE + mtd->page_size - 1) / mtd->page_size;
+    for (i = 0; i < page_count; i++)
+    {
+        ret = rt_mtd_nand_read(mtd, i, (rt_uint8_t *)part_temp + mtd->page_size * i, mtd->page_size, RT_NULL, 0);
+        if (ret)
+        {
+            rt_kprintf("%s read page failed, ret=%d\n", __func__, ret);
+            break;
+        }
+    }
+    if (ret == RT_EOK)
+    {
+        rk_partition_init(part_temp, mtd->block_total * mtd->pages_per_block * mtd->page_size);
+    }
+    rt_free(part_temp);
+
+    return RT_EOK;
+}
+#endif
 
 /* Get RK_PARTITION */
-RT_UNUSED int32_t get_rk_partition(struct rt_flash_partition **part)
+int32_t get_rk_partition(struct rt_flash_partition **part)
 {
-    *part = nor_parts;
+    *part = flash_parts;
 
     return part_num;
 }
 
+uint32_t get_rk_partition_fw_ver(void)
+{
+    return fw_ver;
+}
+
+#ifdef RT_USING_SNOR
+static void update_flash_parts_name(int em_part_type, char *part_name)
+{
+#ifdef RT_USING_XIP
+    struct rt_flash_partition *part;
+    int i;
+
+    for (i = 0; i < part_num; i++)
+    {
+        part = &flash_parts[i];
+
+        if (part->type == em_part_type)
+        {
+            rt_strncpy((char *)part->name, (const char *)part_name, RK_PARTITION_NAME_SIZE);
+        }
+    }
+
+#endif
+}
+#endif
+
 int change_part_name(int em_part_type, char *new_name)
 {
     int ret = -RT_ERROR;
+#ifdef RT_USING_SNOR
     int size = 0;
     rt_uint8_t *partition = RT_NULL;
     STRUCT_PART_ITEM *entry = RT_NULL;
@@ -446,6 +598,7 @@ int change_part_name(int em_part_type, char *new_name)
                         rt_memset(entry->sz_name, 0, sizeof(entry->sz_name));
                         rt_strncpy((char *)entry->sz_name, (const char *)new_name, RK_PARTITION_NAME_SIZE);
                         PART_DBG("new part name : %s\n", entry->sz_name);
+                        update_flash_parts_name(part_info->part[i].em_part_type, new_name);
 
                         /* write back to flash*/
                         rt_mtd_nor_erase_block(snor_device, 0, snor_device->block_size);
@@ -465,8 +618,62 @@ int change_part_name(int em_part_type, char *new_name)
 
     if (partition)
         rt_free_align(partition);
+#endif /* RT_USING_SNOR */
+
     return ret;
 }
 
+ssize_t read_rk_partition(char *part_name, void *buf, size_t count, off_t offset)
+{
+#ifdef RT_USING_XIP
+    struct rt_flash_partition *part;
+    int i;
+    unsigned long addr;
+    size_t len = -1;
+
+    for (i = 0; i < part_num; i++)
+    {
+        part = &flash_parts[i];
+
+        if (strncmp(part_name, part->name, RK_PARTITION_NAME_SIZE) == 0)
+        {
+            if (offset < part->size)
+            {
+                addr = XIP_MAP0_BASE0 + part->offset + offset;
+                len = (offset + count) > part->size ? (part->size - offset) : count;
+                //rt_kprintf("found addr: 0x%x, read len=%d\n", addr, len);
+                memcpy(buf, (const void *)addr, len);
+            }
+        }
+    }
+
+    return len;
+#else
+    return -1;
+#endif
+}
+
+void *get_addr_by_part_name(char *part_name)
+{
+#ifdef RT_USING_XIP
+    struct rt_flash_partition *part;
+    int i;
+    void  *addr = NULL;
+
+    for (i = 0; i < part_num; i++)
+    {
+        part = &flash_parts[i];
+
+        if (strncmp(part_name, part->name, RK_PARTITION_NAME_SIZE) == 0)
+        {
+            addr = (void *)(XIP_MAP0_BASE0 + part->offset);
+        }
+    }
+
+    return addr;
+#else
+    return NULL;
+#endif
+}
 
 #endif

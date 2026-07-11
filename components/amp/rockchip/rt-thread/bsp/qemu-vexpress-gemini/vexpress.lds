@@ -20,7 +20,7 @@ SECTIONS
         __vsymtab_start = .;
         KEEP(*(VSymTab))
         __vsymtab_end = .;
-        . = ALIGN(4);	
+        . = ALIGN(4);
 
         /* section information for modules */
         . = ALIGN(4);
@@ -44,8 +44,9 @@ SECTIONS
     .ctors :
     {
         PROVIDE(__ctors_start__ = .);
-        KEEP(*(SORT(.ctors.*)))
-        KEEP(*(.ctors))
+        /* new GCC version uses .init_array */
+        KEEP(*(SORT(.init_array.*)))
+        KEEP(*(.init_array))
         PROVIDE(__ctors_end__ = .);
     }
 
@@ -57,8 +58,8 @@ SECTIONS
         PROVIDE(__dtors_end__ = .);
     }
 
+    . = ALIGN(8);
     __data_start = .;
-    . = ALIGN(4);
     .data :
     {
         *(.data)
@@ -66,8 +67,8 @@ SECTIONS
     }
     __data_end = .;
 
-    . = ALIGN(4);
-    __bss_start = __data_end;
+    . = ALIGN(8);
+    __bss_start = .;
     .bss       :
     {
     *(.bss)

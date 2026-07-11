@@ -70,7 +70,11 @@
 #ifdef XIP_DEBUG
 void xip_dbg(uint8_t c)
 {
+#if RKMCU_RK2118
+    UART0->THR = c;
+#else
     UART1->THR = c;
+#endif
     HAL_DelayMs(30);
 }
 #else
@@ -78,7 +82,6 @@ void xip_dbg(uint8_t c)
 #endif
 
 #define SPIFLASH_MTD_DEV_NAME_MAX 8
-#define SPINOR_ID_MAX_LENGTH      5    /**< SPI Nor id data max length */
 
 #define MTD_TO_SPIFLASH(m) (struct spiflash_device *)(m)
 
@@ -105,15 +108,80 @@ static const struct rt_mtd_nor_driver_ops snor_mtd_ops;
 static HAL_Status fspi_xfer(struct SNOR_HOST *spi, struct HAL_SPI_MEM_OP *op)
 {
     struct rt_fspi_device *fspi_device = (struct rt_fspi_device *)spi->userdata;
+    struct spiflash_device *spiflash = &s_spiflash[0];
+    HAL_Status ret;
+
+    rt_fspi_set_mode(fspi_device, spi->mode);
 
     xip_dbg('T');
-    return rt_fspi_xfer(fspi_device, op);
+    if (op->data.poll)
+    {
+        /*
+            * The progress of polling status with XIP hand up:
+            *   1. Re-enable XIP
+            *   2. Enable HW Polling and XIP hand up
+            *   3. Re-enable irq
+            *   4. Nor operation waiting for polling status isr
+            *   5. At the same time, the system supports rotating scheduling
+            */
+        if (!spiflash->xip_resumed)
+        {
+            rt_fspi_xip_config(fspi_device, NULL, true);
+            spiflash->xip_resumed = true;
+        }
+        ret = rt_fspi_xfer_hw_polling(fspi_device, op);
+        if (ret)
+        {
+            return ret;
+        }
+#if !defined(CPU_RUN_IN_SRAM) && !defined(CPU_RUN_IN_DDR)
+        if (!spiflash->irq_resumed)
+        {
+            rt_hw_interrupt_enable(spiflash->level);
+            spiflash->irq_resumed = true;
+        }
+#endif
+
+        /*
+         * When there is a chance for interrupt related code to be fully stored
+         * in the SRAM space, it is possible to consider abandoning polling, but
+         * currently it is not possible
+         */
+        while (rt_fspi_is_poll_finished(fspi_device) != HAL_OK)
+            ;
+        ret = rt_fspi_irqhelper(fspi_device);
+        if (ret != RT_EOK)
+        {
+            rt_kprintf("%s timer out \n", __func__);
+            rt_fspi_irqhelper(fspi_device);
+        }
+    }
+    else
+    {
+#if !defined(CPU_RUN_IN_SRAM) && !defined(CPU_RUN_IN_DDR)
+        if (spiflash->irq_resumed)
+        {
+            spiflash->level = rt_hw_interrupt_disable();
+            spiflash->irq_resumed = false;
+        }
+#endif
+        if (spiflash->xip_resumed)
+        {
+            rt_fspi_xip_config(fspi_device, NULL, false);
+            spiflash->xip_resumed = false;
+        }
+        ret = rt_fspi_xfer(fspi_device, op);
+    }
+
+    return ret;
 }
 
 #ifdef HAL_FSPI_XIP_ENABLE
 static HAL_Status fspi_xip_config(struct SNOR_HOST *spi, struct HAL_SPI_MEM_OP *op, uint32_t on)
 {
     struct rt_fspi_device *fspi_device = (struct rt_fspi_device *)spi->userdata;
+
+    rt_fspi_set_mode(fspi_device, spi->mode);
 
     xip_dbg('X');
     return rt_fspi_xip_config(fspi_device, op, on);
@@ -122,14 +190,13 @@ static HAL_Status fspi_xip_config(struct SNOR_HOST *spi, struct HAL_SPI_MEM_OP *
 
 static int rockchip_sfc_delay_lines_tuning(struct SPI_NOR *nor, struct rt_fspi_device *fspi_device)
 {
-    uint8_t id_temp[SPINOR_ID_MAX_LENGTH];
+    uint8_t id_temp[SNOR_ID_LENGTH_MAX];
     uint16_t cell_max = (uint16_t)rt_fspi_get_max_dll_cells(fspi_device);
     uint16_t right, left = 0, final;
-    uint16_t step = HAL_FSPI_DLL_TRANING_STEP;
+    uint16_t step = HAL_SNOR_IsDtr(nor) ? 1 : HAL_FSPI_DLL_TRANING_STEP;
     bool dll_valid = false;
 
     xip_dbg('a');
-    HAL_SNOR_Init(nor);
     for (right = 0; right <= cell_max; right += step)
     {
         int ret;
@@ -147,15 +214,21 @@ static int rockchip_sfc_delay_lines_tuning(struct SPI_NOR *nor, struct rt_fspi_d
             break;
         }
 
-        xip_dbg('b');
         snor_dbg("dll read flash id:%x %x %x\n",
                  id_temp[0], id_temp[1], id_temp[2]);
 
         ret = HAL_SNOR_IsFlashSupported(id_temp);
+        if (ret)
+        {
+            xip_dbg('D');
+        }
+        else
+        {
+            xip_dbg('_');
+        }
         if (dll_valid && !ret)
         {
             right -= step;
-
             break;
         }
         if (!dll_valid && ret)
@@ -174,9 +247,18 @@ static int rockchip_sfc_delay_lines_tuning(struct SPI_NOR *nor, struct rt_fspi_d
     if (dll_valid && (right - left) >= HAL_FSPI_DLL_TRANING_VALID_WINDOW)
     {
         if (left == 0 && right < cell_max)
-            final = left + (right - left) * 2 / 5;
+        {
+            /*
+             * When the dll windows is incomplete, it's better to minus 5 dll
+             * cells to match with data tuning, and using 2/5 windows to match
+             * the middle of eye diagram.
+             */
+            final = (right - 5) * 2 / 5;
+        }
         else
-            final = left + (right - left) / 2;
+        {
+            final = (right + left) / 2;
+        }
     }
     else
     {
@@ -222,6 +304,9 @@ static uint32_t fspi_snor_adapt(struct SPI_NOR *nor)
         return ret;
     }
 
+#ifdef IS_FPGA
+    nor->spi->speed = 24000000;
+#else
     if (RT_SNOR_SPEED > 0 && RT_SNOR_SPEED <= SNOR_SPEED_MAX)
     {
         nor->spi->speed = RT_SNOR_SPEED;
@@ -230,12 +315,12 @@ static uint32_t fspi_snor_adapt(struct SPI_NOR *nor)
     {
         nor->spi->speed = SNOR_SPEED_DEFAULT;
     }
+#endif
     nor->spi->mode = HAL_SPI_MODE_3;
     nor->spi->xfer = fspi_xfer;
     nor->spi->userdata = (void *)fspi_device;
     xip_dbg('1');
     nor->spi->speed = rt_fspi_set_speed(fspi_device, nor->spi->speed);
-    rt_fspi_set_mode(fspi_device, nor->spi->mode);
     xip_dbg('2');
     rt_fspi_controller_init(fspi_device);
 
@@ -243,6 +328,7 @@ static uint32_t fspi_snor_adapt(struct SPI_NOR *nor)
     if (nor->spi->speed > RT_FSPI_SPEED_THRESHOLD)
     {
         xip_dbg('3');
+        HAL_SNOR_Init(nor);
         dll_result = rockchip_sfc_delay_lines_tuning(nor, fspi_device);
     }
     else
@@ -252,18 +338,22 @@ static uint32_t fspi_snor_adapt(struct SPI_NOR *nor)
     xip_dbg('4');
 
     /* Devices initialed with XIP */
-#ifndef RT_SNOR_DUAL_IO
-    nor->spi->mode |= (HAL_SPI_TX_QUAD | HAL_SPI_RX_QUAD);
-#else
+#ifdef RT_SNOR_DUAL_IO
     nor->spi->mode |= HAL_SPI_RX_DUAL;
+#else
+#if (((FSPI_VER >> 18) & 0x1) == 0x1U) /* Support X8_CAP */
+    nor->spi->mode |= (HAL_SPI_TX_QUAD | HAL_SPI_RX_QUAD | HAL_SPI_TX_OCTAL | HAL_SPI_RX_OCTAL | HAL_SPI_DTR | HAL_SPI_DQS | HAL_SPI_POLL);
+#else
+    nor->spi->mode |= (HAL_SPI_TX_QUAD | HAL_SPI_RX_QUAD);
 #endif
+#endif
+
 #ifdef HAL_FSPI_XIP_ENABLE
     nor->spi->mode |= HAL_SPI_XIP;
     nor->spi->xipConfig = fspi_xip_config;
     nor->spi->xipMem = rt_fspi_get_xip_mem_data_phys(fspi_device);
     nor->spi->xipMemCode = rt_fspi_get_xip_mem_code_phys(fspi_device);
 #endif
-    rt_fspi_set_mode(fspi_device, nor->spi->mode);
 
     /* Init spi nor abstract */
     ret = HAL_SNOR_Init(nor);
@@ -272,7 +362,20 @@ static uint32_t fspi_snor_adapt(struct SPI_NOR *nor)
         xip_dbg('5');
         HAL_SNOR_XIPEnable(nor);
     }
-    xip_dbg('6');
+
+    /*
+     * When quad dtr transmission occurs, the timing changes and there
+     * is no DQS to cover the sampling timing issue, requiring DLL.
+     */
+    if (HAL_SNOR_IsDtr(nor))
+    {
+        xip_dbg('6');
+        HAL_SNOR_XIPDisable(nor);
+        dll_result = rockchip_sfc_delay_lines_tuning(nor, fspi_device);
+        HAL_SNOR_XIPEnable(nor);
+    }
+
+    xip_dbg('7');
 
     if (dll_result)
     {
@@ -469,7 +572,7 @@ static int snor_init(uint8_t dev_id, char *name, enum spiflash_host type)
     mtd_dev->block_start  = 0;
     mtd_dev->block_end    = HAL_SNOR_GetCapacity(nor) / mtd_dev->block_size;
     rt_mtd_nor_register_device(name, mtd_dev);
-    rk_partition_init(mtd_dev);
+    mtd_nor_rk_partition_init(mtd_dev);
     spiflash->type = type;
 
 exit:
@@ -495,8 +598,12 @@ rt_err_t rk_snor_xip_suspend(void)
 
     if (spiflash->nor.spi->mode & HAL_SPI_XIP)
     {
+#if !defined(CPU_RUN_IN_SRAM) && !defined(CPU_RUN_IN_DDR)
         spiflash->level = rt_hw_interrupt_disable();
+        spiflash->irq_resumed = false;
+#endif
         HAL_SNOR_XIPDisable(&spiflash->nor);
+        spiflash->xip_resumed = false;
     }
 #endif
 
@@ -513,8 +620,18 @@ rt_err_t rk_snor_xip_resume(void)
 
     if (spiflash->nor.spi->mode & HAL_SPI_XIP)
     {
-        HAL_SNOR_XIPEnable(&spiflash->nor);
-        rt_hw_interrupt_enable(spiflash->level);
+        if (!spiflash->xip_resumed)
+        {
+            HAL_SNOR_XIPEnable(&spiflash->nor);
+            spiflash->xip_resumed = true;
+        }
+#if !defined(CPU_RUN_IN_SRAM) && !defined(CPU_RUN_IN_DDR)
+        if (!spiflash->irq_resumed)
+        {
+            rt_hw_interrupt_enable(spiflash->level);
+            spiflash->irq_resumed = true;
+        }
+#endif
     }
 #endif
 
@@ -546,8 +663,12 @@ rt_err_t rk_snor_resume(void)
     return rk_snor_xip_resume();
 }
 
-/*
- * The length of buffer is at least 8 bytes.
+/**
+ * @brief Read the unique id number(4BH commnad).
+ * @param dev: rt_mtd_nor_device.
+ * @param buf: read buffer, the length of buffer is at least 8 bytes.
+ * @attention Not all flash support uuid feature, check if there is 4BH uuid
+ *   command in the spec.
  */
 rt_err_t snor_read_uuid(struct rt_mtd_nor_device *dev, uint8_t *buf)
 {
@@ -577,8 +698,7 @@ static rt_err_t snor_mtd_read_id(struct rt_mtd_nor_device *dev)
     return *(rt_uint32_t *)(id);
 }
 
-
-static rt_size_t snor_mtd_write(struct rt_mtd_nor_device *dev, rt_off_t pos, const rt_uint8_t *data, rt_size_t size)
+static rt_size_t snor_mtd_write(struct rt_mtd_nor_device *dev, rt_off_t pos, const rt_uint8_t *data, rt_uint32_t size)
 {
     struct spiflash_device *spiflash = MTD_TO_SPIFLASH(dev);
     struct SPI_NOR *nor = &spiflash->nor;
@@ -609,19 +729,27 @@ static rt_size_t snor_mtd_write(struct rt_mtd_nor_device *dev, rt_off_t pos, con
     return size;
 }
 
-static rt_size_t snor_mtd_read(struct rt_mtd_nor_device *dev, rt_off_t pos, rt_uint8_t *data, rt_size_t size)
+static rt_size_t snor_mtd_read(struct rt_mtd_nor_device *dev, rt_off_t pos, rt_uint8_t *data, rt_uint32_t size)
 {
     struct spiflash_device *spiflash = MTD_TO_SPIFLASH(dev);
     struct SPI_NOR *nor = &spiflash->nor;
     int ret;
 
+#if defined(XIP_DEBUG) && defined(RT_SNOR_XIP_DATA_BEGIN)
+    rt_kprintf("%s pos = %08x,size = %08x, limite to %08x\n", __func__, pos, size, RT_SNOR_XIP_DATA_BEGIN);
+#else
     snor_dbg("%s pos = %08x,size = %08x\n", __func__, pos, size);
+#endif
 
     RT_ASSERT(dev != RT_NULL);
     RT_ASSERT(size != 0);
 
     rt_mutex_take(&spiflash->lock, RT_WAITING_FOREVER);
+#if RT_SNOR_XIP_DATA_BEGIN
+    if (nor->spi->mode & HAL_SPI_XIP && pos >= RT_SNOR_XIP_DATA_BEGIN)
+#else
     if (nor->spi->mode & HAL_SPI_XIP)
+#endif
     {
         HAL_DCACHE_InvalidateByRange((uint32_t)(pos + nor->spi->xipMem), size);
         rt_memcpy(data, (uint32_t *)(pos + nor->spi->xipMem), size);
@@ -646,15 +774,21 @@ static rt_err_t snor_mtd_erase_sector(struct rt_mtd_nor_device *dev, rt_off_t po
     struct spiflash_device *spiflash = MTD_TO_SPIFLASH(dev);
     struct SPI_NOR *nor = &spiflash->nor;
     int ret = RT_EOK;
-    uint32_t nsec = size / nor->sectorSize;
 
-    snor_dbg("%s pos = %08x,size = %08x\n", __func__, pos, size);
+    snor_dbg("%s pos = %08x, size = %08x\n", __func__, pos, size);
 
     RT_ASSERT(dev != RT_NULL);
     RT_ASSERT(size != 0);
 
+    if (pos % nor->sectorSize || size % nor->sectorSize)
+    {
+        rt_kprintf("%s pos=%d size=%d should be 4KB aligned\n", __func__, pos, size);
+        return -RT_ERROR;
+    }
+
     rt_mutex_take(&spiflash->lock, RT_WAITING_FOREVER);
     rk_snor_xip_suspend();
+
     if (pos == 0 && size == nor->size)
     {
         ret = HAL_SNOR_Erase(nor, pos, ERASE_CHIP);
@@ -662,19 +796,34 @@ static rt_err_t snor_mtd_erase_sector(struct rt_mtd_nor_device *dev, rt_off_t po
         {
             ret = -RT_ERROR;
         }
-        nsec = 0;
     }
-    while (nsec)
+    else
     {
-        ret = HAL_SNOR_Erase(nor, pos, ERASE_SECTOR);
-        if (ret)
+        while (size > 0)
         {
-            ret = -RT_ERROR;
-
-            break;
+            if ((pos % 0x10000) == 0 && size >= 0x10000)
+            {
+                ret = HAL_SNOR_Erase(nor, pos, ERASE_BLOCK64K);
+                if (ret)
+                {
+                    ret = -RT_ERROR;
+                    break;
+                }
+                pos += 0x10000;
+                size -= 0x10000;
+            }
+            else
+            {
+                ret = HAL_SNOR_Erase(nor, pos, ERASE_SECTOR);
+                if (ret)
+                {
+                    ret = -RT_ERROR;
+                    break;
+                }
+                pos += nor->sectorSize;
+                size -= nor->sectorSize;
+            }
         }
-        nsec --;
-        pos += dev->block_size;
     }
     rk_snor_xip_resume();
     rt_mutex_release(&spiflash->lock);
@@ -702,6 +851,10 @@ int rt_hw_snor_init(void)
 {
     int ret;
 
+#ifdef XIP_DEBUG
+    rt_kprintf("%s speed=%d %d\n", __func__, RT_SNOR_SPEED, RT_SNOR_XIP_DATA_BEGIN);
+#endif
+
 #if defined(RT_USING_SNOR_FSPI_HOST)
     ret = snor_init(0, "snor", SPIFLASH_FSPI_HOST);
 #endif
@@ -714,6 +867,10 @@ int rt_hw_snor_init(void)
     ret = snor_init(0, "snor", SPIFLASH_SPI_HOST);
 #elif defined(RT_USING_SNOR_FSPI_HOST) && defined(RT_USING_SNOR_SPI_HOST)
     ret = snor_init(1, "snor1", SPIFLASH_SPI_HOST);
+#endif
+
+#ifdef XIP_DEBUG
+    rt_kprintf("%s finished ret=%d\n", __func__, ret);
 #endif
 
     return ret;

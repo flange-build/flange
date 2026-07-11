@@ -76,7 +76,7 @@ struct rt_dma_chan;
 struct rt_dma_device
 {
     struct rt_device dev;
-    uint32_t base;
+    rt_base_t base;
     int (*start)(struct rt_dma_chan *chan);
     int (*stop)(struct rt_dma_chan *chan);
 

@@ -31,9 +31,6 @@
 #define ISP3X_VI_DPCL               (ISP3X_CTRL_BASE + 0x00018)
 #define ISP3X_SWS_CFG               (ISP3X_CTRL_BASE + 0x0001c)
 
-#define MI_BASE                     (ISP3X_CTRL_BASE+0x00001400)
-#define MI_WR_CTRL2                 (MI_BASE + 0x00400)
-
 #define ISP3X_IMG_EFF_BASE          (ISP_REG_BASE + 0x0200)
 #define ISP3X_IMG_EFF_CTRL          (ISP3X_IMG_EFF_BASE + 0x00000)
 #define ISP3X_IMG_EFF_COLOR_SEL         (ISP3X_IMG_EFF_BASE + 0x00004)

@@ -1,0 +1,94 @@
+{
+	"howling_configs": {
+		"drop_ref_chan" : 0,
+		"pre_gain" : 0,
+		"notch" : {
+			"status" : "disable",
+			"div_num" : 3,
+			"freq_div" : [100, 800, 4900, 12000],
+			"power_threshold" : [100000000.0, 50000000.0, 20000.0],
+			"pharmonic_threshold" : [18, 6, 0],
+			"paverage_threshold" : [10, 16, 12],
+			"pneibor_threshold" : [17, 17, 8],
+			"sfm_threshold" : [280, 150, 30],
+			"fund_correct" : [2, 10, 60, 100, -3],
+			"sfm_len" : 5,
+			"imsd_len" : 6,
+			"persist_frame" : 3,
+			"detect_frame" : 3,
+			"sfreq_num" : 20,
+			"gain" : 0
+		},
+		"shift" : {
+			"status" : "enable",
+			"filter_tap" : 151,
+			"shift_freq" : -2.5
+		},
+		"vc" : {
+			"status" : "disable",
+			"fs_ratio": 0.75,
+			"freq_apply" : 0
+		},
+		"af" : {
+			"status" : "enable",
+			"filter_len" : 3,
+			"delay_len" : 4,
+			"af_ref_threshold" : 10,
+			"af_mic_threshold" : 10,
+			"jump_len" : 0,
+			"start_freq" : 1000,
+			"end_freq" : 24000,
+			"adapt_rate" : 0.15,
+			"auto_adapted" :1,
+			"dual_filter" : 0
+		},
+		"pf" : {
+			"status" : "disable",
+			"fast_filter_len" : 3,
+			"delay_len" : 1,
+			"start_freq" : 0,
+			"end_freq" : 300,
+			"alpha" : 0.995
+		},
+		"aes" : {
+			"status" : "disable",
+			"Beta_Up": 0.001,
+			"Beta_Down": 0.002,
+			"Beta_Up_Low": 0.001,
+			"Beta_Down_Low": 0.002,
+			"low_freq": 1000,
+			"high_freq": 3750,
+			"start_freq": 0,
+			"end_freq": 400,
+			"THD_Flag": 0,
+			"HARD_Flag": 0,
+			"LimitRatio" : [
+				[1.0, 0.5, 0.5],
+				[1.0, 0.8, 0.6]
+			]
+		},
+		"nnnotch" : {
+			"status": "disable",
+			"energy_threhold": 80,
+			"mean_pow_threhold": 3,
+			"bank_num": 64,
+			"layer_num": 5,
+			"model_path": "/oem/howling.bin"
+		},
+		"hpf" : {
+			"status": "enable",
+			"fc": 60,
+			"bw": 1
+		},
+		"nlp" : {
+			"status": "enable",
+			"alpha": 0.3
+		},
+		"limit" : {
+			"status" : "enable",
+			"p_limit" :  [200, 0, 200, 0, 0, 5],
+			"graph_x" : [-50, -25, -10, -2, 3],
+			"graph_y" : [-55, -25, -8, -2, 0]
+		}
+	}
+}

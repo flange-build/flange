@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -12,14 +12,14 @@
 #define __SENSOR_H__
 
 #include <rtthread.h>
-#include <rtdevice.h>
+#include "pin.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #ifdef RT_USING_RTC
-#define  rt_sensor_get_ts()  time()          /* API for the sensor to get the timestamp */
+#define  rt_sensor_get_ts()  time(RT_NULL)   /* API for the sensor to get the timestamp */
 #else
 #define  rt_sensor_get_ts()  rt_tick_get()   /* API for the sensor to get the timestamp */
 #endif
@@ -44,6 +44,15 @@ extern "C" {
 #define RT_SENSOR_CLASS_TVOC           (10) /* TVOC Level        */
 #define RT_SENSOR_CLASS_NOISE          (11) /* Noise Loudness    */
 #define RT_SENSOR_CLASS_STEP           (12) /* Step sensor       */
+#define RT_SENSOR_CLASS_FORCE          (13) /* Force sensor      */
+#define RT_SENSOR_CLASS_DUST           (14) /* Dust sensor       */
+#define RT_SENSOR_CLASS_ECO2           (15) /* eCO2 sensor       */
+#define RT_SENSOR_CLASS_GNSS           (16) /* GPS/GNSS sensor   */
+#define RT_SENSOR_CLASS_TOF            (17) /* TOF sensor        */
+#define RT_SENSOR_CLASS_SPO2           (18) /* SpO2 sensor       */
+#define RT_SENSOR_CLASS_IAQ            (19) /* IAQ sensor.       */
+#define RT_SENSOR_CLASS_ETOH           (20) /* EtOH sensor.      */
+#define RT_SENSOR_CLASS_BP             (21) /* Blood Pressure    */
 
 /* Sensor vendor types */
 
@@ -53,6 +62,16 @@ extern "C" {
 #define RT_SENSOR_VENDOR_INVENSENSE    (3)  /* Invensense */
 #define RT_SENSOR_VENDOR_SEMTECH       (4)  /* Semtech */
 #define RT_SENSOR_VENDOR_GOERTEK       (5)  /* Goertek */
+#define RT_SENSOR_VENDOR_MIRAMEMS      (6)  /* MiraMEMS */
+#define RT_SENSOR_VENDOR_DALLAS        (7)  /* Dallas */
+#define RT_SENSOR_VENDOR_ASAIR         (8)  /* Aosong */
+#define RT_SENSOR_VENDOR_SHARP         (9)  /* Sharp */
+#define RT_SENSOR_VENDOR_SENSIRION     (10) /* Sensirion */
+#define RT_SENSOR_VENDOR_TI            (11) /* Texas Instruments */
+#define RT_SENSOR_VENDOR_PLANTOWER     (12) /* Plantower */
+#define RT_SENSOR_VENDOR_AMS           (13) /* ams AG */
+#define RT_SENSOR_VENDOR_MAXIM         (14) /* Maxim Integrated */
+#define RT_SENSOR_VENDOR_MELEXIS       (15) /* Melexis */
 
 /* Sensor unit types */
 
@@ -69,7 +88,13 @@ extern "C" {
 #define  RT_SENSOR_UNIT_ONE            (10) /* Dimensionless quantity  unit: 1          */
 #define  RT_SENSOR_UNIT_BPM            (11) /* Heart rate              unit: bpm        */
 #define  RT_SENSOR_UNIT_MM             (12) /* Distance                unit: mm         */
-
+#define  RT_SENSOR_UNIT_MN             (13) /* Force                   unit: mN         */
+#define  RT_SENSOR_UNIT_PPM            (14) /* Concentration           unit: ppm        */
+#define  RT_SENSOR_UNIT_PPB            (15) /* Concentration           unit: ppb        */
+#define  RT_SENSOR_UNIT_DMS            (16) /* Coordinates             unit: DMS        */
+#define  RT_SENSOR_UNIT_DD             (17) /* Coordinates             unit: DD         */
+#define  RT_SENSOR_UNIT_MGM3           (18) /* Concentration           unit: mg/m3      */
+#define  RT_SENSOR_UNIT_MMHG           (19) /* Blood Pressure          unit: mmHg       */
 /* Sensor communication interface types */
 
 #define  RT_SENSOR_INTF_I2C            (1 << 0)
@@ -94,13 +119,15 @@ extern "C" {
 
 /* Sensor control cmd types */
 
-#define  RT_SENSOR_CTRL_GET_ID         (0)  /* Get device id */
-#define  RT_SENSOR_CTRL_GET_INFO       (1)  /* Get sensor info */
-#define  RT_SENSOR_CTRL_SET_RANGE      (2)  /* Set the measure range of sensor. unit is info of sensor */
-#define  RT_SENSOR_CTRL_SET_ODR        (3)  /* Set output date rate. unit is HZ */
-#define  RT_SENSOR_CTRL_SET_MODE       (4)  /* Set sensor's work mode. ex. RT_SENSOR_MODE_POLLING,RT_SENSOR_MODE_INT */
-#define  RT_SENSOR_CTRL_SET_POWER      (5)  /* Set power mode. args type of sensor power mode. ex. RT_SENSOR_POWER_DOWN,RT_SENSOR_POWER_NORMAL */
-#define  RT_SENSOR_CTRL_SELF_TEST      (6)  /* Take a self test */
+#define  RT_SENSOR_CTRL_GET_ID         (RT_DEVICE_CTRL_BASE(Sensor) + 0)  /* Get device id */
+#define  RT_SENSOR_CTRL_GET_INFO       (RT_DEVICE_CTRL_BASE(Sensor) + 1)  /* Get sensor info */
+#define  RT_SENSOR_CTRL_SET_RANGE      (RT_DEVICE_CTRL_BASE(Sensor) + 2)  /* Set the measure range of sensor. unit is info of sensor */
+#define  RT_SENSOR_CTRL_SET_ODR        (RT_DEVICE_CTRL_BASE(Sensor) + 3)  /* Set output date rate. unit is HZ */
+#define  RT_SENSOR_CTRL_SET_MODE       (RT_DEVICE_CTRL_BASE(Sensor) + 4)  /* Set sensor's work mode. ex. RT_SENSOR_MODE_POLLING,RT_SENSOR_MODE_INT */
+#define  RT_SENSOR_CTRL_SET_POWER      (RT_DEVICE_CTRL_BASE(Sensor) + 5)  /* Set power mode. args type of sensor power mode. ex. RT_SENSOR_POWER_DOWN,RT_SENSOR_POWER_NORMAL */
+#define  RT_SENSOR_CTRL_SELF_TEST      (RT_DEVICE_CTRL_BASE(Sensor) + 6)  /* Take a self test */
+
+#define  RT_SENSOR_CTRL_USER_CMD_START 0x100  /* User commands should be greater than 0x100 */
 
 struct rt_sensor_info
 {
@@ -147,7 +174,7 @@ struct rt_sensor_device
     const struct rt_sensor_ops  *ops;       /* The sensor ops */
 
     struct rt_sensor_module     *module;    /* The sensor module */
-    
+
     rt_err_t (*irq_handle)(rt_sensor_t sensor);             /* Called when an interrupt is generated, registered by the driver */
 };
 
@@ -167,6 +194,19 @@ struct sensor_3_axis
     rt_int32_t z;
 };
 
+/* Blood Pressure Data Type */
+struct sensor_bp
+{
+    rt_int32_t sbp; /* SBP : systolic pressure */
+    rt_int32_t dbp; /* DBP : diastolic pressure */
+};
+
+struct coordinates
+{
+    double longitude;
+    double latitude;
+};
+
 struct rt_sensor_data
 {
     rt_uint32_t         timestamp;          /* The timestamp when the data was received */
@@ -176,6 +216,7 @@ struct rt_sensor_data
         struct sensor_3_axis acce;          /* Accelerometer.       unit: mG          */
         struct sensor_3_axis gyro;          /* Gyroscope.           unit: mdps        */
         struct sensor_3_axis mag;           /* Magnetometer.        unit: mGauss      */
+        struct coordinates   coord;         /* Coordinates          unit: degrees     */
         rt_int32_t           temp;          /* Temperature.         unit: dCelsius    */
         rt_int32_t           humi;          /* Relative humidity.   unit: permillage  */
         rt_int32_t           baro;          /* Pressure.            unit: pascal (Pa) */
@@ -185,6 +226,13 @@ struct rt_sensor_data
         rt_int32_t           tvoc;          /* TVOC.                unit: permillage  */
         rt_int32_t           noise;         /* Noise Loudness.      unit: HZ          */
         rt_uint32_t          step;          /* Step sensor.         unit: 1           */
+        rt_int32_t           force;         /* Force sensor.        unit: mN          */
+        rt_uint32_t          dust;          /* Dust sensor.         unit: ug/m3       */
+        rt_uint32_t          eco2;          /* eCO2 sensor.         unit: ppm         */
+        rt_uint32_t          spo2;          /* SpO2 sensor.         unit: permillage  */
+        rt_uint32_t          iaq;           /* IAQ sensor.          unit: 1 */
+        rt_uint32_t          etoh;          /* EtOH sensor.         unit: ppm */
+        struct sensor_bp     bp;            /* BloodPressure.       unit: mmHg        */
     } data;
 };
 

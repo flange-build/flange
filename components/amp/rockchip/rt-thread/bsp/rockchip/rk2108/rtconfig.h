@@ -66,7 +66,7 @@
 /* RT_USING_INTERRUPT_INFO is not set */
 #define RT_USING_CONSOLE
 #define RT_CONSOLEBUF_SIZE 128
-#define RT_CONSOLE_DEVICE_NAME "uart0"
+#define RT_CONSOLE_DEVICE_NAME "uart2"
 #define RT_VER_NUM 0x30103
 #define ARCH_ARM
 #define ARCH_ARM_CORTEX_M
@@ -168,7 +168,7 @@
 /* RT_USING_GD is not set */
 /* RT_USING_ENC28J60 is not set */
 /* RT_USING_SPI_WIFI is not set */
-/* RT_USING_WDT is not set */
+#define RT_USING_WDT
 #define RT_USING_AUDIO
 /* RT_USING_SENSOR is not set */
 /* RT_USING_TOUCH is not set */
@@ -177,7 +177,7 @@
 
 /* RT_USING_WIFI is not set */
 
-/* Using USB */
+/* Using WiFi */
 
 /* RT_USING_USB_HOST is not set */
 #define RT_USING_USB_DEVICE
@@ -226,9 +226,6 @@
 /* AT commands */
 
 /* RT_USING_AT is not set */
-
-/* System */
-
 /* RT_USING_LITTLEVGL2RTT is not set */
 
 /* VBUS(Virtual Software BUS) */
@@ -311,6 +308,7 @@
 
 /* RT-Thread rockchip common drivers */
 
+#define RT_USING_CPU_USAGE
 /* HAL_DBG_ON is not set */
 /* RT_USING_SND_GLB_RST is not set */
 /* RT_USING_RESET is not set */
@@ -334,6 +332,8 @@
 #define RT_USING_SNOR
 #define RT_SNOR_SPEED 80000000
 /* RT_SNOR_DUAL_IO is not set */
+/* RT_ROOT_DEF_PART_OFFSET is not set */
+/* RT_ROOT_DEF_PART_SIZE is not set */
 #define RT_USING_SNOR_FSPI_HOST
 /* RT_USING_SNOR_SFC_HOST is not set */
 /* RT_USING_SNOR_SPI_HOST is not set */
@@ -372,6 +372,10 @@
 
 /* RT_USING_CAMERA is not set */
 
+/* RT-Thread rockchip ambient light sensor driver */
+
+/* RT_USING_ALS is not set */
+
 /* RT-Thread rockchip vicap_lite driver */
 
 /* RT_USING_VICAP_LITE is not set */
@@ -384,6 +388,7 @@
 
 /* RT_USING_BUFFER_MANAGE is not set */
 /* RT_USING_SENSOR_HUB is not set */
+/* RT_USING_WDT_DUMP is not set */
 /* RT_USING_QPIPSRAM is not set */
 
 /* RT-Thread rockchip coredump driver */
@@ -394,6 +399,8 @@
 /* Enable PSTORE */
 
 /* RT_USING_PSTORE is not set */
+
+/* RT-Thread rockchip AMP driver */
 
 /* RT-Thread rockchip rk2108 drivers */
 
@@ -447,8 +454,8 @@
 
 /* RT-Thread application */
 
-/* RT_USING_LVGL_APP_DEMO is not set */
 /* RT_USING_ROCKCHIP_DEMO is not set */
+/* RT_USING_RK_BATTERY_IPC is not set */
 /* RT_USING_RK_IOT_APP is not set */
 /* ENABLE_DUAL_TRACKING is not set */
 

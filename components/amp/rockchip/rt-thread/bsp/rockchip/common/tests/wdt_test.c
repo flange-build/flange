@@ -37,7 +37,7 @@ static int wdt_test(int argc, char **argv)
         {
             if (argc == 3)
             {
-                wdt_dev = rt_device_find("dw_wdt");
+                wdt_dev = rt_device_find("wdt");
                 RT_ASSERT(wdt_dev != RT_NULL);
 
                 ret = rt_device_init(wdt_dev);
@@ -53,7 +53,7 @@ static int wdt_test(int argc, char **argv)
                     keep_timer = rt_timer_create("keep", keep_timer_func, RT_NULL,
                                                  RT_TICK_PER_SECOND / 8, RT_TIMER_FLAG_PERIODIC);
                     if (!keep_timer)
-                        return -RT_ERROR;
+                        return RT_ERROR;
 
                     rt_timer_start(keep_timer);
                 }
@@ -126,7 +126,7 @@ int _at_wdt_test(void)
     rt_uint32_t tl1 = 0;
     rt_uint32_t tl2 = 0;
 
-    wdt_dev = rt_device_find("dw_wdt");
+    wdt_dev = rt_device_find("wdt");
     RT_ASSERT(wdt_dev != RT_NULL);
 
     ret = rt_device_init(wdt_dev);

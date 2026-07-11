@@ -324,16 +324,14 @@ out:
 struct pd *get_pd_from_id(ePD_Id pd_id)
 {
     struct pd *pd;
-    rt_slist_t *pos;
 
     if (!pd_id)
         return NULL;
 
     rt_mutex_take(&pd_lock, RT_WAITING_FOREVER);
 
-    rt_slist_for_each(pos, &pd_list)
+    rt_slist_for_each_entry(pd, &pd_list, node)
     {
-        pd = rt_slist_entry(pos, struct pd, node);
         if (pd->pd_id == pd_id)
         {
             goto out;

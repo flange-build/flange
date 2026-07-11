@@ -11,11 +11,9 @@
   *
   ******************************************************************************
   */
-#include <rtthread.h>
-
-#ifdef RT_USING_WIFI
 #include "board_wifibt.h"
 
+#ifdef RT_USING_WIFI
 #include <wlan_mgnt.h>
 #include <wlan_cfg.h>
 #include <wlan_prot.h>
@@ -108,11 +106,19 @@ uint32_t rk_bt_power_down(void)
     return 1;
 }
 
-RT_WEAK RT_UNUSED void rk_bt_init_gpio(void)
+void rk_bt_init_gpio(void)
 {
     // setup bt_reg_on
     HAL_PINCTRL_SetIOMUX(BT_GPIO_PORT, BT_POWER_GPIO_PIN, PIN_CONFIG_MUX_FUNC0);
     HAL_GPIO_SetPinDirection(BT_GPIO_PORT_BASE, BT_POWER_GPIO_PIN, GPIO_OUT);
+
+    // setup uart
+    HAL_PINCTRL_SetIOMUX(BT_GPIO_PORT,
+                         BT_HOST_RX_PIN |
+                         BT_HOST_TX_PIN |
+                         BT_HOST_CTS_PIN |
+                         BT_HOST_RTS_PIN,
+                         BT_PIN_CONFIG_MUX_FUNC_NUM);
 }
 
 extern struct rk_mmc_platform_data rk_mmc_table[];

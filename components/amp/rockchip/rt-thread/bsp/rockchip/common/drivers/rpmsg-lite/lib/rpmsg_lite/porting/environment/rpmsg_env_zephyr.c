@@ -2,7 +2,7 @@
  * Copyright (c) 2014, Mentor Graphics Corporation
  * Copyright (c) 2015 Xilinx, Inc.
  * Copyright (c) 2016 Freescale Semiconductor, Inc.
- * Copyright 2016-2022 NXP
+ * Copyright 2016-2023 NXP
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -87,7 +87,7 @@ static struct isr_info isr_table[ISR_COUNT];
  */
 static int32_t env_in_isr(void)
 {
-    return platform_in_isr();
+    return k_is_in_isr();
 }
 
 /*!
@@ -97,11 +97,24 @@ static int32_t env_in_isr(void)
  * Utilize events to avoid busy loop implementation.
  *
  */
-void env_wait_for_link_up(volatile uint32_t *link_state, uint32_t link_id)
+uint32_t env_wait_for_link_up(volatile uint32_t *link_state, uint32_t link_id, uint32_t timeout_ms)
 {
     if (*link_state != 1U)
     {
-        k_event_wait_all(&env_event, (1UL << link_id), false, K_FOREVER);
+        if (env_in_isr() != 0)
+        {
+            timeout_ms = 0; /* force timeout == 0 when in ISR */
+        }
+
+        if (0 != k_event_wait_all(&env_event, (1UL << link_id), false, timeout_ms))
+        {
+            return 1U;
+        }
+        return 0U;
+    }
+    else
+    {
+        return 1U;
     }
 }
 
@@ -659,7 +672,7 @@ void env_delete_queue(void *queue)
  * @return - status of function execution
  */
 
-int32_t env_put_queue(void *queue, void *msg, uint32_t timeout_ms)
+int32_t env_put_queue(void *queue, void *msg, uintptr_t timeout_ms)
 {
     if (env_in_isr() != 0)
     {
@@ -685,7 +698,7 @@ int32_t env_put_queue(void *queue, void *msg, uint32_t timeout_ms)
  * @return - status of function execution
  */
 
-int32_t env_get_queue(void *queue, void *msg, uint32_t timeout_ms)
+int32_t env_get_queue(void *queue, void *msg, uintptr_t timeout_ms)
 {
     if (env_in_isr() != 0)
     {

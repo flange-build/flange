@@ -3,25 +3,22 @@ Import('rtconfig')
 from building import *
 
 cwd = GetCurrentDir()
-src = Glob('*.c') \
-
-# benchmark demo.
-src += Glob('benchmark/*.c') \
-        + Glob('benchmark/assets/*.c') 
-
-# music demo
-src += Glob('music/*.c') \
-        + Glob('music/assets/*.c') 
-
+src = Glob('*.c')
 CPPPATH = [cwd]
 
-# benchmark demo.
-CPPPATH += [cwd + '/benchmark']
-
-# music demo.
-CPPPATH += [cwd + '/music']
+if GetDepend(['RT_USING_RKADK']):
+    src += Glob('lv_port_disp/rkadk/*.c')
+    CPPPATH += [cwd + '/lv_port_disp/rkadk']
+else:
+    src += Glob('lv_port_disp/vop/*.c')
+    CPPPATH += [cwd + '/lv_port_disp/vop']
 
 group = DefineGroup('Applications', src, depend = ['RT_USING_LVGL_DEMO'], CPPPATH = CPPPATH)
 
-Return('group')
+list = os.listdir(cwd)
+for d in list:
+    path = os.path.join(cwd, d)
+    if os.path.isfile(os.path.join(path, 'SConscript')):
+        group = group + SConscript(os.path.join(d, 'SConscript'))
 
+Return('group')

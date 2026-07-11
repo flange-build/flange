@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -24,8 +24,6 @@ extern "C" {
 #endif
 
 #define RT_LWAN_ID_PREFIX      (0x5054)
-
-#define RT_WLAN_PROT_LWIP  ("lwip")
 
 typedef enum
 {

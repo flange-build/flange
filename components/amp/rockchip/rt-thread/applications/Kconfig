@@ -9,8 +9,7 @@ config RT_USING_DLMODULE_APP_EXAMPLE
 
 config RT_USING_LVGL_DEMO
     bool "LVGL Demo enable"
-    depends on RT_USING_LITTLEVGL2RTT_V8
-    select RT_LV_COLOR_SCREEN_TRANSP
+    depends on RT_USING_LVGL
     help
         "LVGL Demo"
 
@@ -20,14 +19,31 @@ choice
 
     config RT_LV_DEMO_MUSIC
         bool "Music demo enable"
+        select RT_LV_USE_DEMO_MUSIC
         help
             "LVGL Music demo"
 
+    config RT_LV_DEMO_WIDGETS
+        bool "Widgets demo enable"
+        select RT_LV_USE_DEMO_WIDGETS
+        help
+            "LVGL Widgets demo"
+
     config RT_LV_DEMO_BENCHMARK
         bool "benchmark demo enable"
+        select RT_LV_USE_DEMO_BENCHMARK
         help
             "LVGL Benchmark demo"
+
+    config RT_LV_RK_DEMO
+        bool "rk demo enable"
+        help
+            "LVGL rk demo"
 endchoice
+
+config RT_USING_LVGL_APP_DEMO
+    bool
+    default n
 
 config RT_USING_ROCKCHIP_DEMO
     bool "Rockchip demo select"
@@ -50,7 +66,7 @@ choice
 
     config RT_USING_CLOCK_DEMO
         bool "clock demo enable"
-        depends on RT_USING_LITTLEVGL2RTT_V7
+        select RT_USING_LITTLEVGL2RTT
         help
             "Display clock demo based on 720x1080 panel"
 
@@ -68,36 +84,43 @@ choice
 
     config RT_USING_LVGL_CLOCK_EXH2020
         bool "clock exh2020 enable"
-        depends on RT_USING_LITTLEVGL2RTT_V7
+        select RT_USING_LITTLEVGL2RTT
         select RT_USING_PSRAM_HEAP
         help
             "Display clock demo based on 454x454 panel"
 
     config RT_USING_APP_WEARABLE
         bool "Wearable demo enable"
-        depends on RT_USING_LITTLEVGL2RTT_V7
+        select RT_USING_LITTLEVGL2RTT
         select RT_USING_PSRAM_HEAP
-        select RT_USING_LARGE_HEAP
         help
             "Display wearable demo"
 
+    config RT_USING_LVGL_CLOCK_DEMO1
+        bool "lvgl clock demo1 enable"
+        select RT_USING_LVGL_APP_DEMO
+        select RT_USING_LITTLEVGL2RTT
+        select RT_USING_PSRAM_HEAP
+        help
+            "Display clock demo based on 320x320 panel"
+
     config RT_USING_RECORDING_PEN_APP
         bool "Recording pen app"
-        depends on RT_USING_LITTLEVGL2RTT_V7
+        select RT_USING_LITTLEVGL2RTT
         select RT_USING_AUDIO_SERVER
         help
             Enable recording pen app
 
     config RT_USING_IOT_DISPLAY
         bool "IoT display enable"
-        depends on RT_USING_LITTLEVGL2RTT_V7
+        select RT_USING_LITTLEVGL2RTT
         help
             "Display clock & IoT strings based on 240x320 panel"
 
     config RT_USING_PCBA_TEST
         bool "pcba test enable"
         default n
-        depends on RT_USING_LITTLEVGL2RTT_V7
+        select RT_USING_LITTLEVGL2RTT
         select RT_USING_AUDIO_SERVER
         help
             Enable PCBA test with LCD display
@@ -129,32 +152,6 @@ endif
 config RT_USING_RK_BATTERY_IPC
     bool "rk batter ipc app"
     default n
-
-if RT_USING_RK_BATTERY_IPC
-menu "RT-Thread Application Rockchip Battery IPC"
-config RT_USING_META_DDR_ADRESS
-    hex "meta ddr phy address"
-    default 0x800000
-    depends on RT_USING_RK_BATTERY_IPC
-
-config RT_USING_RK_AOV
-    bool "rk fast wakeup"
-    default n
-    depends on RT_USING_RK_BATTERY_IPC
-
-endmenu
-endif
-
-config RT_USING_SMART_MEETING
-    bool "smart meeting demo"
-    select RT_USING_AUDIO_SERVER
-    select RT_USING_DSP
-    select RT_USING_CJSON
-    default n
-
-    if RT_USING_SMART_MEETING
-        source "$RTT_DIR/applications/smart_meeting/Kconfig"
-    endif
 
 config RT_USING_RK_IOT_APP
     bool "rk iot app"

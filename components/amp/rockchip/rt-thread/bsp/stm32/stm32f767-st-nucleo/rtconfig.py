@@ -13,14 +13,14 @@ if os.getenv('RTT_ROOT'):
 # cross_tool provides the cross compiler
 # EXEC_PATH is the compiler execute path, for example, CodeSourcery, Keil MDK, IAR
 if  CROSS_TOOL == 'gcc':
-    PLATFORM 	= 'gcc'
-    EXEC_PATH 	= '/usr/local/Cellar/arm-none-eabi-gcc/7-2017-q4-major/gcc/bin/'
+    PLATFORM    = 'gcc'
+    EXEC_PATH   = r'/opt/gcc-arm-none-eabi-7-2017-q4-major/bin/'
 elif CROSS_TOOL == 'keil':
-    PLATFORM 	= 'armcc'
-    EXEC_PATH 	= r'C:/Keil_v5'
+    PLATFORM    = 'armcc'
+    EXEC_PATH   = r'C:/Keil_v5'
 elif CROSS_TOOL == 'iar':
-	PLATFORM 	= 'iar'
-	EXEC_PATH 	= r'C:/Program Files (x86)/IAR Systems/Embedded Workbench 8.0'
+    PLATFORM    = 'iccarm'
+    EXEC_PATH   = r'C:/Program Files (x86)/IAR Systems/Embedded Workbench 8.3'
 
 if os.getenv('RTT_EXEC_PATH'):
     EXEC_PATH = os.getenv('RTT_EXEC_PATH')
@@ -43,7 +43,7 @@ if PLATFORM == 'gcc':
     STRIP = PREFIX + 'strip'
 
     DEVICE = ' -mcpu=' + CPU + ' -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -ffunction-sections -fdata-sections'
-    CFLAGS = DEVICE + ' -std=c99 -g -Wall'
+    CFLAGS = DEVICE + ' -g -Wall'
     AFLAGS = ' -c' + DEVICE + ' -x assembler-with-cpp -Wa,-mimplicit-it=thumb '
     LFLAGS = DEVICE + ' -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,Reset_Handler -T board/linker_scripts/link.lds'
 
@@ -55,6 +55,8 @@ if PLATFORM == 'gcc':
         AFLAGS += ' -gdwarf-2'
     else:
         CFLAGS += ' -O2 -Os'
+
+    CXXFLAGS = CFLAGS 
 
     POST_ACTION = OBJCPY + ' -O binary $TARGET rtthread.bin\n' + SIZE + ' $TARGET \n'
 
@@ -69,6 +71,7 @@ if PLATFORM == 'gcc':
 elif PLATFORM == 'armcc':
     # toolchains
     CC = 'armcc'
+    CXX = 'armcc'
     CXX = 'armcc'
     AS = 'armasm'
     AR = 'armar'
@@ -91,12 +94,49 @@ elif PLATFORM == 'armcc':
     else:
         CFLAGS += ' -O2 -Otime'
 
-    CXXFLAGS = CFLAGS
+    CXXFLAGS = CFLAGS 
+    CFLAGS += ' -std=c99'
+    
     POST_ACTION = 'fromelf --bin $TARGET --output rtthread.bin \nfromelf -z $TARGET'
 
-elif PLATFORM == 'iar':
+elif PLATFORM == 'armclang':
+    # toolchains
+    CC = 'armclang'
+    CXX = 'armclang'
+    AS = 'armasm'
+    AR = 'armar'
+    LINK = 'armlink'
+    TARGET_EXT = 'axf'
+
+    DEVICE = ' --cpu Cortex-M7.fp.sp '
+    CFLAGS = ' --target=arm-arm-none-eabi -mcpu=cortex-m7 '
+    CFLAGS += ' -mcpu=cortex-m7 -mfpu=fpv5-sp-d16 '
+    CFLAGS += ' -mfloat-abi=hard -c -fno-rtti -funsigned-char -fshort-enums -fshort-wchar '
+    CFLAGS += ' -gdwarf-3 -ffunction-sections '
+    AFLAGS = DEVICE + ' --apcs=interwork '
+    LFLAGS = DEVICE + ' --info sizes --info totals --info unused --info veneers '
+    LFLAGS += ' --list rt-thread.map '
+    LFLAGS += r' --strict --scatter "board\linker_scripts\link.sct" '
+    CFLAGS += ' -I' + EXEC_PATH + '/ARM/ARMCLANG/include'
+    LFLAGS += ' --libpath=' + EXEC_PATH + '/ARM/ARMCLANG/lib'
+
+    EXEC_PATH += '/ARM/ARMCLANG/bin/'
+
+    if BUILD == 'debug':
+        CFLAGS += ' -g -O1' # armclang recommend
+        AFLAGS += ' -g'
+    else:
+        CFLAGS += ' -O2'
+        
+    CXXFLAGS = CFLAGS
+    CFLAGS += ' -std=c99'
+
+    POST_ACTION = 'fromelf --bin $TARGET --output rtthread.bin \nfromelf -z $TARGET'
+
+elif PLATFORM == 'iccarm':
     # toolchains
     CC = 'iccarm'
+    CXX = 'iccarm'
     CXX = 'iccarm'
     AS = 'iasmarm'
     AR = 'iarchive'
@@ -142,3 +182,10 @@ elif PLATFORM == 'iar':
 
     EXEC_PATH = EXEC_PATH + '/arm/bin/'
     POST_ACTION = ''
+
+def dist_handle(BSP_ROOT, dist_dir):
+    import sys
+    cwd_path = os.getcwd()
+    sys.path.append(os.path.join(os.path.dirname(BSP_ROOT), 'tools'))
+    from sdk_dist import dist_do_building
+    dist_do_building(BSP_ROOT, dist_dir)

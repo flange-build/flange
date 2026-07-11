@@ -90,11 +90,6 @@ config RT_USING_PMIC
         depends on RT_USING_PM_FG
         default n
 
-    config RT_USING_RTC_RK816
-        bool "Enable RK816 rtc"
-        depends on RT_USING_RTC
-        default n
-
     config RT_USING_SENSOR_RK816
         bool "Enable RK816 battery temperature sensor"
         depends on RT_USING_SENSOR
@@ -103,6 +98,11 @@ config RT_USING_PMIC
 
 config RT_USING_PWM_REGULATOR
     bool "Enable Pwm Regulator"
+    depends on RT_USING_PWM
+    default n
+
+config RT_USING_PWM_REMOTECTL
+    bool "Enable Pwm Remote control"
     depends on RT_USING_PWM
     default n
 
@@ -193,12 +193,32 @@ config RT_USING_PSRAM_HEAP
     endif
 
 choice
+    prompt "RTC Driver Select"
+    depends on RT_USING_RTC
+    depends on !RT_USING_SOFT_RTC
+
+    config RT_USING_RTC_HM8563
+        bool "Enable HM8563 RTC"
+
+    config RT_USING_RTC_RK816
+        bool "Enable RK816 RTC"
+        depends on RT_USING_PMIC_RK816
+        default n
+endchoice
+
+choice
     prompt "MIPI DSI Panel Type"
-    depends on RT_USING_DSI
+    depends on RT_USING_DSI || RT_USING_DW_MIPI_DSI
     default RT_USING_PANEL_SS if RKMCU_PISCES
 
     config RT_USING_PANEL_FPGA_LVDS
         bool "FPGA LVDS panel, reslution is 800x1280"
+
+    config RT_USING_PANEL_ILI9881D
+        bool "ILI9881D mipi panel, resolution is 1280x720"
+
+    config RT_USING_PANEL_QV068Y0Q
+        bool "QV068Y0Q-N10 mipi panel, resolution is 480x1280"
 
     config RT_USING_PANEL_SS
         bool "SS mipi panel, resolution is 1080x2340"
@@ -237,6 +257,23 @@ choice
 
     config RT_USING_PANEL_ST7789V_XF20
         bool "xh2.0TFT-22P' MCU panel, reslution is 240x320"
+
+    config RT_USING_PANEL_K350C4516T
+        bool "K350C4516T' MCU panel, reslution is 320x480"
+endchoice
+
+choice
+    prompt "RGB Panel Type"
+    depends on RT_USING_VOP_RGB
+
+    config RT_USING_PANEL_FX070_DHM11BOE
+        bool "FX070_DHM11BOE RGB panel, resolution is 1024x600"
+
+    config RT_USING_PANEL_Q7050ITH2641AA1T
+        bool "Q7050ITH2641AA1T RGB panel, resolution is 1024x600"
+
+    config RT_USING_PANEL_CLAA070WP03XG
+        bool "CLAA070WP03XG RGB to LVDS panel, resolution is 800x1280"
 endchoice
 
 choice
@@ -267,10 +304,24 @@ menu "Enable Fault Dump Hook"
     endif
 endmenu
 
+config RT_USING_RK_ATAGS
+    bool "Enable RK ATAGS"
+    default n
+
+menu "RT-Thread rockchip inno-mipi-dphy driver"
+config RT_USING_INNO_MIPI_DPHY
+    bool "Enable INNO_MIPI_DPHY"
+    default n
+endmenu
+
+config RT_USING_XIP
+    depends on RT_USING_SNOR
+    bool "Enable XIP"
+    default n
+
 menuconfig RT_USING_SNOR
     bool "Enable ROCKCHIP SPI NOR Flash"
     select RT_USING_MTD_NOR
-    select RT_USING_FWANALYSIS
     default n
 
 if RT_USING_SNOR
@@ -285,6 +336,12 @@ if RT_USING_SNOR
         bool "Set SPI Host DUAL IO Lines"
         default n
 
+    config RT_SNOR_XIP_DATA_BEGIN
+        int "Designate the starting address for accessing in XIP mode"
+        default 0
+        help
+            Designate the starting address for accessing in XIP mode rather than in function interface mode. If set
+            to 0, it means full space XIP access.
 choice
     prompt "Choose SPI Nor Flash Adapter"
     default RT_USING_SNOR_FSPI_HOST
@@ -323,6 +380,12 @@ menu "RT-Thread rockchip jpeg enc driver"
             depends on RT_USING_JPEG_ENC
             default n
         endif
+endmenu
+
+menu "RT-Thread rockchip rga driver"
+    config RT_USING_RGA
+        bool "Enable rga"
+        default n
 endmenu
 
 menu "RT-Thread rockchip pm drivers"
@@ -398,7 +461,7 @@ config RT_USING_ISP3
 
 config RT_USING_ISP_DDR_ADRESS
     hex "isp ddr phy address"
-    default 0x860000
+    default 0x1e60000
     depends on RT_USING_ISP3 || RT_USING_ISP
 
 config RT_USING_ISP_DDR_SIZE
@@ -474,40 +537,6 @@ choice
         bool "Enable F37"
     config RT_USING_SC230AI
         bool "Enable SC230AI"
-    config RT_USING_SC501AI
-        bool "Enable SC501AI"
-    config RT_USING_SC2336
-        bool "Enable SC2336"
-    config RT_USING_SC301IOT
-        bool "Enable SC301IOT"
-    config RT_USING_SC3336
-        bool "Enable SC3336"
-    config RT_USING_SC3338
-        bool "Enable SC3338"
-    config RT_USING_SC4336
-        bool "Enable SC4336"
-    config RT_USING_SC4336P
-        bool "Enable SC4336P"
-    config RT_USING_GC3003
-        bool "Enable GC3003"
-    config RT_USING_SC200AI
-        bool "Enable SC200AI"
-    config RT_USING_GC2093
-        bool "Enable GC2093"
-
-endchoice
-endmenu
-
-menu "RT-Thread rockchip ambient light sensor driver"
-config RT_USING_ALS
-    bool "Ambient light sensor driver config"
-    default n
-
-choice
-    prompt "Select ambient light sensor"
-    depends on RT_USING_ALS
-    config RT_USING_ALS_LTR308
-        bool "Enable Lite-On LTR308 ambient light sensor"
 endchoice
 endmenu
 
@@ -529,6 +558,60 @@ config RT_USING_BUFFER_MANAGE
     default n
 endmenu
 
+menuconfig RT_USING_HDMI_SWITCH_DRIVERS
+    bool "hdmi switch drivers config"
+    default n
+
+if RT_USING_HDMI_SWITCH_DRIVERS
+        config RT_USING_IT6632X
+        bool "it6632x driver select"
+        depends on RT_USING_I2C
+        default n
+
+        config RT_IT6632X_FW_UPGRADE
+        bool "it6632x fw upgrade"
+        depends on RT_USING_IT6632X
+        default n
+
+        config RT_USING_EP91A7P
+        bool "ep91a7p driver select"
+        depends on RT_USING_I2C
+        default n
+
+        config RT_EP91A7P_FW_UPGRADE
+        bool "ep91a7p fw upgrade"
+        depends on RT_USING_EP91A7P
+        default n
+endif
+
+menuconfig RT_USING_LED_TUBE
+    bool "led tube driver config"
+    default n
+
+    if RT_USING_LED_TUBE
+        config RT_USING_AIP1640
+        depends on RT_USING_LED_TUBE
+        bool "aip1640 driver select"
+        default n
+
+        config RT_USING_AIP1629
+        depends on RT_USING_LED_TUBE
+        bool "aip1629 driver select"
+        default n
+    endif
+
+menuconfig RT_USING_LEDS
+    bool "led driver config"
+    default n
+
+    if RT_USING_LEDS
+    source "$BSP_DIR/../common/drivers/leds/Kconfig"
+    endif
+
+menuconfig RT_USING_IOEXPANDER
+    bool "IoExpander driver config"
+    default n
+
 menuconfig RT_USING_TOUCH_DRIVERS
     bool "Touch drivers config"
     depends on RT_USING_TOUCH
@@ -540,13 +623,19 @@ if RT_USING_TOUCH_DRIVERS
         default RT_USING_TOUCH_GTXX
 
         config RT_USING_TOUCH_GTXX
-            bool "GT touch driver select"
+            bool "GTxx touch driver select"
+
+        config RT_USING_TOUCH_GT1X
+            bool "GT1x touch driver select"
 
         config RT_USING_TOUCH_S3706
             bool "S3706 touch driver select"
 
         config RT_USING_CSTXX
             bool "CST touch driver select"
+
+        config RT_USING_TOUCH_ST1232
+            bool "Sitronix touch driver select"
 
         config RT_USING_CYTTSP5
             bool "Cyttsp5 touch driver select"
@@ -563,26 +652,6 @@ if RT_USING_TOUCH_DRIVERS
     config RT_TOUCH_Y_RANGE
         int "touch y range"
         default 1280
-endif
-
-menuconfig RT_USING_TOUCHKEY_DRIVERS
-    bool "Touch Key drivers config"
-    depends on RT_USING_TOUCH
-    default n
-
-if RT_USING_TOUCHKEY_DRIVERS
-    choice
-        prompt "Choose touch driver"
-        default RT_USING_GT308L
-
-        config RT_USING_GT308L
-            bool "GT308L touch key driver select"
-
-    endchoice
-
-    config RT_TOUCH_KEY_NUMBER
-        int "touch key number"
-        default 5
 endif
 
 config RT_USING_SENSOR_HUB
@@ -691,7 +760,10 @@ endmenu
 
 menuconfig RT_USING_SPINAND
     bool "Enable ROCKCHIP SPI Nand Flash"
-    select RT_USING_MTD
+    select RT_USING_MTD_NAND
+    select RT_USING_DFS
+    select RT_USING_MINI_FTL
+    select RT_USING_DMA
     default n
 
 if RT_USING_SPINAND
@@ -702,12 +774,26 @@ if RT_USING_SPINAND
         help
             Reset the speed of SPI Nand flash based on SPI Nand characteristics, usually it range from 80MHz to 133MHz.
 
+    config RT_USING_MINI_FTL
+        bool "Support mini ftl"
+        default y
+        help
+            Support apis with mini ftl, mainly implementing bad block management within the partition.
+
 choice
     prompt "Choose SPI Nand Flash Adapter"
     default RT_USING_SPINAND_FSPI_HOST
 
     config RT_USING_SPINAND_FSPI_HOST
         bool "Attach FSPI controller to SPINAND"
+
+    if RT_USING_SPINAND_FSPI_HOST
+    config RT_USING_SPINAND_FSPI_CS1
+        bool "extend fspi cs1 as SPINAND device"
+    endif
+
+    config RT_USING_SPINAND_SFC_HOST
+        bool "Attach SFC controller to SPINAND"
 
     config RT_USING_SPINAND_SPI_HOST
         bool "Attach SPI controller to SPINAND"
@@ -736,11 +822,10 @@ if RT_USING_PSTORE
 endif
 endmenu
 
-menu "RT-Thread rockchip AMP driver"
-
+menu "RT-Thread rockchip RPMSG driver"
 config RT_USING_RPMSG_LITE
     bool "Enable RPMSG LITE"
-    depends on BSP_RK3308 || BSP_RK3568 || BSP_RK3588
+    depends on BSP_RK3308 || BSP_RK3568 || BSP_RK3562 || BSP_RK3588 || BSP_RK3506 || BSP_RK3576
     default n
 
     if RT_USING_RPMSG_LITE
@@ -751,22 +836,194 @@ config RT_USING_RPMSG_LITE
 
 endmenu
 
-config RT_LWIP_USING_HW_CHECKSUM
-    bool
-    default n
-
 menu "Enable FTL"
     config RT_USING_FTL
         bool "Enable Flash FTL"
         default n
-choice
-    prompt "Choose Flash FTL for RK SPINAND driver"
-    default RT_USING_DHARA
+if RT_USING_FTL
+    choice
+        prompt "Choose Flash FTL for RK SPINAND driver"
+        default RT_USING_DHARA
 
-    config RT_USING_DHARA
-        bool "Enable DHARA FTL"
-        depends on RT_USING_SPINAND
-        default n
-endchoice
+        config RT_USING_DHARA
+            bool "Enable DHARA FTL"
+            depends on RT_USING_SPINAND
+            default n
+
+        if RT_USING_DHARA
+        config RT_USING_DHARA_ENABLE_CACHE
+            bool "Enable DHARA FTL data cache"
+            default n
+            help
+                If enable it, not sync meta data for each single write, it
+                requires the file system to call flush to complete ftl sync.
+        endif
+    endchoice
+endif
 endmenu
+
+config RT_USING_MULTIMEDIA
+    bool "enbale rockit and rkadk"
+    default n
+
+if RT_USING_MULTIMEDIA
+    menuconfig RT_USING_ROCKIT
+        bool "rockit"
+        select RT_USING_POSIX_FS
+        select RT_USING_POSIX_DEVIO
+        select RT_USING_POSIX_POLL
+        select RT_USING_POSIX_SELECT
+        select RT_USING_POSIX_DELAY
+        select RT_USING_POSIX_CLOCK
+        select RT_USING_POSIX_PIPE
+        select RT_USING_POSIX_MESSAGE_SEMAPHORE
+        select RT_USING_POSIX_STDIO
+        select RT_USING_PTHREADS
+        select RT_USING_DFS
+        select RT_USING_UNCACHE_HEAP
+        default n
+        help
+            rockit: light-weight multimedia api
+
+    if RT_USING_ROCKIT
+        config RT_USING_ROCKIT_VI
+            bool "vi"
+            default n
+            help
+                rockit video input module
+
+        config RT_USING_ROCKIT_VPSS
+            bool "vpss"
+            default n
+            help
+                rockit video process module
+
+        config RT_USING_ROCKIT_VENC
+            bool "venc"
+            default n
+            help
+                rockit video encoder module
+
+        config RT_USING_ROCKIT_VDEC
+            bool "vdec"
+            default y
+            help
+                rockit video decoder module
+
+        config RT_USING_ROCKIT_VO
+            bool "vo"
+            default y
+            help
+                rockit video output module
+
+        config RT_USING_ROCKIT_TDE
+            bool "tde"
+            default y
+            help
+                rockit video Two Dimensional Engine module
+
+        config RT_USING_ROCKIT_VGS
+            bool "vgs"
+            default n
+            help
+                rockit video Graphics sub system module
+
+        config RT_USING_ROCKIT_AVS
+            bool "avs"
+            default n
+            help
+                rockit Any View Stitching system module
+
+        config RT_USING_ROCKIT_RGN
+            bool "rgn"
+            default y
+            help
+                rockit region manange module
+
+        config RT_USING_ROCKIT_AI
+            bool "ai"
+            default y
+            help
+                rockit Audio input module
+
+        config RT_USING_ROCKIT_AO
+            bool "ao"
+            default y
+            help
+                rockit Audio output module
+
+        config RT_USING_ROCKIT_ADEC
+            bool "adec"
+            default y
+            help
+                rockit Audio decoder module
+
+        config RT_USING_ROCKIT_AENC
+            bool "aenc"
+            default y
+            help
+                rockit Audio encoder module
+
+    endif
+
+    menuconfig RT_USING_RKADK
+        bool "rkadk"
+        select RT_USING_POSIX_FS
+        select RT_USING_POSIX_DEVIO
+        select RT_USING_POSIX_POLL
+        select RT_USING_POSIX_DELAY
+        select RT_USING_POSIX_CLOCK
+        select RT_USING_POSIX_PIPE
+        select RT_USING_POSIX_MMAN
+        select RT_USING_POSIX_MESSAGE_SEMAPHORE
+        select RT_USING_PTHREADS
+        select RT_USING_LWIP
+        select RT_USING_LWIP212
+        select RT_USING_ROCKIT
+        default n
+        help
+            rkadk: light-weight multimedia api
+
+    if RT_USING_RKADK
+        config RT_RKADK_ENABLE_COMMON_FUNCTIONS
+            bool "common"
+            default n
+            help
+                rkadk common module
+
+        config RT_RKADK_ENABLE_AOV
+            bool "aov"
+            default n
+            help
+                rkadk aov module
+
+        config RT_RKADK_ENABLE_STORAGE
+            bool "storage"
+            default n
+            help
+                rkadk storage module
+
+        config RT_RKADK_ENABLE_DISPLAY
+            bool "display"
+            default n
+            help
+                rkadk display module
+
+        config RT_RKADK_ENABLE_PLAYER
+            bool "player"
+            default y
+            help
+                rkadk player module
+
+        config RT_RKADK_BUILD_EXAMPLES
+            bool "examples"
+            default y
+            help
+                rkadk examples module
+
+    endif
+endif
+
+source "$BSP_DIR/../common/drivers/Kconfig.spinorlist"
+
 endmenu

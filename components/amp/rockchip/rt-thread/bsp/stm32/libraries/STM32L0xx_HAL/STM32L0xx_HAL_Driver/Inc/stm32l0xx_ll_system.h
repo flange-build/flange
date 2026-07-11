@@ -18,29 +18,13 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; COPYRIGHT(c) 2016 STMicroelectronics</center></h2>
+  * <h2><center>&copy; Copyright (c) 2016 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * Redistribution and use in source and binary forms, with or without modification,
-  * are permitted provided that the following conditions are met:
-  *   1. Redistributions of source code must retain the above copyright notice,
-  *      this list of conditions and the following disclaimer.
-  *   2. Redistributions in binary form must reproduce the above copyright notice,
-  *      this list of conditions and the following disclaimer in the documentation
-  *      and/or other materials provided with the distribution.
-  *   3. Neither the name of STMicroelectronics nor the names of its contributors
-  *      may be used to endorse or promote products derived from this software
-  *      without specific prior written permission.
-  *
-  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
@@ -74,14 +58,11 @@ extern "C" {
   * @{
   */
 
-/* Defines used for position in the register */
-#define DBGMCU_REVID_POSITION         (uint32_t)16U
-
 /**
  * @brief Power-down in Run mode Flash key
  */
-#define FLASH_PDKEY1                  ((uint32_t)0x04152637U) /*!< Flash power down key1 */
-#define FLASH_PDKEY2                  ((uint32_t)0xFAFBFCFDU) /*!< Flash power down key2: used with FLASH_PDKEY1 
+#define FLASH_PDKEY1                  (0x04152637U) /*!< Flash power down key1 */
+#define FLASH_PDKEY2                  (0xFAFBFCFDU) /*!< Flash power down key2: used with FLASH_PDKEY1
                                                                    to unlock the RUN_PD bit in FLASH_ACR */
 
 /**
@@ -99,7 +80,7 @@ extern "C" {
 /** @defgroup SYSTEM_LL_EC_REMAP SYSCFG Memory Remap
 * @{
 */
-#define LL_SYSCFG_REMAP_FLASH              (uint32_t)0x00000000U                                 /*!< Main Flash memory mapped at 0x00000000              */
+#define LL_SYSCFG_REMAP_FLASH              0x00000000U                                           /*!< Main Flash memory mapped at 0x00000000              */
 #define LL_SYSCFG_REMAP_SYSTEMFLASH        SYSCFG_CFGR1_MEM_MODE_0                               /*!< System Flash memory mapped at 0x00000000            */
 #define LL_SYSCFG_REMAP_SRAM               (SYSCFG_CFGR1_MEM_MODE_1 | SYSCFG_CFGR1_MEM_MODE_0)   /*!< SRAM mapped at 0x00000000                           */
 
@@ -111,7 +92,7 @@ extern "C" {
 /** @defgroup SYSTEM_LL_EC_BANKMODE SYSCFG Bank Mode
   * @{
   */
-#define LL_SYSCFG_BANKMODE_BANK1           (uint32_t)0x00000000U     /*!< Flash Bank1 mapped at 0x08000000 (and aliased at 0x00000000),
+#define LL_SYSCFG_BANKMODE_BANK1           0x00000000U               /*!< Flash Bank1 mapped at 0x08000000 (and aliased at 0x00000000),
                                                                           Flash Bank2 mapped at 0x08018000 (and aliased at 0x00018000),
                                                                           Data EEPROM Bank1 mapped at 0x08080000 (and aliased at 0x00080000),
                                                                           Data EEPROM Bank2 mapped at 0x08080C00 (and aliased at 0x00080C00) */
@@ -128,7 +109,7 @@ extern "C" {
 /** @defgroup SYSTEM_LL_EC_BOOTMODE SYSCFG Boot Mode
 * @{
 */
-#define LL_SYSCFG_BOOTMODE_FLASH           (uint32_t)0x00000000U                                 /*!< Main Flash memory boot mode              */
+#define LL_SYSCFG_BOOTMODE_FLASH           0x00000000U                                           /*!< Main Flash memory boot mode              */
 #define LL_SYSCFG_BOOTMODE_SYSTEMFLASH     SYSCFG_CFGR1_BOOT_MODE_0                              /*!< System Flash memory boot mode            */
 #define LL_SYSCFG_BOOTMODE_SRAM            (SYSCFG_CFGR1_BOOT_MODE_1 | SYSCFG_CFGR1_BOOT_MODE_0) /*!< SRAM boot mode                           */
 
@@ -176,7 +157,7 @@ extern "C" {
 /** @defgroup SYSTEM_LL_VREFINT_CONTROL SYSCFG VREFINT Control
   * @{
   */
-#define LL_SYSCFG_VREFINT_CONNECT_NONE        (uint32_t)0x00000000U             /*!< No pad connected to VREFINT_ADC */
+#define LL_SYSCFG_VREFINT_CONNECT_NONE        0x00000000U                       /*!< No pad connected to VREFINT_ADC */
 #define LL_SYSCFG_VREFINT_CONNECT_IO1         SYSCFG_CFGR3_VREF_OUT_0           /*!< PB0 connected to VREFINT_ADC */
 #define LL_SYSCFG_VREFINT_CONNECT_IO2         SYSCFG_CFGR3_VREF_OUT_1           /*!< PB1 connected to VREFINT_ADC */
 #define LL_SYSCFG_VREFINT_CONNECT_IO1_IO2     (SYSCFG_CFGR3_VREF_OUT_0 | SYSCFG_CFGR3_VREF_OUT_1)   /*!< PB0 and PB1 connected to VREFINT_ADC */
@@ -187,17 +168,17 @@ extern "C" {
 /** @defgroup SYSTEM_LL_EC_EXTI_PORT SYSCFG EXTI Port
   * @{
   */
-#define LL_SYSCFG_EXTI_PORTA               (uint32_t)0U              /*!< EXTI PORT A */
-#define LL_SYSCFG_EXTI_PORTB               (uint32_t)1U              /*!< EXTI PORT B */
-#define LL_SYSCFG_EXTI_PORTC               (uint32_t)2U              /*!< EXTI PORT C */
+#define LL_SYSCFG_EXTI_PORTA               0U              /*!< EXTI PORT A */
+#define LL_SYSCFG_EXTI_PORTB               1U              /*!< EXTI PORT B */
+#define LL_SYSCFG_EXTI_PORTC               2U              /*!< EXTI PORT C */
 #if defined(GPIOD_BASE)
-#define LL_SYSCFG_EXTI_PORTD               (uint32_t)3U              /*!< EXTI PORT D */
+#define LL_SYSCFG_EXTI_PORTD               3U              /*!< EXTI PORT D */
 #endif /*GPIOD_BASE*/
 #if defined(GPIOE_BASE)
-#define LL_SYSCFG_EXTI_PORTE               (uint32_t)4U              /*!< EXTI PORT E */
+#define LL_SYSCFG_EXTI_PORTE               4U              /*!< EXTI PORT E */
 #endif /*GPIOE_BASE*/
 #if defined(GPIOH_BASE)
-#define LL_SYSCFG_EXTI_PORTH               (uint32_t)5U              /*!< EXTI PORT H */
+#define LL_SYSCFG_EXTI_PORTH               5U              /*!< EXTI PORT H */
 #endif /*GPIOH_BASE*/
 /**
   * @}
@@ -270,7 +251,7 @@ extern "C" {
 /** @defgroup SYSTEM_LL_EC_LATENCY FLASH LATENCY
   * @{
   */
-#define LL_FLASH_LATENCY_0                 ((uint32_t)0x00000000U) /*!< FLASH Zero Latency cycle */
+#define LL_FLASH_LATENCY_0                 (0x00000000U)           /*!< FLASH Zero Latency cycle */
 #define LL_FLASH_LATENCY_1                 FLASH_ACR_LATENCY       /*!< FLASH One Latency cycle */
 /**
   * @}
@@ -749,7 +730,7 @@ __STATIC_INLINE uint32_t LL_DBGMCU_GetDeviceID(void)
   */
 __STATIC_INLINE uint32_t LL_DBGMCU_GetRevisionID(void)
 {
-  return (uint32_t)(READ_BIT(DBGMCU->IDCODE, DBGMCU_IDCODE_REV_ID) >> DBGMCU_REVID_POSITION);
+  return (uint32_t)(READ_BIT(DBGMCU->IDCODE, DBGMCU_IDCODE_REV_ID) >> DBGMCU_IDCODE_REV_ID_Pos);
 }
 
 /**

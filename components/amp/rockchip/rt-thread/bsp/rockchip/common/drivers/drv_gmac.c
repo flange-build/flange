@@ -49,8 +49,8 @@
 #define RK_GMAC_DEBUG 0
 
 #define MAX_ADDR_LEN 6
-#define ETH_RXBUFNB 4
-#define ETH_TXBUFNB 4
+#define ETH_RXBUFNB 32
+#define ETH_TXBUFNB 32
 
 #if RK_GMAC_DEBUG
 #define rk_gmac_dbg(dev, fmt, ...) \
@@ -121,9 +121,6 @@ struct rockchip_eth
     rt_uint8_t *rx_buff;
     rt_uint8_t *tx_buff;
 };
-
-extern void rt_hw_cpu_dcache_invalidate(void *addr, int size);
-extern void rt_hw_cpu_dcache_clean(void *addr, int size);
 
 /* interrupt service routine */
 void rt_rockchip_eth_irq(struct rockchip_eth *eth)
@@ -204,7 +201,7 @@ static inline int is_valid_ethaddr(const rt_uint8_t *addr)
  */
 static inline void net_random_ethaddr(rt_uint8_t *addr)
 {
-    unsigned int seed = HAL_TIMER_GetCount(SYS_TIMER) | 0xffffffff;
+    unsigned int seed = HAL_TIMER_GetCount(SYS_TIMER) & 0xffffffff;
     rt_int8_t i;
 
     for (i = 0; i < 6; i++)
@@ -257,8 +254,9 @@ static rt_err_t rt_rockchip_eth_init(rt_device_t dev)
         goto err;
     }
 
-    rt_memset(eth->rx_buff, 0, HAL_GMAC_MAX_PACKET_SIZE * ETH_RXBUFNB);
     rt_memset(eth->tx_buff, 0, HAL_GMAC_MAX_PACKET_SIZE * ETH_TXBUFNB);
+
+    HAL_DCACHE_InvalidateByRange((rt_int32_t)eth->rx_buff, HAL_GMAC_MAX_PACKET_SIZE * ETH_RXBUFNB);
 
     /* Initialize Rx Descriptors list */
     HAL_GMAC_DMARxDescInit(pGMAC, eth->rx_desc, eth->rx_buff, ETH_RXBUFNB);
@@ -270,7 +268,8 @@ static rt_err_t rt_rockchip_eth_init(rt_device_t dev)
     rt_hw_interrupt_umask(eth->dev->irqNum);
 
     clk_enable_by_id(eth->dev->pclkGateID);
-    clk_enable_by_id(eth->dev->clkGateID);
+    clk_enable_by_id(eth->dev->clkGateID125M);
+    clk_enable_by_id(eth->dev->clkGateID50M);
 
     /* Enable GMAC and DMA transmission and reception */
     ret = HAL_GMAC_Start(pGMAC, eth->dev_addr);
@@ -349,15 +348,15 @@ static void rt_rockchip_phy_reset(const struct rockchip_eth_config *config)
         HAL_GPIO_SetPinLevel(config->reset_gpio_bank,
                              config->reset_gpio_num,
                              GPIO_HIGH);
-        rt_thread_mdelay(config->reset_delay_ms[0]);
+        HAL_DelayMs(config->reset_delay_ms[0]);
         HAL_GPIO_SetPinLevel(config->reset_gpio_bank,
                              config->reset_gpio_num,
                              GPIO_LOW);
-        rt_thread_mdelay(config->reset_delay_ms[1]);
+        HAL_DelayMs(config->reset_delay_ms[1]);
         HAL_GPIO_SetPinLevel(config->reset_gpio_bank,
                              config->reset_gpio_num,
                              GPIO_HIGH);
-        rt_thread_mdelay(config->reset_delay_ms[2]);
+        HAL_DelayMs(config->reset_delay_ms[2]);
     }
 }
 
@@ -436,6 +435,7 @@ static void phy_monitor_thread_entry(void *parameter)
     }
 }
 
+#ifdef RT_USING_DEVICE_OPS
 const struct rt_device_ops eth_ops =
 {
     .init = rt_rockchip_eth_init,
@@ -445,6 +445,7 @@ const struct rt_device_ops eth_ops =
     .write = rt_rockchip_eth_write,
     .control = rt_rockchip_eth_control,
 };
+#endif
 
 RT_WEAK const struct rockchip_eth_config rockchip_eth_config_table[] = {0};
 
@@ -491,6 +492,9 @@ rt_err_t rt_rockchip_eth_tx(rt_device_t dev, struct pbuf *p)
 {
     struct rockchip_eth *eth = (struct rockchip_eth *)dev;
     struct GMAC_HANDLE *pGMAC = &eth->instance;
+#ifdef RT_USING_GMAC_PTP
+    struct PTP_TIME timestamp;
+#endif
     rt_uint8_t *ptr = RT_NULL;
     rt_err_t status = RT_EOK;
 
@@ -502,7 +506,7 @@ rt_err_t rt_rockchip_eth_tx(rt_device_t dev, struct pbuf *p)
         return RT_EOK;
 
     /* lock ETH device */
-    rt_sem_take(&eth ->sem_lock, RT_WAITING_FOREVER);
+    rt_sem_take(&eth->sem_lock, RT_WAITING_FOREVER);
 
     /* copy data to tx buffer */
     ptr = (rt_uint8_t *)HAL_GMAC_GetTXBuffer(pGMAC);
@@ -510,16 +514,24 @@ rt_err_t rt_rockchip_eth_tx(rt_device_t dev, struct pbuf *p)
     pbuf_copy_partial(p, ptr, p->tot_len, 0);
     rt_rockchip_dump_hex(p->payload, p->tot_len);
 
-    rt_hw_cpu_dcache_clean(ptr, p->tot_len);
+    HAL_DCACHE_CleanByRange((rt_uint32_t)ptr, p->tot_len);
 
     status = HAL_GMAC_Send(pGMAC, ptr, p->tot_len);
     if (status)
     {
         rk_gmac_dbg(&eth->parent, "GMAC send failed: %d\n", status);
     }
+    else
+    {
+#ifdef RT_USING_GMAC_PTP
+        HAL_GMAC_GetTxTimestamp(pGMAC, &timestamp);
+        p->time_sec = timestamp.sec;
+        p->time_nsec = timestamp.nsec;
+#endif
+    }
 
     /* unlock ETH device */
-    rt_sem_release(&eth ->sem_lock);
+    rt_sem_release(&eth->sem_lock);
 
     return status;
 }
@@ -531,41 +543,139 @@ struct pbuf *rt_rockchip_eth_rx(rt_device_t dev)
     struct GMAC_HANDLE *pGMAC = &eth->instance;
     struct pbuf *p = RT_NULL;
     rt_uint8_t *ptr = RT_NULL;
+#ifdef RT_USING_GMAC_PTP
+    struct PTP_TIME timestamp;
+#endif
     rt_int32_t size;
 
     if (!pGMAC->phyStatus.link)
         return RT_NULL;
 
     /* lock ETH device */
-    rt_sem_take(&eth ->sem_lock, RT_WAITING_FOREVER);
+    rt_sem_take(&eth->sem_lock, RT_WAITING_FOREVER);
 
     ptr = HAL_GMAC_Recv(pGMAC, &size);
     if (size > 0 && ptr)
     {
-        rt_hw_cpu_dcache_invalidate(ptr, size);
+        HAL_DCACHE_InvalidateByRange((rt_int32_t)ptr, size);
         /* allocate buffer */
         p = pbuf_alloc(PBUF_LINK, size, PBUF_RAM);
         if (p != RT_NULL)
         {
             pbuf_take(p, ptr, size);
         }
+#ifdef RT_USING_GMAC_PTP
+        HAL_GMAC_GetRxTimestamp(pGMAC, &timestamp);
+        p->time_sec = timestamp.sec;
+        p->time_nsec = timestamp.nsec;
+#endif
         rt_rockchip_dump_hex(p->payload, p->tot_len);
         HAL_GMAC_CleanRX(pGMAC);
+        HAL_DCACHE_InvalidateByRange((rt_int32_t)ptr, HAL_GMAC_MAX_PACKET_SIZE);
     }
     else
     {
         rk_gmac_dbg(&eth->parent, "GMAC recv failed: %d\n", size);
         /* unlock ETH device */
-        rt_sem_release(&eth ->sem_lock);
+        rt_sem_release(&eth->sem_lock);
 
         return RT_NULL;
     }
 
     /* unlock ETH device */
-    rt_sem_release(&eth ->sem_lock);
+    rt_sem_release(&eth->sem_lock);
 
     return p;
 }
+
+#ifdef RT_USING_GMAC_PTP
+int rt_rockchip_ptp_set_time(void *handle, struct PTP_TIME *timestamp)
+{
+    struct rockchip_eth *eth = (struct rockchip_eth *)handle;
+    struct GMAC_HANDLE *pGMAC;
+
+    if (eth)
+    {
+        pGMAC = &eth->instance;
+        return HAL_GMAC_PTPSetTime(pGMAC, timestamp);
+    }
+
+    return -RT_ERROR;
+}
+
+int rt_rockchip_ptp_get_time(void *handle, struct PTP_TIME *timestamp)
+{
+    struct rockchip_eth *eth = (struct rockchip_eth *)handle;
+    struct GMAC_HANDLE *pGMAC;
+
+    if (eth)
+    {
+        pGMAC = &eth->instance;
+        HAL_GMAC_PTPGetTime(pGMAC, timestamp);
+        return RT_EOK;
+    }
+
+    return -RT_ERROR;
+}
+
+int rt_rockchip_ptp_update_offset(void *handle, struct PTP_TIME_OFFSET *timeoffset)
+{
+    struct rockchip_eth *eth = (struct rockchip_eth *)handle;
+    struct GMAC_HANDLE *pGMAC;
+
+    if (eth)
+    {
+        pGMAC = &eth->instance;
+        return HAL_GMAC_PTPUpdateTimeOffset(pGMAC, timeoffset);
+    }
+
+    return -RT_ERROR;
+}
+
+int rt_rockchip_ptp_adj_freq(void *handle, int32_t adj)
+{
+    struct rockchip_eth *eth = (struct rockchip_eth *)handle;
+    struct GMAC_HANDLE *pGMAC;
+
+    if (eth)
+    {
+        pGMAC = &eth->instance;
+        return HAL_GMAC_PTPAdjFreq(pGMAC, adj);
+    }
+
+    return -RT_ERROR;
+}
+
+int rt_rockchip_ptp_start(void *handle)
+{
+    struct rockchip_eth *eth = (struct rockchip_eth *)handle;
+    const struct HAL_GMAC_DEV *gmac_dev;
+    struct GMAC_HANDLE *pGMAC;
+
+    if (eth)
+    {
+        pGMAC = &eth->instance;
+        gmac_dev = eth->dev;
+        HAL_GMAC_PTPStart(pGMAC, clk_get_rate(gmac_dev->ptpClkID),
+                          HAL_GMAC_PTP_FINEUPDATE);
+        return RT_EOK;
+    }
+
+    return -RT_ERROR;
+}
+
+void *rt_rockchip_ptp_get_handle(void)
+{
+    struct rockchip_eth *const *eth;
+
+    for (eth = rockchip_eth_table; *eth != RT_NULL; eth++)
+    {
+        return *eth;
+    }
+
+    return RT_NULL;
+}
+#endif
 
 int rt_rockchip_hw_eth_init(void)
 {
@@ -600,16 +710,17 @@ int rt_rockchip_hw_eth_init(void)
         interface = (*eth)->config->mode;
         if (interface == PHY_INTERFACE_MODE_RGMII)
         {
-            clk_set_rate(gmac_dev->clkID, 125000000);
+            clk_set_rate(gmac_dev->clkID125M, 125000000);
         }
         else
         {
-            clk_set_rate(gmac_dev->clkID, 50000000);
+            clk_set_rate(gmac_dev->clkID50M, 50000000);
         }
         freq = clk_get_rate(gmac_dev->pclkID);
         HAL_GMAC_Init(&(*eth)->instance, gmac_dev->pReg, freq, interface,
                       (*eth)->config->external_clk);
 
+        memset(&config, 0, sizeof(struct GMAC_PHY_Config));
         config.speed = (*eth)->config->speed;
         config.maxSpeed = (*eth)->config->max_speed;
         config.duplexMode = PHY_DUPLEX_FULL;
@@ -629,7 +740,16 @@ int rt_rockchip_hw_eth_init(void)
         }
         HAL_GMAC_WriteHWAddr(&(*eth)->instance, (*eth)->dev_addr);
 
+#ifdef RT_USING_DEVICE_OPS
         (*eth)->parent.parent.ops           = &eth_ops;
+#else
+        (*eth)->parent.parent.init          = rt_rockchip_eth_init;
+        (*eth)->parent.parent.open          = rt_rockchip_eth_open;
+        (*eth)->parent.parent.close         = rt_rockchip_eth_close;
+        (*eth)->parent.parent.read          = rt_rockchip_eth_read;
+        (*eth)->parent.parent.write         = rt_rockchip_eth_write;
+        (*eth)->parent.parent.control       = rt_rockchip_eth_control;
+#endif
         (*eth)->parent.parent.user_data = *eth;
         (*eth)->parent.parent.type          = RT_Device_Class_NetIf;
 
@@ -653,6 +773,11 @@ int rt_rockchip_hw_eth_init(void)
         {
             rt_kprintf("eth_device_init faild: %d\n", state);
         }
+
+#ifdef RT_USING_GMAC_PTP
+        HAL_CRU_ClkEnable(gmac_dev->ptpClkGateID);
+        rt_rockchip_ptp_start(*eth);
+#endif
 
         eth_device_linkchange(&((*eth)->parent), RT_FALSE);
         /* start phy monitor */
@@ -759,6 +884,39 @@ void phy_write(uint32_t phyReg, uint32_t data)
     }
 }
 
+void phy_reg_show_usage(void)
+{
+    rt_kprintf("phy_reg read 0\n");
+    rt_kprintf("phy_reg write 0 0x3100\n");
+}
+
+void phy_reg(int argc, char **argv)
+{
+    rt_uint16_t addr, data;
+    char *cmd;
+
+    cmd = argv[1];
+    addr = strtol(argv[2], NULL, 16);
+    if (!rt_strcmp(cmd, "read"))
+    {
+        phy_read(addr);
+    }
+    else if (!rt_strcmp(cmd, "write"))
+    {
+        data = strtol(argv[3], NULL, 16);
+        phy_write(addr, data);
+    }
+    else
+    {
+        goto out;
+    }
+
+    return;
+out:
+    phy_reg_show_usage();
+    return;
+}
+
 void phy_dump(void)
 {
     struct GMAC_HANDLE *pGMAC;
@@ -836,9 +994,9 @@ void dump_desc_stat(void)
         rt_kprintf("[%2d] des0: 0x%8x, des1: %0x%8x, des2: %0x%8x, des3: %0x%8x\n",
                    i,
                    eth->rx_desc[i].des0,
-                   eth->rx_desc[i].des0,
-                   eth->rx_desc[i].des0,
-                   eth->rx_desc[i].des0);
+                   eth->rx_desc[i].des1,
+                   eth->rx_desc[i].des2,
+                   eth->rx_desc[i].des3);
     }
 
     for (i = 0; i < ETH_TXBUFNB; i++)
@@ -846,18 +1004,17 @@ void dump_desc_stat(void)
         rt_kprintf("[%2d] des0: 0x%8x, des1: %0x%8x, des2: %0x%8x, des3: %0x%8x\n",
                    i,
                    eth->tx_desc[i].des0,
-                   eth->tx_desc[i].des0,
-                   eth->tx_desc[i].des0,
-                   eth->tx_desc[i].des0);
+                   eth->tx_desc[i].des1,
+                   eth->tx_desc[i].des2,
+                   eth->tx_desc[i].des3);
     }
 }
 
-FINSH_FUNCTION_EXPORT(switch_id, switch eth id);
-FINSH_FUNCTION_EXPORT(phy_read, read phy register);
-FINSH_FUNCTION_EXPORT(phy_write, write phy register);
-FINSH_FUNCTION_EXPORT(phy_dump, dump phy registers);
-FINSH_FUNCTION_EXPORT(dump_net_stat, dump network info);
-FINSH_FUNCTION_EXPORT(dump_desc_stat, dump description info);
+MSH_CMD_EXPORT(switch_id, switch eth id);
+MSH_CMD_EXPORT(phy_reg, read / write phy register);
+MSH_CMD_EXPORT(phy_dump, dump phy registers);
+MSH_CMD_EXPORT(dump_net_stat, dump network info);
+MSH_CMD_EXPORT(dump_desc_stat, dump description info);
 #endif
 #endif
 #endif

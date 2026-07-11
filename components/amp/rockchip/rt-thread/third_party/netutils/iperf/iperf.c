@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -149,7 +150,7 @@ static void iperf_udp_server(void *thread_param)
         {
             f = (float)(sentlen * RT_TICK_PER_SECOND / 125 / (tick2 - tick1));
             f /= 1000.0f;
-            snprintf(speed, sizeof(speed), "%.4f Mbps! lost:%d total:%d\n", f, lost, total);
+            snprintf(speed, sizeof(speed), "%.4f Mbps! lost:%d total:%d\n", f, (int)lost, (int)total);
             rt_kprintf("%s", speed);
         }
     }

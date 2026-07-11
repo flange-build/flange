@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -28,8 +28,10 @@
 #define BAUD_RATE_921600                921600
 #define BAUD_RATE_1500000               1500000
 #define BAUD_RATE_2000000               2000000
+#define BAUD_RATE_2500000               2500000
 #define BAUD_RATE_3000000               3000000
 #define BAUD_RATE_4000000               4000000
+#define BAUD_RATE_8000000               8000000
 
 #define DATA_BITS_5                     5
 #define DATA_BITS_6                     6
@@ -79,8 +81,8 @@
 #define RT_SERIAL_TX_DATAQUEUE_SIZE     2048
 #define RT_SERIAL_TX_DATAQUEUE_LWM      30
 
-#define RT_SERIAL_AUTO_FLOW_ENABLE      0x01
-#define RT_SERIAL_AUTO_FLOW_DISABLE     0x00
+#define RT_SERIAL_FLOWCONTROL_CTSRTS     1
+#define RT_SERIAL_FLOWCONTROL_NONE       0
 
 /* Default config for serial_configure structure */
 #define RT_SERIAL_CONFIG_DEFAULT           \
@@ -92,6 +94,7 @@
     BIT_ORDER_LSB,    /* LSB first sent */ \
     NRZ_NORMAL,       /* Normal mode */    \
     RT_SERIAL_RB_BUFSZ, /* Buffer size */  \
+    RT_SERIAL_FLOWCONTROL_NONE, /* Off flowcontrol */ \
     0                                      \
 }
 
@@ -105,7 +108,7 @@ struct serial_configure
     rt_uint32_t bit_order               :1;
     rt_uint32_t invert                  :1;
     rt_uint32_t bufsz                   :16;
-    rt_uint32_t flow_ctrl               :1;
+    rt_uint32_t flowcontrol             :1;
     rt_uint32_t reserved                :5;
 };
 
@@ -127,7 +130,7 @@ struct rt_serial_tx_fifo
     struct rt_completion completion;
 };
 
-/* 
+/*
  * Serial DMA mode
  */
 struct rt_serial_rx_dma

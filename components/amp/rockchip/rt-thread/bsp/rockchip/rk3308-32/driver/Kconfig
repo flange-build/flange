@@ -72,7 +72,7 @@ endif
 if RT_USING_SDIO
 menu "Enable SDIO/SDMMC/eMMC"
     config RT_USING_SDIO0
-        bool "Enable SDIO controller"
+        bool "Enable eMMC controller"
         default n
 endmenu
 endif
@@ -81,7 +81,6 @@ menu "Enable GMAC"
     config RT_USING_GMAC
         bool "Enable GMAC"
         select RT_USING_LWIP
-        select RT_LWIP_USING_HW_CHECKSUM
         default n
 
     if RT_USING_GMAC
@@ -105,6 +104,10 @@ menu "Enable UART"
         default y
 
     if RT_USING_UART
+    config RT_USING_UART0
+        bool "Enable UART0"
+        default n
+
     config RT_USING_UART1
         bool "Enable UART1"
         default n
@@ -123,8 +126,70 @@ menu "Enable UART"
     endif
 endmenu
 
+config RT_USING_DISPLAY
+    bool "Enable Display"
+    default n
+
+choice
+    prompt "Display Controller"
+    depends on RT_USING_DISPLAY
+
+    config RT_USING_VOP
+        bool "Enable VOP Composite"
+        depends on RT_USING_DISPLAY
+        default y
+endchoice
+
+choice
+    prompt "Display Interface"
+    depends on RT_USING_VOP
+
+    config RT_USING_VOP_RGB
+        bool "Enable RGB Display Interface"
+        default y
+
+    config RT_USING_VOP_MCU
+        bool "Enable MCU Display Interface"
+        default n
+endchoice
+
 config RT_USING_SHARE_CONSOLE_OUT
     bool "Enable spinlock for share console output"
     default y
+
+if RT_USING_USB_HOST
+menu "Enable USB HOST"
+    config RT_USING_DWC2_USBH
+        bool "Enable USB OTG HOST"
+        depends on !RT_USING_USB_DEVICE
+        default n
+
+    if RT_USING_DWC2_USBH
+    config RT_USING_DWC2_USBH0
+        bool "Enable USB OTG0 HOST"
+        default n
+    endif
+
+    config RT_USING_USBH_EHCI
+        bool "Enable USB2.0 HOST"
+        default n
+
+    if RT_USING_USBH_EHCI
+    config RT_USING_EHCI_USBH0
+        bool "Enable USB EHCI0 HOST"
+        default n
+    endif
+
+    config RT_USING_USBH_OHCI
+        bool "Enable USB1.1 HOST"
+        default n
+
+    if RT_USING_USBH_OHCI
+    config RT_USING_OHCI_USBH0
+        bool "Enable USB OHCI0 HOST"
+        default n
+    endif
+endmenu
+endif
 
 endmenu

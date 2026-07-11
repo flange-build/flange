@@ -16,9 +16,11 @@ config BSP_RK3568
     bool
     select ARCH_ARMV8
     select ARCH_ARM_CORTEX_A
+    select RT_USING_GIC_V3
     select RT_USING_COMPONENTS_INIT
     select RT_USING_USER_MAIN
     select RT_USING_FPU
+    select RT_USING_CPU_FFS
     default y
 
 config ARCH_ARMV8

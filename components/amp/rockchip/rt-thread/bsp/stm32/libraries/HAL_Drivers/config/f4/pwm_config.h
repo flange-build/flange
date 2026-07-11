@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -16,6 +16,17 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#ifdef BSP_USING_PWM1
+#ifndef PWM1_CONFIG
+#define PWM1_CONFIG                             \
+    {                                           \
+       .tim_handle.Instance     = TIM1,         \
+       .name                    = "pwm1",       \
+       .channel                 = 0             \
+    }
+#endif /* PWM1_CONFIG */
+#endif /* BSP_USING_PWM1 */
 
 #ifdef BSP_USING_PWM2
 #ifndef PWM2_CONFIG
@@ -60,6 +71,39 @@ extern "C" {
     }
 #endif /* PWM5_CONFIG */
 #endif /* BSP_USING_PWM5 */
+
+#ifdef BSP_USING_PWM8
+#ifndef PWM8_CONFIG
+#define PWM8_CONFIG                             \
+    {                                           \
+       .tim_handle.Instance     = TIM8,         \
+       .name                    = "pwm8",       \
+       .channel                 = 0             \
+    }
+#endif /* PWM8_CONFIG */
+#endif /* BSP_USING_PWM8 */
+
+#ifdef BSP_USING_PWM9
+#ifndef PWM9_CONFIG
+#define PWM9_CONFIG                             \
+    {                                           \
+       .tim_handle.Instance     = TIM9,         \
+       .name                    = "pwm9",       \
+       .channel                 = 0             \
+    }
+#endif /* PWM9_CONFIG */
+#endif /* BSP_USING_PWM9 */
+
+#ifdef BSP_USING_PWM12
+#ifndef PWM12_CONFIG
+#define PWM12_CONFIG                            \
+    {                                           \
+       .tim_handle.Instance     = TIM12,        \
+       .name                    = "pwm12",      \
+       .channel                 = 0             \
+    }
+#endif /* PWM12_CONFIG */
+#endif /* BSP_USING_PWM12 */
 
 #ifdef __cplusplus
 }

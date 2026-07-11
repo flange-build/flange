@@ -40,7 +40,7 @@ struct clk_gate
 struct clk_init
 {
     const char *name;
-    uint32_t clk_id;
+    uint64_t clk_id;
     uint32_t init_rate;
 };
 

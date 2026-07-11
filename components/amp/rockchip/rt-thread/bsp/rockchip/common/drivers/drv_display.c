@@ -39,7 +39,7 @@ The Display driver use to Init display control include VOP, MIPI DSI and other d
     - rt_err_t rk_display_disable(struct display_state *state): disable display output;
 
 - **Commit display config**:
-    - rt_err_t rk_display_commit(struct display_state *state): commit one frame display config;
+    - rt_err_t rk_display_commit(struct display_state *state, enum rockchip_display_commit_mode mode): commit one frame display config;
 
 - **Te handle thread**:
     - void  rk_display_te_handle_thread(void *p): emulate TE irq to commit one frame;
@@ -74,8 +74,11 @@ static bool boot_flag = true;
 /********************* Private Variable Definition ******************************/
 extern const struct rockchip_crtc_funcs rockchip_vop_funcs;
 extern const struct rockchip_connector_funcs rockchip_rgb_funcs;
-#ifdef RT_USING_DSI
+#if defined(RT_USING_DSI) || defined(RT_USING_DW_MIPI_DSI)
 extern const struct rockchip_connector_funcs rockchip_dsi_funcs;
+#endif
+#ifdef RT_USING_INNO_MIPI_DPHY
+extern const struct rockchip_phy_funcs rockchip_dphy_funcs;
 #endif
 extern const struct rockchip_panel_funcs rockchip_panel_funcs;
 /********************* Public Function Definitions ******************************/
@@ -90,8 +93,11 @@ void rk_display_vmode_to_drm_mode(struct video_mode *mode_input,
  */
 static rt_err_t rk_connector_dsi_init(struct display_state *state)
 {
-#ifdef RT_USING_DSI
+#if defined(RT_USING_DSI) || defined(RT_USING_DW_MIPI_DSI)
     state->conn_state.funcs = &rockchip_dsi_funcs;
+#endif
+#ifdef RT_USING_INNO_MIPI_DPHY
+    state->phy_state.funcs = &rockchip_dphy_funcs;
 #endif
     return RT_EOK;
 }
@@ -197,9 +203,10 @@ static rt_err_t rk_display_disable(struct display_state *state)
 /**
  * @brief  Commit one frame to display.
  * @param  state: display state.
+ * @param  mode: nonblocking commit or blocking commit.
  * return rt_err_t.
  */
-static rt_err_t rk_display_commit(struct display_state *state)
+static rt_err_t rk_display_commit(struct display_state *state, enum rockchip_display_commit_mode mode)
 {
 #ifdef RT_HW_LCD_GPIO_TRIGGER_PIN
     int ret = 0;
@@ -232,7 +239,7 @@ static rt_err_t rk_display_commit(struct display_state *state)
             state->crtc_state.funcs->set_area(state, &display_rect);
         state->conn_state.funcs->set_area(state, &display_rect);
     }
-    state->crtc_state.funcs->commit(state);
+    state->crtc_state.funcs->commit(state, mode);
 
     return RT_EOK;
 }
@@ -279,8 +286,13 @@ static rt_err_t rt_lcd_init(rt_device_t dev)
     /**
      * init rt_device_graphic_info structure.
      */
+#ifdef RT_USING_DW_MIPI_DSI
+    state->graphic_info.bits_per_pixel = 24;
+    state->graphic_info.pixel_format = RTGRAPHIC_PIXEL_FORMAT_RGB888;
+#else
     state->graphic_info.bits_per_pixel = 8;
     state->graphic_info.pixel_format = RTGRAPHIC_PIXEL_FORMAT_RGB332;
+#endif
     state->graphic_info.framebuffer = (void *)state->rtt_framebuffer;
     state->graphic_info.width = state->mode.crtcHdisplay;
     state->graphic_info.height = state->mode.crtcVdisplay;
@@ -335,6 +347,9 @@ static rt_err_t rt_lcd_control(rt_device_t dev, int cmd, void *args)
     const struct rockchip_crtc_funcs *crtc_funcs = state->crtc_state.funcs;
     struct crtc_lut_state *lut_state = NULL;
     struct CRTC_WIN_STATE *win_state;
+    struct DISPLAY_MODE_INFO *mode_info = &state->mode;
+    rt_uint32_t event = false;
+    rt_uint32_t interframe_time;
     rt_err_t ret = RT_EOK;
     int i = 0;
 
@@ -359,6 +374,7 @@ static rt_err_t rt_lcd_control(rt_device_t dev, int cmd, void *args)
     case RK_DISPLAY_CTRL_SET_POST_CLIP:
     case RK_DISPLAY_CTRL_SET_SCALE:
     case RK_DISPLAY_CTRL_UPDATE_BL:
+    case RK_DISPLAY_CTRL_WAIT_VBLANK:
         if (!state->enabled)
             display_dbg(dev, "[please check] display not enabled when do: 0x%lx\n", cmd);
         break;
@@ -393,6 +409,28 @@ static rt_err_t rt_lcd_control(rt_device_t dev, int cmd, void *args)
     }
 #endif
 
+    if (cmd == RK_DISPLAY_CTRL_WAIT_VBLANK)
+    {
+        if (!mode_info || !mode_info->vrefresh)
+            return RT_EOK;
+
+        rt_mutex_take(&state->vblank_lock, RT_WAITING_FOREVER);
+        interframe_time = 1000000 / mode_info->vrefresh;
+        /* Set timeout to interframe_time * 1.5 for margin */
+        ret = rt_event_recv(state->vblank_event,
+                            true,
+                            RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
+                            interframe_time * 3 / 2, &event);
+        if (!event)
+        {
+            rt_kprintf("Wait vblank timeout %d\n", ret);
+            return -RT_ETIMEOUT;
+        }
+        rt_mutex_release(&state->vblank_lock);
+
+        return RT_EOK;
+    }
+
     rt_mutex_take(&state->display_lock, RT_WAITING_FOREVER);
     switch (cmd)
     {
@@ -404,7 +442,7 @@ static rt_err_t rt_lcd_control(rt_device_t dev, int cmd, void *args)
 #endif
         state->crtc_state.funcs->set_scale(state);
         state->crtc_state.funcs->set_plane(state, &state->crtc_state.win_state[0]);
-        rk_display_commit(state);
+        rk_display_commit(state, DISPLAY_COMMIT_NONBLOCK);
         break;
     case RTGRAPHIC_CTRL_POWERON:
         pm_runtime_request(PM_RUNTIME_ID_VOP);
@@ -455,7 +493,7 @@ static rt_err_t rt_lcd_control(rt_device_t dev, int cmd, void *args)
             if (state->crtc_state.win_state[i].winUpdate)
                 crtc_funcs->set_plane(state, &state->crtc_state.win_state[i]);
         }
-        rk_display_commit(state);
+        rk_display_commit(state, (enum rockchip_display_commit_mode)args);
         break;
     case RK_DISPLAY_CTRL_LOAD_LUT:
         lut_state = (struct crtc_lut_state *)args;
@@ -570,6 +608,10 @@ int rt_hw_lcd_init(void)
     RT_ASSERT(state->isr_workqueue != NULL);
     rt_event_init(&state->event, "displayEvent", RT_IPC_FLAG_FIFO);
 
+    state->vblank_event = rt_event_create("vblankEvent", RT_IPC_FLAG_FIFO);
+    if (rt_mutex_init(&(state->vblank_lock), "vblankLock", RT_IPC_FLAG_FIFO) != RT_EOK)
+        RT_ASSERT(0);
+
     /* register lcd device to RT-Thread */
     rt_device_register(&state->lcd, "lcd", RT_DEVICE_FLAG_RDWR);
 
@@ -610,6 +652,21 @@ void rk_display_vmode_to_drm_mode(struct video_mode *mode_input,
     mode_output->crtcVtotal = mode_output->crtcVsyncEnd +
                               mode_input->upper_margin;
     mode_output->flags = mode_input->flag;
+
+    if (mode_output->crtcHtotal == 0 || mode_output->crtcVtotal == 0)
+    {
+        mode_output->vrefresh = 0;
+    }
+    else
+    {
+        mode_output->vrefresh = HAL_DIV_ROUND_CLOSEST(mode_output->crtcClock * 1000,
+                                mode_output->crtcHtotal * mode_output->crtcVtotal);
+
+        if (mode_output->flags & VIDEO_MODE_FLAG_INTERLACE)
+            mode_output->vrefresh *= 2;
+        if (mode_output->flags & VIDEO_MODE_FLAG_DBLSCAN)
+            mode_output->vrefresh /= 2;
+    }
 }
 
 INIT_DEVICE_EXPORT(rt_hw_lcd_init);

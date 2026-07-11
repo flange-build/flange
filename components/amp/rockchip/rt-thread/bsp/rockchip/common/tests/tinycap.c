@@ -95,12 +95,22 @@ static uint32_t capture_sample(FILE *file, struct rt_device *card,
         return 0;
     }
 
+    memset(&param, 0, sizeof(struct AUDIO_PARAMS));
     param.channels = channels;
     param.sampleRate = rate;
     param.sampleBits = bits;
 
+    ret = rt_device_control(card, RK_AUDIO_CTL_HW_PARAMS, &param);
+    RT_ASSERT(ret == RT_EOK);
+
+    ret = rt_device_control(card, RK_AUDIO_CTL_PCM_PREPARE, &abuf);
+    RT_ASSERT(ret == RT_EOK);
+
 #ifdef RT_USING_DRIVER_AUDIO_PCM_PLUGIN_SOFTVOL
     ret = rt_device_control(card, RK_AUDIO_CTL_PLUGIN_PREPARE, (void *)type);
+    RT_ASSERT(ret == RT_EOK);
+
+    ret = rt_device_control(card, RK_AUDIO_CTL_PLUGIN_HW, &param);
     RT_ASSERT(ret == RT_EOK);
 
     softvol.vol_l = vol_l;
@@ -113,12 +123,6 @@ static uint32_t capture_sample(FILE *file, struct rt_device *card,
     RT_ASSERT(ret == RT_EOK);
     rt_kprintf("Get softvol2: %d, %d\n", softvol2.vol_l, softvol2.vol_r);
 #endif
-
-    ret = rt_device_control(card, RK_AUDIO_CTL_HW_PARAMS, &param);
-    RT_ASSERT(ret == RT_EOK);
-
-    ret = rt_device_control(card, RK_AUDIO_CTL_PCM_PREPARE, &abuf);
-    RT_ASSERT(ret == RT_EOK);
 
     size = abuf.period_size * channels * (bits >> 3);
     buffer = rt_malloc(size);

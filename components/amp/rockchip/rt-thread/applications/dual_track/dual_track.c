@@ -349,14 +349,14 @@ void dt_capture_run(void *arg)
         param.sampleRate = dt_recorder->samplerate;
         param.sampleBits = dt_recorder->bits;
 
-        ret = rt_device_control(audio_dev_a, RK_AUDIO_CTL_HW_PARAMS, &param);
-        RT_ASSERT(ret == RT_EOK);
-        ret = rt_device_control(audio_dev_d, RK_AUDIO_CTL_HW_PARAMS, &param);
-        RT_ASSERT(ret == RT_EOK);
-
         ret = rt_device_control(audio_dev_a, RK_AUDIO_CTL_PCM_PREPARE, &abuf_a);
         RT_ASSERT(ret == RT_EOK);
         ret = rt_device_control(audio_dev_d, RK_AUDIO_CTL_PCM_PREPARE, &abuf_d);
+        RT_ASSERT(ret == RT_EOK);
+
+        ret = rt_device_control(audio_dev_a, RK_AUDIO_CTL_HW_PARAMS, &param);
+        RT_ASSERT(ret == RT_EOK);
+        ret = rt_device_control(audio_dev_d, RK_AUDIO_CTL_HW_PARAMS, &param);
         RT_ASSERT(ret == RT_EOK);
 
         audio_buf_a = rt_malloc(size / 4);

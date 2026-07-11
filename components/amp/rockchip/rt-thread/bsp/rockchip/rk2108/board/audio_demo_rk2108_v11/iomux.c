@@ -86,28 +86,6 @@ void audio_iomux_config(void)
                          PIN_CONFIG_MUX_FUNC3);
 }
 
-void i2s1_m0_iomux_config(void)
-{
-    // for i2s input
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
-                         GPIO_PIN_A4 |  // I2S_IN_MCLK
-                         GPIO_PIN_A5,   // I2S_IN_SDI2
-                         PIN_CONFIG_MUX_FUNC4);
-
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
-                         GPIO_PIN_A4 |  // I2S1_MCLK_MUX0
-                         GPIO_PIN_A6 |  // I2S1_OUT_SCLK_MUX0
-                         GPIO_PIN_A7 |  // I2S1_OUT_LRCK_MUX0
-                         GPIO_PIN_B0,   // I2S1_OUT_SDO0_MUX0
-                         PIN_CONFIG_MUX_FUNC4);
-
-    WRITE_REG_MASK_WE(GRF->SOC_CON4,
-                      GRF_SOC_CON4_GRF_CON_AUDIO_PRO_APP_I2S1_MASK |  // I2S1 used as audio input
-                      GRF_SOC_CON4_GRF_CON_I2S1_SDI2_FROM_IO_MASK,    // I2S1 sdi2 come from IO
-                      (0x1 << GRF_SOC_CON4_GRF_CON_AUDIO_PRO_APP_I2S1_SHIFT) |
-                      (0x1 << GRF_SOC_CON4_GRF_CON_I2S1_SDI2_FROM_IO_SHIFT));
-}
-
 void rt_hw_iomux_config(void)
 {
     pdm_input_iomux_config();
@@ -125,7 +103,7 @@ void rt_hw_iomux_config(void)
     i2c0_m1_iomux_config();
 
 #ifdef RT_USING_I2STDM1
-    i2s1_m0_iomux_config();
+    i2s1_output_iomux_config();
 #endif
 #ifdef RT_USING_AUDIOPWM
     audio_iomux_config();

@@ -33,7 +33,6 @@ void uart2_rts_iomux_config(int uart_en);
 void pcm_iomux_config(void);
 void key_ctrl_iomux_config(void);
 void uart0_iomux_config(void);
-void uart0_cts_rts_iomux_config(void);
 void uart1_m0_iomux_config(void);
 void uart1_m1_iomux_config(void);
 void uart1_m2_iomux_config(void);

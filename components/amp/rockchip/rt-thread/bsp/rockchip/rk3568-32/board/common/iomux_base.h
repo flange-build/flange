@@ -19,6 +19,8 @@ void can1_m1_iomux_config(void);
 void gmac0_iomux_config(void);
 void gmac1_m1_iomux_config(void);
 void i2c0_m0_iomux_config(void);
+void i2c1_m0_iomux_config(void);
+void sdmmc0_iomux_config(void);
 void rt_hw_iomux_config(void);
 
 #endif

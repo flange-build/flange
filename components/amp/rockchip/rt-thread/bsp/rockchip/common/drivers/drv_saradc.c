@@ -20,6 +20,7 @@
 #include <rtdef.h>
 #include <rtthread.h>
 #include <rtdbg.h>
+#include "drv_clock.h"
 
 #define ADC_NAME "rk_adc0"
 #define TIMEOUT 10
@@ -31,6 +32,8 @@ struct rk_saradc
     rt_uint32_t mode;
     struct rt_event event;
     struct rt_adc_device rk_saradc_dev;
+    struct clk_gate *pclk_saradc;
+    struct clk_gate *clk_saradc;
 };
 
 static struct rk_saradc rk_saradc;
@@ -60,6 +63,14 @@ static rt_err_t rk_get_saradc_value(struct rt_adc_device *device, rt_uint32_t ch
     RT_ASSERT(device != RT_NULL);
     RT_ASSERT(value != RT_NULL);
 
+    clk_enable(rk_saradc->pclk_saradc);
+    clk_enable(rk_saradc->clk_saradc);
+
+    /* A delay is necessary to guarantee clock stability; otherwise, sampling may be abnormal on RK3308 */
+#if defined(SOC_RK3308)
+    HAL_DelayUs(10);
+#endif
+
     HAL_SARADC_Start(rk_saradc->reg, rk_saradc->mode, channel);
 
     ret = rk_wait_saradc_completed(rk_saradc);
@@ -73,6 +84,9 @@ static rt_err_t rk_get_saradc_value(struct rt_adc_device *device, rt_uint32_t ch
     *value = (rt_uint32_t)HAL_SARADC_GetRaw(rk_saradc->reg, channel);
 
     HAL_SARADC_Stop(rk_saradc->reg);
+
+    clk_disable(rk_saradc->clk_saradc);
+    clk_disable(rk_saradc->pclk_saradc);
 
     return RT_EOK;
 }
@@ -100,8 +114,10 @@ static int rk_saradc_init(void)
     rk_saradc.mode = SARADC_INT_MOD;
     rk_saradc.reg = SARADC;
 
-    HAL_CRU_ClkEnable(PCLK_SARADC_CONTROL_GATE);
-    HAL_CRU_ClkEnable(CLK_SARADC_GATE);
+#ifdef PCLK_SARADC_CONTROL_GATE
+    rk_saradc.pclk_saradc = get_clk_gate_from_id(PCLK_SARADC_CONTROL_GATE);
+#endif
+    rk_saradc.clk_saradc = get_clk_gate_from_id(CLK_SARADC_GATE);
 
 #ifdef SRST_P_SARADC
     HAL_CRU_ClkResetAssert(SRST_P_SARADC);
@@ -127,6 +143,6 @@ static int rk_saradc_init(void)
     return result;
 }
 
-INIT_BOARD_EXPORT(rk_saradc_init);
+INIT_DEVICE_EXPORT(rk_saradc_init);
 
 #endif

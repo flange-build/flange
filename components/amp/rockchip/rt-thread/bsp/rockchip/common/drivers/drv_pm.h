@@ -18,7 +18,7 @@
 #include "hal_base.h"
 
 #define PM_MS_PER_SEC           (1000)
-#define PM_RUN_TBL_IDX_MAX      (PM_RUN_MODE_COUNT)
+#define PM_RUN_TBL_IDX_MAX      (PM_RUN_MODE_MAX)
 #define TBL_IDX_INV             (0xF)
 
 #define PM_MS_TO_SYS_TICK(ms)   ((RT_TICK_PER_SECOND * (ms))/PM_MS_PER_SEC)

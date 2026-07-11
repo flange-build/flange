@@ -1,7 +1,7 @@
 /*
  * This file is part of the CmBacktrace Library.
  *
- * Copyright (c) 2016-2019, Armink, <armink.ztl@gmail.com>
+ * Copyright (c) 2016-2020, Armink, <armink.ztl@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -34,33 +34,35 @@
 #include <stdlib.h>
 
 /* library software version number */
-#define CMB_SW_VERSION                "1.3.99"
+#define CMB_SW_VERSION                "1.4.1"
 
-#define CMB_CPU_ARM_CORTEX_M0          0
-#define CMB_CPU_ARM_CORTEX_M3          1
-#define CMB_CPU_ARM_CORTEX_M4          2
-#define CMB_CPU_ARM_CORTEX_M7          3
+#define CMB_CPU_ARM_CORTEX_M0             0
+#define CMB_CPU_ARM_CORTEX_M3             1
+#define CMB_CPU_ARM_CORTEX_M4             2
+#define CMB_CPU_ARM_CORTEX_M7             3
+#define CMB_CPU_ARM_CORTEX_M33            4
 
-#define CMB_OS_PLATFORM_RTT            0
-#define CMB_OS_PLATFORM_UCOSII         1
-#define CMB_OS_PLATFORM_UCOSIII        2
-#define CMB_OS_PLATFORM_FREERTOS       3
+#define CMB_OS_PLATFORM_RTT               0
+#define CMB_OS_PLATFORM_UCOSII            1
+#define CMB_OS_PLATFORM_UCOSIII           2
+#define CMB_OS_PLATFORM_FREERTOS          3
 
-#define CMB_PRINT_LANGUAGE_ENGLISH     0
-#define CMB_PRINT_LANGUAGE_CHINESE     1
+#define CMB_PRINT_LANGUAGE_ENGLISH        0
+#define CMB_PRINT_LANGUAGE_CHINESE        1
+#define CMB_PRINT_LANGUAGE_CHINESE_UTF8   2
 
 /* name max length, default size: 32 */
 #ifndef CMB_NAME_MAX
-#define CMB_NAME_MAX                   32
+#define CMB_NAME_MAX                      32
 #endif
 
 /* print information language, default is English */
 #ifndef CMB_PRINT_LANGUAGE
-#define CMB_PRINT_LANGUAGE             CMB_PRINT_LANGUAGE_ENGLISH
+#define CMB_PRINT_LANGUAGE                CMB_PRINT_LANGUAGE_ENGLISH
 #endif
 
 
-#if defined(__CC_ARM)
+#if defined(__ARMCC_VERSION)
     /* C stack block name, default is STACK */
     #ifndef CMB_CSTACK_BLOCK_NAME
     #define CMB_CSTACK_BLOCK_NAME          STACK
@@ -94,14 +96,6 @@
     /* code section end address, defined on linker script file, default is _etext */
     #ifndef CMB_CODE_SECTION_END
     #define CMB_CODE_SECTION_END           _etext
-    #endif
-    /* extend code section start address, defined on linker script file, default is _stext_ext */
-    #ifndef CMB_CODE_SECTION_EXT_START
-    #define CMB_CODE_SECTION_EXT_START         _stext_ext
-    #endif
-    /* extend code section end address, defined on linker script file, default is _etext_ext */
-    #ifndef CMB_CODE_SECTION_EXT_END
-    #define CMB_CODE_SECTION_EXT_END           _etext_ext
     #endif
 #else
     #error "not supported compiler"
@@ -172,9 +166,15 @@ struct cmb_hard_fault_regs{
     union {
       unsigned int value;
       struct {
+#if (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M33)
+        unsigned int IPSR : 9;           // Interrupt Program Status register (IPSR)
+        unsigned int EPSR : 18;          // Execution Program Status register (EPSR)
+        unsigned int APSR : 5;           // Application Program Status register (APSR)
+#else
         unsigned int IPSR : 8;           // Interrupt Program Status register (IPSR)
         unsigned int EPSR : 19;          // Execution Program Status register (EPSR)
         unsigned int APSR : 5;           // Application Program Status register (APSR)
+#endif
       } bits;
     } psr;                               // Program status register.
   } saved;
@@ -184,9 +184,19 @@ struct cmb_hard_fault_regs{
     struct {
       unsigned int MEMFAULTACT    : 1;   // Read as 1 if memory management fault is active
       unsigned int BUSFAULTACT    : 1;   // Read as 1 if bus fault exception is active
+#if (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M33)
+      unsigned int HARDFAULTACT   : 1;   // Read as 1 if hardfault is active
+#else
       unsigned int UnusedBits1    : 1;
+#endif
       unsigned int USGFAULTACT    : 1;   // Read as 1 if usage fault exception is active
+#if (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M33)
+      unsigned int SECUREFAULTACT : 1;   // Read as 1 if secure fault exception is active
+      unsigned int NMIACT         : 1;   // Read as 1 if NMI exception is active
+      unsigned int UnusedBits2    : 1;
+#else
       unsigned int UnusedBits2    : 3;
+#endif
       unsigned int SVCALLACT      : 1;   // Read as 1 if SVC exception is active
       unsigned int MONITORACT     : 1;   // Read as 1 if debug monitor exception is active
       unsigned int UnusedBits3    : 1;
@@ -199,6 +209,13 @@ struct cmb_hard_fault_regs{
       unsigned int MEMFAULTENA    : 1;   // Memory management fault handler enable
       unsigned int BUSFAULTENA    : 1;   // Bus fault handler enable
       unsigned int USGFAULTENA    : 1;   // Usage fault handler enable
+#if (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M33)
+      unsigned int SECUREFAULTENA : 1;   // Secure fault handler enable
+      unsigned int SECUREFAULTPENDED : 1;   // Secure fault pended; Secure fault handler was started but was replaced by a higher-priority exception
+      unsigned int HARDFAULTPENDED   : 1;   // Hard fault pended; Hard fault handler was started but was replaced by a higher-priority exception
+#else
+      // None
+#endif
     } bits;
   } syshndctrl;                          // System Handler Control and State Register (0xE000ED24)
 
@@ -239,7 +256,12 @@ struct cmb_hard_fault_regs{
       unsigned short INVSTATE   : 1;     // Attempts to switch to an invalid state (e.g., ARM)
       unsigned short INVPC      : 1;     // Attempts to do an exception with a bad value in the EXC_RETURN number
       unsigned short NOCP       : 1;     // Attempts to execute a coprocessor instruction
+#if (CMB_CPU_PLATFORM_TYPE == CMB_CPU_ARM_CORTEX_M33)
+      unsigned short STKOF      : 1;     // Indicates a stack overflow error has occured
+      unsigned short UnusedBits : 3;
+#else
       unsigned short UnusedBits : 4;
+#endif
       unsigned short UNALIGNED  : 1;     // Indicates that an unaligned access fault has taken place
       unsigned short DIVBYZERO0 : 1;     // Indicates a divide by zero has taken place (can be set only if DIV_0_TRP is set)
     } bits;
@@ -279,7 +301,7 @@ if (!(EXPR))                                                                   \
 }
 
 /* ELF(Executable and Linking Format) file extension name for each compiler */
-#if defined(__CC_ARM)
+#if defined(__ARMCC_VERSION)
     #define CMB_ELF_FILE_EXTENSION_NAME          ".axf"
 #elif defined(__ICCARM__)
     #define CMB_ELF_FILE_EXTENSION_NAME          ".out"
@@ -332,6 +354,22 @@ if (!(EXPR))                                                                   \
     static __inline __asm uint32_t cmb_get_sp(void) {
         mov r0, sp
         bx lr
+    }
+#elif defined(__clang__)
+    __attribute__( (always_inline) ) static __inline uint32_t cmb_get_msp(void) {
+        uint32_t result;
+        __asm volatile ("mrs %0, msp" : "=r" (result) );
+        return (result);
+    }
+    __attribute__( (always_inline) ) static __inline uint32_t cmb_get_psp(void) {
+        uint32_t result;
+        __asm volatile ("mrs %0, psp" : "=r" (result) );
+        return (result);
+    }
+    __attribute__( (always_inline) ) static __inline uint32_t cmb_get_sp(void) {
+        uint32_t result;
+        __asm volatile ("mov %0, sp" : "=r" (result) );
+        return (result);
     }
 #elif defined(__ICCARM__)
 /* IAR iccarm specific functions */

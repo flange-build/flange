@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -15,6 +15,113 @@
 #include <dfs_fs.h>
 #include <dfs_file.h>
 #include "dfs_private.h"
+
+typedef struct _gpt_header {
+    uint64_t signature;                        /* 0x0  */
+    uint32_t revision;                         /* 0x8  */
+    uint32_t header_size;                      /* 0xC  */
+    uint32_t header_crc32;                     /* 0x10 */
+    uint32_t reserved1;                        /* 0x14 */
+    uint64_t my_lba;                           /* 0x18 */
+    uint64_t alternate_lba;                    /* 0x20 */
+    uint64_t first_usable_lba;                 /* 0x28 */
+    uint64_t last_usable_lba;                  /* 0x30 */
+    uint8_t  disk_guid[16];                    /* 0x38 */
+    uint64_t partition_entry_lba;              /* 0x48 */
+    uint32_t num_partition_entries;            /* 0x50 */
+    uint32_t sizeof_partition_entry;           /* 0x54 */
+    uint32_t partition_entry_array_crc32;      /* 0x58 */
+} __packed gpt_header;
+
+typedef struct _gpt_entry {
+    uint8_t  partition_type_guid[16];          /* 0x0  */
+    uint8_t  unique_partition_guid[16];        /* 0x10 */
+    uint64_t starting_lba;                     /* 0x20 */
+    uint64_t ending_lba;                       /* 0x28 */
+    uint64_t attributes;                       /* 0x30 */
+    uint8_t  partition_name[72];               /* 0x38 */
+} __packed gpt_entry;
+
+
+/* rk_partition: ui_part_property bits filed */
+#define RK_PARTITION_NO_PARTITION_SIZE (1 << 2)
+#define RK_PARTITION_PROPERTY_SHIFT    (8)
+#define RK_PARTITION_PROPERTY_MASK     (0x3 << RK_PARTITION_PROPERTY_SHIFT)
+#define RK_PARTITION_PROPERTY_ROONLY   (PART_FLAG_RDONLY << RK_PARTITION_PROPERTY_SHIFT)
+#define RK_PARTITION_PROPERTY_WRONLY   (PART_FLAG_WRONLY << RK_PARTITION_PROPERTY_SHIFT)
+#define RK_PARTITION_PROPERTY_RDWR     (PART_FLAG_RDWR << RK_PARTITION_PROPERTY_SHIFT)
+
+/* rk_partition: partition date time */
+typedef enum
+{
+    PART_VENDOR     = 1 << 0,
+    PART_IDBLOCK    = 1 << 1,
+    PART_MISC       = 1 << 2,
+    PART_FW1        = 1 << 3,
+    PART_FW2        = 1 << 4,
+    PART_DATA       = 1 << 5,
+    PART_FONT1      = 1 << 6,
+    PART_FONT2      = 1 << 7,
+    PART_CHAR       = 1 << 8,
+    PART_MENU       = 1 << 9,
+    PART_UI         = 1 << 10,
+    PART_USER1      = 1 << 30,
+    PART_USER2      = 1 << 31
+} enum_partition_type;
+
+/* rk_partition : partition date time */
+struct rk_parttion_date_time
+{
+    uint16_t  year;
+    uint8_t   month;
+    uint8_t   day;
+    uint8_t   hour;
+    uint8_t   min;
+    uint8_t   sec;
+    uint8_t   reserve;
+};
+
+/* rk_partition: partition head file */
+struct rk_partition_header
+{
+    uint32_t    ui_fw_tag;  /* "RKFP" */
+    struct rk_parttion_date_time    dt_release_data_time;
+    uint32_t    ui_fw_ver;
+    uint32_t    ui_size;    /* size of sturct,unit of u8 */
+    uint32_t    ui_part_entry_offset;   /* unit of sector */
+    uint32_t    ui_backup_part_entry_offset;
+    uint32_t    ui_part_entry_size; /* unit of u8 */
+    uint32_t    ui_part_entry_count;
+    uint32_t    ui_fw_size; /* unit of u8 */
+    uint8_t     reserved[464];
+    uint32_t    ui_part_entry_crc;
+    uint32_t    ui_header_crc;
+};
+
+/* rk_partition: partition item */
+typedef struct rk_parttion_item
+{
+    uint8_t     sz_name[32];
+    enum_partition_type em_part_type;
+    uint32_t    ui_pt_off;  /* unit of sector */
+    uint32_t    ui_pt_sz;   /* unit of sector */
+    uint32_t    ui_data_length; /* ui_data_length low 32 */
+    uint32_t    reserved1;  /* ui_data_length high 32 */
+    uint32_t    ui_part_property;
+    uint8_t     reserved2[72];
+} STRUCT_PART_ITEM, *PSTRUCT_PART_ITEM;
+
+typedef struct rk_partition_info
+{
+    struct rk_partition_header hdr; /* 0.5KB */
+    struct rk_parttion_item part[12];   /* 1.5KB */
+} STRUCT_PART_INFO, *PSTRUCT_PART_INFO;;
+
+#define RK_PARTITION_TAG    0x50464B52
+#define RK_PARTITION_NAME_SIZE  32
+
+#define RK_PARTITION_REGISTER_TYPE_BLK (0 << 10)
+#define RK_PARTITION_REGISTER_TYPE_MTD (1 << 10)
 
 /**
  * @addtogroup FsApi
@@ -38,7 +145,7 @@ int dfs_register(const struct dfs_filesystem_ops *ops)
     dfs_lock();
     /* check if this filesystem was already registered */
     for (iter = &filesystem_operation_table[0];
-           iter < &filesystem_operation_table[DFS_FILESYSTEM_TYPES_MAX]; iter ++)
+            iter < &filesystem_operation_table[DFS_FILESYSTEM_TYPES_MAX]; iter ++)
     {
         /* find out an empty filesystem type entry */
         if (*iter == NULL)
@@ -55,7 +162,7 @@ int dfs_register(const struct dfs_filesystem_ops *ops)
     if (empty == NULL)
     {
         rt_set_errno(-ENOSPC);
-        LOG_E("There is no space to register this file system (%d).", ops->name);
+        LOG_E("There is no space to register this file system (%s).", ops->name);
         ret = -1;
     }
     else if (ret == RT_EOK)
@@ -120,16 +227,16 @@ struct dfs_filesystem *dfs_filesystem_lookup(const char *path)
  *
  * @return the mounted path or NULL if none device mounted.
  */
-const char* dfs_filesystem_get_mounted_path(struct rt_device* device)
+const char *dfs_filesystem_get_mounted_path(struct rt_device *device)
 {
-    const char* path = NULL;
+    const char *path = NULL;
     struct dfs_filesystem *iter;
 
     dfs_lock();
     for (iter = &filesystem_table[0];
             iter < &filesystem_table[DFS_FILESYSTEMS_MAX]; iter++)
     {
-        /* fint the mounted device */
+        /* find the mounted device */
         if (iter->ops == NULL) continue;
         else if (iter->dev_id == device)
         {
@@ -144,17 +251,131 @@ const char* dfs_filesystem_get_mounted_path(struct rt_device* device)
     return path;
 }
 
+void utf16le_to_ascii(char* ascii_str, const char* utf16le_str, int n) {
+    int i = 0;
+
+    while (*utf16le_str || *(utf16le_str + 1)) {
+        if (++i >= n)
+            break;
+
+        *ascii_str++ = *utf16le_str;
+        utf16le_str += 2;
+    }
+    *ascii_str = '\0';
+}
+
+/**
+ * this function will fetch the GPT partition table on specified buffer.
+ *
+ * @param part the returned partition structure.
+ * @param buf the buffer contains partition table.
+ * @param sect_count the sector count in the buffer.
+ * @param pindex the index of partition table to fetch.
+ *
+ * @return RT_EOK on successful or -RT_ERROR on failed.
+ */
+static int dfs_filesystem_get_gpt_partition(struct dfs_partition *part,
+                                      uint8_t         *buf,
+                                      uint8_t         sect_count,
+                                      uint32_t        pindex)
+{
+    gpt_header *gpt_head;
+    gpt_entry  *gpt_ent;
+    uint32_t gpt_table_begin, index;
+
+    if (sect_count <= (2 + pindex / 4))
+        return -EIO;
+
+    /* check gpt main header */
+    gpt_head = (gpt_header *)(&buf[512]);
+    if (gpt_head->signature != 0x5452415020494645 || gpt_head->my_lba != 1) {
+        return -EIO;
+    }
+
+    /* get partition table LBA */
+    gpt_table_begin = gpt_head->partition_entry_lba;
+    index = ((gpt_table_begin + pindex / 4) * 512) + ((pindex % 4) * 128);
+    if (index >= (sect_count * 512)) {
+        return -EIO;
+    }
+
+    gpt_ent = (gpt_entry *)(&buf[index]);
+
+    /* get partition info for gpt entry */
+    utf16le_to_ascii(part->name, (const char *)gpt_ent->partition_name, sizeof(part->name));    /* the name of gpt partition is unicode, do not use strcpy */
+    part->type = 0x0B;
+    part->offset = gpt_ent->starting_lba;
+    part->size = gpt_ent->ending_lba - gpt_ent->starting_lba;
+    if (part->size != 0)
+        part->size += 1;    /* ending_lba is inclusive */
+    //rt_kprintf("pindex=%d, name=%s, offset=%d, size=%d\n", pindex, part->name, part->offset, part->size);
+
+    if (part->size != 0)
+        return RT_EOK;
+    else
+        return -RT_ERROR;
+}
+
+
+/**
+ * this function will fetch the RK partition table on specified buffer.
+ *
+ * @param part the returned partition structure.
+ * @param buf the buffer contains partition table.
+ * @param sect_count the sector count in the buffer.
+ * @param pindex the index of partition table to fetch.
+ *
+ * @return RT_EOK on successful or -RT_ERROR on failed.
+ */
+static int dfs_filesystem_get_rk_partition(struct dfs_partition *part,
+                                           uint8_t         *buf,
+                                           uint8_t         sect_count,
+                                           uint32_t        pindex)
+{
+    struct rk_partition_info *part_temp = (struct rk_partition_info *)buf;
+    int part_num;
+
+    if (sect_count < 4) {
+        rt_kprintf("%s input invald, sect_count=%d\n", __func__, sect_count);
+        return -EIO;
+    }
+
+    part_num = part_temp->hdr.ui_part_entry_count;
+
+    if (pindex >= part_num) {
+        rt_kprintf("%s input invald, pindex=%d>part_num=%d\n", __func__, pindex, part_num);
+        return -EIO;
+    }
+
+    /* get partition info for gpt entry */
+    rt_strncpy(part->name, (char *)part_temp->part[pindex].sz_name, sizeof(part->name));
+    part->type = 0x0B;
+    part->offset = (uint32_t)part_temp->part[pindex].ui_pt_off;
+    if (part_temp->part[pindex].ui_pt_sz == 0xFFFFFFFF || (part_temp->part[pindex].ui_part_property & RK_PARTITION_NO_PARTITION_SIZE))
+        part->size = 0xFFFFFFFF;
+    else
+        part->size = ((uint32_t)part_temp->part[pindex].ui_pt_sz);
+    rt_kprintf("pindex=%d, name=%s, offset=%d, size=%d\n", pindex, part_temp->part[pindex].sz_name, part->offset, part->size);
+
+    if (part->size != 0)
+        return RT_EOK;
+    else
+        return -RT_ERROR;
+}
+
 /**
  * this function will fetch the partition table on specified buffer.
  *
  * @param part the returned partition structure.
  * @param buf the buffer contains partition table.
+ * @param sect_count the sector count in the buffer.
  * @param pindex the index of partition table to fetch.
  *
  * @return RT_EOK on successful or -RT_ERROR on failed.
  */
 int dfs_filesystem_get_partition(struct dfs_partition *part,
                                       uint8_t         *buf,
+                                      uint8_t         sect_count,
                                       uint32_t        pindex)
 {
 #define DPT_ADDRESS     0x1be       /* device partition offset in Boot Sector */
@@ -162,9 +383,20 @@ int dfs_filesystem_get_partition(struct dfs_partition *part,
 
     uint8_t *dpt;
     uint8_t type;
+    uint32_t type2;
 
     RT_ASSERT(part != NULL);
     RT_ASSERT(buf != NULL);
+
+    /* check gpt partion */
+    dpt = buf + DPT_ADDRESS + 4;
+    type = *dpt;
+    if (type == 0xee)
+        return dfs_filesystem_get_gpt_partition(part, buf, sect_count, pindex);
+
+    type2 = ((uint32_t *)buf)[0];
+    if (type2 == RK_PARTITION_TAG)
+      return dfs_filesystem_get_rk_partition(part, buf, sect_count, pindex);
 
     dpt = buf + DPT_ADDRESS + pindex * DPT_ITEM_SIZE;
 
@@ -173,34 +405,29 @@ int dfs_filesystem_get_partition(struct dfs_partition *part,
         return -EIO;
 
     /* get partition type */
-    type = *(dpt+4);
+    type = *(dpt + 4);
     if (type == 0)
         return -EIO;
 
     /* set partition information
      *    size is the number of 512-Byte */
+    rt_memset(part->name, 0, sizeof(part->name));      /* MBR has no partition name */
     part->type = type;
-    part->offset = *(dpt+8) | *(dpt+9)<<8 | *(dpt+10)<<16 | *(dpt+11)<<24;
-    part->size = *(dpt+12) | *(dpt+13)<<8 | *(dpt+14)<<16 | *(dpt+15)<<24;
-
-    /*TODO: This is just a temporary solution to support eMMC Flash*/
-#if defined(RT_ROOT_PART_OFFSET) && defined(RT_ROOT_PART_SIZE)
-    part->offset = RT_ROOT_PART_OFFSET;
-    part->size = RT_ROOT_PART_SIZE;
-#endif
+    part->offset = *(dpt + 8) | *(dpt + 9) << 8 | *(dpt + 10) << 16 | *(dpt + 11) << 24;
+    part->size = *(dpt + 12) | *(dpt + 13) << 8 | *(dpt + 14) << 16 | *(dpt + 15) << 24;
 
     rt_kprintf("found part[%d], begin: %d, size: ",
-               pindex, part->offset*512);
-    if ((part->size>>11) == 0)
-        rt_kprintf("%d%s",part->size>>1,"KB\n");     /* KB */
+               pindex, part->offset * 512);
+    if ((part->size >> 11) == 0)
+        rt_kprintf("%d%s", part->size >> 1, "KB\n"); /* KB */
     else
     {
         unsigned int part_size;
         part_size = part->size >> 11;                /* MB */
-        if ((part_size>>10) == 0)
-            rt_kprintf("%d.%d%s",part_size,(part->size>>1)&0x3FF,"MB\n");
+        if ((part_size >> 10) == 0)
+            rt_kprintf("%d.%d%s", part_size, (part->size >> 1) & 0x3FF, "MB\n");
         else
-            rt_kprintf("%d.%d%s",part_size>>10,part_size&0x3FF,"GB\n");
+            rt_kprintf("%d.%d%s", part_size >> 10, part_size & 0x3FF, "GB\n");
     }
 
     return RT_EOK;
@@ -246,7 +473,7 @@ int dfs_mount(const char   *device_name,
     dfs_lock();
 
     for (ops = &filesystem_operation_table[0];
-           ops < &filesystem_operation_table[DFS_FILESYSTEM_TYPES_MAX]; ops++)
+            ops < &filesystem_operation_table[DFS_FILESYSTEM_TYPES_MAX]; ops++)
         if ((*ops != NULL) && (strcmp((*ops)->name, filesystemtype) == 0))
             break;
 
@@ -322,14 +549,14 @@ int dfs_mount(const char   *device_name,
     dfs_unlock();
 
     /* open device, but do not check the status of device */
-    if (dev_id != NULL && dev_id->type != RT_Device_Class_MTD)
+    if (dev_id != NULL)
     {
         if (rt_device_open(fs->dev_id,
                            RT_DEVICE_OFLAG_RDWR) != RT_EOK)
         {
-            /* The underlaying device has error, clear the entry. */
+            /* The underlying device has error, clear the entry. */
             dfs_lock();
-            memset(fs, 0, sizeof(struct dfs_filesystem));
+            rt_memset(fs, 0, sizeof(struct dfs_filesystem));
 
             goto err1;
         }
@@ -345,7 +572,7 @@ int dfs_mount(const char   *device_name,
         /* mount failed */
         dfs_lock();
         /* clear filesystem table entry */
-        memset(fs, 0, sizeof(struct dfs_filesystem));
+        rt_memset(fs, 0, sizeof(struct dfs_filesystem));
 
         goto err1;
     }
@@ -409,7 +636,7 @@ int dfs_unmount(const char *specialfile)
         rt_free(fs->path);
 
     /* clear this filesystem table entry */
-    memset(fs, 0, sizeof(struct dfs_filesystem));
+    rt_memset(fs, 0, sizeof(struct dfs_filesystem));
 
     dfs_unlock();
     rt_free(fullpath);
@@ -458,7 +685,7 @@ int dfs_mkfs(const char *fs_name, const char *device_name)
     }
     dfs_unlock();
 
-    if (index <= DFS_FILESYSTEM_TYPES_MAX)
+    if (index < DFS_FILESYSTEM_TYPES_MAX)
     {
         /* find file system operation */
         const struct dfs_filesystem_ops *ops = filesystem_operation_table[index];
@@ -509,10 +736,10 @@ int dfs_mount_table(void)
         if (mount_table[index].path == NULL) break;
 
         if (dfs_mount(mount_table[index].device_name,
-                mount_table[index].path,
-                mount_table[index].filesystemtype,
-                mount_table[index].rwflag,
-                mount_table[index].data) != 0)
+                      mount_table[index].path,
+                      mount_table[index].filesystemtype,
+                      mount_table[index].rwflag,
+                      mount_table[index].data) != 0)
         {
             LOG_E("mount fs[%s] on %s failed.\n", mount_table[index].filesystemtype,
                        mount_table[index].path);
@@ -528,17 +755,17 @@ INIT_ENV_EXPORT(dfs_mount_table);
 int dfs_mount_device(rt_device_t dev)
 {
   int index = 0;
-  
+
   if(dev == RT_NULL) {
     rt_kprintf("the device is NULL to be mounted.\n");
     return -RT_ERROR;
   }
-  
+
   while (1)
   {
     if (mount_table[index].path == NULL) break;
-    
-    if(strcmp(mount_table[index].device_name, dev->parent.name) == 0) {
+
+    if(strncmp(mount_table[index].device_name, dev->parent.name, RT_NAME_MAX) == 0) {
       if (dfs_mount(mount_table[index].device_name,
                     mount_table[index].path,
                     mount_table[index].filesystemtype,
@@ -554,10 +781,10 @@ int dfs_mount_device(rt_device_t dev)
         return RT_EOK;
       }
     }
-    
+
     index ++;
   }
-  
+
   rt_kprintf("can't find device:%s to be mounted.\n", dev->parent.name);
   return -RT_ERROR;
 }
@@ -573,9 +800,11 @@ int dfs_unmount_device(rt_device_t dev)
     for (iter = &filesystem_table[0];
             iter < &filesystem_table[DFS_FILESYSTEMS_MAX]; iter++)
     {
+        if (iter->dev_id == NULL)
+            continue;
+
         /* check if the PATH is mounted */
-        if ((iter->dev_id->parent.name != NULL) 
-			&& (strcmp(iter->dev_id->parent.name, dev->parent.name) == 0))
+        if (strcmp(iter->dev_id->parent.name, dev->parent.name) == 0)
         {
             fs = iter;
             break;
@@ -597,7 +826,7 @@ int dfs_unmount_device(rt_device_t dev)
         rt_free(fs->path);
 
     /* clear this filesystem table entry */
-    memset(fs, 0, sizeof(struct dfs_filesystem));
+    rt_memset(fs, 0, sizeof(struct dfs_filesystem));
 
     dfs_unlock();
 
@@ -646,7 +875,7 @@ int df(const char *path)
     }
 
     rt_kprintf("disk free: %d.%d %s [ %d block, %d bytes per block ]\n",
-        (unsigned long)cap, minor, unit_str[unit_index], buffer.f_bfree, buffer.f_bsize);
+               (unsigned long)cap, minor, unit_str[unit_index], buffer.f_bfree, buffer.f_bsize);
     return 0;
 }
 FINSH_FUNCTION_EXPORT(df, get disk free);

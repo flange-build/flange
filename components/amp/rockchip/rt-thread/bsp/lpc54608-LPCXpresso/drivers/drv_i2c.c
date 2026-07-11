@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -7,7 +7,7 @@
  * Date           Author       Notes
  * 2017-08-08     Yang        the first version
  */
- 
+
 #include <rtthread.h>
 #include <rtdevice.h>
 #include "board.h"
@@ -56,7 +56,7 @@ static void gpio_set_scl(void *data, rt_int32_t state)
     else
     {
         //bd->scl.base->B[bd->sda.port][bd->sda.pin] = 0;
-        GPIO_WritePinOutput(bd->scl.base, bd->scl.port, bd->scl.pin, 1);
+        GPIO_WritePinOutput(bd->scl.base, bd->scl.port, bd->scl.pin, 0);
     }
 }
 
@@ -243,6 +243,9 @@ int rt_hw_i2c_init(void)
         /* Enable touch panel controller */
         GPIO_PinInit(GPIO, _i2c_bdata.sda.port, _i2c_bdata.sda.pin, &pin_config);
         GPIO_PinInit(GPIO, _i2c_bdata.scl.port, _i2c_bdata.scl.pin, &pin_config);
+
+        GPIO_WritePinOutput(GPIO, _i2c_bdata.sda.port, _i2c_bdata.sda.pin, 1);
+        GPIO_WritePinOutput(GPIO, _i2c_bdata.scl.port, _i2c_bdata.scl.pin, 1);
 
         i2c_device.priv = (void *)&_i2c_bit_ops;
         rt_i2c_bit_add_bus(&i2c_device, "i2c2");

@@ -28,6 +28,9 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
+#include <sys/types.h>
+#include <string.h>
 #include <drivers/mtd_nor.h>
 #include <drivers/mtd_nand.h>
 
@@ -38,9 +41,11 @@ extern "C" {
 /* ================================================================================ */
 /* ================                 rk_partition                  ================= */
 /* ================================================================================ */
-#define RK_PARTITION_SIZE   2048    /* rk_partition total size */
+#define RK_PARTITION_SIZE   4096    /* rk_partition total size */
+#define RK_PARTITION_SEC    (RK_PARTITION_SIZE / 512) /* rk_partition total 512B sector */
 #define RK_PARTITION_TAG    0x50464B52
 #define RK_PARTITION_NAME_SIZE  32
+#define RK_PARTITION_MAX_PARTITION 32
 
 /* rk_partition: ui_part_property bits filed */
 #define RK_PARTITION_NO_PARTITION_SIZE BIT(2)
@@ -147,11 +152,14 @@ struct rt_flash_partition
 
 #define DEV_2_PART(dev) (struct rt_flash_partition *)dev;
 
-rt_err_t mtd_nor_init_partition(struct rt_mtd_nor_device *mtd_nor, struct rt_flash_partition *parts);
-rt_err_t blk_init_partition(struct rt_mtd_nor_device *mtd_nor, struct rt_flash_partition *parts);
-uint32_t rk_partition_init(struct rt_mtd_nor_device *mtd);
+uint32_t rk_partition_init(struct rk_partition_info *part_temp, uint32_t flash_size);
+uint32_t mtd_nor_rk_partition_init(struct rt_mtd_nor_device *mtd);
+uint32_t mtd_nand_rk_partition_init(struct rt_mtd_nand_device *mtd);
 int32_t get_rk_partition(struct rt_flash_partition **part);
 int change_part_name(int em_part_type, char *new_name);
+ssize_t read_rk_partition(char *part_name, void *buf, size_t count, off_t offset);
+void *get_addr_by_part_name(char *part_name);
+uint32_t get_rk_partition_fw_ver(void);
 
 #ifdef __cplusplus
 }

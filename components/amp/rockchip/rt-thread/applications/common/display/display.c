@@ -414,20 +414,14 @@ rt_err_t rt_display_win_clear(rt_uint8_t winid, rt_uint8_t fmt,
     wincfg.w     = MAX(32 / fmt2bps[fmt], 1);
     wincfg.h     = h;
     wincfg.fblen = wincfg.w * wincfg.h * fmt2bps[fmt] / 8;
-#ifdef RT_USING_LARGE_HEAP
     wincfg.fb    = (rt_uint8_t *)rt_malloc_large(wincfg.fblen);
-#else
-    wincfg.fb    = (rt_uint8_t *)rt_malloc(wincfg.fblen);
-#endif
     rt_memset((void *)wincfg.fb, data, wincfg.fblen);
 
     ret = rt_display_win_layers_set(&wincfg);
     RT_ASSERT(ret == RT_EOK);
-#ifdef RT_USING_LARGE_HEAP
+
     rt_free_large(wincfg.fb);
-#else
-    rt_free(wincfg.fb);
-#endif
+
     return RT_EOK;
 }
 

@@ -212,6 +212,12 @@ struct pltfrm_cam_itf
 };
 
 /* frame format  ----------------------------------------------------------*/
+struct v4l2_fract
+{
+    u32   numerator;
+    u32   denominator;
+};
+
 struct v4l2_subdev_frame_interval
 {
     u32 pad;

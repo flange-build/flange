@@ -1,20 +1,21 @@
 /*
- * File      : writespeed.c
- * This file is part of RT-TestCase in RT-Thread RTOS
- * COPYRIGHT (C) 2010, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
- * The license and distribution terms for this file may be
- * found in the file LICENSE in this distribution or at
- * http://www.rt-thread.org/license/LICENSE
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
  * Date           Author       Notes
  * 2010-02-10     Bernard      first version
+ * 2020-04-12     Jianjia Ma   add msh cmd
  */
 #include <rtthread.h>
-#include <dfs_posix.h>
+#include <dfs_file.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/statfs.h>
 
-void ranw_speed(const char* filename, int total_length, int block_size)
+void writespeed(const char* filename, int total_length, int block_size)
 {
     int fd, index, length;
     char *buff_ptr;
@@ -32,36 +33,34 @@ void ranw_speed(const char* filename, int total_length, int block_size)
     {
         rt_kprintf("no memory\n");
         close(fd);
-
         return;
     }
 
-	/* prepare write data */
-	for (index = 0; index < block_size; index++)
-	{
-		buff_ptr[index] = index;
-	}
-	index = 0;
+    /* prepare write data */
+    for (index = 0; index < block_size; index++)
+    {
+        buff_ptr[index] = index;
+    }
+    index = 0;
 
-	/* get the beginning tick */
+    /* get the beginning tick */
     tick = rt_tick_get();
-	while (index < total_length / block_size)
-	{
-        lseek(fd, rand() % (total_length - block_size), SEEK_SET);
-		length = write(fd, buff_ptr, block_size);
-		if (length != block_size)
-		{
-			rt_kprintf("write failed\n");
-			break;
-		}
+    while (index < total_length / block_size)
+    {
+        length = write(fd, buff_ptr, block_size);
+        if (length != block_size)
+        {
+            rt_kprintf("write failed\n");
+            break;
+        }
 
-		index ++;
-	}
+        index ++;
+    }
     tick = rt_tick_get() - tick;
 
-	/* close file and release memory */
+    /* close file and release memory */
     close(fd);
-	rt_free(buff_ptr);
+    rt_free(buff_ptr);
 
     /* calculate write speed */
     rt_kprintf("File write speed: %d byte/s\n", total_length / tick * RT_TICK_PER_SECOND);
@@ -69,62 +68,33 @@ void ranw_speed(const char* filename, int total_length, int block_size)
 
 #ifdef RT_USING_FINSH
 #include <finsh.h>
-FINSH_FUNCTION_EXPORT(ranw_speed, perform file write test);
-#endif
+FINSH_FUNCTION_EXPORT(writespeed, perform file write test);
 
-void seqw_speed(const char* filename, int total_length, int block_size)
+static void cmd_writespeed(int argc, char *argv[])
 {
-    int fd, index, length;
-    char *buff_ptr;
-    rt_tick_t tick;
+    char* filename;
+    int length;
+    int block_size;
 
-    fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0);
-    if (fd < 0)
+    if(argc == 4)
     {
-        rt_kprintf("open file:%s failed\n", filename);
-        return;
+        filename = argv[1];
+        length = atoi(argv[2]);
+        block_size = atoi(argv[3]);
     }
-
-    buff_ptr = rt_malloc(block_size);
-    if (buff_ptr == RT_NULL)
+    else if(argc == 2)
     {
-        rt_kprintf("no memory\n");
-        close(fd);
-
-        return;
+        filename = argv[1];
+        block_size = 512;
+        length = 1024*1024;
     }
-
-	/* prepare write data */
-	for (index = 0; index < block_size; index++)
-	{
-		buff_ptr[index] = index;
-	}
-	index = 0;
-
-	/* get the beginning tick */
-    tick = rt_tick_get();
-	while (index < total_length / block_size)
-	{
-		length = write(fd, buff_ptr, block_size);
-		if (length != block_size)
-		{
-			rt_kprintf("write failed\n");
-			break;
-		}
-
-		index ++;
-	}
-    tick = rt_tick_get() - tick;
-
-	/* close file and release memory */
-    close(fd);
-	rt_free(buff_ptr);
-
-    /* calculate write speed */
-    rt_kprintf("File write speed: %d byte/s\n", total_length / tick * RT_TICK_PER_SECOND);
+    else
+    {
+       rt_kprintf("Usage:\nwritespeed [file_path] [length] [block_size]\n");
+       rt_kprintf("writespeed [file_path] with default length 1MB and block size 512\n");
+       return;
+    }
+    writespeed(filename, length, block_size);
 }
-
-#ifdef RT_USING_FINSH
-#include <finsh.h>
-FINSH_FUNCTION_EXPORT(seqw_speed, perform file write test);
-#endif
+MSH_CMD_EXPORT_ALIAS(cmd_writespeed, writespeed, test file system write speed);
+#endif /* RT_USING_FINSH */

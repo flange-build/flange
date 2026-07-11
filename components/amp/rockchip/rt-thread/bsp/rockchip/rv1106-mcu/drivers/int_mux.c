@@ -26,15 +26,6 @@ void rt_hw_interrupt_active(int vector)
     *(unsigned int *)(INT_MUX + index * 4) = (1 << set) | temp;
 }
 
-void rt_hw_interrupt_deactive(int vector)
-{
-    unsigned int index, set;
-
-    index = vector / 32;
-    set = vector % 32;
-    *(unsigned int *)(INT_MUX + index * 4) &= ~(1 << set);
-}
-
 rt_uint32_t rt_hw_interrupt_get_active(void)
 {
     rt_uint32_t cause = -1;

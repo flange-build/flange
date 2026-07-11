@@ -285,6 +285,8 @@ void rt_hw_iomux_config(void)
 
     pdm_input_iomux_config();
 
+    uart0_iomux_config();
+
     sfc0_iomux_config();
 
     sfc1_iomux_config();
@@ -295,10 +297,7 @@ void rt_hw_iomux_config(void)
 
 #ifdef M4_JTAG_ENABLE
     m4_jtag_iomux_config();
-#else
-    uart0_iomux_config();
 #endif
-    uart0_cts_rts_iomux_config();
 
     lcdc_iomux_config();
 

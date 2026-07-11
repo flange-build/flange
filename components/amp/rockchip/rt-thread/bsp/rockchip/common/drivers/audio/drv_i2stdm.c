@@ -14,9 +14,11 @@
 
 #include <rtdevice.h>
 #include <rtthread.h>
-#include <rthw.h>
 
-#if defined(RT_USING_I2STDM) && (defined(RT_USING_I2STDM0) || defined(RT_USING_I2STDM1) || defined(RT_USING_I2STDM2))
+#if defined(RT_USING_I2STDM) && \
+    (defined(RT_USING_I2STDM0) || defined(RT_USING_I2STDM1) || defined(RT_USING_I2STDM2)  || defined(RT_USING_I2STDM3) || \
+     defined(RT_USING_I2STDM4) || defined(RT_USING_I2STDM5) || defined(RT_USING_I2STDM6)  || defined(RT_USING_I2STDM7) || \
+     defined(RT_USING_I2STDM8) || defined(RT_USING_I2STDM9) || defined(RT_USING_I2STDM10) || defined(RT_USING_I2STDM11))
 
 #include "rk_audio.h"
 #include "drv_clock.h"
@@ -83,14 +85,6 @@ static rt_err_t rk_i2stdm_set_clk(struct audio_dai *dai,
 {
     struct rk_i2stdm_dev *i2stdm = to_i2stdm(dai);
 
-    if (i2stdm->hI2sTdm->trcmMode != TRCM_NONE)
-    {
-        clk_set_rate(i2stdm->hI2sTdm->mclkTx, freq);
-        clk_set_rate(i2stdm->hI2sTdm->mclkRx, freq);
-
-        return RT_EOK;
-    }
-
     if (stream == AUDIO_STREAM_PLAYBACK)
         clk_set_rate(i2stdm->hI2sTdm->mclkTx, freq);
     else
@@ -113,14 +107,13 @@ static rt_err_t rk_i2stdm_config(struct audio_dai *dai,
 static rt_err_t rk_i2stdm_start(struct audio_dai *dai, eAUDIO_streamType stream)
 {
     struct rk_i2stdm_dev *i2stdm = to_i2stdm(dai);
-#ifdef HAL_I2STDM_TDM_MULTI_LANES
-    rt_base_t level;
-#endif
 
     if (i2stdm->hI2sTdm->trcmMode != TRCM_NONE)
     {
-        clk_enable(i2stdm->mclk_tx_gate);
-        clk_enable(i2stdm->mclk_rx_gate);
+        if (i2stdm->hI2sTdm->trcmMode == TRCM_TXONLY)
+            clk_enable(i2stdm->mclk_tx_gate);
+        else
+            clk_enable(i2stdm->mclk_rx_gate);
 
         rt_mutex_take(&i2stdm->trcm_lock, RT_WAITING_FOREVER);
         HAL_I2STDM_TxRxEnable(i2stdm->hI2sTdm, stream, !i2stdm->trctrl_cnt);
@@ -134,14 +127,7 @@ static rt_err_t rk_i2stdm_start(struct audio_dai *dai, eAUDIO_streamType stream)
         else
             clk_enable(i2stdm->mclk_rx_gate);
 
-
-#ifdef HAL_I2STDM_TDM_MULTI_LANES
-        level = rt_hw_interrupt_disable();
-#endif
         HAL_I2STDM_Enable(i2stdm->hI2sTdm, stream);
-#ifdef HAL_I2STDM_TDM_MULTI_LANES
-        rt_hw_interrupt_enable(level);
-#endif
     }
 
     return RT_EOK;
@@ -159,8 +145,10 @@ static rt_err_t rk_i2stdm_stop(struct audio_dai *dai, eAUDIO_streamType stream)
         HAL_I2STDM_TxRxDisable(i2stdm->hI2sTdm, stream, !i2stdm->trctrl_cnt);
         rt_mutex_release(&i2stdm->trcm_lock);
 
-        clk_disable(i2stdm->mclk_tx_gate);
-        clk_disable(i2stdm->mclk_rx_gate);
+        if (i2stdm->hI2sTdm->trcmMode == TRCM_TXONLY)
+            clk_disable(i2stdm->mclk_tx_gate);
+        else
+            clk_disable(i2stdm->mclk_rx_gate);
     }
     else
     {
@@ -176,12 +164,12 @@ static rt_err_t rk_i2stdm_stop(struct audio_dai *dai, eAUDIO_streamType stream)
 }
 
 #if defined(RT_USING_PM)
-static int rk_i2stdm_pm_suspend(const struct rt_device *device)
+static int rk_i2stdm_pm_suspend(const struct rt_device *device, rt_uint8_t mode)
 {
     return RT_EOK;
 }
 
-static void rk_i2stdm_pm_resume(const struct rt_device *device)
+static void rk_i2stdm_pm_resume(const struct rt_device *device, rt_uint8_t mode)
 {
 }
 
@@ -223,7 +211,7 @@ static struct audio_dai *rk_i2stdm_init_dai(struct HAL_I2STDM_DEV *hI2sTdm)
 #endif
 #if defined(RT_USING_PM)
     i2stdm->parent.user_data = i2stdm;
-    rt_pm_register_device(&i2stdm->parent, &rk_i2stdm_pm_ops);
+    rt_pm_device_register(&i2stdm->parent, &rk_i2stdm_pm_ops);
 #endif
     rt_mutex_init(&i2stdm->trcm_lock, "trcm_lock", RT_IPC_FLAG_FIFO);
 
@@ -240,6 +228,33 @@ int rt_hw_i2stdm_init(void)
 #endif
 #if defined(RT_USING_I2STDM2)
     rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm2Dev));
+#endif
+#if defined(RT_USING_I2STDM3)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm3Dev));
+#endif
+#if defined(RT_USING_I2STDM4)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm4Dev));
+#endif
+#if defined(RT_USING_I2STDM5)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm5Dev));
+#endif
+#if defined(RT_USING_I2STDM6)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm6Dev));
+#endif
+#if defined(RT_USING_I2STDM7)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm7Dev));
+#endif
+#if defined(RT_USING_I2STDM8)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm8Dev));
+#endif
+#if defined(RT_USING_I2STDM9)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm9Dev));
+#endif
+#if defined(RT_USING_I2STDM10)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm10Dev));
+#endif
+#if defined(RT_USING_I2STDM11)
+    rk_audio_register_dai(rk_i2stdm_init_dai(&g_i2sTdm11Dev));
 #endif
 
     return 0;

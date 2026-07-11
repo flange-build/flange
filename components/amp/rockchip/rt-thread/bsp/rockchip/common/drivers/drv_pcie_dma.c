@@ -1,17 +1,7 @@
 /**
-  * Copyright (c) 2022 Rockchip Electronics Co., Ltd
+  * Copyright (c) 2025 Rockchip Electronics Co., Ltd
   *
   * SPDX-License-Identifier: Apache-2.0
-  ******************************************************************************
-  * @file    drv_pcie_dma.c
-  * @version V1.0
-  * @brief   pcie_dma interface
-  *
-  * Change Logs:
-  * Date           Author          Notes
-  * 2022-08-30     Dingqiang Lin   the first version
-  *
-  ******************************************************************************
   */
 
 /** @addtogroup RKBSP_Driver_Reference
@@ -31,7 +21,6 @@
 #include <rtthread.h>
 #include <rtdevice.h>
 
-#include "hal_bsp.h"
 #include "drv_pcie_dma.h"
 
 #ifdef RT_USING_PCIE_DMA
@@ -118,7 +107,7 @@ rt_err_t rk_pcie_dma_wait_for_complete(struct rk_pcie_dma_device *dma, struct rk
     return dma->ops->wait_for_finished(dma, transfer->chan->cur, timeout_us);
 }
 
-struct rk_pcie_dma_device *rk_pcie_dma_register(void *priv_data, struct rk_pcie_dma_ops *ops)
+struct rk_pcie_dma_device *rk_pcie_dma_register(void *priv_data, const struct rk_pcie_dma_ops *ops)
 {
     rt_err_t ret = -RT_ERROR;
     struct rk_pcie_dma_device *dev = RT_NULL;

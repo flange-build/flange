@@ -37,8 +37,7 @@
                                                (ISP_MINOR_VERSION * 100) + \
                                                 ISP_REVISE_REVISION)
 #define RK_ISP_DEVICE_NAME                  "isp_0"
-#define RK_ISP_MAIN_SUBDEV_NAME             "sensor_0"
-#define RK_ISP_ASSIST_SUBDEV_NAME           "sensor_1"
+#define RK_ISP_SUBDEV_NAME                  "sensor_0"
 #define RK_ISP_ROW_BYTE_ALIGN                256
 
 #define RK_ISP_BUF_NUM_MAX                  (32)
@@ -253,13 +252,11 @@ struct vicap_clock_info
     rk_clk_gate *vicap_dclk;
     rk_clk_gate *vicap_i0clk;
     rk_clk_gate *vicap_rx0pclk;
-    rk_clk_gate *vicap_pclk_vepu;
 };
 
 struct csi2_clock_info
 {
     rk_clk_gate *csi2_pclk;
-    rk_clk_gate *csi2_rxbyteclkhs0;
 };
 
 struct dphy_clock_info
@@ -335,50 +332,6 @@ typedef enum rdbk_index
     RK_ISP_BUF_RDBK_MAX,
 } eISP_Buf_Rdbkindex;
 
-#pragma pack(1)
-struct dphy_desc
-{
-    bool csi_host_idx;
-    int data_lanes;
-    bool enable;
-    char *isp_subdev_name;
-};
-#pragma pack()
-
-#pragma pack(1)
-struct dphy_board_desc
-{
-    bool enable;
-    uint32_t reg;
-    struct dphy_desc csi2_dphy1;
-    struct dphy_desc csi2_dphy2;
-};
-#pragma pack()
-
-#pragma pack(1)
-struct csi2_board_desc
-{
-    bool csi_host_idx;
-    bool enable;
-    char *subdev_name;
-    char *isp_subdev_name;
-    uint32_t reg;
-};
-#pragma pack()
-
-#pragma pack(1)
-struct vicap_board_desc
-{
-    bool enable;
-    uint32_t reg;
-};
-#pragma pack()
-
-extern struct dphy_board_desc csi2_dphy_board;
-extern struct csi2_board_desc csi2_host0_board;
-extern struct csi2_board_desc csi2_host1_board;
-extern struct vicap_board_desc vicap_board;
-
 struct rk_isp_dev
 {
     struct rk_isp_device parent;
@@ -388,10 +341,6 @@ struct rk_isp_dev
     struct VICAP_REG *vicap;
     struct MIPI_CSI_DPHY_REG *dphy;
     struct CSI2HOST_REG *csihost;
-    struct dphy_board_desc *csi2_dphy_board;
-    struct csi2_board_desc *csi2_host0_board;
-    struct csi2_board_desc *csi2_host1_board;
-    struct vicap_board_desc *vicap_board;
     struct rk_isp_irq *irq_set;
     struct rk_camera_device *subdev;
     struct isp_videobuf_queue buf_queue;

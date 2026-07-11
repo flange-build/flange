@@ -146,6 +146,19 @@ void sdio_iomux_config(void)
                          PIN_CONFIG_DRV_LEVEL1);
 }
 
+/**
+ * @brief  config iomux for uart0
+ */
+void uart0_iomux_config(void)
+{
+    HAL_PINCTRL_SetIOMUX(GPIO_BANK0,
+                         GPIO_PIN_C7 |  // UART0_RX
+                         GPIO_PIN_D0 |  // UART0_TX
+                         GPIO_PIN_D1 |  // UART0_CTSN
+                         GPIO_PIN_D2,   // UART0_RTSN
+                         PIN_CONFIG_MUX_FUNC1);
+}
+
 #ifdef RT_USING_PMIC_RK816
 /**
  * @brief  Config iomux for PMIC
@@ -213,7 +226,6 @@ void rt_hw_iomux_config(void)
 #else
     uart0_iomux_config();
 #endif
-    uart0_cts_rts_iomux_config();
 
     i2c0_m1_iomux_config();
 

@@ -14,7 +14,7 @@ for d in list:
     if os.path.isfile(os.path.join(path, 'SConscript')):
         objs = objs + SConscript(os.path.join(d, 'SConscript'))
 
-group = DefineGroup('Benchmark', src, depend = ['RT_USING_RPMSG_LITE'], CPPPATH = CPPPATH)
+group = DefineGroup('RPMsglite', src, depend = ['RT_USING_RPMSG_LITE'], CPPPATH = CPPPATH)
 objs = objs + group
 
 Return('objs')

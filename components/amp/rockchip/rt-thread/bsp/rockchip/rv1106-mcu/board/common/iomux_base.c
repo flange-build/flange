@@ -13,54 +13,15 @@
 #include "hal_base.h"
 
 /**
- * @brief  Config iomux m2 for I2C0
- */
-RT_WEAK RT_UNUSED void i2c0_m2_iomux_config(void)
-{
-    /* I2C0 M2 SCL-3A4 SDA-3A5 */
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK3,
-                         GPIO_PIN_A4 | GPIO_PIN_A5,
-                         PIN_CONFIG_MUX_FUNC3);
-
-    /* pull none smt */
-    HAL_PINCTRL_SetParam(GPIO_BANK3,
-                         GPIO_PIN_A4 | GPIO_PIN_A5,
-                         PIN_CONFIG_PUL_NORMAL |
-                         PIN_CONFIG_SMT_ENABLE);
-}
-
-/**
- * @brief  Config iomux m1 for I2C3
- */
-RT_WEAK RT_UNUSED void i2c3_m1_iomux_config(void)
-{
-    /* I2C0 M2 SCL-1D3 SDA-1D2 */
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
-                         GPIO_PIN_D2 | GPIO_PIN_D3,
-                         PIN_CONFIG_MUX_FUNC3);
-
-    /* pull none smt */
-    HAL_PINCTRL_SetParam(GPIO_BANK1,
-                         GPIO_PIN_D2 | GPIO_PIN_D3,
-                         PIN_CONFIG_PUL_NORMAL |
-                         PIN_CONFIG_SMT_ENABLE);
-}
-
-/**
  * @brief  Config iomux m2 for I2C4
  */
 RT_WEAK RT_UNUSED void i2c4_m2_iomux_config(void)
 {
     /* I2C4 M2 SCL-3C7 SDA-3D0 */
     HAL_PINCTRL_SetIOMUX(GPIO_BANK3,
-                         GPIO_PIN_C7 | GPIO_PIN_D0,
+                         GPIO_PIN_C7 |
+                         GPIO_PIN_D0,
                          PIN_CONFIG_MUX_FUNC3);
-
-    /* pull none smt */
-    HAL_PINCTRL_SetParam(GPIO_BANK3,
-                         GPIO_PIN_C7 | GPIO_PIN_D0,
-                         PIN_CONFIG_PUL_NORMAL |
-                         PIN_CONFIG_SMT_ENABLE);
 }
 
 /**
@@ -110,21 +71,9 @@ RT_WEAK RT_UNUSED void uart2_m0_iomux_config(void)
 }
 
 /**
- * @brief  Config iomux m1 for UART2
- */
-RT_WEAK RT_UNUSED void uart2_m1_iomux_config(void)
-{
-    /* UART2 M1 RX-1B3 TX-1B2 */
-    HAL_PINCTRL_SetIOMUX(GPIO_BANK1,
-                         GPIO_PIN_B2 |
-                         GPIO_PIN_B3,
-                         PIN_CONFIG_MUX_FUNC2);
-}
-
-/**
  * @brief  Config iomux for RV1106
  */
 RT_WEAK RT_UNUSED void rt_hw_iomux_config(void)
 {
-    uart2_m1_iomux_config();
+    uart2_m0_iomux_config();
 }

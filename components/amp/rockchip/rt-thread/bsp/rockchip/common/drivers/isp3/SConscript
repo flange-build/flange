@@ -2,7 +2,7 @@ Import('RTT_ROOT')
 Import('rtconfig')
 from building import *
 
-cwd = GetCurrentDir()
+cwd = os.path.join(str(Dir('#')), 'drivers')
 
 # add the general drvers.
 src = Glob("*.c")

@@ -1079,7 +1079,7 @@ static rt_err_t rk_dsp_send_vendor_key(struct rk_dsp *rkdsp, int *result)
         rt_kprintf("read vendor key fail\n");
         rt_free_uncache(uncache_buf);
         rkdsp_free(key);
-        return -RT_ERROR;
+        return RT_ERROR;
     }
 
     rt_hw_cpu_dcache_ops(RT_HW_CACHE_FLUSH, (void *)key, len);

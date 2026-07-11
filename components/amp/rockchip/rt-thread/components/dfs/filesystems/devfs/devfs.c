@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -97,7 +97,7 @@ int dfs_device_fs_close(struct dfs_fd *file)
 
         root_dirent = (struct device_dirent *)file->data;
         RT_ASSERT(root_dirent != RT_NULL);
-        
+
         /* release dirent */
         rt_free(root_dirent);
         return RT_EOK;
@@ -133,7 +133,7 @@ int dfs_device_fs_open(struct dfs_fd *file)
         struct rt_object_information *information;
         struct device_dirent *root_dirent;
         rt_uint32_t count = 0;
-        
+
         /* lock scheduler */
         rt_enter_critical();
 
@@ -144,11 +144,15 @@ int dfs_device_fs_open(struct dfs_fd *file)
         {
             count ++;
         }
+        rt_exit_critical();
 
-        root_dirent = (struct device_dirent *)rt_malloc(sizeof(struct device_dirent) + 
-            count * sizeof(rt_device_t));
+        root_dirent = (struct device_dirent *)rt_malloc(sizeof(struct device_dirent) +
+                      count * sizeof(rt_device_t));
         if (root_dirent != RT_NULL)
         {
+            /* lock scheduler */
+            rt_enter_critical();
+
             root_dirent->devices = (rt_device_t *)(root_dirent + 1);
             root_dirent->read_index = 0;
             root_dirent->device_count = count;
@@ -156,16 +160,22 @@ int dfs_device_fs_open(struct dfs_fd *file)
             /* get all device node */
             for (node = information->object_list.next; node != &(information->object_list); node = node->next)
             {
+                /* avoid memory write through */
+                if (count == root_dirent->device_count)
+                {
+                    rt_kprintf("warning: There are newly added devices that are not displayed!");
+                    break;
+                }
                 object = rt_list_entry(node, struct rt_object, list);
                 root_dirent->devices[count] = (rt_device_t)object;
                 count ++;
             }
+            rt_exit_critical();
         }
-        rt_exit_critical();
 
         /* set data */
         file->data = root_dirent;
-        
+
         return RT_EOK;
     }
 
@@ -173,12 +183,12 @@ int dfs_device_fs_open(struct dfs_fd *file)
     if (device == RT_NULL)
         return -ENODEV;
 
-#ifdef RT_USING_POSIX
+#ifdef RT_USING_POSIX_DEVIO
     if (device->fops)
     {
         /* use device fops */
         file->fops = device->fops;
-        file->data = (void*)device;
+        file->data = (void *)device;
 
         /* use fops */
         if (file->fops->open)
@@ -186,17 +196,19 @@ int dfs_device_fs_open(struct dfs_fd *file)
             result = file->fops->open(file);
             if (result == RT_EOK || result == -RT_ENOSYS)
             {
+                file->type = FT_DEVICE;
                 return 0;
             }
         }
     }
     else
-#endif
+#endif /* RT_USING_POSIX_DEVIO */
     {
         result = rt_device_open(device, RT_DEVICE_OFLAG_RDWR);
         if (result == RT_EOK || result == -RT_ENOSYS)
         {
             file->data = device;
+            file->type = FT_DEVICE;
             return RT_EOK;
         }
     }
@@ -214,7 +226,7 @@ int dfs_device_fs_stat(struct dfs_filesystem *fs, const char *path, struct stat 
         st->st_dev = 0;
 
         st->st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH |
-            S_IWUSR | S_IWGRP | S_IWOTH;
+                      S_IWUSR | S_IWGRP | S_IWOTH;
         st->st_mode &= ~S_IFREG;
         st->st_mode |= S_IFDIR | S_IXUSR | S_IXGRP | S_IXOTH;
 
@@ -233,7 +245,7 @@ int dfs_device_fs_stat(struct dfs_filesystem *fs, const char *path, struct stat 
             st->st_dev = 0;
 
             st->st_mode = S_IRUSR | S_IRGRP | S_IROTH |
-                S_IWUSR | S_IWGRP | S_IWOTH;
+                          S_IWUSR | S_IWGRP | S_IWOTH;
 
             if (dev_id->type == RT_Device_Class_Char)
                 st->st_mode |= S_IFCHR;
@@ -269,7 +281,7 @@ int dfs_device_fs_getdents(struct dfs_fd *file, struct dirent *dirp, uint32_t co
     if (count == 0)
         return -EINVAL;
 
-    for (index = 0; index < count && index + root_dirent->read_index < root_dirent->device_count; 
+    for (index = 0; index < count && index + root_dirent->read_index < root_dirent->device_count;
         index ++)
     {
         object = (rt_object_t)root_dirent->devices[root_dirent->read_index + index];
@@ -293,7 +305,7 @@ static int dfs_device_fs_poll(struct dfs_fd *fd, struct rt_pollreq *req)
     return mask;
 }
 
-static const struct dfs_file_ops _device_fops = 
+static const struct dfs_file_ops _device_fops =
 {
     dfs_device_fs_open,
     dfs_device_fs_close,
@@ -306,25 +318,23 @@ static const struct dfs_file_ops _device_fops =
     dfs_device_fs_poll,
 };
 
-static const struct dfs_filesystem_ops _device_fs = 
+static const struct dfs_filesystem_ops _device_fs =
 {
     "devfs",
     DFS_FS_FLAG_DEFAULT,
     &_device_fops,
-
     dfs_device_fs_mount,
-    RT_NULL,
-    RT_NULL,
-    RT_NULL,
-
-    RT_NULL,
+    RT_NULL, /*unmount*/
+    RT_NULL, /*mkfs*/
+    RT_NULL, /*statfs*/
+    RT_NULL, /*unlink*/
     dfs_device_fs_stat,
-    RT_NULL,
+    RT_NULL, /*rename*/
 };
 
 int devfs_init(void)
 {
-    /* register rom file system */
+    /* register device file system */
     dfs_register(&_device_fs);
 
     return 0;

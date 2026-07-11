@@ -39,7 +39,7 @@ if PLATFORM == 'gcc':
     OBJCPY  = PREFIX + 'objcopy'
 
     DEVICE = ' -mcpu=cortex-a55+crypto -mfloat-abi=hard -marm -ffast-math'
-    CFLAGS = DEVICE + ' -std=gnu99 -Wall -g -Wno-stringop-truncation'
+    CFLAGS = DEVICE + ' -std=gnu99 -Wall -g -Wno-stringop-truncation -D__RT_THREAD__'
     AFLAGS = DEVICE + ' -c -x assembler-with-cpp -D__ASSEMBLY__'
     LINK_SCRIPT = 'gcc_arm.ld.S'
     LFLAGS  = DEVICE + ' -lm -lgcc -lc' + ' -nostartfiles -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,system_vectors -T gcc_arm.ld'

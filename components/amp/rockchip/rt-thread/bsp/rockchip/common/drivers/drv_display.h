@@ -28,6 +28,8 @@
 
 #include "drv_panel.h"
 #include "drv_panel_cfg.h"
+#include "drv_dw_mipi_dsi.h"
+#include "drv_inno_mipi_dphy.h"
 
 /*******************************************************************************
  * Pre-processor Definitions
@@ -62,6 +64,7 @@ do { \
 #define RK_DISPLAY_CTRL_CLOSE_WIN           0x1011
 #define RK_DISPLAY_CTRL_POST_PLANE          0x1012
 #define RK_DISPLAY_CTRL_DISABLE_LUT         0x1013
+#define RK_DISPLAY_CTRL_WAIT_VBLANK         0x1014
 
 #define RK_DISPLAY_MAX_CRTC_WIN_NUM         3
 #define RK_DISPLAY_TIME_OUT                 50
@@ -96,6 +99,12 @@ enum rockchip_display_sync_cmd
     DISPLAY_SET_ASYNC_MODE,
     DISPLAY_SYNC,
 };
+
+enum rockchip_display_commit_mode
+{
+    DISPLAY_COMMIT_NONBLOCK,
+    DISPLAY_COMMIT_BLOCK,
+};
 /*******************************************************************************
  *Private Variable Definition
  ******************************************************************************/
@@ -129,7 +138,7 @@ struct rockchip_crtc_funcs
     void (*set_plane)(struct display_state *state, struct CRTC_WIN_STATE *win_state);
     void (*set_scale)(struct display_state *state);
     void (*set_area)(struct display_state *state, struct DISPLAY_RECT *display_rect);
-    void (*commit)(struct display_state *state);
+    void (*commit)(struct display_state *state, enum rockchip_display_commit_mode mode);
     void (*load_lut)(struct display_state *state, uint8_t winId,
                      uint32_t *lut, uint16_t lut_size);
     void (*disable_lut)(struct display_state *state, uint8_t winId);
@@ -168,7 +177,22 @@ struct crtc_state
 
     uint8_t irqno;
     rt_event_t frm_fsh_event;
+    rt_event_t frm_st_event;
     bool wait_frm_fsh;
+};
+
+struct rockchip_phy_funcs
+{
+    int (*init)(struct display_state *state);
+    int (*power_on)(struct display_state *state);
+    int (*power_off)(struct display_state *state);
+    unsigned long (*set_pll)(struct display_state *state, unsigned long rate);
+};
+
+struct phy_state
+{
+    const struct rockchip_phy_funcs *funcs;
+    void *private;
 };
 
 struct rockchip_connector_funcs
@@ -180,6 +204,7 @@ struct rockchip_connector_funcs
     void (*init)(struct display_state *state);
     void (*deinit)(struct display_state *state);
     void (*prepare)(struct display_state *state);
+    void (*unprepare)(struct display_state *state);
     void (*enable)(struct display_state *state);
     void (*disable)(struct display_state *state);
     void (*update_mode)(struct display_state *state, struct DISPLAY_MODE_INFO *mode);
@@ -193,6 +218,7 @@ struct connector_state
     struct DSI_REG *hw_base;
     const struct rockchip_connector_funcs *funcs;
     bool enabled;
+    void *private;
 };
 
 struct rockchip_panel_funcs
@@ -250,8 +276,10 @@ struct display_state
     struct crtc_state crtc_state;
     struct connector_state conn_state;
     struct panel_state panel_state;
+    struct phy_state phy_state;
     struct DISPLAY_MODE_INFO mode;
     struct rt_mutex display_lock;
+    struct rt_mutex vblank_lock;
     struct rt_workqueue *isr_workqueue;
     struct rt_work work;
     struct rt_event event;
@@ -262,6 +290,7 @@ struct display_state
 #endif
     bool te_irq;
     rt_event_t te_event;
+    rt_event_t vblank_event;
 };
 
 /*******************************************************************************

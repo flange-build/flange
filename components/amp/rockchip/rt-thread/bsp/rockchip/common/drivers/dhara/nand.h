@@ -80,6 +80,7 @@ struct dhara_nand
     struct block_status *blocks;
     void            *priv_data;
     void            *copy_buf;
+    uint32_t        start_blocks;
 };
 
 /* Is the given block bad? */

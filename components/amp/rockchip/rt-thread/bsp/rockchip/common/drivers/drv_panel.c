@@ -10,6 +10,7 @@
   * Change Logs:
   * Date           Author          Notes
   * 2019-02-20     Huang Jiachai   first implementation
+  * 2023-09-01     Damon Ding      add panel reset control
   * 2023-09-01     Zhizhan Chen    add panel delay configurations
   *
   ******************************************************************************
@@ -117,7 +118,9 @@ static void rockchip_panel_init(struct display_state *state)
     panel_state->vmode.xres = RT_HW_LCD_XRES;
     panel_state->vmode.yres = RT_HW_LCD_YRES;
     panel_state->vmode.pixclock = RT_HW_LCD_PIXEL_CLOCK;
+#if defined(RT_USING_DSI) || defined(RT_USING_DW_MIPI_DSI)
     panel_state->vmode.lanembps = RT_HW_LCD_LANE_MBPS;
+#endif
     panel_state->vmode.left_margin = RT_HW_LCD_LEFT_MARGIN;
     panel_state->vmode.right_margin = RT_HW_LCD_RIGHT_MARGIN;
     panel_state->vmode.upper_margin = RT_HW_LCD_UPPER_MARGIN;
@@ -173,6 +176,11 @@ static void rockchip_panel_deinit(struct display_state *state)
  */
 static void rockchip_panel_enable_power(struct display_state *state)
 {
+#ifdef RT_HW_LCD_EN_PIN
+    rt_pin_mode(RT_HW_LCD_EN_PIN, PIN_MODE_OUTPUT);
+    rt_pin_write(RT_HW_LCD_EN_PIN, RT_HW_LCD_POWER_EN_FLAG);
+#endif
+
 #ifdef RT_HW_LCD_POWER_EN_PIN
     rt_pin_mode(RT_HW_LCD_POWER_EN_PIN, PIN_MODE_OUTPUT);
     rt_pin_write(RT_HW_LCD_POWER_EN_PIN, RT_HW_LCD_POWER_EN_FLAG);
@@ -185,6 +193,11 @@ static void rockchip_panel_enable_power(struct display_state *state)
  */
 static void rockchip_panel_disable_power(struct display_state *state)
 {
+#ifdef RT_HW_LCD_EN_PIN
+    rt_pin_mode(RT_HW_LCD_EN_PIN, PIN_MODE_OUTPUT);
+    rt_pin_write(RT_HW_LCD_EN_PIN, !RT_HW_LCD_POWER_EN_FLAG);
+#endif
+
 #ifdef RT_HW_LCD_POWER_EN_PIN
     rt_pin_mode(RT_HW_LCD_POWER_EN_PIN, PIN_MODE_OUTPUT);
     rt_pin_write(RT_HW_LCD_POWER_EN_PIN, !RT_HW_LCD_POWER_EN_FLAG);
@@ -349,7 +362,7 @@ static void rockchip_panel_prepare(struct display_state *state)
 #endif
     rockchip_panel_reset(state);
     rt_thread_delay(10);
-    if (&panel_state->on_cmds)
+    if (panel_state->on_cmds.cmds)
     {
         if (panel_state->conn_type == RK_DISPLAY_CONNECTOR_DSI)
             ret = rockchip_panel_send_dsi_cmds(state, &panel_state->on_cmds);
@@ -375,7 +388,7 @@ static void rockchip_panel_unprepare(struct display_state *state)
         return;
 
     rt_thread_delay(10);
-    if (&panel_state->off_cmds)
+    if (panel_state->off_cmds.cmds)
     {
         if (panel_state->conn_type == RK_DISPLAY_CONNECTOR_DSI)
             ret = rockchip_panel_send_dsi_cmds(state, &panel_state->off_cmds);
@@ -415,6 +428,10 @@ static void rockchip_panel_enable(struct display_state *state)
     /**
      * todo: enable backlight
      */
+
+#ifdef RT_HW_LCD_ENABLE_DELAY_MS
+    HAL_DelayMs(RT_HW_LCD_ENABLE_DELAY_MS);
+#endif
 
     panel_state->enabled = true;
 }

@@ -2,7 +2,7 @@
  * Copyright (c) 2014, Mentor Graphics Corporation
  * Copyright (c) 2015 Xilinx, Inc.
  * Copyright (c) 2016 Freescale Semiconductor, Inc.
- * Copyright 2016-2022 NXP
+ * Copyright 2016-2023 NXP
  * Copyright 2021 ACRIOS Systems s.r.o.
  * All rights reserved.
  *
@@ -88,6 +88,15 @@ static struct isr_info isr_table[ISR_COUNT];
 #error "This RPMsg-Lite port requires RL_USE_ENVIRONMENT_CONTEXT set to 0"
 #endif
 
+#if defined(AARCH64)
+extern uint64_t ullPortInterruptNesting;
+
+static int32_t os_in_isr(void)
+{
+    return (ullPortInterruptNesting > 0);
+}
+#endif
+
 /*!
  * env_in_isr
  *
@@ -96,7 +105,11 @@ static struct isr_info isr_table[ISR_COUNT];
  */
 static int32_t env_in_isr(void)
 {
+#if defined(AARCH64)
+    return os_in_isr();
+#else
     return platform_in_isr();
+#endif
 }
 
 /*!
@@ -106,12 +119,27 @@ static int32_t env_in_isr(void)
  * Utilize events to avoid busy loop implementation.
  *
  */
-void env_wait_for_link_up(volatile uint32_t *link_state, uint32_t link_id)
+uint32_t env_wait_for_link_up(volatile uint32_t *link_state, uint32_t link_id, uint32_t timeout_ms)
 {
     (void)xEventGroupClearBits(event_group, (EventBits_t)(1UL << link_id));
     if (*link_state != 1U)
     {
-        (void)xEventGroupWaitBits(event_group, (EventBits_t)(1UL << link_id), pdFALSE, pdTRUE, portMAX_DELAY);
+        EventBits_t uxBits;
+        uxBits = xEventGroupWaitBits(event_group, (EventBits_t)(1UL << link_id), pdFALSE, pdTRUE,
+                                     ((portMAX_DELAY == timeout_ms) ? portMAX_DELAY : timeout_ms / portTICK_PERIOD_MS));
+        if (uxBits == (EventBits_t)(1UL << link_id))
+        {
+            return 1U;
+        }
+        else
+        {
+            /* timeout */
+            return 0U;
+        }
+    }
+    else
+    {
+        return 1U;
     }
 }
 
@@ -149,8 +177,10 @@ int32_t env_init(void)
     RL_ASSERT(env_init_counter >= 0);
     if (env_init_counter < 0)
     {
+        /* coco begin validated: (env_init_counter < 0) condition will never met unless RAM is corrupted */
         (void)xTaskResumeAll(); /* re-enable scheduler */
         return -1;
+        /* coco end */
     }
     env_init_counter++;
     /* multiple call of 'env_init' - return ok */
@@ -184,10 +214,8 @@ int32_t env_init(void)
          * if needed and other tasks to wait for the
          * blocking to be done.
          * This is in ENV layer as this is ENV specific.*/
-        if (pdTRUE == xSemaphoreTake(env_sema, portMAX_DELAY))
-        {
-            (void)xSemaphoreGive(env_sema);
-        }
+        (void)xSemaphoreTake(env_sema, portMAX_DELAY);
+        (void)xSemaphoreGive(env_sema);
         return 0;
     }
 }
@@ -235,6 +263,7 @@ int32_t env_deinit(void)
     }
 }
 
+#if !(defined(RL_USE_STATIC_API) && (RL_USE_STATIC_API == 1))
 /*!
  * env_allocate_memory - implementation
  *
@@ -257,6 +286,7 @@ void env_free_memory(void *ptr)
         vPortFree(ptr);
     }
 }
+#endif
 
 /*!
  *
@@ -710,7 +740,7 @@ void env_delete_queue(void *queue)
  * @return - status of function execution
  */
 
-int32_t env_put_queue(void *queue, void *msg, uint32_t timeout_ms)
+int32_t env_put_queue(void *queue, void *msg, uintptr_t timeout_ms)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (env_in_isr() != 0)
@@ -744,7 +774,7 @@ int32_t env_put_queue(void *queue, void *msg, uint32_t timeout_ms)
  * @return - status of function execution
  */
 
-int32_t env_get_queue(void *queue, void *msg, uint32_t timeout_ms)
+int32_t env_get_queue(void *queue, void *msg, uintptr_t timeout_ms)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (env_in_isr() != 0)

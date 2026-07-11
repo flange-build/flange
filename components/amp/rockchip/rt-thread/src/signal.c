@@ -1,12 +1,13 @@
 /*
- * Copyright (c) 2006-2018, RT-Thread Development Team
+ * Copyright (c) 2006-2021, RT-Thread Development Team
  *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
  * Date           Author       Notes
  * 2017/10/5      Bernard      the first version
- * 2019/02/15     Jesven       fixed the problem of si_list
+ * 2018/09/17     Jesven       fix: in _signal_deliver RT_THREAD_STAT_MASK to RT_THREAD_STAT_SIGNAL_MASK
+ * 2018/11/22     Jesven       in smp version rt_hw_context_switch_to add a param
  */
 
 #include <stdint.h>
@@ -19,10 +20,10 @@
 
 #ifndef RT_SIG_INFO_MAX
 #define RT_SIG_INFO_MAX 32
-#endif
+#endif /* RT_SIG_INFO_MAX */
 
-#define DBG_SECTION_NAME    "SIGN"
-#define DBG_LEVEL           DBG_INFO
+#define DBG_TAG     "SIGN"
+#define DBG_LVL     DBG_WARNING
 #include <rtdbg.h>
 
 #define sig_mask(sig_no)    (1u << sig_no)
@@ -34,9 +35,9 @@ struct siginfo_node
     struct rt_slist_node list;
 };
 
-static struct rt_mempool *_rt_siginfo_pool;
+static struct rt_mempool *_siginfo_pool;
 static void _signal_deliver(rt_thread_t tid);
-void rt_thread_handle_sig(void);
+void rt_thread_handle_sig(rt_bool_t clean_state);
 
 static void _signal_default_handler(int signo)
 {
@@ -46,36 +47,36 @@ static void _signal_default_handler(int signo)
 
 static void _signal_entry(void *parameter)
 {
-    register rt_base_t level;
     rt_thread_t tid = rt_thread_self();
 
-    while (1)
+    /* handle signal */
+    rt_thread_handle_sig(RT_FALSE);
+
+#ifdef RT_USING_SMP
     {
-        level = rt_hw_interrupt_disable();
-        if (tid->stat & RT_THREAD_STAT_SIGNAL)
-        {
-            rt_hw_interrupt_enable(level);
+        struct rt_cpu* pcpu = rt_cpu_self();
 
-            /* handle signal */
-            rt_thread_handle_sig();
-        }
-        else
+        pcpu->current_thread->cpus_lock_nest--;
+        if (pcpu->current_thread->cpus_lock_nest == 0)
         {
-            /*
-             * Note: interrupt is disabled and no reentrant issue.
-             * 
-             * no signal status in tid->stat. 
-            */
-            break;
+            pcpu->current_thread->scheduler_lock_nest--;
         }
+
     }
-
-    /* never come back... */
+#else
+    /* return to thread */
     tid->sp = tid->sig_ret;
     tid->sig_ret = RT_NULL;
+#endif /* RT_USING_SMP */
 
-    LOG_D("switch back to: 0x%08x", tid->sp);
-    rt_hw_context_switch_to((rt_uint32_t) & (tid->sp));
+    LOG_D("switch back to: 0x%08x\n", tid->sp);
+    tid->stat &= ~RT_THREAD_STAT_SIGNAL;
+
+#ifdef RT_USING_SMP
+    rt_hw_context_switch_to((rt_base_t)&parameter, tid);
+#else
+    rt_hw_context_switch_to((rt_ubase_t)&(tid->sp));
+#endif /* RT_USING_SMP */
 }
 
 /*
@@ -90,7 +91,7 @@ static void _signal_entry(void *parameter)
  */
 static void _signal_deliver(rt_thread_t tid)
 {
-    rt_ubase_t level;
+    rt_base_t level;
 
     level = rt_hw_interrupt_disable();
 
@@ -106,7 +107,7 @@ static void _signal_deliver(rt_thread_t tid)
         /* resume thread to handle signal */
         rt_thread_resume(tid);
         /* add signal state */
-        tid->stat |= RT_THREAD_STAT_SIGNAL;
+        tid->stat |= (RT_THREAD_STAT_SIGNAL | RT_THREAD_STAT_SIGNAL_PENDING);
 
         rt_hw_interrupt_enable(level);
 
@@ -123,17 +124,36 @@ static void _signal_deliver(rt_thread_t tid)
             rt_hw_interrupt_enable(level);
 
             /* do signal action in self thread context */
-            rt_thread_handle_sig();
+            if (rt_interrupt_get_nest() == 0)
+            {
+                rt_thread_handle_sig(RT_TRUE);
+            }
         }
         else if (!((tid->stat & RT_THREAD_STAT_SIGNAL_MASK) & RT_THREAD_STAT_SIGNAL))
         {
             /* add signal state */
-            tid->stat |= RT_THREAD_STAT_SIGNAL;
+            tid->stat |= (RT_THREAD_STAT_SIGNAL | RT_THREAD_STAT_SIGNAL_PENDING);
 
+#ifdef RT_USING_SMP
+            {
+                int cpu_id;
+
+                cpu_id = tid->oncpu;
+                if ((cpu_id != RT_CPU_DETACHED) && (cpu_id != rt_hw_cpu_id()))
+                {
+                    rt_uint32_t cpu_mask;
+
+                    cpu_mask = RT_CPU_MASK ^ (1 << cpu_id);
+                    rt_hw_ipi_send(RT_SCHEDULE_IPI, cpu_mask);
+                }
+            }
+#else
             /* point to the signal handle entry */
+            tid->stat &= ~RT_THREAD_STAT_SIGNAL_PENDING;
             tid->sig_ret = tid->sp;
             tid->sp = rt_hw_stack_init((void *)_signal_entry, RT_NULL,
                                        (void *)((char *)tid->sig_ret - 32), RT_NULL);
+#endif /* RT_USING_SMP */
 
             rt_hw_interrupt_enable(level);
             LOG_D("signal stack pointer @ 0x%08x", tid->sp);
@@ -148,6 +168,60 @@ static void _signal_deliver(rt_thread_t tid)
     }
 }
 
+#ifdef RT_USING_SMP
+void *rt_signal_check(void* context)
+{
+    rt_base_t level;
+    int cpu_id;
+    struct rt_cpu* pcpu;
+    struct rt_thread *current_thread;
+
+    level = rt_hw_interrupt_disable();
+    cpu_id = rt_hw_cpu_id();
+    pcpu   = rt_cpu_index(cpu_id);
+    current_thread = pcpu->current_thread;
+
+    if (pcpu->irq_nest)
+    {
+        rt_hw_interrupt_enable(level);
+        return context;
+    }
+
+    if (current_thread->cpus_lock_nest == 1)
+    {
+        if (current_thread->stat & RT_THREAD_STAT_SIGNAL_PENDING)
+        {
+            void *sig_context;
+
+            current_thread->stat &= ~RT_THREAD_STAT_SIGNAL_PENDING;
+
+            rt_hw_interrupt_enable(level);
+            sig_context = rt_hw_stack_init((void *)_signal_entry, context,
+                    (void *)(context - 32), RT_NULL);
+            return sig_context;
+        }
+    }
+    rt_hw_interrupt_enable(level);
+    return context;
+}
+#endif /* RT_USING_SMP */
+
+/**
+ * @brief    This function will install a processing function to a specific
+ *           signal and return the old processing function of this signal.
+ *
+ * @note     This function needs to be used in conjunction with the
+ *           rt_signal_unmask() function to make the signal effective.
+ *
+ * @see      rt_signal_unmask()
+ *
+ * @param    signo is a specific signal value (range: 0 ~ RT_SIG_MAX).
+ *
+ * @param    handler is sets the processing of signal value.
+ *
+ * @return   Return the old processing function of this signal. ONLY When the
+ *           return value is SIG_ERR, the operation is failed.
+ */
 rt_sighandler_t rt_signal_install(int signo, rt_sighandler_t handler)
 {
     rt_base_t level;
@@ -175,6 +249,17 @@ rt_sighandler_t rt_signal_install(int signo, rt_sighandler_t handler)
     return old;
 }
 
+/**
+ * @brief    This function will block the specified signal.
+ *
+ * @note     This function will block the specified signal, even if the
+ *           rt_thread_kill() function is called to send this signal to
+ *           the current thread, it will no longer take effect.
+ *
+ * @see      rt_thread_kill()
+ *
+ * @param    signo is a specific signal value (range: 0 ~ RT_SIG_MAX).
+ */
 void rt_signal_mask(int signo)
 {
     rt_base_t level;
@@ -187,6 +272,17 @@ void rt_signal_mask(int signo)
     rt_hw_interrupt_enable(level);
 }
 
+/**
+ * @brief    This function will unblock the specified signal.
+ *
+ * @note     This function will unblock the specified signal. After calling
+ *           the rt_thread_kill() function to send this signal to the current
+ *           thread, it will take effect.
+ *
+ * @see      rt_thread_kill()
+ *
+ * @param    signo is a specific signal value (range: 0 ~ RT_SIG_MAX).
+ */
 void rt_signal_unmask(int signo)
 {
     rt_base_t level;
@@ -208,10 +304,24 @@ void rt_signal_unmask(int signo)
     }
 }
 
+/**
+ * @brief    This function will wait for the arrival of the set signal. If it does not wait for this signal, the thread will be
+ *           suspended until it waits for this signal or the waiting time exceeds the specified timeout: timeout.
+ *
+ * @param    set is the set of signal values to be waited for. Use the function
+ *           sigaddset() to add the signal.
+ *
+ * @param    si is a pointer to the received signal info. If you don't care about this value, you can use RT_NULL to set.
+ *
+ * @param    timeout is a timeout period (unit: an OS tick).
+ *
+ * @return   Return the operation status. When the return value is RT_EOK, the operation is successful.
+ *           If the return value is any other values, it means that the signal wait failed.
+ */
 int rt_signal_wait(const rt_sigset_t *set, rt_siginfo_t *si, rt_int32_t timeout)
 {
     int ret = RT_EOK;
-    rt_base_t   level;
+    rt_base_t level;
     rt_thread_t tid = rt_thread_self();
     struct siginfo_node *si_node = RT_NULL, *si_prev = RT_NULL;
 
@@ -327,7 +437,7 @@ __done_return:
     return ret;
 }
 
-void rt_thread_handle_sig(void)
+void rt_thread_handle_sig(rt_bool_t clean_state)
 {
     rt_base_t level;
 
@@ -335,7 +445,6 @@ void rt_thread_handle_sig(void)
     struct siginfo_node *si_node;
 
     level = rt_hw_interrupt_disable();
-
     if (tid->sig_pending & tid->sig_mask)
     {
         /* if thread is not waiting for signal */
@@ -371,8 +480,15 @@ void rt_thread_handle_sig(void)
                 tid->error = error;
             }
 
-            /* clean state */
-            tid->stat &= ~RT_THREAD_STAT_SIGNAL;
+            /* whether clean signal status */
+            if (clean_state == RT_TRUE)
+            {
+                tid->stat &= ~RT_THREAD_STAT_SIGNAL;
+            }
+            else
+            {
+                return;
+            }
         }
     }
     rt_hw_interrupt_enable(level);
@@ -433,6 +549,16 @@ void rt_thread_free_sig(rt_thread_t tid)
     }
 }
 
+/**
+ * @brief    This function can be used to send any signal to any thread.
+ *
+ * @param    tid is a pointer to the thread that receives the signal.
+ *
+ * @param    sig is a specific signal value (range: 0 ~ RT_SIG_MAX).
+ *
+ * @return   Return the operation status. When the return value is RT_EOK, the operation is successful.
+ *           If the return value is any other values, it means that the signal send failed.
+ */
 int rt_thread_kill(rt_thread_t tid, int sig)
 {
     siginfo_t si;
@@ -474,7 +600,7 @@ int rt_thread_kill(rt_thread_t tid, int sig)
     }
     rt_hw_interrupt_enable(level);
 
-    si_node = (struct siginfo_node *) rt_mp_alloc(_rt_siginfo_pool, 0);
+    si_node = (struct siginfo_node *) rt_mp_alloc(_siginfo_pool, 0);
     if (si_node)
     {
         rt_slist_init(&(si_node->list));
@@ -512,8 +638,8 @@ int rt_thread_kill(rt_thread_t tid, int sig)
 
 int rt_system_signal_init(void)
 {
-    _rt_siginfo_pool = rt_mp_create("signal", RT_SIG_INFO_MAX, sizeof(struct siginfo_node));
-    if (_rt_siginfo_pool == RT_NULL)
+    _siginfo_pool = rt_mp_create("signal", RT_SIG_INFO_MAX, sizeof(struct siginfo_node));
+    if (_siginfo_pool == RT_NULL)
     {
         LOG_E("create memory pool for signal info failed.");
         RT_ASSERT(0);
@@ -522,4 +648,4 @@ int rt_system_signal_init(void)
     return 0;
 }
 
-#endif
+#endif /* RT_USING_SIGNALS */

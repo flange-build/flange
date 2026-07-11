@@ -5,5 +5,6 @@ source "$RTT_DIR/third_party/wice/Kconfig"
 source "$RTT_DIR/third_party/netutils/Kconfig"
 source "$RTT_DIR/third_party/bt/Kconfig"
 source "$RTT_DIR/third_party/cypress/Kconfig"
-source "$RTT_DIR/third_party/audio/audio_server/Kconfig"
+source "$RTT_DIR/third_party/ampak/Kconfig"
+source "$RTT_DIR/third_party/wfd/Kconfig"
 endmenu

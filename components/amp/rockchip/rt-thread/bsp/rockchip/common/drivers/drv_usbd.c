@@ -28,13 +28,17 @@
 #endif
 #include "board.h"
 
-#define WORK_QUEUE_STACK_SIZE   512
-#define WORK_QUEUE_PRIORITY     0
+#define WORK_QUEUE_STACK_SIZE           512
+#define WORK_QUEUE_PRIORITY             0
+#define EP_STATUS_POLL_INTERVAL_MS      5
+#define EP_START_POLL_TIMEOUT           (100 * EP_STATUS_POLL_INTERVAL_MS)
+#define EP_XFER_COMPL_POLL_TIMEOUT      (10 * EP_STATUS_POLL_INTERVAL_MS)
 
 struct rockchip_usbd
 {
     struct PCD_HANDLE pcd;
     struct udcd udc;
+    rt_uint8_t id;
     /* Interrupt workqueue */
     struct rt_workqueue *isr_workqueue;
     struct rt_work isr_work;
@@ -164,13 +168,13 @@ void HAL_PCDEx_BcdCallback(struct PCD_HANDLE *pcd, ePCD_bcdMsg msg)
     {
         clk_enable_by_id(g_usbdDev.hclkGateID);
         clk_enable_by_id(g_usbdDev.utmiclkGateID);
-        HAL_USB_PhyResume();
+        HAL_USB_PhyResume(g_usbd.id);
         usb_pcd_lowlevel_hw_init(pcd);
         RT_DEBUG_LOG(RT_DEBUG_USB, ("resume usb phy and ctrl\n"));
     }
     else
     {
-        HAL_USB_PhySuspend();
+        HAL_USB_PhySuspend(g_usbd.id);
         clk_disable_by_id(g_usbdDev.hclkGateID);
         clk_disable_by_id(g_usbdDev.utmiclkGateID);
         RT_DEBUG_LOG(RT_DEBUG_USB, ("suspend usb phy and ctrl\n"));
@@ -258,12 +262,137 @@ static rt_err_t usb_wakeup(void)
     return RT_EOK;
 }
 
+static rt_err_t usb_ep_poll_enable(uep_t ep)
+{
+    rt_err_t ret = RT_EOK;
+
+    RT_ASSERT(ep != RT_NULL);
+    RT_ASSERT(ep->ep_desc != RT_NULL);
+    if (HAL_PCD_EPPollEn(&g_usbd.pcd, ep->ep_desc->bEndpointAddress) != HAL_OK)
+        ret = RT_ERROR;
+
+    return ret;
+}
+
+static rt_err_t usb_ep_poll_status(uep_t ep)
+{
+    rt_uint16_t poll_time = 0;
+    rt_uint8_t ep_xfer_start = 0;
+    rt_uint8_t ep_xfer_compl = 0;
+    rt_err_t ret = RT_EOK;
+
+    RT_ASSERT(ep != RT_NULL);
+    RT_ASSERT(ep->ep_desc != RT_NULL);
+
+    while (poll_time < EP_START_POLL_TIMEOUT)
+    {
+        if (HAL_PCD_EPXferStartPoll(&g_usbd.pcd, ep->ep_desc->bEndpointAddress) == HAL_OK)
+        {
+            ep_xfer_start = 1;
+            break;
+        }
+
+        rt_thread_mdelay(EP_STATUS_POLL_INTERVAL_MS);
+        poll_time += EP_STATUS_POLL_INTERVAL_MS;
+    }
+
+    if (!ep_xfer_start)
+    {
+        rt_kprintf("wait ep xfer start timeout\n");
+        return RT_ERROR;
+    }
+
+    poll_time = 0;
+    while (poll_time < EP_XFER_COMPL_POLL_TIMEOUT)
+    {
+        if (HAL_PCD_EPXferCompletePoll(&g_usbd.pcd, ep->ep_desc->bEndpointAddress) == HAL_OK)
+        {
+            ep_xfer_compl = 1;
+            break;
+        }
+
+        rt_thread_mdelay(EP_STATUS_POLL_INTERVAL_MS);
+        poll_time += EP_STATUS_POLL_INTERVAL_MS;
+    }
+
+    if (!ep_xfer_compl)
+    {
+        rt_kprintf("ep frame toggle\n");
+        HAL_PCD_EPFrameToggle(&g_usbd.pcd, ep->ep_desc->bEndpointAddress);
+    }
+
+    return ret;
+}
+
+#if (defined(RT_USING_USB_PMIC_VBUS) || defined(USB_VBUS_PIN) || defined(RT_USING_BVALID_IRQ)) && defined(USB_INNO_PHY_BCD_DETECT)
+static void usb_inno_phy_bcd_detect(struct PCD_HANDLE *pcd)
+{
+    rt_uint16_t dcd_time = 0;
+    ePCD_bcdMsg msg = PCD_BCD_DEFAULT_STATE;
+
+    HAL_USB_PhyInit();
+    HAL_USB_InnoPhy_SetChgMode(RT_TRUE);
+    HAL_USB_InnoPhy_DCD_Det(RT_TRUE);
+
+    while (dcd_time < CHG_DCD_DET_TIMEOUT)
+    {
+        rt_thread_mdelay(CHG_DCD_DET_TIME_MS);
+        dcd_time += CHG_DCD_DET_TIME_MS;
+        if (dcd_time >= CHG_DCD_DET_DBNC)
+        {
+            msg = HAL_USB_InnoPhy_DCD_State();
+            if (msg == PCD_BCD_CONTACT_DETECTION)
+                break;
+        }
+    }
+
+    HAL_USB_InnoPhy_DCD_Det(RT_FALSE);
+
+    if (msg == PCD_BCD_CONTACT_DETECTION)
+    {
+        HAL_USB_InnoPhy_Primary_Det(RT_TRUE);
+        rt_thread_mdelay(CHG_PRIMARY_DET_TIME_MS);
+        msg = HAL_USB_InnoPhy_Primary_State();
+    }
+    else
+    {
+        msg = PCD_BCD_FLOATING_CHARGING_PORT;
+        goto out;
+    }
+
+    HAL_USB_InnoPhy_Primary_Det(RT_FALSE);
+
+    if (msg != PCD_BCD_STD_DOWNSTREAM_PORT)
+    {
+        HAL_USB_InnoPhy_Secondary_Det(RT_TRUE);
+        rt_thread_mdelay(CHG_SECONDARY_DET_TIME_MS);
+        msg = HAL_USB_InnoPhy_Secondary_State();
+        HAL_USB_InnoPhy_Secondary_Det(RT_FALSE);
+    }
+
+out:
+    HAL_USB_InnoPhy_SetChgMode(RT_FALSE);
+
+    /* Check if the USB still remains connected */
+    if (!HAL_USB_InnoPhy_GetBvalid())
+        msg = PCD_BCD_DEFAULT_STATE;
+
+    HAL_PCDEx_BcdCallback(pcd, msg);
+}
+#endif
+
+#if defined(RT_USING_USB_PMIC_VBUS) || defined(USB_VBUS_PIN) || defined(RT_USING_BVALID_IRQ)
 static void usb_vbus_isr_work(struct rt_work *work, void *work_data)
 {
     struct PCD_HANDLE *pcd = (struct PCD_HANDLE *)work_data;
 
+#ifdef USB_INNO_PHY_BCD_DETECT
+    usb_inno_phy_bcd_detect(pcd);
+#else
     HAL_PCDEx_BcdDetect(pcd);
+#endif
 }
+#endif
 
 #ifdef USB_VBUS_PIN
 static void usb_vbus_pin_isr(void *args)
@@ -281,10 +410,35 @@ static void usb_vbus_pin_isr(void *args)
     }
     else
     {
-        HAL_USB_PhySuspend();
+        HAL_USB_PhySuspend(g_usbd.id);
         clk_disable_by_id(g_usbdDev.hclkGateID);
         clk_disable_by_id(g_usbdDev.utmiclkGateID);
         pcd->bcdState = PCD_BCD_DEFAULT_STATE;
+        RT_DEBUG_LOG(RT_DEBUG_USB, ("suspend usb phy and ctrl\n"));
+    }
+}
+#endif
+
+#if defined(RT_USING_BVALID_IRQ)
+void bvalid_irq_handler()
+{
+    if (HAL_USB_PhyBvalidIrqRise_Status())
+    {
+        HAL_USB_PhyBvalidIrqRise_Clear();
+        rt_interrupt_enter();
+        rt_work_init(&g_usbd.isr_work, usb_vbus_isr_work, &g_usbd.pcd);
+        rt_workqueue_dowork(g_usbd.isr_workqueue, &g_usbd.isr_work);
+        /* leave interrupt */
+        rt_interrupt_leave();
+        RT_DEBUG_LOG(RT_DEBUG_USB, ("Bvalid rise irq\n"));
+    }
+    else if (HAL_USB_PhyBvalidIrqFall_Status())
+    {
+        HAL_USB_PhyBvalidIrqFall_Clear();
+        HAL_USB_PhySuspend(g_usbd.id);
+        clk_disable_by_id(g_usbdDev.hclkGateID);
+        clk_disable_by_id(g_usbdDev.utmiclkGateID);
+        g_usbd.pcd.bcdState = PCD_BCD_DEFAULT_STATE;
         RT_DEBUG_LOG(RT_DEBUG_USB, ("suspend usb phy and ctrl\n"));
     }
 }
@@ -299,18 +453,41 @@ static rt_err_t usb_vbus_irq_init(struct PCD_HANDLE *pcd)
 
     if (PIN_HIGH == rt_pin_read(USB_VBUS_PIN))
     {
+#if defined(USB_INNO_PHY_BCD_DETECT)
+        usb_inno_phy_bcd_detect(pcd);
+#else
         HAL_PCDEx_BcdDetect(pcd);
+#endif
         /* Set PHY suspend in HAL_PCDEx_BcdCallback */
     }
     else
     {
-        HAL_USB_PhySuspend();
+        HAL_USB_PhySuspend(g_usbd.id);
         clk_disable_by_id(g_usbdDev.hclkGateID);
         clk_disable_by_id(g_usbdDev.utmiclkGateID);
         RT_DEBUG_LOG(RT_DEBUG_USB, ("suspend usb phy and ctrl\n"));
     }
+#elif defined(RT_USING_BVALID_IRQ)
+    rt_hw_interrupt_install(g_usbdDev.BvalidIrqNum, (rt_isr_handler_t)bvalid_irq_handler,
+                            RT_NULL, "bvalid_irq");
+    rt_hw_interrupt_umask(g_usbdDev.BvalidIrqNum);
+    HAL_USB_PhyBvalidIrqEnable(RT_TRUE);
+
+    if (HAL_USB_InnoPhy_GetBvalid())
+    {
+#if defined(USB_INNO_PHY_BCD_DETECT)
+        usb_inno_phy_bcd_detect(pcd);
 #else
-    /* TODO: bvalid irq for USB PHY */
+        HAL_PCDEx_BcdDetect(pcd);
+#endif
+    }
+    else
+    {
+        HAL_USB_PhySuspend(g_usbd.id);
+        clk_disable_by_id(g_usbdDev.hclkGateID);
+        clk_disable_by_id(g_usbdDev.utmiclkGateID);
+        RT_DEBUG_LOG(RT_DEBUG_USB, ("suspend usb phy and ctrl\n"));
+    }
 #endif
     return RT_EOK;
 }
@@ -328,7 +505,7 @@ void usb_plug_in_hook(void)
 
 void usb_plug_out_hook(void)
 {
-    HAL_USB_PhySuspend();
+    HAL_USB_PhySuspend(g_usbd.id);
     clk_disable_by_id(g_usbdDev.hclkGateID);
     clk_disable_by_id(g_usbdDev.utmiclkGateID);
     g_usbd.pcd.bcdState = PCD_BCD_DEFAULT_STATE;
@@ -337,10 +514,10 @@ void usb_plug_out_hook(void)
 #endif
 
 #if defined(RT_USING_PM)
-static int rt_usbd_pm_suspend(const struct rt_device *device)
+static int rt_usbd_pm_suspend(const struct rt_device *device, rt_uint8_t mode)
 {
 #if !defined(RT_USING_USB_PMIC_VBUS) && !defined(USB_VBUS_PIN)
-    HAL_USB_PhySuspend();
+    HAL_USB_PhySuspend(g_usbd.id);
     clk_disable_by_id(g_usbdDev.hclkGateID);
     clk_disable_by_id(g_usbdDev.utmiclkGateID);
     RT_DEBUG_LOG(RT_DEBUG_USB, ("suspend usb phy and ctrl\n"));
@@ -348,14 +525,14 @@ static int rt_usbd_pm_suspend(const struct rt_device *device)
     return RT_EOK;
 }
 
-static void rt_usbd_pm_resume(const struct rt_device *device)
+static void rt_usbd_pm_resume(const struct rt_device *device, rt_uint8_t mode)
 {
 #if !defined(RT_USING_USB_PMIC_VBUS) && !defined(USB_VBUS_PIN)
     struct PCD_HANDLE *pcd = (struct PCD_HANDLE *)device->user_data;
 
     clk_enable_by_id(g_usbdDev.hclkGateID);
     clk_enable_by_id(g_usbdDev.utmiclkGateID);
-    HAL_USB_PhyResume();
+    HAL_USB_PhyResume(g_usbd.id);
     usb_pcd_lowlevel_hw_init(pcd);
     RT_DEBUG_LOG(RT_DEBUG_USB, ("resume usb phy and ctrl\n"));
 #endif
@@ -397,7 +574,7 @@ static rt_err_t usb_pcd_init(rt_device_t device)
     rt_hw_interrupt_install(g_usbdDev.irqNum, (rt_isr_handler_t)USB_IRQHandler, RT_NULL, "usb_irq");
     rt_hw_interrupt_umask(g_usbdDev.irqNum);
 
-#if !defined(RT_USING_USB_PMIC_VBUS) && !defined(USB_VBUS_PIN)
+#if !defined(RT_USING_USB_PMIC_VBUS) && !defined(USB_VBUS_PIN) && !defined(RT_USING_BVALID_IRQ)
     /* Initialize usb clocks */
     clk_enable_by_id(g_usbdDev.hclkGateID);
     clk_enable_by_id(g_usbdDev.utmiclkGateID);
@@ -415,7 +592,7 @@ static rt_err_t usb_pcd_init(rt_device_t device)
 #endif
 
 #if defined(RT_USING_PM)
-    rt_pm_register_device(device, &rk_usbd_pm_ops);
+    rt_pm_device_register(device, &rk_usbd_pm_ops);
 #endif
     return RT_EOK;
 }
@@ -441,6 +618,8 @@ const static struct udcd_ops g_udc_ops =
     usb_ep0_send_status,
     usb_suspend,
     usb_wakeup,
+    usb_ep_poll_enable,
+    usb_ep_poll_status,
 };
 
 int rt_usbd_register(void)

@@ -125,13 +125,7 @@ struct config_param g_param;
                                                             __val = __val < __min ? __min: __val; \
                                                             __val > __max ? __max: __val; })
 
-/* 0x3000 * CAM_NUM */
-#define SHARED_MEM_RESERVED_HEAD_SIZE                   0x6000
-
-RT_WEAK struct dphy_board_desc csi2_dphy_board = {0};
-RT_WEAK struct csi2_board_desc csi2_host1_board = {0};
-RT_WEAK struct csi2_board_desc csi2_host0_board = {0};
-RT_WEAK struct vicap_board_desc vicap_board = {0};
+#define SHARED_MEM_RESERVED_HEAD_SIZE                   0x3000
 
 /* ISP_Private_Macro */
 
@@ -515,7 +509,7 @@ static uint32_t rk_isp_heap_malloc(struct rk_isp_dev *dev, uint32_t size,
     mem = heap->cur_addr;
     heap->cur_addr += (size - 1);
     heap->available_size = heap->end_addr - heap->cur_addr + 1;
-    ISP_INFO(dev, "buf head[%x] heap->end_addr %x\n", mem, heap->end_addr);
+    ISP_INFO(dev, "Err: buf head[%x] heap->end_addr %x\n", mem, heap->end_addr);
 
     return mem;
 }
@@ -854,10 +848,10 @@ static struct rk_camera_device *rk_isp_ctrl_get_subdev(struct rk_isp_dev *dev)
 
     RT_ASSERT(dev != RT_NULL);
 
-    subdev = rt_device_find(RK_ISP_MAIN_SUBDEV_NAME);
+    subdev = rt_device_find(RK_ISP_SUBDEV_NAME);
     if (subdev == RT_NULL)
     {
-        ISP_INFO(dev, "Err: Can't find isp subdev:%s\n", RK_ISP_MAIN_SUBDEV_NAME);
+        ISP_INFO(dev, "Err: Can't find isp subdev:%s\n", RK_ISP_SUBDEV_NAME);
         return RT_NULL;
     }
 
@@ -1007,10 +1001,6 @@ static void rk_isp_hw_set_clk(struct rk_isp_dev *dev, bool enable)
         {
             rk_clk_enable1(isp_clk->isp_pclk);
         }
-        if (isp_clk->isp0_vicap_clk)
-        {
-            rk_clk_enable1(isp_clk->isp0_vicap_clk);
-        }
     }
     else
     {
@@ -1028,10 +1018,6 @@ static void rk_isp_hw_set_clk(struct rk_isp_dev *dev, bool enable)
         {
             rk_clk_disable1(isp_clk->isp_pclk);
         }
-        if (isp_clk->isp0_vicap_clk)
-        {
-            rk_clk_disable1(isp_clk->isp0_vicap_clk);
-        }
     }
 }
 
@@ -1041,8 +1027,6 @@ static void rk_isp_hw_set_vicap_clk(struct rk_isp_dev *dev, bool enable)
 
     RT_ASSERT(dev != RT_NULL);
 
-//clk_dump();
-    ISP_INFO(dev, "rk_isp_hw_set_vicap_clk enable is %d\n", enable);
     vicap_clk = &dev->vicap_clk;
     if (enable)
     {
@@ -1074,10 +1058,6 @@ static void rk_isp_hw_set_vicap_clk(struct rk_isp_dev *dev, bool enable)
         if (vicap_clk->vicap_rx0pclk)
         {
             rk_clk_enable1(vicap_clk->vicap_rx0pclk);
-        }
-        if (vicap_clk->vicap_pclk_vepu)
-        {
-            rk_clk_enable1(vicap_clk->vicap_pclk_vepu);
         }
     }
     else
@@ -1111,10 +1091,6 @@ static void rk_isp_hw_set_vicap_clk(struct rk_isp_dev *dev, bool enable)
         {
             rk_clk_disable1(vicap_clk->vicap_rx0pclk);
         }
-        if (vicap_clk->vicap_pclk_vepu)
-        {
-            rk_clk_disable1(vicap_clk->vicap_pclk_vepu);
-        }
     }
 }
 
@@ -1131,20 +1107,12 @@ static void rk_isp_hw_set_csi2_clk(struct rk_isp_dev *dev, bool enable)
         {
             rk_clk_enable1(csi2_clk->csi2_pclk);
         }
-        if (csi2_clk->csi2_rxbyteclkhs0)
-        {
-            rk_clk_enable1(csi2_clk->csi2_rxbyteclkhs0);
-        }
     }
     else
     {
         if (csi2_clk->csi2_pclk)
         {
             rk_clk_disable1(csi2_clk->csi2_pclk);
-        }
-        if (csi2_clk->csi2_rxbyteclkhs0)
-        {
-            rk_clk_disable1(csi2_clk->csi2_rxbyteclkhs0);
         }
     }
 }
@@ -1478,9 +1446,6 @@ static void rk_isp_hw_set_isp_top(struct rk_isp_dev *dev, bool enable)
                    ISP_ISP_IMSC_SW_IMSC_FRAME_MASK |
                    ISP_ISP_IMSC_SW_IMSC_PIC_SIZE_ERR_MASK;
 
-#ifdef RT_USING_RK_AOV
-        acq_prop |= RKISP_READ(ISP3X_ISP_CTRL1);
-#endif
         RKISP_WRITE(ISP3X_ISP_CTRL1, acq_prop);
 
         /* Acquisition Size */
@@ -1550,26 +1515,11 @@ static rt_err_t rk_isp_hw_set_subdev_enable(struct rk_isp_dev *dev, bool enable)
 static rt_err_t rk_isp_hw_set_stream_on(struct rk_isp_dev *dev)
 {
     uint32_t mask;
-    rt_err_t ret = RT_EOK;
-    struct isp_output_info *output_info;
-    uint32_t width, height;
+    rt_err_t ret;
 
     RT_ASSERT(dev != RT_NULL);
 
     rk_isp_function_enter();
-
-    output_info = &dev->output;
-
-    if (output_info->is_crop)
-    {
-        width = output_info->crop.width;
-        height = output_info->crop.height;
-    }
-    else
-    {
-        width = output_info->pix_format.width;
-        height = output_info->pix_format.height;
-    }
 
     /* start to config isp */
     rk_isp_hw_set_clk(dev, ENABLE);
@@ -1598,8 +1548,8 @@ static rt_err_t rk_isp_hw_set_stream_on(struct rk_isp_dev *dev)
     RKISP_WRITE(ISP3X_MAIN_RESIZE_CTRL, 0);
     RKISP_WRITE(ISP3X_MAIN_RESIZE_CTRL, 0x100);
     RKISP_WRITE(ISP3X_VI_DPCL, 0x5);
-    RKISP_WRITE(ISP3X_MI_MP_WR_Y_LLENGTH, width);
-    RKISP_WRITE(ISP3X_MI_MP_WR_Y_PIC_SIZE, width * height);
+    RKISP_WRITE(ISP3X_MI_MP_WR_Y_LLENGTH, 0x280);
+    RKISP_WRITE(ISP3X_MI_MP_WR_Y_PIC_SIZE, 0x4b000);
     RKISP_WRITE(ISP3X_MI_WR_XTD_FORMAT_CTRL, 0);
     RKISP_WRITE(ISP3X_MPFBC_CTRL, 0x502);
     RKISP_WRITE(ISP32_MI_MP_WR_CTRL, 0x100);
@@ -1608,11 +1558,7 @@ static rt_err_t rk_isp_hw_set_stream_on(struct rk_isp_dev *dev)
 
     rk_isp_module_init(dev);
     RKISP_WRITE(ISP3X_ISP_CTRL0, 0x6397); //
-#ifdef RT_USING_RK_AOV
-    RKISP_WRITE(ISP3X_MI_WR_CTRL, 0x217a2000); //bit0 enable mi
-#else
     RKISP_WRITE(ISP3X_MI_WR_CTRL, 0x217a2001); //bit0 enable mi
-#endif
     RKISP_WRITE(ISP3X_MI_WR_INIT, 0x10);
 
     rk_isp_hw_set_isp_top(dev, ENABLE);
@@ -1627,9 +1573,7 @@ static rt_err_t rk_isp_hw_set_stream_on(struct rk_isp_dev *dev)
     rk_isp_hw_csi_host_init(dev);
     rk_isp_hw_mipi_lvds_dphy_init(dev);
 
-#ifndef RT_USING_CAM_STREAM_ON_LATE
     ret = rk_isp_hw_set_subdev_enable(dev, ENABLE);
-#endif
 
     rk_isp_function_exit();
 
@@ -2177,8 +2121,6 @@ rt_err_t rk_isp_ctrl_stream_off(struct rk_isp_dev *dev, bool is_force)
     {
 
         rk_isp_hw_set_subdev_enable(dev, DISABLE);
-        rk_isp_hw_mipi_lvds_dphy_reinit(dev);
-        rk_isp_hw_csi_host_reinit(dev);
         rk_isp_hw_vicap_reinit(dev);
         rk_isp_release_buf(dev);
 
@@ -2392,10 +2334,6 @@ static void rk_irq_handler_isp(int vector, void *param)
     {
         rk_isp_isr(ispdev, mis_val);
         rk_isp_sub_isp_top_irq(ispdev, mis_val);
-#ifdef RT_USING_RK_AOV
-        if (ispdev->is_streamoff && !(RKISP_READ(ISP3X_MI_WR_CTRL) & 1))
-            rt_sem_release(ispdev->streamoff_sem);
-#endif
     }
     rt_interrupt_leave();
 
@@ -2924,17 +2862,6 @@ int rk_device_isp_init(void)
     struct rk_isp_dev *rk_ispdev = &isp_instance;
     struct config_param *param = &g_param; //(struct config_param *)CONFIG_ADDRESS;
     struct isp_init_info *isp_mem_config = &param->isp;
-
-    RT_ASSERT(csi2_dphy_board.reg != RT_NULL);
-    RT_ASSERT(csi2_host0_board.reg != RT_NULL);
-    RT_ASSERT(csi2_host1_board.reg != RT_NULL);
-    RT_ASSERT(vicap_board.reg != RT_NULL);
-
-    rk_ispdev->csi2_dphy_board = &csi2_dphy_board;
-    rk_ispdev->csi2_host0_board = &csi2_host0_board;
-    rk_ispdev->csi2_host1_board = &csi2_host1_board;
-    rk_ispdev->vicap_board = &vicap_board;
-
     rk_isp_function_enter();
     isp_mem_config->share_mem_addr = RT_USING_ISP_DDR_ADRESS;
     isp_mem_config->share_mem_size = RT_USING_ISP_DDR_SIZE;
@@ -2946,68 +2873,23 @@ int rk_device_isp_init(void)
     rk_ispdev->isp_clk.isp_aclk = get_clk_gate_from_id(ACLK_ISP3P2_GATE);
     rk_ispdev->isp_clk.isp_hclk = get_clk_gate_from_id(HCLK_ISP3P2_GATE);
     rk_ispdev->isp_clk.isp_pclk = get_clk_gate_from_id(CLK_CORE_ISP3P2_GATE);
-    rk_ispdev->isp_clk.isp0_vicap_clk = get_clk_gate_from_id(ISP0CLK_VICAP_GATE);
 
     rk_ispdev->vicap_clk.vicap_pclk = get_clk_gate_from_id(PCLK_VICAP_GATE);
     rk_ispdev->vicap_clk.vicap_aclk = get_clk_gate_from_id(ACLK_VICAP_GATE);
     rk_ispdev->vicap_clk.vicap_hclk = get_clk_gate_from_id(HCLK_VICAP_GATE);
     rk_ispdev->vicap_clk.vicap_dclk = get_clk_gate_from_id(DCLK_VICAP_GATE);
-    rk_ispdev->vicap_clk.vicap_pclk_vepu = get_clk_gate_from_id(PCLK_VICAP_VEPU_GATE);
+    rk_ispdev->vicap_clk.vicap_i0clk = get_clk_gate_from_id(I0CLK_VICAP_GATE);
+    rk_ispdev->vicap_clk.vicap_rx0pclk = get_clk_gate_from_id(RX0PCLK_VICAP_GATE);
 
-    if (rk_ispdev->csi2_dphy_board->csi2_dphy1.enable && rk_ispdev->csi2_dphy_board->csi2_dphy2.enable)
-    {
-        if (!strcmp(rk_ispdev->csi2_dphy_board->csi2_dphy1.isp_subdev_name, RK_ISP_MAIN_SUBDEV_NAME) &&
-                rk_ispdev->csi2_dphy_board->csi2_dphy1.csi_host_idx)
-        {
-            rk_ispdev->vicap_clk.vicap_i0clk = get_clk_gate_from_id(I1CLK_VICAP_GATE);
-            rk_ispdev->vicap_clk.vicap_rx0pclk = get_clk_gate_from_id(RX1PCLK_VICAP_GATE);
-            rk_ispdev->csi2_clk.csi2_pclk = get_clk_gate_from_id(PCLK_CSIHOST1_GATE);
-            rk_ispdev->csi2_clk.csi2_rxbyteclkhs0 = get_clk_gate_from_id(CLK_RXBYTECLKHS_1_GATE);
-        }
-        else
-        {
-            rk_ispdev->vicap_clk.vicap_i0clk = get_clk_gate_from_id(I0CLK_VICAP_GATE);
-            rk_ispdev->vicap_clk.vicap_rx0pclk = get_clk_gate_from_id(RX0PCLK_VICAP_GATE);
-            rk_ispdev->csi2_clk.csi2_pclk = get_clk_gate_from_id(PCLK_CSIHOST0_GATE);
-            rk_ispdev->csi2_clk.csi2_rxbyteclkhs0 = get_clk_gate_from_id(CLK_RXBYTECLKHS_0_GATE);
-        }
-    }
-    else if (rk_ispdev->csi2_dphy_board->csi2_dphy1.enable)
-    {
-        if (rk_ispdev->csi2_dphy_board->csi2_dphy1.csi_host_idx)
-        {
-            rk_ispdev->vicap_clk.vicap_i0clk = get_clk_gate_from_id(I1CLK_VICAP_GATE);
-            rk_ispdev->vicap_clk.vicap_rx0pclk = get_clk_gate_from_id(RX1PCLK_VICAP_GATE);
-            rk_ispdev->csi2_clk.csi2_pclk = get_clk_gate_from_id(PCLK_CSIHOST1_GATE);
-            rk_ispdev->csi2_clk.csi2_rxbyteclkhs0 = get_clk_gate_from_id(CLK_RXBYTECLKHS_1_GATE);
-        }
-        else
-        {
-            rk_ispdev->vicap_clk.vicap_i0clk = get_clk_gate_from_id(I0CLK_VICAP_GATE);
-            rk_ispdev->vicap_clk.vicap_rx0pclk = get_clk_gate_from_id(RX0PCLK_VICAP_GATE);
-            rk_ispdev->csi2_clk.csi2_pclk = get_clk_gate_from_id(PCLK_CSIHOST0_GATE);
-            rk_ispdev->csi2_clk.csi2_rxbyteclkhs0 = get_clk_gate_from_id(CLK_RXBYTECLKHS_0_GATE);
-        }
-    }
-    else if (rk_ispdev->csi2_dphy_board->csi2_dphy2.enable)
-    {
-        if (rk_ispdev->csi2_dphy_board->csi2_dphy2.csi_host_idx)
-        {
-            rk_ispdev->vicap_clk.vicap_i0clk = get_clk_gate_from_id(I1CLK_VICAP_GATE);
-            rk_ispdev->vicap_clk.vicap_rx0pclk = get_clk_gate_from_id(RX1PCLK_VICAP_GATE);
-            rk_ispdev->csi2_clk.csi2_pclk = get_clk_gate_from_id(PCLK_CSIHOST1_GATE);
-            rk_ispdev->csi2_clk.csi2_rxbyteclkhs0 = get_clk_gate_from_id(CLK_RXBYTECLKHS_1_GATE);
-        }
-        else
-        {
-            rk_ispdev->vicap_clk.vicap_i0clk = get_clk_gate_from_id(I0CLK_VICAP_GATE);
-            rk_ispdev->vicap_clk.vicap_rx0pclk = get_clk_gate_from_id(RX0PCLK_VICAP_GATE);
-            rk_ispdev->csi2_clk.csi2_pclk = get_clk_gate_from_id(PCLK_CSIHOST0_GATE);
-            rk_ispdev->csi2_clk.csi2_rxbyteclkhs0 = get_clk_gate_from_id(CLK_RXBYTECLKHS_0_GATE);
-        }
-    }
+    rk_ispdev->csi2_clk.csi2_pclk = get_clk_gate_from_id(PCLK_CSIHOST0_GATE);
 
     rk_ispdev->dphy_clk.dphy_pclk = get_clk_gate_from_id(PCLK_MIPICSIPHY_GATE);
+
+#if TEST_ISP_CLK_ENABLE
+    rk_ispdev->isp_clk.isp_aclk = RK_NULL;
+    rk_ispdev->isp_clk.isp_hclk = RK_NULL;
+    rk_ispdev->isp_clk.isp_pclk = RK_NULL;
+#endif
 
     ret = rk_isp_register(rk_ispdev, rk_ispdev->name);
 

@@ -6,8 +6,14 @@ export LANG=C.UTF-8
 CUR_DIR=$(pwd)
 IMAGE=$(pwd)/Image
 PARAM_FILE=$CUR_DIR/Image/parameter.txt
-ITS_FILE=$CUR_DIR/Image/amp.its
 TOOLS=$CUR_DIR/../tools
+
+SMP=$(grep -wE "RT_USING_SMP" $CUR_DIR/rtconfig.h)
+if [ -n "$SMP" ];then
+    ITS_FILE=$CUR_DIR/Image/smp.its
+else
+    ITS_FILE=$CUR_DIR/Image/amp.its
+fi
 
 usage() {
     echo "usage:"
@@ -90,8 +96,13 @@ make_rtt()
     echo "Build RT-Thread CPU$1 Successful!"
 }
 
+CORE_NUMBERS=$(grep -wcE "amp[0-9]* {" $ITS_FILE)
+
 case $1 in
     0|1|2|3)
+		if ! [ "$1" -lt "$CORE_NUMBERS" ] 2>/dev/null; then
+			exit 1
+		fi
         make_rtt $1
         ;;
     rootfs)
@@ -101,10 +112,10 @@ case $1 in
         $TOOLS/mkimage -f $ITS_FILE -E -p 0xe00 $IMAGE/amp.img
         ;;
     all)
-        make_rtt 0
-        make_rtt 1
-        make_rtt 2
-        make_rtt 3
+        for ((i = 0; i < $CORE_NUMBERS; i++)); do
+            make_rtt $i
+        done
+
         $CUR_DIR/mkroot.sh $CUR_DIR/userdata $PARAM_FILE $IMAGE/
         $TOOLS/mkimage -f $ITS_FILE -E -p 0xe00 $IMAGE/amp.img
         ;;

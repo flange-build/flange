@@ -12,15 +12,11 @@
   */
 #include "drv_isp3_subdev.h"
 #include "regs_v3x.h"
-#include "drv_isp3.h"
 
 #if defined(RT_USING_ISP3)
 
 #define MIPI_LVDS_DEBUG                       0
 #define MIPI_LVDS_DEBUG_REGISTER              0
-
-#define MIPI_LVDS_INFO(fmt, args...)         rt_kprintf("[ISP]: %s "fmt"", __FUNCTION__, ##args)
-#define MIPI_LVDS_ERR(fmt, args...)         rt_kprintf("[ISP]: %s ERR "fmt"", __FUNCTION__, ##args)
 
 #if MIPI_LVDS_DEBUG
 #include <stdio.h>
@@ -29,8 +25,12 @@
                 rt_kprintf("[ISP]:");    \
                 rt_kprintf(__VA_ARGS__);    \
                 }while(0)
+#define rk_mipi_lvds_function_enter()                     rt_kprintf("[csi2rx]:(%s) enter \n",__FUNCTION__)
+#define rk_mipi_lvds_function_exit()                      rt_kprintf("[csi2rx]:(%s) exit \n",__FUNCTION__)
 #else
 #define MIPI_LVDS_DBG(...)
+#define rk_mipi_lvds_function_enter()
+#define rk_mipi_lvds_function_exit()
 #endif
 
 struct dphy_param
@@ -125,7 +125,7 @@ void mipidphy_fpga_stream_on(struct rk_isp_dev *dev)
     if (index == len - 1)
     {
         index = len - 2;
-        MIPI_LVDS_ERR("can't match data rate:%d mbps", data_rate_mbps);
+        rt_kprintf("can't match data rate:%d mbps", data_rate_mbps);
     }
 
     mipidphy_fpga_write(dphy_base, 0x34,
@@ -171,25 +171,18 @@ static const struct dphy_param rv1109_dphy_param[] =
     {0xffff, 0xff},
 };
 
-int rk_isp_hw_mipi_lvds_dphy_init(struct rk_isp_dev *dev)
+void rk_isp_hw_mipi_lvds_dphy_init(struct rk_isp_dev *dev)
 {
     struct rk_camera_info *cam_info;
     struct rk_camera_mbus_config *mbus_config;
-    uint32_t mask, dphy_base, lanes_en = 0, data_rate_mbps,
-                              grf_lanes_en = 0, lvds_mode = 0;
+    uint32_t mask, lane_num, lanes_en = 0, data_rate_mbps,
+                             grf_lanes_en, lvds_mode = 0;
     uint8_t index, len;
-    bool dual_cam_en;
-    struct dphy_board_desc *csi2_dphy = dev->csi2_dphy_board;
+
+    rk_mipi_lvds_function_enter();
 
     RT_ASSERT(dev != RT_NULL);
 
-    if (!csi2_dphy->enable)
-    {
-        MIPI_LVDS_ERR("dphy is not enable\n");
-        return -RT_ERROR;
-    }
-
-    dphy_base = csi2_dphy->reg;
     cam_info = &dev->input.cam_info;
     mbus_config = &cam_info->mbus_config;
 
@@ -205,76 +198,55 @@ int rk_isp_hw_mipi_lvds_dphy_init(struct rk_isp_dev *dev)
     if (index == len - 1)
     {
         index = len - 2;
-        MIPI_LVDS_ERR("can't match data rate: %dmbps, use %dmbps as default", data_rate_mbps,
-                      rv1109_dphy_param[index].data_rate_mbps);
+        rt_kprintf("can't match data rate:%d mbps", data_rate_mbps);
     }
 
-    if (csi2_dphy->csi2_dphy1.enable && csi2_dphy->csi2_dphy2.enable)
-        dual_cam_en = 1;
-    else
-        dual_cam_en = 0;
+    RKISP_WRITE(CSI2_DPHY_DUAL_CAL_EN, 0x1e);
+    RKISP_WRITE(CSI2_DPHY_DUAL_CAL_EN, 0x1f);
 
-    if (dual_cam_en)
-    {
-        /* split mode */
-        RKISP_WRITE(dphy_base + CSI2_DPHY_DUAL_CAL_EN, 0x5e);
-        RKISP_WRITE(dphy_base + CSI2_DPHY_DUAL_CAL_EN, 0x5f);
-    }
-    else
-    {
-        RKISP_WRITE(dphy_base + CSI2_DPHY_DUAL_CAL_EN, 0x1e);
-        RKISP_WRITE(dphy_base + CSI2_DPHY_DUAL_CAL_EN, 0x1f);
-    }
-
+    lane_num = mbus_config->flags & MEDIA_BUS_FLAGS_CSI2_LVDS_LANES_MASK;
     grf_lanes_en = CSIPHY_CLKLANE_ENABLE;
-    RKISP_WRITE(dphy_base + CSI2_DPHY_CLK_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
+    RKISP_WRITE(CSI2_DPHY_CLK_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
+    if (lane_num >= MEDIA_BUS_FLAGS_CSI2_LVDS_LANES_1)
+    {
+        lanes_en |= DPHYRX_LANE_EN_LANE0;
+        grf_lanes_en |= CSIPHY_LANE_0_ENABLE;
+        RKISP_WRITE(CSI2_DPHY_LANE0_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
+    }
 
-    if (csi2_dphy->csi2_dphy1.enable)
+    if (lane_num >= MEDIA_BUS_FLAGS_CSI2_LVDS_LANES_2)
     {
-        if (csi2_dphy->csi2_dphy1.data_lanes >= 1)
-        {
-            lanes_en |= DPHYRX_LANE_EN_LANE0;
-            grf_lanes_en |= CSIPHY_LANE_0_ENABLE;
-            RKISP_WRITE(dphy_base + CSI2_DPHY_LANE0_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
-        }
-        if (csi2_dphy->csi2_dphy1.data_lanes >= 2)
-        {
-            lanes_en |= DPHYRX_LANE_EN_LANE1;
-            grf_lanes_en |= CSIPHY_LANE_1_ENABLE;
-            RKISP_WRITE(dphy_base + CSI2_DPHY_LANE1_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
-        }
+        lanes_en |= DPHYRX_LANE_EN_LANE1;
+        grf_lanes_en |= CSIPHY_LANE_1_ENABLE;
+        RKISP_WRITE(CSI2_DPHY_LANE1_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
     }
-    if (csi2_dphy->csi2_dphy2.enable)
+
+    if (lane_num >= MEDIA_BUS_FLAGS_CSI2_LVDS_LANES_3)
     {
-        if (csi2_dphy->csi2_dphy2.data_lanes >= 1)
-        {
-            lanes_en |= DPHYRX_LANE_EN_LANE2;
-            grf_lanes_en |= CSIPHY_LANE_2_ENABLE;
-            RKISP_WRITE(dphy_base + CSI2_DPHY_LANE2_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
-        }
-        if (csi2_dphy->csi2_dphy2.data_lanes >= 2)
-        {
-            lanes_en |= DPHYRX_LANE_EN_LANE3;
-            grf_lanes_en |= CSIPHY_LANE_3_ENABLE;
-            RKISP_WRITE(dphy_base + CSI2_DPHY_LANE3_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
-        }
+        lanes_en |= DPHYRX_LANE_EN_LANE2;
+        grf_lanes_en |= CSIPHY_LANE_2_ENABLE;
+        RKISP_WRITE(CSI2_DPHY_LANE2_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
     }
+
+    if (lane_num >= MEDIA_BUS_FLAGS_CSI2_LVDS_LANES_4)
+    {
+        lanes_en |= DPHYRX_LANE_EN_LANE3;
+        grf_lanes_en |= CSIPHY_LANE_3_ENABLE;
+        RKISP_WRITE(CSI2_DPHY_LANE3_WR_THS_SETTLE, rv1109_dphy_param[index].hs_settle);
+    }
+
     lanes_en |= 0x41;
-    RKISP_WRITE(dphy_base + CSI2_DPHY_CTRL_LANE_ENABLE, lanes_en);
+    RKISP_WRITE(CSI2_DPHY_CTRL_LANE_ENABLE, lanes_en);
 
     if (mbus_config->mbus_type == CAMERA_MBUS_CSI2_DPHY)
     {
         /* when use mipi, do not write DPHYRX_MIPI_LVDS_ENABLE */
-        RKISP_WRITE(dphy_base + CSI2_DPHY_PATH0_MODE_SEL, 0x02);
-        if (dual_cam_en)
-            /* split_mode */
-            RKISP_WRITE(dphy_base + CSI2_DPHY_CLK_INV, 0x14);
-        else
-            RKISP_WRITE(dphy_base + CSI2_DPHY_CLK_INV, 0x04);
+        RKISP_WRITE(CSI2_DPHY_PATH0_MODE_SEL, 0x02);
+        RKISP_WRITE(CSI2_DPHY_CLK_INV, 0x04);
     }
     else if (mbus_config->mbus_type == CAMERA_MBUS_LVDS_DPHY)
     {
-        RKISP_WRITE(dphy_base + CSI2_DPHY_PATH0_MODE_SEL, 0x04);
+        RKISP_WRITE(CSI2_DPHY_PATH0_MODE_SEL, 0x04);
 
         mask = mbus_config->flags & MEDIA_BUS_FLAGS_CSI2_LVDS_BITS_MODE_MASK;
         if (mask == MEDIA_BUS_FLAGS_CSI2_LVDS_BITS_MODE_8BITS)
@@ -290,7 +262,7 @@ int rk_isp_hw_mipi_lvds_dphy_init(struct rk_isp_dev *dev)
             lvds_mode = DPHYRX_LVDS_MODE_12BITS;
         }
         lvds_mode |= DPHYRX_LVDS_MODE_ENABLE;
-        RKISP_WRITE(dphy_base + CSI2_DPHY_PATH0_LVDS_MODE_SEL, lvds_mode);
+        RKISP_WRITE(CSI2_DPHY_PATH0_LVDS_MODE_SEL, lvds_mode);
 
     }
 
@@ -298,12 +270,12 @@ int rk_isp_hw_mipi_lvds_dphy_init(struct rk_isp_dev *dev)
     if (mask)
     {
         /* continue */
-        RKISP_WRITE(dphy_base + CSI2_DPHY_CLK_MODE, 0x1);
+        RKISP_WRITE(CSI2_DPHY_CLK_MODE, 0x1);
     }
     else
     {
         /* non-continue */
-        RKISP_WRITE(dphy_base + CSI2_DPHY_CLK_MODE, 0x0);
+        RKISP_WRITE(CSI2_DPHY_CLK_MODE, 0x0);
     }
 
     RKISP_WRITE(VI_CSIPHY_CON5, grf_lanes_en);
@@ -311,93 +283,44 @@ int rk_isp_hw_mipi_lvds_dphy_init(struct rk_isp_dev *dev)
     rk_mipi_lvds_dphy_dump_register(dev);
 #endif
 
-    return RT_EOK;
+    rk_mipi_lvds_function_exit();
 }
 #endif
 
-int rk_isp_hw_mipi_lvds_dphy_reinit(struct rk_isp_dev *dev)
-{
-    uint32_t dphy_base;
-    struct dphy_board_desc *csi2_dphy = dev->csi2_dphy_board;
-
-    dphy_base = (uint32_t)csi2_dphy->reg;
-    RKISP_WRITE(dphy_base + CSI2_DPHY_CTRL_LANE_ENABLE, 0x01);
-
-    return RT_EOK;
-}
-
-int rk_isp_hw_csi_host_init(struct rk_isp_dev *dev)
+void rk_isp_hw_csi_host_init(struct rk_isp_dev *dev)
 {
     struct rk_camera_info *cam_info;
     struct rk_camera_mbus_config *mbus_config;
-    uint32_t lane_num, csi_host0_base, csi_host1_base;
-    struct csi2_board_desc *csi_host0 = (struct csi2_board_desc *)&csi2_host0_board;
-    struct csi2_board_desc *csi_host1 = (struct csi2_board_desc *)&csi2_host1_board;
+    uint32_t lane_num;
+
+    rk_mipi_lvds_function_enter();
 
     RT_ASSERT(dev != RT_NULL);
 
-    csi_host0_base = csi_host0->reg;
-    csi_host1_base = csi_host1->reg;
     cam_info = &dev->input.cam_info;
     mbus_config = &cam_info->mbus_config;
 
     lane_num = mbus_config->flags & MEDIA_BUS_FLAGS_CSI2_LVDS_LANES_MASK;
 
-    if (csi_host0->enable)
-    {
-        RKISP_WRITE(csi_host0_base + CSIHOST_N_LANES, lane_num);
-        RKISP_WRITE(csi_host0_base + CSIHOST_CONTROL, 0x0c204000);
-        RKISP_WRITE(csi_host0_base + CSIHOST_RESETN, 0x1);
-    }
-    if (csi_host1->enable)
-    {
-        RKISP_WRITE(csi_host1_base + CSIHOST_N_LANES, lane_num);
-        RKISP_WRITE(csi_host1_base + CSIHOST_CONTROL, 0x0c204000);
-        RKISP_WRITE(csi_host1_base + CSIHOST_RESETN, 0x1);
-    }
-
-    return RT_EOK;
+    RKISP_WRITE(CSIHOST_N_LANES, lane_num);
+    RKISP_WRITE(CSIHOST_CONTROL, 0x0c204000);
+    RKISP_WRITE(CSIHOST_RESETN, 0x1);
+    rk_mipi_lvds_function_exit();
 }
 
-int rk_isp_hw_csi_host_reinit(struct rk_isp_dev *dev)
-{
-    uint32_t csi_host0_base, csi_host1_base;
-    struct csi2_board_desc *csi_host0 = (struct csi2_board_desc *)&csi2_host0_board;
-    struct csi2_board_desc *csi_host1 = (struct csi2_board_desc *)&csi2_host1_board;
-
-    csi_host0_base = csi_host0->reg;
-    csi_host1_base = csi_host1->reg;
-    if (csi_host0->enable)
-    {
-        RKISP_READ(csi_host0_base + CSIHOST_ERR1);
-        RKISP_READ(csi_host0_base + CSIHOST_ERR2);
-        RKISP_WRITE(csi_host0_base + CSIHOST_RESETN, 0x0);
-    }
-    if (csi_host1->enable)
-    {
-        RKISP_READ(csi_host1_base + CSIHOST_ERR1);
-        RKISP_READ(csi_host1_base + CSIHOST_ERR2);
-        RKISP_WRITE(csi_host1_base + CSIHOST_RESETN, 0x0);
-    }
-
-    return RT_EOK;
-}
-
-int rk_isp_hw_vicap_init(struct rk_isp_dev *dev)
+void rk_isp_hw_vicap_init(struct rk_isp_dev *dev)
 {
     struct isp_output_info *output_info;
-    uint32_t width, height, val, vicap_base;
+    uint32_t width, height, val;
     struct rk_camera_mbus_config *mbus_config;
     struct isp_input_info *input_info;
     struct isp_input_fmt *input_fmt;
     struct rk_camera_info *cam_info;
-    struct vicap_board_desc *vicap = dev->vicap_board;
-    struct csi2_board_desc *csi_host0 = dev->csi2_host0_board;
-    struct csi2_board_desc *csi_host1 = dev->csi2_host1_board;
+
+    rk_mipi_lvds_function_enter();
 
     RT_ASSERT(dev != RT_NULL);
 
-    vicap_base = vicap->reg;
     output_info = &dev->output;
     input_info = &dev->input;
     input_fmt = &input_info->input_fmt;
@@ -445,33 +368,19 @@ int rk_isp_hw_vicap_init(struct rk_isp_dev *dev)
         default:
             break;
         }
-        if (csi_host0->enable)
-            RKISP_WRITE(vicap_base + CSI_MIPI0_ID0_CTRL0, val);//0xac13
-        if (csi_host1->enable)
-            RKISP_WRITE(vicap_base + CSI_MIPI1_ID0_CTRL0, val);//0xac13
+        RKISP_WRITE(CSI_MIPI0_ID0_CTRL0, val);//0xac13
     }
-    if (csi_host0->enable)
-    {
-        RKISP_WRITE(vicap_base + CSI_MIPI0_ID0_CTRL1, (height << 16) | width);
-        RKISP_WRITE(vicap_base + CSI_MIPI0_CTRL, 0x7075);
-        RKISP_WRITE(vicap_base + TOISP0_CH_CTRL, VICAP_TOISP0_SEL_MIPI0);
-    }
-    if (csi_host1->enable)
-    {
-        RKISP_WRITE(vicap_base + CSI_MIPI1_ID0_CTRL1, (height << 16) | width);
-        RKISP_WRITE(vicap_base + CSI_MIPI1_CTRL, 0x7075);
-        RKISP_WRITE(vicap_base + TOISP0_CH_CTRL, VICAP_TOISP0_SEL_MIPI1);
-    }
-
-    RKISP_WRITE(vicap_base + TOISP0_CROP_SIZE, (height << 16) | width);
-
-    return RT_EOK;
+    RKISP_WRITE(CSI_MIPI0_ID0_CTRL1, (height << 16) | width);
+    RKISP_WRITE(CSI_MIPI0_CTRL, 0x7075);
+    RKISP_WRITE(TOISP0_CH_CTRL, 0x1);
+    RKISP_WRITE(TOISP0_CROP_SIZE, (height << 16) | width);
+    rk_mipi_lvds_function_exit();
 }
 
-int rk_isp_hw_vicap_reinit(struct rk_isp_dev *dev)
+void rk_isp_hw_vicap_reinit(struct rk_isp_dev *dev)
 {
-    RKISP_WRITE(CSI_MIPI1_CTRL, 0x7074);
-    return RT_EOK;
+
+    RKISP_WRITE(CSI_MIPI0_CTRL, 0x7074);
 }
 
 #endif

@@ -1,14 +1,24 @@
+/*
+ * Copyright (c) 2006-2021, RT-Thread Development Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author       Notes
+ */
 #include <rtthread.h>
-
 #include <stdio.h>
-
 #ifdef _WIN32
 #include <sdl.h>
 #else
-#include <SDL/SDL.h>
+#include <SDL2/SDL.h>
 #endif
 #include <rtdevice.h>
 #include <rtgui/driver.h>
+
+#define DBG_TAG    "sdl.fb"
+#define DBG_LVL    DBG_WARNING
+#include <rtdbg.h>
 
 #define SDL_SCREEN_WIDTH    480
 #define SDL_SCREEN_HEIGHT   320
@@ -190,7 +200,7 @@ static void sdlfb_hw_init(void)
         SDL_PixelFormatEnumToMasks(SDL_SCREEN_FORMAT, &bpp, &Rmask, &Gmask,
             &Bmask, &Amask);
 
-        _device.surface = SDL_CreateRGBSurface(0, SDL_SCREEN_WIDTH, SDL_SCREEN_HEIGHT, 
+        _device.surface = SDL_CreateRGBSurface(0, SDL_SCREEN_WIDTH, SDL_SCREEN_HEIGHT,
             bpp, Rmask, Gmask, Bmask, Amask);
     }
 
@@ -214,7 +224,11 @@ static void sdlfb_hw_init(void)
 
     rt_device_register(RT_DEVICE(&_device), "sdl", RT_DEVICE_FLAG_RDWR);
 
-    sdllock = rt_mutex_create("fb", RT_IPC_FLAG_FIFO);
+    sdllock = rt_mutex_create("fb", RT_IPC_FLAG_PRIO);
+    if (sdllock == RT_NULL)
+    {
+        LOG_E("Create mutex for sdlfb failed!");
+    }
 }
 
 #ifdef _WIN32
@@ -255,7 +269,7 @@ static void *sdl_loop(void *lpParam)
     int motion_tick = 50;
 
     int mouse_id = 1;
- 
+
 #ifndef _WIN32
     sigset_t  sigmask, oldmask;
     /* set the getchar without buffer */
@@ -455,7 +469,7 @@ static void *sdl_loop(void *lpParam)
             exit(1);
             break;
         }
-            
+
     }
     rt_hw_exit();
     return 0;
@@ -510,6 +524,7 @@ void rt_hw_sdl_start(void)
     pthread_mutex_lock(&sdl_ok_mutex);
     pthread_cond_wait(&sdl_ok_event, &sdl_ok_mutex);
 
+    pthread_mutex_unlock(&sdl_ok_mutex);
     pthread_mutex_destroy(&sdl_ok_mutex);
     pthread_cond_destroy(&sdl_ok_event);
 #endif

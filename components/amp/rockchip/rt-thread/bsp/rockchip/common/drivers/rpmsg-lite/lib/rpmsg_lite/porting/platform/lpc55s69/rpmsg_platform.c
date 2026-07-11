@@ -71,41 +71,53 @@ static void platform_global_isr_enable(void)
 
 int32_t platform_init_interrupt(uint32_t vector_id, void *isr_data)
 {
-    /* Register ISR to environment layer */
-    env_register_isr(vector_id, isr_data);
-
-    env_lock_mutex(platform_lock);
-
-    RL_ASSERT(0 <= isr_counter);
-    if (isr_counter == 0)
+    if (platform_lock != ((void *)0))
     {
-        NVIC_SetPriority(MAILBOX_IRQn, 5);
+        /* Register ISR to environment layer */
+        env_register_isr(vector_id, isr_data);
+
+        env_lock_mutex(platform_lock);
+
+        RL_ASSERT(0 <= isr_counter);
+        if (isr_counter == 0)
+        {
+            NVIC_SetPriority(MAILBOX_IRQn, 5);
+        }
+        isr_counter++;
+
+        env_unlock_mutex(platform_lock);
+        return 0;
     }
-    isr_counter++;
-
-    env_unlock_mutex(platform_lock);
-
-    return 0;
+    else
+    {
+        return -1;
+    }
 }
 
 int32_t platform_deinit_interrupt(uint32_t vector_id)
 {
-    /* Prepare the MU Hardware */
-    env_lock_mutex(platform_lock);
-
-    RL_ASSERT(0 < isr_counter);
-    isr_counter--;
-    if (isr_counter == 0)
+    if (platform_lock != ((void *)0))
     {
-        NVIC_DisableIRQ(MAILBOX_IRQn);
+        env_lock_mutex(platform_lock);
+
+        RL_ASSERT(0 < isr_counter);
+        isr_counter--;
+        if (isr_counter == 0)
+        {
+            NVIC_DisableIRQ(MAILBOX_IRQn);
+        }
+
+        /* Unregister ISR from environment layer */
+        env_unregister_isr(vector_id);
+
+        env_unlock_mutex(platform_lock);
+
+        return 0;
     }
-
-    /* Unregister ISR from environment layer */
-    env_unregister_isr(vector_id);
-
-    env_unlock_mutex(platform_lock);
-
-    return 0;
+    else
+    {
+        return -1;
+    }
 }
 
 void platform_notify(uint32_t vector_id)
@@ -264,9 +276,9 @@ void platform_cache_disable(void)
  * Dummy implementation
  *
  */
-uint32_t platform_vatopa(void *addr)
+uintptr_t platform_vatopa(void *addr)
 {
-    return ((uint32_t)(char *)addr);
+    return ((uintptr_t)(char *)addr);
 }
 
 /**
@@ -275,7 +287,7 @@ uint32_t platform_vatopa(void *addr)
  * Dummy implementation
  *
  */
-void *platform_patova(uint32_t addr)
+void *platform_patova(uintptr_t addr)
 {
     return ((void *)(char *)addr);
 }

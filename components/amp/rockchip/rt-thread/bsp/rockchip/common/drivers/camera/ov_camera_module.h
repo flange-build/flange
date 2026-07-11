@@ -46,6 +46,13 @@ enum sensor_hdr_type_t
 };
 
 /* frame format  ----------------------------------------------------------*/
+
+struct v4l2_fract
+{
+    u32   numerator;
+    u32   denominator;
+};
+
 /**
  * struct v4l2_subdev_frame_interval - Pad-level frame rate
  * @pad: pad number, as reported by the media API

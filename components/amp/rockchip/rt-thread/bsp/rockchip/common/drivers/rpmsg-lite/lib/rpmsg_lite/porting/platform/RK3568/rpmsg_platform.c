@@ -12,6 +12,7 @@
 #include <rtthread.h>
 #include "interrupt.h"
 #include "hal_base.h"
+#include "hal_gic.h"
 
 #if defined(RL_USE_ENVIRONMENT_CONTEXT) && (RL_USE_ENVIRONMENT_CONTEXT == 1)
 #error "This RPMsg-Lite port requires RL_USE_ENVIRONMENT_CONTEXT set to 0"
@@ -210,24 +211,24 @@ int32_t platform_init_interrupt(uint32_t vector_id, void *isr_data)
 #ifdef RL_PLATFORM_USING_SOFTIRQ
         if (cpu_id == RL_GET_M_CPU_ID(vector_id))
         {
-            rt_hw_interrupt_set_route(rl_set_irq_rm(vector_id), CPU_GET_AFFINITY(cpu_id, 0));
+            HAL_GIC_SetIRouter(rl_set_irq_rm(vector_id), CPU_GET_AFFINITY(cpu_id, 0));
             rt_hw_interrupt_install(rl_set_irq_rm(vector_id), rpmsg_master_isr, RT_NULL, "rpmsg-lite");
         }
         else
         {
-            rt_hw_interrupt_set_route(rl_set_irq_mr(vector_id), CPU_GET_AFFINITY(cpu_id, 0));
+            HAL_GIC_SetIRouter(rl_set_irq_mr(vector_id), CPU_GET_AFFINITY(cpu_id, 0));
             rt_hw_interrupt_install(rl_set_irq_mr(vector_id), rpmsg_remote_isr, (void *)link_id, "rpmsg-lite");
         }
 #endif
 #ifdef RL_PLATFORM_USING_MBOX
         if (cpu_id == RL_GET_M_CPU_ID(vector_id))
         {
-            rt_hw_interrupt_set_route(rl_mbox_m_irq(RL_GET_R_CPU_ID(vector_id)), CPU_GET_AFFINITY(cpu_id, 0));
+            HAL_GIC_SetIRouter(rl_mbox_m_irq(RL_GET_R_CPU_ID(vector_id)), CPU_GET_AFFINITY(cpu_id, 0));
             rt_hw_interrupt_install(rl_mbox_m_irq(RL_GET_R_CPU_ID(vector_id)), rpmsg_mbox_isr, RT_NULL, "rpmsg-lite");
         }
         else
         {
-            rt_hw_interrupt_set_route(rl_mbox_r_irq(cpu_id), CPU_GET_AFFINITY(cpu_id, 0));
+            HAL_GIC_SetIRouter(rl_mbox_r_irq(cpu_id), CPU_GET_AFFINITY(cpu_id, 0));
             rt_hw_interrupt_install(rl_mbox_r_irq(cpu_id), rpmsg_mbox_isr, RT_NULL, "rpmsg-lite");
         }
         if (register_count % 2 == 0)

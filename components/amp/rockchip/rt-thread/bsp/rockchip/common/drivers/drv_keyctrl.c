@@ -319,7 +319,7 @@ static rt_err_t rt_keyctrl_init(rt_device_t dev)
         keyctrl_dev->key_scan_timer = rt_timer_create("key_scan", rt_keyctrl_scan_timer_func, RT_NULL,
                                       10, RT_TIMER_FLAG_PERIODIC);
         if (!keyctrl_dev->key_scan_timer)
-            return -RT_ERROR;
+            return RT_ERROR;
     }
 
     return RT_EOK;
@@ -387,12 +387,12 @@ const static struct rt_device_ops keyctrl_dev_ops =
 #endif
 
 #if defined(RT_USING_PM)
-static int rt_keyctl_pm_suspend(const struct rt_device *device)
+static int rt_keyctl_pm_suspend(const struct rt_device *device, rt_uint8_t mode)
 {
     return RT_EOK;
 }
 
-static void rt_keyctl_pm_resume(const struct rt_device *device)
+static void rt_keyctl_pm_resume(const struct rt_device *device, rt_uint8_t mode)
 {
     HAL_KeyCtrl_Init(KEY_CTRL, KEYCTRL_DET_TH, KEYCTRL_CAL_PERIOD_TH, KEYCTRL_FIL_TH);
 }
@@ -436,7 +436,7 @@ static int rt_keyctrl_dev_init(void)
     keyctrl_dev->key_release = 1;
 
 #if defined(RT_USING_PM)
-    rt_pm_register_device(&keyctrl_dev->dev, &rk_keyctl_pm_ops);
+    rt_pm_device_register(&keyctrl_dev->dev, &rk_keyctl_pm_ops);
 #endif
 
     rt_device_register(&(keyctrl_dev->dev), "keyctrl", RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX);

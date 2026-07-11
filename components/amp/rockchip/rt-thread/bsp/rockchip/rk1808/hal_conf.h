@@ -55,7 +55,7 @@
 #endif
 
 #ifdef RT_USING_PMU
-#define HAL_PMU_MODULE_ENABLED
+#define HAL_PD_MODULE_ENABLED
 #endif
 
 #ifdef RT_USING_SNOR
