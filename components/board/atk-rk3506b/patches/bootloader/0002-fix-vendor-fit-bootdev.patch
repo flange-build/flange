@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Sun, 12 Jul 2026 12:00:00 +0800
+Subject: [PATCH] 修复 RK3506 vendor FIT 启动设备初始化
+
+Radxa 基线把 FIT、resource、boot mode 和 vendor storage 改为从
+android_get_bootdev() 取设备，但 RK3506 的 RKIMG_BOOTCOMMAND 先执行 boot_fit，
+之后才执行会初始化 android_dev_desc 的 boot_android。结果 boot_fit 永远看不到
+SPI NAND。
+
+ATK SDK 对应源码始终从 rockchip_get_bootdev() 取得启动设备。恢复这一路径，
+让 vendor FIT 在 Android fallback 之前即可读取具名 boot 分区。
+---
+ arch/arm/mach-rockchip/boot_mode.c    |  7 +------
+ arch/arm/mach-rockchip/fit.c          |  7 +------
+ arch/arm/mach-rockchip/resource_img.c | 12 ++----------
+ arch/arm/mach-rockchip/vendor.c       | 12 ++----------
+ common/image-android.c                | 12 ++----------
+ 5 files changed, 8 insertions(+), 42 deletions(-)
+
+diff --git a/arch/arm/mach-rockchip/fit.c b/arch/arm/mach-rockchip/fit.c
+--- a/arch/arm/mach-rockchip/fit.c
++++ b/arch/arm/mach-rockchip/fit.c
+@@ -10,9 +10,6 @@
+ #include <sysmem.h>
+ #include <asm/arch/fit.h>
+ #include <asm/arch/resource_img.h>
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-#include <android_bootloader.h>
+-#endif
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -429,11 +426,7 @@ void *fit_image_load_bootables(ulong *size)
+ 	int blk_num;
+ 	void *fit;
+ 
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-	dev_desc = android_get_bootdev();
+-#else
+ 	dev_desc = rockchip_get_bootdev();
+-#endif
+ 	if (!dev_desc)
+ 		return NULL;
+ 
+diff --git a/arch/arm/mach-rockchip/resource_img.c b/arch/arm/mach-rockchip/resource_img.c
+--- a/arch/arm/mach-rockchip/resource_img.c
++++ b/arch/arm/mach-rockchip/resource_img.c
+@@ -14,9 +14,6 @@
+ #include <asm/arch/rk_hwid.h>
+ #include <asm/arch/uimage.h>
+ #include <asm/arch/fit.h>
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-#include <android_bootloader.h>
+-#endif
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -378,11 +375,7 @@ static int resource_scan(void)
+ 
+ 	if (!list_empty(&entry_head))
+ 		return 0;
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-	desc = android_get_bootdev();
+-#else
+ 	desc = rockchip_get_bootdev();
+-#endif
+ 	if (!desc) {
+ 		printf("RESC: No bootdev\n");
+ 		return -ENODEV;
+@@ -466,11 +459,7 @@ int rockchip_read_resource_file(void *buf, const char *name, int blk_offset, int
+ 		pos = f->blk_start + (f->blk_offset + blk_offset) * blksz;
+ 		memcpy(buf, (char *)pos, len);
+ 	} else {
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-		desc = android_get_bootdev();
+-#else
+ 		desc = rockchip_get_bootdev();
+-#endif
+ 		if (!desc)
+ 			return -ENODEV;
+ 
+diff --git a/arch/arm/mach-rockchip/boot_mode.c b/arch/arm/mach-rockchip/boot_mode.c
+--- a/arch/arm/mach-rockchip/boot_mode.c
++++ b/arch/arm/mach-rockchip/boot_mode.c
+@@ -9,9 +9,6 @@
+ #include <malloc.h>
+ #include <asm/io.h>
+ #include <asm/arch/boot_mode.h>
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-#include <android_bootloader.h>
+-#endif
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -28,11 +25,7 @@ static int misc_require_recovery(u32 bcb_offset, int *bcb_recovery_msg)
+ 	disk_partition_t part;
+ 	int cnt, recovery = 0;
+ 
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-	dev_desc = android_get_bootdev();
+-#else
+ 	dev_desc = rockchip_get_bootdev();
+-#endif
+ 	if (!dev_desc) {
+ 		printf("dev_desc is NULL!\n");
+ 		goto out;
+diff --git a/arch/arm/mach-rockchip/vendor.c b/arch/arm/mach-rockchip/vendor.c
+--- a/arch/arm/mach-rockchip/vendor.c
++++ b/arch/arm/mach-rockchip/vendor.c
+@@ -12,9 +12,6 @@
+ #include <part.h>
+ #include <fdt_support.h>
+ #include <usbplug.h>
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-#include <android_bootloader.h>
+-#endif
+ 
+ /* tag for vendor check */
+ #define VENDOR_TAG		0x524B5644
+@@ -320,11 +317,7 @@ static int vendor_ops(u8 *buffer, u32 addr, u32 n_sec, int write)
+ 	unsigned int lba = 0;
+ 	int ret = 0;
+ 
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-	dev_desc = android_get_bootdev();
+-#else
+ 	dev_desc = rockchip_get_bootdev();
+-#endif
+ 	if (!dev_desc) {
+ 		printf("%s: dev_desc is NULL!\n", __func__);
+ 		return -ENODEV;
+@@ -442,11 +435,7 @@ int vendor_storage_init(void)
+ 	u16 version2_offset, part_size;
+ 	struct blk_desc *dev_desc;
+ 
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-	dev_desc = android_get_bootdev();
+-#else
+ 	dev_desc = rockchip_get_bootdev();
+-#endif
+ 	if (!dev_desc) {
+ 		printf("[Vendor ERROR]:Invalid boot device type(%d)\n",
+ 		       bootdev_type);
+diff --git a/common/image-android.c b/common/image-android.c
+--- a/common/image-android.c
++++ b/common/image-android.c
+@@ -25,9 +25,6 @@
+ #include <android_avb/rk_avb_ops_user.h>
+ #endif
+ #include <optee_include/OpteeClientInterface.h>
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-#include <android_bootloader.h>
+-#endif
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -45,11 +42,7 @@ static int android_version_init(void)
+ 	disk_partition_t part;
+ 	int os_version;
+ 
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-	desc = android_get_bootdev();
+-#else
+ 	desc = rockchip_get_bootdev();
+-#endif
+ 	if (!desc) {
+ 		printf("No bootdev\n");
+ 		return -1;
+@@ -432,10 +425,6 @@ static int image_load(img_t img, struct andr_img_hdr *hdr,
+ 		      ulong blkstart, void *ram_base)
+ {
+-#ifdef CONFIG_ANDROID_BOOTLOADER
+-	struct blk_desc *desc = android_get_bootdev();
+-#else
+ 	struct blk_desc *desc = rockchip_get_bootdev();
+-#endif
+ 	disk_partition_t part_vendor_boot;
+ 	disk_partition_t part_init_boot;
+ 	__maybe_unused u32 typesz;
+-- 
+2.50.1

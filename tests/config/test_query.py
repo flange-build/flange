@@ -26,9 +26,9 @@ class TestGetValidTargets:
         assert isinstance(targets, list)
 
     def test_expected_count(self, boards):
-        """当前 16 个 board 的全部 product/variant 组合应完整枚举。"""
+        """当前 17 个 board 的全部 product/variant 组合应完整枚举。"""
         targets = get_valid_targets(boards=boards)
-        assert len(targets) == 48
+        assert len(targets) == 52
 
     def test_contains_radxa_targets(self, boards):
         targets = get_valid_targets(boards=boards)
