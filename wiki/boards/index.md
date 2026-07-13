@@ -1,7 +1,7 @@
 ---
 title: 板级索引
 type: index
-updated: 2026-05-28
+updated: 2026-07-14
 ---
 
 # 板级索引
@@ -12,6 +12,7 @@ updated: 2026-05-28
 - [[tspi-rk3566]] — RK3566
 - [[neons-core3566-nanob]] — RK3566
 - [[orangepi-cm4]] — RK3566
+- [[atk-rk3506b]] — RK3506B（ARM32，512 MiB DDR + 512 MiB SPI NAND，UBI/UBIFS + CPU2 RT-Thread，status: stable）
 - [[rp-pro-rk3568-h]] — RK3568（首颗真 RK3568，AP6275P PCIe WiFi6/BT5.2，status: wip）
 - [[armsom-cm5-io]] — RK3576（首颗 RK3576，Mali-G52 panfrost 开源 GPU，OP-TEE 打包，BW3752/AP6275S WiFi/BT，status: wip）
 - [[radxa-rock-4d]] — RK3576（首块 UFS 4K 存储板，image/flash 扇区参数化，UFS 启动 + SSH + WiFi/BT 上板通，status: done）

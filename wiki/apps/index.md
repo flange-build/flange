@@ -1,7 +1,7 @@
 ---
 title: App 索引
 type: index
-updated: 2026-05-03
+updated: 2026-07-14
 ---
 
 # App 索引
@@ -12,3 +12,4 @@ updated: 2026-05-03
 - [[adbd]] — USB ADB 服务，recovery rootfs 内运行
 - [[flange-rootfs-grow]] — 首次启动扩展 rootfs 分区与文件系统
 - [[rk3568_amp_rtt_foc]] — AMP 从核 FOC 电机固件（AS5600 有感电压闭环，tspi-rk3566 foc product）
+- [[rk3506 AMP UART4 RPMsg demo]] — ATK-RK3506B CPU2 最小 RT-Thread UART4 + RPMsg echo 固件

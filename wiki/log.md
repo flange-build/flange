@@ -507,3 +507,9 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 新增 `wiki/apps/rk3568_amp_rtt_foc.md`（AMP 从核 FOC 电机固件综合页）；`wiki/boards/tspi-rk3566.md` products 加 `foc`、补 foc product 段与 dtso source；`wiki/apps/index.md` 挂新页。foc product = amp-rtt 基建 + `app:foc=rk3568_amp_rtt_foc` 驱动三相无刷电机，`tspi-rk3566-amp-foc.dtso` 把 i2c2/pwm12-14/EN/FLIP 整组从 Linux 摘给从核。固件走 HAL 直驱 PWM3/I2C2（补 hal_conf.h 的 RT_USING_PWM→HAL_PWM 门控），有感电压 FOC 级联「位置 PID(默认 P)→速度 PI→Uq」，AS5600 位置反馈无电流采样，1kHz 控制线程。上板通：编码器读通、有感平滑旋转、速度/位置闭环动起来。
 
 关键坑（app 页「易踩坑」详列）：① PWM mux 取内核 rk3568-pinctrl.dtsi（pwm12/13=func2、pwm14=func1），非凭记忆；② CRU 主/从核共享，Linux clk_disable_unused 门控 disabled 的 i2c2 时钟 + 留其复位态 → 每次传输前重开门控 + 脉冲解复位；③ 标定对齐须 foc_apply(−π/2) 才把转子 d 轴拉到电角 0（反 Park 的 Vq 使磁场落 θ+90°）；④ 控制线程 rt_thread_mdelay 让出、勿 HAL_DelayUs 忙等饿死 finsh。演进 proposal/design/tasks 见 `openspec/changes/add-tspi-rk3566-foc-svpwm/`。
+
+## [2026-07-14] sync | ATK-RK3506B ARM32 + SPI NAND/UBI + CPU2 RT-Thread 实机验收
+
+新增 [[atk-rk3506b]] 与 [[rk3506 AMP UART4 RPMsg demo]]，同步 [[rockchip 平台]]、[[rootfs 构建器]]、[[image 构建器]]、[[amp 构建器]]、[[AMP 协处理器与 rpmsg]]、[[flash-config.json]]、[[FlashStrategy 抽象]]、[[USB 线刷协议]]、[[adbd]] 及索引。该板为 flange 首个 ARM32 Rockchip：512 MiB DDR + 512 MiB SPI NAND，kernel `linux-6.1-stan-rkr5.1`、vendor FIT、Ubuntu Base armhf UBI/UBIFS；CPU0-1 跑 Linux，CPU2 在 `0x03e00000` 跑最小 RT-Thread（UART4 + RPMsg）。刷写由配置生成 parameter，按 `DB → 身份门禁 → UL -noreset → DI -p → 具名 DI` 执行，不依赖 loader 不支持的 SSD，也不把 SPI NAND 伪装为 GPT raw.img。
+
+实机已确认：Maskrom 全刷、断电冷启动、Linux 6.1.115、rootfs UBIFS 可写、CPU2 固件区从 `/proc/iomem` 排除、RPMsg channel 枚举、USB gadget `ff740000.usb` configured 且 ADB 可进入。OpenSpec 证据落在 `add-rk3506b-atk-rk3506b/evidence/rk3506b-hardware-acceptance.md`；UART4/MSH、RPMsg 多轮 echo、坏块与恢复演练仍保持未完成，不以枚举结果替代端到端验收。

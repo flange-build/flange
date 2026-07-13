@@ -10,7 +10,10 @@ sources:
   - builder/platforms/rockchip/boot.py
   - builder/platforms/rockchip/recovery.py
   - builder/platforms/rockchip/image.py
+  - builder/platforms/rockchip/amp.py
+  - builder/platforms/rockchip/validation.py
   - components/platform/rockchip/config.py
+  - components/platform/rockchip/rk3506b/config.py
   - components/platform/rockchip/rk3566/config.py
   - components/platform/rockchip/rk3568/config.py
   - components/platform/rockchip/rk3576/config.py
@@ -23,29 +26,30 @@ related:
   - "[[neons-core3566-nanob]]"
   - "[[orangepi-cm4]]"
   - "[[rp-pro-rk3568-h]]"
+  - "[[atk-rk3506b]]"
   - "[[radxa-rock5b]]"
   - "[[armsom-cm5-io]]"
   - "[[kernel 构建器]]"
   - "[[bootloader 构建器]]"
   - "[[USB 线刷协议]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-06-15
+updated: 2026-07-14
 ---
 
 ## TL;DR
 
-Rockchip 系列平台；已落地 SoC：RK3566 / RK3568（4×A55）+ RK3576（4×A72+4×A53，Mali-G52，[[armsom-cm5-io]]）+ RK3588/RK3588S（4×A76+4×A55，Mali-G610）。flange 的首选打样平台。开源 GPU 按架构分流：RK3576/Bifrost 走 panfrost、RK3588/Valhall 走 panthor（详见 GPU 段）。
+Rockchip 系列平台，覆盖 ARM32 RK3506B 与 ARM64 RK3566/RK3568/RK3576/RK3588(S)。同一策略层按配置选择 extlinux/FIT、ext4/UBI、块设备 GPT/SPI NAND MTD；[[atk-rk3506b]] 已完成全刷与冷启动实机验收。
 
 ## 关键设计要点
 
 **策略类布局（`builder/platforms/rockchip/`）**
 
-6 个策略文件 + 工厂入口：`kernel.py`、`bootloader.py`、`rootfs.py`、`boot.py`、`recovery.py`、`image.py`，由 `__init__.py:create_builder()` 按组件名分发。`ARTIFACT_NAMES` 表定义 collect key → 产物文件名映射（如 `("bootloader","idbloader") → "idbloader.img"`）。
+组件策略文件 + 工厂入口：`kernel.py`、`bootloader.py`、`rootfs.py`、`boot.py`、`recovery.py`、`image.py`、`amp.py`，由 `__init__.py:create_builder()` 按组件名分发。`ARTIFACT_NAMES` 表定义 collect key → 产物文件名映射。
 
 **平台数据（`components/platform/rockchip/`）**
 
 - `config.py`：第一层（platform 层），声明 `vendor`、`flash_tool: "upgrade_tool"`、arch、rkbin 仓库、packages 基线（含 `+packages: [libdrm2, libdrm-common]`，所有 panthor / mali_kbase / mpp / RGA 用户态客户端的强依赖，ubuntu-base 不带）
-- `rk3566/config.py` / `rk3568/config.py` / `rk3588/config.py` / `rk3588s/config.py`：第二层（SoC 层），声明 rkbin ini 前缀、U-Boot defconfig、kernel 仓库/分支/defconfig list、分区表。RK3566 与 RK3568 同 die（BootROM 都识别为 rk3568、共用 `rk3568_defconfig`），但 SoC 层独立——`RK3566MINIALL.ini` 走 1056MHz DDR、`RK3568MINIALL.ini` 走 1560MHz，挂错性能砍 33%（详见 `rk3568/config.py` 注释）
+- SoC 层声明 rkbin、U-Boot/kernel 架构与工具链、boot/rootfs 格式和 AMP runtime。RK3506B 走 ARM32 gcc-10、vendor FIT、UBI；RK3566 与 RK3568 虽同 die，仍须分别选择 1056/1560MHz DDR ini。
 - 第三层（board 层）：位于 `components/board/<board>/config.py`，三层经 `deep_merge()` 合并
 
 **SoC 层默认 deb（`+extra_debs`）**
@@ -61,12 +65,13 @@ dpkg -i 一次性传入 9 个 deb，按依赖拓扑顺序排列（mpp → rga �
 
 **SoC 分支差异**
 
+- RK3506B：`linux-6.1-stan-rkr5.1`，ARM `zImage` + vendor FIT，Ubuntu Base armhf + UBI/UBIFS
 - RK3566 / RK3568：`linux-6.1-stan-rkr4.1-buildroot`（GPU 走 BSP mali_kbase）
 - RK3588/RK3588S：`linux-6.1-stan-rkr5.1`，dts 已切到 mainline panthor (`arm,mali-valhall-csf`)；SoC 配置通过 `rk3588_panthor.config` fragment 关 mali_kbase 启 `CONFIG_DRM_PANTHOR=m`，固件 blob `mali_csffw.bin` 走 `extra_firmware source: kernel` 从 BSP 内 vendor 子目录拷贝。**不能用 rkr4.1**——其 mali_kbase fork 不识别 RK3588 r0p0 status 5 silicon，会在 `kbase_hwaccess_pm_powerup` mutex 死锁
 
 **刷写工具：`upgrade_tool`**
 
-支持四种模式：DB（Download Boot）、WL（Write Loader）、RD（Read/Write 分区）、LD（设备轮询检测）。宿主机直接调用，不进 Docker。
+块设备走 `LD → DB → SSD(可选) → WL/DI → RD`；SPI NAND 全刷走 `DB → RCI/RFI/RID 身份门禁 → UL -noreset → DI -p parameter.txt → 具名 DI → RD`。参数文件、摘要、分区大小和 `rootfs_mtd_index` 在任何持久写入前校验；宿主机直接调用，不进 Docker。
 
 **patches**
 
