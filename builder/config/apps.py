@@ -36,7 +36,16 @@ def gather_custom_packages(config: dict) -> list[str]:
 
     禁用 recovery（``recovery.enabled is False`` 或缺省）时不读 recovery 列表。
     """
-    rootfs_pkgs = (config.get("rootfs") or {}).get("custom_packages") or []
+    rootfs_cfg = config.get("rootfs") or {}
+    rootfs_pkgs = list(rootfs_cfg.get("custom_packages") or [])
+    if rootfs_cfg.get("image_format", "ext4") == "ubi":
+        # flange-rootfs-grow 只会调用 growpart/resize2fs，属于 GPT/ext4 首启
+        # 扩容逻辑；UBI volume 由 ubinize 与 UBI 层管理，安装该 app 既无效又会
+        # 在 SPI NAND 系统上误操作不存在的块设备分区。
+        rootfs_pkgs = [
+            package for package in rootfs_pkgs
+            if package != "flange-rootfs-grow"
+        ]
     seen: set[str] = set(rootfs_pkgs)
     merged: list[str] = list(rootfs_pkgs)
 

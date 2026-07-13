@@ -17,8 +17,8 @@ import pytest
 
 from builder.flash import (
     FlashConfig, FlashConfigGenerator, FlashError, FlashExecutor,
-    FlashPartition, FlashStrategy, PreFlashConfig, RockchipFlashStrategy,
-    DeviceInfo, get_flash_strategy,
+    FlashIdentityConfig, FlashPartition, FlashStrategy, PreFlashConfig,
+    RockchipFlashStrategy, DeviceInfo, get_flash_strategy,
 )
 
 
@@ -236,6 +236,84 @@ class TestRockchipFlashStrategy:
             info = strategy.detect_device(Path("/fake/tool"))
             assert info is None
 
+    def test_detect_device_rejects_multiple_rockchip_devices(self):
+        strategy = RockchipFlashStrategy()
+        with patch("builder.flash.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout=(
+                    "List of rockusb connected(2)\n"
+                    "DevNo=1 Mode=Loader\nDevNo=2 Mode=Maskrom\n"
+                ),
+                stderr="",
+            )
+            with pytest.raises(FlashError, match="2 台.*只连接一台"):
+                strategy.detect_device(Path("/fake/tool"))
+
+    def test_device_identity_matches_rk3506_f053_chip_tag(self):
+        strategy = RockchipFlashStrategy()
+        config = FlashConfig(
+            platform="rockchip",
+            flash_tool="upgrade_tool",
+            board="test",
+            product="default",
+            variant="release",
+            soc="rk3506b",
+            storage_type="spinand",
+            identity=FlashIdentityConfig(
+                chip_patterns=[r"\b(?:46\s+30\s+35\s+33|f053)\b"],
+                storage_patterns=[r"\b(?:spi[ -]?nand|snand)\b"],
+            ),
+        )
+
+        def fake_run(cmd, **kwargs):
+            outputs = {
+                "RCI": (
+                    "Chip Info: 46 30 35 33 AD 8 B1 80 94 CC FE 7F "
+                    "AB 8 B1 80\n\nF053\n"
+                ),
+                "RFI": (
+                    "Flash Info:\n"
+                    "        Manufacturer: SAMSUNG,value=00\n"
+                    "        Flash Size: 511MB\n"
+                    "        Block Size: 128KB\n"
+                    "        Page Size: 2KB\n"
+                ),
+                "RID": "Flash ID:53 4E 41 4E 44\n\nSNAND\n",
+            }
+            return MagicMock(
+                returncode=0, stdout=outputs[cmd[1]], stderr="")
+
+        with patch("builder.flash.subprocess.run", side_effect=fake_run):
+            strategy._verify_device_identity(Path("upgrade_tool"), config)
+
+    def test_device_identity_rejects_wrong_storage_before_write(self):
+        strategy = RockchipFlashStrategy()
+        config = FlashConfig(
+            platform="rockchip",
+            flash_tool="upgrade_tool",
+            board="test",
+            product="default",
+            variant="release",
+            soc="rk3506b",
+            identity=FlashIdentityConfig(
+                chip_patterns=["RK3506"],
+                storage_patterns=[r"\b(?:spi[ -]?nand|snand)\b"],
+            ),
+        )
+
+        def fake_run(cmd, **kwargs):
+            outputs = {
+                "RCI": "Chip Info: RK3506\n",
+                "RFI": "Flash Info: EMMC\n",
+                "RID": "ReadFlashID: 15 01 00\n",
+            }
+            return MagicMock(
+                returncode=0, stdout=outputs[cmd[1]], stderr="")
+
+        with patch("builder.flash.subprocess.run", side_effect=fake_run):
+            with pytest.raises(FlashError, match="存储身份.*不匹配"):
+                strategy._verify_device_identity(Path("upgrade_tool"), config)
+
     def test_detect_device_timeout(self):
         strategy = RockchipFlashStrategy()
         with patch("builder.flash.subprocess.run") as mock_run:
@@ -351,7 +429,7 @@ class TestFlashExecutor:
 
             mock_strategy.find_tool.assert_called_once()
             mock_strategy.wait_for_device.assert_called_once()
-            mock_strategy.pre_flash.assert_called_once()
+            mock_strategy.pre_flash_all.assert_called_once()
             assert mock_strategy.write_partition.call_count == 4
             mock_strategy.reboot.assert_called_once()
 

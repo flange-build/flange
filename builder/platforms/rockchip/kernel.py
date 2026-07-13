@@ -13,6 +13,25 @@ from builder.dtb_overlay import (
 class RockchipKernelBuilder(KernelBuilder):
     component = "kernel"
     ARCH = "arm64"
+    DEFAULT_ARCH = "arm64"
+    DEFAULT_CROSS = KernelBuilder.CROSS
+
+    def _configure_build_context(self, config: dict) -> None:
+        """从 FINAL_CONFIG 为本次构建解析架构与工具链。
+
+        每次调用都从默认值重新计算并写入实例属性，避免同一 Python 进程复用
+        builder 时把 ARM32 target 的状态泄漏给后续 ARM64 target；类属性保持
+        现有 ARM64/AArch64 gcc-10 缺省值不变。
+        """
+        kernel = config.get("kernel", {}) or {}
+        self.ARCH = kernel.get("arch", self.DEFAULT_ARCH)
+        self.CROSS = kernel.get("cross_compile", self.DEFAULT_CROSS)
+
+    @staticmethod
+    def _dts_target(dts_dir: str, dts: str, suffix: str) -> str:
+        """拼接 kernel make 的 DTS 相对目标，兼容根 DTS 目录。"""
+        filename = f"{dts}.{suffix}"
+        return f"{dts_dir}/{filename}" if dts_dir else filename
 
     def configure(self, src_dir: Path, config: dict):
         """支持单 defconfig 字符串或多步 defconfig 合并 list。
@@ -44,6 +63,7 @@ class RockchipKernelBuilder(KernelBuilder):
         三个 fragment 始终生成，由 SoC config 决定是否在 defconfig list 中
         引入。
         """
+        self._configure_build_context(config)
         self._write_case_insensitive_fix(src_dir)
         self._write_panthor_fragment(src_dir, config)
         self._write_panfrost_fragment(src_dir, config)
@@ -181,6 +201,7 @@ class RockchipKernelBuilder(KernelBuilder):
         self._status("panel_mipi_dbi.config 生成")
 
     def compile(self, src_dir: Path, config: dict):
+        self._configure_build_context(config)
         jobs = config.get("jobs", 0)
         # 单文件 dtb 目标：用 "<dts_dir>/<dts>.dtb" 这种子目录相对路径
         # （不是 basename 也不是 arch/... 完整路径）。内核顶层 Makefile
@@ -192,15 +213,31 @@ class RockchipKernelBuilder(KernelBuilder):
         # 目标设备树无需在子目录 Makefile 的 dtb-y 里登记。
         dts_dir = config["kernel"].get("dts_dir", "rockchip")
         dts = config["kernel"]["dts"]
-        targets = [
-            "Image",
-            f"{dts_dir}/{dts}.dtb",
-            *overlay_make_targets(config, dts_dir),
-            "modules",
-        ]
+        kernel_image = config["kernel"].get("image", "Image")
+        boot_format = config["kernel"].get("boot_format", "extlinux")
+        extra = ["KCFLAGS=-Wno-error"]
+        if boot_format == "fit":
+            boot_its = config["kernel"].get("boot_its")
+            if not boot_its:
+                raise KeyError(
+                    "kernel.boot_format=fit 时必须声明 kernel.boot_its")
+            # Rockchip BSP 的 arch/arm{,64}/Makefile 中 ``%.img`` 会递归
+            # 构建 DTB、kernel image 与 modules。这里若再把 ``modules`` 作为
+            # 同一次 make 的并列 goal，外层与 ``%.img`` 的递归 make 会同时
+            # 写同一批 .o/.d，最终触发 fixdep 丢失 depfile。FIT 路径只提交
+            # ``%.img`` 单一 goal；extlinux 路径仍显式构建 modules。
+            targets = [self._dts_target(dts_dir, dts, "img")]
+            extra.append(f"BOOT_ITS={boot_its}")
+        else:
+            targets = [
+                kernel_image,
+                self._dts_target(dts_dir, dts, "dtb"),
+                *overlay_make_targets(config, dts_dir),
+                "modules",
+            ]
         self.make(src_dir, targets,
                   arch=self.ARCH, cross=self.CROSS, jobs=jobs,
-                  extra=["KCFLAGS=-Wno-error"],
+                  extra=extra,
                   label="编译内核...")
         # 编译 out-of-tree 模块
         self._compile_oot_modules(src_dir, config, jobs)
@@ -227,13 +264,20 @@ class RockchipKernelBuilder(KernelBuilder):
         self._install_oot_modules(src_dir, config, modules_staging)
 
     def collect(self, src_dir: Path, config: dict) -> dict:
+        self._configure_build_context(config)
         dts_dir = config["kernel"].get("dts_dir", "rockchip")
         dts = config["kernel"]["dts"]
+        kernel_image = config["kernel"].get("image", "Image")
+        dts_output_dir = src_dir / "arch" / self.ARCH / "boot" / "dts"
+        if dts_dir:
+            dts_output_dir /= dts_dir
         outputs = {
-            "image": src_dir / f"arch/{self.ARCH}/boot/Image",
-            "dtb": src_dir / f"arch/{self.ARCH}/boot/dts/{dts_dir}/{dts}.dtb",
+            "image": src_dir / "arch" / self.ARCH / "boot" / kernel_image,
+            "dtb": dts_output_dir / f"{dts}.dtb",
             "modules": src_dir / "_modules_staging",
         }
+        if config["kernel"].get("boot_format", "extlinux") == "fit":
+            outputs["fit_boot"] = src_dir / "boot.img"
         overlays = dtb_overlays(config)
         if overlays:
             overlay_dir = kernel_overlay_dir(src_dir, self.ARCH, dts_dir)

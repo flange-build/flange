@@ -136,7 +136,8 @@ def overlay_make_targets(config: dict, dts_dir: str) -> list[str]:
     仅覆盖 ``boot.dtb_overlays``；vendor overlay 由 device-tree-overlay 组件
     单独构建，不走 kernel make。
     """
-    return [f"{dts_dir}/overlay/{name}" for name in dtb_overlays(config)]
+    prefix = f"{dts_dir}/" if dts_dir else ""
+    return [f"{prefix}overlay/{name}" for name in dtb_overlays(config)]
 
 
 def kernel_overlay_dir(src_dir: Path, arch: str, dts_dir: str) -> Path:

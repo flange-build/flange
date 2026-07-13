@@ -10,6 +10,11 @@ import tempfile
 from pathlib import Path
 from builder.rootfs import RootfsBuilder
 from builder.chroot import ChrootContext
+from builder.config.validate import validate_mtd_ubi
+from builder.docker import BuildError
+from builder.partition.rockchip import parse_parameter_file
+from builder.partition.size import parse_size, resolve_image_size
+from builder.paths import PROJECT_ROOT
 
 
 class RockchipRootfsBuilder(RootfsBuilder):
@@ -51,10 +56,19 @@ class RockchipRootfsBuilder(RootfsBuilder):
         if self.output:
             self.output.dedent()
 
-        # Phase 3: 确保基础 /etc/fstab 和挂载点存在
-        self._install_fstab(rootfs_dir)
+        # Phase 3: 按镜像格式生成基础 fstab/mount 约定
+        self._install_fstab(rootfs_dir, config)
+        self._ensure_api_mountpoints(rootfs_dir)
 
-        # Phase 4: 从目录生成 ext4 rootfs.img（免 mount，mke2fs -d 直读目录）
+        # Phase 4: 从 staging 目录生成 ext4 或 UBIFS/UBI 镜像。
+        image_format = config.get("rootfs", {}).get("image_format", "ext4")
+        if image_format == "ubi":
+            self._build_ubi(rootfs_dir, config)
+        else:
+            self._build_ext4(rootfs_dir, config)
+
+    def _build_ext4(self, rootfs_dir: Path, config: dict) -> None:
+        """保持既有 mke2fs 路径生成 rootfs.img。"""
         self._output = self._work_dir / "rootfs.img"
         rootfs_size_mb = self._partition_size_mb(config, "rootfs")
         self._ensure_rootfs_fits_image(rootfs_dir, rootfs_size_mb)
@@ -67,8 +81,125 @@ class RockchipRootfsBuilder(RootfsBuilder):
             "-d", str(rootfs_dir), str(self._output),
         ])
 
-    def _install_fstab(self, rootfs_dir: Path):
-        """写入 /etc/fstab，挂载 rootfs 和 boot 分区。
+    def _build_ubi(self, rootfs_dir: Path, config: dict) -> None:
+        """用显式 NAND 几何生成 UBIFS 与 UBI volume。"""
+        validate_mtd_ubi(config)
+        ubi = config["rootfs"]["ubi"]
+        min_io = int(ubi["min_io_size"], 0) if isinstance(
+            ubi["min_io_size"], str) else int(ubi["min_io_size"])
+        peb = int(ubi["peb_size"], 0) if isinstance(
+            ubi["peb_size"], str) else int(ubi["peb_size"])
+        subpage = int(ubi["subpage_size"], 0) if isinstance(
+            ubi["subpage_size"], str) else int(ubi["subpage_size"])
+        vid = int(ubi["vid_hdr_offset"], 0) if isinstance(
+            ubi["vid_hdr_offset"], str) else int(ubi["vid_hdr_offset"])
+        leb = int(ubi["leb_size"], 0) if isinstance(
+            ubi["leb_size"], str) else int(ubi["leb_size"])
+        max_leb = int(ubi["max_leb_count"], 0) if isinstance(
+            ubi["max_leb_count"], str) else int(ubi["max_leb_count"])
+        volume_size = parse_size(ubi["volume_size"]).bytes
+
+        self._ensure_rootfs_fits_ubi(rootfs_dir, volume_size)
+        ubifs = self._work_dir / "rootfs.ubifs"
+        self._status("生成 rootfs.ubifs...")
+        mkfs_command = [
+            "mkfs.ubifs",
+            "-r", str(rootfs_dir),
+            "-o", str(ubifs),
+            "-m", str(min_io),
+            "-e", str(leb),
+            "-c", str(max_leb),
+        ]
+        if ubi.get("space_fixup", False):
+            # 部分 USB 刷写器会把全 0xFF NAND page 也实际编程；-F 让
+            # UBIFS 首次挂载先修复空闲区，避免后续写入形成二次编程。
+            mkfs_command.append("-F")
+        self.docker.run(mkfs_command)
+        self._ensure_file_fits(
+            ubifs, volume_size, "UBIFS", "rootfs.ubi.volume_size")
+
+        ubinize_cfg = self._work_dir / "ubinize.cfg"
+        ubinize_cfg.write_text(
+            "[rootfs]\n"
+            "mode=ubi\n"
+            f"image={ubifs}\n"
+            "vol_id=0\n"
+            "vol_type=dynamic\n"
+            "vol_name=rootfs\n"
+            f"vol_size={volume_size}\n"
+        )
+        self._output = self._work_dir / "rootfs.ubi"
+        self._status("生成 rootfs.ubi...")
+        self.docker.run([
+            "ubinize",
+            "-o", str(self._output),
+            "-m", str(min_io),
+            "-p", str(peb),
+            "-s", str(subpage),
+            "-O", str(vid),
+            str(ubinize_cfg),
+        ])
+        physical_limit = self._ubi_physical_limit(config, peb)
+        self._ensure_file_fits(
+            self._output, physical_limit, "UBI", "rootfs MTD 可用容量")
+
+    def _ensure_rootfs_fits_ubi(
+        self,
+        rootfs_dir: Path,
+        volume_size: int,
+    ) -> None:
+        """在 mkfs.ubifs 前以 staging apparent size 做逻辑容量门禁。"""
+        result = self.docker.run(
+            ["du", "-sb", str(rootfs_dir)], capture=True)
+        used_bytes = int(result.stdout.split()[0])
+        if used_bytes > volume_size:
+            raise BuildError(
+                f"rootfs staging 内容 {used_bytes} bytes 超过 UBI volume "
+                f"{volume_size} bytes；请精简 rootfs 或增大 volume_size。")
+
+    @staticmethod
+    def _ensure_file_fits(
+        path: Path,
+        limit: int,
+        label: str,
+        limit_label: str,
+    ) -> None:
+        """拒绝截断超过逻辑/物理容量的 UBIFS/UBI 产物。"""
+        if not path.is_file():
+            raise FileNotFoundError(f"{label} 产物未生成: {path}")
+        size = path.stat().st_size
+        if size > limit:
+            raise BuildError(
+                f"{label} 产物 {size} bytes 超过 {limit_label} "
+                f"{limit} bytes；禁止截断写入。")
+
+    @staticmethod
+    def _ubi_physical_limit(config: dict, peb_size: int) -> int:
+        """返回扣除显式坏块余量后的 rootfs MTD 物理容量。"""
+        partitions = config["partitions"]
+        if partitions.get("format", "gpt") == "mtd":
+            parameter = Path(partitions["parameter"])
+            if not parameter.is_absolute():
+                parameter = PROJECT_ROOT / parameter
+            entries = parse_parameter_file(parameter)
+            rootfs = next(entry for entry in entries if entry.name == "rootfs")
+            storage_bytes = parse_size(config["storage"]["size"]).bytes
+            partition_bytes = rootfs.size_bytes(storage_bytes)
+            assert partition_bytes is not None
+        else:
+            rootfs_entry = next(
+                entry for entry in partitions["entries"]
+                if entry["name"] == "rootfs")
+            # Rockchip GPT parameter 生成器会把 remaining 展开为 image_size，
+            # 因此物理门禁必须使用同一解析规则。
+            partition_bytes = resolve_image_size(rootfs_entry).bytes
+        reserved_value = config["rootfs"]["ubi"]["reserved_pebs"]
+        reserved = int(reserved_value, 0) if isinstance(
+            reserved_value, str) else int(reserved_value)
+        return partition_bytes - reserved * peb_size
+
+    def _install_fstab(self, rootfs_dir: Path, config: dict | None = None):
+        """按 image format 写入 /etc/fstab。
 
         使用 LABEL 而非 PARTUUID，不依赖 GPT 分区表正确性。
         若 overlay 已提供真实 /etc/fstab（声明 LABEL= / UUID= / /dev/ /
@@ -82,12 +213,19 @@ class RockchipRootfsBuilder(RootfsBuilder):
         if fstab.exists():
             existing = fstab.read_text()
             has_real_mount = any(
-                marker in existing
-                for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")
+                line.strip() and not line.lstrip().startswith("#")
+                for line in existing.splitlines()
             )
             if has_real_mount:
                 return
         fstab.parent.mkdir(parents=True, exist_ok=True)
+        image_format = (config or {}).get("rootfs", {}).get(
+            "image_format", "ext4")
+        if image_format == "ubi":
+            fstab.write_text(
+                "# UBI rootfs 由 kernel bootargs 挂载；不声明 ext4 root/boot 项。\n"
+            )
+            return
         fstab.write_text(
             "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>\n"
             "LABEL=rootfs     /              ext4    defaults   0       1\n"
@@ -95,6 +233,23 @@ class RockchipRootfsBuilder(RootfsBuilder):
         )
         # 确保 /boot 挂载点存在
         (rootfs_dir / "boot").mkdir(exist_ok=True)
+
+    @staticmethod
+    def _ensure_api_mountpoints(rootfs_dir: Path) -> None:
+        """确保 systemd 启动早期使用的 API 文件系统挂载点存在。"""
+        for relative in (
+            "proc",
+            "sys",
+            "sys/fs/cgroup",
+            "dev",
+            "dev/pts",
+            "dev/shm",
+            "run",
+            "run/lock",
+            "tmp",
+        ):
+            (rootfs_dir / relative).mkdir(parents=True, exist_ok=True)
+        (rootfs_dir / "tmp").chmod(0o1777)
 
     def _get_base_cache_path(self, config: dict) -> Path | None:
         """获取 base.tar.gz 快照路径。需要 cache 引用（由 engine 注入）。"""
@@ -111,8 +266,9 @@ class RockchipRootfsBuilder(RootfsBuilder):
         self._status("解压 base tarball...")
         self.docker.run_privileged(
             ["tar", "xf", str(tarball_path), "-C", str(rootfs_dir)])
+        emulator = self._rootfs_emulator(config)
         self.docker.run_privileged(
-            ["cp", "/usr/bin/qemu-aarch64-static",
+            ["cp", f"/usr/bin/{emulator}",
              str(rootfs_dir / "usr" / "bin" / "")])
 
         with ChrootContext(rootfs_dir, self.docker) as chroot:
@@ -129,6 +285,25 @@ class RockchipRootfsBuilder(RootfsBuilder):
                             "--no-install-recommends"] + packages,
                            label=f"安装 {len(packages)} 个包...")
             chroot.run(["apt-get", "clean"])
+
+    @staticmethod
+    def _rootfs_emulator(config: dict) -> str:
+        """按用户态 ABI 选择 chroot emulator，允许 rootfs.emulator 覆盖。"""
+        rootfs = config.get("rootfs") or {}
+        explicit = rootfs.get("emulator")
+        if explicit:
+            return explicit
+        arch = config.get("arch", "aarch64")
+        mapping = {
+            "aarch64": "qemu-aarch64-static",
+            "armhf": "qemu-arm-static",
+        }
+        try:
+            return mapping[arch]
+        except KeyError as exc:
+            raise ValueError(
+                f"未定义 arch={arch!r} 的 rootfs chroot emulator；"
+                "请声明 rootfs.emulator") from exc
 
     def _build_phase2(self, rootfs_dir: Path, config: dict):
         """Phase 2: Customize — custom deb 安装 + overlay 文件覆盖。"""
@@ -197,4 +372,6 @@ class RockchipRootfsBuilder(RootfsBuilder):
             ["tar", "xf", str(cache_path), "-C", str(rootfs_dir)])
 
     def collect(self, src_dir: Path, config: dict) -> dict:
+        if config.get("rootfs", {}).get("image_format", "ext4") == "ubi":
+            return {"ubi": self._output}
         return {"rootfs": self._output}

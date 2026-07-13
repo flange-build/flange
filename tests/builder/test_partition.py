@@ -4,7 +4,11 @@ import pytest
 
 from builder.config.registry import resolve_config
 from builder.partition import PartitionTable, Partition
-from builder.partition.rockchip import RockchipPartitionConverter
+from builder.partition.rockchip import (
+    RockchipPartitionConverter,
+    parse_parameter_text,
+    validate_parameter_capacity,
+)
 
 
 class TestPartitionTable:
@@ -72,6 +76,54 @@ class TestRockchipConverter:
         assert "0x2000@0x4000(uboot)" in cmdline
         assert "0x20000@0x8000(boot)" in cmdline
         assert "0x200000@0x40000(rootfs)" in cmdline
+
+
+class TestRockchipParameterParser:
+    """MTD/SPI NAND parameter 解析、顺序与容量门禁。"""
+
+    TEXT = (
+        "TYPE: MTD\n"
+        "CMDLINE:mtdparts=rk29xxnand:"
+        "0x1000@0x0(loader),0x2000@0x1000(uboot),"
+        "0x2000@0x3000(amp),-@0x5000(rootfs:grow)\n"
+    )
+
+    def test_parse_named_mtd_entries_and_flags(self):
+        entries = parse_parameter_text(self.TEXT)
+
+        assert [entry.name for entry in entries] == [
+            "loader", "uboot", "amp", "rootfs"]
+        assert entries[2].offset == 0x3000
+        assert entries[2].size == 0x2000
+        assert entries[3].size is None
+        assert entries[3].flags == ("grow",)
+
+    def test_empty_device_prefix_is_supported(self):
+        entries = parse_parameter_text(
+            "CMDLINE:mtdparts=:0x1000@0x0(boot),-@0x1000(rootfs)\n")
+        assert [entry.name for entry in entries] == ["boot", "rootfs"]
+
+    def test_overlapping_partitions_are_rejected(self):
+        text = (
+            "CMDLINE:mtdparts=:0x2000@0x0(boot),"
+            "0x1000@0x1000(amp)\n"
+        )
+        with pytest.raises(ValueError, match="重叠"):
+            parse_parameter_text(text)
+
+    def test_remaining_partition_must_be_last(self):
+        text = (
+            "CMDLINE:mtdparts=:-@0x0(rootfs),"
+            "0x1000@0x1000(data)\n"
+        )
+        with pytest.raises(ValueError, match="必须位于最后"):
+            parse_parameter_text(text)
+
+    def test_capacity_rejects_partition_end_past_device(self):
+        entries = parse_parameter_text(
+            "CMDLINE:mtdparts=:0x2000@0xf0000(boot)\n")
+        with pytest.raises(ValueError, match="超出存储容量"):
+            validate_parameter_capacity(entries, 128 * 1024 * 1024)
 
 
 # ── recovery 分区在真实平台配置中可解析 ──────────────────────────

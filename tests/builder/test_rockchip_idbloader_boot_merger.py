@@ -67,7 +67,11 @@ def test_extract_idb_path_absent_returns_none():
 def _make_firmware_dir(tmp_path: Path) -> Path:
     fw = tmp_path / "firmware"
     (fw / "RKBOOT").mkdir(parents=True)
+    (fw / "RKTRUST").mkdir()
     (fw / "RKBOOT" / "RK3576MINIALL.ini").write_text(_INI)
+    # compile 会先解析显式/兼容 trust INI 路径；具体 BL31 内容由测试 patch
+    # _parse_trust_ini 注入，这里只提供真实路径以覆盖路径契约。
+    (fw / "RKTRUST" / "RK3576TRUST.ini").write_text("[BL31_OPTION]\n")
     (fw / "bin" / "rk35").mkdir(parents=True)
     (fw / "bin" / "rk35" / "rk3576_bl31_v1.24.elf").write_bytes(b"\x7fELF-fake-bl31")
     (fw / "tools").mkdir()

@@ -63,12 +63,22 @@ class RockchipBootBuilder(ComponentBuilder):
 
     def compile(self, src_dir: Path, config: dict):
         """从 kernel 产物 + config 构建 boot.img。"""
+        target_dir = self.cache.target_dir
+        if config.get("kernel", {}).get("boot_format", "extlinux") == "fit":
+            kernel_fit = target_dir / "kernel" / "boot.img"
+            if not kernel_fit.is_file():
+                raise FileNotFoundError(
+                    f"kernel FIT boot.img 未找到: {kernel_fit}；"
+                    "确认 kernel.<dts>.img 构建成功且产物已收集")
+            self._boot_img = kernel_fit
+            self._status("复用 kernel vendor FIT boot.img")
+            return
+
         self._work_dir = Path(tempfile.mkdtemp(prefix="flange-boot-"))
         staging = self._work_dir / "staging"
         staging.mkdir()
 
         # 读取 kernel 产物（来自前序 kernel 组件收集到的 target 目录）
-        target_dir = self.cache.target_dir
         kernel_src_image = target_dir / "kernel" / "Image"
         dts_name = config["kernel"]["dts"]
         kernel_src_dtb = target_dir / "kernel" / f"{dts_name}.dtb"

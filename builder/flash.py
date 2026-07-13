@@ -6,15 +6,27 @@
 """
 
 import argparse
+import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
+
+from builder.partition.rockchip import (
+    parse_parameter_file,
+    parse_parameter_text,
+    validate_parameter_capacity,
+)
+from builder.partition.size import parse_size
+from builder.paths import PROJECT_ROOT
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +183,8 @@ class FlashPartition:
     # 此外 recovery.protected_partitions 中显式列出的分区也标记 True。
     # 默认 False，向前兼容现有 flash-config.json 消费者。
     protected: bool = False
+    # MTD/GPT 分区容量（512B sector 字符串）；旧配置缺省为空。
+    size: str = ""
 
 
 @dataclass
@@ -191,6 +205,15 @@ class PreFlashConfig:
 
 
 @dataclass
+class FlashIdentityConfig:
+    """首次持久写入前用于匹配 Rockchip 芯片与存储介质的正则。"""
+
+    chip_patterns: list[str] = field(default_factory=list)
+    storage_patterns: list[str] = field(default_factory=list)
+    require_rid: bool = False
+
+
+@dataclass
 class FlashConfig:
     """flash-config.json 的完整数据模型。"""
     platform: str
@@ -198,20 +221,38 @@ class FlashConfig:
     board: str
     product: str
     variant: str
+    # SoC 身份用于 Rockchip 首次持久写入前的设备校验；空值兼容旧清单。
+    soc: str = ""
     # 目标存储逻辑块大小：eMMC/SD 为 512，UFS 为 4096。缺省 512 向前兼容
     # 旧 flash-config.json。供 write_gpt 按扇区截取 GPT。
     sector_size: int = 512
     # 目标存储介质名（Rockchip upgrade_tool SSD 列表里的名字；UFS=SATA）。
     # 非空时 flash 在 DB 后用 SSD 切到该存储，否则用 loader 默认（eMMC/SPI）。
     storage: str = ""
+    # 存储介质类型（如 spinand）。与 SSD 展示名称分离，避免用工具输出文案
+    # 决定 NAND 坏块安全的具名 DI 路由。
+    storage_type: str = ""
+    # 分区配置模型：gpt（由 entries 生成）或兼容旧 mtd parameter。
+    partition_format: str = "gpt"
+    # parameter 相对 target_dir 的路径与存储总容量；SPI NAND 的 GPT 配置
+    # 同样生成 parameter 并记录 rootfs MTD index。
+    parameter: str = ""
+    storage_size: str = ""
+    rootfs_mtd_index: Optional[int] = None
+    # parameter 内容摘要。具名 DI 路由必须校验，避免 parameter 与清单布局漂移。
+    parameter_sha256: str = ""
     partitions: list[FlashPartition] = field(default_factory=list)
     pre_flash: PreFlashConfig = field(default_factory=PreFlashConfig)
+    identity: FlashIdentityConfig = field(default_factory=FlashIdentityConfig)
 
     def to_json(self, path: Path):
-        """序列化为 JSON 文件。"""
+        """原子序列化为 JSON 文件。"""
         data = asdict(self)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        _atomic_write_text(
+            path,
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        )
 
     @classmethod
     def from_json(cls, path: Path) -> "FlashConfig":
@@ -219,22 +260,48 @@ class FlashConfig:
         data = json.loads(path.read_text())
         partitions = [FlashPartition(**p) for p in data.get("partitions", [])]
         pre_flash = PreFlashConfig(**data.get("pre_flash", {}))
+        identity = FlashIdentityConfig(**data.get("identity", {}))
         return cls(
             platform=data["platform"],
             flash_tool=data["flash_tool"],
             board=data["board"],
             product=data["product"],
             variant=data["variant"],
+            soc=data.get("soc", ""),
             sector_size=data.get("sector_size", 512),
             storage=data.get("storage", ""),
+            storage_type=data.get("storage_type", ""),
+            partition_format=data.get("partition_format", "gpt"),
+            parameter=data.get("parameter", ""),
+            storage_size=data.get("storage_size", ""),
+            rootfs_mtd_index=data.get("rootfs_mtd_index"),
+            parameter_sha256=data.get("parameter_sha256", ""),
             partitions=partitions,
             pre_flash=pre_flash,
+            identity=identity,
         )
 
 
 class FlashError(Exception):
     """刷写过程中的错误。"""
     pass
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """在同目录写临时文件并原子替换，失败时不暴露半写产物。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary_path.replace(path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
 
 
 @dataclass
@@ -265,6 +332,11 @@ class FlashStrategy(ABC):
                   device: Optional["DeviceInfo"] = None):
         """刷写前准备（如 Rockchip 上传 miniloader）。"""
 
+    def pre_flash_all(self, tool: Path, target_dir: Path, config: FlashConfig,
+                      device: Optional["DeviceInfo"] = None):
+        """全量刷写前准备；默认复用单分区准备流程。"""
+        self.pre_flash(tool, target_dir, config, device)
+
     @abstractmethod
     def write_partition(self, tool: Path, offset: int, image: Path):
         """写入单个分区。"""
@@ -277,6 +349,25 @@ class FlashStrategy(ABC):
         新分区，``Waiting for root device PARTLABEL=...`` 会死等。
         """
         return
+
+    def preflight(
+        self,
+        target_dir: Path,
+        config: "FlashConfig",
+        partitions: list[FlashPartition],
+    ) -> None:
+        """执行任何设备写操作前的本地产物校验；默认 no-op。"""
+        return
+
+    def write_named_partition(
+        self,
+        tool: Path,
+        part: FlashPartition,
+        image: Path,
+        config: "FlashConfig",
+    ) -> None:
+        """按分区模型写入；默认退化为 offset 写。"""
+        self.write_partition(tool, int(part.offset, 0), image)
 
     @abstractmethod
     def reboot(self, tool: Path):
@@ -347,7 +438,17 @@ class RockchipFlashStrategy(FlashStrategy):
                 [str(tool), "LD"],
                 capture_output=True, text=True, timeout=5,
             )
-            output = result.stdout.lower() + result.stderr.lower()
+            raw_output = result.stdout + result.stderr
+            count_match = re.search(
+                r"connected\s*\(\s*(\d+)\s*\)", raw_output, re.I)
+            if count_match:
+                count = int(count_match.group(1))
+            else:
+                count = len(re.findall(r"\bDevNo\s*=", raw_output, re.I))
+            if count > 1:
+                raise FlashError(
+                    f"检测到 {count} 台 Rockchip 设备；为防止误刷，请只连接一台")
+            output = raw_output.lower()
             if "maskrom" in output:
                 return DeviceInfo("rockchip", "maskrom", "Rockchip Maskrom 设备")
             if "loader" in output:
@@ -355,6 +456,74 @@ class RockchipFlashStrategy(FlashStrategy):
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
         return None
+
+    @staticmethod
+    def _identity_corpus(output: str) -> str:
+        """把工具输出及其中的十六进制 ASCII 字节合并为可匹配文本。"""
+        decoded: list[str] = []
+        for match in re.finditer(
+            r"(?:(?<![0-9a-fA-F])[0-9a-fA-F]{2}(?:\s+|$)){2,}",
+            output,
+        ):
+            tokens = re.findall(r"[0-9a-fA-F]{2}", match.group(0))
+            raw = bytes(int(token, 16) for token in tokens)
+            decoded.append("".join(
+                chr(value) if 32 <= value < 127 else " " for value in raw
+            ))
+        return output + "\n" + "\n".join(decoded)
+
+    @staticmethod
+    def _read_identity(tool: Path, command: str) -> str:
+        result = subprocess.run(
+            [str(tool), command], capture_output=True, text=True)
+        output = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0 or not output.strip():
+            raise FlashError(
+                f"upgrade_tool {command} 设备身份读取失败"
+                f"（exit {result.returncode}）:\n{output}")
+        return output
+
+    @staticmethod
+    def _require_identity_match(
+        label: str,
+        corpus: str,
+        patterns: list[str],
+    ) -> None:
+        if patterns and not any(
+            re.search(pattern, corpus, re.I) for pattern in patterns
+        ):
+            raise FlashError(
+                f"Rockchip {label}身份与 flash-config 不匹配；"
+                f"期望任一 {patterns!r}，工具输出:\n{corpus}")
+
+    def _verify_device_identity(
+        self,
+        tool: Path,
+        config: FlashConfig,
+    ) -> None:
+        """在 UL/DI/WL 前验证 SoC 与存储，RID 用于唯一设备诊断。"""
+        identity = config.identity
+        chip_patterns = list(identity.chip_patterns)
+        if not chip_patterns and config.soc:
+            chip_patterns = [re.escape(config.soc)]
+        if not chip_patterns and not identity.storage_patterns:
+            return
+
+        chip_output = self._read_identity(tool, "RCI")
+        flash_output = self._read_identity(tool, "RFI")
+        chip_corpus = self._identity_corpus(chip_output)
+        try:
+            flash_id_output = self._read_identity(tool, "RID")
+        except FlashError:
+            if identity.require_rid:
+                raise
+            flash_id_output = ""
+        flash_corpus = self._identity_corpus(
+            flash_output + "\n" + flash_id_output)
+        self._require_identity_match("SoC", chip_corpus, chip_patterns)
+        self._require_identity_match(
+            "存储", flash_corpus, identity.storage_patterns)
+        _ok(f"设备身份已确认（{config.soc or 'Rockchip'} / {config.storage_type}）")
 
     _UDEV_HINT = (
         "upgrade_tool DB 无法打开 USB（Creating Comm Object failed）——maskrom 的 "
@@ -377,6 +546,23 @@ class RockchipFlashStrategy(FlashStrategy):
             raise FlashError(f"upgrade_tool DB 失败（exit {r.returncode}）:\n{out}")
         time.sleep(1)
 
+    def _upgrade_loader(self, tool: Path, miniloader: Path):
+        """用工具文档顺序 ``UL <Loader> -noreset`` 写入并保持 loader。"""
+        _info(f"写入 miniloader（UL {miniloader.name} -noreset）...")
+        r = subprocess.run(
+            [str(tool), "UL", str(miniloader), "-noreset"],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            out = (r.stdout or "") + (r.stderr or "")
+            if "Comm Object" in out:
+                raise FlashError(self._UDEV_HINT)
+            raise FlashError(
+                f"upgrade_tool UL {miniloader.name} -noreset 失败"
+                f"（exit {r.returncode}）:\n{out}")
+        time.sleep(1)
+
     def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
                   device: Optional["DeviceInfo"] = None):
         # DB (Download Boot) 仅在 maskrom 模式下上传 loader；
@@ -390,10 +576,104 @@ class RockchipFlashStrategy(FlashStrategy):
             if not miniloader.exists():
                 raise FlashError(f"未找到 miniloader: {miniloader}")
             self._download_boot(tool, miniloader)
-        # 切目标存储（UFS=SATA）。DB 后 loader 默认存储是 SPI/eMMC，不切则 WL
-        # 会写错介质。eMMC/SD 板 storage 为空，保持 loader 默认、行为不变。
+        self._verify_device_identity(tool, config)
+        # 仅显式声明 selector 的多介质 loader 执行 SSD（如 UFS=SATA）。
+        # 单介质 RK3506 SPI NAND loader 不提供 SSD feature，storage 为空时保持
+        # loader 当前介质，后续仍由 storage_type=spinand 进入 DI 路径。
         if config.storage:
             self._switch_storage(tool, config.storage)
+
+    def pre_flash_all(self, tool: Path, target_dir: Path, config: FlashConfig,
+                      device: Optional["DeviceInfo"] = None):
+        """SPI NAND 全刷用原厂 UL 流程，其余介质保持既有 DB/SSD 路径。"""
+        if (config.storage_type != "spinand"
+                or not config.pre_flash.download_boot):
+            return self.pre_flash(tool, target_dir, config, device)
+        miniloader = target_dir / config.pre_flash.download_boot
+        if not miniloader.exists():
+            raise FlashError(f"未找到 miniloader: {miniloader}")
+        if device is None:
+            device = self.detect_device(tool)
+        if device and device.mode == "maskrom":
+            # DB 只在 RAM 中启动同一 miniloader，先取得身份信息，再允许 UL
+            # 发生首次持久写入。
+            self._download_boot(tool, miniloader)
+        self._verify_device_identity(tool, config)
+        self._upgrade_loader(tool, miniloader)
+        if config.storage:
+            self._switch_storage(tool, config.storage)
+
+    def preflight(
+        self,
+        target_dir: Path,
+        config: FlashConfig,
+        partitions: list[FlashPartition],
+    ) -> None:
+        """SPI NAND 刷写前校验 parameter、mtd index、镜像与容量。"""
+        if (config.partition_format != "mtd"
+                and config.storage_type != "spinand"):
+            return
+        if (config.storage_type == "spinand"
+                and any(part.name == "idbloader" for part in partitions)):
+            raise FlashError(
+                "SPI NAND flash-config 仍包含 idbloader 具名写入，属于旧版构建产物；"
+                "请执行 flange build image -f 重新生成后再刷写")
+        if not config.storage_size:
+            raise FlashError("SPI NAND flash-config 缺少 storage_size")
+        parameter = target_dir / (config.parameter or "parameter.txt")
+        try:
+            entries = parse_parameter_file(parameter)
+            storage_bytes = parse_size(config.storage_size).bytes
+            validate_parameter_capacity(entries, storage_bytes)
+        except (OSError, ValueError) as exc:
+            raise FlashError(f"SPI NAND parameter 刷写前校验失败: {exc}") from exc
+        if not config.parameter_sha256:
+            raise FlashError(
+                "SPI NAND flash-config 缺少 parameter_sha256；"
+                "请执行 flange build image -f 重新生成")
+        actual_sha256 = hashlib.sha256(parameter.read_bytes()).hexdigest()
+        if actual_sha256 != config.parameter_sha256:
+            raise FlashError(
+                "SPI NAND parameter 与 flash-config 摘要不一致；"
+                "请执行 flange build image -f 重新生成")
+        by_name = {entry.name: entry for entry in entries}
+        if config.rootfs_mtd_index is None:
+            raise FlashError("SPI NAND flash-config 缺少 rootfs_mtd_index")
+        index = config.rootfs_mtd_index
+        actual = entries[index].name if 0 <= index < len(entries) else "越界"
+        if actual != "rootfs":
+            raise FlashError(
+                f"rootfs_mtd_index={index} 对应 {actual!r}，期望 'rootfs'")
+
+        for part in partitions:
+            entry = by_name.get(part.name)
+            if entry is None:
+                raise FlashError(
+                    f"SPI NAND parameter 中不存在 flash-config 分区 {part.name!r}")
+            try:
+                config_offset = int(part.offset, 0)
+                config_size = (
+                    None if part.size == "remaining" else int(part.size, 0)
+                )
+            except (TypeError, ValueError) as exc:
+                raise FlashError(
+                    f"flash-config 分区 {part.name} offset/size 非法；"
+                    "请重新构建 image") from exc
+            if config_offset != entry.offset or config_size != entry.size:
+                raise FlashError(
+                    f"分区 {part.name} 布局不一致：flash-config="
+                    f"0x{config_offset:x}/{part.size}，parameter="
+                    f"0x{entry.offset:x}/"
+                    f"{'remaining' if entry.size is None else f'0x{entry.size:x}'}")
+            image = target_dir / part.image
+            if not image.is_file():
+                raise FlashError(f"SPI NAND 分区 {part.name} 镜像不存在: {image}")
+            limit = entry.size_bytes(storage_bytes)
+            image_bytes = image.stat().st_size
+            if limit is None or image_bytes > limit:
+                raise FlashError(
+                    f"SPI NAND 分区 {part.name} 镜像 {image_bytes} bytes 超过容量 "
+                    f"{limit} bytes")
 
     @staticmethod
     def _parse_storage_no(ssd_output: str, name: str) -> Optional[str]:
@@ -434,6 +714,23 @@ class RockchipFlashStrategy(FlashStrategy):
         )
         _ok(f"{image.name}")
 
+    def write_named_partition(
+        self,
+        tool: Path,
+        part: FlashPartition,
+        image: Path,
+        config: FlashConfig,
+    ) -> None:
+        """SPI NAND 用 DI 具名分区写；块设备 GPT 保持 WL offset 路径。"""
+        if (config.partition_format != "mtd"
+                and config.storage_type != "spinand"
+                and not config.storage):
+            return super().write_named_partition(tool, part, image, config)
+        flag = self.DI_FLAGS.get(part.name, f"-{part.name}")
+        _info(f"写 {part.name}（DI {flag}）...")
+        subprocess.run([str(tool), "DI", flag, str(image)], check=True)
+        _ok(part.name)
+
     # GPT primary：protective MBR 在 LBA 0，GPT header 在 LBA 1，紧随 16KiB
     # entries array（128 entry × 128 B，与扇区大小无关）。rockchip upgrade_tool
     # 拒绝 WL 0（保护 boot region），跳过 protective MBR，从 LBA 1 起写
@@ -463,9 +760,12 @@ class RockchipFlashStrategy(FlashStrategy):
         return self.GPT_HEADER_LBA * sector // 512
 
     def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
-        # UFS（di 路径）：分区表由 flash_whole_disk 的 `di -p parameter.txt`
-        # 写入，loader 按 4K 建 GPT，这里不再 WL raw.img 的 GPT。
-        if config.storage:
+        if config.partition_format == "mtd":
+            return
+        # UFS 与 SPI NAND 的分区表都由 flash_whole_disk 的
+        # `DI -p parameter.txt` 写入；SPI NAND 即使不支持 SSD、storage 为空，
+        # 也不得退回 WL raw.img 的 GPT 路径。
+        if config.storage or config.storage_type == "spinand":
             return
         raw_img = target_dir / "image" / "raw.img"
         if not raw_img.exists():
@@ -508,17 +808,18 @@ class RockchipFlashStrategy(FlashStrategy):
 
     def flash_whole_disk(self, tool: Path, target_dir: Path,
                          config: "FlashConfig") -> bool:
-        """UFS（di 路径）：`di -p parameter.txt` 建 GPT + `di -<abbr> img`
-        逐分区，由 loader 按 4K 落盘。返回 True 跳过基类的逐分区 WL。
+        """参数化 Rockchip 路径：`DI -p parameter.txt` + 具名 DI。
 
-        非 UFS 板（config.storage 为空）返回 False，走传统 WL 逐分区。"""
-        if not config.storage:
+        UFS/SATA 由显式 storage selector 进入；SPI NAND 由 storage_type 进入，
+        可不支持 SSD 并保持 loader 当前介质。传统 eMMC/SD 板返回 False，
+        继续 WL offset 路径。"""
+        if not config.storage and config.storage_type != "spinand":
             return False
-        param = target_dir / "parameter.txt"
+        param = target_dir / (config.parameter or "parameter.txt")
         if not param.exists():
             raise FlashError(
-                f"未找到 parameter.txt: {param}（UFS 刷写需要它，请重新 build）")
-        _info("写分区表（di -p parameter.txt）...")
+                f"未找到 parameter.txt: {param}（请重新 build）")
+        _info("写 parameter 分区布局（DI -p）...")
         subprocess.run([str(tool), "DI", "-p", str(param)], check=True)
         _ok("parameter/GPT")
         for part in config.partitions:
@@ -526,10 +827,7 @@ class RockchipFlashStrategy(FlashStrategy):
             if not image.exists():
                 _info(f"跳过 {part.name}: {image} 不存在")
                 continue
-            flag = self.DI_FLAGS.get(part.name, f"-{part.name}")
-            _info(f"写 {part.name}（di {flag}）...")
-            subprocess.run([str(tool), "DI", flag, str(image)], check=True)
-            _ok(part.name)
+            self.write_named_partition(tool, part, image, config)
         return True
 
     def flash_spi_firmware(self, tool: Path, target_dir: Path,
@@ -561,7 +859,11 @@ class RockchipFlashStrategy(FlashStrategy):
             "idbloader": "bootloader/idbloader.img",
             "uboot": "bootloader/u-boot.itb",
             "boot": "boot/boot.img",
-            "rootfs": "rootfs/rootfs.img",
+            "rootfs": (
+                "rootfs/rootfs.ubi"
+                if (config.get("rootfs") or {}).get("image_format") == "ubi"
+                else "rootfs/rootfs.img"
+            ),
         }
         if (config.get("recovery") or {}).get("enabled", False):
             m["recovery"] = "recovery/recovery.img"
@@ -1101,21 +1403,105 @@ class FlashConfigGenerator:
         if recovery_cfg.get("enabled", False):
             protected_set.add("recovery")
 
-        partitions = []
-        for entry in config.get("partitions", {}).get("entries", []):
-            name = entry["name"]
-            image = image_map.get(name, "")
-            if not image:
-                continue  # 跳过无镜像映射的分区（如 userdata）
-            ptype = entry.get("type", "raw")
-            protected = bool(ptype == "raw" or name in protected_set)
-            partitions.append(FlashPartition(
-                name=name,
-                offset=entry.get("offset", "0x0"),
-                type=ptype,
-                image=image,
-                protected=protected,
-            ))
+        partition_cfg = config.get("partitions", {}) or {}
+        partition_format = partition_cfg.get("format", "gpt")
+        partitions: list[FlashPartition] = []
+        parameter_relative = ""
+        parameter_text = ""
+        parameter_entries = []
+        parameter_sha256 = ""
+        rootfs_mtd_index = None
+        storage_cfg = config.get("storage") or {}
+        storage_size = storage_cfg.get("size", "")
+        storage_type = storage_cfg.get("type", "")
+        needs_parameter = (
+            platform == "rockchip"
+            and (
+                partition_format == "mtd"
+                or bool(config.get("flash_storage"))
+                or storage_type == "spinand"
+            )
+        )
+
+        if needs_parameter:
+            try:
+                if partition_format == "mtd":
+                    parameter_source = Path(
+                        partition_cfg.get("parameter", ""))
+                    if not parameter_source.is_absolute():
+                        parameter_source = PROJECT_ROOT / parameter_source
+                    parameter_text = parameter_source.read_text(
+                        encoding="utf-8")
+                else:
+                    machine = (config.get("rkbin") or {}).get(
+                        "mkimage_chip", "RK3576").upper()
+                    parameter_text = generate_parameter_txt(
+                        partition_cfg.get("entries") or [],
+                        machine=machine,
+                    )
+                parameter_entries = parse_parameter_text(parameter_text)
+                total_bytes = parse_size(storage_size).bytes
+                validate_parameter_capacity(parameter_entries, total_bytes)
+            except (OSError, TypeError, ValueError) as exc:
+                raise FlashError(
+                    f"无法生成 Rockchip parameter/flash-config: {exc}") from exc
+            parameter_relative = "parameter.txt"
+            parameter_sha256 = hashlib.sha256(
+                parameter_text.encode("utf-8")).hexdigest()
+            rootfs_mtd_index = next(
+                (index for index, entry in enumerate(parameter_entries)
+                 if entry.name == "rootfs"),
+                None,
+            )
+
+        configured_types = {
+            entry.get("name"): entry.get("type", "raw")
+            for entry in partition_cfg.get("entries") or []
+        }
+        if parameter_entries:
+            # parameter 是实际由 upgrade_tool 消费的布局事实源；flash config
+            # 必须从同一解析结果派生，避免单位或 size 表达方式漂移。
+            for entry in parameter_entries:
+                if storage_type == "spinand" and entry.name == "idbloader":
+                    continue
+                image = image_map.get(entry.name, "")
+                if not image:
+                    continue
+                ptype = configured_types.get(entry.name, "raw")
+                if (entry.name == "rootfs"
+                        and (config.get("rootfs") or {}).get(
+                            "image_format") == "ubi"):
+                    ptype = "ubi"
+                partitions.append(FlashPartition(
+                    name=entry.name,
+                    offset=f"0x{entry.offset:x}",
+                    type=ptype,
+                    image=image,
+                    protected=bool(
+                        ptype == "raw" or entry.name in protected_set),
+                    size="remaining" if entry.size is None
+                    else f"0x{entry.size:x}",
+                ))
+        else:
+            for entry in partition_cfg.get("entries") or []:
+                name = entry["name"]
+                image = image_map.get(name, "")
+                if not image:
+                    continue
+                ptype = entry.get("type", "raw")
+                if (name == "rootfs"
+                        and (config.get("rootfs") or {}).get(
+                            "image_format") == "ubi"):
+                    ptype = "ubi"
+                partitions.append(FlashPartition(
+                    name=name,
+                    offset=entry.get("offset", "0x0"),
+                    type=ptype,
+                    image=image,
+                    protected=bool(
+                        ptype == "raw" or name in protected_set),
+                    size=entry.get("size", ""),
+                ))
 
         # 构造 pre_flash（由平台策略声明）
         pre_flash = strategy.generate_pre_flash_config(config)
@@ -1126,23 +1512,29 @@ class FlashConfigGenerator:
             board=config["board"],
             product=config.get("product", "default"),
             variant=config.get("variant", "release"),
+            soc=config.get("soc", ""),
             sector_size=int(config.get("partitions", {}).get("sector_size", 512)),
             storage=config.get("flash_storage", ""),
+            storage_type=storage_type,
+            partition_format=partition_format,
+            parameter=parameter_relative,
+            storage_size=storage_size,
+            rootfs_mtd_index=rootfs_mtd_index,
+            parameter_sha256=parameter_sha256,
             partitions=partitions,
             pre_flash=pre_flash,
+            identity=FlashIdentityConfig(
+                chip_patterns=list(
+                    (config.get("flash_identity") or {}).get(
+                        "chip_patterns") or []),
+                storage_patterns=list(
+                    (config.get("flash_identity") or {}).get(
+                        "storage_patterns") or []),
+                require_rid=bool(
+                    (config.get("flash_identity") or {}).get(
+                        "require_rid", False)),
+            ),
         )
-
-        output = target_dir / "flash-config.json"
-        flash_config.to_json(output)
-
-        # 为带 flash_storage（UFS）的 rockchip 板生成 parameter.txt，供刷写时
-        # `upgrade_tool di -p` 在目标存储上按 4K 建 GPT。eMMC/SD 板不生成，
-        # 沿用逐分区 WL + write_gpt 路径。
-        if config.get("flash_storage") and config.get("platform") == "rockchip":
-            entries = config.get("partitions", {}).get("entries", [])
-            machine = config.get("rkbin", {}).get("mkimage_chip", "RK3576").upper()
-            (target_dir / "parameter.txt").write_text(
-                generate_parameter_txt(entries, machine=machine))
 
         # SPI 启动固件 spi.img → `flange flash --spi-firmware` 写入 SPI NOR。两条路:
         #  (a) prebuilt_spi_image：直接用 radxa bsp 预编的整体 spi.img（RK3576 ROCK
@@ -1172,6 +1564,12 @@ class FlashConfigGenerator:
         elif config.get("flash_spi_loader") and config.get("platform") == "rockchip":
             build_spi_image(target_dir / "bootloader", spi_out)
 
+        # 发布顺序刻意为 parameter → flash config。中断发生在两者之间时，旧清单
+        # 的摘要会与新 parameter 不符，preflight 必然失败；反向顺序会放行旧布局。
+        if needs_parameter:
+            _atomic_write_text(target_dir / "parameter.txt", parameter_text)
+        output = target_dir / "flash-config.json"
+        flash_config.to_json(output)
         return output
 
 
@@ -1195,11 +1593,14 @@ class FlashExecutor:
         """全量刷写所有分区。"""
         cfg = self.config
         _header(f"flange flash · {cfg.board} · {cfg.product}-{cfg.variant}")
+        # 先做所有本地、非破坏性校验；镜像/parameter 不一致时不等待设备，
+        # 更不会上传 loader 或写入任何分区。
+        self.strategy.preflight(self.target_dir, cfg, cfg.partitions)
         tool = self.strategy.find_tool(self.project_dir)
         device = None
         if not no_wait:
             device = self.strategy.wait_for_device(tool)
-        self.strategy.pre_flash(tool, self.target_dir, cfg, device)
+        self.strategy.pre_flash_all(tool, self.target_dir, cfg, device)
 
         _step("刷写分区")
         start = time.time()
@@ -1208,14 +1609,20 @@ class FlashExecutor:
         self.strategy.write_gpt(tool, self.target_dir, cfg)
         # 整盘刷写钩子（如 Qualcomm edl-ng write-sector raw.img）：返回 True
         # 表示已处理，跳过 per-partition 循环；默认 False，走逐分区流程。
-        if not self.strategy.flash_whole_disk(tool, self.target_dir, cfg):
+        whole_disk_handled = self.strategy.flash_whole_disk(
+            tool, self.target_dir, cfg)
+        if whole_disk_handled is not True:
             for part in cfg.partitions:
                 image = self.target_dir / part.image
                 if not image.exists():
                     _warn(f"跳过 {part.name}: 镜像不存在")
                     continue
-                offset = int(part.offset, 0)
-                self.strategy.write_partition(tool, offset, image)
+                if (cfg.partition_format == "mtd"
+                        or cfg.storage_type == "spinand"):
+                    self.strategy.write_named_partition(tool, part, image, cfg)
+                else:
+                    self.strategy.write_partition(
+                        tool, int(part.offset, 0), image)
         if no_reboot:
             _info("跳过重启（--no-reboot）")
         else:
@@ -1231,6 +1638,13 @@ class FlashExecutor:
 
     def flash_partition(self, name: str, no_wait: bool = False, no_reboot: bool = False):
         """刷写指定分区。"""
+        requested_name = name
+        if (self.config.partition_format == "mtd"
+                or self.config.storage_type == "spinand"):
+            name = {
+                "bootloader": "uboot",
+                "kernel": "boot",
+            }.get(name, name)
         part = None
         for p in self.config.partitions:
             if p.name == name:
@@ -1239,24 +1653,39 @@ class FlashExecutor:
         if not part:
             available = [p.name for p in self.config.partitions]
             raise FlashError(
-                f"未知分区: {name}\n可用分区: {', '.join(available)}"
+                f"未知分区: {requested_name}\n可用分区: {', '.join(available)}"
             )
         image = self.target_dir / part.image
         if not image.exists():
             raise FlashError(f"镜像不存在: {image}")
 
+        self.strategy.preflight(self.target_dir, self.config, [part])
         tool = self.strategy.find_tool(self.project_dir)
+        device = None
         if not no_wait:
-            self.strategy.wait_for_device(tool)
-        self.strategy.pre_flash(tool, self.target_dir, self.config)
-        offset = int(part.offset, 0)
-        self.strategy.write_partition(tool, offset, image)
+            device = self.strategy.wait_for_device(tool)
+        # SPI NAND 的 bootloader 由 loader(SPL) + uboot(proper) 两部分组成。
+        # 原厂单刷路径也先 UL MiniLoaderAll，再 DI -uboot；若这里只做 DB/DI，
+        # 会继续从 NAND 启动旧 SPL，形成“旧 SPL + 新 proper”的混合链路。
+        if (name == "uboot"
+                and self.config.storage_type == "spinand"):
+            self.strategy.pre_flash_all(
+                tool, self.target_dir, self.config, device)
+        else:
+            self.strategy.pre_flash(
+                tool, self.target_dir, self.config, device)
+        if (self.config.partition_format == "mtd"
+                or self.config.storage_type == "spinand"):
+            self.strategy.write_named_partition(
+                tool, part, image, self.config)
+        else:
+            self.strategy.write_partition(tool, int(part.offset, 0), image)
         if no_reboot:
             _info("跳过重启（--no-reboot）")
         else:
             self.strategy.reboot(tool)
         print()
-        print(_c(_GREEN, f" ✓ 分区 {name} 刷写完成"))
+        print(_c(_GREEN, f" ✓ 分区 {requested_name} 刷写完成"))
 
     def flash_raw(self, device: str):
         """dd 整盘刷写。"""

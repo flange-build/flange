@@ -26,7 +26,10 @@ Recovery 子配置 schema（顶层 ``config["recovery"]``，全部可选；缺�
 
 from __future__ import annotations
 
+import importlib
+
 from builder.partition.size import parse_size
+from builder.patches import normalize_excluded_patches
 
 
 class ConfigError(ValueError):
@@ -46,6 +49,174 @@ def _find_partition(config: dict, name: str) -> dict | None:
         if entry.get("name") == name:
             return entry
     return None
+
+
+def _positive_int(value, field: str, *, allow_zero: bool = False) -> int:
+    """解析配置中的十进制/十六进制整数并校验正值。"""
+    try:
+        result = int(value, 0) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{field} 必须是整数，当前: {value!r}") from exc
+    minimum = 0 if allow_zero else 1
+    if result < minimum:
+        qualifier = "非负" if allow_zero else "大于 0"
+        raise ConfigError(f"{field} 必须{qualifier}，当前: {result}")
+    return result
+
+
+def _byte_size(value, field: str) -> int:
+    """解析带 B/M/G 后缀的字节容量，拒绝含糊的裸 sector 数。"""
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{field} 必须使用带 B/M/G 后缀的容量字符串")
+    if not value.strip()[-1].isalpha():
+        raise ConfigError(f"{field} 必须使用带 B/M/G 后缀的容量字符串")
+    try:
+        return parse_size(value).bytes
+    except ValueError as exc:
+        raise ConfigError(f"{field} 非法: {exc}") from exc
+
+
+def validate_build_routes(config: dict) -> None:
+    """校验架构、boot/rootfs/partition 构建路由的枚举契约。"""
+    kernel = config.get("kernel") or {}
+    kernel_arch = kernel.get("arch", "arm64")
+    if kernel_arch not in ("arm", "arm64"):
+        raise ConfigError(
+            f"kernel.arch 非法: {kernel_arch!r}（须为 'arm' 或 'arm64'）")
+    for field in ("cross_compile", "image"):
+        value = kernel.get(field)
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ConfigError(f"kernel.{field} 必须是非空字符串")
+    dts_dir = kernel.get("dts_dir", "rockchip")
+    if not isinstance(dts_dir, str):
+        raise ConfigError("kernel.dts_dir 必须是字符串（根目录使用空字符串）")
+    boot_format = kernel.get("boot_format", "extlinux")
+    if boot_format not in ("extlinux", "fit"):
+        raise ConfigError(
+            f"kernel.boot_format 非法: {boot_format!r}（须为 extlinux 或 fit）")
+    if boot_format == "fit" and not kernel.get("boot_its"):
+        raise ConfigError(
+            "kernel.boot_format=fit 时必须声明 kernel.boot_its")
+
+    bootloader = config.get("bootloader") or {}
+    cross_compile = bootloader.get("cross_compile")
+    if cross_compile is not None and (
+        not isinstance(cross_compile, str) or not cross_compile
+    ):
+        raise ConfigError("bootloader.cross_compile 必须是非空字符串")
+
+    rootfs_format = (config.get("rootfs") or {}).get(
+        "image_format", "ext4")
+    if rootfs_format not in ("ext4", "ubi"):
+        raise ConfigError(
+            f"rootfs.image_format 非法: {rootfs_format!r}（须为 ext4 或 ubi）")
+    partition_format = (config.get("partitions") or {}).get("format", "gpt")
+    if partition_format not in ("gpt", "mtd"):
+        raise ConfigError(
+            f"partitions.format 非法: {partition_format!r}（须为 gpt 或 mtd）")
+    # parameter、存储介质与 mtd index 属于平台语义，由平台扩展校验。
+    for component, component_config in config.items():
+        if not isinstance(component_config, dict):
+            continue
+        if "exclude_patches" not in component_config:
+            continue
+        try:
+            normalize_excluded_patches(
+                component_config["exclude_patches"],
+                f"{component}.exclude_patches",
+            )
+        except TypeError as exc:
+            raise ConfigError(str(exc)) from exc
+
+
+def validate_flash_identity(config: dict) -> None:
+    """校验刷写身份匹配规则，避免字符串被误拆成逐字符正则。"""
+    identity = config.get("flash_identity") or {}
+    if not isinstance(identity, dict):
+        raise ConfigError("flash_identity 必须是字典")
+    for field in ("chip_patterns", "storage_patterns"):
+        value = identity.get(field, [])
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item for item in value
+        ):
+            raise ConfigError(f"flash_identity.{field} 必须是非空字符串列表")
+    require_rid = identity.get("require_rid", False)
+    if not isinstance(require_rid, bool):
+        raise ConfigError("flash_identity.require_rid 必须是 bool")
+
+
+def validate_ubi_geometry(config: dict) -> None:
+    """校验平台无关的 UBI/UBIFS 几何，不推断介质或分区模型。"""
+    rootfs = config.get("rootfs") or {}
+    if rootfs.get("image_format", "ext4") != "ubi":
+        return
+    ubi = rootfs.get("ubi") or {}
+    required = (
+        "min_io_size",
+        "peb_size",
+        "subpage_size",
+        "vid_hdr_offset",
+        "leb_size",
+        "max_leb_count",
+        "volume_size",
+        "reserved_pebs",
+    )
+    missing = [field for field in required if ubi.get(field) is None]
+    if missing:
+        raise ConfigError(
+            "rootfs.ubi 缺少 NAND/UBI 几何字段: " + ", ".join(missing))
+    if "space_fixup" in ubi and not isinstance(ubi["space_fixup"], bool):
+        raise ConfigError("rootfs.ubi.space_fixup 必须是 bool")
+
+    min_io = _positive_int(ubi["min_io_size"], "rootfs.ubi.min_io_size")
+    peb = _positive_int(ubi["peb_size"], "rootfs.ubi.peb_size")
+    subpage = _positive_int(ubi["subpage_size"], "rootfs.ubi.subpage_size")
+    vid = _positive_int(ubi["vid_hdr_offset"], "rootfs.ubi.vid_hdr_offset")
+    leb = _positive_int(ubi["leb_size"], "rootfs.ubi.leb_size")
+    max_leb = _positive_int(ubi["max_leb_count"], "rootfs.ubi.max_leb_count")
+    reserved = _positive_int(
+        ubi["reserved_pebs"], "rootfs.ubi.reserved_pebs", allow_zero=True)
+    volume_size = _byte_size(ubi["volume_size"], "rootfs.ubi.volume_size")
+
+    if peb % min_io:
+        raise ConfigError("rootfs.ubi.peb_size 必须是 min_io_size 的整数倍")
+    if min_io % subpage:
+        raise ConfigError("rootfs.ubi.min_io_size 必须是 subpage_size 的整数倍")
+    if vid % subpage or vid >= peb:
+        raise ConfigError(
+            "rootfs.ubi.vid_hdr_offset 必须按 subpage_size 对齐且小于 peb_size")
+    data_offset = ((vid + 64 + min_io - 1) // min_io) * min_io
+    expected_leb = peb - data_offset
+    if leb != expected_leb:
+        raise ConfigError(
+            f"rootfs.ubi.leb_size={leb} 与几何推导值 {expected_leb} 不一致")
+    if volume_size > max_leb * leb:
+        raise ConfigError(
+            "rootfs.ubi.volume_size 超过 max_leb_count × leb_size")
+    _ = (reserved, peb)
+
+
+def _run_platform_validation(config: dict, function: str) -> None:
+    """动态调用平台扩展校验；没有 validation 模块的平台直接跳过。"""
+    platform = config.get("platform")
+    if not platform:
+        return
+    module_name = f"builder.platforms.{platform}.validation"
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name:
+            return
+        raise
+    validator = getattr(module, function, None)
+    if validator:
+        validator(config)
+
+
+def validate_mtd_ubi(config: dict) -> None:
+    """兼容入口：校验通用 UBI 几何，再分派平台存储规则。"""
+    validate_ubi_geometry(config)
+    _run_platform_validation(config, "validate_storage")
 
 
 def validate_recovery_partition(config: dict) -> None:
@@ -121,14 +292,8 @@ def _is_amp_enabled(config: dict) -> bool:
     return bool((config.get("amp") or {}).get("enabled", False))
 
 
-def validate_amp(config: dict) -> None:
-    """amp 启用时，强制配置自洽：mode 合法、soc_project 存在、partitions.entries
-    含非 raw 的 amp 分区，且 amp 分区排在 remaining rootfs 之前。
-
-    amp 分区必须非 raw：U-Boot 的 AMP loader 按 GPT 分区名 part_get_info_by_name
-    ("amp") 定位 FIT，而 raw 分区不进 GPT（image.py 跳过）→ 声明 raw 会让 U-Boot
-    永远 -ENODEV、从核不被拉起。
-    """
+def validate_amp_common(config: dict) -> None:
+    """校验平台无关的 AMP mode、SoC project 与内存 schema。"""
     if not _is_amp_enabled(config):
         return
 
@@ -143,38 +308,39 @@ def validate_amp(config: dict) -> None:
             "amp.enabled=True 但缺少 amp.soc_project（如 rk3566 应设为 'rk3568'）。"
         )
 
-    entry = _find_partition(config, "amp")
-    if entry is None:
+    memory = amp.get("memory") or {}
+    memory_fields = (
+        "cpu",
+        "cpu_base",
+        "dram_size",
+        "sram_base",
+        "sram_size",
+        "shmem_base",
+        "shmem_size",
+        "rpmsg_base",
+        "rpmsg_size",
+    )
+    missing_memory = [field for field in memory_fields
+                      if memory.get(field) is None]
+    if missing_memory:
         raise ConfigError(
-            "amp.enabled=True 但 partitions.entries 中缺少 amp 分区；请加入 "
-            "{name: 'amp', type: 'ext4', offset, size}（须排在 remaining rootfs 之前）。"
-        )
-    if entry.get("type") == "raw":
-        raise ConfigError(
-            "amp 分区 type 不得为 raw（U-Boot 按 GPT 分区名定位 FIT，raw 不进 GPT）；"
-            "请用 ext4 占位（image 不会格式化它，dd 进的裸 FIT 块原样保留）。"
-        )
-    for field in ("offset", "size"):
-        if not entry.get(field):
-            raise ConfigError(f"amp 分区缺少 {field}；offset 与 size 都必须显式声明。")
+            "amp.enabled=True 但 amp.memory 缺少字段: "
+            + ", ".join(missing_memory))
 
-    # amp 分区必须排在 remaining rootfs 之前（grow rootfs 之后不可有非 raw 分区，
-    # 否则连 validate_rootfs_auto_grow 也会拒绝）。
-    entries = (config.get("partitions") or {}).get("entries") or []
-    amp_idx = next((i for i, e in enumerate(entries)
-                    if e.get("name") == "amp"), None)
-    rootfs_idx = next((i for i, e in enumerate(entries)
-                       if e.get("name") == "rootfs"), None)
-    if (amp_idx is not None and rootfs_idx is not None
-            and amp_idx > rootfs_idx
-            and entries[rootfs_idx].get("size") == "remaining"):
-        raise ConfigError(
-            "amp 分区必须排在 remaining rootfs 之前（grow rootfs 之后不可有非 raw 分区）。"
-        )
+
+
+def validate_amp(config: dict) -> None:
+    """兼容入口：校验通用 AMP schema，再分派平台分区规则。"""
+    validate_amp_common(config)
+    _run_platform_validation(config, "validate_amp")
 
 
 def validate_config(config: dict) -> None:
     """对 FINAL_CONFIG 执行全部已知校验，第一项失败即抛 ConfigError。"""
+    validate_build_routes(config)
+    validate_flash_identity(config)
     validate_recovery_partition(config)
     validate_rootfs_auto_grow(config)
-    validate_amp(config)
+    validate_ubi_geometry(config)
+    validate_amp_common(config)
+    _run_platform_validation(config, "validate_config")

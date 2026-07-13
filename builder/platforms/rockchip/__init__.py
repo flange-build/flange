@@ -5,6 +5,7 @@ from builder.source import SourceManager
 
 # 产物名映射：(组件, collect key) → target 目录下的文件名/目录名
 ARTIFACT_NAMES = {
+    ("kernel",     "fit_boot"):   "boot.img",
     ("kernel",     "dtbos"):      "overlay",
     ("kernel",     "modules"):    "modules",
     ("bootloader", "bootloader"): "u-boot.itb",
@@ -12,9 +13,11 @@ ARTIFACT_NAMES = {
     ("bootloader", "miniloader"): "miniloader.bin",
     ("boot",       "boot"):       "boot.img",
     ("rootfs",     "rootfs"):     "rootfs.img",
+    ("rootfs",     "ubi"):        "rootfs.ubi",
     ("recovery",   "recovery"):   "recovery.img",
     ("amp",        "amp"):        "amp.img",
     ("image",      "image"):      "raw.img",
+    ("image",      "bundle"):     "mtd-bundle.json",
 }
 
 

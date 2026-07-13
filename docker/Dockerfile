@@ -58,6 +58,8 @@ RUN dpkg --add-architecture arm64 \
         lz4 \
         zstd \
         e2fsprogs \
+        mtd-utils \
+        u-boot-tools \
         dosfstools \
         parted \
         fdisk \
@@ -79,6 +81,13 @@ RUN dpkg --add-architecture arm64 \
         gdb-multiarch \
         libc6-dev:arm64 \
         libc6-dev:armhf \
+    && command -v mkfs.ubifs \
+    && command -v ubinize \
+    && command -v mkimage \
+    && command -v qemu-arm-static \
+    && command -v qemu-aarch64-static \
+    && command -v arm-linux-gnueabihf-gcc \
+    && command -v arm-linux-gnueabi-gcc \
     && mkdir -p /etc/meson \
     && rm -rf /var/lib/apt/lists/*
 
@@ -114,6 +123,32 @@ RUN curl -fsSL "https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x8
         | tar -xJ -C /opt \
     && ln -sfn /opt/gcc-10.5.0-nolibc/aarch64-linux /opt/aarch64-gcc10 \
     && /opt/aarch64-gcc10/bin/aarch64-linux-gcc --version | head -1
+
+# RK3506B 的 ATK SDK 对 ARM32 U-Boot 与 kernel 均使用 Arm GNU Toolchain
+# 10.3-2021.07（arm-none-linux-gnueabihf）。Ubuntu 24.04 的系统 ARM32
+# 工具链是 gcc-13；实机构建的 U-Boot proper 在 OP-TEE 跳转后无输出。固定 SDK
+# 同款 gcc-10.3.1，并校验归档 SHA256，避免镜像更新后静默换回系统编译器。
+ARG ARM_LINUX_GCC_RELEASE=10.3-2021.07
+ARG ARM_LINUX_GCC_TARBALL=gcc-arm-${ARM_LINUX_GCC_RELEASE}-x86_64-arm-none-linux-gnueabihf.tar.xz
+ARG ARM_LINUX_GCC_URL=https://developer.arm.com/-/media/Files/downloads/gnu-a/${ARM_LINUX_GCC_RELEASE}/binrel/${ARM_LINUX_GCC_TARBALL}
+ARG ARM_LINUX_GCC_SHA256=aa074fa8371a4f73fecbd16bd62c8b1945f23289e26414794f130d6ccdf8e39c
+RUN curl -fsSL "${ARM_LINUX_GCC_URL}" -o "/tmp/${ARM_LINUX_GCC_TARBALL}" \
+    && echo "${ARM_LINUX_GCC_SHA256}  /tmp/${ARM_LINUX_GCC_TARBALL}" \
+        | sha256sum -c - \
+    && tar -xJf "/tmp/${ARM_LINUX_GCC_TARBALL}" -C /opt \
+    && ln -sfn \
+        "/opt/gcc-arm-${ARM_LINUX_GCC_RELEASE}-x86_64-arm-none-linux-gnueabihf" \
+        /opt/arm-linux-gcc10 \
+    && rm -f "/tmp/${ARM_LINUX_GCC_TARBALL}" \
+    && /opt/arm-linux-gcc10/bin/arm-none-linux-gnueabihf-gcc --version \
+        | head -1
+
+# RK3506 vendor kernel 启用 scripts/gcc-plugins；Arm 工具链随附的 plugin
+# headers 会引用宿主侧 mpc.h/mpfr.h，须提供对应开发头文件。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libmpc-dev \
+        libmpfr-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # AMP 协处理器裸机固件（Cortex-A55 AArch32 HAL / RT-Thread）须用 newlib 版
 # arm-none-eabi 工具链（提供 --specs=nosys.specs；glibc 向的 arm-linux-gnueabihf
