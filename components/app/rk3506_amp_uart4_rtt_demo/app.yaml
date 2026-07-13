@@ -1,0 +1,16 @@
+app:
+  name: rk3506_amp_uart4_rtt_demo
+  version: 0.1.0
+  description: RK3506 CPU2 RT-Thread UART4 与 Linux RPMsg 阻塞 echo 示例
+  type: amp
+  arch:
+    - armhf
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: scons
+  options:
+    bsp: rk3506-32

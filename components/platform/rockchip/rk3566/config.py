@@ -148,6 +148,23 @@ SOC = {
     # 避免改动 default product 的分区布局。
     "amp": {
         "soc_project": "rk3568",
+        # RPMsg/GIC runtime profile：DTS、RT-Thread app 与 FIT 静态校验共用。
+        # RK3568 的 INTID 222 增量白名单 workaround 只属于此 profile，
+        # RK3506 等 SoC 不得继承。
+        "runtime": {
+            "amp_mpidr": 0x300,
+            "linux_mpidr": 0x000,
+            "linux_arch": "arm64",
+            "cpu_delete": "&cpu3",
+            "link_id": 0x10,
+            "mailboxes": ["mailbox", "mailbox"],
+            "mailbox_irq": 222,
+            "endpoint_address": 0x3003,
+            "endpoint_name": "rpmsg-ap3-ch0",
+            "gic_profile": "rk3568-incremental-intid222",
+            "firmware_reserved_in_dts": True,
+            "fit_requires_sram": False,
+        },
         "memory": {
             "cpu": 3,
             # 从核固件 link/load 地址。不能用 SDK 默认 0x02800000——flange 的

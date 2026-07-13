@@ -91,6 +91,27 @@ class RockchipAmpBuilder(ComponentBuilder):
         mem.update(self._amp_cfg(config).get("memory") or {})
         return mem
 
+    def _runtime(self, config: dict) -> dict:
+        """读取 SoC AMP runtime profile，不在 builder 内按板名/SoC 猜值。"""
+        runtime = self._amp_cfg(config).get("runtime") or {}
+        required = (
+            "amp_mpidr",
+            "linux_mpidr",
+            "linux_arch",
+            "cpu_delete",
+            "link_id",
+            "mailboxes",
+            "mailbox_irq",
+            "endpoint_address",
+            "endpoint_name",
+            "gic_profile",
+        )
+        missing = [field for field in required if runtime.get(field) is None]
+        if missing:
+            raise ValueError(
+                "amp.runtime 缺少 SoC 通信字段: " + ", ".join(missing))
+        return runtime
+
     def _jobs(self) -> int:
         return max((os.cpu_count() or 1) - 6, 1)
 
@@ -107,37 +128,134 @@ class RockchipAmpBuilder(ComponentBuilder):
             self._amp_img = self._compile_rtthread(config)
 
     def _assert_dts_consistency(self, config: dict):
-        """交叉比对 kernel 的 rk3568-amp.dtsi 的 SHMEM/RPMSG 地址与 config.amp.memory。
-
-        rk3568-amp.dtsi 提供的 amp-shmem / rpmsg 段地址必须与 config 的
-        shmem_base / rpmsg_base 一致（DTS 第三腿一致性兜底）。从核固件地址
-        （cpu_base）不在此校验：它由 amp.py 同时驱动 make 的 FIRMWARE_CPU_BASE
-        与 amp_linux.its 的 load（单一事实源、无漂移空间），且在 board 的 amp dts
-        里覆盖 amp-cpu3 entry + 固件保留区——rk3568-amp.dtsi 自带的 entry 已被
-        覆盖，不再代表真实值，故不读它。kernel 源未就绪时跳过（best-effort）。
-        """
+        """按 kernel arch/DTS include closure 校验 AMP 内存与 runtime profile。"""
         mem = self._memory(config)
+        runtime = self._runtime(config)
         board = config.get("board", "")
-        dtsi = Path(
-            f".build/sources/kernel/{board}"
-            "/arch/arm64/boot/dts/rockchip/rk3568-amp.dtsi")
-        if not dtsi.is_file():
-            self._status("跳过 dts 交叉校验：rk3568-amp.dtsi 未就绪（kernel 源未拉取）")
+        kernel = config.get("kernel") or {}
+        kernel_root = Path(
+            kernel.get("local_path") or f".build/sources/kernel/{board}")
+        arch = kernel.get("arch", "arm64")
+        dts_root = kernel_root / "arch" / arch / "boot" / "dts"
+        dts_dir = kernel.get("dts_dir", "rockchip")
+        target = dts_root / dts_dir / f"{kernel.get('dts', '')}.dts"
+        if not target.is_file():
+            self._status(
+                f"跳过 dts 交叉校验：目标 DTS 未就绪（{target}）")
             return
-        text = dtsi.read_text()
-        checks = []
-        m = re.search(r"amp-shmem@([0-9a-fA-F]+)", text)
-        if m:
-            checks.append(("amp_shmem", int(m.group(1), 16), mem["shmem_base"]))
-        m = re.search(r"\brpmsg@([0-9a-fA-F]+)", text)
-        if m:
-            checks.append(("rpmsg", int(m.group(1), 16), mem["rpmsg_base"]))
-        for name, dts_val, cfg_val in checks:
-            if dts_val != cfg_val:
+        text = self._read_dts_closure(target, dts_root)
+        regions = self._dts_regions(text)
+        self._require_region(
+            regions, "shmem", mem["shmem_base"], mem["shmem_size"])
+        self._require_contiguous_region(
+            regions, "rpmsg", mem["rpmsg_base"], mem["rpmsg_size"])
+        self._require_region(
+            regions, "sram", mem["sram_base"], mem["sram_size"])
+        if runtime.get("firmware_reserved_in_dts", True):
+            self._require_region(
+                regions, "firmware", mem["cpu_base"], mem["dram_size"])
+
+        cpu_delete = runtime["cpu_delete"]
+        if not re.search(rf"/delete-node/\s+{re.escape(cpu_delete)}\s*;", text):
+            raise ValueError(
+                f"dts 交叉校验失败：未从 Linux 删除 {cpu_delete}")
+        links = re.findall(
+            r"rockchip,link-id\s*=\s*<\s*(0x[0-9a-fA-F]+|\d+)", text)
+        actual = int(links[-1], 0) if links else None
+        if actual != runtime["link_id"]:
+            raise ValueError(
+                f"dts 交叉校验失败：link-id={actual!r} != "
+                f"amp.runtime.link_id={runtime['link_id']:#x}")
+        mailbox_matches = re.findall(r"mboxes\s*=\s*<([^>]+)>", text, re.S)
+        mailboxes = re.findall(r"&([A-Za-z0-9_]+)",
+                               mailbox_matches[-1] if mailbox_matches else "")
+        if mailboxes != list(runtime["mailboxes"]):
+            raise ValueError(
+                f"dts 交叉校验失败：mailboxes={mailboxes} != "
+                f"amp.runtime.mailboxes={runtime['mailboxes']}")
+        if not re.search(rf"\b{runtime['mailbox_irq']}\b", text):
+            raise ValueError(
+                f"dts 交叉校验失败：缺 mailbox IRQ {runtime['mailbox_irq']}")
+        self._status("dts 交叉校验通过（内存/CPU/link-id/mailbox 一致）")
+
+    @classmethod
+    def _read_dts_closure(cls, target: Path, dts_root: Path) -> str:
+        """递归读取 quoted DTS include；dt-bindings angle include 不参与。"""
+        seen: set[Path] = set()
+
+        def visit(path: Path) -> str:
+            path = path.resolve()
+            if path in seen:
+                return ""
+            if not path.is_file():
+                raise FileNotFoundError(f"DTS include 不存在: {path}")
+            seen.add(path)
+            content = path.read_text()
+            pattern = re.compile(r'#include\s+"([^"]+)"')
+
+            def expand(match: re.Match) -> str:
+                include = match.group(1)
+                candidate = path.parent / include
+                if not candidate.is_file():
+                    candidate = dts_root / include
+                return visit(candidate)
+
+            expanded = pattern.sub(expand, content)
+            return f"\n/* flange-source: {path.name} */\n{expanded}"
+
+        return visit(target)
+
+    @staticmethod
+    def _dts_regions(text: str) -> dict[int, int]:
+        """收集 2-cell/4-cell address-size reg，按 base 保留最大 region。"""
+        regions: dict[int, int] = {}
+        for match in re.finditer(r"\breg\s*=\s*<([^>]+)>", text, re.S):
+            values = [
+                int(token, 0)
+                for token in re.findall(r"0x[0-9a-fA-F]+|\b\d+\b",
+                                        match.group(1))
+            ]
+            if len(values) == 2:
+                base, size = values
+            elif len(values) == 4:
+                base = (values[0] << 32) | values[1]
+                size = (values[2] << 32) | values[3]
+            else:
+                continue
+            regions[base] = max(regions.get(base, 0), size)
+        return regions
+
+    @staticmethod
+    def _require_region(
+        regions: dict[int, int],
+        name: str,
+        base: int,
+        size: int,
+    ) -> None:
+        actual = regions.get(base)
+        if actual != size:
+            raise ValueError(
+                f"dts 交叉校验失败：{name} {base:#x}/{actual!r} != "
+                f"config {base:#x}/{size:#x}")
+
+    @staticmethod
+    def _require_contiguous_region(
+        regions: dict[int, int],
+        name: str,
+        base: int,
+        size: int,
+    ) -> None:
+        cursor = base
+        end = base + size
+        while cursor < end:
+            region_size = regions.get(cursor)
+            if not region_size:
                 raise ValueError(
-                    f"dts 交叉校验失败：{name} dts={hex(dts_val)} != "
-                    f"config.amp.memory={hex(cfg_val)}；请对齐内存布局单一事实源")
-        self._status(f"dts 交叉校验通过（{len(checks)} 项 SHMEM/RPMSG 地址一致）")
+                    f"dts 交叉校验失败：{name} 在 {cursor:#x} 存在空洞")
+            cursor += region_size
+        if cursor != end:
+            raise ValueError(
+                f"dts 交叉校验失败：{name} 末端 {cursor:#x} != {end:#x}")
 
     def _amp_app_dir(self, config: dict) -> Path:
         """解析 config.amp.app → amp app 工程目录（components/app/<name>）。
@@ -207,10 +325,12 @@ class RockchipAmpBuilder(ComponentBuilder):
             raise FileNotFoundError(
                 f"amp app 未产出 firmware.bin（{firmware_bin}）；确认 CMakeLists "
                 "的 executable target 名为 'firmware'（见 rockchip-hal.cmake 用法）。")
-        return self._mkimage_fit(soc, firmware_bin, cpu, mem)
+        return self._mkimage_fit(
+            soc, firmware_bin, cpu, mem, runtime=self._runtime(config))
 
     def _mkimage_fit(self, soc: str, firmware_bin: Path, cpu: int,
-                     mem: dict, its_path=None, incbin_name=None) -> Path:
+                     mem: dict, its_path=None, incbin_name=None,
+                     runtime=None) -> Path:
         """用 SDK 自带 mkimage 把从核固件 .bin 打成 FIT amp.img。
 
         amp_linux.its 的 load 改成 config.cpu_base（单一事实源），与固件链接地址
@@ -227,11 +347,16 @@ class RockchipAmpBuilder(ComponentBuilder):
                         / "Image" / "amp_linux.its")
         if incbin_name is None:
             incbin_name = f"hal{cpu}.bin"
+        if runtime is None:
+            raise ValueError("AMP FIT 打包缺少 runtime profile")
+        firmware_size = firmware_bin.stat().st_size
+        if firmware_size > mem["dram_size"]:
+            raise BuildError(
+                f"AMP firmware {firmware_size} bytes 超过 dram_size "
+                f"{mem['dram_size']} bytes")
         its_txt = Path(its_path).read_text()
-        its_txt = re.sub(
-            r"(\bload\s*=\s*<\s*)0x[0-9a-fA-F]+(\s*>)",
-            lambda m: m.group(1) + hex(mem["cpu_base"]) + m.group(2),
-            its_txt)
+        its_txt = self._render_fit_its(
+            its_txt, cpu, mem, runtime, incbin_name)
         work = Path(tempfile.mkdtemp(prefix="flange-amp-"))
         (work / "amp_linux.its").write_text(its_txt)
         shutil.copy2(firmware_bin, work / incbin_name)
@@ -241,6 +366,152 @@ class RockchipAmpBuilder(ComponentBuilder):
             [mkimage, "-f", "amp_linux.its", "-E", "-p", "0xe00", "amp.img"],
             cwd=str(work), extra_mounts=[work], label="amp:mkimage")
         return work / "amp.img"
+
+    @staticmethod
+    def _fit_node_span(text: str, name: str) -> tuple[int, int]:
+        """返回 ITS 中唯一具名 node 的 [start,end)；用 brace matching 定界。"""
+        matches = list(re.finditer(
+            rf"(?m)^\s*{re.escape(name)}\s*\{{", text))
+        if len(matches) != 1:
+            raise ValueError(
+                f"AMP ITS 期望唯一节点 {name!r}，实际 {len(matches)} 个")
+        start = matches[0].start()
+        brace = text.find("{", matches[0].start(), matches[0].end())
+        depth = 0
+        for index in range(brace, len(text)):
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    semicolon = text.find(";", index)
+                    if semicolon < 0:
+                        raise ValueError(f"AMP ITS 节点 {name!r} 缺结束分号")
+                    return start, semicolon + 1
+        raise ValueError(f"AMP ITS 节点 {name!r} 大括号未闭合")
+
+    @staticmethod
+    def _replace_fit_property(
+        node: str,
+        prop: str,
+        value: str,
+        *,
+        insert_after: str | None = None,
+    ) -> str:
+        """只在给定 node 文本内替换属性；可在缺失时按锚点插入。"""
+        pattern = re.compile(
+            rf"(?m)^(?P<indent>\s*){re.escape(prop)}\s*=\s*[^;]+;")
+        match = pattern.search(node)
+        if match:
+            return pattern.sub(
+                lambda found: f"{found.group('indent')}{prop} = {value};",
+                node,
+                count=1,
+            )
+        if not insert_after:
+            raise ValueError(f"AMP ITS 目标节点缺少属性 {prop}")
+        anchor = re.compile(
+            rf"(?m)^(?P<indent>\s*){re.escape(insert_after)}\s*=\s*[^;]+;")
+        anchor_match = anchor.search(node)
+        if not anchor_match:
+            raise ValueError(
+                f"AMP ITS 无法插入 {prop}：缺少锚点 {insert_after}")
+        insertion = (
+            anchor_match.group(0)
+            + f"\n{anchor_match.group('indent')}{prop} = {value};")
+        return node[:anchor_match.start()] + insertion + node[anchor_match.end():]
+
+    @classmethod
+    def _render_fit_its(
+        cls,
+        text: str,
+        cpu: int,
+        mem: dict,
+        runtime: dict,
+        incbin_name: str,
+    ) -> str:
+        """只渲染 ``images/amp<cpu>``，保留 Linux configuration 属性。"""
+        node_name = f"amp{cpu}"
+        start, end = cls._fit_node_span(text, node_name)
+        node = text[start:end]
+        node = cls._replace_fit_property(
+            node, "data", f'/incbin/("{incbin_name}")')
+        node = cls._replace_fit_property(
+            node, "load", f"<{mem['cpu_base']:#x}>")
+        node = cls._replace_fit_property(
+            node, "size", f"<{mem['dram_size']:#x}>", insert_after="load")
+        if "srambase" in node or runtime.get("fit_requires_sram"):
+            node = cls._replace_fit_property(
+                node, "srambase", f"<{mem['sram_base']:#x}>",
+                insert_after="size")
+            node = cls._replace_fit_property(
+                node, "sramsize", f"<{mem['sram_size']:#x}>",
+                insert_after="srambase")
+        rendered = text[:start] + node + text[end:]
+        cls._assert_fit_its(rendered, node_name, mem, runtime, incbin_name)
+        return rendered
+
+    @classmethod
+    def _assert_fit_its(
+        cls,
+        text: str,
+        node_name: str,
+        mem: dict,
+        runtime: dict,
+        incbin_name: str,
+    ) -> None:
+        """校验 AMP/Linux FIT 节点、MPIDR、SRAM 与 loadables。"""
+        start, end = cls._fit_node_span(text, node_name)
+        amp_node = text[start:end]
+
+        def int_property(node: str, prop: str) -> int | None:
+            match = re.search(
+                rf"\b{re.escape(prop)}\s*=\s*<\s*"
+                rf"(0x[0-9a-fA-F]+|\d+)\s*>", node)
+            return int(match.group(1), 0) if match else None
+
+        checks = {
+            "cpu": (int_property(amp_node, "cpu"), runtime["amp_mpidr"]),
+            "load": (int_property(amp_node, "load"), mem["cpu_base"]),
+            "size": (int_property(amp_node, "size"), mem["dram_size"]),
+        }
+        if runtime.get("fit_requires_sram"):
+            checks["srambase"] = (
+                int_property(amp_node, "srambase"), mem["sram_base"])
+            checks["sramsize"] = (
+                int_property(amp_node, "sramsize"), mem["sram_size"])
+        for field, (actual, expected) in checks.items():
+            if actual != expected:
+                raise ValueError(
+                    f"AMP ITS {node_name}.{field}={actual!r} != {expected:#x}")
+        arch = re.search(r'\barch\s*=\s*"([^"]+)"', amp_node)
+        if not arch or arch.group(1) != "arm":
+            raise ValueError(f"AMP ITS {node_name}.arch 必须为 arm")
+        if f'/incbin/("{incbin_name}")' not in amp_node:
+            raise ValueError(f"AMP ITS {node_name} incbin 未指向 {incbin_name}")
+
+        linux_start, linux_end = cls._fit_node_span(text, "linux")
+        linux = text[linux_start:linux_end]
+        linux_arch = re.search(r'\barch\s*=\s*"([^"]+)"', linux)
+        if (not linux_arch
+                or linux_arch.group(1) != runtime["linux_arch"]):
+            raise ValueError(
+                f"AMP ITS linux.arch 与 runtime {runtime['linux_arch']} 不一致")
+        linux_cpu = int_property(linux, "cpu")
+        if linux_cpu != runtime["linux_mpidr"]:
+            raise ValueError(
+                f"AMP ITS linux.cpu={linux_cpu!r} != "
+                f"{runtime['linux_mpidr']:#x}")
+        if runtime.get("linux_load") is not None:
+            linux_load = int_property(linux, "load")
+            if linux_load != runtime["linux_load"]:
+                raise ValueError(
+                    f"AMP ITS linux.load={linux_load!r} != "
+                    f"{runtime['linux_load']:#x}")
+        loadables = re.search(r'\bloadables\s*=\s*"([^"]+)"', text)
+        if not loadables or loadables.group(1) != node_name:
+            raise ValueError(
+                f"AMP ITS loadables 必须仅引用 {node_name}")
 
     def _rtt_bsp_dir(self, soc: str) -> Path:
         """定位 RT-Thread BSP 模板目录：<soc>-32（-32 = Cortex-A55 AArch32）。"""
@@ -450,6 +721,20 @@ Return('group')
         self._write_swift_sconscript(applications_dir, swift_cfg, include_dirs)
         return archive
 
+    @staticmethod
+    def _write_runtime_header(applications_dir: Path, runtime: dict) -> Path:
+        """把 SoC runtime profile 渲染为 app 可消费的只读 C header。"""
+        applications_dir.mkdir(parents=True, exist_ok=True)
+        header = applications_dir / "flange_amp_runtime.h"
+        header.write_text(
+            "/* 由 flange AMP builder 从 FINAL_CONFIG 生成，请勿手改。 */\n"
+            "#pragma once\n"
+            f"#define FLANGE_AMP_LINK_ID {runtime['link_id']:#x}U\n"
+            f"#define FLANGE_AMP_EPT_ADDR {runtime['endpoint_address']:#x}U\n"
+            f"#define FLANGE_AMP_EPT_NAME \"{runtime['endpoint_name']}\"\n"
+        )
+        return header
+
     def _compile_rtthread(self, config: dict) -> Path:
         """mode=rt-thread：把 RT-Thread BSP 模板 stage 到 tmpdir、叠加 amp app
         overlay、由 config.amp.memory 注入 scons 环境变量后 scons 构建产出
@@ -529,6 +814,8 @@ Return('group')
         if app_apps.is_dir():
             shutil.copytree(app_apps, bsp_tmp / "applications",
                             dirs_exist_ok=True)
+        runtime = self._runtime(config)
+        self._write_runtime_header(bsp_tmp / "applications", runtime)
         app_config = app_dir / ".config"
         if app_config.is_file():
             self._merge_kconfig_fragment(bsp_tmp / ".config",
@@ -570,9 +857,15 @@ Return('group')
             raise FileNotFoundError(
                 f"RT-Thread 未产出 rtthread.bin（{rtt_bin}）；检查 scons 日志。")
         its_path = bsp_tmp / "Image" / "amp_linux.its"
-        return self._mkimage_fit(soc, rtt_bin, cpu, mem,
-                                 its_path=its_path,
-                                 incbin_name=f"rtt{cpu}.bin")
+        return self._mkimage_fit(
+            soc,
+            rtt_bin,
+            cpu,
+            mem,
+            its_path=its_path,
+            incbin_name=f"rtt{cpu}.bin",
+            runtime=self._runtime(config),
+        )
 
     # --- collect ---
 
