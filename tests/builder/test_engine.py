@@ -311,6 +311,7 @@ class TestBuildCacheApp:
         product = config.get("product", "default")
         variant = config.get("variant", "release")
         cache.target_dir = Path(tmpdir) / board / product / variant
+        cache.project_root = Path(tmpdir)
         return cache
 
     def test_app哈希可重复计算(self):
@@ -345,16 +346,14 @@ class TestBuildCacheApp:
 
     def test_app_yaml内容变化导致哈希改变(self, tmp_path):
         """app.yaml 文件内容改变时，app 哈希应发生变化。"""
-        import os
-
         config = {
             "board": "test", "product": "default", "variant": "release",
             "platform": "rockchip", "soc": "rk3566",
             "rootfs": {"custom_packages": ["mypkg"]},
         }
 
-        # 在 tmp_path 下创建 app/mypkg/app.yaml，并在计算哈希时切换工作目录
-        app_dir = tmp_path / "app" / "mypkg"
+        # App 源路径始终相对显式 project_root，不依赖调用方当前工作目录。
+        app_dir = tmp_path / "components" / "app" / "mypkg"
         app_dir.mkdir(parents=True)
         app_yaml = app_dir / "app.yaml"
 
@@ -362,17 +361,13 @@ class TestBuildCacheApp:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             cache = self._make_cache(config, tmpdir)
+            cache.project_root = tmp_path
 
-            # 第一次：version 1.0.0
-            orig_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                h1 = cache.compute_hash("app")
-                # 修改 app.yaml（版本变更）
-                app_yaml.write_text("app:\n  name: mypkg\n  version: 2.0.0\n")
-                h2 = cache.compute_hash("app")
-            finally:
-                os.chdir(orig_cwd)
+            h1 = cache.compute_hash("app")
+            app_yaml.write_text("app:\n  name: mypkg\n  version: 2.0.0\n")
+            second = self._make_cache(config, tmpdir)
+            second.project_root = tmp_path
+            h2 = second.compute_hash("app")
 
         assert h1 != h2, "app.yaml 内容变更后哈希应改变"
 

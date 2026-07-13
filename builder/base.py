@@ -4,6 +4,8 @@ import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from builder.docker import DockerRunner
+from builder.patches import normalize_excluded_patches
+from builder.paths import COMPONENTS_ROOT
 from builder.source import SourceManager
 
 
@@ -39,6 +41,7 @@ class ComponentBuilder(ABC):
         self._status("源码就绪")
         if not config.get("_local_mode", {}).get(self.component):
             self.reset_source(src_dir)
+            self._remove_patch_created_files(src_dir, config)
             patches = self._count_patches(config)
             self.apply_patches(src_dir, config)
             if patches > 0:
@@ -51,16 +54,44 @@ class ComponentBuilder(ABC):
 
     def _count_patches(self, config: dict) -> int:
         """统计补丁数量。"""
+        return len(self._patch_paths(config))
+
+    def _patch_paths(self, config: dict) -> list[Path]:
+        """返回当前组件实际适用的平台与板级补丁。
+
+        ``<component>.exclude_patches`` 可按文件名或仓库相对路径排除不适用于
+        当前构建路由的补丁。例如 vendor FIT（扁平设备树镜像）启动必须保留
+        DTS bootargs，因此可排除仅为 extlinux 准备的 U-Boot 补丁。
+
+        默认不排除任何补丁，既有 target 行为保持不变。
+        """
         platform = config["platform"]
         board = config["board"]
-        count = 0
-        for patch_dir in [
-            Path(f"components/platform/{platform}/patches/{self.component}"),
-            Path(f"components/board/{board}/patches/{self.component}"),
-        ]:
-            if patch_dir.exists():
-                count += len(list(patch_dir.glob("*.patch")))
-        return count
+        component_config = config.get(self.component, {}) or {}
+        excluded_names = set(normalize_excluded_patches(
+            component_config.get("exclude_patches"),
+            f"{self.component}.exclude_patches",
+        ))
+        applicable: list[Path] = []
+        for patch in self._all_patch_paths(config):
+            relative = patch.relative_to(COMPONENTS_ROOT.parent).as_posix()
+            if patch.name in excluded_names or relative in excluded_names:
+                continue
+            applicable.append(patch)
+        return applicable
+
+    def _all_patch_paths(self, config: dict) -> list[Path]:
+        """返回当前平台/board 为组件声明的全部 patch，包括被路由排除者。"""
+        platform = config["platform"]
+        board = config["board"]
+        patches: list[Path] = []
+        for patch_dir in (
+            COMPONENTS_ROOT / "platform" / platform / "patches" / self.component,
+            COMPONENTS_ROOT / "board" / board / "patches" / self.component,
+        ):
+            if patch_dir.is_dir():
+                patches.extend(sorted(patch_dir.glob("*.patch")))
+        return patches
 
     def reset_source(self, src_dir: Path):
         """重置源码树，保留 .o 等编译产物（增量编译）。
@@ -72,18 +103,40 @@ class ComponentBuilder(ABC):
         self.docker.run(["git", "checkout", "-f", "."], cwd=str(src_dir),
                         check=False)
 
+    def _remove_patch_created_files(self, src_dir: Path, config: dict) -> None:
+        """删除上次 patch 明确新增的文件，使增量源码树可重复打补丁。
+
+        ``git checkout -f .`` 只还原 tracked 文件；patch 中从 ``/dev/null``
+        新增的 DTS/defconfig 会作为 untracked 文件残留，下一次 ``git apply``
+        因目标已存在而失败。这里仅解析当前适用 patch 的 ``--- /dev/null`` /
+        ``+++ b/<path>`` 对并删除对应文件，不执行 ``git clean``，因此保留 .o、
+        下载物及其他增量缓存。本地源码模式本来就跳过 reset/patch，不受影响。
+        """
+        root = src_dir.resolve()
+        # 扫描全部声明 patch，而不是只看当前适用集合。这样从 product A
+        # 切到排除某 patch 的 product B 时，也能删除 A 留下的 untracked 文件。
+        for patch in self._all_patch_paths(config):
+            lines = patch.read_text().splitlines()
+            for index, line in enumerate(lines[:-1]):
+                if line != "--- /dev/null":
+                    continue
+                target_line = lines[index + 1]
+                if not target_line.startswith("+++ b/"):
+                    continue
+                relative = target_line[len("+++ b/"):]
+                target = (src_dir / relative).resolve()
+                if not target.is_relative_to(root):
+                    raise ValueError(
+                        f"补丁新增文件路径越出源码树: {patch}: {relative}")
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                elif target.exists():
+                    raise IsADirectoryError(
+                        f"补丁声明新增文件但目标是目录: {target}")
+
     def apply_patches(self, src_dir: Path, config: dict):
         """按序应用平台补丁 + 板级补丁"""
-        platform = config["platform"]
-        board = config["board"]
-        all_patches = []
-        for patch_dir in [
-            Path(f"components/platform/{platform}/patches/{self.component}"),
-            Path(f"components/board/{board}/patches/{self.component}"),
-        ]:
-            if patch_dir.exists():
-                all_patches.extend(sorted(patch_dir.glob("*.patch")))
-        for patch in all_patches:
+        for patch in self._patch_paths(config):
             abs_patch = str(patch.resolve())
             try:
                 self.docker.run(["git", "apply", abs_patch], cwd=str(src_dir))

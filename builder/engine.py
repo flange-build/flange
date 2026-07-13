@@ -41,7 +41,7 @@ class BuildEngine:
     def __init__(self, config: dict, project_dir: Path = None):
         self.config = config
         self.project_dir = project_dir or Path.cwd()
-        self.cache = BuildCache(config)
+        self.cache = BuildCache(config, project_root=self.project_dir)
 
         # 统一输出
         level = _resolve_output_level(config)
@@ -171,7 +171,7 @@ class BuildEngine:
             gen.generate(self.config, target_dir)
             self.output.status("flash-config.json 已生成")
         except Exception as e:
-            self.output.warning(f"flash-config.json 生成失败: {e}")
+            raise BuildError(f"flash-config.json 生成失败: {e}") from e
 
     def _get_builder(self, component: str):
         # device-tree-overlay 组件 vendor 无关，直接路由到统一 builder，

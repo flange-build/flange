@@ -13,6 +13,9 @@ import os
 import subprocess
 from pathlib import Path
 
+from builder.patches import normalize_excluded_patches
+from builder.paths import PROJECT_ROOT
+
 
 # 组件依赖图：键为组件名，值为该组件依赖的上游组件列表。
 # cache 用此图做 Merkle 哈希级联；engine 用此图做拓扑排序。
@@ -44,14 +47,13 @@ DEPENDENCY_GRAPH: dict[str, list[str]] = {
 }
 
 
-# 各组件必须存在的产物（相对 target/<board>/<product>/<variant>/<component>/）。
+# 各组件默认必须存在的产物（相对 target/<board>/<product>/<variant>/<component>/）。
 # 支持字面量文件名和 glob 通配（如 "*.dtb"）。
 # 缓存命中时校验这些文件存在，防止 .build_hash 有效但产物被误删导致下游失败。
 # app 组件不校验：custom_packages 为空时无 deb 输出是合法状态。
 # recovery 组件仅在 enabled 时校验：禁用时无产物是合法状态（运行时短路）。
 # 值可以是通用产物列表，也可以是按 platform 分派的产物列表。
-REQUIRED_ARTIFACTS: dict[str, list[str] | dict[str, list[str]]] = {
-    "kernel":     ["Image", "*.dtb"],
+DEFAULT_REQUIRED_ARTIFACTS: dict[str, list[str] | dict[str, list[str]]] = {
     "bootloader": {
         "rockchip": ["u-boot.itb", "idbloader.img", "miniloader.bin"],
         "allwinnera733": ["boot0_sdcard.bin", "boot0_ufs.bin",
@@ -62,6 +64,13 @@ REQUIRED_ARTIFACTS: dict[str, list[str] | dict[str, list[str]]] = {
     "recovery":   ["recovery.img"],
     "amp":        ["amp.img"],
     "image":      ["raw.img"],
+}
+
+# 向后兼容仍按旧常量读取 kernel 默认产物的外部代码；动态路由由
+# ``BuildCache._required_artifacts`` 统一解析，不修改该兼容字典。
+REQUIRED_ARTIFACTS = {
+    **DEFAULT_REQUIRED_ARTIFACTS,
+    "kernel": ["Image", "*.dtb"],
 }
 
 
@@ -80,14 +89,25 @@ class BuildCache:
         disable_root_login / users / default_user / groups）等（rootfs）
     """
 
-    def __init__(self, config: dict, target_base: Path = None):
+    def __init__(
+        self,
+        config: dict,
+        target_base: Path = None,
+        project_root: Path = None,
+    ):
         self.config = config
+        self.project_root = Path(project_root or PROJECT_ROOT).resolve()
         board = config["board"]
         product = config.get("product", "default")
         variant = config.get("variant", "release")
-        self.target_dir = (target_base or Path(".build/target")) / board / product / variant
+        default_target = self.project_root / ".build" / "target"
+        self.target_dir = (target_base or default_target) / board / product / variant
         # 记忆化：避免 image→boot→kernel 等路径上重复计算
         self._hash_cache: dict[str, str] = {}
+
+    def _project_path(self, *parts: str) -> Path:
+        """按注入的项目根解析路径，兼容少量 ``__new__`` 测试调用方。"""
+        return Path(getattr(self, "project_root", PROJECT_ROOT), *parts)
 
     # --- 主入口：组件级哈希查询 ---
 
@@ -130,17 +150,14 @@ class BuildCache:
         return False
 
     def _required_artifacts_present(self, component: str) -> bool:
-        """校验 REQUIRED_ARTIFACTS 中声明的产物是否都存在。
+        """按 FINAL_CONFIG 路由校验组件必需产物是否都存在。
 
-        未在 REQUIRED_ARTIFACTS 中声明的组件（如 app）直接返回 True。
+        未声明的组件（如 app）直接返回 True。kernel image、rootfs 格式与
+        image GPT/MTD 输出均按当前 target 动态解析。
         """
-        required = REQUIRED_ARTIFACTS.get(component)
+        required = self._required_artifacts(component)
         if not required:
             return True
-        if isinstance(required, dict):
-            required = required.get(self.config.get("platform", ""), [])
-            if not required:
-                return True
         component_dir = self.target_dir / component
         if not component_dir.is_dir():
             return False
@@ -155,6 +172,34 @@ class BuildCache:
                     return False
         return True
 
+    def _required_artifacts(self, component: str) -> list[str]:
+        """返回当前配置下组件的必需产物列表。"""
+        if component == "kernel":
+            kernel = self.config.get("kernel") or {}
+            image = kernel.get("image", "Image")
+            dts = kernel.get("dts")
+            required = [image, f"{dts}.dtb" if dts else "*.dtb"]
+            if kernel.get("boot_format", "extlinux") == "fit":
+                required.append("boot.img")
+            return required
+        if component == "rootfs":
+            image_format = (self.config.get("rootfs") or {}).get(
+                "image_format", "ext4")
+            return ["rootfs.ubi" if image_format == "ubi" else "rootfs.img"]
+        if component == "image":
+            partition_format = (self.config.get("partitions") or {}).get(
+                "format", "gpt")
+            if (self.config.get("storage") or {}).get("type") == "spinand":
+                return ["mtd-bundle.json", "parameter.txt"]
+            return [
+                "mtd-bundle.json" if partition_format == "mtd" else "raw.img"
+            ]
+
+        required = DEFAULT_REQUIRED_ARTIFACTS.get(component)
+        if isinstance(required, dict):
+            return list(required.get(self.config.get("platform", ""), []))
+        return list(required or [])
+
     def store(self, component: str):
         hash_file = self.target_dir / component / ".build_hash"
         hash_file.parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +207,9 @@ class BuildCache:
 
     def compute_hash(self, component: str) -> str:
         """计算组件的完整哈希（含依赖链级联）。"""
+        if not hasattr(self, "_hash_cache"):
+            # 兼容少量通过 ``__new__`` 构造的测试/调用方。
+            self._hash_cache = {}
         if component in self._hash_cache:
             return self._hash_cache[component]
 
@@ -216,7 +264,8 @@ class BuildCache:
                 h.update(json.dumps(blist).encode())
                 # 板私有 dtso 源目录内容（如有）：dtso 改动须触发重 build
                 board = self.config.get("board", "")
-                board_dts_dir = Path(f"components/board/{board}/dtso")
+                board_dts_dir = self._project_path(
+                    "components", "board", board, "dtso")
                 if board_dts_dir.exists():
                     h.update(b"board_overlays_src:")
                     self._hash_directory(h, board_dts_dir)
@@ -302,6 +351,7 @@ class BuildCache:
         packages = sorted(rootfs_cfg.get("packages", []))
         h.update(json.dumps(packages).encode())
         h.update(self.config.get("arch", "").encode())
+        h.update(rootfs_cfg.get("emulator", "").encode())
         return h.hexdigest()[:16]
 
     def _compute_recovery_base_hash(self) -> str:
@@ -331,14 +381,26 @@ class BuildCache:
 
         # overlay 目录递归哈希（rootfs → platform → board）
         for overlay_dir in [
-            Path("components/rootfs/overlay"),
-            Path(f"components/platform/{self.config.get('platform', '')}/overlay"),
-            Path(f"components/board/{self.config['board']}/overlay"),
+            self._project_path("components", "rootfs", "overlay"),
+            self._project_path(
+                "components", "platform",
+                self.config.get("platform", ""), "overlay"),
+            self._project_path(
+                "components", "board", self.config["board"], "overlay"),
         ]:
             if overlay_dir.exists():
                 self._hash_directory(h, overlay_dir)
 
         rootfs_cfg = self.config.get("rootfs", {})
+        # 输出路由与 UBI 几何直接决定最终 rootfs 产物；不影响 Phase 1 base
+        # 内容，故只进入 customize hash。
+        rootfs_route = {
+            "image_format": rootfs_cfg.get("image_format", "ext4"),
+            "ubi": rootfs_cfg.get("ubi") or {},
+        }
+        h.update(b"rootfs_route:")
+        h.update(json.dumps(
+            rootfs_route, sort_keys=True, default=str).encode())
         # custom_packages 列表（排序后 JSON）
         custom_packages = sorted(rootfs_cfg.get("custom_packages", []))
         h.update(json.dumps(custom_packages).encode())
@@ -369,7 +431,8 @@ class BuildCache:
             src_dir = fw.get("src_dir", "")
             if not src_dir or not board:
                 continue
-            fw_base = Path(f"components/board/{board}/{src_dir}")
+            fw_base = self._project_path(
+                "components", "board", board, src_dir)
             if not fw_base.is_dir():
                 continue
             self._hash_directory(h, fw_base)
@@ -404,9 +467,11 @@ class BuildCache:
         platform = self.config.get("platform", "")
         board = self.config.get("board", "")
         for overlay_dir in [
-            Path("components/recovery/overlay"),
-            Path(f"components/platform/{platform}/recovery-overlay"),
-            Path(f"components/board/{board}/recovery-overlay"),
+            self._project_path("components", "recovery", "overlay"),
+            self._project_path(
+                "components", "platform", platform, "recovery-overlay"),
+            self._project_path(
+                "components", "board", board, "recovery-overlay"),
         ]:
             if overlay_dir.exists():
                 self._hash_directory(h, overlay_dir)
@@ -426,7 +491,7 @@ class BuildCache:
         custom_packages = gather_custom_packages(self.config)
         h.update(json.dumps(custom_packages).encode())
         for pkg in custom_packages:
-            app_dir = Path("components/app") / pkg
+            app_dir = self._project_path("components", "app", pkg)
             if app_dir.exists():
                 self._hash_directory(h, app_dir)
             else:
@@ -462,7 +527,7 @@ class BuildCache:
         # amp.app 用户工程源（平台无关，复用 app 体系的 components/app/<name>）
         app_name = amp_cfg.get("app")
         if app_name:
-            app_dir = Path("components/app") / app_name
+            app_dir = self._project_path("components", "app", app_name)
             if app_dir.is_dir():
                 h.update(b"amp_app:")
                 self._hash_directory(h, app_dir)
@@ -485,7 +550,13 @@ class BuildCache:
         if fn is None:
             return []
         try:
-            return [Path(p) for p in fn(self.config)]
+            paths = []
+            for value in fn(self.config):
+                path = Path(value)
+                paths.append(
+                    path if path.is_absolute() else self._project_path(value)
+                )
+            return paths
         except Exception:
             return []
 
@@ -497,7 +568,9 @@ class BuildCache:
         若源码目录或补丁目录不存在（如 boot/image 没有源码树），安全跳过。
         """
         # 源码 commit
-        src_dir = Path(".build/sources") / component / self.config["board"]
+        project_root = Path(getattr(self, "project_root", PROJECT_ROOT))
+        src_dir = (project_root / ".build" / "sources" / component
+                   / self.config["board"])
         if src_dir.exists():
             h.update(b"src:")
             h.update(self._git_head(src_dir).encode())
@@ -505,12 +578,21 @@ class BuildCache:
         # 补丁
         platform = self.config.get("platform", "")
         board = self.config["board"]
+        excluded = set(normalize_excluded_patches(
+            (self.config.get(component) or {}).get("exclude_patches"),
+            f"{component}.exclude_patches",
+        ))
         for patch_dir in [
-            Path(f"components/platform/{platform}/patches/{component}"),
-            Path(f"components/board/{board}/patches/{component}"),
+            project_root / "components" / "platform" / platform
+            / "patches" / component,
+            project_root / "components" / "board" / board
+            / "patches" / component,
         ]:
             if patch_dir.exists():
                 for p in sorted(patch_dir.glob("*.patch")):
+                    relative = p.relative_to(project_root).as_posix()
+                    if p.name in excluded or relative in excluded:
+                        continue
                     h.update(b"patch:")
                     h.update(p.name.encode())
                     h.update(p.read_bytes())
@@ -518,10 +600,20 @@ class BuildCache:
     # --- 哈希输入混合：partitions 配置 ---
 
     def _mix_partitions(self, h: "hashlib._Hash") -> None:
-        """混入 partitions 配置（entries 的 offset/size/type 全部参与）。"""
+        """混入 partitions 配置与 parameter 文件内容。"""
         partitions = self.config.get("partitions", {})
         h.update(b"partitions:")
         h.update(json.dumps(partitions, sort_keys=True, default=str).encode())
+        parameter = partitions.get("parameter")
+        if parameter:
+            path = Path(parameter)
+            if not path.is_absolute():
+                path = self._project_path(str(path))
+            h.update(b"parameter:")
+            if path.is_file():
+                h.update(path.read_bytes())
+            else:
+                h.update(f"missing:{parameter}".encode())
 
     # --- 哈希输入混合：rkbin firmware ---
 
@@ -531,7 +623,8 @@ class BuildCache:
         bootloader 构建时会从 rkbin 读 BL31/DDR init/SPL 等二进制，
         rkbin 升级会改变这些二进制，必须触发 bootloader 重建。
         """
-        fw_dir = Path(f".build/sources/firmware/{self.config['platform']}")
+        fw_dir = self._project_path(
+            ".build", "sources", "firmware", self.config["platform"])
         if fw_dir.exists():
             h.update(b"rkbin:")
             h.update(self._git_head(fw_dir).encode())
@@ -558,7 +651,8 @@ class BuildCache:
             return
         h.update(b"oot_sources:")
         for name in sorted(oot_sources):
-            repo_dir = Path(f".build/sources/oot-modules/{name}")
+            repo_dir = self._project_path(
+                ".build", "sources", "oot-modules", name)
             if repo_dir.exists():
                 h.update(name.encode())
                 h.update(b"=")

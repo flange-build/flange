@@ -310,6 +310,16 @@ class TestBuildAll:
         result = builder.build_all()
         assert result == {}
 
+    def test_build_all清理上一路由残留deb(self, tmp_path):
+        """ext4→UBI 等路由切换不得把已过滤 App 的旧 deb 留给 rootfs。"""
+        builder = _make_builder(tmp_path)
+        stale = builder._output_dir / "flange-rootfs-grow_1.0_arm64.deb"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"stale")
+
+        assert builder.build_all() == {}
+        assert not stale.exists()
+
     def test_单app批量构建(self, tmp_path):
         """custom_packages 中只有一个 App 时，返回包含该 App 的字典。"""
         from builder.source import SourceManager

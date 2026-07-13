@@ -441,6 +441,11 @@ class AppBuilder:
         """
         from builder.config.apps import gather_custom_packages
         custom_packages: list[str] = gather_custom_packages(self._config)
+        # build_all 表示按 FINAL_CONFIG 对账完整 App 集合。先删除上一路由留下的
+        # deb，避免 ext4→UBI 等 product 切换把已过滤 package 装回 rootfs。
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+        for stale_deb in self._output_dir.glob("*.deb"):
+            stale_deb.unlink()
         if not custom_packages:
             self._status("custom_packages 为空，无需构建 App")
             return {}
