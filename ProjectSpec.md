@@ -190,6 +190,8 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
   - `rootfs.extra_debs`：从 URL 直下不在 Ubuntu 官方源的预编译 deb，必须声明 `sha256` 校验
   - 两者均支持 `+` 追加语义（platform → SoC → board 叠加），缓存哈希纳入配置变更，改动会触发 Phase 2 重建
 - 三层继承：platform → SoC → board，通过 `deep_merge()` 合并
+- SoC 层只声明芯片级事实（架构、工具链、固件协议与硬件能力）；具体显示、存储路由、
+  AMP enable 和 rootfs package policy 属于 board/product，MUST NOT 固化在 SoC 层
 - 条件标记：`+packages:debug`（追加语义）、`packages:smart-display`（条件覆盖）
 - 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`
 - 配置解析：`resolve_config(board, product, variant)` 返回扁平的 FINAL_CONFIG dict
@@ -420,23 +422,26 @@ feat(kernel): 添加内核编译支持
 
 ### 11.2 Docker 构建环境
 - 所有编译构建操作**必须在 Docker 容器内**完成
-- Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖；另装 kernel.org crosstool gcc-10.5 到 `/opt/aarch64-gcc10`，作 u-boot/kernel 默认交叉工具链（见 §11.3）
+- Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖；另装 kernel.org crosstool gcc-10.5 到 `/opt/aarch64-gcc10` 作为 AArch64 u-boot/kernel 默认工具链，并安装 Arm GNU Toolchain 10.3-2021.07 到 `/opt/arm-linux-gcc10` 供 RK3506B ARM32 u-boot/kernel 使用（见 §11.3）
 - 项目根目录通过 volume mount 映射到容器内
 - 源码仓库目录 `.build/sources/` 和 APT 缓存 `.build/cache/apt/` 通过 volume 持久化
 - 宿主机 `~/.ssh` 以只读方式挂载，通过 entrypoint 脚本修正权限
 
 ### 11.3 交叉编译
-- **u-boot / kernel 构建**默认用容器内独立安装的 kernel.org crosstool **gcc-10.5**（前缀 `/opt/aarch64-gcc10/bin/aarch64-linux-`），由基类 `builder/base.py` 的 `ComponentBuilder.CROSS` 全平台统一声明，各平台策略类继承不覆盖（子类如需别的工具链可 override `CROSS` 类属性）。改用 gcc-10 的原因：老 rockchip u-boot 在 Ubuntu 24.04 系统 gcc-13 下整体二进制布局变化，会让 RK3576 UFS DMA 读 buffer 落到坏物理地址而上板崩（详见 openspec `selfbuild-rk3576-spi-image`）
+- **u-boot / kernel 构建**按目标架构使用容器内独立固定的 gcc-10 工具链。AArch64 默认使用 kernel.org crosstool **gcc-10.5**（前缀 `/opt/aarch64-gcc10/bin/aarch64-linux-`），由 `builder/base.py` 的 `ComponentBuilder.CROSS` 声明；RK3506B ARM32 通过 SoC 配置覆盖为 ATK SDK 同款 Arm GNU Toolchain **gcc-10.3.1**（前缀 `/opt/arm-linux-gcc10/bin/arm-none-linux-gnueabihf-`）。不得把 Ubuntu 24.04 的系统 gcc-13 用于这些老 Rockchip 低层产物；RK3576 的实机根因详见 openspec `selfbuild-rk3576-spi-image`，RK3506B 的工具链约束详见 openspec `add-rk3506b-atk-rk3506b`
 - **app / deb 组件构建**（`builder/app.py`）仍用 Docker 系统包交叉编译器（`gcc-aarch64-linux-gnu` / `gcc-arm-linux-gnueabihf`）
 - 平台策略类（builder/platforms/）直接调用交叉编译器，无需额外工具链注册机制
 - 板级配置通过 config.py 中的 dict 声明（platform/SoC/board 三层继承）
 
 ### 11.4 输出管理
 - 构建产物收集到 `.build/target/<board>/<product>/<variant>/`（git ignored，根目录 `target` 软链接直达）
-- 内核产出：Image、DTB、modules（INSTALL_MOD_STRIP=1）
+- 内核产出按 FINAL_CONFIG 路由：ARM64/extlinux 通常为 `Image`、精确目标 DTB、modules；
+  ARM32/vendor FIT 通常为 `zImage`、精确目标 DTB、modules 与 FIT `boot.img`
 - 内核构建支持 out-of-tree 模块：通过 `kernel.oot_modules` 配置声明，在 `make modules` 后独立编译并统一安装到 rootfs；OOT 编译入口若是独立 git 仓库（如 vendor WiFi/BT 包），通过 `kernel.oot_sources` 声明源（每次 ensure 后路径作为 `{<name>_src}` 模板变量注入），仓库 git HEAD 入 kernel hash；安装末尾跑 `depmod -b` 重建 modules.{dep,alias,symbols}+`.bin` 索引，开机 PCI/USB hotplug 才能自动 load
 - flash.sh 由 `builder/flash.py` 自动生成
 - 分区配置由 `builder/partition/` 从 config 自动转换
+- 块设备 GPT image 输出 `raw.img`；SPI NAND MUST 输出 parameter 与具名刷写 manifest，
+  MUST NOT 生成或整片写入无法表达 OOB/ECC/坏块的 `raw.img`
 - 使用 `flange clean` 清理当前配置的构建产物
 
 ---
@@ -453,6 +458,8 @@ feat(kernel): 添加内核编译支持
 - 刷写通过 `flange flash [component]` 执行（如 `flange flash kernel`）
 - 全量刷写：`flange flash`（重写分区表 + 所有分区）
 - flash.sh 由构建引擎自动生成，包含平台特有的刷写命令
+- 任何持久写入前必须完成本地产物 preflight；parameter 与 flash config 应使用摘要及
+  name/offset/size 交叉校验。支持身份读取的平台还必须拒绝多设备，并核对 SoC/存储介质
 
 ### 12.3 平台适配
 - 每块板子的 `config.py` 声明所属平台和刷写工具
