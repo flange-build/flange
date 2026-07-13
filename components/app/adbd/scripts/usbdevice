@@ -117,10 +117,50 @@ usb_wait_files()
 
 usb_release_files()
 {
-	for i in `seq 200`;do
-		fuser -s -k $@ 2>/dev/null || break
+	# 最小 rootfs 可以不安装 psmisc/fuser；卸载路径在这种情况下直接
+	# 交给 umount 返回真实占用错误，不能让缺少调试工具中断 gadget 启动。
+	command -v fuser >/dev/null 2>&1 || return 0
+
+	for i in $(seq 200); do
+		fuser -s -k "$@" 2>/dev/null || break
 		sleep .01
 	done
+}
+
+usb_fuser_users()
+{
+	if ! command -v fuser >/dev/null 2>&1; then
+		echo "unavailable"
+		return 0
+	fi
+
+	fuser -m "$@" 2>&1 || echo "none"
+}
+
+# ConfigFS 挂载成功不代表 USB gadget framework 已注册。内核把
+# USB_CONFIGFS/USB_F_FS 编成模块时，只有加载 usb_f_fs（并由依赖自动加载
+# libcomposite）后才会出现 /sys/kernel/config/usb_gadget。板级
+# modules-load.d 是冷启动主路径，这里保留一次幂等自愈与明确诊断。
+usb_ensure_gadget_framework()
+{
+	if [ ! -d "$CONFIGFS_DIR/usb_gadget" ] && \
+	   command -v modprobe >/dev/null 2>&1; then
+		modprobe usb_f_fs 2>/dev/null || true
+	fi
+
+	if ! mountpoint -q "$CONFIGFS_DIR"; then
+		if ! mount -t configfs none "$CONFIGFS_DIR"; then
+			usb_msg "[ERROR] ConfigFS 挂载失败：$CONFIGFS_DIR"
+			return 1
+		fi
+	fi
+
+	if [ ! -d "$CONFIGFS_DIR/usb_gadget" ]; then
+		usb_msg "[ERROR] USB gadget ConfigFS 未注册；请确认 usb_f_fs/libcomposite 已加载"
+		return 1
+	fi
+
+	return 0
 }
 
 # 等待 UDC controller 注册到 /sys/class/udc/。
@@ -276,7 +316,7 @@ adb_prepare()
 {
 	usb_mount adb /dev/usb-ffs/adb -o uid=2000,gid=2000,no_disconnect=1 -t functionfs
 	ADBD_PID="$(pidof adbd 2>/dev/null || echo '')"
-	usb_msg "[DEBUG adb_prepare] adbd pid=$ADBD_PID ffs_users=$(fuser -m /dev/usb-ffs/adb 2>&1 || echo 'none')"
+	usb_msg "[DEBUG adb_prepare] adbd pid=$ADBD_PID ffs_users=$(usb_fuser_users /dev/usb-ffs/adb)"
 	usb_start_daemon /usr/bin/adbd
 	usb_wait_files -m /dev/usb-ffs/adb
 	ADBD_PID_AFTER="$(pidof adbd 2>/dev/null || echo '')"
@@ -572,13 +612,11 @@ usb_prepare()
 	# Orders required by kernel
 	USB_FUNCS="$(usb_funcs_sort rndis uac uvc adb ntb ums mtp acm)"
 	USB_CONFIG="$(echo "$USB_FUNCS" | tr ' ' '_')"
+	usb_ensure_gadget_framework || exit 1
 
-	if [ ! -d $USB_GADGET_DIR ]; then
-		mountpoint -q $CONFIGFS_DIR || \
-			mount -t configfs none $CONFIGFS_DIR
-
-		mkdir -p $USB_GADGET_DIR
-		cd $USB_GADGET_DIR
+	if [ ! -d "$USB_GADGET_DIR" ]; then
+		mkdir -p "$USB_GADGET_DIR"
+		cd "$USB_GADGET_DIR"
 
 		# Global initialize
 		usb_run_stage usb init
@@ -675,18 +713,13 @@ usb_start()
 	usb_msg "[DEBUG start] Writing UDC=$USB_UDC"
 	usb_write $USB_GADGET_DIR/UDC $USB_UDC
 
-	# Verify UDC bind 真的成功。背景：写 sysfs UDC attr 时 echo 的退出码
-	# 不一定反映 kernel 端写失败（stdio 缓冲 + sh builtin echo 差异）；
-	# 当底层 dwc3 controller 还没 ready（典型场景：Rockchip RK3588 上
-	# fusb302 USB-C PD 协商未完成），kernel 端 `udc_bind_to_driver` 返回
-	# -ENODEV，echo 可能仍报 0。读回 sysfs 文件即可断言——成功 bind 时
-	# 文件内容等于 $USB_UDC，失败时保持空。失败时 exit 1 让 systemd
-	# Restart=on-failure 自动重试（service unit 已配，2 秒后 cold restart，
-	# 那时 fusb302 通常已完成协商）；继续走 stale state 反而导致脏 daemon
-	# 残留 + udev event 再触发 stop+start 循环，更糟。
+	# Verify UDC bind 真的成功。写 sysfs UDC attr 时 echo 的退出码
+	# 不一定反映 kernel 端写失败；读回文件可同时适用于
+	# DWC2/DWC3 等 controller。失败时交给 systemd 有界重试，
+	# 避免继续使用 stale daemon/FunctionFS 状态。
 	ACTUAL_UDC="$(cat $USB_GADGET_DIR/UDC 2>/dev/null || true)"
 	if [ "$ACTUAL_UDC" != "$USB_UDC" ]; then
-		usb_msg "[ERROR] UDC bind 失败：expected=$USB_UDC actual='$ACTUAL_UDC' —— 底层 controller 未 ready（dwc3/fusb302 PD 协商未完成？）。退出 1 触发 systemd Restart=on-failure。"
+		usb_msg "[ERROR] UDC bind 失败：expected=$USB_UDC actual='$ACTUAL_UDC' —— 请检查 controller role/dr_mode、VBUS/ID 状态与 dmesg。退出 1 触发 systemd Restart=on-failure。"
 		exit 1
 	fi
 
