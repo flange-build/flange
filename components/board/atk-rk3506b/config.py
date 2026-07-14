@@ -98,6 +98,9 @@ BOARD = {
             "rk3506-display.config",
             "rockchip_amp.config",
             "case_insensitive_fix.config",
+            # 复用其中的 cfg80211、Bluetooth、crypto 与 rfkill core；
+            # fragment 附带的 Rockchip SDIO/GPIO glue 在下方明确关闭。
+            "rk3506-wifibt.config",
             "CONFIG_MTD=y",
             "CONFIG_MTD_CMDLINE_PARTS=y",
             "CONFIG_MTD_SPI_NAND=y",
@@ -107,6 +110,86 @@ BOARD = {
             "CONFIG_CGROUPS=y",
             "CONFIG_RPMSG_CHAR=y",
             "CONFIG_RPMSG_CTRL=y",
+            # RTL8733BUUA 的 WiFi/BT 都走 USB。关闭错误的 SDIO Broadcom
+            # 与 UART HCI 路径；in-tree btusb 也关闭，避免和 OOT
+            # rtk_btusb 竞争同一 e0/01/01 interface。
+            "# CONFIG_BCMDHD is not set",
+            "# CONFIG_AP6XXX is not set",
+            "# CONFIG_WL_ROCKCHIP is not set",
+            "# CONFIG_RFKILL_RK is not set",
+            "# CONFIG_BT_HCIUART is not set",
+            "# CONFIG_BT_HCIBTUSB is not set",
+        ],
+        # linux-6.1-stan-rkr5.1 不含 RTL8733BU WiFi source，旧版
+        # rtk_btusb 也不认识 0bda:b733。使用固定 commit 的 OOT source，
+        # 由 content hash、modules staging 与 depmod 统一管理。
+        "oot_sources": {
+            "rtl8733bu_wifi": {
+                "repo": "https://github.com/wirenboard/rtl8733bu.git",
+                "branch": "v5.13.0.1-112",
+                "commit": (
+                    "2d9048be60759206b8db5e2370420333ef0b8478"
+                ),
+            },
+            "rtl8733bu_bt": {
+                "repo": (
+                    "https://gitee.com/fengyuzhong/rtl8733bu-bt.git"
+                ),
+                "branch": "master",
+                "commit": (
+                    "dc7b30b4b9d2c5437a80bfaff6c8a77c97642778"
+                ),
+            },
+        },
+        "+oot_modules": [
+            {
+                "dir": "{rtl8733bu_wifi_src}",
+                "label": "RTL8733BU USB WiFi",
+                "pre_build": [
+                    # 每次先还原固定 commit，再应用与官方 SDK 一致的
+                    # Linux 6.1 regulatory API 最小兼容补丁。
+                    "git -C {rtl8733bu_wifi_src} checkout -- .",
+                    (
+                        "git -C {rtl8733bu_wifi_src} apply "
+                        "/workspace/components/board/atk-rk3506b/patches/"
+                        "rtl8733bu/"
+                        "0001-disable-removed-regulatory-flag.patch"
+                    ),
+                ],
+                "make_args": [
+                    "ARCH={arch}",
+                    "CROSS_COMPILE={cross_compile}",
+                    "KSRC={kernel_src}",
+                    "M={rtl8733bu_wifi_src}",
+                    "CONFIG_RTW_DEBUG=n",
+                    "CONFIG_PROC_DEBUG=n",
+                    (
+                        "USER_EXTRA_CFLAGS=-Wno-unused-function "
+                        "-Wno-discarded-qualifiers"
+                    ),
+                ],
+                "ko_pattern": [
+                    "{rtl8733bu_wifi_src}/8733bu.ko",
+                ],
+            },
+            {
+                "dir": "{rtl8733bu_bt_src}/usb/bluetooth_usb_driver",
+                "label": "RTL8733BU USB Bluetooth",
+                "make_args": [
+                    "-C",
+                    "{kernel_src}",
+                    "M={rtl8733bu_bt_src}/usb/bluetooth_usb_driver",
+                    "modules",
+                    "ARCH={arch}",
+                    "CROSS_COMPILE={cross_compile}",
+                ],
+                "ko_pattern": [
+                    (
+                        "{rtl8733bu_bt_src}/usb/bluetooth_usb_driver/"
+                        "rtk_btusb.ko"
+                    ),
+                ],
+            },
         ],
     },
     "recovery": {
@@ -122,6 +205,23 @@ BOARD = {
         "image_format": "ubi",
         # SPI NAND 不安装 ext4 grow/recovery 管理程序，仅保留 ADB 调试入口。
         "custom_packages": ["adbd"],
+        # NetworkManager/wpa_supplicant 已由 base package set 提供；只追加
+        # BlueZ daemon/CLI，USB HCI firmware 由 rtk_btusb 自动加载。
+        "+packages": ["bluez"],
+        # RTL8733BU Bluetooth 最小 firmware/config，同 OOT rtk_btusb source
+        # 且固定 commit；WiFi firmware 已编入 8733bu.ko。
+        "+extra_firmware": [
+            {
+                "name": "rtl8733bu-bluetooth",
+                "source": "oot:rtl8733bu_bt",
+                "repo_subdir": "rtkbt-firmware/lib/firmware",
+                "files": [
+                    "rtl8733bu_fw",
+                    "rtl8733bu_config",
+                ],
+                "dest": "lib/firmware",
+            },
+        ],
         "ubi": {
             # 原厂 SDK Buildroot 配置：2 KiB min-I/O/subpage、128 KiB PEB、
             # 0x1f000 LEB；VID header 位于第一个 2 KiB subpage。

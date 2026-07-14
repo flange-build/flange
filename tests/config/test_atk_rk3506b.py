@@ -89,6 +89,133 @@ def test_hardware_and_minimal_rtt_amp_contract(config):
     assert config["rootfs"]["custom_packages"] == ["adbd"]
 
 
+def test_rtl8733bu_uses_fixed_usb_oot_drivers(config):
+    """RTL8733BUUA 的 WiFi/BT 均使用固定版本的 USB OOT driver。"""
+    fragments = config["kernel"]["defconfig"]
+    assert "rk3506-wifibt.config" in fragments
+    for expected in (
+        "# CONFIG_BCMDHD is not set",
+        "# CONFIG_AP6XXX is not set",
+        "# CONFIG_WL_ROCKCHIP is not set",
+        "# CONFIG_RFKILL_RK is not set",
+        "# CONFIG_BT_HCIUART is not set",
+        "# CONFIG_BT_HCIBTUSB is not set",
+    ):
+        assert expected in fragments
+
+    sources = config["kernel"]["oot_sources"]
+    assert sources["rtl8733bu_wifi"]["repo"] == (
+        "https://github.com/wirenboard/rtl8733bu.git"
+    )
+    assert sources["rtl8733bu_wifi"]["commit"] == (
+        "2d9048be60759206b8db5e2370420333ef0b8478"
+    )
+    assert sources["rtl8733bu_bt"]["repo"] == (
+        "https://gitee.com/fengyuzhong/rtl8733bu-bt.git"
+    )
+    assert sources["rtl8733bu_bt"]["commit"] == (
+        "dc7b30b4b9d2c5437a80bfaff6c8a77c97642778"
+    )
+
+    modules = {
+        module["label"]: module
+        for module in config["kernel"]["oot_modules"]
+    }
+    wifi = modules["RTL8733BU USB WiFi"]
+    assert wifi["dir"] == "{rtl8733bu_wifi_src}"
+    assert wifi["ko_pattern"] == [
+        "{rtl8733bu_wifi_src}/8733bu.ko",
+    ]
+    assert wifi["pre_build"][0] == (
+        "git -C {rtl8733bu_wifi_src} checkout -- ."
+    )
+    assert wifi["pre_build"][1].endswith(
+        "rtl8733bu/0001-disable-removed-regulatory-flag.patch"
+    )
+    assert "CONFIG_RTW_DEBUG=n" in wifi["make_args"]
+    assert "CONFIG_PROC_DEBUG=n" in wifi["make_args"]
+    assert (
+        "USER_EXTRA_CFLAGS=-Wno-unused-function "
+        "-Wno-discarded-qualifiers"
+    ) in wifi["make_args"]
+    assert "KSRC={kernel_src}" in wifi["make_args"]
+
+    bluetooth = modules["RTL8733BU USB Bluetooth"]
+    assert bluetooth["dir"] == (
+        "{rtl8733bu_bt_src}/usb/bluetooth_usb_driver"
+    )
+    assert bluetooth["ko_pattern"] == [
+        (
+            "{rtl8733bu_bt_src}/usb/bluetooth_usb_driver/"
+            "rtk_btusb.ko"
+        ),
+    ]
+
+
+def test_rtl8733bu_rootfs_is_minimal_and_reproducible(config):
+    """只追加 BlueZ 与同源的 RTL8733BU Bluetooth firmware。"""
+    packages = config["rootfs"]["packages"]
+    assert "bluez" in packages
+    assert "network-manager" in packages
+    assert "wpasupplicant" in packages
+    assert "linux-firmware" not in packages
+
+    entries = [
+        entry for entry in config["rootfs"]["extra_firmware"]
+        if entry.get("name") == "rtl8733bu-bluetooth"
+    ]
+    assert len(entries) == 1
+    firmware = entries[0]
+    assert firmware == {
+        "name": "rtl8733bu-bluetooth",
+        "source": "oot:rtl8733bu_bt",
+        "repo_subdir": "rtkbt-firmware/lib/firmware",
+        "files": [
+            "rtl8733bu_fw",
+            "rtl8733bu_config",
+        ],
+        "dest": "lib/firmware",
+    }
+
+
+def test_rtl8733bu_does_not_add_wifi_bluetooth_dts_patch():
+    """USB composite device 不应通过 DTS patch 伪造 SDIO/UART 路由。"""
+    patch_dir = Path("components/board/atk-rk3506b/patches/kernel")
+    patches = sorted(patch_dir.glob("*.patch"))
+    assert patches
+    assert "0002-enable-ap6256-wifi-bluetooth.patch" not in {
+        patch.name for patch in patches
+    }
+
+    patch_text = "\n".join(
+        patch.read_text(encoding="utf-8") for patch in patches
+    ).lower()
+    for forbidden in (
+        "ap6256",
+        "rtl8733bu",
+        "sdio_pwrseq",
+        "wireless-wlan",
+        "&uart5",
+        "bcm4345c5",
+    ):
+        assert forbidden not in patch_text
+
+
+def test_rtl8733bu_has_only_minimal_oot_compatibility_patch():
+    """OOT patch 只禁用当前 Linux 6.1 已移除的 regulatory flag。"""
+    patch_dir = Path("components/board/atk-rk3506b/patches/rtl8733bu")
+    patches = sorted(patch_dir.glob("*.patch"))
+    assert [patch.name for patch in patches] == [
+        "0001-disable-removed-regulatory-flag.patch",
+    ]
+
+    patch_text = patches[0].read_text(encoding="utf-8")
+    assert patch_text.count("REGULATORY_IGNORE_STALE_KICKOFF") == 3
+    assert "sdio" not in patch_text.lower()
+    assert "uart" not in patch_text.lower()
+    assert "dts" not in patch_text.lower()
+
+
 def test_usb_gadget_modules_follow_atk_sdk_load_order():
     """USB gadget 模块顺序应与 ATK Linux 6.1 SDK 保持一致。"""
     modules_file = Path(

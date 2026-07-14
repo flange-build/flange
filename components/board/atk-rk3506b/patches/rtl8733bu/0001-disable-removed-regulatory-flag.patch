@@ -1,0 +1,18 @@
+RTL8733BU: 禁用已移除的 stale kickoff regulatory flag
+
+wirenboard/rtl8733bu v5.13.0.1-112 仍无条件使用
+REGULATORY_IGNORE_STALE_KICKOFF。该 flag 在当前 gitlab-r Linux 6.1
+内核中不存在，导致 OOT module 编译失败。
+
+ATK 官方 Linux 6.1 SDK 的同版 RTL8733BU driver 同样注释此赋值；该
+flag 只控制过期 regulatory hint 的处理策略，不影响 USB 枚举、firmware
+加载或 cfg80211 注册。保持其余 vendor source 不变。
+
+diff --git a/os_dep/linux/wifi_regd.c b/os_dep/linux/wifi_regd.c
+--- a/os_dep/linux/wifi_regd.c
++++ b/os_dep/linux/wifi_regd.c
+@@ -408,3 +408,3 @@ int rtw_regd_init(struct wiphy *wiphy)
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0))
+-	wiphy->regulatory_flags |= REGULATORY_IGNORE_STALE_KICKOFF;
++//	wiphy->regulatory_flags |= REGULATORY_IGNORE_STALE_KICKOFF;
+ #endif
