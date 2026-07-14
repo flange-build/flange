@@ -9,6 +9,7 @@
 #define PIN_SPK_BCLK   41
 #define PIN_SPK_DOUT   42
 #define PIN_SPK_WS     43
+#define PIN_MIC_DATA   46
 #define LCD_W          240
 #define LCD_H          135
 #define LCD_X_OFFSET   40   /* ST7789 240x135 GRAM 偏移，按图案微调 */

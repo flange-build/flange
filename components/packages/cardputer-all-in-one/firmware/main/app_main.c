@@ -30,7 +30,8 @@ void app_main(void)
     /* GUD 控制协议状态机初始化（须在 TinyUSB 安装前，回调可能立即触发） */
     gud_device_init();
 
-    /* GPIO43 是 I2S WS，必须在 USB audio streaming 开始前完成初始化。 */
+    /* GPIO43 由 speaker WS 与 microphone PDM CLK 半双工共享。
+     * USB streaming 开始前先初始化仲裁状态机。 */
     ESP_ERROR_CHECK(uac_audio_start());
 
     /* 安装 TinyUSB：vendor 类设备 16d0:10a9，供 mainline gud 驱动绑定。
@@ -42,7 +43,7 @@ void app_main(void)
     tusb_cfg.descriptor.string = aio_string_desc_arr;
     tusb_cfg.descriptor.string_count = aio_string_desc_count;
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
-    ESP_LOGI("aio", "tinyusb installed (GUD + UAC1 speaker + HID)");
+    ESP_LOGI("aio", "tinyusb installed (GUD + UAC1 half-duplex audio + HID)");
 
     /* HID 键盘：TinyUSB 安装后启动测试上报任务 */
     hid_keyboard_start();
