@@ -12,8 +12,27 @@
 - UBI/UBIFS rootfs；
 - CPU2 运行最小 RT-Thread，提供 UART4 控制台、MSH 与 RPMsg echo；
 - MIPI 720×1280 显示由目标 DTS 配置。
+- USB1 作为 Host，内核启用 GUD（Generic USB Display，通用 USB 显示）主机侧 DRM 驱动，
+  可连接兼容 GUD 协议的 USB 显示设备；USB0 保持 OTG/device 角色用于 ADB。
 
 内核配置只保存远程 repo 与 branch，不包含开发机源码绝对路径。
+
+## USB GUD 显示
+
+本板内核配置包含 `CONFIG_DRM_GUD=y`。将兼容 GUD 协议的 USB 显示设备连接到 USB1
+Host 口后，内核应通过 `gud` DRM 驱动创建 `/dev/dri/cardN`。USB1 的实际 Host 角色和
+供电能力取决于板级硬件连接；USB0 不用于 GUD，继续承担 OTG/ADB 功能。
+
+内核同时启用 `CONFIG_FB`、`CONFIG_VT`、`CONFIG_DRM_FBDEV_EMULATION` 和 `CONFIG_FRAMEBUFFER_CONSOLE`，FIT DTS 的默认
+启动参数包含 `console=tty1 fbcon=map:1`，会把 Linux tty console 映射到 GUD 的 framebuffer1。
+板载 MIPI 屏仍保留为 framebuffer0；如果 GUD 未连接，tty console 不会自动回退到 MIPI 屏。
+
+设备启动后可检查：
+
+```bash
+dmesg | grep -i gud
+ls -l /dev/dri/card*
+```
 
 ## GPT 分区布局
 

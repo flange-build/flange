@@ -62,6 +62,13 @@ def test_merged_config_uses_requested_kernel_dts_and_arm32(config):
     ]
     assert "CONFIG_MTD_SPI_NAND=y" in config["kernel"]["defconfig"]
     assert "CONFIG_RPMSG_CHAR=y" in config["kernel"]["defconfig"]
+    assert "CONFIG_DRM_GUD=y" in config["kernel"]["defconfig"]
+    assert "CONFIG_DRM_FBDEV_EMULATION=y" in config["kernel"]["defconfig"]
+    assert "CONFIG_FB=y" in config["kernel"]["defconfig"]
+    assert "CONFIG_VT=y" in config["kernel"]["defconfig"]
+    assert "CONFIG_VT_CONSOLE=y" in config["kernel"]["defconfig"]
+    assert "CONFIG_FRAMEBUFFER_CONSOLE=y" in config["kernel"]["defconfig"]
+    assert config["boot"]["kernel_args"] == "console=tty1 fbcon=map:1"
     assert config["bootloader"]["cross_compile"] == (
         "/opt/arm-linux-gcc10/bin/arm-none-linux-gnueabihf-"
     )
@@ -214,6 +221,17 @@ def test_rtl8733bu_has_only_minimal_oot_compatibility_patch():
     assert "sdio" not in patch_text.lower()
     assert "uart" not in patch_text.lower()
     assert "dts" not in patch_text.lower()
+
+
+def test_gud_patch_routes_tty_console_to_fb1():
+    """vendor FIT 的 DTS bootargs 必须包含 GUD fbcon 路由。"""
+    patch = Path(
+        "components/board/atk-rk3506b/patches/kernel/"
+        "0002-enable-gud-fbcon-console.patch"
+    )
+    text = patch.read_text(encoding="utf-8")
+    assert "console=ttyFIQ0 console=tty1" in text
+    assert "fbcon=map:1" in text
 
 
 def test_usb_gadget_modules_follow_atk_sdk_load_order():

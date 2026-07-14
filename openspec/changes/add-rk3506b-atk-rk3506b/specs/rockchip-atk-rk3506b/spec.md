@@ -152,3 +152,18 @@ SoC/board 配置 SHALL 记录远程 repo 与 branch，不得记录开发机 kern
 #### Scenario: 配置可移植
 - **WHEN** 在仓库中搜索 ATK-RK3506B 配置和文档
 - **THEN** 可提交配置不含用户主目录绝对路径
+
+### Requirement: ATK-RK3506B 支持 USB GUD 主机显示
+
+ATK-RK3506B 的最终 kernel defconfig SHALL 启用
+`CONFIG_DRM_GUD=y`，并保持 USB1 为 Host。USB0 的 OTG/device 与 ADB 配置不得因启用 GUD
+而改变。
+
+#### Scenario: GUD 内核配置合并
+- **WHEN** 解析 `atk-rk3506b-default-debug` 或 `atk-rk3506b-default-release`
+- **THEN** 最终 kernel defconfig 包含 `CONFIG_DRM_GUD=y`
+- **AND** 最终 kernel defconfig 包含 `CONFIG_DRM_FBDEV_EMULATION=y` 与
+  `CONFIG_FB=y`、`CONFIG_VT=y`、`CONFIG_VT_CONSOLE=y`、`CONFIG_FRAMEBUFFER_CONSOLE=y`
+- **AND** kernel args 包含 `console=tty1 fbcon=map:1`
+- **AND** USB1 仍用于连接 USB Host 设备
+- **AND** USB0 仍用于 OTG/device 与 ADB

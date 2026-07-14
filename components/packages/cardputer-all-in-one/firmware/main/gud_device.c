@@ -282,19 +282,10 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
     return gud_handle_control(rhport, stage, request);
 }
 
-/*
- * bulk OUT 数据回调（framebuffer 像素）。
- * SET_BUFFER 武装后，host 经 bulk OUT 发 s_frame_xferlen 字节(压缩=LZ4 数据，
- * 否则=未压缩 RGB565)。FS EP 一次回调通常只带 ≤64 字节，要跨多次回调累积；
- * 收满后(压缩则先解压)→byteswap→blit 并回 idle。
- * 无"待收帧"状态时收到数据视为异常，丢弃并告警。
- *
- * 注意：buffer/bufsize 是 esp_tinyusb 已读入的一段；仍 read_flush 以推进 FIFO。
- */
-void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
+/* 消费一段 vendor bulk OUT 数据，FIFO/direct 两种 TinyUSB 模式共用。 */
+static void gud_consume_rx_chunk(uint8_t const *buffer, uint32_t bufsize)
 {
     if (!s_frame_active) {
-        tud_vendor_n_read_flush(itf);
         ESP_LOGW(TAG, "bulk OUT %u bytes 无待收帧 丢弃", bufsize);
         return;
     }
@@ -310,7 +301,6 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 
     memcpy(dst + s_frame_received, buffer, n);
     s_frame_received += n;
-    tud_vendor_n_read_flush(itf);
 
     if (s_frame_received >= s_frame_xferlen) {
         /* 压缩帧：先 LZ4 解压到 s_fb，得到 s_frame_length 字节未压缩 RGB565。
@@ -354,4 +344,42 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
         s_frame_active = false;
         s_frame_received = 0;
     }
+}
+
+/*
+ * bulk OUT 数据回调（framebuffer 像素）。
+ * SET_BUFFER 武装后，host 经 bulk OUT 发 s_frame_xferlen 字节(压缩=LZ4 数据，
+ * 否则=未压缩 RGB565)。FS EP 一次通常只收 ≤64 字节，要跨多次回调累积；
+ * 收满后(压缩则先解压)→byteswap→blit 并回 idle。
+ *
+ * TinyUSB Vendor 有两种 RX 语义：
+ *   - FIFO 模式：回调的 buffer=NULL / bufsize=0，必须用 tud_vendor_n_read()
+ *     从 FIFO 取数据；
+ *   - direct 模式：回调参数就是当前收到的数据。
+ * 项目默认 CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=64，实际走 FIFO 模式。
+ */
+#if CFG_TUD_API_V0_19_COMPAT
+void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
+#else
+void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint32_t bufsize)
+#endif
+{
+#if CFG_TUD_VENDOR_TXRX_BUFFERED
+    uint8_t fifo_buf[CFG_TUD_VENDOR_RX_BUFSIZE];
+
+    /* FIFO 容量可大于单个 USB packet，一次回调内尽量排空。 */
+    while (tud_vendor_n_available(itf) > 0) {
+        uint32_t available = tud_vendor_n_available(itf);
+        uint32_t want = available;
+        if (want > sizeof(fifo_buf))
+            want = sizeof(fifo_buf);
+
+        uint32_t got = tud_vendor_n_read(itf, fifo_buf, want);
+        if (got == 0)
+            break;
+        gud_consume_rx_chunk(fifo_buf, got);
+    }
+#else
+    gud_consume_rx_chunk(buffer, bufsize);
+#endif
 }

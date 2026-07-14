@@ -10,14 +10,12 @@ M5Stack Cardputer 作为 **USB 设备**，让嵌入式 Linux 主机把它当成�
 ## 能力
 
 - USB 复合设备，**VID/PID = `16d0:10a9`**（mainline `gud` 绑定的固定 ID）。
-  - **IF0 Vendor(GUD) 显示**：GUD 设备协议最小子集，单 connector / 单模式 **240×135** / **RGB565**（未压缩）；收 host 帧（SET_BUFFER + bulk OUT）→ blit 到板载 ST7789。
+  - **IF0 Vendor(GUD) 显示**：GUD 设备协议最小子集，单 connector / 单模式 **240×135** / **RGB565**，支持 LZ4 压缩与 dirty rectangle（脏矩形）；收 host 帧（SET_BUFFER + bulk OUT）→ blit 到板载 ST7789。
   - **IF1 AudioControl + IF2 playback + IF3 capture**：UAC1 mono 16 kHz / 16 bit / `S16_LE`。
     - playback：isochronous OUT → I2S1（BCLK=GPIO41、DOUT=GPIO42、WS=GPIO43）→ 板载 NS4168。
     - capture：板载 SPM1423 → I2S0 PDM RX（DAT=GPIO46、CLK=GPIO43）→ isochronous IN。
   - **IF4 HID 键盘**：扫描 74HC138 矩阵键盘（列选 GPIO{8,9,11}/行 GPIO{13,15,3,4,5,6,7}）→ 映射为 HID usage（含 Shift/Ctrl/Alt/Opt 修饰 + Fn 层 F1-12/方向/Esc/Del）→ 中断 IN 上报。
 - 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）；键盘引脚/键值表照搬 M5Cardputer 库。
-
-尚未实现（后续阶段）：LZ4/脏矩形。
 
 > 麦克风 PDM clock 与扬声器 WS 共用 GPIO43，硬件只支持半双工。若 host 同时打开 playback 与
 > capture，最后启动的方向优先；该方向关闭后，firmware 自动恢复仍保持打开的另一方向。

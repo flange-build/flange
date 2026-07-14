@@ -25,6 +25,7 @@ def test_rk3506b_soc_uses_requested_kernel_and_armhf_routes():
     assert kernel["defconfig"] == [
         "rk3506_defconfig",
         "case_insensitive_fix.config",
+        "CONFIG_DRM_GUD=y",
     ]
 
 

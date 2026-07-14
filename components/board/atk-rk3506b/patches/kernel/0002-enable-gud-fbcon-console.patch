@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Tue, 15 Jul 2026 00:00:00 +0800
+Subject: [PATCH] arm: dts: rk3506b: route tty console to GUD framebuffer
+
+启用 DRM fbdev/fbcon 后，将 tty1 映射到 GUD 对应的 framebuffer1。
+保留 ttyFIQ0，便于串口调试；GUD 未连接时 tty1 不回退到板载 MIPI。
+---
+ arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts b/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
+--- a/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
++++ b/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
+@@ -16,7 +16,7 @@
+ / {
+         chosen {
+         // rw rootfs
+-                bootargs = "earlycon=uart8250,mmio32,0xff0a0000 console=ttyFIQ0 ubi.mtd=5 root=ubi0:rootfs rw rootfstype=ubifs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1 storagemedia=mtd androidboot.storagemedia=mtd androidboot.mode=normal";
++                bootargs = "earlycon=uart8250,mmio32,0xff0a0000 console=ttyFIQ0 console=tty1 fbcon=map:1 ubi.mtd=5 root=ubi0:rootfs rw rootfstype=ubifs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1 storagemedia=mtd androidboot.storagemedia=mtd androidboot.mode=normal";
+         };
+ };

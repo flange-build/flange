@@ -13,11 +13,11 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 
 ## 状态
 
-- ✅ **GUD 显示链路打通** —— Cardputer 枚举为 `16d0:10a9`，host `gud` 出 `/dev/dri/cardN`，未压缩 RGB565 收帧上 ST7789。
+- ✅ **GUD 显示链路打通** —— Cardputer 枚举为 `16d0:10a9`，host `gud` 出 `/dev/dri/cardN`，RGB565/LZ4 与脏矩形收帧上 ST7789。
 - ✅ **HID 键盘** —— 74HC138 矩阵扫描 → HID usage 映射上报，与 GUD 同一复合设备，host 出 `/dev/input/eventN`。
 - ✅ **UAC1 扬声器** —— mono 16 kHz / 16 bit USB OUT → I2S NS4168，host 由 `snd-usb-audio` 提供 ALSA playback PCM。
 - ✅ **UAC1 麦克风** —— PDM SPM1423 → mono 16 kHz / 16 bit USB IN，和扬声器按最后启动优先半双工切换。
-- ⏳ LZ4+脏矩形 / Linux flange 组件 / flash 集成。
+- ⏳ Linux flange 组件 / flash 集成。
 
 详见 `firmware/README.md`。
 

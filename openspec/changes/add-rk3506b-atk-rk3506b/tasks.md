@@ -88,6 +88,9 @@
 - [x] 9.5 增加仓库检查，确保 ATK/RK3506B 可提交配置不含开发机绝对路径
 - [x] 9.6 编写中文 board 文档，记录硬件规格、UART4 接线、构建/刷写命令、NAND 风险和恢复方法
 - [x] 9.7 在 ATK board rootfs overlay 按原厂 SDK 顺序持久加载 USB2 PHY、`usb_f_fs` 和 DWC2，保持 USB0 OTG/USB1 host 并覆盖配置测试
+- [x] 9.8 启用 RK3506B 的 `CONFIG_DRM_GUD=y`，保持 USB1 Host/USB0 OTG 角色并增加配置回归测试与中文文档
+- [x] 9.9 启用 DRM fbdev/fbcon，并将 `tty1` 默认映射到 GUD framebuffer1
+- [x] 9.10 修正 Cardputer GUD 固件的 TinyUSB Vendor FIFO 收帧路径，确保 fbcon 的 bulk OUT 帧被组帧并刷新到 ST7789
 
 ## 10. 构建与静态集成验收
 

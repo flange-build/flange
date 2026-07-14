@@ -66,6 +66,9 @@ SOC = {
         "defconfig": [
             "rk3506_defconfig",
             "case_insensitive_fix.config",
+            # GUD（Generic USB Display，通用 USB 显示）主机侧 DRM 驱动。
+            # USB1 作为 Host 时可将兼容的 USB 显示设备注册为 DRM 显示器。
+            "CONFIG_DRM_GUD=y",
         ],
     },
     "rootfs": {
@@ -79,8 +82,9 @@ SOC = {
         "dtb_overlays": [],
         "vendor_overlays": [],
         "default_overlays": [],
-        # FIT 模式以目标 DTS chosen.bootargs 为唯一启动参数来源。
-        "kernel_args": "",
+        # 在保留 DTS 串口 console 的同时启用 tty1，并将 fbcon 映射到 GUD
+        # 对应的 DRM fbdev（板载 MIPI 为 fb0，GUD 为 fb1）。
+        "kernel_args": "console=tty1 fbcon=map:1",
     },
     # SoC 级 AMP 协议事实。board 只负责 opt-in、选择 app 与 MTD 分区。
     "amp": {

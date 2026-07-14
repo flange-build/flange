@@ -98,6 +98,17 @@ BOARD = {
             "rk3506-display.config",
             "rockchip_amp.config",
             "case_insensitive_fix.config",
+            # 板级 defconfig 为覆盖式列表，显式保留 GUD 主机侧 DRM 驱动。
+            "CONFIG_DRM_GUD=y",
+            # 为 DRM 设备提供 fbdev 兼容层，使 fbcon/tty1 能输出到 GUD。
+            "CONFIG_DRM_FBDEV_EMULATION=y",
+            # DRM fbdev emulation 与 FRAMEBUFFER_CONSOLE 都依赖 framebuffer core。
+            "CONFIG_FB=y",
+            "CONFIG_VT=y",
+            "CONFIG_VT_CONSOLE=y",
+            "CONFIG_VT_HW_CONSOLE_BINDING=y",
+            "CONFIG_FRAMEBUFFER_CONSOLE=y",
+            "CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y",
             # 复用其中的 cfg80211、Bluetooth、crypto 与 rfkill core；
             # fragment 附带的 Rockchip SDIO/GPIO glue 在下方明确关闭。
             "rk3506-wifibt.config",
