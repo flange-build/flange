@@ -6,6 +6,9 @@
 #define PIN_LCD_CS     37
 #define PIN_LCD_RST    33
 #define PIN_LCD_BL     38
+#define PIN_SPK_BCLK   41
+#define PIN_SPK_DOUT   42
+#define PIN_SPK_WS     43
 #define LCD_W          240
 #define LCD_H          135
 #define LCD_X_OFFSET   40   /* ST7789 240x135 GRAM 偏移，按图案微调 */

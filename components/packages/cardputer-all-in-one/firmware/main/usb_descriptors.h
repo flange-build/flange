@@ -6,8 +6,24 @@
 #define GUD_VID 0x16D0
 #define GUD_PID 0x10A9
 
-enum { ITF_NUM_VENDOR = 0, ITF_NUM_HID, ITF_NUM_TOTAL };
-enum { EPNUM_VENDOR_OUT = 0x01, EPNUM_VENDOR_IN = 0x81, EPNUM_HID = 0x82 };
+enum {
+    ITF_NUM_VENDOR = 0,
+    ITF_NUM_AUDIO_CONTROL,
+    ITF_NUM_AUDIO_STREAMING,
+    ITF_NUM_HID,
+    ITF_NUM_TOTAL
+};
+enum {
+    EPNUM_VENDOR_OUT = 0x01,
+    EPNUM_VENDOR_IN = 0x81,
+    EPNUM_HID = 0x82,
+    EPNUM_AUDIO_OUT = 0x03
+};
+
+#define UAC_SAMPLE_RATE 16000
+#define UAC_CHANNEL_COUNT 1
+#define UAC_BYTES_PER_SAMPLE 2
+#define UAC_EP_OUT_SIZE 32
 
 /*
  * 描述符仅暴露“数据”，由 app_main 通过 tinyusb_config_t 注入。

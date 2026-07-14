@@ -1,3 +1,4 @@
 dependencies:
-  # 实测 1.7.6；锁到 1.7.x 避免次版本 API 漂移（如 string_descriptor_count 字段）
-  espressif/esp_tinyusb: "~1.7.0"
+  # UAC1 device 支持从 TinyUSB 0.21 起可用；精确锁定，避免描述符/API 漂移。
+  espressif/esp_tinyusb: "2.2.1"
+  espressif/tinyusb: "0.21.0~1"

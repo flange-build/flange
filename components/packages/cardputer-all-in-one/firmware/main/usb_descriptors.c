@@ -1,14 +1,13 @@
 #include "usb_descriptors.h"
 
-/* 设备描述符：vendor 类设备，VID/PID = 16d0:10a9（gud 绑定所需） */
+/* 设备描述符：Misc/IAD 复合设备，VID/PID = 16d0:10a9（gud 绑定所需） */
 const tusb_desc_device_t aio_desc_device = {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
     .bcdUSB = 0x0200,
-    /* 类信息放在接口层（bInterfaceClass=0xFF），设备层置 0 */
-    .bDeviceClass = 0x00,
-    .bDeviceSubClass = 0x00,
-    .bDeviceProtocol = 0x00,
+    .bDeviceClass = TUSB_CLASS_MISC,
+    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol = MISC_PROTOCOL_IAD,
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor = GUD_VID,
     .idProduct = GUD_PID,
@@ -23,21 +22,59 @@ const tusb_desc_device_t aio_desc_device = {
 static const uint8_t aio_hid_report_desc[] = {
     TUD_HID_REPORT_DESC_KEYBOARD()};
 
-/*
- * 配置描述符：vendor 接口(GUD, bulk IN/OUT) + HID 键盘接口(中断 IN 端点 0x82)。
- * 接口数 = ITF_NUM_TOTAL(2)；总长含 vendor + HID 两段。
- */
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_HID_DESC_LEN)
+/* UAC1 mono speaker：IAD + AC + AS alt0/alt1，固定 16 kHz / 16 bit。 */
+#define UAC1_SPEAKER_DESC_LEN (8 + \
+                               TUD_AUDIO10_DESC_STD_AC_LEN + \
+                               TUD_AUDIO10_DESC_CS_AC_LEN(1) + \
+                               TUD_AUDIO10_DESC_INPUT_TERM_LEN + \
+                               TUD_AUDIO10_DESC_OUTPUT_TERM_LEN + \
+                               TUD_AUDIO10_DESC_STD_AS_LEN + \
+                               TUD_AUDIO10_DESC_STD_AS_LEN + \
+                               TUD_AUDIO10_DESC_CS_AS_INT_LEN + \
+                               TUD_AUDIO10_DESC_TYPE_I_FORMAT_LEN(1) + \
+                               TUD_AUDIO10_DESC_STD_AS_ISO_EP_LEN + \
+                               TUD_AUDIO10_DESC_CS_AS_ISO_EP_LEN)
+
+#define UAC1_SPEAKER_DESCRIPTOR(_ac_itf, _as_itf, _stridx, _epout) \
+    8, TUSB_DESC_INTERFACE_ASSOCIATION, _ac_itf, 2, TUSB_CLASS_AUDIO, 0, 0, _stridx, \
+    TUD_AUDIO10_DESC_STD_AC(_ac_itf, 0, _stridx), \
+    TUD_AUDIO10_DESC_CS_AC(0x0100, \
+                           TUD_AUDIO10_DESC_INPUT_TERM_LEN + \
+                               TUD_AUDIO10_DESC_OUTPUT_TERM_LEN, \
+                           _as_itf), \
+    TUD_AUDIO10_DESC_INPUT_TERM(1, AUDIO_TERM_TYPE_USB_STREAMING, 0, \
+                                UAC_CHANNEL_COUNT, AUDIO10_CHANNEL_CONFIG_NON_PREDEFINED, \
+                                0, 0), \
+    TUD_AUDIO10_DESC_OUTPUT_TERM(2, AUDIO_TERM_TYPE_OUT_GENERIC_SPEAKER, 0, 1, 0), \
+    TUD_AUDIO10_DESC_STD_AS_INT(_as_itf, 0, 0, 0), \
+    TUD_AUDIO10_DESC_STD_AS_INT(_as_itf, 1, 1, 0), \
+    TUD_AUDIO10_DESC_CS_AS_INT(1, 1, AUDIO10_DATA_FORMAT_TYPE_I_PCM), \
+    TUD_AUDIO10_DESC_TYPE_I_FORMAT(UAC_CHANNEL_COUNT, UAC_BYTES_PER_SAMPLE, 16, \
+                                   UAC_SAMPLE_RATE), \
+    TUD_AUDIO10_DESC_STD_AS_ISO_EP(_epout, \
+                                   TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ADAPTIVE, \
+                                   UAC_EP_OUT_SIZE, 1, 0), \
+    TUD_AUDIO10_DESC_CS_AS_ISO_EP(AUDIO10_CS_AS_ISO_DATA_EP_ATT_SAMPLING_FRQ, \
+                                  AUDIO10_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, 0)
+
+/* 配置描述符：IF0 GUD + IF1/2 UAC1 speaker + IF3 HID keyboard。 */
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + \
+                          UAC1_SPEAKER_DESC_LEN + TUD_HID_DESC_LEN)
 const uint8_t aio_desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
     TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
+    UAC1_SPEAKER_DESCRIPTOR(ITF_NUM_AUDIO_CONTROL, ITF_NUM_AUDIO_STREAMING, 4,
+                            EPNUM_AUDIO_OUT),
     TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_KEYBOARD,
                        sizeof(aio_hid_report_desc), EPNUM_HID, CFG_TUD_HID_EP_BUFSIZE, 10),
 };
 
+_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN,
+               "USB 配置描述符长度不一致");
+
 /*
  * 字符串描述符：交由 esp_tinyusb 完成 UTF-16 转换与 langid 处理。
- * 索引 0 = langid（English, 0x0409），1=厂商 2=产品 3=序列号。
+ * 索引 0 = langid（English, 0x0409），1=厂商 2=产品 3=序列号 4=音频功能。
  */
 static const char k_langid[] = {0x09, 0x04, 0x00};
 const char *aio_string_desc_arr[] = {
@@ -45,6 +82,7 @@ const char *aio_string_desc_arr[] = {
     "flange",
     "Cardputer GUD Display",
     "AIO-0001",
+    "Cardputer Speaker",
 };
 const int aio_string_desc_count = sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]);
 

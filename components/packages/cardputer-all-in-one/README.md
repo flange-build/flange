@@ -15,7 +15,8 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 
 - ✅ **GUD 显示链路打通** —— Cardputer 枚举为 `16d0:10a9`，host `gud` 出 `/dev/dri/cardN`，未压缩 RGB565 收帧上 ST7789。
 - ✅ **HID 键盘** —— 74HC138 矩阵扫描 → HID usage 映射上报，与 GUD 同一复合设备，host 出 `/dev/input/eventN`。
-- ⏳ UAC 音频（需迁底层 tinyusb + GPIO43 三重冲突/半双工）/ LZ4+脏矩形 / Linux flange 组件 / flash 集成。
+- ✅ **UAC1 扬声器** —— mono 16 kHz / 16 bit USB OUT → I2S NS4168，host 由 `snd-usb-audio` 提供 ALSA playback PCM。
+- ⏳ UAC 麦克风（GPIO43 与扬声器 WS 共用，需半双工设计）/ LZ4+脏矩形 / Linux flange 组件 / flash 集成。
 
 详见 `firmware/README.md`。
 
