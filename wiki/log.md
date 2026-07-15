@@ -527,3 +527,22 @@ mono 16 kHz/S16_LE UAC1 扬声器与麦克风均完成实机验收。板级 root
 用户补充确认 NAND 备份/恢复、四种单组件刷写、UART4/MSH 与 RPMsg 多轮 echo 已完成。
 OpenSpec change `add-rk3506b-atk-rk3506b` 同步 9 个 capability 后归档到
 `archive/2026-07-15-add-rk3506b-atk-rk3506b`；完整测试全绿与最终证据审计仍作为已知测试债务保留。
+
+## [2026-07-15] fix | ATK-RK3506B 双路 YT8512C 无 carrier 根因与修复
+
+[[atk-rk3506b]] 两路 GMAC 能 probe、MDIO 能读到 PHY ID `0x00000128`，但插网线
+没有 carrier。原理图确认两颗 YT8512C 由 `RXDV/CLK_CTL=11b` strap 为 RMII1，
+50 MHz `RMII_REF_CLK` 由 SoC 输出；运行时 FDT、构建 DTB、BSP DTS/Kconfig、
+GMAC clock/reset/pinctrl 均一致，排除 DTS、Kconfig 和 clock tree。
+
+根因是当前精简版 Motorcomm driver 的 `0x128` 初始化与 BSP 不匹配：误复用旧型号
+`yt8512_clk_init()`，在额外改写 `0x0050/0x4000` 后发出不等待完成的 reset；LED1
+enable bit `0x0010` 又被误作寄存器地址（正确地址为 `0x40c3`）；关闭 auto-sleep 后
+还缺少 BSP 的最终 software reset。新增板级 kernel patch，只让 `0x128` 按
+`LED0(0x40c0) → LED1(0x40c3) → 清 0x2027 bit15 → genphy_soft_reset()` 初始化，
+并补带完成轮询的 soft-reset callback；旧 `0x118` 流程不变，也不照抄错误的
+`.flags = PHY_POLL`。
+
+刷入 kernel `#18` 并冷启动后，两路 PHY 均绑定 `YT8512B Ethernet (irq=POLL)`；
+`end0` 与 `end1` 分别以 100 Mbps/Full Link Up，拔线正常 Link Down，全程不再依赖
+`mii-tool -R`。OpenSpec change `align-rk3506b-yt8512c-init` 已完成实机验收并归档。

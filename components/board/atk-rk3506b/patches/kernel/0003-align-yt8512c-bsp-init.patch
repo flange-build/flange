@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Tue, 15 Jul 2026 00:00:00 +0800
+Subject: [PATCH] net: phy: 对齐 YT8512C BSP 初始化流程
+
+ATK-RK3506B 的两路板载 PHY 均为 ID 0x00000128 的 YT8512C。
+该型号由硬件 strap 选择 RMII1 和 50 MHz reference clock input，BSP
+初始化不改写 AFE PLL/combo 寄存器，而是在 LED 与 auto-sleep 配置后
+执行 software reset。
+
+修复 LED1 配置误写到 0x0010 的问题，为 0x00000128 单独采用 BSP
+顺序，并使用 Linux 6.1 会等待 reset 完成的 genphy_soft_reset。
+保留旧 ID 0x00000118 的 clock init，避免改变其他型号的既有行为。
+---
+ drivers/net/phy/motorcomm.c | 33 ++++++++++++++++++++++++---------
+ 1 file changed, 24 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/net/phy/motorcomm.c b/drivers/net/phy/motorcomm.c
+index 8039c4b99..5caf2c494 100644
+--- a/drivers/net/phy/motorcomm.c
++++ b/drivers/net/phy/motorcomm.c
+@@ -542,7 +542,7 @@ static int yt8512_led_init(struct phy_device *phydev)
+ 	mask = YT8512_LED1_TXACT_BLK_EN | YT8512_LED1_RXACT_BLK_EN;
+ 	val &= ~mask;
+ 
+-	ret = ytphy_write_ext(phydev, YT8512_LED1_BT_ON_EN, val);
++	ret = ytphy_write_ext(phydev, YT8512_EXTREG_LED1, val);
+ 
+ 	return ret;
+ }
+@@ -608,15 +608,11 @@ static int yt8011_config_init(struct phy_device *phydev)
+ 	return 0;
+ }
+ 
+-static int yt8512_config_init(struct phy_device *phydev)
++static int yt8512_common_config_init(struct phy_device *phydev)
+ {
+ 	int ret;
+ 	int val;
+ 
+-	ret = yt8512_clk_init(phydev);
+-	if (ret < 0)
+-		return ret;
+-
+ 	ret = yt8512_led_init(phydev);
+ 	if (ret < 0)
+ 		return ret;
+@@ -628,11 +624,29 @@ static int yt8512_config_init(struct phy_device *phydev)
+ 
+ 	val &= (~BIT(YT8512_EN_SLEEP_SW_BIT));
+ 
+-	ret = ytphy_write_ext(phydev, YT8512_EXTREG_SLEEP_CONTROL1, val);
++	return ytphy_write_ext(phydev, YT8512_EXTREG_SLEEP_CONTROL1, val);
++}
++
++static int yt8512_config_init(struct phy_device *phydev)
++{
++	int ret;
++
++	ret = yt8512_clk_init(phydev);
+ 	if (ret < 0)
+ 		return ret;
+ 
+-	return ret;
++	return yt8512_common_config_init(phydev);
++}
++
++static int yt8512b_config_init(struct phy_device *phydev)
++{
++	int ret;
++
++	ret = yt8512_common_config_init(phydev);
++	if (ret < 0)
++		return ret;
++
++	return genphy_soft_reset(phydev);
+ }
+ 
+ static int yt8512_read_status(struct phy_device *phydev)
+@@ -1198,7 +1212,8 @@ static struct phy_driver motorcomm_phy_drvs[] = {
+ 	}, {
+ 		PHY_ID_MATCH_EXACT(PHY_ID_YT8512B),
+ 		.name		= "YT8512B Ethernet",
+-		.config_init	= yt8512_config_init,
++		.soft_reset	= genphy_soft_reset,
++		.config_init	= yt8512b_config_init,
+ 		.read_status	= yt8512_read_status,
+ 		.suspend	= genphy_suspend,
+ 		.resume		= genphy_resume,

@@ -103,6 +103,62 @@ def test_ethernet_drivers_and_phy_are_built_in(config):
     } & defconfig
 
 
+def test_yt8512c_patch_aligns_bsp_init_without_legacy_regression():
+    """板载 0x128 PHY 对齐 BSP，同时保留旧 0x118 的 clock init。"""
+    patch = Path(
+        "components/board/atk-rk3506b/patches/kernel/"
+        "0003-align-yt8512c-bsp-init.patch"
+    )
+    text = patch.read_text(encoding="utf-8")
+    added = "\n".join(
+        line[1:]
+        for line in text.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    removed = "\n".join(
+        line[1:]
+        for line in text.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    )
+
+    assert (
+        "ytphy_write_ext(phydev, YT8512_EXTREG_LED1, val)"
+        in added
+    )
+    assert (
+        "ytphy_write_ext(phydev, YT8512_LED1_BT_ON_EN, val)"
+        in removed
+    )
+
+    legacy_init = re.search(
+        r"static int yt8512_config_init.*?"
+        r"return yt8512_common_config_init\(phydev\);",
+        added,
+        re.S,
+    )
+    target_init = re.search(
+        r"static int yt8512b_config_init.*?"
+        r"return genphy_soft_reset\(phydev\);",
+        added,
+        re.S,
+    )
+    assert legacy_init is not None
+    assert target_init is not None
+    assert "yt8512_clk_init(phydev)" in legacy_init.group(0)
+    assert "yt8512_clk_init(phydev)" not in target_init.group(0)
+    assert "yt8512_common_config_init(phydev)" in target_init.group(0)
+    assert "return genphy_soft_reset(phydev);" in target_init.group(0)
+
+    assert re.search(
+        r"\.soft_reset\s*=\s*genphy_soft_reset", added
+    )
+    assert re.search(
+        r"\.config_init\s*=\s*yt8512b_config_init", added
+    )
+    for forbidden in (".features", ".config_aneg", ".flags = PHY_POLL"):
+        assert forbidden not in added
+
+
 def test_hardware_and_minimal_rtt_amp_contract(config):
     assert config["memory"]["size"] == "512M"
     assert config["storage"]["type"] == "spinand"
