@@ -117,8 +117,8 @@
 
 ## 12. 完成检查
 
-- [ ] 12.1 运行完整自动化测试和 OpenSpec 严格校验，确认所有新增/修改 capability 与实现一致
-- [ ] 12.2 检查每项任务证据、未完成的硬件问题和回滚资料，只有全部验收通过后才标记变更完成
+- [x] 12.1 运行完整自动化测试和 OpenSpec 严格校验，确认所有新增/修改 capability 与实现一致
+- [x] 12.2 检查每项任务证据、未完成的硬件问题和回滚资料，只有全部验收通过后才标记变更完成
 
 ## 13. 对抗式 review 修复
 
@@ -131,5 +131,5 @@
 - [x] 13.7 将 Rockchip parameter/UBI/AMP 分区校验迁入平台层，并把 ATK 策略从 RK3506B SoC 下沉到 board
 - [x] 13.8 增加 Rockchip 单设备、RCI/RFI/RID SoC/存储身份门禁，并让全刷复用 named-DI 原语
 - [x] 13.9 同步 ProjectSpec、OpenSpec capability 与 ATK board 文档
-- [ ] 13.10 运行完整自动化测试、OpenSpec strict validation，并复核实机 `/proc/iomem` 排除 CPU2 firmware 区域
+- [x] 13.10 运行完整自动化测试、OpenSpec strict validation，并复核实机 `/proc/iomem` 排除 CPU2 firmware 区域
 - [x] 13.11 将 ATK-RK3506B 的 DWMAC/STMMAC、Motorcomm PHY、PHYLIB、MDIO 与 fixed PHY 配置强制为 built-in，并增加 FINAL_CONFIG 回归测试

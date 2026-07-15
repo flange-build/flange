@@ -76,12 +76,15 @@ ALSA 将设备枚举为 card 2 `Cardputer GUD Display`，playback 与 capture �
 ## 自动化与规格校验
 
 - RK3506B/ARM32/UBI/AMP/刷写/ADB 定向测试：`95 passed`；
-- `openspec validate add-rk3506b-atk-rk3506b --strict`：通过；
-- 当前工作区全量测试：`1392 passed, 39 skipped, 42 failed`；同环境干净
-  `HEAD` 基线为 `1256 passed, 39 skipped, 51 failed`，本变更没有扩大既有失败面；
-- 其中两个 recoveryctl loopback socket 用例在受限沙箱内报 `EPERM`，沙箱外单独复跑
-  为 `2 passed`。其余既有陈旧断言仍需独立测试债务变更处理，因此任务 12.1/13.10
-  保持未完成，不以定向测试替代全量绿灯。
+- 原 42 个失败所涉及的 App、cache、recoveryctl、rootfs deb 与配置测试分组复跑：
+  `487 passed`，没有删除或跳过测试；
+- Ubuntu 24.04 构建镜像中的 Python 3.12.3、pytest 9.1.1 全量测试：
+  `1485 passed in 64.99s`，`0 failed`、`0 skipped`；
+- 两个 recoveryctl loopback socket 用例已包含在全量结果中；另在允许 loopback 的宿主环境
+  单独复跑为 `2 passed`，确认旧 `EPERM` 仅来自受限沙箱网络策略；
+- `openspec validate --all --strict`：`64 passed, 0 failed`，所有 capability 与实现一致；
+- 已复核归档内 ARM64 基线、SPI NAND 身份/刷写记录、冷启动证据、恢复路径和容量余量。
+  实机 `/proc/iomem` 继续证明 CPU2 firmware 区间未归入 Linux System RAM。
 
 ## 补充验收确认
 
@@ -92,4 +95,6 @@ ALSA 将设备枚举为 card 2 `Cardputer GUD Display`，playback 与 capture �
 - UART4 上的 RT-Thread banner、link-up 和可交互 MSH；
 - 创建 RPMsg char endpoint 后的多轮 Linux↔CPU2 echo。
 
-完整自动化测试仍有既有失败，最终测试债务与证据审计任务继续保持未完成，不以本次实机确认替代。
+原 42 个既有 pytest 失败已在独立质量债务变更中全部修复，完整自动化测试与 OpenSpec
+strict validation 均为全绿。任务证据、回滚资料与已知限制已逐项复核；2.4/5 GHz WiFi、
+Bluetooth HCI 与 ADB 长时间压力属于独立 WiFi/BT 变更的扩展覆盖，不构成本变更的验收阻塞项。

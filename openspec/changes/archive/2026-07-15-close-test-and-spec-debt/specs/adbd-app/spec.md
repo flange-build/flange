@@ -1,10 +1,5 @@
-# adbd-app Specification
+## MODIFIED Requirements
 
-## Purpose
-
-定义 adbd 作为 Python AppBuilder 管理的 service App 的目录、架构选择、deb 打包和 rootfs 集成契约。
-
-## Requirements
 ### Requirement: adbd App 工程结构
 
 adbd SHALL 作为 service 类型 App 存在于 `components/app/adbd/` 目录，包含以下文件：
@@ -50,6 +45,8 @@ Python AppBuilder SHALL 按 FINAL_CONFIG 的 `arch` 和 `bin/adbd-<arch>` 文件
 - **WHEN** `components/board/radxa-zero3w/config.py` 的 `rootfs.custom_packages` 包含 `"adbd"`
 - **THEN** 构建该板子的 rootfs 时，adbd .deb 包在 rootfs 之前生成并安装到镜像中
 
+## ADDED Requirements
+
 ### Requirement: Python deb 打包产出
 
 adbd App SHALL 由 `AppBuilder` 解析 `app.yaml`，并通过 `DebBuilder` 打包为单个 .deb 包，包含以下文件安装映射：
@@ -73,3 +70,11 @@ adbd App SHALL 由 `AppBuilder` 解析 `app.yaml`，并通过 `DebBuilder` 打�
 
 - **WHEN** deb 包安装完成
 - **THEN** `usbdevice.service` 已被 `systemctl enable`，将在系统启动时自动拉起
+
+## REMOVED Requirements
+
+### Requirement: flange_deb 打包产出
+
+**Reason**: 项目已移除 Bazel/Starlark 与 `flange_deb` 规则，统一由 Python `AppBuilder` 和 `DebBuilder` 打包。
+
+**Migration**: 使用本 capability 新增的“Python deb 打包产出”要求，以 `app.yaml` 作为唯一打包数据源。

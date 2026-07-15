@@ -66,6 +66,9 @@
 
 ### Requirement: sudo 三态 SHALL 控制 sudoers.d 文件写入
 
+框架 SHALL 按 `users.<name>.sudo` 的三态值控制 sudo group 与
+`/etc/sudoers.d/` 文件写入：
+
 - `sudo: True` 或省略 → 仅入 sudo group，**不**写 `/etc/sudoers.d/` 文件
 - `sudo: False` → 不入 sudo group，**不**写 `/etc/sudoers.d/` 文件
 - `sudo: {"nopasswd": True}` → 入 sudo group **且** 写入 `/etc/sudoers.d/90-<name>`，文件内容为单行 `<name> ALL=(ALL:ALL) NOPASSWD:ALL`，文件权限为 `0440`，所有者 `root:root`
