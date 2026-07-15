@@ -98,6 +98,15 @@ BOARD = {
             "rk3506-display.config",
             "rockchip_amp.config",
             "case_insensitive_fix.config",
+            # 对齐 ATK BSP 的 rk3506-ethernet.config，并由后置的
+            # flange_inline.config 覆盖通用 defconfig 中对应的 module 配置。
+            "CONFIG_DWMAC_ROCKCHIP=y",
+            "CONFIG_STMMAC_ETH=y",
+            "CONFIG_STMMAC_PLATFORM=y",
+            "CONFIG_MOTORCOMM_PHY=y",
+            "CONFIG_PHYLIB=y",
+            "CONFIG_MDIO_BUS=y",
+            "CONFIG_FIXED_PHY=y",
             # 板级 defconfig 为覆盖式列表，显式保留 GUD 主机侧 DRM 驱动。
             "CONFIG_DRM_GUD=y",
             # 为 DRM 设备提供 fbdev 兼容层，使 fbcon/tty1 能输出到 GUD。
@@ -109,6 +118,10 @@ BOARD = {
             "CONFIG_VT_HW_CONSOLE_BINDING=y",
             "CONFIG_FRAMEBUFFER_CONSOLE=y",
             "CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y",
+            # Cardputer 的复合 USB 设备同时提供 HID 键盘和 UAC1
+            # 麦克风/扬声器；USB core 为 module，class driver 也保持 module。
+            "CONFIG_USB_HID=m",
+            "CONFIG_SND_USB_AUDIO=m",
             # 复用其中的 cfg80211、Bluetooth、crypto 与 rfkill core；
             # fragment 附带的 Rockchip SDIO/GPIO glue 在下方明确关闭。
             "rk3506-wifibt.config",
@@ -214,11 +227,16 @@ BOARD = {
     "partitions": _PARTITIONS,
     "rootfs": {
         "image_format": "ubi",
+        # 414 MiB UBI 无法同时容纳全局 debug 集中约 40 MiB 的
+        # valgrind 与 Cardputer 验收工具；保留 gdb/strace/tcpdump。
+        "package_sets": {
+            "debug": ["gdb", "strace", "tcpdump"],
+        },
         # SPI NAND 不安装 ext4 grow/recovery 管理程序，仅保留 ADB 调试入口。
         "custom_packages": ["adbd"],
-        # NetworkManager/wpa_supplicant 已由 base package set 提供；只追加
-        # BlueZ daemon/CLI，USB HCI firmware 由 rtk_btusb 自动加载。
-        "+packages": ["bluez"],
+        # NetworkManager/wpa_supplicant 已由 base package set 提供；追加
+        # BlueZ 及 Cardputer HID/UAC1 实机验收工具。
+        "+packages": ["bluez", "alsa-utils", "evtest"],
         # RTL8733BU Bluetooth 最小 firmware/config，同 OOT rtk_btusb source
         # 且固定 commit；WiFi firmware 已编入 8733bu.ko。
         "+extra_firmware": [

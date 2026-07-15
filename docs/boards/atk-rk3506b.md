@@ -17,7 +17,7 @@
 
 内核配置只保存远程 repo 与 branch，不包含开发机源码绝对路径。
 
-## USB GUD 显示
+## Cardputer USB GUD/HID/UAC
 
 本板内核配置包含 `CONFIG_DRM_GUD=y`。将兼容 GUD 协议的 USB 显示设备连接到 USB1
 Host 口后，内核应通过 `gud` DRM 驱动创建 `/dev/dri/cardN`。USB1 的实际 Host 角色和
@@ -27,12 +27,28 @@ Host 口后，内核应通过 `gud` DRM 驱动创建 `/dev/dri/cardN`。USB1 的
 启动参数包含 `console=tty1 fbcon=map:1`，会把 Linux tty console 映射到 GUD 的 framebuffer1。
 板载 MIPI 屏仍保留为 framebuffer0；如果 GUD 未连接，tty console 不会自动回退到 MIPI 屏。
 
+针对 Cardputer USB 复合设备，内核还启用 `CONFIG_USB_HID=m` 与
+`CONFIG_SND_USB_AUDIO=m`，分别绑定 HID 键盘和 UAC1（USB Audio Class 1，USB 音频类 1）
+扬声器/麦克风接口。rootfs 安装 `evtest` 与 `alsa-utils`，便于直接验收。
+
 设备启动后可检查：
 
 ```bash
 dmesg | grep -i gud
 ls -l /dev/dri/card*
+lsusb -t
+cat /proc/bus/input/devices
+evtest /dev/input/eventN
+cat /proc/asound/cards
+aplay -l
+arecord -l
 ```
+
+`lsusb -t` 应显示 GUD 接口绑定 `gud`、HID 接口绑定 `usbhid`、AudioControl 和
+AudioStreaming 接口绑定 `snd-usb-audio`。Cardputer 音频为 mono 16 kHz / 16 bit，因板级
+GPIO43 共用限制，扬声器和麦克风按最后启动方向优先半双工运行。
+由于 rootfs UBI 只有 414 MiB，本板 debug 包集保留 `gdb`/`strace`/`tcpdump`，不安装约
+40 MiB 的 `valgrind`，以为 HID/UAC 验收工具和后续升级保留容量余量。
 
 ## GPT 分区布局
 

@@ -83,6 +83,26 @@ def test_merged_config_uses_requested_kernel_dts_and_arm32(config):
     assert fit_pack["copies"] == 2
 
 
+def test_ethernet_drivers_and_phy_are_built_in(config):
+    """DWMAC、STMMAC 与 Motorcomm PHY 应覆盖 BSP 通用模块配置。"""
+    defconfig = set(config["kernel"]["defconfig"])
+    built_in_options = {
+        "CONFIG_DWMAC_ROCKCHIP=y",
+        "CONFIG_STMMAC_ETH=y",
+        "CONFIG_STMMAC_PLATFORM=y",
+        "CONFIG_MOTORCOMM_PHY=y",
+        "CONFIG_PHYLIB=y",
+        "CONFIG_MDIO_BUS=y",
+        "CONFIG_FIXED_PHY=y",
+    }
+
+    assert built_in_options <= defconfig
+    assert not {
+        option.removesuffix("=y") + "=m"
+        for option in built_in_options
+    } & defconfig
+
+
 def test_hardware_and_minimal_rtt_amp_contract(config):
     assert config["memory"]["size"] == "512M"
     assert config["storage"]["type"] == "spinand"
@@ -94,6 +114,20 @@ def test_hardware_and_minimal_rtt_amp_contract(config):
     assert config["amp"]["app"] == "rk3506_amp_uart4_rtt_demo"
     assert config["rootfs"]["image_format"] == "ubi"
     assert config["rootfs"]["custom_packages"] == ["adbd"]
+
+
+def test_cardputer_usb_composite_host_support(config):
+    """Cardputer 的 HID 与 UAC1 接口应由内核自动绑定。"""
+    fragments = config["kernel"]["defconfig"]
+    assert "CONFIG_USB_HID=m" in fragments
+    assert "CONFIG_SND_USB_AUDIO=m" in fragments
+
+    packages = config["rootfs"]["packages"]
+    assert "alsa-utils" in packages
+    assert "evtest" in packages
+    if config["variant"] == "debug":
+        assert "valgrind" not in packages
+        assert {"gdb", "strace", "tcpdump"} <= set(packages)
 
 
 def test_rtl8733bu_uses_fixed_usb_oot_drivers(config):
