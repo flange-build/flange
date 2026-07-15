@@ -526,7 +526,8 @@ mono 16 kHz/S16_LE UAC1 扬声器与麦克风均完成实机验收。板级 root
 
 用户补充确认 NAND 备份/恢复、四种单组件刷写、UART4/MSH 与 RPMsg 多轮 echo 已完成。
 OpenSpec change `add-rk3506b-atk-rk3506b` 同步 9 个 capability 后归档到
-`archive/2026-07-15-add-rk3506b-atk-rk3506b`；完整测试全绿与最终证据审计仍作为已知测试债务保留。
+`archive/2026-07-15-add-rk3506b-atk-rk3506b`；其完整测试与最终证据审计随后由
+`close-test-and-spec-debt` 统一收尾，结果见下方同日质量门禁条目。
 
 ## [2026-07-15] fix | ATK-RK3506B 双路 YT8512C 无 carrier 根因与修复
 
@@ -546,3 +547,18 @@ enable bit `0x0010` 又被误作寄存器地址（正确地址为 `0x40c3`）；
 刷入 kernel `#18` 并冷启动后，两路 PHY 均绑定 `YT8512B Ethernet (irq=POLL)`；
 `end0` 与 `end1` 分别以 100 Mbps/Full Link Up，拔线正常 Link Down，全程不再依赖
 `mii-tool -R`。OpenSpec change `align-rk3506b-yt8512c-init` 已完成实机验收并归档。
+
+## [2026-07-15] sync | 清零既有 pytest 与 OpenSpec 规格债务
+
+原 42 个 pytest 失败全部修复，没有删除或跳过测试：App 编译命令 2 项改为断言已解析的
+CPU 并行数；BuildCache 20 项同步公开哈希接口、动态必需产物、三层路径和 Merkle 依赖；
+recoveryctl socket 2 项确认仅受限沙箱禁止 loopback，在正常环境通过；rootfs deb 1 项改由
+`ChrootContext` 边界验证；平台与 merge 配置 17 项同步 GUD、Qualcomm、安全 root 及
+product/variant 当前默认值。审计同时发现 12 个 App 集成用例因旧 `app/adbd` 路径静默跳过，
+已改为 `components/app/adbd` 并实际执行。
+
+Ubuntu 24.04 构建镜像中以 Python 3.12.3、pytest 9.1.1 全量运行得到
+`1485 passed in 64.99s`、`0 failed`、`0 skipped`；OpenSpec 全仓 strict validation 为
+`64 passed, 0 failed`。历史 `build-optimization`、`flash-enhancement`、
+`python-app-packaging` 已补齐 delta 后归档，ATK-RK3506B 的 12.1、12.2、13.10 及最终
+实机证据同步完成。

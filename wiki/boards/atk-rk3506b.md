@@ -206,3 +206,5 @@ gadget OTG0 (`ff740000`) 是两个 controller，不应互相切换 role。
   100 Mbps/Full 建链，拔线产生 Link Down，不依赖手工 PHY reset。
 - UART4/MSH console 与 RPMsg 多轮 binary echo 已通过；2.4/5 GHz 连接、Bluetooth HCI
   与 ADB 长时间回归尚未独立验收。
+- 原 42 个 pytest 旧契约失败均已修复且未删测试；Python 3.12 全量为
+  `1485 passed`、OpenSpec strict 为 `64 passed, 0 failed`，归档证据和回滚资料已复核。
