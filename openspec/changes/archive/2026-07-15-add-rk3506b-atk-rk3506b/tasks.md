@@ -91,6 +91,7 @@
 - [x] 9.8 启用 RK3506B 的 `CONFIG_DRM_GUD=y`，保持 USB1 Host/USB0 OTG 角色并增加配置回归测试与中文文档
 - [x] 9.9 启用 DRM fbdev/fbcon，并将 `tty1` 默认映射到 GUD framebuffer1
 - [x] 9.10 修正 Cardputer GUD 固件的 TinyUSB Vendor FIFO 收帧路径，确保 fbcon 的 bulk OUT 帧被组帧并刷新到 ST7789
+- [x] 9.11 启用 Cardputer USB HID/UAC1 host driver，在 rootfs 加入 `evtest`/`alsa-utils`，并以板级 debug 集移除 `valgrind` 保持 UBI 容量余量
 
 ## 10. 构建与静态集成验收
 
@@ -105,12 +106,12 @@
 
 ## 11. 实机刷写与运行验收
 
-- [ ] 11.1 在破坏性操作前保存原厂 parameter、各可读 MTD 分区和恢复工具/镜像，并验证 MaskROM 恢复路径
+- [x] 11.1 在破坏性操作前保存原厂 parameter、各可读 MTD 分区和恢复工具/镜像，并验证 MaskROM 恢复路径
 - [x] 11.2 仅下载 RK3506B miniloader 并确认设备保持当前 SPI NAND、容量与 parameter 解析结果，不写分区；`SSD` 不支持结果已记录
-- [ ] 11.3 分别刷写 bootloader、boot、amp 和 rootfs，核对每次命令只操作预期具名分区
+- [x] 11.3 分别刷写 bootloader、boot、amp 和 rootfs，核对每次命令只操作预期具名分区
 - [x] 11.4 冷启动验证 U-Boot 从 SPI NAND 加载 boot/amp、Linux 从 `ubi0:rootfs` 挂载且 MIPI 720×1280 显示工作
-- [ ] 11.5 验证 Linux 仅枚举 CPU0/CPU1，UART4 输出 RT-Thread banner/link-up 并可进入 MSH
-- [ ] 11.6 通过 `/dev/rpmsg_ctrlN`/`/dev/rpmsgN` 完成多轮 Linux↔CPU2 echo，并记录 dmesg/UART 日志
+- [x] 11.5 验证 Linux 仅枚举 CPU0/CPU1，UART4 输出 RT-Thread banner/link-up 并可进入 MSH
+- [x] 11.6 通过 `/dev/rpmsg_ctrlN`/`/dev/rpmsgN` 完成多轮 Linux↔CPU2 echo，并记录 dmesg/UART 日志
 - [x] 11.7 将最终 NAND 几何、刷写输出、启动日志、容量余量和已知限制回写中文文档及测试证据
 - [x] 11.8 重刷新 rootfs 后冷启动，不手工 `modprobe` 即确认 `usb_gadget` 存在、`ff740000.usb` 进入 `configured` 且 ADB 可连接
 
@@ -131,3 +132,4 @@
 - [x] 13.8 增加 Rockchip 单设备、RCI/RFI/RID SoC/存储身份门禁，并让全刷复用 named-DI 原语
 - [x] 13.9 同步 ProjectSpec、OpenSpec capability 与 ATK board 文档
 - [ ] 13.10 运行完整自动化测试、OpenSpec strict validation，并复核实机 `/proc/iomem` 排除 CPU2 firmware 区域
+- [x] 13.11 将 ATK-RK3506B 的 DWMAC/STMMAC、Motorcomm PHY、PHYLIB、MDIO 与 fixed PHY 配置强制为 built-in，并增加 FINAL_CONFIG 回归测试

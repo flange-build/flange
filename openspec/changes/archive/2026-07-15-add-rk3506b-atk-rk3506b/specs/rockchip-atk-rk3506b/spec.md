@@ -29,6 +29,13 @@
 - **THEN** repo、branch 和 DTS 与要求逐字一致
 - **AND** 最终 `.config` 支持 MIPI display、AMP、SPI NAND、UBI/UBIFS 与 RPMsg char
 
+#### Scenario: 以太网驱动与 PHY 支持内建
+- **WHEN** 解析 debug 或 release 的最终 kernel defconfig
+- **THEN** `CONFIG_DWMAC_ROCKCHIP`、`CONFIG_STMMAC_ETH`、
+  `CONFIG_STMMAC_PLATFORM`、`CONFIG_MOTORCOMM_PHY`、`CONFIG_PHYLIB`、
+  `CONFIG_MDIO_BUS` 与 `CONFIG_FIXED_PHY` 均为 `y`
+- **AND** 上述配置不被通用 `rk3506_defconfig` 降级为 module
+
 #### Scenario: DTS 保留 CPU2 AMP 与 UBI 启动参数
 - **WHEN** 反编译构建出的目标 DTB
 - **THEN** Linux CPU 列表不含 `cpu@f02`
@@ -167,3 +174,18 @@ ATK-RK3506B 的最终 kernel defconfig SHALL 启用
 - **AND** kernel args 包含 `console=tty1 fbcon=map:1`
 - **AND** USB1 仍用于连接 USB Host 设备
 - **AND** USB0 仍用于 OTG/device 与 ADB
+
+### Requirement: ATK-RK3506B 支持 Cardputer USB HID 与 UAC1
+
+ATK-RK3506B 的最终 kernel defconfig SHALL 启用 `CONFIG_USB_HID=m` 与
+`CONFIG_SND_USB_AUDIO=m`，使 Cardputer USB 复合设备的 HID 键盘、UAC1 扬声器与麦克风
+接口能够通过 USB modalias 自动绑定。rootfs SHALL 包含 `evtest` 与 `alsa-utils`
+验收工具。为遵守 414 MiB UBI 容量门禁，该板 debug 包集 SHALL 保留
+`gdb`/`strace`/`tcpdump` 但不安装 `valgrind`。
+
+#### Scenario: Cardputer 复合设备自动绑定
+- **WHEN** 将 Cardputer `16d0:10a9` 连接到 USB1 Host 口
+- **THEN** HID Boot Keyboard 接口绑定 `usbhid` 并创建 `/dev/input/eventN`
+- **AND** AudioControl/AudioStreaming 接口绑定 `snd-usb-audio`
+- **AND** ALSA 列出 mono 16 kHz / 16 bit playback 与 capture PCM
+- **AND** rootfs 可执行 `evtest`、`aplay`、`arecord` 与 `amixer`

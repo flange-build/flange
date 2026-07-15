@@ -19,34 +19,46 @@ flange SHALL 为 Rockchip bootloader 提供启用 AMP 的配置（经 `bootloade
 
 ### Requirement: 目标板 Linux DTS 接入 AMP 通信节点
 
-flange SHALL 为目标板提供一个**专用 AMP dts 文件**（经 board kernel patch 新增到内核树，由 amp product 的 `kernel.dts` 选用），内容为基础板 dts 加三类 AMP 改动：(a) `#include "rk3568-amp.dtsi"`（或等价内联）接入 `reserved-memory`（amp_shmem / rpmsg / rpmsg_dma / mcu 段）、`rockchip-amp`（amp-cpus entry + amp-irqs）、`rpmsg`（`rockchip,rpmsg` + `mboxes` + `memory-region`）并使能 `&mailbox`（status = okay）；(b) `/delete-node/ &<amp-core>;` 把分给 AMP 的 cpu 节点（tspi-rk3566 为 cpu3）从 Linux 摘掉，使 Linux 不去 online 该核；(c) 确保 AMP 从核 console 所用 UART（默认 UART4）不被 Linux 占用。reserved-memory 与 amp-cpus entry 地址 SHALL 与 amp 固件内存布局（SHMEM_BASE / LINUX_RPMSG_BASE / 从核 load 地址）一致。改动 SHALL 走独立 dts 文件 + product 选用，SHALL NOT 写成会改基础板主 dts 的 board patch（patch 按板对所有 product 生效，会污染非 amp product）；也 SHALL NOT 走运行时 overlay（目标板 extlinux 默认不应用 overlay）。因 DTS 走静态 patch、无法在构建期消费 SoC 内存布局常量（与 build.sh/.its 两腿由构建器注入不同），flange SHALL 提供一个构建期/校验期交叉比对：把 patch 内的 reserved-memory / amp-cpus entry 地址与 SoC 内存布局常量逐项比对，不一致 SHALL 使构建/校验失败——以此把 DTS 这条手工腿纳入内存布局单一事实源的一致性保障，避免「改了常量忘改 patch」无人拦截。
+启用 AMP 的 target SHALL 选择包含以下内容的专用 DTS：AMP reserved-memory、
+`rockchip-amp`、`rockchip,rpmsg`、已启用 mailbox、从 Linux CPU 列表删除的 AMP core，以及不被
+Linux 占用的 AMP console UART。该 DTS MAY 已存在于指定 kernel branch，也 MAY 由 board patch
+新增；若内核已提供精确匹配的 DTS，flange SHALL 直接选用而不得复制或改写一份同名协议。
+
+reserved-memory、从核 load/MPIDR、RPMsg base/size、mailbox/link-id 和 UART 资源 SHALL 与
+FINAL_CONFIG 及 AMP FIT 一致。builder SHALL 根据 `kernel.arch`、`kernel.dts_dir` 和目标 DTS
+include 链执行交叉校验，不得写死 RK3568/ARM64 路径。地址或资源不一致 MUST 使构建失败。
 
 #### Scenario: 编出的 dtb 含 AMP 节点
-
-- **WHEN** 用 amp product（如 `tspi-rk3566-amp`）构建内核并反编译其 dtb
-- **THEN** 含 `compatible = "rockchip,rpmsg"` 节点、四段 AMP `reserved-memory`、`rockchip-amp` 节点
-- **AND** `mailbox` 节点 `status` 为 `okay`
+- **WHEN** 构建启用 AMP 的 target 并反编译 DTB
+- **THEN** 含 `compatible=rockchip,rpmsg`、AMP reserved-memory 和 `rockchip-amp`
+- **AND** 相关 mailbox 节点为 `okay`
 
 #### Scenario: AMP 从核的 cpu 节点被摘出 Linux
+- **WHEN** 反编译启用 AMP 的 DTB 或在目标板查看 CPU 枚举
+- **THEN** 分给 AMP 的 CPU 节点不属于 Linux
+- **AND** Linux CPU 数量等于 SoC 总核数减去配置的 AMP 核数
 
-- **WHEN** 用 amp product 构建并反编译 dtb，或上板执行 `nproc`/`cat /proc/cpuinfo`
-- **THEN** dtb 中分给 AMP 的 cpu 节点（tspi-rk3566 为 `cpu@300`/cpu3）不存在
-- **AND** Linux 仅枚举 3 个 CPU（cpu0/1/2）
+#### Scenario: 非 AMP product 不受专用 DTS 影响
+- **WHEN** 某板同时提供非 AMP product 并构建该 product
+- **THEN** 不选择 AMP DTS 且不删除 Linux CPU
 
-#### Scenario: default product 不受 AMP dts 影响
-
-- **WHEN** 用 `default` product（非 amp）构建内核
-- **THEN** 其 dtb 不含 AMP 节点、cpu 节点齐全（4 核），不选用 amp dts 文件
+#### Scenario: 内核已有精确 AMP DTS 时直接复用
+- **WHEN** 指定 kernel branch 已包含 board 配置声明的 AMP DTS
+- **THEN** kernel builder 直接构建该 DTS
+- **AND** board 不增加复制该 DTS 的 patch
 
 #### Scenario: DTS 地址与 amp 固件一致
+- **WHEN** 比较 DTS、FINAL_CONFIG 与 amp FIT 的 reserved-memory/RPMsg/load 数据
+- **THEN** 对应地址、大小、CPU 与 link-id 一致
+- **AND** CPU2 firmware `0x03e00000/0x00100000` 具有 `no-map` reserved-memory
 
-- **WHEN** 比较 DTS 的 reserved-memory/amp-cpus entry 地址与 amp 固件注入的 SHMEM/LINUX_RPMSG/load 地址
-- **THEN** 对应段地址逐字节一致（同一内存布局事实源）
+#### Scenario: Linux 不管理 CPU2 firmware 内存
+- **WHEN** 目标板启动后读取 `/proc/iomem` 与 reserved-memory sysfs
+- **THEN** `0x03e00000-0x03efffff` 不属于 Linux System RAM
 
-#### Scenario: DTS 地址与 SoC 常量不一致时被拦截
-
-- **WHEN** board kernel patch 内的 reserved-memory/amp-cpus 地址与 SoC 内存布局常量不一致
-- **THEN** 构建期/校验期交叉比对失败，给出明确错误（指出哪段地址不匹配）
+#### Scenario: DTS 与配置不一致时被拦截
+- **WHEN** DTS include 链中的 AMP 数据与 FINAL_CONFIG 不一致
+- **THEN** 构建失败并指出字段、DTS 值与配置值
 
 ### Requirement: 内核暴露 rpmsg 字符设备供用户态通信
 
@@ -64,44 +76,46 @@ flange SHALL 为目标板提供一个**专用 AMP dts 文件**（经 board kerne
 
 ### Requirement: AMP↔Linux rpmsg 链路建立与双向收发
 
-flange 交付的 amp product（dts + amp 从核固件 + 内核）SHALL 共同满足 rpmsg-lite 从核与 Linux master 之间「链路握手 + name-service 通告 + 双向数据」的三项约束，缺一则链路不通（上板表现为从核卡 `rpmsg_lite_wait_for_link_up`，或 link-up 成功但 Linux 无对应 rpmsg 通道）。三约束 mode 无关，但旋钮位置随 mode 不同：`hal` 在 amp app 的 `main.c`，`rt-thread` 在 BSP 的 `board/common/`。
+flange 交付的 AMP product SHALL 通过一个按 SoC 定义的 runtime profile 统一 DTS、固件与
+rpmsg-lite port。profile MUST 至少声明 AMP CPU、Linux master CPU、link-id、mailbox 实例/通道、
+mailbox IRQ、RPMsg memory、endpoint 和 GIC 初始化策略。固件与 DTS MUST 消费相同语义值，Linux
+RPMsg 驱动保持 target kernel 的 stock 实现。
 
-**(a) rpmsg 邮箱中断路由到从核（DTS amp-irqs + 固件侧路由）。** 从核 `rpmsg_lite_wait_for_link_up` 死等本核 RAM 的 `link_state`，它仅在从核收到 Linux 发来的首条 mailbox 中断——MBOX0 通道3 A2B 方向，INTID 222 / GIC SPI 190——经 ISR 置 1（与共享内存/cache 无关）。该 IRQ SHALL 列入 `rockchip-amp` 的 `amp-irqs` 并路由到 AMP 核（tspi-rk3566 = cpu3）；否则 Linux `gic_dist_init`（irq-gic-v3）会把未列入 amp-irqs 的 SPI 的 GICD_IROUTER 强制改回 boot CPU(cpu0)、盖掉从核自设路由，使从核永久阻塞。**该 DTS amp-irqs 腿 mode 无关，hal 与 rt-thread 共用同一 board dts。** 固件侧亦 SHALL 把 222 路由到本核：`hal` 由 amp app `irqsConfig[]` 提供；`rt-thread` 由 BSP `board/common/board_base.c` 的 `irqsConfig[]` 在 Linux-rpmsg Kconfig 选项（如 `RT_USING_COMMON_TEST_LINUX_RPMSG_LITE`）下提供，故 rt-thread app 的 `.config` SHALL 启用该选项。
+所有 profile SHALL 满足：从核不重新初始化由 Linux 管理的 GIC distributor；mailbox IRQ 可在
+从核上被使能；`rpmsg_lite_wait_for_link_up` 成功；从核发送 name-service announce；Linux 可创建
+字符 endpoint 并完成双向数据。
 
-**(b) 从核不接管 GIC 分发器。** amp 从核固件的 `GIC_IRQ_AMP_CTRL.cpuAff`/`defRouteAff` SHALL 设为**非本核**（Linux master 所在 cpu0），使 `HAL_GIC_Init` 判定 `gicInit=0`——从核仅等待 Linux 配置好 AMP 路由后使能自身 IRQ，SHALL NOT 重初始化 GIC 分发器。设为本核会令 `gicInit=1`、从核与 Linux 抢 GICD 致挂死。旋钮：`hal` 在 amp app `main.c`（早期默认 `(3,0)` 须改 cpu0）；`rt-thread` 在 BSP `board/common/board_base.c` 的 `irqConfig`，**厂商 BSP 默认即 `cpuAff = CPU_GET_AFFINITY(0,0)`、`defRouteAff = CPU_GET_AFFINITY(0,0)`，已满足，无需改**。
-
-**(c) 反向通道（从核→Linux 新消息）经 link-id 命中 stock 驱动，内核 rpmsg 驱动保持 stock。** rpmsg-lite `platform_notify` 用 `RL_GET_R_CPU_ID(link-id)`（低4位 R）作从核发送的 mailbox 通道号；stock `rockchip_rpmsg_mbox` 把"新消息"通道定为 `rpmsg-rx`(ch0)→`rk_rpmsg_rx_callback`→vq[0]。故 link-id 低4位(R) SHALL 取 **0**，使从核把新消息发到 ch0、命中 stock rx 回调；高4位(M) 取任意 ≠ 从核物理 cpu 的值。固件的 `RL_PLATFORM_SET_LINK_ID(M,R)` 与 board dts override 的 `rockchip,link-id` SHALL 同步为该值（如 **0x10**，M=1/R=0）。旋钮：`hal` 在 amp app `main.c` 的 `LINK_ID_M/R`；`rt-thread` **在 amp app `main.c` 自写** `RL_PLATFORM_SET_LINK_ID(1,0)=0x10`——**上板修正：厂商 `rpmsg_test.c` 的 Linux-rpmsg 测试自定义 `MASTER_ID=0`、`remote_id=cpu3` → `0x03`（R=3），与 stock 驱动（新消息 ch0）及 dts 的 0x10 均不符（卡 `wait_for_link_up`），故 SHALL NOT 直接用厂商测试；rt-thread app SHALL 自写 rpmsg echo 并取 link-id 0x10**。flange SHALL NOT 为此 patch 内核 rpmsg 驱动（两 mode 共用 100% stock 驱动，与上游 radxa/rockchip-linux 一致）。
-
-**(d) rt-thread：222 SHALL 由 app 补进 AMP GIC 白名单。** AMP 模式（`gicInit=0`）下 `HAL_GIC_Enable(irq)` 受 `GIC_AmpCheckIrqValid()` 门控——仅 `HAL_GIC_Init` 经 `irqsCfg` 进过 `ampValid` 白名单的 IRQ 才可本核使能。`hal` app 的 `irqsConfig[]` 已含 `MBOX0_CH3_A2B_IRQn`(222)；`rt-thread` BSP `board_base.c` 仅在 `RT_USING_COMMON_TEST_LINUX_RPMSG_LITE` flag 下才含 222（而该 flag 会拉起厂商测试于错误 link-id）。故不开该 flag 时，rt-thread app SHALL 在 `rpmsg_lite_remote_init` 之前调用 `HAL_GIC_Init(&cfg)`（`cfg.irqsCfg` 仅含 222、`cpuAff` 取非本核以保持 gicInit=0）增量补进白名单——否则 rpmsg-lite 的 `HAL_GIC_Enable(222)` 静默返回 `HAL_INVAL`，从核收不到 Linux kick、永卡 `wait_for_link_up`（现象：`MBOX0 A2B_STATUS ch3` 位置起不被消费）。
+RK3568 profile SHALL 保持现有 CPU3、`link-id=0x10`、MBOX0_CH3_A2B/INTID 222 和 RT-Thread
+app 增量 GIC 白名单行为。RK3506 profile SHALL 使用 CPU2、`link-id=0x02`、DTS 中的
+mailbox0/mailbox2 与 INTID 176/RK3506 `MAILBOX_BB_2_IRQn` 路由；它 SHALL NOT 套用
+RK3568 的 link-id 或 INTID 222 workaround。
 
 #### Scenario: 从核 link-up 成功
-
-- **WHEN** amp 固件运行、Linux 起来后查看从核 console（UART4）
-- **THEN** 打印 `rpmsg: link up` 与端点 `announced`（说明 `wait_for_link_up` 已返回、收到了 INTID 222 邮箱中断）
+- **WHEN** AMP 固件运行且 Linux RPMsg master 初始化完成
+- **THEN** 从核 console 打印 `link up` 与 endpoint `announced`
 
 #### Scenario: Linux 建出从核通告的 rpmsg 通道
-
-- **WHEN** 从核 `rpmsg_ns_announce` 后在 Linux 查看 `/sys/bus/rpmsg/devices`
-- **THEN** 出现从核通告的通道（地址与固件端点一致），dmesg 含 `creating channel`
+- **WHEN** 从核执行 name-service announce
+- **THEN** Linux `/sys/bus/rpmsg/devices` 与 dmesg 出现对应通道
 
 #### Scenario: 端到端双向收发
+- **WHEN** Linux 经 `/dev/rpmsg_ctrlN` 创建 endpoint 并写入数据
+- **THEN** 从 `/dev/rpmsgN` 读回从核响应
 
-- **WHEN** 经 `/dev/rpmsg_ctrl0` 创建匹配该通道的端点得 `/dev/rpmsgN`，向其写入数据
-- **THEN** 读回从核 echo（双向数据路径通）
+#### Scenario: RK3568 runtime 行为保持不变
+- **WHEN** 构建和启动既有 RK3568 RT-Thread AMP product
+- **THEN** 继续使用 CPU3、link-id `0x10`、INTID 222 与既有 GIC 白名单处理
+- **AND** RPMsg echo 回归通过
 
-#### Scenario: rt-thread app 满足约束 (b)/(c)/(d)（上板实测）
+#### Scenario: RK3506 runtime 使用 SoC 专用 profile
+- **WHEN** 构建和启动 RK3506B RT-Thread AMP product
+- **THEN** 固件和 DTS 均使用 CPU2、link-id `0x02`、mailbox0/mailbox2 与 RK3506 mailbox IRQ
+- **AND** 不注入 RK3568 的 INTID 222 配置
 
-- **WHEN** 以 `mode=rt-thread` 构建并上板
-- **THEN** 约束 (b) `gicInit=0` 由 BSP `board_base.c` 的 `irqConfig.cpuAff=cpu0` 默认满足
-- **AND** 约束 (c) link-id 由 amp app `main.c` 自写 `SET_LINK_ID(1,0)=0x10`（与 dts 0x10 一致），**非**厂商测试的 0x03
-- **AND** 约束 (d) app `main.c` 在 rpmsg init 前 `HAL_GIC_Init(&amp_extra_gic)` 把 222 补进 AMP GIC 白名单
-- **AND** 上板结果：从核 UART4 打印 `link up!`+`announced`，Linux `dmesg` 出现 `creating channel rpmsg-ap3-ch0 addr 0x3003`
-
-#### Scenario: 两 mode 共用同一 board dts 与 stock 内核驱动
-
-- **WHEN** 在 hal 与 rt-thread 两 product 间切换并构建 image
-- **THEN** 二者用同一份 board amp dts（amp-irqs、`rockchip,link-id`、reserved-memory、amp-cpus entry）与同一份未 patch 的内核 rpmsg 驱动
-- **AND** 仅 amp.img 的从核固件内容不同（CMake firmware vs scons rtthread）
+#### Scenario: 两种 mode 使用同一板级协议
+- **WHEN** 某 target 同时提供 HAL 与 RT-Thread mode
+- **THEN** 两者共用该 target 的 DTS、runtime profile 与 stock Linux driver
+- **AND** 仅 amp partition 内的从核 firmware 内容不同
 
 ### Requirement: AMP 从核 console UART 按板选择并保持三方一致
 
@@ -204,3 +218,17 @@ MBOX0_CH3_A2B IRQ、link-id 0x10 和 GIC 白名单约束不变。
 - **WHEN** 使用同步后的 RT-Thread 4.1.1 与 Rockchip HAL SDK 构建并上板
 - **THEN** app 不因旧版 rpmsg-lite 或 GIC route API 编译失败
 - **AND** Linux 创建 `rpmsg-ap3-ch0` 后双向 echo 成功
+
+### Requirement: RK3506B AMP console 固定为 UART4
+
+ATK-RK3506B 的 DTS、RT-Thread BSP 与 app SHALL 一致使用 UART4、
+`RM_IO27_TX/RM_IO28_RX`、UART4 IRQ 和 1500000 8N1。Linux SHALL 不初始化或复用该 UART pinmux。
+
+#### Scenario: UART4 三方配置一致
+- **WHEN** 检查目标 DTB、RT-Thread `.config` 和 app 初始化代码
+- **THEN** 三者均选择 UART4 与相同 pinmux/baud rate
+
+#### Scenario: 冷启动日志可见
+- **WHEN** 从 SPI NAND 冷启动并监听 UART4
+- **THEN** 在 RPMsg link-up 前看到 RT-Thread banner 和 CPU2 启动日志
+- **AND** link-up 后 MSH 可交互

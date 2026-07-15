@@ -63,6 +63,16 @@ configured
 全量刷写后冷启动无需手工 `modprobe`，ADB 可直接连接，证明 board overlay 与
 `usbdevice.service` 的模块加载/顺序修正生效。
 
+## Cardputer USB 复合设备
+
+2026-07-15 通过 ADB 对 Cardputer `16d0:10a9` 完成实机验收。`lsusb -t` 显示 interface 0
+绑定 `gud`，interface 1/2/3 绑定 `snd-usb-audio`，interface 4 绑定 `usbhid`；TTY console
+已通过 GUD framebuffer 显示，HID 键盘输入正常。
+
+ALSA 将设备枚举为 card 2 `Cardputer GUD Display`，playback 与 capture 均为 mono、
+16000 Hz、S16_LE。`speaker-test`、5 秒 `arecord` 及录音 `aplay` 回放均正常退出，用户确认
+扬声器和麦克风实际声音正常。rootfs 中的 `evtest`、`aplay`、`arecord` 与 `amixer` 可直接用于验收。
+
 ## 自动化与规格校验
 
 - RK3506B/ARM32/UBI/AMP/刷写/ADB 定向测试：`95 passed`；
@@ -73,9 +83,13 @@ configured
   为 `2 passed`。其余既有陈旧断言仍需独立测试债务变更处理，因此任务 12.1/13.10
   保持未完成，不以定向测试替代全量绿灯。
 
-## 仍待验收
+## 补充验收确认
+
+2026-07-15 用户补充确认以下项目均已完成：
 
 - 原厂 parameter/各分区备份与 MaskROM 恢复演练；
 - bootloader、boot、amp、rootfs 四种单组件刷写实操；
 - UART4 上的 RT-Thread banner、link-up 和可交互 MSH；
 - 创建 RPMsg char endpoint 后的多轮 Linux↔CPU2 echo。
+
+完整自动化测试仍有既有失败，最终测试债务与证据审计任务继续保持未完成，不以本次实机确认替代。

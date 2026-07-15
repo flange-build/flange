@@ -1,3 +1,10 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: amp 分区必须声明为非 raw 具名 GPT 分区`
+- TO: `### Requirement: amp 分区必须声明为目标存储可寻址的具名 GPT 分区`
+- FROM: `### Requirement: image 整盘组装把 amp.img dd 进 amp 分区偏移`
+- TO: `### Requirement: image 与 flash 按存储能力处理 amp.img`
+
 ## MODIFIED Requirements
 
 ### Requirement: amp 分区必须声明为目标存储可寻址的具名 GPT 分区

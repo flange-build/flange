@@ -4,34 +4,54 @@
 TBD - created by archiving change 2026-03-29-phase6-image-flash. Update Purpose after archive.
 ## Requirements
 ### Requirement: Rockchip 平台 boot 分区构建脚本
-`image/rockchip/build_boot.sh` SHALL 实现 Rockchip 平台的 boot 分区构建流程：创建目录结构 → 复制 Image 和 DTB → 解压 DTBO → 生成 extlinux.conf → mkfs.ext4 打包为 boot.img。
+
+Rockchip boot 构建 SHALL 按 FINAL_CONFIG 的 boot format 路由。extlinux 模式 SHALL 保持现有
+流程：创建目录结构、复制 Image/DTB/DTBO、生成 extlinux.conf 并打包 ext4 `boot.img`。
+vendor FIT 模式 SHALL 使用内核提供的 FIT 生成器把配置声明的 kernel payload、DTB 与 resource
+打包为 `boot.img`，不得额外创建 extlinux 或 ext4 文件系统。
 
 #### Scenario: boot 分区目录结构
-- **WHEN** build_boot.sh 组装 boot 分区内容
+- **WHEN** extlinux 模式组装 boot 分区内容
 - **THEN** 创建 `/Image`、`/dtb/rockchip/<dts>.dtb`、`/extlinux/extlinux.conf` 结构
 
 #### Scenario: extlinux.conf 内容正确
-- **WHEN** `BOOT_DEFAULT_OVERLAYS` 包含 overlay 列表且 `BOOT_KERNEL_ARGS` 包含内核参数
-- **THEN** 生成的 extlinux.conf 包含正确的 `kernel`、`fdt`、`fdtoverlays`（如有）、`append` 行
+- **WHEN** extlinux 模式的 `BOOT_DEFAULT_OVERLAYS` 包含 overlay 列表且
+  `BOOT_KERNEL_ARGS` 包含内核参数
+- **THEN** 生成的 extlinux.conf 包含正确的 `kernel`、`fdt`、`fdtoverlays`（如有）、
+  `append` 行
 
 #### Scenario: DTBO 文件解压
-- **WHEN** `BOOT_DTBOS_DIR` 非空且包含 .dtbo 文件
+- **WHEN** extlinux 模式的 `BOOT_DTBOS_DIR` 非空且包含 `.dtbo` 文件
 - **THEN** DTBO 文件被复制到 boot 分区的 `/dtb/rockchip/overlay/` 目录
 
-### Requirement: Rockchip 平台镜像打包脚本
-`image/rockchip/build_image.sh` SHALL 实现 Rockchip 平台的磁盘镜像打包流程：解析 parameter.txt → 创建空白镜像 → 写入分区表 → dd bootloader 到对应偏移 → 写入 boot 和 rootfs 分区 → 产出 raw.img。
+#### Scenario: vendor FIT 模式不生成 extlinux
+- **WHEN** `kernel.boot_format=fit`
+- **THEN** `boot.img` 是包含目标 kernel 与 FDT 的 FIT
+- **AND** 构建过程不调用 `mke2fs` 且不生成 extlinux.conf
 
-#### Scenario: 完整打包流程
-- **WHEN** image_build 框架调用 `image/rockchip/build_image.sh`
-- **THEN** 产出的 raw.img 包含完整的分区表、bootloader、boot 分区和 rootfs 分区
+### Requirement: Rockchip 平台镜像打包脚本
+
+Rockchip image 构建 SHALL 按 FINAL_CONFIG 和物理存储能力选择映射。非 SPI NAND 的 `gpt` 模式
+SHALL 创建磁盘 `raw.img` 并写入 GPT/bootloader/boot/rootfs；`storage.type=spinand` 时无论
+`partitions.format` 为 GPT 或 MTD，构建系统都 SHALL 从最终 entries/parameter 生成
+`parameter.txt` 与具名刷写 manifest，不得生成整片 `raw.img`。
+
+#### Scenario: 完整 GPT 打包流程
+- **WHEN** image builder 处理 `partitions.format=gpt`
+- **THEN** 产出的 `raw.img` 包含完整分区表、bootloader、boot 与 rootfs 分区
 
 #### Scenario: bootloader 写入正确偏移
-- **WHEN** parameter.txt 定义 uboot 分区偏移为 0x4000 扇区
-- **THEN** u-boot.itb 被 dd 到 raw.img 的对应偏移位置
+- **WHEN** GPT parameter 定义 uboot 分区偏移为 `0x4000` 扇区
+- **THEN** `u-boot.itb` 被写到 `raw.img` 的对应偏移位置
 
-#### Scenario: rootfs 从 tar.gz 转 ext4
-- **WHEN** 打包脚本处理 rootfs
-- **THEN** 创建 ext4 文件系统，将 rootfs.tar.gz 解压到其中，生成 UUID 并回写到 extlinux.conf
+#### Scenario: rootfs 从 staging 转 ext4
+- **WHEN** GPT/ext4 路径处理 rootfs
+- **THEN** 创建 ext4 文件系统、生成 UUID 并让 extlinux 引用正确 rootfs
+
+#### Scenario: GPT/SPI NAND 使用 UBI 具名产物
+- **WHEN** GPT image builder 处理 `storage.type=spinand` 与 `rootfs.image_format=ubi`
+- **THEN** manifest 将 rootfs 分区映射到 `rootfs.ubi`
+- **AND** 不查找 `rootfs.img` 或生成 `raw.img`
 
 ### Requirement: Rockchip parameter.txt 分区定义
 `image/rockchip/parameter.txt` SHALL 定义 Rockchip 平台的默认分区布局，包含 uboot、misc、boot、rootfs 分区的偏移和大小。
@@ -52,9 +72,35 @@ TBD - created by archiving change 2026-03-29-phase6-image-flash. Update Purpose 
 - **THEN** boot_partition 使用 `//kernel/rockchip` 的产物、board.bzl 中的 boot 配置；image_build 聚合 boot + bootloader + rootfs 产物
 
 ### Requirement: Rockchip 镜像产物收集
-`image/rockchip/BUILD.bazel` SHALL 包含 `image_collect` 实例，收集 raw.img 和各组件镜像到 `target/<board>/image/` 目录，同时复制 parameter.txt 供刷写脚本使用。
 
-#### Scenario: 收集产物完整
-- **WHEN** 执行 `bazel run //image:collect --config=radxa-zero3w`
-- **THEN** `target/radxa-zero3w/image/` 包含 `raw.img`、`idbloader.img`、`u-boot.itb`、`boot.img`、`rootfs.tar.gz`、`parameter.txt`
+Rockchip image 收集 SHALL 根据最终构建路由复制必需产物。块设备 GPT/ext4 路径 SHALL 保持
+收集 `raw.img`、bootloader、boot、rootfs 与 parameter；GPT/UBI SPI NAND 路径 SHALL 收集
+loader、idbloader、U-Boot、FIT boot、AMP、UBI rootfs、生成的 parameter、具名刷写 manifest
+和 flash config。
+
+#### Scenario: GPT 产物收集保持完整
+- **WHEN** 收集现有 Rockchip GPT/ext4 target
+- **THEN** 目标目录仍包含 `raw.img`、bootloader、`boot.img`、`rootfs.img` 与
+  `parameter.txt`
+
+#### Scenario: SPI NAND GPT/UBI 产物收集完整
+- **WHEN** 收集 RK3506B SPI NAND target
+- **THEN** 目标目录包含 loader、`boot.img`、`amp.img`、`rootfs.ubi`、
+  `parameter.txt`、`mtd-bundle.json` 和 `flash-config.json`
+- **AND** flash config 声明具名 DI 路由而非整片 raw 写入
+
+### Requirement: 生成的 parameter 与 DTS 启动参数交叉校验
+
+当 target 使用 `ubi.mtd=<index>` 时，image/flash config SHALL 解析从最终 GPT entries 生成的
+`parameter.txt`，确认对应 index 的分区名为 rootfs，并确认所有分区末端不超过配置声明的存储容量。
+该校验 SHALL 由 `storage.type=spinand && rootfs.image_format=ubi` 触发，不得依赖
+`partitions.format` 的字符串取值。
+
+#### Scenario: rootfs MTD index 匹配
+- **WHEN** DTS 声明 `ubi.mtd=5` 且 parameter 的第六个分区为 rootfs
+- **THEN** 生成布局校验通过
+
+#### Scenario: rootfs MTD index 错误
+- **WHEN** DTS 声明 `ubi.mtd=5` 但 parameter 的第六个分区不是 rootfs
+- **THEN** image 构建失败并报告 index、实际名称与期望名称
 

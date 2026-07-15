@@ -512,4 +512,18 @@ audit 发现 4 个业务 commit（`a7e60dc` `a99f040` `00f3462` `89aa609`）只�
 
 新增 [[atk-rk3506b]] 与 [[rk3506 AMP UART4 RPMsg demo]]，同步 [[rockchip 平台]]、[[rootfs 构建器]]、[[image 构建器]]、[[amp 构建器]]、[[AMP 协处理器与 rpmsg]]、[[flash-config.json]]、[[FlashStrategy 抽象]]、[[USB 线刷协议]]、[[adbd]] 及索引。该板为 flange 首个 ARM32 Rockchip：512 MiB DDR + 512 MiB SPI NAND，kernel `linux-6.1-stan-rkr5.1`、vendor FIT、Ubuntu Base armhf UBI/UBIFS；CPU0-1 跑 Linux，CPU2 在 `0x03e00000` 跑最小 RT-Thread（UART4 + RPMsg）。刷写由配置生成 parameter，按 `DB → 身份门禁 → UL -noreset → DI -p → 具名 DI` 执行，不依赖 loader 不支持的 SSD，也不把 SPI NAND 伪装为 GPT raw.img。
 
-实机已确认：Maskrom 全刷、断电冷启动、Linux 6.1.115、rootfs UBIFS 可写、CPU2 固件区从 `/proc/iomem` 排除、RPMsg channel 枚举、USB gadget `ff740000.usb` configured 且 ADB 可进入。OpenSpec 证据落在 `add-rk3506b-atk-rk3506b/evidence/rk3506b-hardware-acceptance.md`；UART4/MSH、RPMsg 多轮 echo、坏块与恢复演练仍保持未完成，不以枚举结果替代端到端验收。
+实机已确认：Maskrom 全刷、断电冷启动、Linux 6.1.115、rootfs UBIFS 可写、CPU2 固件区从
+`/proc/iomem` 排除、RPMsg channel 枚举、USB gadget `ff740000.usb` configured 且 ADB 可进入。
+OpenSpec 证据现位于 `archive/2026-07-15-add-rk3506b-atk-rk3506b/evidence/rk3506b-hardware-acceptance.md`；
+UART4/MSH、RPMsg 多轮 echo、坏块与恢复演练在该日仍保持未完成，不以枚举结果替代端到端验收。
+
+## [2026-07-15] sync | ATK-RK3506B Cardputer GUD/HID/UAC 实机验收与规格归档
+
+新增 [[Cardputer USB 复合设备]]，同步 [[atk-rk3506b]] 与索引。Cardputer `16d0:10a9`
+在 USB1 Host 自动绑定 `gud`、`usbhid` 和 `snd-usb-audio`；GUD TTY console、HID 键盘、
+mono 16 kHz/S16_LE UAC1 扬声器与麦克风均完成实机验收。板级 rootfs 加入 `evtest`、
+`alsa-utils`，并为 414 MiB UBI 从 debug 包集移除 `valgrind`、保留其余核心调试工具。
+
+用户补充确认 NAND 备份/恢复、四种单组件刷写、UART4/MSH 与 RPMsg 多轮 echo 已完成。
+OpenSpec change `add-rk3506b-atk-rk3506b` 同步 9 个 capability 后归档到
+`archive/2026-07-15-add-rk3506b-atk-rk3506b`；完整测试全绿与最终证据审计仍作为已知测试债务保留。

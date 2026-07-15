@@ -1,7 +1,7 @@
 ---
 title: 概念索引
 type: index
-updated: 2026-05-03
+updated: 2026-07-15
 ---
 
 # 概念索引
@@ -39,6 +39,7 @@ updated: 2026-05-03
 ## 内核与模块
 - [[out-of-tree 模块]]
 - [[硬件特性包]]
+- [[Cardputer USB 复合设备]] — GUD 显示、HID 键盘与 UAC1 音频的复合设备 host 契约
 - [[sec_ts 触摸 a7a 供电欠压]] — a7a 魅族 E3 触摸不可用真根因＝硬件开机浪涌欠压，软件无解
 
 ## AMP / 协处理器

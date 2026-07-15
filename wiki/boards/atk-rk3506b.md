@@ -10,7 +10,8 @@ sources:
   - components/board/atk-rk3506b/patches/rtl8733bu/0001-disable-removed-regulatory-flag.patch
   - components/platform/rockchip/rk3506b/config.py
   - docs/boards/atk-rk3506b.md
-  - openspec/changes/add-rk3506b-atk-rk3506b/evidence/rk3506b-hardware-acceptance.md
+  - openspec/specs/rockchip-atk-rk3506b/spec.md
+  - openspec/changes/archive/2026-07-15-add-rk3506b-atk-rk3506b/evidence/rk3506b-hardware-acceptance.md
   - openspec/changes/archive/2026-07-14-add-atk-rk3506b-rtl8733bu-wifi-bt/evidence/rtl8733bu-acceptance.md
 related:
   - "[[rockchip 平台]]"
@@ -18,7 +19,8 @@ related:
   - "[[AMP 协处理器与 rpmsg]]"
   - "[[FlashStrategy 抽象]]"
   - "[[rk3506 AMP UART4 RPMsg demo]]"
-updated: 2026-07-14
+  - "[[Cardputer USB 复合设备]]"
+updated: 2026-07-15
 ---
 
 ## TL;DR
@@ -26,6 +28,7 @@ updated: 2026-07-14
 正点原子 ATK-RK3506B：512 MiB DDR + 512 MiB SPI NAND，flange 首块 ARM32、
 UBI/UBIFS、vendor FIT Rockchip 板。Linux 占 CPU0-1，CPU2 跑最小 RT-Thread；
 板载 RTL8733BUUA 通过 USB Hub 同时提供 WiFi 与 Bluetooth，UART4 AMP 保持独立。
+USB1 Host 已实机通过 Cardputer GUD/fbcon、HID 键盘与 UAC1 扬声器/麦克风验收。
 
 ## 配置
 
@@ -38,6 +41,7 @@ UBI/UBIFS、vendor FIT Rockchip 板。Linux 占 CPU0-1，CPU2 跑最小 RT-Threa
 | AMP | CPU2 `0x03e00000`，UART4 1500000 8N1，RPMsg `0x3003` |
 | WiFi | RTL8733BUUA，USB `0bda:b733` `ff/ff/ff`，OOT `8733bu.ko` |
 | Bluetooth | RTL8733BUUA，USB `0bda:b733` `e0/01/01`，OOT `rtk_btusb.ko` |
+| Cardputer | USB `16d0:10a9`，GUD + HID + mono 16 kHz UAC1 |
 
 分区顺序固定为 `idbloader → uboot → boot → recovery(1 MiB 占位) → amp → rootfs`，
 因此 rootfs 始终是 `mtd5`。SPI NAND 不生成 GPT `raw.img`；构建期由配置生成
@@ -122,5 +126,6 @@ gadget OTG0 (`ff740000`) 是两个 controller，不应互相切换 role。
 - RPMsg channel 已枚举；USB gadget 自动加载 module 并绑定 `ff740000.usb`，ADB 可直接进入。
 - USB2 OTG1 已枚举 CH334R `1a86:8091` 与 RTL8733BUUA `0bda:b733`；刷入本次镜像后
   WLAN interface 已正常出现，证明 USB WiFi driver 的枚举、自动加载与注册链路可用。
+- Cardputer 的 `gud`、`usbhid`、`snd-usb-audio` 已自动绑定；TTY、键盘、扬声器和麦克风均通过。
 - UART4/MSH console 与 RPMsg 多轮 binary echo 已通过；2.4/5 GHz 连接、Bluetooth HCI
   与 GMAC/ADB 完整回归尚未独立验收。
