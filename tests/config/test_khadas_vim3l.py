@@ -67,8 +67,10 @@ class TestVIM3LMergedConfig:
         # SM1 family 复用 G12A 工具链
         assert merged["bootloader"]["fip_tool"] == "aml_encrypt_g12a"
         assert merged["bootloader"]["fip_family_inc"] == "g12a.inc"
-        # kernel：mainline arm64 generic defconfig，dts_dir 由 SoC 提供
-        assert merged["kernel"]["defconfig"] == "defconfig"
+        # kernel：mainline arm64 generic defconfig + USB GUD，dts_dir 由 SoC 提供
+        assert merged["kernel"]["defconfig"] == [
+            "defconfig", "CONFIG_DRM_GUD=y",
+        ]
         assert merged["kernel"]["dts_dir"] == "amlogic"
 
     def test_board_layer_fields(self, merged):

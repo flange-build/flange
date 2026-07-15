@@ -2,22 +2,25 @@
 
 import hashlib
 import json
-import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 from builder.cache import BuildCache
 
 
 class TestBuildCache:
     def _make_cache(self, config: dict, tmpdir: str) -> BuildCache:
-        cache = BuildCache.__new__(BuildCache)
-        cache.config = config
-        board = config["board"]
-        product = config.get("product", "default")
-        variant = config.get("variant", "release")
-        cache.target_dir = Path(tmpdir) / board / product / variant
-        return cache
+        return BuildCache(
+            config,
+            target_base=Path(tmpdir),
+            project_root=Path(tmpdir),
+        )
+
+    @staticmethod
+    def _create_kernel_artifacts(cache: BuildCache) -> None:
+        kernel_dir = cache.target_dir / "kernel"
+        kernel_dir.mkdir(parents=True, exist_ok=True)
+        (kernel_dir / "Image").write_bytes(b"kernel")
+        (kernel_dir / "test.dtb").write_bytes(b"dtb")
 
     def test_not_up_to_date_when_no_hash_file(self):
         config = {"board": "test", "product": "default", "variant": "release",
@@ -31,6 +34,7 @@ class TestBuildCache:
                   "platform": "rockchip", "soc": "rk3566"}
         with tempfile.TemporaryDirectory() as tmpdir:
             cache = self._make_cache(config, tmpdir)
+            self._create_kernel_artifacts(cache)
             cache.store("kernel")
             assert cache.is_up_to_date("kernel")
 
@@ -43,6 +47,7 @@ class TestBuildCache:
                    "kernel": {"defconfig": "defconfig_b"}}
         with tempfile.TemporaryDirectory() as tmpdir:
             cache1 = self._make_cache(config1, tmpdir)
+            self._create_kernel_artifacts(cache1)
             cache1.store("kernel")
             cache2 = self._make_cache(config2, tmpdir)
             assert not cache2.is_up_to_date("kernel")
@@ -52,6 +57,7 @@ class TestBuildCache:
                   "platform": "rockchip", "soc": "rk3566"}
         with tempfile.TemporaryDirectory() as tmpdir:
             cache = self._make_cache(config, tmpdir)
+            self._create_kernel_artifacts(cache)
             cache.store("kernel")
             assert cache.is_up_to_date("kernel")
             assert not cache.is_up_to_date("bootloader")
@@ -232,144 +238,107 @@ class TestDirectoryHash:
 
 
 class TestAppSourceHash:
-    """App 源码递归哈希测试 — 验证 _hash_app_sources 的正确性。"""
+    """App 源码递归哈希测试 — 通过公开 compute_hash 接口验证。"""
 
     def _make_cache(self, tmpdir: str, custom_packages: list) -> BuildCache:
-        cache = BuildCache.__new__(BuildCache)
-        cache.config = {
+        config = {
             "board": "test", "platform": "rockchip",
             "soc": "rk3566", "arch": "aarch64",
+            "product": "default", "variant": "release",
             "rootfs": {"custom_packages": custom_packages},
         }
-        cache.target_dir = Path(tmpdir) / "test" / "default" / "release"
-        return cache
+        return BuildCache(
+            config,
+            target_base=Path(tmpdir) / ".build" / "target",
+            project_root=Path(tmpdir),
+        )
+
+    @staticmethod
+    def _app_dir(tmpdir: str, name: str) -> Path:
+        return Path(tmpdir) / "components" / "app" / name
 
     def _compute_app_hash(self, cache: BuildCache) -> str:
-        h = hashlib.sha256()
-        cache._hash_app_sources(h)
-        return h.hexdigest()
+        return cache.compute_hash("app")
 
     def test_source_file_change(self):
         """App 源码文件变化 → 哈希变化（修复验证）。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app_dir = Path(tmpdir) / "app" / "myapp"
+            app_dir = self._app_dir(tmpdir, "myapp")
             app_dir.mkdir(parents=True)
             (app_dir / "app.yaml").write_text("name: myapp")
             (app_dir / "conf").mkdir()
             (app_dir / "conf" / "config.txt").write_text("key=value1")
 
-            with patch("builder.cache.Path") as MockPath:
-                # 让 Path("app") / pkg 指向我们的临时目录
-                def path_side_effect(p):
-                    if p.startswith("app/"):
-                        return Path(tmpdir) / p
-                    return Path(p)
-                # 直接 monkey-patch 更简单
-                pass
-
-            # 直接操作：用 chdir 确保 Path("app/myapp") 指向正确位置
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                cache = self._make_cache(tmpdir, ["myapp"])
-                h1 = self._compute_app_hash(cache)
-
-                (app_dir / "conf" / "config.txt").write_text("key=value2")
-                h2 = self._compute_app_hash(cache)
-                assert h1 != h2
-            finally:
-                os.chdir(old_cwd)
+            h1 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["myapp"]))
+            (app_dir / "conf" / "config.txt").write_text("key=value2")
+            h2 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["myapp"]))
+            assert h1 != h2
 
     def test_app_yaml_change(self):
         """app.yaml 变化 → 哈希变化（回归保护）。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app_dir = Path(tmpdir) / "app" / "myapp"
+            app_dir = self._app_dir(tmpdir, "myapp")
             app_dir.mkdir(parents=True)
             (app_dir / "app.yaml").write_text("name: myapp\nversion: 1.0")
 
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                cache = self._make_cache(tmpdir, ["myapp"])
-                h1 = self._compute_app_hash(cache)
-
-                (app_dir / "app.yaml").write_text("name: myapp\nversion: 2.0")
-                h2 = self._compute_app_hash(cache)
-                assert h1 != h2
-            finally:
-                os.chdir(old_cwd)
+            h1 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["myapp"]))
+            (app_dir / "app.yaml").write_text("name: myapp\nversion: 2.0")
+            h2 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["myapp"]))
+            assert h1 != h2
 
     def test_new_file_changes_hash(self):
         """新增 App 文件 → 哈希变化。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app_dir = Path(tmpdir) / "app" / "myapp"
+            app_dir = self._app_dir(tmpdir, "myapp")
             app_dir.mkdir(parents=True)
             (app_dir / "app.yaml").write_text("name: myapp")
 
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                cache = self._make_cache(tmpdir, ["myapp"])
-                h1 = self._compute_app_hash(cache)
-
-                (app_dir / "newfile.sh").write_text("#!/bin/bash")
-                h2 = self._compute_app_hash(cache)
-                assert h1 != h2
-            finally:
-                os.chdir(old_cwd)
+            h1 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["myapp"]))
+            (app_dir / "newfile.sh").write_text("#!/bin/bash")
+            h2 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["myapp"]))
+            assert h1 != h2
 
     def test_pycache_excluded(self):
         """__pycache__ 不影响哈希。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            app_dir = Path(tmpdir) / "app" / "myapp"
+            app_dir = self._app_dir(tmpdir, "myapp")
             app_dir.mkdir(parents=True)
             (app_dir / "app.yaml").write_text("name: myapp")
 
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                cache = self._make_cache(tmpdir, ["myapp"])
-                h1 = self._compute_app_hash(cache)
-
-                pycache = app_dir / "__pycache__"
-                pycache.mkdir()
-                (pycache / "mod.cpython-310.pyc").write_bytes(b"\x00")
-                h2 = self._compute_app_hash(cache)
-                assert h1 == h2
-            finally:
-                os.chdir(old_cwd)
+            h1 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["myapp"]))
+            pycache = app_dir / "__pycache__"
+            pycache.mkdir()
+            (pycache / "mod.cpython-310.pyc").write_bytes(b"\x00")
+            h2 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["myapp"]))
+            assert h1 == h2
 
     def test_custom_packages_list_change(self):
         """custom_packages 列表变化 → 哈希变化。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             for name in ("app1", "app2"):
-                d = Path(tmpdir) / "app" / name
+                d = self._app_dir(tmpdir, name)
                 d.mkdir(parents=True)
                 (d / "app.yaml").write_text(f"name: {name}")
 
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                cache1 = self._make_cache(tmpdir, ["app1"])
-                h1 = self._compute_app_hash(cache1)
-
-                cache2 = self._make_cache(tmpdir, ["app1", "app2"])
-                h2 = self._compute_app_hash(cache2)
-                assert h1 != h2
-            finally:
-                os.chdir(old_cwd)
+            h1 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["app1"]))
+            h2 = self._compute_app_hash(
+                self._make_cache(tmpdir, ["app1", "app2"]))
+            assert h1 != h2
 
     def test_missing_app_uses_placeholder(self):
         """缺失 App 目录使用占位符。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                cache = self._make_cache(tmpdir, ["nonexistent"])
-                h = self._compute_app_hash(cache)
-                assert h  # 不报错，正常返回哈希
-            finally:
-                os.chdir(old_cwd)
+            cache = self._make_cache(tmpdir, ["nonexistent"])
+            assert self._compute_app_hash(cache)
 
 
 class TestRootfsPhaseHash:
@@ -379,6 +348,7 @@ class TestRootfsPhaseHash:
         config = {
             "board": "test", "platform": "rockchip",
             "soc": "rk3566", "arch": "aarch64",
+            "product": "default", "variant": "release",
             "rootfs": {
                 "url": "https://example.com/ubuntu-base.tar.gz",
                 "packages": ["systemd", "openssh-server"],
@@ -386,44 +356,45 @@ class TestRootfsPhaseHash:
             },
         }
         config.update(overrides)
-        cache = BuildCache.__new__(BuildCache)
-        cache.config = config
-        cache.target_dir = Path(tmpdir) / "test" / "default" / "release"
-        return cache
+        return BuildCache(
+            config,
+            target_base=Path(tmpdir) / ".build" / "target",
+            project_root=Path(tmpdir),
+        )
 
     def test_base_hash_depends_on_url(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache1 = self._make_cache(tmpdir)
-            h1 = cache1._compute_rootfs_base_hash()
+            h1 = cache1.compute_phase_hash("rootfs", "base")
 
             cache2 = self._make_cache(tmpdir, rootfs={
                 "url": "https://example.com/other.tar.gz",
                 "packages": ["systemd", "openssh-server"],
                 "custom_packages": [],
             })
-            h2 = cache2._compute_rootfs_base_hash()
+            h2 = cache2.compute_phase_hash("rootfs", "base")
             assert h1 != h2
 
     def test_base_hash_depends_on_packages(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache1 = self._make_cache(tmpdir)
-            h1 = cache1._compute_rootfs_base_hash()
+            h1 = cache1.compute_phase_hash("rootfs", "base")
 
             cache2 = self._make_cache(tmpdir, rootfs={
                 "url": "https://example.com/ubuntu-base.tar.gz",
                 "packages": ["systemd", "openssh-server", "vim"],
                 "custom_packages": [],
             })
-            h2 = cache2._compute_rootfs_base_hash()
+            h2 = cache2.compute_phase_hash("rootfs", "base")
             assert h1 != h2
 
     def test_base_hash_depends_on_arch(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache1 = self._make_cache(tmpdir)
-            h1 = cache1._compute_rootfs_base_hash()
+            h1 = cache1.compute_phase_hash("rootfs", "base")
 
             cache2 = self._make_cache(tmpdir, arch="armhf")
-            h2 = cache2._compute_rootfs_base_hash()
+            h2 = cache2.compute_phase_hash("rootfs", "base")
             assert h1 != h2
 
     def test_base_hash_stable_with_package_order(self):
@@ -439,59 +410,64 @@ class TestRootfsPhaseHash:
                 "packages": ["systemd", "openssh-server"],
                 "custom_packages": [],
             })
-            assert cache1._compute_rootfs_base_hash() == cache2._compute_rootfs_base_hash()
+            assert cache1.compute_phase_hash(
+                "rootfs", "base") == cache2.compute_phase_hash(
+                    "rootfs", "base")
 
     def test_customize_hash_includes_base_hash(self):
         """packages 变化 → base_hash 变 → customize_hash 也变（级联）。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             cache1 = self._make_cache(tmpdir)
-            h1 = cache1._compute_rootfs_customize_hash()
+            h1 = cache1.compute_hash("rootfs")
 
             cache2 = self._make_cache(tmpdir, rootfs={
                 "url": "https://example.com/ubuntu-base.tar.gz",
                 "packages": ["systemd", "openssh-server", "vim"],
                 "custom_packages": [],
             })
-            h2 = cache2._compute_rootfs_customize_hash()
+            h2 = cache2.compute_hash("rootfs")
             assert h1 != h2
 
     def test_customize_hash_depends_on_overlay(self):
         """overlay 文件变化 → customize_hash 变，base_hash 不变。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            board_dir = Path(tmpdir) / "board" / "test" / "overlay"
+            board_dir = (Path(tmpdir) / "components" / "board" / "test"
+                         / "overlay")
             board_dir.mkdir(parents=True)
             (board_dir / "etc_hosts").write_text("127.0.0.1 localhost")
 
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                cache = self._make_cache(tmpdir)
-                h1_base = cache._compute_rootfs_base_hash()
-                h1_cust = cache._compute_rootfs_customize_hash()
+            cache1 = self._make_cache(tmpdir)
+            h1_base = cache1.compute_phase_hash("rootfs", "base")
+            h1_cust = cache1.compute_hash("rootfs")
 
-                (board_dir / "etc_hosts").write_text("127.0.0.1 myhost")
-                h2_base = cache._compute_rootfs_base_hash()
-                h2_cust = cache._compute_rootfs_customize_hash()
+            (board_dir / "etc_hosts").write_text("127.0.0.1 myhost")
+            cache2 = self._make_cache(tmpdir)
+            h2_base = cache2.compute_phase_hash("rootfs", "base")
+            h2_cust = cache2.compute_hash("rootfs")
 
-                assert h1_base == h2_base  # base 不变
-                assert h1_cust != h2_cust  # customize 变了
-            finally:
-                os.chdir(old_cwd)
+            assert h1_base == h2_base
+            assert h1_cust != h2_cust
 
-    def test_customize_hash_depends_on_app_debs(self):
-        """app deb 变化 → customize_hash 变，base_hash 不变。"""
+    def test_customize_hash_depends_on_app_sources(self):
+        """App 源码变化经 Merkle 依赖使 rootfs hash 变化，base 不变。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache = self._make_cache(tmpdir)
-            deb_dir = cache.target_dir / "app"
-            deb_dir.mkdir(parents=True)
-            (deb_dir / "myapp_1.0_arm64.deb").write_bytes(b"deb-v1")
+            rootfs = {
+                "url": "https://example.com/ubuntu-base.tar.gz",
+                "packages": ["systemd"],
+                "custom_packages": ["myapp"],
+            }
+            app_dir = (Path(tmpdir) / "components" / "app" / "myapp")
+            app_dir.mkdir(parents=True)
+            (app_dir / "app.yaml").write_text("name: myapp\nversion: 1")
 
-            h1_base = cache._compute_rootfs_base_hash()
-            h1_cust = cache._compute_rootfs_customize_hash()
+            cache1 = self._make_cache(tmpdir, rootfs=rootfs)
+            h1_base = cache1.compute_phase_hash("rootfs", "base")
+            h1_cust = cache1.compute_hash("rootfs")
 
-            (deb_dir / "myapp_1.0_arm64.deb").write_bytes(b"deb-v2")
-            h2_base = cache._compute_rootfs_base_hash()
-            h2_cust = cache._compute_rootfs_customize_hash()
+            (app_dir / "app.yaml").write_text("name: myapp\nversion: 2")
+            cache2 = self._make_cache(tmpdir, rootfs=rootfs)
+            h2_base = cache2.compute_phase_hash("rootfs", "base")
+            h2_cust = cache2.compute_hash("rootfs")
 
             assert h1_base == h2_base
             assert h1_cust != h2_cust
@@ -508,32 +484,46 @@ class TestRootfsPhaseHash:
                 "packages": ["systemd"],
                 "custom_packages": ["app1", "app2"],
             })
-            assert cache1._compute_rootfs_customize_hash() != cache2._compute_rootfs_customize_hash()
+            assert cache1.compute_hash("rootfs") != cache2.compute_hash("rootfs")
 
-    def test_compute_hash_rootfs_returns_customize_hash(self):
-        """compute_hash("rootfs") 返回 customize_hash。"""
+    def test_compute_hash_rootfs_is_stable(self):
+        """相同输入下公开 rootfs hash 在不同缓存实例间稳定。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache = self._make_cache(tmpdir)
-            assert cache.compute_hash("rootfs") == cache._compute_rootfs_customize_hash()
+            h1 = self._make_cache(tmpdir).compute_hash("rootfs")
+            h2 = self._make_cache(tmpdir).compute_hash("rootfs")
+            assert h1 == h2
+            assert len(h1) == 16
 
 
 class TestPhaseCache:
     """分阶段缓存接口测试。"""
 
-    def _make_cache(self, tmpdir: str) -> BuildCache:
+    def _make_cache(
+        self,
+        tmpdir: str,
+        packages: list[str] | None = None,
+    ) -> BuildCache:
         config = {
             "board": "test", "platform": "rockchip",
             "soc": "rk3566", "arch": "aarch64",
+            "product": "default", "variant": "release",
             "rootfs": {
                 "url": "https://example.com/ubuntu-base.tar.gz",
-                "packages": ["systemd"],
+                "packages": packages or ["systemd"],
                 "custom_packages": [],
             },
         }
-        cache = BuildCache.__new__(BuildCache)
-        cache.config = config
-        cache.target_dir = Path(tmpdir) / "test" / "default" / "release"
-        return cache
+        return BuildCache(
+            config,
+            target_base=Path(tmpdir) / ".build" / "target",
+            project_root=Path(tmpdir),
+        )
+
+    @staticmethod
+    def _create_rootfs_artifact(cache: BuildCache) -> None:
+        rootfs_dir = cache.target_dir / "rootfs"
+        rootfs_dir.mkdir(parents=True, exist_ok=True)
+        (rootfs_dir / "rootfs.img").write_bytes(b"rootfs")
 
     def test_store_then_up_to_date(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -549,8 +539,8 @@ class TestPhaseCache:
             assert cache.is_phase_up_to_date("rootfs", "base")
 
             # 改 packages → base_hash 变
-            cache.config["rootfs"]["packages"] = ["systemd", "vim"]
-            assert not cache.is_phase_up_to_date("rootfs", "base")
+            changed = self._make_cache(tmpdir, ["systemd", "vim"])
+            assert not changed.is_phase_up_to_date("rootfs", "base")
 
     def test_different_phases_independent(self):
         """base 和 build 哈希互不影响。"""
@@ -558,21 +548,22 @@ class TestPhaseCache:
             cache = self._make_cache(tmpdir)
             cache.store_phase("rootfs", "base")
             cache.store("rootfs")  # 写 .build_hash
+            self._create_rootfs_artifact(cache)
 
             assert cache.is_phase_up_to_date("rootfs", "base")
             assert cache.is_up_to_date("rootfs")
 
             # 改 packages → base 和 build 都失效
-            cache.config["rootfs"]["packages"] = ["systemd", "vim"]
-            assert not cache.is_phase_up_to_date("rootfs", "base")
-            assert not cache.is_up_to_date("rootfs")
+            changed = self._make_cache(tmpdir, ["systemd", "vim"])
+            assert not changed.is_phase_up_to_date("rootfs", "base")
+            assert not changed.is_up_to_date("rootfs")
 
-    def test_compute_phase_hash_returns_base_hash(self):
+    def test_compute_phase_hash_is_stable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache = self._make_cache(tmpdir)
-            phase_hash = cache.compute_phase_hash("rootfs", "base")
-            direct_hash = cache._compute_rootfs_base_hash()
-            assert phase_hash == direct_hash
+            h1 = self._make_cache(tmpdir).compute_phase_hash("rootfs", "base")
+            h2 = self._make_cache(tmpdir).compute_phase_hash("rootfs", "base")
+            assert h1 == h2
+            assert len(h1) == 16
 
     def test_unsupported_phase_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:

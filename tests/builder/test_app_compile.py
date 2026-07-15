@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, call
 
@@ -160,7 +161,9 @@ class TestCmakeBuildCommands:
         builder = _make_builder(tmp_path)
         spec = _make_spec(system="cmake")
         cmds = builder._build_commands(spec, builder._config)
-        assert cmds[1] == ["cmake", "--build", "build", "-j$(nproc)"]
+        assert cmds[1] == [
+            "cmake", "--build", "build", f"-j{os.cpu_count() or 1}"
+        ]
 
     def test_cmake注入aarch64编译器(self, tmp_path):
         """aarch64 架构时，cmake configure 步骤应使用 aarch64-linux-gnu- 编译器。"""
@@ -295,11 +298,11 @@ class TestMakeBuildCommands:
         assert cmds[0][0] == "make"
 
     def test_make包含并行编译标志(self, tmp_path):
-        """make 命令应包含 -j$(nproc) 并行编译标志。"""
+        """make 命令应包含解析为实际 CPU 数的并行编译标志。"""
         builder = _make_builder(tmp_path)
         spec = _make_spec(system="make")
         cmds = builder._build_commands(spec, builder._config)
-        assert "-j$(nproc)" in cmds[0]
+        assert f"-j{os.cpu_count() or 1}" in cmds[0]
 
     def test_make包含ARCH参数(self, tmp_path):
         """make 命令应包含 ARCH=arm64。"""

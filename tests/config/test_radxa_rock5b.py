@@ -83,12 +83,13 @@ class TestROCK5BMergedConfig:
         assert "mali-csf" in names, (
             f"ROCK 5B merged config 应包含 mali-csf extra_firmware；实际: {names}")
 
-    def test_root_password_set(self, merged):
-        """ROCK 5B 必须设 rootfs.root_password。
-        ubuntu-base 默认 root 是锁定态（/etc/shadow 字段为 *），不设此字段
-        rootfs build 后 root 无法登录。值与其他 rockchip 板（tspi-rk3566 /
-        radxa-cubie-a7z）保持一致 1234，方便开发期切板调试。"""
-        assert merged["rootfs"]["root_password"] == "1234"
+    def test_secure_user_defaults(self, merged):
+        """ROCK 5B 沿用安全基线：锁定 root，提供 flange sudo 用户。"""
+        rootfs = merged["rootfs"]
+        assert rootfs["root_password"] is None
+        assert rootfs["disable_root_login"] is True
+        assert rootfs["default_user"] == "flange"
+        assert rootfs["users"]["flange"]["password"] == "flange"
 
     def test_mali_valhall_compat_overlay_built_but_not_default(self, merged):
         """mali-valhall-compat overlay 仍编进 boot 分区作 emergency rollback，

@@ -147,7 +147,9 @@ class TestS905Y2SoCDiscovery:
     def test_kernel_dts_dir_is_amlogic(self):
         cfg = _load_soc_config("s905y2", PROJECT_ROOT)
         assert cfg["kernel"]["dts_dir"] == "amlogic"
-        assert cfg["kernel"]["defconfig"] == "defconfig"
+        assert cfg["kernel"]["defconfig"] == [
+            "defconfig", "CONFIG_DRM_GUD=y",
+        ]
 
     def test_kernel_args_includes_ttyaml0(self):
         cfg = _load_soc_config("s905y2", PROJECT_ROOT)

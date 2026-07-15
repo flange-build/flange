@@ -59,13 +59,14 @@ class TestOrangePi5PlusMergedConfig:
 
     def test_soc_layer_kernel_not_overridden(self, merged):
         """SoC 层 kernel.branch 不被 board 覆盖；default product 下 defconfig
-        list 仅含 SoC 三项（board 把 GOODIX 移到 +defconfig:wks55fhd001wct-bringup
+        list 仅含 SoC 四项（board 把 GOODIX 移到 +defconfig:wks55fhd001wct-bringup
         条件块，default 不命中）。"""
         assert merged["kernel"]["branch"] == "linux-6.1-stan-rkr5.1"
         assert merged["kernel"]["defconfig"] == [
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "rk3588_panthor.config",
+            "CONFIG_DRM_GUD=y",
         ]
 
     def test_kernel_goodix_only_on_bringup_product(self, boards):

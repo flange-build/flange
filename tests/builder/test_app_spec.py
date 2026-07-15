@@ -636,14 +636,14 @@ class TestSwiftBuildValidation:
 # ---------------------------------------------------------------------------
 
 class TestAdbdAppYaml:
-    """验证 app/adbd/app.yaml 可被正确解析（集成测试）。"""
+    """验证 components/app/adbd/app.yaml 可被正确解析（集成测试）。"""
 
     def test_adbd_spec_loads(self):
         # 从真实路径加载（相对于项目根目录）
         project_root = Path(__file__).parent.parent.parent
-        adbd_dir = project_root / "app" / "adbd"
+        adbd_dir = project_root / "components" / "app" / "adbd"
         if not (adbd_dir / "app.yaml").exists():
-            pytest.skip("app/adbd/app.yaml 不存在，跳过集成测试")
+            pytest.skip("components/app/adbd/app.yaml 不存在，跳过集成测试")
 
         spec = load_spec(adbd_dir)
         assert spec.app.name == "adbd"
@@ -654,9 +654,9 @@ class TestAdbdAppYaml:
     def test_adbd_has_install_section(self):
         """adbd app.yaml 应包含 install 安装映射。"""
         project_root = Path(__file__).parent.parent.parent
-        adbd_dir = project_root / "app" / "adbd"
+        adbd_dir = project_root / "components" / "app" / "adbd"
         if not (adbd_dir / "app.yaml").exists():
-            pytest.skip("app/adbd/app.yaml 不存在，跳过集成测试")
+            pytest.skip("components/app/adbd/app.yaml 不存在，跳过集成测试")
 
         spec = load_spec(adbd_dir)
         assert spec.install, "adbd 应定义 install 映射"
@@ -664,9 +664,9 @@ class TestAdbdAppYaml:
     def test_adbd_has_systemd_section(self):
         """adbd app.yaml 应包含 systemd 配置。"""
         project_root = Path(__file__).parent.parent.parent
-        adbd_dir = project_root / "app" / "adbd"
+        adbd_dir = project_root / "components" / "app" / "adbd"
         if not (adbd_dir / "app.yaml").exists():
-            pytest.skip("app/adbd/app.yaml 不存在，跳过集成测试")
+            pytest.skip("components/app/adbd/app.yaml 不存在，跳过集成测试")
 
         spec = load_spec(adbd_dir)
         assert spec.systemd is not None

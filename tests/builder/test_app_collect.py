@@ -470,7 +470,7 @@ class TestAdbdIntegration:
         # 从测试文件位置推算项目根目录
         here = Path(__file__).parent
         root = here.parent.parent
-        adbd = root / "app" / "adbd"
+        adbd = root / "components" / "app" / "adbd"
         if not adbd.exists():
             pytest.skip(f"adbd 目录不存在：{adbd}")
         return adbd

@@ -63,7 +63,9 @@ class TestRadxaZeroMergedConfig:
         ]
         assert merged["bootloader"]["fip_tool"] == "aml_encrypt_g12a"
         assert merged["bootloader"]["fip_family_inc"] == "g12a.inc"
-        assert merged["kernel"]["defconfig"] == "defconfig"
+        assert merged["kernel"]["defconfig"] == [
+            "defconfig", "CONFIG_DRM_GUD=y",
+        ]
         assert merged["kernel"]["dts_dir"] == "amlogic"
 
     def test_board_layer_fields(self, merged):

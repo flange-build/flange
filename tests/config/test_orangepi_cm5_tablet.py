@@ -76,6 +76,7 @@ class TestOrangePiCm5TabletMergedConfig:
             "rockchip_linux_defconfig",
             "case_insensitive_fix.config",
             "rk3588_panthor.config",
+            "CONFIG_DRM_GUD=y",
         ]
 
     def test_board_layer_fields(self, merged):

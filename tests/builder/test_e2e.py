@@ -2,7 +2,7 @@
 
 覆盖场景：
 13.1 adbd 真实 App 端到端打包验证：
-    - 使用真实 app/adbd/ 目录构建 .deb（若目录不存在则跳过）
+    - 使用真实 components/app/adbd/ 目录构建 .deb（若目录不存在则跳过）
     - 验证 .deb 文件名格式
     - 验证 control 文件字段（Package / Version / Architecture / Depends）
     - 验证 data.tar.gz 文件列表（完整安装路径）
@@ -89,7 +89,7 @@ def _get_tar_info(tar_data: bytes, name: str) -> tarfile.TarInfo:
 
 # 本测试文件位于 tests/builder/，项目根为上两级目录
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
-_ADBD_DIR = _PROJECT_ROOT / "app" / "adbd"
+_ADBD_DIR = _PROJECT_ROOT / "components" / "app" / "adbd"
 
 # adbd 目录缺失时跳过所有 13.1 测试（兼容 CI 精简环境）
 _ADBD_EXISTS = _ADBD_DIR.is_dir() and (_ADBD_DIR / "app.yaml").is_file()
@@ -104,7 +104,7 @@ _SKIP_IF_NO_ADBD = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 def _build_adbd_deb(output_dir: Path) -> Path:
-    """使用真实 app/adbd/ 构建 adbd .deb 到指定目录，返回 .deb 路径。
+    """使用真实 components/app/adbd/ 构建 adbd .deb，返回 .deb 路径。
 
     DockerRunner 与 SourceManager 均使用 MagicMock——adbd 为预编译 App
     （build.system=none），不需要 Docker 编译步骤。
@@ -118,7 +118,7 @@ def _build_adbd_deb(output_dir: Path) -> Path:
     }
     builder = AppBuilder(
         docker=MagicMock(),
-        source=MagicMock(),
+        source=None,
         config=config,
         project_dir=_PROJECT_ROOT,
     )
@@ -134,36 +134,41 @@ def _build_adbd_deb(output_dir: Path) -> Path:
 
 @_SKIP_IF_NO_ADBD
 class TestAdbdEndToEnd:
-    """13.1 — 使用真实 app/adbd/ 构建 .deb 并验证内容。
+    """13.1 — 使用真实 components/app/adbd/ 构建 .deb 并验证内容。
 
     测试通过 AppBuilder.build_one("adbd") 产出 adbd_1.0.0_arm64.deb，
     随后解包验证 control 字段、data.tar.gz 文件树和 postinst 脚本。
     """
 
     @pytest.fixture(scope="class")
-    def deb_path(self, tmp_path_factory):
+    @classmethod
+    def deb_path(cls, tmp_path_factory):
         """Class-scoped fixture：只构建一次 .deb，所有测试复用。"""
         out = tmp_path_factory.mktemp("adbd_deb")
         return _build_adbd_deb(out)
 
     @pytest.fixture(scope="class")
-    def ar_members(self, deb_path):
+    @classmethod
+    def ar_members(cls, deb_path):
         """解析 .deb ar 成员，供内容验证复用。"""
         return _read_ar_members(deb_path)
 
     @pytest.fixture(scope="class")
-    def control_text(self, ar_members):
+    @classmethod
+    def control_text(cls, ar_members):
         """提取 control 文件文本内容。"""
         tar_data = ar_members["control.tar.gz"]
         return _read_tar_member(tar_data, "./control").decode("utf-8")
 
     @pytest.fixture(scope="class")
-    def data_names(self, ar_members):
+    @classmethod
+    def data_names(cls, ar_members):
         """提取 data.tar.gz 中所有成员名称列表。"""
         return _read_tar_names(ar_members["data.tar.gz"])
 
     @pytest.fixture(scope="class")
-    def postinst_text(self, ar_members):
+    @classmethod
+    def postinst_text(cls, ar_members):
         """提取 postinst 脚本内容。"""
         tar_data = ar_members["control.tar.gz"]
         return _read_tar_member(tar_data, "./postinst").decode("utf-8")

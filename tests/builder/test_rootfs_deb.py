@@ -369,87 +369,84 @@ class TestRootfsDebInstall:
 class TestRootfsDebInstallIntegration:
     """通过 compile() 方法的集成测试，验证 Phase 2 deb 安装端到端流程。"""
 
-    def _setup_compile_env(self, tmp_path: Path, config: dict):
-        """为 compile() 方法创建必要的模拟环境。
-
-        注意：不预先创建 rootfs_dir，compile() 内部会通过 rootfs_dir.mkdir() 创建。
-        预先创建会导致 mkdir() 抛出 FileExistsError。
-
-        返回 builder 实例。
-        """
-        builder = _make_builder(tmp_path)
-        return builder
+    @staticmethod
+    def _compile_isolated(
+        builder: RockchipRootfsBuilder,
+        config: dict,
+        work_dir: Path,
+        chroot_ctx: MagicMock,
+    ) -> MagicMock:
+        """保留真实 Phase 2 deb 路径，隔离其余 rootfs 构建步骤。"""
+        work_dir.mkdir()
+        isolated = {
+            "_build_phase1": MagicMock(),
+            "_build_ext4": MagicMock(),
+            "_install_extra_debs": MagicMock(),
+            "_install_kernel_modules": MagicMock(),
+            "_install_extra_firmware": MagicMock(),
+            "_install_panel_firmware": MagicMock(),
+            "apply_overlays": MagicMock(),
+            "_configure_users": MagicMock(),
+            "_install_hostname": MagicMock(),
+        }
+        with patch.multiple(builder, **isolated), patch(
+            "builder.platforms.rockchip.rootfs.ChrootContext",
+            return_value=chroot_ctx,
+        ) as chroot_cls, patch(
+            "builder.platforms.rockchip.rootfs.tempfile.mkdtemp",
+            return_value=str(work_dir),
+        ):
+            builder.compile(None, config)
+        return chroot_cls
 
     def test_compile调用dpkg安装deb包(self, tmp_path: Path, monkeypatch):
         """compile() 执行时，若存在 .deb 文件，应在 ChrootContext 内调用 dpkg -i。"""
         config = _make_config(tmp_path)
         board, product, variant = config["board"], config["product"], config["variant"]
 
-        # 切换工作目录到 tmp_path，令 Path("target/...") 解析到 tmp_path 下
+        # Phase 2 使用三层产物路径 .build/target/<board>/<product>/<variant>。
         monkeypatch.chdir(tmp_path)
 
         # 准备 .deb 文件
-        app_deb_dir = tmp_path / "target" / board / product / variant / "app"
+        app_deb_dir = (
+            tmp_path / ".build" / "target" / board / product / variant / "app"
+        )
         app_deb_dir.mkdir(parents=True)
         deb_file = app_deb_dir / "integrate_1.0_arm64.deb"
         deb_file.write_bytes(b"integration deb")
 
-        builder = self._setup_compile_env(tmp_path, config)
+        builder = _make_builder(tmp_path)
+        chroot = MagicMock()
+        chroot_ctx = MagicMock()
+        chroot_ctx.__enter__.return_value = chroot
+        chroot_ctx.__exit__.return_value = False
 
-        # 记录所有 dpkg -i 相关调用
-        dpkg_calls: list = []
+        self._compile_isolated(
+            builder, config, tmp_path / "work", chroot_ctx)
 
-        def fake_run_privileged(cmd, check=True, **kwargs):
-            """拦截 run_privileged 调用，记录 dpkg -i 命令。"""
-            if len(cmd) >= 2 and cmd[0] == "chroot" and "dpkg" in cmd:
-                dpkg_calls.append(cmd)
-
-        builder.docker.run_privileged.side_effect = fake_run_privileged
-
-        # 拦截 tempfile.mkdtemp 使其返回我们控制的目录
-        with patch("builder.platforms.rockchip.rootfs.tempfile.mkdtemp",
-                   return_value=str(tmp_path)):
-            # compile 内部会调用 Phase 1（docker.run_privileged）和 Phase 3（tar）
-            # 我们通过 side_effect 拦截这些调用
-            try:
-                builder.compile(None, config)
-            except Exception:
-                # Phase 1/3 中的某些 docker 调用可能抛出异常，忽略
-                pass
-
-        # 验证 dpkg -i 被调用
-        assert any("dpkg" in str(c) for c in dpkg_calls), (
-            f"预期 dpkg -i 被调用，实际 run_privileged 调用：{dpkg_calls}"
+        chroot.run.assert_called_once_with(
+            [
+                "dpkg", "-i", "--force-confnew",
+                "/tmp/flange-debs/integrate_1.0_arm64.deb",
+            ],
+            label="dpkg -i (1 个包)...",
         )
+        assert not (tmp_path / "work" / "rootfs" / "tmp"
+                    / "flange-debs").exists()
 
     def test_compile无deb时不调用dpkg(self, tmp_path: Path, monkeypatch):
         """compile() 执行时，若无 .deb 文件，不应调用 dpkg -i。"""
         config = _make_config(tmp_path)
         # 不创建 app_deb_dir
 
-        # 切换工作目录到 tmp_path，令 Path("target/...") 解析到 tmp_path 下
         monkeypatch.chdir(tmp_path)
 
-        builder = self._setup_compile_env(tmp_path, config)
+        builder = _make_builder(tmp_path)
+        chroot_ctx = MagicMock()
+        chroot_cls = self._compile_isolated(
+            builder, config, tmp_path / "work", chroot_ctx)
 
-        dpkg_calls: list = []
-
-        def fake_run_privileged(cmd, check=True, **kwargs):
-            if len(cmd) >= 2 and cmd[0] == "chroot" and "dpkg" in cmd:
-                dpkg_calls.append(cmd)
-
-        builder.docker.run_privileged.side_effect = fake_run_privileged
-
-        with patch("builder.platforms.rockchip.rootfs.tempfile.mkdtemp",
-                   return_value=str(tmp_path)):
-            try:
-                builder.compile(None, config)
-            except Exception:
-                pass
-
-        assert dpkg_calls == [], (
-            f"不期望 dpkg -i 被调用，实际调用：{dpkg_calls}"
-        )
+        chroot_cls.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

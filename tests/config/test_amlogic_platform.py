@@ -148,7 +148,9 @@ class TestS905D3SoCDiscovery:
     def test_kernel_dts_dir_is_amlogic(self):
         cfg = _load_soc_config("s905d3", PROJECT_ROOT)
         assert cfg["kernel"]["dts_dir"] == "amlogic"
-        assert cfg["kernel"]["defconfig"] == "defconfig"
+        assert cfg["kernel"]["defconfig"] == [
+            "defconfig", "CONFIG_DRM_GUD=y",
+        ]
 
     def test_kernel_args_includes_ttyaml0(self):
         cfg = _load_soc_config("s905d3", PROJECT_ROOT)
@@ -177,7 +179,7 @@ class TestS905D3SoCDiscovery:
 
 
 class TestExistingPlatformsUnaffected:
-    """新增 amlogic 不污染既有 rockchip / allwinnera733。"""
+    """平台发现覆盖当前全部已注册平台。"""
 
     def test_rockchip_platform_intact(self):
         cfg = _load_platform_config("rockchip", PROJECT_ROOT)
@@ -197,9 +199,11 @@ class TestExistingPlatformsUnaffected:
         cfg = _load_soc_config("a733", PROJECT_ROOT)
         assert cfg["platform"] == "allwinnera733"
 
-    def test_all_three_platforms_discovered(self):
+    def test_all_platforms_discovered(self):
         platforms = _discover_platform_configs(PROJECT_ROOT)
-        assert set(platforms.keys()) == {"rockchip", "allwinnera733", "amlogic"}
+        assert set(platforms.keys()) == {
+            "rockchip", "allwinnera733", "amlogic", "qualcommqcs6490",
+        }
 
     def test_no_cross_pollution_in_soc_map(self):
         """amlogic SoC 不应出现在 rockchip / allwinnera733 平台下。"""

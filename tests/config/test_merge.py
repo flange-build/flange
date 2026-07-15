@@ -203,7 +203,12 @@ class TestResolveUnconditional:
     def test_unconditional_keys_preserved(self):
         config = {"arch": "arm64", "packages": ["systemd"]}
         result = resolve_conditions(config, product="generic", variant="release")
-        assert result == {"arch": "arm64", "packages": ["systemd"]}
+        assert result == {
+            "arch": "arm64",
+            "packages": ["systemd"],
+            "product": "generic",
+            "variant": "release",
+        }
 
 
 class TestResolveVariantOverride:
@@ -215,7 +220,11 @@ class TestResolveVariantOverride:
             "packages:debug": ["systemd", "gdb", "strace"],
         }
         result = resolve_conditions(config, product="generic", variant="debug")
-        assert result == {"packages": ["systemd", "gdb", "strace"]}
+        assert result == {
+            "packages": ["systemd", "gdb", "strace"],
+            "product": "generic",
+            "variant": "debug",
+        }
 
     def test_non_matching_variant_discarded(self):
         config = {
@@ -223,7 +232,11 @@ class TestResolveVariantOverride:
             "packages:debug": ["systemd", "gdb", "strace"],
         }
         result = resolve_conditions(config, product="generic", variant="release")
-        assert result == {"packages": ["systemd"]}
+        assert result == {
+            "packages": ["systemd"],
+            "product": "generic",
+            "variant": "release",
+        }
 
 
 class TestResolveAppendCondition:
@@ -235,7 +248,11 @@ class TestResolveAppendCondition:
             "+packages:debug": ["gdb", "strace"],
         }
         result = resolve_conditions(config, product="generic", variant="debug")
-        assert result == {"packages": ["systemd", "gdb", "strace"]}
+        assert result == {
+            "packages": ["systemd", "gdb", "strace"],
+            "product": "generic",
+            "variant": "debug",
+        }
 
     def test_matching_product_append(self):
         config = {
@@ -245,7 +262,11 @@ class TestResolveAppendCondition:
         result = resolve_conditions(
             config, product="smart-display", variant="release"
         )
-        assert result == {"packages": ["systemd", "weston", "chromium"]}
+        assert result == {
+            "packages": ["systemd", "weston", "chromium"],
+            "product": "smart-display",
+            "variant": "release",
+        }
 
     def test_non_matching_product_discarded(self):
         config = {
@@ -253,7 +274,11 @@ class TestResolveAppendCondition:
             "+packages:smart-display": ["weston"],
         }
         result = resolve_conditions(config, product="router", variant="release")
-        assert result == {"packages": ["systemd"]}
+        assert result == {
+            "packages": ["systemd"],
+            "product": "router",
+            "variant": "release",
+        }
 
 
 class TestResolveMultipleConditions:
@@ -284,7 +309,15 @@ class TestResolveNestedConditions:
             }
         }
         result = resolve_conditions(config, product="generic", variant="debug")
-        assert result == {"rootfs": {"packages": ["systemd", "gdb"]}}
+        assert result == {
+            "rootfs": {
+                "packages": ["systemd", "gdb"],
+                "product": "generic",
+                "variant": "debug",
+            },
+            "product": "generic",
+            "variant": "debug",
+        }
 
 
 class TestResolveConditionalOverride:
@@ -300,6 +333,8 @@ class TestResolveConditionalOverride:
         )
         assert result == {
             "partitions": ["boot", "rootfs", "data", "media"],
+            "product": "smart-display",
+            "variant": "release",
         }
 
 
@@ -312,7 +347,11 @@ class TestResolveUnconditionalAppend:
             "+packages": ["bash"],
         }
         result = resolve_conditions(config, product="generic", variant="release")
-        assert result == {"packages": ["systemd", "bash"]}
+        assert result == {
+            "packages": ["systemd", "bash"],
+            "product": "generic",
+            "variant": "release",
+        }
 
 
 class TestResolveFullScenario:
