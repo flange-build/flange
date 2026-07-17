@@ -31,6 +31,7 @@ def _make_spec(
     system: str = "cmake",
     options: dict | None = None,
     deps: list[str] | None = None,
+    apt_packages: list[str] | None = None,
     commands: list[list[str]] | None = None,
     app_type: str = "exec",
 ) -> AppSpec:
@@ -41,6 +42,7 @@ def _make_spec(
         system:   构建系统（cmake/meson/make/swift/custom/none）
         options:  build.options 字典
         deps:     build.deps 列表
+        apt_packages: 当前构建容器内安装的 APT 编译依赖
         commands: build.commands 列表（custom 构建系统专用）
         app_type: App 类型
 
@@ -60,6 +62,7 @@ def _make_spec(
             system=system,
             options=options or {},
             deps=deps or [],
+            apt_packages=apt_packages or [],
             commands=commands or [],
         ),
     )
@@ -564,3 +567,48 @@ class TestCompileExecution:
         builder._compile(app_dir, spec, builder._config)
         first_call_cmd = builder._docker.run.call_args_list[0].args[0]
         assert "-DBUILD_TESTS=OFF" in first_call_cmd
+
+    def test_apt构建依赖在编译前按目标架构安装(self, tmp_path):
+        """apt_packages 应先更新索引、安装，再执行 CMake。"""
+        builder = _make_builder(tmp_path, arch="armhf")
+        spec = _make_spec(
+            system="cmake",
+            apt_packages=["libasound2-dev:{arch}", "zlib1g-dev"],
+        )
+        app_dir = self._app_dir(tmp_path)
+
+        builder._compile(app_dir, spec, builder._config)
+
+        calls = builder._docker.run.call_args_list
+        assert calls[0].args[0] == ["apt-get", "update"]
+        assert calls[1].args[0] == [
+            "apt-get",
+            "install",
+            "-y",
+            "--no-install-recommends",
+            "-o",
+            "Dir::Cache::archives=/cache/apt",
+            "libasound2-dev:armhf",
+            "zlib1g-dev",
+        ]
+        assert calls[2].args[0][0] == "cmake"
+
+    def test_apt索引与已安装依赖在同次构建中复用(self, tmp_path):
+        """同一 AppBuilder 重复遇到相同包时不应再次调用 APT。"""
+        builder = _make_builder(tmp_path, arch="armhf")
+        spec = _make_spec(
+            system="make",
+            apt_packages=["libasound2-dev:{arch}"],
+        )
+        app_dir = self._app_dir(tmp_path)
+
+        builder._compile(app_dir, spec, builder._config)
+        builder._compile(app_dir, spec, builder._config)
+
+        commands = [item.args[0] for item in builder._docker.run.call_args_list]
+        assert commands.count(["apt-get", "update"]) == 1
+        apt_installs = [
+            command for command in commands
+            if command[:2] == ["apt-get", "install"]
+        ]
+        assert len(apt_installs) == 1

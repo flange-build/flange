@@ -84,6 +84,8 @@ capabilities:
 # 可选：构建配置
 build:
   system: cmake                  # none | cmake | meson | make | swift | custom
+  apt_packages:                  # 当前构建容器内安装的编译依赖
+    - libssl-dev:{arch}          # {arch} 展开为当前目标架构
   options:                       # 传递给构建系统的选项（cmake -D 变量等）
     CMAKE_BUILD_TYPE: Release
     ENABLE_TESTS: "OFF"
@@ -139,6 +141,7 @@ lib:
 | `maintainer.email` | 是 | 维护者邮箱 |
 | `capabilities` | 否 | App 能力标签，供配置系统和文档使用 |
 | `build.system` | 否 | 构建系统，默认 `none`（预编译包） |
+| `build.apt_packages` | 否 | 构建容器内安装的 APT 编译依赖；支持 `:{arch}` 架构占位符 |
 | `build.options` | 否 | 传递给构建系统的选项字典 |
 | `build.outputs` | 否 | 构建产物路径列表（相对于 App 目录） |
 | `build.deps` | 否 | App 间构建依赖列表 |
@@ -169,7 +172,15 @@ lib:
 | `swift` | Swift Package Manager 交叉编译 | Swift 项目 |
 | `custom` | 完全自定义命令（由 `build.commands` 提供） | 特殊构建需求 |
 
-### 3.2 约定式路径映射
+### 3.2 构建期、App 间与运行期依赖
+
+`build.apt_packages` 只在当前 `flange build` 容器内、编译命令执行前通过 APT 安装；`build.deps` 表示 App 间的
+构建顺序与 sysroot 依赖；顶层 `depends` 会写入 `.deb` control，供目标设备安装运行时库。
+
+构建期包支持 `:{arch}`，例如 `libasound2-dev:{arch}` 在 armhf 目标展开为 `libasound2-dev:armhf`。下载的 `.deb`
+复用 `.build/cache/apt`，App 专属依赖不应固化进 `docker/Dockerfile`。
+
+### 3.3 约定式路径映射
 
 AppBuilder 根据 App 目录下的子目录名，按约定自动映射到目标文件系统路径：
 
@@ -186,7 +197,7 @@ AppBuilder 根据 App 目录下的子目录名，按约定自动映射到目标�
 
 如需覆盖约定映射，在 `install:` 段声明具体路径（见 [2.2 节](#22-完整-schema) adbd 示例）。
 
-### 3.3 预编译二进制架构选择
+### 3.4 预编译二进制架构选择
 
 当 `build.system = none` 时，AppBuilder 根据目标架构自动选择 `bin/` 目录中的正确二进制：
 
@@ -194,7 +205,7 @@ AppBuilder 根据 App 目录下的子目录名，按约定自动映射到目标�
 - `armhf` 目标：优先匹配 `-armhf`、`-arm32` 后缀
 - 不匹配目标架构的文件自动排除
 
-### 3.4 类型示例
+### 3.5 类型示例
 
 #### exec 类型（CMake）
 

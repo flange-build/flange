@@ -421,6 +421,11 @@ class AppBuilder:
         # 目标架构
         self._arch: str = config.get("arch", "aarch64")
 
+        # 同一次 flange build 共用一个容器，只需刷新一次 APT 索引；已安装的
+        # 编译依赖也不重复请求。下载包复用 docker-compose 挂载的 /cache/apt。
+        self._apt_index_updated = False
+        self._installed_build_packages: set[str] = set()
+
     def _status(self, msg: str):
         if self.output:
             self.output.status(msg)
@@ -977,7 +982,60 @@ class AppBuilder:
         except ValueError:
             extra_mounts = [app_dir]
 
+        self._install_build_packages(
+            spec,
+            cwd=str(app_dir),
+            extra_mounts=extra_mounts,
+        )
+
         # 逐步执行编译命令
         cwd = str(app_dir)
         for cmd in commands:
             self._docker.run(cmd, cwd=cwd, extra_mounts=extra_mounts)
+
+    def _install_build_packages(
+        self,
+        spec: AppSpec,
+        *,
+        cwd: str,
+        extra_mounts: Optional[List[Path]],
+    ) -> None:
+        """在当前构建容器中安装 App 声明的 APT 编译依赖。"""
+        requested = list(dict.fromkeys(
+            package.replace("{arch}", self._arch)
+            for package in spec.build.apt_packages
+        ))
+        pending = [
+            package
+            for package in requested
+            if package not in self._installed_build_packages
+        ]
+        if not pending:
+            return
+
+        if not self._apt_index_updated:
+            self._status("更新 App 构建依赖 APT 索引")
+            self._docker.run(
+                ["apt-get", "update"],
+                cwd=cwd,
+                extra_mounts=extra_mounts,
+            )
+            self._apt_index_updated = True
+
+        self._status(
+            f"安装 App 构建依赖 ({self._arch}): {', '.join(pending)}"
+        )
+        self._docker.run(
+            [
+                "apt-get",
+                "install",
+                "-y",
+                "--no-install-recommends",
+                "-o",
+                "Dir::Cache::archives=/cache/apt",
+                *pending,
+            ],
+            cwd=cwd,
+            extra_mounts=extra_mounts,
+        )
+        self._installed_build_packages.update(pending)

@@ -11,6 +11,10 @@ services:
       - ./.build/sources:/workspace/.build/sources
       # APT 下载缓存持久化
       - ./.build/cache/apt:/cache/apt
+      # 构建期按需安装依赖时复用 multiarch 软件包索引
+      - ./.build/cache/apt-lists:/var/lib/apt/lists
+      # 使用仓库当前的官方 HTTPS 源配置，无需因源地址变化重建通用镜像
+      - ./docker/apt/ubuntu.sources:/etc/apt/sources.list.d/ubuntu.sources:ro
       # SSH 密钥（挂载到临时位置，entrypoint 复制并修正权限）
       - ~/.ssh:/tmp/.ssh-host:ro
     working_dir: /workspace

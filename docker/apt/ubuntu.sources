@@ -9,21 +9,21 @@
 # 由 docker/Dockerfile 通过 COPY 投放，替换镜像默认 ubuntu.sources。
 
 Types: deb
-URIs: http://archive.ubuntu.com/ubuntu/
+URIs: https://archive.ubuntu.com/ubuntu/
 Suites: noble noble-updates noble-backports
 Components: main restricted universe multiverse
 Architectures: amd64
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
 Types: deb
-URIs: http://security.ubuntu.com/ubuntu/
+URIs: https://security.ubuntu.com/ubuntu/
 Suites: noble-security
 Components: main restricted universe multiverse
 Architectures: amd64
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
 Types: deb
-URIs: http://ports.ubuntu.com/ubuntu-ports/
+URIs: https://ports.ubuntu.com/ubuntu-ports/
 Suites: noble noble-updates noble-backports noble-security
 Components: main restricted universe multiverse
 Architectures: arm64 armhf

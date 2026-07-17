@@ -3,9 +3,7 @@
 ## Purpose
 
 规定 flange 中 App 源的注册与发现模型：定义本地 App 目录、out-of-tree 单体注册（`external_apps.local_path` / `git`）与搜索路径（`external_app_dirs`）三类来源的配置格式与查找优先级，统一路径解析规则，并规范 `flange create app` 脚手架命令的目标目录选择与注册指引行为、`flange list apps` 的来源标签展示。让 App 源码既能随 flange 仓库分发，也能放置在宿主机任意位置被同一套构建流水线发现、识别与打包。
-
 ## Requirements
-
 ### Requirement: App 身份由 app.yaml 声明，目录名仅用于物理定位
 
 每个 App SHALL 在其根目录内提供一个 `app.yaml`，其中 `app.name` 字段是 App 的权威身份；App 目录名本身不作为身份，仅用于在宿主机上定位。构建系统 SHALL 在加载 App 时以 `app.yaml` 的 `app.name` 为准。
@@ -218,3 +216,24 @@
 
 - **WHEN** `external_app_dirs = ["~/vendor-apps"]`，其下 `wifi/app.yaml` 与 `bt/app.yaml` 存在
 - **THEN** 两个 App 都出现在输出，标签相同 `[dir:<abs>]`
+
+### Requirement: App 构建期 APT 依赖由 app.yaml 声明
+
+需要系统开发包的 App MUST 在 `build.apt_packages` 中声明构建期 APT 依赖，构建系统 MUST 在当前构建容器内、编译命令
+执行前安装这些包。包名 MAY 使用 `:{arch}` 占位符选择当前目标架构。App 专属构建依赖 MUST NOT 固化到通用
+`docker/Dockerfile`；`build.deps` 与顶层 `depends` 的 App 间依赖、设备运行时依赖语义 MUST 保持不变。
+
+#### Scenario: ARM32 App 声明交叉编译开发包
+
+- **WHEN** armhf App 声明 `build.apt_packages: [libasound2-dev:{arch}]` 并开始编译
+- **THEN** 构建系统先在当前容器安装 `libasound2-dev:armhf`，再执行该 App 的构建命令
+
+#### Scenario: App 同时声明构建期与运行期依赖
+
+- **WHEN** App 在 `build.apt_packages` 声明 `libasound2-dev:{arch}`，并在顶层 `depends` 声明 `libasound2t64`
+- **THEN** 前者仅安装到构建容器，后者仅写入目标 `.deb` 的运行时依赖
+
+#### Scenario: 构建依赖包含非法 APT 参数
+
+- **WHEN** `build.apt_packages` 中出现以 `-` 开头的参数、shell 片段或无效架构占位符
+- **THEN** `app.yaml` 解析阶段给出明确错误并停止构建

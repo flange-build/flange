@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional
@@ -17,6 +18,12 @@ VALID_APP_TYPES = {"exec", "service", "lib", "test", "amp"}
 # 允许的构建系统取值。amp = 经 SDK（HAL Makefile / RT-Thread scons）+ mkimage
 # 打 FIT，由 amp 组件驱动，不复用 _BUILD_SYSTEMS 的 host 交叉编译模板。
 VALID_BUILD_SYSTEMS = {"none", "cmake", "meson", "make", "swift", "custom", "amp", "scons"}
+
+# build.apt_packages 仅接受 Debian 包名和可选架构限定符。允许 {arch}
+# 占位符在构建时替换成当前目标架构，拒绝以 '-' 开头的 APT 选项注入。
+APT_PACKAGE_PATTERN = re.compile(
+    r"^[a-z0-9][a-z0-9+.-]*(?::(?:\{arch\}|[a-z0-9][a-z0-9-]*))?$"
+)
 
 
 class AppSpecError(ValueError):
@@ -41,6 +48,8 @@ class BuildConfig:
     outputs: List[str] = field(default_factory=list)
     # App 间构建依赖
     deps: List[str] = field(default_factory=list)
+    # 当前构建容器内安装的 APT 编译依赖，支持 :{arch} 架构占位符
+    apt_packages: List[str] = field(default_factory=list)
     # custom 构建专用命令列表，每项为字符串列表
     commands: List[List[str]] = field(default_factory=list)
     # Embedded Swift 配置；仅 app.type=amp + build.system=scons 可用
@@ -257,6 +266,16 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
 
     outputs = _parse_str_list_value(raw.get("outputs", []), "build.outputs")
     deps = _parse_str_list_value(raw.get("deps", []), "build.deps")
+    apt_packages = _parse_str_list_value(
+        raw.get("apt_packages", []),
+        "build.apt_packages",
+    )
+    for package in apt_packages:
+        if not APT_PACKAGE_PATTERN.fullmatch(package):
+            raise AppSpecError(
+                "build.apt_packages 包名无效："
+                f"'{package}'，仅允许 Debian 包名及可选的 :{{arch}} 架构限定符"
+            )
 
     # 解析 commands（custom 专用）
     commands = raw.get("commands", [])
@@ -277,6 +296,7 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
         options=options,
         outputs=outputs,
         deps=deps,
+        apt_packages=apt_packages,
         commands=parsed_commands,
         swift=_parse_swift_build(raw.get("swift"), app_info, system),
     )

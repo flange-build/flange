@@ -104,6 +104,9 @@ capabilities:
 
 build:
   system: cmake
+  apt_packages:
+    - libssl-dev:{arch}
+    - zlib1g-dev
   options:
     CMAKE_BUILD_TYPE: Release
   outputs:
@@ -268,6 +271,7 @@ class TestFullFieldParsing:
         assert spec.build.options == {"CMAKE_BUILD_TYPE": "Release"}
         assert spec.build.outputs == ["bin/my-daemon"]
         assert spec.build.deps == ["libfoo"]
+        assert spec.build.apt_packages == ["libssl-dev:{arch}", "zlib1g-dev"]
 
         # install 映射
         assert spec.install["bin/my-daemon"] == "/usr/bin/my-daemon"
@@ -337,6 +341,11 @@ class TestDefaultValues:
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
         assert spec.build.outputs == []
+
+    def test_build_apt_packages_defaults_to_empty_list(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
+        assert spec.build.apt_packages == []
 
     def test_capabilities_defaults_to_empty_list(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -574,6 +583,36 @@ class TestBuildSystemValues:
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, yaml_content))
         assert spec.build.system == "none"
+
+
+class TestBuildAptPackagesValidation:
+    """验证 App 构建期 APT 依赖的格式与架构占位符。"""
+
+    @pytest.mark.parametrize(
+        "package",
+        ["libasound2-dev:{arch}", "libcurl4-openssl-dev:armhf", "zlib1g-dev"],
+    )
+    def test_valid_package_accepted(self, package):
+        yaml_content = _MINIMAL_EXEC + (
+            "\nbuild:\n  system: cmake\n  apt_packages:\n"
+            f"    - {package}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = load_spec(_write_yaml(tmpdir, yaml_content))
+        assert spec.build.apt_packages == [package]
+
+    @pytest.mark.parametrize(
+        "package",
+        ["-oDebug::NoLocking=1", "libfoo;id", "libfoo:{bad}", "", "LibFoo"],
+    )
+    def test_invalid_package_rejected(self, package):
+        yaml_content = _MINIMAL_EXEC + (
+            "\nbuild:\n  system: cmake\n  apt_packages:\n"
+            f"    - '{package}'\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match="build.apt_packages"):
+                load_spec(_write_yaml(tmpdir, yaml_content))
 
 
 # ---------------------------------------------------------------------------
