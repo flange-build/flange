@@ -1,0 +1,16 @@
+[Unit]
+Description=Cardputer GUD 音乐播放器
+After=multi-user.target
+StartLimitIntervalSec=180
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/cardputer_music_player/start.sh
+ExecStopPost=/usr/bin/cardputer_music_player --restore-tty
+Restart=on-failure
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+{
+  "provider": "netease_official",
+  "manifest_url": "",
+  "douyin_api_url": "",
+  "douyin_broker_url": "",
+  "douyin_access_token_file": "",
+  "resolver_url": "",
+  "netease_api_url": "",
+  "netease_playlist_id": "",
+  "netease_app_id": "",
+  "netease_private_key_file": "/var/lib/cardputer_music_player/netease-private-key.pem",
+  "netease_session_file": "/var/lib/cardputer_music_player/netease-session.json",
+  "framebuffer_name": "guddrmfb",
+  "input_name": "Cardputer GUD Display",
+  "alsa_device": "plughw:CARD=Display,DEV=0",
+  "visualizer": "spectrum",
+  "fps": 10
+}

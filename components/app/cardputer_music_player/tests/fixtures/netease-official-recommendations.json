@@ -1,0 +1,31 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "id": "1001",
+      "name": "在线歌曲一",
+      "duration": 183000,
+      "artists": [
+        {
+          "id": "2001",
+          "name": "歌手甲"
+        }
+      ],
+      "coverImgUrl": "http://p1.music.126.net/cover-one.jpg",
+      "playFlag": true
+    },
+    {
+      "id": "1002",
+      "name": "在线歌曲二",
+      "duration": 205000,
+      "artists": [
+        {
+          "id": "2002",
+          "name": "歌手乙"
+        }
+      ],
+      "coverImgUrl": "https://p2.music.126.net/cover-two.jpg",
+      "playFlag": false
+    }
+  ]
+}

@@ -233,10 +233,23 @@ BOARD = {
             "debug": ["gdb", "strace", "tcpdump"],
         },
         # SPI NAND 不安装 ext4 grow/recovery 管理程序，仅保留 ADB 调试入口。
-        "custom_packages": ["adbd"],
+        "custom_packages": ["adbd", "cardputer_music_player"],
         # NetworkManager/wpa_supplicant 已由 base package set 提供；追加
         # BlueZ 及 Cardputer HID/UAC1 实机验收工具。
-        "+packages": ["bluez", "alsa-utils", "evtest"],
+        "+packages": [
+            "bluez",
+            "alsa-utils",
+            "evtest",
+            # Cardputer 播放器运行时依赖由产品 rootfs 安装；交叉编译开发包
+            # 由 App 自身 build.apt_packages 在构建容器内按需安装。
+            "libasound2t64",
+            "libcurl3t64-gnutls",
+            "libfreetype6",
+            "libmpg123-0t64",
+            "libqrencode4",
+            "libssl3t64",
+            "fonts-wqy-microhei",
+        ],
         # RTL8733BU Bluetooth 最小 firmware/config，同 OOT rtk_btusb source
         # 且固定 commit；WiFi firmware 已编入 8733bu.ko。
         "+extra_firmware": [

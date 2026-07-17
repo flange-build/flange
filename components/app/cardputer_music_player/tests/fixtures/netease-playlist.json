@@ -1,0 +1,19 @@
+{
+  "songs": [
+    {
+      "id": 347230,
+      "name": "海风信号",
+      "ar": [{"id": 1, "name": "测试歌手"}],
+      "al": {"id": 9, "name": "夏日专辑", "picUrl": "https://img.example/cover.jpg"},
+      "dt": 183000
+    },
+    {
+      "id": 347231,
+      "name": "夜航",
+      "ar": [{"id": 2, "name": "第二歌手"}],
+      "al": {"id": 10, "name": "夜色", "picUrl": "https://img.example/night.jpg"},
+      "dt": 201500
+    }
+  ],
+  "code": 200
+}

@@ -1,0 +1,13 @@
+{
+  "provider": "manifest",
+  "manifest_url": "file:///tmp/cardputer-mp3-manifest.json",
+  "douyin_api_url": "",
+  "douyin_broker_url": "",
+  "douyin_access_token_file": "",
+  "resolver_url": "",
+  "framebuffer_name": "guddrmfb",
+  "input_name": "Cardputer GUD Display",
+  "alsa_device": "plughw:CARD=Display,DEV=0",
+  "visualizer": "spectrum",
+  "fps": 10
+}

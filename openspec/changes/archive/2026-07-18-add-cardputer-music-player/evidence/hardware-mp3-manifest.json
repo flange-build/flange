@@ -1,0 +1,14 @@
+{
+  "tracks": [
+    {
+      "id": "acceptance-midnight-arpeggio",
+      "source": "local",
+      "rank": 1,
+      "title": "午夜琶音",
+      "artist": "flange 实机验收",
+      "duration_ms": 60000,
+      "cover_url": "file:///usr/share/cardputer_music_player/midnight-bloom.png",
+      "audio_url": "file:///tmp/cardputer-acceptance.mp3"
+    }
+  ]
+}

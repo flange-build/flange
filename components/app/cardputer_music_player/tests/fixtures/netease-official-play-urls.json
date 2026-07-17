@@ -1,0 +1,23 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "id": "1001",
+      "url": "http://m801.music.126.net/audio-one.mp3",
+      "br": 128000,
+      "duration": 183000
+    },
+    {
+      "id": "1002",
+      "url": null,
+      "br": 0,
+      "duration": 205000
+    },
+    {
+      "id": "9999",
+      "url": "https://untrusted.example/audio.mp3",
+      "br": 128000,
+      "duration": 1000
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+/bin/
+/build/
+/conf/*.local.json
+*.key
+*.pem
+*.token
+*session*.json

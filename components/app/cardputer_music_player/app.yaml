@@ -1,0 +1,48 @@
+app:
+  name: cardputer_music_player
+  version: 0.1.0
+  description: Cardputer GUD 小屏音乐播放器与实时音频可视化
+  type: service
+  arch:
+    - armhf
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+capabilities:
+  - display
+  - audio
+  - keyboard
+  - network
+
+build:
+  system: cmake
+  apt_packages:
+    - libasound2-dev:{arch}
+    - libcurl4-gnutls-dev:{arch}
+    - libfreetype-dev:{arch}
+    - libmpg123-dev:{arch}
+    - libqrencode-dev:{arch}
+    - libssl-dev:{arch}
+
+depends:
+  - libc6
+  - alsa-utils
+  - libasound2t64
+  - libcurl3t64-gnutls
+  - libfreetype6
+  - libmpg123-0t64
+  - libqrencode4
+  - libssl3t64
+  - fonts-wqy-microhei
+
+systemd:
+  unit: systemd/cardputer_music_player.service
+  auto_start: true
+
+data_dirs:
+  - /var/lib/cardputer_music_player
+
+conffiles:
+  - /etc/cardputer_music_player/config.json

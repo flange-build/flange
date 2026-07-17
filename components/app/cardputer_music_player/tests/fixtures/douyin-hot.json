@@ -1,0 +1,30 @@
+{
+  "data": {
+    "error_code": 0,
+    "description": "",
+    "list": [
+      {
+        "rank": 1,
+        "id": "official-music-001",
+        "title": "夏夜信号",
+        "author": "开放平台作者",
+        "cover": "https://example.invalid/covers/001.jpg",
+        "duration": 183,
+        "share_url": "https://www.douyin.com/music/official-music-001"
+      },
+      {
+        "rank": 2,
+        "music_id": "official-music-002",
+        "music_name": "纸飞机",
+        "artist": "榜单作者",
+        "cover_url": "https://example.invalid/covers/002.png",
+        "duration": 201,
+        "share_link": "https://www.douyin.com/music/official-music-002"
+      }
+    ]
+  },
+  "extra": {
+    "error_code": 0,
+    "logid": "fixture-log-id"
+  }
+}

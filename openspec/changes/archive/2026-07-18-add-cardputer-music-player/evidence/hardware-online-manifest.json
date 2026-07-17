@@ -1,0 +1,14 @@
+{
+  "tracks": [
+    {
+      "id": "samplelib-3s",
+      "source": "https",
+      "rank": 1,
+      "title": "Samplelib Online",
+      "artist": "Samplelib / Free to use",
+      "duration_ms": 3000,
+      "cover_url": "file:///usr/share/cardputer_music_player/midnight-bloom.png",
+      "audio_url": "https://samplelib.com/lib/preview/mp3/sample-3s.mp3"
+    }
+  ]
+}
