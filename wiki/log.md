@@ -562,3 +562,18 @@ Ubuntu 24.04 构建镜像中以 Python 3.12.3、pytest 9.1.1 全量运行得到
 `64 passed, 0 failed`。历史 `build-optimization`、`flash-enhancement`、
 `python-app-packaging` 已补齐 delta 后归档，ATK-RK3506B 的 12.1、12.2、13.10 及最终
 实机证据同步完成。
+
+## [2026-07-18] sync | Cardputer 网易云官方在线播放器归档
+
+新增 [[Cardputer 在线音乐播放器]]，同步 [[app 打包系统]]、[[atk-rk3506b]] 与 App 索引。
+播放器以 ARM32 原生 C 直接驱动 GUD/HID/UAC1，默认使用网易云开放平台二维码登录并加载
+“我喜欢的音乐”；`W/S/A/D`、`E/Q` 与 Space/Enter 完成完整队列和播放控制，联网列表移至
+后台任务，实机 32 首列表在 4374 ms 内就绪且服务 `NRestarts=0`。
+
+App 专属交叉编译开发包改由 `app.yaml:build.apt_packages` 在 Docker 内按需安装，运行库仍由
+板级 rootfs 和 deb `Depends` 管理。提交前审计覆盖工作区、最终 deb 与 Git 历史，未发现真实
+App ID、secret、Private Key 或 session；同时禁止携带 token header 的请求自动重定向，并强制
+session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
+`cardputer-music-player` 主规格，归档到
+`archive/2026-07-18-add-cardputer-music-player`；任务 8.5 因未提供合法抖音 token/broker，
+继续作为明确的外部实机待办。

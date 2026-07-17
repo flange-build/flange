@@ -7,8 +7,10 @@ sources:
   - builder/app_spec.py
   - builder/app_list.py
   - builder/deb.py
+  - docker-compose.yml
   - ProjectSpec.md#91-app-来源查找优先级
   - docs/app-architecture.md
+  - openspec/specs/app-registry/spec.md
 related:
   - "[[deb 打包引擎]]"
   - "[[scaffold 生成器]]"
@@ -16,7 +18,8 @@ related:
   - "[[scaffold 新建 app 流程]]"
   - "[[recoveryctl]]"
   - "[[adbd]]"
-updated: 2026-04-26
+  - "[[Cardputer 在线音乐播放器]]"
+updated: 2026-07-18
 ---
 
 ## TL;DR
@@ -25,13 +28,15 @@ updated: 2026-04-26
 
 ## 关键设计要点
 
-- **4 种 App 类型**（`app_spec.py:12`）：`exec`、`service`、`lib`（含 dev 包）、`test`
-- **6 种构建系统**（`app_spec.py:15`）：`none`/`cmake`/`meson`/`make`/`swift`/`custom`
+- **5 种 App 类型**：`exec`、`service`、`lib`（含 dev 包）、`test`、`amp`
+- **8 种构建系统**：`none`/`cmake`/`meson`/`make`/`swift`/`custom`/`amp`/`scons`
 - **来源三层**（详见 [ProjectSpec §9.1](../../ProjectSpec.md#91-app-来源查找优先级)）：① `components/app/*`；② external_apps Git 仓库；③ external_app_dirs；同名取高优先级
 - **AppSpec**（`load_spec`，L224）：yaml → 强类型；非法 type/system 抛 `AppSpecError`
 - **依赖图**（`_topo_sort_apps`，L339）：DFS 拓扑；循环依赖抛 `CircularDependencyError`（L335）
 - **AppBuilder**（L390）：`build_all`（L431）→ `build_one`（L458）；lib 额外 sysroot（`_build_lib`，L516）
 - **约定优先**：`collect_files`（L208）按后缀推断安装位置；`install:` 覆盖
+- **三类依赖**：`build.apt_packages` 在当前 Docker 构建容器按目标架构安装；
+  `build.deps` 决定 App 构建顺序；顶层 `depends` 写入目标 `.deb`
 - **rootfs**：engine 注入 deb 列表到 `custom_packages`，Phase 2 `dpkg -i`
 
 ## 关键代码位置
@@ -46,3 +51,5 @@ updated: 2026-04-26
 
 - `lib` 产出运行时 deb + `-dev` deb；rootfs 只装运行时包，sysroot 供其他 App 链接
 - `custom` commands 在 Docker 内 `cwd=app_dir` 执行，宿主机路径无效
+- App 专属开发包声明在 `build.apt_packages`，不得为了单个 App 固化进通用 Dockerfile；
+  `:{arch}` 会展开成当前目标架构，APT 下载与索引复用 `.build/cache/`

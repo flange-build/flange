@@ -11,7 +11,10 @@ sources:
   - components/board/atk-rk3506b/patches/rtl8733bu/0001-disable-removed-regulatory-flag.patch
   - components/platform/rockchip/rk3506b/config.py
   - docs/boards/atk-rk3506b.md
+  - components/app/cardputer_music_player/app.yaml
   - openspec/specs/rockchip-atk-rk3506b/spec.md
+  - openspec/specs/cardputer-music-player/spec.md
+  - openspec/changes/archive/2026-07-18-add-cardputer-music-player/evidence/cardputer-music-player-hardware.md
   - openspec/changes/archive/2026-07-15-add-rk3506b-atk-rk3506b/evidence/rk3506b-hardware-acceptance.md
   - openspec/changes/archive/2026-07-15-align-rk3506b-yt8512c-init/evidence/rk3506b-yt8512c-hardware.md
   - openspec/changes/archive/2026-07-14-add-atk-rk3506b-rtl8733bu-wifi-bt/evidence/rtl8733bu-acceptance.md
@@ -22,7 +25,8 @@ related:
   - "[[FlashStrategy 抽象]]"
   - "[[rk3506 AMP UART4 RPMsg demo]]"
   - "[[Cardputer USB 复合设备]]"
-updated: 2026-07-15
+  - "[[Cardputer 在线音乐播放器]]"
+updated: 2026-07-18
 ---
 
 ## TL;DR
@@ -45,7 +49,7 @@ UAC1 扬声器/麦克风均已实机验收。
 | Ethernet | 2× YT8512C，RMII1，PHY ID `0x00000128`，各自在独立 MDIO bus 的 address 1 |
 | WiFi | RTL8733BUUA，USB `0bda:b733` `ff/ff/ff`，OOT `8733bu.ko` |
 | Bluetooth | RTL8733BUUA，USB `0bda:b733` `e0/01/01`，OOT `rtk_btusb.ko` |
-| Cardputer | USB `16d0:10a9`，GUD + HID + mono 16 kHz UAC1 |
+| Cardputer | USB `16d0:10a9`，GUD + HID + mono 16 kHz UAC1；官方网易云在线播放器自启 |
 
 分区顺序固定为 `idbloader → uboot → boot → recovery(1 MiB 占位) → amp → rootfs`，
 因此 rootfs 始终是 `mtd5`。SPI NAND 不生成 GPT `raw.img`；构建期由配置生成
@@ -202,6 +206,8 @@ gadget OTG0 (`ff740000`) 是两个 controller，不应互相切换 role。
 - USB2 OTG1 已枚举 CH334R `1a86:8091` 与 RTL8733BUUA `0bda:b733`；刷入本次镜像后
   WLAN interface 已正常出现，证明 USB WiFi driver 的枚举、自动加载与注册链路可用。
 - Cardputer 的 `gud`、`usbhid`、`snd-usb-audio` 已自动绑定；TTY、键盘、扬声器和麦克风均通过。
+- `cardputer_music_player` armhf 包已由板级 rootfs 安装，编译依赖按 App 声明动态进入 Docker；
+  默认二维码登录后加载 32 首红心曲目，列表异步就绪，服务 `NRestarts=0`。
 - 双路 YT8512C 均绑定 PHY ID `0x00000128`；`end0`/`end1` 分别接线时均以
   100 Mbps/Full 建链，拔线产生 Link Down，不依赖手工 PHY reset。
 - UART4/MSH console 与 RPMsg 多轮 binary echo 已通过；2.4/5 GHz 连接、Bluetooth HCI
