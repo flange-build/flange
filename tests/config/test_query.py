@@ -28,7 +28,7 @@ class TestGetValidTargets:
     def test_expected_count(self, boards):
         """当前 17 个 board 的全部 product/variant 组合应完整枚举。"""
         targets = get_valid_targets(boards=boards)
-        assert len(targets) == 52
+        assert len(targets) == 54
 
     def test_contains_radxa_targets(self, boards):
         targets = get_valid_targets(boards=boards)
