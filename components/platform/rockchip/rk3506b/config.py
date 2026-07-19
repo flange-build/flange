@@ -102,6 +102,9 @@ SOC = {
             "endpoint_address": 0x3003,
             "endpoint_name": "rpmsg-ap3-ch0",
             "gic_profile": "rk3506-stock-mailbox2",
+            # 最终 rtthread.elf 必须通过 __heap_begin/__heap_end 门禁；为
+            # RPMsg、RT-Thread 对象与后续观测扩展保留确定的动态内存下限。
+            "minimum_heap_size": 0x00080000,
             # board patch 在目标 DTS 中补齐 CPU2 firmware no-map 保留区；
             # 构建器必须校验该区域，禁止 Linux 页分配器覆盖运行中的 RTOS。
             "firmware_reserved_in_dts": True,

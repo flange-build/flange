@@ -1,5 +1,7 @@
 """Rockchip 平台构建策略工厂。"""
 
+from pathlib import Path
+
 from builder.docker import DockerRunner
 from builder.source import SourceManager
 
@@ -21,6 +23,36 @@ ARTIFACT_NAMES = {
 }
 
 
+def _amp_app_source_dir(config: dict) -> str | None:
+    """按 app-registry 优先级返回 amp app 的可哈希源码目录。
+
+    该函数不触发 clone，仅解析已经存在或由 FINAL_CONFIG 归一化后的目录；
+    真正的来源获取仍由 SourceManager.ensure_app 负责。
+    """
+    amp = config.get("amp") or {}
+    app = amp.get("app", "")
+    if not app:
+        return None
+
+    local = Path("components/app") / app
+    if (local / "app.yaml").is_file():
+        return str(local)
+
+    external = (config.get("external_apps") or {}).get(app)
+    if external:
+        local_path = external.get("local_path")
+        if local_path:
+            return str(Path(local_path))
+        if external.get("git"):
+            return str(Path(".build/sources/apps") / app)
+
+    for directory in config.get("external_app_dirs") or []:
+        candidate = Path(directory) / app
+        if (candidate / "app.yaml").is_file():
+            return str(candidate)
+    return str(local)
+
+
 def amp_source_dirs(config: dict) -> list:
     """返回 amp 增量哈希应覆盖的源码目录。
 
@@ -31,10 +63,10 @@ def amp_source_dirs(config: dict) -> list:
     变更时用 `flange build -f amp` 强制重建。别的平台各自导出同名函数。
     """
     amp = config.get("amp") or {}
-    app = amp.get("app", "")
     dirs = []
-    if app:
-        dirs.append(f"components/app/{app}")
+    app_dir = _amp_app_source_dir(config)
+    if app_dir:
+        dirs.append(app_dir)
     # rockchip-hal.cmake 是 amp app 的构建接口，改动须触发重建（虽是单文件，
     # _hash_directory 接受目录——故指其所在 hal 根的该文件不便单列；改放 app
     # 目录哈希为主，.cmake 变更走 -f）。

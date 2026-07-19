@@ -231,3 +231,38 @@ loadable 仅引用 CPU2 固件。固件 load/size、MPIDR 和 SRAM SHALL 与配�
 - **WHEN** 对构建出的 RK3506 `amp.img` 执行 FIT 结构检查
 - **THEN** `amp2.arch=arm`、`amp2.cpu=0xf02`、`amp2.load=0x03e00000`
 - **AND** configuration 的 Linux CPU 为 `0xf00` 且 load 为 `0x00900000`
+
+### Requirement: RT-Thread AMP 的跨语言 ABI 必须可验证
+
+当 RT-Thread AMP app 包含 Swift archive 时，builder SHALL 从 BSP `rtconfig.py` 的静态
+`DEVICE` flags 派生 Swift CPU、浮点和 enum ABI。若 BSP 使用 hard-float，builder MUST 在
+Swift archive 和最终 `rtthread.elf` 两个阶段以固定裸机工具链 `readelf -A` 验证
+`Tag_ABI_VFP_args: VFP registers`。Swift C importer SHALL 匹配 BSP/newlib 的 variable-size
+enum ABI，两个阶段均 MUST 验证 `Tag_ABI_enum_size: small`。任一属性不匹配时构建必须失败。
+
+#### Scenario: archive 与最终 ELF 的 ABI 一致
+
+- **WHEN** Swift archive 和最终 ELF 均声明 VFP register arguments 与 small enum
+- **THEN** builder 允许继续执行 RT-Thread AMP 打包
+
+#### Scenario: 任一 ABI 属性不匹配
+
+- **WHEN** archive 或最终 ELF 缺少 required ABI attribute，或声明 32-bit enum
+- **THEN** builder 在生成可刷写 amp.img 前失败并指出不匹配的 artifact
+
+### Requirement: RT-Thread AMP 最终 ELF 必须满足 heap 容量门槛
+
+每个 RT-Thread AMP runtime profile SHALL 提供正整数 byte 数
+`amp.runtime.minimum_heap_size`。builder MUST 在最终链接后使用固定裸机工具链的
+`nm -n --defined-only` 与 `readelf -SW` 交叉验证 `__heap_begin`/`__heap_end` 和 `.heap`，
+要求范围一致、完整落在 CPU firmware carveout 内，且容量不小于配置门槛。
+
+#### Scenario: heap 容量满足配置门槛
+
+- **WHEN** 符号与 section 一致、位于 firmware carveout 内且容量足够
+- **THEN** builder 输出可用容量、最低门槛和余量，并继续打包
+
+#### Scenario: heap 缺失、不一致、越界或过小
+
+- **WHEN** 任一 heap 证据缺失，范围不一致、越界，或容量低于配置门槛
+- **THEN** builder 失败关闭且不得生成可刷写 amp.img

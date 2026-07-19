@@ -144,10 +144,35 @@ class BuildCache:
         """
         if self.config.get(component, {}).get("local_path"):
             return True
+        if component == "amp":
+            amp_name = (self.config.get("amp") or {}).get("app")
+            if amp_name and self._app_source_is_local(amp_name):
+                return True
+        if component == "app":
+            from builder.config.apps import gather_custom_packages
+            if any(
+                self._app_source_is_local(name)
+                for name in gather_custom_packages(self.config)
+            ):
+                return True
         for dep in DEPENDENCY_GRAPH.get(component, []):
             if self._has_local_upstream(dep):
                 return True
         return False
+
+    def _app_source_is_local(self, app_name: str) -> bool:
+        """外部 local_path / external_app_dirs 属于开发态本地源码。
+
+        这类源码不依赖 git ref，组件及下游必须放弃缓存命中，确保 OOT 修改
+        不会复用旧 deb、rootfs 或 amp.img。
+        """
+        if (self._project_path(
+                "components", "app", app_name, "app.yaml")).is_file():
+            return False
+        external = (self.config.get("external_apps") or {}).get(app_name) or {}
+        if external.get("local_path"):
+            return True
+        return bool(self.config.get("external_app_dirs"))
 
     def _required_artifacts_present(self, component: str) -> bool:
         """按 FINAL_CONFIG 路由校验组件必需产物是否都存在。
@@ -491,11 +516,31 @@ class BuildCache:
         custom_packages = gather_custom_packages(self.config)
         h.update(json.dumps(custom_packages).encode())
         for pkg in custom_packages:
-            app_dir = self._project_path("components", "app", pkg)
+            source_cfg = (self.config.get("external_apps") or {}).get(pkg)
+            if source_cfg:
+                h.update(json.dumps(
+                    source_cfg, sort_keys=True, default=str).encode())
+            app_dir = self._registered_app_source_dir(pkg)
             if app_dir.exists():
                 self._hash_directory(h, app_dir)
             else:
                 h.update(f"missing:{pkg}".encode())
+
+    def _registered_app_source_dir(self, app_name: str) -> Path:
+        """只读解析 App 源目录，不触发网络 clone。"""
+        local = self._project_path("components", "app", app_name)
+        if (local / "app.yaml").is_file():
+            return local
+        external = (self.config.get("external_apps") or {}).get(app_name) or {}
+        if external.get("local_path"):
+            return Path(external["local_path"])
+        if external.get("git"):
+            return self._project_path(".build", "sources", "apps", app_name)
+        for directory in self.config.get("external_app_dirs") or []:
+            candidate = Path(directory) / app_name
+            if (candidate / "app.yaml").is_file():
+                return candidate
+        return local
 
     # --- 哈希输入混合：amp ---
 
@@ -527,7 +572,11 @@ class BuildCache:
         # amp.app 用户工程源（平台无关，复用 app 体系的 components/app/<name>）
         app_name = amp_cfg.get("app")
         if app_name:
-            app_dir = self._project_path("components", "app", app_name)
+            source_cfg = (self.config.get("external_apps") or {}).get(app_name)
+            if source_cfg:
+                h.update(json.dumps(
+                    source_cfg, sort_keys=True, default=str).encode())
+            app_dir = self._registered_app_source_dir(app_name)
             if app_dir.is_dir():
                 h.update(b"amp_app:")
                 self._hash_directory(h, app_dir)

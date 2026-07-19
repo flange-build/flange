@@ -89,6 +89,7 @@ def test_rk3506b_amp_memory_runtime_matches_vendor_dts_and_its():
     assert runtime["endpoint_address"] == 0x3003
     assert runtime["endpoint_name"] == "rpmsg-ap3-ch0"
     assert runtime["gic_profile"] == "rk3506-stock-mailbox2"
+    assert runtime["minimum_heap_size"] == 0x00080000
     assert runtime["firmware_reserved_in_dts"] is True
     assert runtime["fit_requires_sram"] is True
 

@@ -301,8 +301,69 @@ print(json.dumps(result))
 }
 
 # --- Docker Compose 执行封装 ---
+_flange_oot_mount_pairs() {
+    # FINAL_CONFIG 中的 local_path 由宿主项目根解析；容器内项目根固定为
+    # /workspace。把外部 App 所在 git worktree（无 git 时为 App 目录）映射到
+    # 容器中对应的规范化路径，使整体 image/amp 构建也能消费 OOT 源。
+    _flange_python '
+import os
+import subprocess
+from pathlib import Path
+
+from builder.config.loader import STATE_FILE, load_current_config
+from builder.paths import PROJECT_ROOT
+
+if not STATE_FILE.is_file():
+    raise SystemExit(0)
+
+config = load_current_config()
+paths = []
+for entry in (config.get("external_apps") or {}).values():
+    local_path = entry.get("local_path")
+    if local_path:
+        paths.append(Path(local_path))
+for directory in config.get("external_app_dirs") or []:
+    paths.append(Path(directory))
+
+mounts = {}
+project_root = Path(PROJECT_ROOT).resolve()
+for path in paths:
+    source = path.expanduser().resolve()
+    if not source.exists():
+        raise SystemExit(f"OOT App 路径不存在，无法挂载到构建容器：{source}")
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        mount_root = Path(result.stdout.strip()).resolve()
+    except (OSError, subprocess.CalledProcessError):
+        mount_root = source
+    if mount_root.is_relative_to(project_root):
+        continue
+    relative = os.path.relpath(mount_root, project_root)
+    container_root = (Path("/workspace") / relative).resolve()
+    mounts[str(mount_root)] = str(container_root)
+
+for source, target in sorted(mounts.items()):
+    print(f"{source}\t{target}")
+'
+}
+
 _flange_docker_run() {
-    (cd "$FLANGE_DIR" && docker compose run --rm build "$@")
+    local pairs=""
+    local docker_args=()
+    pairs=$(_flange_oot_mount_pairs) || return 1
+    if [[ -n "$pairs" ]]; then
+        while IFS=$'\t' read -r source target; do
+            if [[ -n "$source" ]] && [[ -n "$target" ]]; then
+                docker_args+=(--volume "${source}:${target}:rw")
+            fi
+        done <<< "$pairs"
+    fi
+    (cd "$FLANGE_DIR" && docker compose run --rm "${docker_args[@]}" build "$@")
 }
 
 # --- flange 子命令 ---

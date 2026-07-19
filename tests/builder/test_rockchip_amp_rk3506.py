@@ -50,6 +50,7 @@ def _runtime() -> dict:
         "endpoint_address": 0x3003,
         "endpoint_name": "rpmsg-ap3-ch0",
         "gic_profile": "rk3506-stock-mailbox2",
+        "minimum_heap_size": 0x00080000,
         "firmware_reserved_in_dts": True,
         "fit_requires_sram": True,
     }
@@ -124,6 +125,7 @@ def test_rk3568_runtime_profile_keeps_existing_workaround_and_fit():
     assert runtime["link_id"] == 0x10
     assert runtime["mailbox_irq"] == 222
     assert runtime["gic_profile"] == "rk3568-incremental-intid222"
+    assert runtime["minimum_heap_size"] == 0x00080000
     assert "load = <0x7000000>;" in rendered
     assert 'loadables = "amp3";' in rendered
 

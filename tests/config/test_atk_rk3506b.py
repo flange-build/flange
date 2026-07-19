@@ -35,6 +35,8 @@ def test_board_is_discovered_with_debug_and_release_targets(boards):
     targets = set(get_valid_targets(boards=boards))
     assert "atk-rk3506b-default-debug" in targets
     assert "atk-rk3506b-default-release" in targets
+    assert "atk-rk3506b-fluxion-debug" in targets
+    assert "atk-rk3506b-fluxion-release" in targets
 
 
 def test_merged_config_uses_requested_kernel_dts_and_arm32(config):
@@ -169,7 +171,10 @@ def test_hardware_and_minimal_rtt_amp_contract(config):
     assert config["amp"]["mode"] == "rt-thread"
     assert config["amp"]["app"] == "rk3506_amp_uart4_rtt_demo"
     assert config["rootfs"]["image_format"] == "ubi"
-    assert config["rootfs"]["custom_packages"] == ["adbd"]
+    assert config["rootfs"]["custom_packages"] == [
+        "adbd",
+        "cardputer_music_player",
+    ]
 
 
 def test_cardputer_usb_composite_host_support(config):

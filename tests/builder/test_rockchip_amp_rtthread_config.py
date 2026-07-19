@@ -66,6 +66,28 @@ def test_rtthread_amp_cache_includes_flange_base_config():
     assert "components/platform/rockchip/amp" in paths
 
 
+def test_rtthread_amp_cache_includes_external_local_app(tmp_path):
+    """AMP OOT local_path 必须进入增量哈希输入。"""
+    app_dir = tmp_path / "rk3506_amp_fluxion_foc"
+    app_dir.mkdir()
+    (app_dir / "app.yaml").write_text("app:\n")
+
+    paths = amp_source_dirs({
+        "amp": {
+            "app": "rk3506_amp_fluxion_foc",
+            "mode": "rt-thread",
+            "soc_project": "rk3506",
+        },
+        "external_apps": {
+            "rk3506_amp_fluxion_foc": {
+                "local_path": str(app_dir),
+            },
+        },
+    })
+
+    assert str(app_dir) in paths
+
+
 def test_serial_open_notifies_rockchip_uart_clock_control():
     """serial open/close 应对称通知 Rockchip UART 驱动管理时钟。"""
     serial_path = (

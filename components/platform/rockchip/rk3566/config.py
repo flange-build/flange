@@ -162,6 +162,7 @@ SOC = {
             "endpoint_address": 0x3003,
             "endpoint_name": "rpmsg-ap3-ch0",
             "gic_profile": "rk3568-incremental-intid222",
+            "minimum_heap_size": 0x00080000,
             "firmware_reserved_in_dts": True,
             "fit_requires_sram": False,
         },
