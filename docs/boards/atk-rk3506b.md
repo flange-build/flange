@@ -80,8 +80,9 @@ CPU2 RT-Thread firmware 固定加载到 `0x03e00000`，大小 1 MiB。ATK board 
 Fluxion profile 还声明 `amp.runtime.minimum_heap_size=0x80000`（512 KiB）。builder 在最终
 `rtthread.elf` 链接后，以裸机 `nm` 和 `readelf` 交叉校验 heap 起止符号、`.heap` section、
 firmware carveout 边界和最小容量，不能证明时不会生成可刷写 `amp.img`。2026-07-19 的
-`atk-rk3506b-fluxion-debug` 真实 Docker 构建实测 heap 为 653 KiB，余量 141 KiB，因此保留
-现有 1 MiB carveout；新增功能若侵蚀余量会由构建门禁直接暴露，而不是无证据扩大内存。
+`atk-rk3506b-fluxion-debug` 在控制线程栈从 16 KiB 修正为 64 KiB 后，真实 Docker
+构建实测 heap 为 607 KiB，余量 95 KiB，因此保留现有 1 MiB carveout；新增功能若侵蚀
+余量会由构建门禁直接暴露，而不是无证据扩大内存。
 
 更新后的 kernel 上板后必须确认：
 

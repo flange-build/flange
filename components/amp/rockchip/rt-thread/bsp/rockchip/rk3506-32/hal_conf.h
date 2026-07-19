@@ -75,6 +75,18 @@
 #ifdef RT_USING_PIN
 #define HAL_GPIO_MODULE_ENABLED
 #define HAL_PINCTRL_MODULE_ENABLED
+#define HAL_GPIO_VIRTUAL_MODEL_FEATURE_ENABLED
+#define HAL_GPIO_VIRTUAL_GROUP_USED 3 /* CPU2 AMP owns EXP3 */
+/*
+ * RK3506 names the group IRQs GPIOx_3_IRQn while the common virtual GPIO
+ * driver derives GPIOx_EXP3_IRQn. Keep the vendor CMSIS header untouched and
+ * bridge that naming difference in this BSP.
+ */
+#define GPIO0_EXP3_IRQn GPIO0_3_IRQn
+#define GPIO1_EXP3_IRQn GPIO1_3_IRQn
+#define GPIO2_EXP3_IRQn GPIO2_3_IRQn
+#define GPIO3_EXP3_IRQn GPIO3_3_IRQn
+#define GPIO4_EXP3_IRQn GPIO4_3_IRQn
 #endif
 
 #ifdef RT_USING_I2C

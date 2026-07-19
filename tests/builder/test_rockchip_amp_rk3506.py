@@ -14,6 +14,14 @@ RK3506_ITS = Path(
     "components/amp/rockchip/rt-thread/bsp/rockchip/"
     "rk3506-32/Image/amp_linux.its"
 )
+RK3506_HAL_CONF = Path(
+    "components/amp/rockchip/rt-thread/bsp/rockchip/"
+    "rk3506-32/hal_conf.h"
+)
+RK3506_BOARD_BASE = Path(
+    "components/amp/rockchip/rt-thread/bsp/rockchip/"
+    "rk3506-32/board/common/board_base.c"
+)
 RK3568_ITS = Path(
     "components/amp/rockchip/rt-thread/bsp/rockchip/"
     "rk3568-32/Image/amp_linux.its"
@@ -100,6 +108,17 @@ def test_rk3506_rtthread_bsp_mapping_exists():
 
     assert bsp.as_posix().endswith("rk3506-32")
     assert (bsp / "SConstruct").is_file()
+
+
+def test_rk3506_gpio_virtual_group_matches_cpu2_amp_gic_routes():
+    hal_conf = RK3506_HAL_CONF.read_text()
+    board_base = RK3506_BOARD_BASE.read_text()
+
+    assert "#define HAL_GPIO_VIRTUAL_MODEL_FEATURE_ENABLED" in hal_conf
+    assert "#define HAL_GPIO_VIRTUAL_GROUP_USED 3" in hal_conf
+    for bank in range(5):
+        assert f"#define GPIO{bank}_EXP3_IRQn GPIO{bank}_3_IRQn" in hal_conf
+        assert f"GPIO{bank}_3_IRQn" in board_base
 
 
 def test_runtime_header_only_contains_app_consumed_profile_fields(tmp_path):
