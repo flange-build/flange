@@ -67,9 +67,10 @@ class TestVIM3LMergedConfig:
         # SM1 family 复用 G12A 工具链
         assert merged["bootloader"]["fip_tool"] == "aml_encrypt_g12a"
         assert merged["bootloader"]["fip_family_inc"] == "g12a.inc"
-        # kernel：mainline arm64 generic defconfig + USB GUD，dts_dir 由 SoC 提供
+        # kernel：mainline arm64 generic defconfig + USB GUD；board 层显式追加
+        # 网络协议栈与 TUN（网络隧道）支持，dts_dir 由 SoC 提供。
         assert merged["kernel"]["defconfig"] == [
-            "defconfig", "CONFIG_DRM_GUD=y",
+            "defconfig", "CONFIG_DRM_GUD=y", "CONFIG_NET=y", "CONFIG_TUN=y",
         ]
         assert merged["kernel"]["dts_dir"] == "amlogic"
 

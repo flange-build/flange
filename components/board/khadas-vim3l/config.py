@@ -22,6 +22,10 @@ BOARD = {
         # compatible = "khadas,vim3l", "amlogic,sm1"。include 链：
         # meson-sm1.dtsi + meson-khadas-vim3.dtsi。
         "dts": "meson-sm1-khadas-vim3l",
+        # TUN（网络隧道）供 VPN 等用户态程序创建 /dev/net/tun；显式保留
+        # 网络协议栈总开关，避免后续基础 defconfig 调整影响板级网络功能。
+        # raw Kconfig 项由 KernelBuilder 在最后一个 fragment 中合并。
+        "+defconfig": ["CONFIG_NET=y", "CONFIG_TUN=y"],
     },
 
     "bootloader": {
