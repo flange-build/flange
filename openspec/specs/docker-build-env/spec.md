@@ -100,6 +100,22 @@ Docker 镜像的最终 layer SHALL 保留本 spec 声明的全部工具与 cross
 - **WHEN** 查看 `docker/Dockerfile` 的 FROM 指令
 - **THEN** 基础镜像为 `ubuntu:24.04`，平台为 `linux/amd64`
 
+### Requirement: HTTPS APT 源必须先建立 CA 信任链
+
+Docker 构建容器 SHALL 在复制项目维护的 HTTPS Ubuntu APT 源前，使用基础镜像默认的官方源安装
+`ca-certificates`，并确认 `/etc/ssl/certs/ca-certificates.crt` 非空。构建过程 MUST NOT 通过关闭
+TLS 证书或主机名校验绕过信任链错误。
+
+#### Scenario: Dockerfile 先安装 CA 再复制 HTTPS 源
+
+- **WHEN** 按顺序读取 `docker/Dockerfile`
+- **THEN** 安装并校验 `ca-certificates` 的步骤位于复制 `docker/apt/ubuntu.sources` 之前
+
+#### Scenario: APT HTTPS 证书校验保持启用
+
+- **WHEN** 查看 Dockerfile 和 APT 配置
+- **THEN** Ubuntu 软件源全部使用 HTTPS，且不存在关闭 `Verify-Peer` 或 `Verify-Host` 的配置
+
 ### Requirement: 容器内预装 Bazel 8.x
 构建容器 SHALL 通过 bazelisk 安装 Bazel，版本由项目根目录的 `.bazelversion` 文件锁定为 8.x 系列。
 
@@ -214,4 +230,3 @@ Docker 构建容器 SHALL 安装 `u-boot-tools` 并提供可执行的 `mkimage`�
 #### Scenario: FIT 打包工具可执行
 - **WHEN** 在 build 容器内执行 `mkimage -V`
 - **THEN** 命令成功输出版本信息
-

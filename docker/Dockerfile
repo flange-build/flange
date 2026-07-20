@@ -2,6 +2,14 @@ FROM --platform=linux/amd64 ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# ubuntu:24.04 精简镜像不提供 CA 证书文件。先通过镜像默认的官方 HTTP
+# APT 源安装 ca-certificates，再切换到项目 HTTPS 源；APT 仓库元数据仍由
+# Ubuntu archive key 校验，且不通过关闭 TLS 校验绕过信任链。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && test -s /etc/ssl/certs/ca-certificates.crt \
+    && rm -rf /var/lib/apt/lists/*
+
 # Ubuntu noble sources 投放：主源限制 amd64，追加 ports.ubuntu.com 提供 arm64/armhf
 # —— 不替换的话 dpkg --add-architecture arm64 之后 apt update 会对 archive.ubuntu.com
 # 的 arm64 索引发 404（该镜像不托管 amd64/i386 之外的架构）。
@@ -24,7 +32,6 @@ RUN dpkg --add-architecture arm64 \
         g++-arm-linux-gnueabihf \
         binutils-arm-linux-gnueabihf \
         crossbuild-essential-armel \
-        ca-certificates \
         curl \
         gnupg \
         git \
