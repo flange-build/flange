@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Wed, 22 Jul 2026 09:00:00 +0800
+Subject: [PATCH] arm: dts: rk3506b: 禁用 SPI0 释放 GPIO0_C0/C3 给 fluxion PWM
+
+vendor rk3506b-alientek.dtsi 使能了 &spi0（status=okay，挂 spidev@0），
+其 pinctrl 用固定 func2 占用 GPIO0_C0(spi0_clk) 与 GPIO0_C3(spi0_csn0)。
+
+这两个引脚正是 CPU2 fluxion 六步开环 board profile 的 U 相 PWM
+（GPIO0_C0 → RMIO pwm1_ch0）与三相栅驱使能 EN（GPIO0_C3 → GPIO 输出）。
+AMP 下 Linux spidev 启动即经 pinctrl 持有并主动驱动这两脚，与 CPU2 写同一
+IOMUX 寄存器争用，导致 U 相与 EN 失效。
+
+fluxion AMP 部署不使用 40pin SPI0。在 AMP 目标 DTS 中禁用 spi0，使 Linux
+释放 GPIO0_C0/C3，交给 CPU2 RMIO/GPIO 独占。V/W 相（GPIO0_C1/C2）与 pwm1
+控制器本就未被 Linux 占用，无需改动。
+---
+ .../rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts b/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
+--- a/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
++++ b/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
+@@ -31,3 +31,10 @@
+ &uart2 {
+         status = "disabled";
+ };
++
++// SPI0 (spi0_clk=GPIO0_C0, spi0_csn0=GPIO0_C3) 与 CPU2 fluxion 六步 PWM
++// (U 相 pwm1_ch0 @ GPIO0_C0) 和三相栅驱 EN(GPIO0_C3) 争用同一 IOMUX。
++// fluxion AMP 部署不使用 40pin SPI0，禁用以把这两个引脚交给 CPU2 RMIO/GPIO。
++&spi0 {
++        status = "disabled";
++};

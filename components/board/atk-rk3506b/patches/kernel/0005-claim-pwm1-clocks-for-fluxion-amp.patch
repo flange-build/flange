@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Sun, 26 Jul 2026 09:00:00 +0800
+Subject: [PATCH] arm: dts: rk3506b: 由 rockchip-amp 认领 pwm1 时钟
+
+CPU2 fluxion 六步 board profile 在 AMP 侧自行 HAL_CRU_ClkEnable(PCLK_PWM1_GATE/
+CLK_PWM1_GATE) 并设频，驱动 pwm1 三通道输出三相 PWM。但 Linux 没有任何驱动认领
+pwm1（clk_summary 显示 clk_pwm1/pclk_pwm1 的 consumer 为 "deviceless"），于是内核
+启动末期的 clk_disable_unused 会把这两个时钟重新门控。
+
+后果是 PWM 输出在 CPU2 启动后短暂可用，待 Linux 走完 clk_disable_unused 即彻底
+消失：引脚无波形，而 CPU2 侧的 Swift runtime 仍在正常换相——软件状态与物理输出
+静默脱节。从 Linux 读 PWM1 寄存器时所有偏移返回同一总线残留值（0x04006D08），
+即时钟已关的典型表现。
+
+rockchip-amp 节点的 clocks 属性正是为此设计：由该节点持有引用，使 AMP 侧独占的
+外设时钟不被 Linux 当作 unused 回收（uart4/timer 已同样处理）。此处补上 pwm1 的
+PCLK 与功能时钟。
+
+引脚侧无需改动：三相 GPIO0_C0/C1/C2 经 RMIO 由 CPU2 独占，spi0 已由 patch 0004
+禁用释放 GPIO0_C0/C3。
+
+实测：修补前 clk_pwm1/pclk_pwm1 的 enable_cnt=0 且硬件使能列为 N，示波器无波形。
+---
+ arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts b/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
+--- a/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
++++ b/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
+@@ -38,3 +38,13 @@
+ &spi0 {
+         status = "disabled";
+ };
++
++// pwm1 由 CPU2 fluxion 独占（三相 PWM，RMIO → GPIO0_C0/C1/C2）。Linux 侧无驱动
++// 认领，若不在此声明引用，clk_disable_unused 会在启动末期关掉 pwm1 时钟，导致
++// PWM 输出静默消失（CPU2 仍在换相，但引脚无波形）。
++&rockchip_amp {
++        clocks = <&cru HCLK_M0>, <&cru STCLK_M0>,
++                 <&cru SCLK_UART4>, <&cru PCLK_UART4>,
++                 <&cru PCLK_TIMER>, <&cru CLK_TIMER0_CH5>,
++                 <&cru PCLK_PWM1>, <&cru CLK_PWM1>;
++};
