@@ -306,49 +306,9 @@ _flange_oot_mount_pairs() {
     # /workspace。把外部 App 所在 git worktree（无 git 时为 App 目录）映射到
     # 容器中对应的规范化路径，使整体 image/amp 构建也能消费 OOT 源。
     _flange_python '
-import os
-import subprocess
-from pathlib import Path
+from builder.oot_mounts import print_mount_pairs
 
-from builder.config.loader import STATE_FILE, load_current_config
-from builder.paths import PROJECT_ROOT
-
-if not STATE_FILE.is_file():
-    raise SystemExit(0)
-
-config = load_current_config()
-paths = []
-for entry in (config.get("external_apps") or {}).values():
-    local_path = entry.get("local_path")
-    if local_path:
-        paths.append(Path(local_path))
-for directory in config.get("external_app_dirs") or []:
-    paths.append(Path(directory))
-
-mounts = {}
-project_root = Path(PROJECT_ROOT).resolve()
-for path in paths:
-    source = path.expanduser().resolve()
-    if not source.exists():
-        raise SystemExit(f"OOT App 路径不存在，无法挂载到构建容器：{source}")
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "--show-toplevel"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        mount_root = Path(result.stdout.strip()).resolve()
-    except (OSError, subprocess.CalledProcessError):
-        mount_root = source
-    if mount_root.is_relative_to(project_root):
-        continue
-    relative = os.path.relpath(mount_root, project_root)
-    container_root = (Path("/workspace") / relative).resolve()
-    mounts[str(mount_root)] = str(container_root)
-
-for source, target in sorted(mounts.items()):
-    print(f"{source}\t{target}")
+print_mount_pairs()
 '
 }
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from builder.app_spec import load_spec
 from builder.config.loader import load_current_config
+from builder.oot_mounts import oot_volume_arguments
 from builder.app_list import list_all
 
 
@@ -102,10 +103,16 @@ def deploy_app(name_or_path: str, build_deb: bool, run: bool):
     # 2. 若需要，触发构建（透传原始参数，让 AppBuilder 自行决定走名称还是路径分支）
     if build_deb:
         print(f"==> 构建 App '{app_name}' ...")
-        # 调用 docker run 在容器内编译；外部目录由 AppBuilder._compile 通过
-        # extra_mounts 动态挂入容器，因此 deploy.py 这里不需要额外处理 -v。
+        # 调用 docker run 在容器内编译。OOT App 目录必须在这一层就挂进容器：
+        # 容器内无法动态挂载，且 App 目录在解析阶段（早于编译）就要可见。
+        # 与 flange build 共用 builder.oot_mounts，避免两条路径挂载不一致。
+        try:
+            volume_arguments = oot_volume_arguments(load_current_config())
+        except FileNotFoundError as error:
+            print(f"\n  [错误] {error}")
+            sys.exit(1)
         cmd = [
-            "docker", "compose", "run", "--rm", "build",
+            "docker", "compose", "run", "--rm", *volume_arguments, "build",
             "python3", "-c",
             (
                 "from pathlib import Path; "
