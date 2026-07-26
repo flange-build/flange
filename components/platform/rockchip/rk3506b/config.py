@@ -104,10 +104,15 @@ SOC = {
             "gic_profile": "rk3506-stock-mailbox2",
             # 最终 rtthread.elf 必须通过 __heap_begin/__heap_end 门禁；为
             # RPMsg、RT-Thread 对象与后续观测扩展保留确定的动态内存下限。
-            # fluxion AMP 的控制栈已确认被 START 编排路径击穿 64KB，现暂取
-            # 256KB（诊断值，待按实测水位收敛），故门禁 512KB→256KB 让路。
-            # 控制栈收敛到正式值后应一并把此门禁恢复到 0x00080000。
-            "minimum_heap_size": 0x00040000,
+            #
+            # 384KB 而非原先的 512KB：512KB 是 SoC 模板继承值，不是按本平台实际
+            # 需求推导的，而它与 fluxion AMP 不可能共存——CPU2 只有 1MB DRAM，
+            # 控制线程栈实测峰值 137KB（栈染色法，见 fluxion_amp_main.c 注释），
+            # 要腾出 512KB 堆栈只能给到 94KB，必然再次击穿。
+            # 当前构建可用堆 440160 字节，本门禁留约 46KB 余量，仍能拦住"未来某次
+            # 改动吃掉几十 KB 堆"这类回归。真正按需求推导需要运行时堆用量测量，
+            # 而 CPU2 目前没有可用的 console 通道。
+            "minimum_heap_size": 0x00060000,
             # board patch 在目标 DTS 中补齐 CPU2 firmware no-map 保留区；
             # 构建器必须校验该区域，禁止 Linux 页分配器覆盖运行中的 RTOS。
             "firmware_reserved_in_dts": True,
