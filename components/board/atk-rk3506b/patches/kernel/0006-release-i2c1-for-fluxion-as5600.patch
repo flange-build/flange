@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Sat, 01 Aug 2026 09:00:00 +0800
+Subject: [PATCH] arm: dts: rk3506b: 把 i2c1 释放给 CPU2 fluxion 的 AS5600 编码器
+
+CPU2 fluxion 的编码器位置闭环用 AS5600（i2c 从地址 0x36）读转子角度，接在
+40pin 的 GPIO1_B1(SCL) / GPIO1_B2(SDA) 上。这两个引脚经 RMIO 对应
+rm_io24_i2c1_scl / rm_io25_i2c1_sda，也就是 i2c1 控制器。
+
+vendor 的 rk3506b-alientek.dtsi 把 i2c1 置为 okay 并用 pinctrl 认领了这两个
+引脚，但其下没有挂任何子设备——Linux 只是占着控制器与引脚，没有实际用途。
+AMP 部署下这会与 CPU2 争同一个控制器和同一组 IOMUX。禁用后 Linux 侧无功能
+损失（对比 i2c2 挂着 gt911 触摸屏，不能动；i2c0 同样空置但本次不涉及）。
+
+与 spi0（patch 0004）是同一类冲突：vendor dtsi 使能了 AMP 侧需要独占的外设。
+
+时钟同时要认领。i2c1 被禁用后 Linux 没有驱动持有它的时钟引用，启动末期的
+clk_disable_unused 会把 pclk_i2c1/clk_i2c1 一并门控，CPU2 随后的传输会卡在
+START 超时——与 pwm1 曾经遇到的失败模式相同（patch 0005）。rockchip-amp 节点
+的 clocks 属性正是为此设计，此处补上 i2c1 的两个时钟。
+
+参考 rk3568_amp_rtt_foc 的 as5600.c：它在 RK3568 上走的是"每次传输前重新
+HAL_CRU_ClkEnable"的补偿路线，因为那块板的 AMP 节点没有认领机制可用。RK3506
+这里由 DTS 一次性认领，更干净，也避免了在控制环热路径上反复写 CRU。
+---
+ arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+--- a/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
++++ b/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
+@@ -39,12 +39,20 @@
+         status = "disabled";
+ };
+ 
+-// pwm1 由 CPU2 fluxion 独占（三相 PWM，RMIO → GPIO0_C0/C1/C2）。Linux 侧无驱动
+-// 认领，若不在此声明引用，clk_disable_unused 会在启动末期关掉 pwm1 时钟，导致
+-// PWM 输出静默消失（CPU2 仍在换相，但引脚无波形）。
++// i2c1 (SCL=GPIO1_B1/rm_io24, SDA=GPIO1_B2/rm_io25) 由 CPU2 fluxion 独占，用于
++// AS5600 磁编码器读转子角度。vendor dtsi 使能了它却没有挂任何子设备，禁用以把
++// 控制器和这两个引脚交给 CPU2 RMIO。
++&i2c1 {
++        status = "disabled";
++};
++
++// pwm1 与 i2c1 均由 CPU2 fluxion 独占。Linux 侧无驱动认领，若不在此声明引用，
++// clk_disable_unused 会在启动末期关掉它们的时钟：pwm1 表现为引脚无波形（CPU2
++// 仍在换相），i2c1 表现为传输卡在 START 超时。
+ &rockchip_amp {
+         clocks = <&cru HCLK_M0>, <&cru STCLK_M0>,
+                  <&cru SCLK_UART4>, <&cru PCLK_UART4>,
+                  <&cru PCLK_TIMER>, <&cru CLK_TIMER0_CH5>,
+-                 <&cru PCLK_PWM1>, <&cru CLK_PWM1>;
++                 <&cru PCLK_PWM1>, <&cru CLK_PWM1>,
++                 <&cru PCLK_I2C1>, <&cru CLK_I2C1>;
+ };
