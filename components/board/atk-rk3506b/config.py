@@ -235,13 +235,13 @@ BOARD = {
     "external_apps:fluxion": {
         "rk3506_amp_fluxion_foc": {
             "local_path": (
-                "../../fluxion/Device/FlangeApps/"
+                "../fluxion/Device/FlangeApps/"
                 "rk3506_amp_fluxion_foc"
             ),
         },
         "fluxion-rpmsg-bridge": {
             "local_path": (
-                "../../fluxion/Device/FlangeApps/"
+                "../fluxion/Device/FlangeApps/"
                 "fluxion_rpmsg_bridge"
             ),
         },
