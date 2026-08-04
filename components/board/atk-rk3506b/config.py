@@ -225,7 +225,7 @@ BOARD = {
         "enabled": True,
         "mode": "rt-thread",
         "app": "rk3506_amp_uart4_rtt_demo",
-        "app:fluxion": "rk3506_amp_fluxion_foc",
+        "app:fluxion": "fluxion_runtime",
     },
     # OOT 源与 flange checkout 的默认相对布局：
     #   <Project>/EMB_Project/flange
@@ -233,16 +233,10 @@ BOARD = {
     # envsetup 会把外部 git worktree 映射到容器中同一相对位置，避免把开发机
     # 绝对路径写进配置。default product 不解析这些来源。
     "external_apps:fluxion": {
-        "rk3506_amp_fluxion_foc": {
+        "fluxion_runtime": {
             "local_path": (
                 "../fluxion/Device/FlangeApps/"
-                "rk3506_amp_fluxion_foc"
-            ),
-        },
-        "fluxion-rpmsg-bridge": {
-            "local_path": (
-                "../fluxion/Device/FlangeApps/"
-                "fluxion_rpmsg_bridge"
+                "fluxion_runtime"
             ),
         },
     },
@@ -256,7 +250,6 @@ BOARD = {
         },
         # SPI NAND 不安装 ext4 grow/recovery 管理程序，仅保留 ADB 调试入口。
         "custom_packages": ["adbd", "cardputer_music_player"],
-        "+custom_packages:fluxion": ["fluxion-rpmsg-bridge"],
         # NetworkManager/wpa_supplicant 已由 base package set 提供；追加
         # BlueZ 及 Cardputer HID/UAC1 实机验收工具。
         "+packages": [

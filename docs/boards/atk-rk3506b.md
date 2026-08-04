@@ -128,13 +128,10 @@ flange build image -f
 
 ## Fluxion FOC OOT product
 
-`atk-rk3506b-fluxion-{debug,release}` 在已验证的启动、内存和 RPMsg 基线上增加两项
-仓库外应用：
-
-- CPU2：`rk3506_amp_fluxion_foc`，RT-Thread + Embedded Swift，执行由主机编译后的
-  FTS 静态 Runtime 计划；
-- Linux：`fluxion-rpmsg-bridge`，独占 RPMsg char 端点并向 Web 工作台提供
-  `/healthz`、只读 `/telemetry` 和独立 `/control`。
+`atk-rk3506b-fluxion-{debug,release}` 第一阶段只注册仓库外 AMP App
+`fluxion_runtime`。CPU2 运行 RT-Thread + Embedded Swift 电压模式 FOC Runtime，控制和遥测通过
+UART4 上的 MSH（模块化 Shell）`motor` 命令进行。第一阶段不构建 RPMsg/Linux bridge；
+Linux bridge 与 Web 集成属于第二阶段。
 
 默认 checkout 布局为：
 
@@ -143,7 +140,7 @@ flange build image -f
 <Project>/fluxion
 ```
 
-board 配置只保存 `../../fluxion/Device/FlangeApps/...` 相对路径，不保存开发机绝对路径。
+board 配置只保存 `../fluxion/Device/FlangeApps/fluxion_runtime` 相对路径，不保存开发机绝对路径。
 `envsetup.sh` 在启动 build 容器前解析 FINAL_CONFIG，并把 OOT App 所在 git worktree
 挂载到容器内对应路径。`default` product 继续使用已验证的 UART4/RPMsg echo 固件，作为
 恢复和链路诊断基线。
@@ -154,22 +151,8 @@ board 配置只保存 `../../fluxion/Device/FlangeApps/...` 相对路径，不�
 source envsetup.sh
 lunch atk-rk3506b-fluxion-debug
 flange build amp -f
-flange build app -f
-flange build rootfs -f
 flange build image -f
 ```
-
-2026-07-19 的真实 `flange build image -f` debug 构建用时 339.8 s，生成并收集
-`idbloader/uboot/boot/amp/rootfs`；其中 `amp.img` 为 288,256 byte，
-`rootfs.ubi` 为 216,662,016 byte。构建日志确认 armhf
-`fluxion-rpmsg-bridge_0.1.0` Deb 安装进入 rootfs，最终清单和
-`flash-config.json` 均把 AMP 指向 `0x28800`、rootfs 指向 `0x30800`。这属于交叉构建与
-镜像集成证据；没有实板启动、RPMsg 往返和功率级 HIL 证据时，不能据此宣称电机控制已验证。
-
-FTS 在 Linux/主机侧经过 lexer、parser、语义和安全校验后生成静态 Swift plan；RT-Thread
-实时核不解析 FTS 文本，也不保存画布布局。RPMsg 只承载小端、定长、有 CRC 的控制与遥测
-帧。控制线程独占 Runtime，RPMsg worker 只能写入固定容量命令队列；20 kHz 快环不得执行
-RPMsg 阻塞发送、JSON、文件或动态内存操作。
 
 在功率板的 PWM 引脚、电流采样通道、编码器、EN/FAULT 极性和硬件 break 已按原理图完成
 适配及 HIL/故障注入前，目标端 board hook 必须失败关闭，不能因为 bridge 或算法包已连通
