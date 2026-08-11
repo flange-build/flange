@@ -35,9 +35,20 @@ typedef enum { PANEL_ILI9881C, PANEL_ST7123 } panel_kind_t;
 
 static panel_kind_t panel_detect(void)
 {
-    if (i2c_master_probe(board_i2c_bus(), 0x55, 100) == ESP_OK)
+    const bool st7123 = (i2c_master_probe(board_i2c_bus(), 0x55, 100) == ESP_OK);
+    const bool gt911  = (i2c_master_probe(board_i2c_bus(), 0x14, 100) == ESP_OK);
+
+    if (st7123 && !gt911)
         return PANEL_ST7123;
-    return PANEL_ILI9881C;   /* 探不到 0x55 一律按 ILI9881C（0x14 GT911）处理 */
+    if (gt911 && !st7123)
+        return PANEL_ILI9881C;
+
+    /* 两个都探到或都没探到：探测法失效。回落到 ILI9881C 只是为了能继续启动，
+     * 若实机是 ST7123 批次会表现为时序错乱的花屏 —— 所以必须大声报出来，
+     * 否则这个失败模式没有任何外部症状可循。 */
+    ESP_LOGE(TAG, "面板探测失败(0x55=%d 0x14=%d)，回落 ILI9881C；"
+                  "若屏幕花屏请核对 i2cscan 日志", st7123, gt911);
+    return PANEL_ILI9881C;
 }
 
 esp_err_t display_init(void)

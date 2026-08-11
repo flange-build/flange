@@ -4,6 +4,8 @@
 #include "esp_io_expander_pi4ioe5v6408.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "board";
 static i2c_master_bus_handle_t s_i2c;
@@ -41,6 +43,10 @@ esp_err_t board_power_init(void)
     /* 面板与触摸上电。触摸本阶段不用，但与面板同源，一并拉起避免后续再动时序。 */
     ESP_RETURN_ON_ERROR(ioexp_out(IO_EXPANDER_PIN_NUM_4, 1), TAG, "LCD_EN");
     ESP_RETURN_ON_ERROR(ioexp_out(IO_EXPANDER_PIN_NUM_5, 1), TAG, "TOUCH_EN");
+
+    /* 面板/触摸的 I2C 从机在电源拉起后需要时间才能应答，panel_detect() 依赖
+     * 这一点。50ms 是保守值，只在开机走一次，不影响任何运行时性能。 */
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     /* 背光常亮。需要调光时再换 LEDC PWM，本阶段不做。 */
     gpio_config_t bl = { .mode = GPIO_MODE_OUTPUT, .pin_bit_mask = 1ULL << PIN_LCD_BL };
