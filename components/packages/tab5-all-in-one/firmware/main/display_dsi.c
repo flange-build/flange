@@ -25,7 +25,12 @@ static const char *TAG = "disp";
 
 #define PANEL_FB_BYTES ((size_t)PANEL_W * PANEL_H * sizeof(uint16_t))
 
-/* 旋转方向按实机标定：1 = 90° CCW，0 = 270° CCW。见 README 的方向标定说明。 */
+/*
+ * 旋转方向按实机标定：1 = 90° CCW，0 = 270° CCW。两分支的面板落点（供判读）：
+ *   整帧 (0,0,640,360)     两分支都落在 (0,0) 720×1280，铺满全屏无黑边。
+ *   自检黄块 (64,32,64,64) 128×128；=1 落 (64,1024)，=0 落 (528,128)。
+ * 两者相差 180°，所以黄块位置就是判定依据：跑到另一头就把本宏取反重编。
+ */
 #define DISPLAY_ROT_CCW90 1
 
 static esp_ldo_channel_handle_t s_ldo;
@@ -88,15 +93,16 @@ void display_test_pattern(void)
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     /*
-     * 局部矩形自检，验证非整帧的坐标映射。复用同一缓冲的左上角 64×64——
-     * display_blit() 按 pic_w=GUD_W 解读输入，取的就是 stride 为 GUD_W 的
-     * 左上角子块，所以只需把该区域改黄，无需第二次分配。
+     * 局部矩形自检：同时验证「非零输出偏移」与「紧凑输入布局」两件事。
+     * 源点取 (64,32) 而非 (0,0)——(0,0) 是紧凑解读与「整帧基址+偏移」解读的
+     * 退化重合点，放那儿等于什么都没验。缓冲前 sq*sq 个像素紧凑填黄即可
+     * （不是左上角子块），正是 gud_device.c 交过来的排布。
+     * 落点：ROT_CCW90=1 → (64,1024)，=0 → (528,128)，均 128×128。
      */
     const int sq = 64;
-    for (int y = 0; y < sq; y++)
-        for (int x = 0; x < sq; x++)
-            probe[y * GUD_W + x] = 0xFFE0;   /* 黄 */
-    display_blit(0, 0, sq, sq, probe);
+    for (int i = 0; i < sq * sq; i++)
+        probe[i] = 0xFFE0;   /* 黄 */
+    display_blit(64, 32, sq, sq, probe);
 
     /* PPA_TRANS_MODE_BLOCKING 保证上面两次搬运都已完成，可以安全释放 */
     heap_caps_free(probe);
@@ -237,11 +243,14 @@ esp_err_t display_init(void)
  * PPA 的 SRM 引擎在一次操作里同时完成 2× 缩放与 90° 旋转，无需两遍搬运。
  * 输入输出的 cache 同步由 PPA 驱动自己做(ppa_srm.c:254/:260)，此处不用管。
  * 注意 PPA 的 rotation_angle 是逆时针(CCW)。
+ *
+ * 输入契约：pixels 是紧凑排列的 w×h 个 RGB565（stride = w，无 padding），
+ * 亦即 gud_device.c 收帧后交过来的样子——脏矩形数据从缓冲偏移 0 起连续存放。
+ * x/y 只用于算输出落点，不参与输入寻址。整帧 (0,0,640,360) 时紧凑解读与
+ * 「整帧基址 + 偏移」解读恰好重合，所以只有非整帧的脏矩形能区分二者。
  */
 void display_blit(int x, int y, int w, int h, const void *pixels)
 {
-    if (!s_ppa || !s_fb) return;
-
     /* 旋转后输出块的尺寸：宽高互换再各乘 2 */
     const uint32_t out_w = (uint32_t)h * GUD_SCALE;
     const uint32_t out_h = (uint32_t)w * GUD_SCALE;
@@ -259,12 +268,12 @@ void display_blit(int x, int y, int w, int h, const void *pixels)
     ppa_srm_oper_config_t op = {
         .in = {
             .buffer = pixels,
-            .pic_w = GUD_W,
-            .pic_h = GUD_H,
+            .pic_w = (uint32_t)w,
+            .pic_h = (uint32_t)h,
             .block_w = (uint32_t)w,
             .block_h = (uint32_t)h,
-            .block_offset_x = (uint32_t)x,
-            .block_offset_y = (uint32_t)y,
+            .block_offset_x = 0,
+            .block_offset_y = 0,
             .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
         },
         .out = {
@@ -290,5 +299,4 @@ void display_blit(int x, int y, int w, int h, const void *pixels)
         ESP_LOGW(TAG, "ppa srm 失败 %s: %dx%d @(%d,%d) → (%u,%u) %ux%u",
                  esp_err_to_name(err), w, h, x, y,
                  (unsigned)out_x, (unsigned)out_y, (unsigned)out_w, (unsigned)out_h);
-    (void)out_w; (void)out_h;
 }
