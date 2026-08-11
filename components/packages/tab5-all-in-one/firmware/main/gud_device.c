@@ -3,7 +3,9 @@
 #include "tab5_pins.h"   /* GUD_W / GUD_H */
 #include "display_dsi.h" /* display_blit */
 #include "esp_log.h"
+#include "esp_heap_caps.h" /* heap_caps_malloc(MALLOC_CAP_SPIRAM)：帧缓冲放 PSRAM */
 #include "lz4.h" /* LZ4_decompress_safe：解 GUD host 端 LZ4 压缩帧 */
+#include <assert.h>
 #include <string.h>
 
 static const char *TAG = "gud";
@@ -72,15 +74,15 @@ static const uint8_t k_connector_connected = GUD_CONNECTOR_STATUS_CONNECTED;
 static uint8_t s_set_buf[64];
 
 /*
- * 帧缓冲：整屏 RGB565 = 240*135*2 ≈ 63KB。放内部 SRAM。
+ * 帧缓冲：整屏 RGB565 = 640*360*2 ≈ 450KB，超出内部 SRAM 容量，放 PSRAM。
  * s_fb   : 解压后/未压缩的像素帧(最终 byteswap+blit 的目标)。
  * s_cbuf : 压缩帧的接收缓冲。host 仅在压缩更小时才发压缩帧，故 compressed_length
  *          < 该矩形未压缩大小 ≤ GUD_FB_CAP，按整屏容量足够。
- * TODO(PSRAM): 若后续要双缓冲或更大分辨率，迁到 PSRAM 并用 heap_caps 分配。
+ * 由 gud_device_init() 用 heap_caps_malloc(MALLOC_CAP_SPIRAM) 分配。
  */
 #define GUD_FB_CAP (GUD_W * GUD_H * 2)
-static uint8_t s_fb[GUD_FB_CAP];
-static uint8_t s_cbuf[GUD_FB_CAP];
+static uint8_t *s_fb;
+static uint8_t *s_cbuf;
 
 /*
  * "待收帧"状态机：
@@ -163,6 +165,10 @@ static void gud_arm_set_buffer(void)
 
 void gud_device_init(void)
 {
+    s_fb = heap_caps_malloc(GUD_FB_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_cbuf = heap_caps_malloc(GUD_FB_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    assert(s_fb && s_cbuf);
+
     ESP_LOGI(TAG, "GUD device init: %dx%d RGB565, single connector(PANEL), single mode",
              GUD_W, GUD_H);
     ESP_LOGI(TAG, "descriptor size=%u connector=%u mode=%u (packed check)",
