@@ -898,6 +898,31 @@ git commit -m "feat(tab5-fw): MIPI-DSI 面板点亮，双面板批次运行时�
   panel_y = x * 2
   ```
 
+- [ ] **Step 2.5：cache 一致性 —— PPA 路径不用自己 msync，但有两条约束**
+
+P4 的 DMA 不侦听 cache，所以「谁写缓冲、谁负责回写」这件事必须想清楚。已核实
+（`$HOME/esp/esp-idf/components/esp_driver_ppa/src/ppa_srm.c`）：
+
+- `:254` PPA 对**输入**缓冲做 `esp_cache_msync(..., DIR_C2M | UNALIGNED)`（回写 CPU 刚解压的源像素）
+- `:260` PPA 对**输出**缓冲做 `esp_cache_msync(..., DIR_M2C)`（invalidate，让 CPU 能读到 DMA 写的新内容）
+
+两者都在提交 DMA 事务前无条件执行 ⇒ **`display_blit()` 里输入输出都不用自己 msync**。
+
+但要守住两条：
+
+1. **交给 PPA 之前，`s_fb` 上不能留 CPU 的脏 cache 行**。`:260` 是 invalidate 不是回写；
+   若 CPU 先直写了 `s_fb` 又没 flush，那些脏行可能在 PPA 写完之后才被淘汰，
+   **反过来覆盖 PPA 的输出**。Task 2 的 `memset` 与色条自检后都紧跟了
+   `display_frame_buffer_flush()`，已无隐患；但今后凡是混用 CPU 直写与 PPA 的地方都要先 flush。
+2. `:260` 用 `PPA_ALIGN_DOWN`/`PPA_ALIGN_UP` 把 invalidate 区间**向外扩**到 cache line 边界
+   （源码注释：`alignment strict on M2C direction`）。即 PPA 输出块上下边缘所在的
+   两条 cache line 会被连带 invalidate —— 又一个「别在相邻区域留脏行」的理由。
+
+> `display_frame_buffer_flush()` 目前是整幅 1.84MB 全 flush，开机只调两次无所谓。
+> 若将来出现逐帧的 CPU 直写路径，要改成按行区间 flush（照 IDF
+> `esp_lcd_panel_dpi.c:646` 的 `y_start`/`y_end` 算法，届时需加 `UNALIGNED` 标志）。
+> 现在不做。
+
 - [ ] **Step 3：在 `display_dsi.c` 里加 PPA client**
 
 在文件顶部加 `#include "driver/ppa.h"`，并加静态句柄：
