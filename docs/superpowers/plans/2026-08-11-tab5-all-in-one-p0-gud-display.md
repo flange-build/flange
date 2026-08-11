@@ -73,7 +73,7 @@
 |---|---|
 | `gud_protocol.h` | 原样拷贝（内核 vendor，Dual MIT/GPL） |
 | `lz4.c` / `lz4.h` | 原样拷贝（BSD-2-Clause） |
-| `gud_device.c` / `.h` | 拷贝后改三处：尺寸常量、删 byteswap、`display_blit` 语义 |
+| `gud_device.c` / `.h` | 拷贝后改四处：include/尺寸来源、模式时序 640×360、删 byteswap、帧缓冲改 PSRAM heap 分配。**收帧的紧凑布局不动** —— 脏矩形数据从缓冲偏移 0 起紧凑累积是对的，由 `display_blit()` 去适配它（见 Task 3 Step 4 的警告） |
 | `main/tinyusb_config/tusb_config.h` | **本计划不拷** —— 它存在的唯一目的是开 `CFG_TUD_AUDIO`，而 P0 没有音频接口；vendor 类由 `CONFIG_TINYUSB_VENDOR_COUNT=1` 经 esp_tinyusb 自带的 tusb_config.h 生效。留到音频阶段再连同 `main/CMakeLists.txt` 的 21 行注入块一起从 Cardputer 拷来 |
 | `main/CMakeLists.txt` 的 tinyusb 配置注入段 | **本计划不拷**，理由同上（只有 lz4.c 那行 `set_source_files_properties` 要拷，它与音频无关） |
 
@@ -874,7 +874,28 @@ git commit -m "feat(tab5-fw): MIPI-DSI 面板点亮，双面板批次运行时�
 - 画面**充满全屏**、无黑边、无越界；
 - 四个色块与手持横屏方向一致（横屏看时左上就是红）；
 - 中央黑方块居中；
-- 再单独 blit 一次 `(x=0, y=0, w=64, h=64)` 的纯黄小块，它出现在**横屏视角的左上角**。
+- 再单独 blit 一次 **`(x=64, y=32, w=64, h=64)`** 的纯黄小块（**紧凑输入**），验证非零输出偏移。
+
+> ⚠️ 黄块**不能**用 `(0,0)` —— 那恰好是「紧凑输入」与「stride 子块」两种解读的
+> 重合退化点，验不出 `display_blit()` 输入契约写错这类 bug（见 Step 4 的警告）。
+>
+> **颜色本身就是判据**：黄块的像素取自 probe 缓冲的紧凑前 4096 个像素，
+> 即整帧图第 0–6 行（横跨全宽，落在**红色**象限）。若输入契约被误写成 stride 解读，
+> PPA 会去读 (64,32) 处的子块 —— 那在第 32–95 行，是**红色**。所以：
+>
+> - 方块是**黄的** ⇒ 紧凑输入契约正确 ✅
+> - 方块是**红的** ⇒ 输入契约退回 stride 解读，`display_blit()` 写错了 ❌
+>
+> 这比只看落点强得多，且不依赖人对旋转方向的判断。
+
+**两个分支下黄块的面板落点**（判读位置时对照）：
+
+| `DISPLAY_ROT_CCW90` | out_x | out_y | 面板上的块 |
+|---|---|---|---|
+| `1`（90° CCW） | 64 | 1024 | (64, 1024) 起 128×128，偏下 |
+| `0`（270° CCW） | 528 | 128 | (528, 128) 起 128×128，偏上且靠右 |
+
+两者相差甚远，判读毫不含糊。
 
 > ⚠️ **判读时注意区分「面板坐标」与「观看方位」**。整条链路带 90° 旋转，
 > 两者差一个旋转量。黄块在**面板坐标系**里的落点是：
@@ -977,14 +998,23 @@ void display_blit(int x, int y, int w, int h, const void *pixels)
 #endif
 
     ppa_srm_oper_config_t op = {
+        /*
+         * ⚠️ 输入是**紧凑**的 w×h，不是整帧 640×360 的子块。
+         * gud_device.c 收帧时把脏矩形数据从缓冲偏移 0 起紧凑累积
+         * （`req.length == w*h*2` 校验 + `memcpy(dst + s_frame_received, ...)`，
+         * LZ4 也解压到偏移 0），所以这里必须 pic_w=w / pic_h=h / offset=0。
+         * x/y 只用于算**输出**落点，不参与输入寻址。
+         * 若误写成 pic_w=GUD_W + offset=(x,y)（stride 解读），整帧恰好重合、
+         * 局部矩形读到垃圾 —— Task 4 全绿而 Task 5 静默花屏。
+         */
         .in = {
             .buffer = pixels,
-            .pic_w = GUD_W,
-            .pic_h = GUD_H,
+            .pic_w = (uint32_t)w,
+            .pic_h = (uint32_t)h,
             .block_w = (uint32_t)w,
             .block_h = (uint32_t)h,
-            .block_offset_x = (uint32_t)x,
-            .block_offset_y = (uint32_t)y,
+            .block_offset_x = 0,
+            .block_offset_y = 0,
             .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
         },
         .out = {
