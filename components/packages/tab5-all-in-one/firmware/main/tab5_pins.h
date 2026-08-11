@@ -11,6 +11,8 @@
 /* 显示 */
 #define PIN_LCD_BL         22    /* 背光 LEDA */
 #define IOEXP_ADDR         0x43  /* PI4IOE5V6408-1：管 LCD/TOUCH/SPEAKER/CAMERA 使能 */
+#define ST7123_I2C_ADDR    0x55  /* ST7123 显示触控一体，存在即表明是 ST7123 批次 */
+#define GT911_I2C_ADDR     0x14  /* GT911 触摸，存在即表明面板为 ILI9881C */
 
 /* 面板原生分辨率（竖屏）与 DSI 参数 */
 #define PANEL_W            720

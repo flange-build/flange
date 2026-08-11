@@ -7,7 +7,6 @@
 #include "usb_descriptors.h"
 #include "gud_device.h"
 #include "board_power.h"
-#include "tab5_pins.h"
 
 static const char *TAG = "tab5_aio";
 
@@ -25,13 +24,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(display_init());
 
-    /* 面板自检：4 条竖直色条（面板竖屏坐标系，x 是短边 720） */
-    uint16_t *fb = display_frame_buffer();
-    const uint16_t bars[4] = {0xF800, 0x07E0, 0x001F, 0xFFFF}; /* R G B W (RGB565) */
-    for (int y = 0; y < PANEL_H; y++)
-        for (int x = 0; x < PANEL_W; x++)
-            fb[y * PANEL_W + x] = bars[(x * 4) / PANEL_W];
-    display_frame_buffer_flush();
+    display_test_pattern();
 
     /* GUD 控制协议状态机初始化（须在 TinyUSB 安装前，回调可能立即触发） */
     ESP_ERROR_CHECK(gud_device_init());

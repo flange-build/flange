@@ -51,7 +51,7 @@ esp_err_t board_power_init(void)
     /* 背光常亮。需要调光时再换 LEDC PWM，本阶段不做。 */
     gpio_config_t bl = { .mode = GPIO_MODE_OUTPUT, .pin_bit_mask = 1ULL << PIN_LCD_BL };
     ESP_RETURN_ON_ERROR(gpio_config(&bl), TAG, "bl gpio");
-    gpio_set_level(PIN_LCD_BL, 1);
+    ESP_RETURN_ON_ERROR(gpio_set_level(PIN_LCD_BL, 1), TAG, "bl level");
 
     ESP_LOGI(TAG, "board power ready (i2c %d/%d, ioexp 0x%02x)",
              PIN_I2C_SDA, PIN_I2C_SCL, IOEXP_ADDR);

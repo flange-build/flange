@@ -1,8 +1,6 @@
 /*
  * M5Stack Tab5 显示 HAL。面板原生 720x1280 竖屏，MIPI-DSI 2 lane @ 1Gbps。
  * DSI/DPI 参数复刻自 esp-bsp bsp/m5stack_tab5/src/bsp_display.c（Apache-2.0）。
- * Tab5 随批次装 ILI9881C 或 ST7123 两种面板，两条路径都编进固件，
- * 由 panel_detect() 在运行时按内部 I2C 上的地址区分。
  */
 #include "display_dsi.h"
 #include "tab5_pins.h"
@@ -16,9 +14,12 @@
 #include "esp_check.h"
 #include "esp_cache.h"
 #include "esp_log.h"
+#include <stdint.h>
 #include <string.h>
 
 static const char *TAG = "disp";
+
+#define PANEL_FB_BYTES ((size_t)PANEL_W * PANEL_H * sizeof(uint16_t))
 
 static esp_ldo_channel_handle_t s_ldo;
 static esp_lcd_dsi_bus_handle_t s_dsi_bus;
@@ -26,13 +27,33 @@ static esp_lcd_panel_io_handle_t s_io;
 static esp_lcd_panel_handle_t s_panel;
 static uint16_t *s_fb;      /* DPI 帧缓冲，720x1280 RGB565，由驱动分配在 PSRAM */
 
-uint16_t *display_frame_buffer(void) { return s_fb; }
-
-void display_frame_buffer_flush(void)
+/*
+ * 把 CPU 对帧缓冲的写入回写到 PSRAM。P4 的 DMA 不侦听 cache，DSI 桥直接从
+ * PSRAM 取像素，CPU 改完 s_fb 不回写则末尾若干行可能还脏在 L2 里没落盘，
+ * 表现为屏幕底部杂色带。
+ *
+ * 刻意不加 ESP_CACHE_MSYNC_FLAG_UNALIGNED：C2M 方向不带该 flag 时地址与
+ * size 都必须按 cache line 对齐，否则 esp_cache_msync 返回 ESP_ERR_INVALID_ARG
+ * 而 abort。整幅回写满足这两点——地址由 heap_caps_calloc 保证对齐（见 IDF
+ * esp_lcd_panel_dpi.c:232 的断言注释），size = 1,843,200 = 128 × 14400，
+ * 64B/128B 两种 line size 都整除。将来若有人拿它去刷部分行区间，我们希望
+ * 那个断言大声炸掉，而不是被 UNALIGNED 静默放过。
+ */
+static void frame_buffer_flush(void)
 {
-    if (!s_fb) return;
-    ESP_ERROR_CHECK(esp_cache_msync(s_fb, (size_t)PANEL_W * PANEL_H * 2,
+    ESP_ERROR_CHECK(esp_cache_msync(s_fb, PANEL_FB_BYTES,
                                     ESP_CACHE_MSYNC_FLAG_DIR_C2M));
+}
+
+void display_test_pattern(void)
+{
+    /* 4 条竖直色条（面板竖屏坐标系，x 是短边 720） */
+    const uint16_t bars[] = {0xF800, 0x07E0, 0x001F, 0xFFFF}; /* R G B W (RGB565) */
+    const int n = sizeof(bars) / sizeof(bars[0]);
+    for (int y = 0; y < PANEL_H; y++)
+        for (int x = 0; x < PANEL_W; x++)
+            s_fb[y * PANEL_W + x] = bars[(x * n) / PANEL_W];
+    frame_buffer_flush();
 }
 
 /* 面板/触摸控制器随 Tab5 批次而异，用内部 I2C 上的地址区分：
@@ -41,10 +62,23 @@ void display_frame_buffer_flush(void)
  * 两条初始化路径都编进固件，探到哪个走哪个。 */
 typedef enum { PANEL_ILI9881C, PANEL_ST7123 } panel_kind_t;
 
+/* 两套 DPI 时序，均复刻自 esp-bsp bsp/m5stack_tab5/src/bsp_display.c（Apache-2.0）。
+ * 用 designated initializer 按 panel_kind_t 索引，把枚举与表绑死。 */
+typedef struct { uint32_t clk_mhz; esp_lcd_video_timing_t timing; } panel_timing_t;
+
+static const panel_timing_t s_panel_timings[] = {
+    [PANEL_ILI9881C] = { 60, { .h_size = PANEL_W, .v_size = PANEL_H,
+                               .hsync_back_porch = 140, .hsync_pulse_width = 40, .hsync_front_porch = 40,
+                               .vsync_back_porch = 20,  .vsync_pulse_width = 4,  .vsync_front_porch = 20 } },
+    [PANEL_ST7123]   = { 70, { .h_size = PANEL_W, .v_size = PANEL_H,
+                               .hsync_back_porch = 40,  .hsync_pulse_width = 2,  .hsync_front_porch = 40,
+                               .vsync_back_porch = 8,   .vsync_pulse_width = 2,  .vsync_front_porch = 220 } },
+};
+
 static panel_kind_t panel_detect(void)
 {
-    const bool st7123 = (i2c_master_probe(board_i2c_bus(), 0x55, 100) == ESP_OK);
-    const bool gt911  = (i2c_master_probe(board_i2c_bus(), 0x14, 100) == ESP_OK);
+    const bool st7123 = (i2c_master_probe(board_i2c_bus(), ST7123_I2C_ADDR, 100) == ESP_OK);
+    const bool gt911  = (i2c_master_probe(board_i2c_bus(), GT911_I2C_ADDR, 100) == ESP_OK);
 
     if (st7123 && !gt911)
         return PANEL_ST7123;
@@ -59,6 +93,7 @@ static panel_kind_t panel_detect(void)
     return PANEL_ILI9881C;
 }
 
+/* 须在 board_power_init() 之后调用：panel_detect() 依赖内部 I2C 总线。 */
 esp_err_t display_init(void)
 {
     /* MIPI DSI PHY 供电：内部 LDO_VO3 @ 2.5V。不做这步 DSI 停在 "No Power" 态。 */
@@ -84,39 +119,22 @@ esp_err_t display_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_dbi(s_dsi_bus, &dbi_cfg, &s_io), TAG, "dbi io");
 
     /*
-     * DPI 配置。两种面板只有像素时钟与 porch 不同，其余一致。
+     * DPI 配置。两种面板只有像素时钟与 porch 不同（见 s_panel_timings），其余一致。
      * IDF 6.0：用 in/out_color_format，没有 5.x 的 .pixel_format 字段。
      * 可以放栈上：两个面板驱动都只在 esp_lcd_new_panel_*() 内部把 dpi_config
      * 转交给 esp_lcd_new_panel_dpi()，后者按值拷走各字段，不留存指针；
      * panel_*_init() 阶段不再解引用它。
      */
+    const panel_kind_t kind = panel_detect();
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .virtual_channel = 0,
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
         .in_color_format = LCD_COLOR_FMT_RGB565,
         .out_color_format = LCD_COLOR_FMT_RGB565,
         .num_fbs = 1,
-        .video_timing = { .h_size = PANEL_W, .v_size = PANEL_H },
+        .dpi_clock_freq_mhz = s_panel_timings[kind].clk_mhz,
+        .video_timing = s_panel_timings[kind].timing,
     };
-
-    const panel_kind_t kind = panel_detect();
-    if (kind == PANEL_ST7123) {
-        dpi_cfg.dpi_clock_freq_mhz = 70;
-        dpi_cfg.video_timing.hsync_back_porch  = 40;
-        dpi_cfg.video_timing.hsync_pulse_width = 2;
-        dpi_cfg.video_timing.hsync_front_porch = 40;
-        dpi_cfg.video_timing.vsync_back_porch  = 8;
-        dpi_cfg.video_timing.vsync_pulse_width = 2;
-        dpi_cfg.video_timing.vsync_front_porch = 220;
-    } else {
-        dpi_cfg.dpi_clock_freq_mhz = 60;
-        dpi_cfg.video_timing.hsync_back_porch  = 140;
-        dpi_cfg.video_timing.hsync_pulse_width = 40;
-        dpi_cfg.video_timing.hsync_front_porch = 40;
-        dpi_cfg.video_timing.vsync_back_porch  = 20;
-        dpi_cfg.video_timing.vsync_pulse_width = 4;
-        dpi_cfg.video_timing.vsync_front_porch = 20;
-    }
 
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = -1,          /* Tab5 面板无独立 reset 脚 */
@@ -154,8 +172,8 @@ esp_err_t display_init(void)
 
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(s_panel, 1, (void **)&s_fb),
                         TAG, "get fb");
-    memset(s_fb, 0, (size_t)PANEL_W * PANEL_H * 2);
-    display_frame_buffer_flush();
+    memset(s_fb, 0, PANEL_FB_BYTES);
+    frame_buffer_flush();
 
     ESP_LOGI(TAG, "panel %s %dx%d ready, fb=%p",
              kind == PANEL_ST7123 ? "ST7123" : "ILI9881C", PANEL_W, PANEL_H, s_fb);
