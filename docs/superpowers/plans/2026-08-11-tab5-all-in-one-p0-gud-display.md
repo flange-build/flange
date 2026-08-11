@@ -527,9 +527,9 @@ git commit -m "feat(tab5-fw): 工程骨架 + USB-C 全速端口 GUD 枚举 (P0 T
 上电后屏幕显示 4 条竖直色条（红/绿/蓝/白），无花屏、无滚动、颜色正确（红就是红，不是蓝）。
 UART 日志见 `disp: panel <型号> 720x1280 ready`。
 
-- [ ] **Step 2：`idf_component.yml` 先加 IO 扩展组件**
+- [ ] **Step 2：`idf_component.yml` 加 IO 扩展与两个面板驱动**
 
-面板组件要等 Step 5 扫出型号才能选，这里只加 IO 扩展：
+**两种面板批次都要支持**（运行时探测，见 Step 5），所以两个面板组件都进依赖：
 
 ```yaml
 dependencies:
@@ -537,6 +537,10 @@ dependencies:
   espressif/tinyusb: "0.21.0~1"
   # PI4IOE5V6408-1(0x43)：LCD/TOUCH 电源使能
   espressif/esp_io_expander_pi4ioe5v6408: "1.0.1"
+  # 两种面板批次都支持：运行时按 I2C 探测结果二选一初始化。
+  # 两者都只是把我们填好的 dpi_config 转发给 esp_lcd_new_panel_dpi，与 IDF 6.0 兼容。
+  espressif/esp_lcd_ili9881c: "1.1.0"
+  espressif/esp_lcd_st7123: "1.0.2"
 ```
 
 - [ ] **Step 3：写 `firmware/main/board_power.h`**
@@ -611,10 +615,30 @@ esp_err_t board_power_init(void)
 }
 ```
 
-- [ ] **Step 5：实机确定面板型号，并把面板组件加进 `idf_component.yml`（人工控制者执行）**
+- [ ] **Step 5：面板型号的运行时探测**
 
-`board_power.c` 已就绪，可以扫 I2C 了。临时在 `app_main()` 的 `board_power_init()` 之后插入
-（本 Task 的 Step 10 会删掉）：
+Tab5 随批次装两种面板，**同一份固件要都支持**，所以型号不能在编译期定死，
+在 `display_dsi.c` 里做运行时探测：
+
+```c
+/* 面板/触摸控制器随 Tab5 批次而异，用内部 I2C 上的地址区分：
+ *   0x55 ⇒ ST7123（显示触控一体）
+ *   0x14 ⇒ GT911 触摸，面板为 ILI9881C
+ * 两条初始化路径都编进固件，探到哪个走哪个。 */
+typedef enum { PANEL_ILI9881C, PANEL_ST7123 } panel_kind_t;
+
+static panel_kind_t panel_detect(void)
+{
+    if (i2c_master_probe(board_i2c_bus(), 0x55, 100) == ESP_OK)
+        return PANEL_ST7123;
+    return PANEL_ILI9881C;   /* 探不到 0x55 一律按 ILI9881C（0x14 GT911）处理 */
+}
+```
+
+`board_power.c` 已在 Step 3/4 就绪，`board_i2c_bus()` 可用。
+
+**另外**：Task 2 期间在 `app_main()` 里保留一段**首次 bring-up 用的 I2C 全扫描**，
+用于确认 I2C 总线本身工作正常、并记录本机实际的设备地址表（Step 10 删掉）：
 
 ```c
     for (uint8_t a = 0x08; a < 0x78; a++) {
@@ -623,20 +647,8 @@ esp_err_t board_power_init(void)
     }
 ```
 
-加 `#include "board_power.h"`，把 `board_power.c` 加进 `main/CMakeLists.txt` 的 SRCS，
-`PRIV_REQUIRES` 加 `esp_driver_i2c`，然后 `idf.py build` + 烧录，读 UART 日志。
-
-判读：见 **0x55** ⇒ 面板/触摸是 **ST7123**；见 **0x14** ⇒ 触摸是 **GT911**、面板是 **ILI9881C**。
-（0x43/0x44 是 IO 扩展、0x10/0x40 是音频 codec、0x68 IMU、0x32 RTC、0x41 电量计，都属正常。）
-
-把结论写进 `display_dsi.c` 顶部注释，并按结论把面板组件加进 `idf_component.yml`
-（下文代码以 **ILI9881C** 为例；若扫到 0x55 则改用 `espressif/esp_lcd_st7123: "1.0.2"`，
-并把 Step 6 的 DPI 时序换成本计划「关键事实」表里 ST7123 那一行的值）：
-
-```yaml
-  # 面板驱动：只把我们填好的 dpi_config 转发给 esp_lcd_new_panel_dpi，与 IDF 6.0 兼容。
-  espressif/esp_lcd_ili9881c: "1.1.0"
-```
+预期能看到：0x43/0x44 IO 扩展、0x10 ES8388、0x40 ES7210、0x68 BMI270、
+0x32 RX8130CE、0x41 INA226，外加 0x14 或 0x55 之一。把实际结果记进 README。
 
 - [ ] **Step 6：写 `firmware/main/display_dsi.c` 的真实实现（暂不含 PPA）**
 
@@ -644,15 +656,18 @@ esp_err_t board_power_init(void)
 /*
  * M5Stack Tab5 显示 HAL。面板原生 720x1280 竖屏，MIPI-DSI 2 lane @ 1Gbps。
  * DSI/DPI 参数复刻自 esp-bsp bsp/m5stack_tab5/src/bsp_display.c（Apache-2.0）。
- * 本机面板型号：ILI9881C（由 Task 2 Step 2 的 I2C 扫描确定，见 README）。
+ * Tab5 随批次装 ILI9881C 或 ST7123 两种面板，两条路径都编进固件，
+ * 由 panel_detect() 在运行时按内部 I2C 上的地址区分。
  */
 #include "display_dsi.h"
 #include "tab5_pins.h"
+#include "board_power.h"
 #include "esp_ldo_regulator.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_dev.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_ili9881c.h"
+#include "esp_lcd_st7123.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include <string.h>
@@ -691,41 +706,67 @@ esp_err_t display_init(void)
     };
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_dbi(s_dsi_bus, &dbi_cfg, &s_io), TAG, "dbi io");
 
-    /* IDF 6.0：用 in/out_color_format，没有 5.x 的 .pixel_format 字段。 */
+    /*
+     * DPI 配置。两种面板只有像素时钟与 porch 不同，其余一致。
+     * IDF 6.0：用 in/out_color_format，没有 5.x 的 .pixel_format 字段。
+     */
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .virtual_channel = 0,
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
-        .dpi_clock_freq_mhz = 60,
         .in_color_format = LCD_COLOR_FMT_RGB565,
         .out_color_format = LCD_COLOR_FMT_RGB565,
         .num_fbs = 1,
-        .video_timing = {
-            .h_size = PANEL_W,
-            .v_size = PANEL_H,
-            .hsync_back_porch = 140,
-            .hsync_pulse_width = 40,
-            .hsync_front_porch = 40,
-            .vsync_back_porch = 20,
-            .vsync_pulse_width = 4,
-            .vsync_front_porch = 20,
-        },
+        .video_timing = { .h_size = PANEL_W, .v_size = PANEL_H },
     };
 
-    ili9881c_vendor_config_t vendor_cfg = {
-        .mipi_config = {
-            .dsi_bus = s_dsi_bus,
-            .dpi_config = &dpi_cfg,
-            .lane_num = DSI_LANE_NUM,
-        },
-    };
+    const panel_kind_t kind = panel_detect();
+    if (kind == PANEL_ST7123) {
+        dpi_cfg.dpi_clock_freq_mhz = 70;
+        dpi_cfg.video_timing.hsync_back_porch  = 40;
+        dpi_cfg.video_timing.hsync_pulse_width = 2;
+        dpi_cfg.video_timing.hsync_front_porch = 40;
+        dpi_cfg.video_timing.vsync_back_porch  = 8;
+        dpi_cfg.video_timing.vsync_pulse_width = 2;
+        dpi_cfg.video_timing.vsync_front_porch = 220;
+    } else {
+        dpi_cfg.dpi_clock_freq_mhz = 60;
+        dpi_cfg.video_timing.hsync_back_porch  = 140;
+        dpi_cfg.video_timing.hsync_pulse_width = 40;
+        dpi_cfg.video_timing.hsync_front_porch = 40;
+        dpi_cfg.video_timing.vsync_back_porch  = 20;
+        dpi_cfg.video_timing.vsync_pulse_width = 4;
+        dpi_cfg.video_timing.vsync_front_porch = 20;
+    }
+
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = -1,          /* Tab5 面板无独立 reset 脚 */
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
-        .vendor_config = &vendor_cfg,
     };
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_ili9881c(s_io, &panel_cfg, &s_panel),
-                        TAG, "new panel");
+
+    /*
+     * 两个 vendor config 结构不同：ili9881c 的 mipi_config 有 lane_num 字段，
+     * st7123 的没有（只有 dsi_bus + dpi_config）。照抄另一个会编译失败。
+     */
+    if (kind == PANEL_ST7123) {
+        static st7123_vendor_config_t vendor_st7123;
+        vendor_st7123 = (st7123_vendor_config_t){
+            .mipi_config = { .dsi_bus = s_dsi_bus, .dpi_config = &dpi_cfg },
+        };
+        panel_cfg.vendor_config = &vendor_st7123;
+        ESP_RETURN_ON_ERROR(esp_lcd_new_panel_st7123(s_io, &panel_cfg, &s_panel),
+                            TAG, "new panel st7123");
+    } else {
+        static ili9881c_vendor_config_t vendor_ili9881c;
+        vendor_ili9881c = (ili9881c_vendor_config_t){
+            .mipi_config = { .dsi_bus = s_dsi_bus, .dpi_config = &dpi_cfg,
+                             .lane_num = DSI_LANE_NUM },
+        };
+        panel_cfg.vendor_config = &vendor_ili9881c;
+        ESP_RETURN_ON_ERROR(esp_lcd_new_panel_ili9881c(s_io, &panel_cfg, &s_panel),
+                            TAG, "new panel ili9881c");
+    }
+
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "disp on");
@@ -734,7 +775,8 @@ esp_err_t display_init(void)
                         TAG, "get fb");
     memset(s_fb, 0, (size_t)PANEL_W * PANEL_H * 2);
 
-    ESP_LOGI(TAG, "panel ILI9881C %dx%d ready, fb=%p", PANEL_W, PANEL_H, s_fb);
+    ESP_LOGI(TAG, "panel %s %dx%d ready, fb=%p",
+             kind == PANEL_ST7123 ? "ST7123" : "ILI9881C", PANEL_W, PANEL_H, s_fb);
     return ESP_OK;
 }
 
@@ -790,14 +832,27 @@ Expected: `Project build complete.`
 |---|---|
 | 全黑、UART 报 `dsi phy ldo` 失败 | 确认 `chan_id=3`；`CONFIG_ESP_LDO_CHAN3_*` 是否被其它配置占用 |
 | 全黑、日志正常走完 | 检查 `LCD_EN`（expander 0x43 pin4）与背光 G22；用万用表量背光 |
-| 有画面但花屏/条纹/滚动 | 面板 init 命令不匹配。把 esp-bsp `bsp/m5stack_tab5/priv_include/disp_init_data.h` 的 `disp_init_data_ili9881c` 数组 vendor 进本工程（新建 `panel_init_data.h`，注明 Apache-2.0 来源），填进 `ili9881c_vendor_config_t.init_cmds` / `.init_cmds_size` |
+| 有画面但花屏/条纹/滚动 | 面板 init 命令不匹配（组件自带的默认序列与 M5 这块屏对不上）。把 esp-bsp `bsp/m5stack_tab5/priv_include/disp_init_data.h`（ILI9881C）或 `disp_init_data_1.h`（ST7123）的数组 vendor 进本工程（新建 `panel_init_data.h`，注明 Apache-2.0 来源），填进对应 `*_vendor_config_t` 的 `init_cmds` / `init_cmds_size` |
 | 红蓝互换 | 把 `rgb_ele_order` 改成 `LCD_RGB_ELEMENT_ORDER_BGR` |
+| `panel_detect()` 判错型号 | 看 i2cscan 日志里实际有没有 0x55；若两个地址都在或都不在，改用更强的判据（读控制器 ID 寄存器） |
 
-- [ ] **Step 10：删掉 Step 5 的临时 I2C 扫描代码并提交**
+- [ ] **Step 10：标注未验证路径、删掉扫描代码、提交**
+
+实机只会跑通两条路径中的一条，另一条是「照 esp-bsp 复刻但未上板」的状态。
+**必须在日志里说清楚**，否则日后有人会误以为两条都验过：给未走到的那条加一句
+warning，例如实机是 ILI9881C 时——
+
+```c
+    if (kind == PANEL_ST7123)
+        ESP_LOGW(TAG, "ST7123 路径未经实机验证（本项目实机为 ILI9881C）");
+```
+
+把实机的 i2cscan 地址表与验证过的面板型号记进 README，然后删掉 Step 5 的临时全扫描
+（`panel_detect()` 是常驻功能，**不要删**）。
 
 ```bash
 git add components/packages/tab5-all-in-one
-git commit -m "feat(tab5-fw): MIPI-DSI 面板点亮 + IO expander 上电时序 (P0 Task2)"
+git commit -m "feat(tab5-fw): MIPI-DSI 面板点亮，双面板批次运行时探测 (P0 Task2)"
 ```
 
 ---
