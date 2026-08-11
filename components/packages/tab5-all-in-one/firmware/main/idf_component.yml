@@ -4,3 +4,7 @@ dependencies:
   espressif/tinyusb: "0.21.0~1"
   # PI4IOE5V6408-1(0x43)：LCD/TOUCH 电源使能
   espressif/esp_io_expander_pi4ioe5v6408: "1.0.1"
+  # 两种面板批次都支持：运行时按 I2C 探测结果二选一初始化。
+  # 两者都只是把我们填好的 dpi_config 转发给 esp_lcd_new_panel_dpi，与 IDF 6.0 兼容。
+  espressif/esp_lcd_ili9881c: "1.1.0"
+  espressif/esp_lcd_st7123: "1.0.2"
