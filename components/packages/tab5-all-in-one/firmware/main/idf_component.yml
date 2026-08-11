@@ -1,0 +1,4 @@
+dependencies:
+  # 与 cardputer-all-in-one 同版本精确锁定，避免描述符/API 漂移。
+  espressif/esp_tinyusb: "2.2.1"
+  espressif/tinyusb: "0.21.0~1"
