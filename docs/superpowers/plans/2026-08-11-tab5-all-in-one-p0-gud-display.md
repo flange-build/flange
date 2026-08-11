@@ -404,6 +404,30 @@ static const struct gud_display_mode_req k_mode = {
          * 与 Cardputer 的 ST7789 4-line SPI 不同。 */
 ```
 
+改动 4 —— **帧缓冲改 PSRAM 运行时分配**。Cardputer 的 240×135 下 `s_fb`/`s_cbuf`
+各 63 KB，放内部 SRAM 没问题；改成 640×360 后各 460 KB、合计 900 KB，
+**超出 P4 内部 SRAM，链接期直接报 `region 'sram_seg' overflowed`**。把
+```c
+static uint8_t s_fb[GUD_FB_CAP];
+static uint8_t s_cbuf[GUD_FB_CAP];
+```
+改为
+```c
+static uint8_t *s_fb;
+static uint8_t *s_cbuf;
+```
+并在 `gud_device_init()` 开头加：
+```c
+    s_fb = heap_caps_malloc(GUD_FB_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_cbuf = heap_caps_malloc(GUD_FB_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    assert(s_fb && s_cbuf);
+```
+同时加 `#include "esp_heap_caps.h"` 与 `#include <assert.h>`。
+
+> 不要改用 `linker.lf` + `CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY` 的
+> extram_bss 映射来解决 —— 那是另一套机制，与本行的 heap 分配重复，且把
+> 缓冲的位置决定权从代码挪到链接脚本，后续 Task 增删缓冲时容易漏改。
+
 - [ ] **Step 12：写 `firmware/main/display_dsi.h`（本任务先给桩）**
 
 ```c
@@ -1014,26 +1038,12 @@ Tab5 屏上出现 modetest 的彩色测试图，铺满全屏、方向与 Task 3 
 
 - [ ] **Step 2：确认 `gud_device.c` 的帧缓冲落在 PSRAM**
 
-`s_fb` / `s_cbuf` 现在各是 `GUD_W*GUD_H*2 = 460800` 字节，两个共 900 KB，
-放不进内部 SRAM。把
-```c
-static uint8_t s_fb[GUD_FB_CAP];
-static uint8_t s_cbuf[GUD_FB_CAP];
-```
-改为运行时分配（在 `gud_device_init()` 里）：
+**已在 Task 1 的「改动 4」完成**（原本排在这里是计划编排错误：`GUD_W/GUD_H` 在 Task 1
+就变成 640×360 了，两个缓冲当场涨到 900 KB，Task 1 不做这一步根本链接不过）。
 
-```c
-static uint8_t *s_fb;
-static uint8_t *s_cbuf;
-```
-
-`gud_device_init()` 开头加：
-```c
-    s_fb = heap_caps_malloc(GUD_FB_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_cbuf = heap_caps_malloc(GUD_FB_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    assert(s_fb && s_cbuf);
-```
-并加 `#include "esp_heap_caps.h"` 与 `#include <assert.h>`。
+本步只需确认：`s_fb` / `s_cbuf` 是 `uint8_t *`、在 `gud_device_init()` 里用
+`heap_caps_malloc(..., MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)` 分配，且启动日志
+无 `region 'sram_seg' overflowed`。若不符，回 Task 1 改动 4 的做法补齐。
 
 - [ ] **Step 3：移除 app_main 的 Task 3 自检**
 
