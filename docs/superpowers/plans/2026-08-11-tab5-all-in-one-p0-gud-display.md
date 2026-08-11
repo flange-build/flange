@@ -876,6 +876,13 @@ git commit -m "feat(tab5-fw): MIPI-DSI 面板点亮，双面板批次运行时�
 - 中央黑方块居中；
 - 再单独 blit 一次 `(x=0, y=0, w=64, h=64)` 的纯黄小块，它出现在**横屏视角的左上角**。
 
+> ⚠️ **判读时注意区分「面板坐标」与「观看方位」**。整条链路带 90° 旋转，
+> 两者差一个旋转量。黄块在**面板坐标系**里的落点是：
+> `DISPLAY_ROT_CCW90=1` → (0, 1152)，面板左下角；`=0` → (592, 0)，面板右上角。
+> 横持观看时其中之一会呈现在左上角。**判据以横持观看的方位为准**，
+> 不要拿面板坐标去对，否则会误判成 bug。两个分支的落点相差 180°，
+> 所以这个开关确实能有效区分。
+
 - [ ] **Step 2：理解坐标变换（写码前先想清楚，这是本任务唯一容易错的地方）**
 
 - GUD 坐标系：横向 640(w) × 360(h)，原点左上。
@@ -1019,9 +1026,17 @@ void display_blit(int x, int y, int w, int h, const void *pixels)
                        PRIV_REQUIRES esp_driver_gpio esp_driver_i2c esp_driver_ppa esp_lcd)
 ```
 
-- [ ] **Step 6：app_main 换成 640×360 自检图**
+- [ ] **Step 6：`display_test_pattern()` 换成 640×360 自检图**
 
-把 Task 2 的面板色条自检替换为：
+> 实施时的偏离（已采纳）：自检图放在 `display_dsi.c` 的 `display_test_pattern()` 里，
+> 不是 `app_main`（Task 2 的接口收窄已把自检收进显示模块，`app_main` 只留一行调用）。
+> 另外 640×360×2 = 460 KB **不能放 `.bss`** —— 内部 DRAM 只剩约 565 KB，放进去余量吃掉八成；
+> 改用 `heap_caps_malloc(MALLOC_CAP_SPIRAM)` 分配、用完 `heap_caps_free()`。
+> 64×64 黄块也不新开缓冲，直接复用 probe 缓冲的左上角子块
+> （`display_blit()` 按 `pic_w=GUD_W` 解读输入，取的正是 stride 640 的左上角）。
+> 主任务栈只有 `CONFIG_ESP_MAIN_TASK_STACK_SIZE=3584`，8 KB 放栈上会当场爆栈。
+
+逻辑等价于：
 
 ```c
     /* PPA 自检：640×360 四象限 + 中央黑方块，整帧 blit 应铺满全屏 */
