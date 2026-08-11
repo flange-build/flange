@@ -14,7 +14,7 @@ void app_main(void)
     ESP_ERROR_CHECK(display_init());
 
     /* GUD 控制协议状态机初始化（须在 TinyUSB 安装前，回调可能立即触发） */
-    gud_device_init();
+    ESP_ERROR_CHECK(gud_device_init());
 
     /*
      * ⚠️ 必须显式选全速端口。Tab5 的 USB-C 接在 P4 的 USB1P1 全速 PHY(GPIO24/25)

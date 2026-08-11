@@ -1,6 +1,7 @@
 #include "usb_descriptors.h"
 
-/* 设备描述符：Misc/IAD 复合设备，VID/PID = 16d0:10a9（gud 绑定所需） */
+/* 设备描述符：Misc/IAD：为后续 UAC/HID/UVC 复合预留；本阶段仅 IF0 vendor。
+ * VID/PID = 16d0:10a9（gud 绑定所需） */
 const tusb_desc_device_t aio_desc_device = {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
@@ -28,7 +29,10 @@ const uint8_t aio_desc_configuration[] = {
 _Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN,
                "USB 配置描述符长度不一致");
 
-/* 字符串描述符：UTF-16 转换与 langid 由 esp_tinyusb 完成。 */
+/*
+ * 字符串描述符：交由 esp_tinyusb 完成 UTF-16 转换与 langid 处理。
+ * 索引 0 = langid（English, 0x0409），1=厂商 2=产品 3=序列号。
+ */
 static const char k_langid[] = {0x09, 0x04, 0x00};
 const char *aio_string_desc_arr[] = {
     k_langid,

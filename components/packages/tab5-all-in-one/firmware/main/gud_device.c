@@ -5,7 +5,6 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h" /* heap_caps_malloc(MALLOC_CAP_SPIRAM)：帧缓冲放 PSRAM */
 #include "lz4.h" /* LZ4_decompress_safe：解 GUD host 端 LZ4 压缩帧 */
-#include <assert.h>
 #include <string.h>
 
 static const char *TAG = "gud";
@@ -80,6 +79,7 @@ static uint8_t s_set_buf[64];
  * s_cbuf : 压缩帧的接收缓冲。host 仅在压缩更小时才发压缩帧，故 compressed_length
  *          < 该矩形未压缩大小 ≤ GUD_FB_CAP，按整屏容量足够。
  * 由 gud_device_init() 用 heap_caps_malloc(MALLOC_CAP_SPIRAM) 分配。
+ * 随进程常驻，不释放：生命周期等于固件运行时，无需对应的 free 路径。
  */
 #define GUD_FB_CAP (GUD_W * GUD_H * 2)
 static uint8_t *s_fb;
@@ -164,11 +164,16 @@ static void gud_arm_set_buffer(void)
              (unsigned)s_frame_xferlen, s_frame_compressed ? "LZ4" : "raw");
 }
 
-void gud_device_init(void)
+esp_err_t gud_device_init(void)
 {
     s_fb = heap_caps_malloc(GUD_FB_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_cbuf = heap_caps_malloc(GUD_FB_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    assert(s_fb && s_cbuf);
+    if (!s_fb || !s_cbuf) {
+        ESP_LOGE(TAG, "PSRAM 帧缓冲分配失败：需 2×%u 字节，PSRAM 最大空闲块 %u",
+                 (unsigned)GUD_FB_CAP,
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        return ESP_ERR_NO_MEM;
+    }
 
     ESP_LOGI(TAG, "GUD device init: %dx%d RGB565, single connector(PANEL), single mode",
              GUD_W, GUD_H);
@@ -176,6 +181,7 @@ void gud_device_init(void)
              (unsigned)sizeof(struct gud_display_descriptor_req),
              (unsigned)sizeof(struct gud_connector_descriptor_req),
              (unsigned)sizeof(struct gud_display_mode_req));
+    return ESP_OK;
 }
 
 /* 设备→host：在 SETUP 阶段提供数据；host 实际取 min(wLength, len) 字节 */

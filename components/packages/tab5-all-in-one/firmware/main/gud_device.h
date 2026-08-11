@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "esp_err.h"
 #include "tusb.h"
 
 /*
@@ -11,8 +12,8 @@
  * framebuffer 帧搬运（bulk OUT + SET_BUFFER）是 Task 4，不在此处。
  */
 
-/* 初始化（当前仅打印 banner，状态全为静态常量，预留挂点） */
-void gud_device_init(void);
+/* 初始化：分配 PSRAM 帧缓冲并打印 banner。失败返回 ESP_ERR_NO_MEM。 */
+esp_err_t gud_device_init(void);
 
 /*
  * 处理一个 vendor 类 EP0 控制请求，分阶段调用。
