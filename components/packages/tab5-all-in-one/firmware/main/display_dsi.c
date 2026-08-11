@@ -11,8 +11,12 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_ili9881c.h"
 #include "esp_lcd_st7123.h"
+#include "driver/ppa.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_cache.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include <stdint.h>
 #include <string.h>
@@ -21,7 +25,11 @@ static const char *TAG = "disp";
 
 #define PANEL_FB_BYTES ((size_t)PANEL_W * PANEL_H * sizeof(uint16_t))
 
+/* 旋转方向按实机标定：1 = 90° CCW，0 = 270° CCW。见 README 的方向标定说明。 */
+#define DISPLAY_ROT_CCW90 1
+
 static esp_ldo_channel_handle_t s_ldo;
+static ppa_client_handle_t s_ppa;
 static esp_lcd_dsi_bus_handle_t s_dsi_bus;
 static esp_lcd_panel_io_handle_t s_io;
 static esp_lcd_panel_handle_t s_panel;
@@ -45,15 +53,53 @@ static void frame_buffer_flush(void)
                                     ESP_CACHE_MSYNC_FLAG_DIR_C2M));
 }
 
+/*
+ * 面板自检。刻意走 display_blit()，因此同时验证面板时序、颜色通道，
+ * 以及 PPA 的缩放/旋转坐标映射——三者任一错都会在屏上直接看出来。
+ * 测试图 640×360×2 = 460KB 放 PSRAM（内部 DRAM 余量不够），用完即释放：
+ * 这是开机期一次性自检，不该常驻。
+ */
 void display_test_pattern(void)
 {
-    /* 4 条竖直色条（面板竖屏坐标系，x 是短边 720） */
-    const uint16_t bars[] = {0xF800, 0x07E0, 0x001F, 0xFFFF}; /* R G B W (RGB565) */
-    const int n = sizeof(bars) / sizeof(bars[0]);
-    for (int y = 0; y < PANEL_H; y++)
-        for (int x = 0; x < PANEL_W; x++)
-            s_fb[y * PANEL_W + x] = bars[(x * n) / PANEL_W];
-    frame_buffer_flush();
+    const size_t probe_px = (size_t)GUD_W * GUD_H;
+    uint16_t *probe = heap_caps_malloc(probe_px * sizeof(uint16_t),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!probe) {
+        /* 自检失败不该挡住正常启动，报一声就走 */
+        ESP_LOGE(TAG, "自检图分配失败(%u KB)，跳过自检",
+                 (unsigned)(probe_px * sizeof(uint16_t) / 1024));
+        return;
+    }
+
+    /* 四象限用于辨认方向，正中 40×40 黑方块用于确认居中与无裁切 */
+    for (int y = 0; y < GUD_H; y++)
+        for (int x = 0; x < GUD_W; x++)
+            probe[y * GUD_W + x] = (y < GUD_H / 2)
+                ? (x < GUD_W / 2 ? 0xF800 : 0x07E0)    /* 上：左红 右绿 */
+                : (x < GUD_W / 2 ? 0x001F : 0xFFFF);   /* 下：左蓝 右白 */
+
+    const int cx = GUD_W / 2, cy = GUD_H / 2, half = 20;   /* 40×40 */
+    for (int y = cy - half; y < cy + half; y++)
+        for (int x = cx - half; x < cx + half; x++)
+            probe[y * GUD_W + x] = 0x0000;
+
+    display_blit(0, 0, GUD_W, GUD_H, probe);
+
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    /*
+     * 局部矩形自检，验证非整帧的坐标映射。复用同一缓冲的左上角 64×64——
+     * display_blit() 按 pic_w=GUD_W 解读输入，取的就是 stride 为 GUD_W 的
+     * 左上角子块，所以只需把该区域改黄，无需第二次分配。
+     */
+    const int sq = 64;
+    for (int y = 0; y < sq; y++)
+        for (int x = 0; x < sq; x++)
+            probe[y * GUD_W + x] = 0xFFE0;   /* 黄 */
+    display_blit(0, 0, sq, sq, probe);
+
+    /* PPA_TRANS_MODE_BLOCKING 保证上面两次搬运都已完成，可以安全释放 */
+    heap_caps_free(probe);
 }
 
 /* 面板/触摸控制器随 Tab5 批次而异，用内部 I2C 上的地址区分：
@@ -175,13 +221,74 @@ esp_err_t display_init(void)
     memset(s_fb, 0, PANEL_FB_BYTES);
     frame_buffer_flush();
 
+    ppa_client_config_t ppa_cfg = {
+        .oper_type = PPA_OPERATION_SRM,
+        .max_pending_trans_num = 1,   /* 只用阻塞模式，1 即可 */
+    };
+    ESP_RETURN_ON_ERROR(ppa_register_client(&ppa_cfg, &s_ppa), TAG, "ppa client");
+
     ESP_LOGI(TAG, "panel %s %dx%d ready, fb=%p",
              kind == PANEL_ST7123 ? "ST7123" : "ILI9881C", PANEL_W, PANEL_H, s_fb);
     return ESP_OK;
 }
 
+/*
+ * 把 GUD 坐标系(640×360 横向)的一块 RGB565 送上面板(720×1280 竖向)。
+ * PPA 的 SRM 引擎在一次操作里同时完成 2× 缩放与 90° 旋转，无需两遍搬运。
+ * 输入输出的 cache 同步由 PPA 驱动自己做(ppa_srm.c:254/:260)，此处不用管。
+ * 注意 PPA 的 rotation_angle 是逆时针(CCW)。
+ */
 void display_blit(int x, int y, int w, int h, const void *pixels)
 {
-    /* Task 3 用 PPA 实现（2× 缩放 + 90° 旋转写进 s_fb）。 */
-    (void)x; (void)y; (void)w; (void)h; (void)pixels;
+    if (!s_ppa || !s_fb) return;
+
+    /* 旋转后输出块的尺寸：宽高互换再各乘 2 */
+    const uint32_t out_w = (uint32_t)h * GUD_SCALE;
+    const uint32_t out_h = (uint32_t)w * GUD_SCALE;
+
+#if DISPLAY_ROT_CCW90
+    const uint32_t out_x = (uint32_t)y * GUD_SCALE;
+    const uint32_t out_y = (uint32_t)(PANEL_H - (x + w) * GUD_SCALE);
+    const ppa_srm_rotation_angle_t rot = PPA_SRM_ROTATION_ANGLE_90;
+#else
+    const uint32_t out_x = (uint32_t)(PANEL_W - (y + h) * GUD_SCALE);
+    const uint32_t out_y = (uint32_t)x * GUD_SCALE;
+    const ppa_srm_rotation_angle_t rot = PPA_SRM_ROTATION_ANGLE_270;
+#endif
+
+    ppa_srm_oper_config_t op = {
+        .in = {
+            .buffer = pixels,
+            .pic_w = GUD_W,
+            .pic_h = GUD_H,
+            .block_w = (uint32_t)w,
+            .block_h = (uint32_t)h,
+            .block_offset_x = (uint32_t)x,
+            .block_offset_y = (uint32_t)y,
+            .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+        },
+        .out = {
+            .buffer = s_fb,
+            .buffer_size = PANEL_FB_BYTES,
+            .pic_w = PANEL_W,
+            .pic_h = PANEL_H,
+            .block_offset_x = out_x,
+            .block_offset_y = out_y,
+            .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+        },
+        .rotation_angle = rot,
+        .scale_x = (float)GUD_SCALE,
+        .scale_y = (float)GUD_SCALE,
+        .mirror_x = false,
+        .mirror_y = false,
+        .byte_swap = false,
+        .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+
+    esp_err_t err = ppa_do_scale_rotate_mirror(s_ppa, &op);
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "ppa srm 失败 %s: %dx%d @(%d,%d) → (%u,%u) %ux%u",
+                 esp_err_to_name(err), w, h, x, y,
+                 (unsigned)out_x, (unsigned)out_y, (unsigned)out_w, (unsigned)out_h);
+    (void)out_w; (void)out_h;
 }
