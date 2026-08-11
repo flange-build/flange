@@ -74,8 +74,8 @@
 | `gud_protocol.h` | 原样拷贝（内核 vendor，Dual MIT/GPL） |
 | `lz4.c` / `lz4.h` | 原样拷贝（BSD-2-Clause） |
 | `gud_device.c` / `.h` | 拷贝后改三处：尺寸常量、删 byteswap、`display_blit` 语义 |
-| `main/tinyusb_config/tusb_config.h` | 拷贝（本计划只需 Vendor，Audio/HID 段留着不影响） |
-| `main/CMakeLists.txt` 的 tinyusb 配置注入段 | 原样拷贝（让 tinyusb/esp_tinyusb 用我们的 tusb_config.h） |
+| `main/tinyusb_config/tusb_config.h` | **本计划不拷** —— 它存在的唯一目的是开 `CFG_TUD_AUDIO`，而 P0 没有音频接口；vendor 类由 `CONFIG_TINYUSB_VENDOR_COUNT=1` 经 esp_tinyusb 自带的 tusb_config.h 生效。留到音频阶段再连同 `main/CMakeLists.txt` 的 21 行注入块一起从 Cardputer 拷来 |
+| `main/CMakeLists.txt` 的 tinyusb 配置注入段 | **本计划不拷**，理由同上（只有 lz4.c 那行 `set_source_files_properties` 要拷，它与音频无关） |
 
 ---
 
@@ -92,11 +92,10 @@ components/packages/tab5-all-in-one/
     └── main/
         ├── CMakeLists.txt
         ├── idf_component.yml
-        ├── tinyusb_config/tusb_config.h
         ├── app_main.c                # 编排：board_power → display → gud → tinyusb
         ├── usb_descriptors.{c,h}     # 仅 GUD vendor 接口（后续阶段再加 UAC/HID/UVC）
         ├── gud_protocol.h            # 拷贝
-        ├── gud_device.{c,h}          # 拷贝 + 三处改动
+        ├── gud_device.{c,h}          # 拷贝 + 四处改动
         ├── lz4.{c,h}                 # 拷贝
         ├── tab5_pins.h               # 板级 GPIO / 尺寸常量
         ├── board_power.{c,h}         # 内部 I2C + PI4IOE5V6408 + 背光
@@ -121,7 +120,6 @@ components/packages/tab5-all-in-one/
 - Create: `components/packages/tab5-all-in-one/firmware/partitions.csv`
 - Create: `components/packages/tab5-all-in-one/firmware/main/CMakeLists.txt`
 - Create: `components/packages/tab5-all-in-one/firmware/main/idf_component.yml`
-- Create: `components/packages/tab5-all-in-one/firmware/main/tinyusb_config/tusb_config.h`（拷贝）
 - Create: `components/packages/tab5-all-in-one/firmware/main/gud_protocol.h`（拷贝）
 - Create: `components/packages/tab5-all-in-one/firmware/main/lz4.c` / `lz4.h`（拷贝）
 - Create: `components/packages/tab5-all-in-one/firmware/main/gud_device.c` / `.h`（拷贝 + 改）
@@ -144,14 +142,15 @@ ls /dev/dri/                            # 见 cardN
 - [ ] **Step 2：建目录并拷贝可复用文件**
 
 ```bash
-mkdir -p components/packages/tab5-all-in-one/firmware/main/tinyusb_config
+mkdir -p components/packages/tab5-all-in-one/firmware/main
 SRC=components/packages/cardputer-all-in-one/firmware
 DST=components/packages/tab5-all-in-one/firmware
 cp $SRC/main/gud_protocol.h $SRC/main/lz4.c $SRC/main/lz4.h \
    $SRC/main/gud_device.c $SRC/main/gud_device.h $DST/main/
-cp $SRC/main/tinyusb_config/tusb_config.h $DST/main/tinyusb_config/
 cp $SRC/.gitignore $DST/.gitignore
 ```
+
+> 不拷 `tinyusb_config/tusb_config.h`，理由见上表。
 
 - [ ] **Step 3：写 `firmware/CMakeLists.txt`**
 
@@ -208,35 +207,13 @@ dependencies:
 
 - [ ] **Step 7：写 `firmware/main/CMakeLists.txt`**
 
-`tinyusb` 配置注入段与 Cardputer 完全一致（原因见该文件注释：让依赖组件与应用共用
-我们的 `tusb_config.h`），只改 SRCS：
+P0 不需要 Cardputer 那 21 行 tusb_config.h 注入块（它只为开 `CFG_TUD_AUDIO`；vendor
+类由 `CONFIG_TINYUSB_VENDOR_COUNT=1` 经 esp_tinyusb 自带配置生效）。`PRIV_REQUIRES`
+也留空——Task 2 再按实际用到的驱动加：
 
 ```cmake
 idf_component_register(SRCS "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c"
-                       INCLUDE_DIRS "." "tinyusb_config"
-                       PRIV_REQUIRES esp_driver_gpio)
-
-# esp_tinyusb 默认 tusb_config.h 不含我们要的类配置。让依赖组件与应用统一使用
-# main/tinyusb_config/tusb_config.h；该文件再 include_next 默认配置，保留 Kconfig 映射。
-idf_build_get_property(build_components BUILD_COMPONENTS)
-
-if(tinyusb IN_LIST build_components)
-    set(tinyusb_component tinyusb)
-else()
-    set(tinyusb_component espressif__tinyusb)
-endif()
-
-if(esp_tinyusb IN_LIST build_components)
-    set(esp_tinyusb_component esp_tinyusb)
-else()
-    set(esp_tinyusb_component espressif__esp_tinyusb)
-endif()
-
-idf_component_get_property(tinyusb_lib ${tinyusb_component} COMPONENT_LIB)
-idf_component_get_property(esp_tinyusb_lib ${esp_tinyusb_component} COMPONENT_LIB)
-set(tinyusb_config_dir "${CMAKE_CURRENT_LIST_DIR}/tinyusb_config")
-target_include_directories(${tinyusb_lib} BEFORE PRIVATE "${tinyusb_config_dir}")
-target_include_directories(${esp_tinyusb_lib} BEFORE PRIVATE "${tinyusb_config_dir}")
+                       INCLUDE_DIRS ".")
 
 # 官方 LZ4 v1.9.4 参考实现(lz4/lz4, BSD-2-Clause)，仅用 LZ4_decompress_safe 解 GUD
 # host 端 LZ4 压缩帧。第三方源码放宽告警，避免 main 的 -Werror 因其内部告警失败。
