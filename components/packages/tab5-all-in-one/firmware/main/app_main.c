@@ -31,6 +31,7 @@ void app_main(void)
     for (int y = 0; y < PANEL_H; y++)
         for (int x = 0; x < PANEL_W; x++)
             fb[y * PANEL_W + x] = bars[(x * 4) / PANEL_W];
+    display_frame_buffer_flush();
 
     /* GUD 控制协议状态机初始化（须在 TinyUSB 安装前，回调可能立即触发） */
     ESP_ERROR_CHECK(gud_device_init());

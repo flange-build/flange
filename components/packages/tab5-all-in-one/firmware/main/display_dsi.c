@@ -14,6 +14,7 @@
 #include "esp_lcd_ili9881c.h"
 #include "esp_lcd_st7123.h"
 #include "esp_check.h"
+#include "esp_cache.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -26,6 +27,13 @@ static esp_lcd_panel_handle_t s_panel;
 static uint16_t *s_fb;      /* DPI 帧缓冲，720x1280 RGB565，由驱动分配在 PSRAM */
 
 uint16_t *display_frame_buffer(void) { return s_fb; }
+
+void display_frame_buffer_flush(void)
+{
+    if (!s_fb) return;
+    ESP_ERROR_CHECK(esp_cache_msync(s_fb, (size_t)PANEL_W * PANEL_H * 2,
+                                    ESP_CACHE_MSYNC_FLAG_DIR_C2M));
+}
 
 /* 面板/触摸控制器随 Tab5 批次而异，用内部 I2C 上的地址区分：
  *   0x55 ⇒ ST7123（显示触控一体）
@@ -119,18 +127,19 @@ esp_err_t display_init(void)
     /*
      * 两个 vendor config 结构不同：ili9881c 的 mipi_config 有 lane_num 字段，
      * st7123 的没有（只有 dsi_bus + dpi_config）。照抄另一个会编译失败。
+     * 与 dpi_cfg 同理可以放栈上：两个驱动的私有结构体(ili9881c_panel_t /
+     * st7123_panel_t)都只按值拷走 init_cmds / init_cmds_size / lane_num，
+     * 不保存 vendor_config 指针本身。
      */
     if (kind == PANEL_ST7123) {
-        static st7123_vendor_config_t vendor_st7123;
-        vendor_st7123 = (st7123_vendor_config_t){
+        st7123_vendor_config_t vendor_st7123 = {
             .mipi_config = { .dsi_bus = s_dsi_bus, .dpi_config = &dpi_cfg },
         };
         panel_cfg.vendor_config = &vendor_st7123;
         ESP_RETURN_ON_ERROR(esp_lcd_new_panel_st7123(s_io, &panel_cfg, &s_panel),
                             TAG, "new panel st7123");
     } else {
-        static ili9881c_vendor_config_t vendor_ili9881c;
-        vendor_ili9881c = (ili9881c_vendor_config_t){
+        ili9881c_vendor_config_t vendor_ili9881c = {
             .mipi_config = { .dsi_bus = s_dsi_bus, .dpi_config = &dpi_cfg,
                              .lane_num = DSI_LANE_NUM },
         };
@@ -146,6 +155,7 @@ esp_err_t display_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(s_panel, 1, (void **)&s_fb),
                         TAG, "get fb");
     memset(s_fb, 0, (size_t)PANEL_W * PANEL_H * 2);
+    display_frame_buffer_flush();
 
     ESP_LOGI(TAG, "panel %s %dx%d ready, fb=%p",
              kind == PANEL_ST7123 ? "ST7123" : "ILI9881C", PANEL_W, PANEL_H, s_fb);
