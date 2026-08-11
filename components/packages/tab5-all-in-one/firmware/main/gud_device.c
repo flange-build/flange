@@ -11,15 +11,16 @@
 static const char *TAG = "gud";
 
 /*
- * 固定显示参数：单 connector / 单模式 240x135 / RGB565。
- * LCD_W/LCD_H 来自 cardputer_pins.h，与显示模块共用，避免分叉。
+ * 固定显示参数：单 connector / 单模式 640x360 / RGB565。
+ * GUD_W/GUD_H 来自 tab5_pins.h，与显示模块共用，避免分叉。
+ * 面板原生 720x1280 竖屏，由 display_blit 内的 PPA 放大 2× 并旋转 90° 铺满。
  */
 /* 单一支持的像素格式 */
 static const uint8_t k_formats[] = {GUD_PIXEL_FORMAT_RGB565};
 
 /*
- * 显示描述符。max_buffer_size=0 让 host 自行按 format×尺寸 计算（240x135xRGB565
- * ≈64KB，远小于驱动 64MB 上限）。单模式设备 min==max。flags=0：不声明
+ * 显示描述符。max_buffer_size=0 让 host 自行按 format×尺寸 计算（640x360xRGB565
+ * ≈450KB，远小于驱动 64MB 上限）。单模式设备 min==max。flags=0：不声明
  * STATUS_ON_SET（probe 全是 GET，无需 SET 后状态轮询）。
  * compression=GUD_COMPRESSION_LZ4：声明支持 LZ4，host(CONFIG_LZ4_COMPRESS) 会对
  * 划算的帧压缩后再发，FS 12Mbps 下显著提升有效帧率(UI 内容收益大)。host 逐帧择优，
