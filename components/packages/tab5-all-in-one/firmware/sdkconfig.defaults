@@ -1,4 +1,16 @@
 CONFIG_IDF_TARGET="esp32p4"
+# M5Stack Tab5 实测装的是 ESP32-P4 rev v1.0（esptool 报 "revision v1.0"），
+# 而 IDF v6.0 默认最低支持 v3.1(CONFIG_ESP32P4_REV_MIN_301)，会在烧录时报
+# "requires chip revision in range [v3.1 - v3.99]" 拒绝启动。
+#
+# ⚠️ 这两档是**互斥**的，不能运行时兼容。IDF Kconfig 原文：
+#   "Support of ESP32-P4 rev. <3.0 and >=3.0 is mutually exclusive"
+#   "Revisions higher than 3.0 (included) and revisions less than 3.0
+#    have huge hardware difference."
+# 即本固件编译为支持 v0.x/v1.x 后，就跑不了 v3.x 的 P4。若日后遇到换了
+# v3.x 芯片的 Tab5 批次，需要另出一份固件，无法像双面板那样运行时探测。
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
