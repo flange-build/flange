@@ -249,7 +249,7 @@ components/packages/tab5-all-in-one/
         ├── usb_descriptors.{c,h}  # 复合描述符 + HID 复合 report 描述符
         ├── tinyusb_config/tusb_config.h
         ├── gud_protocol.h         # 自 Cardputer 拷贝（内核 vendor，Dual MIT/GPL）
-        ├── gud_device.{c,h}       # 自 Cardputer 拷贝 + 改三处（见下）
+        ├── gud_device.{c,h}       # 自 Cardputer 拷贝 + 改四处（见下）
         ├── lz4.{c,h}              # 自 Cardputer 拷贝（BSD-2-Clause，零改动）
         ├── tab5_pins.h            # 板级 GPIO / 尺寸常量
         ├── board_power.{c,h}      # 内部 I2C + PI4IOE5V6408 上电时序
@@ -260,10 +260,13 @@ components/packages/tab5-all-in-one/
         └── codec_audio.{c,h}      # ES8388/ES7210 + I2S 全双工 + UAC1 回调
 ```
 
-`gud_device.c` 相对 Cardputer 的三处改动：
+`gud_device.c` 相对 Cardputer 的四处改动：
 1. 尺寸常量 640×360 与对应的模式时序 / `GUD_FB_CAP`；
 2. **删除** per-pixel `bswap16`（§3.2）；
-3. `display_blit` 语义从「直接推 SPI 屏」变为「PPA 缩放旋转进 DPI 帧缓冲」。
+3. `display_blit` 语义从「直接推 SPI 屏」变为「PPA 缩放旋转进 DPI 帧缓冲」；
+4. `s_fb` / `s_cbuf` 从内部 SRAM 静态数组改为 `heap_caps_malloc(MALLOC_CAP_SPIRAM)`
+   运行时分配 —— 640×360 下两者各 460 KB、合计 900 KB，放内部 SRAM 链接不过
+   （计划里称为「Task 1 的改动 4」）。
 
 ### 8.1 依赖（保持依赖树干净，不引入 LVGL / esp_video / usb-host）
 

@@ -19,8 +19,12 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 
 ## 状态
 
-- ✅ **工程骨架 + USB-C 全速枚举** —— 枚举为 `16d0:10a9`，host `gud` 出 `/dev/dri/cardN`。
-  实机验证通过。（关键点：USB-C 接的是全速 PHY，必须 `TINYUSB_CONFIG_FULL_SPEED`。）
+- ✅ **工程骨架 + USB 设备栈在全速端口上起来了** —— 实机烧录后固件正常启动，
+  UART 日志见 `TinyUSB Driver installed on port 0`；同时 esptool 报
+  `USB mode: USB-Serial/JTAG`，佐证 USB-C 确实挂在全速 PHY 上。
+  （关键点：USB-C 接的是全速 PHY，必须 `TINYUSB_CONFIG_FULL_SPEED`。）
+  ⏳ **host 侧尚未观察** —— `lsusb` 是否见 `16d0:10a9`、`gud` 是否出 `/dev/dri/cardN`，
+  都还没跑过，待验证。
 - ✅ **MIPI-DSI 面板点亮** —— 720×1280 竖屏，2 lane @ 1000 Mbps，两种面板批次运行时 I2C 探测。
   实机验证通过（开发用机为 ILI9881C 批次；ST7123 路径只编译未上板）。
 - ✅ **PPA 缩放 + 旋转** —— 一次 SRM 操作完成 2× 放大 + 90° 旋转，640×360 铺满面板。

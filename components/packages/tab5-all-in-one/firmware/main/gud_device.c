@@ -75,7 +75,7 @@ static uint8_t s_set_buf[64];
 
 /*
  * 帧缓冲：整屏 RGB565 = 640*360*2 ≈ 450KB，超出内部 SRAM 容量，放 PSRAM。
- * s_fb   : 解压后/未压缩的像素帧(最终 byteswap+blit 的目标)。
+ * s_fb   : 解压后/未压缩的像素帧(最终 blit 的目标)。
  * s_cbuf : 压缩帧的接收缓冲。host 仅在压缩更小时才发压缩帧，故 compressed_length
  *          < 该矩形未压缩大小 ≤ GUD_FB_CAP，按整屏容量足够。
  * 由 gud_device_init() 用 heap_caps_malloc(MALLOC_CAP_SPIRAM) 分配。
@@ -90,7 +90,7 @@ static uint8_t *s_cbuf;
  *   s_frame_active=false → idle，bulk OUT 数据视为异常丢弃；
  *   SET_BUFFER 解析成功后 → active，记下 damage 矩形/未压缩长度/本次 bulk 传输长度，
  *   received=0；tud_vendor_rx_cb 按 received 偏移累积到目标缓冲，收满 xferlen 即
- *   (压缩则先解压)→byteswap→blit 并回 idle。
+ *   (压缩则先解压)→blit 并回 idle。
  */
 /* control 回调(arm)与 rx_cb(consume)同处 TinyUSB 单任务上下文，无真正并发；
  * 仅 s_frame_active 作为 arm/disarm 门控声明 volatile 以防寄存器缓存，
@@ -280,7 +280,7 @@ bool gud_handle_control(uint8_t rhport, uint8_t stage,
 
 /*
  * tinyusb 弱回调：vendor 类 EP0 控制请求入口。
- * esp_tinyusb 不实现此符号，此处定义即被链接采用（Task 2 已确认）。
+ * esp_tinyusb 不实现此符号，此处定义即被链接采用（已确认）。
  * 仅转发 vendor 类型请求给 GUD 状态机；其它类型让 stack 处理 / STALL。
  */
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
@@ -343,13 +343,16 @@ static void gud_consume_rx_chunk(uint8_t const *buffer, uint32_t bufsize)
  * bulk OUT 数据回调（framebuffer 像素）。
  * SET_BUFFER 武装后，host 经 bulk OUT 发 s_frame_xferlen 字节(压缩=LZ4 数据，
  * 否则=未压缩 RGB565)。FS EP 一次通常只收 ≤64 字节，要跨多次回调累积；
- * 收满后(压缩则先解压)→byteswap→blit 并回 idle。
+ * 收满后(压缩则先解压)→blit 并回 idle。
  *
  * TinyUSB Vendor 有两种 RX 语义：
  *   - FIFO 模式：回调的 buffer=NULL / bufsize=0，必须用 tud_vendor_n_read()
  *     从 FIFO 取数据；
  *   - direct 模式：回调参数就是当前收到的数据。
- * 项目默认 CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=64，实际走 FIFO 模式。
+ * 项目默认 CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=512（esp_tinyusb 对 ESP32-P4 的默认值，
+ * 与 ESP32-S3 的 64 不同），RX/TX 都 >0 ⇒ CFG_TUD_VENDOR_TXRX_BUFFERED，实际走 FIFO 模式。
+ * 注意下面的 fifo_buf 因此是 512 字节的**栈上**数组，位于 TinyUSB 任务栈
+ * （默认 4096 字节，占约 1/8）；调整该任务栈大小时要把它算进去。
  */
 #if CFG_TUD_API_V0_19_COMPAT
 void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)

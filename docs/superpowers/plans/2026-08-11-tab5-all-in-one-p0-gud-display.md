@@ -127,7 +127,7 @@ components/packages/tab5-all-in-one/
 - Create: `components/packages/tab5-all-in-one/firmware/main/usb_descriptors.c` / `.h`
 - Create: `components/packages/tab5-all-in-one/firmware/main/app_main.c`
 
-- [ ] **Step 1：定义成功判据**
+- [x] **Step 1：定义成功判据**
 
 烧录后在 Linux 主机上：
 
@@ -139,7 +139,7 @@ ls /dev/dri/                            # 见 cardN
 
 且 Tab5 的 UART0（G37/G38，115200 8N1）能看到固件日志 `tab5_aio: tinyusb installed (GUD only)`。
 
-- [ ] **Step 2：建目录并拷贝可复用文件**
+- [x] **Step 2：建目录并拷贝可复用文件**
 
 ```bash
 mkdir -p components/packages/tab5-all-in-one/firmware/main
@@ -152,7 +152,7 @@ cp $SRC/.gitignore $DST/.gitignore
 
 > 不拷 `tinyusb_config/tusb_config.h`，理由见上表。
 
-- [ ] **Step 3：写 `firmware/CMakeLists.txt`**
+- [x] **Step 3：写 `firmware/CMakeLists.txt`**
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -160,7 +160,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(tab5_aio)
 ```
 
-- [ ] **Step 4：写 `firmware/partitions.csv`**
+- [x] **Step 4：写 `firmware/partitions.csv`**
 
 factory 放大到 4 MB（P4 + DSI + PPA + 后续 UAC/UVC 代码量远大于 Cardputer）：
 
@@ -171,10 +171,22 @@ phy_init, data, phy,     0xf000,  0x1000
 factory,  app,  factory, 0x10000, 0x400000
 ```
 
-- [ ] **Step 5：写 `firmware/sdkconfig.defaults`**
+- [x] **Step 5：写 `firmware/sdkconfig.defaults`**
 
 ```
 CONFIG_IDF_TARGET="esp32p4"
+# M5Stack Tab5 实测装的是 ESP32-P4 rev v1.0（esptool 报 "revision v1.0"），
+# 而 IDF v6.0 默认最低支持 v3.1(CONFIG_ESP32P4_REV_MIN_301)，会在烧录时报
+# "requires chip revision in range [v3.1 - v3.99]" 拒绝启动。
+#
+# ⚠️ 这两档是**互斥**的，不能运行时兼容。IDF Kconfig 原文：
+#   "Support of ESP32-P4 rev. <3.0 and >=3.0 is mutually exclusive"
+#   "Revisions higher than 3.0 (included) and revisions less than 3.0
+#    have huge hardware difference."
+# 即本固件编译为支持 v0.x/v1.x 后，就跑不了 v3.x 的 P4。若日后遇到换了
+# v3.x 芯片的 Tab5 批次，需要另出一份固件，无法像双面板那样运行时探测。
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
@@ -184,7 +196,7 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 # TinyUSB vendor 类：esp_tinyusb 用 *_COUNT(int) 启用，>0 即开启 CFG_TUD_VENDOR
 CONFIG_TINYUSB_VENDOR_COUNT=1
-# 32MB Octal PSRAM：DPI 帧缓冲(1.84MB) + GUD 收帧缓冲都放这里
+# 32MB HEX(16 线) PSRAM：DPI 帧缓冲(1.84MB) + GUD 收帧缓冲都放这里
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
@@ -194,7 +206,7 @@ CONFIG_SPIRAM_SPEED_200M=y
 > 依次试 `CONFIG_SPIRAM_MODE_OCT=y` + `CONFIG_SPIRAM_SPEED_120M=y`，
 > 以实际启动日志里 `Found <N>MB PSRAM` 为准，把可用的组合写死回本文件。
 
-- [ ] **Step 6：写 `firmware/main/idf_component.yml`**
+- [x] **Step 6：写 `firmware/main/idf_component.yml`**
 
 ```yaml
 dependencies:
@@ -205,7 +217,7 @@ dependencies:
 
 > 面板与 IO 扩展组件在 Task 2 才加，本任务保持依赖最小。
 
-- [ ] **Step 7：写 `firmware/main/CMakeLists.txt`**
+- [x] **Step 7：写 `firmware/main/CMakeLists.txt`**
 
 P0 不需要 Cardputer 那 21 行 tusb_config.h 注入块（它只为开 `CFG_TUD_AUDIO`；vendor
 类由 `CONFIG_TINYUSB_VENDOR_COUNT=1` 经 esp_tinyusb 自带配置生效）。`PRIV_REQUIRES`
@@ -220,7 +232,7 @@ idf_component_register(SRCS "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4
 set_source_files_properties(lz4.c PROPERTIES COMPILE_FLAGS "-Wno-error -Wno-unused-function")
 ```
 
-- [ ] **Step 8：写 `firmware/main/tab5_pins.h`**
+- [x] **Step 8：写 `firmware/main/tab5_pins.h`**
 
 ```c
 #pragma once
@@ -258,7 +270,7 @@ _Static_assert(GUD_W * GUD_SCALE == PANEL_H, "GUD 宽度放大后应等于面板
 _Static_assert(GUD_H * GUD_SCALE == PANEL_W, "GUD 高度放大后应等于面板宽度(旋转 90°)");
 ```
 
-- [ ] **Step 9：写 `firmware/main/usb_descriptors.h`**
+- [x] **Step 9：写 `firmware/main/usb_descriptors.h`**
 
 ```c
 #pragma once
@@ -285,7 +297,7 @@ extern const char *aio_string_desc_arr[];
 extern const int aio_string_desc_count;
 ```
 
-- [ ] **Step 10：写 `firmware/main/usb_descriptors.c`**
+- [x] **Step 10：写 `firmware/main/usb_descriptors.c`**
 
 ```c
 #include "usb_descriptors.h"
@@ -329,7 +341,7 @@ const char *aio_string_desc_arr[] = {
 const int aio_string_desc_count = sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]);
 ```
 
-- [ ] **Step 11：改 `firmware/main/gud_device.c` 的三处**
+- [x] **Step 11：改 `firmware/main/gud_device.c` 的四处**
 
 改动 1 —— 头部 include 与尺寸来源，把
 ```c
@@ -405,7 +417,7 @@ static uint8_t *s_cbuf;
 > extram_bss 映射来解决 —— 那是另一套机制，与本行的 heap 分配重复，且把
 > 缓冲的位置决定权从代码挪到链接脚本，后续 Task 增删缓冲时容易漏改。
 
-- [ ] **Step 12：写 `firmware/main/display_dsi.h`（本任务先给桩）**
+- [x] **Step 12：写 `firmware/main/display_dsi.h`（本任务先给桩）**
 
 ```c
 #pragma once
@@ -416,7 +428,7 @@ esp_err_t display_init(void);
 void display_blit(int x, int y, int w, int h, const void *pixels);
 ```
 
-- [ ] **Step 13：写 `firmware/main/display_dsi.c` 的桩实现**
+- [x] **Step 13：写 `firmware/main/display_dsi.c` 的桩实现**
 
 本任务不点屏，只让链路能编能跑，把收帧证明打到 UART：
 
@@ -441,7 +453,7 @@ void display_blit(int x, int y, int w, int h, const void *pixels)
 
 把 `display_dsi.c` 加进 `main/CMakeLists.txt` 的 SRCS。
 
-- [ ] **Step 14：写 `firmware/main/app_main.c`**
+- [x] **Step 14：写 `firmware/main/app_main.c`**
 
 **注意 `TINYUSB_CONFIG_FULL_SPEED`，不要用 `TINYUSB_DEFAULT_CONFIG`。**
 
@@ -482,7 +494,7 @@ void app_main(void)
 }
 ```
 
-- [ ] **Step 15：编译**
+- [x] **Step 15：编译**
 
 ```bash
 get_idf
@@ -502,7 +514,7 @@ Expected: `Project build complete.`
 若 `lsusb` 完全看不到设备：先接 UART0(G37/G38) 看固件是否起来；确认
 `app_main.c` 用的是 `TINYUSB_CONFIG_FULL_SPEED`。
 
-- [ ] **Step 17：提交**
+- [x] **Step 17：提交**
 
 ```bash
 git add components/packages/tab5-all-in-one
@@ -522,12 +534,17 @@ git commit -m "feat(tab5-fw): 工程骨架 + USB-C 全速端口 GUD 枚举 (P0 T
 - Modify: `components/packages/tab5-all-in-one/firmware/main/CMakeLists.txt`
 - Modify: `components/packages/tab5-all-in-one/firmware/main/app_main.c`
 
-- [ ] **Step 1：定义成功判据**
+- [x] **Step 1：定义成功判据**
 
 上电后屏幕显示 4 条竖直色条（红/绿/蓝/白），无花屏、无滚动、颜色正确（红就是红，不是蓝）。
 UART 日志见 `disp: panel <型号> 720x1280 ready`。
 
-- [ ] **Step 2：`idf_component.yml` 加 IO 扩展与两个面板驱动**
+> 📌 **实际交付时的偏离**：这里的 4 条竖直色条只在 Task 2 存活了一小会儿，
+> Task 3 Step 6 就把 `display_test_pattern()` 换成了 640×360 的四象限自检图
+> （它还能同时验 PPA 的缩放旋转）。当前固件里**没有色条**，本判据只对 Task 2
+> 当时的中间态有效，事后复现请以四象限图为准。
+
+- [x] **Step 2：`idf_component.yml` 加 IO 扩展与两个面板驱动**
 
 **两种面板批次都要支持**（运行时探测，见 Step 5），所以两个面板组件都进依赖：
 
@@ -543,7 +560,7 @@ dependencies:
   espressif/esp_lcd_st7123: "1.0.2"
 ```
 
-- [ ] **Step 3：写 `firmware/main/board_power.h`**
+- [x] **Step 3：写 `firmware/main/board_power.h`**
 
 ```c
 #pragma once
@@ -557,7 +574,7 @@ esp_err_t board_power_init(void);
 i2c_master_bus_handle_t board_i2c_bus(void);
 ```
 
-- [ ] **Step 4：写 `firmware/main/board_power.c`**
+- [x] **Step 4：写 `firmware/main/board_power.c`**
 
 ```c
 #include "board_power.h"
@@ -615,7 +632,7 @@ esp_err_t board_power_init(void)
 }
 ```
 
-- [ ] **Step 5：面板型号的运行时探测**
+- [x] **Step 5：面板型号的运行时探测**
 
 Tab5 随批次装两种面板，**同一份固件要都支持**，所以型号不能在编译期定死，
 在 `display_dsi.c` 里做运行时探测：
@@ -650,7 +667,7 @@ static panel_kind_t panel_detect(void)
 预期能看到：0x43/0x44 IO 扩展、0x10 ES8388、0x40 ES7210、0x68 BMI270、
 0x32 RX8130CE、0x41 INA226，外加 0x14 或 0x55 之一。把实际结果记进 README。
 
-- [ ] **Step 6：写 `firmware/main/display_dsi.c` 的真实实现（暂不含 PPA）**
+- [x] **Step 6：写 `firmware/main/display_dsi.c` 的真实实现（暂不含 PPA）**
 
 ```c
 /*
@@ -794,7 +811,7 @@ void display_blit(int x, int y, int w, int h, const void *pixels)
 uint16_t *display_frame_buffer(void);
 ```
 
-- [ ] **Step 7：app_main 加上电与色条自检**
+- [x] **Step 7：app_main 加上电与色条自检**
 
 在 `app_main()` 开头把 `display_init()` 换成：
 
@@ -817,14 +834,14 @@ uint16_t *display_frame_buffer(void);
                        PRIV_REQUIRES esp_driver_gpio esp_driver_i2c esp_lcd)
 ```
 
-- [ ] **Step 8：编译**
+- [x] **Step 8：编译**
 
 ```bash
 get_idf && cd components/packages/tab5-all-in-one/firmware && idf.py build
 ```
 Expected: `Project build complete.`
 
-- [ ] **Step 9：上板验证（人工控制者执行）**
+- [x] **Step 9：上板验证（人工控制者执行）**
 
 烧录后看屏。三种典型失败与处置：
 
@@ -836,7 +853,7 @@ Expected: `Project build complete.`
 | 红蓝互换 | 把 `rgb_ele_order` 改成 `LCD_RGB_ELEMENT_ORDER_BGR` |
 | `panel_detect()` 判错型号 | 看 i2cscan 日志里实际有没有 0x55；若两个地址都在或都不在，改用更强的判据（读控制器 ID 寄存器） |
 
-- [ ] **Step 10：标注未验证路径、删掉扫描代码、提交**
+- [x] **Step 10：标注未验证路径、删掉扫描代码、提交**
 
 实机只会跑通两条路径中的一条，另一条是「照 esp-bsp 复刻但未上板」的状态。
 **必须在日志里说清楚**，否则日后有人会误以为两条都验过：给未走到的那条加一句
@@ -864,10 +881,10 @@ git commit -m "feat(tab5-fw): MIPI-DSI 面板点亮，双面板批次运行时�
 
 **Files:**
 - Modify: `components/packages/tab5-all-in-one/firmware/main/display_dsi.c`
-- Modify: `components/packages/tab5-all-in-one/firmware/main/app_main.c`（临时自检，Task 4 移除）
+- Modify: `components/packages/tab5-all-in-one/firmware/main/app_main.c`（自检调用；最终决定**保留**，见 Task 4 Step 3）
 - Modify: `components/packages/tab5-all-in-one/firmware/main/CMakeLists.txt`
 
-- [ ] **Step 1：定义成功判据**
+- [x] **Step 1：定义成功判据**
 
 用一张 640×360 的自检图（左上红、右上绿、左下蓝、右下白，正中一个 40×40 黑方块）整帧 blit 后：
 
@@ -898,13 +915,13 @@ git commit -m "feat(tab5-fw): MIPI-DSI 面板点亮，双面板批次运行时�
 两者相差甚远，判读毫不含糊。
 
 > ⚠️ **判读时注意区分「面板坐标」与「观看方位」**。整条链路带 90° 旋转，
-> 两者差一个旋转量。黄块在**面板坐标系**里的落点是：
-> `DISPLAY_ROT_CCW90=1` → (0, 1152)，面板左下角；`=0` → (592, 0)，面板右上角。
+> 两者差一个旋转量。黄块在**面板坐标系**里的落点即上表的两个值：
+> `DISPLAY_ROT_CCW90=1` → (64, 1024)，面板左下角；`=0` → (528, 128)，面板右上角。
 > 横持观看时其中之一会呈现在左上角。**判据以横持观看的方位为准**，
 > 不要拿面板坐标去对，否则会误判成 bug。两个分支的落点相差 180°，
 > 所以这个开关确实能有效区分。
 
-- [ ] **Step 2：理解坐标变换（写码前先想清楚，这是本任务唯一容易错的地方）**
+- [x] **Step 2：理解坐标变换（写码前先想清楚，这是本任务唯一容易错的地方）**
 
 - GUD 坐标系：横向 640(w) × 360(h)，原点左上。
 - 面板坐标系：竖向 720(w) × 1280(h)，原点左上。
@@ -926,7 +943,7 @@ git commit -m "feat(tab5-fw): MIPI-DSI 面板点亮，双面板批次运行时�
   panel_y = x * 2
   ```
 
-- [ ] **Step 2.5：cache 一致性 —— PPA 路径不用自己 msync，但有两条约束**
+- [x] **Step 2.5：cache 一致性 —— PPA 路径不用自己 msync，但有两条约束**
 
 P4 的 DMA 不侦听 cache，所以「谁写缓冲、谁负责回写」这件事必须想清楚。已核实
 （`$HOME/esp/esp-idf/components/esp_driver_ppa/src/ppa_srm.c`）：
@@ -941,17 +958,18 @@ P4 的 DMA 不侦听 cache，所以「谁写缓冲、谁负责回写」这件事
 1. **交给 PPA 之前，`s_fb` 上不能留 CPU 的脏 cache 行**。`:260` 是 invalidate 不是回写；
    若 CPU 先直写了 `s_fb` 又没 flush，那些脏行可能在 PPA 写完之后才被淘汰，
    **反过来覆盖 PPA 的输出**。Task 2 的 `memset` 与色条自检后都紧跟了
-   `display_frame_buffer_flush()`，已无隐患；但今后凡是混用 CPU 直写与 PPA 的地方都要先 flush。
+   `frame_buffer_flush()`（`display_dsi.c` 里的 static 函数），已无隐患；
+   但今后凡是混用 CPU 直写与 PPA 的地方都要先 flush。
 2. `:260` 用 `PPA_ALIGN_DOWN`/`PPA_ALIGN_UP` 把 invalidate 区间**向外扩**到 cache line 边界
    （源码注释：`alignment strict on M2C direction`）。即 PPA 输出块上下边缘所在的
    两条 cache line 会被连带 invalidate —— 又一个「别在相邻区域留脏行」的理由。
 
-> `display_frame_buffer_flush()` 目前是整幅 1.84MB 全 flush，开机只调两次无所谓。
+> `frame_buffer_flush()` 目前是整幅 1.84MB 全 flush，开机只调两次无所谓。
 > 若将来出现逐帧的 CPU 直写路径，要改成按行区间 flush（照 IDF
 > `esp_lcd_panel_dpi.c:646` 的 `y_start`/`y_end` 算法，届时需加 `UNALIGNED` 标志）。
 > 现在不做。
 
-- [ ] **Step 3：在 `display_dsi.c` 里加 PPA client**
+- [x] **Step 3：在 `display_dsi.c` 里加 PPA client**
 
 在文件顶部加 `#include "driver/ppa.h"`，并加静态句柄：
 
@@ -969,7 +987,7 @@ static ppa_client_handle_t s_ppa;
     ESP_RETURN_ON_ERROR(ppa_register_client(&ppa_cfg, &s_ppa), TAG, "ppa client");
 ```
 
-- [ ] **Step 4：实现 `display_blit()`**
+- [x] **Step 4：实现 `display_blit()`**
 
 替换 Task 2 里的空实现：
 
@@ -1050,13 +1068,13 @@ void display_blit(int x, int y, int w, int h, const void *pixels)
 #define DISPLAY_ROT_CCW90 1
 ```
 
-- [ ] **Step 5：`main/CMakeLists.txt` 的 `PRIV_REQUIRES` 加 `esp_driver_ppa`**
+- [x] **Step 5：`main/CMakeLists.txt` 的 `PRIV_REQUIRES` 加 `esp_driver_ppa`**
 
 ```cmake
                        PRIV_REQUIRES esp_driver_gpio esp_driver_i2c esp_driver_ppa esp_lcd)
 ```
 
-- [ ] **Step 6：`display_test_pattern()` 换成 640×360 自检图**
+- [x] **Step 6：`display_test_pattern()` 换成 640×360 自检图**
 
 > 实施时的偏离（已采纳）：自检图放在 `display_dsi.c` 的 `display_test_pattern()` 里，
 > 不是 `app_main`（Task 2 的接口收窄已把自检收进显示模块，`app_main` 只留一行调用）。
@@ -1094,14 +1112,14 @@ void display_blit(int x, int y, int w, int h, const void *pixels)
 > `probe` 是 640×360×2 = 460 KB，必须是 `static`（放不进任务栈）。若链接报 DRAM 不足，
 > 改成 `heap_caps_malloc(GUD_W * GUD_H * 2, MALLOC_CAP_SPIRAM)` 并加 `#include "esp_heap_caps.h"`。
 
-- [ ] **Step 7：编译**
+- [x] **Step 7：编译**
 
 ```bash
 get_idf && cd components/packages/tab5-all-in-one/firmware && idf.py build
 ```
 Expected: `Project build complete.`
 
-- [ ] **Step 8：上板标定方向（人工控制者执行）**
+- [x] **Step 8：上板标定方向（人工控制者执行）**
 
 烧录后横持 Tab5 观察：
 
@@ -1112,7 +1130,7 @@ Expected: `Project build complete.`
 
 把最终值与结论写进 README。
 
-- [ ] **Step 9：提交**
+- [x] **Step 9：提交**
 
 ```bash
 git add components/packages/tab5-all-in-one
@@ -1127,7 +1145,7 @@ git commit -m "feat(tab5-fw): PPA 单次操作完成 2x 缩放 + 90 度旋转铺
 
 **Files:**
 - Modify: `components/packages/tab5-all-in-one/firmware/main/gud_device.c`
-- Modify: `components/packages/tab5-all-in-one/firmware/main/app_main.c`（移除 Task 3 自检）
+- `app_main.c` **不改**（开机自检图刻意保留，见 Step 3）
 
 - [ ] **Step 1：定义成功判据**
 
@@ -1147,12 +1165,21 @@ Tab5 屏上出现 modetest 的彩色测试图，铺满全屏、方向与 Task 3 
 `heap_caps_malloc(..., MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)` 分配，且启动日志
 无 `region 'sram_seg' overflowed`。若不符，回 Task 1 改动 4 的做法补齐。
 
-- [ ] **Step 3：移除 app_main 的 Task 3 自检**
+- [ ] **Step 3：保留开机自检图，`app_main.c` 不改**
 
-删掉 `probe` / `corner` 两段自检代码及相关变量，`app_main()` 恢复为
+本步**不需要任何代码改动**，只需确认现状符合下面的决定。
+
+现状：自检代码早已不在 `app_main.c` 里 —— Task 2 的接口收窄（commit `f297b6b1`）
+把它搬进了 `display_dsi.c` 的 `display_test_pattern()`，`app_main()` 已经就是
 `board_power_init() → display_init() → gud_device_init() → tinyusb_driver_install()`。
+同一次收窄也删掉了 `display_frame_buffer()`，头文件现在只导出
+`display_init` / `display_blit` / `display_test_pattern`，没有清屏用的帧缓冲出口。
 
-保留一句开机提示图（可选）：用 `memset(display_frame_buffer(), 0, PANEL_W*PANEL_H*2)` 清屏即可。
+决定：**保留 `display_test_pattern()`**，理由是它就是本任务的验收信号 ——
+host 的 GUD 帧一送上来就会覆盖自检图，屏幕从四象限图变成 host 画面，
+**这个变化本身即是 GUD 打通的证据**；反过来若开机就清成黑屏，出问题时便分不清
+「显示链路坏了」与「GUD 根本没送帧」。这条决定同时记在 `display_dsi.c` 的
+`display_test_pattern()` 注释、`display_dsi.h` 的声明处与 `firmware/README.md`。
 
 - [ ] **Step 4：编译**
 
@@ -1260,7 +1287,7 @@ gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
 
 记录：场景 A 的 fps、场景 B 的主观跟手程度（"打字无感延迟 / 滚动可见撕裂" 这类描述）。
 
-- [ ] **Step 2：写 `firmware/README.md`**
+- [x] **Step 2：写 `firmware/README.md`**
 
 必须覆盖这些内容（照 `cardputer-all-in-one/firmware/README.md` 的结构）：
 
@@ -1275,7 +1302,7 @@ gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
 - Step 1 实测的帧率数据；
 - 文件职责表。
 
-- [ ] **Step 3：写包级 `README.md`**
+- [x] **Step 3：写包级 `README.md`**
 
 照 `cardputer-all-in-one/README.md` 的结构：两侧分工表、当前状态清单
 （✅ GUD 显示 / ⏳ 键盘、触摸、音频、UVC）、文档链接（本 spec 与 plan）。

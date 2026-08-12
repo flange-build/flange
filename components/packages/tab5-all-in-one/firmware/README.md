@@ -252,14 +252,19 @@ gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
 每份 `640×360×2` = 460,800 字节），DPI 帧缓冲 1.84 MB。
 开机自检图另临时占一份 460,800 字节，用完即释放。
 
-> ⚠️ **DIRAM 总量是 576,464 字节（约 563 KB），不是 640 KB** —— 这是
-> `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` 的副作用。IDF 的
-> `components/esp_system/ld/esp32p4/memory.ld.in` 对两档芯片用**完全不同的 SRAM 布局**：
+> ⚠️ **DIRAM 总量是 576,464 字节（约 563 KB）** —— 对着 `build/tab5_aio.map` 的
+> Memory Configuration 核实过：`sram_low 0x4ff00000 / 0x2cbd0` + `sram_high 0x4ff40000 / 0x60000`。
+> 这个布局是 `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` 带来的：IDF 的
+> `components/esp_system/ld/esp32p4/memory.ld.in` 对两档芯片用**完全不同的 SRAM 布局** ——
 > rev ≥3.0 是一整块 `sram_seg`（`0x4FF00000 + L2_CACHE_SIZE` 到 `0x4FFAEFC0`），
-> rev <3.0 拆成 `sram_low`（`0x4FF00000`–`0x4FF2CBD0`）+ `sram_high` 两段，
-> 可用总量少约 77 KB。这不是配置失误，是真实的硅片差异。
+> rev <3.0 拆成 `sram_low` + `sram_high` 两段。
 >
-> **后续阶段（UAC 音频 / UVC 摄像头）的内部 RAM 预算要按剩余 ~474 KB 算，不能按 565 KB。**
+> 但按本工程的 `CONFIG_CACHE_L2_CACHE_SIZE=0x20000` 算，rev ≥3.0 档位是
+> `0x4FF20000`–`0x4FFAEFC0` = 585,664 字节，**只比当前多 9,200 字节（约 9 KB）**。
+> 也就是说：**翻 Kconfig 换档位换不回什么内存**，内部 RAM 不够时只能从别处省，
+> 不要指望改芯片版本档位解决。
+>
+> **后续阶段（UAC 音频 / UVC 摄像头）的内部 RAM 预算要按剩余 ~474 KB 算，不能按 563 KB。**
 > DMA 缓冲往往必须在内部 RAM，这条约束比看上去紧。
 
 ## 文件

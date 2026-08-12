@@ -9,11 +9,17 @@
  *
  * 改动说明（仅为在 ESP-IDF / TinyUSB 下编译，语义不变）：
  *   - 内核类型 __le32/__le16/__le64/__u8 → 标准 stdint（GUD 协议要求小端，
- *     ESP32-S3 本身即小端，故直接用 uint*_t 即字节兼容）；
+ *     ESP32-P4 本身即小端，故直接用 uint*_t 即字节兼容）；
  *   - __packed → __attribute__((packed))；
  *   - BIT(n) → (1u << n)；
  *   - 移除 #include <linux/types.h>。
  * 所有请求码、魔数、结构体布局、像素格式、连接器类型、status 值均原样保留。
+ *
+ * 与姊妹包 cardputer-all-in-one 的同名文件相比，**有意**存在注释差异（除本段外
+ * 还有两处：上面的 ESP32-P4，以及下面 gud_set_buffer_req 的使用说明）——
+ * 本包的芯片与调用时机都不同，注释必须各自正确。
+ * **这不是漏同步**，diff 时不要「修回」去。
+ * 代码本体（结构体与常量）仍与 Cardputer 及内核原文逐字节一致。
  */
 
 #ifndef __GUD_PROTOCOL_H
@@ -103,7 +109,8 @@ struct gud_connector_descriptor_req {
 } __attribute__((packed));
 
 /*
- * struct gud_set_buffer_req - Set buffer transfer info (Task 4 才用)
+ * struct gud_set_buffer_req - Set buffer transfer info
+ * （由 gud_device.c 的 gud_arm_set_buffer() 解析，武装一次收帧）
  */
 struct gud_set_buffer_req {
 	uint32_t x;
