@@ -133,7 +133,9 @@ static panel_kind_t panel_detect(void)
      * 若实机是 ST7123 批次会表现为时序错乱的花屏 —— 所以必须大声报出来，
      * 否则这个失败模式没有任何外部症状可循。 */
     ESP_LOGE(TAG, "面板探测失败(0x55=%d 0x14=%d)，回落 ILI9881C；"
-                  "若屏幕花屏请核对 i2cscan 日志", st7123, gt911);
+                  "两者都为 0 多半是上电时序不足(见 board_power_init 的稳定延时)，"
+                  "都为 1 说明地址排他性假设不成立、需改读控制器 ID 寄存器",
+             st7123, gt911);
     return PANEL_ILI9881C;
 }
 
@@ -232,8 +234,9 @@ esp_err_t display_init(void)
     ESP_LOGI(TAG, "panel %s %dx%d ready, fb=%p",
              kind == PANEL_ST7123 ? "ST7123" : "ILI9881C", PANEL_W, PANEL_H, s_fb);
     if (kind == PANEL_ST7123)
-        ESP_LOGW(TAG, "ST7123 路径未经实机验证（本项目实机为 ILI9881C 批次，"
-                      "i2cscan 见 0x14 无 0x55）；若显示异常请优先怀疑本路径");
+        ESP_LOGW(TAG, "ST7123 路径未经实机验证（开发用机是 ILI9881C 批次，"
+                      "面板 ID 实测 0x98/0x81/0x5c）；若显示异常请优先怀疑本路径，"
+                      "并注意上游 init 数据有两条 data_size 多算 1 字节");
     return ESP_OK;
 }
 
