@@ -11,6 +11,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_ili9881c.h"
 #include "esp_lcd_st7123.h"
+#include "panel_init_data.h"   /* 须在上面两个面板头之后：依赖它们定义的元素类型 */
 #include "driver/ppa.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -203,6 +204,8 @@ esp_err_t display_init(void)
      */
     if (kind == PANEL_ST7123) {
         st7123_vendor_config_t vendor_st7123 = {
+            .init_cmds      = disp_init_data_st7123,
+            .init_cmds_size = sizeof(disp_init_data_st7123) / sizeof(disp_init_data_st7123[0]),
             .mipi_config = { .dsi_bus = s_dsi_bus, .dpi_config = &dpi_cfg },
         };
         panel_cfg.vendor_config = &vendor_st7123;
@@ -210,6 +213,8 @@ esp_err_t display_init(void)
                             TAG, "new panel st7123");
     } else {
         ili9881c_vendor_config_t vendor_ili9881c = {
+            .init_cmds      = disp_init_data_ili9881c,
+            .init_cmds_size = sizeof(disp_init_data_ili9881c) / sizeof(disp_init_data_ili9881c[0]),
             .mipi_config = { .dsi_bus = s_dsi_bus, .dpi_config = &dpi_cfg,
                              .lane_num = DSI_LANE_NUM },
         };
