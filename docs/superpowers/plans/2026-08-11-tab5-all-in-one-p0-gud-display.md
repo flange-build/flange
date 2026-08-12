@@ -813,6 +813,11 @@ uint16_t *display_frame_buffer(void);
 
 - [x] **Step 7：app_main 加上电与色条自检**
 
+> ⚠️ **下面这段是 Task 2 当时的中间态，已被后续任务取代，不要照着重建工程。**
+> 自检在 Task 2 收尾的接口收窄（commit `f297b6b1`）里搬进了 `display_dsi.c` 的
+> `display_test_pattern()`，同一次收窄删掉了 `display_frame_buffer()` 这个导出
+> —— 照抄本段会写出一个后来被删的公开接口。当前形态见 Task 3 Step 6。
+
 在 `app_main()` 开头把 `display_init()` 换成：
 
 ```c
