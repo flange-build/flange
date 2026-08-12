@@ -231,6 +231,12 @@ esp_err_t display_init(void)
     };
     ESP_RETURN_ON_ERROR(ppa_register_client(&ppa_cfg, &s_ppa), TAG, "ppa client");
 
+    /* 背光在此点亮，而不是 board_power_init() 里：面板 init 序列 195 条命令要跑
+     * 几十到上百毫秒，期间点亮只会在开机时闪一下白屏/杂讯。不变式是
+     * 「背光亮 ⟺ 面板正在输出有效视频」，属显示域，故由本函数在全部初始化
+     * 成功之后负责，不交给 app_main 编排。此刻帧缓冲已清零，屏上是纯黑。 */
+    board_backlight(true);
+
     ESP_LOGI(TAG, "panel %s %dx%d ready, fb=%p",
              kind == PANEL_ST7123 ? "ST7123" : "ILI9881C", PANEL_W, PANEL_H, s_fb);
     if (kind == PANEL_ST7123)

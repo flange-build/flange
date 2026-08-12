@@ -48,12 +48,19 @@ esp_err_t board_power_init(void)
      * 这一点。50ms 是保守值，只在开机走一次，不影响任何运行时性能。 */
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    /* 背光常亮。需要调光时再换 LEDC PWM，本阶段不做。 */
+    /* 背光 GPIO 配成输出但**保持熄灭**：面板 init 序列有 195 条命令要跑，此刻点亮
+     * 只会让开机闪一下白屏/杂讯。点亮时机归显示域，见 display_init()。
+     * 需要调光时再换 LEDC PWM，本阶段不做。 */
     gpio_config_t bl = { .mode = GPIO_MODE_OUTPUT, .pin_bit_mask = 1ULL << PIN_LCD_BL };
     ESP_RETURN_ON_ERROR(gpio_config(&bl), TAG, "bl gpio");
-    ESP_RETURN_ON_ERROR(gpio_set_level(PIN_LCD_BL, 1), TAG, "bl level");
+    ESP_RETURN_ON_ERROR(gpio_set_level(PIN_LCD_BL, 0), TAG, "bl level");
 
-    ESP_LOGI(TAG, "board power ready (i2c %d/%d, ioexp 0x%02x)",
+    ESP_LOGI(TAG, "board power ready (i2c %d/%d, ioexp 0x%02x, 背光待面板就绪后点亮)",
              PIN_I2C_SDA, PIN_I2C_SCL, IOEXP_ADDR);
     return ESP_OK;
+}
+
+void board_backlight(bool on)
+{
+    gpio_set_level(PIN_LCD_BL, on);
 }
