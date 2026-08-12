@@ -13,8 +13,6 @@
 #include "esp_lcd_st7123.h"
 #include "panel_init_data.h"   /* 须在上面两个面板头之后：依赖它们定义的元素类型 */
 #include "driver/ppa.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_cache.h"
 #include "esp_heap_caps.h"
@@ -27,10 +25,13 @@ static const char *TAG = "disp";
 #define PANEL_FB_BYTES ((size_t)PANEL_W * PANEL_H * sizeof(uint16_t))
 
 /*
- * 旋转方向按实机标定：1 = 90° CCW，0 = 270° CCW。两分支的面板落点（供判读）：
- *   整帧 (0,0,640,360)     两分支都落在 (0,0) 720×1280，铺满全屏无黑边。
- *   自检黄块 (64,32,64,64) 128×128；=1 落 (64,1024)，=0 落 (528,128)。
- * 两者相差 180°，所以黄块位置就是判定依据：跑到另一头就把本宏取反重编。
+ * 旋转方向：1 = 90° CCW，0 = 270° CCW。两者相差 180°。
+ * **已实机标定（M5Stack Tab5 + ILI9881C 批次）：1 正确** ——
+ * 横持时红色象限落在左上角，与 GUD 坐标系一致。
+ * 面板坐标落点：=1 时整帧 (0,0) 起 720×1280、64×64 黄块在 (64,1024)；
+ *              =0 时整帧同样 (0,0)，黄块在 (528,128)。
+ * 注意「铺满全屏」验不出方向 —— 两个分支都产生 (0,0) 起 720×1280，
+ * 差别只在内容转了 180°。判据是红色象限的落角。
  */
 #define DISPLAY_ROT_CCW90 1
 
@@ -64,6 +65,10 @@ static void frame_buffer_flush(void)
  * 以及 PPA 的缩放/旋转坐标映射——三者任一错都会在屏上直接看出来。
  * 测试图 640×360×2 = 460KB 放 PSRAM（内部 DRAM 余量不够），用完即释放：
  * 这是开机期一次性自检，不该常驻。
+ *
+ * 保留它还有第二个用途：它是「显示链路还活着」的基准信号。host 的 GUD 帧
+ * 一送上来就会覆盖它，屏幕从四象限图变成 host 画面，这个变化本身即是
+ * GUD 打通的证据；若开机就黑屏，则可区分「显示坏了」与「GUD 没送帧」。
  */
 void display_test_pattern(void)
 {
@@ -91,21 +96,7 @@ void display_test_pattern(void)
 
     display_blit(0, 0, GUD_W, GUD_H, probe);
 
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    /*
-     * 局部矩形自检：同时验证「非零输出偏移」与「紧凑输入布局」两件事。
-     * 源点取 (64,32) 而非 (0,0)——(0,0) 是紧凑解读与「整帧基址+偏移」解读的
-     * 退化重合点，放那儿等于什么都没验。缓冲前 sq*sq 个像素紧凑填黄即可
-     * （不是左上角子块），正是 gud_device.c 交过来的排布。
-     * 落点：ROT_CCW90=1 → (64,1024)，=0 → (528,128)，均 128×128。
-     */
-    const int sq = 64;
-    for (int i = 0; i < sq * sq; i++)
-        probe[i] = 0xFFE0;   /* 黄 */
-    display_blit(64, 32, sq, sq, probe);
-
-    /* PPA_TRANS_MODE_BLOCKING 保证上面两次搬运都已完成，可以安全释放 */
+    /* PPA_TRANS_MODE_BLOCKING 保证搬运已完成，可以安全释放 */
     heap_caps_free(probe);
 }
 
@@ -240,6 +231,9 @@ esp_err_t display_init(void)
 
     ESP_LOGI(TAG, "panel %s %dx%d ready, fb=%p",
              kind == PANEL_ST7123 ? "ST7123" : "ILI9881C", PANEL_W, PANEL_H, s_fb);
+    if (kind == PANEL_ST7123)
+        ESP_LOGW(TAG, "ST7123 路径未经实机验证（本项目实机为 ILI9881C 批次，"
+                      "i2cscan 见 0x14 无 0x55）；若显示异常请优先怀疑本路径");
     return ESP_OK;
 }
 

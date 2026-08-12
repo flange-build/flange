@@ -14,14 +14,6 @@ void app_main(void)
 {
     ESP_ERROR_CHECK(board_power_init());
 
-    /* 临时：扫描内部 I2C，用于确定本机面板/触摸控制器型号。
-     * 见 0x55 ⇒ ST7123；见 0x14 ⇒ GT911(面板为 ILI9881C)。
-     * TODO(Task2): 型号确定后删除本段。 */
-    for (uint8_t a = 0x08; a < 0x78; a++) {
-        if (i2c_master_probe(board_i2c_bus(), a, 50) == ESP_OK)
-            ESP_LOGI("i2cscan", "found 0x%02x", a);
-    }
-
     ESP_ERROR_CHECK(display_init());
 
     display_test_pattern();
