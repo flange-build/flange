@@ -3,8 +3,9 @@
 M5Stack Tab5 作为 **USB 设备**，让嵌入式 Linux 主机把它当成一块标准 DRM 显示器
 （mainline `gud` 驱动，`/dev/dri/cardN`）。host 送来的 **640×360 RGB565** 帧经 ESP32-P4 的
 PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90° 旋转**，铺满板载的
-720×1280 MIPI-DSI 面板。同一个复合设备上还带 **HID 键盘**（Tab5 Keyboard）；
-后续阶段追加 HID 触摸屏 / UAC 音频 / UVC 摄像头。
+720×1280 MIPI-DSI 面板。同一个复合设备上还带 **HID 键盘**（Tab5 Keyboard）与
+**HID 多点触摸**（GT911，与键盘共用同一个 HID 接口、靠 Report ID 区分）；
+后续阶段追加 UAC 音频 / UVC 摄像头。
 
 > ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
 
@@ -14,9 +15,11 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
   - **IF0 Vendor(GUD) 显示**：GUD 设备协议最小子集，单 connector / 单模式 **640×360** /
     **RGB565**，支持 LZ4 压缩与 dirty rectangle（脏矩形）；收 host 帧（SET_BUFFER + bulk OUT）
     →（可选 LZ4 解压）→ PPA 缩放旋转 → DPI 帧缓冲 → 面板。
-  - **IF1 HID 键盘**：Tab5 Keyboard 经独立 I2C 总线读行列事件，自建 6KRO 状态机上报，
-    报告带 Report ID（RID 1）。详见下文「HID 键盘」。
-  - 设备描述符为 Misc/IAD 复合设备，为后续 UAC/触摸/UVC 预留。
+  - **IF1 HID 键盘 + 多点触摸**：一个接口、一条中断 IN 端点，靠 Report ID 区分 ——
+    **RID 1 = 键盘**（Tab5 Keyboard 经独立 I2C 总线读行列事件，自建 6KRO 状态机上报）、
+    **RID 2 = digitizer**（GT911 电容触摸，最多 5 点绝对坐标）。
+    详见下文「HID 键盘」与「HID 多点触摸」。
+  - 设备描述符为 Misc/IAD 复合设备，为后续 UAC/UVC 预留。
 - 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）；
   面板 init 序列与 DSI/DPI 参数复刻自 esp-bsp `bsp/m5stack_tab5`（Apache-2.0）；
   待机画面用的点阵字体 `main/font8x16.h` vendor 自 [Spleen](https://github.com/fcambus/spleen)
@@ -176,8 +179,8 @@ P4 全速控制器（tinyusb `dwc2_esp32.h`）：`ep_count = 7`、`ep_in_count =
 FIFO 256 words（1 KB），即**最多 4 条可用 IN 端点**。
 
 当前已用 **2 条 IN 端点**：vendor(`0x81`) + HID(`0x82`)，余 2 条。后续的 UAC + UVC 会把它们用满，
-所以**触摸必须与键盘合并进同一个 HID 接口**，用 Report ID 区分（RID 1 键盘 / RID 2 digitizer）——
-键盘的报告描述符已经带 Report ID，届时是纯增量改动。
+所以**触摸与键盘合并在同一个 HID 接口**上，用 Report ID 区分（RID 1 键盘 / RID 2 digitizer），
+**已如此落地**（触摸没有新增任何端点，见下文「HID 多点触摸」）。
 
 > 余下这 2 条也是**可选 CDC 调试串口**（默认关闭）要占的，见下文「日志」章节。
 > 三者（CDC / UAC / UVC）不能同时开。
@@ -508,13 +511,17 @@ Sym(3,0) / Aa(3,1) 是本地层键，不上报；查表得到的 usage 落在 `0
 
 IF1 = HID（`EPNUM_HID = 0x82`，vendor 用 `0x81`），`bInterval = 10`（ms）。
 **报告描述符带 Report ID**（`HID_RID_KEYBOARD = 1`）—— P4 全速控制器最多 4 条可用
-IN 端点（见上），UAC/UVC 会用满，触摸必须与键盘共用本接口，届时以 **RID 2 = digitizer**
-追加是纯增量改动。
+IN 端点（见上），UAC/UVC 会用满，所以触摸与键盘共用本接口，以 **RID 2 = digitizer**
+追加（已落地，见下文「HID 多点触摸」）。
 
-> ⚠️ **已知的规范不自洽**：`TUD_HID_DESCRIPTOR` 传 `HID_ITF_PROTOCOL_KEYBOARD` 会把
-> `bInterfaceSubClass` 设为 BOOT，宣称支持 boot keyboard，而 **boot 协议报告格式不允许
-> Report ID**。Linux `usbhid` 默认走 report 协议，**本用途不受影响**；受影响的只有
-> BIOS/UEFI/GRUB 早期阶段（记录在此免得日后有人报「BIOS 里打不了字」）。
+> ⚠️ **`bInterfaceProtocol` 已从 `HID_ITF_PROTOCOL_KEYBOARD` 改成 `HID_ITF_PROTOCOL_NONE`**
+> （随触摸一并落地）。传 `KEYBOARD` 会把 `bInterfaceSubClass` 一并设为 BOOT，即宣称支持
+> boot keyboard，而 **boot 协议的报告格式不允许 Report ID** —— 本接口现在同时承载
+> 键盘(RID 1)与 digitizer(RID 2)、必须靠 Report ID 区分，继续声明 BOOT 就是在说谎。
+> **代价**：BIOS/UEFI/GRUB 这类只会 `SET_PROTOCOL(boot)` 的早期环境不再能把它当键盘用
+> （记录在此免得日后有人报「BIOS 里打不了字」）。Linux `usbhid` 默认走 report 协议，
+> 日常零影响 —— 改完实机复验：键盘仍枚举为**独立的 input 设备**
+> （`flange Tab5 USB Terminal Keyboard`），见下文「HID 多点触摸 / Host 侧验证」。
 
 `tud_hid_set_report_cb` 是空实现，即**不同步 host 的 CapsLock 等 LED 状态**（本阶段有意）。
 
@@ -548,12 +555,215 @@ cat /proc/bus/input/devices
 sudo evtest /dev/input/eventN
 ```
 
+## HID 多点触摸（GT911）
+
+**实机验证通过**：host 侧 `hid-multitouch` 绑定，**多点触摸可用（实测三指同时接触）**，
+键盘仍是独立的 input 设备。⚠️ **四角坐标标定尚未验证**，见本章末「待验项」。
+
+GT911 与 IO 扩展 / codec / IMU 同挂**内部 I2C**（SDA=G31 / SCL=G32），所以 `touch_hid.c`
+直接复用 `board_i2c_bus()` 的总线句柄，**不像键盘那样自建总线**；触摸电源使能在
+PI4IOE5V6408-1(`0x43`) 的 PIN5，`board_power_init()` 已拉高。上报走键盘那条 HID
+接口(IF1)与端点，用 **Report ID 2** 区分。20ms 轮询，不用中断（理由见下）。
+
+> 触摸与键盘一样是**可选外设，缺席不拦启动** —— `touch_start()` 失败只打 WARNING，
+> 详见上文「HID 键盘」开头那段说明。
+
+### ⚠️⚠️ TP_INT 上的上拉电阻 —— 这块板最大的坑
+
+**Tab5 v1 硬件（ILI9881C + GT911）在 TP_INT（G23）上有一颗到 3V3 的上拉电阻，它会压住
+GT911 不出坐标。** I2C 读得到产品 ID、`esp_lcd_touch_new_i2c_gt911()` 一路返回 `ESP_OK`、
+轮询任务也在跑，但状态寄存器 `0x814E` 的 buffer-ready 位(bit7)永远不置起 ——
+**现象是完全静默**：设备在、驱动在、`evtest` 里一个事件都没有。
+
+解法要**两句、缺一不可**（`touch_start()` 开头）：
+
+1. 把 G23 `gpio_config()` 成 **OUTPUT** 并 `gpio_set_level(..., 0)` **主动驱动到低**，
+   压住那颗外部上拉；且必须在 `esp_lcd_touch_new_i2c_gt911()` **之前**做；
+2. 同时把 `tp_cfg.int_gpio_num` 填成 **`GPIO_NUM_NC`**。
+
+**只做第 1 句无效** —— GT911 驱动会在初始化里把这个脚重新 `gpio_config()` 成
+INPUT + NEGEDGE，刚驱动的低电平立刻被抹掉，等于没修。代价是放弃中断驱动触摸的可能，
+本来也没用上（我们是 20ms 轮询）。
+
+这不是猜测：官方 esp-bsp `bsp/m5stack_tab5/src/bsp_display.c` 的 `bsp_touch_new()` 在
+`board_version == 1` 分支专门做了这两件事，注释原文 *"there is resistor to 3V3 on
+interrupt pin which is blocking GT911 touch"*。我们此前只逐项对照了 BSP 里 `tp_cfg` 的
+**初始化列表**（那部分确实相同），漏看了紧随其后的这两行 GPIO 操作，于是原样复现了这个
+「上游已知并已修」的坑。**排查时若见触摸完全静默，先查这里，别再怀疑 I2C** ——
+`esp_lcd_touch_new_i2c_gt911()` 结尾会无条件读产品 ID(`0x8140`) 与配置版本(`0x8047`)，
+它返回 `ESP_OK` 本身就已经证明 I2C 通、地址对。
+
+> **拉低不影响 I2C 地址**：GT911 只在**上电/复位瞬间**按 INT 电平 latch 地址
+> （高⇒`0x14`、低⇒`0x5D`），那一刻由板上那颗上拉决定为高；此处拉低发生在
+> `board_power_init()` 拉起 TOUCH_EN 之后很久（中间还隔着 195 条面板 init 命令），
+> 地址早已锁定。
+>
+> 万一将来换批次硬件复发，Plan B 是补 M5 官方的显式复位时序（脉冲 IO 扩展 P5），
+> 但**顺序写反会更坏**：必须「先拉高 INT → 脉冲 P5 → 等 100ms → 再执行 INT 拉低」；
+> 若在 INT 已被拉低之后才脉冲 P5，GT911 会 latch 成 `0x5D`，连 I2C 都不再应答。
+> 详见 `touch_hid.c` 里 `touch_start()` 开头的长注释。
+
+### ⚠️ I2C 地址是 `0x14`，不是驱动默认的 `0x5D`
+
+GT911 的**默认**地址是 `0x5D`，`0x14` 是**备用**地址 —— Tab5 用的正是 `0x14`。
+组件的 `ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG()` 宏填的是 `0x5D`，且只校验传入值合法、
+**不会自动探测**（它那段地址选择流程还要求有 rst 引脚，Tab5 没有，直接被跳过）。
+所以必须显式改写：
+
+```c
+io_cfg.dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;   /* = 0x14 */
+```
+
+不改就一定探不到。顺带：`display_dsi.c` 的面板批次探测正是靠 `i2c_master_probe(0x14)`
+命中才选的 ILI9881C 分支，这个地址是实测无疑的（见上文「面板批次」）。
+
+### 坐标反变换（`touch_map.c`）
+
+触摸控制器按**面板原生 720×1280 竖向**出数，而 host 画的是 640×360 横向内容 ——
+两者必须落到同一可视坐标系，否则点哪儿指针跑到别处。方向三 flag
+（`swap_xy` / `mirror_x` / `mirror_y`）**全填 0，这不是待标定的占位值，是官方 BSP 的取值**
+（esp-bsp 的 `tp_cfg` 初始化列表与此逐项相同）。
+
+反变换与 `display_blit()` 在 `DISPLAY_ROT_CCW90 = 1` 下的正变换**互逆**：
+
+```
+正：GUD gy ↦ panel x ∈ [2·gy, 2·gy+2)
+    GUD gx ↦ panel y ∈ [1280−2·gx−2, 1280−2·gx)
+
+反：gud_x = (PANEL_H − 1 − panel_y) / GUD_SCALE     /* 0..639 */
+    gud_y =  panel_x                / GUD_SCALE     /* 0..359 */
+```
+
+边界自检：`gud(0,0)` ↔ `panel(0,1279)`、`gud(639,359)` ↔ `panel(718,0)`。
+
+再归一化成 HID 逻辑值 `[0, TOUCH_HID_LOGICAL_MAX]`（**32767**），让报告描述符与 GUD
+分辨率解耦 —— 换分辨率只改调用方传的 `gud_max`，描述符不动。取 32767 而非 65535 是因为
+**Logical Maximum 在 HID 里是有符号量**，超过 32767 就得用更宽的编码并小心正负。
+
+两处容易写错、且现象极难反推的地方，就地钉死在 `touch_map.c` 的注释里：
+
+- **必须先钳入参**：`panel_y` 超过 `PANEL_H-1` 时 `PANEL_H-1-panel_y` 是负数（整型提升后
+  有符号），除完再转 `uint16_t` 会绕成一个巨大值 —— 光钳结果救不回来；
+- **归一化的中间积显式用 `uint32_t`**：`639 × 32767 = 20,938,113` 早已超出 `uint16_t`
+  与 `int16_t`，不要依赖「int 至少 32 位」。
+
+#### 宿主机回归测试（32 用例）
+
+反变换被抽成零依赖纯函数（照 `kbd_translate.c` 的先例），`test/test_touch_map.c`
+**直接编译真实源码**而非复制体：
+
+```bash
+cd firmware/test
+cc -std=c11 -Wall -Wextra -I../main test_touch_map.c ../main/touch_map.c -o /tmp/t && /tmp/t
+# → OK (32 cases)
+```
+
+用例覆盖四角、正中、越界钳位、**与显示正变换的往返一致性**，以及
+`touch_report_fill()` 的两条不变量（`contact_count` 恒等于 `tip=1` 的 slot 数、
+非活跃 slot 整体清零）。「几个触点装进几个 slot、多出来的怎么办」这类错误在实机上
+只表现为「多指时坐标错位或干脆没反应」，从现象反推极难，放到宿主机上钉死几乎零成本。
+**改算式或报告布局后务必重跑。**
+
+### 报告描述符：四个不写清楚就会被静默坑掉的点
+
+TinyUSB 没有现成的 digitizer 描述符宏（只有 keyboard/mouse/consumer/gamepad），
+`AIO_HID_REPORT_DESC_TOUCH` 按 HID Usage Tables 的 Digitizers 页(0x0D)手写。
+负载 `sizeof(touch_report_t)` = **31 字节** = 5 × 6 字节 contact + 1 字节 Contact Count；
+单个 contact 是 `Tip Switch 1 bit + 7 bit 常量填充 + Contact Identifier 8 bit + 绝对 X/Y 各 16 bit`。
+
+1. **活跃触点必须紧挨着排在报告最前面、不留空洞**，不能按 `contact_id` 去占固定 slot。
+   Linux `hid-multitouch` 的默认 class 带 `MT_QUIRK_CONTACT_CNT_ACCURATE`：它**只看前
+   `contact_count` 个 slot**，其余直接不处理（靠 `input_mt_sync_frame` 释放）。中间留空洞的话，
+   **空洞后面的真实触点会被整个丢弃**。`touch_report_fill()` 因此负责压实，并把未使用的
+   slot 整体清零。
+2. **`TOUCH_CONTACTS_MAX`（= 5）三处共用同一个常量**：① 报告描述符（展开几份 contact
+   collection、Contact Count 的 Logical Maximum）；② `touch_report_t` 的 slot 数；
+   ③ `tud_hid_get_report_cb()` 里 Contact Count Maximum 那份 Feature 报告的应答值。
+   各写各的，host 解出来的触点数与报告实际长度对不上，**症状是坐标全乱**。
+   `usb_descriptors.c` 与 `touch_map.h` 各有一条 `_Static_assert` 把描述符展开次数与
+   结构体尺寸钉在一起，改数量时漏改会在编译期炸掉，而不是等到实机坐标乱跳。
+3. **Contact Identifier 的 Logical Maximum 255 必须用 2 字节编码**
+   （`HID_LOGICAL_MAX_N(255, 2)`）：HID 的 logical min/max 是**有符号**量，
+   单字节 `0xFF` 会被解析成 **−1**。
+4. **X/Y 用 Generic Desktop 页的 X/Y，不是 Digitizer 页** —— `hid-input` / `hid-multitouch`
+   只认这一组来生成 `ABS_MT_POSITION_X/Y`。⚠️ 用完必须 `HID_USAGE_PAGE(DIGITIZER)` **切回去**：
+   Usage Page 是 **Global** item，会一直生效到下次改写，不切回来的话下一份 contact 的
+   Usage(Finger)/Usage(Tip Switch) 与段尾的 Contact Count 全被解析成 Desktop 页里同号的
+   usage，**整份描述符报废**。
+
+此外 **Contact Count Maximum 是 `Feature` 报告、不是 Input**：`hid-multitouch` 在 probe 时会
+主动 `GET_REPORT(Feature, RID 2)` 读它来决定分配几个 MT slot，STALL 或返回空会让它退回默认值。
+应答实现在 `tud_hid_get_report_cb()` 里，就一个字节 —— 多点能不能真正生效就差它
+（⚠️ buffer 里**不要**再写 Report ID，TinyUSB 已经替我们写进第一字节并把指针后移了）。
+
+> 键盘(RID 1)与触摸在同一个 HID 接口上，因此**整个接口会归 `hid-multitouch` 管**。
+> 这不影响键盘：`mt_input_mapping()` 对 `application == GenericDesktop/Keyboard` 的字段
+> 直接返回 0，退回 `hid-input` 的默认处理 —— 实机上键盘依然是一个**独立的 input 设备**。
+
+### 上报策略
+
+- **`contact_id` 取触摸控制器给的 `track_id`**，不用数组下标：同一根手指按住期间 `track_id`
+  不变，host 靠它把帧与帧之间的触点连成轨迹（→ `ABS_MT_TRACKING_ID`）。若改用下标，
+  中间某根手指抬起时后面的手指会集体「换 id」，host 看成瞬移。
+- **状态没变就不发**：20ms 轮询下按住不放会每帧产生一条相同报告，白占与键盘共用的端点带宽。
+  坐标是状态量不是边沿，host 记住最后一条即可。比较直接对整个 packed 结构体 `memcmp`。
+- **端点忙时最多等 20ms**（写法与 `kbd_build_and_report()` 一致）。直接丢弃的话，
+  丢掉的若正好是 `contact_count = 0` 那条「全部抬起」，**host 就一直认为手指还按着**
+  —— 与键盘的卡键同源。
+- **只有真发出去了才记进 `last_rpt`**：否则「状态没变就不发」会把一次失败的发送**永久固化**
+  （手指已离开屏幕、不会再产生新状态）。发送失败保持 `last_rpt` 不动，下一轮自然重试。
+
+### Host 侧验证（`evtest`）
+
+复合设备会出**两个** input 设备，先按名字挑对：
+
+```bash
+lsusb | grep 16d0                     # 16d0:10a9
+sudo evtest                           # 不带参数：列出所有 event 设备及名字，按编号选
+```
+
+- `flange Tab5 USB Terminal **Keyboard**` —— 键盘那份（RID 1）；
+- `flange Tab5 USB Terminal` —— **触摸这份**（RID 2），名字里没有 `Keyboard`。
+
+也可以直接查驱动绑没绑对：
+
+```bash
+grep -B2 -A4 "Tab5" /proc/bus/input/devices          # 看 Name / Handlers=eventN
+ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multitouch
+```
+
+**实机验证结论**（在 `khadas-vim3l`（arm64）上用 `evtest`）：
+
+- 设备枚举为 `bus 0x3 vendor 0x16d0 product 0x10a9`，名为 `flange Tab5 USB Terminal`；
+- **`hid-multitouch` 正常绑定**，且**键盘仍是独立的 input 设备**
+  （`flange Tab5 USB Terminal Keyboard`）—— 共用一个 HID 接口不冲突；
+- 能力表含 `ABS_MT_SLOT`（**Max 4**）、`ABS_MT_POSITION_X` / `ABS_MT_POSITION_Y`
+  （均 **Max 32767**），属性含 `INPUT_PROP_DIRECT`（直接式触摸屏，不是触摸板）；
+- `ABS_MT_SLOT` 的 **Max 4**（= `TOUCH_CONTACTS_MAX` − 1 = 5 − 1）恰好证明
+  **Contact Count Maximum 那份 Feature 报告被内核读到了** —— 没读到的话这里会是
+  `hid-multitouch` 的默认值 10；
+- **实测三指同时接触**，分别落在 slot 0 / 1 / 2，各有独立且稳定的 `ABS_MT_TRACKING_ID`，
+  坐标各自独立更新。
+
+> ⚠️ **不要把这写成「5 点全部验证通过」**：实测只观察到 3 指同时接触，**4 / 5 指未验证**。
+> 描述符与报告结构声明的是 5 点，且 GT911 本身按 `CONFIG_ESP_LCD_TOUCH_MAX_POINTS = 5` 上报。
+
+### 待验项：四角坐标标定
+
+**尚未验证**。已知情况：某次抓取里所有触点的 Y 都落在满量程的 **78%–99%**（对应横屏画面
+最下方约 20% 的一条带），这**既可能**是当时手指本来就点在那一带、**也可能**是 Y 轴映射有问题
+—— **日志无法区分这两种解释**，所以不能据此下任何结论。
+
+验证方法：依次点屏幕**横持视角**的四个角，确认 X 与 Y **各自都能跑到接近 0 与接近 32767**
+（`evtest` 里看 `ABS_MT_POSITION_X` / `ABS_MT_POSITION_Y` 的取值范围）。四角都能到量程两端，
+才算标定通过；某一轴始终挤在一小段区间里，才是真的映射错了。
+
 ## 文件
 
 | 文件 | 职责 |
 |------|------|
 | `main/app_main.c` | 编排：board_power → display → gud → TinyUSB 安装 |
-| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘） |
+| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2） |
 | `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8） |
 | `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧（脏矩形累积 / LZ4 解压）→ `display_blit()` |
 | `main/lz4.{c,h}` | 官方 LZ4 v1.9.4 参考实现（BSD-2-Clause），仅用 `LZ4_decompress_safe` |
@@ -567,6 +777,9 @@ sudo evtest /dev/input/eventN
 | `main/kbd_translate.{c,h}` | 按下集合 → HID modifier/keycode 分层翻译，零依赖纯函数（宿主机可测） |
 | `main/tab5_kbd_map.h` | 行列 → HID usage 映射表（vendor 自 M5 官方固件，MIT） |
 | `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
+| `main/touch_hid.{c,h}` | GT911 初始化（INT 拉低 + 备用地址 `0x14`）+ 20ms 轮询 + digitizer 上报（RID 2） |
+| `main/touch_map.{c,h}` | 面板坐标 → GUD 坐标反变换 + HID 归一化 + 报告装填，零依赖纯函数（宿主机可测） |
+| `test/test_touch_map.c` | 触摸坐标变换与报告装填的宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/tab5_pins.h` | 板级 GPIO / 面板与 GUD 尺寸常量（含放大倍数的静态断言） |
 | `sdkconfig.defaults` | 目标/PSRAM/分区/控制台/vendor 类、芯片版本互斥的说明，以及末尾默认注释掉的 CDC 调试串口开关 |
 | `partitions.csv` | factory 分区 4 MB |

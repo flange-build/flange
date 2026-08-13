@@ -95,19 +95,19 @@ firmware/test/
 
 **Files:** Modify `tab5_pins.h`、`main/idf_component.yml`、`CMakeLists.txt`、`app_main.c`；Create `touch_hid.{c,h}`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 UART 日志见 `touch: gt911 ready (addr=0x14)`；手指点屏幕**四个角与正中**，各打印一组
 `touch: raw x=.. y=.. n=..`，坐标随手指移动连续变化。GUD 显示与键盘均不回归。
 
-- [ ] **Step 2：`idf_component.yml` 加组件**
+- [x] **Step 2：`idf_component.yml` 加组件**
 
 ```yaml
   # GT911 触摸（Tab5 是备用地址 0x14，不是默认的 0x5D）
   espressif/esp_lcd_touch_gt911: "1.2.1"
 ```
 
-- [ ] **Step 3：`tab5_pins.h` 加常量**
+- [x] **Step 3：`tab5_pins.h` 加常量**
 
 ```c
 #define PIN_TOUCH_INT      23
@@ -117,19 +117,24 @@ UART 日志见 `touch: gt911 ready (addr=0x14)`；手指点屏幕**四个角与�
 （`GT911_I2C_ADDR 0x14` 已存在、用于面板批次探测，不要重复定义 —— 复用它即可，
 本条视实际代码决定是否需要。）
 
-- [ ] **Step 4：`touch_hid.c` 初始化**
+- [x] **Step 4：`touch_hid.c` 初始化**
 
 要点：
 - 用 `board_i2c_bus()` 拿内部总线，`esp_lcd_new_panel_io_i2c()` 建 IO（config 从
   `ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG()` 起手，**把 `dev_addr` 改成 `ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP`**）
 - `esp_lcd_touch_config_t`：`x_max = PANEL_W`、`y_max = PANEL_H`、`int_gpio_num = PIN_TOUCH_INT`、
   `rst_gpio_num = -1`（Tab5 触摸无独立 reset）、三个 flag **本任务全填 0**（标定在 Task 2）
+
+> ⚠️ **本步这一条最终被推翻**：`int_gpio_num` 必须填 `GPIO_NUM_NC`，且要先把 G23 配成输出
+> 并驱动为低 —— 板上到 3V3 的上拉会压住 GT911 不出坐标，**现象是完全静默**。
+> 照本步原样写会一个坐标都读不到，坑了整整一轮排查（fix 见 commit `2b0d1ac0`，
+> 根因详见 `firmware/README.md` 的「HID 多点触摸」）。
 - `esp_lcd_touch_new_i2c_gt911()`
 - 起一个任务：`esp_lcd_touch_read_data()` → `esp_lcd_touch_get_coordinates()` → 打印原始 x/y/点数
 
 轮询即可（20ms），中断驱动留到后面按需 —— 触摸不像键盘那样怕丢事件。
 
-- [ ] **Step 5：编译 + 上板验证 + 提交**
+- [x] **Step 5：编译 + 上板验证 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): GT911 触摸 bring-up，打印原始坐标 (P2 Task1)"
@@ -148,7 +153,17 @@ git commit -m "feat(tab5-fw): GT911 触摸 bring-up，打印原始坐标 (P2 Tas
 点屏幕**横持视角**的四角，日志里的 `gud x/y` 应分别接近 `(0,0)` / `(639,0)` / `(0,359)` / `(639,359)`；
 点正中接近 `(320,180)`。宿主机回归测试全过。
 
-- [ ] **Step 2：先标定 GT911 的朝向（人工，出数据）**
+> ⚠️ **只完成了一半，故不勾。** 宿主机回归测试全过（`test_touch_map.c`，32 用例）；
+> 但**四角标定至今未验证** —— 某次抓取里所有触点的 Y 都落在满量程的 78%–99%，
+> 既可能是手指位置所致、也可能是 Y 轴映射问题，日志无法区分。
+> 补验方法（改在 host 侧做更直接）：`evtest` 里依次点四角，确认
+> `ABS_MT_POSITION_X` 与 `ABS_MT_POSITION_Y` 都能各自跑到接近 0 与接近 32767。
+> 记录在 spec §5.2 的「待验项」。
+
+- [x] **Step 2：先标定 GT911 的朝向（人工，出数据）**
+
+> 实际**未做人工标定**：官方 esp-bsp 的 `tp_cfg` 已给出取值（三个 flag 全 false、
+> GT911 按面板原生 720×1280 竖向出数），据此直接定案，见 commit `9a4b54d6`。
 
 用 Task 1 的原始坐标日志，记录**横持视角**下四个角各自的原始 (x, y)。据此判断：
 
@@ -160,7 +175,7 @@ git commit -m "feat(tab5-fw): GT911 触摸 bring-up，打印原始坐标 (P2 Tas
 
 **把标定结果写进代码注释**，像 `DISPLAY_ROT_CCW90` 那样写明「已实机标定」。
 
-- [ ] **Step 3：抽出纯函数 `touch_map.c`**
+- [x] **Step 3：抽出纯函数 `touch_map.c`**
 
 零 ESP-IDF 依赖，便于宿主机测试：
 
@@ -178,7 +193,7 @@ void touch_map_panel_to_gud(uint16_t panel_x, uint16_t panel_y,
 ```
 并对结果做**上限钳位**（`gud_x ≤ GUD_W-1`、`gud_y ≤ GUD_H-1`）—— 触摸可能报出略超面板范围的值。
 
-- [ ] **Step 4：写 `test/test_touch_map.c`**
+- [x] **Step 4：写 `test/test_touch_map.c`**
 
 照 `test_kbd_translate.c` 的形式：`main()` + assert，无框架，不挂 IDF 构建。
 用例至少覆盖：四角、正中、越界钳位、以及**与显示正变换的往返一致性**
@@ -189,7 +204,7 @@ cd firmware/test
 cc -std=c11 -Wall -Wextra -I../main test_touch_map.c ../main/touch_map.c -o /tmp/t && /tmp/t
 ```
 
-- [ ] **Step 5：编译 + 上板验证 + 提交**
+- [x] **Step 5：编译 + 上板验证 + 提交**
 
 ---
 
@@ -199,7 +214,7 @@ cc -std=c11 -Wall -Wextra -I../main test_touch_map.c ../main/touch_map.c -o /tmp
 
 **Files:** Modify `usb_descriptors.{c,h}`、`touch_hid.c`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 cat /proc/bus/input/devices          # 见新增的 touch 设备
@@ -207,7 +222,7 @@ sudo evtest /dev/input/eventN        # 点屏幕见 ABS_X / ABS_Y / BTN_TOUCH
 ```
 且**键盘与 GUD 显示均不回归**。
 
-- [ ] **Step 2：拍板接口协议字段**
+- [x] **Step 2：拍板接口协议字段**
 
 现有 `TUD_HID_DESCRIPTOR(..., HID_ITF_PROTOCOL_KEYBOARD, ...)` 会把 `bInterfaceSubClass` 设成 BOOT，
 宣称支持 boot keyboard —— 而 boot 协议**不允许 Report ID**，加了 digitizer 后这个声明更不自洽。
@@ -219,7 +234,7 @@ sudo evtest /dev/input/eventN        # 点屏幕见 ABS_X / ABS_Y / BTN_TOUCH
 
 **改完必须重新验证键盘仍工作**（这是本任务唯一可能碰坏已验证功能的地方）。
 
-- [ ] **Step 3：报告描述符追加 RID 2**
+- [x] **Step 3：报告描述符追加 RID 2**
 
 TinyUSB 没有现成的 digitizer 宏，手写。单点最小可用形态：
 
@@ -244,12 +259,12 @@ End Collection
 ⚠️ 加了这段之后 `aio_hid_report_desc` 变长，**`_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN)` 仍必须成立** ——
 `TUD_HID_DESCRIPTOR` 里的报告描述符长度是 `sizeof(aio_hid_report_desc)`，会自动跟着变，但务必确认没炸。
 
-- [ ] **Step 4：上报时同样要处理端点忙**
+- [x] **Step 4：上报时同样要处理端点忙**
 
 键盘那边踩过的坑：`tud_hid_ready()` 为假时直接丢弃，会丢掉「抬起」报告 → host 认为手指还按着。
 触摸的上报路径**照搬键盘的等待 + 失败告警写法**，不要重新发明。
 
-- [ ] **Step 5：编译 + 上板验证 + 提交**
+- [x] **Step 5：编译 + 上板验证 + 提交**
 
 ---
 
@@ -259,22 +274,22 @@ End Collection
 
 **Files:** Modify `usb_descriptors.c`、`touch_hid.c`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 `evtest` 见 `ABS_MT_SLOT` / `ABS_MT_TRACKING_ID` / `ABS_MT_POSITION_X/Y`；两指同时点有两个 slot。
 
-- [ ] **Step 2：描述符加多点必需字段**
+- [x] **Step 2：描述符加多点必需字段**
 
 在单点基础上，每个 contact 的 Logical Collection 里加 **Contact Identifier**，
 collection 外加 **Contact Count**，并提供 **Contact Count Maximum 的 Feature 报告**
 （`hid-multitouch` 靠它判定最大触点数）。Feature 报告要在 `tud_hid_get_report_cb()` 里应答 ——
 该回调目前是返回 0 的空实现，**这里要真正实现它**。
 
-- [ ] **Step 3：`touch_hid.c` 上报多点**
+- [x] **Step 3：`touch_hid.c` 上报多点**
 
 `esp_lcd_touch_get_coordinates()` 本来就返回多点，逐点变换后填进报告。
 
-- [ ] **Step 4：编译 + 上板验证 + 提交**
+- [x] **Step 4：编译 + 上板验证 + 提交**
 
 > 若 Task 4 在实机上迟迟不通，**单点（Task 3）已经可用**，可以先停在那里 —— 对「USB 瘦终端」
 > 这个用途，单点绝对定位已经覆盖绝大部分场景。不要为了多点把已经能用的单点搞坏。
@@ -283,11 +298,11 @@ collection 外加 **Contact Count**，并提供 **Contact Count Maximum 的 Feat
 
 ## Task 5：文档与收尾
 
-- [ ] `firmware/README.md` 加触摸章节：GT911 备用地址 `0x14` 的坑、坐标反变换推导与标定结果、
+- [x] `firmware/README.md` 加触摸章节：GT911 备用地址 `0x14` 的坑、坐标反变换推导与标定结果、
       Report ID 布局、接口协议改 NONE 的理由与代价、宿主机回归测试跑法。
-- [ ] 包级 `README.md` 状态清单：HID 触摸屏移到 ✅（如实机通过）。
-- [ ] spec §5 回填实测结论（GT911 实际朝向、三个 flag 的标定值）。
-- [ ] 提交。
+- [x] 包级 `README.md` 状态清单：HID 触摸屏移到 ✅（如实机通过）。
+- [x] spec §5 回填实测结论（GT911 实际朝向、三个 flag 的标定值）。
+- [x] 提交。
 
 ---
 

@@ -11,7 +11,7 @@
 
 | 侧 | 内容 | 构建 |
 |----|------|------|
-| **Tab5 固件** | `firmware/`（ESP-IDF + TinyUSB）—— GUD 显示 / 后续 UAC、HID、UVC | **容器外** `idf.py`（见 `firmware/README.md`）|
+| **Tab5 固件** | `firmware/`（ESP-IDF + TinyUSB）—— GUD 显示 / HID 键盘 + 多点触摸 / 后续 UAC、UVC | **容器外** `idf.py`（见 `firmware/README.md`）|
 | **Linux 组件** | 内核 config fragment（`CONFIG_DRM_GUD` / `HID_MULTITOUCH` / `SND_USB_AUDIO` / `USB_VIDEO_CLASS`）+ 验收工具/文档 | `flange build` |
 
 Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers/gpu/drm/gud`）、
@@ -38,8 +38,17 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 - ✅ **HID 键盘**（Tab5 Keyboard，I2C `0x6D`，独立总线 G0/G1，INT G50）—— 实机验证通过，
   键盘输入正常。用键盘固件的 Normal 模式自建 6KRO 状态机，不用其自带的 HID 模式
   （修饰键不进队列、一次只能表达一个键），详见 `firmware/README.md`。
-- ⏳ 规划中：HID 触摸屏（GT911，与键盘共用一个 HID 接口，用 Report ID 区分）；
-  UAC1 全双工音频（ES8388 + ES7210）；UVC 摄像头（SC202CS，风险最高、允许砍）；
+- ✅ **HID 多点触摸**（GT911，`0x14`，与键盘共用一个 HID 接口、用 Report ID 区分：
+  RID 1 键盘 / RID 2 digitizer，不新增端点）—— 实机验证通过：host 侧 `hid-multitouch`
+  正常绑定，键盘仍是独立的 input 设备；`ABS_MT_SLOT Max 4`（= `TOUCH_CONTACTS_MAX` − 1）
+  证明 Contact Count Maximum 的 Feature 报告被内核读到；**多点触摸已验证（实测 3 指同时）**，
+  4/5 指未验证。最大的坑是 **TP_INT(G23) 上到 3V3 的上拉电阻会压住 GT911 不出坐标**
+  （现象是完全静默），必须把该脚驱动为低**且**给驱动传 `int_gpio_num = GPIO_NUM_NC`，
+  详见 `firmware/README.md`。
+- ⏳ **触摸的四角坐标标定待验**：需依次点四角、确认 X 与 Y 都能各自跑到接近 0 与
+  接近 32767。已知某次抓取里所有触点的 Y 都落在满量程的 78%–99%，既可能是手指位置所致、
+  也可能是 Y 轴映射问题，日志无法区分。
+- ⏳ 规划中：UAC1 全双工音频（ES8388 + ES7210）；UVC 摄像头（SC202CS，风险最高、允许砍）；
   主机侧全局内核 config（`flange_common.config` + builder 注入，对所有 board 生效）。
 
 > USB-C 只有 **12 Mbps 全速**（480 Mbps 的高速口被接到了 USB-A 母座）。带宽是零和的：
@@ -50,5 +59,7 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 ## 文档
 
 - 设计/可行性：`docs/superpowers/specs/2026-08-11-tab5-all-in-one-design.md`
-- 实施计划：`docs/superpowers/plans/2026-08-11-tab5-all-in-one-p0-gud-display.md`（GUD 显示）
+- 实施计划：`docs/superpowers/plans/2026-08-11-tab5-all-in-one-p0-gud-display.md`（GUD 显示）、
+  `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p1-hid-keyboard.md`（HID 键盘）、
+  `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p2-hid-touch.md`（HID 触摸）
 - 固件细节与构建/烧录/验证：`firmware/README.md`

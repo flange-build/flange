@@ -223,9 +223,47 @@ HID 模式（寄存器 0x30）有两个硬伤：
 - 以 **HID digitizer（绝对坐标，最多 5 点）** 上报，host 侧由 mainline `hid-multitouch` 处理。
 - **坐标要做与显示相同的 90° 变换**：触摸控制器按面板原生 720×1280 竖向坐标出数，
   而 host 的显示内容是横向的 —— 二者必须落到同一可视坐标系，否则触摸与画面错位。
-  变换方向（顺时针/逆时针）与是否需要镜像，在阶段 3 用实机标定。
-- 与键盘共用 IF4 的同一个中断 IN 端点，靠 Report ID 区分（RID 1 键盘 / RID 2 digitizer），
-  省下一条 IN 端点（见 §2 端点预算）。
+- 与键盘共用同一个中断 IN 端点，靠 Report ID 区分（RID 1 键盘 / RID 2 digitizer），
+  省下一条 IN 端点（见 §2 端点预算）。接口号在 §2 的**最终**布局里是 IF4；
+  UAC/UVC 尚未落地，当前实现里 HID 就是 **IF1**（`ITF_NUM_HID`，端点 `0x82`）。
+
+### 5.1 实施订正（P2）
+
+原文写「变换方向与是否需要镜像，在阶段 3 用实机标定」—— **实际不需要标定**：
+官方 esp-bsp `bsp/m5stack_tab5/src/bsp_display.c` 的 `tp_cfg` 已给出取值
+（`x_max/y_max = 720/1280`、`swap_xy / mirror_x / mirror_y` 三个 flag 全 false），
+即 GT911 就按面板原生 720×1280 竖向出数，直接套 §3.2 显示正变换的反解即可。
+这条订正在实施中已确认（commit `9a4b54d6`）。
+
+原文没有提到、但**实际是本阶段最大障碍**的一点：**INT(G23) 不是用来接中断的，
+而是必须被 ESP 侧主动驱动为低**。Tab5 v1 硬件在该脚上有一颗到 3V3 的上拉电阻，
+会压住 GT911 不置位 buffer-ready，表现为**完全静默**（I2C 通、初始化成功、
+一个坐标都读不到）。修法是「G23 配成输出并拉低」+「`tp_cfg.int_gpio_num` 填
+`GPIO_NUM_NC`」两句缺一不可 —— 只做前者会被 GT911 驱动重新 `gpio_config()` 成 INPUT
+而失效。代价是放弃中断驱动，改为 20ms 轮询（触摸是状态量、不怕丢边沿，无影响）。
+根因与 Plan B 详见 `firmware/README.md` 的「HID 多点触摸」章节。
+
+### 5.2 实机验证结论（P2 Task 5）
+
+在 `khadas-vim3l`（arm64）上用 `evtest` 验证：
+
+- 设备枚举为 `bus 0x3 vendor 0x16d0 product 0x10a9`，名为 `flange Tab5 USB Terminal`；
+- **`hid-multitouch` 正常绑定**，且**键盘仍是独立的 input 设备**
+  （`flange Tab5 USB Terminal Keyboard`）—— 二者共用一个 HID 接口不冲突，
+  §2 靠 Report ID 省一条 IN 端点的设计成立；
+- 能力表含 `ABS_MT_SLOT`（Max 4）、`ABS_MT_POSITION_X/Y`（均 Max 32767）、
+  属性 `INPUT_PROP_DIRECT`；
+- `ABS_MT_SLOT` 的 Max 4（= `TOUCH_CONTACTS_MAX` − 1）证明 **Contact Count Maximum
+  那份 Feature 报告被内核读到了**，而不是退回 `hid-multitouch` 的默认值 10；
+- **多点触摸已验证：实测三指同时接触**，分别落在 slot 0/1/2，各有独立且稳定的
+  `ABS_MT_TRACKING_ID`，坐标各自独立更新。⚠️ **4/5 指未验证**。
+
+**待验项 —— 四角坐标标定**：尚未验证。某次抓取里所有触点的 Y 都落在满量程的 78%–99%
+（横屏画面最下方约 20%），既可能是手指位置所致、也可能是 Y 轴映射问题，**日志无法区分**。
+验证方法：依次点四角，确认 X 与 Y 都能各自跑到接近 0 与接近 32767。
+
+坐标算式本身有宿主机纯函数回归测试（`firmware/test/test_touch_map.c`，32 用例，
+含与显示正变换的往返一致性）。
 
 ---
 
