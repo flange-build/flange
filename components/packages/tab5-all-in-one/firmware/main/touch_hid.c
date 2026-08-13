@@ -96,7 +96,16 @@ esp_err_t touch_start(void)
             .reset = 0,
             .interrupt = 0,
         },
-        /* 三个方向 flag 全 0：先按 GT911 原始出数打日志，方向标定在下一步做。 */
+        /*
+         * 三个方向 flag 全 0 —— **不是待标定的占位值，是官方 BSP 的取值**。
+         * esp-bsp `bsp/m5stack_tab5/src/bsp_display.c` 的 tp_cfg 逐项相同：
+         * x_max/y_max = 720/1280、rst = NC、levels.interrupt = 0、三个 flag 全 false。
+         * 即 GT911 就是按面板原生 720×1280 竖向出数，touch_map.c 的反变换直接可用。
+         *
+         * 官方在使能触摸电源后等 500ms 再探测，我们 board_power_init() 只等 50ms；
+         * 但本函数排在 display_init()(195 条面板 init 命令) 与 kbd_start() 之后，
+         * 距 TOUCH_EN 拉高早已远超 500ms，这个差异在本调用顺序下不成立。
+         */
         .flags = {
             .swap_xy = 0,
             .mirror_x = 0,
