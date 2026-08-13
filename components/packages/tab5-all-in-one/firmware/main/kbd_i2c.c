@@ -22,6 +22,10 @@ static const char *TAG = "kbd";
 /* 寄存器地址取自官方固件 user_i2c_reg.h。注意 0xFE/0xFF 是绝对地址——
  * 协议图最后一行标的 0xF0 是块基址，Version/Address 在该行 E/F 列。
  * 0xFD 是固件升级入口，误写会变砖，本文件永不触碰。 */
+/* INTR_CONFIG / INTR_STATUS 当前不用，但**有意保留**：键盘上电默认
+ * INT_CFG = 0x07（三种模式的中断全开）已满足需求，而排空 EVENT_NUM 队列
+ * 本身就会让从机释放 INT，故既不需要显式配置也不需要显式清中断。
+ * 留着是因为它们是这张寄存器表的一部分，删了下次要用还得重查手册。 */
 #define REG_INTR_CONFIG    0x00
 #define REG_INTR_STATUS    0x01
 #define REG_EVENT_NUM      0x02
@@ -79,13 +83,28 @@ static esp_err_t kbd_write_reg(uint8_t reg, uint8_t val)
  *     Sym 不是 Shift，而是切到第二层。当 Shift 上报会让符号全错。
  *   - Ctrl(4,0) / Alt(4,1)：查表得到的 usage 落在 0xE0~0xE7（HID 修饰键区间），
  *     由下面的通用规则自动归入 modifier 字节，不占 keycode 槽。
- *   - 字母键：Aa 生效 → 用 second 层（大写）。
+ *   - 字母键：Aa 生效**且未按住 Ctrl/Alt** → 用 second 层（大写）。
  *   - 其余键：Sym 按住且 key_modifier_flag 置位 → 用 second 层。
  */
 static void kbd_build_and_report(void)
 {
-    bool sym = s_pressed[3][0];
-    bool aa  = s_pressed[3][1];
+    bool sym  = s_pressed[3][0];
+    bool ctrl = s_pressed[4][0];
+    bool alt  = s_pressed[4][1];
+
+    /*
+     * Aa 的大写层必须被 Ctrl/Alt 排除（官方 convert_to_hid() 的
+     * `aa_flag && ctrl_state == false && alt_state == false` 同义）。
+     *
+     * 为什么：按住 Aa 时再按 Ctrl+C，若不排除，'c' 会走第二层带上
+     * KEY_MOD_LSHIFT，最终发出的是 **Ctrl+Shift+C** —— 终端里那通常是
+     * 「复制」，而 Ctrl+C 是 SIGINT，**两个完全不同的绑定**。用户只会看到
+     * 「按 Ctrl+C 中断不了程序」，极难联想到是键盘分层逻辑的问题。
+     *
+     * 状态取自 s_pressed 而非累加中的 modifier —— 后者此刻还没算完。
+     * 这个条件不是冗余的，别顺手删。
+     */
+    bool aa = s_pressed[3][1] && !ctrl && !alt;
 
     uint8_t modifier = 0;
     uint8_t keys[6] = {0};
@@ -123,6 +142,10 @@ static void kbd_build_and_report(void)
             } else if (code != KEY_NONE && nk < 6) {
                 keys[nk++] = code;
             }
+            /* 超过 6 个非修饰键时静默丢弃，**这是有意选择**，不是疏漏。
+             * 标准 HID 的做法是全槽填 KEY_ERR_OVF(0x01)，但那是给真·全键盘用的；
+             * 这块 70 键小键盘上同时按 7 个键属于误触而非有意输入，丢弃比让 host
+             * 收到一串 ErrorRollOver 更无害。 */
         }
     }
 
