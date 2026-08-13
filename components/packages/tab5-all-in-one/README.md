@@ -19,18 +19,22 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 
 ## 状态
 
-- ✅ **工程骨架 + USB 设备栈在全速端口上起来了** —— 实机烧录后固件正常启动，
-  UART 日志见 `TinyUSB Driver installed on port 0`；同时 esptool 报
-  `USB mode: USB-Serial/JTAG`，佐证 USB-C 确实挂在全速 PHY 上。
-  （关键点：USB-C 接的是全速 PHY，必须 `TINYUSB_CONFIG_FULL_SPEED`。）
-  ⏳ **host 侧尚未观察** —— `lsusb` 是否见 `16d0:10a9`、`gud` 是否出 `/dev/dri/cardN`，
-  都还没跑过，待验证。
+- ✅ **USB-C 枚举为 `16d0:10a9`，host `gud` 绑定成功** —— 实机验证通过。
+  两个必要条件缺一不可：`TINYUSB_CONFIG_FULL_SPEED`（选对端口），
+  以及 `usb_wrap_ll_phy_select(&USB_WRAP, 0)`（把内部 FSLS PHY 0 从
+  USB-Serial/JTAG 划给 OTG1.1）。**只做前者的话主机只看得到 `303a:1001` 的 CDC ACM**，
+  详见 `firmware/README.md`。
+- ✅ **GUD 出图** —— Linux console 已实机显示在 Tab5 屏上，
+  即 USB 枚举 → `drm/gud` 绑定 → `/dev/dri/cardN` → 收帧 → PPA 缩放旋转 → 面板
+  整条链路打通。
 - ✅ **MIPI-DSI 面板点亮** —— 720×1280 竖屏，2 lane @ 1000 Mbps，两种面板批次运行时 I2C 探测。
   实机验证通过（开发用机为 ILI9881C 批次；ST7123 路径只编译未上板）。
 - ✅ **PPA 缩放 + 旋转** —— 一次 SRM 操作完成 2× 放大 + 90° 旋转，640×360 铺满面板。
   实机验证通过，旋转方向已标定（`DISPLAY_ROT_CCW90 = 1`）。
-- ⏳ **GUD 出图的实机验证**（`modetest -M gud -s <id>:640x360` 上图）。
-- ⏳ **脏矩形 + LZ4 的实机验证**，以及帧率实测。
+- ⏳ **脏矩形 + LZ4 的定量验证**：Linux console 的文本渲染已经在走脏矩形路径且显示正常，
+  但尚未对着 UART 日志确认 `LZ4 解压失败` / `ppa srm 失败` 均为 0 条，也未跑
+  GStreamer 全屏动态内容压测。
+- ⏳ **帧率实测**（两个场景：`videotestsrc` 全屏动态内容测下限、文本终端测实际体感）。
 - ⏳ 规划中：HID 键盘（Tab5 Keyboard，I2C `0x6D`，独立总线 G0/G1，INT G50）；
   HID 触摸屏（GT911，与键盘共用一个 HID 接口，用 Report ID 区分）；
   UAC1 全双工音频（ES8388 + ES7210）；UVC 摄像头（SC202CS，风险最高、允许砍）；
