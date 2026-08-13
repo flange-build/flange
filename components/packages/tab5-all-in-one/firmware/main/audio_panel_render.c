@@ -26,19 +26,31 @@
 _Static_assert(AUDIO_PANEL_Y >= STANDBY_DOTS_Y + STANDBY_DOTS_H,
                "面板必须在待机动画的等待点下方：两者都在周期性重画，重叠会互相覆盖");
 _Static_assert(AUDIO_PANEL_X + AUDIO_PANEL_STATUS_W <= GUD_W, "状态区右边缘出画");
-_Static_assert(AUDIO_PANEL_METER_Y + AUDIO_PANEL_METER_H <= GUD_H, "电平条下边缘出画");
-_Static_assert(AUDIO_PANEL_STATUS_H == AUDIO_PANEL_STATUS_LINES * FONT8X16_H,
-               "状态区高度必须正好装下整数行");
 _Static_assert(AUDIO_PANEL_METER_X + AUDIO_PANEL_METER_W <= GUD_W, "电平条右边缘出画");
-_Static_assert(AUDIO_PANEL_Y + AUDIO_PANEL_STATUS_H <= AUDIO_PANEL_METER_Y,
-               "状态区与电平条不能重叠：两者分别 blit，重叠等于互相覆盖");
+_Static_assert(AUDIO_PANEL_METER_Y + AUDIO_PANEL_METER_H <= GUD_H, "电平条下边缘出画");
+_Static_assert(AUDIO_PANEL_STATUS_H
+                   == AUDIO_PANEL_STATUS_LINES * FONT8X16_H + AUDIO_PANEL_STATUS_PAD,
+               "状态区高度 = 整数行 + 底衬");
+
+/* ── 覆盖完整性：面板落笔处不许留下任何待机画面的残片 ──────────────
+ * 这三条比"不出画"更要紧：出画会被钳位（看得见），而漏盖只是屏上多一截线，
+ * 极易被当成显示故障。测试里另有一条同义用例（防有人把断言删了）。 */
+_Static_assert(AUDIO_PANEL_METER_Y == AUDIO_PANEL_Y + AUDIO_PANEL_STATUS_H,
+               "状态区与电平条必须紧邻无缝：分别 blit，留缝就会漏出缝里的待机像素");
+_Static_assert(AUDIO_PANEL_STATUS_W == AUDIO_PANEL_METER_W,
+               "两块必须同宽，否则窄的那块两侧会漏出待机脚注");
+_Static_assert(AUDIO_PANEL_METER_Y + AUDIO_PANEL_METER_H == GUD_H,
+               "面板必须一直盖到画布下边缘：待机脚注2 在 y 330..346，留白就会漏出来");
 
 /* ---------------- 电平条一行的内部版式 ----------------
  *
- *  x=0        16                          156   164        204
- *  ┌──┬────────────────────────────────┬────┬──────────┐
- *  │L │██████████████                  │    │    1234  │   y+3..y+13 是条
- *  └──┴────────────────────────────────┴────┴──────────┘
+ *  x=0  16                    156  164   204                        512
+ *  ┌──┬──────────────────────┬───┬─────┬───────────────────────────┐
+ *  │L │████████████          │   │24576│                           │
+ *  └──┴──────────────────────┴───┴─────┴───────────────────────────┘
+ *      条 y+3..y+13                     ↑ 右侧留白是**故意**的：电平条区域宽度
+ *                                         由"要盖住待机脚注"决定（见头文件），
+ *                                         不是由内容决定，多出来的部分画背景色。
  */
 #define METER_ROW_H     16
 #define METER_LABEL_X   0

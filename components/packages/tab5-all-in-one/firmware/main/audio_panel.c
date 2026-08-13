@@ -24,8 +24,8 @@ static const char *TAG = "apanel";
  * 顺带搬运状态区那 48 KB。
  * 一次分配、不释放：bring-up 工具的生命周期就是整个开机。
  */
-static uint16_t *s_status_px;   /* 512×48×2 = 49,152 B */
-static uint16_t *s_meter_px;    /*  256×32×2 = 16,384 B */
+static uint16_t *s_status_px;   /* 512×52×2 = 53,248 B */
+static uint16_t *s_meter_px;    /* 512×32×2 = 32,768 B */
 
 static char s_lines[AUDIO_PANEL_STATUS_LINES][AUDIO_PANEL_COLS + 1];
 

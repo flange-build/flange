@@ -15,6 +15,10 @@
 #include "tinyusb_cdc_acm.h"
 #include "tinyusb_console.h"
 #endif
+#if CONFIG_TAB5_AUDIO_PANEL
+#include "audio_panel.h"
+#include "audio_panel_render.h"   /* 自检要用 AUDIO_PANEL_PEAK_FULL */
+#endif
 
 static const char *TAG = "tab5_aio";
 
@@ -42,6 +46,60 @@ static void route_fsls_phy0_to_otg(void)
     usb_wrap_ll_phy_select(&USB_WRAP, 0);
     ESP_LOGI(TAG, "内部 FSLS PHY 0 已划给 OTG1.1（USB-C 从 USB-Serial/JTAG 收回）");
 }
+
+#if CONFIG_TAB5_AUDIO_PANEL
+/*
+ * 面板自检：**先确认这把尺子本身是准的**，再拿它去量 codec/I2S。
+ *
+ * 面板是 bring-up 期唯一看得见的输出（这块板现场没有串口），所以它自己出错时
+ * 没有任何别的观测手段 —— "屏上什么都没有"既可能是 codec 没起来，也可能是面板
+ * 没起来，两者混淆会把后面几个任务带进沟里。本段用一串**已知**的假数据，让这
+ * 三件事各自可以一眼判定：
+ *
+ *   ① 三行文字都可读        —— 三行分别写着 1/3、2/3、3/3，缺哪行一眼看得出；
+ *   ② 电平条随数据变化且比例正确 —— L 从 0 线性扫到满格、R = 满格 − L，
+ *      两条永远反向且长度之和恒为满格，比例错了立刻看得出来；
+ *   ③ 峰值 0 = 空条          —— 扫描两端各让一路恰好归零，收尾再停在
+ *      "L 半格 / R 空条"的静止画面上，"静音"与"面板挂了"从此不会混淆。
+ *
+ * 调用点放在 app_main 末尾：此刻 GUD / TinyUSB / 键盘 / 触摸都已启动完毕，
+ * 这段十几秒的循环阻塞的只是 main 任务自己（它接下来本来也只是空转），
+ * 不会拖住任何一条已验证的链路。Task 1 起面板改由真实探测结果与麦克风峰值
+ * 驱动，本段随之删除。
+ */
+#define SELFTEST_STEPS   20
+#define SELFTEST_SWEEPS  2
+#define SELFTEST_STEP_MS 250   /* > 面板内部的 5 Hz 节流周期，每一步都画得出来 */
+
+static void audio_panel_selftest(void)
+{
+    if (audio_panel_init() != ESP_OK) {
+        ESP_LOGW(TAG, "屏上状态面板初始化失败，自检跳过");
+        return;
+    }
+
+    audio_panel_status(0, "1/3 PANEL SELFTEST  no serial console on this board");
+    audio_panel_status(1, "2/3 L sweeps 0..full, R = full - L  (sum stays full)");
+    audio_panel_status(2, "3/3 each bar must reach EMPTY at one end of the sweep");
+
+    for (int sweep = 0; sweep < SELFTEST_SWEEPS; sweep++)
+        for (int i = 0; i <= SELFTEST_STEPS; i++) {
+            const uint16_t l =
+                (uint16_t)((uint32_t)i * AUDIO_PANEL_PEAK_FULL / SELFTEST_STEPS);
+            audio_panel_levels(l, (uint16_t)(AUDIO_PANEL_PEAK_FULL - l));
+            vTaskDelay(pdMS_TO_TICKS(SELFTEST_STEP_MS));
+        }
+
+    /* 收尾停在一个静止的判据画面上：半格 vs 空条并排，可以慢慢看。
+     * 连喂两次是因为节流窗口可能吞掉其中一次 —— 第一次把累积的峰值冲掉，
+     * 第二次画的才一定是这里给的这两个数。 */
+    audio_panel_status(2, "3/3 DONE  L=half  R=0 -> R bar must be EMPTY");
+    audio_panel_levels(AUDIO_PANEL_PEAK_FULL / 2, 0);
+    vTaskDelay(pdMS_TO_TICKS(SELFTEST_STEP_MS * 2));
+    audio_panel_levels(AUDIO_PANEL_PEAK_FULL / 2, 0);
+    ESP_LOGI(TAG, "屏上状态面板自检结束");
+}
+#endif
 
 void app_main(void)
 {
@@ -120,6 +178,11 @@ void app_main(void)
     err = touch_start();
     if (err != ESP_OK)
         ESP_LOGW(TAG, "触摸不可用(%s)，继续启动", esp_err_to_name(err));
+
+    /* 必须放在最后：自检本身要阻塞十几秒，而上面几条链路都得先起来。 */
+#if CONFIG_TAB5_AUDIO_PANEL
+    audio_panel_selftest();
+#endif
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }

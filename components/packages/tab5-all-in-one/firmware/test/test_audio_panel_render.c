@@ -163,6 +163,11 @@ static void test_status(uint16_t bg)
         check("每行都有前景像素",
               nonbg_in_rect(buf, AUDIO_PANEL_STATUS_W, bg,
                             0, i * 16, AUDIO_PANEL_STATUS_W, 16) > 0);
+    /* 底衬那 4 px 纯粹用来盖待机脚注，文本不许侵占它 */
+    check("状态区底衬是纯背景",
+          nonbg_in_rect(buf, AUDIO_PANEL_STATUS_W, bg,
+                        0, AUDIO_PANEL_STATUS_LINES * 16,
+                        AUDIO_PANEL_STATUS_W, AUDIO_PANEL_STATUS_PAD) == 0);
 
     /* NULL 行画成纯背景，且不影响别的行 */
     const char *lnull[] = { "line0", NULL, "line2" };
@@ -276,6 +281,44 @@ static void test_layout(void)
           AUDIO_PANEL_METER_X >= 0 && AUDIO_PANEL_METER_X + AUDIO_PANEL_METER_W <= GUD_W &&
           AUDIO_PANEL_METER_Y >= 0 && AUDIO_PANEL_METER_Y + AUDIO_PANEL_METER_H <= GUD_H);
     check("状态区宽度正好是整数列", AUDIO_PANEL_STATUS_W == AUDIO_PANEL_COLS * 8);
+    check("两块同宽", AUDIO_PANEL_STATUS_W == AUDIO_PANEL_METER_W);
+    check("两块紧邻无缝", AUDIO_PANEL_METER_Y == AUDIO_PANEL_Y + AUDIO_PANEL_STATUS_H);
+    check("面板盖到画布下边缘", AUDIO_PANEL_METER_Y + AUDIO_PANEL_METER_H == GUD_H);
+}
+
+/*
+ * 覆盖完整性：面板落笔之后，待机画面在那一带不许留下任何残片。
+ *
+ * 这是 Task 0 最容易出的"观测工具自己产生误导"——分隔线露半截、脚注露个尾巴，
+ * 看上去就是显示坏了。判据不看面板画了什么（那是上面几组用例的事），只看
+ * **待机画面本身**在面板脚印之外的那一圈是否干净：
+ *   ① 面板上沿之上、等待点之下的那条带（y 268..276）必须是纯背景；
+ *   ② 面板脚印所在的行（y 276..360）里，脚印左右两侧必须是纯背景。
+ * 这两条成立，面板画上去之后就不可能有残片 —— 与坐标怎么改无关。
+ */
+static void test_coverage(void)
+{
+    uint16_t *fb = malloc((size_t)GUD_W * GUD_H * sizeof(uint16_t));
+    assert(fb);
+    standby_render(fb);
+    const uint16_t bg = fb[0];
+
+    int gap_clean = 1;
+    for (int y = STANDBY_DOTS_Y + STANDBY_DOTS_H; y < AUDIO_PANEL_Y; y++)
+        for (int x = 0; x < GUD_W; x++)
+            gap_clean &= (fb[y * GUD_W + x] == bg);
+    check("面板上沿与等待点之间没有待机内容", gap_clean);
+
+    int side_clean = 1;
+    for (int y = AUDIO_PANEL_Y; y < GUD_H; y++)
+        for (int x = 0; x < GUD_W; x++) {
+            if (x >= AUDIO_PANEL_X && x < AUDIO_PANEL_X + AUDIO_PANEL_W)
+                continue;   /* 脚印内，画上去就没了 */
+            side_clean &= (fb[y * GUD_W + x] == bg);
+        }
+    check("面板脚印左右两侧没有待机内容（分隔线/脚注全在脚印内）", side_clean);
+
+    free(fb);
 }
 
 /* 把待机画面 + 面板合成成一张 640×360，导出即屏上真实的样子 */
@@ -323,6 +366,7 @@ int main(int argc, char **argv)
     test_status(bg);
     test_meter(bg);
     test_layout();
+    test_coverage();
 
     if (argc > 1)
         preview(argv[1]);
