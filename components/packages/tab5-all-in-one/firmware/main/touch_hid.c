@@ -123,6 +123,7 @@ static void touch_task(void *arg)
     uint16_t last_x = 0, last_y = 0;
 #if TOUCH_DEBUG_MARKER
     bool dbg_blink = false;
+    int  dbg_tick = 0;
 #endif
 
     while (1) {
@@ -131,11 +132,19 @@ static void touch_task(void *arg)
 #if TOUCH_DEBUG_MARKER
         /* 心跳画在**读 I2C 之前**：这样它只证明「任务还在跑」这一件事。
          * 若画在读之后，一条读失败的 continue 就会把心跳停掉，「任务卡死」
-         * 与「GT911 读不通」在屏上就混成同一个现象了。 */
-        dbg_blink = !dbg_blink;
-        display_debug_marker(DBG_STATUS_X, DBG_STATUS_Y,
-                             DBG_STATUS_SIZE, DBG_STATUS_SIZE,
-                             dbg_blink ? DBG_GREEN : DBG_GREEN_DIM);
+         * 与「GT911 读不通」在屏上就混成同一个现象了。
+         *
+         * 但**不能每轮都画**：display_debug_marker() 结尾要整帧 cache 回写
+         * (1.8MB)，20ms 一次 ≈ 92MB/s，会挤占 PSRAM 带宽、把 GUD 显示拖卡，
+         * 反而干扰判读。降到每 25 轮(约 500ms)一次，肉眼看仍是清晰的闪烁，
+         * 回写量降到 1/25。触点红块只在真有触摸时画，本来就不常态触发。 */
+        if (++dbg_tick >= 25) {
+            dbg_tick = 0;
+            dbg_blink = !dbg_blink;
+            display_debug_marker(DBG_STATUS_X, DBG_STATUS_Y,
+                                 DBG_STATUS_SIZE, DBG_STATUS_SIZE,
+                                 dbg_blink ? DBG_GREEN : DBG_GREEN_DIM);
+        }
 #endif
 
         if (esp_lcd_touch_read_data(s_tp) != ESP_OK)
