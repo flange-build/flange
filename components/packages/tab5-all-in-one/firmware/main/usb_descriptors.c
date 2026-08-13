@@ -140,8 +140,24 @@ static const uint8_t aio_hid_report_desc[] = {
     AIO_HID_REPORT_DESC_TOUCH
 };
 
-/* 配置描述符：IF0 = GUD vendor，IF1 = HID 键盘 + 触摸。 */
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_HID_DESC_LEN)
+/*
+ * 配置描述符：IF0 = GUD vendor，IF1 = HID 键盘 + 触摸，
+ * 可选 IF2/IF3 = CDC 调试串口（默认关闭，见 sdkconfig.defaults 末尾）。
+ *
+ * TUD_CDC_DESCRIPTOR **自带 IAD**，一段 TUD_CDC_DESC_LEN = 66 字节里含通信 + 数据
+ * 两个接口；本设备描述符本来就是 Misc/IAD(239/2/1)，无需为它改设备描述符。
+ */
+#if CONFIG_TINYUSB_CDC_ENABLED
+#define AIO_CDC_DESC_LEN TUD_CDC_DESC_LEN
+/* 字符串索引 4，与下方 aio_string_desc_arr 的第 5 个元素对应，
+ * 传给 TUD_CDC_DESCRIPTOR 的 _stridx。两处改一处必错，故在此定名。 */
+#define AIO_STRID_CDC    4
+#else
+#define AIO_CDC_DESC_LEN 0
+#endif
+
+#define CONFIG_TOTAL_LEN \
+    (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_HID_DESC_LEN + AIO_CDC_DESC_LEN)
 const uint8_t aio_desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
     TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
@@ -161,6 +177,12 @@ const uint8_t aio_desc_configuration[] = {
     TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
                        sizeof(aio_hid_report_desc), EPNUM_HID,
                        CFG_TUD_HID_EP_BUFSIZE, 10),
+#if CONFIG_TINYUSB_CDC_ENABLED
+    /* 通知端点 8 字节即够：CDC ACM 的 SERIAL_STATE 通知负载最长 10 字节，
+     * 且本工程只做单向日志输出、从不主动上报串口状态线。 */
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, AIO_STRID_CDC, EPNUM_CDC_NOTIF, 8,
+                       EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
+#endif
 };
 
 _Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN,
@@ -208,7 +230,9 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 
 /*
  * 字符串描述符：交由 esp_tinyusb 完成 UTF-16 转换与 langid 处理。
- * 索引 0 = langid（English, 0x0409），1=厂商 2=产品 3=序列号。
+ * 索引 0 = langid（English, 0x0409），1=厂商 2=产品 3=序列号，
+ * 4 = CDC 调试串口（仅在 CONFIG_TINYUSB_CDC_ENABLED 时存在，须等于 AIO_STRID_CDC）。
+ * aio_string_desc_count 由 sizeof/sizeof 自动算，增删元素不用手改。
  */
 static const char k_langid[] = {0x09, 0x04, 0x00};
 const char *aio_string_desc_arr[] = {
@@ -216,5 +240,15 @@ const char *aio_string_desc_arr[] = {
     "flange",
     "Tab5 USB Terminal",
     "TAB5-0001",
+#if CONFIG_TINYUSB_CDC_ENABLED
+    "Tab5 Debug Console",
+#endif
 };
 const int aio_string_desc_count = sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]);
+
+#if CONFIG_TINYUSB_CDC_ENABLED
+/* 把 TUD_CDC_DESCRIPTOR 的 _stridx 与字符串数组钉在一起：在数组中间插一条新字符串
+ * 却忘了改 AIO_STRID_CDC，host 侧只表现为「串口名字不对」，几乎不会有人去查描述符。 */
+_Static_assert(sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]) == AIO_STRID_CDC + 1,
+               "CDC 字符串必须位于索引 AIO_STRID_CDC（当前是数组最后一个）");
+#endif

@@ -72,6 +72,60 @@ idf.py build
 与 Cardputer 不同，Tab5 的 UART0 不与显示/音频争引脚，因此 `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`，
 **保留了完整的串口控制台**。USB-C 上的串口失效后，这里是唯一的现场证据来源，调试时先接它。
 
+### 可选：USB CDC 调试串口（默认关闭）
+
+**默认状态下这块板现场没有任何可用串口。** UART0 只在 M5-Bus 排针上（要外接 USB-TTL），
+而 USB-C 上的 USB-Serial/JTAG 被有意关掉了 —— TinyUSB 必须独占那条 FSLS PHY（见上一节）。
+两者都不满足时，所有 `ESP_LOG*` 在现场等于不存在。
+
+为此 `sdkconfig.defaults` 末尾预留了一个**默认注释掉**的开关：
+
+```
+# CONFIG_TINYUSB_CDC_ENABLED=y
+# CONFIG_TINYUSB_CDC_COUNT=1
+```
+
+取消这两行的注释后，复合设备上会多出一个 CDC ACM 接口，`ESP_LOG*` / `stdout` 改从 USB-C 出来，
+`idf.py monitor` 直接可看，**不用接 USB-TTL**。
+
+```bash
+# 打开
+sed -i '' 's/^# CONFIG_TINYUSB_CDC_/CONFIG_TINYUSB_CDC_/' sdkconfig.defaults
+rm -f sdkconfig && idf.py build          # ⚠️ 必须删 sdkconfig，否则 defaults 不重新生效
+```
+
+> ⚠️ **`rm -f sdkconfig` 不能省。** `sdkconfig.defaults` 只在 `sdkconfig` **不存在**时被读，
+> 改了 defaults 却不删 `sdkconfig`，构建会静默沿用旧配置 —— 表现为「改了开关却没生效」。
+
+代码侧一律走 `#if CONFIG_TINYUSB_CDC_ENABLED` 条件编译（`usb_descriptors.{c,h}` 的接口/端点/
+描述符/字符串，`app_main.c` 的 `tinyusb_cdcacm_init()` + `tinyusb_console_init()`）。
+`CONFIG_TOTAL_LEN` 与 `_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN)`
+两种配置下都成立：**关闭 57 字节 / 开启 123 字节**（`TUD_CDC_DESC_LEN = 66`，自带 IAD、占两个接口）。
+
+#### ⚠️ 代价：开启后 4 条 IN 端点全部用满
+
+| 用途 | 端点 |
+|---|---|
+| vendor(GUD) | OUT `0x01` / IN `0x81` |
+| HID（键盘 + 触摸） | IN `0x82` |
+| CDC 通知 | IN `0x83` |
+| CDC 数据 | OUT `0x02` / IN `0x84` |
+
+P4 全速控制器只有 4 条可用 IN 端点（见上「端点预算」）。开着 CDC 时 **UAC 音频（麦克风 1 条 IN）
+与 UVC 摄像头（视频流 1 条 IN）都放不下** —— 做那两个阶段前必须把开关注释回去。
+FIFO 反而不是瓶颈：256 words 里 EP0 16 + vendor 32 + HID 16 + 通知 2 + CDC 数据 32 = 98 words，
+余量远大于 RX FIFO 所需的 62 words。
+
+**这是调试设施，不是产品特性。正常构建、提交与出厂固件都应保持关闭**
+（关闭态的 Flash/DIRAM 与不带本开关的版本**逐字节相同**：272,150 / 91,228）。
+
+#### ⚠️ 开机早期的日志会丢
+
+`tinyusb_console_init()` 之后 `stdout` 写进 CDC 的 TX 环形缓冲，这些字节要等 host 侧真的打开
+`ttyACM*` 并开始读才会流出去。从上电到你敲下 `idf.py monitor` 之间的日志，超出缓冲的部分被覆盖丢弃。
+**看不到最前面几行是正常现象，不是 bug。** 要抓上电阶段（`board_power` / `display_init` 那一段）
+仍然只能接 UART0。
+
 ## ⚠️ 必须显式选全速端口
 
 Tab5 的 USB-C 接在 P4 的 **USB1P1 全速 PHY（GPIO24/25，12 Mbps）** 上；
@@ -122,6 +176,9 @@ FIFO 256 words（1 KB），即**最多 4 条可用 IN 端点**。
 当前已用 **2 条 IN 端点**：vendor(`0x81`) + HID(`0x82`)，余 2 条。后续的 UAC + UVC 会把它们用满，
 所以**触摸必须与键盘合并进同一个 HID 接口**，用 Report ID 区分（RID 1 键盘 / RID 2 digitizer）——
 键盘的报告描述符已经带 Report ID，届时是纯增量改动。
+
+> 余下这 2 条也是**可选 CDC 调试串口**（默认关闭）要占的，见下文「日志」章节。
+> 三者（CDC / UAC / UVC）不能同时开。
 
 ## 显示
 
@@ -437,7 +494,7 @@ sudo evtest /dev/input/eventN
 | `main/tab5_kbd_map.h` | 行列 → HID usage 映射表（vendor 自 M5 官方固件，MIT） |
 | `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/tab5_pins.h` | 板级 GPIO / 面板与 GUD 尺寸常量（含放大倍数的静态断言） |
-| `sdkconfig.defaults` | 目标/PSRAM/分区/控制台/vendor 类，以及芯片版本互斥的说明 |
+| `sdkconfig.defaults` | 目标/PSRAM/分区/控制台/vendor 类、芯片版本互斥的说明，以及末尾默认注释掉的 CDC 调试串口开关 |
 | `partitions.csv` | factory 分区 4 MB |
 | `main/idf_component.yml` | 依赖精确锁版：esp_tinyusb / tinyusb / io_expander / 两个面板驱动 |
 

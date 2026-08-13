@@ -10,6 +10,11 @@
 #include "kbd_i2c.h"
 #include "touch_hid.h"
 #include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
+#if CONFIG_TINYUSB_CDC_ENABLED
+/* ⚠️ 这两个头必须在 #if 内包含：tinyusb_cdc_acm.h 在 CDC 未开启时会 #error。 */
+#include "tinyusb_cdc_acm.h"
+#include "tinyusb_console.h"
+#endif
 
 static const char *TAG = "tab5_aio";
 
@@ -64,6 +69,37 @@ void app_main(void)
     tusb_cfg.descriptor.string_count = aio_string_desc_count;
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
     ESP_LOGI(TAG, "tinyusb installed (GUD only)");
+
+#if CONFIG_TINYUSB_CDC_ENABLED
+    /*
+     * 可选的 USB CDC 调试串口（默认关闭，开关在 sdkconfig.defaults 末尾）。
+     *
+     * 这块板现场没有可用串口：USB-Serial/JTAG 被关掉了（TinyUSB 要占那条 FSLS PHY），
+     * UART0 只在 M5-Bus 排针上。开启本段后 ESP_LOG* 直接从 USB-C 出来，
+     * `idf.py monitor` 即可看，代价是把 4 条可用 IN 端点用满（见 usb_descriptors.h）。
+     *
+     * ⚠️ **开机早期的日志会丢。** tinyusb_console_init() 之后 stdout / ESP_LOG* 就写进
+     * CDC 的 TX 环形缓冲，而这些字节要等 host 侧真的把 ttyACM 打开并开始读才会流出去 ——
+     * 从上电到你敲下 `idf.py monitor` 之间产生的日志，超出缓冲的部分被覆盖丢弃。
+     * 看不到最前面几行是**正常现象，不是 bug**；要抓上电阶段请接 UART0(G37/G38)。
+     *
+     * 失败只记 WARNING 继续：调试设施挂了不该拖垮已验证的显示/键盘/触摸，
+     * 与下方 kbd_start() / touch_start() 同一处置原则。
+     */
+    const tinyusb_config_cdcacm_t acm_cfg = { .cdc_port = TINYUSB_CDC_ACM_0 };
+    esp_err_t cdc_err = tinyusb_cdcacm_init(&acm_cfg);
+    if (cdc_err != ESP_OK) {
+        ESP_LOGW(TAG, "CDC 调试串口初始化失败(%s)，继续启动（日志仍走 UART0）",
+                 esp_err_to_name(cdc_err));
+    } else {
+        cdc_err = tinyusb_console_init(TINYUSB_CDC_ACM_0);
+        if (cdc_err != ESP_OK)
+            ESP_LOGW(TAG, "CDC 控制台重定向失败(%s)，继续启动（日志仍走 UART0）",
+                     esp_err_to_name(cdc_err));
+        else
+            ESP_LOGI(TAG, "CDC 调试串口已启用，日志改从 USB-C 输出");
+    }
+#endif
 
     /*
      * 键盘与触摸是**可选外设**，缺席时只降级、不拦启动：

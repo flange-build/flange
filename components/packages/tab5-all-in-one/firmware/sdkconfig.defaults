@@ -36,3 +36,12 @@ CONFIG_TINYUSB_HID_COUNT=1
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
+# ── 调试用 USB CDC 串口（默认关闭）─────────────────────────────────
+# 取消下面两行的注释即可让 ESP_LOG* 从 USB-C 出来（idf.py monitor 可直接看）。
+# 取消注释后必须 `rm -f sdkconfig` 再 build，否则 defaults 不会重新生效。
+#
+# ⚠️ 代价：CDC 要占 2 条 IN 端点（通知 + 数据），加上 vendor 与 HID 各一条，
+#    P4 全速控制器的 4 条可用 IN 端点就用满了 —— UAC 音频与 UVC 摄像头都放不下。
+#    做音频/摄像头阶段时必须把它关回去。
+# CONFIG_TINYUSB_CDC_ENABLED=y
+# CONFIG_TINYUSB_CDC_COUNT=1
