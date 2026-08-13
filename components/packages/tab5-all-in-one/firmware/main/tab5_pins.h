@@ -13,6 +13,7 @@
 #define IOEXP_ADDR         0x43  /* PI4IOE5V6408-1：管 LCD/TOUCH/SPEAKER/CAMERA 使能 */
 #define ST7123_I2C_ADDR    0x55  /* ST7123 显示触控一体，存在即表明是 ST7123 批次 */
 #define GT911_I2C_ADDR     0x14  /* GT911 触摸，存在即表明面板为 ILI9881C */
+#define PIN_TOUCH_INT      23    /* GT911 INT；触摸电源使能在 IO 扩展 0x43 的 PIN5，board_power_init() 已拉高 */
 
 /* Tab5 Keyboard：独立的 STM32F030 I2C 从机，挂在与内部 I2C 分离的另一条总线上。
  * INT 低有效（键盘固件拉低表示有事件），故 ESP 侧上拉 + 下降沿触发。 */

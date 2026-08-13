@@ -8,3 +8,5 @@ dependencies:
   # 两者都只是把我们填好的 dpi_config 转发给 esp_lcd_new_panel_dpi，与 IDF 6.0 兼容。
   espressif/esp_lcd_ili9881c: "1.1.0"
   espressif/esp_lcd_st7123: "1.0.2"
+  # GT911 电容触摸（Tab5 用的是**备用**地址 0x14，不是组件宏默认的 0x5D）
+  espressif/esp_lcd_touch_gt911: "1.2.1"
