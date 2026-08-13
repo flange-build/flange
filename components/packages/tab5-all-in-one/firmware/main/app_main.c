@@ -49,7 +49,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(display_init());
 
-    display_test_pattern();
+    display_standby_screen();
 
     /* GUD 控制协议状态机初始化（须在 TinyUSB 安装前，回调可能立即触发） */
     ESP_ERROR_CHECK(gud_device_init());

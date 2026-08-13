@@ -102,6 +102,15 @@ static uint32_t s_frame_xferlen;  /* 本次 bulk 应收字节数(压缩=compress
 static uint32_t s_frame_received; /* 已累积字节数 */
 static bool s_frame_compressed;   /* 本帧是否 LZ4 压缩 */
 
+/* host 是否已经送上过至少一帧。置位后永不清零：待机画面据此永久停止绘制。
+ * 写在 TinyUSB 任务、读在待机动画任务，故 volatile。 */
+static volatile bool s_has_frame = false;
+
+bool gud_device_has_frame(void)
+{
+    return s_has_frame;
+}
+
 /* 解析刚收进 s_set_buf 的 SET_BUFFER 请求并武装一次收帧 */
 static void gud_arm_set_buffer(void)
 {
@@ -330,6 +339,7 @@ static void gud_consume_rx_chunk(uint8_t const *buffer, uint32_t bufsize)
          * 与 Cardputer 的 ST7789 4-line SPI 不同。 */
         display_blit((int)s_frame_x, (int)s_frame_y,
                      (int)s_frame_w, (int)s_frame_h, s_fb);
+        s_has_frame = true;
         ESP_LOGD(TAG, "帧收满 xfer=%u(%s) blit %ux%u @(%u,%u)",
                  (unsigned)s_frame_xferlen, s_frame_compressed ? "LZ4" : "raw",
                  (unsigned)s_frame_w, (unsigned)s_frame_h,

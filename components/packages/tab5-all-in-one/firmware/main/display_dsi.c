@@ -5,6 +5,10 @@
 #include "display_dsi.h"
 #include "tab5_pins.h"
 #include "board_power.h"
+#include "standby_screen.h"
+#include "gud_device.h"        /* gud_device_has_frame()：动画的停止条件 */
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_ldo_regulator.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_dev.h"
@@ -26,11 +30,13 @@ static const char *TAG = "disp";
 
 /*
  * 旋转方向：1 = 90° CCW，0 = 270° CCW。两者相差 180°。
- * **已实机标定（M5Stack Tab5 + ILI9881C 批次）：1 正确** ——
- * 横持时红色象限落在左上角，与 GUD 坐标系一致。
- * 判据：注意「铺满全屏」验不出方向 —— 两个分支都产生 (0,0) 起 720×1280，
- * 差别只在内容转了 180°。判据是**自检图红色象限的落角**（横持时应在左上角），
- * 与 firmware/README.md 一致。
+ * **已实机标定（M5Stack Tab5 + ILI9881C 批次）：1 正确**（当时的判据是四象限
+ * 自检图的红色象限横持时落在左上角，与 GUD 坐标系一致）。
+ * 注意「铺满全屏」验不出方向 —— 两个分支都产生 (0,0) 起 720×1280，差别只在
+ * 内容转了 180°，判据必须是内容的落角。
+ * 自检图已换成待机画面（display_standby_screen），**现在的判据是文字方向**：
+ * 横持时 "NO SIGNAL" 正着可读即正确，上下颠倒即取值反了 —— 比色块更灵敏，
+ * 文字方向一眼可辨，色块要对照记忆。与 firmware/README.md 一致。
  * （标定当时另放了一个 64×64 黄块辅助定位，=1 落在面板 (64,1024)、=0 落在
  *  (528,128)；该临时黄块已随自检图精简一并删除，用当前固件复现不出来。）
  */
@@ -62,43 +68,76 @@ static void frame_buffer_flush(void)
 }
 
 /*
- * 面板自检。刻意走 display_blit()，因此同时验证面板时序、颜色通道，
- * 以及 PPA 的缩放/旋转坐标映射——三者任一错都会在屏上直接看出来。
- * 测试图 640×360×2 = 460KB 放 PSRAM（内部 DRAM 余量不够），用完即释放：
- * 这是开机期一次性自检，不该常驻。
+ * 等待点动画：副标题末尾的 . / .. / ... 循环，500ms 一步。
  *
- * 保留它还有第二个用途：它是「显示链路还活着」的基准信号。host 的 GUD 帧
- * 一送上来就会覆盖它，屏幕从四象限图变成 host 画面，这个变化本身即是
- * GUD 打通的证据；若开机就黑屏，则可区分「显示坏了」与「GUD 没送帧」。
+ * 只重画点所在的 48×32 那一小块（3 KB），不重画 460 KB 整屏 —— 整屏搬运既
+ * 浪费，也可能挤占 USB 收帧的时序。display_blit() 的输入是紧凑排列的 w×h，
+ * 所以这里给的就是一个 48×32 的紧凑小缓冲，x/y 只决定落点。
+ *
+ * host 一送上第一帧就永久停止并退出：待机画面盖在 host 内容上是硬伤，
+ * 而 GUD 是脏矩形刷新的，被我们盖掉的那一小块 host 未必会再画一次。
  */
-void display_test_pattern(void)
+static void standby_dots_task(void *arg)
 {
-    const size_t probe_px = (size_t)GUD_W * GUD_H;
-    uint16_t *probe = heap_caps_malloc(probe_px * sizeof(uint16_t),
+    (void)arg;
+    const size_t patch_bytes =
+        (size_t)STANDBY_DOTS_W * STANDBY_DOTS_H * sizeof(uint16_t);
+    uint16_t *patch = heap_caps_malloc(patch_bytes,
                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!probe) {
-        /* 自检失败不该挡住正常启动，报一声就走 */
-        ESP_LOGE(TAG, "自检图分配失败(%u KB)，跳过自检",
-                 (unsigned)(probe_px * sizeof(uint16_t) / 1024));
+    if (!patch) {
+        ESP_LOGW(TAG, "等待点缓冲分配失败(%u 字节)，待机画面无动画",
+                 (unsigned)patch_bytes);
+        vTaskDelete(NULL);
         return;
     }
 
-    /* 四象限用于辨认方向，正中 40×40 黑方块用于确认居中与无裁切 */
-    for (int y = 0; y < GUD_H; y++)
-        for (int x = 0; x < GUD_W; x++)
-            probe[y * GUD_W + x] = (y < GUD_H / 2)
-                ? (x < GUD_W / 2 ? 0xF800 : 0x07E0)    /* 上：左红 右绿 */
-                : (x < GUD_W / 2 ? 0x001F : 0xFFFF);   /* 下：左蓝 右白 */
+    for (int phase = 0; !gud_device_has_frame();
+         phase = (phase + 1) % STANDBY_DOTS_PHASES) {
+        standby_render_dots(patch, phase);
+        /* 渲染期间 host 可能已经上来了，落笔前再看一眼 */
+        if (gud_device_has_frame())
+            break;
+        display_blit(STANDBY_DOTS_X, STANDBY_DOTS_Y,
+                     STANDBY_DOTS_W, STANDBY_DOTS_H, patch);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
 
-    const int cx = GUD_W / 2, cy = GUD_H / 2, half = 20;   /* 40×40 */
-    for (int y = cy - half; y < cy + half; y++)
-        for (int x = cx - half; x < cx + half; x++)
-            probe[y * GUD_W + x] = 0x0000;
+    heap_caps_free(patch);
+    ESP_LOGI(TAG, "待机画面停止绘制，屏幕交给 host");
+    vTaskDelete(NULL);   /* 用完即退，不空转常驻 */
+}
 
-    display_blit(0, 0, GUD_W, GUD_H, probe);
+/*
+ * 待机画面（"NO SIGNAL" OSD）。host 没送帧时屏上显示它，收到第一帧后
+ * 由 host 内容整幅覆盖、动画任务随之退出。
+ *
+ * 刻意走 display_blit()，因此顺带验证面板时序、颜色通道，以及 PPA 的缩放/
+ * 旋转坐标映射 —— 三者任一错都在屏上直接看出来。它取代了此前的四象限自检图，
+ * 而且**验方向比色块更灵敏**：文字上下颠倒或镜像一眼可辨，色块得对照记忆。
+ *
+ * 整幅 640×360×2 = 460KB 放 PSRAM（内部 DRAM 余量不够），blit 完即释放；
+ * 之后常驻的只有动画任务里那 3 KB。
+ */
+void display_standby_screen(void)
+{
+    const size_t px = (size_t)GUD_W * GUD_H;
+    uint16_t *buf = heap_caps_malloc(px * sizeof(uint16_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) {
+        /* 待机画面挂了不该挡住正常启动（host 的帧照样能上屏），报一声就走 */
+        ESP_LOGE(TAG, "待机画面分配失败(%u KB)，跳过",
+                 (unsigned)(px * sizeof(uint16_t) / 1024));
+        return;
+    }
+
+    standby_render(buf);
+    display_blit(0, 0, GUD_W, GUD_H, buf);
 
     /* PPA_TRANS_MODE_BLOCKING 保证搬运已完成，可以安全释放 */
-    heap_caps_free(probe);
+    heap_caps_free(buf);
+
+    if (xTaskCreate(standby_dots_task, "standby", 3072, NULL, 2, NULL) != pdPASS)
+        ESP_LOGW(TAG, "等待点动画任务创建失败，待机画面为静态");
 }
 
 /* 面板/触摸控制器随 Tab5 批次而异，用内部 I2C 上的地址区分：
@@ -228,7 +267,16 @@ esp_err_t display_init(void)
 
     ppa_client_config_t ppa_cfg = {
         .oper_type = PPA_OPERATION_SRM,
-        .max_pending_trans_num = 1,   /* 只用阻塞模式，1 即可 */
+        /*
+         * 只用阻塞模式，故每个提交者最多占 1 个 trans 元素 —— 但**提交者有两个**：
+         * TinyUSB 任务（GUD 收帧）与待机画面的等待点动画任务。池子空了时
+         * ppa_do_scale_rotate_mirror() 不等待，直接返回 ESP_FAIL（ppa_srm.c:308
+         * "exceed maximum pending transactions"），那一次 blit 就丢了；落在 GUD
+         * 侧就是 host 的一块脏矩形永远不上屏（脏矩形不会自动重发）。窗口很窄
+         * （动画 500ms 才提交一次），但代价不对称，故按提交者数量给 2。
+         * 动画任务退出后多出来的那个元素闲置，几百字节内部 RAM，不值得回收。
+         */
+        .max_pending_trans_num = 2,
     };
     ESP_RETURN_ON_ERROR(ppa_register_client(&ppa_cfg, &s_ppa), TAG, "ppa client");
 

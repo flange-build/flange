@@ -18,7 +18,9 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
     报告带 Report ID（RID 1）。详见下文「HID 键盘」。
   - 设备描述符为 Misc/IAD 复合设备，为后续 UAC/触摸/UVC 预留。
 - 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）；
-  面板 init 序列与 DSI/DPI 参数复刻自 esp-bsp `bsp/m5stack_tab5`（Apache-2.0）。
+  面板 init 序列与 DSI/DPI 参数复刻自 esp-bsp `bsp/m5stack_tab5`（Apache-2.0）；
+  待机画面用的点阵字体 `main/font8x16.h` vendor 自 [Spleen](https://github.com/fcambus/spleen)
+  8×16（BSD-2-Clause，见下文「待机画面」）。
 
 ## 硬件与工具链
 
@@ -117,7 +119,7 @@ FIFO 反而不是瓶颈：256 words 里 EP0 16 + vendor 32 + HID 16 + 通知 2 +
 余量远大于 RX FIFO 所需的 62 words。
 
 **这是调试设施，不是产品特性。正常构建、提交与出厂固件都应保持关闭**
-（关闭态的 Flash/DIRAM 与不带本开关的版本**逐字节相同**：272,150 / 91,228）。
+（关闭态的 Flash/DIRAM 与不带本开关的版本**逐字节相同**：275,062 / 91,228）。
 
 #### ⚠️ 开机早期的日志会丢
 
@@ -162,7 +164,7 @@ CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n
 cdc_acm 1-1.1:1.0: ttyACM0: USB ACM device
 ```
 
-`lsusb` 里根本没有 `16d0:10a9`，屏幕自检图正常、UART 日志也正常打出
+`lsusb` 里根本没有 `16d0:10a9`，屏幕待机画面正常、UART 日志也正常打出
 `TinyUSB Driver installed on port 0` —— 固件一切「看起来正常」，只是 PHY 不归它。
 
 > 这两项只影响**应用**阶段。bootloader 阶段 USJ 仍然启用，按住 BOOT 进下载模式照常能烧录
@@ -211,10 +213,14 @@ PPA 是 SRM（Scale-Rotate-Mirror）引擎，`scale_x/scale_y` 与 `rotation_ang
 ### 方向标定：`DISPLAY_ROT_CCW90 = 1`（已实机标定）
 
 `display_dsi.c` 里的这个宏决定旋转方向（`1` = 90° CCW，`0` = 270° CCW，两者相差 180°）。
-**实机验证取值为 `1`**：横持时红色象限落在左上角，与 GUD 坐标系一致。
+**实机验证取值为 `1`**（标定当时的判据是四象限自检图的红色象限横持时落在左上角）。
+
+自检图已换成待机画面，**现在的判据是文字方向**：横持时 `NO SIGNAL` 正着可读即正确，
+上下颠倒就是取值反了。这比原来的色块**更灵敏** —— 文字方向一眼可辨，
+色块得对照记忆哪个角该是红的。
 
 > ⚠️ 「画面铺满全屏」**验不出方向** —— 两个分支都产生 (0,0) 起的 720×1280 输出，
-> 差别只在内容转了 180°。判据必须是内容的落角（自检图的红色象限），不是有没有黑边。
+> 差别只在内容转了 180°。判据必须是内容本身（待机画面的文字方向），不是有没有黑边。
 
 坐标映射（`DISPLAY_ROT_CCW90 = 1`）：
 
@@ -248,6 +254,69 @@ P4 的 DMA 不侦听 cache，DPI 帧缓冲是 `SPIRAM | DMA` 分配的：CPU 改
 背光 GPIO 在 `board_power_init()` 里配好但**保持熄灭**，直到 `display_init()` 全部初始化
 成功后才由 `board_backlight(true)` 点亮。不变式是「背光亮 ⟺ 面板正在输出有效视频」——
 195 条面板 init 命令要跑几十到上百毫秒，提前点亮会在开机时闪一下白屏/杂讯。
+
+### 待机画面（`NO SIGNAL`）
+
+开机后 host 还没送帧时屏上显示的是一幅**产品化的 NO SIGNAL 画面**（`display_standby_screen()`），
+不是自检图 —— 早期那张「四象限彩块 + 中央黑方块」是 bring-up 期用来标定旋转方向、
+验证 PPA 变换的，使命已完成。
+
+```
+              ┌──────────┐        显示器线框（下巴上一颗琥珀电源灯）
+              └────┬─────┘
+                 ──┴──
+
+               NO SIGNAL          3×（24×48），琥珀 #F0A030
+          Waiting for USB host…   2×（16×32），浅灰 #C8CDD4，末尾三点循环
+      ───────────────────────     分隔线 #2A2F38
+       M5Stack Tab5  |  USB Display          1×（8×16），暗灰 #8A929C
+       640 x 360 RGB565  |  USB 16d0:10a9
+```
+
+- 背景 `#0F1115`（不刺眼、也不是纯黑，便于与「面板没输出」区分）。RGB565 是有损的，
+  `standby_screen.c` 的配色表逐项注明了设计值与转换后实际显示的值。
+- **收到第一帧 GUD 后永久停止绘制**，之后完全由 host 内容接管。停止条件是
+  `gud_device_has_frame()`（`gud_device.c` 里 blit 成功后置位的一个 `volatile bool`）。
+  这是硬要求：GUD 是脏矩形刷新的，被待机画面盖掉的一小块，host 未必会再画一次。
+- 等待点动画每 500ms 一步，**只重画点所在的 48×32 那一小块**（3 KB 紧凑缓冲 + 局部
+  `display_blit()`），不重画 460 KB 整屏 —— 整屏搬运既浪费也可能挤占 USB 收帧时序。
+  它同时替代了此前用来证明「固件还活着」的诊断心跳。动画任务停下后 `vTaskDelete(NULL)` 退出。
+- ⚠️ 动画任务让 PPA 有了**第二个提交者**（另一个是 TinyUSB 收帧），故 PPA client 的
+  `max_pending_trans_num` 从 1 提到 2。池子空了时 `ppa_do_scale_rotate_mirror()`
+  不等待、直接返回 `ESP_FAIL`，落在 GUD 侧就是 host 的一块脏矩形永远不上屏
+  （脏矩形不会自动重发）—— 窗口很窄，但代价不对称。
+- **它仍然验证着旋转方向**，而且比四象限彩块更灵敏：文字上下颠倒/镜像一眼可辨，
+  说明 `DISPLAY_ROT_CCW90` 取值错了（见上「方向标定」）。
+
+文案一律**英文**：显示器 OSD 的通用惯例（`NO SIGNAL`），且中文点阵要带整个 CJK 字库，
+几十上百 KB flash，对一块开机三秒就被 host 覆盖的画面完全不划算。
+
+#### 字体
+
+`main/font8x16.h` = [Spleen](https://github.com/fcambus/spleen) 2.2.0 的 `spleen-8x16.bdf`，
+**BSD-2-Clause**，© 2018-2026 Frederic Cambus。工程刻意不引 LVGL，字体渲染是自己的
+100 行绘制原语（填充矩形 / 线框 / 整数倍放大画字符串，全在 `standby_screen.c`，不外露）。
+
+提取是**机械的**（照 `panel_init_data.h` / `tab5_kbd_map.h` 的先例，不手抄）：按
+`STARTCHAR..ENDCHAR` 切块 → 只取 `ENCODING` 落在 `0x20`–`0x7E` 的 95 个字形 → 断言其
+`BBX 8 16 0 -4` 与 8×16 cell 一致 → 把 `BITMAP` 的 16 行十六进制原样搬下来 = 1520 字节。
+整份字库有 1001 个字形（含 Unicode 区），带进来纯属浪费 flash。位布局与源 BDF 一致：
+每行 1 字节，**bit7 是最左像素**。
+
+#### 宿主机版式预览
+
+绘制原语与版式被抽成零依赖纯函数（`main/standby_screen.{c,h}`，只需要 `tab5_pins.h` 的
+`GUD_W/GUD_H`），因此可以在宿主机上渲染成 PPM 肉眼验收 ——「文字越界 / 两行叠一起 /
+颜色算反」这类问题，在这里发现比烧一轮板便宜得多：
+
+```bash
+cd firmware/test
+cc -std=c11 -Wall -Wextra -I../main test_standby_screen.c ../main/standby_screen.c \
+    -o /tmp/test_standby && /tmp/test_standby /tmp/standby.ppm   # 参数可选，给了才导预览
+```
+
+35 个用例覆盖越界哨兵、行带占用（元素之间的空隙必须真的是空的）、左右 8px 边距、
+标题与正文的颜色层次、点动画各相位的单调性与钳位。**改版式后务必重跑。**
 
 ## 面板批次
 
@@ -312,8 +381,9 @@ gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
 ```
 
 固件侧对照：UART 日志里 `LZ4 解压失败` 与 `ppa srm 失败` 均应为 0 条。
-开机自检图（四象限 + 中央黑方块）被 host 画面覆盖这一变化本身，即是 GUD 打通的证据；
-若开机就黑屏，则可据此区分「显示坏了」与「GUD 没送帧」。
+开机的**待机画面**（`NO SIGNAL`，见上「显示 / 待机画面」）被 host 画面覆盖、
+等待点动画随之停下（日志打一条 `待机画面停止绘制，屏幕交给 host`），这一变化本身即是
+GUD 打通的证据；若开机就黑屏、连待机画面都没有，则可据此区分「显示坏了」与「GUD 没送帧」。
 
 ## 帧率
 
@@ -331,13 +401,14 @@ gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
 
 | 项 | 值 |
 |---|---|
-| Flash | 255,126 字节（约 249 KB），占 4 MB factory 分区 **6%** |
-| 内部 DIRAM | 90,738 字节（**15.7%**），剩余约 474 KB |
-| 镜像总大小 | 336,328 字节（`.bin` 另有 padding） |
+| Flash | 275,062 字节（约 269 KB），占 4 MB factory 分区 **7%** |
+| 内部 DIRAM | 91,228 字节（**15.8%**），剩余约 474 KB |
+| 镜像总大小 | 356,686 字节（`.bin` 另有 padding） |
 
 大块缓冲全在 PSRAM，不占内部 RAM：GUD 收帧缓冲共约 900 KB（未压缩帧与压缩帧各一份，
 每份 `640×360×2` = 460,800 字节），DPI 帧缓冲 1.84 MB。
-开机自检图另临时占一份 460,800 字节，用完即释放。
+待机画面另临时占一份 460,800 字节，blit 完即释放；等待点动画常驻 3 KB（`48×32×2`），
+收到第一帧后一并释放。字体 1520 字节在 flash（`.rodata`）。
 
 > ⚠️ **DIRAM 总量是 576,464 字节（约 563 KB）** —— 对着 `build/tab5_aio.map` 的
 > Memory Configuration 核实过：`sram_low 0x4ff00000 / 0x2cbd0` + `sram_high 0x4ff40000 / 0x60000`。
@@ -486,7 +557,10 @@ sudo evtest /dev/input/eventN
 | `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8） |
 | `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧（脏矩形累积 / LZ4 解压）→ `display_blit()` |
 | `main/lz4.{c,h}` | 官方 LZ4 v1.9.4 参考实现（BSD-2-Clause），仅用 `LZ4_decompress_safe` |
-| `main/display_dsi.{c,h}` | 显示 HAL：LDO + DSI + 面板探测/初始化 + PPA 缩放旋转 + 自检图 + 背光点亮 |
+| `main/display_dsi.{c,h}` | 显示 HAL：LDO + DSI + 面板探测/初始化 + PPA 缩放旋转 + 待机画面上屏/动画任务 + 背光点亮 |
+| `main/standby_screen.{c,h}` | 待机画面（`NO SIGNAL`）的绘制原语与版式，零依赖纯函数（宿主机可渲染预览） |
+| `main/font8x16.h` | Spleen 8×16 点阵字体，ASCII 0x20-0x7E（vendor 自 fcambus/spleen，BSD-2-Clause） |
+| `test/test_standby_screen.c` | 待机画面宿主机回归测试 + PPM 版式预览（直接编译真实源码，非复制体） |
 | `main/panel_init_data.h` | 两种批次的面板 init 命令序列（vendor 自 esp-bsp，Apache-2.0） |
 | `main/board_power.{c,h}` | 内部 I2C 总线 + PI4IOE5V6408 上电时序 + 背光开关 |
 | `main/kbd_i2c.{c,h}` | 键盘 I2C 总线 + G50 中断 + 事件排空 + HID 上报（Normal 模式） |

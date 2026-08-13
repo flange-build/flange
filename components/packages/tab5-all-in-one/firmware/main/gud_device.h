@@ -22,3 +22,6 @@ esp_err_t gud_device_init(void);
  */
 bool gud_handle_control(uint8_t rhport, uint8_t stage,
                         tusb_control_request_t const *req);
+
+/* host 是否已经送过至少一帧。待机画面据此停止绘制，避免盖住主机内容。 */
+bool gud_device_has_frame(void);
