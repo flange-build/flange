@@ -15,17 +15,15 @@
  * 深色但不纯黑，长时间挂机不刺眼；文字浅灰，状态词用琥珀拉开层次。
  * RGB565 是有损的（R/B 5 bit、G 6 bit），下表右侧写的是**转换后实际显示**的
  * 24 bit 值（低位补 0），日后调色请对着它看，不要对着左边的设计值。
+ * 打包宏 STANDBY_RGB565() 在头文件里（面板也要用同一套换算）。
  */
-#define RGB565(r, g, b) \
-    ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
-
-#define C_BG      RGB565(0x0F, 0x11, 0x15)   /* #0F1115 → 0x0882 实显 #081014 背景 */
-#define C_SCREEN  RGB565(0x16, 0x1A, 0x21)   /* #161A21 → 0x10C4 实显 #101820 图标内屏 */
-#define C_BEZEL   RGB565(0x6E, 0x76, 0x81)   /* #6E7681 → 0x6BB0 实显 #687480 图标边框 */
-#define C_TEXT    RGB565(0xC8, 0xCD, 0xD4)   /* #C8CDD4 → 0xCE7A 实显 #C8CCD0 正文 */
-#define C_AMBER   RGB565(0xF0, 0xA0, 0x30)   /* #F0A030 → 0xF506 实显 #F0A030 状态色 */
-#define C_DIM     RGB565(0x8A, 0x92, 0x9C)   /* #8A929C → 0x8C93 实显 #889098 脚注 */
-#define C_RULE    RGB565(0x2A, 0x2F, 0x38)   /* #2A2F38 → 0x2967 实显 #282C38 分隔线 */
+#define C_BG      STANDBY_RGB565(0x0F, 0x11, 0x15)   /* #0F1115 → 0x0882 实显 #081014 背景 */
+#define C_SCREEN  STANDBY_RGB565(0x16, 0x1A, 0x21)   /* #161A21 → 0x10C4 实显 #101820 图标内屏 */
+#define C_BEZEL   STANDBY_RGB565(0x6E, 0x76, 0x81)   /* #6E7681 → 0x6BB0 实显 #687480 图标边框 */
+#define C_TEXT    STANDBY_RGB565(0xC8, 0xCD, 0xD4)   /* #C8CDD4 → 0xCE7A 实显 #C8CCD0 正文 */
+#define C_AMBER   STANDBY_RGB565(0xF0, 0xA0, 0x30)   /* #F0A030 → 0xF506 实显 #F0A030 状态色 */
+#define C_DIM     STANDBY_RGB565(0x8A, 0x92, 0x9C)   /* #8A929C → 0x8C93 实显 #889098 脚注 */
+#define C_RULE    STANDBY_RGB565(0x2A, 0x2F, 0x38)   /* #2A2F38 → 0x2967 实显 #282C38 分隔线 */
 
 /* ---------------- 文案与版式 ----------------
  *
@@ -77,15 +75,14 @@ _Static_assert(STANDBY_DOTS_W == 3 * FONT8X16_W * SUB_SC, "等待点最多 3 个
 _Static_assert(STANDBY_DOTS_H == FONT8X16_H * SUB_SC, "等待点高度 = 副标题行高");
 _Static_assert(STANDBY_DOTS_X + STANDBY_DOTS_W <= GUD_W, "等待点右边缘出画");
 
-/* ---------------- 绘制原语 ---------------- */
-
-typedef struct {
-    uint16_t *px;
-    int w, h;
-} canvas_t;
+/* ---------------- 绘制原语 ----------------
+ *
+ * standby_canvas_t / standby_fill_rect / standby_draw_text 在头文件里导出，
+ * 供 audio_panel_render.c 复用；draw_frame / draw_char 只有本文件用，保持 static。
+ */
 
 /* 填充矩形。整条绘制链只有这一个函数写像素，边界钳位因此只需在这里做对一次。 */
-static void fill_rect(const canvas_t *c, int x, int y, int w, int h, uint16_t color)
+void standby_fill_rect(const standby_canvas_t *c, int x, int y, int w, int h, uint16_t color)
 {
     int x0 = x < 0 ? 0 : x;
     int y0 = y < 0 ? 0 : y;
@@ -98,20 +95,20 @@ static void fill_rect(const canvas_t *c, int x, int y, int w, int h, uint16_t co
 }
 
 /* 1 像素粗的矩形线框（只画边，不填内部） */
-static void draw_frame(const canvas_t *c, int x, int y, int w, int h,
+static void draw_frame(const standby_canvas_t *c, int x, int y, int w, int h,
                        int thick, uint16_t color)
 {
-    fill_rect(c, x, y, w, thick, color);                    /* 上 */
-    fill_rect(c, x, y + h - thick, w, thick, color);        /* 下 */
-    fill_rect(c, x, y, thick, h, color);                    /* 左 */
-    fill_rect(c, x + w - thick, y, thick, h, color);        /* 右 */
+    standby_fill_rect(c, x, y, w, thick, color);                    /* 上 */
+    standby_fill_rect(c, x, y + h - thick, w, thick, color);        /* 下 */
+    standby_fill_rect(c, x, y, thick, h, color);                    /* 左 */
+    standby_fill_rect(c, x + w - thick, y, thick, h, color);        /* 右 */
 }
 
 /*
  * 画一个字形，整数倍放大：字模的 1 个点画成 scale×scale 的实心方块。
  * 只有一份 8×16 字体，字号层次全靠这个倍数（1×/2×/3×）。
  */
-static void draw_char(const canvas_t *c, int x, int y, char ch,
+static void draw_char(const standby_canvas_t *c, int x, int y, char ch,
                       uint16_t color, int scale)
 {
     unsigned char u = (unsigned char)ch;
@@ -125,12 +122,12 @@ static void draw_char(const canvas_t *c, int x, int y, char ch,
             continue;
         for (int col = 0; col < FONT8X16_W; col++)
             if (bits & (0x80 >> col))   /* bit7 = 最左像素 */
-                fill_rect(c, x + col * scale, y + row * scale, scale, scale, color);
+                standby_fill_rect(c, x + col * scale, y + row * scale, scale, scale, color);
     }
 }
 
-static void draw_text(const canvas_t *c, int x, int y, const char *s,
-                      uint16_t color, int scale)
+void standby_draw_text(const standby_canvas_t *c, int x, int y, const char *s,
+                       uint16_t color, int scale)
 {
     for (; *s; s++, x += FONT8X16_W * scale)
         draw_char(c, x, y, *s, color, scale);
@@ -151,34 +148,34 @@ static void draw_text(const canvas_t *c, int x, int y, const char *s,
  */
 void standby_render(uint16_t *buf)
 {
-    const canvas_t c = { .px = buf, .w = GUD_W, .h = GUD_H };
+    const standby_canvas_t c = { .px = buf, .w = GUD_W, .h = GUD_H };
 
-    fill_rect(&c, 0, 0, GUD_W, GUD_H, C_BG);
+    standby_fill_rect(&c, 0, 0, GUD_W, GUD_H, C_BG);
 
     /* 显示器图标 */
     const int inner_h = ICON_H - ICON_BEZ - ICON_CHIN;
-    fill_rect(&c, ICON_X + ICON_BEZ, ICON_Y + ICON_BEZ,
+    standby_fill_rect(&c, ICON_X + ICON_BEZ, ICON_Y + ICON_BEZ,
               ICON_W - 2 * ICON_BEZ, inner_h, C_SCREEN);
     draw_frame(&c, ICON_X, ICON_Y, ICON_W, ICON_H, ICON_BEZ, C_BEZEL);
-    fill_rect(&c, ICON_X + ICON_W - 12, ICON_Y + ICON_BEZ + inner_h + 1,
+    standby_fill_rect(&c, ICON_X + ICON_W - 12, ICON_Y + ICON_BEZ + inner_h + 1,
               LED_W, LED_H, C_AMBER);                       /* 下巴上的电源灯 */
-    fill_rect(&c, ICON_X + (ICON_W - NECK_W) / 2, ICON_Y + ICON_H,
+    standby_fill_rect(&c, ICON_X + (ICON_W - NECK_W) / 2, ICON_Y + ICON_H,
               NECK_W, NECK_H, C_BEZEL);                     /* 颈 */
-    fill_rect(&c, ICON_X + (ICON_W - BASE_W) / 2, ICON_Y + ICON_H + NECK_H,
+    standby_fill_rect(&c, ICON_X + (ICON_W - BASE_W) / 2, ICON_Y + ICON_H + NECK_H,
               BASE_W, BASE_H, C_BEZEL);                     /* 底座 */
 
-    draw_text(&c, TEXT_X(TITLE, TITLE_SC), TITLE_Y, TITLE, C_AMBER, TITLE_SC);
-    draw_text(&c, TEXT_X(SUB, SUB_SC), SUB_Y, SUB, C_TEXT, SUB_SC);
+    standby_draw_text(&c, TEXT_X(TITLE, TITLE_SC), TITLE_Y, TITLE, C_AMBER, TITLE_SC);
+    standby_draw_text(&c, TEXT_X(SUB, SUB_SC), SUB_Y, SUB, C_TEXT, SUB_SC);
 
-    fill_rect(&c, (GUD_W - RULE_W) / 2, RULE_Y, RULE_W, 1, C_RULE);
+    standby_fill_rect(&c, (GUD_W - RULE_W) / 2, RULE_Y, RULE_W, 1, C_RULE);
 
-    draw_text(&c, TEXT_X(FOOT1, 1), FOOT1_Y, FOOT1, C_DIM, 1);
-    draw_text(&c, TEXT_X(FOOT2, 1), FOOT2_Y, FOOT2, C_DIM, 1);
+    standby_draw_text(&c, TEXT_X(FOOT1, 1), FOOT1_Y, FOOT1, C_DIM, 1);
+    standby_draw_text(&c, TEXT_X(FOOT2, 1), FOOT2_Y, FOOT2, C_DIM, 1);
 }
 
 void standby_render_dots(uint16_t *buf, int n_dots)
 {
-    const canvas_t c = { .px = buf, .w = STANDBY_DOTS_W, .h = STANDBY_DOTS_H };
+    const standby_canvas_t c = { .px = buf, .w = STANDBY_DOTS_W, .h = STANDBY_DOTS_H };
     char dots[4] = "";
 
     if (n_dots < 0)
@@ -188,6 +185,6 @@ void standby_render_dots(uint16_t *buf, int n_dots)
     memset(dots, '.', (size_t)n_dots);
     dots[n_dots] = '\0';
 
-    fill_rect(&c, 0, 0, STANDBY_DOTS_W, STANDBY_DOTS_H, C_BG);
-    draw_text(&c, 0, 0, dots, C_TEXT, SUB_SC);
+    standby_fill_rect(&c, 0, 0, STANDBY_DOTS_W, STANDBY_DOTS_H, C_BG);
+    standby_draw_text(&c, 0, 0, dots, C_TEXT, SUB_SC);
 }

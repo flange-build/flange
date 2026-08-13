@@ -324,7 +324,7 @@ firmware/sdkconfig.defaults    # 改：裁 esp_codec_dev 的 codec 列表 + 默�
 
 **Files:** Create `main/Kconfig.projbuild`、`main/audio_panel.{c,h}`、`main/audio_panel_render.{c,h}`、`test/test_audio_panel_render.c`；Modify `main/standby_screen.{c,h}`、`main/display_dsi.c`、`main/CMakeLists.txt`、`sdkconfig.defaults`
 
-- [ ] **Step 1：成功判据**
+- [ ] **Step 1：成功判据**（宿主机与编译判据已过；实机部分待烧板验证）
 
 宿主机：
 
@@ -339,7 +339,7 @@ cc -std=c11 -Wall -Wextra -Werror -I../main test_audio_panel_render.c \
 
 关掉开关重编：Flash 与 DIRAM 应与本任务开始前**逐字节相同**（照 `firmware/README.md` 记录 CDC 开关时的同一条判据），证明它真的是零成本的可选设施。
 
-- [ ] **Step 2：`main/Kconfig.projbuild` —— 做成开关，默认关闭**
+- [x] **Step 2：`main/Kconfig.projbuild` —— 做成开关，默认关闭**
 
 ```kconfig
 menu "Tab5 AIO"
@@ -372,7 +372,7 @@ endmenu
 # CONFIG_TAB5_AUDIO_PANEL=y
 ```
 
-- [ ] **Step 3：`standby_screen.{c,h}` 最小导出**
+- [x] **Step 3：`standby_screen.{c,h}` 最小导出**
 
 只导出**面板真正用得到的**三样，其余（`draw_char` / `draw_frame` 与全部版式常量）保持 `static`：
 
@@ -404,7 +404,7 @@ void standby_draw_text(const standby_canvas_t *c, int x, int y, const char *s,
 
 **判据**：`test_standby_screen.c` 的 35 个用例**原样全过**（它只调 `standby_render` / `standby_render_dots`，不该受改名影响）——若有用例挂了，说明改名改错了地方，不要改测试。
 
-- [ ] **Step 4：`audio_panel_render.h` —— 版式常量与两个纯函数**
+- [x] **Step 4：`audio_panel_render.h` —— 版式常量与两个纯函数**
 
 面板分两块，**分别 blit**：状态区（内容变了才画，一次开机就几次）与电平条（5 Hz）。分开是为了别让 5 Hz 的刷新去搬状态区那 48 KB。
 
@@ -488,7 +488,7 @@ uint16_t audio_panel_bar_len(uint16_t peak)
 }
 ```
 
-- [ ] **Step 5：`audio_panel.{c,h}` —— 上屏、脏检查与节流**
+- [x] **Step 5：`audio_panel.{c,h}` —— 上屏、脏检查与节流**
 
 ```c
 #pragma once
@@ -522,7 +522,7 @@ void audio_panel_levels(uint16_t peak_l, uint16_t peak_r);
 
   ⓘ 于是**PPA 的第三个提交者就是数据泵任务**（Task 2 起存在），不是一个独立的面板任务。
 
-- [ ] **Step 6：`display_dsi.c` 的 PPA 提交者数量**
+- [x] **Step 6：`display_dsi.c` 的 PPA 提交者数量**
 
 现在的 `.max_pending_trans_num = 2` 对应两个提交者（TinyUSB 收帧任务 + 等待点动画任务）。面板让数据泵任务成为**第三个**，必须跟着涨——池子空时 `ppa_do_scale_rotate_mirror()` **不等待、直接返回 `ESP_FAIL`**（`ppa_srm.c` 尾部 "exceed maximum pending transactions"），落在 GUD 侧就是 host 的一块脏矩形永远不上屏，而脏矩形不会自动重发。
 
@@ -546,7 +546,7 @@ void audio_panel_levels(uint16_t peak_l, uint16_t peak_r);
 
 > ⓘ `CONFIG_TAB5_AUDIO_PANEL` 未定义时 `#if` 求值为 0，两种配置下都成立，不必写 `#ifdef`。
 
-- [ ] **Step 7：`test/test_audio_panel_render.c`**
+- [x] **Step 7：`test/test_audio_panel_render.c`**
 
 照 `test_standby_screen.c` 的形式（`main()` + `assert`，无框架，可选导出 PPM 预览）。用例至少覆盖：
 
@@ -555,7 +555,7 @@ void audio_panel_levels(uint16_t peak_l, uint16_t peak_r);
 3. `render_meter`：两路不同峰值画出**不同长度**的条；`peak = 0` 时条区域全是背景色；两行互不侵占（用行带占用检查，照 `test_standby_screen.c` 的做法）；
 4. 版式：状态区与电平条的矩形**不重叠**，且都不与 `STANDBY_DOTS_*` 重叠（这条与 `_Static_assert` 重复是故意的——断言防编译期，测试防有人把断言删了）。
 
-- [ ] **Step 8：编译（开/关两种配置）+ 上板验证 + 提交**
+- [ ] **Step 8：编译（开/关两种配置）+ 上板验证 + 提交**（开/关两种配置均已编过、关闭时与基线逐节相同；上板验证待做 —— 本任务未加调用方，面板要到 Task 1 Step 4 才有数据可画）
 
 ```bash
 cd firmware && . $HOME/esp/esp-idf/export.sh

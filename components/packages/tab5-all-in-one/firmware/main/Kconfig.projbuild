@@ -1,0 +1,17 @@
+menu "Tab5 AIO"
+
+config TAB5_AUDIO_PANEL
+    bool "音频 bring-up 屏上状态面板（调试设施，默认关闭）"
+    default n
+    help
+      在待机画面下方画一块状态面板：三行文字 + 左右声道电平条。
+
+      这块板默认没有任何可用串口（UART0 只在 M5-Bus 排针上，USB-Serial/JTAG 被
+      TinyUSB 收走，CDC 与 UAC 音频在全速口上互斥），codec/I2S bring-up 阶段
+      USB 侧又还什么都没有 —— 屏幕是那一段唯一看得见的输出。
+
+      **这是调试设施，不是产品特性。** 打开后 PPA 多一个周期性提交者，
+      占用 64 KB PSRAM（状态区 48 KB + 电平条 16 KB），电平条以 5 Hz 刷新
+      约合 80 KB/s 的 PPA 搬运；出厂固件应保持关闭。
+
+endmenu
