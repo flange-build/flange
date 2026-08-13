@@ -35,8 +35,10 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
   但尚未对着 UART 日志确认 `LZ4 解压失败` / `ppa srm 失败` 均为 0 条，也未跑
   GStreamer 全屏动态内容压测。
 - ⏳ **帧率实测**（两个场景：`videotestsrc` 全屏动态内容测下限、文本终端测实际体感）。
-- ⏳ 规划中：HID 键盘（Tab5 Keyboard，I2C `0x6D`，独立总线 G0/G1，INT G50）；
-  HID 触摸屏（GT911，与键盘共用一个 HID 接口，用 Report ID 区分）；
+- ✅ **HID 键盘**（Tab5 Keyboard，I2C `0x6D`，独立总线 G0/G1，INT G50）—— 实机验证通过，
+  键盘输入正常。用键盘固件的 Normal 模式自建 6KRO 状态机，不用其自带的 HID 模式
+  （修饰键不进队列、一次只能表达一个键），详见 `firmware/README.md`。
+- ⏳ 规划中：HID 触摸屏（GT911，与键盘共用一个 HID 接口，用 Report ID 区分）；
   UAC1 全双工音频（ES8388 + ES7210）；UVC 摄像头（SC202CS，风险最高、允许砍）；
   主机侧全局内核 config（`flange_common.config` + builder 注入，对所有 board 生效）。
 

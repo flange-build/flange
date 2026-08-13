@@ -1,9 +1,19 @@
 #include "kbd_translate.h"
 #include "tab5_kbd_map.h"
 
-/* 四个功能键的位置，取自官方固件 updatemodifier_mask() */
-#define IS_SYM(r, c) ((r) == 3 && (c) == 0)
-#define IS_AA(r, c)  ((r) == 3 && (c) == 1)
+/* 四个功能键的位置，取自官方固件 updatemodifier_mask()。统一成具名常量，
+ * 下面对这四个键的所有引用（宏与直接下标）都走这套定义，同一个事实不写两遍。 */
+#define ROW_SYM  3
+#define COL_SYM  0
+#define ROW_AA   3
+#define COL_AA   1
+#define ROW_CTRL 4
+#define COL_CTRL 0
+#define ROW_ALT  4
+#define COL_ALT  1
+
+#define IS_SYM(r, c) ((r) == ROW_SYM && (c) == COL_SYM)
+#define IS_AA(r, c)  ((r) == ROW_AA && (c) == COL_AA)
 
 /*
  * 分层规则（与官方固件 convert_to_hid() 语义一致）：
@@ -15,11 +25,11 @@
  *   - 字母键：Aa 生效**且未按住 Ctrl/Alt** → 用 second 层（大写）。
  *   - 其余键：Sym 按住且 key_modifier_flag 置位 → 用 second 层。
  */
-int kbd_translate(const bool pressed[KBD_ROWS][KBD_COLS], uint8_t *out_modifier, uint8_t out_keys[6])
+int kbd_translate(const bool pressed[KBD_ROWS][KBD_COLS], uint8_t *out_modifier, uint8_t out_keys[KBD_KEYS_MAX])
 {
-    bool sym  = pressed[3][0];
-    bool ctrl = pressed[4][0];
-    bool alt  = pressed[4][1];
+    bool sym  = pressed[ROW_SYM][COL_SYM];
+    bool ctrl = pressed[ROW_CTRL][COL_CTRL];
+    bool alt  = pressed[ROW_ALT][COL_ALT];
 
     /*
      * Aa 的大写层必须被 Ctrl/Alt 排除（官方 convert_to_hid() 的
@@ -33,10 +43,10 @@ int kbd_translate(const bool pressed[KBD_ROWS][KBD_COLS], uint8_t *out_modifier,
      * 状态取自 pressed 而非累加中的 modifier —— 后者此刻还没算完。
      * 这个条件不是冗余的，别顺手删。
      */
-    bool aa = pressed[3][1] && !ctrl && !alt;
+    bool aa = pressed[ROW_AA][COL_AA] && !ctrl && !alt;
 
     uint8_t modifier = 0;
-    uint8_t keys[6] = {0};
+    uint8_t keys[KBD_KEYS_MAX] = {0};
     int nk = 0;
 
     for (int r = 0; r < KBD_ROWS; r++) {
@@ -68,10 +78,10 @@ int kbd_translate(const bool pressed[KBD_ROWS][KBD_COLS], uint8_t *out_modifier,
             /* 0xE0~0xE7 是 HID 修饰键 usage：转成 modifier 位，不占 keycode 槽 */
             if (code >= KEY_LEFTCTRL && code <= KEY_RIGHTMETA) {
                 modifier |= (uint8_t)(1u << (code - KEY_LEFTCTRL));
-            } else if (code != KEY_NONE && nk < 6) {
+            } else if (code != KEY_NONE && nk < KBD_KEYS_MAX) {
                 keys[nk++] = code;
             }
-            /* 超过 6 个非修饰键时静默丢弃，**这是有意选择**，不是疏漏。
+            /* 超过 KBD_KEYS_MAX 个非修饰键时静默丢弃，**这是有意选择**，不是疏漏。
              * 标准 HID 的做法是全槽填 KEY_ERR_OVF(0x01)，但那是给真·全键盘用的；
              * 这块 70 键小键盘上同时按 7 个键属于误触而非有意输入，丢弃比让 host
              * 收到一串 ErrorRollOver 更无害。 */
@@ -79,7 +89,7 @@ int kbd_translate(const bool pressed[KBD_ROWS][KBD_COLS], uint8_t *out_modifier,
     }
 
     *out_modifier = modifier;
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < KBD_KEYS_MAX; i++)
         out_keys[i] = keys[i];
     return nk;
 }

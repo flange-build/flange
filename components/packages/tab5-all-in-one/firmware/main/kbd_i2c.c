@@ -19,6 +19,7 @@
 #include "freertos/task.h"
 #include "tusb.h"
 #include <inttypes.h>
+#include <stdio.h>
 
 static const char *TAG = "kbd";
 
@@ -91,11 +92,13 @@ static esp_err_t kbd_write_reg(uint8_t reg, uint8_t val)
 static void kbd_build_and_report(void)
 {
     uint8_t modifier = 0;
-    uint8_t keys[6] = {0};
+    uint8_t keys[KBD_KEYS_MAX] = {0};
     int nk = kbd_translate(s_pressed, &modifier, keys);
 
-    ESP_LOGD(TAG, "report mod=0x%02x keys=%02x %02x %02x %02x %02x %02x",
-             modifier, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5]);
+    char keys_str[KBD_KEYS_MAX * 3 + 1] = {0};
+    for (int i = 0; i < KBD_KEYS_MAX; i++)
+        snprintf(keys_str + i * 3, 4, "%02x ", keys[i]);
+    ESP_LOGD(TAG, "report mod=0x%02x keys=%s", modifier, keys_str);
 
     /* 端点忙时等它腾空（最多 20ms）：描述符里 bInterval=10ms，全速下 host
      * 10ms 才来取一次数据，同一批次排空里连调 tud_hid_keyboard_report()

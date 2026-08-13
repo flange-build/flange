@@ -67,7 +67,7 @@ static const char k_langid[] = {0x09, 0x04, 0x00};
 const char *aio_string_desc_arr[] = {
     k_langid,
     "flange",
-    "Tab5 GUD Display",
+    "Tab5 USB Terminal",
     "TAB5-0001",
 };
 const int aio_string_desc_count = sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]);

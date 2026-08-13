@@ -293,18 +293,137 @@ gst-launch-1.0 videotestsrc ! videoconvert ! videoscale ! \
 > **后续阶段（UAC 音频 / UVC 摄像头）的内部 RAM 预算要按剩余 ~474 KB 算，不能按 563 KB。**
 > DMA 缓冲往往必须在内部 RAM，这条约束比看上去紧。
 
+## HID 键盘
+
+**实机验证通过**：键盘输入在 GUD 显示的 Linux console 上正常。
+
+Tab5 Keyboard 是**独立的 STM32F030 I2C 从机**，地址 `0x6D`，挂在 **SDA=G0 / SCL=G1**，
+与内部 I2C（G31/G32，见上）**物理分离**，故 `kbd_i2c.c` 自建一条 `i2c_master_bus`，
+用 `I2C_NUM_1`（`I2C_NUM_0` 已被 `board_power` 的内部总线占用）。中断线 **G50，低有效**
+（键盘固件拉低表示事件队列非空）→ ESP 侧配上拉 + 下降沿触发。矩阵 **5 行 × 14 列 = 70 键**。
+
+### 寄存器表
+
+取自官方固件 `user_i2c_reg.h`，不是照协议图猜的：
+
+| 地址 | 名称 | 说明 |
+|---|---|---|
+| `0x00` | INTR_CONFIG | bit0 普通模式中断使能 / bit1 HID / bit2 字符，默认 `0x07` |
+| `0x01` | INTR_STATUS | 同位布局；写 0 释放中断信号并清状态 |
+| `0x02` | EVENT_NUM | 当前模式队列长度 0~32；读一次事件自动减 1；**写 0 清空队列并释放中断**（已从官方 `user_i2c_callback.c:149-159` 核实：`event_fifo_reset()` + `int_disable()`） |
+| `0x03` | RGB_BRIGHTNESS | 0~100，默认 20 |
+| `0x10` | KEYBOARD_MODE | 0 = Normal / 1 = HID / 2 = Character，默认 0 |
+| `0x11` | RGB_MODE | 0 绑定 / 1 自定义 |
+| `0x20` | KEY_EVENT | Normal 模式事件，1 字节：bit7 = 按下(1)/释放(0)，bit[6:4] = 行(0~4)，bit[3:0] = 列(0~13)；队列空读回 `0xFF` |
+| `0x30` | HID_EVENT | 2 字节（本实现不用） |
+| `0x40` / `0x50` | CHAR_EVENT_LENGTH / CHAR_EVENT | 字符模式（本实现不用） |
+| `0x60`–`0x67` | RGB_VALUE | RGB1_B/G/R、RGB2_B/G/R |
+| `0xFD` | IAP_UPDATE | 固件升级入口 |
+| `0xFE` | FIRMWARE_VERSION | 只读 |
+| `0xFF` | I2C_ADDRESS | 读写，改后立即生效并存 Flash |
+
+> ⚠️ **协议图容易读错**：图里最后一行标的 `0xF0` 是**块基址**，Version / Address 分别在
+> 该行的 E / F 列，即绝对地址是 `0xFE` / `0xFF`。照图按 `0xF0` 读会读到别的东西。
+>
+> ⚠️ **`0xFD` 是固件升级（IAP）入口，协议图上没画**。误写会把键盘刷成砖，
+> `kbd_i2c.c` 永不触碰这个地址。
+
+### 为什么不用键盘自带的 HID 模式
+
+读 M5 官方固件 `user_keyboard_handle.c` 确认两个硬伤：
+1. 修饰键（Ctrl / Alt / Sym / Aa）被标记 `special_key`，不进事件队列 —— host 永远看不到
+   「单独按住 Ctrl」；
+2. 按下推 `{modifier, keycode}`、松开推 `{modifier, 0}`，一次只能表达一个键。
+
+对「Linux 终端」这个用途，组合键与按住状态都是刚需，故用 Normal 模式（寄存器 `0x10` 写 0）
+自建 6KRO 状态机，不用官方 HID 模式（寄存器 `0x30`）。
+
+### 两个上游语义陷阱
+
+行列 → HID usage 的映射表 vendor 自官方固件 `key_value_map`（`tab5_kbd_map.h`，MIT），
+但直接照抄语义会踩两个坑：
+
+1. **底行字母 `z x c v b n m` 的 `firstModifierMask` 是 `KEY_MOD_LSHIFT`**
+   （第 0–3 行字母都是 `KEY_MOD_RESERVED`）。官方 `convert_to_hid()` 的小写分支根本不读
+   这个字段（只用运行时 `modifier_mask`），无声地绕过了它。**任何无条件取
+   `firstModifierMask` 的实现都会让整个底行打出大写**。本实现对字母基础层硬写
+   `mod = 0`（`kbd_translate.c`）。
+2. **Aa 必须被 Ctrl/Alt 门控**（官方是 `aa_flag && !ctrl_state && !alt_state`）。漏掉的话，
+   按住 Aa 时 `Ctrl+C` 会变成 `Ctrl+Shift+C` —— 终端里前者是 SIGINT、后者通常是「复制」，
+   **症状（Ctrl+C 中断不了程序）极难联想到键盘层逻辑**。门控用的 ctrl/alt 状态必须取自
+   `s_pressed`（当前按下集合），不能取正在累加的 `modifier`（那时还没算完）。
+
+另外一个容易搞混但不是「陷阱」的点：**Sym / Aa 不作为 Shift 上报**。官方表里它们的
+`firstKeyCode` 都是 `KEY_LEFTSHIFT`，但物理键盘上标「!」的键，其基础层本身就是
+`Shift+1` —— Sym 是切到第二层，不是 Shift；若把 Sym 当 Shift 上报，符号会全错。
+
+### 分层规则
+
+Sym(3,0) / Aa(3,1) 是本地层键，不上报；查表得到的 usage 落在 `0xE0~0xE7`（HID 修饰键区间）
+时转成 modifier 位、不占 keycode 槽（Ctrl/Alt 由此自动处理）；Sym 按住且
+`key_modifier_flag` 置位时用第二层；Aa 生效（且未按 Ctrl/Alt）时字母键用第二层（大写）。
+超过 6 个非修饰键同时按下时静默丢弃 —— 有意选择，70 键小键盘上同时按 7 个键属误触。
+
+### USB 侧
+
+IF1 = HID（`EPNUM_HID = 0x82`，vendor 用 `0x81`），`bInterval = 10`（ms）。
+**报告描述符带 Report ID**（`HID_RID_KEYBOARD = 1`）—— P4 全速控制器最多 4 条可用
+IN 端点（见上），UAC/UVC 会用满，触摸必须与键盘共用本接口，届时以 **RID 2 = digitizer**
+追加是纯增量改动。
+
+> ⚠️ **已知的规范不自洽**：`TUD_HID_DESCRIPTOR` 传 `HID_ITF_PROTOCOL_KEYBOARD` 会把
+> `bInterfaceSubClass` 设为 BOOT，宣称支持 boot keyboard，而 **boot 协议报告格式不允许
+> Report ID**。Linux `usbhid` 默认走 report 协议，**本用途不受影响**；受影响的只有
+> BIOS/UEFI/GRUB 早期阶段（记录在此免得日后有人报「BIOS 里打不了字」）。
+
+`tud_hid_set_report_cb` 是空实现，即**不同步 host 的 CapsLock 等 LED 状态**（本阶段有意）。
+
+### 端点忙的处理
+
+`tud_hid_ready()` 为假时若直接丢弃报告，同一批排空产生的多条报告只有第一条发得出去；
+**丢掉「释放」那条就是终端里的卡键/字符自动重复，且现象极像硬件故障**。实现改为最多等
+20ms 让端点腾空（`kbd_i2c.c` 的 `kbd_build_and_report()`），仍失败时 `ESP_LOGW`。
+
+> ⚠️ 并**不能**用「一批只发最终状态」来规避 —— 批次里若同时有 press-A 和 release-A，
+> 合并后这次按键会整个消失，必须逐条发。
+
+### 宿主机回归测试
+
+分层逻辑被抽成零依赖纯函数 `kbd_translate.c`（`kbd_i2c.c` 只管 I2C 与 USB 上报），
+`firmware/test/test_kbd_translate.c` **直接编译真实源码**而非复制体，16 个用例覆盖
+两个上游陷阱与 Sym/Aa 组合。不引入任何测试框架，也不挂进 IDF 构建：
+
+```bash
+cd firmware/test
+cc -std=c11 -Wall -Wextra -I../main test_kbd_translate.c ../main/kbd_translate.c -o /tmp/t && /tmp/t
+```
+
+**改动分层逻辑后务必重跑。**
+
+### Host 侧验证
+
+```bash
+lsusb -v -d 16d0:10a9 | grep -A5 HID
+cat /proc/bus/input/devices
+sudo evtest /dev/input/eventN
+```
+
 ## 文件
 
 | 文件 | 职责 |
 |------|------|
 | `main/app_main.c` | 编排：board_power → display → gud → TinyUSB 安装 |
-| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（当前仅 IF0 GUD vendor） |
+| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘） |
 | `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8） |
 | `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧（脏矩形累积 / LZ4 解压）→ `display_blit()` |
 | `main/lz4.{c,h}` | 官方 LZ4 v1.9.4 参考实现（BSD-2-Clause），仅用 `LZ4_decompress_safe` |
 | `main/display_dsi.{c,h}` | 显示 HAL：LDO + DSI + 面板探测/初始化 + PPA 缩放旋转 + 自检图 + 背光点亮 |
 | `main/panel_init_data.h` | 两种批次的面板 init 命令序列（vendor 自 esp-bsp，Apache-2.0） |
 | `main/board_power.{c,h}` | 内部 I2C 总线 + PI4IOE5V6408 上电时序 + 背光开关 |
+| `main/kbd_i2c.{c,h}` | 键盘 I2C 总线 + G50 中断 + 事件排空 + HID 上报（Normal 模式） |
+| `main/kbd_translate.{c,h}` | 按下集合 → HID modifier/keycode 分层翻译，零依赖纯函数（宿主机可测） |
+| `main/tab5_kbd_map.h` | 行列 → HID usage 映射表（vendor 自 M5 官方固件，MIT） |
+| `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/tab5_pins.h` | 板级 GPIO / 面板与 GUD 尺寸常量（含放大倍数的静态断言） |
 | `sdkconfig.defaults` | 目标/PSRAM/分区/控制台/vendor 类，以及芯片版本互斥的说明 |
 | `partitions.csv` | factory 分区 4 MB |

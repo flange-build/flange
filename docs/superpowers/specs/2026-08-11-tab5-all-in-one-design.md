@@ -197,6 +197,22 @@ HID 模式（寄存器 0x30）有两个硬伤：
 不作为 Shift 上报；大小写与符号由本地层查表产生对应的 `modifier | keycode` 组合发给 host。
 这样 host 收到的是标准键盘语义，不需要任何特殊配置。
 
+### 4.4 实机验证结论（P1 Task 5）
+
+**Normal 模式 + 自建状态机方案实机验证通过**：键盘输入在 GUD 显示的 Linux console 上正常。
+
+实施阶段（P1 Task3）发现并绕开了两个上游语义陷阱，回归用例见
+`firmware/test/test_kbd_translate.c`：
+
+1. **底行字母 `firstModifierMask` 陷阱**：官方 `key_value_map` 里 `z x c v b n m` 的
+   `firstModifierMask` 是 `KEY_MOD_LSHIFT`（第 0–3 行字母都是 `KEY_MOD_RESERVED`），但官方
+   `convert_to_hid()` 的小写分支根本不读这个字段。若实现无条件取用该字段，整个底行会打出
+   大写。`kbd_translate.c` 对字母基础层硬写 `mod = 0`，与官方语义一致。
+2. **Aa 未被 Ctrl/Alt 门控**：若不排除，按住 Aa 时 `Ctrl+C` 会变成 `Ctrl+Shift+C`
+   （终端里前者是 SIGINT、后者通常是「复制」）。`kbd_translate.c` 取
+   `aa = pressed[ROW_AA][COL_AA] && !ctrl && !alt`，且 ctrl/alt 状态取自当前按下集合，
+   不取正在累加中的 `modifier`。
+
 ---
 
 ## 5. 触摸：与键盘共用一个 HID 接口
