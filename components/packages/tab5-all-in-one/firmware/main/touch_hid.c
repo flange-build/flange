@@ -12,7 +12,6 @@
 #include "tab5_pins.h"
 #include "board_power.h"
 #include "usb_descriptors.h"
-#include "display_dsi.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_lcd_panel_io.h"
 #include "driver/gpio.h"
@@ -23,60 +22,6 @@
 #include "tusb.h"
 
 static const char *TAG = "touch";
-
-/*
- * ⚠️ 临时诊断设施 —— 定位完问题请改回 0 或整段删除。
- *
- * 为什么需要它：本机的 USB-Serial/JTAG 已被关掉（TinyUSB 要占那条 FSLS PHY，
- * 见 app_main.c 的 route_fsls_phy0_to_otg），UART0 只在 M5-Bus 排针上、需另接
- * USB-TTL。也就是说**现场没有任何串口**，本文件里所有 ESP_LOG* 都看不到。
- *
- * 而「触摸不工作」有两种成因，光看 host 侧分不开：
- *   A. 固件根本没读到坐标（GT911 起不来，或一直返回 0 个点）
- *   B. 读到了，但 HID 报告没送出去 / host 解析不对
- * 于是把固件内部状态直接画到面板上，用户一眼可辨。
- *
- * 屏幕左上角有**两个** 16×16 方块，左起：
- *
- * ① x=0：初始化 + 心跳
- *   绿/暗绿**闪烁**   GT911 初始化通过，touch_task 在跑
- *   **静止红**        esp_lcd_touch_new_i2c_gt911() 失败，任务没起来
- *   **静止绿**        初始化过了但任务没跑起来（xTaskCreate 失败/卡死）
- *   什么都没有        touch_start() 压根没被调到，或显示链路本身有问题
- *
- * ② x=24：**最近一次**触摸读取的结果（与心跳同频刷新，约 500ms）
- *   蓝   esp_lcd_touch_read_data() 出错 ⇒ I2C 层不通了
- *   黄   read_data 过了但 esp_lcd_touch_get_data() 出错
- *   暗灰 两者都 OK、但 points == 0（**没手指时的正常色**）
- *   品红 points > 0，读到触点了 ⇒ GT911 侧没问题，问题在 HID/host（成因 B）
- *
- * 品红一旦出现就**粘住不再变回暗灰**：触摸是瞬时的，500ms 采样极易错过，
- * 不粘住的话手指一抬就看不到证据了。
- *
- * 另外点屏时会在触点处画 24×24 红块，落点即 GT911 报的面板原生坐标
- * （刻意不经 touch_map 变换），顺带验证读数本身合不合理。
- *
- * 代价（所以不能长期留着）：心跳每 500ms 触发两次整帧 cache 回写(各 1.8MB)，
- * 且会在 host 的 GUD 画面上留下色块。
- */
-#define TOUCH_DEBUG_MARKER 1
-
-#if TOUCH_DEBUG_MARKER
-/* 左上角状态块（面板原生坐标系）：① 初始化状态 + 心跳，② 最近一次读取结果 */
-#define DBG_STATUS_X     0
-#define DBG_READ_X       24       /* 与 ① 留 8px 间隔，避免两块糊成一条 */
-#define DBG_STATUS_Y     0
-#define DBG_STATUS_SIZE  16
-/* 触点块：比状态块大一圈，好和它区分开 */
-#define DBG_POINT_SIZE   24
-#define DBG_GREEN        0x07E0   /* 初始化成功 */
-#define DBG_GREEN_DIM    0x03E0   /* 心跳的另一相 */
-#define DBG_RED          0xF800   /* 初始化失败 / 读到触点 */
-#define DBG_BLUE         0x001F   /* read_data 出错 */
-#define DBG_YELLOW       0xFFE0   /* get_data 出错 */
-#define DBG_GREY         0x39E7   /* 读取正常但 points == 0 */
-#define DBG_MAGENTA      0xF81F   /* points > 0（粘住） */
-#endif
 
 /* 轮询周期。触摸不像键盘那样怕丢事件（坐标是状态而非边沿），20ms
  * 对指针跟随已经足够跟手，无需中断驱动。 */
@@ -138,73 +83,19 @@ static void touch_task(void *arg)
      * 最后一条即可，重发没有信息量。 */
     bool     last_tip = false;
     uint16_t last_x = 0, last_y = 0;
-#if TOUCH_DEBUG_MARKER
-    bool     dbg_blink = false;
-    int      dbg_tick = 0;
-    /* 最近一次读取结果的颜色。初值取暗灰（= 读得通但没触点），这样开机后
-     * 若这块一直是暗灰，含义明确：「I2C 通、就是一个点都读不到」。 */
-    uint16_t dbg_read = DBG_GREY;
-    /* 品红粘住标志：见文件头说明，500ms 采样错过瞬时触摸的概率很高。 */
-    bool     dbg_ever_touched = false;
-#endif
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(TOUCH_POLL_MS));
 
-#if TOUCH_DEBUG_MARKER
-        /* 心跳画在**读 I2C 之前**：这样它只证明「任务还在跑」这一件事。
-         * 若画在读之后，一条读失败的 continue 就会把心跳停掉，「任务卡死」
-         * 与「GT911 读不通」在屏上就混成同一个现象了。
-         *
-         * 但**不能每轮都画**：display_debug_marker() 结尾要整帧 cache 回写
-         * (1.8MB)，20ms 一次 ≈ 92MB/s，会挤占 PSRAM 带宽、把 GUD 显示拖卡，
-         * 反而干扰判读。降到每 25 轮(约 500ms)一次，肉眼看仍是清晰的闪烁，
-         * 回写量降到 1/25。触点红块只在真有触摸时画，本来就不常态触发。 */
-        if (++dbg_tick >= 25) {
-            dbg_tick = 0;
-            dbg_blink = !dbg_blink;
-            display_debug_marker(DBG_STATUS_X, DBG_STATUS_Y,
-                                 DBG_STATUS_SIZE, DBG_STATUS_SIZE,
-                                 dbg_blink ? DBG_GREEN : DBG_GREEN_DIM);
-            /* 读取结果块同样只在心跳节拍重画（而不是每轮），理由同上：
-             * 每次 display_debug_marker() 都要整帧回写 1.8MB。 */
-            display_debug_marker(DBG_READ_X, DBG_STATUS_Y,
-                                 DBG_STATUS_SIZE, DBG_STATUS_SIZE,
-                                 dbg_ever_touched ? DBG_MAGENTA : dbg_read);
-        }
-#endif
-
-        if (esp_lcd_touch_read_data(s_tp) != ESP_OK) {
-#if TOUCH_DEBUG_MARKER
-            dbg_read = DBG_BLUE;
-#endif
+        if (esp_lcd_touch_read_data(s_tp) != ESP_OK)
             continue;
-        }
 
         /* 用 esp_lcd_touch_get_data() 而非 esp_lcd_touch_get_coordinates()：
          * 后者在 esp_lcd_touch 1.2.x 已标 deprecated（2.0.0 移除），编译告警。 */
         esp_lcd_touch_point_data_t pts[TOUCH_POINTS_MAX];
         uint8_t points = 0;
-        if (esp_lcd_touch_get_data(s_tp, pts, &points, TOUCH_POINTS_MAX) != ESP_OK) {
-#if TOUCH_DEBUG_MARKER
-            dbg_read = DBG_YELLOW;
-#endif
+        if (esp_lcd_touch_get_data(s_tp, pts, &points, TOUCH_POINTS_MAX) != ESP_OK)
             continue;
-        }
-
-#if TOUCH_DEBUG_MARKER
-        dbg_read = (points > 0) ? DBG_MAGENTA : DBG_GREY;
-
-        /* 用 pts[0] 的**面板原生坐标**直接落点，刻意不经 touch_map_panel_to_gud()：
-         * 这里要看的是 GT911 出的最原始读数，套上变换就看不出是读数错还是变换错。
-         * 无触点时不擦除上一个红块 —— 留痕比闪一下更容易观察，host 的 GUD 帧
-         * 迟早会把它盖掉。 */
-        if (points > 0) {
-            dbg_ever_touched = true;
-            display_debug_marker(pts[0].x, pts[0].y,
-                                 DBG_POINT_SIZE, DBG_POINT_SIZE, DBG_RED);
-        }
-#endif
 
         const bool tip = points > 0;
         /* 抬起时坐标沿用最后一次的位置 —— digitizer 的惯例是「手指在哪儿松开的」，
@@ -244,7 +135,7 @@ esp_err_t touch_start(void)
     /*
      * ⚠️⚠️ Tab5 v1（ILI9881C + GT911）硬件上 INT 脚有一颗**到 3V3 的上拉电阻**，
      * 它会压住 GT911 不出坐标：I2C 读得到产品 ID、初始化一路成功，但状态寄存器
-     * 0x814E 的 buffer-ready 位(bit7)永远不置起，表现正是「初始化过、心跳正常、
+     * 0x814E 的 buffer-ready 位(bit7)永远不置起，表现正是「初始化过、轮询也在跑、
      * 就是一个触点都读不到」。必须由 ESP 侧把 INT **主动驱动到低**压住那颗上拉。
      *
      * 这不是猜测：官方 esp-bsp `bsp/m5stack_tab5/src/bsp_display.c` 的
@@ -269,7 +160,7 @@ esp_err_t touch_start(void)
      * 地址早已锁定。顺带：display_dsi.c 的 panel_detect() 已 i2c_master_probe(0x14)
      * 成功才选了 ILI9881C 分支，0x14 这个地址本身是实测无疑的。
      *
-     * ⚠️⚠️ 若这个修**没解决问题**，Plan B 是补 M5 官方的复位时序 —— 但两者
+     * ⚠️⚠️ 本修已实机验证通过。万一将来换批次硬件复发，Plan B 是补 M5 官方的复位时序 —— 但两者
      * **有致命的先后顺序要求，写反会更坏**：
      *   M5Tab5-UserDemo 的 bsp_reset_tp() 与 M5GFX 都通过 IO 扩展 0x43 的 **P5**
      *   （即我们 board_power_init() 里那个 TOUCH_EN，M5 管它叫 TP_RST）做一次
@@ -277,7 +168,7 @@ esp_err_t touch_start(void)
      *   我们现在只把 P5 置了高，从没拉低过，等于没有干净的复位沿。
      *   要补的话必须是「先拉高 INT → 脉冲 P5 → 等 100ms → 再执行本函数的 INT 拉低」。
      *   若在 INT 已经被拉低之后才去脉冲 P5，GT911 会 latch 成 **0x5D**，
-     *   连 I2C 都不再应答（屏上②会从暗灰变蓝），比现在还糟。
+     *   连 I2C 都不再应答（连 esp_lcd_touch_new_i2c_gt911() 都会失败），比现在还糟。
      *
      * 之所以先试 esp-bsp 这条而不是 M5 那条：esp-bsp 用的是**和我们完全相同的
      * esp_lcd_touch_gt911 驱动栈**，且那段注释明确写着是针对 board version 1
@@ -359,26 +250,11 @@ esp_err_t touch_start(void)
         esp_lcd_panel_io_del(io);
         ESP_LOGE(TAG, "gt911 未应答(0x%02x)：%s，检查内部 I2C 与触摸电源",
                  ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, esp_err_to_name(err));
-#if TOUCH_DEBUG_MARKER
-        /* 左上角常驻红块 = GT911 初始化失败。此后不会再有任何绘制（任务没起来），
-         * 所以它是**静止**的，与心跳的绿色闪烁在屏上一眼可分。
-         * app_main 的调用顺序保证 display_init() 已完成、帧缓冲可用；
-         * display_debug_marker() 内部另有 s_fb == NULL 的防御。 */
-        display_debug_marker(DBG_STATUS_X, DBG_STATUS_Y,
-                             DBG_STATUS_SIZE, DBG_STATUS_SIZE, DBG_RED);
-#endif
         return err;
     }
 
     ESP_LOGI(TAG, "gt911 ready (addr=0x%02x, int=G%d 由本函数驱动为低)",
              ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, PIN_TOUCH_INT);
-
-#if TOUCH_DEBUG_MARKER
-    /* 初始化成功先画一次绿块，再交给 touch_task 去闪。多这一笔是为了把
-     * 「起来了但任务没跑起来」也显出来：那种情况下屏上是**静止的绿块**。 */
-    display_debug_marker(DBG_STATUS_X, DBG_STATUS_Y,
-                         DBG_STATUS_SIZE, DBG_STATUS_SIZE, DBG_GREEN);
-#endif
 
     xTaskCreate(touch_task, "touch", 4096, NULL, 5, NULL);
     return ESP_OK;

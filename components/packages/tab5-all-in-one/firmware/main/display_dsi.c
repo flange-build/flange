@@ -62,46 +62,6 @@ static void frame_buffer_flush(void)
 }
 
 /*
- * 屏上诊断方块。见 display_dsi.h 的说明——这是无串口环境下把固件内部状态
- * 显示出来的手段，不属于正常显示路径。
- *
- * 三点要紧：
- *  1) 必须钳位。s_fb 只有 PANEL_W×PANEL_H 个像素，越界就是写坏 PSRAM 里
- *     紧邻的其它分配，症状会是别处莫名其妙的崩溃。
- *  2) 画完必须 frame_buffer_flush()。P4 的 DMA 不侦听 cache，CPU 直写帧缓冲
- *     不回写则 DSI 桥取到的还是旧像素，屏上什么都看不到（见 README「CPU 直写
- *     帧缓冲后必须 cache 回写」）。走 PPA 的 display_blit() 不用管，那是 PPA
- *     驱动自己做的；本函数是 CPU 直写，必须自己做。
- *  3) 与 display_blit() 并发写同一块 s_fb 且无锁。诊断用途下可接受：最坏结果
- *     是方块边缘几个像素被 host 的 GUD 帧盖掉或反之，不影响判读。
- */
-void display_debug_marker(uint16_t panel_x, uint16_t panel_y,
-                          uint16_t w, uint16_t h, uint16_t rgb565)
-{
-    /* touch_start() 失败时也会调本函数，那时 display_init() 已完成；
-     * 但若将来调用顺序变了，s_fb 可能还是 NULL，这里挡住。 */
-    if (!s_fb || panel_x >= PANEL_W || panel_y >= PANEL_H)
-        return;
-
-    /* 用 uint32_t 算右/下边界：uint16_t 相加会绕回，钳位反而失效 */
-    uint32_t x_end = (uint32_t)panel_x + w;
-    uint32_t y_end = (uint32_t)panel_y + h;
-    if (x_end > PANEL_W)
-        x_end = PANEL_W;
-    if (y_end > PANEL_H)
-        y_end = PANEL_H;
-
-    /* 逐行写：s_fb 的 stride 是 PANEL_W 个像素（不是 w） */
-    for (uint32_t y = panel_y; y < y_end; y++) {
-        uint16_t *row = s_fb + y * PANEL_W;
-        for (uint32_t x = panel_x; x < x_end; x++)
-            row[x] = rgb565;
-    }
-
-    frame_buffer_flush();
-}
-
-/*
  * 面板自检。刻意走 display_blit()，因此同时验证面板时序、颜色通道，
  * 以及 PPA 的缩放/旋转坐标映射——三者任一错都会在屏上直接看出来。
  * 测试图 640×360×2 = 460KB 放 PSRAM（内部 DRAM 余量不够），用完即释放：
