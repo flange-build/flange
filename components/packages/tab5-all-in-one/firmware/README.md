@@ -736,7 +736,10 @@ ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multi
 
 - 设备枚举为 `bus 0x3 vendor 0x16d0 product 0x10a9`，名为 `flange Tab5 USB Terminal`；
 - **`hid-multitouch` 正常绑定**，且**键盘仍是独立的 input 设备**
-  （`flange Tab5 USB Terminal Keyboard`）—— 共用一个 HID 接口不冲突；
+  （`flange Tab5 USB Terminal Keyboard`）—— 共用一个 HID 接口不冲突。
+  ⓘ 这条是**推断**而非直接观察：上面那条查 `/sys/bus/hid/.../driver` 的命令当时没跑，
+  依据是能力表里出现了 `ABS_MT_SLOT` —— 该轴由 `input_mt_init_slots()` 创建，
+  HID 栈里只有 `hid-multitouch` 会调它，`hid-generic` 不会；
 - 能力表含 `ABS_MT_SLOT`（**Max 4**）、`ABS_MT_POSITION_X` / `ABS_MT_POSITION_Y`
   （均 **Max 32767**），属性含 `INPUT_PROP_DIRECT`（直接式触摸屏，不是触摸板）；
 - `ABS_MT_SLOT` 的 **Max 4**（= `TOUCH_CONTACTS_MAX` − 1 = 5 − 1）恰好证明
