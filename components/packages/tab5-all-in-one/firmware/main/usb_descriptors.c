@@ -19,15 +19,45 @@ const tusb_desc_device_t aio_desc_device = {
     .bNumConfigurations = 0x01,
 };
 
-/* 配置描述符：目前只有 IF0 = GUD vendor。 */
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN)
+/* 标准键盘，带 Report ID —— 触摸阶段以 RID 2 追加时是纯增量改动。 */
+static const uint8_t aio_hid_report_desc[] = {
+    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(HID_RID_KEYBOARD))
+};
+
+/* 配置描述符：IF0 = GUD vendor，IF1 = HID 键盘。 */
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_HID_DESC_LEN)
 const uint8_t aio_desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
     TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
+    TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_KEYBOARD,
+                       sizeof(aio_hid_report_desc), EPNUM_HID,
+                       CFG_TUD_HID_EP_BUFSIZE, 10),
 };
 
 _Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN,
                "USB 配置描述符长度不一致");
+
+/* esp_tinyusb 只实现 tud_descriptor_*_cb，HID 这三个回调要我们自己提供，
+ * 否则链接期缺符号（report_cb）或运行时对 GET/SET_REPORT STALL。 */
+uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
+{
+    (void)instance;
+    return aio_hid_report_desc;
+}
+
+uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
+                               hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen)
+{
+    (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)reqlen;
+    return 0;
+}
+
+/* 空实现 = 忽略 host 下发的 LED 状态（如 CapsLock）。本阶段有意为之。 */
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+                           hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize)
+{
+    (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)bufsize;
+}
 
 /*
  * 字符串描述符：交由 esp_tinyusb 完成 UTF-16 转换与 langid 处理。

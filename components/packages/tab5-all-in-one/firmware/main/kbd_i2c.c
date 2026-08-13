@@ -10,12 +10,14 @@
 #include "kbd_i2c.h"
 #include "tab5_pins.h"
 #include "tab5_kbd_map.h"
+#include "usb_descriptors.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "tusb.h"
 
 static const char *TAG = "kbd";
 
@@ -149,9 +151,11 @@ static void kbd_build_and_report(void)
         }
     }
 
-    ESP_LOGI(TAG, "report mod=0x%02x keys=%02x %02x %02x %02x %02x %02x",
+    ESP_LOGD(TAG, "report mod=0x%02x keys=%02x %02x %02x %02x %02x %02x",
              modifier, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5]);
-    /* Task 4 在此接 tud_hid_keyboard_report() */
+
+    if (tud_hid_ready())
+        tud_hid_keyboard_report(HID_RID_KEYBOARD, modifier, nk ? keys : NULL);
 }
 
 static void kbd_task(void *arg)
