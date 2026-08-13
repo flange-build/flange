@@ -55,6 +55,9 @@ static TaskHandle_t s_kbd_task;
  * 无从下手。每连续失败 10 次告警一次，读成功即清零。 */
 static uint32_t s_i2c_fail_count;
 
+/* 上一条 HID 报告没发出去（端点持续忙），待重发。见 kbd_task() 末尾的重试。 */
+static bool s_report_pending;
+
 static void kbd_note_i2c_result(esp_err_t err)
 {
     if (err == ESP_OK) {
@@ -87,9 +90,10 @@ static esp_err_t kbd_write_reg(uint8_t reg, uint8_t val)
     return i2c_master_transmit(s_dev, buf, sizeof(buf), 100);
 }
 
-/* 把当前按下集合翻译成 HID 报告并发给 host。分层逻辑（Sym/Aa/Ctrl/Alt）
- * 在 kbd_translate.c，拆出来是为了能在宿主机测试，这里只管发送。 */
-static void kbd_build_and_report(void)
+/* 把当前按下集合翻译成 HID 报告并发给 host，返回是否真的发出去了。
+ * 分层逻辑（Sym/Aa/Ctrl/Alt）在 kbd_translate.c，拆出来是为了能在宿主机测试，
+ * 这里只管发送。 */
+static bool kbd_build_and_report(void)
 {
     uint8_t modifier = 0;
     uint8_t keys[KBD_KEYS_MAX] = {0};
@@ -108,8 +112,11 @@ static void kbd_build_and_report(void)
      * press-A 和 release-A，合并后这次按键会整个消失，必须逐条发。 */
     for (int i = 0; i < 20 && !tud_hid_ready(); i++)
         vTaskDelay(pdMS_TO_TICKS(1));
-    if (!tud_hid_keyboard_report(HID_RID_KEYBOARD, modifier, nk ? keys : NULL))
-        ESP_LOGW(TAG, "hid report 丢弃（端点持续忙）");
+    if (!tud_hid_keyboard_report(HID_RID_KEYBOARD, modifier, nk ? keys : NULL)) {
+        ESP_LOGW(TAG, "hid report 发送失败（端点持续忙），待重发");
+        return false;
+    }
+    return true;
 }
 
 static void kbd_task(void *arg)
@@ -148,9 +155,30 @@ static void kbd_task(void *arg)
                 if (row >= KBD_ROWS || col >= KBD_COLS)
                     continue;
                 s_pressed[row][col] = pressed;
-                kbd_build_and_report();
+                s_report_pending = !kbd_build_and_report();
             }
         } while (n > 0);
+
+        /*
+         * 排空后补发一次上面没发出去的报告。
+         *
+         * 为什么必须补：等满 20ms 端点仍忙时报告就丢了，若丢的正好是「全部
+         * 松开」那条，而此后用户不再按键（不会再产生事件、也就不会再有任何
+         * 发送），host 会一直认为键按着 —— 终端里表现成字符自动重复。这与
+         * 触摸丢掉 tip=0 抬起报告是同一个洞（见 touch_hid.c）。
+         *
+         * 为什么重发是安全的：报告是 s_pressed 的**纯函数**（kbd_translate()
+         * 每次都从按下集合重算「此刻按着哪些键」的完整快照），重发只是把当前
+         * 真相再声明一遍，不会凭空造出或抹掉一次按键。上面那条「不能一批只发
+         * 最终状态」的禁忌针对的是**批内合并**（press-A 与 release-A 合并后
+         * 这次按键整个消失），与失败后重试是两回事，不冲突。
+         *
+         * 放在排空之后是关键：此刻 s_pressed 已吸收完本轮全部事件，补发的就是
+         * 最新真相。任务本身有 100ms 超时兜底会醒，所以即使之后再无按键也会重试，
+         * 不需要额外的重试计数或定时器。
+         */
+        if (s_report_pending)
+            s_report_pending = !kbd_build_and_report();
     }
 }
 
