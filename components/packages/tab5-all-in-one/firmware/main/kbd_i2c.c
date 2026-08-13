@@ -9,6 +9,7 @@
  */
 #include "kbd_i2c.h"
 #include "tab5_pins.h"
+#include "tab5_kbd_map.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "esp_check.h"
@@ -32,6 +33,17 @@ static const char *TAG = "kbd";
 
 /* Normal 模式事件：bit7 按下(1)/释放(0)，bit[6:4] 行，bit[3:0] 列；队列空读回 0xFF */
 #define KEY_EVENT_EMPTY    0xFF
+
+#define KBD_ROWS 5
+#define KBD_COLS 14
+
+/* 当前按下的键（行列位图）。Normal 模式给的是按下/释放边沿事件，
+ * 而 HID 报告要的是「此刻按着哪些键」的全量快照，所以必须自己维护集合。 */
+static bool s_pressed[KBD_ROWS][KBD_COLS];
+
+/* 四个功能键的位置，取自官方固件 updatemodifier_mask() */
+#define IS_SYM(r, c)   ((r) == 3 && (c) == 0)
+#define IS_AA(r, c)    ((r) == 3 && (c) == 1)
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
@@ -58,6 +70,67 @@ static esp_err_t kbd_write_reg(uint8_t reg, uint8_t val)
     return i2c_master_transmit(s_dev, buf, sizeof(buf), 100);
 }
 
+/*
+ * 把当前按下集合翻译成标准 HID 键盘报告（modifier + 最多 6 个 keycode）。
+ *
+ * 分层规则（与官方固件 convert_to_hid() 语义一致）：
+ *   - Sym(3,0) / Aa(3,1)：**本地层键，不上报**。官方表里它们的 firstKeyCode 是
+ *     KEY_LEFTSHIFT，但物理键盘上标「!」的键其基础层本身就是 Shift+1 ——
+ *     Sym 不是 Shift，而是切到第二层。当 Shift 上报会让符号全错。
+ *   - Ctrl(4,0) / Alt(4,1)：查表得到的 usage 落在 0xE0~0xE7（HID 修饰键区间），
+ *     由下面的通用规则自动归入 modifier 字节，不占 keycode 槽。
+ *   - 字母键：Aa 生效 → 用 second 层（大写）。
+ *   - 其余键：Sym 按住且 key_modifier_flag 置位 → 用 second 层。
+ */
+static void kbd_build_and_report(void)
+{
+    bool sym = s_pressed[3][0];
+    bool aa  = s_pressed[3][1];
+
+    uint8_t modifier = 0;
+    uint8_t keys[6] = {0};
+    int nk = 0;
+
+    for (int r = 0; r < KBD_ROWS; r++) {
+        for (int c = 0; c < KBD_COLS; c++) {
+            if (!s_pressed[r][c]) continue;
+            if (IS_SYM(r, c) || IS_AA(r, c)) continue;   /* 本地层键，不上报 */
+
+            const key_value_t *k = &key_value_map[r][c];
+            bool is_letter = (k->firstKeyCode >= KEY_A && k->firstKeyCode <= KEY_Z);
+            bool use_second = is_letter ? aa : (sym && key_modifier_flag[r][c]);
+
+            uint8_t mod, code;
+            if (use_second) {
+                mod  = k->secondModifierMask;
+                code = k->secondKeyCode;
+            } else if (is_letter) {
+                /* ⚠️ 不能取表里的 firstModifierMask：上游把底排 z/x/c/v/b/n/m 的
+                 * firstModifierMask 写成了 KEY_MOD_LSHIFT。官方 convert_to_hid()
+                 * 的小写分支根本不读这个字段（只用运行时 modifier_mask），从而
+                 * 绕开了它；照抄字段会让这一整排打出大写。这里照同样语义处理。 */
+                mod  = 0;
+                code = k->firstKeyCode;
+            } else {
+                mod  = k->firstModifierMask;
+                code = k->firstKeyCode;
+            }
+
+            modifier |= mod;
+            /* 0xE0~0xE7 是 HID 修饰键 usage：转成 modifier 位，不占 keycode 槽 */
+            if (code >= KEY_LEFTCTRL && code <= KEY_RIGHTMETA) {
+                modifier |= (uint8_t)(1u << (code - KEY_LEFTCTRL));
+            } else if (code != KEY_NONE && nk < 6) {
+                keys[nk++] = code;
+            }
+        }
+    }
+
+    ESP_LOGI(TAG, "report mod=0x%02x keys=%02x %02x %02x %02x %02x %02x",
+             modifier, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5]);
+    /* Task 4 在此接 tud_hid_keyboard_report() */
+}
+
 static void kbd_task(void *arg)
 {
     (void)arg;
@@ -75,9 +148,17 @@ static void kbd_task(void *arg)
             uint8_t ev = KEY_EVENT_EMPTY;
             if (kbd_read_reg(REG_KEY_EVENT, &ev, 1) != ESP_OK || ev == KEY_EVENT_EMPTY)
                 break;
-            ESP_LOGI(TAG, "raw %s row=%u col=%u",
-                     (ev & 0x80) ? "press" : "release",
-                     (unsigned)((ev >> 4) & 0x07), (unsigned)(ev & 0x0F));
+            const bool pressed = (ev & 0x80) != 0;
+            const uint8_t row = (ev >> 4) & 0x07;
+            const uint8_t col = ev & 0x0F;
+            ESP_LOGI(TAG, "raw %s row=%u col=%u", pressed ? "press" : "release",
+                     (unsigned)row, (unsigned)col);
+
+            /* 越界防御：行列来自从机，若固件/线路异常给出非法值，别越界写内存 */
+            if (row >= KBD_ROWS || col >= KBD_COLS)
+                continue;
+            s_pressed[row][col] = pressed;
+            kbd_build_and_report();
         }
     }
 }
