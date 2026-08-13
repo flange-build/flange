@@ -166,8 +166,16 @@ esp_err_t kbd_start(void)
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_bus), TAG, "kbd i2c bus");
 
-    ESP_RETURN_ON_ERROR(i2c_master_probe(s_bus, KBD_I2C_ADDR, 100), TAG,
-                        "键盘未应答(0x%02x)，检查排线与 G0/G1", KBD_I2C_ADDR);
+    /* 探测失败是**受支持的正常配置**（Tab5 Keyboard 是可拆配件，不插就该降级启动），
+     * 所以这条路径必须把总线还回去 —— 否则每次不插键盘开机都白占住 I2C_NUM_1 与 G0/G1。
+     * 此刻还没 add_device，设备链为空，i2c_del_master_bus() 可直接成功，
+     * 不需要 goto 清理链。 */
+    if (i2c_master_probe(s_bus, KBD_I2C_ADDR, 100) != ESP_OK) {
+        i2c_del_master_bus(s_bus);
+        s_bus = NULL;
+        ESP_LOGW(TAG, "键盘未应答(0x%02x)；未插键盘底座时属正常", KBD_I2C_ADDR);
+        return ESP_ERR_NOT_FOUND;
+    }
 
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
