@@ -10,6 +10,7 @@
 #include "kbd_i2c.h"
 #include "tab5_pins.h"
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -34,6 +35,17 @@ static const char *TAG = "kbd";
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
+static TaskHandle_t s_kbd_task;
+
+/* INT 低有效：键盘固件拉低表示队列非空。用下降沿唤醒读取任务，
+ * ISR 里只做任务通知，I2C 读取放任务上下文（I2C 不能在 ISR 里做）。 */
+static void IRAM_ATTR kbd_int_isr(void *arg)
+{
+    (void)arg;
+    BaseType_t hp = pdFALSE;
+    vTaskNotifyGiveFromISR(s_kbd_task, &hp);
+    portYIELD_FROM_ISR(hp);
+}
 
 static esp_err_t kbd_read_reg(uint8_t reg, uint8_t *out, size_t len)
 {
@@ -50,18 +62,23 @@ static void kbd_task(void *arg)
 {
     (void)arg;
     while (1) {
+        /* 等 INT。保留 100ms 超时兜底：INT 是**电平语义**（队列非空即低），
+         * 若我们在它已经拉低之后才配置下降沿中断，就永远等不到边沿。
+         * 超时轮询让这种竞态自愈。代价是空闲时每秒 10 次一字节 I2C 读，可忽略。 */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+
+        /* 一次排空队列：EVENT_NUM 给出当前事件数，逐个读走后 INT 自然释放。 */
         uint8_t n = 0;
-        if (kbd_read_reg(REG_EVENT_NUM, &n, 1) == ESP_OK && n > 0) {
-            for (uint8_t i = 0; i < n; i++) {
-                uint8_t ev = KEY_EVENT_EMPTY;
-                if (kbd_read_reg(REG_KEY_EVENT, &ev, 1) != ESP_OK || ev == KEY_EVENT_EMPTY)
-                    break;
-                ESP_LOGI(TAG, "raw %s row=%u col=%u",
-                         (ev & 0x80) ? "press" : "release",
-                         (unsigned)((ev >> 4) & 0x07), (unsigned)(ev & 0x0F));
-            }
+        if (kbd_read_reg(REG_EVENT_NUM, &n, 1) != ESP_OK)
+            continue;
+        for (uint8_t i = 0; i < n; i++) {
+            uint8_t ev = KEY_EVENT_EMPTY;
+            if (kbd_read_reg(REG_KEY_EVENT, &ev, 1) != ESP_OK || ev == KEY_EVENT_EMPTY)
+                break;
+            ESP_LOGI(TAG, "raw %s row=%u col=%u",
+                     (ev & 0x80) ? "press" : "release",
+                     (unsigned)((ev >> 4) & 0x07), (unsigned)(ev & 0x0F));
         }
-        vTaskDelay(pdMS_TO_TICKS(15));
     }
 }
 
@@ -92,6 +109,18 @@ esp_err_t kbd_start(void)
     ESP_RETURN_ON_ERROR(kbd_write_reg(REG_KEYBOARD_MODE, KBD_MODE_NORMAL), TAG, "设 Normal 模式失败");
 
     ESP_LOGI(TAG, "fw=0x%02x addr=0x%02x mode=normal", fw, KBD_I2C_ADDR);
-    xTaskCreate(kbd_task, "kbd", 4096, NULL, 5, NULL);
+
+    /* 中断配置必须在建任务**之后** —— ISR 要用到 s_kbd_task 句柄。 */
+    xTaskCreate(kbd_task, "kbd", 4096, NULL, 5, &s_kbd_task);
+
+    gpio_config_t int_cfg = {
+        .mode = GPIO_MODE_INPUT,
+        .pin_bit_mask = 1ULL << PIN_KBD_INT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,   /* INT 低有效，常态由上拉保持高 */
+        .intr_type = GPIO_INTR_NEGEDGE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&int_cfg), TAG, "kbd int gpio");
+    ESP_RETURN_ON_ERROR(gpio_install_isr_service(0), TAG, "isr service");
+    ESP_RETURN_ON_ERROR(gpio_isr_handler_add(PIN_KBD_INT, kbd_int_isr, NULL), TAG, "isr add");
     return ESP_OK;
 }
