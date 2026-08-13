@@ -1,4 +1,4 @@
-idf_component_register(SRCS "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c" "display_dsi.c" "board_power.c"
+idf_component_register(SRCS "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c" "display_dsi.c" "board_power.c" "kbd_i2c.c"
                        INCLUDE_DIRS "."
                        PRIV_REQUIRES esp_driver_i2c esp_driver_gpio esp_lcd esp_mm esp_driver_ppa)
 

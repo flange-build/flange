@@ -7,6 +7,7 @@
 #include "usb_descriptors.h"
 #include "gud_device.h"
 #include "board_power.h"
+#include "kbd_i2c.h"
 #include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
 
 static const char *TAG = "tab5_aio";
@@ -62,6 +63,8 @@ void app_main(void)
     tusb_cfg.descriptor.string_count = aio_string_desc_count;
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
     ESP_LOGI(TAG, "tinyusb installed (GUD only)");
+
+    ESP_ERROR_CHECK(kbd_start());
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }
