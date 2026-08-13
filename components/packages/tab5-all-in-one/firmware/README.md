@@ -3,7 +3,8 @@
 M5Stack Tab5 作为 **USB 设备**，让嵌入式 Linux 主机把它当成一块标准 DRM 显示器
 （mainline `gud` 驱动，`/dev/dri/cardN`）。host 送来的 **640×360 RGB565** 帧经 ESP32-P4 的
 PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90° 旋转**，铺满板载的
-720×1280 MIPI-DSI 面板。后续阶段在同一个复合设备上追加 UAC 音频 / HID 键盘触摸 / UVC 摄像头。
+720×1280 MIPI-DSI 面板。同一个复合设备上还带 **HID 键盘**（Tab5 Keyboard）；
+后续阶段追加 HID 触摸屏 / UAC 音频 / UVC 摄像头。
 
 > ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
 
@@ -13,7 +14,9 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
   - **IF0 Vendor(GUD) 显示**：GUD 设备协议最小子集，单 connector / 单模式 **640×360** /
     **RGB565**，支持 LZ4 压缩与 dirty rectangle（脏矩形）；收 host 帧（SET_BUFFER + bulk OUT）
     →（可选 LZ4 解压）→ PPA 缩放旋转 → DPI 帧缓冲 → 面板。
-  - 设备描述符已按 Misc/IAD 复合设备声明，为后续 UAC/HID/UVC 预留；本阶段只有 IF0。
+  - **IF1 HID 键盘**：Tab5 Keyboard 经独立 I2C 总线读行列事件，自建 6KRO 状态机上报，
+    报告带 Report ID（RID 1）。详见下文「HID 键盘」。
+  - 设备描述符为 Misc/IAD 复合设备，为后续 UAC/触摸/UVC 预留。
 - 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）；
   面板 init 序列与 DSI/DPI 参数复刻自 esp-bsp `bsp/m5stack_tab5`（Apache-2.0）。
 
@@ -116,8 +119,9 @@ cdc_acm 1-1.1:1.0: ttyACM0: USB ACM device
 P4 全速控制器（tinyusb `dwc2_esp32.h`）：`ep_count = 7`、`ep_in_count = 5`（含 EP0）、
 FIFO 256 words（1 KB），即**最多 4 条可用 IN 端点**。
 
-本阶段只用 vendor 的 IN/OUT 各一条，余量充足。后续的 UAC + HID + UVC 会把 IN 端点用满，
-届时**键盘与触摸必须合并成一个 HID 接口**，用 Report ID 区分（RID 1 键盘 / RID 2 digitizer）。
+当前已用 **2 条 IN 端点**：vendor(`0x81`) + HID(`0x82`)，余 2 条。后续的 UAC + UVC 会把它们用满，
+所以**触摸必须与键盘合并进同一个 HID 接口**，用 Report ID 区分（RID 1 键盘 / RID 2 digitizer）——
+键盘的报告描述符已经带 Report ID，届时是纯增量改动。
 
 ## 显示
 
@@ -227,8 +231,8 @@ DPI 时序（两者只有像素时钟与 porch 不同，见 `display_dsi.c` 的 
 
 `0x43` 是 PI4IOE5V6408-1，本固件用它的 `LCD_EN`(pin4) / `TOUCH_EN`(pin5) 给面板与触摸上电。
 
-> Tab5 Keyboard 在**另一条** I2C 上：SDA = G0 / SCL = G1 / INT = G50，地址 `0x6D`。
-> 本阶段未使用，键盘阶段再单独初始化那条总线。
+> Tab5 Keyboard 在**另一条** I2C 上：SDA = G0 / SCL = G1 / INT = G50，地址 `0x6D`，
+> 由 `kbd_i2c.c` 自己持有 `I2C_NUM_1`（本表这条内部总线是 `I2C_NUM_0`）。详见「HID 键盘」。
 
 ## Host 侧验证（主机需 mainline `gud`，内核 ≥ 5.13，发行版一般自带 `CONFIG_DRM_GUD=m`）
 
