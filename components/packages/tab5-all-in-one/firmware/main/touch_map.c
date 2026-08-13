@@ -46,3 +46,31 @@ uint16_t touch_map_gud_to_hid(uint16_t gud, uint16_t gud_max)
 
     return (uint16_t)(((uint32_t)gud * TOUCH_HID_LOGICAL_MAX) / gud_max);
 }
+
+/*
+ * 见 touch_map.h 的契约说明。刻意做成不依赖 esp_lcd_touch 的纯函数：
+ * 「几个触点装进几个 slot、多出来的怎么办、contact_count 填几」这几件事
+ * 写错了在实机上都表现为「多指时坐标错位或干脆没反应」，从现象反推极难，
+ * 放到宿主机上钉死（见 firmware/test/test_touch_map.c）成本几乎为零。
+ *
+ * **未使用的 slot 必须整体清零**，不能只清 tip：Linux hid-multitouch 是按
+ * contact_count 决定处理前几个 slot，剩下的本就该是干净的 tip=0 空槽；
+ * 留着上一帧的残值只会在排查时误导人。
+ */
+void touch_report_fill(touch_report_t *rpt, const touch_contact_t *active, uint8_t n)
+{
+    if (n > TOUCH_CONTACTS_MAX)
+        n = TOUCH_CONTACTS_MAX;
+
+    for (uint8_t i = 0; i < TOUCH_CONTACTS_MAX; i++) {
+        if (i < n) {
+            rpt->contacts[i] = active[i];
+            rpt->contacts[i].tip = 1;   /* 不信调用方填的，见头文件契约 */
+        } else {
+            const touch_contact_t empty = {0};
+            rpt->contacts[i] = empty;
+        }
+    }
+
+    rpt->contact_count = n;
+}

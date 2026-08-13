@@ -1,6 +1,7 @@
 #include "usb_descriptors.h"
-/* 只为 TOUCH_HID_LOGICAL_MAX：报告描述符声明的 Logical Maximum 与
- * touch_map_gud_to_hid() 归一化用的上限必须是同一个数，分开写迟早会漂。 */
+/* 为 TOUCH_HID_LOGICAL_MAX 与 TOUCH_CONTACTS_MAX：报告描述符声明的
+ * Logical Maximum / contact 数，必须与 touch_map 那边的归一化上限、
+ * touch_report_t 的 slot 数是同一个数，分开写迟早会漂。 */
 #include "touch_map.h"
 
 /* 设备描述符：Misc/IAD：为后续 UAC/HID/UVC 复合预留；本阶段仅 IF0 vendor。
@@ -23,46 +24,47 @@ const tusb_desc_device_t aio_desc_device = {
 };
 
 /*
- * RID 2：单点 digitizer（触摸屏）。TinyUSB 没有现成的 digitizer 描述符宏
- * （只有 keyboard/mouse/consumer/gamepad 等），按 HID Usage Tables 的
- * Digitizers 页(0x0D)手写。用 HID_* 宏而非裸字节数组：每个 item 的 tag/type/size
- * 由宏算，改一处不会连累相邻字节。
+ * 一个 contact（手指）在报告描述符里的那一段。TOUCH_CONTACTS_MAX 份
+ * 逐字相同，所以做成宏重复展开 —— 手写五遍必然出现不一致，而这类不一致
+ * 在 host 侧只表现为「某几根手指坐标错位」，从现象几乎反推不出来。
  *
- * 单点最小可用形态，负载共 5 字节：
- *   Tip Switch 1 bit + 7 bit 填充（补齐到字节边界）+ 绝对 X/Y 各 16 bit
- * X/Y 归一化到 0..TOUCH_HID_LOGICAL_MAX，描述符因此不与 GUD 分辨率耦死 ——
- * 换分辨率只改 touch_map 的归一化，这里不动。
+ * 负载 6 字节，与 touch_map.h 的 touch_contact_t 逐位对应：
+ *   Tip Switch 1 bit + 7 bit 常量填充 + Contact Identifier 8 bit
+ *   + 绝对 X/Y 各 16 bit
  *
- * host 侧预期：本描述符没有 Contact Count / Contact Identifier，也没有 Win8
- * 认证要的那份 Contact Count Maximum Feature 报告，所以 Linux 的 hid-core
- * 不会把它划进 HID_GROUP_MULTITOUCH，走的是 hid-generic + hid-input ——
- * Tip Switch → BTN_TOUCH、Generic Desktop X/Y(绝对) → ABS_X/ABS_Y，
- * 正好是单点绝对定位要的形态。多点留到后续阶段。
+ * ⚠️ 结尾那句 HID_USAGE_PAGE(DIGITIZER) 不是冗余：Usage Page 是 **Global**
+ * item，会一直生效到下次改写。段内为了 X/Y 切到了 Generic Desktop 页，
+ * 不切回来的话，下一份 contact 的 Usage(Finger)/Usage(Tip Switch) 以及
+ * 段尾的 Contact Count 全会被解析成 Desktop 页里同号的 usage，整份描述符报废。
  */
-#define AIO_HID_REPORT_DESC_TOUCH \
-    HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER                    ) ,\
-    HID_USAGE      ( HID_USAGE_DIGITIZER_TOUCH_SCREEN            ) ,\
-    HID_COLLECTION ( HID_COLLECTION_APPLICATION                  ) ,\
-      HID_REPORT_ID( HID_RID_TOUCH                               ) \
-      /* 一个手指 = 一个 Logical Collection；多点时就是复制这一段 */ \
+#define AIO_TOUCH_CONTACT_DESC \
       HID_USAGE      ( HID_USAGE_DIGITIZER_FINGER                ) ,\
       HID_COLLECTION ( HID_COLLECTION_LOGICAL                    ) ,\
-        /* Tip Switch：1 = 手指接触屏面。host 映射成 BTN_TOUCH */ \
+        /* Tip Switch：1 = 手指接触屏面。hid-multitouch 靠它 + Contact
+         * Identifier 才把本设备认成多点触摸屏 */ \
         HID_USAGE      ( HID_USAGE_DIGITIZER_TIP_SWITCH          ) ,\
         HID_LOGICAL_MIN( 0                                       ) ,\
         HID_LOGICAL_MAX( 1                                       ) ,\
         HID_REPORT_SIZE( 1                                       ) ,\
         HID_REPORT_COUNT(1                                       ) ,\
         HID_INPUT      ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE  ) ,\
-        /* 7 bit 常量填充：把 tip 补齐成整字节，好让后面的 16bit X/Y 字节对齐，
-         * 也让 C 侧 touch_report_t 能直接是 {uint8_t; uint16_t; uint16_t} */ \
+        /* 7 bit 常量填充：把 tip 补齐成整字节，好让后面的字段字节对齐，
+         * 也让 C 侧 touch_contact_t 能直接是 {u8; u8; u16; u16} */ \
         HID_REPORT_SIZE( 7                                       ) ,\
         HID_REPORT_COUNT(1                                       ) ,\
         HID_INPUT      ( HID_CONSTANT | HID_VARIABLE | HID_ABSOLUTE ) ,\
+        /* Contact Identifier：同一根手指在按住期间保持同一个 id，
+         * host 靠它把帧与帧之间的触点连成轨迹（→ ABS_MT_TRACKING_ID）。
+         * ⚠️ Logical Maximum 255 必须用 2 字节编码：HID 的 logical min/max
+         * 是**有符号**量，单字节 0xFF 会被解成 -1。 */ \
+        HID_USAGE      ( HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER  ) ,\
+        HID_LOGICAL_MAX_N( 255, 2                                ) ,\
+        HID_REPORT_SIZE( 8                                       ) ,\
+        HID_REPORT_COUNT(1                                       ) ,\
+        HID_INPUT      ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE  ) ,\
         /* X/Y 用 Generic Desktop 页的 X/Y（不是 Digitizer 页）——
-         * hid-input 只认这一组来生成 ABS_X/ABS_Y */ \
+         * hid-input / hid-multitouch 只认这一组来生成 ABS_MT_POSITION_X/Y */ \
         HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP                  ) ,\
-        HID_LOGICAL_MIN( 0                                       ) ,\
         HID_LOGICAL_MAX_N( TOUCH_HID_LOGICAL_MAX, 2              ) ,\
         HID_REPORT_SIZE( 16                                      ) ,\
         HID_REPORT_COUNT(1                                       ) ,\
@@ -70,10 +72,69 @@ const tusb_desc_device_t aio_desc_device = {
         HID_INPUT      ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE  ) ,\
         HID_USAGE      ( HID_USAGE_DESKTOP_Y                     ) ,\
         HID_INPUT      ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE  ) ,\
-      HID_COLLECTION_END                                            ,\
+        /* 切回 Digitizer 页，见上方 ⚠️ */ \
+        HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER                ) ,\
+      HID_COLLECTION_END                                            ,
+
+/*
+ * RID 2：多点 digitizer（触摸屏），最多 TOUCH_CONTACTS_MAX 个并发触点。
+ * TinyUSB 没有现成的 digitizer 描述符宏（只有 keyboard/mouse/consumer/gamepad），
+ * 按 HID Usage Tables 的 Digitizers 页(0x0D)手写。用 HID_* 宏而非裸字节数组：
+ * 每个 item 的 tag/type/size 由宏算，改一处不会连累相邻字节。
+ *
+ * 负载共 sizeof(touch_report_t) = 31 字节：5 × 6 字节 contact + 1 字节 Contact Count。
+ * X/Y 归一化到 0..TOUCH_HID_LOGICAL_MAX，描述符因此不与 GUD 分辨率耦死 ——
+ * 换分辨率只改 touch_map 的归一化，这里不动。
+ *
+ * host 侧预期：Linux 的 hid-core 在扫描描述符时一见到 Input 里的
+ * Contact Identifier(0x51) 就把设备划进 HID_GROUP_MULTITOUCH，交给
+ * hid-multitouch 而不是 hid-generic；Contact Count Maximum 这份 Feature 报告
+ * 则告诉它一次最多几个触点（应答见下方 tud_hid_get_report_cb）。
+ * 结果是 ABS_MT_SLOT / ABS_MT_TRACKING_ID / ABS_MT_POSITION_X/Y 那套多点协议。
+ *
+ * ⚠️ 键盘(RID 1)也在这同一个 HID 接口上，因此会一并归 hid-multitouch 管。
+ * 这不影响键盘：hid-multitouch 的 mt_input_mapping() 对
+ * application == GenericDesktop/Keyboard 的字段直接返回 0，退回 hid-input 的
+ * 默认处理，与之前 hid-generic 下的行为一致。
+ */
+#define AIO_HID_REPORT_DESC_TOUCH \
+    HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER                    ) ,\
+    HID_USAGE      ( HID_USAGE_DIGITIZER_TOUCH_SCREEN            ) ,\
+    HID_COLLECTION ( HID_COLLECTION_APPLICATION                  ) ,\
+      HID_REPORT_ID( HID_RID_TOUCH                               ) \
+      /* TOUCH_CONTACTS_MAX 份，逐字相同 —— 改数量要同时改这里的展开次数，
+       * 漏改会被下方 sizeof(touch_report_t) 那条 _Static_assert 拦住。 */ \
+      AIO_TOUCH_CONTACT_DESC \
+      AIO_TOUCH_CONTACT_DESC \
+      AIO_TOUCH_CONTACT_DESC \
+      AIO_TOUCH_CONTACT_DESC \
+      AIO_TOUCH_CONTACT_DESC \
+      /* Contact Count：本帧实际有几个触点。host 据此只处理前 N 个 slot，
+       * 其余 tip=0 的空槽被忽略；填 0 即「全部手指已抬起」。 */ \
+      HID_USAGE      ( HID_USAGE_DIGITIZER_CONTACT_COUNT         ) ,\
+      HID_LOGICAL_MIN( 0                                         ) ,\
+      HID_LOGICAL_MAX( TOUCH_CONTACTS_MAX                        ) ,\
+      HID_REPORT_SIZE( 8                                         ) ,\
+      HID_REPORT_COUNT(1                                         ) ,\
+      HID_INPUT      ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE    ) ,\
+      /* Contact Count Maximum：**Feature** 报告，不是 Input。
+       * hid-multitouch 会主动 GET_REPORT(Feature, RID 2) 来读它，
+       * 应答在 tud_hid_get_report_cb() 里。 */ \
+      HID_USAGE      ( HID_USAGE_DIGITIZER_CONTACT_COUNT_MAXIMUM ) ,\
+      HID_LOGICAL_MIN( 0                                         ) ,\
+      HID_LOGICAL_MAX( TOUCH_CONTACTS_MAX                        ) ,\
+      HID_REPORT_SIZE( 8                                         ) ,\
+      HID_REPORT_COUNT(1                                         ) ,\
+      HID_FEATURE    ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE    ) ,\
     HID_COLLECTION_END
 
-/* 标准键盘(RID 1) + 单点 digitizer(RID 2)，同一份报告描述符、同一条端点。 */
+/* 描述符里展开了几份 contact，与 touch_report_t 的 slot 数必须一致。
+ * 这里用报告总长把两边钉在一起：改了 TOUCH_CONTACTS_MAX 却忘了增删上面的
+ * AIO_TOUCH_CONTACT_DESC，就会在这条断言上炸掉，而不是等到实机坐标乱跳。 */
+_Static_assert(sizeof(touch_report_t) == 6 * 5 + 1,
+               "报告描述符展开了 5 份 contact，TOUCH_CONTACTS_MAX 必须同步");
+
+/* 标准键盘(RID 1) + 多点 digitizer(RID 2)，同一份报告描述符、同一条端点。 */
 static const uint8_t aio_hid_report_desc[] = {
     TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(HID_RID_KEYBOARD)),
     AIO_HID_REPORT_DESC_TOUCH
@@ -113,10 +174,28 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
     return aio_hid_report_desc;
 }
 
+/*
+ * 目前只应答一件事：Contact Count Maximum（RID 2 的 Feature 报告）。
+ *
+ * 这不是可选项 —— Linux 的 hid-multitouch 在 probe 时会 GET_REPORT(Feature)
+ * 读这个值来决定分配几个 MT slot；STALL 或返回空会让它退回默认值甚至
+ * 判定设备不完整。多点触摸能不能真正生效，就差这一个字节。
+ *
+ * ⚠️ buffer 里**不要**再写 Report ID：TinyUSB 已经在 hid_device.c 的
+ * GET_REPORT 分支里把它作为第一字节写进去，并把 buffer 指针后移了一格。
+ * 这里只填负载，返回负载长度。
+ */
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
                                hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen)
 {
-    (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)reqlen;
+    (void)instance;
+
+    if (report_type == HID_REPORT_TYPE_FEATURE && report_id == HID_RID_TOUCH && reqlen >= 1) {
+        buffer[0] = TOUCH_CONTACTS_MAX;
+        return 1;
+    }
+
+    /* 其余一律不应答（返回 0）。 */
     return 0;
 }
 

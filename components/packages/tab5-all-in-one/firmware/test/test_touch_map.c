@@ -19,6 +19,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 static void expect(const char *name, uint16_t px, uint16_t py,
                    uint16_t want_x, uint16_t want_y)
@@ -161,6 +162,90 @@ int main(void)
         assert(prev == TOUCH_HID_LOGICAL_MAX && "轴末端应恰好是满量程");
     }
     n++;
+
+    /*
+     * 8. 多点报告装配 touch_report_fill()。
+     *
+     * 这一步写错的症状是「多指时某几根手指坐标错位 / 抬手后 host 以为还按着」，
+     * 与坐标算错在现象上几乎无法区分，所以同样在宿主机钉死。
+     *
+     * 每个用例都顺带校验两条不变量：
+     *   a) contact_count 恰好等于 tip=1 的 slot 数；
+     *   b) 非活跃 slot 必须整体清零（不只是 tip=0）。
+     */
+    {
+        /* 6 个源触点，超出 TOUCH_CONTACTS_MAX=5，用于检验截断 */
+        touch_contact_t src[6];
+        for (unsigned i = 0; i < 6; i++) {
+            src[i].tip = 0;                     /* 故意填 0：应被 fill 覆写成 1 */
+            src[i].contact_id = (uint8_t)(10 + i);
+            src[i].x = (uint16_t)(1000 + i);
+            src[i].y = (uint16_t)(2000 + i);
+        }
+
+        static const uint8_t in_n[]   = { 0, 1, 2, 5, 6, 255 };
+        static const uint8_t want_n[] = { 0, 1, 2, 5, 5, 5   };
+
+        for (unsigned c = 0; c < sizeof(in_n) / sizeof(in_n[0]); c++) {
+            touch_report_t rpt;
+            memset(&rpt, 0xAA, sizeof(rpt));    /* 脏底：漏写的字节会被抓到 */
+            touch_report_fill(&rpt, src, in_n[c]);
+
+            const uint8_t exp = want_n[c];
+            if (rpt.contact_count != exp) {
+                fprintf(stderr, "FAIL [fill n=%u]: contact_count=%u, want %u\n",
+                        in_n[c], rpt.contact_count, exp);
+                assert(0 && "contact_count 不对");
+            }
+
+            unsigned tips = 0;
+            for (unsigned i = 0; i < TOUCH_CONTACTS_MAX; i++) {
+                const touch_contact_t *s = &rpt.contacts[i];
+                if (i < exp) {
+                    tips++;
+                    if (s->tip != 1 || s->contact_id != src[i].contact_id ||
+                        s->x != src[i].x || s->y != src[i].y) {
+                        fprintf(stderr, "FAIL [fill n=%u]: slot%u = {%u,%u,%u,%u}\n",
+                                in_n[c], i, s->tip, s->contact_id, s->x, s->y);
+                        assert(0 && "活跃 slot 内容不对（tip 必须被置 1）");
+                    }
+                } else {
+                    if (s->tip || s->contact_id || s->x || s->y) {
+                        fprintf(stderr, "FAIL [fill n=%u]: 空 slot%u 未清零 "
+                                        "{%u,%u,%u,%u}\n",
+                                in_n[c], i, s->tip, s->contact_id, s->x, s->y);
+                        assert(0 && "非活跃 slot 必须整体清零");
+                    }
+                }
+            }
+            assert(tips == rpt.contact_count && "contact_count 应等于 tip=1 的 slot 数");
+            n++;
+        }
+
+        /* n=0 的产物必须与「全零报告」逐字节相同 —— touch_task() 用这个
+         * 等价关系做 last_rpt 的初值，不成立就会在开机后多发一条空报告。 */
+        {
+            touch_report_t rpt, zero;
+            memset(&rpt, 0xAA, sizeof(rpt));
+            memset(&zero, 0, sizeof(zero));
+            touch_report_fill(&rpt, src, 0);
+            assert(memcmp(&rpt, &zero, sizeof(rpt)) == 0 && "空报告应是全零");
+            n++;
+        }
+
+        /* 装配同样的输入两次，结果必须逐字节相同 —— touch_task() 靠 memcmp
+         * 判「状态没变」，若 fill 留下任何未初始化的洞，那条判定就会失效，
+         * 表现为按住不动却每 20ms 重发一次报告。 */
+        {
+            touch_report_t a, b;
+            memset(&a, 0x00, sizeof(a));
+            memset(&b, 0xFF, sizeof(b));
+            touch_report_fill(&a, src, 3);
+            touch_report_fill(&b, src, 3);
+            assert(memcmp(&a, &b, sizeof(a)) == 0 && "同输入应产出逐字节相同的报告");
+            n++;
+        }
+    }
 
     printf("OK (%d cases)\n", n);
     return 0;

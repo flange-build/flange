@@ -1,5 +1,5 @@
 /*
- * M5Stack Tab5 电容触摸（GT911）→ USB HID digitizer（单点绝对坐标）。
+ * M5Stack Tab5 电容触摸（GT911）→ USB HID digitizer（多点绝对坐标，最多 5 点）。
  *
  * GT911 与 IO 扩展/codec/IMU 同挂**内部 I2C**（G31/G32），故直接复用
  * board_i2c_bus() 的总线句柄，不像键盘那样自建总线。
@@ -20,6 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "tusb.h"
+#include <string.h>
 
 static const char *TAG = "touch";
 
@@ -28,46 +29,30 @@ static const char *TAG = "touch";
 #define TOUCH_POLL_MS 20
 
 /* esp_lcd_touch 一次最多返回 CONFIG_ESP_LCD_TOUCH_MAX_POINTS 个点；
- * 本阶段只看第一个点，但缓冲要按上限开 —— esp_lcd_touch_get_data() 会
- * memset 满 max_point_cnt 个元素，传小了就是越界写。 */
+ * 缓冲必须按这个上限开 —— esp_lcd_touch_get_data() 会 memset 满
+ * max_point_cnt 个元素，传小了就是越界写。
+ * 它与报告的 slot 数 TOUCH_CONTACTS_MAX 目前都是 5，但两者来源不同
+ * （一个是驱动配置、一个是我们的描述符），不假定相等，多出来的点由
+ * touch_report_fill() 截断。 */
 #define TOUCH_POINTS_MAX CONFIG_ESP_LCD_TOUCH_MAX_POINTS
 
 static esp_lcd_touch_handle_t s_tp;
 
-/*
- * RID 2 的报告负载，逐位对应 usb_descriptors.c 里的 AIO_HID_REPORT_DESC_TOUCH：
- * tip 的 bit0 是 Tip Switch、高 7 位是描述符里那段常量填充；x/y 是归一化到
- * [0, TOUCH_HID_LOGICAL_MAX] 的绝对坐标。
- *
- * packed 是必需的：不加的话 uint16_t 前会插 1 字节对齐填充，报告变 6 字节、
- * 且 x/y 整体后移一字节，host 解出来的坐标全是垃圾。
- * 字节序：HID 规定小端，P4(RISC-V) 本就是小端，直接结构体发出去即可。
- */
-typedef struct __attribute__((packed)) {
-    uint8_t  tip;   /* bit0 = 接触中 */
-    uint16_t x;
-    uint16_t y;
-} touch_report_t;
-
-_Static_assert(sizeof(touch_report_t) == 5, "digitizer 报告应为 1+2+2 字节");
+/* 报告负载定义在 touch_map.h（touch_contact_t / touch_report_t / TOUCH_CONTACTS_MAX），
+ * 与 usb_descriptors.c 的报告描述符共用同一批常量，也便于宿主机回归测试。 */
 
 /* 返回是否真的发出去了。调用方据此决定要不要把它记为「已发出的状态」——
  * 记错了就再也不会重发，见 touch_task() 里的说明。 */
-static bool touch_report(bool tip, uint16_t hid_x, uint16_t hid_y)
+static bool touch_report(const touch_report_t *rpt)
 {
-    const touch_report_t rpt = {
-        .tip = tip ? 1 : 0,
-        .x = hid_x,
-        .y = hid_y,
-    };
-
     /* 端点忙时等它腾空（最多 20ms），写法与 kbd_build_and_report() 一致，
      * 理由也一样：描述符里 bInterval=10ms，全速下 host 10ms 才来取一次，
      * tud_hid_ready() 为假时直接丢弃会静默吞掉报告。触摸这边丢掉的若正好是
-     * tip=0 那条「抬起」，host 就一直认为手指还按着 —— 与键盘的卡键同源。 */
+     * contact_count=0 那条「全部抬起」，host 就一直认为手指还按着 ——
+     * 与键盘的卡键同源。 */
     for (int i = 0; i < 20 && !tud_hid_ready(); i++)
         vTaskDelay(pdMS_TO_TICKS(1));
-    if (!tud_hid_report(HID_RID_TOUCH, &rpt, sizeof(rpt))) {
+    if (!tud_hid_report(HID_RID_TOUCH, rpt, sizeof(*rpt))) {
         ESP_LOGW(TAG, "touch hid report 丢弃（端点持续忙）");
         return false;
     }
@@ -77,12 +62,18 @@ static bool touch_report(bool tip, uint16_t hid_x, uint16_t hid_y)
 static void touch_task(void *arg)
 {
     (void)arg;
-    /* 上一次**已发出**的状态。只在它变化时才发：20ms 轮询按住不放会每帧
+    /*
+     * 上一次**已发出**的报告。只在它变化时才发：20ms 轮询按住不放会每帧
      * 产生一条同样的报告，而端点 bInterval=10ms、还要与键盘共用，白占带宽
      * 且会拖长键盘等端点的时间。坐标本身是状态量（不是边沿），host 记住
-     * 最后一条即可，重发没有信息量。 */
-    bool     last_tip = false;
-    uint16_t last_x = 0, last_y = 0;
+     * 最后一条即可，重发没有信息量。
+     *
+     * 多点之后「状态没变」直接对整个报告结构体做 memcmp，而不是逐字段比：
+     * 结构体是 packed 的、无填充洞，memcmp 语义精确，且新增字段时不会漏比。
+     * 初值全零恰好等于 touch_report_fill(&rpt, NULL, 0) 的产物（无触点），
+     * 所以开机后不会先发一条多余的空报告。
+     */
+    touch_report_t last_rpt = {0};
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(TOUCH_POLL_MS));
@@ -97,36 +88,45 @@ static void touch_task(void *arg)
         if (esp_lcd_touch_get_data(s_tp, pts, &points, TOUCH_POINTS_MAX) != ESP_OK)
             continue;
 
-        const bool tip = points > 0;
-        /* 抬起时坐标沿用最后一次的位置 —— digitizer 的惯例是「手指在哪儿松开的」，
-         * 若归零，host 会先看到指针瞬移到左上角再抬起，表现为误点。 */
-        uint16_t hid_x = last_x, hid_y = last_y;
-
-        if (tip) {
+        /* 活跃触点：坐标经与显示互逆的反变换 + 归一化，id 用触摸控制器给的
+         * track_id —— 同一根手指按住期间 track_id 不变，host 靠它把帧与帧
+         * 之间的触点连成轨迹（ABS_MT_TRACKING_ID）；若这里改用数组下标，
+         * 中间某根手指抬起时后面的手指会集体「换 id」，host 看成瞬移。 */
+        touch_contact_t active[TOUCH_CONTACTS_MAX];
+        uint8_t n = 0;
+        for (uint8_t i = 0; i < points && n < TOUCH_CONTACTS_MAX; i++) {
             uint16_t gud_x = 0, gud_y = 0;
-            touch_map_panel_to_gud(pts[0].x, pts[0].y, &gud_x, &gud_y);
-            hid_x = touch_map_gud_to_hid(gud_x, GUD_W - 1);
-            hid_y = touch_map_gud_to_hid(gud_y, GUD_H - 1);
+            touch_map_panel_to_gud(pts[i].x, pts[i].y, &gud_x, &gud_y);
+            active[n].tip = 1;   /* touch_report_fill() 会覆写，填上只为可读 */
+            active[n].contact_id = pts[i].track_id;
+            active[n].x = touch_map_gud_to_hid(gud_x, GUD_W - 1);
+            active[n].y = touch_map_gud_to_hid(gud_y, GUD_H - 1);
             /* LOGD 而非 LOGI：20ms 轮询下按住不放每秒 50 条，会把串口刷没。 */
-            ESP_LOGD(TAG, "raw(%u,%u) → gud(%u,%u) → hid(%u,%u) n=%u",
-                     (unsigned)pts[0].x, (unsigned)pts[0].y,
+            ESP_LOGD(TAG, "id=%u raw(%u,%u) → gud(%u,%u) → hid(%u,%u) n=%u/%u",
+                     (unsigned)pts[i].track_id, (unsigned)pts[i].x, (unsigned)pts[i].y,
                      (unsigned)gud_x, (unsigned)gud_y,
-                     (unsigned)hid_x, (unsigned)hid_y, (unsigned)points);
+                     (unsigned)active[n].x, (unsigned)active[n].y,
+                     (unsigned)(i + 1), (unsigned)points);
+            n++;
         }
 
-        if (tip == last_tip && hid_x == last_x && hid_y == last_y)
+        /* 每次都发满 TOUCH_CONTACTS_MAX 个 slot：多余的 slot 清零(tip=0)，
+         * contact_count = n。全部松开时 n == 0，这条「所有 tip=0 + count=0」
+         * 的报告必须发出去，否则 host 认为手指还在。 */
+        touch_report_t rpt;
+        touch_report_fill(&rpt, active, n);
+
+        if (memcmp(&rpt, &last_rpt, sizeof(rpt)) == 0)
             continue;
 
-        /* 只有真的发出去了才记进 last_*：否则「状态没变就不发」这条规则会把
-         * 一次失败的发送永久固化 —— 尤其是丢掉 tip=0 那条抬起报告时，手指已
-         * 离开屏幕、不会再产生新状态，host 就一直以为按着。发送失败保持
-         * last_* 不动，下一个 20ms 轮询会自然重试。 */
-        if (!touch_report(tip, hid_x, hid_y))
+        /* 只有真的发出去了才记进 last_rpt：否则「状态没变就不发」这条规则会把
+         * 一次失败的发送永久固化 —— 尤其是丢掉 contact_count=0 那条抬起报告时，
+         * 手指已离开屏幕、不会再产生新状态，host 就一直以为按着。发送失败保持
+         * last_rpt 不动，下一个 20ms 轮询会自然重试。 */
+        if (!touch_report(&rpt))
             continue;
 
-        last_tip = tip;
-        last_x = hid_x;
-        last_y = hid_y;
+        last_rpt = rpt;
     }
 }
 
