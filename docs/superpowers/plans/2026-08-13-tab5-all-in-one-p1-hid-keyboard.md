@@ -81,6 +81,16 @@
 > （`{"!", KEY_MOD_LSHIFT, KEY_1, ...}`）—— Sym 不是 Shift，而是切到第二层（「!」→「?」）。
 > 若把 Sym 当 Shift 上报，符号全错。
 
+> ⚠️ **上游数据不一致（实施中发现，必须绕开）**：底行字母 `z x c v b n m` 的
+> **`firstModifierMask` 是 `KEY_MOD_LSHIFT`**，而第 0–3 行的字母都是 `KEY_MOD_RESERVED`。
+> 官方 `convert_to_hid()` 的小写分支**根本不读这个字段**（只用运行时 `modifier_mask`），
+> 所以上游自己无声地绕过了它。任何「无条件取 `firstModifierMask`」的实现都会让
+> **整个底行打出大写 Z X C V B N M**。正确做法是照官方语义：字母的基础层不贡献 modifier。
+
+> ⚠️ **Aa 必须被 Ctrl/Alt 门控**：官方是 `aa_flag && !ctrl_state && !alt_state`。
+> 漏掉这个排除的话，按住 Aa 时的 `Ctrl+C` 会变成 **`Ctrl+Shift+C`** —— 终端里前者是 SIGINT、
+> 后者通常是「复制」，是两个完全不同的绑定，且现象（Ctrl+C 中断不了程序）极难联想到键盘层逻辑。
+
 ### 端点预算（决定描述符形态）
 
 P4 全速控制器：`ep_count = 7`、`ep_in_count = 5`（含 EP0），即**最多 4 条可用 IN 端点**。
@@ -410,7 +420,9 @@ curl -sS "$B/keyboard/user_hid_map.h"         -o /tmp/khid.h
 - 文件头写明来源（`m5stack/M5Tab5-Keyboard-Internal-FW`，`Core/User/keyboard/`）与 **MIT** 许可，保留 SPDX 版权行；
 - 从 `user_hid_map.h` 提取 `KeModifierMask_t` 与 `KeScanCode_t` 两个枚举（HID 修饰位掩码与 usage 码）；
 - 从 `user_keyboard_handle.c` 提取 `key_value_map[5][14]` 与 `key_modifier_flag[5][14]`，
-  以及它们依赖的 `key_value_t` 结构体定义（在 `user_keyboard_handle.h`，一并取）；
+  以及它们依赖的 `key_value_t` 结构体定义（**在 `sys/user_sys.h`**，一并取）；
+  存储类需从上游的 `const static` / 外部链接 `const` 改成 `static`（头文件不能带外部链接定义），
+  这是**唯一允许的偏离**；
 - **数组内容一字节不改**，提完自己 diff / MD5 核对；
 - 注明四个功能键位置：Sym(3,0)、Aa(3,1)、Ctrl(4,0)、Alt(4,1)。
 
