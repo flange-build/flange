@@ -18,6 +18,16 @@ CONFIG_FREERTOS_HZ=1000
 # Tab5 的 UART0(G37/G38) 引到 M5-Bus，不与显示/音频争引脚，保留完整串口控制台
 # （与 Cardputer 的 CONFIG_ESP_CONSOLE_NONE 相反）。
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# ⚠️ 必须同时关掉次级控制台与 USJ 模块，否则 USB-C 上枚举出来的是 CDC ACM 而非 GUD。
+# P4 只有一条 FS/LS PHY(SOC_USB_FSLS_PHY_NUM=1)，USB-Serial/JTAG 与 OTG1.1 共用它。
+# IDF 的 ESP_CONSOLE_SECONDARY 默认就是 USB_SERIAL_JTAG，它 select 出
+# ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED → USJ_ENABLE_USB_SERIAL_JTAG，
+# 于是 USJ 外设开机即占住 PHY，TinyUSB 再怎么 usb_new_phy() 也抢不过来 ——
+# 主机侧表现为 `cdc_acm ... ttyACM0: USB ACM device`，完全看不到 16d0:10a9。
+# 只指定主控制台走 UART0 是不够的，次级那条是独立选项。
+# 注：这两项只影响**应用**阶段；bootloader 阶段 USJ 仍启用，按 BOOT 进下载模式照常能烧。
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n
 # TinyUSB vendor 类：esp_tinyusb 用 *_COUNT(int) 启用，>0 即开启 CFG_TUD_VENDOR
 CONFIG_TINYUSB_VENDOR_COUNT=1
 # 32MB HEX(16 线) PSRAM：DPI 帧缓冲(1.84MB) + GUD 收帧缓冲都放这里

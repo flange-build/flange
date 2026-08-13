@@ -82,8 +82,34 @@ Tab5 的 USB-C 接在 P4 的 **USB1P1 全速 PHY（GPIO24/25，12 Mbps）** 上�
 tinyusb_config_t tusb_cfg = TINYUSB_CONFIG_FULL_SPEED(NULL, NULL);
 ```
 
-佐证：此时在主机上跑 esptool，报的是 `USB mode: USB-Serial/JTAG`（全速 PHY 仍归 ROM 的
-USB-Serial/JTAG，说明 TinyUSB 没接管它）。
+### ⚠️ 还要关掉次级控制台，否则 USB-C 上出来的是 CDC ACM
+
+**选对端口只是第一步。** P4 只有一条 FS/LS PHY（`SOC_USB_FSLS_PHY_NUM = 1`），
+**USB-Serial/JTAG 与 OTG1.1 共用它**。谁先占住谁赢。
+
+IDF 的 `ESP_CONSOLE_SECONDARY` **默认就是 `USB_SERIAL_JTAG`**，它会 select 出
+`ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED` → `USJ_ENABLE_USB_SERIAL_JTAG`，
+于是 USJ 外设开机即启用并占住 PHY，TinyUSB 再怎么 `usb_new_phy()` 也抢不过来。
+
+**只设 `CONFIG_ESP_CONSOLE_UART_DEFAULT=y` 是不够的** —— 那只管主控制台，
+次级是另一个独立选项。所以 `sdkconfig.defaults` 里必须还有：
+
+```
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n
+```
+
+**症状**：host 侧 `dmesg` 只见
+
+```
+cdc_acm 1-1.1:1.0: ttyACM0: USB ACM device
+```
+
+`lsusb` 里根本没有 `16d0:10a9`，屏幕自检图正常、UART 日志也正常打出
+`TinyUSB Driver installed on port 0` —— 固件一切「看起来正常」，只是 PHY 不归它。
+
+> 这两项只影响**应用**阶段。bootloader 阶段 USJ 仍然启用，按住 BOOT 进下载模式照常能烧录
+> （IDF Kconfig 原文即如此说明）。
 
 ### 端点预算（后续阶段会用满）
 
