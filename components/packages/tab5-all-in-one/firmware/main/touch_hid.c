@@ -6,6 +6,7 @@
  * 触摸电源使能在 PI4IOE5V6408-1(0x43) 的 PIN5 上，board_power_init() 已拉高。
  */
 #include "touch_hid.h"
+#include "touch_map.h"
 #include "tab5_pins.h"
 #include "board_power.h"
 #include "esp_lcd_touch_gt911.h"
@@ -47,8 +48,13 @@ static void touch_task(void *arg)
             continue;
 
         if (points > 0) {
-            ESP_LOGI(TAG, "raw(%u,%u) n=%u", (unsigned)pts[0].x, (unsigned)pts[0].y,
-                     (unsigned)points);
+            /* 标定期原始值与变换后都要看：原始值判 GT911 的出数朝向，
+             * 变换后判它与 host 画面是否对得上。 */
+            uint16_t gud_x = 0, gud_y = 0;
+            touch_map_panel_to_gud(pts[0].x, pts[0].y, &gud_x, &gud_y);
+            ESP_LOGI(TAG, "raw(%u,%u) → gud(%u,%u) n=%u",
+                     (unsigned)pts[0].x, (unsigned)pts[0].y,
+                     (unsigned)gud_x, (unsigned)gud_y, (unsigned)points);
         } else if (last_points > 0) {
             /* 抬起也打一条：标定时要能分清「没动」与「松手了」 */
             ESP_LOGI(TAG, "release");
