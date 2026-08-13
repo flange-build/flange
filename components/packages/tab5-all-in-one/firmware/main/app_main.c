@@ -65,9 +65,25 @@ void app_main(void)
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
     ESP_LOGI(TAG, "tinyusb installed (GUD only)");
 
-    ESP_ERROR_CHECK(kbd_start());
+    /*
+     * 键盘与触摸是**可选外设**，缺席时只降级、不拦启动：
+     *   - Tab5 Keyboard 是可拆配件（2×5 排针），不接底座时 kbd_start() 里的
+     *     i2c_master_probe(0x6D) 必然失败；
+     *   - 触摸控制器随面板批次而异（GT911 / ST7123）。
+     * 若这里照旧用 ESP_ERROR_CHECK，一个没插的配件就会把整机打进 boot loop，
+     * 连屏幕都没有 —— 而显示(GUD)才是这个产品的核心形态。
+     * 对比：board_power / display / gud_device / TinyUSB 仍用 ESP_ERROR_CHECK，
+     * 那些是核心链路，起不来就没有任何可用形态，早死早报比带病运行好。
+     * 日志用 WARNING 而非 ERROR，并写明「可能是正常的」，免得用户以为坏了。
+     */
+    esp_err_t err = kbd_start();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "键盘不可用(%s)，继续启动；未插键盘底座时属正常",
+                 esp_err_to_name(err));
 
-    ESP_ERROR_CHECK(touch_start());
+    err = touch_start();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "触摸不可用(%s)，继续启动", esp_err_to_name(err));
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }

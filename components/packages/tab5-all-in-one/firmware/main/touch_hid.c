@@ -82,6 +82,15 @@ esp_err_t touch_start(void)
         .x_max = PANEL_W,
         .y_max = PANEL_H,
         .rst_gpio_num = GPIO_NUM_NC,        /* Tab5 触摸没有独立 reset 脚 */
+        /*
+         * 填了 INT 脚，GT911 驱动会对它 gpio_config(intr_type = NEGEDGE)，而 IDF 的
+         * gpio_config() 顺带 gpio_intr_enable()。我们没给 interrupt_callback，所以
+         * G23 是「中断使能但无 handler」——已查证无害且**不依赖 GPIO ISR service**：
+         * gpio_intr_enable() 只做 HAL 寄存器写，不碰 gpio_isr_func/isr_handle；
+         * 没装 ISR service 时 CPU 中断压根没分配，状态位只是空闲锁存，无人读取。
+         * 这条要紧：kbd_start() 失败（没插键盘）时 ISR service 不会被装上，
+         * 触摸**不能**因此跟着起不来。将来改中断驱动时把 interrupt_callback 填上即可。
+         */
         .int_gpio_num = PIN_TOUCH_INT,
         .levels = {
             .reset = 0,
@@ -94,9 +103,19 @@ esp_err_t touch_start(void)
             .mirror_y = 0,
         },
     };
-    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_gt911(io, &tp_cfg, &s_tp), TAG,
-                        "gt911 未应答(0x%02x)，检查内部 I2C 与触摸电源",
-                        ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP);
+    /*
+     * 探不到就把 panel io 拆掉再返回。GT911 驱动自己的 err 分支只清它那一份
+     * （含 gpio_reset_pin(INT)、且失败时不会写 s_tp），**不碰我们传进去的 io**；
+     * 而 touch_start() 失败现在不再 abort（见 app_main），这个 io 会一直挂在
+     * 内部 I2C 总线的设备链上没人回收。
+     */
+    esp_err_t err = esp_lcd_touch_new_i2c_gt911(io, &tp_cfg, &s_tp);
+    if (err != ESP_OK) {
+        esp_lcd_panel_io_del(io);
+        ESP_LOGE(TAG, "gt911 未应答(0x%02x)：%s，检查内部 I2C 与触摸电源",
+                 ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, esp_err_to_name(err));
+        return err;
+    }
 
     ESP_LOGI(TAG, "gt911 ready (addr=0x%02x, int=G%d)",
              ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, PIN_TOUCH_INT);

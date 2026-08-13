@@ -306,6 +306,14 @@ Tab5 Keyboard 是**独立的 STM32F030 I2C 从机**，地址 `0x6D`，挂在 **S
 用 `I2C_NUM_1`（`I2C_NUM_0` 已被 `board_power` 的内部总线占用）。中断线 **G50，低有效**
 （键盘固件拉低表示事件队列非空）→ ESP 侧配上拉 + 下降沿触发。矩阵 **5 行 × 14 列 = 70 键**。
 
+> **键盘与触摸都是可选外设，缺席不拦启动。** Tab5 Keyboard 是可拆配件（2×5 排针），
+> 不接底座时 `i2c_master_probe(0x6D)` 必然失败；触摸控制器也随面板批次而异。
+> 故 `app_main.c` 对 `kbd_start()` / `touch_start()` **不用 `ESP_ERROR_CHECK`**，
+> 失败只打一条 **WARNING** 后继续启动 —— 日志里看到
+> `键盘不可用(...)，继续启动` 属正常现象，不是故障。
+> 反之 `board_power` / `display` / `gud_device` / TinyUSB 仍是 `ESP_ERROR_CHECK`：
+> 那些是核心链路，起不来就没有任何可用形态。
+
 ### 寄存器表
 
 取自官方固件 `user_i2c_reg.h`，不是照协议图猜的：
