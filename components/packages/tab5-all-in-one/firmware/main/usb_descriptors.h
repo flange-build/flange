@@ -13,9 +13,11 @@ enum { ITF_NUM_VENDOR = 0, ITF_NUM_HID, ITF_NUM_TOTAL };
 #define EPNUM_VENDOR_IN  0x81
 #define EPNUM_HID        0x82
 
-/* HID Report ID。触摸阶段追加 RID 2 = digitizer，共用本接口与端点
- * （P4 全速控制器最多 4 条 IN 端点，UAC/UVC 会用满，见 firmware/README.md）。 */
+/* HID Report ID。键盘与触摸共用 IF1 这一个接口与 EPNUM_HID 这一条 IN 端点
+ * （P4 全速控制器最多 4 条 IN 端点，UAC/UVC 会用满，见 firmware/README.md），
+ * 靠 Report ID 区分 —— 这也是本接口必须放弃 boot 协议的原因，见 usb_descriptors.c。 */
 #define HID_RID_KEYBOARD 1
+#define HID_RID_TOUCH    2
 
 /*
  * 描述符数据由 esp_tinyusb 经 tinyusb_config_t 注入；不要在本工程实现

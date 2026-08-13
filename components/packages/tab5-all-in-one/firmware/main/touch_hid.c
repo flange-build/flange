@@ -1,20 +1,24 @@
 /*
- * M5Stack Tab5 电容触摸（GT911）→ 坐标日志。
+ * M5Stack Tab5 电容触摸（GT911）→ USB HID digitizer（单点绝对坐标）。
  *
  * GT911 与 IO 扩展/codec/IMU 同挂**内部 I2C**（G31/G32），故直接复用
  * board_i2c_bus() 的总线句柄，不像键盘那样自建总线。
  * 触摸电源使能在 PI4IOE5V6408-1(0x43) 的 PIN5 上，board_power_init() 已拉高。
+ *
+ * 上报走键盘那条 HID 接口(IF1)与端点，用 Report ID 2 区分，见 usb_descriptors.c。
  */
 #include "touch_hid.h"
 #include "touch_map.h"
 #include "tab5_pins.h"
 #include "board_power.h"
+#include "usb_descriptors.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "tusb.h"
 
 static const char *TAG = "touch";
 
@@ -29,10 +33,55 @@ static const char *TAG = "touch";
 
 static esp_lcd_touch_handle_t s_tp;
 
+/*
+ * RID 2 的报告负载，逐位对应 usb_descriptors.c 里的 AIO_HID_REPORT_DESC_TOUCH：
+ * tip 的 bit0 是 Tip Switch、高 7 位是描述符里那段常量填充；x/y 是归一化到
+ * [0, TOUCH_HID_LOGICAL_MAX] 的绝对坐标。
+ *
+ * packed 是必需的：不加的话 uint16_t 前会插 1 字节对齐填充，报告变 6 字节、
+ * 且 x/y 整体后移一字节，host 解出来的坐标全是垃圾。
+ * 字节序：HID 规定小端，P4(RISC-V) 本就是小端，直接结构体发出去即可。
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t  tip;   /* bit0 = 接触中 */
+    uint16_t x;
+    uint16_t y;
+} touch_report_t;
+
+_Static_assert(sizeof(touch_report_t) == 5, "digitizer 报告应为 1+2+2 字节");
+
+/* 返回是否真的发出去了。调用方据此决定要不要把它记为「已发出的状态」——
+ * 记错了就再也不会重发，见 touch_task() 里的说明。 */
+static bool touch_report(bool tip, uint16_t hid_x, uint16_t hid_y)
+{
+    const touch_report_t rpt = {
+        .tip = tip ? 1 : 0,
+        .x = hid_x,
+        .y = hid_y,
+    };
+
+    /* 端点忙时等它腾空（最多 20ms），写法与 kbd_build_and_report() 一致，
+     * 理由也一样：描述符里 bInterval=10ms，全速下 host 10ms 才来取一次，
+     * tud_hid_ready() 为假时直接丢弃会静默吞掉报告。触摸这边丢掉的若正好是
+     * tip=0 那条「抬起」，host 就一直认为手指还按着 —— 与键盘的卡键同源。 */
+    for (int i = 0; i < 20 && !tud_hid_ready(); i++)
+        vTaskDelay(pdMS_TO_TICKS(1));
+    if (!tud_hid_report(HID_RID_TOUCH, &rpt, sizeof(rpt))) {
+        ESP_LOGW(TAG, "touch hid report 丢弃（端点持续忙）");
+        return false;
+    }
+    return true;
+}
+
 static void touch_task(void *arg)
 {
     (void)arg;
-    uint8_t last_points = 0;
+    /* 上一次**已发出**的状态。只在它变化时才发：20ms 轮询按住不放会每帧
+     * 产生一条同样的报告，而端点 bInterval=10ms、还要与键盘共用，白占带宽
+     * 且会拖长键盘等端点的时间。坐标本身是状态量（不是边沿），host 记住
+     * 最后一条即可，重发没有信息量。 */
+    bool     last_tip = false;
+    uint16_t last_x = 0, last_y = 0;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(TOUCH_POLL_MS));
@@ -47,19 +96,36 @@ static void touch_task(void *arg)
         if (esp_lcd_touch_get_data(s_tp, pts, &points, TOUCH_POINTS_MAX) != ESP_OK)
             continue;
 
-        if (points > 0) {
-            /* 标定期原始值与变换后都要看：原始值判 GT911 的出数朝向，
-             * 变换后判它与 host 画面是否对得上。 */
+        const bool tip = points > 0;
+        /* 抬起时坐标沿用最后一次的位置 —— digitizer 的惯例是「手指在哪儿松开的」，
+         * 若归零，host 会先看到指针瞬移到左上角再抬起，表现为误点。 */
+        uint16_t hid_x = last_x, hid_y = last_y;
+
+        if (tip) {
             uint16_t gud_x = 0, gud_y = 0;
             touch_map_panel_to_gud(pts[0].x, pts[0].y, &gud_x, &gud_y);
-            ESP_LOGI(TAG, "raw(%u,%u) → gud(%u,%u) n=%u",
+            hid_x = touch_map_gud_to_hid(gud_x, GUD_W - 1);
+            hid_y = touch_map_gud_to_hid(gud_y, GUD_H - 1);
+            /* LOGD 而非 LOGI：20ms 轮询下按住不放每秒 50 条，会把串口刷没。 */
+            ESP_LOGD(TAG, "raw(%u,%u) → gud(%u,%u) → hid(%u,%u) n=%u",
                      (unsigned)pts[0].x, (unsigned)pts[0].y,
-                     (unsigned)gud_x, (unsigned)gud_y, (unsigned)points);
-        } else if (last_points > 0) {
-            /* 抬起也打一条：标定时要能分清「没动」与「松手了」 */
-            ESP_LOGI(TAG, "release");
+                     (unsigned)gud_x, (unsigned)gud_y,
+                     (unsigned)hid_x, (unsigned)hid_y, (unsigned)points);
         }
-        last_points = points;
+
+        if (tip == last_tip && hid_x == last_x && hid_y == last_y)
+            continue;
+
+        /* 只有真的发出去了才记进 last_*：否则「状态没变就不发」这条规则会把
+         * 一次失败的发送永久固化 —— 尤其是丢掉 tip=0 那条抬起报告时，手指已
+         * 离开屏幕、不会再产生新状态，host 就一直以为按着。发送失败保持
+         * last_* 不动，下一个 20ms 轮询会自然重试。 */
+        if (!touch_report(tip, hid_x, hid_y))
+            continue;
+
+        last_tip = tip;
+        last_x = hid_x;
+        last_y = hid_y;
     }
 }
 

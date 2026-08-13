@@ -17,3 +17,22 @@
  */
 void touch_map_panel_to_gud(uint16_t panel_x, uint16_t panel_y,
                             uint16_t *gud_x, uint16_t *gud_y);
+
+/*
+ * HID digitizer 报告里 X/Y 的 Logical Maximum。报告描述符与下面的归一化
+ * 共用这一个常量（usb_descriptors.c 为此包含本头文件）—— 两处写死不同的数
+ * 只会表现为「指针位置按比例偏移」，从现象很难反推。
+ *
+ * 取 32767 而非 65535：Logical Maximum 在 HID 里是**有符号**量，超过 32767
+ * 就得用 3/4 字节编码并小心正负，没必要。
+ */
+#define TOUCH_HID_LOGICAL_MAX 32767
+
+/*
+ * 把 GUD 坐标归一化成 HID 逻辑值 [0, TOUCH_HID_LOGICAL_MAX]。
+ * gud_max 传该轴的最大合法坐标（GUD_W-1 / GUD_H-1），入参超界会先钳到它。
+ *
+ * 归一化让报告描述符与 GUD 分辨率解耦：换分辨率只改调用方传的 gud_max。
+ * gud_max 必须非 0（调用方传的都是编译期常量 639 / 359）。
+ */
+uint16_t touch_map_gud_to_hid(uint16_t gud, uint16_t gud_max);

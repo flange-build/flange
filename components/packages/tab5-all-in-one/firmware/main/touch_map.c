@@ -27,3 +27,22 @@ void touch_map_panel_to_gud(uint16_t panel_x, uint16_t panel_y,
     *gud_x = (uint16_t)((PANEL_H - 1 - panel_y) / GUD_SCALE);
     *gud_y = (uint16_t)(panel_x / GUD_SCALE);
 }
+
+/*
+ * ⚠️ 溢出：gud_max 取 GUD_W-1 = 639 时，中间积是 639 × 32767 = 20,938,113 ——
+ * 早已超出 uint16_t，也超出 int16_t。这里显式用 uint32_t 中间量，而不是
+ * 依赖「int 至少 32 位」的整型提升：C 只保证 int ≥ 16 位，在 16 位 int 的
+ * 实现上 uint16_t 会提升成 int 并直接溢出（未定义行为）。宿主机与 P4 上
+ * int 都是 32 位，但把它钉死是零成本的。
+ *
+ * 结果范围：分子 ≤ gud_max × 32767，除以 gud_max 后 ≤ 32767，故转 uint16_t
+ * 无损；且入参钳位保证了这个上界（不钳的话超界入参会算出 >32767 的值，
+ * host 侧表现为指针冲到屏幕外或绕回）。
+ */
+uint16_t touch_map_gud_to_hid(uint16_t gud, uint16_t gud_max)
+{
+    if (gud > gud_max)
+        gud = gud_max;
+
+    return (uint16_t)(((uint32_t)gud * TOUCH_HID_LOGICAL_MAX) / gud_max);
+}

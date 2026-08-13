@@ -1,5 +1,5 @@
 /*
- * touch_map_panel_to_gud() 宿主机回归测试。
+ * touch_map_panel_to_gud() / touch_map_gud_to_hid() 宿主机回归测试。
  *
  * 触摸坐标反变换必须与 display_dsi.c 的 90° CCW 正变换严格互逆，否则实机
  * 表现是「点哪儿指针跑到别处」—— 从现象几乎反推不出是哪一步算错。这类
@@ -29,6 +29,16 @@ static void expect(const char *name, uint16_t px, uint16_t py,
         fprintf(stderr, "FAIL [%s]: panel(%u,%u) -> gud(%u,%u), want (%u,%u)\n",
                 name, px, py, gx, gy, want_x, want_y);
         assert(0 && "touch_map 用例失败");
+    }
+}
+
+static void expect_hid(const char *name, uint16_t gud, uint16_t gud_max, uint16_t want)
+{
+    const uint16_t got = touch_map_gud_to_hid(gud, gud_max);
+    if (got != want) {
+        fprintf(stderr, "FAIL [%s]: gud(%u)/max(%u) -> %u, want %u\n",
+                name, gud, gud_max, got, want);
+        assert(0 && "touch_map_gud_to_hid 用例失败");
     }
 }
 
@@ -111,6 +121,44 @@ int main(void)
             touch_map_panel_to_gud((uint16_t)px, (uint16_t)py, &gx, &gy);
             assert(gx < GUD_W && gy < GUD_H && "反解越出 GUD 范围");
         }
+    }
+    n++;
+
+    /*
+     * 6. HID 归一化 touch_map_gud_to_hid()。
+     * 这是整条链路里最容易写出整数溢出的一步：639 × 32767 = 20,938,113，
+     * 中间量若用 uint16_t 会绕回，表现是指针在屏幕上乱跳。
+     */
+    expect_hid("x 左端 0 -> 0", 0, GUD_W - 1, 0);                                      n++;
+    expect_hid("x 右端 639 -> 满量程", GUD_W - 1, GUD_W - 1, TOUCH_HID_LOGICAL_MAX);   n++;
+    expect_hid("y 上端 0 -> 0", 0, GUD_H - 1, 0);                                      n++;
+    expect_hid("y 下端 359 -> 满量程", GUD_H - 1, GUD_H - 1, TOUCH_HID_LOGICAL_MAX);   n++;
+    /* 中点。手算：320×32767 = 10,485,440，10,485,440/639 = 16409 余 89。
+     * 180×32767 = 5,898,060，5,898,060/359 = 16429 余 49。
+     * 都在半量程 16383 附近（GUD 像素索引 0..639 的正中是 319.5，故略偏大）。 */
+    expect_hid("x 中点 320", 320, GUD_W - 1, 16409);                                   n++;
+    expect_hid("y 中点 180", 180, GUD_H - 1, 16429);                                   n++;
+    /* 越界钳位：钳的是入参而非结果，所以越多界都只到满量程，不会绕回。 */
+    expect_hid("x 超界钳到满量程", 1000, GUD_W - 1, TOUCH_HID_LOGICAL_MAX);            n++;
+    expect_hid("x 极端超界 65535", 65535, GUD_W - 1, TOUCH_HID_LOGICAL_MAX);           n++;
+    expect_hid("y 极端超界 65535", 65535, GUD_H - 1, TOUCH_HID_LOGICAL_MAX);           n++;
+
+    /* 7. 两轴各自穷举：值域不越 Logical Maximum，且随输入单调不减。
+     * 单调性是溢出/绕回的直接探针 —— 一旦中间量在某个输入处绕回，
+     * 输出必然出现一次下跌。 */
+    for (int axis = 0; axis < 2; axis++) {
+        const uint16_t gud_max = axis ? (uint16_t)(GUD_H - 1) : (uint16_t)(GUD_W - 1);
+        uint16_t prev = 0;
+        for (uint16_t g = 0; g <= gud_max; g++) {
+            const uint16_t h = touch_map_gud_to_hid(g, gud_max);
+            if (h > TOUCH_HID_LOGICAL_MAX || h < prev) {
+                fprintf(stderr, "FAIL [归一化单调]: axis=%d gud=%u -> %u (前一个 %u)\n",
+                        axis, g, h, prev);
+                assert(0 && "归一化越界或非单调");
+            }
+            prev = h;
+        }
+        assert(prev == TOUCH_HID_LOGICAL_MAX && "轴末端应恰好是满量程");
     }
     n++;
 
