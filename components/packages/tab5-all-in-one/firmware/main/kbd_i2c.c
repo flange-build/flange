@@ -9,7 +9,7 @@
  */
 #include "kbd_i2c.h"
 #include "tab5_pins.h"
-#include "tab5_kbd_map.h"
+#include "kbd_translate.h"
 #include "usb_descriptors.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "tusb.h"
+#include <inttypes.h>
 
 static const char *TAG = "kbd";
 
@@ -40,20 +41,29 @@ static const char *TAG = "kbd";
 /* Normal 模式事件：bit7 按下(1)/释放(0)，bit[6:4] 行，bit[3:0] 列；队列空读回 0xFF */
 #define KEY_EVENT_EMPTY    0xFF
 
-#define KBD_ROWS 5
-#define KBD_COLS 14
-
 /* 当前按下的键（行列位图）。Normal 模式给的是按下/释放边沿事件，
  * 而 HID 报告要的是「此刻按着哪些键」的全量快照，所以必须自己维护集合。 */
 static bool s_pressed[KBD_ROWS][KBD_COLS];
 
-/* 四个功能键的位置，取自官方固件 updatemodifier_mask() */
-#define IS_SYM(r, c)   ((r) == 3 && (c) == 0)
-#define IS_AA(r, c)    ((r) == 3 && (c) == 1)
-
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
 static TaskHandle_t s_kbd_task;
+
+/* 连续 I2C 读失败节流计数：排线松了/键盘掉电时不能每次失败都刷屏
+ * （100ms 轮询下会很快连成一片），但也不能完全静默——那样实机排障
+ * 无从下手。每连续失败 10 次告警一次，读成功即清零。 */
+static uint32_t s_i2c_fail_count;
+
+static void kbd_note_i2c_result(esp_err_t err)
+{
+    if (err == ESP_OK) {
+        s_i2c_fail_count = 0;
+        return;
+    }
+    if (++s_i2c_fail_count % 10 == 0)
+        ESP_LOGW(TAG, "键盘 I2C 连续读失败 %" PRIu32 " 次，检查排线与 G0/G1(0x%02x)",
+                 s_i2c_fail_count, KBD_I2C_ADDR);
+}
 
 /* INT 低有效：键盘固件拉低表示队列非空。用下降沿唤醒读取任务，
  * ISR 里只做任务通知，I2C 读取放任务上下文（I2C 不能在 ISR 里做）。 */
@@ -76,86 +86,27 @@ static esp_err_t kbd_write_reg(uint8_t reg, uint8_t val)
     return i2c_master_transmit(s_dev, buf, sizeof(buf), 100);
 }
 
-/*
- * 把当前按下集合翻译成标准 HID 键盘报告（modifier + 最多 6 个 keycode）。
- *
- * 分层规则（与官方固件 convert_to_hid() 语义一致）：
- *   - Sym(3,0) / Aa(3,1)：**本地层键，不上报**。官方表里它们的 firstKeyCode 是
- *     KEY_LEFTSHIFT，但物理键盘上标「!」的键其基础层本身就是 Shift+1 ——
- *     Sym 不是 Shift，而是切到第二层。当 Shift 上报会让符号全错。
- *   - Ctrl(4,0) / Alt(4,1)：查表得到的 usage 落在 0xE0~0xE7（HID 修饰键区间），
- *     由下面的通用规则自动归入 modifier 字节，不占 keycode 槽。
- *   - 字母键：Aa 生效**且未按住 Ctrl/Alt** → 用 second 层（大写）。
- *   - 其余键：Sym 按住且 key_modifier_flag 置位 → 用 second 层。
- */
+/* 把当前按下集合翻译成 HID 报告并发给 host。分层逻辑（Sym/Aa/Ctrl/Alt）
+ * 在 kbd_translate.c，拆出来是为了能在宿主机测试，这里只管发送。 */
 static void kbd_build_and_report(void)
 {
-    bool sym  = s_pressed[3][0];
-    bool ctrl = s_pressed[4][0];
-    bool alt  = s_pressed[4][1];
-
-    /*
-     * Aa 的大写层必须被 Ctrl/Alt 排除（官方 convert_to_hid() 的
-     * `aa_flag && ctrl_state == false && alt_state == false` 同义）。
-     *
-     * 为什么：按住 Aa 时再按 Ctrl+C，若不排除，'c' 会走第二层带上
-     * KEY_MOD_LSHIFT，最终发出的是 **Ctrl+Shift+C** —— 终端里那通常是
-     * 「复制」，而 Ctrl+C 是 SIGINT，**两个完全不同的绑定**。用户只会看到
-     * 「按 Ctrl+C 中断不了程序」，极难联想到是键盘分层逻辑的问题。
-     *
-     * 状态取自 s_pressed 而非累加中的 modifier —— 后者此刻还没算完。
-     * 这个条件不是冗余的，别顺手删。
-     */
-    bool aa = s_pressed[3][1] && !ctrl && !alt;
-
     uint8_t modifier = 0;
     uint8_t keys[6] = {0};
-    int nk = 0;
-
-    for (int r = 0; r < KBD_ROWS; r++) {
-        for (int c = 0; c < KBD_COLS; c++) {
-            if (!s_pressed[r][c]) continue;
-            if (IS_SYM(r, c) || IS_AA(r, c)) continue;   /* 本地层键，不上报 */
-
-            const key_value_t *k = &key_value_map[r][c];
-            bool is_letter = (k->firstKeyCode >= KEY_A && k->firstKeyCode <= KEY_Z);
-            bool use_second = is_letter ? aa : (sym && key_modifier_flag[r][c]);
-
-            uint8_t mod, code;
-            if (use_second) {
-                mod  = k->secondModifierMask;
-                code = k->secondKeyCode;
-            } else if (is_letter) {
-                /* ⚠️ 不能取表里的 firstModifierMask：上游把底排 z/x/c/v/b/n/m 的
-                 * firstModifierMask 写成了 KEY_MOD_LSHIFT。官方 convert_to_hid()
-                 * 的小写分支根本不读这个字段（只用运行时 modifier_mask），从而
-                 * 绕开了它；照抄字段会让这一整排打出大写。这里照同样语义处理。 */
-                mod  = 0;
-                code = k->firstKeyCode;
-            } else {
-                mod  = k->firstModifierMask;
-                code = k->firstKeyCode;
-            }
-
-            modifier |= mod;
-            /* 0xE0~0xE7 是 HID 修饰键 usage：转成 modifier 位，不占 keycode 槽 */
-            if (code >= KEY_LEFTCTRL && code <= KEY_RIGHTMETA) {
-                modifier |= (uint8_t)(1u << (code - KEY_LEFTCTRL));
-            } else if (code != KEY_NONE && nk < 6) {
-                keys[nk++] = code;
-            }
-            /* 超过 6 个非修饰键时静默丢弃，**这是有意选择**，不是疏漏。
-             * 标准 HID 的做法是全槽填 KEY_ERR_OVF(0x01)，但那是给真·全键盘用的；
-             * 这块 70 键小键盘上同时按 7 个键属于误触而非有意输入，丢弃比让 host
-             * 收到一串 ErrorRollOver 更无害。 */
-        }
-    }
+    int nk = kbd_translate(s_pressed, &modifier, keys);
 
     ESP_LOGD(TAG, "report mod=0x%02x keys=%02x %02x %02x %02x %02x %02x",
              modifier, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5]);
 
-    if (tud_hid_ready())
-        tud_hid_keyboard_report(HID_RID_KEYBOARD, modifier, nk ? keys : NULL);
+    /* 端点忙时等它腾空（最多 20ms）：描述符里 bInterval=10ms，全速下 host
+     * 10ms 才来取一次数据，同一批次排空里连调 tud_hid_keyboard_report()
+     * 否则只有第一条发得出去，之后的全被静默丢弃——若丢的正好是「释放」
+     * 那条，host 就认为键还按着，终端里表现成卡键/自动重复，且现象极像
+     * 硬件故障。不能改成「一批只发最终状态」来规避：若批次里同时有
+     * press-A 和 release-A，合并后这次按键会整个消失，必须逐条发。 */
+    for (int i = 0; i < 20 && !tud_hid_ready(); i++)
+        vTaskDelay(pdMS_TO_TICKS(1));
+    if (!tud_hid_keyboard_report(HID_RID_KEYBOARD, modifier, nk ? keys : NULL))
+        ESP_LOGW(TAG, "hid report 丢弃（端点持续忙）");
 }
 
 static void kbd_task(void *arg)
@@ -167,26 +118,36 @@ static void kbd_task(void *arg)
          * 超时轮询让这种竞态自愈。代价是空闲时每秒 10 次一字节 I2C 读，可忽略。 */
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
 
-        /* 一次排空队列：EVENT_NUM 给出当前事件数，逐个读走后 INT 自然释放。 */
-        uint8_t n = 0;
-        if (kbd_read_reg(REG_EVENT_NUM, &n, 1) != ESP_OK)
-            continue;
-        for (uint8_t i = 0; i < n; i++) {
-            uint8_t ev = KEY_EVENT_EMPTY;
-            if (kbd_read_reg(REG_KEY_EVENT, &ev, 1) != ESP_OK || ev == KEY_EVENT_EMPTY)
+        /* 排空队列，读完立刻复查 EVENT_NUM：INT 是电平语义（队列非空即低），
+         * 若排空期间新事件又到了，NEGEDGE 不会再触发，只读一轮会让它一直
+         * 等到下次 100ms 超时才被处理（手感上是偶尔一个字母慢半拍）。
+         * 这个 do-while 同时收窄 kbd_build_and_report() 里 HID 端点忙丢
+         * 报告的触发窗口——批次越小，两条报告间隔越接近事件本身的节奏。 */
+        uint8_t n;
+        do {
+            esp_err_t err = kbd_read_reg(REG_EVENT_NUM, &n, 1);
+            kbd_note_i2c_result(err);
+            if (err != ESP_OK)
                 break;
-            const bool pressed = (ev & 0x80) != 0;
-            const uint8_t row = (ev >> 4) & 0x07;
-            const uint8_t col = ev & 0x0F;
-            ESP_LOGI(TAG, "raw %s row=%u col=%u", pressed ? "press" : "release",
-                     (unsigned)row, (unsigned)col);
+            for (uint8_t i = 0; i < n; i++) {
+                uint8_t ev = KEY_EVENT_EMPTY;
+                err = kbd_read_reg(REG_KEY_EVENT, &ev, 1);
+                kbd_note_i2c_result(err);
+                if (err != ESP_OK || ev == KEY_EVENT_EMPTY)
+                    break;
+                const bool pressed = (ev & 0x80) != 0;
+                const uint8_t row = (ev >> 4) & 0x07;
+                const uint8_t col = ev & 0x0F;
+                ESP_LOGD(TAG, "raw %s row=%u col=%u", pressed ? "press" : "release",
+                         (unsigned)row, (unsigned)col);
 
-            /* 越界防御：行列来自从机，若固件/线路异常给出非法值，别越界写内存 */
-            if (row >= KBD_ROWS || col >= KBD_COLS)
-                continue;
-            s_pressed[row][col] = pressed;
-            kbd_build_and_report();
-        }
+                /* 越界防御：行列来自从机，若固件/线路异常给出非法值，别越界写内存 */
+                if (row >= KBD_ROWS || col >= KBD_COLS)
+                    continue;
+                s_pressed[row][col] = pressed;
+                kbd_build_and_report();
+            }
+        } while (n > 0);
     }
 }
 
@@ -217,6 +178,13 @@ esp_err_t kbd_start(void)
     ESP_RETURN_ON_ERROR(kbd_write_reg(REG_KEYBOARD_MODE, KBD_MODE_NORMAL), TAG, "设 Normal 模式失败");
 
     ESP_LOGI(TAG, "fw=0x%02x addr=0x%02x mode=normal", fw, KBD_I2C_ADDR);
+
+    /* 开机时队列可能已非空（INT 已被拉低）：若不清，这批陈旧事件会在装好
+     * 中断后随第一次排空灌进 s_pressed，残留一个「开机前就按下」的键状态，
+     * 直到用户再按一次同一物理键才会翻转掉。REG_EVENT_NUM 写 0 即清空队列
+     * 并释放 INT（寄存器表语义），必须放在装 GPIO 中断之前做，让「INT 已
+     * 拉低」这个初始态直接不成立。 */
+    ESP_RETURN_ON_ERROR(kbd_write_reg(REG_EVENT_NUM, 0), TAG, "清空开机残留队列失败");
 
     /* 中断配置必须在建任务**之后** —— ISR 要用到 s_kbd_task 句柄。 */
     xTaskCreate(kbd_task, "kbd", 4096, NULL, 5, &s_kbd_task);
