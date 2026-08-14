@@ -268,22 +268,15 @@ esp_err_t display_init(void)
     ppa_client_config_t ppa_cfg = {
         .oper_type = PPA_OPERATION_SRM,
         /*
-         * 元素数 = **并发提交者数**（只用阻塞模式，每个提交者最多占 1 个）：
-         *   ① TinyUSB 任务（GUD 收帧）
-         *   ② 待机画面的等待点动画任务（收到第一帧后退出）
-         *   ③ 音频数据泵任务（仅 CONFIG_TAB5_AUDIO_PANEL，画状态面板与电平条）
-         * 池子空时 ppa_do_scale_rotate_mirror() 不等待、直接返回 ESP_FAIL
-         * （ppa_srm.c "exceed maximum pending transactions"），那一次 blit 就丢了；
-         * 落在 GUD 侧就是 host 的一块脏矩形永远不上屏（脏矩形不会自动重发）。
-         * 窗口很窄，但代价不对称，故按提交者数量给足。
-         * 退出/关闭后多出来的元素闲置，几百字节内部 RAM，不值得回收。
-         * （CONFIG_TAB5_AUDIO_PANEL 未定义时 #if 求值为 0，两种配置下都成立。）
+         * 只用阻塞模式，故每个提交者最多占 1 个 trans 元素 —— 但**提交者有两个**：
+         * TinyUSB 任务（GUD 收帧）与待机画面的等待点动画任务。池子空了时
+         * ppa_do_scale_rotate_mirror() 不等待，直接返回 ESP_FAIL（ppa_srm.c:308
+         * "exceed maximum pending transactions"），那一次 blit 就丢了；落在 GUD
+         * 侧就是 host 的一块脏矩形永远不上屏（脏矩形不会自动重发）。窗口很窄
+         * （动画 500ms 才提交一次），但代价不对称，故按提交者数量给 2。
+         * 动画任务退出后多出来的那个元素闲置，几百字节内部 RAM，不值得回收。
          */
-#if CONFIG_TAB5_AUDIO_PANEL
-        .max_pending_trans_num = 3,
-#else
         .max_pending_trans_num = 2,
-#endif
     };
     ESP_RETURN_ON_ERROR(ppa_register_client(&ppa_cfg, &s_ppa), TAG, "ppa client");
 

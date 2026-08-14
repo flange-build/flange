@@ -45,9 +45,3 @@ CONFIG_SPIRAM_SPEED_200M=y
 #    做音频/摄像头阶段时必须把它关回去。
 # CONFIG_TINYUSB_CDC_ENABLED=y
 # CONFIG_TINYUSB_CDC_COUNT=1
-# ── bring-up 屏上状态面板（默认关闭）─────────────────────────────
-# 取消注释后，codec/I2S 的状态与麦克风电平会画在屏幕下方 —— 这块板没有串口，
-# bring-up 阶段这是唯一看得见的输出。取消注释后必须 `rm -f sdkconfig` 再 build。
-# ⚠️ Task 9 的复合回归必须关掉它：它自己会占 PPA 与 PSRAM 带宽，开着测显示帧率
-#    等于把仪表算进被测对象。
-# CONFIG_TAB5_AUDIO_PANEL=y

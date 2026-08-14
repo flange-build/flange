@@ -33,25 +33,3 @@ void standby_render(uint16_t *buf);
  * 越界的 n_dots 按 0..3 钳位。
  */
 void standby_render_dots(uint16_t *buf, int n_dots);
-
-/* ── 供 audio_panel_render.c 复用的最小子集 ──────────────────────
- * 只导出真正被复用的两个原语与画布类型。draw_char / draw_frame 以及全部版式
- * 常量仍是 static —— 导出得越多，日后改待机画面版式时要顾虑的调用方就越多。
- * 这里导出的三样都是纯像素运算，宿主机可直接编译。 */
-typedef struct {
-    uint16_t *px;
-    int w, h;
-} standby_canvas_t;
-
-/* 填充矩形。整条绘制链只有这一个函数写像素，边界钳位因此只需在这里做对一次；
- * 越界的 x/y/w/h 会被钳到画布内，不会越界写。 */
-void standby_fill_rect(const standby_canvas_t *c, int x, int y, int w, int h, uint16_t color);
-
-/* 画一行字符串，整数倍放大（scale=1 时是 8×16）。表外字符画成 '?'，不静默吞掉。 */
-void standby_draw_text(const standby_canvas_t *c, int x, int y, const char *s,
-                       uint16_t color, int scale);
-
-/* RGB565 打包。⚠️ R/B 只有 5 bit、G 只有 6 bit，低位会被丢掉 ——
- * 调色请对着实际显示值看，不要对着设计值。 */
-#define STANDBY_RGB565(r, g, b) \
-    ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
