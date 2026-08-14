@@ -1326,8 +1326,10 @@ tud_audio_read()      →  mono_to_stereo  →  i2s_channel_write(tx)  （播放
 host 没选中某个方向时：播放侧**灌静音而不是停写**（I2S 时钟保持连续，ES8388 不会因为
 BCLK 断续而「咔」一声）；录音侧清空软件 FIFO（否则下次打开会先放出一段陈旧音频）。
 
-任务优先级 5，与 `TINYUSB_DEFAULT_TASK_PRIO` 相同 —— 它每毫秒只搬 128 字节、绝大部分时间
-阻塞在 I2S 收发上，没有理由压过 USB 栈。欠载/溢出**只计数**，每 10 秒汇总一条
+任务优先级 **4，低于** `TINYUSB_DEFAULT_TASK_PRIO`(5)。曾经取 5（同优先级），理由是
+「绝大部分时间阻塞在 I2S 收发上」—— 那个前提在通道未进入 RUNNING 时不成立，
+`i2s_channel_read()` 会立即返回错误而非阻塞满超时。USB 是这块板的命脉，
+显示/键盘/触摸/音频全走它，任何情况下都不该被音频抢。欠载/溢出**只计数**，每 10 秒汇总一条
 日志：1 kHz 的 `ESP_LOGW` 会自己把音频饿死，属于观测干扰被观测。
 
 Cardputer 上那套 `AUDIO_MODE_SPEAKER/MICROPHONE` 三态仲裁**不移植** —— 那是因为它的扬声器 WS
