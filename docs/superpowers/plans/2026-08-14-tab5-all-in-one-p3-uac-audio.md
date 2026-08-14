@@ -322,23 +322,9 @@ firmware/sdkconfig.defaults    # 改：裁 esp_codec_dev 的 codec 列表 + 默�
 
 目标：把已经实机验证过的显示通路变成 bring-up 期的**仪表**。没有它，Task 2/3 的判据无处可落（硬约束 C）。
 
-**Files:** Create `main/Kconfig.projbuild`、`main/audio_panel.{c,h}`、`main/audio_panel_render.{c,h}`、`test/test_audio_panel_render.c`；Modify `main/standby_screen.{c,h}`、`main/display_dsi.c`、`main/app_main.c`、`main/CMakeLists.txt`、`sdkconfig.defaults`
-
-> ⚠️ **`main/app_main.c` 是实施时补上的，原清单漏了它 —— 而漏掉它这个任务就验不了。**
-> 面板本身没有任何调用者：Step 1 的实机判据（三行文字、电平条随数据变化）需要有人喂数据，
-> 而 Task 1 Step 4 才是第一个真实调用点。更麻烦的是它**没有任何编译期症状**：
-> `--gc-sections` 会把整个未被引用的模块丢掉，于是「打开开关重编」测出来的 Flash/DIRAM
-> 与基线**逐字节相同**，看上去正好像是"零成本"判据通过了，实际上镜像里根本没有面板。
-> 所以 Step 5 之后要在 `app_main()` 末尾加一段 `#if CONFIG_TAB5_AUDIO_PANEL` 的自检
-> （已知假数据扫一遍电平条），Task 1 起改由真实数据驱动、该段随之删除。
+**Files:** Create `main/Kconfig.projbuild`、`main/audio_panel.{c,h}`、`main/audio_panel_render.{c,h}`、`test/test_audio_panel_render.c`；Modify `main/standby_screen.{c,h}`、`main/display_dsi.c`、`main/CMakeLists.txt`、`sdkconfig.defaults`
 
 - [ ] **Step 1：成功判据**（宿主机与编译判据已过；实机部分待烧板验证）
-
-> ⓘ 实施补充：面板脚印取 x 64..576 / y 276..360，把待机画面的分隔线(y=292)、
-> 脚注1(y 310..326)、脚注2(y 330..346) **完整**盖住 —— 半截露出来的线会被当成显示故障，
-> 反过来污染这把尺子自己的可信度。由此还推出「状态区与电平条必须紧邻无缝」：两块分别
-> blit，中间留 4 px 缝隙，缝里的待机像素就原样露出来。这几条都有 `_Static_assert` 与
-> 宿主机用例把关。
 
 宿主机：
 
@@ -569,7 +555,7 @@ void audio_panel_levels(uint16_t peak_l, uint16_t peak_r);
 3. `render_meter`：两路不同峰值画出**不同长度**的条；`peak = 0` 时条区域全是背景色；两行互不侵占（用行带占用检查，照 `test_standby_screen.c` 的做法）；
 4. 版式：状态区与电平条的矩形**不重叠**，且都不与 `STANDBY_DOTS_*` 重叠（这条与 `_Static_assert` 重复是故意的——断言防编译期，测试防有人把断言删了）。
 
-- [ ] **Step 8：编译（开/关两种配置）+ 上板验证 + 提交**（开/关两种配置均已编过、关闭时与基线逐节相同、自检调用点已就位；只剩上板那一次目视验证）
+- [ ] **Step 8：编译（开/关两种配置）+ 上板验证 + 提交**（开/关两种配置均已编过、关闭时与基线逐节相同；上板验证待做 —— 本任务未加调用方，面板要到 Task 1 Step 4 才有数据可画）
 
 ```bash
 cd firmware && . $HOME/esp/esp-idf/export.sh
