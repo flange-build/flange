@@ -9,17 +9,13 @@
  * esp_tinyusb 两个库的 include 路径最前面 —— 只改一个会让两边看到不同的
  * CFG_TUD_*，接口数与描述符长度对不上。
  *
- * ⚠️ 整段音频配置由 CONFIG_AIO_AUDIO_DESC 控制（见 main/Kconfig.projbuild），
- *    **默认关闭**。关闭时本文件退化成一层透明的 include_next，CFG_TUD_AUDIO
- *    保持 esp_tinyusb 的默认值 0，与音频落地之前的构建逐位一致。
- *    sdkconfig.h 必须在 include_next **之前**取到：IDF 给每个编译单元都加了
+ * ⓘ sdkconfig.h 必须在 include_next **之前**取到（下面的 CFG_TUD_* 之外，
+ *    esp_tinyusb 的默认配置本身也读它）：IDF 给每个编译单元都加了
  *    -I build/config，所以这里能直接 include 到。
  */
 #include "sdkconfig.h"
 
 #include_next "tusb_config.h"
-
-#if CONFIG_AIO_AUDIO_DESC
 
 #undef CFG_TUD_AUDIO
 #define CFG_TUD_AUDIO 1
@@ -53,5 +49,3 @@
  */
 #define CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP        0
 #define CFG_TUD_AUDIO_ENABLE_INTERRUPT_EP       0
-
-#endif /* CONFIG_AIO_AUDIO_DESC */

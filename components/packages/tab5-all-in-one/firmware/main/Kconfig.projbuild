@@ -1,153 +1,18 @@
 menu "Tab5 All-in-One"
 
-# ── UAC1 音频的编译期开关 ────────────────────────────────────────────
+# ⓘ 音频（UAC1：ES8388 播放 + ES7210 录音）**无条件编译**，没有开关。
 #
-# 为什么需要这个开关：31275803 引入 UAC1 音频后出现回归 —— 主机侧既没出录音
-# 设备，**连已实机验证的 GUD 显示也枚举不出来了**（退回该提交前即恢复）。
-# 根因尚未坐实，而 GUD 是本产品的核心形态，所以音频默认关闭，让默认构建回到
-# 「GUD + HID 已验证可用」的状态。
-#
-# 三档而不是两档，是为了把两类候选根因**分开验证**：
-#   NONE      描述符里没有音频，也不启动 codec  → 基线，GUD 必须恢复
-#   DESC_ONLY 描述符**原样**带音频，但不启动 codec → 只保留 USB 侧变化
-#   FULL      31275803 的完整行为
-# DESC_ONLY 下若 GUD 恢复 ⇒ 根因在 codec/I2S 运行时；仍不恢复 ⇒ 根因在
-# 描述符/端点/FIFO。描述符是静态的，这条二分才干净。
-#
-# ✅ 二分第一刀已实测：DESC_ONLY 下 **GUD 正常且主机枚举出了 UAC 设备**。
-#    ⇒ 描述符、端点号、DWC2 FIFO、TinyUSB 音频类驱动全部无罪，
-#      根因 100% 落在 codec_audio.c 的运行时。第二刀见下面的 AIO_AUDIO_FULL_STAGE。
-
-choice AIO_AUDIO_MODE
-    prompt "UAC1 音频（ES8388 播放 + ES7210 录音）"
-    default AIO_AUDIO_NONE
-    help
-        默认关闭。音频尚未实机验证，且疑似导致 GUD 显示枚举失败。
-
-    config AIO_AUDIO_NONE
-        bool "关闭（默认，仅 GUD + HID）"
-
-    config AIO_AUDIO_DESC_ONLY
-        bool "只出描述符，不启动 codec（二分用）"
-
-    config AIO_AUDIO_FULL
-        bool "完整启用"
-endchoice
-
-# ── 二分第二刀：FULL 档内部按启动步骤分级 ────────────────────────────
-#
-# DESC_ONLY 已经把根因锁进 codec_audio.c 的运行时，剩下的空间是
-# codec_audio_start() 的五个动作，本旋钮让每烧一次板就再切一刀。
-# 用 int 而不是 choice：可以直接二分（先烧 4，再按结果烧 2 或 5）。
-#
-# | 值 | 跑到哪一步为止 | GUD 挂了说明什么 |
-# |----|----------------|------------------|
-# | 0  | **只起数据泵**，codec/I2S 一个字都不碰（I2S 句柄保持 NULL） | 罪在数据泵对 tud_audio_* 的调用本身 |
-# | 1  | i2s_full_duplex_init()：建通道 + 配 G26~G30 + 时钟         | 罪在 I2S 外设/引脚/时钟 bring-up |
-# | 2  | + es8388_init()：I2C 0x10 寄存器序列 + TX 使能             | 罪在 ES8388 那段 I2C 或 TX 通道使能 |
-# | 3  | + es7210_init()：I2C 0x40 寄存器序列 + RX 使能             | 罪在 ES7210 那段 I2C 或 RX 通道使能 |
-# | 4  | + board_speaker_enable(true)：功放上电（**不起数据泵**）   | 罪在功放上电（电流/电源，非软件） |
-# | 5  | + 数据泵任务（默认，= 完整行为）                            | 罪在数据泵的稳态运行 |
-#
-# 读法：某一级 GUD 正常、下一级挂掉 ⇒ 根因就在这两级之间新增的那一个动作。
-# 0 与 5 是一对反向验证：0 只留 USB 侧调用、5 只比 4 多了数据泵。
-# ⚠️ 这是**排障用**的旋钮，根因定位后应当连同本注释一起删掉。
-config AIO_AUDIO_FULL_STAGE
-    int "FULL 档跑到第几步（二分排障用，5 = 完整行为）"
-    depends on AIO_AUDIO_FULL
-    range 0 5
-    default 5
-    help
-        只在排查「开音频后 USB 枚举失败」时才动它。5 是完整行为。
-        每个取值的含义见 main/Kconfig.projbuild 里的表，或 firmware/README.md。
-
-# ── 二分第三刀：I2S 到底要不要碰那几个引脚 ───────────────────────────
-#
-# ⚠️⚠️ 已查实的硬事实：**ESP32-P4 内部全速 PHY 的 D−/D+ 就是 GPIO26 / GPIO27**，
-#      而 Tab5 的 I2S DOUT = G26、BCLK = G27 —— 两者撞在同一对焊盘上。
-#      依据（IDF v6.0 源码，非推测）：
-#        components/esp_hal_usb/esp32p4/usb_dwc_periph.c:31
-#            static const usb_internal_phy_io_t internal_phy_io = { .dp = 27, .dm = 26 };
-#          它挂在 usb_dwc_info.controllers[1]（Full-Speed USB-DWC）的 internal_phy_io 上。
-#        components/soc/esp32p4/register/hw_ver1/soc/io_mux_reg.h:169-170
-#            #define USB_INT_PHY1_DM_GPIO_NUM  26
-#            #define USB_INT_PHY1_DP_GPIO_NUM  27
-#        components/esp_hw_support/usb_phy/usb_phy.c:308-313 —— 注释原文
-#            "For FSLS PHY that shares pads with GPIO peripheral, we must set
-#             drive capability to 3 (40mA)"
-#          然后**无条件**对 G26/G27 调 gpio_ll_set_drive_capability(..., CAP_3)。
-#
-# 这一档把「I2S 外设/GDMA/时钟 bring-up」与「I2S 抢 GPIO」拆开，一次烧板切一刀。
-# 与 AIO_AUDIO_FULL_STAGE=1 配合使用（只跑 i2s_full_duplex_init()）。
-#
-# | 取值 | I2S 配哪些脚 | GUD 正常说明什么 |
-# |------|--------------|------------------|
-# | ALL（默认） | G26/27/28/29/30 全配 | —（就是现在挂掉的行为） |
-# | NO_USB_PADS | 只配 G28/29/30，DOUT(26)/BCLK(27) 留空 | 罪就是 USB PHY 那两个焊盘 |
-# | NONE | 一个脚都不配 | 罪在引脚（再用 NO_USB_PADS 定位是哪两个）；挂掉则罪在外设/GDMA/时钟 |
-#
-# ⚠️ 排障旋钮。NO_USB_PADS / NONE 下音频**必然不出声**（数据线没接出去），
-#    这是预期的 —— 这两档只回答「USB 还活不活」。
-#
-# ✅ 已实测：NO_USB_PADS 下 GUD 正常、声卡与麦克风都枚举得出（只是没声音）
-#    ⇒ 罪就是那对焊盘，根因坐实。真正的机理与修法见下面「根因已坐实」一节。
-choice AIO_AUDIO_I2S_GPIO
-    prompt "I2S 引脚配置（二分排障用）"
-    depends on AIO_AUDIO_FULL
-    default AIO_AUDIO_I2S_GPIO_ALL
-
-    config AIO_AUDIO_I2S_GPIO_ALL
-        bool "全配（默认，= 正常行为）"
-
-    config AIO_AUDIO_I2S_GPIO_NO_USB_PADS
-        bool "不配 DOUT(G26)/BCLK(G27) —— 即让开 USB 全速 PHY 的 D−/D+"
-
-    config AIO_AUDIO_I2S_GPIO_NONE
-        bool "一个引脚都不配"
-endchoice
-
-# ── ✅ 根因已坐实，修法已实现（本节留作历史记录）────────────────────
-#
-# 实测（AIO_AUDIO_FULL + AIO_AUDIO_I2S_GPIO_NO_USB_PADS，整套音频照跑、只让开
-# G26/G27）：**GUD 显示正常、声卡与麦克风都枚举出来**，只是没声音（数据线确实
-# 没接出去）。⇒ I2S 外设/时钟/GDMA、codec I2C、esp_codec_dev、数据泵、UAC 描述符、
-# 端点/FIFO 全部无罪，**只要碰 G26/G27 就死**。
-#
-# 真正的机理**不是**「两个驱动器抢焊盘」，而是一次寄存器误伤：
-#   esp_hal_gpio/esp32p4/include/hal/gpio_ll.h:676-686 的 gpio_ll_func_sel()
-#   把「PHY0 归 USJ、PHY1 归 OTG」这个默认映射写死了（注释原文
-#   "We only consider the default connection here"），见到 G26/G27 就写
-#       USB_WRAP.otg_conf.usb_pad_enable = 0;
-#   而 route_fsls_phy0_to_otg() 恰恰把映射对调了 ⇒ 关掉的是 **G24/G25 的 USB-C**。
-#
-# 修法（无需任何 Kconfig 开关，见 app_main.c）：
-#   1. codec_audio_init()（I2S + 两颗 codec）排到 tinyusb_driver_install() **之前**，
-#      让误伤发生在 USB 上电之前；install 内部的 usb_new_phy() 会把那一位置回 1。
-#   2. install 之后跑 otg_fsls_pads_repair()：幂等地把 usb_pad_enable 置 1、
-#      清 pad_pull_override、并把 usb_phy.c 抬到 40mA 的 G26/G27 驱动能力回默认。
-# 完整依据见 main/tab5_pins.h 的音频段。
-#
-# ── ❌ 已被证伪的候选修法（默认关，只作对照保留）──────────────────
-#
-# 当初以为：换 PHY 后 USJ 落在 PHY1(G26/G27)，清掉它的 usb_pad_enable 就能让出焊盘。
-# 查实 IDF 在 app_main 之前**已经替我们清过了** —— CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n
-# 时 esp_perip_clk_init() 会执行
-#     REG_CLR_BIT(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
-#     REG_CLR_BIT(HP_SYS_CLKRST_SOC_CLK_CTRL2_REG, ..._USB_DEVICE_APB_CLK_EN);
-# （esp_system/port/soc/esp32p4/clk.c:238-242 → esp_hal_clock/esp32p4/clk_gate_ll.h:330-336）
-# 所以本选项是**空操作**，还多余地把 USJ 的 APB 与 48M 时钟又打开了一次。
-config AIO_USJ_RELEASE_PHY_PADS
-    bool "换 PHY 后把 G26/G27 焊盘从 USB-Serial/JTAG 放掉（已证伪，默认关）"
-    default n
-    help
-        已查实为空操作 —— IDF 启动阶段就已清掉该位。仅作历史对照保留，别打开。
-        详见 main/Kconfig.projbuild 的说明与 firmware/README.md。
+# 它曾经有过一组排障旋钮（AIO_AUDIO_MODE / AIO_AUDIO_FULL_STAGE /
+# AIO_AUDIO_I2S_GPIO / AIO_USJ_RELEASE_PHY_PADS），用来二分定位「开音频后 USB
+# 枚举失败」。根因已坐实并修复 —— 配 G26/G27 会让 IDF 的 gpio_ll_func_sel()
+# 误关 USB-C 的焊盘，机理与修法见 main/tab5_pins.h 的音频段与 app_main.c；
+# 二分过程的结论存在 firmware/README.md。旋钮已随之删除，别再加回来。
 
 # ── 排障档：拿 GUD 的 IN 端点换一条 USB CDC 日志串口 ─────────────────
 #
-# 这块板现场**没有可用串口**：USB-Serial/JTAG 被 TinyUSB 收走（USJ_ENABLE=n），
-# UART0(G37/G38) 只在 M5-Bus 排针上、要外接 USB-TTL。于是音频排障一直在盲二分，
-# 每定位一刀就要烧一次板。本档用一次可逆的端点交换换来 ESP_LOG*：
+# 这块板现场**没有开箱即用的串口**：USB-Serial/JTAG 被 TinyUSB 收走
+# （USJ_ENABLE=n），UART0(G37/G38) 只在 M5-Bus 排针上、要外接 USB-TTL。
+# 本档用一次可逆的端点交换换来从 USB-C 直接看 ESP_LOG*：
 #
 #   放弃 vendor(GUD) 的 IN 端点 0x81  →  腾出 1 条
 #   把留给 UVC 的 0x84 临时借出去      →  再腾出 1 条
@@ -159,10 +24,11 @@ config AIO_USJ_RELEASE_PHY_PADS
 # 逐条依据与端点表见 main/usb_descriptors.h。
 #
 # ⚠️ **排障档，不是产品档**：它占了留给 UVC 的 0x84，4 条 IN 端点用满。
-#    拿到日志、定位完就关掉。
+#    排查音频 / USB 问题时打开它拿日志，查完关掉，把 0x84 还给 UVC。
 #
 # 用法：
 #   idf.py menuconfig → Tab5 All-in-One → 打开本项 → idf.py build flash monitor
+#   （或在 sdkconfig.defaults 里取消 CONFIG_AIO_DEBUG_CDC=y 那一行的注释）
 config AIO_DEBUG_CDC
     bool "调试档：让出 GUD 的 IN 端点，换 USB CDC 日志串口"
     default n
@@ -171,12 +37,6 @@ config AIO_DEBUG_CDC
         默认关闭。打开后 ESP_LOG* 从 USB-C 出来，`idf.py monitor` 直接看，
         代价是 GUD 的 IN 端点（不影响显示）与 UVC 预留的 0x84。
         ⚠️ 开机最早那几行日志会丢（要等 host 打开 ttyACM 才开始流），
-        所以 codec_audio 的自检结果做成了每 10 秒复读一次，见 codec_audio.c。
-
-# 派生量：描述符与 CFG_TUD_AUDIO 是否要带上音频。
-# 后两档都要，所以统一用它判断，别在 C 里到处写两个宏的 ||。
-config AIO_AUDIO_DESC
-    bool
-    default y if AIO_AUDIO_DESC_ONLY || AIO_AUDIO_FULL
+        所以音频自检结果在本档下每 10 秒复读一次，见 app_main.c。
 
 endmenu

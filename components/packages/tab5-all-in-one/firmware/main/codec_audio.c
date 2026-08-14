@@ -71,8 +71,9 @@ static volatile bool s_mic_on;
  * 现场又没有 UART（USJ 被 TinyUSB 收走，UART0 只在 M5-Bus 排针上）。
  *
  * 所以把 init 阶段的每一个判定记成静态快照，等控制台可用后由
- * codec_audio_report() 复读。调用点见 app_main.c —— 它每 10 秒复读一次，
- * 因为 CDC 的 TX 环形缓冲会把 host 打开 ttyACM 之前的日志覆盖掉。
+ * codec_audio_report() 复读。调用点见 app_main.c：默认档（日志走 UART0）打一遍，
+ * 开了 CONFIG_AIO_DEBUG_CDC 时每 10 秒复读 —— CDC 的 TX 环形缓冲会把 host
+ * 打开 ttyACM 之前的日志覆盖掉，只打一遍等于没打。
  */
 /*
  * ⚠️ 三步的结果**各记各的**，不再共用「一个被反复覆写的 s_init_err + 一个事后
@@ -151,32 +152,6 @@ static bool i2s_duplex_active(void)
     return I2S0.tx_conf.sig_loopback != 0;
 }
 
-/*
- * I2S 实际要配的引脚。⚠️ 排障旋钮 CONFIG_AIO_AUDIO_I2S_GPIO（见 Kconfig.projbuild）：
- * 把「I2S 外设/GDMA/时钟 bring-up」与「I2S 抢 GPIO」拆开验证用。
- * DOUT(G26)/BCLK(G27) 与 USB 内部全速 PHY 的 D−/D+ 是同一对焊盘，见 tab5_pins.h。
- * 根因坐实后应当把这段 #if 连同 Kconfig 里的 choice 一起删掉。
- */
-#if CONFIG_AIO_AUDIO_I2S_GPIO_NONE
-#  define I2S_GPIO_MCLK  I2S_GPIO_UNUSED
-#  define I2S_GPIO_BCLK  I2S_GPIO_UNUSED
-#  define I2S_GPIO_WS    I2S_GPIO_UNUSED
-#  define I2S_GPIO_DOUT  I2S_GPIO_UNUSED
-#  define I2S_GPIO_DSIN  I2S_GPIO_UNUSED
-#elif CONFIG_AIO_AUDIO_I2S_GPIO_NO_USB_PADS
-#  define I2S_GPIO_MCLK  PIN_I2S_MCLK
-#  define I2S_GPIO_BCLK  I2S_GPIO_UNUSED   /* G27 = USB 全速 PHY 的 D+ */
-#  define I2S_GPIO_WS    PIN_I2S_LRCK
-#  define I2S_GPIO_DOUT  I2S_GPIO_UNUSED   /* G26 = USB 全速 PHY 的 D− */
-#  define I2S_GPIO_DSIN  PIN_I2S_DSIN
-#else /* CONFIG_AIO_AUDIO_I2S_GPIO_ALL：正常行为 */
-#  define I2S_GPIO_MCLK  PIN_I2S_MCLK
-#  define I2S_GPIO_BCLK  PIN_I2S_SCLK
-#  define I2S_GPIO_WS    PIN_I2S_LRCK
-#  define I2S_GPIO_DOUT  PIN_I2S_DOUT
-#  define I2S_GPIO_DSIN  PIN_I2S_DSIN
-#endif
-
 static esp_err_t i2s_full_duplex_init(void)
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(AUDIO_I2S_PORT, I2S_ROLE_MASTER);
@@ -212,12 +187,15 @@ static esp_err_t i2s_full_duplex_init(void)
          * 录音就只拿得到 MIC1，MIC2 白装。 */
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
                                                         I2S_SLOT_MODE_STEREO),
+        /* ⚠️ 配 bclk(G27) 与 dout(G26) 这一步会顺手关掉 USB-C 的焊盘 ——
+         * 本板最贵的坑，机理见 tab5_pins.h 的音频段，修法是本函数所在的
+         * codec_audio_init() 必须排在 tinyusb_driver_install() 之前。 */
         .gpio_cfg = {
-            .mclk = I2S_GPIO_MCLK,
-            .bclk = I2S_GPIO_BCLK,
-            .ws   = I2S_GPIO_WS,
-            .dout = I2S_GPIO_DOUT,
-            .din  = I2S_GPIO_DSIN,
+            .mclk = PIN_I2S_MCLK,
+            .bclk = PIN_I2S_SCLK,
+            .ws   = PIN_I2S_LRCK,
+            .dout = PIN_I2S_DOUT,
+            .din  = PIN_I2S_DSIN,
             .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
         },
     };
@@ -393,7 +371,7 @@ static int32_t frame_peak(const int16_t *buf, size_t n)
  *
  *   录音可用   → i2s_channel_read()  读满一个 DMA 描述符(= 1 ms 的样本)才返回
  *   只有播放   → i2s_channel_write() 在 DMA 排满时阻塞，同样是 1 ms 一拍
- *   两个都没有 → 退回 vTaskDelay()（STAGE 0 反向验证档就走这条）
+ *   两个都没有 → 退回 vTaskDelay()（两颗 codec 都没起来时走这条）
  *
  * 一整轮谁都没阻塞成功时**必须**补一次延时：那两个超时只在通道已 RUNNING 时
  * 才真的阻塞，通道没使能时两个调用都立即返回错误，不补延时本循环就退化成不让出
@@ -521,14 +499,6 @@ static void audio_pump_task(void *arg)
 }
 
 /*
- * ⚠️ 下面那个 stage 是**排障旋钮**（CONFIG_AIO_AUDIO_FULL_STAGE，默认 5 = 完整行为）。
- *
- * 根因已坐实（见下面 codec_audio_init() 上方那段与 main/tab5_pins.h），
- * stage 只剩回归排查的价值。各级含义见 main/Kconfig.projbuild 的表。
- * **修法实机确认后应当把 stage 连同那段 Kconfig 一起删掉**，别留成永久配置项。
- */
-
-/*
  * ⚠️⚠️⚠️ **本函数必须在 tinyusb_driver_install() 之前调用。** 这是这块板最贵的
  *        那个坑的修法之一，改顺序等于把 bug 放回去。
  *
@@ -541,8 +511,8 @@ static void audio_pump_task(void *arg)
  * 对调了。于是这一位实际关掉的是 **PHY0 = G24/G25 = Tab5 的 USB-C**。
  *
  * 症状：主机看得到设备（D+ 上拉还在），但 EP0 一个控制传输都不应答，CPU 不复位。
- * 反证：CONFIG_AIO_AUDIO_I2S_GPIO_NO_USB_PADS（整套音频照跑、只让开 G26/G27）
- *       下 GUD 与声卡全部正常 —— 罪就在「碰这两个脚」本身。
+ * 反证（当时的二分实测）：整套音频照跑、只把 G26/G27 从 gpio_cfg 里让开时，
+ *       GUD 与声卡全部正常 —— 罪就在「碰这两个脚」本身。
  *
  * 放在 tinyusb_driver_install() 之前，误伤发生时 USB 还没连主机；install 内部的
  * usb_new_phy() → usb_wrap_hal_init() → usb_wrap_ll_phy_set_defaults() 会把
@@ -555,37 +525,31 @@ static void audio_pump_task(void *arg)
  */
 esp_err_t codec_audio_init(void)
 {
-    const int stage = CONFIG_AIO_AUDIO_FULL_STAGE;
-
     /*
      * 每一步的结果都记进各自的快照槽：本函数跑在 CDC 日志串口起来之前，
      * 这里的 ESP_LOG* 现场看不到，全靠 codec_audio_report() 复读。
      *
-     * ⚠️ **两颗 codec 各自失败、各自降级**，一颗挂掉不再中断另一颗的初始化。
+     * ⚠️ **两颗 codec 各自失败、各自降级**，一颗挂掉不中断另一颗的初始化。
      * 只有 I2S 本身起不来才提前返回错误 —— 那时候连时钟都没有，两个方向都没戏。
      */
-    if (stage >= 1) {
-        s_st_i2s = i2s_full_duplex_init();
-        if (s_st_i2s != ESP_OK) {
-            ESP_LOGE(TAG, "I2S 起不来(%s)，播放与录音一起放弃", esp_err_to_name(s_st_i2s));
-            return s_st_i2s;
-        }
-        s_i2s_ok = true;
+    s_st_i2s = i2s_full_duplex_init();
+    if (s_st_i2s != ESP_OK) {
+        ESP_LOGE(TAG, "I2S 起不来(%s)，播放与录音一起放弃", esp_err_to_name(s_st_i2s));
+        return s_st_i2s;
     }
-    if (stage >= 2) {
-        s_st_spk = es8388_init();
-        s_spk_ok = (s_st_spk == ESP_OK);
-        if (!s_spk_ok)
-            ESP_LOGE(TAG, "ES8388(播放)初始化失败(%s)；录音不受影响，继续",
-                     esp_err_to_name(s_st_spk));
-    }
-    if (stage >= 3) {
-        s_st_mic = es7210_init();
-        s_mic_ok = (s_st_mic == ESP_OK);
-        if (!s_mic_ok)
-            ESP_LOGE(TAG, "ES7210(录音)初始化失败(%s，卡在 %s，probe=%s)；播放不受影响，继续",
-                     esp_err_to_name(s_st_mic), s_mic_step, esp_err_to_name(s_mic_probe));
-    }
+    s_i2s_ok = true;
+
+    s_st_spk = es8388_init();
+    s_spk_ok = (s_st_spk == ESP_OK);
+    if (!s_spk_ok)
+        ESP_LOGE(TAG, "ES8388(播放)初始化失败(%s)；录音不受影响，继续",
+                 esp_err_to_name(s_st_spk));
+
+    s_st_mic = es7210_init();
+    s_mic_ok = (s_st_mic == ESP_OK);
+    if (!s_mic_ok)
+        ESP_LOGE(TAG, "ES7210(录音)初始化失败(%s，卡在 %s，probe=%s)；播放不受影响，继续",
+                 esp_err_to_name(s_st_mic), s_mic_step, esp_err_to_name(s_mic_probe));
 
     return ESP_OK;
 }
@@ -607,14 +571,13 @@ static int reg_rd(const audio_codec_ctrl_if_t *ctrl, int reg)
 /*
  * 把「音频到底卡在哪一步」一次性打出来。
  *
- * 为什么需要它、为什么要**反复**打：见文件上方那段「开机自检快照」。
- * app_main 每 10 秒调一次 —— CDC 的 TX 环形缓冲只有几百字节，host 打开
- * ttyACM 之前的日志会被覆盖，一次性打印的话现场大概率什么都看不到。
+ * 为什么需要它：见文件上方那段「开机自检快照」。调用节奏见 app_main.c
+ * （默认档打一遍；开 CDC 时每 10 秒复读，因为它的 TX 环形缓冲会覆盖）。
  *
  * 读法（从上往下，第一条不对的就是根因）：
  *   I2S!=ESP_OK / duplex=0 → I2S 没起来或没组成全双工，两个方向都没戏，先修它。
  *   播放=... / 录音=...    → 两条链路**各自**的 init 返回值。「未运行」= 那一步
- *                            压根没跑（被 STAGE 挡住），与「失败」严格区分。
+ *                            压根没跑（I2S 失败提前返回了），与「失败」严格区分。
  *   ES7210 probe=ESP_OK 但 init 失败 → 芯片在总线上、应答正常，罪在驱动那一侧，
  *                            「卡在=」指出具体是哪一句。
  *   ES7210 probe=ESP_ERR_NOT_FOUND  → 芯片不应答（地址/供电/走线），别再查驱动。
@@ -674,16 +637,11 @@ void codec_audio_report(void)
  */
 esp_err_t codec_audio_start(void)
 {
-    const int stage = CONFIG_AIO_AUDIO_FULL_STAGE;
-    /* 0 与 5 都起数据泵，二者互为反向验证：0 是「只有数据泵」（codec/I2S 一个字
-     * 不碰，句柄留 NULL），5 是「全都要」。中间四级都不起泵。 */
-    const bool run_pump = (stage == 0 || stage == 5);
-
     /*
      * 功放只在 ES8388 真的配好时才导通 —— 接在一颗没配好的 DAC 后面只会放大噪声。
      * ⚠️ 与 ES7210 无关：那是另一颗芯片、另一条 USB 接口，它挂了播放照样要出声。
      */
-    if (stage >= 4 && s_spk_ok) {
+    if (s_spk_ok) {
         /*
          * 功放**最后**开。ES8388 的 open() 第一条就是 DACCONTROL3 静音，随后由
          * esp_codec_dev_open() 内部解除静音；等 DAC 输出电平稳定下来再导通功放，
@@ -698,8 +656,8 @@ esp_err_t codec_audio_start(void)
         s_pa_on = true;
     }
 
-    if (run_pump && xTaskCreate(audio_pump_task, "audio", AUDIO_TASK_STACK_SIZE, NULL,
-                                AUDIO_TASK_PRIORITY, NULL) != pdPASS) {
+    if (xTaskCreate(audio_pump_task, "audio", AUDIO_TASK_STACK_SIZE, NULL,
+                    AUDIO_TASK_PRIORITY, NULL) != pdPASS) {
         if (s_pa_on) {
             board_speaker_enable(false);
             s_pa_on = false;
@@ -707,13 +665,10 @@ esp_err_t codec_audio_start(void)
         return ESP_ERR_NO_MEM;
     }
 
-    if (stage == 5)
-        ESP_LOGI(TAG, "UAC1 音频就绪：%d Hz / %d ch / 16 bit（播放=%s，录音=%s）",
-                 UAC_SAMPLE_RATE, UAC_CHANNEL_COUNT,
-                 s_spk_ok ? "可用" : "降级：丢弃 host 送来的数据",
-                 s_mic_ok ? "可用" : "降级：向 host 上报静音");
-    else
-        ESP_LOGW(TAG, "排障档 CONFIG_AIO_AUDIO_FULL_STAGE=%d：音频未完整启动", stage);
+    ESP_LOGI(TAG, "UAC1 音频就绪：%d Hz / %d ch / 16 bit（播放=%s，录音=%s）",
+             UAC_SAMPLE_RATE, UAC_CHANNEL_COUNT,
+             s_spk_ok ? "可用" : "降级：丢弃 host 送来的数据",
+             s_mic_ok ? "可用" : "降级：向 host 上报静音");
     return ESP_OK;
 }
 

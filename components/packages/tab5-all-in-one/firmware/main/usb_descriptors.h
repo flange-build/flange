@@ -15,19 +15,13 @@
  *
  * UAC1 三接口的**相对顺序不能动**：AudioControl 必须是 IAD 覆盖区间的第一个，
  * 两个 AudioStreaming 必须紧随其后且连号。
- *
- * ⚠️ 音频三接口由 CONFIG_AIO_AUDIO_DESC 控制，**默认不编入**（见
- * main/Kconfig.projbuild）。关闭时 ITF_NUM_TOTAL 退回 2，配置描述符与音频
- * 落地之前逐位一致 —— 这正是「GUD 回归」的兜底。
  */
 enum {
     ITF_NUM_VENDOR = 0,
     ITF_NUM_HID,                   /* 键盘 + 多点触摸，靠 Report ID 区分 */
-#if CONFIG_AIO_AUDIO_DESC
     ITF_NUM_AUDIO_CONTROL,
     ITF_NUM_AUDIO_STREAMING_OUT,   /* 播放：host → ES8388 → 喇叭 */
     ITF_NUM_AUDIO_STREAMING_IN,    /* 录音：ES7210 双麦 → host */
-#endif
 #if CONFIG_AIO_DEBUG_CDC
     /* 调试档的 CDC 也**追加在最后**，理由与音频那三个相同：不动已验证的接口号。
      * CDC 的两个接口必须连号且控制接口在前。 */
@@ -56,10 +50,8 @@ enum {
 #define EPNUM_VENDOR_IN  0x81      /* 声明但从不使用，见下方 CONFIG_AIO_DEBUG_CDC */
 #endif
 #define EPNUM_HID        0x82
-#if CONFIG_AIO_AUDIO_DESC
 #define EPNUM_AUDIO_OUT  0x02      /* ISO OUT，播放 */
 #define EPNUM_AUDIO_IN   0x83      /* ISO IN，录音；0x84 留给 UVC */
-#endif
 
 /*
  * ── CONFIG_AIO_DEBUG_CDC：拿 GUD 的 IN 端点换一条 USB 日志串口 ──────────
@@ -101,7 +93,7 @@ enum {
  * 正确的打开方式是上面那个 CONFIG_AIO_DEBUG_CDC（它自己会 select 出
  * CONFIG_TINYUSB_CDC_ENABLED，并重排端点号），而不是手动开 CDC。
  */
-#if CONFIG_AIO_AUDIO_DESC && CONFIG_TINYUSB_CDC_ENABLED && !CONFIG_AIO_DEBUG_CDC
+#if CONFIG_TINYUSB_CDC_ENABLED && !CONFIG_AIO_DEBUG_CDC
 #error "CDC 调试串口与 UAC 音频互斥（IN 端点不够，且 0x83/0x84 撞号）：要日志请开 CONFIG_AIO_DEBUG_CDC（Tab5 All-in-One 菜单里），它会让出 GUD 的 IN 端点并重排端点号；不要直接开 CONFIG_TINYUSB_CDC_ENABLED"
 #endif
 

@@ -79,8 +79,8 @@
  *   而是一次**寄存器误伤**：I2S 配脚顺手把 USB-C 的焊盘开关拨到了 0。
  *
  * ── 实测吻合（这是坐实根因的那组数据）──
- *   CONFIG_AIO_AUDIO_FULL + CONFIG_AIO_AUDIO_I2S_GPIO_NO_USB_PADS（整套音频照跑，
- *   只把 G26/G27 让开）：GUD 显示正常、声卡与麦克风都枚举出来，只是没声音
+ *   当时的二分档「整套音频照跑，只把 G26/G27 从 i2s_std_config_t.gpio_cfg 里让开
+ *   （填 I2S_GPIO_UNUSED）」：GUD 显示正常、声卡与麦克风都枚举出来，只是没声音
  *   （DOUT/BCLK 确实没接出去）。⇒ I2S 外设、时钟、GDMA、codec I2C、esp_codec_dev、
  *   数据泵、UAC 描述符、端点/FIFO 全部无罪，**只要碰这两个脚就死**。
  *   反过来碰了就死的症状是「D+ 还拉着、主机看得到设备、EP0 一个控制传输都不应答、
@@ -133,7 +133,9 @@
  *       esp_system/port/soc/esp32p4/clk.c:238-242 → esp_hal_clock/esp32p4/clk_gate_ll.h:330-336
  *           REG_CLR_BIT(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
  *           REG_CLR_BIT(HP_SYS_CLKRST_SOC_CLK_CTRL2_REG, ..._USB_DEVICE_APB_CLK_EN);
- *   所以 CONFIG_AIO_USJ_RELEASE_PHY_PADS 那档**是空操作**（还多余地把 USJ 时钟又打开了）。
+ *   所以「排障时再显式调一次 usb_serial_jtag_ll_phy_enable_pad(false) 把焊盘让给
+ *   I2S」那个候选修法**是空操作**（还多余地把 USJ 的 APB 与 48M 时钟又打开一次），
+ *   已连同它的 Kconfig 开关一起删掉，别再实现第二遍。
  */
 
 /* 喇叭功放使能：与 LCD_EN(PIN4) / TOUCH_EN(PIN5) 同在 0x43 那颗 PI4IOE5V6408 上
