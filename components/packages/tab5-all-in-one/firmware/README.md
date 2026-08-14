@@ -1142,20 +1142,28 @@ CPU1），I2S 侧发生在之后的 `app_main`（CPU0），**不存在并发**�
 
 **FIFO 与 IN 端点预算不是根因。** 按 `dcd_dwc2.c` 的 `dfifo_alloc()` 逐步验算
 （rhport 0 = FS，`ep_count=7` / `ep_in_count=5` / `otg_dfifo_depth=256`，
-`calc_device_grxfsiz(mps,n) = 13+1+2*(mps/4+1)+2n`；P4 的 FS 核是 slave-only，
-`dma_device_enabled()` 运行时为假，故 `dfifo_top` 不扣 EPInfo）：
+`calc_device_grxfsiz(mps,n) = 13+1+2*(mps/4+1)+2n`）：
+
+> ⚠️ **可分配量是 242 words，不是 256。** `dcd_dwc2.c:260-263` 在 DMA 模式下先扣
+> `2 × ep_count = 14` words 作 EPInfo。本工程 `CONFIG_TINYUSB_MODE_DMA=y`（esp_tinyusb
+> 的 `tusb_config.h:106` 据此定义 `CFG_TUD_DWC2_DMA_ENABLE 1`），而 P4 的
+> `OTG11_ARCHITECTURE = 2` = `GHWCFG2_ARCH_INTERNAL_DMA`，两个条件都成立
+> ⇒ `dma_device_enabled()` 为**真**。
+> 本节此前记作「FS 核 slave-only、不扣 EPInfo」，**那是错的**，少算了 14 words。
+> 音频阶段余量充裕所以没出事，但 UVC 的包大小是按这个数定的，务必用 242。
 
 | 步骤 | 端点 | mps | `grxfsiz` | `dfifo_top` | `allocated_epin_count` | 断言 |
 |---|---|---|---|---|---|---|
-| `dfifo_device_init` | — | — | **62** | 256 | 0 | — |
-| 同上，EP0 IN | `0x80` | 64 | 62 | **240** | **1** | `0<5` ✅ / `256≥16+62` ✅ |
-| `vendord_open` | `0x01` OUT | 64 | 62（`new_sz=62`，不涨） | 240 | 1 | ✅ |
-| `vendord_open` | `0x81` IN | 64 | 62 | **224** | **2** | `1<5` ✅ / `240≥16+62` ✅ |
-| `hidd_open` | `0x82` IN | 64 | 62 | **208** | **3** | `2<5` ✅ / `224≥16+62` ✅ |
-| `audiod_open` | `0x83` IN | 36 | 62 | **199** | **4** | `3<5` ✅ / `208≥9+62` ✅ |
-| `audiod_open` | `0x02` OUT | 36 | 62（`new_sz=48<62`，不涨） | 199 | 4 | ✅ |
+| `dfifo_device_init` | — | — | **62** | **242** | 0 | — |
+| 同上，EP0 IN | `0x80` | 64 | 62 | **226** | **1** | `0<5` ✅ / `242≥16+62` ✅ |
+| `vendord_open` | `0x01` OUT | 64 | 62（`new_sz=62`，不涨） | 226 | 1 | ✅ |
+| `vendord_open` | `0x81` IN | 64 | 62 | **210** | **2** | `1<5` ✅ / `226≥16+62` ✅ |
+| `hidd_open` | `0x82` IN | 64 | 62 | **194** | **3** | `2<5` ✅ / `210≥16+62` ✅ |
+| `audiod_open` | `0x83` IN | 36 | 62 | **185** | **4** | `3<5` ✅ / `194≥9+62` ✅ |
+| `audiod_open` | `0x02` OUT | 36 | 62（`new_sz=48<62`，不涨） | 185 | 4 | ✅ |
 
-余量 199−62 = **137 words**，IN 端点 4 条 ≤ 5。**没有任何一条断言接近失败。**
+余量 185−62 = **123 words（492 字节）**，IN 端点 4 条 ≤ 5。**没有任何一条断言接近失败**，
+但这 123 words 就是 UVC 的 ISO IN 能拿到的全部空间。
 而且 `handle_bus_reset()` 与 `dcd_edpt_close_all()` 都会把 `allocated_epin_count`
 清零并重跑 `dfifo_device_init()`，多次总线复位/重设配置不会累加。
 
