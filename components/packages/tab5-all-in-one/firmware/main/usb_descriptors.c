@@ -168,6 +168,8 @@ static const uint8_t aio_hid_report_desc[] = {
  * 下面播放用 ADAPTIVE、录音用 ASYNCHRONOUS，两者都非 0；
  * test/check_usb_desc.py 有专门一条断言守着这两件事。
  */
+#if CONFIG_AIO_AUDIO_DESC
+
 #define UAC1_STREAM_DESC_LEN (TUD_AUDIO10_DESC_STD_AS_LEN * 2 + \
                               TUD_AUDIO10_DESC_CS_AS_INT_LEN + \
                               TUD_AUDIO10_DESC_TYPE_I_FORMAT_LEN(1) + \
@@ -228,6 +230,13 @@ static const uint8_t aio_hid_report_desc[] = {
  * 与下方 aio_string_desc_arr 的第 5 个元素对应，两处改一处必错，故在此定名。 */
 #define AIO_STRID_AUDIO 4
 
+#else /* !CONFIG_AIO_AUDIO_DESC：音频默认关闭，见 main/Kconfig.projbuild */
+
+#define UAC1_AUDIO_DESC_LEN 0
+#define AIO_STRID_AUDIO     4   /* 字符串数组不随音频增删，索引保持稳定 */
+
+#endif
+
 /*
  * 配置描述符：IF0 = GUD vendor，IF1 = HID 键盘 + 触摸，
  * IF2/IF3/IF4 = UAC1 音频（AudioControl + 播放 AS + 录音 AS，由 IAD 成组）。
@@ -258,9 +267,11 @@ const uint8_t aio_desc_configuration[] = {
     TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
                        sizeof(aio_hid_report_desc), EPNUM_HID,
                        CFG_TUD_HID_EP_BUFSIZE, 10),
+#if CONFIG_AIO_AUDIO_DESC
     UAC1_AUDIO_DESCRIPTOR(ITF_NUM_AUDIO_CONTROL, ITF_NUM_AUDIO_STREAMING_OUT,
                           ITF_NUM_AUDIO_STREAMING_IN, AIO_STRID_AUDIO,
                           EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN),
+#endif
 };
 
 _Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN,
@@ -271,12 +282,14 @@ _Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN,
  * 两者分处两个文件、无法互相 include，只能靠断言钉住 —— 不一致时 TinyUSB 会在
  * 收发路径上截断或拒绝，而枚举完全正常，症状极难归因。
  */
+#if CONFIG_AIO_AUDIO_DESC
 _Static_assert(UAC_EP_OUT_SIZE <= CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX,
                "描述符声明的播放端点大小超过 tusb_config.h 里给驱动的上限");
 _Static_assert(UAC_EP_IN_SIZE <= CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX,
                "描述符声明的录音端点大小超过 tusb_config.h 里给驱动的上限");
 _Static_assert(CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP == 0,
                "全速控制器只有 4 条可用 IN 端点，反馈端点会顶掉 UVC 的位置");
+#endif
 
 /* esp_tinyusb 只实现 tud_descriptor_*_cb，HID 这三个回调要我们自己提供，
  * 否则链接期缺符号（report_cb）或运行时对 GET/SET_REPORT STALL。 */

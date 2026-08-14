@@ -1,0 +1,39 @@
+menu "Tab5 All-in-One"
+
+# ── UAC1 音频的编译期开关 ────────────────────────────────────────────
+#
+# 为什么需要这个开关：31275803 引入 UAC1 音频后出现回归 —— 主机侧既没出录音
+# 设备，**连已实机验证的 GUD 显示也枚举不出来了**（退回该提交前即恢复）。
+# 根因尚未坐实，而 GUD 是本产品的核心形态，所以音频默认关闭，让默认构建回到
+# 「GUD + HID 已验证可用」的状态。
+#
+# 三档而不是两档，是为了把两类候选根因**分开验证**：
+#   NONE      描述符里没有音频，也不启动 codec  → 基线，GUD 必须恢复
+#   DESC_ONLY 描述符**原样**带音频，但不启动 codec → 只保留 USB 侧变化
+#   FULL      31275803 的完整行为
+# DESC_ONLY 下若 GUD 恢复 ⇒ 根因在 codec/I2S 运行时；仍不恢复 ⇒ 根因在
+# 描述符/端点/FIFO。描述符是静态的，这条二分才干净。
+
+choice AIO_AUDIO_MODE
+    prompt "UAC1 音频（ES8388 播放 + ES7210 录音）"
+    default AIO_AUDIO_NONE
+    help
+        默认关闭。音频尚未实机验证，且疑似导致 GUD 显示枚举失败。
+
+    config AIO_AUDIO_NONE
+        bool "关闭（默认，仅 GUD + HID）"
+
+    config AIO_AUDIO_DESC_ONLY
+        bool "只出描述符，不启动 codec（二分用）"
+
+    config AIO_AUDIO_FULL
+        bool "完整启用"
+endchoice
+
+# 派生量：描述符与 CFG_TUD_AUDIO 是否要带上音频。
+# 后两档都要，所以统一用它判断，别在 C 里到处写两个宏的 ||。
+config AIO_AUDIO_DESC
+    bool
+    default y if AIO_AUDIO_DESC_ONLY || AIO_AUDIO_FULL
+
+endmenu

@@ -15,13 +15,19 @@
  *
  * UAC1 三接口的**相对顺序不能动**：AudioControl 必须是 IAD 覆盖区间的第一个，
  * 两个 AudioStreaming 必须紧随其后且连号。
+ *
+ * ⚠️ 音频三接口由 CONFIG_AIO_AUDIO_DESC 控制，**默认不编入**（见
+ * main/Kconfig.projbuild）。关闭时 ITF_NUM_TOTAL 退回 2，配置描述符与音频
+ * 落地之前逐位一致 —— 这正是「GUD 回归」的兜底。
  */
 enum {
     ITF_NUM_VENDOR = 0,
     ITF_NUM_HID,                   /* 键盘 + 多点触摸，靠 Report ID 区分 */
+#if CONFIG_AIO_AUDIO_DESC
     ITF_NUM_AUDIO_CONTROL,
     ITF_NUM_AUDIO_STREAMING_OUT,   /* 播放：host → ES8388 → 喇叭 */
     ITF_NUM_AUDIO_STREAMING_IN,    /* 录音：ES7210 双麦 → host */
+#endif
     ITF_NUM_TOTAL
 };
 
@@ -40,8 +46,10 @@ enum {
 #define EPNUM_VENDOR_OUT 0x01
 #define EPNUM_VENDOR_IN  0x81
 #define EPNUM_HID        0x82
+#if CONFIG_AIO_AUDIO_DESC
 #define EPNUM_AUDIO_OUT  0x02      /* ISO OUT，播放 */
 #define EPNUM_AUDIO_IN   0x83      /* ISO IN，录音；0x84 留给 UVC */
+#endif
 
 /*
  * ⚠️ CDC 调试串口与 UAC 音频**互斥**：CDC 自带 2 条 IN（通知 + 数据），
@@ -51,8 +59,8 @@ enum {
  * 把它变成编译期错误，而不是留给后人在一块**没有串口**的板子上调试一个
  * 「像是描述符写错」的枚举失败 —— 那正是最需要日志的时候最想打开 CDC 的时刻。
  */
-#if CONFIG_TINYUSB_CDC_ENABLED
-#error "CDC 调试串口与 UAC 音频互斥（IN 端点不够，且 0x83/0x84 撞号）：请把 sdkconfig.defaults 末尾那两行注释回去，然后 rm -f sdkconfig 重编"
+#if CONFIG_AIO_AUDIO_DESC && CONFIG_TINYUSB_CDC_ENABLED
+#error "CDC 调试串口与 UAC 音频互斥（IN 端点不够，且 0x83/0x84 撞号）：二选一 —— 要么把 CONFIG_AIO_AUDIO_MODE 设回「关闭」，要么把 sdkconfig.defaults 末尾那两行注释回去，然后 rm -f sdkconfig 重编"
 #endif
 
 /*

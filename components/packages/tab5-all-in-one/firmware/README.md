@@ -5,8 +5,8 @@ M5Stack Tab5 作为 **USB 设备**，让嵌入式 Linux 主机把它当成一块
 PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90° 旋转**，铺满板载的
 720×1280 MIPI-DSI 面板。同一个复合设备上还带 **HID 键盘**（Tab5 Keyboard）与
 **HID 多点触摸**（GT911，与键盘共用同一个 HID 接口、靠 Report ID 区分）与
-**UAC1 全双工音频**（ES8388 出喇叭 / ES7210 双麦录音，16 kHz 单声道）；
-后续阶段追加 UVC 摄像头。
+**UAC1 全双工音频**（ES8388 出喇叭 / ES7210 双麦录音，16 kHz 单声道，
+⛔ **实机回归，当前默认关闭**，见下文）；后续阶段追加 UVC 摄像头。
 
 > ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
 
@@ -20,7 +20,8 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
     **RID 1 = 键盘**（Tab5 Keyboard 经独立 I2C 总线读行列事件，自建 6KRO 状态机上报）、
     **RID 2 = digitizer**（GT911 电容触摸，最多 5 点绝对坐标）。
     详见下文「HID 键盘」与「HID 多点触摸」。
-  - **IF2/IF3/IF4 UAC1 音频**：一个 AudioControl + 两个 AudioStreaming（播放 OUT / 录音 IN），
+  - **IF2/IF3/IF4 UAC1 音频**（⛔ `CONFIG_AIO_AUDIO_MODE` **默认关闭**，默认构建只有 IF0/IF1）：
+    一个 AudioControl + 两个 AudioStreaming（播放 OUT / 录音 IN），
     由 IAD 成组，host 侧走 mainline `snd-usb-audio`，零自定义驱动。
     **16 kHz / 单声道 / S16_LE，两个方向同参数**（全双工的 I2S TX/RX 共用 BCLK 与 WS）。
     播放经 ES8388 出板载喇叭，录音取 ES7210 的两只麦混成单声道。详见下文「UAC1 全双工音频」。
@@ -797,7 +798,78 @@ ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multi
 
 ## UAC1 全双工音频（ES8388 播放 + ES7210 双麦录音）
 
-**状态：代码已落地并通过宿主机校验，⏳ 尚未实机验证。**
+### ⛔ 状态：**默认关闭**（实机回归，根因未定）
+
+实机结果：加上音频之后，主机侧不但没出录音设备，**连已实机验证的 GUD 显示也枚举不出来了**；
+退回 `31275803` 之前即恢复。GUD 是本产品的核心形态，所以音频改为**编译期可选、默认关闭**。
+
+`CONFIG_AIO_AUDIO_MODE`（`main/Kconfig.projbuild`）三档：
+
+| 档位 | 描述符 | `codec_audio_start()` | 用途 |
+|---|---|---|---|
+| `AIO_AUDIO_NONE`（**默认**） | 57 字节 / 2 接口，与音频落地前**逐位一致** | 不调用 | 基线，GUD + HID |
+| `AIO_AUDIO_DESC_ONLY` | 230 字节 / 5 接口，与 `31275803` 一致 | 不调用（`codec_audio.c` 也不编译） | **二分用**，见下 |
+| `AIO_AUDIO_FULL` | 同上 | 调用 | `31275803` 的完整行为 |
+
+```bash
+# 默认（GUD + HID）
+rm -f sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults" build
+
+# 二分变体：描述符原样带音频，但不启动 codec
+printf 'CONFIG_AIO_AUDIO_DESC_ONLY=y\n' > /tmp/aio.conf
+rm -f sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
+```
+
+> ⚠️ `SDKCONFIG_DEFAULTS` 会**留在 CMake 缓存里**。切档位时必须重新显式传一次（或
+> `idf.py fullclean`），只 `rm -f sdkconfig` 不够 —— 否则会悄悄沿用上一次的档位。
+
+**二分怎么读**：描述符是静态的，`DESC_ONLY` 只保留 USB 侧的变化、去掉全部 codec/I2S 运行时。
+
+- `DESC_ONLY` 下 GUD **恢复** ⇒ 根因在 codec/I2S 运行时（`codec_audio_start()` 或数据泵任务）。
+- `DESC_ONLY` 下 GUD **仍不行** ⇒ 根因在描述符 / 端点 / FIFO。
+
+### 已排除的候选（静态验算，非推测）
+
+**FIFO 与 IN 端点预算不是根因。** 按 `dcd_dwc2.c` 的 `dfifo_alloc()` 逐步验算
+（rhport 0 = FS，`ep_count=7` / `ep_in_count=5` / `otg_dfifo_depth=256`，
+`calc_device_grxfsiz(mps,n) = 13+1+2*(mps/4+1)+2n`；P4 的 FS 核是 slave-only，
+`dma_device_enabled()` 运行时为假，故 `dfifo_top` 不扣 EPInfo）：
+
+| 步骤 | 端点 | mps | `grxfsiz` | `dfifo_top` | `allocated_epin_count` | 断言 |
+|---|---|---|---|---|---|---|
+| `dfifo_device_init` | — | — | **62** | 256 | 0 | — |
+| 同上，EP0 IN | `0x80` | 64 | 62 | **240** | **1** | `0<5` ✅ / `256≥16+62` ✅ |
+| `vendord_open` | `0x01` OUT | 64 | 62（`new_sz=62`，不涨） | 240 | 1 | ✅ |
+| `vendord_open` | `0x81` IN | 64 | 62 | **224** | **2** | `1<5` ✅ / `240≥16+62` ✅ |
+| `hidd_open` | `0x82` IN | 64 | 62 | **208** | **3** | `2<5` ✅ / `224≥16+62` ✅ |
+| `audiod_open` | `0x83` IN | 36 | 62 | **199** | **4** | `3<5` ✅ / `208≥9+62` ✅ |
+| `audiod_open` | `0x02` OUT | 36 | 62（`new_sz=48<62`，不涨） | 199 | 4 | ✅ |
+
+余量 199−62 = **137 words**，IN 端点 4 条 ≤ 5。**没有任何一条断言接近失败。**
+而且 `handle_bus_reset()` 与 `dcd_edpt_close_all()` 都会把 `allocated_epin_count`
+清零并重跑 `dfifo_device_init()`，多次总线复位/重设配置不会累加。
+
+再者，音频的两次分配走的是 `usbd_edpt_iso_alloc()`，`audiod_open()` **忽略其返回值**——
+即便失败也不会让 `SET_CONFIGURATION` 失败；而音频接口排在 vendor/HID **之后**打开，
+在机制上不可能反过来害 GUD 打不开端点。
+
+**端点号 `0x02`(OUT) 与 `0x82`(IN) 共号也不是根因（就源码而言）。** `dcd_dwc2.c` 与
+`usbd.c` 的所有端点状态都按 `[epnum][dir]` 索引：`dwc2->ep[dir][epnum]`、
+`xfer_status[epnum][dir]`、`_usbd_dev.ep_status[epnum][dir]`、
+`daintmsk` 的 IN/OUT 各占一半位、`depctl.tx_fifo_num = epnum` 只对 IN 生效。
+唯一只按 `epnum` 索引的是 `dfifo_alloc()` 里的 `bm_double_buffered & (1<<epnum)`，
+而它默认为 0（`CFG_TUD_CONFIGURE_DWC2_DEFAULT`）且只影响 bulk IN 的 FIFO 加倍。
+参照实现 cardputer 用的是 `0x03`/`0x84`（不共号），但**没有找到 dwc2 禁止共号的依据**。
+
+**`esp_codec_dev` 与 IDF `esp_driver_i2s` 的初始化路径上没有 `ESP_ERROR_CHECK` /
+`abort()` / `assert()`**（已 grep 全组件），`codec_audio.c` 自己也全是
+`ESP_RETURN_ON_*`。所以「codec 初始化失败 → panic → 复位循环」这条具体路径不成立；
+但数据泵任务的运行时行为（优先级 5、`i2s_channel_read` 失败即 `continue` 无延时）
+尚未排除，这正是 `DESC_ONLY` 要测的那一半。
+
+---
+
+以下为音频功能本身的设计说明，在 `AIO_AUDIO_FULL` 下有效。
 
 Tab5 作为 host 的 USB 声卡：播放 host → USB → ES8388 → 板载喇叭，录音 ES7210 双麦 → USB → host，
 **两个方向同时可用**。host 侧走 mainline `snd-usb-audio`，零自定义驱动。
@@ -989,7 +1061,7 @@ USB-Serial/JTAG 被 TinyUSB 收走，CDC 又被编译期 `#error` 堵死。接�
 | 文件 | 职责 |
 |------|------|
 | `main/app_main.c` | 编排：board_power → display → gud → TinyUSB 安装 |
-| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2 + IF2-4 UAC1 音频）与 UAC 参数常量 |
+| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2 + IF2-4 UAC1 音频，音频段受 `CONFIG_AIO_AUDIO_DESC` 控制）与 UAC 参数常量 |
 | `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8） |
 | `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧（脏矩形累积 / LZ4 解压）→ `display_blit()` |
 | `main/lz4.{c,h}` | 官方 LZ4 v1.9.4 参考实现（BSD-2-Clause），仅用 `LZ4_decompress_safe` |
@@ -1005,9 +1077,10 @@ USB-Serial/JTAG 被 TinyUSB 收走，CDC 又被编译期 `#error` 堵死。接�
 | `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/touch_hid.{c,h}` | GT911 初始化（INT 拉低 + 备用地址 `0x14`）+ 20ms 轮询 + digitizer 上报（RID 2） |
 | `main/touch_map.{c,h}` | 面板坐标 → GUD 坐标反变换 + HID 归一化 + 报告装填，零依赖纯函数（宿主机可测） |
-| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调 |
+| `main/Kconfig.projbuild` | `CONFIG_AIO_AUDIO_MODE` 三档开关（默认关闭音频），以及派生量 `CONFIG_AIO_AUDIO_DESC` |
+| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调（仅 `AIO_AUDIO_FULL` 下编译） |
 | `main/audio_frame.{c,h}` | USB 单声道 ↔ I2S 立体声转换，零依赖纯函数（宿主机可测） |
-| `main/tinyusb_config/tusb_config.h` | `include_next` esp_tinyusb 默认配置后追加 `CFG_TUD_AUDIO_*`（它没开放 Audio 类） |
+| `main/tinyusb_config/tusb_config.h` | `include_next` esp_tinyusb 默认配置后追加 `CFG_TUD_AUDIO_*`（它没开放 Audio 类）；整段受 `CONFIG_AIO_AUDIO_DESC` 控制，关闭时退化成透明转发 |
 | `test/test_touch_map.c` | 触摸坐标变换与报告装填的宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/tab5_pins.h` | 板级 GPIO / 面板与 GUD 尺寸常量（含放大倍数的静态断言） |
 | `sdkconfig.defaults` | 目标/PSRAM/分区/控制台/vendor 类、芯片版本互斥的说明，以及末尾默认注释掉的 CDC 调试串口开关 |

@@ -1,4 +1,15 @@
-idf_component_register(SRCS "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c" "display_dsi.c" "standby_screen.c" "board_power.c" "kbd_i2c.c" "kbd_translate.c" "touch_hid.c" "touch_map.c" "codec_audio.c" "audio_frame.c"
+set(aio_srcs "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c" "display_dsi.c"
+             "standby_screen.c" "board_power.c" "kbd_i2c.c" "kbd_translate.c"
+             "touch_hid.c" "touch_map.c" "audio_frame.c")
+
+# codec_audio.c 调 tud_audio_*，那些符号只在 CFG_TUD_AUDIO=1 时存在；音频关闭
+# （默认）时把它整个排除，否则是链接期缺符号。audio_frame.c 是纯函数、无 USB
+# 依赖，且 test/test_audio_frame.c 一直在测它，所以始终编译。
+if(CONFIG_AIO_AUDIO_FULL)
+    list(APPEND aio_srcs "codec_audio.c")
+endif()
+
+idf_component_register(SRCS ${aio_srcs}
                        INCLUDE_DIRS "." "tinyusb_config"
                        PRIV_REQUIRES esp_driver_i2c esp_driver_gpio esp_driver_i2s esp_lcd esp_mm esp_driver_ppa)
 

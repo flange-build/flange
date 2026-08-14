@@ -9,7 +9,9 @@
 #include "board_power.h"
 #include "kbd_i2c.h"
 #include "touch_hid.h"
+#if CONFIG_AIO_AUDIO_FULL
 #include "codec_audio.h"
+#endif
 #include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
 #if CONFIG_TINYUSB_CDC_ENABLED
 /* ⚠️ 这两个头必须在 #if 内包含：tinyusb_cdc_acm.h 在 CDC 未开启时会 #error。 */
@@ -128,10 +130,16 @@ void app_main(void)
      * 而显示(GUD)才是这个产品的核心形态，不该被一颗 codec 拖垮。
      *
      * 必须排在 tinyusb_driver_install() 之后：数据泵任务一起来就会调 tud_audio_*。
+     *
+     * ⚠️ 只在 CONFIG_AIO_AUDIO_FULL 下调用。CONFIG_AIO_AUDIO_DESC_ONLY 保留
+     * 描述符但**不启动 codec**，用来把「USB 描述符/端点」与「codec/I2S 运行时」
+     * 这两类候选根因分开验证，见 main/Kconfig.projbuild。
      */
+#if CONFIG_AIO_AUDIO_FULL
     err = codec_audio_start();
     if (err != ESP_OK)
         ESP_LOGW(TAG, "音频不可用(%s)，继续启动", esp_err_to_name(err));
+#endif
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }
