@@ -28,6 +28,54 @@
 
 ---
 
+## ✅ 实施结果（2026-08-15 回填）
+
+**Task 1–8 已完成，音频播放与录音均已实机验证**：host 侧枚举成 UAC1 声卡，
+`speaker-test` / `aplay` 从板载喇叭出声，`arecord` 录到的声音正常。
+音频现在是**无条件编译**的（默认构建就带 GUD + HID + UAC1），排障旋钮已全部删除。
+
+**未完成 / 未验证（别当成已验证）**：
+
+- **Task 6 Step 2–4（读 DWC2 寄存器实测 FIFO 占用）没有实现** —— 静态验算 +
+  `check_usb_desc.py` 的端点闸门已经足够让本阶段过关，实测寄存器这条留到 UVC 阶段
+  （那时余量才真正吃紧）再做。
+- **Task 9（与 GUD / HID 的复合回归，连续 10 分钟四项同跑）没做。** 因此
+  「全双工同时收发的长时间稳定性」「音频对 GUD 帧率的影响」「无反馈端点的长时间
+  时钟漂移（爆音/断续）」三项**均无实测数据**。
+
+### 中途的一次大回归与根因（这是本阶段最贵的产出）
+
+Task 7 之后出现回归：开音频不但没出录音设备，**连已验证的 GUD 显示也枚举不出来**
+（主机 dmesg：`device descriptor read/64, error -32` + `Device not responding to
+setup address`，设备既没崩也没复位）。三刀二分（描述符档 / 启动步骤分级 / I2S 引脚档）
+把根因坐实为：
+
+> **IDF 的 `gpio_ll_func_sel()` 把「哪条全速 PHY 归谁」写死了。** 配 G26/G27
+> （= I2S 的 DOUT/BCLK，也是内部 FSLS PHY1 的 D−/D+）时它无条件写
+> `USB_WRAP.otg_conf.usb_pad_enable = 0`；而 `route_fsls_phy0_to_otg()` 把
+> OTG 换到了 PHY0，于是被关掉的是 **G24/G25 这条 USB-C** 的焊盘。
+
+修法（不带任何 Kconfig 开关）：`codec_audio_init()` 排到 `tinyusb_driver_install()`
+**之前**（误伤发生时 USB 还没连主机，install 内部会把那一位置回 1），install 之后再跑
+一次 `otg_fsls_pads_repair()` 幂等兜底。完整机理见 `firmware/main/tab5_pins.h` 的音频段
+与 `firmware/README.md`。
+
+### ⚠️ 分档旋钮的教训（写给下一次要引入类似机制的人）
+
+二分用的 `CONFIG_AIO_AUDIO_FULL_STAGE`（0–5，按 `codec_audio_start()` 的五个动作分级）
+**完成了它的使命**（`4` 挂、`2` 挂 ⇒ 数据泵、功放、ES7210 全部洗清），
+但它也**制造了一次完整的假故障**：清理前的最后一轮里 `CONFIG_AIO_AUDIO_FULL_STAGE=2`
+留在了 `sdkconfig` 里（stage 2 = 只做到 `es8388_init()`，`es7210_init()` 根本不执行），
+自检因此打出 `录音 ES7210=未运行 probe=未运行 卡在=未开始` —— 我们对着一条**压根没跑过的
+代码路径**查了一轮「ES7210 故障」，而 ES7210 从头到尾都是好的。
+
+结论：**分阶段旋钮只应在一次排障会话里存在，定位完立刻删除**；若非留不可，
+自检日志必须把「当前档位」本身打出来，否则「没跑」与「跑了但失败」在现场无法区分。
+四个排障旋钮（`AIO_AUDIO_MODE` / `AIO_AUDIO_FULL_STAGE` / `AIO_AUDIO_I2S_GPIO` /
+`AIO_USJ_RELEASE_PHY_PADS`）已随本次清理全部删除。
+
+---
+
 ## 范围
 
 只做音频。前置：P0（GUD 显示）、P1（HID 键盘）、P2（HID 多点触摸）均已实机验证通过（见 `components/packages/tab5-all-in-one/README.md` 的状态清单）。
@@ -340,7 +388,7 @@ firmware/sdkconfig.defaults    # 改：裁 esp_codec_dev 的 codec 列表
 
 **Files:** Modify `main/idf_component.yml`、`main/tab5_pins.h`、`main/board_power.{c,h}`、`main/CMakeLists.txt`、`main/app_main.c`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 本任务**没有上板判据**（面板已删，此时 USB 侧还什么都没有）。判据全在宿主机：
 
@@ -352,7 +400,7 @@ firmware/sdkconfig.defaults    # 改：裁 esp_codec_dev 的 codec 列表
 本步不重复探测 —— 探测结果只能进 `ESP_LOG*`，而日志不是判据。真出问题时，
 `esp_codec_dev_open()` 会在 Task 2/3 直接返回失败，host 侧表现为「声卡在但全静音」。
 
-- [ ] **Step 2：`idf_component.yml` 加 `esp_codec_dev`**
+- [x] **Step 2：`idf_component.yml` 加 `esp_codec_dev`**
 
 ```yaml
   # ES8388 播放 + ES7210 录音的寄存器序列（各约 40 / 50 条，含 ES8388 那三条无文档的
@@ -387,7 +435,7 @@ CONFIG_CODEC_CJC8910_SUPPORT=n
 > ⚠️ 改了 `sdkconfig.defaults` **必须 `rm -f sdkconfig` 再 build**，否则 defaults 不重新生效（`firmware/README.md` 里已经为 CDC 开关记过这一条）。
 > ⚠️ 上面这批 Kconfig 名以 `managed_components/espressif__esp_codec_dev/Kconfig` 实际有的为准：`idf.py build` 会对不存在的项报 warning，按 warning 增删即可（**不要**留下拼错的行——那只是静默无效）。
 
-- [ ] **Step 3：`tab5_pins.h` 加常量**
+- [x] **Step 3：`tab5_pins.h` 加常量**
 
 引脚与功放使能均**已查证**（esp-bsp `bsp/m5stack_tab5/include/bsp/m5stack_tab5.h:82-88`，Apache-2.0），不是推测：
 
@@ -418,7 +466,7 @@ CONFIG_CODEC_CJC8910_SUPPORT=n
 #define ES7210_I2C_ADDR8   0x80 /* = ES7210_CODEC_DEFAULT_ADDR */
 ```
 
-- [ ] **Step 3b：`usb_descriptors.h` 先落音频参数常量**
+- [x] **Step 3b：`usb_descriptors.h` 先落音频参数常量**
 
 这几个常量 Task 2/3 的 I2S 配置就要用（采样率、每帧样本数），而描述符要到 Task 5 才写——**先落常量、后落描述符**，免得 Task 2 里出现一个后面还要改的魔法数。放 `usb_descriptors.h` 而不是 `tab5_pins.h`：它们描述的是**对 host 声明的格式**，不是板级布线。
 
@@ -448,7 +496,7 @@ CONFIG_CODEC_CJC8910_SUPPORT=n
 _Static_assert(UAC_SAMPLE_RATE % 1000 == 0, "采样率必须产生整数 samples/ms，否则要上反馈端点");
 ```
 
-- [ ] **Step 4：`board_power.{c,h}` 加功放开关（配好但**保持关闭**）与 codec 探测**
+- [x] **Step 4：`board_power.{c,h}` 加功放开关（配好但**保持关闭**）与 codec 探测**
 
 功放**不在 `board_power_init()` 里打开**——这与本固件已有的背光处置同构（`board_power.c:51-56`：引脚配好、保持熄灭，真正点亮归 `display_init()`）。理由：ES8388 在 `esp_codec_dev_open()` 之前 DAC 未上电、输出端电平未定，此时导通功放正是产生开机「啪」声的经典配方。**esp-bsp 自己就是先开功放后配 codec 的**（`src/bsp_audio.c:110` vs 寄存器写入时机），本计划刻意不照抄。
 
@@ -489,7 +537,7 @@ void board_speaker_enable(bool on)
 > 于是 `board_power.{c,h}` 本任务只多一件事：把 `SPEAKER_EN` 配成推挽输出并**保持 0**。
 > 初稿的 `board_audio_present()` / `board_codec_t` 一并作废。
 
-- [ ] **Step 5：验证依赖树没被污染**
+- [x] **Step 5：验证依赖树没被污染**
 
 ```bash
 cd firmware && . $HOME/esp/esp-idf/export.sh && rm -f sdkconfig && idf.py reconfigure
@@ -498,7 +546,7 @@ ls managed_components/
 
 **判据**：新增的目录只有 `espressif__esp_codec_dev`（它的 manifest 里只有 `idf: ">=4.0"`，不该带来别的），**不得出现** `lvgl`、`esp_video`、`usb_host_*`、`m5stack_tab5` 之类。出现了就退回本步，改为按「关键事实」里列出的寄存器表自己写薄驱动。
 
-- [ ] **Step 6：编译 + 上板验证 + 提交**
+- [x] **Step 6：编译 + 上板验证 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): 音频供电与 ES8388/ES7210 探测，引入 esp_codec_dev (P3 Task1)"
@@ -518,7 +566,7 @@ git commit -m "feat(tab5-fw): 音频供电与 ES8388/ES7210 探测，引入 esp_
 
 **Files:** Create `main/codec_audio.{c,h}`；Modify `main/CMakeLists.txt`、`main/app_main.c`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 `idf.py build` 通过，且 **GUD 显示与键盘触摸不回归**（本任务不改任何已有链路）。
 听感判据推迟到 Task 7（`aplay` 出声时一并听「有没有开机『啪』声、音高对不对」）。
@@ -528,7 +576,7 @@ git commit -m "feat(tab5-fw): 音频供电与 ES8388/ES7210 探测，引入 esp_
 > 两次 `i2s_channel_init_std_mode()` 传的是不是**同一个** `i2s_std_config_t` 对象
 > （Step 3 的写法在结构上排除了这种可能，所以真出现 0 更可能是有人后来把它拆成了两份）。
 
-- [ ] **Step 2：`codec_audio.h`**
+- [x] **Step 2：`codec_audio.h`**
 
 ```c
 #pragma once
@@ -547,7 +595,7 @@ git commit -m "feat(tab5-fw): 音频供电与 ES8388/ES7210 探测，引入 esp_
 esp_err_t codec_audio_start(void);
 ```
 
-- [ ] **Step 3：`codec_audio.c` 的 I2S 全双工初始化**
+- [x] **Step 3：`codec_audio.c` 的 I2S 全双工初始化**
 
 ```c
 #define AUDIO_I2S_PORT       I2S_NUM_0
@@ -639,7 +687,7 @@ static bool i2s_duplex_active(void)
 }
 ```
 
-- [ ] **Step 4：ES8388 初始化（`esp_codec_dev`）**
+- [x] **Step 4：ES8388 初始化（`esp_codec_dev`）**
 
 先核对组件的真实签名（组件此时才刚被拉下来）：
 
@@ -701,7 +749,7 @@ static esp_err_t es8388_init(void)
 
 > ⚠️ `esp_codec_dev_open()` 内部会通过 `data_if` 去 `i2s_channel_enable()`（`audio_codec_data_i2s.c` 的 open 路径会 reconfig + enable）。所以**不要**再自己调 `i2s_channel_enable(s_tx)`——重复 enable 会返回 `ESP_ERR_INVALID_STATE`。若实测发现它并不 enable（表现为完全没有声音、且 BCLK 没在动），再在这里补上并把结论写进注释。
 
-- [ ] **Step 4b：功放使能的时序（这一步决定有没有开机「啪」声）**
+- [x] **Step 4b：功放使能的时序（这一步决定有没有开机「啪」声）**
 
 `codec_audio_start()` 的顺序**必须**是：
 
@@ -725,7 +773,7 @@ i2s_full_duplex_init()          /* 时钟先跑起来 */
 
 对称地，若日后加关流路径，必须**先** `board_speaker_enable(false)` **再** `esp_codec_dev_close()`——`esp_codec_dev_close()` 不会碰这个引脚（`esp_codec_dev.c:563-569`），顺序反了就是关机 pop。本阶段不做关流（音频一路常开），但把这条写进 `codec_audio.c` 的注释。
 
-- [ ] **Step 5：数据泵任务**
+- [x] **Step 5：数据泵任务**
 
 任务在本步就建起来，Task 7/8 往里加 USB 收发，**不要每个任务另起一个新任务**。
 本步只需要一个空转的骨架（`while (1) vTaskDelay(...)`）——初稿在这里灌 3 秒正弦，
@@ -745,7 +793,7 @@ i2s_full_duplex_init()          /* 时钟先跑起来 */
 
 `codec_audio_start()` 末尾 `xTaskCreate(audio_pump_task, "audio", AUDIO_TASK_STACK_SIZE, NULL, AUDIO_TASK_PRIORITY, NULL)`，失败返回 `ESP_ERR_NO_MEM`（并先把功放关回去，别留着一个空转的功放）。
 
-- [ ] **Step 6：`app_main.c` 调用**
+- [x] **Step 6：`app_main.c` 调用**
 
 在 `touch_start()` 之后追加，处置原则与键盘/触摸一致（失败只 WARNING、不拦启动）：
 
@@ -755,7 +803,7 @@ i2s_full_duplex_init()          /* 时钟先跑起来 */
         ESP_LOGW(TAG, "音频不可用(%s)，继续启动", esp_err_to_name(err));
 ```
 
-- [ ] **Step 7：编译 + 上板验证 + 提交**
+- [x] **Step 7：编译 + 上板验证 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): I2S 全双工与 ES8388 播放 bring-up (P3 Task2)"
@@ -773,7 +821,7 @@ git commit -m "feat(tab5-fw): I2S 全双工与 ES8388 播放 bring-up (P3 Task2)
 
 **Files:** Modify `main/codec_audio.c`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 `idf.py build` 通过，**GUD 显示与键盘触摸不回归**。
 
@@ -786,7 +834,7 @@ git commit -m "feat(tab5-fw): I2S 全双工与 ES8388 播放 bring-up (P3 Task2)
 > 所以预期是「重配成同样的值 = 无变化」。若实测录音全零或播放被打断，
 > 从这里查起，并把结论写进 `codec_audio.c` 的注释。
 
-- [ ] **Step 2：ES7210 初始化**
+- [x] **Step 2：ES7210 初始化**
 
 ```c
 static esp_codec_dev_handle_t s_mic_dev;
@@ -841,7 +889,7 @@ static esp_err_t es7210_init(void)
 >
 > ⓘ **`mclk_div` 必须与 `std_cfg.clk_cfg.mclk_multiple` 一致（都是 256）**：ES7210 靠 `REG02=0xc1` 启用 DLL/倍频器，倍率对不上就采不准。MCLK 物理上接在 G30，`ES7210_MCLK_FROM_PAD` 正是「用外部引脚来的 MCLK」。
 
-- [ ] **Step 3：数据泵仍保持空转**
+- [x] **Step 3：数据泵仍保持空转**
 
 初稿在这里把空转循环换成「读 RX + 写正弦 + 屏上电平条」。本版跳过：真正的收发循环
 在 Task 7/8 一次写成（RX 读作节拍源 → `tud_audio_write()` → `tud_audio_read()` → TX 写），
@@ -851,7 +899,7 @@ static esp_err_t es7210_init(void)
 所以 `display_dsi.c` 的 `max_pending_trans_num` 保持 2 不动 —— 初稿里那条
 「要涨到 3」的要求随面板一起作废。
 
-- [ ] **Step 4：编译 + 上板验证 + 提交**
+- [x] **Step 4：编译 + 上板验证 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): ES7210 双麦录音初始化 (P3 Task3)"
@@ -867,7 +915,7 @@ git commit -m "feat(tab5-fw): ES7210 双麦录音初始化 (P3 Task3)"
 
 **Files:** Create `main/audio_frame.{c,h}`、`test/test_audio_frame.c`；Modify `main/CMakeLists.txt`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 cd firmware/test
@@ -877,7 +925,7 @@ cc -std=c11 -Wall -Wextra -Werror -I../main test_audio_frame.c ../main/audio_fra
 
 全部用例通过，且 Task 2/3 的实机行为不变（本任务只是把已经写出的函数补上测试与边界处理）。
 
-- [ ] **Step 2：`audio_frame.h`**
+- [x] **Step 2：`audio_frame.h`**
 
 ```c
 #pragma once
@@ -915,7 +963,7 @@ void audio_frame_stereo_to_mono(const int16_t *stereo, int16_t *mono, size_t fra
  * 消费者就是那块面板。判录音有没有信号改用 host 侧 `sox ... -n stat` 的 RMS。 */
 ```
 
-- [ ] **Step 3：`audio_frame.c`**
+- [x] **Step 3：`audio_frame.c`**
 
 ```c
 #include "audio_frame.h"
@@ -937,7 +985,7 @@ void audio_frame_stereo_to_mono(const int16_t *stereo, int16_t *mono, size_t fra
 }
 ```
 
-- [ ] **Step 4：`test/test_audio_frame.c`**
+- [x] **Step 4：`test/test_audio_frame.c`**
 
 照 `test_touch_map.c` 的形式：`main()` + `assert`，无框架，不挂 IDF 构建。用例至少覆盖：
 
@@ -946,7 +994,7 @@ void audio_frame_stereo_to_mono(const int16_t *stereo, int16_t *mono, size_t fra
 3. `stereo_to_mono`：`(INT16_MAX, INT16_MAX) → 32767`、`(INT16_MIN, INT16_MIN) → -32768`（证明不溢出）；
 5. **往返一致性**：`mono → stereo → mono` 应逐样本相等（因为左右同值，平均即原值）。
 
-- [ ] **Step 5：编译 + 跑测试 + 提交**
+- [x] **Step 5：编译 + 跑测试 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): audio_frame 声道转换纯函数与宿主机回归测试 (P3 Task4)"
@@ -960,7 +1008,7 @@ git commit -m "feat(tab5-fw): audio_frame 声道转换纯函数与宿主机回�
 
 **Files:** Create `main/tinyusb_config/tusb_config.h`、`test/check_usb_desc.py`；Modify `main/usb_descriptors.{c,h}`、`main/CMakeLists.txt`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 cd firmware && . $HOME/esp/esp-idf/export.sh && idf.py build     # 含全部 _Static_assert
@@ -969,7 +1017,7 @@ python3 test/check_usb_desc.py build/tab5_aio.elf                # → 打印描
 
 脚本必须打印出 5 个接口（IF0 vendor / IF1 HID / IF2 AC / IF3 AS-out / IF4 AS-in）、2 条 ISO 端点，且**全部断言通过**，其中包括「没有任何端点的 `bSynchAddress` 非 0」与「没有任何 ISO 端点的 sync 字段为 0」。本任务**不上板**。
 
-- [ ] **Step 2：`main/tinyusb_config/tusb_config.h`**
+- [x] **Step 2：`main/tinyusb_config/tusb_config.h`**
 
 ```c
 #pragma once
@@ -1012,7 +1060,7 @@ python3 test/check_usb_desc.py build/tab5_aio.elf                # → 打印描
 #define CFG_TUD_AUDIO_ENABLE_INTERRUPT_EP       0
 ```
 
-- [ ] **Step 3：`usb_descriptors.h` 的接口/端点/参数**
+- [x] **Step 3：`usb_descriptors.h` 的接口/端点/参数**
 
 ```c
 enum {
@@ -1056,7 +1104,7 @@ _Static_assert(CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP == 0,
                "全速控制器只有 4 条可用 IN 端点，反馈端点会顶掉 UVC 的位置");
 ```
 
-- [ ] **Step 4：`usb_descriptors.c` 的 UAC1 描述符**
+- [x] **Step 4：`usb_descriptors.c` 的 UAC1 描述符**
 
 以 `components/packages/cardputer-all-in-one/firmware/main/usb_descriptors.c:26-74` 为底稿，**改两处**：录音端点的 sync 类型与 lock delay，其余照搬。
 
@@ -1152,13 +1200,13 @@ _Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN, "USB 配置�
 
 字符串数组末尾追加 `"Tab5 Audio"`，索引常量 `#define AIO_STRID_AUDIO 4`（原 CDC 用的就是 4，CDC 已被禁用，索引不冲突），并沿用既有的 `_Static_assert` 写法把索引与数组长度钉在一起。
 
-- [ ] **Step 5：`main/CMakeLists.txt` 接 tusb_config 覆盖**
+- [x] **Step 5：`main/CMakeLists.txt` 接 tusb_config 覆盖**
 
 逐行照搬 `cardputer-all-in-one/firmware/main/CMakeLists.txt:6-27`：`INCLUDE_DIRS` 加 `"tinyusb_config"`，然后对 `tinyusb` 与 `esp_tinyusb` 两个 COMPONENT_LIB 都 `target_include_directories(... BEFORE PRIVATE ...)`。
 
 > ⚠️ **`BEFORE` 与「两个库都要加」缺一不可**：esp_tinyusb 自己在 `CMakeLists.txt:76-86` 把它的 `include/` 塞进了 tinyusb 库，不用 `BEFORE` 会排在它后面而不生效；只改 tinyusb 会让 esp_tinyusb 的 `descriptors_control.c` 看到不同的 `CFG_TUD_*`，接口数/描述符长度对不上。
 
-- [ ] **Step 6：`test/check_usb_desc.py`**
+- [x] **Step 6：`test/check_usb_desc.py`**
 
 从 ELF 里取出 `aio_desc_configuration` 的字节并解析校验。用 `pyelftools`（IDF 的 python 环境自带 0.32，`export.sh` 之后即可用）。
 
@@ -1279,7 +1327,7 @@ def main():
 main()
 ```
 
-- [ ] **Step 7：跑一遍并提交**（本任务**不上板**）
+- [x] **Step 7：跑一遍并提交**（本任务**不上板**）
 
 ```
 git commit -m "feat(tab5-fw): UAC1 描述符与 tusb_config 覆盖，加宿主机描述符校验 (P3 Task5)"
@@ -1293,7 +1341,7 @@ git commit -m "feat(tab5-fw): UAC1 描述符与 tusb_config 覆盖，加宿主�
 
 **Files:** Modify `main/app_main.c`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 host 侧：
 
@@ -1314,9 +1362,18 @@ cat /proc/asound/card<N>/stream0             # 看 Playback/Capture 两段的 Ra
 
 固件侧：UART 日志打出 FIFO 占用（下一步），**空闲 ≥ 100 words**。
 
+> ✅ **host 侧五条判据已实机通过**（声卡枚举、两个方向参数正确、两条 ISO 端点的
+> sync 类型正确且无反馈端点、无 `snd-usb-audio` 报错、GUD/键盘/触摸照旧）。
+> ⚠️ 固件侧那条 FIFO 实测**没做**（Step 2 未实现），改以静态验算 +
+> `check_usb_desc.py` 的「IN 端点 ≤ 4 且 `0x84` 未被占用」闸门代替。
+
 > ⓘ host 侧需要 `CONFIG_SND_USB_AUDIO`（发行版一般自带 `snd-usb-audio.ko`）。若 `lsusb` 看得到设备、`dmesg` 里却没有音频相关行且 `/proc/asound/cards` 没有本设备，先 `modinfo snd-usb-audio` 确认模块存在——这属于 host 内核配置问题，归 spec §9 那个阶段（`flange_common.config`）处理，**不是本阶段的固件缺陷**。包级 README 的分工表里已经列了这一项。
 
 - [ ] **Step 2：`app_main.c` 加 FIFO 占用实测**
+
+> ⚠️ **未实现，有意跳过。** 静态验算（README 的 FIFO 账表）+ `check_usb_desc.py`
+> 的端点闸门已足够本阶段过关；读寄存器实测留到 UVC 阶段余量真正吃紧时再做。
+> 下面的代码片段原样留着，到时候直接用。
 
 ```c
 #include "soc/usb_dwc_struct.h"
@@ -1369,6 +1426,8 @@ static void log_usb_fifo_usage(void)
 
 - [ ] **Step 3：如果 FIFO 不够怎么办（降级阶梯，按序试，不要跳）**
 
+> ⓘ 未触发（音频装得下，UVC 还没开始）。降级阶梯留档备用。
+
 1. 把 `UAC_EP_*_SIZE` 的 +4 余量去掉（各省 1 word），代价是异步 IN 偶尔丢一个样本；
 2. 关掉 vendor 端点的双缓冲（`_tud_cfg.bm_double_buffered`），省 16 words，代价是 GUD bulk 吞吐下降 —— **这一步要重测帧率**；
 3. 去掉 vendor 的 IN 端点（spec §2 的第一条降级选项，GUD 只用 EP0 控制 + bulk OUT）；
@@ -1378,9 +1437,11 @@ static void log_usb_fifo_usage(void)
 
 - [ ] **Step 4：把实测数字回填**
 
+> ⚠️ 随 Step 2 一起跳过 —— 没有实测数字可回填。
+
 把 Step 2 打出来的 RX/各 TX/空闲写进 `firmware/README.md` 的「端点预算」章节（那里现在只有 CDC 场景的 98/256）。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```
 git commit -m "feat(tab5-fw): UAC1 枚举通过，实测 DWC2 FIFO 占用 (P3 Task6)"
@@ -1394,7 +1455,7 @@ git commit -m "feat(tab5-fw): UAC1 枚举通过，实测 DWC2 FIFO 占用 (P3 Ta
 
 **Files:** Modify `main/codec_audio.c`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 speaker-test -D hw:<card>,0 -F S16_LE -c 1 -r 16000 -t sine -f 1000 -l 3
@@ -1406,7 +1467,7 @@ aplay -D hw:<card>,0 /usr/share/sounds/alsa/Front_Center.wav              # 实�
 
 > ⚠️ 若声音是**半速或倍速**，先怀疑 `audio_frame_mono_to_stereo()` 没做（把单声道当立体声直接灌给 I2S，速率就会差一倍）；若只有一边喇叭响，怀疑同一处。
 
-- [ ] **Step 2：UAC 控制回调（照搬 Cardputer，唯一要改的是接口号来源）**
+- [x] **Step 2：UAC 控制回调（照搬 Cardputer，唯一要改的是接口号来源）**
 
 Cardputer 的 `uac_audio.c:286-341` 那四个回调可整体照搬：`tud_audio_set_itf_cb` / `tud_audio_set_itf_close_ep_cb` 维护「host 有没有选中 alt 1」的两个标志位，`tud_audio_get_req_ep_cb` / `tud_audio_set_req_ep_cb` 应答 UAC1 的端点采样率请求（`AUDIO10_EP_CTRL_SAMPLING_FREQ`，UAC1 的采样率控制走端点而非 clock source）。
 
@@ -1420,7 +1481,7 @@ static volatile bool s_spk_on;   /* host 选中了播放 AS 的 alt 1 */
 static volatile bool s_mic_on;   /* host 选中了录音 AS 的 alt 1 */
 ```
 
-- [ ] **Step 3：`audio_pump_task` 接上播放**
+- [x] **Step 3：`audio_pump_task` 接上播放**
 
 把 Task 3 的自检循环改成正式的数据泵（仍以 RX 读作节拍源，理由见 Task 3 Step 3）：
 
@@ -1460,11 +1521,11 @@ static void audio_pump_task(void *arg)
 
 欠载计数用一个 `static uint32_t s_tx_underrun;`，每 10 秒由同一任务打一条汇总日志（**不要**在每帧路径里 `ESP_LOGW`——1 kHz 的日志会自己把音频饿死，这是典型的观测干扰被观测）。
 
-- [ ] **Step 4：（作废）删掉 Task 2 的正弦自检**
+- [x] **Step 4：（作废）删掉 Task 2 的正弦自检**
 
 本版从来没有写过正弦自检（见顶部修订记录），无可删。
 
-- [ ] **Step 5：编译 + 上板验证 + 提交**
+- [x] **Step 5：编译 + 上板验证 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): UAC1 播放通路打通，aplay 出声 (P3 Task7)"
@@ -1493,7 +1554,13 @@ aplay /tmp/tab5.wav                     # 回放，应能听清刚才说的话
 4. `dmesg` 无 `snd-usb-audio` 报错、无重新枚举；
 5. **GUD 显示与键盘触摸不回归**。
 
-- [ ] **Step 2：数据泵接上录音**
+> ✅ **录音本身已实机验证**：`arecord` 录到的声音正常（判据 1、2）。
+> ⚠️ 判据 3（**播放与录音同时**跑 10 秒）与判据 5 的长时间复合回归**尚未验证** ——
+> 实测是分别验证播放与录音的。留给 Task 9。
+> ⓘ 中途一度以为 ES7210 坏了（自检报 `录音 ES7210=未运行`），实为
+> `CONFIG_AIO_AUDIO_FULL_STAGE=2` 的残留配置所致，见顶部「实施结果」。
+
+- [x] **Step 2：数据泵接上录音**
 
 在 Task 7 的循环里，`i2s_channel_read()` 之后追加：
 
@@ -1514,11 +1581,11 @@ aplay /tmp/tab5.wav                     # 回放，应能听清刚才说的话
 
 同样只计数、每 10 秒汇总一次。
 
-- [ ] **Step 3：删掉 Task 3 的电平自检**
+- [x] **Step 3：删掉 Task 3 的电平自检**
 
 本版从来没有写过电平自检，`audio_frame_peak()` 也没有实现（见顶部修订记录），无可删。
 
-- [ ] **Step 4：编译 + 上板验证 + 提交**
+- [x] **Step 4：编译 + 上板验证 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): UAC1 录音通路打通，全双工同时收发验证 (P3 Task8)"
@@ -1531,6 +1598,10 @@ git commit -m "feat(tab5-fw): UAC1 录音通路打通，全双工同时收发验
 目标：证明音频跑起来没有把已交付的三项能力弄坏。这是硬约束 D 的落点，也是 spec §10 对阶段 4 的验证要求。
 
 **Files:** 无（纯验证；发现问题则回到对应任务）
+
+> ⏳ **整个 Task 9 尚未执行。** 因此本阶段对「音频与 GUD/HID 并跑的帧率影响」
+> 「全双工长时间稳定性」「时钟漂移是否导致爆音/断续」**没有任何实测数据**，
+> 不得在任何文档里写成已验证。
 
 - [ ] **Step 1：前置检查（做之前先确认，别做到一半才发现缺工具）**
 
@@ -1598,7 +1669,7 @@ sudo evtest       # 交替选键盘那份与触摸那份，各敲/点若干次
 
 ## Task 10：文档与收尾
 
-- [ ] **Step 1**：`firmware/README.md` 加「UAC1 全双工音频」章节，至少覆盖：
+- [x] **Step 1**：`firmware/README.md` 加「UAC1 全双工音频」章节，至少覆盖：
   - 采样率/声道/位深的选定理由与**那张 FIFO 账表**（含 48 kHz 立体声为什么不可行、以及升级阶梯）；
   - **为什么不用反馈端点**，以及 UAC1 下 sync 字段不能填 0 的陷阱；
   - I2S 全双工的硬性要求（同一份 config、一次调用建两个通道、不能混 STD/TDM、不能用 `SLOT_MODE_MONO` 否则丢掉 MIC2），以及配置不一致时**只有 DEBUG 级日志**这件事；
@@ -1612,15 +1683,15 @@ sudo evtest       # 交替选键盘那份与触摸那份，各敲/点若干次
   - host 侧验证命令（`/proc/asound/cards`、`aplay -l`、`arecord -l`、`stream0`、`--dump-hw-params`、全双工同时跑法）；
   - 两个宿主机验证跑法：`test_audio_frame.c` 与 `check_usb_desc.py`（后者要写明依赖 IDF python 环境的 pyelftools）；
   - Task 9 的复合回归结论与欠载计数实测值。
-- [ ] **Step 2**：`firmware/README.md` 的「文件」表补 `codec_audio.{c,h}` / `audio_frame.{c,h}` / `tinyusb_config/tusb_config.h` / `test/test_audio_frame.c` / `test/check_usb_desc.py` 五行；更新「能力」一节的接口布局（**IF0 GUD / IF1 HID / IF2-4 UAC**）。「待机画面」章节不动 —— 本阶段没碰 `standby_screen.{c,h}`。
-- [ ] **Step 3**：包级 `components/packages/tab5-all-in-one/README.md` 状态清单：UAC1 全双工音频从「⏳ 规划中」移到 ✅（如实机通过），并写明采样率/声道与「带宽是零和的」这条既有提示的具体数字。
-- [ ] **Step 4**：spec 回填：
+- [x] **Step 2**：`firmware/README.md` 的「文件」表补 `codec_audio.{c,h}` / `audio_frame.{c,h}` / `tinyusb_config/tusb_config.h` / `test/test_audio_frame.c` / `test/check_usb_desc.py` 五行；更新「能力」一节的接口布局（**IF0 GUD / IF1 HID / IF2-4 UAC**）。「待机画面」章节不动 —— 本阶段没碰 `standby_screen.{c,h}`。
+- [x] **Step 3**：包级 `components/packages/tab5-all-in-one/README.md` 状态清单：UAC1 全双工音频从「⏳ 规划中」移到 ✅（如实机通过），并写明采样率/声道与「带宽是零和的」这条既有提示的具体数字。
+- [x] **Step 4**：spec 回填：
   - **§6 订正**：原文写「UAC1 参数沿用 Cardputer 的 mono 16 kHz」——采样率结论一致，但**理由要补上 FIFO 账**（原文没有这一层）；同时补上「两个方向必须同采样率（全双工共用 BCLK/WS）」这条原文没有的硬约束；
   - **§6 补充**：喇叭功放使能 = **`0x43` 那颗 PI4IOE5V6408 的 PIN1**（esp-bsp `BSP_SPEAKER_EN`），功放**没有**独立 GPIO；以及「codec 配完再开功放」的上电顺序与理由；
   - **§2 订正**：端点表补上「反馈端点会顶掉 UVC」这条推理，并把实测 FIFO 数字写进 §2 的端点预算；**同时订正接口布局** —— §2 原先设想 HID 排在 UAC 之后（IF4），实际落地是 **IF0 vendor / IF1 HID / IF2-4 UAC**（理由见「接口与端点新旧对照」一节）；
   - **§10 阶段 4** 的验证标准里，`--dump-hw-params` 那条与本计划 Task 7/8 一致，勾掉即可。
-- [ ] **Step 5**：`components/packages/tab5-all-in-one/README.md` 的「文档」一节补本计划的链接。
-- [ ] **Step 6**：提交。
+- [x] **Step 5**：`components/packages/tab5-all-in-one/README.md` 的「文档」一节补本计划的链接。
+- [x] **Step 6**：提交。
 
 ```
 git commit -m "docs(tab5): 补 UAC1 全双工音频的实现说明与实机验证结论 (P3 Task10)"

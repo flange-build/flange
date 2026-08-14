@@ -42,21 +42,21 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
   RID 1 键盘 / RID 2 digitizer，不新增端点）—— 实机验证通过：host 侧 `hid-multitouch`
   正常绑定，键盘仍是独立的 input 设备；`ABS_MT_SLOT Max 4`（= `TOUCH_CONTACTS_MAX` − 1）
   证明 Contact Count Maximum 的 Feature 报告被内核读到；**多点触摸已验证（实测 3 指同时）**，
-  4/5 指未验证。最大的坑是 **TP_INT(G23) 上到 3V3 的上拉电阻会压住 GT911 不出坐标**
+  4/5 指未验证。**四角坐标标定已实机验证通过**（X 与 Y 各自都能跑到接近 0 与接近 32767，
+  反变换与轴向都对）。最大的坑是 **TP_INT(G23) 上到 3V3 的上拉电阻会压住 GT911 不出坐标**
   （现象是完全静默），必须把该脚驱动为低**且**给驱动传 `int_gpio_num = GPIO_NUM_NC`，
   详见 `firmware/README.md`。
-- ⏳ **触摸的四角坐标标定待验**：需依次点四角、确认 X 与 Y 都能各自跑到接近 0 与
-  接近 32767。已知某次抓取里所有触点的 Y 都落在满量程的 78%–99%，既可能是手指位置所致、
-  也可能是 Y 轴映射问题，日志无法区分。
-- ⏳ **UAC1 全双工音频 —— 根因已坐实、修法已落地，等实机确认**（ES8388 播放 `0x10` / ES7210 双麦录音 `0x40`，一个 I2S 端口真全双工，
-  **16 kHz / 单声道 / S16_LE**）—— 代码已落地，描述符已在宿主机上逐项校验（`test/check_usb_desc.py`）。
-  曾经的回归是：开音频后不但没出录音设备，**连 GUD 显示也枚举不出来**。
-  根因是 **IDF 的 `gpio_ll_func_sel()` 把「哪条全速 PHY 归谁」写死了** —— 配 G26/G27
+- ✅ **UAC1 全双工音频 —— 播放与录音均已实机验证**（ES8388 播放 `0x10` / ES7210 双麦录音 `0x40`，
+  一个 I2S 端口真全双工，**16 kHz / 单声道 / S16_LE**）：host 侧枚举成 UAC1 声卡，
+  喇叭**放得出声**、`arecord` **录得到正常的声音**，且 GUD / 键盘 / 触摸无回归。
+  音频已改为**无条件编译**（默认构建就带），排障旋钮全部删除。
+  **尚未验证**：全双工同时收发的长时间稳定性、与 GUD/HID 并跑时对帧率的影响、
+  以及无反馈端点带来的长时间时钟漂移（是否爆音/断续）。
+  这里最贵的一个坑：曾经开音频后不但没出录音设备，**连 GUD 显示也枚举不出来** ——
+  根因是 **IDF 的 `gpio_ll_func_sel()` 把「哪条全速 PHY 归谁」写死了**，配 G26/G27
   时它会写 `USB_WRAP.otg_conf.usb_pad_enable = 0`，而我们把 OTG 换到了 PHY0，
   于是关掉的是 **G24/G25 这条 USB-C**。修法是把音频硬件 bring-up 排到
   `tinyusb_driver_install()` 之前 + 装完后跑一次焊盘修复，详见 `firmware/README.md`。
-  默认构建仍是「GUD + HID」（`CONFIG_AIO_AUDIO_MODE` 三档开关，含用于二分定位的
-  `DESC_ONLY` 档），实机确认后再改默认。
   占 IF2/IF3/IF4 与端点 `0x02`(播放 ISO OUT) / `0x83`(录音 ISO IN)；
   **坚决不用显式反馈端点**，因为最后一条 IN(`0x84`) 要留给 UVC。参数不是听感定的而是 FIFO 账定的：
   16 kHz 单声道的 OUT 包 36 B 小于 vendor 已有的 64 B，共享 RX FIFO 一个 word 都不涨，
@@ -75,5 +75,6 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 - 设计/可行性：`docs/superpowers/specs/2026-08-11-tab5-all-in-one-design.md`
 - 实施计划：`docs/superpowers/plans/2026-08-11-tab5-all-in-one-p0-gud-display.md`（GUD 显示）、
   `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p1-hid-keyboard.md`（HID 键盘）、
-  `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p2-hid-touch.md`（HID 触摸）
+  `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p2-hid-touch.md`（HID 触摸）、
+  `docs/superpowers/plans/2026-08-14-tab5-all-in-one-p3-uac-audio.md`（UAC1 音频）
 - 固件细节与构建/烧录/验证：`firmware/README.md`

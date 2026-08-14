@@ -6,7 +6,7 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
 720×1280 MIPI-DSI 面板。同一个复合设备上还带 **HID 键盘**（Tab5 Keyboard）与
 **HID 多点触摸**（GT911，与键盘共用同一个 HID 接口、靠 Report ID 区分）与
 **UAC1 全双工音频**（ES8388 出喇叭 / ES7210 双麦录音，16 kHz 单声道，
-⛔ **实机回归，当前默认关闭**，见下文）；后续阶段追加 UVC 摄像头。
+✅ **播放与录音均已实机验证**，见下文）；后续阶段追加 UVC 摄像头。
 
 > ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
 
@@ -20,7 +20,7 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
     **RID 1 = 键盘**（Tab5 Keyboard 经独立 I2C 总线读行列事件，自建 6KRO 状态机上报）、
     **RID 2 = digitizer**（GT911 电容触摸，最多 5 点绝对坐标）。
     详见下文「HID 键盘」与「HID 多点触摸」。
-  - **IF2/IF3/IF4 UAC1 音频**（⛔ `CONFIG_AIO_AUDIO_MODE` **默认关闭**，默认构建只有 IF0/IF1）：
+  - **IF2/IF3/IF4 UAC1 音频**（无条件编译，默认构建就带）：
     一个 AudioControl + 两个 AudioStreaming（播放 OUT / 录音 IN），
     由 IAD 成组，host 侧走 mainline `snd-usb-audio`，零自定义驱动。
     **16 kHz / 单声道 / S16_LE，两个方向同参数**（全双工的 I2S TX/RX 共用 BCLK 与 WS）。
@@ -69,6 +69,16 @@ idf.py set-target esp32p4         # 首次
 idf.py build
 ```
 
+**开箱即用**：`sdkconfig.defaults` 已经把所有必需项写全（芯片版本、控制台、PSRAM、
+分区表、TinyUSB 类计数、codec 裁剪），`rm -f sdkconfig && idf.py build` 直接产出
+**GUD + HID + UAC1 音频**的可用固件，不需要任何旁路 conf 文件。
+唯一的可选项是排障用的 `CONFIG_AIO_DEBUG_CDC`（默认关，见「日志」一节）。
+
+> ⚠️ 改过 `main/Kconfig.projbuild` 之后**必须连 build 目录一起删**
+> （`idf.py fullclean` 或 `rm -rf build sdkconfig`），否则 `sdkconfig.h` 不重新生成，
+> 新配置项在 C 里报 `undeclared`。同理 `SDKCONFIG_DEFAULTS` 会留在 CMake 缓存里，
+> 换过一次就得显式再传一次。
+
 **烧录要点：TinyUSB 接管全速 PHY 后 USB-Serial/JTAG 失效，自动复位下载不可用**，
 需手动进 ROM 下载模式：
 
@@ -102,9 +112,12 @@ idf.py build flash monitor
 
 代码侧一律走 `#if CONFIG_AIO_DEBUG_CDC` / `#if CONFIG_TINYUSB_CDC_ENABLED` 条件编译
 （`usb_descriptors.{c,h}` 的接口/端点/描述符，`app_main.c` 的 `tinyusb_cdcacm_init()` +
-`tinyusb_console_init()` + 每 10 秒一次的 `codec_audio_report()`）。
-`_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN)` 在每一档下都成立：
-**仅 GUD+HID 57 字节 / +音频 230 / +音频+CDC 289 / 仅 GUD+HID+CDC 116**。
+`tinyusb_console_init()` + 主循环里每 10 秒复读一次的 `codec_audio_report()`）。
+`_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN)` 在两档下都成立：
+**默认档（GUD + HID + 音频）230 字节 / 5 接口，调试档 289 字节 / 7 接口**。
+
+也可以直接在 `sdkconfig.defaults` 末尾把 `#CONFIG_AIO_DEBUG_CDC=y` 那一行的注释取消，
+再 `rm -f sdkconfig && idf.py build`（`sdkconfig.defaults` 只在生成 `sdkconfig` 时读一次）。
 
 #### ⚠️ 代价：让出 GUD 的 IN 端点 + 借走 UVC 预留的 `0x84`
 
@@ -784,30 +797,39 @@ ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multi
 > ⚠️ **不要把这写成「5 点全部验证通过」**：实测只观察到 3 指同时接触，**4 / 5 指未验证**。
 > 描述符与报告结构声明的是 5 点，且 GT911 本身按 `CONFIG_ESP_LCD_TOUCH_MAX_POINTS = 5` 上报。
 
-### 待验项：四角坐标标定
+### ✅ 四角坐标标定（已实机验证）
 
-**尚未验证**。已知情况：某次抓取里所有触点的 Y 都落在满量程的 **78%–99%**（对应横屏画面
-最下方约 20% 的一条带），这**既可能**是当时手指本来就点在那一带、**也可能**是 Y 轴映射有问题
-—— **日志无法区分这两种解释**，所以不能据此下任何结论。
+依次点屏幕**横持视角**的四个角，X 与 Y **各自都能跑到接近 0 与接近 32767**
+（`evtest` 里看 `ABS_MT_POSITION_X` / `ABS_MT_POSITION_Y` 的取值范围）——
+标定通过，`touch_map.c` 的反变换与轴向都是对的。
 
-验证方法：依次点屏幕**横持视角**的四个角，确认 X 与 Y **各自都能跑到接近 0 与接近 32767**
-（`evtest` 里看 `ABS_MT_POSITION_X` / `ABS_MT_POSITION_Y` 的取值范围）。四角都能到量程两端，
-才算标定通过；某一轴始终挤在一小段区间里，才是真的映射错了。
+> ⓘ 曾有一次抓取里所有触点的 Y 都落在满量程的 **78%–99%**，一度疑似 Y 轴映射有问题。
+> 实测四角标定正常 ⇒ 那就是当时手指本来就点在画面下方那一带。再遇到类似的偏态分布，
+> 先按四角标定复核，别直接怀疑映射。
 
 ## UAC1 全双工音频（ES8388 播放 + ES7210 双麦录音）
 
-### ⏳ 状态：**根因已坐实、修法已落地，等实机确认**（默认仍关闭）
+### ✅ 状态：播放与录音均已实机验证
 
-实机回归的原始现象：加上音频之后，主机侧不但没出录音设备，**连已实机验证的 GUD 显示
-也枚举不出来了**；退回 `31275803` 之前即恢复。GUD 是本产品的核心形态，所以音频当时
-改为**编译期可选、默认关闭**。
+**已实机确认**：主机把它枚举成 UAC1 声卡，`speaker-test` / `aplay` 从板载喇叭**出声**，
+`arecord` 录到的**声音正常**，同时 GUD 显示、键盘、触摸均无回归。
+音频因此改为**无条件编译**，所有排障旋钮已删除（见下面「排障经验」）。
 
-三刀二分之后根因已经坐实：**配 G26/G27 会让 IDF 的 `gpio_ll_func_sel()` 顺手关掉
-USB-C 的焊盘**（不是模拟打架，是寄存器误伤），详见下面「根因（已坐实）」与「修法」两节。
-修法已实现且不带任何 Kconfig 开关；**默认档仍是 `AIO_AUDIO_NONE`**，等
-`CONFIG_AIO_AUDIO_FULL` 实机确认后再改默认并清掉排障旋钮。
+> ⚠️ **未验证的部分，别写成已验证**：
+> - 全双工**同时**收发的长时间稳定性（实测是分别验证播放与录音）；
+> - 与 GUD / HID 并跑时对帧率的影响（音频每毫秒一次 DMA + 一次 USB ISO 传输）；
+> - 音质与时钟漂移 —— 本设备**没有反馈端点**（理由见下文），长时间连续播放是否
+>   出现爆音、断续或缓慢的相位漂移，尚无实测数据。
 
-主机侧 dmesg（`2f7a6502` 实测，即**已含**「数据泵补延时 + 优先级降到 4」那次修复）：
+### 排障过程留档（三刀二分 + 根因）
+
+这一节保留的是**结论与证据**，不是操作手册：当时用来切刀的四个 Kconfig 旋钮
+（`AIO_AUDIO_MODE` / `AIO_AUDIO_FULL_STAGE` / `AIO_AUDIO_I2S_GPIO` /
+`AIO_USJ_RELEASE_PHY_PADS`）已经**全部删除**，正文里提到它们只是在复述当时的实验条件。
+
+原始现象：加上音频之后，主机侧不但没出录音设备，**连已实机验证的 GUD 显示也枚举不出来了**；
+退回 `31275803` 之前即恢复。主机侧 dmesg（`2f7a6502` 实测，即**已含**「数据泵补延时 +
+优先级降到 4」那次修复）：
 
 ```
 221.388  usb 1-1.2: USB disconnect, device number 5      ← app 接管，TinyUSB 上电
@@ -820,74 +842,58 @@ USB-C 的焊盘**（不是模拟打架，是寄存器误伤），详见下面「
 bootloader 阶段的 `cdc_acm ttyACM0` ⇒ 设备既没崩也没复位，是「活着但 EP0 不应答」。
 这条否定证据下面反复用到。
 
-`CONFIG_AIO_AUDIO_MODE`（`main/Kconfig.projbuild`）三档：
+### ⚠️ 排障经验（这轮最贵的三条）
 
-| 档位 | 描述符 | `codec_audio_start()` | 用途 |
-|---|---|---|---|
-| `AIO_AUDIO_NONE`（**默认**） | 57 字节 / 2 接口，与音频落地前**逐位一致** | 不调用 | 基线，GUD + HID |
-| `AIO_AUDIO_DESC_ONLY` | 230 字节 / 5 接口，与 `31275803` 一致 | 不调用（`codec_audio.c` 也不编译） | **二分用**，见下 |
-| `AIO_AUDIO_FULL` | 同上 | 调用 | `31275803` 的完整行为 |
-
-```bash
-# 默认（GUD + HID）
-rm -f sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults" build
-
-# 二分变体：描述符原样带音频，但不启动 codec
-printf 'CONFIG_AIO_AUDIO_DESC_ONLY=y\n' > /tmp/aio.conf
-rm -f sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
-```
-
-> ⚠️ `SDKCONFIG_DEFAULTS` 会**留在 CMake 缓存里**。切档位时必须重新显式传一次（或
-> `idf.py fullclean`），只 `rm -f sdkconfig` 不够 —— 否则会悄悄沿用上一次的档位。
->
-> ⚠️ 改了 `main/Kconfig.projbuild` 之后**必须连 build 目录一起删**（`idf.py fullclean`
-> 或 `rm -rf build sdkconfig`），否则 `sdkconfig.h` 不会重新生成，新配置项在 C 里
-> 报 `undeclared`。
+1. **分档旋钮的残留配置会静默改变行为，而日志表现得像真实故障。**
+   清理前的最后一轮里，`CONFIG_AIO_AUDIO_FULL_STAGE=2` 留在了 `sdkconfig` 里
+   （stage 2 的定义就是「只做到 `es8388_init()` 为止」，`es7210_init()` 根本不执行）。
+   于是自检打出 `录音 ES7210=未运行 probe=未运行 卡在=未开始` —— 我们对着一条
+   **压根没跑过的代码路径**查了一整轮「ES7210 故障」，而 ES7210 从头到尾都是好的。
+   教训：**分阶段旋钮只该在一次排障会话里存在，定位完立刻删掉**；真要保留，
+   自检日志必须把「当前档位」本身也打出来，否则「没跑」与「跑了但失败」
+   在现场无法区分。（快照里把「未运行」与真实错误码分开是对的，但那只解决了一半 ——
+   人还得知道**为什么**没运行。）
+2. **没查源码就写进注释的机理，会把后面几次烧板全带偏。** 见下面「历史：一度写在
+   这里的错误机理」。
+3. **现场没有串口时，先把日志通道做出来再排障。** `CONFIG_AIO_DEBUG_CDC` 这一档
+   （拿 GUD 那条从未通过流量的 IN 端点换一条 USB CDC 串口）本该是第一步而不是第五步。
 
 ### ✅ 二分第一刀（已实测）：描述符无罪
 
-`DESC_ONLY` 档实测结果：**GUD 显示正常，且主机成功枚举出 UAC 设备**。
+当时的 `DESC_ONLY` 档（描述符原样带音频，但**不启动 codec**）实测结果：
+**GUD 显示正常，且主机成功枚举出 UAC 设备**。
 
 于是这一整片候选根因**被排除**：描述符内容、接口号、端点号、DWC2 的 FIFO 预算、
 TinyUSB 音频类驱动本身（`audiod_init` / `audiod_open` / `CFG_TUD_AUDIO_*`）——
 这些在 `DESC_ONLY` 下全都在跑，而且跑得好好的。
 
-`FULL` 与 `DESC_ONLY` 的差值只剩「编译 `codec_audio.c` + 调用 `codec_audio_start()`」，
+完整档与 `DESC_ONLY` 的差值只剩「编译 `codec_audio.c` + 调用它」，
 **根因 100% 在 `codec_audio.c` 的运行时**。
 
-### 二分第二刀：`CONFIG_AIO_AUDIO_FULL_STAGE`（0–5，默认 5）
+### 二分第二刀：按启动步骤分级（`codec_audio_start()` 的五个动作）
 
-只在 `AIO_AUDIO_FULL` 下有效，按 `codec_audio_start()` 的动作分级，一次烧板切一刀：
+当时的 `AIO_AUDIO_FULL_STAGE`（0–5）把启动切成五级，一次烧板切一刀，
+判据只有一条：GUD 还出不出图（现场没串口）。
 
 | 值 | 跑到哪一步为止 | 这一级挂掉 ⇒ 根因是 |
 |---|---|---|
-| `0` | **只起数据泵**，codec/I2S 一个字都不碰（I2S 句柄保持 `NULL`，改用 `vTaskDelay(1)` 当节拍源） | 数据泵对 `tud_audio_*` 的调用本身 |
+| `0` | **只起数据泵**，codec/I2S 一个字都不碰 | 数据泵对 `tud_audio_*` 的调用本身 |
 | `1` | `i2s_full_duplex_init()`：建通道 + 配 G26~G30 + 时钟 | I2S 外设 / 引脚 / 时钟 bring-up |
 | `2` | `+ es8388_init()`：I2C `0x10` 寄存器序列 + TX 通道使能 | ES8388 那段 I2C，或 TX 通道使能 |
 | `3` | `+ es7210_init()`：I2C `0x40` 寄存器序列 + RX 通道使能 | ES7210 那段 I2C，或 RX 通道使能 |
 | `4` | `+ board_speaker_enable(true)`：功放上电（**不起数据泵**） | 功放上电（电流/电源，软件之外） |
-| `5` | `+ 数据泵任务`（默认，= 完整行为） | 数据泵的稳态运行 |
-
-```bash
-# 先烧 4：一刀切开「codec/I2S 初始化」与「数据泵」
-printf 'CONFIG_AIO_AUDIO_FULL=y\nCONFIG_AIO_AUDIO_FULL_STAGE=4\n' > /tmp/aio.conf
-rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
-```
-
-**怎么读**（判据只有一条：GUD 还出不出图 —— 现场没串口）：
-
-- `4` **正常** ⇒ 罪在数据泵。再烧 `0` 反向验证。
-- `4` **挂掉** ⇒ 罪在初始化。再烧 `2` 二分。
+| `5` | `+ 数据泵任务`（= 完整行为） | 数据泵的稳态运行 |
 
 **实测结果：`4` 挂、`2` 挂** ⇒ 数据泵、功放上电、ES7210 全部洗清，
-根因落在 `1`（`i2s_full_duplex_init()`）或 `2`（`es8388_init()`）。
+根因落在 `1`（`i2s_full_duplex_init()`）或 `2`（`es8388_init()`）—— 与最终结论一致。
 
-> ⚠️ `STAGE` 是**排障旋钮**，不是长期配置项。根因定位后应当把它连同
-> `main/Kconfig.projbuild` 里那段表格与 `codec_audio_start()` 里的分级一起删掉。
+> ⚠️ 这把刀也是**代价最大的一把**：它留在 `sdkconfig` 里的残值后来伪造了一次
+> 「ES7210 故障」，见上面「排障经验」第 1 条。旋钮已删除。
 
 ### ✅ 二分第三刀（已实测）：罪就是那两个焊盘
 
-`AIO_AUDIO_FULL` + `AIO_AUDIO_I2S_GPIO_NO_USB_PADS`（**整套音频照跑**，只把 G26/G27 让开）：
+当时的 `AIO_AUDIO_I2S_GPIO=NO_USB_PADS` 档（**整套音频照跑**，只把 G26/G27 从
+`i2s_std_config_t.gpio_cfg` 里换成 `I2S_GPIO_UNUSED`）：
 
 > **GUD 显示正常、声卡枚举、麦克风也枚举出来了。只是没有声音、麦克风也没电平。**
 
@@ -1015,55 +1021,26 @@ esp_system/port/soc/esp32p4/clk.c:238-242 → esp_hal_clock/esp32p4/clk_gate_ll.
     REG_CLR_BIT(HP_SYS_CLKRST_SOC_CLK_CTRL2_REG, ..._USB_DEVICE_APB_CLK_EN);
 ```
 
-所以 PHY1 的焊盘从来没被打开过，G26/G27 上只有 I2S 一个驱动器，
-`CONFIG_AIO_USJ_RELEASE_PHY_PADS` 那档是**空操作**。
+所以 PHY1 的焊盘从来没被打开过，G26/G27 上只有 I2S 一个驱动器。
+顺带被证伪的还有一个候选修法：「排障时再显式调一次
+`usb_serial_jtag_ll_phy_enable_pad(false)` 把焊盘让给 I2S」——**空操作**，
+还多余地把 USJ 的 APB 与 48M 时钟又打开一次；它的 Kconfig 开关
+（`AIO_USJ_RELEASE_PHY_PADS`）已随清理删除，别再实现第二遍。
+
 教训：「USB 还占着焊盘」听起来天经地义，但没查 IDF 的启动路径就写进注释，
 把后续三次烧板引到了错的方向。真正的机理见上面「根因（已坐实）」一节。
 
-### 二分第三刀：`CONFIG_AIO_AUDIO_I2S_GPIO`（配合 `STAGE=1`）
+### ✅ 修法已实机验证
 
-把「I2S 外设/GDMA/时钟 bring-up」与「I2S 抢 GPIO」拆开，一次烧板切一刀：
+带真实引脚（G26/G27）的完整音频 + GUD + HID 一起烧上去：
 
-| 取值 | I2S 配哪些脚 | GUD **正常**说明 |
-|---|---|---|
-| `ALL`（默认） | G26/27/28/29/30 全配 | —（修法落地前就是挂掉的那一档） |
-| `NONE` | 一个都不配 | 罪在**引脚**（外设/GDMA/时钟无罪）；挂掉则反之 |
-| `NO_USB_PADS` | 只配 G28/29/30，让开 G26/G27 | 罪就是那对 **USB PHY 焊盘** |
-
-```bash
-# 第一刀：I2S 全外设起来但一个脚都不碰
-printf 'CONFIG_AIO_AUDIO_FULL=y\nCONFIG_AIO_AUDIO_FULL_STAGE=1\nCONFIG_AIO_AUDIO_I2S_GPIO_NONE=y\n' > /tmp/aio.conf
-rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
-```
-
-> ⚠️ `NONE` / `NO_USB_PADS` 下音频**必然不出声**（数据线没接出去），这是预期的：
-> 这两档只回答「USB 还活不活」。
-
-### ❌ 已证伪的候选修法：`CONFIG_AIO_USJ_RELEASE_PHY_PADS`（默认关，只作对照）
-
-当初的想法是：换 PHY 后 USJ 落在 PHY1(G26/G27)，清掉
-`USB_SERIAL_JTAG.conf0.usb_pad_enable` 就能让出焊盘。
-查实 **IDF 在 `app_main` 之前已经替我们清过了**（见上面「已证伪」那段的源码引用），
-所以本选项是空操作，还多余地把 USJ 的 APB 与 48M 时钟又打开了一次。留着只为对照。
-
-### 验证修法（一次烧板）
-
-```bash
-# 真正的修法不带任何旋钮：FULL + 真实引脚(26/27)
-printf 'CONFIG_AIO_AUDIO_FULL=y\n' > /tmp/aio.conf
-rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
-python3 test/check_usb_desc.py build/tab5_aio.elf      # 烧板前的闸门
-idf.py -p <口> flash
-```
-
-| 现象 | 说明 |
+| 现象 | 结论 |
 |---|---|
-| GUD 出图 **且** 主机出声卡 **且** 有声音/有麦克风电平 | ✅ 修法成立，可以开始清排障旋钮 |
-| GUD 出图、声卡在，但**没声音** | 焊盘问题解决了，剩下的是纯音频问题（codec 寄存器 / 功放 / 增益），与 USB 无关 |
-| GUD 又不出图了 | 修法不够。见下面「后手」 |
+| GUD 出图 **且** 主机出声卡 **且** 喇叭有声音、录音正常 | ✅ 实测就是这一行 —— 修法成立，排障旋钮已全部删除 |
 
-**后手**（若修法不成立）：`gpio_ll_func_sel()` 的误伤是**每次**配脚都会发生的，
-如果哪天有人在装完 TinyUSB 之后再动 G26/G27，`otg_fsls_pads_repair()` 就得跟着挪。
+**后手（留给日后）**：`gpio_ll_func_sel()` 的误伤是**每次**配脚都会发生的，
+如果哪天有人在装完 TinyUSB 之后再动 G26/G27，`otg_fsls_pads_repair()` 就得跟着挪到那次配脚之后
+（它进入时读到的 `usb_pad_enable` 会打进日志，正是用来发现这件事的）。
 更彻底的做法是**绕开 `gpio_func_sel()`**：给 I2S 传 `I2S_GPIO_UNUSED`，自己写
 `IO_MUX.gpio[26/27].mcu_sel = PIN_FUNC_GPIO` + `esp_rom_gpio_connect_out_signal()`，
 把 IDF 那条副作用整个跳过。
@@ -1096,8 +1073,8 @@ bool     tud_audio_n_clear_ep_in_ff(...){ TU_VERIFY(... p_desc != NULL); ... }  
 `221.388` 那次 disconnect 之后**再没出现过**。所以设备既没崩也没复位，
 它是「活着但 EP0 不应答」。（`CONFIG_ESP_TASK_WDT_PANIC` 未开，任务看门狗只告警。）
 
-**内存不是根因。** `AIO_AUDIO_FULL` 实测 `idf.py size`：DIRAM 用 95598 / 576464 字节，
-**内部 RAM 还剩 480 KB**。而且 `codec_audio_start()` 里每一条分配失败路径
+**内存不是根因。** 带音频的默认档实测 `idf.py size`：DIRAM 用 95690 / 576464 字节（16.6%），
+**内部 RAM 还剩 480 KB**。而且 `codec_audio_init()` / `codec_audio_start()` 里每一条分配失败路径
 （`i2s_new_channel` / `audio_codec_new_*` / `esp_codec_dev_new` / `xTaskCreate`）
 都是 `ESP_RETURN_ON_*` 返回错误码 → 数据泵根本不会被创建 → USB 一侧毫发无损。
 
@@ -1198,7 +1175,7 @@ CPU1），I2S 侧发生在之后的 `app_main`（CPU0），**不存在并发**�
 
 ---
 
-以下为音频功能本身的设计说明，在 `AIO_AUDIO_FULL` 下有效。
+以下为音频功能本身的设计说明。
 
 Tab5 作为 host 的 USB 声卡：播放 host → USB → ES8388 → 板载喇叭，录音 ES7210 双麦 → USB → host，
 **两个方向同时可用**。host 侧走 mainline `snd-usb-audio`，零自定义驱动。
@@ -1361,9 +1338,10 @@ AC 头的 `bcdADC`+`wTotalLength`+`baInterfaceNr`、终端 ID 链（1→2 播放
 两条 ISO 端点的包大小/间隔/sync 类型、**`bSynchAddress` 全为 0**、
 **sync 字段全非 0**、IN 端点 ≤ 4 条且 `0x84` 未被占用、两份 Type I 格式描述符与预期参数一致。
 
-脚本按**描述符里 IAD 的 `bFunctionClass`** 自动判定当前是哪一档（音频 / CDC 排障档），
-不去读 `sdkconfig` —— 它只相信 ELF 里真正躺着的那串字节，这样才保得住
-「独立第二意见」的性质。开了 `CONFIG_AIO_DEBUG_CDC` 时它改为断言
+音频是无条件编译的，所以**没有音频 IAD 本身就是一条失败**；唯一还会变的是
+`CONFIG_AIO_DEBUG_CDC` 那一档，脚本按**描述符里 CDC IAD 的 `bFunctionClass`**
+自动判定，不去读 `sdkconfig` —— 它只相信 ELF 里真正躺着的那串字节，这样才保得住
+「独立第二意见」的性质。判定为调试档时它改为断言
 **IF0 只剩 bulk OUT**（IN 端点没让干净会超编，而 `dcd_dwc2` 超编时一个字都不打）、
 CDC 的 IAD/接口类/三条端点各就各位、且全部端点地址互不重复。
 
@@ -1424,18 +1402,26 @@ IN 端点连 EP0 共 5 条，恰好等于 `ep_in_count`，`dcd_dwc2.c` 的
 ```bash
 idf.py menuconfig      # Tab5 All-in-One → 打开 CONFIG_AIO_DEBUG_CDC
 idf.py build flash monitor
+
+# 或：取消 sdkconfig.defaults 末尾 `#CONFIG_AIO_DEBUG_CDC=y` 的注释，再
+rm -f sdkconfig && idf.py build flash monitor
 ```
 
 ⚠️ **排障档，不是产品档**：它占了留给 UVC 的 `0x84`，4 条 IN 端点用满。
-定位完就关掉。GUD 显示 / 键盘 / 触摸 / 音频在这一档下全部照常工作。
+查完就关掉。GUD 显示 / 键盘 / 触摸 / 音频在这一档下全部照常工作。
 
 #### 日志里该看哪几行
 
 `codec_audio_init()` 必须跑在 `tinyusb_driver_install()` 之前（焊盘那个坑），
 而 CDC 要等 install 之后才起得来 —— 也就是说**音频最关键的那几行日志天生打不出来**。
 所以 `codec_audio.c` 把 init 阶段的每个判定记成静态快照，由 `codec_audio_report()`
-在 `app_main` 主循环里**每 10 秒复读一次**（CDC 的 TX 环形缓冲会把 host 打开
-`ttyACM` 之前的内容覆盖掉，只打一遍现场大概率什么都看不到）。
+在启动末尾补打一遍。
+
+**复读只在本档下发生**：CDC 的 TX 环形缓冲会把 host 打开 `ttyACM` 之前的内容覆盖掉，
+只打一遍现场大概率什么都看不到，所以 `app_main` 主循环里那次每 10 秒的复读被
+`#if CONFIG_AIO_DEBUG_CDC` 圈住。默认档日志走 UART0（终端有回滚、不会被覆盖），
+打一遍就够 —— 每轮复读要做十几次 I2C 寄存器回读，而那条内部总线还挂着触摸、
+IO 扩展与 IMU，没必要长期占着。
 
 ```
 codec_audio: [自检] I2S=ESP_OK duplex=1 | 播放 ES8388=ESP_OK open=ESP_OK | 录音 ES7210=ESP_OK open=ESP_OK | pa=1 pump=1
@@ -1476,7 +1462,8 @@ codec_audio: 10s 泵：spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37 | TX 欠载 0
 
 #### 关掉调试档之后
 
-不接 UART0 时，这一段仍然是盲的。三条缓解照旧成立：
+不接 UART0 时，这一段仍然是盲的（自检快照只在启动时打一遍，且没有出口）。
+三条缓解照旧成立：
 
 1. codec 初始化失败只会让音频降级，但**描述符是静态的**，host 侧照样枚举出声卡
    —— 「有声卡但全静音」本身就是一条 host 侧信号；
@@ -1489,7 +1476,7 @@ codec_audio: 10s 泵：spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37 | TX 欠载 0
 | 文件 | 职责 |
 |------|------|
 | `main/app_main.c` | 编排：board_power → display → gud → TinyUSB 安装 |
-| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2 + IF2-4 UAC1 音频 + IF5/6 CDC 排障串口，后两段分别受 `CONFIG_AIO_AUDIO_DESC` / `CONFIG_AIO_DEBUG_CDC` 控制）、UAC 参数常量与端点账 |
+| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2 + IF2-4 UAC1 音频 + IF5/6 CDC 排障串口，最后一段受 `CONFIG_AIO_DEBUG_CDC` 控制）、UAC 参数常量与端点账 |
 | `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8） |
 | `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧（脏矩形累积 / LZ4 解压）→ `display_blit()` |
 | `main/lz4.{c,h}` | 官方 LZ4 v1.9.4 参考实现（BSD-2-Clause），仅用 `LZ4_decompress_safe` |
@@ -1505,10 +1492,10 @@ codec_audio: 10s 泵：spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37 | TX 欠载 0
 | `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/touch_hid.{c,h}` | GT911 初始化（INT 拉低 + 备用地址 `0x14`）+ 20ms 轮询 + digitizer 上报（RID 2） |
 | `main/touch_map.{c,h}` | 面板坐标 → GUD 坐标反变换 + HID 归一化 + 报告装填，零依赖纯函数（宿主机可测） |
-| `main/Kconfig.projbuild` | `CONFIG_AIO_AUDIO_MODE` 三档开关（默认关闭音频）、派生量 `CONFIG_AIO_AUDIO_DESC`、排障用的 `CONFIG_AIO_AUDIO_FULL_STAGE`（0–5，默认 5），以及 `CONFIG_AIO_DEBUG_CDC`（让出 GUD 的 IN 端点换 USB 日志串口） |
-| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调 + `codec_audio_report()` 开机自检快照（仅 `AIO_AUDIO_FULL` 下编译） |
+| `main/Kconfig.projbuild` | 只剩 `CONFIG_AIO_DEBUG_CDC`（默认 n，让出 GUD 的 IN 端点换 USB 日志串口）；音频无条件编译，排障旋钮已删除 |
+| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调 + `codec_audio_report()` 开机自检快照 |
 | `main/audio_frame.{c,h}` | USB 单声道 ↔ I2S 立体声转换，零依赖纯函数（宿主机可测） |
-| `main/tinyusb_config/tusb_config.h` | `include_next` esp_tinyusb 默认配置后追加 `CFG_TUD_AUDIO_*`（它没开放 Audio 类）；整段受 `CONFIG_AIO_AUDIO_DESC` 控制，关闭时退化成透明转发 |
+| `main/tinyusb_config/tusb_config.h` | `include_next` esp_tinyusb 默认配置后追加 `CFG_TUD_AUDIO_*`（它没开放 Audio 类） |
 | `test/test_touch_map.c` | 触摸坐标变换与报告装填的宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/tab5_pins.h` | 板级 GPIO / 面板与 GUD 尺寸常量（含放大倍数的静态断言） |
 | `sdkconfig.defaults` | 目标/PSRAM/分区/控制台/vendor 类、芯片版本互斥的说明，以及末尾默认注释掉的 CDC 调试串口开关 |

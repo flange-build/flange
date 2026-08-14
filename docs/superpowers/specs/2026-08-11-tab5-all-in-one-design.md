@@ -67,9 +67,18 @@ VID/PID 沿用 **`16d0:10a9`** —— mainline `drm/gud` 绑定的固定 modalia
 | 接口 | 类 | 端点 | host 侧 mainline 驱动 |
 |---|---|---|---|
 | IF0 | Vendor / **GUD** | bulk OUT (+IN) | `drm/gud` → `/dev/dri/cardN` |
-| IF1–IF3 | **UAC1** AudioControl + AS-out + AS-in | iso OUT, iso IN | `snd-usb-audio` → ALSA |
-| IF4 | **HID** 复合（RID 1 = 键盘，RID 2 = digitizer） | int IN ×1 | `usbhid` + `hid-multitouch` |
-| IF5–IF6 | **UVC** VideoControl + VideoStreaming（MJPEG） | iso IN | `uvcvideo` → `/dev/videoN` |
+| IF1 | **HID** 复合（RID 1 = 键盘，RID 2 = digitizer） | int IN ×1 | `usbhid` + `hid-multitouch` |
+| IF2–IF4 | **UAC1** AudioControl + AS-out + AS-in | iso OUT `0x02`, iso IN `0x83` | `snd-usb-audio` → ALSA |
+| IF5–IF6 | **UVC** VideoControl + VideoStreaming（MJPEG） | iso IN `0x84` | `uvcvideo` → `/dev/videoN` |
+
+> **订正（阶段 4 落地时）**：本表原先把 UAC 排在 IF1–IF3、HID 排在 IF4。实际落地是
+> **IF0 vendor / IF1 HID / IF2–IF4 UAC** —— 键盘与多点触摸都已实机验证通过，
+> 没有理由为排版去动它们的接口号；IAD 只要求它覆盖的接口连续，不要求排在最前。
+> 端点号同样刻意不动（vendor `0x01/0x81`、HID `0x82`）。
+>
+> 另一条阶段 4 才查清的硬约束：**绝不引入显式反馈端点** —— 它会占掉第 4 条 IN
+> 端点 `0x84`，而那一条要留给 UVC。16 kHz 整数 samples/ms 让 adaptive OUT +
+> asynchronous IN 就够用。详见 `firmware/README.md`。
 
 端点预算：IN = vendor / audio / HID / UVC 共 4 条 + EP0；OUT = vendor / audio 共 2 条 + EP0。
 落在 FS 控制器预算内。**若阶段 0 实测端点不足**，按此顺序降级：
@@ -258,9 +267,9 @@ HID 模式（寄存器 0x30）有两个硬伤：
 - **多点触摸已验证：实测三指同时接触**，分别落在 slot 0/1/2，各有独立且稳定的
   `ABS_MT_TRACKING_ID`，坐标各自独立更新。⚠️ **4/5 指未验证**。
 
-**待验项 —— 四角坐标标定**：尚未验证。某次抓取里所有触点的 Y 都落在满量程的 78%–99%
-（横屏画面最下方约 20%），既可能是手指位置所致、也可能是 Y 轴映射问题，**日志无法区分**。
-验证方法：依次点四角，确认 X 与 Y 都能各自跑到接近 0 与接近 32767。
+**四角坐标标定：已实机验证通过。** 依次点四角，X 与 Y 各自都能跑到接近 0 与接近 32767，
+反变换与轴向都对。（曾有一次抓取里所有触点的 Y 都落在满量程的 78%–99%，一度疑似 Y 轴
+映射问题；四角标定通过 ⇒ 那是当时手指位置所致。再遇到类似偏态分布，先按四角标定复核。）
 
 坐标算式本身有宿主机纯函数回归测试（`firmware/test/test_touch_map.c`，32 用例，
 含与显示正变换的往返一致性）。
@@ -274,7 +283,19 @@ HID 模式（寄存器 0x30）有两个硬伤：
   Cardputer 上因 GPIO43 被扬声器 WS 与麦克风 PDM CLK 共享而写的**半双工仲裁逻辑整体删除**；
 - UAC1 参数沿用 Cardputer 的 mono 16 kHz / 16 bit / `S16_LE`，
   描述符宏（`UAC1_AUDIO_DESCRIPTOR`）可整体照搬；
-- 喇叭功放使能在 IO 扩展芯片的 `SPEAKER_EN`（PI4IOE5V6408 P1）。
+- **补：采样率是 FIFO 账定的，不是听感定的。** 全速控制器整块 dfifo 只有 256 words，
+  16 kHz 单声道的 OUT 包 36 B **小于 vendor 已有的 64 B ⇒ 共享 RX FIFO 一个 word 都不涨**，
+  整个音频功能只花录音那 9 words；48 kHz 立体声会把余量压到 15 words，UVC 直接没位置；
+- **补：两个方向必须同采样率/位宽/slot 数** —— 全双工的 I2S TX/RX 共用 BCLK 与 WS，
+  要跑不同速率就得占两个 I2S 端口，而 Tab5 的 SCLK/LRCK/MCLK 物理上只有一组；
+- 喇叭功放使能在 IO 扩展芯片的 `SPEAKER_EN`（PI4IOE5V6408 P1，`0x43`）——
+  功放**没有**独立 GPIO（esp-bsp 的 `BSP_POWER_AMP_IO = GPIO_NUM_NC`），
+  上电顺序定死为「codec 配完 + 解除静音 → 延时 50 ms → 才开功放」（避免开机 pop），
+  与 esp-bsp 自身的顺序相反，刻意不照抄；
+- **实机状态（阶段 4）**：播放与录音**均已验证**（喇叭出声、录音正常）；
+  **未验证**：全双工同时收发的长时间稳定性、对 GUD 帧率的影响、无反馈端点的时钟漂移。
+  过程中最贵的一个坑是「配 G26/G27 会让 IDF 的 `gpio_ll_func_sel()` 误关 USB-C 焊盘」，
+  机理与修法见 `firmware/main/tab5_pins.h` 与 `firmware/README.md`。
 
 ---
 
@@ -399,7 +420,7 @@ UVC 需 `CONFIG_USB_VIDEO_CLASS`。要求**所有 board 都生效**。
 | **1** | 实机 I2C 扫描定面板型号；DSI 起屏；640×360 GUD + PPA 缩放旋转 + LZ4/脏矩形 | `modetest -M gud -s <id>:640x360` 出图且方向/颜色正确；脏矩形局部刷新位置正确；实测终端刷新帧率并记录 |
 | **2** | 键盘 I2C Normal 模式 + G50 中断 + HID RID1 | `evtest` 打字正确；`Ctrl+C` / `Alt+Tab` 组合键生效；按住方向键连发正常 |
 | **3** | 触摸 → HID RID2 digitizer + 坐标 90° 标定 | `evtest` 见 `ABS_MT_*`；`hid-multitouch` 绑定；触点与画面位置一致 |
-| **4** | UAC1 全双工音频 | `aplay` / `arecord` 的 `--dump-hw-params` 报 `S16_LE / 1ch / 16000`；播放与录音**同时**打开互不干扰；与 GUD 并发 10 分钟无爆音、无重新枚举 |
+| **4** | UAC1 全双工音频 | ✅ 播放（喇叭出声）与录音（`arecord` 正常）已分别实机验证；⏳ **仍待验**：播放与录音**同时**打开互不干扰、与 GUD 并发 10 分钟无爆音/无重新枚举 |
 | **5** | UVC MJPEG（可砍） | `v4l2-ctl --list-formats-ext` 见 MJPEG；能取流；不可行则记录原因并砍掉 |
 | **6** | `flange_common.config` + builder 注入 + rootfs `v4l-utils` + README/文档 | 至少 3 块不同平台的 board 重建内核通过；`atk-rk3506b` 上 Cardputer 与 Tab5 复合回归 |
 
