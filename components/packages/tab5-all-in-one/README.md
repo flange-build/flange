@@ -11,7 +11,7 @@
 
 | 侧 | 内容 | 构建 |
 |----|------|------|
-| **Tab5 固件** | `firmware/`（ESP-IDF + TinyUSB）—— GUD 显示 / HID 键盘 + 多点触摸 / 后续 UAC、UVC | **容器外** `idf.py`（见 `firmware/README.md`）|
+| **Tab5 固件** | `firmware/`（ESP-IDF + TinyUSB）—— GUD 显示 / HID 键盘 + 多点触摸 / UAC1 音频 / 后续 UVC | **容器外** `idf.py`（见 `firmware/README.md`）|
 | **Linux 组件** | 内核 config fragment（`CONFIG_DRM_GUD` / `HID_MULTITOUCH` / `SND_USB_AUDIO` / `USB_VIDEO_CLASS`）+ 验收工具/文档 | `flange build` |
 
 Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers/gpu/drm/gud`）、
@@ -48,7 +48,14 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 - ⏳ **触摸的四角坐标标定待验**：需依次点四角、确认 X 与 Y 都能各自跑到接近 0 与
   接近 32767。已知某次抓取里所有触点的 Y 都落在满量程的 78%–99%，既可能是手指位置所致、
   也可能是 Y 轴映射问题，日志无法区分。
-- ⏳ 规划中：UAC1 全双工音频（ES8388 + ES7210）；UVC 摄像头（SC202CS，风险最高、允许砍）；
+- ⏳ **UAC1 全双工音频**（ES8388 播放 `0x10` / ES7210 双麦录音 `0x40`，一个 I2S 端口真全双工，
+  **16 kHz / 单声道 / S16_LE**）—— 代码已落地，描述符已在宿主机上逐项校验（`test/check_usb_desc.py`），
+  **尚未实机验证**。占 IF2/IF3/IF4 与端点 `0x02`(播放 ISO OUT) / `0x83`(录音 ISO IN)；
+  **坚决不用显式反馈端点**，因为最后一条 IN(`0x84`) 要留给 UVC。参数不是听感定的而是 FIFO 账定的：
+  16 kHz 单声道的 OUT 包 36 B 小于 vendor 已有的 64 B，共享 RX FIFO 一个 word 都不涨，
+  整个音频功能的 FIFO 代价只有录音那 9 words（256 words 里余 137）；48 kHz 立体声会把余量压到
+  31 words，UVC 直接没位置。详见 `firmware/README.md` 的「UAC1 全双工音频」。
+- ⏳ 规划中：UVC 摄像头（SC202CS，风险最高、允许砍）；
   主机侧全局内核 config（`flange_common.config` + builder 注入，对所有 board 生效）。
 
 > USB-C 只有 **12 Mbps 全速**（480 Mbps 的高速口被接到了 USB-A 母座）。带宽是零和的：

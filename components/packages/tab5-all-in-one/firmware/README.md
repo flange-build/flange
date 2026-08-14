@@ -4,8 +4,9 @@ M5Stack Tab5 作为 **USB 设备**，让嵌入式 Linux 主机把它当成一块
 （mainline `gud` 驱动，`/dev/dri/cardN`）。host 送来的 **640×360 RGB565** 帧经 ESP32-P4 的
 PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90° 旋转**，铺满板载的
 720×1280 MIPI-DSI 面板。同一个复合设备上还带 **HID 键盘**（Tab5 Keyboard）与
-**HID 多点触摸**（GT911，与键盘共用同一个 HID 接口、靠 Report ID 区分）；
-后续阶段追加 UAC 音频 / UVC 摄像头。
+**HID 多点触摸**（GT911，与键盘共用同一个 HID 接口、靠 Report ID 区分）与
+**UAC1 全双工音频**（ES8388 出喇叭 / ES7210 双麦录音，16 kHz 单声道）；
+后续阶段追加 UVC 摄像头。
 
 > ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
 
@@ -19,7 +20,11 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
     **RID 1 = 键盘**（Tab5 Keyboard 经独立 I2C 总线读行列事件，自建 6KRO 状态机上报）、
     **RID 2 = digitizer**（GT911 电容触摸，最多 5 点绝对坐标）。
     详见下文「HID 键盘」与「HID 多点触摸」。
-  - 设备描述符为 Misc/IAD 复合设备，为后续 UAC/UVC 预留。
+  - **IF2/IF3/IF4 UAC1 音频**：一个 AudioControl + 两个 AudioStreaming（播放 OUT / 录音 IN），
+    由 IAD 成组，host 侧走 mainline `snd-usb-audio`，零自定义驱动。
+    **16 kHz / 单声道 / S16_LE，两个方向同参数**（全双工的 I2S TX/RX 共用 BCLK 与 WS）。
+    播放经 ES8388 出板载喇叭，录音取 ES7210 的两只麦混成单声道。详见下文「UAC1 全双工音频」。
+  - 设备描述符为 Misc/IAD 复合设备，为后续 UVC 预留。
 - 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）；
   面板 init 序列与 DSI/DPI 参数复刻自 esp-bsp `bsp/m5stack_tab5`（Apache-2.0）；
   待机画面用的点阵字体 `main/font8x16.h` vendor 自 [Spleen](https://github.com/fcambus/spleen)
@@ -117,12 +122,24 @@ rm -f sdkconfig && idf.py build          # ⚠️ 必须删 sdkconfig，否则 d
 | CDC 数据 | OUT `0x02` / IN `0x84` |
 
 P4 全速控制器只有 4 条可用 IN 端点（见上「端点预算」）。开着 CDC 时 **UAC 音频（麦克风 1 条 IN）
-与 UVC 摄像头（视频流 1 条 IN）都放不下** —— 做那两个阶段前必须把开关注释回去。
-FIFO 反而不是瓶颈：256 words 里 EP0 16 + vendor 32 + HID 16 + 通知 2 + CDC 数据 32 = 98 words，
-余量远大于 RX FIFO 所需的 62 words。
+与 UVC 摄像头（视频流 1 条 IN）都放不下**，而且 CDC 默认拿的就是 `0x83`/`0x84`，与两者直接撞号。
 
-**这是调试设施，不是产品特性。正常构建、提交与出厂固件都应保持关闭**
-（关闭态的 Flash/DIRAM 与不带本开关的版本**逐字节相同**：275,062 / 91,228）。
+> ### 🚫 UAC 音频落地后，这条退路已经关闭
+>
+> `usb_descriptors.h` 里有一条 `#if CONFIG_TINYUSB_CDC_ENABLED / #error`，
+> **打开 CDC 会直接编译失败**，不再需要靠记性。这是有意的：最想打开 CDC 的时刻，
+> 恰恰是音频调不通、看起来像描述符写错的时候 —— 而那时打开它只会换来一个
+> 更难懂的枚举失败。需要日志请接 **UART0(G37/G38，在 M5-Bus 排针上)**。
+>
+> 下面这一节保留下来，是为了记住「为什么不能开」以及它当年怎么用；
+> 要重新启用，得先把音频的 IN 端点让出来。
+
+FIFO 反而不是瓶颈：256 words 里 EP0 16 + vendor 16 + HID 16 + 通知 2 + CDC 数据 16 = 66 words，
+余量远大于 RX FIFO 所需的 62 words。（此处曾按「vendor/CDC 数据各 32」记，那是假设 bulk IN 开了
+双缓冲；实测 `_tud_cfg.bm_double_buffered` 保持默认 0，`tud_configure()` 从未被调用，故各 16。）
+
+**这是调试设施，不是产品特性。**（当年记录：关闭态的 Flash/DIRAM 与不带本开关的版本
+**逐字节相同**，均为 275,062 / 91,228；音频落地后的新数字见「资源占用」。）
 
 #### ⚠️ 开机早期的日志会丢
 
@@ -178,12 +195,22 @@ cdc_acm 1-1.1:1.0: ttyACM0: USB ACM device
 P4 全速控制器（tinyusb `dwc2_esp32.h`）：`ep_count = 7`、`ep_in_count = 5`（含 EP0）、
 FIFO 256 words（1 KB），即**最多 4 条可用 IN 端点**。
 
-当前已用 **2 条 IN 端点**：vendor(`0x81`) + HID(`0x82`)，余 2 条。后续的 UAC + UVC 会把它们用满，
-所以**触摸与键盘合并在同一个 HID 接口**上，用 Report ID 区分（RID 1 键盘 / RID 2 digitizer），
-**已如此落地**（触摸没有新增任何端点，见下文「HID 多点触摸」）。
+当前已用 **3 条 IN 端点**：vendor(`0x81`) + HID(`0x82`) + UAC 录音(`0x83`)，**余 1 条**。
+`0x84` 是留给 UVC 视频流的最后一条，**不得占用** —— 这也是音频坚决不用显式反馈端点的原因
+（见下文「UAC1 全双工音频」）。
 
-> 余下这 2 条也是**可选 CDC 调试串口**（默认关闭）要占的，见下文「日志」章节。
-> 三者（CDC / UAC / UVC）不能同时开。
+正因为一开始就知道会用满，**触摸与键盘才合并在同一个 HID 接口**上、用 Report ID 区分
+（RID 1 键盘 / RID 2 digitizer），触摸没有新增任何端点（见下文「HID 多点触摸」）。
+
+| 端点 | 归属 | 类型 |
+|---|---|---|
+| `0x01` / `0x81` | vendor(GUD) | bulk OUT / IN |
+| `0x82` | HID（键盘 + 触摸） | 中断 IN |
+| `0x02` | UAC 播放 | 等时 OUT（adaptive） |
+| `0x83` | UAC 录音 | 等时 IN（asynchronous） |
+| `0x84` | **预留给 UVC** | — |
+
+> **可选 CDC 调试串口与 UAC 互斥**，且已变成**编译期 `#error`**，见下文「日志」章节。
 
 ## 显示
 
@@ -404,9 +431,16 @@ GUD 打通的证据；若开机就黑屏、连待机画面都没有，则可据�
 
 | 项 | 值 |
 |---|---|
-| Flash | 275,062 字节（约 269 KB），占 4 MB factory 分区 **7%** |
-| 内部 DIRAM | 91,228 字节（**15.8%**），剩余约 474 KB |
-| 镜像总大小 | 356,686 字节（`.bin` 另有 padding） |
+| Flash | 352,670 字节（约 344 KB），占 4 MB factory 分区 **9%** |
+| 内部 DIRAM | 95,598 字节（**16.6%**），剩余约 470 KB |
+| 镜像总大小 | 438,108 字节（`.bin` 另有 padding） |
+
+UAC1 音频的增量：**Flash +77,608 / DIRAM +4,370**（相对不带音频的 275,062 / 91,228）。
+Flash 那一大笔几乎全在三个新链接进来的库上，与我们自己的代码无关：
+`esp_driver_i2s` 22.9 KB（STD/PDM/TDM 三种模式一起编）+ `esp_codec_dev` 16.2 KB
++ `esp_hal_i2s` 5.4 KB，其余是 TinyUSB 的 audio class。
+`esp_codec_dev` 已经在 `sdkconfig.defaults` 里裁到**只剩 ES8388 与 ES7210 两颗**，
+其余八颗 codec 不编。9% 的占用离 4 MB 分区还很远，本阶段不做进一步瘦身。
 
 大块缓冲全在 PSRAM，不占内部 RAM：GUD 收帧缓冲共约 900 KB（未压缩帧与压缩帧各一份，
 每份 `640×360×2` = 460,800 字节），DPI 帧缓冲 1.84 MB。
@@ -761,12 +795,201 @@ ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multi
 （`evtest` 里看 `ABS_MT_POSITION_X` / `ABS_MT_POSITION_Y` 的取值范围）。四角都能到量程两端，
 才算标定通过；某一轴始终挤在一小段区间里，才是真的映射错了。
 
+## UAC1 全双工音频（ES8388 播放 + ES7210 双麦录音）
+
+**状态：代码已落地并通过宿主机校验，⏳ 尚未实机验证。**
+
+Tab5 作为 host 的 USB 声卡：播放 host → USB → ES8388 → 板载喇叭，录音 ES7210 双麦 → USB → host，
+**两个方向同时可用**。host 侧走 mainline `snd-usb-audio`，零自定义驱动。
+
+### 参数：16 kHz / 单声道 / S16_LE，两个方向同参数
+
+**两个方向必须同采样率**，这不是选择题：全双工的 I2S TX/RX 共用 BCLK 与 WS，
+采样率、位宽、slot 数三项都得一致。要让两个方向跑不同速率就得占两个 I2S 端口，
+而 Tab5 的 SCLK/LRCK/MCLK 在物理上只有一组。
+
+**为什么是 16 kHz 单声道 —— 是 FIFO 账定的，不是听感定的。** 全速控制器整块 FIFO 只有
+256 words（1 KB），要同时装下共享 RX FIFO 与每条 IN 端点的 TX FIFO：
+
+| 方案 | OUT 包 | RX FIFO | 音频 IN 的 TX FIFO | 合计已用 | 空闲（留给 UVC） |
+|---|---|---|---|---|---|
+| **16 kHz 单声道（本方案）** | 36 B | **62**（不涨） | 9 | **119** | **137 words = 548 B** ✅ |
+| 32 kHz 单声道 / 16 kHz 立体声 | 68 B | 64 | 17 | 129 | 127 words |
+| 48 kHz 单声道 | 100 B | 80 | 25 | 153 | 103 words |
+| 48 kHz 立体声 | 196 B | 128 | 49 | 225 | **31 words** ❌ UVC 没位置 |
+
+16 kHz 单声道有一个别的档位没有的性质：**OUT 包 36 B 小于 vendor 已有的 64 B，
+共享 RX FIFO 一个 word 都不涨**，整个音频功能的 FIFO 代价只有录音那 9 words。
+而 FIFO 不够时 `dfifo_alloc()` 只是 `TU_ASSERT` 返回 false，**默认日志等级下一个字都不打**。
+
+**升级阶梯**：32 kHz 单声道与 16 kHz 立体声只多吃 10 words，属于「几乎免费」的档位；
+48 kHz 立体声不可行。等 UVC 的可行性结论出来之后再抬。改的是 `usb_descriptors.h` 里
+`UAC_SAMPLE_RATE` / `UAC_CHANNEL_COUNT` 两个常量。
+
+### 为什么绝不用显式反馈端点
+
+反馈端点会多占一条 IN，正好顶掉留给 UVC 的 `0x84`（见上「端点预算」）。
+16 kHz 让这件事成立：`16000 % 1000 == 0` ⇒ 每个 USB 帧**恰好 16 个样本、没有小数包**，
+adaptive（播放 OUT）与 asynchronous（录音 IN）就够用。若选 44 100 Hz，就得按 9/10 的比例
+交替发 44 和 45 个样本并跟踪相位漂移 —— 那才是逼人上反馈端点的场景。
+
+`tusb_config.h` 里 `CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP` 与 `..._INTERRUPT_EP` 都**显式写 0**，
+不靠默认值。异步 IN 每帧发几个样本由 `CFG_TUD_AUDIO_EP_IN_FLOW_CONTROL` 按软件 FIFO 水位
+决定（标称 ±1），这就是「异步 IN 不需要反馈」的实现基础。
+
+> ### ⚠️ 与之配对的静默陷阱：sync 字段绝不能填 0
+>
+> UAC1 的 ISO 端点描述符里，`bmAttributes` 的 sync 字段填 0（`TUSB_ISO_EP_ATT_NO_SYNC`）
+> 会被 TinyUSB **当成一条反馈端点**（`audio_device.c` 的 UAC1 分支就是靠
+> `sync == NO_SYNC` 来判定的），数据端点从此永远发不出去 —— 而枚举一切正常。
+> `test/check_usb_desc.py` 有专门一条断言守着它，另一条守着 `bSynchAddress == 0`。
+
+### I2S 全双工的硬性要求（写错了不报错，只出噪声）
+
+1. **TX 与 RX 必须在同一个端口，且两次 `i2s_channel_init_std_mode()` 的 `i2s_std_config_t`
+   要能 `memcmp` 相等** —— 驱动靠这个判定能否共享 BCLK/WS。`codec_audio.c` 的写法是
+   **两次传同一个 `const` 局部变量的地址**，让「填得不一样」在结构上就不可能发生。
+2. **不一致时 P4 不报错**：只打一条 **DEBUG 级**的 `"TX & RX on I2S0 are simplex"`
+   就放行，所有函数照样返回 `ESP_OK`，然后两个方向各自去驱动 BCLK/WS —— 症状是噪声或全静音。
+   本工程现场没有串口，那行字谁也看不见，所以改用**读寄存器**显式判定：
+   `I2S0.tx_conf.sig_loopback`（就是 `i2s_ll_share_bck_ws()` 写的那一位）必须是 1，
+   为 0 就返回错误码、拒绝启动音频（host 侧表现为「声卡在但全静音」）。
+3. **两个通道必须在一次 `i2s_new_channel(&cfg, &tx, &rx)` 里同时要到** —— P4 的 I2S v2 上
+   分两次建会失败。
+4. **不能混 STD 与 TDM**（`mode_info` 结构体对不上，直接组不成全双工）。ES7210 只有 2 只麦，
+   驱动本身也是「≥3 只麦才开 TDM」，走 STD 立体声 2 slot 正合适。
+5. **不能用 `I2S_SLOT_MODE_MONO`**：它会把 `slot_mask` 设成只剩左声道，**MIC2 白装**。
+   线上统一走立体声 2 slot，USB 侧的单声道由 `audio_frame.c` 的纯函数转换。
+
+### codec 接法与两个陷阱
+
+两颗芯片与 IO 扩展/触摸同挂内部 I2C(G31/G32)，`audio_codec_i2c_cfg_t.bus_handle` 正好吃
+`board_i2c_bus()` 的现成句柄，**不新建 master** —— 与 `touch_hid.c` 同一处置。
+
+> **⚠️ 陷阱一：8 bit / 7 bit 地址。** `esp_codec_dev` 的 `.addr` 收的是 **8 bit** 形式
+> （驱动内部再 `>>1`），而 `i2c_master_probe()` 收 **7 bit**。`tab5_pins.h` 里两种形式
+> **分开定名**（`ES8388_I2C_ADDR7 = 0x10` / `ADDR8 = 0x20`，`ES7210_I2C_ADDR7 = 0x40` / `ADDR8 = 0x80`）。
+> 混用的症状是 codec 初始化失败，或把寄存器写到别的器件上 —— 而 I2C 写没有任何反馈。
+>
+> **⚠️ 陷阱二：`esp_codec_dev_close()` 不会关功放。** 关流时不自己拉低 `SPEAKER_EN`
+> 就会残留导通，容易有关机 pop。本阶段音频一路常开、不做关流，但这条写在 `codec_audio.c` 的注释里。
+
+### 喇叭功放：`0x43` 的 PIN1，且必须最后开
+
+功放使能 = **`0x43` 那颗 PI4IOE5V6408 的 PIN1**（esp-bsp 的 `BSP_SPEAKER_EN`），
+**与 LCD_EN(PIN4) / TOUCH_EN(PIN5) 是同一颗**。功放**没有独立 GPIO**
+（esp-bsp 的 `BSP_POWER_AMP_IO = GPIO_NUM_NC`），所以 `es8388_codec_cfg_t.pa_pin` 填 −1，
+驱动内建的 PA 控制变成空操作，由 `board_speaker_enable()` 自己驱动。
+
+上电顺序**必须**是：
+
+```
+i2s_full_duplex_init()  →  esp8388_init()（含 esp_codec_dev_open：先静音、再解除静音）
+                        →  vTaskDelay(50ms)（让 DAC 输出电平稳定）
+                        →  board_speaker_enable(true)   ← 最后才导通功放
+```
+
+不变式：**功放导通 ⟺ ES8388 已配置完成且已解除静音**。`board_power_init()` 只把引脚配成
+推挽输出并**保持 0**，与背光的处置同构（配好但不点亮，点亮归显示域）。
+
+> ⚠️ **esp-bsp 自己的顺序是反的**（`bsp_audio.c` 先 `bsp_feature_enable(SPEAKER)` 再配 codec），
+> 本工程**刻意不照抄**。这是从代码顺序**推出**的爆音风险，上游没有已报告的 Tab5 缺陷 ——
+> 若实机没听到「啪」声，也**不要**把顺序改回去，代价只是 50 ms 开机时间。
+>
+> 关流时必须**反序**：先 `board_speaker_enable(false)` 再 `esp_codec_dev_close()`。
+
+### 数据泵
+
+一个任务、每 1 ms 一转，同时搬两个方向，**以 `i2s_channel_read()` 作节拍源**
+（DMA 描述符正好是 1 ms 的样本数，读满即返回，比 `vTaskDelay(1)` 更贴合 USB 帧）：
+
+```
+i2s_channel_read(rx)  →  stereo_to_mono  →  tud_audio_write()      （录音）
+tud_audio_read()      →  mono_to_stereo  →  i2s_channel_write(tx)  （播放）
+```
+
+host 没选中某个方向时：播放侧**灌静音而不是停写**（I2S 时钟保持连续，ES8388 不会因为
+BCLK 断续而「咔」一声）；录音侧清空软件 FIFO（否则下次打开会先放出一段陈旧音频）。
+
+任务优先级 5，与 `TINYUSB_DEFAULT_TASK_PRIO` 相同 —— 它每毫秒只搬 128 字节、绝大部分时间
+阻塞在 `i2s_channel_read()` 上，没有理由压过 USB 栈。欠载/溢出**只计数**，每 10 秒汇总一条
+日志：1 kHz 的 `ESP_LOGW` 会自己把音频饿死，属于观测干扰被观测。
+
+Cardputer 上那套 `AUDIO_MODE_SPEAKER/MICROPHONE` 三态仲裁**不移植** —— 那是因为它的扬声器 WS
+与麦克风 PDM CLK 共用同一个 GPIO；Tab5 的 DOUT(G26)/DSIN(G28) 是两根脚，两个方向各自独立，
+用两个 `volatile bool` 就够。
+
+### 宿主机验证（烧板前必跑）
+
+```bash
+cd firmware/test
+cc -std=c11 -Wall -Wextra -Werror -I../main test_audio_frame.c ../main/audio_frame.c \
+   -o /tmp/ta && /tmp/ta                                   # → OK (13 cases)
+
+cd .. && . $HOME/esp/esp-idf/export.sh && idf.py build
+python3 test/check_usb_desc.py build/tab5_aio.elf          # → 描述符树 + OK
+```
+
+`check_usb_desc.py` 从 ELF 里取出 `aio_desc_device` / `aio_desc_configuration` 的字节，
+逐条断言并打印整棵描述符树。**这是本阶段唯一一道能在烧板前拦住错误的闸门** ——
+手写描述符错一个字节的表现是「host 完全不认这个设备 / 不出 ALSA 节点」，
+而现场没有串口可查；`TUD_AUDIO10_*` 宏只保证每条 item 的 `bLength`/tag 自洽，
+**不校验** terminal ID 链、`wTotalLength`、`baInterfaceNr` 这些跨描述符引用。
+它需要 `pyelftools`（IDF 的 python 环境自带），所以要先 `export.sh`。
+
+断言覆盖：VID/PID 与 Misc/IAD 设备类、`wTotalLength` 与 `bNumInterfaces` 自洽、
+IF0 仍是 vendor 类 / IF1 仍是 HID 类 / 三条老端点都还在、IAD 从 IF2 起覆盖 3 个接口、
+AC 头的 `bcdADC`+`wTotalLength`+`baInterfaceNr`、终端 ID 链（1→2 播放 / 3→4 录音）、
+两条 AS 各有 alt0 零带宽 + alt1 带端点、`bTerminalLink` 指向正确的终端、
+两条 ISO 端点的包大小/间隔/sync 类型、**`bSynchAddress` 全为 0**、
+**sync 字段全非 0**、IN 端点 ≤ 4 条且 `0x84` 未被占用、两份 Type I 格式描述符与预期参数一致。
+
+### Host 侧验证（上板后）
+
+```bash
+lsusb -v -d 16d0:10a9 | grep -A6 -iE "iad|audio|isochronous|synch"
+cat /proc/asound/cards                  # 应出现 "Tab5 USB Terminal"
+aplay -l && arecord -l                  # 各出现一个 USB Audio 设备
+cat /proc/asound/card<N>/stream0        # Playback/Capture 两段：S16_LE / 1ch / 16000
+
+# 播放
+speaker-test -D hw:<N>,0 -F S16_LE -c 1 -r 16000 -t sine -f 1000 -l 3
+aplay -D hw:<N>,0 --dump-hw-params -f S16_LE -c 1 -r 16000 /dev/zero
+aplay -D hw:<N>,0 /usr/share/sounds/alsa/Front_Center.wav
+
+# 录音
+arecord -D hw:<N>,0 -f S16_LE -c 1 -r 16000 -d 10 /tmp/tab5.wav
+sox /tmp/tab5.wav -n stat               # 安静时 RMS 低、说话时高；不能是全零或常数
+
+# 全双工：两个终端同时跑上面的 speaker-test 与 arecord，两边都要正常
+```
+
+判据：`stream0` 里**不出现 `Sync Endpoint`**、`lsusb -v` 的两条 ISO 端点分别是
+`Synch Type Adaptive` 与 `Synch Type Asynchronous`、`dmesg` 无 `snd-usb-audio` 报错、
+无重新枚举，且 **GUD 显示 / 键盘 / 触摸全部不回归**。
+
+> ⓘ host 侧需要 `CONFIG_SND_USB_AUDIO`（发行版一般自带 `snd-usb-audio.ko`）。
+> 若 `lsusb` 看得到设备、`/proc/asound/cards` 却没有它且 `dmesg` 无音频相关行，
+> 先 `modinfo snd-usb-audio` 确认模块存在 —— 那是 host 内核配置问题，不是固件缺陷。
+
+### ⚠️ 这一段 bring-up 期是盲的
+
+从上电到 host 完成枚举之间没有任何可见输出：UART0 只在 M5-Bus 排针上（要外接 USB-TTL），
+USB-Serial/JTAG 被 TinyUSB 收走，CDC 又被编译期 `#error` 堵死。接受这个代价的三条缓解：
+
+1. codec 初始化失败会让 `codec_audio_start()` 整体返回错误、音频降级，
+   但**描述符是静态的**，host 侧照样枚举出声卡 —— 「有声卡但全静音」本身就是一条 host 侧信号；
+2. 全双工是否成立由读寄存器显式判定，不靠日志；
+3. 真要抓这一段，接 UART0(G37/G38) —— 代码里的 `ESP_LOG*` 全部保留，
+   它们不是判据，但接上串口时是最快的现场证据。
+
+
 ## 文件
 
 | 文件 | 职责 |
 |------|------|
 | `main/app_main.c` | 编排：board_power → display → gud → TinyUSB 安装 |
-| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2） |
+| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2 + IF2-4 UAC1 音频）与 UAC 参数常量 |
 | `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8） |
 | `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧（脏矩形累积 / LZ4 解压）→ `display_blit()` |
 | `main/lz4.{c,h}` | 官方 LZ4 v1.9.4 参考实现（BSD-2-Clause），仅用 `LZ4_decompress_safe` |
@@ -775,18 +998,21 @@ ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multi
 | `main/font8x16.h` | Spleen 8×16 点阵字体，ASCII 0x20-0x7E（vendor 自 fcambus/spleen，BSD-2-Clause） |
 | `test/test_standby_screen.c` | 待机画面宿主机回归测试 + PPM 版式预览（直接编译真实源码，非复制体） |
 | `main/panel_init_data.h` | 两种批次的面板 init 命令序列（vendor 自 esp-bsp，Apache-2.0） |
-| `main/board_power.{c,h}` | 内部 I2C 总线 + PI4IOE5V6408 上电时序 + 背光开关 |
+| `main/board_power.{c,h}` | 内部 I2C 总线 + PI4IOE5V6408 上电时序 + 背光开关 + 喇叭功放开关 |
 | `main/kbd_i2c.{c,h}` | 键盘 I2C 总线 + G50 中断 + 事件排空 + HID 上报（Normal 模式） |
 | `main/kbd_translate.{c,h}` | 按下集合 → HID modifier/keycode 分层翻译，零依赖纯函数（宿主机可测） |
 | `main/tab5_kbd_map.h` | 行列 → HID usage 映射表（vendor 自 M5 官方固件，MIT） |
 | `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/touch_hid.{c,h}` | GT911 初始化（INT 拉低 + 备用地址 `0x14`）+ 20ms 轮询 + digitizer 上报（RID 2） |
 | `main/touch_map.{c,h}` | 面板坐标 → GUD 坐标反变换 + HID 归一化 + 报告装填，零依赖纯函数（宿主机可测） |
+| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调 |
+| `main/audio_frame.{c,h}` | USB 单声道 ↔ I2S 立体声转换，零依赖纯函数（宿主机可测） |
+| `main/tinyusb_config/tusb_config.h` | `include_next` esp_tinyusb 默认配置后追加 `CFG_TUD_AUDIO_*`（它没开放 Audio 类） |
 | `test/test_touch_map.c` | 触摸坐标变换与报告装填的宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/tab5_pins.h` | 板级 GPIO / 面板与 GUD 尺寸常量（含放大倍数的静态断言） |
 | `sdkconfig.defaults` | 目标/PSRAM/分区/控制台/vendor 类、芯片版本互斥的说明，以及末尾默认注释掉的 CDC 调试串口开关 |
 | `partitions.csv` | factory 分区 4 MB |
-| `main/idf_component.yml` | 依赖精确锁版：esp_tinyusb / tinyusb / io_expander / 两个面板驱动 |
+| `main/idf_component.yml` | 依赖精确锁版：esp_tinyusb / tinyusb / io_expander / 两个面板驱动 / esp_codec_dev |
 
 设计与路线：见仓库
 `docs/superpowers/specs/2026-08-11-tab5-all-in-one-design.md` 与

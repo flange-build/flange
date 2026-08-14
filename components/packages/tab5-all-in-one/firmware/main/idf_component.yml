@@ -10,3 +10,10 @@ dependencies:
   espressif/esp_lcd_st7123: "1.0.2"
   # GT911 电容触摸（Tab5 用的是**备用**地址 0x14，不是组件宏默认的 0x5D）
   espressif/esp_lcd_touch_gt911: "1.2.1"
+  # ES8388 播放 + ES7210 双麦录音的寄存器序列（各数十条，含 ES8388 那几条无文档的
+  # DLL 寄存器，手抄一遍既无收益也无从验证）。这是**芯片驱动**组件，与上面几个
+  # esp_lcd_* / esp_io_expander_* 同一性质，**不是** esp-bsp 板级组件：
+  # 它的 manifest 只依赖 idf>=4.0，PRIV_REQUIRES 全是 IDF 内置，不会拖进
+  # LVGL / esp_video / usb_host。它的 audio_codec_i2c_cfg_t.bus_handle 正好吃
+  # 我们已有的 board_i2c_bus()，因此不会在 G31/G32 上再建一个 I2C master。
+  espressif/esp_codec_dev: "1.6.2"

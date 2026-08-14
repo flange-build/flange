@@ -141,23 +141,104 @@ static const uint8_t aio_hid_report_desc[] = {
 };
 
 /*
- * 配置描述符：IF0 = GUD vendor，IF1 = HID 键盘 + 触摸，
- * 可选 IF2/IF3 = CDC 调试串口（默认关闭，见 sdkconfig.defaults 末尾）。
+ * ── UAC1（Audio Class 1.0）复合功能：一个 AudioControl 接口管两条 AudioStreaming ──
  *
- * TUD_CDC_DESCRIPTOR **自带 IAD**，一段 TUD_CDC_DESC_LEN = 66 字节里含通信 + 数据
- * 两个接口；本设备描述符本来就是 Misc/IAD(239/2/1)，无需为它改设备描述符。
+ * TinyUSB 0.21 有完整的 TUD_AUDIO10_* 底层模板（src/device/usbd.h），但**没有**
+ * 「播放 + 录音」的整功能模板（只有 TUD_AUDIO10_MIC_ONE_CH_DESCRIPTOR，单麦且不带
+ * IAD），所以这套布局要自己拼。底稿取自 cardputer-all-in-one/firmware/main/
+ * usb_descriptors.c，那边这套「1×AC + 播放 AS + 录音 AS」已实机跑通。
+ *
+ * 拓扑（terminal ID 是本文件内自洽的编号，被 baSourceID 交叉引用）：
+ *   播放：ID1 输入端子(USB Streaming) → ID2 输出端子(Speaker)
+ *   录音：ID3 输入端子(Microphone)    → ID4 输出端子(USB Streaming)
+ *
+ * 不放 Feature Unit（音量/静音）：host 侧软件音量已经够用，而 Feature Unit 会引入
+ * 一组必须正确应答的 GET/SET_CUR 控制请求 —— 应答错了 snd-usb-audio 在 probe 阶段
+ * 就报错，属于典型的「加了功能反而不能用」。要做也该等基础通路稳了再说。
+ *
+ * ⚠️ 两条 ISO 端点的 **bSynchAddress 都填 0**（宏的最后一个参数），即没有显式
+ * 反馈端点 —— 反馈端点会占掉第 4 条 IN(0x84)，把 UVC 顶掉，见 usb_descriptors.h
+ * 的端点表。异步 IN 本来就不需要反馈（反馈是给异步 **OUT** sink 用的，IN 方向
+ * 设备是时钟主控）；adaptive OUT sink 靠自己吸收速率差，也不需要。
+ *
+ * ⚠️ 与之配对的一个静默陷阱：bmAttributes 的 sync 字段**绝不能填 0**
+ * （TUSB_ISO_EP_ATT_NO_SYNC）。audio_device.c 的 UAC1 分支正是靠
+ * `sync == TUSB_ISO_EP_ATT_NO_SYNC` 判定「这是一条反馈端点」的 —— 填 0 会让
+ * TinyUSB 把我们的数据端点当成反馈端点，数据永远发不出去，而枚举一切正常。
+ * 下面播放用 ADAPTIVE、录音用 ASYNCHRONOUS，两者都非 0；
+ * test/check_usb_desc.py 有专门一条断言守着这两件事。
  */
-#if CONFIG_TINYUSB_CDC_ENABLED
-#define AIO_CDC_DESC_LEN TUD_CDC_DESC_LEN
-/* 字符串索引 4，与下方 aio_string_desc_arr 的第 5 个元素对应，
- * 传给 TUD_CDC_DESCRIPTOR 的 _stridx。两处改一处必错，故在此定名。 */
-#define AIO_STRID_CDC    4
-#else
-#define AIO_CDC_DESC_LEN 0
-#endif
+#define UAC1_STREAM_DESC_LEN (TUD_AUDIO10_DESC_STD_AS_LEN * 2 + \
+                              TUD_AUDIO10_DESC_CS_AS_INT_LEN + \
+                              TUD_AUDIO10_DESC_TYPE_I_FORMAT_LEN(1) + \
+                              TUD_AUDIO10_DESC_STD_AS_ISO_EP_LEN + \
+                              TUD_AUDIO10_DESC_CS_AS_ISO_EP_LEN)
 
+#define UAC1_AUDIO_DESC_LEN (8 /* IAD */ + \
+                             TUD_AUDIO10_DESC_STD_AC_LEN + \
+                             TUD_AUDIO10_DESC_CS_AC_LEN(2) + \
+                             2 * (TUD_AUDIO10_DESC_INPUT_TERM_LEN + \
+                                  TUD_AUDIO10_DESC_OUTPUT_TERM_LEN) + \
+                             2 * UAC1_STREAM_DESC_LEN)
+
+#define UAC1_AUDIO_DESCRIPTOR(_ac_itf, _spk_as, _mic_as, _stridx, _epout, _epin) \
+    /* IAD：告诉 host「这 3 个接口是一个音频功能」，snd-usb-audio 靠它成组绑定。
+     * 设备描述符已经是 Misc/IAD(239/2/1)，不必为它再改。 */ \
+    8, TUSB_DESC_INTERFACE_ASSOCIATION, _ac_itf, 3, TUSB_CLASS_AUDIO, 0, 0, _stridx, \
+    TUD_AUDIO10_DESC_STD_AC(_ac_itf, 0 /* 无中断端点：省一条 IN */, _stridx), \
+    /* 第二个参数是「下属单元/端子描述符的总字节数」，宏自己会把 AC 头的长度加进去 */ \
+    TUD_AUDIO10_DESC_CS_AC(0x0100 /* bcdADC = UAC 1.0 */, \
+                           2 * (TUD_AUDIO10_DESC_INPUT_TERM_LEN + \
+                                TUD_AUDIO10_DESC_OUTPUT_TERM_LEN), \
+                           _spk_as, _mic_as /* baInterfaceNr[]，必须指向两个 AS 接口 */), \
+    /* 播放链：USB 流 → 喇叭 */ \
+    TUD_AUDIO10_DESC_INPUT_TERM(1, AUDIO_TERM_TYPE_USB_STREAMING, 0, \
+                                UAC_CHANNEL_COUNT, AUDIO10_CHANNEL_CONFIG_NON_PREDEFINED, 0, 0), \
+    TUD_AUDIO10_DESC_OUTPUT_TERM(2, AUDIO_TERM_TYPE_OUT_GENERIC_SPEAKER, 0, 1 /* ← ID1 */, 0), \
+    /* 录音链：麦克风 → USB 流 */ \
+    TUD_AUDIO10_DESC_INPUT_TERM(3, AUDIO_TERM_TYPE_IN_GENERIC_MIC, 0, \
+                                UAC_CHANNEL_COUNT, AUDIO10_CHANNEL_CONFIG_NON_PREDEFINED, 0, 0), \
+    TUD_AUDIO10_DESC_OUTPUT_TERM(4, AUDIO_TERM_TYPE_USB_STREAMING, 0, 3 /* ← ID3 */, 0), \
+    /* ── 播放 AS：alt 0 = 零带宽（host 不放音时不占 ISO 预留），alt 1 = 带端点 ── */ \
+    TUD_AUDIO10_DESC_STD_AS_INT(_spk_as, 0, 0, 0), \
+    TUD_AUDIO10_DESC_STD_AS_INT(_spk_as, 1, 1, 0), \
+    TUD_AUDIO10_DESC_CS_AS_INT(1 /* bTerminalLink → ID1 */, 1, AUDIO10_DATA_FORMAT_TYPE_I_PCM), \
+    TUD_AUDIO10_DESC_TYPE_I_FORMAT(UAC_CHANNEL_COUNT, UAC_BYTES_PER_SAMPLE, 16, UAC_SAMPLE_RATE), \
+    /* adaptive sink：设备自己吸收速率差。末参 0 = bSynchAddress，见上方 ⚠️ */ \
+    TUD_AUDIO10_DESC_STD_AS_ISO_EP(_epout, \
+                                   TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ADAPTIVE, \
+                                   UAC_EP_OUT_SIZE, 1 /* bInterval = 每帧 */, 0), \
+    TUD_AUDIO10_DESC_CS_AS_ISO_EP(AUDIO10_CS_AS_ISO_DATA_EP_ATT_SAMPLING_FRQ, \
+                                  AUDIO10_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, 0), \
+    /* ── 录音 AS ── */ \
+    TUD_AUDIO10_DESC_STD_AS_INT(_mic_as, 0, 0, 0), \
+    TUD_AUDIO10_DESC_STD_AS_INT(_mic_as, 1, 1, 0), \
+    TUD_AUDIO10_DESC_CS_AS_INT(4 /* bTerminalLink → ID4 */, 1, AUDIO10_DATA_FORMAT_TYPE_I_PCM), \
+    TUD_AUDIO10_DESC_TYPE_I_FORMAT(UAC_CHANNEL_COUNT, UAC_BYTES_PER_SAMPLE, 16, UAC_SAMPLE_RATE), \
+    /* asynchronous source：设备按自己的 I2S 时钟出数据，每帧发几个样本由
+     * CFG_TUD_AUDIO_EP_IN_FLOW_CONTROL 按软件 FIFO 水位决定（标称 ±1）。
+     * 同样 bSynchAddress = 0。 */ \
+    TUD_AUDIO10_DESC_STD_AS_ISO_EP(_epin, \
+                                   TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS, \
+                                   UAC_EP_IN_SIZE, 1, 0), \
+    TUD_AUDIO10_DESC_CS_AS_ISO_EP(AUDIO10_CS_AS_ISO_DATA_EP_ATT_SAMPLING_FRQ, \
+                                  AUDIO10_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_MILLISEC, 1)
+
+/* 音频功能的字符串索引，同时是 IAD 与三个音频接口的 iInterface。
+ * 与下方 aio_string_desc_arr 的第 5 个元素对应，两处改一处必错，故在此定名。 */
+#define AIO_STRID_AUDIO 4
+
+/*
+ * 配置描述符：IF0 = GUD vendor，IF1 = HID 键盘 + 触摸，
+ * IF2/IF3/IF4 = UAC1 音频（AudioControl + 播放 AS + 录音 AS，由 IAD 成组）。
+ *
+ * 音频排在 HID **之后**：接口号对 host 侧没有功能影响（drm/gud 按 VID/PID + 接口类
+ * 绑定，usbhid / hid-multitouch 按接口类绑定，snd-usb-audio 按 IAD + 接口类绑定，
+ * 没有任何一方按接口号绑定），所以宁可不动已实机验证的 IF0/IF1。
+ * 端点号同理刻意不动（0x81 / 0x82），少一个变量。
+ */
 #define CONFIG_TOTAL_LEN \
-    (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_HID_DESC_LEN + AIO_CDC_DESC_LEN)
+    (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_HID_DESC_LEN + UAC1_AUDIO_DESC_LEN)
 const uint8_t aio_desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
     TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
@@ -177,16 +258,25 @@ const uint8_t aio_desc_configuration[] = {
     TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
                        sizeof(aio_hid_report_desc), EPNUM_HID,
                        CFG_TUD_HID_EP_BUFSIZE, 10),
-#if CONFIG_TINYUSB_CDC_ENABLED
-    /* 通知端点 8 字节即够：CDC ACM 的 SERIAL_STATE 通知负载最长 10 字节，
-     * 且本工程只做单向日志输出、从不主动上报串口状态线。 */
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, AIO_STRID_CDC, EPNUM_CDC_NOTIF, 8,
-                       EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
-#endif
+    UAC1_AUDIO_DESCRIPTOR(ITF_NUM_AUDIO_CONTROL, ITF_NUM_AUDIO_STREAMING_OUT,
+                          ITF_NUM_AUDIO_STREAMING_IN, AIO_STRID_AUDIO,
+                          EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN),
 };
 
 _Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN,
                "USB 配置描述符长度不一致");
+
+/*
+ * 描述符声明的端点大小与 tinyusb_config/tusb_config.h 给驱动的上限对账。
+ * 两者分处两个文件、无法互相 include，只能靠断言钉住 —— 不一致时 TinyUSB 会在
+ * 收发路径上截断或拒绝，而枚举完全正常，症状极难归因。
+ */
+_Static_assert(UAC_EP_OUT_SIZE <= CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX,
+               "描述符声明的播放端点大小超过 tusb_config.h 里给驱动的上限");
+_Static_assert(UAC_EP_IN_SIZE <= CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX,
+               "描述符声明的录音端点大小超过 tusb_config.h 里给驱动的上限");
+_Static_assert(CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP == 0,
+               "全速控制器只有 4 条可用 IN 端点，反馈端点会顶掉 UVC 的位置");
 
 /* esp_tinyusb 只实现 tud_descriptor_*_cb，HID 这三个回调要我们自己提供，
  * 否则链接期缺符号（report_cb）或运行时对 GET/SET_REPORT STALL。 */
@@ -231,7 +321,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 /*
  * 字符串描述符：交由 esp_tinyusb 完成 UTF-16 转换与 langid 处理。
  * 索引 0 = langid（English, 0x0409），1=厂商 2=产品 3=序列号，
- * 4 = CDC 调试串口（仅在 CONFIG_TINYUSB_CDC_ENABLED 时存在，须等于 AIO_STRID_CDC）。
+ * 4 = 音频功能（须等于 AIO_STRID_AUDIO，是 IAD 与三个音频接口的 iInterface）。
  * aio_string_desc_count 由 sizeof/sizeof 自动算，增删元素不用手改。
  */
 static const char k_langid[] = {0x09, 0x04, 0x00};
@@ -240,15 +330,12 @@ const char *aio_string_desc_arr[] = {
     "flange",
     "Tab5 USB Terminal",
     "TAB5-0001",
-#if CONFIG_TINYUSB_CDC_ENABLED
-    "Tab5 Debug Console",
-#endif
+    "Tab5 Audio",
 };
 const int aio_string_desc_count = sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]);
 
-#if CONFIG_TINYUSB_CDC_ENABLED
-/* 把 TUD_CDC_DESCRIPTOR 的 _stridx 与字符串数组钉在一起：在数组中间插一条新字符串
- * 却忘了改 AIO_STRID_CDC，host 侧只表现为「串口名字不对」，几乎不会有人去查描述符。 */
-_Static_assert(sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]) == AIO_STRID_CDC + 1,
-               "CDC 字符串必须位于索引 AIO_STRID_CDC（当前是数组最后一个）");
-#endif
+/* 把 UAC1_AUDIO_DESCRIPTOR 的 _stridx 与字符串数组钉在一起：在数组中间插一条新
+ * 字符串却忘了改 AIO_STRID_AUDIO，host 侧只表现为「声卡名字不对」，几乎不会有人
+ * 去查描述符。 */
+_Static_assert(sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]) == AIO_STRID_AUDIO + 1,
+               "音频字符串必须位于索引 AIO_STRID_AUDIO（当前是数组最后一个）");

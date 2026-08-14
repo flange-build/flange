@@ -9,6 +9,7 @@
 #include "board_power.h"
 #include "kbd_i2c.h"
 #include "touch_hid.h"
+#include "codec_audio.h"
 #include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
 #if CONFIG_TINYUSB_CDC_ENABLED
 /* ⚠️ 这两个头必须在 #if 内包含：tinyusb_cdc_acm.h 在 CDC 未开启时会 #error。 */
@@ -120,6 +121,17 @@ void app_main(void)
     err = touch_start();
     if (err != ESP_OK)
         ESP_LOGW(TAG, "触摸不可用(%s)，继续启动", esp_err_to_name(err));
+
+    /*
+     * UAC1 全双工音频。与键盘/触摸同一处置原则：失败只降级、不拦启动。
+     * 描述符是静态的，所以即便这里失败，host 侧照样枚举出声卡，只是收发到静音 ——
+     * 而显示(GUD)才是这个产品的核心形态，不该被一颗 codec 拖垮。
+     *
+     * 必须排在 tinyusb_driver_install() 之后：数据泵任务一起来就会调 tud_audio_*。
+     */
+    err = codec_audio_start();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "音频不可用(%s)，继续启动", esp_err_to_name(err));
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }
