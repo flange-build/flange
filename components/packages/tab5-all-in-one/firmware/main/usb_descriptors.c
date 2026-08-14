@@ -148,13 +148,17 @@ static const uint8_t aio_hid_report_desc[] = {
  * IAD），所以这套布局要自己拼。底稿取自 cardputer-all-in-one/firmware/main/
  * usb_descriptors.c，那边这套「1×AC + 播放 AS + 录音 AS」已实机跑通。
  *
- * 拓扑（terminal ID 是本文件内自洽的编号，被 baSourceID 交叉引用）：
- *   播放：ID1 输入端子(USB Streaming) → ID2 输出端子(Speaker)
+ * 拓扑（terminal/unit ID 是本文件内自洽的编号，被 bSourceID 交叉引用）：
+ *   播放：ID1 输入端子(USB Streaming) → ID5 Feature Unit(音量/静音) → ID2 输出端子(Speaker)
  *   录音：ID3 输入端子(Microphone)    → ID4 输出端子(USB Streaming)
  *
- * 不放 Feature Unit（音量/静音）：host 侧软件音量已经够用，而 Feature Unit 会引入
- * 一组必须正确应答的 GET/SET_CUR 控制请求 —— 应答错了 snd-usb-audio 在 probe 阶段
- * 就报错，属于典型的「加了功能反而不能用」。要做也该等基础通路稳了再说。
+ * 播放侧的 Feature Unit 让 host 的音量键与 alsamixer 直接调 **ES8388 的硬件音量**
+ * （落点见 codec_audio.c 的 tud_audio_*_req_entity_cb → esp_codec_dev_set_out_vol），
+ * 而不是让 host 在送出前先把 PCM 乘一遍 —— 后者在 16 bit / 16 kHz 上每衰减 6 dB
+ * 就丢掉 1 bit 有效位，是真声卡与「USB 喇叭」的分界线。
+ *
+ * **录音侧刻意不放 Feature Unit**：录音增益本阶段不做（ES7210 的增益在
+ * es7210_init() 里一次设定），少一个必须正确应答的实体就少一处静默 STALL 的机会。
  *
  * ⚠️ 两条 ISO 端点的 **bSynchAddress 都填 0**（宏的最后一个参数），即没有显式
  * 反馈端点 —— 反馈端点会占掉第 4 条 IN(0x84)，把 UVC 顶掉，见 usb_descriptors.h
@@ -174,11 +178,16 @@ static const uint8_t aio_hid_report_desc[] = {
                               TUD_AUDIO10_DESC_STD_AS_ISO_EP_LEN + \
                               TUD_AUDIO10_DESC_CS_AS_ISO_EP_LEN)
 
+/* AC 接口下属的全部单元/端子的总字节数。CS_AC 头的 wTotalLength 与
+ * UAC1_AUDIO_DESC_LEN 都要用它，写成一处免得两边漂。 */
+#define UAC1_AC_UNITS_LEN (2 * (TUD_AUDIO10_DESC_INPUT_TERM_LEN + \
+                                TUD_AUDIO10_DESC_OUTPUT_TERM_LEN) + \
+                           TUD_AUDIO10_DESC_FEATURE_UNIT_LEN(UAC_CHANNEL_COUNT))
+
 #define UAC1_AUDIO_DESC_LEN (8 /* IAD */ + \
                              TUD_AUDIO10_DESC_STD_AC_LEN + \
                              TUD_AUDIO10_DESC_CS_AC_LEN(2) + \
-                             2 * (TUD_AUDIO10_DESC_INPUT_TERM_LEN + \
-                                  TUD_AUDIO10_DESC_OUTPUT_TERM_LEN) + \
+                             UAC1_AC_UNITS_LEN + \
                              2 * UAC1_STREAM_DESC_LEN)
 
 #define UAC1_AUDIO_DESCRIPTOR(_ac_itf, _spk_as, _mic_as, _stridx, _epout, _epin) \
@@ -186,15 +195,33 @@ static const uint8_t aio_hid_report_desc[] = {
      * 设备描述符已经是 Misc/IAD(239/2/1)，不必为它再改。 */ \
     8, TUSB_DESC_INTERFACE_ASSOCIATION, _ac_itf, 3, TUSB_CLASS_AUDIO, 0, 0, _stridx, \
     TUD_AUDIO10_DESC_STD_AC(_ac_itf, 0 /* 无中断端点：省一条 IN */, _stridx), \
-    /* 第二个参数是「下属单元/端子描述符的总字节数」，宏自己会把 AC 头的长度加进去 */ \
+    /* 第二个参数是「下属单元/端子描述符的总字节数」，宏自己会把 AC 头的长度加进去。
+     * ⚠️ 加减实体时这里必须跟着改：wTotalLength 少算一条，host 就在解析到一半时
+     * 停下，后面的实体（比如 Feature Unit）**静默消失**，表现为「声卡在但没有音量」。 */ \
     TUD_AUDIO10_DESC_CS_AC(0x0100 /* bcdADC = UAC 1.0 */, \
-                           2 * (TUD_AUDIO10_DESC_INPUT_TERM_LEN + \
-                                TUD_AUDIO10_DESC_OUTPUT_TERM_LEN), \
+                           UAC1_AC_UNITS_LEN, \
                            _spk_as, _mic_as /* baInterfaceNr[]，必须指向两个 AS 接口 */), \
-    /* 播放链：USB 流 → 喇叭 */ \
+    /* 播放链：USB 流 → Feature Unit(音量/静音) → 喇叭 */ \
     TUD_AUDIO10_DESC_INPUT_TERM(1, AUDIO_TERM_TYPE_USB_STREAMING, 0, \
                                 UAC_CHANNEL_COUNT, AUDIO10_CHANNEL_CONFIG_NON_PREDEFINED, 0, 0), \
-    TUD_AUDIO10_DESC_OUTPUT_TERM(2, AUDIO_TERM_TYPE_OUT_GENERIC_SPEAKER, 0, 1 /* ← ID1 */, 0), \
+    /* \
+     * Feature Unit：Mute + Volume 两个控制，**只声明在 master 通道**上 \
+     * （bmaControls[0]），逐通道的 bmaControls[1] 全 0。 \
+     * \
+     * 为什么不两边都声明：Linux 的 snd-usb-audio 对 master 位与逐通道位**各建一个 \
+     * mixer 控件**（sound/usb/mixer.c 的 parse_audio_feature_unit），两个控件名字 \
+     * 一样，第二个会被自动加后缀变成 "PCM Playback Volume,1" —— alsamixer 里出现 \
+     * 两根一模一样的滑块，用户不知道该拖哪根。本设备是单声道，master 就够表达。 \
+     * \
+     * ⚠️ 变参的个数必须是「通道数 + 1」（master + 每通道各一个 16 位位图）， \
+     * 宏正是按变参个数反算 bLength 的。改 UAC_CHANNEL_COUNT 却忘了增删这里的位图， \
+     * 会被文件末尾那条 sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN 拦住。 \
+     */ \
+    TUD_AUDIO10_DESC_FEATURE_UNIT(UAC_FU_ID_SPEAKER, 1 /* ← ID1 */, 0 /* iFeature */, \
+                                  AUDIO10_FU_CONTROL_BM_MUTE | AUDIO10_FU_CONTROL_BM_VOLUME, \
+                                  0 /* 通道 1：不单独声明，见上 */), \
+    TUD_AUDIO10_DESC_OUTPUT_TERM(2, AUDIO_TERM_TYPE_OUT_GENERIC_SPEAKER, 0, \
+                                 UAC_FU_ID_SPEAKER /* ← ID5，不再直连 ID1 */, 0), \
     /* 录音链：麦克风 → USB 流 */ \
     TUD_AUDIO10_DESC_INPUT_TERM(3, AUDIO_TERM_TYPE_IN_GENERIC_MIC, 0, \
                                 UAC_CHANNEL_COUNT, AUDIO10_CHANNEL_CONFIG_NON_PREDEFINED, 0, 0), \

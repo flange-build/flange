@@ -1,7 +1,7 @@
 idf_component_register(SRCS "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c"
                             "display_dsi.c" "standby_screen.c" "board_power.c"
                             "kbd_i2c.c" "kbd_translate.c" "touch_hid.c" "touch_map.c"
-                            "audio_frame.c" "codec_audio.c"
+                            "audio_frame.c" "codec_audio.c" "uac_volume.c"
                        INCLUDE_DIRS "." "tinyusb_config"
                        PRIV_REQUIRES esp_driver_i2c esp_driver_gpio esp_driver_i2s esp_lcd esp_mm esp_driver_ppa)
 

@@ -35,6 +35,13 @@ EXPECT = dict(
     ep_audio_out=0x02, ep_audio_in=0x83,
     sample_rate=16000, channels=1, subframe=2, bits=16,
     ep_audio_pkt=36,
+    # 播放链上的 Feature Unit（音量 + 静音）。ID 取 5 而非插进 1..4 中间，
+    # 见 main/usb_descriptors.h 的 UAC_FU_ID_SPEAKER。
+    fu_id=5,
+    # bmaControls[0]（master 通道）= MUTE(bit0) | VOLUME(bit1)。
+    # 逐通道的 bmaControls[1] 必须是 0：两边都声明会让 snd-usb-audio 建出两个
+    # 同名控件（第二个被自动改名成 "...,1"），alsamixer 里出现两根一样的滑块。
+    fu_master_bm=0x0003,
     # 排障档 CONFIG_AIO_DEBUG_CDC：让出 GUD 的 IN 端点、借用 UVC 预留的 0x84，
     # 换一条 USB CDC 日志串口。两个接口**追加在音频之后**，vendor/HID/音频的编号全不动。
     itf_cdc=5,
@@ -52,6 +59,7 @@ DESC_CS_ENDPOINT = 0x25
 
 # UAC1 AudioControl 的 CS 子类型
 AC_HEADER, AC_INPUT_TERMINAL, AC_OUTPUT_TERMINAL = 0x01, 0x02, 0x03
+AC_FEATURE_UNIT = 0x06
 # UAC1 AudioStreaming 的 CS 子类型
 AS_GENERAL, AS_FORMAT_TYPE = 0x01, 0x02
 
@@ -259,20 +267,49 @@ def main():
     ba = list(ac_hdr[8:8 + n_coll])
     check(ba == [EXPECT['itf_as_out'], EXPECT['itf_as_in']],
           f'baInterfaceNr 应为 {[EXPECT["itf_as_out"], EXPECT["itf_as_in"]]}，实际 {ba}')
-    # AC 头的 wTotalLength 必须覆盖它自己 + 全部终端/单元描述符
-    units = [d for d in csi if d[2] in (AC_INPUT_TERMINAL, AC_OUTPUT_TERMINAL)]
+    # AC 头的 wTotalLength 必须覆盖它自己 + 全部终端/单元描述符。
+    # ⚠️ 新增实体（如 Feature Unit）时这个集合要跟着扩：少算一条的表现是 host 解析
+    #    到一半就停，后面的实体静默消失（「声卡在但没有音量」）。
+    units = [d for d in csi
+             if d[2] in (AC_INPUT_TERMINAL, AC_OUTPUT_TERMINAL, AC_FEATURE_UNIT)]
     ac_total = u16(ac_hdr, 5)
     check(ac_total == ac_hdr[0] + sum(d[0] for d in units),
-          f'AC 头的 wTotalLength={ac_total}，与「AC 头 + 全部终端」的实际长度不符')
+          f'AC 头的 wTotalLength={ac_total}，与「AC 头 + 全部终端/单元」的实际长度不符')
 
-    # 终端 ID 链：ID1(USB流) → ID2(喇叭)，ID3(麦克风) → ID4(USB流)
+    # 终端 ID 链：ID1(USB流) → ID5(Feature Unit) → ID2(喇叭)，ID3(麦克风) → ID4(USB流)
     in_terms = {d[3]: d for d in csi if d[2] == AC_INPUT_TERMINAL}
     out_terms = {d[3]: d for d in csi if d[2] == AC_OUTPUT_TERMINAL}
     check(sorted(in_terms) == [1, 3] and sorted(out_terms) == [2, 4],
           f'终端 ID 应为输入 {{1,3}} / 输出 {{2,4}}，实际 输入{sorted(in_terms)} 输出{sorted(out_terms)}')
     check(u16(in_terms[1], 4) == 0x0101, 'ID1 应是 USB Streaming(0x0101) 输入端子')
     check(u16(out_terms[2], 4) == 0x0301, 'ID2 应是 Generic Speaker(0x0301) 输出端子')
-    check(out_terms[2][7] == 1, 'ID2 的 bSourceID 必须指向 ID1（播放链断了）')
+
+    # ── 5b) 播放侧 Feature Unit：音量/静音落到 ES8388 硬件的入口 ──
+    # 描述符错一位的表现是「alsamixer 里没有这个通道」或「有滑块但拖了不出声」，
+    # 而 host 侧不会报任何错 —— 这正是本脚本存在的理由。
+    fus = [d for d in csi if d[2] == AC_FEATURE_UNIT]
+    check(len(fus) == 1,
+          f'播放链上应恰有 1 个 Feature Unit（录音侧刻意不放），实际 {len(fus)}')
+    fu = fus[0]
+    check(fu[3] == EXPECT['fu_id'],
+          f'Feature Unit 的 bUnitID={fu[3]}，应为 {EXPECT["fu_id"]}'
+          '（codec_audio.c 的控制请求回调按这个数寻址）')
+    check(fu[4] == 1, f'Feature Unit 的 bSourceID={fu[4]}，必须指向 ID1(USB 流输入端子)')
+    check(fu[5] == 2, f'Feature Unit 的 bControlSize={fu[5]}，应为 2（每通道 16 位位图）')
+    # 布局：[6:8]bmaControls[0] master，[8:10]bmaControls[1] 通道1，[10]iFeature
+    check(fu[0] == 7 + 2 * (EXPECT['channels'] + 1),
+          f'Feature Unit 的 bLength={fu[0]}，与「master + {EXPECT["channels"]} 个通道」'
+          '的位图个数对不上')
+    check(u16(fu, 6) == EXPECT['fu_master_bm'],
+          f'Feature Unit 的 master 位图=0x{u16(fu, 6):04x}，'
+          f'应为 0x{EXPECT["fu_master_bm"]:04x}（Mute + Volume）')
+    check(u16(fu, 8) == 0,
+          f'Feature Unit 的通道 1 位图=0x{u16(fu, 8):04x}，必须为 0 —— '
+          '与 master 重复声明会让 snd-usb-audio 建出两根同名滑块')
+    check(out_terms[2][7] == EXPECT['fu_id'],
+          f'ID2 的 bSourceID={out_terms[2][7]}，应指向 Feature Unit '
+          f'ID{EXPECT["fu_id"]}（音量被绕过了，或播放链断了）')
+
     check(u16(in_terms[3], 4) == 0x0201, 'ID3 应是 Generic Microphone(0x0201) 输入端子')
     check(u16(out_terms[4], 4) == 0x0101, 'ID4 应是 USB Streaming(0x0101) 输出端子')
     check(out_terms[4][7] == 3, 'ID4 的 bSourceID 必须指向 ID3（录音链断了）')
@@ -364,7 +401,8 @@ def main():
     print(f'\nOK — GUD + HID + UAC1 音频：'
           f'{len(cfg)} 字节 / {n_itf} 接口 / '
           f'{len(iso_eps)} 条 ISO 端点 / {len(in_eps)} 条 IN 端点 '
-          f'({", ".join(f"0x{a:02X}" for a in in_eps)}) / 无反馈端点')
+          f'({", ".join(f"0x{a:02X}" for a in in_eps)}) / 无反馈端点 / '
+          f'播放链 ID1→ID{EXPECT["fu_id"]}(FU:Mute+Volume)→ID2')
 
 
 main()

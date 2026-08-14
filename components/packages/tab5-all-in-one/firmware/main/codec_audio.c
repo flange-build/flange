@@ -18,6 +18,7 @@
 #include "audio_frame.h"
 #include "board_power.h"
 #include "tab5_pins.h"
+#include "uac_volume.h"
 #include "usb_descriptors.h"
 
 static const char *TAG = "codec_audio";
@@ -61,6 +62,19 @@ static esp_codec_dev_handle_t s_mic_dev;
  */
 static volatile bool s_spk_on;
 static volatile bool s_mic_on;
+
+/*
+ * ── 播放侧 Feature Unit（UAC_FU_ID_SPEAKER）的当前值 ──────────────
+ *
+ * s_vol_q8 存的是 **host 送来的原值**（1/256 dB，有符号），不是换算后的百分比：
+ * GET_CUR 要如实回报 host 自己设过的那个数。若回报换算再反换算的结果，
+ * 拖动条会在四舍五入的边界上「跳回去」—— 用户看到的是滑块自己弹一格。
+ *
+ * 只在 USB 控制回调里写、在同一个回调里读，全部发生在 TinyUSB 任务这一个上下文，
+ * 不需要 volatile 或临界区（与上面两个跨任务的 s_*_on 不同）。
+ */
+static int16_t s_vol_q8 = UAC_VOL_DEFAULT_Q8;
+static bool s_vol_muted;
 
 /*
  * ── 开机自检快照 ───────────────────────────────────────────────────
@@ -266,9 +280,15 @@ static esp_err_t es8388_init(void)
     s_open_spk = esp_codec_dev_open(s_spk_dev, &fs);
     ESP_RETURN_ON_FALSE(s_open_spk == ESP_CODEC_DEV_OK, ESP_FAIL, TAG, "es8388 open");
 
-    /* 开机音量取 70%：满量程直推板载小喇叭在中低频容易破音，而破音很容易被误判
-     * 成时钟配错。host 侧还会再叠一层软件音量（本阶段不声明 Feature Unit）。 */
-    esp_codec_dev_set_out_vol(s_spk_dev, 70);
+    /*
+     * 开机音量 = UAC_VOL_DEFAULT_Q8（−15 dB = 70%）：满量程直推板载小喇叭在中低频
+     * 容易破音，而破音很容易被误判成时钟配错。
+     *
+     * ⚠️ 这里**必须**经 uac_volume_q8_to_percent() 换算，而不是直接写 70 ——
+     * s_vol_q8 的初值与硬件实际音量必须是同一个数，否则 host 枚举后第一次 GET_CUR
+     * 读到的音量是假的：滑块显示 70%，实际却是别的值，之后随便动一下才「对上」。
+     */
+    esp_codec_dev_set_out_vol(s_spk_dev, uac_volume_q8_to_percent(s_vol_q8));
     return ESP_OK;
 }
 
@@ -735,4 +755,116 @@ bool tud_audio_set_req_ep_cb(uint8_t rhport, tusb_control_request_t const *reque
                           ((uint32_t)buffer[1] << 8) |
                           ((uint32_t)buffer[2] << 16);
     return rate == UAC_SAMPLE_RATE;
+}
+
+/*
+ * ── 播放音量 / 静音：Feature Unit(UAC_FU_ID_SPEAKER) 的实体控制请求 ──────
+ *
+ * host 用「接口收件人 + wIndex 高字节 = 实体 ID」寻址这里；TinyUSB 先按 AC 描述符
+ * 确认该实体存在（audio_device.c 的 audiod_verify_entity_exists），再转到这两个回调。
+ * 返回 false ⇒ STALL ⇒ host 认为该控制不可用。
+ *
+ * 请求编码（UAC1 §5.2.1）：
+ *   wValue 高字节 = 控制选择子（MUTE=1 / VOLUME=2）
+ *   wValue 低字节 = 通道号，0 = master。描述符里只在 master 上声明了控制，
+ *                   所以**只应答 0**，其余一律 STALL —— 应答一个没声明过的通道
+ *                   等于对 host 撒谎，而症状会推迟到某个 host 真去读它时才出现。
+ *   wIndex 高字节 = 实体 ID，低字节 = AC 接口号
+ */
+static void apply_out_volume(void)
+{
+    /* ES8388 没起来时只更新软件状态：GET_CUR 仍要能如实回报 host 设过的值，
+     * 而不是 STALL —— 「声卡没有音量控制」比「音量控制没作用」更难排查。 */
+    if (s_spk_dev == NULL)
+        return;
+
+    /*
+     * ⓘ 这两句是 I2C 写，跑在 TinyUSB 任务上下文里（控制传输的数据阶段回调），
+     * 每次约几百微秒。音量变化是人手操作、频率极低，为它引一套「记下来等数据泵
+     * 去落盘」的异步机制不值当；但**不要**把同样的写法搬到高频路径上。
+     *
+     * 顺序：先音量后静音。反过来在「解除静音的同时改音量」这一步会先以旧音量
+     * 出声再纠正，听感是一下爆音。
+     */
+    esp_codec_dev_set_out_vol(s_spk_dev, uac_volume_q8_to_percent(s_vol_q8));
+    esp_codec_dev_set_out_mute(s_spk_dev, s_vol_muted);
+}
+
+bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const *request)
+{
+    /* 应答缓冲是局部的：tud_audio_buffer_and_schedule_control_xfer() 会先把它
+     * memcpy 进 TinyUSB 自己的控制缓冲再排传输，不持有本指针。 */
+    uint8_t buf[2];
+    int16_t value;
+
+    if (tu_u16_high(request->wIndex) != UAC_FU_ID_SPEAKER ||
+        tu_u16_low(request->wValue) != 0 /* master 通道 */)
+        return false;
+
+    switch (tu_u16_high(request->wValue)) {
+    case AUDIO10_FU_CTRL_MUTE:
+        /* Mute 是 1 字节布尔，只有 CUR 属性（没有 MIN/MAX/RES 可言）。 */
+        if (request->bRequest != AUDIO10_CS_REQ_GET_CUR)
+            return false;
+        buf[0] = s_vol_muted ? 1 : 0;
+        return tud_audio_buffer_and_schedule_control_xfer(rhport, request, buf, 1);
+
+    case AUDIO10_FU_CTRL_VOLUME:
+        /*
+         * ⚠️ MIN/MAX/RES 三条**都必须应答**，不是可选项：Linux 的 snd-usb-audio 在
+         * probe 时就把它们读齐来建 mixer 控件（get_min_max_with_quirks()），
+         * 任何一条 STALL 都会让整个音量控件被丢掉 —— 表现是「alsamixer 里根本
+         * 没有这个通道」，而不是「音量不好用」。
+         * 取值与理由见 uac_volume.h。
+         */
+        switch (request->bRequest) {
+        case AUDIO10_CS_REQ_GET_CUR: value = s_vol_q8; break;
+        case AUDIO10_CS_REQ_GET_MIN: value = UAC_VOL_MIN_Q8; break;
+        case AUDIO10_CS_REQ_GET_MAX: value = UAC_VOL_MAX_Q8; break;
+        case AUDIO10_CS_REQ_GET_RES: value = UAC_VOL_RES_Q8; break;
+        default: return false;
+        }
+        uac_volume_encode(value, buf);
+        return tud_audio_buffer_and_schedule_control_xfer(rhport, request, buf, 2);
+
+    default:
+        /* Bass / Treble / AGC 等一概没声明，请求到了就是 host 在乱试。 */
+        return false;
+    }
+}
+
+bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *request,
+                                 uint8_t *buffer)
+{
+    (void)rhport;
+
+    /* 只有 SET_CUR 有意义：MIN/MAX/RES 是设备的固有能力，不接受 host 改写。 */
+    if (tu_u16_high(request->wIndex) != UAC_FU_ID_SPEAKER ||
+        tu_u16_low(request->wValue) != 0 ||
+        request->bRequest != AUDIO10_CS_REQ_SET_CUR)
+        return false;
+
+    switch (tu_u16_high(request->wValue)) {
+    case AUDIO10_FU_CTRL_MUTE:
+        if (request->wLength != 1)
+            return false;
+        s_vol_muted = (buffer[0] != 0);
+        apply_out_volume();
+        return true;
+
+    case AUDIO10_FU_CTRL_VOLUME:
+        if (request->wLength != 2)
+            return false;
+        /*
+         * 原值照存（见 s_vol_q8 的声明），换算只发生在写硬件的那一步。
+         * 越界与 0x8000（−∞ dB）的处理全在 uac_volume.c 里，有宿主机测试守着 ——
+         * 这里不再自己判一遍，免得两处规则分叉。
+         */
+        s_vol_q8 = uac_volume_decode(buffer);
+        apply_out_volume();
+        return true;
+
+    default:
+        return false;
+    }
 }

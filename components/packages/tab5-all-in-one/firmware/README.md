@@ -6,7 +6,8 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
 720×1280 MIPI-DSI 面板。同一个复合设备上还带 **HID 键盘**（Tab5 Keyboard）与
 **HID 多点触摸**（GT911，与键盘共用同一个 HID 接口、靠 Report ID 区分）与
 **UAC1 全双工音频**（ES8388 出喇叭 / ES7210 双麦录音，16 kHz 单声道，
-✅ **播放与录音均已实机验证**，见下文）；后续阶段追加 UVC 摄像头。
+带**播放音量/静音的硬件控制**，✅ **播放与录音均已实机验证**，见下文）；
+后续阶段追加 UVC 摄像头。
 
 > ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
 
@@ -24,7 +25,9 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
     一个 AudioControl + 两个 AudioStreaming（播放 OUT / 录音 IN），
     由 IAD 成组，host 侧走 mainline `snd-usb-audio`，零自定义驱动。
     **16 kHz / 单声道 / S16_LE，两个方向同参数**（全双工的 I2S TX/RX 共用 BCLK 与 WS）。
-    播放经 ES8388 出板载喇叭，录音取 ES7210 的两只麦混成单声道。详见下文「UAC1 全双工音频」。
+    播放经 ES8388 出板载喇叭，录音取 ES7210 的两只麦混成单声道。
+    播放链上带一个 **Feature Unit（Mute + Volume）**，主机的音量键与 `alsamixer`
+    直接调 **ES8388 的硬件音量**（不是主机软件音量）。详见下文「UAC1 全双工音频」。
   - 设备描述符为 Misc/IAD 复合设备，为后续 UVC 预留。
 - 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）；
   面板 init 序列与 DSI/DPI 参数复刻自 esp-bsp `bsp/m5stack_tab5`（Apache-2.0）；
@@ -114,7 +117,7 @@ idf.py build flash monitor
 （`usb_descriptors.{c,h}` 的接口/端点/描述符，`app_main.c` 的 `tinyusb_cdcacm_init()` +
 `tinyusb_console_init()` + 主循环里每 10 秒复读一次的 `codec_audio_report()`）。
 `_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN)` 在两档下都成立：
-**默认档（GUD + HID + 音频）230 字节 / 5 接口，调试档 289 字节 / 7 接口**。
+**默认档（GUD + HID + 音频）241 字节 / 5 接口，调试档 300 字节 / 7 接口**。
 
 也可以直接在 `sdkconfig.defaults` 末尾把 `#CONFIG_AIO_DEBUG_CDC=y` 那一行的注释取消，
 再 `rm -f sdkconfig && idf.py build`（`sdkconfig.defaults` 只在生成 `sdkconfig` 时读一次）。
@@ -443,9 +446,12 @@ GUD 打通的证据；若开机就黑屏、连待机画面都没有，则可据�
 
 | 项 | 值 |
 |---|---|
-| Flash | 352,670 字节（约 344 KB），占 4 MB factory 分区 **9%** |
-| 内部 DIRAM | 95,598 字节（**16.6%**），剩余约 470 KB |
-| 镜像总大小 | 438,108 字节（`.bin` 另有 padding） |
+| Flash | 356,466 字节（约 348 KB），占 4 MB factory 分区 **9%** |
+| 内部 DIRAM | 95,694 字节（**16.6%**），剩余约 470 KB |
+| 镜像总大小 | 442,336 字节（`.bin` 另有 padding） |
+
+播放音量控制（Feature Unit + 换算 + 两个控制请求回调）的增量：**Flash +502 / DIRAM +4**
+（相对不带音量控制的 355,964 / 95,690）。DIRAM 那 4 字节就是 `s_vol_q8` 与 `s_vol_muted`。
 
 UAC1 音频的增量：**Flash +77,608 / DIRAM +4,370**（相对不带音频的 275,062 / 91,228）。
 Flash 那一大笔几乎全在三个新链接进来的库上，与我们自己的代码无关：
@@ -816,6 +822,10 @@ ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multi
 音频因此改为**无条件编译**，所有排障旋钮已删除（见下面「排障经验」）。
 
 > ⚠️ **未验证的部分，别写成已验证**：
+> - **播放音量控制（Feature Unit）尚未上板**：描述符已过宿主机闸门
+>   （`check_usb_desc.py`）、换算已过宿主机测试（`test_uac_volume.c`），
+>   但「alsamixer 里出得来、拖了真的改 ES8388 寄存器」还没有实机证据。
+>   验法见下文「Host 侧验证 → 播放音量控制」；
 > - 全双工**同时**收发的长时间稳定性（实测是分别验证播放与录音）；
 > - 与 GUD / HID 并跑时对帧率的影响（音频每毫秒一次 DMA + 一次 USB ISO 传输）；
 > - 音质与时钟漂移 —— 本设备**没有反馈端点**（理由见下文），长时间连续播放是否
@@ -1276,6 +1286,70 @@ i2s_full_duplex_init()  →  esp8388_init()（含 esp_codec_dev_open：先静音
 >
 > 关流时必须**反序**：先 `board_speaker_enable(false)` 再 `esp_codec_dev_close()`。
 
+### 播放音量控制：Feature Unit → ES8388 硬件音量
+
+主机的音量键与 `alsamixer` 直接调 **ES8388 的 DAC 音量寄存器**，不是让主机在送出前
+把 PCM 乘一遍。这不是锦上添花：16 bit / 16 kHz 上主机每软件衰减 6 dB 就丢掉 1 bit
+有效位，衰到常用的 −30 dB 时只剩 11 bit —— 这正是「真声卡」与「USB 喇叭」的分界线。
+
+AudioControl 的播放链因此从 `ID1(USB 流) → ID2(喇叭)` 改成
+**`ID1(USB 流) → ID5(Feature Unit) → ID2(喇叭)`**，Feature Unit 声明 **Mute + Volume**
+两个控制、**只在 master 通道上**（`bmaControls[0] = 0x0003`，逐通道的 `bmaControls[1] = 0`）。
+两边都声明的话，`snd-usb-audio` 会**各建一个同名 mixer 控件**，第二个被自动改名成
+`PCM Playback Volume,1` —— alsamixer 里出现两根一模一样的滑块。本设备是单声道，
+master 一根就够。**录音侧刻意不放 Feature Unit**（录音增益本阶段不做）。
+
+改动落点：`usb_descriptors.c` 的 `UAC1_AUDIO_DESCRIPTOR`（`ID2` 的 `bSourceID` 1→5、
+AC 头的 `wTotalLength` 52→63、配置描述符 230→241 字节），
+`codec_audio.c` 的 `tud_audio_get_req_entity_cb` / `tud_audio_set_req_entity_cb`。
+Unit ID 取 **5** 而非插进 1..4 中间：录音侧那条 AS 接口的 `bTerminalLink` 指着 ID4，
+重编号会连带动到与本次改动无关的录音链；UAC1 只要求实体 ID 在功能内唯一。
+
+> #### ⚠️ 本功能唯一真正难的地方：两套音量刻度的换算
+>
+> | | 单位 | 类型 | 特殊值 |
+> |---|---|---|---|
+> | UAC1（host 侧） | **1/256 dB** | **有符号 16 位**，线上小端 | `0x8000` = −∞ dB（静音） |
+> | `esp_codec_dev_set_out_vol()` | **0..100 百分比** | 无符号整数 | `0` 会落到 **−96 dB** |
+>
+> `esp_codec_dev` 的默认曲线是 `vol 0..100 → −50..0 dB`（`esp_codec_dev.c` 的
+> `_get_vol_db()`），但 `vol == 0` 有一条**单独的 −96 dB 分支**，不是曲线端点。
+>
+> 换算写错的表现极具误导性 ——「音量条能拖但声音不跟着变」「拖到一半突然静音」
+> 「方向反了」，**全都长得像 codec 或 I2C 出了问题**，而这块板现场没有串口。
+> 所以换算被抽成零依赖纯函数 `main/uac_volume.{c,h}`，配宿主机测试
+> `test/test_uac_volume.c`（32 用例：端点双向往返、全量百分比往返、逐 q8 值扫单调性、
+> `0x8000` 特殊值、越界钳位、以及 **`−50 dB = −12800 = 0xCE00` 这类负值的字节编码**）。
+>
+> **MIN / MAX / RES 的取值理由**：
+>
+> | | 值 | 理由 |
+> |---|---|---|
+> | MIN | **−50 dB**（`0xCE00`） | `esp_codec_dev` 默认曲线的**下端点**。ES8388 寄存器本身能到 −96 dB，但我们只能经百分比这个入口去够它 —— 声明得比曲线宽，下半段会全部钳到 `vol=0`，症状正是「拖到一半突然静音」 |
+> | MAX | **0 dB** | 曲线上端点 = 满量程。>0 dB 是数字增益，只会削顶 |
+> | RES | **0.5 dB**（`128`） | 真实步进，两侧正好对上：百分比只有 101 档、跨 50 dB ⇒ 每档 0.5 dB，而 ES8388 的 `DACCONTROL4/5` 步进也恰是 0.5 dB。声明 1 dB 白丢一半分辨率；声明更细则是撒谎，host 送来的中间值会被静默吞掉 |
+>
+> 于是本换算与 `esp_codec_dev` 默认曲线**逐点重合**（`q8 = −12800 + 128 × percent`），
+> host 看到的 dB 就是 codec 真正被设成的 dB，没有第二层隐藏映射。
+> 音量条拖到底（0%）时额外落进 `esp_codec_dev` 的 −96 dB 分支，即**底端就是静音** ——
+> 这是有意接受的，比停在「还能听见」更符合预期，且 Mute 是另一条独立控制。
+
+几个不那么显眼但会出事的点：
+
+- **`GET_MIN` / `GET_MAX` / `GET_RES` 三条都必须应答**，不是可选项：`snd-usb-audio`
+  在 probe 时就把它们读齐来建 mixer 控件，任何一条 STALL 都会让**整个音量控件被丢掉**
+  —— 表现是「alsamixer 里根本没有这个通道」，而不是「音量不好用」。
+- **`GET_CUR` 回报 host 送来的原值**（`s_vol_q8` 存的就是原值），不是换算再反换算的结果：
+  后者会在四舍五入边界上让滑块自己弹一格。
+- **开机音量经同一个换算算出来**（`UAC_VOL_DEFAULT_Q8` = −15 dB = 70%），不是硬写 70：
+  否则 host 枚举后第一次 `GET_CUR` 读到的音量与硬件实际状态对不上，
+  滑块显示一个值、实际是另一个值，随便动一下才「对上」。
+- **只应答 master 通道（`wValue` 低字节 = 0）**，其余 STALL —— 应答一个描述符里没声明过
+  的通道等于对 host 撒谎，症状会推迟到某个 host 真去读它时才出现。
+- 两个回调里的 `esp_codec_dev_set_out_vol/mute()` 是 **I2C 写，跑在 TinyUSB 任务上下文**
+  （控制传输数据阶段），每次几百微秒。音量是人手操作、频率极低，不值当为它引一套
+  异步落盘机制；但**别把同样的写法搬到高频路径上**。
+
 ### 数据泵
 
 一个任务、每 1 ms 一转，同时搬两个方向：
@@ -1319,6 +1393,8 @@ Cardputer 上那套 `AUDIO_MODE_SPEAKER/MICROPHONE` 三态仲裁**不移植** �
 cd firmware/test
 cc -std=c11 -Wall -Wextra -Werror -I../main test_audio_frame.c ../main/audio_frame.c \
    -o /tmp/ta && /tmp/ta                                   # → OK (13 cases)
+cc -std=c11 -Wall -Wextra -Werror -I../main test_uac_volume.c ../main/uac_volume.c \
+   -o /tmp/tv && /tmp/tv                                   # → OK (32 cases)
 
 cd .. && . $HOME/esp/esp-idf/export.sh && idf.py build
 python3 test/check_usb_desc.py build/tab5_aio.elf          # → 描述符树 + OK
@@ -1333,7 +1409,9 @@ python3 test/check_usb_desc.py build/tab5_aio.elf          # → 描述符树 + 
 
 断言覆盖：VID/PID 与 Misc/IAD 设备类、`wTotalLength` 与 `bNumInterfaces` 自洽、
 IF0 仍是 vendor 类 / IF1 仍是 HID 类 / 三条老端点都还在、IAD 从 IF2 起覆盖 3 个接口、
-AC 头的 `bcdADC`+`wTotalLength`+`baInterfaceNr`、终端 ID 链（1→2 播放 / 3→4 录音）、
+AC 头的 `bcdADC`+`wTotalLength`+`baInterfaceNr`、终端 ID 链（1→5→2 播放 / 3→4 录音）、
+播放侧 Feature Unit 的 `bUnitID`/`bSourceID`/`bControlSize`/`bLength` 与两个
+`bmaControls`（master 必须是 Mute+Volume，逐通道那个必须为 0）、
 两条 AS 各有 alt0 零带宽 + alt1 带端点、`bTerminalLink` 指向正确的终端、
 两条 ISO 端点的包大小/间隔/sync 类型、**`bSynchAddress` 全为 0**、
 **sync 字段全非 0**、IN 端点 ≤ 4 条且 `0x84` 未被占用、两份 Type I 格式描述符与预期参数一致。
@@ -1364,6 +1442,43 @@ sox /tmp/tab5.wav -n stat               # 安静时 RMS 低、说话时高；不
 
 # 全双工：两个终端同时跑上面的 speaker-test 与 arecord，两边都要正常
 ```
+
+#### 播放音量控制（Feature Unit）
+
+```bash
+# 1) 控件存在：应出现 "PCM Playback Volume"（滑块）与 "PCM Playback Switch"（开关）
+amixer -c <N> scontrols
+amixer -c <N> sget PCM
+#    期望：Limits: Playback 0 - 100 / dB range 从 -50.00dB 到 0.00dB / 有 [on|off]
+
+# 2) 读写：一边放 speaker-test 一边改，声压必须**当场**跟着变
+amixer -c <N> sset PCM 100%          # 满量程
+amixer -c <N> sset PCM 20%           # 明显变轻
+amixer -c <N> sset PCM toggle        # 静音 / 解除静音
+
+# 3) 也可以直接按 dB 设，验证刻度对得上
+amixer -c <N> -- sset PCM -15dB      # = 70%，即开机默认值
+
+# 4) 交互式：alsamixer -c <N>，用 ↑↓ 拖 PCM，M 键切静音
+alsamixer -c <N>
+
+# 5) 桌面音量键：pactl list sinks 里选中该 sink 后按笔记本的音量加/减，
+#    pactl get-sink-volume <sink> 与 amixer 读出的值要同步变化
+```
+
+**怎么确认改的是硬件音量而不是主机软件音量**（这是本功能唯一值得验的东西）：
+
+1. **看 host 有没有在拧 PCM**：`amixer -c <N> sget PCM` 显示的是硬件控件本身；
+   若它是 `[100%]` 而声音却很轻，那说明衰减发生在 PulseAudio/PipeWire 的软件混音里。
+   `pactl list sinks | grep -i "volume\|flags"` 里出现 **`HW_VOLUME_CTRL`** 才是走硬件。
+2. **看寄存器**（最硬的一条证据，需 `CONFIG_AIO_DEBUG_CDC=y`）：拖动音量后看
+   `codec_audio_report()` 每 10 秒复读的那行 `ES8388 ... vol L/R=xx/xx` ——
+   它读的是 `DACCONTROL4/5`，**必须跟着变**（值越大越轻，0x00 = 0 dB，步进 0.5 dB；
+   70% ⇒ −15 dB ⇒ 0x1e）。静音时 `dacctl3` 的 bit2 置 1。
+   若这两个寄存器纹丝不动而声音却变了，那就是主机在做软件音量。
+3. **看设备侧的 USB 数据**：同一行日志里的 `usb_peak` 是 host 送来的 PCM 峰值。
+   拖音量条时 `usb_peak` **不该变**（host 原样送出），变的只有 codec 寄存器。
+   `usb_peak` 跟着音量条变 ⟹ host 在软件衰减 ⟹ Feature Unit 没被用上。
 
 判据：`stream0` 里**不出现 `Sync Endpoint`**、`lsusb -v` 的两条 ISO 端点分别是
 `Synch Type Adaptive` 与 `Synch Type Asynchronous`、`dmesg` 无 `snd-usb-audio` 报错、
@@ -1493,8 +1608,10 @@ codec_audio: 10s 泵：spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37 | TX 欠载 0
 | `main/touch_hid.{c,h}` | GT911 初始化（INT 拉低 + 备用地址 `0x14`）+ 20ms 轮询 + digitizer 上报（RID 2） |
 | `main/touch_map.{c,h}` | 面板坐标 → GUD 坐标反变换 + HID 归一化 + 报告装填，零依赖纯函数（宿主机可测） |
 | `main/Kconfig.projbuild` | 只剩 `CONFIG_AIO_DEBUG_CDC`（默认 n，让出 GUD 的 IN 端点换 USB 日志串口）；音频无条件编译，排障旋钮已删除 |
-| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调 + `codec_audio_report()` 开机自检快照 |
+| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调（含 Feature Unit 的音量/静音落到 ES8388 硬件）+ `codec_audio_report()` 开机自检快照 |
 | `main/audio_frame.{c,h}` | USB 单声道 ↔ I2S 立体声转换，零依赖纯函数（宿主机可测） |
+| `main/uac_volume.{c,h}` | UAC1 音量(有符号 1/256 dB) ↔ `esp_codec_dev` 百分比 的换算 + 线上小端编解码，零依赖纯函数（宿主机可测）；含 MIN/MAX/RES 取值理由 |
+| `test/test_uac_volume.c` | 音量换算的宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/tinyusb_config/tusb_config.h` | `include_next` esp_tinyusb 默认配置后追加 `CFG_TUD_AUDIO_*`（它没开放 Audio 类） |
 | `test/test_touch_map.c` | 触摸坐标变换与报告装填的宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/tab5_pins.h` | 板级 GPIO / 面板与 GUD 尺寸常量（含放大倍数的静态断言） |

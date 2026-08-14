@@ -147,6 +147,20 @@ enum {
 _Static_assert(UAC_SAMPLE_RATE % 1000 == 0,
                "采样率必须产生整数 samples/ms，否则要上显式反馈端点（会顶掉 UVC）");
 
+/*
+ * 播放链上 Feature Unit（音量 / 静音）的 bUnitID。
+ *
+ * 描述符（usb_descriptors.c）与控制请求回调（codec_audio.c 的
+ * tud_audio_*_req_entity_cb）必须用**同一个** ID：host 的每一条音量请求都把它放在
+ * wIndex 的高字节里，对不上号的表现是「alsamixer 里有滑块但拖了不出声」，
+ * 而 TinyUSB 只会静默 STALL。所以在这里定名，两边都引用它。
+ *
+ * 取 5 而不是插进 1..4 中间：终端 ID 1..4（USB流/喇叭/麦克风/USB流）已实机验证，
+ * 且录音侧那条 AS 接口的 bTerminalLink 指着 ID4 —— 重新编号会连带动到与本次
+ * 改动毫无关系的录音链。UAC1 只要求实体 ID 在本功能内唯一，不要求连续或有序。
+ */
+#define UAC_FU_ID_SPEAKER 5
+
 /* HID Report ID。键盘与触摸共用 IF1 这一个接口与 EPNUM_HID 这一条 IN 端点
  * （P4 全速控制器最多 4 条 IN 端点，UAC/UVC 会用满，见 firmware/README.md），
  * 靠 Report ID 区分 —— 这也是本接口必须放弃 boot 协议的原因，见 usb_descriptors.c。 */
