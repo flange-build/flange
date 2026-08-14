@@ -47,13 +47,16 @@ CONFIG_CODEC_ES7243_SUPPORT=n
 CONFIG_CODEC_ES7243E_SUPPORT=n
 CONFIG_CODEC_AW88298_SUPPORT=n
 CONFIG_CODEC_TAS5805M_SUPPORT=n
-# ── 调试用 USB CDC 串口（当前**不可用**）───────────────────────────
-# 曾经可以取消下面两行的注释让 ESP_LOG* 从 USB-C 出来，但 UAC 音频落地后这条
-# 退路被堵死了：CDC 要占 2 条 IN 端点（通知 + 数据），加上 vendor 与 HID 各一条，
-# P4 全速控制器的 4 条可用 IN 端点就用满，音频 IN 是第 5 条；而且它默认拿的就是
-# 0x83/0x84，与 UAC 录音、UVC 预留直接撞号。
+# ── 调试用 USB CDC 串口 ───────────────────────────────────────────
+# **别在这里手动开 CONFIG_TINYUSB_CDC_ENABLED**（usb_descriptors.h 有 #error 拦着）：
+# esp_tinyusb 默认给 CDC 的端点是 0x83/0x84，与 UAC 录音、UVC 预留直接撞号，
+# 而且 2 条 IN 端点会把 P4 全速控制器的 4 条可用 IN 用超。
 #
-# ⚠️ 现在 usb_descriptors.h 里有一条 #error 会**在编译期**拦住你，不必再靠记性。
-#    需要日志请接 UART0(G37/G38，在 M5-Bus 排针上)。
-# CONFIG_TINYUSB_CDC_ENABLED=y
-# CONFIG_TINYUSB_CDC_COUNT=1
+# 要日志请开 menuconfig → Tab5 All-in-One → CONFIG_AIO_DEBUG_CDC：
+# 它让出 GUD 的 IN 端点（drm/gud 不用它）、借用 UVC 预留的 0x84，把端点号重排到
+# 刚好装得下，并自动 select 出 CONFIG_TINYUSB_CDC_ENABLED。见 main/Kconfig.projbuild。
+#
+#     idf.py menuconfig   # 打开 CONFIG_AIO_DEBUG_CDC
+#     idf.py build flash monitor
+#
+# 也可以接 UART0(G37/G38，在 M5-Bus 排针上)，那条能抓到上电最早的日志。

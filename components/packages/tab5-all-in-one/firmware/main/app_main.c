@@ -240,11 +240,13 @@ void app_main(void)
 
 #if CONFIG_TINYUSB_CDC_ENABLED
     /*
-     * 可选的 USB CDC 调试串口（默认关闭，开关在 sdkconfig.defaults 末尾）。
+     * 可选的 USB CDC 调试串口（默认关闭，开关是 menuconfig 里的
+     * Tab5 All-in-One → CONFIG_AIO_DEBUG_CDC，它会 select 出本宏）。
      *
      * 这块板现场没有可用串口：USB-Serial/JTAG 被关掉了（TinyUSB 要占那条 FSLS PHY），
      * UART0 只在 M5-Bus 排针上。开启本段后 ESP_LOG* 直接从 USB-C 出来，
-     * `idf.py monitor` 即可看，代价是把 4 条可用 IN 端点用满（见 usb_descriptors.h）。
+     * `idf.py monitor` 即可看，代价是让出 GUD 的 IN 端点（GUD 不用它）与 UVC
+     * 预留的 0x84，4 条可用 IN 端点用满（端点表与依据见 usb_descriptors.h）。
      *
      * ⚠️ **开机早期的日志会丢。** tinyusb_console_init() 之后 stdout / ESP_LOG* 就写进
      * CDC 的 TX 环形缓冲，而这些字节要等 host 侧真的把 ttyACM 打开并开始读才会流出去 ——
@@ -309,5 +311,22 @@ void app_main(void)
     }
 #endif
 
-    while (1) vTaskDelay(pdMS_TO_TICKS(1000));
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+#if CONFIG_AIO_AUDIO_FULL
+        /*
+         * 音频自检**每 10 秒复读一次**，别改成只打一遍。
+         *
+         * 两条硬约束逼出这个写法：
+         *   1. codec_audio_init() 必须跑在 tinyusb_driver_install() 之前（见上），
+         *      而这块板唯一的日志出口 —— CONFIG_AIO_DEBUG_CDC 那条 USB CDC 串口 ——
+         *      要等 install 之后才起得来。init 阶段的 ESP_LOG* 现场一个字看不到。
+         *   2. 就算把它挪到 CDC 初始化之后打一次，CDC 的 TX 环形缓冲也只有几百字节，
+         *      会被后续日志覆盖 —— 用户敲下 `idf.py monitor` 时早就冲掉了。
+         * 复读的代价是每 10 秒四行日志加几次 I2C 读，可以忽略。
+         * 根因定位完、CONFIG_AIO_DEBUG_CDC 关掉之后，这段可以一并删掉。
+         */
+        codec_audio_report();
+#endif
+    }
 }

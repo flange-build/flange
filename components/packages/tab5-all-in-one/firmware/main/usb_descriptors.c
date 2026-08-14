@@ -238,19 +238,50 @@ static const uint8_t aio_hid_report_desc[] = {
 #endif
 
 /*
+ * GUD vendor 接口的两种形态。
+ *
+ * 正常档用 TinyUSB 的 TUD_VENDOR_DESCRIPTOR（bulk OUT + bulk IN）；
+ * CONFIG_AIO_DEBUG_CDC 档去掉 IN 端点，把那条 IN 让给 CDC 日志串口 ——
+ * 依据（drm/gud 只找 bulk OUT、本固件从不 tud_vendor_write）见 usb_descriptors.h。
+ * TinyUSB 没有「只有 OUT」的 vendor 模板，所以按它的 9+7 字节布局手写一份：
+ * 与 TUD_VENDOR_DESCRIPTOR 逐字节一致，只是 bNumEndpoints 从 2 改成 1、
+ * 并去掉尾部那条 IN 端点。
+ */
+#if CONFIG_AIO_DEBUG_CDC
+#define AIO_VENDOR_DESC_LEN (9 + 7)
+#define AIO_VENDOR_DESCRIPTOR(_itfnum, _stridx, _epout, _epsize) \
+    9, TUSB_DESC_INTERFACE, _itfnum, 0, 1, TUSB_CLASS_VENDOR_SPECIFIC, 0x00, 0x00, _stridx, \
+    7, TUSB_DESC_ENDPOINT, _epout, TUSB_XFER_BULK, U16_TO_U8S_LE(_epsize), 0
+#else
+#define AIO_VENDOR_DESC_LEN TUD_VENDOR_DESC_LEN
+#define AIO_VENDOR_DESCRIPTOR(_itfnum, _stridx, _epout, _epsize) \
+    TUD_VENDOR_DESCRIPTOR(_itfnum, _stridx, _epout, EPNUM_VENDOR_IN, _epsize)
+#endif
+
+/* 调试档的 CDC ACM：TUD_CDC_DESCRIPTOR 自带 IAD，两个接口必须连号。
+ * iInterface 传 0（不起名）—— 免得动 aio_string_desc_arr 的长度断言。 */
+#if CONFIG_AIO_DEBUG_CDC
+#define AIO_CDC_DESC_LEN TUD_CDC_DESC_LEN
+#else
+#define AIO_CDC_DESC_LEN 0
+#endif
+
+/*
  * 配置描述符：IF0 = GUD vendor，IF1 = HID 键盘 + 触摸，
- * IF2/IF3/IF4 = UAC1 音频（AudioControl + 播放 AS + 录音 AS，由 IAD 成组）。
+ * IF2/IF3/IF4 = UAC1 音频（AudioControl + 播放 AS + 录音 AS，由 IAD 成组），
+ * IF5/IF6 = CDC 调试串口（仅 CONFIG_AIO_DEBUG_CDC）。
  *
  * 音频排在 HID **之后**：接口号对 host 侧没有功能影响（drm/gud 按 VID/PID + 接口类
  * 绑定，usbhid / hid-multitouch 按接口类绑定，snd-usb-audio 按 IAD + 接口类绑定，
  * 没有任何一方按接口号绑定），所以宁可不动已实机验证的 IF0/IF1。
- * 端点号同理刻意不动（0x81 / 0x82），少一个变量。
+ * 端点号同理刻意不动（0x81 / 0x82），少一个变量。CDC 同理再追加在最后。
  */
 #define CONFIG_TOTAL_LEN \
-    (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_HID_DESC_LEN + UAC1_AUDIO_DESC_LEN)
+    (TUD_CONFIG_DESC_LEN + AIO_VENDOR_DESC_LEN + TUD_HID_DESC_LEN + \
+     UAC1_AUDIO_DESC_LEN + AIO_CDC_DESC_LEN)
 const uint8_t aio_desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
-    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
+    AIO_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, 64),
     /*
      * bInterfaceProtocol = NONE（原先是 KEYBOARD）。
      *
@@ -271,6 +302,10 @@ const uint8_t aio_desc_configuration[] = {
     UAC1_AUDIO_DESCRIPTOR(ITF_NUM_AUDIO_CONTROL, ITF_NUM_AUDIO_STREAMING_OUT,
                           ITF_NUM_AUDIO_STREAMING_IN, AIO_STRID_AUDIO,
                           EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN),
+#endif
+#if CONFIG_AIO_DEBUG_CDC
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 0, EPNUM_CDC_NOTIF, 8,
+                       EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
 #endif
 };
 

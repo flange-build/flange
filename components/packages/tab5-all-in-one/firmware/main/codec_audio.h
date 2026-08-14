@@ -31,3 +31,18 @@
  */
 esp_err_t codec_audio_init(void);
 esp_err_t codec_audio_start(void);
+
+/*
+ * 把「音频卡在哪一步」打成四行日志：init 各步的返回值、I2S 全双工判定、
+ * ES8388/ES7210 的寄存器回读、功放状态、数据泵的帧数与信号峰值。
+ *
+ * ⚠️ **必须在日志通道可用之后调用**，而且要**反复调用**。
+ * codec_audio_init() 跑在 tinyusb_driver_install() 之前，那时这块板唯一的
+ * 日志出口（CONFIG_AIO_DEBUG_CDC 的 USB CDC 串口）还不存在；而 CDC 的 TX
+ * 环形缓冲又会把 host 打开 ttyACM 之前的内容覆盖掉。所以 app_main 的主循环
+ * 每 10 秒复读一次，用户什么时候接上 monitor 都能看到完整一份。
+ *
+ * codec_audio_init() 失败后照样可以调（未初始化的部分会打成 −1 / 0）。
+ * 每次调用会做几次 I2C 读，不要放进实时路径。
+ */
+void codec_audio_report(void);

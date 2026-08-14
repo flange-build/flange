@@ -143,6 +143,36 @@ config AIO_USJ_RELEASE_PHY_PADS
         已查实为空操作 —— IDF 启动阶段就已清掉该位。仅作历史对照保留，别打开。
         详见 main/Kconfig.projbuild 的说明与 firmware/README.md。
 
+# ── 排障档：拿 GUD 的 IN 端点换一条 USB CDC 日志串口 ─────────────────
+#
+# 这块板现场**没有可用串口**：USB-Serial/JTAG 被 TinyUSB 收走（USJ_ENABLE=n），
+# UART0(G37/G38) 只在 M5-Bus 排针上、要外接 USB-TTL。于是音频排障一直在盲二分，
+# 每定位一刀就要烧一次板。本档用一次可逆的端点交换换来 ESP_LOG*：
+#
+#   放弃 vendor(GUD) 的 IN 端点 0x81  →  腾出 1 条
+#   把留给 UVC 的 0x84 临时借出去      →  再腾出 1 条
+#   CDC 要 2 条（通知 + 数据）         →  正好凑够，IN 端点仍是 4 条
+#
+# **GUD 不需要 IN 端点**：mainline drivers/gpu/drm/gud/gud_drv.c 的 gud_probe()
+# 只调 usb_find_bulk_out_endpoint()，全驱动没有 usb_find_bulk_in_endpoint /
+# usb_rcvbulkpipe；本固件 gud_device.c 也只有 rx 侧，从不 tud_vendor_write()。
+# 逐条依据与端点表见 main/usb_descriptors.h。
+#
+# ⚠️ **排障档，不是产品档**：它占了留给 UVC 的 0x84，4 条 IN 端点用满。
+#    拿到日志、定位完就关掉。
+#
+# 用法：
+#   idf.py menuconfig → Tab5 All-in-One → 打开本项 → idf.py build flash monitor
+config AIO_DEBUG_CDC
+    bool "调试档：让出 GUD 的 IN 端点，换 USB CDC 日志串口"
+    default n
+    select TINYUSB_CDC_ENABLED
+    help
+        默认关闭。打开后 ESP_LOG* 从 USB-C 出来，`idf.py monitor` 直接看，
+        代价是 GUD 的 IN 端点（不影响显示）与 UVC 预留的 0x84。
+        ⚠️ 开机最早那几行日志会丢（要等 host 打开 ttyACM 才开始流），
+        所以 codec_audio 的自检结果做成了每 10 秒复读一次，见 codec_audio.c。
+
 # 派生量：描述符与 CFG_TUD_AUDIO 是否要带上音频。
 # 后两档都要，所以统一用它判断，别在 C 里到处写两个宏的 ||。
 config AIO_AUDIO_DESC

@@ -89,58 +89,54 @@ idf.py build
 而 USB-C 上的 USB-Serial/JTAG 被有意关掉了 —— TinyUSB 必须独占那条 FSLS PHY（见上一节）。
 两者都不满足时，所有 `ESP_LOG*` 在现场等于不存在。
 
-为此 `sdkconfig.defaults` 末尾预留了一个**默认注释掉**的开关：
-
-```
-# CONFIG_TINYUSB_CDC_ENABLED=y
-# CONFIG_TINYUSB_CDC_COUNT=1
-```
-
-取消这两行的注释后，复合设备上会多出一个 CDC ACM 接口，`ESP_LOG*` / `stdout` 改从 USB-C 出来，
-`idf.py monitor` 直接可看，**不用接 USB-TTL**。
+开关是 **menuconfig → Tab5 All-in-One → `CONFIG_AIO_DEBUG_CDC`**（默认 n）：
 
 ```bash
-# 打开
-sed -i '' 's/^# CONFIG_TINYUSB_CDC_/CONFIG_TINYUSB_CDC_/' sdkconfig.defaults
-rm -f sdkconfig && idf.py build          # ⚠️ 必须删 sdkconfig，否则 defaults 不重新生效
+idf.py menuconfig      # 打开 CONFIG_AIO_DEBUG_CDC
+idf.py build flash monitor
 ```
 
-> ⚠️ **`rm -f sdkconfig` 不能省。** `sdkconfig.defaults` 只在 `sdkconfig` **不存在**时被读，
-> 改了 defaults 却不删 `sdkconfig`，构建会静默沿用旧配置 —— 表现为「改了开关却没生效」。
+打开后复合设备上会多出一个 CDC ACM 接口，`ESP_LOG*` / `stdout` 改从 USB-C 出来，
+`idf.py monitor` 直接可看，**不用接 USB-TTL**。它自己会 `select` 出
+`CONFIG_TINYUSB_CDC_ENABLED`，不需要也**不应该**手动去开那一项。
 
-代码侧一律走 `#if CONFIG_TINYUSB_CDC_ENABLED` 条件编译（`usb_descriptors.{c,h}` 的接口/端点/
-描述符/字符串，`app_main.c` 的 `tinyusb_cdcacm_init()` + `tinyusb_console_init()`）。
-`CONFIG_TOTAL_LEN` 与 `_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN)`
-两种配置下都成立：**关闭 57 字节 / 开启 123 字节**（`TUD_CDC_DESC_LEN = 66`，自带 IAD、占两个接口）。
+代码侧一律走 `#if CONFIG_AIO_DEBUG_CDC` / `#if CONFIG_TINYUSB_CDC_ENABLED` 条件编译
+（`usb_descriptors.{c,h}` 的接口/端点/描述符，`app_main.c` 的 `tinyusb_cdcacm_init()` +
+`tinyusb_console_init()` + 每 10 秒一次的 `codec_audio_report()`）。
+`_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN)` 在每一档下都成立：
+**仅 GUD+HID 57 字节 / +音频 230 / +音频+CDC 289 / 仅 GUD+HID+CDC 116**。
 
-#### ⚠️ 代价：开启后 4 条 IN 端点全部用满
+#### ⚠️ 代价：让出 GUD 的 IN 端点 + 借走 UVC 预留的 `0x84`
 
-| 用途 | 端点 |
-|---|---|
-| vendor(GUD) | OUT `0x01` / IN `0x81` |
-| HID（键盘 + 触摸） | IN `0x82` |
-| CDC 通知 | IN `0x83` |
-| CDC 数据 | OUT `0x02` / IN `0x84` |
+| 用途 | 正常档 | 调试档 |
+|---|---|---|
+| vendor(GUD) | OUT `0x01` / IN `0x81` | OUT `0x01`（**没有 IN**） |
+| HID（键盘 + 触摸） | IN `0x82` | IN `0x82` |
+| UAC 录音 | IN `0x83` | IN `0x83` |
+| UVC 预留 | IN `0x84` | —（借给 CDC 通知） |
+| CDC 通知 / 数据 | — | IN `0x84` / OUT `0x03` + IN `0x81` |
 
-P4 全速控制器只有 4 条可用 IN 端点（见上「端点预算」）。开着 CDC 时 **UAC 音频（麦克风 1 条 IN）
-与 UVC 摄像头（视频流 1 条 IN）都放不下**，而且 CDC 默认拿的就是 `0x83`/`0x84`，与两者直接撞号。
+**去掉 vendor 的 IN 端点为什么安全**：mainline `drivers/gpu/drm/gud/gud_drv.c` 的
+`gud_probe()` 只调一次 `usb_find_bulk_out_endpoint()`，全驱动没有
+`usb_find_bulk_in_endpoint` / `usb_rcvbulkpipe` —— GUD 协议是「EP0 控制请求 +
+bulk OUT 送像素」的单向结构；本固件 `gud_device.c` 也只有 rx 侧，从不调
+`tud_vendor_write()`。TinyUSB 的 `vendord_open()` 按描述符里实际出现的端点逐条 open
+（`vendor_device.c:296-332`），只有 OUT 时就只开 `rx_stream`。
+`0x81` 一直是 `TUD_VENDOR_DESCRIPTOR` 顺带声明的、**从未通过流量**的端点。
 
-> ### 🚫 UAC 音频落地后，这条退路已经关闭
->
-> `usb_descriptors.h` 里有一条 `#if CONFIG_TINYUSB_CDC_ENABLED / #error`，
-> **打开 CDC 会直接编译失败**，不再需要靠记性。这是有意的：最想打开 CDC 的时刻，
-> 恰恰是音频调不通、看起来像描述符写错的时候 —— 而那时打开它只会换来一个
-> 更难懂的枚举失败。需要日志请接 **UART0(G37/G38，在 M5-Bus 排针上)**。
->
-> 下面这一节保留下来，是为了记住「为什么不能开」以及它当年怎么用；
-> 要重新启用，得先把音频的 IN 端点让出来。
+FIFO 不是瓶颈：256 words 依次扣 EP0 16 + HID 16 + 音频 IN 9 + CDC 通知 16 +
+CDC 数据 IN 16 = 73，余 183 ≫ RX FIFO 所需的 62 words；IN 端点连 EP0 共 5 条，
+恰好等于 `ep_in_count`，`dcd_dwc2.c` 的 `TU_ASSERT(allocated_epin_count < ep_in_count)`
+每一步都成立。（此处曾按「vendor/CDC 数据各 32」记，那是假设 bulk IN 开了双缓冲；
+实测 `_tud_cfg.bm_double_buffered` 保持默认 0，`tud_configure()` 从未被调用，故各 16。）
 
-FIFO 反而不是瓶颈：256 words 里 EP0 16 + vendor 16 + HID 16 + 通知 2 + CDC 数据 16 = 66 words，
-余量远大于 RX FIFO 所需的 62 words。（此处曾按「vendor/CDC 数据各 32」记，那是假设 bulk IN 开了
-双缓冲；实测 `_tud_cfg.bm_double_buffered` 保持默认 0，`tud_configure()` 从未被调用，故各 16。）
+> ⚠️ **直接开 `CONFIG_TINYUSB_CDC_ENABLED` 仍然是编译期错误。**
+> esp_tinyusb 默认给 CDC 的端点就是 `0x83`/`0x84`，与 UAC 录音、UVC 预留直接撞号，
+> 而且不让出 vendor 的 IN 就会超编 —— `dcd_dwc2` 超编时**一个字都不打**，
+> 症状是某个接口静默不工作。`usb_descriptors.h` 的 `#error` 会把你导向
+> `CONFIG_AIO_DEBUG_CDC`，那一档已经把端点号重排好了。
 
-**这是调试设施，不是产品特性。**（当年记录：关闭态的 Flash/DIRAM 与不带本开关的版本
-**逐字节相同**，均为 275,062 / 91,228；音频落地后的新数字见「资源占用」。）
+**这是排障设施，不是产品特性。** 定位完就关掉 —— 它占着留给 UVC 的 `0x84`。
 
 #### ⚠️ 开机早期的日志会丢
 
@@ -211,7 +207,9 @@ FIFO 256 words（1 KB），即**最多 4 条可用 IN 端点**。
 | `0x83` | UAC 录音 | 等时 IN（asynchronous） |
 | `0x84` | **预留给 UVC** | — |
 
-> **可选 CDC 调试串口与 UAC 互斥**，且已变成**编译期 `#error`**，见下文「日志」章节。
+> 要 USB 日志串口请开 **`CONFIG_AIO_DEBUG_CDC`**（排障档）：它让出 vendor(GUD) 的 IN
+> 端点 `0x81`（GUD 只用 bulk OUT）并借走 `0x84`，把 CDC 塞进这张表。直接开
+> `CONFIG_TINYUSB_CDC_ENABLED` 仍是编译期 `#error`。见下文「日志」章节。
 
 ## 显示
 
@@ -1347,6 +1345,12 @@ AC 头的 `bcdADC`+`wTotalLength`+`baInterfaceNr`、终端 ID 链（1→2 播放
 两条 ISO 端点的包大小/间隔/sync 类型、**`bSynchAddress` 全为 0**、
 **sync 字段全非 0**、IN 端点 ≤ 4 条且 `0x84` 未被占用、两份 Type I 格式描述符与预期参数一致。
 
+脚本按**描述符里 IAD 的 `bFunctionClass`** 自动判定当前是哪一档（音频 / CDC 排障档），
+不去读 `sdkconfig` —— 它只相信 ELF 里真正躺着的那串字节，这样才保得住
+「独立第二意见」的性质。开了 `CONFIG_AIO_DEBUG_CDC` 时它改为断言
+**IF0 只剩 bulk OUT**（IN 端点没让干净会超编，而 `dcd_dwc2` 超编时一个字都不打）、
+CDC 的 IAD/接口类/三条端点各就各位、且全部端点地址互不重复。
+
 ### Host 侧验证（上板后）
 
 ```bash
@@ -1375,16 +1379,82 @@ sox /tmp/tab5.wav -n stat               # 安静时 RMS 低、说话时高；不
 > 若 `lsusb` 看得到设备、`/proc/asound/cards` 却没有它且 `dmesg` 无音频相关行，
 > 先 `modinfo snd-usb-audio` 确认模块存在 —— 那是 host 内核配置问题，不是固件缺陷。
 
-### ⚠️ 这一段 bring-up 期是盲的
+### `CONFIG_AIO_DEBUG_CDC`：拿 GUD 的 IN 端点换一条 USB 日志串口
 
-从上电到 host 完成枚举之间没有任何可见输出：UART0 只在 M5-Bus 排针上（要外接 USB-TTL），
-USB-Serial/JTAG 被 TinyUSB 收走，CDC 又被编译期 `#error` 堵死。接受这个代价的三条缓解：
+这块板现场没有可用串口：UART0 只在 M5-Bus 排针上（要外接 USB-TTL），
+USB-Serial/JTAG 被 TinyUSB 收走。于是音频排障长期只能盲二分，每切一刀烧一次板。
+`CONFIG_AIO_DEBUG_CDC`（menuconfig → Tab5 All-in-One）用一次**可逆的端点交换**
+换来 `ESP_LOG*`：
 
-1. codec 初始化失败会让 `codec_audio_start()` 整体返回错误、音频降级，
-   但**描述符是静态的**，host 侧照样枚举出声卡 —— 「有声卡但全静音」本身就是一条 host 侧信号；
+| | 0x81 | 0x82 | 0x83 | 0x84 |
+|---|---|---|---|---|
+| 正常档 | vendor(GUD) | HID | UAC 录音 | 留给 UVC |
+| **调试档** | **CDC 数据** | HID | UAC 录音 | **CDC 通知** |
+
+**GUD 不需要 IN 端点** —— 这是这条路成立的全部依据：mainline
+`drivers/gpu/drm/gud/gud_drv.c` 的 `gud_probe()` 只调一次
+`usb_find_bulk_out_endpoint()`，全驱动没有 `usb_find_bulk_in_endpoint` /
+`usb_rcvbulkpipe`（协议本身是「EP0 控制请求 + bulk OUT 送像素」的单向结构）；
+本固件 `gud_device.c` 也只有 rx 侧，从不调 `tud_vendor_write()`。
+TinyUSB 侧同样没问题：`vendord_open()` 按描述符里实际出现的端点逐条 open，
+只有 OUT 时就只开 `rx_stream`（`vendor_device.c:296-332`）。
+所以 `0x81` 一直是 `TUD_VENDOR_DESCRIPTOR` 顺带声明出来的、**从未通过流量**的端点。
+
+FIFO 也够：256 words 的 dfifo 依次扣 EP0(16) + HID(16) + 音频 IN(9) +
+CDC 通知(16) + CDC 数据 IN(16) = 73，余 183 ≫ `grxfsiz` 62；
+IN 端点连 EP0 共 5 条，恰好等于 `ep_in_count`，`dcd_dwc2.c` 的
+`TU_ASSERT(allocated_epin_count < ep_in_count)` 每一步都成立。
+
+```bash
+idf.py menuconfig      # Tab5 All-in-One → 打开 CONFIG_AIO_DEBUG_CDC
+idf.py build flash monitor
+```
+
+⚠️ **排障档，不是产品档**：它占了留给 UVC 的 `0x84`，4 条 IN 端点用满。
+定位完就关掉。GUD 显示 / 键盘 / 触摸 / 音频在这一档下全部照常工作。
+
+#### 日志里该看哪几行
+
+`codec_audio_init()` 必须跑在 `tinyusb_driver_install()` 之前（焊盘那个坑），
+而 CDC 要等 install 之后才起得来 —— 也就是说**音频最关键的那几行日志天生打不出来**。
+所以 `codec_audio.c` 把 init 阶段的每个判定记成静态快照，由 `codec_audio_report()`
+在 `app_main` 主循环里**每 10 秒复读一次**（CDC 的 TX 环形缓冲会把 host 打开
+`ttyACM` 之前的内容覆盖掉，只打一遍现场大概率什么都看不到）。
+
+```
+codec_audio: [自检] init 步数=3/3 err=ESP_OK duplex=1 spk_open=0 mic_open=0 pa=1 pump=1
+codec_audio: [自检] ES8388 chippwr=00 dacpwr=3c dacctl3=00 vol L/R=1e/1e LOUT1/ROUT1=1e/1e LOUT2/ROUT2=00/00
+codec_audio: [自检] ES7210 mic1gain=.. mic2gain=.. mic12pwr=..
+codec_audio: [自检] 泵 帧=... spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37
+codec_audio: 10s 泵：spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37 | TX 欠载 0 麦 FIFO 溢出 0 RX 读失败 0
+```
+
+从上往下读，**第一条不对的就是根因**：
+
+| 现象 | 结论 |
+|---|---|
+| `步数<3` / `err!=ESP_OK` | `codec_audio_init()` 就失败了 ⇒ `app_main` 因此**没调** `codec_audio_start()`，功放没开、数据泵没起。「有声卡但全静音」最常见的成因 |
+| `duplex=0` | I2S 没组成全双工（两次 `init_std_mode` 的 `std_cfg` 不相等） |
+| ES8388 寄存器全打成 `ffffffff` | 回读失败 ⇒ I2C 根本没通（地址 / 总线 / 上电） |
+| `dacpwr!=3c` 或 `dacctl3` 的 bit2=1 | DAC 没上电 / 还在静音 |
+| `pa=0` | 功放没导通（`codec_audio_start()` 没跑到，或 IO 扩展写失败） |
+| `pump=0` / `帧=0` | 数据泵任务没起来 |
+| `spk_on=0` | **host 从没把播放接口切到 alt 1** ⇒ 问题在主机侧（没选对声卡 / 没在放音），不在固件 |
+| `spk_on=1` 但 `usb_peak=0` | host 选了接口却只送静音 |
+| `usb_peak>0` 却仍没声 | 数字侧全通，问题在 codec 之后的模拟侧（音量 / 路由 / 功放 / 喇叭） |
+| `RX 读失败` 一直在涨 | ⚠️ 注意：数据泵用 `i2s_channel_read()` 当节拍源，RX 失败会 `continue` 掉整轮 —— **播放也一起停**。录音侧坏掉会表现成播放也没声 |
+
+`mic_peak` 是**无条件**统计的（host 没开录音时也统计），所以它单独回答
+「ES7210 到底有没有在往 DSIN 上送东西」。
+
+#### 关掉调试档之后
+
+不接 UART0 时，这一段仍然是盲的。三条缓解照旧成立：
+
+1. codec 初始化失败只会让音频降级，但**描述符是静态的**，host 侧照样枚举出声卡
+   —— 「有声卡但全静音」本身就是一条 host 侧信号；
 2. 全双工是否成立由读寄存器显式判定，不靠日志；
-3. 真要抓这一段，接 UART0(G37/G38) —— 代码里的 `ESP_LOG*` 全部保留，
-   它们不是判据，但接上串口时是最快的现场证据。
+3. 真要抓上电最早那一段（CDC 也抓不到），接 UART0(G37/G38)。
 
 
 ## 文件
@@ -1392,7 +1462,7 @@ USB-Serial/JTAG 被 TinyUSB 收走，CDC 又被编译期 `#error` 堵死。接�
 | 文件 | 职责 |
 |------|------|
 | `main/app_main.c` | 编排：board_power → display → gud → TinyUSB 安装 |
-| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2 + IF2-4 UAC1 音频，音频段受 `CONFIG_AIO_AUDIO_DESC` 控制）与 UAC 参数常量 |
+| `main/usb_descriptors.{c,h}` | USB 复合描述符数据（IF0 GUD vendor + IF1 HID 键盘 RID1 / 多点触摸 RID2 + IF2-4 UAC1 音频 + IF5/6 CDC 排障串口，后两段分别受 `CONFIG_AIO_AUDIO_DESC` / `CONFIG_AIO_DEBUG_CDC` 控制）、UAC 参数常量与端点账 |
 | `main/gud_protocol.h` | GUD 协议定义（vendor 自内核 6.8） |
 | `main/gud_device.{c,h}` | GUD 控制协议状态机 + 收帧（脏矩形累积 / LZ4 解压）→ `display_blit()` |
 | `main/lz4.{c,h}` | 官方 LZ4 v1.9.4 参考实现（BSD-2-Clause），仅用 `LZ4_decompress_safe` |
@@ -1408,8 +1478,8 @@ USB-Serial/JTAG 被 TinyUSB 收走，CDC 又被编译期 `#error` 堵死。接�
 | `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/touch_hid.{c,h}` | GT911 初始化（INT 拉低 + 备用地址 `0x14`）+ 20ms 轮询 + digitizer 上报（RID 2） |
 | `main/touch_map.{c,h}` | 面板坐标 → GUD 坐标反变换 + HID 归一化 + 报告装填，零依赖纯函数（宿主机可测） |
-| `main/Kconfig.projbuild` | `CONFIG_AIO_AUDIO_MODE` 三档开关（默认关闭音频）、派生量 `CONFIG_AIO_AUDIO_DESC`，以及排障用的 `CONFIG_AIO_AUDIO_FULL_STAGE`（0–5，默认 5） |
-| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调（仅 `AIO_AUDIO_FULL` 下编译） |
+| `main/Kconfig.projbuild` | `CONFIG_AIO_AUDIO_MODE` 三档开关（默认关闭音频）、派生量 `CONFIG_AIO_AUDIO_DESC`、排障用的 `CONFIG_AIO_AUDIO_FULL_STAGE`（0–5，默认 5），以及 `CONFIG_AIO_DEBUG_CDC`（让出 GUD 的 IN 端点换 USB 日志串口） |
+| `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调 + `codec_audio_report()` 开机自检快照（仅 `AIO_AUDIO_FULL` 下编译） |
 | `main/audio_frame.{c,h}` | USB 单声道 ↔ I2S 立体声转换，零依赖纯函数（宿主机可测） |
 | `main/tinyusb_config/tusb_config.h` | `include_next` esp_tinyusb 默认配置后追加 `CFG_TUD_AUDIO_*`（它没开放 Audio 类）；整段受 `CONFIG_AIO_AUDIO_DESC` 控制，关闭时退化成透明转发 |
 | `test/test_touch_map.c` | 触摸坐标变换与报告装填的宿主机回归测试（直接编译真实源码，非复制体） |

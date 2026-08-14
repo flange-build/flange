@@ -2,7 +2,8 @@
 """从固件 ELF 里取出 aio_desc_configuration 并逐条校验。
 
 **烧板前的闸门。** 这块板现场没有可用串口（USB-Serial/JTAG 被 TinyUSB 收走、
-CDC 在音频阶段被编译期 #error 禁掉、UART0 只在 M5-Bus 排针上要外接 USB-TTL），
+UART0 只在 M5-Bus 排针上要外接 USB-TTL；唯一的 USB CDC 日志通道 CONFIG_AIO_DEBUG_CDC
+本身就要靠改端点账换来，而端点账写错就正是本脚本要拦的东西），
 而 UAC1 描述符写错一个字节的表现是「host 完全不认这个设备 / 不出 ALSA 节点」——
 没有任何现场证据。手写的 TUD_AUDIO10_* 宏只保证每条 item 的 bLength/tag 自洽，
 **不校验** terminal ID 链、wTotalLength、baInterfaceNr 这些跨描述符引用，
@@ -33,6 +34,11 @@ EXPECT = dict(
     ep_audio_out=0x02, ep_audio_in=0x83,
     sample_rate=16000, channels=1, subframe=2, bits=16,
     ep_audio_pkt=36,
+    # 排障档 CONFIG_AIO_DEBUG_CDC：让出 GUD 的 IN 端点、借用 UVC 预留的 0x84，
+    # 换一条 USB CDC 日志串口。接口**追加在最后**，音频/HID/vendor 的编号全不动 ——
+    # 所以 CDC 的接口号随音频在不在而变（有音频=5/6，没音频=2/3），下面按模式算。
+    itf_cdc_with_audio=5, itf_cdc_no_audio=2,
+    ep_cdc_in=0x81, ep_cdc_notif=0x84, ep_cdc_out=0x03,
 )
 
 DESC_CONFIG = 0x02
@@ -129,13 +135,17 @@ def main():
     #    不能把全部 CS_INTERFACE 混成一个池子去按 subtype 过滤。
     itfs, eps, iads = [], [], []
     ac_csi, as_csi, cse = [], [], []   # as_csi 元素为 (接口号, 描述符)
+    itf_eps = {}                       # (接口号, alt) -> 该 alt 下声明的端点地址集合
     cur = None
     for ln, typ, d in items:
         if typ == DESC_INTERFACE:
             itfs.append(d)
             cur = d
+            itf_eps.setdefault((d[2], d[3]), set())
         elif typ == DESC_ENDPOINT:
             eps.append(d)
+            check(cur is not None, 'ENDPOINT 出现在任何 INTERFACE 之前')
+            itf_eps[(cur[2], cur[3])].add(d[2])
         elif typ == DESC_CS_INTERFACE:
             check(cur is not None, 'CS_INTERFACE 出现在任何 INTERFACE 之前')
             if (cur[5], cur[6]) == (0x01, 0x01):        # AUDIO / AUDIOCONTROL
@@ -148,10 +158,17 @@ def main():
             iads.append(d)
     csi = ac_csi
 
-    # 音频在不在，由 IAD 是否出现来判定（IAD 只有音频功能才有）。
-    has_audio = len(iads) > 0
-    n_itf = EXPECT['n_itf'] if has_audio else EXPECT['n_itf_no_audio']
-    print(f'== 模式：{"音频已编入 (CONFIG_AIO_AUDIO_DESC=y)" if has_audio else "音频未编入 —— 仅校验 GUD + HID"} ==\n')
+    # 编了哪些可选功能，一律由 IAD 的 bFunctionClass 判定 —— 不读 sdkconfig，
+    # 才保得住「独立第二意见」的性质：只相信 ELF 里真正躺着的那串字节。
+    audio_iads = [d for d in iads if d[4] == 0x01]   # AUDIO
+    cdc_iads = [d for d in iads if d[4] == 0x02]     # CDC Control
+    has_audio = len(audio_iads) > 0
+    has_cdc = len(cdc_iads) > 0
+    n_itf = (EXPECT['n_itf'] if has_audio else EXPECT['n_itf_no_audio']) + (2 if has_cdc else 0)
+    mode = '音频已编入 (CONFIG_AIO_AUDIO_DESC=y)' if has_audio else '音频未编入 —— 仅校验 GUD + HID'
+    if has_cdc:
+        mode += ' + CDC 排障档 (CONFIG_AIO_DEBUG_CDC=y，已让出 GUD 的 IN 端点)'
+    print(f'== 模式：{mode} ==\n')
 
     itf_nums = sorted({d[2] for d in itfs})
     check(itf_nums == list(range(n_itf)),
@@ -172,25 +189,67 @@ def main():
     hid = itf_by(EXPECT['itf_hid'])
     check(hid[5] == 0x03, 'IF1 必须是 HID 类(0x03)')
     ep_addrs = {d[2] for d in eps}
-    for name in ('ep_vendor_out', 'ep_vendor_in', 'ep_hid'):
+    for name in ('ep_vendor_out', 'ep_hid'):
         check(EXPECT[name] in ep_addrs, f'{name}=0x{EXPECT[name]:02X} 不见了')
 
-    # ── 端点总账：两种模式都要守 ──
+    # vendor(GUD) 的 IN 端点：正常档必须在；CDC 排障档必须**不在**（那条 IN 让给了 CDC）。
+    # drm/gud 的 gud_probe() 只找 bulk OUT，从不找 bulk IN，所以让掉它不影响显示；
+    # 但「以为让掉了其实还在」会让 IN 端点超编、dcd_dwc2 静默失败，所以两边都钉死。
+    #
+    # ⚠️ 必须按**接口**查而不是按全局地址查：CDC 档里 0x81 被 CDC 数据 IN 接手了，
+    #    「0x81 还在描述符里」并不代表 vendor 还占着它。
+    vendor_eps = itf_eps[(EXPECT['itf_vendor'], 0)]
+    if has_cdc:
+        check(vendor_eps == {EXPECT['ep_vendor_out']},
+              f'CDC 排障档下 IF0(vendor) 只该剩 bulk OUT，实际 '
+              f'{{{", ".join(f"0x{a:02X}" for a in sorted(vendor_eps))}}} —— '
+              'IN 端点没让出去会超编，而 dcd_dwc2 超编时一个字都不打')
+    else:
+        check(vendor_eps == {EXPECT['ep_vendor_out'], EXPECT['ep_vendor_in']},
+              f'IF0(vendor) 应为 bulk OUT + bulk IN，实际 '
+              f'{{{", ".join(f"0x{a:02X}" for a in sorted(vendor_eps))}}}')
+    check(vendor[4] == len(vendor_eps),
+          f'IF0(vendor) 的 bNumEndpoints={vendor[4]}，与实际声明的 {len(vendor_eps)} 条不符')
+
+    # ── 端点总账：所有模式都要守 ──
     in_eps = sorted({d[2] for d in eps if d[2] & 0x80})
     check(len(in_eps) <= 4,
           f'IN 端点最多 4 条（P4 全速控制器 ep_in_count=5 含 EP0），实际 {len(in_eps)}')
-    check(0x84 not in in_eps, '0x84 必须留给 UVC，本阶段不得占用')
+    check(0x84 not in in_eps or has_cdc,
+          '0x84 必须留给 UVC —— 只有 CDC 排障档可以临时借走')
+
+    # ── CDC 排障档：接口/端点账 ──
+    if has_cdc:
+        itf_cdc = EXPECT['itf_cdc_with_audio'] if has_audio else EXPECT['itf_cdc_no_audio']
+        itf_cdc_data = itf_cdc + 1
+        check(len(cdc_iads) == 1, f'应恰有 1 条 CDC IAD，实际 {len(cdc_iads)}')
+        cdc_iad = cdc_iads[0]
+        check(cdc_iad[2] == itf_cdc and cdc_iad[3] == 2,
+              f'CDC 的 IAD 应从 IF{itf_cdc} 起覆盖 2 个接口，'
+              f'实际 first={cdc_iad[2]} count={cdc_iad[3]}')
+        cdc_ctl = itf_by(itf_cdc)
+        cdc_dat = itf_by(itf_cdc_data)
+        check((cdc_ctl[5], cdc_ctl[6]) == (0x02, 0x02),
+              'CDC 控制接口必须是 CDC/ACM(2/2)')
+        check(cdc_dat[5] == 0x0A, 'CDC 数据接口必须是 CDC-Data 类(0x0A)')
+        check(itf_eps[(itf_cdc, 0)] == {EXPECT['ep_cdc_notif']},
+              f'CDC 控制接口应只有通知端点 0x{EXPECT["ep_cdc_notif"]:02X}')
+        check(itf_eps[(itf_cdc_data, 0)] == {EXPECT['ep_cdc_out'], EXPECT['ep_cdc_in']},
+              f'CDC 数据接口应为 0x{EXPECT["ep_cdc_out"]:02X} + 0x{EXPECT["ep_cdc_in"]:02X}')
+        # 端点地址全局唯一 —— 与音频/HID 撞号是这一档最容易踩的坑，
+        # 而撞号的表现是「某个接口静默不工作」，从现象几乎反推不出来。
+        check(len({d[2] for d in eps}) == len(eps), '有端点地址重复声明')
 
     if not has_audio:
-        # 音频未编入：不该有任何 IAD / ISO 端点 / CS 描述符残留
-        check(not iads, f'音频未编入却出现了 {len(iads)} 条 IAD')
+        # 音频未编入：不该有音频 IAD / ISO 端点 / CS 描述符残留
+        check(not audio_iads, f'音频未编入却出现了 {len(audio_iads)} 条音频 IAD')
         check(not [d for d in eps if d[3] & 0x03 == 0x01], '音频未编入却出现了 ISO 端点')
         check(not csi and not as_csi and not cse, '音频未编入却出现了音频类 CS 描述符')
         iso_eps = []
     else:
         # ── 4) IAD 覆盖三个音频接口 ──
-        check(len(iads) == 1, f'应恰有 1 条 IAD（音频），实际 {len(iads)}')
-        iad = iads[0]
+        check(len(audio_iads) == 1, f'应恰有 1 条音频 IAD，实际 {len(audio_iads)}')
+        iad = audio_iads[0]
         check(iad[2] == EXPECT['itf_ac'] and iad[3] == 3,
               f'IAD 应从 IF{EXPECT["itf_ac"]} 起覆盖 3 个接口，实际 first={iad[2]} count={iad[3]}')
         check(iad[4] == 0x01, 'IAD 的 bFunctionClass 必须是 AUDIO(0x01)')

@@ -63,6 +63,42 @@ static volatile bool s_spk_on;
 static volatile bool s_mic_on;
 
 /*
+ * ── 开机自检快照 ───────────────────────────────────────────────────
+ *
+ * 本模块**最关键的那几行日志天生打不出来**：codec_audio_init() 必须跑在
+ * tinyusb_driver_install() 之前（见下方那段长注释），而这块板唯一可用的日志
+ * 通道 —— CONFIG_AIO_DEBUG_CDC 那条 USB CDC 串口 —— 恰恰要等 install 之后才起得来。
+ * 现场又没有 UART（USJ 被 TinyUSB 收走，UART0 只在 M5-Bus 排针上）。
+ *
+ * 所以把 init 阶段的每一个判定记成静态快照，等控制台可用后由
+ * codec_audio_report() 复读。调用点见 app_main.c —— 它每 10 秒复读一次，
+ * 因为 CDC 的 TX 环形缓冲会把 host 打开 ttyACM 之前的日志覆盖掉。
+ */
+static int  s_init_steps;                 /* init 成功跑完了几步：0..3 */
+static esp_err_t s_init_err = ESP_OK;     /* 失败在哪一步的返回值 */
+static bool s_init_duplex;                /* i2s_duplex_active() 的实测值 */
+static int  s_open_spk = -1;              /* esp_codec_dev_open(播放) 返回值 */
+static int  s_open_mic = -1;              /* esp_codec_dev_open(录音) 返回值 */
+static bool s_pa_on;                      /* board_speaker_enable() 到底调没调 */
+static const audio_codec_ctrl_if_t *s_spk_ctrl;   /* 留着回读寄存器用 */
+static const audio_codec_ctrl_if_t *s_mic_ctrl;
+
+/*
+ * 数据泵的 10 秒统计量。做成文件作用域（而不是任务局部）是为了让
+ * codec_audio_report() 能在数据泵没起来时也照样打印一份「全 0」——
+ * 「泵没在跑」与「泵在跑但没数据」是两个完全不同的结论。
+ *
+ * usb_peak / mic_peak 是这组数字里最值钱的两个：它们把
+ * 「host 根本没送音频」与「送了但设备没放出来」一刀分开。
+ */
+static uint32_t s_stat_tx_underrun, s_stat_mic_overrun, s_stat_rx_fail;
+static uint32_t s_stat_frames_total;
+/* 本窗口内的最大 |sample|。初值 −1 = 「数据泵一转都没跑过」，与
+ * 「跑了但全是静音(0)」是两个不同的结论，所以不能都用 0。 */
+static int32_t  s_stat_usb_peak = -1;     /* USB OUT（host 送来的播放数据） */
+static int32_t  s_stat_mic_peak = -1;     /* I2S RX（ES7210 送来的录音数据） */
+
+/*
  * 显式判定 I2S 是否真的组成了全双工，**不依赖 IDF 那条看不见的 DEBUG 日志**。
  *
  * i2s_std.c 的 i2s_std_set_slot() 在 controller->full_duplex 成立时调
@@ -157,6 +193,7 @@ static esp_err_t i2s_full_duplex_init(void)
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_rx, &std_cfg), TAG, "i2s rx");
 
     const bool duplex = i2s_duplex_active();
+    s_init_duplex = duplex;
     ESP_LOGI(TAG, "I2S %d Hz / 16 bit / 2 slot, duplex=%d", UAC_SAMPLE_RATE, duplex);
     ESP_RETURN_ON_FALSE(duplex, ESP_ERR_INVALID_STATE, TAG,
                         "I2S 未组成全双工：两次 init 传的不是同一份 std_cfg");
@@ -186,6 +223,7 @@ static esp_err_t es8388_init(void)
     };
     const audio_codec_ctrl_if_t *ctrl = audio_codec_new_i2c_ctrl(&i2c_cfg);
     ESP_RETURN_ON_FALSE(ctrl, ESP_FAIL, TAG, "es8388 i2c ctrl");
+    s_spk_ctrl = ctrl;   /* 留给 codec_audio_report() 回读寄存器 */
 
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = AUDIO_I2S_PORT, .tx_handle = s_tx, .rx_handle = NULL,
@@ -214,8 +252,8 @@ static esp_err_t es8388_init(void)
     /* ⓘ esp_codec_dev_open() 内部会经 data_if 去 i2s_channel_enable(s_tx)，
      * 所以**不要**再自己 enable 一次（会返回 ESP_ERR_INVALID_STATE）。 */
     esp_codec_dev_sample_info_t fs = wire_format();
-    ESP_RETURN_ON_FALSE(esp_codec_dev_open(s_spk_dev, &fs) == ESP_CODEC_DEV_OK,
-                        ESP_FAIL, TAG, "es8388 open");
+    s_open_spk = esp_codec_dev_open(s_spk_dev, &fs);
+    ESP_RETURN_ON_FALSE(s_open_spk == ESP_CODEC_DEV_OK, ESP_FAIL, TAG, "es8388 open");
 
     /* 开机音量取 70%：满量程直推板载小喇叭在中低频容易破音，而破音很容易被误判
      * 成时钟配错。host 侧还会再叠一层软件音量（本阶段不声明 Feature Unit）。 */
@@ -232,6 +270,7 @@ static esp_err_t es7210_init(void)
     };
     const audio_codec_ctrl_if_t *ctrl = audio_codec_new_i2c_ctrl(&i2c_cfg);
     ESP_RETURN_ON_FALSE(ctrl, ESP_FAIL, TAG, "es7210 i2c ctrl");
+    s_mic_ctrl = ctrl;   /* 留给 codec_audio_report() 回读寄存器 */
 
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = AUDIO_I2S_PORT, .tx_handle = NULL, .rx_handle = s_rx,
@@ -261,13 +300,27 @@ static esp_err_t es7210_init(void)
     ESP_RETURN_ON_FALSE(s_mic_dev, ESP_FAIL, TAG, "es7210 dev");
 
     esp_codec_dev_sample_info_t fs = wire_format();
-    ESP_RETURN_ON_FALSE(esp_codec_dev_open(s_mic_dev, &fs) == ESP_CODEC_DEV_OK,
-                        ESP_FAIL, TAG, "es7210 open");
+    s_open_mic = esp_codec_dev_open(s_mic_dev, &fs);
+    ESP_RETURN_ON_FALSE(s_open_mic == ESP_CODEC_DEV_OK, ESP_FAIL, TAG, "es7210 open");
 
     /* 30 dB 是 IDF 官方 es7210 例子的取值，对驻极体麦是个「能听清说话又不啸叫」
      * 的起点。真要调，先在 host 侧用 `sox -n stat` 看 RMS 再动。 */
     esp_codec_dev_set_in_gain(s_mic_dev, 30.0f);
     return ESP_OK;
+}
+
+/* 一段 16 bit 样本里的最大绝对值。用来回答「这条链路上到底有没有信号」——
+ * 比任何寄存器都直接。取反用 int32 中转，免得 INT16_MIN 溢出。 */
+static int32_t frame_peak(const int16_t *buf, size_t n)
+{
+    int32_t peak = 0;
+
+    for (size_t i = 0; i < n; i++) {
+        int32_t v = buf[i] < 0 ? -(int32_t)buf[i] : buf[i];
+        if (v > peak)
+            peak = v;
+    }
+    return peak;
 }
 
 /*
@@ -281,11 +334,15 @@ static void audio_pump_task(void *arg)
     int16_t rx_stereo[UAC_FRAME_SAMPLES * 2];
     int16_t tx_stereo[UAC_FRAME_SAMPLES * 2];
     int16_t usb_mono[UAC_FRAME_SAMPLES];
-    uint32_t tx_underrun = 0, mic_overrun = 0, rx_fail = 0, frames = 0;
+    uint32_t frames = 0;
     /* 上一转录音是否在流。用来把「清空软件 FIFO」做成**边沿触发**，见下方。 */
     bool mic_streaming = false;
 
     (void)arg;
+
+    /* 从 −1（没跑过）转成 0（跑了，静音），见两者的声明处。 */
+    s_stat_usb_peak = 0;
+    s_stat_mic_peak = 0;
 
     while (1) {
         size_t got = 0;
@@ -301,7 +358,7 @@ static void audio_pump_task(void *arg)
         } else if (i2s_channel_read(s_rx, rx_stereo, sizeof(rx_stereo), &got,
                                     pdMS_TO_TICKS(50)) != ESP_OK ||
                    got != sizeof(rx_stereo)) {
-            rx_fail++;
+            s_stat_rx_fail++;
             /*
              * ⚠️ 这里的延时不可省。上面那个 50 ms 超时**只在通道已 RUNNING 时**
              * 才会真的阻塞；通道没使能时 i2s_channel_read() 立即返回错误，
@@ -317,10 +374,18 @@ static void audio_pump_task(void *arg)
          * tud_audio_write() 只写进软件 FIFO，真正的分包由 TinyUSB 按
          * CFG_TUD_AUDIO_EP_IN_FLOW_CONTROL 决定（标称 16 样本 ±1）——
          * 这正是「异步 IN 不需要反馈端点」的实现基础。 */
+        {
+            /* 录音侧的信号电平**无条件**统计：host 没开录音时也想知道
+             * ES7210 有没有在往 DSIN 上送东西。 */
+            int32_t p = frame_peak(rx_stereo, UAC_FRAME_SAMPLES * 2);
+            if (p > s_stat_mic_peak)
+                s_stat_mic_peak = p;
+        }
+
         if (s_mic_on && tud_mounted()) {
             audio_frame_stereo_to_mono(rx_stereo, usb_mono, UAC_FRAME_SAMPLES);
             if (tud_audio_write(usb_mono, UAC_FRAME_BYTES) != UAC_FRAME_BYTES)
-                mic_overrun++;
+                s_stat_mic_overrun++;
             mic_streaming = true;
         } else if (mic_streaming) {
             /*
@@ -342,20 +407,34 @@ static void audio_pump_task(void *arg)
             read = tud_audio_read(usb_mono, UAC_FRAME_BYTES);
         if (read < UAC_FRAME_BYTES)
             memset((uint8_t *)usb_mono + read, 0, UAC_FRAME_BYTES - read);
+        {
+            int32_t p = frame_peak(usb_mono, UAC_FRAME_SAMPLES);
+            if (p > s_stat_usb_peak)
+                s_stat_usb_peak = p;
+        }
         audio_frame_mono_to_stereo(usb_mono, tx_stereo, UAC_FRAME_SAMPLES);
 
         size_t written = 0;
         if (s_tx != NULL &&                          /* NULL 只可能出现在 STAGE 0，见上 */
             (i2s_channel_write(s_tx, tx_stereo, sizeof(tx_stereo), &written,
                                pdMS_TO_TICKS(20)) != ESP_OK || written != sizeof(tx_stereo)))
-            tx_underrun++;
+            s_stat_tx_underrun++;
 
-        /* 只计数，每 10 秒汇总一条 —— 见 AUDIO_STAT_PERIOD_FRAMES 上的注释。 */
+        s_stat_frames_total++;
+
+        /* 只计数，每 10 秒汇总一条 —— 见 AUDIO_STAT_PERIOD_FRAMES 上的注释。
+         * 无条件打印（不再只在出错时打）：现场唯一的日志通道是那条 CDC 串口，
+         * 「spk_on 有没有变 1、usb_peak 是不是一直 0」正是判断
+         * 「host 到底送没送音频」的那一行，比错误计数值钱得多。 */
         if (++frames >= AUDIO_STAT_PERIOD_FRAMES) {
-            if (tx_underrun || mic_overrun || rx_fail)
-                ESP_LOGW(TAG, "10s 统计：TX 欠载 %" PRIu32 "，麦克风 FIFO 溢出 %" PRIu32
-                              "，RX 读失败 %" PRIu32, tx_underrun, mic_overrun, rx_fail);
-            tx_underrun = mic_overrun = rx_fail = frames = 0;
+            ESP_LOGI(TAG, "10s 泵：spk_on=%d mic_on=%d usb_peak=%" PRId32
+                          " mic_peak=%" PRId32 " | TX 欠载 %" PRIu32
+                          " 麦 FIFO 溢出 %" PRIu32 " RX 读失败 %" PRIu32,
+                     s_spk_on, s_mic_on, s_stat_usb_peak, s_stat_mic_peak,
+                     s_stat_tx_underrun, s_stat_mic_overrun, s_stat_rx_fail);
+            s_stat_tx_underrun = s_stat_mic_overrun = s_stat_rx_fail = 0;
+            s_stat_usb_peak = s_stat_mic_peak = 0;
+            frames = 0;
         }
     }
 }
@@ -397,14 +476,86 @@ esp_err_t codec_audio_init(void)
 {
     const int stage = CONFIG_AIO_AUDIO_FULL_STAGE;
 
-    if (stage >= 1)
-        ESP_RETURN_ON_ERROR(i2s_full_duplex_init(), TAG, "i2s");
-    if (stage >= 2)
-        ESP_RETURN_ON_ERROR(es8388_init(), TAG, "es8388");
-    if (stage >= 3)
-        ESP_RETURN_ON_ERROR(es7210_init(), TAG, "es7210");
+    /* 每一步的结果都记进快照：本函数跑在 CDC 日志串口起来之前，
+     * 这里的 ESP_LOG* 现场看不到，全靠 codec_audio_report() 复读。 */
+    if (stage >= 1) {
+        s_init_err = i2s_full_duplex_init();
+        ESP_RETURN_ON_ERROR(s_init_err, TAG, "i2s");
+        s_init_steps = 1;
+    }
+    if (stage >= 2) {
+        s_init_err = es8388_init();
+        ESP_RETURN_ON_ERROR(s_init_err, TAG, "es8388");
+        s_init_steps = 2;
+    }
+    if (stage >= 3) {
+        s_init_err = es7210_init();
+        ESP_RETURN_ON_ERROR(s_init_err, TAG, "es7210");
+        s_init_steps = 3;
+    }
 
     return ESP_OK;
+}
+
+/* 回读一个 codec 寄存器；读不到（或 ctrl 还没建出来）返回 −1
+ * ——下面按 %02x 打，所以现场看到的是一串 `ffffffff`，与 00~ff 一眼可分。
+ * 只在 codec_audio_report() 里用，10 秒一次，不在任何实时路径上。 */
+static int reg_rd(const audio_codec_ctrl_if_t *ctrl, int reg)
+{
+    int v = 0;
+
+    if (ctrl == NULL || ctrl->read_reg == NULL)
+        return -1;
+    if (ctrl->read_reg(ctrl, reg, 1, &v, 1) != ESP_CODEC_DEV_OK)
+        return -1;
+    return v & 0xff;
+}
+
+/*
+ * 把「音频到底卡在哪一步」一次性打出来。
+ *
+ * 为什么需要它、为什么要**反复**打：见文件上方那段「开机自检快照」。
+ * app_main 每 10 秒调一次 —— CDC 的 TX 环形缓冲只有几百字节，host 打开
+ * ttyACM 之前的日志会被覆盖，一次性打印的话现场大概率什么都看不到。
+ *
+ * 读法（从上往下，第一条不对的就是根因）：
+ *   steps<3 / err!=OK  → codec_audio_init() 在那一步就失败了，
+ *                        app_main 因此**没有**调 codec_audio_start()，
+ *                        功放没开、数据泵没起 —— 「有声卡但全静音」的最常见成因。
+ *   duplex=0           → I2S 没组成全双工（两次 init 的 std_cfg 不相等）。
+ *   ES8388 寄存器全打成 ffffffff → 回读失败，I2C 根本没通（地址/总线/上电）。
+ *   DACPOWER!=0x3c 或 DACCONTROL3 的 bit2=1 → DAC 没上电 / 还在静音。
+ *   pa=0               → 功放没导通（codec_audio_start() 没跑到，或 IO 扩展写失败）。
+ *   pump=0             → 数据泵任务没起来。
+ *   spk_on=0           → **host 从没把播放接口切到 alt 1**：问题在主机侧
+ *                        （没选对声卡 / 没在放音），不在固件。
+ *   spk_on=1 但 usb_peak=0 → host 选了接口却只送静音。
+ *   usb_peak>0 但仍没声 → 数字侧全通，问题在 codec 之后的模拟侧（音量/路由/功放/喇叭）。
+ */
+void codec_audio_report(void)
+{
+    ESP_LOGI(TAG, "[自检] init 步数=%d/3 err=%s duplex=%d spk_open=%d mic_open=%d pa=%d pump=%d",
+             s_init_steps, esp_err_to_name(s_init_err), s_init_duplex,
+             s_open_spk, s_open_mic, s_pa_on, s_stat_frames_total != 0);
+
+    /* ES8388：0x02 CHIPPOWER(期望 0x00)、0x04 DACPOWER(期望 0x3c)、
+     * 0x19 DACCONTROL3(bit2=1 即静音)、0x1a/0x1b DAC 左右音量(0=0dB，越大越轻)、
+     * 0x2e/0x2f LOUT1/ROUT1 音量(0x1e=0dB)、0x30/0x31 LOUT2/ROUT2 音量(驱动写 0x00)。
+     * 全打成 ffffffff 就说明 I2C 没通，那比任何别的结论都优先。 */
+    ESP_LOGI(TAG, "[自检] ES8388 chippwr=%02x dacpwr=%02x dacctl3=%02x vol L/R=%02x/%02x "
+                  "LOUT1/ROUT1=%02x/%02x LOUT2/ROUT2=%02x/%02x",
+             reg_rd(s_spk_ctrl, 0x02), reg_rd(s_spk_ctrl, 0x04), reg_rd(s_spk_ctrl, 0x19),
+             reg_rd(s_spk_ctrl, 0x1a), reg_rd(s_spk_ctrl, 0x1b),
+             reg_rd(s_spk_ctrl, 0x2e), reg_rd(s_spk_ctrl, 0x2f),
+             reg_rd(s_spk_ctrl, 0x30), reg_rd(s_spk_ctrl, 0x31));
+
+    /* ES7210：MIC1/MIC2 增益(0x43/0x44) 与 MIC12 电源(0x4b)。同样只为证明 I2C 通没通。 */
+    ESP_LOGI(TAG, "[自检] ES7210 mic1gain=%02x mic2gain=%02x mic12pwr=%02x",
+             reg_rd(s_mic_ctrl, 0x43), reg_rd(s_mic_ctrl, 0x44), reg_rd(s_mic_ctrl, 0x4b));
+
+    ESP_LOGI(TAG, "[自检] 泵 帧=%" PRIu32 " spk_on=%d mic_on=%d usb_peak=%" PRId32
+                  " mic_peak=%" PRId32,
+             s_stat_frames_total, s_spk_on, s_mic_on, s_stat_usb_peak, s_stat_mic_peak);
 }
 
 /*
@@ -430,11 +581,13 @@ esp_err_t codec_audio_start(void)
          */
         vTaskDelay(pdMS_TO_TICKS(50));
         board_speaker_enable(true);
+        s_pa_on = true;
     }
 
     if (run_pump && xTaskCreate(audio_pump_task, "audio", AUDIO_TASK_STACK_SIZE, NULL,
                                 AUDIO_TASK_PRIORITY, NULL) != pdPASS) {
         board_speaker_enable(false);
+        s_pa_on = false;
         return ESP_ERR_NO_MEM;
     }
 
