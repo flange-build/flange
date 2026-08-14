@@ -256,13 +256,25 @@ static void audio_pump_task(void *arg)
     int16_t tx_stereo[UAC_FRAME_SAMPLES * 2];
     int16_t usb_mono[UAC_FRAME_SAMPLES];
     uint32_t tx_underrun = 0, mic_overrun = 0, rx_fail = 0, frames = 0;
+    /* 上一转录音是否在流。用来把「清空软件 FIFO」做成**边沿触发**，见下方。 */
+    bool mic_streaming = false;
 
     (void)arg;
 
     while (1) {
         size_t got = 0;
-        if (i2s_channel_read(s_rx, rx_stereo, sizeof(rx_stereo), &got,
-                             pdMS_TO_TICKS(50)) != ESP_OK || got != sizeof(rx_stereo)) {
+        if (s_rx == NULL) {
+            /*
+             * CONFIG_AIO_AUDIO_FULL_STAGE == 0（反向验证档）：codec/I2S 一个字
+             * 都没初始化，句柄是 NULL。此时改用 1 ms 定时当节拍源，让本任务只
+             * 剩下 USB 侧的调用 —— 这一档专门用来验「数据泵对 tud_audio_* 的
+             * 调用本身是否有罪」。正常构建（STAGE 5）永远走不到这里。
+             */
+            vTaskDelay(pdMS_TO_TICKS(1));
+            memset(rx_stereo, 0, sizeof(rx_stereo));
+        } else if (i2s_channel_read(s_rx, rx_stereo, sizeof(rx_stereo), &got,
+                                    pdMS_TO_TICKS(50)) != ESP_OK ||
+                   got != sizeof(rx_stereo)) {
             rx_fail++;
             /*
              * ⚠️ 这里的延时不可省。上面那个 50 ms 超时**只在通道已 RUNNING 时**
@@ -283,9 +295,17 @@ static void audio_pump_task(void *arg)
             audio_frame_stereo_to_mono(rx_stereo, usb_mono, UAC_FRAME_SAMPLES);
             if (tud_audio_write(usb_mono, UAC_FRAME_BYTES) != UAC_FRAME_BYTES)
                 mic_overrun++;
-        } else {
-            /* host 关掉录音时清空软件 FIFO，否则下次打开会先放出一段陈旧音频。 */
+            mic_streaming = true;
+        } else if (mic_streaming) {
+            /*
+             * host 关掉录音时清空软件 FIFO，否则下次打开会先放出一段陈旧音频。
+             * **只在关闭的那一刻清一次**，不是每毫秒清一次：没在流的时候 FIFO
+             * 本来就没人往里写，重复清纯属空转，而且会让「host 还没枚举完」这段
+             * 窗口里本任务无谓地每毫秒碰一次 TinyUSB 的内部结构。
+             * 参照实现 cardputer-all-in-one 也是只在方向切换的边沿上清。
+             */
             tud_audio_clear_ep_in_ff();
+            mic_streaming = false;
         }
 
         /* ── 播放：USB OUT → I2S TX ──
@@ -299,8 +319,9 @@ static void audio_pump_task(void *arg)
         audio_frame_mono_to_stereo(usb_mono, tx_stereo, UAC_FRAME_SAMPLES);
 
         size_t written = 0;
-        if (i2s_channel_write(s_tx, tx_stereo, sizeof(tx_stereo), &written,
-                              pdMS_TO_TICKS(20)) != ESP_OK || written != sizeof(tx_stereo))
+        if (s_tx != NULL &&                          /* NULL 只可能出现在 STAGE 0，见上 */
+            (i2s_channel_write(s_tx, tx_stereo, sizeof(tx_stereo), &written,
+                               pdMS_TO_TICKS(20)) != ESP_OK || written != sizeof(tx_stereo)))
             tx_underrun++;
 
         /* 只计数，每 10 秒汇总一条 —— 见 AUDIO_STAT_PERIOD_FRAMES 上的注释。 */
@@ -313,32 +334,54 @@ static void audio_pump_task(void *arg)
     }
 }
 
+/*
+ * ⚠️ 下面那个 stage 是**排障旋钮**（CONFIG_AIO_AUDIO_FULL_STAGE，默认 5 = 完整行为）。
+ *
+ * 二分第一刀（AIO_AUDIO_DESC_ONLY）已实测：描述符原样带音频时 GUD 正常、主机也
+ * 枚举得出 UAC 设备 ⇒ 描述符 / 端点号 / DWC2 FIFO / TinyUSB 音频类驱动全部无罪，
+ * 「开音频就枚举不出来」的根因 100% 落在本文件的**运行时**。剩下的空间就是下面
+ * 这五个动作，stage 让每烧一次板就再切掉一刀。各级含义见 main/Kconfig.projbuild
+ * 的表。**根因定位后应当把 stage 连同那段 Kconfig 一起删掉**，别留成永久配置项。
+ */
 esp_err_t codec_audio_start(void)
 {
-    ESP_RETURN_ON_ERROR(i2s_full_duplex_init(), TAG, "i2s");
-    ESP_RETURN_ON_ERROR(es8388_init(), TAG, "es8388");
-    ESP_RETURN_ON_ERROR(es7210_init(), TAG, "es7210");
+    const int stage = CONFIG_AIO_AUDIO_FULL_STAGE;
+    /* 0 与 5 都起数据泵，二者互为反向验证：0 是「只有数据泵」（codec/I2S 一个字
+     * 不碰，句柄留 NULL），5 是「全都要」。中间四级都不起泵。 */
+    const bool run_pump = (stage == 0 || stage == 5);
 
-    /*
-     * 功放**最后**开。ES8388 的 open() 第一条就是 DACCONTROL3 静音，随后由
-     * esp_codec_dev_open() 内部解除静音；等 DAC 输出电平稳定下来再导通功放，
-     * 否则开机会有一声「啪」。50 ms 是保守值，只在启动走一次。
-     *
-     * 对称地，若日后加关流路径，必须**先** board_speaker_enable(false) **再**
-     * esp_codec_dev_close() —— esp_codec_dev_close() 不会碰这个引脚，顺序反了
-     * 就是关机 pop。本阶段音频一路常开，不做关流。
-     */
-    vTaskDelay(pdMS_TO_TICKS(50));
-    board_speaker_enable(true);
+    if (stage >= 1)
+        ESP_RETURN_ON_ERROR(i2s_full_duplex_init(), TAG, "i2s");
+    if (stage >= 2)
+        ESP_RETURN_ON_ERROR(es8388_init(), TAG, "es8388");
+    if (stage >= 3)
+        ESP_RETURN_ON_ERROR(es7210_init(), TAG, "es7210");
 
-    if (xTaskCreate(audio_pump_task, "audio", AUDIO_TASK_STACK_SIZE, NULL,
-                    AUDIO_TASK_PRIORITY, NULL) != pdPASS) {
+    if (stage >= 4) {
+        /*
+         * 功放**最后**开。ES8388 的 open() 第一条就是 DACCONTROL3 静音，随后由
+         * esp_codec_dev_open() 内部解除静音；等 DAC 输出电平稳定下来再导通功放，
+         * 否则开机会有一声「啪」。50 ms 是保守值，只在启动走一次。
+         *
+         * 对称地，若日后加关流路径，必须**先** board_speaker_enable(false) **再**
+         * esp_codec_dev_close() —— esp_codec_dev_close() 不会碰这个引脚，顺序反了
+         * 就是关机 pop。本阶段音频一路常开，不做关流。
+         */
+        vTaskDelay(pdMS_TO_TICKS(50));
+        board_speaker_enable(true);
+    }
+
+    if (run_pump && xTaskCreate(audio_pump_task, "audio", AUDIO_TASK_STACK_SIZE, NULL,
+                                AUDIO_TASK_PRIORITY, NULL) != pdPASS) {
         board_speaker_enable(false);
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "UAC1 全双工音频就绪：%d Hz / %d ch / 16 bit",
-             UAC_SAMPLE_RATE, UAC_CHANNEL_COUNT);
+    if (stage == 5)
+        ESP_LOGI(TAG, "UAC1 全双工音频就绪：%d Hz / %d ch / 16 bit",
+                 UAC_SAMPLE_RATE, UAC_CHANNEL_COUNT);
+    else
+        ESP_LOGW(TAG, "排障档 CONFIG_AIO_AUDIO_FULL_STAGE=%d：音频未完整启动", stage);
     return ESP_OK;
 }
 

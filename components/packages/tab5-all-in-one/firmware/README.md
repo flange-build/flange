@@ -798,10 +798,23 @@ ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multi
 
 ## UAC1 全双工音频（ES8388 播放 + ES7210 双麦录音）
 
-### ⛔ 状态：**默认关闭**（实机回归，根因未定）
+### ⛔ 状态：**默认关闭**（实机回归，根因已收敛到 `codec_audio.c` 运行时）
 
 实机结果：加上音频之后，主机侧不但没出录音设备，**连已实机验证的 GUD 显示也枚举不出来了**；
 退回 `31275803` 之前即恢复。GUD 是本产品的核心形态，所以音频改为**编译期可选、默认关闭**。
+
+主机侧 dmesg（`2f7a6502` 实测，即**已含**「数据泵补延时 + 优先级降到 4」那次修复）：
+
+```
+221.388  usb 1-1.2: USB disconnect, device number 5      ← app 接管，TinyUSB 上电
+221.731  usb 1-1.2: device descriptor read/64, error -32
+223.101  usb 1-1.2: Device not responding to setup address.
+224.010  usb 1-1-port2: unable to enumerate USB device
+```
+
+读法：D+ 已拉起（主机看得到设备），但 EP0 一个控制传输都不应答；且之后**再没出现过**
+bootloader 阶段的 `cdc_acm ttyACM0` ⇒ 设备既没崩也没复位，是「活着但 EP0 不应答」。
+这条否定证据下面反复用到。
 
 `CONFIG_AIO_AUDIO_MODE`（`main/Kconfig.projbuild`）三档：
 
@@ -822,13 +835,104 @@ rm -f sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.con
 
 > ⚠️ `SDKCONFIG_DEFAULTS` 会**留在 CMake 缓存里**。切档位时必须重新显式传一次（或
 > `idf.py fullclean`），只 `rm -f sdkconfig` 不够 —— 否则会悄悄沿用上一次的档位。
+>
+> ⚠️ 改了 `main/Kconfig.projbuild` 之后**必须连 build 目录一起删**（`idf.py fullclean`
+> 或 `rm -rf build sdkconfig`），否则 `sdkconfig.h` 不会重新生成，新配置项在 C 里
+> 报 `undeclared`。
 
-**二分怎么读**：描述符是静态的，`DESC_ONLY` 只保留 USB 侧的变化、去掉全部 codec/I2S 运行时。
+### ✅ 二分第一刀（已实测）：描述符无罪
 
-- `DESC_ONLY` 下 GUD **恢复** ⇒ 根因在 codec/I2S 运行时（`codec_audio_start()` 或数据泵任务）。
-- `DESC_ONLY` 下 GUD **仍不行** ⇒ 根因在描述符 / 端点 / FIFO。
+`DESC_ONLY` 档实测结果：**GUD 显示正常，且主机成功枚举出 UAC 设备**。
+
+于是这一整片候选根因**被排除**：描述符内容、接口号、端点号、DWC2 的 FIFO 预算、
+TinyUSB 音频类驱动本身（`audiod_init` / `audiod_open` / `CFG_TUD_AUDIO_*`）——
+这些在 `DESC_ONLY` 下全都在跑，而且跑得好好的。
+
+`FULL` 与 `DESC_ONLY` 的差值只剩「编译 `codec_audio.c` + 调用 `codec_audio_start()`」，
+**根因 100% 在 `codec_audio.c` 的运行时**。
+
+### 二分第二刀：`CONFIG_AIO_AUDIO_FULL_STAGE`（0–5，默认 5）
+
+只在 `AIO_AUDIO_FULL` 下有效，按 `codec_audio_start()` 的动作分级，一次烧板切一刀：
+
+| 值 | 跑到哪一步为止 | 这一级挂掉 ⇒ 根因是 |
+|---|---|---|
+| `0` | **只起数据泵**，codec/I2S 一个字都不碰（I2S 句柄保持 `NULL`，改用 `vTaskDelay(1)` 当节拍源） | 数据泵对 `tud_audio_*` 的调用本身 |
+| `1` | `i2s_full_duplex_init()`：建通道 + 配 G26~G30 + 时钟 | I2S 外设 / 引脚 / 时钟 bring-up |
+| `2` | `+ es8388_init()`：I2C `0x10` 寄存器序列 + TX 通道使能 | ES8388 那段 I2C，或 TX 通道使能 |
+| `3` | `+ es7210_init()`：I2C `0x40` 寄存器序列 + RX 通道使能 | ES7210 那段 I2C，或 RX 通道使能 |
+| `4` | `+ board_speaker_enable(true)`：功放上电（**不起数据泵**） | 功放上电（电流/电源，软件之外） |
+| `5` | `+ 数据泵任务`（默认，= 完整行为） | 数据泵的稳态运行 |
+
+```bash
+# 先烧 4：一刀切开「codec/I2S 初始化」与「数据泵」
+printf 'CONFIG_AIO_AUDIO_FULL=y\nCONFIG_AIO_AUDIO_FULL_STAGE=4\n' > /tmp/aio.conf
+rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
+```
+
+**怎么读**（判据只有一条：GUD 还出不出图 —— 现场没串口）：
+
+- `4` **正常** ⇒ 罪在数据泵。再烧 `0`：
+  - `0` 也**正常** ⇒ 罪在数据泵的 **I2S 收发**（1 kHz 的 `i2s_channel_read/write`），
+    不在它对 `tud_audio_*` 的调用；
+  - `0` **挂掉** ⇒ 罪在数据泵对 `tud_audio_*` 的调用本身（与静态分析矛盾，见下）。
+- `4` **挂掉** ⇒ 罪在初始化。再烧 `2` 二分：正常则罪在 `3`/`4` 新增的那一步，
+  挂掉则罪在 `1`/`2`。
+
+> ⚠️ `STAGE` 是**排障旋钮**，不是长期配置项。根因定位后应当把它连同
+> `main/Kconfig.projbuild` 里那段表格与 `codec_audio_start()` 里的分级一起删掉。
 
 ### 已排除的候选（静态验算，非推测）
+
+**数据泵在枚举完成前调 `tud_audio_*` 不会有事。** TinyUSB 0.21.0 的
+`class/audio/audio_device.c` 里，三个 API 的第一行都是同一条守卫：
+
+```c
+uint16_t tud_audio_n_write(...)         { TU_VERIFY(func_id < CFG_TUD_AUDIO && _audiod_fct[func_id].p_desc != NULL); ... }  // :501
+uint16_t tud_audio_n_read(...)          { TU_VERIFY(... p_desc != NULL); ... }                                              // :449
+bool     tud_audio_n_clear_ep_in_ff(...){ TU_VERIFY(... p_desc != NULL); ... }                                              // :506
+```
+
+`p_desc` 只在 `audiod_open()`（即 `SET_CONFIGURATION` 解析描述符时）才被赋值，
+而 `audiod_reset()`（:793，每次总线复位都会调）用 `tu_memclr(audio, ITF_MEM_RESET_SIZE)`
+把它清回 `NULL`。所以在 host 完成 `SET_CONFIGURATION` 之前，这三个调用是**纯空操作**：
+不解引用未初始化的 FIFO、不取任何锁（`TU_VERIFY` 只是 `if (!cond) return 0/false`，
+不是 `assert`），也不会碰 TinyUSB 的任何内部状态。软件 FIFO 的缓冲区本身是
+`.bss` 里的静态数组，`audiod_init()`（:677，`tud_init()` 里调）就已经 `tu_fifo_config()` 好了。
+
+**「panic / 看门狗把板子打挂」这一整类不成立。** 本工程 `sdkconfig` 里
+`CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y` 且 `CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0`，
+`CONFIG_ESP_INT_WDT=y`（300 ms，触发即 panic）。也就是说：**任何** panic、断言失败、
+栈溢出、或连续 300 ms 关中断/跨核死锁，结果都是**立即复位**。而复位后 bootloader
+阶段的 USB-Serial/JTAG 会重新枚举成 `cdc_acm ... ttyACM0`——实测 dmesg 里
+`221.388` 那次 disconnect 之后**再没出现过**。所以设备既没崩也没复位，
+它是「活着但 EP0 不应答」。（`CONFIG_ESP_TASK_WDT_PANIC` 未开，任务看门狗只告警。）
+
+**内存不是根因。** `AIO_AUDIO_FULL` 实测 `idf.py size`：DIRAM 用 95598 / 576464 字节，
+**内部 RAM 还剩 480 KB**。而且 `codec_audio_start()` 里每一条分配失败路径
+（`i2s_new_channel` / `audio_codec_new_*` / `esp_codec_dev_new` / `xTaskCreate`）
+都是 `ESP_RETURN_ON_*` 返回错误码 → 数据泵根本不会被创建 → USB 一侧毫发无损。
+
+**`codec_audio_start()` 里没有可能永不返回的调用。** 逐个查过：
+
+- I2C（与触摸共用 `board_i2c_bus()`）：`esp_codec_dev` 的
+  `platform/audio_codec_ctrl_i2c.c` 把 `DEFAULT_I2C_TRANS_TIMEOUT` 定为 **100 ms**，
+  每次 `i2c_master_transmit[_receive]()` 都带这个超时；IDF 的 `i2c_master` 驱动
+  自带总线互斥锁，与 20 ms 轮询的触摸任务之间**不会互相破坏、也不会死等**
+  （两边都是有限超时 + 只在一处取锁，构不成循环等待）。
+- `esp_codec_dev` 的 I2S 互斥锁：`DEFAULT_WAIT_TIMEOUT` = **1000 ms**，同样有限。
+- `i2s_channel_init_std_mode()` / `i2s_channel_enable()`：纯寄存器与 DMA 配置，不阻塞。
+
+**而且即便它真的永不返回也不要紧**：`codec_audio_start()` 跑在 `app_main`（CPU0）里，
+`app_main` 之后只有 `while (1) vTaskDelay(1000)`；而 TinyUSB 的任务是
+`xTaskCreatePinnedToCore(..., prio 5, xCoreID = TINYUSB_DEFAULT_TASK_AFFINITY)`，
+多核构建下 **`TINYUSB_DEFAULT_TASK_AFFINITY = 1`，即钉在 CPU1**
+（`espressif__esp_tinyusb/include/tinyusb_default_config.h:70-85`）。
+数据泵是 `xTaskCreate`（不钉核）、优先级 **4**，低于 TinyUSB 的 5，
+**在任何一个核上都抢不过它**——这也说明 `2f7a6502` 那次「优先级 5→4」不可能是解药，
+与实测一致。
+
+### 已排除的候选（续：USB 侧，`DESC_ONLY` 实测已复核这一整片）
 
 **FIFO 与 IN 端点预算不是根因。** 按 `dcd_dwc2.c` 的 `dfifo_alloc()` 逐步验算
 （rhport 0 = FS，`ep_count=7` / `ep_in_count=5` / `otg_dfifo_depth=256`，
@@ -863,9 +967,12 @@ rm -f sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.con
 
 **`esp_codec_dev` 与 IDF `esp_driver_i2s` 的初始化路径上没有 `ESP_ERROR_CHECK` /
 `abort()` / `assert()`**（已 grep 全组件），`codec_audio.c` 自己也全是
-`ESP_RETURN_ON_*`。所以「codec 初始化失败 → panic → 复位循环」这条具体路径不成立；
-但数据泵任务的运行时行为（优先级 5、`i2s_channel_read` 失败即 `continue` 无延时）
-尚未排除，这正是 `DESC_ONLY` 要测的那一半。
+`ESP_RETURN_ON_*`。所以「codec 初始化失败 → panic → 复位循环」这条具体路径不成立
+——这与上面「dmesg 里再没出现过 bootloader 的 CDC ACM」那条实测证据互为印证。
+
+**数据泵的忙循环也已被实机排除。** `2f7a6502` 已经给错误路径补了 `vTaskDelay(10ms)`、
+并把优先级从 5 降到 4，而**那份失败的 dmesg 正是在 `2f7a6502` 上抓的**。
+再加上上面那条「TinyUSB 任务钉在 CPU1、优先级 5」的分析，这条线索到此为止。
 
 ---
 
@@ -1077,7 +1184,7 @@ USB-Serial/JTAG 被 TinyUSB 收走，CDC 又被编译期 `#error` 堵死。接�
 | `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/touch_hid.{c,h}` | GT911 初始化（INT 拉低 + 备用地址 `0x14`）+ 20ms 轮询 + digitizer 上报（RID 2） |
 | `main/touch_map.{c,h}` | 面板坐标 → GUD 坐标反变换 + HID 归一化 + 报告装填，零依赖纯函数（宿主机可测） |
-| `main/Kconfig.projbuild` | `CONFIG_AIO_AUDIO_MODE` 三档开关（默认关闭音频），以及派生量 `CONFIG_AIO_AUDIO_DESC` |
+| `main/Kconfig.projbuild` | `CONFIG_AIO_AUDIO_MODE` 三档开关（默认关闭音频）、派生量 `CONFIG_AIO_AUDIO_DESC`，以及排障用的 `CONFIG_AIO_AUDIO_FULL_STAGE`（0–5，默认 5） |
 | `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调（仅 `AIO_AUDIO_FULL` 下编译） |
 | `main/audio_frame.{c,h}` | USB 单声道 ↔ I2S 立体声转换，零依赖纯函数（宿主机可测） |
 | `main/tinyusb_config/tusb_config.h` | `include_next` esp_tinyusb 默认配置后追加 `CFG_TUD_AUDIO_*`（它没开放 Audio 类）；整段受 `CONFIG_AIO_AUDIO_DESC` 控制，关闭时退化成透明转发 |

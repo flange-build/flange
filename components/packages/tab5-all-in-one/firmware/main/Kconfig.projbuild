@@ -13,6 +13,10 @@ menu "Tab5 All-in-One"
 #   FULL      31275803 的完整行为
 # DESC_ONLY 下若 GUD 恢复 ⇒ 根因在 codec/I2S 运行时；仍不恢复 ⇒ 根因在
 # 描述符/端点/FIFO。描述符是静态的，这条二分才干净。
+#
+# ✅ 二分第一刀已实测：DESC_ONLY 下 **GUD 正常且主机枚举出了 UAC 设备**。
+#    ⇒ 描述符、端点号、DWC2 FIFO、TinyUSB 音频类驱动全部无罪，
+#      根因 100% 落在 codec_audio.c 的运行时。第二刀见下面的 AIO_AUDIO_FULL_STAGE。
 
 choice AIO_AUDIO_MODE
     prompt "UAC1 音频（ES8388 播放 + ES7210 录音）"
@@ -29,6 +33,33 @@ choice AIO_AUDIO_MODE
     config AIO_AUDIO_FULL
         bool "完整启用"
 endchoice
+
+# ── 二分第二刀：FULL 档内部按启动步骤分级 ────────────────────────────
+#
+# DESC_ONLY 已经把根因锁进 codec_audio.c 的运行时，剩下的空间是
+# codec_audio_start() 的五个动作，本旋钮让每烧一次板就再切一刀。
+# 用 int 而不是 choice：可以直接二分（先烧 4，再按结果烧 2 或 5）。
+#
+# | 值 | 跑到哪一步为止 | GUD 挂了说明什么 |
+# |----|----------------|------------------|
+# | 0  | **只起数据泵**，codec/I2S 一个字都不碰（I2S 句柄保持 NULL） | 罪在数据泵对 tud_audio_* 的调用本身 |
+# | 1  | i2s_full_duplex_init()：建通道 + 配 G26~G30 + 时钟         | 罪在 I2S 外设/引脚/时钟 bring-up |
+# | 2  | + es8388_init()：I2C 0x10 寄存器序列 + TX 使能             | 罪在 ES8388 那段 I2C 或 TX 通道使能 |
+# | 3  | + es7210_init()：I2C 0x40 寄存器序列 + RX 使能             | 罪在 ES7210 那段 I2C 或 RX 通道使能 |
+# | 4  | + board_speaker_enable(true)：功放上电（**不起数据泵**）   | 罪在功放上电（电流/电源，非软件） |
+# | 5  | + 数据泵任务（默认，= 完整行为）                            | 罪在数据泵的稳态运行 |
+#
+# 读法：某一级 GUD 正常、下一级挂掉 ⇒ 根因就在这两级之间新增的那一个动作。
+# 0 与 5 是一对反向验证：0 只留 USB 侧调用、5 只比 4 多了数据泵。
+# ⚠️ 这是**排障用**的旋钮，根因定位后应当连同本注释一起删掉。
+config AIO_AUDIO_FULL_STAGE
+    int "FULL 档跑到第几步（二分排障用，5 = 完整行为）"
+    depends on AIO_AUDIO_FULL
+    range 0 5
+    default 5
+    help
+        只在排查「开音频后 USB 枚举失败」时才动它。5 是完整行为。
+        每个取值的含义见 main/Kconfig.projbuild 里的表，或 firmware/README.md。
 
 # 派生量：描述符与 CFG_TUD_AUDIO 是否要带上音频。
 # 后两档都要，所以统一用它判断，别在 C 里到处写两个宏的 ||。
