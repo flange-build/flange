@@ -30,11 +30,15 @@ static const char *TAG = "codec_audio";
 
 #define AUDIO_TASK_STACK_SIZE 4096
 /*
- * 与 TinyUSB 的任务同优先级（esp_tinyusb 的 TINYUSB_DEFAULT_TASK_PRIO = 5）。
- * 本任务每毫秒只搬 128 字节，绝大部分时间阻塞在 i2s_channel_read() 上，没有理由
- * 压过 USB 栈；同优先级下 FreeRTOS 时间片轮转，两者都不会饿死。
+ * **必须低于** TinyUSB 的任务优先级（esp_tinyusb 的 TINYUSB_DEFAULT_TASK_PRIO = 5）。
+ *
+ * 此前取 5（同优先级），理由是「本任务绝大部分时间阻塞在 i2s_channel_read() 上」——
+ * 这个前提在 I2S 通道**未进入 RUNNING** 时不成立：那时 i2s_channel_read() 会立即
+ * 返回错误而不是阻塞满超时，循环随即退化成不让出 CPU 的忙转，独占一个核。
+ * USB 是这块板的命脉（显示/键盘/触摸/音频全走它），任何情况下都不该被音频抢；
+ * 排在它下面，最坏情况也只是音频卡顿，而不是整个设备枚举不出来。
  */
-#define AUDIO_TASK_PRIORITY   5
+#define AUDIO_TASK_PRIORITY   4
 
 /* 欠载/溢出汇总日志的间隔。⚠️ 绝不在每帧路径里打日志 ——
  * 1 kHz 的 ESP_LOGW 会自己把音频饿死，属于观测干扰被观测。 */
@@ -260,6 +264,14 @@ static void audio_pump_task(void *arg)
         if (i2s_channel_read(s_rx, rx_stereo, sizeof(rx_stereo), &got,
                              pdMS_TO_TICKS(50)) != ESP_OK || got != sizeof(rx_stereo)) {
             rx_fail++;
+            /*
+             * ⚠️ 这里的延时不可省。上面那个 50 ms 超时**只在通道已 RUNNING 时**
+             * 才会真的阻塞；通道没使能时 i2s_channel_read() 立即返回错误，
+             * 于是 continue 会把本循环变成不让出 CPU 的忙转、独占一个核，
+             * 把同核上的低优先级任务连同 idle 任务一起饿死。
+             * 也就是说「音频没起来」会升级成「整块板子不正常」。
+             */
+            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
