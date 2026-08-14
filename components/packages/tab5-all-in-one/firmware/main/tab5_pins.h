@@ -34,36 +34,106 @@
 #define PIN_I2S_DSIN       28   /* ES7210 → ESP，录音 */
 
 /*
- * ⚠️⚠️⚠️ **G26 / G27 与 USB 抢焊盘** —— 这是本板最贵的一个坑，别再踩第二次。
+ * ⚠️⚠️⚠️ **配置 G26/G27 会顺手关掉 USB-C 的焊盘** —— 本板最贵的一个坑，
+ *        排查烧了七八次板，写清楚，别再踩第二次。
  *
- * ESP32-P4 有两条内部全速(FSLS) PHY，它们的 D−/D+ 是**复用到 GPIO 上的**：
+ * ── 事实 1：ESP32-P4 的两条内部全速(FSLS) PHY 的 D−/D+ 复用在 GPIO 上 ──
  *     PHY0: D− = G24, D+ = G25     ← Tab5 的 USB-C 接在这里
  *     PHY1: D− = G26, D+ = G27     ← 正好就是本板的 I2S DOUT 与 BCLK
+ *   依据 components/soc/esp32p4/register/hw_ver1/soc/io_mux_reg.h:167-170
+ *       USB_INT_PHY0_DM/DP_GPIO_NUM = 24 / 25
+ *       USB_INT_PHY1_DM/DP_GPIO_NUM = 26 / 27
  *
- * 依据（IDF v6.0 源码，逐条可查，不是推测）：
- *   - components/soc/esp32p4/register/hw_ver1/soc/io_mux_reg.h:167-176
- *         USB_INT_PHY0_DM/DP_GPIO_NUM = 24 / 25
- *         USB_INT_PHY1_DM/DP_GPIO_NUM = 26 / 27
- *   - components/esp_hal_usb/esp32p4/usb_dwc_periph.c:31-34
- *         internal_phy_io = { .dp = 27, .dm = 26 }，挂在 usb_dwc_info
- *         .controllers[1]（Full-Speed USB-DWC，也就是 TinyUSB 用的那个）上
- *   - components/esp_hw_support/usb_phy/usb_phy.c:308-313，注释原文：
- *         "For FSLS PHY that shares pads with GPIO peripheral, we must set
- *          drive capability to 3 (40mA)"
- *     —— usb_new_phy() 会**无条件**把 G26/G27 的驱动能力抬到 CAP_3(40mA)，
- *        与我们把 OTG 换到了 PHY0 无关（IDF 认死 OTG 的 PHY 就是 PHY1）。
+ * ── 事实 2：哪条 PHY 归谁，是可以换的，而我们**换了** ──
+ *   LP_SYS.usb_ctrl.sw_usb_phy_sel 决定 USJ 与 USB_WRAP(OTG1.1) 各拿哪条 PHY。
+ *   默认 USJ→PHY0、OTG→PHY1；app_main.c 的 route_fsls_phy0_to_otg() 把它对调成
+ *   **OTG→PHY0(G24/G25)、USJ→PHY1(G26/G27)** —— 必须这么换，因为 USB-C 物理接的
+ *   就是 G24/G25。见 hal/usb_wrap_ll.h 的 usb_wrap_ll_phy_select()。
  *
- * 后果：app_main.c 的 route_fsls_phy0_to_otg() 把 OTG 换到 PHY0 的同时，
- * **USJ 被换到了 PHY1**，而 USJ 从 bootloader 起就是使能的（dmesg 里那条
- * cdc_acm 就是它），CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 只让应用不再初始化它，
- * 并不会关掉它已经使能的 PHY 焊盘。于是 I2S 一配 G26/G27，这两个焊盘上就同时
- * 有 USB PHY 的模拟驱动器和 I2S 的 40mA 数字推挽输出。
+ * ── 事实 3（真正的根因）：IDF 的 GPIO HAL 把「谁用哪条 PHY」写死了 ──
+ *   components/esp_hal_gpio/esp32p4/include/hal/gpio_ll.h:676-686
+ *       static inline void gpio_ll_func_sel(gpio_dev_t *hw, uint8_t gpio_num, uint32_t func)
+ *       {
+ *           // Disable USB PHY configuration if pins (24, 25) (26, 27) needs to
+ *           // select an IOMUX function
+ *           // We only consider the default connection here: PHY0 -> USJ, PHY1 -> USB_OTG
+ *           if (gpio_num == 24 || gpio_num == 25)      USB_SERIAL_JTAG.conf0.usb_pad_enable = 0;
+ *           else if (gpio_num == 26 || gpio_num == 27) USB_WRAP.otg_conf.usb_pad_enable = 0;
+ *           IO_MUX.gpio[gpio_num].mcu_sel = func;
+ *       }
+ *   注释里那句 "We only consider the default connection here" 就是炸弹引信：
+ *   **我们恰恰破坏了那个默认假设。**
  *
- * 实测吻合：STAGE=1（只跑 i2s_full_duplex_init）即挂，且 CPU 不复位、
- * D+ 仍拉着 —— 主机看得到设备但一个控制传输都不应答。
+ *   而 usb_pad_enable 是**跟着 mux 走的**（每个控制器一位，经 sw_usb_phy_sel 路由到
+ *   它当前那条 PHY —— 否则 usb_new_phy() 置位 USB_WRAP 那一位之后 USB-C 根本不会通）。
+ *   于是：
+ *       i2s_channel_init_std_mode() → i2s_gpio_check_and_set()
+ *         → gpio_func_sel(26/27, PIN_FUNC_GPIO) → gpio_ll_func_sel()
+ *           → USB_WRAP.otg_conf.usb_pad_enable = 0
+ *             → 换过 PHY 之后这一位管的是 **PHY0 = G24/G25 = USB-C**
+ *               → **USB-C 的焊盘被关掉**
  *
- * 这两个脚是**硬连线**到 ES8388 的，改不了；要动只能让 USB 那边放开焊盘，
- * 见 CONFIG_AIO_USJ_RELEASE_PHY_PADS。
+ *   注意：G26/G27 上从头到尾**只有 I2S 一个驱动器**，PHY1 的焊盘并没有被打开
+ *   （OTG 的 usb_pad_enable 早已随 mux 走到 PHY0；USJ 那一位则在启动早期就被 IDF
+ *   清零了，见下）。所以这**不是**「两个驱动器抢一个焊盘」的模拟问题，
+ *   而是一次**寄存器误伤**：I2S 配脚顺手把 USB-C 的焊盘开关拨到了 0。
+ *
+ * ── 实测吻合（这是坐实根因的那组数据）──
+ *   CONFIG_AIO_AUDIO_FULL + CONFIG_AIO_AUDIO_I2S_GPIO_NO_USB_PADS（整套音频照跑，
+ *   只把 G26/G27 让开）：GUD 显示正常、声卡与麦克风都枚举出来，只是没声音
+ *   （DOUT/BCLK 确实没接出去）。⇒ I2S 外设、时钟、GDMA、codec I2C、esp_codec_dev、
+ *   数据泵、UAC 描述符、端点/FIFO 全部无罪，**只要碰这两个脚就死**。
+ *   反过来碰了就死的症状是「D+ 还拉着、主机看得到设备、EP0 一个控制传输都不应答、
+ *   CPU 不复位」—— 正是焊盘被关掉、PHY 停止收发的样子。
+ *
+ * ── 修法（app_main.c）──
+ *   引脚是硬连线的，改不了；IDF 的 gpio_ll_func_sel() 也不能改。只能**在它误伤之后
+ *   把开关拨回来**，并让误伤发生在 USB 还没上电的时候：
+ *     1. codec_audio_init()（I2S + 两颗 codec）排在 tinyusb_driver_install() **之前**
+ *        —— 那时 USB 还没连上主机，误伤无害；随后 tinyusb_driver_install() 内部的
+ *        usb_new_phy() → usb_wrap_hal_init() → usb_wrap_ll_phy_set_defaults() 会把
+ *        otg_conf.usb_pad_enable 重新置 1（esp_hal_usb/usb_wrap_hal.c:11-19）。
+ *        这样**不存在**「USB 已枚举却被短暂拔掉」的窗口。
+ *     2. 装完 TinyUSB 再显式跑一遍 otg_fsls_pads_repair() 兜底。
+ *   细节与另外两条兜底动作见 app_main.c 的 otg_fsls_pads_repair()。
+ *
+ * ── 另一条独立的误伤路径（同一 bug 家族，已一并兜底）──
+ *   gpio_ll.h:93-111 的 gpio_ll_pullup_dis() 也写死了同一套假设：对 G27 调它会写
+ *   USB_WRAP.otg_conf.pad_pull_override = 1 / dp_pullup = 0，换过 PHY 之后就是
+ *   **拿掉 G25(D+) 的上拉** ⇒ 主机直接看不到设备。当前 I2S 路径不走这条
+ *   （i2s_gpio_check_and_set() 只调 gpio_func_sel / gpio_input_enable /
+ *   esp_rom_gpio_connect_out_signal），但修复里顺手把 override 清回 0。
+ *
+ * ── 为什么 esp-bsp / M5Stack 自己的固件不会踩到 ──
+ *   Tab5 原理图（官方 PDF）的网名把三对脚分得很清楚：
+ *       U1 pin 49/50  USB2_OTG_D−/D+                → USB-A 母座（高速 PHY 专用焊盘）
+ *       U1 pin 52/53  GPIO24/USB1P1_0− , GPIO25/…+  → USB_DEVICE_DM/DP → USB-C J8
+ *       U1 pin 55/56  GPIO26/USB1P1_1− , GPIO27/…+  → I2S_DIN_MOSI_GPIO26 / I2S_SCLK_GPIO27
+ *   也就是说 **PHY1 上根本没有接任何 USB 连接器**。而 esp-bsp bsp/m5stack_tab5 的
+ *   bsp_usb.c 走的是 usb_host_install()，在 P4 上解析成**高速控制器 + UTMI PHY**
+ *   （独立焊盘），从不碰 G24~G27；esp-bsp 全仓库对 usb_phy / usb_wrap / phy_sel /
+ *   pad_enable 零命中，也没有任何 example 同时开音频与 USB。
+ *   我们是**第一个**在这块板上把全速 OTG 换到 PHY0 的，所以这条路上没有前人的脚印。
+ *   （P4 官方 errata 13 条里也没有 USB / GPIO 相关项；IDF 的 P4 GPIO 文档只提醒
+ *    G24/G25 被 USB-JTAG 占用，对 G26/G27 与双 PHY 的相互作用只字未提，
+ *    datasheet 甚至把 G26/G27 归为「可自由使用、无限制」的 Priority 2。）
+ *
+ * ⓘ LP_SYS.usb_ctrl 的 sw_hw_usb_phy_sel / sw_usb_phy_sel 这两位在公开 TRM 里是
+ *   **reserved**（IDF 头文件的描述也只有 "need_des"）。TRM 只文档化了 eFuse 那条
+ *   静态换法。也就是说我们用的是一条未公开的运行时寄存器路径 —— 它能用（实机已验），
+ *   但别指望文档，也别指望 IDF 的其它部分知道我们换过。
+ *   另注：usb_wrap_ll_phy_select() 在 v5.4.3 / v5.5.1 及更早版本有 switch 漏 break
+ *   的 bug，phy_idx=0 是静默空操作（espressif/esp-idf#17831 修）。本工程用的
+ *   IDF v6.0 已含 break，不受影响。
+ *
+ * ── 顺带澄清一条**曾经写在这里的错误结论**（别再照抄）──
+ *   「USJ 从 bootloader 起就使能着 PHY1 的焊盘，跟 I2S 打架」——**不成立**。
+ *   CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 时，IDF 在 app_main 之前就已经清掉了
+ *   USB_SERIAL_JTAG.conf0.usb_pad_enable 并门控了 USJ 时钟：
+ *       esp_system/port/soc/esp32p4/clk.c:238-242 → esp_hal_clock/esp32p4/clk_gate_ll.h:330-336
+ *           REG_CLR_BIT(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
+ *           REG_CLR_BIT(HP_SYS_CLKRST_SOC_CLK_CTRL2_REG, ..._USB_DEVICE_APB_CLK_EN);
+ *   所以 CONFIG_AIO_USJ_RELEASE_PHY_PADS 那档**是空操作**（还多余地把 USJ 时钟又打开了）。
  */
 
 /* 喇叭功放使能：与 LCD_EN(PIN4) / TOUCH_EN(PIN5) 同在 0x43 那颗 PI4IOE5V6408 上

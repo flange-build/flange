@@ -12,9 +12,11 @@
 #if CONFIG_AIO_AUDIO_FULL
 #include "codec_audio.h"
 #endif
-#include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
-#if CONFIG_AIO_USJ_RELEASE_PHY_PADS
+#include "driver/gpio.h"                /* gpio_set_drive_capability */
 #include "esp_private/periph_ctrl.h"    /* PERIPH_RCC_ATOMIC */
+#include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
+#include "tab5_pins.h"
+#if CONFIG_AIO_USJ_RELEASE_PHY_PADS
 #include "hal/usb_serial_jtag_ll.h"     /* usb_serial_jtag_ll_phy_enable_pad */
 #endif
 #if CONFIG_TINYUSB_CDC_ENABLED
@@ -48,22 +50,43 @@ static void route_fsls_phy0_to_otg(void)
 {
     usb_wrap_ll_phy_select(&USB_WRAP, 0);
 
+#if CONFIG_AIO_AUDIO_FULL
+    /*
+     * ⚠️ 提前打开 USB_WRAP 的总线时钟。
+     *
+     * 换过 PHY 之后，**任何人**把 G26/G27 配成 IO_MUX 功能，IDF 的
+     * gpio_ll_func_sel() 都会顺手写一次 USB_WRAP.otg_conf.usb_pad_enable = 0
+     * （机理见 tab5_pins.h 音频段）。而 I2S 配脚发生在 tinyusb_driver_install()
+     * **之前**（见 app_main 里的顺序说明），那时 USB_WRAP 的总线时钟还是关的 ——
+     * IDF 启动阶段 esp_perip_clk_init() 已经把 HP_SYS_CLKRST.soc_clk_ctrl1 的
+     * reg_usb_otg11_sys_clk_en 清零（esp_hal_clock/esp32p4/clk_gate_ll.h:321-323）。
+     * 对时钟被门控的外设做寄存器访问在 P4 上是总线错误，所以先把它打开。
+     *
+     * 打开它没有副作用：tinyusb_driver_install() → usb_wrap_hal_init() 马上又会
+     * 打开一次（esp_hal_usb/usb_wrap_hal.c:11-19），我们只是把它提前了几毫秒。
+     * soc_clk_ctrl1 / hp_usb_clkrst_ctrl0 是与别的外设共用的 32 位寄存器，
+     * 必须走 PERIPH_RCC_ATOMIC() 的读改写锁，不能裸写。
+     */
+    PERIPH_RCC_ATOMIC() {
+        usb_wrap_ll_enable_bus_clock(true);
+    }
+#endif
+
 #if CONFIG_AIO_USJ_RELEASE_PHY_PADS
     /*
-     * ⚠️ 候选修法（默认关闭，见 main/Kconfig.projbuild 的说明）：把 PHY1 的
-     * 焊盘 —— **也就是 G26/G27，正好是本板 I2S 的 DOUT 与 BCLK** —— 从
-     * USB-Serial/JTAG 手里放掉。
+     * ⚠️ **已被证伪的候选修法**，默认关闭，只为对照留着（见 Kconfig.projbuild）。
      *
-     * 上面那次换 PHY 是**双向**的：OTG1.1 拿到 PHY0(G24/G25) 的同时，USJ 被换到了
-     * PHY1(G26/G27)。而 USJ 从 bootloader 起就是使能的（主机 dmesg 里那条 cdc_acm
-     * 就是它），CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 只让**应用**不再初始化它，
-     * 并不会关掉它已经使能的 PHY 焊盘。于是 I2S 一配 G26/G27，那两个焊盘上就同时
-     * 有 USB PHY 的模拟驱动器和 I2S 的数字推挽输出（驱动能力还刚被 usb_phy.c
-     * 抬到 CAP_3 = 40mA）。详细依据见 tab5_pins.h 音频段下面那段注释。
+     * 当初的想法是：换 PHY 之后 USJ 落在 PHY1(G26/G27)，把它的 usb_pad_enable 清掉
+     * 就能让出焊盘。但查实 IDF 在 app_main 之前**已经替我们清过了** ——
+     * CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 时 esp_perip_clk_init() 会执行
+     *     REG_CLR_BIT(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
+     * （esp_hal_clock/esp32p4/clk_gate_ll.h:330-336）。所以这段是**空操作**，
+     * 反而多把 USJ 的 APB 与 48M 时钟打开了一次。真正的根因与修法见
+     * tab5_pins.h 音频段与下面的 otg_fsls_pads_repair()。
      *
-     * 先使能 USJ 的总线时钟再写它的寄存器：CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 时
-     * 没人保证这颗外设的 APB 时钟还开着，而对时钟门控住的外设做寄存器访问在 P4 上
-     * 是总线错误。reg_usb_device_apb_clk_en 与 reg_i2s0_apb_clk_en 同在
+     * 先使能 USJ 的总线时钟再写它的寄存器：时钟已被上面那段启动代码门控，
+     * 而对时钟门控住的外设做寄存器访问在 P4 上是总线错误。
+     * reg_usb_device_apb_clk_en 与 reg_i2s0_apb_clk_en 同在
      * HP_SYS_CLKRST.soc_clk_ctrl2 这**一个 32 位字**里，所以必须走 PERIPH_RCC_ATOMIC()
      * 的读改写锁，不能裸写。
      */
@@ -76,6 +99,73 @@ static void route_fsls_phy0_to_otg(void)
 
     ESP_LOGI(TAG, "内部 FSLS PHY 0 已划给 OTG1.1（USB-C 从 USB-Serial/JTAG 收回）");
 }
+
+#if CONFIG_AIO_AUDIO_FULL
+/*
+ * 把 I2S 配 G26/G27 时被 IDF **误伤**的三样东西修回来。
+ *
+ * 机理（完整版见 tab5_pins.h 的音频段，那里有逐行源码出处）：IDF 的
+ * gpio_ll_func_sel() / gpio_ll_pullup_dis() 都写死了「PHY0 归 USJ、PHY1 归 OTG」
+ * 这个默认映射，而 route_fsls_phy0_to_otg() 恰恰把它对调了。于是每次有人把
+ * G26/G27 配成 IO_MUX 功能，IDF 都以为在关 PHY1 的焊盘，实际关掉的是
+ * **PHY0 = G24/G25 = USB-C**。
+ *
+ * 三个动作，按「确认必需 / 保险起见」分：
+ *
+ *  1. usb_pad_enable = 1 —— **确认必需**。这就是被误伤的那一位。
+ *     正常路径上 tinyusb_driver_install() → usb_wrap_hal_init() →
+ *     usb_wrap_ll_phy_set_defaults() 已经把它置回 1（usb_wrap_hal.c:11-19），
+ *     这里再写一次是幂等兜底：万一日后有人在装 TinyUSB **之后**再动这两个脚
+ *     （改引脚、加第二个 I2S、gpio_reset_pin(26) …），这一行就是唯一的救命稻草。
+ *
+ *  2. pad_pull_override = 0 —— **保险起见**。gpio_ll_pullup_dis(G27) 会写
+ *     pad_pull_override=1 / dp_pullup=0，换过 PHY 之后等于拿掉 G25(D+) 的上拉，
+ *     主机会直接看不到设备。当前 I2S 路径不走这条（i2s_gpio_check_and_set() 只调
+ *     gpio_func_sel / gpio_input_enable / esp_rom_gpio_connect_out_signal），
+ *     但同一个 bug 家族，清回硬件默认（0 = 上下拉交给 PHY 硬件管）零成本。
+ *     ⓘ device 模式下 IDF 本来就不用这个 override（usb_phy.c 只在 HOST 模式里
+ *       调 usb_wrap_hal_phy_enable_pull_override），所以清它不会破坏任何东西。
+ *
+ *  3. 驱动能力回默认 —— **保险起见 / 卫生**。usb_phy.c:309-313 会**无条件**把
+ *     usb_dwc_info.controllers[1].internal_phy_io（写死 dm=26/dp=27）这两个脚的
+ *     驱动能力抬到 GPIO_DRIVE_CAP_3(40mA)，原文注释：
+ *         "For FSLS PHY that shares pads with GPIO peripheral, we must set
+ *          drive capability to 3 (40mA)"
+ *     它同样不知道我们换了 PHY —— 抬的是 I2S 在用的两个脚，而不是 USB 在用的。
+ *     I2S 驱动自己从不碰驱动能力（i2s_common.c 的 i2s_gpio_check_and_set() 只做
+ *     func_sel / 信号矩阵），所以这 40mA 会一直留在音频线上。恢复成焊盘复位默认
+ *     GPIO_DRIVE_CAP_DEFAULT(=2 ≈ 20mA)，让这两个脚和别的普通 GPIO 一模一样。
+ *     ⓘ 2 确实就是 G26/G27 的复位值：P4 TRM 第 9 章引脚表给 GPIO26/27 的 DRV
+ *       复位值是 2，而 GPIO24/25 是 3（datasheet：「默认驱动强度 20 mA，
+ *       GPIO24/GPIO25 例外，为 40 mA」）。也与 io_mux_struct.h 的 fun_drv
+ *       default: 2 对上。**不设成更弱**：超出「只收拾自己制造的烂摊子」的范围，
+ *       且 BCLK 要驱动两颗 codec。
+ *     ⚠️ 千万**别**顺手去调低 G24/G25 的驱动能力：usb_phy.c 那段写死了 26/27，
+ *       从来不碰 24/25 —— USB-C 能工作全靠这两个脚复位值本来就是 3(40mA)。
+ *
+ * 必须排在 tinyusb_driver_install() **之后**：动作 3 撤销的正是它内部做的事，
+ * 放在前面会被它重新抬上去。
+ */
+static void otg_fsls_pads_repair(void)
+{
+    const bool pad_was_enabled = usb_wrap_ll_phy_is_pad_enabled(&USB_WRAP);
+
+    usb_wrap_ll_phy_enable_pad(&USB_WRAP, true);
+    usb_wrap_ll_phy_disable_pull_override(&USB_WRAP);
+    gpio_set_drive_capability(PIN_I2S_DOUT, GPIO_DRIVE_CAP_DEFAULT);
+    gpio_set_drive_capability(PIN_I2S_SCLK, GPIO_DRIVE_CAP_DEFAULT);
+
+    /*
+     * 与 app_main() 里 codec_audio_init() 之后那条日志配成一对：那条应当读到 0
+     * （I2S 刚把焊盘关掉），这条应当读到 1（install 里的
+     * usb_wrap_ll_phy_set_defaults() 又置回来了）。两条一起构成机理的现场证据。
+     * 若这条读到 0，说明又有人在装 TinyUSB **之后**配了 G26/G27 —— 那本函数就得
+     * 跟着挪到那次配脚之后。
+     */
+    ESP_LOGI(TAG, "OTG FSLS 焊盘已修复（进入时 usb_pad_enable=%d，应为 1；G26/G27 驱动能力回默认）",
+             pad_was_enabled);
+}
+#endif /* CONFIG_AIO_AUDIO_FULL */
 
 void app_main(void)
 {
@@ -96,6 +186,44 @@ void app_main(void)
      */
     route_fsls_phy0_to_otg();
 
+#if CONFIG_AIO_AUDIO_FULL
+    /*
+     * ⚠️⚠️ 音频的**硬件** bring-up 必须排在 tinyusb_driver_install() 之前，
+     *      而数据泵必须排在它之后。这个顺序不是风格问题，是这块板最贵的那个坑：
+     *
+     * codec_audio_init() 里 i2s_channel_init_std_mode() 会把 G26/G27 配成
+     * IO_MUX 功能，而 IDF 的 gpio_ll_func_sel() 见到这两个脚就会写一次
+     * USB_WRAP.otg_conf.usb_pad_enable = 0 —— 换过 PHY 之后那一位管的是
+     * **G24/G25 这条 USB-C**。放在这里，误伤发生时 USB 还没连上主机，
+     * 随后 tinyusb_driver_install() 内部的 usb_new_phy() 会把它重新置 1，
+     * **不存在「已枚举的设备被短暂拔掉」的窗口**。
+     * 若反过来（音频在后），主机会看到一次 disconnect，GUD/HID 全部重来。
+     * 完整机理与源码出处见 tab5_pins.h 的音频段。
+     *
+     * 与键盘/触摸同一处置原则：失败只降级、不拦启动。描述符是静态的，
+     * 即便这里失败 host 照样枚举出声卡，只是收发到静音 —— 而显示(GUD)
+     * 才是这个产品的核心形态，不该被一颗 codec 拖垮。
+     *
+     * ⓘ 代价：codec 的 I2C 序列（约几十毫秒）排在了 USB 上电之前，开机到主机
+     *   看见设备会晚这么多。可接受，也让 codec 的 I2C 不必与 USB 中断抢时间。
+     */
+    esp_err_t audio_err = codec_audio_init();
+    if (audio_err != ESP_OK)
+        ESP_LOGW(TAG, "音频硬件初始化失败(%s)，继续启动（USB 不受影响）",
+                 esp_err_to_name(audio_err));
+
+    /*
+     * ⓘ **机理的现场证据，别删。** 此刻读到的 usb_pad_enable 应当是 **0** ——
+     * 那正是 i2s_channel_init_std_mode() 配 G26/G27 时 IDF 顺手写下的。
+     * 这一行把「IDF 会误伤 USB-C 焊盘」从推断变成一条可在串口上看到的事实；
+     * 下一句 tinyusb_driver_install() 会把它置回 1（见 otg_fsls_pads_repair()）。
+     * 若这里读到 1，说明 I2S 根本没配那两个脚（例如开了
+     * CONFIG_AIO_AUDIO_I2S_GPIO_NO_USB_PADS/NONE，或 STAGE=0）。
+     */
+    ESP_LOGI(TAG, "音频硬件就绪；此刻 OTG usb_pad_enable=%d（配过 G26/G27 时应为 0）",
+             usb_wrap_ll_phy_is_pad_enabled(&USB_WRAP));
+#endif
+
     tinyusb_config_t tusb_cfg = TINYUSB_CONFIG_FULL_SPEED(NULL, NULL);
     tusb_cfg.descriptor.device = &aio_desc_device;
     tusb_cfg.descriptor.full_speed_config = aio_desc_configuration;
@@ -103,6 +231,12 @@ void app_main(void)
     tusb_cfg.descriptor.string_count = aio_string_desc_count;
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
     ESP_LOGI(TAG, "tinyusb installed (GUD only)");
+
+#if CONFIG_AIO_AUDIO_FULL
+    /* 把 usb_new_phy() 顺手抬到 40mA 的 G26/G27 驱动能力等三样东西修回来。
+     * 必须紧跟 install，且必须在 codec_audio_start() 之前 —— 见函数上方注释。 */
+    otg_fsls_pads_repair();
+#endif
 
 #if CONFIG_TINYUSB_CDC_ENABLED
     /*
@@ -156,20 +290,23 @@ void app_main(void)
         ESP_LOGW(TAG, "触摸不可用(%s)，继续启动", esp_err_to_name(err));
 
     /*
-     * UAC1 全双工音频。与键盘/触摸同一处置原则：失败只降级、不拦启动。
-     * 描述符是静态的，所以即便这里失败，host 侧照样枚举出声卡，只是收发到静音 ——
-     * 而显示(GUD)才是这个产品的核心形态，不该被一颗 codec 拖垮。
+     * UAC1 音频的**第二半**：功放上电 + 数据泵任务。硬件 bring-up 已经在
+     * tinyusb_driver_install() 之前跑过了（见上面那段 codec_audio_init() 的注释）。
      *
      * 必须排在 tinyusb_driver_install() 之后：数据泵任务一起来就会调 tud_audio_*。
+     * 与键盘/触摸同一处置原则：失败只降级、不拦启动。
      *
      * ⚠️ 只在 CONFIG_AIO_AUDIO_FULL 下调用。CONFIG_AIO_AUDIO_DESC_ONLY 保留
      * 描述符但**不启动 codec**，用来把「USB 描述符/端点」与「codec/I2S 运行时」
      * 这两类候选根因分开验证，见 main/Kconfig.projbuild。
      */
 #if CONFIG_AIO_AUDIO_FULL
-    err = codec_audio_start();
-    if (err != ESP_OK)
-        ESP_LOGW(TAG, "音频不可用(%s)，继续启动", esp_err_to_name(err));
+    /* 硬件没起来就别开功放、也别起泵：功放接在一颗没配好的 DAC 后面只会出噪声。 */
+    if (audio_err == ESP_OK) {
+        err = codec_audio_start();
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "音频不可用(%s)，继续启动", esp_err_to_name(err));
+    }
 #endif
 
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));

@@ -363,18 +363,39 @@ static void audio_pump_task(void *arg)
 /*
  * ⚠️ 下面那个 stage 是**排障旋钮**（CONFIG_AIO_AUDIO_FULL_STAGE，默认 5 = 完整行为）。
  *
- * 二分第一刀（AIO_AUDIO_DESC_ONLY）已实测：描述符原样带音频时 GUD 正常、主机也
- * 枚举得出 UAC 设备 ⇒ 描述符 / 端点号 / DWC2 FIFO / TinyUSB 音频类驱动全部无罪，
- * 「开音频就枚举不出来」的根因 100% 落在本文件的**运行时**。剩下的空间就是下面
- * 这五个动作，stage 让每烧一次板就再切掉一刀。各级含义见 main/Kconfig.projbuild
- * 的表。**根因定位后应当把 stage 连同那段 Kconfig 一起删掉**，别留成永久配置项。
+ * 根因已坐实（见下面 codec_audio_init() 上方那段与 main/tab5_pins.h），
+ * stage 只剩回归排查的价值。各级含义见 main/Kconfig.projbuild 的表。
+ * **修法实机确认后应当把 stage 连同那段 Kconfig 一起删掉**，别留成永久配置项。
  */
-esp_err_t codec_audio_start(void)
+
+/*
+ * ⚠️⚠️⚠️ **本函数必须在 tinyusb_driver_install() 之前调用。** 这是这块板最贵的
+ *        那个坑的修法之一，改顺序等于把 bug 放回去。
+ *
+ * i2s_channel_init_std_mode() → i2s_gpio_check_and_set() → gpio_func_sel(26/27) →
+ * IDF 的 gpio_ll_func_sel()（esp_hal_gpio/esp32p4/include/hal/gpio_ll.h:676-686）
+ * 见到 G26/G27 就会写一次
+ *         USB_WRAP.otg_conf.usb_pad_enable = 0;
+ * 它的注释写着 "We only consider the default connection here: PHY0 -> USJ,
+ * PHY1 -> USB_OTG" —— 而 app_main.c 的 route_fsls_phy0_to_otg() 恰恰把这个映射
+ * 对调了。于是这一位实际关掉的是 **PHY0 = G24/G25 = Tab5 的 USB-C**。
+ *
+ * 症状：主机看得到设备（D+ 上拉还在），但 EP0 一个控制传输都不应答，CPU 不复位。
+ * 反证：CONFIG_AIO_AUDIO_I2S_GPIO_NO_USB_PADS（整套音频照跑、只让开 G26/G27）
+ *       下 GUD 与声卡全部正常 —— 罪就在「碰这两个脚」本身。
+ *
+ * 放在 tinyusb_driver_install() 之前，误伤发生时 USB 还没连主机；install 内部的
+ * usb_new_phy() → usb_wrap_hal_init() → usb_wrap_ll_phy_set_defaults() 会把
+ * usb_pad_enable 置回 1（esp_hal_usb/usb_wrap_hal.c:11-19），因此**没有任何
+ * 「已枚举设备被短暂拔掉」的窗口**。install 之后 app_main.c 还会跑一次
+ * otg_fsls_pads_repair() 兜底并撤销驱动能力误伤。
+ *
+ * ⓘ 前提：调用本函数时 USB_WRAP 的总线时钟必须已经开着，否则上面那次
+ *   otg_conf 写入是对被门控外设的访问。route_fsls_phy0_to_otg() 已经负责打开。
+ */
+esp_err_t codec_audio_init(void)
 {
     const int stage = CONFIG_AIO_AUDIO_FULL_STAGE;
-    /* 0 与 5 都起数据泵，二者互为反向验证：0 是「只有数据泵」（codec/I2S 一个字
-     * 不碰，句柄留 NULL），5 是「全都要」。中间四级都不起泵。 */
-    const bool run_pump = (stage == 0 || stage == 5);
 
     if (stage >= 1)
         ESP_RETURN_ON_ERROR(i2s_full_duplex_init(), TAG, "i2s");
@@ -382,6 +403,20 @@ esp_err_t codec_audio_start(void)
         ESP_RETURN_ON_ERROR(es8388_init(), TAG, "es8388");
     if (stage >= 3)
         ESP_RETURN_ON_ERROR(es7210_init(), TAG, "es7210");
+
+    return ESP_OK;
+}
+
+/*
+ * 功放上电 + 数据泵任务。**必须在 tinyusb_driver_install() 之后**：数据泵一起来
+ * 就会调 tud_audio_*。硬件 bring-up 在 codec_audio_init() 里，见上。
+ */
+esp_err_t codec_audio_start(void)
+{
+    const int stage = CONFIG_AIO_AUDIO_FULL_STAGE;
+    /* 0 与 5 都起数据泵，二者互为反向验证：0 是「只有数据泵」（codec/I2S 一个字
+     * 不碰，句柄留 NULL），5 是「全都要」。中间四级都不起泵。 */
+    const bool run_pump = (stage == 0 || stage == 5);
 
     if (stage >= 4) {
         /*

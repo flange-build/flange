@@ -798,10 +798,16 @@ ls -l /sys/bus/hid/devices/*16D0*10A9*/driver        # → .../drivers/hid-multi
 
 ## UAC1 全双工音频（ES8388 播放 + ES7210 双麦录音）
 
-### ⛔ 状态：**默认关闭**（实机回归，根因已收敛到 `codec_audio.c` 运行时）
+### ⏳ 状态：**根因已坐实、修法已落地，等实机确认**（默认仍关闭）
 
-实机结果：加上音频之后，主机侧不但没出录音设备，**连已实机验证的 GUD 显示也枚举不出来了**；
-退回 `31275803` 之前即恢复。GUD 是本产品的核心形态，所以音频改为**编译期可选、默认关闭**。
+实机回归的原始现象：加上音频之后，主机侧不但没出录音设备，**连已实机验证的 GUD 显示
+也枚举不出来了**；退回 `31275803` 之前即恢复。GUD 是本产品的核心形态，所以音频当时
+改为**编译期可选、默认关闭**。
+
+三刀二分之后根因已经坐实：**配 G26/G27 会让 IDF 的 `gpio_ll_func_sel()` 顺手关掉
+USB-C 的焊盘**（不是模拟打架，是寄存器误伤），详见下面「根因（已坐实）」与「修法」两节。
+修法已实现且不带任何 Kconfig 开关；**默认档仍是 `AIO_AUDIO_NONE`**，等
+`CONFIG_AIO_AUDIO_FULL` 实机确认后再改默认并清掉排障旋钮。
 
 主机侧 dmesg（`2f7a6502` 实测，即**已含**「数据泵补延时 + 优先级降到 4」那次修复）：
 
@@ -881,7 +887,89 @@ rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/
 > ⚠️ `STAGE` 是**排障旋钮**，不是长期配置项。根因定位后应当把它连同
 > `main/Kconfig.projbuild` 里那段表格与 `codec_audio_start()` 里的分级一起删掉。
 
-### 🎯 机理：**I2S 的 DOUT/BCLK 与 USB 全速 PHY 抢同一对焊盘**
+### ✅ 二分第三刀（已实测）：罪就是那两个焊盘
+
+`AIO_AUDIO_FULL` + `AIO_AUDIO_I2S_GPIO_NO_USB_PADS`（**整套音频照跑**，只把 G26/G27 让开）：
+
+> **GUD 显示正常、声卡枚举、麦克风也枚举出来了。只是没有声音、麦克风也没电平。**
+
+没声音是预期的（DOUT 与 BCLK 确实没接出去）。这一档把剩下的候选根因一次洗清：
+I2S 外设 / 时钟 / GDMA、codec I2C 序列、`esp_codec_dev`、数据泵、UAC 描述符、端点、FIFO
+**全部无罪** —— 只要碰 G26/G27 就死。附带结论：最初「麦克风枚举不出来」不是独立 bug，
+是同一根因的连带现象。
+
+### 🎯 根因（已坐实）：**配 G26/G27 会顺手关掉 USB-C 的焊盘**
+
+一句话：**这不是「两个驱动器抢一个焊盘」的模拟问题，是一次寄存器误伤。**
+
+`esp_hal_gpio/esp32p4/include/hal/gpio_ll.h:676-686`：
+
+```c
+static inline void gpio_ll_func_sel(gpio_dev_t *hw, uint8_t gpio_num, uint32_t func)
+{
+    // Disable USB PHY configuration if pins (24, 25) (26, 27) needs to select an IOMUX function
+    // P4 has two internal PHYs connecting to USJ and USB_WRAP(OTG1.1) separately.
+    // We only consider the default connection here: PHY0 -> USJ, PHY1 -> USB_OTG
+    if (gpio_num == 24 || gpio_num == 25)      USB_SERIAL_JTAG.conf0.usb_pad_enable = 0;
+    else if (gpio_num == 26 || gpio_num == 27) USB_WRAP.otg_conf.usb_pad_enable = 0;
+    IO_MUX.gpio[gpio_num].mcu_sel = func;
+}
+```
+
+注释里那句 **"We only consider the default connection here"** 就是引信 ——
+`route_fsls_phy0_to_otg()` 恰恰把那个默认映射对调了。完整调用链：
+
+```
+i2s_channel_init_std_mode()
+  → i2s_gpio_check_and_set()                  esp_driver_i2s/i2s_common.c:920
+    → gpio_func_sel(26/27, PIN_FUNC_GPIO)     esp_driver_gpio/src/gpio.c:1128
+      → gpio_ll_func_sel()
+        → USB_WRAP.otg_conf.usb_pad_enable = 0
+          → 换过 PHY 后这一位管的是 PHY0 = G24/G25 = **USB-C**
+```
+
+`usb_pad_enable` 是**跟着 mux 走的**（否则 `usb_new_phy()` 置位 USB_WRAP 那一位之后
+USB-C 根本不会通）。所以 G26/G27 上自始至终只有 I2S 一个驱动器，PHY1 的焊盘从未打开。
+
+症状也对得上：G25(D+) 的复位状态是「输入禁用 + 上拉使能」，焊盘关掉后 D+ 仍浮在高位
+⇒ 主机看得到设备，但收发器已死 ⇒ EP0 一个控制传输都不应答，CPU 不复位。
+
+**为什么 esp-bsp / M5Stack 自己的固件不会踩到**：Tab5 的 PHY1 上根本没接 USB 连接器
+（原理图 U1 pin 55/56 的网名就是 `I2S_DIN_MOSI_GPIO26` / `I2S_SCLK_GPIO27`），
+而 `bsp/m5stack_tab5/src/bsp_usb.c` 走的是 `usb_host_install()`，在 P4 上解析成
+**高速控制器 + UTMI PHY**（独立焊盘），从不碰 G24~G27。esp-bsp 全仓库对
+`usb_phy` / `usb_wrap` / `phy_sel` / `pad_enable` 零命中，也没有任何 example 同时开
+音频与 USB。P4 官方 errata 13 条里也没有 USB/GPIO 相关项。**我们是第一个在这块板上
+把全速 OTG 换到 PHY0 的**。
+
+### 🔧 修法（已实现，无需任何 Kconfig 开关）
+
+见 `main/app_main.c`，两步：
+
+1. **`codec_audio_init()`（I2S + 两颗 codec）排到 `tinyusb_driver_install()` 之前。**
+   误伤发生时 USB 还没连主机；随后 install 内部的 `usb_new_phy()` →
+   `usb_wrap_hal_init()` → `usb_wrap_ll_phy_set_defaults()` 会把 `usb_pad_enable`
+   置回 1（`esp_hal_usb/usb_wrap_hal.c:11-19`）。**没有「已枚举设备被短暂拔掉」的窗口** ——
+   反过来（音频在后）主机会看到一次 disconnect，GUD/HID 全部重来。
+   为此 `route_fsls_phy0_to_otg()` 里提前打开了 USB_WRAP 的总线时钟
+   （启动阶段 `esp_perip_clk_init()` 把它关了，对被门控外设写寄存器在 P4 上是总线错误）。
+2. **install 之后跑 `otg_fsls_pads_repair()`** —— 幂等兜底，三个动作：
+   `usb_pad_enable = 1`（**确认必需**，误伤的就是这一位）、
+   `pad_pull_override = 0`（**保险**，防同族的 `gpio_ll_pullup_dis(G27)` 拿掉 D+ 上拉）、
+   G26/G27 驱动能力从 `usb_phy.c` 抬的 CAP_3(40mA) 回默认 CAP_2(20mA)。
+   它还会把进入时读到的 `usb_pad_enable` 打进日志，作为机理的现场证据。
+
+> ⚠️ 千万别顺手去调低 **G24/G25** 的驱动能力：`usb_phy.c:309-313` 写死了 26/27、
+> 从不碰 24/25，USB-C 能工作全靠这两个脚复位值本来就是 3(40mA)（TRM 第 9 章引脚表）。
+
+> ⓘ `LP_SYS.usb_ctrl` 的 `sw_hw_usb_phy_sel` / `sw_usb_phy_sel` 在公开 TRM 里是
+> **reserved**，TRM 只文档化了 eFuse 那条静态换法。我们用的是未公开的运行时路径 ——
+> 能用（实机已验），但别指望 IDF 的其它部分知道我们换过。
+> 另注：`usb_wrap_ll_phy_select()` 在 v5.4.3 / v5.5.1 及更早版本有 switch 漏 `break`
+> 的 bug，`phy_idx=0` 是静默空操作（espressif/esp-idf#17831 修）；本工程用的 IDF v6.0
+> 已含 `break`，不受影响。
+
+### 历史：一度写在这里的**错误**机理（保留作教训）
 
 **ESP32-P4 内部全速(FSLS) PHY 的 D−/D+ 是复用到 GPIO 上的**：
 
@@ -920,12 +1008,19 @@ PHY0(G24/G25) 的同时，**USJ 被换到了 PHY1(G26/G27)**（见 `usb_wrap_ll_
 **USB PHY 的模拟驱动器**和 **I2S 的数字推挽输出**（驱动能力还刚被 `usb_phy.c`
 抬到 CAP_3 = 40 mA）。
 
-**分清确认与推断**：
-- **已确认（源码）**：G26/G27 就是内部全速 PHY 的 D−/D+；换 PHY 后 USJ 落在 PHY1；
-  `usb_new_phy()` 无条件把这两个脚的驱动能力抬到 40 mA；I2S 会把它们配成推挽输出。
-- **推断（未实测）**：两个驱动器对打 → 拖垮 PHY0/PHY1 共用的 USB 模拟域 →
-  G24/G25 上的差分信号失效。这一步解释了全部症状（D+ 还拉着、主机看得到设备、
-  一个控制传输都不应答、CPU 不复位不看门狗），但没有直接测量证据。
+**这条推断已被证伪**：`CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n` 时，IDF 在 `app_main`
+之前就已经清掉了 `USB_SERIAL_JTAG.conf0.usb_pad_enable` 并门控了 USJ 的时钟 ——
+
+```
+esp_system/port/soc/esp32p4/clk.c:238-242 → esp_hal_clock/esp32p4/clk_gate_ll.h:330-336
+    REG_CLR_BIT(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
+    REG_CLR_BIT(HP_SYS_CLKRST_SOC_CLK_CTRL2_REG, ..._USB_DEVICE_APB_CLK_EN);
+```
+
+所以 PHY1 的焊盘从来没被打开过，G26/G27 上只有 I2S 一个驱动器，
+`CONFIG_AIO_USJ_RELEASE_PHY_PADS` 那档是**空操作**。
+教训：「USB 还占着焊盘」听起来天经地义，但没查 IDF 的启动路径就写进注释，
+把后续三次烧板引到了错的方向。真正的机理见上面「根因（已坐实）」一节。
 
 ### 二分第三刀：`CONFIG_AIO_AUDIO_I2S_GPIO`（配合 `STAGE=1`）
 
@@ -933,7 +1028,7 @@ PHY0(G24/G25) 的同时，**USJ 被换到了 PHY1(G26/G27)**（见 `usb_wrap_ll_
 
 | 取值 | I2S 配哪些脚 | GUD **正常**说明 |
 |---|---|---|
-| `ALL`（默认） | G26/27/28/29/30 全配 | —（就是现在挂掉的行为） |
+| `ALL`（默认） | G26/27/28/29/30 全配 | —（修法落地前就是挂掉的那一档） |
 | `NONE` | 一个都不配 | 罪在**引脚**（外设/GDMA/时钟无罪）；挂掉则反之 |
 | `NO_USB_PADS` | 只配 G28/29/30，让开 G26/G27 | 罪就是那对 **USB PHY 焊盘** |
 
@@ -946,28 +1041,36 @@ rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/
 > ⚠️ `NONE` / `NO_USB_PADS` 下音频**必然不出声**（数据线没接出去），这是预期的：
 > 这两档只回答「USB 还活不活」。
 
-### 候选修法：`CONFIG_AIO_USJ_RELEASE_PHY_PADS`（默认关）
+### ❌ 已证伪的候选修法：`CONFIG_AIO_USJ_RELEASE_PHY_PADS`（默认关，只作对照）
 
-G26/G27 是**硬连线**到 ES8388 的，改不了引脚；只能让 USB 那边放开焊盘。
-本选项在 `route_fsls_phy0_to_otg()` 换完 PHY 之后显式清掉
-`USB_SERIAL_JTAG.conf0.usb_pad_enable`，把 PHY1 的那对焊盘彻底交还给 GPIO。
+当初的想法是：换 PHY 后 USJ 落在 PHY1(G26/G27)，清掉
+`USB_SERIAL_JTAG.conf0.usb_pad_enable` 就能让出焊盘。
+查实 **IDF 在 `app_main` 之前已经替我们清过了**（见上面「已证伪」那段的源码引用），
+所以本选项是空操作，还多余地把 USJ 的 APB 与 48M 时钟又打开了一次。留着只为对照。
+
+### 验证修法（一次烧板）
 
 ```bash
-# 一次烧板验证修法：完整音频 + 放开焊盘
-printf 'CONFIG_AIO_AUDIO_FULL=y\nCONFIG_AIO_USJ_RELEASE_PHY_PADS=y\n' > /tmp/aio.conf
+# 真正的修法不带任何旋钮：FULL + 真实引脚(26/27)
+printf 'CONFIG_AIO_AUDIO_FULL=y\n' > /tmp/aio.conf
 rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
+python3 test/check_usb_desc.py build/tab5_aio.elf      # 烧板前的闸门
+idf.py -p <口> flash
 ```
 
-- GUD 出图 **且** 主机出声卡 ⇒ 机理成立，本选项就是修法：应改为默认打开、
-  删掉旋钮，并把 `STAGE` / `I2S_GPIO` 两个排障旋钮一并清掉。
-- 仍挂 ⇒ 放开焊盘不够（PHY1 的模拟部分可能还得断电），或机理另有其因；
-  此时先用上面第三刀的 `NONE` / `NO_USB_PADS` 把「引脚 vs 外设」钉死。
+| 现象 | 说明 |
+|---|---|
+| GUD 出图 **且** 主机出声卡 **且** 有声音/有麦克风电平 | ✅ 修法成立，可以开始清排障旋钮 |
+| GUD 出图、声卡在，但**没声音** | 焊盘问题解决了，剩下的是纯音频问题（codec 寄存器 / 功放 / 增益），与 USB 无关 |
+| GUD 又不出图了 | 修法不够。见下面「后手」 |
 
-> 实现细节：写 `USB_SERIAL_JTAG` 的寄存器前先 `PERIPH_RCC_ATOMIC()` 里
-> `usb_serial_jtag_ll_enable_bus_clock(true)` —— 关了 `USJ_ENABLE_USB_SERIAL_JTAG`
-> 之后没人保证这颗外设的 APB 时钟还开着，而对时钟门控住的外设做寄存器访问在 P4 上
-> 是总线错误；且 `reg_usb_device_apb_clk_en` 与 `reg_i2s0_apb_clk_en` 同在
-> `HP_SYS_CLKRST.soc_clk_ctrl2` 这**一个 32 位字**里，必须走读改写锁。
+**后手**（若修法不成立）：`gpio_ll_func_sel()` 的误伤是**每次**配脚都会发生的，
+如果哪天有人在装完 TinyUSB 之后再动 G26/G27，`otg_fsls_pads_repair()` 就得跟着挪。
+更彻底的做法是**绕开 `gpio_func_sel()`**：给 I2S 传 `I2S_GPIO_UNUSED`，自己写
+`IO_MUX.gpio[26/27].mcu_sel = PIN_FUNC_GPIO` + `esp_rom_gpio_connect_out_signal()`，
+把 IDF 那条副作用整个跳过。
+**不能走的路**：不换 PHY —— USB-C 物理接在 G24/G25 上，全速 OTG 必须用 PHY0；
+eFuse 换法也没用，IDF 的 `gpio_ll_func_sel()` 仍按写死的映射误伤。
 
 ### 已排除的候选（静态验算，非推测）
 

@@ -48,11 +48,15 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 - ⏳ **触摸的四角坐标标定待验**：需依次点四角、确认 X 与 Y 都能各自跑到接近 0 与
   接近 32767。已知某次抓取里所有触点的 Y 都落在满量程的 78%–99%，既可能是手指位置所致、
   也可能是 Y 轴映射问题，日志无法区分。
-- ⛔ **UAC1 全双工音频 —— 实机回归，已改为编译期可选且默认关闭**（ES8388 播放 `0x10` / ES7210 双麦录音 `0x40`，一个 I2S 端口真全双工，
-  **16 kHz / 单声道 / S16_LE**）—— 代码已落地，描述符已在宿主机上逐项校验（`test/check_usb_desc.py`），
-  但实机上不但没出录音设备，**连 GUD 显示也枚举不出来**（退回该提交前即恢复），根因未定。
-  默认构建已回到「GUD + HID」，音频由 `CONFIG_AIO_AUDIO_MODE` 三档开关控制（含一个用于
-  二分定位的 `DESC_ONLY` 档），详见 `firmware/README.md`。
+- ⏳ **UAC1 全双工音频 —— 根因已坐实、修法已落地，等实机确认**（ES8388 播放 `0x10` / ES7210 双麦录音 `0x40`，一个 I2S 端口真全双工，
+  **16 kHz / 单声道 / S16_LE**）—— 代码已落地，描述符已在宿主机上逐项校验（`test/check_usb_desc.py`）。
+  曾经的回归是：开音频后不但没出录音设备，**连 GUD 显示也枚举不出来**。
+  根因是 **IDF 的 `gpio_ll_func_sel()` 把「哪条全速 PHY 归谁」写死了** —— 配 G26/G27
+  时它会写 `USB_WRAP.otg_conf.usb_pad_enable = 0`，而我们把 OTG 换到了 PHY0，
+  于是关掉的是 **G24/G25 这条 USB-C**。修法是把音频硬件 bring-up 排到
+  `tinyusb_driver_install()` 之前 + 装完后跑一次焊盘修复，详见 `firmware/README.md`。
+  默认构建仍是「GUD + HID」（`CONFIG_AIO_AUDIO_MODE` 三档开关，含用于二分定位的
+  `DESC_ONLY` 档），实机确认后再改默认。
   占 IF2/IF3/IF4 与端点 `0x02`(播放 ISO OUT) / `0x83`(录音 ISO IN)；
   **坚决不用显式反馈端点**，因为最后一条 IN(`0x84`) 要留给 UVC。参数不是听感定的而是 FIFO 账定的：
   16 kHz 单声道的 OUT 包 36 B 小于 vendor 已有的 64 B，共享 RX FIFO 一个 word 都不涨，
