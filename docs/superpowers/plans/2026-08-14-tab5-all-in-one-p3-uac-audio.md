@@ -1,5 +1,23 @@
 # Tab5 all-in-one — P3：UAC1 全双工音频（ES8388 + ES7210）实施计划
 
+> **⚠️ 2026-08-14 修订（实施时生效的版本）** —— 与初稿的三处偏离，已同步进本文：
+>
+> 1. **删掉了原 Task 0「bring-up 屏上状态面板」**（初稿的提交已在分支上 revert）。
+>    面板会让数据泵任务变成 PPA 的第三个提交者、占 64 KB PSRAM，而它自己正是
+>    Task 9 要测的那个变量。**本阶段不往屏幕上画任何东西**，`standby_screen.*` /
+>    `display_dsi.c` 一律不动。于是硬约束 C 的可见通道从三条减为**两条**
+>    （宿主机 + host 侧），所有原本落在「屏上第 N 行」的判据一律改到 **host 侧**
+>    （`lsusb -v` / `dmesg` / `/proc/asound` / `aplay` / `arecord`）。
+> 2. **不做固件自造正弦波的中间步骤。** 原 Task 2/3 用「喇叭响 1 kHz 正弦」和
+>    「屏上电平条会动」把 codec 与 USB 分开验，两条判据都依赖屏幕；面板没了之后
+>    它们无处落地。直接做到 `aplay` 出声、`arecord` 录到为止 —— 代价是 codec 与
+>    USB 两段不再分开归因，缓解办法见 Task 7/8 的排查顺序。
+> 3. **HID 保持 IF1 不动**，音频三接口追加在它**之后**（IF2/IF3/IF4）。
+>    初稿按 spec §2 把 HID 挪到 IF4，但键盘与多点触摸都已实机验证通过，
+>    没有理由为排版去动它们的接口号；IAD 只要求所覆盖的接口连续，不要求排在最前。
+>
+> 其余部分（关键事实、参数论证、代码片段）原样有效。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: 用 superpowers:subagent-driven-development 逐任务实施。步骤用 `- [ ]` 复选框跟踪。硬件在环：subagent 写码 + 容器外 `. $HOME/esp/esp-idf/export.sh && idf.py build` 编译验证；烧录、听声、host 侧 ALSA 验证由人工控制者做。
 
 **Goal:** 让 Tab5 作为 Linux 主机的 **USB 声卡**：播放（host → USB → ES8388 → 喇叭）与录音（ES7210 双麦 → USB → host）**同时可用**，host 侧走 mainline `snd-usb-audio`，零自定义驱动。与已实机验证的 GUD 显示、HID 键盘、HID 多点触摸同处一个 USB 复合设备且互不破坏。
@@ -50,7 +68,7 @@ P4 全速控制器（tinyusb `portable/synopsys/dwc2/dwc2_esp32.h:79`，**已逐
 
 超编时 `dcd_dwc2.c:227` 的 `TU_ASSERT(_dcd_data.allocated_epin_count < dwc2_controller->ep_in_count)` 直接失败——而且**默认日志等级下一个字都不打**，症状是 `SET_INTERFACE` 被 STALL、某个接口静默不工作，**看起来与音频毫无关联**。
 
-> ⚠️ 第 2 条对本阶段的实际后果：**「先临时开 CDC 把音频调通」这条退路是堵死的。** 实施者在最需要日志的时候一定会想到它，然后撞上一个像是描述符写错的枚举失败。所以 Task 5 Step 3 会把它变成编译期 `#error`，并且本计划另给了一条**零端点代价**的观测通道（见下方硬约束 C 与 Task 0）。
+> ⚠️ 第 2 条对本阶段的实际后果：**「先临时开 CDC 把音频调通」这条退路是堵死的。** 实施者在最需要日志的时候一定会想到它，然后撞上一个像是描述符写错的枚举失败。所以 Task 5 Step 3 会把它变成编译期 `#error`。**初稿给的那条替代观测通道（屏上面板）本版已删**，因此这段 bring-up 期确实是盲的 —— 缓解办法见下方硬约束 C。
 
 **所以：播放 OUT 端点用 `TUSB_ISO_EP_ATT_ADAPTIVE`，录音 IN 端点用 `TUSB_ISO_EP_ATT_ASYNCHRONOUS`，两者的 `bSynchAddress` 都填 0，且 `CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP` 显式写 0。** 异步 IN 端点本来就不需要反馈端点（反馈是给异步 **OUT** sink 用的，设备是 IN 方向的时钟主控）；adaptive OUT sink 靠自己吸收速率差，也不需要反馈。
 
@@ -76,26 +94,25 @@ TX FIFO_n = ceil(该 IN 端点最大包字节 / 4)                       ; bulk 
 
 这块板默认状态下**没有可用串口**：UART0(G37/G38) 只在 M5-Bus 排针上（要外接 USB-TTL），USB-Serial/JTAG 已被 TinyUSB 收走 FSLS PHY，`CONFIG_TINYUSB_CDC_ENABLED` 默认关闭——而按硬约束 A 的端点表，**本阶段连临时打开 CDC 都不行**。
 
-这条约束比它看起来更硬：**它把「用 `ESP_LOGI` 打个数看看」这个默认调试手段整个拿掉了。** 因此本计划的每一条判据都必须落在下面**三条能看见的通道**之一，任何一条判据若只存在于 `ESP_LOG*` 里，就等于没有判据：
+这条约束比它看起来更硬：**它把「用 `ESP_LOGI` 打个数看看」这个默认调试手段整个拿掉了。** 因此本计划的每一条判据都必须落在下面**两条能看见的通道**之一，任何一条判据若只存在于 `ESP_LOG*` 里，就等于没有判据：
 
 | 通道 | 覆盖阶段 | 落点 |
 |---|---|---|
 | **① 宿主机（不上板）** | 描述符、纯逻辑函数 | Task 4 的 `test_audio_frame.c`、Task 5 的 `check_usb_desc.py` |
-| **② 屏上状态面板**（本计划新建，零端点代价） | Task 0–3 的 codec/I2S bring-up，此时 USB 侧还什么都没有 | Task 0 建，Task 2/3 用 |
-| **③ host 侧** | USB 枚举之后的一切 | `lsusb -v`、`dmesg`、`/proc/asound/`、`aplay` / `arecord`、`evtest` |
+| **② host 侧** | USB 枚举之后的一切 | `lsusb -v`、`dmesg`、`/proc/asound/`、`aplay` / `arecord`、`evtest` |
+
+> ⚠️ **这两条通道之间有一段盲区**：从上电到 host 完成枚举之间（codec / I2S bring-up）
+> 什么都看不见。初稿用屏上面板补这一格，本版删掉了它（见顶部修订记录），因此
+> **接受这段盲区**，代价是 codec 与 USB 两段不再分开归因。缓解办法有三：
+> ① 两颗 codec 的初始化失败会各自返回错误码并让 `codec_audio_start()` 整体失败，
+> 音频降级但 host 侧仍能枚举出声卡 —— 「有声卡但全静音」本身就是一条 host 侧可见的信号；
+> ② I2S 全双工是否成立由**读寄存器**显式判定（见硬约束表下方的第 2 条），不靠日志；
+> ③ 真要抓这一段，接 UART0(G37/G38，在 M5-Bus 排针上) 外挂 USB-TTL —— 代码里的
+> `ESP_LOG*` 全部保留，它们不是判据，但接上串口时是最快的现场证据。
 
 > ⓘ **订正任务说明中的一条**：本仓库**目前并没有**「从 ELF dump 描述符再用解析器跑一遍」的既有做法——P1/P2 的宿主机验证做的是**纯逻辑函数**回归（`test_kbd_translate.c` / `test_touch_map.c` / `test_standby_screen.c`），HID 报告描述符本身是靠上板后 `evtest` 的行为反推的。本计划把这条做法**新建**出来（Task 5），因为 UAC1 描述符比 HID 报告描述符更长、更多交叉引用（terminal ID 链、`wTotalLength`、`baInterfaceNr`），且失败时没有任何降级形态。
 
-判据落点：Task 5 的 `check_usb_desc.py` 在**不烧板**的前提下把整份配置描述符断言一遍；Task 0 把屏幕变成 bring-up 期的仪表。
-
-### C-bis. 为什么屏幕可以当日志通道
-
-P0 已经把「GUD 坐标系的一块紧凑 RGB565 → PPA 缩放旋转 → 面板」这条路实机验证过了（`display_blit()`），而 `616af603` 又落地了零依赖的绘制原语（`standby_screen.c`：填充矩形 / 线框 / 整数倍放大画字符串 + Spleen 8×16 点阵字体）。两者相加，屏上打字**不需要任何新硬件通路，也不占用一条端点**——这正好补上 ② 这一格。
-
-代价与边界条件写在 Task 0，其中最要紧的两条：
-
-- **PPA 的 `max_pending_trans_num` 要跟着提交者数量涨**（现在是 2，面板是第 3 个提交者）；
-- **面板是 bring-up 期仪表，做成 Kconfig 开关、默认关闭**，且 Task 9 的复合回归**必须关掉它**——否则它自己就成了扰动被测对象的那个变量。
+判据落点：Task 5 的 `check_usb_desc.py` 在**不烧板**的前提下把整份配置描述符断言一遍 —— 这是本阶段唯一一道能在烧板前拦住错误的闸门。
 
 ### D. 不破坏已验证的 GUD 显示、HID 键盘、HID 多点触摸
 
@@ -201,7 +218,7 @@ Cardputer 已经把这套 CMake 接线跑通了，**逐行照搬**：`components
    ⚠️ **不要把判据寄托在那条 DEBUG 日志上**：本工程现场没有串口（硬约束 C），那行字谁也看不见。本计划改用两道**自己的**防线（Task 2 Step 3）：
 
    - **结构上保证一致**：TX/RX 的 `i2s_std_config_t` 由**同一个 `const` 局部变量**派生，两次 `i2s_channel_init_std_mode()` 传的是同一个对象的地址，「填得不一样」在结构上就不可能发生；
-   - **运行时显式判定**：`i2s_std.c:142-146` 的 `i2s_ll_share_bck_ws()` 在 P4 上写的是 `I2S0.tx_conf.sig_loopback`（`components/soc/esp32p4/register/hw_ver1/soc/i2s_struct.h:576-580`，bit 30）。两个通道都 init 完之后**这一位必须是 1**——它就是硬件层面「TX 与 RX 共用 BCLK/WS」的开关。读它，为 0 就走**可见**的失败路径（屏上报错 + 返回错误码，不启动音频），而不是任其 `ESP_OK` 放行后变成噪声。
+   - **运行时显式判定**：`i2s_std.c:142-146` 的 `i2s_ll_share_bck_ws()` 在 P4 上写的是 `I2S0.tx_conf.sig_loopback`（`components/soc/esp32p4/register/hw_ver1/soc/i2s_struct.h:576-580`，bit 30）。两个通道都 init 完之后**这一位必须是 1**——它就是硬件层面「TX 与 RX 共用 BCLK/WS」的开关。读它，为 0 就走**可见**的失败路径（返回错误码、不启动音频，host 侧表现为「声卡在但全静音」），而不是任其 `ESP_OK` 放行后变成一屋子噪声。
 3. 由 2 推论：**TX 与 RX 不能一个用 STD、一个用 TDM**（两者的 `mode_info` 结构体都对不上）。ES8388 与 ES7210 都按 **STD Philips 立体声 2 slot** 配，不用 TDM——ES7210 的驱动本身也是「≥3 只麦才开 TDM」（`es7210.c:16,177-185` 的 `ENABLE_TDM_MAX_NUM = 3`），Tab5 只有 2 只麦，`REG12` 写 `0x00`，MIC1→左 slot、MIC2→右 slot。
 4. **两个通道必须在一次 `i2s_new_channel()` 调用里同时要到**（`&tx, &rx` 一起传），不能先起 TX 再追加 RX——ESP32-P4 的 I2S v2 上分两次建会失败（[esphome#16043](https://github.com/esphome/esphome/issues/16043)）；esp-bsp 的 `bsp_audio.c:50` 也是一次调用建两个。
 5. **不要用 `I2S_SLOT_MODE_MONO`**：`I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(..., MONO)` 会把 `slot_mask` 设成 `I2S_STD_SLOT_LEFT`，录音就**只拿得到 ES7210 的 MIC1，MIC2 白装**（esp-bsp 的 `bsp_audio.c:34` 正是这么配的）。线上统一走 STEREO，单↔双的转换放到 `audio_frame.c` 的纯函数里。
@@ -262,18 +279,20 @@ Cardputer 已经把这套 CMake 接线跑通了，**逐行照搬**：`components
 
 ## 接口与端点新旧对照
 
-spec §2 的最终布局把 HID 排在 UAC 之后（IF4）。本阶段落实这一点：音频的 3 个接口插在 vendor 与 HID 之间，**HID 从 IF1 移到 IF4**。
+spec §2 的最终布局把 HID 排在 UAC 之后（IF4）。**本阶段刻意不落实这一点**：音频三接口追加在 HID **之后**，`IF0` vendor 与 `IF1` HID 的编号一个都不动。
 
 | | 现在（P2 结束） | 本阶段之后 | UVC（P4，预留） |
 |---|---|---|---|
 | IF0 | Vendor(GUD) | Vendor(GUD) | 同 |
-| IF1 | **HID（键盘+触摸）** | **AudioControl** | 同 |
-| IF2 | — | AudioStreaming OUT（播放） | 同 |
-| IF3 | — | AudioStreaming IN（录音） | 同 |
-| IF4 | — | **HID（键盘+触摸）** | 同 |
+| IF1 | **HID（键盘+触摸）** | **HID（键盘+触摸）不变** | 同 |
+| IF2 | — | AudioControl | 同 |
+| IF3 | — | AudioStreaming OUT（播放） | 同 |
+| IF4 | — | AudioStreaming IN（录音） | 同 |
 | IF5/IF6 | — | — | VideoControl / VideoStreaming |
 
-**接口号变动对 host 侧没有功能影响**：`drm/gud` 按 VID/PID + 接口类绑定，`usbhid` / `hid-multitouch` 按接口类绑定，`snd-usb-audio` 按 IAD + 接口类绑定，**没有任何一方按接口号绑定**。真正需要跟着改的只有三处，都在固件内：`ITF_NUM_*` 枚举、`TUD_*_DESCRIPTOR` 的第一个参数、以及 `tud_audio_set_itf_cb()` 里用 `ITF_NUM_AUDIO_STREAMING_OUT/IN` 做的方向判断。
+**为什么不按 spec §2 排**：接口号对 host 侧本来就没有功能影响 —— `drm/gud` 按 VID/PID + 接口类绑定，`usbhid` / `hid-multitouch` 按接口类绑定，`snd-usb-audio` 按 **IAD** + 接口类绑定，**没有任何一方按接口号绑定**。既然重排一分好处也没有，就没有理由去动两个已经实机验证过的接口 —— 硬约束 D 要防的正是这类「顺手改一下」。IAD 只要求它覆盖的接口**连续**，不要求它们排在配置描述符的最前面（TinyUSB 的 `audiod_open()` 也是从 AC 接口往后扫到下一个非 AS 接口或下一条 IAD 为止，音频排在末尾完全合法）。
+
+于是固件内需要改的只有两处：`ITF_NUM_*` 枚举末尾追加三项，以及 `tud_audio_set_itf_cb()` 里用 `ITF_NUM_AUDIO_STREAMING_OUT/IN` 做方向判断。`TUD_VENDOR_DESCRIPTOR` / `TUD_HID_DESCRIPTOR` 的参数一个字都不用改。
 
 端点：
 
@@ -293,284 +312,25 @@ spec §2 的最终布局把 HID 排在 UAC 之后（IF4）。本阶段落实这�
 
 ```
 firmware/main/
-├── Kconfig.projbuild          # 新：TAB5_AUDIO_PANEL 开关（默认 n）
-├── audio_panel.{c,h}          # 新：bring-up 屏上状态面板（PSRAM 缓冲 + 节流 + display_blit）
-├── audio_panel_render.{c,h}   # 新：面板版式与电平条渲染，零依赖纯函数（宿主机可测）
-├── standby_screen.{c,h}       # 改：最小导出 3 个绘制原语 + RGB565 宏（其余仍 static）
-├── display_dsi.c              # 改：PPA max_pending_trans_num 随提交者数量调整
-├── codec_audio.{c,h}          # 新：ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵
-├── audio_frame.{c,h}          # 新：单↔双声道转换与峰值计算，零依赖纯函数（宿主机可测）
+├── codec_audio.{c,h}          # 新：ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + 音频类回调
+├── audio_frame.{c,h}          # 新：单↔双声道转换，零依赖纯函数（宿主机可测）
 ├── tinyusb_config/tusb_config.h  # 新：include_next 默认配置后追加 CFG_TUD_AUDIO_*
-├── usb_descriptors.{c,h}      # 改：加 UAC1 三接口 + 两 ISO 端点；HID 接口号 1→4
+├── usb_descriptors.{c,h}      # 改：加 UAC1 三接口(IF2/3/4) + 两 ISO 端点；IF0/IF1 不动
 ├── tab5_pins.h                # 改：加 I2S 引脚、功放使能脚、两个 codec 的 7/8 bit 地址
-├── board_power.{c,h}          # 改：功放开关（配好但保持关闭）+ codec 探测
-├── app_main.c                 # 改：启动面板与音频 + FIFO 占用实测
+├── board_power.{c,h}          # 改：功放开关（配好但保持关闭）
+├── app_main.c                 # 改：在 touch_start() 之后启动音频
 ├── idf_component.yml          # 改：加 espressif/esp_codec_dev
 └── CMakeLists.txt             # 改：加源文件、tinyusb_config 接线、esp_driver_i2s
 firmware/test/
-├── test_audio_panel_render.c  # 新：面板渲染的宿主机回归 + PPM 版式预览
 ├── test_audio_frame.c         # 新：audio_frame 纯函数回归（直接编译真实源码）
 └── check_usb_desc.py          # 新：从 ELF 解析并校验整份配置描述符（烧板前的闸门）
-firmware/sdkconfig.defaults    # 改：裁 esp_codec_dev 的 codec 列表 + 默认注释掉的面板开关
+firmware/sdkconfig.defaults    # 改：裁 esp_codec_dev 的 codec 列表
 ```
 
-**转换逻辑与面板版式都抽成零依赖纯函数**（照 `kbd_translate.c` / `touch_map.c` / `standby_screen.c` 的先例），让 `test/` 能直接编译真实源码做回归。
+**声道转换抽成零依赖纯函数**（照 `kbd_translate.c` / `touch_map.c` 的先例），让 `test/` 能直接编译真实源码做回归。
 
----
-
-## Task 0：bring-up 屏上状态面板（先于一切音频代码）
-
-目标：把已经实机验证过的显示通路变成 bring-up 期的**仪表**。没有它，Task 2/3 的判据无处可落（硬约束 C）。
-
-**Files:** Create `main/Kconfig.projbuild`、`main/audio_panel.{c,h}`、`main/audio_panel_render.{c,h}`、`test/test_audio_panel_render.c`；Modify `main/standby_screen.{c,h}`、`main/display_dsi.c`、`main/CMakeLists.txt`、`sdkconfig.defaults`
-
-- [ ] **Step 1：成功判据**
-
-宿主机：
-
-```bash
-cd firmware/test
-cc -std=c11 -Wall -Wextra -Werror -I../main test_audio_panel_render.c \
-   ../main/audio_panel_render.c ../main/standby_screen.c -o /tmp/tap && /tmp/tap /tmp/panel.ppm
-# → OK (N cases)，并导出一张可肉眼验收版式的 PPM
-```
-
-实机（临时打开开关烧一次）：屏幕下方出现状态面板，三行文字可读、两条电平条随手动喂进去的假数据变化；**待机画面的「NO SIGNAL」与等待点动画仍在正常工作、没有被面板压住或互相覆盖**；GUD/键盘/触摸不回归。
-
-关掉开关重编：Flash 与 DIRAM 应与本任务开始前**逐字节相同**（照 `firmware/README.md` 记录 CDC 开关时的同一条判据），证明它真的是零成本的可选设施。
-
-- [ ] **Step 2：`main/Kconfig.projbuild` —— 做成开关，默认关闭**
-
-```kconfig
-menu "Tab5 AIO"
-
-config TAB5_AUDIO_PANEL
-    bool "音频 bring-up 屏上状态面板（调试设施，默认关闭）"
-    default n
-    help
-      在待机画面下方画一块状态面板：三行文字 + 左右声道电平条。
-
-      这块板默认没有任何可用串口（UART0 只在 M5-Bus 排针上，USB-Serial/JTAG 被
-      TinyUSB 收走，CDC 与 UAC 音频在全速口上互斥），codec/I2S bring-up 阶段
-      USB 侧又还什么都没有 —— 屏幕是那一段唯一看得见的输出。
-
-      **这是调试设施，不是产品特性。** 打开后 PPA 多一个周期性提交者，
-      占用 64 KB PSRAM（状态区 48 KB + 电平条 16 KB），电平条以 5 Hz 刷新
-      约合 80 KB/s 的 PPA 搬运；出厂固件应保持关闭。
-
-endmenu
-```
-
-`sdkconfig.defaults` 末尾追加（与既有的 CDC 开关同一写法与同一警告）：
-
-```
-# ── bring-up 屏上状态面板（默认关闭）─────────────────────────────
-# 取消注释后，codec/I2S 的状态与麦克风电平会画在屏幕下方 —— 这块板没有串口，
-# bring-up 阶段这是唯一看得见的输出。取消注释后必须 `rm -f sdkconfig` 再 build。
-# ⚠️ Task 9 的复合回归必须关掉它：它自己会占 PPA 与 PSRAM 带宽，开着测显示帧率
-#    等于把仪表算进被测对象。
-# CONFIG_TAB5_AUDIO_PANEL=y
-```
-
-- [ ] **Step 3：`standby_screen.{c,h}` 最小导出**
-
-只导出**面板真正用得到的**三样，其余（`draw_char` / `draw_frame` 与全部版式常量）保持 `static`：
-
-```c
-/* ── 供 audio_panel_render.c 复用的最小子集 ──────────────────────
- * 只导出真正被复用的两个原语与画布类型。draw_char / draw_frame 以及全部版式
- * 常量仍是 static —— 导出得越多，日后改待机画面版式时要顾虑的调用方就越多。
- * 这里导出的三样都是纯像素运算，宿主机可直接编译。 */
-typedef struct {
-    uint16_t *px;
-    int w, h;
-} standby_canvas_t;
-
-/* 填充矩形。整条绘制链只有这一个函数写像素，边界钳位因此只需在这里做对一次；
- * 越界的 x/y/w/h 会被钳到画布内，不会越界写。 */
-void standby_fill_rect(const standby_canvas_t *c, int x, int y, int w, int h, uint16_t color);
-
-/* 画一行字符串，整数倍放大（scale=1 时是 8×16）。表外字符画成 '?'，不静默吞掉。 */
-void standby_draw_text(const standby_canvas_t *c, int x, int y, const char *s,
-                       uint16_t color, int scale);
-
-/* RGB565 打包。⚠️ R/B 只有 5 bit、G 只有 6 bit，低位会被丢掉 ——
- * 调色请对着实际显示值看，不要对着设计值。 */
-#define STANDBY_RGB565(r, g, b) \
-    ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
-```
-
-`standby_screen.c` 侧是**纯机械改名**：`canvas_t` → `standby_canvas_t`、`fill_rect` → `standby_fill_rect`、`draw_text` → `standby_draw_text`（去掉 `static`），原来的 `RGB565` 宏改为直接用 `STANDBY_RGB565`。`draw_char` / `draw_frame` 不动。
-
-**判据**：`test_standby_screen.c` 的 35 个用例**原样全过**（它只调 `standby_render` / `standby_render_dots`，不该受改名影响）——若有用例挂了，说明改名改错了地方，不要改测试。
-
-- [ ] **Step 4：`audio_panel_render.h` —— 版式常量与两个纯函数**
-
-面板分两块，**分别 blit**：状态区（内容变了才画，一次开机就几次）与电平条（5 Hz）。分开是为了别让 5 Hz 的刷新去搬状态区那 48 KB。
-
-```c
-#pragma once
-/*
- * bring-up 屏上状态面板的版式与渲染，纯函数、零依赖（只用 standby_screen.h
- * 导出的绘制原语与 tab5_pins.h 的 GUD_W/GUD_H）。上屏由 audio_panel.c 负责。
- *
- * 拆成独立文件的理由与 standby_screen.c 相同：电平条的长度换算、数字格式化、
- * 越界钳位都能在宿主机上钉死，而这些错在实机上只表现为"条画得不对"，
- * 从现象几乎反推不出来。见 test/test_audio_panel_render.c。
- */
-#include <stdint.h>
-
-/* ── 版式（GUD 640×360 横向坐标系；上屏时 PPA 会 2× 放大并旋转 90°）──
- *
- * 面板放在屏幕**最下方**，理由是必须避开待机画面的等待点动画（y 236..268）——
- * 两者都在周期性重画，重叠就会互相覆盖，表现为文字闪烁或缺一块。
- * 下面那条 _Static_assert 把这个约束钉死。
- */
-#define AUDIO_PANEL_X            64
-#define AUDIO_PANEL_Y            276
-#define AUDIO_PANEL_STATUS_W     512
-#define AUDIO_PANEL_STATUS_LINES 3
-#define AUDIO_PANEL_STATUS_H     (AUDIO_PANEL_STATUS_LINES * 16)   /* 48 */
-#define AUDIO_PANEL_COLS         (AUDIO_PANEL_STATUS_W / 8)        /* 64 列，1× 字号 */
-
-#define AUDIO_PANEL_METER_X      AUDIO_PANEL_X
-#define AUDIO_PANEL_METER_Y      (AUDIO_PANEL_Y + AUDIO_PANEL_STATUS_H + 4)  /* 328 */
-#define AUDIO_PANEL_METER_W      256
-#define AUDIO_PANEL_METER_H      32     /* 两行 × 16 px：L 一行、R 一行 */
-#define AUDIO_PANEL_BAR_W        140    /* 条的最大长度，像素 */
-
-/* 电平条满刻度。与 audio_frame_peak() 的返回域一致（0..32768），
- * 取 32768 而不是 32767 是因为 INT16_MIN 的绝对值就是 32768。 */
-#define AUDIO_PANEL_PEAK_FULL    32768
-
-/*
- * 状态区渲染：n 行文本 → 紧凑的 AUDIO_PANEL_STATUS_W × AUDIO_PANEL_STATUS_H 缓冲。
- * lines[i] 为 NULL 或空串时该行画成背景色。超过 AUDIO_PANEL_COLS 的部分被截断
- * （截断而不是换行：面板是定高的，换行会把后面的行挤出画）。
- * n 超过 AUDIO_PANEL_STATUS_LINES 时按上限截断。
- */
-void audio_panel_render_status(uint16_t *buf, const char *const *lines, int n);
-
-/*
- * 电平条渲染：两路峰值 → 紧凑的 AUDIO_PANEL_METER_W × AUDIO_PANEL_METER_H 缓冲。
- * 每行 = 标签("L"/"R") + 条 + 5 位十进制峰值。
- * peak 超过 AUDIO_PANEL_PEAK_FULL 时条按满格画（钳位，不是绕回）。
- */
-void audio_panel_render_meter(uint16_t *buf, uint16_t peak_l, uint16_t peak_r);
-
-/*
- * 峰值 → 条长度（像素）。单独导出是为了能在宿主机上单独钉死这条换算 ——
- * 它是整块面板里唯一一处算术，也是唯一一处会被"顺手优化"改错的地方。
- * 用 uint32_t 中间量：32768 × 140 = 4,587,520，早已超出 uint16_t。
- */
-uint16_t audio_panel_bar_len(uint16_t peak);
-```
-
-配套断言（放 `audio_panel_render.c`，需要 `#include "standby_screen.h"` 拿 `STANDBY_DOTS_*`）：
-
-```c
-_Static_assert(AUDIO_PANEL_Y >= STANDBY_DOTS_Y + STANDBY_DOTS_H,
-               "面板必须在待机动画的等待点下方：两者都在周期性重画，重叠会互相覆盖");
-_Static_assert(AUDIO_PANEL_X + AUDIO_PANEL_STATUS_W <= GUD_W, "状态区右边缘出画");
-_Static_assert(AUDIO_PANEL_METER_Y + AUDIO_PANEL_METER_H <= GUD_H, "电平条下边缘出画");
-_Static_assert(AUDIO_PANEL_STATUS_H == AUDIO_PANEL_STATUS_LINES * FONT8X16_H,
-               "状态区高度必须正好装下整数行");
-```
-
-`audio_panel_bar_len()` 的实现：
-
-```c
-uint16_t audio_panel_bar_len(uint16_t peak)
-{
-    if (peak >= AUDIO_PANEL_PEAK_FULL)
-        return AUDIO_PANEL_BAR_W;
-    return (uint16_t)(((uint32_t)peak * AUDIO_PANEL_BAR_W) / AUDIO_PANEL_PEAK_FULL);
-}
-```
-
-- [ ] **Step 5：`audio_panel.{c,h}` —— 上屏、脏检查与节流**
-
-```c
-#pragma once
-/*
- * bring-up 期的屏上状态面板。整个模块由 CONFIG_TAB5_AUDIO_PANEL 门控，
- * 关闭时下面三个函数全部编译成空（见 audio_panel.c 的 #if），调用点不必加条件。
- *
- * 为什么需要它：这块板默认没有可用串口，而 codec/I2S bring-up 阶段 USB 侧还
- * 什么都没有 —— 屏幕是那一段唯一看得见的输出。详见计划的硬约束 C。
- */
-#include <stdint.h>
-#include "esp_err.h"
-
-/* 分配 PSRAM 缓冲。须在 display_init() 之后调用（要用 display_blit）。 */
-esp_err_t audio_panel_init(void);
-
-/* 设置第 line 行（0..AUDIO_PANEL_STATUS_LINES-1）的文本。
- * **内容没变就不重画**，因此可以在任何地方无脑调用。 */
-void audio_panel_status(int line, const char *text);
-
-/* 更新电平条。**内部按 5 Hz 节流**，因此可以在每毫秒的数据泵里无脑调用。 */
-void audio_panel_levels(uint16_t peak_l, uint16_t peak_r);
-```
-
-实现要点：
-
-- 两个 PSRAM 缓冲（状态区 512×48×2 = 49,152 B、电平条 256×32×2 = 16,384 B），`audio_panel_init()` 一次分配、不释放（bring-up 工具，生命周期就是整个开机）。
-- `audio_panel_status()` 把文本存进一份 `char[LINES][COLS+1]`，`strcmp` 不同才重渲染 + `display_blit(AUDIO_PANEL_X, AUDIO_PANEL_Y, ...)`。
-- `audio_panel_levels()` 用 `esp_timer_get_time()` 做 5 Hz 节流；节流期内把峰值取 `max` 累积，**不要直接丢弃**——丢弃会让一次拍手正好落在节流窗口里而看不见。
-- **两者都从调用方的任务上下文里直接 blit**，不另起任务：数据泵任务本来就是 1 ms 一转，5 Hz 的额外工作落在它身上完全吃得下，而多一个任务就要多一个 PPA 提交者名额。
-
-  ⓘ 于是**PPA 的第三个提交者就是数据泵任务**（Task 2 起存在），不是一个独立的面板任务。
-
-- [ ] **Step 6：`display_dsi.c` 的 PPA 提交者数量**
-
-现在的 `.max_pending_trans_num = 2` 对应两个提交者（TinyUSB 收帧任务 + 等待点动画任务）。面板让数据泵任务成为**第三个**，必须跟着涨——池子空时 `ppa_do_scale_rotate_mirror()` **不等待、直接返回 `ESP_FAIL`**（`ppa_srm.c` 尾部 "exceed maximum pending transactions"），落在 GUD 侧就是 host 的一块脏矩形永远不上屏，而脏矩形不会自动重发。
-
-```c
-/*
- * 元素数 = **并发提交者数**（只用阻塞模式，每个提交者最多占 1 个）：
- *   ① TinyUSB 任务（GUD 收帧）
- *   ② 待机画面的等待点动画任务（收到第一帧后退出）
- *   ③ 音频数据泵任务（仅 CONFIG_TAB5_AUDIO_PANEL，画状态面板与电平条）
- * 池子空时 ppa_do_scale_rotate_mirror() 不等待、直接返回 ESP_FAIL
- * （ppa_srm.c "exceed maximum pending transactions"），那一次 blit 就丢了。
- * 窗口很窄，但代价不对称（GUD 那边是永久性的一块不刷新），故按提交者数量给足。
- * 退出/关闭后多出来的元素闲置，几百字节内部 RAM，不值得回收。
- */
-#if CONFIG_TAB5_AUDIO_PANEL
-        .max_pending_trans_num = 3,
-#else
-        .max_pending_trans_num = 2,
-#endif
-```
-
-> ⓘ `CONFIG_TAB5_AUDIO_PANEL` 未定义时 `#if` 求值为 0，两种配置下都成立，不必写 `#ifdef`。
-
-- [ ] **Step 7：`test/test_audio_panel_render.c`**
-
-照 `test_standby_screen.c` 的形式（`main()` + `assert`，无框架，可选导出 PPM 预览）。用例至少覆盖：
-
-1. `audio_panel_bar_len`：0 → 0；`AUDIO_PANEL_PEAK_FULL` → `AUDIO_PANEL_BAR_W`；`AUDIO_PANEL_PEAK_FULL/2` → `AUDIO_PANEL_BAR_W/2`（±1）；**超过满刻度 → 钳到 `AUDIO_PANEL_BAR_W`，不绕回**（这是 `uint32_t` 中间量那条注释要防的错）；
-2. `render_status`：越界哨兵（缓冲前后各放一个魔数，渲染后必须没被动过）；`lines[i] = NULL` 那行是纯背景色；超长字符串被截断而不越界；`n > LINES` 被截断；
-3. `render_meter`：两路不同峰值画出**不同长度**的条；`peak = 0` 时条区域全是背景色；两行互不侵占（用行带占用检查，照 `test_standby_screen.c` 的做法）；
-4. 版式：状态区与电平条的矩形**不重叠**，且都不与 `STANDBY_DOTS_*` 重叠（这条与 `_Static_assert` 重复是故意的——断言防编译期，测试防有人把断言删了）。
-
-- [ ] **Step 8：编译（开/关两种配置）+ 上板验证 + 提交**
-
-```bash
-cd firmware && . $HOME/esp/esp-idf/export.sh
-rm -f sdkconfig && idf.py build && idf.py size      # 关：记下 Flash/DIRAM
-sed -i '' 's/^# CONFIG_TAB5_AUDIO_PANEL=y/CONFIG_TAB5_AUDIO_PANEL=y/' sdkconfig.defaults
-rm -f sdkconfig && idf.py build                     # 开：烧板验证
-```
-
-验证完把开关注释回去，重编并核对 Flash/DIRAM 与「关」那次**逐字节相同**。
-
-```
-git commit -m "feat(tab5-fw): bring-up 屏上状态面板（默认关闭），补上无串口下的观测通道 (P3 Task0)"
-```
-
-> **何时移除**：本面板的使命在 Task 8 结束（音频全通、host 侧 `/proc/asound` 与 `arecord` 成为更好的观测手段）。届时**不删代码、保持默认关闭**——理由与 CDC 调试串口同：下一个阶段（UVC）还会有一段"USB 侧什么都没有"的 bring-up 期，那时它仍是唯一看得见的输出。Task 10 要在 README 里写明这个定位与重新打开的方法。
+> ⓘ `standby_screen.{c,h}` 与 `display_dsi.c` **不在本清单里** —— 本阶段不碰显示链路的任何一行，
+> 这是「不破坏已验证功能」最省事的落实方式。
 
 ---
 
@@ -582,17 +342,15 @@ git commit -m "feat(tab5-fw): bring-up 屏上状态面板（默认关闭），�
 
 - [ ] **Step 1：成功判据**
 
-**屏上**（Task 0 的面板，第 0 行）出现：
+本任务**没有上板判据**（面板已删，此时 USB 侧还什么都没有）。判据全在宿主机：
 
-```
-I2C  ES8388 OK   ES7210 OK
-```
+1. `idf.py reconfigure` 后 `managed_components/` **只多出 `espressif__esp_codec_dev` 一个目录**（Step 5）；
+2. `idf.py build` 通过；
+3. `idf.py size` 的增量如实记下来，Task 10 要写进 README。
 
-即两颗芯片的 `i2c_master_probe()` 都返回 `ESP_OK`（**探测用 7 bit 地址** `0x10` / `0x40`，与 `firmware/README.md` 的实测 I2C 设备表一致）。任一为 `--` 就停下来查电与地址，别往下走。
-
-同一句话也照常 `ESP_LOGI` 一份（接了 USB-TTL 时更方便），但**判据是屏上那一行**——现场没有串口。
-
-且 `idf.py build` 通过、**GUD 显示与键盘触摸均不回归**（本任务不改任何已有链路，出现回归说明依赖引入撞车了，立刻停下来查）。
+两颗芯片的存在性早已由 `firmware/README.md` 的实测 I2C 设备表证实（`0x10` / `0x40` 都应答过），
+本步不重复探测 —— 探测结果只能进 `ESP_LOG*`，而日志不是判据。真出问题时，
+`esp_codec_dev_open()` 会在 Task 2/3 直接返回失败，host 侧表现为「声卡在但全静音」。
 
 - [ ] **Step 2：`idf_component.yml` 加 `esp_codec_dev`**
 
@@ -725,24 +483,11 @@ void board_speaker_enable(bool on)
              es8388, es7210);
 ```
 
-并把同一结论送上屏（`board_power.c` 不该依赖音频模块，所以这一句写在 `app_main.c` 里，紧跟 `board_power_init()` 之后）：
-
-```c
-    char l0[AUDIO_PANEL_COLS + 1];
-    snprintf(l0, sizeof(l0), "I2C  ES8388 %s   ES7210 %s",
-             board_audio_present(BOARD_CODEC_ES8388) ? "OK" : "--",
-             board_audio_present(BOARD_CODEC_ES7210) ? "OK" : "--");
-    audio_panel_status(0, l0);
-```
-
-`board_power.h` 相应导出探测结果（探测在 `board_power_init()` 里做过一次，不重复打 I2C）：
-
-```c
-typedef enum { BOARD_CODEC_ES8388, BOARD_CODEC_ES7210 } board_codec_t;
-/* board_power_init() 期间那一次探测的结果。重复探测没有坏处，但会在总线上
- * 多打两个事务，而这条总线同时挂着触摸的 20ms 轮询，能省则省。 */
-bool board_audio_present(board_codec_t which);
-```
+> ⚠️ **本版连这段探测日志也一并删掉了。** 它唯一的出口是 `ESP_LOG*`（原本还要送一份
+> 上屏，面板已删），而日志不是判据；探不到 codec 的后果 —— `esp_codec_dev_open()` 失败 —— 
+> 已经有明确的返回值路径，再多一次 I2C 事务只是在给挂着触摸 20 ms 轮询的总线添堵。
+> 于是 `board_power.{c,h}` 本任务只多一件事：把 `SPEAKER_EN` 配成推挽输出并**保持 0**。
+> 初稿的 `board_audio_present()` / `board_codec_t` 一并作废。
 
 - [ ] **Step 5：验证依赖树没被污染**
 
@@ -761,31 +506,27 @@ git commit -m "feat(tab5-fw): 音频供电与 ES8388/ES7210 探测，引入 esp_
 
 ---
 
-## Task 2：I2S 全双工 + ES8388 播放 bring-up（固件自造正弦，不碰 USB）
+## Task 2：I2S 全双工 + ES8388 播放 bring-up（不碰 USB）
 
-目标：喇叭能出一个干净的 1 kHz 正弦音。**这一步把「codec 通了没有」与「USB 通了没有」彻底分开**——之后若 `aplay` 没声音，就不用再怀疑 codec。
+目标：把 I2S 全双工与 ES8388 配起来，并让功放在正确的时刻导通。
+
+> ⚠️ **本版删掉了初稿的「固件自造 1 kHz 正弦自检」**（见顶部修订记录）。它的判据是
+> 「喇叭响 + 屏上 duplex=1」，面板没了之后只剩耳朵，而「有没有声音」在 Task 7
+> 用 `aplay` 一样能听 —— 多写一段开机后要删的临时代码换不来新信息，还会在开机头
+> 3 秒占住 TX、盖掉 host 的第一段音频。**代价要说清楚**：codec 与 USB 两段不再分开
+> 归因，`aplay` 没声音时得同时怀疑两边，排查顺序见 Task 7 Step 1。
 
 **Files:** Create `main/codec_audio.{c,h}`；Modify `main/CMakeLists.txt`、`main/app_main.c`
 
 - [ ] **Step 1：成功判据**
 
-**屏上**第 1 行出现（`duplex=1` 是我们自己读寄存器判定的，不是"函数返回了 OK"）：
+`idf.py build` 通过，且 **GUD 显示与键盘触摸不回归**（本任务不改任何已有链路）。
+听感判据推迟到 Task 7（`aplay` 出声时一并听「有没有开机『啪』声、音高对不对」）。
 
-```
-I2S  16000Hz 16bit 2slot  duplex=1
-```
-
-第 2 行出现 `ES8388 OK  vol=70  PA=on`。
-
-加三条听感判据（缺一不可，都只能靠耳朵）：
-
-1. **喇叭连续发出稳定的 1 kHz 正弦**约 3 秒，不断续、不沙哑；
-2. 从上电到正弦开始之间**没有可闻的「啪」声**（这是 Step 4b 那套上电顺序要买的东西）；
-3. 音高听着就是 1 kHz 而不是 500 Hz 或 2 kHz（半速/倍速说明声道数或 slot 配置错了）。
-
-GUD 显示与键盘触摸不回归。
-
-> ⚠️ **`duplex=0` 时必须停在这里，不要往下走。** 那说明 TX 与 RX 没有共用 BCLK/WS，两个方向在抢时钟——继续下去听到的一切噪声都无从归因。检查点只有一个：两次 `i2s_channel_init_std_mode()` 传的是不是**同一个** `i2s_std_config_t` 对象（Step 3 的写法在结构上排除了这种可能，所以真出现 0 更可能是有人后来把它拆成了两份）。
+> ⚠️ **全双工判定不靠听，也不靠日志。** `i2s_duplex_active()` 直接读
+> `I2S0.tx_conf.sig_loopback`，为 0 就返回错误码、不启动音频。检查点只有一个：
+> 两次 `i2s_channel_init_std_mode()` 传的是不是**同一个** `i2s_std_config_t` 对象
+> （Step 3 的写法在结构上排除了这种可能，所以真出现 0 更可能是有人后来把它拆成了两份）。
 
 - [ ] **Step 2：`codec_audio.h`**
 
@@ -870,13 +611,12 @@ static esp_err_t i2s_full_duplex_init(void)
      *
      * 为 0 意味着驱动判定两边配置不同、退回了 simplex —— 而它在 P4 上**只打一条
      * DEBUG 级日志就放行**，所有函数照样返回 ESP_OK。本工程现场没有串口，那行字
-     * 谁也看不见，所以必须在这里变成一条可见的失败：屏上报错 + 返回错误码，
-     * 让 codec_audio_start() 整个失败，而不是带病运行成一屋子噪声。
+     * 谁也看不见，所以必须在这里变成一条可见的失败：返回错误码，让
+     * codec_audio_start() 整个失败（host 侧表现为「声卡在但全静音」），
+     * 而不是带病运行成一屋子噪声。
      */
     const bool duplex = i2s_duplex_active();
     ESP_LOGI(TAG, "I2S %dHz/16bit/2slot duplex=%d", UAC_SAMPLE_RATE, duplex);
-    audio_panel_status(1, duplex ? "I2S  16000Hz 16bit 2slot  duplex=1"
-                                 : "I2S  duplex=0  !! TX/RX 未共用 BCLK/WS !!");
     ESP_RETURN_ON_FALSE(duplex, ESP_ERR_INVALID_STATE, TAG,
                         "I2S 未组成全双工：两次 init 传的不是同一份 std_cfg");
     return ESP_OK;
@@ -985,9 +725,11 @@ i2s_full_duplex_init()          /* 时钟先跑起来 */
 
 对称地，若日后加关流路径，必须**先** `board_speaker_enable(false)` **再** `esp_codec_dev_close()`——`esp_codec_dev_close()` 不会碰这个引脚（`esp_codec_dev.c:563-569`），顺序反了就是关机 pop。本阶段不做关流（音频一路常开），但把这条写进 `codec_audio.c` 的注释。
 
-- [ ] **Step 5：数据泵任务的骨架 + 自检正弦（正弦是临时代码，Task 7 删掉）**
+- [ ] **Step 5：数据泵任务**
 
-任务在本步就建起来，Task 3 与 Task 7/8 逐步往里加内容，**不要每个任务另起一个新任务**。
+任务在本步就建起来，Task 7/8 往里加 USB 收发，**不要每个任务另起一个新任务**。
+本步只需要一个空转的骨架（`while (1) vTaskDelay(...)`）——初稿在这里灌 3 秒正弦，
+本版删掉了，理由见 Task 2 开头。
 
 ```c
 #define AUDIO_TASK_STACK_SIZE 4096
@@ -999,35 +741,9 @@ i2s_full_duplex_init()          /* 时钟先跑起来 */
  * 若 Task 9 的复合回归发现显示掉帧，降到 4 再测（见 Task 9 Step 2）。
  */
 #define AUDIO_TASK_PRIORITY   5
-
-/* 1kHz @ 16kHz 采样 = 每周期恰好 16 点，Q15 × 0.25。
- * 幅度取满量程的 1/4：直推板载小喇叭时满幅容易破音，而破音会让人误判成时钟错。 */
-static const int16_t k_sine_1khz[UAC_FRAME_SAMPLES] = {
-    0, 3135, 5793, 7568, 8192, 7568, 5793, 3135,
-    0, -3135, -5793, -7568, -8192, -7568, -5793, -3135,
-};
-
-static void audio_pump_task(void *arg)
-{
-    int16_t tx_stereo[UAC_FRAME_SAMPLES * 2];
-    (void)arg;
-
-    /* 开机自检：连续 3 秒把正弦灌进 TX。目的是把「codec/I2S 通了没有」与
-     * 「USB 通了没有」分开验 —— 之后 aplay 没声音就不必再怀疑这一段。 */
-    audio_frame_mono_to_stereo(k_sine_1khz, tx_stereo, UAC_FRAME_SAMPLES);
-    for (int ms = 0; ms < 3000; ms++) {
-        size_t written = 0;
-        i2s_channel_write(s_tx, tx_stereo, sizeof(tx_stereo), &written, pdMS_TO_TICKS(20));
-    }
-    ESP_LOGI(TAG, "正弦自检结束");
-
-    while (1) vTaskDelay(pdMS_TO_TICKS(100));   /* Task 3 起被真正的收发循环取代 */
-}
 ```
 
-`codec_audio_start()` 末尾 `xTaskCreate(audio_pump_task, "audio", AUDIO_TASK_STACK_SIZE, NULL, AUDIO_TASK_PRIORITY, NULL)`，失败返回 `ESP_ERR_NO_MEM`。
-
-（`audio_frame_mono_to_stereo()` 在 Task 4 才有宿主机测试，但函数本身要在本步就写出来——Task 4 是补测试与边界用例，不是补实现。`k_sine_1khz` 的元素个数正好等于 `UAC_FRAME_SAMPLES`，加一条 `_Static_assert(sizeof(k_sine_1khz)/sizeof(k_sine_1khz[0]) == UAC_FRAME_SAMPLES, "正弦表长度必须等于一帧样本数")` 钉住——改采样率时这张表会失效，而症状只是音高不对，很难联想到。）
+`codec_audio_start()` 末尾 `xTaskCreate(audio_pump_task, "audio", AUDIO_TASK_STACK_SIZE, NULL, AUDIO_TASK_PRIORITY, NULL)`，失败返回 `ESP_ERR_NO_MEM`（并先把功放关回去，别留着一个空转的功放）。
 
 - [ ] **Step 6：`app_main.c` 调用**
 
@@ -1042,29 +758,33 @@ static void audio_pump_task(void *arg)
 - [ ] **Step 7：编译 + 上板验证 + 提交**
 
 ```
-git commit -m "feat(tab5-fw): I2S 全双工与 ES8388 播放 bring-up，正弦自检出声 (P3 Task2)"
+git commit -m "feat(tab5-fw): I2S 全双工与 ES8388 播放 bring-up (P3 Task2)"
 ```
 
 ---
 
-## Task 3：ES7210 录音 bring-up（屏上电平条，仍不碰 USB）
+## Task 3：ES7210 录音初始化（仍不碰 USB）
 
-目标：确认双麦真的在出数据，且没有把已经能出声的播放弄坏。
+目标：把 ES7210 配起来，并让它与已经打开的 ES8388 共处同一个 I2S 端口而不互相破坏。
+
+> ⚠️ **本版删掉了初稿的「屏上电平条自检」**（见顶部修订记录）。它的全部判据都在屏上，
+> 面板没了就无处落地。双麦是否真在出数据推迟到 Task 8 用 `arecord` + `sox stat` 判 ——
+> 那是更客观的判据（RMS 数字，不是条的长度）。
 
 **Files:** Modify `main/codec_audio.c`
 
 - [ ] **Step 1：成功判据**
 
-**屏上**第 2 行变成 `ES8388 OK  ES7210 OK  PA=on`，且**电平条开始动**（这正是 Task 0 那块面板存在的理由——没有它，本任务在没有串口的板子上根本没有判据）：
+`idf.py build` 通过，**GUD 显示与键盘触摸不回归**。
 
-- **安静环境**下两条都很短、数字很小（经验上 < 500，具体阈值以实测为准，如实记进 README）；
-- **对着麦克风说话/拍手**时两条都明显冲长、数字跳到数千以上，且**停止后回落**；
-- **L 与 R 是两只不同的麦**（L = MIC1、R = MIC2）：贴近其中一只说话，两条应该**长度不同**。两条永远等长说明只接到了一只麦（多半是误用了 `I2S_SLOT_MODE_MONO`）；
-- 播放的正弦自检**同时仍在响**——**这就是全双工成立的第一手证据**：屏上 `duplex=1` 证明硬件共用了 BCLK/WS，边放边录证明两个方向真的都在搬数据。
-
-GUD 显示与键盘触摸不回归。
-
-> ⚠️ 若两条恒为 0 长：先看 MCLK 有没有真出（`ES7210_MCLK_FROM_PAD` 要求 ESP 从 G30 提供 MCLK），再看是不是 Step 2 的 `mic_selected` 掩码选错了通道。若两条恒为同一个非零长度且**不随声音变化**，多半是 I2S 收到的是空闲电平而非采样，回去看屏上的 `duplex=` 那一位。
+> ⓘ **本步有一个只能上板才知道的风险，先记下来**：`esp_codec_dev_open(s_mic_dev, ...)`
+> 会经它的 I2S data_if 去 `i2s_channel_reconfig_std_slot/clock(s_rx)` ——
+> 而 RX 此刻已经是 `full_duplex_slave`，TX 正在跑。逐行读过 `audio_codec_data_i2s.c`
+> 的 `check_fs_compatible()`：因为两边的 `sample_rate` / `channel` / `bits_per_sample`
+> 完全相同，它会走「同参数直接 set」那条分支，且**不会**去 disable/reconfig TX
+> （那条补救分支的条件是 `paired->out_enable == false`，而 TX 已经 enable）。
+> 所以预期是「重配成同样的值 = 无变化」。若实测录音全零或播放被打断，
+> 从这里查起，并把结论写进 `codec_audio.c` 的注释。
 
 - [ ] **Step 2：ES7210 初始化**
 
@@ -1121,60 +841,29 @@ static esp_err_t es7210_init(void)
 >
 > ⓘ **`mclk_div` 必须与 `std_cfg.clk_cfg.mclk_multiple` 一致（都是 256）**：ES7210 靠 `REG02=0xc1` 启用 DLL/倍频器，倍率对不上就采不准。MCLK 物理上接在 G30，`ES7210_MCLK_FROM_PAD` 正是「用外部引脚来的 MCLK」。
 
-- [ ] **Step 3：把 `audio_pump_task` 的空转循环换成收发循环（电平自检是临时代码，Task 8 删掉）**
+- [ ] **Step 3：数据泵仍保持空转**
 
-把 Task 2 Step 5 里那句 `while (1) vTaskDelay(...)` 换成真正的循环：每次 `i2s_channel_read()` 一帧（= 1 ms），同时继续 `i2s_channel_write()` 正弦；每累计 1000 帧用 `audio_frame_peak()` 打印左右两路峰值。**读写在同一个任务里交替，这就是最终数据泵的雏形**，Task 7/8 只是把正弦换成 USB 数据。
+初稿在这里把空转循环换成「读 RX + 写正弦 + 屏上电平条」。本版跳过：真正的收发循环
+在 Task 7/8 一次写成（RX 读作节拍源 → `tud_audio_write()` → `tud_audio_read()` → TX 写），
+中间不做一个开机后要删的形态。
 
-```c
-    int16_t rx_stereo[UAC_FRAME_SAMPLES * 2];
-    int16_t ch[UAC_FRAME_SAMPLES];
-    uint16_t peak_l = 0, peak_r = 0;
-    int n_frames = 0;
-
-    while (1) {
-        size_t got = 0;
-        /* 用 RX 读作为节拍源：DMA 描述符正好是 1ms 的样本数，读满即阻塞到下一个 1ms，
-         * 比 vTaskDelay(1) 更贴合 USB 帧，也省掉一个定时器。 */
-        if (i2s_channel_read(s_rx, rx_stereo, sizeof(rx_stereo), &got,
-                             pdMS_TO_TICKS(50)) != ESP_OK)
-            continue;
-
-        for (int i = 0; i < UAC_FRAME_SAMPLES; i++) ch[i] = rx_stereo[2 * i];
-        uint16_t p = audio_frame_peak(ch, UAC_FRAME_SAMPLES);
-        if (p > peak_l) peak_l = p;
-        for (int i = 0; i < UAC_FRAME_SAMPLES; i++) ch[i] = rx_stereo[2 * i + 1];
-        p = audio_frame_peak(ch, UAC_FRAME_SAMPLES);
-        if (p > peak_r) peak_r = p;
-
-        size_t written = 0;
-        i2s_channel_write(s_tx, tx_stereo, sizeof(tx_stereo), &written, pdMS_TO_TICKS(20));
-
-        /* 每帧无脑调用即可：audio_panel_levels() 内部按 5 Hz 节流，
-         * 且节流窗口内取 max 累积 —— 直接丢弃的话，一次拍手正好落在窗口里就看不见了。
-         * 关掉面板时它编译成空，这一行零成本。 */
-        audio_panel_levels(peak_l, peak_r);
-
-        if (++n_frames >= 1000) {          /* 每秒一次，别在每帧路径里打日志 */
-            ESP_LOGI(TAG, "mic peak L=%u R=%u", peak_l, peak_r);
-            peak_l = peak_r = 0;           /* 面板有自己的累积窗口，这里只管日志的 */
-            n_frames = 0;
-        }
-    }
-```
-
-⚠️ **这一步同时让数据泵任务成为 PPA 的第三个提交者**——Task 0 Step 6 已经把 `max_pending_trans_num` 调好了。若跳过 Task 0 直接做本任务，池子会不够，症状是 GUD 偶发地有一小块永远不刷新（脏矩形不会重发），**而且与音频看起来毫无关系**。
+⚠️ 顺带说明：**本阶段数据泵不会成为 PPA 的提交者**（它不画任何东西），
+所以 `display_dsi.c` 的 `max_pending_trans_num` 保持 2 不动 —— 初稿里那条
+「要涨到 3」的要求随面板一起作废。
 
 - [ ] **Step 4：编译 + 上板验证 + 提交**
 
 ```
-git commit -m "feat(tab5-fw): ES7210 双麦录音 bring-up，全双工电平自检通过 (P3 Task3)"
+git commit -m "feat(tab5-fw): ES7210 双麦录音初始化 (P3 Task3)"
 ```
 
 ---
 
 ## Task 4：`audio_frame.c` 纯函数 + 宿主机回归测试
 
-目标：把「单↔双声道转换」与「峰值计算」钉死在宿主机上。这类错误在实机上只表现为「声音小一半 / 只有一边有声 / 电平数字不对」，从现象反推极难，而在宿主机上验几乎零成本。
+目标：把「单↔双声道转换」钉死在宿主机上。这类错误在实机上只表现为「声音小一半 / 只有一边有声 / 音高快一倍」，从现象反推极难，而在宿主机上验几乎零成本。
+
+> ⚠️ **`audio_frame_peak()` 随屏上电平条一起删掉了**（见顶部修订记录）：它唯一的消费者就是那块面板。判录音有没有信号改用 host 侧的 `sox /tmp/tab5.wav -n stat`，那是更客观的判据。下面凡提到 `peak` 的用例一并作废。
 
 **Files:** Create `main/audio_frame.{c,h}`、`test/test_audio_frame.c`；Modify `main/CMakeLists.txt`
 
@@ -1222,14 +911,8 @@ void audio_frame_mono_to_stereo(const int16_t *mono, int16_t *stereo, size_t fra
  */
 void audio_frame_stereo_to_mono(const int16_t *stereo, int16_t *mono, size_t frames);
 
-/*
- * 一段样本里的峰值绝对值，供录音电平自检打印。
- * n == 0 返回 0。
- *
- * ⚠️ INT16_MIN(-32768) 的绝对值是 32768，放不进 int16_t —— 本函数返回
- * uint16_t 并如实返回 32768，不做钳位。调用方只用它打日志/比阈值，不回填样本。
- */
-uint16_t audio_frame_peak(const int16_t *samples, size_t n);
+/* ⚠️ 初稿这里还有一个 audio_frame_peak()，随屏上电平条一起删掉了 —— 它唯一的
+ * 消费者就是那块面板。判录音有没有信号改用 host 侧 `sox ... -n stat` 的 RMS。 */
 ```
 
 - [ ] **Step 3：`audio_frame.c`**
@@ -1252,17 +935,6 @@ void audio_frame_stereo_to_mono(const int16_t *stereo, int16_t *mono, size_t fra
         mono[i] = (int16_t)(sum >> 1);
     }
 }
-
-uint16_t audio_frame_peak(const int16_t *samples, size_t n)
-{
-    uint16_t peak = 0;
-    for (size_t i = 0; i < n; i++) {
-        const int32_t v = samples[i];
-        const uint16_t a = (uint16_t)(v < 0 ? -v : v);
-        if (a > peak) peak = a;
-    }
-    return peak;
-}
 ```
 
 - [ ] **Step 4：`test/test_audio_frame.c`**
@@ -1272,7 +944,6 @@ uint16_t audio_frame_peak(const int16_t *samples, size_t n)
 1. `mono_to_stereo`：3 帧，左右两路都等于源；`frames == 0` 不写任何字节（用哨兵值检查）；
 2. `stereo_to_mono`：`(100, 200) → 150`；`(-100, -200) → -150`（`(-300)>>1 == -150`）；`(1, 0) → 0`（右移向下取整，**不是** 0.5 四舍五入）；`(-1, 0) → -1`（这是右移与 `/2` 唯一会分叉的那一类，必须钉死）；
 3. `stereo_to_mono`：`(INT16_MAX, INT16_MAX) → 32767`、`(INT16_MIN, INT16_MIN) → -32768`（证明不溢出）；
-4. `peak`：正负混合取最大绝对值；含 `INT16_MIN` 时返回 32768；`n == 0` 返回 0；
 5. **往返一致性**：`mono → stereo → mono` 应逐样本相等（因为左右同值，平均即原值）。
 
 - [ ] **Step 5：编译 + 跑测试 + 提交**
@@ -1296,7 +967,7 @@ cd firmware && . $HOME/esp/esp-idf/export.sh && idf.py build     # 含全部 _St
 python3 test/check_usb_desc.py build/tab5_aio.elf                # → 打印描述符树 + OK
 ```
 
-脚本必须打印出 5 个接口（IF0 vendor / IF1 AC / IF2 AS-out / IF3 AS-in / IF4 HID）、2 条 ISO 端点，且**全部断言通过**，其中包括「没有任何端点的 `bSynchAddress` 非 0」与「没有任何 ISO 端点的 sync 字段为 0」。本任务**不上板**。
+脚本必须打印出 5 个接口（IF0 vendor / IF1 HID / IF2 AC / IF3 AS-out / IF4 AS-in）、2 条 ISO 端点，且**全部断言通过**，其中包括「没有任何端点的 `bSynchAddress` 非 0」与「没有任何 ISO 端点的 sync 字段为 0」。本任务**不上板**。
 
 - [ ] **Step 2：`main/tinyusb_config/tusb_config.h`**
 
@@ -1346,18 +1017,19 @@ python3 test/check_usb_desc.py build/tab5_aio.elf                # → 打印描
 ```c
 enum {
     ITF_NUM_VENDOR = 0,
-    /* UAC1 三接口。顺序不能动：AudioControl 必须是 IAD 覆盖的第一个接口，
-     * 两个 AudioStreaming 必须紧随其后且连号（IAD 只能描述连续区间）。 */
+    ITF_NUM_HID,                   /* ⚠️ 保持 1 不动：音频追加在它之后 */
+    /* UAC1 三接口。相对顺序不能动：AudioControl 必须是 IAD 覆盖区间的第一个接口，
+     * 两个 AudioStreaming 必须紧随其后且连号（IAD 只能描述连续区间）。
+     * 但整段排在 HID 之后完全合法 —— IAD 不要求它覆盖的接口位于配置描述符最前。 */
     ITF_NUM_AUDIO_CONTROL,
     ITF_NUM_AUDIO_STREAMING_OUT,   /* 播放 */
     ITF_NUM_AUDIO_STREAMING_IN,    /* 录音 */
-    ITF_NUM_HID,                   /* ⚠️ 由 1 变为 4：音频插在了前面 */
     ITF_NUM_TOTAL
 };
 
 #define EPNUM_VENDOR_OUT 0x01
 #define EPNUM_VENDOR_IN  0x81
-#define EPNUM_HID        0x82      /* 刻意不动：接口号变了，端点号不变，少一个变量 */
+#define EPNUM_HID        0x82      /* 与接口号一样刻意不动，少一个变量 */
 #define EPNUM_AUDIO_OUT  0x02      /* ISO OUT，播放 */
 #define EPNUM_AUDIO_IN   0x83      /* ISO IN，录音；0x84 留给 UVC */
 
@@ -1788,9 +1460,9 @@ static void audio_pump_task(void *arg)
 
 欠载计数用一个 `static uint32_t s_tx_underrun;`，每 10 秒由同一任务打一条汇总日志（**不要**在每帧路径里 `ESP_LOGW`——1 kHz 的日志会自己把音频饿死，这是典型的观测干扰被观测）。
 
-- [ ] **Step 4：删掉 Task 2 的正弦自检**
+- [ ] **Step 4：（作废）删掉 Task 2 的正弦自检**
 
-`audio_pump_task` 开头那段 3 秒正弦、`k_sine_1khz` 表与配套的 `_Static_assert` 整体删除。它的使命（把 codec 与 USB 分开验）已经完成，留着会在开机后头 3 秒占住 TX、盖掉 host 的第一段音频。
+本版从来没有写过正弦自检（见顶部修订记录），无可删。
 
 - [ ] **Step 5：编译 + 上板验证 + 提交**
 
@@ -1844,7 +1516,7 @@ aplay /tmp/tab5.wav                     # 回放，应能听清刚才说的话
 
 - [ ] **Step 3：删掉 Task 3 的电平自检**
 
-峰值打印从数据泵里移除（`audio_frame_peak()` 与它的测试**保留**——排查时随时可以临时接回去，且它是被测过的）。
+本版从来没有写过电平自检，`audio_frame_peak()` 也没有实现（见顶部修订记录），无可删。
 
 - [ ] **Step 4：编译 + 上板验证 + 提交**
 
@@ -1862,13 +1534,10 @@ git commit -m "feat(tab5-fw): UAC1 录音通路打通，全双工同时收发验
 
 - [ ] **Step 1：前置检查（做之前先确认，别做到一半才发现缺工具）**
 
-**a) 固件侧：屏上面板必须关闭。**
+**a) 固件侧：无需任何准备。**
 
-```bash
-grep -n "^CONFIG_TAB5_AUDIO_PANEL" firmware/sdkconfig.defaults   # 应无输出（保持注释态）
-```
-
-理由：面板每 200 ms 往 PPA 提交一次 16 KB 的搬运（约 80 KB/s），本任务恰恰要测「音频跑起来会不会让显示变慢」——开着它等于把仪表算进被测对象。**必须用关闭态的固件跑本任务**，测完再说。
+初稿在这里要求「确认屏上面板关着」——面板已删，本阶段的固件里没有任何会扰动显示的
+调试设施，直接用正式固件跑本任务即可。（这正是删掉面板换来的：被测对象里不再混着仪表。）
 
 **b) host 侧：P2 用的是 `khadas-vim3l`（arm64），先确认工具齐全。**
 
@@ -1917,7 +1586,6 @@ sudo evtest       # 交替选键盘那份与触摸那份，各敲/点若干次
 
 按带宽账，音频满负荷只吃 ~9% 的周期性带宽，留给 GUD bulk 的理论上限仍高于它实测能跑到的吞吐（见「带宽账」一节）。所以**明显变慢多半不是带宽问题**，候选原因按可能性排序：
 
-0. **屏上面板忘了关**（Step 1a）——它每 200 ms 提交一次 16 KB 的 PPA 搬运（约 80 KB/s），是这张单子上最容易犯也最容易排除的一条，先确认；
 1. 数据泵任务优先级压过了 TinyUSB 的任务 —— `AUDIO_TASK_PRIORITY` 与 `TINYUSB_DEFAULT_TASK_PRIO` 现在同为 5，降到 4 再测；
 2. `i2s_channel_write()` 的 20ms 超时在欠载时把任务钉住 —— 看欠载计数；
 3. PSRAM 带宽争用（DPI 帧缓冲 + PPA + I2S DMA）—— 把 I2S DMA 缓冲确认在**内部 RAM**（`i2s_new_channel` 默认即是；内部 RAM 只剩约 474 KB，见 `firmware/README.md` 的资源占用章节，本阶段的 DMA 缓冲只有几 KB，不构成压力）。
@@ -1938,16 +1606,18 @@ sudo evtest       # 交替选键盘那份与触摸那份，各敲/点若干次
   - **功放使能 = `0x43` 的 PIN1**，与 LCD_EN/TOUCH_EN 同一颗；以及「codec 配完解除静音 → 延时 → 才开功放」的顺序（与背光同构），并注明 esp-bsp 自己的顺序相反、我们刻意不照抄；`esp_codec_dev_close()` 不会关功放；
   - Task 6 实测的 FIFO 数字（更新「端点预算」章节里那组只覆盖 CDC 场景的旧数字）；
   - **那张 IN 端点占用表**（当前 / +音频 / +音频+UVC / +音频+CDC 不可行 / +反馈端点顶掉 UVC），把互斥关系一次说清；`CONFIG_TINYUSB_CDC_ENABLED` 与 UAC 互斥已变成编译期 `#error`，并更新 README 现有那段「开启 CDC 的代价」——它当时写的是「做那两个阶段前必须把开关注释回去」，现在是**编译器会拦住你**；
-  - **bring-up 屏上状态面板**：为什么需要（无串口 + CDC 退路被堵死）、怎么开（`CONFIG_TAB5_AUDIO_PANEL` + `rm -f sdkconfig`）、代价（PPA 第三个提交者、64 KB PSRAM）、**Task 9 必须关掉它**、以及「不删代码、留给 UVC 阶段复用」的定位；`standby_screen.h` 最小导出了哪三样、为什么其余保持 `static`；
+  - **这段 bring-up 期是盲的**：无串口 + CDC 退路被编译期堵死 + 本阶段不做屏上面板，
+    从上电到 host 枚举之间没有任何可见输出；写明缓解办法（codec 失败会整体降级成
+    「声卡在但全静音」、全双工靠读寄存器判定、真要抓就接 UART0）；
   - host 侧验证命令（`/proc/asound/cards`、`aplay -l`、`arecord -l`、`stream0`、`--dump-hw-params`、全双工同时跑法）；
   - 两个宿主机验证跑法：`test_audio_frame.c` 与 `check_usb_desc.py`（后者要写明依赖 IDF python 环境的 pyelftools）；
   - Task 9 的复合回归结论与欠载计数实测值。
-- [ ] **Step 2**：`firmware/README.md` 的「文件」表补 `codec_audio.{c,h}` / `audio_frame.{c,h}` / `audio_panel.{c,h}` / `audio_panel_render.{c,h}` / `Kconfig.projbuild` / `tinyusb_config/tusb_config.h` / `test/test_audio_frame.c` / `test/test_audio_panel_render.c` / `test/check_usb_desc.py` 九行；更新「能力」一节的接口布局（IF0 GUD / IF1-3 UAC / IF4 HID）；并在「待机画面」章节补一句 `standby_screen.{c,h}` 现在还给面板导出了三个绘制原语。
+- [ ] **Step 2**：`firmware/README.md` 的「文件」表补 `codec_audio.{c,h}` / `audio_frame.{c,h}` / `tinyusb_config/tusb_config.h` / `test/test_audio_frame.c` / `test/check_usb_desc.py` 五行；更新「能力」一节的接口布局（**IF0 GUD / IF1 HID / IF2-4 UAC**）。「待机画面」章节不动 —— 本阶段没碰 `standby_screen.{c,h}`。
 - [ ] **Step 3**：包级 `components/packages/tab5-all-in-one/README.md` 状态清单：UAC1 全双工音频从「⏳ 规划中」移到 ✅（如实机通过），并写明采样率/声道与「带宽是零和的」这条既有提示的具体数字。
 - [ ] **Step 4**：spec 回填：
   - **§6 订正**：原文写「UAC1 参数沿用 Cardputer 的 mono 16 kHz」——采样率结论一致，但**理由要补上 FIFO 账**（原文没有这一层）；同时补上「两个方向必须同采样率（全双工共用 BCLK/WS）」这条原文没有的硬约束；
   - **§6 补充**：喇叭功放使能 = **`0x43` 那颗 PI4IOE5V6408 的 PIN1**（esp-bsp `BSP_SPEAKER_EN`），功放**没有**独立 GPIO；以及「codec 配完再开功放」的上电顺序与理由；
-  - **§2 订正**：端点表补上「反馈端点会顶掉 UVC」这条推理，并把实测 FIFO 数字写进 §2 的端点预算；
+  - **§2 订正**：端点表补上「反馈端点会顶掉 UVC」这条推理，并把实测 FIFO 数字写进 §2 的端点预算；**同时订正接口布局** —— §2 原先设想 HID 排在 UAC 之后（IF4），实际落地是 **IF0 vendor / IF1 HID / IF2-4 UAC**（理由见「接口与端点新旧对照」一节）；
   - **§10 阶段 4** 的验证标准里，`--dump-hw-params` 那条与本计划 Task 7/8 一致，勾掉即可。
 - [ ] **Step 5**：`components/packages/tab5-all-in-one/README.md` 的「文档」一节补本计划的链接。
 - [ ] **Step 6**：提交。
@@ -1963,10 +1633,10 @@ git commit -m "docs(tab5): 补 UAC1 全双工音频的实现说明与实机验�
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | **FIFO 装不下**（256 words 是硬上限） | 音频或 UVC 之一放不进去，且失败**无日志**（`TU_ASSERT` 静默返回） | 参数选定阶段就按公式算过账（16 kHz 单声道的 OUT 包小于 vendor 已有的 64 B，RX FIFO 一个 word 不涨）；Task 6 主动读寄存器实测；Task 6 Step 3 给了按序降级阶梯 |
-| **现场没有任何串口** | 默认调试手段（`ESP_LOGI` 打个数）整个失效；而「临时开 CDC」这条退路被端点预算堵死 | Task 0 把屏幕做成 bring-up 仪表（零端点代价）；硬约束 C 列了三条可见通道，每条判据都必须落在其中之一；CDC 与 UAC 互斥变成编译期 `#error` |
-| **I2S 没组成全双工却不报错** | 声音是噪声或全静音，所有函数返回 `ESP_OK` | 两道自己的防线：① 两次 init 传**同一个** `i2s_std_config_t` 对象（结构上排除"填得不一样"）；② 读 `I2S0.tx_conf.sig_loopback`（就是 `i2s_ll_share_bck_ws()` 写的那一位）显式判定，为 0 则屏上报错并拒绝启动音频。**不依赖 IDF 那条看不见的 DEBUG 日志** |
-| **屏上面板自己成了扰动源** | Task 9 测「音频会不会让显示变慢」时把仪表算进被测对象 | 面板是 Kconfig 开关、默认关闭；Task 9 Step 1a 把「确认它关着」作为前置检查，Step 3 的归因清单里它排第 0 位 |
-| **PPA 提交者变成 3 个却没调 `max_pending_trans_num`** | 池子空时 `ppa_do_scale_rotate_mirror()` 直接返回 `ESP_FAIL`，GUD 偶发一小块永远不刷新（脏矩形不重发），**且与音频看起来毫无关系** | Task 0 Step 6 随开关条件式调到 3，注释里把「元素数 = 并发提交者数」这条不变式写死；Task 3 Step 3 再提醒一次 |
+| **现场没有任何串口** | 默认调试手段（`ESP_LOGI` 打个数）整个失效；而「临时开 CDC」这条退路被端点预算堵死 | 硬约束 C 列了两条可见通道（宿主机 / host 侧），每条判据都必须落在其中之一；CDC 与 UAC 互斥变成编译期 `#error`。**残留风险**：从上电到 host 枚举之间是盲的（初稿的屏上面板已删），缓解见硬约束 C 下方那段 ⚠️ |
+| **I2S 没组成全双工却不报错** | 声音是噪声或全静音，所有函数返回 `ESP_OK` | 两道自己的防线：① 两次 init 传**同一个** `i2s_std_config_t` 对象（结构上排除"填得不一样"）；② 读 `I2S0.tx_conf.sig_loopback`（就是 `i2s_ll_share_bck_ws()` 写的那一位）显式判定，为 0 则返回错误码并拒绝启动音频（host 侧表现为「声卡在但全静音」）。**不依赖 IDF 那条看不见的 DEBUG 日志** |
+| **codec 与 USB 两段无法分开归因**（删掉正弦/电平自检的代价） | `aplay` 没声音时要同时怀疑 codec 与 USB 两边 | 全双工由读寄存器显式判定，先排除掉最隐蔽的那一类；`check_usb_desc.py` 在烧板前把描述符那一半排除掉；剩下的按 Task 7 Step 1 的顺序查 |
+| **esp_codec_dev 打开录音时重配已在跑的全双工 I2S** | 录音全零，或播放被打断 | 已逐行读过 `check_fs_compatible()`：两边参数完全相同 ⇒ 走「同参数直接 set」分支且不动 TX，预期是重配成同样的值。**这条只能上板验**，见 Task 3 Step 1 的 ⓘ |
 | **UAC1 描述符的交叉引用写错** | host 完全不认这个设备，而现场没有串口可查 | Task 5 的 `check_usb_desc.py` 在烧板前把 `wTotalLength` / `baInterfaceNr` / terminal ID 链 / ISO 端点属性全部断言一遍；底稿取自已实机跑通的 Cardputer |
 | **ISO 端点 sync 字段填成 0** | TinyUSB 的 UAC1 分支把数据端点当成反馈端点，数据永远发不出去 | `check_usb_desc.py` 有专门一条断言；`audio_device.c:908-922` 的判定逻辑写进了注释 |
 | 接口号变动（HID 1→4）碰坏已验证功能 | 键盘/触摸回归 | 端点号刻意**不动**（只动接口号），减少变量；Task 6 起每个上板任务的判据都含键盘与触摸 |
