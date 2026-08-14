@@ -872,15 +872,102 @@ rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/
 
 **怎么读**（判据只有一条：GUD 还出不出图 —— 现场没串口）：
 
-- `4` **正常** ⇒ 罪在数据泵。再烧 `0`：
-  - `0` 也**正常** ⇒ 罪在数据泵的 **I2S 收发**（1 kHz 的 `i2s_channel_read/write`），
-    不在它对 `tud_audio_*` 的调用；
-  - `0` **挂掉** ⇒ 罪在数据泵对 `tud_audio_*` 的调用本身（与静态分析矛盾，见下）。
-- `4` **挂掉** ⇒ 罪在初始化。再烧 `2` 二分：正常则罪在 `3`/`4` 新增的那一步，
-  挂掉则罪在 `1`/`2`。
+- `4` **正常** ⇒ 罪在数据泵。再烧 `0` 反向验证。
+- `4` **挂掉** ⇒ 罪在初始化。再烧 `2` 二分。
+
+**实测结果：`4` 挂、`2` 挂** ⇒ 数据泵、功放上电、ES7210 全部洗清，
+根因落在 `1`（`i2s_full_duplex_init()`）或 `2`（`es8388_init()`）。
 
 > ⚠️ `STAGE` 是**排障旋钮**，不是长期配置项。根因定位后应当把它连同
 > `main/Kconfig.projbuild` 里那段表格与 `codec_audio_start()` 里的分级一起删掉。
+
+### 🎯 机理：**I2S 的 DOUT/BCLK 与 USB 全速 PHY 抢同一对焊盘**
+
+**ESP32-P4 内部全速(FSLS) PHY 的 D−/D+ 是复用到 GPIO 上的**：
+
+| PHY | D− | D+ | Tab5 上是谁 |
+|---|---|---|---|
+| PHY0 | **G24** | **G25** | USB-C（bootloader 的 USJ 与 app 的 TinyUSB 都在这里） |
+| PHY1 | **G26** | **G27** | **正好是本板的 I2S DOUT 与 BCLK** |
+
+依据（IDF v6.0 源码逐条可查，**不是推测**）：
+
+```
+components/soc/esp32p4/register/hw_ver1/soc/io_mux_reg.h:167-176
+    #define USB_INT_PHY0_DM_GPIO_NUM  24      #define USB_INT_PHY0_DP_GPIO_NUM  25
+    #define USB_INT_PHY1_DM_GPIO_NUM  26      #define USB_INT_PHY1_DP_GPIO_NUM  27
+
+components/esp_hal_usb/esp32p4/usb_dwc_periph.c:31-34
+    static const usb_internal_phy_io_t internal_phy_io = { .dp = 27, .dm = 26 };
+  ——挂在 usb_dwc_info.controllers[1]（Full-Speed USB-DWC，即 TinyUSB 用的那个）上
+
+components/esp_hw_support/usb_phy/usb_phy.c:308-313（注释是 IDF 原文）
+    // For FSLS PHY that shares pads with GPIO peripheral, we must set drive capability to 3 (40mA)
+    gpio_ll_set_drive_capability(..., internal_phy_io->dm /* G26 */, GPIO_DRIVE_CAP_3);
+    gpio_ll_set_drive_capability(..., internal_phy_io->dp /* G27 */, GPIO_DRIVE_CAP_3);
+```
+
+而 `main/tab5_pins.h`：`PIN_I2S_DOUT = 26`、`PIN_I2S_SCLK(BCLK) = 27`。
+
+**关键的一环是 `route_fsls_phy0_to_otg()` 换 PHY 是双向的**：OTG1.1 拿到
+PHY0(G24/G25) 的同时，**USJ 被换到了 PHY1(G26/G27)**（见 `usb_wrap_ll_phy_select()`
+的注释：`sw_usb_phy_sel = true` ⇒ *"USJ mapped to USB FSLS PHY 1"*）。
+而 USJ 从 bootloader 起就是使能的（dmesg 里 `219.231` 那条 `cdc_acm` 就是它），
+`CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n` 只让**应用**不再初始化它，
+**并不会关掉它已经使能的 PHY 焊盘**。
+
+于是 `i2s_channel_init_std_mode()` 一配 G26/G27，那两个焊盘上就同时有
+**USB PHY 的模拟驱动器**和 **I2S 的数字推挽输出**（驱动能力还刚被 `usb_phy.c`
+抬到 CAP_3 = 40 mA）。
+
+**分清确认与推断**：
+- **已确认（源码）**：G26/G27 就是内部全速 PHY 的 D−/D+；换 PHY 后 USJ 落在 PHY1；
+  `usb_new_phy()` 无条件把这两个脚的驱动能力抬到 40 mA；I2S 会把它们配成推挽输出。
+- **推断（未实测）**：两个驱动器对打 → 拖垮 PHY0/PHY1 共用的 USB 模拟域 →
+  G24/G25 上的差分信号失效。这一步解释了全部症状（D+ 还拉着、主机看得到设备、
+  一个控制传输都不应答、CPU 不复位不看门狗），但没有直接测量证据。
+
+### 二分第三刀：`CONFIG_AIO_AUDIO_I2S_GPIO`（配合 `STAGE=1`）
+
+把「I2S 外设/GDMA/时钟 bring-up」与「I2S 抢 GPIO」拆开，一次烧板切一刀：
+
+| 取值 | I2S 配哪些脚 | GUD **正常**说明 |
+|---|---|---|
+| `ALL`（默认） | G26/27/28/29/30 全配 | —（就是现在挂掉的行为） |
+| `NONE` | 一个都不配 | 罪在**引脚**（外设/GDMA/时钟无罪）；挂掉则反之 |
+| `NO_USB_PADS` | 只配 G28/29/30，让开 G26/G27 | 罪就是那对 **USB PHY 焊盘** |
+
+```bash
+# 第一刀：I2S 全外设起来但一个脚都不碰
+printf 'CONFIG_AIO_AUDIO_FULL=y\nCONFIG_AIO_AUDIO_FULL_STAGE=1\nCONFIG_AIO_AUDIO_I2S_GPIO_NONE=y\n' > /tmp/aio.conf
+rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
+```
+
+> ⚠️ `NONE` / `NO_USB_PADS` 下音频**必然不出声**（数据线没接出去），这是预期的：
+> 这两档只回答「USB 还活不活」。
+
+### 候选修法：`CONFIG_AIO_USJ_RELEASE_PHY_PADS`（默认关）
+
+G26/G27 是**硬连线**到 ES8388 的，改不了引脚；只能让 USB 那边放开焊盘。
+本选项在 `route_fsls_phy0_to_otg()` 换完 PHY 之后显式清掉
+`USB_SERIAL_JTAG.conf0.usb_pad_enable`，把 PHY1 的那对焊盘彻底交还给 GPIO。
+
+```bash
+# 一次烧板验证修法：完整音频 + 放开焊盘
+printf 'CONFIG_AIO_AUDIO_FULL=y\nCONFIG_AIO_USJ_RELEASE_PHY_PADS=y\n' > /tmp/aio.conf
+rm -rf build sdkconfig && idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;/tmp/aio.conf" build
+```
+
+- GUD 出图 **且** 主机出声卡 ⇒ 机理成立，本选项就是修法：应改为默认打开、
+  删掉旋钮，并把 `STAGE` / `I2S_GPIO` 两个排障旋钮一并清掉。
+- 仍挂 ⇒ 放开焊盘不够（PHY1 的模拟部分可能还得断电），或机理另有其因；
+  此时先用上面第三刀的 `NONE` / `NO_USB_PADS` 把「引脚 vs 外设」钉死。
+
+> 实现细节：写 `USB_SERIAL_JTAG` 的寄存器前先 `PERIPH_RCC_ATOMIC()` 里
+> `usb_serial_jtag_ll_enable_bus_clock(true)` —— 关了 `USJ_ENABLE_USB_SERIAL_JTAG`
+> 之后没人保证这颗外设的 APB 时钟还开着，而对时钟门控住的外设做寄存器访问在 P4 上
+> 是总线错误；且 `reg_usb_device_apb_clk_en` 与 `reg_i2s0_apb_clk_en` 同在
+> `HP_SYS_CLKRST.soc_clk_ctrl2` 这**一个 32 位字**里，必须走读改写锁。
 
 ### 已排除的候选（静态验算，非推测）
 
@@ -931,6 +1018,40 @@ bool     tud_audio_n_clear_ep_in_ff(...){ TU_VERIFY(... p_desc != NULL); ... }  
 数据泵是 `xTaskCreate`（不钉核）、优先级 **4**，低于 TinyUSB 的 5，
 **在任何一个核上都抢不过它**——这也说明 `2f7a6502` 那次「优先级 5→4」不可能是解药，
 与实测一致。
+
+### 已排除的候选（续：时钟 / 电源域 / GDMA，源码验算）
+
+**I2S 不碰任何 USB 也在用的 PLL。** `I2S_CLK_SRC_DEFAULT` 在 P4 上不是 PLL：
+`esp_hal_i2s/esp32p4/include/hal/i2s_ll.h:46-51` 里
+`#if HAL_CONFIG(CHIP_SUPPORT_MIN_REV) >= 300` 才是 `I2S_CLK_SRC_PLL_160M`，
+否则 `I2S_LL_DEFAULT_CLK_SRC = I2S_CLK_SRC_XTAL`（注释原文：*"No PLL clock source
+before version 3, use XTAL as default"*）。本固件是 `CONFIG_ESP32P4_REV_MIN_100`，
+**走的就是 XTAL 40 MHz 分频**（MCLK 4.096 MHz = 40 MHz ÷ 9.765625，靠 I2S 自己的
+小数分频器）。APLL 也没被碰：`i2s_common.c` / `i2s_std.c` 里 `periph_rtc_apll_acquire()`
+的每一处都由 `clk_src == I2S_CLK_SRC_APLL` 守着。
+
+**没有共享寄存器被误改。** 逐个字对过 `HP_SYS_CLKRST`：
+
+| 寄存器（32 位字） | I2S bring-up 会写 | 同字里有没有 USB 位 |
+|---|---|---|
+| `soc_clk_ctrl1` | `reg_ahb_pdma_sys_clk_en`（GDMA） | **有**：`reg_usb_otg11_sys_clk_en` |
+| `soc_clk_ctrl2` | `reg_i2s0_apb_clk_en` | **有**：`reg_usb_device_apb_clk_en`（USJ） |
+| `peri_clk_ctrl11/12/13` | I2S0 rx/tx 分频与源选择 | 无 |
+| `hp_rst_en0/1/2` | `reg_rst_en_gdma` / `reg_rst_en_i2s0_apb` | 无 |
+
+前两行虽然同字，但两边写的都是**位域读改写**（读活寄存器 → 改一位 → 写回），
+顺序执行时互不破坏；而 USB 侧的写发生在 `tinyusb_driver_install()`（TinyUSB 任务，
+CPU1），I2S 侧发生在之后的 `app_main`（CPU0），**不存在并发**。
+
+> ⓘ 顺带发现一个 IDF 的潜在缺陷（与本 bug 无关，仅记录）：
+> `esp_hal_usb/usb_wrap_hal.c:14-15` 调的是**下划线版**
+> `_usb_wrap_ll_enable_bus_clock()` / `_usb_wrap_ll_reset_register()`，即
+> **没有**套 `PERIPH_RCC_ATOMIC()`，而同文件 LL 头里白纸黑字写着
+> *"…are shared registers, so this function must be used in an atomic way"*。
+> 本工程里因为不并发所以没踩到。
+
+**GDMA 通道也不是被抢走的。** P4 的全速 OTG 核是 slave-only（不吃 GDMA），
+`usb_dwc_info.controllers[1]` 也没有任何 DMA 相关字段。
 
 ### 已排除的候选（续：USB 侧，`DESC_ONLY` 实测已复核这一整片）
 

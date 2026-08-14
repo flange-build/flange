@@ -82,6 +82,32 @@ static bool i2s_duplex_active(void)
     return I2S0.tx_conf.sig_loopback != 0;
 }
 
+/*
+ * I2S 实际要配的引脚。⚠️ 排障旋钮 CONFIG_AIO_AUDIO_I2S_GPIO（见 Kconfig.projbuild）：
+ * 把「I2S 外设/GDMA/时钟 bring-up」与「I2S 抢 GPIO」拆开验证用。
+ * DOUT(G26)/BCLK(G27) 与 USB 内部全速 PHY 的 D−/D+ 是同一对焊盘，见 tab5_pins.h。
+ * 根因坐实后应当把这段 #if 连同 Kconfig 里的 choice 一起删掉。
+ */
+#if CONFIG_AIO_AUDIO_I2S_GPIO_NONE
+#  define I2S_GPIO_MCLK  I2S_GPIO_UNUSED
+#  define I2S_GPIO_BCLK  I2S_GPIO_UNUSED
+#  define I2S_GPIO_WS    I2S_GPIO_UNUSED
+#  define I2S_GPIO_DOUT  I2S_GPIO_UNUSED
+#  define I2S_GPIO_DSIN  I2S_GPIO_UNUSED
+#elif CONFIG_AIO_AUDIO_I2S_GPIO_NO_USB_PADS
+#  define I2S_GPIO_MCLK  PIN_I2S_MCLK
+#  define I2S_GPIO_BCLK  I2S_GPIO_UNUSED   /* G27 = USB 全速 PHY 的 D+ */
+#  define I2S_GPIO_WS    PIN_I2S_LRCK
+#  define I2S_GPIO_DOUT  I2S_GPIO_UNUSED   /* G26 = USB 全速 PHY 的 D− */
+#  define I2S_GPIO_DSIN  PIN_I2S_DSIN
+#else /* CONFIG_AIO_AUDIO_I2S_GPIO_ALL：正常行为 */
+#  define I2S_GPIO_MCLK  PIN_I2S_MCLK
+#  define I2S_GPIO_BCLK  PIN_I2S_SCLK
+#  define I2S_GPIO_WS    PIN_I2S_LRCK
+#  define I2S_GPIO_DOUT  PIN_I2S_DOUT
+#  define I2S_GPIO_DSIN  PIN_I2S_DSIN
+#endif
+
 static esp_err_t i2s_full_duplex_init(void)
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(AUDIO_I2S_PORT, I2S_ROLE_MASTER);
@@ -118,11 +144,11 @@ static esp_err_t i2s_full_duplex_init(void)
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
                                                         I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
-            .mclk = PIN_I2S_MCLK,
-            .bclk = PIN_I2S_SCLK,
-            .ws   = PIN_I2S_LRCK,
-            .dout = PIN_I2S_DOUT,
-            .din  = PIN_I2S_DSIN,
+            .mclk = I2S_GPIO_MCLK,
+            .bclk = I2S_GPIO_BCLK,
+            .ws   = I2S_GPIO_WS,
+            .dout = I2S_GPIO_DOUT,
+            .din  = I2S_GPIO_DSIN,
             .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
         },
     };

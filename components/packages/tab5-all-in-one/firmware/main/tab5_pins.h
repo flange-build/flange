@@ -28,10 +28,43 @@
  * 「扬声器与麦克风抢同一根 WS 脚」的半双工仲裁。
  * 取自 esp-bsp bsp/m5stack_tab5（Apache-2.0）。 */
 #define PIN_I2S_MCLK       30
-#define PIN_I2S_SCLK       27   /* BCLK */
+#define PIN_I2S_SCLK       27   /* BCLK  ⚠️ 同时是 USB 内部全速 PHY1 的 D+，见下 */
 #define PIN_I2S_LRCK       29   /* WS */
-#define PIN_I2S_DOUT       26   /* ESP → ES8388，播放 */
+#define PIN_I2S_DOUT       26   /* ESP → ES8388，播放；⚠️ 同时是 PHY1 的 D−，见下 */
 #define PIN_I2S_DSIN       28   /* ES7210 → ESP，录音 */
+
+/*
+ * ⚠️⚠️⚠️ **G26 / G27 与 USB 抢焊盘** —— 这是本板最贵的一个坑，别再踩第二次。
+ *
+ * ESP32-P4 有两条内部全速(FSLS) PHY，它们的 D−/D+ 是**复用到 GPIO 上的**：
+ *     PHY0: D− = G24, D+ = G25     ← Tab5 的 USB-C 接在这里
+ *     PHY1: D− = G26, D+ = G27     ← 正好就是本板的 I2S DOUT 与 BCLK
+ *
+ * 依据（IDF v6.0 源码，逐条可查，不是推测）：
+ *   - components/soc/esp32p4/register/hw_ver1/soc/io_mux_reg.h:167-176
+ *         USB_INT_PHY0_DM/DP_GPIO_NUM = 24 / 25
+ *         USB_INT_PHY1_DM/DP_GPIO_NUM = 26 / 27
+ *   - components/esp_hal_usb/esp32p4/usb_dwc_periph.c:31-34
+ *         internal_phy_io = { .dp = 27, .dm = 26 }，挂在 usb_dwc_info
+ *         .controllers[1]（Full-Speed USB-DWC，也就是 TinyUSB 用的那个）上
+ *   - components/esp_hw_support/usb_phy/usb_phy.c:308-313，注释原文：
+ *         "For FSLS PHY that shares pads with GPIO peripheral, we must set
+ *          drive capability to 3 (40mA)"
+ *     —— usb_new_phy() 会**无条件**把 G26/G27 的驱动能力抬到 CAP_3(40mA)，
+ *        与我们把 OTG 换到了 PHY0 无关（IDF 认死 OTG 的 PHY 就是 PHY1）。
+ *
+ * 后果：app_main.c 的 route_fsls_phy0_to_otg() 把 OTG 换到 PHY0 的同时，
+ * **USJ 被换到了 PHY1**，而 USJ 从 bootloader 起就是使能的（dmesg 里那条
+ * cdc_acm 就是它），CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 只让应用不再初始化它，
+ * 并不会关掉它已经使能的 PHY 焊盘。于是 I2S 一配 G26/G27，这两个焊盘上就同时
+ * 有 USB PHY 的模拟驱动器和 I2S 的 40mA 数字推挽输出。
+ *
+ * 实测吻合：STAGE=1（只跑 i2s_full_duplex_init）即挂，且 CPU 不复位、
+ * D+ 仍拉着 —— 主机看得到设备但一个控制传输都不应答。
+ *
+ * 这两个脚是**硬连线**到 ES8388 的，改不了；要动只能让 USB 那边放开焊盘，
+ * 见 CONFIG_AIO_USJ_RELEASE_PHY_PADS。
+ */
 
 /* 喇叭功放使能：与 LCD_EN(PIN4) / TOUCH_EN(PIN5) 同在 0x43 那颗 PI4IOE5V6408 上
  * （esp-bsp 的 BSP_SPEAKER_EN = IO_EXPANDER_PIN_NUM_1，其 BSP_IO_EXPANDER_ADDRESS

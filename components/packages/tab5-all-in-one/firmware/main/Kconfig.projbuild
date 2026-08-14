@@ -61,6 +61,71 @@ config AIO_AUDIO_FULL_STAGE
         只在排查「开音频后 USB 枚举失败」时才动它。5 是完整行为。
         每个取值的含义见 main/Kconfig.projbuild 里的表，或 firmware/README.md。
 
+# ── 二分第三刀：I2S 到底要不要碰那几个引脚 ───────────────────────────
+#
+# ⚠️⚠️ 已查实的硬事实：**ESP32-P4 内部全速 PHY 的 D−/D+ 就是 GPIO26 / GPIO27**，
+#      而 Tab5 的 I2S DOUT = G26、BCLK = G27 —— 两者撞在同一对焊盘上。
+#      依据（IDF v6.0 源码，非推测）：
+#        components/esp_hal_usb/esp32p4/usb_dwc_periph.c:31
+#            static const usb_internal_phy_io_t internal_phy_io = { .dp = 27, .dm = 26 };
+#          它挂在 usb_dwc_info.controllers[1]（Full-Speed USB-DWC）的 internal_phy_io 上。
+#        components/soc/esp32p4/register/hw_ver1/soc/io_mux_reg.h:169-170
+#            #define USB_INT_PHY1_DM_GPIO_NUM  26
+#            #define USB_INT_PHY1_DP_GPIO_NUM  27
+#        components/esp_hw_support/usb_phy/usb_phy.c:308-313 —— 注释原文
+#            "For FSLS PHY that shares pads with GPIO peripheral, we must set
+#             drive capability to 3 (40mA)"
+#          然后**无条件**对 G26/G27 调 gpio_ll_set_drive_capability(..., CAP_3)。
+#
+# 这一档把「I2S 外设/GDMA/时钟 bring-up」与「I2S 抢 GPIO」拆开，一次烧板切一刀。
+# 与 AIO_AUDIO_FULL_STAGE=1 配合使用（只跑 i2s_full_duplex_init()）。
+#
+# | 取值 | I2S 配哪些脚 | GUD 正常说明什么 |
+# |------|--------------|------------------|
+# | ALL（默认） | G26/27/28/29/30 全配 | —（就是现在挂掉的行为） |
+# | NO_USB_PADS | 只配 G28/29/30，DOUT(26)/BCLK(27) 留空 | 罪就是 USB PHY 那两个焊盘 |
+# | NONE | 一个脚都不配 | 罪在引脚（再用 NO_USB_PADS 定位是哪两个）；挂掉则罪在外设/GDMA/时钟 |
+#
+# ⚠️ 排障旋钮。NO_USB_PADS / NONE 下音频**必然不出声**（数据线没接出去），
+#    这是预期的 —— 这两档只回答「USB 还活不活」。
+choice AIO_AUDIO_I2S_GPIO
+    prompt "I2S 引脚配置（二分排障用）"
+    depends on AIO_AUDIO_FULL
+    default AIO_AUDIO_I2S_GPIO_ALL
+
+    config AIO_AUDIO_I2S_GPIO_ALL
+        bool "全配（默认，= 正常行为）"
+
+    config AIO_AUDIO_I2S_GPIO_NO_USB_PADS
+        bool "不配 DOUT(G26)/BCLK(G27) —— 即让开 USB 全速 PHY 的 D−/D+"
+
+    config AIO_AUDIO_I2S_GPIO_NONE
+        bool "一个引脚都不配"
+endchoice
+
+# ── 候选修法：把 G26/G27 的焊盘从 USB-Serial/JTAG 手里放掉 ────────────
+#
+# route_fsls_phy0_to_otg() 把 OTG1.1 换到 PHY0(G24/G25) 的同时，**USJ 被换到了
+# PHY1(G26/G27)**（见 usb_wrap_ll_phy_select 的注释：sw_usb_phy_sel = true ⇒
+# "USJ mapped to USB FSLS PHY 1"）。而 USJ 在 bootloader 阶段是**开着的**
+# （dmesg 里那条 cdc_acm 就是它），CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 只是让
+# 应用不再初始化它，**并不会把它已经使能的 PHY 焊盘关掉**。
+#
+# 于是 G26/G27 上同时有两个驱动器：仍然使能的 USB PHY1 模拟驱动器，和 I2S 的
+# 数字推挽输出（而且驱动能力刚被 usb_phy.c 抬到 CAP_3 = 40mA）。本选项在换 PHY
+# 之后显式清掉 USB_SERIAL_JTAG.conf0.usb_pad_enable，把那对焊盘彻底交还给 GPIO。
+#
+# **默认关闭**：机理里「两个驱动器打架 → 拖垮 PHY0/PHY1 共用的 USB 模拟域 →
+# G24/G25 上的信号失效」这一步是推断而非实测，而默认档必须保持已验证可用。
+# 打开它 + AIO_AUDIO_FULL（STAGE=5）一次烧板即可验证：
+#   GUD 出图 **且** 主机出声卡 ⇒ 机理成立，本选项就是修法，应改为默认打开并删掉旋钮。
+config AIO_USJ_RELEASE_PHY_PADS
+    bool "换 PHY 后把 G26/G27 焊盘从 USB-Serial/JTAG 放掉（候选修法，默认关）"
+    default n
+    help
+        仅在排查/验证「开音频后 USB 枚举失败」时打开。详见
+        main/Kconfig.projbuild 的说明与 firmware/README.md。
+
 # 派生量：描述符与 CFG_TUD_AUDIO 是否要带上音频。
 # 后两档都要，所以统一用它判断，别在 C 里到处写两个宏的 ||。
 config AIO_AUDIO_DESC

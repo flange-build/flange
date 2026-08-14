@@ -13,6 +13,10 @@
 #include "codec_audio.h"
 #endif
 #include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
+#if CONFIG_AIO_USJ_RELEASE_PHY_PADS
+#include "esp_private/periph_ctrl.h"    /* PERIPH_RCC_ATOMIC */
+#include "hal/usb_serial_jtag_ll.h"     /* usb_serial_jtag_ll_phy_enable_pad */
+#endif
 #if CONFIG_TINYUSB_CDC_ENABLED
 /* ⚠️ 这两个头必须在 #if 内包含：tinyusb_cdc_acm.h 在 CDC 未开启时会 #error。 */
 #include "tinyusb_cdc_acm.h"
@@ -43,6 +47,33 @@ static const char *TAG = "tab5_aio";
 static void route_fsls_phy0_to_otg(void)
 {
     usb_wrap_ll_phy_select(&USB_WRAP, 0);
+
+#if CONFIG_AIO_USJ_RELEASE_PHY_PADS
+    /*
+     * ⚠️ 候选修法（默认关闭，见 main/Kconfig.projbuild 的说明）：把 PHY1 的
+     * 焊盘 —— **也就是 G26/G27，正好是本板 I2S 的 DOUT 与 BCLK** —— 从
+     * USB-Serial/JTAG 手里放掉。
+     *
+     * 上面那次换 PHY 是**双向**的：OTG1.1 拿到 PHY0(G24/G25) 的同时，USJ 被换到了
+     * PHY1(G26/G27)。而 USJ 从 bootloader 起就是使能的（主机 dmesg 里那条 cdc_acm
+     * 就是它），CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 只让**应用**不再初始化它，
+     * 并不会关掉它已经使能的 PHY 焊盘。于是 I2S 一配 G26/G27，那两个焊盘上就同时
+     * 有 USB PHY 的模拟驱动器和 I2S 的数字推挽输出（驱动能力还刚被 usb_phy.c
+     * 抬到 CAP_3 = 40mA）。详细依据见 tab5_pins.h 音频段下面那段注释。
+     *
+     * 先使能 USJ 的总线时钟再写它的寄存器：CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n 时
+     * 没人保证这颗外设的 APB 时钟还开着，而对时钟门控住的外设做寄存器访问在 P4 上
+     * 是总线错误。reg_usb_device_apb_clk_en 与 reg_i2s0_apb_clk_en 同在
+     * HP_SYS_CLKRST.soc_clk_ctrl2 这**一个 32 位字**里，所以必须走 PERIPH_RCC_ATOMIC()
+     * 的读改写锁，不能裸写。
+     */
+    PERIPH_RCC_ATOMIC() {
+        usb_serial_jtag_ll_enable_bus_clock(true);
+    }
+    usb_serial_jtag_ll_phy_enable_pad(false);
+    ESP_LOGI(TAG, "已把 G26/G27 焊盘从 USB-Serial/JTAG 放掉（让给 I2S）");
+#endif
+
     ESP_LOGI(TAG, "内部 FSLS PHY 0 已划给 OTG1.1（USB-C 从 USB-Serial/JTAG 收回）");
 }
 
