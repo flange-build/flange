@@ -1301,19 +1301,33 @@ i2s_full_duplex_init()  →  esp8388_init()（含 esp_codec_dev_open：先静音
 
 ### 数据泵
 
-一个任务、每 1 ms 一转，同时搬两个方向，**以 `i2s_channel_read()` 作节拍源**
-（DMA 描述符正好是 1 ms 的样本数，读满即返回，比 `vTaskDelay(1)` 更贴合 USB 帧）：
+一个任务、每 1 ms 一转，同时搬两个方向：
 
 ```
 i2s_channel_read(rx)  →  stereo_to_mono  →  tud_audio_write()      （录音）
 tud_audio_read()      →  mono_to_stereo  →  i2s_channel_write(tx)  （播放）
 ```
 
+**节拍源是动态的 —— 谁阻塞成功谁就是节拍**，这是「播放与录音各自降级」在泵里的落点：
+
+| 可用的方向 | 节拍源 | 说明 |
+|---|---|---|
+| 录音可用 | `i2s_channel_read()` | DMA 描述符正好是 1 ms 的样本数，读满即返回，比 `vTaskDelay(1)` 更贴合 USB 帧 |
+| 只有播放 | `i2s_channel_write()` | DMA 排满时它阻塞，同样是 1 ms 一拍 |
+| 都不可用 | `vTaskDelay(1)` | STAGE 0 反向验证档 |
+
+> ⚠️ **RX 读失败绝不 `continue`**。早先的版本拿 `i2s_channel_read()` 当唯一节拍源、
+> 读失败就跳过整轮，于是 ES7210 一挂、完好的 ES8388 也一声不出 —— 播放被录音挟持。
+> 现在读失败只是把录音缓冲清零（向 host 上报静音）并计一次数，播放照走。
+> 一整轮谁都没阻塞成功时**必须**补一次 `vTaskDelay()`：那两个超时只在通道已
+> RUNNING 时才真的阻塞，通道没使能时两个调用都立即返回错误，不补延时循环就退化成
+> 不让出 CPU 的忙转，把同核的 idle 任务一起饿死 ——「音频没起来」会升级成「整块板子不正常」。
+
 host 没选中某个方向时：播放侧**灌静音而不是停写**（I2S 时钟保持连续，ES8388 不会因为
 BCLK 断续而「咔」一声）；录音侧清空软件 FIFO（否则下次打开会先放出一段陈旧音频）。
 
 任务优先级 5，与 `TINYUSB_DEFAULT_TASK_PRIO` 相同 —— 它每毫秒只搬 128 字节、绝大部分时间
-阻塞在 `i2s_channel_read()` 上，没有理由压过 USB 栈。欠载/溢出**只计数**，每 10 秒汇总一条
+阻塞在 I2S 收发上，没有理由压过 USB 栈。欠载/溢出**只计数**，每 10 秒汇总一条
 日志：1 kHz 的 `ESP_LOGW` 会自己把音频饿死，属于观测干扰被观测。
 
 Cardputer 上那套 `AUDIO_MODE_SPEAKER/MICROPHONE` 三态仲裁**不移植** —— 那是因为它的扬声器 WS
@@ -1422,27 +1436,38 @@ idf.py build flash monitor
 `ttyACM` 之前的内容覆盖掉，只打一遍现场大概率什么都看不到）。
 
 ```
-codec_audio: [自检] init 步数=3/3 err=ESP_OK duplex=1 spk_open=0 mic_open=0 pa=1 pump=1
+codec_audio: [自检] I2S=ESP_OK duplex=1 | 播放 ES8388=ESP_OK open=ESP_OK | 录音 ES7210=ESP_OK open=ESP_OK | pa=1 pump=1
+codec_audio: [自检] ES7210 probe(0x40)=ESP_OK 卡在=完成
 codec_audio: [自检] ES8388 chippwr=00 dacpwr=3c dacctl3=00 vol L/R=1e/1e LOUT1/ROUT1=1e/1e LOUT2/ROUT2=00/00
 codec_audio: [自检] ES7210 mic1gain=.. mic2gain=.. mic12pwr=..
 codec_audio: [自检] 泵 帧=... spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37
 codec_audio: 10s 泵：spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37 | TX 欠载 0 麦 FIFO 溢出 0 RX 读失败 0
 ```
 
+⚠️ **播放与录音是两条互不牵连的链路**：第一行里 `播放 ES8388=…` 与
+`录音 ES7210=…` 各报各的，一边失败另一边照常工作（ES7210 挂 ⇒ 录音上报静音、
+播放正常；ES8388 挂 ⇒ 播放丢数据、录音正常）。只有 `I2S!=ESP_OK` 才两边一起放弃。
+
+⚠️ 「没跑过」打成 **`未运行`**，绝不打成 `-1`：`ESP_FAIL` 与
+`ESP_CODEC_DEV_DRV_ERR` **都等于 −1**，用 −1 当哨兵会让「那一步没跑」与
+「那一步真的返回了 DRV_ERR」在日志里长得一模一样。
+
 从上往下读，**第一条不对的就是根因**：
 
 | 现象 | 结论 |
 |---|---|
-| `步数<3` / `err!=ESP_OK` | `codec_audio_init()` 就失败了 ⇒ `app_main` 因此**没调** `codec_audio_start()`，功放没开、数据泵没起。「有声卡但全静音」最常见的成因 |
-| `duplex=0` | I2S 没组成全双工（两次 `init_std_mode` 的 `std_cfg` 不相等） |
+| `I2S!=ESP_OK` / `duplex=0` | I2S 没起来或没组成全双工（两次 `init_std_mode` 的 `std_cfg` 不相等）⇒ 两个方向都没戏，先修它 |
+| `录音 ES7210` 非 `ESP_OK`，且 `probe(0x40)=ESP_OK` | 芯片在总线上、应答正常 ⇒ 罪在驱动侧，看 `卡在=` 那一句 |
+| `probe(0x40)=ESP_ERR_NOT_FOUND` | 芯片**不应答** ⇒ 查供电(AUDIO_VDD)/走线，别再查驱动。地址本身已核实：原理图 U13 的 AD0/AD1 双双接 AGND ⇒ 7 bit `0x40` |
+| `卡在=esp_codec_dev_open` | 罪在「拿 RX 去 reconfig 一条已经在跑的全双工 I2S」这一步，不是 codec 本身 |
 | ES8388 寄存器全打成 `ffffffff` | 回读失败 ⇒ I2C 根本没通（地址 / 总线 / 上电） |
 | `dacpwr!=3c` 或 `dacctl3` 的 bit2=1 | DAC 没上电 / 还在静音 |
-| `pa=0` | 功放没导通（`codec_audio_start()` 没跑到，或 IO 扩展写失败） |
-| `pump=0` / `帧=0` | 数据泵任务没起来 |
+| `pa=0` | 功放没导通（ES8388 没起来，或 IO 扩展写失败）。**与 ES7210 无关** |
+| `pump=0` / `帧=0` | 数据泵任务没起来。帧数**无条件**递增，所以这条不再会被「RX 一直读不到」冒充 |
 | `spk_on=0` | **host 从没把播放接口切到 alt 1** ⇒ 问题在主机侧（没选对声卡 / 没在放音），不在固件 |
 | `spk_on=1` 但 `usb_peak=0` | host 选了接口却只送静音 |
 | `usb_peak>0` 却仍没声 | 数字侧全通，问题在 codec 之后的模拟侧（音量 / 路由 / 功放 / 喇叭） |
-| `RX 读失败` 一直在涨 | ⚠️ 注意：数据泵用 `i2s_channel_read()` 当节拍源，RX 失败会 `continue` 掉整轮 —— **播放也一起停**。录音侧坏掉会表现成播放也没声 |
+| `RX 读失败` 一直在涨 | 只影响录音。数据泵的节拍源会自动落到 `i2s_channel_write()` 上，**播放不受连累** |
 
 `mic_peak` 是**无条件**统计的（host 没开录音时也统计），所以它单独回答
 「ES7210 到底有没有在往 DSIN 上送东西」。

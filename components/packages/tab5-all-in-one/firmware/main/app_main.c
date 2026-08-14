@@ -303,12 +303,19 @@ void app_main(void)
      * 这两类候选根因分开验证，见 main/Kconfig.projbuild。
      */
 #if CONFIG_AIO_AUDIO_FULL
-    /* 硬件没起来就别开功放、也别起泵：功放接在一颗没配好的 DAC 后面只会出噪声。 */
-    if (audio_err == ESP_OK) {
-        err = codec_audio_start();
-        if (err != ESP_OK)
-            ESP_LOGW(TAG, "音频不可用(%s)，继续启动", esp_err_to_name(err));
-    }
+    /*
+     * ⚠️ **无条件调用**，别再拿 audio_err 一票否决。
+     *
+     * 播放(ES8388) 与录音(ES7210) 是两颗独立芯片、两条独立的 USB streaming 接口，
+     * 本来就该各自降级；此处曾经的 `if (audio_err == ESP_OK)` 把它们绑成全有全无 ——
+     * ES7210 一挂，完好的 ES8388 连功放都不开，用户一声都听不到。
+     * codec_audio_init() 现在只在 **I2S 本身**起不来时才返回错误（那时两个方向都
+     * 没戏），单颗 codec 的失败记在自检快照里，由 codec_audio_start() 自己按
+     * 「哪条链路可用」决定开不开功放、怎么跑数据泵。
+     */
+    err = codec_audio_start();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "音频不可用(%s)，继续启动", esp_err_to_name(err));
 #endif
 
     while (1) {

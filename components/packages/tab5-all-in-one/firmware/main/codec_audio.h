@@ -26,15 +26,24 @@
  *
  * 两者失败时调用方都只降级、不拦启动（同 kbd_start / touch_start）：USB 描述符
  * 是静态的，host 侧照样会枚举出声卡，只是收发到的都是静音 —— 这比让整机进
- * boot loop 好。codec_audio_init() 失败后 codec_audio_start() 仍可安全调用
- * （句柄为 NULL，数据泵走它的 NULL 分支）。
+ * boot loop 好。
+ *
+ * ⚠️ 降级的粒度是**每条链路**，不是「音频」整体。播放(ES8388) 与录音(ES7210)
+ * 是两颗独立芯片、USB 侧也是两条独立的 AudioStreaming 接口：
+ *     ES7210 挂 ⇒ 播放照常工作，录音向 host 上报静音
+ *     ES8388 挂 ⇒ 录音照常工作，播放把 host 送来的数据丢弃
+ *     I2S 本身挂 ⇒ 才整体放弃（连时钟都没有，谈不上降级）
+ * 因此 codec_audio_init() **只在 I2S 起不来时**返回错误；单颗 codec 的失败记进
+ * 自检快照，不体现在返回值里。调用方**必须无条件调用 codec_audio_start()**，
+ * 由它按「哪条链路可用」决定开不开功放、数据泵怎么跑。
  */
 esp_err_t codec_audio_init(void);
 esp_err_t codec_audio_start(void);
 
 /*
- * 把「音频卡在哪一步」打成四行日志：init 各步的返回值、I2S 全双工判定、
- * ES8388/ES7210 的寄存器回读、功放状态、数据泵的帧数与信号峰值。
+ * 把「音频卡在哪一步」打成五行日志：三条链路各自的 init 返回值、I2S 全双工判定、
+ * ES7210 的 i2c_master_probe 结果与卡住的那一句、ES8388/ES7210 的寄存器回读、
+ * 功放状态、数据泵的帧数与信号峰值。
  *
  * ⚠️ **必须在日志通道可用之后调用**，而且要**反复调用**。
  * codec_audio_init() 跑在 tinyusb_driver_install() 之前，那时这块板唯一的
@@ -42,7 +51,8 @@ esp_err_t codec_audio_start(void);
  * 环形缓冲又会把 host 打开 ttyACM 之前的内容覆盖掉。所以 app_main 的主循环
  * 每 10 秒复读一次，用户什么时候接上 monitor 都能看到完整一份。
  *
- * codec_audio_init() 失败后照样可以调（未初始化的部分会打成 −1 / 0）。
+ * codec_audio_init() 失败后照样可以调（没跑到的步骤打成「未运行」，与真实
+ * 错误码严格区分 —— ESP_FAIL 与 ESP_CODEC_DEV_DRV_ERR 都是 −1，不能拿 −1 当哨兵）。
  * 每次调用会做几次 I2C 读，不要放进实时路径。
  */
 void codec_audio_report(void);
