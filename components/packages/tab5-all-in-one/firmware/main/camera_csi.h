@@ -1,9 +1,17 @@
 #pragma once
 /*
- * SC202CS → MIPI-CSI → ISP → 1280×720 RGB565（PSRAM）。
+ * SC202CS(RAW8) → MIPI-CSI host → **ISP(去马赛克)** → CSI 桥(直通) → DMA →
+ * 1280×720 RGB565（PSRAM）。
  * **本阶段（P4 Task8）取流但不接 UVC** —— UVC 继续出 Task6 的片上合成图案。
  * PPA 缩小与接进 UVC 流是 Task9 的事，刻意分开：这样「取流」出问题时，
  * 变量只有取流本身，不会和编码/USB 混在一起。
+ *
+ * ⚠️ **RAW8→RGB565 只能由 ISP 做，不能交给 CSI 桥。** 本板 P4 是 rev v1.0，
+ * 桥的颜色转换硬件不存在，让它转会在 esp_cam_new_csi_ctlr() 就返回
+ * ESP_ERR_NOT_SUPPORTED（实机踩过一次）。所以 CSI 的 input/output 颜色格式
+ * **都填 RGB565**（= 桥搬运的数据，不是传感器发的），逐行依据写在
+ * camera_csi.c 的 csi_cfg 上方。IDF 例程 mipi_isp_dsi 那份 RAW8→RGB565 的
+ * CSI 配置只适用于 rev ≥ 3.0，不能照抄。
  *
  * 分层与音频、面板、触摸完全同构：
  *   寄存器序列   → 托管组件 espressif/esp_cam_sensor（**芯片驱动**组件，

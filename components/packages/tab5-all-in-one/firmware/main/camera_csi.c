@@ -230,6 +230,15 @@ static volatile uint32_t s_frames_done;     /* 完整写进缓冲、并交到 do
 static volatile uint32_t s_frames_reused;   /* 中断没抢到空闲缓冲，把刚写完那块又借走 */
 static volatile uint32_t s_frames_dropped;  /* done 队列满，写好的帧没人要 */
 static uint32_t          s_get_timeouts;    /* camera_csi_get_frame() 超时次数 */
+/*
+ * 帧长不符。CSI 驱动交回来的 received_size 就是它自己算的
+ * fb_size_in_bytes = h*v*out_bpp/8（esp_cam_ctlr_csi.c:158-160、386），
+ * 与本文件的 CAM_FB_BYTES 是两条独立算出来的路。对不上就说明 csi_cfg 里
+ * output_data_color_type 的理解错了 —— 那种错在画面上表现为花屏/错位，
+ * 从像素上很难反推，所以在这里直接拦下来记成一个数，别让它冒充正常帧。
+ */
+static volatile uint32_t s_size_mismatch;
+static volatile uint32_t s_last_size;       /* 最近一次收到的 received_size */
 
 /* 六个初始化步骤各记一个返回值，**不共用哨兵**（STEP_NOT_RUN 在文件上半部定义）。
  * 这是音频那轮的教训：一个哨兵表达两件事，现场就分不出「没跑」和「跑了但失败」。 */
@@ -284,6 +293,14 @@ static bool cam_on_trans_finished(esp_cam_ctlr_handle_t handle,
         s_frames_reused++;
         return false;
     }
+    s_last_size = (uint32_t)trans->received_size;
+    if (trans->received_size != CAM_FB_BYTES) {
+        /* 不把它当帧交出去：半帧/超长帧的统计值会冒充正常画面，比没有帧更坏。 */
+        s_size_mismatch++;
+        uint16_t *bad = trans->buffer;
+        xQueueSendFromISR(s_free_q, &bad, &woken);
+        return woken == pdTRUE;
+    }
     uint16_t *buf = trans->buffer;
     if (xQueueSendFromISR(s_done_q, &buf, &woken) == pdTRUE)
         s_frames_done++;
@@ -313,6 +330,45 @@ esp_err_t camera_csi_init(void)
      * mipi_clk = 576000000 ⇒ lane_bit_rate_mbps = 576。
      * ⚠️ 这是**唯一可用**的传感器模式：1600×1200 的 1200 行超出 P4 ISP 的
      *    1920×1080 输入上限，1600×900 裁不出 4:3。见 P4 计划的「关键事实」。
+     *
+     * ══ input 与 output **都填 RGB565**，这不是笔误 ═══════════════════════
+     *
+     * 硬件管线是：CSI PHY/host → **ISP** → CSI 桥 → DW-GDMA → PSRAM。
+     * ISP 在桥的**上游**（soc_caps.h 的 SOC_ISP_SHARE_CSI_BRG = 1；isp_core.c:92
+     * 用 MIPI_CSI_BRG_USER_SHARE 认领同一个桥，本文件的 CSI 控制器用
+     * MIPI_CSI_BRG_USER_CSI 认领，mipi_csi_share_hw_ctrl.c 明确允许这一对共存，
+     * 见 esp_driver_isp/test_apps 的 test_isp_csi.c）。
+     * ⇒ **写进 PSRAM 的字节由 ISP 的输出格式决定**，桥只是搬运。
+     *   RAW8 → RGB565 的去马赛克整个由 ISP 做（isp_ll.h:473-478，
+     *   isp_ll_set_output_data_color_format(RGB565) 会顺手把 demosaic_en 打开）。
+     *
+     * 于是这两个字段对 CSI 控制器只剩两个作用，**都不是「告诉它传感器发的是什么」**
+     * （CSI host 压根不配色彩格式：mipi_csi_hal_init() 只设 lane/时钟，
+     *  数据类型范围写死 0x12~0x2f，已经涵盖 RAW8 的 0x2A）：
+     *   input  → in_bpp  → csi_transfer_size = h*v*in_bpp/64，**DMA 搬多少字节**
+     *   output → out_bpp → fb_size_in_bytes  = h*v*out_bpp/8，缓冲长度校验与
+     *                      交回来的 received_size
+     *   （esp_cam_ctlr_csi.c:143-160、207）
+     * 填 RAW8/RGB565 的话 DMA 只搬 921600 字节、却声称收到 1843200 字节 ——
+     * **半帧**。两个都填 RGB565 时 in_bpp == out_bpp == 16，两个数都是 1843200，
+     * 与 ISP 实际吐出的字节数一致。
+     *
+     * ⚠️⚠️ 更硬的一条：**本板 P4 是 rev v1.0，桥的颜色转换功能根本不存在。**
+     *   esp_cam_new_csi_ctlr() 内部会调 s_csi_ctlr_format_conversion()
+     *   （esp_cam_ctlr_csi.c:226）；只要 input != output，它在
+     *   :604-608 处查芯片版本，rev < 3.0 直接返回 ESP_ERR_NOT_SUPPORTED —— 实机
+     *   第一次就是死在这里（快照打的是 ctlr=ESP_ERR_NOT_SUPPORTED）。
+     *   而 mipi_csi_ll.h:159/292 那对 #if HAL_CONFIG(CHIP_SUPPORT_MIN_REV) >= 300
+     *   更说明问题：rev < 3.0 编译出来的那一版里，桥的五个颜色模式 LL 函数
+     *   **全是空函数**，硬件上就没有这个块。
+     *   ⇒ IDF 例程 examples/peripherals/camera/mipi_isp_dsi 那份
+     *      RAW8 → RGB565 的 CSI 配置**只适用于 rev ≥ 3.0，不能照抄**。
+     *   （这是同一个芯片版本限制第三次咬这个工程：先是烧录门槛
+     *     CONFIG_ESP32P4_SELECTS_REV_LESS_V3，再是 JPEG 编码器不支持 YUV420/444。）
+     *
+     * ⓘ input == output 这条路**两个版本都对**：src == dst 时驱动走的是
+     *   :599-602 的直通分支，rev ≥ 3.0 上写真的旁路位、rev < 3.0 上是空操作，
+     *   去马赛克反正都在 ISP 里。所以这里不做版本分支。
      */
     const esp_cam_ctlr_csi_config_t csi_cfg = {
         .ctlr_id  = 0,
@@ -321,8 +377,10 @@ esp_err_t camera_csi_init(void)
         .v_res    = CAM_SENSOR_H,
         .data_lane_num      = CAM_MIPI_LANES,   /* 1 */
         .lane_bit_rate_mbps = CAM_MIPI_MBPS,    /* 576 */
-        .input_data_color_type  = CAM_CTLR_COLOR_RAW8,
-        .output_data_color_type = CAM_CTLR_COLOR_RGB565,   /* 经 ISP 去马赛克后的输出 */
+        /* 见上面那一大段：这两个描述的是**桥搬运的数据**（= ISP 的输出），
+         * 不是传感器发出来的 RAW8。相等 ⇒ 桥直通，不触发颜色转换的版本门。 */
+        .input_data_color_type  = CAM_CTLR_COLOR_RGB565,
+        .output_data_color_type = CAM_CTLR_COLOR_RGB565,
         .queue_items  = CAM_FB_COUNT,
         .byte_swap_en = false,
         /* 关掉驱动内部的备份缓冲：它会再吃 1.84 MB PSRAM **和一份写带宽**
@@ -371,7 +429,17 @@ esp_err_t camera_csi_init(void)
     s_st_fb = ESP_OK;
 
     /*
-     * ISP：把 RAW8 去马赛克成 RGB565。**不做 AE/AWB 闭环** —— 闭环控制律要么引
+     * ISP：把 RAW8 去马赛克成 RGB565。**整条 RAW→RGB 转换只有这一处在做**，
+     * CSI 桥那边是直通（理由见上面 csi_cfg 那一大段）。
+     *
+     * ⓘ rev < 3.0 上这条路是通的：esp_isp_new_processor() / esp_isp_enable() /
+     *   去马赛克本身**没有任何芯片版本门**，isp_ll.h:473-478 里
+     *   ISP_COLOR_RGB565 会把 isp_out_type = 4 且 demosaic_en = 1 一起设好。
+     *   有版本门的是我们**一个都没用**的可选子模块：BLC(isp_blc.c:29)、
+     *   WBG(isp_wbg.c:29)、AWB(isp_awb.c:82)、crop(isp_crop.c:29) 要 rev ≥ 3.0，
+     *   LSC(isp_lsc.c:57) 要 rev ≥ 1.0。所以修好 CSI 不会再撞 ISP 的墙。
+     *
+     * **不做 AE/AWB 闭环** —— 闭环控制律要么引
      * espressif/esp_ipa（会把 esp_video 的一半拖进来），要么自己写；本阶段用
      * esp_cam_sensor 模式表里的默认曝光与增益（sc202cs_isp_info[0] 的
      * exp_def = 0x3dc、gain_def = 0）。
@@ -552,22 +620,32 @@ void camera_csi_report(void)
      *   fb!=ESP_OK              → 1.84 MB × 3 的 PSRAM 分配或对齐不过关，与摄像头无关。
      *   ctlr!=ESP_OK            → CSI 控制器建不起来。lane 数/速率/分辨率参数问题，
      *                             或者 CSI 已被别的东西占了。
+     *                             **ESP_ERR_NOT_SUPPORTED 特指一件事**：csi_cfg 的
+     *                             input/output 颜色格式不相等，触发了桥的颜色转换，
+     *                             而本板 P4 rev < 3.0 没有这个硬件块。曾经实机死在
+     *                             这里一次，详见 csi_cfg 上面那段。
      *   cbs!=ESP_OK             → 回调注册被拒。几乎只可能是调用顺序错了。
      *   isp!=ESP_OK             → ISP 建不起来（时钟源/分辨率超上限）。
      *   fmt!=ESP_OK             → SCCB 写寄存器表失败：总线在探测之后掉了。
      *   start!=ESP_OK           → 前面全对，但 enable/start/stream-on 那一串断了。
      *   以上全 ESP_OK 但 帧=0    → 管线建起来了、传感器也 stream on 了，
      *                             但一帧数据都没到 —— 查 MIPI 走线/lane 速率。
+     *   帧长不符 非零            → 驱动交回来的 received_size 与 CAM_FB_BYTES 对不上，
+     *                             即 csi_cfg 的 output_data_color_type 理解错了。
+     *                             此时**这些帧一律不交出去**，所以「帧」不会涨 ——
+     *                             两个数要一起看才分得清「没数据」和「数据长度不对」。
      *   帧在涨                   → 取到了。**此时才轮到看亮度那几行**判断内容对不对。
      * 「未运行」与任何一个错误码严格区分开，见 STEP_NOT_RUN 的声明。
      */
     ESP_LOGI(TAG, "[自检] CSI fb=%s ctlr=%s cbs=%s isp=%s fmt=%s start=%s | "
                   "取流中=%d 帧=%" PRIu32 " 抢缓冲=%" PRIu32 " 丢弃=%" PRIu32
-                  " 取帧超时=%" PRIu32,
+                  " 取帧超时=%" PRIu32 " 帧长不符=%" PRIu32 "(实收 %" PRIu32
+                  "，应为 %u)",
              step_str(s_st_fb), step_str(s_st_ctlr), step_str(s_st_cbs),
              step_str(s_st_isp), step_str(s_st_fmt), step_str(s_st_start),
              s_streaming, s_frames_done, s_frames_reused, s_frames_dropped,
-             s_get_timeouts);
+             s_get_timeouts, s_size_mismatch, s_last_size,
+             (unsigned)CAM_FB_BYTES);
 }
 
 /* ══ 以下整块是**临时自检**，Task9 接上 UVC 时删掉 ═══════════════════ */
@@ -639,6 +717,18 @@ static void cam_selftest_task(void *arg)
     uint32_t sum_mean = 0, ticks = 0;
     uint32_t bw_busy = 0;
     cam_frame_stats_t st = {0, 0, 0, 0, 0};
+    /*
+     * 只统计**最下面 1/8** 的那份，与全帧那份并排打出来。
+     *
+     * 它防的是这次修复最可能的暗礁：csi_cfg 的 input 颜色格式决定 DMA 搬多少字节
+     * （csi_transfer_size = h*v*in_bpp/64），要是这个数算小了，DMA 只填上半张，
+     * 下半张永远停在 calloc 出来的零 —— 而**全帧的均值/最暗/最亮/校验和照样会
+     * 随镜头变化**，看起来完全正常。下 1/8 的均值一直钉在 0 就是那种截断的指纹。
+     * 缓冲是行连续的，把指针推到 7/8 处、高度传 1/8 即可，复用同一个已测函数。
+     */
+    cam_frame_stats_t st_bottom = {0, 0, 0, 0, 0};
+    const int bottom_rows = CAM_SENSOR_H / 8;
+    uint32_t full_max_ever = 0, bottom_max_ever = 0;
 
     while (esp_timer_get_time() < deadline) {
         const uint16_t *fb = NULL;
@@ -652,7 +742,13 @@ static void cam_selftest_task(void *arg)
         frames++;
         total++;
         cam_frame_stats_rgb565(fb, CAM_SENSOR_W, CAM_SENSOR_H, CAM_STATS_STEP, &st);
+        cam_frame_stats_rgb565(fb + (size_t)(CAM_SENSOR_H - bottom_rows) * CAM_SENSOR_W,
+                               CAM_SENSOR_W, bottom_rows, CAM_STATS_STEP, &st_bottom);
         sum_mean += st.lum_mean;
+        if (st.lum_max > full_max_ever)
+            full_max_ever = st.lum_max;
+        if (st_bottom.lum_max > bottom_max_ever)
+            bottom_max_ever = st_bottom.lum_max;
         ticks++;
 
         const int64_t now = esp_timer_get_time();
@@ -660,10 +756,12 @@ static void cam_selftest_task(void *arg)
             /* fps 用整数十分位，不引浮点格式化。 */
             const uint32_t fps_x10 = (uint32_t)((int64_t)frames * 10000000 / (now - t0));
             ESP_LOGI(TAG, "[自检] 帧 #%" PRIu32 " %" PRIu32 ".%" PRIu32 " fps  "
-                          "亮度 均值%u 最暗%u 最亮%u  校验和 %08" PRIx32
+                          "亮度 均值%u 最暗%u 最亮%u (下1/8 均值%u 最亮%u)  "
+                          "校验和 %08" PRIx32
                           "  (%dx%d RGB565, 采样 %" PRIu32 " 点)",
                      total, fps_x10 / 10, fps_x10 % 10,
-                     st.lum_mean, st.lum_min, st.lum_max, st.checksum,
+                     st.lum_mean, st.lum_min, st.lum_max,
+                     st_bottom.lum_mean, st_bottom.lum_max, st.checksum,
                      CAM_SENSOR_W, CAM_SENSOR_H, st.samples);
             frames = 0;
             t0 = now;
@@ -680,6 +778,17 @@ static void cam_selftest_task(void *arg)
     ESP_LOGI(TAG, "[自检] 取流结束：共 %" PRIu32 " 帧、超时 %" PRIu32 " 次、"
                   "平均亮度 %" PRIu32 "/255",
              total, timeouts, ticks ? sum_mean / ticks : 0);
+    /*
+     * DMA 截断的自动判读，别让它只停留在「用户得自己注意那个括号里的数」。
+     * 整整一轮里全帧见过光、而最下面 1/8 一次都没亮过 ⇒ 那 1/8 从来没被写过。
+     * 反过来 bottom 见过光就等于「最后一行也写到了」，帧长这件事就此坐实。
+     */
+    if (total > 0 && full_max_ever > 16 && bottom_max_ever == 0)
+        ESP_LOGE(TAG, "[自检] ⚠️ 下 1/8 全程为零而全帧有画面 ⇒ **DMA 只填了上半张**，"
+                      "csi_cfg 的 input_data_color_type 定的搬运字节数偏小");
+    else if (total > 0)
+        ESP_LOGI(TAG, "[自检] 帧完整性 OK：下 1/8 也被写到（历史最亮 %" PRIu32 "）",
+                 bottom_max_ever);
     /*
      * 带宽三个数的读法：
      *   busy 比 idle 掉一两成 → 正常，CSI 那 55 MB/s 就该吃掉这么多。
