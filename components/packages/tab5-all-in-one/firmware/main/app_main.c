@@ -12,6 +12,7 @@
 #if AIO_HAS_AUDIO
 #include "codec_audio.h"
 #endif
+#include "uvc_stream.h"
 #include "driver/gpio.h"                /* gpio_set_drive_capability */
 #include "esp_private/periph_ctrl.h"    /* PERIPH_RCC_ATOMIC */
 #include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
@@ -150,9 +151,21 @@ static void otg_fsls_pads_repair(void)
  * ⚠️ 必须等 host 完成 SET_CONFIGURATION 之后再读：端点是那时才 open、
  *    FIFO 是那时才分配的。调用点在 app_main 末尾的空转循环里，tud_mounted() 后触发。
  *
- * ⚠️ 视频流的 TX FIFO 要等 host 选中 VideoStreaming 的 alt 1（真的打开摄像头）
- *    才会分配 —— alt 0 是零端点。所以**没打开摄像头时 EP4 IN 那一行不出现是正常的**；
- *    打开之后它仍然不出现，才是 dfifo_alloc() 静默失败（见计划 Task5 Step6 第 4 条）。
+ * ⚠️ **视频流的 TX FIFO 与 alt 无关，SET_CONFIGURATION 时就分掉了。**（这一条推翻了
+ *    计划 Task5 里「alt 1 才分配、所以 alt 0 下 EP4 IN 那一行不出现是正常的」的说法，
+ *    以及随之而来的「已用 119→231」的两段式预期。）逐行依据：
+ *      tusb_mcu.h:768-770  dwc2 没定义 TUP_DCD_EDPT_CLOSE_API ⇒ TUP_DCD_EDPT_ISO_ALLOC 成立
+ *      video_device.c:1404-1422  videod_open() 里就调 usbd_edpt_iso_alloc()
+ *      dcd_dwc2.c:634-637  → dfifo_alloc()，此刻写下 DIEPTXF4
+ *      video_device.c:866-871  alt 1 只调 usbd_edpt_iso_activate() → edpt_activate()，
+ *                              那里只写 DIEPCTL，**不碰 FIFO**
+ *    UAC 的 ISO 端点同理（audio_device.c:953-965），所以下面那笔账里 0x83 与 0x84
+ *    一样都是「枚举完就在」。
+ *    ⇒ **EP4 IN 那一行枚举后就该出现，摄像头开不开都一样**；它不出现就是
+ *      usbd_edpt_iso_alloc() 失败了 —— 而它的返回值 video_device.c 根本不检查，
+ *      彻底静默：设备照样枚举、uvcvideo 照样绑、alt 1 照样成功，只是一帧都发不出来
+ *      （计划 Task5 Step6 第 4 条预期的「SET_INTERFACE 被 STALL」不会发生，
+ *       实际症状是 uvc_stream_report() 里「提交一直涨、完成不涨」）。
  */
 static void log_usb_fifo_usage(void)
 {
@@ -179,10 +192,11 @@ static void log_usb_fifo_usage(void)
     const unsigned free_words = (unsigned)(lowest - rx);
     ESP_LOGI(TAG, "FIFO: 已用 %u words，空闲 %u words (%u 字节)；UVC 端点占 %u words",
              used, free_words, free_words * 4, (unsigned)((UVC_EP_SIZE + 3) / 4));
-    /* 静态验算：默认档在摄像头**未打开**时应当是 已用 119 / 空闲 123；
-     * host 选中 alt 1 之后变成 已用 231 / 空闲 11。UVC 调试档对应 112 / 130
-     * 与 224 / 18。差得多就说明账算错了，或者有人偷偷加了端点 ——
-     * 把数字打出来比断言更有用，因为断言炸了也没人看得见。 */
+    /* 静态验算（UVC 的 112 words 已含在内，见上方 ⚠️：与 alt 无关，枚举完就在）：
+     *   默认档   RX 62 + EP0 16 + 0x81 16 + 0x82 16 + 0x83 9 + 0x84 112 = 已用 231 / 空闲 11
+     *   UVC 调试档 RX 62 + EP0 16 + 0x81 16 + 0x82 16 + 0x83 2 + 0x84 112 = 已用 224 / 空闲 18
+     * 这两个数**从枚举到拔线不变**，开不开摄像头都一样。差得多就说明账算错了，
+     * 或者有人偷偷加了端点 —— 把数字打出来比断言更有用，因为断言炸了也没人看得见。 */
 }
 
 void app_main(void)
@@ -350,6 +364,16 @@ void app_main(void)
     codec_audio_report();
 #endif
 
+    /*
+     * UVC 帧泵。必须排在 tinyusb_driver_install() 之后：任务一起来就会调
+     * tud_video_*。与键盘/触摸/音频同一处置原则：失败只降级、不拦启动 ——
+     * 摄像头挂了不该拖垮显示，何况本阶段的「摄像头」只是 flash 里一张静态图。
+     * **两档都要有**：UVC 调试档存在的理由正是「一边跑摄像头一边看日志」。
+     */
+    err = uvc_stream_start();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "摄像头不可用(%s)，继续启动", esp_err_to_name(err));
+
     bool fifo_logged = false;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
@@ -361,6 +385,16 @@ void app_main(void)
             fifo_logged = true;
         }
 
+        /*
+         * UVC 自检快照**两档都复读**，与上面那次性的 FIFO 快照、与
+         * codec_audio_report() 都不同：那两者打的是静态事实（分配与初始化结果），
+         * 而这里的计数器随 host 开/关摄像头逐拍变化 —— 「host 有没有真的在取流」
+         * 「帧有没有发完」只能从它随时间的增量看出来，这是 P4 Task5 判定点在
+         * 设备侧唯一的证据。默认档没有 CDC，这几行走 UART0(G37/G38)。
+         */
+        if (fifo_logged)
+            uvc_stream_report();
+
 #if CONFIG_AIO_DEBUG_CDC
         /*
          * 只有开了 CDC 日志串口才**复读**，理由是 CDC 独有的一个性质：
@@ -369,8 +403,10 @@ void app_main(void)
          * UART0 控制台没有这个问题（字节直接出去、终端有回滚），所以默认档不复读。
          *
          * 复读的是 FIFO 快照而不是音频自检 —— 本档下音频整体不编译（0x83 让给了
-         * CDC 通知）。而且 host 打开/关闭摄像头会让 VideoStreaming 在 alt 0 与
-         * alt 1 之间切换，EP4 IN 那一行会跟着出现/消失，复读正好能看见这件事。
+         * CDC 通知）。
+         * ⓘ 复读它**不是**为了看 alt 切换：EP4 IN 那一行在 SET_CONFIGURATION 时
+         *   就定下来了，开关摄像头不会让它出现/消失（见 log_usb_fifo_usage() 的 ⚠️）。
+         *   摄像头开没开看上面那条 uvc_stream_report() 的 streaming= 字段。
          */
         if (fifo_logged)
             log_usb_fifo_usage();
