@@ -1,6 +1,7 @@
 set(aio_srcs "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c"
              "display_dsi.c" "standby_screen.c" "board_power.c"
-             "kbd_i2c.c" "kbd_translate.c" "touch_hid.c" "touch_map.c")
+             "kbd_i2c.c" "kbd_translate.c" "touch_hid.c" "touch_map.c"
+             "uvc_pattern.c")
 set(aio_reqs esp_driver_i2c esp_driver_gpio esp_lcd esp_mm esp_driver_ppa)
 
 # UVC 调试档（CONFIG_AIO_DEBUG_CDC）下**整个音频功能不编译**：CDC 的通知端点要占
