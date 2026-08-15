@@ -1,0 +1,86 @@
+CONFIG_IDF_TARGET="esp32p4"
+# M5Stack Tab5 实测装的是 ESP32-P4 rev v1.0（esptool 报 "revision v1.0"），
+# 而 IDF v6.0 默认最低支持 v3.1(CONFIG_ESP32P4_REV_MIN_301)，会在烧录时报
+# "requires chip revision in range [v3.1 - v3.99]" 拒绝启动。
+#
+# ⚠️ 这两档是**互斥**的，不能运行时兼容。IDF Kconfig 原文：
+#   "Support of ESP32-P4 rev. <3.0 and >=3.0 is mutually exclusive"
+#   "Revisions higher than 3.0 (included) and revisions less than 3.0
+#    have huge hardware difference."
+# 即本固件编译为支持 v0.x/v1.x 后，就跑不了 v3.x 的 P4。若日后遇到换了
+# v3.x 芯片的 Tab5 批次，需要另出一份固件，无法像双面板那样运行时探测。
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_FREERTOS_HZ=1000
+# Tab5 的 UART0(G37/G38) 引到 M5-Bus，不与显示/音频争引脚，保留完整串口控制台
+# （与 Cardputer 的 CONFIG_ESP_CONSOLE_NONE 相反）。
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# ⚠️ 必须同时关掉次级控制台与 USJ 模块，否则 USB-C 上枚举出来的是 CDC ACM 而非 GUD。
+# P4 只有一条 FS/LS PHY(SOC_USB_FSLS_PHY_NUM=1)，USB-Serial/JTAG 与 OTG1.1 共用它。
+# IDF 的 ESP_CONSOLE_SECONDARY 默认就是 USB_SERIAL_JTAG，它 select 出
+# ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED → USJ_ENABLE_USB_SERIAL_JTAG，
+# 于是 USJ 外设开机即占住 PHY，TinyUSB 再怎么 usb_new_phy() 也抢不过来 ——
+# 主机侧表现为 `cdc_acm ... ttyACM0: USB ACM device`，完全看不到 16d0:10a9。
+# 只指定主控制台走 UART0 是不够的，次级那条是独立选项。
+# 注：这两项只影响**应用**阶段；bootloader 阶段 USJ 仍启用，按 BOOT 进下载模式照常能烧。
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n
+# TinyUSB vendor 类：esp_tinyusb 用 *_COUNT(int) 启用，>0 即开启 CFG_TUD_VENDOR
+CONFIG_TINYUSB_VENDOR_COUNT=1
+# TinyUSB HID 接口：>0 即开启 CFG_TUD_HID
+CONFIG_TINYUSB_HID_COUNT=1
+# 32MB HEX(16 线) PSRAM：DPI 帧缓冲(1.84MB) + GUD 收帧缓冲都放这里
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+# esp_codec_dev 默认把十几颗 codec 全编进来。Tab5 只用 ES8388(播放) 与
+# ES7210(录音)，其余全关 —— 省 flash，也让「哪颗芯片在起作用」在配置里一目了然。
+# （ZL38063 / CJC8910 / DUMMY / DATA_ADC 组件自身就默认 n，不必重复关。）
+CONFIG_CODEC_ES8311_SUPPORT=n
+CONFIG_CODEC_ES8156_SUPPORT=n
+CONFIG_CODEC_ES8374_SUPPORT=n
+CONFIG_CODEC_ES8389_SUPPORT=n
+CONFIG_CODEC_ES7243_SUPPORT=n
+CONFIG_CODEC_ES7243E_SUPPORT=n
+CONFIG_CODEC_AW88298_SUPPORT=n
+CONFIG_CODEC_TAS5805M_SUPPORT=n
+# ── UVC 调试档：USB CDC 日志串口（默认关闭）───────────────────────
+# 排查摄像头 / USB 问题想从 USB-C 直接看日志时，**取消下面这一行的注释**再重新
+# `idf.py build`（改过 Kconfig 相关配置后要 `idf.py fullclean && rm -f sdkconfig`
+# 重来；已有 sdkconfig 时也可以走 `idf.py menuconfig` → Tab5 All-in-One）。
+#CONFIG_AIO_DEBUG_CDC=y
+#
+# 代价有两条：让出 GUD 的 IN 端点 0x81（drm/gud 不用它，显示不受影响），
+# 以及**整个音频功能不编译** —— CDC 的通知端点要占 0x83，也就是 UAC 录音那一条。
+# 本档下 host 侧 /proc/asound/cards 里没有这块设备，喇叭与双麦全不工作。
+# **UVC 的 0x84 不出借**，摄像头在本档下照常工作：这一档就是为
+# 「一边跑摄像头一边看日志」设计的。所以正常形态下必须保持关闭。
+# 开启后 DWC2 的 FIFO 快照会每 10 秒复读一次（CDC 的 TX 缓冲会覆盖早期日志），
+# 见 app_main.c 的 log_usb_fifo_usage()。
+#
+# **别改成手动开 CONFIG_TINYUSB_CDC_ENABLED**（usb_descriptors.h 有 #error 拦着）：
+# esp_tinyusb 默认给 CDC 的端点是 0x83/0x84，与 UAC 录音、UVC 视频流直接撞号，
+# 而且 2 条 IN 端点会把 P4 全速控制器的 4 条可用 IN 用超。CONFIG_AIO_DEBUG_CDC
+# 会自己 select 出它并把端点号重排好，见 main/Kconfig.projbuild。
+#
+# 手边有 USB-TTL 就优先接 UART0(G37/G38，在 M5-Bus 排针上)：零端点代价、
+# 能抓到上电最早的日志、而且默认档（音频在）也能用 —— 默认档的日志本来就走它
+# （上面 CONFIG_ESP_CONSOLE_UART_DEFAULT=y）。
+
+# ── 摄像头传感器（esp_cam_sensor）───────────────────────────────
+# 该组件的二十多颗传感器默认都是 n，只需显式打开 Tab5 实装的 SC202CS。
+# 模式表只留 1280×720 RAW8：其余三个模式要么超出 P4 ISP 的 1920×1080 输入上限
+# （1600×1200 的 1200 行），要么裁不出 4:3（1600×900）。三个 =n 与组件默认值
+# 一致，写出来是为了让「只编了哪一张寄存器表」在配置里一目了然。
+CONFIG_CAMERA_SC202CS=y
+CONFIG_CAMERA_SC202CS_MIPI_RAW8_1280X720_30FPS=y
+CONFIG_CAMERA_SC202CS_MIPI_RAW8_1600X1200_30FPS=n
+CONFIG_CAMERA_SC202CS_MIPI_RAW10_1600X1200_30FPS=n
+CONFIG_CAMERA_SC202CS_MIPI_RAW10_1600X900_30FPS=n
+CONFIG_CAMERA_SC202CS_MIPI_DEFAULT_FMT_RAW8_1280X720_30FPS=y
+# 我们在 camera_csi.c 里直接调 sc202cs_detect()，不用 esp_video 那套
+# ESP_CAM_SENSOR_DETECT_FN 链接段自动探测机制（关掉它也就不需要 -u 强制保留符号）。
+CONFIG_CAMERA_SC202CS_AUTO_DETECT_MIPI_INTERFACE_SENSOR=n

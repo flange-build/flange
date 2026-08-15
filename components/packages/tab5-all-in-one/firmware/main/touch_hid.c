@@ -1,0 +1,261 @@
+/*
+ * M5Stack Tab5 电容触摸（GT911）→ USB HID digitizer（多点绝对坐标，最多 5 点）。
+ *
+ * GT911 与 IO 扩展/codec/IMU 同挂**内部 I2C**（G31/G32），故直接复用
+ * board_i2c_bus() 的总线句柄，不像键盘那样自建总线。
+ * 触摸电源使能在 PI4IOE5V6408-1(0x43) 的 PIN5 上，board_power_init() 已拉高。
+ *
+ * 上报走键盘那条 HID 接口(IF1)与端点，用 Report ID 2 区分，见 usb_descriptors.c。
+ */
+#include "touch_hid.h"
+#include "touch_map.h"
+#include "tab5_pins.h"
+#include "board_power.h"
+#include "usb_descriptors.h"
+#include "esp_lcd_touch_gt911.h"
+#include "esp_lcd_panel_io.h"
+#include "driver/gpio.h"
+#include "esp_check.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "tusb.h"
+#include <string.h>
+
+static const char *TAG = "touch";
+
+/* 轮询周期。触摸不像键盘那样怕丢事件（坐标是状态而非边沿），20ms
+ * 对指针跟随已经足够跟手，无需中断驱动。 */
+#define TOUCH_POLL_MS 20
+
+/* esp_lcd_touch 一次最多返回 CONFIG_ESP_LCD_TOUCH_MAX_POINTS 个点；
+ * 缓冲必须按这个上限开 —— esp_lcd_touch_get_data() 会 memset 满
+ * max_point_cnt 个元素，传小了就是越界写。
+ * 它与报告的 slot 数 TOUCH_CONTACTS_MAX 目前都是 5，但两者来源不同
+ * （一个是驱动配置、一个是我们的描述符），不假定相等，多出来的点由
+ * touch_report_fill() 截断。 */
+#define TOUCH_POINTS_MAX CONFIG_ESP_LCD_TOUCH_MAX_POINTS
+
+static esp_lcd_touch_handle_t s_tp;
+
+/* 报告负载定义在 touch_map.h（touch_contact_t / touch_report_t / TOUCH_CONTACTS_MAX），
+ * 与 usb_descriptors.c 的报告描述符共用同一批常量，也便于宿主机回归测试。 */
+
+/* 返回是否真的发出去了。调用方据此决定要不要把它记为「已发出的状态」——
+ * 记错了就再也不会重发，见 touch_task() 里的说明。 */
+static bool touch_report(const touch_report_t *rpt)
+{
+    /* 端点忙时等它腾空（最多 20ms），写法与 kbd_build_and_report() 一致，
+     * 理由也一样：描述符里 bInterval=10ms，全速下 host 10ms 才来取一次，
+     * tud_hid_ready() 为假时直接丢弃会静默吞掉报告。触摸这边丢掉的若正好是
+     * contact_count=0 那条「全部抬起」，host 就一直认为手指还按着 ——
+     * 与键盘的卡键同源。 */
+    for (int i = 0; i < 20 && !tud_hid_ready(); i++)
+        vTaskDelay(pdMS_TO_TICKS(1));
+    if (!tud_hid_report(HID_RID_TOUCH, rpt, sizeof(*rpt))) {
+        ESP_LOGW(TAG, "touch hid report 丢弃（端点持续忙）");
+        return false;
+    }
+    return true;
+}
+
+static void touch_task(void *arg)
+{
+    (void)arg;
+    /*
+     * 上一次**已发出**的报告。只在它变化时才发：20ms 轮询按住不放会每帧
+     * 产生一条同样的报告，而端点 bInterval=10ms、还要与键盘共用，白占带宽
+     * 且会拖长键盘等端点的时间。坐标本身是状态量（不是边沿），host 记住
+     * 最后一条即可，重发没有信息量。
+     *
+     * 多点之后「状态没变」直接对整个报告结构体做 memcmp，而不是逐字段比：
+     * 结构体是 packed 的、无填充洞，memcmp 语义精确，且新增字段时不会漏比。
+     * 初值全零恰好等于 touch_report_fill(&rpt, NULL, 0) 的产物（无触点），
+     * 所以开机后不会先发一条多余的空报告。
+     */
+    touch_report_t last_rpt = {0};
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(TOUCH_POLL_MS));
+
+        if (esp_lcd_touch_read_data(s_tp) != ESP_OK)
+            continue;
+
+        /* 用 esp_lcd_touch_get_data() 而非 esp_lcd_touch_get_coordinates()：
+         * 后者在 esp_lcd_touch 1.2.x 已标 deprecated（2.0.0 移除），编译告警。 */
+        esp_lcd_touch_point_data_t pts[TOUCH_POINTS_MAX];
+        uint8_t points = 0;
+        if (esp_lcd_touch_get_data(s_tp, pts, &points, TOUCH_POINTS_MAX) != ESP_OK)
+            continue;
+
+        /* 活跃触点：坐标经与显示互逆的反变换 + 归一化，id 用触摸控制器给的
+         * track_id —— 同一根手指按住期间 track_id 不变，host 靠它把帧与帧
+         * 之间的触点连成轨迹（ABS_MT_TRACKING_ID）；若这里改用数组下标，
+         * 中间某根手指抬起时后面的手指会集体「换 id」，host 看成瞬移。 */
+        touch_contact_t active[TOUCH_CONTACTS_MAX];
+        uint8_t n = 0;
+        for (uint8_t i = 0; i < points && n < TOUCH_CONTACTS_MAX; i++) {
+            uint16_t gud_x = 0, gud_y = 0;
+            touch_map_panel_to_gud(pts[i].x, pts[i].y, &gud_x, &gud_y);
+            active[n].tip = 1;   /* touch_report_fill() 会覆写，填上只为可读 */
+            active[n].contact_id = pts[i].track_id;
+            active[n].x = touch_map_gud_to_hid(gud_x, GUD_W - 1);
+            active[n].y = touch_map_gud_to_hid(gud_y, GUD_H - 1);
+            /* LOGD 而非 LOGI：20ms 轮询下按住不放每秒 50 条，会把串口刷没。 */
+            ESP_LOGD(TAG, "id=%u raw(%u,%u) → gud(%u,%u) → hid(%u,%u) n=%u/%u",
+                     (unsigned)pts[i].track_id, (unsigned)pts[i].x, (unsigned)pts[i].y,
+                     (unsigned)gud_x, (unsigned)gud_y,
+                     (unsigned)active[n].x, (unsigned)active[n].y,
+                     (unsigned)(i + 1), (unsigned)points);
+            n++;
+        }
+
+        /* 每次都发满 TOUCH_CONTACTS_MAX 个 slot：多余的 slot 清零(tip=0)，
+         * contact_count = n。全部松开时 n == 0，这条「所有 tip=0 + count=0」
+         * 的报告必须发出去，否则 host 认为手指还在。 */
+        touch_report_t rpt;
+        touch_report_fill(&rpt, active, n);
+
+        if (memcmp(&rpt, &last_rpt, sizeof(rpt)) == 0)
+            continue;
+
+        /* 只有真的发出去了才记进 last_rpt：否则「状态没变就不发」这条规则会把
+         * 一次失败的发送永久固化 —— 尤其是丢掉 contact_count=0 那条抬起报告时，
+         * 手指已离开屏幕、不会再产生新状态，host 就一直以为按着。发送失败保持
+         * last_rpt 不动，下一个 20ms 轮询会自然重试。 */
+        if (!touch_report(&rpt))
+            continue;
+
+        last_rpt = rpt;
+    }
+}
+
+esp_err_t touch_start(void)
+{
+    /*
+     * ⚠️⚠️ Tab5 v1（ILI9881C + GT911）硬件上 INT 脚有一颗**到 3V3 的上拉电阻**，
+     * 它会压住 GT911 不出坐标：I2C 读得到产品 ID、初始化一路成功，但状态寄存器
+     * 0x814E 的 buffer-ready 位(bit7)永远不置起，表现正是「初始化过、轮询也在跑、
+     * 就是一个触点都读不到」。必须由 ESP 侧把 INT **主动驱动到低**压住那颗上拉。
+     *
+     * 这不是猜测：官方 esp-bsp `bsp/m5stack_tab5/src/bsp_display.c` 的
+     * bsp_touch_new() 在 board_version == 1 分支专门做了这件事，注释原文——
+     *   "Keep LCD touch interrupt pin in low for working touch
+     *    Note: This is the fix (ver 1) - there is resistor to 3V3 on interrupt
+     *    pin which is blocking GT911 touch."
+     * 我们此前只对照了 BSP 里 tp_cfg 的初始化列表（那部分确实逐项相同），漏看了
+     * 紧随其后的这段 GPIO 操作，于是复现了这个「BSP 已知并已修」的坑。
+     *
+     * 两个细节缺一不可：
+     *  1) 必须在 esp_lcd_touch_new_i2c_gt911() **之前**驱动低；
+     *  2) 且必须把 tp_cfg.int_gpio_num 置成 GPIO_NUM_NC —— 否则驱动会在
+     *     esp_lcd_touch_gt911.c:152 把这个脚重新 gpio_config() 成 INPUT，
+     *     把我们刚驱动的低电平抹掉，等于没修。官方 BSP 同样是先在 tp_cfg 里填了
+     *     BSP_LCD_TOUCH_INT、随后一行改写成 GPIO_NUM_NC，正是为此。
+     * 代价：放弃中断驱动触摸的可能。本来也没用上（我们是 20ms 轮询），不影响。
+     *
+     * I2C 地址不受影响：GT911 只在**上电/复位瞬间**按 INT 电平 latch 地址
+     * （高⇒0x14、低⇒0x5D），那一刻由板上那颗外部上拉决定为高；此处拉低发生在
+     * board_power_init() 拉起 TOUCH_EN 之后很久（中间还隔着 195 条面板 init 命令），
+     * 地址早已锁定。顺带：display_dsi.c 的 panel_detect() 已 i2c_master_probe(0x14)
+     * 成功才选了 ILI9881C 分支，0x14 这个地址本身是实测无疑的。
+     *
+     * ⚠️⚠️ 本修已实机验证通过。万一将来换批次硬件复发，Plan B 是补 M5 官方的复位时序 —— 但两者
+     * **有致命的先后顺序要求，写反会更坏**：
+     *   M5Tab5-UserDemo 的 bsp_reset_tp() 与 M5GFX 都通过 IO 扩展 0x43 的 **P5**
+     *   （即我们 board_power_init() 里那个 TOUCH_EN，M5 管它叫 TP_RST）做一次
+     *   low→delay→high 的显式复位，且**全程把 INT 保持在高**以 latch 0x14；
+     *   我们现在只把 P5 置了高，从没拉低过，等于没有干净的复位沿。
+     *   要补的话必须是「先拉高 INT → 脉冲 P5 → 等 100ms → 再执行本函数的 INT 拉低」。
+     *   若在 INT 已经被拉低之后才去脉冲 P5，GT911 会 latch 成 **0x5D**，
+     *   连 I2C 都不再应答（连 esp_lcd_touch_new_i2c_gt911() 都会失败），比现在还糟。
+     *
+     * 之所以先试 esp-bsp 这条而不是 M5 那条：esp-bsp 用的是**和我们完全相同的
+     * esp_lcd_touch_gt911 驱动栈**，且那段注释明确写着是针对 board version 1
+     * （ILI9881C + GT911，正是我们这块）的修正；M5GFX 走的是自己的触摸实现。
+     */
+    const gpio_config_t int_gpio_cfg = {
+        .mode = GPIO_MODE_OUTPUT,
+        .intr_type = GPIO_INTR_DISABLE,
+        .pull_down_en = 0,
+        .pull_up_en = 1,     /* 与 BSP 逐字一致；推挽输出下内部上拉不起作用 */
+        .pin_bit_mask = BIT64(PIN_TOUCH_INT),
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&int_gpio_cfg), TAG, "touch int gpio");
+    ESP_RETURN_ON_ERROR(gpio_set_level(PIN_TOUCH_INT, 0), TAG, "touch int 拉低");
+
+    /*
+     * ⚠️ GT911 的**默认**地址是 0x5D，0x14 是备用地址 —— Tab5 用的正是 0x14。
+     * ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG() 宏填的是 0x5D，且组件只校验传入值
+     * 合法、不会自动探测（esp_lcd_touch_gt911.c 的地址选择流程还要求有 rst
+     * 引脚，Tab5 没有，那段直接被跳过）。不显式改成 BACKUP 就一定探不到。
+     */
+    esp_lcd_panel_io_i2c_config_t io_cfg = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+    io_cfg.dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
+
+    esp_lcd_panel_io_handle_t io = NULL;
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(board_i2c_bus(), &io_cfg, &io),
+                        TAG, "touch panel io");
+
+    esp_lcd_touch_config_t tp_cfg = {
+        .x_max = PANEL_W,
+        .y_max = PANEL_H,
+        .rst_gpio_num = GPIO_NUM_NC,        /* Tab5 触摸没有独立 reset 脚 */
+        /*
+         * **故意填 NC，尽管 INT 脚确实存在（G23）**。见上方那段长注释：G23 已被我们
+         * 亲手配成输出并驱动到低以压住板上到 3V3 的上拉；这里若填 PIN_TOUCH_INT，
+         * GT911 驱动会把它重新 gpio_config() 成 INPUT+NEGEDGE，低电平立刻失效，
+         * 触摸又变回读不到点。官方 BSP 也是填 GPIO_NUM_NC。
+         * 副作用：走的是驱动里 rst/int 皆 NC 的那条分支（打印 "I2C address
+         * initialization procedure skipped"），本就是我们此前的行为，无变化。
+         */
+        .int_gpio_num = GPIO_NUM_NC,
+        .levels = {
+            .reset = 0,
+            .interrupt = 0,
+        },
+        /*
+         * 三个方向 flag 全 0 —— **不是待标定的占位值，是官方 BSP 的取值**。
+         * esp-bsp `bsp/m5stack_tab5/src/bsp_display.c` 的 tp_cfg 初始化列表与此
+         * 逐项相同：x_max/y_max = 720/1280、rst = NC、levels.interrupt = 0、
+         * 三个 flag 全 false。即 GT911 就是按面板原生 720×1280 竖向出数，
+         * touch_map.c 的反变换直接可用。
+         * （⚠️ 但**只有初始化列表相同**：BSP 随后还改写了 int_gpio_num 并驱动 INT 到低，
+         *  见本函数开头。当初"配置逐项相同"的结论就是漏看那两行才得出的。）
+         *
+         * 官方在使能触摸电源后等 500ms 再探测，我们 board_power_init() 只等 50ms；
+         * 但本函数排在 display_init()(195 条面板 init 命令) 与 kbd_start() 之后，
+         * 距 TOUCH_EN 拉高早已远超 500ms，这个差异在本调用顺序下不成立。
+         */
+        .flags = {
+            .swap_xy = 0,
+            .mirror_x = 0,
+            .mirror_y = 0,
+        },
+    };
+    /*
+     * 探不到就把 panel io 拆掉再返回。GT911 驱动自己的 err 分支只清它那一份
+     * （free(tp)；int/rst 都是 NC 所以不会去动 G23，我们驱动的低电平得以保留），
+     * **不碰我们传进去的 io**；而 touch_start() 失败现在不再 abort（见 app_main），
+     * 这个 io 会一直挂在内部 I2C 总线的设备链上没人回收。
+     *
+     * ⚠️ 这个返回值比看上去有分量：esp_lcd_touch_new_i2c_gt911() 结尾**无条件**调用
+     * touch_gt911_read_cfg()，后者要读产品 ID(0x8140, 3B) 和配置版本(0x8047, 1B)，
+     * 任一 I2C 读失败就整个 goto err 返回错误。所以**它返回 ESP_OK 就等于证明了
+     * GT911 在 0x14 上有应答、寄存器读得通**（rst==NC 只跳过前面那段地址选择流程，
+     * 不影响这次读）。排查时别再把 I2C 层当嫌疑对象——那一环已经被这行代码验过了。
+     */
+    esp_err_t err = esp_lcd_touch_new_i2c_gt911(io, &tp_cfg, &s_tp);
+    if (err != ESP_OK) {
+        esp_lcd_panel_io_del(io);
+        ESP_LOGE(TAG, "gt911 未应答(0x%02x)：%s，检查内部 I2C 与触摸电源",
+                 ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "gt911 ready (addr=0x%02x, int=G%d 由本函数驱动为低)",
+             ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, PIN_TOUCH_INT);
+
+    xTaskCreate(touch_task, "touch", 4096, NULL, 5, NULL);
+    return ESP_OK;
+}
