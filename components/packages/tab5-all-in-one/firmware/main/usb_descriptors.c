@@ -255,6 +255,156 @@ static const uint8_t aio_hid_report_desc[] = {
  * 与下方 aio_string_desc_arr 的第 5 个元素对应，两处改一处必错，故在此定名。 */
 #define AIO_STRID_AUDIO 4
 
+/* 音频描述符长度的薄封装：与下方 AIO_CDC_DESC_LEN 完全同构。
+ * 本阶段(P4 Task1) AIO_HAS_AUDIO 恒为 1；P4 Task3 起 UVC 调试档会把它变成 0。 */
+#if AIO_HAS_AUDIO
+#define AIO_AUDIO_DESC_LEN UAC1_AUDIO_DESC_LEN
+#else
+#define AIO_AUDIO_DESC_LEN 0
+#endif
+
+/*
+ * ── UVC 1.5：一个 VideoControl 接口 + 一个 VideoStreaming 接口（MJPEG）──
+ *
+ * 底稿取自 tinyusb examples/device/video_capture 的 TUD_VIDEO_CAPTURE_DESCRIPTOR_MJPEG
+ * （MIT）。TinyUSB 库里只有底层 TUD_VIDEO_DESC_* 宏，整功能模板在 example 里 ——
+ * 与 UAC1 的处境一样，只是这次上游已经拼好了，我们照搬并改两处：
+ * 帧描述符从 _CONT（连续帧率区间）换成 _DISC（单一离散帧率），以及接口号/端点号
+ * 由参数传入（example 里是直接引用它自己的 ITF_NUM_* 枚举）。
+ *
+ * 拓扑（terminal ID 是本功能内自洽的编号）：
+ *   ID1 Camera Terminal（摄像头） → ID2 Output Terminal（USB Streaming）
+ *
+ * ⚠️ VideoControl 接口 bNumEndpoints = 0：**不要状态中断端点**。
+ *    四条可用 IN 端点已经被 vendor/HID/UAC 录音/本视频流用满（见 usb_descriptors.h
+ *    的端点表），多一条就撞上 dcd_dwc2.c 的 TU_ASSERT —— 而它**一个字都不打**。
+ *
+ * ⚠️ 帧描述符用 **_DISC（离散）而不是 _CONT（连续）**，只声明一个帧间隔。
+ *    理由：video_device.c:550-558 在 host 把 dwFrameInterval 填 0（问默认值）时，
+ *    对「bFrameIntervalType > 1 或 连续区间的 min != max」这两种情况会直接
+ *    `return true` 而**不填任何值**，把协商结果推给下一轮。单一离散间隔让这条
+ *    路径永远走不到，协商是确定性的。代价是 host 不能选别的帧率 —— 本来也不想给。
+ *
+ * ⚠️ ISO 端点由 TUD_VIDEO_DESC_EP_ISO 生成，它写死 TUSB_ISO_EP_ATT_ASYNCHRONOUS
+ *    且是标准 7 字节端点描述符（不是 UAC1 那种带 bRefresh/bSynchAddress 的 9 字节）——
+ *    所以 UVC 侧不存在「反馈端点」这回事，也不存在 UAC1 那个「sync 字段填 0 会被
+ *    当成反馈端点」的陷阱。check_usb_desc.py 仍会断言它是 7 字节（9 字节 = 有人手写错了）。
+ */
+#define UVC_CAM_TERM_ID   1
+#define UVC_OUT_TERM_ID   2
+/* UVC 1.5。时基时钟频率是 UVC 1.0 的遗留字段，1.5 下已废弃，照 example 填 27 MHz。 */
+#define UVC_BCD_VERSION   0x0150
+#define UVC_CLOCK_FREQ    27000000
+
+/*
+ * ⚠️ **TinyUSB 0.21 的 TUD_VIDEO_DESC_CS_VS_FRM_MJPEG_DISC 是坏的，不能用。**
+ *
+ * 逐字核实（video.h:656-660）：它把变参**原样**摊进字节流
+ *     ..., U32_TO_U8S_LE(_frminterval), (TU_ARGS_NUM(__VA_ARGS__)), __VA_ARGS__
+ * 却又按「每个变参占 4 字节」算 bLength（`..._DISC_LEN + TU_ARGS_NUM × 4`），
+ * 并拿同一个 TU_ARGS_NUM 当 bFrameIntervalType。两种调法都自相矛盾：
+ *   · 传裸 u32（1 个变参）⇒ bLength=30、bFrameIntervalType=1 都对，但那个 u32 被
+ *     截成**1 个字节**，实际只发出 27 字节 ⇒ 声明 30、实际 27，**整条描述符流
+ *     从这里开始错位**，host 之后解析到的每一条都是垃圾；
+ *   · 传 U32_TO_U8S_LE(interval)（4 个变参）⇒ 字节对了，但 bLength 变成 42、
+ *     bFrameIntervalType 变成 4（= 「有 4 个离散帧间隔」，纯属胡说）。
+ * 这不是我们用错了：全仓库（src 与 examples）对三个 `*_DISC` 宏**零调用**，
+ * 上游从没跑过它们。CONT 那三个宏没有变参，不受影响。
+ *
+ * 所以按 UVC 1.5 规范 3.1.2 Table 3-4 手写一份「恰好一个离散帧间隔」的版本 ——
+ * 与本文件里 AIO_VENDOR_DESCRIPTOR（TinyUSB 没有「只有 OUT」的 vendor 模板）
+ * 同一处置：库里没有能用的模板就自己按布局拼，而不是迁就一个坏宏。
+ *
+ * 为什么坚持离散而不退回 _CONT：video_device.c:550-558 在 host 把 dwFrameInterval
+ * 填 0（问默认值）时，对「bFrameIntervalType > 1 或 连续区间的 min != max」会直接
+ * `return true` 而**不填任何值**，把协商推给下一轮。单一离散间隔让这条路径永远
+ * 走不到，协商是确定性的。代价是 host 不能选别的帧率 —— 本来也不想给。
+ *
+ * 30 = 1 bLength + 1 bDescriptorType + 1 bDescriptorSubtype + 1 bFrameIndex
+ *    + 1 bmCapabilities + 2 wWidth + 2 wHeight + 4 dwMinBitRate + 4 dwMaxBitRate
+ *    + 4 dwMaxVideoFrameBufferSize + 4 dwDefaultFrameInterval
+ *    + 1 bFrameIntervalType + 4 dwFrameInterval[0]
+ * 与 `TUD_VIDEO_DESC_CS_VS_FRM_MJPEG_DISC_LEN(26) + 1×4` 一致（那个长度常量是对的，
+ * 坏掉的只是宏体），所以下面 UVC_VS_DESC_LEN 仍旧引用它，一处改两处不会漂。
+ */
+#define AIO_UVC_FRM_MJPEG_DISC1(_frmidx, _cap, _width, _height, _minbr, _maxbr, \
+                                _maxfrmbufsz, _frminterval) \
+    (TUD_VIDEO_DESC_CS_VS_FRM_MJPEG_DISC_LEN + 1 * 4), \
+    TUSB_DESC_CS_INTERFACE, VIDEO_CS_ITF_VS_FRAME_MJPEG, \
+    _frmidx, _cap, U16_TO_U8S_LE(_width), U16_TO_U8S_LE(_height), \
+    U32_TO_U8S_LE(_minbr), U32_TO_U8S_LE(_maxbr), \
+    U32_TO_U8S_LE(_maxfrmbufsz), U32_TO_U8S_LE(_frminterval), \
+    1 /* bFrameIntervalType：恰好一个离散间隔 */, U32_TO_U8S_LE(_frminterval)
+
+/* VS 接口下属「格式 + 帧 + 色彩匹配」的总字节数。
+ * 帧描述符是变长的：bLength = ..._DISC_LEN(26) + 离散帧间隔个数 × 4，
+ * 我们只有 1 个间隔 ⇒ 30。 */
+#define UVC_VS_DESC_LEN (TUD_VIDEO_DESC_CS_VS_FMT_MJPEG_LEN + \
+                         (TUD_VIDEO_DESC_CS_VS_FRM_MJPEG_DISC_LEN + 1 * 4) + \
+                         TUD_VIDEO_DESC_CS_VS_COLOR_MATCHING_LEN)
+
+#define UVC_DESC_LEN (TUD_VIDEO_DESC_IAD_LEN + \
+                      TUD_VIDEO_DESC_STD_VC_LEN + \
+                      (TUD_VIDEO_DESC_CS_VC_LEN + 1 /* bInCollection = 1 个 VS */) + \
+                      TUD_VIDEO_DESC_CAMERA_TERM_LEN + \
+                      TUD_VIDEO_DESC_OUTPUT_TERM_LEN + \
+                      TUD_VIDEO_DESC_STD_VS_LEN /* alt 0，零带宽 */ + \
+                      (TUD_VIDEO_DESC_CS_VS_IN_LEN + 1 /* bNumFormats × bControlSize */) + \
+                      UVC_VS_DESC_LEN + \
+                      TUD_VIDEO_DESC_STD_VS_LEN /* alt 1 */ + \
+                      7 /* ISO 端点 */)
+
+#define UVC_MJPEG_DESCRIPTOR(_vc_itf, _vs_itf, _stridx, _epin) \
+    TUD_VIDEO_DESC_IAD(_vc_itf, 2, _stridx), \
+    /* ── VideoControl，无端点 ── */ \
+    TUD_VIDEO_DESC_STD_VC(_vc_itf, 0 /* bNumEndpoints，见上方 ⚠️ */, _stridx), \
+      /* 第二个参数是「下属端子/单元描述符的总字节数」，宏自己会把 VC 头的长度
+       * 加进去。⚠️ 加减实体时这里必须跟着改：wTotalLength 少算一条，host 就在
+       * 解析到一半时停下，后面的实体静默消失。 */ \
+      TUD_VIDEO_DESC_CS_VC(UVC_BCD_VERSION, \
+                           TUD_VIDEO_DESC_CAMERA_TERM_LEN + TUD_VIDEO_DESC_OUTPUT_TERM_LEN, \
+                           UVC_CLOCK_FREQ, _vs_itf /* baInterfaceNr[]：唯一的 VS 接口 */), \
+        /* Camera Terminal：焦距三项与 bmControls 全 0 = 不支持任何摄像头控制
+         * （变焦/对焦/曝光…）。每加一项都是一处必须正确应答的 GET/SET_CUR，
+         * 应答错了 uvcvideo 在 probe 阶段就报错 —— 典型的「加了功能反而不能用」。 */ \
+        TUD_VIDEO_DESC_CAMERA_TERM(UVC_CAM_TERM_ID, 0, 0, 0, 0, 0, 0), \
+        TUD_VIDEO_DESC_OUTPUT_TERM(UVC_OUT_TERM_ID, VIDEO_TT_STREAMING, 0, \
+                                   UVC_CAM_TERM_ID, 0), \
+    /* ── VideoStreaming alt 0：零端点、零带宽 ──
+     * **这是 spec §2.1「带宽零和」的落点**：host 不打开摄像头时停在 alt 0，
+     * 不预留任何 ISO 带宽，12 Mbps 全部归 GUD 的 bulk。摄像头对显示的影响
+     * 严格为零，直到有人真的打开它。 */ \
+    TUD_VIDEO_DESC_STD_VS(_vs_itf, 0, 0, _stridx), \
+      TUD_VIDEO_DESC_CS_VS_INPUT(1 /* bNumFormats */, UVC_VS_DESC_LEN, \
+                                 _epin, 0 /* bmInfo：不支持动态格式切换 */, \
+                                 UVC_OUT_TERM_ID /* bTerminalLink */, \
+                                 0 /* bStillCaptureMethod：不做静态抓拍 */, \
+                                 0 /* bTriggerSupport */, 0 /* bTriggerUsage */, \
+                                 0 /* bmaControls(1)：本格式不支持任何流控制 */), \
+        TUD_VIDEO_DESC_CS_VS_FMT_MJPEG(1 /* bFormatIndex */, 1 /* bNumFrameDescriptors */, \
+                                       0 /* bmFlags：帧大小**不固定**，这是 MJPEG 的常态 */, \
+                                       1 /* bDefaultFrameIndex */, \
+                                       0, 0 /* 宽高比不声明 */, 0 /* 逐行 */, 0 /* 无拷贝保护 */), \
+          /* 单一离散帧间隔（用手写版，库里那个 _DISC 宏是坏的，见上方 ⚠️）。
+           * dwMaxVideoFrameBufferSize 直接决定每个 ISO 包发多少字节，别乱填 ——
+           * 见 usb_descriptors.h 的 UVC_MAX_FRAME_BYTES 与它下面那条 _Static_assert。 */ \
+          AIO_UVC_FRM_MJPEG_DISC1(1 /* bFrameIndex */, 0 /* bmCapabilities */, \
+              UVC_W, UVC_H, \
+              (uint32_t)UVC_W * UVC_H * 16 /* dwMinBitRate，信息性 */, \
+              (uint32_t)UVC_W * UVC_H * 16 * UVC_FPS /* dwMaxBitRate，信息性 */, \
+              UVC_MAX_FRAME_BYTES, \
+              UVC_FRAME_INTERVAL /* dwDefaultFrameInterval，同时是唯一的离散间隔 */), \
+        TUD_VIDEO_DESC_CS_VS_COLOR_MATCHING(VIDEO_COLOR_PRIMARIES_BT709, \
+                                            VIDEO_COLOR_XFER_CH_BT709, \
+                                            VIDEO_COLOR_COEF_SMPTE170M), \
+    /* ── VideoStreaming alt 1：带 ISO IN 端点 ── */ \
+    TUD_VIDEO_DESC_STD_VS(_vs_itf, 1, 1, _stridx), \
+      TUD_VIDEO_DESC_EP_ISO(_epin, UVC_EP_SIZE, 1 /* bInterval = 每帧 */)
+
+/* 视频功能的字符串索引，同时是 IAD 与两个视频接口的 iInterface。
+ * 与下方 aio_string_desc_arr 的第 6 个元素对应。 */
+#define AIO_STRID_VIDEO 5
+
 /*
  * GUD vendor 接口的两种形态。
  *
@@ -287,16 +437,17 @@ static const uint8_t aio_hid_report_desc[] = {
 /*
  * 配置描述符：IF0 = GUD vendor，IF1 = HID 键盘 + 触摸，
  * IF2/IF3/IF4 = UAC1 音频（AudioControl + 播放 AS + 录音 AS，由 IAD 成组），
- * IF5/IF6 = CDC 调试串口（仅 CONFIG_AIO_DEBUG_CDC）。
+ * IF5/IF6 = UVC 摄像头（VideoControl + VideoStreaming，由 IAD 成组），
+ * 再往后 = CDC 调试串口（仅 CONFIG_AIO_DEBUG_CDC）。
  *
- * 音频排在 HID **之后**：接口号对 host 侧没有功能影响（drm/gud 按 VID/PID + 接口类
- * 绑定，usbhid / hid-multitouch 按接口类绑定，snd-usb-audio 按 IAD + 接口类绑定，
- * 没有任何一方按接口号绑定），所以宁可不动已实机验证的 IF0/IF1。
- * 端点号同理刻意不动（0x81 / 0x82），少一个变量。CDC 同理再追加在最后。
+ * 音频与 UVC 都排在 HID **之后**：接口号对 host 侧没有功能影响（drm/gud 按
+ * VID/PID + 接口类绑定，usbhid / hid-multitouch 按接口类绑定，snd-usb-audio 与
+ * uvcvideo 按 IAD + 接口类绑定，没有任何一方按接口号绑定），所以宁可不动已实机
+ * 验证的 IF0/IF1。端点号同理刻意不动（0x81 / 0x82 / 0x83），少一个变量。
  */
 #define CONFIG_TOTAL_LEN \
     (TUD_CONFIG_DESC_LEN + AIO_VENDOR_DESC_LEN + TUD_HID_DESC_LEN + \
-     UAC1_AUDIO_DESC_LEN + AIO_CDC_DESC_LEN)
+     AIO_AUDIO_DESC_LEN + UVC_DESC_LEN + AIO_CDC_DESC_LEN)
 const uint8_t aio_desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
     AIO_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 0, EPNUM_VENDOR_OUT, 64),
@@ -316,9 +467,13 @@ const uint8_t aio_desc_configuration[] = {
     TUD_HID_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
                        sizeof(aio_hid_report_desc), EPNUM_HID,
                        CFG_TUD_HID_EP_BUFSIZE, 10),
+#if AIO_HAS_AUDIO
     UAC1_AUDIO_DESCRIPTOR(ITF_NUM_AUDIO_CONTROL, ITF_NUM_AUDIO_STREAMING_OUT,
                           ITF_NUM_AUDIO_STREAMING_IN, AIO_STRID_AUDIO,
                           EPNUM_AUDIO_OUT, EPNUM_AUDIO_IN),
+#endif
+    UVC_MJPEG_DESCRIPTOR(ITF_NUM_VIDEO_CONTROL, ITF_NUM_VIDEO_STREAMING,
+                         AIO_STRID_VIDEO, EPNUM_UVC_IN),
 #if CONFIG_AIO_DEBUG_CDC
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 0, EPNUM_CDC_NOTIF, 8,
                        EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
@@ -339,6 +494,14 @@ _Static_assert(UAC_EP_IN_SIZE <= CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX,
                "描述符声明的录音端点大小超过 tusb_config.h 里给驱动的上限");
 _Static_assert(CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP == 0,
                "全速控制器只有 4 条可用 IN 端点，反馈端点会顶掉 UVC 的位置");
+
+/* 描述符声明的 ISO 包大小与 tusb_config.h 给驱动的缓冲/封顶值必须**相等**，
+ * 不是「小于等于」：小了会浪费 FIFO，大了会被 dwMaxPayloadTransferSize 悄悄
+ * 截到缓冲大小 —— 两种都不报错，只是带宽莫名其妙少一截。 */
+_Static_assert(UVC_EP_SIZE == CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE,
+               "UVC ISO 端点大小必须与 CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE 完全相等");
+_Static_assert(CFG_TUD_VIDEO == 1 && CFG_TUD_VIDEO_STREAMING == 1,
+               "两个宏都要定义：只定义 CFG_TUD_VIDEO 会让 video_device.c 编成空文件");
 
 /* esp_tinyusb 只实现 tud_descriptor_*_cb，HID 这三个回调要我们自己提供，
  * 否则链接期缺符号（report_cb）或运行时对 GET/SET_REPORT STALL。 */
@@ -383,8 +546,13 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 /*
  * 字符串描述符：交由 esp_tinyusb 完成 UTF-16 转换与 langid 处理。
  * 索引 0 = langid（English, 0x0409），1=厂商 2=产品 3=序列号，
- * 4 = 音频功能（须等于 AIO_STRID_AUDIO，是 IAD 与三个音频接口的 iInterface）。
+ * 4 = 音频功能（须等于 AIO_STRID_AUDIO，是 IAD 与三个音频接口的 iInterface），
+ * 5 = 视频功能（须等于 AIO_STRID_VIDEO，是 IAD 与两个视频接口的 iInterface）。
  * aio_string_desc_count 由 sizeof/sizeof 自动算，增删元素不用手改。
+ *
+ * ⓘ 音频那条字符串在 UVC 调试档下没人引用（音频整体不编译），但**数组照旧保留**：
+ *   让两档的字符串索引完全一致，少一个变量。几十字节 flash 换一个不必分档验证的
+ *   常量表，买得起。
  */
 static const char k_langid[] = {0x09, 0x04, 0x00};
 const char *aio_string_desc_arr[] = {
@@ -393,11 +561,14 @@ const char *aio_string_desc_arr[] = {
     "Tab5 USB Terminal",
     "TAB5-0001",
     "Tab5 Audio",
+    "Tab5 Camera",
 };
 const int aio_string_desc_count = sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]);
 
-/* 把 UAC1_AUDIO_DESCRIPTOR 的 _stridx 与字符串数组钉在一起：在数组中间插一条新
- * 字符串却忘了改 AIO_STRID_AUDIO，host 侧只表现为「声卡名字不对」，几乎不会有人
- * 去查描述符。 */
-_Static_assert(sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]) == AIO_STRID_AUDIO + 1,
-               "音频字符串必须位于索引 AIO_STRID_AUDIO（当前是数组最后一个）");
+/* 把两个 _stridx 与字符串数组钉在一起：在数组中间插一条新字符串却忘了改
+ * AIO_STRID_AUDIO / AIO_STRID_VIDEO，host 侧只表现为「声卡/摄像头名字不对」，
+ * 几乎不会有人去查描述符。 */
+_Static_assert(AIO_STRID_VIDEO == AIO_STRID_AUDIO + 1,
+               "视频字符串必须紧跟在音频字符串之后");
+_Static_assert(sizeof(aio_string_desc_arr) / sizeof(aio_string_desc_arr[0]) == AIO_STRID_VIDEO + 1,
+               "视频字符串必须位于索引 AIO_STRID_VIDEO（当前是数组最后一个）");

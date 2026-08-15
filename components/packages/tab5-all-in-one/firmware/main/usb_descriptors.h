@@ -6,6 +6,14 @@
 #define GUD_PID 0x10a9
 
 /*
+ * 音频是否编译进本档。**本阶段(P4 Task1)恒为 1** —— UVC 调试档那套
+ * 「关掉音频腾出 IN 端点给 CDC」的重排在 P4 Task3 落地，届时本宏改为由
+ * CONFIG_AIO_DEBUG_CDC 反相定义。先写死是为了让 Task1 的 diff 只覆盖一档：
+ * 一次只动一个变量。
+ */
+#define AIO_HAS_AUDIO 1
+
+/*
  * 接口编号。
  *
  * ⚠️ **IF0 vendor 与 IF1 HID 的编号刻意不动。** 音频三个接口追加在 HID 之后，
@@ -19,9 +27,16 @@
 enum {
     ITF_NUM_VENDOR = 0,
     ITF_NUM_HID,                   /* 键盘 + 多点触摸，靠 Report ID 区分 */
+#if AIO_HAS_AUDIO
     ITF_NUM_AUDIO_CONTROL,
     ITF_NUM_AUDIO_STREAMING_OUT,   /* 播放：host → ES8388 → 喇叭 */
     ITF_NUM_AUDIO_STREAMING_IN,    /* 录音：ES7210 双麦 → host */
+#endif
+    /* UVC 两接口，同样**追加在最后**。相对顺序不能动：VideoControl 必须是 IAD
+     * 覆盖区间的第一个，VideoStreaming 必须紧随其后。整段排在最后完全合法 ——
+     * uvcvideo 按 IAD + 接口类绑定，不按接口号。 */
+    ITF_NUM_VIDEO_CONTROL,
+    ITF_NUM_VIDEO_STREAMING,
 #if CONFIG_AIO_DEBUG_CDC
     /* 调试档的 CDC 也**追加在最后**，理由与音频那三个相同：不动已验证的接口号。
      * CDC 的两个接口必须连号且控制接口在前。 */
@@ -37,13 +52,13 @@ enum {
  *
  * | 0x81 | 0x82 | 0x83 | 0x84 |
  * |------|------|------|------|
- * | vendor(GUD) | HID | **UAC 录音** | **留给 UVC** |
+ * | vendor(GUD) | HID | **UAC 录音** | **UVC 视频流** |
  *
  * （CONFIG_AIO_DEBUG_CDC 下这张表会重排，见下方那段。）
  *
  * 超编时 dcd_dwc2.c 的 TU_ASSERT(allocated_epin_count < ep_in_count) 直接失败，
  * 且默认日志等级下**一个字都不打** —— 症状是 SET_INTERFACE 被 STALL、某个接口
- * 静默不工作，看起来与音频毫无关联。所以 0x84 必须留着。
+ * 静默不工作，看起来与音频毫无关联。所以 4 条已经用满，不得再加。
  */
 #define EPNUM_VENDOR_OUT 0x01
 #if !CONFIG_AIO_DEBUG_CDC
@@ -51,7 +66,8 @@ enum {
 #endif
 #define EPNUM_HID        0x82
 #define EPNUM_AUDIO_OUT  0x02      /* ISO OUT，播放 */
-#define EPNUM_AUDIO_IN   0x83      /* ISO IN，录音；0x84 留给 UVC */
+#define EPNUM_AUDIO_IN   0x83      /* ISO IN，录音 */
+#define EPNUM_UVC_IN     0x84      /* ISO IN，视频流。四条可用 IN 端点的最后一条 */
 
 /*
  * ── CONFIG_AIO_DEBUG_CDC：拿 GUD 的 IN 端点换一条 USB 日志串口 ──────────
@@ -78,6 +94,12 @@ enum {
  *    **排障档，不是产品档** —— 拿到日志、定位完就关掉。
  */
 #if CONFIG_AIO_DEBUG_CDC
+/* ⚠️ **本档在 P4 Task1 下暂不可用。** 它借的正是 0x84，而 0x84 从本任务起
+ * 已经是 UVC 的视频流端点本身，借走它等于关掉被调试的对象。真正的重排
+ * （让出 vendor IN 0x81 + 整个音频功能不编译腾出 0x83）在 P4 Task3 落地。
+ * 在那之前把冲突变成编译期错误，而不是留一个「两个功能抢同一条端点、
+ * 枚举正常但某个接口静默不工作」的固件出去。 */
+#error "CONFIG_AIO_DEBUG_CDC 与 UVC 撞号（都要 0x84）：端点重排在 P4 Task3 落地，在那之前请保持关闭"
 #define EPNUM_CDC_IN     0x81      /* 原 vendor IN 空出来的那一条 */
 #define EPNUM_CDC_NOTIF  0x84      /* 临时借用 UVC 的预留位 */
 #define EPNUM_CDC_OUT    0x03
@@ -160,6 +182,59 @@ _Static_assert(UAC_SAMPLE_RATE % 1000 == 0,
  * 改动毫无关系的录音链。UAC1 只要求实体 ID 在本功能内唯一，不要求连续或有序。
  */
 #define UAC_FU_ID_SPEAKER 5
+
+/*
+ * ── UVC（USB Video Class）：MJPEG 640×360 @ 10 fps ──────────────────
+ *
+ * 分辨率是**像素管线**定的，不是带宽定的（spec §7 原写 640×480，本阶段订正）：
+ *   ① SC202CS 唯一能用的 MIPI 模式是 1280×720（1600×1200 超出 P4 ISP 的
+ *      1920×1080 上限，1600×900 裁不出 4:3）；
+ *   ② P4 的 ISP **没有缩放器**（esp_driver_isp 只有 isp_crop.h，能裁不能缩）；
+ *   ③ 唯一的缩放器 PPA 的缩放比粒度是 1/16 ⇒ 1280×720 ×0.5 = 640×360 精确，
+ *      而 640×480 需要 2/3，1/16 表达不出来（最近的 11/16 给出 660×495）。
+ * 附带：640/16=40、360/8=45 都整除 4:2:2 的 MCU(16×8)，编码器不必补边；
+ * 而且与 GUD 显示模式同为 640×360，整个包只有一个分辨率要记。
+ */
+#define UVC_W                640
+#define UVC_H                360
+#define UVC_FPS              10
+/* dwFrameInterval 的单位是 100 ns ⇒ 10 fps = 1,000,000。
+ * video_device.c:560-561 有 TU_ASSERT(interval/10000 != 0)，即帧间隔不得小于 1 ms。 */
+#define UVC_FRAME_INTERVAL   (10000000 / UVC_FPS)
+
+/*
+ * ISO IN 端点大小 = 448 字节（112 words FIFO）。
+ *
+ * 上限是 **492 字节**，由 DWC2 的 dfifo 账算出来，**不是 1023(全速 ISO 的规范上限)**：
+ *   dfifo 顶 = 256 − 2×ep_count(7) = **242 words**（dcd_dwc2.c:257-263，
+ *     is_dma 成立：CONFIG_TINYUSB_MODE_DMA=y 且 P4 的 OTG11_ARCHITECTURE=2=INTERNAL_DMA）
+ *   已用 = RX 62 + EP0 16 + vendor IN 16 + HID 16 + UAC 录音 IN 9 = 119
+ *   余量 = 242 − 119 = 123 words = 492 字节
+ * 取 448 而不取满 492：① dfifo_alloc() 装不下时只是 TU_ASSERT 返回 false、
+ * **无日志**，症状是 SET_INTERFACE 被 STALL；② 448 在 is_dma 为真(余 123)与为假
+ * (余 137) 两种假设下都成立；③ 代价只有 9% 带宽，而 640×360@10fps 有 1.5–2.6 倍余量。
+ */
+#define UVC_EP_SIZE          448
+/* 每包被 UVC 载荷头吃掉 2 字节（video_device.c:1174-1176）。 */
+#define UVC_PAYLOAD_HDR      2
+
+/*
+ * 一帧 JPEG 的上限。同时是 cam_jpeg.c 输出缓冲的大小。
+ *
+ * ⚠️ 这个数**不能随便填小**：TinyUSB 用
+ *     dwMaxPayloadTransferSize = min(ceil(dwMaxVideoFrameSize/interval_ms) + 2,
+ *                                    CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE)
+ * （video_device.c:562-567），而 uvcvideo 把我们声明的 dwMaxVideoFrameBufferSize
+ * 原样填进 COMMIT。填 30000 的话每包只发 302 字节，带宽白掉三分之一，
+ * **而且哪里都不报错**。下面那条 _Static_assert 守着这件事。
+ */
+#define UVC_MAX_FRAME_BYTES  65536
+
+_Static_assert((UVC_MAX_FRAME_BYTES / (UVC_FRAME_INTERVAL / 10000)) + 2 > UVC_EP_SIZE,
+               "dwMaxVideoFrameBufferSize 太小，TinyUSB 会把每包缩到不足 UVC_EP_SIZE，"
+               "带宽静默损失（见 video_device.c 的 dwMaxPayloadTransferSize 计算）");
+_Static_assert(UVC_W % 16 == 0 && UVC_H % 8 == 0,
+               "4:2:2 的 MCU 是 16×8，两个方向都要整除，否则编码器要补边");
 
 /* HID Report ID。键盘与触摸共用 IF1 这一个接口与 EPNUM_HID 这一条 IN 端点
  * （P4 全速控制器最多 4 条 IN 端点，UAC/UVC 会用满，见 firmware/README.md），

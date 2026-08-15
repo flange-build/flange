@@ -145,6 +145,34 @@
  * （es8388.c 见 pa_pin == -1 直接 return），必须由我们经 IO 扩展自己驱动。 */
 #define IOEXP_PIN_SPEAKER_EN  IO_EXPANDER_PIN_NUM_1
 
+/* ── 摄像头 ──────────────────────────────────────────────────────
+ * SC202CS 2 MP，MIPI-CSI **1 lane**。板上自带 24 MHz 晶振，**没有** XCLK 引脚、
+ * 也**没有** RESET 引脚（esp-bsp 的 BSP_CAMERA_GPIO_XCLK / BSP_CAMERA_RST 都是
+ * GPIO_NUM_NC）⇒ 不需要 LEDC 产时钟，上电只有一件事：拉高 IO 扩展上的使能。
+ *
+ * ⚠️ CAMERA_EN 与 LCD_EN(PIN4) / TOUCH_EN(PIN5) / SPEAKER_EN(PIN1) **同在
+ * 0x43 那一颗 PI4IOE5V6408 上**（esp-bsp 的 BSP_FEATURE_CAMERA 分支走的就是
+ * bsp_io_expander_init()，其地址 = ..._ADDRESS_LOW = 0x43）。必须复用
+ * board_power.c 已有的 s_ioexp 句柄 —— 新建一个 expander 会重置整颗芯片的
+ * 方向/输出寄存器，把面板与触摸的电一起断掉。 */
+#define IOEXP_PIN_CAMERA_EN   IO_EXPANDER_PIN_NUM_6
+
+/* SC202CS 的 SCCB(=I2C) 地址，**7 bit**。挂在内部 I2C(G31/G32) 上，
+ * 与 GT911(0x14) / ES8388(0x10) / ES7210(0x40) / IO 扩展(0x43,0x44) 共总线。
+ * PID 寄存器 0x3107/0x3108 读回应为 0xeb52。取自 esp_cam_sensor 的
+ * sensors/sc202cs/include/sc202cs.h（SC202CS_SCCB_ADDR / SC202CS_PID）。
+ * ⚠️ 与 esp_codec_dev 那两颗不同，esp_sccb_intf 收的就是 **7 bit** 地址，
+ *    不需要再定一份 8 bit 形式。 */
+#define SC202CS_I2C_ADDR7     0x36
+#define SC202CS_PID_EXPECT    0xeb52
+
+/* 传感器唯一可用的 MIPI 模式：其余模式要么超出 P4 ISP 的 1920×1080 上限
+ * （1600×1200 的 1200 行），要么裁不出 4:3（1600×900）。 */
+#define CAM_SENSOR_W          1280
+#define CAM_SENSOR_H          720
+#define CAM_MIPI_LANES        1
+#define CAM_MIPI_MBPS         576   /* = sc202cs_format_info[].mipi_info.mipi_clk / 1e6 */
+
 /* ⚠️ 两种 I2C 地址形式必须分开定名：i2c_master_probe() 收 **7 bit**，而
  * esp_codec_dev 的 audio_codec_i2c_cfg_t.addr 收 **8 bit**（驱动内部再 >>1，见
  * platform/audio_codec_ctrl_i2c.c）。混用的症状是 codec 初始化失败，或把寄存器
