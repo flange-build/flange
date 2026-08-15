@@ -1,13 +1,16 @@
 set(aio_srcs "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c"
              "display_dsi.c" "standby_screen.c" "board_power.c"
              "kbd_i2c.c" "kbd_translate.c" "touch_hid.c" "touch_map.c"
-             "uvc_pattern.c" "uvc_stream.c" "cam_jpeg.c" "camera_csi.c")
+             "uvc_pattern.c" "uvc_stream.c" "cam_jpeg.c" "camera_csi.c"
+             "cam_frame_stats.c")
 # esp_driver_jpeg = P4 的硬件 JPEG 编码器，IDF 内置组件。**不用 esp_video**：
 # 那个托管组件会顺带拖进 usb_host_uvc + esp_h264 + esp_ipa，本工程一个都不需要。
+# esp_driver_cam(MIPI-CSI 控制器) / esp_driver_isp(RAW8→RGB565 去马赛克) 同理，
+# 都是 IDF 内置组件，摄像头链路只额外用到托管组件 esp_cam_sensor 的寄存器序列。
 # esp_timer 只为 cam_jpeg.c 量一次编码耗时（微秒级，FreeRTOS 的 tick 是 1 ms，
 # 分不出 2 ms 与 3 ms 的差别）。它本来就在每个工程里，加进来不增加任何产物。
 set(aio_reqs esp_driver_i2c esp_driver_gpio esp_lcd esp_mm esp_driver_ppa
-             esp_driver_jpeg esp_timer)
+             esp_driver_jpeg esp_timer esp_driver_cam esp_driver_isp)
 
 # UVC 调试档（CONFIG_AIO_DEBUG_CDC）下**整个音频功能不编译**：CDC 的通知端点要占
 # 0x83，也就是 UAC 录音那一条（推导见 main/usb_descriptors.h 的 AIO_HAS_AUDIO 段）。

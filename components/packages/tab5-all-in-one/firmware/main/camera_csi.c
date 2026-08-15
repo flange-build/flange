@@ -1,17 +1,28 @@
 /*
- * SC202CS 的 SCCB 探测。实现说明见 camera_csi.h。
+ * SC202CS 的 SCCB 探测 + MIPI-CSI/ISP 取流。实现说明见 camera_csi.h。
  */
 #include "camera_csi.h"
 #include "board_power.h"
+#include "cam_frame_stats.h"
 #include "tab5_pins.h"
 #include "esp_log.h"
+#include "esp_check.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_sccb_intf.h"
 #include "esp_sccb_i2c.h"
 #include "sc202cs.h"
+#include "esp_cam_sensor.h"
+#include "esp_cam_ctlr.h"
+#include "esp_cam_ctlr_csi.h"
+#include "driver/isp.h"
+#include "esp_cache.h"
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
 
 static const char *TAG = "camera";
 
@@ -164,4 +175,537 @@ void camera_sensor_report(void)
     ESP_LOGI(TAG, "[自检] SCCB(0x%02x)=%s pid_rd=%s pid=%s(期望 0x%04x) detect=%d",
              SC202CS_I2C_ADDR7, step_str(s_st_sccb), step_str(s_st_pid_rd),
              pid, SC202CS_PID_EXPECT, s_detected);
+}
+
+/* ══ P4 Task8：MIPI-CSI + ISP 取流 ════════════════════════════════════ */
+
+/*
+ * 一帧 = 1280×720 个 RGB565 = 1 843 200 字节 ≈ 1.84 MB。
+ *
+ * 缓冲数取 **3**，不是双缓冲。理由是本驱动关掉了 CSI 的备份缓冲
+ * （bk_buffer_dis = true，见 camera_csi_init()），此时**每帧结束的中断里必须
+ * 拿得出一块空闲缓冲**，拿不出来 IDF 的 CSI 驱动会直接 assert(false) 崩掉。
+ * 双缓冲下的稳态是「一块在 DMA、一块在调用方手里」⇒ 空闲数恰好为 0，
+ * 调用方只要有一帧（33 ms）的抖动就会撞上抢缓冲的降级路径。第三块只多花
+ * 1.84 MB PSRAM 空间、**不多花一点带宽**（DMA 同一时刻只写一块），
+ * 换来「帧率/丢帧这两个判据不会因为自身的调度抖动而误报」。
+ */
+#define CAM_FB_COUNT   3
+#define CAM_FB_BYTES   ((size_t)CAM_SENSOR_W * CAM_SENSOR_H * 2)
+
+/* 帧缓冲对齐。P4 的 PSRAM cache line 是 64 字节，DMA 与 esp_cache_msync() 都要求
+ * 首地址与长度按 cache line 对齐（不对齐时 msync 返回 INVALID_ARG，而它是在 CSI
+ * 的中断里被 assert 的 —— 表现为崩在驱动内部，很难反查到这里）。
+ * CAM_FB_BYTES = 1843200 = 64 × 28800，长度天然对齐。首地址靠 aligned_calloc。
+ * init 里还会用 esp_cache_get_line_size_by_addr() 复核一次，免得这个 64 是猜的。 */
+#define CAM_FB_ALIGN   64
+
+/* ISP 时钟。1280×720@30fps = 27.6 Mpixel/s，ISP 每周期处理 1 个像素 ⇒ 80 MHz
+ * 有近 3 倍余量。与 IDF 的 mipi_isp_dsi 例程取同一个数。 */
+#define CAM_ISP_CLK_HZ (80 * 1000 * 1000)
+
+static esp_cam_ctlr_handle_t s_cam;
+static isp_proc_handle_t     s_isp;
+static uint16_t             *s_fb[CAM_FB_COUNT];
+
+/*
+ * 缓冲在两个队列之间轮转：
+ *   s_free_q  空闲，等着交给 DMA        —— 中断里取（ISR safe）
+ *   s_done_q  已写满，等着交给调用方      —— 中断里放
+ * s_held 是已经交给调用方、尚未归还的那一块（见 camera_csi_get_frame() 的约定）。
+ */
+static QueueHandle_t s_free_q;
+static QueueHandle_t s_done_q;
+static uint16_t     *s_held;
+static bool          s_streaming;
+
+/* 只在中断里读写，中断彼此串行，不需要额外同步。 */
+static uint16_t *s_filling;        /* 当前交给 DMA 的那一块 */
+static bool      s_reuse_pending;  /* 这一帧的缓冲是「抢回来的」，内容留不住 */
+
+/* 运行期计数器。**只在自检快照里读**，不参与任何控制流。
+ * volatile：前三个由 CSI 中断写、report/取帧任务读；32 位对齐读写在 P4 上是原子的，
+ * 又都只做单向累加，不需要更强的同步。 */
+static volatile uint32_t s_frames_done;     /* 完整写进缓冲、并交到 done 队列的帧 */
+static volatile uint32_t s_frames_reused;   /* 中断没抢到空闲缓冲，把刚写完那块又借走 */
+static volatile uint32_t s_frames_dropped;  /* done 队列满，写好的帧没人要 */
+static uint32_t          s_get_timeouts;    /* camera_csi_get_frame() 超时次数 */
+
+/* 六个初始化步骤各记一个返回值，**不共用哨兵**（STEP_NOT_RUN 在文件上半部定义）。
+ * 这是音频那轮的教训：一个哨兵表达两件事，现场就分不出「没跑」和「跑了但失败」。 */
+static int32_t s_st_fb    = STEP_NOT_RUN;   /* 帧缓冲分配 */
+static int32_t s_st_ctlr  = STEP_NOT_RUN;   /* esp_cam_new_csi_ctlr() */
+static int32_t s_st_cbs   = STEP_NOT_RUN;   /* esp_cam_ctlr_register_event_callbacks() */
+static int32_t s_st_isp   = STEP_NOT_RUN;   /* esp_isp_new_processor() */
+static int32_t s_st_fmt   = STEP_NOT_RUN;   /* esp_cam_sensor_set_format() */
+static int32_t s_st_start = STEP_NOT_RUN;   /* enable/start/stream-on 整条启动链 */
+
+/*
+ * 中断回调之一：DMA 要下一块缓冲了。
+ *
+ * ⚠️ **必须无条件给出一块缓冲。** bk_buffer_dis = true 时驱动没有内部备份缓冲，
+ * 这里返回空会让它走到 assert(false)（esp_cam_ctlr_csi.c 的
+ * "no new buffer, and no driver internal buffer"）—— 也就是直接崩机。
+ * 所以空闲队列空了的时候，把**刚写满、还没交出去的那一块**再借给 DMA，
+ * 并置 s_reuse_pending；紧接着的 on_trans_finished 会据此把这一帧记成 reused
+ * 而不是入队 —— 它的内容马上就要被覆盖，交出去就是错的。
+ * 这样「跟不上」表现为一个可读的计数器，而不是一次崩机。
+ */
+static bool cam_on_get_new_trans(esp_cam_ctlr_handle_t handle,
+                                 esp_cam_ctlr_trans_t *trans, void *user_data)
+{
+    (void)handle;
+    (void)user_data;
+    BaseType_t woken = pdFALSE;
+    uint16_t *buf = NULL;
+
+    if (xQueueReceiveFromISR(s_free_q, &buf, &woken) == pdTRUE) {
+        s_reuse_pending = false;
+    } else {
+        buf = s_filling;          /* 即将在下一段被 finish 的那一块 */
+        s_reuse_pending = true;
+    }
+    trans->buffer = buf;
+    trans->buflen = CAM_FB_BYTES;
+    s_filling = buf;
+    return woken == pdTRUE;
+}
+
+/* 中断回调之二：一帧写完了。 */
+static bool cam_on_trans_finished(esp_cam_ctlr_handle_t handle,
+                                  esp_cam_ctlr_trans_t *trans, void *user_data)
+{
+    (void)handle;
+    (void)user_data;
+    BaseType_t woken = pdFALSE;
+
+    if (s_reuse_pending) {
+        s_reuse_pending = false;
+        s_frames_reused++;
+        return false;
+    }
+    uint16_t *buf = trans->buffer;
+    if (xQueueSendFromISR(s_done_q, &buf, &woken) == pdTRUE)
+        s_frames_done++;
+    else
+        s_frames_dropped++;       /* 队列深度 = 缓冲数，理论上到不了这里 */
+    return woken == pdTRUE;
+}
+
+esp_err_t camera_csi_init(void)
+{
+    ESP_RETURN_ON_FALSE(s_sensor, ESP_ERR_INVALID_STATE, TAG,
+                        "传感器没探到，不建 CSI/ISP");
+    if (s_cam)
+        return ESP_OK;            /* 幂等 */
+
+    /*
+     * ⓘ MIPI PHY 的供电（LDO_VO3 @ 2.5V → VDD_MIPI_DPHY）**不在这里申请**：
+     *   P4 上 DSI 与 CSI 两个 PHY 共用这一路 LDO，display_dsi.c 开机时已经
+     *   esp_ldo_acquire_channel(DSI_PHY_LDO_CHAN) 过了，而显示是核心链路
+     *   （ESP_ERROR_CHECK，起不来就没有任何可用形态），所以走到这里时它必然是通的。
+     *   在这里再申请一次只会多一条会失败的路径。
+     */
+
+    /*
+     * CSI 控制器。参数全部来自 esp_cam_sensor 的模式表 sc202cs_format_info[0]
+     * （"MIPI_1lane_24Minput_RAW8_1280x720_30fps"）：lane_num = 1、
+     * mipi_clk = 576000000 ⇒ lane_bit_rate_mbps = 576。
+     * ⚠️ 这是**唯一可用**的传感器模式：1600×1200 的 1200 行超出 P4 ISP 的
+     *    1920×1080 输入上限，1600×900 裁不出 4:3。见 P4 计划的「关键事实」。
+     */
+    const esp_cam_ctlr_csi_config_t csi_cfg = {
+        .ctlr_id  = 0,
+        .clk_src  = MIPI_CSI_PHY_CLK_SRC_DEFAULT,
+        .h_res    = CAM_SENSOR_W,
+        .v_res    = CAM_SENSOR_H,
+        .data_lane_num      = CAM_MIPI_LANES,   /* 1 */
+        .lane_bit_rate_mbps = CAM_MIPI_MBPS,    /* 576 */
+        .input_data_color_type  = CAM_CTLR_COLOR_RAW8,
+        .output_data_color_type = CAM_CTLR_COLOR_RGB565,   /* 经 ISP 去马赛克后的输出 */
+        .queue_items  = CAM_FB_COUNT,
+        .byte_swap_en = false,
+        /* 关掉驱动内部的备份缓冲：它会再吃 1.84 MB PSRAM **和一份写带宽**
+         * （没人排队时 DMA 照样往它里面写），而本驱动自己排了 3 块缓冲，
+         * 空闲队列见底时由 cam_on_get_new_trans() 的抢用路径兜住。 */
+        .bk_buffer_dis = true,
+    };
+    s_st_ctlr = esp_cam_new_csi_ctlr(&csi_cfg, &s_cam);
+    ESP_RETURN_ON_ERROR(s_st_ctlr, TAG, "CSI 控制器");
+
+    /* 两个回调都必须注册：esp_cam_ctlr_start() 会硬性检查 on_trans_finished
+     * （没有它直接返回 ESP_ERR_INVALID_STATE），而 bk_buffer_dis = true 时
+     * on_get_new_trans 也是必须的 —— start 拿不到第一块缓冲同样起不来。 */
+    const esp_cam_ctlr_evt_cbs_t cbs = {
+        .on_get_new_trans  = cam_on_get_new_trans,
+        .on_trans_finished = cam_on_trans_finished,
+    };
+    s_st_cbs = esp_cam_ctlr_register_event_callbacks(s_cam, &cbs, NULL);
+    ESP_RETURN_ON_ERROR(s_st_cbs, TAG, "CSI 回调注册");
+
+    /* 队列放指针即可，深度 = 缓冲数。 */
+    s_free_q = xQueueCreate(CAM_FB_COUNT, sizeof(uint16_t *));
+    s_done_q = xQueueCreate(CAM_FB_COUNT, sizeof(uint16_t *));
+    ESP_RETURN_ON_FALSE(s_free_q && s_done_q, ESP_ERR_NO_MEM, TAG, "帧队列");
+
+    for (int i = 0; i < CAM_FB_COUNT; i++) {
+        s_fb[i] = heap_caps_aligned_calloc(CAM_FB_ALIGN, 1, CAM_FB_BYTES,
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+        if (!s_fb[i]) {
+            s_st_fb = ESP_ERR_NO_MEM;
+            ESP_RETURN_ON_FALSE(false, ESP_ERR_NO_MEM, TAG,
+                                "帧缓冲 %d/%d（每块 %u 字节）分配失败",
+                                i, CAM_FB_COUNT, (unsigned)CAM_FB_BYTES);
+        }
+        /* CAM_FB_ALIGN 是不是真的够，问一次硬件而不是靠记忆 —— 猜错的话
+         * esp_cache_msync() 会在 CSI 中断里 assert，那种崩很难反查到这一行。 */
+        const size_t line = esp_cache_get_line_size_by_addr(s_fb[i]);
+        if (line == 0 || (CAM_FB_ALIGN % line) != 0) {
+            s_st_fb = ESP_ERR_INVALID_STATE;
+            ESP_RETURN_ON_FALSE(false, ESP_ERR_INVALID_STATE, TAG,
+                                "cache line = %u，与 CAM_FB_ALIGN(%d) 不相容",
+                                (unsigned)line, CAM_FB_ALIGN);
+        }
+        xQueueSend(s_free_q, &s_fb[i], 0);
+    }
+    s_st_fb = ESP_OK;
+
+    /*
+     * ISP：把 RAW8 去马赛克成 RGB565。**不做 AE/AWB 闭环** —— 闭环控制律要么引
+     * espressif/esp_ipa（会把 esp_video 的一半拖进来），要么自己写；本阶段用
+     * esp_cam_sensor 模式表里的默认曝光与增益（sc202cs_isp_info[0] 的
+     * exp_def = 0x3dc、gain_def = 0）。
+     * ⚠️ **代价**：固定室内光照下画面正常，但换光照环境会过曝或欠曝，且不会自动
+     *    恢复。真要自动曝光，下一阶段优先自己写 30 行 P 控制器，别引 esp_ipa。
+     * bayer 顺序取自 sc202cs_isp_info[0].bayer_type = ESP_CAM_SENSOR_BAYER_BGGR。
+     * ⚠️ 只能按**名字**抄，不能按数值抄：两个枚举的顺序正好是反的
+     *    （esp_cam_sensor_types.h 是 RGGB=0…BGGR=3，hal/color_types.h 是
+     *     BGGR=0…RGGB=3）。数值直传的话红蓝会对调，而那种偏色一眼看不出是配错了。
+     */
+    const esp_isp_processor_cfg_t isp_cfg = {
+        .clk_hz = CAM_ISP_CLK_HZ,
+        .input_data_source      = ISP_INPUT_DATA_SOURCE_CSI,
+        .input_data_color_type  = ISP_COLOR_RAW8,
+        .output_data_color_type = ISP_COLOR_RGB565,
+        .has_line_start_packet  = false,
+        .has_line_end_packet    = false,
+        .h_res = CAM_SENSOR_W,
+        .v_res = CAM_SENSOR_H,
+        .bayer_order = COLOR_RAW_ELEMENT_ORDER_BGGR,
+    };
+    s_st_isp = esp_isp_new_processor(&isp_cfg, &s_isp);
+    ESP_RETURN_ON_ERROR(s_st_isp, TAG, "ISP");
+
+    /*
+     * ⚠️ **实测结论（与计划里的存疑处对应）：set_format 是必须的，不能省。**
+     * sc202cs_detect() 只把 dev->cur_format 指向模式表里的那一项，**一个寄存器
+     * 都没往芯片里写**（managed_components/.../sc202cs.c:1527 附近，detect 里只有
+     * power_on + 读 ID）。真正把那张 1280×720 RAW8 寄存器表写下去的是
+     * sc202cs_set_format()。不调它就 stream on，传感器还停在上电默认态，
+     * CSI 收到的行数/格式全对不上 —— 现象是一帧都收不到或者花屏。
+     * 传 NULL 让组件自己挑 CONFIG_CAMERA_SC202CS_MIPI_IF_FORMAT_INDEX_DEFAULT
+     * 那一项，与 Task7 日志里打出来的默认模式是同一个，不必自己找 index。
+     */
+    s_st_fmt = esp_cam_sensor_set_format(s_sensor, NULL);
+    ESP_RETURN_ON_ERROR(s_st_fmt, TAG, "传感器 set_format");
+
+    ESP_LOGI(TAG, "CSI+ISP 就绪：%dx%d RAW8→RGB565，%d 块帧缓冲各 %u 字节"
+                  "（共 %u KB PSRAM）；**尚未取流**",
+             CAM_SENSOR_W, CAM_SENSOR_H, CAM_FB_COUNT, (unsigned)CAM_FB_BYTES,
+             (unsigned)(CAM_FB_COUNT * CAM_FB_BYTES / 1024));
+    return ESP_OK;
+}
+
+esp_err_t camera_csi_start(void)
+{
+    ESP_RETURN_ON_FALSE(s_cam && s_isp, ESP_ERR_INVALID_STATE, TAG, "CSI 未初始化");
+    if (s_streaming)
+        return ESP_OK;            /* 幂等 */
+
+    /* 控制器先就位，传感器最后开：传感器一 stream on，MIPI 差分对就开始送数据，
+     * 控制器没 start 的话那些数据无处可去（表现为 CSI 的 error 中断刷屏）。
+     * 四步各自记进 s_st_start，失败时快照里能直接看出断在哪一步 ——
+     * 「CSI enable 就没过」与「传感器 stream on 没写进去」的排查方向完全不同。 */
+    int on = 1;
+    esp_err_t err = esp_cam_ctlr_enable(s_cam);
+    const char *step = "CSI enable";
+    if (err == ESP_OK) { err = esp_isp_enable(s_isp);   step = "ISP enable"; }
+    if (err == ESP_OK) { err = esp_cam_ctlr_start(s_cam); step = "CSI start"; }
+    if (err == ESP_OK) {
+        err = esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &on);
+        step = "传感器 stream on";
+    }
+    s_st_start = err;
+    if (err != ESP_OK) {
+        /* 启动链断在某一步。把已经打开的东西按反序关掉，免得留下「控制器开着、
+         * 传感器没开」这种半开状态 —— 那会在下一次 start 时以
+         * ESP_ERR_INVALID_STATE 的形式重新冒出来，掩盖真正的根因。
+         * 这三个 stop/disable 自身的返回值故意不看：此刻它们必然有一部分是
+         * INVALID_STATE（本来就没开起来），看了反而盖掉上面那个真错误码。 */
+        esp_cam_ctlr_stop(s_cam);
+        esp_isp_disable(s_isp);
+        esp_cam_ctlr_disable(s_cam);
+        ESP_LOGE(TAG, "取流启动失败于「%s」(%s)", step, esp_err_to_name(err));
+        return err;
+    }
+
+    s_streaming = true;
+    ESP_LOGI(TAG, "取流已开始（CSI 每秒往 PSRAM 写约 %u MB）",
+             (unsigned)(CAM_FB_BYTES * 30 / (1024 * 1024)));
+    return ESP_OK;
+}
+
+/* 记下第一个错误并把它念出来。停流的四步一个都不能早退，见下面的说明。 */
+static void keep_first_err(esp_err_t *first, const char *what, esp_err_t rc)
+{
+    if (rc == ESP_OK)
+        return;
+    ESP_LOGW(TAG, "停流的「%s」失败(%s)，仍继续把剩下几步走完",
+             what, esp_err_to_name(rc));
+    if (*first == ESP_OK)
+        *first = rc;              /* 后面的错误多半是第一个的连锁反应 */
+}
+
+esp_err_t camera_csi_stop(void)
+{
+    if (!s_streaming)
+        return ESP_OK;            /* 幂等 */
+
+    /*
+     * 严格反序：先让传感器停止送数据，再停控制器。顺序反了会在 CSI 上留下半帧，
+     * 下次 start 的第一帧是错位的。
+     *
+     * **四步一个都不能早退**：stop 的后置条件是「停下来了」，中途 return 会留下
+     * 「控制器还开着但 s_streaming 已经是 false」这类半停状态，下一次 start 只会
+     * 收到一个与根因无关的 INVALID_STATE。失败只记 warning、继续往下走，
+     * 最终状态由 s_streaming = false 一锤定音。
+     */
+    esp_err_t err = ESP_OK;
+    int off = 0;
+    /* 逐条顺序展开，**不要**塞进数组初始化器里循环 —— C 不保证初始化器各表达式的
+     * 求值顺序，而这四步的先后正是本函数的全部内容。 */
+    keep_first_err(&err, "传感器 stream off",
+                   esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &off));
+    keep_first_err(&err, "CSI stop",    esp_cam_ctlr_stop(s_cam));
+    keep_first_err(&err, "ISP disable", esp_isp_disable(s_isp));
+    keep_first_err(&err, "CSI disable", esp_cam_ctlr_disable(s_cam));
+    s_streaming = false;
+
+    /* 把所有缓冲收回空闲队列，让下一次 start 从确定的状态开始 ——
+     * 否则残留在 done 队列里的旧帧会被下一次 get_frame() 当成新帧取走。 */
+    if (s_held) {
+        xQueueSend(s_free_q, &s_held, 0);
+        s_held = NULL;
+    }
+    uint16_t *buf;
+    while (xQueueReceive(s_done_q, &buf, 0) == pdTRUE)
+        xQueueSend(s_free_q, &buf, 0);
+    s_filling = NULL;
+    s_reuse_pending = false;
+
+    ESP_LOGI(TAG, "取流已停止（传感器进 sleep mode，不再占 PSRAM 带宽）");
+    return err;
+}
+
+esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms)
+{
+    ESP_RETURN_ON_FALSE(fb, ESP_ERR_INVALID_ARG, TAG, "fb 为空");
+    ESP_RETURN_ON_FALSE(s_streaming, ESP_ERR_INVALID_STATE, TAG, "没在取流");
+
+    /* 归还上一次交出去的那一块。**必须在等新帧之前做** —— 中断只在空闲队列里
+     * 有货时才不用走抢缓冲的降级路径。 */
+    if (s_held) {
+        xQueueSend(s_free_q, &s_held, 0);
+        s_held = NULL;
+    }
+
+    uint16_t *buf = NULL;
+    if (xQueueReceive(s_done_q, &buf, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        s_get_timeouts++;
+        return ESP_ERR_TIMEOUT;
+    }
+
+    /*
+     * DMA 写完之后、CPU 读之前，必须把这块缓冲的 cache 行作废（M2C），
+     * 否则读到的可能是上一轮遗留在 cache 里的旧内容。
+     *
+     * ⚠️ **这一步不能指望 CSI 驱动替我们做。** 驱动确实在中断里调了
+     *    esp_cache_msync(trans.buffer, trans.received_size, M2C)，但那一行在
+     *    `trans.received_size = fb_size_in_bytes` **之前**执行，此时 received_size
+     *    还是 0（我们在 on_get_new_trans 里没有、也不该去设它）—— 长度 0 的
+     *    invalidate 是个空操作。上游这个顺序问题不该由我们靠「刚好也能工作」
+     *    去赌，在这里自己做一次，代价是一条硬件 invalidate 指令。
+     */
+    const esp_err_t err = esp_cache_msync(buf, CAM_FB_BYTES,
+                                          ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+    ESP_RETURN_ON_ERROR(err, TAG, "帧缓冲 cache invalidate");
+
+    s_held = buf;
+    *fb = buf;
+    return ESP_OK;
+}
+
+void camera_csi_report(void)
+{
+    /*
+     * 读法（从上往下，第一条不对的就是根因）：
+     *   fb!=ESP_OK              → 1.84 MB × 3 的 PSRAM 分配或对齐不过关，与摄像头无关。
+     *   ctlr!=ESP_OK            → CSI 控制器建不起来。lane 数/速率/分辨率参数问题，
+     *                             或者 CSI 已被别的东西占了。
+     *   cbs!=ESP_OK             → 回调注册被拒。几乎只可能是调用顺序错了。
+     *   isp!=ESP_OK             → ISP 建不起来（时钟源/分辨率超上限）。
+     *   fmt!=ESP_OK             → SCCB 写寄存器表失败：总线在探测之后掉了。
+     *   start!=ESP_OK           → 前面全对，但 enable/start/stream-on 那一串断了。
+     *   以上全 ESP_OK 但 帧=0    → 管线建起来了、传感器也 stream on 了，
+     *                             但一帧数据都没到 —— 查 MIPI 走线/lane 速率。
+     *   帧在涨                   → 取到了。**此时才轮到看亮度那几行**判断内容对不对。
+     * 「未运行」与任何一个错误码严格区分开，见 STEP_NOT_RUN 的声明。
+     */
+    ESP_LOGI(TAG, "[自检] CSI fb=%s ctlr=%s cbs=%s isp=%s fmt=%s start=%s | "
+                  "取流中=%d 帧=%" PRIu32 " 抢缓冲=%" PRIu32 " 丢弃=%" PRIu32
+                  " 取帧超时=%" PRIu32,
+             step_str(s_st_fb), step_str(s_st_ctlr), step_str(s_st_cbs),
+             step_str(s_st_isp), step_str(s_st_fmt), step_str(s_st_start),
+             s_streaming, s_frames_done, s_frames_reused, s_frames_dropped,
+             s_get_timeouts);
+}
+
+/* ══ 以下整块是**临时自检**，Task9 接上 UVC 时删掉 ═══════════════════ */
+
+/* 取流并观察多少秒。**够长到能把三个物理动作各做三次**（挡住镜头 / 拿开 /
+ * 手电照），又不至于让「摄像头永远开着」变成默认构建的常态。 */
+#define CAM_SELFTEST_SEC   120
+/* 亮度采样步长：每 8 行取一行、行内每 8 个取一个 ⇒ 只碰 1/64 的像素。
+ * 全采样 92 万像素每帧要好几毫秒，取帧循环自己就会变成被观测的干扰源。 */
+#define CAM_STATS_STEP     8
+
+/*
+ * PSRAM 读带宽实测。
+ *
+ * 存在的理由：本任务最大的风险是「CSI 每秒往 PSRAM 写 55 MB」把 DPI 面板刷新
+ * （每秒从 PSRAM 读 89～107 MB，算式见 camera_csi.h）挤出撕裂/花屏，
+ * 而**肉眼看屏幕不是判据** ——
+ * 轻微的带宽紧张肉眼看不出来，等看得出来时已经说不清是不是别的原因。
+ * 这里量的是「同一时刻 CPU 还能从 PSRAM 读多快」：取流前后各测一次，
+ * 差值就是 CSI 实际吃掉的那一份带宽，是个能写进报告的数字。
+ *
+ * 做法：从帧缓冲里连续读 1 MB 到内部 SRAM。读的区间远大于 cache，每条 cache line
+ * 都真的要去 PSRAM 取；目的地常驻 cache，测到的就是**读**带宽。
+ * 读的内容是什么无所谓（正在被 DMA 写也没关系），所以直接借 s_fb[0]。
+ */
+#define CAM_BW_CHUNK   1024
+#define CAM_BW_TOTAL   (1024 * 1024)
+
+static uint32_t psram_read_mbps(void)
+{
+    if (!s_fb[0])
+        return 0;
+    uint8_t *sink = heap_caps_malloc(CAM_BW_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!sink)
+        return 0;
+
+    const uint8_t *src = (const uint8_t *)s_fb[0];
+    const int64_t t0 = esp_timer_get_time();
+    for (size_t off = 0; off < CAM_BW_TOTAL; off += CAM_BW_CHUNK)
+        memcpy(sink, src + off, CAM_BW_CHUNK);
+    const int64_t dt = esp_timer_get_time() - t0;
+
+    heap_caps_free(sink);
+    /* 字节/微秒 == MB/s（都按 1e6 算，量级判断够用，不必纠结 MiB） */
+    return dt > 0 ? (uint32_t)(CAM_BW_TOTAL / dt) : 0;
+}
+
+static void cam_selftest_task(void *arg)
+{
+    (void)arg;
+
+    /* 取流之前先量一次空载带宽，作为下面那次的基线。 */
+    const uint32_t bw_idle = psram_read_mbps();
+
+    if (camera_csi_start() != ESP_OK) {
+        ESP_LOGE(TAG, "[自检] 取流启动失败，看上面 camera_csi_report() 的 start= 字段");
+        camera_csi_report();
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "[自检] 摄像头取流自检开始，共 %d 秒。请在这段时间里各做三次："
+                  "①手完全挡住镜头（亮度应掉到 40 以下）②拿开（回到 80 以上）"
+                  "③手电照镜头（冲到 200 以上）", CAM_SELFTEST_SEC);
+
+    const int64_t deadline = esp_timer_get_time() + (int64_t)CAM_SELFTEST_SEC * 1000000;
+    int64_t t0 = esp_timer_get_time();
+    uint32_t frames = 0, total = 0, timeouts = 0;
+    uint32_t sum_mean = 0, ticks = 0;
+    uint32_t bw_busy = 0;
+    cam_frame_stats_t st = {0, 0, 0, 0, 0};
+
+    while (esp_timer_get_time() < deadline) {
+        const uint16_t *fb = NULL;
+        /* 200 ms：传感器是 30 fps 固定，正常情况 33 ms 就该有一帧。
+         * 超时说明数据根本没来，与「来了但是全黑」是两件完全不同的事。 */
+        if (camera_csi_get_frame(&fb, 200) != ESP_OK) {
+            timeouts++;
+            ESP_LOGW(TAG, "[自检] 取帧超时（累计 %" PRIu32 " 次）", timeouts);
+            continue;
+        }
+        frames++;
+        total++;
+        cam_frame_stats_rgb565(fb, CAM_SENSOR_W, CAM_SENSOR_H, CAM_STATS_STEP, &st);
+        sum_mean += st.lum_mean;
+        ticks++;
+
+        const int64_t now = esp_timer_get_time();
+        if (now - t0 >= 1000000) {
+            /* fps 用整数十分位，不引浮点格式化。 */
+            const uint32_t fps_x10 = (uint32_t)((int64_t)frames * 10000000 / (now - t0));
+            ESP_LOGI(TAG, "[自检] 帧 #%" PRIu32 " %" PRIu32 ".%" PRIu32 " fps  "
+                          "亮度 均值%u 最暗%u 最亮%u  校验和 %08" PRIx32
+                          "  (%dx%d RGB565, 采样 %" PRIu32 " 点)",
+                     total, fps_x10 / 10, fps_x10 % 10,
+                     st.lum_mean, st.lum_min, st.lum_max, st.checksum,
+                     CAM_SENSOR_W, CAM_SENSOR_H, st.samples);
+            frames = 0;
+            t0 = now;
+            /* 带宽只在取流开始后量一次：它自己要读 1 MB PSRAM，天天量就成了
+             * 被观测的干扰源。 */
+            if (bw_busy == 0)
+                bw_busy = psram_read_mbps();
+        }
+    }
+
+    camera_csi_stop();
+    const uint32_t bw_after = psram_read_mbps();
+
+    ESP_LOGI(TAG, "[自检] 取流结束：共 %" PRIu32 " 帧、超时 %" PRIu32 " 次、"
+                  "平均亮度 %" PRIu32 "/255",
+             total, timeouts, ticks ? sum_mean / ticks : 0);
+    /*
+     * 带宽三个数的读法：
+     *   busy 比 idle 掉一两成 → 正常，CSI 那 55 MB/s 就该吃掉这么多。
+     *   busy 掉一半以上       → PSRAM 已经很紧，DPI 面板大概率也在挨饿，
+     *                           GUD 显示要重点看有没有撕裂/花屏。
+     *   after 没回到 idle     → 停流没停干净（或有别的东西在吃带宽），
+     *                           这比数值本身更值得查。
+     */
+    ESP_LOGI(TAG, "[自检] PSRAM 读带宽：空载 %" PRIu32 " MB/s → 取流中 %" PRIu32
+                  " MB/s → 停流后 %" PRIu32 " MB/s"
+                  "（面板 DPI 常驻读 89~107 MB/s，CSI 取流时再写 55 MB/s）",
+             bw_idle, bw_busy, bw_after);
+    ESP_LOGI(TAG, "[自检] 剩余内存：内部堆 %u 字节、PSRAM %u 字节",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    camera_csi_report();
+    ESP_LOGI(TAG, "[自检] 已停止取流；摄像头保持就绪，等 Task9 由 UVC 的 alt 0/1 接管启停");
+    vTaskDelete(NULL);
+}
+
+void camera_csi_selftest_start(void)
+{
+    /* 栈 4096：任务体只有几个局部变量，cam_frame_stats_t 也只有 20 字节；
+     * 大头是 ESP_LOGI 的格式化。与 kbd/touch 两个任务取同一个数。
+     * 优先级 4，比 USB/键盘/触摸(5) 低一档：本任务是自检，绝不该跟已经验证过的
+     * 能力抢 CPU。 */
+    if (xTaskCreate(cam_selftest_task, "cam_st", 4096, NULL, 4, NULL) != pdPASS)
+        ESP_LOGE(TAG, "[自检] 自检任务建不起来（内部堆不够）");
 }

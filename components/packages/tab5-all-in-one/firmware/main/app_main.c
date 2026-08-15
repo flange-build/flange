@@ -335,7 +335,7 @@ void app_main(void)
         ESP_LOGW(TAG, "触摸不可用(%s)，继续启动", esp_err_to_name(err));
 
     /*
-     * 摄像头传感器探测（P4 Task7：**只探测，不取流**）。
+     * 摄像头：传感器探测（Task7）+ CSI/ISP 取流管线（Task8）。
      *
      * 排在这里而不是更早：它的结论只能从日志看，而开 CDC 调试档时日志要等
      * tinyusb_cdcacm_init() + tinyusb_console_init() 之后才有出口。放在 kbd/touch
@@ -353,6 +353,24 @@ void app_main(void)
     /* 成功失败都打一遍快照：成功时它是「SCCB 通、PID 对」的正面证据，
      * 失败时它是唯一能把 NAK / PID 不符 / 组件内部失败区分开的东西。 */
     camera_sensor_report();
+
+    if (err == ESP_OK) {
+        /* CSI 控制器 + ISP + 帧缓冲。**只建对象，不开数据流** ——
+         * CSI 一取流每秒就往 PSRAM 写 55 MB，与 DPI 面板刷新抢带宽，
+         * 所以启停是单独一对函数（Task9 会把它们挂到 UVC 的 alt 0/1 上）。 */
+        err = camera_csi_init();
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "CSI/ISP 起不来(%s)，继续启动；UVC 仍走片上合成图案",
+                     esp_err_to_name(err));
+        camera_csi_report();
+
+        /* ⚠️ **临时**：Task9 接上 UVC 时删掉这三行。
+         * 本任务不接 UVC，没有 host 侧出口，「取到的是不是真画面」只能靠
+         * 「拿手挡住镜头、平均亮度跟着掉」这个物理判据。自检任务取流 120 秒后
+         * 自动停流，默认构建不会变成「摄像头永远开着」。 */
+        if (err == ESP_OK)
+            camera_csi_selftest_start();
+    }
 
     /*
      * UAC1 音频的**第二半**：功放上电 + 数据泵任务。硬件 bring-up 已经在
@@ -434,8 +452,11 @@ void app_main(void)
 
         /* 摄像头自检同理：它是**开机一次性的静态事实**，上面那一遍打在
          * tinyusb_console_init() 之后没多久，早被 CDC 的 TX 环形缓冲冲掉了。
-         * 默认档不复读 —— 那一档日志走 UART0，终端有回滚。 */
+         * 默认档不复读 —— 那一档日志走 UART0，终端有回滚。
+         * CSI 那条一起复读：它前六个字段同样是开机一次性的静态事实，
+         * 后面几个计数器则随取流逐拍变化。 */
         camera_sensor_report();
+        camera_csi_report();
 #endif
     }
 }
