@@ -49,6 +49,11 @@ esp_err_t board_power_init(void)
      * ⚠️ esp-bsp 的 bsp_audio.c 是**先**开功放**后**配 codec 的，此处刻意不照抄。 */
     ESP_RETURN_ON_ERROR(ioexp_out(IOEXP_PIN_SPEAKER_EN, 0), TAG, "SPEAKER_EN");
 
+    /* 摄像头：同样只把引脚配好并**保持关闭**。上电时机归 camera_csi.c，
+     * 理由见 board_power.h 上 board_camera_enable() 的不变式（省电 + 不让
+     * MIPI 差分对无谓地一直在动）。 */
+    ESP_RETURN_ON_ERROR(ioexp_out(IOEXP_PIN_CAMERA_EN, 0), TAG, "CAMERA_EN");
+
     /* 面板/触摸的 I2C 从机在电源拉起后需要时间才能应答，panel_detect() 依赖
      * 这一点。50ms 是保守值，只在开机走一次，不影响任何运行时性能。 */
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -73,4 +78,9 @@ void board_backlight(bool on)
 void board_speaker_enable(bool on)
 {
     esp_io_expander_set_level(s_ioexp, IOEXP_PIN_SPEAKER_EN, on);
+}
+
+void board_camera_enable(bool on)
+{
+    esp_io_expander_set_level(s_ioexp, IOEXP_PIN_CAMERA_EN, on);
 }

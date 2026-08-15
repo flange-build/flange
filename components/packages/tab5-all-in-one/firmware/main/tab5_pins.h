@@ -166,6 +166,18 @@
 #define SC202CS_I2C_ADDR7     0x36
 #define SC202CS_PID_EXPECT    0xeb52
 
+/* PID 的两个寄存器地址。组件把它们放在 sensors/sc202cs/private_include/sc202cs_regs.h
+ * （SC202CS_REG_SENSOR_ID_H/L），对应用不可见 —— 所以在这里复刻一份。
+ * 用途：在调 sc202cs_detect() **之前**自己读一次 PID。detect() 失败时一律返回
+ * NULL，无法区分「芯片不应答」「读回的 PID 不对」「组件内部分配失败」这三种情况，
+ * 而这三者的排查方向完全不同（供电/走线 vs 装了别的传感器 vs 内存）。 */
+#define SC202CS_REG_PID_H     0x3107
+#define SC202CS_REG_PID_L     0x3108
+
+/* SCCB 时钟。总线上还挂着触摸(20ms 轮询)、两颗音频 codec 与两颗 IO 扩展，
+ * 取与它们共存的保守值；探测只发生在开机一次，快不快无所谓。 */
+#define SC202CS_SCCB_HZ       100000
+
 /* 传感器唯一可用的 MIPI 模式：其余模式要么超出 P4 ISP 的 1920×1080 上限
  * （1600×1200 的 1200 行），要么裁不出 4:3（1600×900）。 */
 #define CAM_SENSOR_W          1280

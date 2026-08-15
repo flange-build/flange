@@ -22,3 +22,14 @@ void board_backlight(bool on);
  * 未定。关流/关机时必须**先关它再关 codec**：esp_codec_dev_close() 不会碰这个
  * 引脚，顺序反了就是关机 pop。 */
 void board_speaker_enable(bool on);
+
+/* 开关摄像头电源（IO 扩展 0x43 的 PIN6）。与背光、功放同构：board_power_init()
+ * 只把引脚配好并**保持关闭**，真正打开归摄像头域（camera_csi.c）。
+ *
+ * 不变式：**摄像头上电 ⟺ 马上就要探测/取流**。它常开着会一直耗电（这是一块
+ * 有电池的板子），而且 SC202CS 上电后 MIPI 的差分对就一直在动。
+ *
+ * ⚠️ 与 LCD_EN(PIN4) / TOUCH_EN(PIN5) / SPEAKER_EN(PIN1) 同在 **0x43 那一颗**
+ * PI4IOE5V6408 上，必须复用 board_power.c 已有的 s_ioexp 句柄 ——
+ * 新建一个 expander 会重置整颗芯片的方向/输出寄存器，把面板与触摸的电一起断掉。 */
+void board_camera_enable(bool on);

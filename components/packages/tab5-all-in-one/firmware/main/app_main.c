@@ -13,6 +13,7 @@
 #include "codec_audio.h"
 #endif
 #include "uvc_stream.h"
+#include "camera_csi.h"
 #include "driver/gpio.h"                /* gpio_set_drive_capability */
 #include "esp_private/periph_ctrl.h"    /* PERIPH_RCC_ATOMIC */
 #include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
@@ -334,6 +335,26 @@ void app_main(void)
         ESP_LOGW(TAG, "触摸不可用(%s)，继续启动", esp_err_to_name(err));
 
     /*
+     * 摄像头传感器探测（P4 Task7：**只探测，不取流**）。
+     *
+     * 排在这里而不是更早：它的结论只能从日志看，而开 CDC 调试档时日志要等
+     * tinyusb_cdcacm_init() + tinyusb_console_init() 之后才有出口。放在 kbd/touch
+     * 旁边，「三个可选外设各自探测」在代码上也读成一件事。
+     *
+     * 与键盘/触摸/音频同一处置原则：失败只降级、不拦启动 —— 摄像头探不到时
+     * UVC 继续用片上合成图案帧源（uvc_stream.c 本阶段一行没改），显示/键盘/
+     * 触摸/音频四项能力一概不受影响。camera_sensor_probe() 失败时会自己把
+     * 摄像头电源关掉，这里不用再管。
+     */
+    err = camera_sensor_probe();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "摄像头传感器不可用(%s)，继续启动；UVC 仍走片上合成图案",
+                 esp_err_to_name(err));
+    /* 成功失败都打一遍快照：成功时它是「SCCB 通、PID 对」的正面证据，
+     * 失败时它是唯一能把 NAK / PID 不符 / 组件内部失败区分开的东西。 */
+    camera_sensor_report();
+
+    /*
      * UAC1 音频的**第二半**：功放上电 + 数据泵任务。硬件 bring-up 已经在
      * tinyusb_driver_install() 之前跑过了（见上面那段 codec_audio_init() 的注释）。
      *
@@ -410,6 +431,11 @@ void app_main(void)
          */
         if (fifo_logged)
             log_usb_fifo_usage();
+
+        /* 摄像头自检同理：它是**开机一次性的静态事实**，上面那一遍打在
+         * tinyusb_console_init() 之后没多久，早被 CDC 的 TX 环形缓冲冲掉了。
+         * 默认档不复读 —— 那一档日志走 UART0，终端有回滚。 */
+        camera_sensor_report();
 #endif
     }
 }

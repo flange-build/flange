@@ -69,3 +69,18 @@ CONFIG_CODEC_TAS5805M_SUPPORT=n
 # 手边有 USB-TTL 就优先接 UART0(G37/G38，在 M5-Bus 排针上)：零端点代价、
 # 能抓到上电最早的日志、而且默认档（音频在）也能用 —— 默认档的日志本来就走它
 # （上面 CONFIG_ESP_CONSOLE_UART_DEFAULT=y）。
+
+# ── 摄像头传感器（esp_cam_sensor）───────────────────────────────
+# 该组件的二十多颗传感器默认都是 n，只需显式打开 Tab5 实装的 SC202CS。
+# 模式表只留 1280×720 RAW8：其余三个模式要么超出 P4 ISP 的 1920×1080 输入上限
+# （1600×1200 的 1200 行），要么裁不出 4:3（1600×900）。三个 =n 与组件默认值
+# 一致，写出来是为了让「只编了哪一张寄存器表」在配置里一目了然。
+CONFIG_CAMERA_SC202CS=y
+CONFIG_CAMERA_SC202CS_MIPI_RAW8_1280X720_30FPS=y
+CONFIG_CAMERA_SC202CS_MIPI_RAW8_1600X1200_30FPS=n
+CONFIG_CAMERA_SC202CS_MIPI_RAW10_1600X1200_30FPS=n
+CONFIG_CAMERA_SC202CS_MIPI_RAW10_1600X900_30FPS=n
+CONFIG_CAMERA_SC202CS_MIPI_DEFAULT_FMT_RAW8_1280X720_30FPS=y
+# 我们在 camera_csi.c 里直接调 sc202cs_detect()，不用 esp_video 那套
+# ESP_CAM_SENSOR_DETECT_FN 链接段自动探测机制（关掉它也就不需要 -u 强制保留符号）。
+CONFIG_CAMERA_SC202CS_AUTO_DETECT_MIPI_INTERFACE_SENSOR=n

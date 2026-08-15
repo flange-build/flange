@@ -17,3 +17,16 @@ dependencies:
   # LVGL / esp_video / usb_host。它的 audio_codec_i2c_cfg_t.bus_handle 正好吃
   # 我们已有的 board_i2c_bus()，因此不会在 G31/G32 上再建一个 I2C master。
   espressif/esp_codec_dev: "1.6.2"
+  # SC202CS 的 MIPI 模式寄存器序列（四张表，含大量无文档项）。这是**芯片驱动**组件，
+  # 与已在用的 esp_lcd_ili9881c / esp_lcd_touch_gt911 / esp_io_expander_pi4ioe5v6408 /
+  # esp_codec_dev 同一性质，**不是** esp-bsp 板级组件。
+  #
+  # ⚠️ **刻意不引 espressif/esp_video**：实测它 2.3.0 的 manifest 强制依赖
+  #      espressif/usb_host_uvc  ← USB **Host** 栈
+  #      espressif/esp_h264      ← 软件 H.264 编码器
+  #      espressif/esp_ipa
+  #    在一块「TinyUSB device 独占唯一一条 FSLS PHY」的板子上引入 USB Host 栈，
+  #    既违反「不引入 usb-host 依赖」，也与本产品形态毫无关系。
+  #    而 esp_cam_sensor 的依赖只有 cmake_utilities(构建期) + esp_sccb_intf(零外部依赖)。
+  #    我们只需要「一个固定模式、拿到一帧 RGB565」，esp_video 那层 V4L2 语义用不上。
+  espressif/esp_cam_sensor: "~2.4.0"
