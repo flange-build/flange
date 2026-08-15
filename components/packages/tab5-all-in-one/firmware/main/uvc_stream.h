@@ -8,12 +8,11 @@
  *   P4 Task9：真实摄像头（camera_csi.c → cam_jpeg.c）
  * 每一步只换帧源，USB 侧一行不动 —— 出问题时变量只有一个。
  *
- * ⚠️ **本阶段（Task6）证明的是「片上编码 → 分包 → host 解出连续变化的画面」，
- *    仍然不是持续吞吐的上限。** 合成图案是平色块，硬件编码出来只有几 KB
- *    （宿主机同参数实测约 6.4 KB ≈ 15 个包 ≈ 15 ms），100 ms 的拍子里八成还在空转。
- *    真要把这根管子压满，得等 Task9 的真实摄像头画面 —— 别拿本阶段的
- *    「零拒收」当带宽结论。判断带宽余量看 uvc_stream_report() 第二行的
- *    「峰值占 N/100 ms」。
+ * ⚠️ **Task9 起才第一次真正压这根管子。** Task5/Task6 的帧源都压不满它
+ *    （静态图与平色块的合成图案编出来都只有几 KB ≈ 15 个包 ≈ 15 ms，100 ms 的
+ *    拍子里八成在空转），所以那两步的「零拒收」**不是**带宽结论。真实照片类内容
+ *    640×360 4:2:2 在 q=70 上典型 25–35 KB，对着每帧 44.6 KB 的预算才有话说。
+ *    判断余量看 uvc_stream_report() 第二行的「峰值占 N/100 ms」与「拒收」。
  */
 #include "esp_err.h"
 #include <stdbool.h>
@@ -26,7 +25,7 @@ esp_err_t uvc_stream_start(void);
  * 实现就是一句 tud_video_n_streaming(0, 0)，单独暴露是为了让
  * uvc_stream_report() 与将来的自检有一个不必知道 ctl/stm 索引的入口。
  * ⓘ CSI 的按需启停（spec §2.1「带宽零和」在 PSRAM 侧的落点）在帧泵任务**内部**
- *   完成，直接用 tud_video_n_streaming()，不绕这个函数 —— 见 P4 Task9 Step4。 */
+ *   完成，直接用 tud_video_n_streaming()，不绕这个函数。 */
 bool uvc_stream_is_streaming(void);
 
 /* 自检快照打一遍（提交/完成/拒收帧数，以及 host 在 COMMIT 里协商下来的参数）。

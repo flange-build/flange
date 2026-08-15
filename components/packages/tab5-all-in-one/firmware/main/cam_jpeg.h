@@ -35,6 +35,34 @@ esp_err_t cam_jpeg_encode(const uint16_t *src, int w, int h,
                           const uint8_t **out, size_t *len);
 
 /*
+ * PPA SRM 缩放：CAM_SENSOR_W×CAM_SENSOR_H 的 RGB565 → UVC_W×UVC_H 的 RGB565。
+ * 摄像头帧与 JPEG 编码器之间唯一的一步（Task9）。
+ *
+ * src：紧凑排列的 1280×720 RGB565，即 camera_csi_get_frame() 交回来的那一块。
+ *      **输入侧没有对齐要求**（驱动的 C2M 回写带 UNALIGNED 标志）。
+ * dst：紧凑排列的 640×360 RGB565。
+ *      ⚠️ **dst 的首地址必须按 cache line 对齐**（ppa_srm.c:186-189 硬性检查
+ *      out.buffer 与 out.buffer_size 两者都对齐，不对齐直接 ESP_ERR_INVALID_ARG，
+ *      表现为「一帧都出不来」而不是画面异常）。460800 字节这个长度天然对齐
+ *      （= 128 × 3600，64/128 两种 line size 都整除），首地址靠调用方用
+ *      heap_caps_aligned_alloc() 保证 —— 见 uvc_stream.c 的分配点。
+ *
+ * 同步阻塞（PPA_TRANS_MODE_BLOCKING），必须在任务上下文调用。
+ * 两侧的 cache 同步由 PPA 驱动自己做（ppa_srm.c:250-260），调用方不用管。
+ */
+esp_err_t cam_jpeg_downscale(const uint16_t *src, uint16_t *dst);
+
+/*
+ * 缩放侧的统计快照。参数都可传 NULL。
+ *
+ * last_us 不只是好奇：PPA 引擎是**与 GUD 显示共享**的硬件（两个 client 在引擎的
+ * 那个二值信号量上排队，见 cam_jpeg.c 里 s_ppa 的注释），所以这个数就是
+ * 「摄像头每 100 ms 会把 display_blit() 顶住多久」的上界，是 Task10 归因
+ * 「显示掉帧到底怪谁」时唯一的直接证据。
+ */
+void cam_jpeg_scale_stats(uint32_t *scaled, uint32_t *failed, uint32_t *last_us);
+
+/*
  * 告诉本模块「刚才那一块缓冲已经交给 UVC 了」，下一次编码换另一块。
  * **必须只在 tud_video_n_frame_xfer() 返回 true 之后调用。**
  *

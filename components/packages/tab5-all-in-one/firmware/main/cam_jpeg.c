@@ -1,6 +1,8 @@
 #include "cam_jpeg.h"
 #include "usb_descriptors.h"   /* UVC_W / UVC_H / UVC_MAX_FRAME_BYTES */
+#include "tab5_pins.h"         /* CAM_SENSOR_W / CAM_SENSOR_H */
 #include "driver/jpeg_encode.h"
+#include "driver/ppa.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -49,7 +51,52 @@ static const char *TAG = "cam_jpeg";
 
 #define CAM_JPEG_BUFS 2
 
+/*
+ * 缩放比 = 输出 ÷ 输入，**必须是 1/16 的整数倍**：PPA SRM 的缩放系数是
+ * 「整数位 + 4 位小数」（ppa_ll.h 的 SCALING_FRAG_MAX = 16），表达不出来的比例会被
+ * 硬件截断成最近的 1/16，输出尺寸随之对不上 out.pic_w/h —— 那是画面横向错位、
+ * 从像素上极难反推的一类错。1280→640 与 720→360 都恰好是 8/16，精确可表达。
+ * （spec §7 原想要的 640×480 需要「裁 960×720 再乘 2/3」，2/3 落在 11/16 上
+ *   给出 660×495，这就是本工程输出 640×360 而不是 640×480 的全部理由；
+ *   P4 的 ISP 又没有缩放器，esp_driver_isp 只有 isp_crop.h。）
+ * 编译期把这两条钉住，别等上板看画面。
+ */
+_Static_assert(UVC_W * 16 % CAM_SENSOR_W == 0 && UVC_H * 16 % CAM_SENSOR_H == 0,
+               "缩放比不是 1/16 的整数倍，PPA SRM 表达不出来");
+_Static_assert(UVC_W * CAM_SENSOR_H == UVC_H * CAM_SENSOR_W,
+               "输入输出宽高比不同：等比缩放会变形，要么裁剪要么改输出尺寸");
+#define CAM_SCALE_X  ((float)UVC_W / (float)CAM_SENSOR_W)
+#define CAM_SCALE_Y  ((float)UVC_H / (float)CAM_SENSOR_H)
+
 static jpeg_encoder_handle_t s_enc;
+
+/*
+ * 缩放用的 PPA client。**独立注册，不共用 display_dsi.c 那一个。**
+ *
+ * PPA 的对象层次是「client（各自一条事务队列） → engine（全局唯一、引用计数共享）」
+ * （ppa_core.c:279-289 的 ppa_engine_acquire()，两个 SRM client 拿到的是同一个
+ *  engine；真正的串行化发生在 engine 的二值信号量上，ppa_core.c:422/502）。
+ * 于是两种做法在**硬件争用**上完全等价，差别只在事务池：
+ *
+ *   共用一个 client ⇒ 提交者从 2 个（TinyUSB 收帧、待机点动画）变成 3 个，
+ *     display_dsi.c 里那个 max_pending_trans_num = 2 就必须跟着改成 3。改漏了
+ *     的后果是**不对称的**：池子空时 ppa_do_scale_rotate_mirror() 不阻塞、直接
+ *     返回 ESP_FAIL（ppa_srm.c:307-310），落在 GUD 侧就是 host 的一块脏矩形永远不
+ *     上屏 —— 脏矩形不会自动重发，那一块从此是花的。
+ *   独立 client ⇒ 显示那边的提交者集合**一个都没变**，2 这个数继续成立、不用动，
+ *     且摄像头再怎么忙也吃不到显示的事务元素。代价只有几百字节内部 RAM。
+ *
+ * 取独立 client：让「不动已验证的显示链路」成为结构上的事实，而不是靠改对一个数。
+ * ⓘ 引擎仍是共享硬件，缩放期间 display_blit() 会在引擎信号量上等 ——
+ *   等多久由 cam_jpeg_scale_stats() 的 last_us 直接量出来。
+ *
+ * max_pending_trans_num = 1：本 client 只有 UVC 帧泵任务一个提交者，且用阻塞模式，
+ * 同一时刻最多一笔在途。
+ */
+static ppa_client_handle_t s_ppa;
+static uint32_t s_scaled;
+static uint32_t s_scale_failed;
+static uint32_t s_scale_us;
 static uint8_t *s_out[CAM_JPEG_BUFS];
 static size_t   s_out_cap[CAM_JPEG_BUFS];
 /* 上一次**成功提交**给 UVC 的那一块（可能仍在飞）。编码永远写另一块，
@@ -90,9 +137,83 @@ esp_err_t cam_jpeg_init(void)
         ESP_RETURN_ON_FALSE(s_out[i], ESP_ERR_NO_MEM, TAG, "JPEG 输出缓冲 %d", i);
     }
 
-    ESP_LOGI(TAG, "JPEG 编码器就绪：%dx%d 4:2:2 q=%d，双缓冲各 %u 字节(PSRAM)",
-             UVC_W, UVC_H, CAM_JPEG_QUALITY, (unsigned)s_out_cap[0]);
+    /* 缩放器与编码器一起建。失败就整体失败：Task9 之后帧源只有摄像头这一条，
+     * 少了缩放这一步 1280×720 根本喂不进声明为 640×360 的编码/描述符链路，
+     * 「半个能用的管线」没有意义。 */
+    const ppa_client_config_t ppa_cfg = {
+        .oper_type = PPA_OPERATION_SRM,
+        .max_pending_trans_num = 1,
+    };
+    ESP_RETURN_ON_ERROR(ppa_register_client(&ppa_cfg, &s_ppa), TAG, "PPA client");
+
+    ESP_LOGI(TAG, "JPEG 编码器就绪：%dx%d 4:2:2 q=%d，双缓冲各 %u 字节(PSRAM)；"
+                  "PPA 缩放 %dx%d → %dx%d（×%d/16，独立 client）",
+             UVC_W, UVC_H, CAM_JPEG_QUALITY, (unsigned)s_out_cap[0],
+             CAM_SENSOR_W, CAM_SENSOR_H, UVC_W, UVC_H, UVC_W * 16 / CAM_SENSOR_W);
     return ESP_OK;
+}
+
+esp_err_t cam_jpeg_downscale(const uint16_t *src, uint16_t *dst)
+{
+    ESP_RETURN_ON_FALSE(s_ppa && src && dst, ESP_ERR_INVALID_ARG, TAG, "参数");
+
+    const ppa_srm_oper_config_t op = {
+        .in = {
+            .buffer = src,
+            .pic_w = CAM_SENSOR_W,
+            .pic_h = CAM_SENSOR_H,
+            .block_w = CAM_SENSOR_W,
+            .block_h = CAM_SENSOR_H,
+            .block_offset_x = 0,
+            .block_offset_y = 0,
+            .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+        },
+        .out = {
+            .buffer = dst,
+            .buffer_size = (size_t)UVC_W * UVC_H * 2,
+            .pic_w = UVC_W,
+            .pic_h = UVC_H,
+            .block_offset_x = 0,
+            .block_offset_y = 0,
+            .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+        },
+        /*
+         * **不旋转、不镜像。** 与显示链路（display_blit() 转 90°）刻意不同：
+         * 那边转是因为面板竖屏而 host 画的是横向内容；摄像头这边的输出直接交给
+         * host，由 host 决定怎么显示，设备侧擅自转会让 host 拿到一张躺着的图。
+         * esp-bsp 的 BSP_CAMERA_ROTATION = 270 是给「在本机竖屏上预览」用的，
+         * 与本产品形态无关，刻意不照抄。
+         * 若实机发现画面上下颠倒/左右镜像（模组装配朝向），改这里，
+         * **并把「实测决定」写进注释**，别让下一个人以为这是推导出来的。
+         */
+        .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+        .scale_x = CAM_SCALE_X,
+        .scale_y = CAM_SCALE_Y,
+        .mirror_x = false,
+        .mirror_y = false,
+        /* byte_swap 只交换 16 位里的高低字节，**不是** R/B 互换 —— RGB565 的
+         * R/B 是位域不是字节，换字节只会把颜色搅成一团。真出现红蓝对调要改的是
+         * camera_csi.c 里 ISP 的 bayer_order（BGGR ↔ RGGB 恰好就是 R/B 互换）。 */
+        .byte_swap = false,
+        .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+
+    const int64_t t0 = esp_timer_get_time();
+    const esp_err_t err = ppa_do_scale_rotate_mirror(s_ppa, &op);
+    s_scale_us = (uint32_t)(esp_timer_get_time() - t0);
+    if (err != ESP_OK) {
+        s_scale_failed++;
+        return err;
+    }
+    s_scaled++;
+    return ESP_OK;
+}
+
+void cam_jpeg_scale_stats(uint32_t *scaled, uint32_t *failed, uint32_t *last_us)
+{
+    if (scaled)  *scaled = s_scaled;
+    if (failed)  *failed = s_scale_failed;
+    if (last_us) *last_us = s_scale_us;
 }
 
 esp_err_t cam_jpeg_encode(const uint16_t *src, int w, int h,

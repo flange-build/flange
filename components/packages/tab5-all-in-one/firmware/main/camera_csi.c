@@ -3,7 +3,6 @@
  */
 #include "camera_csi.h"
 #include "board_power.h"
-#include "cam_frame_stats.h"
 #include "tab5_pins.h"
 #include "esp_log.h"
 #include "esp_check.h"
@@ -648,33 +647,31 @@ void camera_csi_report(void)
              (unsigned)CAM_FB_BYTES);
 }
 
-/* ══ 以下整块是**临时自检**，Task9 接上 UVC 时删掉 ═══════════════════ */
-
-/* 取流并观察多少秒。**够长到能把三个物理动作各做三次**（挡住镜头 / 拿开 /
- * 手电照），又不至于让「摄像头永远开着」变成默认构建的常态。 */
-#define CAM_SELFTEST_SEC   120
-/* 亮度采样步长：每 8 行取一行、行内每 8 个取一个 ⇒ 只碰 1/64 的像素。
- * 全采样 92 万像素每帧要好几毫秒，取帧循环自己就会变成被观测的干扰源。 */
-#define CAM_STATS_STEP     8
+/* ══ PSRAM 读带宽实测 ══════════════════════════════════════════════ */
 
 /*
- * PSRAM 读带宽实测。
- *
- * 存在的理由：本任务最大的风险是「CSI 每秒往 PSRAM 写 55 MB」把 DPI 面板刷新
- * （每秒从 PSRAM 读 89～107 MB，算式见 camera_csi.h）挤出撕裂/花屏，
- * 而**肉眼看屏幕不是判据** ——
+ * 存在的理由：这条链路最大的风险是「CSI 每秒往 PSRAM 写 55 MB」＋「PPA 每秒读
+ * 18 MB / 写 4.6 MB」＋「JPEG 编码器的读写」，把 DPI 面板刷新（每秒从 PSRAM 读
+ * 89～107 MB，算式见 camera_csi.h）挤出撕裂/花屏，而**肉眼看屏幕不是判据** ——
  * 轻微的带宽紧张肉眼看不出来，等看得出来时已经说不清是不是别的原因。
- * 这里量的是「同一时刻 CPU 还能从 PSRAM 读多快」：取流前后各测一次，
- * 差值就是 CSI 实际吃掉的那一份带宽，是个能写进报告的数字。
+ * 这里量的是「同一时刻 CPU 还能从 PSRAM 读多快」：不取流 / 取流+缩放+编码 /
+ * 停流后各测一次，差值就是这条链路实际吃掉的那一份带宽，是个能写进报告的数字。
+ *
+ * ⓘ Task8 时它长在那个临时自检任务里（那个任务连同它 120 秒强制取流的行为
+ *   已随 Task9 删掉）；**量本身保留**，改由 uvc_stream.c 在真实链路的三个时点
+ *   各调一次 —— 观测设施跟着被观测对象走。
  *
  * 做法：从帧缓冲里连续读 1 MB 到内部 SRAM。读的区间远大于 cache，每条 cache line
  * 都真的要去 PSRAM 取；目的地常驻 cache，测到的就是**读**带宽。
  * 读的内容是什么无所谓（正在被 DMA 写也没关系），所以直接借 s_fb[0]。
+ *
+ * ⚠️ 它自己要读 1 MB PSRAM（约 10 ms），**是个有代价的观测**，只能在明确的时点
+ *    调，不能每帧调 —— 否则它就成了被观测的干扰源。
  */
 #define CAM_BW_CHUNK   1024
 #define CAM_BW_TOTAL   (1024 * 1024)
 
-static uint32_t psram_read_mbps(void)
+uint32_t camera_csi_psram_read_mbps(void)
 {
     if (!s_fb[0])
         return 0;
@@ -691,130 +688,4 @@ static uint32_t psram_read_mbps(void)
     heap_caps_free(sink);
     /* 字节/微秒 == MB/s（都按 1e6 算，量级判断够用，不必纠结 MiB） */
     return dt > 0 ? (uint32_t)(CAM_BW_TOTAL / dt) : 0;
-}
-
-static void cam_selftest_task(void *arg)
-{
-    (void)arg;
-
-    /* 取流之前先量一次空载带宽，作为下面那次的基线。 */
-    const uint32_t bw_idle = psram_read_mbps();
-
-    if (camera_csi_start() != ESP_OK) {
-        ESP_LOGE(TAG, "[自检] 取流启动失败，看上面 camera_csi_report() 的 start= 字段");
-        camera_csi_report();
-        vTaskDelete(NULL);
-        return;
-    }
-
-    ESP_LOGI(TAG, "[自检] 摄像头取流自检开始，共 %d 秒。请在这段时间里各做三次："
-                  "①手完全挡住镜头（亮度应掉到 40 以下）②拿开（回到 80 以上）"
-                  "③手电照镜头（冲到 200 以上）", CAM_SELFTEST_SEC);
-
-    const int64_t deadline = esp_timer_get_time() + (int64_t)CAM_SELFTEST_SEC * 1000000;
-    int64_t t0 = esp_timer_get_time();
-    uint32_t frames = 0, total = 0, timeouts = 0;
-    uint32_t sum_mean = 0, ticks = 0;
-    uint32_t bw_busy = 0;
-    cam_frame_stats_t st = {0, 0, 0, 0, 0};
-    /*
-     * 只统计**最下面 1/8** 的那份，与全帧那份并排打出来。
-     *
-     * 它防的是这次修复最可能的暗礁：csi_cfg 的 input 颜色格式决定 DMA 搬多少字节
-     * （csi_transfer_size = h*v*in_bpp/64），要是这个数算小了，DMA 只填上半张，
-     * 下半张永远停在 calloc 出来的零 —— 而**全帧的均值/最暗/最亮/校验和照样会
-     * 随镜头变化**，看起来完全正常。下 1/8 的均值一直钉在 0 就是那种截断的指纹。
-     * 缓冲是行连续的，把指针推到 7/8 处、高度传 1/8 即可，复用同一个已测函数。
-     */
-    cam_frame_stats_t st_bottom = {0, 0, 0, 0, 0};
-    const int bottom_rows = CAM_SENSOR_H / 8;
-    uint32_t full_max_ever = 0, bottom_max_ever = 0;
-
-    while (esp_timer_get_time() < deadline) {
-        const uint16_t *fb = NULL;
-        /* 200 ms：传感器是 30 fps 固定，正常情况 33 ms 就该有一帧。
-         * 超时说明数据根本没来，与「来了但是全黑」是两件完全不同的事。 */
-        if (camera_csi_get_frame(&fb, 200) != ESP_OK) {
-            timeouts++;
-            ESP_LOGW(TAG, "[自检] 取帧超时（累计 %" PRIu32 " 次）", timeouts);
-            continue;
-        }
-        frames++;
-        total++;
-        cam_frame_stats_rgb565(fb, CAM_SENSOR_W, CAM_SENSOR_H, CAM_STATS_STEP, &st);
-        cam_frame_stats_rgb565(fb + (size_t)(CAM_SENSOR_H - bottom_rows) * CAM_SENSOR_W,
-                               CAM_SENSOR_W, bottom_rows, CAM_STATS_STEP, &st_bottom);
-        sum_mean += st.lum_mean;
-        if (st.lum_max > full_max_ever)
-            full_max_ever = st.lum_max;
-        if (st_bottom.lum_max > bottom_max_ever)
-            bottom_max_ever = st_bottom.lum_max;
-        ticks++;
-
-        const int64_t now = esp_timer_get_time();
-        if (now - t0 >= 1000000) {
-            /* fps 用整数十分位，不引浮点格式化。 */
-            const uint32_t fps_x10 = (uint32_t)((int64_t)frames * 10000000 / (now - t0));
-            ESP_LOGI(TAG, "[自检] 帧 #%" PRIu32 " %" PRIu32 ".%" PRIu32 " fps  "
-                          "亮度 均值%u 最暗%u 最亮%u (下1/8 均值%u 最亮%u)  "
-                          "校验和 %08" PRIx32
-                          "  (%dx%d RGB565, 采样 %" PRIu32 " 点)",
-                     total, fps_x10 / 10, fps_x10 % 10,
-                     st.lum_mean, st.lum_min, st.lum_max,
-                     st_bottom.lum_mean, st_bottom.lum_max, st.checksum,
-                     CAM_SENSOR_W, CAM_SENSOR_H, st.samples);
-            frames = 0;
-            t0 = now;
-            /* 带宽只在取流开始后量一次：它自己要读 1 MB PSRAM，天天量就成了
-             * 被观测的干扰源。 */
-            if (bw_busy == 0)
-                bw_busy = psram_read_mbps();
-        }
-    }
-
-    camera_csi_stop();
-    const uint32_t bw_after = psram_read_mbps();
-
-    ESP_LOGI(TAG, "[自检] 取流结束：共 %" PRIu32 " 帧、超时 %" PRIu32 " 次、"
-                  "平均亮度 %" PRIu32 "/255",
-             total, timeouts, ticks ? sum_mean / ticks : 0);
-    /*
-     * DMA 截断的自动判读，别让它只停留在「用户得自己注意那个括号里的数」。
-     * 整整一轮里全帧见过光、而最下面 1/8 一次都没亮过 ⇒ 那 1/8 从来没被写过。
-     * 反过来 bottom 见过光就等于「最后一行也写到了」，帧长这件事就此坐实。
-     */
-    if (total > 0 && full_max_ever > 16 && bottom_max_ever == 0)
-        ESP_LOGE(TAG, "[自检] ⚠️ 下 1/8 全程为零而全帧有画面 ⇒ **DMA 只填了上半张**，"
-                      "csi_cfg 的 input_data_color_type 定的搬运字节数偏小");
-    else if (total > 0)
-        ESP_LOGI(TAG, "[自检] 帧完整性 OK：下 1/8 也被写到（历史最亮 %" PRIu32 "）",
-                 bottom_max_ever);
-    /*
-     * 带宽三个数的读法：
-     *   busy 比 idle 掉一两成 → 正常，CSI 那 55 MB/s 就该吃掉这么多。
-     *   busy 掉一半以上       → PSRAM 已经很紧，DPI 面板大概率也在挨饿，
-     *                           GUD 显示要重点看有没有撕裂/花屏。
-     *   after 没回到 idle     → 停流没停干净（或有别的东西在吃带宽），
-     *                           这比数值本身更值得查。
-     */
-    ESP_LOGI(TAG, "[自检] PSRAM 读带宽：空载 %" PRIu32 " MB/s → 取流中 %" PRIu32
-                  " MB/s → 停流后 %" PRIu32 " MB/s"
-                  "（面板 DPI 常驻读 89~107 MB/s，CSI 取流时再写 55 MB/s）",
-             bw_idle, bw_busy, bw_after);
-    ESP_LOGI(TAG, "[自检] 剩余内存：内部堆 %u 字节、PSRAM %u 字节",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    camera_csi_report();
-    ESP_LOGI(TAG, "[自检] 已停止取流；摄像头保持就绪，等 Task9 由 UVC 的 alt 0/1 接管启停");
-    vTaskDelete(NULL);
-}
-
-void camera_csi_selftest_start(void)
-{
-    /* 栈 4096：任务体只有几个局部变量，cam_frame_stats_t 也只有 20 字节；
-     * 大头是 ESP_LOGI 的格式化。与 kbd/touch 两个任务取同一个数。
-     * 优先级 4，比 USB/键盘/触摸(5) 低一档：本任务是自检，绝不该跟已经验证过的
-     * 能力抢 CPU。 */
-    if (xTaskCreate(cam_selftest_task, "cam_st", 4096, NULL, 4, NULL) != pdPASS)
-        ESP_LOGE(TAG, "[自检] 自检任务建不起来（内部堆不够）");
 }
