@@ -41,7 +41,28 @@ SC202CS ──MIPI-CSI 1 lane 576 Mbps──▶ ISP(去马赛克+AWB/AE) ──�
 
 ---
 
+## 📌 落地状态（回填）
+
+**Task 1–9 与 Task 11 已完成；Task 10（五项复合回归）未执行。**
+
+✅ **已实机验证**：UVC 出真实摄像头画面（MJPEG 640×360 @ 10 fps，ISO IN `0x84` × 448 B，
+零拒收、每 10 秒精确 +100 帧）、CSI 取流 30 fps 稳定（抢缓冲/丢弃/取帧超时全 0、
+帧长 1843200 正确）、SC202CS 探测（`0x36` / `0xeb52`）、硬件 JPEG 实时编码、
+PPA ×0.5、**AE 闭环**、五项既有能力各自无回归。
+
+⏳ **未验证**：**AWB 闭环（只过 281 个宿主机用例，没上过板）**、单色场景防护的实际效果、
+Task 10 的复合回归、摄像头开着时 GUD 帧率与 PSRAM 带宽争用的实测值、
+P3 遗留的全双工长时间稳定性与无反馈端点的时钟漂移。
+
+⛔ **实施推翻了本计划的九处技术判断**，见下面的「实施订正汇总」。
+
+---
+
 ## ⛔ 放弃判定点（spec §7 授权，必须在 Task 4 结束时明确判一次）
+
+> ✅ **结果：判定点通过，UVC 没有被砍。** Task 4/5 的三条 host 侧判据全部成立
+> （`/dev/videoN` 出现、`v4l2-ctl` 报 `MJPG 640x360 10.000 fps`、`ffplay` 稳定显示），
+> 且 GUD / HID / 音频均无回归。下面这一节保留作决策记录。
 
 > spec §7 原文：「**若阶段 5 判定不可行，直接砍掉，不阻塞前四项已交付的能力**」。
 
@@ -210,6 +231,39 @@ TX FIFO_n = ceil(该 IN 端点 wMaxPacketSize / 4)                   ; 未开双
 
 ---
 
+## ⛔ 实施订正汇总（**落地后回填 —— 下面这九条推翻了本计划的对应段落**）
+
+> 本计划写在拉下组件之前，有九处与实际不符。**改动本计划的任何相关段落前先读这一节。**
+> 权威的现状描述在 `components/packages/tab5-all-in-one/firmware/README.md` 的
+> 「UVC 摄像头」与「ESP32-P4 rev <3.0 已知不可用的硬件功能」两章。
+
+| # | 本计划原文 | 实际 | 落点 |
+|---|---|---|---|
+| ① | CSI 填 `input=RAW8 / output=RGB565`（照 IDF 例程 `mipi_isp_dsi`） | ❌ **实机死在 `esp_cam_new_csi_ctlr() = ESP_ERR_NOT_SUPPORTED`**。该函数内部就调 `s_csi_ctlr_format_conversion()`（`esp_cam_ctlr_csi.c:226`），`input != output` 即在 `:604-608` 查芯片版本，rev <3.0 拒绝。**`mipi_csi_ll.h` 的 `#else` 分支里桥的五个颜色 LL 函数全是空实现 —— 硬件上就没有这个块。**⇒ 两个都填 **RGB565**（桥直通），去马赛克交给 ISP | Task 8 Step 3 |
+| ② | （未提）这两个字段只是"颜色标签" | ❌ **双双决定长度**：`input → in_bpp → csi_transfer_size = h*v*in_bpp/64`（DMA 实际搬多少）、`output → out_bpp → fb_size_in_bytes`（帧缓冲大小与 `received_size`）。填 `RAW8/RGB565` ⇒ **只搬 921,600 却声称收到 1,843,200（半帧）**，上层完全看不出来。为此补了「帧长不符计数器」与「下 1/8 亮度」两道自证判据 | Task 8 Step 3 |
+| ③ | `esp_cam_ctlr_receive()` 是阻塞取帧 | ❌ 它是**提交缓冲**（`xQueueSend`）。完成通知只走 `on_trans_finished` 回调，且 `esp_cam_ctlr_start()` **硬性要求注册该回调**。⇒ 改成「回调推 `s_done_q`，取帧函数 `xQueueReceive`」 | Task 8 Step 3 |
+| ④ | `esp_cam_sensor_set_para_value(ESP_CAM_SENSOR_PARA_STREAM, ...)` | ❌ **`ESP_CAM_SENSOR_PARA_STREAM` 这个符号不存在。** 走 `esp_cam_sensor_ioctl(ESP_CAM_SENSOR_IOC_S_STREAM)` | Task 8 Step 4 |
+| ⑤ | `esp_cam_sensor_set_format()` 可能不必调 | ❌ **必须调** —— `sc202cs_detect()` 只把 `cur_format` 指过去，**一个寄存器都没写** | Task 8 Step 4 |
+| ⑥ | PPA 的 cache 由驱动自己管，"此处不用管" | ⚠️ **同步**不用管，**对齐**要管：`ppa_srm.c:186-189` 对 `out.buffer` 的**地址与长度都硬性检查** cache line 对齐，不过就 `ESP_ERR_INVALID_ARG` —— 症状是**「一帧都出不来」**，host 侧完全看不出是内存对齐。⇒ 缩放输出缓冲用 `MALLOC_CAP_CACHE_ALIGNED`。（JPEG 编码器那侧反而不要求输入对齐，所以接 PPA 之前一直没事） | Task 9 Step 2 |
+| ⑦ | ISO 端点的 FIFO 在 host 选 **alt 1** 时分配，失败症状是 `SET_INTERFACE` 被 STALL | ❌ **`SET_CONFIGURATION` 时就分掉了**：`video_device.c:1404-1422` 的 `videod_open()` 里调 `usbd_edpt_iso_alloc()` → `dcd_dwc2.c:634-637` → `dfifo_alloc()`；alt 1 只调 `usbd_edpt_iso_activate()`，**不碰 FIFO**。而且**返回值根本没人检查、彻底静默**。⇒ 真正的症状是**「提交涨、完成不涨」**，判据是启动日志里 `FIFO: EP4 IN=112 words` 那一行在不在 | Task 5 Step 6 的排查顺序 |
+| ⑧ | **不做 AE/AWB 闭环**，用传感器模式表的 `exp_def/gain_def`；代价是「换光照会过曝/欠曝」 | ❌ **被实机推翻**（首图「整体发绿 + 亮度均值 45 已削顶」）。实际自己写了 **AE**（ev 标量 P 控制 + 四道防振荡闸）与 **AWB**（灰世界 + 四道防护 + CCM 施加），**仍然没有引 `esp_ipa`**。⚠️ 白平衡只能走 **CCM** —— 硬件 WBG 有 rev ≥3.0 的版本门，用不了；CCM 无版本门但**系数上限 4.0**。⚠️ 另订正本计划一处错误结论：**`isp_awb` 并无芯片版本门**，那处 `<300` 只否掉 subwindow 子功能且只打 warning | 「自动曝光 / 自动白平衡」一节 + Task 8 Step 3 的注释 |
+| ⑨ | 依赖树判据：`managed_components/` 只准多出**三个**目录 | ✅ 结论成立但更好：只多出 **两个**（`espressif__esp_cam_sensor`、`espressif__esp_sccb_intf`），`cmake_utilities` 早已在树里。**实测总计 12 个目录** | Task 7 Step 5 |
+
+另外两条**上游 bug**，本计划未预见、实施时自行挡住：
+
+- **`TUD_VIDEO_DESC_CS_VS_FRM_MJPEG_DISC` 等三个宏是坏的**（`bLength` 算法与
+  `bFrameIntervalType` 都错，且**全仓库零调用者**，上游从没跑过）⇒ 手写
+  `AIO_UVC_FRM_MJPEG_DISC1(...)` 替代，`check_usb_desc.py` 用 `len(frm) == 30` 钉住；
+- **`sc202cs.c:1167` 的增益下标 clamp 是 off-by-one**（默认配置下允许下标 == 表长
+  ⇒ 越界读）⇒ `cam_ae_split()` 自己钳死，宿主机测试用 `ev = 1…4×10⁶` 的扫描护着。
+
+**未推翻、已实机证实**的关键前提（列出来免得日后误以为也被订正了）：
+`UVC_EP_SIZE = 448`（112 words）装得下、dfifo 顶是 **242 不是 256**、
+`dwMaxVideoFrameBufferSize = 65536` 让 `payload` 实测为 448 未被缩水、
+CSI 按 alt 0/1 启停、PPA 用独立 client。
+
+---
+
 ## 关键事实（已核实，不要凭记忆改）
 
 ### TinyUSB 的 UVC device 支持（**逐文件核实**）
@@ -286,6 +340,11 @@ $ curl -s https://components.espressif.com/api/components/espressif/esp_cam_sens
 Task 6 Step 5 有明确的依赖树判据（`managed_components/` 只准多出 `espressif__esp_cam_sensor`、`espressif__esp_sccb_intf`、`espressif__cmake_utilities` 三个目录），不通过就退回「按 `sc202cs.c` 的寄存器表自己写薄驱动」。
 
 ### 自动曝光 / 自动白平衡：**用 ISP 的硬件统计 + 传感器默认值，不引 `esp_ipa`**
+
+> ⛔ **本节的结论「不做闭环」已被实机推翻，见「实施订正汇总」第 ⑧ 条。**
+> 「不引 `esp_ipa`」这一半仍然成立；「用默认曝光增益、不做闭环」这一半不成立 ——
+> 实际写了 AE 与 AWB 两个闭环（`cam_tune.c`，零 ESP-IDF 依赖、281 个宿主机用例）。
+> ⚠️ **AWB 闭环至今未上板**；AE 已实机验证。
 
 `esp_ipa`（Image Processing Algorithm）是 `esp_video` 用来跑 AE/AWB 闭环的组件。本阶段**不引它**：
 
@@ -443,7 +502,7 @@ firmware/sdkconfig.defaults     # 改：裁 esp_cam_sensor 只留 SC202CS 的一
 
 **Files:** Modify `main/tinyusb_config/tusb_config.h`、`main/usb_descriptors.{c,h}`、`main/tab5_pins.h`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 cd firmware && . $HOME/esp/esp-idf/export.sh && rm -f sdkconfig && idf.py build
@@ -453,7 +512,7 @@ cd firmware && . $HOME/esp/esp-idf/export.sh && rm -f sdkconfig && idf.py build
 2. 全部 `_Static_assert` 通过，其中包括新加的 `sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN`（默认档应为 **384**）；
 3. `idf.py size` 的 Flash 增量如实记下来（Task 10 要写进 README）。
 
-- [ ] **Step 2：`tab5_pins.h` 落 UVC 的尺寸/帧率常量**
+- [x] **Step 2：`tab5_pins.h` 落 UVC 的尺寸/帧率常量**
 
 放 `tab5_pins.h` 而不是 `usb_descriptors.h`？**不**——与 P3 的 `UAC_*` 同处置：这些描述的是**对 host 声明的格式**，不是板级布线，所以放 `usb_descriptors.h`（下一步）。`tab5_pins.h` 本步只加**板级**的两条：
 
@@ -487,7 +546,7 @@ cd firmware && . $HOME/esp/esp-idf/export.sh && rm -f sdkconfig && idf.py build
 #define CAM_MIPI_MBPS         576   /* = sc202cs_format_info[].mipi_info.mipi_clk / 1e6 */
 ```
 
-- [ ] **Step 3：`usb_descriptors.h` 的 UVC 参数常量、接口号与端点号**
+- [x] **Step 3：`usb_descriptors.h` 的 UVC 参数常量、接口号与端点号**
 
 ```c
 /*
@@ -582,7 +641,7 @@ enum {
 
 Task 3 会把这条 `#error` 换成真正的重排。**不允许跳过这一步直接写重排** —— 那会让 Task 1 的判据同时覆盖两档，一次改两个变量。
 
-- [ ] **Step 4：`tinyusb_config/tusb_config.h` 追加 video 配置**
+- [x] **Step 4：`tinyusb_config/tusb_config.h` 追加 video 配置**
 
 ```c
 /*
@@ -615,7 +674,7 @@ Task 3 会把这条 `#error` 换成真正的重排。**不允许跳过这一步�
 #define CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE  448
 ```
 
-- [ ] **Step 5：`usb_descriptors.c` 的 UVC 描述符**
+- [x] **Step 5：`usb_descriptors.c` 的 UVC 描述符**
 
 底稿逐行取自 `managed_components/espressif__tinyusb/examples/device/video_capture/src/usb_descriptors.h` 的 `TUD_VIDEO_CAPTURE_DESCRIPTOR_MJPEG`（MIT），**改两处**：帧描述符从 `_CONT`（连续帧率区间）换成 `_DISC`（单一离散帧率），以及把 `_width/_height/_fps` 换成我们的常量。
 
@@ -763,7 +822,7 @@ _Static_assert(CFG_TUD_VIDEO == 1 && CFG_TUD_VIDEO_STREAMING == 1,
                "两个宏都要定义：只定义 CFG_TUD_VIDEO 会让 video_device.c 编成空文件");
 ```
 
-- [ ] **Step 6：编译并记录长度，提交**
+- [x] **Step 6：编译并记录长度，提交**
 
 预期：默认档 **7 接口 / 384 字节**（= 9 config + 23 vendor + 25 HID + 184 UAC1 + 143 UVC）。若 `_Static_assert` 报出别的数字，**先手算 UVC_DESC_LEN 的 12 项**再改代码，不要靠改常量凑。
 
@@ -779,7 +838,7 @@ git commit -m "feat(tab5-fw): 开启 CFG_TUD_VIDEO 并落 UVC MJPEG 640x360 描�
 
 **Files:** Modify `test/check_usb_desc.py`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 cd firmware && . $HOME/esp/esp-idf/export.sh
@@ -788,7 +847,7 @@ python3 test/check_usb_desc.py build/tab5_aio.elf     # → 打印描述符树 +
 
 脚本必须打印 **7 个接口**（IF0 vendor / IF1 HID / IF2 AC / IF3 AS-out / IF4 AS-in / IF5 VC / IF6 VS）、**4 条 IN 端点**、**3 条 ISO 端点**（UAC 两条 + UVC 一条），且全部断言通过。
 
-- [ ] **Step 2：`EXPECT` 里补 UVC 的期望值**
+- [x] **Step 2：`EXPECT` 里补 UVC 的期望值**
 
 沿用既有做法 —— **刻意重复一遍字面量**而不是去解析头文件：本脚本是独立的第二意见，跟着头文件一起改就失去了交叉检查的意义。
 
@@ -813,7 +872,7 @@ VS_INPUT_HEADER, VS_FORMAT_MJPEG, VS_FRAME_MJPEG, VS_COLORFORMAT = 0x01, 0x06, 0
 VIDEO_ITT_CAMERA, VIDEO_TT_STREAMING = 0x0201, 0x0101
 ```
 
-- [ ] **Step 3：加一个 `check_uvc(items, itf_by, itf_eps, has_audio)` 函数**
+- [x] **Step 3：加一个 `check_uvc(items, itf_by, itf_eps, has_audio)` 函数**
 
 断言清单（每一条都对应一种「烧了才发现」的错误）：
 
@@ -926,7 +985,7 @@ def check_uvc(items, itf_by, itf_eps, has_audio):
     check(color[3] == 0x01, 'bColorPrimaries 应为 BT.709')
 ```
 
-- [ ] **Step 4：`main()` 里挂上 UVC 检查，并把「IN 端点 ≤ 4」升级成「恰好 4 且含 0x84」**
+- [x] **Step 4：`main()` 里挂上 UVC 检查，并把「IN 端点 ≤ 4」升级成「恰好 4 且含 0x84」**
 
 既有那条 `check(len(in_eps) <= 4, ...)` 改成：
 
@@ -947,7 +1006,7 @@ def check_uvc(items, itf_by, itf_eps, has_audio):
           f'× {EXPECT["ep_uvc_pkt"]} B/帧 = {(EXPECT["ep_uvc_pkt"] - 2) } B/ms 有效载荷')
 ```
 
-- [ ] **Step 5：跑一遍并提交**（本任务**不上板**）
+- [x] **Step 5：跑一遍并提交**（本任务**不上板**）
 
 ```
 git commit -m "feat(tab5-fw): check_usb_desc.py 扩展到 UVC 描述符 (P4 Task2)"
@@ -961,7 +1020,7 @@ git commit -m "feat(tab5-fw): check_usb_desc.py 扩展到 UVC 描述符 (P4 Task
 
 **Files:** Modify `main/usb_descriptors.{c,h}`、`main/Kconfig.projbuild`、`main/app_main.c`、`main/CMakeLists.txt`、`test/check_usb_desc.py`、`sdkconfig.defaults`
 
-- [ ] **Step 1：成功判据**（两档都编译 + 脚本两档都过，**不上板**）
+- [x] **Step 1：成功判据**（两档都编译 + 脚本两档都过，**不上板**）
 
 ```bash
 cd firmware && . $HOME/esp/esp-idf/export.sh
@@ -1000,7 +1059,7 @@ diff /tmp/p3.hex /tmp/p4.hex && echo "✅ vendor/HID/UAC 三段逐字节未变"
 `if __name__ == '__main__': main()` —— 这样它既能当脚本跑，也能被 import 复用
 `symbol_bytes()`。这是本步唯一对脚本既有行为的改动。）
 
-- [ ] **Step 2：`usb_descriptors.h` 的 `AIO_HAS_AUDIO` 与调试档端点重排**
+- [x] **Step 2：`usb_descriptors.h` 的 `AIO_HAS_AUDIO` 与调试档端点重排**
 
 把 Task 1 那条临时 `#error` 换成真正的重排：
 
@@ -1066,7 +1125,7 @@ diff /tmp/p3.hex /tmp/p4.hex && echo "✅ vendor/HID/UAC 三段逐字节未变"
 
 `UAC_*` 那批参数常量与 `UAC_FU_ID_SPEAKER` **保持无条件定义**（它们只是数字，被 `#if` 掉的是描述符与代码）—— 这样 `codec_audio.c` 里那些 `_Static_assert` 不必也跟着加条件。
 
-- [ ] **Step 3：`usb_descriptors.c` / `app_main.c` / `CMakeLists.txt` 的音频条件编译**
+- [x] **Step 3：`usb_descriptors.c` / `app_main.c` / `CMakeLists.txt` 的音频条件编译**
 
 三处，都用 `#if AIO_HAS_AUDIO` 包住，**函数体一行不改**：
 
@@ -1089,7 +1148,7 @@ diff /tmp/p3.hex /tmp/p4.hex && echo "✅ vendor/HID/UAC 三段逐字节未变"
 > P3 的教训写得很清楚 —— **分阶段旋钮只应在一次排障会话里存在**。
 > 这里只有两档，`AIO_HAS_AUDIO` 是 `CONFIG_AIO_DEBUG_CDC` 的反相，不是独立自由度。
 
-- [ ] **Step 4：`Kconfig.projbuild` 改写说明**
+- [x] **Step 4：`Kconfig.projbuild` 改写说明**
 
 把现有 `AIO_DEBUG_CDC` 的 prompt 与 help 改成 UVC 时代的版本（端点表换成新的、明写「本档下没有音频」、明写「有 USB-TTL 就接 UART0」）。prompt 改为：
 
@@ -1098,7 +1157,7 @@ config AIO_DEBUG_CDC
     bool "UVC 调试档：让出 GUD 的 IN 端点 + 关掉音频，换 USB CDC 日志串口"
 ```
 
-- [ ] **Step 5：`app_main.c` 加 DWC2 FIFO 占用实测**
+- [x] **Step 5：`app_main.c` 加 DWC2 FIFO 占用实测**
 
 P3 Task 6 Step 2 留着没实现的那段代码，本步真正落地 —— **UVC 阶段余量只剩 123 words，这是必须变成数字的时候**。代码照 P3 计划里那份，改三处：注释更新到 242 words 的口径、循环覆盖 `0x84`、并把「剩余是否够 UVC」直接判出来：
 
@@ -1147,7 +1206,7 @@ static void log_usb_fifo_usage(void)
 }
 ```
 
-- [ ] **Step 6：`check_usb_desc.py` 支持两档**
+- [x] **Step 6：`check_usb_desc.py` 支持两档**
 
 脚本已经按「描述符里有没有 CDC IAD」自动判定档位（P3 就是这么写的）。本步把这个判定扩成三元组：
 
@@ -1163,11 +1222,11 @@ static void log_usb_fifo_usage(void)
 既有那批音频断言全部包进 `if has_audio:`；`n_itf` 期望值改成 `7 if has_audio else 6`；
 CDC 的端点期望改成 `ep_cdc_notif = 0x83`（原来是 `0x84`）。
 
-- [ ] **Step 7：`sdkconfig.defaults` 的注释更新**
+- [x] **Step 7：`sdkconfig.defaults` 的注释更新**
 
 那段解释 `#CONFIG_AIO_DEBUG_CDC=y` 代价的注释要改：现在的代价是「让出 GUD 的 IN 端点 **+ 整个音频功能不编译**」，不再是「借走 UVC 的 0x84」。
 
-- [ ] **Step 8：两档编译 + 脚本 + 逐字节 diff，提交**
+- [x] **Step 8：两档编译 + 脚本 + 逐字节 diff，提交**
 
 ```
 git commit -m "feat(tab5-fw): UVC 调试档改为让出音频换 CDC，0x84 永久归 UVC；补 DWC2 FIFO 实测 (P4 Task3)"
@@ -1186,7 +1245,7 @@ git commit -m "feat(tab5-fw): UVC 调试档改为让出音频换 CDC，0x84 永�
 
 **Files:** Create `main/uvc_pattern.{c,h}`、`test/test_uvc_pattern.c`、`test/jpeg_to_header.py`、`main/uvc_test_jpeg.h`；Modify `main/CMakeLists.txt`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 cd firmware/test
@@ -1199,7 +1258,7 @@ cc -std=c11 -Wall -Wextra -Werror -I../main test_uvc_pattern.c ../main/uvc_patte
 2. `/tmp/pattern.ppm` 用看图软件打开：**8 根竖直色条 + 一个白方块 + 底部一条随帧号变化的灰阶带**，无黑边、无错位；
 3. 生成的 `main/uvc_test_jpeg.h` 里数组大小在 **12 KB–44 KB** 之间（下限是「JPEG 至少得有内容」，上限是硬约束 B 的每帧预算 44.6 KB）。
 
-- [ ] **Step 2：`main/uvc_pattern.h`**
+- [x] **Step 2：`main/uvc_pattern.h`**
 
 ```c
 #pragma once
@@ -1244,7 +1303,7 @@ bool uvc_pattern_render(uint16_t *dst, int w, int h, uint32_t frame_no);
 int uvc_pattern_square_x(int w, uint32_t frame_no);
 ```
 
-- [ ] **Step 3：`main/uvc_pattern.c`**
+- [x] **Step 3：`main/uvc_pattern.c`**
 
 ```c
 #include "uvc_pattern.h"
@@ -1317,7 +1376,7 @@ bool uvc_pattern_render(uint16_t *dst, int w, int h, uint32_t frame_no)
 }
 ```
 
-- [ ] **Step 4：`test/test_uvc_pattern.c`**
+- [x] **Step 4：`test/test_uvc_pattern.c`**
 
 照 `test_standby_screen.c` 的形式：`main()` + `assert`，无框架，不挂 IDF 构建；带一个可选参数导出 PPM 供肉眼验收。用例至少覆盖：
 
@@ -1336,7 +1395,7 @@ PPM 导出（RGB565 → RGB888，与 `test_standby_screen.c` 同一段逻辑）�
  * 灰阶带也不是全黑，一眼能看出三个元素都在）。 */
 ```
 
-- [ ] **Step 5：`test/jpeg_to_header.py` —— 机械转换，不手抄**
+- [x] **Step 5：`test/jpeg_to_header.py` —— 机械转换，不手抄**
 
 照 `panel_init_data.h` / `tab5_kbd_map.h` / `font8x16.h` 的先例：**vendor 进来的二进制一律用脚本转，不手抄**。
 
@@ -1407,7 +1466,7 @@ if __name__ == '__main__':
 > ⓘ **为什么静态图也要走 4:2:2**：Task 6 换成片上编码时，若两边的子采样不同，
 > 「换了之后图变了」就同时有「编码器」与「子采样」两个变量。保持一致，只留一个变量。
 
-- [ ] **Step 6：`main/CMakeLists.txt` 加 `uvc_pattern.c`，编译 + 跑测试 + 提交**
+- [x] **Step 6：`main/CMakeLists.txt` 加 `uvc_pattern.c`，编译 + 跑测试 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): UVC 测试图案纯函数与静态测试图 JPEG (P4 Task4)"
@@ -1425,7 +1484,7 @@ git commit -m "feat(tab5-fw): UVC 测试图案纯函数与静态测试图 JPEG (
 
 **Files:** Create `main/uvc_stream.{c,h}`；Modify `main/app_main.c`、`main/CMakeLists.txt`
 
-- [ ] **Step 1：成功判据（host 侧，三条，缺一不可）**
+- [x] **Step 1：成功判据（host 侧，三条，缺一不可）**
 
 先在 **UVC 调试档**（`CONFIG_AIO_DEBUG_CDC=y`，有 CDC 日志、无音频）跑一遍拿 FIFO 数字与 TinyUSB 日志，再在**默认档**跑一遍做真正的判定。
 
@@ -1447,7 +1506,7 @@ ffplay -f v4l2 -input_format mjpeg -video_size 640x360 -framerate 10 /dev/videoN
 4. **GUD 显示、键盘、触摸、音频（默认档）全部照旧** —— `modetest -M gud` 出图、`evtest` 打字、`ABS_MT_*`、`aplay`/`arecord` 正常；
 5. 调试档下 UART/CDC 打出的 `FIFO: 已用 … 空闲 …` 与静态验算吻合（默认档预期已用 **231** / 空闲 **11**；调试档预期已用 **224** / 空闲 **18**）。
 
-- [ ] **Step 2：`main/uvc_stream.h`**
+- [x] **Step 2：`main/uvc_stream.h`**
 
 ```c
 #pragma once
@@ -1479,7 +1538,7 @@ bool uvc_stream_is_streaming(void);
 void uvc_stream_report(void);
 ```
 
-- [ ] **Step 3：`main/uvc_stream.c` 的类回调与帧泵**
+- [x] **Step 3：`main/uvc_stream.c` 的类回调与帧泵**
 
 ```c
 #define UVC_CTL_IDX   0    /* 只有一个 VideoControl 功能（CFG_TUD_VIDEO == 1） */
@@ -1595,7 +1654,7 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
 > **必须双缓冲**，否则编码器会一边写、UVC 一边读同一块内存，表现为画面横向撕裂。
 > 这条要在 Task 6 落地时写进 `cam_jpeg.c` 的注释。
 
-- [ ] **Step 4：`app_main.c` 调用**
+- [x] **Step 4：`app_main.c` 调用**
 
 在 `codec_audio_start()` 之后追加（处置原则与键盘/触摸/音频一致）：
 
@@ -1608,11 +1667,11 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
 并把 `uvc_stream_report()` 加进主循环里既有的那个 `#if CONFIG_AIO_DEBUG_CDC` 复读块，
 以及默认档的那一次性打印（与 `codec_audio_report()` 并排）。
 
-- [ ] **Step 5：上板验证（先调试档，后默认档）**
+- [x] **Step 5：上板验证（先调试档，后默认档）**
 
 按 Step 1 的两轮跑法。**两轮之间只改 `CONFIG_AIO_DEBUG_CDC` 一个变量**，别顺手改别的。
 
-- [ ] **Step 6：⛔ 判定点 —— 不成立时的排查顺序（穷尽这五步才允许宣布放弃）**
+- [x] **Step 6：⛔ 判定点 —— 不成立时的排查顺序（穷尽这五步才允许宣布放弃）**
 
 按「最可能 + 最便宜」排序，**不要跳步**：
 
@@ -1626,7 +1685,7 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
 
 **五步走完仍不成立 ⇒ 触发「放弃判定点」**，按本计划开头那一节的动作执行，**并把这五步各自的实测现象写进 README 的「UVC 为什么砍掉」**（下一个人不该重走一遍）。
 
-- [ ] **Step 7：提交**
+- [x] **Step 7：提交**
 
 ```
 git commit -m "feat(tab5-fw): 静态图 MJPEG 流打通，host 侧出 /dev/videoN (P4 Task5)"
@@ -1642,7 +1701,7 @@ git commit -m "feat(tab5-fw): 静态图 MJPEG 流打通，host 侧出 /dev/video
 
 **Files:** Create `main/cam_jpeg.{c,h}`；Modify `main/uvc_stream.c`、`main/CMakeLists.txt`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 ffplay -f v4l2 -input_format mjpeg -video_size 640x360 -framerate 10 /dev/videoN
@@ -1656,7 +1715,7 @@ ls -l /tmp/s.mjpg    # ÷100 = 平均帧字节
 3. **平均帧 ≤ 30 KB、峰值帧 ≤ 44 KB**（`uvc_stream_report()` 打的 `frame_bytes` 峰值），`s_frames_late` 与 `s_frames_dropped` **都是 0**；
 4. GUD / HID / 音频不回归。
 
-- [ ] **Step 2：`main/cam_jpeg.h`**
+- [x] **Step 2：`main/cam_jpeg.h`**
 
 ```c
 #pragma once
@@ -1700,7 +1759,7 @@ void cam_jpeg_stats(uint32_t *encoded, uint32_t *failed,
                     size_t *last_bytes, size_t *peak_bytes, uint32_t *last_us);
 ```
 
-- [ ] **Step 3：`main/cam_jpeg.c`**
+- [x] **Step 3：`main/cam_jpeg.c`**
 
 ```c
 #include "driver/jpeg_encode.h"
@@ -1806,7 +1865,7 @@ esp_err_t cam_jpeg_encode(const uint16_t *src, int w, int h,
 > 没有就在这里补一次 `esp_cache_msync(dst, produced, ESP_CACHE_MSYNC_FLAG_DIR_M2C)`
 > **并把结论写进注释**（"实测需要/不需要"，别留成猜测）。
 
-- [ ] **Step 4：`uvc_stream.c` 换帧源**
+- [x] **Step 4：`uvc_stream.c` 换帧源**
 
 把 Task 5 那两行静态图换成「渲染 + 编码」，**其余一行不改**：
 
@@ -1833,7 +1892,7 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
 与 `cam_jpeg_init()`，失败则整体返回错误（帧泵不起来，host 侧表现为「有 `/dev/videoN`
 但取不到流」——**这是可见的**，比带病运行好）。
 
-- [ ] **Step 5：调质量参数（有判据，不是拍脑袋）**
+- [x] **Step 5：调质量参数（有判据，不是拍脑袋）**
 
 跑 Step 1 的 `--stream-count=100`，读 `uvc_stream_report()` 打出的峰值帧字节：
 
@@ -1845,7 +1904,7 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
 
 **每次改完都要重跑 Step 1 的全部四条判据**，并把最终取值与实测三个数字（平均帧、峰值帧、实测 fps）写进 `cam_jpeg.c` 的注释 —— 下一个人才知道 70 这个数是怎么来的。
 
-- [ ] **Step 6：编译 + 上板验证 + 提交**
+- [x] **Step 6：编译 + 上板验证 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): 硬件 JPEG 编码器接入，片上实时编码合成图案 (P4 Task6)"
@@ -1864,7 +1923,7 @@ git commit -m "feat(tab5-fw): 硬件 JPEG 编码器接入，片上实时编码�
 
 **Files:** Modify `main/idf_component.yml`、`main/board_power.{c,h}`、`main/tab5_pins.h`、`main/CMakeLists.txt`、`sdkconfig.defaults`；Create `main/camera_csi.{c,h}`（本任务只写探测部分）
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 1. `idf.py reconfigure` 后 `managed_components/` **只多出三个目录**：
    `espressif__esp_cam_sensor`、`espressif__esp_sccb_intf`、`espressif__cmake_utilities`；
@@ -1872,7 +1931,7 @@ git commit -m "feat(tab5-fw): 硬件 JPEG 编码器接入，片上实时编码�
 2. `idf.py build` 通过，`idf.py size` 增量记下来；
 3. 上板（调试档）日志打出 `SC202CS 探测成功 PID=0xeb52`。
 
-- [ ] **Step 2：`idf_component.yml` 加 `esp_cam_sensor`**
+- [x] **Step 2：`idf_component.yml` 加 `esp_cam_sensor`**
 
 ```yaml
   # SC202CS 的 MIPI 模式寄存器序列（四张表，含大量无文档项）。这是**芯片驱动**组件，
@@ -1914,7 +1973,7 @@ CONFIG_CAMERA_SC202CS_AUTO_DETECT_MIPI_INTERFACE_SENSOR=n
 `main/CMakeLists.txt` 的 `PRIV_REQUIRES` 追加 `esp_driver_cam esp_driver_isp esp_driver_jpeg`
 （`esp_driver_ppa` 已在）。
 
-- [ ] **Step 3：`board_power.{c,h}` 加摄像头使能（配好但**保持关闭**）**
+- [x] **Step 3：`board_power.{c,h}` 加摄像头使能（配好但**保持关闭**）**
 
 与背光、功放**完全同构**：`board_power_init()` 只把引脚配成推挽输出并保持 0，真正打开归摄像头域。
 
@@ -1934,7 +1993,7 @@ void board_camera_enable(bool on);
 `board_power_init()` 里在 `TOUCH_EN` / `SPEAKER_EN` 之后追加
 `ESP_RETURN_ON_ERROR(ioexp_out(IOEXP_PIN_CAMERA_EN, 0), TAG, "CAMERA_EN");`。
 
-- [ ] **Step 4：`camera_csi.c` 的探测部分**
+- [x] **Step 4：`camera_csi.c` 的探测部分**
 
 ```c
 #include "esp_sccb_intf.h"
@@ -1988,7 +2047,7 @@ esp_err_t camera_sensor_probe(void)
 > **判据**：`sccb_new_i2c_io()`、`sc202cs_detect()`、`SC202CS_SCCB_ADDR == 0x36`、
 > `SC202CS_PID == 0xeb52` 四项都在。字段名对不上就按头文件改，**并把差异记进注释**。
 
-- [ ] **Step 5：依赖树核实（硬判据）**
+- [x] **Step 5：依赖树核实（硬判据）**
 
 ```bash
 cd firmware && . $HOME/esp/esp-idf/export.sh && rm -f sdkconfig && idf.py reconfigure
@@ -2000,7 +2059,7 @@ ls managed_components/
 `esp_ipa` / `lvgl` 中的任何一个 ⇒ **退回本步**，改为按 `sc202cs.c` 的寄存器表自己写薄驱动
 （那张 1280×720 RAW8 的表约 100 条，可以接受；其余三张不抄）。
 
-- [ ] **Step 6：上板（调试档）验证 + 切默认档确认不回归 + 提交**
+- [x] **Step 6：上板（调试档）验证 + 切默认档确认不回归 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): 引入 esp_cam_sensor 并探到 SC202CS (P4 Task7)"
@@ -2014,7 +2073,7 @@ git commit -m "feat(tab5-fw): 引入 esp_cam_sensor 并探到 SC202CS (P4 Task7)
 
 **Files:** Modify `main/camera_csi.{c,h}`
 
-- [ ] **Step 1：成功判据（调试档，日志）**
+- [x] **Step 1：成功判据（调试档，日志）**
 
 上板后日志每秒打一条：
 
@@ -2030,7 +2089,7 @@ cam: 帧 #300 30.1 fps  平均亮度 118/255  (1280x720 RGB565)
 5. **GUD 显示不出现撕裂/花屏** —— 这是本任务最需要盯的回归项（CSI 每秒往 PSRAM 写 55 MB，
    而 DPI 面板刷新每秒要从 PSRAM 读约 110 MB，见硬约束 D 第 2 条）。
 
-- [ ] **Step 2：`camera_csi.h`**
+- [x] **Step 2：`camera_csi.h`**
 
 ```c
 #pragma once
@@ -2068,7 +2127,7 @@ esp_err_t camera_csi_stop(void);
 esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms);
 ```
 
-- [ ] **Step 3：CSI 控制器 + ISP**
+- [x] **Step 3：CSI 控制器 + ISP**
 
 ```c
 #include "esp_cam_ctlr_csi.h"
@@ -2103,6 +2162,9 @@ esp_err_t camera_csi_init(void)
         .v_res    = CAM_SENSOR_H,
         .data_lane_num      = CAM_MIPI_LANES,      /* 1 */
         .lane_bit_rate_mbps = CAM_MIPI_MBPS,       /* 576 */
+        /* ⛔ 实施订正：这两行是错的，实机死在 esp_cam_new_csi_ctlr() =
+         *    ESP_ERR_NOT_SUPPORTED。**两个都必须填 RGB565**（桥直通），详见下面
+         *    「实施订正汇总」第 ①/② 条。 */
         .input_data_color_type  = CAM_CTLR_COLOR_RAW8,
         .output_data_color_type = CAM_CTLR_COLOR_RGB565,  /* 经 ISP 去马赛克后的输出 */
         .queue_items  = 1,
@@ -2148,6 +2210,10 @@ esp_err_t camera_csi_init(void)
     return ESP_OK;
 }
 
+/* ⛔ 实施订正：整个函数起不来 —— `esp_cam_ctlr_receive()` 是**提交缓冲**
+ *    （内部 `xQueueSend`），不是阻塞取帧；完成通知只走 `on_trans_finished` 回调。
+ *    实际实现是「回调把填好的缓冲推进 s_done_q，本函数 xQueueReceive」，
+ *    外加一次手动 `esp_cache_msync(..., M2C)`。详见「实施订正汇总」第 ③ 条。 */
 esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms)
 {
     s_fb_idx = (s_fb_idx + 1) % CAM_FB_COUNT;
@@ -2164,7 +2230,7 @@ esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms)
 }
 ```
 
-- [ ] **Step 4：启停顺序（这一步决定会不会把显示弄花）**
+- [x] **Step 4：启停顺序（这一步决定会不会把显示弄花）**
 
 ```c
 esp_err_t camera_csi_start(void)
@@ -2188,8 +2254,15 @@ esp_err_t camera_csi_start(void)
 > 同一处还要调 `esp_cam_sensor_set_format()` 选中那唯一一个模式 —— 若组件已按
 > `CONFIG_CAMERA_SC202CS_MIPI_IF_FORMAT_INDEX_DEFAULT` 在 detect 里设好，就不必重复设，
 > **把实测结论写进注释**。
+>
+> ⛔ **实测结论（两条都与上面这段不符）**：
+> ① **`ESP_CAM_SENSOR_PARA_STREAM` 这个符号不存在。** stream on/off 走
+>    `esp_cam_sensor_ioctl(s, ESP_CAM_SENSOR_IOC_S_STREAM, &en)`。
+> ② **`esp_cam_sensor_set_format()` 必须调，不能省** —— `sc202cs_detect()` 只把
+>    `cur_format` 指过去，**一个寄存器都没写**。
+> 见「实施订正汇总」第 ④/⑤ 条。
 
-- [ ] **Step 5：临时自检任务（本任务结束时删掉）**
+- [x] **Step 5：临时自检任务（本任务结束时删掉）**
 
 ```c
 /*
@@ -2234,7 +2307,7 @@ static void cam_selftest_task(void *arg)
 }
 ```
 
-- [ ] **Step 6：上板验证（三个物理动作各做三次）+ 切默认档确认 GUD 不花屏 + 提交**
+- [x] **Step 6：上板验证（三个物理动作各做三次）+ 切默认档确认 GUD 不花屏 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): MIPI-CSI + ISP 取流，SC202CS 出 1280x720 RGB565 (P4 Task8)"
@@ -2248,7 +2321,7 @@ git commit -m "feat(tab5-fw): MIPI-CSI + ISP 取流，SC202CS 出 1280x720 RGB56
 
 **Files:** Modify `main/cam_jpeg.{c,h}`、`main/uvc_stream.c`
 
-- [ ] **Step 1：成功判据**
+- [x] **Step 1：成功判据**
 
 ```bash
 ffplay -f v4l2 -input_format mjpeg -video_size 640x360 -framerate 10 /dev/videoN
@@ -2261,7 +2334,7 @@ v4l2-ctl -d /dev/videoN --stream-mmap --stream-count=100 --stream-to=/tmp/cam.mj
 4. **未打开摄像头时** GUD 帧率与 P3 相同（这是「带宽零和」的正面验证，见 Step 5）;
 5. GUD / HID / 音频不回归。
 
-- [ ] **Step 2：`cam_jpeg.c` 加 PPA 缩放**
+- [x] **Step 2：`cam_jpeg.c` 加 PPA 缩放**
 
 ```c
 /*
@@ -2308,6 +2381,11 @@ esp_err_t cam_jpeg_downscale(const uint16_t *src, uint16_t *dst)
     };
     /* 输入输出的 cache 同步由 PPA 驱动自己做（ppa_srm.c 提交 DMA 前做输入 C2M
      * 回写与输出 M2C 失效），此处不用管 —— 与 display_dsi.c 同一条结论。 */
+    /* ⛔ 实施订正：cache **同步**确实不用管，但 **对齐**要管 ——
+     *    `ppa_srm.c:186-189` 对 `out.buffer` 的**地址与长度都硬性检查 cache line
+     *    对齐**，不过就 ESP_ERR_INVALID_ARG，症状是「一帧都出不来」。
+     *    所以 `s_rgb` 必须用 MALLOC_CAP_CACHE_ALIGNED 分配。本计划漏了这条，
+     *    见「实施订正汇总」第 ⑥ 条。 */
     return ppa_do_scale_rotate_mirror(s_ppa, &op);
 }
 ```
@@ -2318,7 +2396,7 @@ esp_err_t cam_jpeg_downscale(const uint16_t *src, uint16_t *dst)
 > 预览」用的，**与本产品形态无关，刻意不照抄**。若实机发现画面是倒的（模组装配朝向），
 > 再改这里的 `rotation_angle`，**并在注释里写明是实测决定的**。
 
-- [ ] **Step 3：`uvc_stream.c` 换帧源（第三次，也是最后一次）**
+- [x] **Step 3：`uvc_stream.c` 换帧源（第三次，也是最后一次）**
 
 ```c
 static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
@@ -2342,7 +2420,7 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
 `test/test_uvc_pattern.c` **保留**（宿主机测试仍然有价值，而且它是静态测试图的生成源），
 但固件里不再调用 —— `uvc_pattern.c` 从 `CMakeLists.txt` 的 `SRCS` 里去掉。
 
-- [ ] **Step 4：CSI 的按需启停（「摄像头不开对显示零影响」的实现落点）**
+- [x] **Step 4：CSI 的按需启停（「摄像头不开对显示零影响」的实现落点）**
 
 帧泵任务里，在 `tud_video_n_streaming()` 的判断处加启停：
 
@@ -2360,7 +2438,7 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
         if (!want) { s_xfer_in_flight = false; continue; }
 ```
 
-- [ ] **Step 5：帧率实测（两组数字，都要记）**
+- [x] **Step 5：帧率实测（两组数字，都要记）**
 
 | 场景 | 测什么 | 怎么测 |
 |---|---|---|
@@ -2371,7 +2449,7 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
 不许估算 —— 带宽账预测 GUD 的理论上限从约 1364 B/ms 掉到约 916 B/ms（−33%），
 实测比这更差就说明瓶颈不在带宽（多半是 PSRAM 或 PPA 争用），按 Task 10 Step 3 归因。
 
-- [ ] **Step 6：上板验证 + 提交**
+- [x] **Step 6：上板验证 + 提交**
 
 ```
 git commit -m "feat(tab5-fw): PPA 2x 缩小接入 UVC，摄像头实时画面打通 (P4 Task9)"
@@ -2380,6 +2458,19 @@ git commit -m "feat(tab5-fw): PPA 2x 缩小接入 UVC，摄像头实时画面打
 ---
 
 ## Task 10：五项能力的复合回归 + 端点/FIFO 实测
+
+> ⏳ **本任务尚未执行 —— 六个 Step 一个都没勾。**
+> 五项能力**各自**都已实机验证（且每次新增能力时都复验过前面几项无回归），
+> 但「五项同时全开压 10 分钟」这一场没跑，**所以下列数字至今没有**：
+> 摄像头开着时 GUD 的实测帧率、PSRAM 带宽争用的实测值、
+> 长时间稳定性（含 P3 欠的账：全双工同时收发、无反馈端点的时钟漂移）、
+> 拔插与热切换的行为。
+> **Task 11 的文档里凡是依赖这些数字的地方，一律标成「⏳ 未测」而不是填推算值。**
+>
+> ⓘ Step 2 的一部分**已经顺带做到了**：`FIFO: EP4 IN=112 words` 与两档的
+> `已用/空闲`（默认 231/11、调试 224/18，分母 242）在 bring-up 过程中就读到了，
+> 已回填 `firmware/README.md` 的「端点预算」。但该 Step 的 host 侧 `lsusb -v`
+> 对照与「五项同跑」下的复读没做，故不勾。
 
 目标：证明 UVC 没有把已交付的四项能力弄坏。这是硬约束 D 的落点，也是 spec §10 对阶段 5 的验证要求。
 
@@ -2489,7 +2580,20 @@ sudo dmesg -w
 
 ## Task 11：文档与收尾
 
-- [ ] **Step 1**：`firmware/README.md` 加「UVC 摄像头」章节，至少覆盖：
+> ✅ **已完成**，但有两处**没能照本任务原样办到**，因为它们依赖未执行的 Task 10：
+>
+> - **Step 3 要求的「Task 10 实测的那两组数字」不存在** —— 端点/FIFO 那组
+>   （`EP4 IN=112 words`、默认 231/11、调试 224/18）在 bring-up 时顺带读到了，已回填；
+>   但**摄像头开着时的 GUD 帧率、PSRAM 带宽争用实测值没有**，README 里写成「⏳ 未测」
+>   并明确标注「以下是推算，不是实测」。
+> - **Step 4 要求「补上开摄像头时 GUD 帧率的实测变化」** —— 同理，包级 README 里
+>   给的是带宽推算（周期性 172 → 584 B/ms，GUD 理论上限 −33%）并显式声明未实测。
+>
+> 另：Step 1 的清单里「不做 AE/AWB 闭环的代价」一条**已作废**（闭环做了），
+> 改写成了 AE / AWB 两节 + 白平衡标定流程 + `cam_tune.h` 参数表，
+> 并把 **AWB 未上板**这一限定在三份文档里都写明。
+
+- [x] **Step 1**：`firmware/README.md` 加「UVC 摄像头」章节，至少覆盖：
   - **分辨率为什么是 640×360 而不是 spec 原写的 640×480** —— 那三条像素管线约束（传感器唯一可用模式 1280×720 / P4 的 ISP 没有缩放器 / PPA 缩放粒度 1/16），并说明**带宽上 640×480 本来是够的**，别让人以为是带宽不够；
   - **端点与 FIFO 的完整账**：dfifo 顶是 **242 words 而不是 256**（buffer DMA 模式下扣 2×ep_count），默认档余量 123 words = 492 字节，为什么取 448 而不取满，以及 Task 10 实测的那两组数字。**顺手改掉现有那处「CDC 通知 16 words」的笔误（实际 2 words）**；
   - **`dwMaxVideoFrameBufferSize` 那个静默带宽陷阱**（声明小了会让每包缩水而哪里都不报错）；
@@ -2500,24 +2604,24 @@ sudo dmesg -w
   - `CAM_JPEG_QUALITY` 的取值与实测的三个数字（平均帧、峰值帧、实测 fps）；
   - host 侧验证命令（`v4l2-ctl --list-formats-ext`、`ffplay`、`--stream-mmap` 统计帧率）；
   - **两个 `/dev/video*` 节点是正常现象**（后一个是 metadata 节点）。
-- [ ] **Step 2**：`firmware/README.md` 的「日志」章节**整段改写** —— `CONFIG_AIO_DEBUG_CDC` 的语义变了：
+- [x] **Step 2**：`firmware/README.md` 的「日志」章节**整段改写** —— `CONFIG_AIO_DEBUG_CDC` 的语义变了：
   - 新端点表（`0x81` CDC 数据 / `0x82` HID / `0x83` CDC 通知 / `0x84` **UVC，不再出借**）；
   - **代价从「借走 UVC 的 0x84」变成「整个音频功能不编译」**，并列出这一档下不可用的能力清单；
   - **优先接 UART0 + USB-TTL**：零端点代价、能抓上电最早的日志、默认档也能用。CDC 档是「手边只有一根 USB-C 线」时的替代品；
   - 两档的接口数/描述符长度更新为 **7 / 384** 与 **6 / 259**。
-- [ ] **Step 3**：`firmware/README.md` 的「端点预算」「资源占用」「文件」三节更新：
+- [x] **Step 3**：`firmware/README.md` 的「端点预算」「资源占用」「文件」三节更新：
   - 端点表加 `0x84`，并把「余 1 条」改成「**4/4 用满**」；
   - Flash/DIRAM/PSRAM 增量（`idf.py size` 实测），PSRAM 要单列摄像头的大头：CSI 帧缓冲 2×1.84 MB + 缩放后 460 KB + JPEG 双缓冲 2×64 KB ≈ **4.3 MB**；
   - 文件表补 `uvc_stream.{c,h}` / `uvc_pattern.{c,h}` / `uvc_test_jpeg.h` / `camera_csi.{c,h}` / `cam_jpeg.{c,h}` / `test/test_uvc_pattern.c` / `test/jpeg_to_header.py` 七行。
-- [ ] **Step 4**：`components/packages/tab5-all-in-one/README.md` 状态清单：UVC 摄像头从「⏳ 规划中」移到 ✅（如实机通过），写明 **MJPEG 640×360 @ 10 fps**，并把「带宽是零和的」这条既有提示补上具体数字（开摄像头时 GUD 帧率的实测变化）。「文档」一节补本计划的链接。
-- [ ] **Step 5**：spec 回填：
+- [x] **Step 4**：`components/packages/tab5-all-in-one/README.md` 状态清单：UVC 摄像头从「⏳ 规划中」移到 ✅（如实机通过），写明 **MJPEG 640×360 @ 10 fps**，并把「带宽是零和的」这条既有提示补上具体数字（开摄像头时 GUD 帧率的实测变化）。「文档」一节补本计划的链接。
+- [x] **Step 5**：spec 回填：
   - **§7 订正**：`640×480` → **`640×360`**，补上三条像素管线约束；`esp_video` → **`esp_cam_sensor` + IDF 内置 CSI/ISP/JPEG/PPA**，并说明 `esp_video` 为什么不能用；补上「不做 AE/AWB 闭环」这条本阶段的取舍；
   - **§8.1 订正**：依赖表阶段 5 那一行从 `esp_video` 改成 `esp_cam_sensor`（并注明它的传递依赖只有 `esp_sccb_intf` + `cmake_utilities`）；
   - **§2 订正**：端点表补 `0x84` 已落地；**并订正 FIFO 口径 —— 可分配的是 242 words 不是 256**；
   - **§2 补充**：`CONFIG_AIO_DEBUG_CDC` 的新语义（关音频换 CDC，`0x84` 永久归 UVC），以及「有 USB-TTL 就接 UART0」；
   - **§10 阶段 5** 的验证标准勾掉，并把实测的 fps / 帧大小 / GUD 帧率影响写进去；
   - **§11 风险登记**：「TinyUSB UVC device 不可用」那条改成实测结论；新增一条「PSRAM 带宽争用」。
-- [ ] **Step 6**：提交。
+- [x] **Step 6**：提交。
 
 ```
 git commit -m "docs(tab5): 补 UVC 摄像头的实现说明与实机验证结论 (P4 Task11)"

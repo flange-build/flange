@@ -6,8 +6,9 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
 720×1280 MIPI-DSI 面板。同一个复合设备上还带 **HID 键盘**（Tab5 Keyboard）与
 **HID 多点触摸**（GT911，与键盘共用同一个 HID 接口、靠 Report ID 区分）与
 **UAC1 全双工音频**（ES8388 出喇叭 / ES7210 双麦录音，16 kHz 单声道，
-带**播放音量/静音的硬件控制**，✅ **播放与录音均已实机验证**，见下文）；
-后续阶段追加 UVC 摄像头。
+带**播放音量/静音的硬件控制**，✅ **播放与录音均已实机验证**，见下文）
+与 **UVC 摄像头**（SC202CS 经 MIPI-CSI + ISP + 硬件 JPEG，**MJPEG 640×360 @ 10 fps**，
+✅ **出真实画面已实机验证**；⏳ 自动白平衡闭环未上板，见下文）。
 
 > ESP-IDF 项目，**容器外**构建（flange 的 Docker 无 ESP 工具链）。
 
@@ -28,7 +29,13 @@ PPA（Pixel Processing Accelerator，像素处理加速器）**2× 放大 + 90°
     播放经 ES8388 出板载喇叭，录音取 ES7210 的两只麦混成单声道。
     播放链上带一个 **Feature Unit（Mute + Volume）**，主机的音量键与 `alsamixer`
     直接调 **ES8388 的硬件音量**（不是主机软件音量）。详见下文「UAC1 全双工音频」。
-  - 设备描述符为 Misc/IAD 复合设备，为后续 UVC 预留。
+  - **IF5/IF6 UVC 摄像头**：VideoControl（`bNumEndpoints = 0`）+ VideoStreaming
+    （alt 0 零端点 / alt 1 一条 ISO IN `0x84` × 448 B），由 IAD 成组，
+    host 侧走 mainline `uvcvideo`，零自定义驱动。**只声明一个格式/分辨率/帧率：
+    MJPEG 640×360 @ 10 fps**。SC202CS → MIPI-CSI(RAW8 1280×720@30) → ISP 去马赛克
+    → PPA ×0.5 → 硬件 JPEG(4:2:2)。**未打开时严格零占用**（alt 0 不预留带宽，
+    固件侧连 CSI 都不启动）。详见下文「UVC 摄像头」。
+  - 设备描述符为 Misc/IAD 复合设备。**4 条可用 IN 端点已全部用满。**
 - 协议头 `main/gud_protocol.h` 从内核 6.8 `include/drm/gud.h` vendor（Dual MIT/GPL）；
   面板 init 序列与 DSI/DPI 参数复刻自 esp-bsp `bsp/m5stack_tab5`（Apache-2.0）；
   待机画面用的点阵字体 `main/font8x16.h` vendor 自 [Spleen](https://github.com/fcambus/spleen)
@@ -64,6 +71,28 @@ IDF Kconfig 原文：rev < 3.0 与 >= 3.0「硬件差异巨大、互不兼容」
 若日后遇到换成 v3.x 芯片的 Tab5 批次，只能另出一份固件
 （改 `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n` + `CONFIG_ESP32P4_REV_MIN_301`）。
 
+### ⚠️⚠️ ESP32-P4 rev <3.0 已知**不可用**的硬件功能
+
+> **这个坑已经咬了四次**（烧录被拒 → CSI 桥 → JPEG 输入格式 → ISP 的 WBG），
+> 所以单列一节集中记录。共同的症状模式是：**IDF 的例程、文档、头文件都写着有，
+> 编译也过，运行时才报 `ESP_ERR_NOT_SUPPORTED`；更坏的是有些不报错，只是静默不生效。**
+> 排查任何「照 IDF 例程写却不工作」的外设时，**先回来看这张表**。
+
+机理是统一的：IDF 的 LL 层大量用 `#if HAL_CONFIG(CHIP_SUPPORT_MIN_REV) >= 300`
+把功能圈起来，rev <3.0 编到的是 `#else` 分支 —— 有的分支是**空函数**（硬件上就没有那个块），
+有的是运行时查芯片版本后返回错误。
+
+| 功能 | rev <3.0 下的实际状态 | 出处与后果 |
+|---|---|---|
+| **烧录** | IDF v6.0 默认最低支持 **v3.1**，直接拒绝 | 不加 `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` + `CONFIG_ESP32P4_REV_MIN_100=y` 就烧不进去（见上一节） |
+| **CSI 桥的颜色转换** | ❌ **硬件上没有这个块** | `mipi_csi_ll.h:159/292` 那对 `#if ... >= 300`，`#else` 分支里桥的五个颜色模式 LL 函数**全是空实现**。而 `esp_cam_new_csi_ctlr()` 内部就会调 `s_csi_ctlr_format_conversion()`（`esp_cam_ctlr_csi.c:226`），只要 `input != output` 就在 `:604-608` 查版本并拒绝 ⇒ **`ESP_ERR_NOT_SUPPORTED`，连控制器都建不出来**。⇒ IDF 例程 `examples/peripherals/camera/mipi_isp_dsi` 那份 `RAW8→RGB565` 的 CSI 配置**只适用于 rev ≥3.0，不能照抄**。**解法：CSI 的 input/output 都填 RGB565（桥直通旁路），去马赛克整个交给 ISP** |
+| **硬件 JPEG 编码器的 YUV420 / YUV444 输入** | ❌ 不支持 | `esp_driver_jpeg/jpeg_encode.c:186-198` 的 `#if !(CONFIG_ESP_REV_MIN_FULL < 300 && SOC_IS(ESP32P4))`。可用输入只剩 **RGB888 / RGB565 / GRAY / YUV422** ⇒ 本工程选 RGB565 输入（正好是 PPA 的输出色彩模式） |
+| **ISP 的 WBG（白平衡增益）、BLC、crop** | ❌ 不可用（均要 rev ≥3.0） | ⇒ **白平衡只能改用 CCM**（色彩校正矩阵）来做，见下文「UVC 摄像头 / 白平衡」 |
+| **ISP 的 CCM** | ✅ 可用，但**系数上限 4.0** | rev <3.0 的 CCM 系数是 **2 位整数 + 10 位小数**；rev ≥3.0 才是 4 位整数 + 8 位小数（上限 16）。控制律必须把增益钳在 4.0 以内 |
+| **ISP 的 AWB 统计** | ✅ **可用** | 曾经误记为「有版本门」。实际 `isp_awb.c` 只有 **subwindow 子功能**要 rev ≥3.0，且那里只 `ESP_LOGW` 一条警告，不失败 |
+| **ISP 的去马赛克 / `esp_isp_new_processor` / `enable`** | ✅ 可用，**一概无版本门** | `isp_ll.h:473-478`：把 ISP 输出设成 `ISP_COLOR_RGB565` 会顺手打开 `demosaic_en` |
+| **ISP 的 LSC** | ✅ 可用 | `ESP_CHIP_REV_ABOVE` 对 rev v1.0 判 LSC 为可用（本工程未使用） |
+
 ## 构建 / 烧录
 
 ```bash
@@ -73,8 +102,9 @@ idf.py build
 ```
 
 **开箱即用**：`sdkconfig.defaults` 已经把所有必需项写全（芯片版本、控制台、PSRAM、
-分区表、TinyUSB 类计数、codec 裁剪），`rm -f sdkconfig && idf.py build` 直接产出
-**GUD + HID + UAC1 音频**的可用固件，不需要任何旁路 conf 文件。
+分区表、TinyUSB 类计数、codec 裁剪、`esp_cam_sensor` 只留 SC202CS 一个模式），
+`rm -f sdkconfig && idf.py build` 直接产出
+**GUD + HID + UAC1 音频 + UVC 摄像头**的可用固件，不需要任何旁路 conf 文件。
 唯一的可选项是排障用的 `CONFIG_AIO_DEBUG_CDC`（默认关，见「日志」一节）。
 
 > ⚠️ 改过 `main/Kconfig.projbuild` 之后**必须连 build 目录一起删**
@@ -117,20 +147,42 @@ idf.py build flash monitor
 （`usb_descriptors.{c,h}` 的接口/端点/描述符，`app_main.c` 的 `tinyusb_cdcacm_init()` +
 `tinyusb_console_init()` + 主循环里每 10 秒复读一次的 `codec_audio_report()`）。
 `_Static_assert(sizeof(aio_desc_configuration) == CONFIG_TOTAL_LEN)` 在两档下都成立：
-**默认档（GUD + HID + 音频）241 字节 / 5 接口，调试档 300 字节 / 7 接口**。
+**默认档（GUD + HID + 音频 + UVC）384 字节 / 7 接口，
+调试档（GUD + HID + UVC + CDC，无音频）259 字节 / 6 接口**。
 
 也可以直接在 `sdkconfig.defaults` 末尾把 `#CONFIG_AIO_DEBUG_CDC=y` 那一行的注释取消，
 再 `rm -f sdkconfig && idf.py build`（`sdkconfig.defaults` 只在生成 `sdkconfig` 时读一次）。
 
-#### ⚠️ 代价：让出 GUD 的 IN 端点 + 借走 UVC 预留的 `0x84`
+#### ⚠️ 代价：让出 GUD 的 IN 端点 + **整个音频功能不编译**
 
 | 用途 | 正常档 | 调试档 |
 |---|---|---|
 | vendor(GUD) | OUT `0x01` / IN `0x81` | OUT `0x01`（**没有 IN**） |
 | HID（键盘 + 触摸） | IN `0x82` | IN `0x82` |
-| UAC 录音 | IN `0x83` | IN `0x83` |
-| UVC 预留 | IN `0x84` | —（借给 CDC 通知） |
-| CDC 通知 / 数据 | — | IN `0x84` / OUT `0x03` + IN `0x81` |
+| UAC 播放 / 录音 | OUT `0x02` / IN `0x83` | **整体不编译** |
+| **UVC 视频流** | IN `0x84` | IN `0x84`（**同一条，不变**） |
+| CDC 通知 / 数据 | — | IN `0x83` / OUT `0x03` + IN `0x81` |
+
+> ⚠️ **这一档的代价在 UVC 落地后变了。** 它原先是「借走 UVC 预留的 `0x84`」——
+> UVC 真的占上之后两者直接撞号，而这块板现场没有别的日志通道。
+> 现在改成 **`AIO_HAS_AUDIO` 由 `CONFIG_AIO_DEBUG_CDC` 反相定义**：
+> 开调试档 ⇒ `codec_audio.*` 整体不编译，腾出的那条 IN 端点给 CDC，
+> **`0x84` 永久归 UVC、绝不出借** —— 因为摄像头 bring-up 恰恰是最需要日志的那一段。
+> 编译期有 `#if CONFIG_AIO_DEBUG_CDC && AIO_HAS_AUDIO` 的 `#error` 守着。
+
+**这一档下失去的能力**：
+
+| 失去的 | 严重度 | 说明 |
+|---|---|---|
+| **全部音频**：喇叭播放、双麦录音、`alsamixer` 音量 | 高 | host 侧 `/proc/asound/cards` 里**没有**这块设备。ES8388/ES7210 不初始化，功放不导通 |
+| vendor(GUD) 的 IN 端点 `0x81` | **无** | `drm/gud` 从不使用它（依据见下），显示照常 |
+| 开机最早那几行日志 | 中 | CDC 的 TX 环形缓冲要等 host 打开 `ttyACM*` 才开始流 |
+| 再加任何 USB 功能的余地 | — | 4 条 IN 用满 |
+
+**保留的**：GUD 显示、HID 键盘、HID 多点触摸、**UVC 摄像头**。
+
+> 💡 **有 USB-TTL 的话，优先接 UART0(G37/G38)**：零端点代价、能抓上电最早的日志、
+> **默认档（音频在）也能用**。CDC 调试档是「手边只有一根 USB-C 线」时的替代品。
 
 **去掉 vendor 的 IN 端点为什么安全**：mainline `drivers/gpu/drm/gud/gud_drv.c` 的
 `gud_probe()` 只调一次 `usb_find_bulk_out_endpoint()`，全驱动没有
@@ -140,11 +192,16 @@ bulk OUT 送像素」的单向结构；本固件 `gud_device.c` 也只有 rx 侧
 （`vendor_device.c:296-332`），只有 OUT 时就只开 `rx_stream`。
 `0x81` 一直是 `TUD_VENDOR_DESCRIPTOR` 顺带声明的、**从未通过流量**的端点。
 
-FIFO 不是瓶颈：256 words 依次扣 EP0 16 + HID 16 + 音频 IN 9 + CDC 通知 16 +
-CDC 数据 IN 16 = 73，余 183 ≫ RX FIFO 所需的 62 words；IN 端点连 EP0 共 5 条，
-恰好等于 `ep_in_count`，`dcd_dwc2.c` 的 `TU_ASSERT(allocated_epin_count < ep_in_count)`
-每一步都成立。（此处曾按「vendor/CDC 数据各 32」记，那是假设 bulk IN 开了双缓冲；
-实测 `_tud_cfg.bm_double_buffered` 保持默认 0，`tud_configure()` 从未被调用，故各 16。）
+FIFO 也够（**分母是 242 words 不是 256**，见「端点预算」）：RX 62 + EP0 16 +
+`0x81` CDC 数据 IN 16 + `0x82` HID 16 + `0x83` CDC 通知 **2** + `0x84` UVC 112
+= **已用 224，空闲 18** —— 比默认档（231 / 11）还宽裕 7 words。
+IN 端点连 EP0 共 5 条，恰好等于 `ep_in_count`，`dcd_dwc2.c` 的
+`TU_ASSERT(allocated_epin_count < ep_in_count)` 每一步都成立。
+
+> 此处两处旧账已订正：① 曾按「vendor/CDC 数据各 32」记，那是假设 bulk IN 开了双缓冲，
+> 实测 `_tud_cfg.bm_double_buffered` 保持默认 0、`tud_configure()` 从未被调用，故各 16；
+> ② 曾把 **CDC 通知记成 16 words**，实际它的 `wMaxPacketSize` 是 **8** ⇒ `ceil(8/4) = 2 words`。
+> 两处都只让余量更大，不影响任何结论。
 
 > ⚠️ **直接开 `CONFIG_TINYUSB_CDC_ENABLED` 仍然是编译期错误。**
 > esp_tinyusb 默认给 CDC 的端点就是 `0x83`/`0x84`，与 UAC 录音、UVC 预留直接撞号，
@@ -152,7 +209,7 @@ CDC 数据 IN 16 = 73，余 183 ≫ RX FIFO 所需的 62 words；IN 端点连 EP
 > 症状是某个接口静默不工作。`usb_descriptors.h` 的 `#error` 会把你导向
 > `CONFIG_AIO_DEBUG_CDC`，那一档已经把端点号重排好了。
 
-**这是排障设施，不是产品特性。** 定位完就关掉 —— 它占着留给 UVC 的 `0x84`。
+**这是排障设施，不是产品特性。** 定位完就关掉 —— 它让整个音频功能不编译。
 
 #### ⚠️ 开机早期的日志会丢
 
@@ -203,17 +260,15 @@ cdc_acm 1-1.1:1.0: ttyACM0: USB ACM device
 > 这两项只影响**应用**阶段。bootloader 阶段 USJ 仍然启用，按住 BOOT 进下载模式照常能烧录
 > （IDF Kconfig 原文即如此说明）。
 
-### 端点预算（后续阶段会用满）
+### 端点预算（**已 4/4 用满**）
 
-P4 全速控制器（tinyusb `dwc2_esp32.h`）：`ep_count = 7`、`ep_in_count = 5`（含 EP0）、
-FIFO 256 words（1 KB），即**最多 4 条可用 IN 端点**。
-
-当前已用 **3 条 IN 端点**：vendor(`0x81`) + HID(`0x82`) + UAC 录音(`0x83`)，**余 1 条**。
-`0x84` 是留给 UVC 视频流的最后一条，**不得占用** —— 这也是音频坚决不用显式反馈端点的原因
-（见下文「UAC1 全双工音频」）。
+P4 全速控制器（tinyusb `dwc2_esp32.h`）：`ep_count = 7`、`ep_in_count = 5`（含 EP0），
+即**最多 4 条可用 IN 端点**。UVC 落地后**四条全部用尽，不得再加任何 USB 功能**。
 
 正因为一开始就知道会用满，**触摸与键盘才合并在同一个 HID 接口**上、用 Report ID 区分
-（RID 1 键盘 / RID 2 digitizer），触摸没有新增任何端点（见下文「HID 多点触摸」）。
+（RID 1 键盘 / RID 2 digitizer），触摸没有新增任何端点（见下文「HID 多点触摸」）；
+音频也**坚决不用显式反馈端点**（见下文「UAC1 全双工音频」）—— 那一条要留给 UVC，
+**而 UVC 已经如约用上了它**。
 
 | 端点 | 归属 | 类型 |
 |---|---|---|
@@ -221,11 +276,52 @@ FIFO 256 words（1 KB），即**最多 4 条可用 IN 端点**。
 | `0x82` | HID（键盘 + 触摸） | 中断 IN |
 | `0x02` | UAC 播放 | 等时 OUT（adaptive） |
 | `0x83` | UAC 录音 | 等时 IN（asynchronous） |
-| `0x84` | **预留给 UVC** | — |
+| `0x84` | **UVC 视频流**（448 B/帧） | 等时 IN（asynchronous） |
 
-> 要 USB 日志串口请开 **`CONFIG_AIO_DEBUG_CDC`**（排障档）：它让出 vendor(GUD) 的 IN
-> 端点 `0x81`（GUD 只用 bulk OUT）并借走 `0x84`，把 CDC 塞进这张表。直接开
-> `CONFIG_TINYUSB_CDC_ENABLED` 仍是编译期 `#error`。见下文「日志」章节。
+接口布局：IF0 vendor(GUD) / IF1 HID / IF2–IF4 UAC1 / **IF5–IF6 UVC**，
+默认档 **7 接口 / 384 字节**配置描述符。
+
+#### ⚠️ FIFO 可分配的是 **242 words，不是 256**
+
+`dcd_dwc2.c` 的 `dfifo_device_init()` 在 **buffer DMA 模式**下先扣一笔：
+
+```c
+_dcd_data.dfifo_top = dwc2_controller->otg_dfifo_depth;   /* 256 */
+if (is_dma) {
+    _dcd_data.dfifo_top -= 2 * dwc2_controller->ep_count;  /* −2×7 = −14 */
+}
+```
+
+`is_dma` 的两个条件本工程**都成立**：`CFG_TUD_DWC2_DMA_ENABLE=1`（由
+`CONFIG_TINYUSB_MODE_DMA=y` 门控，默认值从未改过）、且 P4 OTG1.1 的
+`ghwcfg2.arch == 2`（internal DMA）。⇒ **可分配上限 242 words。**
+
+| 项 | wMaxPacketSize | words |
+|---|---|---|
+| RX FIFO（所有 OUT 共享） | 最大 OUT 包 = vendor 的 64 | 62 |
+| EP0 IN | 64 | 16 |
+| `0x81` vendor bulk IN | 64 | 16 |
+| `0x82` HID 中断 IN | 64 | 16 |
+| `0x83` UAC 录音 ISO IN | 36 | 9 |
+| **`0x84` UVC 视频 ISO IN** | **448** | **112** |
+| **合计 / 余量** | | **231 / 11** |
+
+**为什么 UVC 端点取 448 而不取满 492**（余量原本是 `242 − 119 = 123` words）：
+
+1. `dfifo_alloc()` 失败只是 `TU_ASSERT` 返回 false，**一个字都不打日志**；
+2. 448 在 `is_dma` 真/假**两种假设下都装得下**（slave 模式余量 137 words）。
+   取 492 则只在 DMA 模式下「碰巧够用」，有人改成 slave 模式就炸；
+3. 代价只有 9% 带宽（446 vs 490 B/ms 有效载荷），而 640×360 @ 10 fps 上有
+   1.5–2.6 倍余量，买得起。
+
+**实测已证实这笔账**：`EP4 IN=112 words` 那一行在启动日志里如期出现，且
+**枚举时就分配好了，不等 host 选 alt 1**（见下文「UVC 摄像头 / ISO FIFO 在
+`SET_CONFIGURATION` 就分配」）。调试档另测到 224/242 与 242 的口径一致。
+
+> 要 USB 日志串口请开 **`CONFIG_AIO_DEBUG_CDC`**（排障档）。⚠️ **它的语义已经变了** ——
+> 现在是「**整个音频功能不编译**，换出一条 IN 端点给 CDC」，`0x84` **永久归 UVC、不再出借**。
+> 有 USB-TTL 时**优先接 UART0(G37/G38)**：零端点代价、能抓上电最早的日志、默认档也能用。
+> 直接开 `CONFIG_TINYUSB_CDC_ENABLED` 仍是编译期 `#error`。见下文「日志」章节。
 
 ## 显示
 
@@ -442,28 +538,55 @@ GUD 打通的证据；若开机就黑屏、连待机画面都没有，则可据�
 - **场景 B（实际体感）**：把文本终端绑到 GUD 卡后跑 vim/htop，记录打字与滚动的跟手程度
   （「打字无感延迟 / 滚动可见撕裂」这类描述），这才是「USB 瘦终端」的真实使用场景。
 
-## 资源占用（实测，`idf.py size`）
+## 资源占用（实测，`idf.py size` @ `c844d908`，IDF v6.0.2）
+
+**默认档**（GUD + HID + UAC1 音频 + UVC 摄像头，7 接口）：
 
 | 项 | 值 |
 |---|---|
-| Flash | 356,466 字节（约 348 KB），占 4 MB factory 分区 **9%** |
-| 内部 DIRAM | 95,694 字节（**16.6%**），剩余约 470 KB |
-| 镜像总大小 | 442,336 字节（`.bin` 另有 padding） |
+| Flash | **418,986** 字节（约 409 KB），占 4 MB factory 分区 **10%** |
+| 内部 DIRAM | **97,260** 字节（**16.87%**），剩余 **479,204** 字节（约 468 KB） |
+| 镜像总大小 | 505,534 字节（`.bin` 为 505,904，另有 padding） |
 
-播放音量控制（Feature Unit + 换算 + 两个控制请求回调）的增量：**Flash +502 / DIRAM +4**
-（相对不带音量控制的 355,964 / 95,690）。DIRAM 那 4 字节就是 `s_vol_q8` 与 `s_vol_muted`。
+**UVC 调试档**（`CONFIG_AIO_DEBUG_CDC=y`：**没有音频**，GUD + HID + UVC + CDC，6 接口）：
 
-UAC1 音频的增量：**Flash +77,608 / DIRAM +4,370**（相对不带音频的 275,062 / 91,228）。
-Flash 那一大笔几乎全在三个新链接进来的库上，与我们自己的代码无关：
-`esp_driver_i2s` 22.9 KB（STD/PDM/TDM 三种模式一起编）+ `esp_codec_dev` 16.2 KB
-+ `esp_hal_i2s` 5.4 KB，其余是 TinyUSB 的 audio class。
-`esp_codec_dev` 已经在 `sdkconfig.defaults` 里裁到**只剩 ES8388 与 ES7210 两颗**，
-其余八颗 codec 不编。9% 的占用离 4 MB 分区还很远，本阶段不做进一步瘦身。
+| 项 | 值 |
+|---|---|
+| Flash | **352,018** 字节 |
+| 内部 DIRAM | **95,980** 字节（**16.65%**），剩余 480,484 字节 |
+| 镜像总大小 | 436,034 字节（`.bin` 为 436,400） |
 
-大块缓冲全在 PSRAM，不占内部 RAM：GUD 收帧缓冲共约 900 KB（未压缩帧与压缩帧各一份，
-每份 `640×360×2` = 460,800 字节），DPI 帧缓冲 1.84 MB。
+> ⚠️ **调试档比默认档更小**（Flash −66,968），因为它把整个音频功能编译掉了 ——
+> 音频那一笔本身就有 7 万多字节。**别拿它当「加了功能反而变小」的怪事看。**
+
+**P4 阶段（UVC + 摄像头）的增量：Flash +62,520 / DIRAM +1,566**
+（相对 P3 结束时的 356,466 / 95,694）。其中 CCM + AE 那次是 Flash +4,738 / DIRAM +80，
+AWB 闭环那次是 Flash +1,772 / DIRAM +68，**PSRAM ±0** —— 大头是新链接进来的
+`esp_driver_cam` / `esp_driver_isp` / `esp_driver_jpeg` 与 `esp_cam_sensor` 的寄存器表。
+10% 的占用离 4 MB 分区还很远，不做进一步瘦身。
+
+早先几个阶段的增量（保留作对照）：播放音量控制 **Flash +502 / DIRAM +4**；
+UAC1 音频 **Flash +77,608 / DIRAM +4,370**（几乎全在三个新链接的库上：
+`esp_driver_i2s` 22.9 KB + `esp_codec_dev` 16.2 KB + `esp_hal_i2s` 5.4 KB，
+其余是 TinyUSB 的 audio class；`esp_codec_dev` 已裁到只剩 ES8388 与 ES7210 两颗）。
+
+### PSRAM（大块缓冲全在这儿，不占内部 RAM）
+
+| 用途 | 大小 |
+|---|---|
+| GUD 收帧缓冲（未压缩 + 压缩各一份，每份 `640×360×2`） | 2 × 460,800 = 921,600 |
+| DPI 帧缓冲 `720×1280×2` | 1,843,200 |
+| **CSI 帧缓冲 3 × `1280×720×2`** | **5,529,600** |
+| **PPA 缩放输出 `640×360×2`**（cache line 对齐） | **460,800** |
+| **JPEG 输出双缓冲 2 × `UVC_MAX_FRAME_BYTES`** | **131,072** |
+| 合计 | 约 **8.5 MB** / 32 MB |
+
 待机画面另临时占一份 460,800 字节，blit 完即释放；等待点动画常驻 3 KB（`48×32×2`），
 收到第一帧后一并释放。字体 1520 字节在 flash（`.rodata`）。
+
+> 摄像头那三项（≈6.1 MB）**即便没人打开摄像头也一直占着** —— 启动时一次建好，
+> 为的是分配失败在开机日志里立刻可见。32 MB PSRAM 付得起，而**带宽代价为零**
+> （alt 0 时不取流/不缩放/不编码），理由见「UVC 摄像头 / 不用时零占用」。
 
 > ⚠️ **DIRAM 总量是 576,464 字节（约 563 KB）** —— 对着 `build/tab5_aio.map` 的
 > Memory Configuration 核实过：`sram_low 0x4ff00000 / 0x2cbd0` + `sram_high 0x4ff40000 / 0x60000`。
@@ -477,8 +600,10 @@ Flash 那一大笔几乎全在三个新链接进来的库上，与我们自己�
 > 也就是说：**翻 Kconfig 换档位换不回什么内存**，内部 RAM 不够时只能从别处省，
 > 不要指望改芯片版本档位解决。
 >
-> **后续阶段（UAC 音频 / UVC 摄像头）的内部 RAM 预算要按剩余 ~474 KB 算，不能按 563 KB。**
-> DMA 缓冲往往必须在内部 RAM，这条约束比看上去紧。
+> **内部 RAM 预算要按剩余量算，不能按 563 KB。** 五项能力全部落地后**实测剩余
+> 479,204 字节（约 468 KB）**，即 UAC 音频与 UVC 摄像头两个阶段合计只吃掉约 6 KB ——
+> 大块缓冲全在 PSRAM（见「资源占用」）。DMA 缓冲往往必须在内部 RAM，
+> 这条约束比看上去紧，但目前远未逼近。
 
 ## HID 键盘
 
@@ -1215,9 +1340,16 @@ Tab5 作为 host 的 USB 声卡：播放 host → USB → ES8388 → 板载喇�
 共享 RX FIFO 一个 word 都不涨**，整个音频功能的 FIFO 代价只有录音那 9 words。
 而 FIFO 不够时 `dfifo_alloc()` 只是 `TU_ASSERT` 返回 false，**默认日志等级下一个字都不打**。
 
+> ⚠️ **本表的分母 256 已被 P4 阶段订正为 242**（buffer DMA 模式下 `dfifo_device_init()`
+> 先扣 `2 × ep_count = 14`，见「端点预算」）。所以「空闲」那一列各减 14：
+> 16 kHz 单声道实际余 **123 words = 492 B**。**结论一条没变** —— UVC 取 448 B（112 words）
+> 仍然装得下，且 48 kHz 立体声那一档只会更装不下。
+
 **升级阶梯**：32 kHz 单声道与 16 kHz 立体声只多吃 10 words，属于「几乎免费」的档位；
-48 kHz 立体声不可行。等 UVC 的可行性结论出来之后再抬。改的是 `usb_descriptors.h` 里
-`UAC_SAMPLE_RATE` / `UAC_CHANNEL_COUNT` 两个常量。
+48 kHz 立体声不可行。改的是 `usb_descriptors.h` 里 `UAC_SAMPLE_RATE` /
+`UAC_CHANNEL_COUNT` 两个常量。
+⚠️ **但 UVC 已经落地并吃掉了 112 words，默认档实测只剩 11 words 空闲** ——
+再抬采样率就会把 UVC 的 ISO 端点挤掉，**这条阶梯实际上已经关闭了**。
 
 ### 为什么绝不用显式反馈端点
 
@@ -1493,17 +1625,24 @@ alsamixer -c <N>
 > 若 `lsusb` 看得到设备、`/proc/asound/cards` 却没有它且 `dmesg` 无音频相关行，
 > 先 `modinfo snd-usb-audio` 确认模块存在 —— 那是 host 内核配置问题，不是固件缺陷。
 
-### `CONFIG_AIO_DEBUG_CDC`：拿 GUD 的 IN 端点换一条 USB 日志串口
+### `CONFIG_AIO_DEBUG_CDC`：拿 GUD 的 IN 端点 + **整个音频**换一条 USB 日志串口
 
 这块板现场没有可用串口：UART0 只在 M5-Bus 排针上（要外接 USB-TTL），
 USB-Serial/JTAG 被 TinyUSB 收走。于是音频排障长期只能盲二分，每切一刀烧一次板。
-`CONFIG_AIO_DEBUG_CDC`（menuconfig → Tab5 All-in-One）用一次**可逆的端点交换**
+`CONFIG_AIO_DEBUG_CDC`（menuconfig → Tab5 All-in-One）用一次**可逆的交换**
 换来 `ESP_LOG*`：
 
 | | 0x81 | 0x82 | 0x83 | 0x84 |
 |---|---|---|---|---|
-| 正常档 | vendor(GUD) | HID | UAC 录音 | 留给 UVC |
-| **调试档** | **CDC 数据** | HID | UAC 录音 | **CDC 通知** |
+| 正常档 | vendor(GUD) | HID | UAC 录音 | **UVC 视频流** |
+| **调试档** | **CDC 数据** | HID | **CDC 通知** | **UVC 视频流（不变）** |
+
+> ⚠️ **UVC 落地后这一档的代价变了。** 它原先借的正是 `0x84`，与 UVC 直接撞号。
+> 现在改成**整个音频功能不编译**（`AIO_HAS_AUDIO` 由本项反相定义）来腾端点，
+> **`0x84` 永久归 UVC** —— 因为摄像头 bring-up 恰恰是最需要日志的那一段，
+> 「一开日志就没摄像头」是不能接受的。
+> **这一档下 host 侧 `/proc/asound/cards` 里没有这块设备**，`aplay -l` / `arecord -l`
+> 都不列它；GUD 显示 / HID 键盘 / HID 触摸 / **UVC 摄像头**照常。
 
 **GUD 不需要 IN 端点** —— 这是这条路成立的全部依据：mainline
 `drivers/gpu/drm/gud/gud_drv.c` 的 `gud_probe()` 只调一次
@@ -1514,8 +1653,8 @@ TinyUSB 侧同样没问题：`vendord_open()` 按描述符里实际出现的端�
 只有 OUT 时就只开 `rx_stream`（`vendor_device.c:296-332`）。
 所以 `0x81` 一直是 `TUD_VENDOR_DESCRIPTOR` 顺带声明出来的、**从未通过流量**的端点。
 
-FIFO 也够：256 words 的 dfifo 依次扣 EP0(16) + HID(16) + 音频 IN(9) +
-CDC 通知(16) + CDC 数据 IN(16) = 73，余 183 ≫ `grxfsiz` 62；
+FIFO 也够（分母 **242** words，见「端点预算」）：RX 62 + EP0 16 + CDC 数据 IN 16 +
+HID 16 + CDC 通知 **2** + UVC 112 = **已用 224 / 空闲 18**，比默认档还宽裕 7 words；
 IN 端点连 EP0 共 5 条，恰好等于 `ep_in_count`，`dcd_dwc2.c` 的
 `TU_ASSERT(allocated_epin_count < ep_in_count)` 每一步都成立。
 
@@ -1527,8 +1666,11 @@ idf.py build flash monitor
 rm -f sdkconfig && idf.py build flash monitor
 ```
 
-⚠️ **排障档，不是产品档**：它占了留给 UVC 的 `0x84`，4 条 IN 端点用满。
-查完就关掉。GUD 显示 / 键盘 / 触摸 / 音频在这一档下全部照常工作。
+⚠️ **排障档，不是产品档**：它把**整个音频功能编译掉了**，4 条 IN 端点用满。
+查完就关掉。GUD 显示 / 键盘 / 触摸 / **UVC 摄像头**在这一档下照常工作，**音频没有**。
+
+💡 **有 USB-TTL 的话优先接 UART0(G37/G38)** —— 零端点代价、能抓上电最早的日志、
+**默认档（音频在）也能用**。CDC 调试档是「手边只有一根 USB-C 线」时的替代品。
 
 #### 日志里该看哪几行
 
@@ -1591,6 +1733,644 @@ codec_audio: 10s 泵：spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37 | TX 欠载 0
 3. 真要抓上电最早那一段（CDC 也抓不到），接 UART0(G37/G38)。
 
 
+## UVC 摄像头（SC202CS + MIPI-CSI + ISP + 硬件 JPEG）
+
+### ✅ 状态：出真实画面已实机验证；**AWB 闭环尚未上板**
+
+| 项 | 状态 |
+|---|---|
+| UVC 链路（MJPEG **640×360 @ 10 fps**，ISO IN `0x84` × **448 B/帧**） | ✅ 实机：`ffplay` 出图、**零拒收**、每 10 秒精确 +100 帧、提交 == 完成、`payload=448` 未被缩水 |
+| FIFO 分配 | ✅ 实机：`EP4 IN=112 words`，**枚举时即分配，不等 alt 1** |
+| 硬件 JPEG 实时编码（RGB565 输入 / 4:2:2 / `CAM_JPEG_QUALITY = 70`） | ✅ 实机 |
+| SC202CS 探测（SCCB `0x36`，PID `0xeb52`） | ✅ 实机 `detect=1` |
+| MIPI-CSI + ISP 取流 1280×720 RAW8 → RGB565 | ✅ 实机：**30 fps 稳定**，抢缓冲 / 丢弃 / 取帧超时**全 0**，帧长 **1843200** 正确，下 1/8 跟着全帧动，亮度跟手（挡住 15 / 拿开 45 / 手电 100） |
+| PPA ×0.5 缩小 + 接入 UVC | ✅ 实机：`ffplay` 出**真实摄像头画面** |
+| **AE（自动曝光）闭环** | ✅ 实机 |
+| **AWB（自动白平衡）闭环** | ⏳ **未上板** —— 只过了宿主机的 281 个用例。出问题时 `CAM_AWB_ENABLE = 0` 一行退回**已实机验证的静态白平衡** |
+| 灰世界四道防护的实际效果 | ⏳ **未上板** |
+| 五项能力同跑 10 分钟的复合回归 | ⏳ **未做** |
+| 摄像头开着时 GUD 帧率的变化、PSRAM 带宽争用实测值 | ⏳ **未测**（固件侧的观测设施已就位，见「自检日志怎么读」） |
+
+> 每次新增能力时都复验过前面几项无回归（GUD 显示 / HID 键盘 / HID 多点触摸 /
+> UAC1 音频含硬件音量 / UVC 出图，五项**各自**都通过），但「五项同时全开压 10 分钟」
+> 这一场还没跑。
+
+### 管线全貌
+
+```
+SC202CS ──MIPI-CSI 1 lane @ 576 Mbps──▶ CSI host
+  RAW8 1280×720 @30fps                     │
+  SCCB 0x36（复用内部 I2C G31/G32）          ▼
+  电源 = IO 扩展 0x43 的 PIN6              ISP：去马赛克 + CCM（白平衡）
+                                            │   （BGGR，RAW8 → RGB565）
+                                            ▼
+                                        CSI 桥（**直通，不做颜色转换**）
+                                            │
+                                            ▼ DW-GDMA
+                            1280×720 RGB565 = 1,843,200 B × 3 块（PSRAM）
+                                            │
+                                            ▼ PPA SRM  scale ×8/16（精确 0.5）
+                                640×360 RGB565 = 460,800 B（PSRAM，**cache line 对齐**）
+                                            │
+                                            ▼ 硬件 JPEG 编码器（RGB565 in / 4:2:2 / q=70）
+                                     ~20–35 KB JPEG × 2 块（双缓冲）
+                                            │
+                                            ▼ tud_video_n_frame_xfer()（一次提交整帧）
+                            ISO IN 0x84，448 B/包（含 2 B 载荷头）@ 1 ms
+                                            │
+                                            ▼
+                                host: uvcvideo → /dev/videoN
+```
+
+各段的代码落点：`camera_csi.{c,h}`（传感器 + CSI + ISP + AE/AWB 施加）、
+`cam_jpeg.{c,h}`（PPA 缩放 + JPEG 编码）、`uvc_stream.{c,h}`（TinyUSB 类回调 + 帧泵）、
+`cam_tune.{c,h}`（**所有可调参数与控制律**，零 ESP-IDF 依赖、宿主机可测）、
+`cam_frame_stats.{c,h}`（帧统计纯函数）。
+
+### 为什么是 640×360 @ 10 fps —— 是**像素管线**定的，不是带宽定的
+
+先把带宽账摆出来，因为结论与直觉相反：**640×480 在带宽上本来是够的**
+（10 fps 每帧预算 44.6 KB，典型 MJPEG 4:2:2 中等质量 23–38 KB）。
+做不到的原因是三条像素管线约束叠在一起：
+
+1. **SC202CS 唯一可用的模式是 1280×720（16:9）** —— 它四个模式全是 RAW，
+   1600×1200 的 1200 行超过 P4 ISP 的 1920×1080 输入上限，1600×900 裁不出 4:3；
+2. **P4 的 ISP 没有缩放器** —— `esp_driver_isp` 下只有 `isp_crop.h`，只能裁不能缩；
+3. **唯一的缩放器 PPA，缩放比粒度是 1/16**（系数是「整数位 + 4 位小数」）——
+   `1280×720 → 640×360` 是精确的 8/16；而 640×480 要「裁 960×720 再乘 2/3」，
+   **2/3 表达不出来**（最近的 11/16 给出 660×495）。
+
+⇒ 640×360 是这条管线上唯一既精确、又不改变视野与宽高比的输出尺寸。附带三个好处：
+
+- **与 GUD 显示模式同为 640×360**，整个包里只有一个分辨率要记；
+- 像素数比 640×480 少 25% ⇒ JPEG 小 25% ⇒ 帧率余量大 25%；
+- 640 与 360 **都整除 4:2:2 的 MCU（16×8）**，编码器不需要补边。
+  （这也是选 4:2:2 而不是 4:2:0 的直接原因：4:2:0 的 MCU 是 16×16，360 不整除。
+  代价是 4:2:0 大 20–25%，按现有余量付得起。）
+
+10 fps ⇒ `interval_ms = 100`、`dwFrameInterval = 1,000,000`（100 ns 单位），
+每帧传输耗时 = 帧字节 / 446 B/ms，20–35 KB ⇒ 45–78 ms，落在 100 ms 帧期内，
+剩下的空档还给 GUD 的 bulk。
+
+**只声明一个格式、一个帧、一个离散帧间隔** —— 不做多分辨率/多帧率协商。
+
+### ⚠️ CSI 的 `input_data_color_type` 与 `output_data_color_type` **双双决定长度**
+
+**这是本阶段最贵的一个坑，且它有两种表现：一种直接报错，一种静默给半帧。**
+
+```c
+.input_data_color_type  = CAM_CTLR_COLOR_RGB565,   /* ← 不是 RAW8！ */
+.output_data_color_type = CAM_CTLR_COLOR_RGB565,
+```
+
+**为什么两个都填 RGB565（而不是照 IDF 例程写 RAW8 → RGB565）**：
+
+- 本板 P4 是 **rev v1.0，CSI 桥的颜色转换硬件根本不存在**
+  （`mipi_csi_ll.h` 那对 `#if ... >= 300` 的 `#else` 分支里，桥的五个颜色模式 LL 函数
+  **全是空实现**）。而 `esp_cam_new_csi_ctlr()` 内部就会调
+  `s_csi_ctlr_format_conversion()`（`esp_cam_ctlr_csi.c:226`），只要 `input != output`
+  就在 `:604-608` 查芯片版本并拒绝 ⇒ **`ESP_ERR_NOT_SUPPORTED`，连控制器都建不出来**。
+  实机第一次就死在这里。
+- ⇒ **IDF 例程 `examples/peripherals/camera/mipi_isp_dsi` 那份 CSI 配置只适用于
+  rev ≥3.0，不能照抄。** 解法是让 CSI 桥**直通**，去马赛克整个交给 ISP。
+
+**这两个字段描述的是「桥搬运的数据」，不是「传感器发出的数据」**，而且**双双参与长度计算**：
+
+| 字段 | 算什么 | 填 RGB565 | 若误填 RAW8 |
+|---|---|---|---|
+| `input_data_color_type` → `in_bpp` | `csi_transfer_size = h*v*in_bpp/64`，即 **DMA 实际搬多少字节** | 1,843,200 | **921,600（半帧）** |
+| `output_data_color_type` → `out_bpp` | `fb_size_in_bytes = h*v*out_bpp/8`，即**帧缓冲大小与 `received_size`** | 1,843,200 | 1,843,200 |
+
+⇒ 填 `RAW8/RGB565` 会**只搬半帧却声称收满**：`received_size` 正常、帧计数正常、
+全帧亮度统计照样跟手，**从上层完全看不出来**。
+
+固件对此有两道自证判据（都在自检行里）：
+
+1. **帧长不符计数器** —— `received_size != CAM_FB_BYTES` 时这一帧**不交出去**
+   （半帧冒充正常画面比没有帧更坏），计数与实收字节都进快照；
+2. **下 1/8 亮度与全帧并排统计**，并自动判读：全帧见过光而下 1/8 全程为零
+   ⇒ 打一条 `ERROR` 直接点名 `csi_cfg.input_data_color_type`。
+
+> ⓘ CSI host 本身不配色彩格式（`mipi_csi_hal_init` 只设 lane/时钟，数据类型范围
+> 写死 `0x12~0x2f`，已涵盖 RAW8 的 `0x2A`），所以改这两个字段**不影响 MIPI 收包**。
+
+### ⚠️ ISP 在 CSI 桥**之前**，所以写进 PSRAM 的字节由 ISP 的输出格式定义
+
+管线次序是 **CSI host → ISP → CSI 桥 → DW-GDMA → PSRAM**，而不是直觉上的
+「CSI 收完再交给 ISP」。依据：`SOC_ISP_SHARE_CSI_BRG = 1`；`isp_core.c:92` 以
+`BRG_USER_SHARE` 认领同一个桥，CSI 控制器以 `BRG_USER_CSI` 认领，
+`mipi_csi_share_hw_ctrl.c` 允许这一对共存。
+
+⇒ **是 ISP 吐 RGB565，桥只负责搬**，上一节那两个字段填 RGB565 才与实际一致。
+
+ISP 配置：
+
+```c
+.clk_hz = 80 MHz,
+.input_data_source      = ISP_INPUT_DATA_SOURCE_CSI,
+.input_data_color_type  = ISP_COLOR_RAW8,      /* 这里才是传感器真正发的 RAW8 */
+.output_data_color_type = ISP_COLOR_RGB565,    /* 会顺手打开 demosaic_en */
+.bayer_order = COLOR_RAW_ELEMENT_ORDER_BGGR,
+```
+
+> ⚠️ **bayer order 要按名字抄，绝不能按数值抄**：
+> `esp_cam_sensor_types.h` 是 `RGGB=0 … BGGR=3`，而 `hal/color_types.h` 是
+> `BGGR=0 … RGGB=3`，**两套枚举的顺序恰好相反**。
+
+> ⓘ 三块 1.84 MB 帧缓冲（`CAM_FB_COUNT = 3`）而不是双缓冲：`bk_buffer_dis = true`
+> 时驱动没有内部备份缓冲，`on_get_new_trans` 回调**必须无条件拿得出一块空闲缓冲**，
+> 返回空会让驱动走到 `assert(false)` 直接崩机 —— 而双缓冲的稳态空闲数恰好是 0。
+
+### ⚠️ PPA 输出缓冲的**地址与长度都必须 cache line 对齐**
+
+`ppa_srm.c:186-189` 对 `out.buffer` 与 `out.buffer_size` **两者都硬性检查**，
+不过就直接 `ESP_ERR_INVALID_ARG`。**症状是「一帧都出不来」，而不是画面异常** ——
+host 侧完全看不出这是内存对齐问题。
+
+所以缩放输出缓冲用 `MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED` 分配，
+并在运行时再验一次长度可整除（460,800 = 128 × 3,600，天然对齐）。
+
+> ⓘ **JPEG 编码器那一侧反而没有这个要求**（`jpeg_encode.c:250` 的 C2M 带
+> `UNALIGNED` 标志），所以接 PPA 之前一直用普通 `malloc` 都没事 ——
+> 这条限制是引入 PPA 才出现的，P4 计划里没写。
+>
+> ⓘ 但 **JPEG 的输出比特流缓冲另有一条**：`jpeg_encode.c:144` 检查 `bit_stream`
+> 地址按 cache line 对齐，必须用 `jpeg_alloc_encoder_mem()` 分配，普通
+> `heap_caps_malloc()` 过不了 —— 症状同样是「一帧都编不出来」。
+
+### ⚠️ UVC 的 ISO FIFO 在 `SET_CONFIGURATION` 就分配了，**不等 alt 1，且失败静默**
+
+> 这一条推翻了 P4 计划里「alt 1 才分配 FIFO」的说法，直接改变了排障方向。
+
+逐行依据：
+
+- `tusb_mcu.h:768-770` dwc2 没定义 `TUP_DCD_EDPT_CLOSE_API` ⇒ `TUP_DCD_EDPT_ISO_ALLOC` 成立；
+- `video_device.c:1404-1422` 的 `videod_open()` 里就调 `usbd_edpt_iso_alloc()`；
+- `dcd_dwc2.c:634-637` → `dfifo_alloc()`，**此刻**写下 `DIEPTXF4`；
+- `video_device.c:866-871` 里 alt 1 只调 `usbd_edpt_iso_activate()` → `edpt_activate()`，
+  那里只写 `DIEPCTL`，**一个字都不碰 FIFO**。
+
+⇒ **`usbd_edpt_iso_alloc()` 的返回值 `video_device.c` 根本不检查，彻底静默。**
+
+**所以症状是「提交涨、完成不涨」，而不是 `SET_INTERFACE` 被 STALL。**
+判据是启动日志里 `FIFO: EP4 IN=112 words` 那一行**必须出现** —— 它不出现就是分配失败了。
+实测两档都出现，默认档 `已用 231 / 空闲 11`，调试档 `已用 224 / 空闲 18`（分母都是 242）。
+
+### ⚠️ `dwMaxVideoFrameBufferSize` 声明小了会让**每包缩水，且哪里都不报错**
+
+TinyUSB 自己算 `dwMaxPayloadTransferSize`（`video_device.c:562-567`）：
+
+```
+payload = min( ceil(dwMaxVideoFrameSize / interval_ms) + 2 , CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE )
+```
+
+而 `dwMaxVideoFrameSize` 来自 host 的 COMMIT，`uvcvideo` 直接抄我们帧描述符里的
+`dwMaxVideoFrameBufferSize`。**声明成 30000 的话 `30000/100 + 2 = 302 < 448`
+⇒ 每个 ISO 包只发 302 字节，带宽白掉三分之一，而且哪里都不报错。**
+
+⇒ `UVC_MAX_FRAME_BYTES = 65536`（`65536/100 + 2 = 658 > 448` ✅），三道守着：
+`usb_descriptors.h` 的 `_Static_assert`、`check_usb_desc.py` 的断言、
+以及自检行里把实际 `payload=` 打出来（**实测 448，未被缩水**）。
+
+65536 同时是 JPEG 输出缓冲的大小 —— 用**同一个常量**；编码结果超限时走**可见的失败路径**
+（丢帧 + 计数），**不截断**（截断的 JPEG 在 host 侧表现为绿色/灰色的下半屏，极难归因）。
+
+### ⚠️ TinyUSB 上游 bug：三个 `*_FRM_MJPEG_DISC` 宏是坏的，本工程手写了替代
+
+`TUD_VIDEO_DESC_CS_VS_FRM_MJPEG_DISC`（`video.h:656-660`）把变参**原样**摊进字节流，
+却又按「每个变参占 4 字节」算 `bLength`：
+
+- 传裸 `u32`（1 个变参）⇒ `bLength = 30`、`bFrameIntervalType = 1` 都对，
+  但那个 u32 被截成**1 个字节**，实际只发 27 字节 ⇒ **整条描述符流从这里开始错位**；
+- 传 `U32_TO_U8S_LE(interval)`（4 个变参）⇒ 字节数对了，
+  但 `bLength` 变成 42、`bFrameIntervalType` 变成 4。
+
+**两条路都错。** 这不是我们用错了：**三个 `*_DISC` 宏在全仓库（`src` 与 `examples`）
+零调用者，上游从没跑过它们。** 本工程用手写的 `AIO_UVC_FRM_MJPEG_DISC1(...)` 替代，
+精确产出 30 字节，`check_usb_desc.py` 有 `len(frm) == 26 + 4` 的断言钉住。
+
+> ⓘ 用 `_DISC`（离散）而不是 `_CONT`（连续）的理由：`video_device.c:550-558` 在 host
+> 把 `dwFrameInterval` 填 0（问默认值）时，对「`bFrameIntervalType > 1`」与
+> 「连续区间 min != max」这两种情况会直接 `return true` 而**不填任何值**。
+
+### ⚠️ `CFG_TUD_VIDEO` 与 `CFG_TUD_VIDEO_STREAMING` **必须同时定义**
+
+`usbd.c:229` 只看 `#if CFG_TUD_VIDEO` 就把 videod 驱动挂进驱动表，
+而 `video_device.c:30` 的编译门是 `#if (CFG_TUD_ENABLED && CFG_TUD_VIDEO && CFG_TUD_VIDEO_STREAMING)`。
+**只定义前者 ⇒ 整个 `video_device.c` 编译成空文件 ⇒ 链接期缺 `videod_init` / `videod_deinit` /
+`videod_reset` / `videod_open` / `videod_control_xfer_cb` / `videod_xfer_cb` 六个符号。**
+`tusb_option.h` 只给了 `CFG_TUD_VIDEO` 的默认值 0，后者连默认值都没有。
+
+三个宏都在 `main/tinyusb_config/tusb_config.h`，且 `usb_descriptors.c` 有
+`_Static_assert` 守着两者都为 1、以及 `UVC_EP_SIZE == CFG_TUD_VIDEO_STREAMING_EP_BUFSIZE`。
+
+### ⚠️ `sc202cs.c:1167` 上游 off-by-one —— 增益下标会越界读
+
+`MIN(u32_val, s_limited_abs_gain_index)` 在增益表里**没有任何一项超过**
+`CONFIG_CAMERA_SC202CS_ABSOLUTE_GAIN_LIMIT` 时（**默认恰好如此**：表的最大值
+`63008` == 上限 `63008`，`:1526-1532` 那个循环从不 `break`），
+`s_limited_abs_gain_index` 停在 `ARRAY_SIZE` 上 —— 于是**下标 == 表长也被放行**，
+`sc202cs_gain_map[表长]` 是一次**越界读**。
+
+⇒ **不能指望传感器驱动兜底**，传进去的下标必须自己保证合法。
+`cam_ae_split()` 因此严格把下标钳在 `[0, gain_count − 1]`，宿主机测试用
+`ev = 1 … 4×10⁶` 的扫描断言 `g < gain_count`。
+
+### 白平衡：**用 CCM 替代 WBG**
+
+本板 P4 rev v1.0 的**硬件白平衡增益（WBG）有 rev ≥3.0 的版本门，用不了**
+（`isp_wbg.c:30`），BLC 同理。而 **CCM（颜色校正矩阵）没有任何版本门** ——
+它在去马赛克之后的 RGB 域上乘一个 3×3 矩阵，**对角阵 `diag(kr, 1, kb)`
+与 WBG 的通道增益在数学上等价**。
+
+```c
+.matrix = {{ kr, 0, 0 }, { 0, 1.0f, 0 }, { 0, 0, kb }}
+```
+
+- **上限 4.0** —— rev <3.0 的 CCM 定点格式是「2 位整数 + 10 位小数 + 符号」
+  （rev ≥3.0 才是 4 + 8），超范围 `esp_isp_ccm_configure()` 直接 `ESP_ERR_INVALID_ARG`。
+  控制律内部钳在 `[0.250, 4.000]`。
+- **只做对角线，不做非对角项** —— 非对角项管的是色彩还原准确度（把传感器光谱响应
+  映射到 sRGB），要色卡与拟合，与「发绿」这个问题无关，刻意不做。
+- 绿固定 1.000 作基准，**红蓝往上抬而不是把绿压下去**：抬红蓝时绿通道保持满量程，
+  压绿则要靠 AE 多加一档增益补回亮度，白白多一份噪声。
+
+#### 为什么断定「整体发绿 = 白平衡缺失」而不是「bayer order 配错」
+
+1. **物理必然** —— Bayer 阵列 50% 是绿像素、绿滤光片透过率也最高，
+   而本管线里 RAW→RGB 只有 ISP 去马赛克一步，**没有任何一处对三通道施加不同增益**
+   （WBG 用不了、CCM 在那次改动前压根没配）⇒ 必然偏绿；
+2. **bayer order 错的症状不是这个** —— 四种 order 的差别是 R 与 B 的位置，
+   G 在四种 order 里都占对角线两格，所以配错的表现是**红蓝对调 + 棋盘格高频伪影**，
+   不是整幅均匀偏绿；
+3. **可证伪的现场判据**（烧板后按这个判）：看自检行的「通道均值 R.. G.. B..」——
+   `R < G > B` 且比例大体固定、与镜头对着什么无关 ⇒ 白平衡；
+   拍**红色**物体时 `b_mean` 反而比 `r_mean` 高 ⇒ 才轮到改 `bayer_order`。
+
+### 自动曝光（AE）：自己写的 P 控制器，**没有引 `esp_ipa`**
+
+曝光与增益两个旋钮被合成一个标量 **ev（曝光量）**：
+
+```
+ev = 曝光寄存器值 × 绝对增益 ÷ 1000
+```
+
+亮度与 ev 成正比（不削顶时），所以控制律只对这一个数做比例控制；
+「先用曝光时间、不够再加增益」的**分配策略被隔离在 `cam_ae_split()` 里**
+（曝光时间不增加噪声，模拟/数字增益都增加）—— 控制与分配分开，两件事各自可测。
+
+**四道防振荡闸**（缺一不可，取值理由见 `cam_tune.h` 逐条注释）：
+
+| 闸 | 宏 | 值 | 为什么 |
+|---|---|---|---|
+| ① 死区 | `CAM_AE_DEADBAND` | 12 | ≈ 目标的 10%，肉眼看不出，却足以让量化噪声与一片云飘过就触发调整（= 画面「一亮一暗地喘」） |
+| ② 阻尼 | `CAM_AE_DAMP_NUM/DEN` | 1/2 | 测量到执行有约 170 ms 滞后，带滞后的比例环节增益 1.0 就在振荡边缘，0.5 留一倍余量。**不要**改成 1/1 |
+| ③ 单步限幅 | `CAM_AE_STEP_MAX` | 2 | 盖住镜头时理论倍数到 60×，一步跳过去必然大幅过冲再反向。限成 2× 后最坏约 6 步（≈2 秒）走完，全程单调 |
+| ④ 更新周期 | `CAM_AE_INTERVAL_TICKS` | 3 拍 = **300 ms** | 由**测量滞后**推导：传感器 1–2 帧(33–66 ms) + CSI 积压 2 帧(≤66 ms) + 帧泵一拍(≤100 ms) ≈ 230 ms。保证每次测量反映的是上一次下发的结果 |
+
+**第五条纪律：状态里存的是量化后的实际 ev，不是请求值** —— 否则每次「请求」与「实际」
+的那点差额会在下一拍被当成新误差再放大一次，形成慢速极限环。
+
+曝光/增益下发是**一次** `esp_cam_sensor_set_para_value(ESP_CAM_SENSOR_GROUP_EXP_GAIN, ...)`，
+两个值一起写，所以不会漏出「新曝光 + 旧增益」的中间帧；约 6 次 SCCB 写 ≈ 2 ms @100 kHz，
+最快 300 ms 一次，占那条还挂着 20 ms 触摸轮询的总线不到 1%。
+
+### 自动白平衡（AWB）：灰世界 + **四道防护** ⏳ 未上板
+
+> ⚠️ **本节描述的闭环尚未实机验证**，只过了宿主机的 281 个用例（含红墙/绿植/蓝天
+> 三个单色场景与带 3 拍滞后的 AE+AWB 联合仿真）。
+> **`CAM_AWB_ENABLE = 0` 一行即可退回已实机验证的静态白平衡**，且关掉时相关代码整段不编译。
+
+反馈量是**分通道均值**（AE 那次 1/64 扫描顺带算出来的，边际成本只有三个累加器），
+按灰世界反推 `diag(kr, 1, kb)` 再经 CCM 施加。
+
+**灰世界对单色场景完全不成立** —— 镜头怼着一堵红墙时，它会认定红通道太强、把红压下去，
+结果**红墙变成灰墙、其余部分泛青**。这是闭环 AWB 的头号通病，四道防护各挡一类：
+
+| 防护 | 宏 | 值 | 挡什么 |
+|---|---|---|---|
+| ① 亮度下限 | `CAM_AWB_LUM_MIN` | 40 | 太暗时通道均值由**读出噪声**主导（信噪比 <1），比值纯属随机 |
+| ② 亮度上限 | `CAM_AWB_LUM_MAX` | 200 | 大面积接近削顶时均值被 255 **截断**，原本 300 与 400 的两个通道都变 255，看起来「已经平衡」 |
+| ③ 色偏上限 | `CAM_AWB_CAST_MAX_PCT` | 200（= 2.00×） | 三通道均值 max/min 超过它即判为单色场景。依据：**普通混杂场景**很少超 1.7×，而红墙 R200/G60/B55 ⇒ 3.6×、绿植 R55/G150/B50 ⇒ 3.0×、蓝天 R70/G110/B210 ⇒ 3.0× 全被拦下。均值为 0 按「无穷大色偏」处理（顺手挡住除零） |
+| ④ 增益合理范围 | `CAM_AWB_GAIN_MIN/MAX_MILLI` | [1.000, 3.000] | 建议值越界 ⇒ **整拍不动，而不是钳到边界采纳** —— 跑出范围本身说明统计不可信，采纳钳过的值等于照着错误方向走。下限 1.0 有物理依据（绿通道恒为最强，R/B 相对 G 的增益不可能 <1）；上限 3.0 覆盖到白炽灯 2700K |
+
+> ⓘ **防护 ①–④ 不消耗更新周期** —— 不可信的场景不该算进 1 秒那一拍里。
+
+控制律纪律与 AE 同源：死区 5%、阻尼 1/2、单步限幅 25%、更新周期 10 拍（= 1 秒）。
+单步 25% 意味着最坏从 1.000 走到 3.000 要 5 秒 —— **慢，但单调不过冲**；
+**白平衡的过冲比曝光的更难看**，人眼对色偏的敏感度远高于对亮度。
+
+#### 与 AE 的解耦（三条，缺一不可）
+
+1. **归一化** —— 反馈量是**通道比值**（`建议 = 当前 × g_mean / 该通道均值`），
+   只含比值，AE 把整体亮度翻倍它一点不变 ⇒ **对 AE 天然免疫**；
+2. **时间尺度分离** —— AWB 周期 1 秒 vs AE 300 ms。慢环每次看到的是快环的**稳态**
+   而不是暂态（AE 最坏收敛 ≈6 步 × 300 ms ≈ 2 秒）；
+3. **等 AE 收敛才动** —— 颜色统计只在亮度稳定的窗口里可信。
+   ⓘ **AE 关着时传「已稳定」**：曝光恒定本就是最该采信统计的情形。
+
+#### 为什么**不挂硬件 AWB 统计**（`isp_awb`）——这是取舍，不是「用不了」
+
+它在本板上**确实可用**（那处 `< 300` 只否掉 **subwindow** 子功能，而且只打个 warning）。
+不用它的四条理由：
+
+1. 反馈量已经免费拿到了（同一次扫描顺带算的），再挂一个硬件块换不来新信息量，
+   只多一份配置面 + 一条会失败的初始化路径 + 一个中断回调；
+2. **它唯一能多给的那份能力在本板上恰好残缺** —— 硬件 AWB 的价值在**白点筛选**
+   （只累加落在指定亮度/色度框内的像素），但那个框本身要靠色卡标定
+   （把猜测从「灰世界成不成立」挪到「白点框画得对不对」），
+   而能把统计限制在画面某区域的 **subwindow 恰恰是 rev <3.0 唯一被砍掉的那一项**；
+3. 同一件事已经用软件做了、而且更保守：硬件在**像素级**挑出可信部分继续调，
+   软件（四道防护）在**整幅级**判定不可信就**整拍不调**。对一台 UVC 摄像头，
+   「宁可不动，不要动错」是对的一侧；
+4. 不新增组件目录，也不新增运行期失败路径。
+
+> 若哪天要更准的白平衡，**正确的下一步不是挂硬件统计块**，而是先给帧统计加
+> **像素级白点筛选**（在已有那次扫描里多两个条件判断）—— 那才是精度的瓶颈。
+
+### 白平衡标定流程（静态模式下，也可用来固化闭环的结论）
+
+1. 烧板，让摄像头对着一张**白纸**（或灰卡），照明用日常那盏灯，**充满画面**；
+2. **等 AE 收敛** —— 自检行出现 `AE ... 已收敛` 且亮度均值落在目标附近。
+   曝光没稳的时候通道均值会被削顶与量化噪声带偏，**这一步不能省**；
+3. 读 camera 的自检行：
+
+```
+camera: [自检] 画质 CCM=ESP_OK 当前 R×1.700 G×1.000 B×1.550
+               | 通道均值 R98 G121 B105 → 建议 R×2.099 B×1.786（对白纸/灰卡时才作数）
+```
+
+4. 把最后那两个数抄进 `main/cam_tune.h` 的 `CAM_CCM_GAIN_R_MILLI` /
+   `CAM_CCM_GAIN_B_MILLI`（单位 1/1000，即抄成 `2099` / `1786`），重新编译；
+5. 再跑一次：通道均值应当三个数相近（差 <5%），**建议值应当 ≈ 当前值**。
+
+> ⭐ **建议值是绝对值且幂等** —— `建议 = 当前 × g_mean / 该通道均值`，
+> **已经把当前生效的 CCM 乘进去了**，不是增量。所以直接抄、不要相乘；
+> 系数正确时三个均值相等 ⇒ 建议 == 当前 ⇒ 抄多少次都不动。
+>
+> ⓘ AWB 开着时这一步会**自动**发生：自检行里的「当前」就是 AWB 调出来的值，
+> 抄它就等于把闭环的结论固化成静态标定。
+
+### 参数在哪调：`main/cam_tune.h`（**只在这里改**）
+
+控制律是纯逻辑、不依赖 ESP-IDF，宿主机可编译可测（`test/test_cam_tune.c`）。
+
+| 宏 | 默认值 | 说明 |
+|---|---|---|
+| `CAM_CCM_GAIN_R_MILLI` | 1700 | CCM 红增益**开机初值**（AWB 开时是起点，关时是最终值）。⚠️ 默认值是**估计值不是实测值**，标定流程见上 |
+| `CAM_CCM_GAIN_G_MILLI` | 1000 | 绿固定为基准 |
+| `CAM_CCM_GAIN_B_MILLI` | 1550 | CCM 蓝增益初值 |
+| `CAM_AE_TARGET` | 120 | 目标亮度（BT.601 均值）。>150 会让室内白墙削顶，太低整体发灰 |
+| `CAM_AE_DEADBAND` | 12 | 防振荡闸① |
+| `CAM_AE_DAMP_NUM` / `_DEN` | 1 / 2 | 防振荡闸② |
+| `CAM_AE_STEP_MAX` | 2 | 防振荡闸③（单步最大倍数） |
+| `CAM_AE_GAIN_MAX_MILLI` | 16000 | 增益上限 16×（传感器表能到 63×，那时噪声已盖过画面） |
+| `CAM_AE_INTERVAL_TICKS` | 3 | 防振荡闸④，一拍 = 100 ms |
+| `CAM_AE_CONVERGE_TICKS` | 3 | 纯观测量，不参与控制 |
+| **`CAM_AWB_ENABLE`** | **1** | **AWB 总开关。改 0 = 钉回已实机验证的静态白平衡（相关代码整段不编译）** |
+| `CAM_AWB_INTERVAL_TICKS` | 10 | AWB 周期 = 1 秒（与 AE 的时间尺度分离） |
+| `CAM_AWB_DEADBAND_PCT` | 5 | 增益差 <5% 不动 |
+| `CAM_AWB_DAMP_NUM` / `_DEN` | 1 / 2 | 阻尼 |
+| `CAM_AWB_STEP_MAX_PCT` | 25 | 单步限幅 |
+| `CAM_AWB_LUM_MIN` / `_MAX` | 40 / 200 | 防护 ① ② |
+| `CAM_AWB_CAST_MAX_PCT` | 200 | 防护 ③（单色场景） |
+| `CAM_AWB_GAIN_MIN/MAX_MILLI` | 1000 / 3000 | 防护 ④ |
+| `CAM_AWB_CONVERGE_TICKS` | 3 | 纯观测量 |
+
+JPEG 与尺寸相关的常量另在两处：`main/cam_jpeg.c` 的 `CAM_JPEG_QUALITY`（70）、
+`CAM_JPEG_SUBSAMPLE`（4:2:2）、`CAM_JPEG_BUFS`（2）；
+`main/usb_descriptors.h` 的 `UVC_W/H/FPS/EP_SIZE/MAX_FRAME_BYTES`；
+`main/tab5_pins.h` 的 `CAM_SENSOR_W/H`、`CAM_MIPI_LANES/MBPS`、`SC202CS_*`。
+
+**`CAM_JPEG_QUALITY` 的调法有判据，不是拍脑袋**（照自检行第二条读）：
+
+| 峰值帧字节 | 动作 |
+|---|---|
+| > 44 KB（占满 100/100 ms） | 帧发不完，拒收会跟着涨 ⇒ **质量 −10** |
+| 30–44 KB | 保持，但已经贴着预算，**别再往上调** |
+| < 20 KB 且拒收 = 0 | 才允许 **+10** 换画质 |
+
+### 自检日志怎么读
+
+摄像头相关共 **6 行**，两组。**从上往下读，第一条不对的就是根因** ——
+`camera` 那两组说的是「有没有帧 / 帧对不对」，`uvc` 那四行说的是「帧有没有发出去」。
+
+> 默认档日志走 UART0（G37/G38，需外接 USB-TTL）；调试档走 USB CDC 并每 10 秒复读一次。
+
+#### `camera:` —— 取流与画质
+
+```
+camera: [自检] SCCB(0x36)=ESP_OK pid_rd=ESP_OK pid=0xeb52(期望 0xeb52) detect=1
+camera: [自检] CSI fb=ESP_OK ctlr=ESP_OK cbs=ESP_OK isp=ESP_OK fmt=ESP_OK start=ESP_OK
+             | 取流中=1 帧=300 抢缓冲=0 丢弃=0 取帧超时=0 帧长不符=0(实收 1843200，应为 1843200)
+camera: [自检] 画质 CCM=ESP_OK 当前 R×1.700 G×1.000 B×1.550
+             | 通道均值 R98 G121 B105 → 建议 R×2.099 B×1.786（对白纸/灰卡时才作数）
+camera: [自检] AWB=开 R×1.700 B×1.550 调整中 下发=0 最近=色偏过大(未运行)
+             | 未更新：AE未稳=0 暗场=0 过亮=0 色偏过大=12 未到周期=0 死区内=0 增益越界=0 量化无变化=0
+camera: [自检] AE=ESP_OK 曝光=624/1244 增益=1.000×(第 0 档) 曝光量=624
+             | 亮度 118→目标 120(±12) 已收敛 下发=4 最近=ESP_OK
+```
+
+| 现象 | 结论 |
+|---|---|
+| `detect=0` | 传感器没探到。`SCCB(0x36)=ESP_ERR_NOT_FOUND` ⇒ 不应答，查供电与走线；`pid` 不符 ⇒ 装的不是 SC202CS |
+| **`ctlr=ESP_ERR_NOT_SUPPORTED`** | **特指一件事**：`csi_cfg` 的 input/output 颜色格式不相等，触发了桥的颜色转换，而本板 rev <3.0 没这个硬件块。见上文「CSI 的两个 color_type」 |
+| `fmt!=ESP_OK` | SCCB 写寄存器表失败：总线在探测之后掉了 |
+| 六步全 `ESP_OK` 但 `帧=0` | 管线建起来了、传感器也 stream on 了，但一帧都没到 ⇒ 查 MIPI 走线 / lane 速率 |
+| **`帧长不符` 非零** | `received_size` 与 `CAM_FB_BYTES` 对不上 ⇒ `output_data_color_type` 理解错了。**此时这些帧一律不交出去，所以「帧」不会涨** —— 两个数要一起看才分得清「没数据」与「数据长度不对」 |
+| `帧` 在涨 | 取到了。**此时才轮到看画质那几行** |
+| `CCM!=ESP_OK` | 白平衡压根没生效，画面必然发绿，先修这个 |
+| 通道均值 `R<G>B` 比例固定 | 白平衡还没调准（AWB 开着会自己收敛；关着就抄「建议」重编） |
+| 拍**红色**物体时 `B > R` | **这才是 bayer order 配错**（红蓝对调），改 `camera_csi.c` 的 `bayer_order` |
+| 三个均值相近（差 <5%） | 白平衡到位，「建议」应当 ≈「当前」 |
+| AWB `下发=0` 且 `AE未稳` 一大堆 | AE 一直没收敛（环境光在变？）⇒ AWB 一步都走不了，**先去看 AE 那一行** |
+| AWB `色偏过大` 一直在涨 | **防护③正在起作用**：镜头对着单色物体。**这是正确行为**，转向普通场景就不涨了 |
+| AWB `暗场` / `过亮` 在涨 | 环境光超出 [40, 200]，加/减光 |
+| AWB `增益越界` 在涨 | 灰世界推出的系数跑出 [1.0, 3.0]：要么光源极端，要么 bayer order 配错 |
+| AWB `死区内` 在涨 + `已收敛` | **一切正常**，白平衡已到位并稳住 |
+| AWB `下发`一直涨、增益来回摆 | **振荡**。调大 `CAM_AWB_INTERVAL_TICKS` 或减小阻尼 |
+| AE `下发=0` 且取流中 | 控制律一次没动过：要么亮度一直落在死区（好事），要么帧统计压根没送进来 |
+| AE 亮度长期偏离目标而 `下发` 不涨 | **顶到限位了** ⇒ 环境太暗，只能加光或抬 `CAM_AE_GAIN_MAX_MILLI`（代价是噪声） |
+| AE 亮度来回摆、`下发`一直涨 | 振荡。优先加大 `CAM_AE_INTERVAL_TICKS` 或减小阻尼 |
+
+> ⚠️ **「被场景带偏」与「被防护挡住」在现场必须分得开** —— 这正是 AWB 那一行
+> 同时给出「当前增益 + 是否收敛」「最近一拍的结论」「八种未更新理由的累计计数」的原因。
+>
+> ⚠️ 「没跑过」一律打成 **`未运行`**，绝不打成 `-1`（沿用音频那一章的教训）。
+
+#### `uvc:` —— 编码与发送
+
+```
+uvc: [自检] streaming=1 提交=1000 完成=1000 拒收=0 | commit×1 payload=448(应为 448)
+           frame_max=65536 interval=1000000
+uvc: [自检] 编码=1000 失败=0 | 帧字节 最近=24310 平均=23980 峰值=31204
+           → 峰值占 70/100 ms | 编码耗时=9137 us
+uvc: [自检] 缩放=1000 失败=0 耗时=4210 us | 实测 10.0 fps(距上一行自检) | 摄像头启停=ESP_OK
+uvc: [自检] 画面 采样=28800 均值118 最暗3 最亮255 (下1/8 均值102 最亮241,
+           历史最亮 全帧255/下1/8 241) 校验和 7a3f10c2
+           | PSRAM 读 空载... → 取流中... → 停流后... MB/s
+```
+
+| 现象 | 结论 |
+|---|---|
+| `streaming=0` 一直不变 | host 没选中 alt 1 ⇒ 问题在协商/描述符，不在取流 |
+| `streaming=1` 但 `提交=0` | 帧泵没跑起来（任务没建 / 优先级饿死） |
+| **`提交` 一直涨、`完成` 不涨** | 包发不出去 ⇒ **多半是 EP4 IN 的 FIFO 没分到**（见上文，`FIFO: EP4 IN=112 words` 那一行是否出现） |
+| `payload ≠ 448` | `dwMaxVideoFrameBufferSize` 那个静默带宽陷阱 |
+| `拒收` 在涨 | 上一帧还在飞就提交了下一帧 ⇒ 帧太大发不完，看下一行的峰值 |
+| `峰值 > 44 KB` | 帧发不完 ⇒ `CAM_JPEG_QUALITY` −10 |
+| **`缩放 失败` 非零** | PPA 提交被拒。**几乎只有一个原因**：输出缓冲没按 cache line 对齐。它是启动时一次性分配的，所以**要么全失败要么全成功**，中间态不存在 |
+| `缩放 耗时` | 就是每 100 ms 里 `display_blit()` 可能被顶住的时长**上界**（PPA 引擎是共享硬件，两个 client 在引擎信号量上排队）。**显示掉帧时先看这个数，别一上来就怪带宽** |
+| `实测 fps` | 判据 **≥ 9.0**。**用「完成」而不是「提交」算** —— 提交了没发完的帧 host 一帧都看不见 |
+| `采样=0` | 一次都没统计过 = 从来没取到过帧 ⇒ 回去看 `camera` 那一行 |
+| **`最暗 == 最亮`** | **纯色，不是真实画面** |
+| **校验和帧帧不变** | 取到的是同一块没被重写的缓冲 |
+| **`下1/8 历史最亮` 恒为 0 而全帧见过光** | **DMA 只填了上半张**（固件会自动打一条 ERROR 点名 `input_data_color_type`） |
+| PSRAM 三个数 | 取流中比空载掉一两成算正常；**掉一半以上**说明 DPI 面板也在挨饿，重点看 GUD 有没有撕裂；停流后没回到空载 ⇒ 停流没停干净 |
+
+> 「有帧」与「帧里有东西」是**两件事** —— 一块没被写过的零缓冲在帧计数上与真实画面
+> 一模一样。上面那四条（`最暗==最亮` / 校验和不变 / 下 1/8 / 采样=0）就是为此存在的。
+
+### 「不用时零占用」的两个落点
+
+**摄像头对显示的影响严格为零，直到有人真的打开它。** 这不是优化，是整章取舍成立的基础：
+
+1. **USB 侧** —— VideoStreaming 停在 **alt 0（零端点、零带宽）**，host 不预留任何 ISO 带宽；
+2. **PSRAM 侧** —— **CSI 只在 host 选中 alt 1 时才 `start`**。不流时不取流、不缩放、不编码，
+   CSI 那 ≈55 MB/s 的 PSRAM 写入（DPI 面板刷新 ≈89–107 MB/s 读的直接竞争者）归零。
+
+反过来，**打开摄像头会让显示明显变慢**：周期性传输从 172 B/ms 涨到 584 B/ms，
+留给 GUD bulk 的理论上限从约 1364 掉到约 916 B/ms（**−33%**）。
+**这是全速口的物理上限，不是 bug。** ⏳ **实测数字尚未取得**，上面是推算。
+
+> ⓘ 缓冲与编码器**在启动时一次建好**，不做按需分配 —— 分配失败要在开机日志里立刻可见，
+> 而不是等 host 打开摄像头时才在帧泵里静默失败（那时 host 侧表现为「有 `/dev/videoN`
+> 但取不到流」，从现象反推不到内存不够）。代价是没人开摄像头也占着 PSRAM，**带宽代价为零**。
+
+> ⚠️ **不要用模块内的 `in_flight` 标志去影子跟踪「有没有帧在飞」** ——
+> host 快速 `alt1 → alt0 → alt1` 时，切到 alt 0 那一刻驱动在 `_open_vs_itf()` 里把
+> `bufsize` 清了、**完成回调不会再来**，而标志留在 true，从此每一拍都以为上一帧还在飞，
+> **流再也起不来（只能重新插拔）**。判据一律现问 `tud_video_n_streaming()`。
+
+### 依赖：为什么用 `esp_cam_sensor` 而**不用** `esp_video`
+
+`esp_video` 2.3.0 的 manifest **强制拖进**：
+
+```
+espressif/usb_host_uvc  2.5.*   ← ⚠️ USB **Host** 栈
+espressif/esp_h264      1.3.0   ← 纯软件 H.264 编码器
+espressif/esp_ipa       2.2.*
+```
+
+在一块「TinyUSB device 独占唯一一条 FSLS PHY」的板子上引入 USB **Host** 栈，
+是 spec §8.1「不引入 usb-host 依赖」的正面违反。
+
+`esp_cam_sensor` 则是干净的 —— 它与已在用的 `esp_lcd_ili9881c` / `esp_lcd_touch_gt911` /
+`esp_io_expander_pi4ioe5v6408` / `esp_codec_dev` **同一性质：芯片驱动组件**，
+传递依赖只有 `esp_sccb_intf` 与 `cmake_utilities`（后者早已在树里）。
+**实测 `managed_components/` 共 12 个目录，摄像头只让它多了 2 个。**
+
+MIPI-CSI / ISP / JPEG 编码 / 缩放全部是 **IDF 内置**
+（`esp_driver_cam` / `esp_driver_isp` / `esp_driver_jpeg` / `esp_driver_ppa`），不算依赖。
+取流编排与 AE/AWB 控制律（= `esp_video` + `esp_ipa` 那一层）是我们自己的
+`camera_csi.c` + `cam_tune.c` —— 我们只需要「一个固定模式、拿到一帧 RGB565」，
+不需要 V4L2 设备节点、多设备管理、H.264，更不需要 USB Host。
+
+`sdkconfig.defaults` 把 `esp_cam_sensor` 裁到**只剩 SC202CS 的一个模式**：
+
+```
+CONFIG_CAMERA_SC202CS=y
+CONFIG_CAMERA_SC202CS_MIPI_RAW8_1280X720_30FPS=y
+CONFIG_CAMERA_SC202CS_MIPI_DEFAULT_FMT_RAW8_1280X720_30FPS=y
+CONFIG_CAMERA_SC202CS_AUTO_DETECT_MIPI_INTERFACE_SENSOR=n   # 我们直接调 sc202cs_detect()
+```
+
+> ⚠️ **`esp_cam_sensor_set_format()` 必须调** —— `sc202cs_detect()` 只把 `cur_format`
+> 指过去，**一个寄存器都没写**。（P4 计划里说「若 detect 已设好就不必重复设」，实测不成立。）
+>
+> ⚠️ **`esp_cam_ctlr_receive()` 是「提交缓冲」（`xQueueSend`），不是阻塞取帧**；
+> 完成通知只走 `on_trans_finished` 回调，且 `esp_cam_ctlr_start()` 硬性要求注册它。
+> （P4 计划 Task 8 那份示例代码起不来。）
+>
+> ⚠️ 传感器 stream on 走 `esp_cam_sensor_ioctl(ESP_CAM_SENSOR_IOC_S_STREAM)` ——
+> **不存在 `ESP_CAM_SENSOR_PARA_STREAM` 这个符号**（P4 计划写错了）。
+>
+> ⚠️ **取帧后必须自己 `esp_cache_msync(..., M2C)`** —— 驱动确实在中断里调了，
+> 但那一行在 `trans.received_size = fb_size_in_bytes` **之前**执行，此时 `received_size`
+> 还是 0，**长度 0 的 invalidate 是个空操作**。
+
+### Host 侧验证
+
+主机需 mainline `uvcvideo`（`CONFIG_USB_VIDEO_CLASS`，发行版一般自带 `uvcvideo.ko`）。
+
+```bash
+lsusb -v -d 16d0:10a9 | grep -E "bInterfaceClass|bEndpointAddress|wMaxPacketSize"
+#   → 见 Video(0x0E)；IN 端点恰为 0x81/0x82/0x83/0x84；0x84 的 wMaxPacketSize = 0x01c0 (448)
+sudo dmesg | grep -i uvc            # uvcvideo: Found UVC 1.50 device
+ls /dev/video*
+
+sudo apt-get install -y v4l-utils ffmpeg
+v4l2-ctl -d /dev/videoN --list-formats-ext
+#   → MJPG / 640x360 / 10.000 fps（只有这一个，是有意的）
+
+ffplay -f v4l2 -input_format mjpeg -video_size 640x360 -framerate 10 /dev/videoN
+v4l2-ctl -d /dev/videoN --stream-mmap --stream-count=100 --stream-to=/tmp/cam.mjpg
+```
+
+判据：
+
+1. `ffplay` 显示**真实画面**，方向正确（不上下颠倒/左右镜像）、
+   **颜色正常（人脸不是蓝的 ⇒ 没有 R/B 互换）**；
+2. 实测 fps **≥ 9.0**，固件侧 `拒收` / `编码 失败` / `缩放 失败` 都是 0；
+3. 平均帧 ≤ 30 KB、峰值 ≤ 44 KB；
+4. **停掉 `ffplay` 后固件日志出现「摄像头取流 停止」** —— 这是「不用时零占用」的落点；
+5. GUD / 键盘 / 触摸 / 音频不回归。
+
+> ⓘ `ls /dev/video*` 多出**两个**节点属正常现象（后一个是 `uvcvideo` 的 metadata 节点）。
+>
+> ⓘ 若 `lsusb` 看得到设备、却没有 `/dev/videoN` 且 `dmesg` 无 uvc 相关行，
+> 先 `modinfo uvcvideo` —— 那是 host 内核配置问题，不是固件缺陷。
+
+### 宿主机回归测试（**改控制律后务必重跑**）
+
+控制律与帧统计都被抽成零依赖纯函数，**直接编译真实源码**而非复制体：
+
+```bash
+cd firmware/test
+cc -std=c11 -Wall -Wextra -Werror -I../main test_cam_tune.c ../main/cam_tune.c \
+    -o /tmp/t && /tmp/t          # OK (281 cases)
+cc -std=c11 -Wall -Wextra -Werror -I../main test_cam_frame_stats.c \
+    ../main/cam_frame_stats.c -o /tmp/t && /tmp/t     # OK (24 cases)
+```
+
+`test_cam_tune.c` 的 **281 个用例**分七组，值得点名的几组：
+
+- **增益下标扫描** `ev = 1 … 4×10⁶` 断言 `g < gain_count` —— 这就是上文
+  `sc202cs.c:1167` off-by-one 的护栏；
+- **AE 闭环仿真**：跨四个数量级照度（1 / 6 / 30 / 120 / 1000 / 100000）+ 3 拍滞后，
+  中间四档必须收进死区，两个够不着的极端必须**至少停止移动**（不振荡）；
+- **AWB 单色场景**：红墙 / 绿植 / 蓝天各跑 20 个周期，增益**零移动**且结论恒为
+  `色偏过大`；每个场景先证明「灰世界的原始建议确实越界」，**证明这道防护是承重的**；
+  另有一个**正对照**（偏黄白墙）必须真的更新并遵守 25% 限幅；
+- **幂等回归**：已平衡的场景跑 300 拍，断言 `updates == 0` 且 `已收敛`；
+- **参数体检**：断言 `CAM_AWB_LUM_MIN < CAM_AE_TARGET < CAM_AWB_LUM_MAX`、
+  `CAM_AWB_INTERVAL_TICKS ≥ CAM_AE_INTERVAL_TICKS × 2`、三个 CCM 常量都在 (0, 4000] 等 ——
+  **改参数时先被它拦住**。
+
+USB 描述符另有一道烧板前的闸门（**两档都要过**）：
+
+```bash
+. $HOME/esp/esp-idf/export.sh
+python3 test/check_usb_desc.py build/tab5_aio.elf
+```
+
+它从 ELF 里抠出描述符字节自行解析（**不读 `sdkconfig`，是独立的第二意见**），
+UVC 相关断言包括：VC 接口 `bNumEndpoints == 0`、VS alt 0 零端点 / alt 1 恰好 `{0x84}`、
+**端点描述符长度 == 7**（9 字节是 UAC1 的形式，说明有人手写错了）、
+`wMaxPacketSize == 448`、帧描述符**恰好 30 字节**、
+`dwMaxVideoFrameBufferSize / interval_ms + 2 > 448`（静默带宽陷阱）、
+以及全局的「IN 端点恰为 `0x81/0x82/0x83/0x84` 四条且 `0x84` 是 ISO IN」。
+
 ## 文件
 
 | 文件 | 职责 |
@@ -1612,7 +2392,19 @@ codec_audio: 10s 泵：spk_on=1 mic_on=0 usb_peak=8123 mic_peak=37 | TX 欠载 0
 | `test/test_kbd_translate.c` | `kbd_translate()` 宿主机回归测试（直接编译真实源码，非复制体） |
 | `main/touch_hid.{c,h}` | GT911 初始化（INT 拉低 + 备用地址 `0x14`）+ 20ms 轮询 + digitizer 上报（RID 2） |
 | `main/touch_map.{c,h}` | 面板坐标 → GUD 坐标反变换 + HID 归一化 + 报告装填，零依赖纯函数（宿主机可测） |
-| `main/Kconfig.projbuild` | 只剩 `CONFIG_AIO_DEBUG_CDC`（默认 n，让出 GUD 的 IN 端点换 USB 日志串口）；音频无条件编译，排障旋钮已删除 |
+| `main/Kconfig.projbuild` | 只剩 `CONFIG_AIO_DEBUG_CDC`（默认 n，**让出 GUD 的 IN 端点 + 整个音频不编译**，换 USB 日志串口；`0x84` 永久归 UVC）；音频在默认档下无条件编译，排障旋钮已删除 |
+| `main/uvc_stream.{c,h}` | UVC 类回调（commit / streaming）+ 帧泵任务 + CSI 按 alt 0/1 启停 + 四行自检统计 |
+| `main/camera_csi.{c,h}` | SC202CS 探测（SCCB `0x36`）+ MIPI-CSI + ISP（去马赛克 / CCM）+ AE/AWB 施加 + PSRAM 读带宽实测，产出 1280×720 RGB565 |
+| `main/cam_jpeg.{c,h}` | PPA SRM ×0.5 缩小（**独立 client**，不共用显示那个）+ 硬件 JPEG 编码（RGB565 / 4:2:2 / q=70），双缓冲 |
+| `main/cam_tune.{c,h}` | **所有摄像头可调参数** + AE/AWB 控制律 + CCM 系数反推，零 ESP-IDF 依赖纯逻辑（宿主机可测） |
+| `main/cam_frame_stats.{c,h}` | 帧统计纯函数（亮度均值/最暗/最亮/分通道均值/FNV-1a 校验和），零依赖 |
+| `main/uvc_pattern.{c,h}` | 合成彩条 + 移动方块，零依赖纯函数。**已不在固件 `SRCS` 里**（Task 9 换成真实摄像头），保留作静态测试图的生成源与宿主机测试对象 |
+| `main/uvc_test_jpeg.h` | 静态测试图 JPEG 字节数组（`test/jpeg_to_header.py` 机械生成，注明来源） |
+| `test/test_cam_tune.c` | AE/AWB 控制律的宿主机回归（**281 用例**，含单色场景与带滞后的闭环仿真） |
+| `test/test_cam_frame_stats.c` | 帧统计纯函数的宿主机回归（24 用例） |
+| `test/test_uvc_pattern.c` | 合成图案纯函数回归 + PPM 预览 |
+| `test/jpeg_to_header.py` | 把一张 `.jpg` 机械转成 `uvc_test_jpeg.h` |
+| `test/check_usb_desc.py` | 从 ELF 抠出 USB 描述符自行解析校验（**两档都要过**，含全部 UVC 断言） |
 | `main/codec_audio.{c,h}` | ES8388/ES7210 初始化 + I2S 全双工 + UAC 数据泵 + TinyUSB 音频类回调（含 Feature Unit 的音量/静音落到 ES8388 硬件）+ `codec_audio_report()` 开机自检快照 |
 | `main/audio_frame.{c,h}` | USB 单声道 ↔ I2S 立体声转换，零依赖纯函数（宿主机可测） |
 | `main/uac_volume.{c,h}` | UAC1 音量(有符号 1/256 dB) ↔ `esp_codec_dev` 百分比 的换算 + 线上小端编解码，零依赖纯函数（宿主机可测）；含 MIN/MAX/RES 取值理由 |

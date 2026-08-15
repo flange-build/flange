@@ -85,6 +85,20 @@ VID/PID 沿用 **`16d0:10a9`** —— mainline `drm/gud` 绑定的固定 modalia
 1. 去掉 vendor 的 IN 端点（GUD 只用 EP0 控制 + bulk OUT，IN 端点是 `TUD_VENDOR_DESCRIPTOR` 顺带声明的）；
 2. 砍 UVC（见 §7）。
 
+> **订正（阶段 5 落地时）**：三条。
+>
+> 1. **UVC 落在 IF5–IF6，`0x84` 已用满**（默认档 7 接口 / 384 字节配置描述符）。
+>    4 条非 EP0 的 IN 端点 **4/4 用尽**，不得再加任何 USB 功能。
+> 2. **FIFO 可分配的是 242 words，不是 256。** `dcd_dwc2.c` 的 `dfifo_device_init()`
+>    在 buffer DMA 模式下先扣 `2 × ep_count = 14`，而本工程 `CONFIG_TINYUSB_MODE_DMA=y`
+>    且 P4 OTG1.1 的 `ghwcfg2.arch == 2`（internal DMA），两个条件都成立。
+>    UVC ISO IN 取 448 字节（112 words），余 11 words —— 没取满 492 是因为
+>    `dfifo_alloc()` 失败**无任何日志**，且 448 在 DMA/slave 两种模式下都装得下。
+> 3. **`CONFIG_AIO_DEBUG_CDC` 的语义变了**：它原先借走 `0x84`，与 UVC 直接撞号。
+>    现在这一档改为**整体不编译音频**换出一条 IN 端点，`0x84` 永久归 UVC
+>    （调试档 6 接口 / 259 字节）。有 USB-TTL 时优先接 **UART0(G37/G38)** ——
+>    零端点代价、能抓上电最早的日志、默认档也能用。
+
 ### 2.1 带宽是零和的
 
 同步（isochronous）带宽只在 host 选中**非 0 的 alternate setting** 时才预留。因此：
@@ -93,6 +107,16 @@ VID/PID 沿用 **`16d0:10a9`** —— mainline `drm/gud` 绑定的固定 modalia
 - UVC + UAC + GUD 三者同时使用会明显互相拖慢，这是全速口的物理上限，不是实现缺陷。
 
 该取舍必须写进包的 README，避免使用者误判为 bug。
+
+> **阶段 5 补充**：这条在实现上有**两个**落点，缺一不可。
+>
+> - **USB 侧**：VideoStreaming 接口停在 alt 0（零端点、零带宽），host 不预留 ISO 带宽；
+> - **PSRAM 侧**：CSI **只在 host 选中 alt 1 时才 start** —— 否则 CSI 那 ≈55 MB/s 的
+>   PSRAM 写入会直接和 DPI 面板刷新的 ≈110 MB/s 读抢带宽。
+>
+> 带宽账（1500 字节/毫秒）：摄像头开着时周期性传输从 172 B/ms 涨到 584 B/ms，
+> 留给 GUD bulk 的理论上限从约 1364 掉到约 916 B/ms（**−33%**）。
+> ⏳ **实测值尚未取得**（阶段 5 的 Task 10 未执行），此处只有推算，不得当作实测引用。
 
 ---
 
@@ -301,12 +325,85 @@ HID 模式（寄存器 0x30）有两个硬伤：
 
 ## 7. 摄像头：UVC MJPEG（最后阶段，允许砍掉）
 
-- SC202CS 经 MIPI-CSI，用 `esp_video` 取流；P4 有**硬件 JPEG 编码器**，编码不占 CPU；
-- 经 TinyUSB video class 以 **MJPEG 640×480、目标约 10 fps** 输出；
+- SC202CS 经 MIPI-CSI 取流；P4 有**硬件 JPEG 编码器**，编码不占 CPU；
+- 经 TinyUSB video class 以 **MJPEG 640×360 @ 10 fps** 输出，ISO IN `0x84`、448 字节/帧；
 - **这是全场风险最高的一项**：TinyUSB 的 UVC device 支持相对小众，
   `esp_tinyusb` 也没有对应 Kconfig，需通过现有的 `main/tinyusb_config/tusb_config.h`
-  覆盖机制手工开启 `CFG_TUD_VIDEO`；
+  覆盖机制手工开启 `CFG_TUD_VIDEO`（**且必须同时定义 `CFG_TUD_VIDEO_STREAMING`**，
+  只定义前者会让 `video_device.c` 编成空文件、链接期缺 6 个符号）；
 - 排在最后一个阶段；**若阶段 5 判定不可行，直接砍掉，不阻塞前四项已交付的能力**。
+
+### 7.1 ⛳ 订正一：分辨率是 **640×360**，不是本节原写的 640×480（阶段 5 落地）
+
+**不是带宽不够** —— 640×480 在 10 fps 上每帧预算 44.6 KB，而典型 MJPEG 4:2:2
+中等质量是 23–38 KB，带宽上本来是够的。做不到的原因是**像素管线**，三条叠在一起：
+
+1. **SC202CS 唯一可用的模式是 1280×720（16:9）** —— 它四个模式全是 RAW，
+   1600×1200 的 1200 行超过 P4 ISP 的 1920×1080 输入上限，1600×900 裁不出 4:3；
+2. **P4 的 ISP 没有缩放器**（`esp_driver_isp` 只有 `isp_crop.h`），只能裁不能缩；
+3. **唯一的缩放器 PPA，缩放比粒度是 1/16** —— `1280×720 → 640×360` 是精确的
+   8/16；而 640×480 要「裁 960×720 再乘 2/3」，**2/3 表达不出来**（最近的 11/16
+   给出 660×495）。
+
+⇒ 640×360 是这条管线上唯一既精确、又不改变视野与宽高比的输出尺寸。
+附带好处：与 §3 的 GUD 显示模式同为 640×360，整个包里只有一个分辨率要记；
+且 640 与 360 都整除 4:2:2 的 MCU（16×8），编码器不需要补边
+（4:2:0 的 MCU 是 16×16，360 不整除 —— 这是选 4:2:2 子采样的直接原因）。
+
+### 7.2 ⛳ 订正二：**不用 `esp_video`**，改用 `esp_cam_sensor` + IDF 内置 CSI/ISP/JPEG/PPA
+
+本节原文与 §8.1 的依赖表都写的是 `esp_video`。**实测其组件 manifest 后这条被推翻**：
+
+```
+espressif/esp_video 2.3.0 依赖：
+  espressif/esp_cam_sensor、espressif/esp_ipa、
+  espressif/esp_h264      1.3.0    ← 纯软件 H.264 编码器
+  espressif/usb_host_uvc  2.5.*    ← ⚠️ USB **Host** 栈
+```
+
+在一块「TinyUSB device 独占唯一一条 FSLS PHY」的板子上引入 USB **Host** 栈，
+是 §8.1「不引入 usb-host 依赖」的正面违反；`esp_h264` 同理。
+
+**实际路线 = 「薄板级驱动 + vendor 传感器寄存器序列」**，与 §3.3 面板、§6 codec 完全同构：
+
+| 层 | 用什么 |
+|---|---|
+| SC202CS 寄存器序列 | `espressif/esp_cam_sensor`（传递依赖只有 `esp_sccb_intf` + `cmake_utilities`） |
+| MIPI-CSI / ISP / JPEG 编码 / 缩放 | IDF 内置 `esp_driver_cam` / `esp_driver_isp` / `esp_driver_jpeg` / `esp_driver_ppa` |
+| 取流编排、AE/AWB 控制律 | 自己写的 `camera_csi.c` / `cam_tune.c` |
+
+**实测依赖树 `managed_components/` 仍是 12 个目录**（相对阶段 4 只多出
+`espressif__esp_cam_sensor` 与 `espressif__esp_sccb_intf`，`cmake_utilities` 早已在树里）。
+
+### 7.3 ⛳ 订正三：AE 做了闭环，AWB 也做了 —— 但**不引 `esp_ipa`**
+
+阶段 5 的计划原本写「不做 AE/AWB 闭环，用传感器默认曝光增益，代价是换光照会
+过曝/欠曝」。实际落地时这条被现场推翻（实机首图「整体发绿 + 亮度均值 45 已削顶」），
+于是自己写了两个控制器，**仍然没有引 `esp_ipa`**：
+
+- **AE**：曝光量 `ev = 曝光 × 增益` 合成一个标量做 P 控制，分配上曝光优先、增益垫底；
+  四道防振荡闸（死区 / 阻尼 / 单步限幅 / 更新周期），状态里存**量化后的实际 ev**；
+- **AWB**：灰世界反推 `diag(kr, 1, kb)` 的对角增益，经 **CCM** 施加 ——
+  本板 P4 rev v1.0 的硬件白平衡增益（WBG）有 rev≥3.0 的版本门，用不了，
+  **CCM 是唯一能给三通道分别加增益的地方**（上限 4.0）。四道灰世界防护挡单色场景。
+
+控制律全在不依赖 ESP-IDF 的 `cam_tune.c` 里，宿主机 281 个用例覆盖。
+机理、参数与标定流程见 `firmware/README.md` 的「UVC 摄像头」章节。
+
+### 7.4 实机验证结论（阶段 5）
+
+| 项 | 状态 |
+|---|---|
+| UVC 链路（MJPEG 640×360 @ 10 fps，ISO IN `0x84` × 448 B） | ✅ 已实机验证：`ffplay` 出图、零拒收、每 10 秒精确 +100 帧、提交 == 完成 |
+| 硬件 JPEG 实时编码（RGB565 输入 / 4:2:2 / q=70） | ✅ 已实机验证 |
+| SC202CS 探测（SCCB `0x36`，PID `0xeb52`） | ✅ 已实机验证 `detect=1` |
+| MIPI-CSI + ISP 取流 1280×720 RAW8 → RGB565 | ✅ 已实机验证：30 fps 稳定、抢缓冲/丢弃/取帧超时全 0、帧长 1843200 正确、亮度跟手 |
+| PPA 2× 缩小接入 UVC | ✅ 已实机验证：`ffplay` 出真实摄像头画面 |
+| **AE 闭环** | ✅ 已实机验证 |
+| **AWB 闭环** | ⏳ **未上板** —— 只过了 281 个宿主机用例。`CAM_AWB_ENABLE=0` 可退回已验证的静态白平衡 |
+| 单色场景防护的实际效果 | ⏳ 未上板 |
+| 五项能力的复合回归（同跑 10 分钟） | ⏳ **未做** —— 阶段 5 计划的 Task 10 |
+| 摄像头开着时对 GUD 帧率的影响、PSRAM 带宽争用实测值 | ⏳ **未测** |
 
 ---
 
@@ -352,10 +449,18 @@ components/packages/tab5-all-in-one/
 | `espressif/esp_io_expander_pi4ioe5v6408` | LCD_EN / TOUCH_EN / SPEAKER_EN 等上电时序 | 1 |
 | `espressif/esp_lcd_touch_gt911` **或** `esp_lcd_touch_st7123` | 触摸（二选一，按实机） | 3 |
 | `esp_codec_dev` | ES8388 / ES7210 寄存器序列 | 4 |
-| `esp_video` | 摄像头取流 | 5（可砍） |
+| ~~`esp_video`~~ → **`espressif/esp_cam_sensor`** | SC202CS 寄存器序列（**只要传感器驱动，不要取流框架**） | 5 |
+
+> **订正（阶段 5 落地时）**：本表原写 `esp_video`，**已推翻** —— 它强制拖进
+> `usb_host_uvc`（USB **Host** 栈）+ `esp_h264`（软件编码器）+ `esp_ipa`，
+> 正面违反本节标题里「不引入 usb-host 依赖」。改用 `esp_cam_sensor`，
+> 其传递依赖只有 `espressif/esp_sccb_intf` 与 `espressif/cmake_utilities`
+> （后者早已在树里）。**实测 `managed_components/` 共 12 个目录**。理由详见 §7.2。
 
 MIPI-DSI、PPA、LDO、I2S、I2C 均为 IDF 内置（`esp_lcd` / `esp_driver_ppa` /
 `esp_driver_i2s` / `esp_driver_i2c`），不引入额外组件。
+**摄像头链路的 MIPI-CSI / ISP / 硬件 JPEG 编码同样是 IDF 内置**
+（`esp_driver_cam` / `esp_driver_isp` / `esp_driver_jpeg`）。
 
 ### 8.2 sdkconfig 要点
 
@@ -421,7 +526,7 @@ UVC 需 `CONFIG_USB_VIDEO_CLASS`。要求**所有 board 都生效**。
 | **2** | 键盘 I2C Normal 模式 + G50 中断 + HID RID1 | `evtest` 打字正确；`Ctrl+C` / `Alt+Tab` 组合键生效；按住方向键连发正常 |
 | **3** | 触摸 → HID RID2 digitizer + 坐标 90° 标定 | `evtest` 见 `ABS_MT_*`；`hid-multitouch` 绑定；触点与画面位置一致 |
 | **4** | UAC1 全双工音频 | ✅ 播放（喇叭出声）与录音（`arecord` 正常）已分别实机验证；⏳ **仍待验**：播放与录音**同时**打开互不干扰、与 GUD 并发 10 分钟无爆音/无重新枚举 |
-| **5** | UVC MJPEG（可砍） | `v4l2-ctl --list-formats-ext` 见 MJPEG；能取流；不可行则记录原因并砍掉 |
+| **5** | UVC MJPEG（可砍） | ✅ **未砍，已打通**：`v4l2-ctl --list-formats-ext` 见 MJPEG 640×360 @10 fps、`ffplay` 出真实摄像头画面、AE 闭环生效（见 §7.4）。⏳ **仍待验**：AWB 闭环（未上板）、五项能力同跑 10 分钟的复合回归、开摄像头时 GUD 帧率的实测变化 |
 | **6** | `flange_common.config` + builder 注入 + rootfs `v4l-utils` + README/文档 | 至少 3 块不同平台的 board 重建内核通过；`atk-rk3506b` 上 Cardputer 与 Tab5 复合回归 |
 
 阶段 1–5 每一阶段结束都做一次**复合回归**：已交付的接口同时工作、互不饿死。
@@ -436,7 +541,9 @@ UVC 需 `CONFIG_USB_VIDEO_CLASS`。要求**所有 board 都生效**。
 | PPA 缩放+旋转的脏矩形坐标变换写错 | 画面错位/撕裂 | 阶段 1 单独用固定图案验证四个角与非对称矩形。**实测（Task 3）**：坐标公式经手算 + 实机双重验证（整帧铺满 + 非零偏移的 64×64 局部块落点与颜色均正确），旋转方向标定为 `DISPLAY_ROT_CCW90 = 1`。**但脏矩形路径本身仍待 Task 5 实测** —— 至今只有固件自造的局部块走过它，host 送来的真实 damage 序列还没跑 |
 | 未上板的那条面板路径写错 | 换批次的 Tab5 上黑屏/花屏，且无人发现 | 两条路径都实现（运行时探测），但未验证的那条在日志里显式标注；init 数组逐字复刻 esp-bsp 并注明来源。**实测（Task 2）**：开发用机为 **ILI9881C** 批次（内部 I2C 扫到 0x14、无 0x55），面板 ID `0x98/0x81/0x5c`；且**必须传 esp-bsp 的定制 init 序列**，用驱动组件内置的默认序列实机表现为竖纹 + 四角暗角 + 颜色错乱。**ST7123 路径仍未上板**，另注意上游该份 init 数据有两条 `data_size` 多算 1 字节（`0xA3` 声明 40 实际 39、`0xE8` 声明 15 实际 14），会致越界读，是该路径出问题时的首要怀疑对象 |
 | **P4 芯片版本互斥** | 本固件编译为支持 rev v0.x/v1.x（实机是 **v1.0**），**跑不了 v3.x 的 P4**。IDF 原文：「rev <3.0 与 >=3.0 互斥，硬件差异巨大」 | **无法运行时兼容**，与双面板不同。若遇到换 v3.x 芯片的 Tab5 批次，只能另出一份固件（改 `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n` + `REV_MIN_301`）。已在 `sdkconfig.defaults` 就地注明 |
-| TinyUSB UVC device 不可用 | 摄像头功能落空 | 已排最后阶段，明确允许砍 |
+| ~~TinyUSB UVC device 不可用~~ | 摄像头功能落空 | **已实测排除**：TinyUSB 的 `class/video/` 在这块板的全速口上能出流，`uvcvideo` 正常绑定、`ffplay` 出图、零拒收。两个必须同时定义的宏是 `CFG_TUD_VIDEO` **与** `CFG_TUD_VIDEO_STREAMING`；另发现上游 `TUD_VIDEO_DESC_CS_VS_FRM_MJPEG_DISC` 等三个宏在全树零调用者且 `bLength` 与 `bFrameIntervalType` 都算错，本工程手写了替代 |
+| **ESP32-P4 rev <3.0 缺一批硬件功能** | 照抄 IDF 例程/文档会得到 `ESP_ERR_NOT_SUPPORTED` 或**静默半帧** | 已咬过四次，集中记在 `firmware/README.md` 的「ESP32-P4 rev <3.0 已知不可用的硬件功能」一节：CSI 桥无颜色转换硬件（`mipi_csi_ll.h` 的 `#else` 分支五个函数全空）、JPEG 编码器不吃 YUV420/YUV444、ISP 的 WBG/BLC/crop 不可用（AWB **统计**可用）、CCM 上限 4.0 |
+| **PSRAM 带宽争用**（DPI 读 ≈110 MB/s vs CSI 写 ≈55 MB/s） | 屏幕撕裂/花屏，或 GUD 帧率意外掉更多 | CSI **只在 host 选中 alt 1 时才 start**（alt 0 时不取流/不缩放/不编码）；固件侧留了「空载 / 取流中 / 停流后」三点 PSRAM 读带宽实测。⏳ **实测数字尚未取得** —— 阶段 5 的 Task 10 未执行 |
 | 全局内核 config 触发全板重建 | 一次性长构建 | 排在最后阶段一次性完成 |
 | 640×360 放大后文字发虚 | 观感下降 | 2× 整数放大无插值；若仍不可接受，回退选项是加声明 720p 模式由 host 选（代价是帧率）。**现状：未结论** —— 至今只在实机上验过色块自检图（四象限 + 黑方块），文字观感要等 Task 4/5 把 host 的真实画面（终端 / `videotestsrc`）送上屏后才能判断 |
 
@@ -447,5 +554,7 @@ UVC 需 `CONFIG_USB_VIDEO_CLASS`。要求**所有 board 都生效**。
 - 不修改 `cardputer-all-in-one` 的任何代码（零回归风险优先于消除重复）；
 - 不按批次分别构建固件（两种面板由同一份固件运行时探测，见 §3.3）；
 - 不使用 USB-A 的高速口做 device（需 A-to-A 线且 VBUS 有回灌风险）；
-- 不引入 LVGL / esp_video（阶段 5 前）/ usb-host 依赖；
+- 不引入 LVGL / ~~esp_video（阶段 5 前）~~ / usb-host 依赖 ——
+  **阶段 5 结束时 `esp_video` 一次也没被引入**，摄像头走 `esp_cam_sensor` +
+  IDF 内置 CSI/ISP/JPEG/PPA，见 §7.2；
 - 不做 SD 卡、IMU、RTC、RS485、电池管理 —— 与「USB 瘦终端」定位无关。

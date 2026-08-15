@@ -11,7 +11,7 @@
 
 | 侧 | 内容 | 构建 |
 |----|------|------|
-| **Tab5 固件** | `firmware/`（ESP-IDF + TinyUSB）—— GUD 显示 / HID 键盘 + 多点触摸 / UAC1 音频 / 后续 UVC | **容器外** `idf.py`（见 `firmware/README.md`）|
+| **Tab5 固件** | `firmware/`（ESP-IDF + TinyUSB）—— GUD 显示 / HID 键盘 + 多点触摸 / UAC1 音频 / UVC 摄像头 | **容器外** `idf.py`（见 `firmware/README.md`）|
 | **Linux 组件** | 内核 config fragment（`CONFIG_DRM_GUD` / `HID_MULTITOUCH` / `SND_USB_AUDIO` / `USB_VIDEO_CLASS`）+ 验收工具/文档 | `flange build` |
 
 Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers/gpu/drm/gud`）、
@@ -60,15 +60,39 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
   于是关掉的是 **G24/G25 这条 USB-C**。修法是把音频硬件 bring-up 排到
   `tinyusb_driver_install()` 之前 + 装完后跑一次焊盘修复，详见 `firmware/README.md`。
   占 IF2/IF3/IF4 与端点 `0x02`(播放 ISO OUT) / `0x83`(录音 ISO IN)；
-  **坚决不用显式反馈端点**，因为最后一条 IN(`0x84`) 要留给 UVC。参数不是听感定的而是 FIFO 账定的：
-  16 kHz 单声道的 OUT 包 36 B 小于 vendor 已有的 64 B，共享 RX FIFO 一个 word 都不涨，
-  整个音频功能的 FIFO 代价只有录音那 9 words（256 words 里余 137）；48 kHz 立体声会把余量压到
-  31 words，UVC 直接没位置。详见 `firmware/README.md` 的「UAC1 全双工音频」。
-- ⏳ 规划中：UVC 摄像头（SC202CS，风险最高、允许砍）；
-  主机侧全局内核 config（`flange_common.config` + builder 注入，对所有 board 生效）。
+  **坚决不用显式反馈端点**，因为最后一条 IN(`0x84`) 要留给 UVC —— **UVC 已经如约用上了它**。
+  参数不是听感定的而是 FIFO 账定的：16 kHz 单声道的 OUT 包 36 B 小于 vendor 已有的 64 B，
+  共享 RX FIFO 一个 word 都不涨，整个音频功能的 FIFO 代价只有录音那 9 words
+  （**可分配的是 242 words 不是 256**，扣完余 123）；48 kHz 立体声会把余量压到 17 words，
+  UVC 那 112 words 直接没位置。详见 `firmware/README.md` 的「UAC1 全双工音频」。
+- ✅ **UVC 摄像头 —— 出真实画面已实机验证**（SC202CS，spec 里「风险最高、允许砍」的那一项，
+  **没砍**）：**MJPEG 640×360 @ 10 fps**，ISO IN `0x84` × 448 字节/帧。
+  整条链路 `SC202CS →(MIPI-CSI 1 lane RAW8 1280×720@30) ISP 去马赛克→ RGB565 →
+  PPA ×0.5 → 硬件 JPEG(4:2:2, q=70) → tud_video_n_frame_xfer()` 已打通，
+  host 侧 mainline `uvcvideo` 出 `/dev/videoN`，`ffplay` 显示真实摄像头画面。
+  实测：CSI 取流 **30 fps 稳定**（抢缓冲 / 丢弃 / 取帧超时全 0，帧长 1843200 正确），
+  UVC 侧**每 10 秒精确 +100 帧、提交 == 完成、零拒收**，亮度跟手（挡住 / 拿开 / 手电三档分明）。
+  **自动曝光（AE）闭环已实机验证**。
+  ⚠️ **限定与未验项**：只声明这**一个**格式/分辨率/帧率（不做多模式协商）；
+  **自动白平衡（AWB）闭环尚未上板** —— 它只过了 281 个宿主机用例，
+  `CAM_AWB_ENABLE` 改 0 即可退回**已实机验证的静态白平衡**；
+  单色场景防护的实际效果、以及**开摄像头时 GUD 帧率的实测变化**同样未测（见下方带宽提示）。
+  最贵的一类坑是 **ESP32-P4 rev <3.0 缺一批硬件功能**（CSI 桥没有颜色转换硬件、
+  JPEG 编码器不吃 YUV420/444、ISP 的 WBG/BLC/crop 不可用），照抄 IDF 例程会直接
+  `ESP_ERR_NOT_SUPPORTED` 或**静默拿到半帧**，`firmware/README.md` 有专章。
+- ⏳ **五项能力的复合回归尚未执行**（GUD + 键盘 + 触摸 + 音频 + 摄像头同跑 10 分钟）。
+  五项**各自**都已实机验证，且每次新增能力时都复验过前面几项无回归，
+  但「同时全开」这一场压测还没做。
+- ⏳ 规划中：主机侧全局内核 config（`flange_common.config` + builder 注入，对所有 board 生效）。
 
 > USB-C 只有 **12 Mbps 全速**（480 Mbps 的高速口被接到了 USB-A 母座）。带宽是零和的：
 > 摄像头/音频/显示同时使用会明显互相拖慢，这是全速口的物理上限，**不是实现缺陷**。
+>
+> 具体到摄像头：**打开摄像头会让显示明显变慢** —— 周期性传输从 172 B/ms 涨到
+> 584 B/ms，留给 GUD 的理论带宽上限从约 1364 掉到约 916 B/ms（**−33%**）。
+> 这是推算值，**实测尚未取得**。反过来，**不开摄像头时影响严格为零**：
+> VideoStreaming 停在 alt 0（零端点、零 ISO 带宽），固件侧连 CSI 都不启动
+> （那 ≈55 MB/s 的 PSRAM 写入是 DPI 面板刷新的直接竞争者）。
 
 详见 `firmware/README.md`。
 
@@ -78,5 +102,6 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 - 实施计划：`docs/superpowers/plans/2026-08-11-tab5-all-in-one-p0-gud-display.md`（GUD 显示）、
   `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p1-hid-keyboard.md`（HID 键盘）、
   `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p2-hid-touch.md`（HID 触摸）、
-  `docs/superpowers/plans/2026-08-14-tab5-all-in-one-p3-uac-audio.md`（UAC1 音频）
+  `docs/superpowers/plans/2026-08-14-tab5-all-in-one-p3-uac-audio.md`（UAC1 音频）、
+  `docs/superpowers/plans/2026-08-15-tab5-all-in-one-p4-uvc-camera.md`（UVC 摄像头）
 - 固件细节与构建/烧录/验证：`firmware/README.md`
