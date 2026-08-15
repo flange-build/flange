@@ -25,13 +25,20 @@ void cam_frame_stats_rgb565(const uint16_t *fb, int w, int h, int step,
     uint32_t hash = 2166136261u;
     uint32_t sum = 0, n = 0;
     uint32_t lo = 255, hi = 0;
+    /* 分通道累加和。采样上限 1280×720 = 921 600 个像素 × 255 = 2.35e8，
+     * 离 uint32 的 4.29e9 还有一个量级，全采样也不会溢出。 */
+    uint32_t sum_r = 0, sum_g = 0, sum_b = 0;
 
     for (int y = 0; y < h; y += step) {
         const uint16_t *row = fb + (size_t)y * (size_t)w;
         for (int x = 0; x < w; x += step) {
             const uint16_t p = row[x];
-            const uint32_t lum = (77u * r8_of(p) + 150u * g8_of(p) + 29u * b8_of(p)) >> 8;
+            const uint32_t r = r8_of(p), g = g8_of(p), b = b8_of(p);
+            const uint32_t lum = (77u * r + 150u * g + 29u * b) >> 8;
             sum += lum;
+            sum_r += r;
+            sum_g += g;
+            sum_b += b;
             if (lum < lo) lo = lum;
             if (lum > hi) hi = lum;
             hash = (hash ^ (uint32_t)(p & 0xffu)) * 16777619u;
@@ -45,4 +52,7 @@ void cam_frame_stats_rgb565(const uint16_t *fb, int w, int h, int step,
     out->lum_min  = (uint8_t)lo;
     out->lum_max  = (uint8_t)hi;
     out->checksum = hash;
+    out->r_mean   = (uint8_t)(sum_r / n);
+    out->g_mean   = (uint8_t)(sum_g / n);
+    out->b_mean   = (uint8_t)(sum_b / n);
 }

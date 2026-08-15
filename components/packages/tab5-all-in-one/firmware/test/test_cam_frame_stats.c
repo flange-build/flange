@@ -48,6 +48,24 @@ static void expect(const char *name, int step, uint32_t samples,
     cases++;
 }
 
+/*
+ * 分通道均值。**判白平衡对不对唯一的客观手段**，所以这三个数算错的代价与亮度
+ * 那三个一样大：整幅偏绿会被读成「已经平衡」，或者反过来让人去改根本没错的
+ * bayer order。三个通道必须走同一套 5/6 位 → 8 位扩展，否则「绿比红大」就成了
+ * 量化位数的假象（绿是 6 位、红蓝是 5 位）。
+ */
+static void expect_rgb(const char *name, int step, uint8_t r, uint8_t g, uint8_t b)
+{
+    cam_frame_stats_t s;
+    cam_frame_stats_rgb565(buf, W, H, step, &s);
+    if (s.r_mean != r || s.g_mean != g || s.b_mean != b) {
+        fprintf(stderr, "FAIL [%s]: R=%u G=%u B=%u，期望 R=%u G=%u B=%u\n",
+                name, s.r_mean, s.g_mean, s.b_mean, r, g, b);
+        assert(0 && "分通道均值用例失败");
+    }
+    cases++;
+}
+
 static uint32_t sum_of(int step)
 {
     cam_frame_stats_t s;
@@ -82,6 +100,24 @@ int main(void)
     fill(0x001F);   /* 纯蓝 */
     expect("纯蓝", 1, W * H, (uint8_t)((29u * 255u) >> 8), (uint8_t)((29u * 255u) >> 8),
            (uint8_t)((29u * 255u) >> 8));
+
+    /* ── 分通道均值 ── */
+    fill(0x0000);
+    expect_rgb("全黑三通道", 1, 0, 0, 0);
+    fill(0xFFFF);
+    expect_rgb("全白三通道", 1, 255, 255, 255);   /* 6 位的绿也必须到 255，不是 252 */
+    fill(0xF800);
+    expect_rgb("纯红只有 R", 1, 255, 0, 0);
+    fill(0x07E0);
+    expect_rgb("纯绿只有 G", 1, 0, 255, 0);
+    fill(0x001F);
+    expect_rgb("纯蓝只有 B", 1, 0, 0, 255);
+
+    /* 「整体发绿」的合成样张：绿满、红蓝各一半 —— 三个通道**同尺度**时
+     * 必然读出 R127 G255 B127；若绿用 6 位原值(63)而红蓝用 5 位原值(15)，
+     * 这条用例会立刻失败。 */
+    fill((uint16_t)((15u << 11) | (63u << 5) | 15u));
+    expect_rgb("发绿样张", 1, 123, 255, 123);
 
     /* ── 采样步长：只能看被采到的那些像素 ──
      * 把「会被采到」的像素涂黑、其余涂白。step=8 时结果必须是全黑；
@@ -127,7 +163,7 @@ int main(void)
      * samples == W*H，正是这里要区分开的东西。 */
     {
         cam_frame_stats_t s;
-        const cam_frame_stats_t zero = {0, 0, 0, 0, 0};
+        const cam_frame_stats_t zero = {0};
 
         cam_frame_stats_rgb565(NULL, W, H, 1, &s);
         assert(memcmp(&s, &zero, sizeof(s)) == 0);

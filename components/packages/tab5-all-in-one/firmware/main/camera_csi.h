@@ -30,6 +30,7 @@
  * 不开数据流，启停单独一对函数 —— 由 uvc_stream.c 的帧泵按 host 选中的
  * alt 0/1 调用（alt 0 = 没人开摄像头 ⇒ 一点 PSRAM 带宽都不占）。
  */
+#include "cam_frame_stats.h"
 #include "esp_err.h"
 #include <stdint.h>
 
@@ -93,6 +94,22 @@ esp_err_t camera_csi_stop(void);
  * 完全不同的两件事，日志里必须分得开 —— 见 camera_csi_report()。
  */
 esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms);
+
+/*
+ * 自动曝光走一拍。**每取到一帧就调一次**，由取帧的那一方（uvc_stream.c 的帧泵）
+ * 把该帧的统计送进来 —— 统计本来就是它为了自检在算的，AE 不必再扫一遍 PSRAM。
+ *
+ * 更新频率限制、死区、阻尼、限幅四道防振荡闸全在 cam_tune.c 的控制律里，
+ * 所以本函数**可以放心地每帧调**：绝大多数拍它只是记下亮度就返回，
+ * 真正下发 SCCB 最快也要 CAM_AE_INTERVAL_TICKS 拍一次。
+ *
+ * 不取流（host 停在 alt 0）时它什么都不做 —— 与「摄像头不取流时零影响」一致。
+ * 传感器可调范围没查到时同样什么都不做，画面停在模式表的默认曝光上。
+ *
+ * ⓘ 白平衡不在这里：CCM 是开机一次配好的静态矩阵（camera_csi_init()），
+ *   不需要逐帧动。系数怎么量出来见 cam_tune.h。
+ */
+void camera_csi_ae_tick(const cam_frame_stats_t *stats);
 
 /*
  * CSI/ISP 自检快照。与 camera_sensor_report() 同构、理由也一样（CDC 档下开机那几行

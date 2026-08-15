@@ -162,8 +162,12 @@ static int32_t  s_cam_last_err = ESP_OK;   /* 最近一次 start/stop 的返回�
  *                       csi_transfer_size 那段）
  * 统计对象是**缩放前的 1280×720 原帧**，因为要判的是 CSI/ISP 那一段。
  *
- * 每秒只抽一帧统计（1/64 采样下约 2 ms），不是每帧都做：观测自身要读 PSRAM，
- * 而 PSRAM 带宽正是本阶段要量的东西。
+ * ⓘ 全帧统计从「每秒一次」改成了**每帧一次**：它现在同时是自动曝光的反馈量
+ *   （camera_csi_ae_tick），而 AE 的更新周期是按「拍」算的，隔一秒喂一次数据
+ *   会让 cam_tune.h 里那套按拍推导的滞后余量全部作废。
+ *   代价：1/64 采样约 2 ms/帧 × 10 fps = **每秒 20 ms**，占取流期 PSRAM 时间的
+ *   2%，比 CSI 自己那 55 MB/s 小两个数量级；换来的是曝光能闭上环。
+ *   下 1/8 那份仍然每秒一次 —— 它判的是 DMA 截断，与曝光无关，没必要跟着加密。
  */
 static uint32_t          s_stat_phase;
 static cam_frame_stats_t s_stat_full;
@@ -182,18 +186,23 @@ static uint32_t s_bw_stream_countdown;   /* 取流开始后再等这么多帧才
 static uint32_t s_fps_last_sent;
 static int64_t  s_fps_last_us;
 
+/* 全帧统计：每帧都做，因为它同时是 AE 的反馈量。 */
 static void frame_stats_sample(const uint16_t *raw)
+{
+    cam_frame_stats_rgb565(raw, CAM_SENSOR_W, CAM_SENSOR_H,
+                           UVC_STATS_STEP, &s_stat_full);
+    if (s_stat_full.lum_max > s_full_max_ever)
+        s_full_max_ever = s_stat_full.lum_max;
+}
+
+/* 下 1/8 的统计：只为判 DMA 截断，每秒一次就够。
+ * 缓冲是行连续的，把指针推到 7/8 处、高度传 1/8 即可，复用同一个已测函数。 */
+static void frame_stats_sample_bottom(const uint16_t *raw)
 {
     const int bottom_rows = CAM_SENSOR_H / 8;
 
-    cam_frame_stats_rgb565(raw, CAM_SENSOR_W, CAM_SENSOR_H,
-                           UVC_STATS_STEP, &s_stat_full);
-    /* 缓冲是行连续的，把指针推到 7/8 处、高度传 1/8 即可，复用同一个已测函数。 */
     cam_frame_stats_rgb565(raw + (size_t)(CAM_SENSOR_H - bottom_rows) * CAM_SENSOR_W,
                            CAM_SENSOR_W, bottom_rows, UVC_STATS_STEP, &s_stat_bottom);
-
-    if (s_stat_full.lum_max > s_full_max_ever)
-        s_full_max_ever = s_stat_full.lum_max;
     if (s_stat_bottom.lum_max > s_bottom_max_ever)
         s_bottom_max_ever = s_stat_bottom.lum_max;
 }
@@ -219,10 +228,19 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
     if (camera_csi_get_frame(&raw, UVC_CAM_WAIT_MS) != ESP_OK)
         return false;
 
-    /* 每秒抽一帧做内容统计。统计的是**缩放前**的原帧 —— 要判的是 CSI/ISP 段。 */
+    /*
+     * 内容统计。统计的是**缩放前**的原帧 —— 要判的是 CSI/ISP 段，而且 AE 要控的
+     * 也是传感器的曝光，两者都必须在缩放/编码之前取。
+     * 顺序上紧贴取帧、排在缩放之前：PPA 与 JPEG 各要几毫秒，插在中间只会让
+     * 「反馈量对应哪一帧」变得更含糊。
+     */
+    frame_stats_sample(raw);
+    camera_csi_ae_tick(&s_stat_full);
+
+    /* 下 1/8 那份每秒一次就够，它判的是 DMA 截断，与曝光无关。 */
     if (++s_stat_phase >= UVC_FPS) {
         s_stat_phase = 0;
-        frame_stats_sample(raw);
+        frame_stats_sample_bottom(raw);
     }
 
     if (cam_jpeg_downscale(raw, s_rgb) != ESP_OK)

@@ -3,6 +3,7 @@
  */
 #include "camera_csi.h"
 #include "board_power.h"
+#include "cam_tune.h"
 #include "tab5_pins.h"
 #include "esp_log.h"
 #include "esp_check.h"
@@ -19,6 +20,7 @@
 #include "esp_cam_ctlr.h"
 #include "esp_cam_ctlr_csi.h"
 #include "driver/isp.h"
+#include "driver/isp_ccm.h"     /* 白平衡走 CCM：本板 rev v1.0 没有 WBG，见 cam_tune.h */
 #include "esp_cache.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -247,6 +249,17 @@ static int32_t s_st_cbs   = STEP_NOT_RUN;   /* esp_cam_ctlr_register_event_callb
 static int32_t s_st_isp   = STEP_NOT_RUN;   /* esp_isp_new_processor() */
 static int32_t s_st_fmt   = STEP_NOT_RUN;   /* esp_cam_sensor_set_format() */
 static int32_t s_st_start = STEP_NOT_RUN;   /* enable/start/stream-on 整条启动链 */
+static int32_t s_st_ccm   = STEP_NOT_RUN;   /* CCM 配置 + 使能（白平衡） */
+static int32_t s_st_ae    = STEP_NOT_RUN;   /* AE 可调范围查询 */
+
+/* ══ 画质：白平衡(CCM) 与自动曝光(AE) ══════════════════════════════
+ * 控制律与全部可调参数在 cam_tune.h；本文件只做两件 IDF 侧的事：
+ * 把矩阵写进 ISP，以及把 AE 算出来的曝光/增益经 SCCB 写回传感器。 */
+static cam_ae_limits_t   s_ae_lim;
+static cam_ae_state_t    s_ae;
+static bool              s_ae_ready;                  /* 可调范围查到了吗 */
+static int32_t           s_ae_last_err = ESP_OK;      /* 最近一次下发的返回值 */
+static cam_frame_stats_t s_last_stats;                /* 最近一帧的统计，自检行用 */
 
 /*
  * 中断回调之一：DMA 要下一块缓冲了。
@@ -434,16 +447,24 @@ esp_err_t camera_csi_init(void)
      * ⓘ rev < 3.0 上这条路是通的：esp_isp_new_processor() / esp_isp_enable() /
      *   去马赛克本身**没有任何芯片版本门**，isp_ll.h:473-478 里
      *   ISP_COLOR_RGB565 会把 isp_out_type = 4 且 demosaic_en = 1 一起设好。
-     *   有版本门的是我们**一个都没用**的可选子模块：BLC(isp_blc.c:29)、
-     *   WBG(isp_wbg.c:29)、AWB(isp_awb.c:82)、crop(isp_crop.c:29) 要 rev ≥ 3.0，
-     *   LSC(isp_lsc.c:57) 要 rev ≥ 1.0。所以修好 CSI 不会再撞 ISP 的墙。
+     *   可选子模块里**真正有版本门的只有三个**（IDF v6.0 逐个 grep 过）：
+     *   BLC(isp_blc.c:30)、WBG(isp_wbg.c:30)、crop(isp_crop.c:30) 要 rev ≥ 3.0；
+     *   LSC(isp_lsc.c:58) 要 rev ≥ 1.0，而 ESP_CHIP_REV_ABOVE 是
+     *   `(min_rev) <= (rev)`（soc/chip_revision.h:31）⇒ 本板 rev v1.0 **满足**。
+     *   ⚠️ 曾经写在这里的「AWB(isp_awb.c:82) 要 rev ≥ 3.0」**是错的**：
+     *      isp_awb.c 整个文件没有 ESP_CHIP_REV_ABOVE，那一处 efuse_hal_chip_revision()
+     *      < 300 只否掉 AWB 统计的 **subwindow** 子功能（还只是打个 warning）。
+     *      也就是说硬件 AWB 统计在本板上是可用的 —— 本工程仍然不用它，理由见
+     *      cam_tune.h：白平衡的分通道均值我们已经在软件里算了（帧统计顺带的），
+     *      再挂一个硬件统计块只是多一份配置面与一条会失败的路径。
+     *   **CCM 没有任何版本门**（isp_ccm.c 全文无 ESP_CHIP_REV_ABOVE），这正是
+     *   下面拿它顶替用不了的 WBG 的前提；只是 rev < 3.0 的定点格式窄一些，
+     *   系数上限 4.0 而非 16.0（hal/isp_ll.h:138-144）。
      *
-     * **不做 AE/AWB 闭环** —— 闭环控制律要么引
-     * espressif/esp_ipa（会把 esp_video 的一半拖进来），要么自己写；本阶段用
-     * esp_cam_sensor 模式表里的默认曝光与增益（sc202cs_isp_info[0] 的
-     * exp_def = 0x3dc、gain_def = 0）。
-     * ⚠️ **代价**：固定室内光照下画面正常，但换光照环境会过曝或欠曝，且不会自动
-     *    恢复。真要自动曝光，下一阶段优先自己写 30 行 P 控制器，别引 esp_ipa。
+     * ⓘ **曝光与白平衡都自己做，没有引 espressif/esp_ipa**（它会把 esp_video 的
+     *   一半拖进来）：白平衡是下面那段静态 CCM，自动曝光是 camera_csi_ae_tick()
+     *   里那个带四道防振荡闸的 P 控制器（控制律本体在 cam_tune.c，可宿主机测试）。
+     *   改动前这两件事都没做，实机现象正是「整体发绿 + 欠曝（亮度均值 45）」。
      * bayer 顺序取自 sc202cs_isp_info[0].bayer_type = ESP_CAM_SENSOR_BAYER_BGGR。
      * ⚠️ 只能按**名字**抄，不能按数值抄：两个枚举的顺序正好是反的
      *    （esp_cam_sensor_types.h 是 RGGB=0…BGGR=3，hal/color_types.h 是
@@ -464,6 +485,41 @@ esp_err_t camera_csi_init(void)
     ESP_RETURN_ON_ERROR(s_st_isp, TAG, "ISP");
 
     /*
+     * ══ 白平衡 ══ 用 **CCM 的对角线**顶替用不了的 WBG。
+     *
+     * 为什么非做不可：上面这条管线里 RAW→RGB 只有去马赛克一步，**没有任何一处
+     * 对三个通道施加不同的增益**。而 Bayer 阵列 50% 是绿色像素、绿滤光片透过率
+     * 也最高 ⇒ 不做白平衡的输出必然整体偏绿。这是管线的定义，不是「可能」。
+     * 完整依据（含「为什么不是 bayer order 配错」的三条论证）见 cam_tune.h 文件头。
+     *
+     * 系数取自 cam_tune.h 的三个常量（那里也写了怎么用自检行把它们量出来）。
+     * saturation = true：万一有人把系数调到定点格式表达不了的值，宁可饱和也不要
+     * 整个配置失败 —— 失败等于**一点白平衡都没有**，比略微不准坏得多。
+     * update_once_configured = true：立刻写进硬件，而不是等下一个 VSYNC。此刻
+     * 传感器还没 stream on，等 VSYNC 就等成了「第一次取流时白平衡还没生效」。
+     * （ⓘ rev < 3.0 上 isp_ll_shadow_update_ccm() 本就是个恒真的空函数，
+     *   hal/isp_ll.h:2116 那个 "for compatibility" 分支，所以这一位在本板上无害。）
+     *
+     * 失败**只降级不拦启动**：CCM 配不上只是画面继续发绿，而取流本身是好的 ——
+     * 让一个画质改良把已经验证过的出图能力拖垮，是本末倒置。
+     */
+    const esp_isp_ccm_config_t ccm_cfg = {
+        .matrix = {
+            {CAM_CCM_GAIN_R_MILLI / 1000.0f, 0.0f, 0.0f},
+            {0.0f, CAM_CCM_GAIN_G_MILLI / 1000.0f, 0.0f},
+            {0.0f, 0.0f, CAM_CCM_GAIN_B_MILLI / 1000.0f},
+        },
+        .saturation = true,
+        .flags = { .update_once_configured = 1 },
+    };
+    s_st_ccm = esp_isp_ccm_configure(s_isp, &ccm_cfg);
+    if (s_st_ccm == ESP_OK)
+        s_st_ccm = esp_isp_ccm_enable(s_isp);
+    if (s_st_ccm != ESP_OK)
+        ESP_LOGW(TAG, "CCM 白平衡没配上(%s)，画面会整体发绿，其余一切照常",
+                 esp_err_to_name(s_st_ccm));
+
+    /*
      * ⚠️ **实测结论（与计划里的存疑处对应）：set_format 是必须的，不能省。**
      * sc202cs_detect() 只把 dev->cur_format 指向模式表里的那一项，**一个寄存器
      * 都没往芯片里写**（managed_components/.../sc202cs.c:1527 附近，detect 里只有
@@ -475,6 +531,52 @@ esp_err_t camera_csi_init(void)
      */
     s_st_fmt = esp_cam_sensor_set_format(s_sensor, NULL);
     ESP_RETURN_ON_ERROR(s_st_fmt, TAG, "传感器 set_format");
+
+    /*
+     * ══ 自动曝光的可调范围 ══ **一律运行时查，不写死。**
+     *
+     * 曝光上限跟着模式表的 VTS 走，增益表的长度与内容跟着 menuconfig 的
+     * CONFIG_CAMERA_SC202CS_ABSOLUTE_GAIN_LIMIT 与增益优先策略走（本工程当前是
+     * 数字增益优先那张表）。抄成常量必然在某次改配置时悄悄过期，而症状是
+     * 「曝光调不动」或者更坏 —— 越界下标。
+     *
+     * ⚠️ 必须排在 set_format **之后**：传感器驱动是在那里才把它内部的
+     *    exposure_max / 默认曝光/增益填好的（sc202cs.c:1346-1348）。
+     *
+     * 查不到就**关掉 AE**（s_ae_ready 保持 false），画面停在模式表的默认曝光上 ——
+     * 与改动前的行为完全一致，不会比现在更坏。
+     */
+    esp_cam_sensor_param_desc_t d_exp = { .id = ESP_CAM_SENSOR_EXPOSURE_VAL };
+    esp_cam_sensor_param_desc_t d_gain = { .id = ESP_CAM_SENSOR_GAIN };
+    s_st_ae = esp_cam_sensor_query_para_desc(s_sensor, &d_exp);
+    if (s_st_ae == ESP_OK)
+        s_st_ae = esp_cam_sensor_query_para_desc(s_sensor, &d_gain);
+    if (s_st_ae == ESP_OK && d_gain.enumeration.elements && d_gain.enumeration.count > 0 &&
+        d_exp.number.minimum > 0 && d_exp.number.maximum >= d_exp.number.minimum) {
+        s_ae_lim.exp_min    = (uint32_t)d_exp.number.minimum;
+        s_ae_lim.exp_max    = (uint32_t)d_exp.number.maximum;
+        s_ae_lim.gain_map   = d_gain.enumeration.elements;
+        s_ae_lim.gain_count = d_gain.enumeration.count;
+        /* 状态机的初值就是**芯片此刻的实际值** —— set_format 刚把这两个默认值写进去，
+         * 所以状态与硬件天然一致，不必再多发一次 SCCB 去「同步」。 */
+        cam_ae_init(&s_ae, &s_ae_lim, (uint32_t)d_exp.default_value,
+                    (uint32_t)d_gain.default_value);
+        s_ae_ready = true;
+        ESP_LOGI(TAG, "AE 就绪：曝光 %" PRIu32 "~%" PRIu32 "（默认 %" PRIu32 "），"
+                      "增益 %" PRIu32 " 档（%u.%03u×~%u.%03u×，上限按 cam_tune.h 压到 %u.%03u×），"
+                      "目标亮度 %d",
+                 s_ae_lim.exp_min, s_ae_lim.exp_max, s_ae.exposure, s_ae_lim.gain_count,
+                 (unsigned)(s_ae_lim.gain_map[0] / 1000), (unsigned)(s_ae_lim.gain_map[0] % 1000),
+                 (unsigned)(s_ae_lim.gain_map[s_ae_lim.gain_count - 1] / 1000),
+                 (unsigned)(s_ae_lim.gain_map[s_ae_lim.gain_count - 1] % 1000),
+                 (unsigned)(CAM_AE_GAIN_MAX_MILLI / 1000), (unsigned)(CAM_AE_GAIN_MAX_MILLI % 1000),
+                 CAM_AE_TARGET);
+    } else {
+        if (s_st_ae == ESP_OK)
+            s_st_ae = ESP_ERR_INVALID_RESPONSE;   /* 查成功了但内容不可用 */
+        ESP_LOGW(TAG, "拿不到曝光/增益的可调范围(%s)，自动曝光关闭，"
+                      "画面固定在模式表的默认曝光上", esp_err_to_name(s_st_ae));
+    }
 
     ESP_LOGI(TAG, "CSI+ISP 就绪：%dx%d RAW8→RGB565，%d 块帧缓冲各 %u 字节"
                   "（共 %u KB PSRAM）；**尚未取流**",
@@ -612,6 +714,103 @@ esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms)
     return ESP_OK;
 }
 
+void camera_csi_ae_tick(const cam_frame_stats_t *st)
+{
+    /* samples == 0 表示这份统计什么都没采到（参数非法），拿它去调曝光等于拿
+     * 随机数当反馈 —— 与「采到了，结果是全黑」严格区分开。 */
+    if (!st || st->samples == 0)
+        return;
+
+    /* 统计本身先留下来：即便 AE 关着（查不到可调范围），分通道均值仍然是判断
+     * 白平衡对不对的唯一客观手段，自检行必须能打出来。 */
+    s_last_stats = *st;
+
+    /*
+     * **不取流就一步都不走。** 调用方（uvc_stream.c 的帧泵）只在 alt 1 下才拿得到
+     * 帧，本来就不会走到这里；这一行是结构上的第二道保险 —— 「摄像头不取流时
+     * 零影响」不该依赖调用方记得这件事。
+     */
+    if (!s_ae_ready || !s_streaming)
+        return;
+
+    if (!cam_ae_step(&s_ae, st->lum_mean, &s_ae_lim))
+        return;   /* 没到更新周期 / 落在死区 / 已顶到限位：别去打扰 I2C 总线 */
+
+    /*
+     * 曝光与增益**一次调用一起下发**（ESP_CAM_SENSOR_GROUP_EXP_GAIN）。
+     * 分两次发的话，两次之间会漏出一帧「新曝光 + 旧增益」的画面 —— 亮度跳一下，
+     * 而 AE 下一拍恰好会把这一帧的亮度当成反馈，等于自己给自己注入扰动。
+     * exposure_us 传 0 表示「用 exposure_val 这个原始寄存器值」（组件约定，
+     * esp_cam_sensor_types.h:466-470）：我们的控制量本来就是寄存器域的，
+     * 走 us 会多一次浮点往返换算，白白引入量化误差。
+     *
+     * ⓘ 代价：6 次 SCCB 写（曝光 3 + 增益 3），100 kHz 下约 2 ms，最快 300 ms
+     *   一次 ⇒ 占这条共用 I2C 总线不到 1%。触摸那 20 ms 一次的轮询感觉不到。
+     */
+    const esp_cam_sensor_gh_exp_gain_t v = {
+        .exposure_us  = 0,
+        .exposure_val = s_ae.exposure,
+        .gain_index   = s_ae.gain_index,
+    };
+    s_ae_last_err = esp_cam_sensor_set_para_value(s_sensor, ESP_CAM_SENSOR_GROUP_EXP_GAIN,
+                                                  &v, sizeof(v));
+    if (s_ae_last_err != ESP_OK)
+        ESP_LOGW(TAG, "曝光/增益下发失败(%s)", esp_err_to_name((esp_err_t)s_ae_last_err));
+}
+
+/*
+ * 画质自检：白平衡与曝光各一行。**这两行是判断画面对不对唯一的客观依据** ——
+ * 「发绿」「太暗」是观感，R98/G121/B105、亮度均值 45 才是能拿来算系数的数字。
+ */
+static void camera_quality_report(void)
+{
+    uint32_t sug_r = CAM_CCM_GAIN_R_MILLI, sug_b = CAM_CCM_GAIN_B_MILLI;
+    cam_awb_suggest(s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
+                    CAM_CCM_GAIN_R_MILLI, CAM_CCM_GAIN_B_MILLI, &sug_r, &sug_b);
+
+    /*
+     * 判读：
+     *   CCM!=ESP_OK               → 白平衡压根没生效，画面必然发绿，先修这个。
+     *   通道均值 R<G>B 比例固定    → 白平衡还没调准。把「建议」那两个数抄进
+     *                               cam_tune.h 的 CAM_CCM_GAIN_R/B_MILLI 重编。
+     *   拍红色物体时 B > R        → 这才是 bayer order 配错（红蓝对调），
+     *                               改 camera_csi.c 上面 isp_cfg 的 bayer_order。
+     *   三个均值相近（差 <5%）     → 白平衡到位，「建议」应当≈「当前」。
+     * ⚠️ 只有 AE 收敛之后这几个数才有意义：曝光没稳的时候画面整体偏暗/偏亮，
+     *    通道比例会被削顶与量化噪声带偏。
+     */
+    ESP_LOGI(TAG, "[自检] 画质 CCM=%s 当前 R×%u.%03u G×%u.%03u B×%u.%03u"
+                  " | 通道均值 R%u G%u B%u → 建议 R×%" PRIu32 ".%03" PRIu32
+                  " B×%" PRIu32 ".%03" PRIu32 "（对白纸/灰卡时才作数）",
+             step_str(s_st_ccm),
+             (unsigned)(CAM_CCM_GAIN_R_MILLI / 1000), (unsigned)(CAM_CCM_GAIN_R_MILLI % 1000),
+             (unsigned)(CAM_CCM_GAIN_G_MILLI / 1000), (unsigned)(CAM_CCM_GAIN_G_MILLI % 1000),
+             (unsigned)(CAM_CCM_GAIN_B_MILLI / 1000), (unsigned)(CAM_CCM_GAIN_B_MILLI % 1000),
+             s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
+             sug_r / 1000, sug_r % 1000, sug_b / 1000, sug_b % 1000);
+
+    /*
+     * 判读：
+     *   AE=未运行 / 非 ESP_OK      → 自动曝光没起来，画面固定在默认曝光（会欠曝）。
+     *   下发=0 且取流中             → 控制律一次都没动过：要么亮度一直落在死区
+     *                                （那是好事），要么帧统计压根没送进来。
+     *   亮度长期偏离目标而下发不涨   → **顶到限位了**：曝光已经是上限、增益已经是
+     *                                cam_tune.h 的 CAM_AE_GAIN_MAX_MILLI ⇒ 环境
+     *                                太暗，只能加光或抬那个上限（代价是噪声）。
+     *   亮度在目标附近来回摆、下发一直涨 → 振荡。四道闸的调法见 cam_tune.h，
+     *                                优先加大 CAM_AE_INTERVAL_TICKS 或减小阻尼。
+     */
+    const uint32_t gain_milli = (s_ae_ready && s_ae.gain_index < s_ae_lim.gain_count)
+                                    ? s_ae_lim.gain_map[s_ae.gain_index] : 0;
+    ESP_LOGI(TAG, "[自检] AE=%s 曝光=%" PRIu32 "/%" PRIu32 " 增益=%u.%03u×(第 %" PRIu32 " 档)"
+                  " 曝光量=%" PRIu32 " | 亮度 %u→目标 %d(±%d) %s 下发=%" PRIu32 " 最近=%s",
+             step_str(s_st_ae), s_ae.exposure, s_ae_lim.exp_max,
+             (unsigned)(gain_milli / 1000), (unsigned)(gain_milli % 1000), s_ae.gain_index,
+             s_ae.ev, s_ae.last_mean, CAM_AE_TARGET, CAM_AE_DEADBAND,
+             cam_ae_converged(&s_ae) ? "已收敛" : "调整中",
+             s_ae.updates, step_str(s_ae_last_err));
+}
+
 void camera_csi_report(void)
 {
     /*
@@ -645,6 +844,10 @@ void camera_csi_report(void)
              s_streaming, s_frames_done, s_frames_reused, s_frames_dropped,
              s_get_timeouts, s_size_mismatch, s_last_size,
              (unsigned)CAM_FB_BYTES);
+
+    /* 画质那两行紧跟其后：上面那行说的是「有没有帧」，它们说的是「帧对不对」，
+     * 顺序就是排查顺序 —— 没帧的时候画质数字一律不必看。 */
+    camera_quality_report();
 }
 
 /* ══ PSRAM 读带宽实测 ══════════════════════════════════════════════ */

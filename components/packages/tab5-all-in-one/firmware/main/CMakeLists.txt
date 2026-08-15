@@ -5,7 +5,7 @@ set(aio_srcs "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c"
              "display_dsi.c" "standby_screen.c" "board_power.c"
              "kbd_i2c.c" "kbd_translate.c" "touch_hid.c" "touch_map.c"
              "uvc_stream.c" "cam_jpeg.c" "camera_csi.c"
-             "cam_frame_stats.c")
+             "cam_frame_stats.c" "cam_tune.c")
 # esp_driver_jpeg = P4 的硬件 JPEG 编码器，IDF 内置组件。**不用 esp_video**：
 # 那个托管组件会顺带拖进 usb_host_uvc + esp_h264 + esp_ipa，本工程一个都不需要。
 # esp_driver_cam(MIPI-CSI 控制器) / esp_driver_isp(RAW8→RGB565 去马赛克) 同理，
