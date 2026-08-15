@@ -29,7 +29,7 @@ from elftools.elf.elffile import ELFFile
 #    那串字节。两档下 GUD/HID/音频那部分的断言完全相同。
 EXPECT = dict(
     vid=0x16D0, pid=0x10A9,
-    n_itf=5,
+    n_itf=7,
     itf_vendor=0, itf_hid=1, itf_ac=2, itf_as_out=3, itf_as_in=4,
     ep_vendor_out=0x01, ep_vendor_in=0x81, ep_hid=0x82,
     ep_audio_out=0x02, ep_audio_in=0x83,
@@ -46,6 +46,14 @@ EXPECT = dict(
     # 换一条 USB CDC 日志串口。两个接口**追加在音频之后**，vendor/HID/音频的编号全不动。
     itf_cdc=5,
     ep_cdc_in=0x81, ep_cdc_notif=0x84, ep_cdc_out=0x03,
+    # ── UVC（P4）────────────────────────────────────────────────
+    itf_vc=5, itf_vs=6,
+    ep_uvc=0x84, ep_uvc_pkt=448,
+    uvc_w=640, uvc_h=360, uvc_interval=1000000,   # 100 ns 单位 ⇒ 10 fps
+    uvc_max_frame=65536,
+    uvc_cam_term=1, uvc_out_term=2,
+    # 调试档下 UVC 顶到 IF2/IF3（音频整体不编译），端点号**不变**
+    itf_vc_dbg=2, itf_vs_dbg=3,
 )
 
 DESC_CONFIG = 0x02
@@ -62,6 +70,17 @@ AC_HEADER, AC_INPUT_TERMINAL, AC_OUTPUT_TERMINAL = 0x01, 0x02, 0x03
 AC_FEATURE_UNIT = 0x06
 # UAC1 AudioStreaming 的 CS 子类型
 AS_GENERAL, AS_FORMAT_TYPE = 0x01, 0x02
+
+# ⚠️ UVC 的 CS 子类型与 UAC1 的**数字重叠**（例如 0x02 在 AC 里是 INPUT_TERMINAL、
+#    在 VC 里也是 INPUT_TERMINAL，而 0x01 在 AC 里是 HEADER、在 VS 里是
+#    INPUT_HEADER）。所以下面 check_uvc() 收的是**已按所属接口筛过**的两个列表，
+#    不是全局 CS_INTERFACE 池 —— 混着找会把音频的 ID1/ID2 端子当成视频的端子，
+#    wTotalLength 那条断言会以一个完全指不到病因的数字失败。
+# UVC VideoControl 的 CS 子类型
+VC_HEADER, VC_INPUT_TERM, VC_OUTPUT_TERM = 0x01, 0x02, 0x03
+# UVC VideoStreaming 的 CS 子类型
+VS_INPUT_HEADER, VS_FORMAT_MJPEG, VS_FRAME_MJPEG, VS_COLORFORMAT = 0x01, 0x06, 0x07, 0x0D
+VIDEO_ITT_CAMERA, VIDEO_TT_STREAMING = 0x0201, 0x0101
 
 # TUSB_ISO_EP_ATT_*：bmAttributes 的 bit3:2
 SYNC_NAMES = {0: 'NO_SYNC(!)', 1: 'Asynchronous', 2: 'Adaptive', 3: 'Synchronous'}
@@ -115,6 +134,120 @@ def check(cond, msg):
         raise SystemExit(f'FAIL: {msg}')
 
 
+def check_uvc(iads, eps, vc_csi, vs_csi, itf_by, itf_eps, has_audio):
+    """UVC 段的全部跨描述符引用。每条断言都对应一种烧板后才会暴露的错误。
+
+    vc_csi / vs_csi 已由调用方按「所属接口的 class/subclass」筛过（见上方 ⚠️）。
+    """
+    vc_num = EXPECT['itf_vc'] if has_audio else EXPECT['itf_vc_dbg']
+    vs_num = EXPECT['itf_vs'] if has_audio else EXPECT['itf_vs_dbg']
+
+    # 1) IAD：uvcvideo 靠它把 VC+VS 成组绑定；bFunctionClass 必须是 VIDEO(0x0E)
+    video_iads = [d for d in iads if d[4] == 0x0E]
+    check(len(video_iads) == 1, f'应恰有 1 条 UVC 的 IAD（bFunctionClass=0x0E），实际 {len(video_iads)}')
+    iad = video_iads[0]
+    check(iad[2] == vc_num and iad[3] == 2,
+          f'UVC IAD 应从 IF{vc_num} 起覆盖 2 个接口，实际 first={iad[2]} count={iad[3]}')
+    check(iad[5] == 0x03,
+          f'bFunctionSubClass 应为 VIDEO_INTERFACE_COLLECTION(3)，实际 {iad[5]}')
+
+    # 2) VideoControl：**必须零端点**（第 5 条 IN 端点会撞 dcd_dwc2 的 TU_ASSERT，且无日志）
+    vc = itf_by(vc_num)
+    check(vc[4] == 0, f'VideoControl 的 bNumEndpoints={vc[4]}，必须是 0（IN 端点已用满 4/4）')
+    check((vc[5], vc[6]) == (0x0E, 0x01), 'VideoControl 的 class/subclass 应为 0x0E/0x01')
+    check(itf_eps[(vc_num, 0)] == set(), 'VideoControl 不得带任何端点')
+
+    # 3) VC 头：bcdUVC、wTotalLength、baInterfaceNr
+    vch = next((d for d in vc_csi if d[2] == VC_HEADER), None)
+    check(vch is not None, '缺 VideoControl 的 CS 头')
+    check((vch[3], vch[4]) == (0x50, 0x01),
+          f'bcdUVC=0x{vch[4]:02x}{vch[3]:02x}，应为 0x0150（UVC 1.5）')
+    n_coll = vch[11]
+    check(n_coll == 1, f'bInCollection 应为 1（只有一个 VS 接口），实际 {n_coll}')
+    check(vch[12] == vs_num, f'baInterfaceNr 应指向 IF{vs_num}，实际 {vch[12]}')
+    # wTotalLength 少算一条，host 就在解析到一半时停下，后面的实体静默消失
+    inner = sum(len(d) for d in vc_csi if d[2] in (VC_INPUT_TERM, VC_OUTPUT_TERM))
+    check(u16(vch, 5) == len(vch) + inner,
+          f'VC 头的 wTotalLength={u16(vch, 5)}，应为 {len(vch) + inner}（头 + 两个端子）')
+
+    # 4) 端子链：Camera(ID1) → Output(ID2)，且 Output 的 bSourceID 指回 ID1
+    cam = next((d for d in vc_csi
+                if d[2] == VC_INPUT_TERM and d[3] == EXPECT['uvc_cam_term']), None)
+    out = next((d for d in vc_csi
+                if d[2] == VC_OUTPUT_TERM and d[3] == EXPECT['uvc_out_term']), None)
+    check(cam is not None and u16(cam, 4) == VIDEO_ITT_CAMERA,
+          'ID1 应为 Camera Terminal(wTerminalType=0x0201)')
+    check(out is not None and u16(out, 4) == VIDEO_TT_STREAMING,
+          'ID2 应为 USB Streaming 输出端子(wTerminalType=0x0101)')
+    check(out[7] == EXPECT['uvc_cam_term'],
+          f'输出端子的 bSourceID={out[7]}，应为 {EXPECT["uvc_cam_term"]}（视频链断了）')
+
+    # 5) VideoStreaming：alt 0 零端点（带宽零和的落点）、alt 1 恰一条 ISO IN
+    check(itf_eps[(vs_num, 0)] == set(),
+          'VideoStreaming alt 0 必须零端点 —— host 不开摄像头时不预留 ISO 带宽')
+    check(itf_eps[(vs_num, 1)] == {EXPECT['ep_uvc']},
+          f'VideoStreaming alt 1 应恰有一条端点 0x{EXPECT["ep_uvc"]:02X}')
+    ep = next(d for d in eps if d[2] == EXPECT['ep_uvc'])
+    check(ep[0] == 7,
+          f'UVC 的 ISO 端点描述符应为 7 字节（标准端点），实际 {ep[0]} —— '
+          '9 字节是 UAC1 的形式，说明有人手写错了')
+    check(ep[3] & 0x03 == 0x01, 'UVC 端点必须是 isochronous')
+    check((ep[3] >> 2) & 0x03 == 0x01,
+          'UVC 端点的 sync 类型应为 asynchronous（TUD_VIDEO_DESC_EP_ISO 写死的值）')
+    check(u16(ep, 4) == EXPECT['ep_uvc_pkt'],
+          f'UVC 端点 wMaxPacketSize={u16(ep, 4)}，应为 {EXPECT["ep_uvc_pkt"]}；'
+          'DWC2 的 dfifo 只剩 123 words=492 字节，超了会静默 STALL')
+    check(ep[6] == 1, 'bInterval 应为 1（每个 USB 帧一包）')
+
+    # 6) VS 输入头：bEndpointAddress、bTerminalLink、wTotalLength
+    vsh = next((d for d in vs_csi if d[2] == VS_INPUT_HEADER), None)
+    check(vsh is not None, '缺 VideoStreaming 的输入头')
+    check(vsh[3] == 1, f'bNumFormats 应为 1，实际 {vsh[3]}')
+    check(vsh[6] == EXPECT['ep_uvc'],
+          f'VS 头里的 bEndpointAddress=0x{vsh[6]:02X}，应为 0x{EXPECT["ep_uvc"]:02X}')
+    check(vsh[8] == EXPECT['uvc_out_term'],
+          f'bTerminalLink={vsh[8]}，应指向输出端子 ID{EXPECT["uvc_out_term"]}')
+    check(vsh[9] == 0, 'bStillCaptureMethod 应为 0（不做静态抓拍）')
+    fmt = next(d for d in vs_csi if d[2] == VS_FORMAT_MJPEG)
+    frm = next(d for d in vs_csi if d[2] == VS_FRAME_MJPEG)
+    color = next(d for d in vs_csi if d[2] == VS_COLORFORMAT)
+    check(u16(vsh, 4) == len(vsh) + len(fmt) + len(frm) + len(color),
+          'VS 头的 wTotalLength 与「头 + 格式 + 帧 + 色彩匹配」不符')
+
+    # 7) 格式与帧：MJPEG、640×360、单一离散帧间隔、dwMaxVideoFrameBufferSize
+    check(fmt[3] == 1 and fmt[4] == 1, 'bFormatIndex/bNumFrameDescriptors 都应为 1')
+    check(frm[3] == 1, 'bFrameIndex 应为 1')
+    check(u16(frm, 5) == EXPECT['uvc_w'] and u16(frm, 7) == EXPECT['uvc_h'],
+          f'帧尺寸应为 {EXPECT["uvc_w"]}×{EXPECT["uvc_h"]}，'
+          f'实际 {u16(frm, 5)}×{u16(frm, 7)}')
+    max_frame = int.from_bytes(frm[17:21], 'little')
+    interval = int.from_bytes(frm[21:25], 'little')
+    n_intv = frm[25]
+    # ★ 手写的 AIO_UVC_FRM_MJPEG_DISC1 就是为这条断言存在的：TinyUSB 库里那个
+    #   TUD_VIDEO_DESC_CS_VS_FRM_MJPEG_DISC 宏会让 bLength 与实际字节数不符
+    #   （见 usb_descriptors.c 的 ⚠️），错位后这里读到的全是垃圾。
+    check(len(frm) == 26 + 4,
+          f'离散帧描述符应为 30 字节（26 + 1 个 4 字节间隔），实际 {len(frm)}')
+    check(n_intv == 1,
+          f'bFrameIntervalType 应为 1（单一离散间隔），实际 {n_intv} —— '
+          '连续区间会让 video_device.c 的默认值协商走进"什么都不填"的分支')
+    check(interval == EXPECT['uvc_interval'],
+          f'dwDefaultFrameInterval={interval}，应为 {EXPECT["uvc_interval"]}'
+          f'（{EXPECT["uvc_interval"] // 10000} ms ⇒ {10000000 // EXPECT["uvc_interval"]} fps）')
+    check(int.from_bytes(frm[26:30], 'little') == interval,
+          '唯一的那个离散帧间隔与 dwDefaultFrameInterval 不一致')
+    check(max_frame == EXPECT['uvc_max_frame'],
+          f'dwMaxVideoFrameBufferSize={max_frame}，应为 {EXPECT["uvc_max_frame"]}')
+    # ★ 那条静默的带宽陷阱：max_frame/interval_ms + 2 必须 > 端点包大小，
+    #   否则 TinyUSB 会把每包缩小，带宽白掉一截而哪里都不报错
+    interval_ms = interval // 10000
+    check(max_frame // interval_ms + 2 > EXPECT['ep_uvc_pkt'],
+          f'dwMaxVideoFrameBufferSize 太小：{max_frame}/{interval_ms}+2='
+          f'{max_frame // interval_ms + 2} ≤ {EXPECT["ep_uvc_pkt"]}，'
+          'TinyUSB 会把 dwMaxPayloadTransferSize 缩到这个值（video_device.c:562-567）')
+    check(color[3] == 0x01, 'bColorPrimaries 应为 BT.709')
+
+
 def main():
     elf = sys.argv[1] if len(sys.argv) > 1 else 'build/tab5_aio.elf'
 
@@ -143,6 +276,7 @@ def main():
     #    不能把全部 CS_INTERFACE 混成一个池子去按 subtype 过滤。
     itfs, eps, iads = [], [], []
     ac_csi, as_csi, cse = [], [], []   # as_csi 元素为 (接口号, 描述符)
+    vc_csi, vs_csi = [], []            # UVC 的两套，同样必须按所属接口分开
     itf_eps = {}                       # (接口号, alt) -> 该 alt 下声明的端点地址集合
     cur = None
     for ln, typ, d in items:
@@ -160,6 +294,10 @@ def main():
                 ac_csi.append(d)
             elif (cur[5], cur[6]) == (0x01, 0x02):      # AUDIO / AUDIOSTREAMING
                 as_csi.append((cur[2], d))
+            elif (cur[5], cur[6]) == (0x0E, 0x01):      # VIDEO / VIDEOCONTROL
+                vc_csi.append(d)
+            elif (cur[5], cur[6]) == (0x0E, 0x02):      # VIDEO / VIDEOSTREAMING
+                vs_csi.append(d)
         elif typ == DESC_CS_ENDPOINT:
             cse.append(d)
         elif typ == DESC_IAD:
@@ -171,8 +309,9 @@ def main():
     audio_iads = [d for d in iads if d[4] == 0x01]   # AUDIO
     cdc_iads = [d for d in iads if d[4] == 0x02]     # CDC Control
     has_cdc = len(cdc_iads) > 0
+    has_audio = len(audio_iads) > 0
     n_itf = EXPECT['n_itf'] + (2 if has_cdc else 0)
-    mode = '默认档：GUD + HID + UAC1 音频'
+    mode = '默认档：GUD + HID + UAC1 音频 + UVC 摄像头'
     if has_cdc:
         mode += ' + CDC 排障档 (CONFIG_AIO_DEBUG_CDC=y，已让出 GUD 的 IN 端点)'
     print(f'== 模式：{mode} ==\n')
@@ -219,11 +358,15 @@ def main():
           f'IF0(vendor) 的 bNumEndpoints={vendor[4]}，与实际声明的 {len(vendor_eps)} 条不符')
 
     # ── 端点总账：所有模式都要守 ──
+    # UVC 落地后 4 条可用 IN 端点**全部用满**，所以这里从「≤ 4」升级成「恰好是这四条」：
+    # 少一条说明某个功能的端点没编进去，多一条会撞 dcd_dwc2.c 的
+    # TU_ASSERT(allocated_epin_count < ep_in_count)，而它一个字都不打。
     in_eps = sorted({d[2] for d in eps if d[2] & 0x80})
-    check(len(in_eps) <= 4,
-          f'IN 端点最多 4 条（P4 全速控制器 ep_in_count=5 含 EP0），实际 {len(in_eps)}')
-    check(0x84 not in in_eps or has_cdc,
-          '0x84 必须留给 UVC —— 只有 CDC 排障档可以临时借走')
+    check(in_eps == [0x81, 0x82, 0x83, 0x84],
+          f'IN 端点应恰为 [0x81,0x82,0x83,0x84]（4/4 用满），实际 {[hex(a) for a in in_eps]}')
+    iso_in = {d[2] for d in eps if d[2] & 0x80 and d[3] & 0x03 == 0x01}
+    check(EXPECT['ep_uvc'] in iso_in,
+          '0x84 必须是 UVC 的 ISO IN —— 它是最后一条可用 IN 端点')
 
     # ── CDC 排障档：接口/端点账 ──
     if has_cdc:
@@ -355,16 +498,21 @@ def main():
               f'端点 0x{epaddr:02X} 的 sync 字段是 {SYNC_NAMES[sync]}，应为 {SYNC_NAMES[sync_want]}')
 
     # ── 7) ★硬约束：没有反馈端点，且 ISO 端点的 sync 字段都不为 0 ──
+    # UVC 落地后共 3 条 ISO：UAC 播放 OUT + UAC 录音 IN + UVC 视频 IN。
     iso_eps = [d for d in eps if d[3] & 0x03 == 0x01]
-    check(len(iso_eps) == 2, f'应恰有 2 条 ISO 端点，实际 {len(iso_eps)}')
+    check(len(iso_eps) == 3,
+          f'应恰有 3 条 ISO 端点（UAC 两条 + UVC 一条），实际 {len(iso_eps)}')
     for d in iso_eps:
-        check(d[8] == 0,
-              f'端点 0x{d[2]:02X} 的 bSynchAddress=0x{d[8]:02X} 非 0 —— '
-              '引入了显式反馈端点，会占掉 0x84 把 UVC 顶出去')
         sync = (d[3] >> 2) & 0x03
         check(sync != 0,
               f'端点 0x{d[2]:02X} 的 sync 字段为 0(NO_SYNC) —— '
               'TinyUSB 的 UAC1 分支会把它当成反馈端点，数据永远发不出去')
+        # bSynchAddress 只存在于 UAC1 那种 9 字节的 ISO 数据端点描述符上；
+        # UVC 用的是标准 7 字节端点，压根没有这个字段（也因此没有反馈端点这回事）。
+        if d[0] == 9:
+            check(d[8] == 0,
+                  f'端点 0x{d[2]:02X} 的 bSynchAddress=0x{d[8]:02X} 非 0 —— '
+                  '引入了显式反馈端点，会占掉 0x84 把 UVC 顶出去')
 
     # ── 8) Type I 格式与预期参数一致（两条 AS 各一份，必须都对） ──
     fmts = [d for _, d in as_csi if d[2] == AS_FORMAT_TYPE]
@@ -381,8 +529,12 @@ def main():
         check(rate % 1000 == 0,
               f'采样率 {rate} 不是 1000 的整数倍 —— 会产生小数包，必须上反馈端点')
 
-    # 每条数据端点后面都得跟一条 CS 端点（AS_ISO_EP General）
+    # 每条数据端点后面都得跟一条 CS 端点（AS_ISO_EP General）。
+    # UVC 的 ISO 端点**没有** CS 端点描述符，所以这个数不受视频影响。
     check(len(cse) == 2, f'应有 2 条 CS 端点描述符，实际 {len(cse)}')
+
+    # ── 9) UVC：IAD / 端子链 / alt0 零带宽 / 0x84 的包大小与帧参数 ──
+    check_uvc(iads, eps, vc_csi, vs_csi, itf_by, itf_eps, has_audio)
 
     # ── 打印描述符树 ──
     kind = {DESC_CONFIG: 'CONFIG', DESC_STRING: 'STRING', DESC_INTERFACE: 'INTERFACE',
@@ -395,14 +547,24 @@ def main():
         elif typ == DESC_ENDPOINT:
             note = f'  <- EP 0x{d[2]:02X} attr=0x{d[3]:02X} mps={u16(d, 4)}'
             if d[3] & 3 == 1:
-                note += f' sync={SYNC_NAMES[(d[3] >> 2) & 3]} bSynchAddress={d[8]}'
+                note += f' sync={SYNC_NAMES[(d[3] >> 2) & 3]}'
+                # bSynchAddress 只在 UAC1 那种 9 字节形式里有；UVC 是标准 7 字节。
+                if ln == 9:
+                    note += f' bSynchAddress={d[8]}'
         print(f'  {kind.get(typ, hex(typ)):<13} len={ln:<3} {d.hex()}{note}')
 
-    print(f'\nOK — GUD + HID + UAC1 音频：'
+    print(f'\nOK — GUD + HID + UAC1 音频 + UVC 摄像头：'
           f'{len(cfg)} 字节 / {n_itf} 接口 / '
           f'{len(iso_eps)} 条 ISO 端点 / {len(in_eps)} 条 IN 端点 '
           f'({", ".join(f"0x{a:02X}" for a in in_eps)}) / 无反馈端点 / '
           f'播放链 ID1→ID{EXPECT["fu_id"]}(FU:Mute+Volume)→ID2')
+    print(f'  UVC: MJPEG {EXPECT["uvc_w"]}×{EXPECT["uvc_h"]} @ '
+          f'{10000000 // EXPECT["uvc_interval"]} fps, ISO IN 0x{EXPECT["ep_uvc"]:02X} '
+          f'× {EXPECT["ep_uvc_pkt"]} B/帧 = {EXPECT["ep_uvc_pkt"] - 2} B/ms 有效载荷；'
+          f'视频链 ID{EXPECT["uvc_cam_term"]}(Camera)→ID{EXPECT["uvc_out_term"]}(USB Streaming)')
 
 
-main()
+# 既能当脚本跑，也能被 import 复用 symbol_bytes()：Task 3 的「vendor/HID/UAC 三段
+# 逐字节未变」对比就是靠 import 这个模块做的，模块级直接 main() 会在 import 时炸。
+if __name__ == '__main__':
+    main()
