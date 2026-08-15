@@ -22,11 +22,11 @@ from elftools.elf.elffile import ELFFile
 # 与 main/usb_descriptors.h 的常量一一对应。此处**刻意重复一遍字面量**而不是去
 # 解析头文件：本脚本是独立的第二意见，跟着头文件一起改就失去了交叉检查的意义。
 #
-# ⚠️ 音频是**无条件编译**的（曾经的 CONFIG_AIO_AUDIO_MODE 三档已随排障旋钮删除），
-#    所以「没有音频 IAD」本身就是一条失败。唯一还会变的是 CONFIG_AIO_DEBUG_CDC
-#    那一档：本脚本按「描述符里有没有 CDC IAD」自动判定，并把判定结果打印出来 ——
+# ⚠️ 有**两档**，且**恰好互斥**：默认档有音频无 CDC，UVC 调试档有 CDC 无音频
+#    （两者抢同一条 IN 端点 0x83；0x84 从 P4 起永久归 UVC，不再出借）。
+#    本脚本按「描述符里有没有音频 / CDC 的 IAD」自动判定，并把判定结果打印出来 ——
 #    不去读 sdkconfig，才能保持「独立第二意见」的性质：它只相信 ELF 里真正躺着的
-#    那串字节。两档下 GUD/HID/音频那部分的断言完全相同。
+#    那串字节。两档下 GUD/HID/UVC 那部分的断言完全相同。
 EXPECT = dict(
     vid=0x16D0, pid=0x10A9,
     n_itf=7,
@@ -42,10 +42,11 @@ EXPECT = dict(
     # 逐通道的 bmaControls[1] 必须是 0：两边都声明会让 snd-usb-audio 建出两个
     # 同名控件（第二个被自动改名成 "...,1"），alsamixer 里出现两根一样的滑块。
     fu_master_bm=0x0003,
-    # 排障档 CONFIG_AIO_DEBUG_CDC：让出 GUD 的 IN 端点、借用 UVC 预留的 0x84，
-    # 换一条 USB CDC 日志串口。两个接口**追加在音频之后**，vendor/HID/音频的编号全不动。
-    itf_cdc=5,
-    ep_cdc_in=0x81, ep_cdc_notif=0x84, ep_cdc_out=0x03,
+    # UVC 调试档 CONFIG_AIO_DEBUG_CDC：让出 GUD 的 IN 端点(0x81) + **整个音频功能
+    # 不编译**腾出 0x83，换一条 USB CDC 日志串口。0x84 **不出借**，永久归 UVC。
+    # 本档接口序：vendor(0) HID(1) VC(2) VS(3) CDC(4) CDC-Data(5)。
+    itf_cdc=4,
+    ep_cdc_in=0x81, ep_cdc_notif=0x83, ep_cdc_out=0x03,
     # ── UVC（P4）────────────────────────────────────────────────
     itf_vc=5, itf_vs=6,
     ep_uvc=0x84, ep_uvc_pkt=448,
@@ -310,10 +311,17 @@ def main():
     cdc_iads = [d for d in iads if d[4] == 0x02]     # CDC Control
     has_cdc = len(cdc_iads) > 0
     has_audio = len(audio_iads) > 0
-    n_itf = EXPECT['n_itf'] + (2 if has_cdc else 0)
-    mode = '默认档：GUD + HID + UAC1 音频 + UVC 摄像头'
-    if has_cdc:
-        mode += ' + CDC 排障档 (CONFIG_AIO_DEBUG_CDC=y，已让出 GUD 的 IN 端点)'
+    # 音频与 CDC **必须恰好有一个**：两者抢同一条 IN 端点 0x83（UAC 录音 vs CDC 通知），
+    # 而 0x84 从 P4 起永久归 UVC，不再出借。两个都有 = 端点超编，两个都没有 =
+    # 有人把音频关了却没换来日志通道。
+    check(has_audio != has_cdc,
+          '音频与 CDC 必须恰好有一个：默认档有音频无 CDC，UVC 调试档有 CDC 无音频'
+          '（两者抢同一条 IN 端点 0x83）')
+    # 默认档 7 个接口（vendor + HID + 音频 3 + UVC 2），
+    # UVC 调试档 6 个（vendor + HID + UVC 2 + CDC 2）。
+    n_itf = EXPECT['n_itf'] if has_audio else EXPECT['n_itf'] - 3 + 2
+    mode = ('默认档：GUD + HID + UAC1 音频 + UVC 摄像头' if has_audio else
+            'UVC 调试档：GUD + HID + UVC 摄像头 + CDC 日志串口（**无音频**）')
     print(f'== 模式：{mode} ==\n')
 
     itf_nums = sorted({d[2] for d in itfs})
@@ -390,148 +398,159 @@ def main():
         # 而撞号的表现是「某个接口静默不工作」，从现象几乎反推不出来。
         check(len({d[2] for d in eps}) == len(eps), '有端点地址重复声明')
 
-    # ── 4) IAD 覆盖三个音频接口（音频无条件编译，缺了就是失败）──
-    check(len(audio_iads) == 1, f'应恰有 1 条音频 IAD，实际 {len(audio_iads)}')
-    iad = audio_iads[0]
-    check(iad[2] == EXPECT['itf_ac'] and iad[3] == 3,
-          f'IAD 应从 IF{EXPECT["itf_ac"]} 起覆盖 3 个接口，实际 first={iad[2]} count={iad[3]}')
-    check(iad[4] == 0x01, 'IAD 的 bFunctionClass 必须是 AUDIO(0x01)')
-
-    # ── 5) AudioControl：接口类、AC 头、终端链 ──
-    ac = itf_by(EXPECT['itf_ac'])
-    check((ac[5], ac[6]) == (0x01, 0x01), 'AC 接口必须是 AUDIO/AUDIOCONTROL(1/1)')
-    check(ac[4] == 0, 'AC 接口不应带端点（我们关掉了中断端点，省一条 IN）')
-
-    ac_hdr = next((d for d in csi if d[2] == AC_HEADER and d[0] >= 8), None)
-    check(ac_hdr is not None, '缺 AudioControl 的 CS 头描述符')
-    check(u16(ac_hdr, 3) == 0x0100, 'bcdADC 必须是 0x0100(UAC 1.0)')
-    n_coll = ac_hdr[7]
-    check(n_coll == 2, f'bInCollection 应为 2（播放 + 录音），实际 {n_coll}')
-    ba = list(ac_hdr[8:8 + n_coll])
-    check(ba == [EXPECT['itf_as_out'], EXPECT['itf_as_in']],
-          f'baInterfaceNr 应为 {[EXPECT["itf_as_out"], EXPECT["itf_as_in"]]}，实际 {ba}')
-    # AC 头的 wTotalLength 必须覆盖它自己 + 全部终端/单元描述符。
-    # ⚠️ 新增实体（如 Feature Unit）时这个集合要跟着扩：少算一条的表现是 host 解析
-    #    到一半就停，后面的实体静默消失（「声卡在但没有音量」）。
-    units = [d for d in csi
-             if d[2] in (AC_INPUT_TERMINAL, AC_OUTPUT_TERMINAL, AC_FEATURE_UNIT)]
-    ac_total = u16(ac_hdr, 5)
-    check(ac_total == ac_hdr[0] + sum(d[0] for d in units),
-          f'AC 头的 wTotalLength={ac_total}，与「AC 头 + 全部终端/单元」的实际长度不符')
-
-    # 终端 ID 链：ID1(USB流) → ID5(Feature Unit) → ID2(喇叭)，ID3(麦克风) → ID4(USB流)
-    in_terms = {d[3]: d for d in csi if d[2] == AC_INPUT_TERMINAL}
-    out_terms = {d[3]: d for d in csi if d[2] == AC_OUTPUT_TERMINAL}
-    check(sorted(in_terms) == [1, 3] and sorted(out_terms) == [2, 4],
-          f'终端 ID 应为输入 {{1,3}} / 输出 {{2,4}}，实际 输入{sorted(in_terms)} 输出{sorted(out_terms)}')
-    check(u16(in_terms[1], 4) == 0x0101, 'ID1 应是 USB Streaming(0x0101) 输入端子')
-    check(u16(out_terms[2], 4) == 0x0301, 'ID2 应是 Generic Speaker(0x0301) 输出端子')
-
-    # ── 5b) 播放侧 Feature Unit：音量/静音落到 ES8388 硬件的入口 ──
-    # 描述符错一位的表现是「alsamixer 里没有这个通道」或「有滑块但拖了不出声」，
-    # 而 host 侧不会报任何错 —— 这正是本脚本存在的理由。
-    fus = [d for d in csi if d[2] == AC_FEATURE_UNIT]
-    check(len(fus) == 1,
-          f'播放链上应恰有 1 个 Feature Unit（录音侧刻意不放），实际 {len(fus)}')
-    fu = fus[0]
-    check(fu[3] == EXPECT['fu_id'],
-          f'Feature Unit 的 bUnitID={fu[3]}，应为 {EXPECT["fu_id"]}'
-          '（codec_audio.c 的控制请求回调按这个数寻址）')
-    check(fu[4] == 1, f'Feature Unit 的 bSourceID={fu[4]}，必须指向 ID1(USB 流输入端子)')
-    check(fu[5] == 2, f'Feature Unit 的 bControlSize={fu[5]}，应为 2（每通道 16 位位图）')
-    # 布局：[6:8]bmaControls[0] master，[8:10]bmaControls[1] 通道1，[10]iFeature
-    check(fu[0] == 7 + 2 * (EXPECT['channels'] + 1),
-          f'Feature Unit 的 bLength={fu[0]}，与「master + {EXPECT["channels"]} 个通道」'
-          '的位图个数对不上')
-    check(u16(fu, 6) == EXPECT['fu_master_bm'],
-          f'Feature Unit 的 master 位图=0x{u16(fu, 6):04x}，'
-          f'应为 0x{EXPECT["fu_master_bm"]:04x}（Mute + Volume）')
-    check(u16(fu, 8) == 0,
-          f'Feature Unit 的通道 1 位图=0x{u16(fu, 8):04x}，必须为 0 —— '
-          '与 master 重复声明会让 snd-usb-audio 建出两根同名滑块')
-    check(out_terms[2][7] == EXPECT['fu_id'],
-          f'ID2 的 bSourceID={out_terms[2][7]}，应指向 Feature Unit '
-          f'ID{EXPECT["fu_id"]}（音量被绕过了，或播放链断了）')
-
-    check(u16(in_terms[3], 4) == 0x0201, 'ID3 应是 Generic Microphone(0x0201) 输入端子')
-    check(u16(out_terms[4], 4) == 0x0101, 'ID4 应是 USB Streaming(0x0101) 输出端子')
-    check(out_terms[4][7] == 3, 'ID4 的 bSourceID 必须指向 ID3（录音链断了）')
-    for tid in (1, 3):
-        # 输入端子布局：..[3]bTerminalID [4:6]wTerminalType [6]bAssocTerminal [7]bNrChannels
-        check(in_terms[tid][7] == EXPECT['channels'],
-              f'ID{tid} 的 bNrChannels 应为 {EXPECT["channels"]}')
-
-    # ── 6) 两条 AudioStreaming：alt 0 零带宽 + alt 1 带端点 ──
-    for num, link, sync_want, epaddr in (
-        (EXPECT['itf_as_out'], 1, 2, EXPECT['ep_audio_out']),   # 播放：adaptive
-        (EXPECT['itf_as_in'],  4, 1, EXPECT['ep_audio_in']),    # 录音：asynchronous
-    ):
-        alts = [d for d in itfs if d[2] == num]
-        check(sorted(d[3] for d in alts) == [0, 1],
-              f'IF{num} 必须有 alt0/alt1 两个设置，实际 {sorted(d[3] for d in alts)}')
-        a0 = itf_by(num, 0)
-        a1 = itf_by(num, 1)
-        check((a0[5], a0[6]) == (0x01, 0x02) and (a1[5], a1[6]) == (0x01, 0x02),
-              f'IF{num} 必须是 AUDIO/AUDIOSTREAMING(1/2)')
-        check(a0[4] == 0, f'IF{num} alt0 必须是零带宽（0 个端点），否则 host 一直占 ISO 预留')
-        check(a1[4] == 1, f'IF{num} alt1 必须恰有 1 个端点')
-
-        # 该接口的 AS_GENERAL 的 bTerminalLink 必须接到对应的终端
-        gen = [d for i, d in as_csi if i == num and d[2] == AS_GENERAL and d[0] == 7]
-        check(len(gen) == 1, f'IF{num} 应恰有 1 条 AS_GENERAL，实际 {len(gen)}')
-        check(gen[0][3] == link,
-              f'IF{num} 的 bTerminalLink={gen[0][3]}，应指向终端 ID{link}')
-
-        # 端点
-        ep = next((d for d in eps if d[2] == epaddr), None)
-        check(ep is not None, f'找不到端点 0x{epaddr:02X}')
-        check(ep[0] == 9,
-              f'端点 0x{epaddr:02X} 的描述符必须是 9 字节'
-              '（UAC1 的 ISO 数据端点含 bRefresh/bSynchAddress）')
-        check(ep[3] & 0x03 == 0x01, f'端点 0x{epaddr:02X} 必须是 isochronous')
-        check(u16(ep, 4) == EXPECT['ep_audio_pkt'],
-              f'端点 0x{epaddr:02X} 的 wMaxPacketSize={u16(ep, 4)}，'
-              f'应为 {EXPECT["ep_audio_pkt"]}')
-        check(ep[6] == 1, f'端点 0x{epaddr:02X} 的 bInterval 应为 1（每帧一包）')
-        sync = (ep[3] >> 2) & 0x03
-        check(sync == sync_want,
-              f'端点 0x{epaddr:02X} 的 sync 字段是 {SYNC_NAMES[sync]}，应为 {SYNC_NAMES[sync_want]}')
-
-    # ── 7) ★硬约束：没有反馈端点，且 ISO 端点的 sync 字段都不为 0 ──
-    # UVC 落地后共 3 条 ISO：UAC 播放 OUT + UAC 录音 IN + UVC 视频 IN。
+    # ── 4)~8) 音频段。UVC 调试档下音频整体不编译，这一大段跳过 ──
+    #    （档位由描述符里有没有音频 IAD 判定，不读 sdkconfig —— 保住「独立第二
+    #     意见」的性质：只相信 ELF 里真正躺着的那串字节。）
     iso_eps = [d for d in eps if d[3] & 0x03 == 0x01]
-    check(len(iso_eps) == 3,
-          f'应恰有 3 条 ISO 端点（UAC 两条 + UVC 一条），实际 {len(iso_eps)}')
-    for d in iso_eps:
-        sync = (d[3] >> 2) & 0x03
-        check(sync != 0,
-              f'端点 0x{d[2]:02X} 的 sync 字段为 0(NO_SYNC) —— '
-              'TinyUSB 的 UAC1 分支会把它当成反馈端点，数据永远发不出去')
-        # bSynchAddress 只存在于 UAC1 那种 9 字节的 ISO 数据端点描述符上；
-        # UVC 用的是标准 7 字节端点，压根没有这个字段（也因此没有反馈端点这回事）。
-        if d[0] == 9:
-            check(d[8] == 0,
-                  f'端点 0x{d[2]:02X} 的 bSynchAddress=0x{d[8]:02X} 非 0 —— '
-                  '引入了显式反馈端点，会占掉 0x84 把 UVC 顶出去')
+    if has_audio:
+        # ── 4) IAD 覆盖三个音频接口（音频无条件编译，缺了就是失败）──
+        check(len(audio_iads) == 1, f'应恰有 1 条音频 IAD，实际 {len(audio_iads)}')
+        iad = audio_iads[0]
+        check(iad[2] == EXPECT['itf_ac'] and iad[3] == 3,
+              f'IAD 应从 IF{EXPECT["itf_ac"]} 起覆盖 3 个接口，实际 first={iad[2]} count={iad[3]}')
+        check(iad[4] == 0x01, 'IAD 的 bFunctionClass 必须是 AUDIO(0x01)')
 
-    # ── 8) Type I 格式与预期参数一致（两条 AS 各一份，必须都对） ──
-    fmts = [d for _, d in as_csi if d[2] == AS_FORMAT_TYPE]
-    check(len(fmts) == 2, f'应有 2 份 Type I Format 描述符，实际 {len(fmts)}')
-    for d in fmts:
-        check(d[3] == 0x01, 'bFormatType 必须是 FORMAT_TYPE_I')
-        check(d[4] == EXPECT['channels'], f'bNrChannels={d[4]}，应为 {EXPECT["channels"]}')
-        check(d[5] == EXPECT['subframe'], f'bSubframeSize={d[5]}，应为 {EXPECT["subframe"]}')
-        check(d[6] == EXPECT['bits'], f'bBitResolution={d[6]}，应为 {EXPECT["bits"]}')
-        check(d[7] == 1, f'bSamFreqType={d[7]}，本阶段只声明一个离散采样率')
-        rate = u24(d, 8)
-        check(rate == EXPECT['sample_rate'],
-              f'采样率 {rate} 与预期 {EXPECT["sample_rate"]} 不符')
-        check(rate % 1000 == 0,
-              f'采样率 {rate} 不是 1000 的整数倍 —— 会产生小数包，必须上反馈端点')
+        # ── 5) AudioControl：接口类、AC 头、终端链 ──
+        ac = itf_by(EXPECT['itf_ac'])
+        check((ac[5], ac[6]) == (0x01, 0x01), 'AC 接口必须是 AUDIO/AUDIOCONTROL(1/1)')
+        check(ac[4] == 0, 'AC 接口不应带端点（我们关掉了中断端点，省一条 IN）')
 
-    # 每条数据端点后面都得跟一条 CS 端点（AS_ISO_EP General）。
-    # UVC 的 ISO 端点**没有** CS 端点描述符，所以这个数不受视频影响。
-    check(len(cse) == 2, f'应有 2 条 CS 端点描述符，实际 {len(cse)}')
+        ac_hdr = next((d for d in csi if d[2] == AC_HEADER and d[0] >= 8), None)
+        check(ac_hdr is not None, '缺 AudioControl 的 CS 头描述符')
+        check(u16(ac_hdr, 3) == 0x0100, 'bcdADC 必须是 0x0100(UAC 1.0)')
+        n_coll = ac_hdr[7]
+        check(n_coll == 2, f'bInCollection 应为 2（播放 + 录音），实际 {n_coll}')
+        ba = list(ac_hdr[8:8 + n_coll])
+        check(ba == [EXPECT['itf_as_out'], EXPECT['itf_as_in']],
+              f'baInterfaceNr 应为 {[EXPECT["itf_as_out"], EXPECT["itf_as_in"]]}，实际 {ba}')
+        # AC 头的 wTotalLength 必须覆盖它自己 + 全部终端/单元描述符。
+        # ⚠️ 新增实体（如 Feature Unit）时这个集合要跟着扩：少算一条的表现是 host 解析
+        #    到一半就停，后面的实体静默消失（「声卡在但没有音量」）。
+        units = [d for d in csi
+                 if d[2] in (AC_INPUT_TERMINAL, AC_OUTPUT_TERMINAL, AC_FEATURE_UNIT)]
+        ac_total = u16(ac_hdr, 5)
+        check(ac_total == ac_hdr[0] + sum(d[0] for d in units),
+              f'AC 头的 wTotalLength={ac_total}，与「AC 头 + 全部终端/单元」的实际长度不符')
+
+        # 终端 ID 链：ID1(USB流) → ID5(Feature Unit) → ID2(喇叭)，ID3(麦克风) → ID4(USB流)
+        in_terms = {d[3]: d for d in csi if d[2] == AC_INPUT_TERMINAL}
+        out_terms = {d[3]: d for d in csi if d[2] == AC_OUTPUT_TERMINAL}
+        check(sorted(in_terms) == [1, 3] and sorted(out_terms) == [2, 4],
+              f'终端 ID 应为输入 {{1,3}} / 输出 {{2,4}}，实际 输入{sorted(in_terms)} 输出{sorted(out_terms)}')
+        check(u16(in_terms[1], 4) == 0x0101, 'ID1 应是 USB Streaming(0x0101) 输入端子')
+        check(u16(out_terms[2], 4) == 0x0301, 'ID2 应是 Generic Speaker(0x0301) 输出端子')
+
+        # ── 5b) 播放侧 Feature Unit：音量/静音落到 ES8388 硬件的入口 ──
+        # 描述符错一位的表现是「alsamixer 里没有这个通道」或「有滑块但拖了不出声」，
+        # 而 host 侧不会报任何错 —— 这正是本脚本存在的理由。
+        fus = [d for d in csi if d[2] == AC_FEATURE_UNIT]
+        check(len(fus) == 1,
+              f'播放链上应恰有 1 个 Feature Unit（录音侧刻意不放），实际 {len(fus)}')
+        fu = fus[0]
+        check(fu[3] == EXPECT['fu_id'],
+              f'Feature Unit 的 bUnitID={fu[3]}，应为 {EXPECT["fu_id"]}'
+              '（codec_audio.c 的控制请求回调按这个数寻址）')
+        check(fu[4] == 1, f'Feature Unit 的 bSourceID={fu[4]}，必须指向 ID1(USB 流输入端子)')
+        check(fu[5] == 2, f'Feature Unit 的 bControlSize={fu[5]}，应为 2（每通道 16 位位图）')
+        # 布局：[6:8]bmaControls[0] master，[8:10]bmaControls[1] 通道1，[10]iFeature
+        check(fu[0] == 7 + 2 * (EXPECT['channels'] + 1),
+              f'Feature Unit 的 bLength={fu[0]}，与「master + {EXPECT["channels"]} 个通道」'
+              '的位图个数对不上')
+        check(u16(fu, 6) == EXPECT['fu_master_bm'],
+              f'Feature Unit 的 master 位图=0x{u16(fu, 6):04x}，'
+              f'应为 0x{EXPECT["fu_master_bm"]:04x}（Mute + Volume）')
+        check(u16(fu, 8) == 0,
+              f'Feature Unit 的通道 1 位图=0x{u16(fu, 8):04x}，必须为 0 —— '
+              '与 master 重复声明会让 snd-usb-audio 建出两根同名滑块')
+        check(out_terms[2][7] == EXPECT['fu_id'],
+              f'ID2 的 bSourceID={out_terms[2][7]}，应指向 Feature Unit '
+              f'ID{EXPECT["fu_id"]}（音量被绕过了，或播放链断了）')
+
+        check(u16(in_terms[3], 4) == 0x0201, 'ID3 应是 Generic Microphone(0x0201) 输入端子')
+        check(u16(out_terms[4], 4) == 0x0101, 'ID4 应是 USB Streaming(0x0101) 输出端子')
+        check(out_terms[4][7] == 3, 'ID4 的 bSourceID 必须指向 ID3（录音链断了）')
+        for tid in (1, 3):
+            # 输入端子布局：..[3]bTerminalID [4:6]wTerminalType [6]bAssocTerminal [7]bNrChannels
+            check(in_terms[tid][7] == EXPECT['channels'],
+                  f'ID{tid} 的 bNrChannels 应为 {EXPECT["channels"]}')
+
+        # ── 6) 两条 AudioStreaming：alt 0 零带宽 + alt 1 带端点 ──
+        for num, link, sync_want, epaddr in (
+            (EXPECT['itf_as_out'], 1, 2, EXPECT['ep_audio_out']),   # 播放：adaptive
+            (EXPECT['itf_as_in'],  4, 1, EXPECT['ep_audio_in']),    # 录音：asynchronous
+        ):
+            alts = [d for d in itfs if d[2] == num]
+            check(sorted(d[3] for d in alts) == [0, 1],
+                  f'IF{num} 必须有 alt0/alt1 两个设置，实际 {sorted(d[3] for d in alts)}')
+            a0 = itf_by(num, 0)
+            a1 = itf_by(num, 1)
+            check((a0[5], a0[6]) == (0x01, 0x02) and (a1[5], a1[6]) == (0x01, 0x02),
+                  f'IF{num} 必须是 AUDIO/AUDIOSTREAMING(1/2)')
+            check(a0[4] == 0, f'IF{num} alt0 必须是零带宽（0 个端点），否则 host 一直占 ISO 预留')
+            check(a1[4] == 1, f'IF{num} alt1 必须恰有 1 个端点')
+
+            # 该接口的 AS_GENERAL 的 bTerminalLink 必须接到对应的终端
+            gen = [d for i, d in as_csi if i == num and d[2] == AS_GENERAL and d[0] == 7]
+            check(len(gen) == 1, f'IF{num} 应恰有 1 条 AS_GENERAL，实际 {len(gen)}')
+            check(gen[0][3] == link,
+                  f'IF{num} 的 bTerminalLink={gen[0][3]}，应指向终端 ID{link}')
+
+            # 端点
+            ep = next((d for d in eps if d[2] == epaddr), None)
+            check(ep is not None, f'找不到端点 0x{epaddr:02X}')
+            check(ep[0] == 9,
+                  f'端点 0x{epaddr:02X} 的描述符必须是 9 字节'
+                  '（UAC1 的 ISO 数据端点含 bRefresh/bSynchAddress）')
+            check(ep[3] & 0x03 == 0x01, f'端点 0x{epaddr:02X} 必须是 isochronous')
+            check(u16(ep, 4) == EXPECT['ep_audio_pkt'],
+                  f'端点 0x{epaddr:02X} 的 wMaxPacketSize={u16(ep, 4)}，'
+                  f'应为 {EXPECT["ep_audio_pkt"]}')
+            check(ep[6] == 1, f'端点 0x{epaddr:02X} 的 bInterval 应为 1（每帧一包）')
+            sync = (ep[3] >> 2) & 0x03
+            check(sync == sync_want,
+                  f'端点 0x{epaddr:02X} 的 sync 字段是 {SYNC_NAMES[sync]}，应为 {SYNC_NAMES[sync_want]}')
+
+        # ── 7) ★硬约束：没有反馈端点，且 ISO 端点的 sync 字段都不为 0 ──
+        # UVC 落地后共 3 条 ISO：UAC 播放 OUT + UAC 录音 IN + UVC 视频 IN。
+        check(len(iso_eps) == 3,
+              f'应恰有 3 条 ISO 端点（UAC 两条 + UVC 一条），实际 {len(iso_eps)}')
+        for d in iso_eps:
+            sync = (d[3] >> 2) & 0x03
+            check(sync != 0,
+                  f'端点 0x{d[2]:02X} 的 sync 字段为 0(NO_SYNC) —— '
+                  'TinyUSB 的 UAC1 分支会把它当成反馈端点，数据永远发不出去')
+            # bSynchAddress 只存在于 UAC1 那种 9 字节的 ISO 数据端点描述符上；
+            # UVC 用的是标准 7 字节端点，压根没有这个字段（也因此没有反馈端点这回事）。
+            if d[0] == 9:
+                check(d[8] == 0,
+                      f'端点 0x{d[2]:02X} 的 bSynchAddress=0x{d[8]:02X} 非 0 —— '
+                      '引入了显式反馈端点，会占掉 0x84 把 UVC 顶出去')
+
+        # ── 8) Type I 格式与预期参数一致（两条 AS 各一份，必须都对） ──
+        fmts = [d for _, d in as_csi if d[2] == AS_FORMAT_TYPE]
+        check(len(fmts) == 2, f'应有 2 份 Type I Format 描述符，实际 {len(fmts)}')
+        for d in fmts:
+            check(d[3] == 0x01, 'bFormatType 必须是 FORMAT_TYPE_I')
+            check(d[4] == EXPECT['channels'], f'bNrChannels={d[4]}，应为 {EXPECT["channels"]}')
+            check(d[5] == EXPECT['subframe'], f'bSubframeSize={d[5]}，应为 {EXPECT["subframe"]}')
+            check(d[6] == EXPECT['bits'], f'bBitResolution={d[6]}，应为 {EXPECT["bits"]}')
+            check(d[7] == 1, f'bSamFreqType={d[7]}，本阶段只声明一个离散采样率')
+            rate = u24(d, 8)
+            check(rate == EXPECT['sample_rate'],
+                  f'采样率 {rate} 与预期 {EXPECT["sample_rate"]} 不符')
+            check(rate % 1000 == 0,
+                  f'采样率 {rate} 不是 1000 的整数倍 —— 会产生小数包，必须上反馈端点')
+
+        # 每条数据端点后面都得跟一条 CS 端点（AS_ISO_EP General）。
+        # UVC 的 ISO 端点**没有** CS 端点描述符，所以这个数不受视频影响。
+        check(len(cse) == 2, f'应有 2 条 CS 端点描述符，实际 {len(cse)}')
+    else:
+        # UVC 调试档：唯一的 ISO 端点就是视频流那一条（0x84，在 check_uvc 里细查），
+        # 而 CS 端点描述符是 UAC1 独有的形式，一条都不该剩。
+        check(len(iso_eps) == 1,
+              f'UVC 调试档下应只有 1 条 ISO 端点（视频流），实际 {len(iso_eps)}')
+        check(len(cse) == 0,
+              f'UVC 调试档下不该有 CS 端点描述符（那是 UAC1 独有的），实际 {len(cse)}')
 
     # ── 9) UVC：IAD / 端子链 / alt0 零带宽 / 0x84 的包大小与帧参数 ──
     check_uvc(iads, eps, vc_csi, vs_csi, itf_by, itf_eps, has_audio)
@@ -553,11 +572,13 @@ def main():
                     note += f' bSynchAddress={d[8]}'
         print(f'  {kind.get(typ, hex(typ)):<13} len={ln:<3} {d.hex()}{note}')
 
-    print(f'\nOK — GUD + HID + UAC1 音频 + UVC 摄像头：'
+    print(f'\nOK — {"GUD + HID + UAC1 音频 + UVC 摄像头" if has_audio else mode}：'
           f'{len(cfg)} 字节 / {n_itf} 接口 / '
           f'{len(iso_eps)} 条 ISO 端点 / {len(in_eps)} 条 IN 端点 '
-          f'({", ".join(f"0x{a:02X}" for a in in_eps)}) / 无反馈端点 / '
-          f'播放链 ID1→ID{EXPECT["fu_id"]}(FU:Mute+Volume)→ID2')
+          f'({", ".join(f"0x{a:02X}" for a in in_eps)}) / 无反馈端点')
+    if has_audio:
+        print(f'  UAC1: 播放链 ID1→ID{EXPECT["fu_id"]}(FU:Mute+Volume)→ID2，'
+              f'录音链 ID3→ID4')
     print(f'  UVC: MJPEG {EXPECT["uvc_w"]}×{EXPECT["uvc_h"]} @ '
           f'{10000000 // EXPECT["uvc_interval"]} fps, ISO IN 0x{EXPECT["ep_uvc"]:02X} '
           f'× {EXPECT["ep_uvc_pkt"]} B/帧 = {EXPECT["ep_uvc_pkt"] - 2} B/ms 有效载荷；'

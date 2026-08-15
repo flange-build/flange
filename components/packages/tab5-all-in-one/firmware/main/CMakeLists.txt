@@ -1,9 +1,20 @@
-idf_component_register(SRCS "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c"
-                            "display_dsi.c" "standby_screen.c" "board_power.c"
-                            "kbd_i2c.c" "kbd_translate.c" "touch_hid.c" "touch_map.c"
-                            "audio_frame.c" "codec_audio.c" "uac_volume.c"
+set(aio_srcs "app_main.c" "usb_descriptors.c" "gud_device.c" "lz4.c"
+             "display_dsi.c" "standby_screen.c" "board_power.c"
+             "kbd_i2c.c" "kbd_translate.c" "touch_hid.c" "touch_map.c")
+set(aio_reqs esp_driver_i2c esp_driver_gpio esp_lcd esp_mm esp_driver_ppa)
+
+# UVC 调试档（CONFIG_AIO_DEBUG_CDC）下**整个音频功能不编译**：CDC 的通知端点要占
+# 0x83，也就是 UAC 录音那一条（推导见 main/usb_descriptors.h 的 AIO_HAS_AUDIO 段）。
+# 连 esp_driver_i2s 一起去掉，省下的 flash 也让「这一档真的没有音频」这件事在
+# 构建系统里就成立，而不是只靠描述符里少了三个接口。
+if(NOT CONFIG_AIO_DEBUG_CDC)
+    list(APPEND aio_srcs "audio_frame.c" "codec_audio.c" "uac_volume.c")
+    list(APPEND aio_reqs esp_driver_i2s)
+endif()
+
+idf_component_register(SRCS ${aio_srcs}
                        INCLUDE_DIRS "." "tinyusb_config"
-                       PRIV_REQUIRES esp_driver_i2c esp_driver_gpio esp_driver_i2s esp_lcd esp_mm esp_driver_ppa)
+                       PRIV_REQUIRES ${aio_reqs})
 
 # esp_tinyusb 2.2.1 的默认 tusb_config.h 不含 Audio class。让依赖组件与应用统一
 # 使用 main/tinyusb_config/tusb_config.h；该文件再 include_next 默认配置，

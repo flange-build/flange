@@ -6,12 +6,39 @@
 #define GUD_PID 0x10a9
 
 /*
- * 音频是否编译进本档。**本阶段(P4 Task1)恒为 1** —— UVC 调试档那套
- * 「关掉音频腾出 IN 端点给 CDC」的重排在 P4 Task3 落地，届时本宏改为由
- * CONFIG_AIO_DEBUG_CDC 反相定义。先写死是为了让 Task1 的 diff 只覆盖一档：
- * 一次只动一个变量。
+ * ── AIO_HAS_AUDIO：UVC 调试档为什么必须关掉音频 ─────────────────────
+ *
+ * 这块板现场没有开箱即用的串口（USJ 被 TinyUSB 收走、UART0 只在 M5-Bus 排针上），
+ * 唯一不接外设的日志通道是 USB CDC —— 而 CDC 要 **2 条 IN 端点**（通知 + 数据）。
+ *
+ * P3 那一档的做法是「让出 vendor IN 0x81 + 借走 UVC 预留的 0x84」。**UVC 落地后
+ * 这条路走不通了**：0x84 已经是视频流本身，借走它等于关掉被调试的对象。
+ *
+ * 新的账：让出 vendor IN(0x81) 腾 1 条 + **整个音频功能不编译**腾出 0x83，
+ * CDC 拿 0x81(数据) 与 0x83(通知)，0x84 **原封不动留给 UVC**：
+ *
+ * | 0x81 | 0x82 | 0x83 | 0x84 |
+ * |------|------|------|------|
+ * | CDC 数据 IN | HID | CDC 通知 | **UVC 视频流（不变）** |
+ *
+ * FIFO 也宽裕（dfifo 顶 242 words）：
+ *   RX 62 + EP0 16 + CDC 数据 IN 16 + HID 16 + CDC 通知(8B ⇒ 2 words) 2 = 112
+ *   ⇒ 余 130 words = 520 字节 ≥ UVC 要的 112 words，比默认档还多 7 words。
+ *
+ * ⚠️ **代价：这一档下完全没有音频** —— host 侧 /proc/asound/cards 里没有这块设备，
+ *    aplay/arecord 都不列它，喇叭与双麦全不工作。这是排障档，不是产品档。
+ * ⓘ **有 USB-TTL 就别用这一档**：接 UART0(G37/G38) 零端点代价、能抓上电最早的
+ *    日志、而且默认档（音频在）也能用。本档是「手边只有一根 USB-C 线」时的替代品。
+ *
+ * ⓘ 为什么不给音频单独一个 Kconfig 开关：那会造出第四种组合（无音频 + 无 CDC），
+ *   它既没有用途也要跟着维护判据。AIO_HAS_AUDIO 是 CONFIG_AIO_DEBUG_CDC 的反相，
+ *   不是独立自由度。
  */
+#if CONFIG_AIO_DEBUG_CDC
+#define AIO_HAS_AUDIO 0
+#else
 #define AIO_HAS_AUDIO 1
+#endif
 
 /*
  * 接口编号。
@@ -61,26 +88,22 @@ enum {
  * 静默不工作，看起来与音频毫无关联。所以 4 条已经用满，不得再加。
  */
 #define EPNUM_VENDOR_OUT 0x01
-#if !CONFIG_AIO_DEBUG_CDC
+#if AIO_HAS_AUDIO
 #define EPNUM_VENDOR_IN  0x81      /* 声明但从不使用，见下方 CONFIG_AIO_DEBUG_CDC */
-#endif
-#define EPNUM_HID        0x82
 #define EPNUM_AUDIO_OUT  0x02      /* ISO OUT，播放 */
 #define EPNUM_AUDIO_IN   0x83      /* ISO IN，录音 */
-#define EPNUM_UVC_IN     0x84      /* ISO IN，视频流。四条可用 IN 端点的最后一条 */
+#endif
+#define EPNUM_HID        0x82
+#define EPNUM_UVC_IN     0x84      /* ISO IN，视频流。**两档都是这一条，不再出借** */
 
 /*
- * ── CONFIG_AIO_DEBUG_CDC：拿 GUD 的 IN 端点换一条 USB 日志串口 ──────────
+ * ── CONFIG_AIO_DEBUG_CDC：让出 GUD 的 IN 端点 + 关掉音频，换一条 USB 日志串口 ──
  *
- * 这块板现场**没有可用串口**（USJ 被 TinyUSB 收走、UART0 只在 M5-Bus 排针上），
- * 于是音频排障只能靠盲二分。本档用一个可逆的交换把 ESP_LOG* 引到 USB-C 上：
- *
- *   放弃 vendor 的 IN 端点 0x81  ⇒  腾出 1 条 IN，CDC 要 2 条(通知 + 数据)，
- *   再把留给 UVC 的 0x84 临时借出去  ⇒  正好凑够。
+ * 端点重排见文件顶部 AIO_HAS_AUDIO 那段的完整推导。这里只落号：
  *
  * | 0x81 | 0x82 | 0x83 | 0x84 |
  * |------|------|------|------|
- * | CDC 数据 IN | HID | UAC 录音 | CDC 通知 |
+ * | CDC 数据 IN | HID | CDC 通知 | **UVC 视频流（不变）** |
  *
  * **GUD 不需要 IN 端点。** mainline 的 drivers/gpu/drm/gud/gud_drv.c 在 probe 里
  * 只调一次 `usb_find_bulk_out_endpoint()`，全驱动没有 usb_find_bulk_in_endpoint /
@@ -89,38 +112,32 @@ enum {
  * TUD_VENDOR_DESCRIPTOR 顺带声明出来的一条**从未通过流量的端点**。
  * TinyUSB 侧也没问题：vendord_open() 按描述符里实际出现的端点逐条 open，
  * 只有 OUT 时就只开 rx_stream（vendor_device.c:296-332）。
- *
- * ⚠️ 代价：本档**占用了留给 UVC 的 0x84**，且 4 条 IN 端点用满。所以它是
- *    **排障档，不是产品档** —— 拿到日志、定位完就关掉。
  */
 #if CONFIG_AIO_DEBUG_CDC
-/* ⚠️ **本档在 P4 Task1 下暂不可用。** 它借的正是 0x84，而 0x84 从本任务起
- * 已经是 UVC 的视频流端点本身，借走它等于关掉被调试的对象。真正的重排
- * （让出 vendor IN 0x81 + 整个音频功能不编译腾出 0x83）在 P4 Task3 落地。
- * 在那之前把冲突变成编译期错误，而不是留一个「两个功能抢同一条端点、
- * 枚举正常但某个接口静默不工作」的固件出去。 */
-#error "CONFIG_AIO_DEBUG_CDC 与 UVC 撞号（都要 0x84）：端点重排在 P4 Task3 落地，在那之前请保持关闭"
 #define EPNUM_CDC_IN     0x81      /* 原 vendor IN 空出来的那一条 */
-#define EPNUM_CDC_NOTIF  0x84      /* 临时借用 UVC 的预留位 */
+#define EPNUM_CDC_NOTIF  0x83      /* 原 UAC 录音空出来的那一条（音频整体不编译） */
 #define EPNUM_CDC_OUT    0x03
 #endif
 
 /*
- * ⚠️ CDC 调试串口与 UAC 音频**默认互斥**：CDC 自带 2 条 IN（通知 + 数据），
- * 加上 vendor 与 HID 正好把 4 条可用 IN 端点用满，音频 IN 就是第 5 条；
- * 而且 esp_tinyusb 默认给它的就是 0x83/0x84，与音频、UVC 直接撞号。
+ * 直接开 CONFIG_TINYUSB_CDC_ENABLED 仍然是编译期错误：esp_tinyusb 默认给它的
+ * 端点是 0x83/0x84，与 UVC 直接撞号。
  *
  * 把它变成编译期错误，而不是留给后人在一块**没有串口**的板子上调试一个
  * 「像是描述符写错」的枚举失败 —— 那正是最需要日志的时候最想打开 CDC 的时刻。
- * 正确的打开方式是上面那个 CONFIG_AIO_DEBUG_CDC（它自己会 select 出
+ * 正确的入口是 CONFIG_AIO_DEBUG_CDC（它自己会 select 出
  * CONFIG_TINYUSB_CDC_ENABLED，并重排端点号），而不是手动开 CDC。
  */
 #if CONFIG_TINYUSB_CDC_ENABLED && !CONFIG_AIO_DEBUG_CDC
-#error "CDC 调试串口与 UAC 音频互斥（IN 端点不够，且 0x83/0x84 撞号）：要日志请开 CONFIG_AIO_DEBUG_CDC（Tab5 All-in-One 菜单里），它会让出 GUD 的 IN 端点并重排端点号；不要直接开 CONFIG_TINYUSB_CDC_ENABLED"
+#error "要 USB 日志串口请开 CONFIG_AIO_DEBUG_CDC（Tab5 All-in-One 菜单里），它会让出 GUD 的 IN 端点并关掉音频来腾端点；不要直接开 CONFIG_TINYUSB_CDC_ENABLED（它默认占 0x83/0x84，与 UVC 撞号）"
 #endif
 
 #if CONFIG_AIO_DEBUG_CDC && !CONFIG_TINYUSB_CDC_ENABLED
 #error "CONFIG_AIO_DEBUG_CDC 需要 CONFIG_TINYUSB_CDC_ENABLED（正常由 Kconfig 的 select 保证；手改 sdkconfig 时会掉）"
+#endif
+
+#if CONFIG_AIO_DEBUG_CDC && AIO_HAS_AUDIO
+#error "UVC 调试档必须关掉音频才腾得出 IN 端点（0x83 要给 CDC 通知）"
 #endif
 
 /*

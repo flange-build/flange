@@ -8,35 +8,55 @@ menu "Tab5 All-in-One"
 # 误关 USB-C 的焊盘，机理与修法见 main/tab5_pins.h 的音频段与 app_main.c；
 # 二分过程的结论存在 firmware/README.md。旋钮已随之删除，别再加回来。
 
-# ── 排障档：拿 GUD 的 IN 端点换一条 USB CDC 日志串口 ─────────────────
+# ── UVC 调试档：让出 GUD 的 IN 端点 + 关掉音频，换一条 USB CDC 日志串口 ──
 #
 # 这块板现场**没有开箱即用的串口**：USB-Serial/JTAG 被 TinyUSB 收走
 # （USJ_ENABLE=n），UART0(G37/G38) 只在 M5-Bus 排针上、要外接 USB-TTL。
 # 本档用一次可逆的端点交换换来从 USB-C 直接看 ESP_LOG*：
 #
-#   放弃 vendor(GUD) 的 IN 端点 0x81  →  腾出 1 条
-#   把留给 UVC 的 0x84 临时借出去      →  再腾出 1 条
-#   CDC 要 2 条（通知 + 数据）         →  正好凑够，IN 端点仍是 4 条
+#   放弃 vendor(GUD) 的 IN 端点 0x81  →  腾出 1 条，给 CDC 数据
+#   **整个音频功能不编译**，腾出 0x83 →  再腾出 1 条，给 CDC 通知
+#   0x84 原封不动留给 UVC 视频流       →  IN 端点仍是 4 条，摄像头照常工作
+#
+# | 0x81 | 0x82 | 0x83 | 0x84 |
+# |------|------|------|------|
+# | CDC 数据 IN | HID | CDC 通知 | UVC 视频流（不变） |
+#
+# 早先那版是「借走留给 UVC 的 0x84」。**UVC 落地后这条路走不通了** ——
+# 0x84 已经是视频流本身，借走它等于关掉被调试的对象，而摄像头 bring-up
+# 恰恰是本阶段唯一没有 host 侧可见通道的一段。
 #
 # **GUD 不需要 IN 端点**：mainline drivers/gpu/drm/gud/gud_drv.c 的 gud_probe()
 # 只调 usb_find_bulk_out_endpoint()，全驱动没有 usb_find_bulk_in_endpoint /
 # usb_rcvbulkpipe；本固件 gud_device.c 也只有 rx 侧，从不 tud_vendor_write()。
 # 逐条依据与端点表见 main/usb_descriptors.h。
 #
-# ⚠️ **排障档，不是产品档**：它占了留给 UVC 的 0x84，4 条 IN 端点用满。
-#    排查音频 / USB 问题时打开它拿日志，查完关掉，把 0x84 还给 UVC。
+# ⚠️ **排障档，不是产品档**：本档下**完全没有音频** —— host 侧
+#    /proc/asound/cards 里没有这块设备，aplay/arecord 都不列它，
+#    喇叭与双麦全不工作。查完关掉，把音频要回来。
+#
+# ⓘ **有 USB-TTL 就别用这一档**：接 UART0(G37/G38，在 M5-Bus 排针上) 零端点代价、
+#    能抓上电最早的日志、而且默认档（音频在）也能用。本档是「手边只有一根
+#    USB-C 线」时的替代品。
 #
 # 用法：
 #   idf.py menuconfig → Tab5 All-in-One → 打开本项 → idf.py build flash monitor
 #   （或在 sdkconfig.defaults 里取消 CONFIG_AIO_DEBUG_CDC=y 那一行的注释）
+#   ⚠️ 改过本文件后必须连 build 目录一起删（idf.py fullclean 或 rm -rf build sdkconfig），
+#      否则 sdkconfig.h 不重新生成，新配置项在 C 里报 undeclared。
 config AIO_DEBUG_CDC
-    bool "调试档：让出 GUD 的 IN 端点，换 USB CDC 日志串口"
+    bool "UVC 调试档：让出 GUD 的 IN 端点 + 关掉音频，换 USB CDC 日志串口"
     default n
     select TINYUSB_CDC_ENABLED
     help
-        默认关闭。打开后 ESP_LOG* 从 USB-C 出来，`idf.py monitor` 直接看，
-        代价是 GUD 的 IN 端点（不影响显示）与 UVC 预留的 0x84。
+        默认关闭。打开后 ESP_LOG* 从 USB-C 出来，`idf.py monitor` 直接看。
+        代价有两条：GUD 的 IN 端点（不影响显示），以及**整个音频功能不编译**
+        （喇叭、双麦、alsamixer 音量全没有；0x83 要让给 CDC 的通知端点）。
+        UVC 的 0x84 不受影响，摄像头在本档下照常工作 —— 这一档就是为
+        「一边跑摄像头一边看日志」设计的。
         ⚠️ 开机最早那几行日志会丢（要等 host 打开 ttyACM 才开始流），
-        所以音频自检结果在本档下每 10 秒复读一次，见 app_main.c。
+        所以 DWC2 的 FIFO 快照在本档下每 10 秒复读一次，见 app_main.c。
+        ⓘ 手边有 USB-TTL 就接 UART0(G37/G38)：零端点代价、能抓上电最早的日志、
+        而且默认档也能用。
 
 endmenu

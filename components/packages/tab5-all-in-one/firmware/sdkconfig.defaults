@@ -47,20 +47,25 @@ CONFIG_CODEC_ES7243_SUPPORT=n
 CONFIG_CODEC_ES7243E_SUPPORT=n
 CONFIG_CODEC_AW88298_SUPPORT=n
 CONFIG_CODEC_TAS5805M_SUPPORT=n
-# ── 调试用 USB CDC 串口（默认关闭）─────────────────────────────────
-# 排查音频 / USB 问题想从 USB-C 直接看日志时，**取消下面这一行的注释**再重新
-# `idf.py build`（不必 rm sdkconfig，defaults 只在生成时读一次 —— 已有 sdkconfig
-# 时请走 `idf.py menuconfig` → Tab5 All-in-One，或删掉 sdkconfig 重来）。
+# ── UVC 调试档：USB CDC 日志串口（默认关闭）───────────────────────
+# 排查摄像头 / USB 问题想从 USB-C 直接看日志时，**取消下面这一行的注释**再重新
+# `idf.py build`（改过 Kconfig 相关配置后要 `idf.py fullclean && rm -f sdkconfig`
+# 重来；已有 sdkconfig 时也可以走 `idf.py menuconfig` → Tab5 All-in-One）。
 #CONFIG_AIO_DEBUG_CDC=y
 #
-# 代价：它让出 GUD 的 IN 端点 0x81（drm/gud 不用它，显示不受影响）并**借走留给
-# UVC 的 0x84**，4 条 IN 端点用满 —— 所以正常形态下必须保持关闭。
-# 开启后音频自检还会每 10 秒复读一次（CDC 的 TX 缓冲会覆盖早期日志），见 app_main.c。
+# 代价有两条：让出 GUD 的 IN 端点 0x81（drm/gud 不用它，显示不受影响），
+# 以及**整个音频功能不编译** —— CDC 的通知端点要占 0x83，也就是 UAC 录音那一条。
+# 本档下 host 侧 /proc/asound/cards 里没有这块设备，喇叭与双麦全不工作。
+# **UVC 的 0x84 不出借**，摄像头在本档下照常工作：这一档就是为
+# 「一边跑摄像头一边看日志」设计的。所以正常形态下必须保持关闭。
+# 开启后 DWC2 的 FIFO 快照会每 10 秒复读一次（CDC 的 TX 缓冲会覆盖早期日志），
+# 见 app_main.c 的 log_usb_fifo_usage()。
 #
 # **别改成手动开 CONFIG_TINYUSB_CDC_ENABLED**（usb_descriptors.h 有 #error 拦着）：
-# esp_tinyusb 默认给 CDC 的端点是 0x83/0x84，与 UAC 录音、UVC 预留直接撞号，
+# esp_tinyusb 默认给 CDC 的端点是 0x83/0x84，与 UAC 录音、UVC 视频流直接撞号，
 # 而且 2 条 IN 端点会把 P4 全速控制器的 4 条可用 IN 用超。CONFIG_AIO_DEBUG_CDC
 # 会自己 select 出它并把端点号重排好，见 main/Kconfig.projbuild。
 #
-# 也可以接 UART0(G37/G38，在 M5-Bus 排针上)，那条能抓到上电最早的日志 ——
-# 默认档的日志本来就走它（上面 CONFIG_ESP_CONSOLE_UART_DEFAULT=y）。
+# 手边有 USB-TTL 就优先接 UART0(G37/G38，在 M5-Bus 排针上)：零端点代价、
+# 能抓到上电最早的日志、而且默认档（音频在）也能用 —— 默认档的日志本来就走它
+# （上面 CONFIG_ESP_CONSOLE_UART_DEFAULT=y）。

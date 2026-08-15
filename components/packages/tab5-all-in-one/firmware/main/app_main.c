@@ -9,10 +9,13 @@
 #include "board_power.h"
 #include "kbd_i2c.h"
 #include "touch_hid.h"
+#if AIO_HAS_AUDIO
 #include "codec_audio.h"
+#endif
 #include "driver/gpio.h"                /* gpio_set_drive_capability */
 #include "esp_private/periph_ctrl.h"    /* PERIPH_RCC_ATOMIC */
 #include "hal/usb_wrap_ll.h"   /* usb_wrap_ll_phy_select：把内部 FSLS PHY 0 判给 OTG1.1 */
+#include "soc/usb_dwc_struct.h"         /* 实测 DWC2 的 FIFO 分配，见 log_usb_fifo_usage() */
 #include "tab5_pins.h"
 #if CONFIG_TINYUSB_CDC_ENABLED
 /* ⚠️ 这两个头必须在 #if 内包含：tinyusb_cdc_acm.h 在 CDC 未开启时会 #error。 */
@@ -133,6 +136,55 @@ static void otg_fsls_pads_repair(void)
              pad_was_enabled);
 }
 
+/*
+ * 实测 DWC2 的 FIFO 分配。P4 全速控制器整块 SPRAM 只有 256 words(1 KB)，而且
+ * **buffer DMA 模式下还要先扣掉 2×ep_count = 14 words**（dcd_dwc2.c:257-263，
+ * is_dma 成立：CONFIG_TINYUSB_MODE_DMA=y 且 P4 的 OTG11_ARCHITECTURE=2=内部 DMA）
+ * ⇒ 真正可分配的只有 **242 words**。这块要装下共享 RX FIFO + 每条 IN 端点的
+ * TX FIFO。不够时 dfifo_alloc() 只是 TU_ASSERT 返回 false，**默认日志等级下
+ * 一个字都不打** —— 症状是 SET_INTERFACE 被 STALL、某个接口静默不工作。
+ *
+ * 布局（dcd_dwc2.c 顶部大注释）：地址 0 起是 RX FIFO，顶部往下依次是 EP0 IN、
+ * EP1 IN… 的 TX FIFO，中间那段是空闲。空闲 = 最低的 TX 起始地址 − RX 大小。
+ *
+ * ⚠️ 必须等 host 完成 SET_CONFIGURATION 之后再读：端点是那时才 open、
+ *    FIFO 是那时才分配的。调用点在 app_main 末尾的空转循环里，tud_mounted() 后触发。
+ *
+ * ⚠️ 视频流的 TX FIFO 要等 host 选中 VideoStreaming 的 alt 1（真的打开摄像头）
+ *    才会分配 —— alt 0 是零端点。所以**没打开摄像头时 EP4 IN 那一行不出现是正常的**；
+ *    打开之后它仍然不出现，才是 dfifo_alloc() 静默失败（见计划 Task5 Step6 第 4 条）。
+ */
+static void log_usb_fifo_usage(void)
+{
+    usb_dwc_dev_t *dev = &USB_DWC_FS;      /* Tab5 的 USB-C 接的是全速控制器 */
+    const uint16_t rx = dev->grxfsiz_reg.rxfdep;
+    uint16_t lowest = 0xFFFF, used = rx;
+
+    uint16_t sz = dev->gnptxfsiz_reg.nptxfdep, off = dev->gnptxfsiz_reg.nptxfstaddr;
+    ESP_LOGI(TAG, "FIFO: RX=%u words, EP0 IN=%u@%u", rx, sz, off);
+    used = (uint16_t)(used + sz);
+    if (sz && off < lowest)
+        lowest = off;
+
+    for (int n = 1; n <= 4; n++) {          /* 全速控制器最多 4 条可用 IN 端点 */
+        sz = dev->dieptxfi_regs[n - 1].inepntxfdep;
+        off = dev->dieptxfi_regs[n - 1].inepntxfstaddr;
+        if (sz == 0)
+            continue;
+        ESP_LOGI(TAG, "FIFO: EP%d IN=%u words @%u", n, sz, off);
+        used = (uint16_t)(used + sz);
+        if (off < lowest)
+            lowest = off;
+    }
+    const unsigned free_words = (unsigned)(lowest - rx);
+    ESP_LOGI(TAG, "FIFO: 已用 %u words，空闲 %u words (%u 字节)；UVC 端点占 %u words",
+             used, free_words, free_words * 4, (unsigned)((UVC_EP_SIZE + 3) / 4));
+    /* 静态验算：默认档在摄像头**未打开**时应当是 已用 119 / 空闲 123；
+     * host 选中 alt 1 之后变成 已用 231 / 空闲 11。UVC 调试档对应 112 / 130
+     * 与 224 / 18。差得多就说明账算错了，或者有人偷偷加了端点 ——
+     * 把数字打出来比断言更有用，因为断言炸了也没人看得见。 */
+}
+
 void app_main(void)
 {
     ESP_ERROR_CHECK(board_power_init());
@@ -171,7 +223,15 @@ void app_main(void)
      *
      * ⓘ 代价：codec 的 I2C 序列（约几十毫秒）排在了 USB 上电之前，开机到主机
      *   看见设备会晚这么多。可接受，也让 codec 的 I2C 不必与 USB 中断抢时间。
+     *
+     * ⓘ UVC 调试档（CONFIG_AIO_DEBUG_CDC=y ⇒ AIO_HAS_AUDIO=0）下整个音频功能不编译，
+     *   本段连同下面那条 usb_pad_enable 证据日志一起消失 —— 那一档下没有人配
+     *   G26/G27，也就没有那次误伤。**但 route_fsls_phy0_to_otg() 与
+     *   otg_fsls_pads_repair() 一个都不要跟着去掉**：前者是 USB-C 能枚举的前提
+     *   （与音频无关），后者是幂等的，留着零成本，且日后有人在调试档下手工配
+     *   那两个脚时它仍是唯一的救命稻草。
      */
+#if AIO_HAS_AUDIO
     esp_err_t audio_err = codec_audio_init();
     if (audio_err != ESP_OK)
         ESP_LOGW(TAG, "音频硬件初始化失败(%s)，继续启动（USB 不受影响）",
@@ -187,6 +247,7 @@ void app_main(void)
      */
     ESP_LOGI(TAG, "音频硬件就绪；此刻 OTG usb_pad_enable=%d（配过 G26/G27 时应为 0）",
              usb_wrap_ll_phy_is_pad_enabled(&USB_WRAP));
+#endif /* AIO_HAS_AUDIO */
 
     tinyusb_config_t tusb_cfg = TINYUSB_CONFIG_FULL_SPEED(NULL, NULL);
     tusb_cfg.descriptor.device = &aio_desc_device;
@@ -194,7 +255,11 @@ void app_main(void)
     tusb_cfg.descriptor.string = aio_string_desc_arr;
     tusb_cfg.descriptor.string_count = aio_string_desc_count;
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
-    ESP_LOGI(TAG, "tinyusb installed (GUD + HID + UAC1)");
+#if AIO_HAS_AUDIO
+    ESP_LOGI(TAG, "tinyusb installed (GUD + HID + UAC1 + UVC)");
+#else
+    ESP_LOGI(TAG, "tinyusb installed (GUD + HID + UVC；UVC 调试档，无音频)");
+#endif
 
     /* 把 usb_new_phy() 顺手抬到 40mA 的 G26/G27 驱动能力等三样东西修回来。
      * 必须紧跟 install，且必须在 codec_audio_start() 之前 —— 见函数上方注释。 */
@@ -207,8 +272,9 @@ void app_main(void)
      *
      * 这块板现场没有可用串口：USB-Serial/JTAG 被关掉了（TinyUSB 要占那条 FSLS PHY），
      * UART0 只在 M5-Bus 排针上。开启本段后 ESP_LOG* 直接从 USB-C 出来，
-     * `idf.py monitor` 即可看，代价是让出 GUD 的 IN 端点（GUD 不用它）与 UVC
-     * 预留的 0x84，4 条可用 IN 端点用满（端点表与依据见 usb_descriptors.h）。
+     * `idf.py monitor` 即可看。代价是让出 GUD 的 IN 端点（GUD 不用它）
+     * **并整体关掉音频**（0x83 要给 CDC 通知），4 条可用 IN 端点用满，
+     * 而 0x84 原封不动留给 UVC（端点表与依据见 usb_descriptors.h）。
      *
      * ⚠️ **开机早期的日志会丢。** tinyusb_console_init() 之后 stdout / ESP_LOG* 就写进
      * CDC 的 TX 环形缓冲，而这些字节要等 host 侧真的把 ttyACM 打开并开始读才会流出去 ——
@@ -270,6 +336,7 @@ void app_main(void)
      * 没戏），单颗 codec 的失败记在自检快照里，由 codec_audio_start() 自己按
      * 「哪条链路可用」决定开不开功放、怎么跑数据泵。
      */
+#if AIO_HAS_AUDIO
     err = codec_audio_start();
     if (err != ESP_OK)
         ESP_LOGW(TAG, "音频不可用(%s)，继续启动", esp_err_to_name(err));
@@ -281,19 +348,32 @@ void app_main(void)
      * 打一遍就够。
      */
     codec_audio_report();
+#endif
 
+    bool fifo_logged = false;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
+
+        /* FIFO 实测必须等 host 完成 SET_CONFIGURATION：端点是那时才 open、
+         * FIFO 是那时才分配的。挂载后打一次，把静态验算变成现场数字。 */
+        if (!fifo_logged && tud_mounted()) {
+            log_usb_fifo_usage();
+            fifo_logged = true;
+        }
+
 #if CONFIG_AIO_DEBUG_CDC
         /*
-         * 只有开了 CDC 日志串口才**复读**自检，理由是 CDC 独有的一个性质：
+         * 只有开了 CDC 日志串口才**复读**，理由是 CDC 独有的一个性质：
          * 它的 TX 环形缓冲只有几百字节，且要等 host 打开 ttyACM 才开始流 ——
-         * 上面那一遍在用户敲下 `idf.py monitor` 之前早被冲掉了，不复读等于没打。
-         * UART0 控制台没有这个问题（字节直接出去、终端有回滚），所以默认档
-         * 不复读：每轮要做十几次 I2C 寄存器回读，而那条内部总线还挂着触摸、
-         * IO 扩展与 IMU，白占带宽。要连续观察就开 CONFIG_AIO_DEBUG_CDC。
+         * 上面那一次在用户敲下 `idf.py monitor` 之前早被冲掉了，不复读等于没打。
+         * UART0 控制台没有这个问题（字节直接出去、终端有回滚），所以默认档不复读。
+         *
+         * 复读的是 FIFO 快照而不是音频自检 —— 本档下音频整体不编译（0x83 让给了
+         * CDC 通知）。而且 host 打开/关闭摄像头会让 VideoStreaming 在 alt 0 与
+         * alt 1 之间切换，EP4 IN 那一行会跟着出现/消失，复读正好能看见这件事。
          */
-        codec_audio_report();
+        if (fifo_logged)
+            log_usb_fifo_usage();
 #endif
     }
 }
