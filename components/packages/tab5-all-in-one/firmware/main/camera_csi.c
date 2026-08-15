@@ -252,7 +252,7 @@ static int32_t s_st_start = STEP_NOT_RUN;   /* enable/start/stream-on 整条启�
 static int32_t s_st_ccm   = STEP_NOT_RUN;   /* CCM 配置 + 使能（白平衡） */
 static int32_t s_st_ae    = STEP_NOT_RUN;   /* AE 可调范围查询 */
 
-/* ══ 画质：白平衡(CCM) 与自动曝光(AE) ══════════════════════════════
+/* ══ 画质：白平衡(AWB→CCM) 与自动曝光(AE) ══════════════════════════
  * 控制律与全部可调参数在 cam_tune.h；本文件只做两件 IDF 侧的事：
  * 把矩阵写进 ISP，以及把 AE 算出来的曝光/增益经 SCCB 写回传感器。 */
 static cam_ae_limits_t   s_ae_lim;
@@ -260,6 +260,51 @@ static cam_ae_state_t    s_ae;
 static bool              s_ae_ready;                  /* 可调范围查到了吗 */
 static int32_t           s_ae_last_err = ESP_OK;      /* 最近一次下发的返回值 */
 static cam_frame_stats_t s_last_stats;                /* 最近一帧的统计，自检行用 */
+
+/* 此刻**真正写进 CCM 硬件**的那一对增益。初值是静态标定值；AWB 开着时由
+ * camera_awb_tick() 跟着状态机走。自检行打的「当前」就是它，抄进 cam_tune.h
+ * 即可把闭环的结论固化成静态标定。 */
+static uint32_t s_ccm_r = CAM_CCM_GAIN_R_MILLI;
+static uint32_t s_ccm_b = CAM_CCM_GAIN_B_MILLI;
+
+#if CAM_AWB_ENABLE
+static cam_awb_state_t s_awb;
+static int32_t         s_awb_last_err = ESP_OK;   /* 最近一次重配 CCM 的返回值 */
+#endif
+
+/*
+ * 把一对增益写成 CCM 的对角阵送进 ISP。开机配一次，之后 AWB 每次调整再配一次。
+ *
+ * saturation = true：万一系数落到定点格式表达不了的值，宁可饱和也不要整个配置
+ * 失败 —— 失败等于**一点白平衡都没有**，比略微不准坏得多。
+ * update_once_configured = true：立刻写进硬件而不是等下一个 VSYNC。开机时这是
+ * 必须的（那时还没 stream on，等 VSYNC 就等成了「第一帧还没白平衡」）；运行期
+ * 它意味着理论上可能有一帧中途换矩阵，但 rev < 3.0 上 isp_ll_shadow_update_ccm()
+ * 本就是个恒真的空函数（hal/isp_ll.h 的 "for compatibility" 分支），这一位在本板
+ * 上无害，而 AWB 最快一秒才改一次、每次幅度 ≤ 25%，肉眼不可能看出来。
+ *
+ * ⓘ 只 configure、**不再 enable**：esp_isp_ccm_enable() 有 FSM 检查，重复调用
+ *   直接返回 ESP_ERR_INVALID_STATE。而 esp_isp_ccm_configure() 没有任何 FSM/版本
+ *   门（IDF v6.0 的 isp_ccm.c 全文），取流中随时可调。
+ */
+static esp_err_t camera_ccm_apply(uint32_t r_milli, uint32_t b_milli)
+{
+    const esp_isp_ccm_config_t ccm_cfg = {
+        .matrix = {
+            {r_milli / 1000.0f, 0.0f, 0.0f},
+            {0.0f, CAM_CCM_GAIN_G_MILLI / 1000.0f, 0.0f},
+            {0.0f, 0.0f, b_milli / 1000.0f},
+        },
+        .saturation = true,
+        .flags = { .update_once_configured = 1 },
+    };
+    const esp_err_t err = esp_isp_ccm_configure(s_isp, &ccm_cfg);
+    if (err == ESP_OK) {
+        s_ccm_r = r_milli;
+        s_ccm_b = b_milli;
+    }
+    return err;
+}
 
 /*
  * 中断回调之一：DMA 要下一块缓冲了。
@@ -454,17 +499,20 @@ esp_err_t camera_csi_init(void)
      *   ⚠️ 曾经写在这里的「AWB(isp_awb.c:82) 要 rev ≥ 3.0」**是错的**：
      *      isp_awb.c 整个文件没有 ESP_CHIP_REV_ABOVE，那一处 efuse_hal_chip_revision()
      *      < 300 只否掉 AWB 统计的 **subwindow** 子功能（还只是打个 warning）。
-     *      也就是说硬件 AWB 统计在本板上是可用的 —— 本工程仍然不用它，理由见
-     *      cam_tune.h：白平衡的分通道均值我们已经在软件里算了（帧统计顺带的），
-     *      再挂一个硬件统计块只是多一份配置面与一条会失败的路径。
+     *      也就是说硬件 AWB 统计在本板上是可用的 —— **闭环 AWB 上线之后仍然
+     *      不用它**，完整取舍见 cam_tune.h 文件头的「为什么不挂硬件 AWB 统计」。
+     *      一句话版本：软件分通道均值已经每帧在算（帧统计顺带的，零额外成本），
+     *      而硬件统计块能多给的那份「白点筛选」在本板上恰好残缺（subwindow 没有）
+     *      且它的白点框本身要标定 —— 拿不准的参数换不来更可信的统计。
      *   **CCM 没有任何版本门**（isp_ccm.c 全文无 ESP_CHIP_REV_ABOVE），这正是
      *   下面拿它顶替用不了的 WBG 的前提；只是 rev < 3.0 的定点格式窄一些，
      *   系数上限 4.0 而非 16.0（hal/isp_ll.h:138-144）。
      *
      * ⓘ **曝光与白平衡都自己做，没有引 espressif/esp_ipa**（它会把 esp_video 的
-     *   一半拖进来）：白平衡是下面那段静态 CCM，自动曝光是 camera_csi_ae_tick()
-     *   里那个带四道防振荡闸的 P 控制器（控制律本体在 cam_tune.c，可宿主机测试）。
-     *   改动前这两件事都没做，实机现象正是「整体发绿 + 欠曝（亮度均值 45）」。
+     *   一半拖进来）：两个闭环都在 camera_csi_tune_tick() 里，控制律本体在
+     *   cam_tune.c（纯逻辑、宿主机可测）—— AE 是带四道防振荡闸的 P 控制器，
+     *   AWB 是灰世界 + 四道场景防护、经下面这个 CCM 施加增益。
+     *   这两件事都没做的时候，实机现象正是「整体发绿 + 欠曝（亮度均值 45）」。
      * bayer 顺序取自 sc202cs_isp_info[0].bayer_type = ESP_CAM_SENSOR_BAYER_BGGR。
      * ⚠️ 只能按**名字**抄，不能按数值抄：两个枚举的顺序正好是反的
      *    （esp_cam_sensor_types.h 是 RGGB=0…BGGR=3，hal/color_types.h 是
@@ -492,27 +540,19 @@ esp_err_t camera_csi_init(void)
      * 也最高 ⇒ 不做白平衡的输出必然整体偏绿。这是管线的定义，不是「可能」。
      * 完整依据（含「为什么不是 bayer order 配错」的三条论证）见 cam_tune.h 文件头。
      *
-     * 系数取自 cam_tune.h 的三个常量（那里也写了怎么用自检行把它们量出来）。
-     * saturation = true：万一有人把系数调到定点格式表达不了的值，宁可饱和也不要
-     * 整个配置失败 —— 失败等于**一点白平衡都没有**，比略微不准坏得多。
-     * update_once_configured = true：立刻写进硬件，而不是等下一个 VSYNC。此刻
-     * 传感器还没 stream on，等 VSYNC 就等成了「第一次取流时白平衡还没生效」。
-     * （ⓘ rev < 3.0 上 isp_ll_shadow_update_ccm() 本就是个恒真的空函数，
-     *   hal/isp_ll.h:2116 那个 "for compatibility" 分支，所以这一位在本板上无害。）
+     * 这里配的是**开机初值**（cam_tune.h 的静态标定常量）。CAM_AWB_ENABLE = 1 时
+     * 闭环 AWB 会在取流后从这个初值出发接着调（camera_awb_tick）；= 0 时这就是
+     * 最终值，行为与闭环上线之前完全一致。
      *
      * 失败**只降级不拦启动**：CCM 配不上只是画面继续发绿，而取流本身是好的 ——
      * 让一个画质改良把已经验证过的出图能力拖垮，是本末倒置。
+     * ⓘ 失败时 s_ccm_r/s_ccm_b 保持初值，而硬件里其实是单位阵；这对判读没有影响，
+     *   因为自检行第一格就是 CCM=<错误码>，看到它就该先修这个、别去读后面的数。
      */
-    const esp_isp_ccm_config_t ccm_cfg = {
-        .matrix = {
-            {CAM_CCM_GAIN_R_MILLI / 1000.0f, 0.0f, 0.0f},
-            {0.0f, CAM_CCM_GAIN_G_MILLI / 1000.0f, 0.0f},
-            {0.0f, 0.0f, CAM_CCM_GAIN_B_MILLI / 1000.0f},
-        },
-        .saturation = true,
-        .flags = { .update_once_configured = 1 },
-    };
-    s_st_ccm = esp_isp_ccm_configure(s_isp, &ccm_cfg);
+#if CAM_AWB_ENABLE
+    cam_awb_init(&s_awb);       /* 初值 = 同一对静态标定值，两边不会各说各话 */
+#endif
+    s_st_ccm = camera_ccm_apply(CAM_CCM_GAIN_R_MILLI, CAM_CCM_GAIN_B_MILLI);
     if (s_st_ccm == ESP_OK)
         s_st_ccm = esp_isp_ccm_enable(s_isp);
     if (s_st_ccm != ESP_OK)
@@ -714,23 +754,10 @@ esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms)
     return ESP_OK;
 }
 
-void camera_csi_ae_tick(const cam_frame_stats_t *st)
+/* AE 走一拍：算出新的曝光/增益并经 SCCB 下发。 */
+static void camera_ae_tick(const cam_frame_stats_t *st)
 {
-    /* samples == 0 表示这份统计什么都没采到（参数非法），拿它去调曝光等于拿
-     * 随机数当反馈 —— 与「采到了，结果是全黑」严格区分开。 */
-    if (!st || st->samples == 0)
-        return;
-
-    /* 统计本身先留下来：即便 AE 关着（查不到可调范围），分通道均值仍然是判断
-     * 白平衡对不对的唯一客观手段，自检行必须能打出来。 */
-    s_last_stats = *st;
-
-    /*
-     * **不取流就一步都不走。** 调用方（uvc_stream.c 的帧泵）只在 alt 1 下才拿得到
-     * 帧，本来就不会走到这里；这一行是结构上的第二道保险 —— 「摄像头不取流时
-     * 零影响」不该依赖调用方记得这件事。
-     */
-    if (!s_ae_ready || !s_streaming)
+    if (!s_ae_ready)
         return;
 
     if (!cam_ae_step(&s_ae, st->lum_mean, &s_ae_lim))
@@ -758,36 +785,140 @@ void camera_csi_ae_tick(const cam_frame_stats_t *st)
         ESP_LOGW(TAG, "曝光/增益下发失败(%s)", esp_err_to_name((esp_err_t)s_ae_last_err));
 }
 
+#if CAM_AWB_ENABLE
+/* AWB 走一拍：算出新的 R/B 增益并重配 CCM。控制律与全部防护判据在 cam_tune.c。 */
+static void camera_awb_tick(const cam_frame_stats_t *st)
+{
+    /*
+     * AE 是否已收敛 —— AWB 只在亮度稳定的窗口里采信颜色统计（理由见 cam_tune.h
+     * 的 cam_awb_step）。
+     * ⚠️ AE **关着**（查不到可调范围）时要传 true 而不是 false：那种情况下曝光
+     *    恒定不变，亮度天然是稳的，正是最该采信统计的时候。传 false 会让 AWB
+     *    永远一步不走，而且现场只看到「AE未稳」这个自相矛盾的理由。
+     */
+    const bool ae_stable = !s_ae_ready || cam_ae_converged(&s_ae);
+
+    if (cam_awb_step(&s_awb, st->lum_mean, st->r_mean, st->g_mean, st->b_mean,
+                     ae_stable) != CAM_AWB_APPLIED)
+        return;
+
+    s_awb_last_err = camera_ccm_apply(s_awb.gain_r_milli, s_awb.gain_b_milli);
+    if (s_awb_last_err != ESP_OK) {
+        /*
+         * ⚠️ 写不进去就**把状态机回滚到硬件里实际生效的那一对**。
+         * 不回滚的话状态机以为增益已经变了、而画面反映的还是旧增益 —— 下一拍
+         * 它会拿旧画面去校正新系数，cam_awb_suggest() 赖以成立的幂等性当场失效，
+         * 表现为白平衡缓慢单向漂移。这条路径实际上走不到（系数被钳在 [1.0, 3.0]，
+         * esp_isp_ccm_configure() 只在 NaN/超范围时失败），但「状态机必须永远
+         * 镜像硬件」是个不该靠「反正失败不了」维持的不变式。
+         */
+        s_awb.gain_r_milli = s_ccm_r;
+        s_awb.gain_b_milli = s_ccm_b;
+        ESP_LOGW(TAG, "AWB 重配 CCM 失败(%s)，白平衡回滚到上一组系数",
+                 esp_err_to_name((esp_err_t)s_awb_last_err));
+    }
+}
+#endif
+
+void camera_csi_tune_tick(const cam_frame_stats_t *st)
+{
+    /* samples == 0 表示这份统计什么都没采到（参数非法），拿它去调曝光/白平衡等于
+     * 拿随机数当反馈 —— 与「采到了，结果是全黑」严格区分开。 */
+    if (!st || st->samples == 0)
+        return;
+
+    /* 统计本身先留下来：即便 AE/AWB 都关着，分通道均值仍然是判断白平衡对不对的
+     * 唯一客观手段，自检行必须能打出来。 */
+    s_last_stats = *st;
+
+    /*
+     * **不取流就一步都不走。** 调用方（uvc_stream.c 的帧泵）只在 alt 1 下才拿得到
+     * 帧，本来就不会走到这里；这一行是结构上的第二道保险 —— 「摄像头不取流时
+     * 零影响」不该依赖调用方记得这件事。
+     */
+    if (!s_streaming)
+        return;
+
+    /* 顺序：**先 AE 后 AWB**。AWB 要读 cam_ae_converged()，让它读到的是本帧刚
+     * 更新过的收敛状态，而不是上一帧的陈旧值。 */
+    camera_ae_tick(st);
+#if CAM_AWB_ENABLE
+    camera_awb_tick(st);
+#endif
+}
+
 /*
  * 画质自检：白平衡与曝光各一行。**这两行是判断画面对不对唯一的客观依据** ——
  * 「发绿」「太暗」是观感，R98/G121/B105、亮度均值 45 才是能拿来算系数的数字。
  */
 static void camera_quality_report(void)
 {
-    uint32_t sug_r = CAM_CCM_GAIN_R_MILLI, sug_b = CAM_CCM_GAIN_B_MILLI;
+    uint32_t sug_r = s_ccm_r, sug_b = s_ccm_b;
     cam_awb_suggest(s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
-                    CAM_CCM_GAIN_R_MILLI, CAM_CCM_GAIN_B_MILLI, &sug_r, &sug_b);
+                    s_ccm_r, s_ccm_b, &sug_r, &sug_b);
 
     /*
      * 判读：
      *   CCM!=ESP_OK               → 白平衡压根没生效，画面必然发绿，先修这个。
-     *   通道均值 R<G>B 比例固定    → 白平衡还没调准。把「建议」那两个数抄进
-     *                               cam_tune.h 的 CAM_CCM_GAIN_R/B_MILLI 重编。
+     *   通道均值 R<G>B 比例固定    → 白平衡还没调准。AWB 开着的话它会自己收敛
+     *                               （看下一行的「已收敛」与下发次数）；AWB 关着
+     *                               时把「建议」那两个数抄进 cam_tune.h 的
+     *                               CAM_CCM_GAIN_R/B_MILLI 重编。
      *   拍红色物体时 B > R        → 这才是 bayer order 配错（红蓝对调），
      *                               改 camera_csi.c 上面 isp_cfg 的 bayer_order。
      *   三个均值相近（差 <5%）     → 白平衡到位，「建议」应当≈「当前」。
      * ⚠️ 只有 AE 收敛之后这几个数才有意义：曝光没稳的时候画面整体偏暗/偏亮，
-     *    通道比例会被削顶与量化噪声带偏。
+     *    通道比例会被削顶与量化噪声带偏。（AWB 也正是因此才等 AE 收敛才动。）
      */
-    ESP_LOGI(TAG, "[自检] 画质 CCM=%s 当前 R×%u.%03u G×%u.%03u B×%u.%03u"
+    ESP_LOGI(TAG, "[自检] 画质 CCM=%s 当前 R×%" PRIu32 ".%03" PRIu32 " G×%u.%03u"
+                  " B×%" PRIu32 ".%03" PRIu32
                   " | 通道均值 R%u G%u B%u → 建议 R×%" PRIu32 ".%03" PRIu32
                   " B×%" PRIu32 ".%03" PRIu32 "（对白纸/灰卡时才作数）",
              step_str(s_st_ccm),
-             (unsigned)(CAM_CCM_GAIN_R_MILLI / 1000), (unsigned)(CAM_CCM_GAIN_R_MILLI % 1000),
+             s_ccm_r / 1000, s_ccm_r % 1000,
              (unsigned)(CAM_CCM_GAIN_G_MILLI / 1000), (unsigned)(CAM_CCM_GAIN_G_MILLI % 1000),
-             (unsigned)(CAM_CCM_GAIN_B_MILLI / 1000), (unsigned)(CAM_CCM_GAIN_B_MILLI % 1000),
+             s_ccm_b / 1000, s_ccm_b % 1000,
              s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
              sug_r / 1000, sug_r % 1000, sug_b / 1000, sug_b % 1000);
+
+#if CAM_AWB_ENABLE
+    /*
+     * AWB 那一行。存在的理由是「颜色不对」有两种完全不同的病因，而它们在画面上
+     * 长得一样：**AWB 没在动**（被某道防护挡着）与 **AWB 被场景带偏**（灰世界
+     * 失效，动了但动错了）。所以这里必须同时给出三样东西：
+     *   当前增益 + 是否收敛   →  它调到哪了、还动不动
+     *   最近一拍的结论        →  这一瞬间为什么没动
+     *   每种理由的累计次数    →  过去这段时间主要是被哪一条挡的
+     *
+     * 判读：
+     *   下发=0 且 AE未稳=一大堆   → AE 一直没收敛（环境光在变？帧率太低？），
+     *                              AWB 一步都走不了。先去看 AE 那一行。
+     *   色偏过大 一直在涨          → **防护③正在起作用**：镜头对着单色物体
+     *                              （红墙/绿植/蓝天）。这是**正确行为**，把镜头
+     *                              转向普通场景，这个数就不涨了。
+     *   暗场/过亮 在涨             → 环境光超出 [LUM_MIN, LUM_MAX]，加/减光。
+     *   增益越界 在涨              → 灰世界推出来的系数跑出 [1.0, 3.0]：要么光源
+     *                              极端（比如纯色 LED），要么 bayer order 配错了。
+     *   死区内 在涨 + 已收敛       → **一切正常**，白平衡已经到位并稳住。
+     *   下发一直涨、增益来回摆      → 振荡。调大 CAM_AWB_INTERVAL_TICKS 或减小
+     *                              CAM_AWB_DAMP_NUM/DEN（都在 cam_tune.h）。
+     */
+    ESP_LOGI(TAG, "[自检] AWB=开 R×%" PRIu32 ".%03" PRIu32 " B×%" PRIu32 ".%03" PRIu32
+                  " %s 下发=%" PRIu32 " 最近=%s(%s) | 未更新：AE未稳=%" PRIu32
+                  " 暗场=%" PRIu32 " 过亮=%" PRIu32 " 色偏过大=%" PRIu32
+                  " 未到周期=%" PRIu32 " 死区内=%" PRIu32 " 增益越界=%" PRIu32
+                  " 量化无变化=%" PRIu32,
+             s_awb.gain_r_milli / 1000, s_awb.gain_r_milli % 1000,
+             s_awb.gain_b_milli / 1000, s_awb.gain_b_milli % 1000,
+             cam_awb_converged(&s_awb) ? "已收敛" : "调整中",
+             s_awb.updates, cam_awb_reason_str(s_awb.last), step_str(s_awb_last_err),
+             s_awb.reasons[CAM_AWB_SKIP_AE], s_awb.reasons[CAM_AWB_SKIP_DARK],
+             s_awb.reasons[CAM_AWB_SKIP_BRIGHT], s_awb.reasons[CAM_AWB_SKIP_CAST],
+             s_awb.reasons[CAM_AWB_SKIP_PERIOD], s_awb.reasons[CAM_AWB_SKIP_BAND],
+             s_awb.reasons[CAM_AWB_SKIP_RANGE], s_awb.reasons[CAM_AWB_SKIP_QUANT]);
+#else
+    ESP_LOGI(TAG, "[自检] AWB=关（CAM_AWB_ENABLE=0，白平衡钉在上面那对静态标定值上）");
+#endif
 
     /*
      * 判读：

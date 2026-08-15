@@ -96,20 +96,29 @@ esp_err_t camera_csi_stop(void);
 esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms);
 
 /*
- * 自动曝光走一拍。**每取到一帧就调一次**，由取帧的那一方（uvc_stream.c 的帧泵）
- * 把该帧的统计送进来 —— 统计本来就是它为了自检在算的，AE 不必再扫一遍 PSRAM。
+ * 自动曝光(AE) + 自动白平衡(AWB) 各走一拍。**每取到一帧就调一次**，由取帧的
+ * 那一方（uvc_stream.c 的帧泵）把该帧的统计送进来 —— 统计本来就是它为了自检
+ * 在算的，两个控制环不必再各扫一遍 PSRAM。
  *
- * 更新频率限制、死区、阻尼、限幅四道防振荡闸全在 cam_tune.c 的控制律里，
- * 所以本函数**可以放心地每帧调**：绝大多数拍它只是记下亮度就返回，
- * 真正下发 SCCB 最快也要 CAM_AE_INTERVAL_TICKS 拍一次。
+ * 两者吃的是同一份统计量（AE 看 lum_mean，AWB 看 r/g/b_mean），**互相耦合**，
+ * 处理方式有三条，理由都写在 cam_tune.h：
+ *   ① AWB 的反馈量是**归一化**的通道比值 ⇒ 对 AE 改亮度天然免疫；
+ *   ② AWB 的更新周期（1 秒）远大于 AE 的（300 ms）⇒ 时间尺度分离；
+ *   ③ AWB 只在 AE 已收敛时才动 ⇒ 不在曝光暂态上采信颜色统计。
+ * 因此调用顺序是**先 AE 后 AWB**（AWB 要读到本帧刚更新的收敛状态）。
+ *
+ * 更新频率限制、死区、阻尼、限幅这几道防振荡闸全在 cam_tune.c 的控制律里，
+ * 所以本函数**可以放心地每帧调**：绝大多数拍它只是记下统计就返回，AE 真正下发
+ * SCCB 最快 CAM_AE_INTERVAL_TICKS 拍一次，AWB 重配 CCM 最快
+ * CAM_AWB_INTERVAL_TICKS 拍一次。
  *
  * 不取流（host 停在 alt 0）时它什么都不做 —— 与「摄像头不取流时零影响」一致。
- * 传感器可调范围没查到时同样什么都不做，画面停在模式表的默认曝光上。
+ * 传感器可调范围没查到时 AE 不动（画面停在模式表的默认曝光上），而 AWB 照常
+ * 工作：曝光恒定本身就意味着亮度稳定，正是最该采信颜色统计的情形。
  *
- * ⓘ 白平衡不在这里：CCM 是开机一次配好的静态矩阵（camera_csi_init()），
- *   不需要逐帧动。系数怎么量出来见 cam_tune.h。
+ * ⓘ CAM_AWB_ENABLE = 0 时 AWB 整段不编译，CCM 停在开机配好的静态矩阵上。
  */
-void camera_csi_ae_tick(const cam_frame_stats_t *stats);
+void camera_csi_tune_tick(const cam_frame_stats_t *stats);
 
 /*
  * CSI/ISP 自检快照。与 camera_sensor_report() 同构、理由也一样（CDC 档下开机那几行

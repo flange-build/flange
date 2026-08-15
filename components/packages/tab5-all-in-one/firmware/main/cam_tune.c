@@ -168,3 +168,156 @@ void cam_awb_suggest(uint8_t r_mean, uint8_t g_mean, uint8_t b_mean,
     if (sug_b_milli)
         *sug_b_milli = suggest_one(b_mean, g_mean, cur_b_milli);
 }
+
+/* ══ 闭环 AWB ═══════════════════════════════════════════════════════ */
+
+void cam_awb_init(cam_awb_state_t *st)
+{
+    if (!st)
+        return;
+    const cam_awb_state_t zero = {0};
+    *st = zero;
+    st->gain_r_milli = CAM_CCM_GAIN_R_MILLI;
+    st->gain_b_milli = CAM_CCM_GAIN_B_MILLI;
+    st->last = CAM_AWB_SKIP_PERIOD;
+}
+
+/* 记账 + 返回。每一拍恰好走一次这里，reasons[] 因此是完整的直方图。 */
+static cam_awb_reason_t awb_done(cam_awb_state_t *st, cam_awb_reason_t r)
+{
+    st->last = r;
+    st->reasons[r]++;
+    return r;
+}
+
+/*
+ * 一个通道的目标增益：阻尼 → 单步限幅 → 合理范围。
+ * 顺序不能换：先阻尼决定「走多远」，再限幅决定「一次最多走多远」，
+ * 最后那道范围钳制只是数值安全网（真正的范围判据是调用处的 SKIP_RANGE，
+ * 它在**建议值**上判，不可信的建议根本走不到这里）。
+ */
+static uint32_t awb_next(uint32_t cur, uint32_t sug)
+{
+    int64_t next = (int64_t)cur +
+                   ((int64_t)sug - (int64_t)cur) * CAM_AWB_DAMP_NUM / CAM_AWB_DAMP_DEN;
+
+    const int64_t span = (int64_t)cur * CAM_AWB_STEP_MAX_PCT / 100;
+    if (next > (int64_t)cur + span)
+        next = (int64_t)cur + span;
+    if (next < (int64_t)cur - span)
+        next = (int64_t)cur - span;
+
+    if (next < CAM_AWB_GAIN_MIN_MILLI)
+        next = CAM_AWB_GAIN_MIN_MILLI;
+    if (next > CAM_AWB_GAIN_MAX_MILLI)
+        next = CAM_AWB_GAIN_MAX_MILLI;
+    return (uint32_t)next;
+}
+
+/* |a − b| 占 b 的百分比。b 为 0 时按「差得无穷远」处理（返回 100 以上）。 */
+static uint32_t diff_pct(uint32_t a, uint32_t b)
+{
+    if (b == 0)
+        return 1000;
+    const uint32_t d = a > b ? a - b : b - a;
+    return (uint32_t)(((uint64_t)d * 100u) / b);
+}
+
+cam_awb_reason_t cam_awb_step(cam_awb_state_t *st, uint8_t lum_mean,
+                              uint8_t r_mean, uint8_t g_mean, uint8_t b_mean,
+                              bool ae_converged)
+{
+    if (!st)
+        return CAM_AWB_SKIP_PERIOD;
+
+    st->last_r = r_mean;
+    st->last_g = g_mean;
+    st->last_b = b_mean;
+
+    /*
+     * ── 场景可信度判据（四道防护里的前三道 + AE 闸）──
+     *
+     * 排在频率限制**之前**，而且都是不带副作用的纯算术：这样 st->last 永远
+     * 反映的是「这一帧的场景怎么样」，而不是「还没到点」。它们也**不消耗
+     * settle 计数** —— 场景不可信的那段时间不算进更新周期里，等场景恢复了
+     * 还要再等满一个周期才动，正好给 AE 留出重新稳定的时间。
+     */
+    if (!ae_converged)
+        return awb_done(st, CAM_AWB_SKIP_AE);
+    if (lum_mean < CAM_AWB_LUM_MIN)
+        return awb_done(st, CAM_AWB_SKIP_DARK);
+    if (lum_mean > CAM_AWB_LUM_MAX)
+        return awb_done(st, CAM_AWB_SKIP_BRIGHT);
+
+    /* 防护③：三通道均值的 max/min。任一通道为 0 ⇒ 无穷大色偏 ⇒ 拦下
+     * （这同时是 suggest_one() 那个除零守卫在闭环里的第一道保险）。 */
+    uint32_t hi = r_mean, lo = r_mean;
+    if (g_mean > hi) hi = g_mean;
+    if (g_mean < lo) lo = g_mean;
+    if (b_mean > hi) hi = b_mean;
+    if (b_mean < lo) lo = b_mean;
+    if (lo == 0 || (hi * 100u) / lo > CAM_AWB_CAST_MAX_PCT)
+        return awb_done(st, CAM_AWB_SKIP_CAST);
+
+    /* ── 频率限制 ── 场景可信，但一秒才允许动一次。 */
+    if (st->settle) {
+        st->settle--;
+        return awb_done(st, CAM_AWB_SKIP_PERIOD);
+    }
+    st->settle = CAM_AWB_INTERVAL_TICKS > 0 ? CAM_AWB_INTERVAL_TICKS - 1 : 0;
+
+    uint32_t sug_r = st->gain_r_milli, sug_b = st->gain_b_milli;
+    cam_awb_suggest(r_mean, g_mean, b_mean, st->gain_r_milli, st->gain_b_milli,
+                    &sug_r, &sug_b);
+
+    /*
+     * 防护④：建议值必须落在合理范围内，否则**整拍不动**。
+     * 注意判的是建议值（场景直接推出来的绝对目标）而不是阻尼后的值：
+     * 阻尼后的值必然在范围内（awb_next 自己钳了），拿它来判等于永远不触发。
+     */
+    if (sug_r < CAM_AWB_GAIN_MIN_MILLI || sug_r > CAM_AWB_GAIN_MAX_MILLI ||
+        sug_b < CAM_AWB_GAIN_MIN_MILLI || sug_b > CAM_AWB_GAIN_MAX_MILLI)
+        return awb_done(st, CAM_AWB_SKIP_RANGE);
+
+    /* ── 死区 ── 两个通道都差得不多才算「已经平衡」。 */
+    if (diff_pct(sug_r, st->gain_r_milli) <= CAM_AWB_DEADBAND_PCT &&
+        diff_pct(sug_b, st->gain_b_milli) <= CAM_AWB_DEADBAND_PCT) {
+        if (st->in_band < CAM_AWB_CONVERGE_TICKS)
+            st->in_band++;
+        return awb_done(st, CAM_AWB_SKIP_BAND);
+    }
+
+    const uint32_t next_r = awb_next(st->gain_r_milli, sug_r);
+    const uint32_t next_b = awb_next(st->gain_b_milli, sug_b);
+
+    /* 整数运算后没有实际变化：别去重配 CCM（9 个寄存器写 + 一次可能的撕裂）。 */
+    if (next_r == st->gain_r_milli && next_b == st->gain_b_milli)
+        return awb_done(st, CAM_AWB_SKIP_QUANT);
+
+    st->gain_r_milli = next_r;
+    st->gain_b_milli = next_b;
+    st->in_band = 0;
+    st->updates++;
+    return awb_done(st, CAM_AWB_APPLIED);
+}
+
+bool cam_awb_converged(const cam_awb_state_t *st)
+{
+    return st && st->in_band >= CAM_AWB_CONVERGE_TICKS;
+}
+
+const char *cam_awb_reason_str(cam_awb_reason_t r)
+{
+    switch (r) {
+    case CAM_AWB_APPLIED:      return "已更新";
+    case CAM_AWB_SKIP_AE:      return "AE未稳";
+    case CAM_AWB_SKIP_DARK:    return "暗场";
+    case CAM_AWB_SKIP_BRIGHT:  return "过亮";
+    case CAM_AWB_SKIP_CAST:    return "色偏过大";
+    case CAM_AWB_SKIP_PERIOD:  return "未到周期";
+    case CAM_AWB_SKIP_BAND:    return "死区内";
+    case CAM_AWB_SKIP_RANGE:   return "增益越界";
+    case CAM_AWB_SKIP_QUANT:   return "量化无变化";
+    default:                   return "未知";
+    }
+}

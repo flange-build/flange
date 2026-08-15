@@ -367,6 +367,286 @@ static void test_awb(void)
     cases++;
 }
 
+/* ══ 闭环 AWB：防护判据 ══════════════════════════════════════════════
+ *
+ * 这一组是**整个改动里最要紧的测试**。闭环 AWB 的头号失效模式不是「调不准」，
+ * 而是**被单色场景带偏**：镜头怼着一堵红墙，灰世界认定红通道太强、把红压下去，
+ * 结果红墙变灰、画面其余部分泛青。这种病在实机上很难复现得干净（要真的找一面
+ * 红墙、还要保证 AE 已经稳了），但在宿主机上是一组确定的数字。
+ */
+
+/* 走满一个更新周期，返回其中**唯一那次真正的评估结果**（其余各拍都是「未到周期」）。 */
+static cam_awb_reason_t awb_period(cam_awb_state_t *st, uint8_t lum,
+                                   uint8_t r, uint8_t g, uint8_t b, bool ae_conv)
+{
+    cam_awb_reason_t verdict = CAM_AWB_SKIP_PERIOD;
+    for (int i = 0; i < CAM_AWB_INTERVAL_TICKS; i++) {
+        const cam_awb_reason_t rc = cam_awb_step(st, lum, r, g, b, ae_conv);
+        if (rc != CAM_AWB_SKIP_PERIOD)
+            verdict = rc;
+    }
+    return verdict;
+}
+
+/* BT.601 亮度，与 cam_frame_stats.c 的权重逐字一致（77/150/29，和为 256）。 */
+static uint8_t lum_of(uint32_t r, uint32_t g, uint32_t b)
+{
+    return (uint8_t)((77u * r + 150u * g + 29u * b) >> 8);
+}
+
+/*
+ * 一个「单色场景」用例：喂 200 拍，要求**增益一动不动**，且理由恒为「色偏过大」。
+ *
+ * 三组数字都是「AWB 尚未动过（增益还是静态初值 1.700/1.550）时，镜头怼着该物体
+ * 会测到的通道均值」—— 也就是防护最该起作用的那一刻。亮度都落在
+ * [LUM_MIN, LUM_MAX] 内（故意的：**不能靠暗场/过亮那两道闸蒙混过关**，
+ * 必须是色偏这一道真的挡住了），AE 也传「已收敛」（同理）。
+ */
+static void mono_scene(const char *what, uint8_t r, uint8_t g, uint8_t b)
+{
+    const uint8_t lum = lum_of(r, g, b);
+    CHECK(lum >= CAM_AWB_LUM_MIN && lum <= CAM_AWB_LUM_MAX,
+          "%s：亮度 %u 落在暗场/过亮闸里了，这个用例就测不到色偏闸", what, lum);
+
+    cam_awb_state_t st;
+    cam_awb_init(&st);
+
+    /*
+     * 先证明**这道闸是承重的**：把统计直接交给灰世界，它会给出一个荒唐的建议 ——
+     * 那正是「红墙变灰、画面泛青」在数字上的样子。
+     */
+    uint32_t sug_r = 0, sug_b = 0;
+    cam_awb_suggest(r, g, b, st.gain_r_milli, st.gain_b_milli, &sug_r, &sug_b);
+    CHECK(sug_r < CAM_AWB_GAIN_MIN_MILLI || sug_r > CAM_AWB_GAIN_MAX_MILLI ||
+          sug_b < CAM_AWB_GAIN_MIN_MILLI || sug_b > CAM_AWB_GAIN_MAX_MILLI,
+          "%s：灰世界给出的建议 R×%u B×%u 居然是合理的，这个用例没有说服力",
+          what, sug_r, sug_b);
+
+    for (int p = 0; p < 20; p++) {
+        const cam_awb_reason_t rc = awb_period(&st, lum, r, g, b, true);
+        CHECK(rc == CAM_AWB_SKIP_CAST,
+              "%s(R%u G%u B%u lum%u)：第 %d 个周期的结论是「%s」，应当是「色偏过大」",
+              what, r, g, b, lum, p, cam_awb_reason_str(rc));
+    }
+    CHECK(st.gain_r_milli == CAM_CCM_GAIN_R_MILLI && st.gain_b_milli == CAM_CCM_GAIN_B_MILLI,
+          "%s：增益被带偏了 R×%u B×%u（应当纹丝不动）", what, st.gain_r_milli, st.gain_b_milli);
+    CHECK(st.updates == 0, "%s：单色场景下不该有任何一次下发，实得 %u 次", what, st.updates);
+}
+
+static void test_awb_guards(void)
+{
+    cam_awb_state_t st;
+
+    /* ── 防护③：三种单色场景，一种都不许把白平衡带偏 ── */
+    mono_scene("红墙", 200, 60, 55);    /* 暖色大面积：R/B = 3.6× */
+    mono_scene("绿植", 55, 150, 50);    /* 满屏树叶：G/B = 3.0× */
+    mono_scene("蓝天", 70, 110, 210);   /* 仰拍天空：B/R = 3.0× */
+
+    /*
+     * ── 正对照：**普通混杂场景必须真的调** ──
+     * 没有这一条，上面三条用「永远不更新」也能全过 —— 那不是防护，是关掉了 AWB。
+     * 数字取「略偏黄的白墙」（正是用户实测的现象：B 偏低）：
+     * R100 G120 B90，色偏 1.33× 远在闸内，建议 R×2.040 B×2.066 也都在合理范围。
+     */
+    cam_awb_init(&st);
+    const uint8_t wr = 100, wg = 120, wb = 90;
+    const cam_awb_reason_t rc = awb_period(&st, lum_of(wr, wg, wb), wr, wg, wb, true);
+    CHECK(rc == CAM_AWB_APPLIED, "偏黄的白墙应当触发一次更新，实得「%s」",
+          cam_awb_reason_str(rc));
+    CHECK(st.gain_r_milli > CAM_CCM_GAIN_R_MILLI && st.gain_b_milli > CAM_CCM_GAIN_B_MILLI,
+          "偏黄 ⇒ R/B 都该往上抬，实得 R×%u B×%u", st.gain_r_milli, st.gain_b_milli);
+    /* 单步限幅：一个周期最多动 CAM_AWB_STEP_MAX_PCT%。 */
+    CHECK(st.gain_b_milli <= CAM_CCM_GAIN_B_MILLI +
+                             CAM_CCM_GAIN_B_MILLI * CAM_AWB_STEP_MAX_PCT / 100,
+          "一个周期涨了 %u → %u，超过 %d%% 限幅",
+          (unsigned)CAM_CCM_GAIN_B_MILLI, st.gain_b_milli, CAM_AWB_STEP_MAX_PCT);
+
+    /* ── 防护①：暗场不更新（噪声主导，颜色比值纯属随机） ── */
+    cam_awb_init(&st);
+    CHECK(awb_period(&st, CAM_AWB_LUM_MIN - 1, 20, 30, 15, true) == CAM_AWB_SKIP_DARK,
+          "亮度低于下限时应当报「暗场」");
+    CHECK(st.updates == 0, "暗场下不该有任何下发");
+    /* 边界：恰好等于下限时**不算**暗场（判据是 <，不是 ≤）。 */
+    cam_awb_init(&st);
+    CHECK(awb_period(&st, CAM_AWB_LUM_MIN, wr, wg, wb, true) != CAM_AWB_SKIP_DARK,
+          "亮度恰好等于下限时不该被当成暗场");
+
+    /* ── 防护②：过亮不更新（通道被 255 截断，比值失真） ── */
+    cam_awb_init(&st);
+    CHECK(awb_period(&st, CAM_AWB_LUM_MAX + 1, 250, 252, 248, true) == CAM_AWB_SKIP_BRIGHT,
+          "亮度高于上限时应当报「过亮」");
+    CHECK(st.updates == 0, "过亮时不该有任何下发");
+
+    /* ── 防护④：建议增益跑出合理范围 ⇒ 整拍不动（不是钳到边界上采纳） ── */
+    cam_awb_init(&st);
+    st.gain_r_milli = 2900;      /* 已经接近上限，再往上就越界 */
+    st.gain_b_milli = 2900;
+    CHECK(awb_period(&st, lum_of(100, 120, 110), 100, 120, 110, true) == CAM_AWB_SKIP_RANGE,
+          "建议值越界时应当报「增益越界」");
+    CHECK(st.gain_r_milli == 2900 && st.gain_b_milli == 2900,
+          "越界那一拍不许动，实得 R×%u B×%u", st.gain_r_milli, st.gain_b_milli);
+
+    /* ── 与 AE 的交互：AE 没收敛就一步不走 ── */
+    cam_awb_init(&st);
+    for (int i = 0; i < CAM_AWB_INTERVAL_TICKS * 5; i++)
+        CHECK(cam_awb_step(&st, lum_of(wr, wg, wb), wr, wg, wb, false) == CAM_AWB_SKIP_AE,
+              "AE 未收敛时应当恒报「AE未稳」");
+    CHECK(st.updates == 0, "AE 未收敛时不该有任何下发");
+    /* 而且**不消耗更新周期**：AE 一稳下来，第一拍就能动（不用再等满 10 拍）。
+     * 这是刻意的 —— 场景不可信的那段时间不算进周期里。 */
+    CHECK(cam_awb_step(&st, lum_of(wr, wg, wb), wr, wg, wb, true) == CAM_AWB_APPLIED,
+          "AE 一收敛就该立刻评估一次");
+
+    /* ── 通道均值为 0：既不许除零，也不许当成「平衡」 ── */
+    cam_awb_init(&st);
+    CHECK(awb_period(&st, 100, 0, 120, 100, true) == CAM_AWB_SKIP_CAST,
+          "某个通道全黑时应当按无穷大色偏挡住");
+    CHECK(st.gain_r_milli == CAM_CCM_GAIN_R_MILLI, "全黑通道不许把增益带偏");
+
+    /* ── 空指针不许崩 ── */
+    cam_awb_step(NULL, 100, 100, 120, 90, true);
+    cam_awb_init(NULL);
+    CHECK(!cam_awb_converged(NULL), "converged(NULL) 应当是 false");
+    for (int i = 0; i <= CAM_AWB_REASON_COUNT; i++)
+        CHECK(cam_awb_reason_str((cam_awb_reason_t)i) != NULL, "理由字符串不许为空");
+}
+
+/* ══ 闭环 AWB：AE 与 AWB 同时在跑的联合仿真 ═════════════════════════
+ *
+ * 这才是「两个环不会互相打架」的真正证据。单独测任一个环都看不到耦合：
+ * AWB 把红蓝增益抬上去，画面整体**变亮**，AE 会把这份增益当成扰动压回来；
+ * AE 改曝光，三个通道均值一起变，AWB 又会把这份变化看进自己的反馈量。
+ */
+
+/* 一个假场景：照度 + 传感器三个通道的**原始**响应比（1000 = 与绿等同）。 */
+typedef struct {
+    uint32_t illum;               /* 绿通道均值 = ev × illum / 1000（未削顶前） */
+    uint32_t raw_r, raw_g, raw_b;
+} fake_scene_t;
+
+/* 拍一张：把 ev 与两个 CCM 增益变成三个通道均值（255 削顶）。 */
+static void fake_frame(const fake_scene_t *sc, uint32_t ev, uint32_t gr, uint32_t gb,
+                       uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *lum)
+{
+    const uint64_t base = ((uint64_t)ev * sc->illum) / 1000u;
+    uint64_t vr = base * sc->raw_r / 1000u * gr / 1000u;
+    uint64_t vg = base * sc->raw_g / 1000u;              /* 绿增益恒为 1.000 */
+    uint64_t vb = base * sc->raw_b / 1000u * gb / 1000u;
+    if (vr > 255) vr = 255;
+    if (vg > 255) vg = 255;
+    if (vb > 255) vb = 255;
+    *r = (uint8_t)vr;
+    *g = (uint8_t)vg;
+    *b = (uint8_t)vb;
+    *lum = lum_of((uint32_t)vr, (uint32_t)vg, (uint32_t)vb);
+}
+
+static void run_joint_loop(const fake_scene_t *sc, int ticks)
+{
+    cam_ae_state_t ae;
+    cam_awb_state_t awb;
+    cam_ae_init(&ae, &lim, 988, 0);
+    cam_awb_init(&awb);
+
+    /* 三个执行量各留一份历史：**带滞后**，理由与 AE 单独仿真那处相同
+     * （不带滞后的仿真是自欺欺人，任何比例控制器在零滞后下都不会振荡）。 */
+    uint32_t h_ev[64], h_gr[64], h_gb[64];
+    for (int i = 0; i < 64; i++) {
+        h_ev[i] = ae.ev;
+        h_gr[i] = awb.gain_r_milli;
+        h_gb[i] = awb.gain_b_milli;
+    }
+
+    int last_change = -1;
+    uint8_t r = 0, g = 0, b = 0, lum = 0;
+    for (int t = 0; t < ticks; t++) {
+        const int old = (t - LAG + 64) % 64;
+        fake_frame(sc, h_ev[old], h_gr[old], h_gb[old], &r, &g, &b, &lum);
+
+        /* 顺序与固件里的 camera_csi_tune_tick() 一致：先 AE 后 AWB。 */
+        if (cam_ae_step(&ae, lum, &lim))
+            last_change = t;
+        if (cam_awb_step(&awb, lum, r, g, b, cam_ae_converged(&ae)) == CAM_AWB_APPLIED)
+            last_change = t;
+
+        h_ev[t % 64] = ae.ev;
+        h_gr[t % 64] = awb.gain_r_milli;
+        h_gb[t % 64] = awb.gain_b_milli;
+    }
+
+    /* 判据 1：后 1/3 的时间里**两个环都不再动**。两个环互相激励形成的交替调整
+     * （AWB 动一下 → AE 追一下 → AWB 又动一下）正是耦合失控的数学形态。 */
+    CHECK(last_change < ticks * 2 / 3,
+          "illum=%u：直到第 %d 拍（共 %d 拍）还在调整，AE/AWB 疑似互相激励",
+          sc->illum, last_change, ticks);
+
+    /* 判据 2：亮度落进 AE 的死区。 */
+    const int dl = (int)lum - CAM_AE_TARGET;
+    CHECK(dl >= -CAM_AE_DEADBAND && dl <= CAM_AE_DEADBAND,
+          "illum=%u：收敛后亮度 %u 没落进 AE 死区", sc->illum, lum);
+
+    /* 判据 3：三个通道均值真的拉平了 —— 容差 8%，由 AWB 死区(5%) 与
+     * 通道均值本身的整数量化叠加而来。这一条才是「白平衡对了」。 */
+    const int dr = (int)r - (int)g, db = (int)b - (int)g;
+    CHECK(dr <= (int)g * 8 / 100 && -dr <= (int)g * 8 / 100,
+          "illum=%u：收敛后 R%u 与 G%u 差得太多", sc->illum, r, g);
+    CHECK(db <= (int)g * 8 / 100 && -db <= (int)g * 8 / 100,
+          "illum=%u：收敛后 B%u 与 G%u 差得太多", sc->illum, b, g);
+
+    CHECK(cam_awb_converged(&awb), "illum=%u：AWB 拉平了却没报收敛", sc->illum);
+    CHECK(awb.gain_r_milli >= CAM_AWB_GAIN_MIN_MILLI &&
+          awb.gain_r_milli <= CAM_AWB_GAIN_MAX_MILLI &&
+          awb.gain_b_milli >= CAM_AWB_GAIN_MIN_MILLI &&
+          awb.gain_b_milli <= CAM_AWB_GAIN_MAX_MILLI,
+          "illum=%u：收敛后的增益 R×%u B×%u 跑出了合理范围",
+          sc->illum, awb.gain_r_milli, awb.gain_b_milli);
+}
+
+static void test_awb_closed_loop(void)
+{
+    /*
+     * 传感器原始响应取 R 0.500 / G 1.000 / B 0.455 ⇒ 正确的增益是 R×2.000、
+     * B×2.198，而开机初值是 R×1.700 / B×1.550 —— **恰好是用户实测的方向**
+     * （B 偏低 ⇒ 画面偏黄）。AWB 要把这 8%/42% 的缺口自己补上。
+     */
+    const uint32_t raw_r = 500, raw_g = 1000, raw_b = 455;
+
+    /* 三档照度：分别对应 AE 要大幅提亮 / 基本不动 / 要大幅压暗。
+     * 每一档都要求两个环各自收敛，且**通道均值拉平**。 */
+    fake_scene_t dim   = {60,  raw_r, raw_g, raw_b};
+    fake_scene_t mid   = {120, raw_r, raw_g, raw_b};
+    fake_scene_t bright = {900, raw_r, raw_g, raw_b};
+    run_joint_loop(&dim,    400);
+    run_joint_loop(&mid,    400);
+    run_joint_loop(&bright, 400);
+
+    /*
+     * 已经平衡的场景（原始响应恰好等于初值的倒数）：AWB 应当**一次都不动**，
+     * 并很快报收敛。这一条挡的是「幂等性写错了」——那种错的表现是白平衡明明
+     * 对了还在慢慢漂移，实机上要盯几分钟才看得出来。
+     */
+    fake_scene_t ok = {120, 1000000u / CAM_CCM_GAIN_R_MILLI, 1000,
+                       1000000u / CAM_CCM_GAIN_B_MILLI};
+    cam_ae_state_t ae;
+    cam_awb_state_t awb;
+    cam_ae_init(&ae, &lim, 988, 0);
+    cam_awb_init(&awb);
+    uint32_t h_ev[64];
+    for (int i = 0; i < 64; i++)
+        h_ev[i] = ae.ev;
+    for (int t = 0; t < 300; t++) {
+        uint8_t r, g, b, lum;
+        fake_frame(&ok, h_ev[(t - LAG + 64) % 64], awb.gain_r_milli, awb.gain_b_milli,
+                   &r, &g, &b, &lum);
+        cam_ae_step(&ae, lum, &lim);
+        cam_awb_step(&awb, lum, r, g, b, cam_ae_converged(&ae));
+        h_ev[t % 64] = ae.ev;
+    }
+    CHECK(awb.updates == 0, "本来就平衡的场景不该有任何一次白平衡下发，实得 %u 次",
+          awb.updates);
+    CHECK(cam_awb_converged(&awb), "本来就平衡的场景应当报收敛");
+}
+
 /* ══ 可调参数自身的合法性 ════════════════════════════════════════════ */
 
 static void test_tunables(void)
@@ -385,6 +665,35 @@ static void test_tunables(void)
           CAM_CCM_GAIN_B_MILLI <= 4000, "CCM 系数超过硬件上限 4.000");
     CHECK(CAM_CCM_GAIN_R_MILLI > 0 && CAM_CCM_GAIN_G_MILLI > 0 &&
           CAM_CCM_GAIN_B_MILLI > 0, "CCM 系数必须为正");
+
+    /* ── AWB 的那一组 ── */
+    CHECK(CAM_AWB_GAIN_MIN_MILLI > 0 && CAM_AWB_GAIN_MIN_MILLI < CAM_AWB_GAIN_MAX_MILLI,
+          "AWB 增益范围必须是个非空区间");
+    CHECK(CAM_AWB_GAIN_MAX_MILLI <= 4000,
+          "AWB 增益上限超过硬件定点格式的 4.000，esp_isp_ccm_configure() 会直接失败");
+    /*
+     * **静态初值必须落在 AWB 的合理范围内**。否则开机第一拍就会撞上「增益越界」
+     * 这道闸：AWB 一步都走不了，而现场只看到「颜色没在动」，极难反查到是两组
+     * 参数没对上。这条断言就是替改参数的人挡这一下。
+     */
+    CHECK(CAM_CCM_GAIN_R_MILLI >= CAM_AWB_GAIN_MIN_MILLI &&
+          CAM_CCM_GAIN_R_MILLI <= CAM_AWB_GAIN_MAX_MILLI &&
+          CAM_CCM_GAIN_B_MILLI >= CAM_AWB_GAIN_MIN_MILLI &&
+          CAM_CCM_GAIN_B_MILLI <= CAM_AWB_GAIN_MAX_MILLI,
+          "静态标定初值落在 AWB 的合理范围之外，AWB 会开机就被自己的闸卡死");
+    CHECK(CAM_AWB_DAMP_NUM > 0 && CAM_AWB_DAMP_NUM <= CAM_AWB_DAMP_DEN,
+          "AWB 阻尼系数必须落在 (0, 1]");
+    CHECK(CAM_AWB_STEP_MAX_PCT > CAM_AWB_DEADBAND_PCT,
+          "单步限幅不能小于死区，否则一步永远跨不出死区，AWB 会卡在原地反复下发");
+    CHECK(CAM_AWB_LUM_MIN < CAM_AE_TARGET && CAM_AE_TARGET < CAM_AWB_LUM_MAX,
+          "AE 的目标亮度必须落在 AWB 的可信亮度区间内，否则 AE 一收敛 AWB 就被暗场/过亮挡住");
+    CHECK(CAM_AWB_CAST_MAX_PCT > 100, "色偏上限小于 1.00× 的话任何场景都过不了");
+    /*
+     * **AWB 必须比 AE 慢**。这是两个环解耦的第二条措施（时间尺度分离），
+     * 写成断言是因为它是个很容易在「让 AWB 快一点」的念头下被改坏的不变量。
+     */
+    CHECK(CAM_AWB_INTERVAL_TICKS >= CAM_AE_INTERVAL_TICKS * 2,
+          "AWB 的更新周期至少要是 AE 的两倍，否则两个环会互相追着跑");
 }
 
 int main(void)
@@ -395,6 +704,8 @@ int main(void)
     test_step_basics();
     test_closed_loop();
     test_awb();
+    test_awb_guards();
+    test_awb_closed_loop();
     test_tunables();
 
     printf("OK (%d cases)\n", cases);

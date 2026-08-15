@@ -162,11 +162,12 @@ static int32_t  s_cam_last_err = ESP_OK;   /* 最近一次 start/stop 的返回�
  *                       csi_transfer_size 那段）
  * 统计对象是**缩放前的 1280×720 原帧**，因为要判的是 CSI/ISP 那一段。
  *
- * ⓘ 全帧统计从「每秒一次」改成了**每帧一次**：它现在同时是自动曝光的反馈量
- *   （camera_csi_ae_tick），而 AE 的更新周期是按「拍」算的，隔一秒喂一次数据
- *   会让 cam_tune.h 里那套按拍推导的滞后余量全部作废。
+ * ⓘ 全帧统计从「每秒一次」改成了**每帧一次**：它现在同时是自动曝光与自动白平衡
+ *   的反馈量（camera_csi_tune_tick），而两者的更新周期都是按「拍」算的，
+ *   隔一秒喂一次数据会让 cam_tune.h 里那套按拍推导的滞后余量全部作废。
  *   代价：1/64 采样约 2 ms/帧 × 10 fps = **每秒 20 ms**，占取流期 PSRAM 时间的
- *   2%，比 CSI 自己那 55 MB/s 小两个数量级；换来的是曝光能闭上环。
+ *   2%，比 CSI 自己那 55 MB/s 小两个数量级；换来的是曝光与白平衡都能闭上环
+ *   （AWB 的三个通道均值就在同一次扫描里顺带算出来，不多扫一遍）。
  *   下 1/8 那份仍然每秒一次 —— 它判的是 DMA 截断，与曝光无关，没必要跟着加密。
  */
 static uint32_t          s_stat_phase;
@@ -235,7 +236,7 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
      * 「反馈量对应哪一帧」变得更含糊。
      */
     frame_stats_sample(raw);
-    camera_csi_ae_tick(&s_stat_full);
+    camera_csi_tune_tick(&s_stat_full);
 
     /* 下 1/8 那份每秒一次就够，它判的是 DMA 截断，与曝光无关。 */
     if (++s_stat_phase >= UVC_FPS) {
