@@ -38,6 +38,49 @@ uint32_t cam_map_gain_slot(const uint16_t *gain_breaks, uint32_t n, uint32_t gai
  * w_q8 可传 NULL。 */
 uint32_t cam_map_cct_slot(const uint16_t *cct_tbl, uint32_t n, uint32_t cct_k, uint32_t *w_q8);
 
+/* ── ×1000 定点 → 硬件的「整数位.小数位」定点 ───────────────────────
+ * ISP 各级的系数寄存器是宽度各不相同的定点位域（都在 soc_caps.h 里）：
+ *     demosaic.grad_ratio   2 整数位 + 4 小数位（步长 1/16）
+ *     sharpen.h/m_freq_coeff 3 整数位 + 5 小数位（步长 1/32）
+ * 而标定表统一存 ×1000 的原值。这里做的三件事一件都不能省：
+ *   ① **四舍五入**而不是截断 —— 1.525 在 1/32 栅格上截断是 1.5000（−1.6%），
+ *      四舍五入是 1.53125（+0.4%）；
+ *   ② **进位** —— 舍入可能把小数部分推到 2^dec_bits（例如 3.99 在 5 位小数上
+ *      舍成 32/32），此时必须进到整数位。不进位就会被位域**静默截断成 0**，
+ *      3.99 变成 3.00，而现场看到的只是「锐化偏弱」这种说不清的偏差；
+ *   ③ **溢出显式返回 false**，由调用方决定是钳住还是放弃这次下发 ——
+ *      同样是为了不让位域悄悄吃掉高位。
+ * 溢出时输出被钳到该格式能表达的最大值（(2^int−1) + (2^dec−1)/2^dec）。
+ * int_bits + dec_bits 必须 <= 31；integer / decimal 不可为 NULL。
+ * 官方 SC202CS 标定表里的每一个值都在范围内 ⇒ 正常路径恒返回 true；
+ * 这条返回值是给「将来换标定文件」留的守门人。 */
+bool cam_map_to_fixed(uint32_t milli, uint32_t int_bits, uint32_t dec_bits,
+                      uint32_t *integer, uint32_t *decimal);
+
+/* ── 带迟滞的档位跟踪器 ─────────────────────────────────────────────
+ * 三组前馈（BF/Demosaic 按 gain、SHARP/对比度按 gain、CCM/LSC/饱和度按 CCT）的
+ * 换档逻辑完全一样，写一次。
+ *
+ * 为什么必须有迟滞：本板 rev < 3.0 **没有影子寄存器**（isp_ll_shadow_update_* 在
+ * 该分支里是恒真的空桩），参数写下去立刻生效、**没有帧边界原子性** —— 帧中途换
+ * BF 模板会出现单帧的上下半张不同处理。AE 在档位断点上抖一下就重配一次的话，
+ * 那种撕裂会以「偶发横向亮带」的形式出现，且极难归因。
+ *
+ * 语义：want 必须**连续** hyst 拍都指向同一个新档才真的换。返回 true 表示
+ * 「档变了，调用方去重配硬件」，同时 t->cur 已更新为新档。
+ * 开机第一次（primed == false）无条件返回 true —— 那一拍不是「换档」而是
+ * 「从没配过到配上」，迟滞在这里没有意义，等 3 拍只会让开机头 300 ms 没有前馈。
+ * hyst == 0 按 1 处理（不允许「零拍确认」把迟滞整个短路）。
+ * 结构体由调用方零初始化即可。 */
+typedef struct {
+    uint32_t cur;      /* 已下发的档 */
+    uint32_t pending;  /* 候选档 */
+    uint32_t count;    /* 候选档已连续出现几拍 */
+    bool     primed;   /* 开机第一次下发过了吗 */
+} cam_slot_track_t;
+
+bool cam_slot_changed(cam_slot_track_t *t, uint32_t want, uint32_t hyst);
+
 /* ── rg → CCT（官方 16 点轨迹，线性插值，两端钳位）────────────────
  * rg_q4 = (Σr/Σg) × 10000。返回开尔文，恒落在
  * [cam_cal_cct_k[CAM_CAL_CCT_N-1], cam_cal_cct_k[0]] = [2289, 7466]。

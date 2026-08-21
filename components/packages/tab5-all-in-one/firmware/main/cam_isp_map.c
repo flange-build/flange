@@ -52,6 +52,60 @@ uint32_t cam_map_cct_slot(const uint16_t *cct_tbl, uint32_t n, uint32_t cct_k, u
     return i;
 }
 
+/* ── 定点转换 ──────────────────────────────────────────────────── */
+
+bool cam_map_to_fixed(uint32_t milli, uint32_t int_bits, uint32_t dec_bits,
+                      uint32_t *integer, uint32_t *decimal)
+{
+    const uint32_t dec_span = 1u << dec_bits;      /* 小数栅格数，如 16 / 32 */
+    const uint32_t int_span = 1u << int_bits;      /* 整数部分的表达上限 + 1 */
+
+    uint32_t whole = milli / 1000u;
+    /* 四舍五入到小数栅格。(999 × 32 + 500)/1000 = 32 ⇒ 会进位，见下面一行。 */
+    uint32_t frac = div_round_u((uint64_t)(milli % 1000u) * dec_span, 1000u);
+    if (frac >= dec_span) {                        /* 舍上去了，进位到整数位 */
+        frac = 0;
+        whole++;
+    }
+    if (whole >= int_span) {                       /* 装不下：钳到最大可表达值 */
+        *integer = int_span - 1u;
+        *decimal = dec_span - 1u;
+        return false;
+    }
+    *integer = whole;
+    *decimal = frac;
+    return true;
+}
+
+/* ── 带迟滞的档位跟踪器 ────────────────────────────────────────── */
+
+bool cam_slot_changed(cam_slot_track_t *t, uint32_t want, uint32_t hyst)
+{
+    if (hyst == 0)
+        hyst = 1;
+    if (!t->primed) {                 /* 开机第一拍：不是换档，是从没配过到配上 */
+        t->primed = true;
+        t->cur = want;
+        t->pending = want;
+        t->count = 0;
+        return true;
+    }
+    if (want == t->cur) {             /* 回到已生效的档 ⇒ 候选作废 */
+        t->pending = want;
+        t->count = 0;
+        return false;
+    }
+    if (want != t->pending) {         /* 换了个新候选，重新数 */
+        t->pending = want;
+        t->count = 0;
+    }
+    if (++t->count < hyst)            /* 还没连够 hyst 拍 */
+        return false;
+    t->cur = want;
+    t->count = 0;
+    return true;
+}
+
 /* ── rg → CCT ─────────────────────────────────────────────────── */
 
 uint32_t cam_cct_from_rg(uint32_t rg_q4)

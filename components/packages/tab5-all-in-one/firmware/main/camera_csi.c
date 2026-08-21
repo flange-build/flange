@@ -21,6 +21,12 @@
 #include "esp_cam_ctlr_csi.h"
 #include "driver/isp.h"
 #include "driver/isp_ccm.h"     /* 白平衡走 CCM：本板 rev v1.0 没有 WBG，见 cam_tune.h */
+#if CAM_ADN_ENABLE
+#include "driver/isp_bf.h"
+#include "driver/isp_demosaic.h"
+#include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
+#include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
+#endif
 #include "esp_cache.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -270,6 +276,36 @@ static uint32_t s_ccm_b = CAM_CCM_GAIN_B_MILLI;
 #if CAM_AWB_ENABLE
 static cam_awb_state_t s_awb;
 static int32_t         s_awb_last_err = ESP_OK;   /* 最近一次重配 CCM 的返回值 */
+#endif
+
+/* ══ 官方前馈画质级（开环查表）══════════════════════════════════════
+ * 三组各一个编译开关（cam_tune.h），关掉时下面整段不进镜像 —— 这是现场
+ * bisect 的唯一手段，别把它们合并成一个开关。
+ *
+ * ⚠️ 每一级的状态槽都**不共用哨兵**（与文件上半部那六个同一处置）：
+ *      STEP_NOT_RUN  这一级编译进来了，但**一次都没配过**（比如还没取流）
+ *      非 ESP_OK     配过了，硬件拒了，值就是错误码
+ *      ESP_OK        配上了，自检行同时打出该级此刻的关键参数值
+ *      「未编译」     开关 = 0，由自检行的 #else 分支说出来
+ *   四种情况必须能分开，否则「画面没变化」这一个现象对应四种完全不同的下一步。 */
+#if CAM_ADN_ENABLE
+/* **所有**前馈级加起来累计重配了多少次（一个计数器、每行自检都打同一个数，
+ * 所以标签是「前馈重配合计」而不是「重配」—— 别读成「本级重配了这么多次」）。
+ * 它是迟滞是否起作用的唯一判据：随时间线性增长 ⇒ 要么增益一直在变（去看 AE
+ * 那行），要么 CAM_FEEDFWD_HYST_TICKS 太小。
+ * 开机稳定后它应当停住；开机第一拍每个被编译进来的子级各 +1
+ * （ADN + AEN 全开 ⇒ BF/Demosaic/SHARP/Color 各一次 = 4）。 */
+static uint32_t s_feedfwd_reconf;
+/* 最近一拍喂给选档器的总增益。选档全靠它，打出来才能判断「档位不动」是
+ * 「增益没变」还是「选档算错了」。 */
+static uint32_t s_feedfwd_gain_milli;
+#endif
+
+#if CAM_ADN_ENABLE
+static cam_slot_track_t s_bf_track, s_dm_track;
+static int32_t s_st_bf = STEP_NOT_RUN;    /* esp_isp_bf_configure/enable 的返回值 */
+static int32_t s_st_dm = STEP_NOT_RUN;    /* esp_isp_demosaic_configure 的返回值 */
+static bool    s_bf_enabled;              /* esp_isp_bf_enable 有 FSM 门，只能成功一次 */
 #endif
 
 /*
@@ -820,6 +856,69 @@ static void camera_awb_tick(const cam_frame_stats_t *st)
 }
 #endif
 
+#if CAM_ADN_ENABLE
+/*
+ * BF（Bayer 域降噪）+ Demosaic 梯度比，按传感器总增益查官方表。
+ *
+ * 选它们打头阵的理由：这两级都**不改画面的平均亮度、也不改通道比值**
+ * ⇒ AE 与 AWB 两个闭环的输入完全不变，是整条对齐路线上最安全的一步，
+ * 用来验证「标定表 → ISP API」这条新通路本身是通的。
+ */
+static void camera_adn_tick(uint32_t gain_milli)
+{
+    const uint32_t bf = cam_map_gain_slot(cam_cal_bf_gain, CAM_CAL_BF_N, gain_milli);
+    if (cam_slot_changed(&s_bf_track, bf, CAM_FEEDFWD_HYST_TICKS)) {
+        esp_isp_bf_config_t cfg = {
+            /* 官方桥接层一律用 SRND_DATA + tail valid 0/0：边缘用周围像素补，
+             * 而不是补一个常数 —— 补常数会在画面四边留一圈被降噪算进去的假边。
+             * 两个 tail valid 都写 0 是驱动约定的「整行 padding 都有效」。
+             * ⚠️ **绝不能给 esp_isp_bf_configure() 传 NULL**：它在 else 分支之后
+             *    仍然无条件求值 config->flags.update_once_configured（isp_bf.c），
+             *    传 NULL 就是一次空指针解引用 —— 那不是「优雅地禁用」。要禁用
+             *    这一级请用 CAM_ADN_ENABLE = 0。 */
+            .padding_mode    = ISP_BF_EDGE_PADDING_MODE_SRND_DATA,
+            .padding_data    = 0,
+            .denoising_level = cam_cal_bf[bf].level,
+            .padding_line_tail_valid_start_pixel = 0,
+            .padding_line_tail_valid_end_pixel   = 0,
+            /* 立刻写进硬件而不是等下一个 VSYNC。rev < 3.0 上影子寄存器本就是
+             * 恒真的空桩，这一位在本板上无害；而重配已经被迟滞压到很低频。 */
+            .flags = { .update_once_configured = 1 },
+        };
+        memcpy(cfg.bf_template, cam_cal_bf[bf].matrix, sizeof cfg.bf_template);
+        s_st_bf = esp_isp_bf_configure(s_isp, &cfg);
+        if (s_st_bf == ESP_OK && !s_bf_enabled) {
+            /* enable 有 FSM 门（重复调直接 ESP_ERR_INVALID_STATE），只能成功一次。 */
+            s_st_bf = esp_isp_bf_enable(s_isp);
+            s_bf_enabled = (s_st_bf == ESP_OK);
+        }
+        s_feedfwd_reconf++;
+    }
+
+    const uint32_t dm = cam_map_gain_slot(cam_cal_demosaic_gain, CAM_CAL_DEMOSAIC_N, gain_milli);
+    if (cam_slot_changed(&s_dm_track, dm, CAM_FEEDFWD_HYST_TICKS)) {
+        /* grad_ratio 是 2 整数位 + 4 小数位（soc_caps.h）⇒ 步长 1/16。
+         * 官方四档 1.5/1.25/1.05/1.0 ⇒ 1+8/16 / 1+4/16 / 1+1/16 / 1+0/16
+         * （1.05 量化到 1.0625，这个 6% 的偏差比「不配、停在复位值」小得多）。 */
+        uint32_t ip = 1, dp = 0;
+        cam_map_to_fixed(cam_cal_demosaic[dm].grad_ratio_milli, 2, 4, &ip, &dp);
+        const esp_isp_demosaic_config_t cfg = {
+            .grad_ratio   = { .integer = ip, .decimal = dp },
+            .padding_mode = ISP_DEMOSAIC_EDGE_PADDING_MODE_SRND_DATA,
+            .padding_data = 0,
+            .padding_line_tail_valid_start_pixel = 0,
+            .padding_line_tail_valid_end_pixel   = 0,
+        };
+        /* ⚠️ 只 configure、**不要** esp_isp_demosaic_enable()：去马赛克已经被
+         *   output = RGB565 隐式打开了（isp_ll_set_output_data_color_format()
+         *   顺手置了 demosaic_en），而 enable 有 FSM 门 —— 调它会拿到
+         *   ESP_ERR_INVALID_STATE，那个错误码会让人误以为参数根本没配上。 */
+        s_st_dm = esp_isp_demosaic_configure(s_isp, &cfg);
+        s_feedfwd_reconf++;
+    }
+}
+#endif  /* CAM_ADN_ENABLE */
+
 void camera_csi_tune_tick(const cam_frame_stats_t *st)
 {
     /* samples == 0 表示这份统计什么都没采到（参数非法），拿它去调曝光/白平衡等于
@@ -844,6 +943,20 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
     camera_ae_tick(st);
 #if CAM_AWB_ENABLE
     camera_awb_tick(st);
+#endif
+
+#if CAM_ADN_ENABLE
+    /*
+     * 官方前馈级**排在 AE 之后**：它们按增益选档，要用本拍刚更新过的增益，
+     * 而不是上一拍的陈旧值。
+     *
+     * AE 关着（查不到可调范围）时传感器停在模式表的默认增益，那就是增益表第 0 档
+     * 1.000× ⇒ 这里填 1000 而不是 0。填 0 选出来的也是第 0 档、结果一样，但自检行
+     * 会打出一个不存在的「0.000×」，把「AE 没起来」误报成「增益读错了」。
+     */
+    s_feedfwd_gain_milli = (s_ae_ready && s_ae.gain_index < s_ae_lim.gain_count)
+                               ? s_ae_lim.gain_map[s_ae.gain_index] : 1000;
+    camera_adn_tick(s_feedfwd_gain_milli);
 #endif
 }
 
@@ -942,6 +1055,50 @@ static void camera_quality_report(void)
              s_ae.updates, step_str(s_ae_last_err));
 }
 
+/*
+ * 官方前馈画质级的自检：**每一级一行**，三级各自独立可读。
+ *
+ * 一级一行不是排版洁癖，是 bisect 的前提：三个开关分别管三级，现场把某一级关掉
+ * 重编时，对应那行会变成「未编译」，另外两行原样 —— 一眼看出这一版关的是哪个。
+ *
+ * 每行都必须能分出四种情况（别用同一个哨兵表达其中两种）：
+ *   未编译     开关 = 0，整段代码不在镜像里 ⇒ 由 #else 分支的那行说出来
+ *   未运行     编译进来了但一次都没配过（还没取流，或取流后帧统计没送进来）
+ *   <错误码>   配了、硬件拒了 ⇒ 打的是 esp_err_to_name()，直接可查
+ *   ESP_OK     配上了 ⇒ 同时打出**此刻硬件里的关键参数值**，可与官方标定表逐个核对
+ */
+static void camera_feedfwd_report(void)
+{
+#if CAM_ADN_ENABLE
+    /*
+     * 判读：
+     *   BF=未运行            → 还没取流，或帧统计没进 camera_csi_tune_tick()。
+     *   BF=ESP_ERR_INVALID_ARG   → padding tail valid 参数不合法（两个都得是 0）。
+     *   BF=ESP_ERR_INVALID_STATE → 重复调了 esp_isp_bf_enable()，看 s_bf_enabled。
+     *   档号一直是 0 不动     → 增益没变（正常）或选档喂错了值：看「增益=」那格，
+     *                          遮住镜头让 AE 顶到高增益，档号应当从 0 涨到 3~6、
+     *                          level 从 2 涨到 8~10；开灯回落。
+     *   前馈重配合计 一直涨   → 迟滞没起作用，调大 CAM_FEEDFWD_HYST_TICKS。
+     *                          （它是各前馈级共用的**总**计数，不是本级的）
+     */
+    const uint32_t bf = s_bf_track.cur, dm = s_dm_track.cur;
+    const uint32_t gr = cam_cal_demosaic[dm].grad_ratio_milli;
+    uint32_t gi = 0, gd = 0;
+    cam_map_to_fixed(gr, 2, 4, &gi, &gd);
+    ESP_LOGI(TAG, "[自检] ADN=开 增益=%" PRIu32 ".%03" PRIu32 "× | "
+                  "BF=%s 档%" PRIu32 "/%d level=%u 模板中心=%u | "
+                  "Demosaic=%s 档%" PRIu32 "/%d grad=%" PRIu32 ".%03" PRIu32
+                  "→%" PRIu32 "+%" PRIu32 "/16 | 前馈重配合计=%" PRIu32,
+             s_feedfwd_gain_milli / 1000, s_feedfwd_gain_milli % 1000,
+             step_str(s_st_bf), bf, CAM_CAL_BF_N,
+             cam_cal_bf[bf].level, cam_cal_bf[bf].matrix[4],
+             step_str(s_st_dm), dm, CAM_CAL_DEMOSAIC_N,
+             gr / 1000, gr % 1000, gi, gd, s_feedfwd_reconf);
+#else
+    ESP_LOGI(TAG, "[自检] ADN=未编译（CAM_ADN_ENABLE=0，BF/Demosaic 停在寄存器复位值）");
+#endif
+}
+
 void camera_csi_report(void)
 {
     /*
@@ -979,6 +1136,10 @@ void camera_csi_report(void)
     /* 画质那两行紧跟其后：上面那行说的是「有没有帧」，它们说的是「帧对不对」，
      * 顺序就是排查顺序 —— 没帧的时候画质数字一律不必看。 */
     camera_quality_report();
+
+    /* 官方前馈画质级排在最后：它们既不影响「有没有帧」，也不参与 AE/AWB
+     * 两个闭环的控制律，是纯前向的画质级 —— 前面两组都正常了才轮到看它们。 */
+    camera_feedfwd_report();
 }
 
 /* ══ PSRAM 读带宽实测 ══════════════════════════════════════════════ */

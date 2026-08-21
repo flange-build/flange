@@ -84,6 +84,131 @@ static void test_gain_slot(void)
     }
 }
 
+/* ══ A2. ×1000 → 硬件定点（进位与溢出是重点）═══════════════════════ */
+
+/* 硬件位宽（soc_caps.h:363-373），别在测试里再发明一套。 */
+#define DM_INT 2
+#define DM_DEC 4    /* demosaic grad_ratio：2.4，步长 1/16 */
+#define SH_INT 3
+#define SH_DEC 5    /* sharpen h/m_freq_coeff：3.5，步长 1/32 */
+
+static void chk_fixed(uint32_t milli, uint32_t ib, uint32_t db,
+                      bool ok_exp, uint32_t i_exp, uint32_t d_exp)
+{
+    uint32_t i = 0xdead, d = 0xbeef;
+    assert(cam_map_to_fixed(milli, ib, db, &i, &d) == ok_exp);
+    assert(i == i_exp);
+    assert(d == d_exp);
+    cases++;
+}
+
+static void test_to_fixed(void)
+{
+    /* 官方 demosaic 四档，逐个核对（1.05 只能量化到 1.0625，是已知且可接受的 6%）。 */
+    chk_fixed(1500, DM_INT, DM_DEC, true, 1, 8);      /* 1.5     精确 */
+    chk_fixed(1250, DM_INT, DM_DEC, true, 1, 4);      /* 1.25    精确 */
+    chk_fixed(1050, DM_INT, DM_DEC, true, 1, 1);      /* 1.05  → 1.0625 */
+    chk_fixed(1000, DM_INT, DM_DEC, true, 1, 0);      /* 1.0     精确 */
+    for (int i = 0; i < CAM_CAL_DEMOSAIC_N; i++) {
+        uint32_t ip, dp;
+        assert(cam_map_to_fixed(cam_cal_demosaic[i].grad_ratio_milli, DM_INT, DM_DEC, &ip, &dp));
+        /* 量化误差不超过半个栅格（1/32 = 31 milli）。 */
+        const int32_t back = (int32_t)(ip * 1000u + dp * 1000u / (1u << DM_DEC));
+        const int32_t err = back - (int32_t)cam_cal_demosaic[i].grad_ratio_milli;
+        assert(err > -32 && err < 32);
+        cases++;
+    }
+
+    /* 官方 sharpen 的两个系数。1.625 恰好是 52/32（精确），其余是最近栅格。 */
+    chk_fixed(1625, SH_INT, SH_DEC, true, 1, 20);     /* 1.625   精确 */
+    chk_fixed(1525, SH_INT, SH_DEC, true, 1, 17);     /* 1.525 → 1.53125 */
+    chk_fixed(1425, SH_INT, SH_DEC, true, 1, 14);     /* 1.425 → 1.4375  */
+    chk_fixed(1325, SH_INT, SH_DEC, true, 1, 10);     /* 1.325 → 1.3125  */
+    chk_fixed(1225, SH_INT, SH_DEC, true, 1, 7);      /* 1.225 → 1.21875 */
+    for (int i = 0; i < CAM_CAL_SHARPEN_N; i++) {
+        uint32_t ip, dp;
+        assert(cam_map_to_fixed(cam_cal_sharpen[i].h_coeff_milli, SH_INT, SH_DEC, &ip, &dp));
+        assert(ip < (1u << SH_INT) && dp < (1u << SH_DEC));
+        assert(cam_map_to_fixed(cam_cal_sharpen[i].m_coeff_milli, SH_INT, SH_DEC, &ip, &dp));
+        assert(ip < (1u << SH_INT) && dp < (1u << SH_DEC));
+        cases++;
+    }
+
+    /* 零与整数：不该凭空冒出小数位。 */
+    chk_fixed(0,    SH_INT, SH_DEC, true, 0, 0);
+    chk_fixed(2000, SH_INT, SH_DEC, true, 2, 0);
+
+    /* **进位**：0.99 在 1/32 栅格上舍成 32/32 ⇒ 必须进到整数位，
+     * 而不是被 5 位的位域静默截断成 0（那会把 3.99 变成 3.00）。 */
+    chk_fixed(3990, SH_INT, SH_DEC, true, 4, 0);
+    chk_fixed(1990, DM_INT, DM_DEC, true, 2, 0);      /* 1.99 在 1/16 上同理 */
+    /* 刚好不进位的邻居，证明上一条不是把所有值都推上去了。 */
+    chk_fixed(3960, SH_INT, SH_DEC, true, 3, 31);     /* 0.96×32 = 30.72 → 31 */
+
+    /* **溢出**：3 整数位装不下 8.0；返回 false 且钳到 7 + 31/32。 */
+    chk_fixed(8000, SH_INT, SH_DEC, false, 7, 31);
+    chk_fixed(4000, DM_INT, DM_DEC, false, 3, 15);    /* 2 整数位装不下 4.0 */
+    /* 进位导致的溢出也要被抓住：3.999 → 4.0，2 整数位装不下。 */
+    chk_fixed(3999, DM_INT, DM_DEC, false, 3, 15);
+}
+
+/* ══ A3. 带迟滞的档位跟踪器 ════════════════════════════════════════ */
+
+static void test_slot_track(void)
+{
+    cam_slot_track_t t = { 0 };
+    const uint32_t H = 3;
+
+    /* 开机第一拍无条件下发，且 cur 立刻等于 want。 */
+    assert(cam_slot_changed(&t, 5, H));   assert(t.cur == 5);   cases++;
+    /* 同一个档再来多少拍都不动。 */
+    for (int i = 0; i < 10; i++) {
+        assert(!cam_slot_changed(&t, 5, H));
+        cases++;
+    }
+    /* 新档要连续 3 拍才认。 */
+    assert(!cam_slot_changed(&t, 2, H));  assert(t.cur == 5);   cases++;
+    assert(!cam_slot_changed(&t, 2, H));  assert(t.cur == 5);   cases++;
+    assert(cam_slot_changed(&t, 2, H));   assert(t.cur == 2);   cases++;
+
+    /* **抖动不该换档**：新档与旧档交替出现时计数要被打断。 */
+    for (int i = 0; i < 20; i++) {
+        assert(!cam_slot_changed(&t, 7, H));
+        assert(!cam_slot_changed(&t, 2, H));
+        assert(t.cur == 2);
+        cases++;
+    }
+    /* **两个新档互相打断**也不该换：7,9,7,9… 谁都连不够 3 拍。 */
+    for (int i = 0; i < 20; i++) {
+        assert(!cam_slot_changed(&t, 7, H));
+        assert(!cam_slot_changed(&t, 9, H));
+        assert(t.cur == 2);
+        cases++;
+    }
+    /* 打断之后重新连够 3 拍，仍然换得动（计数被清干净了，不是永久卡死）。 */
+    assert(!cam_slot_changed(&t, 7, H));
+    assert(!cam_slot_changed(&t, 7, H));
+    assert(cam_slot_changed(&t, 7, H));   assert(t.cur == 7);   cases++;
+
+    /* hyst = 1 ⇒ 立即换档；hyst = 0 按 1 处理（不允许把迟滞短路成 0 拍）。 */
+    cam_slot_track_t a = { 0 }, b = { 0 };
+    assert(cam_slot_changed(&a, 0, 1));                         cases++;
+    assert(cam_slot_changed(&a, 3, 1));   assert(a.cur == 3);   cases++;
+    assert(cam_slot_changed(&b, 0, 0));                         cases++;
+    assert(cam_slot_changed(&b, 3, 0));   assert(b.cur == 3);   cases++;
+
+    /* 迟滞只延后、不丢失：连续指向新档 hyst 拍之后必然换成功。 */
+    for (uint32_t h = 1; h <= 8; h++) {
+        cam_slot_track_t s = { 0 };
+        assert(cam_slot_changed(&s, 0, h));
+        for (uint32_t i = 1; i < h; i++)
+            assert(!cam_slot_changed(&s, 1, h));
+        assert(cam_slot_changed(&s, 1, h));
+        assert(s.cur == 1);
+        cases++;
+    }
+}
+
 /* ══ B. 按色温选档 + 插值权重 ═══════════════════════════════════════ */
 
 static void test_cct_slot(void)
@@ -706,6 +831,8 @@ static void test_cal_tables(void)
 int main(void)
 {
     test_gain_slot();
+    test_to_fixed();
+    test_slot_track();
     test_cct_slot();
     test_cct_from_rg();
     test_ccm_interp();
