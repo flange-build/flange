@@ -24,6 +24,11 @@
 #if CAM_ADN_ENABLE
 #include "driver/isp_bf.h"
 #include "driver/isp_demosaic.h"
+#endif
+#if CAM_LSC_ENABLE
+#include "driver/isp_lsc.h"
+#endif
+#if CAM_ADN_ENABLE || CAM_LSC_ENABLE
 #include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
 #include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
 #endif
@@ -308,6 +313,13 @@ static int32_t s_st_dm = STEP_NOT_RUN;    /* esp_isp_demosaic_configure 的返�
 static bool    s_bf_enabled;              /* esp_isp_bf_enable 有 FSM 门，只能成功一次 */
 #endif
 
+#if CAM_LSC_ENABLE
+/* 四个通道各 273 项的增益数组，由驱动分配、常驻（T13 换档要复用同一块）。 */
+static esp_isp_lsc_gain_array_t s_lsc_gain;
+static size_t  s_lsc_n;
+static int32_t s_st_lsc = STEP_NOT_RUN;
+#endif
+
 /*
  * 把一对增益写成 CCM 的对角阵送进 ISP。开机配一次，之后 AWB 每次调整再配一次。
  *
@@ -341,6 +353,40 @@ static esp_err_t camera_ccm_apply(uint32_t r_milli, uint32_t b_milli)
     }
     return err;
 }
+
+#if CAM_LSC_ENABLE
+/*
+ * 把某一档 LSC 标定表填进驱动分配的增益数组并下发。
+ *
+ * 定点：表里存的就是 round(v × 256)，与 isp_lsc_gain_t 的 2 整数位 + 8 小数位
+ * 逐位对齐 ⇒ 直接写 .val，**不做任何换算**。全表实测最大 851（3.323×），
+ * 硬件上限 1023（3.996×），余量 17%；那条边界由提取脚本的断言守着，不在这里重复。
+ *
+ * ⓘ esp_isp_lsc_configure() 没有 FSM 门（isp_lsc.c 全文），取流中可以重配 ——
+ *   T13 按色温换档就靠这一点。代价是 273 × 2 条 LUT 写命令，所以只在档变时做。
+ */
+static esp_err_t camera_lsc_apply(uint32_t slot)
+{
+    for (size_t y = 0; y < CAM_CAL_LSC_GRID_Y; y++) {
+        for (size_t x = 0; x < CAM_CAL_LSC_GRID_X; x++) {
+            /* 目的下标固定按驱动的写法 i = y·num_grids_x + x（isp_lsc.c）。
+             * 源下标可能要转置 —— JSON 的排布顺序是缺口，见 CAM_LSC_TRANSPOSE。 */
+            const size_t dst = y * CAM_CAL_LSC_GRID_X + x;
+#if CAM_LSC_TRANSPOSE
+            const size_t src = x * CAM_CAL_LSC_GRID_Y + y;
+#else
+            const size_t src = dst;
+#endif
+            s_lsc_gain.gain_r [dst].val = cam_cal_lsc[slot][0][src];
+            s_lsc_gain.gain_gr[dst].val = cam_cal_lsc[slot][1][src];
+            s_lsc_gain.gain_gb[dst].val = cam_cal_lsc[slot][2][src];
+            s_lsc_gain.gain_b [dst].val = cam_cal_lsc[slot][3][src];
+        }
+    }
+    const esp_isp_lsc_config_t cfg = { .gain_array = &s_lsc_gain };
+    return esp_isp_lsc_configure(s_isp, &cfg);
+}
+#endif  /* CAM_LSC_ENABLE */
 
 /*
  * 中断回调之一：DMA 要下一块缓冲了。
@@ -567,6 +613,43 @@ esp_err_t camera_csi_init(void)
     };
     s_st_isp = esp_isp_new_processor(&isp_cfg, &s_isp);
     ESP_RETURN_ON_ERROR(s_st_isp, TAG, "ISP");
+
+#if CAM_LSC_ENABLE
+    /*
+     * ══ 镜头阴影校正（暗角）══ 官方 273 格 × 4 通道的标定表。
+     *
+     * ⚠️ **顺序有硬要求**：esp_isp_lsc_allocate_gain_array() 要求 lsc_fsm == INIT
+     *   （isp_lsc.c），必须排在 esp_isp_lsc_enable() 之前 —— 这也是为什么整段放在
+     *   init 里而不是取流之后。allocate 之后才轮到 configure（填表）与 enable。
+     *
+     * ⚠️ 网格数由 ISP 的 h_res/v_res 算出，不是我们定的：
+     *      num_grids = (res − 1)/2/32 + 2  ⇒  x: 21，y: 13  ⇒  273
+     *   与官方标定文件的 lsc_tbl_size **精确相等**（官方标定也是 1280×720，
+     *   不需要重采样）。哪天换了传感器模式这个 273 会变、而标定表不会变，
+     *   下面那条比对就是唯一会拦住它的地方 —— 不比对的话表会被错位填进 LUT，
+     *   现象是「暗角修正的位置整体偏了」，几乎不可能反查到这里。
+     *
+     * 失败**只降级不拦启动**（与 CCM 同一处置）：LSC 配不上只是画面保留暗角，
+     * 而取流本身是好的。
+     */
+    s_st_lsc = esp_isp_lsc_allocate_gain_array(s_isp, &s_lsc_gain, &s_lsc_n);
+    if (s_st_lsc == ESP_OK && s_lsc_n != CAM_CAL_LSC_GRIDS) {
+        ESP_LOGE(TAG, "LSC 网格数 %u 与标定表 %u 不符（ISP 分辨率变了？）",
+                 (unsigned)s_lsc_n, (unsigned)CAM_CAL_LSC_GRIDS);
+        s_st_lsc = ESP_ERR_INVALID_SIZE;
+    }
+    if (s_st_lsc == ESP_OK)
+        s_st_lsc = camera_lsc_apply(CAM_LSC_SLOT_DEFAULT);
+    if (s_st_lsc == ESP_OK)
+        s_st_lsc = esp_isp_lsc_enable(s_isp);
+    if (s_st_lsc != ESP_OK)
+        /* ⚠️ ESP_ERR_NOT_SUPPORTED 只有一个含义：**这块板的 efuse 报的芯片版本
+         *   低于 v1.0**（isp_lsc.c 的门是 ESP_CHIP_REV_ABOVE(rev,100)，而该宏是
+         *   `(min) <= (rev)`，v1.0 ⇒ 100<=100 为真）。真拿到它就去 esptool.py
+         *   chip_id 读实际版本，那会推翻本工程关于 LSC 的全部前提。 */
+        ESP_LOGW(TAG, "LSC 没配上(%s)，画面保留四角暗角，其余一切照常",
+                 esp_err_to_name((esp_err_t)s_st_lsc));
+#endif
 
     /*
      * ══ 白平衡 ══ 用 **CCM 的对角线**顶替用不了的 WBG。
@@ -1096,6 +1179,39 @@ static void camera_feedfwd_report(void)
              gr / 1000, gr % 1000, gi, gd, s_feedfwd_reconf);
 #else
     ESP_LOGI(TAG, "[自检] ADN=未编译（CAM_ADN_ENABLE=0，BF/Demosaic 停在寄存器复位值）");
+#endif
+
+#if CAM_LSC_ENABLE
+    /*
+     * 判读（**四角与中心那五个数是本级唯一能自证生效的东西**）：
+     *   LSC=ESP_ERR_NOT_SUPPORTED → 芯片版本低于 v1.0，见 camera_csi_init() 里的 ⚠️。
+     *   LSC=ESP_ERR_INVALID_SIZE  → 网格数 ≠ 273，ISP 分辨率变了。
+     *   中心≈256(1.00×) 且四角 700~860 → 表填对了：LSC 就是「中心不动、四角提亮」。
+     *   中心不是 256 / 四角不比中心大 → 表被当成衰减而不是增益，或档位填错。
+     *   四个角的值彼此差很多、或某个角接近 256
+     *                             → **排布顺序猜错了**（JSON 是 y 快变），
+     *                               画面会表现为上下亮、左右暗 ⇒ 把 cam_tune.h 的
+     *                               CAM_LSC_TRANSPOSE 改成 1 重编。
+     *   实拍白墙：改动前四角/中心亮度比约 0.3~0.4，改动后差值应 < 15%。
+     */
+    const size_t c_mid = (CAM_CAL_LSC_GRID_Y / 2) * CAM_CAL_LSC_GRID_X + CAM_CAL_LSC_GRID_X / 2;
+    const size_t c_tr  = CAM_CAL_LSC_GRID_X - 1;
+    const size_t c_bl  = (CAM_CAL_LSC_GRID_Y - 1) * CAM_CAL_LSC_GRID_X;
+    const size_t c_br  = c_bl + CAM_CAL_LSC_GRID_X - 1;
+    ESP_LOGI(TAG, "[自检] LSC=开 %s 档%d(%uK) 网格 %d×%d=%u(驱动要 %u) 转置=%s | "
+                  "R 增益 中心=%" PRIu32 " 四角=%" PRIu32 "/%" PRIu32 "/%" PRIu32
+                  "/%" PRIu32 "（256=1.00×）",
+             step_str(s_st_lsc), CAM_LSC_SLOT_DEFAULT,
+             (unsigned)cam_cal_lsc_cct[CAM_LSC_SLOT_DEFAULT],
+             CAM_CAL_LSC_GRID_X, CAM_CAL_LSC_GRID_Y, (unsigned)CAM_CAL_LSC_GRIDS,
+             (unsigned)s_lsc_n, CAM_LSC_TRANSPOSE ? "是" : "否",
+             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_mid].val : 0,
+             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[0].val : 0,
+             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_tr].val : 0,
+             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_bl].val : 0,
+             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_br].val : 0);
+#else
+    ESP_LOGI(TAG, "[自检] LSC=未编译（CAM_LSC_ENABLE=0，画面保留四角暗角）");
 #endif
 }
 
