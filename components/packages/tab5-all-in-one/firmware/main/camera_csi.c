@@ -28,7 +28,11 @@
 #if CAM_LSC_ENABLE
 #include "driver/isp_lsc.h"
 #endif
-#if CAM_ADN_ENABLE || CAM_LSC_ENABLE
+#if CAM_AEN_ENABLE
+#include "driver/isp_sharpen.h"
+#include "driver/isp_color.h"
+#endif
+#if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE
 #include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
 #include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
 #endif
@@ -293,7 +297,7 @@ static int32_t         s_awb_last_err = ESP_OK;   /* 最近一次重配 CCM 的�
  *      ESP_OK        配上了，自检行同时打出该级此刻的关键参数值
  *      「未编译」     开关 = 0，由自检行的 #else 分支说出来
  *   四种情况必须能分开，否则「画面没变化」这一个现象对应四种完全不同的下一步。 */
-#if CAM_ADN_ENABLE
+#if CAM_ADN_ENABLE || CAM_AEN_ENABLE
 /* **所有**前馈级加起来累计重配了多少次（一个计数器、每行自检都打同一个数，
  * 所以标签是「前馈重配合计」而不是「重配」—— 别读成「本级重配了这么多次」）。
  * 它是迟滞是否起作用的唯一判据：随时间线性增长 ⇒ 要么增益一直在变（去看 AE
@@ -318,6 +322,15 @@ static bool    s_bf_enabled;              /* esp_isp_bf_enable 有 FSM 门，只
 static esp_isp_lsc_gain_array_t s_lsc_gain;
 static size_t  s_lsc_n;
 static int32_t s_st_lsc = STEP_NOT_RUN;
+#endif
+
+#if CAM_AEN_ENABLE
+static cam_slot_track_t s_sh_track, s_ct_track;
+static int32_t s_st_sharp = STEP_NOT_RUN;
+static int32_t s_st_color = STEP_NOT_RUN;
+static bool    s_sharp_enabled;           /* enable 有 FSM 门 */
+static bool    s_color_enabled;
+static uint8_t s_contrast_val = 128;      /* 此刻写进硬件的对比度，自检行用 */
 #endif
 
 /*
@@ -1002,6 +1015,86 @@ static void camera_adn_tick(uint32_t gain_milli)
 }
 #endif  /* CAM_ADN_ENABLE */
 
+#if CAM_AEN_ENABLE
+/*
+ * SHARP 锐化 + Color 对比度/饱和度，按传感器总增益查官方表。
+ *
+ * 这两级在 YUV 域，位于 AE（demosaic 后）与 AWB（CCM 前）两个**硬件**采样点的
+ * 下游 —— 但我们今天的统计是软件采在 **ISP 输出**（这两级的下游），所以它们会
+ * 进到 AE/AWB 的反馈里。量化评估（README 有完整推导）：
+ *   · 饱和度钉在 128 = 1.000× ⇒ 逐像素恒等，对通道比值**零影响**（不是「影响小」）；
+ *   · 对比度 132 = 1.031× 只作用在 Y 上（色度不动）⇒ 三个通道拿到的是**同一个**
+ *     加性偏移 ⇒ 通道比值被拉向 1 的幅度 ≈ 0.7%，远小于 CAM_AWB_DEADBAND_PCT = 5。
+ *     ⚠️ 亮度均值的**变化方向**取决于硬件用的是哪种对比度式子，而 TRM 与 IDF
+ *        都没写死这一点：纯增益式 Y' = c·Y 会让 lum_mean 抬约 +3%；以 128 为轴的
+ *        Y' = (Y−128)·c + 128 在偏暗画面上反而让它降约 0.4%。**两种都不超过
+ *        CAM_AE_DEADBAND（12/120 = 10%）⇒ AE 多半连动都不动**，所以这里不需要
+ *        分支处理；但上板读自检行时别把「亮度略降」当成配错了 —— 它只说明是
+ *        后一种式子，把观察到的方向记进 README 即可（这是一处 [缺口] 的实测机会）。
+ *   · 对比度按 gain 选档、gain 由 AE 定 ⇒ 存在 AE→gain→对比度→亮度→AE 的回路，
+ *     但四档之间只差 1.5%，且换档有 3 拍迟滞，环增益远小于 1，不会自激。
+ */
+static void camera_aen_tick(uint32_t gain_milli)
+{
+    const uint32_t sh = cam_map_gain_slot(cam_cal_sharpen_gain, CAM_CAL_SHARPEN_N, gain_milli);
+    if (cam_slot_changed(&s_sh_track, sh, CAM_FEEDFWD_HYST_TICKS)) {
+        /* 两个系数是 3 整数位 + 5 小数位（soc_caps.h）⇒ 步长 1/32。
+         * h = 1.625 恰好是 1+20/32（精确）；m = 1.525 → 1+17/32（差 0.4%）。
+         * m_coeff 随增益单调下降（1.525 → 1.225）：高增益时减弱中频锐化，
+         * 否则被放大的是噪声而不是细节。 */
+        uint32_t hi = 1, hd = 0, mi = 1, md = 0;
+        cam_map_to_fixed(cam_cal_sharpen[sh].h_coeff_milli, 3, 5, &hi, &hd);
+        cam_map_to_fixed(cam_cal_sharpen[sh].m_coeff_milli, 3, 5, &mi, &md);
+        esp_isp_sharpen_config_t cfg = {
+            .h_freq_coeff = { .integer = hi, .decimal = hd },
+            .m_freq_coeff = { .integer = mi, .decimal = md },
+            .h_thresh     = cam_cal_sharpen[sh].h_thresh,
+            .l_thresh     = cam_cal_sharpen[sh].l_thresh,
+            .padding_mode = ISP_SHARPEN_EDGE_PADDING_MODE_SRND_DATA,
+            .padding_data = 0,
+            .padding_line_tail_valid_start_pixel = 0,
+            .padding_line_tail_valid_end_pixel   = 0,
+            .flags = { .update_once_configured = 1 },
+        };
+        memcpy(cfg.sharpen_template, cam_cal_sharpen[sh].matrix, sizeof cfg.sharpen_template);
+        s_st_sharp = esp_isp_sharpen_configure(s_isp, &cfg);
+        if (s_st_sharp == ESP_OK && !s_sharp_enabled) {
+            s_st_sharp = esp_isp_sharpen_enable(s_isp);
+            s_sharp_enabled = (s_st_sharp == ESP_OK);
+        }
+        s_feedfwd_reconf++;
+    }
+
+    const uint32_t ct = cam_map_gain_slot(cam_cal_contrast_gain, CAM_CAL_CONTRAST_N, gain_milli);
+    if (cam_slot_changed(&s_ct_track, ct, CAM_FEEDFWD_HYST_TICKS)) {
+        /* 对比度/饱和度是 1 整数位 + 7 小数位 ⇒ **128 就是 1.0×**。标定文件里的
+         * 132/130/128/126 与 128/130 就是这个 val 的原值，**直接写、不换算**
+         * （把 1.031 乘 1000 写进去会拿到 ESP_ERR_INVALID_ARG，上限是 255）。
+         * ⓘ 色调：官方 SC202CS 标定里**没有 hue 字段**，写 0 就是对齐；顺带避开
+         *   rev<3.0 只有 8 bit 色调（HAL 内部做 hue×256/360 折算）的精度坑。
+         * ⓘ 亮度：同样不在标定里，写 0。 */
+        s_contrast_val = cam_cal_contrast[ct].value;
+        const esp_isp_color_config_t cfg = {
+            .color_contrast   = { .val = s_contrast_val },
+            .color_saturation = { .val = CAM_SATURATION_FIXED_VAL },
+            .color_hue        = 0,
+            .color_brightness = 0,
+            .flags = { .update_once_configured = 1 },
+        };
+        s_st_color = esp_isp_color_configure(s_isp, &cfg);
+        if (s_st_color == ESP_OK && !s_color_enabled) {
+            /* ⓘ isp_core.c 那处 isp_ll_color_enable(true) 的 workaround（DIG-474）
+             *   只在 **DVP** 输入时触发，我们是 CSI 输入 ⇒ 不触发，所以 color 块
+             *   此刻确实停在 FSM 的 INIT 态。若拿到 ESP_ERR_INVALID_STATE，
+             *   说明这条判断错了，回来改这段注释。 */
+            s_st_color = esp_isp_color_enable(s_isp);
+            s_color_enabled = (s_st_color == ESP_OK);
+        }
+        s_feedfwd_reconf++;
+    }
+}
+#endif  /* CAM_AEN_ENABLE */
+
 void camera_csi_tune_tick(const cam_frame_stats_t *st)
 {
     /* samples == 0 表示这份统计什么都没采到（参数非法），拿它去调曝光/白平衡等于
@@ -1028,7 +1121,7 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
     camera_awb_tick(st);
 #endif
 
-#if CAM_ADN_ENABLE
+#if CAM_ADN_ENABLE || CAM_AEN_ENABLE
     /*
      * 官方前馈级**排在 AE 之后**：它们按增益选档，要用本拍刚更新过的增益，
      * 而不是上一拍的陈旧值。
@@ -1039,7 +1132,12 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
      */
     s_feedfwd_gain_milli = (s_ae_ready && s_ae.gain_index < s_ae_lim.gain_count)
                                ? s_ae_lim.gain_map[s_ae.gain_index] : 1000;
+#if CAM_ADN_ENABLE
     camera_adn_tick(s_feedfwd_gain_milli);
+#endif
+#if CAM_AEN_ENABLE
+    camera_aen_tick(s_feedfwd_gain_milli);
+#endif
 #endif
 }
 
@@ -1212,6 +1310,43 @@ static void camera_feedfwd_report(void)
              s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_br].val : 0);
 #else
     ESP_LOGI(TAG, "[自检] LSC=未编译（CAM_LSC_ENABLE=0，画面保留四角暗角）");
+#endif
+
+#if CAM_AEN_ENABLE
+    /*
+     * 判读：
+     *   Color=ESP_ERR_INVALID_ARG → val 超 255：多半是把 1.031 乘了 1000 写进去。
+     *   画面整体发灰、对比度反而降低 → 把 132 当成百分数或做了 /128 的换算。
+     *   遮镜头拉高增益 ⇒ SHARP 档 0→3、m 系数 1.525→1.225，对比度 132→126。
+     *   高增益下噪点被锐化成明显颗粒 → 看 m 系数是否真的随增益降了（没降就是档没跟上）。
+     *   边缘出现白边/黑边（过锐）  → h 系数的定点换算错了（整数位/小数位颠倒）。
+     */
+    const uint32_t sh = s_sh_track.cur;
+    uint32_t hi = 0, hd = 0, mi = 0, md = 0;
+    cam_map_to_fixed(cam_cal_sharpen[sh].h_coeff_milli, 3, 5, &hi, &hd);
+    cam_map_to_fixed(cam_cal_sharpen[sh].m_coeff_milli, 3, 5, &mi, &md);
+    ESP_LOGI(TAG, "[自检] AEN=开 增益=%" PRIu32 ".%03" PRIu32 "× | "
+                  "SHARP=%s 档%" PRIu32 "/%d h阈=%u l阈=%u "
+                  "h系数=%u.%03u→%" PRIu32 "+%" PRIu32 "/32 "
+                  "m系数=%u.%03u→%" PRIu32 "+%" PRIu32 "/32 | "
+                  "Color=%s 对比度=%u(%u.%03u×) 饱和度=%u(%u.%03u×，本阶段钉住) | "
+                  "前馈重配合计=%" PRIu32,
+             s_feedfwd_gain_milli / 1000, s_feedfwd_gain_milli % 1000,
+             step_str(s_st_sharp), sh, CAM_CAL_SHARPEN_N,
+             cam_cal_sharpen[sh].h_thresh, cam_cal_sharpen[sh].l_thresh,
+             (unsigned)(cam_cal_sharpen[sh].h_coeff_milli / 1000),
+             (unsigned)(cam_cal_sharpen[sh].h_coeff_milli % 1000), hi, hd,
+             (unsigned)(cam_cal_sharpen[sh].m_coeff_milli / 1000),
+             (unsigned)(cam_cal_sharpen[sh].m_coeff_milli % 1000), mi, md,
+             step_str(s_st_color), s_contrast_val,
+             (unsigned)(s_contrast_val * 1000u / 128u / 1000u),
+             (unsigned)(s_contrast_val * 1000u / 128u % 1000u),
+             (unsigned)CAM_SATURATION_FIXED_VAL,
+             (unsigned)(CAM_SATURATION_FIXED_VAL * 1000u / 128u / 1000u),
+             (unsigned)(CAM_SATURATION_FIXED_VAL * 1000u / 128u % 1000u),
+             s_feedfwd_reconf);
+#else
+    ESP_LOGI(TAG, "[自检] AEN=未编译（CAM_AEN_ENABLE=0，不配 SHARP/Color）");
 #endif
 }
 
