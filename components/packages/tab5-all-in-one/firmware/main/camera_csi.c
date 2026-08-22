@@ -318,6 +318,32 @@ static int32_t         s_awb_last_err = ESP_OK;   /* 最近一次重配 CCM 的�
 两者不相容时若不在这里拦下，运行期表现是 AE 拿一份全 0 的统计把曝光推到顶。"
 #endif
 
+#if CAM_AWB_SOURCE && !CAM_AWB_STAT_ENABLE
+#error "CAM_AWB_SOURCE=1（AWB 吃硬件白点统计）依赖 CAM_AWB_STAT_ENABLE=1；\
+两者不相容时若不在这里拦下，运行期表现是 AWB 永远拿不到采样、白平衡一步不动。"
+#endif
+
+#if CAM_AWB_SOURCE
+/*
+ * ⚠️ 白点框与门限**必须**与官方标定表逐位相同 —— 它们是同一个采样点上的量。
+ * cam_tune.h 里写的是字面量（那个文件是纯逻辑、不许依赖标定表），这五条断言
+ * 是唯一把两边钉在一起的东西：改一个不改另一个，编译期就断。
+ * （与 CAM_AE_SOURCE 那三条同一处置。）
+ */
+_Static_assert(CAM_AWB_MIN_COUNTED == CAM_CAL_MIN_COUNTED,
+               "CAM_AWB_MIN_COUNTED 与官方 awb.min_counted 不一致");
+_Static_assert(CAM_AWB_RG_MIN_Q4 == CAM_CAL_RG_MIN && CAM_AWB_RG_MAX_Q4 == CAM_CAL_RG_MAX,
+               "AWB 的 rg 包围盒与官方 awb.range.rg 不一致");
+_Static_assert(CAM_AWB_BG_MIN_Q4 == CAM_CAL_BG_MIN && CAM_AWB_BG_MAX_Q4 == CAM_CAL_BG_MAX,
+               "AWB 的 bg 包围盒与官方 awb.range.bg 不一致");
+/* 盒子推出来的增益必须整个装进限幅区间，否则两道判据会互相打架：
+ * 通过盒子的建议值被限幅改写 ⇒ 不动点跑掉 ⇒ 看起来像「收敛到一个错的值」。 */
+_Static_assert(10000000u / CAM_AWB_BG_MIN_Q4 <= CAM_AWB_GAIN_MAX_MILLI,
+               "官方白点框的 kb 上限超过了 CAM_AWB_GAIN_MAX_MILLI");
+_Static_assert(10000000u / CAM_AWB_RG_MAX_Q4 >= CAM_AWB_GAIN_MIN_MILLI,
+               "官方白点框的 kr 下限低于 CAM_AWB_GAIN_MIN_MILLI");
+#endif
+
 #if CAM_AE_SOURCE
 /*
  * ⚠️ 目标与死区**必须**与官方标定表逐位相同 —— 换源之后它们才是同一个采样点上的量。
@@ -1425,6 +1451,24 @@ static void camera_awb_tick(const cam_frame_stats_t *st)
      */
     const bool ae_stable = !s_ae_ready || cam_ae_converged(&s_ae);
 
+#if CAM_AWB_SOURCE
+    (void)st;   /* 硬件白点那条路用不到软件统计 */
+    /*
+     * ⚠️⚠️ **绝对增益，不是增量。** 统计采在 CCM **之前** ⇒ 读数里不含已经生效
+     * 的增益 ⇒ cam_awb_step_hw() 直接给出「总共该乘多少」。它的签名里拿不到当前
+     * 增益，所以这里也**没有任何东西可以传错**。完整说明见 cam_tune.h 的
+     * CAM_AWB_SOURCE，误用旧公式的后果是增益单调发散而计数器一切正常。
+     *
+     * 只有拿到**新采样**的那一拍才走控制律：s_awb_hw_fresh 由上面的
+     * camera_awb_stat_tick() 每拍重置，周期完全由 oneshot 的触发节奏决定
+     * （cam_awb_step_hw 自己**不再做频率限制**，两处都分频会变成 10 秒一次）。
+     * 采样超时的那一拍同样走这里返回 —— 不拿旧数据凑合。
+     */
+    if (!s_awb_hw_fresh)
+        return;
+    if (cam_awb_step_hw(&s_awb, &s_awb_hw, ae_stable) != CAM_AWB_APPLIED)
+        return;
+#else
     /*
      * ⓘ **T6 换了 AE 的测量口径，对 AWB 的影响只有一处：这个 ae_stable 的时机。**
      *   AWB 自己的输入（软件线性通道均值）与公式一个字都没动 ⇒ 行为等价。
@@ -1444,6 +1488,7 @@ static void camera_awb_tick(const cam_frame_stats_t *st)
     if (cam_awb_step(&s_awb, st->lin_lum_mean, st->lin_r_mean, st->lin_g_mean,
                      st->lin_b_mean, ae_stable) != CAM_AWB_APPLIED)
         return;
+#endif  /* CAM_AWB_SOURCE */
 
     s_awb_last_err = camera_ccm_apply(s_awb.gain_r_milli, s_awb.gain_b_milli);
     if (s_awb_last_err != ESP_OK) {
@@ -1451,9 +1496,15 @@ static void camera_awb_tick(const cam_frame_stats_t *st)
          * ⚠️ 写不进去就**把状态机回滚到硬件里实际生效的那一对**。
          * 不回滚的话状态机以为增益已经变了、而画面反映的还是旧增益 —— 下一拍
          * 它会拿旧画面去校正新系数，cam_awb_suggest() 赖以成立的幂等性当场失效，
-         * 表现为白平衡缓慢单向漂移。这条路径实际上走不到（系数被钳在 [1.0, 3.0]，
+         * 表现为白平衡缓慢单向漂移。这条路径实际上走不到（系数被钳在
+         * [CAM_AWB_GAIN_MIN_MILLI, CAM_AWB_GAIN_MAX_MILLI] ⊂ [1.0, 4.0)，
          * esp_isp_ccm_configure() 只在 NaN/超范围时失败），但「状态机必须永远
          * 镜像硬件」是个不该靠「反正失败不了」维持的不变式。
+         *
+         * ⓘ 硬件白点那条路（CAM_AWB_SOURCE = 1）**同样需要这次回滚**，只是理由
+         *   不同：那条路的建议值与当前增益无关，不回滚不会漂；但状态机一旦与
+         *   硬件说的不是同一回事，自检行打的「当前 R×/B×」就成了假话，
+         *   而那一行正是抄回 cam_tune.h 做静态标定的依据。
          */
         s_awb.gain_r_milli = s_ccm_r;
         s_awb.gain_b_milli = s_ccm_b;
@@ -1826,10 +1877,12 @@ static void camera_awb_stat_report(uint32_t sw_sug_r, uint32_t sw_sug_b)
                   " | 软件灰世界(CCM后·当前×g/x) R×%" PRIu32 ".%03" PRIu32
                   " B×%" PRIu32 ".%03" PRIu32
                   " | 差 R%" PRIu32 ".%" PRIu32 "%% B%" PRIu32 ".%" PRIu32 "%%"
-                  " | AWB 源=软件灰世界（本统计只观测）",
+                  " | AWB 源=%s",
              kr / 1000, kr % 1000, kb / 1000, kb % 1000,
              sw_sug_r / 1000, sw_sug_r % 1000, sw_sug_b / 1000, sw_sug_b % 1000,
-             dr / 10, dr % 10, db / 10, db % 10);
+             dr / 10, dr % 10, db / 10, db % 10,
+             CAM_AWB_SOURCE ? "本统计（已接管，绝对公式 Σg/Σx）"
+                            : "软件灰世界（本统计只观测）");
 }
 #endif  /* CAM_AWB_STAT_ENABLE */
 
@@ -1923,23 +1976,42 @@ static void camera_quality_report(void)
      *                              （红墙/绿植/蓝天）。这是**正确行为**，把镜头
      *                              转向普通场景，这个数就不涨了。
      *   暗场/过亮 在涨             → 环境光超出 [LUM_MIN, LUM_MAX]，加/减光。
-     *   增益越界 在涨              → 灰世界推出来的系数跑出 [1.0, 3.0]：要么光源
-     *                              极端（比如纯色 LED），要么 bayer order 配错了。
+     *   增益越界 在涨              → 推出来的系数跑出合理范围：要么光源极端
+     *                              （比如纯色 LED），要么 bayer order 配错了。
      *   死区内 在涨 + 已收敛       → **一切正常**，白平衡已经到位并稳住。
      *   下发一直涨、增益来回摆      → 振荡。调大 CAM_AWB_INTERVAL_TICKS 或减小
      *                              CAM_AWB_DAMP_NUM/DEN（都在 cam_tune.h）。
+     *
+     * ══ CAM_AWB_SOURCE = 1（硬件白点）下额外的三条 ═══════════════════════
+     *   **增益单调爬到 3.445 或掉到 1.000，而「下发」一直在涨** → ⚠️ 这就是
+     *                              cam_tune.h 的 CAM_AWB_SOURCE 里说的那个错：
+     *                              建议值里混进了当前增益。**立刻把
+     *                              CAM_AWB_SOURCE 改回 0 重烧**，再回去查
+     *                              cam_awb_step_hw() 里有没有 st->gain_* 参与
+     *                              建议值计算。判定手法：静置 5 分钟不动镜头，
+     *                              正常应当是「死区内」持续涨而「下发」不涨。
+     *   暗场/过亮/色偏过大 **不为 0** → 不可能。这三条在硬件路上根本不执行，
+     *                              非 0 说明实际走的是软件路（CAM_AWB_SOURCE
+     *                              没生效，或 s_awb_hw_fresh 恒为 false）。
+     *   白点太少 一直在涨           → 正常场景下不该这样。先看上面「AWB统计」
+     *                              那行的「平均G」是不是跑出了官方 green 范围
+     *                              [98, 210] —— 那说明亮度窗与我们的信号电平
+     *                              不同域，要按实测重标（理由写进 cam_isp_cal.h
+     *                              旁边）。镜头怼着单色物体时它涨是**正确行为**，
+     *                              它替代的正是灰世界那条「色偏过大」。
      */
     ESP_LOGI(TAG, "[自检] AWB=开 R×%" PRIu32 ".%03" PRIu32 " B×%" PRIu32 ".%03" PRIu32
                   " %s 下发=%" PRIu32 " 最近=%s(%s) | 未更新：AE未稳=%" PRIu32
                   " 暗场=%" PRIu32 " 过亮=%" PRIu32 " 色偏过大=%" PRIu32
-                  " 未到周期=%" PRIu32 " 死区内=%" PRIu32 " 增益越界=%" PRIu32
-                  " 量化无变化=%" PRIu32,
+                  " 白点太少=%" PRIu32 " 未到周期=%" PRIu32 " 死区内=%" PRIu32
+                  " 增益越界=%" PRIu32 " 量化无变化=%" PRIu32,
              s_awb.gain_r_milli / 1000, s_awb.gain_r_milli % 1000,
              s_awb.gain_b_milli / 1000, s_awb.gain_b_milli % 1000,
              cam_awb_converged(&s_awb) ? "已收敛" : "调整中",
              s_awb.updates, cam_awb_reason_str(s_awb.last), step_str(s_awb_last_err),
              s_awb.reasons[CAM_AWB_SKIP_AE], s_awb.reasons[CAM_AWB_SKIP_DARK],
              s_awb.reasons[CAM_AWB_SKIP_BRIGHT], s_awb.reasons[CAM_AWB_SKIP_CAST],
+             s_awb.reasons[CAM_AWB_SKIP_COUNT],
              s_awb.reasons[CAM_AWB_SKIP_PERIOD], s_awb.reasons[CAM_AWB_SKIP_BAND],
              s_awb.reasons[CAM_AWB_SKIP_RANGE], s_awb.reasons[CAM_AWB_SKIP_QUANT]);
 #else

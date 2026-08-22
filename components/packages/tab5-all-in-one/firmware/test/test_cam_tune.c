@@ -49,6 +49,16 @@ static int cases;
  *              档位间距直接决定 AE 能停在离目标多近的地方，拿稀疏表测收敛
  *              等于在测一个真机上不存在的量化误差。
  */
+/* 与 cam_tune.c 里那个 static diff_pct() 同义：|a − b| 占 b 的百分比。
+ * 用例里比的是「离不动点多远」，所以第二个参数固定传实测值。 */
+static uint32_t diff_pct_ref(uint32_t a, uint32_t b)
+{
+    if (b == 0)
+        return 1000;
+    const uint32_t d = a > b ? a - b : b - a;
+    return (uint32_t)(((uint64_t)d * 100u) / b);
+}
+
 static const uint32_t gmap_coarse[] = {1000, 1500, 2000, 4000, 8000, 16000, 32000, 63008};
 #define GCOUNT_COARSE ((uint32_t)(sizeof(gmap_coarse) / sizeof(gmap_coarse[0])))
 
@@ -728,6 +738,219 @@ static void test_awb_ratios(void)
     CHECK(rg <= 100, "红通道几乎为 0 时 rg 必须接近 0，实得 %u", rg);
 }
 
+/* ══ 硬件白点统计版的 AWB 控制律 ═════════════════════════════════════ */
+
+/* 造一份重心恰好落在 (rg_q4/10000, bg_q4/10000) 的采样。
+ * Σg 固定取 1e6（远大于 counted × 基座，扣不扣基座都不改变量级）。 */
+static cam_awb_hw_stat_t mk_stat(uint32_t counted, uint32_t rg_q4, uint32_t bg_q4)
+{
+    const uint32_t sg = 1000000u;
+    cam_awb_hw_stat_t s;
+    s.counted = counted;
+    s.sum_g = sg;
+    s.sum_r = (uint32_t)((uint64_t)sg * rg_q4 / 10000u);
+    s.sum_b = (uint32_t)((uint64_t)sg * bg_q4 / 10000u);
+    return s;
+}
+
+/*
+ * ⚠️⚠️ **本组用例是 T9 的命门。**
+ *
+ * 被测的那条错误路径（cam_tune.h 的 CAM_AWB_SOURCE 说的那个）在现场看不出来：
+ * 建议值里若混进当前增益，每一拍都会把已经生效的增益再乘一遍，增益单调跑到
+ * 限位，而**所有计数器都显示一切正常**。所以这里必须钉住的不是「增益停下来了」
+ * —— 错误实现同样会「停」（顶到 3445 之后 awb_next 返回原值 ⇒ SKIP_QUANT）——
+ * 而是三件事：
+ *   ① 停下来的**值**等于 1/rg、1/bg，不是限位；
+ *   ② 停下来的**理由**是「死区内」，不是「量化无变化」；
+ *   ③ 从**高于**不动点的初值出发要往下走（错误实现只会往上顶）。
+ */
+static void test_awb_hw_fixed_point(void)
+{
+    /* rg = 0.5、bg = 0.4，都在官方盒子里 ⇒ 不动点 kr = 2.000、kb = 2.500。 */
+    const uint32_t rg = 5000, bg = 4000;
+    const uint32_t fix_r = 10000000u / rg, fix_b = 10000000u / bg;
+    const cam_awb_hw_stat_t st = mk_stat(200000, rg, bg);
+
+    /* ── ① 不动点收敛：连喂 200 拍 ── */
+    cam_awb_state_t a;
+    cam_awb_init(&a);
+    uint32_t prev_r = 0, prev_b = 0;
+    int moved_in_tail = 0;
+    for (int i = 0; i < 200; i++) {
+        prev_r = a.gain_r_milli;
+        prev_b = a.gain_b_milli;
+        cam_awb_step_hw(&a, &st, true);
+        if (i >= 150 && (a.gain_r_milli != prev_r || a.gain_b_milli != prev_b))
+            moved_in_tail++;
+    }
+    CHECK(moved_in_tail == 0, "最后 50 拍还在动 %d 次 —— 没有不动点", moved_in_tail);
+    /* 停在死区内 ⇒ 与不动点的距离不超过 CAM_AWB_DEADBAND_PCT。 */
+    CHECK(diff_pct_ref(fix_r, a.gain_r_milli) <= CAM_AWB_DEADBAND_PCT,
+          "R 停在 %u，离不动点 %u 太远", a.gain_r_milli, fix_r);
+    CHECK(diff_pct_ref(fix_b, a.gain_b_milli) <= CAM_AWB_DEADBAND_PCT,
+          "B 停在 %u，离不动点 %u 太远", a.gain_b_milli, fix_b);
+    /* **这两条才是真正区分对错公式的判据。** 误用旧公式时增益会顶到
+     * CAM_AWB_GAIN_MAX_MILLI，然后靠 awb_next 返回原值「停住」——
+     * 停是停了，但停错了地方、也停错了理由。 */
+    CHECK(a.gain_r_milli < CAM_AWB_GAIN_MAX_MILLI &&
+          a.gain_b_milli < CAM_AWB_GAIN_MAX_MILLI,
+          "增益顶到了限位（R%u B%u）—— 建议值里混进了当前增益，见 CAM_AWB_SOURCE",
+          a.gain_r_milli, a.gain_b_milli);
+    CHECK(a.last == CAM_AWB_SKIP_BAND, "收敛后的理由应当是「死区内」，实得 %s",
+          cam_awb_reason_str(a.last));
+    CHECK(a.reasons[CAM_AWB_SKIP_QUANT] == 0,
+          "出现了「量化无变化」%u 次 —— 那是顶在限位上的指纹",
+          a.reasons[CAM_AWB_SKIP_QUANT]);
+    CHECK(cam_awb_converged(&a), "连续多拍落在死区内应当报收敛");
+    /* 直方图必须与调用次数对得上（每拍恰好记一次）。 */
+    uint32_t total = 0;
+    for (int i = 0; i < CAM_AWB_REASON_COUNT; i++)
+        total += a.reasons[i];
+    CHECK(total == 200, "200 拍只记了 %u 次结论", total);
+    /* 三条软件路专属的防护在硬件路上**恒为 0**（现场靠这个确认走的是哪条路）。 */
+    CHECK(a.reasons[CAM_AWB_SKIP_DARK] == 0 && a.reasons[CAM_AWB_SKIP_BRIGHT] == 0 &&
+          a.reasons[CAM_AWB_SKIP_CAST] == 0,
+          "硬件路上不该出现暗场/过亮/色偏过大");
+    /* 硬件路不做频率限制（周期由 oneshot 的触发节奏决定）。 */
+    CHECK(a.reasons[CAM_AWB_SKIP_PERIOD] == 0,
+          "硬件路不该自己分频，否则实际周期会变成 INTERVAL² 拍");
+
+    /* ── ② 从**高于**不动点的初值出发，必须往下走 ── */
+    cam_awb_state_t hi;
+    cam_awb_init(&hi);
+    hi.gain_r_milli = CAM_AWB_GAIN_MAX_MILLI;
+    hi.gain_b_milli = CAM_AWB_GAIN_MAX_MILLI;
+    for (int i = 0; i < 200; i++)
+        cam_awb_step_hw(&hi, &st, true);
+    CHECK(diff_pct_ref(fix_r, hi.gain_r_milli) <= CAM_AWB_DEADBAND_PCT &&
+          diff_pct_ref(fix_b, hi.gain_b_milli) <= CAM_AWB_DEADBAND_PCT,
+          "从上限出发没能收敛回不动点（R%u B%u）—— 误用旧公式时它会一直贴着上限",
+          hi.gain_r_milli, hi.gain_b_milli);
+
+    /* ── ③ 从下限出发，同样收敛到同一个地方 ── */
+    cam_awb_state_t lo;
+    cam_awb_init(&lo);
+    lo.gain_r_milli = CAM_AWB_GAIN_MIN_MILLI;
+    lo.gain_b_milli = CAM_AWB_GAIN_MIN_MILLI;
+    for (int i = 0; i < 200; i++)
+        cam_awb_step_hw(&lo, &st, true);
+    CHECK(diff_pct_ref(fix_r, lo.gain_r_milli) <= CAM_AWB_DEADBAND_PCT &&
+          diff_pct_ref(fix_b, lo.gain_b_milli) <= CAM_AWB_DEADBAND_PCT,
+          "从下限出发没能收敛到不动点（R%u B%u）", lo.gain_r_milli, lo.gain_b_milli);
+
+    /* ── ④ 幂等：预置成正确值，第一拍就该说「死区内」── */
+    cam_awb_state_t id;
+    cam_awb_init(&id);
+    id.gain_r_milli = fix_r;
+    id.gain_b_milli = fix_b;
+    CHECK(cam_awb_step_hw(&id, &st, true) == CAM_AWB_SKIP_BAND,
+          "预置成不动点之后第一拍就该落在死区内");
+    CHECK(id.updates == 0, "幂等的一拍不该下发，实得 %u 次", id.updates);
+
+    /* ── ⑤ 单步限幅：从下限走到上限要够多个周期，且全程单调 ── */
+    cam_awb_state_t ramp;
+    cam_awb_init(&ramp);
+    ramp.gain_r_milli = CAM_AWB_GAIN_MIN_MILLI;
+    ramp.gain_b_milli = CAM_AWB_GAIN_MIN_MILLI;
+    /* bg 取盒子下界 ⇒ 目标 kb = 3445 = 增益上限，这是最长的一段路。 */
+    const cam_awb_hw_stat_t far = mk_stat(200000, rg, CAM_AWB_BG_MIN_Q4);
+    int steps = 0;
+    uint32_t last_b = ramp.gain_b_milli;
+    for (int i = 0; i < 200; i++) {
+        if (cam_awb_step_hw(&ramp, &far, true) == CAM_AWB_APPLIED)
+            steps++;
+        CHECK(ramp.gain_b_milli >= last_b, "B 增益在爬升途中回头了（%u → %u）",
+              last_b, ramp.gain_b_milli);
+        /* **单步限幅本身**：一拍最多涨 CAM_AWB_STEP_MAX_PCT。这条比「一共走了
+         * 几步」更直接 —— 后者还依赖增益上限取多少（源=0 时是 3000）。 */
+        CHECK(ramp.gain_b_milli <= last_b + last_b * CAM_AWB_STEP_MAX_PCT / 100,
+              "一拍从 %u 跳到 %u，超过了 %d%% 的单步限幅",
+              last_b, ramp.gain_b_milli, CAM_AWB_STEP_MAX_PCT);
+        last_b = ramp.gain_b_milli;
+        if (diff_pct_ref(CAM_AWB_GAIN_MAX_MILLI, ramp.gain_b_milli)
+                <= CAM_AWB_DEADBAND_PCT)
+            break;
+    }
+    /* 1.000 → 3.000 至少 5 个周期（3.445 时 6 个）。数值随增益上限走，
+     * 所以这里只钉住「不是一步到位」这个下界。 */
+    CHECK(steps >= 5, "1.000 爬到上限只用了 %d 个周期，单步限幅没起作用", steps);
+}
+
+static void test_awb_hw_guards(void)
+{
+    const cam_awb_hw_stat_t ok = mk_stat(200000, 5000, 4000);
+    cam_awb_state_t a;
+
+    /* 空指针：不崩、不改状态。 */
+    CHECK(cam_awb_step_hw(NULL, &ok, true) == CAM_AWB_SKIP_PERIOD, "空状态机必须被挡住");
+    cam_awb_init(&a);
+    CHECK(cam_awb_step_hw(&a, NULL, true) == CAM_AWB_SKIP_PERIOD, "空采样必须被挡住");
+
+    /* AE 未收敛：整拍不动，而且**不留下任何副作用** ——
+     * 下一拍 AE 一稳就该立刻能动（硬件路没有 settle 可消耗）。 */
+    cam_awb_init(&a);
+    CHECK(cam_awb_step_hw(&a, &ok, false) == CAM_AWB_SKIP_AE, "AE 未稳时应当整拍不动");
+    CHECK(a.gain_r_milli == CAM_CCM_GAIN_R_MILLI && a.gain_b_milli == CAM_CCM_GAIN_B_MILLI,
+          "AE 未稳的一拍不该改增益");
+    CHECK(cam_awb_step_hw(&a, &ok, true) == CAM_AWB_APPLIED,
+          "AE 一稳就该能动 —— 硬件路不该有被 SKIP_AE 消耗掉的周期计数");
+
+    /* 白点门限的**边界必须精确**：1199 挡下、1200 放行。 */
+    cam_awb_init(&a);
+    const cam_awb_hw_stat_t few = mk_stat(CAM_AWB_MIN_COUNTED - 1, 5000, 4000);
+    CHECK(cam_awb_step_hw(&a, &few, true) == CAM_AWB_SKIP_COUNT,
+          "counted = %d 应当被挡住", CAM_AWB_MIN_COUNTED - 1);
+    cam_awb_init(&a);
+    const cam_awb_hw_stat_t just = mk_stat(CAM_AWB_MIN_COUNTED, 5000, 4000);
+    CHECK(cam_awb_step_hw(&a, &just, true) != CAM_AWB_SKIP_COUNT,
+          "counted = %d 应当放行（边界是 <，不是 <=）", CAM_AWB_MIN_COUNTED);
+
+    /* Σg = 0：走「白点太少」，绝不能除零。 */
+    cam_awb_init(&a);
+    cam_awb_hw_stat_t no_g = ok;
+    no_g.sum_g = 0;
+    CHECK(cam_awb_step_hw(&a, &no_g, true) == CAM_AWB_SKIP_COUNT, "Σg = 0 必须被挡住");
+
+    /* 重心越界的四种组合，全部整拍不动。
+     * ⓘ 硬件的逐像素筛选之后重心理论上不会跑出盒子，但**统计侧基座扣除会把
+     *   重心往外推**（那正是它的用途），所以这道判据不是形式主义。 */
+    const struct { uint32_t rg, bg; const char *what; } bad[] = {
+        { CAM_AWB_RG_MIN_Q4 - 1, 4000, "rg 低于下界" },
+        { CAM_AWB_RG_MAX_Q4 + 1, 4000, "rg 高于上界" },
+        { 5000, CAM_AWB_BG_MIN_Q4 - 1, "bg 低于下界" },
+        { 5000, CAM_AWB_BG_MAX_Q4 + 1, "bg 高于上界" },
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        cam_awb_init(&a);
+        const cam_awb_hw_stat_t s2 = mk_stat(200000, bad[i].rg, bad[i].bg);
+        CHECK(cam_awb_step_hw(&a, &s2, true) == CAM_AWB_SKIP_RANGE,
+              "%s 应当整拍不动", bad[i].what);
+        CHECK(a.gain_r_milli == CAM_CCM_GAIN_R_MILLI &&
+              a.gain_b_milli == CAM_CCM_GAIN_B_MILLI, "%s 不该改增益", bad[i].what);
+    }
+    /* 四个角**恰好**在盒子上：必须放行（边界是闭区间）。 */
+    const struct { uint32_t rg, bg; } corner[] = {
+        { CAM_AWB_RG_MIN_Q4, CAM_AWB_BG_MIN_Q4 }, { CAM_AWB_RG_MIN_Q4, CAM_AWB_BG_MAX_Q4 },
+        { CAM_AWB_RG_MAX_Q4, CAM_AWB_BG_MIN_Q4 }, { CAM_AWB_RG_MAX_Q4, CAM_AWB_BG_MAX_Q4 },
+    };
+    for (size_t i = 0; i < sizeof corner / sizeof corner[0]; i++) {
+        cam_awb_init(&a);
+        const cam_awb_hw_stat_t s2 = mk_stat(200000, corner[i].rg, corner[i].bg);
+        CHECK(cam_awb_step_hw(&a, &s2, true) != CAM_AWB_SKIP_RANGE,
+              "盒子的角 (%u, %u) 应当放行", corner[i].rg, corner[i].bg);
+    }
+
+    /* 满量程不溢出：三通道都顶到 255 ⇒ rg = bg = 1.0，落在盒子外 ⇒ SKIP_RANGE
+     * （而不是一个随机数带来的随机结论）。 */
+    cam_awb_init(&a);
+    const uint32_t full = 1280u * 720u;
+    const cam_awb_hw_stat_t sat = { .counted = full, .sum_r = full * 255u,
+                                    .sum_g = full * 255u, .sum_b = full * 255u };
+    CHECK(cam_awb_step_hw(&a, &sat, true) == CAM_AWB_SKIP_RANGE,
+          "满量程（rg = bg = 1.0）落在官方盒子外，应当整拍不动");
+}
+
 /* ══ 可调参数自身的合法性 ════════════════════════════════════════════ */
 
 static void test_tunables(void)
@@ -779,6 +1002,32 @@ static void test_tunables(void)
      */
     CHECK(CAM_AWB_INTERVAL_TICKS >= CAM_AE_INTERVAL_TICKS * 2,
           "AWB 的更新周期至少要是 AE 的两倍，否则两个环会互相追着跑");
+
+    /* ── 硬件白点那条路的一组 ── */
+    CHECK(CAM_AWB_RG_MIN_Q4 < CAM_AWB_RG_MAX_Q4 && CAM_AWB_BG_MIN_Q4 < CAM_AWB_BG_MAX_Q4,
+          "白点盒子必须是个非空区间");
+    /*
+     * **盒子推出来的增益必须整个装进限幅区间。** 不然会出现最难查的一种情况：
+     * 建议值通过了 SKIP_RANGE，却在 awb_next() 里被钳到边界 ⇒ 不动点跑掉 ⇒
+     * 现场看到的是「收敛了，但收敛到一个不对的值」。
+     * 上限那条同时也是 CAM_AWB_GAIN_MAX_MILLI 取 3445 的**全部理由**。
+     * ⓘ 只在 CAM_AWB_SOURCE = 1 时成立：源=0 的回退路径把上限留在已实机验证的
+     *   3000，而那条路根本不用这个盒子（理由见 CAM_AWB_GAIN_MAX_MILLI）。
+     */
+#if CAM_AWB_SOURCE
+    CHECK(10000000u / CAM_AWB_BG_MIN_Q4 <= CAM_AWB_GAIN_MAX_MILLI,
+          "官方白点框的 kb 上限 %u 超过了增益上限 %u",
+          10000000u / CAM_AWB_BG_MIN_Q4, (unsigned)CAM_AWB_GAIN_MAX_MILLI);
+    CHECK(10000000u / CAM_AWB_RG_MAX_Q4 >= CAM_AWB_GAIN_MIN_MILLI,
+          "官方白点框的 kr 下限 %u 低于增益下限 %u",
+          10000000u / CAM_AWB_RG_MAX_Q4, (unsigned)CAM_AWB_GAIN_MIN_MILLI);
+#endif
+    CHECK(CAM_AWB_MIN_COUNTED > 0 && CAM_AWB_MIN_COUNTED < 1280u * 720u,
+          "白点门限必须落在 (0, 全画面像素数) 内");
+    /* oneshot 的等待不能长到吃掉帧泵那 100 ms 的节拍。 */
+    CHECK(CAM_AWB_ONESHOT_MS > 0 && CAM_AWB_ONESHOT_MS < 100,
+          "oneshot 超时必须为正、且短于帧泵 100 ms 的节拍（传 0 会被驱动当成"
+          "「触发后立刻返回」，统计还没做完就被关掉）");
 }
 
 int main(void)
@@ -792,6 +1041,8 @@ int main(void)
     test_awb_guards();
     test_awb_closed_loop();
     test_awb_ratios();
+    test_awb_hw_fixed_point();
+    test_awb_hw_guards();
     test_tunables();
 
     printf("OK (%d cases)\n", cases);

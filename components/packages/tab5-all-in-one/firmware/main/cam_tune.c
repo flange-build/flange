@@ -331,11 +331,77 @@ bool cam_awb_ratios(const cam_awb_hw_stat_t *s, uint32_t *rg_q4, uint32_t *bg_q4
     return true;
 }
 
+/*
+ * ⚠️⚠️ 读这个函数之前先读 cam_tune.h 的 CAM_AWB_SOURCE。
+ *
+ * 一句话：**这里面不许出现 st->gain_r_milli / st->gain_b_milli 参与建议值的
+ * 计算。** 它们只允许出现在三个地方 —— 死区比较、awb_next() 的起点、以及最后
+ * 的赋值。任何形如 `sug = st->gain_* × ...` 的写法都是 CAM_AWB_SOURCE 那段说的
+ * 那个单调发散错误。签名里拿不到外部传进来的 cur 是第一重防呆，这条注释与
+ * 宿主机的不动点用例是第二、第三重。
+ */
+cam_awb_reason_t cam_awb_step_hw(cam_awb_state_t *st, const cam_awb_hw_stat_t *s,
+                                 bool ae_converged)
+{
+    if (!st || !s)
+        return CAM_AWB_SKIP_PERIOD;
+
+    /* ── 场景可信度 ── 与旧函数同一处置：纯算术、无副作用、不改任何状态。 */
+    if (!ae_converged)
+        return awb_done(st, CAM_AWB_SKIP_AE);
+
+    /* 白点太少 ⇒ 这一拍的估计不可信。**这一条替代了灰世界那条「色偏过大」**：
+     * 镜头怼着红墙时硬件筛不出中性像素，counted 会掉到几百，正是这里挡住。 */
+    if (s->counted < CAM_AWB_MIN_COUNTED)
+        return awb_done(st, CAM_AWB_SKIP_COUNT);
+
+    uint32_t rg_q4 = 0, bg_q4 = 0;
+    /* 算不出来（Σg 被基座扣成 0，或 counted 为 0）也归到「白点太少」：
+     * 两者是同一件事 —— 没有足够可信的白点像素。 */
+    if (!cam_awb_ratios(s, &rg_q4, &bg_q4))
+        return awb_done(st, CAM_AWB_SKIP_COUNT);
+
+    /* 重心必须落在官方白点轨迹的包围盒里，否则整拍不动（不是钳到边界上采纳）。 */
+    if (rg_q4 < CAM_AWB_RG_MIN_Q4 || rg_q4 > CAM_AWB_RG_MAX_Q4 ||
+        bg_q4 < CAM_AWB_BG_MIN_Q4 || bg_q4 > CAM_AWB_BG_MAX_Q4)
+        return awb_done(st, CAM_AWB_SKIP_RANGE);
+
+    /*
+     * ══ 绝对增益。**没有 cur**，看签名就知道乘不进去。══
+     * sug = (1/rg) × 1000 = 10^7 / rg_q4。rg_q4 已由上面的盒子保证 ≥ 3801，
+     * 不会除零、也不会溢出（最大 10^7/2903 = 3445）。
+     */
+    const uint32_t sug_r = 10000000u / rg_q4;
+    const uint32_t sug_b = 10000000u / bg_q4;
+
+    /* ── 死区 ── 两个通道都差得不多才算「已经平衡」。 */
+    if (diff_pct(sug_r, st->gain_r_milli) <= CAM_AWB_DEADBAND_PCT &&
+        diff_pct(sug_b, st->gain_b_milli) <= CAM_AWB_DEADBAND_PCT) {
+        if (st->in_band < CAM_AWB_CONVERGE_TICKS)
+            st->in_band++;
+        return awb_done(st, CAM_AWB_SKIP_BAND);
+    }
+
+    /* 阻尼 → 单步限幅 → 范围钳制，与软件路**共用同一个** awb_next()：
+     * 这一段管的是「怎么走过去」，与「目标是多少」正交，换估计器不该动它。 */
+    const uint32_t next_r = awb_next(st->gain_r_milli, sug_r);
+    const uint32_t next_b = awb_next(st->gain_b_milli, sug_b);
+    if (next_r == st->gain_r_milli && next_b == st->gain_b_milli)
+        return awb_done(st, CAM_AWB_SKIP_QUANT);
+
+    st->gain_r_milli = next_r;
+    st->gain_b_milli = next_b;
+    st->in_band = 0;
+    st->updates++;
+    return awb_done(st, CAM_AWB_APPLIED);
+}
+
 const char *cam_awb_reason_str(cam_awb_reason_t r)
 {
     switch (r) {
     case CAM_AWB_APPLIED:      return "已更新";
     case CAM_AWB_SKIP_AE:      return "AE未稳";
+    case CAM_AWB_SKIP_COUNT:   return "白点太少";
     case CAM_AWB_SKIP_DARK:    return "暗场";
     case CAM_AWB_SKIP_BRIGHT:  return "过亮";
     case CAM_AWB_SKIP_CAST:    return "色偏过大";
