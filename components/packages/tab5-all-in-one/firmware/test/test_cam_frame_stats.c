@@ -262,7 +262,68 @@ int main(void)
             cases++;
         }
 
-        /* ── ⑥ 参数非法时 lin_* 也必须清零（samples == 0 仍是唯一哨兵）── */
+        /* ── ⑥ **线性域逐通道最小值**（黑电平实测的量具，T7）──
+         *
+         * 这四个数是 T7 判「基座是 0 还是 16」的**唯一**依据，所以三条性质
+         * 都得钉死：域对不对、通道分不分得开、亮度是不是单独求的。
+         *
+         * ⑥a 纯色画面：min 必然等于 mean（每个采样点都一样）。 */
+        {
+            memset(lut, 0, sizeof lut);
+            for (int i = 0; i < 256; i++) lut[i] = (uint8_t)i;   /* 恒等 */
+            fill(0x0000);
+            cam_frame_stats_rgb565_lut(buf, W, H, 1, lut, &s);
+            assert(s.lin_lum_min == 0 && s.lin_r_min == 0
+                   && s.lin_g_min == 0 && s.lin_b_min == 0);
+            cases++;
+            fill(0xFFFF);
+            cam_frame_stats_rgb565_lut(buf, W, H, 1, lut, &s);
+            assert(s.lin_lum_min == 255 && s.lin_r_min == 255
+                   && s.lin_g_min == 255 && s.lin_b_min == 255);
+            cases++;
+        }
+
+        /* ⑥b **域**：逆表必须作用在 min 上，否则「16 还是 64」分不出来。
+         * 造一张全场 gamma 值 64 的画面，配 γ=0.5 那档的逆表形状（lut[g] = g²/255）：
+         * 线性 min 应当是 16，而画面域的 lum_min 仍然是 64。
+         * 这正是 T7 的核心判据 —— 直接拿 lum_min 去比官方的 acc.blc = 16 会差四倍。 */
+        {
+            for (int i = 0; i < 256; i++) lut[i] = (uint8_t)(i * i / 255);
+            fill((uint16_t)((8u << 11) | (16u << 5) | 8u));   /* r=g=b=66 左右 */
+            cam_frame_stats_rgb565_lut(buf, W, H, 1, lut, &s);
+            const uint8_t g8 = s.r_mean;                       /* 画面域的通道值 */
+            assert(s.lin_r_min == (uint8_t)(g8 * g8 / 255));
+            assert(s.lin_r_min < g8);                          /* 逆表确实把它压回去了 */
+            assert(s.lum_min == s.lum_mean);                   /* 画面域那份没被动过 */
+            cases++;
+        }
+
+        /* ⑥c **三个通道各自记**：基座有没有色偏正是要判的东西。
+         * 造一幅 R 最暗处 = 0、G 最暗处 = 满、B 最暗处居中的画面。 */
+        {
+            for (int i = 0; i < 256; i++) lut[i] = (uint8_t)i;   /* 恒等，专测通道分离 */
+            fill((uint16_t)((31u << 11) | (63u << 5) | 31u));    /* 全白 */
+            buf[0] = (uint16_t)((0u << 11) | (63u << 5) | 31u);  /* 只有 R 低 */
+            buf[1] = (uint16_t)((31u << 11) | (63u << 5) | 16u); /* 只有 B 低 */
+            cam_frame_stats_rgb565_lut(buf, W, H, 1, lut, &s);
+            assert(s.lin_r_min == 0);
+            assert(s.lin_g_min == 255);
+            assert(s.lin_b_min == (uint8_t)((16u << 3) | (16u >> 2)));   /* = 132 */
+            cases++;
+
+            /* ⑥d **亮度单独求**：min 与线性组合不可交换。三个通道各自的最暗
+             * 分别出现在 buf[0] 与 buf[1] 两个**不同**的像素上 ⇒ 拿三个 min
+             * 去组合会得到一个画面里并不存在、且系统性偏小的亮度。 */
+            const uint32_t bogus = (77u * 0 + 150u * 255 + 29u * 132u) >> 8;
+            const uint32_t real0 = (77u * 0 + 150u * 255 + 29u * 255u) >> 8;
+            const uint32_t real1 = (77u * 255 + 150u * 255 + 29u * 132u) >> 8;
+            const uint32_t real  = real0 < real1 ? real0 : real1;
+            assert(bogus != real);                 /* 用例本身有区分力 */
+            assert(s.lin_lum_min == (uint8_t)real);
+            cases++;
+        }
+
+        /* ── ⑦ 参数非法时 lin_* 也必须清零（samples == 0 仍是唯一哨兵）── */
         {
             const cam_frame_stats_t zero = {0};
             cam_frame_stats_rgb565_lut(NULL, W, H, 1, lut, &s);

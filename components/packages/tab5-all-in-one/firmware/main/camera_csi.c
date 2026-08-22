@@ -69,6 +69,14 @@ static bool    s_detected;                  /* sc202cs_detect() 是否返回了�
  * 探测失败时保持 NULL，且摄像头电源已被断开。 */
 static esp_cam_sensor_device_t *s_sensor;
 
+/*
+ * SCCB io 句柄。**提成文件级静态是 T7 唯一的结构性改动**：黑电平那件事要在
+ * set_format 之后直接读/写传感器的 0x3902，而 esp_cam_sensor 的公开接口里
+ * 没有「透传一次寄存器访问」的口子，只能自己留着这个句柄。
+ * 探测失败时不删它（纯软件对象，十几字节），留着让自检行还有东西可查。
+ */
+static esp_sccb_io_handle_t s_sccb;
+
 esp_err_t camera_sensor_probe(void)
 {
     /* 上电 → 等稳。esp-bsp 的 bsp_camera_start() 在 feature_enable 之后
@@ -97,8 +105,7 @@ esp_err_t camera_sensor_probe(void)
         .addr_bits_width = 16,
         .val_bits_width  = 8,
     };
-    esp_sccb_io_handle_t sccb = NULL;
-    s_st_sccb = sccb_new_i2c_io(board_i2c_bus(), &sccb_cfg, &sccb);
+    s_st_sccb = sccb_new_i2c_io(board_i2c_bus(), &sccb_cfg, &s_sccb);
     if (s_st_sccb != ESP_OK) {
         board_camera_enable(false);
         ESP_LOGE(TAG, "SCCB 挂到内部 I2C 失败(%s)", esp_err_to_name(s_st_sccb));
@@ -119,14 +126,14 @@ esp_err_t camera_sensor_probe(void)
      *   返回 ESP_OK 但 PID != 0xeb52 → 总线通、芯片应答，只是它不是 SC202CS。
      */
     uint8_t pid_h = 0, pid_l = 0;
-    s_st_pid_rd = esp_sccb_transmit_receive_reg_a16v8(sccb, SC202CS_REG_PID_H, &pid_h);
+    s_st_pid_rd = esp_sccb_transmit_receive_reg_a16v8(s_sccb, SC202CS_REG_PID_H, &pid_h);
     if (s_st_pid_rd == ESP_OK)
-        s_st_pid_rd = esp_sccb_transmit_receive_reg_a16v8(sccb, SC202CS_REG_PID_L, &pid_l);
+        s_st_pid_rd = esp_sccb_transmit_receive_reg_a16v8(s_sccb, SC202CS_REG_PID_L, &pid_l);
     if (s_st_pid_rd == ESP_OK)
         s_pid = (int32_t)(((uint16_t)pid_h << 8) | pid_l);
 
     esp_cam_sensor_config_t cfg = {
-        .sccb_handle  = sccb,
+        .sccb_handle  = s_sccb,
         .reset_pin    = -1,      /* Tab5 没有 RESET 引脚（esp-bsp: BSP_CAMERA_RST = NC） */
         .pwdn_pin     = -1,
         .xclk_pin     = -1,      /* 24 MHz 由板上晶振提供（BSP_CAMERA_GPIO_XCLK = NC） */
@@ -272,6 +279,15 @@ static int32_t s_st_fmt   = STEP_NOT_RUN;   /* esp_cam_sensor_set_format() */
 static int32_t s_st_start = STEP_NOT_RUN;   /* enable/start/stream-on 整条启动链 */
 static int32_t s_st_ccm   = STEP_NOT_RUN;   /* CCM 配置 + 使能（白平衡） */
 static int32_t s_st_ae    = STEP_NOT_RUN;   /* AE 可调范围查询 */
+
+/* ══ 黑电平（T7）══ 三个槽各表达一件事，不共用哨兵：
+ *   s_st_blc_rd  读 0x3902 的返回值（**开关关着也读**，零风险的那一半测量）
+ *   s_blc_before 读回的值，−1 = 一个字节都没读到（与读回 0x00 严格区分）
+ *   s_st_blc_wr  写 0x3902 的返回值，STEP_NOT_RUN = 开关关着、压根没写 */
+static int32_t s_st_blc_rd  = STEP_NOT_RUN;
+static int32_t s_blc_before = -1;
+static int32_t s_st_blc_wr  = STEP_NOT_RUN;
+static int32_t s_blc_after  = -1;   /* 写完再读回来的值，−1 = 没读 */
 
 /* ══ 画质：白平衡(AWB→CCM) 与自动曝光(AE) ══════════════════════════
  * 控制律与全部可调参数在 cam_tune.h；本文件只做两件 IDF 侧的事：
@@ -962,6 +978,43 @@ esp_err_t camera_csi_init(void)
     ESP_RETURN_ON_ERROR(s_st_fmt, TAG, "传感器 set_format");
 
     /*
+     * ══ 黑电平：传感器自带的 BLC（T7）══
+     *
+     * ⚠️ **必须排在 set_format 之后**：set_format 会把整张模式寄存器表重写一遍
+     *   （sc202cs_set_format），写早了会被它覆盖掉，而现象是「写了但没效果」——
+     *   最容易被误判成「寄存器地址理解错了」的一种失败。
+     *
+     * 先**无条件读一次**。这一半零风险、开关关着也做，而它单独就能回答
+     * 「传感器的 BLC 上电默认到底是开还是关」：
+     *   读回 0xc0 ⇒ 本来就开着 ⇒ 基座应当已经 ≈ 0，什么都不用做；
+     *   读回 0x80 ⇒ 关着       ⇒ 预期基座 ≈ 16，与官方 acc.blc 吻合。
+     * 读失败不拦启动：它只是个观测量。
+     */
+    uint8_t blc = 0;
+    s_st_blc_rd = esp_sccb_transmit_receive_reg_a16v8(s_sccb, CAM_SENSOR_BLC_REG, &blc);
+    if (s_st_blc_rd == ESP_OK)
+        s_blc_before = blc;
+
+#if CAM_SENSOR_BLC_ENABLE
+    /*
+     * 写。**默认是关的**，完整的取舍、测法与判读表见 cam_tune.h 的
+     * CAM_SENSOR_BLC_ENABLE —— 一句话版本：那行 0xc0 来自厂商寄存器表里被注释掉
+     * 的一行、不是数据手册，所以第一版必须先量出基座本来是多少。
+     * 失败只 warning 不拦启动：写不进去等于什么都没做，画面保留基座。
+     */
+    s_st_blc_wr = esp_sccb_transmit_reg_a16v8(s_sccb, CAM_SENSOR_BLC_REG, CAM_SENSOR_BLC_VAL);
+    if (s_st_blc_wr == ESP_OK) {
+        /* 写完再读回来。SCCB 写返回 ESP_OK 只说明 I2C 层收到了 ACK，
+         * 不说明这个寄存器位真的可写 —— 只读位/保留位会安静地把写吃掉。 */
+        if (esp_sccb_transmit_receive_reg_a16v8(s_sccb, CAM_SENSOR_BLC_REG, &blc) == ESP_OK)
+            s_blc_after = blc;
+    } else {
+        ESP_LOGW(TAG, "传感器 BLC 没写进去(%s)，黑位保留基座",
+                 esp_err_to_name((esp_err_t)s_st_blc_wr));
+    }
+#endif
+
+    /*
      * ══ 自动曝光的可调范围 ══ **一律运行时查，不写死。**
      *
      * 曝光上限跟着模式表的 VTS 走，增益表的长度与内容跟着 menuconfig 的
@@ -1572,6 +1625,43 @@ static void camera_quality_report(void)
              s_ccm_b / 1000, s_ccm_b % 1000,
              s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
              sug_r / 1000, sug_r % 1000, sug_b / 1000, sug_b % 1000);
+
+    /*
+     * ══ 黑位（T7）══ **T10（官方 CCM）唯一的判定依据。**
+     *
+     * 打两组东西，各自独立可读：
+     *   ① 线性域四个最暗值 —— 基座本身。为什么必须是线性域（gamma 在暗部扩张
+     *      4 倍，画面域的 64 就是线性域的 16）见 cam_frame_stats.h。
+     *   ② 传感器 0x3902 的读回值与写入状态 —— 「BLC 有没有在工作」。
+     *
+     * ⚠️ **只有把镜头完全盖住、并等 AE 顶到上限之后，①才是黑电平**；
+     *   平时它就是画面里最暗的那个点，与黑电平无关。完整测法与判读表见
+     *   cam_tune.h 的 CAM_SENSOR_BLC_ENABLE。
+     *
+     * 判读（盖住镜头之后）：
+     *   r/g/b 都 <= 3          基座 ≈ 0 ⇒ T10 放行，CAM_CCM_STRENGTH_MAX 用满
+     *   10~20 且三者相近        基座 ≈ 16（= 官方 acc.blc）⇒ 把 CAM_SENSOR_BLC_ENABLE
+     *                          翻成 1 重烧，再测一次；仍然 ≈16 则 T10 降级放行
+     *                          （统计侧减法 + CCM 强度压到 192）
+     *   彼此差 > 5             基座自带色偏或被 LSC 放大 ⇒ 先关 LSC 隔离
+     *   > 30                   漏光/没盖严，重新盖，别急着写寄存器
+     *   0x3902 写前=0xc0       传感器 BLC 上电就开着 ⇒ 基座本该 ≈ 0
+     *   0x3902 写前=0x80       关着 ⇒ 预期基座 ≈ 16
+     *   写后 != 写入值          这一位不可写（只读/保留）⇒ 这条路走不通，开关改回 0
+     */
+    char blc_b[16] = "未读到", blc_a[16] = "未写";
+    if (s_blc_before >= 0)
+        snprintf(blc_b, sizeof blc_b, "0x%02" PRIx32, (uint32_t)s_blc_before);
+    if (s_blc_after >= 0)
+        snprintf(blc_a, sizeof blc_a, "0x%02" PRIx32, (uint32_t)s_blc_after);
+    ESP_LOGI(TAG, "[自检] 黑位 线性最暗 lum=%u r=%u g=%u b=%u（官方 acc.blc=16；"
+                  "**盖住镜头 + AE 顶格**时才是黑电平）| 传感器BLC=%s "
+                  "0x%04x 读=%s 写前=%s 写=%s 写后=%s",
+             s_last_stats.lin_lum_min, s_last_stats.lin_r_min,
+             s_last_stats.lin_g_min, s_last_stats.lin_b_min,
+             CAM_SENSOR_BLC_ENABLE ? "开(写 0xc0)" : "关(只读不写)",
+             CAM_SENSOR_BLC_REG, step_str(s_st_blc_rd), blc_b,
+             step_str(s_st_blc_wr), blc_a);
 
 #if CAM_AWB_ENABLE
     /*
