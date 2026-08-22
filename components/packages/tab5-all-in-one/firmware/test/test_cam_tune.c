@@ -174,15 +174,17 @@ static void test_step_basics(void)
     CHECK(cam_ae_converged(&st), "连续落在死区内却没报收敛");
     CHECK(st.updates == 0, "死区内不该有任何下发，实得 %u 次", st.updates);
 
-    /* 死区边界：±DEADBAND 之内不动，之外要动。 */
+    /* 死区边界：[LOW, HIGH] 闭区间之内不动，之外要动。
+     * ⚠️ 用 LOW/HIGH 而不是「目标 ± 死区」：官方死区是**非对称**的（−6/+2），
+     *    写成对称式的话 CAM_AE_SOURCE = 1 下这四条会验一个不存在的边界。 */
     cam_ae_init(&st, &lim, 988, 0);
-    CHECK(!tick_period(&st, CAM_AE_TARGET + CAM_AE_DEADBAND), "死区上边界不该动");
+    CHECK(!tick_period(&st, CAM_AE_TARGET_HIGH), "死区上边界不该动");
     cam_ae_init(&st, &lim, 988, 0);
-    CHECK(!tick_period(&st, CAM_AE_TARGET - CAM_AE_DEADBAND), "死区下边界不该动");
+    CHECK(!tick_period(&st, CAM_AE_TARGET_LOW), "死区下边界不该动");
     cam_ae_init(&st, &lim, 988, 0);
-    CHECK(tick_period(&st, CAM_AE_TARGET + CAM_AE_DEADBAND + 1), "越过死区上边界应当动");
+    CHECK(tick_period(&st, CAM_AE_TARGET_HIGH + 1), "越过死区上边界应当动");
     cam_ae_init(&st, &lim, 988, 0);
-    CHECK(tick_period(&st, CAM_AE_TARGET - CAM_AE_DEADBAND - 1), "越过死区下边界应当动");
+    CHECK(tick_period(&st, CAM_AE_TARGET_LOW - 1), "越过死区下边界应当动");
 
     /* ── 方向：暗了加曝光，亮了减曝光 ── */
     cam_ae_init(&st, &lim, 988, 0);
@@ -302,11 +304,9 @@ static void run_loop(uint32_t scene, int ticks, bool expect_in_band)
 
     /* 稳态判据 2：亮度真的落进了死区（能达到目标的场景才要求）。 */
     if (expect_in_band) {
-        const int diff = (int)mean - CAM_AE_TARGET;
-        CHECK(diff >= -CAM_AE_DEADBAND && diff <= CAM_AE_DEADBAND,
+        CHECK((int)mean >= CAM_AE_TARGET_LOW && (int)mean <= CAM_AE_TARGET_HIGH,
               "scene=%u：收敛后亮度 %u 没落进死区 [%d, %d]",
-              scene, mean, CAM_AE_TARGET - CAM_AE_DEADBAND,
-              CAM_AE_TARGET + CAM_AE_DEADBAND);
+              scene, mean, CAM_AE_TARGET_LOW, CAM_AE_TARGET_HIGH);
         CHECK(cam_ae_converged(&st), "scene=%u：亮度在死区内却没报收敛", scene);
     }
 }
@@ -586,9 +586,9 @@ static void run_joint_loop(const fake_scene_t *sc, int ticks)
           sc->illum, last_change, ticks);
 
     /* 判据 2：亮度落进 AE 的死区。 */
-    const int dl = (int)lum - CAM_AE_TARGET;
-    CHECK(dl >= -CAM_AE_DEADBAND && dl <= CAM_AE_DEADBAND,
-          "illum=%u：收敛后亮度 %u 没落进 AE 死区", sc->illum, lum);
+    CHECK((int)lum >= CAM_AE_TARGET_LOW && (int)lum <= CAM_AE_TARGET_HIGH,
+          "illum=%u：收敛后亮度 %u 没落进 AE 死区 [%d, %d]",
+          sc->illum, lum, CAM_AE_TARGET_LOW, CAM_AE_TARGET_HIGH);
 
     /* 判据 3：三个通道均值真的拉平了 —— 容差 8%，由 AWB 死区(5%) 与
      * 通道均值本身的整数量化叠加而来。这一条才是「白平衡对了」。 */
@@ -658,8 +658,12 @@ static void test_tunables(void)
 {
     /* 这几条是「有人调参数时替他挡一下」，不是形式主义：
      * 目标 ± 死区必须留在 8 位量程内，否则死区判据在端点上永远成立/永远不成立。 */
-    CHECK(CAM_AE_TARGET > CAM_AE_DEADBAND && CAM_AE_TARGET + CAM_AE_DEADBAND < 255,
-          "目标亮度 ± 死区超出了 0..255");
+    CHECK(CAM_AE_TARGET_LOW > 0 && CAM_AE_TARGET_HIGH < 255,
+          "死区边界超出了 0..255，端点上的死区判据会永远成立或永远不成立");
+    /* 目标必须在死区之内 —— 官方的死区是非对称的（56/62/64），很容易在只改
+     * 其中一个数时把目标挪到区间外，那时 AE 会「一收敛就立刻又想动」。 */
+    CHECK(CAM_AE_TARGET_LOW <= CAM_AE_TARGET && CAM_AE_TARGET <= CAM_AE_TARGET_HIGH,
+          "目标亮度落在死区 [%d, %d] 之外", CAM_AE_TARGET_LOW, CAM_AE_TARGET_HIGH);
     CHECK(CAM_AE_DAMP_NUM > 0 && CAM_AE_DAMP_NUM <= CAM_AE_DAMP_DEN,
           "阻尼系数必须落在 (0, 1]，大于 1 会放大误差");
     CHECK(CAM_AE_STEP_MAX >= 2, "单步限幅小于 2 会让 AE 几乎动不了");

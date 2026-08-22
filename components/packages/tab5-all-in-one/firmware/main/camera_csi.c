@@ -293,6 +293,25 @@ static cam_awb_state_t s_awb;
 static int32_t         s_awb_last_err = ESP_OK;   /* 最近一次重配 CCM 的返回值 */
 #endif
 
+#if CAM_AE_SOURCE && !CAM_AE_STAT_ENABLE
+#error "CAM_AE_SOURCE=1（AE 吃硬件统计）依赖 CAM_AE_STAT_ENABLE=1；\
+两者不相容时若不在这里拦下，运行期表现是 AE 拿一份全 0 的统计把曝光推到顶。"
+#endif
+
+#if CAM_AE_SOURCE
+/*
+ * ⚠️ 目标与死区**必须**与官方标定表逐位相同 —— 换源之后它们才是同一个采样点上的量。
+ * cam_tune.h 里写的是字面量（那个文件是纯逻辑、不许依赖标定表），这三条断言
+ * 是唯一把两边钉在一起的东西：改一个不改另一个，编译期就断。
+ */
+_Static_assert(CAM_AE_TARGET      == CAM_CAL_AE_TARGET,
+               "CAM_AE_TARGET 与官方 agc.luma_adjust.target 不一致");
+_Static_assert(CAM_AE_TARGET_LOW  == CAM_CAL_AE_TARGET_LOW,
+               "CAM_AE_TARGET_LOW 与官方 agc.luma_adjust 的下边界不一致");
+_Static_assert(CAM_AE_TARGET_HIGH == CAM_CAL_AE_TARGET_HIGH,
+               "CAM_AE_TARGET_HIGH 与官方 agc.luma_adjust 的上边界不一致");
+#endif
+
 #if CAM_AE_STAT_ENABLE
 /* ══ 硬件 AE 5×5 分块统计 ══════════════════════════════════════════
  * 设计意图、ρ 的定义与「为什么先观测再切换」见 cam_tune.h 的 CAM_AE_STAT_ENABLE。 */
@@ -1149,19 +1168,33 @@ esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms)
     return ESP_OK;
 }
 
-/* AE 走一拍：算出新的曝光/增益并经 SCCB 下发。 */
+/* AE 走一拍：算出新的曝光/增益并经 SCCB 下发。
+ * **只换反馈量的来源，控制律（四道防振荡闸）一行不动**，见 cam_tune.h 的 CAM_AE_SOURCE。 */
 static void camera_ae_tick(const cam_frame_stats_t *st)
 {
+    (void)st;   /* CAM_AE_SOURCE = 1 时用不到软件统计 */
     if (!s_ae_ready)
         return;
 
+#if CAM_AE_SOURCE
+    /*
+     * 硬件 5×5 加权测光。官方权重表 + 过暗/过亮块 quorum 剔除，
+     * 归约逻辑在 cam_ae_weighted_mean()（纯逻辑，490 个宿主机用例守着）。
+     */
+    uint8_t blocks[25], lum = 0, nd = 0, nb = 0;
+    if (cam_ae_stat_snapshot(blocks, &lum, &nd, &nb) == 0)
+        return;   /* 统计块一帧都还没交付：这一拍不动，别拿全 0 去调曝光 */
+#else
     /*
      * ⚠️ 喂进去的是 **lin_lum_mean**（逆 gamma 还原过的线性亮度），不是 lum_mean。
      * CAM_AE_TARGET 是线性域的量：gamma 是逐通道的凹函数，把线性 62 抬到 126，
      * 拿 gamma 域的均值去比 62 会让 AE 以为已经过曝一倍、把曝光一路往下压。
      * gamma 关着时两者逐位相等 ⇒ 这一行在两种构建下都对。
      */
-    if (!cam_ae_step(&s_ae, st->lin_lum_mean, &s_ae_lim))
+    const uint8_t lum = st->lin_lum_mean;
+#endif
+
+    if (!cam_ae_step(&s_ae, lum, &s_ae_lim))
         return;   /* 没到更新周期 / 落在死区 / 已顶到限位：别去打扰 I2C 总线 */
 
     /*
@@ -1198,6 +1231,15 @@ static void camera_awb_tick(const cam_frame_stats_t *st)
      *    永远一步不走，而且现场只看到「AE未稳」这个自相矛盾的理由。
      */
     const bool ae_stable = !s_ae_ready || cam_ae_converged(&s_ae);
+
+    /*
+     * ⓘ **T6 换了 AE 的测量口径，对 AWB 的影响只有一处：这个 ae_stable 的时机。**
+     *   AWB 自己的输入（软件线性通道均值）与公式一个字都没动 ⇒ 行为等价。
+     *   现场判据：自检行 AWB 那排「未更新：」直方图的分布应与 T5 时同量级，
+     *   尤其 `AE未稳=` 不该暴涨。若它暴涨，说明官方那个非对称死区（−6/+2）
+     *   在本板上太窄、AE 报不出收敛 —— 那时先看 AE 是不是在死区两侧来回跨，
+     *   再决定是放宽 CAM_AE_TARGET_LOW/HIGH 还是退回 CAM_AE_SOURCE = 0。
+     */
 
     /*
      * ⚠️ 四个反馈量全部取**线性域**那一份。灰世界算的是通道**比值**，而 gamma 是
@@ -1444,8 +1486,13 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
  *   alt 0（不取流）下帧= 还在涨 → stop 路径没停统计，看 camera_csi_stop()。
  *
  * ⚠️ **ρ 只在 AE 已收敛时才有意义**。曝光正在大幅调整时两个口径采的是不同瞬间的
- *   画面，比值会抖。反复三次遮挡/复原后 ρ 应当回到同一个值（±0.03）——
- *   稳定下来的那个数就是 T6 的输入。
+ *   画面，比值会抖。反复三次遮挡/复原后 ρ 应当回到同一个值（±0.03）。
+ *
+ * ⓘ T6 之后 ρ 从「换目标的依据」变成了「推导的验算」：预测值 0.79 来自
+ *   1/(0.30·kr + 0.586 + 0.113·kb) = 1/1.271（kr/kb 就是 CCM 对角线上那两个数，
+ *   自检行「画质」那一格实时打着）。实测显著偏离 0.79 就说明这条推导错了 ——
+ *   最可能的原因是硬件采样点其实不在 CCM 上游，那会直接推翻 CAM_AE_SOURCE
+ *   那一整段论证，回来改它。
  */
 #if CAM_AE_STAT_ENABLE
 static void camera_ae_stat_report(void)
@@ -1468,10 +1515,11 @@ static void camera_ae_stat_report(void)
 
     ESP_LOGI(TAG, "[自检] AE统计=%s 运行=%s 帧=%" PRIu32 " | 硬件加权=%u"
                   "（暗块 %u/%d 亮块 %u/%d）软件线性=%" PRIu32
-                  " ρ=%" PRIu32 ".%03" PRIu32 "（=硬件/软件，T6 的输入）| 本阶段**不接管** AE",
+                  " ρ=%" PRIu32 ".%03" PRIu32 "（=硬件/软件，预测 0.79）| AE 源=%s",
              step_str(s_st_aestat), step_str(s_st_aerun), frames,
              hw, nd, CAM_CAL_AE_LOW_REGIONS, nb, CAM_CAL_AE_HIGH_REGIONS,
-             lin, rho / 1000, rho % 1000);
+             lin, rho / 1000, rho % 1000,
+             CAM_AE_SOURCE ? "本统计（已接管）" : "软件线性（本统计只观测）");
 
     /* 25 块原始值，按 5 行打。缓冲 5×(5×4+3)+1 = 116，开 160 留足余量：
      * -Wformat-truncation 按 %3u 的类型上界估算，开小了会被 -Werror 打回。 */
@@ -1577,12 +1625,20 @@ static void camera_quality_report(void)
      */
     const uint32_t gain_milli = (s_ae_ready && s_ae.gain_index < s_ae_lim.gain_count)
                                     ? s_ae_lim.gain_map[s_ae.gain_index] : 0;
-    ESP_LOGI(TAG, "[自检] AE=%s 曝光=%" PRIu32 "/%" PRIu32 " 增益=%u.%03u×(第 %" PRIu32 " 档)"
-                  " 曝光量=%" PRIu32 " | 亮度(线性) %u→目标 %d(±%d) %s 下发=%" PRIu32
+    /* 「亮度=」打的是 s_ae.last_mean —— **AE 这一拍真正吃进去的那个数**，
+     * 而不是重新算一遍。换源之后这一格与「源=」必须一起读：
+     *   源=硬件5×5  这个数来自 demosaic 后的官方加权测光（CCM/WB 上游）
+     *   源=软件线性  来自 ISP 输出的全帧抽样均值（CCM/WB 下游，逆 gamma 还原）
+     * 两者相差约 1/ρ ≈ 1.27×（推导见 cam_tune.h 的 CAM_AE_SOURCE），
+     * 把它们当同一个量比较是本阶段最容易犯的错。 */
+    ESP_LOGI(TAG, "[自检] AE=%s 源=%s 曝光=%" PRIu32 "/%" PRIu32 " 增益=%u.%03u×(第 %" PRIu32 " 档)"
+                  " 曝光量=%" PRIu32 " | 亮度 %u→目标 %d[%d,%d] %s 下发=%" PRIu32
                   " 最近=%s",
-             step_str(s_st_ae), s_ae.exposure, s_ae_lim.exp_max,
+             step_str(s_st_ae),
+             CAM_AE_SOURCE ? "硬件5×5(官方加权,demosaic后)" : "软件线性(全帧抽样,ISP输出)",
+             s_ae.exposure, s_ae_lim.exp_max,
              (unsigned)(gain_milli / 1000), (unsigned)(gain_milli % 1000), s_ae.gain_index,
-             s_ae.ev, s_ae.last_mean, CAM_AE_TARGET, CAM_AE_DEADBAND,
+             s_ae.ev, s_ae.last_mean, CAM_AE_TARGET, CAM_AE_TARGET_LOW, CAM_AE_TARGET_HIGH,
              cam_ae_converged(&s_ae) ? "已收敛" : "调整中",
              s_ae.updates, step_str(s_ae_last_err));
 

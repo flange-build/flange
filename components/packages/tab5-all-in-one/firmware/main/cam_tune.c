@@ -86,9 +86,11 @@ bool cam_ae_step(cam_ae_state_t *st, uint8_t lum_mean, const cam_ae_limits_t *li
     }
     st->settle = CAM_AE_INTERVAL_TICKS > 0 ? CAM_AE_INTERVAL_TICKS - 1 : 0;
 
-    /* ── 闸 1：死区 ── */
-    const int diff = (int)lum_mean - CAM_AE_TARGET;
-    if (diff >= -CAM_AE_DEADBAND && diff <= CAM_AE_DEADBAND) {
+    /* ── 闸 1：死区 ──
+     * 边界取 CAM_AE_TARGET_LOW/HIGH 而不是「目标 ± 死区」：官方的死区是**非对称**
+     * 的（56/62/64，即 −6/+2），对齐时不对称本身也要一起对齐（理由见 cam_tune.h）。
+     * CAM_AE_SOURCE = 0 时那两个宏退化成对称形式 ⇒ 本行在两种配置下都对。 */
+    if ((int)lum_mean >= CAM_AE_TARGET_LOW && (int)lum_mean <= CAM_AE_TARGET_HIGH) {
         if (st->in_band < CAM_AE_CONVERGE_TICKS)
             st->in_band++;
         return false;
