@@ -183,6 +183,97 @@ int main(void)
     fill(0xFFFF);
     expect("步长大于整幅图", 1000, 1, 255, 255, 255);
 
+    /*
+     * ══ 逆 gamma 表：线性域的那四个字段 ══════════════════════════════
+     *
+     * 这一组守的是「gamma 提前上线」之后 AE/AWB 的反馈量还留在线性域这件事。
+     * 算错的现场表现是**画面看着正常、两个闭环安静地收敛到错误的点上**，
+     * 没有任何一条日志能把它与「传感器就这样」区分开。
+     */
+    {
+        cam_frame_stats_t s;
+        uint8_t lut[256];
+
+        /* ── ① 不传表 = 恒等：两组数必须**逐位相等** ──
+         * 这正是 CAM_GAMMA_ENABLE = 0 时「回到已验证行为」所依赖的性质，
+         * 而不是靠两段各自写对的代码去保证。 */
+        fill(0x4208);   /* R=8/31 G=16/63 B=8/31，三通道都不在端点上 */
+        cam_frame_stats_rgb565_lut(buf, W, H, 1, NULL, &s);
+        assert(s.lin_lum_mean == s.lum_mean);
+        assert(s.lin_r_mean == s.r_mean && s.lin_g_mean == s.g_mean
+               && s.lin_b_mean == s.b_mean);
+        cases++;
+        /* 薄封装与显式传 NULL 必须给出完全一样的结构体。 */
+        {
+            cam_frame_stats_t s2;
+            cam_frame_stats_rgb565(buf, W, H, 1, &s2);
+            assert(memcmp(&s, &s2, sizeof s) == 0);
+            cases++;
+        }
+
+        /* ── ② 恒等表：与不传表等价（挡「传了表就走另一条路」的实现分歧）── */
+        for (int i = 0; i < 256; i++) lut[i] = (uint8_t)i;
+        {
+            cam_frame_stats_t s3;
+            cam_frame_stats_rgb565_lut(buf, W, H, 1, lut, &s3);
+            assert(memcmp(&s, &s3, sizeof s) == 0);
+            cases++;
+        }
+
+        /* ── ③ 真表：逆变换必须**逐像素先做、再平均** ──
+         * 取一张一半亮一半暗的图，配一张折半表 lut[g] = g/2。
+         *   逐像素还原再平均 = (255/2 + 0/2)/2 = 63（整数：127/2 与 0 的均值 63）
+         *   先平均再还原     = lut[127] = 63 —— 线性表两者相同，所以线性表验不出
+         *                      顺序，必须用**非线性**表，见下面那条。 */
+        fill(0x0000);
+        for (int y = 0; y < H / 2; y++)
+            for (int x = 0; x < W; x++) buf[y * W + x] = 0xFFFF;
+        for (int i = 0; i < 256; i++) lut[i] = (uint8_t)(i / 2);
+        cam_frame_stats_rgb565_lut(buf, W, H, 1, lut, &s);
+        assert(s.lum_mean == 127);          /* 原值：一半 255 一半 0 */
+        assert(s.lin_lum_mean == 63);       /* (127 + 0) / 2 */
+        assert(s.lin_r_mean == 63 && s.lin_g_mean == 63 && s.lin_b_mean == 63);
+        cases++;
+
+        /* ── ④ **顺序**：mean(F⁻¹(p)) ≠ F⁻¹(mean(p)) ──
+         * 用一张只在高端抬起来的强非线性表：lut[255] = 200，其余全 0。
+         *   逐像素还原再平均 = (200 + 0)/2 = 100      ← 正确
+         *   先平均再还原     = lut[127] = 0           ← 错误实现会给这个
+         * 两者差 100 级，实现一旦写反，本用例立刻失败。 */
+        memset(lut, 0, sizeof lut);
+        lut[255] = 200;
+        cam_frame_stats_rgb565_lut(buf, W, H, 1, lut, &s);
+        assert(s.lin_r_mean == 100 && s.lin_g_mean == 100 && s.lin_b_mean == 100);
+        /* 亮度也必须由**线性化后的三通道**重新加权，而不是把亮度过一次表：
+         * 后者会给 lut[127] = 0。(77+150+29)·100 >> 8 = 100。 */
+        assert(s.lin_lum_mean == 100);
+        cases++;
+
+        /* ── ⑤ 逆表只碰 lin_*，原始四个量与校验和一个字节都不许变 ──
+         * 送给主机的仍然是 ISP 直出的 gamma 图，统计层不得篡改任何判据。 */
+        {
+            cam_frame_stats_t plain;
+            cam_frame_stats_rgb565(buf, W, H, 1, &plain);
+            assert(s.samples == plain.samples && s.lum_mean == plain.lum_mean);
+            assert(s.lum_min == plain.lum_min && s.lum_max == plain.lum_max);
+            assert(s.checksum == plain.checksum);
+            assert(s.r_mean == plain.r_mean && s.g_mean == plain.g_mean
+                   && s.b_mean == plain.b_mean);
+            cases++;
+        }
+
+        /* ── ⑥ 参数非法时 lin_* 也必须清零（samples == 0 仍是唯一哨兵）── */
+        {
+            const cam_frame_stats_t zero = {0};
+            cam_frame_stats_rgb565_lut(NULL, W, H, 1, lut, &s);
+            assert(memcmp(&s, &zero, sizeof s) == 0);
+            cam_frame_stats_rgb565_lut(buf, W, H, 0, lut, &s);
+            assert(memcmp(&s, &zero, sizeof s) == 0);
+            cam_frame_stats_rgb565_lut(buf, W, H, 1, lut, NULL);   /* 不许崩 */
+            cases += 2;
+        }
+    }
+
     printf("OK (%d cases)\n", cases);
     return 0;
 }

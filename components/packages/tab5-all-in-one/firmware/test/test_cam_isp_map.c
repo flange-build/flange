@@ -828,6 +828,174 @@ static void test_cal_tables(void)
     cases++;
 }
 
+/* ══ L. gamma 前向曲线与逆查表 ══════════════════════════════════════
+ *
+ * 这一组是本次「把 gamma 提前」唯一的正确性支点：ISP 一开 gamma，AE/AWB 的反馈量
+ * 就得靠这张逆表还原回线性域。逆表错了的现场表现是**画面看着正常、两个闭环安静地
+ * 收敛到错误的点上** —— 没有任何一条日志能把它与「传感器就这样」区分开，所以必须
+ * 在宿主机上钉死。 */
+
+/* 曲线的 17 个节点（与 cam_isp_map.c 的 gamma_node 同构，但**独立写一遍**：
+ * 两边同时写错同一处的概率远低于让测试去调被测函数自己的内部实现）。 */
+static void gnode(uint32_t slot, uint32_t i, uint32_t *x, uint32_t *y)
+{
+    if (i == 0) { *x = 0; *y = 0; return; }
+    *x = (i == CAM_CAL_GAMMA_PTS) ? 256u : cam_cal_gamma_x[i - 1];
+    *y = cam_cal_gamma_y[slot][i - 1];
+}
+
+static void test_gamma_curve(void)
+{
+    for (uint32_t s = 0; s < CAM_CAL_GAMMA_N; s++) {
+        /* ── ① 端点。F(0) = 0 是硬件隐含的原点，不能靠标定表兜底。 ── */
+        assert(cam_gamma_forward(s, 0) == 0);
+        cases++;
+
+        /* ── ② 前向必须精确穿过标定表的每一个节点 ──
+         * 这条挡的是「段的边界算错一格」：差一格时曲线整体平移，画面只是稍亮/稍暗，
+         * 肉眼判不出，但逆表会跟着整体偏。 */
+        for (uint32_t i = 1; i < CAM_CAL_GAMMA_PTS; i++) {
+            uint32_t x, y;
+            gnode(s, i, &x, &y);
+            assert(cam_gamma_forward(s, (uint8_t)x) == y);
+        }
+        cases++;
+        /* 末点特殊：节点在 x = 256（硬件按 2 的幂编码末段），x = 255 落在段内。
+         * 四档里 γ=0.5 那档恰好插值回 255，其余三档是 254 —— 都不该是 0 或 255 之外。 */
+        assert(cam_gamma_forward(s, 255) >= 254);
+        cases++;
+
+        /* ── ③ 单调非减 + **近似凹**（段斜率基本单调不增）──
+         *
+         * 凹性不是审美要求：自检行打的「gamma后均值 >= F(线性均值)」这条判读依据，
+         * 数学上就是詹森不等式，前提正是 F 凹。
+         *
+         * ⚠️ **官方那张 y 表是四舍五入到整数的，所以只有近似凹。** 实测四档里
+         *   第 2 档（γ=0.605）在第 13 段上斜率从 10/16 回升到 11/16，是舍入抖动，
+         *   不是曲线真的拐了。所以这里的界是「斜率回升不超过 1（每 16 个 x）」，
+         *   即整数表能造成的最大抖动。
+         *   代价量化过：曲线离自己的上凸包最远 1.22 级（第 2 档；其余三档 0.94），
+         *   ⇒ 詹森那条判读要留 1 级余量，自检行的注释里写明了。
+         *   **本工程钉住的第 0 档是严格凹的**（下面单独断言），所以出厂那一档上
+         *   那条判读严格成立。 */
+        int prev_num = -1, prev_den = 1;
+        for (uint32_t x = 0; x < 255; x++) {
+            assert(cam_gamma_forward(s, (uint8_t)x) <= cam_gamma_forward(s, (uint8_t)(x + 1)));
+        }
+        cases++;
+        for (uint32_t i = 0; i < CAM_CAL_GAMMA_PTS; i++) {
+            uint32_t x0, y0, x1, y1;
+            gnode(s, i, &x0, &y0);
+            gnode(s, i + 1, &x1, &y1);
+            const int num = (int)(y1 - y0), den = (int)(x1 - x0);
+            if (prev_num >= 0) {
+                /* num/den <= prev_num/prev_den + 1/prev_den（舍入余量），去分母。 */
+                assert((long)num * prev_den <= (long)(prev_num + 1) * den);
+                if (s == 0)   /* 出厂档：严格凹，一格余量都不给 */
+                    assert((long)num * prev_den <= (long)prev_num * den);
+            }
+            prev_num = num;
+            prev_den = den;
+        }
+        cases++;
+
+        /* ── ④ 曲线确实在**提亮**：γ < 1 ⇒ F(x) >= x，且中段严格大于 ──
+         * ⓘ 上界只扫到 240（最后一个标定节点）。**末段是唯一的例外**：它的节点在
+         *   x = 256（硬件按 2 的幂编码段长），而 x = 255 落在段内 ⇒ 插值出来是
+         *   254（γ=0.5 档恰好舍入回 255）。也就是说曲线在最亮的十几级上会**低于
+         *   恒等 1 级**。这不是实现的偏差，是硬件那套「末段按 256 算」的编码方式
+         *   决定的，写在这里免得下次有人当成 bug 去修。 */
+        for (uint32_t x = 0; x <= 240; x++)
+            assert(cam_gamma_forward(s, (uint8_t)x) >= x);
+        assert(cam_gamma_forward(s, 64) > 64);
+        assert(cam_gamma_forward(s, 255) + 1 >= 255);
+        cases++;
+
+        /* ── ⑤ 逆表：单调、端点、往返误差 ── */
+        uint8_t lut[256];
+        memset(lut, 0xAA, sizeof lut);
+        cam_gamma_inverse_lut(s, lut);
+        assert(lut[0] == 0);
+        assert(lut[255] == 255);
+        for (int g = 0; g < 255; g++)
+            assert(lut[g] <= lut[g + 1]);
+        cases++;
+
+        /* 往返 A：先编码再还原，必须回到原值 ±1。
+         * 这是 AE/AWB 真正依赖的那条性质 —— 反馈量不能有系统性偏移。 */
+        for (uint32_t x = 0; x <= 255; x++) {
+            const int back = lut[cam_gamma_forward(s, (uint8_t)x)];
+            assert(back - (int)x <= 1 && (int)x - back <= 1);
+        }
+        cases++;
+
+        /* 往返 B：先还原再编码，±2。
+         * 比 A 松一格是**物理决定的**，不是实现凑出来的：曲线在亮部压缩
+         * （末段斜率 0.5）⇒ 一级 gamma 值对应两级线性值，那一格信息在 ISP 里
+         * 就已经丢了。松到 3 才该怀疑实现。 */
+        for (uint32_t g = 0; g <= 255; g++) {
+            const int back = cam_gamma_forward(s, lut[g]);
+            assert(back - (int)g <= 2 && (int)g - back <= 2);
+        }
+        cases++;
+
+        /* ── ⑥ 逆表**必须逐档不同** ──
+         * 挡的是「换档时逆表没跟着换」：那种 bug 下画面一切正常，只有反馈量偏了。
+         * 顺带证明这张表确实是从该档曲线生成的，而不是某条写死的 γ。 */
+        for (uint32_t t = 0; t < CAM_CAL_GAMMA_N; t++) {
+            uint8_t other[256];
+            cam_gamma_inverse_lut(t, other);
+            if (t == s)
+                assert(memcmp(other, lut, sizeof lut) == 0);
+            else
+                assert(memcmp(other, lut, sizeof lut) != 0);
+        }
+        cases++;
+
+        /* ── ⑦ 交叉档的往返必须**明显**失败 ──
+         * 上一条只说「表不一样」，这一条说「用错了表会错到看得见」：拿邻档的逆表
+         * 去还原本档的编码值，误差必须远超 ±1 的合格线，否则第 ⑥ 条就只是在验
+         * 一个无关紧要的差异。 */
+        if (s + 1 < CAM_CAL_GAMMA_N) {
+            uint8_t other[256];
+            cam_gamma_inverse_lut(s + 1, other);
+            int worst = 0;
+            for (uint32_t x = 0; x <= 255; x++) {
+                const int d = (int)other[cam_gamma_forward(s, (uint8_t)x)] - (int)x;
+                if (d > worst) worst = d;
+                if (-d > worst) worst = -d;
+            }
+            assert(worst > 5);
+            cases++;
+        }
+    }
+
+    /* ── ⑧ slot 越界钳到末档，不越界读、不崩 ── */
+    {
+        uint8_t a[256], b[256];
+        cam_gamma_inverse_lut(CAM_CAL_GAMMA_N - 1, a);
+        cam_gamma_inverse_lut(999, b);
+        assert(memcmp(a, b, sizeof a) == 0);
+        assert(cam_gamma_forward(999, 64) == cam_gamma_forward(CAM_CAL_GAMMA_N - 1, 64));
+        cam_gamma_inverse_lut(0, NULL);          /* 不许崩 */
+        cases++;
+    }
+
+    /* ── ⑨ 与解析式 γ 的差别必须**存在且很大** ──
+     * 这条守的是一个容易被「优化」掉的决定：逆的是**硬件那条 16 点折线**，
+     * 不是 y = 255·(x/255)^γ。两者在第一段上差到十几级（γ=0.5 档 x=1 处
+     * 解析式给 16、折线给 4）—— 若哪天有人把实现换成解析式，本用例会失败，
+     * 那不是测试过时，是回归。 */
+    {
+        /* 解析式在 x = 16 处的值：255·(16/255)^0.5 = 63.87 ⇒ 折线节点 64（两者一致，
+         * 节点上本就相等）；差别全在段内。取首段中点 x = 8：
+         *   解析式 255·(8/255)^0.5 = 45.2，折线 64/2 = 32 ⇒ 差 13 级。 */
+        assert(cam_gamma_forward(0, 16) == 64);
+        assert(cam_gamma_forward(0, 8) == 32);
+        cases++;
+    }
+}
+
 int main(void)
 {
     test_gain_slot();
@@ -840,6 +1008,7 @@ int main(void)
     test_ae();
     test_hist();
     test_env_gamma();
+    test_gamma_curve();
     test_cal_tables();
 
     printf("OK (%d cases)\n", cases);

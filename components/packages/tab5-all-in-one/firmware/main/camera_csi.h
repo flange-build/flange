@@ -121,6 +121,18 @@ esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms);
 void camera_csi_tune_tick(const cam_frame_stats_t *stats);
 
 /*
+ * 逆 gamma 查表（256 项），给帧统计层还原线性域用。
+ *
+ * 返回 **NULL = 「别做逆变换」**，且这是一个有含义的返回值而不是错误：gamma 关着
+ * （CAM_GAMMA_ENABLE = 0）或没配上时，ISP 直出的就是线性光，再逆一次会把 AE/AWB
+ * 的反馈量系统性压暗。表的档位与硬件里那条曲线**同源**（同一个函数一起设定），
+ * 调用方不需要、也无从知道当前是哪一档。
+ *
+ * 表的内容在 camera_csi_init() 里定好，之后只读 ⇒ 帧泵线程可以直接用，不需要锁。
+ */
+const uint8_t *camera_csi_gamma_inv_lut(void);
+
+/*
  * CSI/ISP 自检快照。与 camera_sensor_report() 同构、理由也一样（CDC 档下开机那几行
  * 会被环形缓冲冲掉，结论必须能被复读）。
  *

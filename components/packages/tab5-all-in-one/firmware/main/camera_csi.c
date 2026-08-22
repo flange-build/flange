@@ -32,7 +32,10 @@
 #include "driver/isp_sharpen.h"
 #include "driver/isp_color.h"
 #endif
-#if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE
+#if CAM_GAMMA_ENABLE
+#include "driver/isp_gamma.h"   /* 无芯片版本门（isp_gamma.c 全文无 ESP_CHIP_REV_ABOVE） */
+#endif
+#if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE || CAM_GAMMA_ENABLE
 #include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
 #include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
 #endif
@@ -332,6 +335,96 @@ static bool    s_sharp_enabled;           /* enable 有 FSM 门 */
 static bool    s_color_enabled;
 static uint8_t s_contrast_val = 128;      /* 此刻写进硬件的对比度，自检行用 */
 #endif
+
+#if CAM_GAMMA_ENABLE
+/*
+ * ══ gamma ══ 线性 → sRGB 式的编码曲线，**这条链路上缺的那一环**。
+ *
+ * 为什么它不属于「前馈画质级」那一组（虽然写法很像）：前三组只改画质，gamma
+ * 改的是**输出的传递函数本身** —— 它一开，送给主机的每个像素的含义就变了，
+ * 因此必须同时把统计侧的逆变换配套上，否则 AE/AWB 的反馈量当场失真。
+ * 完整的「为什么提前 / 代价怎么还」见 cam_tune.h 的 CAM_GAMMA_ENABLE 那段。
+ */
+static int32_t s_st_gamma = STEP_NOT_RUN;
+/* 当前生效的档。逆表就是按它生成的，两者永远由 camera_gamma_apply() 一起设定。
+ * T11 做动态换档时改的是它，不是别处。 */
+static uint32_t s_gamma_slot = CAM_GAMMA_SLOT;
+/*
+ * 逆表。**只有 s_gamma_ready 为真时才交给统计层** —— 它同时表达两件事：
+ * 「表建好了」且「硬件里确实是这条曲线」。gamma 没配上时画面本来就是线性的，
+ * 这时再逆一次会把反馈量系统性压暗，比不逆更糟。
+ */
+static uint8_t s_gamma_inv[256];
+static bool    s_gamma_ready;
+
+/*
+ * 配一档 gamma：**下发硬件与重建逆表绑在同一个函数里**。
+ *
+ * 这不是排版偏好，是这次改动唯一的正确性支点：逆表与硬件曲线一旦不同源，
+ * AE/AWB 会拿一个系统性偏移过的反馈量安静地闭环，画面上看不出任何异常，
+ * 而自检行里的每一个数都仍然「自洽」。所以不给它们各自走一条路的机会 ——
+ * 将来 T11 做动态换档时也只需要再调一次本函数。
+ *
+ * R/G/B 三个通道配**同一条**曲线：官方每档只有一个 gamma_param，没有分通道差异；
+ * 而且逐通道的逆表能成立，前提正是三通道同曲线。
+ *
+ * ⚠️ **逆表还原的是「线性 + YUV 域那点残差」，不是数学上完美的线性。** 硬件管线里
+ *   gamma 在 RGB 域、Color（对比度/饱和度）在其**下游**的 YUV 域 ⇒ 我们采到的是
+ *   C(F(linear))，逆回去得到的是 F⁻¹(C(F(linear)))。残差量在 T4 已经逐条算过：
+ *   饱和度钉在 128 = 1.000× ⇒ **逐像素恒等，零残差**；对比度 132 = 1.031× 只作用
+ *   在 Y 上 ⇒ 亮度残差约 3%、通道比值残差约 0.7%，分别远小于 AE 死区（6/62 ≈ 9.7%）
+ *   与 AWB 死区（5%）。也就是说这份残差在 gamma 上线之前就已经存在、量级没变，
+ *   不是本次引入的新误差。
+ */
+static esp_err_t camera_gamma_apply(uint32_t slot)
+{
+    isp_gamma_curve_points_t pts = {0};
+
+    /*
+     * ⚠️ **不走 esp_isp_gamma_fill_curve_points()。** 那个 helper 只接受一个
+     *   `uint32_t f(uint32_t)` 的函数指针，要在运行期算 x^γ ⇒ 拖进浮点 powf，
+     *   而我们的 y 早就在提取脚本里算好、并且是**宿主机测试逐点核对过**的常量表。
+     *   顺带避开它那条 `y < 256` 的检查：以 256 归一时末点 256·(255/256)^0.5 = 256
+     *   会被直接拒（这正是标定表以 255 而不是 256 归一的原因，见 cam_isp_cal.h）。
+     *
+     * x 栅格 16,32,…,240,255 满足驱动的两条硬要求（isp_gamma.c 的校验循环）：
+     *   ① 每段段长必须是 **2 的幂** —— 全部是 16；
+     *   ② 末点 x **必须恰好是 255**，且末段按 256−240 = 16 算段长。
+     */
+    for (int i = 0; i < CAM_CAL_GAMMA_PTS; i++) {
+        pts.pt[i].x = cam_cal_gamma_x[i];
+        pts.pt[i].y = cam_cal_gamma_y[slot][i];
+    }
+
+    for (int c = 0; c < 3; c++) {
+        const color_component_t comp = (c == 0) ? COLOR_COMPONENT_R
+                                     : (c == 1) ? COLOR_COMPONENT_G
+                                                : COLOR_COMPONENT_B;
+        const esp_err_t err = esp_isp_gamma_configure(s_isp, comp, &pts);
+        if (err != ESP_OK)
+            return err;   /* 逆表不建 ⇒ s_gamma_ready 保持假 ⇒ 统计留在线性域 */
+    }
+
+    /* 硬件收下了才建逆表，顺序不能反。 */
+    cam_gamma_inverse_lut(slot, s_gamma_inv);
+    s_gamma_slot  = slot;
+    s_gamma_ready = true;
+    return ESP_OK;
+}
+#endif  /* CAM_GAMMA_ENABLE */
+
+/*
+ * 统计层要用的逆 gamma 表。返回 NULL = 「别逆」（gamma 关着或没配上，
+ * 画面本来就是线性的）。
+ */
+const uint8_t *camera_csi_gamma_inv_lut(void)
+{
+#if CAM_GAMMA_ENABLE
+    return s_gamma_ready ? s_gamma_inv : NULL;
+#else
+    return NULL;
+#endif
+}
 
 /*
  * 把一对增益写成 CCM 的对角阵送进 ISP。开机配一次，之后 AWB 每次调整再配一次。
@@ -664,6 +757,28 @@ esp_err_t camera_csi_init(void)
                  esp_err_to_name((esp_err_t)s_st_lsc));
 #endif
 
+#if CAM_GAMMA_ENABLE
+    /*
+     * ══ gamma ══ 排在 LSC 之后、CCM 之前只是**书写顺序**，与硬件管线次序无关：
+     * 三者都只是往各自的寄存器组里写参数，谁先写都一样。真正有顺序要求的只有
+     * LSC 那三步（allocate → configure → enable，见上面）。
+     *
+     * 失败**只降级不拦启动**（与 LSC / CCM 同一处置）：gamma 配不上只是画面继续
+     * 偏暗，而取流本身是好的。此时 s_gamma_ready 保持假 ⇒ 统计层拿到 NULL 逆表
+     * ⇒ 画面是线性的、反馈量也按线性算，两侧仍然自洽。
+     */
+    s_st_gamma = camera_gamma_apply(CAM_GAMMA_SLOT);
+    if (s_st_gamma == ESP_OK) {
+        /* enable 有 FSM 门（重复调直接 ESP_ERR_INVALID_STATE），整个生命周期只调这一次。 */
+        s_st_gamma = esp_isp_gamma_enable(s_isp);
+        if (s_st_gamma != ESP_OK)
+            s_gamma_ready = false;   /* 曲线写进去了但没使能 ⇒ 画面仍是线性的，别逆 */
+    }
+    if (s_st_gamma != ESP_OK)
+        ESP_LOGW(TAG, "gamma 没配上(%s)，画面会明显偏暗（主机按 sRGB 解码线性图），"
+                      "其余一切照常", esp_err_to_name((esp_err_t)s_st_gamma));
+#endif
+
     /*
      * ══ 白平衡 ══ 用 **CCM 的对角线**顶替用不了的 WBG。
      *
@@ -892,7 +1007,13 @@ static void camera_ae_tick(const cam_frame_stats_t *st)
     if (!s_ae_ready)
         return;
 
-    if (!cam_ae_step(&s_ae, st->lum_mean, &s_ae_lim))
+    /*
+     * ⚠️ 喂进去的是 **lin_lum_mean**（逆 gamma 还原过的线性亮度），不是 lum_mean。
+     * CAM_AE_TARGET 是线性域的量：gamma 是逐通道的凹函数，把线性 62 抬到 126，
+     * 拿 gamma 域的均值去比 62 会让 AE 以为已经过曝一倍、把曝光一路往下压。
+     * gamma 关着时两者逐位相等 ⇒ 这一行在两种构建下都对。
+     */
+    if (!cam_ae_step(&s_ae, st->lin_lum_mean, &s_ae_lim))
         return;   /* 没到更新周期 / 落在死区 / 已顶到限位：别去打扰 I2C 总线 */
 
     /*
@@ -930,8 +1051,15 @@ static void camera_awb_tick(const cam_frame_stats_t *st)
      */
     const bool ae_stable = !s_ae_ready || cam_ae_converged(&s_ae);
 
-    if (cam_awb_step(&s_awb, st->lum_mean, st->r_mean, st->g_mean, st->b_mean,
-                     ae_stable) != CAM_AWB_APPLIED)
+    /*
+     * ⚠️ 四个反馈量全部取**线性域**那一份。灰世界算的是通道**比值**，而 gamma 是
+     * 逐通道的幂律 ⇒ 它把比值压向 1（1.23 在 γ=0.605 档上被压成 1.135，−7.7%）
+     * ⇒ 直接拿 gamma 域的均值去闭环，AWB 会**系统性地欠校正**，而且欠多少随
+     * 画面亮度变化（幂律不是等比缩放）。逆回线性域之后 cam_awb_suggest() 的
+     * 幂等性才继续成立。
+     */
+    if (cam_awb_step(&s_awb, st->lin_lum_mean, st->lin_r_mean, st->lin_g_mean,
+                     st->lin_b_mean, ae_stable) != CAM_AWB_APPLIED)
         return;
 
     s_awb_last_err = camera_ccm_apply(s_awb.gain_r_milli, s_awb.gain_b_milli);
@@ -1147,8 +1275,11 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
  */
 static void camera_quality_report(void)
 {
+    /* ⚠️ 用**线性域**那一份：CCM 是线性域上的对角阵，而 gamma 会把通道比值压向 1
+     * ⇒ 拿 gamma 后的均值反推出来的建议值会系统性偏小（欠校正），抄进
+     * cam_tune.h 就把这个偏差固化了。gamma 关着时两份逐位相等。 */
     uint32_t sug_r = s_ccm_r, sug_b = s_ccm_b;
-    cam_awb_suggest(s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
+    cam_awb_suggest(s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
                     s_ccm_r, s_ccm_b, &sug_r, &sug_b);
 
     /*
@@ -1166,13 +1297,13 @@ static void camera_quality_report(void)
      */
     ESP_LOGI(TAG, "[自检] 画质 CCM=%s 当前 R×%" PRIu32 ".%03" PRIu32 " G×%u.%03u"
                   " B×%" PRIu32 ".%03" PRIu32
-                  " | 通道均值 R%u G%u B%u → 建议 R×%" PRIu32 ".%03" PRIu32
+                  " | 通道均值(线性) R%u G%u B%u → 建议 R×%" PRIu32 ".%03" PRIu32
                   " B×%" PRIu32 ".%03" PRIu32 "（对白纸/灰卡时才作数）",
              step_str(s_st_ccm),
              s_ccm_r / 1000, s_ccm_r % 1000,
              (unsigned)(CAM_CCM_GAIN_G_MILLI / 1000), (unsigned)(CAM_CCM_GAIN_G_MILLI % 1000),
              s_ccm_b / 1000, s_ccm_b % 1000,
-             s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
+             s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
              sug_r / 1000, sug_r % 1000, sug_b / 1000, sug_b % 1000);
 
 #if CAM_AWB_ENABLE
@@ -1228,7 +1359,8 @@ static void camera_quality_report(void)
     const uint32_t gain_milli = (s_ae_ready && s_ae.gain_index < s_ae_lim.gain_count)
                                     ? s_ae_lim.gain_map[s_ae.gain_index] : 0;
     ESP_LOGI(TAG, "[自检] AE=%s 曝光=%" PRIu32 "/%" PRIu32 " 增益=%u.%03u×(第 %" PRIu32 " 档)"
-                  " 曝光量=%" PRIu32 " | 亮度 %u→目标 %d(±%d) %s 下发=%" PRIu32 " 最近=%s",
+                  " 曝光量=%" PRIu32 " | 亮度(线性) %u→目标 %d(±%d) %s 下发=%" PRIu32
+                  " 最近=%s",
              step_str(s_st_ae), s_ae.exposure, s_ae_lim.exp_max,
              (unsigned)(gain_milli / 1000), (unsigned)(gain_milli % 1000), s_ae.gain_index,
              s_ae.ev, s_ae.last_mean, CAM_AE_TARGET, CAM_AE_DEADBAND,
@@ -1347,6 +1479,53 @@ static void camera_feedfwd_report(void)
              s_feedfwd_reconf);
 #else
     ESP_LOGI(TAG, "[自检] AEN=未编译（CAM_AEN_ENABLE=0，不配 SHARP/Color）");
+#endif
+
+#if CAM_GAMMA_ENABLE
+    /*
+     * gamma 那一行。它要同时回答**三个**问题，缺一个现场就分不清病因：
+     *   ① 硬件里到底是不是这条曲线      → 档号 + γ + 前向曲线的四个关键点
+     *   ② 统计到底在哪个域算的          → 「统计域=」，以及逆表建了没有
+     *   ③ 逆变换是不是真的对上了        → **线性均值与 gamma 后均值并排**
+     *
+     * ⚠️ ③ 是这次改动唯一能在现场证伪的判据，判读方式必须准确：
+     *
+     *   曲线 F 是**凹**的（段斜率单调下降，宿主机测试守着），由詹森不等式
+     *       mean(F(p)) >= F(mean(p))
+     *   ⇒ 打出来的「gamma后均值」必须 **>= F(线性均值)**（也一起打出来做参照），
+     *     且在画面对比度不极端时两者相差不大（几级到十几级）。
+     *   ⓘ 出厂钉住的第 0 档严格凹 ⇒ 这条不等式严格成立。官方 y 表是取整的，
+     *     第 2 档有一处 1 级的斜率抖动（曲线离自己的上凸包最远 1.22 级）⇒ 将来
+     *     动态换档到那一档时，判读留 1 级余量。
+     *
+     *   gamma后 ≈ 线性        → **逆表没生效**（或 gamma 根本没使能）：两个数应当
+     *                          明显不同才对，相等说明统计域与画面域是同一个。
+     *   gamma后 明显 < F(线性) → 逆表与硬件曲线**不同源**（档号对不上），这是最该
+     *                          怕的一种：画面看着正常，但 AE/AWB 在拿偏移量闭环。
+     *                          用错邻档的误差是十几级量级（宿主机测试 ⑦ 守着），
+     *                          与上面那 1 级的舍入余量差着一个数量级，分得开。
+     *   两者都≈0              → 画面真的全黑，先去看 CSI 那几行，不是 gamma 的事。
+     *
+     * ⓘ「线性均值」就是喂给 AE 的那个数，直接与「AE 目标」比较即可判断曝光够不够。
+     */
+    const uint8_t lin = s_last_stats.lin_lum_mean;
+    ESP_LOGI(TAG, "[自检] GAMMA=%s 档%" PRIu32 "/%d(γ=%u.%03u) 前向 F(16)=%u F(64)=%u"
+                  " F(128)=%u F(255)=%u | 统计域=%s | 亮度均值 线性=%u gamma后=%u"
+                  "（应 >= F(线性)=%u）| 通道均值 线性 R%u G%u B%u / gamma后 R%u G%u B%u"
+                  " | AE 目标=%d(线性域)",
+             step_str(s_st_gamma), s_gamma_slot, CAM_CAL_GAMMA_N,
+             (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] / 1000),
+             (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] % 1000),
+             cam_gamma_forward(s_gamma_slot, 16), cam_gamma_forward(s_gamma_slot, 64),
+             cam_gamma_forward(s_gamma_slot, 128), cam_gamma_forward(s_gamma_slot, 255),
+             s_gamma_ready ? "线性(逆表已建)" : "gamma 域(逆表未建，等同没开 gamma)",
+             lin, s_last_stats.lum_mean, cam_gamma_forward(s_gamma_slot, lin),
+             s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
+             s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
+             CAM_AE_TARGET);
+#else
+    ESP_LOGI(TAG, "[自检] GAMMA=未编译（CAM_GAMMA_ENABLE=0，直出线性光 ⇒ 主机按 sRGB "
+                  "解码会明显偏暗；统计与控制律同在线性域，逆变换一并旁路）");
 #endif
 }
 

@@ -276,3 +276,70 @@ uint32_t cam_gamma_slot(uint32_t env_q1, uint32_t cur_slot)
     }
     return cur_slot;
 }
+
+/* ── gamma 前向/逆变换 ────────────────────────────────────────────
+ *
+ * 曲线的 17 个节点。i = 0 是硬件隐含的原点 (0,0)；i = 1..16 是标定表的 16 个点，
+ * 其中 i = 16 的 x 取 **256** 而不是表里的 255 —— 硬件按段长 256−240 = 16
+ * （2 的幂）编码最后一段，末点的 y 是 x = 256 处的值。
+ */
+static void gamma_node(uint32_t slot, uint32_t i, uint32_t *x, uint32_t *y)
+{
+    if (i == 0) {
+        *x = 0;
+        *y = 0;
+        return;
+    }
+    *x = (i == CAM_CAL_GAMMA_PTS) ? 256u : cam_cal_gamma_x[i - 1];
+    *y = cam_cal_gamma_y[slot][i - 1];
+}
+
+static uint32_t gamma_slot_clamp(uint32_t slot)
+{
+    return slot < CAM_CAL_GAMMA_N ? slot : CAM_CAL_GAMMA_N - 1;
+}
+
+uint8_t cam_gamma_forward(uint32_t slot, uint8_t x)
+{
+    const uint32_t s = gamma_slot_clamp(slot);
+
+    for (uint32_t i = 0; i < CAM_CAL_GAMMA_PTS; i++) {
+        uint32_t x0, y0, x1, y1;
+        gamma_node(s, i, &x0, &y0);
+        gamma_node(s, i + 1, &x1, &y1);
+        if ((uint32_t)x < x1) {
+            /* 段内线性插值，**四舍五入**而不是截断：硬件用移位（截断）还是带舍入
+             * 的乘加，TRM 与 IDF 都没写死 —— 差别至多 1 级。选四舍五入是因为逆表
+             * 由同一个模型生成，两侧一致比两侧各自「更像硬件」更要紧（往返一致性
+             * 是控制环真正依赖的性质，绝对值差 1 级不进任何判据）。 */
+            const uint32_t dx = x1 - x0, dy = y1 - y0;
+            return (uint8_t)(y0 + (((uint32_t)x - x0) * dy + dx / 2u) / dx);
+        }
+    }
+    return 255;   /* 走不到：末段的 x1 = 256 > 255 */
+}
+
+void cam_gamma_inverse_lut(uint32_t slot, uint8_t lut[256])
+{
+    if (!lut)
+        return;
+    const uint32_t s = gamma_slot_clamp(slot);
+
+    for (uint32_t g = 0; g < 256; g++) {
+        uint32_t v = 255;
+        for (uint32_t i = 0; i < CAM_CAL_GAMMA_PTS; i++) {
+            uint32_t x0, y0, x1, y1;
+            gamma_node(s, i, &x0, &y0);
+            gamma_node(s, i + 1, &x1, &y1);
+            if (g > y1)
+                continue;
+            /* y 在本段内。dy == 0（曲线在这一段是平的）时取段起点：那一段的所有
+             * 线性值都编码成同一个 g，取哪个都是猜，取最小的那个不会高估亮度 ——
+             * 高估会让 AE 以为够亮而停止加曝光。官方四档都没有平段，这是守门人。 */
+            const uint32_t dx = x1 - x0, dy = y1 - y0;
+            v = (dy == 0) ? x0 : (x0 + ((g - y0) * dx + dy / 2u) / dy);
+            break;
+        }
+        lut[g] = (uint8_t)(v > 255u ? 255u : v);
+    }
+}

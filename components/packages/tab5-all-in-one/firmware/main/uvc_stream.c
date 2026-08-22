@@ -187,11 +187,18 @@ static uint32_t s_bw_stream_countdown;   /* 取流开始后再等这么多帧才
 static uint32_t s_fps_last_sent;
 static int64_t  s_fps_last_us;
 
-/* 全帧统计：每帧都做，因为它同时是 AE 的反馈量。 */
+/*
+ * 全帧统计：每帧都做，因为它同时是 AE 的反馈量。
+ *
+ * 传逆 gamma 表进去：ISP 的 gamma 开着时画面是 gamma 编码的，而 AE/AWB 的控制律
+ * 全部定义在**线性域**（目标亮度、灰世界的通道比值）。逆表让统计层在同一次扫描里
+ * 顺带算出线性域的那一组均值，控制律的输入域因此不受 gamma 开关影响。
+ * 表由 camera_csi 持有（与硬件曲线同源），gamma 关着时它返回 NULL = 恒等。
+ */
 static void frame_stats_sample(const uint16_t *raw)
 {
-    cam_frame_stats_rgb565(raw, CAM_SENSOR_W, CAM_SENSOR_H,
-                           UVC_STATS_STEP, &s_stat_full);
+    cam_frame_stats_rgb565_lut(raw, CAM_SENSOR_W, CAM_SENSOR_H,
+                               UVC_STATS_STEP, camera_csi_gamma_inv_lut(), &s_stat_full);
     if (s_stat_full.lum_max > s_full_max_ever)
         s_full_max_ever = s_stat_full.lum_max;
 }

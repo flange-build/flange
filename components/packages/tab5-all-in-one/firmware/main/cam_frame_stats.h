@@ -32,6 +32,27 @@ typedef struct {
     uint8_t  r_mean;    /* 采样像素的红通道均值，0..255 */
     uint8_t  g_mean;    /* 绿 */
     uint8_t  b_mean;    /* 蓝 */
+    /*
+     * ── 线性域的那一份（逆 gamma 还原之后再求均值）──────────────────
+     *
+     * 上面四个是**采样到什么就是什么**：ISP 的 gamma 开着时它们是 gamma 编码值。
+     * 下面四个是把每个采样像素先过逆表还原到线性域、**再**求的均值。
+     *
+     * ⚠️ 顺序不能反：gamma 是非线性的，mean(F⁻¹(p)) ≠ F⁻¹(mean(p))。
+     *   一定要逐像素还原再平均，这也正是逆变换必须进到扫描循环里、
+     *   而不能事后对一个均值做一次查表的原因。
+     * ⚠️ 亮度用**线性化之后的三个通道**按 BT.601 重新加权，不是把 gamma 域的亮度
+     *   过一次逆表 —— 亮度是三通道的线性组合，而 gamma 是逐通道的非线性，
+     *   两者不可交换。
+     *
+     * 没传逆表（inv_lut == NULL，也就是 gamma 关着）时这四个数**逐位等于**上面
+     * 那四个 —— 于是「统计在哪个域算的」这件事在两种构建下都能自洽，自检行把两组
+     * 数并排打出来时，gamma 关着就是两两相等，开着就是下面那组小、上面那组大。
+     */
+    uint8_t  lin_lum_mean;  /* 线性域亮度均值 */
+    uint8_t  lin_r_mean;    /* 线性域红通道均值 */
+    uint8_t  lin_g_mean;    /* 绿 */
+    uint8_t  lin_b_mean;    /* 蓝 */
 } cam_frame_stats_t;
 
 /*
@@ -54,3 +75,19 @@ typedef struct {
  */
 void cam_frame_stats_rgb565(const uint16_t *fb, int w, int h, int step,
                             cam_frame_stats_t *out);
+
+/*
+ * 同上，外加一张 256 项的**逆 gamma 查表**用来填 lin_* 那四个字段。
+ *
+ * inv_lut[g] = 「画面里出现 gamma 值 g 时，它对应的线性值是多少」。表由
+ * cam_gamma_inverse_lut() 按**当前实际下发给 ISP 的那一档曲线**生成 ——
+ * 传一张与硬件不符的表比不传更糟：AE/AWB 会拿一个系统性偏移过的反馈量去闭环，
+ * 而画面上看不出任何异常。传 NULL = 恒等 = 画面本来就是线性的。
+ *
+ * ⓘ 逆表只作用在**采样点**上（1/step² ≈ 1.4 万个像素），不碰输出帧的任何一个
+ *   字节 —— 送给主机的仍然是 ISP 直出的 gamma 图。代价是每个采样点 3 次查表。
+ *
+ * cam_frame_stats_rgb565() 就是本函数传 NULL 的薄封装，两者共用同一次扫描逻辑。
+ */
+void cam_frame_stats_rgb565_lut(const uint16_t *fb, int w, int h, int step,
+                                const uint8_t *inv_lut, cam_frame_stats_t *out);

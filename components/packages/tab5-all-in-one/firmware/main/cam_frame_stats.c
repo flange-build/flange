@@ -13,6 +13,12 @@ static inline uint32_t b8_of(uint16_t p) { uint32_t v =  p        & 0x1fu; retur
 void cam_frame_stats_rgb565(const uint16_t *fb, int w, int h, int step,
                             cam_frame_stats_t *out)
 {
+    cam_frame_stats_rgb565_lut(fb, w, h, step, NULL, out);
+}
+
+void cam_frame_stats_rgb565_lut(const uint16_t *fb, int w, int h, int step,
+                                const uint8_t *inv_lut, cam_frame_stats_t *out)
+{
     if (!out)
         return;
     memset(out, 0, sizeof(*out));
@@ -28,6 +34,10 @@ void cam_frame_stats_rgb565(const uint16_t *fb, int w, int h, int step,
     /* 分通道累加和。采样上限 1280×720 = 921 600 个像素 × 255 = 2.35e8，
      * 离 uint32 的 4.29e9 还有一个量级，全采样也不会溢出。 */
     uint32_t sum_r = 0, sum_g = 0, sum_b = 0;
+    /* 线性域的那一份。逆表为 NULL 时与上面三个逐拍相等（恒等映射），
+     * 不另开分支 —— 分支会让「关掉 gamma 时两组数必然相等」这条性质
+     * 依赖两段代码写得一样，而不是依赖同一段代码。 */
+    uint32_t sum_lr = 0, sum_lg = 0, sum_lb = 0, sum_ll = 0;
 
     for (int y = 0; y < h; y += step) {
         const uint16_t *row = fb + (size_t)y * (size_t)w;
@@ -39,6 +49,14 @@ void cam_frame_stats_rgb565(const uint16_t *fb, int w, int h, int step,
             sum_r += r;
             sum_g += g;
             sum_b += b;
+            /* 先逐通道还原到线性，再按 BT.601 重新加权算线性亮度。 */
+            const uint32_t lr = inv_lut ? inv_lut[r] : r;
+            const uint32_t lg = inv_lut ? inv_lut[g] : g;
+            const uint32_t lb = inv_lut ? inv_lut[b] : b;
+            sum_lr += lr;
+            sum_lg += lg;
+            sum_lb += lb;
+            sum_ll += (77u * lr + 150u * lg + 29u * lb) >> 8;
             if (lum < lo) lo = lum;
             if (lum > hi) hi = lum;
             hash = (hash ^ (uint32_t)(p & 0xffu)) * 16777619u;
@@ -55,4 +73,8 @@ void cam_frame_stats_rgb565(const uint16_t *fb, int w, int h, int step,
     out->r_mean   = (uint8_t)(sum_r / n);
     out->g_mean   = (uint8_t)(sum_g / n);
     out->b_mean   = (uint8_t)(sum_b / n);
+    out->lin_lum_mean = (uint8_t)(sum_ll / n);
+    out->lin_r_mean   = (uint8_t)(sum_lr / n);
+    out->lin_g_mean   = (uint8_t)(sum_lg / n);
+    out->lin_b_mean   = (uint8_t)(sum_lb / n);
 }
