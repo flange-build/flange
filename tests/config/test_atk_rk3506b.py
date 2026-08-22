@@ -329,6 +329,17 @@ def test_gud_patch_routes_tty_console_to_fb1():
     assert "fbcon=map:1" in text
 
 
+def test_fluxion_i2c1_patch_routes_irq73_to_cpu2():
+    """Linux 必须把 I2C1 SPI 73 路由给运行 fluxion 的 CPU2。"""
+    patch = Path(
+        "components/board/atk-rk3506b/patches/kernel/"
+        "0006-release-i2c1-for-fluxion-as5600.patch"
+    )
+    text = patch.read_text(encoding="utf-8")
+    assert "GIC_AMP_IRQ_CFG_ROUTE(73, 0xd0, " \
+           "CPU_GET_AFFINITY(0, 2))" in text
+
+
 def test_usb_gadget_modules_follow_atk_sdk_load_order():
     """USB gadget 模块顺序应与 ATK Linux 6.1 SDK 保持一致。"""
     modules_file = Path(

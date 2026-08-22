@@ -121,6 +121,14 @@ def test_rk3506_gpio_virtual_group_matches_cpu2_amp_gic_routes():
         assert f"GPIO{bank}_3_IRQn" in board_base
 
 
+def test_rk3506_i2c1_matches_cpu2_amp_gic_route():
+    board_base = RK3506_BOARD_BASE.read_text()
+
+    assert "#ifdef RT_USING_I2C1" in board_base
+    assert "GIC_AMP_IRQ_CFG_ROUTE(I2C1_IRQn, 0xd0, " \
+           "CPU_GET_AFFINITY(2, 0))" in board_base
+
+
 def test_runtime_header_only_contains_app_consumed_profile_fields(tmp_path):
     header = RockchipAmpBuilder._write_runtime_header(tmp_path, _runtime())
     text = header.read_text()
