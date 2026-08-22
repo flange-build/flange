@@ -21,6 +21,9 @@
 #include "esp_cam_ctlr_csi.h"
 #include "driver/isp.h"
 #include "driver/isp_ccm.h"     /* 白平衡走 CCM：本板 rev v1.0 没有 WBG，见 cam_tune.h */
+#if CAM_AE_STAT_ENABLE
+#include "driver/isp_ae.h"      /* 硬件 5×5 分块测光（isp_ae.c 全文无 ESP_CHIP_REV_ABOVE） */
+#endif
 #if CAM_ADN_ENABLE
 #include "driver/isp_bf.h"
 #include "driver/isp_demosaic.h"
@@ -35,7 +38,7 @@
 #if CAM_GAMMA_ENABLE
 #include "driver/isp_gamma.h"   /* 无芯片版本门（isp_gamma.c 全文无 ESP_CHIP_REV_ABOVE） */
 #endif
-#if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE || CAM_GAMMA_ENABLE
+#if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE || CAM_GAMMA_ENABLE || CAM_AE_STAT_ENABLE
 #include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
 #include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
 #endif
@@ -289,6 +292,67 @@ static uint32_t s_ccm_b = CAM_CCM_GAIN_B_MILLI;
 static cam_awb_state_t s_awb;
 static int32_t         s_awb_last_err = ESP_OK;   /* 最近一次重配 CCM 的返回值 */
 #endif
+
+#if CAM_AE_STAT_ENABLE
+/* ══ 硬件 AE 5×5 分块统计 ══════════════════════════════════════════
+ * 设计意图、ρ 的定义与「为什么先观测再切换」见 cam_tune.h 的 CAM_AE_STAT_ENABLE。 */
+static isp_ae_ctlr_t s_ae_ctlr;
+static int32_t       s_st_aestat = STEP_NOT_RUN;  /* 建控制器 / 注册回调 / 使能，取第一个失败 */
+static int32_t       s_st_aerun  = STEP_NOT_RUN;  /* start/stop 连续统计的返回值 */
+
+/* 25 块亮度 + 帧计数。中断写、任务读 ⇒ 必须整体一致（25 个字节不是原子的），
+ * 用自旋锁把「搬 25 字节」与「读 25 字节」各自变成一个临界区。
+ * 用 portMUX 而不是 mutex：写方在 ISR 里，ISR 不能阻塞。 */
+static portMUX_TYPE  s_ae_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t       s_ae_blocks[25];
+static uint32_t      s_ae_stat_frames;
+
+/*
+ * ⚠️ 本函数跑在 **ISR 上下文**（isp_core.c 的 s_isp_isr_dispatcher）。
+ *   里面只做 25 字节的搬运：不打日志、不发队列、不调任何可能阻塞的东西。
+ *
+ * ⓘ **不加 IRAM_ATTR**：CONFIG_ISP_ISR_IRAM_SAFE 默认关（本工程没开），此时
+ *   ISP 的 ISR 允许访问 flash；加了反而按 isp_ae.c 的 `#if CONFIG_ISP_ISR_IRAM_SAEE`
+ *   分支要求 s_ae_blocks 等一并进内部 RAM，凭空多一层约束。
+ *
+ * ⓘ 返回 false = 没有唤醒任何任务（我们不用队列/信号量，AE 的执行仍然跑在
+ *   帧泵那一拍上，见 camera_ae_tick）。
+ *
+ * ⓘ 驱动填 luminance[i][j] 的次序是 `block_id = i*5 + j` 顺着
+ *   isp_ll_ae_get_block_mean_lum() 读的（isp_ae.c 的 esp_isp_ae_isr），
+ *   而**硬件块编号横着数还是竖着数在 IDF 里查不到 [缺口]**。这对我们没有影响：
+ *   官方权重表是中心对称的金字塔（转置后与自身相同），过暗/过亮块又只是计数。
+ *   真实排布由「只遮半边镜头看哪些块掉下去」这条现场判据顺带测出来。
+ */
+static bool cam_on_ae_stat(isp_ae_ctlr_t h, const esp_isp_ae_env_detector_evt_data_t *e,
+                           void *ud)
+{
+    (void)h;
+    (void)ud;
+    portENTER_CRITICAL_ISR(&s_ae_lock);
+    for (int i = 0; i < 5; i++)
+        for (int j = 0; j < 5; j++)
+            s_ae_blocks[i * 5 + j] = (uint8_t)e->ae_result.luminance[i][j];
+    s_ae_stat_frames++;
+    portEXIT_CRITICAL_ISR(&s_ae_lock);
+    return false;
+}
+
+/* 取一份 25 块的快照，并算出加权均值与两个 quorum 计数。
+ * 返回本函数被调用时统计块已经交付过多少帧（0 = 一帧都没收到，调用方据此
+ * 判断「这份数能不能用」——拿全 0 去调曝光会把曝光一路推到顶）。 */
+static uint32_t cam_ae_stat_snapshot(uint8_t blocks[25], uint8_t *hw_mean,
+                                     uint8_t *n_dark, uint8_t *n_bright)
+{
+    uint32_t frames;
+    portENTER_CRITICAL(&s_ae_lock);
+    memcpy(blocks, s_ae_blocks, 25);
+    frames = s_ae_stat_frames;
+    portEXIT_CRITICAL(&s_ae_lock);
+    *hw_mean = cam_ae_weighted_mean(blocks, n_dark, n_bright);
+    return frames;
+}
+#endif  /* CAM_AE_STAT_ENABLE */
 
 /* ══ 官方前馈画质级（开环查表）══════════════════════════════════════
  * 三组各一个编译开关（cam_tune.h），关掉时下面整段不进镜像 —— 这是现场
@@ -720,6 +784,65 @@ esp_err_t camera_csi_init(void)
     s_st_isp = esp_isp_new_processor(&isp_cfg, &s_isp);
     ESP_RETURN_ON_ERROR(s_st_isp, TAG, "ISP");
 
+#if CAM_AE_STAT_ENABLE
+    /*
+     * ══ 硬件 AE 5×5 分块统计 ══ **只建、只观测，不接管控制律**（T5）。
+     *
+     * 失败**只降级不拦启动**（与 LSC / gamma / CCM 同一处置）：统计块建不起来时
+     * s_st_aestat 记下错误码、自检行照打，AE 继续吃软件均值 —— 取流本身是好的。
+     */
+    const esp_isp_ae_config_t ae_cfg = {
+        /*
+         * 官方 esp_video 把采样点**硬编码**为 AFTER_DEMOSAIC
+         * （esp_video_isp_device.c:879）—— 即线性 RGB 亮度，**CCM 之前、gamma 之前**。
+         * 这正是我们要的：官方那套 target=62 / 权重表 / 过曝欠曝阈值全部是在这个
+         * 采样点上标定的，换个采样点那些数就不成立了。
+         * 顺带一个结构性好处：AWB 改 CCM、gamma 换档都在它下游 ⇒ 扰不到 AE 的输入。
+         */
+        .sample_point = ISP_AE_SAMPLE_POINT_AFTER_DEMOSAIC,
+        /*
+         * ⚠️ 窗口**必须显式写**。isp_hal_ae_window_config() 把窗按 /5 分块：
+         *   全零窗口能通过 esp_isp_new_ae_controller() 的参数校验（它只查
+         *   btm_right >= top_left 且都 < 4095），但 bsize = 0 ⇒ 25 个块全是 0，
+         *   现场表现为「统计跑着、数全是零」，最难归因的一种。
+         * 写 1280×720 而不是 1279×719：/5 之后是 256×144，**整除**，不丢边缘 5 列。
+         * 官方桥接层用的也是整幅传感器分辨率。
+         */
+        .window = { .top_left  = { .x = 0,            .y = 0 },
+                    .btm_right = { .x = CAM_SENSOR_W, .y = CAM_SENSOR_H } },
+        /*
+         * ⚠️ 三个统计块（AE/AWB/AF）共用**一个** ISP 中断，intr_priority 必须与
+         *   处理器一致。上面的 esp_isp_processor_cfg_t 没写这一项 ⇒ 零初始化
+         *   ⇒ intr_priority = 0 ⇒ 这里也必须是 0。不一致时驱动走的是
+         *   `ESP_GOTO_ON_ERROR(intr_priority != isp_proc->intr_priority, ...)`，
+         *   **返回的是布尔 1 而不是 esp_err_t**，自检行会打出一个看不懂的码
+         *   （esp_err_to_name(1) = "ESP_FAIL"，与真正的 ESP_FAIL 混在一起）。
+         */
+        .intr_priority = 0,
+    };
+    s_st_aestat = esp_isp_new_ae_controller(s_isp, &ae_cfg, &s_ae_ctlr);
+    if (s_st_aestat == ESP_OK) {
+        /* 只注册 on_env_statistics_done（AE_FDONE）。
+         * ⓘ 不注册 on_env_change：环境突变检测的阈值我们从没设过
+         *   （esp_isp_ae_controller_set_env_detector_threshold 没调），
+         *   注册它等于给一个语义未定义的事件挂回调。 */
+        const esp_isp_ae_env_detector_evt_cbs_t ae_cbs = {
+            .on_env_statistics_done = cam_on_ae_stat,
+        };
+        s_st_aestat = esp_isp_ae_env_detector_register_event_callbacks(s_ae_ctlr, &ae_cbs, NULL);
+    }
+    if (s_st_aestat == ESP_OK) {
+        /* enable 打开 AE 块并使能 AE 中断；**统计还没开始跑** ——
+         * 连续统计要到 camera_csi_start() 里 start_continuous 才触发第一次。
+         * 而且此刻 ISP 整体还没 esp_isp_enable()，硬件也无从产生统计。
+         * ⇒ 「摄像头不取流时零影响」由这两层共同保证。 */
+        s_st_aestat = esp_isp_ae_controller_enable(s_ae_ctlr);
+    }
+    if (s_st_aestat != ESP_OK)
+        ESP_LOGW(TAG, "AE 硬件统计没建起来(%s)，AE 继续吃软件全帧均值，其余一切照常",
+                 esp_err_to_name((esp_err_t)s_st_aestat));
+#endif
+
 #if CAM_LSC_ENABLE
     /*
      * ══ 镜头阴影校正（暗角）══ 官方 273 格 × 4 通道的标定表。
@@ -905,6 +1028,21 @@ esp_err_t camera_csi_start(void)
         return err;
     }
 
+#if CAM_AE_STAT_ENABLE
+    /*
+     * 统计**只在取流时跑**（硬约束：摄像头不取流时零影响）。
+     * 排在 esp_isp_enable() 成功之后：start_continuous 会立刻发一次
+     * isp_ll_ae_manual_update() 触发第一帧统计，ISP 没使能时那一发是空放。
+     * 建控制器失败时（s_st_aestat != ESP_OK）不碰这里 —— 句柄是 NULL。
+     */
+    if (s_st_aestat == ESP_OK) {
+        s_st_aerun = esp_isp_ae_controller_start_continuous_statistics(s_ae_ctlr);
+        if (s_st_aerun != ESP_OK)
+            ESP_LOGW(TAG, "AE 连续统计没启动(%s)，25 块亮度会一直是 0",
+                     esp_err_to_name((esp_err_t)s_st_aerun));
+    }
+#endif
+
     s_streaming = true;
     ESP_LOGI(TAG, "取流已开始（CSI 每秒往 PSRAM 写约 %u MB）",
              (unsigned)(CAM_FB_BYTES * 30 / (1024 * 1024)));
@@ -943,6 +1081,16 @@ esp_err_t camera_csi_stop(void)
     keep_first_err(&err, "传感器 stream off",
                    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &off));
     keep_first_err(&err, "CSI stop",    esp_cam_ctlr_stop(s_cam));
+#if CAM_AE_STAT_ENABLE
+    /* ⚠️ 必须排在 `ISP disable` **之前**：先让统计块停下来，再关 ISP。
+     * 反过来的话 disable 之后还可能收到最后一次 AE 中断。
+     * 顺序理由与既有四步停流一致（先停数据源，再关块），并同样 keep_first_err 记账。
+     * 幂等由 s_streaming 那道闸保证：驱动的 FSM 门只允许 ENABLE↔CONTINUOUS 各一次。 */
+    if (s_st_aestat == ESP_OK) {
+        s_st_aerun = esp_isp_ae_controller_stop_continuous_statistics(s_ae_ctlr);
+        keep_first_err(&err, "AE 统计 stop", (esp_err_t)s_st_aerun);
+    }
+#endif
     keep_first_err(&err, "ISP disable", esp_isp_disable(s_isp));
     keep_first_err(&err, "CSI disable", esp_cam_ctlr_disable(s_cam));
     s_streaming = false;
@@ -1270,6 +1418,77 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
 }
 
 /*
+ * 硬件 AE 5×5 统计的自检：**两行**。
+ *
+ * 第一行是归约后的量（能不能用、算出来多少、与软件口径差多少），第二行是 25 块
+ * 原始值 —— 后者不是冗余：**「25 个数彼此不同」本身就是一条判据**，它证明分块
+ * 统计的空间性是真的，而不是同一个全画面均值被复制了 25 份。
+ *
+ * 四种情况严格分开（与本文件其余自检行同一处置）：
+ *   未编译      CAM_AE_STAT_ENABLE = 0 ⇒ 由 #else 分支说出来
+ *   未运行      编译进来了但控制器一次都没建过（还没 camera_csi_init）
+ *   <错误码>    建了、硬件或驱动拒了
+ *   ESP_OK      建上了 ⇒ 同时打出帧计数、加权均值、两个 quorum 计数与 ρ
+ *
+ * 判读：
+ *   帧=0 而取流中          → 连续统计没启动，看「运行=」那格（start 的返回值）。
+ *   25 块**全是 0**        → 窗口 bsize=0。见 camera_csi_init() 里 ae_cfg 的 ⚠️。
+ *   25 块全都相同的非零值   → 分块没生效（同上，或分辨率与窗口对不上）。
+ *   遮住镜头 ⇒ 25 块全掉；只遮半边 ⇒ **只有一侧掉**（这条顺带把硬件的块排布
+ *                          方向测出来，把结论记进 cam_on_ae_stat 的注释）。
+ *   手电照中心 ⇒ 中心块冲到 250 以上、「亮块」计数涨到 3 以上。
+ *   帧= 不涨而 CSI 帧在涨   → 忘了 start_continuous，或 enable 失败。
+ *   帧= 涨得比 CSI 帧**快** → AE_ENV 事件也在触发重采（它的阈值我们没设过）。
+ *                          不影响正确性（每次都是完整的一次统计），但 ρ 的
+ *                          采样时刻会与画面统计错开，判读 ρ 时留意。
+ *   alt 0（不取流）下帧= 还在涨 → stop 路径没停统计，看 camera_csi_stop()。
+ *
+ * ⚠️ **ρ 只在 AE 已收敛时才有意义**。曝光正在大幅调整时两个口径采的是不同瞬间的
+ *   画面，比值会抖。反复三次遮挡/复原后 ρ 应当回到同一个值（±0.03）——
+ *   稳定下来的那个数就是 T6 的输入。
+ */
+#if CAM_AE_STAT_ENABLE
+static void camera_ae_stat_report(void)
+{
+    uint8_t blocks[25], hw = 0, nd = 0, nb = 0;
+    const uint32_t frames = cam_ae_stat_snapshot(blocks, &hw, &nd, &nb);
+
+    /*
+     * ρ = 硬件加权 / **软件线性**均值，×1000 的定点。
+     *
+     * ⚠️ 分母是 lin_lum_mean 而**不是** lum_mean：硬件采样点在 gamma 上游，本来
+     *   就是线性量；拿 gamma 域均值当分母会把 γ=0.5 那条曲线的整体抬升（线性 62
+     *   被编码成 126）算进去，得到一个凭空小一倍的假 ρ。
+     *   （gamma 是在本计划里提前做掉的 —— 原计划 T5 写的「软件全帧」是 gamma
+     *     上线之前的说法，直接照抄会错一倍。）
+     * 分母为 0（画面全黑）时打 0，别除零。
+     */
+    const uint32_t lin = s_last_stats.lin_lum_mean;
+    const uint32_t rho = lin ? (uint32_t)hw * 1000u / lin : 0;
+
+    ESP_LOGI(TAG, "[自检] AE统计=%s 运行=%s 帧=%" PRIu32 " | 硬件加权=%u"
+                  "（暗块 %u/%d 亮块 %u/%d）软件线性=%" PRIu32
+                  " ρ=%" PRIu32 ".%03" PRIu32 "（=硬件/软件，T6 的输入）| 本阶段**不接管** AE",
+             step_str(s_st_aestat), step_str(s_st_aerun), frames,
+             hw, nd, CAM_CAL_AE_LOW_REGIONS, nb, CAM_CAL_AE_HIGH_REGIONS,
+             lin, rho / 1000, rho % 1000);
+
+    /* 25 块原始值，按 5 行打。缓冲 5×(5×4+3)+1 = 116，开 160 留足余量：
+     * -Wformat-truncation 按 %3u 的类型上界估算，开小了会被 -Werror 打回。 */
+    char row[160];
+    int n = 0;
+    for (int i = 0; i < 5; i++) {
+        for (int j = 0; j < 5; j++)
+            n += snprintf(row + n, sizeof row - (size_t)n, "%s%3u",
+                          j ? " " : "", blocks[i * 5 + j]);
+        if (i < 4)
+            n += snprintf(row + n, sizeof row - (size_t)n, " |");
+    }
+    ESP_LOGI(TAG, "[自检] AE统计 25 块: %s", row);
+}
+#endif
+
+/*
  * 画质自检：白平衡与曝光各一行。**这两行是判断画面对不对唯一的客观依据** ——
  * 「发绿」「太暗」是观感，R98/G121/B105、亮度均值 45 才是能拿来算系数的数字。
  */
@@ -1366,6 +1585,13 @@ static void camera_quality_report(void)
              s_ae.ev, s_ae.last_mean, CAM_AE_TARGET, CAM_AE_DEADBAND,
              cam_ae_converged(&s_ae) ? "已收敛" : "调整中",
              s_ae.updates, step_str(s_ae_last_err));
+
+#if CAM_AE_STAT_ENABLE
+    camera_ae_stat_report();
+#else
+    ESP_LOGI(TAG, "[自检] AE统计=未编译（CAM_AE_STAT_ENABLE=0，不建 ISP AE 统计块、"
+                  "不申请 ISP 中断；AE 只有软件全帧均值这一个口径）");
+#endif
 }
 
 /*
