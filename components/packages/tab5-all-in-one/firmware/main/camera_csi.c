@@ -24,6 +24,9 @@
 #if CAM_AE_STAT_ENABLE
 #include "driver/isp_ae.h"      /* 硬件 5×5 分块测光（isp_ae.c 全文无 ESP_CHIP_REV_ABOVE） */
 #endif
+#if CAM_AWB_STAT_ENABLE
+#include "driver/isp_awb.h"     /* 硬件白点统计（isp_awb.c 的版本门只否掉 subwindow） */
+#endif
 #if CAM_ADN_ENABLE
 #include "driver/isp_bf.h"
 #include "driver/isp_demosaic.h"
@@ -38,7 +41,8 @@
 #if CAM_GAMMA_ENABLE
 #include "driver/isp_gamma.h"   /* 无芯片版本门（isp_gamma.c 全文无 ESP_CHIP_REV_ABOVE） */
 #endif
-#if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE || CAM_GAMMA_ENABLE || CAM_AE_STAT_ENABLE
+#if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE || CAM_GAMMA_ENABLE || \
+    CAM_AE_STAT_ENABLE || CAM_AWB_STAT_ENABLE
 #include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
 #include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
 #endif
@@ -388,6 +392,24 @@ static uint32_t cam_ae_stat_snapshot(uint8_t blocks[25], uint8_t *hw_mean,
     return frames;
 }
 #endif  /* CAM_AE_STAT_ENABLE */
+
+#if CAM_AWB_STAT_ENABLE
+/* ══ 硬件 AWB 白点统计 ═════════════════════════════════════════════
+ * 设计意图、oneshot 的理由与统计侧 BLC 见 cam_tune.h 的 CAM_AWB_STAT_ENABLE。
+ *
+ * 与 AE 统计**结构不同的一点**：AE 走连续模式 + ISR 回调（每帧一份，任务侧只做
+ * 快照）；AWB 走 **oneshot**（每秒一次，在帧泵任务里阻塞等结果，不注册任何回调）。
+ * 所以这里没有自旋锁、没有 ISR 共享变量 —— 下面这些槽全部只被帧泵任务读写。 */
+static isp_awb_ctlr_t s_awb_ctlr;
+static int32_t        s_st_awbstat = STEP_NOT_RUN;  /* 建控制器 / 使能，取第一个失败 */
+static int32_t        s_st_awbrun  = STEP_NOT_RUN;  /* 最近一次 oneshot 的返回值 */
+
+static cam_awb_hw_stat_t s_awb_hw;          /* 最近一次拿到的采样，自检行用 */
+static bool     s_awb_hw_fresh;             /* 本拍是否刚拿到新采样（T9 的触发条件） */
+static uint32_t s_awb_phase = CAM_AWB_INTERVAL_TICKS;  /* 触发相位，见 camera_awb_stat_tick */
+static uint32_t s_awb_trigs;                /* 累计触发次数 */
+static uint32_t s_awb_timeouts;             /* 其中超时了多少次 */
+#endif  /* CAM_AWB_STAT_ENABLE */
 
 /* ══ 官方前馈画质级（开环查表）══════════════════════════════════════
  * 三组各一个编译开关（cam_tune.h），关掉时下面整段不进镜像 —— 这是现场
@@ -878,6 +900,78 @@ esp_err_t camera_csi_init(void)
                  esp_err_to_name((esp_err_t)s_st_aestat));
 #endif
 
+#if CAM_AWB_STAT_ENABLE
+    /*
+     * ══ 硬件 AWB 白点统计 ══ 用官方标定的白点筛选框。
+     *
+     * 失败**只降级不拦启动**（与 AE 统计 / LSC / gamma / CCM 同一处置）：
+     * 统计块建不起来时 s_st_awbstat 记下错误码、自检行照打，AWB 继续吃软件
+     * 灰世界（CAM_AWB_SOURCE = 1 时则一步不动，见 camera_awb_tick）。
+     */
+    const esp_isp_awb_config_t awb_cfg = {
+        /*
+         * ⚠️⚠️ **CCM 之前**。官方 esp_video 也是硬编码这个采样点。
+         * 这一个字段决定了整个控制律的形态：统计**不穿过**被控块（CCM），
+         * 于是白点估计是**开环前馈**而不是闭环反馈 —— 建议增益是**绝对值**，
+         * 绝不能再乘当前增益。详见 cam_tune.h 的 CAM_AWB_SOURCE。
+         */
+        .sample_point = ISP_AWB_SAMPLE_POINT_BEFORE_CCM,
+        /*
+         * ⚠️ 窗口**必须显式写**（与 AE 同一个坑）：全零窗能通过
+         *   esp_isp_new_awb_controller() 的参数校验，但它表达的是「左上角那一个
+         *   像素」⇒ counted 恒为 0 或 1，现场表现是「统计跑着、白点数几乎恒为 0」。
+         * ⚠️ 与 AE 那边写 1280/720 **不同，这里写 1279/719**：AWB 的窗口
+         *   （isp_hal_awb_set_window_range → isp_ll_awb_set_window_range）是把
+         *   左上/右下四个坐标**原样**写进 lpoint/rpoint 寄存器的**闭区间**，
+         *   不做 AE 那样的 /5 分块。写 1280 就多要了一列不存在的像素。
+         */
+        .window = { .top_left  = { .x = 0,               .y = 0 },
+                    .btm_right = { .x = CAM_SENSOR_W - 1, .y = CAM_SENSOR_H - 1 } },
+        /*
+         * ⚠️ subwindow 在 rev < 3.0 上不可用（驱动打个 warning 就跳过配置），
+         *   我们**不配**，留零 —— 主窗那四个累加值就是全部可用信息。
+         *   零初始化正是驱动认定「没配 subwindow」的判据，不要画蛇添足去填。
+         */
+        .white_patch = {
+            /*
+             * 三个框全部取官方 awb.range（cam_isp_cal.h），**不自己猜**。
+             * 亮度窗的量纲是 R+G+B（[0, 765]，驱动注释写死 255*3），官方给的却是
+             * green 的范围 [98, 210] —— 换算式是官方桥接层自己的：
+             *     lum = G × (1 + R/G + B/G) = R + G + B
+             *     lum_max = 210 × (1 + 0.8790 + 0.6587) = 532.9 → 533
+             *     lum_min =  98 × (1 + 0.3801 + 0.2903) = 163.7 → 164
+             * 推导写在 cam_isp_cal.h 的 CAM_CAL_LUM_MIN 那一段；**现场验算的办法**
+             * 是自检行里那个「平均G = Σg/白点数」，它应当落回 [98, 210]。
+             *
+             * ⓘ 直接用 CAM_CAL_* 除 10000 得到浮点，而不是另抄一遍字面量：
+             *   两处字面量迟早会有一处忘了改，而这种错在画面上看不出来。
+             * ⓘ 驱动把这两个比值转成 2 位整数 + 8 位小数的定点（截断），
+             *   ⇒ 硬件实际用的框是 0.37890625~0.87890625 / 0.2890625~0.65625，
+             *   比这里写的略宽一点点（方向安全：宁可多收几个边界像素，
+             *   重心那一关还有 cam_awb_step_hw 的 SKIP_RANGE 兜着）。
+             */
+            .luminance        = { .min = CAM_CAL_LUM_MIN, .max = CAM_CAL_LUM_MAX },
+            .red_green_ratio  = { .min = CAM_CAL_RG_MIN / 10000.0f,
+                                  .max = CAM_CAL_RG_MAX / 10000.0f },
+            .blue_green_ratio = { .min = CAM_CAL_BG_MIN / 10000.0f,
+                                  .max = CAM_CAL_BG_MAX / 10000.0f },
+        },
+        /* ⚠️ 三个统计块（AE/AWB/AF）共用**一个** ISP 中断，intr_priority 必须与
+         *   处理器一致（都是 0）。理由与失败表现见上面 ae_cfg 的同名字段。 */
+        .intr_priority = 0,
+    };
+    s_st_awbstat = esp_isp_new_awb_controller(s_isp, &awb_cfg, &s_awb_ctlr);
+    if (s_st_awbstat == ESP_OK) {
+        /* ⓘ **不注册 on_statistics_done**：它只在连续模式下才有意义，而我们只用
+         *   oneshot（结果从驱动内部那个 1 深的队列里取）。少一个 ISR 回调，
+         *   也就少一份「ISR 里能不能访问 flash」的约束。 */
+        s_st_awbstat = esp_isp_awb_controller_enable(s_awb_ctlr);
+    }
+    if (s_st_awbstat != ESP_OK)
+        ESP_LOGW(TAG, "AWB 硬件统计没建起来(%s)，白点统计一直是 0",
+                 esp_err_to_name((esp_err_t)s_st_awbstat));
+#endif
+
 #if CAM_LSC_ENABLE
     /*
      * ══ 镜头阴影校正（暗角）══ 官方 273 格 × 4 通道的标定表。
@@ -1272,6 +1366,52 @@ static void camera_ae_tick(const cam_frame_stats_t *st)
         ESP_LOGW(TAG, "曝光/增益下发失败(%s)", esp_err_to_name((esp_err_t)s_ae_last_err));
 }
 
+#if CAM_AWB_STAT_ENABLE
+/*
+ * 触发一次硬件白点统计。**每拍都调，分频在函数内部做**（与 cam_awb_step 的
+ * 频率限制同一处置：调用方不该记着「隔几拍才调一次」这种事）。
+ *
+ * ⚠️ 这是本文件里唯一一处**会阻塞帧泵**的调用：最坏 CAM_AWB_ONESHOT_MS = 60 ms，
+ *   典型 ≈ 一个传感器帧周期 33 ms。帧泵是 100 ms 的固定节拍，预算够（取帧 +
+ *   统计 + 缩放 4.2 ms + 编码 9.1 ms + 这 35 ms）。fps 掉下来时先拉长周期，
+ *   再考虑把这一调用挪到 uvc_stream.c 提交之后 —— 判读见 cam_tune.h。
+ *
+ * ⓘ **只在取流中调**：调用方 camera_csi_tune_tick() 已经有 s_streaming 那道闸，
+ *   这里不再重复判断，但「alt 0 下触发= 不涨」这条现场判据正是靠它成立的。
+ */
+static void camera_awb_stat_tick(void)
+{
+    /*
+     * res 做成 static 而不是栈上局部量：isp_awb_stat_result_t 有 432 字节
+     * （其中 400 字节是 rev < 3.0 上根本不存在的 subwindow 结果，驱动 ISR 仍会
+     * 无条件填），而帧泵任务的栈只有 4 KB。它只被帧泵这一个任务碰，没有重入。
+     */
+    static isp_awb_stat_result_t res;
+
+    s_awb_hw_fresh = false;
+    if (s_st_awbstat != ESP_OK)
+        return;
+    if (--s_awb_phase)
+        return;                     /* 还没到点 */
+    s_awb_phase = CAM_AWB_INTERVAL_TICKS;
+
+    s_awb_trigs++;
+    s_st_awbrun = esp_isp_awb_controller_get_oneshot_statistics(s_awb_ctlr,
+                                                                CAM_AWB_ONESHOT_MS, &res);
+    if (s_st_awbrun != ESP_OK) {
+        /* 超时：这一拍**什么都不做**（不是拿旧数据凑合）。s_awb_hw 保持上一次
+         * 的值只为自检行还有东西可看；s_awb_hw_fresh = false 保证控制律不会用它。 */
+        s_awb_timeouts++;
+        return;
+    }
+    s_awb_hw.counted = res.white_patch_num;
+    s_awb_hw.sum_r   = res.sum_r;
+    s_awb_hw.sum_g   = res.sum_g;
+    s_awb_hw.sum_b   = res.sum_b;
+    s_awb_hw_fresh   = true;
+}
+#endif  /* CAM_AWB_STAT_ENABLE */
+
 #if CAM_AWB_ENABLE
 /* AWB 走一拍：算出新的 R/B 增益并重配 CCM。控制律与全部防护判据在 cam_tune.c。 */
 static void camera_awb_tick(const cam_frame_stats_t *st)
@@ -1488,6 +1628,16 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
     /* 顺序：**先 AE 后 AWB**。AWB 要读 cam_ae_converged()，让它读到的是本帧刚
      * 更新过的收敛状态，而不是上一帧的陈旧值。 */
     camera_ae_tick(st);
+    /*
+     * AWB 的硬件统计**排在 AE 之后、AWB 之前**：AE 那一拍可能刚下发新曝光，
+     * 但曝光要一两帧之后才生效 —— 也就是说这一次 oneshot 采到的仍然是「旧曝光」
+     * 下的画面，与软件统计（同样来自刚取到的那一帧）**同一个时刻**，两个口径
+     * 并排对照才有意义。T9 之后它还兼任触发闸：只有拿到新采样的那一拍
+     * 才允许 AWB 动。
+     */
+#if CAM_AWB_STAT_ENABLE
+    camera_awb_stat_tick();
+#endif
 #if CAM_AWB_ENABLE
     camera_awb_tick(st);
 #endif
@@ -1588,6 +1738,100 @@ static void camera_ae_stat_report(void)
     ESP_LOGI(TAG, "[自检] AE统计 25 块: %s", row);
 }
 #endif
+
+#if CAM_AWB_STAT_ENABLE
+/*
+ * 硬件 AWB 白点统计的自检：**两行**。
+ *
+ * 第一行是这次统计本身（跑没跑、筛出多少、重心在哪、推出多少色温与绝对增益）；
+ * 第二行是**并排对照** —— 同一个物理量（「R 通道该乘多少」）由两个互相独立的
+ * 估计器各给一份：
+ *   硬件白点  采在 **CCM 之前**、按官方框逐像素筛 ⇒ 直接给**绝对**增益 Σg/Σr；
+ *   软件灰世界 采在 **CCM 之后**、整幅平均      ⇒ 给 当前 × g_mean/r_mean，
+ *                                                 那同样是一个**绝对**目标值。
+ * 两个数应当接近。**这一行是 T9 切换前唯一的对照依据**：
+ *   两者接近（差 < 10%）        → 两个估计器互相印证，可以放心把 CAM_AWB_SOURCE
+ *                                翻成 1；
+ *   硬件那份明显更偏离 1.0      → 正常。灰世界被画面里的彩色物体拉向中性，
+ *                                白点筛选没有 —— 这正是换估计器的收益。
+ *   两者方向相反（一个 >1 一个 <1）→ **别切**。多半是 rg 的分子分母颠倒，
+ *                                或者采样点没配上（自检行的 CCT 会同时贴在端点）。
+ *
+ * 判读（第一行）：
+ *   AWB统计=未编译 / 非 ESP_OK  → 统计块没建起来，下面的数全是 0，先修这个。
+ *   触发= 不涨而取流中          → 分频没走到（看 CAM_AWB_INTERVAL_TICKS），
+ *                                或 s_streaming 是 false。
+ *   触发= 在涨但 alt 0          → stop 路径漏了，回去看 camera_csi_tune_tick 的闸。
+ *   超时= 在涨                  → 60 ms 不够，或 ISP 没在出数据。先确认取流中，
+ *                                再把 CAM_AWB_ONESHOT_MS 加到 100 试。
+ *   白点=0 恒定                 → 筛选框与实际数据不同域。临时把 rg/bg 放宽到
+ *                                [0.1, 3.9]、亮度窗放宽到 [1, 764] 重测；这时若
+ *                                有白点，说明官方框用错了域 ⇒ **推翻 T9**。
+ *   白点= 恒等于 921600         → 筛选没生效（框被写成全域），检查浮点字段。
+ *   平均G 跑出 [98, 210]        → 亮度窗与我们的实际信号电平不匹配（AE 目标改过？）。
+ *                                这是「白点太少」最常见的根因 —— 官方 green 范围
+ *                                是按官方 AE 工作点标的，我们的工作点若不同，
+ *                                要按实测等比缩放，**并把偏离官方值的理由写进
+ *                                cam_isp_cal.h 旁边**。
+ *   拍白纸时占比 > 30%、拍红墙时 < 5% → **筛选框真的在筛**，这条是白点统计
+ *                                能不能信的分水岭。
+ *   CCT 恒定贴在 2289 或 7466   → rg 算错（分子分母颠倒）或 Σg = 0 没防住。
+ */
+static void camera_awb_stat_report(uint32_t sw_sug_r, uint32_t sw_sug_b)
+{
+    const uint32_t total = (uint32_t)CAM_SENSOR_W * CAM_SENSOR_H;
+    /* 占比与「平均 G」都按**原始**采样算（不扣统计侧基座）：它们要回答的是
+     * 「硬件那一关筛出了什么」，而基座扣除是我们在硬件之后做的事。 */
+    const uint32_t pct_q1 = (uint32_t)((uint64_t)s_awb_hw.counted * 1000u / total);
+    const uint32_t g_avg  = s_awb_hw.counted ? s_awb_hw.sum_g / s_awb_hw.counted : 0;
+    /* 平均 R+G+B —— **硬件那道亮度窗真正筛的量**。它必须落在 [164, 533] 之内，
+     * 否则就是窗口/采样点没配上（而不是场景问题）。与 g_avg 一起打，
+     * 两个数就把「官方 green 范围 → 官方推导式 → 驱动的 lum 字段」这条换算
+     * 在现场从两头各验一次。 */
+    const uint32_t lum_avg = s_awb_hw.counted
+                                 ? (uint32_t)(((uint64_t)s_awb_hw.sum_r + s_awb_hw.sum_g +
+                                               s_awb_hw.sum_b) / s_awb_hw.counted)
+                                 : 0;
+
+    uint32_t rg = 0, bg = 0, cct = 0, kr = 0, kb = 0;
+    if (cam_awb_ratios(&s_awb_hw, &rg, &bg)) {
+        cct = cam_cct_from_rg(rg);
+        /* 绝对增益 = 1/rg（单位 1/1000）。**这里不乘任何「当前值」** ——
+         * 采样点在 CCM 之前，读数里没有已生效的增益，乘了就是 §E.3 那个错。 */
+        kr = 10000000u / rg;
+        kb = 10000000u / bg;
+    }
+
+    ESP_LOGI(TAG, "[自检] AWB统计=%s 最近=%s 触发=%" PRIu32 " 超时=%" PRIu32
+                  " | 白点=%" PRIu32 "/%" PRIu32 "(%" PRIu32 ".%" PRIu32 "%%)"
+                  " 平均R+G+B=%" PRIu32 "(硬件窗 %d~%d) 平均G=%" PRIu32
+                  "(官方 green %d~%d) | Σr/Σg=0.%04" PRIu32
+                  " Σb/Σg=0.%04" PRIu32 " → CCT=%" PRIu32 "K"
+                  " 绝对增益 R×%" PRIu32 ".%03" PRIu32 " B×%" PRIu32 ".%03" PRIu32,
+             step_str(s_st_awbstat), step_str(s_st_awbrun), s_awb_trigs, s_awb_timeouts,
+             s_awb_hw.counted, total, pct_q1 / 10, pct_q1 % 10,
+             lum_avg, CAM_CAL_LUM_MIN, CAM_CAL_LUM_MAX,
+             g_avg, CAM_CAL_GREEN_MIN, CAM_CAL_GREEN_MAX,
+             rg, bg, cct, kr / 1000, kr % 1000, kb / 1000, kb % 1000);
+
+    /* 两个估计器的差，单位 0.1%。软件那份为 0（还没有过统计）时打 0，不除零。 */
+    const uint32_t dr = sw_sug_r ? (uint32_t)((uint64_t)(kr > sw_sug_r ? kr - sw_sug_r
+                                                                      : sw_sug_r - kr)
+                                              * 1000u / sw_sug_r) : 0;
+    const uint32_t db = sw_sug_b ? (uint32_t)((uint64_t)(kb > sw_sug_b ? kb - sw_sug_b
+                                                                      : sw_sug_b - kb)
+                                              * 1000u / sw_sug_b) : 0;
+    ESP_LOGI(TAG, "[自检] AWB对照 硬件白点(CCM前·绝对) R×%" PRIu32 ".%03" PRIu32
+                  " B×%" PRIu32 ".%03" PRIu32
+                  " | 软件灰世界(CCM后·当前×g/x) R×%" PRIu32 ".%03" PRIu32
+                  " B×%" PRIu32 ".%03" PRIu32
+                  " | 差 R%" PRIu32 ".%" PRIu32 "%% B%" PRIu32 ".%" PRIu32 "%%"
+                  " | AWB 源=软件灰世界（本统计只观测）",
+             kr / 1000, kr % 1000, kb / 1000, kb % 1000,
+             sw_sug_r / 1000, sw_sug_r % 1000, sw_sug_b / 1000, sw_sug_b % 1000,
+             dr / 10, dr % 10, db / 10, db % 10);
+}
+#endif  /* CAM_AWB_STAT_ENABLE */
 
 /*
  * 画质自检：白平衡与曝光各一行。**这两行是判断画面对不对唯一的客观依据** ——
@@ -1700,6 +1944,15 @@ static void camera_quality_report(void)
              s_awb.reasons[CAM_AWB_SKIP_RANGE], s_awb.reasons[CAM_AWB_SKIP_QUANT]);
 #else
     ESP_LOGI(TAG, "[自检] AWB=关（CAM_AWB_ENABLE=0，白平衡钉在上面那对静态标定值上）");
+#endif
+
+#if CAM_AWB_STAT_ENABLE
+    /* 硬件白点统计那两行紧跟 AWB 之后：它们说的是同一件事的另一个口径，
+     * 挨着打才对照得起来。sug_r/sug_b 就是上面画质那行算出来的软件绝对建议。 */
+    camera_awb_stat_report(sug_r, sug_b);
+#else
+    ESP_LOGI(TAG, "[自检] AWB统计=未编译（CAM_AWB_STAT_ENABLE=0，不建 ISP AWB 统计块、"
+                  "帧泵里没有那次 oneshot 阻塞）");
 #endif
 
     /*

@@ -256,13 +256,19 @@ static const uint16_t cam_cal_cct_k[CAM_CAL_CCT_N] = {
  *   lum_max = 210 × (1 + 0.8790 + 0.6587) = 532.917 → 533
  *   lum_min = 98 × (1 + 0.3801 + 0.2903) = 163.699 → 164
  * ⚠️ 这三个框是官方在**未做 WB 的 raw 色度空间**里标的（rg 0.38~0.88 明显没白平衡过），
- *   与我们 ISP_AWB_SAMPLE_POINT_BEFORE_CCM 的采样点恰好同域，可以直接用。 */
+ *   与我们 ISP_AWB_SAMPLE_POINT_BEFORE_CCM 的采样点恰好同域，可以直接用。
+ * ⓘ GREEN_MIN/MAX 是**原始的** green 范围，驱动不吃它（驱动的字段是上面那个
+ *   R+G+B 的 lum 窗）。留着它是为了现场能验算这条换算：自检行打的
+ *   「平均G = Σg/白点数」必须落回 [98, 210]，否则说明官方 green 范围与我们的
+ *   信号电平不同域，亮度窗要按实测重标。 */
 #define CAM_CAL_RG_MIN        3801
 #define CAM_CAL_RG_MAX        8790
 #define CAM_CAL_BG_MIN        2903
 #define CAM_CAL_BG_MAX        6587
 #define CAM_CAL_LUM_MIN       164
 #define CAM_CAL_LUM_MAX       533
+#define CAM_CAL_GREEN_MIN     98
+#define CAM_CAL_GREEN_MAX     210
 /* 白点数低于它就认为这一拍的估计不可信。 */
 #define CAM_CAL_MIN_COUNTED   1200
 

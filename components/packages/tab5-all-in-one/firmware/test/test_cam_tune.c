@@ -652,6 +652,82 @@ static void test_awb_closed_loop(void)
     CHECK(cam_awb_converged(&awb), "本来就平衡的场景应当报收敛");
 }
 
+/* ══ 硬件白点统计：Σ → rg/bg ═════════════════════════════════════════ */
+
+static void test_awb_ratios(void)
+{
+    uint32_t rg = 0xdeadbeef, bg = 0xdeadbeef;
+
+    /* 常规一份：Σr/Σg = 0.5、Σb/Σg = 0.6。 */
+    cam_awb_hw_stat_t s = { .counted = 10000, .sum_r = 500000,
+                            .sum_g = 1000000, .sum_b = 600000 };
+    CHECK(cam_awb_ratios(&s, &rg, &bg), "常规采样应当算得出来");
+    CHECK(rg == 5000, "rg 应为 5000（0.5000），实得 %u", rg);
+    CHECK(bg == 6000, "bg 应为 6000（0.6000），实得 %u", bg);
+
+    /* 不可用的三种：空指针、counted = 0、Σg = 0。全部返回 false 且**不写出参**。 */
+    rg = bg = 0x5a5a;
+    CHECK(!cam_awb_ratios(NULL, &rg, &bg), "空采样必须被挡住");
+    CHECK(!cam_awb_ratios(&s, NULL, &bg), "空出参必须被挡住");
+    CHECK(!cam_awb_ratios(&s, &rg, NULL), "空出参必须被挡住");
+    const cam_awb_hw_stat_t zero_cnt = { .counted = 0, .sum_r = 1, .sum_g = 1, .sum_b = 1 };
+    CHECK(!cam_awb_ratios(&zero_cnt, &rg, &bg), "counted = 0 的采样必须被挡住");
+    const cam_awb_hw_stat_t zero_g = { .counted = 100, .sum_r = 100, .sum_g = 0, .sum_b = 100 };
+    CHECK(!cam_awb_ratios(&zero_g, &rg, &bg), "Σg = 0 必须被挡住（这里正是除零点）");
+    CHECK(rg == 0x5a5a && bg == 0x5a5a, "被挡住时不该写出参");
+
+    /*
+     * **满量程不溢出**。1280×720 全部入选、三个通道都顶到 255：
+     * Σ = 235,008,000，乘 10000 = 2.35e12 —— 用 uint32 算这里必炸，
+     * 炸出来的 rg 是个随机数，而现场只会看到「白平衡莫名其妙地跑」。
+     */
+    const uint32_t full = 1280u * 720u;
+    const cam_awb_hw_stat_t sat = { .counted = full, .sum_r = full * 255u,
+                                    .sum_g = full * 255u, .sum_b = full * 255u };
+    CHECK(cam_awb_ratios(&sat, &rg, &bg), "满量程采样应当算得出来");
+    CHECK(rg == 10000 && bg == 10000, "满量程三通道相等 ⇒ rg = bg = 10000，实得 %u/%u",
+          rg, bg);
+
+    /*
+     * 官方白点框的下界（cam_isp_cal.h 的 CAM_CAL_RG_MIN = 3801、
+     * CAM_CAL_BG_MIN = 2903）必须能被这套定点**精确**表达 —— 控制律的
+     * SKIP_RANGE 判据是拿 rg_q4 与这两个数直接比大小的，差一个量化单位就会
+     * 在边界上得出相反的结论。
+     * ⓘ 这里写字面量而不是 include cam_isp_cal.h：cam_tune 一族是纯逻辑，
+     *   不依赖标定表（那是 cam_isp_map 那一族的事）。
+     */
+    const cam_awb_hw_stat_t corner = { .counted = 1000, .sum_r = 380100,
+                                       .sum_g = 1000000, .sum_b = 290300 };
+    CHECK(cam_awb_ratios(&corner, &rg, &bg), "白点框左下角应当算得出来");
+    CHECK(rg == 3801 && bg == 2903,
+          "白点框左下角应当精确落回官方框的下界，实得 %u/%u", rg, bg);
+
+    /*
+     * 统计侧黑电平扣除。CAM_STAT_BLC_PEDESTAL 是编译期常量，所以这里只能测
+     * 「当前构建下的那一档」——**两档都要有断言**，靠 #if 分开写：
+     * 默认档（0）要求恒等；打开档（16）按手算的值核对。
+     * 这条用例的价值在于把「扣除是精确的（Σ − p×counted）」钉住 ——
+     * 它是唯一能把 counted 用错成「全画面像素数」的地方。
+     */
+    const cam_awb_hw_stat_t ped = { .counted = 1000, .sum_r = 100000,
+                                    .sum_g = 200000, .sum_b = 150000 };
+    CHECK(cam_awb_ratios(&ped, &rg, &bg), "扣基座用例应当算得出来");
+#if CAM_STAT_BLC_PEDESTAL == 0
+    CHECK(rg == 5000 && bg == 7500, "基座 0 时必须是恒等变换，实得 %u/%u", rg, bg);
+#elif CAM_STAT_BLC_PEDESTAL == 16
+    /* Σ' = (100000, 200000, 150000) − 16×1000 = (84000, 184000, 134000)
+     * ⇒ rg = 84000×10000/184000 = 4565、bg = 134000×10000/184000 = 7282。
+     * 注意两个比值都**更偏离 1**：扣掉加性基座之后色度对比被还原，这正是要的。 */
+    CHECK(rg == 4565 && bg == 7282, "基座 16 的手算值对不上，实得 %u/%u", rg, bg);
+#endif
+
+    /* 基座把某个通道减到 0 以下时钳到 0（不是回绕成天文数字）。 */
+    const cam_awb_hw_stat_t tiny = { .counted = 1000, .sum_r = 1,
+                                     .sum_g = 200000, .sum_b = 150000 };
+    CHECK(cam_awb_ratios(&tiny, &rg, &bg), "极暗红通道仍应算得出来");
+    CHECK(rg <= 100, "红通道几乎为 0 时 rg 必须接近 0，实得 %u", rg);
+}
+
 /* ══ 可调参数自身的合法性 ════════════════════════════════════════════ */
 
 static void test_tunables(void)
@@ -715,6 +791,7 @@ int main(void)
     test_awb();
     test_awb_guards();
     test_awb_closed_loop();
+    test_awb_ratios();
     test_tunables();
 
     printf("OK (%d cases)\n", cases);

@@ -308,6 +308,29 @@ bool cam_awb_converged(const cam_awb_state_t *st)
     return st && st->in_band >= CAM_AWB_CONVERGE_TICKS;
 }
 
+/* ══ 硬件白点统计（采样点 = CCM 之前）══════════════════════════════ */
+
+bool cam_awb_ratios(const cam_awb_hw_stat_t *s, uint32_t *rg_q4, uint32_t *bg_q4)
+{
+    if (!s || !rg_q4 || !bg_q4 || s->counted == 0)
+        return false;
+
+    /* 统计侧黑电平扣除。counted 是硬件数出来的参与像素数 ⇒ 这个减法精确。
+     * 常量为 0 时下面三行是恒等变换，编译器会整段折掉（不写 #if 是为了让
+     * 「开与不开」走的是同一条代码路径，宿主机用例才能两种都测到）。 */
+    const uint64_t ped = (uint64_t)CAM_STAT_BLC_PEDESTAL * s->counted;
+    const uint64_t sr = s->sum_r > ped ? (uint64_t)s->sum_r - ped : 0;
+    const uint64_t sg = s->sum_g > ped ? (uint64_t)s->sum_g - ped : 0;
+    const uint64_t sb = s->sum_b > ped ? (uint64_t)s->sum_b - ped : 0;
+    if (sg == 0)
+        return false;
+
+    /* ⚠️ 必须 uint64：Σ 满量程 1280×720×255 = 2.35e8，×10000 就溢出 uint32 了。 */
+    *rg_q4 = (uint32_t)(sr * 10000u / sg);
+    *bg_q4 = (uint32_t)(sb * 10000u / sg);
+    return true;
+}
+
 const char *cam_awb_reason_str(cam_awb_reason_t r)
 {
     switch (r) {

@@ -352,15 +352,22 @@ def emit_awb_box(s, out):
  *   lum_max = %.0f × (1 + %.4f + %.4f) = %.3f → %d
  *   lum_min = %.0f × (1 + %.4f + %.4f) = %.3f → %d
  * ⚠️ 这三个框是官方在**未做 WB 的 raw 色度空间**里标的（rg 0.38~0.88 明显没白平衡过），
- *   与我们 ISP_AWB_SAMPLE_POINT_BEFORE_CCM 的采样点恰好同域，可以直接用。 */"""
+ *   与我们 ISP_AWB_SAMPLE_POINT_BEFORE_CCM 的采样点恰好同域，可以直接用。
+ * ⓘ GREEN_MIN/MAX 是**原始的** green 范围，驱动不吃它（驱动的字段是上面那个
+ *   R+G+B 的 lum 窗）。留着它是为了现场能验算这条换算：自检行打的
+ *   「平均G = Σg/白点数」必须落回 [%d, %d]，否则说明官方 green 范围与我们的
+ *   信号电平不同域，亮度窗要按实测重标。 */"""
                % (r["green"]["max"], r["rg"]["max"], r["bg"]["max"], lum_max, rnd(lum_max),
-                  r["green"]["min"], r["rg"]["min"], r["bg"]["min"], lum_min, rnd(lum_min)))
+                  r["green"]["min"], r["rg"]["min"], r["bg"]["min"], lum_min, rnd(lum_min),
+                  rnd(r["green"]["min"]), rnd(r["green"]["max"])))
     out.append("#define CAM_CAL_RG_MIN        %d" % rnd(r["rg"]["min"] * 10000))
     out.append("#define CAM_CAL_RG_MAX        %d" % rnd(r["rg"]["max"] * 10000))
     out.append("#define CAM_CAL_BG_MIN        %d" % rnd(r["bg"]["min"] * 10000))
     out.append("#define CAM_CAL_BG_MAX        %d" % rnd(r["bg"]["max"] * 10000))
     out.append("#define CAM_CAL_LUM_MIN       %d" % rnd(lum_min))
     out.append("#define CAM_CAL_LUM_MAX       %d" % rnd(lum_max))
+    out.append("#define CAM_CAL_GREEN_MIN     %d" % rnd(r["green"]["min"]))
+    out.append("#define CAM_CAL_GREEN_MAX     %d" % rnd(r["green"]["max"]))
     out.append("/* 白点数低于它就认为这一拍的估计不可信。 */")
     out.append("#define CAM_CAL_MIN_COUNTED   %d" % a["min_counted"])
     return 0
