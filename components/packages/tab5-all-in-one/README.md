@@ -72,17 +72,34 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
   host 侧 mainline `uvcvideo` 出 `/dev/videoN`，`ffplay` 显示真实摄像头画面。
   实测：CSI 取流 **30 fps 稳定**（抢缓冲 / 丢弃 / 取帧超时全 0，帧长 1843200 正确），
   UVC 侧**每 10 秒精确 +100 帧、提交 == 完成、零拒收**，亮度跟手（挡住 / 拿开 / 手电三档分明）。
-  **自动曝光（AE）闭环已实机验证**。
+  **自动曝光（AE）闭环已实机验证**（软件全帧均值 + 目标 120 的那一版）。
   ⚠️ **限定与未验项**：只声明这**一个**格式/分辨率/帧率（不做多模式协商）；
-  **自动白平衡（AWB）闭环尚未上板** —— 它只过了 281 个宿主机用例，
-  `CAM_AWB_ENABLE` 改 0 即可退回**已实机验证的静态白平衡**；
-  单色场景防护的实际效果、以及**开摄像头时 GUD 帧率的实测变化**同样未测（见下方带宽提示）。
+  自动白平衡（AWB）闭环、单色场景防护的实际效果、以及**开摄像头时 GUD 帧率的实测变化**
+  均未测（见下方带宽提示与下一条）。
   最贵的一类坑是 **ESP32-P4 rev <3.0 缺一批硬件功能**（CSI 桥没有颜色转换硬件、
   JPEG 编码器不吃 YUV420/444、ISP 的 WBG/BLC/crop 不可用），照抄 IDF 例程会直接
   `ESP_ERR_NOT_SUPPORTED` 或**静默拿到半帧**，`firmware/README.md` 有专章。
+- ⛔ **ISP 对齐（与官方 `esp_ipa` 管线逐级对齐）—— 已实现，全部未上板验证。**
+  10 个 commit（`751b24bb` … `e6201fc3`）把摄像头画质从「对角阵 CCM + 软件全帧 AE +
+  灰世界 AWB」推进到官方口径：**gamma**（4 档，按 `env.luma` 动态选）、
+  **BF / Demosaic / SHARP / Color**（按增益查官方表）、**LSC**（273 格 × 4 通道，按 CCT 3 档）、
+  **CCM**（官方 19 档按 CCT 插值 + 白平衡右乘折叠 + S2.10 强度钳制）、
+  **硬件 AE 5×5 统计**（官方加权测光，采在 demosaic 后）、
+  **硬件 AWB 白点统计**（官方白点框，采在 CCM 前，开环绝对增益公式）、
+  **直方图 + `env.luma` 重建**、以及**黑电平量具**。
+  标定值全部从官方 `sc202cs_default.json` **机械提取**（`firmware/test/isp_cal_extract.py`，
+  `--check` 是烧板前的闸门）。
+  **已验证的只有宿主机侧**：9 组共 **3258** 个用例、两档 clean build 零告警、
+  USB 描述符两档逐字节未变（`check_usb_desc.py` 双档过）、依赖树仍是 12 个目录。
+  ⚠️ **一次都没有烧过板** —— 所有结论都是源码推导与宿主机仿真。
+  每一项都在一个编译开关后面，`firmware/README.md` 的「**上板验证清单**」给出了
+  从底层（统计抽头在不在画面上）到上层（观感）的有序验证顺序、三个判定点
+  （ρ ≈ 0.79 / `env.luma` 重建 / 黑电平基座）、以及「关掉哪个退回哪个 commit」的对照表。
 - ⏳ **五项能力的复合回归尚未执行**（GUD + 键盘 + 触摸 + 音频 + 摄像头同跑 10 分钟）。
   五项**各自**都已实机验证，且每次新增能力时都复验过前面几项无回归，
-  但「同时全开」这一场压测还没做。
+  但「同时全开」这一场压测还没做。可执行规程见 `firmware/README.md` 的
+  「**五项能力复合回归规程**」—— 它同时是 **P0 欠账**（脏矩形/LZ4 定量、GUD 帧率实测）
+  与 **P3 欠账**（全双工长时稳定性、无反馈端点的时钟漂移）唯一的采集时机。
 - ⏳ 规划中：主机侧全局内核 config（`flange_common.config` + builder 注入，对所有 board 生效）。
 
 > USB-C 只有 **12 Mbps 全速**（480 Mbps 的高速口被接到了 USB-A 母座）。带宽是零和的：
@@ -103,5 +120,9 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
   `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p1-hid-keyboard.md`（HID 键盘）、
   `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p2-hid-touch.md`（HID 触摸）、
   `docs/superpowers/plans/2026-08-14-tab5-all-in-one-p3-uac-audio.md`（UAC1 音频）、
-  `docs/superpowers/plans/2026-08-15-tab5-all-in-one-p4-uvc-camera.md`（UVC 摄像头）
+  `docs/superpowers/plans/2026-08-15-tab5-all-in-one-p4-uvc-camera.md`（UVC 摄像头）、
+  `docs/superpowers/plans/2026-08-21-tab5-isp-align-with-official.md`（ISP 对齐）
+- ISP 基线研究：`docs/superpowers/research/2026-08-19-esp32p4-official-isp-pipeline.md`
+  （官方管线逻辑重建）、`docs/superpowers/research/2026-08-19-our-isp-pipeline-audit.md`
+  （对齐前的自身基线审计）
 - 固件细节与构建/烧录/验证：`firmware/README.md`
