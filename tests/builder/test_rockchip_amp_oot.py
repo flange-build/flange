@@ -107,16 +107,12 @@ def test_local_oot_amp_and_bridge_disable_stale_cache(tmp_path):
     assert cache._has_local_upstream("image") is True
 
 
-def test_atk_rk3506b_fluxion_product_selects_two_oot_apps():
-    """专用 product 不覆盖 default 救援固件，并完整注册 AMP/bridge。"""
+def test_atk_rk3506b_fluxion_product_selects_runtime_only():
     default = resolve_config("atk-rk3506b", "default", "debug")
     fluxion = resolve_config("atk-rk3506b", "fluxion", "debug")
 
     assert default["amp"]["app"] == "rk3506_amp_uart4_rtt_demo"
     assert "external_apps" not in default
-    assert fluxion["amp"]["app"] == "rk3506_amp_fluxion_foc"
-    assert set(fluxion["external_apps"]) == {
-        "rk3506_amp_fluxion_foc",
-        "fluxion-rpmsg-bridge",
-    }
-    assert "fluxion-rpmsg-bridge" in fluxion["rootfs"]["custom_packages"]
+    assert fluxion["amp"]["app"] == "fluxion_runtime"
+    assert set(fluxion["external_apps"]) == {"fluxion_runtime"}
+    assert "fluxion-rpmsg-bridge" not in fluxion["rootfs"]["custom_packages"]

@@ -23,12 +23,12 @@ START 超时——与 pwm1 曾经遇到的失败模式相同（patch 0005）。r
 HAL_CRU_ClkEnable"的补偿路线，因为那块板的 AMP 节点没有认领机制可用。RK3506
 这里由 DTS 一次性认领，更干净，也避免了在控制环热路径上反复写 CRU。
 ---
- arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts | 14 +++++++++++---
- 1 file changed, 11 insertions(+), 3 deletions(-)
+ arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts | 24 +++++++++++++++++++++---
+ 1 file changed, 21 insertions(+), 3 deletions(-)
 
 --- a/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
 +++ b/arch/arm/boot/dts/rk3506b-alientek-mipi720x1280-nand-ubi-ubifs-amp-linux.dts
-@@ -39,12 +39,20 @@
+@@ -39,12 +39,30 @@
          status = "disabled";
  };
  
@@ -46,6 +46,16 @@ HAL_CRU_ClkEnable"的补偿路线，因为那块板的 AMP 节点没有认领机
 +// clk_disable_unused 会在启动末期关掉它们的时钟：pwm1 表现为引脚无波形（CPU2
 +// 仍在换相），i2c1 表现为传输卡在 START 超时。
  &rockchip_amp {
++        amp-irqs = /bits/ 64 <
++                GIC_AMP_IRQ_CFG_ROUTE(35, 0xd0, CPU_GET_AFFINITY(0, 2))
++                GIC_AMP_IRQ_CFG_ROUTE(39, 0xd0, CPU_GET_AFFINITY(0, 2))
++                GIC_AMP_IRQ_CFG_ROUTE(43, 0xd0, CPU_GET_AFFINITY(0, 2))
++                GIC_AMP_IRQ_CFG_ROUTE(47, 0xd0, CPU_GET_AFFINITY(0, 2))
++                GIC_AMP_IRQ_CFG_ROUTE(51, 0xd0, CPU_GET_AFFINITY(0, 2))
++                GIC_AMP_IRQ_CFG_ROUTE(70, 0xd0, CPU_GET_AFFINITY(0, 2))
++                GIC_AMP_IRQ_CFG_ROUTE(73, 0xd0, CPU_GET_AFFINITY(0, 2))
++                GIC_AMP_IRQ_CFG_ROUTE(176, 0xd0, CPU_GET_AFFINITY(0, 2))>;
++
          clocks = <&cru HCLK_M0>, <&cru STCLK_M0>,
                   <&cru SCLK_UART4>, <&cru PCLK_UART4>,
                   <&cru PCLK_TIMER>, <&cru CLK_TIMER0_CH5>,
