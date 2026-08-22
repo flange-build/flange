@@ -135,6 +135,27 @@ bool cam_ccm_fold_at(const int32_t m_milli[9], uint32_t kr_milli, uint32_t kb_mi
 uint32_t cam_ccm_fold_wb(const int32_t m_milli[9], uint32_t kr_milli, uint32_t kb_milli,
                          int32_t out_milli[9]);
 
+/*
+ * ── CCM：折叠 + 定点钳制**再叠一道人为的强度总闸**（T10 的实际策略）─────
+ *
+ *     t = min(cam_ccm_fold_wb(...), t_max_q8)
+ *
+ * 为什么要有这道总闸、以及为什么它的默认值是 192 而不是 256，见 cam_tune.h 的
+ * CAM_CCM_STRENGTH_MAX（一句话：黑电平基座会被 W 变成不等值、再被 CCM 的大负
+ * 非对角项放大成品红黑位，而 T7 的实测数据还没有）。
+ *
+ * 把这两步合成一个函数、而不是让调用方写两遍，是为了让「钳完之后必然仍可行」
+ * 这条性质**在宿主机上可测**：可行域是 [0, t*]，任何 t <= t* 都可行 ⇒ 取更小的
+ * t_max 只会更安全。t_max_q8 > 256 按 256 处理（没有「超过官方全量」这回事）。
+ *
+ * t_feasible 若非 NULL，写回**钳制之前**二分求出的最大可行 t —— 自检行要靠它
+ * 分清「强度上不去」是硬件定点装不下还是我们自己压的，两者的下一步完全不同。
+ * out_milli 不可为 NULL。返回实际采用的 t（0..256）。
+ */
+uint32_t cam_ccm_fold_wb_clamped(const int32_t m_milli[9], uint32_t kr_milli, uint32_t kb_milli,
+                                 uint32_t t_max_q8, int32_t out_milli[9],
+                                 uint32_t *t_feasible);
+
 /* ── AE：25 块 → 加权均值（官方权重表）+ 过暗/过亮块 quorum 剔除 ────
  * n_dark  = 亮度 <  CAM_CAL_AE_LOW_THRESH(14)  的块数
  * n_bright= 亮度 >  CAM_CAL_AE_HIGH_THRESH(239) 的块数

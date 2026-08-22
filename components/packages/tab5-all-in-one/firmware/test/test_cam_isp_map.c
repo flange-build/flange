@@ -489,6 +489,47 @@ static void test_ccm_fold(void)
     }
     cases++;
 
+    /* ── E10 T10 的实际策略：min(t*, CAM_CCM_STRENGTH_MAX) ──
+     * cam_ccm_fold_wb_clamped() 把「定点二分」与「人为总闸」合成一步。三条性质：
+     *   ① 返回值恒等于 min(t*, t_max)（t_max > 256 按 256 处理）；
+     *   ② 结果矩阵恒可行（可行域是 [0, t*]，取更小的 t 只会更安全）——
+     *      这正是「把强度当黑电平的总闸」这个做法成立的全部理由；
+     *   ③ t_max = 0 ⇒ 逐元素退回 diag(kr, 1, kb)，即 CAM_CCM_MODE=0 那条
+     *      已实机验证的路径。**「钳到底 = 回到已知可用状态」这条要能被测到。** */
+    {
+        static const uint32_t tmaxs[] = { 0, 1, 64, 128, 192, 255, 256, 1000 };
+        for (uint32_t i = 0; i < CAM_CAL_CCM_N; i++) {
+            for (int e = 0; e < 9; e++) m[e] = cam_cal_ccm[i][e];
+            for (int g = 0; g < N_GAINS; g++) {
+                const uint32_t kr = k_gains[g].kr, kb = k_gains[g].kb;
+                const uint32_t tstar = cam_ccm_fold_wb(m, kr, kb, out);
+                for (size_t x = 0; x < sizeof tmaxs / sizeof tmaxs[0]; x++) {
+                    uint32_t cap = tmaxs[x] > 256u ? 256u : tmaxs[x];
+                    uint32_t tf = 12345;
+                    int32_t got[9];
+                    const uint32_t t = cam_ccm_fold_wb_clamped(m, kr, kb, tmaxs[x], got, &tf);
+                    assert(tf == tstar);
+                    assert(t == (tstar < cap ? tstar : cap));
+                    assert(imax_abs(got) <= CAM_CCM_ABS_MAX_MILLI);
+                    /* 与「先二分再单独折一次」逐元素一致 —— 合成没有改变语义。 */
+                    int32_t ref[9];
+                    cam_ccm_fold_at(m, kr, kb, t, ref);
+                    assert(memcmp(got, ref, sizeof ref) == 0);
+                    if (t == 0) {
+                        const int32_t want[9] = { (int32_t)kr, 0, 0, 0, 1000, 0,
+                                                  0, 0, (int32_t)kb };
+                        assert(memcmp(got, want, sizeof want) == 0);
+                    }
+                }
+            }
+            cases++;
+        }
+        /* t_feasible 可传 NULL（调用方只要结果时不该被迫准备一个变量）。 */
+        cam_ccm_at_cct(5040, m);
+        assert(cam_ccm_fold_wb_clamped(m, 1786, 1858, 192, out, NULL) == 192);
+    }
+    cases++;
+
     /* ── E9 退化输入：kr = kb = 0 不许崩、不许越界 ──
      * 这不是一个会真实出现的工作点（调用方把增益钳在 [1000,3445]），只是守着
      * 「输入再离谱也给得出一个合法矩阵」。第 0/2 列被增益清零，第 1 列不受影响

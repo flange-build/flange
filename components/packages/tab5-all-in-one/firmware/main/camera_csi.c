@@ -42,7 +42,7 @@
 #include "driver/isp_gamma.h"   /* 无芯片版本门（isp_gamma.c 全文无 ESP_CHIP_REV_ABOVE） */
 #endif
 #if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE || CAM_GAMMA_ENABLE || \
-    CAM_AE_STAT_ENABLE || CAM_AWB_STAT_ENABLE
+    CAM_AE_STAT_ENABLE || CAM_AWB_STAT_ENABLE || CAM_CCM_MODE
 #include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
 #include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
 #endif
@@ -307,6 +307,43 @@ static cam_frame_stats_t s_last_stats;                /* 最近一帧的统计�
  * 即可把闭环的结论固化成静态标定。 */
 static uint32_t s_ccm_r = CAM_CCM_GAIN_R_MILLI;
 static uint32_t s_ccm_b = CAM_CCM_GAIN_B_MILLI;
+
+/*
+ * ══ 当前的色温估计（T10/T13 的索引量）══
+ *
+ * 唯一的写入点是 camera_awb_stat_tick()：每拿到一份**可用**的硬件白点采样，
+ * 就 s_cct_k = cam_cct_from_rg(rg)。除此之外没有任何地方改它 ——
+ * 「CCM/LSC/饱和度三级用的是同一个 CCT」这条不变式靠单一写入点保证，
+ * 而不是靠三处各自记得去算。
+ *
+ * s_cct_valid 与它分开存：值本身永远是一个合法色温（初值 CAM_CCT_DEFAULT_K），
+ * 所以查表永远查得出东西；而「这个数到底是估出来的还是默认值」是另一件事，
+ * 自检行必须能说清楚 —— 否则「CCM 档一直不动」这一个现象会同时对应
+ * 「场景色温真的没变」和「白点统计一次都没成功」两种完全不同的下一步。
+ */
+static uint32_t s_cct_k = CAM_CCT_DEFAULT_K;
+static bool     s_cct_valid;
+
+/*
+ * CCM 此刻的形态。四个量都是自检行要打的：
+ *   s_ccm_t     实际生效的强度（0..256）。**它是 T10 唯一的执行量** ——
+ *               = 0 时下发的就是对角阵，即本改动之前那条已验证的路径。
+ *   s_ccm_tmax  钳制之前二分求出的最大可行 t。它与 s_ccm_t 不等时说明是
+ *               CAM_CCM_STRENGTH_MAX 这道总闸在压，而不是定点范围在压 ——
+ *               两者分开打，「强度上不去」才分得清是硬件限制还是我们自己压的。
+ *   s_ccm_slot / s_ccm_w  插值用的档与权重（w 为 0..256）。
+ *   s_ccm_m[9]  最后真正下发的 9 个系数（×1000）。
+ */
+static uint32_t s_ccm_t;
+static uint32_t s_ccm_tmax;
+static uint32_t s_ccm_slot;
+static uint32_t s_ccm_w;
+static int32_t  s_ccm_m[9];
+static uint32_t s_ccm_reconf;      /* CCM 累计重配次数（AWB 下发 + CCT 换档） */
+#if CAM_CCM_MODE
+static cam_slot_track_t s_ccm_track;   /* 按 CCT 档换矩阵的迟滞跟踪器 */
+static int32_t s_st_ccm_ct = STEP_NOT_RUN;   /* 最近一次「CCT 换档重配」的返回值 */
+#endif
 
 #if CAM_AWB_ENABLE
 static cam_awb_state_t s_awb;
@@ -590,12 +627,56 @@ const uint8_t *camera_csi_gamma_inv_lut(void)
  */
 static esp_err_t camera_ccm_apply(uint32_t r_milli, uint32_t b_milli)
 {
+#if CAM_CCM_MODE
+    /*
+     * ══ T10：官方 19 档矩阵按 CCT 插值 + 白平衡右乘折叠 + 强度钳制 ══
+     *
+     * 三步都在 cam_isp_map.c 里（纯逻辑、宿主机 353+ 个用例守着），这里只负责
+     * 「用哪个 CCT」「压到多少」「打成 float 送进驱动」。
+     *
+     * ⚠️ 顺序不能反：先按 CCT 取基础矩阵，再折增益。反过来（先折再插值）会
+     *   在两档之间插出一个行和不为 1 的东西 —— 行和不变式只在**单档**上成立，
+     *   插值保持它是因为线性组合保持线性等式，而「先折」把 W 也卷进了插值。
+     */
+    int32_t base[9];
+    cam_ccm_at_cct(s_cct_k, base);
+    s_ccm_slot = cam_map_cct_slot(cam_cal_ccm_cct, CAM_CAL_CCM_N, s_cct_k, &s_ccm_w);
+
+    /* 二分出定点范围允许的最大强度，再让 CAM_CCM_STRENGTH_MAX 这道总闸压一次。
+     * 两个数都留着：自检行要能分出「是硬件装不下」还是「是我们自己压的」。 */
+    s_ccm_t = cam_ccm_fold_wb_clamped(base, r_milli, b_milli, CAM_CCM_STRENGTH_MAX,
+                                      s_ccm_m, &s_ccm_tmax);
+#else
+    /*
+     * 对角阵 —— T9 之前那条已实机验证的路径。这里**不是**「t = 0 的特例」而是
+     * 一段独立的代码：CAM_CCM_MODE = 0 时上面整段（含 19 档表与二分）一行都不
+     * 进镜像，硬件行为逐位回到改动之前。两者数值上恰好相等是一条好性质
+     * （宿主机用例 ② 守着 t=0 ⇒ diag），不是实现依赖。
+     */
+    s_ccm_slot = 0;
+    s_ccm_w    = 0;
+    s_ccm_t    = 0;
+    s_ccm_tmax = 0;
+    for (int i = 0; i < 9; i++)
+        s_ccm_m[i] = 0;
+    s_ccm_m[0] = (int32_t)r_milli;
+    s_ccm_m[4] = CAM_CCM_GAIN_G_MILLI;
+    s_ccm_m[8] = (int32_t)b_milli;
+#endif
+
     const esp_isp_ccm_config_t ccm_cfg = {
         .matrix = {
-            {r_milli / 1000.0f, 0.0f, 0.0f},
-            {0.0f, CAM_CCM_GAIN_G_MILLI / 1000.0f, 0.0f},
-            {0.0f, 0.0f, b_milli / 1000.0f},
+            {s_ccm_m[0] / 1000.0f, s_ccm_m[1] / 1000.0f, s_ccm_m[2] / 1000.0f},
+            {s_ccm_m[3] / 1000.0f, s_ccm_m[4] / 1000.0f, s_ccm_m[5] / 1000.0f},
+            {s_ccm_m[6] / 1000.0f, s_ccm_m[7] / 1000.0f, s_ccm_m[8] / 1000.0f},
         },
+        /*
+         * ⚠️ saturation 保持 true，但**它不该被用到**：强度钳制已经保证所有系数
+         * |v| <= CAM_CCM_ABS_MAX_MILLI = 3.990，落在 S2.10 的表达范围内。
+         * 它只是最后一道「宁可饱和也不要整个配置失败」的网 —— 一旦真的生效，
+         * 硬件里的矩阵就与自检行打出来的不是同一个，那才是最坏情况（画面错了
+         * 而日志说没错）。所以自检行同时打 max|v| 与上限，让这条能在现场证伪。
+         */
         .saturation = true,
         .flags = { .update_once_configured = 1 },
     };
@@ -603,9 +684,37 @@ static esp_err_t camera_ccm_apply(uint32_t r_milli, uint32_t b_milli)
     if (err == ESP_OK) {
         s_ccm_r = r_milli;
         s_ccm_b = b_milli;
+        s_ccm_reconf++;
     }
     return err;
 }
+
+#if CAM_CCM_MODE
+/*
+ * CCT 换档 ⇒ 重配 CCM。**与 AWB 那条路互补**：AWB 变增益时已经在
+ * camera_awb_tick() 里重配过，这里管的是「增益没变、但色温跨过了一档边界」。
+ *
+ * 为什么只在**跨档**时重配、而不是每拍按最新 CCT 重新插值：rev v1.0 无影子
+ * 寄存器，9 个系数是逐个写下去的，帧中途换会撕裂。档内的插值误差远小于撕裂
+ * 的代价 —— 相邻档之间系数差最大约 0.1（5040↔5090 那两档几乎重合），
+ * 而 AWB 每次 APPLIED 都会拿最新 CCT 重算一次，档内漂移最多存活一秒。
+ *
+ * 迟滞用 CAM_FEEDFWD_HYST_TICKS（3 拍 = 300 ms），与其余前馈级同一个数：
+ * s_cct_k 本身只有 1 Hz 才更新一次，所以这 3 拍实际上等价于「新 CCT 稳定
+ * 之后的第 3 拍」，而不是「连续采样 3 次」。
+ */
+static void camera_ccm_ct_tick(void)
+{
+    uint32_t w = 0;
+    const uint32_t slot = cam_map_cct_slot(cam_cal_ccm_cct, CAM_CAL_CCM_N, s_cct_k, &w);
+    if (!cam_slot_changed(&s_ccm_track, slot, CAM_FEEDFWD_HYST_TICKS))
+        return;
+    s_st_ccm_ct = camera_ccm_apply(s_ccm_r, s_ccm_b);
+    if (s_st_ccm_ct != ESP_OK)
+        ESP_LOGW(TAG, "CCT 换档重配 CCM 失败(%s)，矩阵保持上一档",
+                 esp_err_to_name((esp_err_t)s_st_ccm_ct));
+}
+#endif  /* CAM_CCM_MODE */
 
 #if CAM_LSC_ENABLE
 /*
@@ -1435,6 +1544,24 @@ static void camera_awb_stat_tick(void)
     s_awb_hw.sum_g   = res.sum_g;
     s_awb_hw.sum_b   = res.sum_b;
     s_awb_hw_fresh   = true;
+
+    /*
+     * ══ 色温估计：**本文件唯一的 s_cct_k 写入点**（T10/T13 的索引量）══
+     *
+     * 放在这里而不是 camera_awb_tick()，是因为 CCT 与「AWB 要不要动增益」是两件
+     * 独立的事：白点重心越界、落在死区、AE 没稳……这些都让 AWB 一步不走，但
+     * **色温估计本身仍然有效**（它只需要重心，不需要控制律放行）。挂在控制律上
+     * 的话，「AWB 已收敛不动了」会连带把 CCM/LSC/饱和度全部冻住。
+     *
+     * cam_awb_ratios() 返回 false 只说「这份采样算不出比值」（counted = 0 或扣完
+     * 基座后 Σg = 0）—— 那时保持上一次的 CCT，不退回默认值：色温不会因为某一秒
+     * 采样失败就真的跳回 5210 K。
+     */
+    uint32_t rg = 0, bg = 0;
+    if (cam_awb_ratios(&s_awb_hw, &rg, &bg)) {
+        s_cct_k     = cam_cct_from_rg(rg);
+        s_cct_valid = true;
+    }
 }
 #endif  /* CAM_AWB_STAT_ENABLE */
 
@@ -1692,6 +1819,15 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
 #if CAM_AWB_ENABLE
     camera_awb_tick(st);
 #endif
+#if CAM_CCM_MODE
+    /*
+     * CCM 的第二条重配路径：色温跨档。排在 AWB **之后**，两条路吃的是同一个
+     * s_cct_k ⇒ 档号没变时这里必然不动（cam_slot_changed 对 want == cur 直接
+     * 返回 false）。档号刚变的那一拍两条路都可能发，代价是每秒最多多一次重配 ——
+     * 远低于「每帧重配」，而换来的是「增益不变、只有色温变」时矩阵也会跟上。
+     */
+    camera_ccm_ct_tick();
+#endif
 
 #if CAM_ADN_ENABLE || CAM_AEN_ENABLE
     /*
@@ -1887,6 +2023,97 @@ static void camera_awb_stat_report(uint32_t sw_sug_r, uint32_t sw_sug_b)
 #endif  /* CAM_AWB_STAT_ENABLE */
 
 /*
+ * 把 9 个 ×1000 的 CCM 系数打成 "a.aaa b.bbb c.ccc | ..." 一行。
+ *
+ * 自己写而不是用 %f：本工程日志里一律不出现浮点（printf 的浮点格式会把 ~7 KB
+ * 的软浮点格式化代码链进来，而且 ESP_LOG 在某些配置下对 %f 支持并不完整）。
+ * 返回 buf 本身，直接嵌进 ESP_LOGI 的参数表。
+ */
+static char *ccm_fmt(char *buf, size_t n, const int32_t m[9])
+{
+    size_t o = 0;
+    buf[0] = '\0';
+    for (int i = 0; i < 9 && o + 1 < n; i++) {
+        const int32_t v = m[i];
+        const uint32_t a = (uint32_t)(v < 0 ? -v : v);
+        const int w = snprintf(buf + o, n - o, "%s%s%" PRIu32 ".%03" PRIu32,
+                               i ? " " : "", v < 0 ? "-" : "", a / 1000u, a % 1000u);
+        if (w < 0 || (size_t)w >= n - o)
+            break;
+        o += (size_t)w;
+        if ((i == 2 || i == 5) && o + 2 < n) {
+            buf[o++] = ' ';
+            buf[o++] = '|';
+            buf[o]   = '\0';
+        }
+    }
+    return buf;
+}
+
+/*
+ * ══ CCM 那一行（T10）══ 「色彩还原是不是按官方口径在动」的唯一客观依据。
+ *
+ * 它必须同时回答五个问题，缺一个现场就分不清病因：
+ *   ① 用的是哪种形态          → 模式=官方表 / 对角阵（CAM_CCM_MODE）
+ *   ② CCT 是估出来的还是默认值 → CCT=NNNNK(估计/默认)
+ *   ③ 选了哪一档、插值权重多少 → 档 i/19（左档 K→右档 K，w=x.xx）
+ *   ④ 强度被谁压的            → 强度=t/256（定点上限给 t*=…，总闸 CAM_CCM_STRENGTH_MAX=…）
+ *   ⑤ 实际下发的 9 个系数     → 连同 max|v| 与 3.990 这条硬边界一起打
+ *
+ * 判读：
+ *   模式=对角阵                 → CAM_CCM_MODE = 0，本行其余各项恒定，属预期。
+ *   CCT 恒为默认值              → 白点统计一次都没成功。去看「AWB统计」那行的
+ *                                「白点=」与「触发=」，不是 CCM 的事。
+ *   强度 = t* < 256 且 CCT 偏低  → **预期**：低色温档系数本身超 S2.10，被定点上限压。
+ *                                §D.4 的表：3055 K → 42%、3473 K → 65%、3800 K → 83%。
+ *   强度 = CAM_CCM_STRENGTH_MAX 而 t* 明显更大
+ *                              → 是**我们自己**压的（黑电平降级档）。拿到 T7 实测
+ *                                之后按 cam_tune.h 那张表把它放开到 256。
+ *   max|v| > 3.990             → 不可能。真出现说明钳制没生效（阈值被改成 4000？），
+ *                                此时硬件里的矩阵与本行打的**不是同一个**（saturation
+ *                                悄悄截断了），画面错了而日志说没错 —— 最坏的一种。
+ *   白纸下三通道均值差 > 5%      → 行和不变式破了。先看档号是不是插到了两端那两个
+ *                                单位阵档（1200 K / 12000 K）上。
+ *   重配= 每秒 > 1              → 迟滞没起作用，或 CCT 在档边界上抖。
+ */
+static void camera_ccm_report(void)
+{
+    char mbuf[128];
+    uint32_t mx = 0;
+    for (int i = 0; i < 9; i++) {
+        const uint32_t a = (uint32_t)(s_ccm_m[i] < 0 ? -s_ccm_m[i] : s_ccm_m[i]);
+        if (a > mx)
+            mx = a;
+    }
+#if CAM_CCM_MODE
+    const uint32_t lo_k = cam_cal_ccm_cct[s_ccm_slot];
+    const uint32_t hi_k = cam_cal_ccm_cct[s_ccm_slot + 1 < CAM_CAL_CCM_N ? s_ccm_slot + 1
+                                                                        : s_ccm_slot];
+    /* 权重打成两位小数（w_q8 × 100 / 256），与「档 i→档 i+1」一起读。 */
+    const uint32_t w100 = s_ccm_w * 100u / 256u;
+    ESP_LOGI(TAG, "[自检] CCM 模式=官方表 %s CCT=%" PRIu32 "K(%s) 档%" PRIu32 "/%d"
+                  "(%" PRIu32 "K→%" PRIu32 "K w=0.%02" PRIu32 ")"
+                  " 强度=%" PRIu32 "/256(定点可行 t*=%" PRIu32 "，总闸 %d) "
+                  "白平衡 R×%" PRIu32 ".%03" PRIu32 " B×%" PRIu32 ".%03" PRIu32
+                  " | 下发 [%s] max|v|=%" PRIu32 ".%03" PRIu32 "(上限 %d.%03d)"
+                  " | 重配=%" PRIu32 " 换档=%s",
+             step_str(s_st_ccm), s_cct_k, s_cct_valid ? "估计" : "默认",
+             s_ccm_slot, CAM_CAL_CCM_N, lo_k, hi_k, w100,
+             s_ccm_t, s_ccm_tmax, CAM_CCM_STRENGTH_MAX,
+             s_ccm_r / 1000, s_ccm_r % 1000, s_ccm_b / 1000, s_ccm_b % 1000,
+             ccm_fmt(mbuf, sizeof mbuf, s_ccm_m), mx / 1000, mx % 1000,
+             CAM_CCM_ABS_MAX_MILLI / 1000, CAM_CCM_ABS_MAX_MILLI % 1000,
+             s_ccm_reconf, step_str(s_st_ccm_ct));
+#else
+    ESP_LOGI(TAG, "[自检] CCM 模式=对角阵（CAM_CCM_MODE=0，只做白平衡、不做色彩还原，"
+                  "即 T9 之前已实机验证的路径）%s CCT=%" PRIu32 "K(%s，本模式下不参与)"
+                  " | 下发 [%s] max|v|=%" PRIu32 ".%03" PRIu32 " | 重配=%" PRIu32,
+             step_str(s_st_ccm), s_cct_k, s_cct_valid ? "估计" : "默认",
+             ccm_fmt(mbuf, sizeof mbuf, s_ccm_m), mx / 1000, mx % 1000, s_ccm_reconf);
+#endif
+}
+
+/*
  * 画质自检：白平衡与曝光各一行。**这两行是判断画面对不对唯一的客观依据** ——
  * 「发绿」「太暗」是观感，R98/G121/B105、亮度均值 45 才是能拿来算系数的数字。
  */
@@ -1922,6 +2149,10 @@ static void camera_quality_report(void)
              s_ccm_b / 1000, s_ccm_b % 1000,
              s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
              sug_r / 1000, sug_r % 1000, sug_b / 1000, sug_b % 1000);
+
+    /* CCM 的形态紧跟其后：上面那行说的是「白平衡增益调到哪了」，它说的是
+     * 「这对增益被装进了一个什么样的矩阵」——同一件事的执行侧。 */
+    camera_ccm_report();
 
     /*
      * ══ 黑位（T7）══ **T10（官方 CCM）唯一的判定依据。**

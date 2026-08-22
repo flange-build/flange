@@ -174,6 +174,21 @@ uint32_t cam_ccm_fold_wb(const int32_t m[9], uint32_t kr, uint32_t kb, int32_t o
     return lo;
 }
 
+uint32_t cam_ccm_fold_wb_clamped(const int32_t m[9], uint32_t kr, uint32_t kb,
+                                 uint32_t t_max, int32_t out[9], uint32_t *t_feasible)
+{
+    const uint32_t tf = cam_ccm_fold_wb(m, kr, kb, out);
+    if (t_feasible)
+        *t_feasible = tf;
+    if (t_max > 256u)
+        t_max = 256u;
+    if (tf <= t_max)
+        return tf;                       /* 总闸没起作用，out 已经是结果 */
+    /* 可行域是 [0, tf] ⊇ [0, t_max] ⇒ 这一次折叠必然可行，返回值不必再看。 */
+    (void)cam_ccm_fold_at(m, kr, kb, t_max, out);
+    return t_max;
+}
+
 /* ── AE 加权均值 + quorum 剔除 ────────────────────────────────── */
 
 uint8_t cam_ae_weighted_mean(const uint8_t lum[25], uint8_t *n_dark, uint8_t *n_bright)
