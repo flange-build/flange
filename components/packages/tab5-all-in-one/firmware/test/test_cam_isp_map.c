@@ -19,6 +19,10 @@
 #include "cam_isp_map.h"
 
 #include "cam_isp_cal.h"
+/* 只为拿 CAM_ENV_EV_BREAKS 这一个宏 —— 降级路径的断点必须与 cam_tune.h 里
+ * 实际生效的那一组是同一份，两处各写一份迟早会有一处忘了改。
+ * cam_tune.h 是纯逻辑头（不依赖 ESP-IDF），这里只用宏、不调它的函数。 */
+#include "cam_tune.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -746,6 +750,62 @@ static void test_env_gamma(void)
     /* 我们的 ev 值域 [8, 19904] 必须把四个断点全部包住（§E.5 的证伪判据）。 */
     assert(cam_env_luma_q1(19904, 62, 62) < cam_cal_gamma_luma_q1[0]);          cases++;
     assert(cam_env_luma_q1(8, 62, 62) > cam_cal_gamma_luma_q1[CAM_CAL_GAMMA_N - 1]); cases++;
+
+    /* ── H2 降级路径 cam_env_luma_from_ev() ──
+     * 用官方 k 反推的那四个 ev 断点时，它与 cam_env_luma_q1(ev, target, target)
+     * 必须给出**同一条曲线**（k/ev 在 1/ev 上是直线，四个锚点也在这条直线上）
+     * ⇒ 翻 CAM_ENV_MODEL 这个开关本身不改变行为，改变只来自把断点换成实测值。 */
+    {
+        static const uint32_t brk[CAM_CAL_GAMMA_N] = CAM_ENV_EV_BREAKS;
+
+        /* 四个锚点逐点命中官方断点。 */
+        for (uint32_t i = 0; i < CAM_CAL_GAMMA_N; i++) {
+            assert(cam_env_luma_from_ev(brk[i], brk) == cam_cal_gamma_luma_q1[i]);
+            cases++;
+        }
+        /* 两端钳位：ev 更大 ⇒ 仍是第 0 档的断点值；ev 更小 ⇒ 末档。 */
+        assert(cam_env_luma_from_ev(19904, brk) == cam_cal_gamma_luma_q1[0]);   cases++;
+        assert(cam_env_luma_from_ev(8, brk) ==
+               cam_cal_gamma_luma_q1[CAM_CAL_GAMMA_N - 1]);                     cases++;
+        /* 与 k/ev 模型在整个值域上一致（钳位区之外，允许 1 个量化单位的差）。 */
+        for (uint32_t ev = brk[CAM_CAL_GAMMA_N - 1]; ev <= brk[0]; ev += 7) {
+            const int64_t a = cam_env_luma_from_ev(ev, brk);
+            const int64_t b = cam_env_luma_q1(ev, CAM_CAL_AE_TARGET, CAM_CAL_AE_TARGET);
+            assert(a - b <= 1 && b - a <= 1);
+        }
+        cases++;
+        /* 对 ev 单调非增（选档标量必须单调，否则会在光照渐变时来回跳档）。 */
+        {
+            uint32_t prev = 0xFFFFFFFFu;
+            for (uint32_t ev = 1; ev <= 24000; ev++) {
+                const uint32_t e = cam_env_luma_from_ev(ev, brk);
+                assert(e <= prev);
+                prev = e;
+            }
+            cases++;
+        }
+        /* 断点换成实测值时，四个官方 luma 断点仍然是锚点（曲线形状不变、位置变）。 */
+        {
+            static const uint32_t mine[CAM_CAL_GAMMA_N] = { 9000, 4000, 1500, 400 };
+            for (uint32_t i = 0; i < CAM_CAL_GAMMA_N; i++)
+                assert(cam_env_luma_from_ev(mine[i], mine) == cam_cal_gamma_luma_q1[i]);
+            uint32_t prev = 0xFFFFFFFFu;
+            for (uint32_t ev = 1; ev <= 24000; ev++) {
+                const uint32_t e = cam_env_luma_from_ev(ev, mine);
+                assert(e <= prev);
+                prev = e;
+            }
+            cases++;
+        }
+        /* 守门：ev = 0 / 空指针 / 断点非降序都不许崩、不许除零。 */
+        assert(cam_env_luma_from_ev(0, brk) == 0);                              cases++;
+        assert(cam_env_luma_from_ev(1000, NULL) == 0);                          cases++;
+        {
+            static const uint32_t bad[CAM_CAL_GAMMA_N] = { 5000, 5000, 5000, 5000 };
+            (void)cam_env_luma_from_ev(4000, bad);   /* 不许崩 */
+            cases++;
+        }
+    }
 
     /* 无迟滞时（cur 越界 ⇒ 开机第一拍）的选档：断点处取该档。 */
     assert(cam_gamma_slot(0, 99) == 0);                     cases++;

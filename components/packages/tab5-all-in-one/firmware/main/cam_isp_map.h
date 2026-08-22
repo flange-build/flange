@@ -182,6 +182,26 @@ void cam_hist_stats(const uint32_t bins[16], uint8_t *mean, uint8_t *bright_pct,
  * ev == 0 或 ae_target == 0 时返回 0。 */
 uint32_t cam_env_luma_q1(uint32_t ev, uint8_t scene_mean, uint8_t ae_target);
 
+/*
+ * ── env.luma 重建的**降级路径**（§E.5 的 k/ev 模型站不住时用）───────────
+ *
+ * 直接由 ev 查表插值给出 env_q1，断点用**我们自己实测**的四个 ev 值
+ * （cam_tune.h 的 CAM_ENV_EV_BREAKS，严格降序，对应官方四个 gamma 断点
+ *  151/301/901/3001）。gamma 的四条曲线与四个断点仍然是官方的 ——
+ * 换掉的只是「ev → env」这一段换算，而那一段本来就是 [反推] 而非 [确证]。
+ *
+ * 插值在 **1/ev** 上做线性：官方模型是 env·ev = 常数，在 1/ev 为自变量时
+ * 它恰好是一条直线 ⇒ 实测断点若仍大体符合该模型，本函数与 cam_env_luma_q1()
+ * 给出的是同一条曲线（用官方那四个 ev 值时逐点重合）。这条性质让「换到降级
+ * 路径」不会顺带改变曲线形状，只改变断点位置。
+ *
+ * 两端**钳住**（ev >= breaks[0] ⇒ 恒取第 0 档的断点值；ev <= breaks[3] ⇒ 末档），
+ * 这正是正确行为：那两段本来就该分别选第 0 档与末档。
+ * ev == 0（AE 没就绪）或 ev_breaks == NULL 时返回 0；断点非严格降序时退回本段左端点，
+ * 不会除零。
+ */
+uint32_t cam_env_luma_from_ev(uint32_t ev, const uint32_t *ev_breaks);
+
 /* ── gamma 选档（4 档，带官方 luma_min_step = 3.0 的迟滞）────────────
  * 档 i 的语义：env_q1 <= cam_cal_gamma_luma_q1[i] 的最小 i；都超过就取末档。
  * （env 小 = 环境暗 = 曝光量大 ⇒ 取 γ 最小那档，提亮最强。）

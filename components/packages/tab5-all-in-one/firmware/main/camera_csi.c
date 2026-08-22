@@ -41,8 +41,11 @@
 #if CAM_GAMMA_ENABLE
 #include "driver/isp_gamma.h"   /* 无芯片版本门（isp_gamma.c 全文无 ESP_CHIP_REV_ABOVE） */
 #endif
+#if CAM_HIST_ENABLE
+#include "driver/isp_hist.h"    /* 直方图统计（isp_hist.c 全文无 ESP_CHIP_REV_ABOVE） */
+#endif
 #if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE || CAM_GAMMA_ENABLE || \
-    CAM_AE_STAT_ENABLE || CAM_AWB_STAT_ENABLE || CAM_CCM_MODE
+    CAM_AE_STAT_ENABLE || CAM_AWB_STAT_ENABLE || CAM_CCM_MODE || CAM_HIST_ENABLE
 #include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
 #include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
 #endif
@@ -473,6 +476,48 @@ static uint32_t s_awb_phase = CAM_AWB_INTERVAL_TICKS;  /* 触发相位，见 cam
 static uint32_t s_awb_trigs;                /* 累计触发次数 */
 static uint32_t s_awb_timeouts;             /* 其中超时了多少次 */
 #endif  /* CAM_AWB_STAT_ENABLE */
+
+#if CAM_HIST_ENABLE
+/*
+ * ══ 直方图统计（T11）══ **纯观测，本任务不改任何控制行为。**
+ *
+ * 它给出两样 AE 的 5×5 测光给不出的东西：
+ *   · 近似**均匀加权**的场景均值 —— 官方 ian.luma.env 的口径，env.luma 的输入。
+ *     AE 那张中心加权金字塔答的是「主体够不够亮」，这里答的是「环境有多亮」，
+ *     官方把它们分成两张表正是为了让 gamma 不跟着测光抖（管线文档 §B.4.2）。
+ *   · 亮块 / 暗块**占比** —— 均值给不出分布形状，而「一大片很亮 + 整体偏暗」
+ *     正是背光的定义（T12 的判据）。
+ */
+static isp_hist_ctlr_t s_hist_ctlr;
+static int32_t  s_st_hist    = STEP_NOT_RUN;   /* 建控制器 / 使能，取第一个失败 */
+static int32_t  s_st_histrun = STEP_NOT_RUN;   /* 最近一次 oneshot 的返回值 */
+static uint32_t s_hist_bins[16];               /* 最近一次的 16 个 bin，自检行用 */
+static uint32_t s_hist_total;                  /* 16 个 bin 之和（应 ≈ 921600） */
+static uint8_t  s_hist_mean;                   /* 近似均匀加权的场景均值 */
+static uint8_t  s_hist_bright_pct;             /* bin 15（>=240）的占比 */
+static uint8_t  s_hist_dark_pct;               /* bin 0（<16）的占比 */
+static uint32_t s_hist_phase = CAM_HIST_PHASE; /* 触发相位，与 AWB 错开半周期 */
+static uint32_t s_hist_trigs;
+static uint32_t s_hist_timeouts;
+
+/*
+ * env.luma（×10）与它选出的 gamma 档。
+ *
+ * T11 **只算不下发**（s_gamma_slot_want 与实际生效的 s_gamma_slot 是两个变量），
+ * T12 才把它接到 camera_gamma_apply() 上。这样 §E.5 那条 [反推] 的重建式先被
+ * 现场证伪一轮，再决定要不要拿它去改画面。
+ *
+ * s_env_slots_seen 是一个 4 位的**位图**：第 i 位表示「第 i 档被选中过」。
+ * 它单独就能回答 T11 的核心判据 —— **四档里用得到几档**。只打当前档的话，
+ * 「一直是第 0 档」既可能是环境真的没变，也可能是重建式整个错了。
+ */
+static uint32_t s_env_q1;
+static uint32_t s_gamma_slot_want = CAM_CAL_GAMMA_N;   /* 越界 = 还没算过，无迟滞 */
+static uint32_t s_env_min_q1 = UINT32_MAX;
+static uint32_t s_env_max_q1;
+static uint32_t s_env_slots_seen;
+static uint32_t s_gamma_slot_switches;                 /* 想换档的累计次数 */
+#endif  /* CAM_HIST_ENABLE */
 
 /* ══ 官方前馈画质级（开环查表）══════════════════════════════════════
  * 三组各一个编译开关（cam_tune.h），关掉时下面整段不进镜像 —— 这是现场
@@ -1107,6 +1152,85 @@ esp_err_t camera_csi_init(void)
                  esp_err_to_name((esp_err_t)s_st_awbstat));
 #endif
 
+#if CAM_HIST_ENABLE
+    /*
+     * ══ 直方图统计 ══ **纯观测**（T11），不接任何控制律。
+     *
+     * 失败**只降级不拦启动**（与 AE/AWB 统计、LSC、gamma、CCM 同一处置）：
+     * 建不起来时 s_st_hist 记下错误码、自检行照打，env.luma 恒为 0、
+     * gamma 停在固定档，取流本身是好的。
+     */
+    const esp_isp_hist_config_t hist_cfg = {
+        /*
+         * ⚠️ 与 AE 同一个坑：isp_hal_hist_window_config() 把窗按 /5 分块，
+         *   全零窗口能通过参数校验但 bsize = 0 ⇒ 16 个 bin 全是 0。
+         * 写 1280×720（而不是 1279×719）：/5 之后是 256×144，**整除**，
+         *   5×256 × 5×144 = 921600 = 整幅像素数，自检行的「Σbin」直接可核对。
+         */
+        .window = { .top_left  = { .x = 0,            .y = 0 },
+                    .btm_right = { .x = CAM_SENSOR_W, .y = CAM_SENSOR_H } },
+        /*
+         * RGB 模式 ⇒ 抽头在 demosaic 之后、**gamma 之前**，与硬件 AE 同域
+         * ⇒ gamma 换档不会扰动这份统计（这正是 T12 敢动态换 gamma 档的前提）。
+         * 官方 esp_video 的默认也是 ISP_HIST_SAMPLING_RGB。
+         */
+        .hist_mode = ISP_HIST_SAMPLING_RGB,
+        /*
+         * ⚠️ 三个 integer 域必须为 0（驱动硬性检查，即三个系数都要 < 1.0）。
+         *   文档要求小数部之和 = 256，而 256/3 除不尽 ⇒ 取 86/85/85。
+         *   官方 esp_video 用的是 85/85/85（和为 255）—— 驱动**只检查权重和、
+         *   不检查系数和**，所以两者都能配上；我们取和恰好 256 的那组，
+         *   量纲上是「亮度 = (86R + 85G + 85B)/256」，干净可核对。
+         */
+        .rgb_coefficient = { .coeff_r = { .integer = 0, .decimal = 86 },
+                             .coeff_g = { .integer = 0, .decimal = 85 },
+                             .coeff_b = { .integer = 0, .decimal = 85 } },
+        /*
+         * ⚠️⚠️ 25 个权重的小数部之和**必须精确等于 256**
+         *   （s_esp_isp_hist_config_hardware() 的 weight_sum == 256，不等直接
+         *    ESP_ERR_INVALID_ARG），而 256/25 除不尽。取 IDF 测试用的那组：
+         *   中心块 16、其余 24 块各 10 ⇒ 24×10 + 16 = 256。
+         *
+         *   ⚠️ **基线文档里那组「10 为主 / 内十字 11 / 中心 12」加起来是 260，
+         *      照抄会直接被驱动拒掉**（本次实施逐条核对源码时发现，已记进计划
+         *      §H.1）。别改回去。
+         *
+         *   这里要的是**近似均匀**（对应官方 ian.luma.env.weight 全 1），
+         *   与 AE 的中心加权金字塔是两张不同的表、两个不同的量。中心那 16
+         *   是被 256 这个整除条件逼出来的 6/256 = 2.3% 的偏差，可以忽略。
+         */
+        .window_weight = {
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10}, {.integer=0,.decimal=16},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+            {.integer=0,.decimal=10}, {.integer=0,.decimal=10},
+        },
+        /* ⚠️ 15 个阈值必须**严格落在 (0, 256)**，写 0 会被拒。取 16 的整数倍
+         *   ⇒ 16 个 bin 各覆盖 16 个码值，与 cam_hist_stats() 里「bin i 的代表值
+         *   取 16i+8」的约定逐位对齐（那个约定由宿主机用例守着）。 */
+        .segment_threshold = { 16, 32, 48, 64, 80, 96, 112, 128,
+                               144, 160, 176, 192, 208, 224, 240 },
+        /* ⓘ esp_isp_hist_config_t **没有 intr_priority 字段**（IDF v6.0 的
+         *   isp_hist.h 全文）—— 直方图的 ISR 直接复用处理器的优先级，
+         *   不存在 AE/AWB 那个「三块必须一致」的坑。 */
+    };
+    s_st_hist = esp_isp_new_hist_controller(s_isp, &hist_cfg, &s_hist_ctlr);
+    if (s_st_hist == ESP_OK) {
+        /* ⓘ **不注册 on_statistics_done**：它只在连续模式下才有意义，
+         *   而我们只用 oneshot（结果从驱动内部那个 1 深的队列里取）。 */
+        s_st_hist = esp_isp_hist_controller_enable(s_hist_ctlr);
+    }
+    if (s_st_hist != ESP_OK)
+        ESP_LOGW(TAG, "直方图统计没建起来(%s)，env.luma 恒为 0、gamma 停在固定档，"
+                      "其余一切照常", esp_err_to_name((esp_err_t)s_st_hist));
+#endif
+
 #if CAM_LSC_ENABLE
     /*
      * ══ 镜头阴影校正（暗角）══ 官方 273 格 × 4 通道的标定表。
@@ -1565,6 +1689,73 @@ static void camera_awb_stat_tick(void)
 }
 #endif  /* CAM_AWB_STAT_ENABLE */
 
+#if CAM_HIST_ENABLE
+/*
+ * 触发一次直方图统计，并把 16 个 bin 归约成三个标量 + 重建 env.luma。
+ * **每拍都调，分频在函数内部做**（与 AWB 的 oneshot 同一处置）。
+ *
+ * ⚠️ 这是本文件里第二处**会阻塞帧泵**的调用（第一处是 AWB 的 oneshot）。
+ *   两者的相位被刻意错开半个周期（CAM_HIST_PHASE = 5 对 AWB 的 10），
+ *   任何一拍里最多只有一次 60 ms 的阻塞 —— 帧泵是 100 ms 的固定节拍，
+ *   撞在一起就会 120 ms 超时、「拒收」立刻非零。**改任一个周期时要一起看。**
+ *
+ * ⓘ 只在取流中调（调用方 camera_csi_tune_tick() 已经有 s_streaming 那道闸），
+ *   「alt 0 下触发= 不涨」这条现场判据正是靠它成立的。
+ */
+static void camera_hist_tick(int ae_target)
+{
+    /* 与 AWB 的 res 同一处置：isp_hist_result_t 64 字节，放 static 避免占用
+     * 帧泵任务那 4 KB 的栈。只被帧泵这一个任务碰，没有重入。 */
+    static isp_hist_result_t res;
+
+    if (s_st_hist != ESP_OK)
+        return;
+    if (--s_hist_phase)
+        return;                                 /* 还没到点 */
+    s_hist_phase = CAM_HIST_INTERVAL_TICKS;
+
+    s_hist_trigs++;
+    s_st_histrun = esp_isp_hist_controller_get_oneshot_statistics(s_hist_ctlr,
+                                                                  CAM_HIST_ONESHOT_MS, &res);
+    if (s_st_histrun != ESP_OK) {
+        /* 超时：这一拍什么都不做（不拿旧数据凑合）。上一次的 bin 保留着，
+         * 只为自检行还有东西可看。 */
+        s_hist_timeouts++;
+        return;
+    }
+
+    s_hist_total = 0;
+    for (int i = 0; i < 16; i++) {
+        s_hist_bins[i] = res.hist_value[i];
+        s_hist_total  += res.hist_value[i];
+    }
+    cam_hist_stats(s_hist_bins, &s_hist_mean, &s_hist_bright_pct, &s_hist_dark_pct);
+
+    /*
+     * ══ env.luma 重建 ══ 依据见 cam_tune.h 的 CAM_ENV_MODEL（标 [反推]，非确证）。
+     *
+     * AE 没就绪时 s_ae.ev 是 0，两条路径都返回 0 —— 自检行据此打「n/a」而不是
+     * 「0」，否则「env=0」会同时表示「环境亮到爆」和「AE 还没起来」两件事。
+     */
+#if CAM_ENV_MODEL
+    s_env_q1 = cam_env_luma_q1(s_ae.ev, s_hist_mean, (uint8_t)ae_target);
+#else
+    static const uint32_t k_ev_breaks[CAM_CAL_GAMMA_N] = CAM_ENV_EV_BREAKS;
+    (void)ae_target;
+    s_env_q1 = cam_env_luma_from_ev(s_ae.ev, k_ev_breaks);
+#endif
+    if (s_env_q1) {
+        if (s_env_q1 < s_env_min_q1) s_env_min_q1 = s_env_q1;
+        if (s_env_q1 > s_env_max_q1) s_env_max_q1 = s_env_q1;
+        const uint32_t want = cam_gamma_slot(s_env_q1, s_gamma_slot_want);
+        if (want != s_gamma_slot_want && s_gamma_slot_want < CAM_CAL_GAMMA_N)
+            s_gamma_slot_switches++;
+        s_gamma_slot_want = want;
+        s_env_slots_seen |= 1u << want;
+    }
+}
+#endif  /* CAM_HIST_ENABLE */
+
 #if CAM_AWB_ENABLE
 /* AWB 走一拍：算出新的 R/B 增益并重配 CCM。控制律与全部防护判据在 cam_tune.c。 */
 static void camera_awb_tick(const cam_frame_stats_t *st)
@@ -1819,6 +2010,13 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
 #if CAM_AWB_ENABLE
     camera_awb_tick(st);
 #endif
+#if CAM_HIST_ENABLE
+    /*
+     * 直方图排在 AE 之后：env.luma 要用本拍刚更新过的 s_ae.ev。
+     * 它与 AWB 的 oneshot 永远不在同一拍（相位错开半周期，见 camera_hist_tick）。
+     */
+    camera_hist_tick(CAM_AE_TARGET);
+#endif
 #if CAM_CCM_MODE
     /*
      * CCM 的第二条重配路径：色温跨档。排在 AWB **之后**，两条路吃的是同一个
@@ -2021,6 +2219,78 @@ static void camera_awb_stat_report(uint32_t sw_sug_r, uint32_t sw_sug_b)
                             : "软件灰世界（本统计只观测）");
 }
 #endif  /* CAM_AWB_STAT_ENABLE */
+
+/*
+ * ══ 直方图与 env.luma 的自检（T11）══ **两行。**
+ *
+ * 第一行是这次统计本身（跑没跑、筛到多少像素、分布的三个标量）；第二行是
+ * 16 个 bin 的原始值 —— 后者不是冗余：「16 个数彼此不同、且遮镜头时整体左移」
+ * 本身就是「这个统计块真的在看画面」的判据，均值算对了不代表分布是真的。
+ * 第三行是 env.luma 与它选出的 gamma 档。
+ *
+ * 判读（第一行）：
+ *   HIST=未编译 / 非 ESP_OK   → 统计块没建起来（权重和 ≠ 256 / 某个 integer 域
+ *                              非 0 / 阈值含 0 是三大死因），下面的数全是 0。
+ *   触发= 不涨而取流中         → 分频没走到（看 CAM_HIST_INTERVAL_TICKS）。
+ *   触发= 在涨但 alt 0        → stop 路径漏了，回去看 camera_csi_tune_tick 的闸。
+ *   超时= 在涨                → 60 ms 不够，或 ISP 没在出数据；也可能是与 AWB
+ *                              的 oneshot 撞了拍（看 CAM_HIST_PHASE）。
+ *   Σbin 明显小于 921600      → 窗口 bsize = 0（同 AE 的窗口坑），或分辨率变了。
+ *   16 个 bin 全 0            → 同上。
+ *   遮住镜头 ⇒ 暗块 >= 80%、bin 整体左移；手电照 ⇒ 亮块涨。**这两条不成立就
+ *                              说明抽头不在画面上**，后面 env.luma 一概不必看。
+ *
+ * 判读（env 那行 —— **T11 的核心判据在这里**）：
+ *   env=n/a                   → AE 还没就绪（ev = 0），不是 env 算错了。
+ *   从明亮日光走到昏暗室内，「用过的档」至少出现**两个**不同的数
+ *                             → §E.5 的 k/ev 重建站得住，T12 可以放心接上。
+ *   四档只用得到一档，或 env 恒在 3001 以上 / 151 以下
+ *                             → **重建式是错的**。把 cam_tune.h 的 CAM_ENV_MODEL
+ *                              翻成 0，并把 CAM_ENV_EV_BREAKS 换成实测的四个 ev
+ *                              （记下是哪种光照、AE 收敛后的 ev 是多少）。
+ *   想换档= 随时间线性增长      → 迟滞不够，把 CAM_CAL_GAMMA_MIN_STEP_Q1（官方 30）
+ *                              加大并记录理由。
+ */
+#if CAM_HIST_ENABLE
+static void camera_hist_report(void)
+{
+    const uint32_t total = (uint32_t)CAM_SENSOR_W * CAM_SENSOR_H;
+    ESP_LOGI(TAG, "[自检] HIST=%s 最近=%s 触发=%" PRIu32 " 超时=%" PRIu32
+                  " | 场景均值=%u（均匀权重，与 AE 的中心加权是两个量）"
+                  " 亮块=%u%% 暗块=%u%% | Σbin=%" PRIu32 "(应为 %" PRIu32 ")",
+             step_str(s_st_hist), step_str(s_st_histrun), s_hist_trigs, s_hist_timeouts,
+             s_hist_mean, s_hist_bright_pct, s_hist_dark_pct, s_hist_total, total);
+
+    ESP_LOGI(TAG, "[自检] HIST bin(每格 16 个码值): %" PRIu32 " %" PRIu32 " %" PRIu32
+                  " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32
+                  " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32
+                  " %" PRIu32 " %" PRIu32 " %" PRIu32,
+             s_hist_bins[0], s_hist_bins[1], s_hist_bins[2], s_hist_bins[3],
+             s_hist_bins[4], s_hist_bins[5], s_hist_bins[6], s_hist_bins[7],
+             s_hist_bins[8], s_hist_bins[9], s_hist_bins[10], s_hist_bins[11],
+             s_hist_bins[12], s_hist_bins[13], s_hist_bins[14], s_hist_bins[15]);
+
+    char env[24] = "n/a";
+    if (s_env_q1)
+        snprintf(env, sizeof env, "%" PRIu32 ".%" PRIu32, s_env_q1 / 10, s_env_q1 % 10);
+    char rng[40] = "（还没有过有效值）";
+    if (s_env_max_q1)
+        snprintf(rng, sizeof rng, "[%" PRIu32 ".%" PRIu32 ", %" PRIu32 ".%" PRIu32 "]",
+                 s_env_min_q1 / 10, s_env_min_q1 % 10, s_env_max_q1 / 10, s_env_max_q1 % 10);
+    ESP_LOGI(TAG, "[自检] ENV 模型=%s ev=%" PRIu32 " 场景均值=%u AE目标=%d"
+                  " → env.luma=%s → 想要 gamma 档=%s"
+                  " | 断点 %u/%u/%u/%u 量程=%s 用过的档 %c%c%c%c 想换档=%" PRIu32,
+             CAM_ENV_MODEL ? "官方 k/ev（[反推]，非确证）" : "实测 ev 断点插值（降级路径）",
+             s_ae.ev, s_hist_mean, CAM_AE_TARGET, env,
+             s_gamma_slot_want < CAM_CAL_GAMMA_N ? (const char[]){(char)('0' + s_gamma_slot_want), 0}
+                                                 : "未定",
+             cam_cal_gamma_luma_q1[0] / 10, cam_cal_gamma_luma_q1[1] / 10,
+             cam_cal_gamma_luma_q1[2] / 10, cam_cal_gamma_luma_q1[3] / 10, rng,
+             (s_env_slots_seen & 1u) ? '0' : '-', (s_env_slots_seen & 2u) ? '1' : '-',
+             (s_env_slots_seen & 4u) ? '2' : '-', (s_env_slots_seen & 8u) ? '3' : '-',
+             s_gamma_slot_switches);
+}
+#endif  /* CAM_HIST_ENABLE */
 
 /*
  * 把 9 个 ×1000 的 CCM 系数打成 "a.aaa b.bbb c.ccc | ..." 一行。
@@ -2293,6 +2563,15 @@ static void camera_quality_report(void)
 #else
     ESP_LOGI(TAG, "[自检] AE统计=未编译（CAM_AE_STAT_ENABLE=0，不建 ISP AE 统计块、"
                   "不申请 ISP 中断；AE 只有软件全帧均值这一个口径）");
+#endif
+
+    /* 直方图那几行紧跟 AE 之后：它与 AE 的 5×5 是同一帧画面的两个口径
+     * （均匀权重 vs 中心加权），挨着打才对照得起来。 */
+#if CAM_HIST_ENABLE
+    camera_hist_report();
+#else
+    ESP_LOGI(TAG, "[自检] HIST=未编译（CAM_HIST_ENABLE=0，不建 ISP 直方图统计块、"
+                  "帧泵里没有那次 oneshot 阻塞；env.luma 与背光判据一并失效）");
 #endif
 }
 

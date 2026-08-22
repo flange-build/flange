@@ -264,6 +264,32 @@ uint32_t cam_env_luma_q1(uint32_t ev, uint8_t scene_mean, uint8_t ae_target)
     return (uint32_t)((num + den / 2) / den);
 }
 
+uint32_t cam_env_luma_from_ev(uint32_t ev, const uint32_t *ev_breaks)
+{
+    if (ev == 0 || !ev_breaks)
+        return 0;
+    if (ev >= ev_breaks[0])
+        return cam_cal_gamma_luma_q1[0];
+    if (ev <= ev_breaks[CAM_CAL_GAMMA_N - 1])
+        return cam_cal_gamma_luma_q1[CAM_CAL_GAMMA_N - 1];
+
+    uint32_t i = 0;
+    while (i + 2 < CAM_CAL_GAMMA_N && ev <= ev_breaks[i + 1])
+        i++;
+    /* 此处必有 ev_breaks[i+1] < ev < ev_breaks[i]（断点严格降序）。 */
+
+    /* 在 1/ev 上线性插值。放大 1e9 是为了让整数除法保留足够有效位：
+     * ev 的值域是 [8, 19904]，1e9/8 = 1.25e8，仍远在 uint64 之内。 */
+    const uint64_t u  = 1000000000ull / ev;
+    const uint64_t u0 = 1000000000ull / ev_breaks[i];
+    const uint64_t u1 = 1000000000ull / ev_breaks[i + 1];
+    const uint32_t l0 = cam_cal_gamma_luma_q1[i];
+    const uint32_t l1 = cam_cal_gamma_luma_q1[i + 1];
+    if (u1 <= u0)
+        return l0;                       /* 断点没按降序写：退回左端点，不除零 */
+    return (uint32_t)(l0 + ((uint64_t)(l1 - l0) * (u - u0)) / (u1 - u0));
+}
+
 static uint32_t gamma_slot_raw(uint32_t env_q1)
 {
     for (uint32_t i = 0; i < CAM_CAL_GAMMA_N; i++) {
