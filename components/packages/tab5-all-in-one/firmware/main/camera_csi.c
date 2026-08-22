@@ -601,10 +601,18 @@ static bool    s_bf_enabled;              /* esp_isp_bf_enable 有 FSM 门，只
 #endif
 
 #if CAM_LSC_ENABLE
-/* 四个通道各 273 项的增益数组，由驱动分配、常驻（T13 换档要复用同一块）。 */
+/* 四个通道各 273 项的增益数组，由驱动分配、常驻（T13 换档复用同一块）。 */
 static esp_isp_lsc_gain_array_t s_lsc_gain;
 static size_t  s_lsc_n;
 static int32_t s_st_lsc = STEP_NOT_RUN;
+/* 增益数组分配成功、格数也对得上 —— **换档前必须查这个**：分配失败时
+ * s_lsc_gain.gain_r 是 NULL，照着填就是一次空指针写。 */
+static bool    s_lsc_ready;
+static uint32_t s_lsc_slot = CAM_LSC_SLOT_DEFAULT;   /* 此刻硬件里是哪一档 */
+#if CAM_LSC_BY_CT
+static cam_slot_track_t s_lsc_track;
+static uint32_t s_lsc_switches;                      /* 累计换档次数（重配 LUT 的次数） */
+#endif
 #endif
 
 #if CAM_AEN_ENABLE
@@ -613,7 +621,12 @@ static int32_t s_st_sharp = STEP_NOT_RUN;
 static int32_t s_st_color = STEP_NOT_RUN;
 static bool    s_sharp_enabled;           /* enable 有 FSM 门 */
 static bool    s_color_enabled;
-static uint8_t s_contrast_val = 128;      /* 此刻写进硬件的对比度，自检行用 */
+static uint8_t s_contrast_val = 128;                        /* 此刻写进硬件的对比度 */
+static uint8_t s_sat_val = CAM_SATURATION_FIXED_VAL;        /* 此刻写进硬件的饱和度 */
+#if CAM_SAT_BY_CT
+static cam_slot_track_t s_sat_track;
+static uint32_t s_sat_switches;
+#endif
 #endif
 
 #if CAM_GAMMA_ENABLE
@@ -842,7 +855,10 @@ static esp_err_t camera_lsc_apply(uint32_t slot)
         }
     }
     const esp_isp_lsc_config_t cfg = { .gain_array = &s_lsc_gain };
-    return esp_isp_lsc_configure(s_isp, &cfg);
+    const esp_err_t err = esp_isp_lsc_configure(s_isp, &cfg);
+    if (err == ESP_OK)
+        s_lsc_slot = slot;         /* 自检行打的必须是**硬件里那一档** */
+    return err;
 }
 #endif  /* CAM_LSC_ENABLE */
 
@@ -1306,10 +1322,17 @@ esp_err_t camera_csi_init(void)
                  (unsigned)s_lsc_n, (unsigned)CAM_CAL_LSC_GRIDS);
         s_st_lsc = ESP_ERR_INVALID_SIZE;
     }
-    if (s_st_lsc == ESP_OK)
+    if (s_st_lsc == ESP_OK) {
+        s_lsc_ready = true;        /* 数组在、格数对 ⇒ 之后换档可以直接填 */
         s_st_lsc = camera_lsc_apply(CAM_LSC_SLOT_DEFAULT);
+    }
     if (s_st_lsc == ESP_OK)
         s_st_lsc = esp_isp_lsc_enable(s_isp);
+#if CAM_LSC_BY_CT
+    /* 把跟踪器**预置**到开机这一档：不预置的话第一拍会因为 primed == false
+     * 无条件返回 true，白白再写一次 273×2 条 LUT 命令。 */
+    (void)cam_slot_changed(&s_lsc_track, CAM_LSC_SLOT_DEFAULT, 1);
+#endif
     if (s_st_lsc != ESP_OK)
         /* ⚠️ ESP_ERR_NOT_SUPPORTED 只有一个含义：**这块板的 efuse 报的芯片版本
          *   低于 v1.0**（isp_lsc.c 的门是 ESP_CHIP_REV_ABOVE(rev,100)，而该宏是
@@ -1798,9 +1821,17 @@ static void camera_awb_stat_tick(void)
      * cam_awb_ratios() 返回 false 只说「这份采样算不出比值」（counted = 0 或扣完
      * 基座后 Σg = 0）—— 那时保持上一次的 CCT，不退回默认值：色温不会因为某一秒
      * 采样失败就真的跳回 5210 K。
+     *
+     * ⚠️ **白点数必须达到官方 min_counted（T13 加的闸）。** 这是「CCT 可不可信」
+     *   这件事的唯一判据，而且把它放在**输入端**：可信性是那个数的属性，不是
+     *   某一拍的属性。于是三个消费者（CCM 的档、LSC 的档、饱和度）自动都只在
+     *   可信的 CCT 上动 —— 白点不够的场景（镜头怼着单色物体）里 CCT 整个冻住，
+     *   而 AWB 的控制律本来就用同一个门限拒绝动增益，两者口径一致。
+     *   计划里 T13 写的是「只在 AWB 判定 APPLIED 或 SKIP_BAND 的那一拍评估 LSC」，
+     *   本实现改成这一条：更简单，且顺带把 T10 的 CCM 换档也一起管住了。
      */
     uint32_t rg = 0, bg = 0;
-    if (cam_awb_ratios(&s_awb_hw, &rg, &bg)) {
+    if (s_awb_hw.counted >= CAM_CAL_MIN_COUNTED && cam_awb_ratios(&s_awb_hw, &rg, &bg)) {
         s_cct_k     = cam_cct_from_rg(rg);
         s_cct_valid = true;
     }
@@ -1950,6 +1981,89 @@ static void camera_awb_tick(const cam_frame_stats_t *st)
 }
 #endif
 
+#if CAM_AEN_ENABLE
+/*
+ * 把此刻的对比度与饱和度一起写进 Color 块。
+ *
+ * **两个值必须由同一次 configure 下发** —— esp_isp_color_config_t 是整体覆盖，
+ * 没有「只改饱和度」这种写法。所以它们各自的持有者（对比度按增益选、饱和度按
+ * 色温选）都只更新自己的那个变量，然后调本函数；分别 configure 会让后一次把
+ * 前一次的值覆盖回默认。
+ *
+ * ⓘ 色调与亮度恒为 0：官方 SC202CS 标定里没有 hue / brightness 字段，写 0
+ *   就是对齐；顺带避开 rev<3.0 只有 8 bit 色调（HAL 内部做 hue×256/360 折算）
+ *   的精度坑。
+ */
+static esp_err_t camera_color_apply(void)
+{
+    const esp_isp_color_config_t cfg = {
+        .color_contrast   = { .val = s_contrast_val },
+        .color_saturation = { .val = s_sat_val },
+        .color_hue        = 0,
+        .color_brightness = 0,
+        .flags = { .update_once_configured = 1 },
+    };
+    return esp_isp_color_configure(s_isp, &cfg);
+}
+#endif  /* CAM_AEN_ENABLE */
+
+#if (CAM_LSC_ENABLE && CAM_LSC_BY_CT) || (CAM_AEN_ENABLE && CAM_SAT_BY_CT)
+/*
+ * ══ 按色温选 LSC 档与饱和度（T13）══ L3 的最后两项。
+ *
+ * 两级共用同一个 s_cct_k（唯一写入点在 camera_awb_stat_tick），所以它们与 CCM
+ * 永远看的是同一个色温 —— 现场若发现三者「说的不是同一件事」，那是代码错了，
+ * 不是估计漂了。
+ *
+ * ⚠️ **必须排在 camera_aen_tick() 之前**：开机第一拍 Color 块还没 configure 过
+ *   （更没 enable），这里只更新 s_sat_val、不下发（s_color_enabled 那道闸），
+ *   紧接着 aen_tick 那一次 configure 就带着正确的饱和度一起下去了 ——
+ *   省掉开机时一次「先 128 再 130」的无谓重配。
+ */
+static void camera_ct_feedfwd_tick(void)
+{
+#if CAM_LSC_ENABLE && CAM_LSC_BY_CT
+    if (s_lsc_ready) {
+        /* 三档中心 2410 / 5210 / 8200 K，取**最近邻**（不插值，理由见 cam_tune.h）。 */
+        const uint32_t slot = cam_map_cct_nearest(cam_cal_lsc_cct, CAM_CAL_LSC_N, s_cct_k);
+        /* 迟滞是别处的两倍：273×2 条 LUT 写是本工程最贵的一次重配，而 rev v1.0
+         * 没有影子寄存器 —— 写到一半就是可见的暗角跳变（理由见 cam_tune.h）。 */
+        if (cam_slot_changed(&s_lsc_track, slot, CAM_FEEDFWD_HYST_TICKS * 2)) {
+            s_st_lsc = camera_lsc_apply(slot);
+            s_lsc_switches++;
+            if (s_st_lsc != ESP_OK)
+                ESP_LOGW(TAG, "LSC 换档到 %" PRIu32 " 失败(%s)，"
+                              "**LUT 可能停在写了一半的状态**（暗角修正会不对）",
+                         slot, esp_err_to_name((esp_err_t)s_st_lsc));
+        }
+    }
+#endif
+
+#if CAM_AEN_ENABLE && CAM_SAT_BY_CT
+    {
+        /*
+         * 官方 acc.saturation 两档：{0 → 128, 4500 → 130}。门限两侧各留
+         * CAM_SAT_CT_HYST_K 的迟滞带，带内保持当前值（不是取中间值 ——
+         * 只有两档，没有中间值可取）。
+         */
+        const uint32_t edge = cam_cal_saturation[1].cct_k;
+        uint8_t want = s_sat_val;
+        if (s_cct_k >= edge + CAM_SAT_CT_HYST_K)
+            want = cam_cal_saturation[1].value;
+        else if (s_cct_k + CAM_SAT_CT_HYST_K < edge)
+            want = cam_cal_saturation[0].value;
+        if (cam_slot_changed(&s_sat_track, want, CAM_FEEDFWD_HYST_TICKS)) {
+            s_sat_val = want;
+            s_sat_switches++;
+            /* Color 块还没 configure 过时不下发：紧跟其后的 aen_tick 会带上它。 */
+            if (s_color_enabled)
+                s_st_color = camera_color_apply();
+        }
+    }
+#endif
+}
+#endif  /* LSC_BY_CT || SAT_BY_CT */
+
 #if CAM_ADN_ENABLE
 /*
  * BF（Bayer 域降噪）+ Demosaic 梯度比，按传感器总增益查官方表。
@@ -2072,14 +2186,7 @@ static void camera_aen_tick(uint32_t gain_milli)
          *   rev<3.0 只有 8 bit 色调（HAL 内部做 hue×256/360 折算）的精度坑。
          * ⓘ 亮度：同样不在标定里，写 0。 */
         s_contrast_val = cam_cal_contrast[ct].value;
-        const esp_isp_color_config_t cfg = {
-            .color_contrast   = { .val = s_contrast_val },
-            .color_saturation = { .val = CAM_SATURATION_FIXED_VAL },
-            .color_hue        = 0,
-            .color_brightness = 0,
-            .flags = { .update_once_configured = 1 },
-        };
-        s_st_color = esp_isp_color_configure(s_isp, &cfg);
+        s_st_color = camera_color_apply();
         if (s_st_color == ESP_OK && !s_color_enabled) {
             /* ⓘ isp_core.c 那处 isp_ll_color_enable(true) 的 workaround（DIG-474）
              *   只在 **DVP** 输入时触发，我们是 CSI 输入 ⇒ 不触发，所以 color 块
@@ -2149,6 +2256,16 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
      * 远低于「每帧重配」，而换来的是「增益不变、只有色温变」时矩阵也会跟上。
      */
     camera_ccm_ct_tick();
+#endif
+
+#if (CAM_LSC_ENABLE && CAM_LSC_BY_CT) || (CAM_AEN_ENABLE && CAM_SAT_BY_CT)
+    /*
+     * 按**色温**选档的两级（LSC / 饱和度）排在按**增益**选档的两级之前：
+     * 饱和度与对比度共用一次 Color configure，先让饱和度把值定下来，
+     * 紧接着 aen_tick 那一次就一起下发了（开机第一拍尤其重要，
+     * 否则会出现「先 128 再 130」两次无谓的重配）。
+     */
+    camera_ct_feedfwd_tick();
 #endif
 
 #if CAM_ADN_ENABLE || CAM_AEN_ENABLE
@@ -2771,16 +2888,39 @@ static void camera_feedfwd_report(void)
      *                               画面会表现为上下亮、左右暗 ⇒ 把 cam_tune.h 的
      *                               CAM_LSC_TRANSPOSE 改成 1 重编。
      *   实拍白墙：改动前四角/中心亮度比约 0.3~0.4，改动后差值应 < 15%。
+     *
+     * ══ T13（按 CCT 选档）额外的三条 ═══════════════════════════════════
+     *   档一直是 1（5210K）且 CCT=…(默认)  → **预期**：白点统计还没给过可信采样
+     *                            （counted 没到官方 min_counted），CCT 冻在默认值。
+     *                            不是 LSC 的事，去看「AWB统计」那行的「白点=」。
+     *   白炽灯下 ⇒ 档 0(2410K)；日光下 ⇒ 档 2(8200K)；室内白光 ⇒ 档 1。
+     *   换光源时画面闪一下暗角  → 迟滞不够（已经是别处的两倍）。**若仍在，
+     *                            接受这个已知代价并写进 README**：rev v1.0 没有
+     *                            影子寄存器，273×2 条 LUT 写落在帧内就是硬件限制。
+     *   换档= 随时间线性增长     → CCT 在两档中点（3810K / 6705K）附近抖。
      */
     const size_t c_mid = (CAM_CAL_LSC_GRID_Y / 2) * CAM_CAL_LSC_GRID_X + CAM_CAL_LSC_GRID_X / 2;
     const size_t c_tr  = CAM_CAL_LSC_GRID_X - 1;
     const size_t c_bl  = (CAM_CAL_LSC_GRID_Y - 1) * CAM_CAL_LSC_GRID_X;
     const size_t c_br  = c_bl + CAM_CAL_LSC_GRID_X - 1;
-    ESP_LOGI(TAG, "[自检] LSC=开 %s 档%d(%uK) 网格 %d×%d=%u(驱动要 %u) 转置=%s | "
+    ESP_LOGI(TAG, "[自检] LSC=开 %s 选档=%s CCT=%" PRIu32 "K(%s) 档%" PRIu32 "/%d(%uK)"
+                  " 换档=%" PRIu32 " 网格 %d×%d=%u(驱动要 %u) 转置=%s | "
                   "R 增益 中心=%" PRIu32 " 四角=%" PRIu32 "/%" PRIu32 "/%" PRIu32
                   "/%" PRIu32 "（256=1.00×）",
-             step_str(s_st_lsc), CAM_LSC_SLOT_DEFAULT,
-             (unsigned)cam_cal_lsc_cct[CAM_LSC_SLOT_DEFAULT],
+             step_str(s_st_lsc),
+#if CAM_LSC_BY_CT
+             "按 CCT 最近邻（迟滞 " CAM_STR(CAM_FEEDFWD_HYST_TICKS) "×2 拍）",
+#else
+             "钉在 CAM_LSC_SLOT_DEFAULT（CAM_LSC_BY_CT=0）",
+#endif
+             s_cct_k, s_cct_valid ? "估计" : "默认",
+             s_lsc_slot, CAM_CAL_LSC_N,
+             (unsigned)cam_cal_lsc_cct[s_lsc_slot],
+#if CAM_LSC_BY_CT
+             s_lsc_switches,
+#else
+             (uint32_t)0,
+#endif
              CAM_CAL_LSC_GRID_X, CAM_CAL_LSC_GRID_Y, (unsigned)CAM_CAL_LSC_GRIDS,
              (unsigned)s_lsc_n, CAM_LSC_TRANSPOSE ? "是" : "否",
              s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_mid].val : 0,
@@ -2798,6 +2938,12 @@ static void camera_feedfwd_report(void)
      *   Color=ESP_ERR_INVALID_ARG → val 超 255：多半是把 1.031 乘了 1000 写进去。
      *   画面整体发灰、对比度反而降低 → 把 132 当成百分数或做了 /128 的换算。
      *   遮镜头拉高增益 ⇒ SHARP 档 0→3、m 系数 1.525→1.225，对比度 132→126。
+     *   饱和度在 128/130 之间抖 → CCT 恰好在 4500 K 附近。迟滞已是 ±150 K，
+     *                            仍抖就加大 CAM_SAT_CT_HYST_K。
+     *   饱和度恒为 128 而 CCT 明显 > 4500 → 换档被迟滞压着（看「换档=」），
+     *                            或 CAM_SAT_BY_CT = 0。
+     *   ⓘ 饱和度对 AE/AWB 的**硬件**统计恒无影响（两个抽头都在 Color 上游）；
+     *     只有 CAM_*_SOURCE = 0 的回退档才会看到那 0.34% 的扰动。
      *   高增益下噪点被锐化成明显颗粒 → 看 m 系数是否真的随增益降了（没降就是档没跟上）。
      *   边缘出现白边/黑边（过锐）  → h 系数的定点换算错了（整数位/小数位颠倒）。
      */
@@ -2809,7 +2955,8 @@ static void camera_feedfwd_report(void)
                   "SHARP=%s 档%" PRIu32 "/%d h阈=%u l阈=%u "
                   "h系数=%u.%03u→%" PRIu32 "+%" PRIu32 "/32 "
                   "m系数=%u.%03u→%" PRIu32 "+%" PRIu32 "/32 | "
-                  "Color=%s 对比度=%u(%u.%03u×) 饱和度=%u(%u.%03u×，本阶段钉住) | "
+                  "Color=%s 对比度=%u(%u.%03u×，按增益) 饱和度=%u(%u.%03u×，%s"
+                  " CCT=%" PRIu32 "K 门限 %uK±" CAM_STR(CAM_SAT_CT_HYST_K) "K 换档=%" PRIu32 ") | "
                   "前馈重配合计=%" PRIu32,
              s_feedfwd_gain_milli / 1000, s_feedfwd_gain_milli % 1000,
              step_str(s_st_sharp), sh, CAM_CAL_SHARPEN_N,
@@ -2821,9 +2968,20 @@ static void camera_feedfwd_report(void)
              step_str(s_st_color), s_contrast_val,
              (unsigned)(s_contrast_val * 1000u / 128u / 1000u),
              (unsigned)(s_contrast_val * 1000u / 128u % 1000u),
-             (unsigned)CAM_SATURATION_FIXED_VAL,
-             (unsigned)(CAM_SATURATION_FIXED_VAL * 1000u / 128u / 1000u),
-             (unsigned)(CAM_SATURATION_FIXED_VAL * 1000u / 128u % 1000u),
+             (unsigned)s_sat_val,
+             (unsigned)(s_sat_val * 1000u / 128u / 1000u),
+             (unsigned)(s_sat_val * 1000u / 128u % 1000u),
+#if CAM_SAT_BY_CT
+             "按 CCT 官方 2 档",
+#else
+             "钉在 CAM_SATURATION_FIXED_VAL",
+#endif
+             s_cct_k, (unsigned)cam_cal_saturation[1].cct_k,
+#if CAM_SAT_BY_CT
+             s_sat_switches,
+#else
+             (uint32_t)0,
+#endif
              s_feedfwd_reconf);
 #else
     ESP_LOGI(TAG, "[自检] AEN=未编译（CAM_AEN_ENABLE=0，不配 SHARP/Color）");

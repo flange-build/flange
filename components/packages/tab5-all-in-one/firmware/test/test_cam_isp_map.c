@@ -253,6 +253,62 @@ static void test_cct_slot(void)
     cases++;
 }
 
+/* ══ B2. 按色温取最近邻档（T13 的 LSC 选档规则）═════════════════════ */
+
+static void test_cct_nearest(void)
+{
+    /* 官方 LSC 三档：2410 / 5210 / 8200 K。中点分别是 3810 与 6705。 */
+    assert(CAM_CAL_LSC_N == 3);
+    assert(cam_cal_lsc_cct[0] == 2410 && cam_cal_lsc_cct[1] == 5210 &&
+           cam_cal_lsc_cct[2] == 8200);
+
+    /* 三个档位中心各自映到自己。 */
+    for (uint32_t i = 0; i < CAM_CAL_LSC_N; i++) {
+        assert(cam_map_cct_nearest(cam_cal_lsc_cct, CAM_CAL_LSC_N, cam_cal_lsc_cct[i]) == i);
+        cases++;
+    }
+    /* 两端钳位。 */
+    assert(cam_map_cct_nearest(cam_cal_lsc_cct, CAM_CAL_LSC_N, 1000) == 0);   cases++;
+    assert(cam_map_cct_nearest(cam_cal_lsc_cct, CAM_CAL_LSC_N, 99999) == 2);  cases++;
+
+    /*
+     * **对 CCT 单调非减**，且恰好有两个切换点。这是本函数唯一要守的性质 ——
+     * 切换点比真正的中点晚约 (hi−lo)/256（q8 权重截断），三档上约 11 K，
+     * 所以这里不去钉「3810 处换档」，而是钉「切换点落在中点右侧 32 K 之内」。
+     */
+    {
+        uint32_t prev = 0, edges = 0;
+        for (uint32_t k = 1000; k <= 12000; k++) {
+            const uint32_t v = cam_map_cct_nearest(cam_cal_lsc_cct, CAM_CAL_LSC_N, k);
+            assert(v >= prev && v <= 2);
+            if (v != prev) {
+                const uint32_t mid = (uint32_t)(cam_cal_lsc_cct[v - 1] + cam_cal_lsc_cct[v]) / 2;
+                assert(k >= mid && k <= mid + 32);
+                edges++;
+            }
+            prev = v;
+        }
+        assert(edges == 2);
+        cases++;
+    }
+
+    /* 退化输入不许崩、不许越界。 */
+    assert(cam_map_cct_nearest(NULL, 3, 5000) == 0);                         cases++;
+    assert(cam_map_cct_nearest(cam_cal_lsc_cct, 0, 5000) == 0);              cases++;
+    assert(cam_map_cct_nearest(cam_cal_lsc_cct, 1, 99999) == 0);             cases++;
+
+    /*
+     * 饱和度那一侧（T13 的另一半）：官方 acc.saturation 只有两档
+     * {0 → 128, 4500 → 130}。这里钉住表本身，运行期的迟滞在 camera_csi.c。
+     */
+    assert(CAM_CAL_SATURATION_N == 2);
+    assert(cam_cal_saturation[0].cct_k == 0 && cam_cal_saturation[0].value == 128);
+    assert(cam_cal_saturation[1].cct_k == 4500 && cam_cal_saturation[1].value == 130);
+    /* 128 = 1.000×，是「不配 color 块」的等价值；130 = 1.0156×。 */
+    assert(cam_cal_saturation[1].value * 1000u / 128u == 1015);
+    cases++;
+}
+
 /* ══ C. rg → CCT ════════════════════════════════════════════════════ */
 
 static void test_cct_from_rg(void)
@@ -1103,6 +1159,7 @@ int main(void)
     test_to_fixed();
     test_slot_track();
     test_cct_slot();
+    test_cct_nearest();
     test_cct_from_rg();
     test_ccm_interp();
     test_ccm_fold();

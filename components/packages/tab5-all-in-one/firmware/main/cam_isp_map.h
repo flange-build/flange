@@ -38,6 +38,15 @@ uint32_t cam_map_gain_slot(const uint16_t *gain_breaks, uint32_t n, uint32_t gai
  * w_q8 可传 NULL。 */
 uint32_t cam_map_cct_slot(const uint16_t *cct_tbl, uint32_t n, uint32_t cct_k, uint32_t *w_q8);
 
+/* ── 按色温取**最近邻**档（不插值）────────────────────────────────
+ * 用在 LSC 上：273×4 个值插值要 1092 次乘加，而三档之间最大差 0.36 —— 不值。
+ * 语义 = cam_map_cct_slot() 之后，权重超过一半就进到右边那一档。
+ * ⓘ 由于权重是 q8 整数（截断），实际的切换点比真正的中点晚约
+ *   (hi−lo)/256 ≈ 0.4%（三档 LSC 上约 11 K）。这个偏差比 CCT 估计本身的噪声
+ *   小一个量级，不做补偿；写在这里是为了「实测发现切换点偏晚」时不必重新推导。
+ * n == 0 或 cct_tbl == NULL 时返回 0。 */
+uint32_t cam_map_cct_nearest(const uint16_t *cct_tbl, uint32_t n, uint32_t cct_k);
+
 /* ── ×1000 定点 → 硬件的「整数位.小数位」定点 ───────────────────────
  * ISP 各级的系数寄存器是宽度各不相同的定点位域（都在 soc_caps.h 里）：
  *     demosaic.grad_ratio   2 整数位 + 4 小数位（步长 1/16）

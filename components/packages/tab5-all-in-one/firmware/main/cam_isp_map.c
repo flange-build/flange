@@ -52,6 +52,15 @@ uint32_t cam_map_cct_slot(const uint16_t *cct_tbl, uint32_t n, uint32_t cct_k, u
     return i;
 }
 
+uint32_t cam_map_cct_nearest(const uint16_t *cct_tbl, uint32_t n, uint32_t cct_k)
+{
+    uint32_t w = 0;
+    uint32_t slot = cam_map_cct_slot(cct_tbl, n, cct_k, &w);
+    if (w > 128u && slot + 1 < n)
+        slot++;
+    return slot;
+}
+
 /* ── 定点转换 ──────────────────────────────────────────────────── */
 
 bool cam_map_to_fixed(uint32_t milli, uint32_t int_bits, uint32_t dec_bits,
