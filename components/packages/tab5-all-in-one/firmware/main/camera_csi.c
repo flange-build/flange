@@ -55,6 +55,12 @@
 
 static const char *TAG = "camera";
 
+/* 把宏的**值**变成字符串字面量（两级展开，缺一级会得到宏名本身）。
+ * 自检行里凡是「门限是多少」这种数，宁可让预处理器去拼，也不要在格式串里
+ * 手抄一遍 —— 手抄的那份迟早会与宏走岔，而现场看到的是那份手抄的。 */
+#define CAM_STR_(x)  #x
+#define CAM_STR(x)   CAM_STR_(x)
+
 /*
  * 开机自检快照。与 codec_audio.c 那份同构，理由也一样：探测跑在 CDC 日志串口
  * 真正开始出字节之前（host 要先打开 ttyACM，那之前的字节被环形缓冲冲掉），
@@ -305,6 +311,23 @@ static bool              s_ae_ready;                  /* 可调范围查到了�
 static int32_t           s_ae_last_err = ESP_OK;      /* 最近一次下发的返回值 */
 static cam_frame_stats_t s_last_stats;                /* 最近一帧的统计，自检行用 */
 
+/*
+ * ══ AE 的目标亮度（T12）══ 官方是**随场景变的**，不再是一个常数。
+ *
+ *   高光优先（默认）  目标 CAM_AE_TARGET + CAM_AE_HL_OFFSET = 59
+ *   暗部优先（背光）  目标 CAM_AE_TARGET + CAM_AE_LL_OFFSET = 63
+ *
+ * 判定与换算都是纯逻辑（cam_ae_backlight / cam_ae_target，宿主机可测），
+ * 这里只负责「每拍算一次并记下来」——自检行要打的是**这一拍真正喂给控制律的
+ * 那个目标**，而不是重新算一遍（重新算的话某天两处走岔就永远看不出来）。
+ *
+ * s_backlight_switches 是纯观测量：它随时间线性增长 = 判据在门限上抖，
+ * 那时才需要给背光判据加迟滞（默认不加的理由见 cam_tune.h）。
+ */
+static bool     s_backlight;
+static int      s_ae_target = CAM_AE_TARGET + CAM_AE_HL_OFFSET;
+static uint32_t s_backlight_switches;
+
 /* 此刻**真正写进 CCM 硬件**的那一对增益。初值是静态标定值；AWB 开着时由
  * camera_awb_tick() 跟着状态机走。自检行打的「当前」就是它，抄进 cam_tune.h
  * 即可把闭环的结论固化成静态标定。 */
@@ -363,6 +386,21 @@ static int32_t         s_awb_last_err = ESP_OK;   /* 最近一次重配 CCM 的�
 两者不相容时若不在这里拦下，运行期表现是 AWB 永远拿不到采样、白平衡一步不动。"
 #endif
 
+#if CAM_GAMMA_ADAPTIVE && !CAM_GAMMA_ENABLE
+#error "CAM_GAMMA_ADAPTIVE=1（按 env.luma 动态选 gamma 档）依赖 CAM_GAMMA_ENABLE=1；\
+gamma 整个不进镜像时「换档」无从谈起。"
+#endif
+
+#if CAM_GAMMA_ADAPTIVE && !CAM_HIST_ENABLE
+#error "CAM_GAMMA_ADAPTIVE=1 依赖 CAM_HIST_ENABLE=1：选档的索引量 env.luma 由直方图重建；\
+不拦下的话运行期表现是 gamma 永远停在开机那一档，而自检行还显示「动态」。"
+#endif
+
+#if CAM_BACKLIGHT_ENABLE && !CAM_HIST_ENABLE
+#error "CAM_BACKLIGHT_ENABLE=1 依赖 CAM_HIST_ENABLE=1：背光判据的两个输入（亮块占比、\
+场景均值）都来自直方图；不拦下的话运行期表现是「背光永不触发」而不是「背光关掉了」。"
+#endif
+
 #if CAM_AWB_SOURCE
 /*
  * ⚠️ 白点框与门限**必须**与官方标定表逐位相同 —— 它们是同一个采样点上的量。
@@ -396,7 +434,20 @@ _Static_assert(CAM_AE_TARGET_LOW  == CAM_CAL_AE_TARGET_LOW,
                "CAM_AE_TARGET_LOW 与官方 agc.luma_adjust 的下边界不一致");
 _Static_assert(CAM_AE_TARGET_HIGH == CAM_CAL_AE_TARGET_HIGH,
                "CAM_AE_TARGET_HIGH 与官方 agc.luma_adjust 的上边界不一致");
+/* 两个优先级偏移同样必须与官方标定逐位相同（agc.{high,low}_light_priority.luma_offset）。
+ * 它们决定的是 AE 的**工作点**，抄错一个数画面就整体偏亮/偏暗，而现场看不出来。 */
+_Static_assert(CAM_AE_HL_OFFSET == CAM_CAL_AE_HL_OFFSET,
+               "高光优先偏移与官方 agc.high_light_priority.luma_offset 不符");
+_Static_assert(CAM_AE_LL_OFFSET == CAM_CAL_AE_LL_OFFSET,
+               "暗部优先偏移与官方 agc.low_light_priority.luma_offset 不符");
 #endif
+
+/* 这两条与 CAM_AE_SOURCE 无关，放在 #if 之外：目标平移在两种口径下都要成立。 */
+_Static_assert(CAM_AE_HL_OFFSET < CAM_AE_LL_OFFSET,
+               "暗部优先的目标必须高于高光优先，否则背光判据是反的");
+_Static_assert(CAM_AE_TARGET + CAM_AE_HL_OFFSET + (CAM_AE_TARGET_LOW - CAM_AE_TARGET) > 0 &&
+               CAM_AE_TARGET + CAM_AE_LL_OFFSET + (CAM_AE_TARGET_HIGH - CAM_AE_TARGET) < 255,
+               "平移后的死区跑出了 8 bit 量程");
 
 #if CAM_AE_STAT_ENABLE
 /* ══ 硬件 AE 5×5 分块统计 ══════════════════════════════════════════
@@ -1574,6 +1625,73 @@ esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms)
     return ESP_OK;
 }
 
+/*
+ * 定这一拍的 AE 目标（T12）。**必须排在 camera_ae_tick() 之前。**
+ *
+ * 用的是**上一次直方图**的两个标量（1 Hz 更新）而不是本帧的软件统计：背光是
+ * 场景属性、不是逐帧属性，用秒级的量去判它正合适；而且这两个标量与 env.luma
+ * 同源，「背光判定」与「gamma 选档」看的是同一份数据，现场对照不会各说各话。
+ */
+static void camera_ae_target_tick(void)
+{
+#if CAM_HIST_ENABLE
+    const bool bl = cam_ae_backlight(s_hist_bright_pct, s_hist_mean);
+#else
+    /* 走不到：CAM_BACKLIGHT_ENABLE=1 且 CAM_HIST_ENABLE=0 已被上面的 #error 拦下。
+     * 留着这一支是为了「直方图关掉」这个 bisect 构建仍然能编过。 */
+    const bool bl = false;
+#endif
+    if (bl != s_backlight)
+        s_backlight_switches++;
+    s_backlight = bl;
+    s_ae_target = cam_ae_target(bl);
+}
+
+#if CAM_GAMMA_ENABLE && CAM_GAMMA_ADAPTIVE
+/* 实际换过多少次档（与「想换档=」分开：后者是 env 选出来的，前者是真下发了的）。 */
+static uint32_t s_gamma_applied;
+
+/*
+ * 按 env.luma 选出的档换 gamma（T12）。
+ *
+ * ⚠️⚠️ **换档 = 重配硬件曲线 + 重建统计侧逆表，两件事必须同时发生。**
+ *   这条由 camera_gamma_apply() 的结构保证（它自己把两件事绑在一起），
+ *   所以这里只需要「决定换哪一档」，不许在别处再摸 s_gamma_inv/s_gamma_slot。
+ *
+ * 迟滞已经在 cam_gamma_slot() 里做掉了（官方 luma_min_step = 3.0），这里不再叠
+ * 第二层 —— 两层迟滞会让「为什么不换档」变成一个要同时看两处的问题。
+ *
+ * ⓘ esp_isp_gamma_configure() 在运行期实际上不可能失败：x 栅格四档完全相同、
+ *   y 是编译期常量表、s_isp 非空。真拿到错误码就停在这一档不再尝试
+ *   （s_st_gamma 记下它，自检行第一格直接可见），而不是反复重试刷屏。
+ */
+static void camera_gamma_tick(void)
+{
+    if (s_st_gamma != ESP_OK || !s_gamma_ready)
+        return;                                   /* 开机就没配上：别在这里补救 */
+    if (s_gamma_slot_want >= CAM_CAL_GAMMA_N)
+        return;                                   /* env 还没算出过（直方图没出数） */
+    if (s_gamma_slot_want == s_gamma_slot)
+        return;
+
+    const uint32_t from = s_gamma_slot;
+    s_st_gamma = camera_gamma_apply(s_gamma_slot_want);
+    if (s_st_gamma != ESP_OK) {
+        ESP_LOGW(TAG, "gamma 换档 %" PRIu32 "→%" PRIu32 " 失败(%s)，"
+                      "**硬件可能停在三通道不一致的中间态**，不再尝试换档",
+                 from, s_gamma_slot_want, esp_err_to_name((esp_err_t)s_st_gamma));
+        return;
+    }
+    s_gamma_applied++;
+    ESP_LOGI(TAG, "gamma 换档 %" PRIu32 "→%" PRIu32 "（γ=%u.%03u，env.luma=%" PRIu32
+                  ".%" PRIu32 "），统计侧逆表已同步重建",
+             from, s_gamma_slot,
+             (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] / 1000),
+             (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] % 1000),
+             s_env_q1 / 10, s_env_q1 % 10);
+}
+#endif  /* CAM_GAMMA_ENABLE && CAM_GAMMA_ADAPTIVE */
+
 /* AE 走一拍：算出新的曝光/增益并经 SCCB 下发。
  * **只换反馈量的来源，控制律（四道防振荡闸）一行不动**，见 cam_tune.h 的 CAM_AE_SOURCE。 */
 static void camera_ae_tick(const cam_frame_stats_t *st)
@@ -1600,7 +1718,7 @@ static void camera_ae_tick(const cam_frame_stats_t *st)
     const uint8_t lum = st->lin_lum_mean;
 #endif
 
-    if (!cam_ae_step(&s_ae, lum, &s_ae_lim))
+    if (!cam_ae_step(&s_ae, lum, s_ae_target, &s_ae_lim))
         return;   /* 没到更新周期 / 落在死区 / 已顶到限位：别去打扰 I2C 总线 */
 
     /*
@@ -1994,8 +2112,10 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
     if (!s_streaming)
         return;
 
-    /* 顺序：**先 AE 后 AWB**。AWB 要读 cam_ae_converged()，让它读到的是本帧刚
-     * 更新过的收敛状态，而不是上一帧的陈旧值。 */
+    /* 顺序：**先定目标、再 AE、后 AWB**。
+     *   目标要用上一次直方图的场景均值/亮块占比（背光判定）；
+     *   AWB 要读 cam_ae_converged()，让它读到的是本帧刚更新过的收敛状态。 */
+    camera_ae_target_tick();
     camera_ae_tick(st);
     /*
      * AWB 的硬件统计**排在 AE 之后、AWB 之前**：AE 那一拍可能刚下发新曝光，
@@ -2015,7 +2135,11 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
      * 直方图排在 AE 之后：env.luma 要用本拍刚更新过的 s_ae.ev。
      * 它与 AWB 的 oneshot 永远不在同一拍（相位错开半周期，见 camera_hist_tick）。
      */
-    camera_hist_tick(CAM_AE_TARGET);
+    camera_hist_tick(s_ae_target);
+#if CAM_GAMMA_ENABLE && CAM_GAMMA_ADAPTIVE
+    /* 紧跟直方图：s_gamma_slot_want 刚被本拍的 env.luma 更新过。 */
+    camera_gamma_tick();
+#endif
 #endif
 #if CAM_CCM_MODE
     /*
@@ -2281,7 +2405,7 @@ static void camera_hist_report(void)
                   " → env.luma=%s → 想要 gamma 档=%s"
                   " | 断点 %u/%u/%u/%u 量程=%s 用过的档 %c%c%c%c 想换档=%" PRIu32,
              CAM_ENV_MODEL ? "官方 k/ev（[反推]，非确证）" : "实测 ev 断点插值（降级路径）",
-             s_ae.ev, s_hist_mean, CAM_AE_TARGET, env,
+             s_ae.ev, s_hist_mean, s_ae_target, env,
              s_gamma_slot_want < CAM_CAL_GAMMA_N ? (const char[]){(char)('0' + s_gamma_slot_want), 0}
                                                  : "未定",
              cam_cal_gamma_luma_q1[0] / 10, cam_cal_gamma_luma_q1[1] / 10,
@@ -2547,16 +2671,33 @@ static void camera_quality_report(void)
      *   源=软件线性  来自 ISP 输出的全帧抽样均值（CCM/WB 下游，逆 gamma 还原）
      * 两者相差约 1/ρ ≈ 1.27×（推导见 cam_tune.h 的 CAM_AE_SOURCE），
      * 把它们当同一个量比较是本阶段最容易犯的错。 */
+    /*
+     * ⓘ T12 之后「目标」是**随场景变的**（官方 luma_offset：高光优先 −3、
+     *   暗部优先 +1），所以这里打的是这一拍真正喂给控制律的 s_ae_target，
+     *   而不是 CAM_AE_TARGET 这个基准值 —— 两者都打出来才判读得了：
+     *     优先级=高光 目标 59[53,61]   普通场景（官方对这颗传感器的默认模式）
+     *     优先级=暗部 目标 63[57,65]   背光：亮块 >= 25% 且场景均值 < 56
+     *   背光切换= 随时间线性增长 ⇒ 判据在门限上抖，该给它加迟滞了。
+     */
     ESP_LOGI(TAG, "[自检] AE=%s 源=%s 曝光=%" PRIu32 "/%" PRIu32 " 增益=%u.%03u×(第 %" PRIu32 " 档)"
-                  " 曝光量=%" PRIu32 " | 亮度 %u→目标 %d[%d,%d] %s 下发=%" PRIu32
-                  " 最近=%s",
+                  " 曝光量=%" PRIu32 " | 亮度 %u→目标 %d[%d,%d]（基准 %d，优先级=%s，"
+                  "偏移 %+d）%s 下发=%" PRIu32 " 最近=%s | 背光=%s(%s) 切换=%" PRIu32,
              step_str(s_st_ae),
              CAM_AE_SOURCE ? "硬件5×5(官方加权,demosaic后)" : "软件线性(全帧抽样,ISP输出)",
              s_ae.exposure, s_ae_lim.exp_max,
              (unsigned)(gain_milli / 1000), (unsigned)(gain_milli % 1000), s_ae.gain_index,
-             s_ae.ev, s_ae.last_mean, CAM_AE_TARGET, CAM_AE_TARGET_LOW, CAM_AE_TARGET_HIGH,
+             s_ae.ev, s_ae.last_mean, s_ae_target,
+             s_ae_target + (CAM_AE_TARGET_LOW - CAM_AE_TARGET),
+             s_ae_target + (CAM_AE_TARGET_HIGH - CAM_AE_TARGET),
+             CAM_AE_TARGET, s_backlight ? "暗部" : "高光",
+             s_backlight ? CAM_AE_LL_OFFSET : CAM_AE_HL_OFFSET,
              cam_ae_converged(&s_ae) ? "已收敛" : "调整中",
-             s_ae.updates, step_str(s_ae_last_err));
+             s_ae.updates, step_str(s_ae_last_err),
+             s_backlight ? "是" : "否",
+             CAM_BACKLIGHT_ENABLE ? "亮块>=" CAM_STR(CAM_BACKLIGHT_BRIGHT_PCT)
+                                    "% 且 场景均值<" CAM_STR(CAM_AE_TARGET_LOW)
+                                  : "判据未编译，恒取高光优先",
+             s_backlight_switches);
 
 #if CAM_AE_STAT_ENABLE
     camera_ae_stat_report();
@@ -2716,11 +2857,17 @@ static void camera_feedfwd_report(void)
      * ⓘ「线性均值」就是喂给 AE 的那个数，直接与「AE 目标」比较即可判断曝光够不够。
      */
     const uint8_t lin = s_last_stats.lin_lum_mean;
-    ESP_LOGI(TAG, "[自检] GAMMA=%s 档%" PRIu32 "/%d(γ=%u.%03u) 前向 F(16)=%u F(64)=%u"
+    ESP_LOGI(TAG, "[自检] GAMMA=%s 选档=%s 档%" PRIu32 "/%d(γ=%u.%03u) 前向 F(16)=%u F(64)=%u"
                   " F(128)=%u F(255)=%u | 统计域=%s | 亮度均值 线性=%u gamma后=%u"
                   "（应 >= F(线性)=%u）| 通道均值 线性 R%u G%u B%u / gamma后 R%u G%u B%u"
-                  " | AE 目标=%d(线性域)",
-             step_str(s_st_gamma), s_gamma_slot, CAM_CAL_GAMMA_N,
+                  " | AE 目标=%d(线性域) | 已换档=%" PRIu32,
+             step_str(s_st_gamma),
+#if CAM_GAMMA_ADAPTIVE
+             "按 env.luma 动态（官方口径）",
+#else
+             "钉在 CAM_GAMMA_SLOT（CAM_GAMMA_ADAPTIVE=0）",
+#endif
+             s_gamma_slot, CAM_CAL_GAMMA_N,
              (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] / 1000),
              (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] % 1000),
              cam_gamma_forward(s_gamma_slot, 16), cam_gamma_forward(s_gamma_slot, 64),
@@ -2729,7 +2876,13 @@ static void camera_feedfwd_report(void)
              lin, s_last_stats.lum_mean, cam_gamma_forward(s_gamma_slot, lin),
              s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
              s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
-             CAM_AE_TARGET);
+             s_ae_target,
+#if CAM_GAMMA_ADAPTIVE
+             s_gamma_applied
+#else
+             (uint32_t)0
+#endif
+             );
 #else
     ESP_LOGI(TAG, "[自检] GAMMA=未编译（CAM_GAMMA_ENABLE=0，直出线性光 ⇒ 主机按 sRGB "
                   "解码会明显偏暗；统计与控制律同在线性域，逆变换一并旁路）");

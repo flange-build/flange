@@ -72,7 +72,23 @@ void cam_ae_init(cam_ae_state_t *st, const cam_ae_limits_t *lim,
     st->ev = cam_ae_ev(exposure, lim->gain_map[gain_index]);
 }
 
-bool cam_ae_step(cam_ae_state_t *st, uint8_t lum_mean, const cam_ae_limits_t *lim)
+bool cam_ae_backlight(uint8_t bright_pct, uint8_t scene_mean)
+{
+#if CAM_BACKLIGHT_ENABLE
+    return bright_pct >= CAM_BACKLIGHT_BRIGHT_PCT && (int)scene_mean < CAM_AE_TARGET_LOW;
+#else
+    (void)bright_pct;
+    (void)scene_mean;
+    return false;
+#endif
+}
+
+int cam_ae_target(bool backlight)
+{
+    return CAM_AE_TARGET + (backlight ? CAM_AE_LL_OFFSET : CAM_AE_HL_OFFSET);
+}
+
+bool cam_ae_step(cam_ae_state_t *st, uint8_t lum_mean, int target, const cam_ae_limits_t *lim)
 {
     if (!st || !limits_ok(lim))
         return false;
@@ -87,10 +103,14 @@ bool cam_ae_step(cam_ae_state_t *st, uint8_t lum_mean, const cam_ae_limits_t *li
     st->settle = CAM_AE_INTERVAL_TICKS > 0 ? CAM_AE_INTERVAL_TICKS - 1 : 0;
 
     /* ── 闸 1：死区 ──
-     * 边界取 CAM_AE_TARGET_LOW/HIGH 而不是「目标 ± 死区」：官方的死区是**非对称**
+     * 边界是「目标 + 官方偏移」而不是「目标 ± 死区」：官方的死区是**非对称**
      * 的（56/62/64，即 −6/+2），对齐时不对称本身也要一起对齐（理由见 cam_tune.h）。
+     * target 由调用方传入（高光优先 59 / 暗部优先 63），死区**跟着它平移** ——
+     * 不对称是死区的性质，不是 62 这个数的性质。
      * CAM_AE_SOURCE = 0 时那两个宏退化成对称形式 ⇒ 本行在两种配置下都对。 */
-    if ((int)lum_mean >= CAM_AE_TARGET_LOW && (int)lum_mean <= CAM_AE_TARGET_HIGH) {
+    const int band_lo = target + (CAM_AE_TARGET_LOW - CAM_AE_TARGET);
+    const int band_hi = target + (CAM_AE_TARGET_HIGH - CAM_AE_TARGET);
+    if ((int)lum_mean >= band_lo && (int)lum_mean <= band_hi) {
         if (st->in_band < CAM_AE_CONVERGE_TICKS)
             st->in_band++;
         return false;
@@ -100,7 +120,7 @@ bool cam_ae_step(cam_ae_state_t *st, uint8_t lum_mean, const cam_ae_limits_t *li
     /* 理论上「一步到位」的曝光量。均值为 0（全黑）时按 1 算 —— 既避免除零，
      * 又让全黑场景走到最大的一步（随后被闸 3 限成 2×），而不是原地不动。 */
     const uint32_t meas = lum_mean ? lum_mean : 1u;
-    const uint64_t want = ((uint64_t)st->ev * CAM_AE_TARGET) / meas;
+    const uint64_t want = ((uint64_t)st->ev * (uint32_t)(target > 0 ? target : 1)) / meas;
 
     /* ── 闸 2：阻尼 ── 只走到理论值的 NUM/DEN。用有符号数：want 可能小于 ev。 */
     int64_t next = (int64_t)st->ev +

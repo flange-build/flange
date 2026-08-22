@@ -159,7 +159,7 @@ static bool tick_period(cam_ae_state_t *st, uint8_t mean)
 {
     bool changed = false;
     for (int i = 0; i < CAM_AE_INTERVAL_TICKS; i++)
-        changed |= cam_ae_step(st, mean, &lim);
+        changed |= cam_ae_step(st, mean, CAM_AE_TARGET, &lim);
     return changed;
 }
 
@@ -173,14 +173,14 @@ static void test_step_basics(void)
           "init 应当照抄传感器默认值：ev=%u exp=%u", st.ev, st.exposure);
     int changed_count = 0;
     for (int i = 0; i < CAM_AE_INTERVAL_TICKS * 4; i++)
-        if (cam_ae_step(&st, 45, &lim))
+        if (cam_ae_step(&st, 45, CAM_AE_TARGET, &lim))
             changed_count++;
     CHECK(changed_count == 4, "4 个周期应当只下发 4 次，实得 %d 次", changed_count);
 
     /* ── 死区：目标附近完全不动，并在若干拍后报收敛 ── */
     cam_ae_init(&st, &lim, 988, 0);
     for (int i = 0; i < CAM_AE_INTERVAL_TICKS * (CAM_AE_CONVERGE_TICKS + 2); i++)
-        CHECK(!cam_ae_step(&st, CAM_AE_TARGET, &lim), "正中目标时不该动");
+        CHECK(!cam_ae_step(&st, CAM_AE_TARGET, CAM_AE_TARGET, &lim), "正中目标时不该动");
     CHECK(cam_ae_converged(&st), "连续落在死区内却没报收敛");
     CHECK(st.updates == 0, "死区内不该有任何下发，实得 %u 次", st.updates);
 
@@ -241,9 +241,83 @@ static void test_step_basics(void)
         CHECK(!tick_period(&st, 255), "已经顶到下限，不该再下发");
     CHECK(st.updates == at_bottom, "下限饱和之后下发次数不该再涨");
 
+    /*
+     * ── 目标由调用方传入（T12）：死区**跟着目标平移**，不对称保持 ──
+     * 这一组是 T12 的核心不变式：同一个亮度在不同目标下的判定必须不同，
+     * 而「−6/+2」这个不对称在两个目标上都成立。
+     */
+    for (int off = -8; off <= 8; off++) {
+        const int tgt = CAM_AE_TARGET + off;
+        const int lo = tgt + (CAM_AE_TARGET_LOW - CAM_AE_TARGET);
+        const int hi = tgt + (CAM_AE_TARGET_HIGH - CAM_AE_TARGET);
+        cam_ae_init(&st, &lim, 988, 0);
+        for (int i = 0; i < CAM_AE_INTERVAL_TICKS; i++)
+            CHECK(!cam_ae_step(&st, (uint8_t)lo, tgt, &lim),
+                  "目标 %d：死区下边界 %d 不该动", tgt, lo);
+        cam_ae_init(&st, &lim, 988, 0);
+        for (int i = 0; i < CAM_AE_INTERVAL_TICKS; i++)
+            CHECK(!cam_ae_step(&st, (uint8_t)hi, tgt, &lim),
+                  "目标 %d：死区上边界 %d 不该动", tgt, hi);
+        bool moved = false;
+        cam_ae_init(&st, &lim, 988, 0);
+        for (int i = 0; i < CAM_AE_INTERVAL_TICKS; i++)
+            moved |= cam_ae_step(&st, (uint8_t)(lo - 1), tgt, &lim);
+        CHECK(moved, "目标 %d：越过死区下边界 %d 应当动", tgt, lo - 1);
+        moved = false;
+        cam_ae_init(&st, &lim, 988, 0);
+        for (int i = 0; i < CAM_AE_INTERVAL_TICKS; i++)
+            moved |= cam_ae_step(&st, (uint8_t)(hi + 1), tgt, &lim);
+        CHECK(moved, "目标 %d：越过死区上边界 %d 应当动", tgt, hi + 1);
+        cases++;
+    }
+    /* 目标越高 ⇒ 同一个偏暗画面下走出去的曝光量越大（方向性）。 */
+    {
+        cam_ae_init(&st, &lim, 988, 0);
+        for (int i = 0; i < CAM_AE_INTERVAL_TICKS; i++)
+            cam_ae_step(&st, 30, CAM_AE_TARGET + CAM_AE_HL_OFFSET, &lim);
+        const uint32_t ev_hl = st.ev;
+        cam_ae_init(&st, &lim, 988, 0);
+        for (int i = 0; i < CAM_AE_INTERVAL_TICKS; i++)
+            cam_ae_step(&st, 30, CAM_AE_TARGET + CAM_AE_LL_OFFSET, &lim);
+        CHECK(st.ev > ev_hl, "暗部优先(目标 %d)的曝光量应当大于高光优先(目标 %d)：%u vs %u",
+              CAM_AE_TARGET + CAM_AE_LL_OFFSET, CAM_AE_TARGET + CAM_AE_HL_OFFSET,
+              st.ev, ev_hl);
+        cases++;
+    }
+    /* 目标 <= 0 是非法输入（不该出现），只要求不除零、不崩。 */
+    cam_ae_init(&st, &lim, 988, 0);
+    for (int i = 0; i < CAM_AE_INTERVAL_TICKS; i++)
+        cam_ae_step(&st, 100, 0, &lim);
+    cases++;
+
+    /* ── 背光判定与目标换算（纯逻辑）── */
+    CHECK(cam_ae_target(false) == CAM_AE_TARGET + CAM_AE_HL_OFFSET,
+          "非背光应当取高光优先目标 %d", CAM_AE_TARGET + CAM_AE_HL_OFFSET);
+    CHECK(cam_ae_target(true) == CAM_AE_TARGET + CAM_AE_LL_OFFSET,
+          "背光应当取暗部优先目标 %d", CAM_AE_TARGET + CAM_AE_LL_OFFSET);
+    CHECK(cam_ae_target(false) < cam_ae_target(true),
+          "暗部优先的目标必须比高光优先高（官方 −3 / +1）");
+    cases++;
+#if CAM_BACKLIGHT_ENABLE
+    /* 两个条件是**与**：亮块够多但整体不暗（普通亮场）不算背光；
+     * 整体暗但没有亮块（普通暗场）也不算 —— 背光的定义是两者同时成立。 */
+    CHECK(cam_ae_backlight(CAM_BACKLIGHT_BRIGHT_PCT, CAM_AE_TARGET_LOW - 1),
+          "亮块够多 + 整体偏暗 应判为背光");
+    CHECK(!cam_ae_backlight(CAM_BACKLIGHT_BRIGHT_PCT - 1, CAM_AE_TARGET_LOW - 1),
+          "亮块不够多不该判为背光");
+    CHECK(!cam_ae_backlight(CAM_BACKLIGHT_BRIGHT_PCT, CAM_AE_TARGET_LOW),
+          "场景均值到了死区下边界就不算「整体偏暗」了");
+    CHECK(!cam_ae_backlight(100, 200), "普通亮场不该判为背光");
+    CHECK(!cam_ae_backlight(0, 10), "普通暗场（没有亮块）不该判为背光");
+    cases++;
+#else
+    CHECK(!cam_ae_backlight(100, 0), "CAM_BACKLIGHT_ENABLE=0 时应当恒为 false");
+    cases++;
+#endif
+
     /* 参数非法不许崩 */
-    CHECK(!cam_ae_step(NULL, 100, &lim), "st 为空应当直接返回 false");
-    CHECK(!cam_ae_step(&st, 100, NULL), "limits 为空应当直接返回 false");
+    CHECK(!cam_ae_step(NULL, 100, CAM_AE_TARGET, &lim), "st 为空应当直接返回 false");
+    CHECK(!cam_ae_step(&st, 100, CAM_AE_TARGET, NULL), "limits 为空应当直接返回 false");
     CHECK(!cam_ae_converged(NULL), "converged(NULL) 应当是 false");
 
     /*
@@ -301,7 +375,7 @@ static void run_loop(uint32_t scene, int ticks, bool expect_in_band)
     uint8_t mean = 0;
     for (int t = 0; t < ticks; t++) {
         mean = fake_sensor(hist, t, scene);
-        if (cam_ae_step(&st, mean, &lim))
+        if (cam_ae_step(&st, mean, CAM_AE_TARGET, &lim))
             last_change_tick = t;
         hist[t % 64] = st.ev;
     }
@@ -579,7 +653,7 @@ static void run_joint_loop(const fake_scene_t *sc, int ticks)
         fake_frame(sc, h_ev[old], h_gr[old], h_gb[old], &r, &g, &b, &lum);
 
         /* 顺序与固件里的 camera_csi_tune_tick() 一致：先 AE 后 AWB。 */
-        if (cam_ae_step(&ae, lum, &lim))
+        if (cam_ae_step(&ae, lum, CAM_AE_TARGET, &lim))
             last_change = t;
         if (cam_awb_step(&awb, lum, r, g, b, cam_ae_converged(&ae)) == CAM_AWB_APPLIED)
             last_change = t;
@@ -653,7 +727,7 @@ static void test_awb_closed_loop(void)
         uint8_t r, g, b, lum;
         fake_frame(&ok, h_ev[(t - LAG + 64) % 64], awb.gain_r_milli, awb.gain_b_milli,
                    &r, &g, &b, &lum);
-        cam_ae_step(&ae, lum, &lim);
+        cam_ae_step(&ae, lum, CAM_AE_TARGET, &lim);
         cam_awb_step(&awb, lum, r, g, b, cam_ae_converged(&ae));
         h_ev[t % 64] = ae.ev;
     }
