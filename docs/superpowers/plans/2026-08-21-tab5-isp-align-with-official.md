@@ -1,3 +1,64 @@
+> [!CAUTION]
+> # ⛔ 本计划已被返工整体推翻（2026-08-23）—— 保留作历史记录，**不要照它实施**
+>
+> **T0–T13 的实现全部删除了。** 提交 `a98886fb`（净删 6850 行）把本计划产出的那一整套
+> **自研控制律** —— AE 比例控制器、AWB 灰世界 + 四道防护、CCT 估计、CCM 逐档插值与
+> 「朝单位阵混合」的强度钳制、gamma 按 `env.luma` 选档、5×5 加权测光、直方图归约 ——
+> 连同 `main/cam_tune.{c,h}` / `main/cam_isp_map.{c,h}` / `main/cam_isp_cal.h` /
+> `firmware/test/isp_cal_extract.py` / `test_cam_tune.c` / `test_cam_isp_map.c`
+> **一并删除**，改由官方闭源算法库 **`espressif/esp_ipa` 2.3.0** 接管全部画质算法。
+>
+> ## 为什么会走到这一步：**本计划最顶上的那条前提是错的**
+>
+> 本计划（以及在它之前的 P4 UVC 计划、两份研究文档、README）从头到尾写着同一句话：
+>
+> > 「**不引入 `esp_video` / `esp_ipa`**，`managed_components/` 保持 12 个目录」
+> > ——因为「引 `esp_ipa` 会把 `esp_video` + `usb_host_uvc`（USB **Host** 栈）+ `esp_h264` 拖进来」。
+>
+> **前半句的事实是对的**：`esp_video` 2.3.0 的 manifest 确实强制依赖
+> `usb_host_uvc` + `esp_h264` + `esp_ipa`，而本板 TinyUSB device 独占唯一一条 FSLS PHY，
+> 引 USB Host 栈确实不可接受。
+>
+> **错的是推论方向。** 依赖是单向的：
+>
+> ```
+> esp_video ──▶ esp_ipa                      （esp_video 依赖 esp_ipa）
+> esp_ipa   ──▶ cmake_utilities + idf>=5.4   （esp_ipa 只依赖这两个，再无其他）
+> ```
+>
+> 也就是说 **`esp_ipa` 完全可以单独引**，而且这是「与官方 1:1」唯一可能的形式。
+> 验证这条前提的代价小到只要读一个 manifest —— 但从 P4 计划阶段写进文档之后，
+> **一路带了十几个提交都没有人回头读它**，于是本计划从 T0 到 T13 全部建立在
+> 「官方算法拿不到，只能自己重写一套」这个不成立的假设上。
+> **约七八个提交的工作量作废。** 这是「前提没有回头验证」的典型案例。
+>
+> ## 另一条同样重要的教训：**官方标定数据与官方算法是一对，不可拆**
+>
+> 本计划的 L3（参数对齐）机械提取了 `sc202cs_default.json` 的 19 档 CCM、LSC、gamma、
+> AE 权重……然后把它们喂给**我们自己写的**控制律。这在方法上就走不通：
+> 那些数是**按 `esp_ipa` 这套算法的行为**在实验室标出来的，换一套控制律得到的不是
+> 「近似官方」，而是一个谁也没验证过的第三种东西。
+> 「用官方的数 + 自己的算法」这个组合本身就是无效的中间态。
+>
+> ## 那么本文还有什么用
+>
+> 1. **它是「为什么那样做行不通」的完整记录** —— 每个任务的设计推理都在，
+>    包括那些至今仍然成立的**硬件事实**（rev v1.0 无 BLC/WBG/CROP、CCM 是 S2.10、
+>    CSI 桥无颜色转换、统计窗口的两种口径、`intr_priority` 返回布尔 1……）。
+>    这些事实在返工后的实现里原样保留，只是执行者从「我们」变成了 blob。
+> 2. **官方管线那一侧的重建仍然有效** —— 本文引用的
+>    `research/2026-08-19-esp32p4-official-isp-pipeline.md` 对**官方**的重建没有失效。
+>
+> ## 返工后的实际实现在哪
+>
+> - 代码：`components/packages/tab5-all-in-one/firmware/main/cam_ipa.{c,h}`
+>   （官方 `esp_ipa` 的消费侧）与 `camera_csi.c`（三块硬件统计 + IPA 节拍任务）
+> - 文档：`components/packages/tab5-all-in-one/firmware/README.md` 的
+>   「**画质：官方 `esp_ipa` 接管**」与「**上板验证清单**」两章
+> - ⚠️ **返工后的固件一次都没有烧过板。**
+
+---
+
 # Tab5 摄像头 ISP 向官方全面对齐 —— 实施计划（L1 结构 + L2 环路 + L3 参数）
 
 > **For agentic workers:** REQUIRED SUB-SKILL: 用 `superpowers:subagent-driven-development` 逐任务实施。

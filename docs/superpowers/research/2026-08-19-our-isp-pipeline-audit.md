@@ -1,3 +1,33 @@
+> [!CAUTION]
+> # ⛔ 返工说明（2026-08-23）：**本文审计的那套实现已被整体删除**
+>
+> 本文如实记录了 2026-08-19 时 Tab5 摄像头管线的自身基线（「我们实际配了什么、
+> 数值是多少、在哪一行」）。此后的「ISP 对齐」那一轮，以及**它的返工**，都发生在本文之后：
+>
+> - 提交 `a98886fb`（净删 6850 行）把全部**自研画质控制律**删除 ——
+>   AE 比例控制器、AWB 灰世界 + 四道防护、CCT 估计、CCM 插值与强度钳制、gamma 选档、
+>   `env.luma` 重建，连同 `main/cam_tune.{c,h}` / `main/cam_isp_map.{c,h}` /
+>   `main/cam_isp_cal.h` / `test/isp_cal_extract.py` 及其宿主机测试；
+> - 画质算法改由官方闭源库 **`espressif/esp_ipa` 2.3.0** 接管，
+>   本工程只剩「建统计 → 送统计 → 按 flag 分发 metadata」这条消费侧管道。
+>
+> ⇒ **本文中凡是描述「我们的实现」的部分（尤其是 A 节的管线级序表、控制律参数、
+> `cam_tune.h` 的宏、文件:行 引用）全部已过时**，只作历史记录，不要据此改代码。
+>
+> **仍然有效的部分**：本文记录的**硬件事实与环境事实** —— rev v1.0 的 BLC/WBG/crop
+> 不可用、CSI 桥无颜色转换、CCM 是 S2.10、传感器模式与寄存器序列、SCCB 地址与电源时序
+> —— 在返工后原样成立（只是执行者从我们的代码变成了 blob）。
+> 另有一条判断需要更正：本文「**未引入** `espressif/esp_video`、`espressif/esp_ipa`」
+> 那一格背后的理由（「引 `esp_ipa` 会把 `esp_video` 那一半拖进来」）**是错的** ——
+> 依赖是单向的 `esp_video → esp_ipa`，`esp_ipa` 只依赖 `cmake_utilities` + `idf>=5.4`。
+> 完整教训见 `docs/superpowers/plans/2026-08-21-tab5-isp-align-with-official.md` 顶部。
+>
+> **返工后的实际实现**：`components/packages/tab5-all-in-one/firmware/main/cam_ipa.{c,h}`
+> 与 `camera_csi.c`；文档见 `firmware/README.md` 的「画质：官方 `esp_ipa` 接管」
+> 与「上板验证清单」两章。⚠️ **返工后的固件一次都没有烧过板。**
+
+---
+
 # 我们现有的 Tab5 摄像头 ISP 管线（对齐前基线审计）
 
 > **性质：如实记录，不作评价。** 本文只回答「我们实际配了什么、没配什么、数值是多少、在哪一行」。
