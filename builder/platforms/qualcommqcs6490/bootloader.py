@@ -45,18 +45,19 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
             archive.extractall(extract_dir)
 
         ufs_firehose = bl.get("ufs_firehose")
-        ufs_provision = bl.get("ufs_provision")
-        if bool(ufs_firehose) != bool(ufs_provision):
+        ufs_provisions = bl.get("ufs_provisions") or {}
+        if bool(ufs_firehose) != bool(ufs_provisions):
             raise ValueError(
-                "bootloader.ufs_firehose/ufs_provision 必须同时配置")
+                "bootloader.ufs_firehose/ufs_provisions 必须同时配置")
         self._ufs_assets = []
-        for name, asset in (
-            ("ufs-firehose", ufs_firehose),
-            ("ufs-provision", ufs_provision),
-        ):
-            if asset:
-                self._ufs_assets.append(self.source.ensure_prebuilt_image(
-                    f"{config['board']}-{name}", asset))
+        if ufs_firehose:
+            self._ufs_assets.append(self.source.ensure_prebuilt_image(
+                f"{config['board']}-ufs-firehose", ufs_firehose))
+        for profile, asset in ufs_provisions.items():
+            if not isinstance(asset, dict) or not asset.get("url"):
+                continue
+            self._ufs_assets.append(self.source.ensure_prebuilt_image(
+                f"{config['board']}-ufs-provision-{profile}", asset))
 
     def collect(self, src_dir, config: dict) -> dict:
         # flat_build/spinor/<board>/ 下含 firehose loader + rawprogram*.xml + 固件 blob。

@@ -1370,22 +1370,31 @@ class QualcommFlashStrategy(FlashStrategy):
             raise FlashError("edl-ng SPI 固件刷写失败")
 
     def provision_ufs(self, tool: Path, target_dir: Path,
-                      device: Optional["DeviceInfo"] = None):
-        """一次性初始化全新 UFS：创建占满设备容量的 LUN 0。"""
+                      device: Optional["DeviceInfo"] = None,
+                      profile: str = "lun0-only"):
+        """按用户选择的布局一次性初始化全新 UFS。"""
+        profiles = {
+            "lun0-only": "provision_ufs31_lun0_only.xml",
+            "qcom": "provision_ufs31.xml",
+        }
+        if profile not in profiles:
+            raise FlashError(
+                f"未知 UFS provisioning profile: {profile}；"
+                f"可选: {', '.join(profiles)}")
         firmware_dir = target_dir / "bootloader" / "edk2-spi-firmware"
         loader = firmware_dir / "prog_firehose_ufs.elf"
-        provision = firmware_dir / "provision_ufs31_lun0_only.xml"
+        provision = firmware_dir / profiles[profile]
         missing = [path for path in (loader, provision) if not path.exists()]
         if missing:
             raise FlashError(
                 f"缺少 UFS provisioning 产物：{', '.join(map(str, missing))}；"
                 "请先执行 flange build bootloader")
-        _step("edl-ng provision → UFS LUN 0（一次性初始化）")
+        _step(f"edl-ng provision → UFS（profile: {profile}，一次性初始化）")
         cmd = [str(tool), "--loader", str(loader), "--memory", "UFS",
                "provision", str(provision)]
         if subprocess.run(cmd).returncode != 0:
             raise FlashError("edl-ng UFS provisioning 失败")
-        _info("UFS LUN 0 初始化完成；请重新进入 EDL 后执行 flange flash")
+        _info("UFS 初始化完成；请重新进入 EDL 后执行 flange flash")
 
 
 # 策略注册表
@@ -1771,8 +1780,11 @@ def _cli_main():
     run_parser.add_argument("--list", action="store_true", dest="list_parts", help="列出可刷写分区")
     run_parser.add_argument("--spi-firmware", action="store_true", dest="spi_firmware",
                             help="刷 SPI boot 固件（Qualcomm bring-up 一次性；需在 EDL 模式）")
-    run_parser.add_argument("--provision-ufs", action="store_true", dest="provision_ufs",
-                            help="一次性初始化全新 Qualcomm UFS 的 LUN 0")
+    run_parser.add_argument(
+        "--provision-ufs", nargs="?", const="lun0-only",
+        choices=("lun0-only", "qcom"), metavar="PROFILE",
+        help=("一次性初始化全新 Qualcomm UFS：lun0-only 为单用户 LUN；"
+              "qcom 为官方 LUN 0-7 布局"))
     run_parser.add_argument("partition", nargs="?", help="指定分区名（不指定则全量刷写）")
 
     # generate 子命令（构建引擎调用）
@@ -1799,7 +1811,9 @@ def _cli_main():
             device = None
             if not args.no_wait:
                 device = executor.strategy.wait_for_device(tool)
-            executor.strategy.provision_ufs(tool, executor.target_dir, device)
+            executor.strategy.provision_ufs(
+                tool, executor.target_dir, device,
+                profile=args.provision_ufs)
         elif args.spi_firmware:
             # Qualcomm bring-up：edl-ng 刷 SPI EDK2 固件（仅支持该方法的策略）
             if not hasattr(executor.strategy, "flash_spi_firmware"):
