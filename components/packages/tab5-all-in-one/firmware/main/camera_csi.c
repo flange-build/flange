@@ -543,7 +543,7 @@ static isp_hist_ctlr_t s_hist_ctlr;
 static int32_t  s_st_hist    = STEP_NOT_RUN;   /* 建控制器 / 使能，取第一个失败 */
 static int32_t  s_st_histrun = STEP_NOT_RUN;   /* 最近一次 oneshot 的返回值 */
 static uint32_t s_hist_bins[16];               /* 最近一次的 16 个 bin，自检行用 */
-static uint32_t s_hist_total;                  /* 16 个 bin 之和（应 ≈ 921600） */
+static uint32_t s_hist_total;                  /* 16 个 bin 之和（应 ≈ 36864 = 一块像素数） */
 static uint8_t  s_hist_mean;                   /* 近似均匀加权的场景均值 */
 static uint8_t  s_hist_bright_pct;             /* bin 15（>=240）的占比 */
 static uint8_t  s_hist_dark_pct;               /* bin 0（<16）的占比 */
@@ -1232,7 +1232,9 @@ esp_err_t camera_csi_init(void)
          * ⚠️ 与 AE 同一个坑：isp_hal_hist_window_config() 把窗按 /5 分块，
          *   全零窗口能通过参数校验但 bsize = 0 ⇒ 16 个 bin 全是 0。
          * 写 1280×720（而不是 1279×719）：/5 之后是 256×144，**整除**，
-         *   5×256 × 5×144 = 921600 = 整幅像素数，自检行的「Σbin」直接可核对。
+         *   每块 256×144 = 36864 像素。⚠️ Σbin 的应有值是**一块**的 36864，
+         *   不是整幅 921600 —— 25 个权重的小数部之和恒为 256(=1.0)，加权累加
+         *   之后总和就回到一块的量。
          */
         .window = { .top_left  = { .x = 0,            .y = 0 },
                     .btm_right = { .x = CAM_SENSOR_W, .y = CAM_SENSOR_H } },
@@ -2476,7 +2478,8 @@ static void camera_awb_stat_report(uint32_t sw_sug_r, uint32_t sw_sug_b)
  *   触发= 在涨但 alt 0        → stop 路径漏了，回去看 camera_csi_tune_tick 的闸。
  *   超时= 在涨                → 60 ms 不够，或 ISP 没在出数据；也可能是与 AWB
  *                              的 oneshot 撞了拍（看 CAM_HIST_PHASE）。
- *   Σbin 明显小于 921600      → 窗口 bsize = 0（同 AE 的窗口坑），或分辨率变了。
+ *   Σbin 明显小于 36864       → 窗口 bsize = 0（同 AE 的窗口坑），或分辨率变了。
+ *                              （36864 = 一块 256×144；权重和恒为 1.0，故不是整幅 921600）
  *   16 个 bin 全 0            → 同上。
  *   遮住镜头 ⇒ 暗块 >= 80%、bin 整体左移；手电照 ⇒ 亮块涨。**这两条不成立就
  *                              说明抽头不在画面上**，后面 env.luma 一概不必看。
@@ -2495,7 +2498,19 @@ static void camera_awb_stat_report(uint32_t sw_sug_r, uint32_t sw_sug_b)
 #if CAM_HIST_ENABLE
 static void camera_hist_report(void)
 {
-    const uint32_t total = (uint32_t)CAM_SENSOR_W * CAM_SENSOR_H;
+    /*
+     * ⚠️ Σbin 的应有值是**一块**的像素数，不是整幅。
+     *   isp_hal.c:245/248 把窗按 SOC_ISP_HIST_BLOCK_{X,Y}_NUMS(=5) 分块算 bsize，
+     *   每块 (1280/5)×(720/5) = 256×144 = 36864 像素；25 个 window_weight 的小数部
+     *   之和恒为 256（驱动硬性检查）= 定点的 1.0 ⇒ 每块按权重加权后累加，
+     *   总和 = 36864 × 256/256 = 36864。
+     *   实测略小（约 96%）是落在 bin 范围外的像素，正常。
+     *
+     *   此前这里写的是整幅 921600，导致自检行每次都在报一个不存在的故障。
+     *   ⓘ 顺带：cam_hist_stats() 的归一化用的是 bin 自身之和，**与这个绝对值无关**
+     *     ⇒ env.luma 与 gamma 选档一直是对的，受影响的只有这行提示。
+     */
+    const uint32_t total = ((uint32_t)CAM_SENSOR_W / 5u) * ((uint32_t)CAM_SENSOR_H / 5u);
     ESP_LOGI(TAG, "[自检] HIST=%s 最近=%s 触发=%" PRIu32 " 超时=%" PRIu32
                   " | 场景均值=%u（均匀权重，与 AE 的中心加权是两个量）"
                   " 亮块=%u%% 暗块=%u%% | Σbin=%" PRIu32 "(应为 %" PRIu32 ")",

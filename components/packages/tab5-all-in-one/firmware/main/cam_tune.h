@@ -145,7 +145,7 @@
  * 改成 0 立刻回到对角阵，即 T9 之前已实机验证的色彩表现；自检行仍然照打
  * （模式那一格会说「对角阵」），CCT 估计也仍然在，现场能继续对照着看。
  */
-#define CAM_CCM_MODE  1
+#define CAM_CCM_MODE  0
 
 /*
  * ── 色彩还原强度的上限（0..256，256 = 官方矩阵全量）─────────────────
@@ -894,7 +894,7 @@
  *   它单独就能回答「传感器的 BLC 上电默认是开还是关」：读回 0xc0 ⇒ 本来就开着
  *   ⇒ 基座该是 0，上面那张表里第一行；读回 0x80 ⇒ 关着 ⇒ 预期基座 16。
  */
-#define CAM_SENSOR_BLC_ENABLE  0
+#define CAM_SENSOR_BLC_ENABLE  1
 #define CAM_SENSOR_BLC_REG     0x3902
 #define CAM_SENSOR_BLC_VAL     0xc0
 
