@@ -163,8 +163,8 @@ static int32_t  s_cam_last_err = ESP_OK;   /* 最近一次 start/stop 的返回�
  * 统计对象是**缩放前的 1280×720 原帧**，因为要判的是 CSI/ISP 那一段。
  *
  * ⓘ 全帧统计从「每秒一次」改成了**每帧一次**：它现在同时是自动曝光与自动白平衡
- *   的反馈量（camera_csi_tune_tick），而两者的更新周期都是按「拍」算的，
- *   隔一秒喂一次数据会让 cam_tune.h 里那套按拍推导的滞后余量全部作废。
+ *   的输入（camera_csi_tune_tick 把硬件统计喂给官方 esp_ipa），而节奏是按「拍」算的，
+ *   隔一秒喂一次数据会让官方算法的帧延迟/迟滞（按帧标定）全部失去意义。
  *   代价：1/64 采样约 2 ms/帧 × 10 fps = **每秒 20 ms**，占取流期 PSRAM 时间的
  *   2%，比 CSI 自己那 55 MB/s 小两个数量级；换来的是曝光与白平衡都能闭上环
  *   （AWB 的三个通道均值就在同一次扫描里顺带算出来，不多扫一遍）。
@@ -188,17 +188,16 @@ static uint32_t s_fps_last_sent;
 static int64_t  s_fps_last_us;
 
 /*
- * 全帧统计：每帧都做，因为它同时是 AE 的反馈量。
+ * 全帧统计：每帧都做。
  *
- * 传逆 gamma 表进去：ISP 的 gamma 开着时画面是 gamma 编码的，而 AE/AWB 的控制律
- * 全部定义在**线性域**（目标亮度、灰世界的通道比值）。逆表让统计层在同一次扫描里
- * 顺带算出线性域的那一组均值，控制律的输入域因此不受 gamma 开关影响。
- * 表由 camera_csi 持有（与硬件曲线同源），gamma 关着时它返回 NULL = 恒等。
+ * ⓘ **纯观测**，不再是任何控制律的反馈量 —— 画质由官方 esp_ipa 用**硬件**统计
+ *   闭环（见 cam_ipa.h）。它回答的是「帧里有没有东西、变不变」这类自检判据，
+ *   逆 gamma 那一套已随自研控制律一并删除（见 cam_frame_stats.h）。
  */
 static void frame_stats_sample(const uint16_t *raw)
 {
-    cam_frame_stats_rgb565_lut(raw, CAM_SENSOR_W, CAM_SENSOR_H,
-                               UVC_STATS_STEP, camera_csi_gamma_inv_lut(), &s_stat_full);
+    cam_frame_stats_rgb565(raw, CAM_SENSOR_W, CAM_SENSOR_H,
+                           UVC_STATS_STEP, &s_stat_full);
     if (s_stat_full.lum_max > s_full_max_ever)
         s_full_max_ever = s_stat_full.lum_max;
 }

@@ -17,9 +17,10 @@
  *                  依赖只有 cmake_utilities + esp_sccb_intf，两者都零外部依赖）
  *   CSI / ISP    → IDF 内置的 esp_driver_cam / esp_driver_isp
  *   板级接线     → 本文件（电源在 IO 扩展 0x43 的 PIN6，SCCB 复用内部 I2C）
- * **刻意不引 espressif/esp_video**：它强制拖 usb_host_uvc + esp_h264 + esp_ipa，
+ * **刻意不引 espressif/esp_video**：它强制拖 usb_host_uvc + esp_h264，
  * 在一块「TinyUSB device 独占唯一一条 FSLS PHY」的板子上引入 USB Host 栈毫无道理。
- * 完整依据见 main/idf_component.yml 里 esp_cam_sensor 那一段。
+ * ⓘ 但 **esp_ipa 单独引了**（画质算法全靠它，见 cam_ipa.h）—— 依赖方向是
+ *   esp_video → esp_ipa，反过来不成立。完整依据见 main/idf_component.yml。
  *
  * ⚠️ **只在真的要用画面时才 start。** CSI 每秒往 PSRAM 写 55 MB（1280×720×2×30），
  * 而 DPI 面板刷新每秒要从 PSRAM 读 89～107 MB —— 算式（timing 见 display_dsi.c）：
@@ -96,41 +97,24 @@ esp_err_t camera_csi_stop(void);
 esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms);
 
 /*
- * 自动曝光(AE) + 自动白平衡(AWB) 各走一拍。**每取到一帧就调一次**，由取帧的
- * 那一方（uvc_stream.c 的帧泵）把该帧的统计送进来 —— 统计本来就是它为了自检
- * 在算的，两个控制环不必再各扫一遍 PSRAM。
+ * 把三块硬件统计（AE 5×5 / AWB 白点 / 直方图）喂进**官方 esp_ipa** 走一拍，
+ * 并把它算出的 metadata 分发到 ISP 与传感器。**每取到一帧就调一次。**
  *
- * 两者吃的是同一份统计量（AE 看 lum_mean，AWB 看 r/g/b_mean），**互相耦合**，
- * 处理方式有三条，理由都写在 cam_tune.h：
- *   ① AWB 的反馈量是**归一化**的通道比值 ⇒ 对 AE 改亮度天然免疫；
- *   ② AWB 的更新周期（1 秒）远大于 AE 的（300 ms）⇒ 时间尺度分离；
- *   ③ AWB 只在 AE 已收敛时才动 ⇒ 不在曝光暂态上采信颜色统计。
- * 因此调用顺序是**先 AE 后 AWB**（AWB 要读到本帧刚更新的收敛状态）。
+ * ⚠️ **本工程不含任何自研控制律。** 曝光、白平衡、CCM、gamma、降噪、锐化、
+ *   LSC、饱和度全部由官方闭源算法决定，实现见 cam_ipa.c；本函数只负责
+ *   「把统计搬过去」。此前那套自研 AE/AWB 已整体删除，取舍见 cam_ipa.h。
  *
- * 更新频率限制、死区、阻尼、限幅这几道防振荡闸全在 cam_tune.c 的控制律里，
- * 所以本函数**可以放心地每帧调**：绝大多数拍它只是记下统计就返回，AE 真正下发
- * SCCB 最快 CAM_AE_INTERVAL_TICKS 拍一次，AWB 重配 CCM 最快
- * CAM_AWB_INTERVAL_TICKS 拍一次。
+ * 参数 stats 是帧内容统计，**只用于自检行**（亮度/校验和/通道均值那几个判据），
+ * 不参与任何控制 —— IPA 吃的是硬件统计，不是这份软件抽样。
  *
  * 不取流（host 停在 alt 0）时它什么都不做 —— 与「摄像头不取流时零影响」一致。
- * 传感器可调范围没查到时 AE 不动（画面停在模式表的默认曝光上），而 AWB 照常
- * 工作：曝光恒定本身就意味着亮度稳定，正是最该采信颜色统计的情形。
+ * 三块硬件统计也只在取流期间跑（camera_csi_start/stop 里成对启停）。
  *
- * ⓘ CAM_AWB_ENABLE = 0 时 AWB 整段不编译，CCM 停在开机配好的静态矩阵上。
+ * ⓘ 分频**不在这里做**：官方算法内部自带帧延迟（agc.exposure.frame_delay=3）、
+ *   最小步长（agc.gain.min_step=0.03）与迟滞（aen.gamma.luma_min_step=3.0），
+ *   外面再叠一层只会让那些标定出来的数失去意义。
  */
 void camera_csi_tune_tick(const cam_frame_stats_t *stats);
-
-/*
- * 逆 gamma 查表（256 项），给帧统计层还原线性域用。
- *
- * 返回 **NULL = 「别做逆变换」**，且这是一个有含义的返回值而不是错误：gamma 关着
- * （CAM_GAMMA_ENABLE = 0）或没配上时，ISP 直出的就是线性光，再逆一次会把 AE/AWB
- * 的反馈量系统性压暗。表的档位与硬件里那条曲线**同源**（同一个函数一起设定），
- * 调用方不需要、也无从知道当前是哪一档。
- *
- * 表的内容在 camera_csi_init() 里定好，之后只读 ⇒ 帧泵线程可以直接用，不需要锁。
- */
-const uint8_t *camera_csi_gamma_inv_lut(void);
 
 /*
  * CSI/ISP 自检快照。与 camera_sensor_report() 同构、理由也一样（CDC 档下开机那几行

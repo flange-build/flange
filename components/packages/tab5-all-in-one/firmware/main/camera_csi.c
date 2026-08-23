@@ -1,9 +1,20 @@
 /*
- * SC202CS 的 SCCB 探测 + MIPI-CSI/ISP 取流。实现说明见 camera_csi.h。
+ * SC202CS 的 SCCB 探测 + MIPI-CSI/ISP 取流，以及**官方 esp_ipa 算法所需的硬件统计**。
+ *
+ * ⚠️ **画质算法本体不在这里，在 cam_ipa.c**（= 官方闭源 esp_ipa）。本文件只负责
+ *   两件事：把三块硬件统计（AE 5×5 / AWB 白点 / 直方图）建起来并读出来，
+ *   以及把它们填成 esp_ipa_stats_t 交给 cam_ipa_process()。**一行控制律都没有。**
+ *
+ * 此前这里有一整套自研的 AE/AWB/CCM/gamma 控制律（cam_tune.c + cam_isp_map.c +
+ * cam_isp_cal.h），已随本次返工**全部删除** —— 它们建立在「引 esp_ipa 会把
+ * esp_video + usb_host_uvc + esp_h264 拖进来」这个错误判断上，而实测依赖方向
+ * 是反的。取舍与依据见 cam_ipa.h 的文件头。
+ *
+ * 实现说明见 camera_csi.h。
  */
 #include "camera_csi.h"
 #include "board_power.h"
-#include "cam_tune.h"
+#include "cam_ipa.h"
 #include "tab5_pins.h"
 #include "esp_log.h"
 #include "esp_check.h"
@@ -20,38 +31,33 @@
 #include "esp_cam_ctlr.h"
 #include "esp_cam_ctlr_csi.h"
 #include "driver/isp.h"
-#include "driver/isp_ccm.h"     /* 白平衡走 CCM：本板 rev v1.0 没有 WBG，见 cam_tune.h */
-#if CAM_AE_STAT_ENABLE
 #include "driver/isp_ae.h"      /* 硬件 5×5 分块测光（isp_ae.c 全文无 ESP_CHIP_REV_ABOVE） */
-#endif
-#if CAM_AWB_STAT_ENABLE
 #include "driver/isp_awb.h"     /* 硬件白点统计（isp_awb.c 的版本门只否掉 subwindow） */
-#endif
-#if CAM_ADN_ENABLE
-#include "driver/isp_bf.h"
-#include "driver/isp_demosaic.h"
-#endif
-#if CAM_LSC_ENABLE
-#include "driver/isp_lsc.h"
-#endif
-#if CAM_AEN_ENABLE
-#include "driver/isp_sharpen.h"
-#include "driver/isp_color.h"
-#endif
-#if CAM_GAMMA_ENABLE
-#include "driver/isp_gamma.h"   /* 无芯片版本门（isp_gamma.c 全文无 ESP_CHIP_REV_ABOVE） */
-#endif
-#if CAM_HIST_ENABLE
 #include "driver/isp_hist.h"    /* 直方图统计（isp_hist.c 全文无 ESP_CHIP_REV_ABOVE） */
-#endif
-#if CAM_ADN_ENABLE || CAM_LSC_ENABLE || CAM_AEN_ENABLE || CAM_GAMMA_ENABLE || \
-    CAM_AE_STAT_ENABLE || CAM_AWB_STAT_ENABLE || CAM_CCM_MODE || CAM_HIST_ENABLE
-#include "cam_isp_cal.h"        /* 官方标定表（机械生成，别手改） */
-#include "cam_isp_map.h"        /* 查表/定点/迟滞的纯逻辑，宿主机可测 */
-#endif
 #include "esp_cache.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+
+/*
+ * ══ 整条 esp_ipa 路的总开关 ═══════════════════════════════════════
+ *
+ * CONFIG_AIO_CAM_IPA（Kconfig.projbuild，**默认开**）。关掉时：
+ *   · 三块硬件统计照常建、照常跑（它们是观测设施，自检行仍然有数可看）；
+ *   · 但**不建 IPA pipeline、不下发任何 metadata** ⇒ ISP 停在
+ *     esp_isp_new_processor() 给的基础配置上：只做 RAW8→RGB565 去马赛克，
+ *     没有 CCM、没有 gamma、没有 LSC、没有降噪/锐化，曝光与增益固定在
+ *     传感器模式表的默认值上。
+ *   · 画面预期：**整体发绿**（Bayer 50% 是绿像素、绿滤光片透过率也最高，而
+ *     管线里没有任何一处对三通道施加不同增益）、**明显偏暗**（直出线性光，
+ *     主机按 sRGB 解码）、**四角有暗角**（无 LSC）、曝光不随环境变化。
+ *     这是一个「能启动、能出图」的最小可用状态，专用于把画质问题与
+ *     取流/USB 问题分开 —— 不是产品形态。
+ */
+#ifdef CONFIG_AIO_CAM_IPA
+#define CAM_IPA_ENABLE 1
+#else
+#define CAM_IPA_ENABLE 0
+#endif
 
 static const char *TAG = "camera";
 
@@ -290,168 +296,28 @@ static int32_t s_st_cbs   = STEP_NOT_RUN;   /* esp_cam_ctlr_register_event_callb
 static int32_t s_st_isp   = STEP_NOT_RUN;   /* esp_isp_new_processor() */
 static int32_t s_st_fmt   = STEP_NOT_RUN;   /* esp_cam_sensor_set_format() */
 static int32_t s_st_start = STEP_NOT_RUN;   /* enable/start/stream-on 整条启动链 */
-static int32_t s_st_ccm   = STEP_NOT_RUN;   /* CCM 配置 + 使能（白平衡） */
-static int32_t s_st_ae    = STEP_NOT_RUN;   /* AE 可调范围查询 */
 
-/* ══ 黑电平（T7）══ 三个槽各表达一件事，不共用哨兵：
- *   s_st_blc_rd  读 0x3902 的返回值（**开关关着也读**，零风险的那一半测量）
+
+/* ══ 黑电平：传感器自带 BLC 的**观测**（读一次，不写）══
+ *   s_st_blc_rd  读 0x3902 的返回值
  *   s_blc_before 读回的值，−1 = 一个字节都没读到（与读回 0x00 严格区分）
- *   s_st_blc_wr  写 0x3902 的返回值，STEP_NOT_RUN = 开关关着、压根没写 */
+ *
+ * ⓘ 只读不写。官方标定文件里的 acc.blc（四通道偏移 16）走的是 ISP 的 BLC 块，
+ *   而本板 rev v1.0 没有那个块 —— cam_ipa.c 会收到 IPA_METADATA_FLAGS_BLC
+ *   并忽略它（见那里 CAM_IPA_HAS_BLC 的推理）。于是「传感器自己的 BLC 开没开」
+ *   就成了判断暗部基座的唯一现场依据，值得留着这一次读：
+ *     读回 0xc0 ⇒ 开着 ⇒ 基座应当已经 ≈ 0；
+ *     读回 0x80 ⇒ 关着 ⇒ 预期基座 ≈ 16，与官方 acc.blc 的 16 精确吻合。
+ */
+#define CAM_SENSOR_BLC_REG  0x3902
 static int32_t s_st_blc_rd  = STEP_NOT_RUN;
 static int32_t s_blc_before = -1;
-static int32_t s_st_blc_wr  = STEP_NOT_RUN;
-static int32_t s_blc_after  = -1;   /* 写完再读回来的值，−1 = 没读 */
 
-/* ══ 画质：白平衡(AWB→CCM) 与自动曝光(AE) ══════════════════════════
- * 控制律与全部可调参数在 cam_tune.h；本文件只做两件 IDF 侧的事：
- * 把矩阵写进 ISP，以及把 AE 算出来的曝光/增益经 SCCB 写回传感器。 */
-static cam_ae_limits_t   s_ae_lim;
-static cam_ae_state_t    s_ae;
-static bool              s_ae_ready;                  /* 可调范围查到了吗 */
-static int32_t           s_ae_last_err = ESP_OK;      /* 最近一次下发的返回值 */
-static cam_frame_stats_t s_last_stats;                /* 最近一帧的统计，自检行用 */
-
-/*
- * ══ AE 的目标亮度（T12）══ 官方是**随场景变的**，不再是一个常数。
- *
- *   高光优先（默认）  目标 CAM_AE_TARGET + CAM_AE_HL_OFFSET = 59
- *   暗部优先（背光）  目标 CAM_AE_TARGET + CAM_AE_LL_OFFSET = 63
- *
- * 判定与换算都是纯逻辑（cam_ae_backlight / cam_ae_target，宿主机可测），
- * 这里只负责「每拍算一次并记下来」——自检行要打的是**这一拍真正喂给控制律的
- * 那个目标**，而不是重新算一遍（重新算的话某天两处走岔就永远看不出来）。
- *
- * s_backlight_switches 是纯观测量：它随时间线性增长 = 判据在门限上抖，
- * 那时才需要给背光判据加迟滞（默认不加的理由见 cam_tune.h）。
- */
-static bool     s_backlight;
-static int      s_ae_target = CAM_AE_TARGET + CAM_AE_HL_OFFSET;
-static uint32_t s_backlight_switches;
-
-/* 此刻**真正写进 CCM 硬件**的那一对增益。初值是静态标定值；AWB 开着时由
- * camera_awb_tick() 跟着状态机走。自检行打的「当前」就是它，抄进 cam_tune.h
- * 即可把闭环的结论固化成静态标定。 */
-static uint32_t s_ccm_r = CAM_CCM_GAIN_R_MILLI;
-static uint32_t s_ccm_b = CAM_CCM_GAIN_B_MILLI;
-
-/*
- * ══ 当前的色温估计（T10/T13 的索引量）══
- *
- * 唯一的写入点是 camera_awb_stat_tick()：每拿到一份**可用**的硬件白点采样，
- * 就 s_cct_k = cam_cct_from_rg(rg)。除此之外没有任何地方改它 ——
- * 「CCM/LSC/饱和度三级用的是同一个 CCT」这条不变式靠单一写入点保证，
- * 而不是靠三处各自记得去算。
- *
- * s_cct_valid 与它分开存：值本身永远是一个合法色温（初值 CAM_CCT_DEFAULT_K），
- * 所以查表永远查得出东西；而「这个数到底是估出来的还是默认值」是另一件事，
- * 自检行必须能说清楚 —— 否则「CCM 档一直不动」这一个现象会同时对应
- * 「场景色温真的没变」和「白点统计一次都没成功」两种完全不同的下一步。
- */
-static uint32_t s_cct_k = CAM_CCT_DEFAULT_K;
-static bool     s_cct_valid;
-
-/*
- * CCM 此刻的形态。四个量都是自检行要打的：
- *   s_ccm_t     实际生效的强度（0..256）。**它是 T10 唯一的执行量** ——
- *               = 0 时下发的就是对角阵，即本改动之前那条已验证的路径。
- *   s_ccm_tmax  钳制之前二分求出的最大可行 t。它与 s_ccm_t 不等时说明是
- *               CAM_CCM_STRENGTH_MAX 这道总闸在压，而不是定点范围在压 ——
- *               两者分开打，「强度上不去」才分得清是硬件限制还是我们自己压的。
- *   s_ccm_slot / s_ccm_w  插值用的档与权重（w 为 0..256）。
- *   s_ccm_m[9]  最后真正下发的 9 个系数（×1000）。
- */
-static uint32_t s_ccm_t;
-static uint32_t s_ccm_tmax;
-static uint32_t s_ccm_slot;
-static uint32_t s_ccm_w;
-static int32_t  s_ccm_m[9];
-static uint32_t s_ccm_reconf;      /* CCM 累计重配次数（AWB 下发 + CCT 换档） */
-#if CAM_CCM_MODE
-static cam_slot_track_t s_ccm_track;   /* 按 CCT 档换矩阵的迟滞跟踪器 */
-static int32_t s_st_ccm_ct = STEP_NOT_RUN;   /* 最近一次「CCT 换档重配」的返回值 */
-#endif
-
-#if CAM_AWB_ENABLE
-static cam_awb_state_t s_awb;
-static int32_t         s_awb_last_err = ESP_OK;   /* 最近一次重配 CCM 的返回值 */
-#endif
-
-#if CAM_AE_SOURCE && !CAM_AE_STAT_ENABLE
-#error "CAM_AE_SOURCE=1（AE 吃硬件统计）依赖 CAM_AE_STAT_ENABLE=1；\
-两者不相容时若不在这里拦下，运行期表现是 AE 拿一份全 0 的统计把曝光推到顶。"
-#endif
-
-#if CAM_AWB_SOURCE && !CAM_AWB_STAT_ENABLE
-#error "CAM_AWB_SOURCE=1（AWB 吃硬件白点统计）依赖 CAM_AWB_STAT_ENABLE=1；\
-两者不相容时若不在这里拦下，运行期表现是 AWB 永远拿不到采样、白平衡一步不动。"
-#endif
-
-#if CAM_GAMMA_ADAPTIVE && !CAM_GAMMA_ENABLE
-#error "CAM_GAMMA_ADAPTIVE=1（按 env.luma 动态选 gamma 档）依赖 CAM_GAMMA_ENABLE=1；\
-gamma 整个不进镜像时「换档」无从谈起。"
-#endif
-
-#if CAM_GAMMA_ADAPTIVE && !CAM_HIST_ENABLE
-#error "CAM_GAMMA_ADAPTIVE=1 依赖 CAM_HIST_ENABLE=1：选档的索引量 env.luma 由直方图重建；\
-不拦下的话运行期表现是 gamma 永远停在开机那一档，而自检行还显示「动态」。"
-#endif
-
-#if CAM_BACKLIGHT_ENABLE && !CAM_HIST_ENABLE
-#error "CAM_BACKLIGHT_ENABLE=1 依赖 CAM_HIST_ENABLE=1：背光判据的两个输入（亮块占比、\
-场景均值）都来自直方图；不拦下的话运行期表现是「背光永不触发」而不是「背光关掉了」。"
-#endif
-
-#if CAM_AWB_SOURCE
-/*
- * ⚠️ 白点框与门限**必须**与官方标定表逐位相同 —— 它们是同一个采样点上的量。
- * cam_tune.h 里写的是字面量（那个文件是纯逻辑、不许依赖标定表），这五条断言
- * 是唯一把两边钉在一起的东西：改一个不改另一个，编译期就断。
- * （与 CAM_AE_SOURCE 那三条同一处置。）
- */
-_Static_assert(CAM_AWB_MIN_COUNTED == CAM_CAL_MIN_COUNTED,
-               "CAM_AWB_MIN_COUNTED 与官方 awb.min_counted 不一致");
-_Static_assert(CAM_AWB_RG_MIN_Q4 == CAM_CAL_RG_MIN && CAM_AWB_RG_MAX_Q4 == CAM_CAL_RG_MAX,
-               "AWB 的 rg 包围盒与官方 awb.range.rg 不一致");
-_Static_assert(CAM_AWB_BG_MIN_Q4 == CAM_CAL_BG_MIN && CAM_AWB_BG_MAX_Q4 == CAM_CAL_BG_MAX,
-               "AWB 的 bg 包围盒与官方 awb.range.bg 不一致");
-/* 盒子推出来的增益必须整个装进限幅区间，否则两道判据会互相打架：
- * 通过盒子的建议值被限幅改写 ⇒ 不动点跑掉 ⇒ 看起来像「收敛到一个错的值」。 */
-_Static_assert(10000000u / CAM_AWB_BG_MIN_Q4 <= CAM_AWB_GAIN_MAX_MILLI,
-               "官方白点框的 kb 上限超过了 CAM_AWB_GAIN_MAX_MILLI");
-_Static_assert(10000000u / CAM_AWB_RG_MAX_Q4 >= CAM_AWB_GAIN_MIN_MILLI,
-               "官方白点框的 kr 下限低于 CAM_AWB_GAIN_MIN_MILLI");
-#endif
-
-#if CAM_AE_SOURCE
-/*
- * ⚠️ 目标与死区**必须**与官方标定表逐位相同 —— 换源之后它们才是同一个采样点上的量。
- * cam_tune.h 里写的是字面量（那个文件是纯逻辑、不许依赖标定表），这三条断言
- * 是唯一把两边钉在一起的东西：改一个不改另一个，编译期就断。
- */
-_Static_assert(CAM_AE_TARGET      == CAM_CAL_AE_TARGET,
-               "CAM_AE_TARGET 与官方 agc.luma_adjust.target 不一致");
-_Static_assert(CAM_AE_TARGET_LOW  == CAM_CAL_AE_TARGET_LOW,
-               "CAM_AE_TARGET_LOW 与官方 agc.luma_adjust 的下边界不一致");
-_Static_assert(CAM_AE_TARGET_HIGH == CAM_CAL_AE_TARGET_HIGH,
-               "CAM_AE_TARGET_HIGH 与官方 agc.luma_adjust 的上边界不一致");
-/* 两个优先级偏移同样必须与官方标定逐位相同（agc.{high,low}_light_priority.luma_offset）。
- * 它们决定的是 AE 的**工作点**，抄错一个数画面就整体偏亮/偏暗，而现场看不出来。 */
-_Static_assert(CAM_AE_HL_OFFSET == CAM_CAL_AE_HL_OFFSET,
-               "高光优先偏移与官方 agc.high_light_priority.luma_offset 不符");
-_Static_assert(CAM_AE_LL_OFFSET == CAM_CAL_AE_LL_OFFSET,
-               "暗部优先偏移与官方 agc.low_light_priority.luma_offset 不符");
-#endif
-
-/* 这两条与 CAM_AE_SOURCE 无关，放在 #if 之外：目标平移在两种口径下都要成立。 */
-_Static_assert(CAM_AE_HL_OFFSET < CAM_AE_LL_OFFSET,
-               "暗部优先的目标必须高于高光优先，否则背光判据是反的");
-_Static_assert(CAM_AE_TARGET + CAM_AE_HL_OFFSET + (CAM_AE_TARGET_LOW - CAM_AE_TARGET) > 0 &&
-               CAM_AE_TARGET + CAM_AE_LL_OFFSET + (CAM_AE_TARGET_HIGH - CAM_AE_TARGET) < 255,
-               "平移后的死区跑出了 8 bit 量程");
-
-#if CAM_AE_STAT_ENABLE
 /* ══ 硬件 AE 5×5 分块统计 ══════════════════════════════════════════
- * 设计意图、ρ 的定义与「为什么先观测再切换」见 cam_tune.h 的 CAM_AE_STAT_ENABLE。 */
+ * 官方 esp_ipa 的 agc/ian 两个模块吃的就是这 25 个块（esp_ipa_stats_t.ae_stats）。
+ * 采样点 AFTER_DEMOSAIC 与官方 esp_video 硬编码的那个**必须一致** ——
+ * 官方 agc.luma_adjust 的 target=62、25 个权重、过曝欠曝阈值全部是在这个
+ * 采样点上标定的，换个采样点那些数就不成立了。 */
 static isp_ae_ctlr_t s_ae_ctlr;
 static int32_t       s_st_aestat = STEP_NOT_RUN;  /* 建控制器 / 注册回调 / 使能，取第一个失败 */
 static int32_t       s_st_aerun  = STEP_NOT_RUN;  /* start/stop 连续统计的返回值 */
@@ -494,373 +360,107 @@ static bool cam_on_ae_stat(isp_ae_ctlr_t h, const esp_isp_ae_env_detector_evt_da
     return false;
 }
 
-/* 取一份 25 块的快照，并算出加权均值与两个 quorum 计数。
- * 返回本函数被调用时统计块已经交付过多少帧（0 = 一帧都没收到，调用方据此
- * 判断「这份数能不能用」——拿全 0 去调曝光会把曝光一路推到顶）。 */
-static uint32_t cam_ae_stat_snapshot(uint8_t blocks[25], uint8_t *hw_mean,
-                                     uint8_t *n_dark, uint8_t *n_bright)
+/* 取一份 25 块的快照。**不做任何归约** —— 加权、剔除过暗/过亮块这些事全部由
+ * 官方 blob 按 agc.luma_adjust 的权重表去做，我们再算一遍只会得到第二个口径。
+ * 返回统计块至今交付过多少帧（0 = 一帧都没收到 ⇒ 这份数不能用，
+ * 拿全 0 喂 blob 会让它把曝光一路推到顶）。 */
+static uint32_t cam_ae_stat_snapshot(uint8_t blocks[25])
 {
     uint32_t frames;
     portENTER_CRITICAL(&s_ae_lock);
     memcpy(blocks, s_ae_blocks, 25);
     frames = s_ae_stat_frames;
     portEXIT_CRITICAL(&s_ae_lock);
-    *hw_mean = cam_ae_weighted_mean(blocks, n_dark, n_bright);
     return frames;
 }
-#endif  /* CAM_AE_STAT_ENABLE */
 
-#if CAM_AWB_STAT_ENABLE
 /* ══ 硬件 AWB 白点统计 ═════════════════════════════════════════════
- * 设计意图、oneshot 的理由与统计侧 BLC 见 cam_tune.h 的 CAM_AWB_STAT_ENABLE。
+ * 官方 esp_ipa 的 awb 模块吃的就是这四个累加值（esp_ipa_stats_t.awb_stats[0]）。
+ * 采样点 BEFORE_CCM 与官方 esp_video 硬编码的那个一致。
  *
- * 与 AE 统计**结构不同的一点**：AE 走连续模式 + ISR 回调（每帧一份，任务侧只做
- * 快照）；AWB 走 **oneshot**（每秒一次，在帧泵任务里阻塞等结果，不注册任何回调）。
- * 所以这里没有自旋锁、没有 ISR 共享变量 —— 下面这些槽全部只被帧泵任务读写。 */
+ * ⚠️ **从 oneshot 改成连续模式 + ISR 回调**（本次返工改的）。原先每秒一次的
+ *   oneshot 会在帧泵任务里阻塞最坏 60 ms；而官方要求「每拿到一份统计就调一次
+ *   process()」，若三块统计都走 oneshot，一拍就要阻塞 120 ms，直接把 100 ms 的
+ *   帧泵节拍撑爆（表现为 fps 掉到 8 以下、UVC「拒收」立刻非零）。
+ *   连续模式下 ISR 每帧填一次，任务侧只做一次 16 字节的快照，**零阻塞**。
+ * ⓘ subwindow 在 rev < 3.0 上不可用，我们不配、也不置 IPA_STATS_FLAGS_AWB_SUBWIN。 */
 static isp_awb_ctlr_t s_awb_ctlr;
-static int32_t        s_st_awbstat = STEP_NOT_RUN;  /* 建控制器 / 使能，取第一个失败 */
-static int32_t        s_st_awbrun  = STEP_NOT_RUN;  /* 最近一次 oneshot 的返回值 */
+static int32_t        s_st_awbstat = STEP_NOT_RUN;  /* 建控制器 / 注册回调 / 使能 */
+static int32_t        s_st_awbrun  = STEP_NOT_RUN;  /* start/stop 连续统计的返回值 */
 
-static cam_awb_hw_stat_t s_awb_hw;          /* 最近一次拿到的采样，自检行用 */
-static bool     s_awb_hw_fresh;             /* 本拍是否刚拿到新采样（T9 的触发条件） */
-static uint32_t s_awb_phase = CAM_AWB_INTERVAL_TICKS;  /* 触发相位，见 camera_awb_stat_tick */
-static uint32_t s_awb_trigs;                /* 累计触发次数 */
-static uint32_t s_awb_timeouts;             /* 其中超时了多少次 */
-#endif  /* CAM_AWB_STAT_ENABLE */
+static portMUX_TYPE s_awb_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_awb_counted, s_awb_sum_r, s_awb_sum_g, s_awb_sum_b;
+static uint32_t s_awb_stat_frames;
 
-#if CAM_HIST_ENABLE
+/* ⚠️ 跑在 ISR 上下文，只搬四个 32 位数。不加 IRAM_ATTR 的理由同 cam_on_ae_stat。 */
+static bool cam_on_awb_stat(isp_awb_ctlr_t h, const esp_isp_awb_evt_data_t *e, void *ud)
+{
+    (void)h;
+    (void)ud;
+    portENTER_CRITICAL_ISR(&s_awb_lock);
+    s_awb_counted = e->awb_result.white_patch_num;
+    s_awb_sum_r   = e->awb_result.sum_r;
+    s_awb_sum_g   = e->awb_result.sum_g;
+    s_awb_sum_b   = e->awb_result.sum_b;
+    s_awb_stat_frames++;
+    portEXIT_CRITICAL_ISR(&s_awb_lock);
+    return false;
+}
+
+static uint32_t cam_awb_stat_snapshot(uint32_t *counted, uint32_t *r, uint32_t *g, uint32_t *b)
+{
+    uint32_t frames;
+    portENTER_CRITICAL(&s_awb_lock);
+    *counted = s_awb_counted;
+    *r = s_awb_sum_r;
+    *g = s_awb_sum_g;
+    *b = s_awb_sum_b;
+    frames = s_awb_stat_frames;
+    portEXIT_CRITICAL(&s_awb_lock);
+    return frames;
+}
 /*
- * ══ 直方图统计（T11）══ **纯观测，本任务不改任何控制行为。**
+ * ══ 直方图统计 ══ 官方 esp_ipa 的 ian 模块靠它重建 env.luma
+ * （= 环境亮度，gamma 选档与 CCM 低照度分支的索引量）。
  *
- * 它给出两样 AE 的 5×5 测光给不出的东西：
- *   · 近似**均匀加权**的场景均值 —— 官方 ian.luma.env 的口径，env.luma 的输入。
- *     AE 那张中心加权金字塔答的是「主体够不够亮」，这里答的是「环境有多亮」，
- *     官方把它们分成两张表正是为了让 gamma 不跟着测光抖（管线文档 §B.4.2）。
- *   · 亮块 / 暗块**占比** —— 均值给不出分布形状，而「一大片很亮 + 整体偏暗」
- *     正是背光的定义（T12 的判据）。
+ * 它给出 AE 的 5×5 测光给不出的东西：**近似均匀加权**的场景均值与亮/暗块分布。
+ * AE 那张中心加权金字塔答的是「主体够不够亮」，直方图答的是「环境有多亮」——
+ * 官方把它们分成两张表（ian.luma.ae.weight 与 ian.luma.env.weight）正是为了
+ * 让 gamma 不跟着测光抖。
+ *
+ * ⚠️ 与 AWB 同一处置：**连续模式 + ISR 回调**，不用 oneshot。理由见上面 AWB
+ *   那一段（三块统计都阻塞的话一拍要 120 ms，撑爆 100 ms 的帧泵节拍）。
  */
 static isp_hist_ctlr_t s_hist_ctlr;
-static int32_t  s_st_hist    = STEP_NOT_RUN;   /* 建控制器 / 使能，取第一个失败 */
-static int32_t  s_st_histrun = STEP_NOT_RUN;   /* 最近一次 oneshot 的返回值 */
-static uint32_t s_hist_bins[16];               /* 最近一次的 16 个 bin，自检行用 */
-static uint32_t s_hist_total;                  /* 16 个 bin 之和（应 ≈ 921600） */
-static uint8_t  s_hist_mean;                   /* 近似均匀加权的场景均值 */
-static uint8_t  s_hist_bright_pct;             /* bin 15（>=240）的占比 */
-static uint8_t  s_hist_dark_pct;               /* bin 0（<16）的占比 */
-static uint32_t s_hist_phase = CAM_HIST_PHASE; /* 触发相位，与 AWB 错开半周期 */
-static uint32_t s_hist_trigs;
-static uint32_t s_hist_timeouts;
+static int32_t  s_st_hist    = STEP_NOT_RUN;   /* 建控制器 / 注册回调 / 使能 */
+static int32_t  s_st_histrun = STEP_NOT_RUN;   /* start/stop 连续统计的返回值 */
 
-/*
- * env.luma（×10）与它选出的 gamma 档。
- *
- * T11 **只算不下发**（s_gamma_slot_want 与实际生效的 s_gamma_slot 是两个变量），
- * T12 才把它接到 camera_gamma_apply() 上。这样 §E.5 那条 [反推] 的重建式先被
- * 现场证伪一轮，再决定要不要拿它去改画面。
- *
- * s_env_slots_seen 是一个 4 位的**位图**：第 i 位表示「第 i 档被选中过」。
- * 它单独就能回答 T11 的核心判据 —— **四档里用得到几档**。只打当前档的话，
- * 「一直是第 0 档」既可能是环境真的没变，也可能是重建式整个错了。
- */
-static uint32_t s_env_q1;
-static uint32_t s_gamma_slot_want = CAM_CAL_GAMMA_N;   /* 越界 = 还没算过，无迟滞 */
-static uint32_t s_env_min_q1 = UINT32_MAX;
-static uint32_t s_env_max_q1;
-static uint32_t s_env_slots_seen;
-static uint32_t s_gamma_slot_switches;                 /* 想换档的累计次数 */
-#endif  /* CAM_HIST_ENABLE */
+static portMUX_TYPE s_hist_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_hist_bins[ISP_HIST_SEGMENT_NUMS];
+static uint32_t s_hist_stat_frames;
 
-/* ══ 官方前馈画质级（开环查表）══════════════════════════════════════
- * 三组各一个编译开关（cam_tune.h），关掉时下面整段不进镜像 —— 这是现场
- * bisect 的唯一手段，别把它们合并成一个开关。
- *
- * ⚠️ 每一级的状态槽都**不共用哨兵**（与文件上半部那六个同一处置）：
- *      STEP_NOT_RUN  这一级编译进来了，但**一次都没配过**（比如还没取流）
- *      非 ESP_OK     配过了，硬件拒了，值就是错误码
- *      ESP_OK        配上了，自检行同时打出该级此刻的关键参数值
- *      「未编译」     开关 = 0，由自检行的 #else 分支说出来
- *   四种情况必须能分开，否则「画面没变化」这一个现象对应四种完全不同的下一步。 */
-#if CAM_ADN_ENABLE || CAM_AEN_ENABLE
-/* **所有**前馈级加起来累计重配了多少次（一个计数器、每行自检都打同一个数，
- * 所以标签是「前馈重配合计」而不是「重配」—— 别读成「本级重配了这么多次」）。
- * 它是迟滞是否起作用的唯一判据：随时间线性增长 ⇒ 要么增益一直在变（去看 AE
- * 那行），要么 CAM_FEEDFWD_HYST_TICKS 太小。
- * 开机稳定后它应当停住；开机第一拍每个被编译进来的子级各 +1
- * （ADN + AEN 全开 ⇒ BF/Demosaic/SHARP/Color 各一次 = 4）。 */
-static uint32_t s_feedfwd_reconf;
-/* 最近一拍喂给选档器的总增益。选档全靠它，打出来才能判断「档位不动」是
- * 「增益没变」还是「选档算错了」。 */
-static uint32_t s_feedfwd_gain_milli;
-#endif
-
-#if CAM_ADN_ENABLE
-static cam_slot_track_t s_bf_track, s_dm_track;
-static int32_t s_st_bf = STEP_NOT_RUN;    /* esp_isp_bf_configure/enable 的返回值 */
-static int32_t s_st_dm = STEP_NOT_RUN;    /* esp_isp_demosaic_configure 的返回值 */
-static bool    s_bf_enabled;              /* esp_isp_bf_enable 有 FSM 门，只能成功一次 */
-#endif
-
-#if CAM_LSC_ENABLE
-/* 四个通道各 273 项的增益数组，由驱动分配、常驻（T13 换档复用同一块）。 */
-static esp_isp_lsc_gain_array_t s_lsc_gain;
-static size_t  s_lsc_n;
-static int32_t s_st_lsc = STEP_NOT_RUN;
-/* 增益数组分配成功、格数也对得上 —— **换档前必须查这个**：分配失败时
- * s_lsc_gain.gain_r 是 NULL，照着填就是一次空指针写。 */
-static bool    s_lsc_ready;
-static uint32_t s_lsc_slot = CAM_LSC_SLOT_DEFAULT;   /* 此刻硬件里是哪一档 */
-#if CAM_LSC_BY_CT
-static cam_slot_track_t s_lsc_track;
-static uint32_t s_lsc_switches;                      /* 累计换档次数（重配 LUT 的次数） */
-#endif
-#endif
-
-#if CAM_AEN_ENABLE
-static cam_slot_track_t s_sh_track, s_ct_track;
-static int32_t s_st_sharp = STEP_NOT_RUN;
-static int32_t s_st_color = STEP_NOT_RUN;
-static bool    s_sharp_enabled;           /* enable 有 FSM 门 */
-static bool    s_color_enabled;
-static uint8_t s_contrast_val = 128;                        /* 此刻写进硬件的对比度 */
-static uint8_t s_sat_val = CAM_SATURATION_FIXED_VAL;        /* 此刻写进硬件的饱和度 */
-#if CAM_SAT_BY_CT
-static cam_slot_track_t s_sat_track;
-static uint32_t s_sat_switches;
-#endif
-#endif
-
-#if CAM_GAMMA_ENABLE
-/*
- * ══ gamma ══ 线性 → sRGB 式的编码曲线，**这条链路上缺的那一环**。
- *
- * 为什么它不属于「前馈画质级」那一组（虽然写法很像）：前三组只改画质，gamma
- * 改的是**输出的传递函数本身** —— 它一开，送给主机的每个像素的含义就变了，
- * 因此必须同时把统计侧的逆变换配套上，否则 AE/AWB 的反馈量当场失真。
- * 完整的「为什么提前 / 代价怎么还」见 cam_tune.h 的 CAM_GAMMA_ENABLE 那段。
- */
-static int32_t s_st_gamma = STEP_NOT_RUN;
-/* 当前生效的档。逆表就是按它生成的，两者永远由 camera_gamma_apply() 一起设定。
- * T11 做动态换档时改的是它，不是别处。 */
-static uint32_t s_gamma_slot = CAM_GAMMA_SLOT;
-/*
- * 逆表。**只有 s_gamma_ready 为真时才交给统计层** —— 它同时表达两件事：
- * 「表建好了」且「硬件里确实是这条曲线」。gamma 没配上时画面本来就是线性的，
- * 这时再逆一次会把反馈量系统性压暗，比不逆更糟。
- */
-static uint8_t s_gamma_inv[256];
-static bool    s_gamma_ready;
-
-/*
- * 配一档 gamma：**下发硬件与重建逆表绑在同一个函数里**。
- *
- * 这不是排版偏好，是这次改动唯一的正确性支点：逆表与硬件曲线一旦不同源，
- * AE/AWB 会拿一个系统性偏移过的反馈量安静地闭环，画面上看不出任何异常，
- * 而自检行里的每一个数都仍然「自洽」。所以不给它们各自走一条路的机会 ——
- * 将来 T11 做动态换档时也只需要再调一次本函数。
- *
- * R/G/B 三个通道配**同一条**曲线：官方每档只有一个 gamma_param，没有分通道差异；
- * 而且逐通道的逆表能成立，前提正是三通道同曲线。
- *
- * ⚠️ **逆表还原的是「线性 + YUV 域那点残差」，不是数学上完美的线性。** 硬件管线里
- *   gamma 在 RGB 域、Color（对比度/饱和度）在其**下游**的 YUV 域 ⇒ 我们采到的是
- *   C(F(linear))，逆回去得到的是 F⁻¹(C(F(linear)))。残差量在 T4 已经逐条算过：
- *   饱和度钉在 128 = 1.000× ⇒ **逐像素恒等，零残差**；对比度 132 = 1.031× 只作用
- *   在 Y 上 ⇒ 亮度残差约 3%、通道比值残差约 0.7%，分别远小于 AE 死区（6/62 ≈ 9.7%）
- *   与 AWB 死区（5%）。也就是说这份残差在 gamma 上线之前就已经存在、量级没变，
- *   不是本次引入的新误差。
- */
-static esp_err_t camera_gamma_apply(uint32_t slot)
+/* ⚠️ 跑在 ISR 上下文，只搬 16 个 32 位数。 */
+static bool cam_on_hist_stat(isp_hist_ctlr_t h, const esp_isp_hist_evt_data_t *e, void *ud)
 {
-    isp_gamma_curve_points_t pts = {0};
-
-    /*
-     * ⚠️ **不走 esp_isp_gamma_fill_curve_points()。** 那个 helper 只接受一个
-     *   `uint32_t f(uint32_t)` 的函数指针，要在运行期算 x^γ ⇒ 拖进浮点 powf，
-     *   而我们的 y 早就在提取脚本里算好、并且是**宿主机测试逐点核对过**的常量表。
-     *   顺带避开它那条 `y < 256` 的检查：以 256 归一时末点 256·(255/256)^0.5 = 256
-     *   会被直接拒（这正是标定表以 255 而不是 256 归一的原因，见 cam_isp_cal.h）。
-     *
-     * x 栅格 16,32,…,240,255 满足驱动的两条硬要求（isp_gamma.c 的校验循环）：
-     *   ① 每段段长必须是 **2 的幂** —— 全部是 16；
-     *   ② 末点 x **必须恰好是 255**，且末段按 256−240 = 16 算段长。
-     */
-    for (int i = 0; i < CAM_CAL_GAMMA_PTS; i++) {
-        pts.pt[i].x = cam_cal_gamma_x[i];
-        pts.pt[i].y = cam_cal_gamma_y[slot][i];
-    }
-
-    for (int c = 0; c < 3; c++) {
-        const color_component_t comp = (c == 0) ? COLOR_COMPONENT_R
-                                     : (c == 1) ? COLOR_COMPONENT_G
-                                                : COLOR_COMPONENT_B;
-        const esp_err_t err = esp_isp_gamma_configure(s_isp, comp, &pts);
-        if (err != ESP_OK)
-            return err;   /* 逆表不建 ⇒ s_gamma_ready 保持假 ⇒ 统计留在线性域 */
-    }
-
-    /* 硬件收下了才建逆表，顺序不能反。 */
-    cam_gamma_inverse_lut(slot, s_gamma_inv);
-    s_gamma_slot  = slot;
-    s_gamma_ready = true;
-    return ESP_OK;
-}
-#endif  /* CAM_GAMMA_ENABLE */
-
-/*
- * 统计层要用的逆 gamma 表。返回 NULL = 「别逆」（gamma 关着或没配上，
- * 画面本来就是线性的）。
- */
-const uint8_t *camera_csi_gamma_inv_lut(void)
-{
-#if CAM_GAMMA_ENABLE
-    return s_gamma_ready ? s_gamma_inv : NULL;
-#else
-    return NULL;
-#endif
+    (void)h;
+    (void)ud;
+    portENTER_CRITICAL_ISR(&s_hist_lock);
+    for (int i = 0; i < ISP_HIST_SEGMENT_NUMS; i++)
+        s_hist_bins[i] = e->hist_result.hist_value[i];
+    s_hist_stat_frames++;
+    portEXIT_CRITICAL_ISR(&s_hist_lock);
+    return false;
 }
 
-/*
- * 把一对增益写成 CCM 的对角阵送进 ISP。开机配一次，之后 AWB 每次调整再配一次。
- *
- * saturation = true：万一系数落到定点格式表达不了的值，宁可饱和也不要整个配置
- * 失败 —— 失败等于**一点白平衡都没有**，比略微不准坏得多。
- * update_once_configured = true：立刻写进硬件而不是等下一个 VSYNC。开机时这是
- * 必须的（那时还没 stream on，等 VSYNC 就等成了「第一帧还没白平衡」）；运行期
- * 它意味着理论上可能有一帧中途换矩阵，但 rev < 3.0 上 isp_ll_shadow_update_ccm()
- * 本就是个恒真的空函数（hal/isp_ll.h 的 "for compatibility" 分支），这一位在本板
- * 上无害，而 AWB 最快一秒才改一次、每次幅度 ≤ 25%，肉眼不可能看出来。
- *
- * ⓘ 只 configure、**不再 enable**：esp_isp_ccm_enable() 有 FSM 检查，重复调用
- *   直接返回 ESP_ERR_INVALID_STATE。而 esp_isp_ccm_configure() 没有任何 FSM/版本
- *   门（IDF v6.0 的 isp_ccm.c 全文），取流中随时可调。
- */
-static esp_err_t camera_ccm_apply(uint32_t r_milli, uint32_t b_milli)
+static uint32_t cam_hist_stat_snapshot(uint32_t bins[ISP_HIST_SEGMENT_NUMS])
 {
-#if CAM_CCM_MODE
-    /*
-     * ══ T10：官方 19 档矩阵按 CCT 插值 + 白平衡右乘折叠 + 强度钳制 ══
-     *
-     * 三步都在 cam_isp_map.c 里（纯逻辑、宿主机 353+ 个用例守着），这里只负责
-     * 「用哪个 CCT」「压到多少」「打成 float 送进驱动」。
-     *
-     * ⚠️ 顺序不能反：先按 CCT 取基础矩阵，再折增益。反过来（先折再插值）会
-     *   在两档之间插出一个行和不为 1 的东西 —— 行和不变式只在**单档**上成立，
-     *   插值保持它是因为线性组合保持线性等式，而「先折」把 W 也卷进了插值。
-     */
-    int32_t base[9];
-    cam_ccm_at_cct(s_cct_k, base);
-    s_ccm_slot = cam_map_cct_slot(cam_cal_ccm_cct, CAM_CAL_CCM_N, s_cct_k, &s_ccm_w);
-
-    /* 二分出定点范围允许的最大强度，再让 CAM_CCM_STRENGTH_MAX 这道总闸压一次。
-     * 两个数都留着：自检行要能分出「是硬件装不下」还是「是我们自己压的」。 */
-    s_ccm_t = cam_ccm_fold_wb_clamped(base, r_milli, b_milli, CAM_CCM_STRENGTH_MAX,
-                                      s_ccm_m, &s_ccm_tmax);
-#else
-    /*
-     * 对角阵 —— T9 之前那条已实机验证的路径。这里**不是**「t = 0 的特例」而是
-     * 一段独立的代码：CAM_CCM_MODE = 0 时上面整段（含 19 档表与二分）一行都不
-     * 进镜像，硬件行为逐位回到改动之前。两者数值上恰好相等是一条好性质
-     * （宿主机用例 ② 守着 t=0 ⇒ diag），不是实现依赖。
-     */
-    s_ccm_slot = 0;
-    s_ccm_w    = 0;
-    s_ccm_t    = 0;
-    s_ccm_tmax = 0;
-    for (int i = 0; i < 9; i++)
-        s_ccm_m[i] = 0;
-    s_ccm_m[0] = (int32_t)r_milli;
-    s_ccm_m[4] = CAM_CCM_GAIN_G_MILLI;
-    s_ccm_m[8] = (int32_t)b_milli;
-#endif
-
-    const esp_isp_ccm_config_t ccm_cfg = {
-        .matrix = {
-            {s_ccm_m[0] / 1000.0f, s_ccm_m[1] / 1000.0f, s_ccm_m[2] / 1000.0f},
-            {s_ccm_m[3] / 1000.0f, s_ccm_m[4] / 1000.0f, s_ccm_m[5] / 1000.0f},
-            {s_ccm_m[6] / 1000.0f, s_ccm_m[7] / 1000.0f, s_ccm_m[8] / 1000.0f},
-        },
-        /*
-         * ⚠️ saturation 保持 true，但**它不该被用到**：强度钳制已经保证所有系数
-         * |v| <= CAM_CCM_ABS_MAX_MILLI = 3.990，落在 S2.10 的表达范围内。
-         * 它只是最后一道「宁可饱和也不要整个配置失败」的网 —— 一旦真的生效，
-         * 硬件里的矩阵就与自检行打出来的不是同一个，那才是最坏情况（画面错了
-         * 而日志说没错）。所以自检行同时打 max|v| 与上限，让这条能在现场证伪。
-         */
-        .saturation = true,
-        .flags = { .update_once_configured = 1 },
-    };
-    const esp_err_t err = esp_isp_ccm_configure(s_isp, &ccm_cfg);
-    if (err == ESP_OK) {
-        s_ccm_r = r_milli;
-        s_ccm_b = b_milli;
-        s_ccm_reconf++;
-    }
-    return err;
+    uint32_t frames;
+    portENTER_CRITICAL(&s_hist_lock);
+    memcpy(bins, s_hist_bins, sizeof s_hist_bins);
+    frames = s_hist_stat_frames;
+    portEXIT_CRITICAL(&s_hist_lock);
+    return frames;
 }
-
-#if CAM_CCM_MODE
-/*
- * CCT 换档 ⇒ 重配 CCM。**与 AWB 那条路互补**：AWB 变增益时已经在
- * camera_awb_tick() 里重配过，这里管的是「增益没变、但色温跨过了一档边界」。
- *
- * 为什么只在**跨档**时重配、而不是每拍按最新 CCT 重新插值：rev v1.0 无影子
- * 寄存器，9 个系数是逐个写下去的，帧中途换会撕裂。档内的插值误差远小于撕裂
- * 的代价 —— 相邻档之间系数差最大约 0.1（5040↔5090 那两档几乎重合），
- * 而 AWB 每次 APPLIED 都会拿最新 CCT 重算一次，档内漂移最多存活一秒。
- *
- * 迟滞用 CAM_FEEDFWD_HYST_TICKS（3 拍 = 300 ms），与其余前馈级同一个数：
- * s_cct_k 本身只有 1 Hz 才更新一次，所以这 3 拍实际上等价于「新 CCT 稳定
- * 之后的第 3 拍」，而不是「连续采样 3 次」。
- */
-static void camera_ccm_ct_tick(void)
-{
-    uint32_t w = 0;
-    const uint32_t slot = cam_map_cct_slot(cam_cal_ccm_cct, CAM_CAL_CCM_N, s_cct_k, &w);
-    if (!cam_slot_changed(&s_ccm_track, slot, CAM_FEEDFWD_HYST_TICKS))
-        return;
-    s_st_ccm_ct = camera_ccm_apply(s_ccm_r, s_ccm_b);
-    if (s_st_ccm_ct != ESP_OK)
-        ESP_LOGW(TAG, "CCT 换档重配 CCM 失败(%s)，矩阵保持上一档",
-                 esp_err_to_name((esp_err_t)s_st_ccm_ct));
-}
-#endif  /* CAM_CCM_MODE */
-
-#if CAM_LSC_ENABLE
-/*
- * 把某一档 LSC 标定表填进驱动分配的增益数组并下发。
- *
- * 定点：表里存的就是 round(v × 256)，与 isp_lsc_gain_t 的 2 整数位 + 8 小数位
- * 逐位对齐 ⇒ 直接写 .val，**不做任何换算**。全表实测最大 851（3.323×），
- * 硬件上限 1023（3.996×），余量 17%；那条边界由提取脚本的断言守着，不在这里重复。
- *
- * ⓘ esp_isp_lsc_configure() 没有 FSM 门（isp_lsc.c 全文），取流中可以重配 ——
- *   T13 按色温换档就靠这一点。代价是 273 × 2 条 LUT 写命令，所以只在档变时做。
- */
-static esp_err_t camera_lsc_apply(uint32_t slot)
-{
-    for (size_t y = 0; y < CAM_CAL_LSC_GRID_Y; y++) {
-        for (size_t x = 0; x < CAM_CAL_LSC_GRID_X; x++) {
-            /* 目的下标固定按驱动的写法 i = y·num_grids_x + x（isp_lsc.c）。
-             * 源下标可能要转置 —— JSON 的排布顺序是缺口，见 CAM_LSC_TRANSPOSE。 */
-            const size_t dst = y * CAM_CAL_LSC_GRID_X + x;
-#if CAM_LSC_TRANSPOSE
-            const size_t src = x * CAM_CAL_LSC_GRID_Y + y;
-#else
-            const size_t src = dst;
-#endif
-            s_lsc_gain.gain_r [dst].val = cam_cal_lsc[slot][0][src];
-            s_lsc_gain.gain_gr[dst].val = cam_cal_lsc[slot][1][src];
-            s_lsc_gain.gain_gb[dst].val = cam_cal_lsc[slot][2][src];
-            s_lsc_gain.gain_b [dst].val = cam_cal_lsc[slot][3][src];
-        }
-    }
-    const esp_isp_lsc_config_t cfg = { .gain_array = &s_lsc_gain };
-    const esp_err_t err = esp_isp_lsc_configure(s_isp, &cfg);
-    if (err == ESP_OK)
-        s_lsc_slot = slot;         /* 自检行打的必须是**硬件里那一档** */
-    return err;
-}
-#endif  /* CAM_LSC_ENABLE */
 
 /*
  * 中断回调之一：DMA 要下一块缓冲了。
@@ -1055,20 +655,15 @@ esp_err_t camera_csi_init(void)
      *   ⚠️ 曾经写在这里的「AWB(isp_awb.c:82) 要 rev ≥ 3.0」**是错的**：
      *      isp_awb.c 整个文件没有 ESP_CHIP_REV_ABOVE，那一处 efuse_hal_chip_revision()
      *      < 300 只否掉 AWB 统计的 **subwindow** 子功能（还只是打个 warning）。
-     *      也就是说硬件 AWB 统计在本板上是可用的 —— **闭环 AWB 上线之后仍然
-     *      不用它**，完整取舍见 cam_tune.h 文件头的「为什么不挂硬件 AWB 统计」。
-     *      一句话版本：软件分通道均值已经每帧在算（帧统计顺带的，零额外成本），
-     *      而硬件统计块能多给的那份「白点筛选」在本板上恰好残缺（subwindow 没有）
-     *      且它的白点框本身要标定 —— 拿不准的参数换不来更可信的统计。
+     *      硬件 AWB 统计在本板上是可用的，下面就在建它 —— 它是官方 awb 算法的输入。
      *   **CCM 没有任何版本门**（isp_ccm.c 全文无 ESP_CHIP_REV_ABOVE），这正是
-     *   下面拿它顶替用不了的 WBG 的前提；只是 rev < 3.0 的定点格式窄一些，
+     *   cam_ipa.c 拿它顶替用不了的 WBG 的前提；只是 rev < 3.0 的定点格式窄一些，
      *   系数上限 4.0 而非 16.0（hal/isp_ll.h:138-144）。
      *
-     * ⓘ **曝光与白平衡都自己做，没有引 espressif/esp_ipa**（它会把 esp_video 的
-     *   一半拖进来）：两个闭环都在 camera_csi_tune_tick() 里，控制律本体在
-     *   cam_tune.c（纯逻辑、宿主机可测）—— AE 是带四道防振荡闸的 P 控制器，
-     *   AWB 是灰世界 + 四道场景防护、经下面这个 CCM 施加增益。
-     *   这两件事都没做的时候，实机现象正是「整体发绿 + 欠曝（亮度均值 45）」。
+     * ⓘ **画质算法一律走官方 esp_ipa**（cam_ipa.c）：CCM / gamma / BF / 锐化 /
+     *   demosaic / LSC / 色彩 / 曝光 / 增益全部由它算，本文件只建统计块并转发。
+     *   这些都没做的时候，实机现象正是「整体发绿 + 欠曝（亮度均值 45）」——
+     *   也正是 CONFIG_AIO_CAM_IPA 关掉时的预期画面。
      * bayer 顺序取自 sc202cs_isp_info[0].bayer_type = ESP_CAM_SENSOR_BAYER_BGGR。
      * ⚠️ 只能按**名字**抄，不能按数值抄：两个枚举的顺序正好是反的
      *    （esp_cam_sensor_types.h 是 RGGB=0…BGGR=3，hal/color_types.h 是
@@ -1088,12 +683,12 @@ esp_err_t camera_csi_init(void)
     s_st_isp = esp_isp_new_processor(&isp_cfg, &s_isp);
     ESP_RETURN_ON_ERROR(s_st_isp, TAG, "ISP");
 
-#if CAM_AE_STAT_ENABLE
     /*
-     * ══ 硬件 AE 5×5 分块统计 ══ **只建、只观测，不接管控制律**（T5）。
+     * ══ 硬件 AE 5×5 分块统计 ══ 官方 esp_ipa 的 agc/ian 模块的输入。
      *
-     * 失败**只降级不拦启动**（与 LSC / gamma / CCM 同一处置）：统计块建不起来时
-     * s_st_aestat 记下错误码、自检行照打，AE 继续吃软件均值 —— 取流本身是好的。
+     * 失败**只降级不拦启动**：统计块建不起来时 s_st_aestat 记下错误码、自检行
+     * 照打，blob 收不到 AE 统计（IPA_STATS_FLAGS_AE 不置位）⇒ 曝光不再自适应，
+     * 但取流本身是好的。
      */
     const esp_isp_ae_config_t ae_cfg = {
         /*
@@ -1143,24 +738,22 @@ esp_err_t camera_csi_init(void)
         s_st_aestat = esp_isp_ae_controller_enable(s_ae_ctlr);
     }
     if (s_st_aestat != ESP_OK)
-        ESP_LOGW(TAG, "AE 硬件统计没建起来(%s)，AE 继续吃软件全帧均值，其余一切照常",
+        ESP_LOGW(TAG, "AE 硬件统计没建起来(%s)，曝光不再自适应，其余一切照常",
                  esp_err_to_name((esp_err_t)s_st_aestat));
-#endif
 
-#if CAM_AWB_STAT_ENABLE
     /*
-     * ══ 硬件 AWB 白点统计 ══ 用官方标定的白点筛选框。
+     * ══ 硬件 AWB 白点统计 ══ 用官方标定的白点筛选框，喂官方 awb 模块。
      *
-     * 失败**只降级不拦启动**（与 AE 统计 / LSC / gamma / CCM 同一处置）：
-     * 统计块建不起来时 s_st_awbstat 记下错误码、自检行照打，AWB 继续吃软件
-     * 灰世界（CAM_AWB_SOURCE = 1 时则一步不动，见 camera_awb_tick）。
+     * 失败**只降级不拦启动**：建不起来时 IPA_STATS_FLAGS_AWB 不置位 ⇒ blob 的
+     * 白平衡停在初值（画面会保持一个固定的偏色），取流本身是好的。
      */
     const esp_isp_awb_config_t awb_cfg = {
         /*
-         * ⚠️⚠️ **CCM 之前**。官方 esp_video 也是硬编码这个采样点。
-         * 这一个字段决定了整个控制律的形态：统计**不穿过**被控块（CCM），
-         * 于是白点估计是**开环前馈**而不是闭环反馈 —— 建议增益是**绝对值**，
-         * 绝不能再乘当前增益。详见 cam_tune.h 的 CAM_AWB_SOURCE。
+         * ⚠️⚠️ **CCM 之前**，与官方 esp_video 硬编码的采样点一致。
+         * 这一个字段决定了 blob 拿到的是什么：统计**不穿过**被控块（CCM），
+         * 于是它给出的 red_gain/blue_gain 是**绝对值**而不是增量 ——
+         * cam_ipa.c 的 config_ccm() 正是按这个语义把它们右乘进 CCM 的。
+         * 换成 AFTER_CCM 会让整条白平衡变成正反馈。
          */
         .sample_point = ISP_AWB_SAMPLE_POINT_BEFORE_CCM,
         /*
@@ -1181,27 +774,31 @@ esp_err_t camera_csi_init(void)
          */
         .white_patch = {
             /*
-             * 三个框全部取官方 awb.range（cam_isp_cal.h），**不自己猜**。
+             * 三个框全部取官方 awb.range（sc202cs_default.json），**不自己猜**。
              * 亮度窗的量纲是 R+G+B（[0, 765]，驱动注释写死 255*3），官方给的却是
              * green 的范围 [98, 210] —— 换算式是官方桥接层自己的：
              *     lum = G × (1 + R/G + B/G) = R + G + B
              *     lum_max = 210 × (1 + 0.8790 + 0.6587) = 532.9 → 533
              *     lum_min =  98 × (1 + 0.3801 + 0.2903) = 163.7 → 164
-             * 推导写在 cam_isp_cal.h 的 CAM_CAL_LUM_MIN 那一段；**现场验算的办法**
-             * 是自检行里那个「平均G = Σg/白点数」，它应当落回 [98, 210]。
+             * **现场验算的办法**是自检行里那个「平均G = Σg/白点数」，
+             * 它应当落回 [98, 210]。
              *
-             * ⓘ 直接用 CAM_CAL_* 除 10000 得到浮点，而不是另抄一遍字面量：
-             *   两处字面量迟早会有一处忘了改，而这种错在画面上看不出来。
+             * ⚠️ 这四个比值与两个亮度界是**唯一**必须手抄进固件的官方标定量 ——
+             *   esp_isp_awb_controller 的白点框只能在**创建时**给定，而 blob 是在
+             *   pipeline 建起来之后才可能通过 IPA_METADATA_FLAGS_AWB 给出这个框。
+             *   顺序上够不着，所以这里照抄 sc202cs_default.json 的 awb.range：
+             *     green { max 210, min 98 }, rg { max 0.879, min 0.3801 },
+             *     bg    { max 0.6587, min 0.2903 }
+             *   （改标定文件时这六个数要跟着改，这是本次返工留下的唯一一处
+             *    「官方数据在两个地方各存一份」，别再增加第二处。）
              * ⓘ 驱动把这两个比值转成 2 位整数 + 8 位小数的定点（截断），
              *   ⇒ 硬件实际用的框是 0.37890625~0.87890625 / 0.2890625~0.65625，
              *   比这里写的略宽一点点（方向安全：宁可多收几个边界像素，
              *   重心那一关还有 cam_awb_step_hw 的 SKIP_RANGE 兜着）。
              */
-            .luminance        = { .min = CAM_CAL_LUM_MIN, .max = CAM_CAL_LUM_MAX },
-            .red_green_ratio  = { .min = CAM_CAL_RG_MIN / 10000.0f,
-                                  .max = CAM_CAL_RG_MAX / 10000.0f },
-            .blue_green_ratio = { .min = CAM_CAL_BG_MIN / 10000.0f,
-                                  .max = CAM_CAL_BG_MAX / 10000.0f },
+            .luminance        = { .min = 164, .max = 533 },
+            .red_green_ratio  = { .min = 0.3801f, .max = 0.879f },
+            .blue_green_ratio = { .min = 0.2903f, .max = 0.6587f },
         },
         /* ⚠️ 三个统计块（AE/AWB/AF）共用**一个** ISP 中断，intr_priority 必须与
          *   处理器一致（都是 0）。理由与失败表现见上面 ae_cfg 的同名字段。 */
@@ -1209,23 +806,21 @@ esp_err_t camera_csi_init(void)
     };
     s_st_awbstat = esp_isp_new_awb_controller(s_isp, &awb_cfg, &s_awb_ctlr);
     if (s_st_awbstat == ESP_OK) {
-        /* ⓘ **不注册 on_statistics_done**：它只在连续模式下才有意义，而我们只用
-         *   oneshot（结果从驱动内部那个 1 深的队列里取）。少一个 ISR 回调，
-         *   也就少一份「ISR 里能不能访问 flash」的约束。 */
-        s_st_awbstat = esp_isp_awb_controller_enable(s_awb_ctlr);
+        /* 连续模式要靠回调拿结果（见上面那段「为什么不用 oneshot」）。 */
+        const esp_isp_awb_cbs_t awb_cbs = { .on_statistics_done = cam_on_awb_stat };
+        s_st_awbstat = esp_isp_awb_register_event_callbacks(s_awb_ctlr, &awb_cbs, NULL);
     }
+    if (s_st_awbstat == ESP_OK)
+        s_st_awbstat = esp_isp_awb_controller_enable(s_awb_ctlr);
     if (s_st_awbstat != ESP_OK)
-        ESP_LOGW(TAG, "AWB 硬件统计没建起来(%s)，白点统计一直是 0",
+        ESP_LOGW(TAG, "AWB 硬件统计没建起来(%s)，白点统计一直是 0，白平衡停在初值",
                  esp_err_to_name((esp_err_t)s_st_awbstat));
-#endif
 
-#if CAM_HIST_ENABLE
     /*
-     * ══ 直方图统计 ══ **纯观测**（T11），不接任何控制律。
+     * ══ 直方图统计 ══ 官方 ian 模块重建 env.luma 用。
      *
-     * 失败**只降级不拦启动**（与 AE/AWB 统计、LSC、gamma、CCM 同一处置）：
-     * 建不起来时 s_st_hist 记下错误码、自检行照打，env.luma 恒为 0、
-     * gamma 停在固定档，取流本身是好的。
+     * 失败**只降级不拦启动**：建不起来时 IPA_STATS_FLAGS_HIST 不置位 ⇒ blob 的
+     * env.luma 拿不到输入，gamma 停在初值档，取流本身是好的。
      */
     const esp_isp_hist_config_t hist_cfg = {
         /*
@@ -1289,107 +884,14 @@ esp_err_t camera_csi_init(void)
     };
     s_st_hist = esp_isp_new_hist_controller(s_isp, &hist_cfg, &s_hist_ctlr);
     if (s_st_hist == ESP_OK) {
-        /* ⓘ **不注册 on_statistics_done**：它只在连续模式下才有意义，
-         *   而我们只用 oneshot（结果从驱动内部那个 1 深的队列里取）。 */
+        const esp_isp_hist_cbs_t hist_cbs = { .on_statistics_done = cam_on_hist_stat };
+        s_st_hist = esp_isp_hist_register_event_callbacks(s_hist_ctlr, &hist_cbs, NULL);
+    }
+    if (s_st_hist == ESP_OK)
         s_st_hist = esp_isp_hist_controller_enable(s_hist_ctlr);
-    }
     if (s_st_hist != ESP_OK)
-        ESP_LOGW(TAG, "直方图统计没建起来(%s)，env.luma 恒为 0、gamma 停在固定档，"
-                      "其余一切照常", esp_err_to_name((esp_err_t)s_st_hist));
-#endif
-
-#if CAM_LSC_ENABLE
-    /*
-     * ══ 镜头阴影校正（暗角）══ 官方 273 格 × 4 通道的标定表。
-     *
-     * ⚠️ **顺序有硬要求**：esp_isp_lsc_allocate_gain_array() 要求 lsc_fsm == INIT
-     *   （isp_lsc.c），必须排在 esp_isp_lsc_enable() 之前 —— 这也是为什么整段放在
-     *   init 里而不是取流之后。allocate 之后才轮到 configure（填表）与 enable。
-     *
-     * ⚠️ 网格数由 ISP 的 h_res/v_res 算出，不是我们定的：
-     *      num_grids = (res − 1)/2/32 + 2  ⇒  x: 21，y: 13  ⇒  273
-     *   与官方标定文件的 lsc_tbl_size **精确相等**（官方标定也是 1280×720，
-     *   不需要重采样）。哪天换了传感器模式这个 273 会变、而标定表不会变，
-     *   下面那条比对就是唯一会拦住它的地方 —— 不比对的话表会被错位填进 LUT，
-     *   现象是「暗角修正的位置整体偏了」，几乎不可能反查到这里。
-     *
-     * 失败**只降级不拦启动**（与 CCM 同一处置）：LSC 配不上只是画面保留暗角，
-     * 而取流本身是好的。
-     */
-    s_st_lsc = esp_isp_lsc_allocate_gain_array(s_isp, &s_lsc_gain, &s_lsc_n);
-    if (s_st_lsc == ESP_OK && s_lsc_n != CAM_CAL_LSC_GRIDS) {
-        ESP_LOGE(TAG, "LSC 网格数 %u 与标定表 %u 不符（ISP 分辨率变了？）",
-                 (unsigned)s_lsc_n, (unsigned)CAM_CAL_LSC_GRIDS);
-        s_st_lsc = ESP_ERR_INVALID_SIZE;
-    }
-    if (s_st_lsc == ESP_OK) {
-        s_lsc_ready = true;        /* 数组在、格数对 ⇒ 之后换档可以直接填 */
-        s_st_lsc = camera_lsc_apply(CAM_LSC_SLOT_DEFAULT);
-    }
-    if (s_st_lsc == ESP_OK)
-        s_st_lsc = esp_isp_lsc_enable(s_isp);
-#if CAM_LSC_BY_CT
-    /* 把跟踪器**预置**到开机这一档：不预置的话第一拍会因为 primed == false
-     * 无条件返回 true，白白再写一次 273×2 条 LUT 命令。 */
-    (void)cam_slot_changed(&s_lsc_track, CAM_LSC_SLOT_DEFAULT, 1);
-#endif
-    if (s_st_lsc != ESP_OK)
-        /* ⚠️ ESP_ERR_NOT_SUPPORTED 只有一个含义：**这块板的 efuse 报的芯片版本
-         *   低于 v1.0**（isp_lsc.c 的门是 ESP_CHIP_REV_ABOVE(rev,100)，而该宏是
-         *   `(min) <= (rev)`，v1.0 ⇒ 100<=100 为真）。真拿到它就去 esptool.py
-         *   chip_id 读实际版本，那会推翻本工程关于 LSC 的全部前提。 */
-        ESP_LOGW(TAG, "LSC 没配上(%s)，画面保留四角暗角，其余一切照常",
-                 esp_err_to_name((esp_err_t)s_st_lsc));
-#endif
-
-#if CAM_GAMMA_ENABLE
-    /*
-     * ══ gamma ══ 排在 LSC 之后、CCM 之前只是**书写顺序**，与硬件管线次序无关：
-     * 三者都只是往各自的寄存器组里写参数，谁先写都一样。真正有顺序要求的只有
-     * LSC 那三步（allocate → configure → enable，见上面）。
-     *
-     * 失败**只降级不拦启动**（与 LSC / CCM 同一处置）：gamma 配不上只是画面继续
-     * 偏暗，而取流本身是好的。此时 s_gamma_ready 保持假 ⇒ 统计层拿到 NULL 逆表
-     * ⇒ 画面是线性的、反馈量也按线性算，两侧仍然自洽。
-     */
-    s_st_gamma = camera_gamma_apply(CAM_GAMMA_SLOT);
-    if (s_st_gamma == ESP_OK) {
-        /* enable 有 FSM 门（重复调直接 ESP_ERR_INVALID_STATE），整个生命周期只调这一次。 */
-        s_st_gamma = esp_isp_gamma_enable(s_isp);
-        if (s_st_gamma != ESP_OK)
-            s_gamma_ready = false;   /* 曲线写进去了但没使能 ⇒ 画面仍是线性的，别逆 */
-    }
-    if (s_st_gamma != ESP_OK)
-        ESP_LOGW(TAG, "gamma 没配上(%s)，画面会明显偏暗（主机按 sRGB 解码线性图），"
-                      "其余一切照常", esp_err_to_name((esp_err_t)s_st_gamma));
-#endif
-
-    /*
-     * ══ 白平衡 ══ 用 **CCM 的对角线**顶替用不了的 WBG。
-     *
-     * 为什么非做不可：上面这条管线里 RAW→RGB 只有去马赛克一步，**没有任何一处
-     * 对三个通道施加不同的增益**。而 Bayer 阵列 50% 是绿色像素、绿滤光片透过率
-     * 也最高 ⇒ 不做白平衡的输出必然整体偏绿。这是管线的定义，不是「可能」。
-     * 完整依据（含「为什么不是 bayer order 配错」的三条论证）见 cam_tune.h 文件头。
-     *
-     * 这里配的是**开机初值**（cam_tune.h 的静态标定常量）。CAM_AWB_ENABLE = 1 时
-     * 闭环 AWB 会在取流后从这个初值出发接着调（camera_awb_tick）；= 0 时这就是
-     * 最终值，行为与闭环上线之前完全一致。
-     *
-     * 失败**只降级不拦启动**：CCM 配不上只是画面继续发绿，而取流本身是好的 ——
-     * 让一个画质改良把已经验证过的出图能力拖垮，是本末倒置。
-     * ⓘ 失败时 s_ccm_r/s_ccm_b 保持初值，而硬件里其实是单位阵；这对判读没有影响，
-     *   因为自检行第一格就是 CCM=<错误码>，看到它就该先修这个、别去读后面的数。
-     */
-#if CAM_AWB_ENABLE
-    cam_awb_init(&s_awb);       /* 初值 = 同一对静态标定值，两边不会各说各话 */
-#endif
-    s_st_ccm = camera_ccm_apply(CAM_CCM_GAIN_R_MILLI, CAM_CCM_GAIN_B_MILLI);
-    if (s_st_ccm == ESP_OK)
-        s_st_ccm = esp_isp_ccm_enable(s_isp);
-    if (s_st_ccm != ESP_OK)
-        ESP_LOGW(TAG, "CCM 白平衡没配上(%s)，画面会整体发绿，其余一切照常",
-                 esp_err_to_name(s_st_ccm));
+        ESP_LOGW(TAG, "直方图统计没建起来(%s)，官方 env.luma 拿不到输入、"
+                      "gamma 停在初值档，其余一切照常", esp_err_to_name((esp_err_t)s_st_hist));
 
     /*
      * ⚠️ **实测结论（与计划里的存疑处对应）：set_format 是必须的，不能省。**
@@ -1422,70 +924,23 @@ esp_err_t camera_csi_init(void)
     if (s_st_blc_rd == ESP_OK)
         s_blc_before = blc;
 
-#if CAM_SENSOR_BLC_ENABLE
     /*
-     * 写。**默认是关的**，完整的取舍、测法与判读表见 cam_tune.h 的
-     * CAM_SENSOR_BLC_ENABLE —— 一句话版本：那行 0xc0 来自厂商寄存器表里被注释掉
-     * 的一行、不是数据手册，所以第一版必须先量出基座本来是多少。
-     * 失败只 warning 不拦启动：写不进去等于什么都没做，画面保留基座。
+     * ══ 官方 esp_ipa 接管画质 ══ **必须排在 set_format 之后**：
+     * 曝光上下限、增益表、默认值都是传感器驱动在 set_format 里才填好的。
+     *
+     * 失败只降级不拦启动：画面停在 ISP 基础配置上（发绿 + 偏暗 + 暗角，
+     * 与总开关关掉时同一形态），而取流本身是好的 —— 让一个画质层把已经
+     * 验证过的出图能力拖垮，是本末倒置。
      */
-    s_st_blc_wr = esp_sccb_transmit_reg_a16v8(s_sccb, CAM_SENSOR_BLC_REG, CAM_SENSOR_BLC_VAL);
-    if (s_st_blc_wr == ESP_OK) {
-        /* 写完再读回来。SCCB 写返回 ESP_OK 只说明 I2C 层收到了 ACK，
-         * 不说明这个寄存器位真的可写 —— 只读位/保留位会安静地把写吃掉。 */
-        if (esp_sccb_transmit_receive_reg_a16v8(s_sccb, CAM_SENSOR_BLC_REG, &blc) == ESP_OK)
-            s_blc_after = blc;
-    } else {
-        ESP_LOGW(TAG, "传感器 BLC 没写进去(%s)，黑位保留基座",
-                 esp_err_to_name((esp_err_t)s_st_blc_wr));
-    }
+#if CAM_IPA_ENABLE
+    const esp_err_t ipa_err = cam_ipa_init(s_isp, s_sensor);
+    if (ipa_err != ESP_OK)
+        ESP_LOGW(TAG, "官方 IPA 没起来(%s)，画面会发绿+偏暗+带暗角，其余一切照常",
+                 esp_err_to_name(ipa_err));
+#else
+    ESP_LOGW(TAG, "CONFIG_AIO_CAM_IPA 关闭：ISP 只做去马赛克，"
+                  "画面会发绿+偏暗+带暗角、曝光固定 —— 这是排障档，不是产品形态");
 #endif
-
-    /*
-     * ══ 自动曝光的可调范围 ══ **一律运行时查，不写死。**
-     *
-     * 曝光上限跟着模式表的 VTS 走，增益表的长度与内容跟着 menuconfig 的
-     * CONFIG_CAMERA_SC202CS_ABSOLUTE_GAIN_LIMIT 与增益优先策略走（本工程当前是
-     * 数字增益优先那张表）。抄成常量必然在某次改配置时悄悄过期，而症状是
-     * 「曝光调不动」或者更坏 —— 越界下标。
-     *
-     * ⚠️ 必须排在 set_format **之后**：传感器驱动是在那里才把它内部的
-     *    exposure_max / 默认曝光/增益填好的（sc202cs.c:1346-1348）。
-     *
-     * 查不到就**关掉 AE**（s_ae_ready 保持 false），画面停在模式表的默认曝光上 ——
-     * 与改动前的行为完全一致，不会比现在更坏。
-     */
-    esp_cam_sensor_param_desc_t d_exp = { .id = ESP_CAM_SENSOR_EXPOSURE_VAL };
-    esp_cam_sensor_param_desc_t d_gain = { .id = ESP_CAM_SENSOR_GAIN };
-    s_st_ae = esp_cam_sensor_query_para_desc(s_sensor, &d_exp);
-    if (s_st_ae == ESP_OK)
-        s_st_ae = esp_cam_sensor_query_para_desc(s_sensor, &d_gain);
-    if (s_st_ae == ESP_OK && d_gain.enumeration.elements && d_gain.enumeration.count > 0 &&
-        d_exp.number.minimum > 0 && d_exp.number.maximum >= d_exp.number.minimum) {
-        s_ae_lim.exp_min    = (uint32_t)d_exp.number.minimum;
-        s_ae_lim.exp_max    = (uint32_t)d_exp.number.maximum;
-        s_ae_lim.gain_map   = d_gain.enumeration.elements;
-        s_ae_lim.gain_count = d_gain.enumeration.count;
-        /* 状态机的初值就是**芯片此刻的实际值** —— set_format 刚把这两个默认值写进去，
-         * 所以状态与硬件天然一致，不必再多发一次 SCCB 去「同步」。 */
-        cam_ae_init(&s_ae, &s_ae_lim, (uint32_t)d_exp.default_value,
-                    (uint32_t)d_gain.default_value);
-        s_ae_ready = true;
-        ESP_LOGI(TAG, "AE 就绪：曝光 %" PRIu32 "~%" PRIu32 "（默认 %" PRIu32 "），"
-                      "增益 %" PRIu32 " 档（%u.%03u×~%u.%03u×，上限按 cam_tune.h 压到 %u.%03u×），"
-                      "目标亮度 %d",
-                 s_ae_lim.exp_min, s_ae_lim.exp_max, s_ae.exposure, s_ae_lim.gain_count,
-                 (unsigned)(s_ae_lim.gain_map[0] / 1000), (unsigned)(s_ae_lim.gain_map[0] % 1000),
-                 (unsigned)(s_ae_lim.gain_map[s_ae_lim.gain_count - 1] / 1000),
-                 (unsigned)(s_ae_lim.gain_map[s_ae_lim.gain_count - 1] % 1000),
-                 (unsigned)(CAM_AE_GAIN_MAX_MILLI / 1000), (unsigned)(CAM_AE_GAIN_MAX_MILLI % 1000),
-                 CAM_AE_TARGET);
-    } else {
-        if (s_st_ae == ESP_OK)
-            s_st_ae = ESP_ERR_INVALID_RESPONSE;   /* 查成功了但内容不可用 */
-        ESP_LOGW(TAG, "拿不到曝光/增益的可调范围(%s)，自动曝光关闭，"
-                      "画面固定在模式表的默认曝光上", esp_err_to_name(s_st_ae));
-    }
 
     ESP_LOGI(TAG, "CSI+ISP 就绪：%dx%d RAW8→RGB565，%d 块帧缓冲各 %u 字节"
                   "（共 %u KB PSRAM）；**尚未取流**",
@@ -1527,12 +982,11 @@ esp_err_t camera_csi_start(void)
         return err;
     }
 
-#if CAM_AE_STAT_ENABLE
     /*
-     * 统计**只在取流时跑**（硬约束：摄像头不取流时零影响）。
+     * 三块统计**只在取流时跑**（硬约束：摄像头不取流时零影响）。
      * 排在 esp_isp_enable() 成功之后：start_continuous 会立刻发一次
-     * isp_ll_ae_manual_update() 触发第一帧统计，ISP 没使能时那一发是空放。
-     * 建控制器失败时（s_st_aestat != ESP_OK）不碰这里 —— 句柄是 NULL。
+     * manual_update 触发第一帧统计，ISP 没使能时那一发是空放。
+     * 建控制器失败的那一块不碰 —— 它的句柄是 NULL。
      */
     if (s_st_aestat == ESP_OK) {
         s_st_aerun = esp_isp_ae_controller_start_continuous_statistics(s_ae_ctlr);
@@ -1540,7 +994,18 @@ esp_err_t camera_csi_start(void)
             ESP_LOGW(TAG, "AE 连续统计没启动(%s)，25 块亮度会一直是 0",
                      esp_err_to_name((esp_err_t)s_st_aerun));
     }
-#endif
+    if (s_st_awbstat == ESP_OK) {
+        s_st_awbrun = esp_isp_awb_controller_start_continuous_statistics(s_awb_ctlr);
+        if (s_st_awbrun != ESP_OK)
+            ESP_LOGW(TAG, "AWB 连续统计没启动(%s)，白点数会一直是 0",
+                     esp_err_to_name((esp_err_t)s_st_awbrun));
+    }
+    if (s_st_hist == ESP_OK) {
+        s_st_histrun = esp_isp_hist_controller_start_continuous_statistics(s_hist_ctlr);
+        if (s_st_histrun != ESP_OK)
+            ESP_LOGW(TAG, "直方图连续统计没启动(%s)，16 个 bin 会一直是 0",
+                     esp_err_to_name((esp_err_t)s_st_histrun));
+    }
 
     s_streaming = true;
     ESP_LOGI(TAG, "取流已开始（CSI 每秒往 PSRAM 写约 %u MB）",
@@ -1580,16 +1045,22 @@ esp_err_t camera_csi_stop(void)
     keep_first_err(&err, "传感器 stream off",
                    esp_cam_sensor_ioctl(s_sensor, ESP_CAM_SENSOR_IOC_S_STREAM, &off));
     keep_first_err(&err, "CSI stop",    esp_cam_ctlr_stop(s_cam));
-#if CAM_AE_STAT_ENABLE
-    /* ⚠️ 必须排在 `ISP disable` **之前**：先让统计块停下来，再关 ISP。
-     * 反过来的话 disable 之后还可能收到最后一次 AE 中断。
+    /* ⚠️ 三块统计必须排在 `ISP disable` **之前**：先让统计块停下来，再关 ISP。
+     * 反过来的话 disable 之后还可能收到最后一次统计中断。
      * 顺序理由与既有四步停流一致（先停数据源，再关块），并同样 keep_first_err 记账。
      * 幂等由 s_streaming 那道闸保证：驱动的 FSM 门只允许 ENABLE↔CONTINUOUS 各一次。 */
     if (s_st_aestat == ESP_OK) {
         s_st_aerun = esp_isp_ae_controller_stop_continuous_statistics(s_ae_ctlr);
         keep_first_err(&err, "AE 统计 stop", (esp_err_t)s_st_aerun);
     }
-#endif
+    if (s_st_awbstat == ESP_OK) {
+        s_st_awbrun = esp_isp_awb_controller_stop_continuous_statistics(s_awb_ctlr);
+        keep_first_err(&err, "AWB 统计 stop", (esp_err_t)s_st_awbrun);
+    }
+    if (s_st_hist == ESP_OK) {
+        s_st_histrun = esp_isp_hist_controller_stop_continuous_statistics(s_hist_ctlr);
+        keep_first_err(&err, "直方图统计 stop", (esp_err_t)s_st_histrun);
+    }
     keep_first_err(&err, "ISP disable", esp_isp_disable(s_isp));
     keep_first_err(&err, "CSI disable", esp_cam_ctlr_disable(s_cam));
     s_streaming = false;
@@ -1648,568 +1119,90 @@ esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms)
     return ESP_OK;
 }
 
-/*
- * 定这一拍的 AE 目标（T12）。**必须排在 camera_ae_tick() 之前。**
- *
- * 用的是**上一次直方图**的两个标量（1 Hz 更新）而不是本帧的软件统计：背光是
- * 场景属性、不是逐帧属性，用秒级的量去判它正合适；而且这两个标量与 env.luma
- * 同源，「背光判定」与「gamma 选档」看的是同一份数据，现场对照不会各说各话。
- */
-static void camera_ae_target_tick(void)
-{
-#if CAM_HIST_ENABLE
-    const bool bl = cam_ae_backlight(s_hist_bright_pct, s_hist_mean);
-#else
-    /* 走不到：CAM_BACKLIGHT_ENABLE=1 且 CAM_HIST_ENABLE=0 已被上面的 #error 拦下。
-     * 留着这一支是为了「直方图关掉」这个 bisect 构建仍然能编过。 */
-    const bool bl = false;
-#endif
-    if (bl != s_backlight)
-        s_backlight_switches++;
-    s_backlight = bl;
-    s_ae_target = cam_ae_target(bl);
-}
+/* ══ 统计 → 官方 esp_ipa ═════════════════════════════════════════════ */
 
-#if CAM_GAMMA_ENABLE && CAM_GAMMA_ADAPTIVE
-/* 实际换过多少次档（与「想换档=」分开：后者是 env 选出来的，前者是真下发了的）。 */
-static uint32_t s_gamma_applied;
+/* 最近一帧的内容统计，自检行用（**纯观测**，不参与任何控制）。 */
+static cam_frame_stats_t s_last_stats;
 
-/*
- * 按 env.luma 选出的档换 gamma（T12）。
- *
- * ⚠️⚠️ **换档 = 重配硬件曲线 + 重建统计侧逆表，两件事必须同时发生。**
- *   这条由 camera_gamma_apply() 的结构保证（它自己把两件事绑在一起），
- *   所以这里只需要「决定换哪一档」，不许在别处再摸 s_gamma_inv/s_gamma_slot。
- *
- * 迟滞已经在 cam_gamma_slot() 里做掉了（官方 luma_min_step = 3.0），这里不再叠
- * 第二层 —— 两层迟滞会让「为什么不换档」变成一个要同时看两处的问题。
- *
- * ⓘ esp_isp_gamma_configure() 在运行期实际上不可能失败：x 栅格四档完全相同、
- *   y 是编译期常量表、s_isp 非空。真拿到错误码就停在这一档不再尝试
- *   （s_st_gamma 记下它，自检行第一格直接可见），而不是反复重试刷屏。
- */
-static void camera_gamma_tick(void)
-{
-    if (s_st_gamma != ESP_OK || !s_gamma_ready)
-        return;                                   /* 开机就没配上：别在这里补救 */
-    if (s_gamma_slot_want >= CAM_CAL_GAMMA_N)
-        return;                                   /* env 还没算出过（直方图没出数） */
-    if (s_gamma_slot_want == s_gamma_slot)
-        return;
-
-    const uint32_t from = s_gamma_slot;
-    s_st_gamma = camera_gamma_apply(s_gamma_slot_want);
-    if (s_st_gamma != ESP_OK) {
-        ESP_LOGW(TAG, "gamma 换档 %" PRIu32 "→%" PRIu32 " 失败(%s)，"
-                      "**硬件可能停在三通道不一致的中间态**，不再尝试换档",
-                 from, s_gamma_slot_want, esp_err_to_name((esp_err_t)s_st_gamma));
-        return;
-    }
-    s_gamma_applied++;
-    ESP_LOGI(TAG, "gamma 换档 %" PRIu32 "→%" PRIu32 "（γ=%u.%03u，env.luma=%" PRIu32
-                  ".%" PRIu32 "），统计侧逆表已同步重建",
-             from, s_gamma_slot,
-             (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] / 1000),
-             (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] % 1000),
-             s_env_q1 / 10, s_env_q1 % 10);
-}
-#endif  /* CAM_GAMMA_ENABLE && CAM_GAMMA_ADAPTIVE */
-
-/* AE 走一拍：算出新的曝光/增益并经 SCCB 下发。
- * **只换反馈量的来源，控制律（四道防振荡闸）一行不动**，见 cam_tune.h 的 CAM_AE_SOURCE。 */
-static void camera_ae_tick(const cam_frame_stats_t *st)
-{
-    (void)st;   /* CAM_AE_SOURCE = 1 时用不到软件统计 */
-    if (!s_ae_ready)
-        return;
-
-#if CAM_AE_SOURCE
-    /*
-     * 硬件 5×5 加权测光。官方权重表 + 过暗/过亮块 quorum 剔除，
-     * 归约逻辑在 cam_ae_weighted_mean()（纯逻辑，490 个宿主机用例守着）。
-     */
-    uint8_t blocks[25], lum = 0, nd = 0, nb = 0;
-    if (cam_ae_stat_snapshot(blocks, &lum, &nd, &nb) == 0)
-        return;   /* 统计块一帧都还没交付：这一拍不动，别拿全 0 去调曝光 */
-#else
-    /*
-     * ⚠️ 喂进去的是 **lin_lum_mean**（逆 gamma 还原过的线性亮度），不是 lum_mean。
-     * CAM_AE_TARGET 是线性域的量：gamma 是逐通道的凹函数，把线性 62 抬到 126，
-     * 拿 gamma 域的均值去比 62 会让 AE 以为已经过曝一倍、把曝光一路往下压。
-     * gamma 关着时两者逐位相等 ⇒ 这一行在两种构建下都对。
-     */
-    const uint8_t lum = st->lin_lum_mean;
+/* 三块统计各自交付了多少帧 —— 自检行要能分出「哪一块没在跑」。 */
+static uint32_t s_ae_frames, s_awb_frames, s_hist_frames;
+#if CAM_IPA_ENABLE
+/* 送进 blob 的序号。官方用它判断「这份统计是不是新的」。 */
+static uint64_t s_stats_seq;
 #endif
 
-    if (!cam_ae_step(&s_ae, lum, s_ae_target, &s_ae_lim))
-        return;   /* 没到更新周期 / 落在死区 / 已顶到限位：别去打扰 I2C 总线 */
-
-    /*
-     * 曝光与增益**一次调用一起下发**（ESP_CAM_SENSOR_GROUP_EXP_GAIN）。
-     * 分两次发的话，两次之间会漏出一帧「新曝光 + 旧增益」的画面 —— 亮度跳一下，
-     * 而 AE 下一拍恰好会把这一帧的亮度当成反馈，等于自己给自己注入扰动。
-     * exposure_us 传 0 表示「用 exposure_val 这个原始寄存器值」（组件约定，
-     * esp_cam_sensor_types.h:466-470）：我们的控制量本来就是寄存器域的，
-     * 走 us 会多一次浮点往返换算，白白引入量化误差。
-     *
-     * ⓘ 代价：6 次 SCCB 写（曝光 3 + 增益 3），100 kHz 下约 2 ms，最快 300 ms
-     *   一次 ⇒ 占这条共用 I2C 总线不到 1%。触摸那 20 ms 一次的轮询感觉不到。
-     */
-    const esp_cam_sensor_gh_exp_gain_t v = {
-        .exposure_us  = 0,
-        .exposure_val = s_ae.exposure,
-        .gain_index   = s_ae.gain_index,
-    };
-    s_ae_last_err = esp_cam_sensor_set_para_value(s_sensor, ESP_CAM_SENSOR_GROUP_EXP_GAIN,
-                                                  &v, sizeof(v));
-    if (s_ae_last_err != ESP_OK)
-        ESP_LOGW(TAG, "曝光/增益下发失败(%s)", esp_err_to_name((esp_err_t)s_ae_last_err));
-}
-
-#if CAM_AWB_STAT_ENABLE
 /*
- * 触发一次硬件白点统计。**每拍都调，分频在函数内部做**（与 cam_awb_step 的
- * 频率限制同一处置：调用方不该记着「隔几拍才调一次」这种事）。
+ * 把三块硬件统计填成 esp_ipa_stats_t。
  *
- * ⚠️ 这是本文件里唯一一处**会阻塞帧泵**的调用：最坏 CAM_AWB_ONESHOT_MS = 60 ms，
- *   典型 ≈ 一个传感器帧周期 33 ms。帧泵是 100 ms 的固定节拍，预算够（取帧 +
- *   统计 + 缩放 4.2 ms + 编码 9.1 ms + 这 35 ms）。fps 掉下来时先拉长周期，
- *   再考虑把这一调用挪到 uvc_stream.c 提交之后 —— 判读见 cam_tune.h。
+ * 逐条对应 esp_video/src/esp_video_isp_pipeline.c 的 isp_stats_to_ipa_stats()：
+ *   AE   → ae_stats[i*5 + j].luminance      （25 块，与驱动填 luminance[i][j] 同序）
+ *   AWB  → awb_stats[0] 的 counted/sum_r/g/b（ISP_AWB_REGIONS = 1，只有全局那一桶）
+ *   HIST → hist_stats[i].value              （16 段）
  *
- * ⓘ **只在取流中调**：调用方 camera_csi_tune_tick() 已经有 s_streaming 那道闸，
- *   这里不再重复判断，但「alt 0 下触发= 不涨」这条现场判据正是靠它成立的。
+ * ⚠️ **哪一块没交付过帧，就不置它的 flag 位。** blob 是按位判断输入有没有的，
+ *   置了位却给全 0 与「没给」是完全不同的两件事 —— 前者会让它以为画面全黑，
+ *   把曝光一路推到顶。
+ *
+ * 返回 true = 至少有一块统计可用（值得调 process()）。
+ *
+ * ⓘ 只在 CAM_IPA_ENABLE 下编译：开关关掉时没有消费者，留着会是一个
+ *   -Wunused-function 告警（本工程要求两档零告警）。三块统计的 snapshot
+ *   helper 不受影响 —— 自检行两档都要用它们。
  */
-static void camera_awb_stat_tick(void)
+#if CAM_IPA_ENABLE
+static bool cam_fill_ipa_stats(esp_ipa_stats_t *st)
 {
-    /*
-     * res 做成 static 而不是栈上局部量：isp_awb_stat_result_t 有 432 字节
-     * （其中 400 字节是 rev < 3.0 上根本不存在的 subwindow 结果，驱动 ISR 仍会
-     * 无条件填），而帧泵任务的栈只有 4 KB。它只被帧泵这一个任务碰，没有重入。
-     */
-    static isp_awb_stat_result_t res;
+    memset(st, 0, sizeof *st);
+    st->seq = ++s_stats_seq;
 
-    s_awb_hw_fresh = false;
-    if (s_st_awbstat != ESP_OK)
-        return;
-    if (--s_awb_phase)
-        return;                     /* 还没到点 */
-    s_awb_phase = CAM_AWB_INTERVAL_TICKS;
-
-    s_awb_trigs++;
-    s_st_awbrun = esp_isp_awb_controller_get_oneshot_statistics(s_awb_ctlr,
-                                                                CAM_AWB_ONESHOT_MS, &res);
-    if (s_st_awbrun != ESP_OK) {
-        /* 超时：这一拍**什么都不做**（不是拿旧数据凑合）。s_awb_hw 保持上一次
-         * 的值只为自检行还有东西可看；s_awb_hw_fresh = false 保证控制律不会用它。 */
-        s_awb_timeouts++;
-        return;
-    }
-    s_awb_hw.counted = res.white_patch_num;
-    s_awb_hw.sum_r   = res.sum_r;
-    s_awb_hw.sum_g   = res.sum_g;
-    s_awb_hw.sum_b   = res.sum_b;
-    s_awb_hw_fresh   = true;
-
-    /*
-     * ══ 色温估计：**本文件唯一的 s_cct_k 写入点**（T10/T13 的索引量）══
-     *
-     * 放在这里而不是 camera_awb_tick()，是因为 CCT 与「AWB 要不要动增益」是两件
-     * 独立的事：白点重心越界、落在死区、AE 没稳……这些都让 AWB 一步不走，但
-     * **色温估计本身仍然有效**（它只需要重心，不需要控制律放行）。挂在控制律上
-     * 的话，「AWB 已收敛不动了」会连带把 CCM/LSC/饱和度全部冻住。
-     *
-     * cam_awb_ratios() 返回 false 只说「这份采样算不出比值」（counted = 0 或扣完
-     * 基座后 Σg = 0）—— 那时保持上一次的 CCT，不退回默认值：色温不会因为某一秒
-     * 采样失败就真的跳回 5210 K。
-     *
-     * ⚠️ **白点数必须达到官方 min_counted（T13 加的闸）。** 这是「CCT 可不可信」
-     *   这件事的唯一判据，而且把它放在**输入端**：可信性是那个数的属性，不是
-     *   某一拍的属性。于是三个消费者（CCM 的档、LSC 的档、饱和度）自动都只在
-     *   可信的 CCT 上动 —— 白点不够的场景（镜头怼着单色物体）里 CCT 整个冻住，
-     *   而 AWB 的控制律本来就用同一个门限拒绝动增益，两者口径一致。
-     *   计划里 T13 写的是「只在 AWB 判定 APPLIED 或 SKIP_BAND 的那一拍评估 LSC」，
-     *   本实现改成这一条：更简单，且顺带把 T10 的 CCM 换档也一起管住了。
-     */
-    uint32_t rg = 0, bg = 0;
-    if (s_awb_hw.counted >= CAM_CAL_MIN_COUNTED && cam_awb_ratios(&s_awb_hw, &rg, &bg)) {
-        s_cct_k     = cam_cct_from_rg(rg);
-        s_cct_valid = true;
-    }
-}
-#endif  /* CAM_AWB_STAT_ENABLE */
-
-#if CAM_HIST_ENABLE
-/*
- * 触发一次直方图统计，并把 16 个 bin 归约成三个标量 + 重建 env.luma。
- * **每拍都调，分频在函数内部做**（与 AWB 的 oneshot 同一处置）。
- *
- * ⚠️ 这是本文件里第二处**会阻塞帧泵**的调用（第一处是 AWB 的 oneshot）。
- *   两者的相位被刻意错开半个周期（CAM_HIST_PHASE = 5 对 AWB 的 10），
- *   任何一拍里最多只有一次 60 ms 的阻塞 —— 帧泵是 100 ms 的固定节拍，
- *   撞在一起就会 120 ms 超时、「拒收」立刻非零。**改任一个周期时要一起看。**
- *
- * ⓘ 只在取流中调（调用方 camera_csi_tune_tick() 已经有 s_streaming 那道闸），
- *   「alt 0 下触发= 不涨」这条现场判据正是靠它成立的。
- */
-static void camera_hist_tick(int ae_target)
-{
-    /* 与 AWB 的 res 同一处置：isp_hist_result_t 64 字节，放 static 避免占用
-     * 帧泵任务那 4 KB 的栈。只被帧泵这一个任务碰，没有重入。 */
-    static isp_hist_result_t res;
-
-    if (s_st_hist != ESP_OK)
-        return;
-    if (--s_hist_phase)
-        return;                                 /* 还没到点 */
-    s_hist_phase = CAM_HIST_INTERVAL_TICKS;
-
-    s_hist_trigs++;
-    s_st_histrun = esp_isp_hist_controller_get_oneshot_statistics(s_hist_ctlr,
-                                                                  CAM_HIST_ONESHOT_MS, &res);
-    if (s_st_histrun != ESP_OK) {
-        /* 超时：这一拍什么都不做（不拿旧数据凑合）。上一次的 bin 保留着，
-         * 只为自检行还有东西可看。 */
-        s_hist_timeouts++;
-        return;
-    }
-
-    s_hist_total = 0;
-    for (int i = 0; i < 16; i++) {
-        s_hist_bins[i] = res.hist_value[i];
-        s_hist_total  += res.hist_value[i];
-    }
-    cam_hist_stats(s_hist_bins, &s_hist_mean, &s_hist_bright_pct, &s_hist_dark_pct);
-
-    /*
-     * ══ env.luma 重建 ══ 依据见 cam_tune.h 的 CAM_ENV_MODEL（标 [反推]，非确证）。
-     *
-     * AE 没就绪时 s_ae.ev 是 0，两条路径都返回 0 —— 自检行据此打「n/a」而不是
-     * 「0」，否则「env=0」会同时表示「环境亮到爆」和「AE 还没起来」两件事。
-     */
-#if CAM_ENV_MODEL
-    s_env_q1 = cam_env_luma_q1(s_ae.ev, s_hist_mean, (uint8_t)ae_target);
-#else
-    static const uint32_t k_ev_breaks[CAM_CAL_GAMMA_N] = CAM_ENV_EV_BREAKS;
-    (void)ae_target;
-    s_env_q1 = cam_env_luma_from_ev(s_ae.ev, k_ev_breaks);
-#endif
-    if (s_env_q1) {
-        if (s_env_q1 < s_env_min_q1) s_env_min_q1 = s_env_q1;
-        if (s_env_q1 > s_env_max_q1) s_env_max_q1 = s_env_q1;
-        const uint32_t want = cam_gamma_slot(s_env_q1, s_gamma_slot_want);
-        if (want != s_gamma_slot_want && s_gamma_slot_want < CAM_CAL_GAMMA_N)
-            s_gamma_slot_switches++;
-        s_gamma_slot_want = want;
-        s_env_slots_seen |= 1u << want;
-    }
-}
-#endif  /* CAM_HIST_ENABLE */
-
-#if CAM_AWB_ENABLE
-/* AWB 走一拍：算出新的 R/B 增益并重配 CCM。控制律与全部防护判据在 cam_tune.c。 */
-static void camera_awb_tick(const cam_frame_stats_t *st)
-{
-    /*
-     * AE 是否已收敛 —— AWB 只在亮度稳定的窗口里采信颜色统计（理由见 cam_tune.h
-     * 的 cam_awb_step）。
-     * ⚠️ AE **关着**（查不到可调范围）时要传 true 而不是 false：那种情况下曝光
-     *    恒定不变，亮度天然是稳的，正是最该采信统计的时候。传 false 会让 AWB
-     *    永远一步不走，而且现场只看到「AE未稳」这个自相矛盾的理由。
-     */
-    const bool ae_stable = !s_ae_ready || cam_ae_converged(&s_ae);
-
-#if CAM_AWB_SOURCE
-    (void)st;   /* 硬件白点那条路用不到软件统计 */
-    /*
-     * ⚠️⚠️ **绝对增益，不是增量。** 统计采在 CCM **之前** ⇒ 读数里不含已经生效
-     * 的增益 ⇒ cam_awb_step_hw() 直接给出「总共该乘多少」。它的签名里拿不到当前
-     * 增益，所以这里也**没有任何东西可以传错**。完整说明见 cam_tune.h 的
-     * CAM_AWB_SOURCE，误用旧公式的后果是增益单调发散而计数器一切正常。
-     *
-     * 只有拿到**新采样**的那一拍才走控制律：s_awb_hw_fresh 由上面的
-     * camera_awb_stat_tick() 每拍重置，周期完全由 oneshot 的触发节奏决定
-     * （cam_awb_step_hw 自己**不再做频率限制**，两处都分频会变成 10 秒一次）。
-     * 采样超时的那一拍同样走这里返回 —— 不拿旧数据凑合。
-     */
-    if (!s_awb_hw_fresh)
-        return;
-    if (cam_awb_step_hw(&s_awb, &s_awb_hw, ae_stable) != CAM_AWB_APPLIED)
-        return;
-#else
-    /*
-     * ⓘ **T6 换了 AE 的测量口径，对 AWB 的影响只有一处：这个 ae_stable 的时机。**
-     *   AWB 自己的输入（软件线性通道均值）与公式一个字都没动 ⇒ 行为等价。
-     *   现场判据：自检行 AWB 那排「未更新：」直方图的分布应与 T5 时同量级，
-     *   尤其 `AE未稳=` 不该暴涨。若它暴涨，说明官方那个非对称死区（−6/+2）
-     *   在本板上太窄、AE 报不出收敛 —— 那时先看 AE 是不是在死区两侧来回跨，
-     *   再决定是放宽 CAM_AE_TARGET_LOW/HIGH 还是退回 CAM_AE_SOURCE = 0。
-     */
-
-    /*
-     * ⚠️ 四个反馈量全部取**线性域**那一份。灰世界算的是通道**比值**，而 gamma 是
-     * 逐通道的幂律 ⇒ 它把比值压向 1（1.23 在 γ=0.605 档上被压成 1.135，−7.7%）
-     * ⇒ 直接拿 gamma 域的均值去闭环，AWB 会**系统性地欠校正**，而且欠多少随
-     * 画面亮度变化（幂律不是等比缩放）。逆回线性域之后 cam_awb_suggest() 的
-     * 幂等性才继续成立。
-     */
-    if (cam_awb_step(&s_awb, st->lin_lum_mean, st->lin_r_mean, st->lin_g_mean,
-                     st->lin_b_mean, ae_stable) != CAM_AWB_APPLIED)
-        return;
-#endif  /* CAM_AWB_SOURCE */
-
-    s_awb_last_err = camera_ccm_apply(s_awb.gain_r_milli, s_awb.gain_b_milli);
-    if (s_awb_last_err != ESP_OK) {
-        /*
-         * ⚠️ 写不进去就**把状态机回滚到硬件里实际生效的那一对**。
-         * 不回滚的话状态机以为增益已经变了、而画面反映的还是旧增益 —— 下一拍
-         * 它会拿旧画面去校正新系数，cam_awb_suggest() 赖以成立的幂等性当场失效，
-         * 表现为白平衡缓慢单向漂移。这条路径实际上走不到（系数被钳在
-         * [CAM_AWB_GAIN_MIN_MILLI, CAM_AWB_GAIN_MAX_MILLI] ⊂ [1.0, 4.0)，
-         * esp_isp_ccm_configure() 只在 NaN/超范围时失败），但「状态机必须永远
-         * 镜像硬件」是个不该靠「反正失败不了」维持的不变式。
-         *
-         * ⓘ 硬件白点那条路（CAM_AWB_SOURCE = 1）**同样需要这次回滚**，只是理由
-         *   不同：那条路的建议值与当前增益无关，不回滚不会漂；但状态机一旦与
-         *   硬件说的不是同一回事，自检行打的「当前 R×/B×」就成了假话，
-         *   而那一行正是抄回 cam_tune.h 做静态标定的依据。
-         */
-        s_awb.gain_r_milli = s_ccm_r;
-        s_awb.gain_b_milli = s_ccm_b;
-        ESP_LOGW(TAG, "AWB 重配 CCM 失败(%s)，白平衡回滚到上一组系数",
-                 esp_err_to_name((esp_err_t)s_awb_last_err));
-    }
-}
-#endif
-
-#if CAM_AEN_ENABLE
-/*
- * 把此刻的对比度与饱和度一起写进 Color 块。
- *
- * **两个值必须由同一次 configure 下发** —— esp_isp_color_config_t 是整体覆盖，
- * 没有「只改饱和度」这种写法。所以它们各自的持有者（对比度按增益选、饱和度按
- * 色温选）都只更新自己的那个变量，然后调本函数；分别 configure 会让后一次把
- * 前一次的值覆盖回默认。
- *
- * ⓘ 色调与亮度恒为 0：官方 SC202CS 标定里没有 hue / brightness 字段，写 0
- *   就是对齐；顺带避开 rev<3.0 只有 8 bit 色调（HAL 内部做 hue×256/360 折算）
- *   的精度坑。
- */
-static esp_err_t camera_color_apply(void)
-{
-    const esp_isp_color_config_t cfg = {
-        .color_contrast   = { .val = s_contrast_val },
-        .color_saturation = { .val = s_sat_val },
-        .color_hue        = 0,
-        .color_brightness = 0,
-        .flags = { .update_once_configured = 1 },
-    };
-    return esp_isp_color_configure(s_isp, &cfg);
-}
-#endif  /* CAM_AEN_ENABLE */
-
-#if (CAM_LSC_ENABLE && CAM_LSC_BY_CT) || (CAM_AEN_ENABLE && CAM_SAT_BY_CT)
-/*
- * ══ 按色温选 LSC 档与饱和度（T13）══ L3 的最后两项。
- *
- * 两级共用同一个 s_cct_k（唯一写入点在 camera_awb_stat_tick），所以它们与 CCM
- * 永远看的是同一个色温 —— 现场若发现三者「说的不是同一件事」，那是代码错了，
- * 不是估计漂了。
- *
- * ⚠️ **必须排在 camera_aen_tick() 之前**：开机第一拍 Color 块还没 configure 过
- *   （更没 enable），这里只更新 s_sat_val、不下发（s_color_enabled 那道闸），
- *   紧接着 aen_tick 那一次 configure 就带着正确的饱和度一起下去了 ——
- *   省掉开机时一次「先 128 再 130」的无谓重配。
- */
-static void camera_ct_feedfwd_tick(void)
-{
-#if CAM_LSC_ENABLE && CAM_LSC_BY_CT
-    if (s_lsc_ready) {
-        /* 三档中心 2410 / 5210 / 8200 K，取**最近邻**（不插值，理由见 cam_tune.h）。 */
-        const uint32_t slot = cam_map_cct_nearest(cam_cal_lsc_cct, CAM_CAL_LSC_N, s_cct_k);
-        /* 迟滞是别处的两倍：273×2 条 LUT 写是本工程最贵的一次重配，而 rev v1.0
-         * 没有影子寄存器 —— 写到一半就是可见的暗角跳变（理由见 cam_tune.h）。 */
-        if (cam_slot_changed(&s_lsc_track, slot, CAM_FEEDFWD_HYST_TICKS * 2)) {
-            s_st_lsc = camera_lsc_apply(slot);
-            s_lsc_switches++;
-            if (s_st_lsc != ESP_OK)
-                ESP_LOGW(TAG, "LSC 换档到 %" PRIu32 " 失败(%s)，"
-                              "**LUT 可能停在写了一半的状态**（暗角修正会不对）",
-                         slot, esp_err_to_name((esp_err_t)s_st_lsc));
+    if (s_st_aestat == ESP_OK) {
+        uint8_t blocks[25];
+        s_ae_frames = cam_ae_stat_snapshot(blocks);
+        if (s_ae_frames) {
+            for (int i = 0; i < ISP_AE_BLOCK_X_NUM; i++)
+                for (int j = 0; j < ISP_AE_BLOCK_Y_NUM; j++)
+                    st->ae_stats[i * ISP_AE_BLOCK_Y_NUM + j].luminance =
+                        blocks[i * ISP_AE_BLOCK_Y_NUM + j];
+            st->flags |= IPA_STATS_FLAGS_AE;
         }
     }
-#endif
 
-#if CAM_AEN_ENABLE && CAM_SAT_BY_CT
-    {
-        /*
-         * 官方 acc.saturation 两档：{0 → 128, 4500 → 130}。门限两侧各留
-         * CAM_SAT_CT_HYST_K 的迟滞带，带内保持当前值（不是取中间值 ——
-         * 只有两档，没有中间值可取）。
-         */
-        const uint32_t edge = cam_cal_saturation[1].cct_k;
-        uint8_t want = s_sat_val;
-        if (s_cct_k >= edge + CAM_SAT_CT_HYST_K)
-            want = cam_cal_saturation[1].value;
-        else if (s_cct_k + CAM_SAT_CT_HYST_K < edge)
-            want = cam_cal_saturation[0].value;
-        if (cam_slot_changed(&s_sat_track, want, CAM_FEEDFWD_HYST_TICKS)) {
-            s_sat_val = want;
-            s_sat_switches++;
-            /* Color 块还没 configure 过时不下发：紧跟其后的 aen_tick 会带上它。 */
-            if (s_color_enabled)
-                s_st_color = camera_color_apply();
+    if (s_st_awbstat == ESP_OK) {
+        uint32_t counted = 0, r = 0, g = 0, b = 0;
+        s_awb_frames = cam_awb_stat_snapshot(&counted, &r, &g, &b);
+        if (s_awb_frames) {
+            st->awb_stats[0].counted = counted;
+            st->awb_stats[0].sum_r   = r;
+            st->awb_stats[0].sum_g   = g;
+            st->awb_stats[0].sum_b   = b;
+            st->flags |= IPA_STATS_FLAGS_AWB;
+            /* ⓘ 不置 IPA_STATS_FLAGS_AWB_SUBWIN：rev < 3.0 上 subwindow 不可用
+             *   （驱动打个 warning 就跳过配置），awb_subwin[][] 保持全零。 */
         }
     }
-#endif
+
+    if (s_st_hist == ESP_OK) {
+        uint32_t bins[ISP_HIST_SEGMENT_NUMS];
+        s_hist_frames = cam_hist_stat_snapshot(bins);
+        if (s_hist_frames) {
+            for (int i = 0; i < ISP_HIST_SEGMENT_NUMS; i++)
+                st->hist_stats[i].value = bins[i];
+            st->flags |= IPA_STATS_FLAGS_HIST;
+        }
+    }
+
+    /* ⓘ SHARPEN / AF 两块统计本工程没建：前者只喂官方 aen 的自适应锐化
+     *   （标定文件里没有相应字段），后者要 VCM 而 SC202CS 是定焦模组。 */
+    return st->flags != 0;
 }
-#endif  /* LSC_BY_CT || SAT_BY_CT */
-
-#if CAM_ADN_ENABLE
-/*
- * BF（Bayer 域降噪）+ Demosaic 梯度比，按传感器总增益查官方表。
- *
- * 选它们打头阵的理由：这两级都**不改画面的平均亮度、也不改通道比值**
- * ⇒ AE 与 AWB 两个闭环的输入完全不变，是整条对齐路线上最安全的一步，
- * 用来验证「标定表 → ISP API」这条新通路本身是通的。
- */
-static void camera_adn_tick(uint32_t gain_milli)
-{
-    const uint32_t bf = cam_map_gain_slot(cam_cal_bf_gain, CAM_CAL_BF_N, gain_milli);
-    if (cam_slot_changed(&s_bf_track, bf, CAM_FEEDFWD_HYST_TICKS)) {
-        esp_isp_bf_config_t cfg = {
-            /* 官方桥接层一律用 SRND_DATA + tail valid 0/0：边缘用周围像素补，
-             * 而不是补一个常数 —— 补常数会在画面四边留一圈被降噪算进去的假边。
-             * 两个 tail valid 都写 0 是驱动约定的「整行 padding 都有效」。
-             * ⚠️ **绝不能给 esp_isp_bf_configure() 传 NULL**：它在 else 分支之后
-             *    仍然无条件求值 config->flags.update_once_configured（isp_bf.c），
-             *    传 NULL 就是一次空指针解引用 —— 那不是「优雅地禁用」。要禁用
-             *    这一级请用 CAM_ADN_ENABLE = 0。 */
-            .padding_mode    = ISP_BF_EDGE_PADDING_MODE_SRND_DATA,
-            .padding_data    = 0,
-            .denoising_level = cam_cal_bf[bf].level,
-            .padding_line_tail_valid_start_pixel = 0,
-            .padding_line_tail_valid_end_pixel   = 0,
-            /* 立刻写进硬件而不是等下一个 VSYNC。rev < 3.0 上影子寄存器本就是
-             * 恒真的空桩，这一位在本板上无害；而重配已经被迟滞压到很低频。 */
-            .flags = { .update_once_configured = 1 },
-        };
-        memcpy(cfg.bf_template, cam_cal_bf[bf].matrix, sizeof cfg.bf_template);
-        s_st_bf = esp_isp_bf_configure(s_isp, &cfg);
-        if (s_st_bf == ESP_OK && !s_bf_enabled) {
-            /* enable 有 FSM 门（重复调直接 ESP_ERR_INVALID_STATE），只能成功一次。 */
-            s_st_bf = esp_isp_bf_enable(s_isp);
-            s_bf_enabled = (s_st_bf == ESP_OK);
-        }
-        s_feedfwd_reconf++;
-    }
-
-    const uint32_t dm = cam_map_gain_slot(cam_cal_demosaic_gain, CAM_CAL_DEMOSAIC_N, gain_milli);
-    if (cam_slot_changed(&s_dm_track, dm, CAM_FEEDFWD_HYST_TICKS)) {
-        /* grad_ratio 是 2 整数位 + 4 小数位（soc_caps.h）⇒ 步长 1/16。
-         * 官方四档 1.5/1.25/1.05/1.0 ⇒ 1+8/16 / 1+4/16 / 1+1/16 / 1+0/16
-         * （1.05 量化到 1.0625，这个 6% 的偏差比「不配、停在复位值」小得多）。 */
-        uint32_t ip = 1, dp = 0;
-        cam_map_to_fixed(cam_cal_demosaic[dm].grad_ratio_milli, 2, 4, &ip, &dp);
-        const esp_isp_demosaic_config_t cfg = {
-            .grad_ratio   = { .integer = ip, .decimal = dp },
-            .padding_mode = ISP_DEMOSAIC_EDGE_PADDING_MODE_SRND_DATA,
-            .padding_data = 0,
-            .padding_line_tail_valid_start_pixel = 0,
-            .padding_line_tail_valid_end_pixel   = 0,
-        };
-        /* ⚠️ 只 configure、**不要** esp_isp_demosaic_enable()：去马赛克已经被
-         *   output = RGB565 隐式打开了（isp_ll_set_output_data_color_format()
-         *   顺手置了 demosaic_en），而 enable 有 FSM 门 —— 调它会拿到
-         *   ESP_ERR_INVALID_STATE，那个错误码会让人误以为参数根本没配上。 */
-        s_st_dm = esp_isp_demosaic_configure(s_isp, &cfg);
-        s_feedfwd_reconf++;
-    }
-}
-#endif  /* CAM_ADN_ENABLE */
-
-#if CAM_AEN_ENABLE
-/*
- * SHARP 锐化 + Color 对比度/饱和度，按传感器总增益查官方表。
- *
- * 这两级在 YUV 域，位于 AE（demosaic 后）与 AWB（CCM 前）两个**硬件**采样点的
- * 下游 —— 但我们今天的统计是软件采在 **ISP 输出**（这两级的下游），所以它们会
- * 进到 AE/AWB 的反馈里。量化评估（README 有完整推导）：
- *   · 饱和度钉在 128 = 1.000× ⇒ 逐像素恒等，对通道比值**零影响**（不是「影响小」）；
- *   · 对比度 132 = 1.031× 只作用在 Y 上（色度不动）⇒ 三个通道拿到的是**同一个**
- *     加性偏移 ⇒ 通道比值被拉向 1 的幅度 ≈ 0.7%，远小于 CAM_AWB_DEADBAND_PCT = 5。
- *     ⚠️ 亮度均值的**变化方向**取决于硬件用的是哪种对比度式子，而 TRM 与 IDF
- *        都没写死这一点：纯增益式 Y' = c·Y 会让 lum_mean 抬约 +3%；以 128 为轴的
- *        Y' = (Y−128)·c + 128 在偏暗画面上反而让它降约 0.4%。**两种都不超过
- *        CAM_AE_DEADBAND（12/120 = 10%）⇒ AE 多半连动都不动**，所以这里不需要
- *        分支处理；但上板读自检行时别把「亮度略降」当成配错了 —— 它只说明是
- *        后一种式子，把观察到的方向记进 README 即可（这是一处 [缺口] 的实测机会）。
- *   · 对比度按 gain 选档、gain 由 AE 定 ⇒ 存在 AE→gain→对比度→亮度→AE 的回路，
- *     但四档之间只差 1.5%，且换档有 3 拍迟滞，环增益远小于 1，不会自激。
- */
-static void camera_aen_tick(uint32_t gain_milli)
-{
-    const uint32_t sh = cam_map_gain_slot(cam_cal_sharpen_gain, CAM_CAL_SHARPEN_N, gain_milli);
-    if (cam_slot_changed(&s_sh_track, sh, CAM_FEEDFWD_HYST_TICKS)) {
-        /* 两个系数是 3 整数位 + 5 小数位（soc_caps.h）⇒ 步长 1/32。
-         * h = 1.625 恰好是 1+20/32（精确）；m = 1.525 → 1+17/32（差 0.4%）。
-         * m_coeff 随增益单调下降（1.525 → 1.225）：高增益时减弱中频锐化，
-         * 否则被放大的是噪声而不是细节。 */
-        uint32_t hi = 1, hd = 0, mi = 1, md = 0;
-        cam_map_to_fixed(cam_cal_sharpen[sh].h_coeff_milli, 3, 5, &hi, &hd);
-        cam_map_to_fixed(cam_cal_sharpen[sh].m_coeff_milli, 3, 5, &mi, &md);
-        esp_isp_sharpen_config_t cfg = {
-            .h_freq_coeff = { .integer = hi, .decimal = hd },
-            .m_freq_coeff = { .integer = mi, .decimal = md },
-            .h_thresh     = cam_cal_sharpen[sh].h_thresh,
-            .l_thresh     = cam_cal_sharpen[sh].l_thresh,
-            .padding_mode = ISP_SHARPEN_EDGE_PADDING_MODE_SRND_DATA,
-            .padding_data = 0,
-            .padding_line_tail_valid_start_pixel = 0,
-            .padding_line_tail_valid_end_pixel   = 0,
-            .flags = { .update_once_configured = 1 },
-        };
-        memcpy(cfg.sharpen_template, cam_cal_sharpen[sh].matrix, sizeof cfg.sharpen_template);
-        s_st_sharp = esp_isp_sharpen_configure(s_isp, &cfg);
-        if (s_st_sharp == ESP_OK && !s_sharp_enabled) {
-            s_st_sharp = esp_isp_sharpen_enable(s_isp);
-            s_sharp_enabled = (s_st_sharp == ESP_OK);
-        }
-        s_feedfwd_reconf++;
-    }
-
-    const uint32_t ct = cam_map_gain_slot(cam_cal_contrast_gain, CAM_CAL_CONTRAST_N, gain_milli);
-    if (cam_slot_changed(&s_ct_track, ct, CAM_FEEDFWD_HYST_TICKS)) {
-        /* 对比度/饱和度是 1 整数位 + 7 小数位 ⇒ **128 就是 1.0×**。标定文件里的
-         * 132/130/128/126 与 128/130 就是这个 val 的原值，**直接写、不换算**
-         * （把 1.031 乘 1000 写进去会拿到 ESP_ERR_INVALID_ARG，上限是 255）。
-         * ⓘ 色调：官方 SC202CS 标定里**没有 hue 字段**，写 0 就是对齐；顺带避开
-         *   rev<3.0 只有 8 bit 色调（HAL 内部做 hue×256/360 折算）的精度坑。
-         * ⓘ 亮度：同样不在标定里，写 0。 */
-        s_contrast_val = cam_cal_contrast[ct].value;
-        s_st_color = camera_color_apply();
-        if (s_st_color == ESP_OK && !s_color_enabled) {
-            /* ⓘ isp_core.c 那处 isp_ll_color_enable(true) 的 workaround（DIG-474）
-             *   只在 **DVP** 输入时触发，我们是 CSI 输入 ⇒ 不触发，所以 color 块
-             *   此刻确实停在 FSM 的 INIT 态。若拿到 ESP_ERR_INVALID_STATE，
-             *   说明这条判断错了，回来改这段注释。 */
-            s_st_color = esp_isp_color_enable(s_isp);
-            s_color_enabled = (s_st_color == ESP_OK);
-        }
-        s_feedfwd_reconf++;
-    }
-}
-#endif  /* CAM_AEN_ENABLE */
+#endif  /* CAM_IPA_ENABLE */
 
 void camera_csi_tune_tick(const cam_frame_stats_t *st)
 {
-    /* samples == 0 表示这份统计什么都没采到（参数非法），拿它去调曝光/白平衡等于
-     * 拿随机数当反馈 —— 与「采到了，结果是全黑」严格区分开。 */
-    if (!st || st->samples == 0)
-        return;
-
-    /* 统计本身先留下来：即便 AE/AWB 都关着，分通道均值仍然是判断白平衡对不对的
-     * 唯一客观手段，自检行必须能打出来。 */
-    s_last_stats = *st;
+    /* samples == 0 表示这份统计什么都没采到（参数非法）—— 与「采到了，结果是
+     * 全黑」严格区分开。它只影响自检行，不影响 IPA（IPA 吃的是硬件统计）。 */
+    if (st && st->samples)
+        s_last_stats = *st;
 
     /*
      * **不取流就一步都不走。** 调用方（uvc_stream.c 的帧泵）只在 alt 1 下才拿得到
@@ -2219,831 +1212,23 @@ void camera_csi_tune_tick(const cam_frame_stats_t *st)
     if (!s_streaming)
         return;
 
-    /* 顺序：**先定目标、再 AE、后 AWB**。
-     *   目标要用上一次直方图的场景均值/亮块占比（背光判定）；
-     *   AWB 要读 cam_ae_converged()，让它读到的是本帧刚更新过的收敛状态。 */
-    camera_ae_target_tick();
-    camera_ae_tick(st);
+#if CAM_IPA_ENABLE
     /*
-     * AWB 的硬件统计**排在 AE 之后、AWB 之前**：AE 那一拍可能刚下发新曝光，
-     * 但曝光要一两帧之后才生效 —— 也就是说这一次 oneshot 采到的仍然是「旧曝光」
-     * 下的画面，与软件统计（同样来自刚取到的那一帧）**同一个时刻**，两个口径
-     * 并排对照才有意义。T9 之后它还兼任触发闸：只有拿到新采样的那一拍
-     * 才允许 AWB 动。
-     */
-#if CAM_AWB_STAT_ENABLE
-    camera_awb_stat_tick();
-#endif
-#if CAM_AWB_ENABLE
-    camera_awb_tick(st);
-#endif
-#if CAM_HIST_ENABLE
-    /*
-     * 直方图排在 AE 之后：env.luma 要用本拍刚更新过的 s_ae.ev。
-     * 它与 AWB 的 oneshot 永远不在同一拍（相位错开半周期，见 camera_hist_tick）。
-     */
-    camera_hist_tick(s_ae_target);
-#if CAM_GAMMA_ENABLE && CAM_GAMMA_ADAPTIVE
-    /* 紧跟直方图：s_gamma_slot_want 刚被本拍的 env.luma 更新过。 */
-    camera_gamma_tick();
-#endif
-#endif
-#if CAM_CCM_MODE
-    /*
-     * CCM 的第二条重配路径：色温跨档。排在 AWB **之后**，两条路吃的是同一个
-     * s_cct_k ⇒ 档号没变时这里必然不动（cam_slot_changed 对 want == cur 直接
-     * 返回 false）。档号刚变的那一拍两条路都可能发，代价是每秒最多多一次重配 ——
-     * 远低于「每帧重配」，而换来的是「增益不变、只有色温变」时矩阵也会跟上。
-     */
-    camera_ccm_ct_tick();
-#endif
-
-#if (CAM_LSC_ENABLE && CAM_LSC_BY_CT) || (CAM_AEN_ENABLE && CAM_SAT_BY_CT)
-    /*
-     * 按**色温**选档的两级（LSC / 饱和度）排在按**增益**选档的两级之前：
-     * 饱和度与对比度共用一次 Color configure，先让饱和度把值定下来，
-     * 紧接着 aen_tick 那一次就一起下发了（开机第一拍尤其重要，
-     * 否则会出现「先 128 再 130」两次无谓的重配）。
-     */
-    camera_ct_feedfwd_tick();
-#endif
-
-#if CAM_ADN_ENABLE || CAM_AEN_ENABLE
-    /*
-     * 官方前馈级**排在 AE 之后**：它们按增益选档，要用本拍刚更新过的增益，
-     * 而不是上一拍的陈旧值。
+     * **每拿到一份统计就调一次 process()，这里不做任何分频。**
+     * 官方算法内部自带节奏控制：agc.exposure.frame_delay = 3（下发后等 3 帧再采信）、
+     * agc.gain.min_step = 0.03、aen.gamma.luma_min_step = 3.0（迟滞）。
+     * 外面再叠一层分频只会让这些标定出来的数失去意义 —— 那正是上一版自研实现
+     * 犯的错（AE 300 ms、AWB 1 s、直方图 1 s 三个周期互相错相位，全是我们自己
+     * 发明的）。
      *
-     * AE 关着（查不到可调范围）时传感器停在模式表的默认增益，那就是增益表第 0 档
-     * 1.000× ⇒ 这里填 1000 而不是 0。填 0 选出来的也是第 0 档、结果一样，但自检行
-     * 会打出一个不存在的「0.000×」，把「AE 没起来」误报成「增益读错了」。
+     * ⓘ 帧泵是 100 ms 的固定节拍 ⇒ 这里约 10 Hz，而三块统计都是每帧（30 Hz）
+     *   由 ISR 更新的 ⇒ blob 拿到的永远是最新一帧的统计，只是每三帧才消费一次。
+     *   这与官方 esp_video 每帧调一次相比只是**节奏慢三倍**，不改变任何控制律；
+     *   帧延迟 frame_delay=3 是按「帧」算的，比我们这一拍还短，不会被跨过去。
      */
-    s_feedfwd_gain_milli = (s_ae_ready && s_ae.gain_index < s_ae_lim.gain_count)
-                               ? s_ae_lim.gain_map[s_ae.gain_index] : 1000;
-#if CAM_ADN_ENABLE
-    camera_adn_tick(s_feedfwd_gain_milli);
-#endif
-#if CAM_AEN_ENABLE
-    camera_aen_tick(s_feedfwd_gain_milli);
-#endif
-#endif
-}
-
-/*
- * 硬件 AE 5×5 统计的自检：**两行**。
- *
- * 第一行是归约后的量（能不能用、算出来多少、与软件口径差多少），第二行是 25 块
- * 原始值 —— 后者不是冗余：**「25 个数彼此不同」本身就是一条判据**，它证明分块
- * 统计的空间性是真的，而不是同一个全画面均值被复制了 25 份。
- *
- * 四种情况严格分开（与本文件其余自检行同一处置）：
- *   未编译      CAM_AE_STAT_ENABLE = 0 ⇒ 由 #else 分支说出来
- *   未运行      编译进来了但控制器一次都没建过（还没 camera_csi_init）
- *   <错误码>    建了、硬件或驱动拒了
- *   ESP_OK      建上了 ⇒ 同时打出帧计数、加权均值、两个 quorum 计数与 ρ
- *
- * 判读：
- *   帧=0 而取流中          → 连续统计没启动，看「运行=」那格（start 的返回值）。
- *   25 块**全是 0**        → 窗口 bsize=0。见 camera_csi_init() 里 ae_cfg 的 ⚠️。
- *   25 块全都相同的非零值   → 分块没生效（同上，或分辨率与窗口对不上）。
- *   遮住镜头 ⇒ 25 块全掉；只遮半边 ⇒ **只有一侧掉**（这条顺带把硬件的块排布
- *                          方向测出来，把结论记进 cam_on_ae_stat 的注释）。
- *   手电照中心 ⇒ 中心块冲到 250 以上、「亮块」计数涨到 3 以上。
- *   帧= 不涨而 CSI 帧在涨   → 忘了 start_continuous，或 enable 失败。
- *   帧= 涨得比 CSI 帧**快** → AE_ENV 事件也在触发重采（它的阈值我们没设过）。
- *                          不影响正确性（每次都是完整的一次统计），但 ρ 的
- *                          采样时刻会与画面统计错开，判读 ρ 时留意。
- *   alt 0（不取流）下帧= 还在涨 → stop 路径没停统计，看 camera_csi_stop()。
- *
- * ⚠️ **ρ 只在 AE 已收敛时才有意义**。曝光正在大幅调整时两个口径采的是不同瞬间的
- *   画面，比值会抖。反复三次遮挡/复原后 ρ 应当回到同一个值（±0.03）。
- *
- * ⓘ T6 之后 ρ 从「换目标的依据」变成了「推导的验算」：预测值 0.79 来自
- *   1/(0.30·kr + 0.586 + 0.113·kb) = 1/1.271（kr/kb 就是 CCM 对角线上那两个数，
- *   自检行「画质」那一格实时打着）。实测显著偏离 0.79 就说明这条推导错了 ——
- *   最可能的原因是硬件采样点其实不在 CCM 上游，那会直接推翻 CAM_AE_SOURCE
- *   那一整段论证，回来改它。
- */
-#if CAM_AE_STAT_ENABLE
-static void camera_ae_stat_report(void)
-{
-    uint8_t blocks[25], hw = 0, nd = 0, nb = 0;
-    const uint32_t frames = cam_ae_stat_snapshot(blocks, &hw, &nd, &nb);
-
-    /*
-     * ρ = 硬件加权 / **软件线性**均值，×1000 的定点。
-     *
-     * ⚠️ 分母是 lin_lum_mean 而**不是** lum_mean：硬件采样点在 gamma 上游，本来
-     *   就是线性量；拿 gamma 域均值当分母会把 γ=0.5 那条曲线的整体抬升（线性 62
-     *   被编码成 126）算进去，得到一个凭空小一倍的假 ρ。
-     *   （gamma 是在本计划里提前做掉的 —— 原计划 T5 写的「软件全帧」是 gamma
-     *     上线之前的说法，直接照抄会错一倍。）
-     * 分母为 0（画面全黑）时打 0，别除零。
-     */
-    const uint32_t lin = s_last_stats.lin_lum_mean;
-    const uint32_t rho = lin ? (uint32_t)hw * 1000u / lin : 0;
-
-    ESP_LOGI(TAG, "[自检] AE统计=%s 运行=%s 帧=%" PRIu32 " | 硬件加权=%u"
-                  "（暗块 %u/%d 亮块 %u/%d）软件线性=%" PRIu32
-                  " ρ=%" PRIu32 ".%03" PRIu32 "（=硬件/软件，预测 0.79）| AE 源=%s",
-             step_str(s_st_aestat), step_str(s_st_aerun), frames,
-             hw, nd, CAM_CAL_AE_LOW_REGIONS, nb, CAM_CAL_AE_HIGH_REGIONS,
-             lin, rho / 1000, rho % 1000,
-             CAM_AE_SOURCE ? "本统计（已接管）" : "软件线性（本统计只观测）");
-
-    /* 25 块原始值，按 5 行打。缓冲 5×(5×4+3)+1 = 116，开 160 留足余量：
-     * -Wformat-truncation 按 %3u 的类型上界估算，开小了会被 -Werror 打回。 */
-    char row[160];
-    int n = 0;
-    for (int i = 0; i < 5; i++) {
-        for (int j = 0; j < 5; j++)
-            n += snprintf(row + n, sizeof row - (size_t)n, "%s%3u",
-                          j ? " " : "", blocks[i * 5 + j]);
-        if (i < 4)
-            n += snprintf(row + n, sizeof row - (size_t)n, " |");
-    }
-    ESP_LOGI(TAG, "[自检] AE统计 25 块: %s", row);
-}
-#endif
-
-#if CAM_AWB_STAT_ENABLE
-/*
- * 硬件 AWB 白点统计的自检：**两行**。
- *
- * 第一行是这次统计本身（跑没跑、筛出多少、重心在哪、推出多少色温与绝对增益）；
- * 第二行是**并排对照** —— 同一个物理量（「R 通道该乘多少」）由两个互相独立的
- * 估计器各给一份：
- *   硬件白点  采在 **CCM 之前**、按官方框逐像素筛 ⇒ 直接给**绝对**增益 Σg/Σr；
- *   软件灰世界 采在 **CCM 之后**、整幅平均      ⇒ 给 当前 × g_mean/r_mean，
- *                                                 那同样是一个**绝对**目标值。
- * 两个数应当接近。**这一行是 T9 切换前唯一的对照依据**：
- *   两者接近（差 < 10%）        → 两个估计器互相印证，可以放心把 CAM_AWB_SOURCE
- *                                翻成 1；
- *   硬件那份明显更偏离 1.0      → 正常。灰世界被画面里的彩色物体拉向中性，
- *                                白点筛选没有 —— 这正是换估计器的收益。
- *   两者方向相反（一个 >1 一个 <1）→ **别切**。多半是 rg 的分子分母颠倒，
- *                                或者采样点没配上（自检行的 CCT 会同时贴在端点）。
- *
- * 判读（第一行）：
- *   AWB统计=未编译 / 非 ESP_OK  → 统计块没建起来，下面的数全是 0，先修这个。
- *   触发= 不涨而取流中          → 分频没走到（看 CAM_AWB_INTERVAL_TICKS），
- *                                或 s_streaming 是 false。
- *   触发= 在涨但 alt 0          → stop 路径漏了，回去看 camera_csi_tune_tick 的闸。
- *   超时= 在涨                  → 60 ms 不够，或 ISP 没在出数据。先确认取流中，
- *                                再把 CAM_AWB_ONESHOT_MS 加到 100 试。
- *   白点=0 恒定                 → 筛选框与实际数据不同域。临时把 rg/bg 放宽到
- *                                [0.1, 3.9]、亮度窗放宽到 [1, 764] 重测；这时若
- *                                有白点，说明官方框用错了域 ⇒ **推翻 T9**。
- *   白点= 恒等于 921600         → 筛选没生效（框被写成全域），检查浮点字段。
- *   平均G 跑出 [98, 210]        → 亮度窗与我们的实际信号电平不匹配（AE 目标改过？）。
- *                                这是「白点太少」最常见的根因 —— 官方 green 范围
- *                                是按官方 AE 工作点标的，我们的工作点若不同，
- *                                要按实测等比缩放，**并把偏离官方值的理由写进
- *                                cam_isp_cal.h 旁边**。
- *   拍白纸时占比 > 30%、拍红墙时 < 5% → **筛选框真的在筛**，这条是白点统计
- *                                能不能信的分水岭。
- *   CCT 恒定贴在 2289 或 7466   → rg 算错（分子分母颠倒）或 Σg = 0 没防住。
- */
-static void camera_awb_stat_report(uint32_t sw_sug_r, uint32_t sw_sug_b)
-{
-    const uint32_t total = (uint32_t)CAM_SENSOR_W * CAM_SENSOR_H;
-    /* 占比与「平均 G」都按**原始**采样算（不扣统计侧基座）：它们要回答的是
-     * 「硬件那一关筛出了什么」，而基座扣除是我们在硬件之后做的事。 */
-    const uint32_t pct_q1 = (uint32_t)((uint64_t)s_awb_hw.counted * 1000u / total);
-    const uint32_t g_avg  = s_awb_hw.counted ? s_awb_hw.sum_g / s_awb_hw.counted : 0;
-    /* 平均 R+G+B —— **硬件那道亮度窗真正筛的量**。它必须落在 [164, 533] 之内，
-     * 否则就是窗口/采样点没配上（而不是场景问题）。与 g_avg 一起打，
-     * 两个数就把「官方 green 范围 → 官方推导式 → 驱动的 lum 字段」这条换算
-     * 在现场从两头各验一次。 */
-    const uint32_t lum_avg = s_awb_hw.counted
-                                 ? (uint32_t)(((uint64_t)s_awb_hw.sum_r + s_awb_hw.sum_g +
-                                               s_awb_hw.sum_b) / s_awb_hw.counted)
-                                 : 0;
-
-    uint32_t rg = 0, bg = 0, cct = 0, kr = 0, kb = 0;
-    if (cam_awb_ratios(&s_awb_hw, &rg, &bg)) {
-        cct = cam_cct_from_rg(rg);
-        /* 绝对增益 = 1/rg（单位 1/1000）。**这里不乘任何「当前值」** ——
-         * 采样点在 CCM 之前，读数里没有已生效的增益，乘了就是 §E.3 那个错。 */
-        kr = 10000000u / rg;
-        kb = 10000000u / bg;
-    }
-
-    ESP_LOGI(TAG, "[自检] AWB统计=%s 最近=%s 触发=%" PRIu32 " 超时=%" PRIu32
-                  " | 白点=%" PRIu32 "/%" PRIu32 "(%" PRIu32 ".%" PRIu32 "%%)"
-                  " 平均R+G+B=%" PRIu32 "(硬件窗 %d~%d) 平均G=%" PRIu32
-                  "(官方 green %d~%d) | Σr/Σg=0.%04" PRIu32
-                  " Σb/Σg=0.%04" PRIu32 " → CCT=%" PRIu32 "K"
-                  " 绝对增益 R×%" PRIu32 ".%03" PRIu32 " B×%" PRIu32 ".%03" PRIu32,
-             step_str(s_st_awbstat), step_str(s_st_awbrun), s_awb_trigs, s_awb_timeouts,
-             s_awb_hw.counted, total, pct_q1 / 10, pct_q1 % 10,
-             lum_avg, CAM_CAL_LUM_MIN, CAM_CAL_LUM_MAX,
-             g_avg, CAM_CAL_GREEN_MIN, CAM_CAL_GREEN_MAX,
-             rg, bg, cct, kr / 1000, kr % 1000, kb / 1000, kb % 1000);
-
-    /* 两个估计器的差，单位 0.1%。软件那份为 0（还没有过统计）时打 0，不除零。 */
-    const uint32_t dr = sw_sug_r ? (uint32_t)((uint64_t)(kr > sw_sug_r ? kr - sw_sug_r
-                                                                      : sw_sug_r - kr)
-                                              * 1000u / sw_sug_r) : 0;
-    const uint32_t db = sw_sug_b ? (uint32_t)((uint64_t)(kb > sw_sug_b ? kb - sw_sug_b
-                                                                      : sw_sug_b - kb)
-                                              * 1000u / sw_sug_b) : 0;
-    ESP_LOGI(TAG, "[自检] AWB对照 硬件白点(CCM前·绝对) R×%" PRIu32 ".%03" PRIu32
-                  " B×%" PRIu32 ".%03" PRIu32
-                  " | 软件灰世界(CCM后·当前×g/x) R×%" PRIu32 ".%03" PRIu32
-                  " B×%" PRIu32 ".%03" PRIu32
-                  " | 差 R%" PRIu32 ".%" PRIu32 "%% B%" PRIu32 ".%" PRIu32 "%%"
-                  " | AWB 源=%s",
-             kr / 1000, kr % 1000, kb / 1000, kb % 1000,
-             sw_sug_r / 1000, sw_sug_r % 1000, sw_sug_b / 1000, sw_sug_b % 1000,
-             dr / 10, dr % 10, db / 10, db % 10,
-             CAM_AWB_SOURCE ? "本统计（已接管，绝对公式 Σg/Σx）"
-                            : "软件灰世界（本统计只观测）");
-}
-#endif  /* CAM_AWB_STAT_ENABLE */
-
-/*
- * ══ 直方图与 env.luma 的自检（T11）══ **两行。**
- *
- * 第一行是这次统计本身（跑没跑、筛到多少像素、分布的三个标量）；第二行是
- * 16 个 bin 的原始值 —— 后者不是冗余：「16 个数彼此不同、且遮镜头时整体左移」
- * 本身就是「这个统计块真的在看画面」的判据，均值算对了不代表分布是真的。
- * 第三行是 env.luma 与它选出的 gamma 档。
- *
- * 判读（第一行）：
- *   HIST=未编译 / 非 ESP_OK   → 统计块没建起来（权重和 ≠ 256 / 某个 integer 域
- *                              非 0 / 阈值含 0 是三大死因），下面的数全是 0。
- *   触发= 不涨而取流中         → 分频没走到（看 CAM_HIST_INTERVAL_TICKS）。
- *   触发= 在涨但 alt 0        → stop 路径漏了，回去看 camera_csi_tune_tick 的闸。
- *   超时= 在涨                → 60 ms 不够，或 ISP 没在出数据；也可能是与 AWB
- *                              的 oneshot 撞了拍（看 CAM_HIST_PHASE）。
- *   Σbin 明显小于 921600      → 窗口 bsize = 0（同 AE 的窗口坑），或分辨率变了。
- *   16 个 bin 全 0            → 同上。
- *   遮住镜头 ⇒ 暗块 >= 80%、bin 整体左移；手电照 ⇒ 亮块涨。**这两条不成立就
- *                              说明抽头不在画面上**，后面 env.luma 一概不必看。
- *
- * 判读（env 那行 —— **T11 的核心判据在这里**）：
- *   env=n/a                   → AE 还没就绪（ev = 0），不是 env 算错了。
- *   从明亮日光走到昏暗室内，「用过的档」至少出现**两个**不同的数
- *                             → §E.5 的 k/ev 重建站得住，T12 可以放心接上。
- *   四档只用得到一档，或 env 恒在 3001 以上 / 151 以下
- *                             → **重建式是错的**。把 cam_tune.h 的 CAM_ENV_MODEL
- *                              翻成 0，并把 CAM_ENV_EV_BREAKS 换成实测的四个 ev
- *                              （记下是哪种光照、AE 收敛后的 ev 是多少）。
- *   想换档= 随时间线性增长      → 迟滞不够，把 CAM_CAL_GAMMA_MIN_STEP_Q1（官方 30）
- *                              加大并记录理由。
- */
-#if CAM_HIST_ENABLE
-static void camera_hist_report(void)
-{
-    const uint32_t total = (uint32_t)CAM_SENSOR_W * CAM_SENSOR_H;
-    ESP_LOGI(TAG, "[自检] HIST=%s 最近=%s 触发=%" PRIu32 " 超时=%" PRIu32
-                  " | 场景均值=%u（均匀权重，与 AE 的中心加权是两个量）"
-                  " 亮块=%u%% 暗块=%u%% | Σbin=%" PRIu32 "(应为 %" PRIu32 ")",
-             step_str(s_st_hist), step_str(s_st_histrun), s_hist_trigs, s_hist_timeouts,
-             s_hist_mean, s_hist_bright_pct, s_hist_dark_pct, s_hist_total, total);
-
-    ESP_LOGI(TAG, "[自检] HIST bin(每格 16 个码值): %" PRIu32 " %" PRIu32 " %" PRIu32
-                  " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32
-                  " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32
-                  " %" PRIu32 " %" PRIu32 " %" PRIu32,
-             s_hist_bins[0], s_hist_bins[1], s_hist_bins[2], s_hist_bins[3],
-             s_hist_bins[4], s_hist_bins[5], s_hist_bins[6], s_hist_bins[7],
-             s_hist_bins[8], s_hist_bins[9], s_hist_bins[10], s_hist_bins[11],
-             s_hist_bins[12], s_hist_bins[13], s_hist_bins[14], s_hist_bins[15]);
-
-    char env[24] = "n/a";
-    if (s_env_q1)
-        snprintf(env, sizeof env, "%" PRIu32 ".%" PRIu32, s_env_q1 / 10, s_env_q1 % 10);
-    char rng[40] = "（还没有过有效值）";
-    if (s_env_max_q1)
-        snprintf(rng, sizeof rng, "[%" PRIu32 ".%" PRIu32 ", %" PRIu32 ".%" PRIu32 "]",
-                 s_env_min_q1 / 10, s_env_min_q1 % 10, s_env_max_q1 / 10, s_env_max_q1 % 10);
-    ESP_LOGI(TAG, "[自检] ENV 模型=%s ev=%" PRIu32 " 场景均值=%u AE目标=%d"
-                  " → env.luma=%s → 想要 gamma 档=%s"
-                  " | 断点 %u/%u/%u/%u 量程=%s 用过的档 %c%c%c%c 想换档=%" PRIu32,
-             CAM_ENV_MODEL ? "官方 k/ev（[反推]，非确证）" : "实测 ev 断点插值（降级路径）",
-             s_ae.ev, s_hist_mean, s_ae_target, env,
-             s_gamma_slot_want < CAM_CAL_GAMMA_N ? (const char[]){(char)('0' + s_gamma_slot_want), 0}
-                                                 : "未定",
-             cam_cal_gamma_luma_q1[0] / 10, cam_cal_gamma_luma_q1[1] / 10,
-             cam_cal_gamma_luma_q1[2] / 10, cam_cal_gamma_luma_q1[3] / 10, rng,
-             (s_env_slots_seen & 1u) ? '0' : '-', (s_env_slots_seen & 2u) ? '1' : '-',
-             (s_env_slots_seen & 4u) ? '2' : '-', (s_env_slots_seen & 8u) ? '3' : '-',
-             s_gamma_slot_switches);
-}
-#endif  /* CAM_HIST_ENABLE */
-
-/*
- * 把 9 个 ×1000 的 CCM 系数打成 "a.aaa b.bbb c.ccc | ..." 一行。
- *
- * 自己写而不是用 %f：本工程日志里一律不出现浮点（printf 的浮点格式会把 ~7 KB
- * 的软浮点格式化代码链进来，而且 ESP_LOG 在某些配置下对 %f 支持并不完整）。
- * 返回 buf 本身，直接嵌进 ESP_LOGI 的参数表。
- */
-static char *ccm_fmt(char *buf, size_t n, const int32_t m[9])
-{
-    size_t o = 0;
-    buf[0] = '\0';
-    for (int i = 0; i < 9 && o + 1 < n; i++) {
-        const int32_t v = m[i];
-        const uint32_t a = (uint32_t)(v < 0 ? -v : v);
-        const int w = snprintf(buf + o, n - o, "%s%s%" PRIu32 ".%03" PRIu32,
-                               i ? " " : "", v < 0 ? "-" : "", a / 1000u, a % 1000u);
-        if (w < 0 || (size_t)w >= n - o)
-            break;
-        o += (size_t)w;
-        if ((i == 2 || i == 5) && o + 2 < n) {
-            buf[o++] = ' ';
-            buf[o++] = '|';
-            buf[o]   = '\0';
-        }
-    }
-    return buf;
-}
-
-/*
- * ══ CCM 那一行（T10）══ 「色彩还原是不是按官方口径在动」的唯一客观依据。
- *
- * 它必须同时回答五个问题，缺一个现场就分不清病因：
- *   ① 用的是哪种形态          → 模式=官方表 / 对角阵（CAM_CCM_MODE）
- *   ② CCT 是估出来的还是默认值 → CCT=NNNNK(估计/默认)
- *   ③ 选了哪一档、插值权重多少 → 档 i/19（左档 K→右档 K，w=x.xx）
- *   ④ 强度被谁压的            → 强度=t/256（定点上限给 t*=…，总闸 CAM_CCM_STRENGTH_MAX=…）
- *   ⑤ 实际下发的 9 个系数     → 连同 max|v| 与 3.990 这条硬边界一起打
- *
- * 判读：
- *   模式=对角阵                 → CAM_CCM_MODE = 0，本行其余各项恒定，属预期。
- *   CCT 恒为默认值              → 白点统计一次都没成功。去看「AWB统计」那行的
- *                                「白点=」与「触发=」，不是 CCM 的事。
- *   强度 = t* < 256 且 CCT 偏低  → **预期**：低色温档系数本身超 S2.10，被定点上限压。
- *                                §D.4 的表：3055 K → 42%、3473 K → 65%、3800 K → 83%。
- *   强度 = CAM_CCM_STRENGTH_MAX 而 t* 明显更大
- *                              → 是**我们自己**压的（黑电平降级档）。拿到 T7 实测
- *                                之后按 cam_tune.h 那张表把它放开到 256。
- *   max|v| > 3.990             → 不可能。真出现说明钳制没生效（阈值被改成 4000？），
- *                                此时硬件里的矩阵与本行打的**不是同一个**（saturation
- *                                悄悄截断了），画面错了而日志说没错 —— 最坏的一种。
- *   白纸下三通道均值差 > 5%      → 行和不变式破了。先看档号是不是插到了两端那两个
- *                                单位阵档（1200 K / 12000 K）上。
- *   重配= 每秒 > 1              → 迟滞没起作用，或 CCT 在档边界上抖。
- */
-static void camera_ccm_report(void)
-{
-    char mbuf[128];
-    uint32_t mx = 0;
-    for (int i = 0; i < 9; i++) {
-        const uint32_t a = (uint32_t)(s_ccm_m[i] < 0 ? -s_ccm_m[i] : s_ccm_m[i]);
-        if (a > mx)
-            mx = a;
-    }
-#if CAM_CCM_MODE
-    const uint32_t lo_k = cam_cal_ccm_cct[s_ccm_slot];
-    const uint32_t hi_k = cam_cal_ccm_cct[s_ccm_slot + 1 < CAM_CAL_CCM_N ? s_ccm_slot + 1
-                                                                        : s_ccm_slot];
-    /* 权重打成两位小数（w_q8 × 100 / 256），与「档 i→档 i+1」一起读。 */
-    const uint32_t w100 = s_ccm_w * 100u / 256u;
-    ESP_LOGI(TAG, "[自检] CCM 模式=官方表 %s CCT=%" PRIu32 "K(%s) 档%" PRIu32 "/%d"
-                  "(%" PRIu32 "K→%" PRIu32 "K w=0.%02" PRIu32 ")"
-                  " 强度=%" PRIu32 "/256(定点可行 t*=%" PRIu32 "，总闸 %d) "
-                  "白平衡 R×%" PRIu32 ".%03" PRIu32 " B×%" PRIu32 ".%03" PRIu32
-                  " | 下发 [%s] max|v|=%" PRIu32 ".%03" PRIu32 "(上限 %d.%03d)"
-                  " | 重配=%" PRIu32 " 换档=%s",
-             step_str(s_st_ccm), s_cct_k, s_cct_valid ? "估计" : "默认",
-             s_ccm_slot, CAM_CAL_CCM_N, lo_k, hi_k, w100,
-             s_ccm_t, s_ccm_tmax, CAM_CCM_STRENGTH_MAX,
-             s_ccm_r / 1000, s_ccm_r % 1000, s_ccm_b / 1000, s_ccm_b % 1000,
-             ccm_fmt(mbuf, sizeof mbuf, s_ccm_m), mx / 1000, mx % 1000,
-             CAM_CCM_ABS_MAX_MILLI / 1000, CAM_CCM_ABS_MAX_MILLI % 1000,
-             s_ccm_reconf, step_str(s_st_ccm_ct));
-#else
-    ESP_LOGI(TAG, "[自检] CCM 模式=对角阵（CAM_CCM_MODE=0，只做白平衡、不做色彩还原，"
-                  "即 T9 之前已实机验证的路径）%s CCT=%" PRIu32 "K(%s，本模式下不参与)"
-                  " | 下发 [%s] max|v|=%" PRIu32 ".%03" PRIu32 " | 重配=%" PRIu32,
-             step_str(s_st_ccm), s_cct_k, s_cct_valid ? "估计" : "默认",
-             ccm_fmt(mbuf, sizeof mbuf, s_ccm_m), mx / 1000, mx % 1000, s_ccm_reconf);
-#endif
-}
-
-/*
- * 画质自检：白平衡与曝光各一行。**这两行是判断画面对不对唯一的客观依据** ——
- * 「发绿」「太暗」是观感，R98/G121/B105、亮度均值 45 才是能拿来算系数的数字。
- */
-static void camera_quality_report(void)
-{
-    /* ⚠️ 用**线性域**那一份：CCM 是线性域上的对角阵，而 gamma 会把通道比值压向 1
-     * ⇒ 拿 gamma 后的均值反推出来的建议值会系统性偏小（欠校正），抄进
-     * cam_tune.h 就把这个偏差固化了。gamma 关着时两份逐位相等。 */
-    uint32_t sug_r = s_ccm_r, sug_b = s_ccm_b;
-    cam_awb_suggest(s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
-                    s_ccm_r, s_ccm_b, &sug_r, &sug_b);
-
-    /*
-     * 判读：
-     *   CCM!=ESP_OK               → 白平衡压根没生效，画面必然发绿，先修这个。
-     *   通道均值 R<G>B 比例固定    → 白平衡还没调准。AWB 开着的话它会自己收敛
-     *                               （看下一行的「已收敛」与下发次数）；AWB 关着
-     *                               时把「建议」那两个数抄进 cam_tune.h 的
-     *                               CAM_CCM_GAIN_R/B_MILLI 重编。
-     *   拍红色物体时 B > R        → 这才是 bayer order 配错（红蓝对调），
-     *                               改 camera_csi.c 上面 isp_cfg 的 bayer_order。
-     *   三个均值相近（差 <5%）     → 白平衡到位，「建议」应当≈「当前」。
-     * ⚠️ 只有 AE 收敛之后这几个数才有意义：曝光没稳的时候画面整体偏暗/偏亮，
-     *    通道比例会被削顶与量化噪声带偏。（AWB 也正是因此才等 AE 收敛才动。）
-     */
-    ESP_LOGI(TAG, "[自检] 画质 CCM=%s 当前 R×%" PRIu32 ".%03" PRIu32 " G×%u.%03u"
-                  " B×%" PRIu32 ".%03" PRIu32
-                  " | 通道均值(线性) R%u G%u B%u → 建议 R×%" PRIu32 ".%03" PRIu32
-                  " B×%" PRIu32 ".%03" PRIu32 "（对白纸/灰卡时才作数）",
-             step_str(s_st_ccm),
-             s_ccm_r / 1000, s_ccm_r % 1000,
-             (unsigned)(CAM_CCM_GAIN_G_MILLI / 1000), (unsigned)(CAM_CCM_GAIN_G_MILLI % 1000),
-             s_ccm_b / 1000, s_ccm_b % 1000,
-             s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
-             sug_r / 1000, sug_r % 1000, sug_b / 1000, sug_b % 1000);
-
-    /* CCM 的形态紧跟其后：上面那行说的是「白平衡增益调到哪了」，它说的是
-     * 「这对增益被装进了一个什么样的矩阵」——同一件事的执行侧。 */
-    camera_ccm_report();
-
-    /*
-     * ══ 黑位（T7）══ **T10（官方 CCM）唯一的判定依据。**
-     *
-     * 打两组东西，各自独立可读：
-     *   ① 线性域四个最暗值 —— 基座本身。为什么必须是线性域（gamma 在暗部扩张
-     *      4 倍，画面域的 64 就是线性域的 16）见 cam_frame_stats.h。
-     *   ② 传感器 0x3902 的读回值与写入状态 —— 「BLC 有没有在工作」。
-     *
-     * ⚠️ **只有把镜头完全盖住、并等 AE 顶到上限之后，①才是黑电平**；
-     *   平时它就是画面里最暗的那个点，与黑电平无关。完整测法与判读表见
-     *   cam_tune.h 的 CAM_SENSOR_BLC_ENABLE。
-     *
-     * 判读（盖住镜头之后）：
-     *   r/g/b 都 <= 3          基座 ≈ 0 ⇒ T10 放行，CAM_CCM_STRENGTH_MAX 用满
-     *   10~20 且三者相近        基座 ≈ 16（= 官方 acc.blc）⇒ 把 CAM_SENSOR_BLC_ENABLE
-     *                          翻成 1 重烧，再测一次；仍然 ≈16 则 T10 降级放行
-     *                          （统计侧减法 + CCM 强度压到 192）
-     *   彼此差 > 5             基座自带色偏或被 LSC 放大 ⇒ 先关 LSC 隔离
-     *   > 30                   漏光/没盖严，重新盖，别急着写寄存器
-     *   0x3902 写前=0xc0       传感器 BLC 上电就开着 ⇒ 基座本该 ≈ 0
-     *   0x3902 写前=0x80       关着 ⇒ 预期基座 ≈ 16
-     *   写后 != 写入值          这一位不可写（只读/保留）⇒ 这条路走不通，开关改回 0
-     */
-    char blc_b[16] = "未读到", blc_a[16] = "未写";
-    if (s_blc_before >= 0)
-        snprintf(blc_b, sizeof blc_b, "0x%02" PRIx32, (uint32_t)s_blc_before);
-    if (s_blc_after >= 0)
-        snprintf(blc_a, sizeof blc_a, "0x%02" PRIx32, (uint32_t)s_blc_after);
-    ESP_LOGI(TAG, "[自检] 黑位 线性最暗 lum=%u r=%u g=%u b=%u（官方 acc.blc=16；"
-                  "**盖住镜头 + AE 顶格**时才是黑电平）| 传感器BLC=%s "
-                  "0x%04x 读=%s 写前=%s 写=%s 写后=%s",
-             s_last_stats.lin_lum_min, s_last_stats.lin_r_min,
-             s_last_stats.lin_g_min, s_last_stats.lin_b_min,
-             CAM_SENSOR_BLC_ENABLE ? "开(写 0xc0)" : "关(只读不写)",
-             CAM_SENSOR_BLC_REG, step_str(s_st_blc_rd), blc_b,
-             step_str(s_st_blc_wr), blc_a);
-
-#if CAM_AWB_ENABLE
-    /*
-     * AWB 那一行。存在的理由是「颜色不对」有两种完全不同的病因，而它们在画面上
-     * 长得一样：**AWB 没在动**（被某道防护挡着）与 **AWB 被场景带偏**（灰世界
-     * 失效，动了但动错了）。所以这里必须同时给出三样东西：
-     *   当前增益 + 是否收敛   →  它调到哪了、还动不动
-     *   最近一拍的结论        →  这一瞬间为什么没动
-     *   每种理由的累计次数    →  过去这段时间主要是被哪一条挡的
-     *
-     * 判读：
-     *   下发=0 且 AE未稳=一大堆   → AE 一直没收敛（环境光在变？帧率太低？），
-     *                              AWB 一步都走不了。先去看 AE 那一行。
-     *   色偏过大 一直在涨          → **防护③正在起作用**：镜头对着单色物体
-     *                              （红墙/绿植/蓝天）。这是**正确行为**，把镜头
-     *                              转向普通场景，这个数就不涨了。
-     *   暗场/过亮 在涨             → 环境光超出 [LUM_MIN, LUM_MAX]，加/减光。
-     *   增益越界 在涨              → 推出来的系数跑出合理范围：要么光源极端
-     *                              （比如纯色 LED），要么 bayer order 配错了。
-     *   死区内 在涨 + 已收敛       → **一切正常**，白平衡已经到位并稳住。
-     *   下发一直涨、增益来回摆      → 振荡。调大 CAM_AWB_INTERVAL_TICKS 或减小
-     *                              CAM_AWB_DAMP_NUM/DEN（都在 cam_tune.h）。
-     *
-     * ══ CAM_AWB_SOURCE = 1（硬件白点）下额外的三条 ═══════════════════════
-     *   **增益单调爬到 3.445 或掉到 1.000，而「下发」一直在涨** → ⚠️ 这就是
-     *                              cam_tune.h 的 CAM_AWB_SOURCE 里说的那个错：
-     *                              建议值里混进了当前增益。**立刻把
-     *                              CAM_AWB_SOURCE 改回 0 重烧**，再回去查
-     *                              cam_awb_step_hw() 里有没有 st->gain_* 参与
-     *                              建议值计算。判定手法：静置 5 分钟不动镜头，
-     *                              正常应当是「死区内」持续涨而「下发」不涨。
-     *   暗场/过亮/色偏过大 **不为 0** → 不可能。这三条在硬件路上根本不执行，
-     *                              非 0 说明实际走的是软件路（CAM_AWB_SOURCE
-     *                              没生效，或 s_awb_hw_fresh 恒为 false）。
-     *   白点太少 一直在涨           → 正常场景下不该这样。先看上面「AWB统计」
-     *                              那行的「平均G」是不是跑出了官方 green 范围
-     *                              [98, 210] —— 那说明亮度窗与我们的信号电平
-     *                              不同域，要按实测重标（理由写进 cam_isp_cal.h
-     *                              旁边）。镜头怼着单色物体时它涨是**正确行为**，
-     *                              它替代的正是灰世界那条「色偏过大」。
-     */
-    ESP_LOGI(TAG, "[自检] AWB=开 R×%" PRIu32 ".%03" PRIu32 " B×%" PRIu32 ".%03" PRIu32
-                  " %s 下发=%" PRIu32 " 最近=%s(%s) | 未更新：AE未稳=%" PRIu32
-                  " 暗场=%" PRIu32 " 过亮=%" PRIu32 " 色偏过大=%" PRIu32
-                  " 白点太少=%" PRIu32 " 未到周期=%" PRIu32 " 死区内=%" PRIu32
-                  " 增益越界=%" PRIu32 " 量化无变化=%" PRIu32,
-             s_awb.gain_r_milli / 1000, s_awb.gain_r_milli % 1000,
-             s_awb.gain_b_milli / 1000, s_awb.gain_b_milli % 1000,
-             cam_awb_converged(&s_awb) ? "已收敛" : "调整中",
-             s_awb.updates, cam_awb_reason_str(s_awb.last), step_str(s_awb_last_err),
-             s_awb.reasons[CAM_AWB_SKIP_AE], s_awb.reasons[CAM_AWB_SKIP_DARK],
-             s_awb.reasons[CAM_AWB_SKIP_BRIGHT], s_awb.reasons[CAM_AWB_SKIP_CAST],
-             s_awb.reasons[CAM_AWB_SKIP_COUNT],
-             s_awb.reasons[CAM_AWB_SKIP_PERIOD], s_awb.reasons[CAM_AWB_SKIP_BAND],
-             s_awb.reasons[CAM_AWB_SKIP_RANGE], s_awb.reasons[CAM_AWB_SKIP_QUANT]);
-#else
-    ESP_LOGI(TAG, "[自检] AWB=关（CAM_AWB_ENABLE=0，白平衡钉在上面那对静态标定值上）");
-#endif
-
-#if CAM_AWB_STAT_ENABLE
-    /* 硬件白点统计那两行紧跟 AWB 之后：它们说的是同一件事的另一个口径，
-     * 挨着打才对照得起来。sug_r/sug_b 就是上面画质那行算出来的软件绝对建议。 */
-    camera_awb_stat_report(sug_r, sug_b);
-#else
-    ESP_LOGI(TAG, "[自检] AWB统计=未编译（CAM_AWB_STAT_ENABLE=0，不建 ISP AWB 统计块、"
-                  "帧泵里没有那次 oneshot 阻塞）");
-#endif
-
-    /*
-     * 判读：
-     *   AE=未运行 / 非 ESP_OK      → 自动曝光没起来，画面固定在默认曝光（会欠曝）。
-     *   下发=0 且取流中             → 控制律一次都没动过：要么亮度一直落在死区
-     *                                （那是好事），要么帧统计压根没送进来。
-     *   亮度长期偏离目标而下发不涨   → **顶到限位了**：曝光已经是上限、增益已经是
-     *                                cam_tune.h 的 CAM_AE_GAIN_MAX_MILLI ⇒ 环境
-     *                                太暗，只能加光或抬那个上限（代价是噪声）。
-     *   亮度在目标附近来回摆、下发一直涨 → 振荡。四道闸的调法见 cam_tune.h，
-     *                                优先加大 CAM_AE_INTERVAL_TICKS 或减小阻尼。
-     */
-    const uint32_t gain_milli = (s_ae_ready && s_ae.gain_index < s_ae_lim.gain_count)
-                                    ? s_ae_lim.gain_map[s_ae.gain_index] : 0;
-    /* 「亮度=」打的是 s_ae.last_mean —— **AE 这一拍真正吃进去的那个数**，
-     * 而不是重新算一遍。换源之后这一格与「源=」必须一起读：
-     *   源=硬件5×5  这个数来自 demosaic 后的官方加权测光（CCM/WB 上游）
-     *   源=软件线性  来自 ISP 输出的全帧抽样均值（CCM/WB 下游，逆 gamma 还原）
-     * 两者相差约 1/ρ ≈ 1.27×（推导见 cam_tune.h 的 CAM_AE_SOURCE），
-     * 把它们当同一个量比较是本阶段最容易犯的错。 */
-    /*
-     * ⓘ T12 之后「目标」是**随场景变的**（官方 luma_offset：高光优先 −3、
-     *   暗部优先 +1），所以这里打的是这一拍真正喂给控制律的 s_ae_target，
-     *   而不是 CAM_AE_TARGET 这个基准值 —— 两者都打出来才判读得了：
-     *     优先级=高光 目标 59[53,61]   普通场景（官方对这颗传感器的默认模式）
-     *     优先级=暗部 目标 63[57,65]   背光：亮块 >= 25% 且场景均值 < 56
-     *   背光切换= 随时间线性增长 ⇒ 判据在门限上抖，该给它加迟滞了。
-     */
-    ESP_LOGI(TAG, "[自检] AE=%s 源=%s 曝光=%" PRIu32 "/%" PRIu32 " 增益=%u.%03u×(第 %" PRIu32 " 档)"
-                  " 曝光量=%" PRIu32 " | 亮度 %u→目标 %d[%d,%d]（基准 %d，优先级=%s，"
-                  "偏移 %+d）%s 下发=%" PRIu32 " 最近=%s | 背光=%s(%s) 切换=%" PRIu32,
-             step_str(s_st_ae),
-             CAM_AE_SOURCE ? "硬件5×5(官方加权,demosaic后)" : "软件线性(全帧抽样,ISP输出)",
-             s_ae.exposure, s_ae_lim.exp_max,
-             (unsigned)(gain_milli / 1000), (unsigned)(gain_milli % 1000), s_ae.gain_index,
-             s_ae.ev, s_ae.last_mean, s_ae_target,
-             s_ae_target + (CAM_AE_TARGET_LOW - CAM_AE_TARGET),
-             s_ae_target + (CAM_AE_TARGET_HIGH - CAM_AE_TARGET),
-             CAM_AE_TARGET, s_backlight ? "暗部" : "高光",
-             s_backlight ? CAM_AE_LL_OFFSET : CAM_AE_HL_OFFSET,
-             cam_ae_converged(&s_ae) ? "已收敛" : "调整中",
-             s_ae.updates, step_str(s_ae_last_err),
-             s_backlight ? "是" : "否",
-             CAM_BACKLIGHT_ENABLE ? "亮块>=" CAM_STR(CAM_BACKLIGHT_BRIGHT_PCT)
-                                    "% 且 场景均值<" CAM_STR(CAM_AE_TARGET_LOW)
-                                  : "判据未编译，恒取高光优先",
-             s_backlight_switches);
-
-#if CAM_AE_STAT_ENABLE
-    camera_ae_stat_report();
-#else
-    ESP_LOGI(TAG, "[自检] AE统计=未编译（CAM_AE_STAT_ENABLE=0，不建 ISP AE 统计块、"
-                  "不申请 ISP 中断；AE 只有软件全帧均值这一个口径）");
-#endif
-
-    /* 直方图那几行紧跟 AE 之后：它与 AE 的 5×5 是同一帧画面的两个口径
-     * （均匀权重 vs 中心加权），挨着打才对照得起来。 */
-#if CAM_HIST_ENABLE
-    camera_hist_report();
-#else
-    ESP_LOGI(TAG, "[自检] HIST=未编译（CAM_HIST_ENABLE=0，不建 ISP 直方图统计块、"
-                  "帧泵里没有那次 oneshot 阻塞；env.luma 与背光判据一并失效）");
-#endif
-}
-
-/*
- * 官方前馈画质级的自检：**每一级一行**，三级各自独立可读。
- *
- * 一级一行不是排版洁癖，是 bisect 的前提：三个开关分别管三级，现场把某一级关掉
- * 重编时，对应那行会变成「未编译」，另外两行原样 —— 一眼看出这一版关的是哪个。
- *
- * 每行都必须能分出四种情况（别用同一个哨兵表达其中两种）：
- *   未编译     开关 = 0，整段代码不在镜像里 ⇒ 由 #else 分支的那行说出来
- *   未运行     编译进来了但一次都没配过（还没取流，或取流后帧统计没送进来）
- *   <错误码>   配了、硬件拒了 ⇒ 打的是 esp_err_to_name()，直接可查
- *   ESP_OK     配上了 ⇒ 同时打出**此刻硬件里的关键参数值**，可与官方标定表逐个核对
- */
-static void camera_feedfwd_report(void)
-{
-#if CAM_ADN_ENABLE
-    /*
-     * 判读：
-     *   BF=未运行            → 还没取流，或帧统计没进 camera_csi_tune_tick()。
-     *   BF=ESP_ERR_INVALID_ARG   → padding tail valid 参数不合法（两个都得是 0）。
-     *   BF=ESP_ERR_INVALID_STATE → 重复调了 esp_isp_bf_enable()，看 s_bf_enabled。
-     *   档号一直是 0 不动     → 增益没变（正常）或选档喂错了值：看「增益=」那格，
-     *                          遮住镜头让 AE 顶到高增益，档号应当从 0 涨到 3~6、
-     *                          level 从 2 涨到 8~10；开灯回落。
-     *   前馈重配合计 一直涨   → 迟滞没起作用，调大 CAM_FEEDFWD_HYST_TICKS。
-     *                          （它是各前馈级共用的**总**计数，不是本级的）
-     */
-    const uint32_t bf = s_bf_track.cur, dm = s_dm_track.cur;
-    const uint32_t gr = cam_cal_demosaic[dm].grad_ratio_milli;
-    uint32_t gi = 0, gd = 0;
-    cam_map_to_fixed(gr, 2, 4, &gi, &gd);
-    ESP_LOGI(TAG, "[自检] ADN=开 增益=%" PRIu32 ".%03" PRIu32 "× | "
-                  "BF=%s 档%" PRIu32 "/%d level=%u 模板中心=%u | "
-                  "Demosaic=%s 档%" PRIu32 "/%d grad=%" PRIu32 ".%03" PRIu32
-                  "→%" PRIu32 "+%" PRIu32 "/16 | 前馈重配合计=%" PRIu32,
-             s_feedfwd_gain_milli / 1000, s_feedfwd_gain_milli % 1000,
-             step_str(s_st_bf), bf, CAM_CAL_BF_N,
-             cam_cal_bf[bf].level, cam_cal_bf[bf].matrix[4],
-             step_str(s_st_dm), dm, CAM_CAL_DEMOSAIC_N,
-             gr / 1000, gr % 1000, gi, gd, s_feedfwd_reconf);
-#else
-    ESP_LOGI(TAG, "[自检] ADN=未编译（CAM_ADN_ENABLE=0，BF/Demosaic 停在寄存器复位值）");
-#endif
-
-#if CAM_LSC_ENABLE
-    /*
-     * 判读（**四角与中心那五个数是本级唯一能自证生效的东西**）：
-     *   LSC=ESP_ERR_NOT_SUPPORTED → 芯片版本低于 v1.0，见 camera_csi_init() 里的 ⚠️。
-     *   LSC=ESP_ERR_INVALID_SIZE  → 网格数 ≠ 273，ISP 分辨率变了。
-     *   中心≈256(1.00×) 且四角 700~860 → 表填对了：LSC 就是「中心不动、四角提亮」。
-     *   中心不是 256 / 四角不比中心大 → 表被当成衰减而不是增益，或档位填错。
-     *   四个角的值彼此差很多、或某个角接近 256
-     *                             → **排布顺序猜错了**（JSON 是 y 快变），
-     *                               画面会表现为上下亮、左右暗 ⇒ 把 cam_tune.h 的
-     *                               CAM_LSC_TRANSPOSE 改成 1 重编。
-     *   实拍白墙：改动前四角/中心亮度比约 0.3~0.4，改动后差值应 < 15%。
-     *
-     * ══ T13（按 CCT 选档）额外的三条 ═══════════════════════════════════
-     *   档一直是 1（5210K）且 CCT=…(默认)  → **预期**：白点统计还没给过可信采样
-     *                            （counted 没到官方 min_counted），CCT 冻在默认值。
-     *                            不是 LSC 的事，去看「AWB统计」那行的「白点=」。
-     *   白炽灯下 ⇒ 档 0(2410K)；日光下 ⇒ 档 2(8200K)；室内白光 ⇒ 档 1。
-     *   换光源时画面闪一下暗角  → 迟滞不够（已经是别处的两倍）。**若仍在，
-     *                            接受这个已知代价并写进 README**：rev v1.0 没有
-     *                            影子寄存器，273×2 条 LUT 写落在帧内就是硬件限制。
-     *   换档= 随时间线性增长     → CCT 在两档中点（3810K / 6705K）附近抖。
-     */
-    const size_t c_mid = (CAM_CAL_LSC_GRID_Y / 2) * CAM_CAL_LSC_GRID_X + CAM_CAL_LSC_GRID_X / 2;
-    const size_t c_tr  = CAM_CAL_LSC_GRID_X - 1;
-    const size_t c_bl  = (CAM_CAL_LSC_GRID_Y - 1) * CAM_CAL_LSC_GRID_X;
-    const size_t c_br  = c_bl + CAM_CAL_LSC_GRID_X - 1;
-    ESP_LOGI(TAG, "[自检] LSC=开 %s 选档=%s CCT=%" PRIu32 "K(%s) 档%" PRIu32 "/%d(%uK)"
-                  " 换档=%" PRIu32 " 网格 %d×%d=%u(驱动要 %u) 转置=%s | "
-                  "R 增益 中心=%" PRIu32 " 四角=%" PRIu32 "/%" PRIu32 "/%" PRIu32
-                  "/%" PRIu32 "（256=1.00×）",
-             step_str(s_st_lsc),
-#if CAM_LSC_BY_CT
-             "按 CCT 最近邻（迟滞 " CAM_STR(CAM_FEEDFWD_HYST_TICKS) "×2 拍）",
-#else
-             "钉在 CAM_LSC_SLOT_DEFAULT（CAM_LSC_BY_CT=0）",
-#endif
-             s_cct_k, s_cct_valid ? "估计" : "默认",
-             s_lsc_slot, CAM_CAL_LSC_N,
-             (unsigned)cam_cal_lsc_cct[s_lsc_slot],
-#if CAM_LSC_BY_CT
-             s_lsc_switches,
-#else
-             (uint32_t)0,
-#endif
-             CAM_CAL_LSC_GRID_X, CAM_CAL_LSC_GRID_Y, (unsigned)CAM_CAL_LSC_GRIDS,
-             (unsigned)s_lsc_n, CAM_LSC_TRANSPOSE ? "是" : "否",
-             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_mid].val : 0,
-             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[0].val : 0,
-             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_tr].val : 0,
-             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_bl].val : 0,
-             s_lsc_gain.gain_r ? s_lsc_gain.gain_r[c_br].val : 0);
-#else
-    ESP_LOGI(TAG, "[自检] LSC=未编译（CAM_LSC_ENABLE=0，画面保留四角暗角）");
-#endif
-
-#if CAM_AEN_ENABLE
-    /*
-     * 判读：
-     *   Color=ESP_ERR_INVALID_ARG → val 超 255：多半是把 1.031 乘了 1000 写进去。
-     *   画面整体发灰、对比度反而降低 → 把 132 当成百分数或做了 /128 的换算。
-     *   遮镜头拉高增益 ⇒ SHARP 档 0→3、m 系数 1.525→1.225，对比度 132→126。
-     *   饱和度在 128/130 之间抖 → CCT 恰好在 4500 K 附近。迟滞已是 ±150 K，
-     *                            仍抖就加大 CAM_SAT_CT_HYST_K。
-     *   饱和度恒为 128 而 CCT 明显 > 4500 → 换档被迟滞压着（看「换档=」），
-     *                            或 CAM_SAT_BY_CT = 0。
-     *   ⓘ 饱和度对 AE/AWB 的**硬件**统计恒无影响（两个抽头都在 Color 上游）；
-     *     只有 CAM_*_SOURCE = 0 的回退档才会看到那 0.34% 的扰动。
-     *   高增益下噪点被锐化成明显颗粒 → 看 m 系数是否真的随增益降了（没降就是档没跟上）。
-     *   边缘出现白边/黑边（过锐）  → h 系数的定点换算错了（整数位/小数位颠倒）。
-     */
-    const uint32_t sh = s_sh_track.cur;
-    uint32_t hi = 0, hd = 0, mi = 0, md = 0;
-    cam_map_to_fixed(cam_cal_sharpen[sh].h_coeff_milli, 3, 5, &hi, &hd);
-    cam_map_to_fixed(cam_cal_sharpen[sh].m_coeff_milli, 3, 5, &mi, &md);
-    ESP_LOGI(TAG, "[自检] AEN=开 增益=%" PRIu32 ".%03" PRIu32 "× | "
-                  "SHARP=%s 档%" PRIu32 "/%d h阈=%u l阈=%u "
-                  "h系数=%u.%03u→%" PRIu32 "+%" PRIu32 "/32 "
-                  "m系数=%u.%03u→%" PRIu32 "+%" PRIu32 "/32 | "
-                  "Color=%s 对比度=%u(%u.%03u×，按增益) 饱和度=%u(%u.%03u×，%s"
-                  " CCT=%" PRIu32 "K 门限 %uK±" CAM_STR(CAM_SAT_CT_HYST_K) "K 换档=%" PRIu32 ") | "
-                  "前馈重配合计=%" PRIu32,
-             s_feedfwd_gain_milli / 1000, s_feedfwd_gain_milli % 1000,
-             step_str(s_st_sharp), sh, CAM_CAL_SHARPEN_N,
-             cam_cal_sharpen[sh].h_thresh, cam_cal_sharpen[sh].l_thresh,
-             (unsigned)(cam_cal_sharpen[sh].h_coeff_milli / 1000),
-             (unsigned)(cam_cal_sharpen[sh].h_coeff_milli % 1000), hi, hd,
-             (unsigned)(cam_cal_sharpen[sh].m_coeff_milli / 1000),
-             (unsigned)(cam_cal_sharpen[sh].m_coeff_milli % 1000), mi, md,
-             step_str(s_st_color), s_contrast_val,
-             (unsigned)(s_contrast_val * 1000u / 128u / 1000u),
-             (unsigned)(s_contrast_val * 1000u / 128u % 1000u),
-             (unsigned)s_sat_val,
-             (unsigned)(s_sat_val * 1000u / 128u / 1000u),
-             (unsigned)(s_sat_val * 1000u / 128u % 1000u),
-#if CAM_SAT_BY_CT
-             "按 CCT 官方 2 档",
-#else
-             "钉在 CAM_SATURATION_FIXED_VAL",
-#endif
-             s_cct_k, (unsigned)cam_cal_saturation[1].cct_k,
-#if CAM_SAT_BY_CT
-             s_sat_switches,
-#else
-             (uint32_t)0,
-#endif
-             s_feedfwd_reconf);
-#else
-    ESP_LOGI(TAG, "[自检] AEN=未编译（CAM_AEN_ENABLE=0，不配 SHARP/Color）");
-#endif
-
-#if CAM_GAMMA_ENABLE
-    /*
-     * gamma 那一行。它要同时回答**三个**问题，缺一个现场就分不清病因：
-     *   ① 硬件里到底是不是这条曲线      → 档号 + γ + 前向曲线的四个关键点
-     *   ② 统计到底在哪个域算的          → 「统计域=」，以及逆表建了没有
-     *   ③ 逆变换是不是真的对上了        → **线性均值与 gamma 后均值并排**
-     *
-     * ⚠️ ③ 是这次改动唯一能在现场证伪的判据，判读方式必须准确：
-     *
-     *   曲线 F 是**凹**的（段斜率单调下降，宿主机测试守着），由詹森不等式
-     *       mean(F(p)) >= F(mean(p))
-     *   ⇒ 打出来的「gamma后均值」必须 **>= F(线性均值)**（也一起打出来做参照），
-     *     且在画面对比度不极端时两者相差不大（几级到十几级）。
-     *   ⓘ 出厂钉住的第 0 档严格凹 ⇒ 这条不等式严格成立。官方 y 表是取整的，
-     *     第 2 档有一处 1 级的斜率抖动（曲线离自己的上凸包最远 1.22 级）⇒ 将来
-     *     动态换档到那一档时，判读留 1 级余量。
-     *
-     *   gamma后 ≈ 线性        → **逆表没生效**（或 gamma 根本没使能）：两个数应当
-     *                          明显不同才对，相等说明统计域与画面域是同一个。
-     *   gamma后 明显 < F(线性) → 逆表与硬件曲线**不同源**（档号对不上），这是最该
-     *                          怕的一种：画面看着正常，但 AE/AWB 在拿偏移量闭环。
-     *                          用错邻档的误差是十几级量级（宿主机测试 ⑦ 守着），
-     *                          与上面那 1 级的舍入余量差着一个数量级，分得开。
-     *   两者都≈0              → 画面真的全黑，先去看 CSI 那几行，不是 gamma 的事。
-     *
-     * ⓘ「线性均值」就是喂给 AE 的那个数，直接与「AE 目标」比较即可判断曝光够不够。
-     */
-    const uint8_t lin = s_last_stats.lin_lum_mean;
-    ESP_LOGI(TAG, "[自检] GAMMA=%s 选档=%s 档%" PRIu32 "/%d(γ=%u.%03u) 前向 F(16)=%u F(64)=%u"
-                  " F(128)=%u F(255)=%u | 统计域=%s | 亮度均值 线性=%u gamma后=%u"
-                  "（应 >= F(线性)=%u）| 通道均值 线性 R%u G%u B%u / gamma后 R%u G%u B%u"
-                  " | AE 目标=%d(线性域) | 已换档=%" PRIu32,
-             step_str(s_st_gamma),
-#if CAM_GAMMA_ADAPTIVE
-             "按 env.luma 动态（官方口径）",
-#else
-             "钉在 CAM_GAMMA_SLOT（CAM_GAMMA_ADAPTIVE=0）",
-#endif
-             s_gamma_slot, CAM_CAL_GAMMA_N,
-             (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] / 1000),
-             (unsigned)(cam_cal_gamma_param_milli[s_gamma_slot] % 1000),
-             cam_gamma_forward(s_gamma_slot, 16), cam_gamma_forward(s_gamma_slot, 64),
-             cam_gamma_forward(s_gamma_slot, 128), cam_gamma_forward(s_gamma_slot, 255),
-             s_gamma_ready ? "线性(逆表已建)" : "gamma 域(逆表未建，等同没开 gamma)",
-             lin, s_last_stats.lum_mean, cam_gamma_forward(s_gamma_slot, lin),
-             s_last_stats.lin_r_mean, s_last_stats.lin_g_mean, s_last_stats.lin_b_mean,
-             s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean,
-             s_ae_target,
-#if CAM_GAMMA_ADAPTIVE
-             s_gamma_applied
-#else
-             (uint32_t)0
-#endif
-             );
-#else
-    ESP_LOGI(TAG, "[自检] GAMMA=未编译（CAM_GAMMA_ENABLE=0，直出线性光 ⇒ 主机按 sRGB "
-                  "解码会明显偏暗；统计与控制律同在线性域，逆变换一并旁路）");
+    esp_ipa_stats_t stats;
+    if (cam_fill_ipa_stats(&stats))
+        cam_ipa_process(&stats);
 #endif
 }
 
@@ -3081,13 +1266,85 @@ void camera_csi_report(void)
              s_get_timeouts, s_size_mismatch, s_last_size,
              (unsigned)CAM_FB_BYTES);
 
-    /* 画质那两行紧跟其后：上面那行说的是「有没有帧」，它们说的是「帧对不对」，
-     * 顺序就是排查顺序 —— 没帧的时候画质数字一律不必看。 */
-    camera_quality_report();
+    /*
+     * 画质那几行紧跟其后：上面那行说的是「有没有帧」，它们说的是「帧对不对」，
+     * 顺序就是排查顺序 —— 没帧的时候画质数字一律不必看。
+     *
+     * 判读（三块统计）：
+     *   AE 帧=0 而 CSI 帧在涨    → 连续统计没启动，看「运行=」那格。
+     *   25 块**全是 0**          → 窗口 bsize=0，见 init 里 ae_cfg 的 ⚠️。
+     *   25 块全都相同的非零值    → 分块没生效（窗口与分辨率对不上）。
+     *   遮住镜头 ⇒ 25 块全掉；只遮半边 ⇒ **只有一侧掉**。
+     *   白点数一直是 0           → 白点框画错了，或者画面里确实没有接近中性的像素
+     *                            （怼着单色物体）。换白纸或灰卡再看。
+     *   平均G = Σg/白点数 应当落回 [98, 210]（官方 awb.range.green）——
+     *                            落在框外说明白点框与实际画面不匹配。
+     *   Σbin 应当 ≈ 921600（= 1280×720）—— 差很多说明直方图窗口配错了。
+     *   alt 0（不取流）下三个「帧=」还在涨 → stop 路径漏了统计块。
+     */
+    ESP_LOGI(TAG, "[自检] 统计 AE=%s(帧 %" PRIu32 ") AWB=%s(帧 %" PRIu32
+                  ") HIST=%s(帧 %" PRIu32 ") | 运行 AE=%s AWB=%s HIST=%s",
+             step_str(s_st_aestat), s_ae_frames, step_str(s_st_awbstat), s_awb_frames,
+             step_str(s_st_hist), s_hist_frames,
+             step_str(s_st_aerun), step_str(s_st_awbrun), step_str(s_st_histrun));
 
-    /* 官方前馈画质级排在最后：它们既不影响「有没有帧」，也不参与 AE/AWB
-     * 两个闭环的控制律，是纯前向的画质级 —— 前面两组都正常了才轮到看它们。 */
-    camera_feedfwd_report();
+    {
+        uint8_t blocks[25];
+        (void)cam_ae_stat_snapshot(blocks);
+        ESP_LOGI(TAG, "[自检] AE 25 块 [%3u %3u %3u %3u %3u | %3u %3u %3u %3u %3u | "
+                      "%3u %3u %3u %3u %3u | %3u %3u %3u %3u %3u | %3u %3u %3u %3u %3u]",
+                 blocks[0], blocks[1], blocks[2], blocks[3], blocks[4],
+                 blocks[5], blocks[6], blocks[7], blocks[8], blocks[9],
+                 blocks[10], blocks[11], blocks[12], blocks[13], blocks[14],
+                 blocks[15], blocks[16], blocks[17], blocks[18], blocks[19],
+                 blocks[20], blocks[21], blocks[22], blocks[23], blocks[24]);
+
+        uint32_t counted = 0, r = 0, g = 0, b = 0;
+        (void)cam_awb_stat_snapshot(&counted, &r, &g, &b);
+        ESP_LOGI(TAG, "[自检] AWB 白点数=%" PRIu32 " Σr=%" PRIu32 " Σg=%" PRIu32
+                      " Σb=%" PRIu32 "（平均G=%" PRIu32 "，官方框 [98,210]；"
+                      "r/g=%" PRIu32 ".%03" PRIu32 " b/g=%" PRIu32 ".%03" PRIu32 "）",
+                 counted, r, g, b,
+                 counted ? g / counted : 0,
+                 g ? (uint32_t)((uint64_t)r * 1000 / g) / 1000 : 0,
+                 g ? (uint32_t)((uint64_t)r * 1000 / g) % 1000 : 0,
+                 g ? (uint32_t)((uint64_t)b * 1000 / g) / 1000 : 0,
+                 g ? (uint32_t)((uint64_t)b * 1000 / g) % 1000 : 0);
+
+        uint32_t bins[ISP_HIST_SEGMENT_NUMS], total = 0;
+        (void)cam_hist_stat_snapshot(bins);
+        for (int i = 0; i < ISP_HIST_SEGMENT_NUMS; i++)
+            total += bins[i];
+        ESP_LOGI(TAG, "[自检] HIST Σbin=%" PRIu32 "（应 ≈ %d）暗(bin0)=%" PRIu32
+                      " 亮(bin15)=%" PRIu32,
+                 total, CAM_SENSOR_W * CAM_SENSOR_H, bins[0],
+                 bins[ISP_HIST_SEGMENT_NUMS - 1]);
+    }
+
+    /*
+     * 帧内容统计。**纯观测**，不参与任何控制律 —— 它回答的是「帧里有没有东西」：
+     *   min == max        ⇒ 纯色（全黑/全白），不是真实画面
+     *   校验和 帧间不变    ⇒ 取到的是同一块没被重写的缓冲
+     *   R<G>B 比例固定    ⇒ 白平衡没起作用（IPA 没跑，或 CCM 没配上）
+     */
+    ESP_LOGI(TAG, "[自检] 帧内容 采样=%" PRIu32 " 亮度 均值=%u 最小=%u 最大=%u "
+                  "校验和=0x%08" PRIx32 " | 通道均值 R=%u G=%u B=%u",
+             s_last_stats.samples, s_last_stats.lum_mean, s_last_stats.lum_min,
+             s_last_stats.lum_max, s_last_stats.checksum,
+             s_last_stats.r_mean, s_last_stats.g_mean, s_last_stats.b_mean);
+
+    ESP_LOGI(TAG, "[自检] 传感器 BLC(0x3902) 读=%s 值=%d"
+                  "（0xc0=开着⇒基座≈0；0x80=关着⇒基座≈16，与官方 acc.blc 吻合。"
+                  "本板 rev v1.0 无 ISP BLC，metadata 的 BLC 位由 cam_ipa.c 忽略）",
+             step_str(s_st_blc_rd), s_blc_before);
+
+    /* 官方 IPA 那几行排在最后：前面都正常了才轮到看算法在做什么。 */
+#if CAM_IPA_ENABLE
+    cam_ipa_report();
+#else
+    ESP_LOGW(TAG, "[自检] IPA=未编译（CONFIG_AIO_CAM_IPA 关闭）：ISP 只做去马赛克，"
+                  "画面发绿+偏暗+带暗角、曝光固定 —— 排障档，不是产品形态");
+#endif
 }
 
 /* ══ PSRAM 读带宽实测 ══════════════════════════════════════════════ */

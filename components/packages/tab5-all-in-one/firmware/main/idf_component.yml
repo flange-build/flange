@@ -27,6 +27,27 @@ dependencies:
   #      espressif/esp_ipa
   #    在一块「TinyUSB device 独占唯一一条 FSLS PHY」的板子上引入 USB Host 栈，
   #    既违反「不引入 usb-host 依赖」，也与本产品形态毫无关系。
-  #    而 esp_cam_sensor 的依赖只有 cmake_utilities(构建期) + esp_sccb_intf(零外部依赖)。
   #    我们只需要「一个固定模式、拿到一帧 RGB565」，esp_video 那层 V4L2 语义用不上。
+  #
+  # ⓘ **但 esp_ipa 可以单独引，而且必须单独引**（见下）。依赖方向是
+  #    esp_video → esp_ipa，**不是**反过来 —— 早先「引 esp_ipa 会把 esp_video
+  #    那一半拖进来」的判断是错的，为此白写了一整套自研控制律，现已全部删除。
   espressif/esp_cam_sensor: "~2.4.0"
+  # ── 官方 ISP 图像处理算法库（AE/AWB/CCM/gamma/降噪/锐化…）────────────
+  #
+  # **画质算法一律走它，我们不自己发明任何控制律。** 它是闭源 blob
+  # （lib/esp32p4/v6.0+/libesp_ipa.a，约 210 KB），但这正是「与官方 1:1」
+  # 唯一可能的形式 —— 官方标定的 19 档 CCM、9 档 LSC、4 档 gamma/锐化/BF
+  # 都是**按这套算法的行为**标定的，换个控制律那些数就不成立了。
+  #
+  # 依赖树实测只多它自己：manifest 里只有 cmake_utilities 0.*（已在树里，
+  # esp_cam_sensor 也用它）+ idf >= 5.4。**不拖 esp_video / usb_host_uvc /
+  # esp_h264**，与上面那条注释说的方向相反的那个误判已经纠正。
+  #
+  # 配置数据**不在运行期解析 JSON**：构建期由该组件的
+  # tools/config/esp_ipa_config.py 读 ESP_IPA_JSON_CONFIG_FILE_PATH 这个
+  # build property，把 JSON 编译成 esp_video_ipa_config.c。而那个 property
+  # 由 esp_cam_sensor 的 project_include.cmake 按 CONFIG_CAMERA_SC202CS_*
+  # _IPA_JSON_CONFIGURATION_FILE 自动指向 sc202cs_default.json ——
+  # **我们一行 CMake 都不用写**，详见 main/cam_ipa.c 文件头。
+  espressif/esp_ipa: "~2.3.0"
