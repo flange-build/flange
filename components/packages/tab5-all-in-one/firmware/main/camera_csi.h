@@ -97,24 +97,23 @@ esp_err_t camera_csi_stop(void);
 esp_err_t camera_csi_get_frame(const uint16_t **fb, uint32_t timeout_ms);
 
 /*
- * 把三块硬件统计（AE 5×5 / AWB 白点 / 直方图）喂进**官方 esp_ipa** 走一拍，
- * 并把它算出的 metadata 分发到 ISP 与传感器。**每取到一帧就调一次。**
+ * 交一份**帧内容统计**（亮度/校验和/通道均值）留给自检行读。**纯观测**，
+ * 不参与任何控制流。调用方（uvc_stream.c 的帧泵）每取到一帧调一次。
+ *
+ * ⚠️ **画质控制不在这条路上。** 官方 esp_ipa 由 camera_csi.c 里那个专用的
+ *   「IPA 节拍任务」驱动 —— 节拍源是 AE 硬件统计的 ISR，**每帧一拍**，
+ *   与本函数、与帧泵那 100 ms 的固定节拍彻底解耦。这与官方
+ *   esp_video 的 isp_task（阻塞在统计 DMA 完成上，一份统计一次 process）同构。
+ *   曾经把 process() 挂在帧泵上，实际只有 10 Hz，官方标定里所有按「帧」计的量
+ *   （agc.exposure.frame_delay = 3 等）都被拉长三倍 ⇒ AE 收敛慢三倍。
  *
  * ⚠️ **本工程不含任何自研控制律。** 曝光、白平衡、CCM、gamma、降噪、锐化、
- *   LSC、饱和度全部由官方闭源算法决定，实现见 cam_ipa.c；本函数只负责
- *   「把统计搬过去」。此前那套自研 AE/AWB 已整体删除，取舍见 cam_ipa.h。
+ *   LSC、饱和度全部由官方闭源算法决定，实现见 cam_ipa.c。
  *
- * 参数 stats 是帧内容统计，**只用于自检行**（亮度/校验和/通道均值那几个判据），
- * 不参与任何控制 —— IPA 吃的是硬件统计，不是这份软件抽样。
- *
- * 不取流（host 停在 alt 0）时它什么都不做 —— 与「摄像头不取流时零影响」一致。
- * 三块硬件统计也只在取流期间跑（camera_csi_start/stop 里成对启停）。
- *
- * ⓘ 分频**不在这里做**：官方算法内部自带帧延迟（agc.exposure.frame_delay=3）、
- *   最小步长（agc.gain.min_step=0.03）与迟滞（aen.gamma.luma_min_step=3.0），
- *   外面再叠一层只会让那些标定出来的数失去意义。
+ * stats 为 NULL 或 samples == 0（什么都没采到）时不更新，与「采到了、结果是
+ * 全黑」严格区分开。
  */
-void camera_csi_tune_tick(const cam_frame_stats_t *stats);
+void camera_csi_note_frame_stats(const cam_frame_stats_t *stats);
 
 /*
  * CSI/ISP 自检快照。与 camera_sensor_report() 同构、理由也一样（CDC 档下开机那几行

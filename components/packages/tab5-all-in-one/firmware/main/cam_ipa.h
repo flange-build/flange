@@ -74,8 +74,16 @@ esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor);
  * **每拿到一份统计就调一次，调用方不要自己再加分频** —— 官方算法内部自带
  * 帧延迟（agc.exposure.frame_delay = 3）、最小步长（gain.min_step = 0.03）
  * 与迟滞（gamma.luma_min_step = 3.0），外面再叠一层分频只会让这些数失去意义。
+ * 这条约束是**硬的**：stats->seq 每调一次涨一，blob 的 frame_delay 数的就是它。
  *
- * stats 为 NULL、pipeline 没建起来、或没在取流时直接返回（不做任何事）。
+ * ⚠️ 唯一的调用方是 camera_csi.c 里的 IPA 节拍任务，节拍源 = AE 硬件统计的
+ *   ISR（每帧一次），与官方 esp_video 的 isp_task 同构（那边阻塞在统计 DMA
+ *   完成上）。**不要**再把它挂回 UVC 帧泵那 100 ms 的固定节拍上 —— 那样只有
+ *   10 Hz，官方标定里所有按「帧」计的量都会被拉长三倍。
+ *
+ * 本函数**不可重入**（s_md / s_info 是文件级状态），只能有一个调用者任务。
+ *
+ * stats 为 NULL、pipeline 没建起来时直接返回（不做任何事）。
  */
 void cam_ipa_process(const esp_ipa_stats_t *stats);
 

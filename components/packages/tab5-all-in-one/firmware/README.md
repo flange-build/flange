@@ -2383,7 +2383,7 @@ python3 test/isp_cal_extract.py           # 重新生成（换传感器/换 IDF 
 | 抗工频闪烁 | `anti_flicker` | 不做 | 取值枚举 [缺口]，且需要把曝光量化到 10 ms 整数倍，会与 AE 的连续控制冲突 |
 | 时域 FIR | `env.speed_param[16]` | 一阶低通 | 滑动索引 [缺口] |
 | 色调 / 亮度 | — | 写 0 | 官方标定里**没有** hue / brightness 字段 ⇒ **写 0 就是对齐**，不是省略 |
-| IPA 调度 | `esp_ipa` 闭源库 | 自己的 `camera_csi_tune_tick()` | 不引 `esp_video`（它强制拖进 USB **Host** 栈，违反 spec §8.1） |
+| IPA 调度 | `esp_video` 的 `isp_task`：阻塞在统计 DMA 完成上，一份统计一次 `process()` | `camera_csi.c` 的 IPA 节拍任务：阻塞在 AE 统计 ISR 的任务通知上，同样一份统计一次 `process()`（30 Hz） | 不引 `esp_video`（它强制拖进 USB **Host** 栈，违反 spec §8.1）；三块统计我们是三个独立 ISR，故以 AE 为节拍源，另带 100 ms 兜底 |
 
 #### 踩过的坑（每一条都咬过一次或差点咬）
 

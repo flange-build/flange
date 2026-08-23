@@ -9,6 +9,7 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 #include "tab5_pins.h"
 
@@ -91,6 +92,14 @@ static int32_t  s_st_range  = STEP_NOT_RUN;  /* 曝光/增益可调范围查询 
 static int32_t  s_st_proc   = STEP_NOT_RUN;  /* 最近一次 process() 的返回值 */
 static int32_t  s_st_exp    = STEP_NOT_RUN;  /* 最近一次曝光/增益下发的返回值 */
 static uint32_t s_ticks;                     /* process() 累计调用次数 */
+/* 最近一次送进 blob 的统计序号。blob 用 seq 判断「这份统计是不是新的」，
+ * 而它由 camera_csi.c 每填一份统计递增一次 ⇒ 它与 s_ticks 应当同步增长。
+ * 两者拉开差距就说明有 process() 被跳过了（或者反过来，统计被重复消费）。 */
+static uint64_t s_last_seq;
+/* 上一次自检的时刻与拍数，用来算 process() 的**实际频率** ——
+ * 「有没有真的从 10 Hz 对齐到 30 Hz」的唯一直读依据。 */
+static int64_t  s_rate_us;
+static uint32_t s_rate_ticks;
 static uint32_t s_flags_seen;                /* 至今**见过**的 metadata flags 并集 */
 static uint32_t s_flags_last;                /* 最近一拍的 metadata flags */
 static uint32_t s_n_exp, s_n_gain, s_n_ccm, s_n_gamma, s_n_lsc;
@@ -647,6 +656,7 @@ void cam_ipa_process(const esp_ipa_stats_t *stats)
      *   不清的话上一拍的位会一直留着，分发层会拿陈旧的字段反复写硬件。
      *   官方 esp_video 在 isp_task 里也是每拍 `isp->metadata.flags = 0`。 */
     s_md.flags = 0;
+    s_last_seq = stats->seq;
     s_st_proc  = esp_ipa_pipeline_process(s_pipe, stats, &s_info, &s_md);
     s_ticks++;
     if (s_st_proc != ESP_OK)
@@ -705,8 +715,12 @@ static const char *step_str(int32_t v)
  *                             是不是 y，以及 build 目录下有没有 esp_video_ipa_config.c。
  *   建立/初始化 非 OK       → blob 拒了。多半是 .names 里某个算法没被链进来
  *                             （CONFIG_ESP_IPA_*_ALGORITHM 被关掉了）。
- *   拍数=0 而在取流         → 统计一份都没送进来，回去看 camera_csi.c 的
- *                             camera_csi_tune_tick()。
+ *   拍数=0 而在取流         → 统计一份都没送进来。回去看 camera_csi.c 的
+ *                             「IPA 节拍」自检行：唤醒=0 说明节拍任务没建起来，
+ *                             跳过一直涨说明三块硬件统计一份都没到。
+ *   Hz ≈ 10 而不是 ≈ 30      → 掉进了 camera_csi.c 的兜底节拍（AE 统计断供），
+ *                             同样看那一行的「超时兜底」与「运行 AE=」。
+ *   Hz ≈ 30 但拍数与 seq 差   → 有统计被重复消费或被跳过，两者应当同步增长。
  *   flags 里**始终没有 ET/GN** → 范围= 那格非 OK（查不到曝光/增益可调范围），
  *                             或者 blob 认为已经收敛（正常，遮挡镜头应当立刻出现）。
  *   flags 里有 BLC          → **预期如此**，本板忽略它，见 dispatch() 的注释。
@@ -721,9 +735,27 @@ void cam_ipa_report(void)
     flags_str(s_flags_last, last, sizeof last);
     flags_str(s_flags_seen, seen, sizeof seen);
 
-    ESP_LOGI(TAG, "IPA：配置=%s 建立=%s 初始化=%s 范围=%s 处理=%s 拍数=%" PRIu32,
+    /*
+     * process() 的**实际频率**：两次自检之间的拍数差 ÷ 时间差。
+     * 取流中应当 ≈ 30 Hz（= 传感器帧率，一份 AE 统计一拍，与官方 isp_task 同）；
+     * ≈ 10 Hz 说明掉回了 camera_csi.c 里那条兜底节拍。不取流时应当是 0。
+     * ⓘ 算完就把基准推到此刻 —— 这个数的语义是「距上一行自检」，与 uvc 那边
+     *   的实测 fps 同一口径。
+     */
+    const int64_t now = esp_timer_get_time();
+    uint32_t hz_x10 = 0;
+    if (s_rate_us && now > s_rate_us)
+        hz_x10 = (uint32_t)((int64_t)(s_ticks - s_rate_ticks) * 10000000
+                            / (now - s_rate_us));
+    s_rate_us    = now;
+    s_rate_ticks = s_ticks;
+
+    ESP_LOGI(TAG, "IPA：配置=%s 建立=%s 初始化=%s 范围=%s 处理=%s"
+                  " 拍数=%" PRIu32 "（≈%" PRIu32 ".%" PRIu32 " Hz 距上一行自检，"
+                  "取流中应 ≈30）统计seq=%" PRIu64,
              step_str(s_st_cfg), step_str(s_st_create), step_str(s_st_init),
-             step_str(s_st_range), step_str(s_st_proc), s_ticks);
+             step_str(s_st_range), step_str(s_st_proc), s_ticks,
+             hz_x10 / 10, hz_x10 % 10, s_last_seq);
     ESP_LOGI(TAG, "IPA：本拍 flags=[%s]  至今见过=[%s]", last, seen);
     ESP_LOGI(TAG, "IPA：下发 曝光=%" PRIu32 " 次（当前 %" PRIu32 " 行 = %" PRIu32
                   " µs）增益=%" PRIu32 " 次（当前 %u.%03u×）下发码=%s",

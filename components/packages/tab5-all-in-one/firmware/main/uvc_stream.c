@@ -162,13 +162,13 @@ static int32_t  s_cam_last_err = ESP_OK;   /* 最近一次 start/stop 的返回�
  *                       csi_transfer_size 那段）
  * 统计对象是**缩放前的 1280×720 原帧**，因为要判的是 CSI/ISP 那一段。
  *
- * ⓘ 全帧统计从「每秒一次」改成了**每帧一次**：它现在同时是自动曝光与自动白平衡
- *   的输入（camera_csi_tune_tick 把硬件统计喂给官方 esp_ipa），而节奏是按「拍」算的，
- *   隔一秒喂一次数据会让官方算法的帧延迟/迟滞（按帧标定）全部失去意义。
+ * ⓘ 全帧统计每帧取一次（跟着本帧泵那一拍，10 fps）。**它不是任何控制律的输入** ——
+ *   曝光与白平衡吃的是 ISP 的硬件统计，由 camera_csi.c 里那个 30 Hz 的 IPA 节拍
+ *   任务独立驱动（节拍源 = AE 统计的 ISR）。这里每帧取一次只是为了让自检行里的
+ *   「校验和帧帧不变」「均值随遮挡变」这些判据有足够的时间分辨率。
  *   代价：1/64 采样约 2 ms/帧 × 10 fps = **每秒 20 ms**，占取流期 PSRAM 时间的
- *   2%，比 CSI 自己那 55 MB/s 小两个数量级；换来的是曝光与白平衡都能闭上环
- *   （AWB 的三个通道均值就在同一次扫描里顺带算出来，不多扫一遍）。
- *   下 1/8 那份仍然每秒一次 —— 它判的是 DMA 截断，与曝光无关，没必要跟着加密。
+ *   2%，比 CSI 自己那 55 MB/s 小两个数量级。
+ *   下 1/8 那份仍然每秒一次 —— 它判的是 DMA 截断，没必要跟着加密。
  */
 static uint32_t          s_stat_phase;
 static cam_frame_stats_t s_stat_full;
@@ -236,13 +236,17 @@ static bool uvc_frame_source_get(const uint8_t **buf, size_t *len)
         return false;
 
     /*
-     * 内容统计。统计的是**缩放前**的原帧 —— 要判的是 CSI/ISP 段，而且 AE 要控的
-     * 也是传感器的曝光，两者都必须在缩放/编码之前取。
+     * 内容统计。统计的是**缩放前**的原帧 —— 要判的就是 CSI/ISP 段。
      * 顺序上紧贴取帧、排在缩放之前：PPA 与 JPEG 各要几毫秒，插在中间只会让
-     * 「反馈量对应哪一帧」变得更含糊。
+     * 「这份数对应哪一帧」变得更含糊。
+     *
+     * ⓘ **画质控制已经不在这条路上了。** 官方 esp_ipa 由 camera_csi.c 里那个
+     *   专用的 IPA 节拍任务驱动（节拍源 = AE 硬件统计的 ISR，每帧一拍），
+     *   与本帧泵的 100 ms 固定节拍彻底解耦 —— 挂在这里时 process() 只有 10 Hz，
+     *   官方标定的 frame_delay 被拉长三倍。这里只剩一份纯观测量。
      */
     frame_stats_sample(raw);
-    camera_csi_tune_tick(&s_stat_full);
+    camera_csi_note_frame_stats(&s_stat_full);
 
     /* 下 1/8 那份每秒一次就够，它判的是 DMA 截断，与曝光无关。 */
     if (++s_stat_phase >= UVC_FPS) {

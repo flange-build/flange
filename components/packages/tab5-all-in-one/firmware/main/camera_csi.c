@@ -313,6 +313,17 @@ static int32_t s_st_start = STEP_NOT_RUN;   /* enable/start/stream-on 整条启�
 static int32_t s_st_blc_rd  = STEP_NOT_RUN;
 static int32_t s_blc_before = -1;
 
+#if CAM_IPA_ENABLE
+/*
+ * IPA 节拍任务的句柄。**提到这里**只有一个理由：唤醒动作发生在下面那个 AE
+ * 统计的 ISR 回调里，而任务体本身在文件下半部、紧挨着它消费的
+ * cam_fill_ipa_stats（那里有「为什么要单开一个任务」的完整推理）。
+ * NULL = IPA 没起来（或任务没建成）⇒ ISR 不唤醒任何人。
+ */
+static TaskHandle_t s_ipa_task;
+static void cam_ipa_task_start(void);
+#endif
+
 /* ══ 硬件 AE 5×5 分块统计 ══════════════════════════════════════════
  * 官方 esp_ipa 的 agc/ian 两个模块吃的就是这 25 个块（esp_ipa_stats_t.ae_stats）。
  * 采样点 AFTER_DEMOSAIC 与官方 esp_video 硬编码的那个**必须一致** ——
@@ -337,8 +348,10 @@ static uint32_t      s_ae_stat_frames;
  *   ISP 的 ISR 允许访问 flash；加了反而按 isp_ae.c 的 `#if CONFIG_ISP_ISR_IRAM_SAEE`
  *   分支要求 s_ae_blocks 等一并进内部 RAM，凭空多一层约束。
  *
- * ⓘ 返回 false = 没有唤醒任何任务（我们不用队列/信号量，AE 的执行仍然跑在
- *   帧泵那一拍上，见 camera_ae_tick）。
+ * ⓘ 它同时是**整条 IPA 的节拍源**：搬完 25 字节之后给 cam_ipa_task 发一条
+ *   任务通知，process() 就在那个任务里跑。ISR 侧只有「给通知」这一个动作，
+ *   重活（填 esp_ipa_stats_t、跑 blob、下发 I2C）一件都不在这里。
+ *   选 AE 而不是 AWB/直方图当拍子的理由写在 cam_ipa_task 上方。
  *
  * ⓘ 驱动填 luminance[i][j] 的次序是 `block_id = i*5 + j` 顺着
  *   isp_ll_ae_get_block_mean_lum() 读的（isp_ae.c 的 esp_isp_ae_isr），
@@ -357,7 +370,19 @@ static bool cam_on_ae_stat(isp_ae_ctlr_t h, const esp_isp_ae_env_detector_evt_da
             s_ae_blocks[i * 5 + j] = (uint8_t)e->ae_result.luminance[i][j];
     s_ae_stat_frames++;
     portEXIT_CRITICAL_ISR(&s_ae_lock);
+
+#if CAM_IPA_ENABLE
+    /* 通知计数式唤醒：任务侧用 ulTaskNotifyTake(pdTRUE) 一次取走全部计数，
+     * 取回的数就是「这一拍之前积了几份统计」—— 那正是判断有没有丢统计的依据。 */
+    BaseType_t woken = pdFALSE;
+    if (s_ipa_task)
+        vTaskNotifyGiveFromISR(s_ipa_task, &woken);
+    /* 返回 true ⇒ ISP 的 ISR 出口做一次 portYIELD_FROM_ISR（isp_ae.c 的
+     * need_yield 是把各回调的返回值或起来的），让节拍任务立刻拿到 CPU。 */
+    return woken == pdTRUE;
+#else
     return false;
+#endif
 }
 
 /* 取一份 25 块的快照。**不做任何归约** —— 加权、剔除过暗/过亮块这些事全部由
@@ -937,6 +962,8 @@ esp_err_t camera_csi_init(void)
     if (ipa_err != ESP_OK)
         ESP_LOGW(TAG, "官方 IPA 没起来(%s)，画面会发绿+偏暗+带暗角，其余一切照常",
                  esp_err_to_name(ipa_err));
+    else
+        cam_ipa_task_start();   /* pipeline 建起来了，才有节拍任务的消费对象 */
 #else
     ESP_LOGW(TAG, "CONFIG_AIO_CAM_IPA 关闭：ISP 只做去马赛克，"
                   "画面会发绿+偏暗+带暗角、曝光固定 —— 这是排障档，不是产品形态");
@@ -1008,6 +1035,13 @@ esp_err_t camera_csi_start(void)
     }
 
     s_streaming = true;
+#if CAM_IPA_ENABLE
+    /* 踢一下节拍任务。它此刻正睡在 portMAX_DELAY 上（不取流那一档），不踢的话
+     * 要等第一份 AE 统计中断才醒 —— 而 AE 统计若压根没建起来（只降级不拦启动），
+     * 它就再也醒不过来，连兜底节拍都不会开始。这一下把它拨回「取流」那一档。 */
+    if (s_ipa_task)
+        xTaskNotifyGive(s_ipa_task);
+#endif
     ESP_LOGI(TAG, "取流已开始（CSI 每秒往 PSRAM 写约 %u MB）",
              (unsigned)(CAM_FB_BYTES * 30 / (1024 * 1024)));
     return ESP_OK;
@@ -1037,7 +1071,21 @@ esp_err_t camera_csi_stop(void)
      * 「控制器还开着但 s_streaming 已经是 false」这类半停状态，下一次 start 只会
      * 收到一个与根因无关的 INVALID_STATE。失败只记 warning、继续往下走，
      * 最终状态由 s_streaming = false 一锤定音。
+     *
+     * ⚠️ **而那句 s_streaming = false 必须排在动任何硬件之前。**
+     * 它是 cam_ipa_task 的闸 —— 那是一条独立的任务（节拍源是 AE 统计的 ISR），
+     * 与本函数**不在同一个任务上**（本函数跑在 UVC 帧泵里）。先关闸，
+     * 停流期间新到的 AE 统计就只会让节拍任务醒一下、看一眼、接着睡，
+     * 不会再往一个正在被关掉的传感器上写曝光/增益。
+     * 残留窗口只剩「关闸那一刻已经进了门的那一拍」（几百微秒），它最坏也只是
+     * 给一颗即将 sleep 的传感器多写一次曝光寄存器 —— 无害，下次 start 照常。
+     *
+     * ⓘ 提前置位不影响本函数原有的语义：入口那道幂等闸已经过了，而
+     *   「最终状态由 s_streaming = false 一锤定音」说的是**不因中途失败而回退**，
+     *   提前置反而让这一点更硬。
      */
+    s_streaming = false;
+
     esp_err_t err = ESP_OK;
     int off = 0;
     /* 逐条顺序展开，**不要**塞进数组初始化器里循环 —— C 不保证初始化器各表达式的
@@ -1063,7 +1111,6 @@ esp_err_t camera_csi_stop(void)
     }
     keep_first_err(&err, "ISP disable", esp_isp_disable(s_isp));
     keep_first_err(&err, "CSI disable", esp_cam_ctlr_disable(s_cam));
-    s_streaming = false;
 
     /* 把所有缓冲收回空闲队列，让下一次 start 从确定的状态开始 ——
      * 否则残留在 done 队列里的旧帧会被下一次 get_frame() 当成新帧取走。 */
@@ -1195,41 +1242,155 @@ static bool cam_fill_ipa_stats(esp_ipa_stats_t *st)
      *   （标定文件里没有相应字段），后者要 VCM 而 SC202CS 是定焦模组。 */
     return st->flags != 0;
 }
+
+/*
+ * ══ IPA 节拍任务 ══════════════════════════════════════════════════
+ *
+ * ── 为什么要单开一个任务 ───────────────────────────────────────────
+ * 官方的消费侧（esp_video/src/esp_video_isp_pipeline.c 的 isp_task）是一个
+ * **专用 FreeRTOS 任务**：阻塞在 VIDIOC_DQBUF 等 ISP 统计 DMA 完成 → 取传感器
+ * 状态 → 填 esp_ipa_stats_t → esp_ipa_pipeline_process() → 分发 metadata →
+ * VIDIOC_QBUF 归还缓冲。**一份统计一次 process，不分频。**
+ *
+ * 本工程一度把 process() 挂在 UVC 帧泵那一拍上，而帧泵是 100 ms 固定节拍
+ * ⇒ 只有 10 Hz。三块统计本来就是 30 Hz 到的（连续模式 + ISR 回调），
+ * 慢的只是消费侧 —— 而 stats->seq 由我们每次 process() 递增，于是官方标定里
+ * 所有按「帧」计的量统统被拉长三倍：
+ *     agc.exposure.frame_delay = 3 → 3 × 100 ms = 300 ms（应为 3 × 33 ms）
+ *     agc.gain.frame_delay     = 3 → 同上
+ *     awb 的各种 delay / counter → 同上
+ * 表现就是 AE/AWB **收敛慢三倍**。修法只能是把消费侧从帧泵上摘下来，
+ * 让它跟着统计走 —— 也就是这个任务。
+ *
+ * ── 节拍源为什么取 AE ─────────────────────────────────────────────
+ * 官方那边三块统计装在同一个 meta buffer 里一起 DQ（带 flags 表示哪些有效），
+ * 我们这边是三个独立的 ISR 回调，必须挑一个当拍子。挑 AE：
+ *   · 它由 ISP 的 AE_FDONE 中断驱动，**每帧必发一次**，是三块里最可靠的；
+ *   · agc 是唯一每拍都消费输入的控制律，拍子跟着它走语义最直接；
+ *   · AWB / 直方图用各自 ISR 最近一次的值 —— 三块统计由**同一个** ISP 中断
+ *     周期产生，落后至多一帧，而 blob 本来就按帧延迟工作。
+ * ⚠️ **只对真正交付过数据的块置 flag 位**，这条不变式在 cam_fill_ipa_stats 里，
+ *   别绕过它：置了位却给全 0，blob 会以为画面全黑、把曝光一路推到顶。
+ *
+ * ── 兜底超时 ──────────────────────────────────────────────────────
+ * AE 统计没建起来（s_st_aestat != ESP_OK，只降级不拦启动的那条路）或中途断供
+ * 时，通知永远不来。纯通知驱动的话 AWB/CCM/gamma/LSC 会一起冻在初值上 ——
+ * 比返工前**更差**。所以取流期间的等待带 CAM_IPA_FALLBACK_MS 超时，超时也走
+ * 一拍：降级成返工前那个 10 Hz 节奏，而不是失效。
+ * 不取流时无限期阻塞、一次都不醒 ——「摄像头不取流时零影响」在本任务上的落点。
+ */
+#define CAM_IPA_FALLBACK_MS  100    /* AE 断供时的兜底节拍，恰好是返工前那一拍 */
+
+/*
+ * 优先级 3。**必须低于 TinyUSB 与各条数据泵**：TinyUSB 与 UVC 帧泵都是 5、
+ * 触摸与键盘是 5、音频泵是 4。理由有两条：
+ *   · 本任务是一条尽力而为的控制回路 —— 晚一拍的代价只是 AE 多花 33 ms 收敛；
+ *     而 UVC/UAC/HID 晚一拍是用户直接看得见听得见的掉帧、爆音、丢触点。
+ *   · 它会做 I2C 写（下发曝光/增益），走的是与触摸/codec/IO 扩展共用的那条
+ *     内部总线，压在触摸之上更没有道理。
+ * 3 之下还有待机点阵任务(2)与 IDLE(0)，不存在把它们饿死的风险：
+ * 本任务 30 Hz、每拍只有几百微秒（blob 的浮点 + 最多 6 次 SCCB 写）。
+ */
+#define CAM_IPA_TASK_PRIO    3
+
+/*
+ * 栈 4096 字节。esp_ipa_stats_t（≈624 B = 25 块 AE + 5×5 AWB 子窗 + 16 段
+ * 直方图 + 3 个 AF 窗 + seq/flags）**提成文件级静态、不放栈上** —— 它每拍都要
+ * memset 一遍，放栈上等于从 blob 的浮点运算与 LSC 分发那里挤掉六百多字节。
+ * ⓘ 顺带把 UVC 帧泵那 4096 字节的栈也还回去了：这个结构体原先是 uvc 任务的
+ *   局部变量。
+ * 实际余量由自检行的「栈余」直读（uxTaskGetStackHighWaterMark，IDF 返回字节），
+ * 不必靠猜；那一格掉到 512 B 以下就该把这里加大。
+ */
+#define CAM_IPA_TASK_STACK   4096
+
+/* 送进 blob 的那份统计。**文件级静态**，理由见 CAM_IPA_TASK_STACK 上方。
+ * 只有 cam_ipa_task 一个写者与读者，不需要同步。 */
+static esp_ipa_stats_t s_ipa_stats;
+
+/* ── 节拍自检计数器 ──────────────────────────────────────────────
+ * 只由 cam_ipa_task 写、自检行读，与本文件其余计数器同规格（单向累加、
+ * 32 位对齐读写在 P4 上原子）。判读表写在 camera_csi_report() 里。 */
+static uint32_t s_ipa_wakes;      /* 任务醒过几次（含兜底超时那几次） */
+static uint32_t s_ipa_notifies;   /* 一共消费掉多少条 AE 通知 */
+static uint32_t s_ipa_runs;       /* 真正调到 cam_ipa_process() 的次数 */
+static uint32_t s_ipa_skips;      /* 醒了但没跑（停流中 / 三块统计一份都没到） */
+static uint32_t s_ipa_timeouts;   /* 兜底超时触发的次数 = AE 统计断供的拍数 */
+static uint32_t s_ipa_batch_max;  /* 单次唤醒里最多消费掉几条通知，>1 = 没跟上 */
+
+static void cam_ipa_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        /*
+         * 不取流 ⇒ 睡到天荒地老（统计块此时也停了，通知不会来），零 CPU；
+         * 取流   ⇒ 最多等一个兜底节拍。
+         * s_streaming 的读法与本文件其余各处一致（写方是启停那一路的任务，
+         * 读到旧值最多让这一拍多睡或少睡一次，下一拍就纠正回来）。
+         */
+        const TickType_t wait = s_streaming ? pdMS_TO_TICKS(CAM_IPA_FALLBACK_MS)
+                                            : portMAX_DELAY;
+        /* pdTRUE = 退出时把计数清零 ⇒ 返回值就是「上一拍到现在积了几份统计」。
+         * 它恒等于 1 才说明真的做到了「一份统计一次 process」。 */
+        const uint32_t n = ulTaskNotifyTake(pdTRUE, wait);
+
+        s_ipa_wakes++;
+        s_ipa_notifies += n;
+        if (n == 0)
+            s_ipa_timeouts++;           /* AE 断供，走兜底那一拍 */
+        else if (n > s_ipa_batch_max)
+            s_ipa_batch_max = n;        /* >1 ⇒ 没跟上，blob 少看了 n-1 帧统计 */
+
+        /* 停流之后可能还剩一条在路上的通知（AE 的 ISR 与本任务是两条线）。
+         * 这一行是「不取流时一步都不走」的闸，与 camera_csi_stop() 里那句
+         * 提前置 false 配对 —— 后者关的是门，这里是进门前再看一眼。 */
+        if (!s_streaming) {
+            s_ipa_skips++;
+            continue;
+        }
+
+        if (cam_fill_ipa_stats(&s_ipa_stats)) {
+            cam_ipa_process(&s_ipa_stats);
+            s_ipa_runs++;
+        } else {
+            s_ipa_skips++;              /* 三块统计一份都还没到，刚开流那几拍 */
+        }
+    }
+}
+
+/*
+ * 建节拍任务。幂等。
+ * 失败**只降级不拦启动**（与本文件其余画质级同一处置）：没有节拍任务就没人调
+ * process()，画面停在 cam_ipa_init() 下发的那批初值上，取流本身完全不受影响。
+ */
+static void cam_ipa_task_start(void)
+{
+    if (s_ipa_task)
+        return;
+    if (xTaskCreate(cam_ipa_task, "ipa", CAM_IPA_TASK_STACK, NULL,
+                    CAM_IPA_TASK_PRIO, &s_ipa_task) != pdPASS) {
+        ESP_LOGW(TAG, "IPA 节拍任务建不起来，画面停在 IPA 初值上，其余一切照常");
+        return;   /* xTaskCreate 失败时不写句柄，s_ipa_task 保持 NULL */
+    }
+    ESP_LOGI(TAG, "IPA 节拍任务已建：节拍源=AE 统计中断（每帧一次 ⇒ 跟随传感器帧率），"
+                  "优先级 %d、栈 %d B，兜底 %d ms；不取流时休眠",
+             CAM_IPA_TASK_PRIO, CAM_IPA_TASK_STACK, CAM_IPA_FALLBACK_MS);
+}
 #endif  /* CAM_IPA_ENABLE */
 
-void camera_csi_tune_tick(const cam_frame_stats_t *st)
+void camera_csi_note_frame_stats(const cam_frame_stats_t *st)
 {
-    /* samples == 0 表示这份统计什么都没采到（参数非法）—— 与「采到了，结果是
-     * 全黑」严格区分开。它只影响自检行，不影响 IPA（IPA 吃的是硬件统计）。 */
+    /*
+     * samples == 0 表示这份统计什么都没采到（参数非法）—— 与「采到了，结果是
+     * 全黑」严格区分开。**纯观测量，不参与任何控制。**
+     *
+     * ⚠️ 本函数**不再驱动 IPA**。process() 已经搬进 cam_ipa_task（节拍源是 AE
+     *   统计的 ISR，跟着传感器帧率走），与帧泵那 100 ms 的固定节拍彻底解耦 ——
+     *   挂在帧泵上时 process() 只有 10 Hz，官方标定里所有按「帧」计的量
+     *   （agc.exposure.frame_delay = 3 等）都被拉长三倍，推理见 cam_ipa_task。
+     */
     if (st && st->samples)
         s_last_stats = *st;
-
-    /*
-     * **不取流就一步都不走。** 调用方（uvc_stream.c 的帧泵）只在 alt 1 下才拿得到
-     * 帧，本来就不会走到这里；这一行是结构上的第二道保险 —— 「摄像头不取流时
-     * 零影响」不该依赖调用方记得这件事。
-     */
-    if (!s_streaming)
-        return;
-
-#if CAM_IPA_ENABLE
-    /*
-     * **每拿到一份统计就调一次 process()，这里不做任何分频。**
-     * 官方算法内部自带节奏控制：agc.exposure.frame_delay = 3（下发后等 3 帧再采信）、
-     * agc.gain.min_step = 0.03、aen.gamma.luma_min_step = 3.0（迟滞）。
-     * 外面再叠一层分频只会让这些标定出来的数失去意义 —— 那正是上一版自研实现
-     * 犯的错（AE 300 ms、AWB 1 s、直方图 1 s 三个周期互相错相位，全是我们自己
-     * 发明的）。
-     *
-     * ⓘ 帧泵是 100 ms 的固定节拍 ⇒ 这里约 10 Hz，而三块统计都是每帧（30 Hz）
-     *   由 ISR 更新的 ⇒ blob 拿到的永远是最新一帧的统计，只是每三帧才消费一次。
-     *   这与官方 esp_video 每帧调一次相比只是**节奏慢三倍**，不改变任何控制律；
-     *   帧延迟 frame_delay=3 是按「帧」算的，比我们这一拍还短，不会被跨过去。
-     */
-    esp_ipa_stats_t stats;
-    if (cam_fill_ipa_stats(&stats))
-        cam_ipa_process(&stats);
-#endif
 }
 
 void camera_csi_report(void)
@@ -1290,7 +1451,8 @@ void camera_csi_report(void)
 
     {
         uint8_t blocks[25];
-        (void)cam_ae_stat_snapshot(blocks);
+        const uint32_t ae_frames = cam_ae_stat_snapshot(blocks);
+        (void)ae_frames;   /* CONFIG_AIO_CAM_IPA 关掉时下面那行不编译 */
         ESP_LOGI(TAG, "[自检] AE 25 块 [%3u %3u %3u %3u %3u | %3u %3u %3u %3u %3u | "
                       "%3u %3u %3u %3u %3u | %3u %3u %3u %3u %3u | %3u %3u %3u %3u %3u]",
                  blocks[0], blocks[1], blocks[2], blocks[3], blocks[4],
@@ -1319,6 +1481,32 @@ void camera_csi_report(void)
                       " 亮(bin15)=%" PRIu32,
                  total, CAM_SENSOR_W * CAM_SENSOR_H, bins[0],
                  bins[ISP_HIST_SEGMENT_NUMS - 1]);
+
+#if CAM_IPA_ENABLE
+        /*
+         * ══ IPA 的**节拍**自检 ══ 「有没有真的对齐 30 Hz」只能由这一行回答。
+         *
+         *   处理/统计 ≈ 100% 且 单次最多=1 ⇒ 每份 AE 统计恰好消费一次 ⇒ **对齐了**。
+         *                                    绝对频率看下面 IPA 那行的「拍数」。
+         *   单次最多 ≥ 2                   ⇒ 任务没跟上，两份统计被合并成一拍，
+         *                                    blob 少看了帧。看 CPU 负载与
+         *                                    「下发码」（I2C 是否在阻塞）。
+         *   超时兜底 持续涨                 ⇒ AE 统计断供，整条 IPA 掉回 10 Hz 兜底
+         *                                    节拍，根因看上面「运行 AE=」那一格。
+         *   跳过 持续涨而取流中             ⇒ 三块统计一份都没到（都没建起来）。
+         *   栈余 < 512 B                   ⇒ CAM_IPA_TASK_STACK 该加大了。
+         *   唤醒 = 0 而取流中               ⇒ 任务根本没建起来，看开机那条 warning。
+         */
+        ESP_LOGI(TAG, "[自检] IPA 节拍 唤醒=%" PRIu32 " 通知=%" PRIu32 " 处理=%" PRIu32
+                      " 跳过=%" PRIu32 " 超时兜底=%" PRIu32 " 单次最多=%" PRIu32 " 条"
+                      " | AE 统计交付=%" PRIu32 " ⇒ 处理/统计=%" PRIu32 "%%（应 ≈100）"
+                      " | 优先级 %d 栈余 %u B",
+                 s_ipa_wakes, s_ipa_notifies, s_ipa_runs, s_ipa_skips,
+                 s_ipa_timeouts, s_ipa_batch_max, ae_frames,
+                 ae_frames ? (uint32_t)((uint64_t)s_ipa_runs * 100 / ae_frames) : 0,
+                 CAM_IPA_TASK_PRIO,
+                 (unsigned)(s_ipa_task ? uxTaskGetStackHighWaterMark(s_ipa_task) : 0));
+#endif
     }
 
     /*
