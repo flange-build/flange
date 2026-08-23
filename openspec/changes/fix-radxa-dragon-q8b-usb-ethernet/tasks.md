@@ -34,3 +34,8 @@
 
 - [x] 7.1 Q8B 复用现有 DWC3 clear-stall 请求保留补丁
 - [x] 7.2 验证 Q8B patch 路由、补丁内容一致性及当前 kernel HEAD 适用性
+
+## 8. Q8B 双有线网卡 probe
+
+- [x] 8.1 增加 TC956x IRQ-domain 配置结构体 zero-init 最小 patch
+- [x] 8.2 验证 patch 路由、当前 kernel HEAD 适用性及相关配置测试

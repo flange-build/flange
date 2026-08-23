@@ -128,6 +128,16 @@ def test_board_kernel_patch_sets_usb0_peripheral():
     assert q8b_dwc3_patch in q8b_patches
     assert q8b_dwc3_patch.read_bytes() == q6a_dwc3_patch.read_bytes()
 
+    tc956x_patch = (
+        PROJECT_ROOT / "components/platform/qualcommsc8280xp/patches/kernel/"
+        "0002-net-tc956x-zero-init-irq-domain-info.patch"
+    )
+    tc956x_text = tc956x_patch.read_text()
+    assert tc956x_patch in q8b_patches
+    assert "+\tstruct irq_domain_chip_generic_info dgc_info = { };" in tc956x_text
+    assert "+\tstruct irq_domain_info info = { };" in tc956x_text
+    assert "toshiba,axi-bus-frequency-half" not in tc956x_text
+
 
 def test_rootfs_firmware_and_ucm_inputs_are_complete():
     cfg = resolve_config("radxa-dragon-q8b", "default", "release")

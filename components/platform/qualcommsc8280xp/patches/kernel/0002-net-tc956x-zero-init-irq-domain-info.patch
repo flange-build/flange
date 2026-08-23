@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Eric Wu <eric3u@outlook.com>
+Date: Sun, 23 Aug 2026 22:00:00 +0800
+Subject: [PATCH] net: stmmac: tc956x: 清零 IRQ-domain 配置结构体
+
+TC956x 驱动在栈上声明 irq_domain_info 与
+irq_domain_chip_generic_info 后只赋值部分字段。Linux 7.0 的 IRQ-domain
+核心会校验 direct_max；未初始化的栈值与已设置的 size 同时非零时返回
+-EINVAL，导致 QPS615 的两个 MAC 均无法完成 probe。
+
+使用内核惯用的空初始化器清零两个结构体，保证未显式配置的字段为零。
+---
+ drivers/net/ethernet/stmicro/stmmac/dwmac-tc956x.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/stmicro/stmmac/dwmac-tc956x.c b/drivers/net/ethernet/stmicro/stmmac/dwmac-tc956x.c
+--- a/drivers/net/ethernet/stmicro/stmmac/dwmac-tc956x.c
++++ b/drivers/net/ethernet/stmicro/stmmac/dwmac-tc956x.c
+@@ -216,8 +216,8 @@ static struct irq_domain *
+ tc956x_msigen_irq_domain_instantiate(struct tc956x_data *td)
+ {
+-	struct irq_domain_chip_generic_info dgc_info;
+-	struct irq_domain_info info;
++	struct irq_domain_chip_generic_info dgc_info = { };
++	struct irq_domain_info info = { };
+ 
+ 	dgc_info.name = "tc956x-msigen";
+ 	dgc_info.handler = handle_level_irq;
+ 	dgc_info.irqs_per_chip = HWIRQ_COUNT;

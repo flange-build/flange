@@ -62,6 +62,13 @@ M.2 E-Key Wi-Fi vendor 驱动全部保留，因为插槽允许用户更换无线
 复用 Docker 镜像已安装的 ccache，将缓存目录固定为项目内 `.build/cache/ccache`，并只在 Qualcomm
 内核主编译命令覆盖 `CC` 与 `HOSTCC`。不改变其他平台和工具链，也不引入新的缓存服务。
 
+### 决策 6：清零 TC956x IRQ-domain 配置结构体
+
+Radxa `linux-7.0.11` 的 `dwmac-tc956x.c` 在栈上声明 `irq_domain_info` 与
+`irq_domain_chip_generic_info` 后只赋值部分字段。未初始化的 `direct_max` 与已设置的 `size`
+触发 IRQ-domain 核心校验并返回 `-EINVAL`，阻断两个 MAC probe。板上 PCIe、endpoint 和驱动绑定
+均已验证正常，因此只增加两处 `{ }` zero-init，不引入 Armbian AXI 半频或整套驱动补丁。
+
 ## Risks / Trade-offs
 
 - **[上游分支回归]** → 浮动分支天然不可复现；出现问题时从构建日志记录 HEAD，再临时恢复 commit pin。
@@ -69,6 +76,7 @@ M.2 E-Key Wi-Fi vendor 驱动全部保留，因为插槽允许用户更换无线
 - **[首次启用 ccache 仍会重编]** → Kbuild 检测到编译器命令变化会重建一次；缓存预热后复用结果。
 - **[大小写不敏感文件系统]** → hard reset 失败时自动回退到 mixed reset 兼容路径。
 - **[网口仍未枚举]** → 通过串口收集 `lspci -nn` 与 PCIe/TC956x dmesg，按 RSDK 同版本输出定位，不再引入 Armbian DTS 属性。
+- **[上游已修复]** → 浮动分支若合入相同 zero-init，patch check 会明确失败，届时删除本地补丁。
 - **[扩展卡驱动被裁剪]** → 本次只保证 Q8B 板载硬件；如需对应 PCIe 独显或网卡，在产品配置中重新启用具体 symbol。
 
 ## Migration Plan

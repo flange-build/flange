@@ -56,6 +56,12 @@ Q8B 双 2.5GbE 支持 MUST 使用指定 Radxa kernel 分支自带的 QPS615/TC95
 - **WHEN** 检查 Q8B 板级 kernel patch
 - **THEN** patch 只包含 `usb_0_dwc3` 的 peripheral 改动且不包含 `toshiba,axi-bus-frequency-half`
 
+#### Scenario: TC956x IRQ domain 可正常创建
+
+- **WHEN** `dwmac_tc956x` 为两个 QPS615 MAC 创建 IRQ domain
+- **THEN** `irq_domain_info` 与 `irq_domain_chip_generic_info` MUST 完整 zero-init
+- **AND** probe MUST NOT 因未初始化的 `direct_max` 返回 `-EINVAL`
+
 ### Requirement: Q8B 内核构建裁剪
 
 Q8B kernel 配置 MUST 通过 flange 的额外 config 机制关闭板载硬件不使用的模块，

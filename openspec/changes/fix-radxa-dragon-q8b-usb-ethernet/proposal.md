@@ -14,6 +14,7 @@ Radxa Dragon Q8B 当前镜像能够启动，但两个 DWC3 均被固定为 host�
 - 保留一份最小板级 patch，将 `usb_0_dwc3`（`a600000.usb`）固定为 peripheral；
   `usb_1_dwc3`（`a800000.usb`）保持 host。
 - Q8B 同样应用现有 DWC3 clear-stall 请求保留补丁，配合 adbd 的 ep0 枚举自愈逻辑。
+- 修复 TC956x 驱动未清零 IRQ-domain 配置结构体导致两个有线网卡 probe 返回 `-EINVAL`。
 - 删除 `toshiba,axi-bus-frequency-half` 板级改动，不再混用 Armbian kernel patch 路线。
 - 通过 flange 额外 config 裁掉 Q8B 明确不用的调试信息、独显和 PCIe 网卡模块，缩短构建时间。
 
@@ -34,7 +35,7 @@ Radxa Dragon Q8B 当前镜像能够启动，但两个 DWC3 均被固定为 host�
 
 ## Impact
 
-- 修改 SC8280XP kernel 仓库配置、额外 config、构建缓存、DWC3 补丁路由和 Q8B 板级 DTS patch。
+- 修改 SC8280XP kernel 仓库配置、额外 config、构建缓存、DWC3/TC956x 补丁路由和 Q8B 板级 DTS patch。
 - 浮动分支组件不再命中组件缓存；每次构建都会 fetch 并执行该组件构建，以保证使用远端 HEAD。
 - 远端 HEAD 未变化时只恢复 patch 改动，不重写未修改源码的时间戳。
 - 远端 HEAD 更新时由 Git 仅重写实际变化文件，并由 ccache 复用未变化编译单元。
