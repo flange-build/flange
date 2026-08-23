@@ -1769,7 +1769,7 @@ metadata 分发到 ISP 与传感器」这条消费侧管道。理由与教训见
 | IPA 节拍任务：AE 统计的 ISR 当节拍源 ⇒ **每帧一次 = 30 Hz**，带 100 ms 兜底 | `camera_csi.c` | ⏳ **已实现，未上板验证** |
 | metadata 逐位分发（ISP 侧 7 组 + 传感器侧曝光/增益） | `cam_ipa.c` | ⏳ **已实现，未上板验证** |
 | `CONFIG_AIO_CAM_IPA` 总开关（默认**开**） | `Kconfig.projbuild` | ⏳ **已实现，未上板验证** |
-| IPA 任务栈余量（`CAM_IPA_TASK_STACK = 4096` 是**估的、不是量的**） | — | ⏳ **未测**，第一次烧板必看那一格 |
+| IPA 任务栈余量（`CAM_IPA_TASK_STACK = 8192` 是**按 blob 反汇编估的、不是量的**） | — | ⏳ **未测**，第一次烧板必看那一格 |
 | 五项能力同跑 10 分钟的复合回归 | — | ⏳ **未做**（规程见文末） |
 | 摄像头开着时 GUD 帧率的变化、PSRAM 带宽争用实测值 | — | ⏳ **未测**（观测设施已就位；采集时机就在复合回归里） |
 | 脏矩形 / LZ4 的定量验证（P0 欠账） | — | ⏳ **未测**（同上） |
@@ -2154,11 +2154,12 @@ JSON 里的六个算法模块（**顺序 = JSON 键序 = pipeline 执行序**）
 
 | 项 | 值 | 为什么 |
 |---|---|---|
-| 任务 | `ipa`，优先级 **3**、栈 **4096 B** | 必须低于 TinyUSB / UVC 帧泵 / 触摸 / 键盘（5）与音频泵（4）：晚一拍只是 AE 多花 33 ms 收敛，而那几条晚一拍是用户看得见听得见的掉帧、爆音、丢触点。它还会做 I2C 写（下发曝光/增益），压在触摸之上更没道理 |
+| 任务 | `ipa`，优先级 **3**、栈 **8192 B** | 必须低于 TinyUSB / UVC 帧泵 / 触摸 / 键盘（5）与音频泵（4）：晚一拍只是 AE 多花 33 ms 收敛，而那几条晚一拍是用户看得见听得见的掉帧、爆音、丢触点。它还会做 I2C 写（下发曝光/增益），压在触摸之上更没道理 |
 | 节拍源 | **AE 统计的 ISR**（`vTaskNotifyGiveFromISR`） | 三块统计里 AE 由 `AE_FDONE` 驱动、每帧必发一次，最可靠；`agc` 又是唯一每拍都消费输入的控制律 |
 | 频率 | **≈30 Hz**（= 传感器帧率） | 官方 `esp_video` 的 `isp_task` 就是「一份统计一次 `process()`，不分频」 |
 | 兜底 | `CAM_IPA_FALLBACK_MS = 100` | AE 统计断供时通知永远不来 ⇒ AWB/CCM/gamma/LSC 会一起冻在初值上，比返工前更差。超时也走一拍 = 降级成 10 Hz，而不是失效 |
 | 不取流时 | `portMAX_DELAY` 无限期阻塞 | 「摄像头不取流时零影响」在本任务上的落点 |
+| **pipeline 建在哪** | **本任务、取流后的第一拍**（`cam_ipa_start()`） | `esp_ipa_pipeline_create()/init()` 太吃栈，跑在 `app_main` 的 3584 B 栈上会把板子打进 `rst:0x7` 复位循环。官方 `esp_video` 也是在它自己的 `isp_task` 里建的。顺带把初值分发挪到了 `esp_isp_enable()` **之后**（原先在之前），与官方同序 |
 
 ⚠️ **`process()` 不许再加任何分频。** 官方算法内部自带帧延迟
 （`agc.exposure.frame_delay = 3`）、最小步长（`gain.min_step = 0.03`）与迟滞
@@ -2167,10 +2168,14 @@ JSON 里的六个算法模块（**顺序 = JSON 键序 = pipeline 执行序**）
 **官方标定里所有按「帧」计的量统统被拉长三倍**，表现为 AE/AWB 收敛慢三倍。
 这条已经在 `87ba6c95` 修掉了（专用任务 + AE ISR 节拍源），别再把它挂回帧泵。
 
-⚠️ 栈 4096 是**估算**：把 `esp_ipa_stats_t`（≈624 B）提成文件级静态之后，
-留给 blob 的浮点运算与 LSC 分发的余量应当够用 —— 但**没有量过**。
+⚠️ 栈 8192 是**估算**，账目在 `camera_csi.c` 的 `CAM_IPA_TASK_STACK` 上方：
+反汇编 `libesp_ipa.a` 量出 blob 内部最深的调用链只有 **224 B**（它内部是 C++
+`std::map<std::string,…>`），大头是它调出去的 `esp_log`/`snprintf`（picolibc 的浮点
+`vfprintf`）、`operator new`→`malloc`，再加上本任务现在还兼着建 pipeline，以及
+RISC-V 上中断跑在被打断任务的栈上这一份余量。**先给足再收敛**：
 自检行的「栈余」（`uxTaskGetStackHighWaterMark`，IDF 返回字节）是唯一的直读依据，
-**第一次烧板必看**，掉到 512 B 以下就把 `CAM_IPA_TASK_STACK` 加大。
+⚠️ **要取流跑一会儿之后再看**（峰值出在取流第一拍那次 `cam_ipa_start()`）：
+`< 1 KB` ⇒ 加大；`> 3 KB` ⇒ 往 6144 / 5120 收。
 
 #### metadata 逐位分发（`cam_ipa.c` 的 `dispatch()`）
 
@@ -2183,7 +2188,7 @@ JSON 里的六个算法模块（**顺序 = JSON 键序 = pipeline 执行序**）
 | `CCM` / `RG` / `BG` | `esp_isp_ccm_configure` + 一次性 `enable` | 三者任一变化都重算整个矩阵：`CCM × diag(rg, 1, bg)` |
 | `BR` / `CN` / `ST` / `HUE` | `esp_isp_color_configure` + 一次性 `enable` | 四个字段在**同一个寄存器组**里 ⇒ **四位任一置起就重发整组**，没置起的沿用此刻的值。`128` 就是 `1.0×`（1 整 + 7 小数），blob 给的就是这个 `val` 的原值，**直接写、不换算** |
 | `ET` / `GN` | 传感器 | µs → 行（`t_line = 1e9/(fps·vts)` ns）、增益倍率 → 表下标；**没变就不发**（省 I2C）；**两者都要改时必须 `ESP_CAM_SENSOR_GROUP_EXP_GAIN` 一次性下发**，否则会漏出一帧「新曝光 + 旧增益」，而 blob 下一拍恰好会把那一帧当成反馈 |
-| `LSC` | `esp_isp_lsc_configure` + 一次性 `enable` | 增益数组 273 格 × 4 通道，`allocate` 必须在 `enable` **之前**（`lsc_fsm == INIT`）⇒ 放在 `cam_ipa_init()` 里；每次下发都比对 `lsc_gain_array_size == 驱动分配的格数`，不等直接记 `ESP_ERR_INVALID_SIZE` 而不是错位填 LUT |
+| `LSC` | `esp_isp_lsc_configure` + 一次性 `enable` | 增益数组 273 格 × 4 通道，`allocate` 必须在 `enable` **之前**（`lsc_fsm == INIT`）⇒ 放在 `cam_ipa_start()` 里；每次下发都比对 `lsc_gain_array_size == 驱动分配的格数`，不等直接记 `ESP_ERR_INVALID_SIZE` 而不是错位填 LUT |
 
 **rev v1.0 忽略掉的那几位 —— 只记录进自检行，一个字都不写硬件：**
 
@@ -2308,7 +2313,7 @@ lum_min =  98 × (1 + 0.3801 + 0.2903) = 163.7 → 164
    （`ESP_GOTO_ON_ERROR(intr_priority != isp_proc->intr_priority, …)` 传的是比较结果）。
    自检行会打出一个 `esp_err_to_name()` 认不出的码，**别往别处查**。AE/AWB 与处理器全写 0。
 7. **LSC 的分配顺序**：`esp_isp_lsc_allocate_gain_array()` 要求 `lsc_fsm == INIT`
-   ⇒ 必须在 `enable` 之前 ⇒ 放在 `cam_ipa_init()` 里，而不是等 metadata 第一次给出 LSC。
+   ⇒ 必须在 `enable` 之前 ⇒ 放在 `cam_ipa_start()` 里，而不是等 metadata 第一次给出 LSC。
 8. **定点换算要「四舍五入 + 进位」，不能截断。** `grad_ratio`（1/16）与锐化系数（1/32）
    截断的话舍掉的小数会被位域**静默吞掉**（1.05 截成 1.0000 = −4.8%），
    而现场只看得到「锐化偏弱」这种说不清的偏差。
@@ -2332,7 +2337,7 @@ lum_min =  98 × (1 + 0.3801 + 0.2903) = 163.7 → 164
     跨文档引用增益表长度时必须说明是哪一份 —— 所以 `cam_ipa.c` 一个数都不写死，全靠
     `esp_cam_sensor_query_para_desc()` 运行时查。另有 `sc202cs.c:1167` 的上游 off-by-one（见上文）。
 15. **`esp_cam_sensor_set_format()` 必须调**，`sc202cs_detect()` 一个寄存器都没写。
-    而 `set_format` 会**重写整张模式寄存器表** ⇒ 读 `0x3902` 与调 `cam_ipa_init()`
+    而 `set_format` 会**重写整张模式寄存器表** ⇒ 读 `0x3902` 与调 `cam_ipa_start()`
     都必须排在它**之后**（曝光上下限、增益表、默认值都是驱动在 `set_format` 里才填好的）。
 16. **CCM 行和是一条可用的现场判据。** 官方每档矩阵的行和都是 1.000，而右乘
     `diag(rg,1,bg)` 只缩放列、**不改行和** ⇒ 中性面仍映射到中性面、整体增益仍为 1。
@@ -2356,7 +2361,7 @@ lum_min =  98 × (1 + 0.3801 + 0.2903) = 163.7 → 164
 | 常量 | 值 | 性质 |
 |---|---|---|
 | `CAM_IPA_HAS_BLC` / `_HAS_WBG` / `_HAS_LSC`（`cam_ipa.c`） | `0` / `0` / `1` | rev v1.0 的**硬件能力门**，与 `esp_video` 的 `ESP_VIDEO_ISP_DEVICE_*` 逐条对应。写成常量而不是运行期查 efuse，是因为整个固件已被 `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` 钉死在 rev <3.0 上 |
-| `CAM_IPA_TASK_PRIO` / `_STACK` / `CAM_IPA_FALLBACK_MS`（`camera_csi.c`） | `3` / `4096` / `100` | 节拍任务的三个数，取值理由见 `camera_csi.c` 里各自上方的注释。⚠️ **栈是估的**，第一次烧板要照自检行的「栈余」复核 |
+| `CAM_IPA_TASK_PRIO` / `_STACK` / `CAM_IPA_FALLBACK_MS`（`camera_csi.c`） | `3` / `8192` / `100` | 节拍任务的三个数，取值理由见 `camera_csi.c` 里各自上方的注释。⚠️ **栈是估的**，第一次烧板要照自检行的「栈余」复核 |
 | `CAM_IPA_SENSOR_NAME`（`cam_ipa.c`） | `"SC202CS"` | 必须与标定 JSON 的顶层键**逐字符相同** |
 
 JPEG 与尺寸相关的常量另在三处：`main/cam_jpeg.c` 的 `CAM_JPEG_QUALITY`（70）、
@@ -2416,6 +2421,7 @@ camera:  [自检] 帧内容 采样=28800 亮度 均值=118 最小=3 最大=255 �
 camera:  [自检] 传感器 BLC(0x3902) 读=ESP_OK 值=128（0xc0=开着⇒基座≈0；0x80=关着⇒基座≈16…）
 cam_ipa: IPA：配置=ESP_OK 建立=ESP_OK 初始化=ESP_OK 范围=ESP_OK 处理=ESP_OK
               拍数=298（≈29.8 Hz 距上一行自检，取流中应 ≈30）统计seq=300
+cam_ipa: IPA：pipeline 建于开机后 NNNNN ms（已建）——取流第一拍、跑在节拍任务的栈上；栈余见「IPA 节拍」那行
 cam_ipa: IPA：本拍 flags=[ET,GN]  至今见过=[RG,BG,ET,GN,BF,SH,GAMMA,CCM,CN,ST,DM,LSC,BLC]
 cam_ipa: IPA：下发 曝光=12 次（当前 624 行 = 20800 µs）增益=4 次（当前 1.000×）下发码=ESP_OK
 cam_ipa: IPA：ISP 重配 CCM=3 gamma=2 LSC=1；块状态 BF=ESP_OK DM=ESP_OK SHARP=ESP_OK
@@ -2441,10 +2447,10 @@ cam_ipa: IPA：色彩 对比度=128 饱和度=130 色调=0 亮度=0（128 = 1.0�
 | AWB `平均G` 落在 `[98, 210]` 之外 | 白点框与实际画面不匹配 |
 | `HIST Σbin` 明显 ≠ 921600 | 直方图窗口配错了 |
 | `处理/统计 ≈ 100%` 且 `单次最多=1` | **每份 AE 统计恰好消费一次 ⇒ 节拍对齐了**。绝对频率看 `cam_ipa` 那行的「拍数」 |
-| `单次最多 ≥ 2` | 任务没跟上，两份统计被合并成一拍，blob 少看了帧 ⇒ 看 CPU 负载与「下发码」（I2C 是否在阻塞） |
+| `单次最多 ≥ 2` | 任务没跟上，两份统计被合并成一拍，blob 少看了帧 ⇒ 看 CPU 负载与「下发码」（I2C 是否在阻塞）。⚠️ **开流后出现一次 2~5 是预期的**：取流第一拍要在本任务里建 pipeline，那几十毫秒会攒下几条通知。看它有没有**持续变大**才有意义 |
 | `超时兜底` 持续涨 | AE 统计断供，整条 IPA 掉回 10 Hz 兜底节拍 ⇒ 根因看「运行 AE=」 |
 | `跳过` 持续涨而取流中 | 三块统计一份都没到（都没建起来） |
-| **`栈余 < 512 B`** | `CAM_IPA_TASK_STACK` 该加大了。**这一格第一次烧板必看** |
+| **`栈余 < 1 KB`** | `CAM_IPA_TASK_STACK` 该加大了。**这一格第一次烧板必看**（要取流跑一会儿之后再看：峰值出在取流第一拍建 pipeline 那一次）。`> 3 KB` 则是给多了，往 6144 收 |
 | `唤醒 = 0` 而取流中 | 节拍任务根本没建起来，看开机那条 warning |
 | `配置=ESP_ERR_NOT_FOUND` | 标定 JSON 没编进来 ⇒ 查 `CONFIG_CAMERA_SC202CS_DEFAULT_IPA_JSON_CONFIGURATION_FILE` 与 `build/.../esp_video_ipa_config.c` |
 | `建立` / `初始化` 非 OK | blob 拒了。多半是某个算法模块没被链进来（`CONFIG_ESP_IPA_*_ALGORITHM` 被关掉了） |
@@ -2577,10 +2583,10 @@ done                                              # 判据：7 组全 OK
 |---|---|---|---|
 | 3.1 | `拍数` 的频率 | **≈30 Hz**（自检行括号里直接打出来，取流中应 ≈30） | ≈10 ⇒ 掉进兜底节拍（AE 统计断供），看 3.3 |
 | 3.2 | `处理/统计` | **≈100%** | 明显 <100% ⇒ 有统计被跳过，看「跳过=」与「超时兜底=」 |
-| 3.3 | `单次最多` | **= 1 条** | ≥2 ⇒ 任务没跟上，两份统计被合并成一拍。查 CPU 负载与「下发码」（I2C 阻塞） |
+| 3.3 | `单次最多` | **= 1 条**（开流那一拍出现一次 2~5 是预期的，见下） | 持续变大 ⇒ 任务没跟上，两份统计被合并成一拍。查 CPU 负载与「下发码」（I2C 阻塞） |
 | 3.4 | `超时兜底` | **不涨** | 持续涨 ⇒ AE 统计断供，根因看「运行 AE=」 |
 | 3.5 | `拍数` vs `统计seq` | **同步增长**（差值不随时间拉大） | 拉大 ⇒ 统计被重复消费或被跳过 |
-| 3.6 | ⭐ **`栈余`** | **> 512 B**，并记下这个数 | ≤512 ⇒ 把 `CAM_IPA_TASK_STACK` 从 4096 加大重烧。**这个值从来没有量过，第一次烧板必看** |
+| 3.6 | ⭐ **`栈余`** | **> 1 KB**，并记下这个数（取流跑一会儿之后再读） | ≤1 KB ⇒ 把 `CAM_IPA_TASK_STACK` 从 8192 加大重烧；>3 KB ⇒ 往 6144 / 5120 收。**这个值从来没有量过，第一次烧板必看** |
 | 3.7 | `唤醒` | 取流中持续涨 | =0 ⇒ 节拍任务没建起来，看开机 warning |
 
 #### 阶段 4：官方算法在不在动
@@ -2588,6 +2594,7 @@ done                                              # 判据：7 组全 OK
 | # | 检查 | 动作 | 判据 | 不过 ⇒ |
 |---|---|---|---|---|
 | 4.1 | pipeline 起没起来 | 读 `cam_ipa: IPA：配置= 建立= 初始化= 范围=` | 四格全 `ESP_OK` | `配置=ESP_ERR_NOT_FOUND` ⇒ 标定 JSON 没编进来；`范围` 非 OK ⇒ 曝光/增益查不到可调范围，AE 不会动 |
+| 4.1b | ⭐ pipeline **建在什么时机** | 读 `cam_ipa: IPA：pipeline 建于开机后 N ms` | **N ≈ host 打开 `/dev/videoN` 的时刻**（不是开机 2 s） | `0`（未建）而取流中 ⇒ 节拍任务没走到 `cam_ipa_start()`，看「IPA 节拍」那行；`≈ 开机 2 s` ⇒ 有人把它挪回 `camera_csi_init()`／`app_main` 栈上去了，那正是 `rst:0x7` 复位循环的来源 |
 | 4.2 | ⭐ **flag 集合** | 读 `至今见过=[…]` | **有** `RG,BG,ET,GN,BF,SH,GAMMA,CCM,DM,LSC` 与 `BR/CN/ST/HUE` 中的若干；**有 `BLC`（预期，本板忽略）**；**没有 `AF`/`FP`/`AETL`/`SR`** | 出现 `AF`/`FP`/`AETL`/`SR` ⇒ 换过标定文件，`dispatch()` 里那段假设不再成立；缺 `ET`/`GN` ⇒ 看 4.1 的「范围=」 |
 | 4.3 | 块状态 | 读 `块状态 BF= DM= SHARP= COLOR= CCM= GAMMA= LSC=` | 全 `ESP_OK` | `INVALID_STATE` ⇒ FSM 门（坑 4/5）；认不出的码 ⇒ `intr_priority`（坑 6） |
 | 4.4 | ⭐ **曝光跟随** | 手电照 / 遮挡，各三次 | `下发 曝光=`、`增益=` 两个计数跟着涨，「当前 N 行」明显变化；**约 1 秒内稳定下来**（`agc.exposure.frame_delay = 3` @30 Hz ⇒ 每步约 100 ms） | 完全不动 ⇒ 看 4.1「范围=」与 4.2 有没有 `ET`/`GN`；来回摆不停 ⇒ 记录现象，**不要改参数**（参数是官方的），先确认 3.1–3.5 全过 |

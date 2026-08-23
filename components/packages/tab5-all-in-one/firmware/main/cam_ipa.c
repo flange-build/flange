@@ -64,6 +64,13 @@ static const char *TAG = "cam_ipa";
  * ⚠️ 关掉某一组**不会**让 blob 少算 —— 它照常算、照常在 metadata 里置位，
  *   只是没人把那几位写进硬件。自检行的「至今见过」仍然会显示它们。
  *
+ * ── 那一轮二分的结论（五次烧板，六个开关此刻**已全部打回 1**）───────
+ * 逐组关、直到六组全关（连节拍任务都不启动、pipeline 只建不跑），**仍然复位**。
+ * 也就是说这六组分发**统统与复位无关**，唯一没被洗清的只剩
+ * `esp_ipa_pipeline_create()/init()` 这一次调用本身 —— 处置见 cam_ipa_start()
+ * 上方那段「为什么必须在任务里建」。这些开关留着不删：它们是这条结论的证据，
+ * 也是日后画质出问题时唯一能把「哪一组写坏了硬件」隔离出来的工具。
+ *
  * 每组关掉之后画面上的代价（拿来判断「关了这组之后画面变成什么样是预期的」）：
  *   LSC     → 四角暗角回来
  *   GAMMA   → 整体偏暗（ISP 直出线性光，host 按 sRGB 解码）
@@ -109,7 +116,18 @@ static esp_cam_sensor_device_t  *s_sensor;
 static esp_ipa_sensor_t   s_info;
 static esp_ipa_metadata_t s_md;
 
-/* ── 传感器可调范围（开机查一次，之后只读）───────────────────────── */
+/* cam_ipa_start() 的一次性闸与它那一次的返回值。**失败也只跑一次** ——
+ * 调用方是 30 Hz 的节拍任务，不闩住的话建不起来的 pipeline 会被每拍重试一遍。 */
+static bool      s_started;
+static esp_err_t s_start_err = ESP_ERR_INVALID_STATE;
+/* pipeline 建成的时刻（开机以来的毫秒）。自检行要打它 —— 「在什么时机建的」
+ * 是本次改动的核心，而它是唯一能在现场直读的证据：
+ *   0        ⇒ 还没建（没取流，或者建失败了，看「建立=」那格）
+ *   ≈ 取流时刻 ⇒ 结构对了（官方同构：取流之后才建）
+ *   ≈ 开机 2 s ⇒ 有人又把它挪回 camera_csi_init() 里去了 */
+static uint32_t s_start_ms;
+
+/* ── 传感器可调范围（取流第一拍查一次，之后只读）─────────────────── */
 static uint32_t        s_exp_min_lines, s_exp_max_lines;
 static const uint32_t *s_gain_map;          /* ×1000 定点，升序 */
 static uint32_t        s_gain_count;
@@ -495,16 +513,18 @@ static void config_lsc(const esp_ipa_metadata_t *md)
     /*
      * ⚠️ **只有在 LSC 块已经开着的时候写下去的那一份才算数。**
      *
-     * 开机那一次走的是「先写整张表、再 esp_isp_lsc_enable()」（本函数的固有顺序，
-     * 且驱动要求 allocate 必须在 enable 之前），而那一刻 ISP 连 esp_isp_enable()
-     * 都还没调、一帧都没来过 —— LSC 的子块时钟被 esp_isp_lsc_configure() 自己设成
-     * ISP_LL_PIPELINE_CLK_CTRL_AUTO（「帧间隔里关掉」，isp_ll.h:208），那 1092 次
-     * LUT 写到底有没有落地**无从确认**。把它记成「已写」，去抖就可能把日后唯一
-     * 一次纠正的机会也挡掉。
+     * 第一次那一趟走的是「先写整张表、再 esp_isp_lsc_enable()」（本函数的固有顺序，
+     * 且驱动要求 allocate 必须在 enable 之前），而 LSC 的子块时钟被
+     * esp_isp_lsc_configure() 自己设成 ISP_LL_PIPELINE_CLK_CTRL_AUTO
+     * （「帧间隔里关掉」，isp_ll.h:208）—— 块还没 enable 的时候那 1092 次 LUT 写
+     * 到底有没有落地**无从确认**。把它记成「已写」，去抖就可能把日后唯一一次
+     * 纠正的机会也挡掉。
      * 不记的代价只有「整个生命周期多写一次整表」，与去抖要防的 30 Hz 重写不是
      * 一个量级。
-     * ⓘ 这也是开机复位循环里 LSC 嫌疑最大的那一点：官方 esp_video 的 isp_task
-     *   是**取流之后**才跑分发的，我们这一次写发生在取流之前，位置与官方不同。
+     * ⓘ 初值分发**已经挪到 esp_isp_enable() 之后**（调用链是 cam_ipa_task 的取流
+     *   第一拍 → cam_ipa_start → dispatch），与官方 esp_video 的 isp_task 同序；
+     *   搬家之前它跑在取流之前，那是与官方不一致的一处。即便如此这一条保守处置
+     *   仍然保留：块本身 enable 与否才是这里的判据，而第一趟必然是「还没 enable」。
      */
     s_lsc_written = was_enabled;
 
@@ -685,11 +705,62 @@ static void dispatch(esp_ipa_metadata_t *md)
 #endif
 }
 
-esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor)
+/*
+ * ══ 为什么整段搬进 IPA 节拍任务 ════════════════════════════════════
+ *
+ * 本函数原名 cam_ipa_init()，由 camera_csi_init() 调用 ⇒ **跑在 app_main 的栈上**
+ * （调用链 app_main → camera_csi_init → cam_ipa_init → esp_ipa_pipeline_create）。
+ * 那个栈由 CONFIG_ESP_MAIN_TASK_STACK_SIZE 给定，IDF 默认 3584 字节，而本工程
+ * 没有覆盖过它。
+ *
+ * ⚠️ 这一条曾把板子打进 `rst:0x7` = RESET_REASON_CORE_MWDT 的复位循环，
+ *   而且**串口一个字都没打出来**。0x7 是 timer-group 看门狗的第二级；第一级
+ *   本该发中断进 panic 打印，能走到第二级说明第一级中断压根没被服务
+ *   ⇒ CPU 已经卡死、中断进不来。栈溢出踩穿相邻 TCB 正是这个形态
+ *   （FreeRTOS 的 canary 只在任务切换时才查，而此时已经切不动了）。
+ *
+ * 而 esp_ipa 这个 blob 的建立路径吃栈**远超一个 C 库的直觉**：反汇编
+ * libesp_ipa.a 可以直接读出它内部是 C++ 的 `std::map<std::string, size_t>`
+ * KV store（_Rb_tree / basic_string / _M_create 一应俱全），create/init 期间
+ * 会构造上百个 std::string；再叠上它自己那些带 %f 的 ESP_LOG（picolibc 的
+ * 浮点 vfprintf 一次就要一千字节量级的栈）。
+ *
+ * ── 官方是怎么做的 ────────────────────────────────────────────────
+ * esp_video/src/esp_video_isp_pipeline.c 的 pipeline **建在它自己的 isp_task
+ * 里**（esp_ipa_pipeline_init 在 line 1417 附近，取流开始的那一刻），栈由
+ * xTaskCreate 给定 —— 官方因此从来碰不到这个问题。我们照抄这个结构。
+ *
+ * 顺带修掉另一处与官方不一致的地方：初值 metadata 的分发原先发生在
+ * esp_isp_enable() **之前**（一帧都没来过就把 LSC 整表写进 LUT），官方是取流
+ * 之后才跑分发。搬进节拍任务后自然对齐 —— 那个任务只有在 s_streaming 为真
+ * 时才会走到这里，而 s_streaming 是 camera_csi_start() 在 esp_isp_enable()
+ * 成功之后才置的。
+ *
+ * ⚠️ **修法故意不是「把 CONFIG_ESP_MAIN_TASK_STACK_SIZE 调大」**：那是全局副作用
+ *   （每个用 app_main 的路径都多占内部 RAM），而且会把「谁需要大栈」这个结构
+ *   问题盖掉。规矩是**谁用大栈谁自己带**。
+ *
+ * ── 调用约定 ──────────────────────────────────────────────────────
+ * 唯一的调用方是 camera_csi.c 的 cam_ipa_task，在**取流后的第一拍**调用。
+ * 它同时满足两个前置条件：
+ *   · esp_cam_sensor_set_format() 之后 —— 曝光上下限/增益表/默认值是驱动在
+ *     set_format 里才填好的（下面查 param_desc 那一段依赖这一点）；
+ *   · esp_isp_enable() 之后 —— 初值分发写进去的 ISP 参数这才有意义。
+ *
+ * ⚠️ 这里读 param_desc 的 default_value 当作「硬件此刻的实际值」仍然成立：
+ *   set_format 之后到本函数之间，**没有任何一条路径写过曝光/增益**
+ *   （本工程里写它们的只有 config_sensor()，而那只由本文件在 pipeline
+ *   建成之后才调）。
+ *
+ * 幂等，且**失败也只跑一次**：调用方是 30 Hz 的节拍任务。
+ */
+esp_err_t cam_ipa_start(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor)
 {
     ESP_RETURN_ON_FALSE(isp && sensor, ESP_ERR_INVALID_ARG, TAG, "句柄为空");
-    if (s_pipe)
-        return ESP_OK;                       /* 幂等 */
+    if (s_started)
+        return s_start_err;
+    s_started   = true;
+    s_start_err = ESP_FAIL;                  /* 下面每条 return 之前都会改写它 */
 
     s_isp    = isp;
     s_sensor = sensor;
@@ -701,7 +772,7 @@ esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor)
      * CONFIG_CAMERA_SC202CS_ABSOLUTE_GAIN_LIMIT 与增益优先策略走。抄成常量
      * 必然在某次改配置时悄悄过期，而症状是「曝光调不动」或者更坏 —— 越界下标。
      *
-     * ⚠️ 必须排在 esp_cam_sensor_set_format() **之后**（调用方保证）：
+     * ⚠️ 必须排在 esp_cam_sensor_set_format() **之后**（见上方调用约定）：
      *    传感器驱动是在那里才把 exposure_max / 默认曝光/增益填好的。
      */
     esp_cam_sensor_param_desc_t d_exp  = { .id = ESP_CAM_SENSOR_EXPOSURE_VAL };
@@ -785,7 +856,8 @@ esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor)
         s_st_cfg = ESP_ERR_NOT_FOUND;
         ESP_LOGE(TAG, "官方配置里没有「%s」—— 标定 JSON 没编进来，或顶层键名变了",
                  CAM_IPA_SENSOR_NAME);
-        return ESP_ERR_NOT_FOUND;
+        s_start_err = ESP_ERR_NOT_FOUND;
+        return s_start_err;
     }
     s_st_cfg = ESP_OK;
     ESP_LOGI(TAG, "官方配置就绪：%u 个算法模块，参数版本 %" PRIu32,
@@ -793,11 +865,14 @@ esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor)
     for (uint8_t i = 0; i < cfg->nums; i++)
         ESP_LOGI(TAG, "  [%u] %s", (unsigned)i, cfg->names[i]);
 
+    /* ⚠️ 这一行与下面的 init 是整条 IPA 里最吃栈的两步（见函数头的推理），
+     *   也是它们必须跑在节拍任务而不是 app_main 上的全部理由。 */
     s_st_create = esp_ipa_pipeline_create(cfg, &s_pipe);
     if (s_st_create != ESP_OK) {
         ESP_LOGE(TAG, "IPA pipeline 建不起来(%s)", esp_err_to_name((esp_err_t)s_st_create));
         s_pipe = NULL;
-        return (esp_err_t)s_st_create;
+        s_start_err = (esp_err_t)s_st_create;
+        return s_start_err;
     }
 
     /*
@@ -809,10 +884,19 @@ esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor)
     s_st_init = esp_ipa_pipeline_init(s_pipe, &s_info, &s_md);
     if (s_st_init != ESP_OK) {
         ESP_LOGE(TAG, "IPA pipeline 初始化失败(%s)", esp_err_to_name((esp_err_t)s_st_init));
-        return (esp_err_t)s_st_init;
+        s_start_err = (esp_err_t)s_st_init;
+        return s_start_err;
     }
+    /* ⓘ 这一次 dispatch 现在发生在 esp_isp_enable() **之后**（调用方是取流后的
+     *   第一拍），与官方 esp_video 的 isp_task 同序。搬家之前它跑在取流之前，
+     *   那一刻 LSC 子块的时钟还是「帧间隔里关掉」，整表写下去有没有落地无从确认
+     *   —— 见 config_lsc() 里 s_lsc_written 那一段。 */
     dispatch(&s_md);
-    ESP_LOGI(TAG, "IPA 初值已下发（flags=0x%05" PRIx32 "）", s_flags_last);
+    s_start_ms  = (uint32_t)(esp_timer_get_time() / 1000);
+    s_start_err = ESP_OK;
+    ESP_LOGI(TAG, "IPA 初值已下发（flags=0x%05" PRIx32 "）；pipeline 建于取流第一拍、"
+                  "开机后 %" PRIu32 " ms、在节拍任务的栈上（不是 app_main）",
+             s_flags_last, s_start_ms);
     return ESP_OK;
 }
 
@@ -917,26 +1001,37 @@ static const char *step_str(int32_t v)
  *   换掉的那个 stdout。手边有 USB-TTL 就接 G37/G38（M5-Bus 排针）——
  *   那是本条 bug 唯一能拿到一手证据的通道，**优先于下面所有二分**。
  *
- * 拿不到串口时，按下面的顺序改 cam_ipa.c 顶部的 CAM_IPA_DISPATCH_*、
- * 每次只动一个、`rm -rf build sdkconfig && idf.py build flash`：
- *   ① CAM_IPA_DISPATCH_LSC 0     ← 先关它。六组里唯一「一次一千多次寄存器写 +
- *                                  与 AWB 的 ISR 共用 LUT 端口」的一组，
- *                                  嫌疑最大。好了 ⇒ 根因在 LUT 那条路上。
- *   ② CAM_IPA_DISPATCH_SENSOR 0  ← 唯一走 I2C 的一组，而那条内部总线上还挂着
- *                                  触摸/两颗 codec/两颗 IO 扩展。好了 ⇒ 去查总线争用。
- *   ③ CAM_IPA_DISPATCH_GAMMA 0
- *   ④ CAM_IPA_DISPATCH_CCM 0
- *   ⑤ CAM_IPA_DISPATCH_DENOISE 0
- *   ⑥ CAM_IPA_DISPATCH_COLOR 0
- *   ⑦ 六组全 0 仍然复位 ⇒ **不是分发**，剩下的只有 cam_ipa_init() 里
- *      esp_ipa_pipeline_create()/init() 那个 blob 本身，与 cam_ipa_task 的存在。
- *      那时改试 CONFIG_ESP_INT_WDT_TIMEOUT_MS 调大、或者把 cam_ipa_task_start()
- *      那一行注掉（pipeline 建但不跑）再分一次。
+ * ── 那一轮二分已经跑完了，结论如下（五次烧板）───────────────────
+ *   CONFIG_AIO_CAM_IPA=n                       → 正常
+ *   关 DISPATCH_LSC                            → 仍复位
+ *   关 DISPATCH_SENSOR                         → 仍复位
+ *   六组分发全关                                → 仍复位
+ *   六组全关 + 节拍任务也不启动（pipeline 只建不跑）→ **仍复位**
+ * ⇒ 根因既不在 metadata 分发、也不在 30 Hz 调 process()，只可能在
+ *   `esp_ipa_pipeline_create()/init()` **这一次调用本身**。
  *
- * ⚠️ 复位发生的时刻本身也是证据：本板**不取流时 IPA 一步都不走**
- *   （cam_ipa_task 睡在 portMAX_DELAY 上），host 没打开 /dev/videoN 之前
- *   跑过的 IPA 代码只有 cam_ipa_init() 那一次。若复位在插 USB 之前就发生，
- *   分发的锅只可能落在**开机那一次** dispatch 上，与取流期间的节拍无关。
+ * ── 由此得出的首要假设与已经做出的修改 ───────────────────────────
+ * **app_main 栈溢出**（注意：是假设，不是结论）。理由与处置写在 cam_ipa_start()
+ * 上方那一大段；一句话是「pipeline 原先建在 3584 字节的 app_main 栈上，而 blob
+ * 内部是 C++ std::map/std::string + 带 %f 的 ESP_LOG」。修法是把 create/init
+ * 整体搬进 cam_ipa_task（栈由 CAM_IPA_TASK_STACK 给定），**不动
+ * CONFIG_ESP_MAIN_TASK_STACK_SIZE**。
+ *
+ * ⚠️ **万一搬家之后还复位**，下一步按这个顺序查（别再重跑上面那张表）：
+ *   ① 先看自检行的「栈余」。若它很小（< 1 KB）⇒ 栈的方向对，只是 IPA 任务这个
+ *      值还不够，继续加 CAM_IPA_TASK_STACK。若它很大（> 3 KB）⇒ **栈溢出假设
+ *      被证伪**，往下走。
+ *   ② 接 USB-TTL 到 G37/G38 拿 UART0 的 panic backtrace。搬家之后 create/init
+ *      跑在一个普通任务上、且是在系统完全起来之后，比开机早期好抓得多。
+ *   ③ 把 CAM_IPA_TASK_PRIO 降到 1、CONFIG_ESP_INT_WDT_TIMEOUT_MS 调大再试：
+ *      能区分「blob 某一步耗时过长把中断饿死」与「真的踩坏了内存」。
+ *   ④ 逐个关 CONFIG_ESP_IPA_*_ALGORITHM（awb / agc / acc / adn / aen / ian），
+ *      把嫌疑收敛到某一个算法模块的 init 上 —— 这是分发开关够不着的那一层。
+ *
+ * ⚠️ 复位发生的**时刻**仍然是最便宜的证据：搬家之后 pipeline 只在**取流第一拍**
+ *   才建（host 打开 /dev/videoN 之后）。若复位发生在插 USB 之前，那就与 IPA
+ *   完全无关了 —— 那一刻本板一行 IPA 代码都没跑过。自检行的「建于开机后 N ms」
+ *   直接给出这个时刻。
  */
 void cam_ipa_report(void)
 {
@@ -965,6 +1060,16 @@ void cam_ipa_report(void)
              step_str(s_st_cfg), step_str(s_st_create), step_str(s_st_init),
              step_str(s_st_range), step_str(s_st_proc), s_ticks,
              hz_x10 / 10, hz_x10 % 10, s_last_seq);
+    /*
+     * pipeline 是在**什么时机**建的。这一行是本次「把 create/init 搬进节拍任务」
+     * 那个改动唯一的现场判据：
+     *   建于=0（未建）而取流中  → 节拍任务没走到 cam_ipa_start()，看「IPA 节拍」那行
+     *   建于 ≈ 取流那一刻       → **结构对了**（官方 esp_video 同序：取流后才建）
+     *   建于 ≈ 开机 2 s         → 有人把它挪回 camera_csi_init()／app_main 栈上去了
+     */
+    ESP_LOGI(TAG, "IPA：pipeline 建于开机后 %" PRIu32 " ms（%s）——"
+                  "取流第一拍、跑在节拍任务的栈上；栈余见「IPA 节拍」那行",
+             s_start_ms, s_start_ms ? "已建" : "未建");
     ESP_LOGI(TAG, "IPA：本拍 flags=[%s]  至今见过=[%s]", last, seen);
     ESP_LOGI(TAG, "IPA：下发 曝光=%" PRIu32 " 次（当前 %" PRIu32 " 行 = %" PRIu32
                   " µs）增益=%" PRIu32 " 次（当前 %u.%03u×）下发码=%s",

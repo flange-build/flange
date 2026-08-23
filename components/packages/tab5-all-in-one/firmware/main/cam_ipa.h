@@ -54,19 +54,30 @@
 /*
  * 建 IPA pipeline 并跑一次 esp_ipa_pipeline_init()，把它给出的初值写进 ISP 与传感器。
  *
+ * ⚠️ **唯一合法的调用点是 camera_csi.c 的 IPA 节拍任务、取流后的第一拍。**
+ *   不是 camera_csi_init()、更不是 app_main —— esp_ipa_pipeline_create()/init()
+ *   要吃掉一个 3584 字节的 app_main 栈装不下的量（blob 内部是 C++
+ *   std::map<std::string,…> + 带 %f 的 ESP_LOG），实测把板子打进过
+ *   `rst:0x7` = CORE_MWDT 的复位循环。完整推理与官方对照写在 cam_ipa.c 的
+ *   cam_ipa_start() 上方，**改动这条调用位置之前必须先读那一段**。
+ *
  * isp / sensor 两个句柄由 camera_csi.c 持有并传进来 —— 本文件不建任何硬件对象，
  * 只往已经建好的对象上写参数。这条边界让「谁拥有硬件」这件事只有一个答案。
  *
- * 须在 esp_cam_sensor_set_format() **之后**调用：曝光上下限、增益表、默认值都是
- * 传感器驱动在 set_format 里才填好的（sc202cs.c 的 exposure_max/gain_def），
- * 早调拿到的是上电默认态的值。
+ * 两条时序前提（由「取流后第一拍」这个调用点一并满足）：
+ *   · esp_cam_sensor_set_format() 之后 —— 曝光上下限、增益表、默认值都是传感器
+ *     驱动在 set_format 里才填好的（sc202cs.c 的 exposure_max/gain_def），
+ *     早调拿到的是上电默认态的值；
+ *   · esp_isp_enable() 之后 —— 初值 metadata 的那一次分发这才写得进已经在跑的
+ *     ISP，与官方 esp_video 的 isp_task 同序。
  *
  * 失败**只降级不拦启动**（与本工程其余画质级同一处置）：返回非 ESP_OK 时
  * 画面停在 ISP 的基础配置上（见 cam_ipa_report() 的判读表），取流本身不受影响。
  *
- * 幂等：重复调用直接返回 ESP_OK。
+ * 幂等，且**失败也只跑一次**：调用方是 30 Hz 的节拍任务，重试没有意义。
+ * 重复调用直接返回第一次那个返回值。
  */
-esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor);
+esp_err_t cam_ipa_start(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor);
 
 /*
  * 送一份统计进 pipeline 走一拍，并把算出来的 metadata 分发到 ISP 与传感器。

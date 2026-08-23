@@ -318,7 +318,8 @@ static int32_t s_blc_before = -1;
  * IPA 节拍任务的句柄。**提到这里**只有一个理由：唤醒动作发生在下面那个 AE
  * 统计的 ISR 回调里，而任务体本身在文件下半部、紧挨着它消费的
  * cam_fill_ipa_stats（那里有「为什么要单开一个任务」的完整推理）。
- * NULL = IPA 没起来（或任务没建成）⇒ ISR 不唤醒任何人。
+ * NULL = 任务没建成 ⇒ ISR 不唤醒任何人，整条 IPA 也就永远不会启动
+ * （pipeline 是在这个任务里建的，见 cam_ipa_task 的第一拍）。
  */
 static TaskHandle_t s_ipa_task;
 static void cam_ipa_task_start(void);
@@ -950,20 +951,24 @@ esp_err_t camera_csi_init(void)
         s_blc_before = blc;
 
     /*
-     * ══ 官方 esp_ipa 接管画质 ══ **必须排在 set_format 之后**：
-     * 曝光上下限、增益表、默认值都是传感器驱动在 set_format 里才填好的。
+     * ══ 官方 esp_ipa 接管画质 ══
+     *
+     * ⚠️ **本函数只建任务，一行 blob 代码都不跑。**
+     *   pipeline 的 create/init 与初值分发全在 cam_ipa_task 里做（那边第一拍调
+     *   cam_ipa_start()）。理由是它太吃栈，而本函数跑在 app_main 上 ——
+     *   完整推理在 cam_ipa.c 的 cam_ipa_start() 上方，以及本文件
+     *   CAM_IPA_TASK_STACK 的说明里。**别把它挪回这里。**
+     *
+     * ⓘ 于是这里也不再有「IPA 起没起来」可判 —— 那个结果要到取流之后才有，
+     *   由自检行的「建立=/初始化=/建于 N ms」三格给出。
+     *   建任务本身失败会在 cam_ipa_task_start() 里打 warning。
      *
      * 失败只降级不拦启动：画面停在 ISP 基础配置上（发绿 + 偏暗 + 暗角，
      * 与总开关关掉时同一形态），而取流本身是好的 —— 让一个画质层把已经
      * 验证过的出图能力拖垮，是本末倒置。
      */
 #if CAM_IPA_ENABLE
-    const esp_err_t ipa_err = cam_ipa_init(s_isp, s_sensor);
-    if (ipa_err != ESP_OK)
-        ESP_LOGW(TAG, "官方 IPA 没起来(%s)，画面会发绿+偏暗+带暗角，其余一切照常",
-                 esp_err_to_name(ipa_err));
-    else
-        cam_ipa_task_start();   /* pipeline 建起来了，才有节拍任务的消费对象 */
+    cam_ipa_task_start();
 #else
     ESP_LOGW(TAG, "CONFIG_AIO_CAM_IPA 关闭：ISP 只做去马赛克，"
                   "画面会发绿+偏暗+带暗角、曝光固定 —— 这是排障档，不是产品形态");
@@ -1294,15 +1299,43 @@ static bool cam_fill_ipa_stats(esp_ipa_stats_t *st)
 #define CAM_IPA_TASK_PRIO    3
 
 /*
- * 栈 4096 字节。esp_ipa_stats_t（≈624 B = 25 块 AE + 5×5 AWB 子窗 + 16 段
- * 直方图 + 3 个 AF 窗 + seq/flags）**提成文件级静态、不放栈上** —— 它每拍都要
- * memset 一遍，放栈上等于从 blob 的浮点运算与 LSC 分发那里挤掉六百多字节。
- * ⓘ 顺带把 UVC 帧泵那 4096 字节的栈也还回去了：这个结构体原先是 uvc 任务的
- *   局部变量。
- * 实际余量由自检行的「栈余」直读（uxTaskGetStackHighWaterMark，IDF 返回字节），
- * 不必靠猜；那一格掉到 512 B 以下就该把这里加大。
+ * ══ 栈 8192 字节 ═══════════════════════════════════════════════════
+ *
+ * ⚠️ **这个数是本任务的全部意义之一。** pipeline 的 create/init 已经从
+ *   camera_csi_init()（跑在 app_main 的 3584 字节栈上）搬进本任务，
+ *   而「谁用大栈谁自己带」就落在这一行上 —— 修法**不是**去调
+ *   CONFIG_ESP_MAIN_TASK_STACK_SIZE（那是全局副作用，且会盖掉结构问题）。
+ *
+ * ── 取值依据（不是拍脑袋，逐项可查）───────────────────────────────
+ * 反汇编 managed_components/espressif__esp_ipa/lib/esp32p4/v6.0+/libesp_ipa.a
+ * （riscv32-esp-elf-objdump -dr，逐函数取 `addi sp,sp,-N` 求最坏调用链）：
+ *   · blob 内部**最深的一条链 224 B**（esp_ipa_awb_init_model_1 → esp_ipa_get_float
+ *     → std::map::operator[] → _Rb_tree::lower_bound → _M_lower_bound），
+ *     单函数最大帧也是 224 B（cal_model_2）。也就是说 **blob 自己只吃几百字节**。
+ *   · 真正的大头是它调出去的外部符号：`esp_log` / `snprintf`（picolibc 的
+ *     浮点 vfprintf，一次一千字节量级）、`_Znwj`→`malloc`→heap_caps 那条链、
+ *     `pow`/`sqrt`。blob 在 create/init 期间会把标定表逐项打成日志。
+ *   · 我们自己这一侧：cam_ipa_start() 里那条带 %.3f 的 ESP_LOGI（同样走浮点
+ *     vfprintf）、dispatch() 一整轮（config_lsc 的 1092 次 LUT 写走 IDF 的
+ *     isp 驱动、config_sensor 走 SCCB→i2c_master 驱动）。
+ *   · RISC-V 上中断跑在**被打断的那个任务的栈**上，还要留一份中断嵌套的余量。
+ * 粗算 ≈ 0.3(blob) + 1.5(两条浮点日志链) + 0.8(驱动/堆) + 1(中断) ≈ 3.6 KB，
+ * 再叠上原先 process()+dispatch 那一档实际用掉的量。
+ *
+ * ── 为什么先给 8192 而不是刚好够 ─────────────────────────────────
+ * 上面那笔账里「外部符号」那几项是估的（picolibc 的 vfprintf 栈用量随格式串变），
+ * 而估低的代价是**又一次没有串口输出的复位循环**，估高的代价只是 4 KB 内部 RAM。
+ * 所以：**第一次烧板给足，然后用 high water mark 收敛。**
+ * 自检行（camera_csi_report 的「IPA 节拍」那一行）直读
+ * uxTaskGetStackHighWaterMark ⇒ 「栈余 N B」，且**取流一段时间之后再看**才算数
+ * （create/init 那个峰值只在取流第一拍出现，之后 HWM 就一直记着它）：
+ *   栈余 > 3 KB  ⇒ 8192 给多了，收到 6144 或 5120，再看一次
+ *   栈余 < 1 KB  ⇒ 还不够，往上加
+ * ⓘ esp_ipa_stats_t（≈624 B = 25 块 AE + 5×5 AWB 子窗 + 16 段直方图 + 3 个 AF 窗
+ *   + seq/flags）**提成文件级静态、不放栈上** —— 它每拍都要 memset 一遍，
+ *   放栈上等于从 blob 那里挤掉六百多字节。这一条与栈给多少无关，保持不变。
  */
-#define CAM_IPA_TASK_STACK   4096
+#define CAM_IPA_TASK_STACK   8192
 
 /*
  * **钉核**。本任务必须与 ISP 的 ISR 跑在同一个核上。
@@ -1363,6 +1396,35 @@ static void cam_ipa_task(void *arg)
             continue;
         }
 
+        /*
+         * ══ 取流后的第一拍：**在这里**把 pipeline 建起来 ═══════════════
+         *
+         * 谁在什么时候建什么，一条链读完：
+         *   camera_csi_init()  建 CSI/ISP/三块统计控制器 + set_format + 建本任务
+         *                      （**不碰 blob**，它跑在 app_main 的 3584 B 栈上）
+         *   camera_csi_start() esp_cam_ctlr_enable → esp_isp_enable → ctlr_start
+         *                      → 传感器 stream on → 三块统计 start → s_streaming=true
+         *                      → xTaskNotifyGive 把本任务从 portMAX_DELAY 上拨醒
+         *   ↓ 本行            cam_ipa_start()：查曝光/增益范围 → 分配 LSC 增益数组
+         *                      → esp_ipa_pipeline_get_config/create/init
+         *                      → 初值 metadata 分发。**全在本任务的栈上。**
+         *   之后每一拍         cam_fill_ipa_stats + cam_ipa_process
+         *
+         * 两条时序都由这个位置一次满足：set_format 早已跑完（曝光上下限才是真的），
+         * esp_isp_enable() 也早已跑完（初值分发写进的是一个已经在跑的 ISP）——
+         * 与官方 esp_video 的 isp_task 同序。搬家之前初值分发发生在 esp_isp_enable()
+         * 之前，那是与官方不一致的一处，一并修掉了。
+         *
+         * 顺带得到一条本来就该有的性质：**host 没打开 /dev/videoN 之前，
+         * 这个 blob 一个字节的堆和一条指令都不占**（「不取流时零影响」）。
+         *
+         * ⚠️ 返回值故意不看：cam_ipa_start() 幂等且失败只跑一次，失败之后
+         *   cam_ipa_process() 自己会因为 s_pipe 为 NULL 而直接返回 —— 本任务照常
+         *   空转，取流/UVC/其余四项能力一概不受影响（只降级不拦启动）。
+         *   建没建成、错在哪一步，看自检行的「配置=/建立=/初始化=/建于 N ms」。
+         */
+        (void)cam_ipa_start(s_isp, s_sensor);
+
         if (cam_fill_ipa_stats(&s_ipa_stats)) {
             cam_ipa_process(&s_ipa_stats);
             s_ipa_runs++;
@@ -1373,9 +1435,16 @@ static void cam_ipa_task(void *arg)
 }
 
 /*
- * 建节拍任务。幂等。
+ * 建节拍任务。幂等。由 camera_csi_init() 调用（**取流之前**，此刻任务只是建起来
+ * 睡在 portMAX_DELAY 上，一步都不走）。
+ *
+ * ⚠️ 必须由 camera_csi_init() 调 —— CAM_IPA_TASK_CORE 取的是 xPortGetCoreID()，
+ *   而那条推理（「= 建 ISP 的那个核」）依赖于本函数与 esp_isp_new_processor()
+ *   跑在同一个任务上。挪到别处调，钉核就钉错了。
+ *
  * 失败**只降级不拦启动**（与本文件其余画质级同一处置）：没有节拍任务就没人调
- * process()，画面停在 cam_ipa_init() 下发的那批初值上，取流本身完全不受影响。
+ * cam_ipa_start()，pipeline 一辈子建不起来，画面停在 ISP 基础配置上
+ * （发绿+偏暗+带暗角），取流本身完全不受影响。
  */
 static void cam_ipa_task_start(void)
 {
@@ -1384,12 +1453,13 @@ static void cam_ipa_task_start(void)
     const BaseType_t core = CAM_IPA_TASK_CORE;
     if (xTaskCreatePinnedToCore(cam_ipa_task, "ipa", CAM_IPA_TASK_STACK, NULL,
                                 CAM_IPA_TASK_PRIO, &s_ipa_task, core) != pdPASS) {
-        ESP_LOGW(TAG, "IPA 节拍任务建不起来，画面停在 IPA 初值上，其余一切照常");
+        ESP_LOGW(TAG, "IPA 节拍任务建不起来，整条 IPA 不会启动"
+                      "（画面发绿+偏暗+带暗角），其余一切照常");
         return;   /* xTaskCreate 失败时不写句柄，s_ipa_task 保持 NULL */
     }
     ESP_LOGI(TAG, "IPA 节拍任务已建：节拍源=AE 统计中断（每帧一次 ⇒ 跟随传感器帧率），"
                   "优先级 %d、栈 %d B、钉在核 %d（= ISP 中断所在核），兜底 %d ms；"
-                  "不取流时休眠",
+                  "不取流时休眠，**pipeline 也要到取流第一拍才在本任务里建**",
              CAM_IPA_TASK_PRIO, CAM_IPA_TASK_STACK, (int)core, CAM_IPA_FALLBACK_MS);
 }
 #endif  /* CAM_IPA_ENABLE */
@@ -1507,11 +1577,23 @@ void camera_csi_report(void)
          *   单次最多 ≥ 2                   ⇒ 任务没跟上，两份统计被合并成一拍，
          *                                    blob 少看了帧。看 CPU 负载与
          *                                    「下发码」（I2C 是否在阻塞）。
+         *                                    ⓘ **开流后的一小撮（2~5）是预期的**：
+         *                                    取流第一拍要在本任务里跑一次
+         *                                    cam_ipa_start()（建 pipeline + 一整轮
+         *                                    初值分发），那几十毫秒里 AE 通知会攒
+         *                                    几条。这个数是单向最大值，之后不会掉
+         *                                    回去 —— 看它有没有**持续变大**才有意义。
          *   超时兜底 持续涨                 ⇒ AE 统计断供，整条 IPA 掉回 10 Hz 兜底
          *                                    节拍，根因看上面「运行 AE=」那一格。
          *   跳过 持续涨而取流中             ⇒ 三块统计一份都没到（都没建起来）。
-         *   栈余 < 512 B                   ⇒ CAM_IPA_TASK_STACK 该加大了。
          *   唤醒 = 0 而取流中               ⇒ 任务根本没建起来，看开机那条 warning。
+         *
+         *   ══ 「栈余」这一格 ══ 它是本任务栈大小的**唯一收敛依据**，而本任务
+         *   现在还兼着建 pipeline（cam_ipa_start），峰值就出在取流那第一拍。
+         *   ⚠️ 所以要**取流跑一会儿之后再看**；不取流时看到的是一个假的大余量。
+         *     栈余 < 1 KB  ⇒ 不够，加大 CAM_IPA_TASK_STACK
+         *     栈余 > 3 KB  ⇒ 给多了，往 6144 / 5120 收，再看一次
+         *   完整的取值账目写在 CAM_IPA_TASK_STACK 上方。
          */
         ESP_LOGI(TAG, "[自检] IPA 节拍 唤醒=%" PRIu32 " 通知=%" PRIu32 " 处理=%" PRIu32
                       " 跳过=%" PRIu32 " 超时兜底=%" PRIu32 " 单次最多=%" PRIu32 " 条"
