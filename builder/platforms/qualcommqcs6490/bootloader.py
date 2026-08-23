@@ -6,6 +6,7 @@ blob，flange 不编译：仅下载 Radxa 预编 flat_build 包并解压暂存�
 """
 
 import tempfile
+import zipfile
 from pathlib import Path
 
 from builder.base import ComponentBuilder
@@ -25,19 +26,22 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
     def compile(self, src_dir, config: dict):
         bl = config.get("bootloader", {})
         url = bl.get("edk2_firmware_url")
-        if not url:
-            raise ValueError("bootloader.edk2_firmware_url 未配置")
+        sha256 = bl.get("edk2_firmware_sha256")
+        if not url or not sha256:
+            raise ValueError(
+                "bootloader.edk2_firmware_url/edk2_firmware_sha256 未配置")
 
         self._work_dir = Path(tempfile.mkdtemp(prefix="flange-edk2-"))
-        zip_path = self._work_dir / "edk2.zip"
         extract_dir = self._work_dir / "edk2"
         extract_dir.mkdir(parents=True, exist_ok=True)
 
-        self._status("下载 Radxa 预编 EDK2 SPI 固件（不编译）...")
-        self.docker.run(["wget", "-q", url, "-O", str(zip_path)],
-                        cwd=str(self._work_dir), label="下载 EDK2 固件")
-        self.docker.run(["unzip", "-q", "-o", str(zip_path), "-d", str(extract_dir)],
-                        cwd=str(self._work_dir), label="解压 EDK2 固件")
+        self._status("下载并校验 Radxa 预编 EDK2 SPI 固件（不编译）...")
+        zip_path = self.source.ensure_prebuilt_image(
+            f"{config['board']}-edk2",
+            {"url": url, "sha256": sha256},
+        )
+        with zipfile.ZipFile(zip_path) as archive:
+            archive.extractall(extract_dir)
 
     def collect(self, src_dir, config: dict) -> dict:
         # flat_build/spinor/<board>/ 下含 firehose loader + rawprogram*.xml + 固件 blob。

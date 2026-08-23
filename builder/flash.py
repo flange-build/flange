@@ -1369,6 +1369,7 @@ _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
     "allwinnera733": AllwinnerA733FlashStrategy,
     "amlogic": AmlogicFlashStrategy,
     "qualcommqcs6490": QualcommFlashStrategy,
+    "qualcommsc8280xp": QualcommFlashStrategy,
 }
 
 

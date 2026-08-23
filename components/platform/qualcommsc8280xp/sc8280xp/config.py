@@ -1,0 +1,106 @@
+"""Qualcomm SC8280XP SoC 配置。"""
+
+SOC = {
+    "platform": "qualcommsc8280xp",
+    "soc": "sc8280xp",
+    "arch": "aarch64",
+    "vendor": "qcom",
+    "repos": {
+        "kernel": {
+            "repo": "https://github.com/radxa/kernel.git",
+            "branch": "linux-7.0.11",
+            "commit": "4a7a039590c7185ed9c53453b163806311799eed",
+            "recurse_submodules": False,
+        },
+    },
+    "kernel": {
+        "from_repo": "kernel",
+        "subpath": "",
+        "defconfig": [
+            "radxa_qcom_7_0_defconfig",
+            # flange 当前不生成 initramfs，让显示驱动在 rootfs 可用后加载固件。
+            "CONFIG_DRM_MSM=m",
+        ],
+        "dts_dir": "qcom",
+        "dtb": "sc8280xp-radxa-dragon-q8b",
+        "enable_configs": [
+            "SCSI_UFSHCD",
+            "SCSI_UFSHCD_PLATFORM",
+            "SCSI_UFS_QCOM",
+            "PHY_QCOM_QMP",
+            "INTERCONNECT_QCOM_SC8280XP",
+            "FW_LOADER_COMPRESS",
+            "FW_LOADER_COMPRESS_ZSTD",
+        ],
+    },
+    "rootfs": {
+        "url": (
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/"
+            "ubuntu-base-24.04.4-base-arm64.tar.gz"
+        ),
+        "+packages": [
+            "bluez",
+            "bluetooth",
+            "protection-domain-mapper",
+            "qrtr-tools",
+            "alsa-ucm-conf",
+            "acpi",
+            "zstd",
+            "libgl1-mesa-dri",
+            "libegl-mesa0",
+            "libgbm1",
+            "mesa-vulkan-drivers",
+            "linux-firmware",
+        ],
+        "+packages:debug": [
+            "mesa-utils",
+            "vulkan-tools",
+        ],
+    },
+    "boot": {
+        "bootloader": "grub",
+        "grub_with_dtb": True,
+        "dtb_filename": "sc8280xp-radxa-dragon-q8b.dtb",
+        "dtb_overlays": [],
+        "vendor_overlays": [],
+        "default_overlays": [],
+        "kernel_args": (
+            "earlycon console=ttyMSM0,115200 acpi=off panic=10 "
+            "root=PARTLABEL=rootfs rootwait"
+        ),
+    },
+    "bootloader": {
+        "edk2_firmware_url": (
+            "https://dl.radxa.com/dragon/q8b/images/"
+            "dragon-q8b_flat_build_wp_260731.zip"
+        ),
+        "edk2_firmware_sha256": (
+            "f9bd55ac342bad53f056f620bdbf6e090ab1ef80c99cbf90ed685a64d7980fb8"
+        ),
+        "firehose_loader": "prog_firehose_ddr.elf",
+        "spi_rawprogram": "rawprogram0.xml",
+        "spi_patch": "patch0.xml",
+    },
+    "partitions": {
+        "format": "gpt",
+        "sector_size": 4096,
+        "entries": [
+            {
+                "name": "esp",
+                "offset": "0x800",
+                "size": "0x80000",
+                "type": "fat32",
+                "label": "efi",
+            },
+            {
+                "name": "rootfs",
+                "offset": "0x80800",
+                "size": "remaining",
+                "type": "ext4",
+                "label": "rootfs",
+                "image_size": "3G",
+                "grow_on_first_boot": True,
+            },
+        ],
+    },
+}

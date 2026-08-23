@@ -42,6 +42,7 @@ class Qcs6490BootBuilder(ComponentBuilder):
         efi_boot.mkdir(parents=True)
 
         dtb = config["kernel"]["dtb"]
+        board_name = config["board"].replace("-", " ").title()
         kargs = config["boot"].get(
             "kernel_args", "acpi=off console=ttyMSM0,115200 root=LABEL=rootfs rootwait")
 
@@ -51,7 +52,7 @@ class Qcs6490BootBuilder(ComponentBuilder):
             "set timeout=3\n"
             "insmod all_video\n"
             "search --no-floppy --label rootfs --set=root\n"
-            'menuentry "Radxa Dragon Q6A (Linux)" {\n'
+            f'menuentry "{board_name} (Linux)" {{\n'
             f"    linux /boot/vmlinuz {kargs}\n"
             "    if [ -f /boot/initrd.img ]; then initrd /boot/initrd.img; fi\n"
             f"    devicetree /boot/{dtb}.dtb\n"

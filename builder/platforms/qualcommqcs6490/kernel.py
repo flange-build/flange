@@ -39,9 +39,8 @@ class Qcs6490KernelBuilder(KernelBuilder):
         # 大小写不敏感 FS 适配（macOS 宿主挂载卷上 git checkout 会丢同名异写文件）
         self._write_case_insensitive_fix(src_dir)
 
-        defconfig = config["kernel"]["defconfig"]
-        if isinstance(defconfig, str):
-            defconfig = [defconfig]
+        defconfig = self._resolve_defconfig_targets(
+            src_dir, config["kernel"]["defconfig"])
         for dc in defconfig:
             self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
         # 合并大小写适配 fragment（敏感 FS 上为空，无副作用）

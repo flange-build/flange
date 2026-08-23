@@ -211,3 +211,38 @@ class TestEnsureExtraFirmwareLocal:
         with pytest.raises(ValueError, match="不支持的 source 类型"):
             manager.ensure_extra_firmware(
                 "weird", cfg, config={"board": "fake-board"})
+
+
+def test_fetch_checkout_discards_previous_build_patches(tmp_path: Path):
+    """切换锁定 commit 前必须清理上次构建留在 tracked 文件中的 patch。"""
+    origin = tmp_path / "origin"
+    work = tmp_path / "work"
+    origin.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=origin, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"],
+                   cwd=origin, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"],
+                   cwd=origin, check=True)
+    tracked = origin / "tracked.txt"
+    tracked.write_text("one\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=origin, check=True)
+    subprocess.run(["git", "commit", "-qm", "one"], cwd=origin, check=True)
+    first = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=origin, check=True,
+        capture_output=True, text=True).stdout.strip()
+    tracked.write_text("two\n")
+    subprocess.run(["git", "commit", "-qam", "two"], cwd=origin, check=True)
+    second = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=origin, check=True,
+        capture_output=True, text=True).stdout.strip()
+
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
+    subprocess.run(["git", "checkout", "-q", first], cwd=work, check=True)
+    (work / "tracked.txt").write_text("上次构建的 patch\n")
+
+    SourceManager(tmp_path / "sources")._fetch_checkout(work, second)
+
+    assert (work / "tracked.txt").read_text() == "two\n"
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=work, check=True,
+        capture_output=True, text=True).stdout == ""

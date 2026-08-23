@@ -275,6 +275,9 @@ SOC = {
     # boot 固件：Radxa 预编 EDK2 SPI blob（flange 不编，仅消费 + edl-ng 刷 SPI）
     "bootloader": {
         "edk2_firmware_url": "https://dl.radxa.com/dragon/q6a/images/dragon-q6a_flat_build_wp_260120.zip",
+        "edk2_firmware_sha256": (
+            "cf23a1742ae5d51c451947d82cb21fd3f1c10bbcd621d611f55520673e3f90ca"
+        ),
         "firehose_loader": "prog_firehose_ddr.elf",
         "spi_rawprogram": "rawprogram0.xml",
         "spi_patch": "patch0.xml",

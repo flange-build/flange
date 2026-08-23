@@ -203,6 +203,7 @@ class TestExistingPlatformsUnaffected:
         platforms = _discover_platform_configs(PROJECT_ROOT)
         assert set(platforms.keys()) == {
             "rockchip", "allwinnera733", "amlogic", "qualcommqcs6490",
+            "qualcommsc8280xp",
         }
 
     def test_no_cross_pollution_in_soc_map(self):

@@ -497,8 +497,21 @@ class SourceManager:
 
     def _fetch_checkout(self, repo_dir: Path, commit: str, is_tag: bool = False):
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
+        # 上一次构建应用的 patch 会留下 tracked 修改；先复位当前 HEAD，
+        # 否则切到另一块板的 commit 时 checkout 会拒绝覆盖这些文件。
+        subprocess.run(["git", "checkout", "-f", "."],
+                       cwd=repo_dir, check=False)
+        subprocess.run(["git", "clean", "-fd"],
+                       cwd=repo_dir, check=False)
         self._fetch_ref(repo_dir, commit, env=env, is_tag=is_tag)
-        subprocess.run(["git", "checkout", commit], cwd=repo_dir, check=True)
+        # 与 branch 路径一致，用 mixed reset + checkout -f 避开 macOS
+        # 大小写不敏感文件系统上 kernel 同名异写文件导致的 hard reset 失败。
+        subprocess.run(["git", "reset", "--mixed", "--no-refresh", commit],
+                       cwd=repo_dir, check=True)
+        subprocess.run(["git", "checkout", "-f", "."],
+                       cwd=repo_dir, check=False)
+        subprocess.run(["git", "clean", "-fd"],
+                       cwd=repo_dir, check=False)
 
     def _fetch_ref(self, repo_dir: Path, ref: str, env: dict, is_tag: bool):
         """fetch 单个 ref。
