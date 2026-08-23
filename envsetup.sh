@@ -457,6 +457,7 @@ _flange_cmd_flash() {
         echo "    --list         列出目标设备所有可刷写的分区及状态"
         echo "    --raw <DEV>    使用 dd 将整盘镜像直接刷写到块设备 (如 /dev/sdX)"
         echo "    --spi-firmware 刷写 Qualcomm SPI boot 固件（仅显式指定时执行；需 EDL 模式）"
+        echo "    --provision-ufs 初始化 Qualcomm UFS LUN 0（仅全新 UFS 执行一次）"
         echo "    --no-wait      刷写时跳过等待设备进入烧录模式的提示"
         echo "    --no-reboot    刷写完成后不触发设备重启 (用于多次刷写或人工接管)"
         echo "    -h, --help     显示此帮助信息"

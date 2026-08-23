@@ -1323,19 +1323,26 @@ class QualcommFlashStrategy(FlashStrategy):
         if not raw.exists():
             raise FlashError(f"未找到整盘镜像 {raw}；请先执行 flange build")
         loader = self._locate_loader(target_dir)
+        if (config.platform == "qualcommsc8280xp"
+                and loader.name != "prog_firehose_ufs.elf"):
+            raise FlashError(
+                "未找到 SC8280XP UFS firehose loader；"
+                "请先执行 flange build bootloader")
         # 目标存储介质：v1 仅 UFS（板子默认）；后续可经 board/SoC config 覆盖。
         memory = "UFS"
         self.write_system_image(tool, raw, loader=loader, memory=memory)
         return True
 
     def _locate_loader(self, target_dir: Path) -> Path:
-        """定位 firehose loader（Radxa EDK2 SPI 固件包内）。"""
-        loader = target_dir / "bootloader" / "edk2-spi-firmware" / "prog_firehose_ddr.elf"
-        if not loader.exists():
-            raise FlashError(
-                f"未找到 firehose loader {loader}；请先执行 flange build "
-                "（bootloader 组件会下载并解压 Radxa EDK2 SPI 固件包，含此 loader）")
-        return loader
+        """系统盘优先使用专用 UFS loader，兼容旧 QCS6490 产物。"""
+        firmware_dir = target_dir / "bootloader" / "edk2-spi-firmware"
+        for name in ("prog_firehose_ufs.elf", "prog_firehose_ddr.elf"):
+            loader = firmware_dir / name
+            if loader.exists():
+                return loader
+        raise FlashError(
+            f"未找到 firehose loader：{firmware_dir}；"
+            "请先执行 flange build bootloader")
 
     # ---- Qualcomm 专有（供 flash 编排 edl-ng 分支调用；非 ABC）----
 
@@ -1361,6 +1368,24 @@ class QualcommFlashStrategy(FlashStrategy):
                "rawprogram", "rawprogram0.xml", "patch0.xml"]
         if subprocess.run(cmd, cwd=str(edk2_dir)).returncode != 0:
             raise FlashError("edl-ng SPI 固件刷写失败")
+
+    def provision_ufs(self, tool: Path, target_dir: Path,
+                      device: Optional["DeviceInfo"] = None):
+        """一次性初始化全新 UFS：创建占满设备容量的 LUN 0。"""
+        firmware_dir = target_dir / "bootloader" / "edk2-spi-firmware"
+        loader = firmware_dir / "prog_firehose_ufs.elf"
+        provision = firmware_dir / "provision_ufs31_lun0_only.xml"
+        missing = [path for path in (loader, provision) if not path.exists()]
+        if missing:
+            raise FlashError(
+                f"缺少 UFS provisioning 产物：{', '.join(map(str, missing))}；"
+                "请先执行 flange build bootloader")
+        _step("edl-ng provision → UFS LUN 0（一次性初始化）")
+        cmd = [str(tool), "--loader", str(loader), "--memory", "UFS",
+               "provision", str(provision)]
+        if subprocess.run(cmd).returncode != 0:
+            raise FlashError("edl-ng UFS provisioning 失败")
+        _info("UFS LUN 0 初始化完成；请重新进入 EDL 后执行 flange flash")
 
 
 # 策略注册表
@@ -1746,6 +1771,8 @@ def _cli_main():
     run_parser.add_argument("--list", action="store_true", dest="list_parts", help="列出可刷写分区")
     run_parser.add_argument("--spi-firmware", action="store_true", dest="spi_firmware",
                             help="刷 SPI boot 固件（Qualcomm bring-up 一次性；需在 EDL 模式）")
+    run_parser.add_argument("--provision-ufs", action="store_true", dest="provision_ufs",
+                            help="一次性初始化全新 Qualcomm UFS 的 LUN 0")
     run_parser.add_argument("partition", nargs="?", help="指定分区名（不指定则全量刷写）")
 
     # generate 子命令（构建引擎调用）
@@ -1764,6 +1791,15 @@ def _cli_main():
             executor.list_partitions()
         elif args.raw:
             executor.flash_raw(args.raw)
+        elif args.provision_ufs:
+            if not hasattr(executor.strategy, "provision_ufs"):
+                raise FlashError(
+                    f"平台 {executor.config.platform} 不支持 --provision-ufs")
+            tool = executor.strategy.find_tool(executor.project_dir)
+            device = None
+            if not args.no_wait:
+                device = executor.strategy.wait_for_device(tool)
+            executor.strategy.provision_ufs(tool, executor.target_dir, device)
         elif args.spi_firmware:
             # Qualcomm bring-up：edl-ng 刷 SPI EDK2 固件（仅支持该方法的策略）
             if not hasattr(executor.strategy, "flash_spi_firmware"):

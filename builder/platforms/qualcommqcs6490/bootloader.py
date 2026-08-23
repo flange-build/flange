@@ -1,10 +1,11 @@
 """Qualcomm QCS6490 bootloader 构建器 —— 消费 Radxa 预编 EDK2 SPI 固件。
 
 高通启动固件（XBL / EDK2 UEFI(PILFv) / TZ / HYP / AOP / firehose loader）是签名
-blob，flange 不编译：仅下载 Radxa 预编 flat_build 包并解压暂存，供 QualcommFlashStrategy
-经 edl-ng 刷写 SPI NOR（bring-up 一次性）。
+blob，flange 不编译：下载 Radxa 预编 flat_build 包及可选 UFS 资源，供
+QualcommFlashStrategy 经 edl-ng 刷写。
 """
 
+import shutil
 import tempfile
 import zipfile
 from pathlib import Path
@@ -43,6 +44,20 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
         with zipfile.ZipFile(zip_path) as archive:
             archive.extractall(extract_dir)
 
+        ufs_firehose = bl.get("ufs_firehose")
+        ufs_provision = bl.get("ufs_provision")
+        if bool(ufs_firehose) != bool(ufs_provision):
+            raise ValueError(
+                "bootloader.ufs_firehose/ufs_provision 必须同时配置")
+        self._ufs_assets = []
+        for name, asset in (
+            ("ufs-firehose", ufs_firehose),
+            ("ufs-provision", ufs_provision),
+        ):
+            if asset:
+                self._ufs_assets.append(self.source.ensure_prebuilt_image(
+                    f"{config['board']}-{name}", asset))
+
     def collect(self, src_dir, config: dict) -> dict:
         # flat_build/spinor/<board>/ 下含 firehose loader + rawprogram*.xml + 固件 blob。
         # 以 firehose loader 所在目录作为 EDK2 固件根（兼容 zip 内层级差异）。
@@ -54,4 +69,6 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
         else:
             self._status(f"警告：未在固件包中找到 {loader}，回退解压根目录")
             edk2_dir = self._work_dir / "edk2"
+        for asset in self._ufs_assets:
+            shutil.copy2(asset, edk2_dir / asset.name)
         return {"edk2": edk2_dir}

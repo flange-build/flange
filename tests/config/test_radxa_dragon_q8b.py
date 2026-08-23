@@ -1,7 +1,8 @@
 """Radxa Dragon Q8B / SC8280XP 配置与复用路径。"""
 
-from unittest.mock import Mock
 import zipfile
+from pathlib import Path
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -14,7 +15,9 @@ from builder.config.registry import (
     resolve_config,
 )
 from builder.config.validate import validate_config
-from builder.flash import QualcommFlashStrategy, get_flash_strategy
+from builder.flash import (
+    FlashConfig, FlashError, QualcommFlashStrategy, get_flash_strategy,
+)
 from builder.paths import PROJECT_ROOT
 from builder.platforms.qualcommqcs6490 import boot as qcom_boot
 from builder.platforms.qualcommqcs6490 import bootloader as qcom_bootloader
@@ -68,6 +71,10 @@ def test_kernel_boot_and_ufs_inputs_are_pinned():
         "dragon-q8b_flat_build_wp_260731.zip")
     assert cfg["bootloader"]["edk2_firmware_sha256"] == (
         "f9bd55ac342bad53f056f620bdbf6e090ab1ef80c99cbf90ed685a64d7980fb8")
+    assert cfg["bootloader"]["ufs_firehose"]["sha256"] == (
+        "2922271fb6d0792d737fb757e7783513b2e7ca54eacb219e80e58ba233dcbaf2")
+    assert cfg["bootloader"]["ufs_provision"]["sha256"] == (
+        "54709fd22904972066ab3bbae58e65da9cda404fdfdacac2cae83feca98ac5c8")
     assert cfg["partitions"]["sector_size"] == 4096
     assert [entry["name"] for entry in cfg["partitions"]["entries"]] == [
         "esp", "rootfs"]
@@ -134,21 +141,67 @@ def test_bootloader_download_is_sha256_verified(tmp_path, monkeypatch):
     archive = tmp_path / "q8b.zip"
     with zipfile.ZipFile(archive, "w") as output:
         output.writestr("flat_build/spinor/dragon-q8b/prog_firehose_ddr.elf", b"")
+    ufs_loader = tmp_path / "prog_firehose_ufs.elf"
+    ufs_loader.write_bytes(b"ufs-loader")
+    ufs_provision = tmp_path / "provision_ufs31_lun0_only.xml"
+    ufs_provision.write_text("<data />")
     source = Mock()
-    source.ensure_prebuilt_image.return_value = archive
+    source.ensure_prebuilt_image.side_effect = [
+        archive, ufs_loader, ufs_provision]
     monkeypatch.setattr(
         qcom_bootloader.tempfile, "mkdtemp", lambda prefix: str(work_dir))
     cfg = resolve_config("radxa-dragon-q8b", "default", "release")
 
-    Qcs6490BootloaderBuilder(FakeDocker(), source).compile(None, cfg)
+    builder = Qcs6490BootloaderBuilder(FakeDocker(), source)
+    builder.compile(None, cfg)
+    output = builder.collect(None, cfg)["edk2"]
 
-    source.ensure_prebuilt_image.assert_called_once_with(
-        "radxa-dragon-q8b-edk2",
-        {
+    assert source.ensure_prebuilt_image.call_args_list == [
+        call("radxa-dragon-q8b-edk2", {
             "url": cfg["bootloader"]["edk2_firmware_url"],
             "sha256": cfg["bootloader"]["edk2_firmware_sha256"],
-        },
-    )
+        }),
+        call("radxa-dragon-q8b-ufs-firehose",
+             cfg["bootloader"]["ufs_firehose"]),
+        call("radxa-dragon-q8b-ufs-provision",
+             cfg["bootloader"]["ufs_provision"]),
+    ]
+    assert (output / "prog_firehose_ufs.elf").read_bytes() == b"ufs-loader"
+    assert (output / "provision_ufs31_lun0_only.xml").is_file()
+
+
+def test_ufs_provision_uses_dedicated_loader(tmp_path):
+    firmware = tmp_path / "bootloader" / "edk2-spi-firmware"
+    firmware.mkdir(parents=True)
+    loader = firmware / "prog_firehose_ufs.elf"
+    provision = firmware / "provision_ufs31_lun0_only.xml"
+    loader.write_bytes(b"loader")
+    provision.write_text("<data />")
+
+    with patch("builder.flash.subprocess.run",
+               return_value=Mock(returncode=0)) as run:
+        QualcommFlashStrategy().provision_ufs(Path("edl-ng"), tmp_path)
+
+    run.assert_called_once_with([
+        "edl-ng", "--loader", str(loader), "--memory", "UFS",
+        "provision", str(provision),
+    ])
+
+
+def test_sc8280xp_system_flash_requires_dedicated_ufs_loader(tmp_path):
+    raw = tmp_path / "image" / "raw.img"
+    raw.parent.mkdir()
+    raw.write_bytes(b"image")
+    firmware = tmp_path / "bootloader" / "edk2-spi-firmware"
+    firmware.mkdir(parents=True)
+    (firmware / "prog_firehose_ddr.elf").write_bytes(b"spi-loader")
+    config = FlashConfig(
+        platform="qualcommsc8280xp", flash_tool="edl-ng",
+        board="radxa-dragon-q8b", product="default", variant="debug")
+
+    with pytest.raises(FlashError, match="UFS firehose loader"):
+        QualcommFlashStrategy().flash_whole_disk(
+            Path("edl-ng"), tmp_path, config)
 
 
 def test_grub_title_is_board_specific_and_q6a_is_unchanged(tmp_path, monkeypatch):

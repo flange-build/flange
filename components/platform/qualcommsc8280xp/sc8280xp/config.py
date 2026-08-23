@@ -80,6 +80,28 @@ SOC = {
         "firehose_loader": "prog_firehose_ddr.elf",
         "spi_rawprogram": "rawprogram0.xml",
         "spi_patch": "patch0.xml",
+        "ufs_firehose": {
+            "url": (
+                "https://raw.githubusercontent.com/armbian/qcombin/"
+                "f2d55c46dcbe2af57dc400658cd14e70cd8baa79/Makena/"
+                "prog_firehose_ddr.elf"
+            ),
+            "sha256": (
+                "2922271fb6d0792d737fb757e7783513b2e7ca54eacb219e80e58ba233dcbaf2"
+            ),
+            "filename": "prog_firehose_ufs.elf",
+        },
+        "ufs_provision": {
+            "url": (
+                "https://raw.githubusercontent.com/armbian/qcombin/"
+                "f2d55c46dcbe2af57dc400658cd14e70cd8baa79/Makena/"
+                "radxa-dragon-q8b/provision_ufs31_lun0_only.xml"
+            ),
+            "sha256": (
+                "54709fd22904972066ab3bbae58e65da9cda404fdfdacac2cae83feca98ac5c8"
+            ),
+            "filename": "provision_ufs31_lun0_only.xml",
+        },
     },
     "partitions": {
         "format": "gpt",
