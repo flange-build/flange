@@ -1,28 +1,3 @@
-> [!NOTE]
-> # ⓘ 返工说明（2026-08-23）：**本文关于官方管线的重建仍然有效**
->
-> 本文写作时的目的是「为自研管线向官方对齐提供对照基线」，而那条路已经被返工推翻 ——
-> 提交 `a98886fb` 把 Tab5 的全部自研画质控制律删除，改为**直接引入官方
-> `espressif/esp_ipa` 2.3.0**，由官方闭源算法库接管 AE/AWB/CCM/gamma/降噪/锐化/LSC。
->
-> **但本文的内容没有失效**：它重建的是**官方**的逻辑（`esp_video` + `esp_ipa` +
-> `sc202cs_default.json` 的逐级行为），而返工正是把这套官方逻辑原样搬了进来 ——
-> 本文因此从「对齐前的对照基线」变成了「**现在跑在板子上的那套算法的说明书**」。
-> 读它仍然是理解 `main/cam_ipa.c` 每一段在做什么的最好途径。
->
-> **需要更正的只有一处判断**（本文与当时全部文档共有）：
-> 「引 `esp_ipa` 会把 `esp_video` + `usb_host_uvc` + `esp_h264` 拖进来」——
-> 事实是对的（`esp_video` 确实依赖那三个），但**推论方向反了**：
-> `esp_ipa` 自己只依赖 `cmake_utilities` + `idf>=5.4`，**可以单独引**。
-> 这条未经回头验证的前提导致了那一整轮自研，详见
-> `docs/superpowers/plans/2026-08-21-tab5-isp-align-with-official.md` 顶部的返工说明。
->
-> **返工后的实际实现**：`components/packages/tab5-all-in-one/firmware/main/cam_ipa.{c,h}`
-> 与 `camera_csi.c`；文档见同目录 `firmware/README.md` 的「画质：官方 `esp_ipa` 接管」一章。
-> ⚠️ **返工后的固件一次都没有烧过板。**
-
----
-
 # ESP32-P4 官方摄像头 ISP 管线逻辑重建
 
 > 日期：2026-08-19
