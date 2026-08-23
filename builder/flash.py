@@ -1323,10 +1323,10 @@ class QualcommFlashStrategy(FlashStrategy):
         if not raw.exists():
             raise FlashError(f"未找到整盘镜像 {raw}；请先执行 flange build")
         loader = self._locate_loader(target_dir)
-        if (config.platform == "qualcommsc8280xp"
+        if (config.board in {"radxa-dragon-q6a", "radxa-dragon-q8b"}
                 and loader.name != "prog_firehose_ufs.elf"):
             raise FlashError(
-                "未找到 SC8280XP UFS firehose loader；"
+                f"未找到 {config.board} UFS firehose loader；"
                 "请先执行 flange build bootloader")
         # 目标存储介质：v1 仅 UFS（板子默认）；后续可经 board/SoC config 覆盖。
         memory = "UFS"

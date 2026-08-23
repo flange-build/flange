@@ -281,6 +281,40 @@ SOC = {
         "firehose_loader": "prog_firehose_ddr.elf",
         "spi_rawprogram": "rawprogram0.xml",
         "spi_patch": "patch0.xml",
+        "ufs_firehose": {
+            "url": (
+                "https://raw.githubusercontent.com/armbian/qcombin/"
+                "f2d55c46dcbe2af57dc400658cd14e70cd8baa79/Kodiak/"
+                "prog_firehose_ddr.elf"
+            ),
+            "sha256": (
+                "bd726ad721639767260a39bfbdce0323a0ea4976f24601c30f3c4f547d26719b"
+            ),
+            "filename": "prog_firehose_ufs.elf",
+        },
+        "ufs_provisions": {
+            "lun0-only": {
+                "url": (
+                    "https://raw.githubusercontent.com/armbian/qcombin/"
+                    "f2d55c46dcbe2af57dc400658cd14e70cd8baa79/Kodiak/"
+                    "radxa-dragon-q6a/provision_ufs31_lun0_only.xml"
+                ),
+                "sha256": (
+                    "54709fd22904972066ab3bbae58e65da9cda404fdfdacac2cae83feca98ac5c8"
+                ),
+                "filename": "provision_ufs31_lun0_only.xml",
+            },
+            "qcom": {
+                "url": (
+                    "https://dl.radxa.com/q6a/images/android/"
+                    "provision_ufs31.xml"
+                ),
+                "sha256": (
+                    "2eca74731049bfb399ec88bdbb830b5163910c471902d15dc3bfa6e9c1889c3e"
+                ),
+                "filename": "provision_ufs31.xml",
+            },
+        },
     },
 
     "partitions": {

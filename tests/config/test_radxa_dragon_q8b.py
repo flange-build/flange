@@ -108,6 +108,18 @@ def test_rootfs_firmware_and_ucm_inputs_are_complete():
     assert len(deb["sha256"]) == 64
 
 
+def test_q6a_ufs_provision_inputs_are_pinned():
+    cfg = resolve_config("radxa-dragon-q6a", "default", "release")
+    bootloader = cfg["bootloader"]
+    assert "/Kodiak/" in bootloader["ufs_firehose"]["url"]
+    assert bootloader["ufs_firehose"]["sha256"] == (
+        "bd726ad721639767260a39bfbdce0323a0ea4976f24601c30f3c4f547d26719b")
+    assert bootloader["ufs_provisions"]["lun0-only"]["sha256"] == (
+        "54709fd22904972066ab3bbae58e65da9cda404fdfdacac2cae83feca98ac5c8")
+    assert bootloader["ufs_provisions"]["qcom"]["sha256"] == (
+        "2eca74731049bfb399ec88bdbb830b5163910c471902d15dc3bfa6e9c1889c3e")
+
+
 @pytest.mark.parametrize(
     "component",
     ["kernel", "bootloader", "rootfs", "boot", "recovery", "image"],
@@ -201,7 +213,12 @@ def test_ufs_provision_uses_selected_profile(tmp_path, profile, filename):
     ])
 
 
-def test_sc8280xp_system_flash_requires_dedicated_ufs_loader(tmp_path):
+@pytest.mark.parametrize(("platform", "board"), [
+    ("qualcommqcs6490", "radxa-dragon-q6a"),
+    ("qualcommsc8280xp", "radxa-dragon-q8b"),
+])
+def test_qualcomm_system_flash_requires_dedicated_ufs_loader(
+        tmp_path, platform, board):
     raw = tmp_path / "image" / "raw.img"
     raw.parent.mkdir()
     raw.write_bytes(b"image")
@@ -209,8 +226,8 @@ def test_sc8280xp_system_flash_requires_dedicated_ufs_loader(tmp_path):
     firmware.mkdir(parents=True)
     (firmware / "prog_firehose_ddr.elf").write_bytes(b"spi-loader")
     config = FlashConfig(
-        platform="qualcommsc8280xp", flash_tool="edl-ng",
-        board="radxa-dragon-q8b", product="default", variant="debug")
+        platform=platform, flash_tool="edl-ng", board=board,
+        product="default", variant="debug")
 
     with pytest.raises(FlashError, match="UFS firehose loader"):
         QualcommFlashStrategy().flash_whole_disk(
