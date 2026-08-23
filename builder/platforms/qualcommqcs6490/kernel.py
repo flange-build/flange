@@ -91,7 +91,8 @@ class Qcs6490KernelBuilder(KernelBuilder):
         dtc_at_arg = f"DTC_FLAGS_{dtb}=-@"
         self.make(src_dir, targets,
                   arch=self.ARCH, cross=self.CROSS, jobs=jobs,
-                  extra=["KCFLAGS=-Wno-error", dtc_at_arg],
+                  extra=[f"CC=ccache {self.CROSS}gcc", "HOSTCC=ccache gcc",
+                         "KCFLAGS=-Wno-error", dtc_at_arg],
                   label="编译内核...")
 
         # 编译 out-of-tree 模块（由 [[硬件特性包]] 注入 kernel.oot_modules，

@@ -504,7 +504,7 @@ class SourceManager:
         subprocess.run(["git", "clean", "-fd"],
                        cwd=repo_dir, check=False)
         self._fetch_ref(repo_dir, commit, env=env, is_tag=is_tag)
-        # 与 branch 路径一致，用 mixed reset + checkout -f 避开 macOS
+        # 固定 ref 路径继续用 mixed reset + checkout -f，避开 macOS
         # 大小写不敏感文件系统上 kernel 同名异写文件导致的 hard reset 失败。
         subprocess.run(["git", "reset", "--mixed", "--no-refresh", commit],
                        cwd=repo_dir, check=True)
@@ -535,13 +535,11 @@ class SourceManager:
                            cwd=repo_dir, env=env, check=True, timeout=600)
 
     def _fetch_reset_branch(self, repo_dir: Path, branch: str):
-        """追远端最新：fetch origin/<branch> 后两步重置（mixed + checkout）。
+        """追远端最新，HEAD 变化时优先 hard reset。
 
-        不用 `git reset --hard` 的原因：在 macOS / Windows 大小写不敏感
-        文件系统上，Linux kernel 等源码树含仅大小写不同的文件
-        （如 xt_connmark.h / xt_CONNMARK.h），`reset --hard` 的 checkout
-        阶段会报 "File exists" → 整条命令失败 "fatal: Could not reset
-        index file"。两步式拆分：
+        hard reset 只重写新旧 HEAD 间实际变化的文件，能最大程度保留 make
+        增量缓存。macOS / Windows 大小写不敏感文件系统上的 Linux kernel
+        源码树可能因同名异写文件使 hard reset 失败，此时回退到两步式兼容路径：
 
           1. git reset --mixed origin/<branch>
              只更新 HEAD + index（二进制 .git/index 文件），不触碰工作
@@ -573,13 +571,32 @@ class SourceManager:
         refspec = f"+{branch}:refs/remotes/origin/{branch}"
         subprocess.run(["git", "fetch", "--depth=1", "origin", refspec],
                        cwd=repo_dir, env=env, check=True, timeout=600)
+        remote_ref = f"refs/remotes/origin/{branch}"
+        if self._rev_parse(repo_dir) == self._rev_parse_ref(
+                repo_dir, remote_ref):
+            # HEAD 未变化时不能执行 mixed reset：它会使整个 index 的 stat
+            # 信息失效，随后的 checkout 会重写内核全部源码时间戳，导致 make
+            # 把所有 .o 误判为过期。这里只恢复上次 patch 和未跟踪文件。
+            subprocess.run(["git", "checkout", "-f", "."],
+                           cwd=repo_dir, check=False)
+            subprocess.run(["git", "clean", "-fd"],
+                           cwd=repo_dir, check=False)
+            return
+        target = f"origin/{branch}"
+        result = subprocess.run(["git", "reset", "--hard", target],
+                                cwd=repo_dir, check=False)
+        if result.returncode == 0:
+            subprocess.run(["git", "clean", "-fd"],
+                           cwd=repo_dir, check=False)
+            return
+
         # `--no-refresh`：跳过 reset 后的 index stat 刷新。kernel 级大树
         # （~90k 文件）在 macOS bind-mount（virtiofs/gRPC-FUSE）下于容器内
         # 刷 index 极慢且会被 SIGKILL（exit 137，git 自身 hint 即建议
         # --no-refresh）。后续 `checkout -f .` 会重新物化工作树，stat 信息
         # 随之更新，跳过刷新无副作用。
         subprocess.run(["git", "reset", "--mixed", "--no-refresh",
-                        f"origin/{branch}"],
+                        target],
                        cwd=repo_dir, check=True)
         subprocess.run(["git", "checkout", "-f", "."],
                        cwd=repo_dir, check=False)

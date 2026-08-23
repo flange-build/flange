@@ -4,6 +4,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     privileged: true
+    environment:
+      CCACHE_DIR: /workspace/.build/cache/ccache
+      CCACHE_MAXSIZE: 20G
     volumes:
       # 项目目录挂载到容器
       - .:/workspace

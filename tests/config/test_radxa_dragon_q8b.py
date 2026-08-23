@@ -50,13 +50,12 @@ def test_platform_soc_and_board_resolve():
     assert (cfg["product"], cfg["variant"]) == ("default", "debug")
 
 
-def test_kernel_boot_and_ufs_inputs_are_pinned():
+def test_kernel_tracks_radxa_branch_and_boot_inputs_are_pinned():
     cfg = resolve_config("radxa-dragon-q8b", "default", "release")
     kernel_repo = cfg["repos"]["kernel"]
     assert kernel_repo == {
         "repo": "https://github.com/radxa/kernel.git",
         "branch": "linux-7.0.11",
-        "commit": "4a7a039590c7185ed9c53453b163806311799eed",
         "recurse_submodules": False,
         "product": "default",
         "variant": "release",
@@ -66,7 +65,19 @@ def test_kernel_boot_and_ufs_inputs_are_pinned():
     assert {
         "SCSI_UFSHCD", "SCSI_UFSHCD_PLATFORM", "SCSI_UFS_QCOM",
         "PHY_QCOM_QMP", "INTERCONNECT_QCOM_SC8280XP",
+        "DEBUG_INFO_NONE",
     }.issubset(cfg["kernel"]["enable_configs"])
+    disabled = set(cfg["kernel"]["disable_configs"])
+    assert {
+        "DEBUG_INFO_DWARF5", "DRM_AMDGPU", "DRM_NOUVEAU",
+        "NET_VENDOR_CHELSIO", "NET_VENDOR_I825XX", "NET_VENDOR_INTEL",
+        "NET_VENDOR_MELLANOX", "NET_VENDOR_MUCSE",
+    } == disabled
+    assert {
+        "DRM_MSM", "NET_VENDOR_STMICRO", "STMMAC_ETH", "DWMAC_TC956X",
+        "TOSHIBA_TC956X_PCI", "QCA808X_PHY", "WLAN_VENDOR_ATH",
+        "USB_USBNET",
+    }.isdisjoint(disabled)
     assert cfg["bootloader"]["edk2_firmware_url"].endswith(
         "dragon-q8b_flat_build_wp_260731.zip")
     assert cfg["bootloader"]["edk2_firmware_sha256"] == (
@@ -81,6 +92,41 @@ def test_kernel_boot_and_ufs_inputs_are_pinned():
     assert cfg["partitions"]["sector_size"] == 4096
     assert [entry["name"] for entry in cfg["partitions"]["entries"]] == [
         "esp", "rootfs"]
+
+
+def test_board_kernel_patch_sets_usb0_peripheral():
+    patch_path = (
+        PROJECT_ROOT / "components/board/radxa-dragon-q8b/patches/kernel/"
+        "0001-dts-q8b-set-usb-roles.patch"
+    )
+    patch_text = patch_path.read_text()
+
+    assert '&usb_0_dwc3 {' in patch_text
+    assert '&usb_1_dwc3 {' not in patch_text
+    assert patch_text.count('-\tdr_mode = "host";') == 1
+    assert patch_text.count('+\tdr_mode = "peripheral";') == 1
+    assert 'dr_mode = "otg"' not in patch_text
+    assert "usb-role-switch" not in patch_text
+    assert "toshiba,axi-bus-frequency-half" not in patch_text
+
+    builder = Qcs6490KernelBuilder(Mock(), Mock())
+    q8b_patches = builder._patch_paths(
+        resolve_config("radxa-dragon-q8b", "default", "release"))
+    q6a_patches = builder._patch_paths(
+        resolve_config("radxa-dragon-q6a", "default", "release"))
+    assert patch_path in q8b_patches
+    assert patch_path not in q6a_patches
+
+    q8b_dwc3_patch = (
+        PROJECT_ROOT / "components/platform/qualcommsc8280xp/patches/kernel/"
+        "0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch"
+    )
+    q6a_dwc3_patch = (
+        PROJECT_ROOT / "components/platform/qualcommqcs6490/patches/kernel/"
+        "0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch"
+    )
+    assert q8b_dwc3_patch in q8b_patches
+    assert q8b_dwc3_patch.read_bytes() == q6a_dwc3_patch.read_bytes()
 
 
 def test_rootfs_firmware_and_ucm_inputs_are_complete():
@@ -149,6 +195,25 @@ def test_kernel_builder_applies_inline_module_override(tmp_path):
         ["radxa_qcom_7_0_defconfig"], ["flange_inline.config"]]
     assert "CONFIG_DRM_MSM=m" in (
         configs / "flange_inline.config").read_text()
+
+
+def test_kernel_build_uses_persistent_ccache(tmp_path):
+    builder = Qcs6490KernelBuilder(Mock(), Mock())
+    builder.make = Mock()
+    builder._compile_oot_modules = Mock()
+    builder._clean_modules_staging = Mock()
+    builder._install_oot_modules = Mock()
+
+    builder.compile(tmp_path, {
+        "jobs": 2,
+        "kernel": {"dts_dir": "qcom", "dtb": "q8b"},
+    })
+
+    compile_extra = builder.make.call_args_list[0].kwargs["extra"]
+    assert f"CC=ccache {builder.CROSS}gcc" in compile_extra
+    assert "HOSTCC=ccache gcc" in compile_extra
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text()
+    assert "CCACHE_DIR: /workspace/.build/cache/ccache" in compose
 
 
 def test_bootloader_download_is_sha256_verified(tmp_path, monkeypatch):

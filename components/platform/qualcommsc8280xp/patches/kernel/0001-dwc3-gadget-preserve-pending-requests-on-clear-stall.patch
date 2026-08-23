@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Eric Wu <eric3u@outlook.com>
+Date: Sat, 11 Apr 2026 13:36:15 +0800
+Subject: [PATCH] =?UTF-8?q?fix(usb):=20dwc3=20gadget=20clear=20stall=20?=
+ =?UTF-8?q?=E6=97=B6=E4=BF=9D=E7=95=99=E6=AD=A3=E5=9C=A8=E8=BF=9B=E8=A1=8C?=
+ =?UTF-8?q?=E7=9A=84=E8=AF=B7=E6=B1=82=EF=BC=88linux-7.0.2=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+主机（如 macOS）在 USB 配置完成后会发送 ClearFeature(ENDPOINT_HALT)，
+上游内核在处理 clear stall 时会将所有正在等待的请求以 -EPIPE 完成，
+导致 adbd 的 bulk 读取收到 -EPIPE 后退出，USB gadget 随之被注销。
+
+将 clear stall 逻辑修改为：用 DWC3_EP_DELAY_START 标记保留请求，
+清除 stall 后通过 __dwc3_gadget_kick_transfer 重启传输。
+
+参考 Android 补丁：
+ANDROID: usb: dwc3: gadget: don't cancel the started requests (92de566762db)
+
+针对 linux-7.0.2 (drivers/usb/dwc3/gadget.c) 重写，逻辑与 linux-6.18.2
+版本一致，仅更新行号和上下文。
+---
+ drivers/usb/dwc3/gadget.c | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/usb/dwc3/gadget.c b/drivers/usb/dwc3/gadget.c
+--- a/drivers/usb/dwc3/gadget.c
++++ b/drivers/usb/dwc3/gadget.c
+@@ -2193,8 +2193,6 @@ int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value, int protocol)
+ {
+ 	struct dwc3_gadget_ep_cmd_params	params;
+ 	struct dwc3				*dwc = dep->dwc;
+-	struct dwc3_request			*req;
+-	struct dwc3_request			*tmp;
+ 	int					ret;
+
+ 	if (usb_endpoint_xfer_isoc(dep->endpoint.desc)) {
+@@ -2245,8 +2243,8 @@ int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value, int protocol)
+
+ 		dwc3_stop_active_transfer(dep, true, true);
+
+-		list_for_each_entry_safe(req, tmp, &dep->started_list, list)
+-			dwc3_gadget_move_cancelled_request(req, DWC3_REQUEST_STATUS_STALLED);
++		if (!list_empty(&dep->started_list))
++			dep->flags |= DWC3_EP_DELAY_START;
+
+ 		if (dep->flags & DWC3_EP_END_TRANSFER_PENDING ||
+ 		    (dep->flags & DWC3_EP_DELAY_STOP)) {
+@@ -2257,8 +2255,6 @@ int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value, int protocol)
+ 			return 0;
+ 		}
+
+-		dwc3_gadget_ep_cleanup_cancelled_requests(dep);
+-
+ 		ret = dwc3_send_clear_stall_ep_cmd(dep);
+ 		if (ret) {
+ 			dev_err(dwc->dev, "failed to clear STALL on %s\n",

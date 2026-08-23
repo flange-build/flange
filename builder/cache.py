@@ -126,6 +126,11 @@ class BuildCache:
         if self._has_local_upstream(component):
             return False
 
+        source = self._component_source_config(component)
+        if (source.get("branch") and not source.get("commit")
+                and not source.get("tag")):
+            return False
+
         hash_file = self.target_dir / component / ".build_hash"
         if not hash_file.exists():
             return False
@@ -618,8 +623,13 @@ class BuildCache:
         """
         # 源码 commit
         project_root = Path(getattr(self, "project_root", PROJECT_ROOT))
-        src_dir = (project_root / ".build" / "sources" / component
-                   / self.config["board"])
+        component_config = self.config.get(component, {}) or {}
+        from_repo = component_config.get("from_repo")
+        if from_repo:
+            src_dir = project_root / ".build" / "sources" / "repos" / from_repo
+        else:
+            src_dir = (project_root / ".build" / "sources" / component
+                       / self.config["board"])
         if src_dir.exists():
             h.update(b"src:")
             h.update(self._git_head(src_dir).encode())
@@ -645,6 +655,14 @@ class BuildCache:
                     h.update(b"patch:")
                     h.update(p.name.encode())
                     h.update(p.read_bytes())
+
+    def _component_source_config(self, component: str) -> dict:
+        """返回组件实际使用的仓库配置。"""
+        component_config = self.config.get(component, {}) or {}
+        from_repo = component_config.get("from_repo")
+        if from_repo:
+            return (self.config.get("repos", {}) or {}).get(from_repo, {}) or {}
+        return component_config
 
     # --- 哈希输入混合：partitions 配置 ---
 

@@ -62,6 +62,27 @@ class TestBuildCache:
             assert cache.is_up_to_date("kernel")
             assert not cache.is_up_to_date("bootloader")
 
+    def test_branch_tracked_named_repo_bypasses_cache_and_hashes_head(
+            self, tmp_path):
+        config = {
+            "board": "test", "product": "default", "variant": "release",
+            "platform": "test", "soc": "test",
+            "repos": {"kernel": {"repo": "https://example.com/kernel.git",
+                                  "branch": "main"}},
+            "kernel": {"from_repo": "kernel"},
+        }
+        repo_dir = tmp_path / ".build" / "sources" / "repos" / "kernel"
+        repo_dir.mkdir(parents=True)
+        cache = BuildCache(config, target_base=tmp_path / "target",
+                           project_root=tmp_path)
+        seen = []
+        cache._git_head = lambda path: seen.append(path) or "branch-head"
+
+        cache.compute_hash("kernel")
+
+        assert seen == [repo_dir]
+        assert not cache.is_up_to_date("kernel")
+
 
 class TestBootloaderArtifactCache:
     """bootloader 缓存产物校验。"""

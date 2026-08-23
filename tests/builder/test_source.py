@@ -246,3 +246,56 @@ def test_fetch_checkout_discards_previous_build_patches(tmp_path: Path):
     assert subprocess.run(
         ["git", "status", "--porcelain"], cwd=work, check=True,
         capture_output=True, text=True).stdout == ""
+
+
+def test_fetch_reset_branch_skips_mixed_reset_when_head_is_unchanged(
+        manager: SourceManager, tmp_path: Path):
+    """远端 HEAD 未变化时不得使整个源码树的时间戳失效。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with patch.object(manager, "_rev_parse", return_value="same"), \
+            patch.object(manager, "_rev_parse_ref", return_value="same"), \
+            patch("builder.source.subprocess.run") as run:
+        manager._fetch_reset_branch(repo, "linux-7.0.11")
+
+    commands = [call.args[0] for call in run.call_args_list]
+    assert not any(command[:2] == ["git", "reset"] for command in commands)
+    assert ["git", "checkout", "-f", "."] in commands
+    assert ["git", "clean", "-fd"] in commands
+
+
+def test_fetch_reset_branch_prefers_hard_reset_when_head_changes(
+        manager: SourceManager, tmp_path: Path):
+    """远端 HEAD 更新时只让 Git 重写实际变化文件。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    completed = subprocess.CompletedProcess([], 0)
+    with patch.object(manager, "_rev_parse", return_value="old"), \
+            patch.object(manager, "_rev_parse_ref", return_value="new"), \
+            patch("builder.source.subprocess.run",
+                  return_value=completed) as run:
+        manager._fetch_reset_branch(repo, "linux-7.0.11")
+
+    commands = [call.args[0] for call in run.call_args_list]
+    assert ["git", "reset", "--hard", "origin/linux-7.0.11"] in commands
+    assert not any("--mixed" in command for command in commands)
+
+
+def test_fetch_reset_branch_falls_back_when_hard_reset_fails(
+        manager: SourceManager, tmp_path: Path):
+    """大小写冲突使 hard reset 失败时保留兼容路径。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def run_git(command, **_kwargs):
+        failed = command[:3] == ["git", "reset", "--hard"]
+        return subprocess.CompletedProcess(command, int(failed))
+
+    with patch.object(manager, "_rev_parse", return_value="old"), \
+            patch.object(manager, "_rev_parse_ref", return_value="new"), \
+            patch("builder.source.subprocess.run", side_effect=run_git) as run:
+        manager._fetch_reset_branch(repo, "linux-7.0.11")
+
+    commands = [call.args[0] for call in run.call_args_list]
+    assert ["git", "reset", "--mixed", "--no-refresh",
+            "origin/linux-7.0.11"] in commands

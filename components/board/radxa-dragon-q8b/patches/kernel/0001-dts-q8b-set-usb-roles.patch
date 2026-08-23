@@ -1,0 +1,17 @@
+dts: qcom: radxa-dragon-q8b: 固定 USB 角色
+
+将 usb_0_dwc3（a600000.usb）改为 peripheral，供 configfs/FunctionFS
+adbd 调试通道绑定。usb_1_dwc3（a800000.usb）保持上游的 host 配置。
+
+diff --git a/arch/arm64/boot/dts/qcom/sc8280xp-radxa-dragon-q8b.dts b/arch/arm64/boot/dts/qcom/sc8280xp-radxa-dragon-q8b.dts
+--- a/arch/arm64/boot/dts/qcom/sc8280xp-radxa-dragon-q8b.dts
++++ b/arch/arm64/boot/dts/qcom/sc8280xp-radxa-dragon-q8b.dts
+@@ -1645,7 +1645,7 @@
+ };
+ 
+ &usb_0_dwc3 {
+-	dr_mode = "host";
++	dr_mode = "peripheral";
+ };
+ 
+ &usb_0_dwc3_hs {

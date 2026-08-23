@@ -9,7 +9,6 @@ SOC = {
         "kernel": {
             "repo": "https://github.com/radxa/kernel.git",
             "branch": "linux-7.0.11",
-            "commit": "4a7a039590c7185ed9c53453b163806311799eed",
             "recurse_submodules": False,
         },
     },
@@ -31,6 +30,20 @@ SOC = {
             "INTERCONNECT_QCOM_SC8280XP",
             "FW_LOADER_COMPRESS",
             "FW_LOADER_COMPRESS_ZSTD",
+            "DEBUG_INFO_NONE",
+        ],
+        # Q8B 只使用 Adreno/MSM 显示和 QPS615/TC956x 板载网卡。通过 flange
+        # 额外 config 覆盖裁掉发行版 defconfig 中的离线调试信息、独显与
+        # 无关 PCIe 网卡；USB 网卡和 M.2 E-Key Wi-Fi 驱动保持可用。
+        "disable_configs": [
+            "DEBUG_INFO_DWARF5",
+            "DRM_AMDGPU",
+            "DRM_NOUVEAU",
+            "NET_VENDOR_CHELSIO",
+            "NET_VENDOR_I825XX",
+            "NET_VENDOR_INTEL",
+            "NET_VENDOR_MELLANOX",
+            "NET_VENDOR_MUCSE",
         ],
     },
     "rootfs": {
