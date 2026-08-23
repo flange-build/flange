@@ -1304,6 +1304,20 @@ static bool cam_fill_ipa_stats(esp_ipa_stats_t *st)
  */
 #define CAM_IPA_TASK_STACK   4096
 
+/*
+ * **钉核**。本任务必须与 ISP 的 ISR 跑在同一个核上。
+ *
+ * 理由是 cam_ipa.c 里那段 LSC LUT 写的临界区：LSC 与 AWB 共用同一套 LUT 寄存器
+ * 接口（写方在本任务、读方在 esp_isp_awb_isr()），而 P4 是双核 ——
+ * portENTER_CRITICAL 只关**本核**的中断，两者分居两核时那段临界区等于没加。
+ *
+ * ⓘ 取「建 ISP 的那个核」而不是写死 0：ISP 的中断由 esp_intr_alloc_intrstatus()
+ *   在**调用它的那个核**上注册（isp_core.c），而调用发生在 camera_csi_init()
+ *   里、也就是 app_main 的任务上。本函数由 camera_csi_init() 在同一个任务里调，
+ *   所以此刻的 xPortGetCoreID() 就是那个核 —— 不必假设 app_main 钉在哪。
+ */
+#define CAM_IPA_TASK_CORE    xPortGetCoreID()
+
 /* 送进 blob 的那份统计。**文件级静态**，理由见 CAM_IPA_TASK_STACK 上方。
  * 只有 cam_ipa_task 一个写者与读者，不需要同步。 */
 static esp_ipa_stats_t s_ipa_stats;
@@ -1367,14 +1381,16 @@ static void cam_ipa_task_start(void)
 {
     if (s_ipa_task)
         return;
-    if (xTaskCreate(cam_ipa_task, "ipa", CAM_IPA_TASK_STACK, NULL,
-                    CAM_IPA_TASK_PRIO, &s_ipa_task) != pdPASS) {
+    const BaseType_t core = CAM_IPA_TASK_CORE;
+    if (xTaskCreatePinnedToCore(cam_ipa_task, "ipa", CAM_IPA_TASK_STACK, NULL,
+                                CAM_IPA_TASK_PRIO, &s_ipa_task, core) != pdPASS) {
         ESP_LOGW(TAG, "IPA 节拍任务建不起来，画面停在 IPA 初值上，其余一切照常");
         return;   /* xTaskCreate 失败时不写句柄，s_ipa_task 保持 NULL */
     }
     ESP_LOGI(TAG, "IPA 节拍任务已建：节拍源=AE 统计中断（每帧一次 ⇒ 跟随传感器帧率），"
-                  "优先级 %d、栈 %d B，兜底 %d ms；不取流时休眠",
-             CAM_IPA_TASK_PRIO, CAM_IPA_TASK_STACK, CAM_IPA_FALLBACK_MS);
+                  "优先级 %d、栈 %d B、钉在核 %d（= ISP 中断所在核），兜底 %d ms；"
+                  "不取流时休眠",
+             CAM_IPA_TASK_PRIO, CAM_IPA_TASK_STACK, (int)core, CAM_IPA_FALLBACK_MS);
 }
 #endif  /* CAM_IPA_ENABLE */
 

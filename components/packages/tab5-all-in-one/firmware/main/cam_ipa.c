@@ -10,6 +10,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 #include "sdkconfig.h"
 #include "tab5_pins.h"
 
@@ -49,6 +50,42 @@ static const char *TAG = "cam_ipa";
 #define CAM_IPA_HAS_BLC   0    /* rev v1.0 无 ISP BLC，metadata 的 BLC 位直接忽略 */
 #define CAM_IPA_HAS_WBG   0    /* rev v1.0 无 WBG，白平衡增益折进 CCM，见 config_ccm */
 #define CAM_IPA_HAS_LSC   1
+
+/*
+ * ══ metadata 分发的分组开关（**二分排障用**，默认全开）════════════════
+ *
+ * 存在的理由：`CONFIG_AIO_CAM_IPA=y` 时实测出现过 `HP_SYS_HP_WDT_RESET` 复位循环，
+ * 而 `=n` 完全正常。那条总开关的粒度是「整条 IPA 路」—— 关掉它得到的只是
+ * 「不是 IPA 就是别的」这一个比特的信息，定位不到是哪一项分发把板子打死。
+ * 现场又拿不到 panic backtrace（见文件末 cam_ipa_report() 上方的「怎么二分」），
+ * 所以把分发切成六组，每组一个宏，**关掉时该组的函数与调用点一行都不进镜像**。
+ *
+ * ⚠️ **这是排障旋钮，不是产品配置。** 六个都得是 1 才是产品形态；查完一定要都打回 1。
+ * ⚠️ 关掉某一组**不会**让 blob 少算 —— 它照常算、照常在 metadata 里置位，
+ *   只是没人把那几位写进硬件。自检行的「至今见过」仍然会显示它们。
+ *
+ * 每组关掉之后画面上的代价（拿来判断「关了这组之后画面变成什么样是预期的」）：
+ *   LSC     → 四角暗角回来
+ *   GAMMA   → 整体偏暗（ISP 直出线性光，host 按 sRGB 解码）
+ *   CCM     → 整体发绿（本板白平衡的唯一施加点就是 CCM，见 config_ccm）
+ *   DENOISE → 高增益下噪点明显、边缘发软（BF/DM/SH 三块一起）
+ *   COLOR   → 对比度/饱和度/色调/亮度停在 ISP 复位值（128 = 1.0×）
+ *   SENSOR  → 曝光/增益固定在模式表默认值上，AE 完全不动
+ *
+ * 建议的二分顺序写在 cam_ipa_report() 上方的判读表里 —— **先关 LSC**：
+ * 它是六组里唯一一个「一次写一千多个寄存器、而且与 AWB 的 ISR 共用同一套 LUT
+ * 接口」的，其余五组都只是几个到几十个普通寄存器写。
+ */
+#define CAM_IPA_DISPATCH_LSC       1  /* LSC：整张 273×4 增益表，走共用 LUT 端口 */
+#define CAM_IPA_DISPATCH_GAMMA     1  /* gamma：三通道各 16 个折点 */
+#define CAM_IPA_DISPATCH_CCM       1  /* CCM + RG/BG（本板白平衡的唯一施加点） */
+#define CAM_IPA_DISPATCH_DENOISE   1  /* BF + demosaic + sharpen */
+#define CAM_IPA_DISPATCH_COLOR     1  /* 亮度/对比度/饱和度/色调 */
+#define CAM_IPA_DISPATCH_SENSOR    1  /* 传感器侧 ET/GN（唯一走 I2C 的一组） */
+
+/* LSC 要**同时**满足「硬件有这个块」与「分发这一组没被关掉」才编。
+ * 合成一个名字，免得每处都写两个条件、日后漏改一处。 */
+#define CAM_IPA_LSC_ON    (CAM_IPA_HAS_LSC && CAM_IPA_DISPATCH_LSC)
 
 /*
  * 传感器名。**必须与官方标定文件顶层的那个键逐字符相同** ——
@@ -105,17 +142,72 @@ static uint32_t s_flags_last;                /* 最近一拍的 metadata flags *
 static uint32_t s_n_exp, s_n_gain, s_n_ccm, s_n_gamma, s_n_lsc;
 
 /* LSC 的增益数组由驱动分配（273 格 × 4 通道），只在 metadata 给出 LSC 时填。 */
-#if CAM_IPA_HAS_LSC
+#if CAM_IPA_LSC_ON
 static esp_isp_lsc_gain_array_t s_lsc_gain;
 static size_t  s_lsc_n;
 static int32_t s_st_lsc = STEP_NOT_RUN;
 static bool    s_lsc_ready;
 static bool    s_lsc_enabled;
+static bool    s_lsc_written;    /* s_lsc_gain 里那份已经写进 LUT 了 ⇒ 可拿来做去抖比对 */
+static uint32_t s_n_lsc_skip;    /* 内容没变、被去抖挡掉的次数 */
+static uint32_t s_lsc_us_max;    /* LUT 写临界区实测最长耗时（µs），自检行直读 */
+
+/*
+ * 写 LSC 的 LUT 时用来把 ISP 的 ISR 挡在外面的自旋锁。
+ *
+ * ⚠️ **LSC 与 AWB 共用同一套 LUT 寄存器接口**（esp_hal_cam/esp32p4/include/hal/isp_ll.h：
+ *   两边都写 `hw->lut_cmd.val`，靠 cmd 里的选择位区分是 LSC 还是 AWB），而两条路
+ *   一条在任务上下文、一条在 ISR 上下文：
+ *     写 LSC：esp_isp_lsc_configure() 的 `for y { for x { wdata; cmd } }`，
+ *             21×13 格 × 2 次（r/gr 与 gb/b）⇒ **1092 次寄存器写**，跑在本任务里；
+ *     读 AWB：IDF 的 esp_isp_awb_isr() 每帧无条件扫 25 个 subwindow × 4 个量
+ *             ⇒ 200 次 `set_cmd` + `rdata`，跑在 ISP 的 ISR 里。
+ *   IDF 自己没有为这两条路做任何互斥。
+ *
+ * ⓘ **实际会被打坏的是 AWB 的 subwindow 统计，不是 LSC 表**：AWB 的读法是
+ *   「先写 lut_cmd 选中一格、再读 lut_rdata」，我们的 cmd 写插在这两步之间就会让它
+ *   读到另一格；反过来我们的 wdata 是**独占**的（AWB 一个字都不写 lut_wdata），
+ *   cmd 又是一次 32 位原子写，所以 LSC 的表本身不会被写花。而 AWB 的 subwindow
+ *   统计本工程压根不消费（rev<3.0 上 subwindow 不可用，我们连
+ *   IPA_STATS_FLAGS_AWB_SUBWIN 都不置）——**已知损害为零**。
+ *
+ * ⚠️ 那为什么还要加锁：**LUT 端口在「一次写还没落地」时被重新下 cmd 之后会怎样，
+ *   TRM 与 IDF 都没有写**。这是本次 HP_WDT 复位循环里少数几个「无法从代码上排除」
+ *   的硬件级未知之一，而排除它的代价只有下面这一段临界区。**这不等于根因已定**。
+ *
+ * ── 代价与为什么不分段 ──────────────────────────────────────────
+ * 临界区包住的是 IDF 的 esp_isp_lsc_configure() 整体（1092 次寄存器写）。要分段
+ * 就得把那个双重循环抄进本文件、直接调 isp_ll_*（私有 HAL）—— 那是把 IDF 的
+ * 私有实现复制一份，日后 IDF 改了 LUT 时序这里不会跟着改，代价比收益大。
+ * 量级上也不需要分段：1092 次外设写在 360 MHz 的 P4 上是**几十到一百多微秒**，
+ * 与 CONFIG_ESP_INT_WDT 的 300 ms 差三个数量级。而且**不必信这个估算** ——
+ * 下面实测每次的耗时并把最大值打进自检行（「LUT 临界区」那一格）。
+ * 加上上面那道内容去抖，这一段一天也走不了几次。
+ *
+ * ⚠️ P4 是双核，portENTER_CRITICAL 只关**本核**的中断。所以 IPA 节拍任务被
+ *   camera_csi.c 钉在「建 ISP 的那个核」上（= ISP 的 ISR 所在核，见
+ *   cam_ipa_task_start()）；不钉的话这段临界区在另一个核上等于没加。
+ */
+static portMUX_TYPE s_lut_lock = portMUX_INITIALIZER_UNLOCKED;
 #endif
 
 /* 各 ISP 子块的 enable 都有 FSM 门（重复调直接 ESP_ERR_INVALID_STATE），
- * 整个生命周期只能成功一次 —— 用这几个布尔记住「已经开过了」。 */
-static bool s_bf_en, s_sharp_en, s_color_en, s_ccm_en, s_gamma_en;
+ * 整个生命周期只能成功一次 —— 用这几个布尔记住「已经开过了」。
+ * ⓘ 按分发分组分别 #if：某组关掉时它的 enable 布尔没人读写，留着就是一条
+ *   -Wunused-variable（本工程要求各档零告警）。而各组的 s_st_* 返回码**不分组**
+ *   ——自检行两档都要打它们，关掉的组会稳定显示「未运行」，那正是该看到的。 */
+#if CAM_IPA_DISPATCH_DENOISE
+static bool s_bf_en, s_sharp_en;
+#endif
+#if CAM_IPA_DISPATCH_COLOR
+static bool s_color_en;
+#endif
+#if CAM_IPA_DISPATCH_CCM
+static bool s_ccm_en;
+#endif
+#if CAM_IPA_DISPATCH_GAMMA
+static bool s_gamma_en;
+#endif
 static int32_t s_st_bf = STEP_NOT_RUN, s_st_sharp = STEP_NOT_RUN;
 static int32_t s_st_color = STEP_NOT_RUN, s_st_ccm = STEP_NOT_RUN;
 static int32_t s_st_gamma = STEP_NOT_RUN, s_st_dm = STEP_NOT_RUN;
@@ -124,6 +216,7 @@ static int32_t s_st_gamma = STEP_NOT_RUN, s_st_dm = STEP_NOT_RUN;
  *  ISP 侧的分发
  * ══════════════════════════════════════════════════════════════════ */
 
+#if CAM_IPA_DISPATCH_DENOISE
 static void config_bf(const esp_ipa_metadata_t *md)
 {
     if (!(md->flags & IPA_METADATA_FLAGS_BF))
@@ -196,6 +289,7 @@ static void config_sharpen(const esp_ipa_metadata_t *md)
         s_sharp_en = (s_st_sharp == ESP_OK);
     }
 }
+#endif  /* CAM_IPA_DISPATCH_DENOISE */
 
 /*
  * 对比度 / 饱和度 / 色调 / 亮度共用**一次** Color configure —— 四个字段在同一个
@@ -208,6 +302,7 @@ static void config_sharpen(const esp_ipa_metadata_t *md)
 static uint8_t s_color_contrast = 128, s_color_saturation = 128;
 static uint8_t s_color_hue, s_color_brightness;
 
+#if CAM_IPA_DISPATCH_COLOR
 static void config_color(const esp_ipa_metadata_t *md)
 {
     const uint32_t any = IPA_METADATA_FLAGS_BR | IPA_METADATA_FLAGS_CN |
@@ -236,7 +331,9 @@ static void config_color(const esp_ipa_metadata_t *md)
         s_color_en = (s_st_color == ESP_OK);
     }
 }
+#endif  /* CAM_IPA_DISPATCH_COLOR */
 
+#if CAM_IPA_DISPATCH_GAMMA
 static void config_gamma(const esp_ipa_metadata_t *md)
 {
     if (!(md->flags & IPA_METADATA_FLAGS_GAMMA))
@@ -271,6 +368,7 @@ static void config_gamma(const esp_ipa_metadata_t *md)
     }
     s_n_gamma++;
 }
+#endif  /* CAM_IPA_DISPATCH_GAMMA */
 
 /*
  * CCM。**本板白平衡的唯一施加点** —— rev v1.0 没有 WBG（CAM_IPA_HAS_WBG = 0），
@@ -288,6 +386,7 @@ static void config_gamma(const esp_ipa_metadata_t *md)
  *   `.saturation = true` 让驱动在越界时饱和而不是整个拒绝 —— 失败等于**一点
  *   白平衡都没有**（画面整体发绿），比略微不准坏得多。
  */
+#if CAM_IPA_DISPATCH_CCM
 static void config_ccm(const esp_ipa_metadata_t *md)
 {
     const bool has_ccm = md->flags & IPA_METADATA_FLAGS_CCM;
@@ -328,8 +427,9 @@ static void config_ccm(const esp_ipa_metadata_t *md)
     if (s_st_ccm == ESP_OK)
         s_n_ccm++;
 }
+#endif  /* CAM_IPA_DISPATCH_CCM */
 
-#if CAM_IPA_HAS_LSC
+#if CAM_IPA_LSC_ON
 static void config_lsc(const esp_ipa_metadata_t *md)
 {
     if (!(md->flags & IPA_METADATA_FLAGS_LSC) || !s_lsc_ready)
@@ -346,21 +446,76 @@ static void config_lsc(const esp_ipa_metadata_t *md)
         s_st_lsc = ESP_ERR_INVALID_SIZE;
         return;
     }
-    memcpy(s_lsc_gain.gain_r,  md->lsc.gain_r,  s_lsc_n * sizeof(isp_lsc_gain_t));
-    memcpy(s_lsc_gain.gain_gr, md->lsc.gain_gr, s_lsc_n * sizeof(isp_lsc_gain_t));
-    memcpy(s_lsc_gain.gain_gb, md->lsc.gain_gb, s_lsc_n * sizeof(isp_lsc_gain_t));
-    memcpy(s_lsc_gain.gain_b,  md->lsc.gain_b,  s_lsc_n * sizeof(isp_lsc_gain_t));
+    /*
+     * ── 内容去抖：这一张表与上次写进 LUT 的完全一样就不重写 ──────────
+     *
+     * s_lsc_gain 里存的**就是上一次写进 LUT 的那份**（下面 configure() 读的就是它），
+     * 所以拿它直接与 blob 这一拍给的四条数组逐字节比即可，不必另存一份影子。
+     *
+     * 为什么值得做：官方 blob 的 cal_lsc() 只在「按色温选中的档位变了」时才置
+     * IPA_METADATA_FLAGS_LSC，本来就不是每拍都发；但色温估计在两档的边界上来回
+     * 抖时，档位会跟着来回跳，于是同一张表被反复重写。比对 4×273×2 = 2184 字节
+     * 的代价，比 1092 次外设写加一段临界区小一个数量级。
+     *
+     * ⚠️ 只有 s_lsc_written 为真时才敢比 —— 开机第一次时 s_lsc_gain 是驱动
+     *   calloc 出来的全零，而「全零」本身也可能是一张合法的表。
+     */
+    const size_t nbytes = s_lsc_n * sizeof(isp_lsc_gain_t);
+    if (s_lsc_written &&
+        !memcmp(s_lsc_gain.gain_r,  md->lsc.gain_r,  nbytes) &&
+        !memcmp(s_lsc_gain.gain_gr, md->lsc.gain_gr, nbytes) &&
+        !memcmp(s_lsc_gain.gain_gb, md->lsc.gain_gb, nbytes) &&
+        !memcmp(s_lsc_gain.gain_b,  md->lsc.gain_b,  nbytes)) {
+        s_n_lsc_skip++;
+        return;
+    }
+
+    memcpy(s_lsc_gain.gain_r,  md->lsc.gain_r,  nbytes);
+    memcpy(s_lsc_gain.gain_gr, md->lsc.gain_gr, nbytes);
+    memcpy(s_lsc_gain.gain_gb, md->lsc.gain_gb, nbytes);
+    memcpy(s_lsc_gain.gain_b,  md->lsc.gain_b,  nbytes);
+
+    /* ⚠️ 临界区**只包 configure()**：enable 那一步有 FSM 门、会走 IDF 自己的
+     *   spinlock，套在我们的临界区里就是嵌套两把锁，没有必要。
+     *   耗时在临界区外量（esp_timer_get_time() 自己要读硬件计数器）。 */
+    const bool was_enabled = s_lsc_enabled;
 
     const esp_isp_lsc_config_t cfg = { .gain_array = &s_lsc_gain };
+    const int64_t t0 = esp_timer_get_time();
+    portENTER_CRITICAL(&s_lut_lock);
     s_st_lsc = esp_isp_lsc_configure(s_isp, &cfg);
-    if (s_st_lsc == ESP_OK && !s_lsc_enabled) {
+    portEXIT_CRITICAL(&s_lut_lock);
+    const uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+    if (us > s_lsc_us_max)
+        s_lsc_us_max = us;
+
+    if (s_st_lsc != ESP_OK)
+        return;      /* 表没写成 ⇒ 不能记成「已写」，否则去抖会挡掉下一次重试 */
+
+    /*
+     * ⚠️ **只有在 LSC 块已经开着的时候写下去的那一份才算数。**
+     *
+     * 开机那一次走的是「先写整张表、再 esp_isp_lsc_enable()」（本函数的固有顺序，
+     * 且驱动要求 allocate 必须在 enable 之前），而那一刻 ISP 连 esp_isp_enable()
+     * 都还没调、一帧都没来过 —— LSC 的子块时钟被 esp_isp_lsc_configure() 自己设成
+     * ISP_LL_PIPELINE_CLK_CTRL_AUTO（「帧间隔里关掉」，isp_ll.h:208），那 1092 次
+     * LUT 写到底有没有落地**无从确认**。把它记成「已写」，去抖就可能把日后唯一
+     * 一次纠正的机会也挡掉。
+     * 不记的代价只有「整个生命周期多写一次整表」，与去抖要防的 30 Hz 重写不是
+     * 一个量级。
+     * ⓘ 这也是开机复位循环里 LSC 嫌疑最大的那一点：官方 esp_video 的 isp_task
+     *   是**取流之后**才跑分发的，我们这一次写发生在取流之前，位置与官方不同。
+     */
+    s_lsc_written = was_enabled;
+
+    if (!s_lsc_enabled) {
         s_st_lsc = esp_isp_lsc_enable(s_isp);
         s_lsc_enabled = (s_st_lsc == ESP_OK);
     }
     if (s_st_lsc == ESP_OK)
         s_n_lsc++;
 }
-#endif  /* CAM_IPA_HAS_LSC */
+#endif  /* CAM_IPA_LSC_ON */
 
 /* ══════════════════════════════════════════════════════════════════
  *  传感器侧的分发：曝光 + 增益
@@ -378,6 +533,7 @@ static void config_lsc(const esp_ipa_metadata_t *md)
  *   取「不超过目标的最大一档」是这张升序表上唯一有物理意义的语义（宁可暗一点
  *   也不要过曝），表长不过百余项，每拍一次线性扫描的代价可以忽略。
  */
+#if CAM_IPA_DISPATCH_SENSOR
 static uint32_t gain_to_index(float gain)
 {
     if (!s_gain_map || s_gain_count == 0)
@@ -469,6 +625,7 @@ static void config_sensor(esp_ipa_metadata_t *md)
         s_n_gain++;
     }
 }
+#endif  /* CAM_IPA_DISPATCH_SENSOR */
 
 /* ══════════════════════════════════════════════════════════════════
  *  对外接口
@@ -482,13 +639,21 @@ static void dispatch(esp_ipa_metadata_t *md)
     /* ISP 侧先、传感器侧后：ISP 的参数在本帧就生效，而曝光/增益要一两帧之后才
      * 反映到统计里。顺序对结果没有影响（两者互不依赖），这样排只是让「本拍改了
      * 什么」在日志里按管线次序读下来。 */
+#if CAM_IPA_DISPATCH_DENOISE
     config_bf(md);
     config_demosaic(md);
     config_sharpen(md);
+#endif
+#if CAM_IPA_DISPATCH_GAMMA
     config_gamma(md);
+#endif
+#if CAM_IPA_DISPATCH_CCM
     config_ccm(md);
+#endif
+#if CAM_IPA_DISPATCH_COLOR
     config_color(md);
-#if CAM_IPA_HAS_LSC
+#endif
+#if CAM_IPA_LSC_ON
     config_lsc(md);
 #endif
     /*
@@ -513,7 +678,11 @@ static void dispatch(esp_ipa_metadata_t *md)
      * 这几位**一个字都不写硬件**，只经 s_flags_seen 进自检行 —— 「blob 要求了
      * 什么」与「我们做到了什么」必须在日志里分得开。
      */
+#if CAM_IPA_DISPATCH_SENSOR
     config_sensor(md);
+#else
+    (void)md;
+#endif
 }
 
 esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor)
@@ -586,7 +755,7 @@ esp_err_t cam_ipa_init(isp_proc_handle_t isp, esp_cam_sensor_device_t *sensor)
                       "画面固定在模式表的默认曝光上", esp_err_to_name((esp_err_t)s_st_range));
     }
 
-#if CAM_IPA_HAS_LSC
+#if CAM_IPA_LSC_ON
     /*
      * LSC 的增益数组必须在 esp_isp_lsc_enable() **之前**分配
      * （esp_isp_lsc_allocate_gain_array() 要求 lsc_fsm == INIT，isp_lsc.c），
@@ -728,6 +897,46 @@ static const char *step_str(int32_t v)
  *                             换过标定文件，回去看 dispatch() 里那段的假设还成不成立。
  *   曝光=/增益= 一直不涨      → blob 在死区里。用手电或遮挡制造 3 档以上的亮度变化
  *                             再看，两个数应当在几拍之内动起来。
+ *   LSC 去抖挡掉=0 而写入很大 → 色温估计在两档边界上抖，每拍都在重写整张表。
+ *   LSC 临界区最长 > 1000 µs  → 与估算差一个数量级，回来重新掂量「不分段」那个取舍。
+ *
+ * ══ 板子进 HP_SYS_HP_WDT_RESET 复位循环时怎么二分 ═══════════════════
+ *
+ * 现象：开机出待机画面后立刻复位、蓝屏与待机画面反复闪；bootloader 打
+ * `rst:0x7 (HP_SYS_HP_WDT_RESET)`；`CONFIG_AIO_CAM_IPA=n` 则完全正常。
+ *
+ * ⚠️ **0x7 = RESET_REASON_CORE_MWDT**（soc/reset_reasons.h），也就是 timer-group
+ *   看门狗的**第二级**。INT_WDT 与 TWDT 的第一级都是「发中断进 panic 打印」、
+ *   第二级才是 RESET_SYSTEM（int_wdt.c:121、task_wdt_impl_timergroup.c:125），
+ *   而第二级会跳过来说明**第一级那个中断压根没跑成**。所以 0x7 + 一个字都没打
+ *   出来，指向的是「中断进不来」而不是「某个任务超时」——
+ *   `CONFIG_ESP_TASK_WDT_PANIC` 开没开与这件事无关。
+ *
+ * ⓘ **panic backtrace 走的是 UART0，不是 CDC。** IDF 的 panic 处理器直接写
+ *   CONFIG_ESP_CONSOLE_UART_DEFAULT 那条 ROM 串口，不经过 tinyusb_console_init()
+ *   换掉的那个 stdout。手边有 USB-TTL 就接 G37/G38（M5-Bus 排针）——
+ *   那是本条 bug 唯一能拿到一手证据的通道，**优先于下面所有二分**。
+ *
+ * 拿不到串口时，按下面的顺序改 cam_ipa.c 顶部的 CAM_IPA_DISPATCH_*、
+ * 每次只动一个、`rm -rf build sdkconfig && idf.py build flash`：
+ *   ① CAM_IPA_DISPATCH_LSC 0     ← 先关它。六组里唯一「一次一千多次寄存器写 +
+ *                                  与 AWB 的 ISR 共用 LUT 端口」的一组，
+ *                                  嫌疑最大。好了 ⇒ 根因在 LUT 那条路上。
+ *   ② CAM_IPA_DISPATCH_SENSOR 0  ← 唯一走 I2C 的一组，而那条内部总线上还挂着
+ *                                  触摸/两颗 codec/两颗 IO 扩展。好了 ⇒ 去查总线争用。
+ *   ③ CAM_IPA_DISPATCH_GAMMA 0
+ *   ④ CAM_IPA_DISPATCH_CCM 0
+ *   ⑤ CAM_IPA_DISPATCH_DENOISE 0
+ *   ⑥ CAM_IPA_DISPATCH_COLOR 0
+ *   ⑦ 六组全 0 仍然复位 ⇒ **不是分发**，剩下的只有 cam_ipa_init() 里
+ *      esp_ipa_pipeline_create()/init() 那个 blob 本身，与 cam_ipa_task 的存在。
+ *      那时改试 CONFIG_ESP_INT_WDT_TIMEOUT_MS 调大、或者把 cam_ipa_task_start()
+ *      那一行注掉（pipeline 建但不跑）再分一次。
+ *
+ * ⚠️ 复位发生的时刻本身也是证据：本板**不取流时 IPA 一步都不走**
+ *   （cam_ipa_task 睡在 portMAX_DELAY 上），host 没打开 /dev/videoN 之前
+ *   跑过的 IPA 代码只有 cam_ipa_init() 那一次。若复位在插 USB 之前就发生，
+ *   分发的锅只可能落在**开机那一次** dispatch 上，与取流期间的节拍无关。
  */
 void cam_ipa_report(void)
 {
@@ -767,7 +976,7 @@ void cam_ipa_report(void)
              s_n_ccm, s_n_gamma, s_n_lsc,
              step_str(s_st_bf), step_str(s_st_dm), step_str(s_st_sharp),
              step_str(s_st_color), step_str(s_st_ccm), step_str(s_st_gamma),
-#if CAM_IPA_HAS_LSC
+#if CAM_IPA_LSC_ON
              step_str(s_st_lsc));
 #else
              "未编译");
@@ -775,4 +984,15 @@ void cam_ipa_report(void)
     ESP_LOGI(TAG, "IPA：色彩 对比度=%u 饱和度=%u 色调=%u 亮度=%u"
                   "（128 = 1.0×）；BLC 位本板忽略（rev v1.0 无 ISP BLC）",
              s_color_contrast, s_color_saturation, s_color_hue, s_color_brightness);
+    /* 分发分组的**实际编译档**与 LSC 那条路的两个新数。两行都是常读常有，
+     * 不因为「默认全开」就省掉 —— 二分排障时最怕的就是「以为烧的是这一档」。 */
+    ESP_LOGI(TAG, "IPA：分发分组 LSC=%d GAMMA=%d CCM=%d DENOISE=%d COLOR=%d SENSOR=%d"
+                  "（全 1 才是产品形态，见 cam_ipa.c 顶部 CAM_IPA_DISPATCH_*）",
+             CAM_IPA_DISPATCH_LSC, CAM_IPA_DISPATCH_GAMMA, CAM_IPA_DISPATCH_CCM,
+             CAM_IPA_DISPATCH_DENOISE, CAM_IPA_DISPATCH_COLOR, CAM_IPA_DISPATCH_SENSOR);
+#if CAM_IPA_LSC_ON
+    ESP_LOGI(TAG, "IPA：LSC LUT 写入=%" PRIu32 " 次，去抖挡掉=%" PRIu32 " 次，"
+                  "临界区最长 %" PRIu32 " µs（关中断时长，应远小于 INT_WDT 的 300 ms）",
+             s_n_lsc, s_n_lsc_skip, s_lsc_us_max);
+#endif
 }
