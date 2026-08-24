@@ -13,6 +13,7 @@ StartLimitIntervalSec=30
 Type=forking
 Environment=TERM=xterm
 ExecStart=/usr/sbin/usbdevice start
+ExecReload=/usr/sbin/usbdevice update
 ExecStop=/usr/sbin/usbdevice stop
 # UDC bind 失败时脚本在 "Writing UDC=" 后 read-back 校验
 # controller name 并 exit 1。Restart=on-failure 让 role/VBUS/deferred probe 等
