@@ -31,6 +31,8 @@ SOC = {
             "FW_LOADER_COMPRESS",
             "FW_LOADER_COMPRESS_ZSTD",
             "DEBUG_INFO_NONE",
+            "ANDROID_BINDER_IPC",
+            "ANDROID_BINDERFS",
         ],
         # Q8B 只使用 Adreno/MSM 显示和 QPS615/TC956x 板载网卡。通过 flange
         # 额外 config 覆盖裁掉发行版 defconfig 中的离线调试信息、独显与
