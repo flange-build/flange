@@ -182,6 +182,8 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
 
 ### 6.2 配置体系
 - rootfs 基线：`components/rootfs/config.py` 可声明平台无关的 rootfs 字段，先于硬件配置继承合并
+- rootfs ubuntu-base：`rootfs.url` 必须配套声明可信的 `rootfs.sha256`；下载先写临时文件，
+  摘要校验通过后方可原子替换缓存文件
 - rootfs 包集合：`rootfs.package_sets` 定义命名包集合，`rootfs.package_set` 选择集合；
   可用 `+package_set:debug` / `+package_set:release` 按 product/variant 追加集合。配置解析后展开为
   `rootfs.packages`，构建器只消费最终包列表。

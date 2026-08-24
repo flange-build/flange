@@ -76,6 +76,7 @@ SOC = {
             "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/"
             "ubuntu-base-24.04.4-base-armhf.tar.gz"
         ),
+        "sha256": "991520b47f6586f38a78505cf016e300b6191bb8ff86a0723481ec23a37ab7f4",
         "emulator": "qemu-arm-static",
     },
     "boot": {

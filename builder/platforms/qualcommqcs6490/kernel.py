@@ -15,26 +15,6 @@ class Qcs6490KernelBuilder(KernelBuilder):
     component = "kernel"
     ARCH = "arm64"
 
-    def reset_source(self, src_dir: Path):
-        """复位源码树：基类 `git checkout -f .`（跟踪文件）+ 清未跟踪残留。
-
-        ⚠️ 必须清未跟踪文件：patch 注入的 new-file（radxa.config /
-        radxa_custom.config）会作为未跟踪文件残留。source.py 对 commit-pinned
-        源「HEAD 已等于目标 commit 时不重新 checkout/clean」，于是同 commit 二次
-        构建时基类的 `git checkout -f .` 复位不了这些未跟踪文件 → apply_patches
-        重打 0004/0005 这类 new-file 补丁报 "already exists" 失败。
-        `git clean -fd` 删未跟踪文件/目录，不带 `-x` 保留 .gitignore 的编译产物
-        (.o/.cmd/.config)，增量编译不受影响；再显式 rm 兜底（防 *.config 被某处
-        .gitignore 命中而 clean 跳过）。
-        """
-        super().reset_source(src_dir)
-        self.docker.run(
-            ["sh", "-c",
-             "git clean -fd; "
-             "rm -f arch/arm64/configs/radxa.config "
-             "arch/arm64/configs/radxa_custom.config"],
-            cwd=str(src_dir), check=False)
-
     def configure(self, src_dir: Path, config: dict):
         # 大小写不敏感 FS 适配（macOS 宿主挂载卷上 git checkout 会丢同名异写文件）
         self._write_case_insensitive_fix(src_dir)

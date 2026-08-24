@@ -208,6 +208,7 @@ SOC = {
     "rootfs": {
         # Ubuntu noble（Q6A 仅支持 noble；与 flange ubuntu-base 路线一致）
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        "sha256": "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
         # Qualcomm IoT PPA：提供 QCS6490 专属固件更新（linux-firmware-dragonwing）。
         # linux-firmware-dragonwing 将 Q6A ADSP/CDSP/GPU 固件置于
         # /lib/firmware/updates/qcom/qcs6490/，内核加载时 updates/ 优先级高于

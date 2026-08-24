@@ -136,6 +136,9 @@ class TestCacheE2E:
             _config, cache = self._make_env(
                 tmpdir, custom_packages=["myapp"])
             app_hash_1 = cache.compute_hash("app")
+            app_output = cache.target_dir / "app" / "myapp_1.0_arm64.deb"
+            app_output.parent.mkdir(parents=True)
+            app_output.write_bytes(b"deb")
             cache.store("app")
             cache.store_phase("rootfs", "base")
             cache.store("rootfs")

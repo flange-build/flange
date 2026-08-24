@@ -59,6 +59,7 @@ SOC = {
     },
     "rootfs": {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        "sha256": "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
         # Rockchip 多媒体加速栈（VPU + RGA + GStreamer-rockchip 插件），与
         # rk3566/rk3588 SoC 用同一组 chip-agnostic deb（rockchip-mpp 用户态按
         # chip 分发）。GPU 用户态走 panfrost（mesa gallium，随 ubuntu-base apt），

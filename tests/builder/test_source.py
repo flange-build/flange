@@ -138,6 +138,54 @@ class TestEnsureExtraDeb:
         assert list(deb_dir.iterdir()) == []
 
 
+class TestEnsureRootfsTarball:
+    def test_下载通过摘要后原子落地(self, manager: SourceManager):
+        content = b"ubuntu-base"
+        config = {
+            "rootfs": {
+                "url": "https://example.com/ubuntu-base.tar.gz",
+                "sha256": _sha256(content),
+            }
+        }
+
+        with patch(
+            "builder.source.subprocess.run",
+            side_effect=_make_wget_writer(content),
+        ):
+            result = manager.ensure_rootfs_tarball(config)
+
+        assert result.read_bytes() == content
+        assert not result.with_suffix(result.suffix + ".download").exists()
+
+    def test_摘要不匹配时拒绝并清理临时文件(self, manager: SourceManager):
+        config = {
+            "rootfs": {
+                "url": "https://example.com/ubuntu-base.tar.gz",
+                "sha256": _sha256(b"expected"),
+            }
+        }
+
+        with patch(
+            "builder.source.subprocess.run",
+            side_effect=_make_wget_writer(b"tampered"),
+        ):
+            with pytest.raises(RuntimeError, match="sha256 校验失败"):
+                manager.ensure_rootfs_tarball(config)
+
+        assert not any((manager.sources_dir / "rootfs").iterdir())
+
+    def test_缺少可信摘要时拒绝下载(self, manager: SourceManager):
+        config = {
+            "rootfs": {"url": "https://example.com/ubuntu-base.tar.gz"}
+        }
+
+        with patch("builder.source.subprocess.run") as run:
+            with pytest.raises(ValueError, match="rootfs.sha256"):
+                manager.ensure_rootfs_tarball(config)
+
+        run.assert_not_called()
+
+
 class TestEnsureExtraFirmwareLocal:
     """ensure_extra_firmware(source='local')：解析 components/board/<board>/
     <src_dir>，返回该目录。零网络、零 clone；只做路径解析与存在性校验。"""
@@ -256,12 +304,35 @@ def test_fetch_reset_branch_skips_mixed_reset_when_head_is_unchanged(
     with patch.object(manager, "_rev_parse", return_value="same"), \
             patch.object(manager, "_rev_parse_ref", return_value="same"), \
             patch("builder.source.subprocess.run") as run:
+        run.return_value.returncode = 0
         manager._fetch_reset_branch(repo, "linux-7.0.11")
 
     commands = [call.args[0] for call in run.call_args_list]
     assert not any(command[:2] == ["git", "reset"] for command in commands)
-    assert ["git", "checkout", "-f", "."] in commands
+    assert ["git", "diff-index", "--quiet", "HEAD", "--"] in commands
+    assert ["git", "checkout", "-f", "."] not in commands
     assert ["git", "clean", "-fd"] in commands
+
+
+def test_fetch_reset_branch_does_not_scan_worktree_during_cache_preflight(
+        manager: SourceManager, tmp_path: Path):
+    """缓存预检只同步 commit，不扫描大源码树。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manager._preparing_cache_inputs = True
+    completed = subprocess.CompletedProcess(
+        [], 0, stdout="same\trefs/heads/linux-7.0.11\n")
+    with patch.object(manager, "_rev_parse", return_value="same"), \
+            patch.object(manager, "_rev_parse_ref", return_value="same"), \
+            patch("builder.source.subprocess.run",
+                  return_value=completed) as run:
+        prepared = manager._fetch_reset_branch(repo, "linux-7.0.11")
+
+    commands = [call.args[0] for call in run.call_args_list]
+    assert prepared is False
+    assert not any(command[1] == "fetch" for command in commands)
+    assert not any(command[1] in {"diff-index", "reset", "checkout", "clean"}
+                   for command in commands)
 
 
 def test_fetch_reset_branch_prefers_hard_reset_when_head_changes(

@@ -81,9 +81,11 @@ class BuildEngine:
                 self.output.phase_skip(component)
                 continue
             forced = force == "all" or force == component
-            if not forced and self.cache.is_up_to_date(component):
-                self.output.phase_skip(component)
-                continue
+            if not forced:
+                self.source.prepare_cache_inputs(component, self.config)
+                if self.cache.is_up_to_date(component):
+                    self.output.phase_skip(component)
+                    continue
             self.output.phase_start(component)
             try:
                 if component == "app":
@@ -95,6 +97,11 @@ class BuildEngine:
                     outputs = builder.build(self.config)
                 self._outputs[component] = outputs
                 self._collect_artifacts(component, outputs)
+                if not self.cache._required_artifacts_present(component):
+                    required = ", ".join(
+                        self.cache._required_artifacts(component))
+                    raise BuildError(
+                        f"{component} 构建完成但缺少必需产物: {required}")
                 self.cache.store(component)
                 self.output.phase_end(component, success=True)
             except (BuildError, Exception) as e:
@@ -150,7 +157,7 @@ class BuildEngine:
                 continue
             src = Path(src_path)
             if not src.exists():
-                continue
+                raise BuildError(f"{component} 声明的构建产物不存在: {src}")
             filename = self._get_artifact_names().get((component, key), src.name)
             dest = component_dir / filename
             if src.resolve() == dest.resolve():

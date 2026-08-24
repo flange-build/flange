@@ -266,6 +266,14 @@ def test_platform_reuses_existing_qualcomm_builders(component):
         "builder.platforms.qualcommqcs6490.")
 
 
+def test_kernel_reset_does_not_clean_entire_source_tree(tmp_path):
+    docker = Mock()
+    Qcs6490KernelBuilder(docker, Mock()).reset_source(tmp_path)
+
+    docker.run.assert_called_once_with(
+        ["git", "checkout", "-f", "."], cwd=str(tmp_path), check=False)
+
+
 def test_kernel_builder_applies_inline_module_override(tmp_path):
     configs = tmp_path / "arch" / "arm64" / "configs"
     configs.mkdir(parents=True)

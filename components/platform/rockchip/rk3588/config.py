@@ -56,6 +56,7 @@ SOC = {
     },
     "rootfs": {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        "sha256": "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
         "extra_firmware": [
             {
                 # Mali-G610 CSF firmware blob —— panthor 驱动 request_firmware

@@ -126,11 +126,6 @@ class BuildCache:
         if self._has_local_upstream(component):
             return False
 
-        source = self._component_source_config(component)
-        if (source.get("branch") and not source.get("commit")
-                and not source.get("tag")):
-            return False
-
         hash_file = self.target_dir / component / ".build_hash"
         if not hash_file.exists():
             return False
@@ -174,10 +169,15 @@ class BuildCache:
         if (self._project_path(
                 "components", "app", app_name, "app.yaml")).is_file():
             return False
-        external = (self.config.get("external_apps") or {}).get(app_name) or {}
-        if external.get("local_path"):
+        source_dir = self._registered_app_source_dir(app_name)
+        if not (source_dir / "app.yaml").is_file():
             return True
-        return bool(self.config.get("external_app_dirs"))
+        try:
+            source_dir.resolve().relative_to(
+                self._project_path("components").resolve())
+            return False
+        except ValueError:
+            return True
 
     def _required_artifacts_present(self, component: str) -> bool:
         """按 FINAL_CONFIG 路由校验组件必需产物是否都存在。
@@ -191,6 +191,10 @@ class BuildCache:
         component_dir = self.target_dir / component
         if not component_dir.is_dir():
             return False
+        if component == "app":
+            from builder.config.apps import gather_custom_packages
+            return (len(list(component_dir.glob("*.deb")))
+                    >= len(gather_custom_packages(self.config)))
         for pattern in required:
             if any(ch in pattern for ch in "*?["):
                 # glob 模式
@@ -204,6 +208,19 @@ class BuildCache:
 
     def _required_artifacts(self, component: str) -> list[str]:
         """返回当前配置下组件的必需产物列表。"""
+        if component == "app":
+            from builder.config.apps import gather_custom_packages
+            return ["*.deb"] if gather_custom_packages(self.config) else []
+        if component == "device-tree-overlay":
+            from builder.dtb_overlay import (
+                board_overlays,
+                package_overlays,
+                vendor_overlays,
+            )
+            names = (vendor_overlays(self.config)
+                     + board_overlays(self.config)
+                     + package_overlays(self.config))
+            return [f"overlays/{name}" for name in names]
         if component == "kernel":
             kernel = self.config.get("kernel") or {}
             image = kernel.get("image", "Image")
@@ -224,6 +241,27 @@ class BuildCache:
             return [
                 "mtd-bundle.json" if partition_format == "mtd" else "raw.img"
             ]
+        if (component == "bootloader"
+                and (self.config.get("bootloader") or {}).get(
+                    "edk2_firmware_url")):
+            bootloader = self.config["bootloader"]
+            base = "edk2-spi-firmware/"
+            required = [
+                base + bootloader.get(
+                    "firehose_loader", "prog_firehose_ddr.elf"),
+                base + bootloader.get("spi_rawprogram", "rawprogram0.xml"),
+                base + bootloader.get("spi_patch", "patch0.xml"),
+            ]
+            ufs_firehose = bootloader.get("ufs_firehose") or {}
+            if ufs_firehose:
+                required.append(base + ufs_firehose.get(
+                    "filename", ufs_firehose["url"].rsplit("/", 1)[-1]))
+            for asset in (bootloader.get("ufs_provisions") or {}).values():
+                if not isinstance(asset, dict) or not asset.get("url"):
+                    continue
+                required.append(base + asset.get(
+                    "filename", asset["url"].rsplit("/", 1)[-1]))
+            return required
 
         required = DEFAULT_REQUIRED_ARTIFACTS.get(component)
         if isinstance(required, dict):
@@ -232,8 +270,10 @@ class BuildCache:
 
     def store(self, component: str):
         hash_file = self.target_dir / component / ".build_hash"
-        hash_file.parent.mkdir(parents=True, exist_ok=True)
-        hash_file.write_text(self.compute_hash(component))
+        # 判定阶段可能已记忆化旧 HEAD；构建/源码准备完成后必须重新计算整条
+        # Merkle 链，写入实际参与构建的输入身份。
+        self._hash_cache = {}
+        self._atomic_write(hash_file, self.compute_hash(component))
 
     def compute_hash(self, component: str) -> str:
         """计算组件的完整哈希（含依赖链级联）。"""
@@ -252,8 +292,11 @@ class BuildCache:
             h.update(self.compute_hash(dep).encode())
 
         # 2. 全局配置：任何组件都受其影响
+        h.update(b"cache-contract-v2")
         for key in ("arch", "platform", "soc", "board"):
             h.update(f"{key}={self.config.get(key, '')}".encode())
+        h.update(b"build_logic:")
+        h.update(self._build_logic_hash().encode())
 
         # 3. 组件特化哈希
         if component == "rootfs":
@@ -315,7 +358,12 @@ class BuildCache:
 
             # bootloader 额外依赖 rkbin firmware
             if component == "bootloader":
+                h.update(b"rkbin_config:")
+                h.update(json.dumps(
+                    self.config.get("rkbin") or {}, sort_keys=True,
+                    default=str).encode())
                 self._mix_rkbin(h)
+                self._mix_named_repo(h, "amlogic-boot-fip")
 
             # kernel 额外依赖 OOT 模块独立源 git HEAD —— branch 跟踪
             # 场景下（如 rkwifibt develop 分支），仓库 HEAD 推进必须级联
@@ -323,6 +371,12 @@ class BuildCache:
             # url / branch 改动），但 HEAD commit 是 ensure 后才知道的
             # 运行时事实，要单独混入。
             if component == "kernel":
+                for name in ("kernel_bsp", "kernel_device"):
+                    cfg = self.config.get(name) or {}
+                    h.update(f"{name}:".encode())
+                    h.update(json.dumps(
+                        cfg, sort_keys=True, default=str).encode())
+                    self._mix_extra_repo(h, name, cfg)
                 self._mix_kernel_oot_sources(h)
                 # package OOT 驱动源目录内容：被选中编译的 driver 源改动须
                 # 级联失效 kernel build（json.dumps(kernel) 已覆盖路径/名单，
@@ -334,6 +388,18 @@ class BuildCache:
                         h.update(b"package_driver_src:")
                         h.update(rel.encode())
                         self._hash_directory(h, d)
+
+            if component == "boot":
+                h.update(b"recovery_enabled:")
+                h.update(str(bool((self.config.get("recovery") or {}).get(
+                    "enabled", False))).encode())
+
+            if component == "image":
+                for key in ("storage", "rkbin"):
+                    h.update(f"{key}:".encode())
+                    h.update(json.dumps(
+                        self.config.get(key) or {}, sort_keys=True,
+                        default=str).encode())
 
         result = h.hexdigest()[:16]
         self._hash_cache[component] = result
@@ -365,21 +431,32 @@ class BuildCache:
     def store_phase(self, component: str, phase: str):
         """保存指定阶段的哈希。"""
         hash_file = self.target_dir / component / f".{phase}_hash"
-        hash_file.parent.mkdir(parents=True, exist_ok=True)
-        hash_file.write_text(self.compute_phase_hash(component, phase))
+        self._atomic_write(hash_file, self.compute_phase_hash(component, phase))
+
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        """在同目录写临时文件后原子替换，避免中断留下半个哈希。"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.tmp")
+        temporary.write_text(content)
+        os.replace(temporary, path)
 
     # --- 哈希输入混合：rootfs ---
 
     def _compute_rootfs_base_hash(self) -> str:
-        """Phase 1 哈希：rootfs.url + sorted(rootfs.packages) + arch。
+        """Phase 1 哈希：可信 tarball、APT 输入、arch 与 emulator。
 
         仅覆盖 Phase 1 的输入，不含 Phase 2 customize 的内容。
         """
         h = hashlib.sha256()
         rootfs_cfg = self.config.get("rootfs", {})
         h.update(rootfs_cfg.get("url", "").encode())
+        h.update(rootfs_cfg.get("sha256", "").encode())
         packages = sorted(rootfs_cfg.get("packages", []))
         h.update(json.dumps(packages).encode())
+        h.update(json.dumps(
+            rootfs_cfg.get("extra_apt_sources") or [],
+            sort_keys=True, default=str).encode())
         h.update(self.config.get("arch", "").encode())
         h.update(rootfs_cfg.get("emulator", "").encode())
         return h.hexdigest()[:16]
@@ -393,7 +470,9 @@ class BuildCache:
         / parted / gdisk / zstd 等），独立于 rootfs.packages。
         """
         h = hashlib.sha256()
-        h.update(self.config.get("rootfs", {}).get("url", "").encode())
+        rootfs_cfg = self.config.get("rootfs", {})
+        h.update(rootfs_cfg.get("url", "").encode())
+        h.update(rootfs_cfg.get("sha256", "").encode())
         recovery_cfg = self.config.get("recovery", {})
         packages = sorted(recovery_cfg.get("packages", []))
         h.update(json.dumps(packages).encode())
@@ -422,6 +501,15 @@ class BuildCache:
                 self._hash_directory(h, overlay_dir)
 
         rootfs_cfg = self.config.get("rootfs", {})
+        # builder/rootfs.py 与平台实现会消费 hostname、软件源、firmware、
+        # image route 等完整子树；以完整配置作为 customize 契约，避免新增字段
+        # 时再次出现漏 hash。
+        h.update(b"rootfs_config:")
+        h.update(json.dumps(rootfs_cfg, sort_keys=True, default=str).encode())
+        h.update(b"storage:")
+        h.update(json.dumps(
+            self.config.get("storage") or {}, sort_keys=True,
+            default=str).encode())
         # 输出路由与 UBI 几何直接决定最终 rootfs 产物；不影响 Phase 1 base
         # 内容，故只进入 customize hash。
         rootfs_route = {
@@ -451,6 +539,12 @@ class BuildCache:
         # extra_firmware 配置（repo/branch/files 变化须触发重建）
         extra_fw = rootfs_cfg.get("extra_firmware", [])
         h.update(json.dumps(extra_fw, sort_keys=True, default=str).encode())
+        for name, cfg in self._repo_firmware():
+            repo_dir = self._project_path(
+                ".build", "sources", "extra-firmware", name)
+            if repo_dir.exists():
+                h.update(f"extra_firmware_head:{name}=".encode())
+                h.update(self._git_head(repo_dir).encode())
         # source="local" 条目：blob 文件内容随仓库携带，config JSON 不会变,
         # 但 blob 字节变了必须重建。逐 entry 解析 components/board/<board>/
         # <src_dir>/<file> 并把字节流混入。
@@ -696,6 +790,40 @@ class BuildCache:
             h.update(b"rkbin:")
             h.update(self._git_head(fw_dir).encode())
 
+    def _mix_named_repo(self, h: "hashlib._Hash", name: str) -> None:
+        """混入命名仓库声明与当前 HEAD（存在时）。"""
+        cfg = (self.config.get("repos") or {}).get(name)
+        if not cfg:
+            return
+        h.update(f"named_repo:{name}:".encode())
+        h.update(json.dumps(cfg, sort_keys=True, default=str).encode())
+        repo_dir = self._project_path(
+            ".build", "sources", "repos", name)
+        if repo_dir.exists():
+            h.update(self._git_head(repo_dir).encode())
+
+    def _mix_extra_repo(self, h: "hashlib._Hash", name: str,
+                        cfg: dict) -> None:
+        """混入 SourceManager.ensure_extra 对应仓库的 HEAD。"""
+        if not cfg:
+            return
+        from_repo = cfg.get("from_repo")
+        if from_repo:
+            self._mix_named_repo(h, from_repo)
+            return
+        repo_dir = self._project_path(
+            ".build", "sources", "extra", name)
+        if repo_dir.exists():
+            h.update(f"extra_repo:{name}=".encode())
+            h.update(self._git_head(repo_dir).encode())
+
+    def _repo_firmware(self):
+        """迭代 rootfs 中具有独立仓库的 firmware 名称与配置。"""
+        for entry in (self.config.get("rootfs") or {}).get(
+                "extra_firmware") or []:
+            if entry.get("source", "repo") == "repo":
+                yield entry.get("name", "firmware"), entry
+
     # --- 哈希输入混合：kernel.oot_sources ---
 
     def _mix_kernel_oot_sources(self, h: "hashlib._Hash") -> None:
@@ -739,9 +867,26 @@ class BuildCache:
         except subprocess.CalledProcessError:
             return "unknown"
 
+    def _build_logic_hash(self) -> str:
+        """返回 builder 与 Docker 构建定义的一次性内容指纹。"""
+        cached = getattr(self, "_logic_hash_cache", None)
+        if cached is not None:
+            return cached
+        h = hashlib.sha256()
+        builder_dir = self._project_path("builder")
+        if builder_dir.is_dir():
+            self._hash_directory(h, builder_dir)
+        for relative in ("docker/Dockerfile", "docker-compose.yml"):
+            path = self._project_path(relative)
+            if path.is_file():
+                h.update(relative.encode())
+                h.update(path.read_bytes())
+        self._logic_hash_cache = h.hexdigest()
+        return self._logic_hash_cache
+
     # 目录递归哈希排除规则
     HASH_EXCLUDE_DIRS = {"__pycache__", ".git", "build", ".build", "node_modules"}
-    HASH_EXCLUDE_EXTS = {".pyc", ".o", ".so"}
+    HASH_EXCLUDE_EXTS = {".pyc", ".o"}
 
     def _hash_directory(self, h: "hashlib._Hash", directory: Path) -> None:
         """递归 hash 目录下所有文件（排除构建产物和临时文件）。

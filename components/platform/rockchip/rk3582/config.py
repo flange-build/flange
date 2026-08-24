@@ -64,6 +64,7 @@ SOC = {
     },
     "rootfs": {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        "sha256": "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
         # 不部署 mali-csf firmware —— GPU 已熔断（RK3588/RK3588S 配置中的
         # arm/mali/arch10.8/mali_csffw.bin 在此略去）。
         # 多媒体加速栈整套保留：VPU / RGA / 显示控制器物理存在，rk3588 deb

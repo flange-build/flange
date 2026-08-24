@@ -120,6 +120,8 @@ class TestSourceManagerEnsureAppBasics:
             branch="",
             dest=expected,
             commit="v2.1.0",
+            recurse=False,
+            is_tag=True,
         )
         assert result == expected
 
@@ -141,10 +143,12 @@ class TestSourceManagerEnsureAppBasics:
             branch="release/3.0",
             dest=expected,
             commit="",
+            recurse=False,
+            is_tag=False,
         )
         assert result == expected
 
-    def test_外部_git_已克隆时跳过克隆(self, tmp_path):
+    def test_外部_git_已克隆时同步branch(self, tmp_path):
         ext = {
             "ota-agent": {
                 "git": "ssh://git@example.com/ota.git",
@@ -155,10 +159,12 @@ class TestSourceManagerEnsureAppBasics:
         already_cloned = tmp_path / "sources" / "apps" / "ota-agent"
         already_cloned.mkdir(parents=True)
 
-        with patch.object(sm, "_clone") as mock_clone:
+        with patch.object(sm, "_clone") as mock_clone, \
+                patch.object(sm, "_fetch_reset_branch") as fetch:
             result = sm.ensure_app("ota-agent", _make_config(external_apps=ext))
 
         mock_clone.assert_not_called()
+        fetch.assert_called_once_with(already_cloned, "release/3.0")
         assert result == already_cloned
 
     def test_外部_git_tag_和_branch_并存时_tag_优先(self, tmp_path):
@@ -179,6 +185,8 @@ class TestSourceManagerEnsureAppBasics:
             branch="main",
             dest=tmp_path / "sources" / "apps" / "myapp",
             commit="v1.0.0",
+            recurse=False,
+            is_tag=True,
         )
 
     def test_外部_git_commit_字段(self, tmp_path):
@@ -199,6 +207,8 @@ class TestSourceManagerEnsureAppBasics:
             branch="main",
             dest=tmp_path / "sources" / "apps" / "myapp",
             commit="abc1234",
+            recurse=False,
+            is_tag=False,
         )
 
     def test_app_未找到时错误信息列出所有层级(self, tmp_path):
@@ -348,7 +358,7 @@ class TestAppBuilderFindAppDir:
         expected_dest = tmp_path / "sources" / "apps" / "remote-agent"
 
         with patch.object(sm, "_clone") as mock_clone:
-            def fake_clone(repo, branch, dest, commit=""):
+            def fake_clone(repo, branch, dest, commit="", **_kwargs):
                 dest.mkdir(parents=True, exist_ok=True)
             mock_clone.side_effect = fake_clone
 
@@ -360,4 +370,6 @@ class TestAppBuilderFindAppDir:
             branch="",
             dest=expected_dest,
             commit="v3.0.0",
+            recurse=False,
+            is_tag=True,
         )

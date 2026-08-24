@@ -70,6 +70,7 @@ SOC = {
     },
     "rootfs": {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        "sha256": "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
         # PowerVR DDK（下方 xserver-xorg-img-bxm）的运行时依赖：该 deb 的
         # control 没有 Depends 字段，dpkg -i 又不解析依赖，ubuntu-base 也不带，
         # 故必须在此显式 apt 安装，否则 libEGL.so.1 因 libdrm.so.2 等缺失而

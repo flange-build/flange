@@ -52,6 +52,7 @@ SOC = {
     },
     "rootfs": {
         "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+        "sha256": "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
         # Rockchip 多媒体加速栈（VPU + RGA + GStreamer-rockchip 插件），来自
         # CmST0us/rockchip-multimedia-ubuntu release 1.0.0 的 prebuilt deb。
         # 与 rk3588 SoC 用同一组 deb：rockchip-mpp 是用户态 chip 抽象层
