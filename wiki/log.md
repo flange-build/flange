@@ -581,3 +581,9 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 ## [2026-08-24] sync | README 与 wiki 对齐 main@e23fd87b
 
 根 README 补齐 ATK-RK3506B、Radxa Dragon Q8B、AMP 构建和 Qualcomm UFS 初始化命令，并增加 wiki 导航。新增 [[qualcommsc8280xp 平台]]、[[radxa-dragon-q8b]] 和 [[Tab5 USB 复合终端]]；同步 [[qualcommqcs6490 平台]] 的 7.0.2 基线、Q6A/Q8B 的 SPI/UFS 分离刷写、[[amp 构建器]] 的 OOT App 挂载、[[atk-rk3506b]] `fluxion` product，以及 [[adbd]] 通过 systemd reload 避免 udev 清理热插拔进程的当前自愈路径。Tab5 文档以最终回退后的自研 T0–T13 ISP 为准，保留未上板与复合回归边界。
+
+## [2026-08-24] refactor | 取消篇幅硬限制并恢复完整历史信息
+
+现行 schema 取消综合页 1200 非空白字符上限，拆页只以导航和主题边界为依据；新增“信息保全优先”原则，要求整理前后逐项确认唯一信息的保留或迁移去向。初次建库计划中的 600/1200 字规则保留为历史记录，但已明确标注失效。
+
+[[adbd]]、[[atk-rk3506b]]、[[radxa-dragon-q6a]]、[[qualcommqcs6490 平台]] 四页从 commit `e23fd87b` 恢复压缩前全文，再以新增章节补充 udev/systemd 自愈、fluxion product、QCS6490 7.0.2 当前基线和 UFS 初始化流程。早期验收、硬件约束、排障过程与版本迁移记录均保留；过时结论通过当前基线说明限定适用范围，不再用摘要覆盖原文。

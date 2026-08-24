@@ -1,5 +1,7 @@
 # flange 仓库知识库（wiki/）一次性构建实施计划
 
+> **状态说明（2026-08-24）**：这是初次建库时的历史实施计划，其中 600/1200 字限制已被现行 [`wiki/CLAUDE.md`](../../../wiki/CLAUDE.md) 取消，不再作为 wiki 编写或 lint 标准。原文保留，仅用于追溯当时的执行过程。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 一次性产出 `wiki/` 下 63 个 markdown 文件（含 schema、综合页、索引页、log），形成可在 Obsidian 浏览且可被 AI Agent 引用的仓库知识库。
