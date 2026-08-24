@@ -139,8 +139,8 @@ def test_q8b_firmware_package_builds_flange_deb(tmp_path: Path):
     ) == source_blob.read_bytes()
 
 
-def test_q8b_fastrpc_package_builds_flange_deb(tmp_path: Path):
-    """FastRPC 参考 deb payload 应由 flange 重打成 Q8B 专用 deb。"""
+def test_q8b_fastrpc_packages_follow_radxa_boundaries(tmp_path: Path):
+    """FastRPC 参考 payload 应按 Radxa 包边界重打为 flange deb。"""
     config = resolve_config("radxa-dragon-q8b", "default", "release")
     source = SourceManager(
         sources_dir=tmp_path / "sources",
@@ -154,19 +154,34 @@ def test_q8b_fastrpc_package_builds_flange_deb(tmp_path: Path):
     )
     builder._output_dir = tmp_path / "app"
 
-    deb_path = builder.build_one("radxa-q8b-fastrpc")
+    packages = builder.build_all()
 
-    assert deb_path.name == "radxa-q8b-fastrpc_1.0.7-1flange1_arm64.deb"
-    members = _read_ar_members(deb_path)
+    assert {
+        "radxa-q8b-dsp-runtime",
+        "libadsprpc1",
+        "libadsp-default-listener1",
+        "libcdsprpc1",
+        "libcdsp-default-listener1",
+        "fastrpc",
+    }.issubset(packages)
+    assert packages["fastrpc"].name == "fastrpc_1.0.7-1flange1_arm64.deb"
+    assert packages["libcdsprpc1"].name == (
+        "libcdsprpc1_1.0.7-1flange1_arm64.deb"
+    )
+
+    members = _read_ar_members(packages["fastrpc"])
     control = _read_tar_member(
         members["control.tar.gz"], "./control"
     ).decode("utf-8")
-    assert "Package: radxa-q8b-fastrpc" in control
-    assert "Depends: acl, libc6 (>= 2.34), libbsd0, libyaml-0-2" in control
+    assert "Package: fastrpc" in control
+    assert "libadsp-default-listener1 (>= 1.0.7)" in control
+    assert "libcdsprpc1 (>= 1.0.7)" in control
+    assert "radxa-q8b-dsp-runtime (= 0.2.41-1flange1)" in control
     control_tar = members["control.tar.gz"]
     control_names = _read_tar_names(control_tar)
-    for name in ("postinst", "prerm", "postrm", "triggers"):
+    for name in ("postinst", "prerm", "postrm"):
         assert f"./{name}" in control_names
+    assert "./triggers" not in control_names
     scripts = "\n".join(
         _read_tar_member(control_tar, f"./{name}").decode("utf-8")
         for name in ("postinst", "prerm", "postrm")
@@ -177,24 +192,74 @@ def test_q8b_fastrpc_package_builds_flange_deb(tmp_path: Path):
     for excluded in ("sdsprpcd.service", "gdsp0rpcd.service",
                      "gdsp1rpcd.service", "cdsp1rpcd.service"):
         assert excluded not in scripts
-    triggers = _read_tar_member(
-        control_tar, "./triggers"
-    ).decode("utf-8")
-    assert triggers.endswith("activate-noawait ldconfig\n")
     for name in ("postinst", "prerm", "postrm"):
         assert _get_tar_info(control_tar, f"./{name}").mode == 0o755
     data = members["data.tar.gz"]
     names = _read_tar_names(data)
     assert "./usr/sbin/cdsprpcd" in names
-    assert "./usr/lib/aarch64-linux-gnu/libcdsprpc.so.1.0.0" in names
+    assert "./lib/systemd/system/fastrpc.service" in names
+    assert "./usr/libexec/fastrpc/setup-dsp.sh" in names
+    assert "./usr/lib/aarch64-linux-gnu/libcdsprpc.so.1.0.0" not in names
     assert (
         "./usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp/"
         "cdsp/fastrpc_shell_3"
-    ) in names
-    dsp_link = _get_tar_info(data, "./usr/lib/dsp")
+    ) not in names
+
+    library_payloads = {
+        "libadsprpc1": "libadsprpc.so.1.0.0",
+        "libadsp-default-listener1": "libadsp_default_listener.so.1.0.0",
+        "libcdsprpc1": "libcdsprpc.so.1.0.0",
+        "libcdsp-default-listener1": "libcdsp_default_listener.so.1.0.0",
+    }
+    for package, library in library_payloads.items():
+        library_members = _read_ar_members(packages[package])
+        library_names = _read_tar_names(library_members["data.tar.gz"])
+        assert f"./usr/lib/aarch64-linux-gnu/{library}" in library_names
+        triggers = _read_tar_member(
+            library_members["control.tar.gz"], "./triggers"
+        ).decode("utf-8")
+        assert triggers.endswith("activate-noawait ldconfig\n")
+
+    dsp_members = _read_ar_members(packages["radxa-q8b-dsp-runtime"])
+    dsp_data = dsp_members["data.tar.gz"]
+    dsp_names = _read_tar_names(dsp_data)
+    assert (
+        "./usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp/"
+        "cdsp/fastrpc_shell_3"
+    ) in dsp_names
+    dsp_link = _get_tar_info(dsp_data, "./usr/lib/dsp")
     assert dsp_link.issym()
     assert dsp_link.linkname == (
         "/usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp")
+
+
+def test_q8b_fastrpc_test_uses_official_package_name(tmp_path: Path):
+    """debug 验证工具应生成官方 `fastrpc-test` 包名。"""
+    config = resolve_config("radxa-dragon-q8b", "default", "debug")
+    builder = AppBuilder(
+        docker=MagicMock(),
+        source=SourceManager(
+            sources_dir=tmp_path / "sources",
+            project_root=_PROJECT_ROOT,
+        ),
+        config=config,
+        project_dir=_PROJECT_ROOT,
+    )
+    builder._output_dir = tmp_path / "app"
+
+    deb_path = builder.build_one("fastrpc-test")
+
+    assert deb_path.name == "fastrpc-test_1.0.7-1flange1_arm64.deb"
+    members = _read_ar_members(deb_path)
+    control = _read_tar_member(
+        members["control.tar.gz"], "./control"
+    ).decode("utf-8")
+    assert "Package: fastrpc-test" in control
+    assert "libcdsprpc1 (>= 1.0.7)" in control
+    names = _read_tar_names(members["data.tar.gz"])
+    assert "./usr/bin/fastrpc_test" in names
+    assert "./usr/share/fastrpc_test/v68/libcalculator_skel.so" in names
+    assert not any("/v75/" in name for name in names)
 
 
 # ---------------------------------------------------------------------------

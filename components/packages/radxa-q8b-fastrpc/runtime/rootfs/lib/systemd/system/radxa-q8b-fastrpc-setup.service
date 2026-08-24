@@ -1,8 +1,0 @@
-[Unit]
-Description=Radxa Dragon Q8B FastRPC 初始化
-Before=adsprpcd.service adsprpcd_audiopd.service cdsprpcd.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/libexec/radxa-q8b-fastrpc/setup.sh
-RemainAfterExit=yes

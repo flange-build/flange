@@ -1,0 +1,22 @@
+app:
+  name: libcdsp-default-listener1
+  version: 1.0.7-1flange1
+  description: Qualcomm CDSP FastRPC default listener 运行库
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+  deps:
+    - libcdsprpc1
+
+maintainer_scripts:
+  triggers: debian/triggers
+
+depends:
+  - libc6 (>= 2.33)
+  - libcdsprpc1 (>= 1.0.7)

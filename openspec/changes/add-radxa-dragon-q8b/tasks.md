@@ -5,6 +5,7 @@
 - [x] 1.3 新增 `firmware-qcom-audioreach` 本地固件包，由 flange 重打 deb 并让 Q8B 安装专用 topology
 - [x] 1.4 新增 `radxa-q8b-fastrpc`，将参考 deb 内容重组为 flange runtime 与 debug test deb
 - [x] 1.5 为 vendor App 增加 maintainer script 映射，并提供 Q8B FastRPC 专用安装/卸载脚本
+- [x] 1.6 按 Radxa 官方包名拆分 `fastrpc`、ADSP/CDSP library、`fastrpc-test` 与 Q8B DSP runtime
 
 ## 2. 构建与刷写复用
 
@@ -20,3 +21,4 @@
 - [x] 3.5 验证 package vendor deb 构建、内容哈希、Q8B 配置解析与 OpenSpec 一致性
 - [x] 3.6 验证 FastRPC release/debug 选择、flange deb 内容、来源哈希与依赖闭包
 - [x] 3.7 验证 maintainer script 路径边界、control.tar.gz 内容与 Q8B 服务范围
+- [x] 3.8 验证拆分后的 deb 包名、依赖闭包、payload 所有权与 debug/release 选择

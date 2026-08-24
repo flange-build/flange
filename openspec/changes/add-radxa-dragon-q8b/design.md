@@ -47,13 +47,20 @@ AppBuilder / DebBuilder 将其重新打成自有 deb，再通过 rootfs 的统�
 流程安装；构建过程不安装上游 deb，也不继承其发行版依赖或 maintainer script。
 
 FastRPC 由 `components/packages/radxa-q8b-fastrpc` 提供。参考 Radxa `fastrpc
-1.0.7-1` 与 `radxa-firmware-sc8280xp 0.2.41` deb 后，只保留 Q8B 实际使用的
-ADSP/CDSP library、daemon、udev/systemd 配置与 DSP runtime；删除通用包中的
-SDSP/GDSP 路径，并增加 `sysusers.d` 与 Q8B 固定 `soc_id=498` 初始化。上游
-maintainer script 不原样继承：vendor App 通过 `maintainer_scripts` 映射 Q8B
-专用 `postinst` / `prerm` / `postrm` 与 `ldconfig` trigger，只管理 ADSP/CDSP，
-不依赖 `deb-systemd-helper`。runtime 和 debug-only v68 test 分别由 flange 重打
-deb。
+1.0.7-1` 与 `radxa-firmware-sc8280xp 0.2.41` deb 后，按官方包边界生成
+`fastrpc`、`libadsp-default-listener1`、`libadsprpc1`、
+`libcdsp-default-listener1`、`libcdsprpc1` 与 debug-only `fastrpc-test`。每个
+library deb 只携带对应 SONAME library；`fastrpc` 只携带 Q8B 实际使用的
+ADSP/CDSP daemon、udev/systemd 配置，并增加 `sysusers.d` 与 Q8B 固定
+`soc_id=498` 初始化。SDSP/GDSP/CDSP1 与 v75 test 不进入 Q8B 包。
+
+上游 maintainer script 不原样继承：`fastrpc` vendor App 通过
+`maintainer_scripts` 映射 Q8B 专用 `postinst` / `prerm` / `postrm`，各 library
+deb 独立映射 `ldconfig` trigger；脚本只管理 ADSP/CDSP，不依赖
+`deb-systemd-helper`。来自 `radxa-firmware-sc8280xp` 的 Q8B ADSP/CDSP DSP
+runtime 与 `/usr/lib/dsp` 路由放入独立的 `radxa-q8b-dsp-runtime` deb，避免将
+固件内容错误归入官方 `fastrpc` 包名，同时继续由已锁定的外部来源安装大型
+remoteproc/display/VPU 固件。
 
 启动所需的 remoteproc/display/VPU 等较大固件继续使用锁定的外部来源；FastRPC
 执行期必须使用的 Q8B DSP runtime 随 package 携带，避免构建期依赖 Radxa APT
@@ -74,8 +81,9 @@ Q8B 与 Q6A 共享 UEFI/GRUB 和 UFS 形态，因此沿用 GPT 两分区、`sect
 - **[模块化 drm/msm 与实板自动加载不一致]** → 配置解析测试确认覆盖生效；实板首验检查 `/dev/dri` 与固件加载日志。
 - **[基础支持缺少 Armbian HDMI 热插拔增强]** → 保留为明确非目标；只有实板复现 KVM/replug 问题时才引入对应补丁。
 - **[EDL 整盘写 UFS 未在 CI 执行]** → CI 只验证命令路由和配置，实际写盘必须在 Q8B 上确认。
-- **[FastRPC DSP runtime 增加约 30 MiB 仓库内容]** → 仅保留 Q8B 的 ADSP/CDSP
-  目录并记录参考 deb SHA-256；不携带其他 SoC、SDSP/GDSP、dbgsym 或 v75 test。
+- **[FastRPC DSP runtime 增加约 30 MiB 仓库内容]** → 独立放入
+  `radxa-q8b-dsp-runtime`，仅保留 Q8B 的 ADSP/CDSP 目录并记录参考 deb
+  SHA-256；不携带其他 SoC、SDSP/GDSP、dbgsym 或 v75 test。
 
 ## Migration Plan
 

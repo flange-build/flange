@@ -1,0 +1,13 @@
+app:
+  name: radxa-q8b-dsp-runtime
+  version: 0.2.41-1flange1
+  description: Radxa Dragon Q8B ADSP/CDSP DSP runtime
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none

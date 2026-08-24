@@ -1,0 +1,35 @@
+app:
+  name: fastrpc
+  version: 1.0.7-1flange1
+  description: Radxa Dragon Q8B FastRPC daemon 与系统配置
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+  deps:
+    - radxa-q8b-dsp-runtime
+    - libadsprpc1
+    - libadsp-default-listener1
+    - libcdsprpc1
+    - libcdsp-default-listener1
+
+maintainer_scripts:
+  postinst: debian/postinst
+  prerm: debian/prerm
+  postrm: debian/postrm
+
+depends:
+  - acl
+  - libc6 (>= 2.34)
+  - libadsp-default-listener1 (>= 1.0.7)
+  - libadsprpc1 (>= 1.0.7)
+  - libcdsp-default-listener1 (>= 1.0.7)
+  - libcdsprpc1 (>= 1.0.7)
+  - radxa-q8b-dsp-runtime (= 0.2.41-1flange1)
+  - systemd
+  - udev

@@ -1,0 +1,13 @@
+[Unit]
+Description=ADSP FastRPC daemon
+Requires=fastrpc.service
+After=fastrpc.service dev-fastrpc\x2dadsp.device dev-fastrpc\x2dadsp\x2dsecure.device
+ConditionPathExists=|/dev/fastrpc-adsp
+ConditionPathExists=|/dev/fastrpc-adsp-secure
+
+[Service]
+Type=exec
+ExecStart=/usr/sbin/adsprpcd
+Restart=on-failure
+RestartSec=5
+RestartForceExitStatus=SIGTERM

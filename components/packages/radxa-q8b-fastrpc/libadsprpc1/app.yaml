@@ -1,0 +1,21 @@
+app:
+  name: libadsprpc1
+  version: 1.0.7-1flange1
+  description: Qualcomm ADSP FastRPC 用户态运行库
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+maintainer_scripts:
+  triggers: debian/triggers
+
+depends:
+  - libbsd0
+  - libc6 (>= 2.34)
+  - libyaml-0-2

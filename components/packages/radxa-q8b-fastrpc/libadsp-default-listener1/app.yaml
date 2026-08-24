@@ -1,0 +1,22 @@
+app:
+  name: libadsp-default-listener1
+  version: 1.0.7-1flange1
+  description: Qualcomm ADSP FastRPC default listener 运行库
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+  deps:
+    - libadsprpc1
+
+maintainer_scripts:
+  triggers: debian/triggers
+
+depends:
+  - libc6 (>= 2.33)
+  - libadsprpc1 (>= 1.0.7)

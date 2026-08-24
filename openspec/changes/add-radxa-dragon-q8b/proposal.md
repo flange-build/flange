@@ -7,10 +7,12 @@ flange 尚不支持基于 Qualcomm SC8280XP（Snapdragon 8cx Gen 3）的 Radxa D
 - 新增 `qualcommsc8280xp` 平台入口与 `sc8280xp` SoC 配置，复用现有 Qualcomm UEFI/GRUB、rootfs、GPT 镜像和 EDL 构建策略。
 - 新增 `radxa-dragon-q8b` 板级配置，使用 Radxa `linux-7.0.11` 内核与 `sc8280xp-radxa-dragon-q8b.dtb`。
 - 按 Armbian 实现安装 SC8280XP 的 ADSP/CDSP/SLPI/VPU 等固件与必要用户态包。
-- 将 Radxa FastRPC deb 的 Q8B 有效内容重组为 flange vendor package，提供
-  ADSP/CDSP 用户态、DSP runtime 与 debug 验证工具，不直接安装上游 deb。
-- 将 FastRPC 的 Q8B 专用安装、卸载与 `ldconfig` trigger 语义映射进 flange
-  自有 deb，不继承上游对 SDSP/GDSP/CDSP1 和 Debian helper 的耦合。
+- 将 Radxa FastRPC deb 的 Q8B 有效内容按官方 `fastrpc`、ADSP/CDSP library
+  与 `fastrpc-test` 包边界重组为 flange vendor package；DSP runtime 独立打包，
+  不直接安装上游 deb。
+- 将 FastRPC 的 Q8B 专用安装、卸载语义映射进 `fastrpc`，将 `ldconfig`
+  trigger 映射进各 library deb，不继承上游对 SDSP/GDSP/CDSP1 和 Debian
+  helper 的耦合。
 - 使用 Radxa 预编 SPI UEFI 固件包，并生成适用于 4096 字节扇区 UFS 的 ESP + rootfs 整盘镜像。
 - 让共享 GRUB 菜单标题从配置读取板名，避免继续写死 Dragon Q6A。
 - 新增最小配置测试，覆盖平台/SoC 自动发现、lunch target 和关键构建字段。

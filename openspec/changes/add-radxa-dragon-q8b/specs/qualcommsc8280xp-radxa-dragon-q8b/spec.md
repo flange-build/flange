@@ -50,14 +50,20 @@ rootfs MUST 基于 Ubuntu 24.04 noble，并 MUST 安装 Armbian SC8280XP 路线�
 #### Scenario: FastRPC 不依赖 Radxa 发行版 deb
 
 - **WHEN** 构建 Q8B rootfs
-- **THEN** flange 从 `components/packages/radxa-q8b-fastrpc` 重新打包并安装 Q8B ADSP/CDSP 用户态、udev/systemd 配置、DSP runtime 与 `/usr/lib/dsp` 路由
+- **THEN** flange 从 `components/packages/radxa-q8b-fastrpc` 生成并安装
+  `fastrpc`、`libadsp-default-listener1`、`libadsprpc1`、
+  `libcdsp-default-listener1`、`libcdsprpc1` 与 `radxa-q8b-dsp-runtime`
+- **AND** 各 library deb 只携带对应 SONAME library，`fastrpc` 只携带 Q8B
+  ADSP/CDSP daemon、udev/systemd 配置，DSP runtime 与 `/usr/lib/dsp` 路由由
+  `radxa-q8b-dsp-runtime` 携带
 - **AND** 构建过程不下载或安装 `fastrpc` / `libcdsprpc1` / `radxa-firmware-sc8280xp` 上游 deb
-- **AND** release 不包含 `fastrpc_test`，debug 包含 v68 验证工具并可执行 `fastrpc_test -a v68`
+- **AND** release 不包含 `fastrpc-test`，debug 包含该包及 v68 验证工具并可执行 `fastrpc_test -a v68`
 
 #### Scenario: FastRPC deb 生命周期脚本经过 Q8B 适配
 
-- **WHEN** flange 构建 `radxa-q8b-fastrpc` runtime deb
-- **THEN** `app.yaml` 将 App 内的 `postinst`、`prerm`、`postrm` 与 `triggers` 映射进 `control.tar.gz`
+- **WHEN** flange 构建 `fastrpc` 与 ADSP/CDSP library deb
+- **THEN** `fastrpc/app.yaml` 将 App 内的 `postinst`、`prerm` 与 `postrm` 映射进 `control.tar.gz`
+- **AND** 各 library `app.yaml` 将 `ldconfig` trigger 映射进各自的 `control.tar.gz`
 - **AND** 脚本只管理 Q8B 的 ADSP/CDSP daemon，并在运行中的 systemd 环境执行 reload/启停
 - **AND** 脚本不引用 SDSP、GDSP、CDSP1 或 `deb-systemd-helper`
 

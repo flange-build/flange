@@ -1,0 +1,2 @@
+# 动态链接库安装后刷新 ld.so cache。
+activate-noawait ldconfig

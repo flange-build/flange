@@ -1,0 +1,10 @@
+# 使用 FastRPC 的进程必须属于 fastrpc group。
+
+# FastRPC 分配内存需要访问 system DMA heap。
+ACTION=="add", SUBSYSTEM=="dma_heap", KERNEL=="system", RUN+="/bin/setfacl -m g:fastrpc:rw $env{DEVNAME}"
+
+# Q8B 只启用 ADSP/CDSP；设备出现时由 systemd 拉起对应 daemon。
+ACTION=="add", SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", OWNER="root", GROUP="fastrpc", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="adsprpcd.service adsprpcd_audiopd.service"
+ACTION=="add", SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp-secure", OWNER="root", GROUP="fastrpc", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="adsprpcd.service adsprpcd_audiopd.service"
+ACTION=="add", SUBSYSTEM=="misc", KERNEL=="fastrpc-cdsp", OWNER="root", GROUP="fastrpc", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="cdsprpcd.service"
+ACTION=="add", SUBSYSTEM=="misc", KERNEL=="fastrpc-cdsp-secure", OWNER="root", GROUP="fastrpc", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="cdsprpcd.service"

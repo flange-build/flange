@@ -188,25 +188,35 @@ def test_rootfs_firmware_and_ucm_inputs_are_complete():
     fastrpc_package = (
         PROJECT_ROOT / "components/packages/radxa-q8b-fastrpc"
     )
-    assert "radxa-q8b-fastrpc" in cfg["rootfs"]["custom_packages"]
-    assert "radxa-q8b-fastrpc-test" not in cfg["rootfs"]["custom_packages"]
-    assert cfg["external_apps"]["radxa-q8b-fastrpc"] == {
-        "local_path": str(fastrpc_package / "runtime")
+    runtime_packages = {
+        "radxa-q8b-dsp-runtime",
+        "libadsprpc1",
+        "libadsp-default-listener1",
+        "libcdsprpc1",
+        "libcdsp-default-listener1",
+        "fastrpc",
     }
-    runtime = fastrpc_package / "runtime/rootfs"
+    assert runtime_packages.issubset(cfg["rootfs"]["custom_packages"])
+    assert "fastrpc-test" not in cfg["rootfs"]["custom_packages"]
+    for name in runtime_packages:
+        assert cfg["external_apps"][name] == {
+            "local_path": str(fastrpc_package / name)
+        }
+    libcdsprpc = fastrpc_package / "libcdsprpc1/rootfs"
     assert hashlib.sha256(
-        (runtime / "usr/lib/aarch64-linux-gnu/libcdsprpc.so.1.0.0")
+        (libcdsprpc / "usr/lib/aarch64-linux-gnu/libcdsprpc.so.1.0.0")
         .read_bytes()
     ).hexdigest() == (
         "4a2eb1b30f90cbb8abc5d7c09d2e9131dec46538a63017619524596fe873960d"
     )
+    dsp_runtime = fastrpc_package / "radxa-q8b-dsp-runtime/rootfs"
     assert hashlib.sha256(
-        (runtime / "usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp/"
+        (dsp_runtime / "usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp/"
          "cdsp/fastrpc_shell_3").read_bytes()
     ).hexdigest() == (
         "5f8844f7d13d72e07a9d224366c834b2bfa9e2283dfe922ce2b83fd945e60ee6"
     )
-    assert (runtime / "usr/lib/dsp").readlink() == Path(
+    assert (dsp_runtime / "usr/lib/dsp").readlink() == Path(
         "/usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp")
 
 
@@ -214,12 +224,12 @@ def test_q8b_debug_includes_fastrpc_v68_test_only():
     debug = resolve_config("radxa-dragon-q8b", "default", "debug")
     release = resolve_config("radxa-dragon-q8b", "default", "release")
 
-    assert "radxa-q8b-fastrpc-test" in debug["rootfs"]["custom_packages"]
-    assert "radxa-q8b-fastrpc-test" not in release["rootfs"]["custom_packages"]
+    assert "fastrpc-test" in debug["rootfs"]["custom_packages"]
+    assert "fastrpc-test" not in release["rootfs"]["custom_packages"]
     test_package = (
-        PROJECT_ROOT / "components/packages/radxa-q8b-fastrpc/test"
+        PROJECT_ROOT / "components/packages/radxa-q8b-fastrpc/fastrpc-test"
     )
-    assert debug["external_apps"]["radxa-q8b-fastrpc-test"] == {
+    assert debug["external_apps"]["fastrpc-test"] == {
         "local_path": str(test_package)
     }
     test_binary = test_package / "rootfs/usr/bin/fastrpc_test"
