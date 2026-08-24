@@ -12,7 +12,7 @@ maintainer:
 build:
   system: none
   deps:
-    - radxa-q8b-dsp-runtime
+    - radxa-firmware-sc8280xp
     - libadsprpc1
     - libadsp-default-listener1
     - libcdsprpc1
@@ -30,6 +30,6 @@ depends:
   - libadsprpc1 (>= 1.0.7)
   - libcdsp-default-listener1 (>= 1.0.7)
   - libcdsprpc1 (>= 1.0.7)
-  - radxa-q8b-dsp-runtime (= 0.2.41-1flange1)
+  - radxa-firmware-sc8280xp (= 0.2.41-1flange1)
   - systemd
   - udev

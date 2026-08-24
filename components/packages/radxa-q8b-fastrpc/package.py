@@ -2,13 +2,8 @@
 
 PACKAGE = {
     "name": "radxa-q8b-fastrpc",
-    "description": "Radxa Dragon Q8B FastRPC 用户态与 DSP runtime",
+    "description": "Radxa Dragon Q8B FastRPC 用户态",
     "components": [
-        {
-            "type": "vendor",
-            "name": "radxa-q8b-dsp-runtime",
-            "dir": "radxa-q8b-dsp-runtime",
-        },
         {
             "type": "vendor",
             "name": "libadsprpc1",

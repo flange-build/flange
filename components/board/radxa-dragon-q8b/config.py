@@ -9,6 +9,7 @@ BOARD = {
     "platform": "qualcommsc8280xp",
     "packages": [
         "firmware-qcom-audioreach",
+        "radxa-firmware-sc8280xp",
         "radxa-q8b-fastrpc",
     ],
     "kernel": {

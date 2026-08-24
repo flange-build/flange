@@ -10,6 +10,8 @@ flange 尚不支持基于 Qualcomm SC8280XP（Snapdragon 8cx Gen 3）的 Radxa D
 - 将 Radxa FastRPC deb 的 Q8B 有效内容按官方 `fastrpc`、ADSP/CDSP library
   与 `fastrpc-test` 包边界重组为 flange vendor package；DSP runtime 独立打包，
   不直接安装上游 deb。
+- 新增独立 `components/packages/radxa-firmware-sc8280xp` vendor package，按
+  Radxa 官方包名提供 Q8B ADSP/CDSP DSP runtime 与 `/usr/lib/dsp` 路由。
 - 将 FastRPC 的 Q8B 专用安装、卸载语义映射进 `fastrpc`，将 `ldconfig`
   trigger 映射进各 library deb，不继承上游对 SDSP/GDSP/CDSP1 和 Debian
   helper 的耦合。

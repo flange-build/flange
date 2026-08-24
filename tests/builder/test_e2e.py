@@ -157,7 +157,7 @@ def test_q8b_fastrpc_packages_follow_radxa_boundaries(tmp_path: Path):
     packages = builder.build_all()
 
     assert {
-        "radxa-q8b-dsp-runtime",
+        "radxa-firmware-sc8280xp",
         "libadsprpc1",
         "libadsp-default-listener1",
         "libcdsprpc1",
@@ -168,6 +168,9 @@ def test_q8b_fastrpc_packages_follow_radxa_boundaries(tmp_path: Path):
     assert packages["libcdsprpc1"].name == (
         "libcdsprpc1_1.0.7-1flange1_arm64.deb"
     )
+    assert packages["radxa-firmware-sc8280xp"].name == (
+        "radxa-firmware-sc8280xp_0.2.41-1flange1_arm64.deb"
+    )
 
     members = _read_ar_members(packages["fastrpc"])
     control = _read_tar_member(
@@ -176,7 +179,7 @@ def test_q8b_fastrpc_packages_follow_radxa_boundaries(tmp_path: Path):
     assert "Package: fastrpc" in control
     assert "libadsp-default-listener1 (>= 1.0.7)" in control
     assert "libcdsprpc1 (>= 1.0.7)" in control
-    assert "radxa-q8b-dsp-runtime (= 0.2.41-1flange1)" in control
+    assert "radxa-firmware-sc8280xp (= 0.2.41-1flange1)" in control
     control_tar = members["control.tar.gz"]
     control_names = _read_tar_names(control_tar)
     for name in ("postinst", "prerm", "postrm"):
@@ -220,7 +223,7 @@ def test_q8b_fastrpc_packages_follow_radxa_boundaries(tmp_path: Path):
         ).decode("utf-8")
         assert triggers.endswith("activate-noawait ldconfig\n")
 
-    dsp_members = _read_ar_members(packages["radxa-q8b-dsp-runtime"])
+    dsp_members = _read_ar_members(packages["radxa-firmware-sc8280xp"])
     dsp_data = dsp_members["data.tar.gz"]
     dsp_names = _read_tar_names(dsp_data)
     assert (

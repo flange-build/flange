@@ -52,10 +52,12 @@ rootfs MUST 基于 Ubuntu 24.04 noble，并 MUST 安装 Armbian SC8280XP 路线�
 - **WHEN** 构建 Q8B rootfs
 - **THEN** flange 从 `components/packages/radxa-q8b-fastrpc` 生成并安装
   `fastrpc`、`libadsp-default-listener1`、`libadsprpc1`、
-  `libcdsp-default-listener1`、`libcdsprpc1` 与 `radxa-q8b-dsp-runtime`
+  `libcdsp-default-listener1` 与 `libcdsprpc1`
+- **AND** flange 从独立的 `components/packages/radxa-firmware-sc8280xp`
+  `vendor` component 生成并安装官方同名 `radxa-firmware-sc8280xp` deb
 - **AND** 各 library deb 只携带对应 SONAME library，`fastrpc` 只携带 Q8B
   ADSP/CDSP daemon、udev/systemd 配置，DSP runtime 与 `/usr/lib/dsp` 路由由
-  `radxa-q8b-dsp-runtime` 携带
+  `radxa-firmware-sc8280xp` 携带
 - **AND** 构建过程不下载或安装 `fastrpc` / `libcdsprpc1` / `radxa-firmware-sc8280xp` 上游 deb
 - **AND** release 不包含 `fastrpc-test`，debug 包含该包及 v68 验证工具并可执行 `fastrpc_test -a v68`
 

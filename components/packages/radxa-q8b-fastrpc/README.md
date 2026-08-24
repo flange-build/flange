@@ -23,11 +23,8 @@ flange vendor App。构建时由 AppBuilder / DebBuilder 生成 flange 自有 de
   debug-only `fastrpc-test`，包名和 SONAME library 所有权与官方一致。
 - `fastrpc` 只保留 Q8B 实际使用的 ADSP/CDSP daemon 与系统配置，不携带
   SDSP/GDSP/CDSP1；Q8B 不使用的 v75 test 也不打包。
-- 官方 `radxa-firmware-sc8280xp` 中的 ADSP/CDSP DSP runtime 单独放入
-  `radxa-q8b-dsp-runtime`。该包不冒用官方固件包名，因为 remoteproc、display
-  与 VPU 固件仍由 board 的锁定 git 来源安装。
-- `radxa-q8b-dsp-runtime` 提供 `/usr/lib/dsp`，固定指向 Q8B 的 SC8280XP DSP
-  目录，不保留上游多板型探测。
+- ADSP/CDSP DSP runtime 已独立到同名 hardware package
+  `components/packages/radxa-firmware-sc8280xp`，不再由 FastRPC package 携带。
 - oneshot service 以 `soc_id=498` 覆盖 Q8B 的 sysfs 兼容点；udev 只处理
   Q8B 的 ADSP/CDSP device，并由 `sysusers.d` 创建 `fastrpc` group。
 - `fastrpc/app.yaml` 映射 Q8B 专用 `postinst` / `prerm` / `postrm`；四个

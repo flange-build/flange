@@ -1,7 +1,7 @@
 app:
-  name: radxa-q8b-dsp-runtime
+  name: radxa-firmware-sc8280xp
   version: 0.2.41-1flange1
-  description: Radxa Dragon Q8B ADSP/CDSP DSP runtime
+  description: Radxa SC8280XP 补充固件与 DSP runtime
   type: vendor
   arch: [aarch64]
 

@@ -189,7 +189,6 @@ def test_rootfs_firmware_and_ucm_inputs_are_complete():
         PROJECT_ROOT / "components/packages/radxa-q8b-fastrpc"
     )
     runtime_packages = {
-        "radxa-q8b-dsp-runtime",
         "libadsprpc1",
         "libadsp-default-listener1",
         "libcdsprpc1",
@@ -202,6 +201,13 @@ def test_rootfs_firmware_and_ucm_inputs_are_complete():
         assert cfg["external_apps"][name] == {
             "local_path": str(fastrpc_package / name)
         }
+    firmware_package = (
+        PROJECT_ROOT / "components/packages/radxa-firmware-sc8280xp"
+    )
+    assert "radxa-firmware-sc8280xp" in cfg["rootfs"]["custom_packages"]
+    assert cfg["external_apps"]["radxa-firmware-sc8280xp"] == {
+        "local_path": str(firmware_package)
+    }
     libcdsprpc = fastrpc_package / "libcdsprpc1/rootfs"
     assert hashlib.sha256(
         (libcdsprpc / "usr/lib/aarch64-linux-gnu/libcdsprpc.so.1.0.0")
@@ -209,7 +215,7 @@ def test_rootfs_firmware_and_ucm_inputs_are_complete():
     ).hexdigest() == (
         "4a2eb1b30f90cbb8abc5d7c09d2e9131dec46538a63017619524596fe873960d"
     )
-    dsp_runtime = fastrpc_package / "radxa-q8b-dsp-runtime/rootfs"
+    dsp_runtime = firmware_package / "rootfs"
     assert hashlib.sha256(
         (dsp_runtime / "usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp/"
          "cdsp/fastrpc_shell_3").read_bytes()
