@@ -77,6 +77,7 @@ lunch
 | `flange build bootloader` | 只构建 bootloader |
 | `flange build rootfs` | 只构建根文件系统 |
 | `flange build recovery` | 只构建 recovery 维护镜像 |
+| `flange build amp` | 只构建 AMP（异构多核）从核固件 |
 | `flange build app` | 构建当前配置所需的所有 App |
 | `flange build app <name-or-path>` | 构建指定 App，参数可为名称或宿主机目录路径（ad-hoc 路径无需注册到 config） |
 | `flange push app <name-or-path>` / `flange run app <name-or-path>` | 热部署 / 运行单个 App，同样支持位置参数传路径 |
@@ -84,7 +85,10 @@ lunch
 | `flange flash <partition>` | 刷写指定分区（如 rootfs, boot, uboot） |
 | `flange flash --list` | 列出可刷写分区及镜像路径 |
 | `flange flash --raw /dev/sdX` | dd 整盘刷写 |
+| `flange flash --spi-firmware` | 单独刷写 SPI 启动固件（需平台支持） |
+| `flange flash --provision-ufs [lun0-only\|qcom]` | 一次性初始化全新 Qualcomm UFS 的 LUN 布局 |
 | `flange flash --no-wait` | 跳过设备等待（CI 环境） |
+| `flange flash --no-reboot` | 刷写完成后不自动重启 |
 | `flange recovery enter` | 让设备从 normal 进入 recovery（USB ADB） |
 | `flange recovery list` | 列出设备分区与挂载状态 |
 | `flange recovery flash <part> <img>` | USB ADB 通道写入指定分区 |
@@ -163,6 +167,7 @@ rootfs 分区可以同时声明设备最终容量和构建产物初始大小：
 
 | 板子 | SoC | 平台 |
 |------|-----|------|
+| atk-rk3506b | RK3506B | Rockchip |
 | radxa-zero3w | RK3566 | Rockchip |
 | neons-core3566-nanob | RK3566 | Rockchip |
 | tspi-rk3566 | RK3566 | Rockchip |
@@ -179,6 +184,7 @@ rootfs 分区可以同时声明设备最终容量和构建产物初始大小：
 | radxa-cubie-a7a | A733 | Allwinner |
 | radxa-cubie-a7z | A733 | Allwinner |
 | radxa-dragon-q6a | QCS6490 | Qualcomm |
+| radxa-dragon-q8b | SC8280XP | Qualcomm |
 
 > 完整列表随 `components/board/*/config.py` 自动发现，可执行 `lunch`（无参数）查看当前所有可选 target。
 
@@ -244,7 +250,7 @@ flange build
 可选地，添加板级数据文件：
 
 ```
-board/<board-name>/
+components/board/<board-name>/
 ├── config.py          # 必须
 ├── overlay/           # 可选：rootfs 覆盖层（直接覆盖到 /）
 │   └── etc/
@@ -519,10 +525,7 @@ flange/
 │   │       └── rk3566/
 │   │           └── config.py #     SoC 配置（第二层）
 │   ├── board/                #   板级配置（第三层）
-│   │   ├── radxa-zero3w/
-│   │   ├── neons-core3566-nanob/
-│   │   ├── tspi-rk3566/
-│   │   └── orangepi-cm4/
+│   │   └── <board-name>/       #   config.py + overlay/patches
 │   ├── app/                  #   App 定义
 │   ├── packages/             #   自定义 deb 包
 │   └── rootfs/               #   rootfs overlay
@@ -568,6 +571,12 @@ flange build
       ├── image/<board>_firmware_<date>.img
       └── flash-config.json ← 自动生成
 ```
+
+## 文档导航
+
+- [ProjectSpec.md](ProjectSpec.md) 是项目规格的事实源。
+- [wiki/index.md](wiki/index.md) 是架构、平台、板级与工作流的交叉索引。
+- `docs/` 保留专题设计、实施计划和硬件验收记录。
 
 ## 许可证
 

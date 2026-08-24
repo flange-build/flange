@@ -1,7 +1,7 @@
 ---
 title: 板级索引
 type: index
-updated: 2026-07-15
+updated: 2026-08-24
 ---
 
 # 板级索引
@@ -24,3 +24,4 @@ updated: 2026-07-15
 - [[khadas-vim3l]] — S905D3（首颗 Amlogic 板，AP6398S WiFi/BT，status: wip）
 - [[radxa-zero]] — S905Y2（第二块 Amlogic 板，G12A，AW-CM256SM WiFi/BT，关 recovery，macOS host，status: wip）
 - [[radxa-dragon-q6a]] — QCS6490（首颗 Qualcomm 板，UEFI/GRUB + UFS 4K LBA + Adreno 643 freedreno + AIC8800 USB，status: wip）
+- [[radxa-dragon-q8b]] — SC8280XP（UEFI/GRUB + UFS 4K LBA + Adreno/MSM + QPS615/TC956x 双网口，status: wip）

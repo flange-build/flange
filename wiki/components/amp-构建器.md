@@ -12,6 +12,8 @@ sources:
   - components/platform/rockchip/rk3566/config.py
   - builder/platforms/rockchip/__init__.py
   - builder/cache.py
+  - builder/oot_mounts.py
+  - components/board/atk-rk3506b/config.py
 related:
   - "[[rockchip 平台]]"
   - "[[AMP 协处理器与 rpmsg]]"
@@ -19,7 +21,7 @@ related:
   - "[[内容哈希与增量构建]]"
   - "[[tspi-rk3566]]"
   - "[[atk-rk3506b]]"
-updated: 2026-07-14
+updated: 2026-08-24
 ---
 
 ## TL;DR
@@ -30,6 +32,7 @@ amp 组件将一个 `type: amp` app 编译为从核 `.bin`，再按 SoC runtime 
 
 - **hal（CMake app）**：amp app（`components/app/<name>`）是独立 CMake 工程，经 `rockchip-hal.cmake`（裸机 `arm-none-eabi` + `rockchip_hal_target()`）引用只读 HAL SDK，产名为 `firmware` 的 target；不 stage、不在 SDK 树内构建。
 - **rt-thread（scons overlay）**：按 `amp.soc_project` stage `<soc>-32` BSP 的可写副本，叠 app `applications/` 与 `.config`；内存经 `RTT_PRMEM_*` 注入，runtime 协议经生成的 `flange_amp_runtime.h` 注入，app 不复制 link-id/endpoint 常量。
+- **OOT App**：`amp.app` 复用 App registry 的三层查找，因此可来自 `external_apps` 或 `external_app_dirs`。宿主机会把外部 git worktree 挂载到容器中的同等相对路径；本地 OOT 源不命中组件缓存，避免复用旧固件。
 - **runtime profile**：SoC 配置提供 MPIDR、Linux arch/load、mailbox/GIC、endpoint 与 SRAM 要求。ITS 只改 `amp<cpu>` 节点，同时断言 Linux 节点、loadables、SRAM 与 profile 一致，避免正则误改整份模板。
 - **内存单一源**：`config.amp.memory` 同时约束固件链接、FIT load/size、DTS entry/reserved-memory；RK3506 额外要求 CPU2 firmware `no-map`，构建期解析目标 DTS 校验。
 - **增量**：哈希 `amp.app` 目录（两 mode）+ rt-thread 的 BSP 模板；庞大 RTOS 内核树不入哈希，走 `-f` 重建。

@@ -577,3 +577,7 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 `cardputer-music-player` 主规格，归档到
 `archive/2026-07-18-add-cardputer-music-player`；任务 8.5 因未提供合法抖音 token/broker，
 继续作为明确的外部实机待办。
+
+## [2026-08-24] sync | README 与 wiki 对齐 main@e23fd87b
+
+根 README 补齐 ATK-RK3506B、Radxa Dragon Q8B、AMP 构建和 Qualcomm UFS 初始化命令，并增加 wiki 导航。新增 [[qualcommsc8280xp 平台]]、[[radxa-dragon-q8b]] 和 [[Tab5 USB 复合终端]]；同步 [[qualcommqcs6490 平台]] 的 7.0.2 基线、Q6A/Q8B 的 SPI/UFS 分离刷写、[[amp 构建器]] 的 OOT App 挂载、[[atk-rk3506b]] `fluxion` product，以及 [[adbd]] 通过 systemd reload 避免 udev 清理热插拔进程的当前自愈路径。Tab5 文档以最终回退后的自研 T0–T13 ISP 为准，保留未上板与复合回归边界。

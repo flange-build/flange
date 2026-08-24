@@ -1,7 +1,7 @@
 ---
 title: flange 知识库
 type: index
-updated: 2026-05-03
+updated: 2026-08-24
 ---
 
 # flange 知识库
@@ -22,11 +22,10 @@ updated: 2026-05-03
 - [[kernel 构建器]] · [[bootloader 构建器]] · [[rootfs 构建器]] · [[recovery 构建器]] · [[image 构建器]] · [[app 打包系统]] · [[amp 构建器]]
 
 ## 平台 (platforms/)
-- [[rockchip 平台]] — RK3566 已落地
-- [[allwinnera733 平台]] — Radxa Cubie A7Z，进行中
+- [[rockchip 平台]] · [[allwinnera733 平台]] · [[amlogic 平台]] · [[qualcommqcs6490 平台]] · [[qualcommsc8280xp 平台]]
 
 ## 板子 (boards/)
-- [[radxa-zero3w]]（首个打样） · [[tspi-rk3566]] · [[neons-core3566-nanob]] · [[orangepi-cm4]] · [[radxa-cubie-a7z]]
+- 完整列表见 [[板级索引]]；新增平台入口：[[atk-rk3506b]] · [[radxa-dragon-q8b]]
 
 ## 关键概念 (concepts/)
 - 配置：[[三层继承]] · [[condition-markers]] · [[product-variant]]
@@ -34,6 +33,7 @@ updated: 2026-05-03
 - 启动：[[U-Boot 启动链]] · [[双 extlinux 配置]] · [[boot-once 启动切换]] · [[reboot reason]]
 - 刷写：[[flash-config.json]] · [[FlashStrategy 抽象]] · [[分区表系统]] · [[USB 线刷协议]]
 - 内核：[[out-of-tree 模块]]
+- USB 终端：[[Cardputer USB 复合设备]] · [[Tab5 USB 复合终端]]
 - AMP：[[AMP 协处理器与 rpmsg]]
 - Recovery：[[recovery 系统]] · [[recoveryctl 协议]]
 

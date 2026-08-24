@@ -16,7 +16,7 @@ related:
   - "[[flash-config.json]]"
   - "[[FlashStrategy 抽象]]"
   - "[[内容哈希与增量构建]]"
-updated: 2026-04-26
+updated: 2026-08-24
 ---
 
 ## TL;DR
@@ -41,9 +41,13 @@ envsetup → lunch → FINAL_CONFIG → .flange/current_config
 
 **4. flange flash**：宿主机通过 [[FlashStrategy 抽象]] 读取 `flash-config.json` 执行 USB 线刷。
 
+Qualcomm 板的 SPI 启动固件与 UFS 系统盘是两条独立路径：`flange flash`
+只写 UFS；`--spi-firmware` 只写 SPI。全新 UFS 需先执行
+`flange flash --provision-ufs [lun0-only|qcom]`，初始化后重新进入 EDL，再刷系统盘。
+
 ## 组件级构建
 
-`flange build` 默认构建 `image`（全量）；可单独指定子目标：`kernel` / `bootloader` / `rootfs`（含 app deb 安装）/ `recovery` / `image`。
+`flange build` 默认构建 `image`（全量）；可单独指定子目标：`kernel` / `bootloader` / `rootfs`（含 app deb 安装）/ `recovery` / `amp` / `image`。
 
 ## 增量构建
 
