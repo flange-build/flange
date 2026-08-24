@@ -9,6 +9,8 @@
   ``builder/kernel_base.py`` 的 OOT 模块编译/安装路径。
 - ``devicetree``：取该 board 对应 ``.dtso``，作为「package overlay」第四源
   注册进 ``boot.package_overlays``，由 ``builder/overlays.py`` 用 cpp+dtc 编译。
+- ``vendor``：注册 package 内的本地 App，并加入 ``rootfs.custom_packages``；
+  由 AppBuilder / DebBuilder 打成 flange 自有 deb 后安装。
 - ``deb``：复用 rootfs deb 安装路径（当前仅在 schema 预留，未落地）。
 
 board 通过顶层 ``packages`` 字段 opt-in。``expand_hardware_packages`` 在
@@ -20,6 +22,8 @@ builder 无需感知包概念——它们读到的就是普通的 ``oot_modules`
 - ``config["kernel"]["oot_modules"]``：追加 oot-driver 合成条目（绝对路径）。
 - ``config["boot"]["package_overlays"]``：package overlay 的 ``.dtbo`` 名列表。
 - ``config["boot"]["package_overlay_sources"]``：``{name.dtbo: 绝对 .dtso 路径}``。
+- ``config["rootfs"]["custom_packages"]``：追加 vendor deb 包名。
+- ``config["external_apps"]``：注册 vendor package 的本地 App 路径。
 - ``config["packages_meta"]``：``{kernel_src_paths, overlay_src_paths}``（相对
   路径），供 ``builder/cache.py`` 做内容哈希（包源改动触发增量重建）。
 """
@@ -33,7 +37,7 @@ from typing import Any
 from builder.paths import PROJECT_ROOT, components_dir
 
 # component 合法类型集合。未知类型 → 构建失败。
-VALID_COMPONENT_TYPES = {"oot-driver", "devicetree", "deb"}
+VALID_COMPONENT_TYPES = {"oot-driver", "devicetree", "vendor", "deb"}
 
 
 def _load_package_var(file_path: Path) -> Any:
@@ -91,6 +95,16 @@ def load_package_manifest(pkg_name: str, project_root: Path) -> dict:
                 f"包 {pkg_name} 的 component type 非法: {ctype!r}；"
                 f"候选: {', '.join(sorted(VALID_COMPONENT_TYPES))}"
             )
+        variants = comp.get("variants")
+        if variants is not None and (
+            not isinstance(variants, list)
+            or not variants
+            or not all(isinstance(item, str) and item for item in variants)
+        ):
+            raise ValueError(
+                f"包 {pkg_name} 的 component variants 必须是非空字符串列表: "
+                f"{comp!r}"
+            )
         if ctype == "oot-driver":
             if not comp.get("dir") or not comp.get("ko_pattern"):
                 raise ValueError(
@@ -102,6 +116,12 @@ def load_package_manifest(pkg_name: str, project_root: Path) -> dict:
                 raise ValueError(
                     f"包 {pkg_name} 的 devicetree component 需含 overlays "
                     f"映射（board → .dtso 相对路径）: {comp!r}"
+                )
+        elif ctype == "vendor":
+            if not comp.get("name") or not comp.get("dir"):
+                raise ValueError(
+                    f"包 {pkg_name} 的 vendor component 需含 name 与 dir: "
+                    f"{comp!r}"
                 )
 
     return pkg
@@ -185,6 +205,9 @@ def expand_hardware_packages(
                 )
 
         for comp in pkg["components"]:
+            if (comp.get("variants")
+                    and config.get("variant") not in comp["variants"]):
+                continue
             ctype = comp["type"]
             if ctype == "oot-driver":
                 # 按需编译：未选中的 driver 不注入 oot_modules（不编译/不安装）
@@ -224,6 +247,27 @@ def expand_hardware_packages(
                 overlay_src_paths.append(
                     f"components/packages/{pkg_name}/{dtso_rel}")
 
-            # ctype == "deb"：预留，本次不落地
+            elif ctype == "vendor":
+                app_dir = (pkg_dir / comp["dir"]).resolve()
+                if not (app_dir / "app.yaml").is_file():
+                    raise FileNotFoundError(
+                        f"包 {pkg_name} 的 vendor App 缺少 app.yaml: {app_dir}"
+                    )
+                app_name = comp["name"]
+                external_apps = config.setdefault("external_apps", {})
+                existing = external_apps.get(app_name)
+                app_source = {"local_path": str(app_dir)}
+                if existing is not None and existing != app_source:
+                    raise ValueError(
+                        f"包 {pkg_name} 的 vendor App 与 external_apps"
+                        f"[{app_name!r}] 冲突"
+                    )
+                external_apps[app_name] = app_source
+                custom_packages = config.setdefault("rootfs", {}).setdefault(
+                    "custom_packages", [])
+                if app_name not in custom_packages:
+                    custom_packages.append(app_name)
+
+            # ctype == "deb"：预留，尚未接入构建流水线
 
     return config

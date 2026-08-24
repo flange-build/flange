@@ -13,11 +13,16 @@ import yaml
 # 允许的 App 类型。amp = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户
 # 应用），产物是固件而非装进 rootfs 的 deb，走独立构建路径（见 app.py
 # build_one 的 amp 分叉与 platforms/rockchip/amp.py 的应用槽位 staging）。
-VALID_APP_TYPES = {"exec", "service", "lib", "test", "amp"}
+VALID_APP_TYPES = {"exec", "service", "lib", "test", "vendor", "amp"}
 
 # 允许的构建系统取值。amp = 经 SDK（HAL Makefile / RT-Thread scons）+ mkimage
 # 打 FIT，由 amp 组件驱动，不复用 _BUILD_SYSTEMS 的 host 交叉编译模板。
 VALID_BUILD_SYSTEMS = {"none", "cmake", "meson", "make", "swift", "custom", "amp", "scons"}
+
+# vendor App 可映射进 deb control.tar.gz 的维护脚本与触发器。
+VALID_MAINTAINER_SCRIPT_NAMES = {
+    "preinst", "postinst", "prerm", "postrm", "triggers",
+}
 
 # build.apt_packages 仅接受 Debian 包名和可选架构限定符。允许 {arch}
 # 占位符在构建时替换成当前目标架构，拒绝以 '-' 开头的 APT 选项注入。
@@ -97,7 +102,7 @@ class AppInfo:
     name: str
     version: str
     description: str
-    # exec / service / lib / test
+    # exec / service / lib / test / vendor / amp
     type: str
     # 支持的目标架构列表
     arch: List[str] = field(default_factory=list)
@@ -122,6 +127,8 @@ class AppSpec:
     conffiles: List[str] = field(default_factory=list)
     # 运行时数据目录声明
     data_dirs: List[str] = field(default_factory=list)
+    # vendor deb 维护脚本名 -> 文件内容
+    maintainer_scripts: Dict[str, str] = field(default_factory=dict)
     # lib 配置（可选，仅 lib 类型有意义）
     lib: Optional[LibConfig] = None
 
@@ -177,6 +184,54 @@ def _parse_maintainer(raw: dict) -> MaintainerInfo:
         if not isinstance(raw[key], str) or not raw[key].strip():
             raise AppSpecError(f"maintainer.{key} 必须是非空字符串")
     return MaintainerInfo(name=raw["name"].strip(), email=raw["email"].strip())
+
+
+def _parse_maintainer_scripts(
+    raw: dict,
+    app_dir: Path,
+    app_info: AppInfo,
+) -> Dict[str, str]:
+    """读取 vendor deb 维护脚本，拒绝 App 目录外的路径。"""
+    if not isinstance(raw, dict):
+        raise AppSpecError("maintainer_scripts: 段必须是字典")
+    if raw and app_info.type != "vendor":
+        raise AppSpecError("maintainer_scripts 仅允许用于 app.type=vendor")
+
+    app_root = app_dir.resolve()
+    scripts: Dict[str, str] = {}
+    for name, value in raw.items():
+        if name not in VALID_MAINTAINER_SCRIPT_NAMES:
+            raise AppSpecError(
+                f"maintainer_scripts 名称无效：{name!r}；允许值："
+                f"{sorted(VALID_MAINTAINER_SCRIPT_NAMES)}"
+            )
+        relative = _validate_relative_path(
+            value,
+            f"maintainer_scripts.{name}",
+        )
+        script_path = (app_dir / relative).resolve()
+        try:
+            script_path.relative_to(app_root)
+        except ValueError as exc:
+            raise AppSpecError(
+                f"maintainer_scripts.{name} 必须位于 App 目录内"
+            ) from exc
+        if not script_path.is_file():
+            raise AppSpecError(
+                f"maintainer_scripts.{name} 文件不存在：{script_path}"
+            )
+        try:
+            content = script_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise AppSpecError(
+                f"maintainer_scripts.{name} 必须是 UTF-8 文本"
+            ) from exc
+        if name != "triggers" and not content.startswith("#!"):
+            raise AppSpecError(
+                f"maintainer_scripts.{name} 必须以 shebang 开头"
+            )
+        scripts[name] = content
+    return scripts
 
 
 def _parse_str_list_value(value, field: str) -> List[str]:
@@ -385,6 +440,13 @@ def load_spec(app_dir: Path) -> AppSpec:
     conffiles = _parse_str_list("conffiles")
     data_dirs = _parse_str_list("data_dirs")
 
+    # vendor deb 可显式映射安装、升级、卸载脚本与 dpkg trigger。
+    maintainer_scripts = _parse_maintainer_scripts(
+        raw.get("maintainer_scripts", {}),
+        app_dir,
+        app_info,
+    )
+
     # 解析可选段：lib
     lib: Optional[LibConfig] = None
     if "lib" in raw:
@@ -400,5 +462,6 @@ def load_spec(app_dir: Path) -> AppSpec:
         depends=depends,
         conffiles=conffiles,
         data_dirs=data_dirs,
+        maintainer_scripts=maintainer_scripts,
         lib=lib,
     )

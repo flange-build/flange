@@ -85,6 +85,20 @@ maintainer:
   email: flange@localhost
 """
 
+# 最小合法 YAML（vendor 类型）
+_MINIMAL_VENDOR = """\
+app:
+  name: my-vendor
+  version: 1.0.0
+  description: 测试 vendor 包
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+"""
+
 # 完整字段 YAML（cmake 构建 + systemd + install 等）
 _FULL_SERVICE = """\
 app:
@@ -400,6 +414,89 @@ class TestDefaultValues:
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
         assert spec.data_dirs == []
+
+    def test_maintainer_scripts_defaults_to_empty_dict(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = load_spec(_write_yaml(tmpdir, _MINIMAL_VENDOR))
+        assert spec.maintainer_scripts == {}
+
+
+class TestMaintainerScripts:
+    """验证 vendor deb 维护脚本映射与路径边界。"""
+
+    def test_vendor_scripts_are_loaded(self, tmp_path: Path):
+        app_dir = _write_yaml(
+            str(tmp_path),
+            _MINIMAL_VENDOR
+            + "maintainer_scripts:\n"
+            + "  postinst: debian/postinst\n"
+            + "  triggers: debian/triggers\n",
+        )
+        debian_dir = app_dir / "debian"
+        debian_dir.mkdir()
+        (debian_dir / "postinst").write_text(
+            "#!/bin/sh\nset -xe\n",
+            encoding="utf-8",
+        )
+        (debian_dir / "triggers").write_text(
+            "activate-noawait ldconfig\n",
+            encoding="utf-8",
+        )
+
+        spec = load_spec(app_dir)
+
+        assert spec.maintainer_scripts["postinst"].startswith("#!/bin/sh")
+        assert spec.maintainer_scripts["triggers"] == (
+            "activate-noawait ldconfig\n"
+        )
+
+    def test_unknown_script_name_rejected(self, tmp_path: Path):
+        app_dir = _write_yaml(
+            str(tmp_path),
+            _MINIMAL_VENDOR
+            + "maintainer_scripts:\n"
+            + "  configure: debian/configure\n",
+        )
+        with pytest.raises(AppSpecError, match="名称无效"):
+            load_spec(app_dir)
+
+    def test_script_path_escape_rejected(self, tmp_path: Path):
+        app_dir = _write_yaml(
+            str(tmp_path),
+            _MINIMAL_VENDOR
+            + "maintainer_scripts:\n"
+            + "  postinst: ../postinst\n",
+        )
+        with pytest.raises(AppSpecError, match="maintainer_scripts.postinst"):
+            load_spec(app_dir)
+
+    def test_script_symlink_escape_rejected(self, tmp_path: Path):
+        outside = tmp_path / "outside-postinst"
+        outside.write_text("#!/bin/sh\nset -xe\n", encoding="utf-8")
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        _write_yaml(
+            str(app_dir),
+            _MINIMAL_VENDOR
+            + "maintainer_scripts:\n"
+            + "  postinst: debian/postinst\n",
+        )
+        debian_dir = app_dir / "debian"
+        debian_dir.mkdir()
+        (debian_dir / "postinst").symlink_to(outside)
+
+        with pytest.raises(AppSpecError, match="必须位于 App 目录内"):
+            load_spec(app_dir)
+
+    def test_non_vendor_script_mapping_rejected(self, tmp_path: Path):
+        app_dir = _write_yaml(
+            str(tmp_path),
+            _MINIMAL_EXEC
+            + "maintainer_scripts:\n"
+            + "  postinst: debian/postinst\n",
+        )
+        with pytest.raises(AppSpecError, match="仅允许用于 app.type=vendor"):
+            load_spec(app_dir)
 
 
 # ---------------------------------------------------------------------------

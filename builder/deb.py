@@ -222,6 +222,7 @@ def generate_control(spec: AppSpec, arch: str) -> Dict[str, str]:
         - "conffiles":  仅当 spec.conffiles 非空时存在
         - "postinst":   仅当 app.type == "service" 且有 systemd 配置时存在
         - "prerm":      同上
+        - vendor 在 maintainer_scripts 中显式映射的维护脚本与 triggers
     """
     deb_arch = _map_arch(arch)
     maintainer_str = f"{spec.maintainer.name} <{spec.maintainer.email}>"
@@ -249,6 +250,9 @@ def generate_control(spec: AppSpec, arch: str) -> Dict[str, str]:
         service_name = Path(spec.systemd.unit).name
         result["postinst"] = _generate_postinst(service_name, spec.data_dirs)
         result["prerm"] = _generate_prerm(service_name)
+
+    # vendor 参考包的脚本必须先完成平台适配，再由 app.yaml 显式映射。
+    result.update(spec.maintainer_scripts)
 
     return result
 

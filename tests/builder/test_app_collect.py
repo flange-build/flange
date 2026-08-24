@@ -195,6 +195,28 @@ class TestConventionMapping:
         assert "/usr/bin/prog" in install_paths
         assert "/usr/bin/subdir" not in install_paths
 
+    def test_vendor_rootfs_tree递归映射并保留权限(self, tmp_path: Path):
+        daemon = tmp_path / "rootfs/usr/sbin/fastrpcd"
+        _touch(daemon)
+        daemon.chmod(0o755)
+        library = tmp_path / "rootfs/usr/lib/libfastrpc.so.1.0.0"
+        _touch(library)
+        symlink = tmp_path / "rootfs/usr/lib/libfastrpc.so.1"
+        symlink.symlink_to("libfastrpc.so.1.0.0")
+        _touch(tmp_path / "rootfs/usr/lib/.DS_Store")
+
+        files = collect_files(
+            tmp_path,
+            _make_spec(name="fastrpc", app_type="vendor"),
+            "aarch64",
+        )
+        result = _result_map(files)
+
+        assert result["/usr/sbin/fastrpcd"] == (daemon, 0o755)
+        assert result["/usr/lib/libfastrpc.so.1.0.0"] == (library, 0o644)
+        assert result["/usr/lib/libfastrpc.so.1"][0].is_symlink()
+        assert "/usr/lib/.DS_Store" not in result
+
 
 # ---------------------------------------------------------------------------
 # 架构后缀匹配测试

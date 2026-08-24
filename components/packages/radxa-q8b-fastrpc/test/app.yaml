@@ -1,0 +1,18 @@
+app:
+  name: radxa-q8b-fastrpc-test
+  version: 1.0.7-1flange1
+  description: Radxa Dragon Q8B FastRPC v68 验证工具
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+  deps:
+    - radxa-q8b-fastrpc
+
+depends:
+  - radxa-q8b-fastrpc (= 1.0.7-1flange1)

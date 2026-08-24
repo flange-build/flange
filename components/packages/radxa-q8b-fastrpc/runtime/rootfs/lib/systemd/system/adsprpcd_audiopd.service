@@ -1,0 +1,14 @@
+[Unit]
+Description=Audio PD ADSP FastRPC daemon
+Requires=radxa-q8b-fastrpc-setup.service
+After=radxa-q8b-fastrpc-setup.service dev-fastrpc\x2dadsp.device dev-fastrpc\x2dadsp\x2dsecure.device
+ConditionPathExists=|/dev/fastrpc-adsp
+ConditionPathExists=|/dev/fastrpc-adsp-secure
+
+[Service]
+Type=exec
+ExecStart=/usr/sbin/adsprpcd audiopd
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=2
+RestartForceExitStatus=SIGTERM

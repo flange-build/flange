@@ -9,6 +9,7 @@
   systemd/   → /lib/systemd/system/  (mode 0o644)
   udev/      → /lib/udev/rules.d/ (mode 0o644)
   res/       → /usr/share/<name>/ (mode 0o644)
+  rootfs/    → /                    (仅 vendor，递归保留目录结构与执行位)
 
 预编译二进制架构后缀选择规则：
   aarch64 目标：匹配 -arm64、-aarch64 后缀
@@ -171,6 +172,25 @@ def _collect_convention(
         [(src_path, install_path, mode, rel_key), ...]
     """
     results: list[tuple[Path, str, int, str]] = []
+
+    # vendor 是从上游发行包审计、筛选后重组的文件树。允许直接按目标
+    # rootfs 布局存放，避免为大量 DSP library 逐文件重复声明 install 映射。
+    if app_type == "vendor":
+        rootfs_dir = app_dir / "rootfs"
+        if rootfs_dir.is_dir():
+            for src_file in sorted(rootfs_dir.rglob("*")):
+                if not (src_file.is_file() or src_file.is_symlink()):
+                    continue
+                if src_file.name == ".DS_Store":
+                    continue
+                relative = src_file.relative_to(rootfs_dir).as_posix()
+                mode = src_file.lstat().st_mode & 0o777
+                results.append((
+                    src_file,
+                    f"/{relative}",
+                    mode,
+                    f"rootfs/{relative}",
+                ))
 
     for subdir_name, (template, mode) in _CONVENTION_MAP.items():
         # include/ 约定仅适用于 lib 类型

@@ -30,7 +30,7 @@ SC8280XP 配置 MUST 将 kernel repo 锁定到 `radxa/kernel` 的 `linux-7.0.11`
 
 ### Requirement: Q8B rootfs 固件与用户态
 
-rootfs MUST 基于 Ubuntu 24.04 noble，并 MUST 安装 Armbian SC8280XP 路线要求的 `bluez`、`protection-domain-mapper`、`qrtr-tools`、Mesa、`linux-firmware` 等用户态包。系统 MUST 从固定的 `radxa-pkg/radxa-firmware` commit 安装 Q8B ADSP、CDSP、SLPI、QUP、display 与 VPU 固件，并 MUST 以 SHA-256 校验安装 Radxa ALSA UCM backport deb。
+rootfs MUST 基于 Ubuntu 24.04 noble，并 MUST 安装 Armbian SC8280XP 路线要求的 `bluez`、`protection-domain-mapper`、`qrtr-tools`、Mesa、`linux-firmware` 等用户态包。系统 MUST 从固定的 `radxa-pkg/radxa-firmware` commit 安装 Q8B ADSP、CDSP、SLPI、QUP、display 与 VPU 固件，MUST 以 SHA-256 校验安装 Radxa ALSA UCM backport deb，并 MUST 从 flange hardware package 安装 Q8B 专用 AudioReach topology 与 FastRPC runtime。
 
 #### Scenario: 固件路径匹配 DTS
 
@@ -41,6 +41,25 @@ rootfs MUST 基于 Ubuntu 24.04 noble，并 MUST 安装 Armbian SC8280XP 路线�
 
 - **WHEN** 下载 Radxa ALSA UCM backport
 - **THEN** 构建器在安装前校验配置声明的 SHA-256，校验失败则中止
+
+#### Scenario: Q8B AudioReach topology 路径匹配内核请求
+
+- **WHEN** 构建 Q8B rootfs
+- **THEN** flange 将 `components/packages/firmware-qcom-audioreach` 的本地 vendor component 重新打成自有 deb，并由 rootfs 安装 `qcom/sc8280xp/SC8280XP-Radxa-Dragon-Q8B-tplg.bin`，且不直接安装上游 deb
+
+#### Scenario: FastRPC 不依赖 Radxa 发行版 deb
+
+- **WHEN** 构建 Q8B rootfs
+- **THEN** flange 从 `components/packages/radxa-q8b-fastrpc` 重新打包并安装 Q8B ADSP/CDSP 用户态、udev/systemd 配置、DSP runtime 与 `/usr/lib/dsp` 路由
+- **AND** 构建过程不下载或安装 `fastrpc` / `libcdsprpc1` / `radxa-firmware-sc8280xp` 上游 deb
+- **AND** release 不包含 `fastrpc_test`，debug 包含 v68 验证工具并可执行 `fastrpc_test -a v68`
+
+#### Scenario: FastRPC deb 生命周期脚本经过 Q8B 适配
+
+- **WHEN** flange 构建 `radxa-q8b-fastrpc` runtime deb
+- **THEN** `app.yaml` 将 App 内的 `postinst`、`prerm`、`postrm` 与 `triggers` 映射进 `control.tar.gz`
+- **AND** 脚本只管理 Q8B 的 ADSP/CDSP daemon，并在运行中的 systemd 环境执行 reload/启停
+- **AND** 脚本不引用 SDSP、GDSP、CDSP1 或 `deb-systemd-helper`
 
 ### Requirement: UEFI、GRUB 与 4K UFS 镜像
 

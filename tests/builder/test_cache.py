@@ -261,13 +261,20 @@ class TestDirectoryHash:
 class TestAppSourceHash:
     """App 源码递归哈希测试 — 通过公开 compute_hash 接口验证。"""
 
-    def _make_cache(self, tmpdir: str, custom_packages: list) -> BuildCache:
+    def _make_cache(
+        self,
+        tmpdir: str,
+        custom_packages: list,
+        external_apps: dict | None = None,
+    ) -> BuildCache:
         config = {
             "board": "test", "platform": "rockchip",
             "soc": "rk3566", "arch": "aarch64",
             "product": "default", "variant": "release",
             "rootfs": {"custom_packages": custom_packages},
         }
+        if external_apps:
+            config["external_apps"] = external_apps
         return BuildCache(
             config,
             target_base=Path(tmpdir) / ".build" / "target",
@@ -309,6 +316,26 @@ class TestAppSourceHash:
             (app_dir / "app.yaml").write_text("name: myapp\nversion: 2.0")
             h2 = self._compute_app_hash(
                 self._make_cache(tmpdir, ["myapp"]))
+            assert h1 != h2
+
+    def test_external_local_firmware_change(self):
+        """package-local firmware 变化应使 app deb 缓存失效。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir) / "components/packages/demo-firmware"
+            app_dir.mkdir(parents=True)
+            (app_dir / "app.yaml").write_text("name: demo-firmware")
+            blob = app_dir / "topology.bin"
+            blob.write_bytes(b"version-1")
+            external_apps = {
+                "demo-firmware": {"local_path": str(app_dir)}
+            }
+
+            h1 = self._compute_app_hash(self._make_cache(
+                tmpdir, ["demo-firmware"], external_apps))
+            blob.write_bytes(b"version-2")
+            h2 = self._compute_app_hash(self._make_cache(
+                tmpdir, ["demo-firmware"], external_apps))
+
             assert h1 != h2
 
     def test_new_file_changes_hash(self):

@@ -1,0 +1,16 @@
+app:
+  name: firmware-qcom-audioreach
+  version: 1.0.4-2
+  description: Radxa Dragon Q8B AudioReach topology 固件
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+install:
+  firmware/qcom/sc8280xp/SC8280XP-Radxa-Dragon-Q8B-tplg.bin: /lib/firmware/qcom/sc8280xp/SC8280XP-Radxa-Dragon-Q8B-tplg.bin

@@ -36,11 +36,28 @@ Dragon Q8B 使用 Qualcomm SC8280XP，启动链为 SPI 中的签名 XBL/EDK2 UEF
 
 Armbian `sc8280xp-vendor` 的 HDMI 热插拔增强属于体验修复而非基础启动前提，本变更不复制约一千行补丁；实板确认需要时再单独提案。
 
-### 决策 3：声明式安装锁定的板级固件与 UCM 包
+### 决策 3：声明式安装锁定的板级固件、AudioReach topology 与 UCM 包
 
 复用 `rootfs.extra_firmware` 从 `radxa-pkg/radxa-firmware` 的固定 commit 安装 ADSP、CDSP、SLPI、QUP、display 和 VPU 固件。display 固件同时按 DTS 要求落到 Lenovo 兼容路径。复用 `rootfs.extra_debs` 安装 Armbian 使用的 Radxa `alsa-ucm-conf` backport，并固定 SHA-256。
 
-相比把二进制复制进仓库，声明式来源可审计、可缓存且不增加仓库体积。
+Q8B 专用 AudioReach topology 由 `components/packages/firmware-qcom-audioreach`
+硬件特性包携带，从 Radxa `1.0.4-2` deb 中只提取板级 topology 数据，并通过
+package `vendor` component 注册为本地 custom package。flange 使用
+AppBuilder / DebBuilder 将其重新打成自有 deb，再通过 rootfs 的统一 `dpkg`
+流程安装；构建过程不安装上游 deb，也不继承其发行版依赖或 maintainer script。
+
+FastRPC 由 `components/packages/radxa-q8b-fastrpc` 提供。参考 Radxa `fastrpc
+1.0.7-1` 与 `radxa-firmware-sc8280xp 0.2.41` deb 后，只保留 Q8B 实际使用的
+ADSP/CDSP library、daemon、udev/systemd 配置与 DSP runtime；删除通用包中的
+SDSP/GDSP 路径，并增加 `sysusers.d` 与 Q8B 固定 `soc_id=498` 初始化。上游
+maintainer script 不原样继承：vendor App 通过 `maintainer_scripts` 映射 Q8B
+专用 `postinst` / `prerm` / `postrm` 与 `ldconfig` trigger，只管理 ADSP/CDSP，
+不依赖 `deb-systemd-helper`。runtime 和 debug-only v68 test 分别由 flange 重打
+deb。
+
+启动所需的 remoteproc/display/VPU 等较大固件继续使用锁定的外部来源；FastRPC
+执行期必须使用的 Q8B DSP runtime 随 package 携带，避免构建期依赖 Radxa APT
+源或从上游 deb 动态提取。
 
 ### 决策 4：沿用 ESP + rootfs 的 4K UFS 镜像与 EDL 路线
 
@@ -57,6 +74,8 @@ Q8B 与 Q6A 共享 UEFI/GRUB 和 UFS 形态，因此沿用 GPT 两分区、`sect
 - **[模块化 drm/msm 与实板自动加载不一致]** → 配置解析测试确认覆盖生效；实板首验检查 `/dev/dri` 与固件加载日志。
 - **[基础支持缺少 Armbian HDMI 热插拔增强]** → 保留为明确非目标；只有实板复现 KVM/replug 问题时才引入对应补丁。
 - **[EDL 整盘写 UFS 未在 CI 执行]** → CI 只验证命令路由和配置，实际写盘必须在 Q8B 上确认。
+- **[FastRPC DSP runtime 增加约 30 MiB 仓库内容]** → 仅保留 Q8B 的 ADSP/CDSP
+  目录并记录参考 deb SHA-256；不携带其他 SoC、SDSP/GDSP、dbgsym 或 v75 test。
 
 ## Migration Plan
 

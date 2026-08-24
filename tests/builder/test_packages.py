@@ -48,6 +48,28 @@ PACKAGE = {
 }
 """
 
+_VENDOR_PACKAGE = """
+PACKAGE = {
+    "name": "demo-firmware",
+    "components": [
+        {"type": "vendor", "name": "demo-firmware",
+         "dir": "."},
+    ],
+}
+"""
+
+_VENDOR_APP = """
+app:
+  name: demo-firmware
+  version: 1.0.0
+  description: 测试固件
+  type: vendor
+  arch: [aarch64]
+maintainer:
+  name: flange
+  email: flange@localhost
+"""
+
 
 @pytest.fixture
 def demo_root(tmp_path: Path) -> Path:
@@ -69,7 +91,7 @@ def test_load_valid_manifest(demo_root: Path):
     assert len(pkg["components"]) == 3
 
 
-def test_unknown_component_type(tmp_path: Path):
+def test_old_firmware_component_type_is_invalid(tmp_path: Path):
     _write_package(tmp_path, "bad", """
 PACKAGE = {"name": "bad", "components": [{"type": "firmware", "name": "x"}]}
 """)
@@ -96,6 +118,24 @@ PACKAGE = {"name": "p", "components": [
     {"type": "oot-driver", "name": "x", "dir": "driver/x"}]}
 """)
     with pytest.raises(ValueError, match="ko_pattern"):
+        load_package_manifest("p", tmp_path)
+
+
+def test_vendor_requires_name_and_dir(tmp_path: Path):
+    _write_package(tmp_path, "p", """
+PACKAGE = {"name": "p", "components": [
+    {"type": "vendor", "name": "demo"}]}
+""")
+    with pytest.raises(ValueError, match="vendor component.*name 与 dir"):
+        load_package_manifest("p", tmp_path)
+
+
+def test_component_variants_requires_nonempty_string_list(tmp_path: Path):
+    _write_package(tmp_path, "p", """
+PACKAGE = {"name": "p", "components": [
+    {"type": "vendor", "name": "demo", "dir": ".", "variants": []}]}
+""")
+    with pytest.raises(ValueError, match="variants 必须是非空字符串列表"):
         load_package_manifest("p", tmp_path)
 
 
@@ -188,6 +228,68 @@ def test_no_packages_is_noop(demo_root: Path):
     out = expand_hardware_packages(cfg, project_root=demo_root)
     assert out is cfg
     assert "kernel" not in cfg or not cfg.get("kernel", {}).get("oot_modules")
+
+
+def test_expand_vendor_into_custom_deb(tmp_path: Path):
+    _write_package(
+        tmp_path,
+        "demo-firmware",
+        _VENDOR_PACKAGE,
+        files={"app.yaml": _VENDOR_APP},
+    )
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    expand_hardware_packages(cfg, project_root=tmp_path)
+    assert cfg["rootfs"]["custom_packages"] == ["demo-firmware"]
+    assert cfg["external_apps"]["demo-firmware"] == {
+        "local_path": str(
+            (tmp_path / "components/packages/demo-firmware").resolve()
+        )
+    }
+
+
+def test_expand_vendor_requires_app_yaml(tmp_path: Path):
+    _write_package(tmp_path, "demo-firmware", _VENDOR_PACKAGE)
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    with pytest.raises(FileNotFoundError, match="缺少 app.yaml"):
+        expand_hardware_packages(cfg, project_root=tmp_path)
+
+
+def test_expand_vendor_filters_variant(tmp_path: Path):
+    _write_package(
+        tmp_path,
+        "demo-firmware",
+        """
+PACKAGE = {
+    "name": "demo-firmware",
+    "components": [
+        {"type": "vendor", "name": "runtime", "dir": "runtime"},
+        {"type": "vendor", "name": "debug-test", "dir": "test",
+         "variants": ["debug"]},
+    ],
+}
+""",
+        files={
+            "runtime/app.yaml": _VENDOR_APP.replace(
+                "demo-firmware", "runtime"),
+            "test/app.yaml": _VENDOR_APP.replace(
+                "demo-firmware", "debug-test"),
+        },
+    )
+
+    release = {
+        "board": "my-board", "variant": "release",
+        "packages": ["demo-firmware"],
+    }
+    expand_hardware_packages(release, project_root=tmp_path)
+    assert release["rootfs"]["custom_packages"] == ["runtime"]
+
+    debug = {
+        "board": "my-board", "variant": "debug",
+        "packages": ["demo-firmware"],
+    }
+    expand_hardware_packages(debug, project_root=tmp_path)
+    assert debug["rootfs"]["custom_packages"] == [
+        "runtime", "debug-test"]
 
 
 def test_nonexistent_package_errors(demo_root: Path):

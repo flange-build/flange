@@ -1,5 +1,6 @@
 """Radxa Dragon Q8B / SC8280XP 配置与复用路径。"""
 
+import hashlib
 import zipfile
 from pathlib import Path
 from unittest.mock import Mock, call, patch
@@ -145,9 +146,14 @@ def test_rootfs_firmware_and_ucm_inputs_are_complete():
     assert {
         "bluez", "protection-domain-mapper", "qrtr-tools",
         "libgl1-mesa-dri", "mesa-vulkan-drivers", "linux-firmware",
+        "acl", "libbsd0", "libyaml-0-2", "udev",
     }.issubset(packages)
+    assert "fastrpc" in cfg["rootfs"]["groups"]
 
-    firmware = cfg["rootfs"]["extra_firmware"][0]
+    firmware_by_name = {
+        item["name"]: item for item in cfg["rootfs"]["extra_firmware"]
+    }
+    firmware = firmware_by_name["radxa-firmware-sc8280xp"]
     destinations = {
         entry if isinstance(entry, str) else entry["dest"]
         for entry in firmware["files"]
@@ -159,9 +165,67 @@ def test_rootfs_firmware_and_ucm_inputs_are_complete():
         "qcom/vpu/vpu20_p4_gen2_s6.mbn",
     }.issubset(destinations)
     assert len(firmware["commit"]) == 40
-    deb = cfg["rootfs"]["extra_debs"][0]
-    assert deb["name"] == "alsa-ucm-conf-radxa-q8b"
-    assert len(deb["sha256"]) == 64
+    assert "firmware-qcom-audioreach" in cfg["rootfs"]["custom_packages"]
+    topology_package = (
+        PROJECT_ROOT / "components/packages/firmware-qcom-audioreach"
+    )
+    assert cfg["external_apps"]["firmware-qcom-audioreach"] == {
+        "local_path": str(topology_package)
+    }
+    topology_path = (
+        topology_package / "firmware/qcom/sc8280xp/"
+        "SC8280XP-Radxa-Dragon-Q8B-tplg.bin"
+    )
+    assert topology_path.stat().st_size == 28660
+    assert hashlib.sha256(topology_path.read_bytes()).hexdigest() == (
+        "737787a3b6a52ff9b66e1f5208e98c6491180130ffbff4a770"
+        "c40cca34f63ee6")
+    debs = {
+        deb["name"]: deb for deb in cfg["rootfs"]["extra_debs"]
+    }
+    assert len(debs["alsa-ucm-conf-radxa-q8b"]["sha256"]) == 64
+
+    fastrpc_package = (
+        PROJECT_ROOT / "components/packages/radxa-q8b-fastrpc"
+    )
+    assert "radxa-q8b-fastrpc" in cfg["rootfs"]["custom_packages"]
+    assert "radxa-q8b-fastrpc-test" not in cfg["rootfs"]["custom_packages"]
+    assert cfg["external_apps"]["radxa-q8b-fastrpc"] == {
+        "local_path": str(fastrpc_package / "runtime")
+    }
+    runtime = fastrpc_package / "runtime/rootfs"
+    assert hashlib.sha256(
+        (runtime / "usr/lib/aarch64-linux-gnu/libcdsprpc.so.1.0.0")
+        .read_bytes()
+    ).hexdigest() == (
+        "4a2eb1b30f90cbb8abc5d7c09d2e9131dec46538a63017619524596fe873960d"
+    )
+    assert hashlib.sha256(
+        (runtime / "usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp/"
+         "cdsp/fastrpc_shell_3").read_bytes()
+    ).hexdigest() == (
+        "5f8844f7d13d72e07a9d224366c834b2bfa9e2283dfe922ce2b83fd945e60ee6"
+    )
+    assert (runtime / "usr/lib/dsp").readlink() == Path(
+        "/usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp")
+
+
+def test_q8b_debug_includes_fastrpc_v68_test_only():
+    debug = resolve_config("radxa-dragon-q8b", "default", "debug")
+    release = resolve_config("radxa-dragon-q8b", "default", "release")
+
+    assert "radxa-q8b-fastrpc-test" in debug["rootfs"]["custom_packages"]
+    assert "radxa-q8b-fastrpc-test" not in release["rootfs"]["custom_packages"]
+    test_package = (
+        PROJECT_ROOT / "components/packages/radxa-q8b-fastrpc/test"
+    )
+    assert debug["external_apps"]["radxa-q8b-fastrpc-test"] == {
+        "local_path": str(test_package)
+    }
+    test_binary = test_package / "rootfs/usr/bin/fastrpc_test"
+    assert hashlib.sha256(test_binary.read_bytes()).hexdigest() == (
+        "aa083f32accbed1962264a04ffd9b80cca14e1efee689843de8a05fd71e7ecd3"
+    )
 
 
 def test_q6a_ufs_provision_inputs_are_pinned():

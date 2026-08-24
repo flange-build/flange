@@ -1,0 +1,2 @@
+# FastRPC runtime 合并了参考 library deb 的动态链接库。
+activate-noawait ldconfig

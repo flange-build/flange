@@ -1,0 +1,27 @@
+app:
+  name: radxa-q8b-fastrpc
+  version: 1.0.7-1flange1
+  description: Radxa Dragon Q8B FastRPC 用户态与 ADSP/CDSP runtime
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+maintainer_scripts:
+  postinst: debian/postinst
+  prerm: debian/prerm
+  postrm: debian/postrm
+  triggers: debian/triggers
+
+depends:
+  - acl
+  - libc6 (>= 2.34)
+  - libbsd0
+  - libyaml-0-2
+  - systemd
+  - udev

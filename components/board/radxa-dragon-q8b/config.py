@@ -7,10 +7,16 @@ BOARD = {
     "board": "radxa-dragon-q8b",
     "soc": "sc8280xp",
     "platform": "qualcommsc8280xp",
+    "packages": [
+        "firmware-qcom-audioreach",
+        "radxa-q8b-fastrpc",
+    ],
     "kernel": {
         "dtb": "sc8280xp-radxa-dragon-q8b",
     },
     "rootfs": {
+        "+groups": ["fastrpc"],
+        "+packages": ["acl", "libbsd0", "libyaml-0-2", "udev"],
         "+extra_firmware": [
             {
                 "name": "radxa-firmware-sc8280xp",

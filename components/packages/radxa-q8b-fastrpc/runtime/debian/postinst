@@ -1,0 +1,11 @@
+#!/bin/sh
+set -xe
+
+# rootfs 构建发生在 chroot 中，不启动宿主机或目标机服务。
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+    systemctl start \
+        adsprpcd.service \
+        adsprpcd_audiopd.service \
+        cdsprpcd.service >/dev/null || true
+fi

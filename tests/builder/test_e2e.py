@@ -25,7 +25,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from builder.app import AppBuilder
+from builder.config.registry import resolve_config
 from builder.engine import DEPENDENCY_GRAPH, BuildEngine, _topo_sort
+from builder.source import SourceManager
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +99,102 @@ _SKIP_IF_NO_ADBD = pytest.mark.skipif(
     not _ADBD_EXISTS,
     reason=f"adbd App 目录不存在：{_ADBD_DIR}，跳过端到端测试",
 )
+
+
+def test_q8b_firmware_package_builds_flange_deb(tmp_path: Path):
+    """package 固件应由 flange 重打 deb，并保留目标路径与原始内容。"""
+    config = resolve_config("radxa-dragon-q8b", "default", "release")
+    source = SourceManager(
+        sources_dir=tmp_path / "sources",
+        project_root=_PROJECT_ROOT,
+    )
+    builder = AppBuilder(
+        docker=MagicMock(),
+        source=source,
+        config=config,
+        project_dir=_PROJECT_ROOT,
+    )
+    builder._output_dir = tmp_path / "app"
+
+    deb_path = builder.build_one("firmware-qcom-audioreach")
+
+    assert deb_path.name == "firmware-qcom-audioreach_1.0.4-2_arm64.deb"
+    members = _read_ar_members(deb_path)
+    control = _read_tar_member(
+        members["control.tar.gz"], "./control"
+    ).decode("utf-8")
+    assert "Package: firmware-qcom-audioreach" in control
+    assert "Depends:" not in control
+    firmware_member = (
+        "./lib/firmware/qcom/sc8280xp/"
+        "SC8280XP-Radxa-Dragon-Q8B-tplg.bin"
+    )
+    assert firmware_member in _read_tar_names(members["data.tar.gz"])
+    source_blob = (
+        _PROJECT_ROOT / "components/packages/firmware-qcom-audioreach/"
+        "firmware/qcom/sc8280xp/SC8280XP-Radxa-Dragon-Q8B-tplg.bin"
+    )
+    assert _read_tar_member(
+        members["data.tar.gz"], firmware_member
+    ) == source_blob.read_bytes()
+
+
+def test_q8b_fastrpc_package_builds_flange_deb(tmp_path: Path):
+    """FastRPC 参考 deb payload 应由 flange 重打成 Q8B 专用 deb。"""
+    config = resolve_config("radxa-dragon-q8b", "default", "release")
+    source = SourceManager(
+        sources_dir=tmp_path / "sources",
+        project_root=_PROJECT_ROOT,
+    )
+    builder = AppBuilder(
+        docker=MagicMock(),
+        source=source,
+        config=config,
+        project_dir=_PROJECT_ROOT,
+    )
+    builder._output_dir = tmp_path / "app"
+
+    deb_path = builder.build_one("radxa-q8b-fastrpc")
+
+    assert deb_path.name == "radxa-q8b-fastrpc_1.0.7-1flange1_arm64.deb"
+    members = _read_ar_members(deb_path)
+    control = _read_tar_member(
+        members["control.tar.gz"], "./control"
+    ).decode("utf-8")
+    assert "Package: radxa-q8b-fastrpc" in control
+    assert "Depends: acl, libc6 (>= 2.34), libbsd0, libyaml-0-2" in control
+    control_tar = members["control.tar.gz"]
+    control_names = _read_tar_names(control_tar)
+    for name in ("postinst", "prerm", "postrm", "triggers"):
+        assert f"./{name}" in control_names
+    scripts = "\n".join(
+        _read_tar_member(control_tar, f"./{name}").decode("utf-8")
+        for name in ("postinst", "prerm", "postrm")
+    )
+    assert "adsprpcd.service" in scripts
+    assert "cdsprpcd.service" in scripts
+    assert "deb-systemd-helper" not in scripts
+    for excluded in ("sdsprpcd.service", "gdsp0rpcd.service",
+                     "gdsp1rpcd.service", "cdsp1rpcd.service"):
+        assert excluded not in scripts
+    triggers = _read_tar_member(
+        control_tar, "./triggers"
+    ).decode("utf-8")
+    assert triggers.endswith("activate-noawait ldconfig\n")
+    for name in ("postinst", "prerm", "postrm"):
+        assert _get_tar_info(control_tar, f"./{name}").mode == 0o755
+    data = members["data.tar.gz"]
+    names = _read_tar_names(data)
+    assert "./usr/sbin/cdsprpcd" in names
+    assert "./usr/lib/aarch64-linux-gnu/libcdsprpc.so.1.0.0" in names
+    assert (
+        "./usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp/"
+        "cdsp/fastrpc_shell_3"
+    ) in names
+    dsp_link = _get_tar_info(data, "./usr/lib/dsp")
+    assert dsp_link.issym()
+    assert dsp_link.linkname == (
+        "/usr/share/qcom/sc8280xp/radxa/dragon-q8b/dsp")
 
 
 # ---------------------------------------------------------------------------

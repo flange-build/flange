@@ -43,6 +43,7 @@ def _make_spec(
     systemd_unit: str = "systemd/test-daemon.service",
     auto_start: bool = True,
     include_systemd: bool = True,
+    maintainer_scripts: Dict[str, str] = None,
 ) -> AppSpec:
     """构造测试用 AppSpec 的辅助函数。"""
     systemd = None
@@ -60,6 +61,7 @@ def _make_spec(
         depends=depends or [],
         conffiles=conffiles or [],
         data_dirs=data_dirs or [],
+        maintainer_scripts=maintainer_scripts or {},
         systemd=systemd,
         build=BuildConfig(),
     )
@@ -420,6 +422,22 @@ class TestGenerateControl:
         spec = _make_spec(data_dirs=["/var/lib/test-daemon"])
         result = generate_control(spec, "aarch64")
         assert "mkdir -p /var/lib/test-daemon" in result["postinst"]
+
+    def test_vendor_maintainer_scripts_are_mapped(self):
+        scripts = {
+            "postinst": "#!/bin/sh\nset -xe\n",
+            "triggers": "activate-noawait ldconfig\n",
+        }
+        spec = _make_spec(
+            app_type="vendor",
+            include_systemd=False,
+            maintainer_scripts=scripts,
+        )
+
+        result = generate_control(spec, "aarch64")
+
+        assert result["postinst"] == scripts["postinst"]
+        assert result["triggers"] == scripts["triggers"]
 
 
 # ---------------------------------------------------------------------------

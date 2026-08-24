@@ -189,6 +189,13 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
   - `rootfs.extra_firmware`：从外部 git 仓库拉取固件文件（如 `radxa-firmware`）；`source` 字段支持 `repo`（默认）/ `kernel` / `bootloader` / `oot:<name>` 复用同 build 已 ensure 的源，避免重复 clone；`files` 元素支持 `str` 或 `{src, dest}` dict 形态做重命名（如给无后缀 vendor 固件统一补 `.bin`）
   - `rootfs.extra_debs`：从 URL 直下不在 Ubuntu 官方源的预编译 deb，必须声明 `sha256` 校验
   - 两者均支持 `+` 追加语义（platform → SoC → board 叠加），缓存哈希纳入配置变更，改动会触发 Phase 2 重建
+- `components/packages` 中的 `vendor` component MUST 注册为本地 custom package，
+  由 flange 的 AppBuilder / DebBuilder 重新打成自有 deb 后通过 rootfs 的统一
+  `dpkg` 流程安装；MUST NOT 直接安装其参考的上游发行版 deb。vendor App MAY
+  通过 `rootfs/` 目录按目标根文件系统布局递归携带文件与符号链接；需要保留
+  安装、升级、卸载语义时，MAY 通过 `maintainer_scripts` 将 App 内的
+  `preinst` / `postinst` / `prerm` / `postrm` / `triggers` 映射进 deb
+  `control.tar.gz`，脚本路径 MUST 为 App 目录内的相对路径。
 - 三层继承：platform → SoC → board，通过 `deep_merge()` 合并
 - SoC 层只声明芯片级事实（架构、工具链、固件协议与硬件能力）；具体显示、存储路由、
   AMP enable 和 rootfs package policy 属于 board/product，MUST NOT 固化在 SoC 层
