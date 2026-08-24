@@ -24,6 +24,9 @@ docker-compose.override.yml
 # Obsidian 工作区配置（每人本地化，不入库）
 .obsidian/
 
+# macOS 文件系统元数据
+.DS_Store
+
 # Claude Code 本地运行时状态（.claude/commands/ 与 .claude/skills/ 仍入库）
 .claude/scheduled_tasks.lock
 .claude/projects/
