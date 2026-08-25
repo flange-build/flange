@@ -6,21 +6,15 @@
 
 from pathlib import Path
 
-from builder.config.registry import discover_boards, get_board_config
+from builder.config.registry import discover_boards
 
 
 def _merged_configs(
     boards: dict[str, dict],
     project_root: Path | None = None,
 ) -> dict[str, dict]:
-    """返回 {board_name: merged_config} 映射（三层合并后）。
-
-    products/variants 等字段可能来自 platform 层，必须用合并结果才能正确读取。
-    """
-    return {
-        name: get_board_config(name, boards=boards, project_root=project_root)
-        for name in boards
-    }
+    """返回 board 身份映射；身份投影已包含 products/variants。"""
+    return boards
 
 
 def get_valid_targets(

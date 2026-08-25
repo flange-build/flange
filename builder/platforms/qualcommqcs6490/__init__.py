@@ -1,6 +1,6 @@
 """Qualcomm QCS6490 平台构建策略工厂（flange 首个 Qualcomm 平台）。
 
-启动/刷写模型见 components/platform/qualcommqcs6490/qcs6490/config.py。
+启动/刷写模型见 components/platform/qualcommqcs6490/qcs6490/config.jsonnet。
 各组件构建器在同目录子模块中实现；create_builder 懒加载以便分组落地。
 """
 

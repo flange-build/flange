@@ -197,6 +197,13 @@ ENV PATH="${SWIFT_HOME}/bin:${PATH}"
 COPY docker/meson/cross-aarch64.ini /etc/meson/cross-aarch64.ini
 COPY docker/meson/cross-armhf.ini   /etc/meson/cross-armhf.ini
 
+# flange build 在容器内求值配置，固定安装与 pyproject.toml 相同版本的
+# Jsonnet Python binding；构建镜像时同步验证模块导入和最小求值。
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
+    && python3 -m pip install --no-cache-dir --break-system-packages jsonnet==0.22.0 \
+    && python3 -c 'import json, _jsonnet; assert json.loads(_jsonnet.evaluate_snippet("docker-smoke.jsonnet", "{ ok: true }")) == {"ok": True}' \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONPATH=/workspace
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh

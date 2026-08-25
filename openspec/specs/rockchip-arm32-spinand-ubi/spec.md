@@ -11,9 +11,9 @@ Rockchip kernel 与 bootloader builder SHALL 从 FINAL_CONFIG 读取组件 `arch
 `arch/arm64/boot/dts/rockchip` 的现有行为。
 
 #### Scenario: ARM32 配置选择正确工具链与路径
-- **WHEN** 合并配置包含 `arch=armhf`、`kernel.arch=arm`、
+- **WHEN** 合并配置包含 `architecture.userspace=armhf`、`architecture.kernel=arm`、
   `kernel.cross_compile=/opt/arm-linux-gcc10/bin/arm-none-linux-gnueabihf-` 和空
-  `kernel.dts_dir`
+  `kernel.device_tree.directory`
 - **THEN** kernel builder 使用 `ARCH=arm` 和配置声明的固定 gcc-10.3.1 前缀
 - **AND** 从 `arch/arm/boot` 与 `arch/arm/boot/dts` 构建并收集目标文件
 

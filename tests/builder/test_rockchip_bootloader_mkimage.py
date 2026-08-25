@@ -19,6 +19,9 @@ def test_compile_missing_mkimage_chip_raises_with_field_name(tmp_path):
     """SoC config 不带 rkbin.mkimage_chip 时，compile() 必须报含字段名的 KeyError。"""
     builder = RockchipBootloaderBuilder(docker=None, source=None)
     config = {
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "rkbin": {
             "ini_prefix": "RK3566",
             "trust_ini_prefix": "RK3568",

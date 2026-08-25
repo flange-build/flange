@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 from builder.base import ComponentBuilder
+from builder.config.canonical import kernel_device_tree
 
 # grub-mkimage 嵌入的模块集：GPT/FAT/ext2 读盘 + label 搜索 + linux/devicetree 加载。
 # 注：Ubuntu 的 grub-efi-arm64-bin 把 `devicetree` 命令打包在 fdt.mod 里
@@ -41,7 +42,7 @@ class Qcs6490BootBuilder(ComponentBuilder):
         efi_boot = esp / "EFI" / "BOOT"
         efi_boot.mkdir(parents=True)
 
-        dtb = config["kernel"]["dtb"]
+        _, dtb = kernel_device_tree(config)
         board_name = config["board"].replace("-", " ").title()
         kargs = config["boot"].get(
             "kernel_args", "acpi=off console=ttyMSM0,115200 root=LABEL=rootfs rootwait")

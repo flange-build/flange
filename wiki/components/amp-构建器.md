@@ -8,12 +8,12 @@ sources:
   - components/app/rk3568_amp_demo/CMakeLists.txt
   - components/app/rk3568_amp_rtt_demo/applications/main.c
   - components/app/rk3506_amp_uart4_rtt_demo/applications/main.c
-  - components/platform/rockchip/rk3506b/config.py
-  - components/platform/rockchip/rk3566/config.py
+  - components/platform/rockchip/rk3506b/config.jsonnet
+  - components/platform/rockchip/rk3566/config.jsonnet
   - builder/platforms/rockchip/__init__.py
   - builder/cache.py
   - builder/oot_mounts.py
-  - components/board/atk-rk3506b/config.py
+  - components/board/atk-rk3506b/config.jsonnet
 related:
   - "[[rockchip 平台]]"
   - "[[AMP 协处理器与 rpmsg]]"

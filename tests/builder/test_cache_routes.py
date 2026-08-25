@@ -13,15 +13,15 @@ def _config(parameter=None) -> dict:
         "board": "cache-route-test",
         "product": "default",
         "variant": "release",
-        "arch": "armhf",
+        "architecture": {
+            "userspace": "armhf", "kernel": "arm", "bootloader": "arm",
+        },
         "platform": "rockchip",
         "soc": "rk3506b",
         "kernel": {
-            "arch": "arm",
             "cross_compile": "arm-linux-gnueabihf-",
             "image": "zImage",
-            "dts": "rk3506b-test",
-            "dts_dir": "",
+            "device_tree": {"directory": "", "name": "rk3506b-test"},
             "boot_format": "fit",
             "boot_its": "boot.its",
         },
@@ -99,8 +99,12 @@ def test_mtd_image_cache_requires_bundle_manifest_not_raw_img(tmp_path):
 
 def test_gpt_ext4_defaults_keep_existing_required_artifacts(tmp_path):
     config = _config()
-    config["arch"] = "aarch64"
-    config["kernel"] = {"dts": "rk3566-test", "dts_dir": "rockchip"}
+    config["architecture"] = {
+        "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+    }
+    config["kernel"] = {
+        "device_tree": {"directory": "rockchip", "name": "rk3566-test"},
+    }
     config["rootfs"] = {
         "url": "https://example.invalid/ubuntu-base-arm64.tar.gz",
         "packages": [],

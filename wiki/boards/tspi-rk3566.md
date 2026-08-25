@@ -3,7 +3,7 @@ title: tspi-rk3566
 type: board
 status: stable
 sources:
-  - components/board/tspi-rk3566/config.py
+  - components/board/tspi-rk3566/config.jsonnet
   - components/board/tspi-rk3566/patches/kernel/0001-dts-firmware_class-path-fix.patch
   - components/board/tspi-rk3566/patches/kernel/0002-bcmdhd-set-fw-ampak-path-brcm.patch
   - components/board/tspi-rk3566/patches/kernel/0003-add-tspi-rk3566-amp-dts.patch
@@ -35,7 +35,7 @@ lunch tspi-rk3566-amp-rtt-debug    # AMP：cpu3 跑 RT-Thread RTOS 从核
 lunch tspi-rk3566-foc-debug        # AMP：cpu3 RT-Thread 驱动三相无刷电机
 ```
 
-**amp product**：经条件键开 amp（`config.amp`，复用 rk3568 SDK，同 die）、选专用 amp dts（patch 0003）、加 rpmsg 字符设备、用含非 raw `amp` 分区的 product 作用域分区表、U-Boot 经 `bootloader.+defconfig:amp` 开 AMP loader。**amp-rtt product**：同 amp 但 `mode=rt-thread`（cpu3 跑 RTOS，`app:amp-rtt=rk3568_amp_rtt_demo`），dts/分区/U-Boot/内核驱动全复用 amp（条件键单值匹配、故各写一份 `:amp-rtt`；分区抽 `_AMP_PARTITIONS` 共享）。**foc product**：同 amp-rtt 基建，`app:foc=rk3568_amp_rtt_foc` 驱动三相无刷电机（AS5600 有感电压闭环，见 [[rk3568_amp_rtt_foc]]），并经 `tspi-rk3566-amp-foc.dtso` 把 i2c2/pwm12-14/EN/FLIP 整组从 Linux 摘给从核独占。default 不受影响。机制见 [[AMP 协处理器与 rpmsg]]、构建见 [[amp 构建器]]。
+**amp product**：Jsonnet 按 product 启用 amp（复用 rk3568 SDK，同 die）、选择专用设备树、通过 `kernel.config` 加 rpmsg 字符设备、切换 AMP 分区表，并通过 `bootloader.config` 开启 AMP loader。**amp-rtt product**：复用同一套配置，`mode=rt-thread` 且 cpu3 运行 RTOS。**foc product**：在 amp-rtt 基础上选择 `rk3568_amp_rtt_foc`，并经 `tspi-rk3566-amp-foc.dtso` 把 i2c2/pwm12-14/EN/FLIP 从 Linux 摘给从核独占。default 不受影响。机制见 [[AMP 协处理器与 rpmsg]]、构建见 [[amp 构建器]]。
 
 ## 关键差异点
 

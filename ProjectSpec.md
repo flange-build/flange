@@ -56,7 +56,7 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 | Qualcomm | `edl-ng` | USB（EDL） |
 
 刷写工具运行在宿主机上，不纳入 Docker 构建环境。各平台 `flash_tool` 在
-`components/platform/<vendor>/config.py` 声明。
+`components/platform/<vendor>/config.jsonnet` 声明。
 
 ### 2.3 组件级构建与刷写
 
@@ -87,9 +87,9 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
   （recovery）；进入 recovery 时通过 Linux reboot reason
   `reboot("recovery")` 让 U-Boot 本次选择 `recovery.conf`，可选
   `flange_boot_once=recovery` 作为断电保持兜底，不持久修改 extlinux DEFAULT
-- **Device Tree Overlay（设备树覆盖）**：平台可通过 `boot.dtb_overlays`
-  声明需要构建并打包进 boot 分区的 `.dtbo` 全集，通过
-  `boot.default_overlays` 声明 extlinux 默认启动按顺序应用的子集；
+- **Device Tree Overlay（设备树覆盖）**：运行期 overlay 统一通过
+  `boot.overlays.{intree,vendor,board,package,enabled}` 声明来源与启用顺序；
+  构建期 DTBO 合并单独使用 `kernel.device_tree.build_overlays`；
   boot 分区统一使用 `/extlinux/` 存放 Image 和 extlinux 配置，使用
   `/dtbs/<vendor>/` 存放 base DTB，overlay 位于
   `/dtbs/<vendor>/overlay/`。extlinux 中的路径以 boot 分区根为基准，
@@ -170,27 +170,35 @@ Shell 脚本是构建系统的核心语言。
 
 ## 6. Python 构建系统规范
 
-Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 Python 编写。
+Python 是本项目的构建引擎语言；配置内容使用 Jsonnet 描述，求值后以
+canonical JSON（规范化 JSON）交给 Python builder。
 
 ### 6.1 文件组织
-- 配置引擎位于 `builder/config/` 子包（merge.py、registry.py、query.py、loader.py、apps.py、validate.py）
+- 配置引擎位于 `builder/config/` 子包（jsonnet.py、registry.py、query.py、loader.py、apps.py、validate.py）
 - 构建引擎位于 `builder/` 目录
 - 平台策略类位于 `builder/platforms/<vendor>/`（如 `builder/platforms/rockchip/kernel.py`）
-- 平台无关 rootfs 基线配置位于 `components/rootfs/config.py`
-- 平台/SoC/板级配置位于 `components/platform/` 和 `components/board/` 下的 `config.py` 文件
+- 平台无关 rootfs 基线配置位于 `components/rootfs/config.jsonnet`
+- 平台/SoC/板级配置位于 `components/platform/` 和 `components/board/` 下的 `config.jsonnet` 文件
 - 分区表转换器位于 `builder/partition/`
 
 ### 6.2 配置体系
-- rootfs 基线：`components/rootfs/config.py` 可声明平台无关的 rootfs 字段，先于硬件配置继承合并
+- 注释约束：每个 `*.jsonnet` 和 `*.libsonnet` 配置源的第一条非空内容 MUST 是中文职责注释，
+  明确所属层级或共享范围、适用对象和配置用途；硬件限制、magic value、workaround、
+  product/variant 条件原因 MUST 在对应字段旁说明。配置格式迁移 MUST 保留并按新语义
+  改写原有有效注释，不得只迁移值而丢弃设计依据
+- rootfs 基线：`components/rootfs/config.jsonnet` 声明平台无关的 rootfs 字段，先于硬件配置组合
 - rootfs ubuntu-base：`rootfs.url` 必须配套声明可信的 `rootfs.sha256`；下载先写临时文件，
   摘要校验通过后方可原子替换缓存文件
 - rootfs 包集合：`rootfs.package_sets` 定义命名包集合，`rootfs.package_set` 选择集合；
-  可用 `+package_set:debug` / `+package_set:release` 按 product/variant 追加集合。配置解析后展开为
-  `rootfs.packages`，构建器只消费最终包列表。
+  product/variant 条件由 Jsonnet `if` 表达。求值边界将其展开为
+  `rootfs.packages`，builder 只消费最终包列表。
 - rootfs 第三方资源声明式安装：
-  - `rootfs.extra_firmware`：从外部 git 仓库拉取固件文件（如 `radxa-firmware`）；`source` 字段支持 `repo`（默认）/ `kernel` / `bootloader` / `oot:<name>` 复用同 build 已 ensure 的源，避免重复 clone；`files` 元素支持 `str` 或 `{src, dest}` dict 形态做重命名（如给无后缀 vendor 固件统一补 `.bin`）
+  - `rootfs.extra_firmware`：通过 `{source: {name, subpath}}` 引用顶层
+    `sources`，或直接使用统一 `{url, sha256, filename}` 下载 descriptor；
+    `files` 元素支持字符串或 `{src, dest}` 做重命名
   - `rootfs.extra_debs`：从 URL 直下不在 Ubuntu 官方源的预编译 deb，必须声明 `sha256` 校验
-  - 两者均支持 `+` 追加语义（platform → SoC → board 叠加），缓存哈希纳入配置变更，改动会触发 Phase 2 重建
+  - 数组增减使用 Jsonnet 原生 `+` 与 `components/config/lib.libsonnet`
+    的 `without`；缓存哈希纳入配置和 source 内容变更
 - `components/packages` 中的 `vendor` component MUST 注册为本地 custom package，
   由 flange 的 AppBuilder / DebBuilder 重新打成自有 deb 后通过 rootfs 的统一
   `dpkg` 流程安装；MUST NOT 直接安装其参考的上游发行版 deb。vendor App MAY
@@ -198,18 +206,20 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
   安装、升级、卸载语义时，MAY 通过 `maintainer_scripts` 将 App 内的
   `preinst` / `postinst` / `prerm` / `postrm` / `triggers` 映射进 deb
   `control.tar.gz`，脚本路径 MUST 为 App 目录内的相对路径。
-- 三层继承：platform → SoC → board，通过 `deep_merge()` 合并
+- 固定组合顺序：rootfs → platform → SoC → board，由 Jsonnet 对象继承、
+  `+:` 和数组表达式完成
 - SoC 层只声明芯片级事实（架构、工具链、固件协议与硬件能力）；具体显示、存储路由、
   AMP enable 和 rootfs package policy 属于 board/product，MUST NOT 固化在 SoC 层
-- 条件标记：`+packages:debug`（追加语义）、`packages:smart-display`（条件覆盖）
+- 条件配置：使用 Jsonnet `if product == ...` / `if variant == ...`，不得把
+  未求值的 product/variant 子树交给 builder
 - 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`
-- 配置解析：`resolve_config(board, product, variant)` 返回扁平的 FINAL_CONFIG dict
-- 新增板级支持只需创建 `components/board/<name>/config.py`，无需修改框架代码
+- 配置解析：`resolve_config(board, product, variant)` 返回已校验的 canonical JSON dict
+- 新增板级支持只需创建 `components/board/<name>/config.jsonnet`，无需修改框架代码
 
 ### 6.3 框架与策略分离
 - **框架层**（`builder/base.py`）：ComponentBuilder 基类，负责源码生命周期、补丁管理、增量编译
 - **策略层**（`builder/platforms/<vendor>/*.py`）：平台子类，实现 `configure()`、`compile()`、`collect()` 方法
-- 配置通过 Python dict 直接传入（无环境变量契约）
+- 配置通过求值后的 Python dict 传入（无环境变量契约）
 - 新增平台时只需在 `builder/platforms/` 下添加策略子类，MUST NOT 修改框架层代码
 
 ### 6.4 构建与刷写约定
@@ -219,7 +229,7 @@ Python 是本项目的构建引擎语言，构建规则和配置引擎均使用 
 - 产物目录：`.build/target/<board>/<product>/<variant>/`（根目录 `target` 软链接指向此）
 
 ### 6.5 配置驱动原则
-- 新增板级支持时，**只允许创建配置文件**（`components/board/<name>/config.py`），不得修改框架层代码
+- 新增板级支持时，**只允许创建配置文件**（`components/board/<name>/config.jsonnet`），不得修改框架层代码
 - 所有可变信息从 FINAL_CONFIG dict 获取
 - 违反此原则说明框架抽象不足，应先重构框架再新增支持
 
@@ -295,8 +305,8 @@ flange/
 │   ├── chroot.py       #   ChrootContext（mount/umount 管理）
 │   ├── flash.py        #   flash.sh 自动生成
 │   ├── config/         #   配置子系统
-│   │   ├── merge.py    #     deep_merge + resolve_conditions
-│   │   ├── registry.py #     统一注册表 + 三层合并
+│   │   ├── jsonnet.py  #     Jsonnet 求值与固定层级组合
+│   │   ├── registry.py #     Jsonnet 配置注册表
 │   │   └── query.py    #     target 解析（给 CLI lunch 用）
 │   ├── partition/      #   分区表系统
 │   │   ├── __init__.py #     中间格式（PartitionTable/Partition）
@@ -309,15 +319,16 @@ flange/
 │           └── image.py       # RockchipImageBuilder
 │
 ├── components/         # 【内容层】仓库携带的原料（版本控制跟踪）
-│   ├── platform/       #   平台/SoC 配置（三层继承前两层）+ patches
+│   ├── config/         #   Jsonnet 公共函数与平台共享数据
+│   ├── platform/       #   平台/SoC 配置（固定组合的中间两层）+ patches
 │   │   └── rockchip/
-│   │       ├── config.py   #     Rockchip 平台配置
+│   │       ├── config.jsonnet #  Rockchip 平台配置
 │   │       ├── patches/    #     平台级补丁（kernel/bootloader）
 │   │       └── rk3566/
-│   │           └── config.py  # RK3566 SoC 配置
+│   │           └── config.jsonnet # RK3566 SoC 配置
 │   ├── board/          #   板级配置（第三层）+ 板级数据
 │   │   └── <board-name>/
-│   │       ├── config.py   #     板级配置（含 products/variants 声明）
+│   │       ├── config.jsonnet #  板级配置（含 products/variants 声明）
 │   │       ├── overlay/    #     文件系统覆盖层
 │   │       └── patches/    #     板级补丁
 │   ├── app/            #   App 定义
@@ -440,7 +451,7 @@ feat(kernel): 添加内核编译支持
 - **u-boot / kernel 构建**按目标架构使用容器内独立固定的 gcc-10 工具链。AArch64 默认使用 kernel.org crosstool **gcc-10.5**（前缀 `/opt/aarch64-gcc10/bin/aarch64-linux-`），由 `builder/base.py` 的 `ComponentBuilder.CROSS` 声明；RK3506B ARM32 通过 SoC 配置覆盖为 ATK SDK 同款 Arm GNU Toolchain **gcc-10.3.1**（前缀 `/opt/arm-linux-gcc10/bin/arm-none-linux-gnueabihf-`）。不得把 Ubuntu 24.04 的系统 gcc-13 用于这些老 Rockchip 低层产物；RK3576 的实机根因详见 openspec `selfbuild-rk3576-spi-image`，RK3506B 的工具链约束详见 openspec `add-rk3506b-atk-rk3506b`
 - **app / deb 组件构建**（`builder/app.py`）仍用 Docker 系统包交叉编译器（`gcc-aarch64-linux-gnu` / `gcc-arm-linux-gnueabihf`）
 - 平台策略类（builder/platforms/）直接调用交叉编译器，无需额外工具链注册机制
-- 板级配置通过 config.py 中的 dict 声明（platform/SoC/board 三层继承）
+- 板级配置通过 `config.jsonnet` 声明（rootfs/platform/SoC/board 固定组合）
 
 ### 11.4 输出管理
 - 构建产物收集到 `.build/target/<board>/<product>/<variant>/`（git ignored，根目录 `target` 软链接直达）
@@ -471,7 +482,7 @@ feat(kernel): 添加内核编译支持
   name/offset/size 交叉校验。支持身份读取的平台还必须拒绝多设备，并核对 SoC/存储介质
 
 ### 12.3 平台适配
-- 每块板子的 `config.py` 声明所属平台和刷写工具
+- 每块板子的 `config.jsonnet` 声明所属 platform/SoC；平台层声明刷写工具
 - flash.sh 根据 FINAL_CONFIG 中的 `flash_tool` 字段自动选择刷写工具
 - 平台特有的刷写逻辑由 `builder/flash.py` 模板化生成
 

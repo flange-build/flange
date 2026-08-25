@@ -118,10 +118,12 @@ class TestDefaultLabelSwitching:
 def _rk3566_cfg(*, recovery_enabled: bool) -> dict:
     return {
         "platform": "rockchip", "soc": "rk3566", "board": "test",
-        "kernel": {"dts": "rk3566-test"},
+        "kernel": {
+            "device_tree": {"directory": "rockchip", "name": "rk3566-test"},
+        },
         "boot": {
             "kernel_args": "console=ttyS2,1500000 loglevel=7",
-            "default_overlays": [],
+            "overlays": {"enabled": []},
         },
         "recovery": {"enabled": recovery_enabled},
     }
@@ -164,9 +166,14 @@ class TestRockchipBootExtlinux:
 def _a733_cfg(*, recovery_enabled: bool) -> dict:
     return {
         "platform": "allwinnera733", "soc": "a733", "board": "test",
-        "kernel": {"dts": "sun60i-a733-test"},
-        "boot": {"dtb_filename": "sunxi.dtb",
-                 "kernel_args": "earlyprintk=sunxi-uart,0x2500000 console=ttyAS0,115200"},
+        "kernel": {
+            "device_tree": {
+                "directory": "allwinner", "name": "sun60i-a733-test",
+            },
+        },
+        "boot": {
+            "kernel_args": "earlyprintk=sunxi-uart,0x2500000 console=ttyAS0,115200",
+        },
         "recovery": {"enabled": recovery_enabled},
     }
 

@@ -3,9 +3,9 @@ title: radxa-dragon-q8b
 type: board
 status: wip
 sources:
-  - components/board/radxa-dragon-q8b/config.py
+  - components/board/radxa-dragon-q8b/config.jsonnet
   - components/board/radxa-dragon-q8b/patches/kernel/0001-dts-q8b-set-usb-roles.patch
-  - components/platform/qualcommsc8280xp/sc8280xp/config.py
+  - components/platform/qualcommsc8280xp/sc8280xp/config.jsonnet
   - components/platform/qualcommsc8280xp/patches/kernel/0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch
   - components/platform/qualcommsc8280xp/patches/kernel/0002-net-tc956x-zero-init-irq-domain-info.patch
   - openspec/changes/add-radxa-dragon-q8b/

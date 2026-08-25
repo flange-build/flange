@@ -8,6 +8,8 @@
 
 from pathlib import Path
 
+from builder.config.canonical import kernel_arch, kernel_device_tree
+from builder.kconfig import render_kconfig
 from builder.kernel_base import KernelBuilder
 
 
@@ -16,6 +18,7 @@ class Qcs6490KernelBuilder(KernelBuilder):
     ARCH = "arm64"
 
     def configure(self, src_dir: Path, config: dict):
+        self.ARCH = kernel_arch(config)
         # 大小写不敏感 FS 适配（macOS 宿主挂载卷上 git checkout 会丢同名异写文件）
         self._write_case_insensitive_fix(src_dir)
 
@@ -26,7 +29,7 @@ class Qcs6490KernelBuilder(KernelBuilder):
         # 合并大小写适配 fragment（敏感 FS 上为空，无副作用）
         self.make(src_dir, ["case_insensitive_fix.config"],
                   arch=self.ARCH, cross=self.CROSS)
-        # 应用 enable(=y builtin) / disable(裁剪) 配置覆盖。
+        # 应用 canonical kernel.config 配置覆盖。
         # ⚠️ 用「追加进 .config + olddefconfig」而非 `make <frag>.config`
         # (即 scripts/kconfig/merge_config.sh)：后者对每个 "redefined" 符号在
         # CWD(=bind 挂载的源码树) 的临时文件上反复 `sed -i`，大片段(720 项裁剪)
@@ -38,15 +41,12 @@ class Qcs6490KernelBuilder(KernelBuilder):
         self._apply_config_overrides(src_dir, config)
 
     def _apply_config_overrides(self, src_dir: Path, config: dict):
-        """把 enable_configs(CONFIG_X=y) 与 disable_configs(# CONFIG_X is not set)
-        追加进 .config 末尾后 olddefconfig 归一化。根因见 configure() 注释。
-        """
-        enable = config["kernel"].get("enable_configs") or []
-        disable = config["kernel"].get("disable_configs") or []
-        if not enable and not disable:
+        """把 kernel.config 追加进 .config 后执行 olddefconfig。"""
+        lines = render_kconfig(
+            config["kernel"].get("config"), "kernel.config"
+        )
+        if not lines:
             return
-        lines = [f"CONFIG_{sym}=y" for sym in enable]
-        lines += [f"# CONFIG_{sym} is not set" for sym in disable]
         frag_rel = f"arch/{self.ARCH}/configs/flange_overrides.config"
         (src_dir / frag_rel).write_text("\n".join(lines) + "\n")
         # 追加到 .config 末尾（kconfig 后值覆盖前值）
@@ -58,8 +58,7 @@ class Qcs6490KernelBuilder(KernelBuilder):
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)
-        dts_dir = config["kernel"].get("dts_dir", "qcom")
-        dtb = config["kernel"]["dtb"]
+        dts_dir, dtb = kernel_device_tree(config)
 
         targets = ["Image", f"{dts_dir}/{dtb}.dtb", "modules"]
         # DTC_FLAGS_<basetarget>=-@：经 scripts/Makefile.lib:369 的
@@ -98,8 +97,7 @@ class Qcs6490KernelBuilder(KernelBuilder):
                     link.unlink()
 
     def collect(self, src_dir: Path, config: dict) -> dict:
-        dts_dir = config["kernel"].get("dts_dir", "qcom")
-        dtb = config["kernel"]["dtb"]
+        dts_dir, dtb = kernel_device_tree(config)
         return {
             "image":   src_dir / f"arch/{self.ARCH}/boot/Image",
             "dtb":     src_dir / f"arch/{self.ARCH}/boot/dts/{dts_dir}/{dtb}.dtb",

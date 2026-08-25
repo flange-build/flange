@@ -5,10 +5,11 @@ TBD - created by archiving change add-rk3506b-atk-rk3506b. Update Purpose after 
 ## Requirements
 ### Requirement: RK3506B SoC 与 ATK board 可被配置系统发现
 
-项目 SHALL 提供 `components/platform/rockchip/rk3506b/config.py` 的 `SOC` 和
-`components/board/atk-rk3506b/config.py` 的 `BOARD`，使 lunch target
+项目 SHALL 提供 `components/platform/rockchip/rk3506b/config.jsonnet` 的 `SOC` 和
+`components/board/atk-rk3506b/config.jsonnet` 的 `BOARD`，使 lunch target
 `atk-rk3506b-default-{debug,release}` 可由三层配置自动发现与解析。合并配置 SHALL 声明
-`platform=rockchip`、`soc=rk3506b`、`board=atk-rk3506b`、`arch=armhf`。
+`platform=rockchip`、`soc=rk3506b`、`board=atk-rk3506b`、
+`architecture.userspace=armhf`、`architecture.kernel=arm`、`architecture.bootloader=arm`。
 
 #### Scenario: lunch target 可解析
 - **WHEN** 解析 `atk-rk3506b-default-debug`

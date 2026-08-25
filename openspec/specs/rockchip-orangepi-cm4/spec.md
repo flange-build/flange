@@ -88,9 +88,9 @@ extra_firmware 条目的 `source` 字段 MUST 缺省（即 `"repo"`），由 `So
 
 ### Requirement: orangepi-cm4 不修改 rk3566-orangepi-cm4-base.dts 且本轮不启用 DSI
 
-`components/board/orangepi-cm4/config.py` 的 `BOARD["kernel"]["dts"]` MUST 保持 `"rk3566-orangepi-cm4-base"`，本 change MUST NOT 修改 `arch/arm64/boot/dts/rockchip/rk3566-orangepi-cm4-base.dts` 的内容（保持为 `rk3566-orangepi-cm4.dtsi` 的空壳）。
+`components/board/orangepi-cm4/config.jsonnet` 的 `BOARD["kernel"]["dts"]` MUST 保持 `"rk3566-orangepi-cm4-base"`，本 change MUST NOT 修改 `arch/arm64/boot/dts/rockchip/rk3566-orangepi-cm4-base.dts` 的内容（保持为 `rk3566-orangepi-cm4.dtsi` 的空壳）。
 
-`components/board/orangepi-cm4/` MUST NOT 包含任何 board overlay（`dtso/` 目录不应存在）；`BOARD["boot"]` MUST NOT 声明 `board_overlays` 或 `default_overlays`，让 `dsi1` 等显示链路节点维持 dtsi 默认 disabled。屏适配由独立后续 change 推进。
+`components/board/orangepi-cm4/` MUST NOT 包含任何 board overlay（`dtso/` 目录不应存在）；`boot.overlays.board` 与 `boot.overlays.enabled` MUST 为空，让 `dsi1` 等显示链路节点维持 dtsi 默认 disabled。屏适配由独立后续 change 推进。
 
 #### Scenario: base.dts 保持空壳
 
@@ -101,7 +101,7 @@ extra_firmware 条目的 `source` 字段 MUST 缺省（即 `"repo"`），由 `So
 
 - **WHEN** 检查 `components/board/orangepi-cm4/`
 - **THEN** 不存在 `dtso/` 子目录
-- **AND** 合并后 FINAL_CONFIG 的 `boot.board_overlays` 与 `boot.default_overlays` 均为空（保持 SoC / platform 默认）
+- **AND** 合并后 FINAL_CONFIG 的 `boot.overlays.board` 与 `boot.overlays.enabled` 均为空（保持 SoC / platform 默认）
 
 #### Scenario: 默认首启 DSI 链路保持沉默
 
@@ -123,7 +123,7 @@ MUST 复用 RK3566 SoC 层的 `amp.memory`，并 MUST 使用 product 作用域�
 - `amp.app` 分别指向 Orange Pi CM4 专用 UART7 HAL / RT-Thread AMP app
 - `bootloader.defconfig` 追加 `CONFIG_AMP=y` 与 `CONFIG_ROCKCHIP_AMP=y`
 - `kernel.defconfig` 追加 `CONFIG_RPMSG_CHAR=y` 与 `CONFIG_RPMSG_CTRL=y`
-- `kernel.dts` 选择 Orange Pi CM4 专用 AMP dts
+- `kernel.device_tree.name` 选择 Orange Pi CM4 专用 AMP dts
 - `partitions` 在 `recovery` 与 `rootfs` 之间包含非 raw 的 `amp` ext4 分区，且 `rootfs` 仍为
   `remaining`
 
@@ -133,7 +133,7 @@ MUST 复用 RK3566 SoC 层的 `amp.memory`，并 MUST 使用 product 作用域�
 - **THEN** `amp.enabled` 为 `true`
 - **AND** `amp.mode` 为 `hal`
 - **AND** `amp.app` 指向 Orange Pi CM4 专用 UART7 HAL AMP app
-- **AND** `kernel.dts` 为 Orange Pi CM4 专用 AMP dts
+- **AND** `kernel.device_tree.name` 为 Orange Pi CM4 专用 AMP dts
 - **AND** `bootloader.defconfig` 同时包含 `CONFIG_AMP=y` 与 `CONFIG_ROCKCHIP_AMP=y`
 - **AND** `kernel.defconfig` 同时包含 `CONFIG_RPMSG_CHAR=y` 与 `CONFIG_RPMSG_CTRL=y`
 - **AND** `partitions.entries` 中 `amp` 分区位于 `recovery` 之后、`rootfs` 之前
@@ -144,7 +144,7 @@ MUST 复用 RK3566 SoC 层的 `amp.memory`，并 MUST 使用 product 作用域�
 - **THEN** `amp.enabled` 为 `true`
 - **AND** `amp.mode` 为 `rt-thread`
 - **AND** `amp.app` 指向 Orange Pi CM4 专用 UART7 RT-Thread AMP app
-- **AND** `kernel.dts` 与 HAL AMP product 相同
+- **AND** `kernel.device_tree.name` 与 HAL AMP product 相同
 - **AND** `bootloader.defconfig` 同时包含 `CONFIG_AMP=y` 与 `CONFIG_ROCKCHIP_AMP=y`
 - **AND** `kernel.defconfig` 同时包含 `CONFIG_RPMSG_CHAR=y` 与 `CONFIG_RPMSG_CTRL=y`
 - **AND** `partitions.entries` 中 `amp` 分区位于 `recovery` 之后、`rootfs` 之前
@@ -153,7 +153,7 @@ MUST 复用 RK3566 SoC 层的 `amp.memory`，并 MUST 使用 product 作用域�
 
 - **WHEN** 解析 `orangepi-cm4-default-release` 的 FINAL_CONFIG
 - **THEN** `amp.enabled` 不为 `true`
-- **AND** `kernel.dts` 仍为 `rk3566-orangepi-cm4-base`
+- **AND** `kernel.device_tree.name` 仍为 `rk3566-orangepi-cm4-base`
 - **AND** `bootloader.defconfig` 不包含 `CONFIG_AMP=y` 或 `CONFIG_ROCKCHIP_AMP=y`
 - **AND** `partitions.entries` 不包含 `amp` 分区
 

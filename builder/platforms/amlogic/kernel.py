@@ -7,16 +7,16 @@ mainline kernel 6.12 LTS arm64，DT 路径 ``arch/arm64/boot/dts/amlogic/``。
 与 rockchip 的差异：
 - 无 vendor patch 链；configure 直接 ``make defconfig``
 - 无 panthor / mali_kbase 复杂度（GPU 首版 Non-Goal，用 in-tree panfrost 即可）
-- defconfig 默认是单字符串 ``"defconfig"``；同时兼容 list 形态以便后续叠加
-  ``case_insensitive_fix.config`` 之类的 fragment（list 时按序合并）
-- ``dts_dir`` 默认 ``"amlogic"``
+- defconfig 是有序 target 数组，可叠加 ``case_insensitive_fix.config`` 等 fragment
+- 设备树目录由 ``kernel.device_tree.directory`` 声明
 - ``KCFLAGS=-Wno-error`` 仍加，防 mainline 偶发 warning 当 error
 """
 
 from pathlib import Path
+from builder.config.canonical import kernel_arch, kernel_device_tree
 from builder.kernel_base import KernelBuilder
 from builder.dtb_overlay import (
-    dtb_overlays,
+    intree_overlays,
     kernel_overlay_dir,
     overlay_make_targets,
     require_overlay_files,
@@ -28,18 +28,15 @@ class AmlogicKernelBuilder(KernelBuilder):
     ARCH = "arm64"
 
     def configure(self, src_dir: Path, config: dict):
-        """defconfig 应用：单字符串或 list 合并。
-
-        list 形态便于挂 ``case_insensitive_fix.config`` 等 fragment，或直接写
-        raw ``CONFIG_X=y`` 行——后者由基类 ``_resolve_defconfig_targets`` 聚合进
-        ``flange_inline.config``（区别于 fragment 文件名）。基类
-        ``_write_case_insensitive_fix`` 始终生成对应 fragment 文件，list 中是否
-        引入由 SoC config 决定。
-        """
+        """按序应用 defconfig target，再应用 ``kernel.config`` override。"""
+        self.ARCH = kernel_arch(config)
         self._write_case_insensitive_fix(src_dir)
         for dc in self._resolve_defconfig_targets(
                 src_dir, config["kernel"]["defconfig"]):
             self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
+        override = self._write_config_override_fragment(src_dir, config)
+        if override:
+            self.make(src_dir, [override], arch=self.ARCH, cross=self.CROSS)
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)
@@ -47,8 +44,7 @@ class AmlogicKernelBuilder(KernelBuilder):
         # kbuild 的 ``%.dtb: dtbs_prepare`` 规则会展开成
         # ``$(MAKE) $(build)=$(dtstree) $(dtstree)/<dts_dir>/<dts>.dtb``，
         # 不需要在子目录 Makefile 的 dtb-y 中登记。
-        dts_dir = config["kernel"].get("dts_dir", "amlogic")
-        dts = config["kernel"]["dts"]
+        dts_dir, dts = kernel_device_tree(config)
         targets = [
             "Image",
             f"{dts_dir}/{dts}.dtb",
@@ -84,14 +80,13 @@ class AmlogicKernelBuilder(KernelBuilder):
         self._install_oot_modules(src_dir, config, modules_staging)
 
     def collect(self, src_dir: Path, config: dict) -> dict:
-        dts_dir = config["kernel"].get("dts_dir", "amlogic")
-        dts = config["kernel"]["dts"]
+        dts_dir, dts = kernel_device_tree(config)
         outputs = {
             "image": src_dir / f"arch/{self.ARCH}/boot/Image",
             "dtb": src_dir / f"arch/{self.ARCH}/boot/dts/{dts_dir}/{dts}.dtb",
             "modules": src_dir / "_modules_staging",
         }
-        overlays = dtb_overlays(config)
+        overlays = intree_overlays(config)
         if overlays:
             overlay_dir = kernel_overlay_dir(src_dir, self.ARCH, dts_dir)
             require_overlay_files(overlay_dir, overlays)

@@ -81,5 +81,11 @@ def test_configure_invokes_panfrost_fragment(builder, tmp_path, monkeypatch):
     monkeypatch.setattr(RockchipKernelBuilder, "make",
                         lambda self, s, t, **kw: None)
     builder.configure(
-        src, {"soc": "rk3576", "kernel": {"defconfig": "rockchip_linux_defconfig"}})
+        src, {
+            "soc": "rk3576",
+            "architecture": {
+                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+            },
+            "kernel": {"defconfig": ["rockchip_linux_defconfig"]},
+        })
     assert calls == [src]

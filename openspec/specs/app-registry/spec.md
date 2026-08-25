@@ -184,7 +184,7 @@
 
 ### Requirement: create app 生成 out-of-tree 位置后输出注册指引
 
-当 `flange create app` 用 `--dir` 把脚手架生成到 `components/app/` 之外的目录时，命令 SHALL 在 stdout 末尾打印一段注册指引文本，告诉用户如何将该路径加入 `external_apps` 或 `external_app_dirs`；命令 MUST NOT 自动修改任何 config.py 文件。
+当 `flange create app` 用 `--dir` 把脚手架生成到 `components/app/` 之外的目录时，命令 SHALL 在 stdout 末尾打印一段注册指引文本，告诉用户如何将该路径加入 `external_apps` 或 `external_app_dirs`；命令 MUST NOT 自动修改任何 config.jsonnet 文件。
 
 #### Scenario: out-of-tree 创建后输出指引
 

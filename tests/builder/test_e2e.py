@@ -279,7 +279,7 @@ def _build_adbd_deb(output_dir: Path) -> Path:
         "board":   "radxa-zero3w",
         "product": "default",
         "variant": "release",
-        "arch":    "aarch64",
+        "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
         "rootfs":  {"custom_packages": ["adbd"]},
     }
     builder = AppBuilder(
@@ -588,7 +588,7 @@ class TestEngineAppIntegration:
             "board":    "test-board",
             "product":  "default",
             "variant":  "release",
-            "arch":     "aarch64",
+            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
             "platform": "rockchip",
             "soc":      "rk3566",
             "rootfs":   {"custom_packages": []},

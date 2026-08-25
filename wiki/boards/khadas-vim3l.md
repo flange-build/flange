@@ -3,12 +3,12 @@ title: khadas-vim3l
 type: board
 status: wip
 sources:
-  - components/board/khadas-vim3l/config.py
+  - components/board/khadas-vim3l/config.jsonnet
   - components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso
   - components/board/khadas-vim3l/overlay/etc/hostname
   - components/board/khadas-vim3l/overlay/etc/systemd/system/bluetooth-vim3l.service
-  - components/platform/amlogic/config.py
-  - components/platform/amlogic/s905d3/config.py
+  - components/platform/amlogic/config.jsonnet
+  - components/platform/amlogic/s905d3/config.jsonnet
   - openspec/changes/add-amlogic-khadas-vim3l/design.md
   - openspec/changes/vim3l-enable-spidev/design.md
 related:
@@ -132,7 +132,7 @@ host 端依赖：`pip install pyamlboot` + `apt install android-tools-fastboot`�
 | `brcmfmac4359-sdio_ap6398s.txt` | `/lib/firmware/brcm/brcmfmac4359-sdio.txt` | NVRAM（brcmfmac fallback 通用名）|
 | `BCM4359C0_ap6398s.hcd` | `/lib/firmware/brcm/BCM4359C0.hcd` | BT patchram（btbcm 标准名）|
 
-fenix 仓库内路径：`archives/hwpacks/wlan-firmware/brcm/`。三件套由 board 层 `rootfs.+extra_firmware` 单一 entry 一并声明（独立 clone 到 `.build/sources/extra-firmware/khadas-fenix-ap6398s/`）。
+fenix 仓库内路径：`archives/hwpacks/wlan-firmware/brcm/`。三件套由 board 层 `rootfs.extra_firmware` 单一 entry 通过 canonical source 引用声明。
 
 **为何全部走 fenix（不用 apt 包）**：Ubuntu 24.04 没有 Debian 风格的 `firmware-brcm80211` 切片包（Ubuntu 把 brcm 固件打在 monolithic `linux-firmware` 内，整包 ~500MB 不适合 embedded 默认拉）。fenix 反而提供完整三件套且全是 Khadas 为 VIM3L 上实际 BCM4359 模组的板级 RF 校准版，比通用 firmware 更精准。
 
@@ -195,7 +195,7 @@ fenix 仓库内路径：`archives/hwpacks/wlan-firmware/brcm/`。三件套由 bo
 
 ## SPI（spidev）
 
-- **来源**：board_overlays 第三源（`boot.board_overlays`），dtso 落 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso`，由 device-tree-overlay 组件 `cpp + dtc` 编译；`default_overlays` 含同一项，开机即应用
+- **来源**：`boot.overlays.board`，dtso 落 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso`，由 device-tree-overlay 组件 `cpp + dtc` 编译；`boot.overlays.enabled` 含同一项，开机即应用
 - **控制器**：SPICC1（`spi@ffd15000`，mainline `meson-g12-common.dtsi` line 2282）；spicc0 与 eMMC 共 GPIOC 不可用，详见 `openspec/changes/vim3l-enable-spidev/design.md` 决策 1
 - **pinmux**：引用 g12-common.dtsi 预定义 `spicc1_pins`（MOSI/MISO/CLK）+ `spicc1_ss0_pins`（native CS0），不重声明
 - **默认参数**：1 路 native CS0、`spi-max-frequency = <24000000>`（24MHz，Fenix BSP 推荐稳态值；外设若需降速由 ioctl `SPI_IOC_WR_MAX_SPEED_HZ` 覆盖），模式由用户态决定

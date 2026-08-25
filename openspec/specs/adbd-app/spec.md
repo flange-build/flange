@@ -33,21 +33,21 @@ Python AppBuilder SHALL 按 FINAL_CONFIG 的 `arch` 和 `bin/adbd-<arch>` 文件
 
 #### Scenario: arm64 目标架构构建
 
-- **WHEN** 在 `arch=aarch64` 的 lunch target 下执行 `flange build app adbd`
+- **WHEN** 在 `architecture.userspace=aarch64` 的 lunch target 下执行 `flange build app adbd`
 - **THEN** 打出的 .deb 包中 `/usr/bin/adbd` 来自 `bin/adbd-arm64`
 
 #### Scenario: armhf 目标架构构建
 
-- **WHEN** 在 `arch=armhf` 的 lunch target 下执行 `flange build app adbd`
+- **WHEN** 在 `architecture.userspace=armhf` 的 lunch target 下执行 `flange build app adbd`
 - **THEN** 打出的 .deb 包中 `/usr/bin/adbd` 来自 `bin/adbd-armhf`
 
 ### Requirement: 板级配置集成
 
-板级配置（如 `components/board/radxa-zero3w/config.py`）的 `rootfs.custom_packages` 列表中添加 `"adbd"` 后，构建引擎 SHALL 先通过 AppBuilder 生成 adbd deb，再由 rootfs Phase 2 自动安装。
+板级配置（如 `components/board/radxa-zero3w/config.jsonnet`）的 `rootfs.custom_packages` 列表中添加 `"adbd"` 后，构建引擎 SHALL 先通过 AppBuilder 生成 adbd deb，再由 rootfs Phase 2 自动安装。
 
 #### Scenario: Radxa Zero 3W 启用 adbd
 
-- **WHEN** `components/board/radxa-zero3w/config.py` 的 `rootfs.custom_packages` 包含 `"adbd"`
+- **WHEN** `components/board/radxa-zero3w/config.jsonnet` 的 `rootfs.custom_packages` 包含 `"adbd"`
 - **THEN** 构建该板子的 rootfs 时，adbd .deb 包在 rootfs 之前生成并安装到镜像中
 
 ### Requirement: Python deb 打包产出

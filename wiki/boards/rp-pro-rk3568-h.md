@@ -3,12 +3,12 @@ title: rp-pro-rk3568-h
 type: board
 status: wip
 sources:
-  - components/board/rp-pro-rk3568-h/config.py
+  - components/board/rp-pro-rk3568-h/config.jsonnet
   - components/board/rp-pro-rk3568-h/patches/kernel/0001-dts-pro-rk3568-h-firmware-class-path-fix.patch
   - components/board/rp-pro-rk3568-h/patches/kernel/0002-dt-bindings-mipi-dsi-eot-packet-compat.patch
   - components/board/rp-pro-rk3568-h/overlay/etc/hostname
   - components/board/rp-pro-rk3568-h/overlay/etc/usbdevice.conf
-  - components/platform/rockchip/rk3568/config.py
+  - components/platform/rockchip/rk3568/config.jsonnet
 related:
   - "[[rockchip 平台]]"
   - "[[out-of-tree 模块]]"
@@ -42,7 +42,7 @@ AP6275P 是 BCM43752A2 的 PCIe 版（AP6275S 才是 SDIO，rkwifibt `wifibt-uti
 - `+oot_modules` 走 kbuild 标准入口 `-C {kernel_src} M=… modules CONFIG_BCMDHD=m CONFIG_BCMDHD_PCIE=y **CONFIG_BCMDHD_SDIO=**`。最后一项必须显式清空：kbuild 进 OOT 时 source 内核 `.config` 把 `CONFIG_BCMDHD_SDIO=y`（in-tree `rkwifi/Kconfig` `choice default BCMDHD_SDIO`）当 make 变量喂入，与 PCIe 同时启用会让 `dhd_config.h` 中 `dhd_conf_get_otp` 在 SDIO 与 PCIe 两个 `#ifdef` 块各有不同签名，conflicting types
 - 不走 bcmdhd Makefile 顶层 phony target（`all` 编 PCIe+SDIO+USB 三变体，且用 `LINUXDIR/$(PWD)` 与 rock5b rtl8852be 的 `KSRC/M` 约定不同）
 - in-tree bcmdhd 默认 SDIO 不抢 PCI 总线，与 OOT `bcmdhd_pcie.ko` 共存无冲突
-- 固件走 `+rootfs.+extra_firmware` `source: oot:rkwifibt`，从 `firmware/broadcom/AP6275_PCIE/{wifi,bt}/` 平铺到 `/lib/firmware/`：fw + clm + `nvram_ap6275p.txt`（小写，driver chip 表 module_name = `ap6275p`）+ `BCM4362A2.hcd`
+- 固件走 `rootfs.extra_firmware` 的 canonical source 引用，从 `firmware/broadcom/AP6275_PCIE/{wifi,bt}/` 平铺到 `/lib/firmware/`：fw + clm + `nvram_ap6275p.txt`（小写，driver chip 表 module_name = `ap6275p`）+ `BCM4362A2.hcd`
 - **不用 armbian/firmware**：其 `ap6275p/nvram_ap6275p.txt` 是 symlink → `nvram_AP6275P.txt`，macOS APFS 大小写不敏感致 git checkout collision，target 没物理落盘，dangling link
 
 ## kernel patches

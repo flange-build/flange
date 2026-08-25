@@ -96,12 +96,10 @@ def test_allwinnera733_rootfs安装模块和usb诊断工具():
     assert "wpasupplicant" in packages
 
 
-def test_radxa_cubie_a7z声明启用aic8800_usb():
-    """板级配置应显式声明启用 AIC8800 USB。"""
+def test_radxa_cubie_a7z不保留无消费者wifi开关():
     config = resolve_config("radxa-cubie-a7z", "default", "release")
 
-    assert config["wifi"]["aic8800_usb"] is True
-    assert not config["wifi"].get("aic8800_sdio", False)
+    assert "wifi" not in config
 
 
 def test_radxa_cubie_a7z依赖radxa_aic8800_usb固件():
@@ -115,13 +113,13 @@ def test_radxa_cubie_a7z依赖radxa_aic8800_usb固件():
     ]
 
     assert len(radxa_entries) == 2
-    assert all(
-        fw["repo"] == "https://github.com/radxa-pkg/aic8800.git"
-        for fw in radxa_entries
-    )
-    assert all(fw["commit"] for fw in radxa_entries)
+    source = config["sources"][radxa_entries[0]["source"]["name"]]
+    assert source == {
+        "url": "https://github.com/radxa-pkg/aic8800.git",
+        "commit": "7f42b22913b462ab6c658dfc075bae1dbfe9a71a",
+    }
     assert {
-        fw["repo_subdir"] for fw in radxa_entries
+        fw["source"]["subpath"] for fw in radxa_entries
     } == {
         "src/USB/driver_fw/fw/aic8800D80",
         "src/USB/driver_fw/fw",
@@ -133,11 +131,11 @@ def test_radxa_cubie_a7z依赖radxa_aic8800_usb固件():
 
     flat_entry = next(
         fw for fw in radxa_entries
-        if fw["repo_subdir"].endswith("aic8800D80")
+        if fw["source"]["subpath"].endswith("aic8800D80")
     )
     nested_entry = next(
         fw for fw in radxa_entries
-        if fw["repo_subdir"] == "src/USB/driver_fw/fw"
+        if fw["source"]["subpath"] == "src/USB/driver_fw/fw"
     )
 
     assert "fmacfw_8800d80_u02.bin" in flat_entry["files"]

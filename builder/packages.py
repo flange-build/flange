@@ -7,8 +7,8 @@
 - ``oot-driver``：合成 ``kernel.oot_modules`` 条目（``make M=`` 对内核源树
   编译 → strip → 装入 ``lib/modules/.../updates/``），复用
   ``builder/kernel_base.py`` 的 OOT 模块编译/安装路径。
-- ``devicetree``：取该 board 对应 ``.dtso``，作为「package overlay」第四源
-  注册进 ``boot.package_overlays``，由 ``builder/overlays.py`` 用 cpp+dtc 编译。
+- ``devicetree``：取该 board 对应 ``.dtso``，注册进
+  ``boot.overlays.package``，由 ``builder/overlays.py`` 用 cpp+dtc 编译。
 - ``vendor``：注册 package 内的本地 App，并加入 ``rootfs.custom_packages``；
   由 AppBuilder / DebBuilder 打成 flange 自有 deb 后安装。
 - ``deb``：复用 rootfs deb 安装路径（当前仅在 schema 预留，未落地）。
@@ -16,11 +16,11 @@
 board 通过顶层 ``packages`` 字段 opt-in。``expand_hardware_packages`` 在
 ``resolve_config`` 解析完三层 + 条件后调用，把包内容注入 config，使下游
 builder 无需感知包概念——它们读到的就是普通的 ``oot_modules`` /
-``package_overlays``。
+``boot.overlays.package``。
 
 注入键：
 - ``config["kernel"]["oot_modules"]``：追加 oot-driver 合成条目（绝对路径）。
-- ``config["boot"]["package_overlays"]``：package overlay 的 ``.dtbo`` 名列表。
+- ``config["boot"]["overlays"]["package"]``：package overlay 的 ``.dtbo`` 名列表。
 - ``config["boot"]["package_overlay_sources"]``：``{name.dtbo: 绝对 .dtso 路径}``。
 - ``config["rootfs"]["custom_packages"]``：追加 vendor deb 包名。
 - ``config["external_apps"]``：注册 vendor package 的本地 App 路径。
@@ -177,7 +177,8 @@ def expand_hardware_packages(
         raise TypeError("kernel.oot_modules 必须是列表")
 
     boot_cfg = config.setdefault("boot", {})
-    package_overlays: list[str] = boot_cfg.setdefault("package_overlays", [])
+    overlay_cfg = boot_cfg.setdefault("overlays", {})
+    package_overlays: list[str] = overlay_cfg.setdefault("package", [])
     overlay_sources: dict[str, str] = boot_cfg.setdefault(
         "package_overlay_sources", {})
 
@@ -243,6 +244,11 @@ def expand_hardware_packages(
                 dtbo_name = dtso_abs.name.removesuffix(".dtso") + ".dtbo"
                 if dtbo_name not in package_overlays:
                     package_overlays.append(dtbo_name)
+                if config.get("platform", "").startswith("qualcomm"):
+                    build_overlays = kernel_cfg.setdefault(
+                        "device_tree", {}).setdefault("build_overlays", [])
+                    if dtbo_name not in build_overlays:
+                        build_overlays.append(dtbo_name)
                 overlay_sources[dtbo_name] = str(dtso_abs)
                 overlay_src_paths.append(
                     f"components/packages/{pkg_name}/{dtso_rel}")

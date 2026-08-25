@@ -3,12 +3,12 @@ title: radxa-zero
 type: board
 status: wip
 sources:
-  - components/board/radxa-zero/config.py
+  - components/board/radxa-zero/config.jsonnet
   - components/board/radxa-zero/overlay/etc/hostname
   - components/board/radxa-zero/overlay/etc/usbdevice.conf
   - components/board/radxa-zero/overlay/etc/modules-load.d/flange-usbgadget.conf
-  - components/platform/amlogic/config.py
-  - components/platform/amlogic/s905y2/config.py
+  - components/platform/amlogic/config.jsonnet
+  - components/platform/amlogic/s905y2/config.jsonnet
   - components/platform/amlogic/s905y2/patches/bootloader/flange_fastboot.config
   - openspec/changes/add-s905y2-radxa-zero/design.md
 related:
@@ -88,7 +88,7 @@ AW-CM256SM（CYW43455）三件套 + BT patchram 从权威 `radxa-pkg/radxa-firmw
 | `cypress/cyfmac43455-sdio.clm_blob` | `brcmfmac43455-sdio.clm_blob` | CLM 校准 |
 | `brcm/BCM4345C0.hcd` | `BCM4345C0.hcd` | BT patchram（CYW43455 BT core） |
 
-由 board 层 `rootfs.+extra_firmware` 单一 entry 声明（独立 clone 到 `.build/sources/extra-firmware/radxa-zero-aw-cm256sm/`）。不用 monolithic `linux-firmware`（~500MB 不适合 embedded）。
+由 board 层 `rootfs.extra_firmware` 单一 entry 通过 `source.{name,subpath}` 声明。不用 monolithic `linux-firmware`（~500MB 不适合 embedded）。
 
 **BT 无 btattach 单元**：mainline `meson-g12a-radxa-zero.dts` 在 `&uart_A` 直接声明 `bluetooth { compatible="brcm,bcm43438-bt"; shutdown-gpios=...; }` serdev 子节点，内核 `hci_serdev`/`btbcm` 自动 probe + 加载 patchram（与 VIM3L 需 btattach 不同）。
 

@@ -13,8 +13,10 @@ import os
 import subprocess
 from pathlib import Path
 
+from builder.config.canonical import userspace_arch
 from builder.patches import normalize_excluded_patches
 from builder.paths import PROJECT_ROOT
+from builder.source import SourceManager
 
 
 # 组件依赖图：键为组件名，值为该组件依赖的上游组件列表。
@@ -142,7 +144,8 @@ class BuildCache:
         boot/image 也会跟着强制重建，确保下游产物总是基于最新的
         kernel 产物重新组装。
         """
-        if self.config.get(component, {}).get("local_path"):
+        descriptor = self._component_source_config(component)
+        if descriptor.get("local_path"):
             return True
         if component == "amp":
             amp_name = (self.config.get("amp") or {}).get("app")
@@ -224,7 +227,8 @@ class BuildCache:
         if component == "kernel":
             kernel = self.config.get("kernel") or {}
             image = kernel.get("image", "Image")
-            dts = kernel.get("dts")
+            from builder.config.canonical import kernel_device_tree
+            _, dts = kernel_device_tree(self.config)
             required = [image, f"{dts}.dtb" if dts else "*.dtb"]
             if kernel.get("boot_format", "extlinux") == "fit":
                 required.append("boot.img")
@@ -243,7 +247,7 @@ class BuildCache:
             ]
         if (component == "bootloader"
                 and (self.config.get("bootloader") or {}).get(
-                    "edk2_firmware_url")):
+                    "edk2_firmware")):
             bootloader = self.config["bootloader"]
             base = "edk2-spi-firmware/"
             required = [
@@ -293,8 +297,13 @@ class BuildCache:
 
         # 2. 全局配置：任何组件都受其影响
         h.update(b"cache-contract-v2")
-        for key in ("arch", "platform", "soc", "board"):
+        h.update(f"architecture={userspace_arch(self.config)}".encode())
+        for key in ("platform", "soc", "board"):
             h.update(f"{key}={self.config.get(key, '')}".encode())
+        # Jsonnet 求值元数据通过 dict 子类属性携带，不污染 canonical JSON。
+        # 任一实际 import 或 target 维度变化都必须使全部组件缓存失效。
+        h.update(b"jsonnet_config:")
+        h.update(getattr(self.config, "jsonnet_hash", "").encode())
         h.update(b"build_logic:")
         h.update(self._build_logic_hash().encode())
 
@@ -318,22 +327,23 @@ class BuildCache:
             if component in ("boot", "image"):
                 self._mix_partitions(h)
 
-            # device-tree-overlay 组件输出集由 boot.vendor_overlays /
-            # boot.board_overlays + vendor 共同决定，并由板私有 dtso 源目录
+            # device-tree-overlay 组件输出集由 boot.overlays.vendor /
+            # boot.overlays.board + vendor 共同决定，并由板私有 dtso 源目录
             # 内容驱动，必须全部混入；否则 boot 子配置或板私有源变化不会级联
             # 到此组件。
             if component == "device-tree-overlay":
+                from builder.dtb_overlay import (
+                    board_overlays,
+                    package_overlays,
+                    vendor_overlays,
+                )
                 h.update(b"vendor:")
                 h.update(self.config.get("vendor", "").encode())
                 h.update(b"vendor_overlays:")
-                vlist = sorted(
-                    (self.config.get("boot") or {}).get("vendor_overlays") or []
-                )
+                vlist = sorted(vendor_overlays(self.config))
                 h.update(json.dumps(vlist).encode())
                 h.update(b"board_overlays:")
-                blist = sorted(
-                    (self.config.get("boot") or {}).get("board_overlays") or []
-                )
+                blist = sorted(board_overlays(self.config))
                 h.update(json.dumps(blist).encode())
                 # 板私有 dtso 源目录内容（如有）：dtso 改动须触发重 build
                 board = self.config.get("board", "")
@@ -344,9 +354,7 @@ class BuildCache:
                     self._hash_directory(h, board_dts_dir)
                 # package overlay：名单 + 各 .dtso 源文件内容
                 h.update(b"package_overlays:")
-                plist = sorted(
-                    (self.config.get("boot") or {}).get("package_overlays")
-                    or [])
+                plist = sorted(package_overlays(self.config))
                 h.update(json.dumps(plist).encode())
                 for rel in sorted((self.config.get("packages_meta") or {})
                                   .get("overlay_src_paths") or []):
@@ -363,7 +371,7 @@ class BuildCache:
                     self.config.get("rkbin") or {}, sort_keys=True,
                     default=str).encode())
                 self._mix_rkbin(h)
-                self._mix_named_repo(h, "amlogic-boot-fip")
+                self._mix_source(h, "amlogic-boot-fip")
 
             # kernel 额外依赖 OOT 模块独立源 git HEAD —— branch 跟踪
             # 场景下（如 rkwifibt develop 分支），仓库 HEAD 推进必须级联
@@ -457,7 +465,7 @@ class BuildCache:
         h.update(json.dumps(
             rootfs_cfg.get("extra_apt_sources") or [],
             sort_keys=True, default=str).encode())
-        h.update(self.config.get("arch", "").encode())
+        h.update(userspace_arch(self.config).encode())
         h.update(rootfs_cfg.get("emulator", "").encode())
         return h.hexdigest()[:16]
 
@@ -476,7 +484,7 @@ class BuildCache:
         recovery_cfg = self.config.get("recovery", {})
         packages = sorted(recovery_cfg.get("packages", []))
         h.update(json.dumps(packages).encode())
-        h.update(self.config.get("arch", "").encode())
+        h.update(userspace_arch(self.config).encode())
         return h.hexdigest()[:16]
 
     def _mix_rootfs_customize(self, h: "hashlib._Hash") -> None:
@@ -536,30 +544,11 @@ class BuildCache:
         h.update(b"account:")
         h.update(json.dumps(account_subtree, sort_keys=True,
                             default=str).encode())
-        # extra_firmware 配置（repo/branch/files 变化须触发重建）
+        # extra_firmware 配置和 source 内容变化须触发重建。
         extra_fw = rootfs_cfg.get("extra_firmware", [])
         h.update(json.dumps(extra_fw, sort_keys=True, default=str).encode())
-        for name, cfg in self._repo_firmware():
-            repo_dir = self._project_path(
-                ".build", "sources", "extra-firmware", name)
-            if repo_dir.exists():
-                h.update(f"extra_firmware_head:{name}=".encode())
-                h.update(self._git_head(repo_dir).encode())
-        # source="local" 条目：blob 文件内容随仓库携带，config JSON 不会变,
-        # 但 blob 字节变了必须重建。逐 entry 解析 components/board/<board>/
-        # <src_dir>/<file> 并把字节流混入。
-        board = self.config.get("board", "")
-        for fw in extra_fw:
-            if fw.get("source") != "local":
-                continue
-            src_dir = fw.get("src_dir", "")
-            if not src_dir or not board:
-                continue
-            fw_base = self._project_path(
-                "components", "board", board, src_dir)
-            if not fw_base.is_dir():
-                continue
-            self._hash_directory(h, fw_base)
+        for _, cfg in self._repo_firmware():
+            self._mix_source(h, cfg["source"]["name"])
         # extra_debs 配置（url/sha256/name 变化须触发重建）
         extra_debs = rootfs_cfg.get("extra_debs", [])
         h.update(json.dumps(extra_debs, sort_keys=True, default=str).encode())
@@ -718,12 +707,17 @@ class BuildCache:
         # 源码 commit
         project_root = Path(getattr(self, "project_root", PROJECT_ROOT))
         component_config = self.config.get(component, {}) or {}
-        from_repo = component_config.get("from_repo")
-        if from_repo:
-            src_dir = project_root / ".build" / "sources" / "repos" / from_repo
+        source_name = (component_config.get("source") or {}).get("name")
+        descriptor = (self.config.get("sources") or {}).get(source_name) or {}
+        if descriptor.get("local_path"):
+            src_dir = Path(descriptor["local_path"])
+        elif descriptor:
+            src_dir = (
+                project_root / ".build" / "sources" / "repos"
+                / SourceManager.source_identity(descriptor)
+            )
         else:
-            src_dir = (project_root / ".build" / "sources" / component
-                       / self.config["board"])
+            return
         if src_dir.exists():
             h.update(b"src:")
             h.update(self._git_head(src_dir).encode())
@@ -752,11 +746,10 @@ class BuildCache:
 
     def _component_source_config(self, component: str) -> dict:
         """返回组件实际使用的仓库配置。"""
-        component_config = self.config.get(component, {}) or {}
-        from_repo = component_config.get("from_repo")
-        if from_repo:
-            return (self.config.get("repos", {}) or {}).get(from_repo, {}) or {}
-        return component_config
+        source_name = (
+            (self.config.get(component) or {}).get("source") or {}
+        ).get("name")
+        return (self.config.get("sources") or {}).get(source_name, {}) or {}
 
     # --- 哈希输入混合：partitions 配置 ---
 
@@ -784,44 +777,48 @@ class BuildCache:
         bootloader 构建时会从 rkbin 读 BL31/DDR init/SPL 等二进制，
         rkbin 升级会改变这些二进制，必须触发 bootloader 重建。
         """
-        fw_dir = self._project_path(
-            ".build", "sources", "firmware", self.config["platform"])
-        if fw_dir.exists():
-            h.update(b"rkbin:")
-            h.update(self._git_head(fw_dir).encode())
+        source = (self.config.get("rkbin") or {}).get("source") or {}
+        if source.get("name"):
+            self._mix_source(h, source["name"])
 
-    def _mix_named_repo(self, h: "hashlib._Hash", name: str) -> None:
-        """混入命名仓库声明与当前 HEAD（存在时）。"""
-        cfg = (self.config.get("repos") or {}).get(name)
-        if not cfg:
+    def _mix_source(self, h: "hashlib._Hash", name: str) -> None:
+        """混入 canonical source descriptor 与当前 HEAD（存在时）。"""
+        descriptor = (self.config.get("sources") or {}).get(name)
+        if not descriptor:
             return
-        h.update(f"named_repo:{name}:".encode())
-        h.update(json.dumps(cfg, sort_keys=True, default=str).encode())
+        h.update(f"source:{name}:".encode())
+        h.update(json.dumps(descriptor, sort_keys=True, default=str).encode())
+        local_path = descriptor.get("local_path")
+        if local_path:
+            path = Path(local_path)
+            if not path.is_absolute():
+                path = self._project_path(local_path)
+            if path.is_dir():
+                self._hash_directory(h, path)
+            elif path.is_file():
+                h.update(path.read_bytes())
+            else:
+                h.update(f"missing:{local_path}".encode())
+            return
         repo_dir = self._project_path(
-            ".build", "sources", "repos", name)
+            ".build", "sources", "repos",
+            SourceManager.source_identity(descriptor),
+        )
         if repo_dir.exists():
             h.update(self._git_head(repo_dir).encode())
 
     def _mix_extra_repo(self, h: "hashlib._Hash", name: str,
                         cfg: dict) -> None:
         """混入 SourceManager.ensure_extra 对应仓库的 HEAD。"""
-        if not cfg:
-            return
-        from_repo = cfg.get("from_repo")
-        if from_repo:
-            self._mix_named_repo(h, from_repo)
-            return
-        repo_dir = self._project_path(
-            ".build", "sources", "extra", name)
-        if repo_dir.exists():
-            h.update(f"extra_repo:{name}=".encode())
-            h.update(self._git_head(repo_dir).encode())
+        source_name = (cfg.get("source") or {}).get("name")
+        if source_name:
+            self._mix_source(h, source_name)
 
     def _repo_firmware(self):
-        """迭代 rootfs 中具有独立仓库的 firmware 名称与配置。"""
+        """迭代 rootfs 中引用 canonical source 的 firmware。"""
         for entry in (self.config.get("rootfs") or {}).get(
                 "extra_firmware") or []:
-            if entry.get("source", "repo") == "repo":
+            if isinstance(entry.get("source"), dict):
                 yield entry.get("name", "firmware"), entry
 
     # --- 哈希输入混合：kernel.oot_sources ---
@@ -836,23 +833,15 @@ class BuildCache:
 
         oot_sources 目录路径与 SourceManager.ensure_oot_source 一致。
         """
-        raw = (self.config.get("kernel", {}) or {}).get("oot_sources", {})
-        # 过滤 resolve_conditions 注入的 product/variant 伪 key（详见
-        # KernelBuilder._oot_sources_config 注释）
-        oot_sources = {k: v for k, v in raw.items()
-                       if k not in ("product", "variant")
-                       and isinstance(v, dict)}
+        oot_sources = (
+            (self.config.get("kernel") or {}).get("oot_sources") or {}
+        )
         if not oot_sources:
             return
         h.update(b"oot_sources:")
         for name in sorted(oot_sources):
-            repo_dir = self._project_path(
-                ".build", "sources", "oot-modules", name)
-            if repo_dir.exists():
-                h.update(name.encode())
-                h.update(b"=")
-                h.update(self._git_head(repo_dir).encode())
-                h.update(b";")
+            self._mix_source(h, oot_sources[name]["source"]["name"])
+            h.update(b";")
 
     # --- 工具函数 ---
 

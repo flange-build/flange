@@ -17,7 +17,7 @@ updated: 2026-05-28
 
 ## TL;DR
 
-为不支持运行时 DT overlay 的启动链（典型如 EDK2 UEFI → GRUB `grub-with-dtb` 单 dtb）提供「构建期合并」替代路径：把 [[硬件特性包]] 注入的 `boot.package_overlays` 与 base dtb 经 `fdtoverlay` 工具预合并为单 dtb，覆盖式写入 rootfs `/boot/<dtb>.dtb`。GRUB `grub.cfg` 一行不变。
+为不支持运行时 DT overlay 的启动链（典型如 EDK2 UEFI → GRUB 单 dtb）提供「构建期合并」替代路径：把 `kernel.device_tree.build_overlays` 与 base dtb 经 `fdtoverlay` 工具预合并为单 dtb，覆盖式写入 rootfs `/boot/<dtb>.dtb`。GRUB `grub.cfg` 一行不变。
 
 ## 与 U-Boot 路径对照
 
@@ -42,7 +42,7 @@ GRUB 世界 (qualcommqcs6490)：
 - **触发条件**：仅在 `config["boot"]["package_overlays"]` 非空时启用合并分支；为空走 base dtb 直拷，与未启用本能力前**字节等价**（保 default product 产物 hash 不变）。
 - **执行位置**：嵌 `_install_kernel_boot`，与"把 base dtb cp 到 rootfs `/boot/<dtb>.dtb`"那一刻同源同汇——而**不**新建一个 `merged-dtb` 组件（对单条 fdtoverlay 命令而言抽象成本过高）。
 - **依赖图**：`builder/cache.py:DEPENDENCY_GRAPH["rootfs"]` 增 `device-tree-overlay`。对 U-Boot 三平台是 no-op（overlay 在那些平台已是 `boot` 的依赖，并发执行无变化）。
-- **输入约束 v1**：仅消费 `boot.package_overlays`（[[硬件特性包]] 注入这一源）；`vendor_overlays` / `board_overlays` / `dtb_overlays` 另三源 v1 不强制合并，后续扩展时接口预留。
+- **输入约束**：只消费 `kernel.device_tree.build_overlays`；来源必须同时声明在 `boot.overlays` 中，平台不支持构建期合并时 validator 直接报错。
 - **base dtb 前提**：必须含 `__symbols__` 节点（mainline arm64 qcom dts 默认 dtc 行为已保证，**不**在合并阶段重复校验）；若缺，`fdtoverlay` 退出码非零，stderr 不被吞，构建立即红。
 - **工具**：`fdtoverlay` 来自 Debian/Ubuntu `device-tree-compiler` 包，与 `dtc` 同源；既有构建 Docker 镜像已含，无新增 host 依赖。
 

@@ -2,13 +2,13 @@
 
 ## Purpose
 
-定义 flange 镜像中 root 账号、普通用户、密码、group、sudo 策略、root 登录通道与 shell 体验的统一声明式配置体系。框架在 `RootfsBuilder` 基类中收敛实现，跨平台共享，配置入口集中在 `components/rootfs/config.py` 的 `ROOTFS["rootfs"]` 子树，板级可通过 `BOARD["rootfs"]` 整段重写覆盖默认。base 默认对齐 ubuntu 桌面心智模型 — root 完全锁定，默认用户 `flange/flange` 入 sudo group。
+定义 flange 镜像中 root 账号、普通用户、密码、group、sudo 策略、root 登录通道与 shell 体验的统一声明式配置体系。框架在 `RootfsBuilder` 基类中收敛实现，跨平台共享，配置入口集中在 `components/rootfs/config.jsonnet` 的 `ROOTFS["rootfs"]` 子树，板级可通过 `BOARD["rootfs"]` 整段重写覆盖默认。base 默认对齐 ubuntu 桌面心智模型 — root 完全锁定，默认用户 `flange/flange` 入 sudo group。
 
 ## Requirements
 
 ### Requirement: rootfs 配置 SHALL 支持声明式用户体系
 
-`components/rootfs/config.py` 的 `ROOTFS["rootfs"]` 字典 SHALL 接受以下账号相关字段。框架 base 层默认值已切换到"ubuntu 桌面心智模型"——root 完全锁定 + 默认用户 `flange/flange`：所有未在板级显式覆盖账号字段的 board 都自动获得此行为。板级可通过 `BOARD["rootfs"]` 整段重写以替换或关闭默认用户体系。
+`components/rootfs/config.jsonnet` 的 `ROOTFS["rootfs"]` 字典 SHALL 接受以下账号相关字段。框架 base 层默认值已切换到"ubuntu 桌面心智模型"——root 完全锁定 + 默认用户 `flange/flange`：所有未在板级显式覆盖账号字段的 board 都自动获得此行为。板级可通过 `BOARD["rootfs"]` 整段重写以替换或关闭默认用户体系。
 
 字段：
 - `root_password`（字符串 \| `None`，base 默认 `None`）：root 账号密码；`None` 时不调用 `chpasswd`，`/etc/shadow` root 字段保持 ubuntu-base tarball 出厂值（`*`）
@@ -154,7 +154,7 @@
 - `_set_root_password(rootfs_dir, password)`
 - `_verify_root_password(rootfs_dir)`
 - `_configure_users(rootfs_dir, config)` — 内部封装 group 预创、useradd、chpasswd、sudoers.d 写入、root 密码设置、`disable_root_login` 处理
-- `_real_users(rootfs_cfg)` — 过滤 `resolve_conditions` 在每层 dict 上注入的 `product` / `variant` 伪 key（merge.py），返回真正的用户 dict
+- `_real_users(rootfs_cfg)` — 直接返回 canonical `rootfs.users`；Jsonnet 求值后不得存在嵌套 product/variant 伪 key
 
 平台子类（`builder/platforms/rockchip/rootfs.py`、`builder/platforms/allwinnera733/rootfs.py`） SHALL 不再各自实现 `_set_root_password` / `_verify_root_password`，且不再直接读取 `rootfs.root_password`。子类 `_build_phase2` 中对账号配置的处理 SHALL 收敛为对 `self._configure_users(rootfs_dir, config)` 的单次调用。
 

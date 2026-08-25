@@ -112,7 +112,7 @@ def test_atk_rk3506b_fluxion_product_selects_runtime_only():
     fluxion = resolve_config("atk-rk3506b", "fluxion", "debug")
 
     assert default["amp"]["app"] == "rk3506_amp_uart4_rtt_demo"
-    assert "external_apps" not in default
+    assert default["external_apps"] == {}
     assert fluxion["amp"]["app"] == "fluxion_runtime"
     assert set(fluxion["external_apps"]) == {"fluxion_runtime"}
     assert "fluxion-rpmsg-bridge" not in fluxion["rootfs"]["custom_packages"]

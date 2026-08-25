@@ -101,26 +101,24 @@ def _arm32_config() -> dict:
         "platform": "rockchip",
         "soc": "rk3506b",
         "board": "atk-rk3506b",
+        "architecture": {
+            "userspace": "armhf", "kernel": "arm", "bootloader": "arm",
+        },
         "kernel": {
-            "arch": "arm",
             "cross_compile": ARM32_GCC10,
             "image": "zImage",
-            "dts": ARM32_DTS,
-            "dts_dir": "",
+            "device_tree": {"directory": "", "name": ARM32_DTS},
             "defconfig": [
                 "rk3506_defconfig",
-                "CONFIG_RPMSG_CHAR=y",
             ],
+            "config": {"CONFIG_RPMSG_CHAR": "y"},
             "boot_format": "fit",
             "boot_its": "boot.its",
         },
-        "boot": {
-            "dtb_overlays": [],
-            "vendor_overlays": [],
-            "board_overlays": [],
-            "package_overlays": [],
-            "default_overlays": [],
-        },
+        "boot": {"overlays": {
+            "intree": [], "vendor": [], "board": [], "package": [],
+            "enabled": [],
+        }},
     }
 
 
@@ -129,22 +127,21 @@ def _arm64_config() -> dict:
         "platform": "rockchip",
         "soc": "rk3566",
         "board": "tspi-rk3566",
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "kernel": {
-            "dts": "rk3566-test",
-            "dts_dir": "rockchip",
-            "defconfig": "rockchip_linux_defconfig",
+            "device_tree": {"directory": "rockchip", "name": "rk3566-test"},
+            "defconfig": ["rockchip_linux_defconfig"],
         },
-        "boot": {
-            "dtb_overlays": [],
-            "vendor_overlays": [],
-            "board_overlays": [],
-            "package_overlays": [],
-            "default_overlays": [],
-        },
+        "boot": {"overlays": {
+            "intree": [], "vendor": [], "board": [], "package": [],
+            "enabled": [],
+        }},
     }
 
 
-def test_kernel_arm32_context_and_inline_fragment_use_arm_path(tmp_path):
+def test_kernel_arm32_context_and_override_fragment_use_arm_path(tmp_path):
     src = tmp_path / "linux"
     (src / "arch" / "arm" / "configs").mkdir(parents=True)
     builder = RecordingKernelBuilder()
@@ -153,9 +150,9 @@ def test_kernel_arm32_context_and_inline_fragment_use_arm_path(tmp_path):
 
     assert builder.ARCH == "arm"
     assert builder.CROSS == ARM32_GCC10
-    inline = src / "arch" / "arm" / "configs" / "flange_inline.config"
-    assert "CONFIG_RPMSG_CHAR=y" in inline.read_text()
-    assert builder.make_calls[-1][0] == ["flange_inline.config"]
+    override = src / "arch" / "arm" / "configs" / "flange_overrides.config"
+    assert "CONFIG_RPMSG_CHAR=y" in override.read_text()
+    assert builder.make_calls[-1][0] == ["flange_overrides.config"]
     assert all(call[1]["arch"] == "arm" for call in builder.make_calls)
     assert all(
         call[1]["cross"] == ARM32_GCC10
@@ -204,11 +201,13 @@ def test_arm32_vendor_fit_structure_target_fdt_resource_and_ubi_bootargs():
         "ubi.mtd=5 root=ubi0:rootfs rw rootfstype=ubifs rootwait\"; }; };\n"
     )
 
-    assert config["kernel"]["arch"] == "arm"
+    assert config["architecture"]["kernel"] == "arm"
     assert config["kernel"]["image"] == "zImage"
-    assert config["kernel"]["dts"] == ARM32_DTS
+    assert config["kernel"]["device_tree"]["name"] == ARM32_DTS
     assert f"{ARM32_DTS}.img" == RockchipKernelBuilder._dts_target(
-        config["kernel"]["dts_dir"], config["kernel"]["dts"], "img"
+        config["kernel"]["device_tree"]["directory"],
+        config["kernel"]["device_tree"]["name"],
+        "img",
     )
     assert 'data = /incbin/("kernel")' in rendered
     assert 'type = "kernel"' in rendered
@@ -269,8 +268,10 @@ def test_bootloader_fragments_are_merged_sequentially_with_arm32_toolchain(
 ):
     builder = RecordingBootloaderBuilder()
     config = {
+        "architecture": {
+            "userspace": "armhf", "kernel": "arm", "bootloader": "arm",
+        },
         "bootloader": {
-            "arch": "arm",
             "cross_compile": ARM32_GCC10,
             "defconfig": [
                 "alientek_rk3506_defconfig",

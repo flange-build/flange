@@ -26,7 +26,9 @@ def _make_config(board="test", product="default", variant="release", packages=No
         "board": board,
         "product": product,
         "variant": variant,
-        "arch": "aarch64",
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "platform": "rockchip",
         "soc": "rk3566",
         "rootfs": {

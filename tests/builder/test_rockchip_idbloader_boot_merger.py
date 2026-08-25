@@ -107,10 +107,13 @@ def _docker_calls_flat(docker):
 def test_boot_merger_mode_skips_mkimage_and_copies_idblock(tmp_path):
     b, src, fw, docker = _builder_with(tmp_path)
     config = {
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "rkbin": {"ini_prefix": "RK3576", "trust_ini_prefix": "RK3576",
                   "mkimage_chip": "rk3576"},
         "bootloader": {"idbloader_method": "boot_merger",
-                       "defconfig": "rock-4d-spi-rk3576_defconfig"},
+                       "defconfig": ["rock-4d-spi-rk3576_defconfig"]},
         "jobs": 0,
     }
     with patch.object(b, "make"), patch.object(
@@ -145,10 +148,13 @@ def test_boot_merger_mode_requires_selfbuilt_spl(tmp_path):
     b, src, fw, docker = _builder_with(tmp_path)
     (src / "spl" / "u-boot-spl.bin").unlink()  # 删掉自编 SPL
     config = {
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "rkbin": {"ini_prefix": "RK3576", "trust_ini_prefix": "RK3576",
                   "mkimage_chip": "rk3576"},
         "bootloader": {"idbloader_method": "boot_merger",
-                       "defconfig": "rock-4d-spi-rk3576_defconfig"},
+                       "defconfig": ["rock-4d-spi-rk3576_defconfig"]},
         "jobs": 0,
     }
     with patch.object(b, "make"), patch.object(
@@ -162,10 +168,13 @@ def test_boot_merger_mode_requires_selfbuilt_spl(tmp_path):
 def test_boot_merger_mode_collect_does_not_raise(tmp_path):
     b, src, fw, docker = _builder_with(tmp_path)
     config = {
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "rkbin": {"ini_prefix": "RK3576", "trust_ini_prefix": "RK3576",
                   "mkimage_chip": "rk3576"},
         "bootloader": {"idbloader_method": "boot_merger",
-                       "defconfig": "rock-4d-spi-rk3576_defconfig"},
+                       "defconfig": ["rock-4d-spi-rk3576_defconfig"]},
         "jobs": 0,
     }
     with patch.object(b, "make"), patch.object(
@@ -183,9 +192,12 @@ def test_default_mode_uses_mkimage(tmp_path):
     """其他 RK35xx（无 idbloader_method）仍走 mkimage -T rksd。"""
     b, src, fw, docker = _builder_with(tmp_path)
     config = {
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "rkbin": {"ini_prefix": "RK3576", "trust_ini_prefix": "RK3576",
                   "mkimage_chip": "rk3576"},
-        "bootloader": {"defconfig": "rk3576_defconfig"},  # 无 idbloader_method
+        "bootloader": {"defconfig": ["rk3576_defconfig"]},  # 无 idbloader_method
         "jobs": 0,
     }
     with patch.object(b, "make"), patch.object(

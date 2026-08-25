@@ -60,7 +60,9 @@ def _make_cache(tmpdir: Path, **config_overrides) -> BuildCache:
         "variant": "release",
         "platform": "rockchip",
         "soc": "rk3566",
-        "arch": "aarch64",
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "rootfs": {
             "url": "https://example.com/ubuntu-base.tar.gz",
             "packages": ["systemd"],

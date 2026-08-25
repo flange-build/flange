@@ -3,7 +3,7 @@ title: neons-core3566-nanob
 type: board
 status: stable
 sources:
-  - components/board/neons-core3566-nanob/config.py
+  - components/board/neons-core3566-nanob/config.jsonnet
   - components/board/neons-core3566-nanob/overlay/etc/hostname
 related:
   - "[[rockchip 平台]]"

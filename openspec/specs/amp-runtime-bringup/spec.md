@@ -25,7 +25,7 @@ Linux 占用的 AMP console UART。该 DTS MAY 已存在于指定 kernel branch�
 新增；若内核已提供精确匹配的 DTS，flange SHALL 直接选用而不得复制或改写一份同名协议。
 
 reserved-memory、从核 load/MPIDR、RPMsg base/size、mailbox/link-id 和 UART 资源 SHALL 与
-FINAL_CONFIG 及 AMP FIT 一致。builder SHALL 根据 `kernel.arch`、`kernel.dts_dir` 和目标 DTS
+FINAL_CONFIG 及 AMP FIT 一致。builder SHALL 根据 `architecture.kernel`、`kernel.device_tree.directory` 和目标 DTS
 include 链执行交叉校验，不得写死 RK3568/ARM64 路径。地址或资源不一致 MUST 使构建失败。
 
 #### Scenario: 编出的 dtb 含 AMP 节点

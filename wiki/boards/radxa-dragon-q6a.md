@@ -3,8 +3,8 @@ title: radxa-dragon-q6a
 type: board
 status: wip
 sources:
-  - components/board/radxa-dragon-q6a/config.py
-  - components/platform/qualcommqcs6490/qcs6490/config.py
+  - components/board/radxa-dragon-q6a/config.jsonnet
+  - components/platform/qualcommqcs6490/qcs6490/config.jsonnet
   - components/platform/qualcommqcs6490/patches/kernel/0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch
   - components/platform/qualcommqcs6490/patches/kernel/0002-dts-radxa-dragon-q6a-usb1-peripheral-for-adb.patch
   - components/platform/qualcommqcs6490/patches/kernel/0003-dts-radxa-dragon-q6a-i2c13-drop-gsi-dma-for-panel.patch
@@ -39,7 +39,7 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 
 继 6.18.2 后再升 **`radxa/kernel@linux-7.0.2`**，pin commit `7473a9f`（= radxa `linux-qcom` 7.0.2-2 子模块；`linux-7.0.2` 分支 tip 会回归 UFS 复位，故固定）。
 
-**config 对齐 rsdk 四段**（`qcs6490/config.py` defconfig）：`defconfig qcom_module.config radxa.config radxa_custom.config`（同 radxa `.github/local/Makefile.local`）。`qcom_module.config`（软链 `radxa_qcom_7_0_defconfig`）是 qcom 全量平台 config——补齐 `QCOM_AOSS_QMP`/`LLCC`/`ARM_SMMU_V3`/`QSEECOM`/UFS 等数百项 `=y`。`enable_configs` 收敛为 `FW_LOADER_COMPRESS*` + USB gadget；`Qcs6490KernelBuilder.reset_source` 加 `git clean -fd`（修同 commit 重建时 new-file 补丁 `already exists`）。
+**config 对齐 rsdk 四段**（`qcs6490/config.jsonnet` defconfig）：`defconfig qcom_module.config radxa.config radxa_custom.config`（同 radxa `.github/local/Makefile.local`）。`qcom_module.config`（软链 `radxa_qcom_7_0_defconfig`）是 qcom 全量平台 config——补齐 `QCOM_AOSS_QMP`/`LLCC`/`ARM_SMMU_V3`/`QSEECOM`/UFS 等数百项 `=y`。额外 symbol 全部收敛到 `kernel.config`。
 
 **⚠️ UFS 开机整机复位（QHEE `PM: Reset by PSHOLD`）双根因 + 修复**：① 早期只用 `defconfig radxa.config`、漏 `qcom_module.config` → UFS probe 缺 qcom 平台驱动；② **板上 SPI 固件过旧**（`251013`/00364-KODIAKLA），与 7.0.2 `kodiak` DTB 资源/握手不匹配。两者都必修——补四段 config + `flange flash --spi-firmware` 刷 `260120`/00549-KODIAKWP。⚠️ `flange flash` 默认只刷 UFS、**不碰 SPI**，大版本内核/DTB 迁移极易漏固件。决策档见 openspec `migrate-qcs6490-kernel-702`。
 
@@ -51,7 +51,7 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 
 **动机**：原 vendor BSP `kernel.qclinux.1.0.r1-rel`(6.6.90) 的 `qcm6490-addons.dtsi` 删了 venus `iommus` 适配 downstream 驱动 → mainline `qcom-venus` 硬件编解码在 BSP 上是死路（`dma_set_mask -EIO`；补 iommus 即 SoC 复位）。改用 Armbian 同款 **`radxa/kernel@linux-6.18.2`**（mainline，同仓库换分支，grub-with-dtb 启动模型不变）。
 
-**切换要点**（`qcs6490/config.py`）：mainline 只有通用 `defconfig`（无 qcom_defconfig）；`enable_configs` 强制 builtin：UFS/QMP-PHY（root-on-UFS 无 initramfs 必需）+ **`FW_LOADER_COMPRESS`/`_ZSTD`**（`/lib/firmware` 全 `.zst`，不开则 venus/i2c-qupv3fw/GPU-a660 全 `-2`）；**R8169 不可裁**（板载 RTL8168）；删 board PIL-firmware patch（mainline DTS 自带 radxa .mbn 路径）。构建侧两个坑修复：`source.py` git reset 加 `--no-refresh`（大树在 macOS bind-mount 刷 index 被 SIGKILL）；`kernel.py` config 片段改 **append `.config` + olddefconfig**（merge_config.sh 在 bind-mount 对大片段 sed-churn 丢临时文件）。
+**切换要点**（`qcs6490/config.jsonnet`）：mainline 只有通用 `defconfig`（无 qcom_defconfig）；`kernel.config` 强制 builtin UFS/QMP-PHY（root-on-UFS 无 initramfs 必需）及 **`FW_LOADER_COMPRESS`/`_ZSTD`**（`/lib/firmware` 全 `.zst`）；**R8169 不可裁**（板载 RTL8168）。构建侧通过 append `.config` + olddefconfig 应用同一 canonical symbol map。
 
 | 子系统（mainline 6.18.2 实板 2026-05-30）| 状态 |
 |---|---|
@@ -66,7 +66,7 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 | **魅族 E3 屏**（meizu-e3-bringup product）| ✓ 实板**有画面 + 可触摸 + 背光可控**（2026-05-30）；mainline 适配见下节坑 #6/#11 |
 | 音频 | ⏳ 待在 mainline 重验（LPASS soundwire codec）|
 
-**AIC8800 wifi + adb（2026-05-30 实板）**：mainline 不带 in-tree aic8800 → 以 OOT 模块从 `radxa-pkg/aic8800` 编（`oot_sources`+`oot_modules`，见 `qcs6490/config.py`）。三处治理：① `get_tx_power` cfg80211 6.18 新增 `radio_idx`/`link_id` 参数（`patches/aic8800/0001`）；② 顶层 Makefile 强制 `-j$(nproc)` + 父 jobserver 继承 → 大 cc1 并发 OOM，配方改 **`MAKEFLAGS= make -j1`** 真串行；③ sed `{}` 要 `{{}}` 转义避开 `str.format`。固件 `/lib/firmware/aic8800D80/` 与驱动 `aic_default_fw_path` 吻合。adb 真根因：mainline 两个 USB 控制器都 `dr_mode=host` → 无 UDC；`patches/kernel/0002` 把 `usb_1`(usb@a600000, USB-A SS 口) 改 peripheral（HDMI 走 qmpphy lane0/1 独立、不受影响；usb_2 hub+wifi 保持 host）+ gadget 栈 builtin。配合 0001 dwc3 stall patch + usbdevice 自愈，开机自动上线（NRestarts=1）。
+**AIC8800 wifi + adb（2026-05-30 实板）**：mainline 不带 in-tree aic8800 → 以 OOT 模块从 `radxa-pkg/aic8800` 编（`oot_sources`+`oot_modules`，见 `qcs6490/config.jsonnet`）。三处治理：① `get_tx_power` cfg80211 6.18 新增 `radio_idx`/`link_id` 参数（`patches/aic8800/0001`）；② 顶层 Makefile 强制 `-j$(nproc)` + 父 jobserver 继承 → 大 cc1 并发 OOM，配方改 **`MAKEFLAGS= make -j1`** 真串行；③ sed `{}` 要 `{{}}` 转义避开 `str.format`。固件 `/lib/firmware/aic8800D80/` 与驱动 `aic_default_fw_path` 吻合。adb 真根因：mainline 两个 USB 控制器都 `dr_mode=host` → 无 UDC；`patches/kernel/0002` 把 `usb_1`(usb@a600000, USB-A SS 口) 改 peripheral（HDMI 走 qmpphy lane0/1 独立、不受影响；usb_2 hub+wifi 保持 host）+ gadget 栈 builtin。配合 0001 dwc3 stall patch + usbdevice 自愈，开机自动上线（NRestarts=1）。
 
 ## bring-up 完成清单（2026-05-29 实板更新）
 
@@ -99,8 +99,7 @@ lunch radxa-dragon-q6a-meizu-e3-bringup-debug   # + 魅族 E3 MIPI-DSI 屏（显
 
 ## 关键板级配置
 
-- `wifi.aic8800_usb = True` — 走 a7a 同款 USB 模组（pid 8d80/8d81）
-- `+extra_firmware`：
+- `rootfs.extra_firmware`：
   - `radxa-aic8800` → `/lib/firmware/aic8800D80/`（QCLINUX BSP driver 写死路径，与 a7a 路径不同）
   - `radxa-firmware-qcs6490` → `/lib/firmware/qcom/qcs6490/radxa/dragon-q6a/{adsp,cdsp}.mbn + jsn`（从 `radxa-pkg/radxa-firmware` 0.2.31 取）
 
@@ -148,7 +147,7 @@ LCD FPC（J10，原理图 v1.21 sheet 31）引脚：
 1. **kernel.py 漏调 OOT pipeline**（旧帐）：`add-qcs6490-radxa-dragon-q6a` 当时无 OOT 故 `Qcs6490KernelBuilder.compile` 跳过 `_compile_oot_modules` / `_install_oot_modules`；本次引入 3 个 OOT 暴露。修：照 a733 加两行调度。
 2. **base dtb 无 `__symbols__`**：QCLINUX BSP `scripts/Makefile.lib:372` 仅对 `base-dtb-y` 加 `-@`；`dtb-y` 默认不带。修：kernel.py 传 `DTC_FLAGS_<dtb>=-@` 经 per-target hook 启用。
 3. **dtso 错抄 mainline radxa branch label**：`&vcc_3v3` / `&vcc_1v8` 在 QCLINUX BSP base 不声明 → fdtoverlay `FDT_ERR_NOTFOUND`。修：dtso 删 `vin-supply`、`vccio-supply` 改 `&vreg_l1c_1p8`（PMIC 直出）。
-4. **`MODULE_SIG_FORCE=y` 拒绝未签名 OOT**：modprobe `Key was rejected by service` + dmesg `Loading of unsigned module is rejected`。修：SoC config 加 `disable_configs: ["MODULE_SIG_FORCE"]`。Follow-up 正向方案是 `_install_oot_modules` 接 `sign-file` + 内核 `certs/signing_key.pem`，跨平台单独立项。
+4. **`MODULE_SIG_FORCE=y` 拒绝未签名 OOT**：通过 `kernel.config.CONFIG_MODULE_SIG_FORCE = "n"` 关闭。Follow-up 正向方案是 `_install_oot_modules` 接 `sign-file` + 内核 `certs/signing_key.pem`，跨平台单独立项。
 5. **sec_ts / sgm37604a ABI 漂移**：`class_create` 6.4 去首参、`i2c_driver.probe` 6.6 删 id 参数、pinctrl/consumer.h 不再间接 include；**mainline 6.18 续增**：`<asm/fb.h>` 6.11 arm64 移除（驱动本不用其符号，删）、`<asm/unaligned.h>` 6.12 迁 `<linux/unaligned.h>`（`__has_include` 分流）、`GPIOF_DIR_IN` 删 → 用 `GPIOF_IN`、`FB_EVENT_BLANK` 6.18 fb.h 移除（fb_notifier 是死代码，按历史值 0x09 `#ifndef` 兜底）。修：`LINUX_VERSION_CODE`/`__has_include`/`#ifndef` 守卫，三板（rock5b/a7a/q6a）通用。
 6. **i2c-geni firmware 加载（BSP↔mainline 反转）**：QCLINUX BSP `geni_load_se_firmware` 缺 DT 属性 `return -EINVAL` 故 dtso 曾加 `qcom,load-firmware;`；**mainline `i2c-qcom-geni` 不读该属性**，`geni_se_read_proto()` 返回 `INVALID_PROTO` 时**自动** load，故 mainline overlay 已删 `qcom,load-firmware`。
 7. **QUP firmware 路径错位**：`request_firmware("qupv3fw.elf")` 找顶层；linux-firmware 装在 `/lib/firmware/qcom/qcs6490/qupv3fw.elf.zst`。修：平台 overlay symlink `qupv3fw.elf.zst -> qcom/qcs6490/qupv3fw.elf.zst`（`FW_LOADER_COMPRESS_ZSTD=y` 自动解压）。

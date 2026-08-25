@@ -3,7 +3,7 @@ title: Cardputer USB 复合设备
 type: concept
 status: stable
 sources:
-  - components/board/atk-rk3506b/config.py
+  - components/board/atk-rk3506b/config.jsonnet
   - components/packages/cardputer-all-in-one/README.md
   - docs/boards/atk-rk3506b.md
   - tests/config/test_atk_rk3506b.py

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from builder.base import ComponentBuilder
-from builder.platforms.allwinnera733 import bootloader as a733_bootloader
 from builder.platforms.allwinnera733.bootloader import AllwinnerA733BootloaderBuilder
 
 
@@ -87,10 +87,14 @@ def test_a733_bootloader_build_applies_platform_patches(monkeypatch, tmp_path):
         "board": "radxa-cubie-a7z",
         "bootloader": {
             "target": "radxa-cubie-a7z",
-            "toolchain_tarball": "arm.tar.xz",
-            "toolchain_url": "https://example.invalid/arm.tar.xz",
-            "riscv_tarball": "riscv.tar.gz",
-            "riscv_url": "https://example.invalid/riscv.tar.gz",
+            "toolchain": {
+                "url": "https://example.invalid/arm.tar.xz",
+                "sha256": "a" * 64,
+            },
+            "riscv_toolchain": {
+                "url": "https://example.invalid/riscv.tar.gz",
+                "sha256": "b" * 64,
+            },
         },
     })
 
@@ -103,65 +107,26 @@ def test_a733_bootloader_build_applies_platform_patches(monkeypatch, tmp_path):
     assert patch_idx < make_idx
 
 
-def test_a733_toolchain_uses_cached_tarball_without_download(
-    monkeypatch,
-    tmp_path,
-):
-    cache_root = tmp_path / ".build"
-    monkeypatch.setattr(a733_bootloader, "BUILD_ROOT", cache_root,
-                        raising=False)
-    cache_tarball = (
-        cache_root / "cache" / "toolchains" / "allwinnera733"
-        / "riscv.tar.gz"
-    )
-    cache_tarball.parent.mkdir(parents=True)
-    cache_tarball.write_bytes(b"cached")
+def test_a733_toolchain_uses_verified_download(tmp_path):
+    cache_tarball = tmp_path / "downloads" / "riscv.tar.gz"
     dest_dir = tmp_path / "src" / "arisc" / "ar100s" / "tools"
     docker = RecordingDocker()
-    builder = AllwinnerA733BootloaderBuilder(docker, source=None)
+    source = MagicMock()
+    source.ensure_download.return_value = cache_tarball
+    builder = AllwinnerA733BootloaderBuilder(docker, source=source)
+    descriptor = {
+        "url": "https://example.invalid/riscv.tar.gz",
+        "sha256": "a" * 64,
+    }
 
     builder._ensure_toolchain(
         label="RISC-V",
-        tarball_name="riscv.tar.gz",
-        tarball_url="https://example.invalid/riscv.tar.gz",
+        descriptor=descriptor,
         dest_dir=dest_dir,
     )
 
-    assert not any(cmd[0] == "wget" for cmd in docker.commands)
-    assert [
-        "tar", "xavf", str(cache_tarball), "-C", str(dest_dir),
-    ] in docker.commands
-
-
-def test_a733_toolchain_downloads_tarball_into_cache(monkeypatch, tmp_path):
-    cache_root = tmp_path / ".build"
-    monkeypatch.setattr(a733_bootloader, "BUILD_ROOT", cache_root,
-                        raising=False)
-    cache_tarball = (
-        cache_root / "cache" / "toolchains" / "allwinnera733"
-        / "riscv.tar.gz"
-    )
-    partial_tarball = cache_tarball.with_suffix(
-        cache_tarball.suffix + ".download"
-    )
-    dest_dir = tmp_path / "src" / "arisc" / "ar100s" / "tools"
-    docker = RecordingDocker()
-    builder = AllwinnerA733BootloaderBuilder(docker, source=None)
-
-    builder._ensure_toolchain(
-        label="RISC-V",
-        tarball_name="riscv.tar.gz",
-        tarball_url="https://example.invalid/riscv.tar.gz",
-        dest_dir=dest_dir,
-    )
-
-    assert [
-        "wget", "-q", "-O", str(partial_tarball),
-        "https://example.invalid/riscv.tar.gz",
-    ] in docker.commands
-    assert [
-        "mv", str(partial_tarball), str(cache_tarball),
-    ] in docker.commands
+    source.ensure_download.assert_called_once_with(
+        "toolchains", "RISC-V", descriptor)
     assert [
         "tar", "xavf", str(cache_tarball), "-C", str(dest_dir),
     ] in docker.commands

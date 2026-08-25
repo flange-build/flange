@@ -1,18 +1,19 @@
 """Device Tree Overlay（设备树覆盖）构建辅助函数。
 
-flange 支持三类 overlay 来源并存：
+``boot.overlays`` 统一声明 overlay 来源与运行期启用列表：
 
-- ``boot.dtb_overlays``：来自内核源码树的 in-tree overlay，由 kernel make 编译
-- ``boot.vendor_overlays``：来自外部 vendor overlay 仓库（如 radxa-overlays），
+- ``intree``：来自内核源码树，由 kernel make 编译
+- ``vendor``：来自外部 vendor overlay 仓库（如 radxa-overlays），
   由 device-tree-overlay 组件用 cpp + dtc 单独编译
-- ``boot.board_overlays``：板私有 overlay，dtso 源文件位于
+- ``board``：板私有 overlay，dtso 源文件位于
   ``components/board/<board>/dtso/``，由 device-tree-overlay 组件复用同一
   cpp + dtc 流水线编译。用于不属于上游 vendor 仓库、又不便落入内核 in-tree
   的板级私有显示 / 外设 overlay。
+- ``package``：硬件特性包注入的 overlay
+- ``enabled``：boot 运行期应用的 overlay
 
-三类都打包到 boot.img 同一目录 ``/dtbs/<vendor>/overlay/`` 下平铺，basename
-必须全局唯一；撞名时构建立即失败。``boot.default_overlays`` 是 extlinux 默认
-应用的子集，必须出现在三源的并集中，不需要带前缀。
+``kernel.device_tree.build_overlays`` 单独声明构建期合并到 base DTB 的列表。
+所有来源都平铺到 boot overlay 目录，basename 必须全局唯一。
 """
 
 from __future__ import annotations
@@ -22,42 +23,49 @@ from collections.abc import Iterable
 from pathlib import Path
 
 
-def _overlay_names(config: dict, key: str) -> list[str]:
-    """读取 boot.<key> overlay 列表，未声明时返回空列表。"""
-    value = (config.get("boot") or {}).get(key, []) or []
+def _validate_names(value, path: str) -> list[str]:
     if isinstance(value, str) or not isinstance(value, Iterable):
-        raise TypeError(f"boot.{key} 必须是字符串列表")
+        raise TypeError(f"{path} 必须是字符串列表")
 
     names = list(value)
     for name in names:
         if not isinstance(name, str) or not name:
-            raise TypeError(f"boot.{key} 只能包含非空字符串")
+            raise TypeError(f"{path} 只能包含非空字符串")
         if "/" in name or name.startswith("."):
-            raise ValueError(f"boot.{key} 只能声明 boot overlay 文件名: {name}")
+            raise ValueError(f"{path} 只能声明 overlay 文件名: {name}")
         if not name.endswith(".dtbo"):
-            raise ValueError(f"boot.{key} 只能声明 .dtbo 文件: {name}")
+            raise ValueError(f"{path} 只能声明 .dtbo 文件: {name}")
     return names
 
 
-def dtb_overlays(config: dict) -> list[str]:
+def _overlay_names(config: dict, key: str) -> list[str]:
+    """读取 canonical overlay 列表。"""
+    overlays = (config.get("boot") or {}).get("overlays") or {}
+    if not isinstance(overlays, dict):
+        raise TypeError("boot.overlays 必须是字典")
+    return _validate_names(
+        overlays.get(key, []) or [], f"boot.overlays.{key}")
+
+
+def intree_overlays(config: dict) -> list[str]:
     """返回 in-tree overlay 文件名列表（从内核源码树编译）。"""
-    return _overlay_names(config, "dtb_overlays")
+    return _overlay_names(config, "intree")
 
 
 def vendor_overlays(config: dict) -> list[str]:
     """返回 vendor overlay 文件名列表（从外部 vendor 仓库编译）。"""
-    return _overlay_names(config, "vendor_overlays")
+    return _overlay_names(config, "vendor")
 
 
 def board_overlays(config: dict) -> list[str]:
     """返回板私有 overlay 文件名列表（从 components/board/<board>/dtso/ 编译）。"""
-    return _overlay_names(config, "board_overlays")
+    return _overlay_names(config, "board")
 
 
 def package_overlays(config: dict) -> list[str]:
     """返回 package overlay 文件名列表（来自 board 启用的硬件特性包的
-    devicetree component，由 builder/packages.py 注入 boot.package_overlays）。"""
-    return _overlay_names(config, "package_overlays")
+    devicetree component，由 builder/packages.py 注入 boot.overlays.package）。"""
+    return _overlay_names(config, "package")
 
 
 def all_declared_overlays(config: dict) -> list[str]:
@@ -66,7 +74,7 @@ def all_declared_overlays(config: dict) -> list[str]:
     顺序保留：先 in-tree、再 vendor、再 board、再 package。任何两源 basename
     撞名 → raise ValueError，错误信息列出冲突项与冲突来源。
     """
-    intree = dtb_overlays(config)
+    intree = intree_overlays(config)
     vendor = vendor_overlays(config)
     private = board_overlays(config)
     package = package_overlays(config)
@@ -78,20 +86,20 @@ def all_declared_overlays(config: dict) -> list[str]:
     iv_collisions = [n for n in vendor if n in intree_set]
     if iv_collisions:
         raise ValueError(
-            "boot.dtb_overlays 与 boot.vendor_overlays 中存在重名: "
+            "boot.overlays.intree 与 boot.overlays.vendor 中存在重名: "
             f"{', '.join(iv_collisions)}；"
             "boot.img 内 overlay 平铺到同一目录，basename 必须全局唯一"
         )
     ib_collisions = [n for n in private if n in intree_set]
     if ib_collisions:
         raise ValueError(
-            "boot.dtb_overlays 与 boot.board_overlays 中存在重名: "
+            "boot.overlays.intree 与 boot.overlays.board 中存在重名: "
             f"{', '.join(ib_collisions)}；basename 必须全局唯一"
         )
     vb_collisions = [n for n in private if n in vendor_set]
     if vb_collisions:
         raise ValueError(
-            "boot.vendor_overlays 与 boot.board_overlays 中存在重名: "
+            "boot.overlays.vendor 与 boot.overlays.board 中存在重名: "
             f"{', '.join(vb_collisions)}；basename 必须全局唯一"
         )
     pkg_collisions = [
@@ -100,44 +108,58 @@ def all_declared_overlays(config: dict) -> list[str]:
     ]
     if pkg_collisions:
         raise ValueError(
-            "boot.package_overlays 与其他源中存在重名: "
+            "boot.overlays.package 与其他源中存在重名: "
             f"{', '.join(pkg_collisions)}；"
             "boot.img 内 overlay 平铺到同一目录，basename 必须全局唯一"
         )
     return intree + vendor + private + package
 
 
-def default_overlays(config: dict) -> list[str]:
-    """返回默认启动应用的 overlay 文件名列表，并校验其属于两源的并集。"""
+def runtime_overlays(config: dict) -> list[str]:
+    """返回 boot 运行期应用的 overlay，并校验它已声明来源。"""
     declared = all_declared_overlays(config)
-    defaults = _overlay_names(config, "default_overlays")
-    missing = [name for name in defaults if name not in declared]
+    enabled = _overlay_names(config, "enabled")
+    missing = [name for name in enabled if name not in declared]
     if missing:
-        intree = dtb_overlays(config)
+        intree = intree_overlays(config)
         vendor = vendor_overlays(config)
         private = board_overlays(config)
         package = package_overlays(config)
         raise ValueError(
-            "boot.default_overlays 引用了未声明在 boot.dtb_overlays / "
-            "boot.vendor_overlays / boot.board_overlays / boot.package_overlays "
+            "boot.overlays.enabled 引用了未声明在 boot.overlays.intree / "
+            "vendor / board / package "
             "中的 DT overlay: "
             f"{', '.join(missing)}；"
-            f"候选 dtb_overlays={intree}，"
-            f"候选 vendor_overlays={vendor}，"
-            f"候选 board_overlays={private}，"
-            f"候选 package_overlays={package}"
+            f"候选 intree={intree}，vendor={vendor}，"
+            f"board={private}，package={package}"
         )
-    return defaults
+    return enabled
+
+
+def build_overlays(config: dict) -> list[str]:
+    """返回构建期合并到 base DTB 的 overlay 列表。"""
+    value = (
+        ((config.get("kernel") or {}).get("device_tree") or {}).get(
+            "build_overlays", [])
+        or []
+    )
+    names = _validate_names(value, "kernel.device_tree.build_overlays")
+    missing = [name for name in names if name not in all_declared_overlays(config)]
+    if missing:
+        raise ValueError(
+            "kernel.device_tree.build_overlays 引用了未声明来源的 overlay: "
+            f"{', '.join(missing)}")
+    return names
 
 
 def overlay_make_targets(config: dict, dts_dir: str) -> list[str]:
     """生成 Linux kernel make 使用的 in-tree overlay 目标列表。
 
-    仅覆盖 ``boot.dtb_overlays``；vendor overlay 由 device-tree-overlay 组件
+    仅覆盖 ``boot.overlays.intree``；vendor overlay 由 device-tree-overlay 组件
     单独构建，不走 kernel make。
     """
     prefix = f"{dts_dir}/" if dts_dir else ""
-    return [f"{prefix}overlay/{name}" for name in dtb_overlays(config)]
+    return [f"{prefix}overlay/{name}" for name in intree_overlays(config)]
 
 
 def kernel_overlay_dir(src_dir: Path, arch: str, dts_dir: str) -> Path:

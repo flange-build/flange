@@ -19,7 +19,7 @@ TBD - created by archiving change 2026-03-29-phase2-config-system. Update Purpos
 
 #### Scenario: SoC 配置包含芯片标识
 - **WHEN** 查看 `RK3566_SOC` dict
-- **THEN** 包含 `"soc": "rk3566"` 和 `"arch": "aarch64"`
+- **THEN** 包含 `"soc": "rk3566"`，最终配置包含 `architecture.userspace == "aarch64"`
 
 #### Scenario: SoC 配置声明所属平台
 - **WHEN** 查看 `RK3566_SOC` dict
@@ -31,4 +31,3 @@ TBD - created by archiving change 2026-03-29-phase2-config-system. Update Purpos
 #### Scenario: platform 目录无数据文件
 - **WHEN** 查看 `platform/rockchip/` 目录树
 - **THEN** 仅有 `config.bzl`、`BUILD.bazel` 和子目录（如 `rk3566/`），不存在 `patches/`、`scripts/` 等目录
-

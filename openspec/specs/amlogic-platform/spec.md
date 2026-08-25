@@ -24,19 +24,19 @@ Amlogic SoC 家族（GXBB / G12A / G12B / SM1 / SC2 等）的平台级构建策�
 
 ### Requirement: amlogic 平台 SoC 配置自动发现
 
-`components/platform/amlogic/config.py` 必须（SHALL）导出 `PLATFORM` 字典使 `_load_platform_config("amlogic")` 返回平台级配置；`components/platform/amlogic/<soc>/config.py` 必须（SHALL）导出 `SOC` 字典使 `_load_soc_config(<soc>)` 返回 SoC 级配置。SoC 目录命名采用具体型号风格（如 `s905d3/`），不使用 family code（如 `sm1/`）。
+`components/platform/amlogic/config.jsonnet` 必须（SHALL）manifest 平台级 object；`components/platform/amlogic/<soc>/config.jsonnet` 必须（SHALL）manifest SoC overlay。SoC 目录命名采用具体型号风格（如 `s905d3/`），不使用 family code（如 `sm1/`）。
 
 #### Scenario: 自动发现 amlogic 平台
 
-- **WHEN** `components/platform/amlogic/config.py` 存在并导出 `PLATFORM` 变量
+- **WHEN** `components/platform/amlogic/config.jsonnet` 存在且 `platform == "amlogic"`
 - **THEN** `_load_platform_config("amlogic")` 成功返回字典
 - **AND** `_discover_platform_configs()` 返回结果包含 key `"amlogic"`
 
 #### Scenario: 自动发现 s905d3 SoC
 
-- **WHEN** `components/platform/amlogic/s905d3/config.py` 存在并导出 `SOC` 变量
+- **WHEN** `components/platform/amlogic/s905d3/config.jsonnet` 存在且 `soc == "s905d3"`
 - **THEN** `_load_soc_config("s905d3")` 成功返回字典
-- **AND** 返回字典中 `platform == "amlogic"` 且 `soc == "s905d3"` 且 `arch == "aarch64"`
+- **AND** 最终配置中 `platform == "amlogic"`、`soc == "s905d3"` 且 `architecture.userspace == "aarch64"`
 
 #### Scenario: amlogic 与现有平台不互相污染
 
@@ -46,31 +46,29 @@ Amlogic SoC 家族（GXBB / G12A / G12B / SM1 / SC2 等）的平台级构建策�
 
 ### Requirement: s905d3 SoC 配置完整声明
 
-`components/platform/amlogic/s905d3/config.py` 的 `SOC` 字典必须（SHALL）至少声明以下字段：`platform="amlogic"`、`soc="s905d3"`、`arch="aarch64"`、`vendor="amlogic"`、`repos.{u-boot, linux, amlogic-boot-fip}` 三个仓库声明、`bootloader.{from_repo="u-boot", defconfig_fragments, fip_tool="aml_encrypt_g12a", fip_family_inc="g12a.inc"}`、`kernel.{from_repo="linux", defconfig, dts_dir="amlogic"}`、`boot.{kernel_args, dtb_overlays, default_overlays}`、`partitions.entries`。
+`components/platform/amlogic/s905d3/config.jsonnet` 必须（SHALL）至少声明：`platform="amlogic"`、`soc="s905d3"`、`vendor="amlogic"`、三个顶层 `sources` descriptor、`bootloader.{source,fip_tool}`、`kernel.{source,defconfig,config,device_tree.directory}`、`boot.{kernel_args,overlays}` 与 `partitions.entries`。
 
 注：`fip_board_dir`（amlogic-boot-fip 仓库内的 board 子目录名，如 `khadas-vim3l`）是 board 粒度而非 SoC 粒度，由 board config 声明（同 SoC 不同 board 在 LibreELEC/amlogic-boot-fip 内使用不同 blob 集）。
 
 #### Scenario: SoC 声明 u-boot 主线仓库 + fastboot fragment
 
 - **WHEN** 加载 `_load_soc_config("s905d3")`
-- **THEN** 返回字典中 `repos["u-boot"]["repo"] == "https://github.com/u-boot/u-boot.git"`
-- **AND** `repos["u-boot"]["branch"]` 为 mainline 标签（如 `"v2024.10"`）
-- **AND** `bootloader.defconfig_fragments[0] == "khadas-vim3l_defconfig"`
-- **AND** `bootloader.defconfig_fragments` 含 fastboot 相关 fragment（路径由 SoC config 决定，启用 `CONFIG_USB_FUNCTION_FASTBOOT` / `CONFIG_FASTBOOT_FLASH` / `CONFIG_CMD_FASTBOOT`）
+- **THEN** `sources.u-boot-s905d3.url == "https://github.com/u-boot/u-boot.git"`
+- **AND** `sources.u-boot-s905d3.branch == "v2024.10"`
+- **AND** 完整 board 配置的 `bootloader.defconfig == ["khadas-vim3l_defconfig", "flange_fastboot.config"]`
 
 #### Scenario: SoC 声明 LibreELEC fip blobs 仓库
 
 - **WHEN** 加载 `_load_soc_config("s905d3")`
-- **THEN** 返回字典中 `repos["amlogic-boot-fip"]["repo"] == "https://github.com/LibreELEC/amlogic-boot-fip.git"`
-- **AND** `bootloader.fip_family_inc == "g12a.inc"`（SM1 family 复用 G12A 工具链）
+- **THEN** `sources.amlogic-boot-fip.url == "https://github.com/LibreELEC/amlogic-boot-fip.git"`
 - **AND** `bootloader.fip_tool == "aml_encrypt_g12a"`
 
 #### Scenario: SoC 声明 mainline kernel 6.12 LTS
 
 - **WHEN** 加载 `_load_soc_config("s905d3")`
-- **THEN** `repos["linux"]["repo"] == "https://github.com/torvalds/linux.git"`
-- **AND** `repos["linux"]["branch"]` 为 `"v6.12"` 或后续 6.12.y 维护标签
-- **AND** `kernel.dts_dir == "amlogic"`
+- **THEN** `sources.linux-s905d3.url == "https://github.com/torvalds/linux.git"`
+- **AND** `sources.linux-s905d3.branch == "v6.12"`
+- **AND** `kernel.device_tree.directory == "amlogic"`
 
 #### Scenario: SoC kernel_args 包含 ttyAML0 console
 
@@ -80,7 +78,7 @@ Amlogic SoC 家族（GXBB / G12A / G12B / SM1 / SC2 等）的平台级构建策�
 
 ### Requirement: amlogic bootloader 构建走 FIP 打包流程
 
-`builder/platforms/amlogic/bootloader.py` 的 ComponentBuilder 必须（SHALL）在 mainline u-boot 编译产出 `u-boot.bin` 之后，通过 `LibreELEC/amlogic-boot-fip` 仓库内的 `build-fip.sh <board_dir> <u-boot.bin> <out>` 脚本拼装 FIP 镜像（`<out>/u-boot.bin`），然后调 `aml_encrypt_g12a --bootsd` 派生 SD/eMMC 可启动镜像 `u-boot.bin.sd.bin`。`<board_dir>` 必须（SHALL）从 board config 的 `bootloader.fip_board_dir` 字段读取。所有 fip blobs 与工具必须（SHALL）从 `repos.amlogic-boot-fip` 声明的仓库内对应 board 子目录取得；不得（MUST NOT）在源码或 Docker 镜像中硬编码 blob 内容。
+`builder/platforms/amlogic/bootloader.py` 的 ComponentBuilder 必须（SHALL）在 mainline u-boot 编译产出 `u-boot.bin` 之后，通过 `amlogic-boot-fip` source 内的 `build-fip.sh <board_dir> <u-boot.bin> <out>` 拼装 FIP，然后调 `aml_encrypt_g12a --bootsd` 派生 `u-boot.bin.sd.bin`。`<board_dir>` 必须从 `bootloader.fip_board_dir` 读取；fip source 必须通过顶层 `sources.amlogic-boot-fip` 获取。
 
 #### Scenario: bootloader 产物为 u-boot.bin.sd.bin
 
@@ -127,13 +125,13 @@ Amlogic SoC 家族（GXBB / G12A / G12B / SM1 / SC2 等）的平台级构建策�
 
 ### Requirement: khadas-vim3l 板级配置完整
 
-`components/board/khadas-vim3l/config.py` 必须（SHALL）作为合法 board 配置文件存在并导出 `BOARD` 字典，使 `_discover_boards()` 返回结果包含 key `"khadas-vim3l"`。该 board 配置必须（SHALL）至少声明：`board="khadas-vim3l"`、`soc="s905d3"`、`platform="amlogic"`、`kernel.dts="meson-sm1-khadas-vim3l"`、`rootfs.+extra_firmware`（含 brcmfmac4359 三件套）。
+`components/board/khadas-vim3l/config.jsonnet` 必须（SHALL）作为合法 board 配置文件存在并导出 `BOARD` 字典，使 `_discover_boards()` 返回结果包含 key `"khadas-vim3l"`。该 board 配置必须（SHALL）至少声明：`board="khadas-vim3l"`、`soc="s905d3"`、`platform="amlogic"`、`kernel.device_tree.name="meson-sm1-khadas-vim3l"`、`rootfs.+extra_firmware`（含 brcmfmac4359 三件套）。
 
 #### Scenario: 三层合并产生完整配置
 
 - **WHEN** 调用 `get_board_config("khadas-vim3l")`
-- **THEN** 返回字典中 `platform == "amlogic"` 且 `soc == "s905d3"` 且 `kernel.dts == "meson-sm1-khadas-vim3l"`
-- **AND** `kernel.dts_dir == "amlogic"`（由 SoC 层提供，board 层不覆盖）
+- **THEN** 返回字典中 `platform == "amlogic"` 且 `soc == "s905d3"` 且 `kernel.device_tree.name == "meson-sm1-khadas-vim3l"`
+- **AND** `kernel.device_tree.directory == "amlogic"`（由 SoC 层提供，board 层不覆盖）
 - **AND** `bootloader.defconfig == "khadas-vim3l_defconfig"`（由 SoC 层提供）
 
 #### Scenario: lunch target 自动派生
@@ -223,10 +221,10 @@ overlay 源文件 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso` 
 - 包含一个 `spidev@0` 子节点：`compatible = "rohm,dh2228fv";`（mainline `drivers/spi/spidev.c` of_match_table 既有项；裸 `linux,spidev` 自 v5.18 起被拒绝）、`reg = <0>;`、`spi-max-frequency = <24000000>;`
 - 不引入 `#include <dt-bindings/...>`（保持源文件 cpp 阶段 no-op，编译路径最短）
 
-`components/board/khadas-vim3l/config.py` 必须（SHALL）在 `BOARD["boot"]` 中声明：
+`components/board/khadas-vim3l/config.jsonnet` 必须（SHALL）在 `BOARD["boot"]` 中声明：
 
-- `"board_overlays": ["vim3l-spidev-spicc1.dtbo"]`
-- `"default_overlays": ["vim3l-spidev-spicc1.dtbo"]`
+- `"board": ["vim3l-spidev-spicc1.dtbo"]`
+- `"enabled": ["vim3l-spidev-spicc1.dtbo"]`
 
 使该 overlay 默认进入 extlinux `fdtoverlays` 行、首启即生效。
 
@@ -234,8 +232,8 @@ overlay 源文件 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso` 
 
 #### Scenario: VIM3L 默认配置含 SPI overlay
 - **WHEN** 调用 `get_board_config("khadas-vim3l")` 取得合并后的配置
-- **THEN** `boot.board_overlays == ["vim3l-spidev-spicc1.dtbo"]`
-- **AND** `boot.default_overlays == ["vim3l-spidev-spicc1.dtbo"]`
+- **THEN** `boot.overlays.board == ["vim3l-spidev-spicc1.dtbo"]`
+- **AND** `boot.overlays.enabled == ["vim3l-spidev-spicc1.dtbo"]`
 
 #### Scenario: dtso 源文件存在并满足契约
 - **WHEN** 检视 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso`

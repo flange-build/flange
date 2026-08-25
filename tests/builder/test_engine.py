@@ -91,7 +91,9 @@ class TestBuildEngineApp:
             "board":    "test-board",
             "product":  "default",
             "variant":  "release",
-            "arch":     "aarch64",
+            "architecture": {
+                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+            },
             "platform": "rockchip",
             "soc":      "rk3566",
             "rootfs":   {"custom_packages": []},
@@ -194,7 +196,10 @@ class TestFlashConfigGeneration:
     def test_image_build_generates_flash_config(self, tmp_path):
         config = {
             "board": "test-board", "product": "default", "variant": "release",
-            "arch": "aarch64", "platform": "rockchip", "soc": "rk3566",
+            "architecture": {
+                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+            },
+            "platform": "rockchip", "soc": "rk3566",
             "flash_tool": "upgrade_tool",
             "rootfs": {"custom_packages": []},
             "partitions": {
@@ -240,7 +245,10 @@ class TestFlashConfigGeneration:
     def test_rootfs_build_does_not_generate_flash_config(self, tmp_path):
         config = {
             "board": "test-board", "product": "default", "variant": "release",
-            "arch": "aarch64", "platform": "rockchip", "soc": "rk3566",
+            "architecture": {
+                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+            },
+            "platform": "rockchip", "soc": "rk3566",
             "rootfs": {"custom_packages": []},
         }
         with (
@@ -276,7 +284,10 @@ class TestCacheInjection:
     def test_builder_receives_cache(self, tmp_path):
         config = {
             "board": "test-board", "product": "default", "variant": "release",
-            "arch": "aarch64", "platform": "rockchip", "soc": "rk3566",
+            "architecture": {
+                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+            },
+            "platform": "rockchip", "soc": "rk3566",
             "rootfs": {"custom_packages": []},
         }
         with (
@@ -305,6 +316,9 @@ class TestBuildCacheApp:
     """验证 BuildCache.compute_hash 对 app 组件的哈希行为。"""
 
     def _make_cache(self, config: dict, tmpdir: str) -> BuildCache:
+        config.setdefault("architecture", {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        })
         cache = BuildCache.__new__(BuildCache)
         cache.config = config
         board = config["board"]

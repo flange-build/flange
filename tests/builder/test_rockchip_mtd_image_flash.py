@@ -60,13 +60,13 @@ def _config(tmp_path: Path) -> dict:
         "board": "atk-rk3506b",
         "product": "default",
         "variant": "release",
-        "arch": "armhf",
+        "architecture": {
+            "userspace": "armhf", "kernel": "arm", "bootloader": "arm",
+        },
         "storage": {"type": "spinand", "size": "512M"},
         "kernel": {
-            "arch": "arm",
             "image": "zImage",
-            "dts_dir": "",
-            "dts": "rk3506b-test",
+            "device_tree": {"directory": "", "name": "rk3506b-test"},
             "boot_format": "fit",
             "boot_its": "boot.its",
         },

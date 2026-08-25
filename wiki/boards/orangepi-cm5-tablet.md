@@ -3,10 +3,10 @@ title: orangepi-cm5-tablet
 type: board
 status: wip
 sources:
-  - components/board/orangepi-cm5-tablet/config.py
+  - components/board/orangepi-cm5-tablet/config.jsonnet
   - components/board/orangepi-cm5-tablet/overlay/etc/hostname
   - components/board/orangepi-cm5-tablet/patches/kernel/0001-bcmdhd-set-fw-ampak-path-brcm.patch
-  - components/platform/rockchip/rk3588s/config.py
+  - components/platform/rockchip/rk3588s/config.jsonnet
 related:
   - "[[orangepi-cm4]]"
   - "[[orangepi-5-plus]]"
@@ -34,7 +34,7 @@ lunch orangepi-cm5-tablet-default-release
 | SoC | RK3588S（与 RK3588 同 die，少 PCIe / 显示通道 / USB 接口） |
 | DTB | `rk3588s-orangepi-cm5-tablet`（rkr5.1 已含；含 `-tablet-lcd.dtsi` + 3 个 `-tablet-camera*.dtsi`，首版均不启用） |
 | hostname | `orangepi-cm5-tablet` |
-| board overlay | 不携带 `dtso/`、不携带 `boot.board_overlays` |
+| board overlay | 不携带 `dtso/`、不携带 `boot.overlays.board` |
 | usbdevice.conf | 不携带（与 cm4 / rock5c-lite 对齐） |
 | kernel patches | 仅 `0001` bcmdhd FW_AMPAK_PATH（cm4 0002 逐字节复用） |
 | extra_firmware | radxa-firmware 仓拉 AP6256 三件套到 `/lib/firmware/brcm/`（与 cm4 同源） |
@@ -49,7 +49,7 @@ lunch orangepi-cm5-tablet-default-release
 
 固件部署 + 路径约束：
 
-- `rootfs.+extra_firmware` 三件套（同 cm4）→ `/lib/firmware/brcm/`
+- `rootfs.extra_firmware` 三件套（同 cm4）→ `/lib/firmware/brcm/`
 - patch `0001-bcmdhd-set-fw-ampak-path-brcm.patch` 启用 `-DFW_AMPAK_PATH="\"brcm\""`，让 driver 按 `/lib/firmware/brcm/<file>` 查找——这是 in-tree bcmdhd 与 firmware 部署路径对齐的硬约束（不带 patch → driver 查 `/lib/firmware/<file>` → 找不到 → WiFi 不起来）
 
 ## 不携带的 cm4 patch

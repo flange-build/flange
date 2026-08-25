@@ -1,38 +1,39 @@
 # board-config Specification
 
 ## Purpose
-TBD - created by archiving change 2026-03-29-phase2-config-system. Update Purpose after archive.
+
+定义 board Jsonnet overlay 的身份字段和板级事实边界。
+
 ## Requirements
-### Requirement: 板级配置文件声明完整构建参数
-`board/radxa-zero3w/board.bzl` SHALL 导出板级配置 dict，包含该板子的完整构建参数，至少包括：`board`（板子名称）、`soc`（SoC 型号）、`platform`（所属平台）、`dts`（设备树名称）。
 
-#### Scenario: 板级配置包含核心字段
-- **WHEN** 查看 `board/radxa-zero3w/board.bzl` 导出的配置 dict
-- **THEN** 包含 `board`、`soc`、`platform`、`dts` 字段
+### Requirement: 板级配置身份
 
-#### Scenario: 板级配置包含内核源码信息
-- **WHEN** 查看板级配置的 `kernel` 字段
-- **THEN** 包含 `repo`（仓库地址）和 `branch`（分支名）
+`components/board/<board>/config.jsonnet` MUST 声明与目录一致的 `board`，以及
+所属 `platform`、`soc`、可用 `products` 和 `variants`。注册表 MUST 从该文件
+自动发现 board，不得动态 import Python 配置模块。
 
-#### Scenario: 板级配置包含 bootloader 源码信息
-- **WHEN** 查看板级配置的 `bootloader` 字段
-- **THEN** 包含 `repo`（仓库地址）和 `branch`（分支名）
+#### Scenario: 自动发现 board
 
-#### Scenario: 板级配置包含 boot 引导参数
-- **WHEN** 查看板级配置的 `boot` 字段
-- **THEN** 包含 `kernel_args`（内核启动参数）、`dtb_overlays`（打包的 dtbo 列表）、`default_overlays`（默认启用的 overlay 列表）
+- **WHEN** board 目录包含合法 `config.jsonnet`
+- **THEN** `discover_boards()` 返回其身份投影
 
-### Requirement: 板级 BUILD.bazel 声明 filegroup
-`board/radxa-zero3w/BUILD.bazel` SHALL 声明板级资源的 `filegroup`（如补丁、overlay），供组件构建规则通过 `deps` 引用。初始阶段可为空 filegroup。
+#### Scenario: 身份与目录不一致
 
-#### Scenario: BUILD.bazel 包含 filegroup 声明
-- **WHEN** 查看 `board/radxa-zero3w/BUILD.bazel`
-- **THEN** 存在 `filegroup` target 声明
+- **WHEN** `board` 字段与目录名不同
+- **THEN** Jsonnet loader 在组合配置前报错
 
-### Requirement: 板级配置声明 rootfs 基线版本
-板级配置 dict SHALL 包含 `rootfs` 字段，声明根文件系统的基线版本（如 Ubuntu 代号）。
+### Requirement: 板级硬件事实使用 canonical 字段
 
-#### Scenario: radxa-zero3w 使用 noble 基线
-- **WHEN** 查看 `board/radxa-zero3w/board.bzl` 中的 `rootfs` 配置
-- **THEN** 包含 `"base": "noble"`
+板级设备树 MUST 通过 `kernel.device_tree.name` 声明；Kconfig override MUST
+使用 `kernel.config` / `bootloader.config`；运行期 overlay MUST 使用
+`boot.overlays.{intree,vendor,board,package,enabled}`。不得使用任何旧 alias。
 
+#### Scenario: 板级设备树
+
+- **WHEN** board 声明 `kernel+: {device_tree+: {name: "demo"}}`
+- **THEN** builder 从 platform/SoC 提供的 directory 和 board 提供的 name 组成路径
+
+### Requirement: 板级数据目录
+
+board MAY 携带 `overlay/`、`patches/` 和 `dtso/` 数据；这些内容 MUST 由公共
+builder 根据 canonical 配置消费，新增 board 不得要求修改框架层代码。

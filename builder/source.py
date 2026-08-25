@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 class SourceManager:
@@ -40,8 +41,7 @@ class SourceManager:
         self._preparing_cache_inputs = True
         try:
             source_cfg = config.get(component, {}) or {}
-            if any(source_cfg.get(key) for key in
-                   ("local_path", "from_repo", "repo", "local_repo")):
+            if source_cfg.get("source"):
                 self._builder_resets_source = component in {
                     "kernel", "bootloader"}
                 try:
@@ -52,20 +52,17 @@ class SourceManager:
             if component == "kernel":
                 for name in ("kernel_bsp", "kernel_device"):
                     cfg = config.get(name) or {}
-                    if any(cfg.get(key) for key in
-                           ("from_repo", "repo", "local_repo")):
+                    if cfg.get("source"):
                         self.ensure_extra(name, cfg, config=config)
                 for name, cfg in (source_cfg.get("oot_sources") or {}).items():
-                    if (name not in ("product", "variant")
-                            and isinstance(cfg, dict)):
-                        self.ensure_oot_source(name, cfg)
+                    self.ensure_oot_source(name, cfg, config=config)
 
             if component == "bootloader":
-                self.ensure_firmware(config.get("platform", ""), config)
-                if "amlogic-boot-fip" in (config.get("repos") or {}):
+                self.ensure_firmware(config)
+                if "amlogic-boot-fip" in (config.get("sources") or {}):
                     self.ensure_extra(
                         "amlogic-boot-fip",
-                        {"from_repo": "amlogic-boot-fip"},
+                        {"source": {"name": "amlogic-boot-fip"}},
                         config=config,
                     )
 
@@ -82,239 +79,133 @@ class SourceManager:
 
     @staticmethod
     def _repo_firmware(config: dict):
-        """迭代 rootfs 中具有独立 git 仓库的 firmware 声明。"""
+        """迭代 rootfs 中的 canonical firmware source。"""
         for entry in (config.get("rootfs") or {}).get("extra_firmware") or []:
-            if entry.get("source", "repo") == "repo":
+            if isinstance(entry.get("source"), dict):
                 yield entry.get("name", "firmware"), entry
 
     def ensure(self, component: str, config: dict) -> Path:
-        """确保组件源码就绪，返回源码目录路径。
-
-        路径解析优先级：
-          1. local_path：直接用本地目录，不碰 git
-          2. from_repo + subpath：引用配置中 repos 字典声明的命名仓库
-          3. local_repo / repo：独立 clone 到 .build/sources/<component>/<board>/
-        """
-        comp_config = config.get(component, {})
-        local_path = comp_config.get("local_path")
-        if local_path:
-            return Path(local_path)
-
-        from_repo = comp_config.get("from_repo")
-        if from_repo:
-            repo_dir = self._ensure_named_repo(from_repo, config)
-            subpath = comp_config.get("subpath", "")
-            return repo_dir / subpath if subpath else repo_dir
-
-        repo_dir = self.sources_dir / component / config["board"]
-        self._ensure_repo(repo_dir, comp_config)
-        return repo_dir
+        """按组件的 canonical source 引用确保源码就绪。"""
+        return self._ensure_source_ref(
+            (config.get(component) or {}).get("source"),
+            config,
+            component,
+        )
 
     def ensure_extra(self, name: str, cfg: dict,
                      config: dict | None = None) -> Path:
-        """确保额外仓库就绪（BSP、device 等），返回仓库目录路径。
+        """按额外组件的 canonical source 引用确保源码就绪。"""
+        if config is None:
+            raise ValueError(f"ensure_extra({name}) 需要 config 参数")
+        return self._ensure_source_ref(cfg.get("source"), config, name)
 
-        路径解析优先级：
-          1. cfg.from_repo + cfg.subpath：引用命名仓库子路径（需传入 config）
-          2. cfg.repo / local_repo：独立 clone 到 .build/sources/extra/<name>/
-        """
-        from_repo = cfg.get("from_repo")
-        if from_repo:
-            if config is None:
-                raise ValueError(
-                    f"ensure_extra({name}): from_repo 模式需要传入 config 参数")
-            repo_dir = self._ensure_named_repo(from_repo, config)
-            subpath = cfg.get("subpath", "")
-            return repo_dir / subpath if subpath else repo_dir
+    @staticmethod
+    def source_identity(descriptor: dict) -> str:
+        """返回决定远端 checkout 工作树身份的稳定摘要。"""
+        payload = json.dumps(
+            descriptor, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+        return hashlib.sha256(payload).hexdigest()
 
-        extra_dir = self.sources_dir / "extra" / name
-        self._ensure_repo(extra_dir, cfg)
-        return extra_dir
-
-    def _ensure_named_repo(self, name: str, config: dict) -> Path:
-        """确保命名仓库就绪，返回 .build/sources/repos/<name>/ 路径。
-
-        命名仓库声明在 config["repos"][name] 中，
-        多个组件可共享同一命名仓库（只 clone 一次）。
-        """
-        repos = config.get("repos", {})
-        if name not in repos:
-            available = ", ".join(sorted(repos)) or "无"
+    def _ensure_source_ref(self, ref, config: dict, label: str) -> Path:
+        """解析唯一 source descriptor，获取根目录后追加安全子路径。"""
+        if not isinstance(ref, dict) or not ref.get("name"):
+            raise ValueError(f"{label}.source.name 未声明")
+        name = ref["name"]
+        sources = config.get("sources") or {}
+        if name not in sources:
+            available = ", ".join(sorted(sources)) or "无"
             raise ValueError(
-                f"命名仓库未定义：{name}（可用: {available}）"
-                f"；请在 config 顶层 repos 字典中声明")
-        repo_dir = self.sources_dir / "repos" / name
-        self._ensure_repo(repo_dir, repos[name])
-        return repo_dir
+                f"{label}.source.name 引用了未知 source: {name!r}"
+                f"（可用: {available}）")
 
-    def ensure_firmware(self, platform: str, config: dict) -> Path:
+        descriptor = sources[name]
+        has_local = bool(descriptor.get("local_path"))
+        has_remote = bool(descriptor.get("url"))
+        if has_local == has_remote:
+            raise ValueError(
+                f"sources.{name} 必须且只能声明 local_path 或 url 之一")
+        if has_local and any(
+            key in descriptor
+            for key in ("branch", "commit", "recurse_submodules")
+        ):
+            raise ValueError(
+                f"sources.{name}.local_path 与远端 revision 字段互斥")
+
+        if has_local:
+            source_dir = Path(descriptor["local_path"])
+            if not source_dir.is_absolute():
+                from builder.paths import PROJECT_ROOT
+                source_dir = (self._project_root or PROJECT_ROOT) / source_dir
+        else:
+            source_dir = (
+                self.sources_dir / "repos" / self.source_identity(descriptor)
+            )
+            self._ensure_repo(source_dir, descriptor)
+
+        subpath = ref.get("subpath", "")
+        subpath_obj = Path(subpath)
+        if subpath_obj.is_absolute() or ".." in subpath_obj.parts:
+            raise ValueError(f"{label}.source.subpath 不得越出 source 根目录")
+        return source_dir / subpath_obj if subpath else source_dir
+
+    def ensure_firmware(self, config: dict) -> Path:
         """确保平台固件仓库就绪（如 rkbin）。"""
-        rkbin_config = config.get("rkbin", {})
-        if not (rkbin_config.get("repo") or rkbin_config.get("local_repo")):
+        rkbin_config = config.get("rkbin") or {}
+        if not rkbin_config:
             return Path("")
-        fw_dir = self.sources_dir / "firmware" / platform
-        self._ensure_repo(fw_dir, rkbin_config)
-        return fw_dir
+        return self._ensure_source_ref(rkbin_config.get("source"), config, "rkbin")
 
-    # extra_firmware source 类型注册表 —— 复用其他组件已 ensure 的源码树
-    # 而非独立 clone。调用方（_install_extra_firmware）需在 component_sources
-    # dict 中提供对应路径。新增 source 类型只需在此添加，无需扩展 API。
-    _COMPONENT_FIRMWARE_SOURCES = frozenset({"kernel", "bootloader"})
-
-    def ensure_oot_source(self, name: str, cfg: dict) -> Path:
-        """确保 out-of-tree 模块源码就绪，返回源码根目录路径。
-
-        存储路径：``.build/sources/oot-modules/<name>/``。cfg 字段与 rkbin
-        相同（``repo`` / ``local_repo`` / ``branch`` / ``commit`` / ``tag`` /
-        ``recurse_submodules``），_ensure_repo 复用同一套语义：
-
-        - 仅声明 branch（无 commit/tag）：每次 ensure 跟踪远端最新（reset --hard）
-        - 声明 commit/tag：固定锁定
-
-        与 extra_firmware 的 source="repo" 形态平行，但语义不同：本函数返回
-        的路径是**编译输入**（make M=<path>），而 extra_firmware 是**rootfs
-        内容来源**。强行复用 extra_firmware 会把 .build/sources/extra-firmware/
-        目录当编译目录，造成增量构建残留 .o/.ko 污染固件部署。
-        """
-        repo_dir = self.sources_dir / "oot-modules" / name
-        self._ensure_repo(repo_dir, cfg)
-        return repo_dir
+    def ensure_oot_source(self, name: str, cfg: dict,
+                          config: dict | None = None) -> Path:
+        """确保 OOT module 的 canonical source 就绪。"""
+        if config is None:
+            raise ValueError(f"kernel.oot_sources.{name} 需要 config 参数")
+        return self._ensure_source_ref(
+            cfg.get("source"), config, f"kernel.oot_sources.{name}")
 
     def ensure_extra_firmware(self, name: str, cfg: dict,
-                              component_sources: dict[str, Path]
-                              | None = None,
                               config: dict | None = None) -> Path:
-        """确保额外固件来源就绪，返回固件根目录路径。
-
-        cfg 的 ``source`` 字段决定来源类型（默认 ``"repo"``）：
-
-        - ``"repo"``：从外部 git 仓库 clone（沿用历史行为）。其他字段按
-          rkbin 格式：``repo`` / ``local_repo`` / ``branch`` / ``commit``。
-          存储路径 ``.build/sources/extra-firmware/<name>/``。
-        - ``"kernel"`` / ``"bootloader"``：复用对应 component 已 ensure 的
-          源码树作为 fw_dir，**不**独立 clone。调用方需在 ``component_sources``
-          中提供 ``{"kernel": <kernel_src_path>, ...}``。适用于 firmware
-          blob 在 BSP 源码内 vendor 的场景（如 RK3588 的
-          ``drivers/gpu/arm/bifrost/mali_csffw.bin``）。
-        - ``"oot:<name>"``：复用同 build 内已 ensure 的 OOT 模块源码作为
-          fw_dir。调用方需在 ``component_sources`` 中以同 key
-          （``"oot:<name>"``）提供路径。适用于 vendor WiFi/BT 包内自带固件
-          blob 的场景（如 rkwifibt 的 ``firmware/realtek/RTL8852BE/``）。
-        - ``"local"``：板目录下随仓库携带的本地 blob，**不**走 git/网络。
-          cfg 需带 ``src_dir`` 字段，相对 ``components/board/<board>/`` 解析为
-          fw_dir。调用方需通过 ``config`` 参数提供顶层 config（取 ``board``
-          字段）。适用于触摸 cfg blob / 板私有 panel firmware 等小尺寸、
-          按 product 条件部署、不便走仓库的场景。
-
-        将来扩展：``"url"`` / 其他 component 类型只需在此函数与
-        ``_COMPONENT_FIRMWARE_SOURCES`` 中添加分支，调用方按需在
-        ``component_sources`` 注入对应 path。
-        """
-        source_type = cfg.get("source", "repo")
-        if source_type == "repo":
-            fw_dir = self.sources_dir / "extra-firmware" / name
-            self._ensure_repo(fw_dir, cfg)
-            return fw_dir
-        if (source_type in self._COMPONENT_FIRMWARE_SOURCES
-                or source_type.startswith("oot:")):
-            if not component_sources or source_type not in component_sources:
-                raise ValueError(
-                    f"extra_firmware {name} 声明 source={source_type!r}，"
-                    f"但调用方未在 component_sources 中提供对应路径")
-            return component_sources[source_type]
-        if source_type == "local":
-            return self._ensure_local_firmware(name, cfg, config)
-        raise ValueError(
-            f"extra_firmware {name} 不支持的 source 类型: {source_type!r}；"
-            f"可选: 'repo' / 'local' / 'oot:<name>' / "
-            f"{' / '.join(sorted(repr(s) for s in self._COMPONENT_FIRMWARE_SOURCES))}")
-
-    def _ensure_local_firmware(self, name: str, cfg: dict,
-                               config: dict | None) -> Path:
-        """source='local' 分支：解析 components/board/<board>/<src_dir>。
-
-        与 source='repo' 平行的"零网络"通路；fw_dir 直接指向仓库内目录，
-        cache 层另行 hash 文件内容以保证 blob 变更触发 rootfs 重建。
-        """
-        if config is None or not config.get("board"):
-            raise ValueError(
-                f"extra_firmware {name} 声明 source='local'，"
-                f"但 ensure_extra_firmware 未收到含 'board' 字段的 config")
-        src_dir = cfg.get("src_dir")
-        if not src_dir:
-            raise ValueError(
-                f"extra_firmware {name} 声明 source='local' 但缺 'src_dir' 字段")
-        # PROJECT_ROOT 是 paths.py 暴露的仓库根；优先使用 self._project_root
-        # 让测试可注入临时根。
-        from builder.paths import COMPONENTS_DIRNAME, PROJECT_ROOT
-        root = self._project_root if self._project_root is not None else PROJECT_ROOT
-        fw_dir = (root / COMPONENTS_DIRNAME / "board"
-                  / config["board"] / src_dir).resolve()
-        if not fw_dir.is_dir():
-            raise FileNotFoundError(
-                f"extra_firmware {name} source='local' 引用的目录不存在: {fw_dir}")
-        return fw_dir
+        """确保额外固件的 canonical source 或下载 descriptor 就绪。"""
+        if cfg.get("url"):
+            return self.ensure_download("firmware", name, cfg).parent
+        if config is None:
+            raise ValueError(f"rootfs.extra_firmware.{name} 需要 config 参数")
+        return self._ensure_source_ref(
+            cfg.get("source"), config, f"rootfs.extra_firmware.{name}")
 
     def ensure_extra_deb(self, name: str, cfg: dict) -> Path:
-        """确保外部 deb 包已下载，返回 deb 文件路径。
-
-        存储路径：.build/sources/extra-debs/<name>/<filename>
-        cfg 格式：
-          - url:     下载地址（必须）
-          - sha256:  校验哈希（必须）
-          - filename: 本地文件名（可选，默认从 URL 提取）
-        下载使用原子写入（.download 后缀），sha256 不匹配则删除重下。
-        """
-        url = cfg["url"]
-        sha256 = cfg["sha256"]
-        filename = cfg.get("filename", url.rsplit("/", 1)[-1])
-        deb_dir = self.sources_dir / "extra-debs" / name
-        deb_dir.mkdir(parents=True, exist_ok=True)
-        deb_path = deb_dir / filename
-
-        # 已存在且校验通过则跳过
-        if deb_path.is_file() and self._sha256_file(deb_path) == sha256:
-            return deb_path
-
-        # 原子下载：先写 .download，完成后 rename；
-        # 失败时清理残留 partial 文件，避免污染缓存目录。
-        partial = deb_path.with_suffix(deb_path.suffix + ".download")
-        try:
-            subprocess.run(
-                ["wget", "-q", "--show-progress", "-O", str(partial), url],
-                check=True, timeout=600,
-            )
-            if self._sha256_file(partial) != sha256:
-                raise RuntimeError(
-                    f"extra_deb {name}: sha256 校验失败（URL: {url}）")
-            partial.rename(deb_path)
-        except Exception:
-            partial.unlink(missing_ok=True)
-            raise
-        return deb_path
+        """确保外部 deb 包已下载。"""
+        return self.ensure_download("extra-debs", name, cfg)
 
     def ensure_prebuilt_image(self, name: str, cfg: dict) -> Path:
-        """确保预编固件镜像（如 SPI bootloader spi.img）已下载，返回文件路径。
+        """确保预编镜像已下载。"""
+        return self.ensure_download("prebuilt", name, cfg)
 
-        存储路径：.build/sources/prebuilt/<name>/<filename>
-        cfg 格式（与 ensure_extra_deb 同款）：
-          - url:      下载地址（必须）
-          - sha256:   校验哈希（必须）
-          - filename: 本地文件名（可选，默认从 URL 提取）
-        原子写入（.download 后缀）+ sha256 校验；缓存命中（文件在且哈希匹配）则
-        跳过下载——故同一构建/刷写多次调用幂等、无网亦可复用已下产物。
-        """
-        url = cfg["url"]
-        sha256 = cfg["sha256"]
-        filename = cfg.get("filename", url.rsplit("/", 1)[-1])
-        img_dir = self.sources_dir / "prebuilt" / name
-        img_dir.mkdir(parents=True, exist_ok=True)
-        img_path = img_dir / filename
+    def ensure_download(self, category: str, name: str, cfg: dict) -> Path:
+        """按统一 descriptor 下载并校验外部产物。"""
+        url = cfg.get("url")
+        raw_sha256 = cfg.get("sha256")
+        sha256 = raw_sha256.lower() if isinstance(raw_sha256, str) else ""
+        if not isinstance(url, str) or not url:
+            raise ValueError(f"{name}.url 必须是非空字符串")
+        if len(sha256) != 64 or any(
+                char not in "0123456789abcdef" for char in sha256):
+            raise ValueError(f"{name}.sha256 必须是 64 位十六进制 SHA256")
+        filename = cfg.get("filename") or Path(urlsplit(url).path).name
+        if (not isinstance(filename, str) or not filename
+                or Path(filename).name != filename):
+            raise ValueError(f"{name}.filename 必须是安全的单个文件名")
+        if Path(category).name != category:
+            raise ValueError(f"非法下载类别: {category!r}")
 
-        if img_path.is_file() and self._sha256_file(img_path) == sha256:
-            return img_path
+        path = self.sources_dir / "downloads" / category / sha256 / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file() and self._sha256_file(path) == sha256:
+            return path
 
-        partial = img_path.with_suffix(img_path.suffix + ".download")
+        partial = path.with_suffix(path.suffix + ".download")
         try:
             subprocess.run(
                 ["wget", "-q", "--show-progress", "-O", str(partial), url],
@@ -322,12 +213,12 @@ class SourceManager:
             )
             if self._sha256_file(partial) != sha256:
                 raise RuntimeError(
-                    f"prebuilt_image {name}: sha256 校验失败（URL: {url}）")
-            partial.rename(img_path)
+                    f"{name}: sha256 校验失败（URL: {url}）")
+            partial.replace(path)
         except Exception:
             partial.unlink(missing_ok=True)
             raise
-        return img_path
+        return path
 
     @staticmethod
     def _sha256_file(path: Path) -> str:
@@ -340,34 +231,7 @@ class SourceManager:
     def ensure_rootfs_tarball(self, config: dict) -> Path:
         """确保 rootfs base tarball 已通过 SHA256 校验并原子落地。"""
         rootfs = config["rootfs"]
-        url = rootfs["url"]
-        raw_sha256 = rootfs.get("sha256")
-        sha256 = raw_sha256.lower() if isinstance(raw_sha256, str) else ""
-        if len(sha256) != 64 or any(
-                char not in "0123456789abcdef" for char in sha256):
-            raise ValueError("rootfs.sha256 必须是 64 位十六进制 SHA256")
-        tarball_dir = self.sources_dir / "rootfs"
-        tarball_dir.mkdir(parents=True, exist_ok=True)
-        filename = url.rsplit("/", 1)[-1]
-        tarball_path = tarball_dir / filename
-        if (tarball_path.is_file()
-                and self._sha256_file(tarball_path) == sha256):
-            return tarball_path
-
-        partial = tarball_path.with_suffix(tarball_path.suffix + ".download")
-        try:
-            subprocess.run(
-                ["wget", "-q", "--show-progress", "-O", str(partial), url],
-                check=True, timeout=600,
-            )
-            if self._sha256_file(partial) != sha256:
-                raise RuntimeError(
-                    f"rootfs tarball sha256 校验失败（URL: {url}）")
-            partial.replace(tarball_path)
-        except Exception:
-            partial.unlink(missing_ok=True)
-            raise
-        return tarball_path
+        return self.ensure_download("rootfs", "rootfs", rootfs)
 
     def ensure_app(self, app_name: str, config: dict) -> Path:
         """确保 App 源码就绪，返回 App 目录路径。
@@ -424,7 +288,7 @@ class SourceManager:
             # 2b. git 分支：克隆到 sources_dir/apps/<name>/
             if "git" in ext:
                 app_dir = self.sources_dir / "apps" / app_name
-                repo_cfg = {**ext, "repo": ext["git"]}
+                repo_cfg = {**ext, "url": ext["git"]}
                 self._ensure_repo(app_dir, repo_cfg)
                 return app_dir
 
@@ -554,22 +418,8 @@ class SourceManager:
                        cwd=repo_dir, env=env, check=True, timeout=3600)
 
     def _resolve_clone_url(self, cfg: dict) -> str:
-        """选出 clone 源 URL。local_repo 优先于 repo。
-
-        local_repo 转成 file:// 绝对 URL：纯本地路径会被 git 当作 hardlink
-        clone 并忽略 --depth=1；file:// 会走 transport，shallow clone 生效。
-        """
-        local_repo = cfg.get("local_repo", "")
-        if local_repo:
-            path = Path(local_repo).expanduser().resolve()
-            if not path.exists():
-                raise ValueError(f"local_repo 不存在: {path}")
-            if not (path / ".git").exists() and not (path / "HEAD").exists():
-                raise ValueError(
-                    f"local_repo 不是一个 git 仓库（未找到 .git 或 HEAD）: {path}"
-                )
-            return f"file://{path}"
-        return cfg["repo"]
+        """返回 canonical git URL。"""
+        return cfg["url"]
 
     def _clone(self, repo: str, branch: str, dest: Path, commit: str = "",
                recurse: bool = False, is_tag: bool = False):

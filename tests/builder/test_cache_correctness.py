@@ -18,10 +18,12 @@ def _config() -> dict:
         "board": "cache-test",
         "product": "default",
         "variant": "release",
-        "arch": "aarch64",
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "platform": "rockchip",
         "soc": "rk3568",
-        "kernel": {"dts": "cache-test"},
+        "kernel": {"device_tree": {"directory": "", "name": "cache-test"}},
         "kernel_device": {"board_dts_path": "board-a.dts"},
         "bootloader": {},
         "rkbin": {"ini_prefix": "RK3568"},
@@ -58,11 +60,12 @@ def _kernel_artifacts(cache: BuildCache) -> None:
 
 def test_branch_head未变化时允许命中(tmp_path: Path, monkeypatch):
     config = _config()
-    config["repos"] = {
-        "kernel": {"repo": "https://example.com/kernel.git", "branch": "main"}
+    config["sources"] = {
+        "kernel": {"url": "https://example.com/kernel.git", "branch": "main"}
     }
-    config["kernel"]["from_repo"] = "kernel"
-    (tmp_path / ".build/sources/repos/kernel").mkdir(parents=True)
+    config["kernel"]["source"] = {"name": "kernel"}
+    identity = SourceManager.source_identity(config["sources"]["kernel"])
+    (tmp_path / ".build/sources/repos" / identity).mkdir(parents=True)
     cache = _cache(tmp_path, config)
     monkeypatch.setattr(cache, "_git_head", lambda _path: "stable-head")
     _kernel_artifacts(cache)
@@ -74,8 +77,12 @@ def test_branch_head未变化时允许命中(tmp_path: Path, monkeypatch):
 
 def test_store重新计算构建后head(tmp_path: Path, monkeypatch):
     config = _config()
-    config["kernel"]["repo"] = "https://example.com/kernel.git"
-    repo = tmp_path / ".build/sources/kernel/cache-test"
+    config["sources"] = {
+        "kernel": {"url": "https://example.com/kernel.git"},
+    }
+    config["kernel"]["source"] = {"name": "kernel"}
+    identity = SourceManager.source_identity(config["sources"]["kernel"])
+    repo = tmp_path / ".build/sources/repos" / identity
     repo.mkdir(parents=True)
     state = {"head": "before"}
     cache = _cache(tmp_path, config)
@@ -94,7 +101,10 @@ def test_store重新计算构建后head(tmp_path: Path, monkeypatch):
 def test_同一组件预同步与构建只fetch一次(tmp_path: Path, monkeypatch):
     manager = SourceManager(
         tmp_path / ".build/sources", project_root=tmp_path)
-    repo = manager.sources_dir / "kernel/cache-test"
+    descriptor = {
+        "url": "https://example.com/kernel.git", "branch": "main",
+    }
+    repo = manager.sources_dir / "repos" / manager.source_identity(descriptor)
     repo.mkdir(parents=True)
     calls = []
     monkeypatch.setattr(
@@ -102,8 +112,8 @@ def test_同一组件预同步与构建只fetch一次(tmp_path: Path, monkeypatc
         lambda path, branch: calls.append((path, branch)),
     )
     config = _config()
-    config["kernel"].update({
-        "repo": "https://example.com/kernel.git", "branch": "main"})
+    config["sources"] = {"kernel": descriptor}
+    config["kernel"]["source"] = {"name": "kernel"}
 
     manager.prepare_cache_inputs("kernel", config)
     manager.ensure("kernel", config)
@@ -248,7 +258,10 @@ def test_dynamic_artifact_gates(tmp_path: Path):
     assert app_cache._required_artifacts_present("app")
 
     overlay_config = _config()
-    overlay_config["boot"]["vendor_overlays"] = ["demo.dtbo"]
+    overlay_config["boot"]["overlays"] = {
+        "intree": [], "vendor": ["demo.dtbo"], "board": [],
+        "package": [], "enabled": [],
+    }
     overlay_cache = _cache(tmp_path / "overlay", overlay_config)
     assert not overlay_cache._required_artifacts_present(
         "device-tree-overlay")
@@ -262,7 +275,10 @@ def test_qualcomm_bootloader要求所有刷写输入(tmp_path: Path):
     config = _config()
     config["platform"] = "qualcommsc8280xp"
     config["bootloader"] = {
-        "edk2_firmware_url": "https://example.com/edk2.zip",
+        "edk2_firmware": {
+            "url": "https://example.com/edk2.zip",
+            "sha256": "a" * 64,
+        },
         "firehose_loader": "prog_firehose_ddr.elf",
         "spi_rawprogram": "rawprogram0.xml",
         "spi_patch": "patch0.xml",

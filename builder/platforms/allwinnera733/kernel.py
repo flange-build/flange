@@ -9,9 +9,10 @@
 import os
 import shutil
 from pathlib import Path
+from builder.config.canonical import kernel_arch, kernel_device_tree
 from builder.kernel_base import KernelBuilder
 from builder.dtb_overlay import (
-    dtb_overlays,
+    intree_overlays,
     kernel_overlay_dir,
     overlay_make_targets,
     require_overlay_files,
@@ -36,6 +37,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         Patches 直接应用 linux-a733/debian/patches/series 中声明的补丁，
         不再手动适配路径前缀。
         """
+        self.ARCH = kernel_arch(config)
         src_dir = self.source.ensure(self.component, config)
         self._status("内核源码就绪")
 
@@ -80,11 +82,12 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
     def _locate_aggregate_root(self, src_dir: Path, config: dict) -> Path:
         """定位聚合仓库根目录。
 
-        from_repo 模式下 src_dir 是 .build/sources/repos/<name>/<subpath>，
-        聚合仓库根是其上两级（去掉 subpath）。直接 clone 场景下
-        src_dir 自身就是 Git 仓库根。
+        source.subpath 非空时，聚合仓库根是去掉该相对路径后的目录；
+        引用 source 根时 src_dir 自身就是 Git 仓库根。
         """
-        subpath = config.get("kernel", {}).get("subpath", "")
+        subpath = (
+            (config.get("kernel", {}).get("source") or {}).get("subpath", "")
+        )
         if subpath:
             parts = subpath.split("/")
             root = src_dir
@@ -190,7 +193,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         1. 将 BSP 的 DTSI 文件 symlink 到内核 DTS allwinner/ 目录
         2. 将 device 仓库的 board.dts 复制到内核 DTS 目录并重命名
         """
-        dts_dir_name = config["kernel"].get("dts_dir", "allwinner")
+        dts_dir_name, _ = kernel_device_tree(config)
         kernel_dts_dir = src_dir / "arch" / self.ARCH / "boot" / "dts" / dts_dir_name
         kernel_dts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -209,7 +212,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
 
         # Device board.dts 复制
         board_dts_path = config["kernel_device"].get("board_dts_path", "")
-        dts_name = config["kernel"]["dts"]
+        _, dts_name = kernel_device_tree(config)
         if board_dts_path:
             board_dts_src = device_dir / board_dts_path
             board_dts_dst = kernel_dts_dir / f"{dts_name}.dts"
@@ -254,7 +257,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         启动前必须 modprobe configfs，启动时序脆弱。通过在 defconfig 合并尾部
         追加此 fragment 恢复为内建，使 adbd 开箱可用。
 
-        合并顺序由 platform/allwinnera733/a733/config.py 的 kernel.defconfig 列表保证：
+        合并顺序由 platform/allwinnera733/a733/config.jsonnet 的 kernel.defconfig 列表保证：
           defconfig → bsp_defconfig → radxa.config → radxa_custom.config
           → aic8800_wlan.config → usb_gadget.config (本 fragment)
           → case_insensitive_fix.config
@@ -286,7 +289,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         生产固件本不该带此测试模块。在 defconfig 合并尾部显式关闭，使 VO 域
         不再被测试 consumer 自动挂起，twi2 总线稳定。
 
-        合并顺序由 platform/allwinnera733/a733/config.py 的 kernel.defconfig
+        合并顺序由 platform/allwinnera733/a733/config.jsonnet 的 kernel.defconfig
         列表保证本 fragment 位于末尾（最后写入 = 覆盖 Kconfig 的 default y）。
         """
         override = src_dir / "arch" / self.ARCH / "configs" / "pd_test_disable.config"
@@ -370,21 +373,19 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         self._status("AIC8800 USB 固件路径修正到 Radxa USB 目录")
 
     def configure(self, src_dir: Path, config: dict):
-        """支持多步 defconfig 合并。
-
-        defconfig list 中的 raw ``CONFIG_X=y`` 行由基类
-        ``_resolve_defconfig_targets`` 聚合进 ``flange_inline.config`` 并追加到
-        末尾（区别于 ``bsp_defconfig`` 等 fragment 文件名）。
-        """
+        """按序应用 defconfig target，再应用 ``kernel.config`` override。"""
         for dc in self._resolve_defconfig_targets(
                 src_dir, config["kernel"]["defconfig"]):
             self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS,
                       extra=self.BSP_MAKE_VARS)
+        override = self._write_config_override_fragment(src_dir, config)
+        if override:
+            self.make(src_dir, [override], arch=self.ARCH, cross=self.CROSS,
+                      extra=self.BSP_MAKE_VARS)
 
     def compile(self, src_dir: Path, config: dict):
         jobs = config.get("jobs", 0)
-        dts_dir = config["kernel"].get("dts_dir", "allwinner")
-        dts = config["kernel"]["dts"]
+        dts_dir, dts = kernel_device_tree(config)
         targets = [
             "Image",
             f"{dts_dir}/{dts}.dtb",
@@ -420,14 +421,13 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
                     link.unlink()
 
     def collect(self, src_dir: Path, config: dict) -> dict:
-        dts_dir = config["kernel"].get("dts_dir", "allwinner")
-        dts = config["kernel"]["dts"]
+        dts_dir, dts = kernel_device_tree(config)
         outputs = {
             "image": src_dir / f"arch/{self.ARCH}/boot/Image",
             "dtb": src_dir / f"arch/{self.ARCH}/boot/dts/{dts_dir}/{dts}.dtb",
             "modules": src_dir / "_modules_staging",
         }
-        overlays = dtb_overlays(config)
+        overlays = intree_overlays(config)
         if overlays:
             overlay_dir = kernel_overlay_dir(src_dir, self.ARCH, dts_dir)
             require_overlay_files(overlay_dir, overlays)

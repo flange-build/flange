@@ -68,7 +68,7 @@ _GIT_MODE_KEYS: frozenset[str] = frozenset(
 def _resolve_path(raw: str, project_root: Path) -> str:
     """把可能含 ``~`` / 相对路径的字符串解析为绝对路径字符串。
 
-    相对路径的锚点是 ``project_root`` ——与 ``local_repo`` 等既有字段一致。
+    相对路径的锚点是 ``project_root`` ——与 ``sources.*.local_path`` 一致。
     返回字符串而非 ``Path``，便于 JSON 序列化与下游比较。
     """
     p = Path(raw).expanduser()

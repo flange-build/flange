@@ -3,7 +3,7 @@ title: radxa-cubie-a7z
 type: board
 status: wip
 sources:
-  - components/board/radxa-cubie-a7z/config.py
+  - components/board/radxa-cubie-a7z/config.jsonnet
   - components/board/radxa-cubie-a7z/dtso/sun60iw2p1-spi1-st7789v-display.dtso
   - components/board/radxa-cubie-a7z/firmware/panel/st7789v2-240x280.txt
   - components/board/radxa-cubie-a7z/overlay/etc/usbdevice.conf
@@ -40,7 +40,7 @@ lunch radxa-cubie-a7z-default-release
 | root 密码 | `1234` |
 | 刷写工具 | `dd`（平台层定义） |
 
-A733 平台使用 `kernel_device.board_dts_path` 指定设备树源文件路径，与 Rockchip 平台使用 `kernel.dts` 直接引用 DTB target 的机制不同。
+A733 平台额外使用 `kernel_device.board_dts_path` 指定 BSP 设备树源文件；所有平台的最终 DTB target 都统一由 `kernel.device_tree.{directory,name}` 描述。
 
 ## ST7789V2 SPI LCD
 
@@ -60,7 +60,7 @@ CedarC VE 硬件解码：内核 `sunxi-ve` 自动 probe（DT compatible），用
 
 ## Device Tree Overlays
 
-28 个 vendor overlay（`boot.vendor_overlays`）+ 1 个 board overlay（ST7789V2 LCD，`boot.board_overlays`）。仅 ST7789V2 overlay 默认启用（`boot.default_overlays`）。其余运行时编辑 `extlinux.conf` 启用。
+vendor overlay 位于 `boot.overlays.vendor`，ST7789V2 板私有 overlay 位于 `boot.overlays.board`；默认项统一放入 `boot.overlays.enabled`。其余可在运行时编辑 `extlinux.conf` 启用。
 
 ## overlay
 

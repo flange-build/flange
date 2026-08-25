@@ -12,13 +12,13 @@ sources:
   - builder/platforms/rockchip/image.py
   - builder/platforms/rockchip/amp.py
   - builder/platforms/rockchip/validation.py
-  - components/platform/rockchip/config.py
-  - components/platform/rockchip/rk3506b/config.py
-  - components/platform/rockchip/rk3566/config.py
-  - components/platform/rockchip/rk3568/config.py
-  - components/platform/rockchip/rk3576/config.py
-  - components/platform/rockchip/rk3588/config.py
-  - components/platform/rockchip/rk3588s/config.py
+  - components/platform/rockchip/config.jsonnet
+  - components/platform/rockchip/rk3506b/config.jsonnet
+  - components/platform/rockchip/rk3566/config.jsonnet
+  - components/platform/rockchip/rk3568/config.jsonnet
+  - components/platform/rockchip/rk3576/config.jsonnet
+  - components/platform/rockchip/rk3588/config.jsonnet
+  - components/platform/rockchip/rk3588s/config.jsonnet
   - ProjectSpec.md#164-三层继承
 related:
   - "[[radxa-zero3w]]"
@@ -48,13 +48,13 @@ Rockchip 系列平台，覆盖 ARM32 RK3506B 与 ARM64 RK3566/RK3568/RK3576/RK35
 
 **平台数据（`components/platform/rockchip/`）**
 
-- `config.py`：第一层（platform 层），声明 `vendor`、`flash_tool: "upgrade_tool"`、arch、rkbin 仓库、packages 基线（含 `+packages: [libdrm2, libdrm-common]`，所有 panthor / mali_kbase / mpp / RGA 用户态客户端的强依赖，ubuntu-base 不带）
+- `config.jsonnet`：第一层（platform 层），声明 `vendor`、`flash_tool: "upgrade_tool"`、`architecture`、共享 `sources`、rkbin 与 packages 基线
 - SoC 层声明 rkbin、U-Boot/kernel 架构与工具链、boot/rootfs 格式和 AMP runtime。RK3506B 走 ARM32 gcc-10、vendor FIT、UBI；RK3566 与 RK3568 虽同 die，仍须分别选择 1056/1560MHz DDR ini。
-- 第三层（board 层）：位于 `components/board/<board>/config.py`，三层经 `deep_merge()` 合并
+- 第三层（board 层）：位于 `components/board/<board>/config.jsonnet`，三层由 Jsonnet object 运算组合
 
-**SoC 层默认 deb（`+extra_debs`）**
+**SoC 层默认 deb（`rootfs.extra_debs`）**
 
-rk3566 / rk3568 / rk3588 SoC 层均声明 `+extra_debs` 默认安装多媒体加速栈（同一组 9 个 deb，来自 `CmST0us/rockchip-multimedia-ubuntu` release 1.0.0，sha256 锁定）：
+rk3566 / rk3568 / rk3588 SoC 层均通过 Jsonnet 数组追加默认安装多媒体加速栈（同一组 9 个 deb，来自 `CmST0us/rockchip-multimedia-ubuntu` release 1.0.0，SHA256 锁定）：
 
 - `rockchip-mpp` + `rockchip-mpp-dev` 1.3.9 — VPU 编解码核心库（`mpp_platform_check` 内部按 chip 分发：RK3568 vepu540c/vdpu341、RK3588 vepu120/vdpu382c，对上同一套 API）
 - `librga2` + `librga-dev` 2.1.0 — 2D 加速 / 颜色空间转换
@@ -79,7 +79,7 @@ dpkg -i 一次性传入 9 个 deb，按依赖拓扑顺序排列（mpp → rga �
 
 ## 易踩坑
 
-- rkbin 的 `RKTRUST.ini` 区分 BL31/BL32；RK3566 使用 `RK3568TRUST.ini`（ini_prefix 与 trust_ini_prefix 不同，见 `rk3566/config.py`）
+- rkbin 的 `RKTRUST.ini` 区分 BL31/BL32；RK3566 使用 `RK3568TRUST.ini`（ini_prefix 与 trust_ini_prefix 不同，见 `rk3566/config.jsonnet`）
 - DTB target 使用子目录相对路径（`rockchip/<dts>.dtb`），非内核完整路径，详见 [[kernel 构建器]]
 - RK3588 板不要用 vendor `<board>-rk3588_defconfig`（含 androidboot 风格固定 bootargs，绕过 extlinux），统一用 generic `rk3588_defconfig`
 - **真 RK3568 板必须挂 rk3568 SoC** 不是 rk3566：两者同 die，但 rkbin 的 `RK3568MINIALL.ini` 选 1560MHz DDR、`RK3566MINIALL.ini` 选 1056MHz，挂错砍 33% 性能

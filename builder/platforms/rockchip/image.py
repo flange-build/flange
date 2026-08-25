@@ -28,6 +28,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.config.canonical import kernel_device_tree
 from builder.config.validate import validate_mtd_ubi
 from builder.docker import BuildError
 from builder.partition.rockchip import (
@@ -246,7 +247,7 @@ class RockchipImageBuilder(ComponentBuilder):
         rootfs_index: int,
     ) -> None:
         """从最终 DTB chosen.bootargs 交叉校验 ``ubi.mtd``。"""
-        dts = config["kernel"]["dts"]
+        _, dts = kernel_device_tree(config)
         dtb = target_dir / "kernel" / f"{dts}.dtb"
         if not dtb.is_file():
             raise FileNotFoundError(f"MTD 启动参数校验所需 DTB 不存在: {dtb}")

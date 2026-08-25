@@ -5,10 +5,19 @@ import json
 import tempfile
 from pathlib import Path
 from builder.cache import BuildCache
+from builder.source import SourceManager
+
+
+_ARCHITECTURE = {
+    "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64",
+}
 
 
 class TestBuildCache:
     def _make_cache(self, config: dict, tmpdir: str) -> BuildCache:
+        config.setdefault("architecture", _ARCHITECTURE)
+        config.setdefault("kernel", {}).setdefault(
+            "device_tree", {"directory": "", "name": "test"})
         return BuildCache(
             config,
             target_base=Path(tmpdir),
@@ -67,11 +76,22 @@ class TestBuildCache:
         config = {
             "board": "test", "product": "default", "variant": "release",
             "platform": "test", "soc": "test",
-            "repos": {"kernel": {"repo": "https://example.com/kernel.git",
-                                  "branch": "main"}},
-            "kernel": {"from_repo": "kernel"},
+            "architecture": _ARCHITECTURE,
+            "sources": {
+                "kernel": {
+                    "url": "https://example.com/kernel.git",
+                    "branch": "main",
+                },
+            },
+            "kernel": {
+                "source": {"name": "kernel"},
+                "device_tree": {"directory": "", "name": "test"},
+            },
         }
-        repo_dir = tmp_path / ".build" / "sources" / "repos" / "kernel"
+        repo_dir = (
+            tmp_path / ".build" / "sources" / "repos"
+            / SourceManager.source_identity(config["sources"]["kernel"])
+        )
         repo_dir.mkdir(parents=True)
         cache = BuildCache(config, target_base=tmp_path / "target",
                            project_root=tmp_path)
@@ -93,7 +113,7 @@ class TestBootloaderArtifactCache:
             "board": "radxa-cubie-a7z",
             "product": "default",
             "variant": "debug",
-            "arch": "aarch64",
+            "architecture": _ARCHITECTURE,
             "platform": "allwinnera733",
             "soc": "a733",
             "bootloader": {"target": "radxa-cubie-a7z"},
@@ -114,7 +134,7 @@ class TestDirectoryHash:
     def _make_cache(self) -> BuildCache:
         cache = BuildCache.__new__(BuildCache)
         cache.config = {"board": "test", "platform": "rockchip",
-                        "soc": "rk3566", "arch": "aarch64"}
+                        "soc": "rk3566", "architecture": _ARCHITECTURE}
         return cache
 
     def _compute(self, cache: BuildCache, directory: Path) -> str:
@@ -269,7 +289,7 @@ class TestAppSourceHash:
     ) -> BuildCache:
         config = {
             "board": "test", "platform": "rockchip",
-            "soc": "rk3566", "arch": "aarch64",
+            "soc": "rk3566", "architecture": _ARCHITECTURE,
             "product": "default", "variant": "release",
             "rootfs": {"custom_packages": custom_packages},
         }
@@ -395,7 +415,7 @@ class TestRootfsPhaseHash:
     def _make_cache(self, tmpdir: str, **overrides) -> BuildCache:
         config = {
             "board": "test", "platform": "rockchip",
-            "soc": "rk3566", "arch": "aarch64",
+            "soc": "rk3566", "architecture": _ARCHITECTURE,
             "product": "default", "variant": "release",
             "rootfs": {
                 "url": "https://example.com/ubuntu-base.tar.gz",
@@ -441,7 +461,10 @@ class TestRootfsPhaseHash:
             cache1 = self._make_cache(tmpdir)
             h1 = cache1.compute_phase_hash("rootfs", "base")
 
-            cache2 = self._make_cache(tmpdir, arch="armhf")
+            cache2 = self._make_cache(tmpdir, architecture={
+                "userspace": "armhf", "kernel": "arm",
+                "bootloader": "arm",
+            })
             h2 = cache2.compute_phase_hash("rootfs", "base")
             assert h1 != h2
 
@@ -553,7 +576,7 @@ class TestPhaseCache:
     ) -> BuildCache:
         config = {
             "board": "test", "platform": "rockchip",
-            "soc": "rk3566", "arch": "aarch64",
+            "soc": "rk3566", "architecture": _ARCHITECTURE,
             "product": "default", "variant": "release",
             "rootfs": {
                 "url": "https://example.com/ubuntu-base.tar.gz",

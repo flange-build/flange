@@ -8,6 +8,7 @@ import pytest
 
 from builder.config.registry import resolve_config
 from builder.platforms.rockchip.amp import RockchipAmpBuilder
+from builder.source import SourceManager
 
 
 RK3506_ITS = Path(
@@ -198,11 +199,13 @@ def _dts_config(tmp_path: Path) -> dict:
     kernel, dts = _synthetic_dts_tree(tmp_path)
     return {
         "board": "test",
+        "architecture": {
+            "userspace": "armhf", "kernel": "arm", "bootloader": "arm",
+        },
+        "sources": {"kernel": {"local_path": str(kernel)}},
         "kernel": {
-            "local_path": str(kernel),
-            "arch": "arm",
-            "dts_dir": "",
-            "dts": dts,
+            "source": {"name": "kernel"},
+            "device_tree": {"directory": "", "name": dts},
         },
         "amp": {
             "soc_project": "rk3506",
@@ -213,14 +216,15 @@ def _dts_config(tmp_path: Path) -> dict:
 
 
 def test_arm32_dts_include_closure_matches_memory_and_runtime(tmp_path):
-    builder = RockchipAmpBuilder(docker=None, source=None)
+    builder = RockchipAmpBuilder(
+        docker=None, source=SourceManager(project_root=tmp_path))
 
     builder._assert_dts_consistency(_dts_config(tmp_path))
 
 
 def test_arm32_dts_missing_firmware_reservation_is_rejected(tmp_path):
     config = _dts_config(tmp_path)
-    dtsi = Path(config["kernel"]["local_path"]) / (
+    dtsi = Path(config["sources"]["kernel"]["local_path"]) / (
         "arch/arm/boot/dts/rk3506-amp.dtsi"
     )
     dtsi.write_text(
@@ -229,7 +233,8 @@ def test_arm32_dts_missing_firmware_reservation_is_rejected(tmp_path):
             "",
         )
     )
-    builder = RockchipAmpBuilder(docker=None, source=None)
+    builder = RockchipAmpBuilder(
+        docker=None, source=SourceManager(project_root=tmp_path))
 
     with pytest.raises(ValueError, match="firmware"):
         builder._assert_dts_consistency(config)
@@ -238,7 +243,8 @@ def test_arm32_dts_missing_firmware_reservation_is_rejected(tmp_path):
 def test_arm32_dts_link_id_mismatch_is_rejected(tmp_path):
     config = _dts_config(tmp_path)
     config["amp"]["runtime"]["link_id"] = 0x10
-    builder = RockchipAmpBuilder(docker=None, source=None)
+    builder = RockchipAmpBuilder(
+        docker=None, source=SourceManager(project_root=tmp_path))
 
     with pytest.raises(ValueError, match="link-id"):
         builder._assert_dts_consistency(config)

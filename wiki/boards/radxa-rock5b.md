@@ -3,14 +3,14 @@ title: radxa-rock5b
 type: board
 status: wip
 sources:
-  - components/board/radxa-rock5b/config.py
+  - components/board/radxa-rock5b/config.jsonnet
   - components/board/radxa-rock5b/dtso/rk3588-rock-5b-mali-valhall-compat.dtso
   - components/board/radxa-rock5b/overlay/etc/hostname
   - components/board/radxa-rock5b/overlay/etc/usbdevice.conf
   - components/board/radxa-rock5b/docs/radxa_rock_5b_v1423_sch.pdf
   - components/packages/meizu-e3-panel/package.py
   - components/packages/meizu-e3-panel/device-tree/rk3588-rock-5b-meizu-e3-panel.dtso
-  - components/platform/rockchip/rk3588/config.py
+  - components/platform/rockchip/rk3588/config.jsonnet
 related:
   - "[[rockchip 平台]]"
   - "[[out-of-tree 模块]]"

@@ -38,14 +38,15 @@ def _config(recovery_enabled=False):
         "platform": "amlogic",
         "soc": "s905d3",
         "board": "test-vim3l",
-        "kernel": {"dts": "meson-sm1-khadas-vim3l", "dts_dir": "amlogic"},
-        "boot": {
+        "kernel": {"device_tree": {
+            "directory": "amlogic", "name": "meson-sm1-khadas-vim3l",
+        }},
+        "boot": {**{
             "kernel_args": "earlycon console=ttyAML0,115200n8 loglevel=7",
-            "dtb_overlays": [],
-            "vendor_overlays": [],
-            "board_overlays": [],
-            "default_overlays": [],
-        },
+        }, "overlays": {
+            "intree": [], "vendor": [], "board": [], "package": [],
+            "enabled": [],
+        }},
         "recovery": {"enabled": recovery_enabled},
         "partitions": {
             "entries": [

@@ -107,7 +107,7 @@ def _make_builder(tmp_path: Path, arch: str = "aarch64") -> AppBuilder:
         "board":   "test-board",
         "product": "default",
         "variant": "release",
-        "arch":    arch,
+        "architecture": {"userspace": arch, "kernel": "arm64", "bootloader": "arm64"},
         "rootfs":  {"custom_packages": []},
         "external_app_dirs": [],
     }
@@ -328,7 +328,7 @@ class TestBuildAll:
             "board":   "test-board",
             "product": "default",
             "variant": "release",
-            "arch":    "aarch64",
+            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
             "rootfs":  {"custom_packages": ["solo"]},
             "external_app_dirs": [],
         }
@@ -350,7 +350,7 @@ class TestBuildAll:
             "board":   "test-board",
             "product": "default",
             "variant": "release",
-            "arch":    "aarch64",
+            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
             "rootfs":  {"custom_packages": ["libbase", "daemon", "cli"]},
             "external_app_dirs": [],
         }
@@ -369,7 +369,7 @@ class TestBuildAll:
             "board":   "test-board",
             "product": "default",
             "variant": "release",
-            "arch":    "aarch64",
+            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
             "rootfs":  {"custom_packages": ["ghost_app"]},
             "external_app_dirs": [],
         }
@@ -388,7 +388,7 @@ class TestBuildAll:
             "board":   "test-board",
             "product": "default",
             "variant": "release",
-            "arch":    "aarch64",
+            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
             "rootfs":  {"custom_packages": ["nodeA", "nodeB"]},
             "external_app_dirs": [],
         }

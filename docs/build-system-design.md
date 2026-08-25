@@ -6,14 +6,15 @@
 
 ## 架构总览
 
-flange v2.0 采用 Python 统一架构，替代了原有的 Bazel+Starlark+Shell 三层架构。
+flange 的构建编排与平台策略使用 Python，配置内容使用 Jsonnet，最终只向
+builder 暴露经过校验的 canonical JSON。
 
 ### 五层架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  用户接口层    envsetup.sh → lunch / flange build / flash       │
-│  配置层        config/ → platform → SoC → board (三层继承)       │
+│  配置层        rootfs → platform → SoC → board (Jsonnet 组合)    │
 │  构建层        builder/ → Docker 容器内 Python 直接调用系统命令   │
 │  产物层        target/<board>/<product>/<variant>/               │
 │  部署层        flash.sh (自动生成) → 平台刷写工具                 │
@@ -22,23 +23,25 @@ flange v2.0 采用 Python 统一架构，替代了原有的 Bazel+Starlark+Shell
 
 ### 核心设计原则
 
-- **Python 统一**：配置引擎、构建编排、平台策略全部 Python，消除 Starlark/Shell 中间层
+- **语义统一**：Jsonnet 负责组合和条件，Python builder 只消费 canonical JSON
 - **Docker 透明**：构建操作通过 `flange` 命令完成，Docker 对用户基本透明
 - **构建在容器内，刷写在宿主机**：容器保证可复现，宿主机访问 USB 设备
-- **配置驱动**：新增板子只需创建 `board/<name>/config.py`，不改框架代码
+- **配置驱动**：新增板子只需创建 `board/<name>/config.jsonnet`，不改框架代码
 - **内容哈希增量**：基于 config + source commit + patches 的哈希判断是否需要重建
 
 ### 配置系统
 
-三层继承 + 条件标记 + 追加语义：
+固定四层组合，数组增减和条件由 Jsonnet 原生表达：
 
 ```
-platform/rockchip/config.py    → 第一层: vendor 级（刷写工具、通用包）
-platform/rockchip/rk3566/config.py → 第二层: SoC 级（defconfig、分区表）
-board/radxa-zero3w/config.py   → 第三层: board 级（DTS、仓库、产品声明）
+rootfs/config.jsonnet                  → rootfs 基线
+platform/rockchip/config.jsonnet       → vendor 级（刷写工具、通用包）
+platform/rockchip/rk3566/config.jsonnet → SoC 级（架构、defconfig）
+board/radxa-zero3w/config.jsonnet      → board 级（设备树、产品声明）
 ```
 
-条件解析：`resolve_conditions(merged, product, variant)` → FINAL_CONFIG
+`product` / `variant` 通过 `std.extVar` 进入求值；求值边界完成包与 App
+归一化、schema 校验后生成 FINAL_CONFIG。
 
 ### 构建引擎
 
@@ -61,18 +64,14 @@ builder/
 
 ### 组件源码模式
 
-`builder/source.py::SourceManager` 为 kernel / bootloader / rkbin 等 git 组件
-提供 4 种源码来源，按优先级：`local_path > local_repo > repo`。
+`builder/source.py::SourceManager` 为 kernel / bootloader / rkbin 等组件解析
+统一的 `sources.<name>` descriptor。组件只通过 `source.{name,subpath}` 引用。
 
 | 字段 | 语义 |
 |------|------|
-| `local_path` | 目录直用，框架不做任何 git 操作（本地 hack） |
-| `local_repo` + `branch`/`commit` | 本地 git 仓库作为 clone 源，克隆后正常同步（离线构建/镜像） |
-| `repo` + `branch` + `commit` | 远程 clone，固定到 commit（钉版本） |
-| `repo` + `branch`（无 `commit`） | 远程 clone，每次 build `fetch + reset --hard origin/<branch>`（跟随远端） |
-
-`local_repo` 会在内部转为 `file://<abs>` URL 喂给 git，以确保 `--depth=1`
-shallow clone 生效（裸本地路径会走 hardlink clone 并忽略 depth）。
+| `local_path` | 目录直用，框架不做 git 操作（本地调试） |
+| `url` + `branch` + `commit` | 远程 clone，固定到 commit（钉版本） |
+| `url` + `branch` | 远程 clone，每次 build 同步并 reset 到分支（跟随远端） |
 
 "跟随远端"语义下，`reset --hard` 会丢弃源码目录里的本地修改——因此
 "声明 branch 不声明 commit"与"声明 local_path"互为独立的两种语义，不混用。

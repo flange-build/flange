@@ -10,8 +10,8 @@ sources:
   - builder/platforms/qualcommqcs6490/boot.py
   - builder/platforms/qualcommqcs6490/recovery.py
   - builder/platforms/qualcommqcs6490/image.py
-  - components/platform/qualcommqcs6490/config.py
-  - components/platform/qualcommqcs6490/qcs6490/config.py
+  - components/platform/qualcommqcs6490/config.jsonnet
+  - components/platform/qualcommqcs6490/qcs6490/config.jsonnet
   - components/platform/qualcommqcs6490/patches/kernel/
   - builder/flash.py#QualcommFlashStrategy
   - openspec/changes/add-qcs6490-radxa-dragon-q6a/

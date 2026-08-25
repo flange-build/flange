@@ -8,7 +8,7 @@ sources:
   - builder/rootfs.py
   - builder/chroot.py
   - docker/Dockerfile
-  - components/rootfs/config.py
+  - components/rootfs/config.jsonnet
   - components/rootfs/overlay/etc/bash.bashrc
   - components/rootfs/overlay/etc/sysctl.d/10-console-quiet.conf
   - components/rootfs/overlay/etc/skel/.bashrc
@@ -29,7 +29,7 @@ ubuntu-base + apt + overlay + deb 两阶段 rootfs 构建；按 `arch` 选择 QE
 
 ## 关键设计要点
 
-- **package_sets 基线**：`components/rootfs/config.py` 定义 `ROOTFS["package_sets"]`（`base`/`debug`/`release`），platform/board 通过 `rootfs.package_set` 选用、`+package_set` 按 variant 激活，registry 展开为 `rootfs.packages` 扁平列表
+- **package_sets 基线**：`components/rootfs/config.jsonnet` 定义 `ROOTFS["package_sets"]`（`base`/`debug`/`release`），platform/board 通过 `rootfs.package_set` 选用、`+package_set` 按 variant 激活，registry 展开为 `rootfs.packages` 扁平列表
 - **Phase 1 — base**：解压 ubuntu-base，chroot 内 `apt-get install` `rootfs.packages`；tar 存 base cache，下次跳过
 - **Phase 2 顺序**（`_build_phase2`）：app deb (`custom_packages`) → `extra_debs` → kernel modules → `extra_firmware` → `apply_overlays`（最后覆盖，优先级最高） → `_configure_users`（账号一体化）
 - **App 注入**：engine 在 rootfs 前完成 App deb 并注入 `config["rootfs"]["custom_packages"]`

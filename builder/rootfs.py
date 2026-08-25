@@ -87,7 +87,7 @@ class RootfsBuilder(ComponentBuilder):
           [
             {
               "name": "qcom-ppa",
-              "key_url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x<fp>",
+              "key": {"url": "https://...", "sha256": "<hex>"},
               "source": "deb [arch=arm64 signed-by=/etc/apt/keyrings/qcom-ppa.gpg] "
                         "https://ppa.launchpadcontent.net/.../ubuntu noble main",
             },
@@ -106,13 +106,14 @@ class RootfsBuilder(ComponentBuilder):
         sources_dir.mkdir(parents=True, exist_ok=True)
         for src in sources:
             name = src["name"]
-            key_url = src["key_url"]
             source_line = src["source"]
             key_path = keyrings_dir / f"{name}.gpg"
+            key_file = self.source.ensure_download(
+                "apt-keys", name, src["key"])
             self._status(f"导入 APT key: {name}")
             self.docker.run(
-                ["sh", "-c",
-                 f"curl -fsSL '{key_url}' | gpg --dearmor -o '{key_path}'"],
+                ["gpg", "--batch", "--yes", "--dearmor",
+                 "-o", str(key_path), str(key_file)],
                 label=f"导入 APT key: {name}",
             )
             (sources_dir / f"{name}.list").write_text(source_line + "\n")
@@ -157,102 +158,22 @@ class RootfsBuilder(ComponentBuilder):
         shutil.rmtree(deb_tmp)
 
     def _install_extra_firmware(self, rootfs_dir: Path, config: dict):
-        """安装额外固件文件到 rootfs。
-
-        config["rootfs"]["extra_firmware"] 是声明 list，每条 entry：
-
-          - 必填：``name`` / ``files`` / ``dest``
-          - 可选：``source``（来源类型，默认 ``"repo"``）；其余字段按 source
-            类型语义化，详见 ``SourceManager.ensure_extra_firmware`` 的注释。
-
-        典型形态：
-
-          [
-            # source="repo"（默认） — 从外部 git 仓库取
-            {
-              "name": "radxa",
-              "repo": "https://github.com/radxa-pkg/radxa-firmware",
-              "branch": "main",
-              "repo_subdir": "radxa-firmware/lib/firmware",  # 仓库内子目录作为 files 的根
-              "files": ["brcm/brcmfmac43430-sdio.txt", ...],
-              "dest": "lib/firmware",   # 相对 rootfs 根目录，默认 lib/firmware
-            },
-            # source="kernel" — 从 BSP 内核源码内已 vendor 的 blob 取
-            {
-              "name": "mali-csf",
-              "source": "kernel",
-              "repo_subdir": "drivers/gpu/arm/bifrost",
-              "files": ["mali_csffw.bin"],
-              "dest": "lib/firmware/arm/mali/arch10.8",
-            },
-            # source="oot:<name>" — 从同 build 已 ensure 的 OOT 模块源取，
-            # 适用于 vendor WiFi/BT 包同时携带固件 blob 的场景（如 rkwifibt）
-            {
-              "name": "rkwifibt-rtl8852be",
-              "source": "oot:rkwifibt",
-              "repo_subdir": "firmware/realtek/RTL8852BE",
-              # files 元素支持 dict 形态做重命名（例如补 .bin 后缀）
-              "files": [
-                {"src": "rtl8852bu_fw",     "dest": "rtl8852bu_fw.bin"},
-                {"src": "rtl8852bu_config", "dest": "rtl8852bu_config.bin"},
-              ],
-              "dest": "lib/firmware/rtl_bt",
-            },
-          ]
-
-        files 元素两种形态：
-          - str：路径同时作 src 和 dest 相对路径，原名拷贝（保留目录结构）
-          - dict {src, dest}：src 是相对 repo_subdir 的源路径，dest 是相对
-            ``dest`` 字段的目标路径（用于重命名或扁平化）
-
-        例：repo_subdir="radxa-firmware/lib/firmware", files=["brcm/foo.txt"],
-            dest="lib/firmware" → rootfs/lib/firmware/brcm/foo.txt
-        """
+        """从 canonical source 引用安装额外固件。"""
         extra_firmware = config.get("rootfs", {}).get("extra_firmware", [])
         if not extra_firmware:
             return
-        # 收集所有 entry 用到的 component source 类型，按需 ensure 对应组件
-        # 源码树。已被 cache 依赖图保证 kernel/bootloader 先于 rootfs build，
-        # 此处只是拿 path，幂等。
-        needed_sources = {fw.get("source", "repo") for fw in extra_firmware}
-        component_sources: dict[str, Path] = {}
-        for st in needed_sources & {"kernel", "bootloader"}:
-            component_sources[st] = self.source.ensure(st, config)
-        # OOT 源：source="oot:<name>" 引用 kernel.oot_sources 中已声明的源。
-        # 过滤 resolve_conditions 递归注入的 product/variant 伪 key（详见
-        # KernelBuilder._oot_sources_config 注释）。
-        raw_oot = config.get("kernel", {}).get("oot_sources", {}) or {}
-        oot_sources = {k: v for k, v in raw_oot.items()
-                       if k not in ("product", "variant")
-                       and isinstance(v, dict)}
-        for st in needed_sources:
-            if not st.startswith("oot:"):
-                continue
-            oot_name = st.split(":", 1)[1]
-            if oot_name not in oot_sources:
-                raise ValueError(
-                    f"extra_firmware 引用 source={st!r}，但 kernel.oot_sources "
-                    f"未声明 {oot_name!r}")
-            component_sources[st] = self.source.ensure_oot_source(
-                oot_name, oot_sources[oot_name])
         for fw in extra_firmware:
             name = fw["name"]
-            source_type = fw.get("source", "repo")
-            if source_type == "repo":
-                self._status(f"同步固件仓库: {name}")
-            else:
-                self._status(f"同步固件源（{source_type} 内 vendor）: {name}")
+            self._status(f"同步固件源: {name}")
             fw_dir = self.source.ensure_extra_firmware(
-                name, fw, component_sources=component_sources, config=config)
-            repo_subdir = fw.get("repo_subdir", "")
-            fw_base = fw_dir / repo_subdir if repo_subdir else fw_dir
+                name, fw, config=config)
             dest_base = rootfs_dir / fw.get("dest", "lib/firmware")
             for entry in fw.get("files", []):
                 if isinstance(entry, dict):
                     src_rel, dest_rel = entry["src"], entry["dest"]
                 else:
                     src_rel = dest_rel = entry
-                src = fw_base / src_rel
+                src = fw_dir / src_rel
                 if not src.exists():
                     raise FileNotFoundError(
                         f"固件文件不存在: {src}（仓库: {name}）")
@@ -267,17 +188,8 @@ class RootfsBuilder(ComponentBuilder):
 
     @staticmethod
     def _real_users(rootfs_cfg: dict) -> dict:
-        """过滤 rootfs.users 字典，去掉 resolve_conditions 在每层 dict 上
-        注入的 ``product`` / ``variant`` 伪 key（merge.py:141-142），仅保留
-        值为 dict 的真正用户条目。
-
-        与 KernelBuilder._oot_sources_config 同病同治；不过滤就会在
-        ``for name, spec in users.items()`` 循环里取到字符串 spec。
-        """
-        raw = rootfs_cfg.get("users") or {}
-        return {k: v for k, v in raw.items()
-                if k not in ("product", "variant")
-                and isinstance(v, dict)}
+        """返回 canonical rootfs 用户对象。"""
+        return rootfs_cfg.get("users") or {}
 
     def _validate_account_config(self, rootfs_cfg: dict) -> None:
         """对账号子树做编译期校验。

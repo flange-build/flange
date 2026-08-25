@@ -85,7 +85,9 @@ def _parameter(tmp_path: Path) -> Path:
 
 def _ubi_config(tmp_path: Path) -> dict:
     return {
-        "arch": "armhf",
+        "architecture": {
+            "userspace": "armhf", "kernel": "arm", "bootloader": "arm",
+        },
         "storage": {"type": "spinand", "size": "512M"},
         "partitions": {
             "format": "mtd",
@@ -120,7 +122,10 @@ def _ubi_config(tmp_path: Path) -> dict:
     ],
 )
 def test_rootfs_emulator_mapping(arch, expected):
-    assert RockchipRootfsBuilder._rootfs_emulator({"arch": arch}) == expected
+    config = {"architecture": {
+        "userspace": arch, "kernel": "arm64", "bootloader": "arm",
+    }}
+    assert RockchipRootfsBuilder._rootfs_emulator(config) == expected
 
 
 @pytest.mark.parametrize(
@@ -146,7 +151,12 @@ def test_phase1_injects_arch_specific_emulator(
 
     builder._build_phase1(
         rootfs_dir,
-        {"arch": arch, "rootfs": {"packages": []}},
+        {
+            "architecture": {
+                "userspace": arch, "kernel": "arm64", "bootloader": "arm",
+            },
+            "rootfs": {"packages": []},
+        },
     )
 
     copy = next(cmd for cmd in docker.privileged_commands if cmd[0] == "cp")

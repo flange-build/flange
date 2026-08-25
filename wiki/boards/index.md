@@ -6,7 +6,7 @@ updated: 2026-08-24
 
 # 板级索引
 
-每块板由 `components/board/<name>/config.py` 定义，遵循三层继承（platform → SoC → board）。
+每块板由 `components/board/<name>/config.jsonnet` 定义，遵循三层继承（platform → SoC → board）。
 
 - [[radxa-zero3w]] — 首个打样板，RK3566
 - [[tspi-rk3566]] — RK3566

@@ -353,23 +353,20 @@ flange/
 
 在板级配置中通过包名引用：
 
-```python
-"+packages": ["my-display-app", "libfoo"],
+```jsonnet
+rootfs+: { custom_packages+: ['my-display-app', 'libfoo'] },
 ```
 
 ### 4.3 仓库外 App（外部集成）
 
 在板级配置的 `external_apps` 字段中声明 git 源，由 `SourceManager` 自动拉取：
 
-```python
-# board/my-board/config.py
-BOARD = {
-    "rootfs": {
-        "+packages": [
-            "my-display-app",       # 仓库内 App
-            "zigbee-daemon",        # 仓库外 App（下方声明源）
-        ],
-    },
+```jsonnet
+// board/my-board/config.jsonnet
+{
+  rootfs+: {
+    custom_packages+: ['my-display-app', 'zigbee-daemon'],
+  },
 
     "external_apps": {
         "zigbee-daemon": {
@@ -390,7 +387,7 @@ BOARD = {
 flange build 触发
     │
     ▼
-配置解析引擎读取 board config.py
+配置解析引擎求值 board config.jsonnet
     │
     ├── 识别 packages 列表中的包名
     ├── SourceManager 在 app/ 目录查找仓库内 App
@@ -681,8 +678,8 @@ BOARD = {
 │           │                                                     │
 │           ▼  板级配置引用                                        │
 │  ┌─────────────────────────────────┐                           │
-│  │ board/my-board/config.py        │                           │
-│  │ "+packages": ["my-app"]         │                           │
+│  │ board/my-board/config.jsonnet   │                           │
+│  │ custom_packages+: ['my-app']    │                           │
 │  └────────┬────────────────────────┘                           │
 │           │                                                     │
 │           ▼  flange build（Docker 容器内）                       │

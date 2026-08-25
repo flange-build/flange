@@ -10,8 +10,8 @@ sources:
   - builder/platforms/amlogic/boot.py
   - builder/platforms/amlogic/recovery.py
   - builder/platforms/amlogic/image.py
-  - components/platform/amlogic/config.py
-  - components/platform/amlogic/s905d3/config.py
+  - components/platform/amlogic/config.jsonnet
+  - components/platform/amlogic/s905d3/config.jsonnet
   - openspec/changes/add-amlogic-khadas-vim3l/design.md
 related:
   - "[[khadas-vim3l]]"
@@ -37,7 +37,7 @@ Amlogic 平台（vendor-wide，对标 [[rockchip 平台]]，区别于 family-nar
 
 **FIP 打包链路**
 
-mainline u-boot 不含 SoC 厂商私有 blob（与 Rockchip 同样情况），blob 由 SoC 层 `repos.amlogic-boot-fip` 独立声明，bootloader builder 在 u-boot 编完后调外挂工具拼装：
+mainline u-boot 不含 SoC 厂商私有 blob（与 Rockchip 同样情况），blob 由 SoC 层 `sources.amlogic-boot-fip` 声明、bootloader 通过 source 引用复用，builder 在 u-boot 编完后调外挂工具拼装：
 
 ```
 u-boot 源码 (mainline v2024.10)

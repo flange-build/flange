@@ -1,27 +1,41 @@
 # config-deep-merge Specification
 
 ## Purpose
-TBD - created by archiving change 2026-03-29-phase2-config-system. Update Purpose after archive.
+
+保留配置组合能力的历史 capability 名称；当前实现由 Jsonnet 原生语义承担，
+不再存在 Python merge API。
+
 ## Requirements
-### Requirement: deep_merge 函数合并两个 dict
-`build/deep_merge.bzl` SHALL 提供 `deep_merge(base, override)` 函数，接受两个 dict 参数，返回深度合并后的新 dict。合并规则：dict 类型递归合并，非 dict 类型后者覆盖前者，`base` 中存在但 `override` 中不存在的 key 保留。
 
-#### Scenario: 嵌套 dict 递归合并
-- **WHEN** 调用 `deep_merge({"a": {"x": 1, "y": 2}}, {"a": {"y": 3, "z": 4}})`
-- **THEN** 返回 `{"a": {"x": 1, "y": 3, "z": 4}}`
+### Requirement: Jsonnet 对象组合
 
-#### Scenario: 非 dict 值直接覆盖
-- **WHEN** 调用 `deep_merge({"a": [1, 2]}, {"a": [3]})`
-- **THEN** 返回 `{"a": [3]}`（列表替换，不追加）
+配置 MUST 按 rootfs → platform → SoC → board 的固定顺序组合。普通字段使用
+Jsonnet 后层覆盖，嵌套对象或数组追加使用 `+:`，不得在 manifest 后的 JSON
+中保留操作字段。
 
-#### Scenario: base 独有 key 保留
-- **WHEN** 调用 `deep_merge({"a": 1, "b": 2}, {"a": 10})`
-- **THEN** 返回 `{"a": 10, "b": 2}`
+#### Scenario: 嵌套对象追加
 
-### Requirement: deep_merge 不修改输入 dict
-`deep_merge` 函数 SHALL NOT 修改传入的 `base` 或 `override` dict，MUST 返回全新的 dict 对象。
+- **WHEN** board 使用 `kernel+: {config+: {FOO: "y"}}`
+- **THEN** 最终 `kernel.config.FOO == "y"` 且上层 kernel 字段仍保留
 
-#### Scenario: 原始 dict 不被修改
-- **WHEN** 定义 `base = {"a": {"x": 1}}` 并调用 `deep_merge(base, {"a": {"y": 2}})`
-- **THEN** 调用后 `base` 仍为 `{"a": {"x": 1}}`
+### Requirement: 数组增减
 
+数组增加 MUST 使用 Jsonnet `+` 或字段 `+:`；删除标量元素 MUST 使用
+`components/config/lib.libsonnet` 的 `without(values, removed)`，并保持未删除
+元素的顺序与重复项。
+
+#### Scenario: 删除并追加 defconfig
+
+- **WHEN** 下层对上层 defconfig 调用 `without` 后追加一个 fragment
+- **THEN** 最终 JSON 只包含运算后的 defconfig 数组
+
+### Requirement: product 与 variant 条件
+
+product/variant 条件 MUST 使用 Jsonnet `std.extVar` 和 `if` 求值。最终 JSON
+只允许顶层 identity 字段 `product`、`variant`，不得携带嵌套条件子树或私有
+后缀键。
+
+#### Scenario: debug 数组追加
+
+- **WHEN** variant 为 `debug`
+- **THEN** Jsonnet 条件表达式追加 debug 包，builder 只看到最终 packages 数组

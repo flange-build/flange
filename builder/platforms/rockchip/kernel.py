@@ -1,9 +1,10 @@
 """Rockchip 内核构建策略 -- 替代 kernel/rockchip/build.sh"""
 
 from pathlib import Path
+from builder.config.canonical import kernel_arch, kernel_device_tree
 from builder.kernel_base import KernelBuilder
 from builder.dtb_overlay import (
-    dtb_overlays,
+    intree_overlays,
     kernel_overlay_dir,
     overlay_make_targets,
     require_overlay_files,
@@ -24,7 +25,7 @@ class RockchipKernelBuilder(KernelBuilder):
         现有 ARM64/AArch64 gcc-10 缺省值不变。
         """
         kernel = config.get("kernel", {}) or {}
-        self.ARCH = kernel.get("arch", self.DEFAULT_ARCH)
+        self.ARCH = kernel_arch(config)
         self.CROSS = kernel.get("cross_compile", self.DEFAULT_CROSS)
 
     @staticmethod
@@ -34,21 +35,10 @@ class RockchipKernelBuilder(KernelBuilder):
         return f"{dts_dir}/{filename}" if dts_dir else filename
 
     def configure(self, src_dir: Path, config: dict):
-        """支持单 defconfig 字符串或多步 defconfig 合并 list。
+        """按序应用 defconfig target，再应用 canonical Kconfig override。
 
-        list 形式按顺序逐个 ``make <dc>``，后者覆盖前者已设置的 CONFIG。
-        每项可以是：
-
-        - **fragment 文件名**（如 ``rockchip_linux_defconfig`` /
-          ``case_insensitive_fix.config``）：当 ``make`` target，需对应文件
-          已存在于 ``arch/<ARCH>/configs/``。
-        - **raw kernel option 字符串**（如 ``"CONFIG_TOUCHSCREEN_GOODIX=y"``
-          / ``"# CONFIG_FOO is not set"``）：识别规则——含 ``=`` 或形如
-          ``# CONFIG_...``——同 build 内的所有 raw option 项聚合写入动态
-          fragment ``arch/<ARCH>/configs/flange_inline.config``，并把
-          ``flange_inline.config`` 追加到 list 末尾（保证后处理、CONFIG
-          冲突时覆盖前序）。板级 +defconfig 写一行 ``CONFIG_X=y`` 即生效，
-          无需 builder 端预先写专用 fragment 函数。
+        ``kernel.defconfig`` 只接受 make target/fragment 名称；symbol 覆盖统一
+        从 ``kernel.config`` 生成 ``flange_overrides.config`` 并在末尾应用。
 
         合并步骤前先生成三个 SoC/平台级 fragment 到 ``arch/<ARCH>/configs/``：
 
@@ -68,12 +58,12 @@ class RockchipKernelBuilder(KernelBuilder):
         self._write_panthor_fragment(src_dir, config)
         self._write_panfrost_fragment(src_dir, config)
         self._write_panel_mipi_dbi_fragment(src_dir)
-        # raw kernel option 字符串与 fragment 文件名的分类、flange_inline.config
-        # 聚合由基类 _resolve_defconfig_targets 统一处理（rockchip / amlogic /
-        # allwinner 共用）。
         for dc in self._resolve_defconfig_targets(
                 src_dir, config["kernel"]["defconfig"]):
             self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
+        override = self._write_config_override_fragment(src_dir, config)
+        if override:
+            self.make(src_dir, [override], arch=self.ARCH, cross=self.CROSS)
 
     def _write_panthor_fragment(self, src_dir: Path, config: dict):
         """生成 rk3588_panthor.config fragment。
@@ -211,8 +201,7 @@ class RockchipKernelBuilder(KernelBuilder):
         # 递归下到子目录，再由 scripts/Makefile.build 的通用模式规则
         # `$(obj)/%.dtb: $(src)/%.dts FORCE` 直接按 .dts 源编 .dtb ——
         # 目标设备树无需在子目录 Makefile 的 dtb-y 里登记。
-        dts_dir = config["kernel"].get("dts_dir", "rockchip")
-        dts = config["kernel"]["dts"]
+        dts_dir, dts = kernel_device_tree(config)
         kernel_image = config["kernel"].get("image", "Image")
         boot_format = config["kernel"].get("boot_format", "extlinux")
         extra = ["KCFLAGS=-Wno-error"]
@@ -265,8 +254,7 @@ class RockchipKernelBuilder(KernelBuilder):
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         self._configure_build_context(config)
-        dts_dir = config["kernel"].get("dts_dir", "rockchip")
-        dts = config["kernel"]["dts"]
+        dts_dir, dts = kernel_device_tree(config)
         kernel_image = config["kernel"].get("image", "Image")
         dts_output_dir = src_dir / "arch" / self.ARCH / "boot" / "dts"
         if dts_dir:
@@ -278,7 +266,7 @@ class RockchipKernelBuilder(KernelBuilder):
         }
         if config["kernel"].get("boot_format", "extlinux") == "fit":
             outputs["fit_boot"] = src_dir / "boot.img"
-        overlays = dtb_overlays(config)
+        overlays = intree_overlays(config)
         if overlays:
             overlay_dir = kernel_overlay_dir(src_dir, self.ARCH, dts_dir)
             require_overlay_files(overlay_dir, overlays)

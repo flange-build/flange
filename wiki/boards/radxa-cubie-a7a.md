@@ -3,7 +3,7 @@ title: radxa-cubie-a7a
 type: board
 status: wip
 sources:
-  - components/board/radxa-cubie-a7a/config.py
+  - components/board/radxa-cubie-a7a/config.jsonnet
   - components/board/radxa-cubie-a7a/overlay/etc/usbdevice.conf
   - components/board/radxa-cubie-a7a/overlay/etc/modules-load.d/aic8800.conf
   - components/board/radxa-cubie-a7a/overlay/etc/modprobe.d/aic8800.conf
@@ -82,7 +82,7 @@ init/exit 序列平移自 rock5b；timing 用 E3 原厂高通权威值 **htot131
 
 ## AIC8800 USB Wi-Fi
 
-链路与 a7z 完全一致：`wifi.aic8800_usb=True` + `rootfs.+extra_firmware` 两条 entry（扁平 `aic8800_fw/USB/` + 芯片子目录 `aic8800D80/`）。USB driver 自动 enumeration，无 DTS 节点。
+链路与 a7z 完全一致：两条 `rootfs.extra_firmware` entry 通过 canonical source 引用复用 AIC8800 checkout（扁平 `aic8800_fw/USB/` + 芯片子目录 `aic8800D80/`）。USB driver 自动 enumeration，无 DTS 节点。
 
 ## 刷写
 

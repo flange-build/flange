@@ -186,55 +186,31 @@ rootfs 分区可以同时声明设备最终容量和构建产物初始大小：
 | radxa-dragon-q6a | QCS6490 | Qualcomm |
 | radxa-dragon-q8b | SC8280XP | Qualcomm |
 
-> 完整列表随 `components/board/*/config.py` 自动发现，可执行 `lunch`（无参数）查看当前所有可选 target。
+> 完整列表随 `components/board/*/config.jsonnet` 自动发现，可执行 `lunch`（无参数）查看当前所有可选 target。
 
 ## 添加新配置
 
 ### 添加新板子（已有平台和 SoC）
 
-只需创建一个文件 `components/board/<board-name>/config.py`：
+只需创建一个文件 `components/board/<board-name>/config.jsonnet`：
 
-```python
-"""<Board Name> (<SoC>) 板级配置"""
-
-BOARD = {
-    # ── 基本信息 ──
-    "board": "<board-name>",       # 板子标识，与目录名一致
-    "soc": "rk3566",               # 引用已注册的 SoC
-    "platform": "rockchip",        # 引用已注册的平台
-
-    # ── 产品与变体 ──
-    "products": ["default"],       # 支持的产品列表
-    "variants": ["debug", "release"],  # 支持的变体
-
-    # ── 内核 ──
-    "kernel": {
-        "repo": "https://github.com/example/kernel.git",
-        "branch": "linux-6.1",
-        "commit": "",              # 留空跟踪 branch HEAD，填写则锁定版本
-        "dts": "rk3566-my-board",  # 设备树名（不含 .dts 后缀）
+```jsonnet
+{
+  board: '<board-name>',
+  soc: 'rk3566',
+  platform: 'rockchip',
+  products: ['default'],
+  variants: ['debug', 'release'],
+  kernel+: {
+    device_tree+: { name: 'rk3566-my-board' },
+    config+: { DRM_MY_PANEL: 'y' },
+  },
+  boot+: {
+    overlays+: {
+      board+: ['rk3566-my-board-panel.dtbo'],
+      enabled+: ['rk3566-my-board-panel.dtbo'],
     },
-
-    # ── Bootloader ──
-    "bootloader": {
-        "repo": "https://github.com/example/u-boot.git",
-        "branch": "next-dev",
-        "commit": "",
-    },
-
-    # ── 启动参数 ──
-    "boot": {
-        "dtb_overlays": [],            # DTB overlay 文件列表
-        "default_overlays": [],        # 默认启用的 overlay
-        "kernel_args": "console=ttyS2,1500000 loglevel=7",
-    },
-
-    # ── 根文件系统 ──
-    "rootfs": {
-        "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
-        "sha256": "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
-        "custom_packages": [],     # 自定义 deb 包名
-    },
+  },
 }
 ```
 
@@ -252,7 +228,7 @@ flange build
 
 ```
 components/board/<board-name>/
-├── config.py          # 必须
+├── config.jsonnet     # 必须
 ├── overlay/           # 可选：rootfs 覆盖层（直接覆盖到 /）
 │   └── etc/
 │       └── hostname
@@ -263,16 +239,17 @@ components/board/<board-name>/
 
 ### 组件源码模式
 
-kernel / bootloader / rkbin 等 git 组件支持多种源码来源，优先级为
-`local_path > from_repo > local_repo/repo`，互斥使用：
+kernel / bootloader / rkbin 等组件统一引用顶层 `sources`。source descriptor
+必须且只能选择远端 `url` 或本地 `local_path`：
 
 | 字段组合 | 行为 | 适用场景 |
 |---------|------|---------|
-| `repo` + `branch` + `commit` | 克隆后固定到 `commit`，每次 build 校验 HEAD | 钉版本，精确复现 |
-| `repo` + `branch`（无 `commit`） | 每次 build `fetch --depth=1 origin <branch>` + `reset --hard` | 跟随远端开发分支 |
-| `local_repo` + `branch`（± `commit`） | 以本地 git 仓库为 origin clone，后续 fetch 同上 | 离线构建 / 内部镜像 |
-| `from_repo` + `subpath` | 复用 config 顶层 `repos` 字典声明的命名仓库的子路径，多个组件共享同一次 clone | 单仓库多组件（如同源 kernel/dts） |
-| `local_path` | 直接把指定目录当源码用，**完全不碰 git** | 本地 hack 调试 |
+| `url` + `branch` + `commit` | 克隆后固定到 `commit`，每次 build 校验 HEAD | 钉版本，精确复现 |
+| `url` + `branch` | 每次 build 同步并 reset 到远端分支 | 跟随开发分支 |
+| `local_path` | 直接使用指定目录，不执行 git 操作 | 本地调试 |
+
+组件只声明 `{source: {name: 'linux', subpath: '可选子目录'}}`。多个组件引用
+同一个 name 即共享同一 source；builder 不接受组件内 URL 或旧 alias。
 
 哈希缓存会把 `git rev-parse HEAD` 和补丁文件内容混进组件哈希
 （`builder/cache.py:_mix_source_tree`），HEAD 变化会级联使下游组件
@@ -280,50 +257,38 @@ kernel / bootloader / rkbin 等 git 组件支持多种源码来源，优先级�
 
 #### 1. 钉版本（推荐生产构建）
 
-```python
-"kernel": {
-    "repo": "https://github.com/radxa/kernel.git",
-    "branch": "linux-6.1-stan-rkr6",   # clone 时使用的分支
-    "commit": "a1b2c3d4...",           # 固定到此 commit
+```jsonnet
+sources+: {
+  linux: {
+    url: 'https://github.com/radxa/kernel.git',
+    branch: 'linux-6.1-stan-rkr6',
+    commit: 'a1b2c3d4...',
+  },
 },
+kernel+: { source: { name: 'linux' } },
 ```
 
 #### 2. 跟随远端最新
 
-```python
-"kernel": {
-    "repo": "https://github.com/radxa/kernel.git",
-    "branch": "linux-6.1-stan-rkr6",
-    # 不写 commit → 每次 build 追 origin/<branch>
-    # 注意：reset --hard 会丢弃本地修改，要本地改动请用 local_path
+```jsonnet
+sources+: {
+  linux: {
+    url: 'https://github.com/radxa/kernel.git',
+    branch: 'linux-6.1-stan-rkr6',  // 不写 commit，跟随分支
+  },
 },
+kernel+: { source: { name: 'linux' } },
 ```
 
-#### 3. 离线构建 / 本地镜像
+#### 3. 本地 hack 调试
 
-```python
-"kernel": {
-    "local_repo": "/home/eki/mirrors/linux.git",  # 绝对路径或 ~/...
-    "branch": "linux-6.1-stan-rkr6",
-    # commit 可选，语义同模式 1/2
-},
+```jsonnet
+sources+: { linux: { local_path: '/workspace/my-kernel-checkout' } },
+kernel+: { source: { name: 'linux' } },
 ```
 
-`local_repo` 内部会转为 `file://` URL 喂给 `git clone`，保留 shallow clone
-与正常远端 fetch 语义一致（而裸本地路径会被 git 当作 hardlink clone 并
-忽略 `--depth=1`）。
-
-#### 4. 本地 hack 调试
-
-```python
-"kernel": {
-    "local_path": "/workspace/my-kernel-checkout",
-    # 其他字段无效；框架原样使用此目录，不 clone 不 reset
-},
-```
-
-声明了 `local_path` 后，`repo` / `local_repo` / `branch` / `commit` 都会被
-忽略。你可以在这个目录里随便改代码、切分支、跑 `make menuconfig`，下次
+`local_path` 与 `url` / `branch` / `commit` 互斥。你可以在这个目录里修改
+代码、切分支、跑 `make menuconfig`，下次
 `flange build` 会直接拿当前状态构建——这也是为什么 `local_path` 早出于
 所有 git 操作之前。
 
@@ -344,66 +309,44 @@ boot 走 mke2fs，image 走 dd。flange 之所以放弃缓存决策，是因为
 
 ### 添加新 SoC（已有平台）
 
-创建 `components/platform/<vendor>/<soc>/config.py`：
+创建 `components/platform/<vendor>/<soc>/config.jsonnet`：
 
-```python
-"""<SoC> 配置 — 第二层继承"""
-
-SOC = {
-    "platform": "<vendor>",
-    "soc": "<soc-name>",
-    "arch": "aarch64",
-
-    # SoC 级默认值（会被 board 覆盖）
-    "bootloader": {
-        "defconfig": "<soc>_defconfig",
-    },
-    "kernel": {
-        "defconfig": "<vendor>_linux_defconfig",
-        "dts_dir": "<vendor>",
-    },
-
-    # 分区表（SoC 默认，board 或 product 可覆盖）
-    "partitions": {
-        "format": "gpt",
-        "sector_size": 512,
-        "entries": [
-            {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
-            {"name": "rootfs", "offset": "0x40000", "size": "0x200000", "type": "ext4"},
-        ],
-    },
+```jsonnet
+{
+  platform: '<vendor>',
+  soc: '<soc-name>',
+  architecture+: { userspace: 'arm64', kernel: 'arm64', bootloader: 'arm64' },
+  bootloader+: { defconfig: ['<soc>_defconfig'] },
+  kernel+: {
+    defconfig: ['<vendor>_linux_defconfig'],
+    device_tree+: { directory: '<vendor>' },
+    config+: { MY_SOC_FEATURE: 'y' },
+  },
 }
 ```
 
 无需注册。新 SoC 会被 `builder/config/registry.py` 自动扫描
-`components/platform/<vendor>/<soc>/config.py` 发现（`_discover_soc_configs()`）。
+`components/platform/<vendor>/<soc>/config.jsonnet` 发现。
 
 ### 添加新平台
 
-1. 创建平台配置 `components/platform/<vendor>/config.py`：
+1. 创建平台配置 `components/platform/<vendor>/config.jsonnet`：
 
-```python
-"""<Vendor> 平台配置 — 第一层继承"""
-
-PLATFORM = {
-    "vendor": "<vendor>",
-    "flash_tool": "<flash-tool-name>",
-    "arch": "aarch64",
-
-    # 平台级基础包
-    "rootfs": {
-        "packages": ["systemd", "systemd-sysv", "dbus", "network-manager", ...],
-    },
-
-    # 条件包（debug 变体时追加）
-    "+rootfs": {
-        "+packages:debug": ["gdb", "strace", "tcpdump"],
-    },
+```jsonnet
+local variant = std.extVar('variant');
+{
+  platform: '<vendor>',
+  vendor: '<vendor>',
+  flash_tool: '<flash-tool-name>',
+  rootfs+: {
+    packages+: ['systemd', 'systemd-sysv', 'dbus', 'network-manager']
+      + (if variant == 'debug' then ['gdb', 'strace'] else []),
+  },
 }
 ```
 
 2. 平台配置无需注册。`builder/config/registry.py` 会自动扫描
-   `components/platform/<vendor>/config.py` 发现新平台（`_discover_platform_configs()`）。
+   `components/platform/<vendor>/config.jsonnet` 发现新平台。
 
 3. 创建平台构建策略 `builder/platforms/<vendor>/`：
 
@@ -423,34 +366,24 @@ builder/platforms/<vendor>/
 
 ### 添加 product/variant 条件配置
 
-在 board 或 platform 的 config 中使用条件标记：
+在 board 或 platform 的 Jsonnet 中直接使用 extVar 和原生运算符：
 
-```python
-BOARD = {
-    ...
-    "products": ["smart-display", "gateway"],
-    "variants": ["debug", "release"],
-
-    # 无条件追加（所有配置都包含）
-    "+rootfs": {
-        "+packages": ["custom-bsp-driver"],
-    },
-
-    # 条件追加（仅匹配的 product/variant 生效）
-    "+rootfs": {
-        "+packages:debug": ["gdb", "strace"],           # variant=debug 时追加
-        "+packages:smart-display": ["weston", "chromium"],  # product=smart-display 时追加
-        "+packages:gateway": ["mosquitto", "zigbee-daemon"],
-    },
-
-    # 条件覆盖（整个字段替换）
-    "partitions:smart-display": {
-        "format": "gpt",
-        "entries": [
-            {"name": "rootfs", "offset": "0x40000", "size": "0x400000", "type": "ext4"},
-            {"name": "data", "offset": "0x440000", "size": "remaining", "type": "ext4"},
-        ],
-    },
+```jsonnet
+local lib = import 'config/lib.libsonnet';
+local product = std.extVar('product');
+local variant = std.extVar('variant');
+{
+  products: ['smart-display', 'gateway'],
+  variants: ['debug', 'release'],
+  rootfs+: {
+    packages+: ['custom-bsp-driver']
+      + (if variant == 'debug' then ['gdb', 'strace'] else [])
+      + (if product == 'smart-display' then ['weston', 'chromium'] else []),
+  },
+  kernel+: {
+    defconfig: lib.without(super.defconfig, ['obsolete.config'])
+      + ['required.config'],
+  },
 }
 ```
 
@@ -458,8 +391,8 @@ BOARD = {
 
 把 App 源码放在仓库外时，有两种声明方式（详见 `docs/app-architecture.md` §8.4）：
 
-```python
-BOARD = {
+```jsonnet
+{
     # 方式 A：单个 App 显式注册
     "external_apps": {
         "wifi":   {"local_path": "~/workspace/wifi"},           # 本地目录
@@ -467,26 +400,12 @@ BOARD = {
                    "tag": "v2.1.0"},                             # git 仓库
     },
     # 方式 B：搜索路径（父目录）——按顺序在其下找 <name>/app.yaml
-    "external_app_dirs": [
-        "~/my-flange-apps",
-        "../vendor-apps",
-    ],
+  external_app_dirs: ['~/my-flange-apps', '../vendor-apps'],
 }
 ```
 
 查找优先级：`components/app/` → `external_apps` → `external_app_dirs`。
 `~` 会展开，相对路径相对仓库根目录解析。
-
-条件标记规则：
-
-| 写法 | 含义 |
-|------|------|
-| `packages` | 无条件，始终生效 |
-| `+packages` | 无条件追加到已有 list |
-| `packages:debug` | 仅 variant=debug 时覆盖 |
-| `+packages:debug` | 仅 variant=debug 时追加 |
-| `+packages:smart-display` | 仅 product=smart-display 时追加 |
-| `partitions:smart-display` | 仅 product=smart-display 时覆盖整个分区表 |
 
 ## 项目结构
 
@@ -506,8 +425,8 @@ flange/
 │   ├── chroot.py             #   ChrootContext（mount/umount 管理）
 │   ├── flash.py              #   统一刷写系统（配置生成 + 刷写执行）
 │   ├── config/               #   配置子系统
-│   │   ├── merge.py          #     deep_merge + resolve_conditions
-│   │   ├── registry.py       #     统一注册表（板子发现、三层合并）
+│   │   ├── jsonnet.py        #     Jsonnet 求值与固定层级组合
+│   │   ├── registry.py       #     Jsonnet 配置注册表
 │   │   └── query.py          #     target 枚举与解析
 │   ├── partition/            #   分区表转换
 │   │   └── rockchip.py       #     → parameter.txt
@@ -521,12 +440,12 @@ flange/
 ├── components/               # 【内容层】仓库携带的原料
 │   ├── platform/             #   平台/SoC 数据（配置 + patches）
 │   │   └── rockchip/
-│   │       ├── config.py     #     平台配置（第一层）
+│   │       ├── config.jsonnet #    平台配置
 │   │       ├── patches/      #     平台级补丁
 │   │       └── rk3566/
-│   │           └── config.py #     SoC 配置（第二层）
-│   ├── board/                #   板级配置（第三层）
-│   │   └── <board-name>/       #   config.py + overlay/patches
+│   │           └── config.jsonnet # SoC 配置
+│   ├── board/                #   板级配置
+│   │   └── <board-name>/       #   config.jsonnet + overlay/patches
 │   ├── app/                  #   App 定义
 │   ├── packages/             #   自定义 deb 包
 │   └── rootfs/               #   rootfs overlay
@@ -549,8 +468,9 @@ flange/
 ```
 lunch radxa-zero3w-default-debug
   │
-  ├─ builder/config/registry.py: 三层合并 (platform → SoC → board)
-  ├─ builder/config/merge.py: resolve_conditions(merged, "default", "debug")
+  ├─ builder/config/jsonnet.py: rootfs → platform → SoC → board 固定组合
+  ├─ Jsonnet extVar: product="default", variant="debug"
+  ├─ canonical validator: 拒绝未知字段和旧 alias
   └─ .flange/current_config ← FINAL_CONFIG (JSON)
 
 flange build

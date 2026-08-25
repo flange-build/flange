@@ -32,8 +32,8 @@ class FakeSource:
     def __init__(self, firmware_dir: Path):
         self.firmware_dir = firmware_dir
 
-    def ensure_firmware(self, platform: str, config: dict) -> Path:
-        assert platform == "rockchip"
+    def ensure_firmware(self, config: dict) -> Path:
+        assert config["platform"] == "rockchip"
         return self.firmware_dir
 
 
@@ -101,6 +101,10 @@ def _source_tree(tmp_path: Path) -> Path:
 
 def _config() -> dict:
     return {
+        "platform": "rockchip",
+        "architecture": {
+            "userspace": "armhf", "kernel": "arm", "bootloader": "arm",
+        },
         "rkbin": {
             "ini_prefix": "RK3506B",
             "loader_ini": "RK3506BMINIALL.ini",
@@ -108,7 +112,6 @@ def _config() -> dict:
             "mkimage_chip": "rk3506",
         },
         "bootloader": {
-            "arch": "arm",
             "cross_compile": "arm-linux-gnueabi-",
             "trust_mode": "tos",
             "idbloader_method": "boot_merger",

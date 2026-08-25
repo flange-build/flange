@@ -3,10 +3,10 @@ title: armsom-cm5-io
 type: board
 status: wip
 sources:
-  - components/board/armsom-cm5-io/config.py
+  - components/board/armsom-cm5-io/config.jsonnet
   - components/board/armsom-cm5-io/patches/kernel/0001-dts-armsom-cm5-wifi-chip-ap6275s.patch
   - components/board/armsom-cm5-io/overlay/etc/modprobe.d/bcmdhd.conf
-  - components/platform/rockchip/rk3576/config.py
+  - components/platform/rockchip/rk3576/config.jsonnet
 related:
   - "[[rockchip 平台]]"
   - "[[radxa-rock5b]]"
@@ -22,7 +22,7 @@ panfrost 渲染（GLES 3.1）通过。
 
 ## 关键设计要点
 
-- **SoC 层对齐 rk3588**：`rk3576/config.py` 复用同一 argon BSP
+- **SoC 层对齐 rk3588**：`rk3576/config.jsonnet` 复用同一 argon BSP
   `linux-6.1-stan-rkr5.1` + `rockchip_linux_defconfig`；差异仅 GPU fragment
   （`rk3576_panfrost.config` 替 `rk3588_panthor.config`）。`rkbin` ini_prefix /
   mkimage_chip 均 `rk3576`，bootloader 用 generic `rk3576_defconfig`。
@@ -35,7 +35,7 @@ panfrost 渲染（GLES 3.1）通过。
 - **OP-TEE**：随全平台 patch `0006` 打包进 u-boot.itb（详见 [[rockchip 平台]]
   OP-TEE 段）。console = `ttyS0,1500000`（UART0，rk3576 serial-id=0）。
 - **WiFi/BT**（change `add-armsom-cm5-io-wifi-bt`）：板载 BW3752-50B1
-  （BCM43752/≈AP6275S）。WiFi 走 **rkwifibt OOT bcmdhd**——`+defconfig` 关内建
+  （BCM43752/≈AP6275S）。WiFi 走 **rkwifibt OOT bcmdhd**——`kernel.config` 关内建
   `CONFIG_BCMDHD`+`CONFIG_BRCMFMAC`、`+oot_modules` 编 OOT `bcmdhd.ko`（对齐
   rock5b 模式）；固件含关键 `clm_bcm43752a2_ag.blob` 从 rkwifibt 仓
   （`firmware/broadcom/AP6275S`）部署到 `/lib/firmware/brcm/`；overlay

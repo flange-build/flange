@@ -12,8 +12,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from builder.rootfs import RootfsBuilder
 from builder.chroot import ChrootContext
+from builder.config.canonical import kernel_device_tree
+from builder.dtb_overlay import build_overlays
+from builder.rootfs import RootfsBuilder
 
 
 class Qcs6490RootfsBuilder(RootfsBuilder):
@@ -152,8 +154,8 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
         ## 构建期 fdtoverlay 合并（grub-with-dtb 平台专用）
 
         GRUB 不支持运行时 DT overlay。当 board 经 `packages` 启用硬件特性包并由
-        `builder/packages.py` 注入 `boot.package_overlays` 时，本函数在写入 /boot/
-        前先用 `fdtoverlay` 把 base dtb 与所有 package overlay `.dtbo` 合成一份
+        ``kernel.device_tree.build_overlays`` 非空时，本函数在写入 /boot/
+        前先用 `fdtoverlay` 把 base dtb 与声明的 overlay `.dtbo` 合成一份
         merged dtb，**覆盖式**写到 /boot/<dtb>.dtb（与 grub.cfg `devicetree
         /boot/<dtb>.dtb` 配套）。无 overlay 时走直拷路径，与未启用本能力前字节等价。
 
@@ -165,21 +167,22 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
         boot = rootfs_dir / "boot"
         boot.mkdir(exist_ok=True)
         image = target_dir / "kernel" / "Image"
-        dtb = target_dir / "kernel" / f"{config['kernel']['dtb']}.dtb"
+        _, dtb_name = kernel_device_tree(config)
+        dtb = target_dir / "kernel" / f"{dtb_name}.dtb"
         if image.exists():
             self.docker.run_privileged(["cp", str(image), str(boot / "vmlinuz")])
         if not dtb.exists():
             return
 
-        package_overlays = (config.get("boot") or {}).get("package_overlays") or []
-        if not package_overlays:
+        overlays = build_overlays(config)
+        if not overlays:
             # 无 overlay：直拷 base dtb，与本能力启用前字节等价
             self.docker.run_privileged(["cp", str(dtb), str(boot / dtb.name)])
             return
 
         # 合并分支：base dtb + package overlays → merged dtb
         overlay_dir = target_dir / "device-tree-overlay" / "overlays"
-        missing = [name for name in package_overlays
+        missing = [name for name in overlays
                    if not (overlay_dir / name).is_file()]
         if missing:
             raise FileNotFoundError(
@@ -189,8 +192,8 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
 
         merged = self._work_dir / dtb.name
         self._status(
-            f"fdtoverlay 合并 {len(package_overlays)} 个 package overlay 到 "
-            f"{dtb.name}：{', '.join(package_overlays)}"
+            f"fdtoverlay 合并 {len(overlays)} 个 overlay 到 "
+            f"{dtb.name}：{', '.join(overlays)}"
         )
         # fdtoverlay 失败时 stderr 不被吞：docker.run 默认在非零退出码时
         # 把 stderr 含进异常信息向上抛，便于排查 base dtb 缺 __symbols__
@@ -199,7 +202,7 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
             "fdtoverlay",
             "-i", str(dtb),
             "-o", str(merged),
-            *[str(overlay_dir / name) for name in package_overlays],
+            *[str(overlay_dir / name) for name in overlays],
         ], label=f"fdtoverlay {dtb.name}")
 
         self.docker.run_privileged(["cp", str(merged), str(boot / dtb.name)])

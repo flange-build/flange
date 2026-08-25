@@ -3,7 +3,7 @@ title: radxa-rock5c-lite
 type: board
 status: wip
 sources:
-  - components/board/radxa-rock5c-lite/config.py
+  - components/board/radxa-rock5c-lite/config.jsonnet
   - components/board/radxa-rock5c-lite/dtso/rk3588s-rock-5c-otg-peripheral.dtso
   - components/board/radxa-rock5c-lite/dtso/rk3588s-rock-5c-st7789vm-lcd-keys.dtso
   - components/board/radxa-rock5c-lite/firmware/panel/st7789vm-240x240.txt
@@ -35,7 +35,7 @@ AIC8800D80 USB combo（BT+WiFi 6），OOT `7f42b22`（与 cubie-a7z 锁同版）
 
 ## USB-C OTG
 
-原始 dts `dr_mode="host"` 致 gadget 不可用。`rk3588s-rock-5c-otg-peripheral.dtso` 覆写为 `"peripheral"`，已加入 `default_overlays`。
+原始 dts `dr_mode="host"` 致 gadget 不可用。`rk3588s-rock-5c-otg-peripheral.dtso` 覆写为 `"peripheral"`，已加入 `boot.overlays.enabled`。
 
 ## 1.3" LCD HAT（ST7789VM 240×240）
 
@@ -88,4 +88,4 @@ GStreamer 这条管线 6 个参数缺一不可：
 
 ## Overlays
 
-均加入 `default_overlays`：`rk3588s-rock-5c-otg-peripheral.dtbo`（OTG peripheral）、`rk3588s-rock-5c-st7789vm-lcd-keys.dtbo`（LCD+键）。`overlay/etc/hostname`=`radxa-rock5c-lite`，`overlay/etc/usbdevice.conf`（ADB）。
+均加入 `boot.overlays.enabled`：`rk3588s-rock-5c-otg-peripheral.dtbo`（OTG peripheral）、`rk3588s-rock-5c-st7789vm-lcd-keys.dtbo`（LCD+键）。`overlay/etc/hostname`=`radxa-rock5c-lite`，`overlay/etc/usbdevice.conf`（ADB）。

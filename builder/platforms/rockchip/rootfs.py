@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from builder.rootfs import RootfsBuilder
 from builder.chroot import ChrootContext
+from builder.config.canonical import userspace_arch
 from builder.config.validate import validate_mtd_ubi
 from builder.docker import BuildError
 from builder.partition.rockchip import parse_parameter_file
@@ -293,7 +294,7 @@ class RockchipRootfsBuilder(RootfsBuilder):
         explicit = rootfs.get("emulator")
         if explicit:
             return explicit
-        arch = config.get("arch", "aarch64")
+        arch = userspace_arch(config)
         mapping = {
             "aarch64": "qemu-aarch64-static",
             "armhf": "qemu-arm-static",

@@ -4,8 +4,8 @@ type: platform
 status: wip
 sources:
   - builder/platforms/qualcommsc8280xp/__init__.py
-  - components/platform/qualcommsc8280xp/config.py
-  - components/platform/qualcommsc8280xp/sc8280xp/config.py
+  - components/platform/qualcommsc8280xp/config.jsonnet
+  - components/platform/qualcommsc8280xp/sc8280xp/config.jsonnet
   - builder/flash.py
 related:
   - "[[radxa-dragon-q8b]]"

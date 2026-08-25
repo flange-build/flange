@@ -4,92 +4,92 @@
 TBD - created by archiving change add-extlinux-dtb-overlays. Update Purpose after archive.
 ## Requirements
 ### Requirement: Device Tree Overlay 配置契约
-平台、SoC、board 或 product 配置 MUST 通过 `boot.dtb_overlays` 声明需要从内核源码树（in-tree）构建并打包的 Device Tree Overlay 文件列表，MUST 通过 `boot.vendor_overlays` 声明需要从外部 vendor overlay 仓库构建并打包的 Device Tree Overlay 文件列表，MUST 通过 `boot.board_overlays` 声明需要从板私有源目录 `components/board/<board>/dtso/` 构建并打包的 Device Tree Overlay 文件列表，MUST 通过 `boot.default_overlays` 声明默认启动时需要应用的 overlay 文件列表。
+平台、SoC、board 或 product 配置 MUST 通过 `boot.overlays.intree` 声明需要从内核源码树（in-tree）构建并打包的 Device Tree Overlay 文件列表，MUST 通过 `boot.overlays.vendor` 声明需要从外部 vendor overlay 仓库构建并打包的列表，MUST 通过 `boot.overlays.board` 声明需要从板私有源目录 `components/board/<board>/dtso/` 构建并打包的列表，MUST 通过 `boot.overlays.package` 接收硬件包提供的列表，并 MUST 通过 `boot.overlays.enabled` 声明运行期应用顺序。
 
 此外，board 通过 `packages` 启用的硬件特性包中，`devicetree` 类型 component 编出的 `.dtbo` 构成第四源「package overlay」，由包机制注册进打包集合，与上述三源同等参与下列约束。package overlay 的源 `.dtso` 位于包目录的 `device-tree/` 子目录、由 device-tree-overlay 的同一 cpp+dtc 流水线编译。
 
-`boot.default_overlays` MUST 保持声明顺序，并 MUST 是 `boot.dtb_overlays ∪ boot.vendor_overlays ∪ boot.board_overlays ∪ package overlays`（按 basename）的子集。
+`boot.overlays.enabled` MUST 保持声明顺序，并 MUST 是 `boot.overlays.intree ∪ boot.overlays.vendor ∪ boot.overlays.board ∪ boot.overlays.package`（按 basename）的子集。
 
-四源（`boot.dtb_overlays` / `boot.vendor_overlays` / `boot.board_overlays` / package overlays）之间，任意两源的 basename MUST NOT 重复——撞名时构建 MUST 失败，错误信息 MUST 列出冲突项与各自来源。
+四源（`boot.overlays.intree` / `boot.overlays.vendor` / `boot.overlays.board` / package overlays）之间，任意两源的 basename MUST NOT 重复——撞名时构建 MUST 失败，错误信息 MUST 列出冲突项与各自来源。
 
 每个字段的每一项 MUST 是非空字符串，MUST 以 `.dtbo` 结尾，MUST NOT 包含 `/`，MUST NOT 以 `.` 起头。
 
 #### Scenario: 同时声明三源 overlay
-- **WHEN** 最终配置中 `boot.dtb_overlays == ["my-local.dtbo"]`、`boot.vendor_overlays == ["radxa-zero3-external-antenna.dtbo", "rk3568-i2c1.dtbo"]`、`boot.board_overlays == ["vim3l-spidev-spicc1.dtbo"]` 且 `boot.default_overlays == ["rk3568-i2c1.dtbo", "vim3l-spidev-spicc1.dtbo"]`
+- **WHEN** 最终配置中 `boot.overlays.intree == ["my-local.dtbo"]`、`boot.overlays.vendor == ["radxa-zero3-external-antenna.dtbo", "rk3568-i2c1.dtbo"]`、`boot.overlays.board == ["vim3l-spidev-spicc1.dtbo"]` 且 `boot.overlays.enabled == ["rk3568-i2c1.dtbo", "vim3l-spidev-spicc1.dtbo"]`
 - **THEN** 构建系统将 `my-local.dtbo` 通过 in-tree 流程构建，将 `radxa-zero3-external-antenna.dtbo`、`rk3568-i2c1.dtbo` 通过 vendor overlay 仓库流程构建，将 `vim3l-spidev-spicc1.dtbo` 通过板私有源流程构建
 - **AND** 四个 `.dtbo` 文件全部纳入打包集合
 - **AND** extlinux 配置仅引用 `rk3568-i2c1.dtbo` 与 `vim3l-spidev-spicc1.dtbo`
 
 #### Scenario: package overlay 纳入打包与默认应用
-- **WHEN** board 通过 `packages` 启用的包提供 `rk3588-rock-5b-meizu-e3-panel.dtbo`（package overlay），且 `boot.default_overlays` 包含 `rk3588-rock-5b-meizu-e3-panel.dtbo`
+- **WHEN** board 通过 `packages` 启用的包提供 `rk3588-rock-5b-meizu-e3-panel.dtbo`（package overlay），且 `boot.overlays.enabled` 包含 `rk3588-rock-5b-meizu-e3-panel.dtbo`
 - **THEN** 该 `.dtbo` 由 cpp+dtc 流水线编译并纳入打包集合
 - **AND** extlinux 配置在 `fdtoverlays` 行引用该 overlay
 
 #### Scenario: 默认 overlay 引用未打包文件
-- **WHEN** `boot.default_overlays` 包含 `missing.dtbo` 但 `boot.dtb_overlays`、`boot.vendor_overlays`、`boot.board_overlays` 与 package overlays 的并集不包含 `missing.dtbo`
+- **WHEN** `boot.overlays.enabled` 包含 `missing.dtbo` 但 `boot.overlays.intree`、`boot.overlays.vendor`、`boot.overlays.board` 与 package overlays 的并集不包含 `missing.dtbo`
 - **THEN** boot 组件构建失败
 - **AND** 错误信息包含缺失的 overlay 文件名
 - **AND** 错误信息列出四源各自的候选集合
 
 #### Scenario: 任意两源 basename 撞名
-- **WHEN** 四源（`boot.dtb_overlays` / `boot.vendor_overlays` / `boot.board_overlays` / package overlays）中任意两源同时包含 `foo.dtbo`
+- **WHEN** 四源（`boot.overlays.intree` / `boot.overlays.vendor` / `boot.overlays.board` / package overlays）中任意两源同时包含 `foo.dtbo`
 - **THEN** 构建失败
 - **AND** 错误信息明确指出冲突的 basename `foo.dtbo` 同时来自哪两源
 
 #### Scenario: 未声明 overlay 保持兼容
-- **WHEN** `boot.dtb_overlays`、`boot.vendor_overlays`、`boot.board_overlays`、`boot.default_overlays` 均为空或未声明，且 board 未通过 `packages` 启用任何 `devicetree` component
+- **WHEN** `boot.overlays.intree`、`boot.overlays.vendor`、`boot.overlays.board`、`boot.overlays.enabled` 均为空或未声明，且 board 未通过 `packages` 启用任何 `devicetree` component
 - **THEN** kernel、device-tree-overlay、boot 与 image 组件保持现有无 overlay 的构建行为
 - **AND** extlinux 配置不生成 `fdtoverlays` 行
 
 ### Requirement: Kernel overlay 产物收集
-支持 Device Tree Overlay 的平台 kernel builder 必须（SHALL）在 `boot.dtb_overlays` 非空时编译对应 `.dtbo`，并通过 collect 返回 `dtbos` 目录供构建引擎收集到 `target/kernel/overlay/`。当任一声明的 overlay 未生成时，kernel 构建必须（MUST）失败。
+支持 Device Tree Overlay 的平台 kernel builder 必须（SHALL）在 `boot.overlays.intree` 非空时编译对应 `.dtbo`，并通过 collect 返回 `dtbos` 目录供构建引擎收集到 `target/kernel/overlay/`。当任一声明的 overlay 未生成时，kernel 构建必须（MUST）失败。
 
 #### Scenario: overlay 编译成功
-- **WHEN** `boot.dtb_overlays` 声明 `["i2c1.dtbo", "spi1.dtbo"]` 且内核源码提供对应 overlay 源文件和 Makefile 规则
+- **WHEN** `boot.overlays.intree` 声明 `["i2c1.dtbo", "spi1.dtbo"]` 且内核源码提供对应 overlay 源文件和 Makefile 规则
 - **THEN** `flange build kernel` 生成 `target/kernel/overlay/i2c1.dtbo`
 - **AND** 生成 `target/kernel/overlay/spi1.dtbo`
 
 #### Scenario: overlay 编译缺失
-- **WHEN** `boot.dtb_overlays` 声明 `["i2c1.dtbo"]` 但内核构建后未产生 `i2c1.dtbo`
+- **WHEN** `boot.overlays.intree` 声明 `["i2c1.dtbo"]` 但内核构建后未产生 `i2c1.dtbo`
 - **THEN** kernel 组件构建失败
 - **AND** 错误信息包含 `i2c1.dtbo`
 
 ### Requirement: extlinux fdtoverlays 渲染
-boot builder 必须（SHALL）把 `boot.default_overlays` 渲染为 extlinux 的 `fdtoverlays` 指令。该指令必须（MUST）支持多个 overlay 路径，并保持 `boot.default_overlays` 的声明顺序。
+boot builder 必须（SHALL）把 `boot.overlays.enabled` 渲染为 extlinux 的 `fdtoverlays` 指令。该指令必须（MUST）支持多个 overlay 路径，并保持 `boot.overlays.enabled` 的声明顺序。
 
 #### Scenario: Rockchip extlinux overlay 路径
-- **WHEN** Rockchip target 的 `boot.default_overlays == ["i2c1.dtbo", "spi1.dtbo"]`
+- **WHEN** Rockchip target 的 `boot.overlays.enabled == ["i2c1.dtbo", "spi1.dtbo"]`
 - **THEN** `/extlinux/extlinux.conf` 包含一行 `fdtoverlays /dtbs/rockchip/overlay/i2c1.dtbo /dtbs/rockchip/overlay/spi1.dtbo`
 
 #### Scenario: Allwinner A733 extlinux overlay 路径
-- **WHEN** Allwinner A733 target 的 `boot.default_overlays == ["i2c1.dtbo", "spi1.dtbo"]`
+- **WHEN** Allwinner A733 target 的 `boot.overlays.enabled == ["i2c1.dtbo", "spi1.dtbo"]`
 - **THEN** `/extlinux/extlinux.conf` 包含一行 `fdtoverlays /dtbs/allwinner/overlay/i2c1.dtbo /dtbs/allwinner/overlay/spi1.dtbo`
 
 #### Scenario: 多 overlay 顺序保持
-- **WHEN** `boot.default_overlays == ["first.dtbo", "second.dtbo", "third.dtbo"]`
+- **WHEN** `boot.overlays.enabled == ["first.dtbo", "second.dtbo", "third.dtbo"]`
 - **THEN** extlinux 中 `fdtoverlays` 的路径顺序为 `first.dtbo`、`second.dtbo`、`third.dtbo`
 
 ### Requirement: boot 分区 overlay 文件布局
-boot builder MUST 将 `target/kernel/overlay/` 中被 `boot.dtb_overlays` 声明的 `.dtbo` 文件、device-tree-overlay 组件产物中被 `boot.vendor_overlays` 声明的 `.dtbo` 文件、以及 device-tree-overlay 组件产物中被 `boot.board_overlays` 声明的 `.dtbo` 文件，复制到平台约定的 boot 分区 overlay 目录。
+boot builder MUST 将 `target/kernel/overlay/` 中被 `boot.overlays.intree` 声明的 `.dtbo` 文件、device-tree-overlay 组件产物中被 `boot.overlays.vendor` 声明的 `.dtbo` 文件、以及 device-tree-overlay 组件产物中被 `boot.overlays.board` 声明的 `.dtbo` 文件，复制到平台约定的 boot 分区 overlay 目录。
 
 base DTB MUST 放在 `/dtbs/<vendor>/`，所有 overlay（无论来自三源中哪一源）MUST 平铺在 `/dtbs/<vendor>/overlay/`，文件名即 basename。
 
 复制阶段若发现 dst 中已存在同名 `.dtbo` 文件 → MUST raise 异常并终止构建。
 
-生成 extlinux 前 MUST 校验 `boot.default_overlays` 引用的文件已存在于 staging 目录。
+生成 extlinux 前 MUST 校验 `boot.overlays.enabled` 引用的文件已存在于 staging 目录。
 
 #### Scenario: Rockchip boot 分区两源平铺
-- **WHEN** Rockchip boot 组件构建，`boot.dtb_overlays == ["my-local.dtbo"]` 且 `boot.vendor_overlays == ["rk3568-i2c1.dtbo"]`
+- **WHEN** Rockchip boot 组件构建，`boot.overlays.intree == ["my-local.dtbo"]` 且 `boot.overlays.vendor == ["rk3568-i2c1.dtbo"]`
 - **THEN** boot.img staging 中包含 `/dtbs/rockchip/overlay/my-local.dtbo`
 - **AND** boot.img staging 中包含 `/dtbs/rockchip/overlay/rk3568-i2c1.dtbo`
 
 #### Scenario: Allwinner A733 boot 分区两源平铺
-- **WHEN** Allwinner A733 boot 组件构建，`boot.dtb_overlays == ["my-local.dtbo"]` 且 `boot.vendor_overlays == ["a733-foo.dtbo"]`
+- **WHEN** Allwinner A733 boot 组件构建，`boot.overlays.intree == ["my-local.dtbo"]` 且 `boot.overlays.vendor == ["a733-foo.dtbo"]`
 - **THEN** boot.img staging 中包含 `/dtbs/allwinner/overlay/my-local.dtbo`
 - **AND** boot.img staging 中包含 `/dtbs/allwinner/overlay/a733-foo.dtbo`
 
 #### Scenario: Amlogic boot 分区含 board 私有 overlay
-- **WHEN** Amlogic（khadas-vim3l）boot 组件构建，`boot.board_overlays == ["vim3l-spidev-spicc1.dtbo"]`
+- **WHEN** Amlogic（khadas-vim3l）boot 组件构建，`boot.overlays.board == ["vim3l-spidev-spicc1.dtbo"]`
 - **THEN** boot.img staging 中包含 `/dtbs/amlogic/overlay/vim3l-spidev-spicc1.dtbo`
 
 #### Scenario: dst 撞名报错
@@ -98,7 +98,7 @@ base DTB MUST 放在 `/dtbs/<vendor>/`，所有 overlay（无论来自三源中�
 - **AND** 异常信息包含已存在路径与本次源路径，可定位冲突来源
 
 ### Requirement: vendor overlay 仓库构建
-flange MUST 提供独立组件 `device-tree-overlay`，从外部 vendor overlay 仓库（git pin 到固定 ref）按 `boot.vendor_overlays` 列表编译 `.dtbo` 产物。
+flange MUST 提供独立组件 `device-tree-overlay`，从外部 vendor overlay 仓库（git pin 到固定 ref）按 `boot.overlays.vendor` 列表编译 `.dtbo` 产物。
 
 该组件 MUST vendor 无关，从 `config["vendor"]` 读取 vendor 名（如 `rockchip`、`allwinner`），用于在仓库中定位子目录 `arch/arm64/boot/dts/<vendor>/overlays/<stem>.{dts,dtso}`。源文件后缀 MUST 同时支持 `.dts`（rockchip 等子目录传统格式）与 `.dtso`（allwinner 等子目录在 kernel ≥ 6.2 引入的新格式）。`config["vendor"]` 字段缺失或值在仓库中无对应子目录时 MUST 报错并明确指出问题。
 
@@ -114,35 +114,35 @@ dtc -@ -I dts -O dtb -o {dtbo} {tmp}
 
 其中 `kernel_src_dir` 取自 kernel 组件的源码目录，`vendor_src_dir` 取自 device-tree-overlay 组件的源码目录。
 
-`boot.vendor_overlays` 中声明的 stem 在仓库对应 vendor 子目录下不存在（`.dts` / `.dtso` 都没有）时 MUST 报错，错误信息 MUST 列出该 vendor 下若干可用 stem 与总数。
+`boot.overlays.vendor` 中声明的 stem 在仓库对应 vendor 子目录下不存在（`.dts` / `.dtso` 都没有）时 MUST 报错，错误信息 MUST 列出该 vendor 下若干可用 stem 与总数。
 
 #### Scenario: 编译声明的 vendor overlay (.dts)
-- **WHEN** `boot.vendor_overlays == ["radxa-zero3-external-antenna.dtbo"]` 且 `config["vendor"] == "rockchip"`，仓库中存在 `arch/arm64/boot/dts/rockchip/overlays/radxa-zero3-external-antenna.dts`
+- **WHEN** `boot.overlays.vendor == ["radxa-zero3-external-antenna.dtbo"]` 且 `config["vendor"] == "rockchip"`，仓库中存在 `arch/arm64/boot/dts/rockchip/overlays/radxa-zero3-external-antenna.dts`
 - **THEN** device-tree-overlay 组件成功编译并把 `radxa-zero3-external-antenna.dtbo` 收集到该组件 target 子目录
 
 #### Scenario: 编译声明的 vendor overlay (.dtso)
-- **WHEN** `boot.vendor_overlays == ["sun60iw2p1-spi1-spidev.dtbo"]` 且 `config["vendor"] == "allwinner"`，仓库中存在 `arch/arm64/boot/dts/allwinner/overlays/sun60iw2p1-spi1-spidev.dtso`
+- **WHEN** `boot.overlays.vendor == ["sun60iw2p1-spi1-spidev.dtbo"]` 且 `config["vendor"] == "allwinner"`，仓库中存在 `arch/arm64/boot/dts/allwinner/overlays/sun60iw2p1-spi1-spidev.dtso`
 - **THEN** device-tree-overlay 组件成功编译并把 `sun60iw2p1-spi1-spidev.dtbo` 收集到该组件 target 子目录
 
 #### Scenario: 仓库中找不到声明的 stem
-- **WHEN** `boot.vendor_overlays == ["nonexistent-overlay.dtbo"]` 且仓库对应 vendor 子目录中既无 `nonexistent-overlay.dts` 也无 `nonexistent-overlay.dtso`
+- **WHEN** `boot.overlays.vendor == ["nonexistent-overlay.dtbo"]` 且仓库对应 vendor 子目录中既无 `nonexistent-overlay.dts` 也无 `nonexistent-overlay.dtso`
 - **THEN** device-tree-overlay 组件构建失败
 - **AND** 错误信息包含 `nonexistent-overlay`
 - **AND** 错误信息列出该 vendor 下若干可用 stem 名与总数
 
 #### Scenario: 缺失 config.vendor
-- **WHEN** `boot.vendor_overlays` 非空但 `config` 顶层无 `vendor` 字段
+- **WHEN** `boot.overlays.vendor` 非空但 `config` 顶层无 `vendor` 字段
 - **THEN** device-tree-overlay 组件构建失败
 - **AND** 错误信息明确指出 `vendor` 字段需补充
 
-#### Scenario: 空 vendor_overlays short-circuit
-- **WHEN** `boot.vendor_overlays == []`
+#### Scenario: 空 boot.overlays.vendor short-circuit
+- **WHEN** `boot.overlays.vendor == []`
 - **THEN** device-tree-overlay 组件 source 阶段仍执行（保持内容哈希稳定）
 - **AND** compile 阶段不执行任何 cpp / dtc 调用
 - **AND** 该组件 target 子目录为空
 
 ### Requirement: 板私有 overlay 源目录与编译
-flange MUST 支持从 `components/board/<board>/dtso/` 目录读取板私有 overlay 源文件（`.dts` 或 `.dtso` 后缀），由 `device-tree-overlay` 组件按 `boot.board_overlays` 列表编译产生 `.dtbo`。
+flange MUST 支持从 `components/board/<board>/dtso/` 目录读取板私有 overlay 源文件（`.dts` 或 `.dtso` 后缀），由 `device-tree-overlay` 组件按 `boot.overlays.board` 列表编译产生 `.dtbo`。
 
 板私有 overlay 编译流程 MUST 与 vendor overlay 复用同一 `cpp + dtc` 流水线，等价于：
 
@@ -156,27 +156,27 @@ dtc -@ -I dts -O dtb -o {dtbo} {tmp}
 
 其中 `kernel_src_dir` 取自 kernel 组件的源码目录。产物 MUST 与 vendor overlay 落到同一 target 子目录（`target/device-tree-overlay/overlays/`），由 boot 组件统一收集。
 
-`boot.board_overlays` 中声明的 stem 在 `components/board/<board>/dtso/` 下不存在（`.dts` / `.dtso` 都没有）时 MUST 报错，错误信息 MUST 列出该目录下若干可用 stem 与总数。
+`boot.overlays.board` 中声明的 stem 在 `components/board/<board>/dtso/` 下不存在（`.dts` / `.dtso` 都没有）时 MUST 报错，错误信息 MUST 列出该目录下若干可用 stem 与总数。
 
-`boot.board_overlays` 非空但 `config["board"]` 字段缺失时 MUST 报错（不应正常发生）。
+`boot.overlays.board` 非空但 `config["board"]` 字段缺失时 MUST 报错（不应正常发生）。
 
 #### Scenario: 编译板私有 overlay
-- **WHEN** `boot.board_overlays == ["vim3l-spidev-spicc1.dtbo"]` 且 `config["board"] == "khadas-vim3l"`，仓库中存在 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso`
+- **WHEN** `boot.overlays.board == ["vim3l-spidev-spicc1.dtbo"]` 且 `config["board"] == "khadas-vim3l"`，仓库中存在 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso`
 - **THEN** device-tree-overlay 组件成功编译并把 `vim3l-spidev-spicc1.dtbo` 收集到 `target/device-tree-overlay/overlays/`
 
 #### Scenario: 板私有源目录找不到声明的 stem
-- **WHEN** `boot.board_overlays == ["nonexistent-overlay.dtbo"]` 且 `components/board/<board>/dtso/` 中既无 `nonexistent-overlay.dts` 也无 `nonexistent-overlay.dtso`
+- **WHEN** `boot.overlays.board == ["nonexistent-overlay.dtbo"]` 且 `components/board/<board>/dtso/` 中既无 `nonexistent-overlay.dts` 也无 `nonexistent-overlay.dtso`
 - **THEN** device-tree-overlay 组件构建失败
 - **AND** 错误信息包含 `nonexistent-overlay`
 - **AND** 错误信息列出该 board 私有 dtso 目录下若干可用 stem 名
 
 #### Scenario: 板私有源目录不存在
-- **WHEN** `boot.board_overlays` 非空但 `components/board/<board>/dtso/` 目录不存在
+- **WHEN** `boot.overlays.board` 非空但 `components/board/<board>/dtso/` 目录不存在
 - **THEN** device-tree-overlay 组件构建失败
 - **AND** 错误信息明确指出缺失目录路径与建议（"请创建该目录并放入对应 .dts/.dtso 文件"）
 
-#### Scenario: 空 board_overlays 与空 vendor_overlays 同时存在
-- **WHEN** `boot.vendor_overlays == []` 且 `boot.board_overlays == []`
+#### Scenario: 空 boot.overlays.board 与空 boot.overlays.vendor 同时存在
+- **WHEN** `boot.overlays.vendor == []` 且 `boot.overlays.board == []`
 - **THEN** device-tree-overlay 组件 source 阶段仍执行（保持内容哈希稳定）
 - **AND** compile 阶段不执行任何 cpp / dtc 调用
 - **AND** 该组件 target 子目录为空
@@ -185,7 +185,7 @@ dtc -@ -I dts -O dtb -o {dtbo} {tmp}
 device-tree-overlay 组件的 source 声明 MUST pin 到外部 vendor overlay 仓库的固定 git ref（推荐 release tag）。flange 内容哈希 MUST 包含该 ref，使 ref 升级时整个组件链触发增量重 build。
 
 #### Scenario: ref 变更触发重建
-- **WHEN** `components/device-tree-overlay/config.py` 中的 git ref 从 `tagA` 改为 `tagB`
+- **WHEN** `components/device-tree-overlay/config.jsonnet` 中的 git ref 从 `tagA` 改为 `tagB`
 - **AND** 其他配置不变
 - **THEN** device-tree-overlay 组件被识别为内容变化
 - **AND** 触发该组件及下游 boot 组件的重建
@@ -201,4 +201,3 @@ device-tree-overlay 组件的 source 声明 MUST pin 到外部 vendor overlay �
 - **WHEN** U-Boot sysboot 读取包含 `fdtoverlays` 的 extlinux 配置
 - **THEN** U-Boot 使用 `fdtoverlay_addr_r` 加载并按顺序应用 overlay
 - **AND** 成功后启动的 Linux 接收已合并 overlay 的 FDT
-

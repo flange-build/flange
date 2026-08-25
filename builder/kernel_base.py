@@ -5,6 +5,7 @@ import os
 import shutil
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.kconfig import defconfig_targets, write_kconfig_fragment
 
 
 class KernelBuilder(ComponentBuilder):
@@ -120,62 +121,28 @@ class KernelBuilder(ComponentBuilder):
         )
         self._status("FS 大小写不敏感，启用 case_insensitive_fix")
 
-    # ---- defconfig inline option 解析 ----
+    # ---- canonical Kconfig ----
 
     def _resolve_defconfig_targets(self, src_dir: Path, defconfig) -> list[str]:
-        """把 ``kernel.defconfig``（单字符串或 list）解析成有序 ``make`` target。
+        """返回只含 defconfig/fragment 名称的有序 make target。"""
+        _ = src_dir
+        return defconfig_targets(defconfig, "kernel.defconfig")
 
-        list 中每项分两类：
-
-        - **raw kernel option**：含 ``=``（如 ``"CONFIG_DRM_GUD=y"`` /
-          ``"CONFIG_X=m"``）或形如 ``"# CONFIG_X is not set"``。这些聚合写入
-          动态 fragment ``arch/<ARCH>/configs/flange_inline.config``，该 fragment
-          追加到 target 列表**末尾**（最后 ``make``，故覆盖前序同名 CONFIG）。
-        - **fragment / defconfig 文件名**：其余原样作 ``make <name>`` target。
-
-        让 SoC / board config 直接在 ``kernel.defconfig``（或板级 ``+defconfig``）
-        写一行 ``CONFIG_X=y`` 即生效，无需为每个 option 预写专用 fragment 函数。
-        rockchip / amlogic / allwinner 三平台 configure 共用本方法。
-        """
-        if isinstance(defconfig, str):
-            defconfig = [defconfig]
-        raw_options: list[str] = []
-        targets: list[str] = []
-        for item in defconfig:
-            if "=" in item or item.lstrip().startswith("# CONFIG_"):
-                raw_options.append(item)
-            else:
-                targets.append(item)
-        if raw_options:
-            self._write_inline_options_fragment(src_dir, raw_options)
-            targets.append("flange_inline.config")
-        return targets
-
-    def _write_inline_options_fragment(self, src_dir: Path,
-                                       options: list[str]) -> None:
-        """把 defconfig 中的 raw ``CONFIG_X=`` 行聚合写入动态 fragment。
-
-        触发：SoC / board 配置直接在 ``kernel.defconfig`` / ``+defconfig`` 写一行
-        ``"CONFIG_TOUCHSCREEN_GOODIX=y"``（或 ``"# CONFIG_FOO is not set"``）而不是
-        先在 builder 加一个 ``_write_xxx_fragment`` 函数 + 单独 ``.config`` 文件。
-        这样板级 opt-in 一行直达 kernel option，零 builder 改动。
-
-        生成路径：``arch/<ARCH>/configs/flange_inline.config``，由
-        ``_resolve_defconfig_targets`` 追加到 target 列表末尾，最后 ``make``，
-        因此 inline option 覆盖前序 fragment 的同名 CONFIG。
-        """
-        fragment = src_dir / "arch" / self.ARCH / "configs" / "flange_inline.config"
-        body = (
-            "# 由 builder 从 kernel.defconfig list 中的 raw option 字符串聚合\n"
-            "# 生成；每行一条 CONFIG_X=y / =m / =n 或 '# CONFIG_X is not set'。\n"
-            "# 项的来源是 SoC / board config.py 直接在 defconfig 写的 raw\n"
-            "# 字符串（区别于 .config fragment 文件名）。最后被 make 处理，\n"
-            "# 覆盖前序 fragment 中同名 CONFIG。\n"
+    def _write_config_override_fragment(
+        self, src_dir: Path, config: dict
+    ) -> str | None:
+        """把 ``kernel.config`` 写成所有平台共用的末尾 override fragment。"""
+        name = "flange_overrides.config"
+        fragment = src_dir / "arch" / self.ARCH / "configs" / name
+        count = write_kconfig_fragment(
+            fragment,
+            (config.get("kernel") or {}).get("config"),
+            field="kernel.config",
         )
-        body += "\n".join(options) + "\n"
-        fragment.write_text(body)
-        self._status(
-            f"flange_inline.config 生成（{len(options)} 项 raw kernel option）")
+        if not count:
+            return None
+        self._status(f"{name} 生成（{count} 项 Kconfig）")
+        return name
 
     # ---- modules_install staging 清理 ----
 
@@ -212,29 +179,19 @@ class KernelBuilder(ComponentBuilder):
           - pre_build: list|None  — 编译前执行的 shell 命令，支持 {kernel_src}
           - post_build: list|None — 编译后执行的 shell 命令，支持 {kernel_src}
 
-        配置来源：config["kernel"]["oot_modules"]，在 SoC config.py 中声明。
+        配置来源：config["kernel"]["oot_modules"]，在 SoC config.jsonnet 中声明。
 
         若 ``dir`` / ``make_args`` / ``ko_pattern`` 引用了独立 git 源（如
         ``{rkwifibt_src}``），需在同 ``config["kernel"]["oot_sources"]`` 字典
-        中声明该源（``{<name>: {repo, branch, ...}}``），由 ``_oot_template_vars``
+        中声明该 source 引用；实际 descriptor 位于顶层 ``sources``，由
+        ``_oot_template_vars``
         统一 ensure 后注入模板字典。``{kernel_src}`` 始终可用。
         """
         return config.get("kernel", {}).get("oot_modules", [])
 
     def _oot_sources_config(self, config: dict) -> dict:
-        """OOT 模块独立源声明字典。键是源名（如 ``rkwifibt``），值是 git
-        仓库 cfg（_ensure_repo 可识别的字段）。返回空字典表示无独立源，
-        OOT 模块只引用 ``{kernel_src}``。
-
-        过滤 ``product`` / ``variant`` 这两个 reserved key —— 它们被
-        ``resolve_conditions`` 递归注入到所有 dict 子树（详见
-        ``builder/config/merge.py``），对 oot_sources 这种"源名 → cfg"
-        语义的 dict 是脏数据。其余子 cfg dict 内层多出来的 product/variant
-        不影响 _ensure_repo（只读已知字段）。
-        """
-        raw = (config.get("kernel", {}) or {}).get("oot_sources", {}) or {}
-        return {k: v for k, v in raw.items()
-                if k not in ("product", "variant") and isinstance(v, dict)}
+        """返回 OOT 模块的 canonical source 引用。"""
+        return (config.get("kernel") or {}).get("oot_sources") or {}
 
     def _oot_template_vars(self, src_dir: Path, config: dict) -> dict[str, str]:
         """构造 OOT 模块字段格式化用的模板字典。
@@ -260,7 +217,7 @@ class KernelBuilder(ComponentBuilder):
             "cross_compile": self.CROSS,
         }
         for name, cfg in self._oot_sources_config(config).items():
-            path = self.source.ensure_oot_source(name, cfg)
+            path = self.source.ensure_oot_source(name, cfg, config=config)
             tmpl[f"{name.replace('-', '_')}_src"] = str(path)
         return tmpl
 

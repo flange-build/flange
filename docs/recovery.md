@@ -70,11 +70,10 @@ boot reason；U-Boot 读取并清除该 one-shot 状态后，本次把 sysboot �
 
 如某个板子存储紧张需要关闭 recovery，在 board 配置中覆盖：
 
-```python
-# components/board/<your-board>/config.py
-BOARD = {
-    ...
-    "recovery": {"enabled": False},
+```jsonnet
+// components/board/<your-board>/config.jsonnet
+{
+  recovery+: { enabled: false },
 }
 ```
 

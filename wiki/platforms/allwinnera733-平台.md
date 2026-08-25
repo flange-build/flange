@@ -10,8 +10,8 @@ sources:
   - builder/platforms/allwinnera733/boot.py
   - builder/platforms/allwinnera733/recovery.py
   - builder/platforms/allwinnera733/image.py
-  - components/platform/allwinnera733/config.py
-  - components/platform/allwinnera733/a733/config.py
+  - components/platform/allwinnera733/config.jsonnet
+  - components/platform/allwinnera733/a733/config.jsonnet
   - openspec/specs/allwinnera733-platform/spec.md
   - openspec/specs/allwinnera733-flash/spec.md
 related:

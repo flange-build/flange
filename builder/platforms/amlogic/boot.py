@@ -20,11 +20,13 @@ import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.config.canonical import kernel_device_tree
 from builder.dtb_overlay import (
     board_overlays,
     copy_declared_overlays,
-    default_overlays,
-    dtb_overlays,
+    intree_overlays,
+    package_overlays,
+    runtime_overlays,
     vendor_overlays,
 )
 from builder.extlinux import (
@@ -60,7 +62,7 @@ class AmlogicBootBuilder(ComponentBuilder):
         # 读取 kernel 产物（来自前序 kernel 组件收集到的 target 目录）
         target_dir = self.cache.target_dir
         kernel_src_image = target_dir / "kernel" / "Image"
-        dts_name = config["kernel"]["dts"]
+        _, dts_name = kernel_device_tree(config)
         kernel_src_dtb = target_dir / "kernel" / f"{dts_name}.dtb"
 
         if not kernel_src_image.exists():
@@ -87,7 +89,7 @@ class AmlogicBootBuilder(ComponentBuilder):
         copy_declared_overlays(
             target_dir / "kernel" / "overlay",
             dtb_dir / "overlay",
-            dtb_overlays(config),
+            intree_overlays(config),
         )
         copy_declared_overlays(
             target_dir / "device-tree-overlay" / "overlays",
@@ -98,6 +100,11 @@ class AmlogicBootBuilder(ComponentBuilder):
             target_dir / "device-tree-overlay" / "overlays",
             dtb_dir / "overlay",
             board_overlays(config),
+        )
+        copy_declared_overlays(
+            target_dir / "device-tree-overlay" / "overlays",
+            dtb_dir / "overlay",
+            package_overlays(config),
         )
 
         # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定
@@ -125,7 +132,7 @@ class AmlogicBootBuilder(ComponentBuilder):
         """生成 U-Boot distro boot 使用的 normal extlinux.conf。"""
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
-        overlay_names = default_overlays(config)
+        overlay_names = runtime_overlays(config)
 
         # PARTLABEL 由 GPT 表设置（partitions.entries 中的 name），kernel
         # 启动早期可直接从 GPT 表解析，不依赖文件系统 probe。
@@ -145,7 +152,7 @@ class AmlogicBootBuilder(ComponentBuilder):
         """生成 U-Boot distro boot 使用的 recovery.conf。"""
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
-        overlay_names = default_overlays(config)
+        overlay_names = runtime_overlays(config)
 
         recovery = LabelSpec(
             name=RECOVERY_LABEL,

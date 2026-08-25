@@ -61,11 +61,15 @@ def _cfg(*, vendor: str | None, vendor_overlays: list[str],
          board_overlays: list[str] | None = None) -> dict:
     cfg: dict = {
         "board": board,
-        "boot": {
-            "vendor_overlays": vendor_overlays,
-            "board_overlays": board_overlays or [],
+        "boot": {"overlays": {
+            "vendor": vendor_overlays,
+            "board": board_overlays or [],
+            "intree": [], "package": [], "enabled": [],
+        }},
+        "sources": {
+            "overlays": {"url": "https://example.com/overlays.git", "branch": "y"},
         },
-        "device-tree-overlay": {"repo": "x", "branch": "y"},
+        "device-tree-overlay": {"source": {"name": "overlays"}},
     }
     if vendor is not None:
         cfg["vendor"] = vendor

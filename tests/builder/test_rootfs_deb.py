@@ -35,7 +35,7 @@ def _make_config(
         "board":   board,
         "product": product,
         "variant": variant,
-        "arch":    "aarch64",
+        "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
         "rootfs":  {
             "packages": [],
             "custom_packages": [],

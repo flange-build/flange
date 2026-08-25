@@ -2,11 +2,11 @@
 
 flange 的"非内核 in-tree" DT overlay 编译流水线，覆盖两类源：
 
-1. **vendor 仓库**（``boot.vendor_overlays``）—— 来自外部 vendor overlay 仓库
+1. **vendor 仓库**（``boot.overlays.vendor``）—— 来自外部 vendor overlay 仓库
    （默认 [radxa-overlays](https://github.com/radxa-pkg/radxa-overlays)），
    git fetch 后从 ``arch/arm64/boot/dts/<vendor>/overlays/`` 取 dts/dtso。
 
-2. **板私有**（``boot.board_overlays``）—— dts/dtso 文件直接落在仓库内
+2. **板私有**（``boot.overlays.board``）—— dts/dtso 文件直接落在仓库内
    ``components/board/<board>/dtso/``，不依赖外部仓库。用于不属于上游
    vendor 仓库、又不便落入内核 in-tree 的板级私有 overlay（典型场景：
    板上某显示模块 / SPI 外设的接入 overlay）。
@@ -84,7 +84,7 @@ class OverlaysBuilder(ComponentBuilder):
     component = "device-tree-overlay"
 
     def build(self, config: dict) -> dict:
-        """空 ``vendor_overlays`` + 空 ``board_overlays`` short-circuit：仍
+        """无 vendor/board/package overlay 时 short-circuit：仍
         fetch 源码（保持内容哈希稳定），但不执行 cpp / dtc。这样 git ref
         不变时 cache 仍命中。"""
         src_dir = self.source.ensure(self.component, config)
@@ -121,7 +121,7 @@ class OverlaysBuilder(ComponentBuilder):
         vendor = config.get("vendor")
         if not vendor:
             raise ValueError(
-                "boot.vendor_overlays 非空但 config 缺少顶层 vendor 字段；"
+                "boot.overlays.vendor 非空但 config 缺少顶层 vendor 字段；"
                 "请在 platform / SoC config 中声明 \"vendor\": \"rockchip\" / "
                 "\"allwinner\" 等（与 radxa-overlays 仓库 arch/arm64/boot/dts/ "
                 "下的子目录名一致）"
@@ -151,13 +151,13 @@ class OverlaysBuilder(ComponentBuilder):
         board = config.get("board")
         if not board:
             raise ValueError(
-                "boot.board_overlays 非空但 config 缺少 board 字段（不应发生）"
+                "boot.overlays.board 非空但 config 缺少 board 字段（不应发生）"
             )
         overlays_dir = Path(f"components/board/{board}/dtso").resolve()
         if not overlays_dir.is_dir():
             raise FileNotFoundError(
                 f"board overlay 源目录不存在: {overlays_dir}；"
-                f"声明了 boot.board_overlays={names} 但目录缺失，"
+                f"声明了 boot.overlays.board={names} 但目录缺失，"
                 "请创建该目录并放入对应 .dts/.dtso 文件"
             )
 

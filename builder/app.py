@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from builder.app_spec import AppSpec
+from builder.config.canonical import userspace_arch
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +440,7 @@ class AppBuilder:
         self._output_dir = self._project_dir / ".build/target" / board / product / variant / "app"
 
         # 目标架构
-        self._arch: str = config.get("arch", "aarch64")
+        self._arch: str = userspace_arch(config)
 
         # 同一次 flange build 共用一个容器，只需刷新一次 APT 索引；已安装的
         # 编译依赖也不重复请求。下载包复用 docker-compose 挂载的 /cache/apt。
@@ -850,7 +851,7 @@ class AppBuilder:
             命令步骤列表，每个步骤是 argv 字符串列表
         """
         system = spec.build.system
-        arch   = config.get("arch", "aarch64")
+        arch = userspace_arch(config)
 
         # custom 构建系统：直接使用 spec.build.commands，不做任何模板展开
         if system == "custom":

@@ -50,7 +50,7 @@ Cubie A7Z 共有 SPI0-SPI3 四个控制器：
 
 ### 为什么是 SPI1
 
-- `components/board/radxa-cubie-a7z/config.py` 已把 `sun60iw2p1-spi1-spidev.dtbo` 列入 `default_overlays`，开机即出 `/dev/spidev1.0`，**零额外 overlay**。
+- `components/board/radxa-cubie-a7z/config.jsonnet` 已通过 `boot.overlays.enabled` 启用 SPI display overlay，开机即出 `/dev/spidev1.0`，**零额外 overlay**。
 - 不与板载 i2s0 音频冲突。
 - 单向写场景下无需 MISO，软件 CS 性能足够（已实测 40 MHz）。
 
@@ -72,7 +72,7 @@ PB3 的硬件 SPI 复用是 **SPI2_CS0 (func 4)**，不能给 SPI1 做硬件片�
 | `gpiod` + `python3-libgpiod` | 1.6.3 | gpiochip chardev 用户态 API |
 | `python3-pil` | 10.2 | RGB565 帧缓冲编码 |
 
-> rootfs 长期方案：把上述包加入 `components/board/radxa-cubie-a7z/config.py` 的 `rootfs.packages`，避免每次 apt 安装。
+> rootfs 长期方案：把上述包加入 `components/board/radxa-cubie-a7z/config.jsonnet` 的 `rootfs.packages`，避免每次 apt 安装。
 
 ### 初始化序列
 
@@ -128,7 +128,7 @@ fbtft 内核驱动阶段（Phase 1，已下线）：
 - ✅ fbcon attached（vtcon1 master frame buffer device），`getty@tty1` 在 LCD 上启动 login
 - ✅ Terminus 6×12 字体应用，密度达到 240/6=40 列 × 280/12=23 行
 - ✅ `console=tty1` cmdline 让内核 boot dmesg 与 systemd 启动消息也输出到 LCD（与串口 ttyAS0 并存）
-- ✅ 框架侧 `boot.board_overlays` 三源机制 + cubie-a7z config 改动通过 48 个 overlay 单元/集成测试（含 16 个新 case）
+- ✅ 框架侧 `boot.overlays.board` 三源机制 + cubie-a7z config 改动通过 48 个 overlay 单元/集成测试（含 16 个新 case）
 
 drm/tiny `panel-mipi-dbi-spi` 阶段（Phase 2，**当前**）：
 
@@ -159,15 +159,14 @@ cubie-a7z 现行实现。change `st7789v2-tinydrm-cutover` 把 mainline v5.18 �
 - `panel-timing.hback-porch = <0>` / `vback-porch = <20>` 表达 280 行圆角模块的 (0, 20) GRAM 偏移——`drm_mipi_dbi.c::mipi_dbi_set_window_address` 每帧自动用 `top_offset/left_offset` 写 CASET/RASET
 - `write-only` 标记（DBI 单向写，无 MISO）
 
-**板级 config**（`components/board/radxa-cubie-a7z/config.py`）：
+**板级 config**（`components/board/radxa-cubie-a7z/config.jsonnet`）：
 
-```python
-"rootfs": {
-    "panel_firmware": [
-        {"src": "firmware/panel/st7789v2-240x280.txt",
-         "dest": "panel-mipi-dbi-spi.bin"},
-    ],
-    # console=tty1 / kbd / console-setup / fonts-terminus 全部移除
+```jsonnet
+rootfs+: {
+  panel_firmware: [{
+    src: 'firmware/panel/st7789v2-240x280.txt',
+    dest: 'panel-mipi-dbi-spi.bin',
+  }],
 },
 ```
 
@@ -298,6 +297,6 @@ fonts-dejavu-core
 - Cubie A7Z 板级 DTS — `sun60i-a733-cubie-a7z.dts`
 - ST7789V2 Datasheet — Sitronix
 - flange 仓库：
-  - `components/board/radxa-cubie-a7z/config.py` —— 默认 overlay 与 vendor overlay 配置
+  - `components/board/radxa-cubie-a7z/config.jsonnet` —— 启用 overlay 与 vendor overlay 配置
   - `builder/overlays.py` —— vendor overlay 编译流水线
   - `openspec/specs/extlinux-dtb-overlays/spec.md` —— overlay 启用机制

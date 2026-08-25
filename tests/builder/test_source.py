@@ -28,6 +28,110 @@ def manager(tmp_path: Path) -> SourceManager:
     return SourceManager(sources_dir=tmp_path / "sources")
 
 
+class TestCanonicalSources:
+    def test_local与remote互斥(self, manager: SourceManager):
+        config = {
+            "kernel": {"source": {"name": "linux"}},
+            "sources": {
+                "linux": {
+                    "local_path": "/tmp/linux",
+                    "url": "https://example.com/linux.git",
+                },
+            },
+        }
+
+        with patch.object(manager, "_ensure_repo") as ensure_repo, \
+                pytest.raises(ValueError, match="必须且只能"):
+            manager.ensure("kernel", config)
+
+        ensure_repo.assert_not_called()
+
+    def test多个组件共享同一checkout(self, manager: SourceManager):
+        config = {
+            "sources": {
+                "vendor": {
+                    "url": "https://example.com/vendor.git",
+                    "commit": "abc",
+                },
+            },
+            "kernel": {"source": {"name": "vendor", "subpath": "kernel"}},
+            "bootloader": {
+                "source": {"name": "vendor", "subpath": "u-boot"},
+            },
+        }
+
+        with patch.object(manager, "_ensure_repo") as ensure_repo:
+            kernel = manager.ensure("kernel", config)
+            bootloader = manager.ensure("bootloader", config)
+
+        assert kernel.parent == bootloader.parent
+        assert kernel.name == "kernel"
+        assert bootloader.name == "u-boot"
+        assert {call.args[0] for call in ensure_repo.call_args_list} == {
+            kernel.parent,
+        }
+
+    def testrevision变化隔离工作树(self, manager: SourceManager):
+        config = {
+            "sources": {
+                "linux": {
+                    "url": "https://example.com/linux.git",
+                    "commit": "commit-a",
+                },
+            },
+            "kernel": {"source": {"name": "linux"}},
+        }
+
+        with patch.object(manager, "_ensure_repo"):
+            first = manager.ensure("kernel", config)
+            config["sources"]["linux"]["commit"] = "commit-b"
+            second = manager.ensure("kernel", config)
+
+        assert first != second
+        assert first.parent == second.parent
+
+    def testlocal_source追加subpath且不clone(
+            self, manager: SourceManager, tmp_path: Path):
+        config = {
+            "sources": {"linux": {"local_path": str(tmp_path / "vendor")}},
+            "kernel": {"source": {"name": "linux", "subpath": "src"}},
+        }
+
+        with patch.object(manager, "_ensure_repo") as ensure_repo:
+            result = manager.ensure("kernel", config)
+
+        assert result == tmp_path / "vendor" / "src"
+        ensure_repo.assert_not_called()
+
+    def testoot与固件复用canonical_source(self, manager: SourceManager):
+        config = {
+            "sources": {
+                "vendor": {
+                    "url": "https://example.com/vendor.git",
+                    "commit": "abc",
+                },
+            },
+        }
+
+        with patch.object(manager, "_ensure_repo") as ensure_repo:
+            oot = manager.ensure_oot_source(
+                "wifi", {"source": {"name": "vendor", "subpath": "driver"}},
+                config=config,
+            )
+            firmware = manager.ensure_extra_firmware(
+                "wifi-fw",
+                {"source": {"name": "vendor", "subpath": "firmware"}},
+                config=config,
+            )
+
+        assert oot.parent == firmware.parent
+        assert oot.name == "driver"
+        assert firmware.name == "firmware"
+        assert {call.args[0] for call in ensure_repo.call_args_list} == {
+            oot.parent,
+        }
+
+
 def _make_wget_writer(content: bytes):
     """构造一个伪 wget：把 content 写入 -O 指定的文件。"""
 
@@ -53,7 +157,10 @@ class TestEnsureExtraDeb:
             "sha256": _sha256(content),
         }
         # 预先放好缓存文件
-        deb_path = manager.sources_dir / "extra-debs" / "foo" / "foo_1.0_arm64.deb"
+        deb_path = (
+            manager.sources_dir / "downloads" / "extra-debs"
+            / cfg["sha256"] / "foo_1.0_arm64.deb"
+        )
         deb_path.parent.mkdir(parents=True)
         deb_path.write_bytes(content)
 
@@ -96,7 +203,9 @@ class TestEnsureExtraDeb:
             with pytest.raises(RuntimeError, match="sha256 校验失败"):
                 manager.ensure_extra_deb("bad", cfg)
 
-        deb_dir = manager.sources_dir / "extra-debs" / "bad"
+        deb_dir = (
+            manager.sources_dir / "downloads" / "extra-debs" / cfg["sha256"]
+        )
         # 目标文件不应存在；.download 残留也应被清理
         assert list(deb_dir.iterdir()) == []
 
@@ -134,7 +243,9 @@ class TestEnsureExtraDeb:
             with pytest.raises(subprocess.CalledProcessError):
                 manager.ensure_extra_deb("flaky", cfg)
 
-        deb_dir = manager.sources_dir / "extra-debs" / "flaky"
+        deb_dir = (
+            manager.sources_dir / "downloads" / "extra-debs" / cfg["sha256"]
+        )
         assert list(deb_dir.iterdir()) == []
 
 
@@ -172,7 +283,11 @@ class TestEnsureRootfsTarball:
             with pytest.raises(RuntimeError, match="sha256 校验失败"):
                 manager.ensure_rootfs_tarball(config)
 
-        assert not any((manager.sources_dir / "rootfs").iterdir())
+        cache = (
+            manager.sources_dir / "downloads" / "rootfs"
+            / config["rootfs"]["sha256"]
+        )
+        assert not any(cache.iterdir())
 
     def test_缺少可信摘要时拒绝下载(self, manager: SourceManager):
         config = {
@@ -187,8 +302,7 @@ class TestEnsureRootfsTarball:
 
 
 class TestEnsureExtraFirmwareLocal:
-    """ensure_extra_firmware(source='local')：解析 components/board/<board>/
-    <src_dir>，返回该目录。零网络、零 clone；只做路径解析与存在性校验。"""
+    """额外 firmware 通过统一 source 引用本地目录。"""
 
     @pytest.fixture
     def fake_board_tree(self, tmp_path: Path):
@@ -204,61 +318,43 @@ class TestEnsureExtraFirmwareLocal:
             sources_dir=fake_board_tree / ".build/sources",
             project_root=fake_board_tree,
         )
-        cfg = {
-            "name": "fake-fw",
-            "source": "local",
-            "src_dir": "firmware/touch",
-            "files": ["blob.bin"],
-            "dest": "lib/firmware",
+        cfg = {"source": {"name": "fake-fw"}}
+        config = {
+            "sources": {
+                "fake-fw": {
+                    "local_path": "components/board/fake-board/firmware/touch",
+                },
+            },
         }
-        config = {"board": "fake-board"}
         fw_dir = manager.ensure_extra_firmware("fake-fw", cfg, config=config)
         assert fw_dir == (fake_board_tree / "components/board/fake-board"
-                          / "firmware/touch").resolve()
+                          / "firmware/touch")
         assert (fw_dir / "blob.bin").read_bytes() == b"\x01\x02\x03"
 
-    def test_缺_src_dir_抛异常(self, fake_board_tree: Path):
+    def test_未知_source_引用抛异常(self, fake_board_tree: Path):
         manager = SourceManager(
             sources_dir=fake_board_tree / ".build/sources",
             project_root=fake_board_tree,
         )
-        cfg = {"source": "local", "files": ["x"], "dest": "y"}
-        with pytest.raises(ValueError, match="src_dir"):
+        with pytest.raises(ValueError, match="未知 source"):
             manager.ensure_extra_firmware(
-                "no-src-dir", cfg, config={"board": "fake-board"})
+                "missing", {"source": {"name": "missing"}},
+                config={"sources": {}})
 
-    def test_缺_config_board_抛异常(self, fake_board_tree: Path):
-        manager = SourceManager(
-            sources_dir=fake_board_tree / ".build/sources",
-            project_root=fake_board_tree,
-        )
-        cfg = {"source": "local", "src_dir": "firmware/touch"}
-        # config=None
-        with pytest.raises(ValueError, match="board"):
-            manager.ensure_extra_firmware("no-cfg", cfg)
-        # config 缺 board
-        with pytest.raises(ValueError, match="board"):
-            manager.ensure_extra_firmware("no-board", cfg, config={})
 
-    def test_src_dir_目录不存在抛(self, fake_board_tree: Path):
-        manager = SourceManager(
-            sources_dir=fake_board_tree / ".build/sources",
-            project_root=fake_board_tree,
-        )
-        cfg = {"source": "local", "src_dir": "firmware/nonexistent"}
-        with pytest.raises(FileNotFoundError):
-            manager.ensure_extra_firmware(
-                "missing", cfg, config={"board": "fake-board"})
+def test_extra_firmware_download复用公共校验入口(
+        manager: SourceManager, tmp_path: Path):
+    artifact = tmp_path / "firmware.bin"
+    with patch.object(
+            manager, "ensure_download", return_value=artifact) as download:
+        result = manager.ensure_extra_firmware(
+            "demo", {
+                "url": "https://example.com/firmware.bin",
+                "sha256": "a" * 64,
+            })
 
-    def test_不支持的_source_类型抛(self, fake_board_tree: Path):
-        manager = SourceManager(
-            sources_dir=fake_board_tree / ".build/sources",
-            project_root=fake_board_tree,
-        )
-        cfg = {"source": "ftp", "src_dir": "firmware/touch"}
-        with pytest.raises(ValueError, match="不支持的 source 类型"):
-            manager.ensure_extra_firmware(
-                "weird", cfg, config={"board": "fake-board"})
+    assert result == artifact.parent
+    download.assert_called_once()
 
 
 def test_fetch_checkout_discards_previous_build_patches(tmp_path: Path):

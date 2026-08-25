@@ -3,8 +3,8 @@ title: radxa-rock-4d
 type: board
 status: done
 sources:
-  - components/board/radxa-rock-4d/config.py
-  - components/platform/rockchip/rk3576/config.py
+  - components/board/radxa-rock-4d/config.jsonnet
+  - components/platform/rockchip/rk3576/config.jsonnet
   - builder/platforms/rockchip/bootloader.py
   - builder/base.py
   - docker/Dockerfile

@@ -45,7 +45,7 @@ def _make_config(
         "board":   "test-board",
         "product": "default",
         "variant": "release",
-        "arch":    "aarch64",
+        "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
         "rootfs":  {"custom_packages": []},
         "external_app_dirs": external_app_dirs or [],
     }

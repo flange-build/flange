@@ -2,7 +2,7 @@
 
 产物：boot.img（ext4 文件系统镜像），内含：
   /extlinux/Image               — kernel 二进制
-  /dtbs/allwinner/<dtb_filename> — 设备树（默认 sunxi.dtb）
+  /dtbs/allwinner/<device-tree>.dtb — 设备树
   /dtbs/allwinner/overlay/*.dtbo — （可选）设备树 overlay（in-tree + vendor 平铺）
   /extlinux/extlinux.conf       — normal 启动配置
   /extlinux/recovery.conf       — recovery 启动配置（启用 recovery 时）
@@ -10,8 +10,7 @@
 Allwinner 首版仍由平台 boot reason 适配决定是否扫描 recovery.conf；boot 分区
 布局与 Rockchip 对齐：启动配置放在 /extlinux/，设备树放在 /dtbs/<vendor>/。
 
-Overlay 三源同 Rockchip：boot.dtb_overlays (in-tree) / boot.vendor_overlays
-(radxa-overlays) / boot.board_overlays (components/board/<board>/dtso/)
+Overlay 来源同 Rockchip：boot.overlays.intree/vendor/board/package。
 平铺到同一 /dtbs/allwinner/overlay/ 目录；basename 全局唯一。vendor 与 board
 共用 device-tree-overlay 组件的 cpp+dtc 编译流水线与产物目录。
 """
@@ -20,12 +19,13 @@ import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.config.canonical import kernel_device_tree
 from builder.dtb_overlay import (
     board_overlays,
     copy_declared_overlays,
-    default_overlays,
-    dtb_overlays,
+    intree_overlays,
     package_overlays,
+    runtime_overlays,
     vendor_overlays,
 )
 from builder.extlinux import (
@@ -60,7 +60,7 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
 
         target_dir = self.cache.target_dir
         kernel_image = target_dir / "kernel" / "Image"
-        dts_name = config["kernel"]["dts"]
+        _, dts_name = kernel_device_tree(config)
         kernel_dtb = target_dir / "kernel" / f"{dts_name}.dtb"
 
         if not kernel_image.exists():
@@ -73,7 +73,8 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         # 复制到 boot 分区标准布局
         self._status("准备 boot 分区内容...")
         shutil.copy2(kernel_image, extlinux_dir / "Image")
-        dtb_filename = config.get("boot", {}).get("dtb_filename", "sunxi.dtb")
+        _, dtb_name = kernel_device_tree(config)
+        dtb_filename = f"{dtb_name}.dtb"
         shutil.copy2(kernel_dtb, dtb_dir / dtb_filename)
         # DTB overlay 三源都平铺到 /dtbs/allwinner/overlay/，撞名时
         # copy_declared_overlays 立即报错。vendor + board 共用
@@ -81,7 +82,7 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         copy_declared_overlays(
             target_dir / "kernel" / "overlay",
             dtb_dir / "overlay",
-            dtb_overlays(config),
+            intree_overlays(config),
         )
         copy_declared_overlays(
             target_dir / "device-tree-overlay" / "overlays",
@@ -128,7 +129,7 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         kernel_args = boot_cfg.get("kernel_args", "")
         root_partuuid = boot_cfg.get("root_partuuid",
                                      "614e0000-0000-4000-8000-000000000001")
-        overlay_names = default_overlays(config)
+        overlay_names = runtime_overlays(config)
 
         normal = LabelSpec(
             name=NORMAL_LABEL,
@@ -150,7 +151,7 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         """生成 recovery.conf。"""
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
-        overlay_names = default_overlays(config)
+        overlay_names = runtime_overlays(config)
 
         # 用 PARTLABEL= 而非 ext4 LABEL=：见 rockchip boot.py 的同一段说明。
         recovery = LabelSpec(

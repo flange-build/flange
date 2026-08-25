@@ -10,8 +10,8 @@ from builder.dtb_overlay import (
     all_declared_overlays,
     board_overlays,
     copy_declared_overlays,
-    default_overlays,
-    dtb_overlays,
+    intree_overlays,
+    runtime_overlays,
     vendor_overlays,
 )
 from builder.platforms.allwinnera733 import ARTIFACT_NAMES as A733_ARTIFACT_NAMES
@@ -66,22 +66,31 @@ def _cfg(platform: str, *, overlays: list[str] | None = None,
     dts = "rk3566-test" if platform == "rockchip" else "sun60i-a733-test"
     boot = {
         "kernel_args": "console=ttyS2,1500000",
-        "dtb_overlays": overlays or [],
-        "vendor_overlays": vendor or [],
-        "board_overlays": board or [],
-        "package_overlays": package or [],
-        "default_overlays": default or [],
+        "overlays": {
+            "intree": overlays or [],
+            "vendor": vendor or [],
+            "board": board or [],
+            "package": package or [],
+            "enabled": default or [],
+        },
     }
     if platform == "allwinnera733":
-        boot["dtb_filename"] = "sunxi.dtb"
         boot["root_partuuid"] = "614e0000-0000-4000-8000-000000000001"
     return {
         "platform": platform,
         "soc": "rk3566" if platform == "rockchip" else "a733",
         "board": "test",
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64",
+            "bootloader": "arm64",
+        },
         "kernel": {
-            "dts": dts,
-            "dts_dir": "rockchip" if platform == "rockchip" else "allwinner",
+            "device_tree": {
+                "name": dts,
+                "directory": (
+                    "rockchip" if platform == "rockchip" else "allwinner"
+                ),
+            },
         },
         "boot": boot,
         "recovery": {"enabled": True},
@@ -115,7 +124,7 @@ def _prepare_vendor_overlay_target(target_dir: Path, overlays: list[str]) -> Non
         (vendor_dir / name).write_bytes(b"vendor-dtbo")
 
 
-def test_default_overlay_must_be_declared_in_dtb_overlays():
+def test_default_overlay_must_be_declared_in_intree_overlays():
     builder = RockchipBootBuilder(docker=None, source=None)
     config = _cfg("rockchip", overlays=[], default=["missing.dtbo"])
 
@@ -142,7 +151,7 @@ def test_rockchip_extlinux_renders_multiple_overlays_in_order():
     assert "  fdt /dtbs/rockchip/rk3566-test.dtb" in text
 
 
-def test_rockchip_recovery_extlinux_uses_same_default_overlays():
+def test_rockchip_recovery_extlinux_uses_same_runtime_overlays():
     builder = RockchipBootBuilder(docker=None, source=None)
     config = _cfg(
         "rockchip",
@@ -177,7 +186,7 @@ def test_a733_extlinux_renders_multiple_overlays_in_order():
     assert "  devicetree /dtbs/allwinner/sunxi.dtb" in text
 
 
-def test_a733_recovery_extlinux_uses_same_default_overlays():
+def test_a733_recovery_extlinux_uses_same_runtime_overlays():
     builder = AllwinnerA733BootBuilder(docker=None, source=None)
     config = _cfg(
         "allwinnera733",
@@ -290,7 +299,7 @@ def test_a733_boot_copies_declared_overlay_to_dtbs_layout(tmp_path):
         / "staging"
         / "dtbs"
         / "allwinner"
-        / "sunxi.dtb"
+        / "sun60i-a733-test.dtb"
     ).exists()
 
 
@@ -316,17 +325,17 @@ def test_vendor_overlays_format_violations():
     bad_cases = [
         ("foo", "只能声明 .dtbo 文件"),       # 缺后缀
         ("foo.dts", "只能声明 .dtbo 文件"),   # 错后缀
-        ("a/b.dtbo", "只能声明 boot overlay 文件名"),  # 含路径
-        (".hidden.dtbo", "只能声明 boot overlay 文件名"),  # 以 . 起头
+        ("a/b.dtbo", "只能声明 overlay 文件名"),  # 含路径
+        (".hidden.dtbo", "只能声明 overlay 文件名"),  # 以 . 起头
     ]
     for name, msg in bad_cases:
-        cfg = {"boot": {"vendor_overlays": [name]}}
+        cfg = {"boot": {"overlays": {"vendor": [name]}}}
         with pytest.raises((ValueError, TypeError), match=msg):
             vendor_overlays(cfg)
 
 
 def test_vendor_overlays_must_be_list():
-    cfg = {"boot": {"vendor_overlays": "rk3568-i2c1.dtbo"}}
+    cfg = {"boot": {"overlays": {"vendor": "rk3568-i2c1.dtbo"}}}
     with pytest.raises(TypeError, match="必须是字符串列表"):
         vendor_overlays(cfg)
 
@@ -334,7 +343,7 @@ def test_vendor_overlays_must_be_list():
 def test_vendor_overlays_default_empty():
     cfg = {"boot": {}}
     assert vendor_overlays(cfg) == []
-    assert dtb_overlays(cfg) == []
+    assert intree_overlays(cfg) == []
     assert all_declared_overlays(cfg) == []
 
 
@@ -361,17 +370,17 @@ def test_all_declared_overlays_collision_raises():
         all_declared_overlays(cfg)
 
 
-def test_default_overlays_can_reference_vendor_source():
+def test_runtime_overlays_can_reference_vendor_source():
     cfg = _cfg(
         "rockchip",
         overlays=["local.dtbo"],
         vendor=["rk3568-i2c1.dtbo"],
         default=["rk3568-i2c1.dtbo"],   # 来自 vendor
     )
-    assert default_overlays(cfg) == ["rk3568-i2c1.dtbo"]
+    assert runtime_overlays(cfg) == ["rk3568-i2c1.dtbo"]
 
 
-def test_default_overlays_unknown_lists_both_candidates():
+def test_runtime_overlays_unknown_lists_both_candidates():
     cfg = _cfg(
         "rockchip",
         overlays=["local.dtbo"],
@@ -379,11 +388,11 @@ def test_default_overlays_unknown_lists_both_candidates():
         default=["missing.dtbo"],
     )
     with pytest.raises(ValueError) as excinfo:
-        default_overlays(cfg)
+        runtime_overlays(cfg)
     msg = str(excinfo.value)
     assert "missing.dtbo" in msg
-    assert "local.dtbo" in msg          # 列出 dtb_overlays 候选
-    assert "rk3568-i2c1.dtbo" in msg    # 列出 vendor_overlays 候选
+    assert "local.dtbo" in msg          # 列出 intree 候选
+    assert "rk3568-i2c1.dtbo" in msg    # 列出 vendor 候选
 
 
 def test_rockchip_boot_copies_both_intree_and_vendor_overlays(tmp_path):
@@ -459,11 +468,11 @@ def test_board_overlays_default_empty():
 def test_board_overlays_format_violations():
     bad_cases = [
         ("foo", "只能声明 .dtbo 文件"),
-        ("a/b.dtbo", "只能声明 boot overlay 文件名"),
-        (".hidden.dtbo", "只能声明 boot overlay 文件名"),
+        ("a/b.dtbo", "只能声明 overlay 文件名"),
+        (".hidden.dtbo", "只能声明 overlay 文件名"),
     ]
     for name, msg in bad_cases:
-        cfg = {"boot": {"board_overlays": [name]}}
+        cfg = {"boot": {"overlays": {"board": [name]}}}
         with pytest.raises((ValueError, TypeError), match=msg):
             board_overlays(cfg)
 
@@ -489,7 +498,7 @@ def test_all_declared_overlays_intree_vs_board_collision():
         board=["foo.dtbo"],
     )
     with pytest.raises(ValueError,
-                       match="dtb_overlays.*board_overlays.*foo.dtbo"):
+                       match="overlays.intree.*overlays.board.*foo.dtbo"):
         all_declared_overlays(cfg)
 
 
@@ -500,20 +509,20 @@ def test_all_declared_overlays_vendor_vs_board_collision():
         board=["foo.dtbo"],
     )
     with pytest.raises(ValueError,
-                       match="vendor_overlays.*board_overlays.*foo.dtbo"):
+                       match="overlays.vendor.*overlays.board.*foo.dtbo"):
         all_declared_overlays(cfg)
 
 
-def test_default_overlays_can_reference_board_source():
+def test_runtime_overlays_can_reference_board_source():
     cfg = _cfg(
         "allwinnera733",
         board=["my-display.dtbo"],
         default=["my-display.dtbo"],
     )
-    assert default_overlays(cfg) == ["my-display.dtbo"]
+    assert runtime_overlays(cfg) == ["my-display.dtbo"]
 
 
-def test_default_overlays_unknown_lists_three_candidates():
+def test_runtime_overlays_unknown_lists_three_candidates():
     cfg = _cfg(
         "allwinnera733",
         overlays=["intree.dtbo"],
@@ -522,13 +531,13 @@ def test_default_overlays_unknown_lists_three_candidates():
         default=["missing.dtbo"],
     )
     with pytest.raises(ValueError) as excinfo:
-        default_overlays(cfg)
+        runtime_overlays(cfg)
     msg = str(excinfo.value)
     assert "missing.dtbo" in msg
     assert "intree.dtbo" in msg
     assert "vendor.dtbo" in msg
     assert "my-display.dtbo" in msg
-    assert "board_overlays" in msg
+    assert "board=" in msg
 
 
 def test_a733_boot_copies_board_overlay_to_dtbs_layout(tmp_path):
@@ -637,7 +646,7 @@ def test_a733_boot_basename_collision_vendor_vs_board(tmp_path):
         board=["foo.dtbo"],
         default=["foo.dtbo"],
     )
-    # 必须在 _build_extlinux_conf -> default_overlays -> all_declared_overlays
+    # 必须在 _build_extlinux_conf -> runtime_overlays -> all_declared_overlays
     # 路径上拦截
     with pytest.raises(ValueError, match="重名.*foo.dtbo"):
         builder._build_extlinux_conf(cfg, "sunxi.dtb")

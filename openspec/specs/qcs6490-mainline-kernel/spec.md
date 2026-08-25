@@ -31,7 +31,7 @@
 
 #### Scenario: 任意阶段可回退到 BSP
 - **WHEN** 迁移过程中某阶段在 mainline 上无法通过
-- **THEN** 将 `repos.kernel.branch` 改回 `kernel.qclinux.1.0.r1-rel` 重建即可恢复已知可用的 BSP 基线
+- **THEN** 将 `sources.linux-qcs6490.branch` 改回 `kernel.qclinux.1.0.r1-rel` 重建即可恢复已知可用的 BSP 基线
 
 ### Requirement: AIC8800 USB Wi-Fi 默认可用
 
@@ -69,10 +69,10 @@ mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模
 
 内核源 SHALL 在 `branch=linux-7.0.2` 基础上 pin `commit=7473a9fca2b08623319e497f4f811746baddb7bc`（= radxa linux-qcom 7.0.2-2 的 `src` 子模块），不跟随分支 tip（tip 已前移到会触发 UFS 复位的 commit）。
 
-内核 config SHALL 对齐 radxa rsdk/linux-qcom 的**四段叠加**配方：`make defconfig qcom_module.config radxa.config radxa_custom.config`（顺序固定，后者覆盖前者）。其中 `qcom_module.config` 为内核 in-tree（软链 radxa `radxa_qcom_7_0_defconfig` 的 qcom 全量平台 config），`radxa.config` / `radxa_custom.config` 分别由 `0004` / `0005` patch 注入。flange 特定 `enable_configs`（`FW_LOADER_COMPRESS*`、USB gadget `configfs`/`F_FS`）SHALL 在四段后追加覆盖，`disable_configs` 仅保留 `MODULE_SIG_FORCE`。
+内核 config SHALL 对齐 radxa rsdk/linux-qcom 的**四段叠加**配方：`make defconfig qcom_module.config radxa.config radxa_custom.config`（顺序固定，后者覆盖前者）。其中 `qcom_module.config` 为内核 in-tree，`radxa.config` / `radxa_custom.config` 由 patch 注入。flange 特定符号 MUST 统一通过 `kernel.config` 在四段后渲染，包含 `FW_LOADER_COMPRESS*`、USB gadget 相关符号以及 `CONFIG_MODULE_SIG_FORCE: "n"`。
 
 #### Scenario: 内核从 linux-7.0.2 构建成功
-- **WHEN** 配置 `repos.kernel.branch = linux-7.0.2` + `commit = 7473a9f` 并执行 `flange build kernel`
+- **WHEN** 配置 `sources.linux-qcs6490.branch = linux-7.0.2` + `commit = 7473a9f` 并执行 `flange build kernel`
 - **THEN** 成功检出该 commit 并编出 `Image` 与 `qcs6490-radxa-dragon-q6a` 对应的 dtb，无构建中断
 
 #### Scenario: 四段 config 片段被正确合并
@@ -122,4 +122,3 @@ rootfs SHALL 包含来自 `ubuntu-qcom-iot/qcom-ppa` 的 `linux-firmware-dragonw
 #### Scenario: GPU 固件从 updates/ 优先加载
 - **WHEN** 系统启动，drm/msm 驱动加载 GPU 固件
 - **THEN** `dmesg` 显示从 `/lib/firmware/updates/` 路径加载固件，无 firmware load 失败
-

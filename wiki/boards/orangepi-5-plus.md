@@ -3,14 +3,14 @@ title: orangepi-5-plus
 type: board
 status: wip
 sources:
-  - components/board/orangepi-5-plus/config.py
+  - components/board/orangepi-5-plus/config.jsonnet
   - components/board/orangepi-5-plus/overlay/etc/hostname
   - components/board/orangepi-5-plus/overlay/etc/usbdevice.conf
   - components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hx8399a-gt911.dtso
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hdmirx-enable.dtso
   - components/board/orangepi-5-plus/firmware/touch/goodix_911_cfg.cfg
-  - components/platform/rockchip/rk3588/config.py
+  - components/platform/rockchip/rk3588/config.jsonnet
 related:
   - "[[radxa-rock5b]]"
   - "[[rockchip 平台]]"

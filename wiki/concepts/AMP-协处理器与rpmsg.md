@@ -6,10 +6,10 @@ sources:
   - components/board/tspi-rk3566/patches/kernel/0003-add-tspi-rk3566-amp-dts.patch
   - components/app/rk3568_amp_demo/src/main.c
   - components/app/rk3568_amp_rtt_demo/applications/main.c
-  - components/board/tspi-rk3566/config.py
-  - components/platform/rockchip/rk3566/config.py
+  - components/board/tspi-rk3566/config.jsonnet
+  - components/platform/rockchip/rk3566/config.jsonnet
   - components/app/rk3506_amp_uart4_rtt_demo/applications/main.c
-  - components/platform/rockchip/rk3506b/config.py
+  - components/platform/rockchip/rk3506b/config.jsonnet
   - components/board/atk-rk3506b/patches/kernel/0001-reserve-amp-firmware-memory.patch
 related:
   - "[[amp 构建器]]"

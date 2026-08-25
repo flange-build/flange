@@ -8,7 +8,7 @@ sources:
   - components/app/cardputer_music_player/src/main.c
   - components/app/cardputer_music_player/src/netease_official.c
   - components/app/cardputer_music_player/src/http.c
-  - components/board/atk-rk3506b/config.py
+  - components/board/atk-rk3506b/config.jsonnet
   - openspec/specs/cardputer-music-player/spec.md
   - openspec/changes/archive/2026-07-18-add-cardputer-music-player/evidence/cardputer-music-player-hardware.md
 related:

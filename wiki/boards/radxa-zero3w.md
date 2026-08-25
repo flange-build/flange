@@ -3,7 +3,7 @@ title: radxa-zero3w
 type: board
 status: stable
 sources:
-  - components/board/radxa-zero3w/config.py
+  - components/board/radxa-zero3w/config.jsonnet
   - components/board/radxa-zero3w/overlay/etc/hostname
   - components/board/radxa-zero3w/overlay/etc/usbdevice.conf
 related:

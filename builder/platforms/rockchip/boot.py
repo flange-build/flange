@@ -14,11 +14,10 @@ U-Boot distro_bootcmd 默认扫描 /extlinux/extlinux.conf；flange 的 U-Boot
 运行时通过 fstab 中 `LABEL=boot /boot ext4 ...` 挂载到 rootfs 的 /boot。
 
 Overlay 三源：
-  - boot.dtb_overlays    : in-tree (来自 kernel 源码树，target/kernel/overlay/)
-  - boot.vendor_overlays : 来自 device-tree-overlay 组件 vendor 仓库
-                           (target/device-tree-overlay/overlays/)
-  - boot.board_overlays  : 来自 device-tree-overlay 组件板私有源
-                           (target/device-tree-overlay/overlays/)
+  - boot.overlays.intree : in-tree (来自 kernel 源码树，target/kernel/overlay/)
+  - boot.overlays.vendor : 来自 device-tree-overlay 组件 vendor 仓库
+  - boot.overlays.board  : 来自 device-tree-overlay 组件板私有源
+  - boot.overlays.package: 由硬件包展开产生
 
 三源平铺到同一 /dtbs/<vendor>/overlay/ 目录；basename 全局唯一，
 撞名时 copy_declared_overlays 立即报错。vendor 与 board 共用 device-tree-
@@ -28,13 +27,14 @@ overlay 组件的产物目录，由 OverlaysBuilder 在编译期写入。
 import shutil
 import tempfile
 from pathlib import Path
+from builder.config.canonical import kernel_device_tree
 from builder.base import ComponentBuilder
 from builder.dtb_overlay import (
     board_overlays,
     copy_declared_overlays,
-    default_overlays,
-    dtb_overlays,
+    intree_overlays,
     package_overlays,
+    runtime_overlays,
     vendor_overlays,
 )
 from builder.extlinux import (
@@ -80,7 +80,7 @@ class RockchipBootBuilder(ComponentBuilder):
 
         # 读取 kernel 产物（来自前序 kernel 组件收集到的 target 目录）
         kernel_src_image = target_dir / "kernel" / "Image"
-        dts_name = config["kernel"]["dts"]
+        _, dts_name = kernel_device_tree(config)
         kernel_src_dtb = target_dir / "kernel" / f"{dts_name}.dtb"
 
         if not kernel_src_image.exists():
@@ -108,7 +108,7 @@ class RockchipBootBuilder(ComponentBuilder):
         copy_declared_overlays(
             target_dir / "kernel" / "overlay",
             dtb_dir / "overlay",
-            dtb_overlays(config),
+            intree_overlays(config),
         )
         copy_declared_overlays(
             target_dir / "device-tree-overlay" / "overlays",
@@ -150,7 +150,7 @@ class RockchipBootBuilder(ComponentBuilder):
         """生成 U-Boot distro boot 使用的 normal extlinux.conf。"""
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
-        overlay_names = default_overlays(config)
+        overlay_names = runtime_overlays(config)
 
         # 用 PARTLABEL= 而非 ext4 LABEL=：GPT partition name 由 parted mkpart
         # 设置为 "rootfs"/"recovery"，kernel 启动早期可直接从 GPT 表解析，
@@ -171,7 +171,7 @@ class RockchipBootBuilder(ComponentBuilder):
         """生成 U-Boot distro boot 使用的 recovery.conf。"""
         boot_cfg = config.get("boot", {})
         kernel_args = boot_cfg.get("kernel_args", "")
-        overlay_names = default_overlays(config)
+        overlay_names = runtime_overlays(config)
 
         recovery = LabelSpec(
             name=RECOVERY_LABEL,

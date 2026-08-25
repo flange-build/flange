@@ -77,7 +77,7 @@ def _make_builder(tmp_path: Path, arch: str = "aarch64") -> AppBuilder:
         "board":   "rk3566",
         "product": "default",
         "variant": "release",
-        "arch":    arch,
+        "architecture": {"userspace": arch, "kernel": "arm64", "bootloader": "arm64"},
         "rootfs":  {"custom_packages": []},
     }
     docker = MagicMock()

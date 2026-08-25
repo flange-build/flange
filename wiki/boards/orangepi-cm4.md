@@ -3,7 +3,7 @@ title: orangepi-cm4
 type: board
 status: stable
 sources:
-  - components/board/orangepi-cm4/config.py
+  - components/board/orangepi-cm4/config.jsonnet
   - components/board/orangepi-cm4/patches/kernel/0001-dts-orangepi-cm4-bootargs-fix.patch
   - components/board/orangepi-cm4/patches/kernel/0002-bcmdhd-set-fw-ampak-path-brcm.patch
   - components/board/orangepi-cm4/patches/kernel/0003-dts-orangepi-cm4-disable-rknpu.patch

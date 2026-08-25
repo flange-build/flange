@@ -28,7 +28,10 @@ class TestCacheE2E:
         """构造测试环境：config + cache + 目录结构。"""
         config = {
             "board": "test", "platform": "rockchip",
-            "soc": "rk3566", "arch": "aarch64",
+            "soc": "rk3566",
+            "architecture": {
+                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+            },
             "product": "default", "variant": "release",
             "rootfs": {
                 "url": rootfs_url,
@@ -39,7 +42,14 @@ class TestCacheE2E:
             },
         }
         if kernel is not None:
-            config["kernel"] = kernel
+            config["kernel"] = {
+                "device_tree": {"directory": "", "name": "test"},
+                **kernel,
+            }
+        else:
+            config["kernel"] = {
+                "device_tree": {"directory": "", "name": "test"},
+            }
         cache = BuildCache(
             config,
             target_base=Path(tmpdir) / ".build" / "target",
@@ -160,7 +170,7 @@ class TestCacheE2E:
         """改 kernel config → kernel 与消费 modules 的 rootfs 都失效。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             _config, cache = self._make_env(
-                tmpdir, kernel={"defconfig": "defconfig_a"})
+                tmpdir, kernel={"defconfig": ["defconfig_a"]})
 
             self._create_kernel_artifacts(cache)
             cache.store("kernel")
@@ -172,7 +182,7 @@ class TestCacheE2E:
             assert cache.is_up_to_date("rootfs")
 
             _changed_config, changed = self._make_env(
-                tmpdir, kernel={"defconfig": "defconfig_b"})
+                tmpdir, kernel={"defconfig": ["defconfig_b"]})
 
             assert not changed.is_up_to_date("kernel")
             assert changed.is_phase_up_to_date("rootfs", "base")

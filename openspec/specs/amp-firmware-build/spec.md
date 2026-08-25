@@ -47,7 +47,7 @@ flange SHALL 新增 `builder/platforms/rockchip/amp.py` 中的 `RockchipAmpBuild
 
 ### Requirement: amp 组件按配置 enabled 开关可选
 
-`builder/engine.py` 的 `_component_disabled` SHALL 新增 amp 分支：当 `config.amp.enabled` 不为真时返回 `True`，使引擎静默跳过 amp 构建且不收集产物（仿 recovery 模式）。平台层 `components/platform/rockchip/config.py` SHALL 默认 `amp = {"enabled": False}`；board 层按需 opt-in。amp 关闭时下游 `image` 因 `amp.img` 缺失自动跳过 amp 分区写入。
+`builder/engine.py` 的 `_component_disabled` SHALL 新增 amp 分支：当 `config.amp.enabled` 不为真时返回 `True`，使引擎静默跳过 amp 构建且不收集产物（仿 recovery 模式）。平台层 `components/platform/rockchip/config.jsonnet` SHALL 默认 `amp = {"enabled": False}`；board 层按需 opt-in。amp 关闭时下游 `image` 因 `amp.img` 缺失自动跳过 amp 分区写入。
 
 #### Scenario: amp 关闭时跳过构建
 
@@ -92,7 +92,7 @@ amp 的协处理器内存布局常量（从核 `cpu_base`/`dram_size`、`shmem_b
 固件链接腿（leg 1）SHALL 按 mode 注入**同一组 6 个值**到同名下游宏（`FIRMWARE_BASE`/`DRAM_SIZE`/`SHMEM_BASE`/`SHMEM_SIZE`/`LINUX_RPMSG_BASE`/`LINUX_RPMSG_SIZE`）：
 
 - `hal`：经 CMake `-DROCKCHIP_AMP_FIRMWARE_BASE/DRAM_SIZE/SHMEM_BASE/SHMEM_SIZE/LINUX_RPMSG_BASE/LINUX_RPMSG_SIZE` 传给 app 的 `CMakeLists.txt` → `rockchip_hal_target`（决定 firmware 链接地址与 cpp 预处理的链接脚本）。
-- `rt-thread`：经 scons 环境变量注入——`cpu_base`→`RTT_PRMEM_BASE`、`dram_size`→`RTT_PRMEM_SIZE`、`shmem_base/size`→`RTT_SHMEM_BASE/SIZE`、`rpmsg_base/size`→`LINUX_RPMSG_BASE/SIZE`、`cpu`→`CUR_CPU`；`rtconfig.py` 据此组出与 hal 同名的 `-DFIRMWARE_BASE/DRAM_SIZE/SHMEM_BASE/SHMEM_SIZE/LINUX_RPMSG_BASE/LINUX_RPMSG_SIZE` 编译宏并预处理 `gcc_arm.ld.S`。
+- `rt-thread`：经 scons 环境变量注入——`cpu_base`→`RTT_PRMEM_BASE`、`dram_size`→`RTT_PRMEM_SIZE`、`shmem_base/size`→`RTT_SHMEM_BASE/SIZE`、`rpmsg_base/size`→`LINUX_RPMSG_BASE/SIZE`、`cpu`→`CUR_CPU`；`rtconfig.jsonnet` 据此组出与 hal 同名的 `-DFIRMWARE_BASE/DRAM_SIZE/SHMEM_BASE/SHMEM_SIZE/LINUX_RPMSG_BASE/LINUX_RPMSG_SIZE` 编译宏并预处理 `gcc_arm.ld.S`。
 
 从核 `load`/`cpu_base` SHALL 为 **`0x07000000`**（落在内核镜像之上、SHMEM 之下的可保留区）；SDK 默认的 `0x02800000` 与 flange 约 37MB 大内核冲突（reserved-memory `failed to reserve`、从核不运行），故 SHALL NOT 沿用——rt-thread 的 `build.sh` 示例默认 `CPU3_MEM_BASE=0x02800000` 同样 SHALL 被 `config.amp.memory` 覆盖。权威值：`cpu_base=0x07000000`、`shmem_base=0x07800000`、`rpmsg_base=0x07c00000`。
 
@@ -234,7 +234,7 @@ loadable 仅引用 CPU2 固件。固件 load/size、MPIDR 和 SRAM SHALL 与配�
 
 ### Requirement: RT-Thread AMP 的跨语言 ABI 必须可验证
 
-当 RT-Thread AMP app 包含 Swift archive 时，builder SHALL 从 BSP `rtconfig.py` 的静态
+当 RT-Thread AMP app 包含 Swift archive 时，builder SHALL 从 BSP `rtconfig.jsonnet` 的静态
 `DEVICE` flags 派生 Swift CPU、浮点和 enum ABI。若 BSP 使用 hard-float，builder MUST 在
 Swift archive 和最终 `rtthread.elf` 两个阶段以固定裸机工具链 `readelf -A` 验证
 `Tag_ABI_VFP_args: VFP registers`。Swift C importer SHALL 匹配 BSP/newlib 的 variable-size

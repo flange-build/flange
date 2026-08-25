@@ -10,10 +10,11 @@ from pathlib import Path
 
 import pytest
 
+from builder.config.jsonnet import ResolvedConfig
 from builder.dtb_overlay import (
     all_declared_overlays,
-    default_overlays,
     package_overlays,
+    runtime_overlays,
 )
 from builder.packages import (
     _parse_opt_in,
@@ -202,17 +203,34 @@ def test_expand_nonexistent_driver_errors(demo_root: Path):
 def test_expand_devicetree_overlay(demo_root: Path):
     cfg = {"board": "my-board", "packages": ["demo-panel"]}
     expand_hardware_packages(cfg, project_root=demo_root)
-    assert "my-board-demo.dtbo" in cfg["boot"]["package_overlays"]
+    assert "my-board-demo.dtbo" in cfg["boot"]["overlays"]["package"]
     src = cfg["boot"]["package_overlay_sources"]["my-board-demo.dtbo"]
     assert src.endswith("device-tree/my-board-demo.dtso")
     assert Path(src).is_absolute()
+
+
+def test_canonical_qualcomm_package_overlay_is_build_time(demo_root: Path):
+    cfg = ResolvedConfig({
+        "board": "my-board",
+        "platform": "qualcommqcs6490",
+        "packages": ["demo-panel"],
+        "kernel": {"device_tree": {"directory": "qcom", "name": "demo"}},
+        "boot": {"overlays": {}},
+    })
+
+    expand_hardware_packages(cfg, project_root=demo_root)
+
+    assert cfg["boot"]["overlays"]["package"] == ["my-board-demo.dtbo"]
+    assert cfg["kernel"]["device_tree"]["build_overlays"] == [
+        "my-board-demo.dtbo",
+    ]
 
 
 def test_expand_devicetree_skipped_for_other_board(demo_root: Path):
     cfg = {"board": "other-board", "packages": ["demo-panel"]}
     expand_hardware_packages(cfg, project_root=demo_root)
     # 该包未对 other-board 提供 overlay → package_overlays 不含它
-    assert not cfg.get("boot", {}).get("package_overlays")
+    assert not cfg.get("boot", {}).get("overlays", {}).get("package")
 
 
 def test_expand_records_cache_meta(demo_root: Path):
@@ -301,35 +319,31 @@ def test_nonexistent_package_errors(demo_root: Path):
 # ---- dtb_overlay 四源集成 ----
 
 def test_package_overlays_in_union():
-    cfg = {"boot": {
-        "dtb_overlays": ["a.dtbo"],
-        "package_overlays": ["p.dtbo"],
-    }}
+    cfg = {"boot": {"overlays": {
+        "intree": ["a.dtbo"], "package": ["p.dtbo"],
+    }}}
     assert package_overlays(cfg) == ["p.dtbo"]
     assert all_declared_overlays(cfg) == ["a.dtbo", "p.dtbo"]
 
 
 def test_package_overlay_collision_fails():
-    cfg = {"boot": {
-        "board_overlays": ["x.dtbo"],
-        "package_overlays": ["x.dtbo"],
-    }}
-    with pytest.raises(ValueError, match="package_overlays.*重名"):
+    cfg = {"boot": {"overlays": {
+        "board": ["x.dtbo"], "package": ["x.dtbo"],
+    }}}
+    with pytest.raises(ValueError, match="overlays.package.*重名"):
         all_declared_overlays(cfg)
 
 
-def test_default_overlays_accepts_package_source():
-    cfg = {"boot": {
-        "package_overlays": ["p.dtbo"],
-        "default_overlays": ["p.dtbo"],
-    }}
-    assert default_overlays(cfg) == ["p.dtbo"]
+def test_runtime_overlays_accepts_package_source():
+    cfg = {"boot": {"overlays": {
+        "package": ["p.dtbo"], "enabled": ["p.dtbo"],
+    }}}
+    assert runtime_overlays(cfg) == ["p.dtbo"]
 
 
-def test_default_overlays_missing_lists_package_candidates():
-    cfg = {"boot": {
-        "package_overlays": ["p.dtbo"],
-        "default_overlays": ["missing.dtbo"],
-    }}
-    with pytest.raises(ValueError, match="候选 package_overlays"):
-        default_overlays(cfg)
+def test_runtime_overlays_missing_lists_package_candidates():
+    cfg = {"boot": {"overlays": {
+        "package": ["p.dtbo"], "enabled": ["missing.dtbo"],
+    }}}
+    with pytest.raises(ValueError, match="package="):
+        runtime_overlays(cfg)

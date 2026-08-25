@@ -7,7 +7,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 `AllwinnerA733KernelBuilder` 必须（SHALL）在编译前将 BSP 仓库集成到内核源码树的 `bsp/` 目录，并将 device 仓库中的 board DTS 复制到内核 DTS 目录。BSP 和 device 目录通过命名仓库 `linux-a733` 的子路径获取（`bsp/` 和 `device-a733/`），与 kernel 共用同一次 clone。
 
 #### Scenario: BSP 目录集成
-- **WHEN** 执行 `allwinnera733` 平台的内核构建，`repos.linux-a733` 已声明
+- **WHEN** 执行 `allwinnera733` 平台的内核构建，`sources.linux-a733` 已声明
 - **THEN** 内核源码树中的 `bsp/` 为 `.build/sources/repos/linux-a733/bsp/` 的 symlink 或副本
 
 #### Scenario: kernel/BSP/device 版本一致
@@ -15,7 +15,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** kernel、BSP、device 三者版本组合由聚合仓库统一管理，不会出现版本漂移
 
 #### Scenario: DTS 文件准备
-- **WHEN** config 指定 `kernel_device.board_dts_path` 为 `"configs/cubie_a7z/linux-5.15/board.dts"` 且 `kernel.dts` 为 `"sun60i-a733-cubie-a7z"`
+- **WHEN** config 指定 `kernel_device.board_dts_path` 为 `"configs/cubie_a7z/linux-5.15/board.dts"` 且 `kernel.device_tree.name` 为 `"sun60i-a733-cubie-a7z"`
 - **THEN** board.dts 从 `.build/sources/repos/linux-a733/device-a733/configs/cubie_a7z/linux-5.15/board.dts` 复制到 `arch/arm64/boot/dts/allwinner/sun60i-a733-cubie-a7z.dts`（内核上游 DTS 目录名保持 `allwinner`，不随 flange 平台重命名而变化）
 
 #### Scenario: BSP DTSI 链接
@@ -30,14 +30,14 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** 构建器依次执行 `make defconfig` 和 `make radxa.config`，最终 `.config` 包含两者合并的结果
 
 ### Requirement: A733 内核编译产物
-`AllwinnerA733KernelBuilder` 的 `collect()` 必须（SHALL）返回 Image、DTB 和 modules 三项基础产物；当 `boot.dtb_overlays` 非空时，还必须（SHALL）返回 `dtbos` 目录，目录中包含所有声明的 `.dtbo` overlay 产物。
+`AllwinnerA733KernelBuilder` 的 `collect()` 必须（SHALL）返回 Image、DTB 和 modules 三项基础产物；当 `boot.overlays.intree` 非空时，还必须（SHALL）返回 `dtbos` 目录，目录中包含所有声明的 `.dtbo` overlay 产物。
 
 #### Scenario: 基础产物收集
-- **WHEN** 内核编译成功完成且未声明 `boot.dtb_overlays`
+- **WHEN** 内核编译成功完成且未声明 `boot.overlays.intree`
 - **THEN** collect 返回字典包含 `"image"` (Image 路径)、`"dtb"` (DTB 路径)、`"modules"` (modules staging 目录路径)
 
 #### Scenario: overlay 产物收集
-- **WHEN** 内核编译成功完成且 config 声明 `boot.dtb_overlays == ["i2c1.dtbo", "spi1.dtbo"]`
+- **WHEN** 内核编译成功完成且 config 声明 `boot.overlays.intree == ["i2c1.dtbo", "spi1.dtbo"]`
 - **THEN** collect 返回字典包含 `"dtbos"` 目录路径
 - **AND** 该目录包含 `i2c1.dtbo`
 - **AND** 该目录包含 `spi1.dtbo`
@@ -72,7 +72,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **AND** U-Boot 按 Allwinner 既有 fastboot / loader 流程处理
 
 ### Requirement: A733 Boot 分区组装
-`AllwinnerA733BootBuilder` 必须（SHALL）将 Image、DTB 和 extlinux.conf 组装到 boot.img 中，文件布局遵循统一 extlinux + dtbs 规范。当 `boot.dtb_overlays` 非空时，boot.img 必须（SHALL）包含 `/dtbs/allwinner/overlay/*.dtbo`；当 `boot.default_overlays` 非空时，extlinux.conf 与 recovery.conf 必须（SHALL）通过 `fdtoverlays` 引用这些默认 overlay。
+`AllwinnerA733BootBuilder` 必须（SHALL）将 Image、DTB 和 extlinux.conf 组装到 boot.img 中，文件布局遵循统一 extlinux + dtbs 规范。当 `boot.overlays.intree` 非空时，boot.img 必须（SHALL）包含 `/dtbs/allwinner/overlay/*.dtbo`；当 `boot.overlays.enabled` 非空时，extlinux.conf 与 recovery.conf 必须（SHALL）通过 `fdtoverlays` 引用这些默认 overlay。
 
 #### Scenario: boot 分区文件布局
 - **WHEN** 构建 `allwinnera733` 平台的 boot.img
@@ -88,11 +88,11 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** 生成的 extlinux.conf 包含正确的 kernel、devicetree、append 行，root 指向 rootfs 分区
 
 #### Scenario: extlinux.conf 包含默认 overlay
-- **WHEN** config 指定 `boot.default_overlays == ["i2c1.dtbo", "spi1.dtbo"]`
+- **WHEN** config 指定 `boot.overlays.enabled == ["i2c1.dtbo", "spi1.dtbo"]`
 - **THEN** 生成的 extlinux.conf 包含 `fdtoverlays /dtbs/allwinner/overlay/i2c1.dtbo /dtbs/allwinner/overlay/spi1.dtbo`
 
 #### Scenario: recovery.conf 包含默认 overlay
-- **WHEN** recovery 启用且 config 指定 `boot.default_overlays == ["i2c1.dtbo"]`
+- **WHEN** recovery 启用且 config 指定 `boot.overlays.enabled == ["i2c1.dtbo"]`
 - **THEN** 生成的 recovery.conf 包含 `fdtoverlays /dtbs/allwinner/overlay/i2c1.dtbo`
 
 ### Requirement: A733 Rootfs 构建
@@ -127,29 +127,29 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **AND** raw.img 总大小按初始分区布局计算
 
 ### Requirement: A733 平台配置三层继承
-`allwinnera733` 平台必须（SHALL）遵循 flange 的三层配置继承体系：platform → SoC → board。PLATFORM 与 SOC 两层之间在目录结构上保持分离（`components/platform/allwinnera733/config.py` + `components/platform/allwinnera733/a733/config.py`），不合并为单一文件。
+`allwinnera733` 平台必须（SHALL）遵循 flange 的三层配置继承体系：platform → SoC → board。PLATFORM 与 SOC 两层之间在目录结构上保持分离（`components/platform/allwinnera733/config.jsonnet` + `components/platform/allwinnera733/a733/config.jsonnet`），不合并为单一文件。
 
 #### Scenario: 配置合并
 - **WHEN** lunch target 为 `radxa-cubie-a7z-default-debug`
-- **THEN** 最终配置为 `components/platform/allwinnera733/config.py` → `components/platform/allwinnera733/a733/config.py` → `components/board/radxa-cubie-a7z/config.py` 三层深度合并的结果
+- **THEN** 最终配置为 `components/platform/allwinnera733/config.jsonnet` → `components/platform/allwinnera733/a733/config.jsonnet` → `components/board/radxa-cubie-a7z/config.jsonnet` 三层深度合并的结果
 
 #### Scenario: PLATFORM.vendor 字段与平台名一致
-- **WHEN** 加载 `components/platform/allwinnera733/config.py`
+- **WHEN** 加载 `components/platform/allwinnera733/config.jsonnet`
 - **THEN** `PLATFORM.vendor == "allwinnera733"`，与 `board.platform` 字段、`_FLASH_STRATEGIES` 注册键、`builder/platforms/allwinnera733/` 目录名严格一致
 
 #### Scenario: SOC.platform 字段指向新平台名
-- **WHEN** 加载 `components/platform/allwinnera733/a733/config.py`
+- **WHEN** 加载 `components/platform/allwinnera733/a733/config.jsonnet`
 - **THEN** `SOC.platform == "allwinnera733"`，以便 SOC 层知道自己属于哪个平台
 
 ### Requirement: A733 平台默认启用 adbd 调试通道
 `allwinnera733` 平台必须（SHALL）在 rootfs 中默认装配 `adbd` App，提供基于 USB gadget 的 adb 调试通道，使所有该平台的板开箱具备与 Rockchip 平台对等的调试能力。
 
 #### Scenario: 平台级 App 声明
-- **WHEN** 读取 `components/platform/allwinnera733/config.py` 的 `rootfs.custom_packages` 字段
+- **WHEN** 读取 `components/platform/allwinnera733/config.jsonnet` 的 `rootfs.custom_packages` 字段
 - **THEN** 列表包含字符串 `"adbd"`，使 `AppBuilder.build_all()` 在任意 `allwinnera733` 板的构建中自动为其打包并安装 adbd.deb
 
 #### Scenario: 板级未显式覆盖时的继承
-- **WHEN** 某 `allwinnera733` 板的 `components/board/<name>/config.py` 未声明 `rootfs.custom_packages`
+- **WHEN** 某 `allwinnera733` 板的 `components/board/<name>/config.jsonnet` 未声明 `rootfs.custom_packages`
 - **THEN** 经三层配置合并后，该板的 `custom_packages` 至少包含 `"adbd"`（来自平台层），rootfs 构建产物内 `/usr/bin/adbd` 等文件存在
 
 ### Requirement: A733 内核 USB gadget 保证
@@ -164,7 +164,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
   - `CONFIG_USB_CONFIGFS_F_FS=y`
 
 #### Scenario: defconfig 合并顺序
-- **WHEN** `components/platform/allwinnera733/a733/config.py` 的 `kernel.defconfig` 列表被 `configure()` 逐项应用
+- **WHEN** `components/platform/allwinnera733/a733/config.jsonnet` 的 `kernel.defconfig` 列表被 `configure()` 逐项应用
 - **THEN** `usb_gadget.config` 在 `radxa.config` 和 `radxa_custom.config` 之后应用，最终 `.config` 中 `CONFIG_USB_CONFIGFS=y`（非 `=m`）
 
 #### Scenario: 最终 `.config` 校验
@@ -202,7 +202,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** 按 series 文件声明顺序应用，任一失败则构建失败
 
 ### Requirement: A733 bootloader 复用 u-boot-aw2501 命名仓库
-`AllwinnerA733BootloaderBuilder` 必须（SHALL）通过 `from_repo: "u-boot-aw2501"` 引用命名仓库获取源码，不再使用组件级独立 `repo` 配置。
+`AllwinnerA733BootloaderBuilder` 必须（SHALL）通过 `source: {name: "u-boot-aw2501"}` 引用顶层 canonical source 获取源码。
 
 #### Scenario: bootloader 从命名仓库构建
 - **WHEN** 执行 `allwinnera733` 平台的 bootloader 构建
@@ -222,7 +222,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **AND** 内容至少包含 `# CONFIG_AIC8800_SDIO is not set`
 
 #### Scenario: AIC8800 fragment 合并顺序
-- **WHEN** `components/platform/allwinnera733/a733/config.py` 的 `kernel.defconfig` 列表被 `configure()` 逐项应用
+- **WHEN** `components/platform/allwinnera733/a733/config.jsonnet` 的 `kernel.defconfig` 列表被 `configure()` 逐项应用
 - **THEN** `aic8800_wlan.config` 在 `radxa.config` 和 `radxa_custom.config` 之后应用
 - **AND** `aic8800_wlan.config` 在 `case_insensitive_fix.config` 之前应用
 
@@ -255,7 +255,7 @@ Linux kernel module dependency（模块依赖）索引文件，以便 rootfs 中
 使目标设备具备标准 `modprobe`、`insmod`、`depmod`、`lsusb`、`ifconfig` 和 Wi-Fi supplicant（认证客户端）能力。
 
 #### Scenario: rootfs apt 包包含模块和诊断工具
-- **WHEN** 读取 `components/platform/allwinnera733/config.py` 的 `rootfs.packages`
+- **WHEN** 读取 `components/platform/allwinnera733/config.jsonnet` 的 `rootfs.packages`
 - **THEN** 列表包含字符串 `"kmod"`
 - **AND** 列表包含字符串 `"usbutils"`
 - **AND** 列表包含字符串 `"net-tools"`
@@ -290,11 +290,11 @@ Linux kernel module dependency（模块依赖）索引文件，以便 rootfs 中
 仓库安装 AIC8800D80 USB 固件到 rootfs 的 `/lib/firmware/aic8800_fw/USB/`，并与 USB firmware helper 参数保持一致。
 
 #### Scenario: 板级配置声明 Radxa AIC8800 固件来源
-- **WHEN** 读取 `components/board/radxa-cubie-a7z/config.py`
+- **WHEN** 读取 `components/board/radxa-cubie-a7z/config.jsonnet`
 - **THEN** `rootfs.extra_firmware` 至少声明一个名为 `radxa-aic8800` 的固件条目
 - **AND** 该条目的 `repo` 指向 `https://github.com/radxa-pkg/aic8800.git`
 - **AND** 该条目固定 `commit`
-- **AND** 该条目的 `repo_subdir` 指向 `src/USB/driver_fw/fw`
+- **AND** 该条目的 `source.subpath` 指向 `src/USB/driver_fw/fw`
 - **AND** 该条目的 `dest` 为 `lib/firmware/aic8800_fw/USB`
 
 #### Scenario: 固件路径与模块参数一致

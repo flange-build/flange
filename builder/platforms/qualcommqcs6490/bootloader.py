@@ -26,11 +26,9 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
 
     def compile(self, src_dir, config: dict):
         bl = config.get("bootloader", {})
-        url = bl.get("edk2_firmware_url")
-        sha256 = bl.get("edk2_firmware_sha256")
-        if not url or not sha256:
-            raise ValueError(
-                "bootloader.edk2_firmware_url/edk2_firmware_sha256 未配置")
+        firmware = bl.get("edk2_firmware")
+        if not isinstance(firmware, dict):
+            raise ValueError("bootloader.edk2_firmware 未配置")
 
         self._work_dir = Path(tempfile.mkdtemp(prefix="flange-edk2-"))
         extract_dir = self._work_dir / "edk2"
@@ -38,8 +36,7 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
 
         self._status("下载并校验 Radxa 预编 EDK2 SPI 固件（不编译）...")
         zip_path = self.source.ensure_prebuilt_image(
-            f"{config['board']}-edk2",
-            {"url": url, "sha256": sha256},
+            f"{config['board']}-edk2", firmware,
         )
         with zipfile.ZipFile(zip_path) as archive:
             archive.extractall(extract_dir)

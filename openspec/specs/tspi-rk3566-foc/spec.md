@@ -5,7 +5,7 @@ TBD - created by archiving change add-tspi-rk3566-foc-svpwm. Update Purpose afte
 ## Requirements
 ### Requirement: foc product 产品接线
 
-tspi-rk3566 的 `config.py` SHALL 声明 product `foc`，并通过 `:foc` 条件键复用 `amp-rtt` product 的全部 AMP 基建：U-Boot AMP loader（`CONFIG_AMP` + `CONFIG_ROCKCHIP_AMP`）、内核 amp dts（`tspi-rk3566-amp`）、rpmsg 字符设备（`CONFIG_RPMSG_CHAR` + `CONFIG_RPMSG_CTRL`）、amp 分区表（`_AMP_PARTITIONS`）、以及 `mode:foc = "rt-thread"` 的 scons 从核构建。`app:foc` SHALL 指向 `rk3568_amp_rtt_foc`。`default` / `amp` / `amp-rtt` 三个既有 product 的解析结果 SHALL 不受任何影响。
+tspi-rk3566 的 `config.jsonnet` SHALL 声明 product `foc`，并通过 `:foc` 条件键复用 `amp-rtt` product 的全部 AMP 基建：U-Boot AMP loader（`CONFIG_AMP` + `CONFIG_ROCKCHIP_AMP`）、内核 amp dts（`tspi-rk3566-amp`）、rpmsg 字符设备（`CONFIG_RPMSG_CHAR` + `CONFIG_RPMSG_CTRL`）、amp 分区表（`_AMP_PARTITIONS`）、以及 `mode:foc = "rt-thread"` 的 scons 从核构建。`app:foc` SHALL 指向 `rk3568_amp_rtt_foc`。`default` / `amp` / `amp-rtt` 三个既有 product 的解析结果 SHALL 不受任何影响。
 
 #### Scenario: lunch foc target 可选
 - **WHEN** 执行 `lunch tspi-rk3566-foc-release`（或 `-debug`）
@@ -13,15 +13,15 @@ tspi-rk3566 的 `config.py` SHALL 声明 product `foc`，并通过 `:foc` 条件
 
 #### Scenario: foc 复用 amp dts 与分区
 - **WHEN** 解析 `tspi-rk3566-foc-*` 配置
-- **THEN** `config.kernel.dts` 为 `"tspi-rk3566-amp"`，且分区表等于 `amp` / `amp-rtt` 所用的 `_AMP_PARTITIONS`（含 16MiB amp 分区）
+- **THEN** `config.kernel.device_tree.name` 为 `"tspi-rk3566-amp"`，且分区表等于 `amp` / `amp-rtt` 所用的 `_AMP_PARTITIONS`（含 16MiB amp 分区）
 
 #### Scenario: default product 不受影响
 - **WHEN** 解析 `tspi-rk3566-default-*` 配置
-- **THEN** `config.amp` 未启用、`config.kernel.dts` 仍为基础板 dts、分区沿用 SoC 默认布局、`tspi-rk3566-amp-foc` overlay 不出现在 `default_overlays` 中
+- **THEN** `config.amp` 未启用、`config.kernel.device_tree.name` 仍为基础板 dts、分区沿用 SoC 默认布局、`tspi-rk3566-amp-foc` overlay 不出现在 `boot.overlays.enabled` 中
 
 ### Requirement: 电机引脚整组从 Linux 摘出
 
-新增 DTS overlay `components/board/tspi-rk3566/dtso/tspi-rk3566-amp-foc.dtso` SHALL 把电机相关引脚整组从 Linux 释放，交给 RT-Thread 从核独占：i2c2、pwm12、pwm13、pwm14 SHALL 置为 `status = "disabled"`；占用 gpio3_a5（EN）的 `xpt2046` 电阻触摸与占用 pwm 撞脚的 uart3 SHALL 保持 disabled；overlay SHALL NOT 为 gpio3_a5 / gpio3_a4 建立 Linux 侧 pinctrl claim。该 overlay SHALL 仅经 `default_overlays:foc` 在 foc product 启用，且经 `board_overlays` 声明编译。
+新增 DTS overlay `components/board/tspi-rk3566/dtso/tspi-rk3566-amp-foc.dtso` SHALL 把电机相关引脚整组从 Linux 释放，交给 RT-Thread 从核独占：i2c2、pwm12、pwm13、pwm14 SHALL 置为 `status = "disabled"`；占用 gpio3_a5（EN）的 `xpt2046` 电阻触摸与占用 pwm 撞脚的 uart3 SHALL 保持 disabled；overlay SHALL NOT 为 gpio3_a5 / gpio3_a4 建立 Linux 侧 pinctrl claim。该 overlay SHALL 仅通过 Jsonnet product 条件加入 `boot.overlays.enabled`，且经 `boot.overlays.board` 声明编译。
 
 #### Scenario: overlay 仅 foc 启用
 - **WHEN** 解析 `tspi-rk3566-foc-*` 配置
@@ -114,4 +114,3 @@ rk3568-32 AMP BSP 的 `hal_conf.h` 当前缺 PWM 模块门控（对 GPIO/PINCTRL
 #### Scenario: 无参数打印用法
 - **WHEN** 输入 `foc` 不带参数
 - **THEN** 打印命令用法（可用子命令与参数说明）
-

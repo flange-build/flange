@@ -32,12 +32,13 @@ import shutil
 import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.config.canonical import kernel_arch, kernel_device_tree
 from builder.docker import BuildError
 from builder.app_spec import AppSpecError, SwiftBuildConfig, load_spec
 
 # AMP 内存布局默认值（单一事实源应由 SoC 配置 config.amp.memory 提供；此处为
 # 兜底默认）。cpu_base 不用 SDK 默认 0x2800000——会与 flange ~37MB 内核镜像
-# 冲突致固件保留失败；权威值见 rk3566/config.py 的 amp.memory 注释。
+# 冲突致固件保留失败；权威值见 rk3566/config.jsonnet 的 amp.memory 注释。
 _DEFAULT_MEMORY = {
     "cpu": 3,                  # 从核 mpidr index（amp_linux.its 的 amp3）
     "cpu_base": 0x07000000,    # 从核固件 link/load 地址（同时写进 .its 的 load）
@@ -142,14 +143,14 @@ class RockchipAmpBuilder(ComponentBuilder):
         """按 kernel arch/DTS include closure 校验 AMP 内存与 runtime profile。"""
         mem = self._memory(config)
         runtime = self._runtime(config)
-        board = config.get("board", "")
-        kernel = config.get("kernel") or {}
-        kernel_root = Path(
-            kernel.get("local_path") or f".build/sources/kernel/{board}")
-        arch = kernel.get("arch", "arm64")
+        if self.source is None:
+            self._status("跳过 dts 交叉校验：kernel source manager 不可用")
+            return
+        kernel_root = self.source.ensure("kernel", config)
+        arch = kernel_arch(config)
         dts_root = kernel_root / "arch" / arch / "boot" / "dts"
-        dts_dir = kernel.get("dts_dir", "rockchip")
-        target = dts_root / dts_dir / f"{kernel.get('dts', '')}.dts"
+        dts_dir, dts = kernel_device_tree(config)
+        target = dts_root / dts_dir / f"{dts}.dts"
         if not target.is_file():
             self._status(
                 f"跳过 dts 交叉校验：目标 DTS 未就绪（{target}）")

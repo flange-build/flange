@@ -32,19 +32,21 @@ def builder():
     return RecordingAmlogicKernelBuilder()
 
 
-def _config(defconfig="defconfig", dts_dir="amlogic", overlays=None):
+def _config(defconfig=None, dts_dir="amlogic", overlays=None):
     return {
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
         "kernel": {
-            "defconfig": defconfig,
-            "dts": "meson-sm1-khadas-vim3l",
-            "dts_dir": dts_dir,
+            "defconfig": defconfig or ["defconfig"],
+            "device_tree": {
+                "directory": dts_dir, "name": "meson-sm1-khadas-vim3l",
+            },
         },
-        "boot": {
-            "dtb_overlays": overlays or [],
-            "vendor_overlays": [],
-            "board_overlays": [],
-            "default_overlays": [],
-        },
+        "boot": {"overlays": {
+            "intree": overlays or [], "vendor": [], "board": [],
+            "package": [], "enabled": [],
+        }},
     }
 
 
@@ -57,14 +59,14 @@ def test_instantiate(builder):
 
 def test_configure_single_defconfig_calls_make_once(builder, tmp_path,
                                                      monkeypatch):
-    """configure 走单字符串 defconfig 时只 make 一次。"""
+    """configure 走单元素 defconfig 数组时只 make 一次。"""
     src = tmp_path / "linux"
     (src / "arch" / "arm64" / "configs").mkdir(parents=True)
     # 屏蔽 case_insensitive_fix 的 fragment 写入（依赖文件系统探针）
     monkeypatch.setattr(AmlogicKernelBuilder, "_write_case_insensitive_fix",
                         lambda self, src_dir: None)
 
-    builder.configure(src, _config(defconfig="defconfig"))
+    builder.configure(src, _config(defconfig=["defconfig"]))
 
     assert builder.make_calls == [(["defconfig"],
                                    {"arch": "arm64",

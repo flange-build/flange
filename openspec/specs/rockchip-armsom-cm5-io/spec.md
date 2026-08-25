@@ -10,20 +10,20 @@ ArmSoM CM5 IO（RK3576）板级配置契约：board config 字段约束、开源
 
 ### Requirement: armsom-cm5-io board 配置基础字段
 
-`components/board/armsom-cm5-io/config.py` 必须（SHALL）作为合法 board 配置
+`components/board/armsom-cm5-io/config.jsonnet` 必须（SHALL）作为合法 board 配置
 文件存在并导出 `BOARD` 字典，使 `_discover_boards()` 返回结果包含 key
 `"armsom-cm5-io"`。该 board 配置 MUST 至少声明：`board="armsom-cm5-io"`、
-`soc="rk3576"`、`platform="rockchip"`、`kernel.dts="rk3576-armsom-cm5-io"`。
+`soc="rk3576"`、`platform="rockchip"`、`kernel.device_tree.name="rk3576-armsom-cm5-io"`。
 
 #### Scenario: 三层合并后 board 字段正确
 
 - **WHEN** 调用 `get_board_config("armsom-cm5-io")`
-- **THEN** 返回的合并字典中 `platform == "rockchip"` 且 `soc == "rk3576"` 且 `kernel.dts == "rk3576-armsom-cm5-io"`
+- **THEN** 返回的合并字典中 `platform == "rockchip"` 且 `soc == "rk3576"` 且 `kernel.device_tree.name == "rk3576-armsom-cm5-io"`
 - **AND** `rkbin.mkimage_chip == "rk3576"`
 
 #### Scenario: board 不覆盖 SoC GPU 路线
 
-- **WHEN** 加载 `components/board/armsom-cm5-io/config.py` 的 `BOARD` 字典
+- **WHEN** 加载 `components/board/armsom-cm5-io/config.jsonnet` 的 `BOARD` 字典
 - **THEN** board 层不重新声明 GPU fragment，沿用 SoC 层 `rk3576_panfrost.config`
 - **AND** 三层合并后 `kernel.defconfig` list 含 `"rk3576_panfrost.config"`
 
@@ -136,7 +136,9 @@ multi-user.target → ssh 连接成功 → panfrost GPU 节点 probe 成功。�
 
 ### Requirement: armsom-cm5-io 部署 AP6275S 固件（含 CLM blob）
 
-`armsom-cm5-io` 的 `rootfs.+extra_firmware` MUST 以 `source="oot:rkwifibt"`（复用 `kernel.oot_sources` 已 ensure 的 rkwifibt 源）从 `repo_subdir=firmware/broadcom/AP6275S` 部署以下文件到 rootfs `/lib/firmware/brcm/`：
+`armsom-cm5-io` 的 `rootfs.extra_firmware` MUST 通过
+`source: {name: "rkwifibt", subpath: "firmware/broadcom/AP6275S"}` 复用
+`kernel.oot_sources.rkwifibt` 的 canonical source，并部署以下文件到 rootfs `/lib/firmware/brcm/`：
 
 - `wifi/fw_bcm43752a2_ag.bin`（SDIO WiFi 主固件）
 - `wifi/nvram_ap6275s.txt`（NVRAM 校准参数）

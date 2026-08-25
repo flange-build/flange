@@ -5,6 +5,8 @@ import shlex
 import shutil
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.config.canonical import bootloader_arch
+from builder.kconfig import defconfig_targets, render_kconfig
 
 
 class RockchipBootloaderBuilder(ComponentBuilder):
@@ -16,7 +18,7 @@ class RockchipBootloaderBuilder(ComponentBuilder):
     def _configure_build_context(self, config: dict) -> None:
         """为本次 U-Boot 构建解析 ARCH 与 CROSS_COMPILE。"""
         bootloader = config.get("bootloader", {}) or {}
-        self.ARCH = bootloader.get("arch", self.DEFAULT_ARCH)
+        self.ARCH = bootloader_arch(config)
         self.CROSS = bootloader.get("cross_compile", self.DEFAULT_CROSS)
 
     def configure(self, src_dir: Path, config: dict):
@@ -24,25 +26,19 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         # 预编 spi.img 板（见 compile）不自编 u-boot，跳过 defconfig 配置。
         if config["bootloader"].get("prebuilt_spi_image"):
             return
-        # bootloader.defconfig 支持单字符串或 list（对齐 kernel.defconfig）：
-        # list 中含 "=" 或 "# CONFIG_" 的项是 raw u-boot option（聚合后追加进
-        # .config 再 olddefconfig 归一化），其余是 defconfig/fragment make 目标。
-        # 让 SoC/board 直接在 bootloader.defconfig（或板级 +defconfig:<product>）
-        # 写一行 CONFIG_X=y 即开 u-boot 选项，无需 patch 上游 defconfig 文件。
-        defconfig = config["bootloader"]["defconfig"]
-        if isinstance(defconfig, str):
-            defconfig = [defconfig]
-        targets = [d for d in defconfig
-                   if "=" not in d and not d.lstrip().startswith("# CONFIG_")]
-        raw_options = [d for d in defconfig
-                       if "=" in d or d.lstrip().startswith("# CONFIG_")]
+        targets = defconfig_targets(
+            config["bootloader"]["defconfig"], "bootloader.defconfig"
+        )
         # U-Boot 的 fragment target 会合并当前 .config。逐个 make 可保证 base
         # defconfig → SoC fragment → AMP fragment 的确定顺序，避免 -j 下并行 target
         # 同时改写 .config。
         for target in targets:
             self.make(src_dir, [target], arch=self.ARCH, cross=self.CROSS)
-        if raw_options:
-            self._apply_inline_defconfig(src_dir, raw_options)
+        overrides = render_kconfig(
+            config["bootloader"].get("config"), "bootloader.config"
+        )
+        if overrides:
+            self._apply_config_overrides(src_dir, overrides)
         self._validate_amp_options(src_dir, config)
 
     @staticmethod
@@ -63,18 +59,14 @@ class RockchipBootloaderBuilder(ComponentBuilder):
             raise ValueError(
                 "U-Boot AMP 选项未成对保留: " + ", ".join(missing))
 
-    def _apply_inline_defconfig(self, src_dir: Path, options: list):
-        """把 bootloader.defconfig 里的 raw u-boot option 追加进 .config 再
-        olddefconfig 归一化。u-boot 与内核同用 Kconfig，但其 defconfig 在 configs/、
-        无内核 arch/<ARCH>/configs 的 fragment 布局，故用「append + olddefconfig」
-        （而非 make <frag>.config）跨工具稳妥：olddefconfig 按 Kconfig 依赖解析
-        select、丢弃 unmet-deps 项。在容器内追加（.config 由容器内 make 生成）。"""
+    def _apply_config_overrides(self, src_dir: Path, options: list[str]):
+        """把 bootloader.config 追加进 .config 后执行 olddefconfig。"""
         payload = "".join(o.rstrip("\n") + "\n" for o in options)
         self.docker.run(
             ["sh", "-c", "printf '%s' " + shlex.quote(payload) + " >> .config"],
             cwd=str(src_dir))
         self.make(src_dir, ["olddefconfig"], arch=self.ARCH, cross=self.CROSS)
-        self._status(f"u-boot inline defconfig（{len(options)} 项 option）")
+        self._status(f"u-boot config override（{len(options)} 项）")
 
     def compile(self, src_dir: Path, config: dict):
         self._configure_build_context(config)
@@ -89,7 +81,7 @@ class RockchipBootloaderBuilder(ComponentBuilder):
                 "必须在 SoC config 显式声明（如 RK3566 用 'rk3568'，"
                 "RK3588 用 'rk3588'）。"
             )
-        firmware_dir = self.source.ensure_firmware("rockchip", config)
+        firmware_dir = self.source.ensure_firmware(config)
 
         # 预编 spi.img 板（RK3576 ROCK 4D）：整套 SPI 启动固件用 radxa bsp 预编的
         # spi.img（board 声明 bootloader.prebuilt_spi_image，flash.py 直接刷之），

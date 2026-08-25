@@ -2,10 +2,12 @@
 
 import pytest
 
+from builder.config.jsonnet import ResolvedConfig
 from builder.config.validate import (
     ConfigError,
     validate_amp,
     validate_build_routes,
+    validate_canonical_config,
     validate_config,
     validate_flash_identity,
     validate_mtd_ubi,
@@ -13,6 +15,134 @@ from builder.config.validate import (
     validate_rootfs_auto_grow,
 )
 from builder.config.registry import resolve_config
+
+
+def _canonical_config() -> ResolvedConfig:
+    return ResolvedConfig({
+        "architecture": {
+            "userspace": "aarch64",
+            "kernel": "arm64",
+            "bootloader": "arm",
+        },
+        "board": "demo",
+        "platform": "amlogic",
+        "soc": "demo-soc",
+        "product": "default",
+        "variant": "release",
+        "sources": {
+            "kernel": {"url": "https://example/kernel.git", "commit": "abc"},
+        },
+        "kernel": {
+            "source": {"name": "kernel", "subpath": ""},
+            "defconfig": ["defconfig"],
+            "config": {"CONFIG_NET": "y"},
+            "device_tree": {"directory": "vendor", "name": "demo"},
+        },
+    })
+
+
+class TestCanonicalConfig:
+    def test_minimal_config_passes(self):
+        validate_config(_canonical_config())
+
+    @pytest.mark.parametrize(
+        ("path", "value", "message"),
+        [
+            ("top", True, "未知字段"),
+            ("wifi", {"aic8800_usb": True}, "wifi"),
+            ("memory", {"size": "512M"}, "memory"),
+            ("kernel.enable_configs", ["NET"], "enable_configs"),
+            ("bootloader.fip_family_inc", "g12a.inc", "fip_family_inc"),
+            ("boot.grub_with_dtb", True, "grub_with_dtb"),
+            ("kernel.product", "default", "只允许出现在"),
+        ],
+    )
+    def test_unknown_alias_and_nested_dimension_fail(self, path, value, message):
+        config = _canonical_config()
+        if "." in path:
+            parent, key = path.split(".")
+            config.setdefault(parent, {})[key] = value
+        else:
+            config[path] = value
+
+        with pytest.raises(ConfigError, match=message):
+            validate_canonical_config(config)
+
+    def test_local_source_rejects_remote_fields(self):
+        config = _canonical_config()
+        config["sources"]["kernel"] = {
+            "local_path": "/tmp/kernel",
+            "commit": "abc",
+        }
+
+        with pytest.raises(ConfigError, match="互斥"):
+            validate_canonical_config(config)
+
+    def test_unknown_source_reference_fails(self):
+        config = _canonical_config()
+        config["kernel"]["source"]["name"] = "missing"
+
+        with pytest.raises(ConfigError, match="未知 source"):
+            validate_canonical_config(config)
+
+    def test_source_subpath_cannot_escape(self):
+        config = _canonical_config()
+        config["kernel"]["source"]["subpath"] = "../other"
+
+        with pytest.raises(ConfigError, match="不得越出"):
+            validate_canonical_config(config)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("edk2_firmware", {"url": "https://example.com/edk2.zip"}),
+            ("toolchain", {"url": "https://example.com/gcc.tar.xz"}),
+        ],
+    )
+    def test_bootloader_download_requires_sha256(self, field, value):
+        config = _canonical_config()
+        config["bootloader"] = {field: value}
+
+        with pytest.raises(ConfigError, match="sha256"):
+            validate_canonical_config(config)
+
+    def test_extra_deb_requires_sha256(self):
+        config = _canonical_config()
+        config["rootfs"] = {
+            "extra_debs": [{"name": "demo", "url": "https://example/a.deb"}],
+        }
+
+        with pytest.raises(ConfigError, match="sha256"):
+            validate_canonical_config(config)
+
+    def test_qualcomm_rejects_runtime_overlays(self):
+        config = _canonical_config()
+        config["platform"] = "qualcommqcs6490"
+        config["boot"] = {
+            "overlays": {
+                "package": ["panel.dtbo"],
+                "enabled": ["panel.dtbo"],
+            },
+        }
+
+        with pytest.raises(ConfigError, match="不支持 boot 运行期"):
+            validate_canonical_config(config)
+
+    def test_qualcomm_accepts_build_overlays(self):
+        config = _canonical_config()
+        config["platform"] = "qualcommqcs6490"
+        config["boot"] = {"overlays": {"package": ["panel.dtbo"]}}
+        config["kernel"]["device_tree"]["build_overlays"] = ["panel.dtbo"]
+
+        validate_canonical_config(config)
+
+    def test_extlinux_platform_rejects_build_overlays(self):
+        config = _canonical_config()
+        config["boot"] = {"overlays": {"board": ["panel.dtbo"]}}
+        config["kernel"]["device_tree"]["build_overlays"] = ["panel.dtbo"]
+
+        with pytest.raises(ConfigError, match="不支持构建期"):
+            validate_canonical_config(config)
 
 
 # ── recovery 分区存在性 ─────────────────────────────────────────────
@@ -75,6 +205,10 @@ class TestValidateRecoveryPartition:
 class TestValidateConfig:
     def test_recovery_enabled_without_partition_blocks_loading(self):
         cfg = {
+            "architecture": {
+                "userspace": "aarch64", "kernel": "arm64",
+                "bootloader": "arm64",
+            },
             "recovery": {"enabled": True},
             "partitions": {"format": "gpt", "entries": [
                 {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
@@ -84,8 +218,10 @@ class TestValidateConfig:
             validate_config(cfg)
 
     def test_minimal_disabled_config_passes(self):
-        validate_config({"recovery": {"enabled": False}})  # no raise
-        validate_config({})  # no raise (recovery 缺省即关闭)
+        with pytest.raises((ConfigError, KeyError)):
+            validate_config({"recovery": {"enabled": False}})
+        with pytest.raises((ConfigError, KeyError)):
+            validate_config({})
 
     @pytest.mark.parametrize("product", ["default", "amp", "amp-rtt"])
     def test_orangepi_cm4_products_pass_validation(self, product):
@@ -178,12 +314,13 @@ def _write_mtd_parameter(tmp_path, *, rootfs_name="rootfs", amp_after=False):
 def _valid_mtd_config(tmp_path) -> dict:
     return {
         "platform": "rockchip",
-        "arch": "armhf",
+        "architecture": {
+            "userspace": "armhf", "kernel": "arm", "bootloader": "arm",
+        },
         "kernel": {
-            "arch": "arm",
             "cross_compile": "arm-linux-gnueabihf-",
             "image": "zImage",
-            "dts_dir": "",
+            "device_tree": {"directory": "", "name": "demo"},
             "boot_format": "fit",
             "boot_its": "boot.its",
         },
@@ -235,13 +372,16 @@ class TestBuildRouteValidation:
     @pytest.mark.parametrize(
         "field,value,match",
         [
-            ("arch", "riscv", "kernel.arch"),
+            ("architecture", "riscv", "architecture.kernel"),
             ("boot_format", "android", "boot_format"),
         ],
     )
     def test_invalid_kernel_route_rejected(self, tmp_path, field, value, match):
         cfg = _valid_mtd_config(tmp_path)
-        cfg["kernel"][field] = value
+        if field == "architecture":
+            cfg["architecture"]["kernel"] = value
+        else:
+            cfg["kernel"][field] = value
         with pytest.raises(ConfigError, match=match):
             validate_build_routes(cfg)
 
@@ -305,6 +445,11 @@ class TestMtdUbiValidation:
     def test_non_rockchip_ubi_does_not_require_spinand_or_parameter(self):
         cfg = {
             "platform": "allwinnera733",
+            "architecture": {
+                "userspace": "aarch64", "kernel": "arm64",
+                "bootloader": "arm64",
+            },
+            "kernel": {"device_tree": {"directory": "", "name": "demo"}},
             "storage": {"type": "spinor"},
             "rootfs": {
                 "image_format": "ubi",

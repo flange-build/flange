@@ -66,7 +66,8 @@ flange create app --type amp --build-system amp my-amp-app
 
 生成 `components/app/my-amp-app/`（`app.yaml` + `src/main.c` + `README.md`）。
 把它打进固件：在 board 的 amp 段把 `amp.app` 指向它，例如
-`components/board/tspi-rk3566/config.py` 的 amp 块加 `"app:amp": "my-amp-app"`，
+`components/board/tspi-rk3566/config.jsonnet` 的 amp product 条件中设置
+`app: 'my-amp-app'`，
 再 `lunch tspi-rk3566-amp` + `flange build`。HAL app 是独立 CMake 工程，引用
 `components/amp/rockchip/hal` 的只读 HAL SDK；RT-Thread app 是叠到 BSP 模板上的
 overlay（`applications/` + 可选 `.config` 片段）。`amp.app` 必须显式声明。
@@ -80,12 +81,12 @@ console、I2C 等应用或板级差异。基线目录已纳入 amp 内容哈希�
 
 amp 配置分布在三层：
 
-- 平台 `components/platform/rockchip/config.py`：`amp.enabled` 默认 `False`（全平台关）。
-- SoC `components/platform/rockchip/rk3566/config.py`：`amp.soc_project`（= `"rk3568"`）
+- 平台 `components/platform/rockchip/config.jsonnet`：`amp.enabled` 默认 `false`（全平台关）。
+- SoC `components/platform/rockchip/rk3566/config.jsonnet`：`amp.soc_project`（= `"rk3568"`）
   与 `amp.memory`（内存布局单一事实源）。
-- Board `components/board/<board>/config.py`：amp product 条件键开
+- Board `components/board/<board>/config.jsonnet`：使用 Jsonnet product 条件开启
   `amp.enabled` / `amp.mode`（`"hal"` | `"rt-thread"` 二选一）、选择对应 amp app、
-  选专用 amp dts、加 `RPMSG_CHAR/CTRL`、并经 `"partitions:amp"` 提供含 amp
+  选专用 amp 设备树、加 `RPMSG_CHAR/CTRL`、并提供含 amp
   分区的分区表。
 
 **内存布局单一事实源**：`amp.memory` 的地址（cpu_base=0x07000000、

@@ -123,7 +123,7 @@
 
 ### Requirement: radxa-cubie-a7a 启用 meizu-e3-bringup product
 
-`components/board/radxa-cubie-a7a/config.py` MUST 声明 `products: ["default", "meizu-e3-bringup"]`，并 MUST 通过条件键仅在 `meizu-e3-bringup` product 注入屏适配：`"+packages:meizu-e3-bringup"` MUST 含 `{"name": "meizu-e3-panel", "drivers": ["sec_ts", "sgm37604a"]}`，`boot."+default_overlays:meizu-e3-bringup"` MUST 含 `"sun60i-a733-cubie-a7a-meizu-e3-panel.dtbo"`。`default` product MUST NOT 携带上述包内容与 panel overlay（维持 HDMI 直出裸机），其产物 MUST 与本变更前 byte-identical。
+`components/board/radxa-cubie-a7a/config.jsonnet` MUST 声明 `products: ["default", "meizu-e3-bringup"]`，并 MUST 使用 Jsonnet product 条件仅在 `meizu-e3-bringup` 注入 `packages` 中的 `meizu-e3-panel` 与 `boot.overlays.enabled` 中的 `sun60i-a733-cubie-a7a-meizu-e3-panel.dtbo`。`default` product MUST NOT 携带上述包内容与 panel overlay。
 
 #### Scenario: bringup product 点屏
 
@@ -277,7 +277,7 @@
 
 启用本包点亮 radxa-dragon-q6a 屏所依赖的内核功能——qcom mainline drm/msm（`CONFIG_DRM_MSM`）、对应的 mdss_dsi 控制器 / dsi_phy 驱动、qcom GENI/QUP I2C（`CONFIG_I2C_QCOM_GENI`）、qcom tlmm pinctrl（`CONFIG_PINCTRL_MSM`/相应 SoC 子驱动）——MUST 在 radxa-dragon-q6a 内核中可用（`qcom_defconfig` 默认含），无需 defconfig fragment。背光与触摸 MUST 由包内 `sgm37604a` / `sec_ts` 两个 OOT 驱动提供；panel 驱动 MUST 由包内 `panel_meizu_e3` OOT 驱动提供（QCLINUX BSP 6.6.90 内 `drivers/gpu/drm/panel/` 无 `simple-panel-dsi` 等通用 DSI panel 驱动），三个 `.ko` MUST 安装到 `lib/modules/.../updates/` 并随 DT 节点自动加载。
 
-为使 OOT 加载不被拒，QCS6490 SoC config（`components/platform/qualcommqcs6490/qcs6490/config.py::kernel`）MUST 声明 `disable_configs: ["MODULE_SIG_FORCE"]`——qcom_defconfig 默认 `CONFIG_MODULE_SIG_FORCE=y` 拒绝未签名模块加载（modprobe `Key was rejected by service` / dmesg `Loading of unsigned module is rejected`），flange OOT 流水线不签 → 必须关掉强制。OOT 加载 taint kernel `E` flag 但工作；`MODULE_SIG` 本身保留（签名模块仍验证，仅不强制）。与 rk/all/aml 三平台对齐（它们内核都不开 SIG_FORCE）。
+为使 OOT 加载不被拒，QCS6490 SoC config（`components/platform/qualcommqcs6490/qcs6490/config.jsonnet::kernel`）MUST 声明 `config: {CONFIG_MODULE_SIG_FORCE: "n"}`——qcom_defconfig 默认启用强制签名，而 flange OOT 流水线不签名。`MODULE_SIG` 本身保留。
 
 为使 i2c-geni 找到 QUP firmware，`components/platform/qualcommqcs6490/overlay/usr/lib/firmware/qupv3fw.elf.zst` MUST 是 symlink 指向 `qcom/qcs6490/qupv3fw.elf.zst`——`request_firmware("qupv3fw.elf")` 在 `/lib/firmware/` 顶层找；linux-firmware deb 实际安装到 `/lib/firmware/qcom/qcs6490/qupv3fw.elf.zst`。内核 `CONFIG_FW_LOADER_COMPRESS_ZSTD=y` 自动解压 `.zst`。overlay 路径 MUST 走 `usr/lib/firmware/...` 而非 `lib/firmware/...`，因 Ubuntu noble usrmerge `/lib -> /usr/lib`、顶层 `lib/` 目录会与 rootfs 中的 `lib` symlink 冲突。
 
@@ -302,7 +302,7 @@
 
 ### Requirement: radxa-dragon-q6a 启用 meizu-e3-bringup product
 
-`components/board/radxa-dragon-q6a/config.py` MUST 在 `products` 列表中追加 `meizu-e3-bringup`（与既有 `default` 并列），并 MUST 在该 product 条件键下注入 `packages: ["meizu-e3-panel"]`。`default` product MUST 不引入本包，使 `radxa-dragon-q6a-default-{debug,release}` 产物与本变更前**字节等价**。lunch target `radxa-dragon-q6a-meizu-e3-bringup-{debug,release}` MUST 由现有 product/variant 机制自动生成。
+`components/board/radxa-dragon-q6a/config.jsonnet` MUST 在 `products` 列表中追加 `meizu-e3-bringup`（与既有 `default` 并列），并 MUST 在该 product 条件键下注入 `packages: ["meizu-e3-panel"]`。`default` product MUST 不引入本包，使 `radxa-dragon-q6a-default-{debug,release}` 产物与本变更前**字节等价**。lunch target `radxa-dragon-q6a-meizu-e3-bringup-{debug,release}` MUST 由现有 product/variant 机制自动生成。
 
 #### Scenario: default product 字节等价
 
@@ -314,7 +314,7 @@
 - **WHEN** lunch `radxa-dragon-q6a-meizu-e3-bringup-debug`，build
 - **THEN** `config["packages"]` 含 `"meizu-e3-panel"`
 - **AND** kernel oot_modules 含 `sec_ts` / `sgm37604a` / `panel_meizu_e3`
-- **AND** `boot.package_overlays` 含 `qcom-qcs6490-radxa-dragon-q6a-meizu-e3-panel.dtbo`
+- **AND** `boot.overlays.package` 含 `qcom-qcs6490-radxa-dragon-q6a-meizu-e3-panel.dtbo`
 - **AND** rootfs `/boot/qcs6490-radxa-dragon-q6a.dtb` 是 base dtb 与该 dtbo 经 `fdtoverlay` 合并的产物（见 [[build-time-dtb-overlay-merge]]）
 
 ### Requirement: radxa-dragon-q6a 背光路径选择
@@ -332,4 +332,3 @@ Q6A 板原理图 v1.21 sheet 31 在 LCD FPC（J10）上同时引出**两条背�
 
 - **WHEN** 系统开机
 - **THEN** 背光默认亮度处于可见档位（非接近 0 的极暗值），可经 `/sys/class/backlight/sgm37604a/brightness` 调节
-

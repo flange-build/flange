@@ -8,14 +8,17 @@ SIG / BL30+BL301 加密 / BL31 加密 / BL33 加密 / DDR fw 嵌入），最后�
 推送 MaskROM 用）。
 
 字段分层：
-- SoC 层 ``bootloader.fip_tool`` / ``fip_family_inc`` —— 工具与 family include
+- SoC 层 ``bootloader.fip_tool`` —— FIP 工具名
 - Board 层 ``bootloader.fip_board_dir`` —— amlogic-boot-fip 仓库内 board 子目录名
 """
 
+import shlex
 import shutil
 from pathlib import Path
 
 from builder.base import ComponentBuilder
+from builder.config.canonical import bootloader_arch
+from builder.kconfig import defconfig_targets, render_kconfig
 from builder.paths import COMPONENTS_ROOT
 
 
@@ -36,12 +39,24 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         阶段从平台/SoC 层的 ``patches/bootloader/`` 复制到 u-boot 源码树
         ``configs/`` 下，由 u-boot Kbuild 的 ``%.config`` 规则合并。
         """
+        self.ARCH = bootloader_arch(config)
         self._stage_fragments(src_dir, config)
-        defconfig = config["bootloader"]["defconfig"]
-        if isinstance(defconfig, str):
-            defconfig = [defconfig]
-        for dc in defconfig:
+        targets = defconfig_targets(
+            config["bootloader"]["defconfig"], "bootloader.defconfig"
+        )
+        for dc in targets:
             self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
+        overrides = render_kconfig(
+            config["bootloader"].get("config"), "bootloader.config"
+        )
+        if overrides:
+            payload = "".join(line + "\n" for line in overrides)
+            self.docker.run(
+                ["sh", "-c", "printf '%s' " + shlex.quote(payload) + " >> .config"],
+                cwd=str(src_dir),
+            )
+            self.make(src_dir, ["olddefconfig"], arch=self.ARCH, cross=self.CROSS)
+            self._status(f"u-boot config override（{len(overrides)} 项）")
 
     def _stage_fragments(self, src_dir: Path, config: dict):
         """把 defconfig list 中以 ``.config`` 结尾的 fragment 复制到 u-boot
@@ -52,9 +67,9 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         缺失视为致命错误（fail-fast，避免 make 阶段以"target 不存在"形式
         报错而难定位）。
         """
-        defconfig = config["bootloader"]["defconfig"]
-        if isinstance(defconfig, str):
-            return
+        defconfig = defconfig_targets(
+            config["bootloader"]["defconfig"], "bootloader.defconfig"
+        )
         platform = config["platform"]
         soc = config["soc"]
         board = config["board"]
@@ -102,11 +117,10 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         self.make(src_dir, [], arch=self.ARCH, cross=self.CROSS, jobs=jobs,
                   label="编译 U-Boot...")
 
-        # 通过 ensure_extra 的 from_repo 路由，复用 SoC config 的命名仓库
-        # repos["amlogic-boot-fip"]，与 u-boot 共用同一份 .build/sources/repos/
-        # 缓存，不重复 clone。
+        # 通过 canonical source 引用复用 FIP 仓库 checkout。
         fip_src = self.source.ensure_extra(
-            "amlogic-boot-fip", {"from_repo": "amlogic-boot-fip"},
+            "amlogic-boot-fip",
+            {"source": {"name": "amlogic-boot-fip"}},
             config=config)
         bl_cfg = config["bootloader"]
         board_dir = bl_cfg.get("fip_board_dir")

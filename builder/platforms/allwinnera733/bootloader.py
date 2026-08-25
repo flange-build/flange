@@ -12,11 +12,9 @@
   - lib32stdc++6 + lib32z1                        — 运行 32-bit x86 Allwinner 工具
 """
 
-import shutil
 from pathlib import Path
 
 from builder.base import ComponentBuilder
-from builder.paths import BUILD_ROOT, PROJECT_ROOT
 
 
 class AllwinnerA733BootloaderBuilder(ComponentBuilder):
@@ -40,15 +38,13 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
         # Linaro ARM → src_dir/toolchains/
         self._ensure_toolchain(
             label="Linaro ARM",
-            tarball_name=bl_cfg["toolchain_tarball"],
-            tarball_url=bl_cfg["toolchain_url"],
+            descriptor=bl_cfg["toolchain"],
             dest_dir=src_dir / "toolchains",
         )
         # RISC-V → src_dir/arisc/ar100s/tools/（arisc Makefile 硬编码此路径）
         self._ensure_toolchain(
             label="RISC-V",
-            tarball_name=bl_cfg["riscv_tarball"],
-            tarball_url=bl_cfg["riscv_url"],
+            descriptor=bl_cfg["riscv_toolchain"],
             dest_dir=src_dir / "arisc" / "ar100s" / "tools",
         )
 
@@ -79,16 +75,12 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
         # 清理主仓库 untracked（保留 toolchains/、out/ 等构建产物）
         # 这里不跑 git clean -fd，因为会删除工具链和构建缓存
 
-    def _ensure_toolchain(self, *, label: str, tarball_name: str,
-                          tarball_url: str, dest_dir: Path):
-        """下载并解压指定工具链到 dest_dir。
-
-        通用化方案：传入 tarball 文件名、URL、目标目录，
-        按 {dest_dir}/{tarball_stem}/ 判断是否已解压。
-        """
-        cache_dir = self._toolchain_cache_dir()
-        cache_tarball = cache_dir / tarball_name
-        legacy_tarball = dest_dir / tarball_name
+    def _ensure_toolchain(self, *, label: str, descriptor: dict,
+                          dest_dir: Path):
+        """通过公共下载入口校验并解压工具链。"""
+        cache_tarball = self.source.ensure_download(
+            "toolchains", label, descriptor)
+        tarball_name = cache_tarball.name
         extracted = (
             dest_dir
             / tarball_name.replace(".tar.xz", "").replace(".tar.gz", "")
@@ -100,48 +92,11 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
             return  # 已解压
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        if self._valid_tarball(cache_tarball):
-            self._status(f"使用缓存的 {label} 工具链")
-        elif self._valid_tarball(legacy_tarball):
-            shutil.copy2(legacy_tarball, cache_tarball)
-            self._status(f"缓存 {label} 工具链")
-        else:
-            partial_tarball = cache_tarball.with_suffix(
-                cache_tarball.suffix + ".download"
-            )
-            self._status(f"下载 {label} 工具链...")
-            self.docker.run(
-                ["wget", "-q", "-O", self._docker_path(partial_tarball),
-                 tarball_url],
-                label=f"下载 {label} 工具链...",
-            )
-            self.docker.run(
-                ["mv", self._docker_path(partial_tarball),
-                 self._docker_path(cache_tarball)],
-            )
         self._status(f"解压 {label} 工具链...")
         self.docker.run(
-            ["tar", "xavf", self._docker_path(cache_tarball),
-             "-C", self._docker_path(dest_dir)],
+            ["tar", "xavf", str(cache_tarball), "-C", str(dest_dir)],
             label=f"解压 {label} 工具链...",
         )
-
-    def _toolchain_cache_dir(self) -> Path:
-        """返回 A733 bootloader 工具链缓存目录。"""
-        return BUILD_ROOT / "cache" / "toolchains" / "allwinnera733"
-
-    def _valid_tarball(self, path: Path) -> bool:
-        return path.is_file() and path.stat().st_size > 0
-
-    def _docker_path(self, path: Path) -> str:
-        path = Path(path)
-        if not path.is_absolute():
-            return str(path)
-        try:
-            return str(path.relative_to(PROJECT_ROOT))
-        except ValueError:
-            return str(path)
 
     def configure(self, src_dir: Path, config: dict):
         pass

@@ -85,6 +85,11 @@ def test_configure_invokes_panel_mipi_dbi_fragment(builder, tmp_path, monkeypatc
     monkeypatch.setattr(RockchipKernelBuilder, "_write_panthor_fragment", fake_panthor)
     monkeypatch.setattr(RockchipKernelBuilder, "make", fake_make)
 
-    builder.configure(src, {"kernel": {"defconfig": "rockchip_linux_defconfig"}})
+    builder.configure(src, {
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
+        "kernel": {"defconfig": ["rockchip_linux_defconfig"]},
+    })
 
     assert calls == [src], f"expected exactly one call to _write_panel_mipi_dbi_fragment with src={src}, got {calls}"

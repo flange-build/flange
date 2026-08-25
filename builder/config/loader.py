@@ -4,7 +4,7 @@
 不缓存完整的 resolved config。每次 build/flash/app 调用 `load_current_config()`
 都会从 state 重新调用 `resolve_config` 拿到最新配置——这样：
 
-  - 修改 board/<name>/config.py、platform/*/config.py、SoC config.py
+  - 修改 board/<name>/config.jsonnet、platform/*/config.jsonnet、SoC 配置
     后无需重新 lunch，下次 build 立即生效
   - 避免"config 源文件变了但 current_config 还是老的"导致的构建偏差
   - 保持 lunch 命令的轻量（只写 3 个字段，不做完整解析）

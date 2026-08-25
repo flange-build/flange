@@ -7,7 +7,7 @@ sources:
   - components/app/rk3506_amp_uart4_rtt_demo/.config
   - components/app/rk3506_amp_uart4_rtt_demo/applications/main.c
   - components/app/rk3506_amp_uart4_rtt_demo/applications/board_uart4.c
-  - components/platform/rockchip/rk3506b/config.py
+  - components/platform/rockchip/rk3506b/config.jsonnet
 related:
   - "[[atk-rk3506b]]"
   - "[[amp 构建器]]"

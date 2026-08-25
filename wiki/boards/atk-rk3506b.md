@@ -3,7 +3,7 @@ title: atk-rk3506b
 type: board
 status: stable
 sources:
-  - components/board/atk-rk3506b/config.py
+  - components/board/atk-rk3506b/config.jsonnet
   - components/board/atk-rk3506b/patches/bootloader/0001-add-alientek-rk3506-board.patch
   - components/board/atk-rk3506b/patches/bootloader/0002-fix-vendor-fit-bootdev.patch
   - components/board/atk-rk3506b/patches/kernel/0001-reserve-amp-firmware-memory.patch
@@ -13,7 +13,7 @@ sources:
   - components/board/atk-rk3506b/patches/kernel/0005-claim-pwm1-clocks-for-fluxion-amp.patch
   - components/board/atk-rk3506b/patches/kernel/0006-release-i2c1-for-fluxion-as5600.patch
   - components/board/atk-rk3506b/patches/rtl8733bu/0001-disable-removed-regulatory-flag.patch
-  - components/platform/rockchip/rk3506b/config.py
+  - components/platform/rockchip/rk3506b/config.jsonnet
   - builder/platforms/rockchip/amp.py
   - docs/boards/atk-rk3506b.md
   - components/app/cardputer_music_player/app.yaml

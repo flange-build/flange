@@ -64,19 +64,22 @@ def _config(*, fragment_dir: Path | None = None,
         "platform": "amlogic",
         "soc": "s905d3",
         "board": board,
-        "repos": {
+        "architecture": {
+            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
+        },
+        "sources": {
+            "u-boot": {"url": "https://github.com/u-boot/u-boot.git"},
             "amlogic-boot-fip": {
-                "repo": "https://github.com/LibreELEC/amlogic-boot-fip.git",
+                "url": "https://github.com/LibreELEC/amlogic-boot-fip.git",
                 "branch": "master",
             },
         },
         "bootloader": {
-            "from_repo": "u-boot",
+            "source": {"name": "u-boot"},
             "defconfig": defconfig
             if defconfig is not None
             else ["khadas-vim3l_defconfig", "flange_fastboot.config"],
             "fip_tool": "aml_encrypt_g12a",
-            "fip_family_inc": "g12a.inc",
             "fip_board_dir": "khadas-vim3l",
         },
     }
@@ -137,15 +140,35 @@ def test_configure_missing_fragment_raises(tmp_path, monkeypatch):
         builder.configure(src_dir, _config())
 
 
-def test_configure_string_defconfig_no_fragment_staging(tmp_path, monkeypatch):
-    """单字符串 defconfig 形态向后兼容，不触发 fragment staging 路径。"""
+def test_configure_single_defconfig_no_fragment_staging(tmp_path, monkeypatch):
+    """单元素 defconfig 数组不触发 fragment staging 路径。"""
     builder, docker, _, src_dir, _ = _make_builder(tmp_path)
     monkeypatch.chdir(tmp_path)
-    cfg = _config(defconfig="khadas-vim3l_defconfig")
+    cfg = _config(defconfig=["khadas-vim3l_defconfig"])
     builder.configure(src_dir, cfg)
     make_targets = [c["cmd"][1:] for c in docker.commands
                     if c["cmd"][:1] == ["make"]]
     assert make_targets == [["khadas-vim3l_defconfig"]]
+
+
+def test_configure_applies_canonical_kconfig_after_defconfig(tmp_path):
+    builder, docker, _, src_dir, _ = _make_builder(tmp_path)
+    cfg = _config(defconfig=["khadas-vim3l_defconfig"])
+    cfg["bootloader"]["config"] = {
+        "CONFIG_AMP": "y",
+        "CONFIG_UNUSED": "n",
+    }
+
+    builder.configure(src_dir, cfg)
+
+    assert [command["cmd"] for command in docker.commands] == [
+        ["make", "khadas-vim3l_defconfig"],
+        [
+            "sh", "-c",
+            "printf '%s' 'CONFIG_AMP=y\n# CONFIG_UNUSED is not set\n' >> .config",
+        ],
+        ["make", "olddefconfig"],
+    ]
 
 
 def test_compile_invokes_build_fip_then_aml_encrypt(tmp_path):
@@ -183,9 +206,11 @@ def test_compile_invokes_build_fip_then_aml_encrypt(tmp_path):
     assert bootusb[1] == "--bootusb"
     assert bootusb[5].endswith("u-boot.bin.usb")
 
-    # ensure_extra 通过 from_repo 路由复用命名仓库
+    # ensure_extra 通过 canonical source 引用复用命名仓库
     assert source.calls[0][0] == "amlogic-boot-fip"
-    assert source.calls[0][1] == {"from_repo": "amlogic-boot-fip"}
+    assert source.calls[0][1] == {
+        "source": {"name": "amlogic-boot-fip"},
+    }
 
 
 def test_compile_missing_fip_board_dir_raises(tmp_path):
