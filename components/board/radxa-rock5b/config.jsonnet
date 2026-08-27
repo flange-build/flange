@@ -81,11 +81,17 @@ local panel = product == 'meizu-e3-bringup';
       // of_match 命中，**不需要**这个 overlay。dtbo 仍编进 boot 分区作为
       // emergency rollback：万一 panthor 起不来需要紧急切回 mali_kbase，
       // 可手动改 /boot/extlinux/extlinux.conf 加 fdtoverlays 启用。
-      board: ['rk3588-rock-5b-mali-valhall-compat.dtbo'],
+      board: [
+        'rk3588-rock-5b-mali-valhall-compat.dtbo',
+        'rk3588-rock-5b-disable-bcm-bluetooth.dtbo',
+      ],
       // meizu-e3-panel 的 panel overlay 由 packages 机制注入 boot.overlays.package
       // （仅 meizu-e3-bringup product 启用包时注入）。在此声明为默认应用，开机即
       // 点亮屏（extlinux fdtoverlays）。default 裸机不挂屏，不带这条 overlay。
-      enabled: if panel then ['rk3588-rock-5b-meizu-e3-panel.dtbo'] else [],
+      // BSP DTS 错把不存在的 BCM4345C5 挂到 UART6，启动后会生成地址全零、
+      // 持续 timeout 的 hci0；实际 RTL8852BE Bluetooth 走 USB btusb。
+      enabled: ['rk3588-rock-5b-disable-bcm-bluetooth.dtbo'] +
+               (if panel then ['rk3588-rock-5b-meizu-e3-panel.dtbo'] else []),
     },
   },
   // RTL8852BE BT 部分固件：rkwifibt 仓库 firmware/realtek/RTL8852BE/

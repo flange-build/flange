@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * ROCK 5B 的 BSP DTS 在 UART6 下声明了不存在的 BCM4345C5 Bluetooth。
+ * 实际 RTL8852BE Bluetooth 走 USB btusb；禁用错误子节点，避免生成无效 hci0。
+ */
+
+/dts-v1/;
+/plugin/;
+
+&uart6 {
+	bluetooth {
+		status = "disabled";
+	};
+};

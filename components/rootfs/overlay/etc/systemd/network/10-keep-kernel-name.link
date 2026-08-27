@@ -1,0 +1,6 @@
+# 对所有网卡保留内核提供的接口名，避免按设备路径重命名。
+[Match]
+OriginalName=*
+
+[Link]
+NamePolicy=keep kernel
