@@ -10,7 +10,14 @@ StartLimitBurst=5
 StartLimitIntervalSec=30
 
 [Service]
-Type=forking
+# oneshot + RemainAfterExit：usbdevice 本身是"配置 gadget 并拉起 FunctionFS
+# daemon"的一次性动作，脚本跑完就退出，长驻的只有它 spawn 的守护循环。
+# 原先的 Type=forking 让 systemd 把那个守护循环误当作 main process 追踪 ——
+# 于是服务的"存活"依赖循环永不退出这一 bug。守护循环被正常回收后
+# （disconnect recovery 的 adb_stop），systemd 立刻判定服务已退出并执行
+# ExecStop，把刚建好的 gadget 又拆掉。
+Type=oneshot
+RemainAfterExit=yes
 Environment=TERM=xterm
 ExecStart=/usr/sbin/usbdevice start
 ExecReload=/usr/sbin/usbdevice update

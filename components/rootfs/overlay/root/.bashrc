@@ -5,8 +5,11 @@
 #
 # 适用场景：
 #   - ssh 登录普通用户后 sudo -s / sudo -i 切到的 root bash
-#   - 不适用 adb shell：adbd 以 argv[0]="sh" 启动 bash → POSIX 模式 →
-#     不读 ~/.bashrc。adb shell 的同等体验由 /etc/bash.bashrc 承担。
+#   - adb shell：ADB 36 standalone adbd + ADBD_SHELL=/bin/bash（见
+#     app/adbd 的 usbdevice.conf）以 argv[0]="-/bin/bash" 启动 login
+#     bash，经 /root/.profile 读到本文件。
+#     （历史：旧 vendor adbd 以 argv[0]="sh" 启动 → POSIX 模式不读
+#     ~/.bashrc，彼时由 /etc/bash.bashrc 承担 adb shell 体验。）
 
 # 非交互 shell 直接退出
 case $- in

@@ -255,16 +255,27 @@ usb_start_daemon()
 {
 	NAME=$(echo $1 | sed "s#^[^ ]*/\([^ ]*\).*#\1#")
 	TAG_FILE=/tmp/.usb_$NAME
+	LOOP_PID_FILE=/tmp/.usb_$NAME.loop
+
+	# 回收上一轮遗留的守护循环，保证每个 daemon 至多一个循环在跑。
+	#
+	# 旧实现有一对读写不对称的状态判断：spawn 守卫读 $USB_FUNCS_FILE 的
+	# "内容非空"（usb_get_started），而循环退出条件读它的"文件存在"
+	# （usb_is_enabled）。usb_prepare 的 disconnect recovery 只把该文件
+	# echo 清空、并不删除 —— 于是守卫失效（每次 recovery 后都重新 spawn），
+	# 旧循环却永不退出。usb_stop_daemon 的 rm TAG_FILE 也只能让旧循环空转，
+	# 下一次 touch TAG_FILE 会让全部历史循环同时复活。
+	#
+	# 结果是每次 disconnect 净泄漏一个永生循环，N 个循环并发
+	# start-stop-daemon 抢同一 FunctionFS ep0，制造新的 disconnect →
+	# 自加速雪崩。rock5b 实测：开机 11 分钟堆积 360+ 循环，USB 每 2 秒
+	# 断连一次（dwc3 "request was not queued to ep0out"），adbd 被反复
+	# kill，adb 完全不可用。
+	usb_reap_daemon_loop $NAME
 
 	# Enable spawn
 	touch $TAG_FILE
 
-	# Already started
-	DAEMON_STARTED="$(usb_get_started)"
-	if [ -n "$DAEMON_STARTED" ]; then
-		usb_msg "[DEBUG usb_start_daemon] usb_get_started=$DAEMON_STARTED, skipping daemon launch for $1"
-		return 0
-	fi
 	usb_msg "[DEBUG usb_start_daemon] launching daemon: $1"
 
 	# Start and spawn background daemon
@@ -272,22 +283,38 @@ usb_start_daemon()
 		exec 3<&-
 
 		cd /
-		while usb_is_enabled; do
-			# Don't spawn after stopped
-			[ ! -f $TAG_FILE ] ||
-				start-stop-daemon -Sqx $@ || true
+		# 循环活性只由本 daemon 自己的 TAG_FILE 决定（per-daemon 语义，
+		# 不再耦合全局 $USB_FUNCS_FILE），usb_stop_daemon 删除它即可让
+		# 循环在下一拍真正退出。
+		while [ -f $TAG_FILE ]; do
+			start-stop-daemon -Sqx $@ || true
 			sleep .5
 		done
 	}&
+	echo $! > $LOOP_PID_FILE
+}
+
+# 终止指定 daemon 的守护循环（若有）。删 TAG_FILE 让循环自然退出，
+# 再按记录的 PID 收尾，避免用 pkill 模式匹配误伤同名进程。
+usb_reap_daemon_loop()
+{
+	TAG_FILE=/tmp/.usb_$1
+	LOOP_PID_FILE=/tmp/.usb_$1.loop
+
+	rm -f $TAG_FILE
+	if [ -f $LOOP_PID_FILE ]; then
+		OLD_LOOP="$(cat $LOOP_PID_FILE 2>/dev/null || true)"
+		[ -z "$OLD_LOOP" ] || kill $OLD_LOOP 2>/dev/null || true
+		rm -f $LOOP_PID_FILE
+	fi
 }
 
 usb_stop_daemon()
 {
 	NAME=$(echo $1 | sed "s#^[^ ]*/\([^ ]*\).*#\1#")
-	TAG_FILE=/tmp/.usb_$NAME
 
 	# Stop and disable spawn
-	rm -f $TAG_FILE
+	usb_reap_daemon_loop $NAME
 	start-stop-daemon -Kqox $@
 }
 
