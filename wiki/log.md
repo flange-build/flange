@@ -6,6 +6,14 @@
 
 ---
 
+## [2026-08-27] sync | rock5b USB adb 不可用根因定位与 adbd 升级至 ADB 36.0.1
+
+`wiki/apps/adbd.md`：全面更新。二进制描述改为 ADB 36.0.1 standalone（arm64 上游 release / armhf 自编译，来源见 bin/README.md）；unit `Type=forking → oneshot`（forking 把守护循环误当 main process 的连带坑）；conf 新增 `ADB_TCP_PORT` / `ADBD_SHELL` 语义（login bash，与 ssh 体验一致）；「易踩坑」补 4 条（udc state 文件 stale、close(ep0) 连带 unbind gadget、板级 conf 整文件覆盖 App conf、macOS tar 的 AppleDouble 污染）；新增「2026-08-27 根因定位」整节——两层根因（守护循环泄漏雪崩为放大器 + 旧 adbd 1.0.28 对 macOS adb host 预防性 ClearFeature(HALT) 引发的 EPIPE 误判为 USB 断开而 close(ep0) 拆 gadget，Linux host 不发 Clear Halt 故从未暴露）、三个分离实验（ACM gadget 对照 / 停 adb server / 稳定期启动 server）、dwc3 ftrace × strace 对时取证、29 轮 rebind 不收敛反证、AOSP Android 10 官方修复（EPIPE→resubmit）对照、验证数据（85.6MB/s、冷启动零干预）与残留疑点（一次整机失联未复现）。
+
+`wiki/boards/radxa-rock5b.md`：TL;DR 补 USB adb 已落地；新增「USB adb」一节（验证结论 + 回链 [[adbd]]）；板私有 overlay 注明 conf 整文件覆盖语义；related 补 [[adbd]]。
+
+相关 commit：0c9b03a2（换 adbd + 泄漏修复 + unit 改造 + conf/.bashrc）、e13a6ec7（11 块板级 conf 补齐 ADB_TCP_PORT/ADBD_SHELL）。
+
 ## [2026-05-29] sync | radxa-dragon-q6a 魅族 E3 屏触摸实板通过（修首次 probe -ENXIO 根因 + 次生 gpio leak）
 
 `wiki/boards/radxa-dragon-q6a.md`：bring-up 表内触摸 sec_ts 行补充 IRQ 201 (msmgpio 81) 实测累计中断证据；「9 个坑」扩展为「10 个坑」，新增第 10 个 = sec_ts probe 时 `vcc_3v3_lcd` 未上电（首次 probe -ENXIO），含根因、双管齐下修法（dtso `regulator-always-on/boot-on` + sec_ts 三处 gpio_free）、a7a 无此问题的对照（Allwinner BSP 系统级 rail 近似 always-on）、follow-up 方向（让 `touchscreen@48` 显式声明 `vdd-supply` 并改驱动主动消费即可去 always-on）。updated → 2026-05-29。

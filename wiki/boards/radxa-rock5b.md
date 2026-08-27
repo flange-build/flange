@@ -17,12 +17,13 @@ related:
   - "[[硬件特性包]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-05-22
+  - "[[adbd]]"
+updated: 2026-08-27
 ---
 
 ## TL;DR
 
-Radxa ROCK 5B，RK3588 SoC（4×A76 + 4×A55），项目首块 RK3588 适配板。已落地：eMMC 启动 + UART2 串口 + GbE/SSH + GPU（mainline panthor）+ M.2 E-Key RTL8852BE WiFi6/BT + VPU 硬解（mpp / RGA / GStreamer-rockchip）。HDMI / NPU / NVMe 不在范围。
+Radxa ROCK 5B，RK3588 SoC（4×A76 + 4×A55），项目首块 RK3588 适配板。已落地：eMMC 启动 + UART2 串口 + GbE/SSH + GPU（mainline panthor）+ M.2 E-Key RTL8852BE WiFi6/BT + VPU 硬解（mpp / RGA / GStreamer-rockchip）+ USB adb（含 macOS 主机，2026-08-27 验证）。HDMI / NPU / NVMe 不在范围。
 
 ## product / variant
 
@@ -72,7 +73,11 @@ M.2 E-Key 槽位（`pcie2x1l0`，dts 默认 okay，PCIe ID `10ec:b852`）走 RTL
 
 实机已点亮。易踩坑：U-Boot 2017.09 overlay 根节点须包 `fragment`；默认亮度别用极低值（led 4 路+40mA+default 2048）；**sgm37604a 驱动 probe 时机太早（LCD_3V3 刚上电）写 MODE(0x11)/CURRENT(0x1B) 寄存器不生效，芯片停在 0x11=0x65 错误调光模式致背光极暗——驱动改为在 `update_status`（panel 使能后）重写 MODE/LED/CURRENT 才稳**。详见 `openspec/changes/archive/2026-05-21-add-meizu-e3-panel-package/`。
 
+## USB adb（fc000000.usb OTG 口）
+
+2026-08-27 全链路验证通过（macOS 主机）：冷启动零干预 `adb devices` 即现 → root shell；push 85.6 MB/s（USB 2.0 近线速）；TCP 5555 并行；`adb shell` 为 login bash（与 ssh 体验一致）。此前接 macOS 主机 `adb devices` 永远为空——两层根因（usbdevice 守护循环泄漏雪崩 + 旧 vendor adbd 对 macOS adb host ClearFeature(HALT) 引发的 EPIPE 误判为断开）与完整定位过程见 [[adbd]]（commit 0c9b03a2、e13a6ec7）。本板是该问题的定位与验证载体。
+
 ## 板私有 overlay
 
 - `dtso/rk3588-rock-5b-mali-valhall-compat.dtso` — emergency rollback：把 GPU compatible 改回 `arm,mali-valhall` 让 BSP mali_kbase 能绑（panthor 起不来时手改 extlinux 启用）
-- `overlay/etc/hostname`、`overlay/etc/usbdevice.conf`（USB gadget group=rockchip，与 zero3w 同模板）
+- `overlay/etc/hostname`、`overlay/etc/usbdevice.conf`（USB gadget group=rockchip，与 zero3w 同模板；含 `ADB_TCP_PORT`/`ADBD_SHELL` export——板级 conf 整文件覆盖 App 层 conf，App 新增键须在此跟进，详见 [[adbd]] 易踩坑）
