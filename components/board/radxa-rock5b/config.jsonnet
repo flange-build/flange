@@ -20,9 +20,10 @@ local panel = product == 'meizu-e3-bringup';
   // meizu-e3-panel 硬件特性包与默认 panel overlay 由同一个 Jsonnet product
   // 条件控制（见下方 packages / boot.overlays.enabled）。
   // 其余配置（kernel、bootloader、firmware）与 default 共用。
-  products: ['default', 'meizu-e3-bringup'],
+  products: ['default', 'desktop', 'meizu-e3-bringup'],
   variants: ['debug', 'release'],
-  packages: if panel then [{
+  packages: (if product == 'desktop' then ['ubuntu-desktop'] else []) +
+            (if panel then [{
     // 账号体系沿用 components/rootfs/config.jsonnet base 层默认：root 完全锁定
     // (root_password=null + disable_root_login=true)，默认用户 flange/flange
     // 入 sudo group。如需开放 root 或改用户在此处加 rootfs 块覆盖。
@@ -43,7 +44,7 @@ local panel = product == 'meizu-e3-bringup';
     // i2c6，与 rock-5c 同），**不**走 rock5b 板载 MP3302/pwm-backlight。故 opt-in
     // 同时选 sec_ts 触摸 + sgm37604a 背光两个 OOT 驱动。
     name: 'meizu-e3-panel', drivers: ['sec_ts', 'sgm37604a'],
-  }] else [],
+  }] else []),
   sources+: {
     rkwifibt: {
       // ---- M.2 E-Key 槽位 RTL8852BE WiFi6+BT5.2 combo 卡支持 ----

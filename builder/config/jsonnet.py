@@ -242,6 +242,14 @@ class JsonnetConfigLoader:
         )
         self._audit_soc_layer(platform_result.config, soc_result.config)
         result = self._evaluate_layers(imports, product=product, variant=variant)
+        selected_packages = list(result.config.get("packages") or [])
+        package_configs = self._package_config_paths(selected_packages)
+        if package_configs:
+            result = self._evaluate_layers(
+                [*imports, *package_configs], product=product, variant=variant
+            )
+            # package 选择以 board 首次求值结果为准，不递归加载或注入依赖包。
+            result.config["packages"] = selected_packages
         resolved = ResolvedConfig(result.config)
         _expand_package_sets(resolved)
         from builder.packages import expand_hardware_packages
@@ -285,6 +293,21 @@ class JsonnetConfigLoader:
             snippet,
             ext_vars={"product": product, "variant": variant},
         )
+
+    def _package_config_paths(self, entries: list[Any]) -> list[Path]:
+        """返回 board 直接启用且携带 Jsonnet 配置的 package。"""
+        paths: list[Path] = []
+        for entry in entries:
+            name = entry if isinstance(entry, str) else (
+                entry.get("name") if isinstance(entry, dict) else None
+            )
+            if (not isinstance(name, str) or not name
+                    or Path(name).name != name):
+                continue
+            path = self.config_root / "packages" / name / "config.jsonnet"
+            if path.is_file():
+                paths.append(path)
+        return paths
 
     def _audit_soc_layer(self, before: dict, after: dict) -> None:
         changed = self._changed_paths(before, after)

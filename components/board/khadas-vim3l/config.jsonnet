@@ -10,12 +10,15 @@
 //   ``firmware-brcm80211`` 切片包（monolithic ``linux-firmware`` 约 500MB
 //   不适合 embedded 默认拉）。改为完整三件套都从 khadas/fenix 仓库的板级
 //   ``_ap6398s`` 调校版拉：WiFi 固件 + NVRAM + BT patchram。
+local product = std.extVar('product');
+
 {
   board: 'khadas-vim3l',
   soc: 's905d3',
   platform: 'amlogic',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     'khadas-fenix-ap6398s': {
       // AP6398S 板级三件套：完整 WiFi + NVRAM + BT patchram 都从 Khadas

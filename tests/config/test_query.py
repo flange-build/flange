@@ -28,12 +28,20 @@ class TestGetValidTargets:
     def test_expected_count(self, boards):
         """当前 18 个 board 的全部 product/variant 组合应完整枚举。"""
         targets = get_valid_targets(boards=boards)
-        assert len(targets) == 56
+        assert len(targets) == 90
 
     def test_contains_radxa_targets(self, boards):
         targets = get_valid_targets(boards=boards)
         assert "radxa-zero3w-default-debug" in targets
         assert "radxa-zero3w-default-release" in targets
+        assert "radxa-zero3w-desktop-debug" in targets
+        assert "radxa-zero3w-desktop-release" in targets
+
+    def test_small_spinand_board_excludes_desktop(self, boards):
+        targets = get_valid_targets(boards=boards)
+        assert not any(
+            target.startswith("atk-rk3506b-desktop-") for target in targets
+        )
 
     def test_contains_neons_targets(self, boards):
         targets = get_valid_targets(boards=boards)

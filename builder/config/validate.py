@@ -72,8 +72,9 @@ _CANONICAL_COMPONENT_FIELDS = {
     "rootfs": {
         "custom_packages", "default_user", "disable_root_login", "emulator",
         "extra_apt_sources", "extra_debs", "extra_firmware", "groups",
-        "image_format", "package_set", "package_sets", "packages",
-        "panel_firmware", "root_password", "sha256", "ubi", "url", "users",
+        "gnome_remote_desktop_login", "image_format", "package_set",
+        "package_sets", "packages", "panel_firmware", "root_password",
+        "sha256", "ubi", "url", "users",
     },
 }
 

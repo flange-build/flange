@@ -13,12 +13,15 @@
 //   24.04 没有 Debian 风格的切片 firmware 包（monolithic linux-firmware 约
 //   500MB 不适合 embedded），固件改从 radxa-pkg/radxa-firmware 拉精准三件套
 //   （详见 rootfs.extra_firmware）。
+local product = std.extVar('product');
+
 {
   board: 'radxa-zero',
   soc: 's905y2',
   platform: 'amlogic',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     'radxa-zero-aw-cm256sm': {
       // AW-CM256SM（CYW43455）板级三件套 + BT patchram，全部从权威

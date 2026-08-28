@@ -11,12 +11,15 @@
 // 默认按 SDIO 模式编译（rkwifi/Kconfig ``choice default BCMDHD_SDIO``），
 // 不会注册 PCI driver，因此 OOT bcmdhd_pcie.ko 与 in-tree bcmdhd.ko 各占
 // 不同总线，无冲突，无须 blacklist 或 patch 关闭 in-tree。
+local product = std.extVar('product');
+
 {
   board: 'rp-pro-rk3568-h',
   soc: 'rk3568',
   platform: 'rockchip',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     rkwifibt: {
       // 注：CONFIG_DRM_GUD=y 已上移到 rk3568 SoC 层（全平台默认启用 GUD），

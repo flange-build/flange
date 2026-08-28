@@ -1,0 +1,14 @@
+[Unit]
+Description=首次启动时配置 GNOME Remote Login 与 Chromium
+Wants=display-manager.service network-online.target snapd.seeded.service
+After=display-manager.service network-online.target snapd.seeded.service
+ConditionPathExists=|/var/lib/flange/gnome-remote-desktop-login.json
+ConditionPathExists=|!/snap/bin/chromium
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/flange-ubuntu-desktop-config/flange-configure-ubuntu-desktop
+TimeoutStartSec=15min
+
+[Install]
+WantedBy=multi-user.target

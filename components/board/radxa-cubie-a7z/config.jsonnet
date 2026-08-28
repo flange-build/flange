@@ -10,13 +10,15 @@ local firmwareFiles = [
   'fmacfw_8800d80_u02_ipc.bin', 'fmacfw_8800d80_h_u02.bin',
   'lmacfw_rf_8800d80_u02.bin',
 ];
+local product = std.extVar('product');
 
 {
   board: 'radxa-cubie-a7z',
   soc: 'a733',
   platform: 'allwinnera733',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     aic8800: {
       // cubie-a7z 板级独有

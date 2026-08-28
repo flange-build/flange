@@ -33,9 +33,10 @@ local product = std.extVar('product');
   soc: 'qcs6490',
   // ---- 多 product 维度（屏幕模组）----
   // 详见文件头说明；variants 在 board 层显式声明并与 platform 允许值一致。
-  products: ['default', 'meizu-e3-bringup'],
+  products: ['default', 'desktop', 'meizu-e3-bringup'],
   variants: ['debug', 'release'],
-  packages: if product == 'meizu-e3-bringup' then [{
+  packages: (if product == 'desktop' then ['ubuntu-desktop'] else []) +
+            (if product == 'meizu-e3-bringup' then [{
     name: 'meizu-e3-panel',
     // ---- 魅族 E3 39pin MIPI-DSI 屏（显示 + 触摸 + 背光）----
     // 仅 meizu-e3-bringup product 启用 meizu-e3-panel 硬件特性包；default 裸机
@@ -45,7 +46,7 @@ local product = std.extVar('product');
     // - panel_meizu_e3：本变更新增，drm_panel 风格 OOT 驱屏，供 mainline
     // drm/msm 消费（QCLINUX BSP 6.6.90 无通用 DSI panel driver）
     drivers: ['sec_ts', 'sgm37604a', 'panel_meizu_e3'],
-  }] else [],
+  }] else []),
   sources+: {
     // AIC8800 驱动与固件共用同一固定 source：kernel.oot_modules 取 src/，
     // rootfs.extra_firmware 取 fw/，内容哈希按同一 commit 跟踪。

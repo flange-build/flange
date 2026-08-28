@@ -206,8 +206,12 @@ canonical JSON（规范化 JSON）交给 Python builder。
   安装、升级、卸载语义时，MAY 通过 `maintainer_scripts` 将 App 内的
   `preinst` / `postinst` / `prerm` / `postrm` / `triggers` 映射进 deb
   `control.tar.gz`，脚本路径 MUST 为 App 目录内的相对路径。
-- 固定组合顺序：rootfs → platform → SoC → board，由 Jsonnet 对象继承、
-  `+:` 和数组表达式完成
+- 固定基础组合顺序：rootfs → platform → SoC → board；随后按 board 直接启用的
+  `packages` 顺序追加包内可选 `config.jsonnet`（单层、不递归）。组合统一由
+  Jsonnet 对象继承、`+:` 和数组表达式完成
+- `rootfs.gnome_remote_desktop_login=true` 时，构建 MUST 使用
+  `default_user` 及其非空 `users.<name>.password` 生成 root-only 首启凭据；
+  目标机配置 GNOME Remote Login 成功后 MUST 删除该暂存文件
 - SoC 层只声明芯片级事实（架构、工具链、固件协议与硬件能力）；具体显示、存储路由、
   AMP enable 和 rootfs package policy 属于 board/product，MUST NOT 固化在 SoC 层
 - 条件配置：使用 Jsonnet `if product == ...` / `if variant == ...`，不得把
@@ -332,7 +336,7 @@ flange/
 │   │       ├── overlay/    #     文件系统覆盖层
 │   │       └── patches/    #     板级补丁
 │   ├── app/            #   App 定义
-│   ├── packages/       #   自定义软件包
+│   ├── packages/       #   component package（package.py，可选 config.jsonnet）
 │   └── rootfs/         #   rootfs 基线配置与 overlay
 │
 ├── docker/             # Docker 构建环境定义

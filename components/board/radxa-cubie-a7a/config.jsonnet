@@ -27,16 +27,17 @@ local firmwareFiles = [
   // OOT 驱动 sec_ts/sgm37604a 零改动，仅 panel overlay 按 sunxi 显示栈
   // 重写。包 opt-in 与默认 panel overlay 由同一个 Jsonnet product 条件控制
   // （见下方 packages / boot.overlays.enabled）。
-  products: ['default', 'meizu-e3-bringup'],
+  products: ['default', 'desktop', 'meizu-e3-bringup'],
   variants: ['debug', 'release'],
-  packages: if product == 'meizu-e3-bringup' then [{
+  packages: (if product == 'desktop' then ['ubuntu-desktop'] else []) +
+            (if product == 'meizu-e3-bringup' then [{
     // ---- 魅族 E3 39pin MIPI-DSI 屏（显示 + 触摸 + 背光）----
     // 仅 meizu-e3-bringup product 启用 meizu-e3-panel 硬件特性包；default 裸机
     // 不挂屏、不带这些 OOT 驱动。屏自带 SGM37604A I2C 背光芯片（@0x36 挂 twi2，
     // 与载板无关），故 opt-in 同时选 sec_ts 触摸 + sgm37604a 背光两个 OOT 驱动，
     // 与 rock5b 一致。
     name: 'meizu-e3-panel', drivers: ['sec_ts', 'sgm37604a'],
-  }] else [],
+  }] else []),
   sources+: {
     aic8800: {
       url: 'https://github.com/radxa-pkg/aic8800.git',

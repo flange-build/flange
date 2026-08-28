@@ -8,9 +8,11 @@
   - panel_firmware：把板级 panel init 文本源编译为 panel.bin 写入 rootfs
   - configure_users：创建 group / 普通用户 / sudo 配置 / root 密码 /
                      disable_root_login（含 chroot 内 chpasswd / passwd -l /
-                     /etc/sudoers.d 写入 / sshd_config drop-in 写入）
+                     /etc/sudoers.d 写入 / sshd_config drop-in 写入），并为
+                     desktop 生成 GNOME Remote Login 首启凭据
 """
 
+import json
 import math
 import shutil
 from pathlib import Path
@@ -210,6 +212,19 @@ class RootfsBuilder(ComponentBuilder):
                 "镜像将无任何普通用户可登录、串口/SSH 全失联（adb 仍可达"
                 "但不构成可登录通道），请至少声明一个 user 后再启用。")
 
+        remote_login = rootfs_cfg.get("gnome_remote_desktop_login", False)
+        if not isinstance(remote_login, bool):
+            raise ValueError("rootfs.gnome_remote_desktop_login 必须是布尔值")
+        if remote_login:
+            if default_user is None:
+                raise ValueError(
+                    "启用 GNOME Remote Login 时 rootfs.default_user 不能为空")
+            password = (users.get(default_user) or {}).get("password")
+            if not isinstance(password, str) or not password:
+                raise ValueError(
+                    "启用 GNOME Remote Login 时 rootfs.users."
+                    f"{default_user}.password 必须是非空字符串")
+
     def _configure_users(self, rootfs_dir: Path, config: dict):
         """创建 group / 用户 / 设密码 / sudo / 锁 root / sshd drop-in。
 
@@ -291,6 +306,32 @@ class RootfsBuilder(ComponentBuilder):
                 # visudo -cf 在 chroot 内对 drop-in 单文件做语法校验；语法错时
                 # 整个 sudoers.d 被 sudo 拒绝读取，提权失效。
                 chroot.run(["visudo", "-cf", f"/etc/sudoers.d/90-{name}"])
+
+        self._write_gnome_remote_desktop_credentials(rootfs_dir, rootfs_cfg)
+
+    def _write_gnome_remote_desktop_credentials(
+        self, rootfs_dir: Path, rootfs_cfg: dict
+    ) -> None:
+        """写入 root-only 首启凭据，由 desktop App 配置系统级 RDP。"""
+        if not rootfs_cfg.get("gnome_remote_desktop_login"):
+            return
+
+        username = rootfs_cfg["default_user"]
+        password = rootfs_cfg["users"][username]["password"]
+        path = (
+            rootfs_dir / "var/lib/flange"
+            / "gnome-remote-desktop-login.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"username": username, "password": password},
+                ensure_ascii=False,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o600)
+        self.docker.run_privileged(["chown", "root:root", str(path)])
 
     def _merge_user_groups(self, top_groups: list, spec: dict) -> list:
         """合并 user 实际入组集合：

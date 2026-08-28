@@ -1,0 +1,35 @@
+app:
+  name: flange-ubuntu-desktop-config
+  version: 1.0.0
+  description: Ubuntu Desktop 简体中文、Remote Login 与 Chromium 配置
+  type: service
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+install:
+  conf/locale: /etc/default/locale
+
+systemd:
+  unit: systemd/flange-configure-ubuntu-desktop.service
+  auto_start: true
+
+depends:
+  - ubuntu-desktop
+  - glmark2-wayland
+  - language-pack-zh-hans
+  - language-pack-gnome-zh-hans
+  - fonts-noto-cjk
+  - gnome-remote-desktop
+  - chromium-browser
+  - snapd
+
+conffiles:
+  - /etc/default/locale
+
+data_dirs: []

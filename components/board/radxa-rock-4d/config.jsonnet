@@ -32,13 +32,15 @@ local firmwareFiles = [
   'fmacfw_8800d80_u02_ipc.bin', 'fmacfw_8800d80_h_u02.bin',
   'lmacfw_rf_8800d80_u02.bin',
 ];
+local product = std.extVar('product');
 
 {
   board: 'radxa-rock-4d',
   soc: 'rk3576',
   platform: 'rockchip',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   // 刷写目标存储 = UFS（Rockchip 工具链里叫 "SATA"）。flash 在 DB 后用
   // `upgrade_tool SSD <No>` 切到它，否则 loader 默认写 SPI NOR（本板从 SPI
   // 启动，默认存储就是 SPI）。eMMC/SD 板不设此键，沿用默认。

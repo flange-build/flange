@@ -21,7 +21,7 @@ def configs():
     boards = discover_boards()
     targets = get_valid_targets(boards)
     assert len(boards) == 18
-    assert len(targets) == 56
+    assert len(targets) == 90
     return {
         target: resolve_config(**{
             "board_name": parsed["board"],

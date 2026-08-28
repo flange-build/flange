@@ -34,6 +34,7 @@ local firmwareFiles = [
   'fmacfw_8800d80_u02_ipc.bin', 'fmacfw_8800d80_h_u02.bin',
   'lmacfw_rf_8800d80_u02.bin',
 ];
+local product = std.extVar('product');
 
 {
   // OOT driver 源根（{aic8800_src}/...）：仓库内 USB driver 子树根，
@@ -41,8 +42,9 @@ local firmwareFiles = [
   board: 'radxa-rock5c-lite',
   soc: 'rk3582',
   platform: 'rockchip',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     aic8800: {
       url: 'https://github.com/radxa-pkg/aic8800.git',

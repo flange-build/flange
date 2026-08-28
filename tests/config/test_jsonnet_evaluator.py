@@ -181,6 +181,41 @@ def test_layer_loader_composes_in_fixed_order_and_separates_dimensions(
     assert config.jsonnet_hash
 
 
+def test_layer_loader_appends_selected_package_config_once(
+    tmp_path, monkeypatch
+):
+    _layered_config_tree(tmp_path)
+    board_path = tmp_path / "components/board/demo-board/config.jsonnet"
+    board_path.write_text(
+        board_path.read_text().replace(
+            "products: ['same', 'other'],",
+            "products: ['same', 'other'], packages: ['desktop'],",
+        )
+    )
+    package_dir = tmp_path / "components/packages/desktop"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.py").write_text(
+        "PACKAGE = {'name': 'desktop', 'components': []}\n"
+    )
+    (package_dir / "config.jsonnet").write_text(
+        "// 测试 package 配置：验证后置 overlay 与非递归选择。\n"
+        "{ rootfs+: { packages+: ['desktop'] }, packages+: ['nested'] }\n"
+    )
+    monkeypatch.setattr(
+        "builder.config.validate._run_platform_validation", lambda *_: None
+    )
+
+    config = JsonnetConfigLoader(tmp_path).evaluate_board(
+        "demo-board", "same", "release"
+    )
+
+    assert config["rootfs"]["packages"] == [
+        "base", "platform", "product", "desktop",
+    ]
+    assert config["packages"] == ["desktop"]
+    assert package_dir / "config.jsonnet" in config.jsonnet_dependencies
+
+
 def test_layer_loader_rejects_identity_mismatch(tmp_path):
     _layered_config_tree(tmp_path)
     board_path = tmp_path / "components" / "board" / "demo-board" / "config.jsonnet"

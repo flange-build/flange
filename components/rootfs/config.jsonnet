@@ -35,8 +35,11 @@
 //                                   /etc/sudoers.d/90-<name>，0440 root:root，
 //                                   单行 ``<name> ALL=(ALL:ALL) NOPASSWD:ALL``
 //   default_user (string | null)
-//       标识"那个"默认用户的语义指针，必须是 users 中存在的键。当前仅作元
-//       数据；不联动 autologin / getty 等。
+//       标识"那个"默认用户的语义指针，必须是 users 中存在的键。desktop
+//       package 可用它复用账号配置启用 GNOME Remote Login。
+//   gnome_remote_desktop_login (boolean, 默认 false)
+//       true 时将 default_user 及其 password 交给 desktop App，在首次启动
+//       配置 GNOME Remote Desktop 系统级 RDP；成功后删除暂存明文凭据。
 //
 // — Group 集合 —
 //   groups (array[string])
@@ -77,6 +80,7 @@ local variant = std.extVar('variant');
       },
     },
     default_user: 'flange',
+    gnome_remote_desktop_login: false,
     groups: [
       // — Group 集合（嵌入式开发板向）—
       // 框架预创 + 默认入组；新增/修改请同步 wiki/components/rootfs-构建器.md

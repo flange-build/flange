@@ -24,8 +24,9 @@ local amp = product == 'amp' || product == 'amp-rtt';
   board: 'orangepi-cm4',
   soc: 'rk3566',
   platform: 'rockchip',
-  products: ['default', 'amp', 'amp-rtt'],
+  products: ['default', 'desktop', 'amp', 'amp-rtt'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     'radxa-firmware': {
       // 账号体系沿用 components/rootfs/config.jsonnet base 层默认。

@@ -32,14 +32,17 @@
 // 其余暂不纳入验收的外设（HDMI/MIPI 屏/摄像头/音频/NPU/VPU）均不在 board
 // 层显式配置，留待后续独立变更。不携带板级 dtso / overlays.board。
 // 不覆盖 SoC 层 GPU/bootloader 字段（沿用 rk3576 generic）。
+local product = std.extVar('product');
+
 {
   board: 'armsom-cm5-io',
   soc: 'rk3576',
   platform: 'rockchip',
   // variants 显式声明为与 platform 允许值一致的 ["debug", "release"]；单 product default。
   // 笛卡尔积：armsom-cm5-io-default-debug / -release。
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     rkwifibt: {
       // ---- BW3752-50B1 (BCM43752 / AP6275S) WiFi6+BT5.3 走 rkwifibt OOT ----

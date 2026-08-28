@@ -1,11 +1,14 @@
 // Neons Core3566 NanoB 板级配置：声明设备树、产品变体和板载硬件策略。
 // Neons Core3566 Nano B (RK3566) 板级配置
+local product = std.extVar('product');
+
 {
   board: 'neons-core3566-nanob',
   soc: 'rk3566',
   platform: 'rockchip',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     'rockchip-kernel': {
       url: 'ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git',

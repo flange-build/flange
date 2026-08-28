@@ -21,14 +21,17 @@
 // ``/lib/firmware/brcm/<file>`` 查 AP6256 固件，与 ``extra_firmware`` 部署路径
 // 对齐。**不**移植 cm4 0001（dtsi bootargs，dts 路径不通用）与 0003（NPU disable，
 // cm5-tablet 上 NPU 状态未验，apply 阶段 dmesg 判断后视情起独立 change）。
+local product = std.extVar('product');
+
 {
   board: 'orangepi-cm5-tablet',
   soc: 'rk3588s',
   // 不声明 oot_sources / oot_modules：AP6256 走 SoC 层 kernel.defconfig
   // fragment 链启用的 in-tree Rockchip bcmdhd，与 cm4 同路径。
   platform: 'rockchip',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     'radxa-firmware': {
       // 账号体系沿用 components/rootfs/config.jsonnet base 层默认：root 完全锁定，默认

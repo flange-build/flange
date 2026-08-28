@@ -2,7 +2,7 @@
 // TSpi RK3566 板级配置
 local product = std.extVar('product');
 local common = import 'config/rockchip.libsonnet';
-local amp = product != 'default';
+local amp = product == 'amp' || product == 'amp-rtt' || product == 'foc';
 
 {
   board: 'tspi-rk3566',
@@ -24,8 +24,9 @@ local amp = product != 'default';
   // 架构朝 FOC 走），并把电机引脚整组（i2c2/pwm12-14/EN/FLIP）经专用 overlay
   // 从 Linux 摘给 RT-Thread 独占。其余 AMP 基建（U-Boot loader、amp dts、
   // rpmsg、amp 分区、scons 构建）全复用 amp-rtt。
-  products: ['default', 'amp', 'amp-rtt', 'foc'],
+  products: ['default', 'desktop', 'amp', 'amp-rtt', 'foc'],
   variants: ['debug', 'release'],
+  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
     'radxa-firmware': {
       // 账号体系沿用 components/rootfs/config.jsonnet base 层默认：

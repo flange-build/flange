@@ -1,12 +1,14 @@
 // Radxa Dragon Q8B 板级配置：声明设备树、产品变体和板载硬件策略。
 // Radxa Dragon Q8B（Qualcomm SC8280XP）板级配置。
+local product = std.extVar('product');
+
 {
   board: 'radxa-dragon-q8b',
   soc: 'sc8280xp',
   platform: 'qualcommsc8280xp',
-  products: ['default'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
-  packages: [
+  packages: (if product == 'desktop' then ['ubuntu-desktop'] else []) + [
     'firmware-qcom-audioreach',
     'radxa-firmware-sc8280xp',
     'radxa-q8b-fastrpc',

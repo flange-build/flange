@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""首次启动时配置系统级 GNOME Remote Login 与 Chromium。"""
+
+import json
+import subprocess
+from pathlib import Path
+
+
+CREDENTIALS_PATH = Path(
+    "/var/lib/flange/gnome-remote-desktop-login.json"
+)
+CHROMIUM_PATH = Path("/snap/bin/chromium")
+
+
+def _run(*args: str) -> None:
+    subprocess.run(args, check=True)
+
+
+def _configure_remote_login() -> None:
+    if not CREDENTIALS_PATH.exists():
+        return
+
+    credentials = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
+    command = (
+        "/usr/sbin/runuser", "-u", "gnome-remote-desktop", "--",
+        "/usr/bin/env", "HOME=/var/lib/gnome-remote-desktop",
+        "XDG_DATA_HOME=/var/lib/gnome-remote-desktop/.local/share",
+        "/usr/bin/grdctl", "rdp",
+    )
+    _run(
+        *command, "set-credentials",
+        credentials["username"], credentials["password"],
+    )
+    _run(*command, "enable")
+    _run(
+        "/usr/bin/systemctl", "enable", "gnome-remote-desktop.service",
+    )
+    _run(
+        "/usr/bin/systemctl", "restart", "gnome-remote-desktop.service",
+    )
+    CREDENTIALS_PATH.unlink()
+
+
+def main() -> None:
+    _configure_remote_login()
+    if not CHROMIUM_PATH.exists():
+        _run("/usr/bin/snap", "install", "chromium")
+
+
+if __name__ == "__main__":
+    main()
