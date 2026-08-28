@@ -19,6 +19,7 @@ StartLimitIntervalSec=30
 Type=oneshot
 RemainAfterExit=yes
 Environment=TERM=xterm
+Environment=TMPDIR=/tmp
 ExecStart=/usr/sbin/usbdevice start
 ExecReload=/usr/sbin/usbdevice update
 ExecStop=/usr/sbin/usbdevice stop

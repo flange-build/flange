@@ -7,10 +7,12 @@ SERVICE = Path("components/app/adbd/systemd/usbdevice.service")
 SCRIPT = Path("components/app/adbd/scripts/usbdevice")
 
 
-def test_adbd_service_exports_term_xterm():
-    """adbd 服务必须导出 TERM=xterm，保证 adb shell 具备终端类型。"""
+def test_adbd_service_exports_runtime_environment():
+    """adbd 服务必须导出 shell 所需的运行环境。"""
 
-    assert "Environment=TERM=xterm" in SERVICE.read_text().splitlines()
+    lines = SERVICE.read_text().splitlines()
+    assert "Environment=TERM=xterm" in lines
+    assert "Environment=TMPDIR=/tmp" in lines
 
 
 def test_adbd_service_waits_for_modules_and_configfs():
