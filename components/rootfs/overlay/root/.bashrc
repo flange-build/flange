@@ -17,6 +17,9 @@ case $- in
       *) return;;
 esac
 
+# adbd 会将 shell 的 TMPDIR 重置为 Android 路径，进入交互 shell 后改回 Linux 通用目录。
+export TMPDIR=/tmp
+
 # history 行为
 HISTCONTROL=ignoreboth
 shopt -s histappend

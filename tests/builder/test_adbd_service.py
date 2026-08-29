@@ -5,6 +5,7 @@ from pathlib import Path
 
 SERVICE = Path("components/app/adbd/systemd/usbdevice.service")
 SCRIPT = Path("components/app/adbd/scripts/usbdevice")
+ROOT_BASHRC = Path("components/rootfs/overlay/root/.bashrc")
 
 
 def test_adbd_service_exports_runtime_environment():
@@ -12,8 +13,13 @@ def test_adbd_service_exports_runtime_environment():
 
     lines = SERVICE.read_text().splitlines()
     assert "Environment=TERM=xterm" in lines
-    assert "Environment=TMPDIR=/tmp" in lines
     assert "Environment=XDG_RUNTIME_DIR=/run/user/1000" in lines
+
+
+def test_adbd_shell_uses_linux_tmpdir():
+    """adbd 交互 shell 必须覆盖其内建的 Android 临时目录。"""
+
+    assert "export TMPDIR=/tmp" in ROOT_BASHRC.read_text().splitlines()
 
 
 def test_adbd_service_waits_for_modules_and_configfs():
