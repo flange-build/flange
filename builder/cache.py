@@ -88,7 +88,8 @@ class BuildCache:
       - rkbin firmware git HEAD（bootloader）
       - App 源码目录递归哈希（app）
       - rootfs base 阶段哈希 + overlay + 账号子树（root_password /
-        disable_root_login / users / default_user / groups）等（rootfs）
+        disable_root_login / users / default_user / default_session /
+        groups）等（rootfs）
     """
 
     def __init__(
@@ -534,14 +535,16 @@ class BuildCache:
         custom_packages = sorted(rootfs_cfg.get("custom_packages", []))
         h.update(json.dumps(custom_packages).encode())
         # 账号子树：root_password / disable_root_login / users / default_user
-        # / groups。任一改动须触发 rootfs 重建（旧实现仅 hash root_password，
-        # 新增用户或改 sudo 配置不会失效缓存，会产出陈旧镜像）。
+        # / default_session / groups。任一改动须触发 rootfs 重建（旧实现仅
+        # hash root_password，新增用户或改 sudo 配置不会失效缓存，会产出
+        # 陈旧镜像）。
         # json.dumps(sort_keys=True) 保证 dict 键顺序无关、嵌套结构稳定。
         account_subtree = {
             "root_password":      rootfs_cfg.get("root_password", ""),
             "disable_root_login": bool(rootfs_cfg.get("disable_root_login")),
             "users":              rootfs_cfg.get("users") or {},
             "default_user":       rootfs_cfg.get("default_user"),
+            "default_session":    rootfs_cfg.get("default_session"),
             "groups":             rootfs_cfg.get("groups") or [],
         }
         h.update(b"account:")

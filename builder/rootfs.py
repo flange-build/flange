@@ -9,8 +9,9 @@
   - configure_default_locale：写入系统默认 locale
   - configure_users：创建 group / 普通用户 / sudo 配置 / root 密码 /
                      disable_root_login（含 chroot 内 chpasswd / passwd -l /
-                     /etc/sudoers.d 写入 / sshd_config drop-in 写入），并为
-                     desktop 生成 GNOME Remote Login 首启凭据
+                     /etc/sudoers.d 写入 / sshd_config drop-in 写入）、默认
+                     图形会话，并为 desktop 生成 GNOME Remote Login
+                     首启凭据
 """
 
 import json
@@ -275,6 +276,9 @@ class RootfsBuilder(ComponentBuilder):
             raise ValueError(
                 f"rootfs.default_user={default_user!r} 不在 rootfs.users 中；"
                 f"已声明用户: {sorted(users.keys()) or '(空)'}")
+        if rootfs_cfg.get("default_session") and default_user is None:
+            raise ValueError(
+                "设置 rootfs.default_session 时 rootfs.default_user 不能为空")
         if rootfs_cfg.get("disable_root_login") and not users:
             raise ValueError(
                 "rootfs.disable_root_login=True 但 rootfs.users 为空 — "
@@ -308,6 +312,7 @@ class RootfsBuilder(ComponentBuilder):
           4) 若声明 root_password 则调用 _set_root_password
           5) 若 disable_root_login 则 passwd -l root 并写 sshd drop-in
           6) 末尾硬校验：shadow root 行 + sshd drop-in 文件 + visudo -cf
+          7) 为 default_user 写入 AccountsService 默认图形会话
 
         旧 board（不写 users / default_user / disable_root_login）行为：
         仅走 (1) (2) (4)，与本次改造前完全一致。
@@ -376,7 +381,32 @@ class RootfsBuilder(ComponentBuilder):
                 # 整个 sudoers.d 被 sudo 拒绝读取，提权失效。
                 chroot.run(["visudo", "-cf", f"/etc/sudoers.d/90-{name}"])
 
+        self._write_default_session(rootfs_dir, rootfs_cfg)
         self._write_gnome_remote_desktop_credentials(rootfs_dir, rootfs_cfg)
+
+    def _write_default_session(
+        self, rootfs_dir: Path, rootfs_cfg: dict
+    ) -> None:
+        """通过 AccountsService 设置 default_user 的默认图形会话。"""
+        session = rootfs_cfg.get("default_session")
+        if not session:
+            return
+        launchers = (
+            rootfs_dir / "usr/share/wayland-sessions" / f"{session}.desktop",
+            rootfs_dir / "usr/share/xsessions" / f"{session}.desktop",
+        )
+        if not any(path.is_file() for path in launchers):
+            raise FileNotFoundError(
+                f"rootfs.default_session={session!r} 没有对应的 session launcher")
+
+        path = (
+            rootfs_dir / "var/lib/AccountsService/users"
+            / rootfs_cfg["default_user"]
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"[User]\nXSession={session}\n", encoding="utf-8")
+        path.chmod(0o600)
+        self.docker.run_privileged(["chown", "root:root", str(path)])
 
     def _write_gnome_remote_desktop_credentials(
         self, rootfs_dir: Path, rootfs_cfg: dict

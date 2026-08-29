@@ -70,7 +70,8 @@ _CANONICAL_COMPONENT_FIELDS = {
         "trust_ini_prefix",
     },
     "rootfs": {
-        "custom_packages", "default_locale", "default_user",
+        "custom_packages", "default_locale", "default_session",
+        "default_user",
         "disable_root_login", "emulator",
         "extra_apt_sources", "extra_debs", "extra_firmware", "groups",
         "gnome_remote_desktop_login", "image_format", "install_recommends",
@@ -273,6 +274,15 @@ def validate_canonical_config(config: dict) -> None:
                     or "\n" in value or "\r" in value):
                 raise ConfigError(
                     f"rootfs.default_locale.{field} 必须是非空单行字符串")
+    default_session = rootfs.get("default_session")
+    if default_session is not None and (
+            not isinstance(default_session, str) or not default_session
+            or "\n" in default_session or "\r" in default_session
+            or PurePosixPath(default_session).name != default_session):
+        raise ConfigError("rootfs.default_session 必须是安全的非空 session 名")
+    if default_session and rootfs.get("default_user") is None:
+        raise ConfigError(
+            "设置 rootfs.default_session 时 rootfs.default_user 不能为空")
     if rootfs.get("url") is not None:
         _validate_download_descriptor(
             {key: rootfs[key] for key in _DOWNLOAD_FIELDS if key in rootfs},

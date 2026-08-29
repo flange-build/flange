@@ -18,7 +18,7 @@ from builder.platforms.rockchip.rootfs import RockchipRootfsBuilder
 
 
 DESKTOP_PACKAGES = {
-    "ubuntu-desktop",
+    "gnome-core",
     "glmark2-wayland",
     "language-pack-zh-hans",
     "language-pack-gnome-zh-hans",
@@ -58,6 +58,8 @@ def test_desktop_product_applies_common_package_config():
     }
     assert desktop["rootfs"]["gnome_remote_desktop_login"] is True
     assert desktop["rootfs"]["install_recommends"] is True
+    assert desktop["rootfs"]["default_session"] == "gnome"
+    assert "ubuntu-desktop" not in desktop["rootfs"]["packages"]
     assert package_config in desktop.jsonnet_dependencies
 
     assert DESKTOP_PACKAGES.isdisjoint(default["rootfs"]["packages"])
@@ -67,10 +69,11 @@ def test_desktop_product_applies_common_package_config():
     assert _rootfs_partition(default)["image_size"] == "2G"
     assert default["rootfs"]["gnome_remote_desktop_login"] is False
     assert default["rootfs"]["install_recommends"] is False
+    assert default["rootfs"]["default_session"] is None
     assert package_config not in default.jsonnet_dependencies
 
 
-def test_desktop_vendor_app_carries_dock_and_first_boot_unit():
+def test_desktop_vendor_app_carries_gnome_appearance_and_first_boot_unit():
     package_dir = PROJECT_ROOT / "components/packages/ubuntu-desktop"
     spec = load_spec(package_dir)
     install_paths = {
@@ -80,12 +83,13 @@ def test_desktop_vendor_app_carries_dock_and_first_boot_unit():
     assert spec.app.name == "flange-ubuntu-desktop-config"
     assert spec.app.type == "service"
     assert spec.build.system == "none"
+    assert DESKTOP_PACKAGES <= set(spec.depends)
     assert spec.systemd is not None
     assert spec.systemd.auto_start is True
     assert "/etc/default/locale" not in install_paths
     assert (
         "/usr/share/glib-2.0/schemas/"
-        "99_flange-ubuntu-dock.gschema.override"
+        "99_flange-gnome.gschema.override"
         in install_paths
     )
     assert (
@@ -99,16 +103,17 @@ def test_desktop_vendor_app_carries_dock_and_first_boot_unit():
     )
     assert (
         package_dir
-        / "schemas/99_flange-ubuntu-dock.gschema.override"
+        / "schemas/99_flange-gnome.gschema.override"
     ).read_text() == (
-        "# Ubuntu desktop profile 的 Dock 默认布局；"
-        "用户仍可在 Settings 中覆盖。\n"
-        "[org.gnome.shell.extensions.dash-to-dock:ubuntu]\n"
-        "dock-position='BOTTOM'\n"
-        "dock-fixed=false\n"
-        "autohide=true\n"
-        "intellihide=true\n"
-        "extend-height=false\n"
+        "# GNOME 原生外观默认值；用户仍可在 Settings 中覆盖。\n"
+        "[org.gnome.desktop.interface]\n"
+        "gtk-theme='Adwaita'\n"
+        "icon-theme='Adwaita'\n"
+        "cursor-theme='Adwaita'\n"
+        "color-scheme='default'\n"
+        "\n"
+        "[org.gnome.shell]\n"
+        "enabled-extensions=[]\n"
     )
     unit = (
         package_dir
@@ -151,6 +156,30 @@ def test_default_locale_writes_systemd_and_debian_paths(tmp_path):
     assert outside.read_text() == "unchanged\n"
 
 
+def test_default_session_writes_accountsservice_user(tmp_path):
+    builder = RockchipRootfsBuilder(MagicMock(), MagicMock())
+    launcher = tmp_path / "usr/share/wayland-sessions/gnome.desktop"
+    launcher.parent.mkdir(parents=True)
+    launcher.touch()
+
+    builder._write_default_session(tmp_path, {
+        "default_user": "flange",
+        "default_session": "gnome",
+    })
+
+    account = tmp_path / "var/lib/AccountsService/users/flange"
+    assert account.read_text() == "[User]\nXSession=gnome\n"
+    assert account.stat().st_mode & 0o777 == 0o600
+
+
+def test_invalid_default_session_is_rejected():
+    config = resolve_config("radxa-zero3w", "desktop", "release")
+    config["rootfs"]["default_session"] = "../ubuntu"
+
+    with pytest.raises(ConfigError, match="rootfs.default_session"):
+        validate_canonical_config(config)
+
+
 @pytest.mark.parametrize("default_locale", [
     "zh_CN.UTF-8",
     {"lang": "zh_CN.UTF-8"},
@@ -165,7 +194,7 @@ def test_invalid_default_locale_is_rejected(default_locale):
 
 
 def test_install_recommends_switch_controls_apt_command():
-    packages = ["ubuntu-desktop"]
+    packages = ["gnome-core"]
     disabled = RockchipRootfsBuilder._apt_install_command(
         packages, {"rootfs": {"install_recommends": False}}
     )
@@ -345,6 +374,7 @@ def test_all_supported_boards_resolve_desktop_products():
             config = resolve_config(board, "desktop", variant, boards=boards)
             assert DESKTOP_PACKAGES <= set(config["rootfs"]["packages"])
             assert config["rootfs"]["install_recommends"] is True
+            assert "ubuntu-desktop" not in config["rootfs"]["packages"]
             assert _rootfs_partition(config)["image_size"] == "6G"
 
     assert "desktop" not in boards["atk-rk3506b"]["products"]

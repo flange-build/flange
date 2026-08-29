@@ -1,7 +1,7 @@
 app:
   name: flange-ubuntu-desktop-config
-  version: 1.0.1
-  description: Ubuntu Desktop Dock、Remote Login 与 Snap 应用配置
+  version: 1.0.5
+  description: GNOME 原生外观、Remote Login 与 Snap 应用配置
   type: service
   arch: [aarch64]
 
@@ -13,14 +13,14 @@ build:
   system: none
 
 install:
-  schemas/99_flange-ubuntu-dock.gschema.override: /usr/share/glib-2.0/schemas/99_flange-ubuntu-dock.gschema.override
+  schemas/99_flange-gnome.gschema.override: /usr/share/glib-2.0/schemas/99_flange-gnome.gschema.override
 
 systemd:
   unit: systemd/flange-configure-ubuntu-desktop.service
   auto_start: true
 
 depends:
-  - ubuntu-desktop
+  - gnome-core
   - glmark2-wayland
   - language-pack-zh-hans
   - language-pack-gnome-zh-hans

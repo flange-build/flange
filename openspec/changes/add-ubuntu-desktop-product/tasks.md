@@ -26,5 +26,10 @@
 
 - [x] 5.1 将默认语言改为 `rootfs.default_locale` 配置并由共享 RootfsBuilder 写入真实 locale 文件
 - [x] 5.2 为 GNOME Remote Login 生成 TLS key/cert，并通过 `grdctl --system` 配置可监听的 RDP backend
-- [x] 5.3 增加全局默认关闭的 `rootfs.install_recommends` 开关，desktop 显式开启并纳入 base cache 哈希
+- [x] 5.3 增加全局默认关闭的 `rootfs.install_recommends` 开关并纳入 base cache 哈希
 - [x] 5.4 更新测试、ProjectSpec，运行相关测试、全量配置解析和 OpenSpec validate
+- [x] 5.5 将 desktop 默认外观切换为 GNOME user mode 与 Adwaita，并增加覆盖测试
+- [x] 5.6 安装 GNOME 默认壁纸资源，并在设备与 package 配置测试中验证背景 URI 文件存在
+- [x] 5.7 移除显示后端耦合，并通过 AccountsService 为 default_user 选择标准 GNOME 会话
+- [x] 5.8 以 gnome-core 替代 ubuntu-desktop
+- [x] 5.9 desktop 启用 install_recommends，安装 GNOME 元包维护的推荐组件

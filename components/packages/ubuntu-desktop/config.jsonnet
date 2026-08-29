@@ -2,7 +2,9 @@
 {
   rootfs+: {
     packages+: [
-      'ubuntu-desktop',
+      // GNOME Core 直接提供 GDM、Shell、Settings、Nautilus 与标准应用，
+      // 不引入 Ubuntu session、Yaru 和 Ubuntu Shell 扩展。
+      'gnome-core',
       'glmark2-wayland',
       'language-pack-zh-hans',
       'language-pack-gnome-zh-hans',
@@ -18,8 +20,9 @@
       lang: 'zh_CN.UTF-8',
       language: 'zh_CN:zh',
     },
-    // 完整 Ubuntu Desktop 跟随元包维护的 Recommends 安装标准桌面应用。
+    // 桌面 product 安装 GNOME 元包维护的推荐集，获得完整桌面体验。
     install_recommends: true,
+    default_session: 'gnome',
     gnome_remote_desktop_login: true,
   },
   // desktop 软件与 Chromium Snap 需要高于嵌入式默认值的初始空间；仅支持

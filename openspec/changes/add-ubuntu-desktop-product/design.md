@@ -9,6 +9,7 @@
 - 让 opt-in 的 component package 可携带一个共享 `config.jsonnet` overlay。
 - 让可扩容 ext4 rootfs 的板统一获得 `desktop-{debug,release}` target、桌面包、简体中文环境和足够容量。
 - 使用 Ubuntu 官方 Chromium Snap，并让目标机首次联网启动时自动完成安装。
+- 直接通过 HDMI/GDM 登录时默认进入标准 GNOME session，并使用原生 Adwaita 外观与扩展集合。
 - 保持所有现有非 desktop target 的 canonical 配置不变。
 
 **Non-Goals:**
@@ -29,18 +30,16 @@
 
 `components/packages/ubuntu-desktop/config.jsonnet` 追加以下 rootfs 软件：
 
-- `ubuntu-desktop`
+- `gnome-core`
 - `glmark2-wayland`
 - `language-pack-zh-hans` 与 `language-pack-gnome-zh-hans`
 - `fonts-noto-cjk`
 - `chromium-browser`
 
-flange 的 rootfs APT 默认使用 `--no-install-recommends`，并通过 canonical 布尔字段
-`rootfs.install_recommends` 允许 product 显式开启。`ubuntu-desktop` package 将该字段设为 `true`，使
-Ubuntu Desktop 元包按发行版维护的 `Recommends` 自动安装计算器、文本编辑器、LibreOffice、媒体等标准
-桌面应用，避免在 flange 中复制并长期维护推荐包清单。其他 product 沿用全局 `false` 默认值；该字段进入
-Phase 1 base cache 哈希，切换后不得复用安装策略不同的旧快照。App Center 与 Thunderbird 按 Ubuntu 24.04
-的分发方式在首启联网后安装 Snap。
+`gnome-core` 通过硬依赖提供 GDM、GNOME Shell、Settings、Nautilus、Terminal、标准 GNOME 应用、
+`gnome-session` 与 `gnome-backgrounds`，无需 `ubuntu-desktop`。desktop product 设置
+`rootfs.install_recommends=true`，跟随 GNOME 元包维护的推荐组件；App Center 与 Thunderbird 仍按
+Ubuntu 24.04 的分发方式在首启联网后安装 Snap。
 
 同时声明默认 locale、`chromium` Snap 和 6 GiB 初始 rootfs。各 board 仅增加 `desktop` product 并在该 product 下 opt-in `ubuntu-desktop`；已有特殊 product 条件保持原样。
 
@@ -53,7 +52,7 @@ AppBuilder / DebBuilder 流水线。package config 通过 `rootfs.default_locale
 
 App 以 `systemd.auto_start` 交付桌面配置 oneshot unit；unit 在目标机首次联网、snapd 完成初始化后按需
 配置 Remote Login，并安装缺失的 Chromium、App Center 与 Thunderbird Snap。自有 deb 名与 Ubuntu 官方
-`ubuntu-desktop` 元包分离，避免 dpkg 冲突。
+GNOME 元包分离，避免 dpkg 冲突。
 
 ### 4. Remote Login 复用 default_user 凭据
 
@@ -63,18 +62,24 @@ package config 显式启用 `rootfs.gnome_remote_desktop_login`。rootfs 账号�
 RDP 凭据并启用 backend，再启用系统级 `gnome-remote-desktop.service`。只有全部命令成功后才删除暂存
 凭据，避免服务 active 但因缺少 TLS key/cert 而不监听 3389，也避免长期额外保留明文文件。
 
-### 5. Ubuntu Dock 使用后置 GSettings override
+### 5. GNOME 原生外观使用标准 session 与后置 GSettings override
 
 vendor App 安装排序晚于 Ubuntu 的 `.gschema.override`，在 `/usr/share/glib-2.0/schemas/` 交付后置
-override，复用 GLib 的 dpkg path trigger 自动重编译 schema。对 Ubuntu desktop profile 显式设置底部、
-智能自动隐藏和非 Panel Mode，不新增首启脚本，也不锁定用户后续自行调整。
+override，复用 GLib 的 dpkg path trigger 自动重编译 schema。默认使用 Adwaita GTK、图标和
+光标主题，并将 GNOME Shell 扩展列表设为空；`gnome-backgrounds` 提供该 profile 默认 URI 引用的
+Adwaita 壁纸。这些值仍是可由用户覆盖的默认值。
+
+`gnome-core` 提供 `gnome-session`，package 声明 `rootfs.default_session=gnome`。共享 RootfsBuilder 校验标准 X11 或
+Wayland session launcher 存在后，为 `default_user` 写入 AccountsService 的 `XSession=gnome`；因此无论是否
+存在远程显示组件，用户从 HDMI 上的 GDM 登录都进入标准 GNOME session。通用 desktop package 不引用或
+覆盖任何具体显示后端的 service。
 
 ## Risks / Trade-offs
 
 - [首次启动无网络时 Chromium 尚不可用] → unit 保持启用，后续重启会再次尝试；系统其余桌面功能不受影响。
 - [6 GiB 初始镜像增大构建与刷写体积] → 仅 desktop product 覆盖，default 与其他 product 不变。
 - [package config 可覆盖 board 字段] → 仅加载 board 显式 opt-in 的仓库内 Jsonnet，仍受 import 白名单与 canonical validator 约束。
-- [全量 Ubuntu Desktop 在部分板上缺少 GPU 加速] → 本变更只保证软件与配置，硬件适配由各板现有内核/Mesa 能力决定。
+- [GNOME 在部分板上缺少 GPU 加速] → 本变更只保证软件与配置，硬件适配由各板现有内核/Mesa 能力决定。
 - [RDP 凭据必须以明文传给 grdctl] → 仅在 root-only 首启文件中短暂保存，成功写入 GNOME Remote Desktop 凭据存储后立即删除；源配置本身已使用同一明文密码创建系统用户。
 - [RDP 使用设备本地自签名证书] → 首次连接需要客户端确认指纹；若产品需要 PKI 证书，可在板级后续覆盖证书交付策略。
 

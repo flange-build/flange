@@ -199,6 +199,10 @@ canonical JSON（规范化 JSON）交给 Python builder。
   `{lang: "<locale>", language: "<gettext language list>"}` 声明；共享
   RootfsBuilder MUST 在 overlay 后将其写入 `/etc/locale.conf` 与
   `/etc/default/locale`，值必须是非空单行字符串。未声明时保持发行版默认值。
+- rootfs 默认图形会话：`rootfs.default_session` 声明 `default_user` 使用的
+  session 名；共享 RootfsBuilder MUST 校验对应的 X11 或 Wayland desktop launcher
+  存在，并写入 `/var/lib/AccountsService/users/<default_user>`。未声明时保持 display
+  manager（显示管理器）的发行版默认行为。
 - rootfs 第三方资源声明式安装：
   - `rootfs.extra_firmware`：通过 `{source: {name, subpath}}` 引用顶层
     `sources`，或直接使用统一 `{url, sha256, filename}` 下载 descriptor；

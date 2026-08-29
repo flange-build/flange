@@ -1,0 +1,9 @@
+# GNOME 原生外观默认值；用户仍可在 Settings 中覆盖。
+[org.gnome.desktop.interface]
+gtk-theme='Adwaita'
+icon-theme='Adwaita'
+cursor-theme='Adwaita'
+color-scheme='default'
+
+[org.gnome.shell]
+enabled-extensions=[]

@@ -37,6 +37,9 @@
 //   default_user (string | null)
 //       标识"那个"默认用户的语义指针，必须是 users 中存在的键。desktop
 //       package 可用它复用账号配置启用 GNOME Remote Login。
+//   default_session (string | null, 默认 null)
+//       default_user 的图形会话名；RootfsBuilder 校验对应 desktop launcher
+//       后写入 AccountsService。未设置时由 display manager 自行选择。
 //   gnome_remote_desktop_login (boolean, 默认 false)
 //       true 时将 default_user 及其 password 交给 desktop App，在首次启动
 //       配置 GNOME Remote Desktop 系统级 RDP；成功后删除暂存明文凭据。
@@ -87,6 +90,7 @@ local variant = std.extVar('variant');
       },
     },
     default_user: 'flange',
+    default_session: null,
     gnome_remote_desktop_login: false,
     // flange 默认不安装 APT Recommends；完整桌面等 product 可显式开启。
     install_recommends: false,

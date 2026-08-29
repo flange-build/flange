@@ -15,21 +15,26 @@
 
 ### Requirement: desktop product SHALL 安装统一桌面软件集合
 
-`desktop` product SHALL 通过 `components/packages/ubuntu-desktop/config.jsonnet` 安装 `ubuntu-desktop`、`glmark2-wayland`、`language-pack-zh-hans`、`language-pack-gnome-zh-hans`、`fonts-noto-cjk` 与 `chromium-browser`，并 SHALL 设置 `rootfs.install_recommends=true`，由 Ubuntu Desktop 元包维护标准用户应用集合。同一 board 的非 desktop product MUST 保持 `rootfs.install_recommends=false`，且 MUST NOT 因本配置新增这些软件包。
+`desktop` product SHALL 通过 `components/packages/ubuntu-desktop/config.jsonnet` 安装 `gnome-core`、
+`glmark2-wayland`、`language-pack-zh-hans`、`language-pack-gnome-zh-hans`、`fonts-noto-cjk`、
+`gnome-remote-desktop` 与 `chromium-browser`，并 SHALL 设置 `rootfs.install_recommends=true`。
+`gnome-core` 的硬依赖 SHALL 提供 GDM、GNOME Shell、Settings、Nautilus、Terminal、标准 GNOME 应用、
+`gnome-session` 与 `gnome-backgrounds`。rootfs MUST NOT 安装 `ubuntu-desktop`。
 
 #### Scenario: desktop canonical 配置包含桌面软件
 - **WHEN** 解析 `radxa-zero3w-desktop-release`
 - **THEN** `rootfs.packages` 包含上述全部软件包
 - **AND** `rootfs.install_recommends=true`
+- **AND** `rootfs.packages` 不包含 `ubuntu-desktop`
 
-#### Scenario: desktop 跟随元包安装推荐应用
+#### Scenario: desktop 安装 GNOME Core 硬依赖
 - **WHEN** 构建任一 desktop rootfs
-- **THEN** rootfs APT 安装命令不含 `--no-install-recommends`
-- **AND** Ubuntu 仓库当前版本的 `ubuntu-desktop` Recommends 自动进入镜像
+- **THEN** rootfs APT 安装命令不包含 `--no-install-recommends`
+- **AND** Ubuntu 仓库当前版本的 `gnome-core` Depends 与 Recommends 自动进入镜像
 
 #### Scenario: default canonical 配置保持精简
 - **WHEN** 解析 `radxa-zero3w-default-release`
-- **THEN** `rootfs.packages` 不包含 `ubuntu-desktop`、`glmark2-wayland` 与 `chromium-browser`
+- **THEN** `rootfs.packages` 不包含 `gnome-core`、`glmark2-wayland` 与 `chromium-browser`
 - **AND** `rootfs.install_recommends=false`
 
 #### Scenario: 非法 Recommends 开关提前失败
@@ -68,7 +73,7 @@ desktop product SHALL 安装 Ubuntu 24.04 官方 `chromium-browser` 过渡 deb �
 
 ### Requirement: desktop package SHALL 是标准 vendor 插接件
 
-`components/packages/ubuntu-desktop/package.py` SHALL 声明 `flange-ubuntu-desktop-config` vendor component，package 根目录 SHALL 提供同名 `app.yaml`，并 MUST 通过现有 AppBuilder / DebBuilder 生成自有 deb。自有 deb 名 MUST NOT 与 Ubuntu 官方 `ubuntu-desktop` 元包重名。
+`components/packages/ubuntu-desktop/package.py` SHALL 声明 `flange-ubuntu-desktop-config` vendor component，package 根目录 SHALL 提供同名 `app.yaml`，并 MUST 通过现有 AppBuilder / DebBuilder 生成自有 deb。自有 deb 名 MUST NOT 与发行版 GNOME 元包重名。
 
 #### Scenario: package 展开为本地 App
 - **WHEN** board 的 desktop product opt-in `ubuntu-desktop` package
@@ -103,14 +108,25 @@ desktop product SHALL 安装 `gnome-remote-desktop` 并启用其系统级 RDP Re
 - **WHEN** desktop 配置的 `default_user` 不存在或该用户没有非空 `password`
 - **THEN** rootfs 构建在写入 Remote Login 配置前失败并指出缺少用户名或密码
 
-### Requirement: desktop product SHALL 提供统一 Ubuntu Dock 默认布局
+### Requirement: desktop product SHALL 默认使用 GNOME 原生外观
 
-desktop product SHALL 将 Ubuntu Dock 默认放在屏幕底部，启用窗口重叠时自动隐藏，并关闭 Panel Mode。
-该策略 MUST 作为 `flange-ubuntu-desktop-config` App 的 GSettings 默认值交付，且 MUST NOT 锁定用户设置。
+desktop product SHALL 通过 `flange-ubuntu-desktop-config` App 的 GSettings 默认值使用 Adwaita GTK、图标和
+光标主题，并 SHALL 默认禁用 GNOME Shell 扩展。desktop product SHALL 安装 `gnome-backgrounds`，确保
+GNOME 默认的明暗 Adwaita 壁纸 URI 均指向现有文件。`gnome-backgrounds` 与 `gnome-session` SHALL 由
+`gnome-core` 的硬依赖提供；desktop product SHALL 声明 `rootfs.default_session=gnome`，使默认用户从 HDMI
+上的 GDM 登录时进入标准 GNOME session。该策略 MUST
+NOT 锁定用户设置，也 MUST NOT 通过具体显示后端的 service override 实现。
 
-#### Scenario: 新用户首次进入 Ubuntu 桌面
+#### Scenario: 新用户首次进入 GNOME 桌面
 
-- **WHEN** 用户尚未写入个人 Ubuntu Dock 设置
-- **THEN** `dock-position` 为 `BOTTOM`
-- **AND** `dock-fixed=false`、`autohide=true`、`intellihide=true`
-- **AND** `extend-height=false`
+- **WHEN** 用户尚未写入个人外观或 GNOME Shell 扩展设置
+- **THEN** `gtk-theme`、`icon-theme` 与 `cursor-theme` 均为 `Adwaita`
+- **AND** `enabled-extensions` 为空
+- **AND** `picture-uri` 与 `picture-uri-dark` 指向的文件均存在
+
+#### Scenario: 默认用户从 HDMI 登录 GNOME
+
+- **WHEN** 默认用户通过 HDMI 上的 GDM 登录桌面
+- **THEN** rootfs 存在名为 `gnome` 的 session launcher
+- **AND** AccountsService 中该用户的 `XSession=gnome`
+- **AND** 登录不依赖任何远程显示服务
