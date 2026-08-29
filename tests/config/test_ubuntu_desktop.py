@@ -51,7 +51,7 @@ def test_desktop_product_applies_common_package_config():
             PROJECT_ROOT / "components/packages/ubuntu-desktop"
         ),
     }
-    assert _rootfs_partition(desktop)["image_size"] == "6G"
+    assert _rootfs_partition(desktop)["image_size"] == "8G"
     assert desktop["rootfs"]["default_locale"] == {
         "lang": "zh_CN.UTF-8",
         "language": "zh_CN:zh",
@@ -375,6 +375,6 @@ def test_all_supported_boards_resolve_desktop_products():
             assert DESKTOP_PACKAGES <= set(config["rootfs"]["packages"])
             assert config["rootfs"]["install_recommends"] is True
             assert "ubuntu-desktop" not in config["rootfs"]["packages"]
-            assert _rootfs_partition(config)["image_size"] == "6G"
+            assert _rootfs_partition(config)["image_size"] == "8G"
 
     assert "desktop" not in boards["atk-rk3506b"]["products"]

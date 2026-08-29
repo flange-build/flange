@@ -41,7 +41,7 @@
 `rootfs.install_recommends=true`，跟随 GNOME 元包维护的推荐组件；App Center 与 Thunderbird 仍按
 Ubuntu 24.04 的分发方式在首启联网后安装 Snap。
 
-同时声明默认 locale、`chromium` Snap 和 6 GiB 初始 rootfs。各 board 仅增加 `desktop` product 并在该 product 下 opt-in `ubuntu-desktop`；已有特殊 product 条件保持原样。
+同时声明默认 locale、`chromium` Snap 和 8 GiB 初始 rootfs。各 board 仅增加 `desktop` product 并在该 product 下 opt-in `ubuntu-desktop`；已有特殊 product 条件保持原样。
 
 ### 3. locale 配置进入 canonical rootfs，Snap 由 vendor App 交付
 
@@ -77,7 +77,7 @@ Wayland session launcher 存在后，为 `default_user` 写入 AccountsService �
 ## Risks / Trade-offs
 
 - [首次启动无网络时 Chromium 尚不可用] → unit 保持启用，后续重启会再次尝试；系统其余桌面功能不受影响。
-- [6 GiB 初始镜像增大构建与刷写体积] → 仅 desktop product 覆盖，default 与其他 product 不变。
+- [8 GiB 初始镜像增大构建与刷写体积] → 仅 desktop product 覆盖，default 与其他 product 不变。
 - [package config 可覆盖 board 字段] → 仅加载 board 显式 opt-in 的仓库内 Jsonnet，仍受 import 白名单与 canonical validator 约束。
 - [GNOME 在部分板上缺少 GPU 加速] → 本变更只保证软件与配置，硬件适配由各板现有内核/Mesa 能力决定。
 - [RDP 凭据必须以明文传给 grdctl] → 仅在 root-only 首启文件中短暂保存，成功写入 GNOME Remote Desktop 凭据存储后立即删除；源配置本身已使用同一明文密码创建系统用户。

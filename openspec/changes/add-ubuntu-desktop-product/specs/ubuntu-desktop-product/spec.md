@@ -82,11 +82,11 @@ desktop product SHALL 安装 Ubuntu 24.04 官方 `chromium-browser` 过渡 deb �
 
 ### Requirement: desktop rootfs SHALL 具有足够初始容量
 
-desktop package config SHALL 将可扩容 ext4 rootfs 的 `image_size` 设为 6 GiB，且 MUST 只影响 desktop product。
+desktop package config SHALL 将可扩容 ext4 rootfs 的 `image_size` 设为 8 GiB，且 MUST 只影响 desktop product。
 
 #### Scenario: desktop 与 default 使用不同初始容量
 - **WHEN** 分别解析同一 board 的 desktop-release 与 default-release 配置
-- **THEN** desktop rootfs 分区 `image_size` 为 `6G`
+- **THEN** desktop rootfs 分区 `image_size` 为 `8G`
 - **AND** default rootfs 分区仍保持板级原值
 
 ### Requirement: desktop product SHALL 启用 GNOME Remote Login

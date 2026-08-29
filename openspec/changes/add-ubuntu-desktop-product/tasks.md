@@ -17,7 +17,7 @@
 
 ## 4. 验证
 
-- [x] 4.1 增加 desktop/default 软件集合、locale、Chromium unit、6 GiB 容量与 target 枚举测试
+- [x] 4.1 增加 desktop/default 软件集合、locale、Chromium unit、8 GiB 容量与 target 枚举测试
 - [x] 4.2 运行相关测试、全量配置解析、OpenSpec validate 和格式检查
 - [x] 4.3 增加 Remote Login 凭据、首启脚本与 App 打包测试，并重新运行相关校验
 - [x] 4.4 修复 vendor GStreamer 与 Ubuntu Desktop 拆分包的文件冲突，并锁定自定义版本
