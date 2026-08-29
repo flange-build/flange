@@ -21,7 +21,10 @@ from builder.cache import BuildCache
 from builder.platforms.rockchip.rootfs import RockchipRootfsBuilder
 
 
-def _make_config(board="test", product="default", variant="release", packages=None):
+def _make_config(
+    board="test", product="default", variant="release", packages=None,
+    install_recommends=False,
+):
     return {
         "board": board,
         "product": product,
@@ -34,6 +37,7 @@ def _make_config(board="test", product="default", variant="release", packages=No
         "rootfs": {
             "url": "https://example.com/ubuntu-base.tar.gz",
             "packages": packages or ["systemd"],
+            "install_recommends": install_recommends,
             "custom_packages": [],
         },
     }
@@ -109,6 +113,25 @@ class TestBaseCachePath:
             builder2 = _make_builder(cache=cache2)
 
             assert builder1._get_base_cache_path(config1) != builder2._get_base_cache_path(config2)
+
+    def test_install_recommends_changes_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config1 = _make_config(install_recommends=False)
+            config2 = _make_config(install_recommends=True)
+
+            cache1 = BuildCache.__new__(BuildCache)
+            cache1.config = config1
+            cache1.target_dir = Path(tmpdir) / "test" / "default" / "release"
+
+            cache2 = BuildCache.__new__(BuildCache)
+            cache2.config = config2
+            cache2.target_dir = Path(tmpdir) / "test" / "desktop" / "release"
+
+            builder1 = _make_builder(cache=cache1)
+            builder2 = _make_builder(cache=cache2)
+            assert builder1._get_base_cache_path(
+                config1
+            ) != builder2._get_base_cache_path(config2)
 
 
 class TestBaseCacheHit:

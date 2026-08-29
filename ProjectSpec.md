@@ -191,7 +191,14 @@ canonical JSON（规范化 JSON）交给 Python builder。
   摘要校验通过后方可原子替换缓存文件
 - rootfs 包集合：`rootfs.package_sets` 定义命名包集合，`rootfs.package_set` 选择集合；
   product/variant 条件由 Jsonnet `if` 表达。求值边界将其展开为
-  `rootfs.packages`，builder 只消费最终包列表。
+  `rootfs.packages`，builder 只消费最终包列表。APT 推荐依赖通过
+  `rootfs.install_recommends` 布尔字段控制：全局默认 `false` 并传入
+  `--no-install-recommends`，需要完整发行版软件集合的 product MAY 显式设为
+  `true`；该字段 MUST 进入 rootfs Phase 1 base cache 哈希。
+- rootfs 默认语言：`rootfs.default_locale` 使用
+  `{lang: "<locale>", language: "<gettext language list>"}` 声明；共享
+  RootfsBuilder MUST 在 overlay 后将其写入 `/etc/locale.conf` 与
+  `/etc/default/locale`，值必须是非空单行字符串。未声明时保持发行版默认值。
 - rootfs 第三方资源声明式安装：
   - `rootfs.extra_firmware`：通过 `{source: {name, subpath}}` 引用顶层
     `sources`，或直接使用统一 `{url, sha256, filename}` 下载 descriptor；
@@ -214,7 +221,8 @@ canonical JSON（规范化 JSON）交给 Python builder。
   Jsonnet 对象继承、`+:` 和数组表达式完成
 - `rootfs.gnome_remote_desktop_login=true` 时，构建 MUST 使用
   `default_user` 及其非空 `users.<name>.password` 生成 root-only 首启凭据；
-  目标机配置 GNOME Remote Login 成功后 MUST 删除该暂存文件
+  目标机 MUST 生成仅服务账号可读的 TLS 私钥与证书，并通过 `grdctl --system`
+  配置证书、凭据和 RDP backend；全部成功后 MUST 删除该暂存文件
 - SoC 层只声明芯片级事实（架构、工具链、固件协议与硬件能力）；具体显示、存储路由、
   AMP enable 和 rootfs package policy 属于 board/product，MUST NOT 固化在 SoC 层
 - 条件配置：使用 Jsonnet `if product == ...` / `if variant == ...`，不得把

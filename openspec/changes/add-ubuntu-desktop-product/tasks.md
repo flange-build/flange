@@ -21,3 +21,10 @@
 - [x] 4.2 运行相关测试、全量配置解析、OpenSpec validate 和格式检查
 - [x] 4.3 增加 Remote Login 凭据、首启脚本与 App 打包测试，并重新运行相关校验
 - [x] 4.4 修复 vendor GStreamer 与 Ubuntu Desktop 拆分包的文件冲突，并锁定自定义版本
+
+## 5. 设备验证修复与桌面应用补全
+
+- [x] 5.1 将默认语言改为 `rootfs.default_locale` 配置并由共享 RootfsBuilder 写入真实 locale 文件
+- [x] 5.2 为 GNOME Remote Login 生成 TLS key/cert，并通过 `grdctl --system` 配置可监听的 RDP backend
+- [x] 5.3 增加全局默认关闭的 `rootfs.install_recommends` 开关，desktop 显式开启并纳入 base cache 哈希
+- [x] 5.4 更新测试、ProjectSpec，运行相关测试、全量配置解析和 OpenSpec validate

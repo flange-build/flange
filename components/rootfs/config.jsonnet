@@ -40,6 +40,13 @@
 //   gnome_remote_desktop_login (boolean, 默认 false)
 //       true 时将 default_user 及其 password 交给 desktop App，在首次启动
 //       配置 GNOME Remote Desktop 系统级 RDP；成功后删除暂存明文凭据。
+//   default_locale (object, 默认不设置)
+//       通过 {lang, language} 声明系统默认 locale；RootfsBuilder 写入
+//       /etc/locale.conf 与 /etc/default/locale。调用方同时负责安装对应
+//       language-pack，未设置时保留 Ubuntu Base 默认值。
+//   install_recommends (boolean, 默认 false)
+//       false 时 APT 使用 --no-install-recommends 保持嵌入式 rootfs 精简；
+//       完整桌面等 product 可显式设为 true，跟随发行版元包安装推荐依赖。
 //
 // — Group 集合 —
 //   groups (array[string])
@@ -81,6 +88,8 @@ local variant = std.extVar('variant');
     },
     default_user: 'flange',
     gnome_remote_desktop_login: false,
+    // flange 默认不安装 APT Recommends；完整桌面等 product 可显式开启。
+    install_recommends: false,
     groups: [
       // — Group 集合（嵌入式开发板向）—
       // 框架预创 + 默认入组；新增/修改请同步 wiki/components/rootfs-构建器.md

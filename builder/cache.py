@@ -462,6 +462,9 @@ class BuildCache:
         h.update(rootfs_cfg.get("sha256", "").encode())
         packages = sorted(rootfs_cfg.get("packages", []))
         h.update(json.dumps(packages).encode())
+        h.update(json.dumps(bool(
+            rootfs_cfg.get("install_recommends", False)
+        )).encode())
         h.update(json.dumps(
             rootfs_cfg.get("extra_apt_sources") or [],
             sort_keys=True, default=str).encode())

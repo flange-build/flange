@@ -70,9 +70,11 @@ _CANONICAL_COMPONENT_FIELDS = {
         "trust_ini_prefix",
     },
     "rootfs": {
-        "custom_packages", "default_user", "disable_root_login", "emulator",
+        "custom_packages", "default_locale", "default_user",
+        "disable_root_login", "emulator",
         "extra_apt_sources", "extra_debs", "extra_firmware", "groups",
-        "gnome_remote_desktop_login", "image_format", "package_set",
+        "gnome_remote_desktop_login", "image_format", "install_recommends",
+        "package_set",
         "package_sets", "packages", "panel_firmware", "root_password",
         "sha256", "ubi", "url", "users",
     },
@@ -254,6 +256,23 @@ def validate_canonical_config(config: dict) -> None:
             descriptor, f"bootloader.ufs_provisions.{name}")
 
     rootfs = config.get("rootfs") or {}
+    install_recommends = rootfs.get("install_recommends", False)
+    if not isinstance(install_recommends, bool):
+        raise ConfigError("rootfs.install_recommends 必须是布尔值")
+    default_locale = rootfs.get("default_locale")
+    if default_locale is not None:
+        if not isinstance(default_locale, dict):
+            raise ConfigError("rootfs.default_locale 必须是字典")
+        _reject_unknown(
+            default_locale, {"lang", "language"},
+            "rootfs.default_locale",
+        )
+        for field in ("lang", "language"):
+            value = default_locale.get(field)
+            if (not isinstance(value, str) or not value
+                    or "\n" in value or "\r" in value):
+                raise ConfigError(
+                    f"rootfs.default_locale.{field} 必须是非空单行字符串")
     if rootfs.get("url") is not None:
         _validate_download_descriptor(
             {key: rootfs[key] for key in _DOWNLOAD_FIELDS if key in rootfs},

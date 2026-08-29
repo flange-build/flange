@@ -6,13 +6,20 @@
       'glmark2-wayland',
       'language-pack-zh-hans',
       'language-pack-gnome-zh-hans',
-      // rootfs 安装包统一使用 --no-install-recommends，显式保留中文字体。
+      // 简体中文字体是 product 硬要求，不依赖元包 Recommends 漂移。
       'fonts-noto-cjk',
       'gnome-remote-desktop',
+      'openssl',
       // Ubuntu 24.04 的 chromium-browser 是 Chromium Snap 的官方过渡包。
       'chromium-browser',
       'snapd',
     ],
+    default_locale: {
+      lang: 'zh_CN.UTF-8',
+      language: 'zh_CN:zh',
+    },
+    // 完整 Ubuntu Desktop 跟随元包维护的 Recommends 安装标准桌面应用。
+    install_recommends: true,
     gnome_remote_desktop_login: true,
   },
   // desktop 软件与 Chromium Snap 需要高于嵌入式默认值的初始空间；仅支持

@@ -6,6 +6,7 @@
   - extra_debs：下载第三方 deb 并安装
   - extra_firmware：从外部仓库拉取固件文件并写入 rootfs
   - panel_firmware：把板级 panel init 文本源编译为 panel.bin 写入 rootfs
+  - configure_default_locale：写入系统默认 locale
   - configure_users：创建 group / 普通用户 / sudo 配置 / root 密码 /
                      disable_root_login（含 chroot 内 chpasswd / passwd -l /
                      /etc/sudoers.d 写入 / sshd_config drop-in 写入），并为
@@ -58,6 +59,14 @@ class RootfsBuilder(ComponentBuilder):
             if entry["name"] == name:
                 return resolve_image_size(entry).mb
         raise KeyError(f"partitions.entries 中未定义分区: {name}")
+
+    @staticmethod
+    def _apt_install_command(packages: list[str], config: dict) -> list[str]:
+        """生成 rootfs APT 安装命令；Recommends 默认关闭，可显式开启。"""
+        command = ["apt-get", "install", "-y"]
+        if not config.get("rootfs", {}).get("install_recommends", False):
+            command.append("--no-install-recommends")
+        return command + packages
 
     def _ensure_rootfs_fits_image(self, rootfs_dir: Path, image_size_mb: int):
         """构建 ext4 前检查 rootfs 内容是否能放入初始镜像。
@@ -120,6 +129,29 @@ class RootfsBuilder(ComponentBuilder):
             )
             (sources_dir / f"{name}.list").write_text(source_line + "\n")
             self._status(f"添加 APT 源: {name}")
+
+    def _configure_default_locale(
+        self, rootfs_dir: Path, config: dict
+    ) -> None:
+        """按 canonical 配置写入 systemd 与 Debian 的默认 locale 路径。"""
+        locale = (config.get("rootfs") or {}).get("default_locale")
+        if locale is None:
+            return
+
+        content = (
+            f"LANG={locale['lang']}\n"
+            f"LANGUAGE={locale['language']}\n"
+        )
+        self._status(f"设置默认 locale: {locale['lang']}")
+        locale_conf = rootfs_dir / "etc/locale.conf"
+        locale_conf.parent.mkdir(parents=True, exist_ok=True)
+        locale_conf.write_text(content, encoding="utf-8")
+        locale_conf.chmod(0o644)
+
+        default_locale = rootfs_dir / "etc/default/locale"
+        default_locale.parent.mkdir(parents=True, exist_ok=True)
+        default_locale.unlink(missing_ok=True)
+        default_locale.symlink_to("../locale.conf")
 
     def _install_extra_debs(self, rootfs_dir: Path, config: dict):
         """下载并安装第三方 deb 包到 rootfs。

@@ -15,24 +15,39 @@
 
 ### Requirement: desktop product SHALL 安装统一桌面软件集合
 
-`desktop` product SHALL 通过 `components/packages/ubuntu-desktop/config.jsonnet` 安装 `ubuntu-desktop`、`glmark2-wayland`、`language-pack-zh-hans`、`language-pack-gnome-zh-hans`、`fonts-noto-cjk` 与 `chromium-browser`。同一 board 的非 desktop product MUST NOT 因本配置新增这些软件包。
+`desktop` product SHALL 通过 `components/packages/ubuntu-desktop/config.jsonnet` 安装 `ubuntu-desktop`、`glmark2-wayland`、`language-pack-zh-hans`、`language-pack-gnome-zh-hans`、`fonts-noto-cjk` 与 `chromium-browser`，并 SHALL 设置 `rootfs.install_recommends=true`，由 Ubuntu Desktop 元包维护标准用户应用集合。同一 board 的非 desktop product MUST 保持 `rootfs.install_recommends=false`，且 MUST NOT 因本配置新增这些软件包。
 
 #### Scenario: desktop canonical 配置包含桌面软件
 - **WHEN** 解析 `radxa-zero3w-desktop-release`
 - **THEN** `rootfs.packages` 包含上述全部软件包
+- **AND** `rootfs.install_recommends=true`
+
+#### Scenario: desktop 跟随元包安装推荐应用
+- **WHEN** 构建任一 desktop rootfs
+- **THEN** rootfs APT 安装命令不含 `--no-install-recommends`
+- **AND** Ubuntu 仓库当前版本的 `ubuntu-desktop` Recommends 自动进入镜像
 
 #### Scenario: default canonical 配置保持精简
 - **WHEN** 解析 `radxa-zero3w-default-release`
 - **THEN** `rootfs.packages` 不包含 `ubuntu-desktop`、`glmark2-wayland` 与 `chromium-browser`
+- **AND** `rootfs.install_recommends=false`
+
+#### Scenario: 非法 Recommends 开关提前失败
+- **WHEN** `rootfs.install_recommends` 不是布尔值
+- **THEN** canonical 配置校验失败并指出该字段
 
 ### Requirement: desktop product SHALL 默认使用简体中文
 
-desktop product SHALL 安装简体中文系统和 GNOME 翻译、CJK 字体，并由 `flange-ubuntu-desktop-config` vendor App 在 rootfs 中安装包含 `LANG=zh_CN.UTF-8` 与 `LANGUAGE=zh_CN:zh` 的 `/etc/default/locale`。非 desktop product MUST 保持现有 locale 行为。
+desktop product SHALL 安装简体中文系统和 GNOME 翻译、CJK 字体，并在 package `config.jsonnet` 中通过 `rootfs.default_locale` 声明 `lang=zh_CN.UTF-8` 与 `language=zh_CN:zh`。RootfsBuilder MUST 将其写入 `/etc/locale.conf` 与 `/etc/default/locale`，兼容 Ubuntu Base 中 `/etc/default/locale` 指向 `/etc/locale.conf` 的 symlink。非 desktop product MUST 保持现有 locale 行为。
 
 #### Scenario: desktop rootfs 写入默认中文 locale
 - **WHEN** 构建任一 desktop rootfs
-- **THEN** `/etc/default/locale` 包含 `LANG=zh_CN.UTF-8`
-- **AND** 同一文件包含 `LANGUAGE=zh_CN:zh`
+- **THEN** `/etc/locale.conf` 与 `/etc/default/locale` 均包含 `LANG=zh_CN.UTF-8`
+- **AND** 两个路径均包含 `LANGUAGE=zh_CN:zh`
+
+#### Scenario: 非法默认 locale 提前失败
+- **WHEN** `rootfs.default_locale` 缺少 `lang` 或 `language`，或值包含换行符
+- **THEN** canonical 配置校验失败并指出对应字段
 
 ### Requirement: desktop product SHALL 安装可运行的 Chromium
 
@@ -45,6 +60,11 @@ desktop product SHALL 安装 Ubuntu 24.04 官方 `chromium-browser` 过渡 deb �
 #### Scenario: Chromium 已安装时保持幂等
 - **WHEN** desktop 镜像启动时 `/snap/bin/chromium` 已存在
 - **THEN** systemd 根据路径条件跳过安装命令
+
+#### Scenario: 首次联网安装 Snap 桌面应用
+- **WHEN** desktop 镜像首次联网启动且 App Center 或 Thunderbird 尚未安装
+- **THEN** systemd 安装 `snap-store` 的 `2/stable` track 与 `thunderbird` stable Snap
+- **AND** 已存在的 Snap MUST 被逐项跳过
 
 ### Requirement: desktop package SHALL 是标准 vendor 插接件
 
@@ -66,13 +86,17 @@ desktop package config SHALL 将可扩容 ext4 rootfs 的 `image_size` 设为 6 
 
 ### Requirement: desktop product SHALL 启用 GNOME Remote Login
 
-desktop product SHALL 安装 `gnome-remote-desktop` 并启用其系统级 RDP Remote Login。RDP 网关用户名 MUST 取 `rootfs.default_user`，密码 MUST 取同一用户的 `rootfs.users.<default_user>.password`；缺少任一值时构建 MUST 失败。系统配置成功后 MUST 删除首启暂存凭据。
+desktop product SHALL 安装 `gnome-remote-desktop` 并启用其系统级 RDP Remote Login。RDP 网关用户名 MUST 取 `rootfs.default_user`，密码 MUST 取同一用户的 `rootfs.users.<default_user>.password`；缺少任一值时构建 MUST 失败。首次启动 MUST 生成仅服务账号可读的设备本地 TLS 私钥与证书，并通过 `grdctl --system` 配置系统 daemon。证书、私钥、凭据与 RDP backend 全部配置成功后 MUST 删除首启暂存凭据。
 
 #### Scenario: 使用默认用户登录 RDP
 
 - **WHEN** desktop 配置声明 `default_user=flange` 且 `users.flange.password=flange`
-- **THEN** 首次启动执行 `grdctl rdp set-credentials flange flange` 与 `grdctl rdp enable`
+- **THEN** 首次启动生成 TLS key/cert，并执行 `grdctl --system rdp set-tls-key`、`set-tls-cert`、`set-credentials` 与 `enable`
 - **AND** 系统级 `gnome-remote-desktop.service` 被启用
+
+#### Scenario: TLS 配置失败时保留首启凭据
+- **WHEN** TLS 生成或任一 `grdctl --system` 命令失败
+- **THEN** oneshot unit 失败且首启暂存凭据仍存在，以便下次启动重试
 
 #### Scenario: desktop 默认用户没有密码
 

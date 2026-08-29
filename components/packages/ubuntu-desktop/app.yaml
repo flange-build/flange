@@ -1,7 +1,7 @@
 app:
   name: flange-ubuntu-desktop-config
-  version: 1.0.0
-  description: Ubuntu Desktop 简体中文、Dock、Remote Login 与 Chromium 配置
+  version: 1.0.1
+  description: Ubuntu Desktop Dock、Remote Login 与 Snap 应用配置
   type: service
   arch: [aarch64]
 
@@ -13,7 +13,6 @@ build:
   system: none
 
 install:
-  conf/locale: /etc/default/locale
   schemas/99_flange-ubuntu-dock.gschema.override: /usr/share/glib-2.0/schemas/99_flange-ubuntu-dock.gschema.override
 
 systemd:
@@ -29,8 +28,6 @@ depends:
   - gnome-remote-desktop
   - chromium-browser
   - snapd
-
-conffiles:
-  - /etc/default/locale
+  - openssl
 
 data_dirs: []

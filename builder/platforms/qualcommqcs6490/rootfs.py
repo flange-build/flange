@@ -98,7 +98,7 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
             packages = config["rootfs"].get("packages", [])
             if packages:
                 self._status(f"apt-get install ({len(packages)} 个包)...")
-                chroot.run(["apt-get", "install", "-y", "--no-install-recommends"] + packages,
+                chroot.run(self._apt_install_command(packages, config),
                            label=f"安装 {len(packages)} 个包...")
             chroot.run(["apt-get", "clean"])
 
@@ -128,6 +128,7 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
         self._install_extra_firmware(rootfs_dir, config)
         self._install_panel_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)
+        self._configure_default_locale(rootfs_dir, config)
         self._configure_users(rootfs_dir, config)
         self._install_hostname(rootfs_dir, config)
 

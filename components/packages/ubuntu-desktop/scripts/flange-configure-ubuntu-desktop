@@ -1,7 +1,9 @@
 #!/usr/bin/python3
-"""首次启动时配置系统级 GNOME Remote Login 与 Chromium。"""
+"""首次启动时配置系统级 GNOME Remote Login 与 Snap 桌面应用。"""
 
 import json
+import shutil
+import socket
 import subprocess
 from pathlib import Path
 
@@ -9,28 +11,56 @@ from pathlib import Path
 CREDENTIALS_PATH = Path(
     "/var/lib/flange/gnome-remote-desktop-login.json"
 )
+TLS_DIR = Path(
+    "/var/lib/gnome-remote-desktop/.local/share/gnome-remote-desktop"
+)
+TLS_CERT_PATH = TLS_DIR / "rdp-tls.crt"
+TLS_KEY_PATH = TLS_DIR / "rdp-tls.key"
 CHROMIUM_PATH = Path("/snap/bin/chromium")
+SNAP_APPS = (
+    (CHROMIUM_PATH, ("chromium",)),
+    (Path("/snap/bin/snap-store"), ("snap-store", "--channel=2/stable")),
+    (Path("/snap/bin/thunderbird"), ("thunderbird",)),
+)
 
 
 def _run(*args: str) -> None:
     subprocess.run(args, check=True)
 
 
-def _configure_remote_login() -> None:
-    if not CREDENTIALS_PATH.exists():
-        return
+def _ensure_tls_certificate() -> None:
+    TLS_DIR.mkdir(parents=True, exist_ok=True)
+    if not TLS_CERT_PATH.exists() or not TLS_KEY_PATH.exists():
+        _run(
+            "/usr/bin/openssl", "req", "-newkey", "rsa:2048",
+            "-nodes", "-x509", "-sha256", "-days", "3650",
+            "-subj", f"/CN={socket.gethostname()}",
+            "-keyout", str(TLS_KEY_PATH),
+            "-out", str(TLS_CERT_PATH),
+        )
+    shutil.chown(
+        TLS_DIR, user="gnome-remote-desktop", group="gnome-remote-desktop",
+    )
+    for path, mode in ((TLS_CERT_PATH, 0o644), (TLS_KEY_PATH, 0o600)):
+        shutil.chown(
+            path, user="gnome-remote-desktop", group="gnome-remote-desktop",
+        )
+        path.chmod(mode)
 
-    credentials = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
-    command = (
-        "/usr/sbin/runuser", "-u", "gnome-remote-desktop", "--",
-        "/usr/bin/env", "HOME=/var/lib/gnome-remote-desktop",
-        "XDG_DATA_HOME=/var/lib/gnome-remote-desktop/.local/share",
-        "/usr/bin/grdctl", "rdp",
-    )
-    _run(
-        *command, "set-credentials",
-        credentials["username"], credentials["password"],
-    )
+
+def _configure_remote_login() -> None:
+    _ensure_tls_certificate()
+    command = ("/usr/bin/grdctl", "--system", "rdp")
+    _run(*command, "set-tls-cert", str(TLS_CERT_PATH))
+    _run(*command, "set-tls-key", str(TLS_KEY_PATH))
+    if CREDENTIALS_PATH.exists():
+        credentials = json.loads(
+            CREDENTIALS_PATH.read_text(encoding="utf-8")
+        )
+        _run(
+            *command, "set-credentials",
+            credentials["username"], credentials["password"],
+        )
     _run(*command, "enable")
     _run(
         "/usr/bin/systemctl", "enable", "gnome-remote-desktop.service",
@@ -38,13 +68,14 @@ def _configure_remote_login() -> None:
     _run(
         "/usr/bin/systemctl", "restart", "gnome-remote-desktop.service",
     )
-    CREDENTIALS_PATH.unlink()
+    CREDENTIALS_PATH.unlink(missing_ok=True)
 
 
 def main() -> None:
     _configure_remote_login()
-    if not CHROMIUM_PATH.exists():
-        _run("/usr/bin/snap", "install", "chromium")
+    for executable, args in SNAP_APPS:
+        if not executable.exists():
+            _run("/usr/bin/snap", "install", *args)
 
 
 if __name__ == "__main__":
