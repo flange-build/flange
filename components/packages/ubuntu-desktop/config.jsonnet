@@ -26,7 +26,7 @@
   // 可扩容 ext4 rootfs 的板，固定 512 MiB SPI NAND 板不启用本 package。
   partitions+: {
     entries: [
-      if entry.name == 'rootfs' then entry + { image_size: '6G' } else entry
+      if entry.name == 'rootfs' then entry + { image_size: '8G' } else entry
       for entry in super.entries
     ],
   },
