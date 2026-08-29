@@ -54,26 +54,47 @@
       name: 'libgstreamer1.0-0',
       url: 'https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/libgstreamer1.0-0_1.24.2_arm64.deb',
       sha256: '23cd246e5c5472936c596d314ca8e9e887cd323a586c22b90224467198262e69',
+      // vendor deb 合并了 Ubuntu 拆分到 tools / plugins-base-apps / libgst*
+      // 的文件。显式允许接管这些文件，并锁定所有相关已安装包，避免后续
+      // apt upgrade 用 1.24.2-1ubuntu* 覆盖 Rockchip patched 版本。
+      force_overwrite: true,
+      hold_packages: [
+        'libgstreamer1.0-0',
+        'gstreamer1.0-tools',
+        'gstreamer1.0-plugins-base',
+        'gstreamer1.0-alsa',
+        'gstreamer1.0-plugins-base-apps',
+        'libgstreamer-gl1.0-0',
+        'libgstreamer-plugins-base1.0-0',
+        'gstreamer1.0-plugins-good',
+        'gstreamer1.0-plugins-bad',
+        'libgstreamer-plugins-good1.0-0',
+        'gstreamer1.0-rockchip',
+      ],
     },
     {
       name: 'gstreamer1.0-plugins-base',
       url: 'https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/gstreamer1.0-plugins-base_1.24.2_arm64.deb',
       sha256: 'c736643550e5b9922c5020281d96e39cfee82b42de996484f330e10c2e5fe409',
+      force_overwrite: true,
     },
     {
       name: 'gstreamer1.0-plugins-good',
       url: 'https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/gstreamer1.0-plugins-good_1.24.2_arm64.deb',
       sha256: '5324e07b23a90510024454b96eb98e6c64c76c85e54e15d6a2c9077c2239033b',
+      force_overwrite: true,
     },
     {
       name: 'gstreamer1.0-plugins-bad',
       url: 'https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/gstreamer1.0-plugins-bad_1.24.2_arm64.deb',
       sha256: '6854bb699b4bb7fcc4fe23e51306c6c57c2e69dea3aaa9776cba537f6d46c3c2',
+      force_overwrite: true,
     },
     {
       name: 'gstreamer1.0-rockchip',
       url: 'https://github.com/CmST0us/rockchip-multimedia-ubuntu/releases/download/1.0.0/gstreamer1.0-rockchip_1.0-1_arm64.deb',
       sha256: '4e8a6fdb195d3acd7b16c59c81b3b9a263d16324753fba4f700b2217d5139c32',
+      force_overwrite: true,
     },
   ],
   // RTL8852BE 使用 rkwifibt vendor OOT 驱动：M 指向实际模块目录，Makefile 的

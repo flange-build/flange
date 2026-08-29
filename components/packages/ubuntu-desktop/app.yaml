@@ -1,7 +1,7 @@
 app:
   name: flange-ubuntu-desktop-config
   version: 1.0.0
-  description: Ubuntu Desktop 简体中文、Remote Login 与 Chromium 配置
+  description: Ubuntu Desktop 简体中文、Dock、Remote Login 与 Chromium 配置
   type: service
   arch: [aarch64]
 
@@ -14,6 +14,7 @@ build:
 
 install:
   conf/locale: /etc/default/locale
+  schemas/99_flange-ubuntu-dock.gschema.override: /usr/share/glib-2.0/schemas/99_flange-ubuntu-dock.gschema.override
 
 systemd:
   unit: systemd/flange-configure-ubuntu-desktop.service

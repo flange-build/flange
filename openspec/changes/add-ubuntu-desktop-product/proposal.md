@@ -8,6 +8,7 @@
 - 为具备可扩容 ext4 rootfs 的板子增加 `desktop-debug` 与 `desktop-release` target；保留现有 product/variant 行为。
 - desktop rootfs 安装 `ubuntu-desktop`、`glmark2-wayland`、简体中文语言包、中文字体与 Chromium 浏览器入口，并将系统默认 locale 设为 `zh_CN.UTF-8`。
 - desktop rootfs 默认启用 GNOME Remote Desktop 的 Remote Login，并复用 rootfs 配置的默认用户名与密码作为 RDP 登录凭据。
+- desktop rootfs 将 Ubuntu Dock 默认放在屏幕底部，启用智能自动隐藏并关闭 Panel Mode。
 - 为桌面镜像统一提供足够的初始 rootfs 容量；固定 512 MiB SPI NAND 的 RK3506B 不暴露 desktop target。
 - Chromium 在 Ubuntu 24.04 中通过 Snap 分发；镜像安装官方过渡 deb，并在首次联网启动时自动安装 `chromium` snap。
 

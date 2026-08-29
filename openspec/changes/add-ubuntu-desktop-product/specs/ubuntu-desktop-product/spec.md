@@ -78,3 +78,15 @@ desktop product SHALL 安装 `gnome-remote-desktop` 并启用其系统级 RDP Re
 
 - **WHEN** desktop 配置的 `default_user` 不存在或该用户没有非空 `password`
 - **THEN** rootfs 构建在写入 Remote Login 配置前失败并指出缺少用户名或密码
+
+### Requirement: desktop product SHALL 提供统一 Ubuntu Dock 默认布局
+
+desktop product SHALL 将 Ubuntu Dock 默认放在屏幕底部，启用窗口重叠时自动隐藏，并关闭 Panel Mode。
+该策略 MUST 作为 `flange-ubuntu-desktop-config` App 的 GSettings 默认值交付，且 MUST NOT 锁定用户设置。
+
+#### Scenario: 新用户首次进入 Ubuntu 桌面
+
+- **WHEN** 用户尚未写入个人 Ubuntu Dock 设置
+- **THEN** `dock-position` 为 `BOTTOM`
+- **AND** `dock-fixed=false`、`autohide=true`、`intellihide=true`
+- **AND** `extend-height=false`

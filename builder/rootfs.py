@@ -131,6 +131,8 @@ class RootfsBuilder(ComponentBuilder):
               "url": "https://github.com/.../xserver-xorg-img-bxm_1.21.1-2_arm64.deb",
               "sha256": "<hex>",
               "filename": "xserver-xorg-img-bxm_1.21.1-2_arm64.deb",  # 可选
+              "force_overwrite": true,  # 可选，允许覆盖其他包拥有的文件
+              "hold_packages": ["xserver-xorg-img-bxm"],  # 可选
             },
           ]
 
@@ -140,12 +142,13 @@ class RootfsBuilder(ComponentBuilder):
         extra_debs = config.get("rootfs", {}).get("extra_debs", [])
         if not extra_debs:
             return
-        deb_files = []
+        deb_entries = []
         for deb_cfg in extra_debs:
             name = deb_cfg["name"]
             self._status(f"下载外部 deb: {name}")
             deb_path = self.source.ensure_extra_deb(name, deb_cfg)
-            deb_files.append(deb_path)
+            deb_entries.append((deb_cfg, deb_path))
+        deb_files = [entry[1] for entry in deb_entries]
         deb_names = [d.name for d in deb_files]
         self._status(f"安装 {len(deb_files)} 个外部 deb: {', '.join(deb_names)}")
         deb_tmp = rootfs_dir / "tmp" / "flange-extra-debs"
@@ -153,9 +156,43 @@ class RootfsBuilder(ComponentBuilder):
         for deb in deb_files:
             shutil.copy2(deb, deb_tmp)
         with ChrootContext(rootfs_dir, self.docker) as chroot:
-            deb_list = [f"/tmp/flange-extra-debs/{d.name}" for d in deb_files]
-            chroot.run(["dpkg", "-i", "--force-confnew"] + deb_list,
-                       label=f"dpkg -i ({len(deb_files)} 个外部包)...")
+            batches = []
+            for deb_cfg, deb_file in deb_entries:
+                force_overwrite = deb_cfg.get("force_overwrite", False)
+                if not batches or batches[-1][0] != force_overwrite:
+                    batches.append((force_overwrite, []))
+                batches[-1][1].append(deb_file)
+            for force_overwrite, batch in batches:
+                command = ["dpkg", "-i", "--force-confnew"]
+                if force_overwrite:
+                    command.append("--force-overwrite")
+                command.extend(
+                    f"/tmp/flange-extra-debs/{deb.name}" for deb in batch)
+                chroot.run(
+                    command,
+                    label=f"dpkg -i ({len(batch)} 个外部包)...",
+                )
+
+            hold_packages = list(dict.fromkeys(
+                package
+                for deb_cfg, _ in deb_entries
+                for package in deb_cfg.get("hold_packages", [])
+            ))
+            if hold_packages:
+                chroot.run(
+                    [
+                        "/bin/sh", "-c",
+                        "set -xe\n"
+                        "for package do\n"
+                        "    if dpkg-query -W -f='${db:Status-Abbrev}' "
+                        "\"$package\" 2>/dev/null | grep -q '^ii '; then\n"
+                        "        apt-mark hold \"$package\"\n"
+                        "    fi\n"
+                        "done",
+                        "flange-apt-hold", *hold_packages,
+                    ],
+                    label=f"锁定 {len(hold_packages)} 个外部包相关版本...",
+                )
             chroot.run(["ldconfig"], label="ldconfig...")
         shutil.rmtree(deb_tmp)
 

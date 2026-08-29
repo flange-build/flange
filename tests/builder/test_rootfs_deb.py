@@ -582,3 +582,55 @@ class TestExtraDebs:
         deb_args = [a for a in dpkg_cmd if a.endswith(".deb")]
         assert len(deb_args) == 2
         assert mock_chroot.run.call_args_list[1][0][0] == ["ldconfig"]
+
+    def test_强制覆盖包单独安装并锁定已安装版本(self, tmp_path: Path):
+        """force_overwrite 包应显式覆盖冲突文件并锁定相关已安装包。"""
+        builder = _make_builder(tmp_path)
+        rootfs_dir = tmp_path / "rootfs"
+        rootfs_dir.mkdir(parents=True)
+        regular_deb = tmp_path / "vendor-runtime_1.0_arm64.deb"
+        forced_deb = tmp_path / "vendor-gstreamer_1.0_arm64.deb"
+        regular_deb.write_bytes(b"runtime")
+        forced_deb.write_bytes(b"gstreamer")
+        builder.source.ensure_extra_deb.side_effect = [
+            regular_deb, forced_deb,
+        ]
+
+        mock_chroot = MagicMock()
+        mock_chroot.__enter__ = MagicMock(return_value=mock_chroot)
+        mock_chroot.__exit__ = MagicMock(return_value=False)
+        with patch("builder.rootfs.ChrootContext", return_value=mock_chroot):
+            config = _make_config(tmp_path)
+            config["rootfs"]["extra_debs"] = [
+                {
+                    "name": "vendor-runtime",
+                    "url": "https://example.com/runtime.deb",
+                    "sha256": "a" * 64,
+                },
+                {
+                    "name": "vendor-gstreamer",
+                    "url": "https://example.com/gstreamer.deb",
+                    "sha256": "b" * 64,
+                    "force_overwrite": True,
+                    "hold_packages": [
+                        "vendor-gstreamer", "ubuntu-split-package",
+                    ],
+                },
+            ]
+            builder._install_extra_debs(rootfs_dir, config)
+
+        calls = mock_chroot.run.call_args_list
+        assert calls[0][0][0] == [
+            "dpkg", "-i", "--force-confnew",
+            "/tmp/flange-extra-debs/vendor-runtime_1.0_arm64.deb",
+        ]
+        assert calls[1][0][0] == [
+            "dpkg", "-i", "--force-confnew", "--force-overwrite",
+            "/tmp/flange-extra-debs/vendor-gstreamer_1.0_arm64.deb",
+        ]
+        hold_command = calls[2][0][0]
+        assert hold_command[-2:] == [
+            "vendor-gstreamer", "ubuntu-split-package",
+        ]
+        assert "apt-mark hold" in hold_command[2]
+        assert calls[3][0][0] == ["ldconfig"]

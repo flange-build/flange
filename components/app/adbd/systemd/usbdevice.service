@@ -20,6 +20,7 @@ Type=oneshot
 RemainAfterExit=yes
 Environment=TERM=xterm
 Environment=TMPDIR=/tmp
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 ExecStart=/usr/sbin/usbdevice start
 ExecReload=/usr/sbin/usbdevice update
 ExecStop=/usr/sbin/usbdevice stop

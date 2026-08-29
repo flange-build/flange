@@ -62,7 +62,7 @@ def test_desktop_product_applies_common_package_config():
     assert package_config not in default.jsonnet_dependencies
 
 
-def test_desktop_vendor_app_carries_locale_and_chromium_unit():
+def test_desktop_vendor_app_carries_locale_dock_and_chromium_unit():
     package_dir = PROJECT_ROOT / "components/packages/ubuntu-desktop"
     spec = load_spec(package_dir)
     install_paths = {
@@ -76,6 +76,11 @@ def test_desktop_vendor_app_carries_locale_and_chromium_unit():
     assert spec.systemd.auto_start is True
     assert "/etc/default/locale" in install_paths
     assert (
+        "/usr/share/glib-2.0/schemas/"
+        "99_flange-ubuntu-dock.gschema.override"
+        in install_paths
+    )
+    assert (
         "/lib/systemd/system/flange-configure-ubuntu-desktop.service"
         in install_paths
     )
@@ -86,6 +91,19 @@ def test_desktop_vendor_app_carries_locale_and_chromium_unit():
     )
     assert (package_dir / "conf/locale").read_text() == (
         "LANG=zh_CN.UTF-8\nLANGUAGE=zh_CN:zh\n"
+    )
+    assert (
+        package_dir
+        / "schemas/99_flange-ubuntu-dock.gschema.override"
+    ).read_text() == (
+        "# Ubuntu desktop profile 的 Dock 默认布局；"
+        "用户仍可在 Settings 中覆盖。\n"
+        "[org.gnome.shell.extensions.dash-to-dock:ubuntu]\n"
+        "dock-position='BOTTOM'\n"
+        "dock-fixed=false\n"
+        "autohide=true\n"
+        "intellihide=true\n"
+        "extend-height=false\n"
     )
     unit = (
         package_dir

@@ -13,6 +13,7 @@ def test_adbd_service_exports_runtime_environment():
     lines = SERVICE.read_text().splitlines()
     assert "Environment=TERM=xterm" in lines
     assert "Environment=TMPDIR=/tmp" in lines
+    assert "Environment=XDG_RUNTIME_DIR=/run/user/1000" in lines
 
 
 def test_adbd_service_waits_for_modules_and_configfs():

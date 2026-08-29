@@ -197,6 +197,9 @@ canonical JSON（规范化 JSON）交给 Python builder。
     `sources`，或直接使用统一 `{url, sha256, filename}` 下载 descriptor；
     `files` 元素支持字符串或 `{src, dest}` 做重命名
   - `rootfs.extra_debs`：从 URL 直下不在 Ubuntu 官方源的预编译 deb，必须声明 `sha256` 校验
+    ；vendor 合并包与 Ubuntu 拆分包存在已确认的文件冲突时，MAY 显式声明
+    `force_overwrite: true`，并通过 `hold_packages` 锁定实际已安装的相关包，防止后续 APT
+    升级覆盖 vendor 版本。未声明时 MUST 保持 dpkg 默认的冲突拒绝行为
   - 数组增减使用 Jsonnet 原生 `+` 与 `components/config/lib.libsonnet`
     的 `without`；缓存哈希纳入配置和 source 内容变更
 - `components/packages` 中的 `vendor` component MUST 注册为本地 custom package，

@@ -88,6 +88,10 @@ _CANONICAL_OVERLAY_FIELDS = {
 }
 _DOWNLOAD_FIELDS = {"url", "sha256", "filename"}
 _CANONICAL_OOT_SOURCE_FIELDS = {"source"}
+_CANONICAL_EXTRA_DEB_FIELDS = {
+    "name", "url", "sha256", "filename", "force_overwrite",
+    "hold_packages",
+}
 _CANONICAL_EXTRA_FIRMWARE_FIELDS = {
     "name", "source", "files", "dest", "url", "sha256", "filename",
 }
@@ -256,13 +260,23 @@ def validate_canonical_config(config: dict) -> None:
             "rootfs",
         )
     for index, descriptor in enumerate(rootfs.get("extra_debs") or []):
+        path = f"rootfs.extra_debs[{index}]"
         if not isinstance(descriptor, dict) or not descriptor.get("name"):
-            raise ConfigError(f"rootfs.extra_debs[{index}].name 未声明")
+            raise ConfigError(f"{path}.name 未声明")
+        _reject_unknown(descriptor, _CANONICAL_EXTRA_DEB_FIELDS, path)
         _validate_download_descriptor(
             {key: descriptor[key] for key in _DOWNLOAD_FIELDS
              if key in descriptor},
-            f"rootfs.extra_debs[{index}]",
+            path,
         )
+        force_overwrite = descriptor.get("force_overwrite", False)
+        if not isinstance(force_overwrite, bool):
+            raise ConfigError(f"{path}.force_overwrite 必须是布尔值")
+        hold_packages = descriptor.get("hold_packages", [])
+        if (not isinstance(hold_packages, list)
+                or any(not isinstance(package, str) or not package
+                       for package in hold_packages)):
+            raise ConfigError(f"{path}.hold_packages 必须是非空字符串数组")
     for index, apt_source in enumerate(rootfs.get("extra_apt_sources") or []):
         if not isinstance(apt_source, dict) or not apt_source.get("name"):
             raise ConfigError(f"rootfs.extra_apt_sources[{index}].name 未声明")

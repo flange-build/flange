@@ -45,6 +45,12 @@
 
 package config 显式启用 `rootfs.gnome_remote_desktop_login`。rootfs 账号配置完成后，将 `default_user` 及其明文 `password` 写入 root-only 的首启凭据文件；缺少默认用户或密码时构建直接失败。vendor App 的桌面配置 oneshot 在 GDM 就绪后以 `gnome-remote-desktop` 系统账号执行 `grdctl rdp set-credentials` 与 `grdctl rdp enable`，再启用系统级 `gnome-remote-desktop.service`。配置成功后删除暂存凭据，避免长期额外保留明文文件。
 
+### 5. Ubuntu Dock 使用后置 GSettings override
+
+vendor App 安装排序晚于 Ubuntu 的 `.gschema.override`，在 `/usr/share/glib-2.0/schemas/` 交付后置
+override，复用 GLib 的 dpkg path trigger 自动重编译 schema。对 Ubuntu desktop profile 显式设置底部、
+智能自动隐藏和非 Panel Mode，不新增首启脚本，也不锁定用户后续自行调整。
+
 ## Risks / Trade-offs
 
 - [首次启动无网络时 Chromium 尚不可用] → unit 保持启用，后续重启会再次尝试；系统其余桌面功能不受影响。
