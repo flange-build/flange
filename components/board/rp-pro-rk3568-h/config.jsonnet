@@ -19,7 +19,8 @@ local product = std.extVar('product');
   platform: 'rockchip',
   products: ['default', 'desktop'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     rkwifibt: {
       // 注：CONFIG_DRM_GUD=y 已上移到 rk3568 SoC 层（全平台默认启用 GUD），

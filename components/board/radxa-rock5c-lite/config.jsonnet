@@ -44,7 +44,8 @@ local product = std.extVar('product');
   platform: 'rockchip',
   products: ['default', 'desktop'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     aic8800: {
       url: 'https://github.com/radxa-pkg/aic8800.git',

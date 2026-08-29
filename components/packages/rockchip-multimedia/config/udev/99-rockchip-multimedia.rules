@@ -1,0 +1,12 @@
+# MPP/VPU/RGA 与 DMA Heap 设备权限，允许 video 组使用硬件编解码和 2D 加速。
+SUBSYSTEM=="video4linux", GROUP="video", MODE="0660"
+KERNEL=="mpp_service", GROUP="video", MODE="0660"
+KERNEL=="rkvdec", GROUP="video", MODE="0660"
+KERNEL=="rkvenc", GROUP="video", MODE="0660"
+KERNEL=="rga", GROUP="video", MODE="0660"
+KERNEL=="vepu", GROUP="video", MODE="0660"
+KERNEL=="avsd", GROUP="video", MODE="0660"
+KERNEL=="h265e", GROUP="video", MODE="0660"
+KERNEL=="reserved", SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"
+KERNEL=="system", SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"
+KERNEL=="system-uncached", SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"

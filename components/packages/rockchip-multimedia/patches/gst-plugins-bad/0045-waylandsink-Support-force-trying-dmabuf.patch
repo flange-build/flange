@@ -1,0 +1,262 @@
+From 2bd204e7b24c8f55a4850791a06a0f3fb2536cb3 Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 14:08:11 +0800
+Subject: [PATCH 45/45] waylandsink: Support force trying dmabuf
+
+Not all source plugins would provide dma feature for dmabuf.
+
+Set env WAYLANDSINK_FORCE_DMABUF=1 to enable it.
+
+Tested on RK3588 EVB with:
+export GST_MPP_VIDEODEC_DEFAULT_ARM_AFBC=1
+export WAYLANDSINK_FORCE_DMABUF=1
+gst-play-1.0 hevc.mp4 --videosink=waylandsink
+
+Signed-off-by: Jeffy Chen <jeffy.chen@rock-chips.com>
+---
+ ext/wayland/gstwaylandsink.c | 96 +++++++++++++++++-------------------
+ ext/wayland/gstwaylandsink.h |  1 +
+ 2 files changed, 47 insertions(+), 50 deletions(-)
+
+diff --git a/ext/wayland/gstwaylandsink.c b/ext/wayland/gstwaylandsink.c
+index a13b7d7..000fdb2 100644
+--- a/ext/wayland/gstwaylandsink.c
++++ b/ext/wayland/gstwaylandsink.c
+@@ -75,7 +75,6 @@ GST_DEBUG_CATEGORY (gstwayland_debug);
+ #define GST_CAT_DEFAULT gstwayland_debug
+ 
+ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
+-    "NV12_10LE40, NV16_10LE40, " \
+     GST_PAD_SINK,
+     GST_PAD_ALWAYS,
+     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_WL_VIDEO_FORMATS) ";"
+@@ -261,6 +260,8 @@ gst_wayland_sink_class_init (GstWaylandSinkClass * klass)
+ static void
+ gst_wayland_sink_init (GstWaylandSink * self)
+ {
++  const gchar *env;
++
+   g_mutex_init (&self->display_lock);
+   g_mutex_init (&self->render_lock);
+   g_cond_init (&self->redraw_cond);
+@@ -269,6 +270,10 @@ gst_wayland_sink_init (GstWaylandSink * self)
+   self->layer = GST_WL_WINDOW_LAYER_NORMAL;
+   self->alpha = 1.0;
+   self->fill_mode = DEFAULT_FILL_MODE;
++
++  env = g_getenv ("WAYLANDSINK_FORCE_DMABUF");
++  if (env && !strcmp (env, "1"))
++    self->force_dmabuf = TRUE;
+ }
+ 
+ static void
+@@ -669,9 +674,10 @@ gst_wayland_sink_fixup_caps (GstWaylandSink * self, GstCaps * caps)
+   /* HACK: Allow nv12-10le40 nv16-10le40 and arm-afbc in main caps */
+ 
+   if (gst_wl_display_support_nv12_10le40 (self->display)) {
+-    tmp_caps = gst_caps_from_string (
+-        GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
+-            "NV12_10LE40"));
++    tmp_caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE ("NV12_10LE40"));
++    if (!self->force_dmabuf)
++      gst_caps_set_features_simple (tmp_caps,
++          gst_caps_features_new_single (GST_CAPS_FEATURE_MEMORY_DMABUF));
+ 
+     /* NV15(AFBC) */
+     if (gst_wl_display_support_afbc (self->display)) {
+@@ -703,23 +709,17 @@ gst_wayland_sink_fixup_caps (GstWaylandSink * self, GstCaps * caps)
+ 
+   /* NV12|NV16 (AFBC) */
+   if (gst_wl_display_support_afbc (self->display)) {
+-    if (gst_wl_display_check_format_for_dmabuf (self->display,
+-            GST_VIDEO_FORMAT_NV12)) {
+-      tmp_caps = gst_caps_from_string (
+-          GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
+-              "NV12"));
+-      gst_caps_set_simple (tmp_caps, "arm-afbc", G_TYPE_INT, 1, NULL);
+-      gst_caps_append (caps, tmp_caps);
+-    }
++    tmp_caps = gst_caps_from_string (
++        GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
++            "NV12"));
++    gst_caps_set_simple (tmp_caps, "arm-afbc", G_TYPE_INT, 1, NULL);
++    gst_caps_append (caps, tmp_caps);
+ 
+-    if (gst_wl_display_check_format_for_dmabuf (self->display,
+-            GST_VIDEO_FORMAT_NV16)) {
+-      tmp_caps = gst_caps_from_string (
+-          GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
+-              "NV16"));
+-      gst_caps_set_simple (tmp_caps, "arm-afbc", G_TYPE_INT, 1, NULL);
+-      gst_caps_append (caps, tmp_caps);
+-    }
++    tmp_caps = gst_caps_from_string (
++        GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
++            "NV16"));
++    gst_caps_set_simple (tmp_caps, "arm-afbc", G_TYPE_INT, 1, NULL);
++    gst_caps_append (caps, tmp_caps);
+   }
+ 
+   return caps;
+@@ -829,8 +829,6 @@ gst_wayland_activate_shm_pool (GstWaylandSink * self)
+ {
+   GstAllocator *alloc = NULL;
+ 
+-  GstStructure *s;
+-  gint value;
+   if (self->pool && gst_buffer_pool_is_active (self->pool)) {
+     GstStructure *config = gst_buffer_pool_get_config (self->pool);
+     gboolean is_shm = FALSE;
+@@ -838,15 +836,6 @@ gst_wayland_activate_shm_pool (GstWaylandSink * self)
+     if (gst_buffer_pool_config_get_allocator (config, &alloc, NULL) && alloc)
+       is_shm = GST_IS_SHM_ALLOCATOR (alloc);
+ 
+-  /* parse AFBC from caps */
+-  s = gst_caps_get_structure (caps, 0);
+-  if (gst_structure_get_int (s, "arm-afbc", &value)) {
+-    if (value)
+-      GST_VIDEO_INFO_SET_AFBC (&self->video_info);
+-    else
+-      GST_VIDEO_INFO_UNSET_AFBC (&self->video_info);
+-  }
+-
+     gst_structure_free (config);
+ 
+     if (is_shm)
+@@ -923,7 +912,6 @@ gst_wayland_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
+ 
+   /* free pooled buffer used with previous caps */
+   if (self->pool) {
+-  g_cond_signal (&self->redraw_cond);
+     gst_buffer_pool_set_active (self->pool, FALSE);
+     gst_clear_object (&self->pool);
+   }
+@@ -931,6 +919,9 @@ gst_wayland_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
+   use_dmabuf = gst_caps_features_contains (gst_caps_get_features (caps, 0),
+       GST_CAPS_FEATURE_MEMORY_DMABUF);
+ 
++  if (self->force_dmabuf)
++    use_dmabuf = TRUE;
++
+   /* validate the format base on the memory type. */
+   if (use_dmabuf) {
+     if (!gst_wl_display_check_format_for_dmabuf (self->display,
+@@ -944,6 +935,18 @@ gst_wayland_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
+     goto unsupported_format;
+   }
+ 
++  /* parse AFBC from caps */
++  {
++    GstStructure *s = gst_caps_get_structure (caps, 0);
++    gint afbc_value;
++    if (gst_structure_get_int (s, "arm-afbc", &afbc_value)) {
++      if (afbc_value)
++        GST_VIDEO_INFO_SET_AFBC (&self->video_info);
++      else
++        GST_VIDEO_INFO_UNSET_AFBC (&self->video_info);
++    }
++  }
++
+   /* Will be used to create buffer pools */
+   gst_caps_replace (&self->caps, caps);
+ 
+@@ -959,11 +962,6 @@ unsupported_drm_format:
+   {
+     GST_ERROR_OBJECT (self, "DRM format %" GST_FOURCC_FORMAT
+         " is not available on the display",
+-
+-  if (g_getenv ("WAYLANDSINK_SYNC_FRAME")) {
+-    while (self->redraw_pending)
+-      g_cond_wait (&self->redraw_cond, &self->render_lock);
+-  }
+         GST_FOURCC_ARGS (self->drm_info.drm_fourcc));
+     return FALSE;
+   }
+@@ -1069,6 +1067,7 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
+   GstWlBuffer *wlbuffer;
+   GstMemory *mem;
+   struct wl_buffer *wbuf = NULL;
++  GstVideoMeta *vmeta;
+ 
+   GstFlowReturn ret = GST_FLOW_OK;
+ 
+@@ -1102,7 +1101,6 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
+       gst_wl_window_ensure_fill_mode (self->window, self->fill_mode);
+     }
+   }
+-  GstVideoCropMeta *crop;
+ 
+   /* make sure that the application has called set_render_rectangle() */
+   if (G_UNLIKELY (gst_wl_window_get_render_rectangle (self->window)->w == 0))
+@@ -1120,6 +1118,13 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
+   }
+ 
+   /* update video info from video meta */
++  vmeta = gst_buffer_get_video_meta (buffer);
++  if (vmeta) {
++    /* prefer the padded width/height from vmeta */
++    self->video_info.width = vmeta->width;
++    self->video_info.height = vmeta->height;
++  }
++
+   mem = gst_buffer_peek_memory (buffer, 0);
+ 
+   GST_LOG_OBJECT (self,
+@@ -1142,11 +1147,6 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
+        * if it was a SHM since the compositor needs to copy that anyway, and
+        * offloading the compositor from a copy helps maintaining a smoother
+        * desktop.
+-  crop = gst_buffer_get_video_crop_meta (buffer);
+-  if (crop)
+-    gst_wl_window_ensure_crop (self->window, crop->x, crop->y,
+-        crop->width, crop->height);
+-
+        */
+       GstVideoFrame src, dst;
+ 
+@@ -1165,10 +1165,6 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
+       if (G_UNLIKELY (!wlbuffer)) {
+         wbuf = gst_wl_linux_dmabuf_construct_wl_buffer (to_render,
+             self->display, &self->drm_info);
+-    /* prefer the padded width/height from vmeta */
+-    self->video_info.width = vmeta->width;
+-    self->video_info.height = vmeta->height;
+-
+ 
+         if (G_UNLIKELY (!wbuf)) {
+           GST_WARNING_OBJECT (self, "failed to import DRM Dumb dmabuf");
+@@ -1199,11 +1195,12 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
+   }
+ 
+ handle_shm:
+-  if (!wbuf && gst_wl_display_check_format_for_shm (self->display,
+-          &self->video_info)) {
+   if (!wbuf && GST_VIDEO_INFO_IS_AFBC (&self->video_info))
+     goto no_afbc;
+ 
++  if (!wbuf && gst_wl_display_check_format_for_shm (self->display,
++          &self->video_info)) {
++
+     if (gst_buffer_n_memory (buffer) == 1 && gst_is_fd_memory (mem))
+       wbuf = gst_wl_shm_memory_construct_wl_buffer (mem, self->display,
+           &self->video_info);
+@@ -1398,7 +1395,6 @@ gst_wayland_sink_set_window_handle (GstVideoOverlay * overlay, guintptr handle)
+         if (self->last_buffer) {
+           /* Resend video info to force resize video surface */
+           self->resend_info = TRUE;
+-          self->redraw_pending = FALSE;
+         }
+       }
+     } else {
+diff --git a/ext/wayland/gstwaylandsink.h b/ext/wayland/gstwaylandsink.h
+index 03b5885..38e95ef 100644
+--- a/ext/wayland/gstwaylandsink.h
++++ b/ext/wayland/gstwaylandsink.h
+@@ -77,6 +77,7 @@ struct _GstWaylandSink
+ 
+   GstVideoRectangle render_rectangle;
+   gboolean skip_dumb_buffer_copy;
++  gboolean force_dmabuf;
+ };
+ 
+ struct _GstWaylandSinkClass

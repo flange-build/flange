@@ -31,7 +31,8 @@ local product = std.extVar('product');
   platform: 'rockchip',
   products: ['default', 'desktop'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     'radxa-firmware': {
       // 账号体系沿用 components/rootfs/config.jsonnet base 层默认：root 完全锁定，默认

@@ -51,6 +51,8 @@ class BuildConfig:
     options: Dict[str, str] = field(default_factory=dict)
     # 构建产物路径列表（相对于 App 目录）
     outputs: List[str] = field(default_factory=list)
+    # custom vendor App 直接生成的完整 deb 文件名
+    deb_outputs: List[str] = field(default_factory=list)
     # App 间构建依赖
     deps: List[str] = field(default_factory=list)
     # 当前构建容器内安装的 APT 编译依赖，支持 :{arch} 架构占位符
@@ -320,6 +322,23 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
     options = {str(k): str(v) for k, v in options.items()}
 
     outputs = _parse_str_list_value(raw.get("outputs", []), "build.outputs")
+    deb_outputs = _parse_str_list_value(
+        raw.get("deb_outputs", []), "build.deb_outputs",
+    )
+    if deb_outputs and (app_info.type != "vendor" or system != "custom"):
+        raise AppSpecError(
+            "build.deb_outputs 仅允许用于 app.type=vendor 且 "
+            "build.system=custom"
+        )
+    for filename in deb_outputs:
+        path = PurePosixPath(filename)
+        if (path.name != filename or not filename.endswith(".deb")
+                or filename == ".deb"
+                or any(char in filename for char in "*?[]")):
+            raise AppSpecError(
+                "build.deb_outputs 只能包含输出目录内的安全 .deb 文件名: "
+                f"{filename!r}"
+            )
     deps = _parse_str_list_value(raw.get("deps", []), "build.deps")
     apt_packages = _parse_str_list_value(
         raw.get("apt_packages", []),
@@ -350,6 +369,7 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
         system=system,
         options=options,
         outputs=outputs,
+        deb_outputs=deb_outputs,
         deps=deps,
         apt_packages=apt_packages,
         commands=parsed_commands,

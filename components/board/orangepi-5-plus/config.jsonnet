@@ -33,7 +33,8 @@ local panel = product == 'wks55fhd001wct-bringup';
   // 加载。default product 不挂屏，不带这条 overlay。
   products: ['default', 'desktop', 'wks55fhd001wct-bringup'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     rkwifibt: {
       // ---- M.2 E-Key 槽位 RTL8852BE WiFi6+BT5.2 combo 卡支持 ----

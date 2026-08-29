@@ -43,17 +43,6 @@ local common = import 'config/rockchip.libsonnet';
     config: { CONFIG_DRM_GUD: 'y' },
     device_tree: { directory: 'rockchip' },
   },
-  // Rockchip 多媒体加速栈（VPU + RGA + GStreamer-rockchip 插件），来自
-  // CmST0us/rockchip-multimedia-ubuntu release 1.0.0 的 prebuilt deb。
-  // 与 rk3588 SoC 用同一组 deb：rockchip-mpp 是用户态 chip 抽象层
-  // （内部按 mpp_platform_check 分发 RK3568 vepu540c / vdpu341 与
-  // RK3588 vepu120 / vdpu382c），RGA 库与 gstreamer-rockchip 插件均
-  // chip-agnostic，noble 24.04 base 自带 gstreamer 1.24.2 上游版本但
-  // 缺 gstreamer1.0-rockchip 私有 plugin 且作者打包的 1.24.2 与
-  // plugin ABI 锁定，core/plugins-{base,good,bad} 必须用本仓库重打包
-  // 保持 ABI 一致。安装顺序：runtime 库 → 开发头 → gstreamer core
-  // → plugins → 厂商插件，dpkg -i 一次性传入做依赖 unrolling。
-  rootfs+: { extra_debs+: common.multimediaDebs },
   boot+: {
     // Overlay 按来源拆分：intree 由 kernel make 编译，vendor 由公共
     // device-tree-overlay 组件编译；basename 全局唯一并平铺到 boot.img。

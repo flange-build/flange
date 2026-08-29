@@ -1,0 +1,23 @@
+From bdc892f5c19abf72356a15275f7d28887768608d Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 13:41:22 +0800
+Subject: [PATCH 19/22] HACK: gl/egl: allow direct dmabuf import when unable to
+ query formats
+
+
+diff --git a/gst-libs/gst/gl/egl/gsteglimage.c b/gst-libs/gst/gl/egl/gsteglimage.c
+index b70fd59..4d41a9d 100644
+--- a/gst-libs/gst/gl/egl/gsteglimage.c
++++ b/gst-libs/gst/gl/egl/gsteglimage.c
+@@ -759,7 +759,7 @@ gst_egl_image_check_dmabuf_direct_with_dma_drm (GstGLContext * context,
+   if (!gst_gl_context_egl_get_format_modifiers (context, fourcc, &modifiers)) {
+     GST_DEBUG ("driver does not support importing fourcc %" GST_FOURCC_FORMAT,
+         GST_FOURCC_ARGS (fourcc));
+-    return FALSE;
++    return TRUE;
+   }
+ 
+   if (modifiers) {
+-- 
+2.43.0
+

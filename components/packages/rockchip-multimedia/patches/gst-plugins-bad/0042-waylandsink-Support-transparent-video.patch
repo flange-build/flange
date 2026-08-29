@@ -1,0 +1,87 @@
+From 10d4153b2352695110445ab96f693dc099da8c63 Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 14:04:18 +0800
+Subject: [PATCH 42/45] waylandsink: Support transparent video
+
+---
+ gst-libs/gst/wayland/gstwlwindow.c | 37 ++++++++++++++++++++++--------
+ 1 file changed, 27 insertions(+), 10 deletions(-)
+
+diff --git a/gst-libs/gst/wayland/gstwlwindow.c b/gst-libs/gst/wayland/gstwlwindow.c
+index 6e24ef6..31ce7e0 100644
+--- a/gst-libs/gst/wayland/gstwlwindow.c
++++ b/gst-libs/gst/wayland/gstwlwindow.c
+@@ -70,6 +70,9 @@ typedef struct _GstWlWindowPrivate
+   gint crop_x, crop_y, crop_w, crop_h;
+   gboolean crop_dirty;
+ 
++  gboolean video_opaque;
++  gboolean area_opaque;
++
+   gint par_n;
+   gint par_d;
+ 
+@@ -705,20 +708,23 @@ gst_wl_window_resize_video_surface (GstWlWindow * self, gboolean commit)
+ }
+ 
+ static void
+-gst_wl_window_set_opaque (GstWlWindow * self, const GstVideoInfo * info)
++gst_wl_window_set_opaque (GstWlWindow * self)
+ {
+   GstWlWindowPrivate *priv = gst_wl_window_get_instance_private (self);
+   struct wl_compositor *compositor;
+   struct wl_region *region;
+ 
+-  /* Set area opaque */
+   compositor = gst_wl_display_get_compositor (priv->display);
+-  region = wl_compositor_create_region (compositor);
+-  wl_region_add (region, 0, 0, G_MAXINT32, G_MAXINT32);
+-  wl_surface_set_opaque_region (priv->area_surface, region);
+-  wl_region_destroy (region);
++ 
++  if (priv->area_opaque) {
++    /* Set area opaque */
++    region = wl_compositor_create_region (compositor);
++    wl_region_add (region, 0, 0, G_MAXINT32, G_MAXINT32);
++    wl_surface_set_opaque_region (priv->area_surface, region);
++    wl_region_destroy (region);
++  }
+ 
+-  if (!GST_VIDEO_INFO_HAS_ALPHA (info)) {
++  if (priv->video_opaque) {
+     /* Set video opaque */
+     region = wl_compositor_create_region (compositor);
+     wl_region_add (region, 0, 0, G_MAXINT32, G_MAXINT32);
+@@ -768,9 +774,15 @@ gst_wl_window_commit_buffer (GstWlWindow * self, GstWlBuffer * buffer)
+     priv->video_width = info->width;
+     priv->video_height = info->height;
+ 
++    priv->video_opaque = !GST_VIDEO_INFO_HAS_ALPHA (info);
++    priv->area_opaque = priv->video_opaque;
++
++    if (g_getenv ("WAYLANDSINK_FORCE_OPAQUE"))
++      priv->area_opaque = priv->video_opaque = TRUE;
++
+     wl_subsurface_set_sync (priv->video_subsurface);
+     gst_wl_window_resize_video_surface (self, FALSE);
+-    gst_wl_window_set_opaque (self, info);
++    gst_wl_window_set_opaque (self);
+   } else if (priv->crop_dirty) {
+     gst_wl_window_resize_video_surface (self, FALSE);
+   }
+@@ -915,8 +927,13 @@ gst_wl_window_update_borders (GstWlWindow * self)
+     GstVideoInfo info;
+     GstAllocator *alloc;
+ 
+-    /* we want WL_SHM_FORMAT_XRGB8888 */
+-    format = GST_VIDEO_FORMAT_BGRx;
++    if (priv->area_opaque) {
++      /* we want WL_SHM_FORMAT_XRGB8888 */
++      format = GST_VIDEO_FORMAT_BGRx;
++    } else {
++      /* we want WL_SHM_FORMAT_ARGB8888 */
++      format = GST_VIDEO_FORMAT_BGRA;
++    }
+     gst_video_info_set_format (&info, format, width, height);
+     alloc = gst_shm_allocator_get ();
+ 

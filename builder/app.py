@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Tuple
 
 from builder.app_spec import AppSpec
 from builder.config.canonical import userspace_arch
+from builder.paths import build_dir
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +489,7 @@ class AppBuilder:
         return results
 
     def build_one(self, name_or_path: str) -> Path:
-        """构建单个 App，返回生成的运行时 .deb 路径。
+        """构建单个 App，返回运行时或多 DEB 声明中的首个 .deb 路径。
 
         入参既可以是 App 名称（沿用 SourceManager 三层查找），也可以是宿主机上的
         路径（ad-hoc 模式，跳过 registry 直接编译）。路径判定见 _resolve_app_dir。
@@ -505,7 +506,7 @@ class AppBuilder:
             name_or_path: App 名称或路径
 
         返回：
-            运行时 .deb 文件路径（lib 类型返回运行时包路径，其余类型返回唯一 .deb 路径）
+            代表性 .deb 路径（lib 返回 runtime，多 DEB 返回声明中的首项）
 
         抛出：
             FileNotFoundError: 路径不存在或缺失 app.yaml
@@ -532,6 +533,25 @@ class AppBuilder:
 
         # 步骤 3：编译
         self._compile(app_dir, spec, self._config)
+
+        # custom vendor App 可直接交付多个已完成的 deb，避免再套空 wrapper。
+        if spec.build.deb_outputs:
+            deb_paths = [
+                self._output_dir / filename
+                for filename in spec.build.deb_outputs
+            ]
+            missing = [path.name for path in deb_paths if not path.is_file()]
+            if missing:
+                from builder.docker import BuildError
+                raise BuildError(
+                    f"App '{app_name}' 缺少声明的 deb 输出: "
+                    f"{', '.join(missing)}"
+                )
+            self._status(
+                f"App '{app_name}' 多 deb 交付完成 → "
+                f"{', '.join(path.name for path in deb_paths)}"
+            )
+            return deb_paths[0]
 
         # 步骤 4：lib 类型走双包流程，其余类型走单包流程
         if spec.app.type == "lib":
@@ -1011,8 +1031,24 @@ class AppBuilder:
 
         # 逐步执行编译命令
         cwd = str(app_dir)
+        work_dir = (
+            build_dir(self._project_dir)
+            / "work" / "apps" / spec.app.name / self._arch
+        )
+        work_dir.mkdir(parents=True, exist_ok=True)
+        build_env = {
+            "FLANGE_BUILD_ROOT": str(build_dir(self._project_dir).resolve()),
+            "FLANGE_APP_WORK_DIR": str(work_dir.resolve()),
+            "FLANGE_APP_OUTPUT_DIR": str(self._output_dir.resolve()),
+            "FLANGE_TARGET_ARCH": self._arch,
+        }
         for cmd in commands:
-            self._docker.run(cmd, cwd=cwd, extra_mounts=extra_mounts)
+            self._docker.run(
+                cmd,
+                cwd=cwd,
+                env=build_env,
+                extra_mounts=extra_mounts,
+            )
 
     def _install_build_packages(
         self,
@@ -1022,8 +1058,11 @@ class AppBuilder:
         extra_mounts: Optional[List[Path]],
     ) -> None:
         """在当前构建容器中安装 App 声明的 APT 编译依赖。"""
+        from builder.deb import _map_arch
+
+        apt_arch = _map_arch(self._arch)
         requested = list(dict.fromkeys(
-            package.replace("{arch}", self._arch)
+            package.replace("{arch}", apt_arch)
             for package in spec.build.apt_packages
         ))
         pending = [

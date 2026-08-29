@@ -42,7 +42,8 @@ local product = std.extVar('product');
   // 笛卡尔积：armsom-cm5-io-default-debug / -release。
   products: ['default', 'desktop'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     rkwifibt: {
       // ---- BW3752-50B1 (BCM43752 / AP6275S) WiFi6+BT5.3 走 rkwifibt OOT ----

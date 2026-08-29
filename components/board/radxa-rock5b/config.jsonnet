@@ -22,7 +22,8 @@ local panel = product == 'meizu-e3-bringup';
   // 其余配置（kernel、bootloader、firmware）与 default 共用。
   products: ['default', 'desktop', 'meizu-e3-bringup'],
   variants: ['debug', 'release'],
-  packages: (if product == 'desktop' then ['ubuntu-desktop'] else []) +
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []) +
             (if panel then [{
     // 账号体系沿用 components/rootfs/config.jsonnet base 层默认：root 完全锁定
     // (root_password=null + disable_root_login=true)，默认用户 flange/flange

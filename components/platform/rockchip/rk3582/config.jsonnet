@@ -13,9 +13,8 @@
 // - ``rootfs.extra_firmware`` 不部署 ``mali_csffw.bin`` —— 没 GPU 不需要
 //   CSF firmware，``arm/mali/arch10.8/`` 目录留空可避免 panthor 模块（若被
 //   误装）尝试加载。
-// - ``rootfs.extra_debs`` 仍部署 mpp / RGA / GStreamer-rockchip 整套多媒体
-//   加速栈：VPU / RGA / 显示控制器物理存在，与 RK3588S 同 ABI，rkr5.1 BSP 上
-//   实测可用（H.264/H.265 8K 解码、4K 编码、RGA 2D 加速全部命中硬件路径）。
+// - board 仍可启用 rockchip-multimedia package：VPU / RGA / 显示控制器物理
+//   存在，与 RK3588S 使用同一套用户态 ABI。
 //
 // board 层（如 radxa-rock5c-lite）应通过 kernel.device_tree.name 指定具体 dts；当 dts 文件
 // 名复用 RK3588S 板（如 ``rk3588s-rock-5c``）时，dts 内的 GPU / 大核 cluster
@@ -57,9 +56,6 @@ local common = import 'config/rockchip.libsonnet';
   },
   // 不部署 mali-csf firmware —— GPU 已熔断（RK3588/RK3588S 配置中的
   // arm/mali/arch10.8/mali_csffw.bin 在此略去）。
-  // 多媒体加速栈整套保留：VPU / RGA / 显示控制器物理存在，rk3588 deb
-  // 通用，详见 rk3588/config.jsonnet 的逐 deb 注释。
-  rootfs+: { extra_debs+: common.multimediaDebs },
   boot+: {
     overlays: {
       intree: [], vendor: [], board: [], package: [], enabled: [],

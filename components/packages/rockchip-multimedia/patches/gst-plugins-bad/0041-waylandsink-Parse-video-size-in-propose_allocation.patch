@@ -1,0 +1,63 @@
+From 7244f54cade640e2ef37cba8780faab2dd7c1d4a Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 14:03:45 +0800
+Subject: [PATCH 41/45] waylandsink: Parse video size in propose_allocation()
+
+---
+ ext/wayland/gstwaylandsink.c | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/ext/wayland/gstwaylandsink.c b/ext/wayland/gstwaylandsink.c
+index ea44acb..a13b7d7 100644
+--- a/ext/wayland/gstwaylandsink.c
++++ b/ext/wayland/gstwaylandsink.c
+@@ -983,10 +983,15 @@ gst_wayland_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
+   GstBufferPool *pool = NULL;
+   gboolean need_pool;
+   GstAllocator *alloc;
++  GstVideoInfo info;
+   GstStructure *s;
+   gint value;
+ 
+   gst_query_parse_allocation (query, &caps, &need_pool);
++  if (!caps)
++    goto no_caps;
++  if (!gst_video_info_from_caps (&info, caps))
++    goto invalid_caps;
+ 
+   s = gst_caps_get_structure (caps, 0);
+   if (gst_structure_get_int (s, "arm-afbc", &value) && value) {
+@@ -999,13 +1004,13 @@ gst_wayland_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
+     pool = gst_wl_video_buffer_pool_new ();
+     config = gst_buffer_pool_get_config (pool);
+     gst_buffer_pool_config_set_params (config,
+-        caps, self->video_info.size, 2, 0);
++        caps, info.size, 2, 0);
+     gst_buffer_pool_config_set_allocator (config,
+         gst_shm_allocator_get (), NULL);
+     gst_buffer_pool_set_config (pool, config);
+   }
+ 
+-  gst_query_add_allocation_pool (query, pool, self->video_info.size, 2, 0);
++  gst_query_add_allocation_pool (query, pool, info.size, 2, 0);
+   if (pool)
+     g_object_unref (pool);
+ 
+@@ -1016,6 +1021,17 @@ gst_wayland_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
+   g_object_unref (alloc);
+ 
+   return TRUE;
++
++no_caps:
++  {
++    GST_DEBUG_OBJECT (bsink, "no caps specified");
++    return FALSE;
++  }
++invalid_caps:
++  {
++    GST_DEBUG_OBJECT (bsink, "invalid caps specified");
++    return FALSE;
++  }
+ }
+ 
+ /* must be called with the render lock */

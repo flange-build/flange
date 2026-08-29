@@ -26,7 +26,8 @@ local amp = product == 'amp' || product == 'amp-rtt' || product == 'foc';
   // rpmsg、amp 分区、scons 构建）全复用 amp-rtt。
   products: ['default', 'desktop', 'amp', 'amp-rtt', 'foc'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     'radxa-firmware': {
       // 账号体系沿用 components/rootfs/config.jsonnet base 层默认：

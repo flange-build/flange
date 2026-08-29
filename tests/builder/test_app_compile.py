@@ -529,10 +529,10 @@ class TestCompileExecution:
 
         assert builder._docker.run.call_count == 3
         calls = builder._docker.run.call_args_list
+        assert [item.args[0] for item in calls] == custom_cmds
         # 仓库内 App，_compile 不应注入 extra_mounts（None）
-        assert calls[0] == call(["./autogen.sh"], cwd=str(app_dir), extra_mounts=None)
-        assert calls[1] == call(["./configure", "--prefix=/usr"], cwd=str(app_dir), extra_mounts=None)
-        assert calls[2] == call(["make"], cwd=str(app_dir), extra_mounts=None)
+        assert all(item.kwargs["cwd"] == str(app_dir) for item in calls)
+        assert all(item.kwargs["extra_mounts"] is None for item in calls)
 
     def test_meson系统调用两次docker_run(self, tmp_path):
         """meson 构建系统应调用 DockerRunner.run 两次（setup + ninja）。"""
@@ -592,6 +592,20 @@ class TestCompileExecution:
             "zlib1g-dev",
         ]
         assert calls[2].args[0][0] == "cmake"
+
+    def test_apt构建依赖把aarch64映射为Debian的arm64(self, tmp_path):
+        builder = _make_builder(tmp_path, arch="aarch64")
+        spec = _make_spec(
+            system="custom",
+            commands=[["true"]],
+            apt_packages=["libasound2-dev:{arch}"],
+        )
+
+        builder._compile(self._app_dir(tmp_path), spec, builder._config)
+
+        assert builder._docker.run.call_args_list[1].args[0][-1] == (
+            "libasound2-dev:arm64"
+        )
 
     def test_apt索引与已安装依赖在同次构建中复用(self, tmp_path):
         """同一 AppBuilder 重复遇到相同包时不应再次调用 APT。"""

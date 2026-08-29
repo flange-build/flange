@@ -55,16 +55,6 @@ local common = import 'config/rockchip.libsonnet';
     device_tree: { directory: 'rockchip' },
   },
   rootfs+: {
-    // Rockchip 多媒体加速栈（VPU + RGA + GStreamer-rockchip 插件），来自
-    // CmST0us/rockchip-multimedia-ubuntu release 1.0.0 的 prebuilt deb。
-    // noble 24.04 base 自带的 gstreamer 是 1.24.2-1ubuntu* 上游版本，但缺
-    // gstreamer1.0-rockchip 私有 plugin（封装 rockchip-mpp 硬解为 gstreamer
-    // element），且作者打包的 1.24.2 版本与 plugin ABI 锁定，因此核心库
-    // libgstreamer1.0-0 + plugins-{base,good,bad} 必须用本仓库重打包以
-    // 保持 ABI 一致。dev 包（mpp-dev / rga-dev）保留供应用层编译用。
-    // 安装顺序：runtime 库 → 开发头 → gstreamer core → plugins → 厂商插件，
-    // dpkg -i 一次性传入会做依赖 unrolling，但仍按依赖顺序排列稳妥。
-    extra_debs+: common.multimediaDebs,
     extra_firmware+: [{
       // Mali-G610 CSF firmware blob —— panthor 驱动 request_firmware
       // 加载路径 ``arm/mali/arch10.8/mali_csffw.bin``（按硬件 GPU

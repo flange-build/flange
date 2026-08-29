@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from builder.app import AppBuilder, CircularDependencyError, _topo_sort_apps
+from builder.docker import BuildError
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ def _make_app_dir(
     build_deps: list[str] | None = None,
     arch: list[str] | None = None,
     bin_files: list[str] | None = None,
+    deb_outputs: list[str] | None = None,
 ) -> Path:
     """在 tmp_path/app/<name>/ 下创建一个最小可用的 App 目录，包含 app.yaml。
 
@@ -77,6 +79,13 @@ def _make_app_dir(
         lines.append("  deps:")
         for d in deps:
             lines.append(f"    - {d}")
+
+    if deb_outputs:
+        lines.append("  commands:")
+        lines.append("    - [true]")
+        lines.append("  deb_outputs:")
+        for filename in deb_outputs:
+            lines.append(f"    - {filename}")
 
     yaml_content = "\n".join(lines) + "\n"
 
@@ -295,6 +304,67 @@ class TestBuildOne:
         builder = _make_builder(tmp_path)
         deb_path = builder.build_one("cmake_app")
         assert deb_path.exists()
+
+    def test_custom_vendor_直接交付多个deb(self, tmp_path):
+        """声明的完整 deb 直接交付，不生成同名 wrapper 包。"""
+        outputs = ["libfoo_1.0_arm64.deb", "foo-tools_1.0_arm64.deb"]
+        _make_app_dir(
+            tmp_path,
+            "source-unit",
+            app_type="vendor",
+            build_system="custom",
+            deb_outputs=outputs,
+        )
+        builder = _make_builder(tmp_path)
+        builder._output_dir.mkdir(parents=True)
+        for filename in outputs:
+            (builder._output_dir / filename).write_bytes(b"deb")
+
+        result = builder.build_one("source-unit")
+
+        assert result == builder._output_dir / outputs[0]
+        assert sorted(path.name for path in builder._output_dir.glob("*.deb")) == sorted(outputs)
+
+    def test_custom_vendor_缺少声明deb时报错(self, tmp_path):
+        """任一声明产物缺失均使构建失败。"""
+        _make_app_dir(
+            tmp_path,
+            "source-unit",
+            app_type="vendor",
+            build_system="custom",
+            deb_outputs=["missing_1.0_arm64.deb"],
+        )
+        builder = _make_builder(tmp_path)
+
+        with pytest.raises(BuildError, match="missing_1.0_arm64.deb"):
+            builder.build_one("source-unit")
+
+    def test_custom命令注入标准构建环境(self, tmp_path):
+        """custom 命令收到 paths.py 计算的构建路径与目标架构。"""
+        output = "foo_1.0_arm64.deb"
+        _make_app_dir(
+            tmp_path,
+            "source-unit",
+            app_type="vendor",
+            build_system="custom",
+            deb_outputs=[output],
+        )
+        builder = _make_builder(tmp_path)
+        builder._output_dir.mkdir(parents=True)
+        (builder._output_dir / output).write_bytes(b"deb")
+
+        builder.build_one("source-unit")
+
+        build_call = builder._docker.run.call_args_list[-1]
+        env = build_call.kwargs["env"]
+        assert env == {
+            "FLANGE_BUILD_ROOT": str((tmp_path / ".build").resolve()),
+            "FLANGE_APP_WORK_DIR": str(
+                (tmp_path / ".build/work/apps/source-unit/aarch64").resolve()
+            ),
+            "FLANGE_APP_OUTPUT_DIR": str(builder._output_dir.resolve()),
+            "FLANGE_TARGET_ARCH": "aarch64",
+        }
 
 
 # ---------------------------------------------------------------------------

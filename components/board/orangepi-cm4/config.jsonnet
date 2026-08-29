@@ -26,7 +26,8 @@ local amp = product == 'amp' || product == 'amp-rtt';
   platform: 'rockchip',
   products: ['default', 'desktop', 'amp', 'amp-rtt'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     'radxa-firmware': {
       // 账号体系沿用 components/rootfs/config.jsonnet base 层默认。

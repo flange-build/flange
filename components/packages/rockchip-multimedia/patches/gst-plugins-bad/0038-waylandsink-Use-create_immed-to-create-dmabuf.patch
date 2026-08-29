@@ -1,0 +1,39 @@
+From e4c5e3270bb5195122d9c688d303b578a3f938c1 Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 14:01:25 +0800
+Subject: [PATCH 38/45] waylandsink: Use create_immed to create dmabuf
+
+---
+ gst-libs/gst/wayland/gstwllinuxdmabuf.c | 19 ++++---------------
+ 1 file changed, 4 insertions(+), 15 deletions(-)
+
+diff --git a/gst-libs/gst/wayland/gstwllinuxdmabuf.c b/gst-libs/gst/wayland/gstwllinuxdmabuf.c
+index ac53e06..f09d594 100644
+--- a/gst-libs/gst/wayland/gstwllinuxdmabuf.c
++++ b/gst-libs/gst/wayland/gstwllinuxdmabuf.c
+@@ -167,21 +167,10 @@ gst_wl_linux_dmabuf_construct_wl_buffer (GstBuffer * buf,
+     }
+   }
+ 
+-  /* Request buffer creation */
+-  zwp_linux_buffer_params_v1_add_listener (params, &params_listener, &data);
+-  zwp_linux_buffer_params_v1_create (params, width, height, fourcc, flags);
+-
+-  /* Wait for the request answer */
+-  wl_display_flush (gst_wl_display_get_display (display));
+-  data.wbuf = (gpointer) 0x1;
+-  timeout = g_get_monotonic_time () + G_TIME_SPAN_SECOND;
+-  while (data.wbuf == (gpointer) 0x1) {
+-    if (!g_cond_wait_until (&data.cond, &data.lock, timeout)) {
+-      GST_ERROR_OBJECT (mem->allocator, "zwp_linux_buffer_params_v1 time out");
+-      zwp_linux_buffer_params_v1_destroy (params);
+-      data.wbuf = NULL;
+-    }
+-  }
++  data.wbuf =
++      zwp_linux_buffer_params_v1_create_immed (params, width, height, fourcc,
++      flags);
++  zwp_linux_buffer_params_v1_destroy (params);
+ 
+ out:
+   if (!data.wbuf) {

@@ -50,11 +50,6 @@ local common = import 'config/rockchip.libsonnet';
     config: { CONFIG_DRM_GUD: 'y' },
     device_tree: { directory: 'rockchip' },
   },
-  // Rockchip 多媒体加速栈（VPU + RGA + GStreamer-rockchip 插件），与
-  // rk3566/rk3588 SoC 用同一组 chip-agnostic deb（rockchip-mpp 用户态按
-  // chip 分发）。GPU 用户态走 panfrost（mesa gallium，随 ubuntu-base apt），
-  // 不在此 deb 集合内；panfrost 无 CSF firmware 依赖，故不带 mali-csf。
-  rootfs+: { extra_debs+: common.multimediaDebs },
   boot+: {
     overlays: {
       intree: [], vendor: [], board: [], package: [], enabled: [],

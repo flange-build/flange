@@ -8,6 +8,7 @@ local product = std.extVar('product');
   platform: 'rockchip',
   products: ['default', 'desktop'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   kernel+: { device_tree+: { name: 'rk3566-radxa-zero-3w' } },
 }

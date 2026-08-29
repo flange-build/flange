@@ -1,0 +1,33 @@
+From cddb637ba9b5745125ece63870fa2eada8fa4fbf Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 13:50:24 +0800
+Subject: [PATCH 22/45] kmssink: Avoid double-closing shared gem handle
+
+---
+ sys/kms/gstkmsallocator.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/sys/kms/gstkmsallocator.c b/sys/kms/gstkmsallocator.c
+index 6f9b36a..682fbb1 100644
+--- a/sys/kms/gstkmsallocator.c
++++ b/sys/kms/gstkmsallocator.c
+@@ -495,10 +495,19 @@ done:
+   for (i = 0; i < n_planes; i++) {
+     struct drm_gem_close arg = { gem_handle[i], };
+     gint err;
++    gint j;
+ 
+     if (!gem_handle[i])
+       continue;
+ 
++    /* Avoid double-closing shared gem handles */
++    for (j = 0; j < i; j++) {
++      if (gem_handle[j] == gem_handle[i])
++        break;
++    }
++    if (j < i)
++      continue;
++
+     err = drmIoctl (alloc->priv->fd, DRM_IOCTL_GEM_CLOSE, &arg);
+     if (err)
+       GST_WARNING_OBJECT (allocator,

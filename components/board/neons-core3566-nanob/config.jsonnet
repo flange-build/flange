@@ -8,7 +8,8 @@ local product = std.extVar('product');
   platform: 'rockchip',
   products: ['default', 'desktop'],
   variants: ['debug', 'release'],
-  packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
+  packages: ['rockchip-multimedia'] +
+            (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     'rockchip-kernel': {
       url: 'ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git',

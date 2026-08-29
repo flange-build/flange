@@ -1,0 +1,28 @@
+From 8dae671fda7f202f54fb6d81445e16dfb5691a05 Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 13:50:24 +0800
+Subject: [PATCH 02/45] interim fix vc1 stream may memory leak when pending
+
+---
+ gst/mpegtsdemux/tsdemux.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/gst/mpegtsdemux/tsdemux.c b/gst/mpegtsdemux/tsdemux.c
+index a3d5eff..c3e213e 100644
+--- a/gst/mpegtsdemux/tsdemux.c
++++ b/gst/mpegtsdemux/tsdemux.c
+@@ -3532,6 +3532,14 @@ gst_ts_demux_push_pending_data (GstTSDemux * demux, TSDemuxStream * stream,
+ 
+     if (G_UNLIKELY (stream->pending_ts && !check_pending_buffers (demux))) {
+       if (buffer) {
++        GList *walk;
++        for (walk = demux->program->stream_list; walk; walk = g_list_next (walk)) {
++          MpegTSBaseStream *bs = (MpegTSBaseStream*)walk->data;
++          if (bs->registration_id == DRF_ID_VC1) {
++            gst_buffer_unref(buffer);
++            goto beach;
++          }
++        }
+         PendingBuffer *pend;
+         pend = g_new0 (PendingBuffer, 1);
+         pend->buffer = buffer;

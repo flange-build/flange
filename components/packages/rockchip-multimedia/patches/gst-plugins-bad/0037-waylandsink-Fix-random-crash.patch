@@ -1,0 +1,22 @@
+From c2312a25adc022ad8e45bd64f85ce4db84d7adf8 Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 14:00:57 +0800
+Subject: [PATCH 37/45] waylandsink: Fix random crash
+
+---
+ ext/wayland/gstwaylandsink.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ext/wayland/gstwaylandsink.c b/ext/wayland/gstwaylandsink.c
+index fddef70..38d041b 100644
+--- a/ext/wayland/gstwaylandsink.c
++++ b/ext/wayland/gstwaylandsink.c
+@@ -1328,7 +1328,7 @@ gst_wayland_sink_expose (GstVideoOverlay * overlay)
+   GST_DEBUG_OBJECT (self, "expose");
+ 
+   g_mutex_lock (&self->render_lock);
+-  if (self->last_buffer) {
++  if (self->window && self->last_buffer) {
+     GST_DEBUG_OBJECT (self, "redrawing last buffer");
+     render_last_buffer (self, TRUE);
+   }

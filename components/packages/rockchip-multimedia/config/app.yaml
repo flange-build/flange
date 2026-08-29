@@ -1,0 +1,25 @@
+app:
+  name: flange-rockchip-multimedia
+  version: 1.0.0
+  description: Rockchip 多媒体 runtime 元依赖与设备权限
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+  deps:
+    - rockchip-multimedia-build
+
+depends:
+  - rockchip-mpp (>= 1.3.9-1flange1)
+  - librga2 (>= 2.1.0-1flange1)
+  - libgstreamer1.0-0 (>= 1.24.2-1ubuntu0.1+flange1)
+  - gstreamer1.0-plugins-base (>= 1.24.2-1ubuntu0.4+flange1)
+  - gstreamer1.0-plugins-good (>= 1.24.2-1ubuntu1.5+flange1)
+  - gstreamer1.0-plugins-bad (>= 1.24.2-1ubuntu4+flange1)
+  - gstreamer1.0-rockchip (>= 1.0-1flange1)
+  - udev

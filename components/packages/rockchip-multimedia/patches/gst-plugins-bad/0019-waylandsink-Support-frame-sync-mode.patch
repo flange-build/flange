@@ -1,0 +1,70 @@
+From 1959642f11f2bb26e32da41a7590b0e9e6f9a38c Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 13:50:24 +0800
+Subject: [PATCH 19/45] waylandsink: Support frame-sync mode
+
+---
+ ext/wayland/gstwaylandsink.c | 9 +++++++++
+ ext/wayland/gstwaylandsink.h | 1 +
+ 2 files changed, 10 insertions(+)
+
+diff --git a/ext/wayland/gstwaylandsink.c b/ext/wayland/gstwaylandsink.c
+index 4d6ba43..86a95e7 100644
+--- a/ext/wayland/gstwaylandsink.c
++++ b/ext/wayland/gstwaylandsink.c
+@@ -262,6 +262,7 @@ gst_wayland_sink_init (GstWaylandSink * self)
+ {
+   g_mutex_init (&self->display_lock);
+   g_mutex_init (&self->render_lock);
++  g_cond_init (&self->redraw_cond);
+ 
+   self->window_handle = 1;
+   self->layer = GST_WL_WINDOW_LAYER_NORMAL;
+@@ -475,6 +476,7 @@ gst_wayland_sink_finalize (GObject * object)
+ 
+   g_mutex_clear (&self->display_lock);
+   g_mutex_clear (&self->render_lock);
++  g_cond_clear (&self->redraw_cond);
+ 
+   G_OBJECT_CLASS (parent_class)->finalize (object);
+ }
+@@ -843,6 +845,7 @@ gst_wayland_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
+ 
+   /* free pooled buffer used with previous caps */
+   if (self->pool) {
++  g_cond_signal (&self->redraw_cond);
+     gst_buffer_pool_set_active (self->pool, FALSE);
+     gst_clear_object (&self->pool);
+   }
+@@ -878,6 +881,11 @@ unsupported_drm_format:
+   {
+     GST_ERROR_OBJECT (self, "DRM format %" GST_FOURCC_FORMAT
+         " is not available on the display",
++
++  if (g_getenv ("WAYLANDSINK_SYNC_FRAME")) {
++    while (self->redraw_pending)
++      g_cond_wait (&self->redraw_cond, &self->render_lock);
++  }
+         GST_FOURCC_ARGS (self->drm_info.drm_fourcc));
+     return FALSE;
+   }
+@@ -1156,6 +1164,7 @@ render:
+ 
+   if (buffer != to_render)
+     gst_buffer_unref (to_render);
++
+   goto done;
+ 
+ no_window_size:
+diff --git a/ext/wayland/gstwaylandsink.h b/ext/wayland/gstwaylandsink.h
+index c565d39..03b5885 100644
+--- a/ext/wayland/gstwaylandsink.h
++++ b/ext/wayland/gstwaylandsink.h
+@@ -66,6 +66,7 @@ struct _GstWaylandSink
+   gboolean resend_info;
+ 
+   GMutex render_lock;
++  GCond redraw_cond;
+   GstBuffer *last_buffer;
+ 
+   GstVideoOrientationMethod sink_rotate_method;

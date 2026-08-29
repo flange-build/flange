@@ -712,6 +712,47 @@ class TestBuildAptPackagesValidation:
                 load_spec(_write_yaml(tmpdir, yaml_content))
 
 
+class TestDebOutputsValidation:
+    """验证 custom vendor App 的多 deb 输出声明。"""
+
+    def test_custom_vendor_accepts_deb_outputs(self):
+        yaml_content = _MINIMAL_VENDOR + (
+            "\nbuild:\n  system: custom\n  commands: [[./build.sh]]\n"
+            "  deb_outputs:\n"
+            "    - libfoo_1.0+flange1_arm64.deb\n"
+            "    - foo-tools_1.0+flange1_arm64.deb\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = load_spec(_write_yaml(tmpdir, yaml_content))
+        assert spec.build.deb_outputs == [
+            "libfoo_1.0+flange1_arm64.deb",
+            "foo-tools_1.0+flange1_arm64.deb",
+        ]
+
+    @pytest.mark.parametrize(
+        "filename", ["../foo.deb", "dist/foo.deb", "*.deb", ".deb", "foo.tar"],
+    )
+    def test_unsafe_deb_output_rejected(self, filename):
+        yaml_content = _MINIMAL_VENDOR + (
+            "\nbuild:\n  system: custom\n  commands: [[./build.sh]]\n"
+            f"  deb_outputs: ['{filename}']\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match="build.deb_outputs"):
+                load_spec(_write_yaml(tmpdir, yaml_content))
+
+    @pytest.mark.parametrize(
+        ("app_type", "system"), [("exec", "custom"), ("vendor", "none")],
+    )
+    def test_deb_outputs_requires_custom_vendor(self, app_type, system):
+        yaml_content = _MINIMAL_VENDOR.replace("type: vendor", f"type: {app_type}") + (
+            f"\nbuild:\n  system: {system}\n  deb_outputs: [foo_1.0_arm64.deb]\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(AppSpecError, match="custom"):
+                load_spec(_write_yaml(tmpdir, yaml_content))
+
+
 # ---------------------------------------------------------------------------
 # 测试：build.swift 约束
 # ---------------------------------------------------------------------------

@@ -1,0 +1,23 @@
+From f21661ab47826502a93ec59097c0686c8ec906f4 Mon Sep 17 00:00:00 2001
+From: Build <build@local>
+Date: Sun, 1 Mar 2026 13:41:03 +0800
+Subject: [PATCH 09/22] glupload: dmabuf: prefer DirectDmabufExternal uploader
+
+
+diff --git a/gst-libs/gst/gl/gstglupload.c b/gst-libs/gst/gl/gstglupload.c
+index d91898a..3788bb9 100644
+--- a/gst-libs/gst/gl/gstglupload.c
++++ b/gst-libs/gst/gl/gstglupload.c
+@@ -3204,8 +3204,8 @@ static const UploadMethod *upload_methods[] = {
+   &_passthrough_upload,
+   &_gl_memory_upload,
+ #if GST_GL_HAVE_DMABUF
+-  &_direct_dma_buf_upload,
+   &_direct_dma_buf_external_upload,
++  &_direct_dma_buf_upload,
+   &_dma_buf_upload,
+ #endif
+ #if GST_GL_HAVE_VIV_DIRECTVIV
+-- 
+2.43.0
+
