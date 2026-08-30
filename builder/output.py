@@ -2,9 +2,11 @@
 
 import os
 import re
+import shutil
 import sys
 import time
 import threading
+import traceback
 from collections import deque
 from enum import Enum
 from pathlib import Path
@@ -71,6 +73,37 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 # ---------------------------------------------------------------------------
+# build.log 轮转
+# ---------------------------------------------------------------------------
+
+#: 保留多少份历史 build.log。构建失败后经常要跟上一次成功的构建对比，而
+#: 之前每次构建都直接 truncate，上一次的日志当场消失。
+DEFAULT_LOG_KEEP = 3
+LOG_KEEP_ENV = "FLANGE_LOG_KEEP"
+
+
+def _log_keep() -> int:
+    try:
+        return max(0, int(os.environ.get(LOG_KEEP_ENV, DEFAULT_LOG_KEEP)))
+    except ValueError:
+        return DEFAULT_LOG_KEEP
+
+
+def rotate_log(path: Path, keep: int) -> None:
+    """build.log → build.log.1 → ... → build.log.<keep>，超出的丢弃。"""
+    if keep < 1 or not path.exists():
+        return
+    oldest = Path(f"{path}.{keep}")
+    if oldest.exists():
+        oldest.unlink()
+    for index in range(keep - 1, 0, -1):
+        previous = Path(f"{path}.{index}")
+        if previous.exists():
+            previous.rename(Path(f"{path}.{index + 1}"))
+    path.rename(Path(f"{path}.1"))
+
+
+# ---------------------------------------------------------------------------
 # BuildOutput
 # ---------------------------------------------------------------------------
 
@@ -87,10 +120,23 @@ class BuildOutput:
         self._tty = _is_tty()
         self._lock = threading.Lock()
 
-        # build.log
+        # build.log：先轮转再打开，上一次构建的日志不会被当场覆盖
         target_dir.mkdir(parents=True, exist_ok=True)
         self._log_path = target_dir / "build.log"
+        rotate_log(self._log_path, _log_keep())
         self._log_file = open(self._log_path, "w", encoding="utf-8")
+
+        # 日志行时间戳：用单调钟算相对耗时。组件级耗时摘要里已经有了，日志
+        # 里缺的是**组件内部**哪一步慢 —— rootfs 与 app 各自是一整块，不看
+        # 行级时间戳就只知道"rootfs 花了 8 分钟"，不知道花在哪。
+        self._log_epoch = time.monotonic()
+        self._log_at_line_start = True
+        # 头部是这份日志的元数据，不走 _log_write —— 它自己不属于任何一步，
+        # 加上 [+0.0s] 只会让"第一条真实记录在哪"变模糊。
+        self._log_file.write(
+            f"# flange build.log  开始于 "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S')}  target={target_dir}\n"
+            f"# 行首 [+N.Ns] 是相对构建开始的耗时\n")
 
         # 构建计时
         self._build_start_time: float = 0.0
@@ -130,13 +176,30 @@ class BuildOutput:
             self._log_write(strip_ansi(text) + end)
 
     def _log_write(self, text: str):
-        """安全写入日志文件。"""
+        """安全写入日志文件（行首带相对时间戳）。"""
         try:
             if self._log_file and not self._log_file.closed:
-                self._log_file.write(text)
+                self._log_file.write(self._stamp(text))
                 self._log_file.flush()
         except OSError:
             pass
+
+    def _stamp(self, text: str) -> str:
+        """给每个物理行的行首插入 ``[+N.Ns]``。
+
+        写入不保证以整行为单位（spinner、``end=""`` 的续写都会切开一行），
+        所以要跨调用记住"当前是否停在行首"，否则时间戳会插进行中间。
+        """
+        if not text:
+            return text
+        prefix = f"[+{time.monotonic() - self._log_epoch:7.1f}s] "
+        chunks: list[str] = []
+        for line in text.splitlines(keepends=True):
+            if self._log_at_line_start:
+                chunks.append(prefix)
+            chunks.append(line)
+            self._log_at_line_start = line.endswith("\n")
+        return "".join(chunks)
 
     def _write_term_only(self, text: str, *, end: str = "", flush: bool = True):
         """仅写终端（用于 spinner \r 刷新）。"""
@@ -218,7 +281,7 @@ class BuildOutput:
         else:
             self._write(self._c(_Colors.RED_BOLD,
                                 f"{self._pad}✗ 失败{self._fmt_time_right(elapsed)}"))
-            self._show_error_context()
+            self._show_error_context(error)
         self._indent = 0
         self._write("")
         self._results.append({
@@ -370,7 +433,7 @@ class BuildOutput:
                 time_str = self._c(_Colors.RED_BOLD, f"{elapsed:>5.1f}s")
                 bar = ""
                 if r.get("error"):
-                    bar = self._c(_Colors.RED, f"  → {r['error'][:40]}")
+                    bar = self._c(_Colors.RED, f"  → {self._brief(r['error'])}")
             else:
                 status_str = "构建"
                 time_str = f"{elapsed:>5.1f}s"
@@ -391,23 +454,48 @@ class BuildOutput:
     # 错误上下文
     # -----------------------------------------------------------------------
 
-    def _show_error_context(self):
-        """显示错误上下文（框线包裹）。"""
-        lines = self._errors if self._errors else list(self._tail_buffer)
-        if not lines:
-            return
-        # 最多显示 15 行
-        lines = lines[-15:]
+    def _show_error_context(self, error: Exception | None = None):
+        """显示失败诊断：异常原文 + 命令输出上下文 + 日志指针。
+
+        之前这里只打命令输出的尾巴，抛出的异常本身从不出现在任何地方 ——
+        engine 捕获后只把 ``str(error)`` 存进摘要，而摘要按 40 字符硬截断。
+        结果是"参数校验失败"这类由 flange 自己抛出、命令输出里根本没有对应
+        行的错误，用户在终端上看不到任何原因。
+        """
         pad = self._pad
         border = self._c(_Colors.RED, f"{pad}" + "┄" * 50)
+        lines = (self._errors if self._errors else list(self._tail_buffer))[-15:]
+        if not lines and error is None:
+            return
+
         self._write(border)
+        if error is not None:
+            for line in f"{type(error).__name__}: {error}".splitlines():
+                self._write(self._c(_Colors.RED_BOLD, f"{pad}{line}"))
+            if lines:
+                self._write(self._c(_Colors.RED, f"{pad}"))
         for line in lines:
             self._write(self._c(_Colors.RED, f"{pad}{line}"))
         self._write(border)
+        self._write(self._c(_Colors.GRAY, f"{pad}完整日志: {self._log_path}"))
+        # traceback 只进日志：终端要的是结论，排查的人要的是栈。
+        if error is not None and error.__traceback__ is not None:
+            self._log_write("".join(traceback.format_exception(error)))
 
     # -----------------------------------------------------------------------
     # 工具
     # -----------------------------------------------------------------------
+
+    def _brief(self, message: str) -> str:
+        """摘要行里的一行式错误。
+
+        取首行而不是前 40 个字符：多行异常的第一行才是结论，按字符截断经常
+        正好切在"Traceback"或路径中间。宽度跟随终端，窄终端才截断，且用 …
+        明示被截过，配合上面 `_show_error_context` 打出的原文与日志路径。
+        """
+        first = message.strip().splitlines()[0] if message.strip() else ""
+        width = max(40, shutil.get_terminal_size((100, 24)).columns - 30)
+        return first if len(first) <= width else first[: width - 1] + "…"
 
     def _fmt_time_right(self, seconds: float, *, prefix: str = "") -> str:
         """格式化耗时（右侧灰色）。"""
