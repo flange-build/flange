@@ -1,27 +1,30 @@
-"""RecoveryBuilder — 各平台 recovery 镜像构建器的公共基类。
+"""RecoveryBuilder — recovery 镜像构建器。
 
-recovery 是一个独立的 ext4 文件系统镜像（label=recovery），构建流程：
+recovery 是一个独立的 ext4 文件系统镜像（label=recovery），构建流程与 normal
+rootfs **完全同形**：base 快照 → customize → fstab → 成像。因此它继承
+`RootfsBuilder`，只声明自己偏离的部分：
 
-  Phase 1   解压 ubuntu-base tarball + apt 安装 recovery.packages
-  Phase 2   dpkg 安装 recovery.custom_packages 中的 deb（来自 app/ 产物）
-            + 拷贝 kernel modules + 应用 recovery-overlay
-  Phase 3   写入 /etc/fstab、/etc/flange/recovery-config.json
-  Phase 4   ``mke2fs -d`` 把目录直接做成 recovery.img
+  - 读 `config["recovery"]` 子树（packages / custom_packages / …），
+    与 normal rootfs 的包集合互不影响，两者共用同一份 ubuntu-base tarball
+  - overlay 走 `recovery-overlay` 目录，同一块板可以给救援系统不同的配置
+  - Phase 2 只做 deb + 内核模块 + overlay：recovery 仅通过 adb 通道交互，
+    账号体系、locale、Wi-Fi 固件都没有意义
+  - deb 按 `recovery.custom_packages` 挑选而不是全装 —— 它是几十 MB 的救援
+    系统，装不下也不需要全部 App
+  - 额外写 `/etc/flange/recovery-config.json`（分区表与刷写策略的事实源）
 
-normal rootfs 与 recovery 复用同一份 ubuntu-base tarball；包集合通过
-``config["recovery"]["packages"]`` 与 ``config["recovery"]["custom_packages"]``
-独立声明，互不影响 normal 系统。
+此前这些"偏离"是靠**整段抄一份编排**表达的：13 个方法与基类同名，逐方法对比
+后 10 个只差参数名与 status 文案，剩下 3 个是抄件漂移 —— 硬编码
+`qemu-aarch64-static`（armhf 板会拿错 emulator）、`_partition_size_mb` 忽略
+`image_size`、以及缺容量门禁。合并之后这类漂移不再可能发生。
 """
 
 from __future__ import annotations
 
 import json
-import shutil
-import tempfile
 from pathlib import Path
 
-from builder.base import ComponentBuilder
-from builder.chroot import ChrootContext
+from builder.rootfs import RootfsBuilder
 
 
 # 设备端读取该路径冻结分区表与刷写策略。
@@ -85,266 +88,54 @@ def build_recovery_config(config: dict) -> dict:
     }
 
 
-class RecoveryBuilder(ComponentBuilder):
-    """recovery 组件构建器基类。
-
-    与 RootfsBuilder 走相同的 docker / chroot / mke2fs 流程，但读取
-    ``config["recovery"]`` 子树而非 ``config["rootfs"]``。
-    """
+class RecoveryBuilder(RootfsBuilder):
+    """recovery 组件构建器基类。"""
 
     component = "recovery"
 
-    # 文件系统中存放 recovery-config.json 的相对路径（不含前导斜杠）。
+    #: 文件系统中存放 recovery-config.json 的相对路径（不含前导斜杠）。
     config_rel_path = RECOVERY_CONFIG_PATH
 
-    # 文件系统 label
+    #: 文件系统 label。与 `component` 同值，保留符号供既有调用方引用。
     fs_label = FS_LABEL
 
-    # ---- 主入口：与 RootfsBuilder 一致，跳过源码克隆 -----------------
+    #: recovery 不挂载 normal rootfs 或 userdata；需要时由 recoveryctl 显式
+    #: 挂到独立目录，避免误触 normal 系统的运行时状态。
+    FSTAB_MOUNTS = (
+        (f"LABEL={FS_LABEL}", "/", "ext4"),
+        ("LABEL=boot", "/boot", "ext4"),
+    )
 
-    def build(self, config: dict) -> dict:
-        self.compile(None, config)
-        return self.collect(None, config)
+    #: 平台/板级 overlay 走独立目录，与 normal rootfs 的 overlay 分开：
+    #: components/platform/<p>/recovery-overlay/、components/board/<b>/…
+    OVERLAY_SUBDIR = "recovery-overlay"
 
-    def configure(self, src_dir: Path, config: dict):
-        pass
+    def _selected_debs(self, config: dict) -> set[str]:
+        """只装 `recovery.custom_packages` 声明的那几个 App 的 deb。
 
-    def compile(self, src_dir: Path, config: dict):
-        self._work_dir = Path(tempfile.mkdtemp(prefix="flange-recovery-"))
-        recovery_dir = self._work_dir / "recovery"
-        recovery_dir.mkdir()
-
-        # Phase 1：与 rootfs 同款 base snapshot 缓存机制 —— 按
-        # rootfs.url + recovery.packages + arch 算 hash 命名 .cache/
-        # recovery-base-<hash>.tar.gz。命中即解压跳过 apt-get update +
-        # install；packages 集合不变时多次 build 共享同一份 base。
-        base_cache_path = self._get_base_cache_path(config)
-        if base_cache_path and base_cache_path.exists():
-            self._status("Phase 1: recovery base 缓存命中")
-            self._extract_base(base_cache_path, recovery_dir)
-        else:
-            self._build_phase1(recovery_dir, config)
-            if base_cache_path:
-                self._save_base_snapshot(recovery_dir, base_cache_path)
-
-        self._build_phase2(recovery_dir, config)
-        self._install_fstab(recovery_dir)
-        self._install_recovery_config(recovery_dir, config)
-
-        size_mb = self._partition_size_mb(config, "recovery")
-        self._output = self._work_dir / "recovery.img"
-        self._status(f"生成 recovery.img ({size_mb}MB)...")
-        self.docker.run([
-            "truncate", "-s", f"{size_mb}M", str(self._output),
-        ])
-        self.docker.run([
-            "mke2fs", "-t", "ext4", "-L", self.fs_label, "-F", "-q",
-            "-d", str(recovery_dir), str(self._output),
-        ])
-
-    def collect(self, src_dir: Path, config: dict) -> dict:
-        return {"recovery": self._output}
-
-    # ---- Phase 1 缓存（与 rootfs 同款 base snapshot 机制） -----------
-
-    def _get_base_cache_path(self, config: dict) -> Path | None:
-        """获取 recovery-base.tar.gz 快照路径。
-
-        哈希按 ``rootfs.url + recovery.packages + arch`` 计算（详见
-        BuildCache._compute_recovery_base_hash），与 rootfs base hash
-        独立 —— recovery.packages 通常是 rootfs.packages 的精简子集。
-
-        路径在 ``.build/target/<board>/.cache/`` 下，跨 product/variant
-        共享。
+        recovery 是几十 MB 的救援系统 —— 全装既放不下，也把救援通道的可靠性
+        绑在了无关 App 上。
         """
-        if not self.cache:
-            return None
-        base_hash = self.cache.compute_phase_hash("recovery", "base")
-        return (self.cache.target_dir.parent.parent.parent / ".cache"
-                / f"recovery-base-{base_hash}.tar.gz")
+        return set(self._component_config(config).get("custom_packages") or [])
 
-    def _save_base_snapshot(self, recovery_dir: Path, cache_path: Path):
-        """将 Phase 1 产物保存为 base.tar.gz 快照。"""
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._status(f"保存 recovery base 快照到 {cache_path.name}")
-        self.docker.run_privileged(
-            ["tar", "-czf", str(cache_path), "-C", str(recovery_dir), "."])
+    def _build_phase2(self, recovery_dir: Path, config: dict) -> None:
+        """deb + 内核模块 + overlay。
 
-    def _extract_base(self, cache_path: Path, recovery_dir: Path):
-        """从 base.tar.gz 快照解压到 recovery_dir。"""
-        self.docker.run_privileged(
-            ["tar", "xf", str(cache_path), "-C", str(recovery_dir)])
-
-    # ---- Phase 1: base 解压 + apt install ---------------------------
-
-    def _build_phase1(self, recovery_dir: Path, config: dict):
-        """解压 ubuntu-base tarball 并按 recovery.packages 安装基础包。"""
-        self._status("Phase 1: recovery base")
-        if self.output:
-            self.output.indent()
-        try:
-            tarball_path = self.source.ensure_rootfs_tarball(config)
-            self._status("解压 base tarball...")
-            self.docker.run_privileged(
-                ["tar", "xf", str(tarball_path), "-C", str(recovery_dir)])
-            self.docker.run_privileged(
-                ["cp", "/usr/bin/qemu-aarch64-static",
-                 str(recovery_dir / "usr" / "bin" / "")])
-
-            with ChrootContext(recovery_dir, self.docker) as chroot:
-                apt_cache = recovery_dir / "var" / "cache" / "apt" / "archives"
-                apt_cache.mkdir(parents=True, exist_ok=True)
-                chroot.bind_mount("/cache/apt", apt_cache)
-
-                self._status("apt-get update...")
-                chroot.run(["apt-get", "update"], label="apt-get update...")
-                packages = (config.get("recovery") or {}).get("packages") or []
-                if packages:
-                    self._status(f"apt-get install ({len(packages)} 个包)...")
-                    chroot.run(["apt-get", "install", "-y",
-                                "--no-install-recommends"] + packages,
-                               label=f"安装 {len(packages)} 个包...")
-                chroot.run(["apt-get", "clean"])
-        finally:
-            if self.output:
-                self.output.dedent()
-
-    # ---- Phase 2: 自定义 deb + kernel modules + overlay -----------
-
-    def _build_phase2(self, recovery_dir: Path, config: dict):
-        """安装 recovery.custom_packages 的 deb，以及 kernel modules 与 overlay。
-
-        与 normal rootfs 不同，recovery 不安装 root_password，不调用
-        ``_configure_users``（不创建普通用户、不写 sudoers.d、不锁 root），
-        也不安装 extra_firmware（recovery 维护场景不需要 Wi-Fi 等驱动固件）。
-        recovery 仅通过 adb 通道交互运行，账号体系无意义。
+        与 normal rootfs 不同，recovery 不配置账号（不建普通用户、不写
+        sudoers.d、不锁 root）、不装 locale、不装 extra_firmware：它只通过
+        adb 通道交互运行，这些都没有意义，且每一项都要占救援分区的空间。
         """
-        self._status("Phase 2: recovery customize")
-        if self.output:
-            self.output.indent()
-        try:
-            self._install_recovery_debs(recovery_dir, config)
-            self._install_kernel_modules(recovery_dir, config)
-            self._apply_recovery_overlays(recovery_dir, config)
-        finally:
-            if self.output:
-                self.output.dedent()
+        self._install_app_debs(recovery_dir, config)
+        self._install_kernel_modules(recovery_dir, config)
+        self.apply_overlays(recovery_dir, config)
+        self._export_package_manifest(recovery_dir)
 
-    def _install_recovery_debs(self, recovery_dir: Path, config: dict):
-        """从 app 产物目录挑选 recovery.custom_packages 对应的 deb 安装。"""
-        custom_pkgs = (config.get("recovery") or {}).get("custom_packages") or []
-        if not custom_pkgs:
-            return
-        target_dir = self.cache.target_dir
-        app_deb_dir = target_dir / "app"
-        if not app_deb_dir.is_dir():
-            return
-
-        wanted: set[str] = set(custom_pkgs)
-        # AppBuilder 的 deb 命名形如 ``<name>_<version>_<arch>.deb``；
-        # 取下划线前的 token 与 wanted 集合比对，简单稳定。
-        deb_files: list[Path] = []
-        for deb in sorted(app_deb_dir.glob("*.deb")):
-            stem = deb.stem.split("_", 1)[0]
-            if stem in wanted:
-                deb_files.append(deb)
-        if not deb_files:
-            return
-
-        names = [d.name for d in deb_files]
-        self._status(f"安装 recovery deb {len(deb_files)} 个: {', '.join(names)}")
-        deb_tmp = recovery_dir / "tmp" / "flange-debs"
-        deb_tmp.mkdir(parents=True, exist_ok=True)
-        for deb in deb_files:
-            shutil.copy2(deb, deb_tmp)
-        with ChrootContext(recovery_dir, self.docker) as chroot:
-            deb_list = [f"/tmp/flange-debs/{d.name}" for d in deb_files]
-            chroot.run(["dpkg", "-i", "--force-confnew"] + deb_list,
-                       label=f"dpkg -i ({len(deb_files)} 个包)...")
-        shutil.rmtree(deb_tmp)
-
-    def _install_kernel_modules(self, recovery_dir: Path, config: dict):
-        """把 kernel 组件产物中的模块复制进 recovery rootfs。
-
-        路径与 RootfsBuilder 一致：``target/.../kernel/modules/lib/modules/``。
-        """
-        target_dir = self.cache.target_dir
-        modules_src = target_dir / "kernel" / "modules" / "lib" / "modules"
-        if not modules_src.is_dir():
-            return
-        self._status("安装内核模块到 recovery...")
-        dest = recovery_dir / "lib" / "modules"
-        dest.mkdir(parents=True, exist_ok=True)
-        self.docker.run_privileged(
-            ["cp", "-a", f"{modules_src}/.", str(dest)])
-
-    def _apply_recovery_overlays(self, recovery_dir: Path, config: dict):
-        """按 rootfs → platform → board 的优先级应用 recovery overlay 文件。
-
-        路径约定（与 normal rootfs 的 overlay 区分，使 recovery 可以单独配置）：
-          components/recovery/overlay/                       跨平台 recovery 共用
-          components/platform/<p>/recovery-overlay/          平台层 recovery 专用
-          components/board/<b>/recovery-overlay/             板级 recovery 专用
-        """
-        platform = config.get("platform", "")
-        board = config.get("board", "")
-        for overlay_dir, label in [
-            (Path("components/recovery/overlay"), "recovery"),
-            (Path(f"components/platform/{platform}/recovery-overlay"), "platform"),
-            (Path(f"components/board/{board}/recovery-overlay"), "board"),
-        ]:
-            if overlay_dir.exists() and any(overlay_dir.iterdir()):
-                self._status(f"复制 {label} recovery overlay 文件...")
-                self.docker.run_privileged(
-                    ["cp", "-a", f"{overlay_dir}/.", str(recovery_dir)])
-
-    # ---- Phase 3: fstab + recovery-config.json -----------------------
-
-    def _install_fstab(self, recovery_dir: Path):
-        """写入最小 ``/etc/fstab``：recovery 自身 / + boot 分区 /boot。
-
-        recovery 不挂载 normal rootfs 或 userdata；需要时由 recoveryctl
-        显式挂载到独立目录，避免误触 normal 系统的运行时状态。
-
-        ubuntu-base tarball 自带占位 fstab（仅 "# UNCONFIGURED FSTAB FOR BASE
-        SYSTEM" 注释，无任何挂载项），需要被覆盖；只有真正声明了 ``LABEL=`` /
-        ``UUID=`` / ``/dev/`` 之类挂载项的 fstab 才视为已被 overlay 自定义。
-        """
-        fstab = recovery_dir / "etc" / "fstab"
-        if fstab.exists():
-            existing = fstab.read_text()
-            has_real_mount = any(
-                marker in existing
-                for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")
-            )
-            if has_real_mount:
-                return
-        fstab.parent.mkdir(parents=True, exist_ok=True)
-        fstab.write_text(
-            "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>\n"
-            f"LABEL={self.fs_label}  /         ext4    defaults   0       1\n"
-            "LABEL=boot      /boot     ext4    defaults   0       2\n"
-        )
-        (recovery_dir / "boot").mkdir(exist_ok=True)
-
-    def _install_recovery_config(self, recovery_dir: Path, config: dict):
-        """渲染 recovery-config.json 并写入镜像内的固定路径。"""
+    def _post_customize(self, recovery_dir: Path, config: dict) -> None:
+        """写入设备端读取的分区表/刷写策略事实源。"""
         target = recovery_dir / self.config_rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        data = build_recovery_config(config)
         target.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            json.dumps(build_recovery_config(config), indent=2,
+                       ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-
-    # ---- 工具 -------------------------------------------------------
-
-    def _partition_size_mb(self, config: dict, name: str) -> int:
-        """从 partitions.entries 读取指定分区的大小（MB）。"""
-        for entry in (config.get("partitions") or {}).get("entries") or []:
-            if entry["name"] == name:
-                size = entry["size"]
-                if size == "remaining":
-                    return 4096  # remaining 默认 4GB（recovery 不应该用 remaining）
-                return (int(size, 0) * 512) // (1024 * 1024)
-        raise KeyError(f"partitions.entries 中未定义分区: {name}")
