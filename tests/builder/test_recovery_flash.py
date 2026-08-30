@@ -168,17 +168,17 @@ class TestRawImageRecoveryEntry:
         """boot → recovery → rootfs，recovery 紧贴在 boot 之后、rootfs 之前。"""
         cfg = _rockchip_full_config(recovery_enabled=True)
         builder = RockchipImageBuilder(docker=None, source=None)
-        entries = builder._resolve_entries(cfg["partitions"]["entries"])
-        names = [e["name"] for e in entries]
+        entries = builder._layout(cfg)
+        names = [e.name for e in entries]
         assert names.index("boot") < names.index("recovery")
         assert names.index("recovery") < names.index("rootfs")
 
     def test_rockchip_image_recovery_offset_size(self):
         cfg = _rockchip_full_config(recovery_enabled=True)
         builder = RockchipImageBuilder(docker=None, source=None)
-        entries = builder._resolve_entries(cfg["partitions"]["entries"])
-        recovery = next(e for e in entries if e["name"] == "recovery")
+        entries = builder._layout(cfg)
+        recovery = next(e for e in entries if e.name == "recovery")
         # 紧随 boot：boot offset=0x8000 + size=0x20000 = recovery offset=0x28000
-        assert recovery["_offset_sectors"] == 0x28000
+        assert recovery.offset_sectors == 0x28000
         # 0x100000 sectors = 512MB
-        assert recovery["_size_sectors"] * 512 == 512 * 1024 * 1024
+        assert recovery.size_sectors * 512 == 512 * 1024 * 1024

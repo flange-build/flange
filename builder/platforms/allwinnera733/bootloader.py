@@ -15,6 +15,7 @@
 from pathlib import Path
 
 from builder.base import ComponentBuilder
+from builder.source import component_local_path
 
 
 class AllwinnerA733BootloaderBuilder(ComponentBuilder):
@@ -26,7 +27,9 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
         self._status("U-Boot 源码就绪（含子模块）")
 
         # 源码重置 — recurse 模式需要同时重置子模块
-        if not config.get("_local_mode", {}).get(self.component):
+        if component_local_path(config, self.component):
+            self._status("local_path 源码：跳过重置与补丁")
+        else:
             self._reset_with_submodules(src_dir)
             patches = self._count_patches(config)
             self.apply_patches(src_dir, config)
