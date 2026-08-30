@@ -8,6 +8,34 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
+def component_source_descriptor(config: dict, component: str) -> dict:
+    """返回组件实际引用的 source descriptor；未声明来源时返回空 dict。
+
+    组件只声明 ``{source: {name: ...}}``，真正的仓库地址与版本锚点集中在顶层
+    ``sources``。这个解析是 builder 与 cache 共用的单一判据 —— 两处各写一份
+    曾让"框架不动 local_path 工作树"的承诺只兑现了一半。
+    """
+    name = ((config.get(component) or {}).get("source") or {}).get("name")
+    if not name:
+        return {}
+    return (config.get("sources") or {}).get(name) or {}
+
+
+def component_local_path(config: dict, component: str) -> str | None:
+    """返回组件的 ``local_path``；非 local 模式返回 None。
+
+    ``local_path`` 是"我正在 hack 这份源码"的声明，它有完整的两半语义：
+
+      - **框架不动这个工作树** —— 不 ``git checkout -f``、不打补丁，否则用户
+        未提交的调试改动会被静默抹掉；
+      - **框架放弃缓存决策** —— 内容变化不走 git，没有可靠的廉价指纹，硬按
+        源码树哈希会出现"改了却判定没变"的假命中。
+
+    两半必须一起兑现。只做后一半正是这个概念此前的状态。
+    """
+    return component_source_descriptor(config, component).get("local_path") or None
+
+
 class SourceManager:
     """管理组件源码仓库的克隆、更新和本地覆盖。"""
 

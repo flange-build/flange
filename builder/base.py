@@ -6,7 +6,7 @@ from pathlib import Path
 from builder.docker import DockerRunner
 from builder.patches import normalize_excluded_patches
 from builder.paths import COMPONENTS_ROOT
-from builder.source import SourceManager
+from builder.source import SourceManager, component_local_path
 
 
 class ComponentBuilder(ABC):
@@ -39,7 +39,12 @@ class ComponentBuilder(ABC):
     def build(self, config: dict) -> dict:
         src_dir = self.source.ensure(self.component, config)
         self._status("源码就绪")
-        if not config.get("_local_mode", {}).get(self.component):
+        if component_local_path(config, self.component):
+            # local_path 声明的是"我正在 hack 这份源码"：框架不动工作树，
+            # 否则 git checkout -f 会抹掉用户未提交的调试改动。缓存那一半
+            # 由 BuildCache._has_local_upstream 兑现（强制重建并级联下游）。
+            self._status("local_path 源码：跳过重置与补丁")
+        else:
             self.reset_source(src_dir)
             self._remove_patch_created_files(src_dir, config)
             patches = self._count_patches(config)
