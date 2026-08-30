@@ -142,7 +142,7 @@ def test_phase1_injects_arch_specific_emulator(
     expected_source,
 ):
     monkeypatch.setattr(
-        "builder.platforms.rockchip.rootfs.ChrootContext", FakeChroot)
+        "builder.rootfs.ChrootContext", FakeChroot)
     rootfs_dir = tmp_path / "rootfs"
     (rootfs_dir / "usr/bin").mkdir(parents=True)
     docker = FakeDocker()
@@ -173,7 +173,7 @@ def test_ubi_fstab_has_no_ext4_root_or_boot_entries(tmp_path):
     text = (rootfs / "etc/fstab").read_text()
     assert "LABEL=rootfs" not in text
     assert "LABEL=boot" not in text
-    assert "ext4" in text  # 注释明确说明为何不写 ext4 项
+    assert "kernel bootargs" in text  # 说明为何没有挂载项
 
 
 def test_systemd_api_mountpoints_are_created(tmp_path):
@@ -199,7 +199,7 @@ def test_ext4_fstab_default_remains_unchanged(tmp_path):
     (rootfs / "etc").mkdir(parents=True)
     builder = RockchipRootfsBuilder(docker=None, source=None)
 
-    builder._install_fstab(rootfs)
+    builder._install_fstab(rootfs, {})
 
     text = (rootfs / "etc/fstab").read_text()
     assert "LABEL=rootfs" in text
@@ -224,7 +224,7 @@ def test_ext4_builder_commands_and_artifact_remain_unchanged(
         },
     }
 
-    builder._build_ext4(tmp_path, config)
+    builder._build_image(tmp_path, config)
 
     assert docker.commands[0] == [
         "truncate", "-s", "512M", str(builder._work_dir / "rootfs.img")]

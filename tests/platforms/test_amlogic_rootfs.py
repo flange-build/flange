@@ -30,7 +30,7 @@ def test_install_fstab_writes_label_mounts(builder, tmp_path):
     rootfs = tmp_path / "rootfs"
     (rootfs / "etc").mkdir(parents=True)
 
-    builder._install_fstab(rootfs)
+    builder._install_fstab(rootfs, {})
 
     fstab = (rootfs / "etc" / "fstab").read_text()
     assert "LABEL=rootfs" in fstab
@@ -48,7 +48,7 @@ def test_install_fstab_respects_existing_overlay(builder, tmp_path):
     )
     (rootfs / "etc" / "fstab").write_text(overlay_text)
 
-    builder._install_fstab(rootfs)
+    builder._install_fstab(rootfs, {})
 
     assert (rootfs / "etc" / "fstab").read_text() == overlay_text
 
@@ -59,7 +59,7 @@ def test_install_fstab_overwrites_ubuntu_base_placeholder(builder, tmp_path):
     (rootfs / "etc").mkdir(parents=True)
     (rootfs / "etc" / "fstab").write_text("# UNCONFIGURED FSTAB FOR BASE SYSTEM\n")
 
-    builder._install_fstab(rootfs)
+    builder._install_fstab(rootfs, {})
 
     fstab = (rootfs / "etc" / "fstab").read_text()
     assert "LABEL=rootfs" in fstab

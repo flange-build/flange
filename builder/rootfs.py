@@ -17,12 +17,15 @@
 import json
 import math
 import shutil
+import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.chroot import ChrootContext
+from builder.config.canonical import userspace_arch
 from builder.docker import BuildError
 from builder.firmware_panel import encode_file as _encode_panel_file
-from builder.partition.size import resolve_image_size
+from builder.partition.layout import PartitionLayout
+from builder.snapshot import SnapshotStore
 
 
 # 写入 /etc/sudoers.d/ 时统一使用 0440，与 visudo 默认权限和 sudo 自身的
@@ -36,6 +39,345 @@ class RootfsBuilder(ComponentBuilder):
     各平台子类继承此类，获得通用 rootfs 能力，再叠加平台特定逻辑。
     """
 
+    component = "rootfs"
+
+    # ------------------------------------------------------------------
+    # 四相编排：base 快照 → customize → fstab → 成像
+    #
+    # 这份编排此前在 4 个平台 + recovery 里手抄了 5 份，AST 归一化对比显示
+    # 42% 是冗余且 8 组同名函数中 6 组已漂移 —— 漂移的代价不是重复，而是
+    # 基类新增的能力接不上抄件（rootfs.emulator、extra_apt_sources 等在
+    # 多数平台上是静默 no-op）。平台差异一律走下面这几个声明位，不要再复制
+    # 整段 compile。
+    # ------------------------------------------------------------------
+
+    #: fstab 挂载项 (spec, mount point, fstype)。用 LABEL 而非 PARTUUID，
+    #: 不依赖 GPT 分区表正确性。空元组表示"这个 rootfs 不由 fstab 挂载"
+    #: （如 UBI 由 kernel bootargs 挂 root）。
+    FSTAB_MOUNTS: tuple[tuple[str, str, str], ...] = (
+        ("LABEL=rootfs", "/", "ext4"),
+        ("LABEL=boot", "/boot", "ext4"),
+    )
+
+    #: 平台/板级 overlay 的目录名。recovery 用 ``recovery-overlay`` 与
+    #: normal rootfs 的 overlay 分开，这样同一块板可以给两者不同的配置。
+    OVERLAY_SUBDIR = "overlay"
+
+    def build(self, config: dict) -> dict:
+        """rootfs 无源码仓库，跳过 source.ensure / reset / patch。"""
+        self.compile(None, config)
+        return self.collect(None, config)
+
+    def configure(self, src_dir: Path, config: dict):
+        pass  # rootfs 无 configure 步骤
+
+    def compile(self, src_dir: Path, config: dict):
+        self._work_dir = Path(
+            tempfile.mkdtemp(prefix=f"flange-{self.component}-"))
+        rootfs_dir = self._work_dir / self.component
+        rootfs_dir.mkdir()
+
+        # Phase 1：解压 base tarball + apt install。切口选在"apt 不做增量"
+        # 这个真实的工具边界上，产物按内容哈希缓存、跨 target 共享。
+        base_cache_path = self._get_base_cache_path(config)
+        if base_cache_path and base_cache_path.exists():
+            self._status("Phase 1: base 缓存命中")
+            self._extract_base(base_cache_path, rootfs_dir)
+        else:
+            self._status("Phase 1: base 构建")
+            if self.output:
+                self.output.indent()
+            self._build_phase1(rootfs_dir, config)
+            if base_cache_path:
+                self._save_base_snapshot(rootfs_dir, base_cache_path)
+            if self.output:
+                self.output.dedent()
+
+        # Phase 2：每次都跑。步骤间有两条顺序硬约束——board overlay 必须在
+        # app deb 之后（overlay 要压回 deb 里的 conffile），rootfs overlay
+        # 必须在 useradd -m 之前（useradd 从 /etc/skel 拷贝）。
+        self._status("Phase 2: Customize")
+        if self.output:
+            self.output.indent()
+        self._build_phase2(rootfs_dir, config)
+        if self.output:
+            self.output.dedent()
+
+        self._post_customize(rootfs_dir, config)
+
+        # Phase 3：挂载约定
+        self._install_fstab(rootfs_dir, config)
+        self._ensure_api_mountpoints(rootfs_dir)
+
+        # Phase 4：成像
+        self._build_image(rootfs_dir, config)
+
+    def collect(self, src_dir: Path, config: dict) -> dict:
+        return {self.component: self._output}
+
+    def _post_customize(self, rootfs_dir: Path, config: dict) -> None:
+        """Phase 2 之后、写 fstab 之前的平台钩子。默认无操作。"""
+
+    def _build_image(self, rootfs_dir: Path, config: dict) -> None:
+        """从 staging 目录生成镜像。默认 ext4；UBI 等路由由平台覆写。"""
+        image_name = f"{self.component}.img"
+        self._output = self._work_dir / image_name
+        size_mb = self._partition_size_mb(config, self.component)
+        self._ensure_rootfs_fits_image(rootfs_dir, size_mb)
+        self._status(f"生成 {image_name} ({size_mb}MB)...")
+        self.docker.run(
+            ["truncate", "-s", f"{size_mb}M", str(self._output)])
+        self.docker.run([
+            "mke2fs", "-t", "ext4", "-L", self.component, "-F", "-q",
+            "-d", str(rootfs_dir), str(self._output),
+        ])
+
+    def _build_phase1(self, rootfs_dir: Path, config: dict) -> None:
+        """解压 base tarball + chroot apt install。"""
+        tarball_path = self.source.ensure_rootfs_tarball(config)
+        self._status("解压 base tarball...")
+        self.docker.run_privileged(
+            ["tar", "xf", str(tarball_path), "-C", str(rootfs_dir)])
+        emulator = self._rootfs_emulator(config)
+        self.docker.run_privileged(
+            ["cp", f"/usr/bin/{emulator}",
+             str(rootfs_dir / "usr" / "bin" / "")])
+
+        with ChrootContext(rootfs_dir, self.docker) as chroot:
+            apt_cache = rootfs_dir / "var" / "cache" / "apt" / "archives"
+            apt_cache.mkdir(parents=True, exist_ok=True)
+            chroot.bind_mount("/cache/apt", apt_cache)
+
+            self._status("apt-get update...")
+            chroot.run(["apt-get", "update"], label="apt-get update...")
+
+            if self._has_extra_apt_sources(config):
+                # ubuntu-base 最小系统不带 CA 证书，直接写 HTTPS 源会让下一次
+                # apt-get update 卡在证书验证上。必须先用官方源把证书装上，
+                # 再写入额外源重新 update。
+                self._status("安装 ca-certificates（额外 APT 源需要）...")
+                chroot.run(
+                    ["apt-get", "install", "-y", "--no-install-recommends",
+                     "ca-certificates"],
+                    label="安装 ca-certificates...")
+                # postinst 在 chroot 内可能没触发，显式生成证书 bundle。
+                chroot.run(["update-ca-certificates"],
+                           label="update-ca-certificates...")
+                self._setup_extra_apt_sources(rootfs_dir, config)
+                self._status("apt-get update（含额外源）...")
+                chroot.run(["apt-get", "update"],
+                           label="apt-get update（含额外源）...")
+
+            packages = self._component_config(config).get("packages") or []
+            if packages:
+                self._status(f"apt-get install ({len(packages)} 个包)...")
+                chroot.run(self._apt_install_command(packages, config),
+                           label=f"安装 {len(packages)} 个包...")
+            chroot.run(["apt-get", "clean"])
+
+    def _build_phase2(self, rootfs_dir: Path, config: dict) -> None:
+        """custom deb → extra deb → 模块 → 固件 → overlay → locale → 账号。"""
+        self._install_app_debs(rootfs_dir, config)
+        self._install_extra_debs(rootfs_dir, config)
+        self._install_kernel_modules(rootfs_dir, config)
+        self._install_extra_firmware(rootfs_dir, config)
+        self._install_panel_firmware(rootfs_dir, config)
+        self.apply_overlays(rootfs_dir, config)
+        self._configure_default_locale(rootfs_dir, config)
+        self._configure_users(rootfs_dir, config)
+        self._install_hostname(rootfs_dir, config)
+        self._export_package_manifest(rootfs_dir)
+
+    def _export_package_manifest(self, rootfs_dir: Path) -> None:
+        """导出镜像内已安装包的名称与版本清单。
+
+        今天只有 ubuntu-base tarball 被 sha256 钉住，之后装进去的数百个 apt
+        包一个版本都没钉：同一个 git commit 隔一个月构建，镜像内容不同，而
+        `flange build` 报"无变更、跳过" —— 缓存在这里主动说谎。
+
+        钉版本会让开发期跟随上游修复变得困难（apt 会因上游删除旧版本而解析
+        失败），所以先只做**事后可审计**：清单同时写进镜像（现场排查用）与
+        产物目录（不刷机也能 diff 两次构建的差异）。
+        """
+        manifest = rootfs_dir / "etc" / "flange" / "packages.manifest"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        self._status("导出已安装包清单...")
+        with ChrootContext(rootfs_dir, self.docker) as chroot:
+            chroot.run(
+                ["/bin/sh", "-c",
+                 "dpkg-query -W -f='${binary:Package}\t${Version}\n' "
+                 "| sort > /etc/flange/packages.manifest"],
+                label="dpkg-query 导出包清单...")
+        # 同时落到产物目录：不刷机也能 diff 两次构建装了什么
+        if self.cache is not None and manifest.is_file():
+            target = self._target_dir() / self.component
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(manifest, target / "packages.manifest")
+
+    def _target_dir(self) -> Path:
+        """当前 target 的产物目录。
+
+        锚点是 engine 注入的 cache，不是 cwd 相对字面量、也不是模块级
+        BUILD_ROOT 常量 —— 前者只在仓库根启动时才对，后者不跟随注入的
+        project_root（ProjectSpec §9）。
+
+        与 base 快照不同，这个目录是**必需输入**：app deb 与内核模块都从
+        这里取，缺了会静默产出没有它们的残缺镜像。所以宁可明确失败。
+        """
+        if self.cache is None:
+            raise RuntimeError(
+                "rootfs 构建需要注入 cache 以定位 target 产物目录"
+                "（app deb 与内核模块都从那里取）")
+        return self.cache.target_dir
+
+    def _selected_debs(self, config: dict) -> set[str] | None:
+        """要安装哪些 App 的 deb；None 表示 app/ 目录下全装。
+
+        normal rootfs 全装：App 与 deb 是一对多（一个 vendor App 可以产 17
+        个 deb），按名挑选必然漏。recovery 是几十 MB 的救援系统，装不下也
+        不需要全部 App，所以它覆写这个方法按 `recovery.custom_packages` 挑。
+        """
+        return None
+
+    def _install_app_debs(self, rootfs_dir: Path, config: dict) -> None:
+        """把 app 组件产出的 deb 装进 rootfs（范围由 `_selected_debs` 决定）。"""
+        app_deb_dir = self._target_dir() / "app"
+        if not app_deb_dir.is_dir():
+            return
+        deb_files = sorted(app_deb_dir.glob("*.deb"))
+        selected = self._selected_debs(config)
+        if selected is not None:
+            deb_files = [deb for deb in deb_files
+                         if deb.stem.split("_", 1)[0] in selected]
+        if not deb_files:
+            return
+        names = [deb.name for deb in deb_files]
+        self._status(f"安装 {len(deb_files)} 个 deb: {', '.join(names)}")
+        deb_tmp = rootfs_dir / "tmp" / "flange-debs"
+        deb_tmp.mkdir(parents=True, exist_ok=True)
+        for deb in deb_files:
+            shutil.copy2(deb, deb_tmp)
+        with ChrootContext(rootfs_dir, self.docker) as chroot:
+            chroot.run(
+                ["dpkg", "-i", "--force-confnew"]
+                + [f"/tmp/flange-debs/{deb.name}" for deb in deb_files],
+                label=f"dpkg -i ({len(deb_files)} 个包)...")
+        shutil.rmtree(deb_tmp)
+
+    def _install_kernel_modules(self, rootfs_dir: Path, config: dict) -> None:
+        """把 kernel 产物里的 lib/modules 子树整体复制进 rootfs。
+
+        保持目录结构原样，modprobe 才能读到 modules.dep / modules.alias
+        这些索引。
+        """
+        modules_src = self._target_dir() / "kernel" / "modules" / "lib" / "modules"
+        if not modules_src.is_dir():
+            return
+        self._status("安装内核模块...")
+        dest = rootfs_dir / "lib" / "modules"
+        dest.mkdir(parents=True, exist_ok=True)
+        self.docker.run_privileged(
+            ["cp", "-a", f"{modules_src}/.", str(dest)])
+
+    def _fstab_mounts(self, config: dict) -> tuple:
+        """返回本次要写进 fstab 的挂载项。默认取类常量，可按配置路由。"""
+        return self.FSTAB_MOUNTS
+
+    def _install_fstab(self, rootfs_dir: Path, config: dict) -> None:
+        """写 /etc/fstab；overlay 已声明真实 fstab 则不覆盖。
+
+        判据是"是否含挂载项标记"而非"是否有非注释行"：ubuntu-base tarball
+        自带的占位 fstab 只有一行 "# UNCONFIGURED FSTAB FOR BASE SYSTEM"
+        注释、没有任何挂载项，按后者判会被误认成"overlay 已接管 fstab"。
+        """
+        fstab = rootfs_dir / "etc" / "fstab"
+        if fstab.exists():
+            existing = fstab.read_text()
+            if any(marker in existing
+                   for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")):
+                return
+        fstab.parent.mkdir(parents=True, exist_ok=True)
+
+        mounts = self._fstab_mounts(config)
+        if not mounts:
+            fstab.write_text(
+                "# 根文件系统不由 fstab 挂载（由 kernel bootargs 指定）。\n")
+            return
+
+        lines = [
+            "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>"
+        ]
+        for index, (spec, mount, fstype) in enumerate(mounts):
+            lines.append(
+                f"{spec:<16} {mount:<14} {fstype:<7} defaults   0       "
+                f"{1 if index == 0 else 2}")
+        fstab.write_text("\n".join(lines) + "\n")
+        for _spec, mount, _fstype in mounts:
+            if mount != "/":
+                (rootfs_dir / mount.lstrip("/")).mkdir(
+                    parents=True, exist_ok=True)
+
+    @staticmethod
+    def _ensure_api_mountpoints(rootfs_dir: Path) -> None:
+        """确保 systemd 启动早期使用的 API 文件系统挂载点存在。"""
+        for relative in (
+            "proc", "sys", "sys/fs/cgroup", "dev", "dev/pts", "dev/shm",
+            "run", "run/lock", "tmp",
+        ):
+            (rootfs_dir / relative).mkdir(parents=True, exist_ok=True)
+        (rootfs_dir / "tmp").chmod(0o1777)
+
+    @staticmethod
+    def _rootfs_emulator(config: dict) -> str:
+        """按用户态 ABI 选 chroot emulator，允许 rootfs.emulator 覆盖。
+
+        硬编码 qemu-aarch64-static 会让 armhf 板拿错 emulator —— 这是抄件
+        漂移的典型后果。
+        """
+        rootfs = config.get("rootfs") or {}
+        explicit = rootfs.get("emulator")
+        if explicit:
+            return explicit
+        arch = userspace_arch(config)
+        mapping = {
+            "aarch64": "qemu-aarch64-static",
+            "armhf": "qemu-arm-static",
+        }
+        try:
+            return mapping[arch]
+        except KeyError as exc:
+            raise ValueError(
+                f"未定义 arch={arch!r} 的 rootfs chroot emulator；"
+                "请声明 rootfs.emulator") from exc
+
+    # ------------------------------------------------------------------
+    # Phase 1 base 快照（跨 board/product/variant 共享，四个平台共用同一套）
+    # ------------------------------------------------------------------
+
+    def _base_snapshot_store(self) -> SnapshotStore:
+        """快照目录是 ``.build/target/.cache``（target_dir 上溯三层）。"""
+        return SnapshotStore(
+            self.cache.target_dir.parent.parent.parent / ".cache",
+            f"{self.component}-base-",
+            self.docker,
+            status=self._status,
+        )
+
+    def _get_base_cache_path(self, config: dict) -> Path | None:
+        """按 Phase 1 内容哈希解析快照路径；无 cache 注入时返回 None。"""
+        if not self.cache:
+            return None
+        base_hash = self.cache.compute_phase_hash(self.component, "base")
+        return self._base_snapshot_store().resolve(base_hash)
+
+    def _save_base_snapshot(self, rootfs_dir: Path, cache_path: Path):
+        """把 Phase 1 产物保存为快照，并回收超额的旧快照。"""
+        self._base_snapshot_store().save(rootfs_dir, cache_path)
+
+    def _extract_base(self, cache_path: Path, rootfs_dir: Path):
+        """从快照解压到 rootfs 目录。"""
+        self._base_snapshot_store().restore(cache_path, rootfs_dir)
+
     def apply_overlays(self, rootfs_dir: Path, config: dict):
         """按优先级顺序应用 overlay 文件：rootfs → platform → board。
 
@@ -44,10 +386,12 @@ class RootfsBuilder(ComponentBuilder):
           components/platform/<p>/overlay/    与芯片平台绑定
           components/board/<b>/overlay/       与具体板子绑定
         """
+        subdir = self.OVERLAY_SUBDIR
         for overlay_dir, label in [
-            (Path("components/rootfs/overlay"),                          "rootfs"),
-            (Path(f"components/platform/{config['platform']}/overlay"),  "platform"),
-            (Path(f"components/board/{config['board']}/overlay"),        "board"),
+            (Path(f"components/{self.component}/overlay"), self.component),
+            (Path(f"components/platform/{config['platform']}/{subdir}"),
+             "platform"),
+            (Path(f"components/board/{config['board']}/{subdir}"), "board"),
         ]:
             if overlay_dir.exists() and any(overlay_dir.iterdir()):
                 self._status(f"复制 {label} overlay 文件...")
@@ -55,42 +399,52 @@ class RootfsBuilder(ComponentBuilder):
                     ["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
 
     def _partition_size_mb(self, config: dict, name: str) -> int:
-        """从 config 中读取指定分区的初始镜像大小（MiB）。"""
-        for entry in config.get("partitions", {}).get("entries", []):
-            if entry["name"] == name:
-                return resolve_image_size(entry).mb
-        raise KeyError(f"partitions.entries 中未定义分区: {name}")
+        """指定分区的初始镜像大小（MiB）。几何解析统一走 PartitionLayout。"""
+        return PartitionLayout.from_config(config).size_mb(name)
 
-    @staticmethod
-    def _apt_install_command(packages: list[str], config: dict) -> list[str]:
-        """生成 rootfs APT 安装命令；Recommends 默认关闭，可显式开启。"""
+    def _apt_install_command(self, packages: list[str],
+                             config: dict) -> list[str]:
+        """生成 APT 安装命令；Recommends 默认关闭，可显式开启。"""
         command = ["apt-get", "install", "-y"]
-        if not config.get("rootfs", {}).get("install_recommends", False):
+        if not self._component_config(config).get("install_recommends", False):
             command.append("--no-install-recommends")
         return command + packages
 
     def _ensure_rootfs_fits_image(self, rootfs_dir: Path, image_size_mb: int):
         """构建 ext4 前检查 rootfs 内容是否能放入初始镜像。
 
-        使用 du 统计目录占用，并额外保留 20% 或至少 128MiB 空间，避免
-        mke2fs 在最后阶段才因空间不足失败。
+        使用 du 统计目录占用，额外保留 20%，用于 ext4 元数据（inode 表、
+        journal）与默认 5% 保留块；避免 mke2fs 在最后阶段才因空间不足失败。
+
+        保留量还有个下限，防止 du 统计偏小时门禁形同虚设。但下限必须随镜像
+        尺寸缩放：固定 128MiB 是按多 GB 的 rootfs 定的，套到 64MB 的 recovery
+        分区上，门禁在数学上永远不可能通过 —— 这正是 recovery 此前整段抄一份
+        编排、绕开这个门禁所掩盖的问题。
         """
         result = self.docker.run(
             ["du", "-sm", str(rootfs_dir)],
             capture=True,
         )
         used_mb = int(result.stdout.split()[0])
-        reserve_mb = max(math.ceil(used_mb * 0.2), 128)
+        reserve_mb = max(math.ceil(used_mb * 0.2), min(128, image_size_mb // 4))
         required_mb = used_mb + reserve_mb
         if required_mb > image_size_mb:
             raise BuildError(
-                f"rootfs 内容约 {used_mb}MB，按保留空间需要至少 "
+                f"{self.component} 内容约 {used_mb}MB，按保留空间需要至少 "
                 f"{required_mb}MB；当前 image_size 仅 {image_size_mb}MB，"
-                f"请增大 rootfs 分区 image_size。"
+                f"请增大 {self.component} 分区 image_size。"
             )
 
+    def _component_config(self, config: dict) -> dict:
+        """本构建器负责的 config 子树：rootfs 读 `rootfs`，recovery 读 `recovery`。
+
+        packages / custom_packages / install_recommends / extra_apt_sources
+        都在这棵子树下，两者互不影响。
+        """
+        return config.get(self.component) or {}
+
     def _has_extra_apt_sources(self, config: dict) -> bool:
-        return bool(config.get("rootfs", {}).get("extra_apt_sources"))
+        return bool(self._component_config(config).get("extra_apt_sources"))
 
     def _setup_extra_apt_sources(self, rootfs_dir: Path, config: dict):
         """在 Phase 1 apt-get update 前写入额外 APT 源和 GPG key。
@@ -109,7 +463,7 @@ class RootfsBuilder(ComponentBuilder):
         source 行写入 /etc/apt/sources.list.d/<name>.list。
         须在 _build_phase1 的 apt-get update 之前调用。
         """
-        sources = config.get("rootfs", {}).get("extra_apt_sources", [])
+        sources = self._component_config(config).get("extra_apt_sources") or []
         if not sources:
             return
         keyrings_dir = rootfs_dir / "etc" / "apt" / "keyrings"

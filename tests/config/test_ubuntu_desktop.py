@@ -51,7 +51,7 @@ def test_desktop_product_applies_common_package_config():
             PROJECT_ROOT / "components/packages/ubuntu-desktop"
         ),
     }
-    assert _rootfs_partition(desktop)["image_size"] == "8G"
+    assert _rootfs_partition(desktop)["image_size"] == "4G"
     assert desktop["rootfs"]["default_locale"] == {
         "lang": "zh_CN.UTF-8",
         "language": "zh_CN:zh",
@@ -194,16 +194,32 @@ def test_invalid_default_locale_is_rejected(default_locale):
 
 
 def test_install_recommends_switch_controls_apt_command():
+    # 不再是 staticmethod：开关按构建器负责的 config 子树读取，
+    # rootfs 读 rootfs.install_recommends，recovery 读 recovery.*。
+    builder = RockchipRootfsBuilder(docker=None, source=None)
     packages = ["gnome-core"]
-    disabled = RockchipRootfsBuilder._apt_install_command(
+    disabled = builder._apt_install_command(
         packages, {"rootfs": {"install_recommends": False}}
     )
-    enabled = RockchipRootfsBuilder._apt_install_command(
+    enabled = builder._apt_install_command(
         packages, {"rootfs": {"install_recommends": True}}
     )
 
     assert "--no-install-recommends" in disabled
     assert "--no-install-recommends" not in enabled
+
+
+def test_recovery的recommends开关读自己的子树():
+    """合并前 recovery 硬编码 --no-install-recommends，这个开关对它是死的。"""
+    from builder.platforms.rockchip.recovery import RockchipRecoveryBuilder
+
+    builder = RockchipRecoveryBuilder(docker=None, source=None)
+    config = {"rootfs": {"install_recommends": True},
+              "recovery": {"install_recommends": False}}
+
+    assert "--no-install-recommends" in builder._apt_install_command(["adb"], config)
+    config["recovery"]["install_recommends"] = True
+    assert "--no-install-recommends" not in builder._apt_install_command(["adb"], config)
 
 
 def test_invalid_install_recommends_is_rejected():
@@ -375,6 +391,6 @@ def test_all_supported_boards_resolve_desktop_products():
             assert DESKTOP_PACKAGES <= set(config["rootfs"]["packages"])
             assert config["rootfs"]["install_recommends"] is True
             assert "ubuntu-desktop" not in config["rootfs"]["packages"]
-            assert _rootfs_partition(config)["image_size"] == "8G"
+            assert _rootfs_partition(config)["image_size"] == "4G"
 
     assert "desktop" not in boards["atk-rk3506b"]["products"]

@@ -73,7 +73,7 @@ class TestBaseCachePath:
             assert path is not None
             assert ".cache" in str(path)
             assert "rootfs-base-" in path.name
-            assert path.suffix == ".gz"
+            assert path.suffix == ".zst"
 
     def test_same_packages_same_path(self):
         """相同 packages → 相同 base_hash → 相同缓存路径。"""
@@ -154,7 +154,7 @@ class TestBaseCacheHit:
             calls = []
             builder.docker.run_privileged.side_effect = lambda cmd, **kw: calls.append(cmd)
 
-            with patch("builder.platforms.rockchip.rootfs.tempfile.mkdtemp",
+            with patch("builder.rootfs.tempfile.mkdtemp",
                        return_value=str(Path(tmpdir) / "work")):
                 (Path(tmpdir) / "work").mkdir()
                 try:
@@ -187,9 +187,9 @@ class TestBaseCacheMiss:
             calls = []
             builder.docker.run_privileged.side_effect = lambda cmd, **kw: calls.append(cmd)
 
-            with patch("builder.platforms.rockchip.rootfs.tempfile.mkdtemp",
+            with patch("builder.rootfs.tempfile.mkdtemp",
                        return_value=str(Path(tmpdir) / "work")), \
-                 patch("builder.platforms.rockchip.rootfs.ChrootContext") as MockChroot:
+                 patch("builder.rootfs.ChrootContext") as MockChroot:
                 (Path(tmpdir) / "work").mkdir()
                 mock_ctx = MagicMock()
                 MockChroot.return_value.__enter__ = MagicMock(return_value=mock_ctx)
@@ -201,7 +201,7 @@ class TestBaseCacheMiss:
 
             # 验证：应有 tar 命令保存快照到 base_path
             cmd_strs = [" ".join(str(c) for c in cmd) for cmd in calls]
-            assert any(str(base_path) in s and "czf" in s for s in cmd_strs), \
+            assert any(str(base_path) in s and "-cf" in s for s in cmd_strs), \
                 f"应保存 base 快照，实际调用: {cmd_strs}"
 
 
@@ -216,9 +216,9 @@ class TestNoCacheGraceful:
             calls = []
             builder.docker.run_privileged.side_effect = lambda cmd, **kw: calls.append(cmd)
 
-            with patch("builder.platforms.rockchip.rootfs.tempfile.mkdtemp",
+            with patch("builder.rootfs.tempfile.mkdtemp",
                        return_value=str(Path(tmpdir) / "work")), \
-                 patch("builder.platforms.rockchip.rootfs.ChrootContext") as MockChroot:
+                 patch("builder.rootfs.ChrootContext") as MockChroot:
                 (Path(tmpdir) / "work").mkdir()
                 mock_ctx = MagicMock()
                 MockChroot.return_value.__enter__ = MagicMock(return_value=mock_ctx)

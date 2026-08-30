@@ -183,6 +183,12 @@ def test_rootfs安装kernel_modules到lib_modules(monkeypatch, tmp_path):
     rootfs_dir = tmp_path / "rootfs"
     docker = RecordingDocker()
     builder = AllwinnerA733RootfsBuilder(docker=docker, source=MagicMock())
+    # 产物目录的锚点是 engine 注入的 cache，不是 cwd —— 否则只有在仓库根
+    # 启动时才对。
+    cache = MagicMock()
+    cache.target_dir = (
+        tmp_path / ".build/target/radxa-cubie-a7z/default/release")
+    builder.cache = cache
 
     builder._install_kernel_modules(
         rootfs_dir,
@@ -196,7 +202,7 @@ def test_rootfs安装kernel_modules到lib_modules(monkeypatch, tmp_path):
     assert docker.privileged_commands == [
         [
             "cp", "-a",
-            ".build/target/radxa-cubie-a7z/default/release/kernel/modules/lib/modules/.",
+            f"{cache.target_dir}/kernel/modules/lib/modules/.",
             str(rootfs_dir / "lib" / "modules"),
         ]
     ]

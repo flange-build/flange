@@ -55,6 +55,10 @@ def _make_builder(tmp_path: Path) -> RockchipRootfsBuilder:
     source.ensure_rootfs_tarball.return_value = fake_tarball
 
     builder = RockchipRootfsBuilder(docker, source)
+    # target 产物目录（app deb、内核模块）的锚点由 engine 注入，不再依赖 cwd
+    cache = MagicMock()
+    cache.target_dir = tmp_path / ".build/target/zero3w/default/release"
+    builder.cache = cache
     return builder
 
 
@@ -110,7 +114,7 @@ class TestRootfsDebInstall:
         chroot_ctx_mock.__enter__ = MagicMock(return_value=chroot_mock)
         chroot_ctx_mock.__exit__ = MagicMock(return_value=False)
 
-        with patch("builder.platforms.rockchip.rootfs.ChrootContext",
+        with patch("builder.rootfs.ChrootContext",
                    return_value=chroot_ctx_mock) as mock_chroot_cls, \
              patch("pathlib.Path.cwd", return_value=tmp_path):
 
@@ -163,7 +167,7 @@ class TestRootfsDebInstall:
         chroot_ctx_mock.__enter__ = MagicMock(return_value=chroot_mock)
         chroot_ctx_mock.__exit__ = MagicMock(return_value=False)
 
-        with patch("builder.platforms.rockchip.rootfs.ChrootContext",
+        with patch("builder.rootfs.ChrootContext",
                    return_value=chroot_ctx_mock) as mock_chroot_cls:
             # 模拟 Phase 2 deb 安装逻辑
             import shutil
@@ -207,7 +211,7 @@ class TestRootfsDebInstall:
         chroot_ctx_mock.__enter__ = MagicMock(return_value=chroot_mock)
         chroot_ctx_mock.__exit__ = MagicMock(return_value=False)
 
-        with patch("builder.platforms.rockchip.rootfs.ChrootContext",
+        with patch("builder.rootfs.ChrootContext",
                    return_value=chroot_ctx_mock) as mock_chroot_cls:
             import shutil
 
@@ -380,7 +384,7 @@ class TestRootfsDebInstallIntegration:
         work_dir.mkdir()
         isolated = {
             "_build_phase1": MagicMock(),
-            "_build_ext4": MagicMock(),
+            "_build_image": MagicMock(),
             "_install_extra_debs": MagicMock(),
             "_install_kernel_modules": MagicMock(),
             "_install_extra_firmware": MagicMock(),
@@ -390,10 +394,10 @@ class TestRootfsDebInstallIntegration:
             "_install_hostname": MagicMock(),
         }
         with patch.multiple(builder, **isolated), patch(
-            "builder.platforms.rockchip.rootfs.ChrootContext",
+            "builder.rootfs.ChrootContext",
             return_value=chroot_ctx,
         ) as chroot_cls, patch(
-            "builder.platforms.rockchip.rootfs.tempfile.mkdtemp",
+            "builder.rootfs.tempfile.mkdtemp",
             return_value=str(work_dir),
         ):
             builder.compile(None, config)
@@ -424,13 +428,15 @@ class TestRootfsDebInstallIntegration:
         self._compile_isolated(
             builder, config, tmp_path / "work", chroot_ctx)
 
-        chroot.run.assert_called_once_with(
-            [
+        # 只断言 dpkg 这一步：Phase 2 结尾还会跑 dpkg-query 导出包清单，
+        # 用调用次数当断言会把无关的新增步骤误判成回归。
+        assert any(
+            call.args[0] == [
                 "dpkg", "-i", "--force-confnew",
                 "/tmp/flange-debs/integrate_1.0_arm64.deb",
-            ],
-            label="dpkg -i (1 个包)...",
-        )
+            ] and call.kwargs.get("label") == "dpkg -i (1 个包)..."
+            for call in chroot.run.call_args_list
+        ), f"没有发出预期的 dpkg -i：{chroot.run.call_args_list}"
         assert not (tmp_path / "work" / "rootfs" / "tmp"
                     / "flange-debs").exists()
 
@@ -446,7 +452,13 @@ class TestRootfsDebInstallIntegration:
         chroot_cls = self._compile_isolated(
             builder, config, tmp_path / "work", chroot_ctx)
 
-        chroot_cls.assert_not_called()
+        # Phase 2 结尾必定进一次 chroot 导出包清单，所以不能用"是否进过
+        # chroot"当判据；直接断言没有任何一条命令是 dpkg -i。
+        runner = chroot_ctx.__enter__.return_value
+        assert not [
+            call for call in runner.run.call_args_list
+            if call.args and call.args[0][:2] == ["dpkg", "-i"]
+        ], f"没有 deb 却发出了 dpkg -i：{runner.run.call_args_list}"
 
 
 # ---------------------------------------------------------------------------
