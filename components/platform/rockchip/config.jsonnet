@@ -24,7 +24,7 @@
       branch: 'next-dev-v2026.01',
     },
     'rockchip-kernel': {
-      url: 'ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git',
+      url: 'https://github.com/flange-build/kernel.git',
       branch: 'linux-6.1-stan-rkr5.1',
     },
   },
