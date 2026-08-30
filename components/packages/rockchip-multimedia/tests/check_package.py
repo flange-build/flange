@@ -32,7 +32,13 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(f"用法: {sys.argv[0]} <DEB 输出目录>")
     output_dir = Path(sys.argv[1]).resolve()
-    expected = load_spec(PACKAGE_ROOT / "build").build.deb_outputs
+    # deb 交付分散在 units/ 下产 deb 的那几个单元上，取并集即完整清单。
+    expected = [
+        name
+        for directory in sorted((PACKAGE_ROOT / "units").iterdir())
+        if directory.is_dir()
+        for name in load_spec(directory).build.deb_outputs
+    ]
     debs = [output_dir / name for name in expected]
     missing = [path.name for path in debs if not path.is_file()]
     if missing:

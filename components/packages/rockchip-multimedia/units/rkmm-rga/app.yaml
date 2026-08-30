@@ -1,7 +1,7 @@
 app:
-  name: rockchip-multimedia-build
+  name: rkmm-rga
   version: 1.0.0
-  description: Rockchip MPP、RGA 与 GStreamer 多 DEB 构建单元
+  description: Rockchip RGA 2D 加速 runtime
   type: vendor
   arch: [aarch64]
 
@@ -12,7 +12,8 @@ maintainer:
 build:
   system: custom
   commands:
-    - [python3, build.py]
+    - [python3, ../../lib/unit.py, rkmm-rga]
+  staging: stage
   apt_packages:
     - bison
     - cmake
@@ -60,20 +61,4 @@ build:
     - wayland-protocols
     - xz-utils
   deb_outputs:
-    - libgstreamer1.0-0_1.24.2-1ubuntu0.1+flange1_arm64.deb
-    - gstreamer1.0-tools_1.24.2-1ubuntu0.1+flange1_arm64.deb
-    - gstreamer1.0-plugins-base-apps_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - libgstreamer-plugins-base1.0-0_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - libgstreamer-gl1.0-0_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-alsa_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-plugins-base_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-x_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-gl_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-plugins-good_1.24.2-1ubuntu1.5+flange1_arm64.deb
-    - libgstreamer-plugins-good1.0-0_1.24.2-1ubuntu1.5+flange1_arm64.deb
-    - gstreamer1.0-plugins-bad-apps_1.24.2-1ubuntu4+flange1_arm64.deb
-    - gstreamer1.0-plugins-bad_1.24.2-1ubuntu4+flange1_arm64.deb
-    - libgstreamer-plugins-bad1.0-0_1.24.2-1ubuntu4+flange1_arm64.deb
-    - rockchip-mpp_1.3.9-1flange1_arm64.deb
     - librga2_2.1.0-1flange1_arm64.deb
-    - gstreamer1.0-rockchip_1.0-1flange1_arm64.deb

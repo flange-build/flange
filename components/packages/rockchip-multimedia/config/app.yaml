@@ -11,8 +11,13 @@ maintainer:
 
 build:
   system: none
+  # 元包只声明 Depends，本身不编译；deps 让它排在全部单元之后，确保
+  # rootfs 安装时被依赖的 deb 都已产出。
   deps:
-    - rockchip-multimedia-build
+    - rkmm-mpp
+    - rkmm-rga
+    - rkmm-gst-rockchip
+    - rkmm-gst-repack
 
 depends:
   - rockchip-mpp (>= 1.3.9-1flange1)

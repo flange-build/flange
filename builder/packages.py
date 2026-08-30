@@ -35,9 +35,15 @@ from pathlib import Path
 from typing import Any
 
 from builder.paths import PROJECT_ROOT, components_dir
+from builder.platforms.spec import capability as platform_capability
 
 # component 合法类型集合。未知类型 → 构建失败。
-VALID_COMPONENT_TYPES = {"oot-driver", "devicetree", "vendor", "deb"}
+#
+# 不含 "deb"：它曾作为占位保留在这里，展开循环里却静默无操作 —— 声明合法、
+# 行为为空是最难查的一类缺陷（配置写了不报错也不生效）。真要接入第三方 deb
+# 时再加，届时展开逻辑与合法性声明一起落地。今天的替代路径是
+# rootfs.extra_debs。
+VALID_COMPONENT_TYPES = {"oot-driver", "devicetree", "vendor"}
 
 
 def _load_package_var(file_path: Path) -> Any:
@@ -154,6 +160,31 @@ def _parse_opt_in(entry: Any) -> tuple[str, set[str] | None]:
     raise TypeError(f"packages 项必须是字符串或 dict: {entry!r}")
 
 
+def _vendor_inputs(pkg_name: str, comp: dict, pkg_dir: Path) -> list[str]:
+    """解析 vendor component 的 ``inputs`` 声明（相对包根的路径列表）。
+
+    未声明时返回空列表 —— App 目录自身的内容已由 ``BuildCache`` 递归哈希，
+    只有目录之外的内容需要显式登记。
+    """
+    inputs = comp.get("inputs")
+    if inputs is None:
+        return []
+    if not isinstance(inputs, list) or not all(
+        isinstance(item, str) and item for item in inputs
+    ):
+        raise ValueError(
+            f"包 {pkg_name} 的 vendor component inputs 必须是非空字符串列表: "
+            f"{comp!r}"
+        )
+    for item in inputs:
+        if not (pkg_dir / item).exists():
+            raise FileNotFoundError(
+                f"包 {pkg_name} 的 vendor component 声明的 inputs 不存在: "
+                f"{pkg_dir / item}"
+            )
+    return list(inputs)
+
+
 def expand_hardware_packages(
     config: dict, project_root: Path | None = None
 ) -> dict:
@@ -185,6 +216,7 @@ def expand_hardware_packages(
     meta = config.setdefault("packages_meta", {})
     kernel_src_paths: list[str] = meta.setdefault("kernel_src_paths", [])
     overlay_src_paths: list[str] = meta.setdefault("overlay_src_paths", [])
+    app_src_paths: dict[str, list[str]] = meta.setdefault("app_src_paths", {})
 
     for entry in pkgs:
         pkg_name, selected = _parse_opt_in(entry)
@@ -244,7 +276,7 @@ def expand_hardware_packages(
                 dtbo_name = dtso_abs.name.removesuffix(".dtso") + ".dtbo"
                 if dtbo_name not in package_overlays:
                     package_overlays.append(dtbo_name)
-                if config.get("platform", "").startswith("qualcomm"):
+                if platform_capability(config, "dtbo_merge_at_build"):
                     build_overlays = kernel_cfg.setdefault(
                         "device_tree", {}).setdefault("build_overlays", [])
                     if dtbo_name not in build_overlays:
@@ -273,7 +305,13 @@ def expand_hardware_packages(
                     "custom_packages", [])
                 if app_name not in custom_packages:
                     custom_packages.append(app_name)
-
-            # ctype == "deb"：预留，尚未接入构建流水线
+                # 位于 App 目录之外、但确实参与该 App 构建的包内内容（补丁、
+                # 共享脚本等）：登记为附加哈希输入，否则改补丁不会触发重建。
+                extra = [
+                    f"components/packages/{pkg_name}/{item}"
+                    for item in _vendor_inputs(pkg_name, comp, pkg_dir)
+                ]
+                if extra:
+                    app_src_paths.setdefault(app_name, []).extend(extra)
 
     return config

@@ -347,3 +347,67 @@ def test_runtime_overlays_missing_lists_package_candidates():
     }}}
     with pytest.raises(ValueError, match="package="):
         runtime_overlays(cfg)
+
+
+# ---- vendor component 的额外哈希输入（inputs） ----
+
+_VENDOR_WITH_INPUTS = """
+PACKAGE = {
+    "name": "demo-firmware",
+    "components": [
+        {"type": "vendor", "name": "demo-firmware", "dir": "build",
+         "inputs": ["patches"]},
+    ],
+}
+"""
+
+
+def test_vendor_inputs_登记为app附加哈希输入(tmp_path: Path):
+    """位于 App 目录之外、却参与构建的包内容必须显式登记进缓存输入。"""
+    _write_package(
+        tmp_path,
+        "demo-firmware",
+        _VENDOR_WITH_INPUTS,
+        files={
+            "build/app.yaml": _VENDOR_APP,
+            "patches/0001-fix.patch": "--- a\n+++ b\n",
+        },
+    )
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    expand_hardware_packages(cfg, project_root=tmp_path)
+
+    assert cfg["packages_meta"]["app_src_paths"] == {
+        "demo-firmware": ["components/packages/demo-firmware/patches"],
+    }
+
+
+def test_vendor_inputs_缺省时不登记(tmp_path: Path):
+    _write_package(
+        tmp_path, "demo-firmware", _VENDOR_PACKAGE,
+        files={"app.yaml": _VENDOR_APP},
+    )
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    expand_hardware_packages(cfg, project_root=tmp_path)
+
+    assert cfg["packages_meta"]["app_src_paths"] == {}
+
+
+def test_vendor_inputs_路径不存在时报错(tmp_path: Path):
+    _write_package(
+        tmp_path, "demo-firmware", _VENDOR_WITH_INPUTS,
+        files={"build/app.yaml": _VENDOR_APP},
+    )
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    with pytest.raises(FileNotFoundError, match="inputs 不存在"):
+        expand_hardware_packages(cfg, project_root=tmp_path)
+
+
+def test_vendor_inputs_必须是字符串列表(tmp_path: Path):
+    _write_package(tmp_path, "demo-firmware", """
+PACKAGE = {"name": "demo-firmware", "components": [
+    {"type": "vendor", "name": "demo-firmware", "dir": "build",
+     "inputs": "patches"}]}
+""", files={"build/app.yaml": _VENDOR_APP})
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    with pytest.raises(ValueError, match="inputs 必须是非空字符串列表"):
+        expand_hardware_packages(cfg, project_root=tmp_path)
