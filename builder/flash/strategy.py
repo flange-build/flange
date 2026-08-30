@@ -1,25 +1,49 @@
-"""统一刷写系统 — 配置生成 + 刷写执行 + 平台策略。
+"""平台刷写策略（**宿主机执行期**）。
 
-双职责设计：
-- 构建时（Docker 内）：FlashConfigGenerator 从 FINAL_CONFIG 生成 flash-config.json
-- 刷写时（宿主机）：FlashExecutor 读取 flash-config.json，通过平台策略执行刷写
+每个平台一个策略类，封装该平台的设备检测、进入下载模式、写分区的工具链
+调用（rkdeveloptool / upgrade_tool / qdl / xfel …）。这些命令全部在开发者
+的机器上执行，不在 Docker 内、不产出任何构建产物，因此本模块**不进**构建
+逻辑指纹 —— 改刷写工具的调用方式不该让 kernel 重新编译。
 """
 
-import argparse
 import hashlib
 import json
 import os
 import re
+import sys
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
 
+from builder.flash.plan import (
+    AllwinnerA733FlashPlan,
+    AmlogicFlashPlan,
+    FlashPlan,
+    QualcommFlashPlan,
+    RockchipFlashPlan,
+)
+from builder.flash.console import (
+    _GRAY, _c, _err, _header, _info, _ok, _step, _tty, _warn,
+)
+from builder.flash.model import (
+    DeviceInfo,
+    FlashConfig,
+    FlashError,
+    FlashPartition,
+    PreFlashConfig,
+    _atomic_write_text,
+)
+from builder.flash.spi import (
+    SPI_IDBLOADER_OFFSET,
+    SPI_IMG_ALIGN,
+    SPI_NOR_SIZE,
+    SPI_UBOOT_OFFSET,
+    build_spi_image,
+)
 from builder.partition.rockchip import (
     parse_parameter_file,
     parse_parameter_text,
@@ -29,294 +53,12 @@ from builder.partition.size import parse_size
 from builder.paths import PROJECT_ROOT
 
 
-# ---------------------------------------------------------------------------
-# 宿主机 CLI 输出辅助（与 BuildOutput 风格统一）
-# ---------------------------------------------------------------------------
-
-def _tty() -> bool:
-    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
-
-def _c(color: str, text: str) -> str:
-    if not _tty():
-        return text
-    return f"{color}{text}\033[0m"
-
-_BLUE_BOLD = "\033[1;34m"
-_GREEN     = "\033[0;32m"
-_YELLOW    = "\033[1;33m"
-_RED_BOLD  = "\033[1;31m"
-_GRAY      = "\033[0;90m"
-_WHITE     = "\033[0;37m"
-
-def _header(text: str):
-    sep = "═" * 58
-    print()
-    print(_c(_WHITE, sep))
-    print(_c(_WHITE, f" {text}"))
-    print(_c(_WHITE, sep))
-    print()
-
-def _step(text: str):
-    print(_c(_BLUE_BOLD, f"▸ {text}"))
-
-def _ok(text: str):
-    print(_c(_GREEN, f"  ✓ {text}"))
-
-def _warn(text: str):
-    print(_c(_YELLOW, f"  ⚠ {text}"))
-
-def _err(text: str):
-    print(_c(_RED_BOLD, f"  ✗ {text}"))
-
-def _info(text: str):
-    print(_c(_GRAY, f"  · {text}"))
-
-
-# ---------------------------------------------------------------------------
-# Rockchip parameter.txt（GPT 分区表）生成
-# ---------------------------------------------------------------------------
-
-# rootfs 固定 PARTUUID，供 kernel cmdline root=PARTUUID 引用（与 image 一致）。
-ROOTFS_PARTUUID = "614e0000-0000-4000-8000-000000000000"
-
-
-def generate_parameter_txt(entries: list, machine: str = "RK3576") -> str:
-    """从 partitions.entries 生成 Rockchip parameter.txt（GPT）。
-
-    offset/size 用 512 字节扇区单位（hex）—— 这是 Rockchip parameter 的通用
-    约定，对 eMMC/UFS 一致（依据：rkbin parameter 样例注释 "per section
-    512(0x200) bytes"；loader1 固定在 0x40=32KB÷512，eMMC/UFS 共用）。
-    parameter 本身 device-agnostic：刷写时 `upgrade_tool di -p parameter.txt`
-    由 loader 按目标设备实际块大小（UFS=4K）把 512-扇区 offset 映射成设备
-    LBA 并建 GPT。flange 的 partitions offset 本就是 512-扇区，直接透传。
-    （最终以实板 di -p 后的 GPT 为准。）
-
-    所有分区都给**显式大小**（用 resolve_image_size：rootfs 取 image_size
-    如 2G→0x400000 扇区），不使用 ``-``（remaining）—— 实测该 loader 的
-    di -p 把 ``-`` 算成 size=0，导致 "partition too small"。rootfs 初始按
-    image_size，靠 grow_on_first_boot 首启动撑满整盘。
-    """
-    from builder.partition.size import resolve_image_size
-
-    segs = []
-    for e in entries:
-        name = e["name"]
-        off = int(e.get("offset", "0"), 0) if e.get("offset") else 0
-        sectors = resolve_image_size(e).sectors
-        flag = ":bootable" if name == "boot" else ""
-        segs.append(f"{sectors:#010x}@{off:#010x}({name}{flag})")
-    cmdline = "mtdparts=rk29xxnand:" + ",".join(segs)
-    lines = [
-        "FIRMWARE_VER: 1.0",
-        f"MACHINE_MODEL: {machine}",
-        "MACHINE_ID: 007",
-        f"MANUFACTURER: {machine}",
-        "MAGIC: 0x5041524B",
-        "ATAG: 0x00200800",
-        "MACHINE: 0xffffffff",
-        "CHECK_MASK: 0x80",
-        "PWR_HLD: 0,0,A,0,1",
-        "TYPE: GPT",
-        "# in section; per section 512(0x200) bytes",
-        f"CMDLINE: {cmdline}",
-        f"uuid:rootfs={ROOTFS_PARTUUID}",
-    ]
-    return "\n".join(lines) + "\n"
-
-
-# ---------------------------------------------------------------------------
-# Rockchip SPI NOR 启动固件（spi.img）合成
-# ---------------------------------------------------------------------------
-
-# SPI NOR 上的布局（字节偏移）。实板日志确认：rkbin SPL 在 SPI(MTD2) 上读
-# u-boot.itb 于 sector 0x4000（= 8 MiB），与 eMMC/UFS 统一约定一致；idbloader
-# 在 32 KiB（rk35xx BootROM 要求非 0 偏移）。
-SPI_NOR_SIZE = 16 * 1024 * 1024          # 板载 SPI NOR 标称 16 MiB（容量上限校验用）
-SPI_IDBLOADER_OFFSET = 0x8000            # 32 KiB
-SPI_UBOOT_OFFSET = 0x800000             # 8 MiB（= sector 0x4000 × 512）
-SPI_IMG_ALIGN = 0x10000                  # 镜像尾部上对齐 64 KiB
-
-
-def build_spi_image(bootloader_dir: Path, out_path: Path,
-                    idbloader_off: int = SPI_IDBLOADER_OFFSET,
-                    uboot_off: int = SPI_UBOOT_OFFSET) -> Path:
-    """把 idbloader.img + u-boot.itb 合成为可写入 SPI NOR 起始(LBA 0)的 spi.img。
-
-    架构 A2：bootloader 全在 SPI（idbloader@32KiB + u-boot.itb@8MiB），UFS 只放
-    OS。idbloader 用 mkimage -T rksd（RK3576 BootROM 已修复 SPI 散布 bug，无需
-    rkspi）。
-
-    镜像**只做到容纳 u-boot.itb 末端**（按 64KiB 上对齐），不填满整片 SPI ——
-    SPINOR 实际可写扇区略少于标称容量（实测 32735 < 32768），写满会
-    "partition too small"；尾部旧内容保留不影响启动（只用 idbloader+itb）。
-    """
-    idb = bootloader_dir / "idbloader.img"
-    itb = bootloader_dir / "u-boot.itb"
-    if not idb.exists() or not itb.exists():
-        raise FlashError(f"合成 spi.img 缺少 {idb} 或 {itb}")
-    idb_b = idb.read_bytes()
-    itb_b = itb.read_bytes()
-    end = uboot_off + len(itb_b)
-    if end > SPI_NOR_SIZE:
-        raise FlashError(
-            f"u-boot.itb 末端 {end} 超过 SPI 容量 {SPI_NOR_SIZE}（u-boot.itb 太大）")
-    size = (end + SPI_IMG_ALIGN - 1) & ~(SPI_IMG_ALIGN - 1)
-    buf = bytearray(size)
-    buf[idbloader_off:idbloader_off + len(idb_b)] = idb_b
-    buf[uboot_off:uboot_off + len(itb_b)] = itb_b
-    out_path.write_bytes(buf)
-    return out_path
-
-
-# ---------------------------------------------------------------------------
-# 数据模型
-# ---------------------------------------------------------------------------
-
-@dataclass
-class FlashPartition:
-    """单个分区的刷写信息。"""
-    name: str
-    offset: str       # "0x40" 等 hex 字符串
-    type: str         # "raw", "ext4" 等
-    image: str        # 相对于 target_dir 的路径
-    # recovery 与宿主机端均消费的保护标记：raw 类型分区一律 True；
-    # 此外 recovery.protected_partitions 中显式列出的分区也标记 True。
-    # 默认 False，向前兼容现有 flash-config.json 消费者。
-    protected: bool = False
-    # MTD/GPT 分区容量（512B sector 字符串）；旧配置缺省为空。
-    size: str = ""
-
-
-@dataclass
-class PreFlashConfig:
-    """刷写前准备操作配置。
-
-    各平台共享字段：
-    - ``download_boot``：第一阶段需推送到 SoC 的引导镜像（rockchip 的
-      ``miniloader.bin``、amlogic 的 ``u-boot.bin.sd.bin``）路径，相对于
-      ``target_dir``。
-    - ``usb_vid`` / ``usb_pid``：MaskROM 阶段 host 端用来识别 SoC 的 USB
-      VID/PID（小写 hex 字符串，例如 amlogic = ``"1b8e"`` / ``"c003"``）。
-      为兼容现有 flash-config.json，默认为空字符串。
-    """
-    download_boot: str = ""  # 第一阶段引导镜像路径（相对于 target_dir）
-    usb_vid: str = ""        # MaskROM USB Vendor ID，hex 不带 0x
-    usb_pid: str = ""        # MaskROM USB Product ID，hex 不带 0x
-
-
-@dataclass
-class FlashIdentityConfig:
-    """首次持久写入前用于匹配 Rockchip 芯片与存储介质的正则。"""
-
-    chip_patterns: list[str] = field(default_factory=list)
-    storage_patterns: list[str] = field(default_factory=list)
-    require_rid: bool = False
-
-
-@dataclass
-class FlashConfig:
-    """flash-config.json 的完整数据模型。"""
-    platform: str
-    flash_tool: str
-    board: str
-    product: str
-    variant: str
-    # SoC 身份用于 Rockchip 首次持久写入前的设备校验；空值兼容旧清单。
-    soc: str = ""
-    # 目标存储逻辑块大小：eMMC/SD 为 512，UFS 为 4096。缺省 512 向前兼容
-    # 旧 flash-config.json。供 write_gpt 按扇区截取 GPT。
-    sector_size: int = 512
-    # 目标存储介质名（Rockchip upgrade_tool SSD 列表里的名字；UFS=SATA）。
-    # 非空时 flash 在 DB 后用 SSD 切到该存储，否则用 loader 默认（eMMC/SPI）。
-    storage: str = ""
-    # 存储介质类型（如 spinand）。与 SSD 展示名称分离，避免用工具输出文案
-    # 决定 NAND 坏块安全的具名 DI 路由。
-    storage_type: str = ""
-    # 分区配置模型：gpt（由 entries 生成）或兼容旧 mtd parameter。
-    partition_format: str = "gpt"
-    # parameter 相对 target_dir 的路径与存储总容量；SPI NAND 的 GPT 配置
-    # 同样生成 parameter 并记录 rootfs MTD index。
-    parameter: str = ""
-    storage_size: str = ""
-    rootfs_mtd_index: Optional[int] = None
-    # parameter 内容摘要。具名 DI 路由必须校验，避免 parameter 与清单布局漂移。
-    parameter_sha256: str = ""
-    partitions: list[FlashPartition] = field(default_factory=list)
-    pre_flash: PreFlashConfig = field(default_factory=PreFlashConfig)
-    identity: FlashIdentityConfig = field(default_factory=FlashIdentityConfig)
-
-    def to_json(self, path: Path):
-        """原子序列化为 JSON 文件。"""
-        data = asdict(self)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_text(
-            path,
-            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-        )
-
-    @classmethod
-    def from_json(cls, path: Path) -> "FlashConfig":
-        """从 JSON 文件反序列化。"""
-        data = json.loads(path.read_text())
-        partitions = [FlashPartition(**p) for p in data.get("partitions", [])]
-        pre_flash = PreFlashConfig(**data.get("pre_flash", {}))
-        identity = FlashIdentityConfig(**data.get("identity", {}))
-        return cls(
-            platform=data["platform"],
-            flash_tool=data["flash_tool"],
-            board=data["board"],
-            product=data["product"],
-            variant=data["variant"],
-            soc=data.get("soc", ""),
-            sector_size=data.get("sector_size", 512),
-            storage=data.get("storage", ""),
-            storage_type=data.get("storage_type", ""),
-            partition_format=data.get("partition_format", "gpt"),
-            parameter=data.get("parameter", ""),
-            storage_size=data.get("storage_size", ""),
-            rootfs_mtd_index=data.get("rootfs_mtd_index"),
-            parameter_sha256=data.get("parameter_sha256", ""),
-            partitions=partitions,
-            pre_flash=pre_flash,
-            identity=identity,
-        )
-
-
-class FlashError(Exception):
-    """刷写过程中的错误。"""
-    pass
-
-
-def _atomic_write_text(path: Path, content: str) -> None:
-    """在同目录写临时文件并原子替换，失败时不暴露半写产物。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent)
-    temporary_path = Path(temporary)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary_path.replace(path)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
-
-
-@dataclass
-class DeviceInfo:
-    """检测到的设备信息。"""
-    platform: str
-    mode: str         # "maskrom", "loader" 等
-    description: str
-
 
 # ---------------------------------------------------------------------------
 # 平台刷写策略
 # ---------------------------------------------------------------------------
 
-class FlashStrategy(ABC):
+class FlashStrategy(FlashPlan, ABC):
     """平台刷写策略基类。"""
 
     @abstractmethod
@@ -373,14 +115,6 @@ class FlashStrategy(ABC):
     def reboot(self, tool: Path):
         """重启设备。"""
 
-    @abstractmethod
-    def partition_image_map(self, config: dict) -> dict[str, str]:
-        """返回 {分区名: 镜像相对路径} 映射。"""
-
-    def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
-        """生成平台特定的 pre_flash 配置。默认返回空配置。"""
-        return PreFlashConfig()
-
     def flash_whole_disk(self, tool: Path, target_dir: Path,
                          config: "FlashConfig") -> bool:
         """整盘刷写钩子（如 edl-ng write-sector 整 raw.img）。
@@ -420,7 +154,7 @@ class FlashStrategy(ABC):
         )
 
 
-class RockchipFlashStrategy(FlashStrategy):
+class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
     """Rockchip 刷写策略 — 使用 upgrade_tool。"""
 
     TOOL_NAME = "upgrade_tool"
@@ -854,30 +588,7 @@ class RockchipFlashStrategy(FlashStrategy):
         _info("重启设备...")
         subprocess.run([str(tool), "RD"], check=True)
 
-    def partition_image_map(self, config: dict) -> dict[str, str]:
-        m = {
-            "idbloader": "bootloader/idbloader.img",
-            "uboot": "bootloader/u-boot.itb",
-            "boot": "boot/boot.img",
-            "rootfs": (
-                "rootfs/rootfs.ubi"
-                if (config.get("rootfs") or {}).get("image_format") == "ubi"
-                else "rootfs/rootfs.img"
-            ),
-        }
-        if (config.get("recovery") or {}).get("enabled", False):
-            m["recovery"] = "recovery/recovery.img"
-        # amp 协处理器固件：启用时纳入刷写映射，使 flash-config.json 含 amp、
-        # `flange flash amp` 可单刷（仿 recovery 的 enabled gate）。
-        if (config.get("amp") or {}).get("enabled", False):
-            m["amp"] = "amp/amp.img"
-        return m
-
-    def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
-        return PreFlashConfig(download_boot="bootloader/miniloader.bin")
-
-
-class AllwinnerA733FlashStrategy(FlashStrategy):
+class AllwinnerA733FlashStrategy(AllwinnerA733FlashPlan, FlashStrategy):
     """Allwinner A733 刷写策略 — SD 卡 dd 模式。"""
 
     def find_tool(self, project_dir: Path) -> Path:
@@ -900,22 +611,7 @@ class AllwinnerA733FlashStrategy(FlashStrategy):
     def reboot(self, tool: Path):
         _info("SD 卡模式：请手动插入 SD 卡并重启设备")
 
-    def partition_image_map(self, config: dict) -> dict[str, str]:
-        # SD 卡模式整体 dd raw.img；列出 recovery 仅为生成 flash-config.json 时
-        # 携带 protection 元数据，write_partition 不会被逐分区调用。
-        m = {
-            "boot0": "bootloader/boot0_sdcard.bin",
-            "boot0_ufs": "bootloader/boot0_ufs.bin",
-            "boot_package": "bootloader/boot_package.fex",
-            "boot": "boot/boot.img",
-            "rootfs": "rootfs/rootfs.img",
-        }
-        if (config.get("recovery") or {}).get("enabled", False):
-            m["recovery"] = "recovery/recovery.img"
-        return m
-
-
-class AmlogicFlashStrategy(FlashStrategy):
+class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
     """Amlogic 刷写策略 — 两段式 USB Burning。
 
     流程（详见 design.md Decision 5）：
@@ -940,8 +636,6 @@ class AmlogicFlashStrategy(FlashStrategy):
     """
 
     # MaskROM 模式 USB VID/PID（Amlogic 通用 BootROM 描述符）
-    MASKROM_VID = "1b8e"
-    MASKROM_PID = "c003"
 
     # pyamlboot 入口脚本名（由 pip install pyamlboot 暴露到 PATH，或在
     # 本地 git clone 后位于 repo 根）。SM1 family 的 S905D3 复用 G12
@@ -1203,41 +897,7 @@ class AmlogicFlashStrategy(FlashStrategy):
         _info("fastboot reboot...")
         self._run_fastboot(tool, "reboot")
 
-    def partition_image_map(self, config: dict) -> dict[str, str]:
-        """amlogic 平台分区 → 镜像路径映射。
-
-        ``bootloader`` 指向 FIP 封装的 SD/eMMC 启动镜像
-        （``u-boot.bin.sd.bin``），由 fastboot 写入 eMMC hw boot0 分区
-        （u-boot ``CONFIG_FASTBOOT_FLASH_MMC_DEV=1`` 路由）。
-        """
-        m = {
-            "bootloader": "bootloader/u-boot.bin.sd.bin",
-            "boot": "boot/boot.img",
-            "rootfs": "rootfs/rootfs.img",
-        }
-        if (config.get("recovery") or {}).get("enabled", False):
-            m["recovery"] = "recovery/recovery.img"
-        return m
-
-    def generate_pre_flash_config(self, config: dict) -> PreFlashConfig:
-        """生成 amlogic 平台的 pre_flash 配置。
-
-        - ``download_boot`` 指向**裸 FIP**（``u-boot.bin``，build-fip.sh 直接
-          产出）而非 SD 格式（``u-boot.bin.sd.bin``）。boot-g12.py 在
-          SRAM 解第一个 64KB 后会通过 AMLC 控制传输请求剩余 chunks，需要
-          binary 的 BL2 位于 offset 0；SD 格式前置了 block-1 header，BL2
-          被推到错误偏移，BL2 起来后 AMLC 握手超时。
-        - ``usb_vid`` / ``usb_pid``：amlogic MaskROM 通用 USB 描述符
-          ``1b8e:c003``。
-        """
-        return PreFlashConfig(
-            download_boot="bootloader/u-boot.bin",
-            usb_vid=self.MASKROM_VID,
-            usb_pid=self.MASKROM_PID,
-        )
-
-
-class QualcommFlashStrategy(FlashStrategy):
+class QualcommFlashStrategy(QualcommFlashPlan, FlashStrategy):
     """Qualcomm QCS6490 刷写策略 —— EDL 模式 + edl-ng（flange 首个高通刷写）。
 
     - 系统盘：``edl-ng --memory UFS write-sector 0 raw.img``（整盘，契合 flange raw.img）。
@@ -1311,10 +971,6 @@ class QualcommFlashStrategy(FlashStrategy):
             subprocess.run([str(tool), "reset"], timeout=15)
         except Exception:
             _info("请手动断电重启 Q6A（退出 EDL 模式）")
-
-    def partition_image_map(self, config: dict) -> dict[str, str]:
-        # 整盘 raw.img 经 edl-ng write-sector 刷入；映射仅作 flash-config 元数据。
-        return {"system": "image/raw.img"}
 
     def flash_whole_disk(self, tool: Path, target_dir: Path,
                          config: "FlashConfig") -> bool:
@@ -1415,429 +1071,3 @@ def get_flash_strategy(platform: str) -> FlashStrategy:
     return cls()
 
 
-# ---------------------------------------------------------------------------
-# 配置生成器（构建时使用）
-# ---------------------------------------------------------------------------
-
-class FlashConfigGenerator:
-    """从 FINAL_CONFIG 生成 flash-config.json。"""
-
-    def generate(self, config: dict, target_dir: Path) -> Path:
-        """生成 flash-config.json 到 target_dir，返回文件路径。
-
-        ``protected`` 标记规则：``type == "raw"`` 一律 True；启用 recovery 时
-        ``recovery.protected_partitions`` 名单中的分区也置 True；recovery 自身
-        分区始终视为受保护（设备端不允许从 recovery 内重写自己）。
-        """
-        platform = config.get("platform", "")
-        strategy = get_flash_strategy(platform)
-        image_map = strategy.partition_image_map(config)
-
-        recovery_cfg = config.get("recovery") or {}
-        protected_set: set[str] = set(recovery_cfg.get("protected_partitions") or [])
-        if recovery_cfg.get("enabled", False):
-            protected_set.add("recovery")
-
-        partition_cfg = config.get("partitions", {}) or {}
-        partition_format = partition_cfg.get("format", "gpt")
-        partitions: list[FlashPartition] = []
-        parameter_relative = ""
-        parameter_text = ""
-        parameter_entries = []
-        parameter_sha256 = ""
-        rootfs_mtd_index = None
-        storage_cfg = config.get("storage") or {}
-        storage_size = storage_cfg.get("size", "")
-        storage_type = storage_cfg.get("type", "")
-        needs_parameter = (
-            platform == "rockchip"
-            and (
-                partition_format == "mtd"
-                or bool(config.get("flash_storage"))
-                or storage_type == "spinand"
-            )
-        )
-
-        if needs_parameter:
-            try:
-                if partition_format == "mtd":
-                    parameter_source = Path(
-                        partition_cfg.get("parameter", ""))
-                    if not parameter_source.is_absolute():
-                        parameter_source = PROJECT_ROOT / parameter_source
-                    parameter_text = parameter_source.read_text(
-                        encoding="utf-8")
-                else:
-                    machine = (config.get("rkbin") or {}).get(
-                        "mkimage_chip", "RK3576").upper()
-                    parameter_text = generate_parameter_txt(
-                        partition_cfg.get("entries") or [],
-                        machine=machine,
-                    )
-                parameter_entries = parse_parameter_text(parameter_text)
-                total_bytes = parse_size(storage_size).bytes
-                validate_parameter_capacity(parameter_entries, total_bytes)
-            except (OSError, TypeError, ValueError) as exc:
-                raise FlashError(
-                    f"无法生成 Rockchip parameter/flash-config: {exc}") from exc
-            parameter_relative = "parameter.txt"
-            parameter_sha256 = hashlib.sha256(
-                parameter_text.encode("utf-8")).hexdigest()
-            rootfs_mtd_index = next(
-                (index for index, entry in enumerate(parameter_entries)
-                 if entry.name == "rootfs"),
-                None,
-            )
-
-        configured_types = {
-            entry.get("name"): entry.get("type", "raw")
-            for entry in partition_cfg.get("entries") or []
-        }
-        if parameter_entries:
-            # parameter 是实际由 upgrade_tool 消费的布局事实源；flash config
-            # 必须从同一解析结果派生，避免单位或 size 表达方式漂移。
-            for entry in parameter_entries:
-                if storage_type == "spinand" and entry.name == "idbloader":
-                    continue
-                image = image_map.get(entry.name, "")
-                if not image:
-                    continue
-                ptype = configured_types.get(entry.name, "raw")
-                if (entry.name == "rootfs"
-                        and (config.get("rootfs") or {}).get(
-                            "image_format") == "ubi"):
-                    ptype = "ubi"
-                partitions.append(FlashPartition(
-                    name=entry.name,
-                    offset=f"0x{entry.offset:x}",
-                    type=ptype,
-                    image=image,
-                    protected=bool(
-                        ptype == "raw" or entry.name in protected_set),
-                    size="remaining" if entry.size is None
-                    else f"0x{entry.size:x}",
-                ))
-        else:
-            for entry in partition_cfg.get("entries") or []:
-                name = entry["name"]
-                image = image_map.get(name, "")
-                if not image:
-                    continue
-                ptype = entry.get("type", "raw")
-                if (name == "rootfs"
-                        and (config.get("rootfs") or {}).get(
-                            "image_format") == "ubi"):
-                    ptype = "ubi"
-                partitions.append(FlashPartition(
-                    name=name,
-                    offset=entry.get("offset", "0x0"),
-                    type=ptype,
-                    image=image,
-                    protected=bool(
-                        ptype == "raw" or name in protected_set),
-                    size=entry.get("size", ""),
-                ))
-
-        # 构造 pre_flash（由平台策略声明）
-        pre_flash = strategy.generate_pre_flash_config(config)
-
-        flash_config = FlashConfig(
-            platform=platform,
-            flash_tool=config.get("flash_tool", ""),
-            board=config["board"],
-            product=config.get("product", "default"),
-            variant=config.get("variant", "release"),
-            soc=config.get("soc", ""),
-            sector_size=int(config.get("partitions", {}).get("sector_size", 512)),
-            storage=config.get("flash_storage", ""),
-            storage_type=storage_type,
-            partition_format=partition_format,
-            parameter=parameter_relative,
-            storage_size=storage_size,
-            rootfs_mtd_index=rootfs_mtd_index,
-            parameter_sha256=parameter_sha256,
-            partitions=partitions,
-            pre_flash=pre_flash,
-            identity=FlashIdentityConfig(
-                chip_patterns=list(
-                    (config.get("flash_identity") or {}).get(
-                        "chip_patterns") or []),
-                storage_patterns=list(
-                    (config.get("flash_identity") or {}).get(
-                        "storage_patterns") or []),
-                require_rid=bool(
-                    (config.get("flash_identity") or {}).get(
-                        "require_rid", False)),
-            ),
-        )
-
-        # SPI 启动固件 spi.img → `flange flash --spi-firmware` 写入 SPI NOR。两条路:
-        #  (a) prebuilt_spi_image：直接用 radxa bsp 预编的整体 spi.img（RK3576 ROCK
-        #      4D —— RK3576 idbloader 须 boot_merger 装配含 rk3576_boost，flange 通用
-        #      mkimage rksd 路径缺 boost → SPL 环境不全、u-boot 读 UFS 崩；详见 design）。
-        #  (b) flash_spi_loader：flange 自编 idbloader+u-boot.itb 合成（eMMC/SD 板）。
-        prebuilt = config.get("bootloader", {}).get("prebuilt_spi_image")
-        spi_out = target_dir / "bootloader" / "spi.img"
-        if prebuilt and config.get("platform") == "rockchip":
-            # prebuilt_spi_image = {url, sha256}：从 radxa 官方下载（不入库 16MB
-            # blob），ensure_prebuilt_image 原子下载 + sha256 校验、缓存到
-            # .build/sources/prebuilt（幂等，缓存命中无网亦可）。
-            from builder.source import SourceManager
-            from builder.paths import BUILD_ROOT, PROJECT_ROOT
-            src = SourceManager(sources_dir=BUILD_ROOT / "sources",
-                                project_root=PROJECT_ROOT)
-            img_path = src.ensure_prebuilt_image(
-                config.get("board", "prebuilt"), prebuilt)
-            spi_out.parent.mkdir(parents=True, exist_ok=True)
-            data = img_path.read_bytes()
-            # SPINOR 实际可写略少于 16MB 标称（末端 GPT backup ~33 扇区不可写）；官方
-            # 预编 spi.img 填满 16MB 会触发 upgrade_tool "partition too small"，截到可
-            # 写上限内即可——idbloader/u-boot.itb/primary GPT 都在头部保留，BootROM 按
-            # 固定偏移找 idbloader 不依赖 GPT（flange 自编 spi.img 本就无 GPT 也能启动）。
-            cap = SPI_NOR_SIZE - SPI_IMG_ALIGN
-            spi_out.write_bytes(data[:cap] if len(data) > cap else data)
-        elif config.get("flash_spi_loader") and config.get("platform") == "rockchip":
-            build_spi_image(target_dir / "bootloader", spi_out)
-
-        # 发布顺序刻意为 parameter → flash config。中断发生在两者之间时，旧清单
-        # 的摘要会与新 parameter 不符，preflight 必然失败；反向顺序会放行旧布局。
-        if needs_parameter:
-            _atomic_write_text(target_dir / "parameter.txt", parameter_text)
-        output = target_dir / "flash-config.json"
-        flash_config.to_json(output)
-        return output
-
-
-# ---------------------------------------------------------------------------
-# 刷写执行器（宿主机使用）
-# ---------------------------------------------------------------------------
-
-class FlashExecutor:
-    """读取 flash-config.json 并执行刷写。"""
-
-    def __init__(self, target_dir: Path, project_dir: Path = None):
-        config_path = target_dir / "flash-config.json"
-        if not config_path.exists():
-            raise FlashError(f"未找到 flash-config.json: {config_path}\n请先执行 flange build")
-        self.config = FlashConfig.from_json(config_path)
-        self.target_dir = target_dir
-        self.project_dir = project_dir or Path.cwd()
-        self.strategy = get_flash_strategy(self.config.platform)
-
-    def flash_all(self, no_wait: bool = False, no_reboot: bool = False):
-        """全量刷写所有分区。"""
-        cfg = self.config
-        _header(f"flange flash · {cfg.board} · {cfg.product}-{cfg.variant}")
-        # 先做所有本地、非破坏性校验；镜像/parameter 不一致时不等待设备，
-        # 更不会上传 loader 或写入任何分区。
-        self.strategy.preflight(self.target_dir, cfg, cfg.partitions)
-        tool = self.strategy.find_tool(self.project_dir)
-        device = None
-        if not no_wait:
-            device = self.strategy.wait_for_device(tool)
-        self.strategy.pre_flash_all(tool, self.target_dir, cfg, device)
-
-        _step("刷写分区")
-        start = time.time()
-        # 全量刷写时分区表可能变化（如新增 recovery），先把 GPT 表写下去；
-        # 平台默认实现是 no-op，rockchip 通过 raw.img 前几个 sector 刷写 GPT。
-        self.strategy.write_gpt(tool, self.target_dir, cfg)
-        # 整盘刷写钩子（如 Qualcomm edl-ng write-sector raw.img）：返回 True
-        # 表示已处理，跳过 per-partition 循环；默认 False，走逐分区流程。
-        whole_disk_handled = self.strategy.flash_whole_disk(
-            tool, self.target_dir, cfg)
-        if whole_disk_handled is not True:
-            for part in cfg.partitions:
-                image = self.target_dir / part.image
-                if not image.exists():
-                    _warn(f"跳过 {part.name}: 镜像不存在")
-                    continue
-                if (cfg.partition_format == "mtd"
-                        or cfg.storage_type == "spinand"):
-                    self.strategy.write_named_partition(tool, part, image, cfg)
-                else:
-                    self.strategy.write_partition(
-                        tool, int(part.offset, 0), image)
-        if no_reboot:
-            _info("跳过重启（--no-reboot）")
-        else:
-            self.strategy.reboot(tool)
-        elapsed = time.time() - start
-
-        sep = "─" * 58
-        print()
-        print(_c(_WHITE, sep))
-        print(_c(_GREEN, f" ✓ 刷写完成{_c(_GRAY, f'  {elapsed:.1f}s')}"))
-        print(_c(_WHITE, sep))
-        print()
-
-    def flash_partition(self, name: str, no_wait: bool = False, no_reboot: bool = False):
-        """刷写指定分区。"""
-        requested_name = name
-        if (self.config.partition_format == "mtd"
-                or self.config.storage_type == "spinand"):
-            name = {
-                "bootloader": "uboot",
-                "kernel": "boot",
-            }.get(name, name)
-        part = None
-        for p in self.config.partitions:
-            if p.name == name:
-                part = p
-                break
-        if not part:
-            available = [p.name for p in self.config.partitions]
-            raise FlashError(
-                f"未知分区: {requested_name}\n可用分区: {', '.join(available)}"
-            )
-        image = self.target_dir / part.image
-        if not image.exists():
-            raise FlashError(f"镜像不存在: {image}")
-
-        self.strategy.preflight(self.target_dir, self.config, [part])
-        tool = self.strategy.find_tool(self.project_dir)
-        device = None
-        if not no_wait:
-            device = self.strategy.wait_for_device(tool)
-        # SPI NAND 的 bootloader 由 loader(SPL) + uboot(proper) 两部分组成。
-        # 原厂单刷路径也先 UL MiniLoaderAll，再 DI -uboot；若这里只做 DB/DI，
-        # 会继续从 NAND 启动旧 SPL，形成“旧 SPL + 新 proper”的混合链路。
-        if (name == "uboot"
-                and self.config.storage_type == "spinand"):
-            self.strategy.pre_flash_all(
-                tool, self.target_dir, self.config, device)
-        else:
-            self.strategy.pre_flash(
-                tool, self.target_dir, self.config, device)
-        if (self.config.partition_format == "mtd"
-                or self.config.storage_type == "spinand"):
-            self.strategy.write_named_partition(
-                tool, part, image, self.config)
-        else:
-            self.strategy.write_partition(tool, int(part.offset, 0), image)
-        if no_reboot:
-            _info("跳过重启（--no-reboot）")
-        else:
-            self.strategy.reboot(tool)
-        print()
-        print(_c(_GREEN, f" ✓ 分区 {requested_name} 刷写完成"))
-
-    def flash_raw(self, device: str):
-        """dd 整盘刷写。"""
-        firmware = next(self.target_dir.glob("*_firmware_*.img"), None)
-        if not firmware:
-            raise FlashError(f"未找到固件镜像（*_firmware_*.img）: {self.target_dir}")
-
-        size_mb = firmware.stat().st_size / (1024 * 1024)
-        _header("flange flash --raw")
-        _info(f"镜像: {firmware.name} ({size_mb:.0f} MB)")
-        _info(f"目标: {device}")
-        confirm = input(_c(_YELLOW, "  ⚠ 将覆盖目标设备全部数据！确认？[y/N] "))
-        if confirm.lower() != "y":
-            _info("已取消")
-            return
-
-        _step("dd 刷写")
-        subprocess.run(
-            ["sudo", "dd", f"if={firmware}", f"of={device}",
-             "bs=4M", "status=progress", "conv=fsync"],
-            check=True,
-        )
-        subprocess.run(["sync"], check=True)
-        print()
-        print(_c(_GREEN, " ✓ dd 刷写完成"))
-
-    def list_partitions(self):
-        """列出所有可刷写分区。"""
-        cfg = self.config
-        _header(f"flange flash --list · {cfg.board} · {cfg.product}-{cfg.variant}")
-        print(f"  {'分区名':<16} {'偏移':<12} {'类型':<8} {'镜像路径'}")
-        print(f"  {'─'*14}   {'─'*10}   {'─'*6}   {'─'*24}")
-        for p in cfg.partitions:
-            exists = _c(_GREEN, "✓") if (self.target_dir / p.image).exists() else _c(_RED_BOLD, "✗")
-            print(f"  {p.name:<16} {p.offset:<12} {p.type:<8} {p.image} [{exists}]")
-        print()
-
-
-# ---------------------------------------------------------------------------
-# CLI 入口（python3 -m builder.flash）
-# ---------------------------------------------------------------------------
-
-def _cli_main():
-    parser = argparse.ArgumentParser(
-        prog="python3 -m builder.flash",
-        description="flange 刷写工具",
-    )
-    subparsers = parser.add_subparsers(dest="command")
-
-    # run 子命令
-    run_parser = subparsers.add_parser("run", help="执行刷写")
-    run_parser.add_argument("--target-dir", required=True, help="构建产物目录")
-    run_parser.add_argument("--project-dir", default=".", help="项目根目录")
-    run_parser.add_argument("--no-wait", action="store_true", help="跳过设备等待")
-    run_parser.add_argument("--no-reboot", action="store_true", help="刷写完成后不触发设备重启")
-    run_parser.add_argument("--raw", metavar="DEVICE", help="dd 整盘刷写到指定设备")
-    run_parser.add_argument("--list", action="store_true", dest="list_parts", help="列出可刷写分区")
-    run_parser.add_argument("--spi-firmware", action="store_true", dest="spi_firmware",
-                            help="刷 SPI boot 固件（Qualcomm bring-up 一次性；需在 EDL 模式）")
-    run_parser.add_argument(
-        "--provision-ufs", nargs="?", const="lun0-only",
-        choices=("lun0-only", "qcom"), metavar="PROFILE",
-        help=("一次性初始化全新 Qualcomm UFS：lun0-only 为单用户 LUN；"
-              "qcom 为官方 LUN 0-7 布局"))
-    run_parser.add_argument("partition", nargs="?", help="指定分区名（不指定则全量刷写）")
-
-    # generate 子命令（构建引擎调用）
-    gen_parser = subparsers.add_parser("generate", help="生成 flash-config.json")
-    gen_parser.add_argument("--config", required=True, help="FINAL_CONFIG JSON 文件路径")
-    gen_parser.add_argument("--target-dir", required=True, help="输出目录")
-
-    args = parser.parse_args()
-
-    if args.command == "run":
-        target_dir = Path(args.target_dir)
-        project_dir = Path(args.project_dir)
-        executor = FlashExecutor(target_dir, project_dir)
-
-        if args.list_parts:
-            executor.list_partitions()
-        elif args.raw:
-            executor.flash_raw(args.raw)
-        elif args.provision_ufs:
-            if not hasattr(executor.strategy, "provision_ufs"):
-                raise FlashError(
-                    f"平台 {executor.config.platform} 不支持 --provision-ufs")
-            tool = executor.strategy.find_tool(executor.project_dir)
-            device = None
-            if not args.no_wait:
-                device = executor.strategy.wait_for_device(tool)
-            executor.strategy.provision_ufs(
-                tool, executor.target_dir, device,
-                profile=args.provision_ufs)
-        elif args.spi_firmware:
-            # Qualcomm bring-up：edl-ng 刷 SPI EDK2 固件（仅支持该方法的策略）
-            if not hasattr(executor.strategy, "flash_spi_firmware"):
-                raise FlashError(
-                    f"平台 {executor.config.platform} 不支持 --spi-firmware")
-            tool = executor.strategy.find_tool(executor.project_dir)
-            device = None
-            if not args.no_wait:
-                device = executor.strategy.wait_for_device(tool)
-            executor.strategy.flash_spi_firmware(tool, executor.target_dir, device)
-        elif args.partition:
-            executor.flash_partition(args.partition, no_wait=args.no_wait, no_reboot=args.no_reboot)
-        else:
-            executor.flash_all(no_wait=args.no_wait, no_reboot=args.no_reboot)
-
-    elif args.command == "generate":
-        config = json.loads(Path(args.config).read_text())
-        gen = FlashConfigGenerator()
-        gen.generate(config, Path(args.target_dir))
-
-    else:
-        parser.print_help()
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    _cli_main()

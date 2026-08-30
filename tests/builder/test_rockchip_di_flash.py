@@ -45,7 +45,7 @@ class TestDiFlashFlow:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(b"x")
         s = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as run:
+        with patch("builder.flash.strategy.subprocess.run") as run:
             run.return_value = MagicMock(returncode=0)
             ret = s.flash_whole_disk(Path("ut"), tmp_path, _cfg("SATA", _parts()))
         assert ret is True

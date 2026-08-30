@@ -49,7 +49,7 @@ class TestFlashSpiFirmware:
         (bl / "spi.img").write_bytes(b"x")
         (bl / "miniloader.bin").write_bytes(b"m")
         s = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as run, \
+        with patch("builder.flash.strategy.subprocess.run") as run, \
              patch.object(s, "detect_device",
                           return_value=MagicMock(mode="maskrom")), \
              patch.object(s, "_switch_storage") as switch:

@@ -184,7 +184,7 @@ class TestRockchipFlashStrategy:
             tool_path.parent.mkdir(parents=True)
             tool_path.touch()
 
-            with patch("builder.flash.sys") as mock_sys:
+            with patch("builder.flash.strategy.sys") as mock_sys:
                 mock_sys.platform = "darwin"
                 result = strategy.find_tool(Path(tmpdir))
                 assert result == tool_path
@@ -196,7 +196,7 @@ class TestRockchipFlashStrategy:
             tool_path.parent.mkdir(parents=True)
             tool_path.touch()
 
-            with patch("builder.flash.sys") as mock_sys:
+            with patch("builder.flash.strategy.sys") as mock_sys:
                 mock_sys.platform = "linux"
                 result = strategy.find_tool(Path(tmpdir))
                 assert result == tool_path
@@ -209,7 +209,7 @@ class TestRockchipFlashStrategy:
 
     def test_detect_device_maskrom(self):
         strategy = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="Found One MASKROM Device",
                 stderr="",
@@ -220,7 +220,7 @@ class TestRockchipFlashStrategy:
 
     def test_detect_device_loader(self):
         strategy = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="Found One LOADER Device",
                 stderr="",
@@ -231,14 +231,14 @@ class TestRockchipFlashStrategy:
 
     def test_detect_device_none(self):
         strategy = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="")
             info = strategy.detect_device(Path("/fake/tool"))
             assert info is None
 
     def test_detect_device_rejects_multiple_rockchip_devices(self):
         strategy = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout=(
                     "List of rockusb connected(2)\n"
@@ -283,7 +283,7 @@ class TestRockchipFlashStrategy:
             return MagicMock(
                 returncode=0, stdout=outputs[cmd[1]], stderr="")
 
-        with patch("builder.flash.subprocess.run", side_effect=fake_run):
+        with patch("builder.flash.strategy.subprocess.run", side_effect=fake_run):
             strategy._verify_device_identity(Path("upgrade_tool"), config)
 
     def test_device_identity_rejects_wrong_storage_before_write(self):
@@ -310,13 +310,13 @@ class TestRockchipFlashStrategy:
             return MagicMock(
                 returncode=0, stdout=outputs[cmd[1]], stderr="")
 
-        with patch("builder.flash.subprocess.run", side_effect=fake_run):
+        with patch("builder.flash.strategy.subprocess.run", side_effect=fake_run):
             with pytest.raises(FlashError, match="存储身份.*不匹配"):
                 strategy._verify_device_identity(Path("upgrade_tool"), config)
 
     def test_detect_device_timeout(self):
         strategy = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="", timeout=5)
             info = strategy.detect_device(Path("/fake/tool"))
             assert info is None
@@ -332,7 +332,7 @@ class TestRockchipFlashStrategy:
 
     def test_write_partition_command(self):
         strategy = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             strategy.write_partition(
                 Path("/tool"), 0x8000, Path("/target/boot/boot.img"))
             mock_run.assert_called_once_with(
@@ -342,7 +342,7 @@ class TestRockchipFlashStrategy:
 
     def test_reboot_command(self):
         strategy = RockchipFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             strategy.reboot(Path("/tool"))
             mock_run.assert_called_once_with(["/tool", "RD"], check=True)
 
@@ -358,8 +358,8 @@ class TestRockchipFlashStrategy:
             return 999.0  # 远超 deadline
 
         with patch.object(strategy, "detect_device", return_value=None), \
-             patch("builder.flash.time.sleep"), \
-             patch("builder.flash.time.time", side_effect=fake_time):
+             patch("builder.flash.strategy.time.sleep"), \
+             patch("builder.flash.strategy.time.time", side_effect=fake_time):
             with pytest.raises(FlashError, match="超时"):
                 strategy.wait_for_device(Path("/tool"), timeout=30)
 
@@ -423,7 +423,7 @@ class TestFlashExecutor:
             mock_strategy.find_tool.return_value = Path("/fake/tool")
             mock_strategy.wait_for_device.return_value = DeviceInfo("rockchip", "maskrom", "")
 
-            with patch("builder.flash.get_flash_strategy", return_value=mock_strategy):
+            with patch("builder.flash.execute.get_flash_strategy", return_value=mock_strategy):
                 executor = FlashExecutor(target_dir, Path(tmpdir))
                 executor.flash_all(no_wait=False)
 
@@ -440,7 +440,7 @@ class TestFlashExecutor:
             mock_strategy = MagicMock(spec=RockchipFlashStrategy)
             mock_strategy.find_tool.return_value = Path("/fake/tool")
 
-            with patch("builder.flash.get_flash_strategy", return_value=mock_strategy):
+            with patch("builder.flash.execute.get_flash_strategy", return_value=mock_strategy):
                 executor = FlashExecutor(target_dir, Path(tmpdir))
                 executor.flash_all(no_wait=True)
 
@@ -454,7 +454,7 @@ class TestFlashExecutor:
             mock_strategy.find_tool.return_value = Path("/fake/tool")
             mock_strategy.wait_for_device.return_value = DeviceInfo("rockchip", "maskrom", "")
 
-            with patch("builder.flash.get_flash_strategy", return_value=mock_strategy):
+            with patch("builder.flash.execute.get_flash_strategy", return_value=mock_strategy):
                 executor = FlashExecutor(target_dir, Path(tmpdir))
                 executor.flash_partition("rootfs")
 
@@ -470,7 +470,7 @@ class TestFlashExecutor:
             mock_strategy = MagicMock(spec=RockchipFlashStrategy)
             mock_strategy.find_tool.return_value = Path("/fake/tool")
 
-            with patch("builder.flash.get_flash_strategy", return_value=mock_strategy):
+            with patch("builder.flash.execute.get_flash_strategy", return_value=mock_strategy):
                 executor = FlashExecutor(target_dir, Path(tmpdir))
                 with pytest.raises(FlashError, match="未知分区"):
                     executor.flash_partition("nonexistent")
@@ -485,7 +485,7 @@ class TestFlashExecutor:
             target_dir = self._setup_executor(tmpdir)
 
             mock_strategy = MagicMock(spec=RockchipFlashStrategy)
-            with patch("builder.flash.get_flash_strategy", return_value=mock_strategy):
+            with patch("builder.flash.execute.get_flash_strategy", return_value=mock_strategy):
                 executor = FlashExecutor(target_dir, Path(tmpdir))
                 executor.list_partitions()
 
@@ -497,14 +497,15 @@ class TestFlashExecutor:
     def test_flash_raw_command(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             target_dir = self._setup_executor(tmpdir)
-            # 创建 firmware 镜像
-            firmware = target_dir / "test_firmware_v1.img"
+            # 创建整盘镜像（image 组件产物，各平台统一命名 raw.img）
+            firmware = target_dir / "image" / "raw.img"
+            firmware.parent.mkdir(parents=True, exist_ok=True)
             firmware.write_bytes(b"x" * 1024)
 
             mock_strategy = MagicMock(spec=RockchipFlashStrategy)
-            with patch("builder.flash.get_flash_strategy", return_value=mock_strategy), \
+            with patch("builder.flash.execute.get_flash_strategy", return_value=mock_strategy), \
                  patch("builtins.input", return_value="y"), \
-                 patch("builder.flash.subprocess.run") as mock_run:
+                 patch("builder.flash.strategy.subprocess.run") as mock_run:
                 executor = FlashExecutor(target_dir, Path(tmpdir))
                 executor.flash_raw("/dev/sdX")
 
@@ -516,15 +517,96 @@ class TestFlashExecutor:
     def test_flash_raw_cancel(self, capsys):
         with tempfile.TemporaryDirectory() as tmpdir:
             target_dir = self._setup_executor(tmpdir)
-            firmware = target_dir / "test_firmware_v1.img"
+            firmware = target_dir / "image" / "raw.img"
+            firmware.parent.mkdir(parents=True, exist_ok=True)
             firmware.write_bytes(b"x" * 1024)
 
             mock_strategy = MagicMock(spec=RockchipFlashStrategy)
-            with patch("builder.flash.get_flash_strategy", return_value=mock_strategy), \
+            with patch("builder.flash.execute.get_flash_strategy", return_value=mock_strategy), \
                  patch("builtins.input", return_value="n"), \
-                 patch("builder.flash.subprocess.run") as mock_run:
+                 patch("builder.flash.strategy.subprocess.run") as mock_run:
                 executor = FlashExecutor(target_dir, Path(tmpdir))
                 executor.flash_raw("/dev/sdX")
 
             # dd 不应被调用
             mock_run.assert_not_called()
+
+
+class TestFlashRaw:
+    """`flange flash --raw` 的整盘镜像定位。
+
+    历史实现 glob `*_firmware_*.img`，而所有平台的 image 产物都叫
+    `image/raw.img`（见各平台 ARTIFACT_NAMES）—— 这条命令从未能找到镜像，
+    对 write_partition 为 no-op、整盘 dd 是唯一刷写手段的板尤其致命。
+    """
+
+    @staticmethod
+    def _executor(tmp_path):
+        from builder.flash import FlashExecutor
+
+        executor = FlashExecutor.__new__(FlashExecutor)
+        executor.target_dir = tmp_path
+        return executor
+
+    def test_缺少整盘镜像时报出具体路径(self, tmp_path):
+        from builder.flash import FlashError
+
+        with pytest.raises(FlashError, match="image/raw.img"):
+            self._executor(tmp_path).flash_raw("/dev/sdX")
+
+    def test_整盘镜像路径与image产物一致(self, tmp_path):
+        import importlib
+
+        from builder.flash import FlashExecutor
+
+        for platform in ("rockchip", "allwinnera733", "amlogic",
+                         "qualcommqcs6490"):
+            names = getattr(
+                importlib.import_module(f"builder.platforms.{platform}"),
+                "ARTIFACT_NAMES", {})
+            assert names.get(("image", "image")) == "raw.img", platform
+        assert FlashExecutor.WHOLE_DISK_IMAGE == "image/raw.img"
+
+
+class TestCLI入口:
+    """`flange flash` 经 `python3 -m builder.flash run` 调用。
+
+    flash 从单模块拆成包时，这条路径静默失效过：包必须有 `__main__.py`
+    才能被 `python3 -m` 执行，而当时没有任何测试碰过 CLI 入口 —— 单测
+    全在直接 import 类，从下面绕过了真正的调用方式。
+    """
+
+    def test_可以作为模块执行(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            [sys.executable, "-m", "builder.flash", "--help"],
+            cwd=root, capture_output=True, text=True, timeout=60)
+
+        assert result.returncode == 0, (
+            f"python3 -m builder.flash 执行失败:\n{result.stderr}")
+        assert "run" in result.stdout, "帮助里应列出 run 子命令"
+
+    def test_envsetup里的每个python模块入口都可执行(self):
+        """envsetup.sh 直接写模块名调用；模块改包、改名都会静默打断它。"""
+        import importlib.util
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        text = (root / "envsetup.sh").read_text(encoding="utf-8")
+        modules = set(re.findall(r"python3 -m (builder[\w.]*)", text))
+        assert modules, "没有从 envsetup.sh 里解析出模块入口"
+
+        for name in sorted(modules):
+            spec = importlib.util.find_spec(name)
+            assert spec is not None, f"envsetup.sh 调用了不存在的模块 {name}"
+            runnable = (
+                spec.submodule_search_locations is None  # 普通模块
+                or importlib.util.find_spec(f"{name}.__main__") is not None
+            )
+            assert runnable, (
+                f"{name} 是包但缺少 __main__.py，`python3 -m {name}` 会失败")
