@@ -27,6 +27,10 @@
       url: 'ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git',
       branch: 'linux-6.1-stan-rkr5.1',
     },
+    'radxa-rockchip-kernel': {
+      url: 'ssh://git@github.com/radxa/kernel.git',
+      branch: 'linux-6.1-stan-rkr5.1',
+    },
   },
   rkbin: { source: { name: 'rkbin' } },
   rootfs+: {

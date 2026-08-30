@@ -63,6 +63,8 @@ local panel = product == 'meizu-e3-bringup';
     },
   },
   kernel+: {
+    // 使用 radxa-rockchip-kernel
+    source: { name: 'radxa-rockchip-kernel' },
     // argon BSP linux-6.1-stan-rkr5.1 已包含 rk3588-rock-5b.dts。
     device_tree+: { name: 'rk3588-rock-5b' },
     // 复用 kernel.oot_sources 已 ensure 的源
