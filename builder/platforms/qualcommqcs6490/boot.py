@@ -13,6 +13,7 @@ flange 无 UEFI/GRUB 先例（现有平台皆 U-Boot/extlinux），本模块为�
 import tempfile
 from pathlib import Path
 
+from builder.partition.layout import PartitionLayout
 from builder.base import ComponentBuilder
 from builder.config.canonical import kernel_device_tree
 
@@ -82,14 +83,15 @@ class Qcs6490BootBuilder(ComponentBuilder):
                          str(grub_cfg), "::/EFI/BOOT/grub.cfg"])
 
     def _esp_size_mb(self, config: dict) -> int:
-        """ESP 大小 → MB。config 的 size 按 flange 约定是 **512 字节扇区**计，
-        故直接 ×512 转字节（与介质 sector_size 无关）。不足 64MB 兜底。"""
-        parts = config.get("partitions", {})
-        for e in parts.get("entries", []):
-            if e["name"] == "esp" and e.get("size"):
-                mb = int(e["size"], 0) * 512 // (1024 * 1024)
-                return max(mb, 64)
-        return 256
+        """ESP 大小 → MB。几何解析走 PartitionLayout，不再自己算。
+
+        未声明 esp 分区时兜底 256MB；声明了但小于 64MB 时抬到 64MB ——
+        grub + kernel + initrd 放不进更小的 ESP。
+        """
+        esp = PartitionLayout.from_config(config).get("esp")
+        if esp is None:
+            return 256
+        return max(esp.size_mb, 64)
 
     def collect(self, src_dir, config: dict) -> dict:
         return {"boot": self._boot_img}

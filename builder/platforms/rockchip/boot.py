@@ -27,6 +27,7 @@ overlay 组件的产物目录，由 OverlaysBuilder 在编译期写入。
 import shutil
 import tempfile
 from pathlib import Path
+from builder.partition.layout import PartitionLayout
 from builder.config.canonical import kernel_device_tree
 from builder.base import ComponentBuilder
 from builder.dtb_overlay import (
@@ -134,7 +135,7 @@ class RockchipBootBuilder(ComponentBuilder):
                 self._build_recovery_extlinux_conf(config, kernel_src_dtb.name))
 
         # mke2fs -d 从 staging 目录直接生成 ext4 镜像（免 mount）
-        boot_size_mb = self._partition_size_mb(config, "boot")
+        boot_size_mb = PartitionLayout.from_config(config).size_mb("boot")
         boot_img = self._work_dir / "boot.img"
         self._status(f"生成 boot.img ({boot_size_mb}MB)...")
         self.docker.run([
@@ -188,13 +189,6 @@ class RockchipBootBuilder(ComponentBuilder):
         )
         return render_extlinux(RECOVERY_LABEL, [recovery])
 
-    def _partition_size_mb(self, config: dict, name: str) -> int:
-        """从 config 中读取指定分区大小（MB）。"""
-        for entry in config.get("partitions", {}).get("entries", []):
-            if entry["name"] == name:
-                size_sectors = int(entry["size"], 0)
-                return (size_sectors * 512) // (1024 * 1024)
-        raise KeyError(f"partitions.entries 中未定义分区: {name}")
 
     def _status(self, msg: str):
         if self.output:

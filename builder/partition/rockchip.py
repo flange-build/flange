@@ -158,3 +158,53 @@ class RockchipPartitionConverter:
             else:
                 parts.append(f"{entry.size}@{entry.offset}({entry.name})")
         return ",".join(parts)
+
+
+# rootfs 固定 PARTUUID，供 kernel cmdline root=PARTUUID 引用（与 image 一致）。
+ROOTFS_PARTUUID = "614e0000-0000-4000-8000-000000000000"
+
+
+def generate_parameter_txt(entries: list, machine: str = "RK3576") -> str:
+    """从 partitions.entries 生成 Rockchip parameter.txt（GPT）。
+
+    offset/size 用 512 字节扇区单位（hex）—— 这是 Rockchip parameter 的通用
+    约定，对 eMMC/UFS 一致（依据：rkbin parameter 样例注释 "per section
+    512(0x200) bytes"；loader1 固定在 0x40=32KB÷512，eMMC/UFS 共用）。
+    parameter 本身 device-agnostic：刷写时 `upgrade_tool di -p parameter.txt`
+    由 loader 按目标设备实际块大小（UFS=4K）把 512-扇区 offset 映射成设备
+    LBA 并建 GPT。flange 的 partitions offset 本就是 512-扇区，直接透传。
+    （最终以实板 di -p 后的 GPT 为准。）
+
+    所有分区都给**显式大小**（用 resolve_image_size：rootfs 取 image_size
+    如 2G→0x400000 扇区），不使用 ``-``（remaining）—— 实测该 loader 的
+    di -p 把 ``-`` 算成 size=0，导致 "partition too small"。rootfs 初始按
+    image_size，靠 grow_on_first_boot 首启动撑满整盘。
+    """
+    from builder.partition.layout import PartitionLayout
+
+    # 几何解析走 PartitionLayout：parameter.txt 是**设备侧**读到的分区表，
+    # 与 raw.img 的 GPT 必须逐字节一致。两边各算一次是 spinand 场景漂移的
+    # 根源 —— 算出不同的偏移，刷进去起不来，要到刷机那一刻才发现。
+    segs = []
+    for part in PartitionLayout.from_config({"partitions": {"entries": entries}}):
+        flag = ":bootable" if part.name == "boot" else ""
+        segs.append(
+            f"{part.size_sectors:#010x}@{part.offset_sectors:#010x}"
+            f"({part.name}{flag})")
+    cmdline = "mtdparts=rk29xxnand:" + ",".join(segs)
+    lines = [
+        "FIRMWARE_VER: 1.0",
+        f"MACHINE_MODEL: {machine}",
+        "MACHINE_ID: 007",
+        f"MANUFACTURER: {machine}",
+        "MAGIC: 0x5041524B",
+        "ATAG: 0x00200800",
+        "MACHINE: 0xffffffff",
+        "CHECK_MASK: 0x80",
+        "PWR_HLD: 0,0,A,0,1",
+        "TYPE: GPT",
+        "# in section; per section 512(0x200) bytes",
+        f"CMDLINE: {cmdline}",
+        f"uuid:rootfs={ROOTFS_PARTUUID}",
+    ]
+    return "\n".join(lines) + "\n"

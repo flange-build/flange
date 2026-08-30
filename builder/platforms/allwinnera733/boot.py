@@ -18,6 +18,7 @@ Overlay 来源同 Rockchip：boot.overlays.intree/vendor/board/package。
 import shutil
 import tempfile
 from pathlib import Path
+from builder.partition.layout import PartitionLayout
 from builder.base import ComponentBuilder
 from builder.config.canonical import kernel_device_tree
 from builder.dtb_overlay import (
@@ -108,7 +109,7 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
                 self._build_recovery_extlinux_conf(config, dtb_filename))
 
         # 生成 boot.img
-        boot_size_mb = self._partition_size_mb(config, "boot")
+        boot_size_mb = PartitionLayout.from_config(config).size_mb("boot")
         boot_img = self._work_dir / "boot.img"
         self._status(f"生成 boot.img ({boot_size_mb}MB)...")
         self.docker.run(["truncate", "-s", f"{boot_size_mb}M", str(boot_img)])
@@ -170,12 +171,6 @@ class AllwinnerA733BootBuilder(ComponentBuilder):
         )
         return render_extlinux(RECOVERY_LABEL, [recovery])
 
-    def _partition_size_mb(self, config: dict, name: str) -> int:
-        for entry in config.get("partitions", {}).get("entries", []):
-            if entry["name"] == name:
-                size_sectors = int(entry["size"], 0)
-                return (size_sectors * 512) // (1024 * 1024)
-        raise KeyError(f"partitions.entries 中未定义分区: {name}")
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         return {"boot": self._boot_img}
