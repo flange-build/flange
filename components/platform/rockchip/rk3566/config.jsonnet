@@ -7,6 +7,13 @@ local common = import 'config/rockchip.libsonnet';
   // 约定一致），device-tree-overlay 组件用它定位 arch/arm64/boot/dts/<vendor>/
   // overlays/<stem>.dts。对 rockchip 平台恰好与 platform 同名。
   platform: 'rockchip', soc: 'rk3566', vendor: 'rockchip',
+  flash_identity: {
+    // 实机 RCI 芯片信息以小端字节序返回十进制 ASCII："38 36 35 33"
+    // 解码为 "8653"，是 "3568" 的字节反转（RK3566 与 RK3568 同 die，
+    // BootROM 识别为 rk3568），而非 "rk3566" 字面量，因此不能只靠
+    // soc 字段兜底匹配（见 builder/flash.py _identity_corpus）。
+    chip_patterns: ['rk\\s*356[68]', '\\b356[68]\\b', '\\b8653\\b'],
+  },
   rkbin+: {
     // mkimage 打包 idbloader 时塞给 BootROM 的 chip 标签。
     // RK3566 与 RK3568 同 die，BootROM 识别为 rk3568。
