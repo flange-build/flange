@@ -71,12 +71,47 @@ _flange_check_docker() {
     return 0
 }
 
+# 状态的唯一真相源是 .flange/current_config —— `flange build` 读的就是它
+# （builder/config/loader.py::load_current_config）。shell 里的 FLANGE_BOARD
+# 等只是它的投影，用于提示符显示。两者会分叉：在另一个 shell 里 lunch 过、
+# 或手工改过 env。凡是会写盘或写硬件的命令都必须以文件为准，否则
+# `flange status` 显示 A 而 `flange build` 造 B，而 CLAUDE.md 的刷写安全
+# 规程恰恰建立在 status 的显示上。
+_flange_read_state() {
+    local state="$FLANGE_DIR/.flange/current_config"
+    [[ -f "$state" ]] || return 1
+    python3 -c "
+import json, sys
+try:
+    s = json.load(open('$state'))
+    print(s['board'], s.get('product', 'default'), s.get('variant', 'release'))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null
+}
+
+# 解析真相源到 FLANGE_TARGET_{BOARD,PRODUCT,VARIANT}，并在 shell 投影与它
+# 不一致时告警。成功返回 0；未 lunch 过返回 1。
 _flange_check_target() {
-    if [[ -z "$FLANGE_BOARD" ]] || [[ -z "$FLANGE_PRODUCT" ]] || [[ -z "$FLANGE_VARIANT" ]]; then
+    local triple
+    triple=$(_flange_read_state) || {
         _flange_error "未选择目标配置，请先执行 lunch"
         return 1
+    }
+    read -r FLANGE_TARGET_BOARD FLANGE_TARGET_PRODUCT FLANGE_TARGET_VARIANT <<< "$triple"
+
+    local shown="${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+    local actual="${FLANGE_TARGET_BOARD}-${FLANGE_TARGET_PRODUCT}-${FLANGE_TARGET_VARIANT}"
+    if [[ -n "$FLANGE_BOARD" && "$shown" != "$actual" ]]; then
+        _flange_warn "本 shell 显示 ${shown}，实际目标是 ${actual}"
+        _flange_warn "以 .flange/current_config 为准；在本 shell 重新 lunch 可同步显示"
     fi
     return 0
+}
+
+# 当前目标的产物目录（按真相源，不按 shell 投影）。
+_flange_target_dir() {
+    echo "$FLANGE_DIR/.build/target/$FLANGE_TARGET_BOARD/$FLANGE_TARGET_PRODUCT/$FLANGE_TARGET_VARIANT"
 }
 
 _flange_check_all() {
@@ -402,6 +437,7 @@ _flange_cmd_build() {
             _flange_docker_run python3 -c "
 from pathlib import Path
 from builder.app import AppBuilder
+from builder.cache import BuildCache
 from builder.docker import DockerRunner
 from builder.source import SourceManager
 from builder.config.loader import load_current_config
@@ -409,14 +445,19 @@ import logging
 logging.basicConfig(level=logging.WARNING)
 cfg = load_current_config()
 ${output_cfg}
-source = SourceManager(project_root=Path('.').resolve())
+root = Path('.').resolve()
+source = SourceManager(project_root=root)
 builder = AppBuilder(DockerRunner(), source, cfg)
+# 注入 cache：单 App 构建后写入其产物清单，随后的 flange build 只重建
+# 真正变化的 App，而不是把整组再编一遍。
+builder.cache = BuildCache(cfg, project_root=root)
 builder.build_one('$app_name')
 "
         else
             _flange_docker_run python3 -c "
 from pathlib import Path
 from builder.app import AppBuilder
+from builder.cache import BuildCache
 from builder.docker import DockerRunner
 from builder.source import SourceManager
 from builder.config.loader import load_current_config
@@ -424,9 +465,11 @@ import logging
 logging.basicConfig(level=logging.WARNING)
 cfg = load_current_config()
 ${output_cfg}
-source = SourceManager(project_root=Path('.').resolve())
+root = Path('.').resolve()
+source = SourceManager(project_root=root)
 builder = AppBuilder(DockerRunner(), source, cfg)
-builder.build_all()
+builder.cache = BuildCache(cfg, project_root=root)
+builder.build_all(force=bool('$force'))
 "
         fi
         return $?
@@ -465,13 +508,16 @@ _flange_cmd_flash() {
         return 0
     fi
     _flange_check_target || return 1
-    local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+    local target_dir="$(_flange_target_dir)"
     if [[ ! -f "${target_dir}/flash-config.json" ]]; then
         _flange_error "未找到 flash-config.json: ${target_dir}/flash-config.json"
         _flange_error "请先执行 flange build 生成镜像"
         return 1
     fi
-    _flange_step "刷写: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+    _flange_step "刷写: ${FLANGE_TARGET_BOARD}-${FLANGE_TARGET_PRODUCT}-${FLANGE_TARGET_VARIANT}"
+    # 刷写是破坏性操作：把"刷的是哪个 target、产物是什么时候造的"摆在眼前，
+    # 而不是让用户去别处确认。
+    _flange_info "产物生成于 $(date -r "${target_dir}/flash-config.json" '+%Y-%m-%d %H:%M' 2>/dev/null || echo '未知时间')"
     python3 -m builder.flash run \
         --target-dir "$target_dir" \
         --project-dir "$FLANGE_DIR" \
@@ -534,20 +580,91 @@ EOF
 
 _flange_cmd_clean() {
     if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-        echo "  用法: flange clean"
+        echo "  用法: flange clean [--all]"
         echo ""
-        echo "  清理当前目标的构建产物。"
+        echo "  清理当前目标的构建产物（.build/target/<board>/<product>/<variant>）。"
+        echo ""
+        echo "  默认**不**清理这三处跨目标共享的派生物："
+        echo "    .build/work/apps/       App 与包内单元的中间产物"
+        echo "    .build/target/.cache/   rootfs / recovery 的 Phase 1 base 快照"
+        echo "    .build/sources/         源码检出与下载缓存"
+        echo "  它们重建代价高（Phase 1 以分钟计）且与当前目标无关，所以留着。"
+        echo "  --all 连同前两者一起清（源码缓存始终保留，重下代价最高）。"
         return 0
     fi
     _flange_check_target || return 1
-    local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
-    _flange_step "清理构建产物: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+    local clean_all=""
+    [[ "$1" == "--all" ]] && clean_all="1"
+
+    local target_dir="$(_flange_target_dir)"
+    _flange_step "清理构建产物: ${FLANGE_TARGET_BOARD}-${FLANGE_TARGET_PRODUCT}-${FLANGE_TARGET_VARIANT}"
     if [[ -d "$target_dir" ]]; then
         rm -rf "$target_dir"
         _flange_info "已清理: $target_dir"
     else
         _flange_info "无需清理: $target_dir 不存在"
     fi
+
+    local work_dir="$FLANGE_DIR/.build/work/apps"
+    local cache_dir="$FLANGE_DIR/.build/target/.cache"
+    if [[ -n "$clean_all" ]]; then
+        for extra in "$work_dir" "$cache_dir"; do
+            if [[ -d "$extra" ]]; then
+                rm -rf "$extra"
+                _flange_info "已清理: $extra"
+            fi
+        done
+        _flange_info "源码缓存 .build/sources/ 始终保留（重下代价最高）"
+    else
+        # 说实话：不列出来，用户会以为 clean 之后是干净重建。
+        local kept=""
+        [[ -d "$work_dir" ]] && kept="${kept}    $(du -sh "$work_dir" 2>/dev/null | cut -f1)\t.build/work/apps/\n"
+        [[ -d "$cache_dir" ]] && kept="${kept}    $(du -sh "$cache_dir" 2>/dev/null | cut -f1)\t.build/target/.cache/\n"
+        if [[ -n "$kept" ]]; then
+            echo "  未清理（跨目标共享，用 --all 一并清理）:"
+            printf "$kept"
+        fi
+    fi
+}
+
+_flange_cmd_why() {
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo "  用法: flange why [component]"
+        echo ""
+        echo "  解释增量构建的缓存决策：命中，还是哪一段输入变了。"
+        echo "  不带参数时依次解释全部组件。"
+        echo ""
+        echo "  分段含义:"
+        echo "    dep:<上游>   上游组件产物变化（Merkle 级联）"
+        echo "    identity     平台 / SoC / 板 / 架构等构建身份"
+        echo "    config       该组件相关的配置切片"
+        echo "    logic        参与构建的 builder 代码与 Docker 定义"
+        echo "    own          该组件自身输入：源码、补丁、overlay、App 等"
+        return 0
+    fi
+    _flange_docker_run python3 -c "
+import json
+from builder.cache import BuildCache, DEPENDENCY_GRAPH
+from builder.config.loader import load_current_config
+
+cfg = load_current_config()
+cache = BuildCache(cfg)
+wanted = ['$1'] if '$1' else list(DEPENDENCY_GRAPH)
+print()
+for component in wanted:
+    report = cache.explain(component)
+    mark = '命中' if report['up_to_date'] else '需重建'
+    print(f\"  {component:<20} {mark}\")
+    if report['note']:
+        print(f\"      {report['note']}\")
+    for reason in report['reasons']:
+        print(f\"      变化: {reason['segment']}\")
+    if not report['up_to_date'] and component == 'app':
+        for name in cache._app_names_for_explain():
+            state = '命中' if cache.is_app_up_to_date(name) else '需重建'
+            print(f\"        App {name:<32} {state}\")
+print()
+"
 }
 
 _flange_cmd_status() {
@@ -592,7 +709,7 @@ _flange_cmd_status() {
 
     # 构建产物状态
     if [[ -n "$FLANGE_BOARD" ]] && [[ -n "$FLANGE_PRODUCT" ]] && [[ -n "$FLANGE_VARIANT" ]]; then
-        local target_dir="$FLANGE_DIR/.build/target/$FLANGE_BOARD/$FLANGE_PRODUCT/$FLANGE_VARIANT"
+        local target_dir="$(_flange_target_dir)"
         echo ""
         echo "  构建产物 ($target_dir):"
         if [[ -d "$target_dir" ]]; then
@@ -932,8 +1049,9 @@ flange() {
         echo "  环境与工具 (Environment & Tools):"
         echo "    docker     管理 Docker 构建环境镜像"
         echo "    shell      进入构建环境 (Docker) 的交互式 Shell"
-        echo "    clean      清理当前目标的构建产物"
+        echo "    clean      清理当前目标的构建产物（--all 连同共享缓存）"
         echo "    status     显示当前配置和构建状态"
+        echo "    why        解释缓存决策：哪一段输入变了导致重建"
         echo ""
         if [[ -n "$FLANGE_BOARD" ]]; then
             echo "  当前目标: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
@@ -1002,6 +1120,10 @@ flange() {
             ;;
         status)
             _flange_cmd_status
+            ;;
+        why)
+            _flange_check_docker || return 1
+            _flange_cmd_why "$@"
             ;;
         docker)
             _flange_cmd_docker "$@"
