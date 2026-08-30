@@ -1,7 +1,9 @@
 # cli-envsetup Specification
 
 ## Purpose
-TBD - created by archiving change 2026-03-29-phase7-cli-scaffold. Update Purpose after archive.
+
+定义 `envsetup.sh` 的环境初始化契约：source 之后提供什么、`lunch` 如何交互式选择目标、以及各子命令执行前必须通过哪些前置检查。
+
 ## Requirements
 ### Requirement: envsetup.sh 初始化开发环境
 项目根目录 SHALL 提供 `envsetup.sh`，通过 `source envsetup.sh` 注入 `lunch` 和 `flange` 函数到当前 shell session。脚本 SHALL 设置 `FLANGE_DIR` 环境变量指向项目根目录。

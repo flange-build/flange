@@ -1,7 +1,9 @@
 # rk3506b-amp-rtt-demo Specification
 
 ## Purpose
-TBD - created by archiving change add-rk3506b-atk-rk3506b. Update Purpose after archive.
+
+定义 RK3506B 上 RT-Thread AMP demo 的验收契约：从核单核运行、固件内存布局与 DTS 一致、UART4 启动日志与 MSH、RPMsg 使用 DTS 定义的 mailbox，以及上板验收同时确认 Linux 侧的 CPU 所有权。
+
 ## Requirements
 ### Requirement: RK3506B RT-Thread demo 在 CPU2 单核运行
 

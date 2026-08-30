@@ -1,7 +1,9 @@
 # amp-partition-flash Specification
 
 ## Purpose
-TBD - created by archiving change add-amp-firmware-support. Update Purpose after archive.
+
+定义 amp.img 从镜像装配到刷写的落地契约：amp 分区在分区表中怎么声明、配置怎么校验自洽、以及不同存储能力下 image 与 flash 两侧如何处理它。
+
 ## Requirements
 ### Requirement: 刷写映射识别 amp 分区
 

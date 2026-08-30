@@ -68,6 +68,32 @@ flange 仓库根目录 MUST 将顶层目录按角色分为三层：**代码层**
 - **WHEN** 构建过程生成中间文件或最终镜像
 - **THEN** 该产物 MUST NOT 写入 `components/` 层；MUST 写入 `.build/` 层
 
+### Requirement: 补丁归属按影响面判断
+
+补丁 MUST 按"它影响谁"归位：影响该平台**所有**板子的补丁位于
+`components/platform/<平台>/patches/`（SoC 级差异可再下沉到
+`components/platform/<平台>/<soc>/patches/`），只影响**特定板子**的补丁位于
+`components/board/<板>/patches/<组件>/`。
+
+判据是影响面而不是"谁先发现的"：把板级补丁放到平台层，其他板会静默地被打上
+不该打的补丁；把平台补丁放到板级，同平台的新板会缺一个必需修复，而且要到
+它真正跑起来才发现。
+
+#### Scenario: 平台通用补丁归属
+
+- **WHEN** 一个内核补丁修复该平台所有 SoC 的公共问题
+- **THEN** 补丁位于 `components/platform/<平台>/patches/`
+
+#### Scenario: 板级特有补丁归属
+
+- **WHEN** 一个内核补丁仅修复某块板子的硬件问题
+- **THEN** 补丁位于 `components/board/<板>/patches/kernel/`
+
+#### Scenario: 补丁不进代码层
+
+- **WHEN** 开发者考虑把补丁放到 `builder/platforms/<平台>/` 旁边
+- **THEN** 该操作 MUST 被拒绝：补丁是数据，归内容层
+
 ### Requirement: 产物层职责边界
 
 `.build/` 层 MUST 聚合所有运行时生成的派生物：外部工具缓存（`.build/cache/`）、源码下载/克隆（`.build/sources/`）、构建产物（`.build/target/`）。`.build/` 整棵目录 MUST 被 `.gitignore` 忽略，MUST 可被安全删除以触发完整重建。

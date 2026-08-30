@@ -1,7 +1,9 @@
 # amp-app-scaffold Specification
 
 ## Purpose
-TBD - created by archiving change add-amp-firmware-support. Update Purpose after archive.
+
+定义 amp（协处理器固件）作为一等 App 类型的契约：它如何被声明、如何生成脚手架、以及它为什么走独立构建路径而不打 deb、不进 rootfs。
+
 ## Requirements
 ### Requirement: amp 作为合法 app 类型与构建系统
 

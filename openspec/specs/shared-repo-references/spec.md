@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义所有源码组件共享的唯一 source descriptor 与引用语义。
+定义所有源码组件共享的唯一 source descriptor 与引用语义：仓库地址、版本锚点（commit / tag / branch / local_path）与子路径只在一处声明，组件按名引用；多个组件引用同一名字即共享同一份检出。
 
 ## Requirements
 

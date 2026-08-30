@@ -41,3 +41,14 @@ boot builder MUST 从 `kernel.device_tree.{directory,name}`、
 
 ext4 镜像创建与文件注入 MUST 通过平台 boot ComponentBuilder 在 Docker 构建
 环境内完成，输出收集为 `target/.../boot/boot.img`。
+
+#### Scenario: 构建 boot 分区
+
+- **WHEN** 执行 boot 组件构建
+- **THEN** ext4 创建与文件注入在 Docker 构建环境内完成
+- **AND** 产物收集为 `target/<board>/<product>/<variant>/boot/boot.img`
+
+#### Scenario: 产物缺失
+
+- **WHEN** boot 组件的 `.build_hash` 有效但 `boot.img` 不存在
+- **THEN** 缓存判定为未命中并重建

@@ -76,11 +76,17 @@ builder/
 "跟随远端"语义下，`reset --hard` 会丢弃源码目录里的本地修改——因此
 "声明 branch 不声明 commit"与"声明 local_path"互为独立的两种语义，不混用。
 
-**local_path 模式的缓存行为**：当前组件及所有下游组件强制重建，
-由底层构建系统（make / mke2fs 等）自己做增量。`builder/cache.py::
-BuildCache._has_local_upstream` 沿 `DEPENDENCY_GRAPH` 递归判断，
-命中即在 `is_up_to_date` 短路返回 False。理由：local_path 内容不走
-git，没有廉价指纹；硬按源码树哈希会出现"改了没变"的假命中。
+**local_path 模式的两半语义**：这个声明的含义是"我正在 hack 这份源码"，
+框架据此做两件事，缺一不可 ——
+
+1. **不动这个工作树**：跳过 `git checkout -f .` 与补丁应用
+   （`builder/source.py::component_local_path` 是 builder 与 cache 共用的
+   单一判据）。否则用户未提交的调试改动会被静默抹掉。
+2. **放弃缓存决策**：当前组件及所有下游组件强制重建，
+   由底层构建系统（make / mke2fs 等）自己做增量。`builder/cache.py::
+   BuildCache._has_local_upstream` 沿 `DEPENDENCY_GRAPH` 递归判断，
+   命中即在 `is_up_to_date` 短路返回 False。理由：local_path 内容不走
+   git，没有廉价指纹；硬按源码树哈希会出现"改了没变"的假命中。
 
 使用详情见 [README.md §组件源码模式](../README.md#组件源码模式)。
 

@@ -1,7 +1,9 @@
 # qcs6490-extra-apt-sources Specification
 
 ## Purpose
-TBD - created by archiving change migrate-qcs6490-kernel-702. Update Purpose after archive.
+
+定义 rootfs 构建消费外部 APT 源的契约，以及它对构建容器的前置要求（ubuntu-base 不带 CA 证书，走 HTTPS 源需要先装证书）。
+
 ## Requirements
 ### Requirement: rootfs 构建支持外部 APT 源
 

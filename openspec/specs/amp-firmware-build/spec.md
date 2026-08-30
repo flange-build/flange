@@ -1,7 +1,9 @@
 # amp-firmware-build Specification
 
 ## Purpose
-TBD - created by archiving change add-amp-firmware-support. Update Purpose after archive.
+
+定义 amp 协处理器固件组件的构建契约：它在依赖图中的位置、hal 与 rt-thread 两种 mode 的产出、SoC 到目标工程的映射、内存布局的单一事实源，以及固件必须满足的 ABI 与容量门槛。
+
 ## Requirements
 ### Requirement: amp 组件注册进依赖图并作为 image 上游
 

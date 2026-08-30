@@ -1,7 +1,9 @@
 # build-output Specification
 
 ## Purpose
-TBD - created by archiving change structured-output. Update Purpose after archive.
+
+定义构建过程的统一输出契约：分层结构、颜色编码、进度与计时、构建摘要、失败诊断与日志持久化，使终端读者与事后排查者各自拿到需要的信息。
+
 ## Requirements
 ### Requirement: 分层输出结构
 

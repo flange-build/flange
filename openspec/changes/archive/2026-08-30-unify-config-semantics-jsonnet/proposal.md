@@ -42,3 +42,24 @@
 - 不借迁移重新设计所有 builder，也不引入通用插件、schema 代码生成或多套配置后端。
 - 不把构建实现逻辑放入 Jsonnet；Jsonnet 只负责声明、组合和求值配置。
 - 不长期保留 Python/Jsonnet 双栈或旧参数 alias；兼容只用于迁移期对照验证。
+
+## 归档时的 delta 核对（2026-08-30）
+
+本变更的任务在实现侧已全部完成，但归档被 spec delta 卡住：其中两份 delta
+声明 MODIFIED 的 requirement 标题在 live spec 中已不存在 —— 后续变更把同一
+片语义用更好的模型重写并先行归档了。逐条核对结果：
+
+- `board-config`：「板级配置文件声明完整构建参数」的内容已由 live 的
+  「板级配置身份」+「板级硬件事实使用 canonical 字段」覆盖，删除。
+- `shared-repo-references`：delta 描述的是 `from_repo` 这一中间设计，live
+  已改为 `sources.<name>` + `source.name` 模型（「顶层命名 source」
+  「组件使用统一 source 引用」「checkout 身份隔离」），四条全部被取代，
+  整份 delta 删除。
+- `config-deep-merge`：delta 声明 REMOVED 的两条 `deep_merge` 要求在 live
+  spec 中已经不存在 —— 该 spec 已整份重写为 Jsonnet 组合语义，删除动作事实上
+  已经完成，整份 delta 删除。
+- 「板级配置声明 rootfs 基线版本」在任何 live spec 中都没有对应要求，
+  确属遗漏，改为 ADDED 保留。
+
+这类"delta 挂在已被重写的标题上"是变更长期不归档的直接后果 —— 见
+`repository-quality-gate` 中新增的归档时效要求。

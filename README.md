@@ -97,6 +97,7 @@ lunch
 | `flange recovery reboot [normal\|recovery\|loader]` | 请求目标模式并重启（默认 normal） |
 | `flange clean` | 清理当前配置的构建产物 |
 | `flange status` | 显示当前配置和构建状态 |
+| `flange why [component]` | 解释缓存决策：哪一段输入变了导致重建 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
 | `flange create app <name> [--type=<type>] [--build-system=<sys>] [--dir=<path>]` | 生成 App 工程脚手架（`--dir` 指向父目录以生成 out-of-tree App） |
 | `flange list apps` | 列出所有可用 App（本地 + external_apps + external_app_dirs） |

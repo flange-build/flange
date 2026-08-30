@@ -1,7 +1,9 @@
 # build-time-dtb-overlay-merge Specification
 
 ## Purpose
-TBD - created by archiving change add-q6a-meizu-e3-panel. Update Purpose after archive.
+
+定义构建期用 fdtoverlay 把 DTBO 合并进 DTB 的能力，以及它与运行期 overlay 加载路径的互斥关系 —— 两条路径由平台能力决定，不能同时启用。
+
 ## Requirements
 ### Requirement: 构建期 fdtoverlay 合并能力
 

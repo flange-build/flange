@@ -1,7 +1,9 @@
 # tspi-rk3566-foc Specification
 
 ## Purpose
-TBD - created by archiving change add-tspi-rk3566-foc-svpwm. Update Purpose after archive.
+
+定义 tspi-rk3566 上 FOC 电机控制 product 的契约：产品接线、电机引脚整组从 Linux 摘出、AMP App 工程结构与自配 IOMUX，以及开环 SVPWM 到有感电压模式的分里程碑验收。
+
 ## Requirements
 ### Requirement: foc product 产品接线
 

@@ -3,9 +3,7 @@
 ## Purpose
 
 定义 flange 镜像中 root 账号、普通用户、密码、group、sudo 策略、root 登录通道与 shell 体验的统一声明式配置体系。框架在 `RootfsBuilder` 基类中收敛实现，跨平台共享，配置入口集中在 `components/rootfs/config.jsonnet` 的 `ROOTFS["rootfs"]` 子树，板级可通过 `BOARD["rootfs"]` 整段重写覆盖默认。base 默认对齐 ubuntu 桌面心智模型 — root 完全锁定，默认用户 `flange/flange` 入 sudo group。
-
 ## Requirements
-
 ### Requirement: rootfs 配置 SHALL 支持声明式用户体系
 
 `components/rootfs/config.jsonnet` 的 `ROOTFS["rootfs"]` 字典 SHALL 接受以下账号相关字段。框架 base 层默认值已切换到"ubuntu 桌面心智模型"——root 完全锁定 + 默认用户 `flange/flange`：所有未在板级显式覆盖账号字段的 board 都自动获得此行为。板级可通过 `BOARD["rootfs"]` 整段重写以替换或关闭默认用户体系。
@@ -167,3 +165,22 @@
 #### Scenario: 两平台账号行为一致
 - **WHEN** 同一份 `rootfs` 配置（含 `users` / `disable_root_login`）被 rockchip 与 allwinnera733 平台分别构建
 - **THEN** 两镜像 `/etc/passwd` 中 user 集合、`/etc/shadow` 中各 user 密码字段格式、`/etc/sudoers.d/` 内容、sshd drop-in 文件内容字节级一致
+
+### Requirement: rootfs SHALL 支持 default_user 的默认图形会话
+
+`rootfs.default_session` SHALL 使用安全的单个 session 名声明 `default_user` 的默认图形会话。设置该字段时
+`default_user` MUST 存在；RootfsBuilder MUST 校验对应的 X11 或 Wayland desktop launcher 存在，并将
+`XSession=<session>` 写入 `/var/lib/AccountsService/users/<default_user>`。未设置时 MUST 保持 display
+manager 的发行版默认行为。
+
+#### Scenario: 为默认用户选择标准 GNOME 会话
+
+- **WHEN** `default_user=flange` 且 `default_session=gnome`
+- **THEN** rootfs 构建验证 `gnome.desktop` session launcher 存在
+- **AND** `/var/lib/AccountsService/users/flange` 包含 `XSession=gnome`
+
+#### Scenario: 默认会话不存在
+
+- **WHEN** `default_session` 没有对应的 X11 或 Wayland desktop launcher
+- **THEN** rootfs 构建失败并指出缺少 session launcher
+

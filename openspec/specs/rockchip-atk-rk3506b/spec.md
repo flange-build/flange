@@ -1,7 +1,9 @@
 # rockchip-atk-rk3506b Specification
 
 ## Purpose
-TBD - created by archiving change add-rk3506b-atk-rk3506b. Update Purpose after archive.
+
+定义 ATK-RK3506B 的板级落地契约：SoC 与 board 的自动发现、内核与 U-Boot 配置、SPI NAND 布局与容量校验、冷启动 USB gadget/ADB、可分区刷写的产物集，以及刷写前的设备与布局身份验证。
+
 ## Requirements
 ### Requirement: RK3506B SoC 与 ATK board 可被配置系统发现
 

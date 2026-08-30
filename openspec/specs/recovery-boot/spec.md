@@ -1,7 +1,9 @@
 # recovery-boot Specification
 
 ## Purpose
-TBD - created by archiving change add-recovery-boot. Update Purpose after archive.
+
+定义 recovery 从构建到启动的契约：分区配置、镜像构建组件与依赖、boot 分区如何同时提供 normal 与 recovery 入口、默认项如何切换，以及 recovery 如何进入整盘镜像与 flash-config。
+
 ## Requirements
 ### Requirement: Recovery 分区配置
 平台或 SoC 配置必须（SHALL）能够声明 `recovery` 分区。启用 recovery 的 target 必须（MUST）在 `partitions.entries` 中包含名称为 `recovery` 的 ext4 分区，且该分区必须有明确 offset 和 size。
