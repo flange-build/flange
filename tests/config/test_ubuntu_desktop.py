@@ -93,6 +93,10 @@ def test_desktop_vendor_app_carries_gnome_appearance_and_first_boot_unit():
         in install_paths
     )
     assert (
+        "/etc/systemd/sleep.conf.d/99-flange-no-sleep.conf"
+        in install_paths
+    )
+    assert (
         "/lib/systemd/system/flange-configure-ubuntu-desktop.service"
         in install_paths
     )
@@ -105,7 +109,7 @@ def test_desktop_vendor_app_carries_gnome_appearance_and_first_boot_unit():
         package_dir
         / "schemas/99_flange-gnome.gschema.override"
     ).read_text() == (
-        "# GNOME 原生外观默认值；用户仍可在 Settings 中覆盖。\n"
+        "# GNOME 原生外观与常亮默认值；用户仍可在 Settings 中覆盖。\n"
         "[org.gnome.desktop.interface]\n"
         "gtk-theme='Adwaita'\n"
         "icon-theme='Adwaita'\n"
@@ -114,6 +118,24 @@ def test_desktop_vendor_app_carries_gnome_appearance_and_first_boot_unit():
         "\n"
         "[org.gnome.shell]\n"
         "enabled-extensions=[]\n"
+        "\n"
+        "[org.gnome.desktop.session]\n"
+        "idle-delay=uint32 0\n"
+        "\n"
+        "[org.gnome.desktop.screensaver]\n"
+        "lock-enabled=false\n"
+        "\n"
+        "[org.gnome.settings-daemon.plugins.power]\n"
+        "sleep-inactive-ac-type='nothing'\n"
+        "sleep-inactive-battery-type='nothing'\n"
+    )
+    assert (
+        package_dir / "systemd/99-flange-no-sleep.conf"
+    ).read_text() == (
+        "# Ubuntu Desktop 产品保持常亮，避免无人值守设备因系统休眠失联。\n"
+        "[Sleep]\n"
+        "AllowSuspend=no\n"
+        "AllowHibernation=no\n"
     )
     unit = (
         package_dir

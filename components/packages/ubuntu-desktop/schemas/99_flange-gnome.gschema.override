@@ -1,4 +1,4 @@
-# GNOME 原生外观默认值；用户仍可在 Settings 中覆盖。
+# GNOME 原生外观与常亮默认值；用户仍可在 Settings 中覆盖。
 [org.gnome.desktop.interface]
 gtk-theme='Adwaita'
 icon-theme='Adwaita'
@@ -7,3 +7,13 @@ color-scheme='default'
 
 [org.gnome.shell]
 enabled-extensions=[]
+
+[org.gnome.desktop.session]
+idle-delay=uint32 0
+
+[org.gnome.desktop.screensaver]
+lock-enabled=false
+
+[org.gnome.settings-daemon.plugins.power]
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'

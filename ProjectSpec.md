@@ -203,6 +203,9 @@ canonical JSON（规范化 JSON）交给 Python builder。
   session 名；共享 RootfsBuilder MUST 校验对应的 X11 或 Wayland desktop launcher
   存在，并写入 `/var/lib/AccountsService/users/<default_user>`。未声明时保持 display
   manager（显示管理器）的发行版默认行为。
+- Ubuntu Desktop 常亮策略：`ubuntu-desktop` package MUST 通过 GSettings 默认值关闭
+  GNOME 空闲黑屏、锁屏与自动休眠，并通过 `systemd-sleep.conf` drop-in 禁止系统挂起和
+  冬眠；该策略 MUST 只影响显式启用此 package 的 desktop product。
 - rootfs 第三方资源声明式安装：
   - `rootfs.extra_firmware`：通过 `{source: {name, subpath}}` 引用顶层
     `sources`，或直接使用统一 `{url, sha256, filename}` 下载 descriptor；
