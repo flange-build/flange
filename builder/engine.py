@@ -2,6 +2,7 @@
 
 import importlib
 import shutil
+import subprocess
 from pathlib import Path
 from builder.app import AppBuilder
 from builder.docker import DockerRunner, BuildError
@@ -24,6 +25,29 @@ def _topo_sort(graph: dict, target: str) -> list:
         order.append(node)
     visit(target)
     return order
+
+
+def _copy_sparse(src: Path, dest: Path) -> None:
+    """复制文件产物，保留空洞。
+
+    ``mke2fs -d`` 造出的 rootfs.img 与 image 的 raw.img 都高度稀疏（实测 4GiB
+    声明只占 2.2MiB），而 ``shutil.copy2`` 不做空洞检测、会把整个声明尺寸实写
+    成零，一次产物收集就要多写数 GiB。
+
+    用 GNU cp 的默认 ``--sparse=auto``：读到全零块时 seek 而不写，实测在
+    Docker Desktop 的 bind mount 上能把稀疏完整带到宿主机。**不要**改成
+    ``--sparse=always`` —— 它写完后还要 punch hole，而 virtiofs 不支持，会以
+    "error deallocating" 失败（实测）。没有 GNU cp 时回退 copy2 保证正确性。
+    """
+    try:
+        subprocess.run(
+            ["cp", "--sparse=auto", "--preserve=mode,timestamps",
+             str(src), str(dest)],
+            check=True, capture_output=True,
+        )
+        return
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        shutil.copy2(src, dest)
 
 
 def _resolve_output_level(config: dict) -> OutputLevel:
@@ -89,7 +113,7 @@ class BuildEngine:
             self.output.phase_start(component)
             try:
                 if component == "app":
-                    outputs = self._build_app()
+                    outputs = self._build_app(force=forced)
                 else:
                     builder = self._get_builder(component)
                     builder.cache = self.cache
@@ -104,7 +128,7 @@ class BuildEngine:
                         f"{component} 构建完成但缺少必需产物: {required}")
                 self.cache.store(component)
                 self.output.phase_end(component, success=True)
-            except (BuildError, Exception) as e:
+            except Exception as e:
                 self.output.phase_end(component, success=False, error=e)
                 raise
 
@@ -122,8 +146,12 @@ class BuildEngine:
             return not (self.config.get("amp") or {}).get("enabled", False)
         return False
 
-    def _build_app(self) -> dict:
-        """使用 AppBuilder 构建所有自定义 App，返回 {app_name: deb_path} 映射。"""
+    def _build_app(self, force: bool = False) -> dict:
+        """使用 AppBuilder 构建所有自定义 App，返回 {app_name: deb_path} 映射。
+
+        注入 cache 后 AppBuilder 会做 per-App 增量：组件级哈希失效只表示
+        "App 集合里有东西变了"，具体重建哪些由 build_all 逐个判定。
+        """
         builder = AppBuilder(
             self.docker,
             self.source,
@@ -131,7 +159,8 @@ class BuildEngine:
             project_dir=self.project_dir,
         )
         builder.output = self.output
-        return builder.build_all()
+        builder.cache = self.cache
+        return builder.build_all(force=bool(force))
 
     def _get_artifact_names(self) -> dict:
         """从当前平台模块获取产物名映射。
@@ -146,7 +175,8 @@ class BuildEngine:
     def _collect_artifacts(self, component: str, outputs: dict):
         """将构建产物复制到 target 目录，供刷写使用。
 
-        文件产物用 shutil.copy2，目录产物用 shutil.copytree（先删旧目录）。
+        文件产物用稀疏拷贝（见 _copy_sparse），目录产物用 shutil.copytree
+        （先删旧目录）。
         """
         if not outputs:
             return
@@ -167,7 +197,7 @@ class BuildEngine:
                     shutil.rmtree(dest)
                 shutil.copytree(src, dest, symlinks=True)
             else:
-                shutil.copy2(src, dest)
+                _copy_sparse(src, dest)
         self.output.status("产物收集")
 
     def _generate_flash_config(self):

@@ -613,3 +613,143 @@ class TestBuildOneWithPath:
         builder = _make_builder(tmp_path)
         with pytest.raises(FileNotFoundError, match="/tmp/abs-not-exist-xyz"):
             builder.build_one("/tmp/abs-not-exist-xyz")
+
+
+# ---------------------------------------------------------------------------
+# per-App 增量：build_all 跳过未变 App、清理无主 deb
+# ---------------------------------------------------------------------------
+
+class TestPerAppIncremental:
+    """注入 BuildCache 后，build_all 应只重建真正变化的 App。"""
+
+    @staticmethod
+    def _with_cache(tmp_path: Path, names: list[str]) -> AppBuilder:
+        from builder.cache import BuildCache
+
+        builder = _make_builder(tmp_path)
+        builder._config["rootfs"]["custom_packages"] = list(names)
+        builder._config.setdefault("board", "test-board")
+        builder.cache = BuildCache(
+            builder._config,
+            target_base=tmp_path / ".build/target",
+            project_root=tmp_path,
+        )
+        return builder
+
+    def test_未变更的app被跳过且deb保留(self, tmp_path):
+        _make_app_dir(tmp_path, "alpha", bin_files=["alpha"])
+        _make_app_dir(tmp_path, "beta", bin_files=["beta"])
+        builder = self._with_cache(tmp_path, ["alpha", "beta"])
+
+        first = builder.build_all()
+        assert set(first) == {"alpha", "beta"}
+        debs = sorted(p.name for p in builder._output_dir.glob("*.deb"))
+        assert len(debs) == 2
+
+        # 只改 alpha：beta 必须命中复用，两个 deb 都还在
+        (tmp_path / "components/app/alpha/bin/alpha").write_bytes(b"\x7fELFv2")
+        builder2 = self._with_cache(tmp_path, ["alpha", "beta"])
+        assert builder2.cache.is_app_up_to_date("beta")
+        assert not builder2.cache.is_app_up_to_date("alpha")
+
+        builder2.build_all()
+        assert sorted(
+            p.name for p in builder2._output_dir.glob("*.deb")) == debs
+
+    def test_移出集合的app其deb被清理(self, tmp_path):
+        _make_app_dir(tmp_path, "alpha", bin_files=["alpha"])
+        _make_app_dir(tmp_path, "beta", bin_files=["beta"])
+        builder = self._with_cache(tmp_path, ["alpha", "beta"])
+        builder.build_all()
+        assert len(list(builder._output_dir.glob("*.deb"))) == 2
+
+        builder2 = self._with_cache(tmp_path, ["alpha"])
+        builder2.build_all()
+
+        remaining = sorted(p.name for p in builder2._output_dir.glob("*.deb"))
+        assert remaining == ["alpha_1.0.0_arm64.deb"]
+        manifest_dir = builder2._output_dir / builder2.cache.APP_MANIFEST_DIR
+        assert sorted(p.stem for p in manifest_dir.glob("*.json")) == ["alpha"]
+
+    def test_换版本号后旧deb被清理(self, tmp_path):
+        _make_app_dir(tmp_path, "alpha", version="1.0.0", bin_files=["alpha"])
+        builder = self._with_cache(tmp_path, ["alpha"])
+        builder.build_all()
+        assert [p.name for p in builder._output_dir.glob("*.deb")] == [
+            "alpha_1.0.0_arm64.deb"]
+
+        _make_app_dir(tmp_path, "alpha", version="2.0.0", bin_files=["alpha"])
+        builder2 = self._with_cache(tmp_path, ["alpha"])
+        builder2.build_all()
+
+        assert [p.name for p in builder2._output_dir.glob("*.deb")] == [
+            "alpha_2.0.0_arm64.deb"]
+
+    def test_force跳过per_app命中(self, tmp_path):
+        _make_app_dir(tmp_path, "alpha", bin_files=["alpha"])
+        builder = self._with_cache(tmp_path, ["alpha"])
+        builder.build_all()
+
+        builder2 = self._with_cache(tmp_path, ["alpha"])
+        assert builder2.cache.is_app_up_to_date("alpha")
+        built = []
+        original = builder2._build_one_debs
+        builder2._build_one_debs = lambda name: (
+            built.append(name) or original(name))
+
+        builder2.build_all(force=True)
+        assert built == ["alpha"]
+
+    def test_standalone_build_one写入清单(self, tmp_path):
+        _make_app_dir(tmp_path, "alpha", bin_files=["alpha"])
+        builder = self._with_cache(tmp_path, ["alpha"])
+
+        builder.build_one("alpha")
+
+        assert builder.cache.is_app_up_to_date("alpha")
+
+    def test_无cache时退化为全量构建且不误删产物(self, tmp_path):
+        _make_app_dir(tmp_path, "alpha", bin_files=["alpha"])
+        builder = _make_builder(tmp_path)
+        builder._config["rootfs"]["custom_packages"] = ["alpha"]
+
+        builder.build_all()
+
+        assert [p.name for p in builder._output_dir.glob("*.deb")] == [
+            "alpha_1.0.0_arm64.deb"]
+
+    def test_撞名的ad_hoc路径构建不写清单(self, tmp_path):
+        """`flange build app ./dir` 即使目录名撞上在册 App，也不能写清单。
+
+        清单里的哈希是按 registry 解析的目录算的；用别处的同名目录构建后写
+        清单，会让下次 build_all 拿错误的产物命中。
+        """
+        _make_app_dir(tmp_path, "alpha", bin_files=["alpha"])
+        builder = self._with_cache(tmp_path, ["alpha"])
+
+        # 另建一个同名 App，从路径构建
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "app.yaml").write_text(
+            (tmp_path / "components/app/alpha/app.yaml").read_text())
+        (elsewhere / "bin").mkdir()
+        (elsewhere / "bin/alpha").write_bytes(b"\x7fELFother")
+
+        builder.build_one(str(elsewhere))
+
+        assert builder.cache.read_app_manifest("alpha") is None
+
+    def test_命中路径不触发源码ensure(self, tmp_path):
+        """复用既有 deb 时不该有 clone/fetch 之类的网络动作。"""
+        _make_app_dir(tmp_path, "alpha", bin_files=["alpha"])
+        builder = self._with_cache(tmp_path, ["alpha"])
+        builder.build_all()
+
+        builder2 = self._with_cache(tmp_path, ["alpha"])
+        calls = []
+        builder2._source.ensure_app = lambda *a, **k: calls.append(a) or (
+            tmp_path / "components/app/alpha")
+
+        builder2.build_all()
+
+        assert calls == []

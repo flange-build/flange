@@ -8,6 +8,24 @@ from builder.cache import BuildCache
 from builder.source import SourceManager
 
 
+def _snapshot_store(cache, prefix: str = "rootfs-base-"):
+    """与 builder/rootfs.py 同构地解析 base 快照目录。"""
+    from builder.snapshot import SnapshotStore
+
+    return SnapshotStore(
+        cache.target_dir.parent.parent.parent / ".cache", prefix, None)
+
+
+def _snapshot_name(cache, component: str = "rootfs") -> str:
+    """生产判据：base 快照按内容哈希命名，命中与否就是同名文件在不在。
+
+    因此不存在独立的 ``.base_hash`` 记录文件 —— 文件名本身就是那条记录。
+    这里直接比对文件名，测的就是 builder/rootfs.py 与 builder/recovery.py
+    实际走的那条路径。
+    """
+    return cache.compute_phase_hash(component, "base")
+
+
 _ARCHITECTURE = {
     "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64",
 }
@@ -596,37 +614,42 @@ class TestPhaseCache:
         rootfs_dir.mkdir(parents=True, exist_ok=True)
         (rootfs_dir / "rootfs.img").write_bytes(b"rootfs")
 
-    def test_store_then_up_to_date(self):
+    def test_首次构建时快照不存在_保存后按同名命中(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache = self._make_cache(tmpdir)
-            assert not cache.is_phase_up_to_date("rootfs", "base")
-            cache.store_phase("rootfs", "base")
-            assert cache.is_phase_up_to_date("rootfs", "base")
+            store = _snapshot_store(cache)
+            snapshot = store.resolve(_snapshot_name(cache))
+            assert not snapshot.exists()
+
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            snapshot.write_bytes(b"snapshot")
+
+            assert store.resolve(_snapshot_name(cache)).exists()
 
     def test_phase_hash_change_invalidates(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache = self._make_cache(tmpdir)
-            cache.store_phase("rootfs", "base")
-            assert cache.is_phase_up_to_date("rootfs", "base")
+            _saved = _snapshot_name(cache)
+            assert _snapshot_name(cache) == _saved
 
             # 改 packages → base_hash 变
             changed = self._make_cache(tmpdir, ["systemd", "vim"])
-            assert not changed.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(changed) != _saved
 
     def test_different_phases_independent(self):
         """base 和 build 哈希互不影响。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             cache = self._make_cache(tmpdir)
-            cache.store_phase("rootfs", "base")
+            _saved = _snapshot_name(cache)
             cache.store("rootfs")  # 写 .build_hash
             self._create_rootfs_artifact(cache)
 
-            assert cache.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(cache) == _saved
             assert cache.is_up_to_date("rootfs")
 
             # 改 packages → base 和 build 都失效
             changed = self._make_cache(tmpdir, ["systemd", "vim"])
-            assert not changed.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(changed) != _saved
             assert not changed.is_up_to_date("rootfs")
 
     def test_compute_phase_hash_is_stable(self):

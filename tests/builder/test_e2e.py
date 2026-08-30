@@ -701,7 +701,7 @@ class TestEngineAppIntegration:
 
             # 记录 build_all 调用顺序
             mock_builder = MockAppBuilder.return_value
-            def _track_app_build():
+            def _track_app_build(force=False):
                 call_order.append("app")
                 return {}
             mock_builder.build_all.side_effect = _track_app_build

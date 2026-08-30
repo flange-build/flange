@@ -6,17 +6,19 @@
 任一上游变更都会级联使下游哈希失效，确保增量构建始终产出一致的产物。
 """
 
+import ast
 import hashlib
 import importlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 from builder.config.canonical import userspace_arch
 from builder.patches import normalize_excluded_patches
 from builder.paths import PROJECT_ROOT
-from builder.source import SourceManager
+from builder.source import SourceManager, component_source_descriptor
 
 
 # 组件依赖图：键为组件名，值为该组件依赖的上游组件列表。
@@ -60,6 +62,10 @@ DEFAULT_REQUIRED_ARTIFACTS: dict[str, list[str] | dict[str, list[str]]] = {
         "rockchip": ["u-boot.itb", "idbloader.img", "miniloader.bin"],
         "allwinnera733": ["boot0_sdcard.bin", "boot0_ufs.bin",
                           "boot_package.fex"],
+        # 裸 FIP（pyamlboot USB 推送）与 SD/eMMC dd 格式都被 flash 消费；
+        # 缺门禁时缓存可以在产物已被删除的情况下命中，刷出没有 bootloader
+        # 的设备。usb_bl2/usb_tpl 是旧式两段上传的备用产物，不列为必需。
+        "amlogic": ["u-boot.bin", "u-boot.bin.sd.bin"],
     },
     "boot":       ["boot.img"],
     "rootfs":     ["rootfs.img"],
@@ -74,6 +80,155 @@ REQUIRED_ARTIFACTS = {
     **DEFAULT_REQUIRED_ARTIFACTS,
     "kernel": ["Image", "*.dtb"],
 }
+
+
+# builder/ 下与任何组件产物无关的模块：刷写、在线维护、部署、脚手架与
+# 清单查询。它们不参与构建，改动不应让 kernel/rootfs 等重编。其余文件
+# （含未来新增的顶层模块）默认仍进指纹，漏登记只会退化为过度失效而非
+# 漏失效。
+BUILD_LOGIC_EXCLUDE_FILES: frozenset[str] = frozenset({
+    "recovery_host.py",
+    "deploy.py",
+    "scaffold.py",
+    "app_list.py",
+    "oot_mounts.py",
+})
+
+# builder/flash/ 是唯一两半性质不同的包，按文件登记：
+#
+#   构建期（**进**指纹）：plan.py 与 generate.py 从 FINAL_CONFIG 推导
+#   flash-config.json，model.py 是它的 schema，spi.py 合成 spi.img ——
+#   这些产物都进 image 组件缓存，改它们必须让下游失效。
+#
+#   宿主机执行期（**不进**指纹）：strategy.py / execute.py / console.py
+#   调用 rkdeveloptool、qdl 一类工具往板子里写，不产出任何构建产物。
+#
+# 拆包之前这两半挤在一个 1812 行的模块里，只能整文件排除 —— 于是改
+# flash-config 的生成规则不会让 image 失效（漏失效），而改一句刷写命令行
+# 会让整棵树重编（过失效）。两个方向的错误同时存在。
+# console.py 不在排除表里：构建期的 generate.py 用它打状态行。它只是终端
+# 配色，改动实际影响不到产物 —— 但"实际影响不到"是判断，不是保证。按既定
+# 政策，含糊的文件一律留在指纹里：过度失效只是多花时间，漏失效是产物错误。
+# 每个组件的通用入口模块。用途有两个，必须分清：
+#
+#   1. 求该组件的 import 闭包（"这个组件的构建实际会走到哪些代码"）。
+#   2. 汇总出"已登记"文件集 —— 出现在**任何**组件闭包里的文件。
+#
+# 第 2 点是兜底的判据：不在任何闭包里的文件（新增的顶层模块、只经
+# importlib 动态加载而 AST 看不见的模块）仍进**全部**组件的指纹。这样
+# 漏登记退化为过度失效，而不是漏失效。
+#
+# 所以这张表必须覆盖**所有**组件，即使某个组件并不收窄 —— 漏一个组件，
+# 它专属的模块就会被判成"未登记"，反过来把它塞进 kernel 的指纹里，收窄
+# 当场失效。
+BUILD_LOGIC_ENTRY: dict[str, str] = {
+    "kernel": "kernel_base.py",
+    "bootloader": "base.py",
+    "rootfs": "rootfs.py",
+    "recovery": "recovery.py",
+    "boot": "extlinux.py",
+    "image": "image.py",
+    "app": "app.py",
+    "amp": "app.py",
+    "device-tree-overlay": "overlays.py",
+}
+
+# 真正按闭包**收窄**指纹的组件。
+#
+# 只对叶子组件做：它们不消费其他组件的产物，参与构建的代码是一个能静态
+# 推导干净的小集合。rootfs / app / image 这类消费上游产物、且按配置动态
+# 路由到大量模块的组件不在此列 —— 收窄它们的收益抵不上漏失效的风险。
+#
+# 收益：改 rootfs.py / app.py / 刷写代码的任何一处，kernel 与 bootloader
+# 不再重编（kernel 单次 222s，bootloader 约 90s）。
+BUILD_LOGIC_SCOPED: frozenset[str] = frozenset({"kernel", "bootloader"})
+
+# 无论闭包如何，永远算进每个受限组件指纹的文件。
+#
+# engine.py 编排构建并把产物收集到 target 目录 —— 改它会改变落盘的内容，
+# 但它 import 了几乎所有 builder，跟着它求闭包等于不收窄。所以它只贡献
+# 自己这一个文件，不展开 import。
+BUILD_LOGIC_ALWAYS: tuple[str, ...] = ("engine.py",)
+
+
+BUILD_LOGIC_EXCLUDE_PATHS: frozenset[str] = frozenset({
+    "flash/strategy.py",
+    "flash/execute.py",
+})
+
+# 仅被 scaffold.py 消费的工程模板目录。
+BUILD_LOGIC_EXCLUDE_DIRS: frozenset[str] = frozenset({"templates"})
+
+# 平台包之间的 re-export（qualcommsc8280xp 直接复用 qualcommqcs6490 的实现）：
+# 构建逻辑指纹只保留"当前平台目录"会把被复用的实现漏掉，改它不会让本 target
+# 失效。用它跟随 import 把实际参与构建的平台包全部纳入。
+_PLATFORM_IMPORT_RE = re.compile(
+    r"(?:from|import)\s+builder\.platforms\.([A-Za-z_][A-Za-z0-9_]*)")
+
+# 与任何组件产物都无关的顶层配置键：CLI 注入的输出级别、并行度，以及只被
+# builder/flash.py 消费的刷写身份（它们决定 flash-config.json，不进任何组件
+# 产物）。
+CONFIG_IRRELEVANT_ALWAYS: frozenset[str] = frozenset({
+    "verbose", "quiet", "jobs",
+    "flash_identity", "flash_spi_loader", "flash_storage", "flash_tool",
+})
+
+# 各组件明确**不消费**的顶层配置键。组件哈希混入「canonical 配置去掉这些
+# 键」的切片，替代原先无差别混入的 jsonnet_hash（整份 canonical + 全部
+# jsonnet 文件字节）——后者让改 rootfs.hostname、甚至给某个 config.jsonnet
+# 加一行注释，都要重编 kernel(222s) + bootloader(127s) + app(644s)。
+#
+# 判据保守：只列有证据表明该组件任何代码路径都不读的键；漏登记只会退化为
+# 过度失效，不会漏失效。已核实的两处跨子树消费必须保留：
+#   - kernel 经 builder/dtb_overlay.py 读 boot.overlays.intree；
+#   - rockchip bootloader 读 amp.enabled 校验 U-Boot AMP 选项。
+CONFIG_IRRELEVANT_KEYS: dict[str, frozenset[str]] = {
+    # partitions 只被 boot/image/rootfs/recovery 消费，且已由 _mix_partitions
+    # 对它们显式建模；kernel/bootloader/dto 三家不读它（已 grep 全部平台核实）。
+    # 不剔除的话，调一次 rootfs 的 image_size 就要赔 kernel 222s + bootloader
+    # 127s + dto 6s。
+    "kernel": frozenset({
+        "rootfs", "recovery", "image", "storage", "amp", "partitions",
+        "external_apps", "external_app_dirs",
+    }),
+    "bootloader": frozenset({
+        "rootfs", "recovery", "image", "partitions",
+        "kernel", "kernel_bsp", "kernel_device",
+        "external_apps", "external_app_dirs",
+    }),
+    "boot": frozenset({
+        "rootfs", "image", "external_apps", "external_app_dirs",
+    }),
+    # device-tree-overlay 依赖 kernel，实际敏感面是「自身切片 ∪ kernel 切片」：
+    # 这里只列 kernel 也剔除的键，否则写了也会被 Merkle 级联带回来，徒增误导。
+    "device-tree-overlay": frozenset({
+        "rootfs", "recovery", "image", "storage", "amp", "partitions",
+        "external_apps", "external_app_dirs",
+    }),
+    "amp": frozenset({
+        "rootfs", "recovery", "kernel", "bootloader", "boot", "image",
+        "partitions", "storage", "rkbin",
+    }),
+    "app": frozenset({
+        "kernel", "kernel_bsp", "kernel_device", "bootloader", "boot",
+        "image", "partitions", "storage", "rkbin", "amp", "vendor",
+    }),
+    # rootfs / recovery / image 消费面最广（分区布局、存储、上游产物路由），
+    # 不做剔除。
+}
+
+
+# App 的编译与打包只由这几个模块决定；per-app 哈希用它替代整棵 builder/
+# 的逻辑指纹，避免改 flash.py / kernel_base.py 之类无关代码就重编全部 App。
+APP_LOGIC_FILES: tuple[str, ...] = (
+    "builder/app.py",
+    "builder/app_spec.py",
+    "builder/deb.py",
+    "builder/docker.py",
+    "builder/config/apps.py",
+    "docker/Dockerfile",
+    "docker-compose.yml",
+)
 
 
 class BuildCache:
@@ -196,9 +351,18 @@ class BuildCache:
         if not component_dir.is_dir():
             return False
         if component == "app":
+            # 按每个 App 的产物清单逐个校验，而非只比 *.deb 总数：多 deb 的
+            # vendor App（rockchip-multimedia 一家就产 17 个）会把计数门禁
+            # 稀释到形同虚设 —— 删掉别的 App 的 deb 仍判"齐全"。
             from builder.config.apps import gather_custom_packages
-            return (len(list(component_dir.glob("*.deb")))
-                    >= len(gather_custom_packages(self.config)))
+            for package in gather_custom_packages(self.config):
+                manifest = self.read_app_manifest(package)
+                if manifest is None or "debs" not in manifest:
+                    return False
+                for name in manifest["debs"]:
+                    if not (component_dir / name).is_file():
+                        return False
+            return True
         for pattern in required:
             if any(ch in pattern for ch in "*?["):
                 # glob 模式
@@ -274,41 +438,108 @@ class BuildCache:
         return list(required or [])
 
     def store(self, component: str):
-        hash_file = self.target_dir / component / ".build_hash"
+        component_dir = self.target_dir / component
         # 判定阶段可能已记忆化旧 HEAD；构建/源码准备完成后必须重新计算整条
         # Merkle 链，写入实际参与构建的输入身份。
         self._hash_cache = {}
-        self._atomic_write(hash_file, self.compute_hash(component))
+        self._atomic_write(
+            component_dir / ".build_hash", self.compute_hash(component))
+        # 分段指纹存档：下次判定失效时能直接指出是哪一段变了，而不是只告诉
+        # 用户"要重建"（见 explain / flange why）。
+        self._atomic_write(
+            component_dir / ".build_hash.json",
+            json.dumps(self.hash_segments(component),
+                       ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        )
+
+    def explain(self, component: str) -> dict:
+        """解释该组件当前的缓存状态：命中，还是哪几段输入变了。
+
+        返回 ``{"component", "up_to_date", "reasons": [...]}``；reasons 里每
+        项形如 ``{"segment", "before", "after"}``，segment 名即重建理由（见
+        hash_segments）。没有存档时 reasons 为空、理由记在 ``note``。
+        """
+        current = self.hash_segments(component)
+        archive_path = self.target_dir / component / ".build_hash.json"
+        result = {
+            "component": component,
+            "up_to_date": self.is_up_to_date(component),
+            "reasons": [],
+            "note": "",
+        }
+        if self._has_local_upstream(component):
+            result["note"] = "组件或其上游声明了 local_path，框架放弃缓存决策"
+            return result
+        if not archive_path.is_file():
+            result["note"] = "没有上次构建的分段存档（首次构建或缓存已清理）"
+            return result
+        try:
+            archived = json.loads(archive_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            result["note"] = "分段存档损坏，按未命中处理"
+            return result
+        for name in sorted(set(current) | set(archived)):
+            before, after = archived.get(name), current.get(name)
+            if before != after:
+                result["reasons"].append(
+                    {"segment": name, "before": before, "after": after})
+        if not result["reasons"] and not result["up_to_date"]:
+            result["note"] = "输入未变，但必需产物缺失"
+        return result
 
     def compute_hash(self, component: str) -> str:
-        """计算组件的完整哈希（含依赖链级联）。"""
+        """计算组件的完整哈希（含依赖链级联）。
+
+        哈希由若干**具名分段**组合而成（见 hash_segments）：上游依赖、全局
+        身份、配置切片、构建逻辑、组件自身输入。分段化让"为什么重建"可以被
+        直接回答 —— 见 ``explain`` 与 ``flange why``。
+        """
         if not hasattr(self, "_hash_cache"):
             # 兼容少量通过 ``__new__`` 构造的测试/调用方。
             self._hash_cache = {}
         if component in self._hash_cache:
             return self._hash_cache[component]
 
-        h = hashlib.sha256()
+        segments = self.hash_segments(component)
+        result = hashlib.sha256(
+            json.dumps(segments, sort_keys=True).encode()
+        ).hexdigest()[:16]
+        self._hash_cache[component] = result
+        return result
 
-        # 1. 上游依赖哈希（Merkle 链）：任一上游变化都级联失效
+    def hash_segments(self, component: str) -> dict:
+        """返回组件哈希的分段指纹。
+
+        分段名即"重建理由"：
+          - ``dep:<上游>``  上游组件产物变了（Merkle 级联）
+          - ``identity``    平台 / SoC / 板 / 架构等构建身份
+          - ``config``      该组件相关的配置切片（见 CONFIG_IRRELEVANT_KEYS）
+          - ``logic``       参与构建的 builder 代码与 Docker 定义
+          - ``own``         该组件自己的输入：源码、补丁、overlay、App 等
+        """
+        segments = {}
         for dep in DEPENDENCY_GRAPH.get(component, []):
-            h.update(b"dep:")
-            h.update(dep.encode())
-            h.update(self.compute_hash(dep).encode())
+            segments[f"dep:{dep}"] = self.compute_hash(dep)
 
-        # 2. 全局配置：任何组件都受其影响
-        h.update(b"cache-contract-v2")
-        h.update(f"architecture={userspace_arch(self.config)}".encode())
+        identity = hashlib.sha256()
+        identity.update(b"cache-contract-v3")
+        identity.update(f"architecture={userspace_arch(self.config)}".encode())
         for key in ("platform", "soc", "board"):
-            h.update(f"{key}={self.config.get(key, '')}".encode())
-        # Jsonnet 求值元数据通过 dict 子类属性携带，不污染 canonical JSON。
-        # 任一实际 import 或 target 维度变化都必须使全部组件缓存失效。
-        h.update(b"jsonnet_config:")
-        h.update(getattr(self.config, "jsonnet_hash", "").encode())
-        h.update(b"build_logic:")
-        h.update(self._build_logic_hash().encode())
+            identity.update(f"{key}={self.config.get(key, '')}".encode())
+        segments["identity"] = identity.hexdigest()
 
-        # 3. 组件特化哈希
+        # 按组件裁剪的 canonical 配置切片，替代旧的全局 jsonnet_hash。
+        # jsonnet_hash 仍保留在 ResolvedConfig 上供诊断，但不再进组件哈希：
+        # 它混入了 jsonnet 源文件的原始字节，连"只加一行注释"都会让全部
+        # 组件失效。切片以求值结果为准，语义不变的编辑不再触发重建。
+        segments["config"] = self._config_slice_hash(component)
+        segments["logic"] = self._build_logic_hash(component)
+        segments["own"] = self._component_own_hash(component)
+        return segments
+
+    def _component_own_hash(self, component: str) -> str:
+        """组件自身输入的指纹：源码、补丁、配置子树、overlay、App 等。"""
+        h = hashlib.sha256()
         if component == "rootfs":
             self._mix_rootfs_customize(h)
         elif component == "app":
@@ -410,14 +641,16 @@ class BuildCache:
                         self.config.get(key) or {}, sort_keys=True,
                         default=str).encode())
 
-        result = h.hexdigest()[:16]
-        self._hash_cache[component] = result
-        return result
+        return h.hexdigest()
 
     # --- rootfs / recovery 分阶段缓存接口（Phase 1 base snapshot） ---
 
     def compute_phase_hash(self, component: str, phase: str) -> str:
         """计算组件指定阶段的哈希。
+
+        用途只有一个：作为 base 快照的**文件名**（内容寻址），命中判定就是
+        "这个文件名存在与否"。因此不需要另写一个 ``.base_hash`` 记录文件 ——
+        文件名本身就是那条记录。
 
         rootfs/recovery 的 base 阶段哈希分别按各自 packages 集合计算 ——
         recovery.packages 与 rootfs.packages 通常不同（recovery 维护系统
@@ -428,19 +661,6 @@ class BuildCache:
         if component == "recovery" and phase == "base":
             return self._compute_recovery_base_hash()
         raise ValueError(f"不支持的分阶段哈希: {component}.{phase}")
-
-    def is_phase_up_to_date(self, component: str, phase: str) -> bool:
-        """检查指定阶段缓存是否有效。"""
-        hash_file = self.target_dir / component / f".{phase}_hash"
-        if not hash_file.exists():
-            return False
-        return (hash_file.read_text().strip()
-                == self.compute_phase_hash(component, phase))
-
-    def store_phase(self, component: str, phase: str):
-        """保存指定阶段的哈希。"""
-        hash_file = self.target_dir / component / f".{phase}_hash"
-        self._atomic_write(hash_file, self.compute_phase_hash(component, phase))
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
@@ -558,6 +778,18 @@ class BuildCache:
         # extra_debs 配置（url/sha256/name 变化须触发重建）
         extra_debs = rootfs_cfg.get("extra_debs", [])
         h.update(json.dumps(extra_debs, sort_keys=True, default=str).encode())
+        # panel firmware 的**文本源内容**：rootfs_cfg 的 json.dumps 只覆盖
+        # src/dest 声明，改 init 序列而不改路径会命中缓存、刷出与源码不符的
+        # 镜像（面板 bringup 正是反复改 init 序列的场景）。
+        board = self.config.get("board", "")
+        for entry in rootfs_cfg.get("panel_firmware") or []:
+            source = entry.get("src") if isinstance(entry, dict) else None
+            if not source:
+                continue
+            path = self._project_path("components", "board", board, source)
+            h.update(b"panel_firmware_src:")
+            h.update(str(source).encode())
+            h.update(path.read_bytes() if path.is_file() else b"missing")
         # partitions 影响 rootfs.img 大小
         self._mix_partitions(h)
 
@@ -600,25 +832,247 @@ class BuildCache:
     # --- 哈希输入混合：app ---
 
     def _mix_app_sources(self, h: "hashlib._Hash") -> None:
-        """将 custom_packages 列表及各 App 的完整源码内容混入 h。
+        """将 custom_packages 列表及各 App 的 per-app 哈希混入 h。
 
         集合为 rootfs.custom_packages 与启用时 recovery.custom_packages 的并集，
         与 AppBuilder.build_all 的来源保持一致，避免 recoveryctl 改动后 app
         组件未失效。
+
+        单个 App 的源码内容由 ``compute_app_hash`` 覆盖（含包级附加输入与
+        build.deps 级联），组件级哈希只做汇总 —— 组件失效仍会调用
+        ``AppBuilder.build_all``，但 build_all 内部按 App 逐个判定，未变的
+        App 直接复用既有 deb。
         """
         from builder.config.apps import gather_custom_packages
         custom_packages = gather_custom_packages(self.config)
         h.update(json.dumps(custom_packages).encode())
         for pkg in custom_packages:
-            source_cfg = (self.config.get("external_apps") or {}).get(pkg)
-            if source_cfg:
-                h.update(json.dumps(
-                    source_cfg, sort_keys=True, default=str).encode())
-            app_dir = self._registered_app_source_dir(pkg)
-            if app_dir.exists():
-                self._hash_directory(h, app_dir)
+            h.update(b"app:")
+            h.update(pkg.encode())
+            h.update(self.compute_app_hash(pkg).encode())
+
+    # --- per-App 二级缓存（app 组件内部粒度） ---
+
+    # 每个 App 的产物清单目录，位于 target/<b>/<p>/<v>/app/ 下。
+    APP_MANIFEST_DIR = ".manifest"
+
+    def app_manifest_path(self, app_name: str) -> Path:
+        """返回单个 App 的产物清单路径。"""
+        return (self.target_dir / "app" / self.APP_MANIFEST_DIR
+                / f"{app_name}.json")
+
+    def read_app_manifest(self, app_name: str) -> dict | None:
+        """读取 App 产物清单；不存在或损坏返回 None。"""
+        path = self.app_manifest_path(app_name)
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def compute_app_hash(self, app_name: str, _stack: tuple = ()) -> str:
+        """计算单个 App 的内容哈希。
+
+        输入：目标用户态 arch、App 打包逻辑指纹（APP_LOGIC_FILES，不含整棵
+        builder/）、external_apps 描述符（local_path 归一化为项目相对路径，
+        使宿主机与容器算出同一值）、App 源码目录递归内容、包级附加输入
+        （packages_meta.app_src_paths，如 rockchip-multimedia 的 patches/），
+        以及 build.deps 中同属本次构建集合的上游 App 哈希（Merkle 级联）。
+
+        刻意**不**混入 jsonnet_hash 与整棵 builder/ 的逻辑指纹：那会让任一
+        配置或任一 builder 文件改动重编全部 App，正是要消除的过度失效。
+        """
+        cached = getattr(self, "_app_hash_cache", None)
+        if cached is None:
+            cached = self._app_hash_cache = {}
+        if app_name in cached:
+            return cached[app_name]
+        if app_name in _stack:
+            # 循环依赖由 AppBuilder._resolve_build_order 显式报错，这里止步即可。
+            return "cycle"
+
+        h = hashlib.sha256()
+        h.update(b"app-hash-v1")
+        h.update(f"arch={userspace_arch(self.config)}".encode())
+        h.update(b"logic:")
+        h.update(self._app_logic_hash().encode())
+        h.update(f"name={app_name}".encode())
+
+        source_cfg = (self.config.get("external_apps") or {}).get(app_name)
+        if source_cfg:
+            h.update(b"source:")
+            h.update(json.dumps(
+                self._portable_app_source(source_cfg),
+                sort_keys=True, default=str).encode())
+
+        app_dir = self._registered_app_source_dir(app_name)
+        if app_dir.is_dir():
+            self._hash_directory(h, app_dir)
+        else:
+            h.update(f"missing:{app_name}".encode())
+
+        for relative in self._app_extra_source_paths(app_name):
+            path = Path(relative)
+            if not path.is_absolute():
+                path = self._project_path(relative)
+            h.update(b"extra:")
+            h.update(relative.encode())
+            if path.is_dir():
+                self._hash_directory(h, path)
+            elif path.is_file():
+                h.update(path.read_bytes())
             else:
-                h.update(f"missing:{pkg}".encode())
+                h.update(b"missing")
+
+        for dep in self._app_build_deps(app_name):
+            h.update(b"dep:")
+            h.update(dep.encode())
+            h.update(self.compute_app_hash(dep, _stack + (app_name,)).encode())
+
+        result = h.hexdigest()[:16]
+        cached[app_name] = result
+        return result
+
+    def is_app_up_to_date(self, app_name: str) -> bool:
+        """判断单个 App 是否可跳过构建。
+
+        与组件级 ``is_up_to_date`` 同构的三层校验：外部本地源码短路、清单
+        哈希一致、清单声明的 deb 全部存在。
+        """
+        if self._app_source_is_local(app_name):
+            return False
+        manifest = self.read_app_manifest(app_name)
+        if manifest is None or "debs" not in manifest:
+            return False
+        if manifest.get("hash") != self.compute_app_hash(app_name):
+            return False
+        deb_dir = self.target_dir / "app"
+        for name in manifest["debs"]:
+            if not (deb_dir / name).is_file():
+                return False
+        staging = manifest.get("staging")
+        if staging and not Path(staging).is_dir():
+            # 下游 App 靠这棵树拿头文件与库：它被删了就必须重建上游，
+            # 否则下游会在 configure 阶段莫名其妙地失败。
+            return False
+        return True
+
+    def store_app(self, app_name: str, debs: list,
+                  staging: str | None = None) -> None:
+        """写入单个 App 的产物清单。
+
+        与组件级 ``store`` 不同，这里刻意复用**判定期**算出的哈希：App 源码
+        是目录内容而非 git HEAD，判定后无需再解析；沿用判定期值可让"构建
+        期间又改了源码"在下一次被正确检出，而不是被写成已构建。
+
+        ``staging`` 是该 App 供下游消费的产物树（见 app.yaml 的
+        ``build.staging``）。它不是 deb、不进 rootfs，但下游 App 的 configure
+        依赖它，因此同样进产物门禁。
+        """
+        payload = {
+            "hash": self.compute_app_hash(app_name),
+            "debs": sorted(Path(deb).name for deb in debs),
+        }
+        if staging:
+            payload["staging"] = staging
+        self._atomic_write(
+            self.app_manifest_path(app_name),
+            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        )
+
+    def _app_names_for_explain(self) -> list:
+        """返回本次配置下参与构建的 App 名单（供 flange why 展开 app 组件）。"""
+        from builder.config.apps import gather_custom_packages
+        return gather_custom_packages(self.config)
+
+    def _app_logic_hash(self) -> str:
+        """App 打包逻辑指纹（APP_LOGIC_FILES 的内容）。"""
+        cached = getattr(self, "_app_logic_hash_cache", None)
+        if cached is not None:
+            return cached
+        h = hashlib.sha256()
+        for relative in APP_LOGIC_FILES:
+            path = self._project_path(relative)
+            h.update(relative.encode())
+            h.update(path.read_bytes() if path.is_file() else b"missing")
+        self._app_logic_hash_cache = h.hexdigest()
+        return self._app_logic_hash_cache
+
+    def _portable_app_source(self, source_cfg: dict) -> dict:
+        """把 external_apps 条目里的绝对 local_path 归一化为项目相对路径。
+
+        宿主机（/Volumes/...）与容器（/workspace）看到的绝对路径不同，直接
+        哈希会让同一份源码在两侧算出不同值。
+        """
+        return self._portable_source(source_cfg)
+
+    def _portable_source(self, descriptor: dict) -> dict:
+        """把 source descriptor 里的 local_path 归一化为机器无关表达。
+
+        组件与 App 两侧共用一份 —— 各写一份的后果是其中一侧仍把绝对路径
+        混进哈希，而这类"同一份源码算出两个值"的问题不会报错，只会表现为
+        缓存莫名不命中。
+        """
+        if not isinstance(descriptor, dict):
+            return descriptor
+        local_path = descriptor.get("local_path")
+        if not local_path:
+            return descriptor
+        portable = dict(descriptor)
+        portable["local_path"] = self._portable_path(local_path)
+        return portable
+
+    def _portable_path(self, path: "Path | str") -> str:
+        """把路径归一化成**与机器无关**的哈希输入。
+
+        项目根内的路径取相对路径；项目根之外的取 `external:<末级名>`，丢掉
+        机器相关的前缀。
+
+        丢掉前缀是有意的：同一个仓库在宿主机是 /Volumes/bsp/flange，在容器里
+        是 /workspace，在 CI 上又是别的路径。把绝对路径混进哈希，同一份源码
+        在三处算出三个值 —— 缓存永远不命中，而现象是"明明没改却全量重建"。
+
+        项目根之外的路径，两台机器指向的本来就是各自的检出，用末级名做身份、
+        内容另行哈希才是对的。
+        """
+        resolved = Path(path)
+        try:
+            return resolved.resolve().relative_to(self.project_root).as_posix()
+        except ValueError:
+            return f"external:{resolved.name}"
+
+    def _app_extra_source_paths(self, app_name: str) -> list:
+        """返回该 App 声明的包级附加哈希输入（相对项目根）。
+
+        由 ``builder/packages.py`` 在展开 vendor component 时写入
+        ``packages_meta.app_src_paths``，用于覆盖位于 App 目录之外、但确实
+        参与构建的内容（如 rockchip-multimedia 的 ``patches/``）。
+        """
+        meta = (self.config.get("packages_meta") or {}).get("app_src_paths")
+        if not isinstance(meta, dict):
+            return []
+        return sorted(meta.get(app_name) or [])
+
+    def _app_build_deps(self, app_name: str) -> list:
+        """返回该 App 在本次构建集合内的 build.deps（与构建顺序一致）。
+
+        集合外的依赖被 ``AppBuilder._resolve_build_order`` 忽略（视为已在
+        系统中），故也不进哈希。
+        """
+        from builder.app_spec import load_spec
+        from builder.config.apps import gather_custom_packages
+
+        app_dir = self._registered_app_source_dir(app_name)
+        if not (app_dir / "app.yaml").is_file():
+            return []
+        try:
+            spec = load_spec(app_dir)
+        except Exception:
+            return []
+        in_set = set(gather_custom_packages(self.config))
+        return sorted(dep for dep in spec.build.deps if dep in in_set)
 
     def _registered_app_source_dir(self, app_name: str) -> Path:
         """只读解析 App 源目录，不触发网络 clone。"""
@@ -661,7 +1115,7 @@ class BuildCache:
         for proj in self._amp_source_dirs():
             if proj.is_dir():
                 h.update(b"amp_proj:")
-                h.update(str(proj).encode())
+                h.update(self._portable_path(proj).encode())
                 self._hash_directory(h, proj)
         # amp.app 用户工程源（平台无关，复用 app 体系的 components/app/<name>）
         app_name = amp_cfg.get("app")
@@ -751,11 +1205,12 @@ class BuildCache:
                     h.update(p.read_bytes())
 
     def _component_source_config(self, component: str) -> dict:
-        """返回组件实际使用的仓库配置。"""
-        source_name = (
-            (self.config.get(component) or {}).get("source") or {}
-        ).get("name")
-        return (self.config.get("sources") or {}).get(source_name, {}) or {}
+        """返回组件实际使用的仓库配置。
+
+        与 ComponentBuilder 共用 ``builder/source.py`` 的同一判据 —— 两处各写
+        一份曾让 local_path 的两半语义只兑现了缓存那一半。
+        """
+        return component_source_descriptor(self.config, component)
 
     # --- 哈希输入混合：partitions 配置 ---
 
@@ -793,7 +1248,9 @@ class BuildCache:
         if not descriptor:
             return
         h.update(f"source:{name}:".encode())
-        h.update(json.dumps(descriptor, sort_keys=True, default=str).encode())
+        h.update(json.dumps(
+            self._portable_source(descriptor),
+            sort_keys=True, default=str).encode())
         local_path = descriptor.get("local_path")
         if local_path:
             path = Path(local_path)
@@ -804,7 +1261,7 @@ class BuildCache:
             elif path.is_file():
                 h.update(path.read_bytes())
             else:
-                h.update(f"missing:{local_path}".encode())
+                h.update(f"missing:{self._portable_path(local_path)}".encode())
             return
         repo_dir = self._project_path(
             ".build", "sources", "repos",
@@ -862,26 +1319,245 @@ class BuildCache:
         except subprocess.CalledProcessError:
             return "unknown"
 
-    def _build_logic_hash(self) -> str:
-        """返回 builder 与 Docker 构建定义的一次性内容指纹。"""
-        cached = getattr(self, "_logic_hash_cache", None)
-        if cached is not None:
-            return cached
+    def _config_slice_hash(self, component: str) -> str:
+        """返回该组件相关的 canonical 配置切片指纹。
+
+        切片 = 完整配置去掉「与所有组件无关的键」与「该组件明确不消费的键」。
+        剔除表见 CONFIG_IRRELEVANT_ALWAYS / CONFIG_IRRELEVANT_KEYS。
+        """
+        cached = getattr(self, "_config_slice_cache", None)
+        if cached is None:
+            cached = self._config_slice_cache = {}
+        if component in cached:
+            return cached[component]
+        irrelevant = (
+            CONFIG_IRRELEVANT_ALWAYS
+            | CONFIG_IRRELEVANT_KEYS.get(component, frozenset())
+        )
+        payload = {
+            key: value for key, value in self.config.items()
+            if key not in irrelevant
+        }
+        # source descriptor 里的 local_path 是绝对路径（开发者本机的检出）。
+        # 直接进配置切片，会让同一份源码在宿主机、容器、CI 上算出三个不同的
+        # 哈希 —— 缓存永远不命中，而现象只是"明明没改却全量重建"。
+        for key in ("sources", "external_apps"):
+            section = payload.get(key)
+            if isinstance(section, dict):
+                payload[key] = {
+                    name: self._portable_source(descriptor)
+                    for name, descriptor in section.items()
+                }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        cached[component] = digest
+        return digest
+
+    def _build_logic_hash(self, component: str = "") -> str:
+        """返回该组件参与构建的 builder 代码与 Docker 定义的内容指纹。
+
+        排除与组件产物无关的模块（刷写 / 部署 / 脚手架 / 清单查询、脚手架
+        模板）与**非当前平台**的构建规则：改 ``builder/flash/strategy.py``
+        或别的平台的 kernel.py 不该让本平台的 kernel 重编。未登记的文件
+        默认仍进指纹，所以漏登记只会退化为过度失效，不会漏失效。
+
+        叶子组件（见 ``BUILD_LOGIC_SCOPED``）再进一步：只哈希它**实际
+        import 到**的那些模块。范围由 AST 静态推导，不是手写清单 ——
+        手写清单会随代码演进而失准，而这里失准的方向是漏失效。兜底同样
+        保守：不在任何组件闭包里的文件仍进全部组件的指纹。
+        """
+        cache_key = component if component in BUILD_LOGIC_SCOPED else ""
+        cached = getattr(self, "_logic_hash_cache", {})
+        if cache_key in cached:
+            return cached[cache_key]
+        scope = self._build_logic_scope(cache_key) if cache_key else None
         h = hashlib.sha256()
         builder_dir = self._project_path("builder")
+        platforms = self._build_logic_platforms()
         if builder_dir.is_dir():
-            self._hash_directory(h, builder_dir)
+            entries = []
+            for path in builder_dir.rglob("*"):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(builder_dir)
+                if self._skip_build_logic(rel, platforms):
+                    continue
+                if scope is not None and rel.as_posix() not in scope:
+                    continue
+                entries.append((rel.as_posix(), path))
+            for rel_posix, path in sorted(entries):
+                h.update(rel_posix.encode())
+                if path.is_symlink():
+                    h.update(os.readlink(path).encode())
+                else:
+                    h.update(path.read_bytes())
         for relative in ("docker/Dockerfile", "docker-compose.yml"):
             path = self._project_path(relative)
             if path.is_file():
                 h.update(relative.encode())
                 h.update(path.read_bytes())
-        self._logic_hash_cache = h.hexdigest()
-        return self._logic_hash_cache
+        cached[cache_key] = h.hexdigest()
+        self._logic_hash_cache = cached
+        return cached[cache_key]
 
-    # 目录递归哈希排除规则
+    def _build_logic_scope(self, component: str) -> frozenset[str]:
+        """该叶子组件实际参与构建的 builder 文件（相对 builder/ 的 posix 路径）。
+
+        范围 = 从入口模块出发的 **import 传递闭包** ∪ **未被任何组件登记的
+        文件**。两部分各自对应一类风险：
+
+        - 闭包用 AST 静态推导而不是手写清单。手写清单会随代码演进失准，而
+          这里失准的方向是**漏失效** —— 组件依赖的模块改了却不重建，产物
+          是旧的，而且没有任何现象提示你。
+        - 兜底把"不属于任何组件闭包"的文件仍算进来。新增一个顶层模块、或
+          通过 importlib 动态加载而 AST 看不见的模块，都落在这一档：结果
+          是过度失效（多编一次），不是漏失效。
+
+        `tests/builder/test_build_logic_scope.py` 用**运行时** import 的
+        真实结果反向校验闭包完整性 —— 静态分析看不见的动态导入会在那里暴露。
+        """
+        cached = getattr(self, "_logic_scope_cache", {})
+        if component in cached:
+            return cached[component]
+
+        builder_dir = self._project_path("builder")
+        platforms = self._build_logic_platforms()
+        # 对**所有**组件求闭包，才能判断一个文件是否"已登记"。只对
+        # BUILD_LOGIC_SCOPED 里的组件应用收窄。
+        closures = {
+            name: self._import_closure(builder_dir, name, platforms)
+            for name in BUILD_LOGIC_ENTRY
+        }
+        registered = frozenset().union(*closures.values()) if closures else frozenset()
+
+        unregistered = set()
+        if builder_dir.is_dir():
+            for path in builder_dir.rglob("*.py"):
+                rel = path.relative_to(builder_dir).as_posix()
+                if rel not in registered:
+                    unregistered.add(rel)
+
+        cached[component] = frozenset(closures[component] | unregistered)
+        self._logic_scope_cache = cached
+        return cached[component]
+
+    def _import_closure(self, builder_dir: Path, component: str,
+                        platforms: frozenset) -> set[str]:
+        """从组件入口模块出发，沿 `builder.*` import 求传递闭包。"""
+        seeds = [BUILD_LOGIC_ENTRY[component]]
+        # 不展开 import 的文件：它们自身的字节要算，但跟着它们的 import 求
+        # 闭包等于不收窄。
+        #   - engine.py：编排构建并收集产物，引用了几乎所有 builder。
+        #   - platforms/<p>/__init__.py：分派器，create_builder 里逐组件
+        #     懒加载全部构建器；ARTIFACT_NAMES 影响产物收集所以要算字节，
+        #     但它 import 的 rootfs/image/amp 与 kernel 无关。
+        opaque = list(BUILD_LOGIC_ALWAYS)
+        for platform in sorted(platforms):
+            seeds.append(f"platforms/{platform}/{component}.py")
+            opaque.append(f"platforms/{platform}/__init__.py")
+
+        seen: set[str] = {
+            rel for rel in opaque if (builder_dir / rel).is_file()
+        }
+        pending = [rel for rel in seeds if (builder_dir / rel).is_file()]
+        while pending:
+            rel = pending.pop()
+            if rel in seen:
+                continue
+            seen.add(rel)
+            try:
+                tree = ast.parse((builder_dir / rel).read_text())
+            except (OSError, SyntaxError):
+                continue
+            for module in self._builder_imports(tree):
+                for candidate in (f"{module}.py", f"{module}/__init__.py"):
+                    if (builder_dir / candidate).is_file():
+                        pending.append(candidate)
+        return seen
+
+    @staticmethod
+    def _builder_imports(tree: "ast.AST") -> set[str]:
+        """AST 里所有 `builder.x.y` 引用，返回相对 builder/ 的模块路径。"""
+        found: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                name = node.module
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("builder."):
+                        found.add(alias.name[len("builder."):].replace(".", "/"))
+                continue
+            else:
+                continue
+            if name.startswith("builder."):
+                found.add(name[len("builder."):].replace(".", "/"))
+        return found
+
+    def _skip_build_logic(self, rel: Path, platforms: frozenset) -> bool:
+        """判断 builder/ 下的相对路径是否应排除出构建逻辑指纹。"""
+        if any(part in self.HASH_EXCLUDE_DIRS for part in rel.parts[:-1]):
+            return True
+        if rel.suffix in self.HASH_EXCLUDE_EXTS:
+            return True
+        if rel.name in self.HASH_EXCLUDE_NAMES:
+            return True
+        if len(rel.parts) == 1 and rel.name in BUILD_LOGIC_EXCLUDE_FILES:
+            return True
+        if rel.as_posix() in BUILD_LOGIC_EXCLUDE_PATHS:
+            return True
+        if rel.parts[0] in BUILD_LOGIC_EXCLUDE_DIRS:
+            return True
+        # 平台构建规则只保留本 target 实际执行的那些包；platforms/__init__.py
+        # 是分派入口，保留。platforms 为空表示解析不出（如测试里的假平台），
+        # 此时不做过滤，保守地全部纳入。
+        if (platforms and rel.parts[0] == "platforms" and len(rel.parts) > 1
+                and rel.parts[1] != "__init__.py"
+                and rel.parts[1] not in platforms):
+            return True
+        return False
+
+    def _build_logic_platforms(self) -> frozenset:
+        """返回本 target 实际执行的平台包名（跟随平台间的 re-export）。
+
+        解析不到任何目录时返回空集，调用方据此放弃平台过滤 —— 宁可多编，
+        也不能漏掉真正参与构建的实现。
+        """
+        cached = getattr(self, "_logic_platforms_cache", None)
+        if cached is not None:
+            return cached
+        root = self._project_path("builder", "platforms")
+        kept: set[str] = set()
+        pending = [self.config.get("platform", "")]
+        while pending:
+            name = pending.pop()
+            if not name or name in kept or not (root / name).is_dir():
+                continue
+            kept.add(name)
+            for path in sorted((root / name).rglob("*.py")):
+                if "__pycache__" in path.parts:
+                    continue
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                pending.extend(_PLATFORM_IMPORT_RE.findall(text))
+        self._logic_platforms_cache = frozenset(kept)
+        return self._logic_platforms_cache
+
+    # 目录递归哈希排除规则。
+    #
+    # 排除判定基于**相对被哈希目录**的路径段，而不是绝对路径：被哈希的
+    # 目录自身可能就叫 ``build``（如 package 的 vendor App
+    # ``components/packages/rockchip-multimedia/build/``），也可能位于
+    # ``.build/`` 之下（git 来源 App 的 ``.build/sources/apps/<name>/``）。
+    # 按绝对路径判定会把整棵树静默跳过，哈希退化为空目录 —— 源码改了却
+    # 判定"未变"，复用陈旧产物。
     HASH_EXCLUDE_DIRS = {"__pycache__", ".git", "build", ".build", "node_modules"}
     HASH_EXCLUDE_EXTS = {".pyc", ".o"}
+    # 宿主机噪声文件：未被 git 跟踪，纳入会让同一 commit 在不同机器上
+    # 算出不同哈希，产生无源码改动的重建。
+    HASH_EXCLUDE_NAMES = {".DS_Store"}
 
     def _hash_directory(self, h: "hashlib._Hash", directory: Path) -> None:
         """递归 hash 目录下所有文件（排除构建产物和临时文件）。
@@ -892,15 +1568,18 @@ class BuildCache:
         for path in directory.rglob("*"):
             if path.is_dir():
                 continue
-            if any(part in self.HASH_EXCLUDE_DIRS for part in path.parts):
+            rel = path.relative_to(directory)
+            # 只看相对路径的目录段：文件名本身叫 build/.build 不算派生物。
+            if any(part in self.HASH_EXCLUDE_DIRS for part in rel.parts[:-1]):
                 continue
             if path.suffix in self.HASH_EXCLUDE_EXTS:
                 continue
-            entries.append(path)
+            if path.name in self.HASH_EXCLUDE_NAMES:
+                continue
+            entries.append((rel.as_posix(), path))
 
-        for path in sorted(entries):
-            rel = path.relative_to(directory)
-            h.update(str(rel).encode())
+        for rel_posix, path in sorted(entries):
+            h.update(rel_posix.encode())
             if path.is_symlink():
                 h.update(os.readlink(path).encode())
             else:

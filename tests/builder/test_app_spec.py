@@ -283,7 +283,6 @@ class TestFullFieldParsing:
         # build 段
         assert spec.build.system == "cmake"
         assert spec.build.options == {"CMAKE_BUILD_TYPE": "Release"}
-        assert spec.build.outputs == ["bin/my-daemon"]
         assert spec.build.deps == ["libfoo"]
         assert spec.build.apt_packages == ["libssl-dev:{arch}", "zlib1g-dev"]
 
@@ -350,11 +349,6 @@ class TestDefaultValues:
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
         assert spec.build.options == {}
-
-    def test_build_outputs_defaults_to_empty_list(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
-        assert spec.build.outputs == []
 
     def test_build_apt_packages_defaults_to_empty_list(self):
         with tempfile.TemporaryDirectory() as tmpdir:

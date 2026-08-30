@@ -13,7 +13,13 @@ import yaml
 # 允许的 App 类型。amp = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户
 # 应用），产物是固件而非装进 rootfs 的 deb，走独立构建路径（见 app.py
 # build_one 的 amp 分叉与 platforms/rockchip/amp.py 的应用槽位 staging）。
-VALID_APP_TYPES = {"exec", "service", "lib", "test", "vendor", "amp"}
+# staging = 只产出供下游 App 消费的交叉编译产物树（DESTDIR 安装树），不打
+# deb、不进 rootfs。用于把一条长编译链拆成可独立增量的单元：链上的中间环节
+# （如 GStreamer core/base 之于 Rockchip 插件）本身不交付任何包，只提供下游
+# configure 所需的头文件与库。
+VALID_APP_TYPES = {
+    "exec", "service", "lib", "test", "vendor", "amp", "staging",
+}
 
 # 允许的构建系统取值。amp = 经 SDK（HAL Makefile / RT-Thread scons）+ mkimage
 # 打 FIT，由 amp 组件驱动，不复用 _BUILD_SYSTEMS 的 host 交叉编译模板。
@@ -49,10 +55,11 @@ class BuildConfig:
     system: str = "none"
     # 传递给构建系统的选项，如 CMake 变量
     options: Dict[str, str] = field(default_factory=dict)
-    # 构建产物路径列表（相对于 App 目录）
-    outputs: List[str] = field(default_factory=list)
     # custom vendor App 直接生成的完整 deb 文件名
     deb_outputs: List[str] = field(default_factory=list)
+    # 供下游 App 消费的产物树，相对 FLANGE_APP_WORK_DIR。声明后进入该 App 的
+    # 产物清单：缓存命中要求它仍然存在，否则下游会拿不到头文件而编译失败。
+    staging: str = ""
     # App 间构建依赖
     deps: List[str] = field(default_factory=list)
     # 当前构建容器内安装的 APT 编译依赖，支持 :{arch} 架构占位符
@@ -321,7 +328,18 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
         raise AppSpecError("build.options 必须是字典")
     options = {str(k): str(v) for k, v in options.items()}
 
-    outputs = _parse_str_list_value(raw.get("outputs", []), "build.outputs")
+    staging = raw.get("staging", "")
+    if staging is not None and not isinstance(staging, str):
+        raise AppSpecError("build.staging 必须是字符串")
+    staging = (staging or "").strip()
+    if staging:
+        path = PurePosixPath(staging)
+        if path.is_absolute() or ".." in path.parts:
+            raise AppSpecError(
+                f"build.staging 必须是工作目录内的相对路径: {staging!r}")
+    if app_info.type == "staging" and not staging:
+        raise AppSpecError(
+            "app.type=staging 必须声明 build.staging（供下游消费的产物树）")
     deb_outputs = _parse_str_list_value(
         raw.get("deb_outputs", []), "build.deb_outputs",
     )
@@ -368,8 +386,8 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
     return BuildConfig(
         system=system,
         options=options,
-        outputs=outputs,
         deb_outputs=deb_outputs,
+        staging=staging,
         deps=deps,
         apt_packages=apt_packages,
         commands=parsed_commands,

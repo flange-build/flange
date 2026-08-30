@@ -421,6 +421,7 @@ class AppBuilder:
     """
 
     output = None  # BuildOutput，由 engine 注入
+    cache = None   # BuildCache，由 engine（或 CLI 单 App 入口）注入
 
     def __init__(
         self,
@@ -456,24 +457,30 @@ class AppBuilder:
     # 公开接口
     # -----------------------------------------------------------------------
 
-    def build_all(self) -> Dict[str, Path]:
+    def build_all(self, force: bool = False) -> Dict[str, Path]:
         """构建所有 custom_packages，返回 {app_name: deb_path}。
 
         待构建集合为 ``rootfs.custom_packages`` 与 ``recovery.custom_packages``
         的并集（启用 recovery 时合并）；rootfs 的 phase2 与 recovery 的
         phase2 各自挑选所需的 deb 安装。
 
+        **per-App 增量**：注入了 cache 时，逐个比对 App 内容哈希与产物清单，
+        未变的 App 直接复用既有 deb —— 改一个 App 不再牵连其余（多媒体包一次
+        全量编译约 10 分钟）。构建完成后清理"不属于任何在册 App"的 deb，替代
+        旧的"先删光再全建"，既保证 rootfs 按 glob 全装不会吃到残留，也让某个
+        App 构建失败时不破坏其他 App 已有的产物。
+
+        参数：
+            force: 跳过 per-App 缓存判定，强制重建全部 App
+
         返回：
             {app_name: .deb 路径} 字典
         """
         from builder.config.apps import gather_custom_packages
         custom_packages: list[str] = gather_custom_packages(self._config)
-        # build_all 表示按 FINAL_CONFIG 对账完整 App 集合。先删除上一路由留下的
-        # deb，避免 ext4→UBI 等 product 切换把已过滤 package 装回 rootfs。
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        for stale_deb in self._output_dir.glob("*.deb"):
-            stale_deb.unlink()
         if not custom_packages:
+            self._prune_stale_debs(custom_packages, set())
             self._status("custom_packages 为空，无需构建 App")
             return {}
 
@@ -482,13 +489,129 @@ class AppBuilder:
         self._status(f"构建顺序: {ordered}")
 
         results: Dict[str, Path] = {}
+        reused: List[str] = []
+        produced: set = set()
         for name in ordered:
-            deb_path = self.build_one(name)
-            results[name] = deb_path
+            if not force and self._reuse_app(name):
+                reused.append(name)
+                names = (self.cache.read_app_manifest(name) or {}).get(
+                    "debs") or []
+                produced.update(names)
+                results[name] = (
+                    self._output_dir / names[0] if names else None)
+                continue
+            debs = self._build_one_debs(name)
+            produced.update(path.name for path in debs)
+            results[name] = debs[0] if debs else None
 
+        if reused:
+            self._status(
+                f"未变更，复用既有 deb ({len(reused)}/{len(ordered)}): "
+                f"{', '.join(reused)}"
+            )
+        self._prune_stale_debs(custom_packages, produced)
         return results
 
-    def build_one(self, name_or_path: str) -> Path:
+    def _reuse_app(self, name: str) -> bool:
+        """判断 App 是否可跳过构建；命中时补齐 lib App 的 sysroot。
+
+        sysroot 是 App 之间的编译期契约（下游 App 用 ``build.deps`` 引用上游
+        的头文件与 .so），它不在产物清单里、也可能被 ``flange clean`` 清掉。
+        命中路径重新安装一次（纯文件复制，廉价），避免下游 App 因上游被跳过
+        而找不到 sysroot。
+        """
+        if self.cache is None or not self.cache.is_app_up_to_date(name):
+            return False
+        from builder.app_spec import load_spec
+
+        # 用 cache 的只读解析，不走 SourceManager.ensure_app —— 命中路径不该
+        # 触发 clone/fetch 之类的网络操作。
+        app_dir = self.cache._registered_app_source_dir(name)
+        if not (app_dir / "app.yaml").is_file():
+            return False
+        spec = load_spec(app_dir)
+        if spec.app.type == "lib":
+            self._install_sysroot(app_dir, spec)
+        return True
+
+    def _staging_dir(self, spec: AppSpec) -> Optional[Path]:
+        """返回该 App 声明的 staging 树绝对路径；未声明返回 None。
+
+        位置与编译期注入的 ``FLANGE_APP_WORK_DIR`` 一致，使包内单元脚本
+        能按同一约定写入、下游 App 能按同一约定读取。
+        """
+        if not spec.build.staging:
+            return None
+        work_dir = (
+            build_dir(self._project_dir)
+            / "work" / "apps" / spec.app.name / self._arch
+        )
+        return work_dir / spec.build.staging
+
+    def _record_app_manifest(
+        self, name_or_path: str, app_dir: Path, debs: List[Path]
+    ) -> None:
+        """构建成功后写入该 App 的内容哈希与产物清单。
+
+        两道判据缺一不可：
+          - 不在 custom_packages 里的 App（ad-hoc 路径构建）不由 build_all
+            管理，写清单只会与同名在册 App 打架；
+          - 即使名字在册，若这次实际构建的目录不是缓存用来算哈希的那个目录
+            （``flange build app ./some/dir`` 恰好撞名），写进去的哈希与产物
+            对不上，下次会命中错误对象。
+
+        standalone ``flange build app <name>`` 满足两道判据，因此单独构建过
+        一个 App 之后，随后的 ``flange build`` 只会重建其余真正变化的 App，
+        而不是把整组再编一遍。
+
+        声明了 ``build.staging`` 的 App 把该产物树一并记进清单：下游 App 靠
+        它拿头文件与库，被误删时必须让上游重建，而不是命中缓存后让下游编译
+        失败。
+        """
+        if self.cache is None:
+            return
+        from builder.config.apps import gather_custom_packages
+
+        if name_or_path not in gather_custom_packages(self._config):
+            return
+        registered = self.cache._registered_app_source_dir(name_or_path)
+        if registered.resolve() != app_dir.resolve():
+            return
+        from builder.app_spec import load_spec
+
+        staging = self._staging_dir(load_spec(app_dir))
+        self.cache.store_app(
+            name_or_path, debs,
+            staging=str(staging) if staging else None,
+        )
+
+    def _prune_stale_debs(self, custom_packages: List[str], keep: set) -> None:
+        """删除不属于本次在册 App 的 deb 与已出集合的 App 清单。
+
+        rootfs 按 ``glob("*.deb")`` 全装（builder/platforms/*/rootfs.py），
+        所以 App 改名 / 换版本号 / 移出 custom_packages（如 UBI 路由过滤掉
+        flange-rootfs-grow）留下的旧 deb 必须清掉，否则会被静默装进镜像。
+
+        参数：
+            custom_packages: 本次在册的 App 名单
+            keep: 本次构建产出或命中复用的全部 deb 文件名
+        """
+        wanted = set(custom_packages)
+        if self.cache is not None:
+            manifest_dir = self._output_dir / self.cache.APP_MANIFEST_DIR
+            if manifest_dir.is_dir():
+                for path in manifest_dir.glob("*.json"):
+                    if path.stem not in wanted:
+                        path.unlink()
+        removed = []
+        for deb in sorted(self._output_dir.glob("*.deb")):
+            if deb.name not in keep:
+                deb.unlink()
+                removed.append(deb.name)
+        if removed:
+            self._status(f"清理无主 deb ({len(removed)}): {', '.join(removed)}")
+
+    def build_one(self, name_or_path: str) -> Optional[Path]:
         """构建单个 App，返回运行时或多 DEB 声明中的首个 .deb 路径。
 
         入参既可以是 App 名称（沿用 SourceManager 三层查找），也可以是宿主机上的
@@ -512,6 +635,15 @@ class AppBuilder:
             FileNotFoundError: 路径不存在或缺失 app.yaml
             ValueError:        名称在三层查找中未命中（来自 SourceManager）
         """
+        debs = self._build_one_debs(name_or_path)
+        return debs[0] if debs else None
+
+    def _build_one_debs(self, name_or_path: str) -> List[Path]:
+        """构建单个 App，返回它产出的**全部** deb 路径（amp 类型为空列表）。
+
+        build_all 需要完整清单才能做 per-App 缓存与无主 deb 清理；build_one
+        只取首项作为代表，保持既有对外语义。
+        """
         from builder.app_spec import load_spec
         from builder.deb import DebBuilder
 
@@ -529,10 +661,22 @@ class AppBuilder:
         # （collect_files/_CONVENTION_MAP）。固件由 amp 组件在 `flange build`
         # 时把本 app 的 src stage 进 SDK 应用槽位后打进 amp.img。
         if spec.app.type == "amp":
-            return self._build_amp(app_dir, spec)
+            self._build_amp(app_dir, spec)
+            return []
 
         # 步骤 3：编译
         self._compile(app_dir, spec, self._config)
+
+        # staging 类型：只产出供下游消费的交叉编译产物树，不打 deb、不进
+        # rootfs。它仍进 custom_packages 集合（否则 _resolve_build_order 会
+        # 忽略它、根本不构建），但产物清单为空，rootfs 的 glob 自然拿不到它。
+        if spec.app.type == "staging":
+            self._status(
+                f"staging App '{app_name}' 完成 → "
+                f"{self._staging_dir(spec)}"
+            )
+            self._record_app_manifest(name_or_path, app_dir, [])
+            return []
 
         # custom vendor App 可直接交付多个已完成的 deb，避免再套空 wrapper。
         if spec.build.deb_outputs:
@@ -551,7 +695,8 @@ class AppBuilder:
                 f"App '{app_name}' 多 deb 交付完成 → "
                 f"{', '.join(path.name for path in deb_paths)}"
             )
-            return deb_paths[0]
+            self._record_app_manifest(name_or_path, app_dir, deb_paths)
+            return deb_paths
 
         # 步骤 4：lib 类型走双包流程，其余类型走单包流程
         if spec.app.type == "lib":
@@ -561,7 +706,9 @@ class AppBuilder:
                 f"lib App '{app_name}' 双包完成 → "
                 f"{runtime_path.name}, {outputs['dev'].name}"
             )
-            return runtime_path
+            deb_paths = [runtime_path, outputs["dev"]]
+            self._record_app_manifest(name_or_path, app_dir, deb_paths)
+            return deb_paths
 
         # 收集文件（非 lib 类型）
         files = collect_files(app_dir, spec, self._arch)
@@ -571,7 +718,8 @@ class AppBuilder:
         deb_path = deb_builder.build_from_spec(spec, self._arch, files, self._output_dir)
         self._status(f"App '{app_name}' 打包完成 → {deb_path.name}")
 
-        return deb_path
+        self._record_app_manifest(name_or_path, app_dir, [deb_path])
+        return [deb_path]
 
     def _build_amp(self, app_dir: Path, spec) -> Optional[Path]:
         """amp 类型 app 的独立构建路径：不打 deb、不进 rootfs。
@@ -826,6 +974,20 @@ class AppBuilder:
             )
         return self._source.ensure_app(app_name, self._config)
 
+    def _spec_dir(self, app_name: str) -> Path:
+        """解析仅用于读取 app.yaml 的 App 目录。
+
+        优先用 cache 的只读解析：排序阶段只需要 ``build.deps``，不该为此对
+        每个 App 走一遍 ``SourceManager.ensure_app``（git 来源会真的 fetch）。
+        只有在只读解析拿不到 app.yaml 时才回退到 ensure，让首次构建照常
+        clone。
+        """
+        if self.cache is not None:
+            candidate = self.cache._registered_app_source_dir(app_name)
+            if (candidate / "app.yaml").is_file():
+                return candidate
+        return self._find_app_dir(app_name)
+
     def _resolve_build_order(self, app_names: list[str]) -> list[str]:
         """解析各 App 的 build.deps，拓扑排序返回构建顺序。
 
@@ -847,7 +1009,7 @@ class AppBuilder:
         graph: dict[str, list[str]] = {}
 
         for name in app_names:
-            app_dir = self._find_app_dir(name)
+            app_dir = self._spec_dir(name)
             spec = load_spec(app_dir)
             # 仅保留同属本次构建集合的依赖
             graph[name] = [d for d in spec.build.deps if d in app_set]

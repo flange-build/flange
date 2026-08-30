@@ -14,6 +14,24 @@ from pathlib import Path
 from builder.cache import BuildCache
 
 
+def _snapshot_store(cache, prefix: str = "rootfs-base-"):
+    """与 builder/rootfs.py 同构地解析 base 快照目录。"""
+    from builder.snapshot import SnapshotStore
+
+    return SnapshotStore(
+        cache.target_dir.parent.parent.parent / ".cache", prefix, None)
+
+
+def _snapshot_name(cache, component: str = "rootfs") -> str:
+    """生产判据：base 快照按内容哈希命名，命中与否就是同名文件在不在。
+
+    因此不存在独立的 ``.base_hash`` 记录文件 —— 文件名本身就是那条记录。
+    这里直接比对文件名，测的就是 builder/rootfs.py 与 builder/recovery.py
+    实际走的那条路径。
+    """
+    return cache.compute_phase_hash(component, "base")
+
+
 class TestCacheE2E:
     """模拟构建周期，验证缓存命中矩阵。"""
 
@@ -75,16 +93,20 @@ class TestCacheE2E:
         with tempfile.TemporaryDirectory() as tmpdir:
             config, cache = self._make_env(tmpdir)
 
+            store = _snapshot_store(cache)
             assert not cache.is_up_to_date("rootfs")
-            assert not cache.is_phase_up_to_date("rootfs", "base")
+            assert not store.resolve(_snapshot_name(cache)).exists()
 
-            # 模拟构建完成
-            cache.store_phase("rootfs", "base")
+            # 模拟构建完成：base 快照按内容哈希落盘，rootfs 写 .build_hash
+            snapshot = store.resolve(_snapshot_name(cache))
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            snapshot.write_bytes(b"snapshot")
+            _saved = _snapshot_name(cache)
             cache.store("rootfs")
             self._create_rootfs_artifact(cache)
 
             assert cache.is_up_to_date("rootfs")
-            assert cache.is_phase_up_to_date("rootfs", "base")
+            assert store.resolve(_snapshot_name(cache)).exists()
 
     def test_overlay_change_base_hit_customize_miss(self):
         """改 overlay 文件：base hit，customize miss。"""
@@ -95,44 +117,44 @@ class TestCacheE2E:
             (overlay_dir / "hosts").write_text("127.0.0.1 localhost")
 
             _config, cache = self._make_env(tmpdir)
-            cache.store_phase("rootfs", "base")
+            _saved = _snapshot_name(cache)
             cache.store("rootfs")
             self._create_rootfs_artifact(cache)
             assert cache.is_up_to_date("rootfs")
-            assert cache.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(cache) == _saved
 
             (overlay_dir / "hosts").write_text("127.0.0.1 myhost")
             _changed_config, changed = self._make_env(tmpdir)
 
-            assert changed.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(changed) == _saved
             assert not changed.is_up_to_date("rootfs")
 
     def test_no_change_all_hit(self):
         """无改动：全部 hit。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             config, cache = self._make_env(tmpdir)
-            cache.store_phase("rootfs", "base")
+            _saved = _snapshot_name(cache)
             cache.store("rootfs")
             self._create_rootfs_artifact(cache)
 
-            assert cache.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(cache) == _saved
             assert cache.is_up_to_date("rootfs")
 
     def test_packages_change_all_miss(self):
         """改 packages：base miss → customize 也 miss。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             config, cache = self._make_env(tmpdir, packages=["systemd"])
-            cache.store_phase("rootfs", "base")
+            _saved = _snapshot_name(cache)
             cache.store("rootfs")
             self._create_rootfs_artifact(cache)
 
-            assert cache.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(cache) == _saved
             assert cache.is_up_to_date("rootfs")
 
             _changed_config, changed = self._make_env(
                 tmpdir, packages=["systemd", "vim"])
 
-            assert not changed.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(changed) != _saved
             assert not changed.is_up_to_date("rootfs")
 
     def test_app_source_change_triggers_customize_miss(self):
@@ -149,13 +171,14 @@ class TestCacheE2E:
             app_output = cache.target_dir / "app" / "myapp_1.0_arm64.deb"
             app_output.parent.mkdir(parents=True)
             app_output.write_bytes(b"deb")
+            cache.store_app("myapp", [app_output])
             cache.store("app")
-            cache.store_phase("rootfs", "base")
+            _saved = _snapshot_name(cache)
             cache.store("rootfs")
             self._create_rootfs_artifact(cache)
 
             assert cache.is_up_to_date("app")
-            assert cache.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(cache) == _saved
             assert cache.is_up_to_date("rootfs")
 
             (app_dir / "main.sh").write_text("#!/bin/bash\necho world")
@@ -163,7 +186,7 @@ class TestCacheE2E:
                 tmpdir, custom_packages=["myapp"])
             assert app_hash_1 != changed.compute_hash("app")
             assert not changed.is_up_to_date("app")
-            assert changed.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(changed) == _saved
             assert not changed.is_up_to_date("rootfs")
 
     def test_kernel_change_invalidates_rootfs(self):
@@ -174,7 +197,7 @@ class TestCacheE2E:
 
             self._create_kernel_artifacts(cache)
             cache.store("kernel")
-            cache.store_phase("rootfs", "base")
+            _saved = _snapshot_name(cache)
             cache.store("rootfs")
             self._create_rootfs_artifact(cache)
 
@@ -185,14 +208,14 @@ class TestCacheE2E:
                 tmpdir, kernel={"defconfig": ["defconfig_b"]})
 
             assert not changed.is_up_to_date("kernel")
-            assert changed.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(changed) == _saved
             assert not changed.is_up_to_date("rootfs")
 
     def test_url_change_invalidates_base(self):
         """改 rootfs.url → base miss → customize 也 miss。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             config, cache = self._make_env(tmpdir)
-            cache.store_phase("rootfs", "base")
+            _saved = _snapshot_name(cache)
             cache.store("rootfs")
             self._create_rootfs_artifact(cache)
 
@@ -201,5 +224,5 @@ class TestCacheE2E:
                 rootfs_url="https://example.com/other-base.tar.gz",
             )
 
-            assert not changed.is_phase_up_to_date("rootfs", "base")
+            assert _snapshot_name(changed) != _saved
             assert not changed.is_up_to_date("rootfs")
