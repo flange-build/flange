@@ -7,6 +7,10 @@
 from builder.docker import DockerRunner
 from builder.source import SourceManager
 
+# 平台能力（见 builder/platforms/spec.py）：高通 bootloader 不做运行期
+# overlay 加载，DTBO 必须在构建期用 fdtoverlay 合并进 DTB。
+DTBO_MERGE_AT_BUILD = True
+
 # 产物名映射：(组件, collect key) → target 目录下的文件名/目录名。
 # 未列出的 key 沿用源文件名（如 kernel 的 image→"Image"、dtb→"<dtb>.dtb"）。
 ARTIFACT_NAMES = {

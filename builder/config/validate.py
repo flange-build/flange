@@ -33,6 +33,8 @@ from builder.config.canonical import kernel_arch, kernel_device_tree
 from builder.config.jsonnet import ResolvedConfig
 from builder.partition.size import parse_size
 from builder.patches import normalize_excluded_patches
+from builder.platforms.spec import capability as platform_capability
+from builder.platforms.spec import known_platforms
 
 
 class ConfigError(ValueError):
@@ -237,11 +239,14 @@ def validate_canonical_config(config: dict) -> None:
         except (TypeError, ValueError) as exc:
             raise ConfigError(str(exc)) from exc
         platform = config.get("platform", "")
-        if platform.startswith("qualcomm") and runtime:
+        # 走平台声明的能力，而不是按名字前缀猜：能力和命名解耦后，新增一个
+        # 构建期合并 DTBO 的非高通平台只需在它自己的包里声明一行。
+        merge_at_build = platform_capability(config, "dtbo_merge_at_build")
+        if merge_at_build and runtime:
             raise ConfigError(
                 f"平台 {platform} 不支持 boot 运行期 overlay；"
                 "请改用 kernel.device_tree.build_overlays")
-        if not platform.startswith("qualcomm") and build:
+        if not merge_at_build and build:
             raise ConfigError(
                 f"平台 {platform} 不支持构建期 DTBO 合并；"
                 "请改用 boot.overlays.enabled")
@@ -636,10 +641,27 @@ def validate_amp(config: dict) -> None:
     _run_platform_validation(config, "validate_amp")
 
 
+def validate_platform(config: dict) -> None:
+    """`platform` 必须对应一个已注册的平台包。
+
+    此前平台名从不校验：写错只会在 engine 里抛 ModuleNotFoundError，而按名字
+    前缀判断能力的地方（`startswith("qualcomm")`）连报错都没有 —— `qualcom`
+    少一个 m 就静默走进非高通分支。校验放在这里，能顺带列出可选值。
+    """
+    platform = config.get("platform")
+    if not platform:
+        return
+    known = known_platforms()
+    if platform not in known:
+        raise ConfigError(
+            f"未知平台 {platform!r}；已注册的平台: {', '.join(known)}")
+
+
 def validate_config(config: dict) -> None:
     """对 FINAL_CONFIG 执行全部已知校验，第一项失败即抛 ConfigError。"""
     if isinstance(config, ResolvedConfig):
         validate_canonical_config(config)
+    validate_platform(config)
     validate_build_routes(config)
     validate_flash_identity(config)
     validate_recovery_partition(config)
