@@ -128,3 +128,47 @@ def test_live_spec不留归档模板占位():
     assert not placeholder, (
         f"这些 spec 的 Purpose 仍是归档占位: {placeholder}；"
         f"写清它到底约束什么，否则没人会在改代码时想起它")
+
+
+# ---------------------------------------------------------------------------
+# 闸门四：live spec 引用的源码路径必须真实存在
+# ---------------------------------------------------------------------------
+
+_SOURCE_REF = re.compile(r"\b(builder/[\w./-]+\.py)\b")
+
+
+def _spec_documents() -> list[Path]:
+    """live spec 加仓库根的技术规格文档；不含 changes/（历史记录）。"""
+    docs = _live_specs()
+    root_spec = ROOT / "openspec" / "flange-build-tool-spec.md"
+    if root_spec.is_file():
+        docs = docs + [root_spec]
+    return docs
+
+
+@pytest.mark.parametrize("doc", _spec_documents(),
+                         ids=lambda p: p.parent.name + "/" + p.name)
+def test_spec引用的源码文件存在(doc: Path):
+    """spec 指向一个不存在的文件，读者会照着它去找、找不到，然后猜。
+
+    这次踩到的是 flash.py 拆包：9 处 spec 与代码注释仍指向
+    `builder/flash.py`，而它已经变成 `builder/flash/` 包。重命名或拆包时
+    没人会想起去搜 spec —— 所以让它自己暴露。
+
+    只检查 live spec 与仓库根的技术规格；`openspec/changes/` 下的提案与
+    任务是历史记录，如实描述当时的路径，不在此列。
+    """
+    missing = sorted({
+        ref for ref in _SOURCE_REF.findall(doc.read_text(encoding="utf-8"))
+        if not (ROOT / ref).exists()
+    })
+    assert not missing, (
+        f"{doc.relative_to(ROOT)} 引用了不存在的源码路径: {missing}")
+
+
+def test_闸门确实能发现引用():
+    """守住正则：匹配不到任何引用时，上面的检查会全部静默通过。"""
+    found = set()
+    for doc in _spec_documents():
+        found.update(_SOURCE_REF.findall(doc.read_text(encoding="utf-8")))
+    assert len(found) > 5, f"只解析出 {found}，正则可能失效了"

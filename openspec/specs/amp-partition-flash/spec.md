@@ -7,7 +7,7 @@
 ## Requirements
 ### Requirement: 刷写映射识别 amp 分区
 
-`builder/flash.py` 的 `RockchipFlashStrategy.partition_image_map` SHALL 新增 `"amp": "amp/amp.img"`（并以 `amp.enabled` 作为 gate，仿 recovery），使 `FlashConfigGenerator` 生成的 `flash-config.json` 含 amp 分区。`flange flash`（全量）SHALL 写入 amp.img，`flange flash amp`（单刷）SHALL 仅写 amp 分区，`flange flash --list` SHALL 列出 amp。
+`builder/flash/plan.py` 的 `RockchipFlashPlan.partition_image_map` SHALL 新增 `"amp": "amp/amp.img"`（并以 `amp.enabled` 作为 gate，仿 recovery），使 `FlashConfigGenerator` 生成的 `flash-config.json` 含 amp 分区。`flange flash`（全量）SHALL 写入 amp.img，`flange flash amp`（单刷）SHALL 仅写 amp 分区，`flange flash --list` SHALL 列出 amp。
 
 #### Scenario: flash-config.json 含 amp
 

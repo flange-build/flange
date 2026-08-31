@@ -10,7 +10,7 @@ local common = import 'config/rockchip.libsonnet';
   flash_identity: {
     // 实机 RCI 芯片信息以小端字节序返回十进制 ASCII："38 38 35 33"
     // 解码为 "8853"，是 "3588" 的字节反转，而非 "rk3588" 字面量，
-    // 因此不能只靠 soc 字段兜底匹配（见 builder/flash.py _identity_corpus）。
+    // 因此不能只靠 soc 字段兜底匹配（见 builder/flash/strategy.py _identity_corpus）。
     chip_patterns: ['rk\\s*3588', '\\b3588\\b', '\\b8853\\b'],
   },
   rkbin+: {

@@ -166,7 +166,7 @@ _PLATFORM_IMPORT_RE = re.compile(
     r"(?:from|import)\s+builder\.platforms\.([A-Za-z_][A-Za-z0-9_]*)")
 
 # 与任何组件产物都无关的顶层配置键：CLI 注入的输出级别、并行度，以及只被
-# builder/flash.py 消费的刷写身份（它们决定 flash-config.json，不进任何组件
+# builder/flash/generate.py 消费的刷写身份（它们决定 flash-config.json，不进任何组件
 # 产物）。
 CONFIG_IRRELEVANT_ALWAYS: frozenset[str] = frozenset({
     "verbose", "quiet", "jobs",

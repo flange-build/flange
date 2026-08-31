@@ -1,7 +1,7 @@
 # platform-abstraction Specification
 
 ## Purpose
-flange 的平台抽象层契约：`builder/config/registry.py` 自动发现 `components/platform/*/config.jsonnet` 与 `components/platform/*/*/config.jsonnet`；`builder/engine.py` 通过 `config["platform"]` 动态 import `builder.platforms.<platform>` 模块获取 ARTIFACT_NAMES 与 `create_builder`；`builder/flash.py` 的 `FlashStrategy` 接口驱动 pre_flash 配置生成，避免引擎/配置生成层出现平台硬编码分支。
+flange 的平台抽象层契约：`builder/config/registry.py` 自动发现 `components/platform/*/config.jsonnet` 与 `components/platform/*/*/config.jsonnet`；`builder/engine.py` 通过 `config["platform"]` 动态 import `builder.platforms.<platform>` 模块获取 ARTIFACT_NAMES 与 `create_builder`；`builder/flash/plan.py` 的 `FlashPlan` 接口驱动 pre_flash 配置生成（构建期），`builder/flash/strategy.py` 的 `FlashStrategy` 驱动宿主机刷写，避免引擎/配置生成层出现平台硬编码分支。
 ## Requirements
 ### Requirement: 配置注册表自动发现平台
 

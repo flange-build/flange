@@ -7,7 +7,7 @@ Amlogic 平台 USB Burning 刷写契约。`AmlogicFlashStrategy` 在 pre_flash �
 
 ### Requirement: AmlogicFlashStrategy 注册到 FlashStrategy 工厂
 
-`builder/flash.py` 必须（SHALL）实现 `AmlogicFlashStrategy(FlashStrategy)` 类并把它注册到 `_FLASH_STRATEGIES["amlogic"]`，使 `get_flash_strategy("amlogic")` 返回该策略实例。
+`builder/flash/strategy.py` 必须（SHALL）实现 `AmlogicFlashStrategy(FlashStrategy)` 类并把它注册到 `_FLASH_STRATEGIES["amlogic"]`，使 `get_flash_strategy("amlogic")` 返回该策略实例。
 
 #### Scenario: amlogic 平台获得正确的 flash 策略
 

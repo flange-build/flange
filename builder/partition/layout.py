@@ -9,7 +9,7 @@
     直接 ValueError
   - `builder/platforms/qualcommqcs6490/boot.py`：`int(e["size"],0)*512//MiB`
     —— 同样的缺陷，另一种写法
-  - `builder/flash.py`：`int(part.size, 0)` 外加一个 `remaining` 特判
+  - `builder/flash/strategy.py`：`int(part.size, 0)` 外加一个 `remaining` 特判
 
 同名的 `_partition_size_mb` 在 4 个文件里各有一份，函数体已经漂移。分区表是
 "镜像怎么装配"和"设备怎么刷写"两侧共同的契约 —— 两侧算出不同的偏移，结果是
