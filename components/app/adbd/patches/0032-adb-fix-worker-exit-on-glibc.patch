@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@localhost>
+Date: Mon, 31 Aug 2026 12:00:00 +0800
+Subject: [PATCH] fix(adbd): 显式等待 USB worker 退出以恢复热插拔
+
+AOSP StopWorker 通过 pthread_kill(worker, 0) 返回 ESRCH 判断退出。
+当前 glibc 对已退出但尚未 join 的线程仍返回 0，monitor 因此永久循环，
+主线程等待 monitor，USB open 线程等待 connection 析构，重插后只剩 offline。
+
+复用已有 libbase ScopeGuard，在 worker 所有返回路径设置完成标记；
+保留 SIGUSR1 中断阻塞 AIO（异步输入输出），随后正常 join 并重新打开 FunctionFS。
+
+上游：standalone-linux-adbd v36.0.1-linux.2
+ADB 源码：78f769e0904c21771cccf6e4e7b239b21800e189（应用上游补丁后）
+glibc 行为依据：https://sourceware.org/pipermail/glibc-cvs/2021q3/074935.html
+---
+diff --git a/daemon/usb.cpp b/daemon/usb.cpp
+--- a/daemon/usb.cpp
++++ b/daemon/usb.cpp
+@@ -42,6 +42,7 @@
+
+ #include <android-base/logging.h>
+ #include <android-base/macros.h>
++#include <android-base/scopeguard.h>
+ #include <android-base/thread_annotations.h>
+
+ #if defined(__ANDROID__)
+@@ -408,6 +409,7 @@
+         CHECK(!worker_started_);
+         worker_started_ = true;
+         worker_thread_ = std::thread([this]() {
++            auto finished = android::base::make_scope_guard([this]() { worker_finished_ = true; });
+             adb_thread_setname("UsbFfs-worker");
+             VLOG(USB) << "UsbFfs-worker thread spawned";
+
+@@ -441,7 +443,8 @@
+         }
+
+         pthread_t worker_thread_handle = worker_thread_.native_handle();
+-        while (true) {
++        // glibc 对已退出但未 join 的线程仍返回 0，必须显式等待 worker 完成。
++        while (!worker_finished_) {
+             int rc = pthread_kill(worker_thread_handle, kInterruptionSignal);
+             if (rc != 0) {
+                 LOG(ERROR) << "failed to send interruption signal to worker: " << strerror(rc);
+@@ -449,15 +452,6 @@
+             }
+
+             std::this_thread::sleep_for(100ms);
+-
+-            rc = pthread_kill(worker_thread_handle, 0);
+-            if (rc == 0) {
+-                continue;
+-            } else if (rc == ESRCH) {
+-                break;
+-            } else {
+-                LOG(ERROR) << "failed to send interruption signal to worker: " << strerror(rc);
+-            }
+         }
+
+         worker_thread_.join();
+@@ -691,6 +685,7 @@
+     std::thread monitor_thread_;
+
+     bool worker_started_;
++    std::atomic<bool> worker_finished_ = false;
+     std::thread worker_thread_;
+
+     std::atomic<bool> stopped_;
