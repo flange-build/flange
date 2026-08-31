@@ -413,26 +413,34 @@ class RootfsBuilder(ComponentBuilder):
     def _ensure_rootfs_fits_image(self, rootfs_dir: Path, image_size_mb: int):
         """构建 ext4 前检查 rootfs 内容是否能放入初始镜像。
 
-        使用 du 统计目录占用，额外保留 20%，用于 ext4 元数据（inode 表、
-        journal）与默认 5% 保留块；避免 mke2fs 在最后阶段才因空间不足失败。
+        门禁只做一件事：**预测 mke2fs 会不会因空间不足失败**，好让报错说人话
+        而不是抛 mke2fs 的晦涩输出。它不承担"运行期该留多少余量"的策略 ——
+        那没有公认阈值，且会在能正常工作的配置上误报。
 
-        保留量还有个下限，防止 du 统计偏小时门禁形同虚设。但下限必须随镜像
-        尺寸缩放：固定 128MiB 是按多 GB 的 rootfs 定的，套到 64MB 的 recovery
-        分区上，门禁在数学上永远不可能通过 —— 这正是 recovery 此前整段抄一份
-        编排、绕开这个门禁所掩盖的问题。
+        保留量按实测的 ext4 开销定：rock5b 的 recovery 实测 du 449MB 的内容
+        做进 512MiB 镜像后占 461MB，开销约 12MB（2.7%）—— 主要是 journal 与
+        inode 表。取 8% 是它的约 3 倍，下限 32MiB 覆盖小镜像的固定 journal
+        开销。
+
+        这里踩过一次：初版按 rootfs 的经验取 20% 且下限固定 128MiB，直接把
+        rock5b 的 recovery 拦下了（要求 577MB > 分区 512MB），而同样内容用
+        旧代码构建出的镜像是有效 ext4、还剩 75MB。20% 是按 rootfs 定的，而
+        rootfs 首启会 growpart 扩容、本来就不需要初始余量；recovery 是固定
+        尺寸的救援分区，刻意装满才是常态。
         """
         result = self.docker.run(
             ["du", "-sm", str(rootfs_dir)],
             capture=True,
         )
         used_mb = int(result.stdout.split()[0])
-        reserve_mb = max(math.ceil(used_mb * 0.2), min(128, image_size_mb // 4))
+        reserve_mb = max(math.ceil(used_mb * 0.08), 32)
         required_mb = used_mb + reserve_mb
         if required_mb > image_size_mb:
             raise BuildError(
-                f"{self.component} 内容约 {used_mb}MB，按保留空间需要至少 "
-                f"{required_mb}MB；当前 image_size 仅 {image_size_mb}MB，"
-                f"请增大 {self.component} 分区 image_size。"
+                f"{self.component} 内容约 {used_mb}MB，算上 ext4 元数据开销"
+                f"需要至少 {required_mb}MB；当前 image_size 仅 "
+                f"{image_size_mb}MB，请增大 {self.component} 分区 image_size "
+                f"或减少装入的内容。"
             )
 
     def _component_config(self, config: dict) -> dict:

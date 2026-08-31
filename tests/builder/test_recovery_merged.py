@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from builder.docker import BuildError
 from builder.recovery import RecoveryBuilder, build_recovery_config
 from builder.rootfs import RootfsBuilder
 
@@ -99,28 +100,36 @@ def test_recovery分区的image_size生效():
 # 漂移 3：容量门禁
 # ---------------------------------------------------------------------------
 
-def test_容量门禁的保留下限随镜像缩放(tmp_path: Path):
-    """固定 128MiB 下限对 64MB 的 recovery 分区数学上永远不可能通过。
+def test_门禁按实测ext4开销放行真实的recovery(tmp_path: Path):
+    """rock5b 的真实数值，取自实机构建。
 
-    这正是 recovery 此前绕开门禁所掩盖的问题 —— 直接照搬会让 recovery
-    永远构建失败。
+    du 449MB 的内容做进 512MiB 镜像后 ext4 实占 461MB（开销 2.7%），剩
+    75MB —— 这是一个能正常工作的配置，门禁必须放行。
+
+    初版按 rootfs 的经验取 20% 且下限固定 128MiB，要求 577MB > 512MB，
+    把它拦下了。门禁只预测 mke2fs 会不会失败，不承担运行期余量策略。
     """
     builder = _builder(tmp_path)
+    builder.docker.run.return_value = MagicMock(stdout="449\t/x")
+    builder._ensure_rootfs_fits_image(tmp_path, 512)
+
+
+def test_门禁在小镜像上依然有效(tmp_path: Path):
+    """下限 32MiB 覆盖小镜像的固定 journal 开销，且不至于永远不可能通过。"""
+    builder = _builder(tmp_path)
     builder.docker.run.return_value = MagicMock(stdout="24\t/x")
+    builder._ensure_rootfs_fits_image(tmp_path, 64)      # 24+32=56 ≤ 64
 
-    # 24MB 内容 + 保留(max(20%, min(128, 64//4))=16) = 40MB ≤ 64MB
-    builder._ensure_rootfs_fits_image(tmp_path, 64)
-
-    # 大镜像的下限维持 128MB 不变
-    builder.docker.run.return_value = MagicMock(stdout="512\t/x")
-    builder._ensure_rootfs_fits_image(tmp_path, 2048)
+    builder.docker.run.return_value = MagicMock(stdout="40\t/x")
+    with pytest.raises(BuildError):
+        builder._ensure_rootfs_fits_image(tmp_path, 64)  # 40+32=72 > 64
 
 
 def test_装不下时报的是flange的话而不是mke2fs的话(tmp_path: Path):
     from builder.docker import BuildError
 
     builder = _builder(tmp_path)
-    builder.docker.run.return_value = MagicMock(stdout="60\t/x")
+    builder.docker.run.return_value = MagicMock(stdout="80\t/x")
     with pytest.raises(BuildError) as exc:
         builder._ensure_rootfs_fits_image(tmp_path, 64)
     assert "recovery" in str(exc.value), "报错要说清是哪个组件装不下"
