@@ -74,6 +74,12 @@ Wayland session launcher 存在后，为 `default_user` 写入 AccountsService �
 存在远程显示组件，用户从 HDMI 上的 GDM 登录都进入标准 GNOME session。通用 desktop package 不引用或
 覆盖任何具体显示后端的 service。
 
+### 6. 常亮策略使用 GNOME 默认值与 systemd 原生配置
+
+同一 GSettings override 将 `idle-delay` 设为 0、关闭自动锁屏，并把交流电和电池供电下的空闲动作设为
+`nothing`。这些是可由用户覆盖的 GNOME 默认值。vendor App 同时安装 `sleep.conf.d` drop-in，将
+`AllowSuspend` 与 `AllowHibernation` 设为 `no`；systemd 会连带禁用混合休眠和先挂起后冬眠，无需额外服务。
+
 ## Risks / Trade-offs
 
 - [首次启动无网络时 Chromium 尚不可用] → unit 保持启用，后续重启会再次尝试；系统其余桌面功能不受影响。
@@ -82,6 +88,7 @@ Wayland session launcher 存在后，为 `default_user` 写入 AccountsService �
 - [GNOME 在部分板上缺少 GPU 加速] → 本变更只保证软件与配置，硬件适配由各板现有内核/Mesa 能力决定。
 - [RDP 凭据必须以明文传给 grdctl] → 仅在 root-only 首启文件中短暂保存，成功写入 GNOME Remote Desktop 凭据存储后立即删除；源配置本身已使用同一明文密码创建系统用户。
 - [RDP 使用设备本地自签名证书] → 首次连接需要客户端确认指纹；若产品需要 PKI 证书，可在板级后续覆盖证书交付策略。
+- [常亮增加功耗] → 仅 desktop product 启用；需要节能的产品不选择 `ubuntu-desktop` package。
 
 ## Migration Plan
 

@@ -145,6 +145,9 @@ def _atomic_write_text(path: Path, content: str) -> None:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
+        # mkstemp 默认权限为 0600（仅创建者可读）；构建在 Docker 容器内以 root
+        # 运行，若不放宽权限，宿主机非 root 用户将无法读取该产物。
+        os.chmod(temporary_path, 0o644)
         temporary_path.replace(path)
     finally:
         if temporary_path.exists():

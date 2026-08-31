@@ -16,6 +16,7 @@
 - Chromium 在 Ubuntu 24.04 中通过 Snap 分发；镜像安装官方过渡 deb，并在首次联网启动时自动安装 `chromium` snap。
 - Ubuntu App Center 与 Thunderbird 同样在首次联网启动时安装官方 Snap。
 - GNOME Remote Login 首次启动时生成设备本地 TLS 证书并配置给系统级 RDP daemon，确保 3389 端口实际监听。
+- desktop 默认关闭 GNOME 空闲黑屏、锁屏与自动休眠，并禁止 systemd 进入挂起或冬眠。
 
 ## Capabilities
 

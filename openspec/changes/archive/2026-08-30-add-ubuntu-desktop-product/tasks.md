@@ -33,3 +33,8 @@
 - [x] 5.7 移除显示后端耦合，并通过 AccountsService 为 default_user 选择标准 GNOME 会话
 - [x] 5.8 以 gnome-core 替代 ubuntu-desktop
 - [x] 5.9 desktop 启用 install_recommends，安装 GNOME 元包维护的推荐组件
+
+## 6. desktop 默认常亮
+
+- [x] 6.1 通过 GNOME GSettings 默认值关闭空闲黑屏、锁屏与自动休眠，并通过 systemd 配置禁止系统休眠
+- [x] 6.2 更新项目规格、OpenSpec 与 package 测试，运行相关测试和严格校验

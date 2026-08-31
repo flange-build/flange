@@ -136,3 +136,19 @@ NOT 锁定用户设置，也 MUST NOT 通过具体显示后端的 service overri
 - **AND** AccountsService 中该用户的 `XSession=gnome`
 - **AND** 登录不依赖任何远程显示服务
 
+### Requirement: desktop product SHALL 默认保持常亮
+
+desktop product SHALL 通过 GSettings 默认值将 GNOME 空闲超时设为 0、关闭自动锁屏，并将交流电和电池供电
+下的空闲动作设为 `nothing`。`flange-ubuntu-desktop-config` App SHALL 安装 `systemd-sleep.conf` drop-in，
+设置 `AllowSuspend=no` 与 `AllowHibernation=no`，从而同时禁止挂起、冬眠、混合休眠和先挂起后冬眠。
+
+#### Scenario: 新用户空闲时保持桌面常亮
+
+- **WHEN** 新用户或 GDM 会话没有写入个人电源管理设置
+- **THEN** GNOME 不因空闲关闭屏幕或自动锁屏
+- **AND** 交流电和电池供电下均不触发自动休眠
+
+#### Scenario: 系统拒绝休眠请求
+
+- **WHEN** desktop rootfs 中的会话请求任一 systemd 休眠模式
+- **THEN** systemd 根据 `99-flange-no-sleep.conf` 拒绝进入该模式
