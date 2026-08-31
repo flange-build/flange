@@ -100,5 +100,67 @@
 - [x] 10.16 治理闸门 `tests/openspec/`：未归档变更 / 废弃构建系统 / Purpose 占位
 - [x] 10.17 构建逻辑指纹按 import 闭包收窄到 kernel + bootloader（待决 #5）
 - [x] 10.18 缓存哈希机器无关化：config 切片里的绝对 `local_path` 归一化（待决 #6）
-- [ ] 9.7 在目标板跑一次完整构建，实测各场景耗时并回填到本变更
-- [ ] 10.19 四块代表板实机启动验证（rock5b / vim3l / q6a / atk-rk3506b）—— 由维护者执行
+- [x] 9.7 在目标板跑完整构建，实测各场景耗时（见下方「实测数据」）
+- [x] 10.19a rock5b 实机验证：build + flash 通过（2026-08-31）
+- [ ] 10.19b 其余三块代表板实机验证（vim3l / q6a / atk-rk3506b）—— 由维护者执行
+
+## 11. 实测数据（radxa-rock5b / desktop / debug，2026-08-31）
+
+宿主机 macOS + Docker Desktop，源码在 `/Volumes/bsp`（外置卷）。
+
+### 场景一：换内核分支后的全量构建
+
+| 组件 | 耗时 | 占比 |
+|---|---|---|
+| kernel | 2338.4s | 74% |
+| app | 561.4s | 18% |
+| bootloader | 175.4s | 6% |
+| rootfs | 41.4s | 1% |
+| device-tree-overlay | 5.5s | 0% |
+| boot | 0.5s | 0% |
+| **合计** | **3142.0s** | |
+
+kernel 是全量编译：切到 `radxa-rockchip-kernel` 分支触发
+`git reset --hard`（`Updated 83173 paths from the index`）。
+
+### 场景二：只改 `builder/rootfs.py`（构建逻辑收窄的直接收益）
+
+| 组件 | 结果 | 耗时 |
+|---|---|---|
+| kernel | **⊘ 跳过** | 0.1s |
+| bootloader | **⊘ 跳过** | 0.1s |
+| device-tree-overlay | 构建 | 6.0s |
+| boot | 构建 | 0.5s |
+| app | 逐 App 全命中 | 0.1s |
+| rootfs | 构建 | 42.3s |
+| recovery | 构建 | 5.9s |
+| image | 构建 | 20.7s |
+| **合计** | | **91.0s** |
+
+收窄前同一改动会让 kernel（2338s）与 bootloader（175s）一并重编 ——
+**2513s → 6.5s**（dto + boot 是非叶子组件，按设计不收窄）。
+
+### 场景三：只改一个 App（adbd 源码）
+
+| 组件 | 结果 | 耗时 |
+|---|---|---|
+| kernel / dto / boot / bootloader / amp | ⊘ 跳过 | 各 0.1s |
+| app | 只重建 adbd，其余命中 | 0.5s |
+| rootfs / recovery / image | 级联重建 | 82.4 / 6.4 / 31.6s |
+| **合计** | | **139.0s** |
+
+app 组件 0.5s 说明 App 粒度生效：10 个 external App + 仓库内 App 中只有
+adbd 真正重建。下游三个组件的级联重建是正确行为（deb 内容变了）。
+
+### 场景四：无任何改动重跑（哈希稳定性）
+
+9 个组件**全部跳过**，合计 **16.2s**（其中大部分是配置求值与容器启动）。
+没有虚假重建 —— 说明哈希输入里没有残留时间戳、绝对路径一类的不稳定项。
+
+### 产物核验
+
+- `raw.img` 4.58 GiB；GPT 三个分区与 `flash-config.json` 逐项一致
+  （boot `0x8000`/64MiB、recovery `0x28000`/512MiB、rootfs `0x128000`/4GiB）
+- `raw` 类型的 idbloader / uboot 未进 GPT，只被 dd
+- rootfs 分区 PARTUUID 已钉定
+- `rootfs/packages.manifest` 1212 个包、`recovery/packages.manifest` 134 个包
