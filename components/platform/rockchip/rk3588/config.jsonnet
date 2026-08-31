@@ -65,7 +65,7 @@ local common = import 'config/rockchip.libsonnet';
       // canonical source reference 直接复用 rockchip-kernel checkout 的
       // drivers/gpu/arm/bifrost 子目录，不重复 clone。
       name: 'mali-csf',
-      source: { name: 'radxa-rockchip-kernel', subpath: 'drivers/gpu/arm/bifrost' },
+      source: { name: 'rockchip-kernel', subpath: 'drivers/gpu/arm/bifrost' },
       files: ['mali_csffw.bin'],
       dest: 'lib/firmware/arm/mali/arch10.8',
     }],

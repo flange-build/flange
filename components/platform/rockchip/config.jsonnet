@@ -27,10 +27,6 @@
       url: 'https://github.com/flange-build/kernel.git',
       branch: 'linux-6.1-stan-rkr5.1',
     },
-    'radxa-rockchip-kernel': {
-      url: 'ssh://git@github.com/radxa/kernel.git',
-      branch: 'linux-6.1-stan-rkr5.1',
-    },
   },
   rkbin: { source: { name: 'rkbin' } },
   rootfs+: {
