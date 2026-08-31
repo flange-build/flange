@@ -30,12 +30,52 @@ fi
 export FLANGE_DIR
 
 # --- Python venv ---
+#
+# 依赖校验必须**每次 source 都做**，不能只在创建 venv 时做一次：
+#   - 首次 pip install 失败（jsonnet 要从源码编译，最容易栽在这一步）后，
+#     .venv 目录已经存在，再 source 永远不会补装，且症状是 import 报错而
+#     不是"依赖没装"
+#   - pyproject.toml 新增依赖后，老 venv 同样不会跟进
+# 校验本身只是一次 import 探测（毫秒级），不影响 source 速度。
 _flange_venv="${FLANGE_DIR}/.venv"
+_flange_dep_stamp="${_flange_venv}/.flange-deps-installed"
+
+# 依赖是否就绪：探针 import 全部核心依赖，且 pyproject.toml 未在上次安装后改动。
+_flange_deps_ready() {
+    [[ -f "$_flange_dep_stamp" ]] || return 1
+    [[ "${FLANGE_DIR}/pyproject.toml" -nt "$_flange_dep_stamp" ]] && return 1
+    "$_flange_venv/bin/python3" -c "import _jsonnet, yaml" 2>/dev/null
+}
+
+_flange_install_deps() {
+    echo "[INFO] 安装 Python 依赖..."
+    if ! "$_flange_venv/bin/pip" install -e "${FLANGE_DIR}[dev]" --quiet; then
+        echo "[ERROR] Python 依赖安装失败。" >&2
+        echo "        jsonnet 需从源码编译，请确认 C++ 工具链可用：" >&2
+        echo "          macOS         xcode-select --install" >&2
+        echo "          Debian/Ubuntu sudo apt install build-essential python3-dev" >&2
+        echo "        修好后重新 source envsetup.sh，或手动执行：" >&2
+        echo "          ${_flange_venv}/bin/pip install -e '${FLANGE_DIR}[dev]'" >&2
+        return 1
+    fi
+    # 只有真正装成功才落 stamp —— 失败时留空，下次 source 会重试
+    : > "$_flange_dep_stamp"
+    echo "[INFO] 依赖安装完成"
+}
+
 if [[ ! -d "$_flange_venv" ]]; then
     echo "[INFO] 创建 Python 虚拟环境: ${_flange_venv}"
-    python3 -m venv "$_flange_venv"
-    "$_flange_venv/bin/pip" install -e "${FLANGE_DIR}[dev]" --quiet
-    echo "[INFO] 依赖安装完成"
+    if ! python3 -m venv "$_flange_venv"; then
+        echo "[ERROR] 创建虚拟环境失败: ${_flange_venv}" >&2
+    fi
+fi
+if [[ ! -x "$_flange_venv/bin/python3" ]]; then
+    # venv 目录在但 python 不可执行 —— 静默跳过等于把问题藏起来，
+    # 症状会变成后续每条命令都 command not found。
+    echo "[ERROR] 虚拟环境不完整（缺 bin/python3）: ${_flange_venv}" >&2
+    echo "        删除后重新 source 可重建: rm -rf '${_flange_venv}'" >&2
+elif ! _flange_deps_ready; then
+    _flange_install_deps
 fi
 # shellcheck disable=SC1091
 source "$_flange_venv/bin/activate"
