@@ -221,6 +221,32 @@ lunch() {
     local arg="$1"
     local board="" product="" variant=""
 
+    if [[ "$arg" == "-h" ]] || [[ "$arg" == "--help" ]]; then
+        echo "  用法: lunch [target|选项]"
+        echo ""
+        echo "  不带参数时打开层级选择界面：按 平台 → SoC → 板 → product →"
+        echo "  variant 浏览，停在末级目标上会显示它的完整配置表。"
+        echo ""
+        echo "    ↑↓ 移动    ←→ 折叠/展开    Enter 选中    / 过滤    q 取消"
+        echo ""
+        echo "  参数:"
+        echo "    <board>-<product>-<variant>   直接选定目标，不进界面"
+        echo "    --product=<name>              仅替换当前目标的 product"
+        echo "    --variant=<name>              仅替换当前目标的 variant"
+        echo "    --no-tui                      用编号列表代替界面"
+        echo "    -h, --help                    显示此帮助"
+        echo ""
+        echo "  非 TTY 环境（管道、CI）自动回退到编号列表。"
+        return 0
+    fi
+
+    # --no-tui 只是交互形式的开关，不是目标名 —— 必须在"直接指定目标"
+    # 分支之前摘掉，否则会被当成 board 名去解析。
+    if [[ "$arg" == "--no-tui" ]]; then
+        arg=""
+        local _lunch_no_tui=1
+    fi
+
     # 解析 --variant=X / --product=X 部分覆盖
     if [[ "$arg" == --variant=* ]]; then
         if [[ -z "$FLANGE_BOARD" ]]; then
@@ -313,7 +339,44 @@ for t in get_valid_targets():
         return 0
     fi
 
-    # 无参数: 交互式菜单
+    # 无参数: 优先层级 TUI，非 TTY 或 --no-tui 回退编号列表
+    if [[ -z "${_lunch_no_tui:-}" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        local _lunch_out
+        _lunch_out=$(mktemp "${TMPDIR:-/tmp}/flange-lunch.XXXXXX") || return 1
+        # TUI 直接占用终端；选择结果经文件回传 —— 子进程改不了父 shell 的
+        # 环境变量，而 $(...) 捕获会把 curses 的输出一并吞掉。
+        (cd "$FLANGE_DIR" && python3 -m builder.lunch_tui \
+            --current "${FLANGE_BOARD:+${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}}" \
+            --out "$_lunch_out")
+        local _lunch_rc=$?
+        local selected=""
+        [[ -s "$_lunch_out" ]] && selected=$(<"$_lunch_out")
+        rm -f "$_lunch_out"
+        if [[ $_lunch_rc -eq 1 ]] || [[ -z "$selected" ]]; then
+            _flange_info "已取消，当前目标不变"
+            return 0
+        fi
+        if [[ $_lunch_rc -ne 0 ]]; then
+            _flange_warn "选择界面不可用，回退到列表模式"
+        else
+            local parsed
+            parsed=$(_flange_python "
+from builder.config.query import parse_target
+import json
+print(json.dumps(parse_target('$selected')))
+") || return 1
+            board=$(_flange_python "import json; d=json.loads('$parsed'); print(d['board'])")
+            product=$(_flange_python "import json; d=json.loads('$parsed'); print(d['product'])")
+            variant=$(_flange_python "import json; d=json.loads('$parsed'); print(d['variant'])")
+            export FLANGE_BOARD="$board"
+            export FLANGE_PRODUCT="$product"
+            export FLANGE_VARIANT="$variant"
+            _flange_save_config || return 1
+            _flange_info "已选择: ${FLANGE_BOARD}-${FLANGE_PRODUCT}-${FLANGE_VARIANT}"
+            return 0
+        fi
+    fi
+
     local targets_raw
     targets_raw=$(_flange_python "
 from builder.config.query import get_valid_targets

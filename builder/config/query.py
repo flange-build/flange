@@ -83,3 +83,110 @@ def parse_target(
                     }
 
     raise ValueError(f"无法解析目标：{target}")
+
+
+# ---------------------------------------------------------------------------
+# 层级目标树
+# ---------------------------------------------------------------------------
+
+#: 树的层级顺序。末级即一个完整的 <board>-<product>-<variant> 目标。
+TREE_LEVELS = ("platform", "soc", "board", "product", "variant")
+
+
+class TargetNode:
+    """目标树上的一个节点。
+
+    树只由板级身份投影构造（`discover_boards()`），**不触发**完整配置求值 ——
+    求值单个目标约 1.3 秒，挂在导航上会让每次按键都卡住。配置表另行按需加载。
+    """
+
+    __slots__ = ("name", "level", "children", "target", "parent")
+
+    def __init__(self, name: str, level: str, parent: "TargetNode | None" = None):
+        self.name = name
+        #: 该节点所处的层级名，取自 TREE_LEVELS；根节点为 ""。
+        self.level = level
+        self.children: list["TargetNode"] = []
+        #: 仅末级节点非空：完整的 <board>-<product>-<variant>。
+        self.target: str | None = None
+        self.parent = parent
+
+    @property
+    def is_leaf(self) -> bool:
+        return self.target is not None
+
+    def child(self, name: str) -> "TargetNode | None":
+        for node in self.children:
+            if node.name == name:
+                return node
+        return None
+
+    def leaves(self) -> list["TargetNode"]:
+        if self.is_leaf:
+            return [self]
+        found: list["TargetNode"] = []
+        for node in self.children:
+            found.extend(node.leaves())
+        return found
+
+    def path(self) -> list[str]:
+        """从根到本节点的名字序列（不含根）。"""
+        names: list[str] = []
+        node: "TargetNode | None" = self
+        while node is not None and node.level:
+            names.append(node.name)
+            node = node.parent
+        return list(reversed(names))
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<TargetNode {self.level}:{self.name} children={len(self.children)}>"
+
+
+def build_target_tree(
+    boards: dict[str, dict] | None = None,
+    project_root: Path | None = None,
+) -> TargetNode:
+    """构造 平台 → SoC → 板 → product → variant 的目标树。
+
+    每一层按名字排序，使界面顺序稳定、可预期。
+    """
+    if boards is None:
+        boards = discover_boards(project_root)
+
+    root = TargetNode("", "", None)
+    for board_name in sorted(boards):
+        identity = boards[board_name]
+        platform = identity.get("platform") or "未知平台"
+        soc = identity.get("soc") or "未知 SoC"
+        products = identity.get("products") or ["default"]
+        variants = identity.get("variants") or ["release"]
+
+        node = root
+        for level, name in (("platform", platform), ("soc", soc),
+                            ("board", board_name)):
+            existing = node.child(name)
+            if existing is None:
+                existing = TargetNode(name, level, node)
+                node.children.append(existing)
+            node = existing
+
+        for product in products:
+            product_node = node.child(product)
+            if product_node is None:
+                product_node = TargetNode(product, "product", node)
+                node.children.append(product_node)
+            for variant in variants:
+                if product_node.child(variant) is not None:
+                    continue
+                leaf = TargetNode(variant, "variant", product_node)
+                leaf.target = f"{board_name}-{product}-{variant}"
+                product_node.children.append(leaf)
+
+    _sort_tree(root)
+    return root
+
+
+def _sort_tree(node: TargetNode) -> None:
+    node.children.sort(key=lambda item: item.name)
+    for child in node.children:
+        _sort_tree(child)

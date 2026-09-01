@@ -133,3 +133,50 @@ def test_venv损坏时明确报错而不是静默跳过(script: str):
     broken = script[script.index('! -x "$_flange_venv/bin/python3"'):]
     assert "ERROR" in broken[:400], "venv 损坏时没有报错"
     assert "rm -rf" in broken[:600], "没有告诉用户怎么重建"
+
+
+# ---------------------------------------------------------------------------
+# lunch 的交互形式
+# ---------------------------------------------------------------------------
+
+def _lunch_body(script: str) -> str:
+    start = script.index("\nlunch() {")
+    end = script.index("\n}\n", start)
+    return script[start:end]
+
+
+def test_lunch无参数时走层级界面(script: str):
+    body = _lunch_body(script)
+    assert "builder.lunch_tui" in body, "lunch 没有接入层级选择界面"
+
+
+def test_lunch在非TTY时回退编号列表(script: str):
+    """管道、CI 里没有终端，curses 起不来 —— 必须还能选目标。"""
+    body = _lunch_body(script)
+    assert "[[ -t 0 ]]" in body and "[[ -t 1 ]]" in body, (
+        "没有检查是否为 TTY，非交互环境会直接失败")
+    assert "可用的目标配置" in body, "回退路径（编号列表）不见了"
+
+
+def test_no_tui在解析目标之前被摘掉(script: str):
+    """否则 `lunch --no-tui` 会被当成 board 名去解析。"""
+    body = _lunch_body(script)
+    no_tui_at = body.index('"--no-tui"')
+    parse_at = body.index("parse_target")
+    assert no_tui_at < parse_at
+
+
+def test_界面结果经文件回传而不是stdout(script: str):
+    """子进程改不了父 shell 的环境变量，而 $(...) 捕获会吞掉 curses 的绘制。"""
+    body = _lunch_body(script)
+    assert "--out" in body and "mktemp" in body
+
+
+def test_取消时不改变当前目标(script: str):
+    body = _lunch_body(script)
+    assert "已取消，当前目标不变" in body
+
+
+def test_lunch有帮助(script: str):
+    body = _lunch_body(script)
+    assert '"--help"' in body and "用法: lunch" in body

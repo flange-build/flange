@@ -17,19 +17,28 @@
 - **THEN** `FLANGE_DIR` 正确指向 envsetup.sh 所在目录
 
 ### Requirement: lunch 交互式板级选择
-`lunch` 函数 SHALL 自动扫描 `board/*/board.bzl` 列出可用板子，展示编号菜单让用户选择。选择后设置 `FLANGE_BOARD` 环境变量。
+
+`lunch` SHALL 从 `components/board/*/config.jsonnet` 自动发现可用板子，
+枚举出 `<board>-<product>-<variant>` 目标供选择。选定后 SHALL 设置
+`FLANGE_BOARD` / `FLANGE_PRODUCT` / `FLANGE_VARIANT` 三个环境变量，并写入
+`.flange/current_config`。
 
 #### Scenario: 交互式选择
 - **WHEN** 执行 `lunch`（无参数）
-- **THEN** 显示编号列表（如 `1. radxa-zero3w`），用户输入编号后设置 `FLANGE_BOARD`
+- **THEN** 展示可选目标供用户选定
+- **AND** 三个环境变量与状态文件一并更新
 
-#### Scenario: 直接指定板子
-- **WHEN** 执行 `lunch radxa-zero3w`
-- **THEN** 直接设置 `FLANGE_BOARD=radxa-zero3w`，不显示菜单
+#### Scenario: 直接指定完整目标
+- **WHEN** 执行 `lunch radxa-rock5b-desktop-debug`
+- **THEN** 直接设置三个变量，不进入交互
 
-#### Scenario: 指定无效板子
+#### Scenario: 仅替换 product 或 variant
+- **WHEN** 已有当前目标时执行 `lunch --variant=release`
+- **THEN** 保留 board 与 product，只替换 variant
+
+#### Scenario: 指定无效目标
 - **WHEN** 执行 `lunch nonexistent-board`
-- **THEN** 输出错误信息提示板子不存在，列出可用选项
+- **THEN** 输出错误信息，并列出可用目标
 
 ### Requirement: 前置检查
 `flange` 命令 SHALL 在执行子命令前检查必要条件：`FLANGE_BOARD` 已设置、Docker daemon 在运行。

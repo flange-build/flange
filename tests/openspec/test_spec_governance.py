@@ -75,6 +75,11 @@ def test_任务全部完成的变更必须归档():
 #: 键是标记，值是"判断仓库是否真的在用它"的证据文件。
 ABANDONED_TOOLING = {
     "bazel": ("MODULE.bazel", "WORKSPACE", ".bazelversion"),
+    # `.bzl` / `board.bzl` 这类写法里不含 "bazel" 字样，上一条抓不到 ——
+    # `cli-envsetup` 的 lunch 要求就是这么活到现在的（它说扫描
+    # `board/*/board.bzl`，那是 Bazel 时代的路径）。
+    ".bzl": ("MODULE.bazel", "WORKSPACE", ".bazelversion"),
+    "starlark": ("MODULE.bazel", "WORKSPACE", ".bazelversion"),
 }
 
 #: 否定式引用是**允许**的：spec 明确要求"不得依赖 Bazel"是有效契约。
