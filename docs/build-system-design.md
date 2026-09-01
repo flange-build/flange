@@ -17,7 +17,7 @@ builder 暴露经过校验的 canonical JSON。
 │  配置层        rootfs → platform → SoC → board (Jsonnet 组合)    │
 │  构建层        builder/ → Docker 容器内 Python 直接调用系统命令   │
 │  产物层        target/<board>/<product>/<variant>/               │
-│  部署层        flash.sh (自动生成) → 平台刷写工具                 │
+│  部署层        flash-config.json → 宿主机刷写策略 → 平台工具      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -55,7 +55,7 @@ builder/
 │   ├── rootfs.py      RockchipRootfsBuilder
 │   └── image.py       RockchipImageBuilder
 ├── partition/         分区表中间格式 → 平台格式转换
-├── flash.py           flash.sh 自动生成
+├── flash/             刷写：构建期生成 flash-config.json + 宿主机执行
 ├── cache.py           内容哈希增量缓存
 ├── docker.py          Docker 容器执行
 ├── source.py          源码仓库管理
@@ -94,7 +94,7 @@ builder/
 
 ```
 kernel ─→ boot ─┐
-                 ├─→ image → collect → flash.sh
+                 ├─→ image → collect → flash-config.json
 bootloader ─────┘
 rootfs ─────────┘
 ```

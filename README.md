@@ -57,14 +57,28 @@ lunch --variant=release
 # 部分覆盖 product
 lunch --product=gateway
 
-# 交互式选择
+# 层级选择界面（无参数）
 lunch
-#   可用配置:
-#     1. neons-core3566-nanob-default-debug
-#     2. neons-core3566-nanob-default-release
-#     3. orangepi-cm4-default-debug
-#     ...
+
+# 用编号列表代替界面
+lunch --no-tui
 ```
+
+不带参数时打开层级选择界面：左侧按 **平台 → SoC → 板 → product → variant**
+浏览，停在末级目标上时右侧显示该目标的完整配置表（内核源、设备树、分区几何、
+rootfs、功能开关等）。打开时自动展开并定位到当前目标。
+
+```
+▾ ▣ rockchip                   │ radxa-rock5b-desktop-debug
+  ▾ ▸ rk3588                   │ ── 内核
+    ▾ ▪ radxa-rock5b           │   device_tree    rockchip/rk3588-rock-5b
+      ▾ · desktop              │ ── 存储与分区
+[        debug        ]        │     rootfs   ext4  off=0x128000  size=4G
+──────────────────────────────────────────────────────────────────
+↑↓ 移动  ←→ 折叠/展开  PgUp/PgDn 翻配置表  Enter 选中  / 过滤  q 取消
+```
+
+非 TTY 环境（管道、CI）自动回退到编号列表。
 
 配置选择后持久化到 `.flange/current_config`，下次 `source envsetup.sh` 自动恢复。
 

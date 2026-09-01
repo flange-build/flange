@@ -72,7 +72,7 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
 
 - 组件构建：在 Docker 容器内执行，构建引擎自动推断组件间依赖并基于内容哈希决定增量构建范围
 - 产物收集：构建完成后自动收集到 `.build/target/<board>/<product>/<variant>/`（根目录 `target` 软链接直达）
-- 组件刷写：在宿主机执行，执行自动生成的 flash.sh 调用平台对应的刷写工具
+- 组件刷写：在宿主机执行，读取构建期生成的 `flash-config.json` 并按平台策略调用刷写工具
 - 全量刷写：重写设备全部分区（分区表 + 所有组件镜像）
 
 ### 2.4 USB 线刷 Recovery
@@ -234,7 +234,9 @@ canonical JSON（规范化 JSON）交给 Python builder。
   AMP enable 和 rootfs package policy 属于 board/product，MUST NOT 固化在 SoC 层
 - 条件配置：使用 Jsonnet `if product == ...` / `if variant == ...`，不得把
   未求值的 product/variant 子树交给 builder
-- 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`
+- 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`；
+  无参数时进入层级选择界面（平台 → SoC → 板 → product → variant），末级目标展示其配置表，
+  非 TTY 环境回退编号列表
 - 配置解析：`resolve_config(board, product, variant)` 返回已校验的 canonical JSON dict
 - 新增板级支持只需创建 `components/board/<name>/config.jsonnet`，无需修改框架代码
 
@@ -246,7 +248,7 @@ canonical JSON（规范化 JSON）交给 Python builder。
 
 ### 6.4 构建与刷写约定
 - 构建命令：`flange build [component]`（component 可选：kernel、bootloader、rootfs，默认 image）
-- 刷写命令：`flange flash [component]`（执行自动生成的 `.build/target/.../flash.sh`）
+- 刷写命令：`flange flash [component]`（读取 `.build/target/.../flash-config.json`）
 - 增量构建：基于内容哈希（config + source commit + patches），由 `builder/cache.py` 管理
 - 产物目录：`.build/target/<board>/<product>/<variant>/`（根目录 `target` 软链接指向此）
 
@@ -325,13 +327,24 @@ flange/
 │   ├── source.py       #   源码仓库管理
 │   ├── cache.py        #   增量构建缓存（内容哈希）
 │   ├── chroot.py       #   ChrootContext（mount/umount 管理）
-│   ├── flash.py        #   flash.sh 自动生成
+│   ├── snapshot.py     #   Phase 1 base 快照存取与 LRU 回收
+│   ├── lunch_tui.py    #   lunch 的层级目标选择界面
+│   ├── flash/          #   刷写系统（构建期与宿主机执行期分离）
+│   │   ├── model.py    #     flash-config.json 的 schema（两侧共享）
+│   │   ├── plan.py     #     分区映射与 pre_flash 推导（构建期）
+│   │   ├── generate.py #     flash-config.json 生成（构建期）
+│   │   ├── spi.py      #     spi.img 合成（构建期）
+│   │   ├── strategy.py #     平台刷写策略（宿主机）
+│   │   └── execute.py  #     刷写执行与 CLI 入口（宿主机）
 │   ├── config/         #   配置子系统
 │   │   ├── jsonnet.py  #     Jsonnet 求值与固定层级组合
 │   │   ├── registry.py #     Jsonnet 配置注册表
-│   │   └── query.py    #     target 解析（给 CLI lunch 用）
+│   │   ├── query.py    #     target 解析与层级目标树（给 CLI lunch 用）
+│   │   └── summary.py  #     目标配置摘要表
 │   ├── partition/      #   分区表系统
 │   │   ├── __init__.py #     中间格式（PartitionTable/Partition）
+│   │   ├── layout.py   #     PartitionLayout：分区几何的单一事实源
+│   │   ├── size.py     #     分区大小解析（扇区数 / 容量后缀）
 │   │   └── rockchip.py #     Rockchip parameter.txt 转换
 │   └── platforms/      #   平台构建策略（代码）
 │       └── rockchip/
@@ -480,7 +493,7 @@ feat(kernel): 添加内核编译支持
 - 内核产出按 FINAL_CONFIG 路由：ARM64/extlinux 通常为 `Image`、精确目标 DTB、modules；
   ARM32/vendor FIT 通常为 `zImage`、精确目标 DTB、modules 与 FIT `boot.img`
 - 内核构建支持 out-of-tree 模块：通过 `kernel.oot_modules` 配置声明，在 `make modules` 后独立编译并统一安装到 rootfs；OOT 编译入口若是独立 git 仓库（如 vendor WiFi/BT 包），通过 `kernel.oot_sources` 声明源（每次 ensure 后路径作为 `{<name>_src}` 模板变量注入），仓库 git HEAD 入 kernel hash；安装末尾跑 `depmod -b` 重建 modules.{dep,alias,symbols}+`.bin` 索引，开机 PCI/USB hotplug 才能自动 load
-- flash.sh 由 `builder/flash.py` 自动生成
+- `flash-config.json` 由 `builder/flash/generate.py` 在构建期生成，宿主机侧由 `builder/flash/execute.py` 读取执行
 - 分区配置由 `builder/partition/` 从 config 自动转换
 - 块设备 GPT image 输出 `raw.img`；SPI NAND MUST 输出 parameter 与具名刷写 manifest，
   MUST NOT 生成或整片写入无法表达 OOB/ECC/坏块的 `raw.img`
@@ -499,14 +512,14 @@ feat(kernel): 添加内核编译支持
 - 支持单独刷写各组件到设备的特定分区
 - 刷写通过 `flange flash [component]` 执行（如 `flange flash kernel`）
 - 全量刷写：`flange flash`（重写分区表 + 所有分区）
-- flash.sh 由构建引擎自动生成，包含平台特有的刷写命令
+- `flash-config.json` 由构建引擎生成，声明各分区的镜像、偏移、大小与保护属性
 - 任何持久写入前必须完成本地产物 preflight；parameter 与 flash config 应使用摘要及
   name/offset/size 交叉校验。支持身份读取的平台还必须拒绝多设备，并核对 SoC/存储介质
 
 ### 12.3 平台适配
 - 每块板子的 `config.jsonnet` 声明所属 platform/SoC；平台层声明刷写工具
-- flash.sh 根据 FINAL_CONFIG 中的 `flash_tool` 字段自动选择刷写工具
-- 平台特有的刷写逻辑由 `builder/flash.py` 模板化生成
+- 刷写侧根据 FINAL_CONFIG 中的 `flash_tool` 字段选择刷写工具
+- 平台特有的刷写逻辑位于 `builder/flash/strategy.py`（宿主机执行期），分区映射与 pre_flash 推导位于 `builder/flash/plan.py`（构建期）
 
 ---
 

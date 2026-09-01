@@ -51,7 +51,8 @@ flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建�
 source envsetup.sh            # 加载 flange / lunch 函数（每个新 shell 都要重新 source）
 lunch <board>                 # 选配置，例：lunch radxa-zero3w
                               # 完整格式 <board>-<product>-<variant>；省略时 product=default、variant=release
-lunch                         # 不带参数 → 交互式列出全部可选 target
+lunch                         # 不带参数 → 层级选择界面（平台→SoC→板→product→variant，
+                              # 末级显示该目标的配置表）；--no-tui 回退编号列表
 ```
 
 配置持久化到 `.flange/current_config`，后续 `source envsetup.sh` 会自动恢复，无需重复 lunch。
