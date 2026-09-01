@@ -23,10 +23,10 @@ import argparse
 import curses
 import sys
 import threading
-import unicodedata
 from pathlib import Path
 
 from builder.config.query import TargetNode, build_target_tree
+from builder.term import display_width, pad, truncate
 
 # 各层级在树上的标记，让用户一眼看出自己在哪一层。
 LEVEL_MARK = {
@@ -38,42 +38,6 @@ LEVEL_MARK = {
 }
 
 _HELP = "↑↓ 移动   ←→ 折叠/展开   PgUp/PgDn 翻配置表   Enter 选中   / 过滤   q 取消"
-
-
-# ---------------------------------------------------------------------------
-# 宽度计算：中文是双宽字符
-# ---------------------------------------------------------------------------
-
-def display_width(text: str) -> int:
-    """字符串在终端上占的列数。
-
-    中文、全角标点在终端里占两列。按 len() 算会让右栏的表格错位，也会让
-    截断算错位置、把半个字符留在屏幕上。
-    """
-    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-               for ch in text)
-
-
-def truncate(text: str, width: int) -> str:
-    """按显示宽度截断，宽度不足时不留半个字符。"""
-    if width <= 0:
-        return ""
-    if display_width(text) <= width:
-        return text
-    out: list[str] = []
-    used = 0
-    for ch in text:
-        step = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-        if used + step > width - 1:
-            break
-        out.append(ch)
-        used += step
-    return "".join(out) + "…"
-
-
-def pad(text: str, width: int) -> str:
-    """按显示宽度右侧补空格。"""
-    return text + " " * max(0, width - display_width(text))
 
 
 # ---------------------------------------------------------------------------

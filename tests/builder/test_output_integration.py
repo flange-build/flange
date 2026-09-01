@@ -60,8 +60,10 @@ class TestBuildFlowIntegration:
         assert "tspi-rk3566" in text
 
         # 组件阶段
-        assert "▸ app" in text
-        assert "⊘" in text
+        # 跳过的组件是**单行** `⊘ app`，不再是"▸ 标题 + ⊘ 说明"两行：
+        # 跳过通常占多数，每个两行会把真正在构建的那个挤出屏幕
+        assert "⊘ app" in text
+        assert "▸ app" not in text
         assert "▸ kernel" in text
         assert "源码就绪" in text
         assert "▸ rootfs" in text

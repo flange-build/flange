@@ -98,11 +98,14 @@ class BuildEngine:
         self.output.build_end()
 
     def _build_components(self, target: str, force=None):
-        for component in _topo_sort(DEPENDENCY_GRAPH, target):
+        order = _topo_sort(DEPENDENCY_GRAPH, target)
+        # 拓扑序在进入循环前就已知，交给输出层用于显示 [i/N] 与总进度
+        self.output.plan([c for c in order if not self._component_disabled(c)])
+        for component in order:
             if self._component_disabled(component):
                 # 静默跳过；image 等下游会感知到 recovery 缺产物从而跳过
                 # 对应分区的 dd / flash-config 注入。
-                self.output.phase_skip(component)
+                self.output.phase_skip(component, reason="disabled")
                 continue
             forced = force == "all" or force == component
             if not forced:
