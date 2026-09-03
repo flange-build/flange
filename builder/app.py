@@ -75,6 +75,8 @@ _BUILD_SYSTEMS: dict[str, list[list[str]]] = {
     "custom": [],
 }
 
+_NATIVE_INSTALL_SYSTEMS = {"cmake", "meson", "make", "swift"}
+
 # ---------------------------------------------------------------------------
 # 架构后缀映射表：目标架构 → 允许的文件名后缀列表
 # ---------------------------------------------------------------------------
@@ -351,6 +353,15 @@ def _is_shared_lib(filename: str) -> bool:
     return filename.endswith(".so") or ".so." in filename
 
 
+def _is_pkg_config(install_path: str) -> bool:
+    """判断安装路径是否为 pkg-config 开发元数据。"""
+    return (
+        install_path.startswith("/usr/lib/")
+        and "/pkgconfig/" in install_path
+        and install_path.endswith(".pc")
+    )
+
+
 # ---------------------------------------------------------------------------
 # App 间拓扑排序
 # ---------------------------------------------------------------------------
@@ -531,6 +542,13 @@ class AppBuilder:
             return False
         spec = load_spec(app_dir)
         if spec.app.type == "lib":
+            install_dir = self._native_install_dir(spec)
+            if (
+                install_dir is not None
+                and spec.build.system != "make"
+                and not install_dir.is_dir()
+            ):
+                return False
             self._install_sysroot(app_dir, spec)
         return True
 
@@ -548,6 +566,19 @@ class AppBuilder:
         )
         return work_dir / spec.build.staging
 
+    def _native_install_dir(self, spec: AppSpec) -> Optional[Path]:
+        """返回标准构建系统的 per-App install staging 目录。"""
+        if spec.build.system not in _NATIVE_INSTALL_SYSTEMS:
+            return None
+        board = self._config.get("board", "unknown")
+        product = self._config.get("product", "default")
+        variant = self._config.get("variant", "release")
+        return (
+            build_dir(self._project_dir)
+            / "work" / "apps" / spec.app.name / self._arch
+            / board / product / variant / "install"
+        )
+
     def _record_app_manifest(
         self, name_or_path: str, app_dir: Path, debs: List[Path]
     ) -> None:
@@ -564,9 +595,9 @@ class AppBuilder:
         一个 App 之后，随后的 ``flange build`` 只会重建其余真正变化的 App，
         而不是把整组再编一遍。
 
-        声明了 ``build.staging`` 的 App 把该产物树一并记进清单：下游 App 靠
-        它拿头文件与库，被误删时必须让上游重建，而不是命中缓存后让下游编译
-        失败。
+        声明了 ``build.staging`` 的 App，以及使用原生 install staging 的
+        lib App，会把该产物树一并记进清单：下游 App 靠它拿头文件与库，
+        被误删时必须让上游重建，而不是命中缓存后让下游编译失败。
         """
         if self.cache is None:
             return
@@ -579,7 +610,12 @@ class AppBuilder:
             return
         from builder.app_spec import load_spec
 
-        staging = self._staging_dir(load_spec(app_dir))
+        spec = load_spec(app_dir)
+        staging = self._staging_dir(spec)
+        if staging is None and spec.app.type == "lib":
+            native_install = self._native_install_dir(spec)
+            if native_install is not None and native_install.is_dir():
+                staging = native_install
         self.cache.store_app(
             name_or_path, debs,
             staging=str(staging) if staging else None,
@@ -664,8 +700,8 @@ class AppBuilder:
             self._build_amp(app_dir, spec)
             return []
 
-        # 步骤 3：编译
-        self._compile(app_dir, spec, self._config)
+        # 步骤 3：编译并把标准构建系统的 install 产物收集到 staging
+        install_dir = self._compile(app_dir, spec, self._config)
 
         # staging 类型：只产出供下游消费的交叉编译产物树，不打 deb、不进
         # rootfs。它仍进 custom_packages 集合（否则 _resolve_build_order 会
@@ -700,7 +736,7 @@ class AppBuilder:
 
         # 步骤 4：lib 类型走双包流程，其余类型走单包流程
         if spec.app.type == "lib":
-            outputs = self._build_lib(app_dir, spec)
+            outputs = self._build_lib(app_dir, spec, install_dir)
             runtime_path = outputs["runtime"]
             self._status(
                 f"lib App '{app_name}' 双包完成 → "
@@ -711,7 +747,7 @@ class AppBuilder:
             return deb_paths
 
         # 收集文件（非 lib 类型）
-        files = collect_files(app_dir, spec, self._arch)
+        files = self._collect_package_files(app_dir, spec, install_dir)
 
         # 步骤 5：打包 .deb
         deb_builder = DebBuilder()
@@ -740,7 +776,12 @@ class AppBuilder:
     # 内部辅助方法
     # -----------------------------------------------------------------------
 
-    def _build_lib(self, app_dir: Path, spec: AppSpec) -> Dict[str, Path]:
+    def _build_lib(
+        self,
+        app_dir: Path,
+        spec: AppSpec,
+        install_dir: Optional[Path] = None,
+    ) -> Dict[str, Path]:
         """为 lib 类型 App 构建双包：运行时包和开发包。
 
         运行时包（lib<name>）：
@@ -757,6 +798,7 @@ class AppBuilder:
         参数：
             app_dir: App 工程目录
             spec:    已解析的 AppSpec 对象
+            install_dir: 原生 install staging 目录
 
         返回：
             {"runtime": runtime_deb_path, "dev": dev_deb_path}
@@ -773,7 +815,7 @@ class AppBuilder:
         # -----------------------------------------------------------------------
         # 从 collect_files 结果中分拣运行时文件和开发文件
         # -----------------------------------------------------------------------
-        all_files = collect_files(app_dir, spec, self._arch)
+        all_files = self._collect_package_files(app_dir, spec, install_dir)
 
         runtime_files: List[Tuple[Path, str, int]] = []  # .so 文件
         dev_files: List[Tuple[Path, str, int]] = []      # 头文件 + .a 文件
@@ -787,6 +829,9 @@ class AppBuilder:
                     runtime_files.append((src_path, install_path, mode))
                 elif fname.endswith(".a"):
                     # 静态库 → 开发包
+                    dev_files.append((src_path, install_path, mode))
+                elif _is_pkg_config(install_path):
+                    # pkg-config 元数据 → 开发包
                     dev_files.append((src_path, install_path, mode))
             elif install_path.startswith("/usr/include/"):
                 # 头文件 → 开发包
@@ -860,22 +905,74 @@ class AppBuilder:
         # -----------------------------------------------------------------------
         # sysroot 安装：供后续依赖此库的 App 编译使用
         # -----------------------------------------------------------------------
-        self._install_sysroot(app_dir, spec)
+        self._install_sysroot(app_dir, spec, all_files)
 
         return {"runtime": runtime_deb, "dev": dev_deb}
 
-    def _install_sysroot(self, app_dir: Path, spec: AppSpec) -> None:
+    def _collect_package_files(
+        self,
+        app_dir: Path,
+        spec: AppSpec,
+        install_dir: Optional[Path],
+    ) -> List[Tuple[Path, str, int]]:
+        """合并 App 目录约定、显式 install 映射与原生 install staging。
+
+        原生 install 产物覆盖同路径的约定文件，但 app.yaml 显式声明的
+        install 映射始终优先，保持既有配置语义。
+        """
+        files = collect_files(app_dir, spec, self._arch)
+        if install_dir is None or not install_dir.is_dir():
+            return files
+
+        explicit_destinations = {
+            destination
+            for source, destination in spec.install.items()
+            if (app_dir / source).exists() or (app_dir / source).is_symlink()
+        }
+        destination_indexes = {
+            install_path: index
+            for index, (_, install_path, _) in enumerate(files)
+        }
+        for src_path in sorted(install_dir.rglob("*")):
+            if not (src_path.is_file() or src_path.is_symlink()):
+                continue
+            relative = src_path.relative_to(install_dir).as_posix()
+            install_path = f"/{relative}"
+            if install_path in explicit_destinations:
+                continue
+
+            entry = (
+                src_path,
+                install_path,
+                src_path.lstat().st_mode & 0o777,
+            )
+            index = destination_indexes.get(install_path)
+            if index is None:
+                destination_indexes[install_path] = len(files)
+                files.append(entry)
+            else:
+                files[index] = entry
+
+        return files
+
+    def _install_sysroot(
+        self,
+        app_dir: Path,
+        spec: AppSpec,
+        files: Optional[List[Tuple[Path, str, int]]] = None,
+    ) -> None:
         """将 lib App 的头文件和共享库安装到 sysroot 目录。
 
         安装约定：
-          include/*.h  → sysroot/usr/include/<name>/
-          lib/*.so*    → sysroot/usr/lib/
+          /usr/include/** → sysroot/usr/include/**
+          /usr/lib/*.so* 与 pkgconfig/*.pc → sysroot/usr/lib/
 
         sysroot 路径：target/<board>/<product>/<variant>/sysroot/
 
         参数：
             app_dir: App 工程目录
             spec:    已解析的 AppSpec 对象
+            files: 已合并的打包文件；省略时从 App 与 install staging 重建
         """
         board   = self._config.get("board",   "unknown")
         product = self._config.get("product", "default")
@@ -885,31 +982,34 @@ class AppBuilder:
             self._project_dir / ".build/target" / board / product / variant / "sysroot"
         )
 
-        app_name = spec.app.name
+        if files is None:
+            install_dir = self._native_install_dir(spec)
+            files = self._collect_package_files(app_dir, spec, install_dir)
 
-        # -----------------------------------------------------------------------
-        # 安装头文件：include/ → sysroot/usr/include/<name>/
-        # -----------------------------------------------------------------------
-        include_src = app_dir / "include"
-        if include_src.is_dir():
-            include_dst = sysroot_base / "usr" / "include" / app_name
-            include_dst.mkdir(parents=True, exist_ok=True)
-            for header in sorted(include_src.iterdir()):
-                if header.is_file():
-                    shutil.copy2(str(header), str(include_dst / header.name))
+        for src_path, install_path, _mode in files:
+            is_header = install_path.startswith("/usr/include/")
+            is_library = (
+                install_path.startswith("/usr/lib/")
+                and _is_shared_lib(Path(install_path).name)
+            )
+            if not (is_header or is_library or _is_pkg_config(install_path)):
+                continue
 
-        # -----------------------------------------------------------------------
-        # 安装共享库：lib/*.so* → sysroot/usr/lib/
-        # -----------------------------------------------------------------------
-        lib_src = app_dir / "lib"
-        if lib_src.is_dir():
-            lib_dst = sysroot_base / "usr" / "lib"
-            lib_dst.mkdir(parents=True, exist_ok=True)
-            for lib_file in sorted(lib_src.iterdir()):
-                if lib_file.is_file() and _is_shared_lib(lib_file.name):
-                    shutil.copy2(str(lib_file), str(lib_dst / lib_file.name))
+            relative = Path(install_path.lstrip("/"))
+            if ".." in relative.parts:
+                raise ValueError(
+                    f"sysroot 安装路径不得包含 '..': {install_path}"
+                )
+            destination = sysroot_base / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists() or destination.is_symlink():
+                destination.unlink()
+            if src_path.is_symlink():
+                destination.symlink_to(os.readlink(src_path))
+            else:
+                shutil.copy2(src_path, destination)
 
-        self._status(f"lib '{app_name}' sysroot 安装完成")
+        self._status(f"lib '{spec.app.name}' sysroot 安装完成")
 
     def _resolve_app_dir(self, name_or_path: str) -> Path:
         """解析入参为 App 目录的绝对路径。
@@ -1034,6 +1134,8 @@ class AppBuilder:
         """
         system = spec.build.system
         arch = userspace_arch(config)
+        variant = config.get("variant", "release")
+        is_debug = variant == "debug"
 
         # custom 构建系统：直接使用 spec.build.commands，不做任何模板展开
         if system == "custom":
@@ -1061,22 +1163,39 @@ class AppBuilder:
                     commands[0][i] = f"-DCMAKE_C_COMPILER={cross_gcc}"
                 elif arg.startswith("-DCMAKE_CXX_COMPILER="):
                     commands[0][i] = f"-DCMAKE_CXX_COMPILER={cross_gxx}"
+            if "CMAKE_BUILD_TYPE" not in spec.build.options:
+                build_type = "Debug" if is_debug else "Release"
+                commands[0].append(f"-DCMAKE_BUILD_TYPE={build_type}")
+            if "CMAKE_INSTALL_PREFIX" not in spec.build.options:
+                commands[0].append("-DCMAKE_INSTALL_PREFIX=/usr")
 
         elif system == "make":
             # 替换 CROSS_COMPILE= 参数
             for i, arg in enumerate(commands[0]):
                 if arg.startswith("CROSS_COMPILE="):
                     commands[0][i] = f"CROSS_COMPILE={cross_prefix}"
+            if "CFLAGS" not in spec.build.options:
+                flags = "-Wall -O0 -g" if is_debug else "-Wall -O2"
+                commands[0].append(f"CFLAGS={flags}")
 
         elif system == "meson":
             # Meson 使用 cross-file，不直接替换命令参数；
             # 架构信息在 /etc/meson/cross-*.ini 中由 Docker 镜像管理
-            pass
+            if "buildtype" not in spec.build.options:
+                build_type = "debug" if is_debug else "release"
+                commands[0].append(f"--buildtype={build_type}")
+            if "prefix" not in spec.build.options:
+                commands[0].append("--prefix=/usr")
 
         elif system == "swift":
+            configuration = spec.build.options.get("configuration")
+            if not configuration:
+                configuration = "debug" if is_debug else "release"
             # 替换 --triple 后面的目标三元组
             for i, arg in enumerate(commands[0]):
-                if arg == "--triple" and i + 1 < len(commands[0]):
+                if arg == "-c" and i + 1 < len(commands[0]):
+                    commands[0][i + 1] = configuration
+                elif arg == "--triple" and i + 1 < len(commands[0]):
                     # 根据架构构造 LLVM 三元组
                     triple_map = {
                         "aarch64": "aarch64-unknown-linux-gnu",
@@ -1130,8 +1249,32 @@ class AppBuilder:
                 commands[0].append(f"-DCMAKE_SYSROOT={sysroot_str}")
 
             elif system == "make":
-                commands[0].append(f"CFLAGS=-I{sysroot_str}/usr/include")
-                commands[0].append(f"LDFLAGS=-L{sysroot_str}/usr/lib")
+                cflags_index = next(
+                    (
+                        index
+                        for index in range(len(commands[0]) - 1, -1, -1)
+                        if commands[0][index].startswith("CFLAGS=")
+                    ),
+                    None,
+                )
+                include_flag = f"-I{sysroot_str}/usr/include"
+                if cflags_index is None:
+                    commands[0].append(f"CFLAGS={include_flag}")
+                else:
+                    commands[0][cflags_index] += f" {include_flag}"
+                ldflags_index = next(
+                    (
+                        index
+                        for index in range(len(commands[0]) - 1, -1, -1)
+                        if commands[0][index].startswith("LDFLAGS=")
+                    ),
+                    None,
+                )
+                library_flag = f"-L{sysroot_str}/usr/lib"
+                if ldflags_index is None:
+                    commands[0].append(f"LDFLAGS={library_flag}")
+                else:
+                    commands[0][ldflags_index] += f" {library_flag}"
 
             elif system == "meson":
                 # Meson 的 sysroot 通过 cross-file 管理，此处不做额外注入
@@ -1150,7 +1293,12 @@ class AppBuilder:
 
         return commands
 
-    def _compile(self, app_dir: Path, spec: AppSpec, config: dict) -> None:
+    def _compile(
+        self,
+        app_dir: Path,
+        spec: AppSpec,
+        config: dict,
+    ) -> Optional[Path]:
         """编译 App。
 
         根据 build.system 选择执行策略：
@@ -1166,12 +1314,15 @@ class AppBuilder:
             app_dir: App 目录（容器内的工作目录）
             spec:    已加载的 AppSpec
             config:  FINAL_CONFIG 字典
+
+        返回：
+            标准构建系统的 install staging 目录；其他构建系统返回 None
         """
         system = spec.build.system
 
         if system == "none":
             # 预编译 App，无需编译步骤
-            return
+            return None
 
         self._status(f"App '{spec.app.name}' 编译 ({system})")
 
@@ -1211,6 +1362,83 @@ class AppBuilder:
                 env=build_env,
                 extra_mounts=extra_mounts,
             )
+
+        if system not in _NATIVE_INSTALL_SYSTEMS:
+            return None
+
+        install_dir = self._native_install_dir(spec)
+        assert install_dir is not None
+        if install_dir.exists():
+            shutil.rmtree(install_dir)
+        install_env = {**build_env, "DESTDIR": str(install_dir.resolve())}
+
+        if system == "cmake":
+            install_cmd = ["cmake", "--install", "build"]
+        elif system == "meson":
+            install_cmd = ["meson", "install", "-C", "build"]
+        elif system == "make":
+            make_variables = [arg for arg in commands[0][1:] if "=" in arg]
+            destdir_arg = f"DESTDIR={install_dir.resolve()}"
+            probe_cmd = [
+                "make", "-n", "install", *make_variables, destdir_arg,
+            ]
+            probe = self._docker.run(
+                probe_cmd,
+                cwd=cwd,
+                env=install_env,
+                check=False,
+                capture=True,
+                extra_mounts=extra_mounts,
+            )
+            if probe.returncode != 0:
+                output = "\n".join(
+                    str(value) for value in (probe.stdout, probe.stderr)
+                    if value
+                )
+                no_rule_prefixes = (
+                    "make: *** No rule to make target 'install'",
+                    "make: *** No rule to make target `install'",
+                )
+                missing_install_target = any(
+                    line.strip().startswith(no_rule_prefixes)
+                    for line in output.splitlines()
+                )
+                if missing_install_target:
+                    self._status(
+                        f"App '{spec.app.name}' 未定义 Make install target，"
+                        "回退约定文件收集"
+                    )
+                    return None
+                from builder.docker import BuildError
+                detail = f"\n{output.strip()}" if output.strip() else ""
+                raise BuildError(
+                    f"Make install target 检查失败 "
+                    f"(exit {probe.returncode}){detail}"
+                )
+            install_cmd = [
+                "make",
+                "install",
+                *make_variables,
+                destdir_arg,
+            ]
+        else:
+            swift_cmd = commands[0]
+            configuration = swift_cmd[swift_cmd.index("-c") + 1]
+            triple = swift_cmd[swift_cmd.index("--triple") + 1]
+            executable = Path(".build") / triple / configuration / spec.app.name
+            destination = install_dir / "usr" / "bin" / spec.app.name
+            install_cmd = [
+                "install", "-Dm755", str(executable), str(destination),
+            ]
+
+        install_dir.mkdir(parents=True)
+        self._docker.run(
+            install_cmd,
+            cwd=cwd,
+            env=install_env,
+            extra_mounts=extra_mounts,
+        )
+        return install_dir
 
     def _install_build_packages(
         self,

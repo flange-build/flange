@@ -89,6 +89,7 @@ REQUIRED_ARTIFACTS = {
 BUILD_LOGIC_EXCLUDE_FILES: frozenset[str] = frozenset({
     "recovery_host.py",
     "deploy.py",
+    "dev.py",
     "scaffold.py",
     "app_list.py",
     "oot_mounts.py",

@@ -17,7 +17,7 @@ import tarfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from builder.app_spec import AppSpec
+from builder.app_spec import APP_NAME_PATTERN, APP_VERSION_PATTERN, AppSpec
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +463,11 @@ class DebBuilder:
         抛出：
             DebBuildError: 构建过程出错
         """
+        if not APP_NAME_PATTERN.fullmatch(name):
+            raise DebBuildError(f"deb 包名包含不安全字符：{name!r}")
+        if not APP_VERSION_PATTERN.fullmatch(version):
+            raise DebBuildError(f"deb 版本包含不安全字符：{version!r}")
+
         # arch 可能已是 deb 格式（arm64），也可能是 config 格式（aarch64），统一映射一次
         deb_arch = _map_arch(arch)
         output_dir = Path(output_dir)

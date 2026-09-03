@@ -3,6 +3,8 @@ title: out-of-tree app 构建
 type: workflow
 status: stable
 sources:
+  - builder/dev.py
+  - builder/app_spec.py
   - builder/app.py
   - builder/deploy.py
   - builder/docker.py
@@ -11,71 +13,103 @@ related:
   - "[[scaffold 新建 app 流程]]"
   - "[[external_apps 装载]]"
   - "[[app 打包系统]]"
-updated: 2026-05-21
+  - "[[硬件特性包]]"
+updated: 2026-09-03
 ---
 
 ## TL;DR
 
-`flange build/push/run app` 的位置参数支持两种形态：**应用名** 或 **宿主机目录路径**。路径形态走 ad-hoc 模式，不需要在 lunch config 里注册即可即时构建 / 推送，特别适合 `flange create app --dir=<外部目录>` 之后的快速验证。
+`flange app create|build|deploy|run|debug|log` 是 App 的资源优先入口。它可以在
+flange 仓库外执行；除 `create` 外，目标可为已注册的 App 名称或含
+`app.yaml` 的目录路径，省略时默认使用调用者当前目录。路径模式是
+ad-hoc（即时）开发，无需修改 lunch config 或 App registry。
 
-## 触发判定
+## 从仓库外完成开发闭环
 
-判定在 Python 侧统一实现（[`builder/app.py:_resolve_app_dir`](../../builder/app.py)），shell 仅透传首个非 flag 参数。满足以下任一条件即视为路径：
-
-- 字符串含有 `/`
-- 字符串以 `.` 开头
-- 字符串解析后是存在的目录且其下含 `app.yaml`
-
-否则按应用名走 `SourceManager.ensure_app` 三层查找（本地 → `external_apps` → `external_app_dirs`，详见 [[external_apps 装载]]）。
-
-## 工作流：create → build → push
+先 `source <flange>/envsetup.sh` 并用 `lunch` 选择 target，然后可在任意目录执行：
 
 ```bash
-# 1. 在仓库外任意位置生成脚手架
-flange create app demo --dir=/tmp --type=exec --build-system=cmake
-# → /tmp/demo/ 内含 app.yaml、CMakeLists.txt、src/main.c
+mkdir -p /work/vendor
+cd /work/vendor
 
-# 2. ad-hoc 构建（无需注册到 config）
-flange build app /tmp/demo
-# → 产物 .deb 落在 .build/target/<board>/<product>/<variant>/app/demo_*.deb
+# create 默认以当前目录为父目录，生成 /work/vendor/demo
+flange app create demo --type exec --build-system cmake
+cd demo
 
-# 3. 热部署到设备
-flange push app /tmp/demo
-# 或直接运行：
-flange run app /tmp/demo
+# 其余命令省略 target 时使用当前目录
+flange app build
+flange app deploy --serial <adb-serial>
+flange app run --serial <adb-serial> -- --port 9000
+flange app debug --serial <adb-serial> -- --port 9000
+flange app log --serial <adb-serial>
 ```
 
-也接受相对路径：
+`deploy` / `run` / `debug` 默认先构建，已有可用产物时可传
+`--no-build`。`run` / `debug` 的 `--` 后参数会传给 exec App；有显式
+action 时，会追加到该 action 的 argv。service App 的默认 `log` 在目标机
+执行 `journalctl -u <unit> --no-pager -f`。默认 `debug` 仅在 debug variant
+可用：exec App 以目标机 GDB `--args` 启动，service App 则附加（attach）当前
+MainPID。release variant 应切换 target 或定义显式 `debug` action。默认
+service 日志还支持 `--lines <n>`、`--since <time>` 与 `--no-follow`。
+
+`--serial` 可用于 `deploy` / `run` / `debug` / `log`。未指定时，flange 只在
+ADB 恰好有一台状态为 `device` 的设备时自动选择；无设备或多设备均会在
+部署或启动前失败。
+
+## 目标解析与产物
+
+- 绝对路径、以 `.` 开头的路径、含 `/` 的路径，或当前目录下已存在的目录，
+  按路径解析并校验 `app.yaml`。相对路径总是相对调用者 cwd。
+- 其余值按 App 名称通过本地 `components/app/` → `external_apps` →
+  `external_app_dirs` 查找，详见 [[external_apps 装载]]。
+- flange 先在宿主机解析外部目录，再将它 bind mount 进最外层 Docker。
+  编译与打包仍发生在容器中。
+- `.deb` 统一写入仓库
+  `.build/target/<board>/<product>/<variant>/app/<name>_<version>_<arch>.deb`。
+  ad-hoc 路径不会改写 config，也不会出现在 `flange list apps`。
+
+## 显式 actions
+
+App 可在 `app.yaml` 顶层为无法安全推断的生命周期定义 argv（参数向量）：
+
+```yaml
+actions:
+  build: ["./tools/build.py", "--profile", "debug"]
+  deploy: ["./tools/deploy.py"]
+  run: ["./tools/run.py", "--mode", "safe"]
+  debug: ["./tools/debug.py"]
+  log: ["./tools/log.py"]
+```
+
+只允许 `build` / `deploy` / `run` / `debug` / `log`，每个值必须是由非空字符串
+组成的非空列表。未知键、shell 命令字符串、空列表或非字符串元素都会在
+执行前被拒绝。显式 action 是对同名生命周期的自包含覆盖：flange 不会再
+自动插入构建、部署或默认运行步骤。`build` action 在 Docker 内以 App 目录为
+cwd 执行，并应通过 `FLANGE_TARGET_DIR` 发布产物；其余 action 在宿主机
+App 目录中执行。设备 action 可从 `FLANGE_ADB_SERIAL` 读取已校验的设备。例如：
 
 ```bash
-cd /tmp
-flange build app ./demo
-flange build app demo            # cwd 下存在 demo/app.yaml 时也按路径解析
+flange app run -- --port 9000
+# 直接执行 argv：./tools/run.py --mode safe --port 9000
 ```
 
-## 容器内的源码可见性
+flange 不经 shell 拆词、插值或 `eval`，所以 `;`、`$()` 等内容只是普通
+argv 元素。但 action 程序本身仍拥有对应运行环境的权限：只应使用可信 App，
+并审查宿主机上运行的 `deploy` / `run` / `debug` / `log` 脚本。
 
-Docker 默认只挂 `.:/workspace`。AppBuilder 检测到 `app_dir` 不在项目根目录子树内时，自动通过 `DockerRunner.extra_mounts` 给 `docker compose run` 追加 `-v <realpath>:<realpath>:rw`，挂载方向保持源路径与目标路径一致——cwd 在宿主与容器内是同一个绝对路径，cmake 的 `CMAKE_SOURCE_DIR`、`compile_commands.json` 等都指向用户能直接打开的位置。
+## 兼容入口
 
-`realpath` 会展平 symlink（macOS 上 `/var` → `/private/var` 之类），避免容器内出现 deref 后的非预期路径。
+以下动词优先形式仍可用，并委托给同一实现：
 
-## 产物落地约定
-
-- `.deb`：统一写到仓库 `.build/target/<board>/<product>/<variant>/app/<name>_<version>_<arch>.deb`，无论源码来自仓库内、`external_apps`、`external_app_dirs` 还是 ad-hoc 路径。
-- **外部目录里只会出现 cmake/meson 自然生成的 `build/`**，与你在该目录手工跑同样构建命令的行为一致。flange 不在外部目录写任何 `.deb`。
-
-## 与 registry 注册的关系
-
-| 场景 | 适合 |
+| 兼容入口 | 资源优先入口 |
 |---|---|
-| `flange build app <path>` ad-hoc | 个人开发期、`flange create --dir=...` 后的快速验证 |
-| `external_apps[name].local_path` | 团队级、随仓库 config 分发的 out-of-tree App |
-| `external_apps[name].git` | 远端 git 仓库（详见 [[external_apps 装载]]） |
-| `external_app_dirs` | 把整个父目录当搜索路径（多 App 批量） |
+| `flange build app <name-or-path>` | `flange app build <name-or-path>` |
+| `flange push app <name-or-path>` | `flange app deploy <name-or-path>` |
+| `flange run app <name-or-path>` | `flange app run <name-or-path>` |
 
-ad-hoc path 不读写 lunch config，也不出现在 `flange list apps` 输出里——它本来就没注册。需要沉淀的话再手工把 `external_apps[name].local_path = <abs>` 加进 board/platform config。
+`flange create app <name>` 也保留兼容，但未指定 `--dir` 时仍创建到仓库
+`components/app/`；新入口 `flange app create <name>` 默认创建到调用者 cwd。
+`flange build app` 不带单 App 目标时仍表示构建当前配置的所有 App。
 
-## 已知限制
-
-- `--no-build` 模式下 `flange push app <path>` 不会回退到外部目录搜索 `.deb`，仍只在仓库 `.build/.../app/` 按 spec 中的 `app.name` 查 `<name>_*.deb`。先 build 过一次后再 `--no-build` 才有效。
-- 路径中含特殊字符（空格、引号）时，shell 透传可能踩坑——使用 `"` 包裹路径即可。
+路径含空格时仍要按调用 shell 的规则加引号，例如
+`flange app build "/work/My App"`；进入 Python 编排层后不会再用 shell 重新解析。

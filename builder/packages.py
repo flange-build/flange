@@ -31,9 +31,11 @@ builder 无需感知包概念——它们读到的就是普通的 ``oot_modules`
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 from typing import Any
 
+from builder.actions import validate_actions
 from builder.paths import PROJECT_ROOT, components_dir
 from builder.platforms.spec import capability as platform_capability
 
@@ -63,13 +65,18 @@ def _load_package_var(file_path: Path) -> Any:
     return module.PACKAGE
 
 
-def load_package_manifest(pkg_name: str, project_root: Path) -> dict:
-    """加载并校验单个包清单，返回 ``PACKAGE`` dict。
+def load_package_manifest_dir(package_dir: Path) -> dict:
+    """从指定目录加载并校验 ``package.py``，返回 ``PACKAGE`` dict。
 
     校验：目录存在、含 package.py、name 与目录名一致、components 各项 type
-    合法且必备字段齐全。任一不满足 → 抛 ValueError（信息含候选集合）。
+    合法且必备字段齐全、actions 使用安全 argv。目录旁的 ``config.jsonnet``
+    不参与此加载过程。
     """
-    pkg_dir = components_dir(project_root) / "packages" / pkg_name
+    package_path = Path(package_dir).expanduser()
+    pkg_dir = package_path.resolve()
+    pkg_name = package_path.name
+    if pkg_name in {"", ".", ".."}:
+        pkg_name = pkg_dir.name
     manifest = pkg_dir / "package.py"
     if not manifest.is_file():
         raise ValueError(
@@ -84,6 +91,12 @@ def load_package_manifest(pkg_name: str, project_root: Path) -> dict:
     if name != pkg_name:
         raise ValueError(
             f"包 {pkg_name} 的 PACKAGE['name']={name!r} 与目录名不一致"
+        )
+    if not isinstance(name, str) or not re.fullmatch(
+        r"[a-z0-9]+(?:-[a-z0-9]+)*", name
+    ):
+        raise ValueError(
+            f"包 {pkg_name} 的 name 必须是 kebab-case：{name!r}"
         )
 
     components = pkg.get("components")
@@ -130,7 +143,60 @@ def load_package_manifest(pkg_name: str, project_root: Path) -> dict:
                     f"{comp!r}"
                 )
 
-    return pkg
+    normalized = dict(pkg)
+    normalized["actions"] = validate_actions(
+        pkg.get("actions", {}),
+        field=f"包 {pkg_name} 的 actions",
+    )
+    return normalized
+
+
+def load_package_manifest(pkg_name: str, project_root: Path) -> dict:
+    """按仓库内名称加载包清单，保持 board opt-in 的既有 API。"""
+    pkg_dir = components_dir(project_root) / "packages" / pkg_name
+    return load_package_manifest_dir(pkg_dir)
+
+
+def resolve_package_dir(
+    name_or_path: str | Path | None,
+    project_root: Path | None = None,
+    caller_cwd: Path | None = None,
+) -> Path:
+    """把仓库内包名或调用者 cwd 下的路径解析为 Package 目录。
+
+    ``None`` 表示调用者当前目录。显式路径或调用者 cwd 下已存在的目录优先；
+    其余值按仓库内 ``components/packages/<name>`` 查找。这里只定位清单，调用方
+    随后应使用 :func:`load_package_manifest_dir` 做统一内容校验。
+    """
+    root = Path(project_root or PROJECT_ROOT).expanduser().resolve()
+    cwd = Path(caller_cwd or Path.cwd()).expanduser().resolve()
+
+    if name_or_path is None:
+        package_dir = cwd
+    else:
+        raw = str(name_or_path)
+        if not raw.strip():
+            raise ValueError("Package 名称或路径不能为空")
+        path = Path(raw).expanduser()
+        candidate = path if path.is_absolute() else cwd / path
+        is_path = (
+            path.is_absolute()
+            or raw.startswith(".")
+            or "/" in raw
+            or candidate.is_dir()
+        )
+        package_dir = (
+            candidate if is_path
+            else components_dir(root) / "packages" / raw
+        )
+
+    resolved = package_dir.resolve()
+    manifest = resolved / "package.py"
+    if not resolved.is_dir() or not manifest.is_file():
+        raise FileNotFoundError(
+            f"Package 路径不存在或缺少 package.py：{resolved}"
+        )
+    return resolved
 
 
 def _parse_opt_in(entry: Any) -> tuple[str, set[str] | None]:

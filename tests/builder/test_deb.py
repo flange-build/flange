@@ -680,6 +680,22 @@ class TestEndToEnd:
         deb_path, _ = self._build_minimal_deb(tmp_path)
         assert deb_path.name == "my-daemon_1.0.0_arm64.deb"
 
+    @pytest.mark.parametrize(
+        ("name", "version"),
+        [("../escape", "1.0"), ("safe", "../1.0")],
+    )
+    def test_unsafe_output_identity_rejected(self, tmp_path, name, version):
+        with pytest.raises(DebBuildError, match="不安全"):
+            DebBuilder().build_deb(
+                name=name,
+                version=version,
+                arch="aarch64",
+                control_fields={},
+                files=[],
+                output_dir=tmp_path / "dist",
+            )
+        assert not (tmp_path / "dist").exists()
+
     def test_deb_ar_magic(self, tmp_path):
         """.deb 文件以标准 ar magic 开头。"""
         deb_path, _ = self._build_minimal_deb(tmp_path)

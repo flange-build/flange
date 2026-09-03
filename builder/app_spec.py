@@ -9,6 +9,8 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from builder.actions import validate_actions
+
 
 # 允许的 App 类型。amp = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户
 # 应用），产物是固件而非装进 rootfs 的 deb，走独立构建路径（见 app.py
@@ -35,6 +37,8 @@ VALID_MAINTAINER_SCRIPT_NAMES = {
 APT_PACKAGE_PATTERN = re.compile(
     r"^[a-z0-9][a-z0-9+.-]*(?::(?:\{arch\}|[a-z0-9][a-z0-9-]*))?$"
 )
+APP_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._-]*$")
+APP_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+.:~_-]*$")
 
 
 class AppSpecError(ValueError):
@@ -140,6 +144,8 @@ class AppSpec:
     maintainer_scripts: Dict[str, str] = field(default_factory=dict)
     # lib 配置（可选，仅 lib 类型有意义）
     lib: Optional[LibConfig] = None
+    # 显式生命周期 action：action 名 -> 不经 shell 展开的 argv
+    actions: Dict[str, List[str]] = field(default_factory=dict)
 
 
 def _parse_app_info(raw: dict) -> AppInfo:
@@ -153,6 +159,19 @@ def _parse_app_info(raw: dict) -> AppInfo:
             raise AppSpecError(f"app.yaml 缺少必填字段：app.{key}")
         if not isinstance(raw[key], str) or not raw[key].strip():
             raise AppSpecError(f"app.{key} 必须是非空字符串")
+
+    name = raw["name"]
+    version = raw["version"]
+    if not APP_NAME_PATTERN.fullmatch(name):
+        raise AppSpecError(
+            "app.name 只能包含字母、数字、加号、点、下划线和连字符，"
+            "且必须以字母或数字开头"
+        )
+    if not APP_VERSION_PATTERN.fullmatch(version):
+        raise AppSpecError(
+            "app.version 只能包含字母、数字、加号、点、冒号、波浪号、"
+            "下划线和连字符，且必须以字母或数字开头"
+        )
 
     # 校验 type 取值
     app_type = raw["type"]
@@ -175,8 +194,8 @@ def _parse_app_info(raw: dict) -> AppInfo:
         raise AppSpecError("app.arch 不能为空")
 
     return AppInfo(
-        name=raw["name"].strip(),
-        version=raw["version"].strip(),
+        name=name,
+        version=version,
         description=raw["description"].strip(),
         type=app_type,
         arch=arch,
@@ -456,6 +475,12 @@ def load_spec(app_dir: Path) -> AppSpec:
     else:
         raise AppSpecError("capabilities 必须是字符串或列表")
 
+    # 解析可选段：actions。与 Package 共用严格 argv 契约。
+    try:
+        actions = validate_actions(raw.get("actions", {}))
+    except ValueError as exc:
+        raise AppSpecError(str(exc)) from exc
+
     # 解析可选段：build
     build = _parse_build(raw["build"], app_info) if "build" in raw else BuildConfig()
 
@@ -494,6 +519,7 @@ def load_spec(app_dir: Path) -> AppSpec:
         app=app_info,
         maintainer=maintainer,
         capabilities=capabilities,
+        actions=actions,
         build=build,
         install=install,
         systemd=systemd,

@@ -135,6 +135,26 @@ def test_venv损坏时明确报错而不是静默跳过(script: str):
     assert "rm -rf" in broken[:600], "没有告诉用户怎么重建"
 
 
+def test_app与package路由到资源优先模块(script: str):
+    """shell 只透传 argv，路径与 action 解析统一留给 Python。"""
+    assert re.search(r"app\|package\).*?_flange_cmd_resource", script, re.S)
+    resource = re.search(
+        r"_flange_cmd_resource\(\)\s*\{(.*?)\n\}", script, re.S
+    )
+    assert resource
+    assert "python3 -P -m builder.dev" in resource.group(1)
+    assert '"$@"' in resource.group(1)
+
+
+def test_app脚手架入口不再eval或拼python源码(script: str):
+    """名称和仓库外路径属于用户输入，必须始终作为 argv 传递。"""
+    create_start = script.index("_flange_cmd_create_app()")
+    create_end = script.index("\n}\n", create_start)
+    body = script[create_start:create_end]
+    assert "eval" not in body
+    assert "python3 -c" not in body
+
+
 # ---------------------------------------------------------------------------
 # lunch 的交互形式
 # ---------------------------------------------------------------------------

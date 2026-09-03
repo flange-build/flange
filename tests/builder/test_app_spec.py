@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from builder.app_spec import (
     AppSpec,
@@ -360,6 +361,11 @@ class TestDefaultValues:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
         assert spec.capabilities == []
 
+    def test_actions_defaults_to_empty_dict(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
+        assert spec.actions == {}
+
     def test_install_defaults_to_empty_dict(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
@@ -413,6 +419,45 @@ class TestDefaultValues:
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_VENDOR))
         assert spec.maintainer_scripts == {}
+
+
+class TestActions:
+    """验证 App 顶层 actions 与 Package 使用相同 argv 契约。"""
+
+    def test_valid_actions_are_parsed_without_shell_splitting(self, tmp_path: Path):
+        app_dir = _write_yaml(
+            str(tmp_path),
+            _MINIMAL_EXEC
+            + "actions:\n"
+            + "  build: [./build.sh, --release]\n"
+            + "  run: [./run.sh, 'safe;literal']\n"
+            + "  debug: [./debug.sh]\n"
+            + "  log: [./log.sh, --follow]\n"
+            + "  deploy: [./deploy.sh]\n",
+        )
+
+        spec = load_spec(app_dir)
+
+        assert spec.actions["build"] == ["./build.sh", "--release"]
+        assert spec.actions["run"] == ["./run.sh", "safe;literal"]
+        assert set(spec.actions) == {"build", "deploy", "run", "debug", "log"}
+
+    @pytest.mark.parametrize(
+        "actions_yaml",
+        [
+            "actions:\n  publish: [./publish.sh]\n",
+            "actions: ./run.sh\n",
+            "actions:\n  run: []\n",
+            "actions:\n  run: [./run.sh, 1]\n",
+            "actions:\n  run: [./run.sh, '']\n",
+            "actions: null\n",
+        ],
+    )
+    def test_invalid_actions_are_rejected(self, tmp_path: Path, actions_yaml: str):
+        app_dir = _write_yaml(str(tmp_path), _MINIMAL_EXEC + actions_yaml)
+
+        with pytest.raises(AppSpecError, match="actions"):
+            load_spec(app_dir)
 
 
 class TestMaintainerScripts:
@@ -532,6 +577,38 @@ class TestRequiredFieldValidation:
         with tempfile.TemporaryDirectory() as tmpdir:
             with pytest.raises(AppSpecError, match="app.version"):
                 load_spec(_write_yaml(tmpdir, yaml_content))
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("name", "../escape"),
+            ("name", "bad/name"),
+            ("name", "bad\nname"),
+            ("name", " safe-app "),
+            ("version", "../1.0"),
+            ("version", "1.0 bad"),
+            ("version", "1.0\nnext"),
+            ("version", " 1.0 "),
+        ],
+    )
+    def test_unsafe_artifact_identity_rejected(self, tmp_path, field, value):
+        data = {
+            "app": {
+                "name": "safe-app",
+                "version": "1.0.0",
+                "description": "desc",
+                "type": "exec",
+                "arch": ["aarch64"],
+            },
+            "maintainer": {"name": "flange", "email": "a@b.com"},
+        }
+        data["app"][field] = value
+        app_dir = _write_yaml(
+            str(tmp_path), yaml.safe_dump(data, allow_unicode=True)
+        )
+
+        with pytest.raises(AppSpecError, match=f"app.{field}"):
+            load_spec(app_dir)
 
     def test_missing_app_description(self):
         yaml_content = (

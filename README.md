@@ -92,9 +92,17 @@ rootfs、功能开关等）。打开时自动展开并定位到当前目标。
 | `flange build rootfs` | 只构建根文件系统 |
 | `flange build recovery` | 只构建 recovery 维护镜像 |
 | `flange build amp` | 只构建 AMP（异构多核）从核固件 |
-| `flange build app` | 构建当前配置所需的所有 App |
-| `flange build app <name-or-path>` | 构建指定 App，参数可为名称或宿主机目录路径（ad-hoc 路径无需注册到 config） |
-| `flange push app <name-or-path>` / `flange run app <name-or-path>` | 热部署 / 运行单个 App，同样支持位置参数传路径 |
+| `flange app create <name> [--dir=<parent>]` | 在调用者当前目录（或指定父目录）创建 App |
+| `flange app build [name-or-path]` | 构建 App；省略目标时使用调用者当前目录 |
+| `flange app deploy [name-or-path] [--serial=<serial>] [--no-build]` | 构建并部署 App；`--no-build` 复用已有产物 |
+| `flange app run [target] ...` / `flange app debug [target] ...` | 支持 `--serial`、`--no-build` 和 `-- <args>...`；部署后运行 / 调试 App |
+| `flange app log [name-or-path] [--serial=<serial>]` | 跟随 service App 日志，或执行显式 `log` action |
+| `flange package create <name> [--dir=<parent>]` | 在调用者当前目录（或指定父目录）创建含单个 vendor component 的 Package |
+| `flange package build [name-or-path] [--component=<name>]` | 构建 Package；名称指向 `components/packages/`，路径指向含 `package.py` 的目录 |
+| `flange package deploy [target] ...` / `flange package run [target] ...` / `flange package debug [target] ...` | 支持 `--component`、`--serial`、`--no-build` 和 `-- <args>...`；复用 vendor App 或执行显式 action |
+| `flange package log [name-or-path] [--component=<name>] [--serial=<serial>]` | 查看选定 vendor component 日志，或执行显式 `log` action |
+| `flange build app` | 构建当前配置所需的所有 App（兼容入口） |
+| `flange build app <target>` / `flange push app <target>` / `flange run app <target>` | 指定 App 的旧动词优先兼容入口，与 `flange app build/deploy/run` 共用实现 |
 | `flange flash` | 全量刷写到设备（自动检测设备） |
 | `flange flash <partition>` | 刷写指定分区（如 rootfs, boot, uboot） |
 | `flange flash --list` | 列出可刷写分区及镜像路径 |
@@ -113,11 +121,26 @@ rootfs、功能开关等）。打开时自动展开并定位到当前目标。
 | `flange status` | 显示当前配置和构建状态 |
 | `flange why [component]` | 解释缓存决策：哪一段输入变了导致重建 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
-| `flange create app <name> [--type=<type>] [--build-system=<sys>] [--dir=<path>]` | 生成 App 工程脚手架（`--dir` 指向父目录以生成 out-of-tree App） |
+| `flange create app <name> [--type=<type>] [--build-system=<sys>] [--dir=<path>]` | 旧动词优先兼容入口；未给 `--dir` 时仍创建到仓库 `components/app/` |
 | `flange list apps` | 列出所有可用 App（本地 + external_apps + external_app_dirs） |
 | `flange docker build` | 构建 Docker 镜像 |
 | `flange docker rebuild` | 无缓存重建 Docker 镜像 |
 | `flange docker status` | 显示 Docker 镜像状态 |
+
+App 与 Package 的资源优先命令可以从 flange 仓库外调用。除 `create`
+外，`name-or-path` 可为仓库内名称或目录路径，省略时默认当前目录；路径模式
+不会修改 board 配置或 registry。`deploy` / `run` / `debug` / `log` 可用
+`--serial` 指定 ADB 设备；未指定时只会自动选择唯一处于 `device` 状态的设备，无设备或
+多设备会在操作前失败。详见 [out-of-tree App 构建](wiki/workflows/out-of-tree-app-%E6%9E%84%E5%BB%BA.md)
+和 [硬件特性包](wiki/concepts/%E7%A1%AC%E4%BB%B6%E7%89%B9%E6%80%A7%E5%8C%85.md)。
+多 vendor Package 的 `run` / `debug` / `log` 需用 `--component` 选择对象；
+`oot-driver` / `devicetree` 没有可推断的设备操作，不会自动刷写分区。
+
+`app.yaml` 顶层 `actions` 与 `PACKAGE["actions"]` 可为上述五个生命周期
+定义非空字符串 argv 列表。显式 action 是同名生命周期的自包含覆盖；
+`build` 在 Docker 内执行并通过 `FLANGE_TARGET_DIR` 发布产物，其余 action
+在宿主机资源目录执行。`--` 后参数仅追加到 argv，不经 shell 展开；
+但 action 程序本身仍需信任，只应运行可信 App 和 Package。
 
 ## Recovery 维护系统
 
@@ -404,6 +427,11 @@ local variant = std.extVar('variant');
 
 ### 引用 out-of-tree App
 
+无需纳入 board 配置的临时开发可直接进入仓库外 App 目录执行
+`flange app build` / `deploy` / `run` / `debug` / `log`；这种 ad-hoc（即时）路径
+不会注册到 config 或 `flange list apps`。需要随仓库配置分发时，再使用下列
+`external_apps` / `external_app_dirs`：
+
 把 App 源码放在仓库外时，有两种声明方式（详见 `docs/app-architecture.md` §8.4）：
 
 ```jsonnet
@@ -462,7 +490,7 @@ flange/
 │   ├── board/                #   板级配置
 │   │   └── <board-name>/       #   config.jsonnet + overlay/patches
 │   ├── app/                  #   App 定义
-│   ├── packages/             #   自定义 deb 包
+│   ├── packages/             #   硬件特性 Package（驱动 / DT / vendor App）
 │   └── rootfs/               #   rootfs overlay
 │
 ├── docker/                   # Docker 构建环境

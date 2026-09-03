@@ -14,13 +14,13 @@ state 文件格式:
 """
 
 import json
-from pathlib import Path
 
 from builder.config.registry import resolve_config
 from builder.config.validate import validate_config
+from builder.paths import PROJECT_ROOT
 
 
-STATE_FILE = Path(".flange/current_config")
+STATE_FILE = PROJECT_ROOT / ".flange" / "current_config"
 
 
 def load_current_config() -> dict:

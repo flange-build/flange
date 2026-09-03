@@ -20,6 +20,10 @@ import string
 from pathlib import Path
 from typing import Optional
 
+import yaml
+
+from builder.app_spec import APP_VERSION_PATTERN
+
 # 模板目录（与本文件同级的 templates/ 子目录）
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -89,6 +93,7 @@ class AppScaffold:
         version: str = "0.1.0",
         description: str = "",
         embedded_swift: bool = False,
+        show_registration_hint: bool = True,
     ) -> Path:
         """生成 App 工程目录。
 
@@ -103,6 +108,7 @@ class AppScaffold:
             version:      版本字符串，默认 0.1.0
             description:  描述字符串，默认空
             embedded_swift: amp+scons 专用；生成 SwiftPM static library 骨架
+            show_registration_hint: 是否输出仓库外 registry 注册提示
 
         返回：
             已创建的 App 目录路径（Path）
@@ -111,7 +117,7 @@ class AppScaffold:
             ScaffoldError: 参数无效、模板目录缺失或目标已存在
         """
         # 1. 参数校验
-        self._validate(name, app_type, build_system)
+        self._validate(name, app_type, build_system, version)
         if embedded_swift and (app_type, build_system) != ("amp", "scons"):
             raise ScaffoldError("embedded_swift 仅支持 type=amp 且 build_system=scons")
         if target_dir is not None and parent_dir is not None:
@@ -150,7 +156,7 @@ class AppScaffold:
         print(f"脚手架已生成：{dest}（type={app_type}, build={build_system}）")
 
         # 5. 当 App 位于默认 components/app/ 之外时，输出注册指引
-        hint = self._registration_hint(dest, name)
+        hint = self._registration_hint(dest, name) if show_registration_hint else None
         if hint:
             print(hint)
 
@@ -199,14 +205,26 @@ class AppScaffold:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _validate(name: str, app_type: str, build_system: str) -> None:
+    def _validate(
+        name: str,
+        app_type: str,
+        build_system: str,
+        version: str,
+    ) -> None:
         """校验参数合法性。"""
         if not name or not name.strip():
             raise ScaffoldError("name 不能为空")
         # 名称只允许字母、数字、连字符、下划线
         import re
-        if not re.match(r'^[A-Za-z0-9_-]+$', name):
-            raise ScaffoldError(f"name 包含非法字符：'{name}'，仅允许字母、数字、'-'、'_'")
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', name):
+            raise ScaffoldError(
+                f"name 包含非法字符：'{name}'，仅允许字母、数字、'-'、'_'，"
+                "且必须以字母或数字开头"
+            )
+        if not isinstance(version, str) or not APP_VERSION_PATTERN.fullmatch(
+            version
+        ):
+            raise ScaffoldError("version 包含非法字符")
 
         if (app_type, build_system) not in _VALID_COMBINATIONS:
             valid_systems = sorted(
@@ -248,7 +266,12 @@ class AppScaffold:
         if not tpl_path.exists():
             raise ScaffoldError(f"模板文件不存在：{tpl_path}")
         out_path = dest / "app.yaml"
-        self._render_file(tpl_path, out_path, variables)
+        yaml_variables = variables.copy()
+        for key in ("name", "version", "description", "type", "build_system"):
+            yaml_variables[key] = yaml.safe_dump(
+                variables[key], allow_unicode=True, default_style='"'
+            ).strip()
+        self._render_file(tpl_path, out_path, yaml_variables)
         if variables.get("embedded_swift") == "true":
             content = out_path.read_text(encoding="utf-8")
             content += (
@@ -333,3 +356,62 @@ class AppScaffold:
         raw = tpl_path.read_text(encoding="utf-8")
         rendered = string.Template(raw).safe_substitute(variables)
         out_path.write_text(rendered, encoding="utf-8")
+
+
+class PackageScaffold:
+    """生成一个可直接走 vendor App 流水线的最小 Package。"""
+
+    def __init__(self, project_root: Optional[Path] = None) -> None:
+        self._root = Path(project_root or Path(__file__).parent.parent)
+
+    def create(
+        self,
+        name: str,
+        *,
+        parent_dir: Path,
+        app_type: str = "exec",
+        build_system: str = "cmake",
+        version: str = "0.1.0",
+        description: str = "",
+    ) -> Path:
+        """在 ``parent_dir/name`` 创建 Package 与内嵌 vendor App。"""
+        import re
+
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
+            raise ScaffoldError(
+                "Package 名称必须是 kebab-case 小写字母、数字和连字符"
+            )
+
+        dest = Path(parent_dir).expanduser().resolve() / name
+        if dest.exists():
+            raise ScaffoldError(f"目标目录已存在：{dest}")
+
+        dest.mkdir(parents=True)
+        try:
+            AppScaffold(self._root).create(
+                name,
+                app_type,
+                build_system,
+                target_dir=dest / "app",
+                version=version,
+                description=description,
+                show_registration_hint=False,
+            )
+            package = (
+                '"""Package 清单。"""\n\n'
+                "PACKAGE = {\n"
+                f'    "name": {name!r},\n'
+                f'    "description": {(description or f"{name} Package")!r},\n'
+                '    "components": [\n'
+                '        {"type": "vendor", "name": '
+                f'{name!r}, "dir": "app"}},\n'
+                "    ],\n"
+                "}\n"
+            )
+            (dest / "package.py").write_text(package, encoding="utf-8")
+        except Exception:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise
+
+        print(f"Package 脚手架已生成：{dest}")
+        return dest

@@ -12,7 +12,10 @@
 
 from __future__ import annotations
 
+import io
 import os
+import subprocess
+import tarfile
 from pathlib import Path
 from unittest.mock import MagicMock, call
 
@@ -20,6 +23,7 @@ import pytest
 
 from builder.app import AppBuilder, _BUILD_SYSTEMS, _CROSS_COMPILE_PREFIX
 from builder.app_spec import AppSpec, AppInfo, BuildConfig, MaintainerInfo
+from builder.docker import BuildError
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +72,11 @@ def _make_spec(
     )
 
 
-def _make_builder(tmp_path: Path, arch: str = "aarch64") -> AppBuilder:
+def _make_builder(
+    tmp_path: Path,
+    arch: str = "aarch64",
+    variant: str = "release",
+) -> AppBuilder:
     """构造使用 tmp_path 作为项目根目录的 AppBuilder。
 
     DockerRunner 使用 MagicMock，以便捕获 run() 调用参数。
@@ -76,13 +84,36 @@ def _make_builder(tmp_path: Path, arch: str = "aarch64") -> AppBuilder:
     config = {
         "board":   "rk3566",
         "product": "default",
-        "variant": "release",
+        "variant": variant,
         "architecture": {"userspace": arch, "kernel": "arm64", "bootloader": "arm64"},
         "rootfs":  {"custom_packages": []},
     }
     docker = MagicMock()
+    docker.run.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="", stderr="",
+    )
     source = MagicMock()
     return AppBuilder(docker, source, config, project_dir=tmp_path)
+
+
+def _deb_data_names(deb_path: Path) -> list[str]:
+    """读取 deb 的 data.tar.gz 成员名，不依赖宿主机 dpkg 工具。"""
+    data = deb_path.read_bytes()
+    if not data.startswith(b"!<arch>\n"):
+        raise ValueError(f"不是有效的 deb：{deb_path}")
+
+    position = 8
+    while position + 60 <= len(data):
+        header = data[position:position + 60]
+        name = header[:16].rstrip().decode("ascii")
+        size = int(header[48:58].rstrip())
+        position += 60
+        payload = data[position:position + size]
+        if name == "data.tar.gz":
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+                return archive.getnames()
+        position += size + (size % 2)
+    raise ValueError(f"deb 缺少 data.tar.gz：{deb_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +267,32 @@ class TestCmakeBuildCommands:
         # 反复调用后，全局常量长度不变
         assert len(_BUILD_SYSTEMS["cmake"][0]) == original_len
 
+    @pytest.mark.parametrize(
+        ("variant", "build_type"),
+        [("debug", "Debug"), ("release", "Release")],
+    )
+    def test_cmake构建类型跟随variant(self, tmp_path, variant, build_type):
+        builder = _make_builder(tmp_path, variant=variant)
+        commands = builder._build_commands(
+            _make_spec(system="cmake"), builder._config,
+        )
+
+        assert f"-DCMAKE_BUILD_TYPE={build_type}" in commands[0]
+        assert "-DCMAKE_INSTALL_PREFIX=/usr" in commands[0]
+
+    def test_cmake显式选项覆盖variant默认值(self, tmp_path):
+        builder = _make_builder(tmp_path, variant="debug")
+        commands = builder._build_commands(
+            _make_spec(
+                system="cmake",
+                options={"CMAKE_BUILD_TYPE": "RelWithDebInfo"},
+            ),
+            builder._config,
+        )
+
+        assert "-DCMAKE_BUILD_TYPE=RelWithDebInfo" in commands[0]
+        assert "-DCMAKE_BUILD_TYPE=Debug" not in commands[0]
+
 
 # ---------------------------------------------------------------------------
 # meson 命令生成
@@ -283,6 +340,16 @@ class TestMesonBuildCommands:
         cmds = builder._build_commands(spec, builder._config)
         ninja_cmd = cmds[1]
         assert not any("-Dprefix" in arg for arg in ninja_cmd)
+
+    @pytest.mark.parametrize("variant", ["debug", "release"])
+    def test_meson构建类型跟随variant(self, tmp_path, variant):
+        builder = _make_builder(tmp_path, variant=variant)
+        commands = builder._build_commands(
+            _make_spec(system="meson"), builder._config,
+        )
+
+        assert f"--buildtype={variant}" in commands[0]
+        assert "--prefix=/usr" in commands[0]
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +416,44 @@ class TestMakeBuildCommands:
         assert "sysroot" in cflags_args[0]
         assert "sysroot" in ldflags_args[0]
 
+    @pytest.mark.parametrize(
+        ("variant", "flags"),
+        [("debug", "-Wall -O0 -g"), ("release", "-Wall -O2")],
+    )
+    def test_make编译标志与sysroot同时保留(self, tmp_path, variant, flags):
+        builder = _make_builder(tmp_path, variant=variant)
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+
+        builder._compile(
+            app_dir,
+            _make_spec(system="make", deps=["libbase"]),
+            builder._config,
+        )
+
+        build_call = builder._docker.run.call_args_list[0]
+        cflags = next(
+            arg for arg in build_call.args[0] if arg.startswith("CFLAGS=")
+        )
+        assert flags in cflags
+        assert "sysroot" in cflags
+        assert "CFLAGS" not in build_call.kwargs["env"]
+
+    def test_make显式CFLAGS保持命令行优先(self, tmp_path):
+        builder = _make_builder(tmp_path, variant="debug")
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+
+        builder._compile(
+            app_dir,
+            _make_spec(system="make", options={"CFLAGS": "-Os -pipe"}),
+            builder._config,
+        )
+
+        build_call = builder._docker.run.call_args_list[0]
+        assert "CFLAGS=-Os -pipe" in build_call.args[0]
+        assert "CFLAGS" not in build_call.kwargs["env"]
+
 
 # ---------------------------------------------------------------------------
 # swift 命令生成
@@ -406,6 +511,27 @@ class TestSwiftBuildCommands:
         assert cmd[jobs_idx + 1] == "4"
         # verbose 无值，只追加 --verbose
         assert "--verbose" in cmd
+
+    @pytest.mark.parametrize("variant", ["debug", "release"])
+    def test_swift_configuration跟随variant(self, tmp_path, variant):
+        builder = _make_builder(tmp_path, variant=variant)
+        command = builder._build_commands(
+            _make_spec(system="swift"), builder._config,
+        )[0]
+
+        assert command[command.index("-c") + 1] == variant
+
+    def test_swift显式configuration覆盖variant默认值(self, tmp_path):
+        builder = _make_builder(tmp_path, variant="debug")
+        command = builder._build_commands(
+            _make_spec(
+                system="swift",
+                options={"configuration": "release"},
+            ),
+            builder._config,
+        )[0]
+
+        assert command[command.index("-c") + 1] == "release"
 
 
 # ---------------------------------------------------------------------------
@@ -489,21 +615,103 @@ class TestCompileExecution:
         # docker.run 不应被调用
         builder._docker.run.assert_not_called()
 
-    def test_cmake系统调用两次docker_run(self, tmp_path):
-        """cmake 构建系统应调用 DockerRunner.run 两次（configure + build）。"""
+    def test_cmake系统调用原生install(self, tmp_path):
+        """CMake 应执行 configure、build 和 install。"""
         builder = _make_builder(tmp_path)
         spec = _make_spec(system="cmake")
         app_dir = self._app_dir(tmp_path)
-        builder._compile(app_dir, spec, builder._config)
-        assert builder._docker.run.call_count == 2
+        install_dir = builder._compile(app_dir, spec, builder._config)
 
-    def test_make系统调用一次docker_run(self, tmp_path):
-        """make 构建系统应调用 DockerRunner.run 一次。"""
+        assert builder._docker.run.call_count == 3
+        install_call = builder._docker.run.call_args_list[-1]
+        assert install_call.args[0] == ["cmake", "--install", "build"]
+        assert install_call.kwargs["env"]["DESTDIR"] == str(install_dir)
+
+    def test_make系统调用原生install(self, tmp_path):
+        """Make 应在编译后传递同组变量执行 install。"""
         builder = _make_builder(tmp_path)
         spec = _make_spec(system="make")
         app_dir = self._app_dir(tmp_path)
-        builder._compile(app_dir, spec, builder._config)
-        assert builder._docker.run.call_count == 1
+        install_dir = builder._compile(app_dir, spec, builder._config)
+
+        assert builder._docker.run.call_count == 3
+        probe_call = builder._docker.run.call_args_list[-2]
+        assert probe_call.args[0][:3] == ["make", "-n", "install"]
+        assert probe_call.kwargs["check"] is False
+        assert probe_call.kwargs["capture"] is True
+        install_call = builder._docker.run.call_args_list[-1]
+        assert install_call.args[0][:2] == ["make", "install"]
+        assert install_call.kwargs["env"]["DESTDIR"] == str(install_dir)
+        assert install_call.args[0][-1] == f"DESTDIR={install_dir}"
+
+    def test_make无install_target回退约定文件收集(self, tmp_path):
+        builder = _make_builder(tmp_path)
+        spec = _make_spec(system="make")
+        app_dir = self._app_dir(tmp_path)
+        executable = app_dir / "bin/testapp"
+        executable.parent.mkdir()
+        executable.write_bytes(b"\x7fELF")
+        builder._docker.run.side_effect = [
+            subprocess.CompletedProcess(["make"], 0, "", ""),
+            subprocess.CompletedProcess(
+                ["make", "-n", "install"],
+                2,
+                "",
+                "make: *** No rule to make target 'install'. Stop.\n",
+            ),
+        ]
+
+        install_dir = builder._compile(app_dir, spec, builder._config)
+        files = builder._collect_package_files(app_dir, spec, install_dir)
+
+        assert install_dir is None
+        assert not builder._native_install_dir(spec).exists()
+        assert any(
+            source == executable and destination == "/usr/bin/testapp"
+            for source, destination, _mode in files
+        )
+
+    @pytest.mark.parametrize(
+        "probe_error",
+        [
+            "make: *** No rule to make target 'generated.h', "
+            "needed by 'install'. Stop.\n",
+            "make[1]: *** No rule to make target 'install'. Stop.\n",
+        ],
+    )
+    def test_make_install_target前置错误不回退(self, tmp_path, probe_error):
+        builder = _make_builder(tmp_path)
+        app_dir = self._app_dir(tmp_path)
+        builder._docker.run.side_effect = [
+            subprocess.CompletedProcess(["make"], 0, "", ""),
+            subprocess.CompletedProcess(
+                ["make", "-n", "install"],
+                2,
+                "",
+                probe_error,
+            ),
+        ]
+
+        with pytest.raises(BuildError, match="Make install target 检查失败"):
+            builder._compile(
+                app_dir, _make_spec(system="make"), builder._config,
+            )
+
+    def test_make_install_target执行失败保持报错(self, tmp_path):
+        builder = _make_builder(tmp_path)
+        app_dir = self._app_dir(tmp_path)
+        builder._docker.run.side_effect = [
+            subprocess.CompletedProcess(["make"], 0, "", ""),
+            subprocess.CompletedProcess(
+                ["make", "-n", "install"], 0, "install command\n", "",
+            ),
+            BuildError("install failed"),
+        ]
+
+        with pytest.raises(BuildError, match="install failed"):
+            builder._compile(
+                app_dir, _make_spec(system="make"), builder._config,
+            )
 
     def test_compile传递正确cwd(self, tmp_path):
         """docker.run 调用时，cwd 参数应为 app_dir 的字符串路径。"""
@@ -534,21 +742,33 @@ class TestCompileExecution:
         assert all(item.kwargs["cwd"] == str(app_dir) for item in calls)
         assert all(item.kwargs["extra_mounts"] is None for item in calls)
 
-    def test_meson系统调用两次docker_run(self, tmp_path):
-        """meson 构建系统应调用 DockerRunner.run 两次（setup + ninja）。"""
+    def test_meson系统调用原生install(self, tmp_path):
+        """Meson 应执行 setup、ninja 和 install。"""
         builder = _make_builder(tmp_path)
         spec = _make_spec(system="meson")
         app_dir = self._app_dir(tmp_path)
-        builder._compile(app_dir, spec, builder._config)
-        assert builder._docker.run.call_count == 2
+        install_dir = builder._compile(app_dir, spec, builder._config)
 
-    def test_swift系统调用一次docker_run(self, tmp_path):
-        """swift 构建系统应调用 DockerRunner.run 一次。"""
+        assert builder._docker.run.call_count == 3
+        install_call = builder._docker.run.call_args_list[-1]
+        assert install_call.args[0] == ["meson", "install", "-C", "build"]
+        assert install_call.kwargs["env"]["DESTDIR"] == str(install_dir)
+
+    def test_swift系统复制已知executable(self, tmp_path):
+        """Swift 应把当前 configuration 的 executable 复制到 staging。"""
         builder = _make_builder(tmp_path)
         spec = _make_spec(system="swift")
         app_dir = self._app_dir(tmp_path)
-        builder._compile(app_dir, spec, builder._config)
-        assert builder._docker.run.call_count == 1
+        install_dir = builder._compile(app_dir, spec, builder._config)
+
+        assert builder._docker.run.call_count == 2
+        install_call = builder._docker.run.call_args_list[-1]
+        assert install_call.args[0] == [
+            "install",
+            "-Dm755",
+            ".build/aarch64-unknown-linux-gnu/release/testapp",
+            str(install_dir / "usr/bin/testapp"),
+        ]
 
     def test_cmake第一次调用包含编译器标志(self, tmp_path):
         """cmake 的第一次 docker.run 调用（configure）应包含 CMAKE_C_COMPILER 标志。"""
@@ -626,3 +846,148 @@ class TestCompileExecution:
             if command[:2] == ["apt-get", "install"]
         ]
         assert len(apt_installs) == 1
+
+
+class TestInstallStagingPackaging:
+    """验证原生 install staging 与现有安装映射的合并语义。"""
+
+    def test_显式install映射优先于staging同路径(self, tmp_path):
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        explicit = app_dir / "manual"
+        explicit.write_bytes(b"manual")
+        install_dir = tmp_path / "install"
+        staged = install_dir / "usr/bin/testapp"
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(b"staged")
+        extra = install_dir / "usr/share/testapp/data"
+        extra.parent.mkdir(parents=True)
+        extra.write_bytes(b"data")
+
+        spec = _make_spec(system="cmake")
+        spec.install = {"manual": "/usr/bin/testapp"}
+        files = _make_builder(tmp_path)._collect_package_files(
+            app_dir, spec, install_dir,
+        )
+        by_destination = {destination: source for source, destination, _ in files}
+
+        assert by_destination["/usr/bin/testapp"] == explicit
+        assert by_destination["/usr/share/testapp/data"] == extra
+
+    def test_lib缓存命中复用install_staging恢复sysroot(self, tmp_path):
+        app_dir = tmp_path / "components/app/libfoo"
+        app_dir.mkdir(parents=True)
+        (app_dir / "app.yaml").write_text(
+            """\
+app:
+  name: foo
+  version: 1.0.0
+  description: 测试库
+  type: lib
+  arch: [aarch64]
+maintainer:
+  name: tester
+  email: test@localhost
+build:
+  system: cmake
+""",
+            encoding="utf-8",
+        )
+        install_dir = (
+            tmp_path
+            / ".build/work/apps/foo/aarch64"
+            / "rk3566/default/release/install"
+        )
+        header = install_dir / "usr/include/foo/foo.h"
+        header.parent.mkdir(parents=True)
+        header.write_text("#pragma once\n", encoding="utf-8")
+        library = install_dir / "usr/lib/libfoo.so.1"
+        library.parent.mkdir(parents=True)
+        library.write_bytes(b"\x7fELF staged library")
+
+        builder = _make_builder(tmp_path)
+        builder.cache = MagicMock()
+        builder.cache.is_app_up_to_date.return_value = True
+        builder.cache._registered_app_source_dir.return_value = app_dir
+
+        assert builder._reuse_app("foo") is True
+        sysroot = (
+            tmp_path
+            / ".build/target/rk3566/default/release/sysroot/usr"
+        )
+        assert (sysroot / "include/foo/foo.h").read_text(
+            encoding="utf-8",
+        ) == "#pragma once\n"
+        assert (sysroot / "lib/libfoo.so.1").read_bytes() == (
+            b"\x7fELF staged library"
+        )
+
+    def test_native_install_staging_is_target_specific(self, tmp_path):
+        spec = _make_spec(name="foo", system="cmake", app_type="lib")
+        release = _make_builder(tmp_path, variant="release")
+        debug = _make_builder(tmp_path, variant="debug")
+
+        assert release._native_install_dir(spec) != debug._native_install_dir(spec)
+
+    def test_lib_pkg_config_enters_dev_deb_and_sysroot(self, tmp_path):
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        install_dir = tmp_path / "install"
+        metadata = install_dir / "usr/lib/pkgconfig/foo.pc"
+        metadata.parent.mkdir(parents=True)
+        metadata.write_text("Name: foo\nVersion: 1.0.0\n", encoding="utf-8")
+        library = install_dir / "usr/lib/libfoo.so.1"
+        library.write_bytes(b"\x7fELF")
+        spec = _make_spec(name="foo", system="meson", app_type="lib")
+        builder = _make_builder(tmp_path)
+
+        outputs = builder._build_lib(app_dir, spec, install_dir)
+
+        assert "./usr/lib/pkgconfig/foo.pc" in _deb_data_names(outputs["dev"])
+        sysroot_pc = (
+            tmp_path
+            / ".build/target/rk3566/default/release/sysroot"
+            / "usr/lib/pkgconfig/foo.pc"
+        )
+        assert sysroot_pc.read_text(encoding="utf-8").startswith("Name: foo")
+
+    def test_默认cmake_scaffold_deb包含executable(self, tmp_path):
+        from builder.scaffold import AppScaffold
+        from builder.source import SourceManager
+
+        class CmakeInstallDocker:
+            """模拟 CMake 执行 install 规则后写入 DESTDIR。"""
+
+            def run(self, cmd, *, env=None, **_kwargs):
+                if cmd == ["cmake", "--install", "build"]:
+                    cmake = Path(_kwargs["cwd"]) / "CMakeLists.txt"
+                    assert "install(TARGETS hello DESTINATION bin)" in (
+                        cmake.read_text(encoding="utf-8")
+                    )
+                    executable = Path(env["DESTDIR"]) / "usr/bin/hello"
+                    executable.parent.mkdir(parents=True)
+                    executable.write_bytes(b"\x7fELF scaffold")
+                    executable.chmod(0o755)
+
+        AppScaffold(project_root=tmp_path).create(
+            "hello", "exec", "cmake",
+        )
+        config = {
+            "board": "test-board",
+            "product": "default",
+            "variant": "release",
+            "architecture": {
+                "userspace": "aarch64",
+                "kernel": "arm64",
+                "bootloader": "arm64",
+            },
+            "rootfs": {"custom_packages": []},
+        }
+        source = SourceManager(project_root=tmp_path)
+        builder = AppBuilder(
+            CmakeInstallDocker(), source, config, project_dir=tmp_path,
+        )
+
+        deb_path = builder.build_one("hello")
+
+        assert "./usr/bin/hello" in _deb_data_names(deb_path)

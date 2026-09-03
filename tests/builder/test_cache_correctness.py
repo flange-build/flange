@@ -345,7 +345,7 @@ def test_无关builder模块变化不使组件哈希失效(tmp_path: Path):
     builder_dir = tmp_path / "builder"
     builder_dir.mkdir(parents=True)
     (builder_dir / "cache.py").write_text("VALUE = 1\n")
-    for name in ("recovery_host.py", "deploy.py", "scaffold.py",
+    for name in ("recovery_host.py", "deploy.py", "dev.py", "scaffold.py",
                  "app_list.py", "oot_mounts.py"):
         (builder_dir / name).write_text("VALUE = 1\n")
     templates = builder_dir / "templates"
@@ -354,7 +354,7 @@ def test_无关builder模块变化不使组件哈希失效(tmp_path: Path):
 
     before = _cache(tmp_path).compute_hash("kernel")
 
-    for name in ("recovery_host.py", "deploy.py", "scaffold.py",
+    for name in ("recovery_host.py", "deploy.py", "dev.py", "scaffold.py",
                  "app_list.py", "oot_mounts.py"):
         (builder_dir / name).write_text("VALUE = 2\n")
     (templates / "app.yaml.tpl").write_text("name: {{other}}\n")

@@ -537,25 +537,7 @@ _flange_cmd_build() {
     # 特殊处理: flange build app [name-or-path]
     if [[ "$component" == "app" ]]; then
         if [[ -n "$app_name" ]]; then
-            _flange_docker_run python3 -c "
-from pathlib import Path
-from builder.app import AppBuilder
-from builder.cache import BuildCache
-from builder.docker import DockerRunner
-from builder.source import SourceManager
-from builder.config.loader import load_current_config
-import logging
-logging.basicConfig(level=logging.WARNING)
-cfg = load_current_config()
-${output_cfg}
-root = Path('.').resolve()
-source = SourceManager(project_root=root)
-builder = AppBuilder(DockerRunner(), source, cfg)
-# 注入 cache：单 App 构建后写入其产物清单，随后的 flange build 只重建
-# 真正变化的 App，而不是把整组再编一遍。
-builder.cache = BuildCache(cfg, project_root=root)
-builder.build_one('$app_name')
-"
+            _flange_cmd_resource app build "$app_name"
         else
             _flange_docker_run python3 -c "
 from pathlib import Path
@@ -889,169 +871,80 @@ print('')
 "
 }
 
-# --- flange create app 子命令 ---
-_flange_cmd_create_app() {
-    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-        echo "  用法: flange create app <name> [options]"
-        echo ""
-        echo "  生成一个新的 App 脚手架。"
-        echo ""
-        echo "  参数:"
-        echo "    <name>                  应用名称"
-        echo ""
-        echo "  选项:"
-        echo "    --type=<type>           应用类型 (exec/service/lib/test/amp)，默认: exec"
-        echo "    --build-system=<sys>    构建系统 (none/cmake/meson/make/swift/amp/scons)，默认: cmake"
-        echo "    --embedded-swift        amp+scons 专用，生成 Embedded Swift / SwiftPM 骨架"
-        echo "    --dir=<path>            应用生成的父目录，默认: components/app/"
-        echo "    --version=<ver>         应用初始版本，默认: 0.1.0"
-        echo "    --description=<desc>    应用描述"
-        echo "    -h, --help              显示此帮助信息"
-        return 0
-    fi
-    local app_name="${1:-}"
-    shift 2>/dev/null
-
-    if [[ -z "$app_name" ]]; then
-        _flange_error "用法: flange create app <name> [--type=<type>] [--build-system=<system>] [--dir=<path>]"
-        return 1
+# --- App / Package 资源优先命令 ---
+_flange_cmd_resource() {
+    local resource="$1"
+    shift
+    local action="${1:---help}"
+    local show_help=""
+    if [[ $# -gt 0 ]]; then
+        shift
     fi
 
-    # 解析可选参数
-    local app_type="exec"
-    local build_system="cmake"
-    local app_version="0.1.0"
-    local app_description=""
-    local app_parent_dir=""       # --dir 指向的父目录；空 = 使用默认 components/app/
-    local embedded_swift="false"
     for arg in "$@"; do
         case "$arg" in
-            --type=*)         app_type="${arg#--type=}"              ;;
-            --build-system=*) build_system="${arg#--build-system=}"  ;;
-            --version=*)      app_version="${arg#--version=}"        ;;
-            --description=*)  app_description="${arg#--description=}";;
-            --dir=*)          app_parent_dir="${arg#--dir=}"         ;;
-            --embedded-swift) embedded_swift="true"                  ;;
+            -h|--help) show_help="1" ;;
         esac
     done
-
-    # --dir 参数处理：~ 展开 + 相对 cwd 解析 + 绝对化
-    # 为了在 bash 里稳妥地支持 ~，借助 eval 展开；相对路径在 Python 侧再 resolve。
-    if [[ -n "$app_parent_dir" ]]; then
-        # shellcheck disable=SC2086
-        app_parent_dir=$(eval echo "$app_parent_dir")
+    if [[ -z "$show_help" ]]; then
+        case "$action" in
+            ""|-h|--help|create) ;;
+            build) _flange_check_all || return 1 ;;
+            *) _flange_check_target || return 1 ;;
+        esac
     fi
 
-    local embedded_swift_hint=""
-    if [[ "$embedded_swift" == "true" ]]; then
-        embedded_swift_hint="  embedded-swift=true"
-    fi
-    _flange_step "生成 App 脚手架：name=$app_name  type=$app_type  build-system=$build_system${embedded_swift_hint}${app_parent_dir:+  dir=$app_parent_dir}"
-
-    # 调用 Python 脚手架生成器
-    python3 -c "
-import sys
-from pathlib import Path
-sys.path.insert(0, '$FLANGE_DIR')
-from builder.scaffold import AppScaffold, ScaffoldError
-try:
-    s = AppScaffold(project_root=Path('$FLANGE_DIR'))
-    parent = Path('$app_parent_dir').resolve() if '$app_parent_dir' else None
-    dest = s.create(
-        name='$app_name',
-        app_type='$app_type',
-        build_system='$build_system',
-        parent_dir=parent,
-        version='$app_version',
-        description='$app_description',
-        embedded_swift=('$embedded_swift' == 'true'),
-    )
-    print(dest)
-except ScaffoldError as e:
-    print(f'错误：{e}', file=sys.stderr)
-    sys.exit(1)
-"
-    local rc=$?
-    if [[ $rc -ne 0 ]]; then
-        _flange_error "脚手架生成失败"
-        return 1
-    fi
-    return 0
+    PYTHONPATH="$FLANGE_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -P -m builder.dev "$resource" "$action" "$@"
 }
 
+# --- 旧 verb-first App 命令：委托给同一资源优先实现 ---
+_flange_cmd_create_app() {
+    local has_dir=""
+    for arg in "$@"; do
+        case "$arg" in
+            --dir|--dir=*) has_dir="1" ;;
+        esac
+    done
+    if [[ -n "$has_dir" ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        _flange_cmd_resource app create "$@"
+    else
+        _flange_cmd_resource app create "$@" --dir "$FLANGE_DIR/components/app"
+    fi
+}
 
-# --- flange push 子命令 ---
 _flange_cmd_push() {
     if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-        echo "  用法: flange push app <name-or-path> [options]"
-        echo ""
-        echo "  将单体应用热部署到通过 ADB 连接的目标设备。"
-        echo "  参数可以是应用名（走 registry 三层查找），也可以是宿主机上的目录路径"
-        echo "  （含 / 或 . 或目录存在且含 app.yaml 时视为路径）。"
-        echo ""
-        echo "  选项:"
-        echo "    --no-build    跳过构建步骤，直接推送最后一次构建的 .deb 产物"
-        echo "    -h, --help    显示此帮助信息"
-        return 0
+        _flange_cmd_resource app deploy --help
+        return $?
     fi
-
-    _flange_check_target || return 1
-    local target="$1"
-    shift 2>/dev/null
-
-    if [[ "$target" == "app" ]]; then
-        local app_arg="${1:-}"
-        if [[ -z "$app_arg" ]]; then
-            _flange_error "用法: flange push app <name-or-path>"
-            return 1
-        fi
-
-        # 传递剩余参数（如 --no-build）
-        shift 1 2>/dev/null
-        _flange_step "热部署 App: $app_arg"
-        python3 -m builder.deploy "$app_arg" "$@"
-    else
+    if [[ "$1" != "app" ]]; then
         _flange_error "用法: flange push app <name-or-path>"
         return 1
     fi
+    shift
+    if [[ $# -eq 0 ]]; then
+        _flange_error "用法: flange push app <name-or-path>"
+        return 1
+    fi
+    _flange_cmd_resource app deploy "$@"
 }
 
-# --- flange run 子命令 ---
 _flange_cmd_run() {
     if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-        echo "  用法: flange run app <name-or-path> [options]"
-        echo ""
-        echo "  热部署并立即运行指定的单体应用。参数可以是应用名（走 registry"
-        echo "  三层查找），也可以是宿主机上的目录路径（含 / 或 . 或目录存在且"
-        echo "  含 app.yaml 时视为路径）。"
-        echo "  - 如果是 exec 类型的应用，将在设备端前台执行（可按 Ctrl+C 退出）。"
-        echo "  - 如果是 service 类型的应用，将重启其 systemd 服务并显示状态。"
-        echo ""
-        echo "  选项:"
-        echo "    --no-build    跳过构建步骤，直接推送最后一次构建的 .deb 产物"
-        echo "    -h, --help    显示此帮助信息"
-        return 0
+        _flange_cmd_resource app run --help
+        return $?
     fi
-
-    _flange_check_target || return 1
-    local target="$1"
-    shift 2>/dev/null
-
-    if [[ "$target" == "app" ]]; then
-        local app_arg="${1:-}"
-        if [[ -z "$app_arg" ]]; then
-            _flange_error "用法: flange run app <name-or-path>"
-            return 1
-        fi
-
-        # 传递剩余参数（如 --no-build）并加上 --run
-        shift 1 2>/dev/null
-        _flange_step "热部署并运行 App: $app_arg"
-        python3 -m builder.deploy "$app_arg" --run "$@"
-    else
+    if [[ "$1" != "app" ]]; then
         _flange_error "用法: flange run app <name-or-path>"
         return 1
     fi
+    shift
+    if [[ $# -eq 0 ]]; then
+        _flange_error "用法: flange run app <name-or-path>"
+        return 1
+    fi
+    _flange_cmd_resource app run "$@"
 }
 
 # --- flange docker 子命令 ---
@@ -1141,6 +1034,8 @@ flange() {
         echo "  用法: flange <command> [args...] [options]"
         echo ""
         echo "  核心模块 (Modules):"
+        echo "    app        App 的创建、构建、部署、运行、调试与日志"
+        echo "    package    Package 的创建、构建、部署、运行、调试与日志"
         echo "    build      [构建] 编译系统组件或应用"
         echo "    flash      [刷写] 将镜像烧录到目标设备"
         echo "    recovery   [线刷] USB ADB 通道线刷 / 备份 / 维护设备"
@@ -1171,6 +1066,9 @@ flange() {
     shift
 
     case "$subcmd" in
+        app|package)
+            _flange_cmd_resource "$subcmd" "$@"
+            ;;
         build)
             _flange_check_all || return 1
             _flange_cmd_build "$@"
