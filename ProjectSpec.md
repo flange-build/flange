@@ -199,6 +199,11 @@ canonical JSON（规范化 JSON）交给 Python builder。
   `{lang: "<locale>", language: "<gettext language list>"}` 声明；共享
   RootfsBuilder MUST 在 overlay 后将其写入 `/etc/locale.conf` 与
   `/etc/default/locale`，值必须是非空单行字符串。未声明时保持发行版默认值。
+- rootfs 默认用户身份：`rootfs.default_user` 非空时，RootfsBuilder MUST 优先
+  创建该用户并固定为 UID 1000，同时创建同名、GID 1000 的 user private group
+  （用户私有组）；任一编号已被其他身份占用时 MUST 构建失败，不得静默改号。
+  `rootfs.groups` 中尚不存在的附加组 MUST 创建为 system group（系统组），
+  不得占用从 1000 开始的普通用户 GID 范围。
 - rootfs 默认图形会话：`rootfs.default_session` 声明 `default_user` 使用的
   session 名；共享 RootfsBuilder MUST 校验对应的 X11 或 Wayland desktop launcher
   存在，并写入 `/var/lib/AccountsService/users/<default_user>`。未声明时保持 display

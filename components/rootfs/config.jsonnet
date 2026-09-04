@@ -35,8 +35,9 @@
 //                                   /etc/sudoers.d/90-<name>，0440 root:root，
 //                                   单行 ``<name> ALL=(ALL:ALL) NOPASSWD:ALL``
 //   default_user (string | null)
-//       标识"那个"默认用户的语义指针，必须是 users 中存在的键。desktop
-//       package 可用它复用账号配置启用 GNOME Remote Login。
+//       标识"那个"默认用户的语义指针，必须是 users 中存在的键。框架优先
+//       创建该用户并固定为 UID 1000、同名用户私有组 GID 1000；编号冲突时
+//       构建失败。desktop package 可用它复用账号配置启用 GNOME Remote Login。
 //   default_session (string | null, 默认 null)
 //       default_user 的图形会话名；RootfsBuilder 校验对应 desktop launcher
 //       后写入 AccountsService。未设置时由 display manager 自行选择。
@@ -54,8 +55,9 @@
 // — Group 集合 —
 //   groups (array[string])
 //       框架统一预创的 group 集合。两职：
-//         1) 构建时对每条 group 调用 ``groupadd -f``（幂等创建），解决
-//            i2c/spi/gpio 等 ubuntu-base 中默认不存在的 group
+//         1) 构建时对每条 group 调用 ``groupadd -r -f``，将缺失项幂等创建
+//            为 system group（系统组），解决 i2c/spi/gpio 等 ubuntu-base
+//            中默认不存在的 group，同时不占用普通用户 GID 范围
 //         2) 作为每个 user 的默认入组集合（user.sudo=false 时框架从该集合
 //            中显式扣除 "sudo" 后再合并 user 自己的 groups）
 //
@@ -80,8 +82,9 @@ local variant = std.extVar('variant');
     users: {
       flange: {
         // — 普通用户 —
-        // 默认建一个 flange 用户（与 ubuntu 桌面装机第一用户心智一致）：
-        // 入 sudo group，密码同名；ssh / 串口登录后用 ``sudo -s`` 切 root。
+        // 默认建一个 flange 用户（对齐 Ubuntu Desktop 首个用户）：固定
+        // UID/GID 1000 的同名用户私有组，入 sudo group，密码同名；ssh /
+        // 串口登录后用 ``sudo -s`` 切 root。
         // 板级可整段重写 users / default_user 以替换默认用户；不希望任何
         // 用户的板级须显式 ``"users": {}`` 并同时把 disable_root_login
         // 设为 false（否则框架在校验阶段拒绝构建）。

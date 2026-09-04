@@ -665,9 +665,10 @@ class RootfsBuilder(ComponentBuilder):
 
         编排顺序（与 spec rootfs-user-system 对齐）：
           1) 配置校验（_validate_account_config）
-          2) groupadd -f 全部顶层 groups（幂等）
+          2) groupadd -r -f 全部顶层 groups（幂等创建 system group，系统组）
           3) for each user:
-               useradd -m -s <shell> -U <name>
+               default_user 固定创建为 UID/GID 1000 的同名用户私有组
+               其余用户执行 useradd -m -s <shell> -U <name>
                usermod -aG <merged> <name>
                chpasswd 写密码
                若 sudo=={"nopasswd": True} 写 /etc/sudoers.d/90-<name>
@@ -684,6 +685,7 @@ class RootfsBuilder(ComponentBuilder):
 
         groups = list(rootfs_cfg.get("groups") or [])
         users = self._real_users(rootfs_cfg)
+        default_user = rootfs_cfg.get("default_user")
         root_password = rootfs_cfg.get("root_password")
         disable_root_login = bool(rootfs_cfg.get("disable_root_login"))
 
@@ -694,17 +696,28 @@ class RootfsBuilder(ComponentBuilder):
                 self._status(f"创建 group ({len(groups)} 个): "
                              f"{', '.join(groups)}")
                 for g in groups:
-                    chroot.run(["groupadd", "-f", g])
+                    chroot.run(["groupadd", "-r", "-f", g])
 
             # (3) 创建用户
             sudoers_d_written: list[str] = []
-            for name, spec in users.items():
-                spec = spec or {}
+            user_names = list(users)
+            if default_user is not None:
+                user_names.remove(default_user)
+                user_names.insert(0, default_user)
+            for name in user_names:
+                spec = users[name] or {}
                 shell = spec.get("shell", "/bin/bash")
                 self._status(f"创建用户 {name!r} (shell={shell})")
-                # -m 创家目录（自动从 /etc/skel 拷贝）；-U 创建同名主组；
-                # -s 显式 shell；--badname 容忍非传统命名规则
-                chroot.run(["useradd", "-m", "-U", "-s", shell, name])
+                # 默认桌面用户对齐 Ubuntu 首个用户：UID 1000，并以同名
+                # GID 1000 用户私有组作为主组；冲突时由 shadow 工具直接失败。
+                if name == default_user:
+                    chroot.run(["groupadd", "-g", "1000", name])
+                    chroot.run([
+                        "useradd", "-m", "-u", "1000", "-g", name,
+                        "-s", shell, name,
+                    ])
+                else:
+                    chroot.run(["useradd", "-m", "-U", "-s", shell, name])
 
                 merged = self._merge_user_groups(groups, spec)
                 if merged:

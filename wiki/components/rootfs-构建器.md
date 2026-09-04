@@ -20,7 +20,7 @@ related:
   - "[[deb 打包引擎]]"
   - "[[app 打包系统]]"
   - "[[源码管理 SourceManager]]"
-updated: 2026-07-14
+updated: 2026-09-04
 ---
 
 ## TL;DR
@@ -40,7 +40,7 @@ ubuntu-base + apt + overlay + deb 两阶段 rootfs 构建；按 `arch` 选择 QE
 - **ARM32**：SoC 配置选择 Ubuntu Base armhf 与 `qemu-arm-static`；Docker 同时提供 armhf 运行库和 gcc-10 hard-float 工具链，宿主机无需 ARM32 环境
 - **UBI**：`rootfs.image_format=ubi` 时先以 `mkfs.ubifs` 按 min-I/O/LEB/max-LEB 生成 volume，再用 `ubinize` 按 PEB/subpage/VID offset 封装 `rootfs.ubi`；`space_fixup=true` 对应 `mkfs.ubifs -F`，首次挂载可修复 NAND 空闲页
 - **API 文件系统**：rootfs 固化 `/proc`、`/sys`、`/dev`、`/dev/pts`、`/run`、`/sys/kernel/config` 等挂载点，保证 systemd 与模块化 USB gadget 冷启动可用
-- **用户与 sudo 体系**（基类 `_configure_users`，跨平台共享）：声明式配置 `rootfs.{users, default_user, disable_root_login, root_password, groups}`；`groups` 顶层声明同时承担"幂等 `groupadd -f` 预创"与"每个 user 默认入组集"双职。每 user 的 `sudo` 三态：`True`（默认入 sudo group）/ `False`（从入组集中扣除 `sudo`）/ `{"nopasswd": True}`（额外写 `/etc/sudoers.d/90-<name>` 0440 NOPASSWD ALL，构建期 `visudo -cf` 校验）。`disable_root_login: true` 同时锁 `/etc/shadow`（`passwd -l root`）与写 `/etc/ssh/sshd_config.d/10-flange.conf` 的 `PermitRootLogin no`，但 **adb 调试通道不受影响**（adbd 不走 PAM）；该开关启用但 `users` 空时框架在构建期 `raise ValueError`。`bash-completion` 进 base 包；overlay `etc/skel/.bashrc` 与 `root/.bashrc` 同款配置（PS1、ls/grep 彩色、`ll/la/l` alias、`sudo<TAB>` completion），让 ssh 登录与 `adb shell` 拿到的 root bash 体验对齐 ubuntu 桌面
+- **用户与 sudo 体系**（基类 `_configure_users`，跨平台共享）：声明式配置 `rootfs.{users, default_user, disable_root_login, root_password, groups}`；`default_user` 非空时优先创建为 UID 1000，并使用同名、GID 1000 的 user private group（用户私有组），编号冲突直接构建失败。`groups` 顶层声明同时承担“幂等 `groupadd -r -f` 预创 system group（系统组）”与“每个 user 默认入组集”双职，缺失组不占普通用户 GID 范围。每 user 的 `sudo` 三态：`True`（默认入 sudo group）/ `False`（从入组集中扣除 `sudo`）/ `{"nopasswd": True}`（额外写 `/etc/sudoers.d/90-<name>` 0440 NOPASSWD ALL，构建期 `visudo -cf` 校验）。`disable_root_login: true` 同时锁 `/etc/shadow`（`passwd -l root`）与写 `/etc/ssh/sshd_config.d/10-flange.conf` 的 `PermitRootLogin no`，但 **adb 调试通道不受影响**（adbd 不走 PAM）；该开关启用但 `users` 空时框架在构建期 `raise ValueError`。`bash-completion` 进 base 包；overlay `etc/skel/.bashrc` 与 `root/.bashrc` 同款配置（PS1、ls/grep 彩色、`ll/la/l` alias、`sudo<TAB>` completion），让 ssh 登录与 `adb shell` 拿到的 root bash 体验对齐 Ubuntu Desktop
 
 ## 关键代码位置
 
