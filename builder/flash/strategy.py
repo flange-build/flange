@@ -730,6 +730,28 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
         return False
 
     @staticmethod
+    def _resolve_pyamlboot_entry(entry: str) -> str:
+        """绕过 pyenv 的 Shell shim，避免 macOS 清除动态库搜索环境。"""
+        path = Path(entry).resolve()
+        if path.parent.name != "shims":
+            return str(path)
+        pyenv = shutil.which("pyenv")
+        if not pyenv:
+            raise FlashError("boot-g12.py 指向 shim，但找不到 pyenv；请恢复 pyenv 或使用真实脚本路径")
+        try:
+            root = subprocess.check_output([pyenv, "root"], text=True, timeout=5).strip()
+            if path.parent != (Path(root) / "shims").resolve():
+                raise FlashError(f"无法识别 boot-g12.py 的 shim：{path}；请把真实脚本目录加入 PATH")
+            resolved = Path(subprocess.check_output(
+                [pyenv, "which", path.name], text=True, timeout=5,
+            ).strip()).resolve()
+        except (OSError, subprocess.SubprocessError) as error:
+            raise FlashError(f"无法解析 pyenv 中的 boot-g12.py：{error}") from error
+        if resolved.parent == path.parent or not resolved.is_file() or not os.access(resolved, os.X_OK):
+            raise FlashError(f"pyenv 未返回可执行的真实 boot-g12.py：{resolved}")
+        return str(resolved)
+
+    @staticmethod
     def _darwin_dyld_lib_path() -> Optional[str]:
         """在 macOS 上返回应注入子进程 DYLD_FALLBACK_LIBRARY_PATH 的路径。
 
@@ -737,7 +759,7 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
         libusb 在 /opt/homebrew/lib（Apple Silicon）或 /usr/local/lib
         （Intel）。前者不在 dyld 默认搜索路径，后者虽在但若残留 x86_64
         老 dylib 会与 arm64 Python arch 失配。把 brew 的 lib 路径强行
-        加入 fallback 搜索路径即可。
+        加入 fallback 搜索路径，并先解析 Shell shim，直接启动真实入口。
 
         非 macOS 返回 None（Linux 走 udev rule / sudo 不需要这层）。
         """
@@ -815,6 +837,9 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
                 "    并把仓库根目录加入 PATH"
             )
 
+        if sys.platform == "darwin":
+            pyamlboot = self._resolve_pyamlboot_entry(pyamlboot)
+
         # MaskROM 设备探测（best-effort）
         self._wait_maskrom_device(timeout=30)
 
@@ -829,8 +854,8 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
         # x86_64 老 brew 或 Rosetta 工具留下的），ctypes find_library 会
         # 撞到 arch 失配的那一份，pyusb 报 "No backend available"。
         # 通过 ``env DYLD_FALLBACK_LIBRARY_PATH=<brew>/lib`` 透给子进程
-        # 解决（DYLD_* 直接传给 sudo 会被 SIP 剥；走 env 作为新命令的
-        # 第一参数，env 自身的 args 不在 SIP 剥除范围内）。
+        # 传入真实入口。DYLD_* 不能直接穿过 sudo，也不能在 env 之后
+        # 再经过 pyenv 的 Shell shim；后者会再次触发 macOS 的环境清理。
         cmd = ["sudo"]
         dyld_extra = self._darwin_dyld_lib_path()
         if dyld_extra:

@@ -129,6 +129,7 @@ class TestPreFlash:
             cfg = self._make_config()
             with patch("shutil.which", return_value="/usr/local/bin/boot-g12.py"), \
                  patch("builder.flash.strategy.subprocess.run") as mock_run, \
+                 patch.object(s, "_wait_maskrom_device"), \
                  patch("builder.flash.strategy.time.sleep"):
                 s.pre_flash(Path("/usr/bin/fastboot"), target_dir, cfg)
 
@@ -144,6 +145,25 @@ class TestPreFlash:
             assert "sudo" in cmd
             assert "/usr/local/bin/boot-g12.py" in cmd
             assert str(boot_img) in cmd
+
+    def test_macos_resolves_shim_before_launch(self, tmp_path):
+        s = AmlogicFlashStrategy()
+        boot = tmp_path / "bootloader/u-boot.bin.sd.bin"
+        boot.parent.mkdir()
+        boot.write_bytes(b"boot")
+        with patch("builder.flash.strategy.sys.platform", "darwin"), \
+             patch("shutil.which", return_value="/pyenv/shims/boot-g12.py"), \
+             patch.object(s, "_resolve_pyamlboot_entry", return_value="/python/bin/boot-g12.py") as resolve, \
+             patch.object(s, "_darwin_dyld_lib_path", return_value="/opt/homebrew/lib"), \
+             patch.object(s, "_wait_maskrom_device"), \
+             patch("builder.flash.strategy.time.sleep"), \
+             patch("builder.flash.strategy.subprocess.run") as run:
+            s.pre_flash(Path("/bin/fastboot"), tmp_path, self._make_config())
+        resolve.assert_called_once_with("/pyenv/shims/boot-g12.py")
+        run.assert_called_once_with([
+            "sudo", "env", "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib",
+            "/python/bin/boot-g12.py", str(boot),
+        ], check=True)
 
     def test_pre_flash_missing_boot_image_raises(self):
         s = AmlogicFlashStrategy()
@@ -352,3 +372,39 @@ class TestDetectDevice:
             info = s.detect_device(Path("/fastboot"))
             assert info is not None
             assert info.mode == "maskrom"
+
+
+class TestPyenvEntry:
+    def test_direct_entry_does_not_invoke_pyenv(self, tmp_path):
+        entry = tmp_path / "boot-g12.py"
+        with patch("builder.flash.strategy.subprocess.check_output") as command:
+            assert AmlogicFlashStrategy._resolve_pyamlboot_entry(str(entry)) == str(entry)
+        command.assert_not_called()
+
+    @pytest.mark.parametrize("invalid", [False, True])
+    def test_shim_resolves_selected_environment_or_fails(self, tmp_path, invalid):
+        root = tmp_path / "pyenv"
+        shim = root / "shims/boot-g12.py"
+        shim.parent.mkdir(parents=True)
+        shim.write_text("#!/bin/sh\n")
+        real = root / "versions/custom/bin/boot-g12.py"
+        real.parent.mkdir(parents=True)
+        real.write_text("#!/python\n")
+        real.chmod(0o755)
+        with patch("shutil.which", return_value="/bin/pyenv"), \
+             patch("builder.flash.strategy.subprocess.check_output",
+                   side_effect=[str(root), str(shim if invalid else real)]) as command:
+            if invalid:
+                with pytest.raises(FlashError, match="真实"):
+                    AmlogicFlashStrategy._resolve_pyamlboot_entry(str(shim))
+            else:
+                assert AmlogicFlashStrategy._resolve_pyamlboot_entry(str(shim)) == str(real)
+                assert command.call_args[0][0] == ["/bin/pyenv", "which", "boot-g12.py"]
+
+    def test_resolution_failure_is_actionable(self, tmp_path):
+        shim = tmp_path / "shims/boot-g12.py"
+        with patch("shutil.which", return_value="/bin/pyenv"), \
+             patch("builder.flash.strategy.subprocess.check_output",
+                   side_effect=subprocess.TimeoutExpired("pyenv", 5)), \
+             pytest.raises(FlashError, match="无法解析 pyenv"):
+            AmlogicFlashStrategy._resolve_pyamlboot_entry(str(shim))
