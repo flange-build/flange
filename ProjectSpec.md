@@ -136,6 +136,11 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
   `name-or-path` 可以是名称或路径，省略时使用调用者目录；create 的 `--dir` 指定父目录。
 - App 名称、路径和 cwd 入口统一进入 AppResolver，递归解析 `build.deps`，拒绝缺失、循环和同名不同源歧义。
   AppBuilder 使用统一 Toolchain、目标隔离工作树、依赖安装前缀与准确 AppBuildReport；打包前检查 ELF 架构。
+- App 通过 `packaging.format/outputs` 声明交付格式、精确文件与 runtime/development 角色；
+  `PackageBackend` 负责规划、默认打包、完整包验证提取与设备安装命令，当前仅实现 DEB。
+  通用 AppBuilder 不包含格式专属命令；APT 编译依赖归属 Ubuntu 构建环境适配。
+  全部包进入依赖安装树与 schema 2 报告，默认部署/rootfs 只安装 runtime；Ubuntu rootfs 拒绝非 DEB。
+  完整外部包的内容及维护脚本由原打包器负责，Flange 不重打包、不执行导入包的维护脚本。
 - App 安装树、隔离源码、调试快照及 Package 源码快照共用 `file_tree.py` 的复制策略：
   符号链接保留目标文本，不展开目标，也不复制链接自身的宿主扩展属性或时间戳；
   普通文件保留内容与权限，目录保留空目录并在子项复制后设置权限。真实 I/O 失败必须中止发布，
@@ -409,6 +414,8 @@ flange/
 │   ├── file_tree.py    #   App/Package 文件树复制，保留链接对象及普通节点权限
 │   ├── app_resolver.py #   来源解析与完整依赖闭包
 │   ├── app_model.py    #   AppBuildResult / AppBuildReport
+│   ├── packaging/     #   包模型、格式策略和 DEB 实现
+│   ├── build_dependencies.py # Ubuntu 构建容器的 APT 编译依赖
 │   ├── package_build.py #  Package 显式 build action 的产物流水线
 │   ├── toolchain.py    #   目标 ABI 与构建系统工具变量
 │   ├── deploy.py       #   manifest 部署、测试、GDB 与会话记录

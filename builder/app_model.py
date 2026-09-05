@@ -10,6 +10,7 @@ from typing import Sequence
 
 from builder.artifacts import ArtifactManifest
 from builder.digest import digest_value
+from builder.packaging.model import PackageArtifact
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,7 @@ class AppBuildResult:
     dependency_ids: tuple[str, ...]
     manifest_path: Path
     manifest: ArtifactManifest
-    runtime_debs: tuple[Path, ...]
+    packages: tuple[PackageArtifact, ...]
     install_dir: Path
     executable: str = ""
     service_unit: str = ""
@@ -34,6 +35,19 @@ class AppBuildResult:
     @property
     def identity(self) -> str:
         return self.manifest.identity
+
+    @property
+    def runtime_packages(self) -> tuple[PackageArtifact, ...]:
+        return tuple(item for item in self.packages if item.role == "runtime")
+
+    @property
+    def development_packages(self) -> tuple[PackageArtifact, ...]:
+        return tuple(item for item in self.packages if item.role == "development")
+
+    @property
+    def runtime_debs(self) -> tuple[Path, ...]:
+        """旧调用者的 DEB 视图；新消费者应使用带格式的包记录。"""
+        return tuple(item.path for item in self.runtime_packages if item.format == "deb")
 
     def validate(self) -> bool:
         if not self.manifest.validate():
@@ -56,9 +70,11 @@ class AppBuildResult:
                     or Path(self.debug_source_dir) == records["debug-source"].path
                 )
                 and self.install_dir == records["install"].path
-                and tuple(metadata["runtime_debs"])
-                == tuple(path.name for path in self.runtime_debs)
-                and all(path == records[path.name].path for path in self.runtime_debs)
+                and metadata["packages"] == [package.metadata() for package in self.packages]
+                and len({package.path.name for package in self.packages}) == len(self.packages)
+                and {package.path.name for package in self.packages}
+                == set(records) - {"install", "resource", "debug-source"}
+                and all(package.path == records[package.path.name].path for package in self.packages)
             )
         except (OSError, ValueError, KeyError):
             return False
@@ -86,14 +102,18 @@ class AppBuildReport:
 
     @property
     def runtime_debs(self) -> tuple[Path, ...]:
-        return tuple(dict.fromkeys(path for result in self.ordered for path in result.runtime_debs))
+        return tuple(item.path for item in self.runtime_packages if item.format == "deb")
+
+    @property
+    def runtime_packages(self) -> tuple[PackageArtifact, ...]:
+        return tuple(dict.fromkeys(item for result in self.ordered for item in result.runtime_packages))
 
     def root(self) -> AppBuildResult:
         if len(self.roots) != 1:
             raise ValueError("该操作要求一个明确的 App 请求根")
         return next(item for item in self.ordered if item.resource_id == self.roots[0])
 
-    def runtime_debs_for(self, names: Sequence[str]) -> tuple[Path, ...]:
+    def runtime_packages_for(self, names: Sequence[str]) -> tuple[PackageArtifact, ...]:
         by_id = {item.resource_id: item for item in self.ordered}
         wanted: set[str] = set()
 
@@ -114,9 +134,12 @@ class AppBuildReport:
                 path
                 for item in self.ordered
                 if item.resource_id in wanted
-                for path in item.runtime_debs
+                for path in item.runtime_packages
             )
         )
+
+    def runtime_debs_for(self, names: Sequence[str]) -> tuple[Path, ...]:
+        return tuple(item.path for item in self.runtime_packages_for(names) if item.format == "deb")
 
     def validate(self) -> bool:
         seen = set()
@@ -145,7 +168,7 @@ class AppBuildReport:
     def write(self, path: Path) -> None:
         path = Path(path)
         value = {
-            "schema_version": 1,
+            "schema_version": 2,
             "roots": self.roots,
             "target": self.target,
             "architecture": self.architecture,
@@ -158,7 +181,7 @@ class AppBuildReport:
                     "dependency_ids": item.dependency_ids,
                     "manifest_path": str(item.manifest_path),
                     "manifest_identity": item.identity,
-                    "runtime_debs": [str(deb) for deb in item.runtime_debs],
+                    "packages": [package.to_dict() for package in item.packages],
                     "install_dir": str(item.install_dir),
                     "executable": item.executable,
                     "service_unit": item.service_unit,
@@ -181,8 +204,8 @@ class AppBuildReport:
     @classmethod
     def load(cls, path: Path) -> AppBuildReport:
         value = json.loads(Path(path).read_text())
-        if value.get("schema_version") != 1:
-            raise ValueError(f"不支持的 App 报告版本：{path}")
+        if value.get("schema_version") != 2:
+            raise ValueError(f"不支持的 App 报告版本，请重新运行 flange app build：{path}")
         results = []
         for entry in value["ordered"]:
             manifest_path = Path(entry["manifest_path"])
@@ -196,7 +219,7 @@ class AppBuildReport:
                 dependency_ids=tuple(entry["dependency_ids"]),
                 manifest_path=manifest_path,
                 manifest=manifest,
-                runtime_debs=tuple(Path(item) for item in entry["runtime_debs"]),
+                packages=tuple(PackageArtifact.from_dict(item) for item in entry["packages"]),
                 install_dir=Path(entry["install_dir"]),
                 executable=entry["executable"],
                 service_unit=entry["service_unit"],
@@ -206,8 +229,8 @@ class AppBuildReport:
                 debug_source_dir=entry["debug_source_dir"],
             )
             recorded = {artifact.path.resolve() for artifact in manifest.artifacts}
-            if any(deb.resolve() not in recorded for deb in result.runtime_debs):
-                raise ValueError("App 报告引用了清单之外的 deb")
+            if any(package.path.resolve() not in recorded for package in result.packages):
+                raise ValueError("App 报告引用了清单之外的包")
             results.append(result)
         report = cls(tuple(value["roots"]), tuple(results), value["target"], value["architecture"])
         if report.identity != value["identity"] or not report.validate():

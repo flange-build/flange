@@ -220,7 +220,10 @@ class RootfsBuilder(ComponentBuilder):
             raise BuildError("rootfs 缺少本次构建的 AppBuildReport")
         if not self.app_report.validate():
             raise BuildError("App 产物已经变更或缺失，拒绝安装")
-        deb_files = self.app_report.runtime_debs_for(names)
+        packages = self.app_report.runtime_packages_for(names)
+        if any(package.format != "deb" for package in packages):
+            raise BuildError("Ubuntu rootfs 仅支持安装 DEB 格式的 App 包")
+        deb_files = tuple(package.path for package in packages)
         if not deb_files:
             return
         names = [deb.name for deb in deb_files]

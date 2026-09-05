@@ -231,6 +231,7 @@ def report_data(report: AppBuildReport) -> dict:
                 "reused": item.reused,
                 "source_dir": str(item.source_dir),
                 "manifest_path": str(item.manifest_path),
+                "packages": [package.to_dict() for package in item.packages],
                 "runtime_debs": [str(path) for path in item.runtime_debs],
             }
             for item in report.ordered

@@ -15,14 +15,16 @@ from builder.app_model import AppBuildReport, AppBuildResult
 from builder.app_resolver import AppResolver, AppResource
 from builder.app_spec import AppSpec
 from builder.artifacts import ArtifactManifest, ArtifactSpec
+from builder.build_dependencies import UbuntuBuildDependencies
 from builder.config.apps import gather_custom_packages
 from builder.config.canonical import userspace_arch
-from builder.deb import DebBuilder, _map_arch
 from builder.digest import digest_value, hash_path
 from builder.environment import environment_identity
 from builder.file_tree import copy_entry, copy_tree
 from builder.graph import InputSpec, TaskPlan
 from builder.locking import FileLock
+from builder.packaging import get_backend
+from builder.packaging.model import PackageArtifact, PackageOutput
 from builder.toolchain import Toolchain
 from builder.workspace import WorkspaceContext
 
@@ -76,8 +78,7 @@ class AppBuilder:
         self._arch = userspace_arch(config)
         self.toolchain = Toolchain.for_arch(self._arch)
         self.resolver = AppResolver(context, source, config)
-        self._apt_index_updated = False
-        self._installed_build_packages: set[str] = set()
+        self.build_dependencies = UbuntuBuildDependencies(docker, context.build_root)
 
     def _status(self, message: str) -> None:
         if self.output:
@@ -154,15 +155,8 @@ class AppBuilder:
                 return candidate
         return source
 
-    def _deb_names(self, spec: AppSpec) -> tuple[str, ...]:
-        if spec.app.type == "staging":
-            return ()
-        if spec.build.deb_outputs:
-            return tuple(spec.build.deb_outputs)
-        name = f"lib{spec.app.name}" if spec.app.type == "lib" else spec.app.name
-        suffix = spec.lib.dev_suffix if spec.lib else "-dev"
-        names = [name, name + suffix] if spec.app.type == "lib" else [name]
-        return tuple(f"{value}_{spec.app.version}_{_map_arch(self._arch)}.deb" for value in names)
+    def _package_outputs(self, spec: AppSpec) -> tuple[PackageOutput, ...]:
+        return get_backend(spec.packaging.format).plan(spec, self._arch)
 
     def _plan(self, resource: AppResource) -> TaskPlan:
         directory = self.context.target_dir / "apps" / resource.resource_id
@@ -173,8 +167,8 @@ class AppBuilder:
         if self.context.target.variant == "debug":
             outputs.append(ArtifactSpec("debug-source", directory / "debug-source", "tree"))
         outputs.extend(
-            ArtifactSpec(name, directory / "artifacts" / name, allow_empty=False)
-            for name in self._deb_names(resource.spec)
+            ArtifactSpec(item.file, directory / "artifacts" / item.file, allow_empty=False)
+            for item in self._package_outputs(resource.spec)
         )
         logic = Path(__file__).parent
         inputs = [
@@ -200,11 +194,17 @@ class AppBuilder:
             "app_build.py",
             "app_resolver.py",
             "app_spec.py",
-            "deb.py",
+            "app_model.py",
+            "build_dependencies.py",
             "file_tree.py",
             "toolchain.py",
         ):
             inputs.append(InputSpec.file(f"recipe:{name}", logic / name))
+        inputs.append(InputSpec.tree(
+            "recipe:packaging", logic / "packaging", exclude_names=("__pycache__",),
+        ))
+        for path in get_backend(resource.spec.packaging.format).recipe_paths():
+            inputs.append(InputSpec.file(f"recipe:{path.name}", path))
         docker_root = self.context.tool_root / "docker"
         if docker_root.is_dir():
             inputs.append(InputSpec.tree("container_recipe", docker_root))
@@ -281,7 +281,7 @@ class AppBuilder:
                     ),
                     "DESTDIR": str(install),
                 }
-                self._install_build_packages(spec)
+                self.build_dependencies.install(spec.build.apt_packages, self._arch)
                 commands, install_command = toolchain.commands(
                     spec,
                     source=source_dir,
@@ -301,7 +301,17 @@ class AppBuilder:
                     if not staged.is_dir() or not any(staged.iterdir()):
                         raise ValueError(f"缺少 App staging 产物：{staged}")
                     copy_tree(staged, install)
-                files = self._collect(source_dir, spec, install)
+                backend = get_backend(spec.packaging.format)
+                package_outputs = backend.plan(spec, self._arch)
+                runtime_paths = None
+                if spec.packaging.outputs:
+                    runtime_paths = backend.import_outputs(
+                        package_outputs, self._arch, publish / "artifacts", install, self._docker,
+                    )
+                    # 完整外部包是安装内容的来源，不用源目录约定覆盖包中的文件。
+                    files = self._installed_files(install)
+                else:
+                    files = self._collect(source_dir, spec, install)
                 validate_elf_architecture(files, self._arch)
                 # 原生安装与约定文件组成单一发布树，依赖与调试读取同一份内容。
                 for source_file, destination, mode in files:
@@ -311,30 +321,23 @@ class AppBuilder:
                         if not target_file.is_symlink():
                             target_file.chmod(mode)
                 files = self._installed_files(install)
-                executable, unit = self._runtime(spec, files)
-                if spec.app.type != "staging" and not spec.build.deb_outputs:
-                    self._package(spec, files, publish / "artifacts")
-                for filename in spec.build.deb_outputs:
-                    package = publish / "artifacts" / filename
-                    if not package.is_file():
-                        raise ValueError(f"缺少声明的 deb 产物：{package}")
-                    inspected = self._docker.run(
-                        ["dpkg-deb", "--field", str(package), "Architecture"], capture=True
-                    )
-                    actual = inspected.stdout.strip()
-                    if actual not in {_map_arch(self._arch), "all"}:
-                        raise ValueError(
-                            f"deb 架构不匹配：{filename} 是 {actual}，目标为 {_map_arch(self._arch)}"
-                        )
-                runtime_names = self._deb_names(spec)
-                if spec.app.type == "lib":
-                    runtime_names = runtime_names[:1]
+                executable, unit = self._runtime(
+                    spec, files if runtime_paths is None else [
+                        entry for entry in files if entry[1] in runtime_paths
+                    ],
+                )
+                if not spec.packaging.outputs:
+                    backend.build(spec, self._arch, files, publish / "artifacts")
+                packages = tuple(
+                    PackageArtifact(output / "artifacts" / item.file, backend.format, item.role)
+                    for item in package_outputs
+                )
                 metadata = {
                     "resource_id": resource.resource_id,
                     "name": spec.app.name,
                     "source_dir": str(resource.source_dir),
                     "dependency_ids": resource.dependency_ids,
-                    "runtime_debs": runtime_names,
+                    "packages": [package.metadata() for package in packages],
                     "executable": executable,
                     "service_unit": unit,
                     "app_type": spec.app.type,
@@ -460,32 +463,6 @@ class AppBuilder:
             return "", unit
         return "", ""
 
-    def _package(
-        self, spec: AppSpec, files: list[tuple[Path, str, int]], destination: Path
-    ) -> None:
-        if spec.app.type != "lib":
-            DebBuilder().build_from_spec(spec, self._arch, files, destination)
-            return
-        runtime = []
-        development = []
-        for entry in files:
-            path = entry[1]
-            filename = Path(path).name
-            if path.startswith("/usr/include/") or filename.endswith((".a", ".pc")):
-                development.append(entry)
-            else:
-                runtime.append(entry)
-        name = f"lib{spec.app.name}"
-        runtime_spec = replace(spec, app=replace(spec.app, name=name))
-        suffix = spec.lib.dev_suffix if spec.lib else "-dev"
-        development_spec = replace(
-            spec,
-            app=replace(spec.app, name=name + suffix),
-            depends=[f"{name} (= {spec.app.version})", *spec.depends],
-        )
-        DebBuilder().build_from_spec(runtime_spec, self._arch, runtime, destination)
-        DebBuilder().build_from_spec(development_spec, self._arch, development, destination)
-
     @staticmethod
     def _publish(
         staging: Path, destination: Path, plan: TaskPlan, fingerprint, identities: dict
@@ -532,8 +509,9 @@ class AppBuilder:
             dependency_ids=tuple(metadata["dependency_ids"]),
             manifest_path=directory / "manifest.json",
             manifest=manifest,
-            runtime_debs=tuple(
-                directory / "artifacts" / filename for filename in metadata["runtime_debs"]
+            packages=tuple(
+                PackageArtifact(directory / "artifacts" / item["file"], item["format"], item["role"])
+                for item in metadata["packages"]
             ),
             install_dir=directory / "install",
             executable=metadata["executable"],
@@ -543,36 +521,3 @@ class AppBuilder:
             compile_source_dir=metadata["compile_source_dir"],
             debug_source_dir=metadata["debug_source_dir"],
         )
-
-    def _install_build_packages(self, spec: AppSpec) -> None:
-        if not spec.build.apt_packages:
-            return
-        with FileLock(self.context.build_root / "locks/apt-cache.lock"):
-            self._install_build_packages_locked(spec)
-
-    def _install_build_packages_locked(self, spec: AppSpec) -> None:
-        requested = [
-            package.replace("{arch}", _map_arch(self._arch)) for package in spec.build.apt_packages
-        ]
-        pending = list(
-            dict.fromkeys(
-                package for package in requested if package not in self._installed_build_packages
-            )
-        )
-        if not pending:
-            return
-        if not self._apt_index_updated:
-            self._docker.run(["apt-get", "update"])
-            self._apt_index_updated = True
-        self._docker.run(
-            [
-                "apt-get",
-                "install",
-                "-y",
-                "--no-install-recommends",
-                "-o",
-                "Dir::Cache::archives=/cache/apt",
-                *pending,
-            ]
-        )
-        self._installed_build_packages.update(pending)

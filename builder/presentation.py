@@ -195,8 +195,10 @@ def render_resource(action: str, result: dict) -> list[str]:
         for app in result["apps"]:
             state = " · " + style("已复用", Role.SUCCESS) if app.get("reused") else ""
             lines.append(f"  {app['name']}{state}")
-            for path in app.get("runtime_debs", []):
-                lines.append("    " + style(path, Role.PATH))
+            for package in app.get("packages", []):
+                role = "运行包" if package["role"] == "runtime" else "开发包"
+                lines.append(f"    {role} · {package['format'].upper()}")
+                lines.append("      " + style(package["path"], Role.PATH))
             if action == "list":
                 lines.append(f"    {style(app['path'], Role.PATH)} · {app['source']}")
         if result.get("identity"):

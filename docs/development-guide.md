@@ -399,12 +399,16 @@ variant = "debug"
 依赖安装树组成当前 App 的编译前缀；它不等于完整目标系统 rootfs。
 资源 ID 包含源码规范路径，避免两个同名目录共用产物。
 
+已有 CPack 工程可以通过 `packaging.outputs` 交付多个完整 DEB，分别声明 `runtime`（运行包）和
+`development`（开发包）。所有包都会提供下游编译所需的安装内容，默认部署和 rootfs 只安装运行包。
+配置、脚本示例与后端扩展方式见[多 DEB 与包格式后端](package-backends.md)。
+
 ```text
 .build/work/<target.key>/apps/<resource-id>/      # 原生中间目录和隔离源码
 .build/target/<board>/<product>/<variant>/apps/
 ├── <resource-id>/
 │   ├── install/                                # 已发布安装树
-│   ├── artifacts/                              # 准确的 deb 集合
+│   ├── artifacts/                              # 准确的运行包与开发包集合
 │   ├── resource.json
 │   ├── debug-source/                           # debug 目标的匹配源码副本
 │   └── manifest.json
@@ -413,6 +417,7 @@ variant = "debug"
 
 实际清单名称和路径以 `flange app build --json` 结果为准。
 系统 App 构建另外发布 `apps/build-report.json`，rootfs/recovery 只消费各自选择的准确依赖闭包。
+App 报告使用 `schema_version: 2`，包记录包含 `path/format/role`；旧报告需重新运行 `flange app build`。
 
 ## 6. 部署、运行与源码调试
 

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+from builder.packaging.model import PackageArtifact
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -176,7 +178,7 @@ def test_只装声明的custom_packages及运行依赖(tmp_path: Path, builder_c
             resource_id=name,
             name=name,
             dependency_ids=deps,
-            runtime_debs=(deb,),
+            runtime_packages=(PackageArtifact(deb, "deb", "runtime"),),
             validate=lambda: True,
         )
 

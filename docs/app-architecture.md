@@ -62,7 +62,9 @@ data_dirs: [/var/lib/telemetry]
 | `build.apt_packages` | 容器编译依赖列表，支持 `:{arch}` 占位符 |
 | `build.commands` | custom 专用非空 argv 列表的列表；不接受 shell 字符串 |
 | `build.staging` | 相对 `FLANGE_APP_WORK_DIR` 的非空安装树；staging 类型必须声明 |
-| `build.deb_outputs` | custom vendor 直接生成的完整 `.deb` 文件名列表 |
+| `build.deb_outputs` | custom vendor 的旧完整 DEB 声明，规范化为全部 runtime；不能与 packaging 混用 |
+| `packaging.format` | 包格式，缺省 deb；由已注册的 PackageBackend 处理 |
+| `packaging.outputs` | 完整外部包列表；每项必填精确 file 和 runtime/development role |
 | `build.swift` | AMP+scons 的 Embedded Swift 配置；不等同于原生 Swift App |
 | `install` | 源相对路径 → 目标绝对路径，覆盖约定收集结果 |
 | `systemd` | service 必填 unit；`auto_start` 缺省 false |
@@ -79,8 +81,9 @@ data_dirs: [/var/lib/telemetry]
 非 service 的非空 `data_dirs`、不适用的 systemd/lib/runtime 块和其他未消费配置会报错。
 源相对路径拒绝绝对值及 `..`，设备路径必须为规范绝对路径。
 
-service 安装始终更新 unit 索引和数据目录；只有 `auto_start: true` 才调用 systemctl enable，
+默认生成的 service 包安装时更新 unit 索引和数据目录；只有 `auto_start: true` 才调用 systemctl enable，
 或在 chroot 中注册 WantedBy 链接。安装不直接启动服务；运行由 `flange app run` 控制。
+完整外部包的启用、升级和数据保留策略由其维护脚本负责，Flange 不覆盖包内容。
 
 安装在其他位置的程序：
 
@@ -93,9 +96,12 @@ install:
 
 构建结束时必须在最终安装清单找到可执行入口，不能只接受一个看似合法的路径字符串。
 
-## 3. 文件收集与 Debian 打包
+## 3. 文件收集与包格式后端
 
-原生构建先把 install 输出放入发布 staging。随后合并约定目录和显式 `install`，形成唯一安装树。
+默认打包时，原生构建先把 install 输出放入发布 staging，再合并约定目录和显式 `install`，形成唯一安装树。
+`builder/packaging/` 的 PackageBackend（包格式后端）接收规划、默认打包、完整包导入与设备安装请求；
+当前仅注册 DEB，默认生成仍复用 `DebBuilder`。构建容器的 APT 编译依赖单独由
+`UbuntuBuildDependencies` 管理，不由交付包格式决定。
 
 安装树复制由 `builder/file_tree.py` 的 `copy_tree` / `copy_entry` 处理。动态库的
 `libfoo.so → libfoo.so.1 → libfoo.so.0` 按链接对象复制，保留各链接的目标文本；
@@ -122,9 +128,36 @@ install:
 实际 ELF 检查仍是最后的架构门禁，文件名不能证明机器类型。
 
 lib 运行包名为 `lib<app.name>`，开发包追加 dev_suffix。
-`/usr/include/`、静态库 `.a` 和 pkg-config `.pc` 属于开发文件，运行包与开发包由同一安装清单拆分。
-custom vendor 可直接生成声明中的多个 deb；只有准确声明和验证的输出会进入报告。
+`/usr/include/`、静态库 `.a`、pkg-config `.pc`、CMake 开发元数据及未带版本的 `.so` 链接属于开发文件，
+运行包与开发包由同一安装清单拆分。带版本的共享库留在运行包。
 默认设备/rootfs 安装 runtime deb，不把开发包或历史残留包自动装入设备。
+
+### 导入 CPack 等工具生成的完整包
+
+通过顶层 `packaging` 精确列出文件与角色，支持 service/exec/lib/test/vendor，不要求更改 App 的真实类型：
+
+```yaml
+packaging:
+  format: deb
+  outputs:
+    - file: telemetry_1.0.0_arm64.deb
+      role: runtime
+    - file: telemetry-dev_1.0.0_arm64.deb
+      role: development
+```
+
+构建脚本把完整包写到 `FLANGE_APP_OUTPUT_DIR`。Flange 校验每包架构为当前目标或 `all`，
+提取全部包形成 `install/` 并检查用户态 ELF；运行入口或 unit 必须存在于 runtime 包。
+下游 `build.deps` 可以消费开发头文件、库和 CMake/pkg-config 元数据；默认部署只安装 runtime。
+文件名中的 `-dev` 不决定角色，Architecture 也不由角色推断。
+
+声明外部完整包后，原包字节和维护脚本保持不变，不再生成 wrapper 包，也不使用源目录约定覆盖包内容。
+因此新配置不能另行声明 `install`、`depends`、`conffiles`、`data_dirs`、`maintainer_scripts`、`lib`
+或 `systemd.auto_start: true`；这些交付语义应写入外部包。`systemd.unit` 仍绑定 service 生命周期。
+重复文件名、路径、glob、未知格式/角色及不同内容的安装路径冲突会明确失败，保留上次成功产物。
+旧 `build.deb_outputs` 继续接受 custom vendor 的完整 DEB，全部视为 runtime。
+
+完整 CPack 接入示例、后端扩展与验证方式见[包格式后端](package-backends.md)。
 
 ## 4. 来源、依赖与工作目录
 
@@ -140,7 +173,8 @@ AppResolver 的优先级为：显式路径 → 工作区 `[apps]` 注册 → 当
 资源 ID 由 App 名称和规范源码路径摘要组成。工作目录为
 `<build_root>/work/<target.key>/apps/<resource-id>/`，发布根为
 `<target_dir>/apps/<resource-id>/`，包含 `install/`、`artifacts/`、`resource.json` 与 `manifest.json`；debug 目标另外发布 `debug-source/`。
-完整请求报告在 `apps/reports/<摘要>.json`，记录根资源、拓扑顺序、依赖、安装树和准确 runtime deb。
+完整请求报告在 `apps/reports/<摘要>.json`，schema_version 为 2，记录根资源、拓扑顺序、依赖、安装树和全部包的
+`path/format/role`。旧报告需要重新 `flange app build`；任一开发包缺失也会使缓存失效。
 
 CMake/Meson 的原生中间目录独立；Make/custom 在隔离源码副本中执行，避免修改用户源或串用目标。
 Toolchain 为目标统一提供 CC/CXX/AR/STRIP。依赖安装树组成当前节点编译前缀，不冒充完整系统 sysroot。
@@ -155,7 +189,7 @@ custom 构建环境包括：
 | `FLANGE_SOURCE_DIR` | 当前隔离 App 源目录 |
 | `FLANGE_BUILD_ROOT` | 工作区产物根 |
 | `FLANGE_APP_WORK_DIR` | 当前资源的隔离工作目录 |
-| `FLANGE_APP_OUTPUT_DIR` | 当前临时发布的 deb 输出目录 |
+| `FLANGE_APP_OUTPUT_DIR` | 当前临时发布的完整包输出目录；文件名必须与 packaging.outputs 一致 |
 | `FLANGE_TARGET_DIR` | 当前系统 target 输出根 |
 | `FLANGE_TARGET_ARCH` | 目标用户空间架构 |
 | `DESTDIR` | 当前安装 staging |

@@ -87,7 +87,8 @@ flowchart LR
 | `package_build.py` | Package 显式 build action 的隔离执行、产物与报告 |
 | `filesystem.py` | 在准备源码和内核配置前拒绝大小写不敏感工作目录 |
 | `app_resolver.py`、`app_build.py`、`toolchain.py` | App 闭包、原生构建适配和准确产物发布 |
-| `app_model.py`、`deb.py` | AppBuildReport 与 Debian 打包 |
+| `app_model.py`、`packaging/` | 包格式与角色记录、AppBuildReport、格式后端；DEB 实现复用 deb.py |
+| `build_dependencies.py` | Ubuntu 构建容器的 APT 编译依赖，与交付格式独立 |
 | `dev.py`、`deploy.py` | 资源生命周期、设备传输与测试/调试会话 |
 | `flash/execute.py`、`flash/strategy.py`、`recovery_host.py` | 宿主刷写、设备能力与在线恢复 |
 
@@ -179,7 +180,9 @@ AppResolver 按显式路径、工作区注册/搜索根和工具来源解析资�
 
 Toolchain 提供目标 CC/CXX/AR/STRIP；CMake/Meson 使用独立 build，Make/custom 使用隔离源副本。
 依赖安装树合成编译前缀，custom 通过 `FLANGE_DEPENDENCY_DIRS` 获取准确上游目录。
-打包前确认架构、运行入口和安装结果，发布 install 树、deb、resource 信息与 manifest。
+打包前确认架构、运行入口和安装结果，发布 install 树、角色化软件包、resource 信息与 manifest。
+完整 CPack 包先由格式后端校验和提取，再形成依赖安装树；运行与开发包都可供下游编译，
+默认部署仅消费运行包。接口及扩展方式见[包格式后端](package-backends.md)。
 系统安装和设备部署均消费 AppBuildReport，不按文件名或目录扫描猜当前结果。
 
 具体字段、查找优先级和 custom 环境变量见 [App 架构](app-architecture.md)。

@@ -11,6 +11,7 @@ import yaml
 
 from builder.actions import validate_actions
 from builder.config.schema import BOOLEAN, STRING, STRINGS, TEXT, ListOf, Map, Object, SchemaError
+from builder.packaging.model import PackageOutput, PackagingConfig
 
 
 # 允许的 App 类型。amp = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户
@@ -153,6 +154,8 @@ class AppSpec:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     # 构建配置（可选，缺省值见 BuildConfig）
     build: BuildConfig = field(default_factory=BuildConfig)
+    # 交付格式与完整外部包；旧 deb_outputs 在解析边界规范化到这里。
+    packaging: PackagingConfig = field(default_factory=PackagingConfig)
     # 安装路径映射：源文件路径 -> 目标路径（可选，覆盖约定默认值）
     install: Dict[str, str] = field(default_factory=dict)
     # systemd 配置（可选，仅 service 类型有意义）
@@ -200,11 +203,16 @@ BUILD_SCHEMA = Object(
         "swift": SWIFT_SCHEMA,
     }
 )
+PACKAGING_SCHEMA = Object({
+    "format": STRING,
+    "outputs": ListOf(Object({"file": STRING, "role": STRING}, ("file", "role"))),
+})
 APP_SCHEMA = Object(
     {
         "app": APP_INFO_SCHEMA,
         "maintainer": MAINTAINER_SCHEMA,
         "build": BUILD_SCHEMA,
+        "packaging": PACKAGING_SCHEMA,
         "install": Map(STRING),
         "systemd": SYSTEMD_SCHEMA,
         "depends": STRINGS,
@@ -462,6 +470,8 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
     )
     if deb_outputs and (app_info.type != "vendor" or system != "custom"):
         raise AppSpecError("build.deb_outputs 仅允许用于 app.type=vendor 且 build.system=custom")
+    if len(set(deb_outputs)) != len(deb_outputs):
+        raise AppSpecError("build.deb_outputs 不允许重复文件名")
     for filename in deb_outputs:
         path = PurePosixPath(filename)
         if (
@@ -521,6 +531,42 @@ def _parse_systemd(raw: dict) -> SystemdConfig:
     return SystemdConfig(unit=unit, auto_start=auto_start)
 
 
+def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig) -> PackagingConfig:
+    from builder.packaging import get_backend
+
+    if "packaging" in raw and build.deb_outputs:
+        raise AppSpecError("packaging 与 build.deb_outputs 不可混用")
+    if "packaging" in raw and app_info.type in {"amp", "staging"}:
+        raise AppSpecError("amp/staging 不交付软件包，不能声明 packaging")
+    value = raw.get("packaging", {})
+    try:
+        outputs = (
+            [PackageOutput(file, "runtime") for file in build.deb_outputs]
+            if build.deb_outputs else [PackageOutput(**item) for item in value.get("outputs", [])]
+        )
+        format = value.get("format", "deb")
+        backend = get_backend(format)
+        for output in outputs:
+            backend.validate_output(output)
+        if len({item.file for item in outputs}) != len(outputs):
+            raise ValueError("不允许重复文件名")
+    except ValueError as error:
+        field_name = "build.deb_outputs" if build.deb_outputs else "packaging"
+        raise AppSpecError(f"{field_name}: {error}") from error
+    if "packaging" in raw and outputs:
+        unsupported = set(raw) & {
+            "install", "depends", "conffiles", "data_dirs", "maintainer_scripts", "lib",
+        }
+        if unsupported:
+            raise AppSpecError(
+                "完整外部包由打包器维护内容和元数据，不能另行声明："
+                + ", ".join(sorted(unsupported))
+            )
+        if raw.get("systemd", {}).get("auto_start", False):
+            raise AppSpecError("完整外部包的服务启用策略由其维护脚本管理，不能设置 auto_start=true")
+    return PackagingConfig(format=format, outputs=outputs)
+
+
 def _parse_lib(raw: dict) -> LibConfig:
     """解析 lib: 段，填充默认值。"""
     if not isinstance(raw, dict):
@@ -576,6 +622,7 @@ def load_spec(app_dir: Path) -> AppSpec:
 
     # 解析可选段：build
     build = _parse_build(raw["build"], app_info) if "build" in raw else BuildConfig()
+    packaging = _parse_packaging(raw, app_info, build)
 
     # 解析可选段：install（文件映射）
     raw_install = raw.get("install", {})
@@ -633,6 +680,7 @@ def load_spec(app_dir: Path) -> AppSpec:
         runtime=runtime,
         actions=actions,
         build=build,
+        packaging=packaging,
         install=install,
         systemd=systemd,
         depends=depends,

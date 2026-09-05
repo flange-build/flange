@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Protocol, Sequence
 
 from builder.app_model import AppBuildReport
-from builder.deb import _map_arch
+from builder.packaging import get_backend
 from builder.artifacts import ArtifactManifest
 from builder.locking import atomic_write
 from builder.locking import FileLock
@@ -148,29 +148,39 @@ def _preflight(
 ) -> str:
     if report.target != asdict(context.target) or not report.validate():
         raise DeployError("当前 target 或实际产物与构建报告不匹配；请重新构建")
-    expected = _map_arch(report.architecture)
-    actual = transport.shell(["dpkg", "--print-architecture"], capture_output=True).stdout.strip()
+    backend = _deployment_backend(report)
+    expected = backend.architecture(report.architecture)
+    actual = transport.shell(backend.architecture_command(), capture_output=True).stdout.strip()
     if actual != expected:
         raise DeployError(f"设备架构 {actual!r} 与构建目标 {expected!r} 不匹配")
     return actual
 
 
+def _deployment_backend(report: AppBuildReport):
+    formats = {item.format for item in report.runtime_packages}
+    if not formats:
+        raise DeployError("该 App 闭包没有可部署的 runtime 包")
+    if len(formats) != 1:
+        raise DeployError("一次设备部署不能混用多种包格式")
+    return get_backend(next(iter(formats)))
+
+
 def _deploy(report: AppBuildReport, transport: DeviceTransport, session: DeviceSession) -> None:
-    if not report.runtime_debs:
-        raise DeployError("该 App 闭包没有可部署的 runtime deb")
+    backend = _deployment_backend(report)
     remote_dir = f"/tmp/flange-{session.data['id']}"
     transport.shell(["mkdir", "-p", remote_dir])
     remote_paths = []
     try:
-        for index, path in enumerate(report.runtime_debs):
+        for index, package in enumerate(report.runtime_packages):
+            path = package.path
             remote = f"{remote_dir}/{index}-{path.name}"
             transport.push(path, remote)
             expected = sha256(path.read_bytes()).hexdigest()
             actual = transport.shell(["sha256sum", remote], capture_output=True).stdout.split()[0]
             if actual != expected:
-                raise DeployError(f"设备收到的 deb 内容校验失败：{path.name}")
+                raise DeployError(f"设备收到的包内容校验失败：{path.name}")
             remote_paths.append(remote)
-        transport.shell(["dpkg", "-i", *remote_paths], capture_output=True)
+        transport.shell(backend.install_command(remote_paths), capture_output=True)
     finally:
         transport.shell(["rm", "-rf", remote_dir], check=False, capture_output=True)
 

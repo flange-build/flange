@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+
+from builder.packaging.model import PackageArtifact
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -427,7 +429,9 @@ class TestRootfsDebInstallIntegration:
         builder = _make_builder(tmp_path)
         builder.app_report = MagicMock()
         builder.app_report.validate.return_value = True
-        builder.app_report.runtime_debs_for.return_value = (deb_file,)
+        builder.app_report.runtime_packages_for.return_value = (
+            PackageArtifact(deb_file, "deb", "runtime"),
+        )
         config["rootfs"]["custom_packages"] = ["integrate"]
         chroot = MagicMock()
         chroot_ctx = MagicMock()
@@ -459,7 +463,7 @@ class TestRootfsDebInstallIntegration:
         builder = _make_builder(tmp_path)
         builder.app_report = MagicMock()
         builder.app_report.validate.return_value = True
-        builder.app_report.runtime_debs_for.return_value = ()
+        builder.app_report.runtime_packages_for.return_value = ()
         chroot_ctx = MagicMock()
         chroot_cls = self._compile_isolated(
             builder, config, tmp_path / "work", chroot_ctx)

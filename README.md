@@ -73,6 +73,7 @@ flange status
 | 我刚接触开发板，先跑通工具 | [第一次使用](docs/first-steps.md) → [开发指南](docs/development-guide.md) |
 | 我想构建系统、刷写自己的板卡 | [第一次构建系统镜像](docs/first-steps.md#第三步为自己的开发板构建系统镜像) → [板卡索引](wiki/boards/index.md) → [刷写与验证](docs/development-guide.md#4-刷写与设备验证) |
 | 我只想开发板上运行的程序 | [第一个 App](docs/first-steps.md#第二步在-docker-中编译第一个-app) → [App 开发与部署](docs/development-guide.md#5-在仓库外创建和构建-app) |
+| 我已有 CPack 工程，要分开交付运行包和开发 SDK | [多 DEB 与包格式后端](docs/package-backends.md) |
 | 我接手已有项目，需要更新、排障和验证 | [维护指南](docs/maintenance-guide.md) → [架构职责参考](docs/build-system-design.md) |
 | 我想加软件、驱动、板卡或平台 | [扩展指南](docs/extension-guide.md) → [项目规格](ProjectSpec.md) |
 

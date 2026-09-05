@@ -27,6 +27,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from builder.packaging.model import PackageArtifact
 from tests.builder.context import component_context
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -181,7 +182,9 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
     builder.output = None
     builder.app_report = MagicMock()
     builder.app_report.validate.return_value = True
-    builder.app_report.runtime_debs_for.return_value = tuple((target / "app").glob("*.deb"))
+    builder.app_report.runtime_packages_for.return_value = tuple(
+        PackageArtifact(path, "deb", "runtime") for path in (target / "app").glob("*.deb")
+    )
 
     recorder = _Recorder(tmp_path, project_root)
     docker.run.side_effect = recorder._record("run")
