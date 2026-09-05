@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from builder.apt import AptCache
 from builder.chroot import ChrootContext
 from builder.config.canonical import userspace_arch
 from builder.environment import environment_identity
 from builder.graph import InputSpec, TaskPlan
-from builder.locking import FileLock
 from builder.snapshot import TAR_METADATA_OPTIONS
 
 
@@ -46,7 +46,7 @@ def base_plan(config: dict, component: str, context) -> TaskPlan:
     ]
     for filename in (
         "rootfs_base.py", "rootfs_storage.py", "snapshot.py", "chroot.py", "source.py", "docker.py",
-        "environment.py",
+        "environment.py", "apt.py", "locking.py",
     ):
         path = context.tool_root / "builder" / filename
         if path.is_file():
@@ -94,13 +94,12 @@ def build_base(plan: TaskPlan, rootfs_dir: Path, *, context, source, docker, sta
     emulator = plan.value("emulator")
     docker.run_privileged(["cp", f"/usr/bin/{emulator}", str(rootfs_dir / "usr/bin/")])
     apt = plan.value("apt")
-    apt_cache = context.build_root / "cache/apt"
-    apt_cache.mkdir(parents=True, exist_ok=True)
+    apt_cache = AptCache(context.build_root / "cache/apt")
     with (
-        FileLock(context.build_root / "locks/apt-cache.lock"),
+        apt_cache.locked(),
         ChrootContext(rootfs_dir, docker) as chroot,
     ):
-        chroot.bind_mount(str(apt_cache), rootfs_dir / "var/cache/apt/archives")
+        chroot.bind_mount(str(apt_cache.archives), rootfs_dir / "var/cache/apt/archives")
         status("apt-get update...")
         chroot.run(["apt-get", "update"], label="apt-get update...")
         if apt["extra_sources"]:

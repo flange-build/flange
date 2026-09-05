@@ -5,23 +5,23 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from builder.apt import AptCache
 from builder.deb import _map_arch
-from builder.locking import FileLock
 
 
 class UbuntuBuildDependencies:
     """同一次 App 闭包构建只刷新一次 APT 索引，按需安装编译依赖。"""
 
-    def __init__(self, runner, build_root: Path) -> None:
+    def __init__(self, runner, tool_root: Path) -> None:
         self.runner = runner
-        self.build_root = build_root
+        self.cache = AptCache.for_tool(tool_root)
         self.index_updated = False
         self.installed: set[str] = set()
 
     def install(self, packages: Sequence[str], arch: str) -> None:
         if not packages:
             return
-        with FileLock(self.build_root / "locks/apt-cache.lock"):
+        with self.cache.locked():
             requested = [
                 package.replace("{arch}", _map_arch(arch)) for package in packages
             ]
@@ -31,7 +31,7 @@ class UbuntuBuildDependencies:
             if not pending:
                 return
             if not self.index_updated:
-                self.runner.run(["apt-get", "update"])
+                self.runner.run(["apt-get", "update", *self.cache.options])
                 self.index_updated = True
             self.runner.run(
                 [
@@ -39,8 +39,7 @@ class UbuntuBuildDependencies:
                     "install",
                     "-y",
                     "--no-install-recommends",
-                    "-o",
-                    "Dir::Cache::archives=/cache/apt",
+                    *self.cache.options,
                     *pending,
                 ]
             )

@@ -143,6 +143,41 @@ def test_每个单元的源都已声明(toolkit):
         assert unit.source in known, f"{name} 引用了未声明的源"
 
 
+def test_模板下载在共享索引锁内执行(toolkit, tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from builder.apt import AptCache
+
+    monkeypatch.setitem(sys.modules, "toolkit", toolkit)
+    spec = importlib.util.spec_from_file_location("rkmm_repack", PACKAGE_ROOT / "lib/repack.py")
+    repack = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(repack)
+    tool = tmp_path / "tool"
+    monkeypatch.setenv("FLANGE_PROJECT_ROOT", str(tool))
+    monkeypatch.setattr(toolkit, "DOWNLOAD_ROOT", tmp_path / "downloads")
+    package = toolkit.TEMPLATE_PACKAGES[0]
+    events = []
+
+    @contextmanager
+    def locked(cache):
+        assert cache == AptCache.for_tool(tool)
+        events.append("lock")
+        yield
+        events.append("unlock")
+
+    def download(command, cwd):
+        assert events == ["lock"]
+        assert command[:2] == ["apt-get", "download"]
+        assert f"Dir::State::lists={AptCache.for_tool(tool).lists}" in command
+        (cwd / package.filename()).write_text("完整包夹具")
+        events.append("download")
+
+    monkeypatch.setattr(AptCache, "locked", locked)
+    monkeypatch.setattr(repack, "run", download)
+    assert repack.download_template(package).is_file()
+    assert events == ["lock", "download", "unlock"]
+
+
 def test_只有产deb的单元声明deb_outputs(toolkit):
     """staging 单元不打 deb，否则空包会被装进 rootfs。"""
     specs = _unit_specs()

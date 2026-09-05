@@ -16,6 +16,7 @@ services:
       # 源码仓库持久化
       - ./.build/sources:/workspace/.build/sources
       # APT 下载缓存持久化
+      # 两个源目录与 builder.apt.AptCache.for_tool 保持一致，互斥按实际源路径确定。
       - ./.build/cache/apt:/cache/apt
       # 构建期按需安装依赖时复用 multiarch 软件包索引
       - ./.build/cache/apt-lists:/var/lib/apt/lists

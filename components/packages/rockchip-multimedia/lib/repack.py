@@ -15,7 +15,10 @@ staging 的文件。所以重打必须在四个单元**全部就绪之后**做�
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
+
+from builder.apt import AptCache
 
 from toolkit import (
     OUTPUT_ROOT,
@@ -41,8 +44,11 @@ def download_template(package: TemplatePackage) -> Path:
     target = DOWNLOAD_ROOT / package.filename()
     if target.is_file():
         return target
-    run(["apt-get", "download", f"{package.name}:arm64={package.version}"],
-        cwd=DOWNLOAD_ROOT)
+    cache = AptCache.for_tool(Path(os.environ["FLANGE_PROJECT_ROOT"]))
+    with cache.locked():
+        # 模板解析会读取共享索引，必须与其他工作区的 update 协调。
+        run(["apt-get", "download", *cache.options, f"{package.name}:arm64={package.version}"],
+            cwd=DOWNLOAD_ROOT)
     if not target.is_file():
         raise RuntimeError(f"APT 未生成模板 DEB: {target.name}")
     return target

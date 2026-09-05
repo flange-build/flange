@@ -129,6 +129,7 @@ Flange 当前没有自动在宿主安装开发包的命令。Ubuntu rootfs 明�
 | builder/packaging/deb.py | DEB 规划、默认拆包、导入、设备命令 |
 | builder/packaging/__init__.py | 显式格式注册 |
 | builder/build_dependencies.py | Ubuntu 构建容器的 APT 编译依赖 |
+| builder/apt.py | 共享 APT 目录、参数与资源互斥，涵盖多个工作区 |
 | builder/app_build.py、app_model.py | 通用编排、准确报告、缓存与原子发布 |
 
 增加格式时实现 `validate_output/plan/build/import_outputs/architecture/architecture_command/install_command/recipe_paths`，

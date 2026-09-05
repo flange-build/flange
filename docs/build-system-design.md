@@ -59,7 +59,7 @@ flowchart LR
 <build_root>/work/<target.key>/              # 可变构建工作目录
 <build_root>/target/<board>/<product>/<variant>/  # 已发布产物
 <build_root>/cache/rootfs-base/              # 共享基础快照
-<build_root>/locks/                          # 并发锁
+<build_root>/locks/                          # 目标、源码等并发锁
 ```
 
 通用目录常量由 `builder/paths.py` 定义，实际工作区路径由 context 派生。
@@ -89,6 +89,7 @@ flowchart LR
 | `app_resolver.py`、`app_build.py`、`toolchain.py` | App 闭包、原生构建适配和准确产物发布 |
 | `app_model.py`、`packaging/` | 包格式与角色记录、AppBuildReport、格式后端；DEB 实现复用 deb.py |
 | `build_dependencies.py` | Ubuntu 构建容器的 APT 编译依赖，与交付格式独立 |
+| `apt.py` | 实际 APT 缓存目录、显式命令参数和跨工作区互斥 |
 | `dev.py`、`deploy.py` | 资源生命周期、设备传输与测试/调试会话 |
 | `flash/execute.py`、`flash/strategy.py`、`recovery_host.py` | 宿主刷写、设备能力与在线恢复 |
 
@@ -147,6 +148,12 @@ SoC 层声明架构、工具链和芯片事实；具体显示、存储、rootfs 
 实际 build 才确认可执行输入。旧 `.build_hash` 不被迁移为有效成功记录。
 
 目标锁保护 `.build/work/<target.key>` 与该目标发布区；共享源码存储另有锁。
+
+APT 互斥按实际目录确定：App 共用工具仓库 `.build/cache/apt` 和 `apt-lists`，
+rootfs/recovery 对实际挂载的下载目录加锁，模板下载读取共享索引时也须协调。
+`AptCache` 将目录规范化、去重并排序，在目录旁创建 `.<目录名>.flange.lock`，
+不把锁放入 APT clean 的清理范围，不删除 APT 自己的锁。加锁顺序为外层目标/资源锁 → APT 资源锁；
+完成 APT 事务和卸载后释放，不延伸到编译过程。改变缓存挂载时必须同时更新目录描述。
 本地源复制到隔离工作目录，原始用户源码不作为编译输出位置。
 内核要求大小写敏感的 build_root 与实际源码工作树；不满足时诊断 `flange.toml.build_dir`，
 不能通过修改目标 Kconfig 或关闭驱动弥补宿主文件系统限制。

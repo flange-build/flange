@@ -584,6 +584,10 @@ feat(kernel): 添加内核编译支持
 - Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖；另装 kernel.org crosstool gcc-10.5 到 `/opt/aarch64-gcc10` 作为 AArch64 u-boot/kernel 默认工具链，并安装 Arm GNU Toolchain 10.3-2021.07 到 `/opt/arm-linux-gcc10` 供 RK3506B ARM32 u-boot/kernel 使用（见 §11.3）
 - 工具根、工作区、输出根和外部源码通过同绝对路径 volume mount 映射到容器内
 - 源码仓库目录 `.build/sources/` 和 APT 缓存 `.build/cache/apt/` 通过 volume 持久化
+- App 的 APT 下载缓存与索引由工具仓库共享；rootfs/recovery 按实际 bind mount 源使用下载缓存。
+  `AptCache` 以实际源目录的规范路径确定独立锁，锁位于缓存外侧，避免被 APT clean 删除。
+  App 依赖安装、基础 rootfs/recovery 安装及内置模板下载均须使用它；多目录排序加锁，
+  目标/资源锁在外层，APT 锁在内层且不得覆盖无关编译。禁止以各工作区的独立锁保护同一共享缓存。
 - rootfs/recovery 活树使用容器原生磁盘，不在宿主共享卷解包；需要同时为 Docker 原生磁盘和宿主产物目录预留空间。
 - 宿主机 `~/.ssh` 以只读方式挂载，通过 entrypoint 脚本修正权限
 - 系统镜像、rootfs 等需要 mount（挂载）的调用必须显式启用容器特权模式；普通 App、Package 编译默认非特权

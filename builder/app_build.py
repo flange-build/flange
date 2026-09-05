@@ -78,7 +78,7 @@ class AppBuilder:
         self._arch = userspace_arch(config)
         self.toolchain = Toolchain.for_arch(self._arch)
         self.resolver = AppResolver(context, source, config)
-        self.build_dependencies = UbuntuBuildDependencies(docker, context.build_root)
+        self.build_dependencies = UbuntuBuildDependencies(docker, context.tool_root)
 
     def _status(self, message: str) -> None:
         if self.output:
@@ -195,8 +195,10 @@ class AppBuilder:
             "app_resolver.py",
             "app_spec.py",
             "app_model.py",
+            "apt.py",
             "build_dependencies.py",
             "file_tree.py",
+            "locking.py",
             "toolchain.py",
         ):
             inputs.append(InputSpec.file(f"recipe:{name}", logic / name))
