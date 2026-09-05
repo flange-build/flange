@@ -11,6 +11,8 @@ sources:
   - components/app/rk3506_amp_uart4_rtt_demo/applications/main.c
   - components/platform/rockchip/rk3506b/config.jsonnet
   - components/board/atk-rk3506b/patches/kernel/0001-reserve-amp-firmware-memory.patch
+  - docs/development-guide.md
+  - docs/extension-guide.md
 related:
   - "[[amp 构建器]]"
   - "[[tspi-rk3566]]"
@@ -18,8 +20,12 @@ related:
   - "[[U-Boot 启动链]]"
   - "[[atk-rk3506b]]"
   - "[[rk3506 AMP UART4 RPMsg demo]]"
-updated: 2026-07-14
+updated: 2026-09-05
 ---
+
+> 阅读前提：先确认[板卡配置与硬件范围](../boards/index.md)，再阅读本专题。
+> 下文接线、内核/固件行为和测试结果只覆盖注明的设备、版本与产品；历史排障记录不代表全部目标已验收。
+> 当前构建入口见[开发指南](../../docs/development-guide.md)，新增驱动/配置见[扩展指南](../../docs/extension-guide.md)。
 
 ## TL;DR
 

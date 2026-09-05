@@ -4,36 +4,41 @@ type: subsystem
 status: stable
 sources:
   - builder/source.py
-related:
-  - "[[ComponentBuilder 基类]]"
-  - "[[rootfs 构建器]]"
-  - "[[external_apps 装载]]"
-updated: 2026-05-06
+  - builder/base.py
+  - builder/locking.py
+  - builder/filesystem.py
+  - docs/build-system-design.md
+  - docs/maintenance-guide.md
+updated: 2026-09-05
 ---
 
-## TL;DR
+# 源码管理 SourceManager
 
-`SourceManager` 管理 git 仓库（kernel/U-Boot/recovery 等）、tarball 与第三方 deb 到 `.build/sources/`；支持 shallow clone、commit 锁定、SHA 比对触发增量更新；app / firmware / deb 各走独立 `ensure_*` 方法。
+SourceManager（源码管理器）分离共享下载存储与可变构建工作树。
+组件通过 `source: {name, subpath}` 引用顶层 `sources.<name>`，不能在组件下另写旧 `source.url` 配置。
 
-## 关键设计要点
+```mermaid
+flowchart TD
+  Remote[远端 sources 描述符] --> Shared[build_root/sources/repos/摘要]
+  Shared --> A[work/目标A/sources/摘要]
+  Shared --> B[work/目标B/sources/摘要]
+  Local[用户 local_path 原始目录] --> Copy[复制当前内容到目标隔离目录]
+  A --> Build[补丁 / 配置 / 编译]
+  B --> Build
+  Copy --> Build
+```
 
-- **URL → 本地路径映射**：`ensure(component, config)` 从 config 读 `source.url` / `source.branch`，落到 `.build/sources/<component>/`
-- **Shallow clone**：`_clone` 默认 `--depth 1`；config 指定 `commit` / `tag` 时追加 `--no-single-branch` 后 `_fetch_checkout` 精确切到该 ref
-- **Ref 优先级**：`commit > tag > branch`；`tag` 用于不可变标签，避免 tag/branch 同名歧义
-- **增量更新**：`_ensure_repo` 取当前 HEAD 与期望 ref 比对，不同才 `_fetch_reset_branch` / `_fetch_checkout`
-- **Submodule**：`_update_submodules` 执行 `git submodule update --init --recursive`
-- **Tarball**：`ensure_rootfs_tarball` 下载 ubuntu-base tar.gz + SHA256 校验
-- **External app**：`ensure_app` 支持 git repo / 本地路径两种来源
-- **External firmware**：`ensure_extra_firmware` 多源类型——`repo` clone 外部 git 仓库到 `extra-firmware/<name>/`；`kernel`/`bootloader`/`oot:<name>` 复用同 build 已 ensure 的源（不重复 clone），调用方通过 `component_sources` 注入对应路径
-- **OOT 模块独立源**：`ensure_oot_source` clone 独立 git 仓库到 `oot-modules/<name>/` 作为 OOT 模块编译输入（路径语义与 `extra_firmware` 拷贝目标分离，避免 .o/.ko 残留污染固件部署）
-- **External deb**：`ensure_extra_deb` wget 直下第三方 deb 到 `extra-debs/<name>/`，强制 sha256 校验；原子下载（`.download` 后缀 → 校验 → rename），失败清理 partial
+共享仓库按来源描述符标识，并用锁覆盖 fetch（获取远端更新）和目标工作树创建。
+Git 输入在目标独立 worktree（工作树）中配置与编译；本地源码复制到目标目录，
+内容变化后重新准备副本，原始目录不会被 reset、patch 或 make 改写。
 
-## 关键代码位置
+实际构建先调用 `prepare_cache_inputs()` 准备本次需要的来源，再计算计划输入。
+`source_path()` 等只读定位用于已有输入；`plan`/`why` 不为了给出预览而下载源码。
+内核准备阶段还检查大小写敏感文件系统，环境不满足时失败而不是修改目标驱动配置。
 
-- [`builder/source.py:SourceManager`](../../builder/source.py) — 主类，L9
-- [`builder/source.py:SourceManager.ensure`](../../builder/source.py) — 组件 git 源，L24
-- [`builder/source.py:SourceManager.ensure_extra_firmware`](../../builder/source.py) — 外部 firmware repo
-- [`builder/source.py:SourceManager.ensure_oot_source`](../../builder/source.py) — OOT 模块独立源
-- [`builder/source.py:SourceManager.ensure_extra_deb`](../../builder/source.py) — 第三方 deb 直下，L103
-- [`builder/source.py:SourceManager.ensure_rootfs_tarball`](../../builder/source.py) — tarball 下载
-- [`builder/source.py:SourceManager.ensure_app`](../../builder/source.py) — app 源码
+`ensure()` 处理组件引用；`ensure_oot_source()`、`ensure_extra_firmware()` 等复用统一来源解析。
+ubuntu-base、额外 deb 与固件下载走带 SHA256 的 descriptor（描述符），
+临时下载校验通过后才原子发布。`subpath` 不能越出已声明源码根。
+
+源码覆盖与缓存排障见[维护指南](../../docs/maintenance-guide.md)；
+App 名称、路径与依赖解析另见[外部 App 装载](../workflows/external_apps-装载.md)。

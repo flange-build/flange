@@ -5,12 +5,18 @@ status: stable
 sources:
   - components/board/neons-core3566-nanob/config.jsonnet
   - components/board/neons-core3566-nanob/overlay/etc/hostname
+  - docs/first-steps.md
 related:
   - "[[rockchip 平台]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-04-26
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list neons-core3566-nanob` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 

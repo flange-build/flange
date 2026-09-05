@@ -4,30 +4,31 @@ type: subsystem
 status: stable
 sources:
   - builder/base.py
-related:
-  - "[[构建引擎 BuildEngine]]"
-  - "[[源码管理 SourceManager]]"
-  - "[[Docker 执行封装]]"
-  - "[[缓存系统]]"
-updated: 2026-04-26
+  - builder/source.py
+  - builder/engine.py
+  - docs/build-system-design.md
+  - docs/extension-guide.md
+updated: 2026-09-05
 ---
 
-## TL;DR
+# ComponentBuilder 基类
 
-`builder/base.py` 中的 `ComponentBuilder` 是所有组件构建器（kernel/bootloader/rootfs/recovery/image）的共同骨架；定义三段阶段协议（configure / compile / collect）和补丁管理方法，由 `BuildEngine` 统一调用。
+[`builder/base.py`](../../builder/base.py) 提供平台组件的模板方法：
+`configure(src_dir, config)` → `compile(src_dir, config)` → `collect(src_dir, config)`。
+`collect()` 返回本次实际产物路径；由引擎负责验证和发布，不能自行把“成功标记”当作缓存。
 
-## 关键设计要点
+当前系统入口通过 `execute(plan)` 消费 TaskPlan 声明中的配置，
+引擎注入工作区上下文、日志和当前 App 报告。
+默认 `build()` 先从 SourceManager 获取目标独立工作树，再重置、应用补丁并执行三个阶段。
+无源码组件可重写构建步骤，但仍须遵循输入、工作区与产物契约。
 
-- **三阶段协议**：子类必须实现 `configure(src_dir, config)`、`compile(src_dir, config)`、`collect(src_dir, config) -> dict`；`build()` 按序调用三阶段
-- **源码与 `SourceManager`**：`build()` 调用 `SourceManager.ensure(component, config)` 获取本地 src_dir，支持 git shallow clone + commit 锁定
-- **补丁管理**：`apply_patches` 遍历 `components/platform/<platform>/patches/<component>/` 下的 `.patch`，按文件名顺序执行 `git am`；`reset_source` 还原补丁前状态
-- **Docker 委托**：`make()` 方法封装常见 `make -j<N>` 调用，通过注入的 `DockerRunner` 在容器内执行
-- **依赖注入**：构造函数接收 `docker: DockerRunner` 和 `source: SourceManager`，便于测试替换 Mock
+补丁按平台后板级、各目录文件名顺序应用；组件 `exclude_patches` 可排除不适用补丁。
+本地 `sources.<name>.local_path` 会先复制隔离，保留调用者当前内容并跳过自动重置和重复补丁。
+编译、patch 与 reset 都不能回写用户原始源码或共享下载仓库。
 
-## 关键代码位置
+构建命令委托给 [DockerRunner](Docker-执行封装.md)。
+`work_dir()` 在 `<build_root>/work/<target.key>/` 下创建当前执行的暂存区，
+不同目标使用各自目录。
 
-- [`builder/base.py:ComponentBuilder`](../../builder/base.py) — 抽象基类，L10
-- [`builder/base.py:ComponentBuilder.build`](../../builder/base.py) — 三阶段调用，L29
-- [`builder/base.py:ComponentBuilder.apply_patches`](../../builder/base.py) — 补丁应用，L67
-- [`builder/base.py:ComponentBuilder.configure`](../../builder/base.py) — 抽象方法，L86
-- [`builder/base.py:ComponentBuilder.collect`](../../builder/base.py) — 抽象方法，L92
+扩展已有平台配方见[扩展指南](../../docs/extension-guide.md)，缓存和发布边界见
+[构建系统设计](../../docs/build-system-design.md)。

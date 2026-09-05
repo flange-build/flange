@@ -20,6 +20,8 @@ sources:
   - components/platform/rockchip/rk3588/config.jsonnet
   - components/platform/rockchip/rk3588s/config.jsonnet
   - ProjectSpec.md#164-三层继承
+  - docs/development-guide.md
+  - docs/extension-guide.md
 related:
   - "[[radxa-zero3w]]"
   - "[[tspi-rk3566]]"
@@ -33,8 +35,12 @@ related:
   - "[[bootloader 构建器]]"
   - "[[USB 线刷协议]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-07-14
+updated: 2026-09-05
 ---
+
+> 阅读前提：先读[架构总览](../concepts/架构总览.md)，并从[板卡索引](../boards/index.md)确认型号。
+> 本页保留平台机制与历史适配记录；芯片支持、产物可构建和实机验收是不同边界。
+> 当前操作见[开发指南](../../docs/development-guide.md)，扩展步骤见[扩展指南](../../docs/extension-guide.md)。
 
 ## TL;DR
 

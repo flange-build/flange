@@ -4,31 +4,31 @@ type: subsystem
 status: stable
 sources:
   - builder/docker.py
-  - docker/Dockerfile
+  - builder/oot_mounts.py
+  - docker-compose.yml
   - docker/entrypoint.sh
-related:
-  - "[[ComponentBuilder 基类]]"
-  - "[[构建引擎 BuildEngine]]"
-updated: 2026-04-26
+  - docs/development-guide.md
+updated: 2026-09-05
 ---
 
-## TL;DR
+# Docker 执行封装
 
-`builder/docker.py` 的 `DockerRunner` 将所有编译命令路由至 Docker 容器内执行；自动挂载项目根目录、传递只读 SSH 密钥、将容器 stdout/stderr 转发给 `BuildOutput`。宿主机无需安装任何编译工具链。
+DockerRunner（容器执行器）使用工具根的 `docker-compose.yml`，将目标编译、chroot 和镜像制作放入统一容器。
+宿主负责入口、挂载和设备操作，不能把 USB 刷写混入构建配方。
 
-## 关键设计要点
+工作区、工具根、输出根及外部 App/源码目录在最外层 Docker 调用中按同绝对路径挂载。
+已经进入容器后，`run()` 直接执行子进程；此时不能再靠内层 `extra_mounts` 动态增加宿主目录。
+外部来源必须先由工作区与资源解析器明确定位。
 
-- **容器判断**：`_is_inside_container()` 检测 `/.dockerenv`；若已在容器内则直接 `subprocess` 运行，避免嵌套 Docker
-- **Volume 策略**：`_run_docker` 挂载整个 PROJECT_ROOT（含 `.build/`），确保构建产物写回宿主机；SSH `~/.ssh` 以只读方式挂载供 git 认证
-- **输出流转**：`_run_with_capture` 逐行读取 stdout 并调用 `output.feed_line()`，保持 spinner 与日志同步；`_run_direct` 则直连 tty 用于交互场景
-- **特权构建**：`run_privileged` 加 `--privileged` 供 rootfs chroot 阶段（dpkg -i、mke2fs）使用
-- **entrypoint 权限修正**：`docker/entrypoint.sh` 将容器内 UID/GID 对齐宿主机，避免产物归属 root
-- **错误传播**：`DockerRunner.run` 检查返回码，非零时抛出 `BuildError`，由 `BuildEngine` 统一捕获展示
+`run()` / `run_privileged()` 传递参数列表、工作目录与环境变量，并将命令输出交给 BuildOutput。
+默认检查非零退出码并传播 BuildError；镜像身份由实际 Docker image inspect 取得，
+不能只用 Dockerfile 内容代表已经运行的工具环境。
 
-## 关键代码位置
+构建镜像使用 `linux/amd64`。ARM 宿主是否能运行取决于 Docker 的跨架构支持；
+rootfs 的 ARM 程序还依赖 Linux 内核的 QEMU/binfmt 注册。
+内核工作目录必须大小写敏感，容器不会自动修复宿主文件系统语义。
+Python 初始化阶段若缺少 Jsonnet wheel（预编译包）可能需要宿主 C++ 工具，
+目标代码仍只在容器中编译。
 
-- [`builder/docker.py:DockerRunner`](../../builder/docker.py) — 主类，L18
-- [`builder/docker.py:DockerRunner.run`](../../builder/docker.py) — 统一入口，L33
-- [`builder/docker.py:DockerRunner._run_docker`](../../builder/docker.py) — 容器执行，L123
-- [`builder/docker.py:DockerRunner.run_privileged`](../../builder/docker.py) — 特权模式，L153
-- [`builder/docker.py:_is_inside_container`](../../builder/docker.py) — 容器检测，L13
+安装、镜像准备、Git 凭据和环境排障统一见[开发指南](../../docs/development-guide.md)；
+工具链内容见[Docker 构建环境](Docker-构建环境.md)。

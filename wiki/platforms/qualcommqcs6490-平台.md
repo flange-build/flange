@@ -13,16 +13,22 @@ sources:
   - components/platform/qualcommqcs6490/config.jsonnet
   - components/platform/qualcommqcs6490/qcs6490/config.jsonnet
   - components/platform/qualcommqcs6490/patches/kernel/
-  - builder/flash.py#QualcommFlashStrategy
+  - builder/flash/strategy.py#QualcommFlashStrategy
   - openspec/changes/add-qcs6490-radxa-dragon-q6a/
   - openspec/changes/archive/2026-05-31-migrate-qcs6490-kernel-702/
+  - docs/development-guide.md
+  - docs/extension-guide.md
 related:
   - "[[radxa-dragon-q6a]]"
   - "[[qualcommsc8280xp 平台]]"
   - "[[FlashStrategy 抽象]]"
   - "[[USB 线刷协议]]"
-updated: 2026-08-24
+updated: 2026-09-05
 ---
+
+> 阅读前提：先读[架构总览](../concepts/架构总览.md)，并从[板卡索引](../boards/index.md)确认型号。
+> 本页保留平台机制与历史适配记录；芯片支持、产物可构建和实机验收是不同边界。
+> 当前操作见[开发指南](../../docs/development-guide.md)，扩展步骤见[扩展指南](../../docs/extension-guide.md)。
 
 ## 当前基线（2026-08-24）
 

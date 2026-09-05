@@ -3,35 +3,43 @@ title: rootfs 两阶段缓存
 type: concept
 status: stable
 sources:
+  - builder/rootfs_base.py
+  - builder/rootfs_storage.py
+  - builder/snapshot.py
   - builder/platforms/rockchip/rootfs.py
-  - builder/cache.py
-related:
-  - "[[rootfs 构建器]]"
-  - "[[内容哈希与增量构建]]"
-  - "[[缓存系统]]"
-updated: 2026-05-04
+  - builder/recovery.py
+  - docs/build-system-design.md
+updated: 2026-09-05
 ---
 
-## TL;DR
+# rootfs 两阶段缓存
 
-rootfs 构建分 base（apt install）和 customize（overlay + deb）两阶段独立缓存，改 overlay 跳过耗时 5-15 分钟的 apt 阶段。
+rootfs（根文件系统）先准备 ubuntu-base 与 APT 软件包，再叠加当前产品的 App、驱动、固件和设置。
+修改 overlay（文件覆盖层）等第二阶段输入时，可复用仍有效的基础快照。
 
-## 关键设计要点
+```mermaid
+flowchart LR
+  Input[ubuntu-base / APT / 架构 / 环境 / 配方] --> Base[基础阶段计划]
+  Base --> Snapshot[校验后的共享快照]
+  Snapshot --> Normal[rootfs 个性化与镜像]
+  Snapshot --> Recovery[Recovery 个性化与镜像]
+```
 
-- **Phase 1 base 哈希输入**：`rootfs.url`（ubuntu-base tarball URL）+ `sorted(rootfs.packages)` + `arch` — 包集合不变时复用 `base.tar.gz` 快照
-- **Phase 2 customize 哈希输入**：base_hash + overlay 目录递归哈希 + custom_packages + root_password + extra_firmware + extra_debs + partitions — 任一变化只跳过 Phase 1 重跑 Phase 2
-- **跨 product/variant 共享**：相同 packages → 相同 base_hash → 共享同一份 `base.tar.gz`；不同 product/variant 的 rootfs 可复用同一 base 快照
-- **recovery 也复用**：recovery 构建的 Phase 1 复用 `rootfs.url` 同一 tarball 来源，减少重复下载
-- **分阶段接口**：`compute_phase_hash("rootfs","base")` / `is_phase_up_to_date` / `store_phase` — 在 `cache.py` 中实现
+基础阶段由 [`builder/rootfs_base.py`](../../builder/rootfs_base.py) 的 `base_plan()` 统一声明输入：
+ubuntu-base URL/SHA256、包列表、APT 推荐依赖策略、额外软件源、用户空间架构、模拟器、实际环境和构建配方。
+rootfs 与 Recovery 只有在这些输入都一致时才能共享快照；“包列表相同”本身不够。
 
-## 关键代码位置
+快照保存在 `<build_root>/cache/rootfs-base/`，由
+[`builder/snapshot.py`](../../builder/snapshot.py) 管理锁、临时文件、完整性校验与原子替换。
+损坏或未完成快照不能命中，失败不得覆盖有效成功记录。
+归档文件可以保存在宿主共享构建目录，解包和恢复的活树始终在容器原生 `/var/tmp`。
+存储配方 `rootfs_storage.py` 纳入 Phase 1 指纹，存储语义变化会使旧配方快照失效；随机临时目录名不改变缓存身份。
+归档同时显式保留数字 UID/GID、模式位、链接、扩展属性、文件 capability 与 POSIX ACL；
+ubuntu-base 原始解包复用同一组 tar 元数据选项。`snapshot.py` 同样进入 Phase 1 指纹，
+归档语义更新会触发旧快照失效，避免缓存恢复后悄悄丢失目标权限。
 
-- [`builder/cache.py:BuildCache._compute_rootfs_base_hash`](../../builder/cache.py) — Phase 1 哈希，L205
-- [`builder/cache.py:BuildCache._mix_rootfs_customize`](../../builder/cache.py) — Phase 2 哈希，L218
-- [`builder/cache.py:BuildCache.compute_phase_hash`](../../builder/cache.py) — 分阶段接口，L183
+第二阶段分别消费本次 AppBuildReport（应用构建报告）选出的 deb 集合、内核 modules、固件、overlay 和账户配置，
+然后生成对应 ext4/UBI 镜像。目录中遗留的 deb 不会自动变成安装输入。
 
-## 延伸阅读
-
-- [[内容哈希与增量构建]]
-- [[rootfs 构建器]]
-- [[缓存系统]]
+旧 `BuildCache.compute_phase_hash / is_phase_up_to_date / store_phase` API 已由上述基础阶段计划与快照管理替代。
+排障使用 `flange why rootfs`，完整边界见[构建系统设计](../../docs/build-system-design.md)。

@@ -1,5 +1,9 @@
 # Recovery 维护系统
 
+**阅读前提：** 已完成[普通构建与刷写流程](development-guide.md#4-刷写与设备验证)，
+并确认自己的 target 启用了 Recovery、设备能进入该系统。初次认识项目先读[入门指南](first-steps.md)。
+本文的分区操作针对匹配的目标设备；命令存在不代表所有板卡的启动链均支持 Recovery。
+
 flange 在 boot 分区中提供 normal 与 recovery 两条启动路径，并预留一个独立
 的 `recovery` 分区，搭载基于 Ubuntu base 的维护系统。设备进入 recovery 后
 可以通过 USB ADB 通道执行分区级线刷、备份与简单维护，不依赖网线或 Wi-Fi。
@@ -8,7 +12,7 @@ flange 在 boot 分区中提供 normal 与 recovery 两条启动路径，并预�
 > recovery rootfs 默认安装 `parted` + `gdisk`。
 
 本文聚焦于"用户视角的怎么用"和"出问题怎么查"。架构与设计取舍参见
-[OpenSpec change `add-recovery-boot`](../openspec/changes/add-recovery-boot/)。
+[OpenSpec change `add-recovery-boot`](../openspec/changes/archive/2026-04-25-add-recovery-boot/)。
 
 ## 为什么需要 recovery
 

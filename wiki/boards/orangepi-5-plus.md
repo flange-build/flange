@@ -6,18 +6,24 @@ sources:
   - components/board/orangepi-5-plus/config.jsonnet
   - components/board/orangepi-5-plus/overlay/etc/hostname
   - components/board/orangepi-5-plus/overlay/etc/usbdevice.conf
-  - components/board/orangepi-5-plus/overlay/usr/lib/firmware/goodix_911_cfg.bin
+  - components/board/orangepi-5-plus/firmware/touch/goodix_911_cfg.bin
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hx8399a-gt911.dtso
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hdmirx-enable.dtso
   - components/board/orangepi-5-plus/firmware/touch/goodix_911_cfg.cfg
   - components/platform/rockchip/rk3588/config.jsonnet
+  - docs/first-steps.md
 related:
   - "[[radxa-rock5b]]"
   - "[[rockchip 平台]]"
   - "[[out-of-tree 模块]]"
   - "[[新增板级支持]]"
-updated: 2026-05-18
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list orangepi-5-plus` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 
@@ -50,7 +56,7 @@ lunch orangepi-5-plus-default-release
 
 - Panel 走 BSP `panel-simple.c` 的 `simple-panel-dsi` + `panel-init-sequence` 路径——LCD 厂 init `.c` 与 dts 字节流 1:1 对应（16 cmd / 319 字节）。零 driver / 零 kernel patch
 - Touch 走 mainline `goodix.c`（compatible `"goodix,gt911"`）；与 vendor `gt9xx` (`"goodix,gt9xx"`) 不撞。启动 `request_firmware("goodix_911_cfg.bin")` 拉 186B cfg（= `GOODIX_CONFIG_911_LENGTH`）
-- cfg blob 走 `overlay/usr/lib/firmware/`（**走 `usr/lib` 不走 `lib`**：ubuntu-base rootfs 已 usrmerge，根 `/lib` 是 symlink → `/usr/lib`，`cp -a` 不能用目录覆盖 non-directory）
+- cfg blob 当前由 `sources.goodix-911-cfg` 引用板级 `firmware/touch/`，经 `rootfs.extra_firmware` 安装。历史 overlay 方案使用 `usr/lib/firmware/` 是为避开 usrmerge 根 `/lib` symlink 的目录覆盖冲突；该约束仍值得保留，不能把旧文件落点当当前源码位置。
 - VOP3 → DSI1 路由独立于 HDMI VP0/VP1，双显可并存
 - dtso 全 `&label{}` fragment，规避 [[orangepi-cm4]] 屏适配撤回 change 的根级裸节点 → `FDT_ERR_BADOVERLAY` 坑
 - `MIPI_DSI_MODE_EOT_PACKET` 旧宏 BSP 6.1 头文件已删，本案选择"不引用"走默认发 EOT

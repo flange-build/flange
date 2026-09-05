@@ -1,5 +1,9 @@
 # AMP 协处理器固件（Rockchip）
 
+**阅读前提：** 已理解[目标与系统构建](first-steps.md)，并已让匹配的板卡运行 Linux。
+本页是 RK3566 板卡专题，涉及从核、串口和设备树，不是普通 App 的第一次编译教程。
+其他 SoC 的 AMP 设置不可直接照搬；通过 `flange target list` 与对应板卡页确认可用 product。
+
 flange 支持在 Rockchip SoC 上构建并刷写 **AMP（Asymmetric Multi-Processing，
 非对称多处理）协处理器固件**：把一个 Cortex-A55 核切到 AArch32 当从核，跑裸机
 HAL 或 RT-Thread，与 Linux 主系统并行，二者经 rpmsg 通信。

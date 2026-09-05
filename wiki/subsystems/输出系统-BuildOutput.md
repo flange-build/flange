@@ -9,7 +9,7 @@ related:
   - "[[构建引擎 BuildEngine]]"
   - "[[Docker 执行封装]]"
   - "[[ComponentBuilder 基类]]"
-updated: 2026-04-26
+updated: 2026-09-05
 ---
 
 ## TL;DR
@@ -22,8 +22,8 @@ updated: 2026-04-26
 - **组件生命周期方法**：`phase_start`（蓝色标题）→ `feed_line`（内容）→ `phase_end`（绿色勾 / 红色叉）形成完整一次构建组件的输出块
 - **spinner**：`spinner_start` 启动后台线程循环更新终端同一行；`spinner_stop` 通知线程退出；确保日志文件不含 ANSI 控制符（`strip_ansi`）
 - **颜色**：`_Colors` 定义 `RED / GREEN / YELLOW / BLUE / BOLD / RESET`；`_c` 方法在非 tty 时自动关闭着色（`_is_tty()` 检测）
-- **build.log**：`BuildOutput.__init__` 打开 `.build/build.log` 追加写；所有调用 `_log_write` 的路径均写文件（不含 spinner 闪烁行）
-- **错误高亮**：`error` 方法以红色 `[ERROR]` 前缀输出，并在 `build_end` 时调用 `_show_error_context` 汇总错误上下文
+- **build.log**：`BuildOutput.__init__` 在当前 `<target_dir>/build.log` 写完整日志，开始构建前先轮转旧日志，默认保留 3 份，由 `FLANGE_LOG_KEEP` 调整；终端级别不取消日志持久化
+- **错误高亮**：`error` 方法以红色错误标记输出，并在 `build_end` 时调用 `_show_error_context` 汇总错误上下文
 
 ## 关键代码位置
 

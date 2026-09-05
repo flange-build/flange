@@ -22,16 +22,22 @@ sources:
   - components/board/khadas-vim3l/config.jsonnet
   - components/platform/amlogic/s905d3/patches/bootloader/flange_fastboot.config
   - openspec/specs/amlogic-flash/spec.md
-  - openspec/changes/add-a311d-khadas-vim3/design.md
+  - openspec/changes/archive/2026-09-05-add-a311d-khadas-vim3/design.md
   - openspec/changes/archive/2026-05-15-add-amlogic-khadas-vim3l/design.md
+  - docs/development-guide.md
+  - docs/extension-guide.md
 related:
   - "[[khadas-vim3]]"
   - "[[khadas-vim3l]]"
   - "[[bootloader 构建器]]"
   - "[[USB 线刷协议]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-09-04
+updated: 2026-09-05
 ---
+
+> 阅读前提：先读[架构总览](../concepts/架构总览.md)，并从[板卡索引](../boards/index.md)确认型号。
+> 本页保留平台机制与历史适配记录；芯片支持、产物可构建和实机验收是不同边界。
+> 当前操作见[开发指南](../../docs/development-guide.md)，扩展步骤见[扩展指南](../../docs/extension-guide.md)。
 
 ## TL;DR
 
@@ -119,6 +125,6 @@ Khadas `khadas/u-boot` 历史含 multi-boot button + Android-style 启动逻辑�
 - VIM3 必须使用 `aml_encrypt_g12b`；VIM3L/SM1 才使用 `aml_encrypt_g12a`。
 - `build-fip.sh` 的 `--bootmk` 已生成四件产物；不得再调用 G12A 私有的 `--bootsd` / `--bootusb` 形式，G12B 工具不支持这组参数。
 - `aml_encrypt_sm1` **不存在**：仓库 board-organized，工具实际名 `aml_encrypt_g12a`（SM1 复用 G12A 工具链），位于 `<board_dir>/aml_encrypt_g12a`。design 早期版本的 `aml_encrypt_sm1` 是误判，已修正
-- LibreELEC/amlogic-boot-fip 内的 `aml_encrypt_g12a` 是 **x86_64 二进制**，非 x86_64 host / ARM Docker 容器内不能跑；flange 构建已要求 x86_64 host（envsetup.sh），ARM host 暂不支持
+- LibreELEC/amlogic-boot-fip 内的 `aml_encrypt_g12a` 是 **x86_64 二进制**，非 x86_64 host / ARM Docker 容器内不能跑；当前构建镜像使用 `linux/amd64`；ARM 宿主需 Docker 提供相应执行支持，不能直接在 ARM 容器执行此二进制。宿主准备见[开发指南](../../docs/development-guide.md)
 - 若使用“按住按键”方式进 MaskROM，推送后必须松开按键；VIM3/VIM3L 推荐的 TST 流程是在两秒内按 Function 三次后立即松开。
 - BootROM 默认从 eMMC 启动，但若用户测试时把 SD 卡插上会优先尝试 SD（影响刷写后启动验证），刷写后拔 SD

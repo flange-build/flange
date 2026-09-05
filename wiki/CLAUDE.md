@@ -5,7 +5,7 @@
 ## 1. 定位
 
 - **服务两类读者**：
-  1. **架构地图**：给新加入或回归的开发者，可在 Obsidian 中浏览，从任何概念跳到代码
+  1. **架构地图**：给新加入或回归的开发者，可在 GitHub、普通 Markdown 查看器与 Obsidian 中浏览，从操作入口或概念跳到代码
   2. **AI Agent 上下文**：让 Claude / Codex 等 Agent 引用已综合好的概念，避免每次从代码与文档原文重新推断
 - **不在范围**：演进决策档案（由 `openspec/changes/` 与 git commit 承担）；外部资料（SoC datasheet、各家 BSP 文档不纳入）
 
@@ -29,7 +29,7 @@
 
 **综合页**（实体 / 概念 / 工作流）：frontmatter + 正文骨架（TL;DR / 关键设计要点 / 关键代码位置 / 数据流 / 易踩坑 / 延伸阅读，**按需选用，省略不适用部分**；如 history / roadmap 页可用「关键里程碑」替代「关键设计要点」）。正文不设字数上限；内容较长时可按独立主题拆页，但拆分必须提升导航性，并在原页保留摘要、去向和双向链接。
 
-**索引页**：仅列 `- [[页面]] — 一句话`，不写细节。
+**索引页**：使用标准 Markdown 相对链接，提供按读者任务或主题分组的入口与一句话说明；可用简短表格说明阅读顺序，不复制完整操作指南。
 
 ### 4.2 Frontmatter 模板
 
@@ -64,8 +64,9 @@ updated: YYYY-MM-DD
 
 ### 4.3 链接风格
 
-- wiki 内：`[[页面 title]]`（无路径无后缀；Obsidian flat lookup）
-- 跨出 wiki：`[文本](../相对路径.md#锚点)`
+- 主要导航与正文推荐链接：`[页面标题](相对路径.md)`，确保 GitHub 与普通 Markdown 查看器可点击。
+- `related` 元数据及辅助关联可保留 `[[页面 title]]`；它们不替代主要导航。
+- 跨出 wiki：按页面真实深度使用相对链接，例如二级目录页面用 `[开发指南](../../docs/development-guide.md)`。
 - 代码引用：`[builder/recovery.py:42](../builder/recovery.py#L42)`
 - commit 引用：写 short hash，如 `commit 33bc2c2`，不带链接
 

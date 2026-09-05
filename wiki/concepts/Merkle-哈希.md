@@ -3,31 +3,29 @@ title: Merkle 哈希
 type: concept
 status: stable
 sources:
-  - builder/cache.py
-related:
-  - "[[内容哈希与增量构建]]"
-  - "[[缓存系统]]"
-updated: 2026-04-26
+  - builder/digest.py
+  - builder/graph.py
+  - builder/artifacts.py
+  - docs/maintenance-guide.md
+updated: 2026-09-05
 ---
 
-## TL;DR
+# Merkle 哈希与文件树身份
 
-目录内容的递归哈希策略：对每个文件按相对路径排序后依次混入（路径名 + 内容/symlink 目标），确保"同内容不同遍历顺序"结果一致。
+Merkle（树状摘要）思想用于把多个输入的身份合成为稳定指纹。
+flange 的具体实现由 [`builder/digest.py`](../../builder/digest.py) 的文件树记录，
+以及 [`builder/graph.py`](../../builder/graph.py) 的具名输入和依赖指纹组成。
 
-## 关键设计要点
+`tree_records()` 以稳定顺序遍历目录，记录相对路径、节点类型与模式位：
+普通文件记录内容 SHA256 和大小，符号链接记录链接目标字符串，目录本身也有记录。
+它不跟随符号链接，不以 mtime（修改时间）或宿主 UID 作为内容身份。
 
-- **排除规则**：`HASH_EXCLUDE_DIRS = {"__pycache__", ".git", "build", ".build", "node_modules"}`；`HASH_EXCLUDE_EXTS = {".pyc", ".o", ".so"}` — 避免编译产物污染哈希
-- **符号链接处理**：symlink 哈希其目标路径字符串（`os.readlink`），而非解引用内容 — 保持链接语义
-- **排序稳定性**：`sorted(entries)` 按绝对路径字典序排序后迭代，任何 OS / 文件系统遍历顺序无关
-- **应用场景**：overlay 目录哈希、App 源码目录哈希、recovery overlay 哈希
-- **历史修复**：App 源码哈希曾只 hash `app.yaml`，改为递归 hash 整个 app 目录后修复了"源码改了但哈希没变"的正确性 bug（见 [[路线图与历史演进]] 构建优化节）
+排除规则必须由输入声明者明确提供。不能全局忽略名为 `build` 的目录，
+也不能按 `.so`、`.o` 后缀一律跳过，因为这些可能是受版本控制的真实输入。
+本地源码、overlay 与安装树应分别声明自己的派生目录排除范围。
 
-## 关键代码位置
+这解决了过去只 hash `app.yaml` 时无法发现 App 源码变化的问题：当前 App 输入包含源码树，
+发布产物也使用同一套节点语义验证。修改权限或链接目标同样会改变身份。
 
-- [`builder/cache.py:BuildCache._hash_directory`](../../builder/cache.py) — 实现，L365
-- [`builder/cache.py:BuildCache.HASH_EXCLUDE_DIRS`](../../builder/cache.py) — 排除规则，L362
-
-## 延伸阅读
-
-- [[内容哈希与增量构建]]
-- [[缓存系统]]
+依赖传播使用上游实际产物身份，见[内容哈希与增量构建](内容哈希与增量构建.md)；
+增加输入或修改缓存时从[维护指南](../../docs/maintenance-guide.md)进入。

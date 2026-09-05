@@ -17,13 +17,19 @@ sources:
   - openspec/specs/amlogic-flash/spec.md
   - openspec/changes/archive/2026-05-15-add-amlogic-khadas-vim3l/design.md
   - openspec/changes/archive/2026-05-15-vim3l-enable-spidev/design.md
+  - docs/first-steps.md
 related:
   - "[[amlogic 平台]]"
   - "[[FlashStrategy 抽象]]"
   - "[[USB 线刷协议]]"
   - "[[新增板级支持]]"
-updated: 2026-09-04
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list khadas-vim3l` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 

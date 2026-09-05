@@ -14,13 +14,19 @@ sources:
   - components/platform/amlogic/config.jsonnet
   - components/platform/amlogic/a311d/config.jsonnet
   - components/config/khadas-vim3-common.libsonnet
-  - openspec/changes/add-a311d-khadas-vim3/design.md
+  - openspec/changes/archive/2026-09-05-add-a311d-khadas-vim3/design.md
+  - docs/first-steps.md
 related:
   - "[[khadas-vim3l]]"
   - "[[amlogic 平台]]"
   - "[[USB 线刷协议]]"
-updated: 2026-09-04
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list khadas-vim3` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 

@@ -4,14 +4,16 @@ type: component
 status: stable
 sources:
   - builder/platforms/rockchip/image.py
-  - builder/flash.py
+  - builder/flash/generate.py
+  - builder/image.py
+  - builder/partition/layout.py
   - builder/partition/rockchip.py
 related:
   - "[[ComponentBuilder 基类]]"
   - "[[分区表系统]]"
   - "[[flash-config.json]]"
   - "[[lunch-build-flash 流程]]"
-updated: 2026-07-14
+updated: 2026-09-05
 ---
 
 ## TL;DR
@@ -21,12 +23,12 @@ updated: 2026-07-14
 ## 关键设计要点
 
 - **跳过源码阶段**：`build()` 直接调 `compile(None, config)`，跳过 source.ensure/reset/patch
-- **分区布局**：`_resolve_entries`（L108）将 hex 字符串 offset/size 转 sectors；`_total_sectors`（L123）加 2048 sectors GPT 尾部保留
+- **分区布局**：共享 `PartitionLayout` 解析 entries 并换算目标介质逻辑扇区；`GptImageBuilder` 装配 GPT 与分区镜像
 - **raw 分区**：`type=="raw"`（如 idbloader）不进 GPT 表，仅 dd；GPT 分区按顺序 `parted mkpart`
 - **分区顺序**（commit fa745b0）：idbloader → uboot → boot → recovery → rootfs；recovery 在 rootfs 之前
-- **产物映射**：`PARTITION_IMAGES`（L31）字典映射分区名→路径；产物不存在则跳过（recovery 未启用时安全）
+- **产物映射**：`PARTITION_IMAGES` 映射分区名→路径，按当前组件启用状态过滤；启用组件缺少必需产物会失败，不由历史文件存在与否决定启用
 - **rootfs PARTUUID**：固定 `"614e0000-0000-4000-8000-000000000000"`，供 kernel cmdline 引用
-- **collect**：`{"image": raw_img}`；`BuildEngine._generate_flash_config` 注入 flash-config.json
+- **collect**：`{"image": raw_img}`；引擎调用 `FlashConfigGenerator` 生成当前目标的 flash-config.json
 - **SPI NAND 路由**：`storage.type=spinand` 时校验总容量与分区边界，生成 `parameter.txt`；`idbloader` 由 `UL` 负责，不再作为具名分区重复写入，rootfs 使用 `rootfs.ubi`
 - **单一布局来源**：parameter、manifest 与 `flash-config.json` 都由解析后的 entries 生成；flash-config 记录 parameter SHA-256，刷写前再次交叉校验，拒绝混用旧产物
 
@@ -38,6 +40,6 @@ updated: 2026-07-14
 
 ## 易踩坑
 
-- `remaining` 分区默认 4 GB，超出 eMMC 容量的镜像刷写时被截断
+- `remaining`、`image_size` 与实际存储容量要共同核对，不能预期刷写工具自动截断镜像来适配小容量设备。
 - `parted`/`sfdisk` 须在 Docker 内执行；`self.docker.run` 已封装，勿在宿主机直接调
 - SPI NAND 必须走 loader 的坏块感知具名 `DI`，不可按 LBA `WL` 或把 UBI dd 进伪 GPT `raw.img`

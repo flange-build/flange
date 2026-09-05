@@ -4,52 +4,37 @@ type: component
 status: stable
 sources:
   - builder/app.py
+  - builder/app_build.py
+  - builder/app_resolver.py
   - builder/app_spec.py
-  - builder/app_list.py
+  - builder/app_model.py
+  - builder/toolchain.py
   - builder/deb.py
-  - docker-compose.yml
-  - ProjectSpec.md#91-app-来源查找优先级
   - docs/app-architecture.md
-  - openspec/specs/app-registry/spec.md
-related:
-  - "[[deb 打包引擎]]"
-  - "[[scaffold 生成器]]"
-  - "[[external_apps 装载]]"
-  - "[[scaffold 新建 app 流程]]"
-  - "[[recoveryctl]]"
-  - "[[adbd]]"
-  - "[[Cardputer 在线音乐播放器]]"
-updated: 2026-07-18
+updated: 2026-09-05
 ---
 
-## TL;DR
+# App 构建与打包
 
-`app.yaml` 唯一数据源 → `AppSpec` 强类型解析 → `AppBuilder` 编排构建 → `deb.py` pure-Python 生成 `.deb`（tarfile + ar，无需 dpkg-deb）。
+`app.yaml` → 严格 AppSpec → AppResolver 依赖闭包 → 原生编译与安装树 → deb 与 ArtifactManifest。
+第一次创建 App 从[创建流程](../workflows/scaffold-新建-app-流程.md)进入；
+完整字段、安装规则与维护接口由[App 架构](../../docs/app-architecture.md)维护。
 
-## 关键设计要点
+| 层 | 责任 |
+| --- | --- |
+| `app_spec.py` | 解析 App 类型、构建/安装声明、运行入口和动作，拒绝重复键与未知字段 |
+| `app_resolver.py` | 统一名称/路径来源和递归依赖，拒绝缺失、循环及同名不同源 |
+| `app_build.py` / `toolchain.py` | 目标工具链、隔离工作区、原生适配、缓存和原子发布 |
+| `app.py` / `deb.py` | 安装文件收集、ELF 架构检查、Debian 打包 |
+| `app_model.py` | AppBuildReport，连接构建、rootfs 安装及设备部署 |
 
-- **5 种 App 类型**：`exec`、`service`、`lib`（含 dev 包）、`test`、`amp`
-- **8 种构建系统**：`none`/`cmake`/`meson`/`make`/`swift`/`custom`/`amp`/`scons`
-- **来源三层**（详见 [ProjectSpec §9.1](../../ProjectSpec.md#91-app-来源查找优先级)）：① `components/app/*`；② external_apps Git 仓库；③ external_app_dirs；同名取高优先级
-- **AppSpec**（`load_spec`，L224）：yaml → 强类型；非法 type/system 抛 `AppSpecError`
-- **依赖图**（`_topo_sort_apps`，L339）：DFS 拓扑；循环依赖抛 `CircularDependencyError`（L335）
-- **AppBuilder**（L390）：`build_all`（L431）→ `build_one`（L458）；lib 额外 sysroot（`_build_lib`，L516）
-- **约定优先**：`collect_files`（L208）按后缀推断安装位置；`install:` 覆盖
-- **三类依赖**：`build.apt_packages` 在当前 Docker 构建容器按目标架构安装；
-  `build.deps` 决定 App 构建顺序；顶层 `depends` 写入目标 `.deb`
-- **rootfs**：engine 注入 deb 列表到 `custom_packages`，Phase 2 `dpkg -i`
+三类依赖作用不同：`build.apt_packages` 在容器准备开发包，`build.deps` 建立 App 构建闭包，
+顶层 `depends` 写入 deb 运行依赖。lib 可发布运行时和开发包；依赖安装树为下游提供编译前缀，
+但它不等于完整系统 sysroot（目标根目录）。
 
-## 关键代码位置
+产物位于当前工作区 `<target_dir>/apps/<resource-id>/` 的 `install/`、`artifacts/`
+及清单中。系统 `app` 组件还发布 `apps/build-report.json`；rootfs/recovery 安装各自报告选出的集合，
+不扫描整个目录里的历史 deb。custom/build action 在 Docker 的隔离副本执行，不污染原始源码。
 
-- [`builder/app_spec.py:AppSpec`](../../builder/app_spec.py) — 结构体，L75
-- [`builder/app_spec.py:load_spec`](../../builder/app_spec.py) — 解析入口，L224
-- [`builder/app.py:AppBuilder.build_one`](../../builder/app.py) — 单 App 构建，L458
-- [`builder/app.py:_topo_sort_apps`](../../builder/app.py) — 依赖排序，L339
-- [`builder/app_list.py:list_all`](../../builder/app_list.py) — 三层扫描，L123
-
-## 易踩坑
-
-- `lib` 产出运行时 deb + `-dev` deb；rootfs 只装运行时包，sysroot 供其他 App 链接
-- `custom` commands 在 Docker 内 `cwd=app_dir` 执行，宿主机路径无效
-- App 专属开发包声明在 `build.apt_packages`，不得为了单个 App 固化进通用 Dockerfile；
-  `:{arch}` 会展开成当前目标架构，APT 下载与索引复用 `.build/cache/`
+资源生命周期包括 `create/list/plan/build/deploy/run/test/debug/log`，
+详见[仓库外 App 开发](../workflows/out-of-tree-app-构建.md)。

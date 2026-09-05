@@ -6,6 +6,9 @@ sources:
   - builder/platforms/rockchip/rootfs.py
   - builder/platforms/allwinnera733/rootfs.py
   - builder/rootfs.py
+  - builder/rootfs_base.py
+  - builder/rootfs_storage.py
+  - builder/snapshot.py
   - builder/chroot.py
   - docker/Dockerfile
   - components/rootfs/config.jsonnet
@@ -20,23 +23,24 @@ related:
   - "[[deb 打包引擎]]"
   - "[[app 打包系统]]"
   - "[[源码管理 SourceManager]]"
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 ## TL;DR
 
-ubuntu-base + apt + overlay + deb 两阶段 rootfs 构建；按 `arch` 选择 QEMU，按 `rootfs.image_format` 输出 ext4 或 UBI。[[atk-rk3506b]] 使用 armhf + `qemu-arm-static` + UBIFS，其余既有块设备路径保持 ext4。
+ubuntu-base + apt + overlay + deb 两阶段 rootfs 构建；按 `architecture.userspace` 选择 QEMU，按 `rootfs.image_format` 输出 ext4 或 UBI。[[atk-rk3506b]] 使用 armhf + `qemu-arm-static` + UBIFS，其余既有块设备路径保持 ext4。
 
 ## 关键设计要点
 
-- **package_sets 基线**：`components/rootfs/config.jsonnet` 定义 `ROOTFS["package_sets"]`（`base`/`debug`/`release`），platform/board 通过 `rootfs.package_set` 选用、`+package_set` 按 variant 激活，registry 展开为 `rootfs.packages` 扁平列表
+- **package_sets 基线**：`components/rootfs/config.jsonnet` 定义 `rootfs.package_sets`，platform/board 通过 `rootfs.package_set` 选择，product/variant 条件使用 Jsonnet 表达；求值边界展开为 `rootfs.packages` 扁平列表
 - **Phase 1 — base**：解压 ubuntu-base，chroot 内 `apt-get install` `rootfs.packages`；tar 存 base cache，下次跳过
-- **Phase 2 顺序**（`_build_phase2`）：app deb (`custom_packages`) → `extra_debs` → kernel modules → `extra_firmware` → `apply_overlays`（最后覆盖，优先级最高） → `_configure_users`（账号一体化）
-- **App 注入**：engine 在 rootfs 前完成 App deb 并注入 `config["rootfs"]["custom_packages"]`
+- **活树与产物分离**：解包、快照恢复、APT、定制和成像读取同一容器原生 `/var/tmp` 活树，不跟随 TMPDIR；最终镜像、清单与平台辅助文件仍写组件持久化工作目录。该边界同时适用于 recovery，避免宿主共享存储的权限/UID 语义影响目标系统
+- **Phase 2 顺序**（`_build_phase2`）：报告选定的 App deb → 额外 deb → kernel modules → 固件/面板文件 → overlay → locale → 账户 → hostname → 包清单
+- **App 报告**：engine 在 rootfs 前构建 App 闭包并传入 AppBuildReport；`rootfs.custom_packages` 选择需要安装的运行依赖集合，拒绝缺失或损坏报告
 - **`extra_debs`**（基类 `_install_extra_debs`）：声明式下载并安装第三方 deb（不在 Ubuntu 官方源、又不便发布到 app 体系的预编译包）；通过 [[源码管理 SourceManager]] sha256 校验，批量 `dpkg -i` 后 `ldconfig`
-- **`extra_firmware`**（基类 `_install_extra_firmware`）：`source` 多类型（`repo` 默认 / `kernel` / `bootloader` / `oot:<name>`），后三种复用同 build 已 ensure 的源不重复 clone（如 `oot:rkwifibt` 复用 [[out-of-tree 模块]] 已有源拷 BT 固件）；`files` 元素支持 `str` 或 `{src, dest}` dict 形态做重命名（如给无后缀 vendor 固件统一补 `.bin`）
+- **`extra_firmware`**（基类 `_install_extra_firmware`）：通过 `source: {name, subpath}` 引用顶层 `sources`，或使用带 SHA256 的下载描述符；同一来源经 SourceManager 复用，`files` 元素支持 `str` 或 `{src, dest}` dict 形态做重命名（如给无后缀 vendor 固件统一补 `.bin`）
 - **继承**：`RockchipRootfsBuilder` / `AllwinnerA733RootfsBuilder` → `RootfsBuilder` → `ComponentBuilder`；`apply_overlays` / `_install_extra_debs` / `_install_extra_firmware` 复用基类
-- **chroot**：`ChrootContext` bind-mount proc/sys/dev/pts + QEMU；`__exit__` umount
+- **chroot**：`ChrootContext` 挂载 proc/sys 并绑定 dev/pts，初始化失败回滚，退出恢复原有临时配置并逆序卸载；主异常不被清理错误替换。活树删除前还会检查剩余挂载
 - **ARM32**：SoC 配置选择 Ubuntu Base armhf 与 `qemu-arm-static`；Docker 同时提供 armhf 运行库和 gcc-10 hard-float 工具链，宿主机无需 ARM32 环境
 - **UBI**：`rootfs.image_format=ubi` 时先以 `mkfs.ubifs` 按 min-I/O/LEB/max-LEB 生成 volume，再用 `ubinize` 按 PEB/subpage/VID offset 封装 `rootfs.ubi`；`space_fixup=true` 对应 `mkfs.ubifs -F`，首次挂载可修复 NAND 空闲页
 - **API 文件系统**：rootfs 固化 `/proc`、`/sys`、`/dev`、`/dev/pts`、`/run`、`/sys/kernel/config` 等挂载点，保证 systemd 与模块化 USB gadget 冷启动可用
@@ -44,16 +48,18 @@ ubuntu-base + apt + overlay + deb 两阶段 rootfs 构建；按 `arch` 选择 QE
 
 ## 关键代码位置
 
-- [`builder/platforms/rockchip/rootfs.py:_build_phase1`](../../builder/platforms/rockchip/rootfs.py) — Phase 1，L108
-- [`builder/platforms/rockchip/rootfs.py:_build_phase2`](../../builder/platforms/rockchip/rootfs.py) — Phase 2，L133
-- [`builder/rootfs.py:RootfsBuilder.apply_overlays`](../../builder/rootfs.py) — overlay，L24
-- [`builder/rootfs.py:RootfsBuilder._install_extra_debs`](../../builder/rootfs.py) — 第三方 deb，L69
+- [`builder/rootfs_base.py`](../../builder/rootfs_base.py) — Phase 1 的统一计划与执行
+- [`builder/rootfs_storage.py`](../../builder/rootfs_storage.py) — 原生工作树作用域与清理门禁
+- [`builder/rootfs.py:RootfsBuilder._build_phase2`](../../builder/rootfs.py) — Phase 2 个性化
+- [`builder/rootfs.py:RootfsBuilder.apply_overlays`](../../builder/rootfs.py) — overlay
+- [`builder/rootfs.py:RootfsBuilder._install_extra_debs`](../../builder/rootfs.py) — 第三方 deb
 - [`builder/rootfs.py:RootfsBuilder._configure_users`](../../builder/rootfs.py) — 账号一体化
-- [`builder/chroot.py:ChrootContext`](../../builder/chroot.py) — chroot，L8
+- [`builder/chroot.py:ChrootContext`](../../builder/chroot.py) — chroot
 
 ## 易踩坑
 
-- base cache 依赖 packages 哈希；包列表变更自动失效，无需手动清理
+- base cache 同时依赖 ubuntu-base 摘要、APT 输入、推荐包策略、架构、模拟器、环境和配方；详见[rootfs 两阶段缓存](../concepts/rootfs-两阶段缓存.md)
+- 大小写敏感卷不等于 Linux 原生权限语义；rootfs 活树自动使用容器原生存储。需要同时检查 Docker 磁盘与宿主产物卷空间，见[开发指南](../../docs/development-guide.md#构建存储与磁盘空间)
 - _modules_staging 的 source/build symlink 须由内核构建器预先删除，详见 [[kernel 构建器]]
 - `disable_root_login: true` 仅锁串口 / SSH 通道，不锁 adb（adbd 不走 PAM）— 这是显式 feature，不是 bug；用于"开发期 adb 留口、生产期对外封锁"双场景
 - `adb shell` 体验依赖 `/etc/bash.bashrc` 而非 `/root/.bashrc`：adbd 以 `argv[0]="sh"` 启动 `/bin/bash`，触发 POSIX 模式，bash 不读 `~/.bashrc`；ubuntu 编译时 `SYS_BASHRC` 把 `/etc/bash.bashrc` 钉死在交互启动路径上（POSIX 仍读），故 PS1 / 环境补齐 / alias 全放该文件。`HOME` / `USER` 等变量在文件早期无条件设（adbd 不走 PAM 进来环境为空，btop 等程序读 `$HOME` 立即失败）
