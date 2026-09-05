@@ -59,22 +59,28 @@ def _source_text(config: dict, name: str | None) -> str:
 
 
 def _identity(config: dict) -> Section:
-    return ("身份", [
-        ("board", _text(config.get("board"))),
-        ("platform", _text(config.get("platform"))),
-        ("soc", _text(config.get("soc"))),
-        ("vendor", _text(config.get("vendor"))),
-        ("product", _text(config.get("product"))),
-        ("variant", _text(config.get("variant"))),
-    ])
+    return (
+        "身份",
+        [
+            ("board", _text(config.get("board"))),
+            ("platform", _text(config.get("platform"))),
+            ("soc", _text(config.get("soc"))),
+            ("vendor", _text(config.get("vendor"))),
+            ("product", _text(config.get("product"))),
+            ("variant", _text(config.get("variant"))),
+        ],
+    )
 
 
 def _architecture(config: dict) -> Section:
-    return ("架构", [
-        ("userspace", _text(_get(config, "architecture", "userspace"))),
-        ("kernel", _text(_get(config, "architecture", "kernel"))),
-        ("bootloader", _text(_get(config, "architecture", "bootloader"))),
-    ])
+    return (
+        "架构",
+        [
+            ("userspace", _text(_get(config, "architecture", "userspace"))),
+            ("kernel", _text(_get(config, "architecture", "kernel"))),
+            ("bootloader", _text(_get(config, "architecture", "bootloader"))),
+        ],
+    )
 
 
 def _kernel(config: dict) -> Section:
@@ -82,21 +88,26 @@ def _kernel(config: dict) -> Section:
     name = _get(config, "kernel", "device_tree", "name")
     device_tree = f"{directory}/{name}" if directory and name else _text(name)
     oot = _get(config, "kernel", "oot_modules", default=[]) or []
-    return ("内核", [
-        ("source", _source_text(config, _get(config, "kernel", "source", "name"))),
-        ("device_tree", device_tree),
-        ("defconfig", _text(_get(config, "kernel", "defconfig"))),
-        ("oot_modules", f"{len(oot)} 个" if oot else _MISSING),
-    ])
+    return (
+        "内核",
+        [
+            ("source", _source_text(config, _get(config, "kernel", "source", "name"))),
+            ("device_tree", device_tree),
+            ("defconfig", _text(_get(config, "kernel", "defconfig"))),
+            ("oot_modules", f"{len(oot)} 个" if oot else _MISSING),
+        ],
+    )
 
 
 def _bootloader(config: dict) -> Section:
-    return ("Bootloader", [
-        ("source",
-         _source_text(config, _get(config, "bootloader", "source", "name"))),
-        ("defconfig", _text(_get(config, "bootloader", "defconfig"))),
-        ("flash_tool", _text(config.get("flash_tool"))),
-    ])
+    return (
+        "Bootloader",
+        [
+            ("source", _source_text(config, _get(config, "bootloader", "source", "name"))),
+            ("defconfig", _text(_get(config, "bootloader", "defconfig"))),
+            ("flash_tool", _text(config.get("flash_tool"))),
+        ],
+    )
 
 
 def _storage(config: dict) -> Section:
@@ -110,10 +121,12 @@ def _storage(config: dict) -> Section:
     ]
     for entry in _get(config, "partitions", "entries", default=[]) or []:
         size = entry.get("image_size") or entry.get("size")
-        rows.append((
-            f"  {entry.get('name', '?')}",
-            f"{entry.get('type', '?')}  off={entry.get('offset', '-')}  size={size}",
-        ))
+        rows.append(
+            (
+                f"  {entry.get('name', '?')}",
+                f"{entry.get('type', '?')}  off={entry.get('offset', '-')}  size={size}",
+            )
+        )
     return ("存储与分区", rows)
 
 
@@ -121,28 +134,33 @@ def _rootfs(config: dict) -> Section:
     url = _get(config, "rootfs", "url") or ""
     packages = _get(config, "rootfs", "packages", default=[]) or []
     custom = _get(config, "rootfs", "custom_packages", default=[]) or []
-    return ("Rootfs", [
-        ("base", url.rsplit("/", 1)[-1] if url else _MISSING),
-        ("image_format", _text(_get(config, "rootfs", "image_format", default="ext4"))),
-        ("apt 包", f"{len(packages)} 个" if packages else _MISSING),
-        ("custom 包", _text(custom)),
-        ("hostname", _text(_get(config, "rootfs", "hostname"))),
-        ("默认用户", _text(_get(config, "rootfs", "default_user"))),
-    ])
+    return (
+        "Rootfs",
+        [
+            ("base", url.rsplit("/", 1)[-1] if url else _MISSING),
+            ("image_format", _text(_get(config, "rootfs", "image_format", default="ext4"))),
+            ("apt 包", f"{len(packages)} 个" if packages else _MISSING),
+            ("custom 包", _text(custom)),
+            ("hostname", _text(_get(config, "rootfs", "hostname") or config.get("board"))),
+            ("默认用户", _text(_get(config, "rootfs", "default_user"))),
+        ],
+    )
 
 
 def _features(config: dict) -> Section:
-    return ("功能开关", [
-        ("recovery", _text(_get(config, "recovery", "enabled", default=False))),
-        ("amp", _text(_get(config, "amp", "enabled", default=False))),
-        ("packages", _text(config.get("packages"))),
-        ("可选 product", _text(config.get("products"))),
-        ("可选 variant", _text(config.get("variants"))),
-    ])
+    return (
+        "功能开关",
+        [
+            ("recovery", _text(_get(config, "recovery", "enabled", default=False))),
+            ("amp", _text(_get(config, "amp", "enabled", default=False))),
+            ("packages", _text(config.get("packages"))),
+            ("可选 product", _text(config.get("products"))),
+            ("可选 variant", _text(config.get("variants"))),
+        ],
+    )
 
 
-_SECTIONS = (_identity, _architecture, _kernel, _bootloader,
-             _storage, _rootfs, _features)
+_SECTIONS = (_identity, _architecture, _kernel, _bootloader, _storage, _rootfs, _features)
 
 
 def summarize_config(config: dict) -> list[Section]:

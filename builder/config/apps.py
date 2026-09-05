@@ -21,6 +21,8 @@ import copy
 from pathlib import Path
 from typing import Any
 
+from builder.config.schema import APP_SOURCE, STRINGS, Map, SchemaError
+
 
 class AppSourceConfigError(ValueError):
     """``external_apps`` / ``external_app_dirs`` 校验失败时抛出。"""
@@ -42,10 +44,7 @@ def gather_custom_packages(config: dict) -> list[str]:
         # flange-rootfs-grow 只会调用 growpart/resize2fs，属于 GPT/ext4 首启
         # 扩容逻辑；UBI volume 由 ubinize 与 UBI 层管理，安装该 app 既无效又会
         # 在 SPI NAND 系统上误操作不存在的块设备分区。
-        rootfs_pkgs = [
-            package for package in rootfs_pkgs
-            if package != "flange-rootfs-grow"
-        ]
+        rootfs_pkgs = [package for package in rootfs_pkgs if package != "flange-rootfs-grow"]
     seen: set[str] = set(rootfs_pkgs)
     merged: list[str] = list(rootfs_pkgs)
 
@@ -57,12 +56,6 @@ def gather_custom_packages(config: dict) -> list[str]:
                 merged.append(pkg)
 
     return sorted(merged)
-
-
-# 合法的 git 模式字段集（白名单外字段可通过但不被本模块消费）
-_GIT_MODE_KEYS: frozenset[str] = frozenset(
-    {"git", "branch", "commit", "tag", "recurse_submodules"}
-)
 
 
 def _resolve_path(raw: str, project_root: Path) -> str:
@@ -77,6 +70,32 @@ def _resolve_path(raw: str, project_root: Path) -> str:
     else:
         p = p.resolve()
     return str(p)
+
+
+def validate_app_source_entry(name: str, entry: Any) -> None:
+    """只验证来源契约，不把路径归一化或访问源码。"""
+    try:
+        APP_SOURCE.check(entry, f"external_apps.{name}")
+    except SchemaError as exc:
+        raise AppSourceConfigError(str(exc)) from exc
+    has_local = "local_path" in entry
+    has_git = "git" in entry
+
+    if has_local and has_git:
+        raise AppSourceConfigError(
+            f"external_apps[{name!r}] 不允许同时声明 local_path 和 git，请二选一"
+        )
+    if not has_local and not has_git:
+        raise AppSourceConfigError(f"external_apps[{name!r}] 必须声明 local_path 或 git 之一")
+
+    if has_local and set(entry) != {"local_path"}:
+        raise AppSourceConfigError(
+            f"external_apps.{name}.local_path 与远端 revision 字段互斥，请删除远端字段"
+        )
+    if "commit" in entry and "tag" in entry:
+        raise AppSourceConfigError(
+            f"external_apps.{name} 的 commit 与 tag 互斥，请选择一个固定 revision"
+        )
 
 
 def _validate_and_normalize_entry(
@@ -97,36 +116,15 @@ def _validate_and_normalize_entry(
             f"external_apps[{name!r}] 必须是字典，实际为 {type(entry).__name__}"
         )
 
+    validate_app_source_entry(name, entry)
     has_local = "local_path" in entry
-    has_git = "git" in entry
-
-    if has_local and has_git:
-        raise AppSourceConfigError(
-            f"external_apps[{name!r}] 不允许同时声明 local_path 和 git，"
-            f"请二选一"
-        )
-    if not has_local and not has_git:
-        raise AppSourceConfigError(
-            f"external_apps[{name!r}] 必须声明 local_path 或 git 之一"
-        )
-
     normalized = copy.deepcopy(entry)
 
     if has_local:
         raw = entry["local_path"]
         if not isinstance(raw, str) or not raw.strip():
-            raise AppSourceConfigError(
-                f"external_apps[{name!r}].local_path 必须是非空字符串"
-            )
+            raise AppSourceConfigError(f"external_apps[{name!r}].local_path 必须是非空字符串")
         normalized["local_path"] = _resolve_path(raw, project_root)
-
-    # git 模式：不在此处做 URL / branch / commit 的深度校验，交给 SourceManager
-    # 现有 clone 路径处理；仅确认 git 字段是非空字符串
-    if has_git:
-        if not isinstance(entry["git"], str) or not entry["git"].strip():
-            raise AppSourceConfigError(
-                f"external_apps[{name!r}].git 必须是非空字符串"
-            )
 
     return normalized
 
@@ -142,6 +140,13 @@ def normalize_app_sources(config: dict, project_root: Path) -> dict:
     若配置中两者都未声明，仍会把 ``external_app_dirs`` 补为 ``[]``，
     这样下游无须关心"键是否存在"的情况分支。
     """
+    try:
+        if "external_apps" in config:
+            Map(APP_SOURCE).check(config["external_apps"], "external_apps")
+        if "external_app_dirs" in config:
+            STRINGS.check(config["external_app_dirs"], "external_app_dirs")
+    except SchemaError as exc:
+        raise AppSourceConfigError(str(exc)) from exc
     result = copy.deepcopy(config)
 
     # external_apps：仅做校验和 local_path 归一化
@@ -154,18 +159,16 @@ def normalize_app_sources(config: dict, project_root: Path) -> dict:
         normalized_apps: dict[str, dict] = {}
         for name, entry in raw_apps.items():
             if not isinstance(name, str) or not name.strip():
-                raise AppSourceConfigError(
-                    f"external_apps 的键必须是非空字符串，实际为 {name!r}"
-                )
+                raise AppSourceConfigError(f"external_apps 的键必须是非空字符串，实际为 {name!r}")
             normalized_apps[name] = _validate_and_normalize_entry(
-                name, entry, project_root,
+                name,
+                entry,
+                project_root,
             )
         result["external_apps"] = normalized_apps
 
     # external_app_dirs：规范化为绝对路径字符串列表
     raw_dirs = result.get("external_app_dirs", [])
-    if raw_dirs is None:
-        raw_dirs = []
     if not isinstance(raw_dirs, list):
         raise AppSourceConfigError(
             f"external_app_dirs 必须是列表，实际为 {type(raw_dirs).__name__}"
@@ -173,9 +176,7 @@ def normalize_app_sources(config: dict, project_root: Path) -> dict:
     normalized_dirs: list[str] = []
     for i, raw in enumerate(raw_dirs):
         if not isinstance(raw, str) or not raw.strip():
-            raise AppSourceConfigError(
-                f"external_app_dirs[{i}] 必须是非空字符串"
-            )
+            raise AppSourceConfigError(f"external_app_dirs[{i}] 必须是非空字符串")
         normalized_dirs.append(_resolve_path(raw, project_root))
     result["external_app_dirs"] = normalized_dirs
 

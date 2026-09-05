@@ -11,11 +11,11 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from builder.rootfs import RootfsBuilder
+from tests.builder.context import component_context
 
 
 def _builder(tmp_path: Path) -> RootfsBuilder:
@@ -24,6 +24,8 @@ def _builder(tmp_path: Path) -> RootfsBuilder:
     cache.target_dir = tmp_path / "target"
     builder.cache = cache
     builder.output = None
+    builder.context = component_context(tmp_path, target_dir=cache.target_dir)
+    builder._work_dir = builder.work_dir()
     return builder
 
 
@@ -35,7 +37,8 @@ def test_导出的清单同时落到镜像内和产物目录(tmp_path: Path):
     def fake_run(command, **kwargs):
         # 模拟 chroot 内 dpkg-query 的重定向输出
         (rootfs / "etc/flange/packages.manifest").write_text(
-            "bash\t5.2-2ubuntu1\nsystemd\t255.4-1ubuntu8\n")
+            "bash\t5.2-2ubuntu1\nsystemd\t255.4-1ubuntu8\n"
+        )
         return MagicMock()
 
     with patch("builder.rootfs.ChrootContext") as chroot_cls:
@@ -43,9 +46,10 @@ def test_导出的清单同时落到镜像内和产物目录(tmp_path: Path):
         builder._export_package_manifest(rootfs)
 
     in_image = rootfs / "etc/flange/packages.manifest"
-    in_target = tmp_path / "target/rootfs/packages.manifest"
+    builder._output = builder._work_dir / "rootfs.img"
+    in_target = builder.collect(None, {})["packages"]
     assert in_image.is_file(), "镜像内要有清单，供现场排查"
-    assert in_target.is_file(), "产物目录要有清单，不刷机也能 diff 两次构建"
+    assert in_target.is_file(), "收集契约必须返回清单，由引擎与镜像一同原子发布"
     assert in_target.read_text() == in_image.read_text()
 
 
@@ -74,7 +78,7 @@ def test_phase2最后一步是导出清单():
     import inspect
 
     source = inspect.getsource(RootfsBuilder._build_phase2)
-    steps = [line.strip() for line in source.splitlines()
-             if line.strip().startswith("self._")]
+    steps = [line.strip() for line in source.splitlines() if line.strip().startswith("self._")]
     assert steps[-1].startswith("self._export_package_manifest"), (
-        f"_export_package_manifest 必须是 phase2 最后一步，实际最后是 {steps[-1]}")
+        f"_export_package_manifest 必须是 phase2 最后一步，实际最后是 {steps[-1]}"
+    )

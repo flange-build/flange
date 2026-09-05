@@ -17,7 +17,6 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.config.canonical import bootloader_arch
 from builder.kconfig import defconfig_targets, render_kconfig
-from builder.paths import COMPONENTS_ROOT
 
 
 class AmlogicBootloaderBuilder(ComponentBuilder):
@@ -39,14 +38,10 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         """
         self.ARCH = bootloader_arch(config)
         self._stage_fragments(src_dir, config)
-        targets = defconfig_targets(
-            config["bootloader"]["defconfig"], "bootloader.defconfig"
-        )
+        targets = defconfig_targets(config["bootloader"]["defconfig"], "bootloader.defconfig")
         for dc in targets:
             self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
-        overrides = render_kconfig(
-            config["bootloader"].get("config"), "bootloader.config"
-        )
+        overrides = render_kconfig(config["bootloader"].get("config"), "bootloader.config")
         if overrides:
             payload = "".join(line + "\n" for line in overrides)
             self.docker.run(
@@ -65,17 +60,15 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         缺失视为致命错误（fail-fast，避免 make 阶段以"target 不存在"形式
         报错而难定位）。
         """
-        defconfig = defconfig_targets(
-            config["bootloader"]["defconfig"], "bootloader.defconfig"
-        )
+        defconfig = defconfig_targets(config["bootloader"]["defconfig"], "bootloader.defconfig")
         platform = config["platform"]
         soc = config["soc"]
         board = config["board"]
         # 用 paths.py 暴露的绝对锚点，避免依赖调用时 cwd（ProjectSpec §9）。
         search_dirs = [
-            COMPONENTS_ROOT / "board" / board / "patches" / "bootloader",
-            COMPONENTS_ROOT / "platform" / platform / soc / "patches" / "bootloader",
-            COMPONENTS_ROOT / "platform" / platform / "patches" / "bootloader",
+            self.components_root / "board" / board / "patches" / "bootloader",
+            self.components_root / "platform" / platform / soc / "patches" / "bootloader",
+            self.components_root / "platform" / platform / "patches" / "bootloader",
         ]
         configs_dir = src_dir / "configs"
         configs_dir.mkdir(parents=True, exist_ok=True)
@@ -85,8 +78,7 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
             src = self._find_fragment(name, search_dirs)
             if src is None:
                 searched = ", ".join(str(d) for d in search_dirs)
-                raise FileNotFoundError(
-                    f"defconfig fragment 未找到: {name}（已搜索 {searched}）")
+                raise FileNotFoundError(f"defconfig fragment 未找到: {name}（已搜索 {searched}）")
             shutil.copy2(src, configs_dir / name)
             self._status(f"defconfig fragment 就位: {name}")
 
@@ -111,14 +103,12 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         四个具名文件。
         """
         jobs = config.get("jobs", 0)
-        self.make(src_dir, [], arch=self.ARCH, cross=self.CROSS, jobs=jobs,
-                  label="编译 U-Boot...")
+        self.make(src_dir, [], arch=self.ARCH, cross=self.CROSS, jobs=jobs, label="编译 U-Boot...")
 
         # 通过 canonical source 引用复用 FIP 仓库 checkout。
         fip_src = self.source.ensure_extra(
-            "amlogic-boot-fip",
-            {"source": {"name": "amlogic-boot-fip"}},
-            config=config)
+            "amlogic-boot-fip", {"source": {"name": "amlogic-boot-fip"}}, config=config
+        )
         bl_cfg = config["bootloader"]
         board_dir = bl_cfg.get("fip_board_dir")
         if not board_dir:
@@ -134,8 +124,7 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         # build-fip.sh 是仓库顶层入口脚本，参数序列：board / u-boot.bin / out
         self._status("FIP 拼装...")
         self.docker.run(
-            ["bash", str(fip_src / "build-fip.sh"),
-             board_dir, str(u_boot_bin), str(out_dir)],
+            ["bash", str(fip_src / "build-fip.sh"), board_dir, str(u_boot_bin), str(out_dir)],
             cwd=str(fip_src),
             label="build-fip.sh ...",
         )
@@ -158,8 +147,8 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         """
         fip_image = self._fip_image
         return {
-            "fip":     fip_image,                          # build-fip.sh 直接产出
-            "sd":      Path(str(fip_image) + ".sd.bin"),
+            "fip": fip_image,  # build-fip.sh 直接产出
+            "sd": Path(str(fip_image) + ".sd.bin"),
             "usb_bl2": Path(str(fip_image) + ".usb.bl2"),
             "usb_tpl": Path(str(fip_image) + ".usb.tpl"),
         }

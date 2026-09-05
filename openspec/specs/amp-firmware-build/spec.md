@@ -3,22 +3,21 @@
 ## Purpose
 
 定义 amp 协处理器固件组件的构建契约：它在依赖图中的位置、hal 与 rt-thread 两种 mode 的产出、SoC 到目标工程的映射、内存布局的单一事实源，以及固件必须满足的 ABI 与容量门槛。
-
 ## Requirements
 ### Requirement: amp 组件注册进依赖图并作为 image 上游
 
-`builder/cache.py` 的 `DEPENDENCY_GRAPH` SHALL 新增 `"amp": []` 叶子节点（amp 固件是裸机/RTOS 镜像，无上游组件依赖），并 SHALL 把 `"amp"` 追加进 `"image"` 的依赖列表，使 `amp.img` 在整盘组装前就绪。`REQUIRED_ARTIFACTS` SHALL 新增 `"amp": ["amp.img"]`，在缓存命中时校验产物存在。
+`builder/graph.py` 的 `DEPENDENCY_GRAPH` SHALL 声明 `"amp": ["kernel"]`，并把 `"amp"` 纳入 `"image"` 的依赖列表。AMP 使用已准备的目标内核源码执行 DTS 内存与运行配置一致性校验，内核必须先于 AMP 准备完成。AMP TaskPlan SHALL 把 `<target_dir>/amp/amp.img` 声明为必需产物，成功 manifest 校验其类型、内容与权限后才允许缓存命中。
 
 #### Scenario: 拓扑排序中 amp 先于 image 构建
 
 - **WHEN** 以 `image` 为目标对 `DEPENDENCY_GRAPH` 做拓扑排序
-- **THEN** `amp` 出现在 `image` 之前
-- **AND** `amp` 的上游依赖列表为空
+- **THEN** `kernel` 出现在 `amp` 之前，`amp` 出现在 `image` 之前
+- **AND** 禁用 AMP 时不执行该节点，也不从旧目录收集残留 AMP 产物
 
 #### Scenario: amp 产物缺失时缓存判定失效
 
-- **WHEN** `amp` 组件 `.build_hash` 有效但 `target/<...>/amp/amp.img` 不存在
-- **THEN** `BuildCache.is_up_to_date("amp")` 返回 `False`，触发重建
+- **WHEN** `amp` 组件成功 manifest 的输入一致但 `<target_dir>/amp/amp.img` 不存在
+- **THEN** `BuildCache.is_up_to_date(amp_plan)` 返回 `False`，触发重建
 
 ### Requirement: amp 构建器按 mode 二选一产出 FIT 格式 amp.img
 
@@ -75,17 +74,15 @@ flange SHALL 新增 `builder/platforms/rockchip/amp.py` 中的 `RockchipAmpBuild
 
 ### Requirement: amp 源码纳入增量内容哈希
 
-`builder/cache.py` 的 `compute_hash` SHALL 为 amp 组件混入 `amp.app` 指向的 app 目录（`components/app/<name>`）的内容哈希（经平台层 `amp_source_dirs(config)` 委托返回，`cache._mix_amp_sources` 调用），连同 `config.amp` 与内存布局常量一起参与哈希。因 amp app 源在 `components/app/` 仓库内、不走 `.build/sources`，现有 `_mix_source_tree` 抓不到其改动，此哈希为正确性必需，否则增量会假命中。HAL SDK 本体（`components/amp/lib/middleware`，vendored 稳定）改动罕见、不纳入默认哈希以省时；SDK 或 `rockchip-hal.cmake` 变更时用 `flange build -f amp` 强制重建。
+AMP TaskPlan MUST 声明 amp 配置、AppResolver 解析的从核 App、完整 AMP SDK 树、平台 AMP 配方/基线、实际工具环境和 kernel 源码/产物依赖。SDK 或 CMake 接口变化必须自动使 AMP 失效，不得要求开发者记住手工 force。源码树内容、权限、节点类型与链接目标 SHALL 进入摘要。
 
-#### Scenario: 改 amp app 源触发 amp 重建
+#### Scenario: 修改从核 App
+- **WHEN** amp.app 对应源码发生变化
+- **THEN** AMP 计划指纹改变，缓存不能命中
 
-- **WHEN** 修改 `amp.app` 指向的 `components/app/<name>/` 下的源码后重新构建
-- **THEN** `BuildCache.is_up_to_date("amp")` 返回 `False`，amp 被重建
-
-#### Scenario: 切换 mode 触发 amp 重建
-
-- **WHEN** `config.amp.mode` 由 `"hal"` 改为 `"rt-thread"` 后重新构建
-- **THEN** amp 组件哈希变化，触发重建
+#### Scenario: 修改 SDK 驱动
+- **WHEN** HAL SDK 或 RT-Thread 内核实现发生变化
+- **THEN** AMP 计划指纹改变并自动重建，不需要额外 force
 
 ### Requirement: 内存布局作为单一事实源由构建注入
 
@@ -116,12 +113,12 @@ amp 的协处理器内存布局常量（从核 `cpu_base`/`dram_size`、`shmem_b
 
 ### Requirement: amp app 为引用 SDK 的 CMake 工程，产出 amp.img 的从核固件
 
-amp 固件的从核应用逻辑 SHALL 来自 `config.amp.app` 指向的 amp 类型 app（`components/app/<name>`），其形态 SHALL 按 `config.amp.mode` 二分，`RockchipAmpBuilder._amp_app_dir` SHALL 按 mode 施加不同的存在性校验：
+amp 固件的从核应用逻辑 SHALL 来自 `config.amp.app` 经共享 AppResolver 解析的 amp 类型 App，支持工作区注册、外部源码和工具仓库 App。其形态 SHALL 按 `config.amp.mode` 二分，`RockchipAmpBuilder._amp_app_dir` SHALL 按 mode 施加不同的存在性校验：
 
 - `hal`：app 为**引用 HAL SDK 的 CMake 工程**——`CMakeLists.txt` 经 `components/amp/rockchip/hal/rockchip-hal.cmake` 引用 SDK，定义名为 `firmware` 的可执行 target。`_amp_app_dir` SHALL 要求该目录有 `CMakeLists.txt`，缺失则报明确错误。
 - `rt-thread`：app 为**轻量 BSP overlay**——至少含从核应用入口（`applications/main.c` 或等价），可含**可选** `.config` 片段（只列相对 BSP 默认的 Kconfig 增量，构建时按符号合并进 BSP 的 `.config` 再重生成 `rtconfig.h`）；构建时 stage 到 BSP 模板之上。`_amp_app_dir` SHALL NOT 要求 `CMakeLists.txt`（rt-thread app 无 CMake 工程），改为校验 overlay 必备文件（`applications/`）存在。
 
-`components/amp` SHALL 仅作只读 SDK 引用——flange SHALL NOT 把 app 源码写进 SDK 树原位、SHALL NOT 在 SDK 树内就地构建（hal 在 app 目录外 tmpdir 构建；rt-thread 在 BSP 模板的 tmpdir 副本上构建）。`amp.app` SHALL 为必填（`enabled` 时）。
+`components/amp` SHALL 仅作只读 SDK 引用——flange SHALL NOT 把 app 源码写进 SDK 树原位、SHALL NOT 在 SDK 树内就地构建。hal 在 App 目录外、rt-thread 在 BSP 模板的副本上构建；两者暂存目录 MUST 位于 `<build_root>/work/<target.key>/amp/`。`amp.app` SHALL 为必填（`enabled` 时）。
 
 #### Scenario: hal app 经 CMake 引用 SDK 打进 amp.img
 
@@ -143,7 +140,7 @@ amp 固件的从核应用逻辑 SHALL 来自 `config.amp.app` 指向的 amp 类�
 #### Scenario: 改 amp app 源码触发 amp 重建
 
 - **WHEN** 修改被 `amp.app` 指向的 app 源码后重新构建
-- **THEN** amp 组件哈希变化（`amp_source_dirs` 含 `components/app/<name>`），触发重建
+- **THEN** AMP 计划中的应用输入指纹变化，触发重建
 
 ### Requirement: RT-Thread AMP 使用 flange 平台基线配置
 

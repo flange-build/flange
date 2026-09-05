@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from tests.builder.context import component_context
 
 import pytest
 
@@ -110,10 +111,7 @@ def test_configure_stages_fragment_into_configs(tmp_path, monkeypatch):
     fragment_content = "CONFIG_USB_FUNCTION_FASTBOOT=y\n"
     (fragment_dir / "flange_fastboot.config").write_text(fragment_content)
 
-    monkeypatch.setattr(
-        "builder.platforms.amlogic.bootloader.COMPONENTS_ROOT",
-        components_root,
-    )
+    builder.context = component_context(components_root.parent)
     builder.configure(src_dir, _config())
 
     staged = src_dir / "configs" / "flange_fastboot.config"
@@ -132,10 +130,7 @@ def test_configure_missing_fragment_raises(tmp_path, monkeypatch):
     builder, _, _, src_dir, _ = _make_builder(tmp_path)
     components_root = tmp_path / "repo-empty" / "components"
     components_root.mkdir(parents=True)
-    monkeypatch.setattr(
-        "builder.platforms.amlogic.bootloader.COMPONENTS_ROOT",
-        components_root,
-    )
+    builder.context = component_context(components_root.parent)
     with pytest.raises(FileNotFoundError, match="flange_fastboot.config"):
         builder.configure(src_dir, _config())
 

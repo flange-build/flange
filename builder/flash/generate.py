@@ -6,16 +6,13 @@
 """
 
 import hashlib
-import json
 from pathlib import Path
 
-from builder.flash.console import _info, _step, _warn
 from builder.flash.model import (
     FlashConfig,
     FlashError,
     FlashIdentityConfig,
     FlashPartition,
-    PreFlashConfig,
     _atomic_write_text,
 )
 from builder.flash.plan import get_flash_plan
@@ -34,10 +31,11 @@ from builder.paths import PROJECT_ROOT
 # 配置生成器（构建时使用）
 # ---------------------------------------------------------------------------
 
+
 class FlashConfigGenerator:
     """从 FINAL_CONFIG 生成 flash-config.json。"""
 
-    def generate(self, config: dict, target_dir: Path) -> Path:
+    def generate(self, config: dict, target_dir: Path, *, context=None, source=None) -> Path:
         """生成 flash-config.json 到 target_dir，返回文件路径。
 
         ``protected`` 标记规则：``type == "raw"`` 一律 True；启用 recovery 时
@@ -64,27 +62,23 @@ class FlashConfigGenerator:
         storage_cfg = config.get("storage") or {}
         storage_size = storage_cfg.get("size", "")
         storage_type = storage_cfg.get("type", "")
-        needs_parameter = (
-            platform == "rockchip"
-            and (
-                partition_format == "mtd"
-                or bool(config.get("flash_storage"))
-                or storage_type == "spinand"
-            )
+        needs_parameter = platform == "rockchip" and (
+            partition_format == "mtd"
+            or bool(config.get("flash_storage"))
+            or storage_type == "spinand"
         )
 
         if needs_parameter:
             try:
                 if partition_format == "mtd":
-                    parameter_source = Path(
-                        partition_cfg.get("parameter", ""))
+                    parameter_source = Path(partition_cfg.get("parameter", ""))
                     if not parameter_source.is_absolute():
-                        parameter_source = PROJECT_ROOT / parameter_source
-                    parameter_text = parameter_source.read_text(
-                        encoding="utf-8")
+                        parameter_source = (
+                            context.tool_root if context else PROJECT_ROOT
+                        ) / parameter_source
+                    parameter_text = parameter_source.read_text(encoding="utf-8")
                 else:
-                    machine = (config.get("rkbin") or {}).get(
-                        "mkimage_chip", "RK3576").upper()
+                    machine = (config.get("rkbin") or {}).get("mkimage_chip", "RK3576").upper()
                     parameter_text = generate_parameter_txt(
                         partition_cfg.get("entries") or [],
                         machine=machine,
@@ -93,14 +87,11 @@ class FlashConfigGenerator:
                 total_bytes = parse_size(storage_size).bytes
                 validate_parameter_capacity(parameter_entries, total_bytes)
             except (OSError, TypeError, ValueError) as exc:
-                raise FlashError(
-                    f"无法生成 Rockchip parameter/flash-config: {exc}") from exc
+                raise FlashError(f"无法生成 Rockchip parameter/flash-config: {exc}") from exc
             parameter_relative = "parameter.txt"
-            parameter_sha256 = hashlib.sha256(
-                parameter_text.encode("utf-8")).hexdigest()
+            parameter_sha256 = hashlib.sha256(parameter_text.encode("utf-8")).hexdigest()
             rootfs_mtd_index = next(
-                (index for index, entry in enumerate(parameter_entries)
-                 if entry.name == "rootfs"),
+                (index for index, entry in enumerate(parameter_entries) if entry.name == "rootfs"),
                 None,
             )
 
@@ -118,20 +109,21 @@ class FlashConfigGenerator:
                 if not image:
                     continue
                 ptype = configured_types.get(entry.name, "raw")
-                if (entry.name == "rootfs"
-                        and (config.get("rootfs") or {}).get(
-                            "image_format") == "ubi"):
+                if (
+                    entry.name == "rootfs"
+                    and (config.get("rootfs") or {}).get("image_format") == "ubi"
+                ):
                     ptype = "ubi"
-                partitions.append(FlashPartition(
-                    name=entry.name,
-                    offset=f"0x{entry.offset:x}",
-                    type=ptype,
-                    image=image,
-                    protected=bool(
-                        ptype == "raw" or entry.name in protected_set),
-                    size="remaining" if entry.size is None
-                    else f"0x{entry.size:x}",
-                ))
+                partitions.append(
+                    FlashPartition(
+                        name=entry.name,
+                        offset=f"0x{entry.offset:x}",
+                        type=ptype,
+                        image=image,
+                        protected=bool(ptype == "raw" or entry.name in protected_set),
+                        size="remaining" if entry.size is None else f"0x{entry.size:x}",
+                    )
+                )
         else:
             # GPT 路径：几何走 PartitionLayout —— 与 image.py 写进 raw.img 的
             # GPT 是同一份解析结果。
@@ -145,19 +137,21 @@ class FlashConfigGenerator:
                 if not image:
                     continue
                 ptype = part.type or "raw"
-                if (part.name == "rootfs"
-                        and (config.get("rootfs") or {}).get(
-                            "image_format") == "ubi"):
+                if (
+                    part.name == "rootfs"
+                    and (config.get("rootfs") or {}).get("image_format") == "ubi"
+                ):
                     ptype = "ubi"
-                partitions.append(FlashPartition(
-                    name=part.name,
-                    offset=f"0x{part.offset_sectors:x}",
-                    type=ptype,
-                    image=image,
-                    protected=bool(
-                        ptype == "raw" or part.name in protected_set),
-                    size=f"0x{part.size_sectors:x}",
-                ))
+                partitions.append(
+                    FlashPartition(
+                        name=part.name,
+                        offset=f"0x{part.offset_sectors:x}",
+                        type=ptype,
+                        image=image,
+                        protected=bool(ptype == "raw" or part.name in protected_set),
+                        size=f"0x{part.size_sectors:x}",
+                    )
+                )
 
         # 构造 pre_flash（由平台策略声明）
         pre_flash = plan.generate_pre_flash_config(config)
@@ -180,15 +174,11 @@ class FlashConfigGenerator:
             partitions=partitions,
             pre_flash=pre_flash,
             identity=FlashIdentityConfig(
-                chip_patterns=list(
-                    (config.get("flash_identity") or {}).get(
-                        "chip_patterns") or []),
+                chip_patterns=list((config.get("flash_identity") or {}).get("chip_patterns") or []),
                 storage_patterns=list(
-                    (config.get("flash_identity") or {}).get(
-                        "storage_patterns") or []),
-                require_rid=bool(
-                    (config.get("flash_identity") or {}).get(
-                        "require_rid", False)),
+                    (config.get("flash_identity") or {}).get("storage_patterns") or []
+                ),
+                require_rid=bool((config.get("flash_identity") or {}).get("require_rid", False)),
             ),
         )
 
@@ -204,11 +194,11 @@ class FlashConfigGenerator:
             # blob），ensure_prebuilt_image 原子下载 + sha256 校验、缓存到
             # .build/sources/prebuilt（幂等，缓存命中无网亦可）。
             from builder.source import SourceManager
-            from builder.paths import BUILD_ROOT, PROJECT_ROOT
-            src = SourceManager(sources_dir=BUILD_ROOT / "sources",
-                                project_root=PROJECT_ROOT)
-            img_path = src.ensure_prebuilt_image(
-                config.get("board", "prebuilt"), prebuilt)
+
+            if source is None and context is None:
+                raise ValueError("预编 SPI 固件下载必须提供 WorkspaceContext 或 SourceManager")
+            src = source or SourceManager(context=context)
+            img_path = src.ensure_prebuilt_image(config.get("board", "prebuilt"), prebuilt)
             spi_out.parent.mkdir(parents=True, exist_ok=True)
             data = img_path.read_bytes()
             # SPINOR 实际可写略少于 16MB 标称（末端 GPT backup ~33 扇区不可写）；官方
@@ -227,5 +217,3 @@ class FlashConfigGenerator:
         output = target_dir / "flash-config.json"
         flash_config.to_json(output)
         return output
-
-

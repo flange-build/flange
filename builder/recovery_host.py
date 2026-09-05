@@ -511,6 +511,8 @@ def cmd_flash(t: Transport, *, partition: str, image: Path,
         raise HostRecoveryError(f"镜像文件不存在：{image}")
 
     if force:
+        if os.environ.get("FLANGE_NO_INTERACTION"):
+            raise HostRecoveryError("受保护分区 --force 写入需要交互确认；请在终端中去掉 --no-interaction 和 --json 后重试")
         ans = prompt(
             f"⚠  即将以 --force 写入受保护分区 {partition}（镜像 {image.name}）。\n"
             f"   该操作可能导致设备无法启动。如确认请输入 'YES'（区分大小写）："

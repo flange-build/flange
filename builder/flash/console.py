@@ -4,50 +4,48 @@
 逻辑指纹 —— 改它不该让任何组件失效。
 """
 
-import os
 import sys
+
+from builder.term import Role, style, terminal_width
 
 
 # ---------------------------------------------------------------------------
 # 宿主机 CLI 输出辅助（与 BuildOutput 风格统一）
 # ---------------------------------------------------------------------------
 
+
 def _tty() -> bool:
     return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
-def _c(color: str, text: str) -> str:
-    if not _tty():
-        return text
-    return f"{color}{text}\033[0m"
 
-_BLUE_BOLD = "\033[1;34m"
-_GREEN     = "\033[0;32m"
-_YELLOW    = "\033[1;33m"
-_RED_BOLD  = "\033[1;31m"
-_GRAY      = "\033[0;90m"
-_WHITE     = "\033[0;37m"
+def _c(role: Role, text: str) -> str:
+    return style(text, role, stream=sys.stdout)
+
 
 def _header(text: str):
-    sep = "═" * 58
+    sep = "─" * min(58, terminal_width())
     print()
-    print(_c(_WHITE, sep))
-    print(_c(_WHITE, f" {text}"))
-    print(_c(_WHITE, sep))
+    print(_c(Role.MUTED, sep))
+    print(_c(Role.HEADING, f" {text}"))
+    print(_c(Role.MUTED, sep))
     print()
+
 
 def _step(text: str):
-    print(_c(_BLUE_BOLD, f"▸ {text}"))
+    print(_c(Role.ACTIVE, f"▸ {text}"))
+
 
 def _ok(text: str):
-    print(_c(_GREEN, f"  ✓ {text}"))
+    print(_c(Role.SUCCESS, f"  ✓ {text}"))
+
 
 def _warn(text: str):
-    print(_c(_YELLOW, f"  ⚠ {text}"))
+    print(_c(Role.WARNING, f"  ⚠ {text}"))
+
 
 def _err(text: str):
-    print(_c(_RED_BOLD, f"  ✗ {text}"))
-
-def _info(text: str):
-    print(_c(_GRAY, f"  · {text}"))
+    print(_c(Role.ERROR, f"  ✗ {text}"))
 
 
+def _info(text: str, *, role: Role = Role.MUTED):
+    print(_c(role, f"  · {text}"))

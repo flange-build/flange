@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.builder.context import component_context
+
 from builder.flash import (
     DeviceInfo,
     FlashConfig,
@@ -160,6 +162,7 @@ def test_mtd_image_builds_manifest_without_raw_gpt_or_dd(tmp_path):
     docker = FdtDocker()
     builder = RockchipImageBuilder(docker=docker, source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     outputs = builder.build(config)
 
@@ -185,6 +188,7 @@ def test_mtd_image_rejects_dtb_ubi_index_mismatch(tmp_path):
     builder = RockchipImageBuilder(
         docker=FdtDocker("ubi.mtd=4 root=ubi0:rootfs"), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     with pytest.raises(Exception, match="ubi.mtd=4"):
         builder.build(config)
@@ -197,6 +201,7 @@ def test_gpt_spinand_builds_named_bundle_without_raw_image(tmp_path):
     docker = FdtDocker()
     builder = RockchipImageBuilder(docker=docker, source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
     stale_raw = target_dir / "image/raw.img"
     stale_raw.parent.mkdir(parents=True)
     stale_raw.write_bytes(b"stale raw image")
@@ -209,7 +214,10 @@ def test_gpt_spinand_builds_named_bundle_without_raw_image(tmp_path):
     assert manifest["rootfs_mtd_index"] == 5
     assert outputs["parameter"].read_text().startswith("FIRMWARE_VER: 1.0\n")
     assert not (builder._work_dir / "raw.img").exists()
-    assert not stale_raw.exists()
+    # 配方不修改上一版发布目录；引擎成功发布后才统一替换。
+    assert stale_raw.read_bytes() == b"stale raw image"
+    assert "image" not in outputs
+    assert "raw.img" not in outputs["bundle"].read_text()
     assert [cmd[0] for cmd in docker.commands] == ["fdtget"]
 
 
@@ -220,6 +228,7 @@ def test_gpt_spinand_rejects_dtb_ubi_index_mismatch(tmp_path):
     builder = RockchipImageBuilder(
         docker=FdtDocker("ubi.mtd=4 root=ubi0:rootfs"), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     with pytest.raises(Exception, match="ubi.mtd=4"):
         builder.build(config)

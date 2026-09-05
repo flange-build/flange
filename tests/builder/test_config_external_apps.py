@@ -118,7 +118,7 @@ class TestNormalizeAppSources:
         """external_apps 顶层类型错误的明确报错。"""
         config = _base_config()
         config["external_apps"] = ["not a dict"]
-        with pytest.raises(AppSourceConfigError, match="必须是字典"):
+        with pytest.raises(AppSourceConfigError, match="必须是键值映射"):
             normalize_app_sources(config, project_root=tmp_path)
 
     def test_external_app_dirs_非列表时报错(self, tmp_path):

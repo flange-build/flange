@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.builder.context import component_context
+
 from builder.dtb_overlay import (
     all_declared_overlays,
     board_overlays,
@@ -253,6 +255,7 @@ def test_rockchip_boot_copies_declared_overlay_to_dtbs_layout(tmp_path):
     _prepare_kernel_target(target_dir, "rockchip", ["i2c1.dtbo"])
     builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     builder.compile(None, _cfg("rockchip", overlays=["i2c1.dtbo"], default=["i2c1.dtbo"]))
 
@@ -279,6 +282,7 @@ def test_a733_boot_copies_declared_overlay_to_dtbs_layout(tmp_path):
     _prepare_kernel_target(target_dir, "allwinnera733", ["i2c1.dtbo"])
     builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     builder.compile(
         None,
@@ -402,6 +406,7 @@ def test_rockchip_boot_copies_both_intree_and_vendor_overlays(tmp_path):
 
     builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     builder.compile(None, _cfg(
         "rockchip",
@@ -425,6 +430,7 @@ def test_a733_boot_copies_both_intree_and_vendor_overlays(tmp_path):
 
     builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     builder.compile(None, _cfg(
         "allwinnera733",
@@ -448,6 +454,7 @@ def test_rockchip_boot_basename_collision_raises(tmp_path):
 
     builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     with pytest.raises(ValueError, match="撞名.*foo.dtbo"):
         builder.compile(None, _cfg(
@@ -551,6 +558,7 @@ def test_a733_boot_copies_board_overlay_to_dtbs_layout(tmp_path):
 
     builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     builder.compile(None, _cfg(
         "allwinnera733",
@@ -573,6 +581,7 @@ def test_rockchip_boot_copies_board_overlay_to_dtbs_layout(tmp_path):
 
     builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     builder.compile(None, _cfg(
         "rockchip",
@@ -596,6 +605,7 @@ def test_rockchip_boot_copies_package_overlay_to_dtbs_layout(tmp_path):
 
     builder = RockchipBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     builder.compile(None, _cfg(
         "rockchip",
@@ -619,6 +629,7 @@ def test_a733_boot_copies_package_overlay_to_dtbs_layout(tmp_path):
 
     builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     builder.compile(None, _cfg(
         "allwinnera733",
@@ -639,6 +650,7 @@ def test_a733_boot_basename_collision_vendor_vs_board(tmp_path):
 
     builder = AllwinnerA733BootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     cfg = _cfg(
         "allwinnera733",

@@ -27,7 +27,7 @@ from builder.flash.plan import (
     RockchipFlashPlan,
 )
 from builder.flash.console import (
-    _GRAY, _c, _err, _header, _info, _ok, _step, _tty, _warn,
+    _c, _err, _header, _info, _ok, _step, _tty, _warn,
 )
 from builder.flash.model import (
     DeviceInfo,
@@ -51,6 +51,7 @@ from builder.partition.rockchip import (
 )
 from builder.partition.size import parse_size
 from builder.paths import PROJECT_ROOT
+from builder.term import Role, supports_color
 
 
 
@@ -138,14 +139,14 @@ class FlashStrategy(FlashPlan, ABC):
                 _ok(f"已检测到 {info.platform} 设备 ({info.mode} 模式)")
                 return info
             remaining = int(deadline - time.time())
-            if _tty():
+            if _tty() and supports_color():
                 frame = frames[idx % len(frames)]
                 sys.stdout.write(
-                    f"\r{_c(_GRAY, f'  {frame} 等待设备连接... ({remaining}s)')}")
+                    f"\r{_c(Role.ACTIVE, f'  {frame} 等待设备连接... ({remaining}s)')}")
                 sys.stdout.flush()
                 idx += 1
             time.sleep(1)
-        if _tty():
+        if _tty() and supports_color():
             sys.stdout.write("\r\033[K")
         _err(f"等待设备超时（{timeout}s）")
         raise FlashError(
@@ -270,7 +271,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
 
     def _download_boot(self, tool: Path, miniloader: Path):
         """DB 上传 miniloader；comm 失败时给 udev/权限提示而非裸 traceback。"""
-        _info("上传 miniloader（DB）...")
+        _info("上传 miniloader（DB）...", role=Role.ACTIVE)
         r = subprocess.run([str(tool), "DB", str(miniloader)],
                            capture_output=True, text=True)
         if r.returncode != 0:
@@ -282,7 +283,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
 
     def _upgrade_loader(self, tool: Path, miniloader: Path):
         """用工具文档顺序 ``UL <Loader> -noreset`` 写入并保持 loader。"""
-        _info(f"写入 miniloader（UL {miniloader.name} -noreset）...")
+        _info(f"写入 miniloader（UL {miniloader.name} -noreset）...", role=Role.ACTIVE)
         r = subprocess.run(
             [str(tool), "UL", str(miniloader), "-noreset"],
             capture_output=True,
@@ -431,7 +432,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
             raise FlashError(
                 f"upgrade_tool SSD 列表中未找到存储 {name!r}；"
                 f"输出:\n{listing.stdout}")
-        _info(f"切换存储到 {name}（SSD {no}）...")
+        _info(f"切换存储到 {name}（SSD {no}）...", role=Role.ACTIVE)
         subprocess.run([str(tool), "SSD", no], check=True)
         _ok(f"存储 → {name}")
 
@@ -441,7 +442,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
             size_str = f", {size_mb:.1f}MB"
         except OSError:
             size_str = ""
-        _info(f"写入 {image.name} (offset=0x{offset:X}{size_str})...")
+        _info(f"写入 {image.name} (offset=0x{offset:X}{size_str})...", role=Role.ACTIVE)
         subprocess.run(
             [str(tool), "WL", str(offset), str(image)],
             check=True,
@@ -461,7 +462,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
                 and not config.storage):
             return super().write_named_partition(tool, part, image, config)
         flag = self.DI_FLAGS.get(part.name, f"-{part.name}")
-        _info(f"写 {part.name}（DI {flag}）...")
+        _info(f"写 {part.name}（DI {flag}）...", role=Role.ACTIVE)
         subprocess.run([str(tool), "DI", flag, str(image)], check=True)
         _ok(part.name)
 
@@ -518,7 +519,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
             tmp_path = Path(tmp.name)
         try:
             _info(f"刷新 GPT 表（WL {wl_offset}, "
-                  f"扇区 {sector}, {size // 1024}KB）...")
+                  f"扇区 {sector}, {size // 1024}KB）...", role=Role.ACTIVE)
             subprocess.run(
                 [str(tool), "WL", str(wl_offset), str(tmp_path)],
                 check=True,
@@ -531,7 +532,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
                 pass
 
     def reboot(self, tool: Path):
-        _info("重启设备...")
+        _info("重启设备...", role=Role.ACTIVE)
         subprocess.run([str(tool), "RD"], check=True)
 
     # upgrade_tool di 的已定义分区缩写；未列出的分区用 -<分区名> 指定。
@@ -553,7 +554,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
         if not param.exists():
             raise FlashError(
                 f"未找到 parameter.txt: {param}（请重新 build）")
-        _info("写 parameter 分区布局（DI -p）...")
+        _info("写 parameter 分区布局（DI -p）...", role=Role.ACTIVE)
         subprocess.run([str(tool), "DI", "-p", str(param)], check=True)
         _ok("parameter/GPT")
         for part in config.partitions:
@@ -582,10 +583,10 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
         if device and device.mode == "maskrom" and miniloader.exists():
             self._download_boot(tool, miniloader)
         self._switch_storage(tool, "SPINOR")
-        _info("写 SPI 启动固件（WL 0 spi.img）...")
+        _info("写 SPI 启动固件（WL 0 spi.img）...", role=Role.ACTIVE)
         subprocess.run([str(tool), "WL", "0", str(spi)], check=True)
         _ok("spi.img")
-        _info("重启设备...")
+        _info("重启设备...", role=Role.ACTIVE)
         subprocess.run([str(tool), "RD"], check=True)
 
 class AllwinnerA733FlashStrategy(AllwinnerA733FlashPlan, FlashStrategy):
@@ -763,7 +764,8 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
         没找到或调用失败时仅打印 warning，不阻塞 —— pyamlboot 本身会在
         没有设备时报错，让其错误冒泡更直观。
         """
-        _info(f"等待 MaskROM 设备（USB {self.MASKROM_VID}:{self.MASKROM_PID}）...")
+        _info(f"等待 MaskROM 设备（USB {self.MASKROM_VID}:{self.MASKROM_PID}）...",
+              role=Role.ACTIVE)
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self._probe_maskrom():
@@ -816,7 +818,7 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
         # MaskROM 设备探测（best-effort）
         self._wait_maskrom_device(timeout=30)
 
-        _info(f"上传 u-boot 到 SoC DDR（{boot_image.name}）...")
+        _info(f"上传 u-boot 到 SoC DDR（{boot_image.name}）...", role=Role.ACTIVE)
         # boot-g12.py 通常需要 root 权限访问 USB raw endpoint；
         # 若用户已配置 udev rule，sudo 可省略。这里默认带 sudo 与
         # Rockchip upgrade_tool 一致心智（rockchip 也需要 udev 或 sudo）。
@@ -836,10 +838,10 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
         cmd += [str(pyamlboot), str(boot_image)]
         subprocess.run(cmd, check=True)
         # u-boot 已进 DDR，等待主线 USB gadget 完成枚举。
-        _info("u-boot 已推入 DDR，等待 fastboot 设备枚举...")
+        _info("u-boot 已推入 DDR，等待 fastboot 设备枚举...", role=Role.ACTIVE)
         # u-boot 主线 USB 枚举需要 ~1.5s，留出余量到 3s。
         time.sleep(3)
-        _ok("u-boot 已推送，等待 fastboot 设备")
+        _info("u-boot 已推送，等待 fastboot 设备", role=Role.ACTIVE)
 
     def _run_fastboot(self, tool: Path, *args: str) -> None:
         """执行 fastboot 子命令，带 stdout/stderr 透传。"""
@@ -861,7 +863,7 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
         u-boot 自动 rescan 分区表，后续 ``flash boot/rootfs`` 立即可找到
         分区。本步骤必须在 ``fastboot flash boot/rootfs`` 之前。
         """
-        _info("用 u-boot oem format 按实际 eMMC 容量重建 GPT...")
+        _info("用 u-boot oem format 按实际 eMMC 容量重建 GPT...", role=Role.ACTIVE)
         self._run_fastboot(tool, "oem", "format")
         _ok("GPT")
 
@@ -885,13 +887,13 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
             size_str = f", {size_mb:.1f}MB"
         except OSError:
             size_str = ""
-        _info(f"fastboot flash {partition_name} ({image.name}{size_str})...")
+        _info(f"fastboot flash {partition_name} ({image.name}{size_str})...", role=Role.ACTIVE)
         self._run_fastboot(tool, "flash", partition_name, str(image))
         _ok(f"{partition_name}")
 
     def reboot(self, tool: Path):
         """通过 fastboot reboot 触发 SoC 重启。"""
-        _info("fastboot reboot...")
+        _info("fastboot reboot...", role=Role.ACTIVE)
         self._run_fastboot(tool, "reboot")
 
 class QualcommFlashStrategy(QualcommFlashPlan, FlashStrategy):

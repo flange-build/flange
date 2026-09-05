@@ -137,7 +137,7 @@ def test_vendor_requires_name_and_dir(tmp_path: Path):
 PACKAGE = {"name": "p", "components": [
     {"type": "vendor", "name": "demo"}]}
 """)
-    with pytest.raises(ValueError, match="vendor component.*name 与 dir"):
+    with pytest.raises(ValueError, match=r"components\[0\].dir.*必填"):
         load_package_manifest("p", tmp_path)
 
 
@@ -304,7 +304,7 @@ def test_parse_opt_in_dict_without_drivers():
 
 
 def test_parse_opt_in_missing_name():
-    with pytest.raises(ValueError, match="缺少 name"):
+    with pytest.raises(ValueError, match="packages.name.*必填"):
         _parse_opt_in({"drivers": ["a"]})
 
 
@@ -557,5 +557,5 @@ PACKAGE = {"name": "demo-firmware", "components": [
      "inputs": "patches"}]}
 """, files={"build/app.yaml": _VENDOR_APP})
     cfg = {"board": "my-board", "packages": ["demo-firmware"]}
-    with pytest.raises(ValueError, match="inputs 必须是非空字符串列表"):
+    with pytest.raises(ValueError, match="inputs 必须是列表"):
         expand_hardware_packages(cfg, project_root=tmp_path)

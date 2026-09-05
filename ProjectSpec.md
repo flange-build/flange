@@ -6,17 +6,22 @@
 
 ## 1. 项目目标
 
-flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建，定位类似 Buildroot / Yocto 但更快速、更可预测。
+flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建，复用发行版软件包，
+将板级系统构建、App（应用）开发和设备维护统一到同一工具入口。
+与 Buildroot / Yocto 的速度和可靠性比较需要相同目标下的测量，不作为未经验证的保证。
 
 ### 1.1 核心目标
 1. 提供内核快速验证通道
 2. 提供文件系统快速验证通道
 3. 提供全系统级别快速验证通道
 4. 提供产品级烧录镜像输出，支持 UFS、eMMC、SPI、SD 卡等多种存储介质
+5. 支持独立 out-of-tree（源码树外）工作区中的 App 创建、计划、构建、部署、运行、测试、调试与日志查看
+6. 以明确输入、目标隔离、准确产物清单与关联验证记录连接开发闭环；SDK 分发、锁定发布、
+   系统级符号和完整硬件验收仍需持续完善，验证范围见[设计评审](docs/build-system-review.md)
 
 ### 1.2 核心优势
-- 比 Buildroot / Yocto 支持更可靠、可预期的组件配置
-- 更快速的编译构建速度
+- 使用求值后的统一配置表达产品、变体与硬件差异
+- 使用组件内容哈希、单 App 缓存与 rootfs 基础快照减少重复工作
 - 以复用现有 apt 软件包为主，支持将自定义软件打包为 apt 包
 - 最终产出可直接刷写的产品级镜像
 
@@ -40,9 +45,16 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 └─────────────────────────────┘     └──────────────────────────┘
 ```
 
-- **构建环境**：所有编译、打包操作在 Docker 容器内完成，确保环境一致性和可复现性
+- **构建环境**：目标代码编译和镜像制作在 Docker 容器内完成，统一工具环境；
+  严格复现还需固定源码版本、实际容器/工具链身份、软件包输入及文件系统语义
 - **部署环境**：镜像刷写在宿主机执行，通过 USB 连接目标设备
-- `.build/target/` 目录作为容器与宿主机之间的产物桥梁（通过 volume mount；根目录 `target` 软链接直达）
+- 工作区 `build_root/target/` 是容器与宿主机之间的产物桥梁；工具根、工作区及外部源码通过同绝对路径挂载。
+- 内核源码和工作树必须位于大小写敏感文件系统；macOS 默认 APFS 不满足时，必须将
+  `flange.toml` 的 `build_dir` 指向 APFS Case-sensitive 卷或使用 Linux ext4。环境不满足时早失败，
+  禁止通过自动关闭驱动或修改目标 Kconfig 适配宿主文件系统。
+- rootfs/recovery 的可变文件树在容器原生 `/var/tmp` 临时目录中完成解包、包安装、定制与成像。
+  宿主共享目录即使大小写敏感，也不能据此认定具备 Linux 权限和 UID/GID 语义。
+  最终镜像、清单与基础快照归档仍写入工作区持久化目录。
 
 ### 2.2 支持平台
 
@@ -60,20 +72,22 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 
 ### 2.3 组件级构建与刷写
 
-Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈希实现增量构建。产物收集到 .build/target/<board>/<product>/<variant>/（可经根目录软链接 target 访问）。
+Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈希实现增量构建。产物由引擎校验后发布到当前工作区的 build_root/target/<board>/<product>/<variant>/。
 
 | 组件 | 构建命令 | 刷写命令 |
 |------|---------|---------|
-| Bootloader | `flange build bootloader` | `flange flash bootloader` |
-| Kernel | `flange build kernel` | `flange flash kernel` |
+| Bootloader | `flange build bootloader` | 按 `flange flash --list` 中的实际分区名刷写 |
+| Kernel / boot 分区 | `flange build kernel`，需要 boot 镜像时再 `flange build boot` | 清单包含 boot 时使用 `flange flash boot` |
 | Rootfs | `flange build rootfs` | `flange flash rootfs` |
 | Recovery | `flange build recovery` | `flange flash recovery` 或 USB ADB 在线写 |
 | 全量镜像 | `flange build` | `flange flash` |
 
 - 组件构建：在 Docker 容器内执行，构建引擎自动推断组件间依赖并基于内容哈希决定增量构建范围
-- 产物收集：构建完成后自动收集到 `.build/target/<board>/<product>/<variant>/`（根目录 `target` 软链接直达）
+- 产物收集：完整输出通过 ArtifactManifest（产物清单）验证后原子替换组件发布目录；失败保留上次成功产物
 - 组件刷写：在宿主机执行，读取构建期生成的 `flash-config.json` 并按平台策略调用刷写工具
 - 全量刷写：重写设备全部分区（分区表 + 所有组件镜像）
+- 构建参数是组件名，刷写参数是生成清单中的分区名，两者不能通用互换。
+  MTD / SPI NAND 路径提供 `kernel → boot`、`bootloader → uboot` 兼容别名，GPT 路径不通用此映射。
 
 ### 2.4 USB 线刷 Recovery
 
@@ -104,13 +118,35 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
 - **硬约束（数据面）**：recovery 数据面（flash/backup）必须走 `adb forward
   + 设备端 127.0.0.1 TCP listen`；控制面走 `adb shell` 的 stdout 单行
   ASCII 控制行（`PORT=`/`READY`/`PROGRESS:`/`STATUS:OK`/`STATUS:FAIL:`）。
-  禁止依赖 `adb exec:` service 或 `shell:v2` protocol —— flange 选用的
-  adbd（android-tools-4.2.2）不支持这两个 service
+  禁止依赖 `adb exec:` service 或 `shell:v2` protocol，以保留既有
+  recovery 控制与数据协议的兼容范围。当前内置 adbd 已升级为 ADB 36.0.1，
+  版本、补丁与验证范围见 [adbd README](components/app/adbd/README.md)；
+  守护进程升级不自动改变上述传输协议约束
 - **安全策略**：bootloader/raw 与 recovery 自身默认 protected；强制写入
   需要 `--force` 双重确认（host 输入 `YES` + device 端要求 `--sha256`）
 - **不属于范围**：OTA / A/B 切换 / 网络烧录 / recovery 自升级
 
 详细用户文档与排障：[`docs/recovery.md`](docs/recovery.md)。
+
+### 2.5 App 与 Package 开发生命周期
+
+- 安装入口为 `flange` / `python -m builder`；`envsetup.sh` 只准备 Python 环境与 `lunch` 包装。
+  `flange init` 创建 `flange.toml`，`WorkspaceContext` 明确工具根、工作区根、输出根、目标和 App 来源。
+- `flange app` / `flange package` 提供 `create/plan/build/deploy/run/test/debug/log`。
+  `name-or-path` 可以是名称或路径，省略时使用调用者目录；create 的 `--dir` 指定父目录。
+- App 名称、路径和 cwd 入口统一进入 AppResolver，递归解析 `build.deps`，拒绝缺失、循环和同名不同源歧义。
+  AppBuilder 使用统一 Toolchain、目标隔离工作树、依赖安装前缀与准确 AppBuildReport；打包前检查 ELF 架构。
+- 默认部署通过宿主 ADB（Android 调试桥），校验设备架构、实际产物及传输摘要，按运行依赖顺序安装 deb；
+  多设备必须指定 `--serial`。`--no-build` 仍验证成功报告和实际文件。
+- exec/test 使用已验证安装树中的 `runtime.executable`，默认 `/usr/bin/<name>`；service 使用 `systemd.unit`。
+  `auto_start` 仅控制安装时是否启用服务，`run` 显式启动服务。
+- debug 要求 debug target。默认设备 GDB（GNU 调试器）支持源码同步和路径映射；`--mode remote`
+  使用 gdbserver、ADB 转发和宿主 GDB。系统库符号、IDE 配置和硬件调试仍需单独准备。
+- `test`、部署、运行和调试会话记录 target、设备与准确产物身份；测试保存退出码、stdout/stderr。
+  这些记录不等于已完成全部板卡、驱动和介质的实机验收。
+- `app.yaml.actions` / `PACKAGE["actions"]` 使用 argv 列表。build action 在 Docker 的隔离副本执行；
+  Package 专属产物通过 manifest 发布，后续动作消费该清单。非 build action 在宿主执行，显式动作无需先选 ADB。
+- 操作与当前边界见[开发指南](docs/development-guide.md)，维护接口见[App 架构](docs/app-architecture.md)。
 
 ---
 
@@ -140,7 +176,7 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
 
 ## 5. Shell 脚本规范
 
-Shell 脚本是构建系统的核心语言。
+Shell 只负责开发环境初始化；公共 CLI、配置、路径与业务编排使用 Python。
 
 ### 5.1 基本要求
 - 解释器声明：`#!/bin/bash`（明确使用 bash，不用 `#!/bin/sh`）
@@ -149,6 +185,8 @@ Shell 脚本是构建系统的核心语言。
 
 ### 5.2 安全与健壮性
 - 脚本开头必须设置：`set -euo pipefail`（构建/编排脚本建议追加 `-x` 输出执行轨迹，即 `set -xeuo pipefail`）
+- 被 source 的环境入口必须保持调用者的 Shell 执行选项；初始化子进程可使用 `set -e` 保留失败处理，
+  但不得主动启用 xtrace（命令跟踪），正常初始化只输出必要提示，失败诊断仍须可见。
 - 临时文件使用 `mktemp`，并通过 `trap` 确保清理
 - 路径变量必须用双引号包裹：`"${variable}"`
 - 禁止使用 `eval`，除非有充分理由并附注释说明
@@ -239,10 +277,11 @@ canonical JSON（规范化 JSON）交给 Python builder。
   AMP enable 和 rootfs package policy 属于 board/product，MUST NOT 固化在 SoC 层
 - 条件配置：使用 Jsonnet `if product == ...` / `if variant == ...`，不得把
   未求值的 product/variant 子树交给 builder
-- 配置选择：`lunch <board>-<product>-<variant>` 选择配置，持久化到 `.flange/current_config`；
-  无参数时进入层级选择界面（平台 → SoC → 板 → product → variant），末级目标展示其配置表，
-  非 TTY 环境回退编号列表
-- 配置解析：`resolve_config(board, product, variant)` 返回已校验的 canonical JSON dict
+- 配置选择：`flange target select <board>-<product>-<variant>`（或 `lunch`）保存到当前工作区
+  `.flange/current_config`；无参数仅在 TTY 进入层级界面，非交互环境要求明确目标。`--target` 仅覆盖本次调用。
+- 目标解析统一使用注册表和 `config.query.parse_target`，不得在 CI/Shell 中按连字符重新拆分。
+- 配置解析：`workspace.resolve_config(context)` 基于工具根调用配置注册表，返回严格校验的 canonical JSON dict；
+  工作区 App 来源由 AppResolver 消费，不向系统配置临时注入路径或执行开关。
 - 新增板级支持只需创建 `components/board/<name>/config.jsonnet`，无需修改框架代码
 
 ### 6.3 框架与策略分离
@@ -251,16 +290,44 @@ canonical JSON（规范化 JSON）交给 Python builder。
 - 配置通过求值后的 Python dict 传入（无环境变量契约）
 - 新增平台时只需在 `builder/platforms/` 下添加策略子类，MUST NOT 修改框架层代码
 
+当前 rootfs 与 recovery 复用 `builder/rootfs.py` 的公共构建编排，GPT（GUID 分区表）镜像
+复用 `builder/image.py`，分区几何统一由 `builder/partition/layout.py` 解析。
+上述平台扩展约束是设计目标；现有缓存产物路由和刷写策略仍有集中分派，新增能力时必须检查所有消费边界，
+不能只创建一个目录便宣称任意平台已支持。维护落点见[架构指南](docs/build-system-design.md)。
+
 ### 6.4 构建与刷写约定
-- 构建命令：`flange build [component]`（component 可选：kernel、bootloader、rootfs，默认 image）
-- 刷写命令：`flange flash [component]`（读取 `.build/target/.../flash-config.json`）
-- 增量构建：基于内容哈希（config + source commit + patches），由 `builder/cache.py` 管理
-- 产物目录：`.build/target/<board>/<product>/<variant>/`（根目录 `target` 软链接指向此）
+- 构建命令：`flange build [component]`（默认 image；包括 kernel、bootloader、app、
+  device-tree-overlay、boot、rootfs、recovery、amp，按配置启用）
+- 刷写命令：`flange flash [partition]`（读取 `.build/target/.../flash-config.json`，分区名以 `--list` 为准）
+- `plan`、执行、`why` 和缓存共用 TaskPlan；输入包含配置、源码、补丁、配方、环境及上游产物身份。
+- 缓存仅认带版本 manifest，并校验全部必需文件树、权限和链接；发布前重新检查输入，旧 `.build_hash` 不再有效。
+- 共享下载与可变源码树分离，后者位于 `build_root/work/<target.key>/sources/`；同目标构建持有进程间锁。
+- 默认产物目录为工作区 `.build/target/<board>/<product>/<variant>/`；`flange.toml.build_dir` 可覆盖输出根。
+- rootfs/recovery 基础缓存按同一 Phase 1 计划寻址；APT、emulator、配方和环境决定快照身份，Phase 2 配置不干扰它。
+- rootfs 活树作用域由 `rootfs_storage.py` 管理，不跟随 TMPDIR；该存储配方纳入 Phase 1 指纹。
+  退出时先完成 chroot 子挂载清理；若仍有挂载，拒绝递归删除临时树并保留诊断，不发布成功状态。
+- ubuntu-base 解包与基础快照保存/恢复显式保留数字 UID/GID、模式位、链接、扩展属性、文件 capability
+  （能力属性）和 ACL（访问控制列表）。`snapshot.py` 纳入 Phase 1 配方，归档行为改变时旧快照必须失效。
 
 ### 6.5 配置驱动原则
 - 新增板级支持时，**只允许创建配置文件**（`components/board/<name>/config.jsonnet`），不得修改框架层代码
 - 所有可变信息从 FINAL_CONFIG dict 获取
 - 违反此原则说明框架抽象不足，应先重构框架再新增支持
+
+### 6.6 配置边界与维护职责
+
+- 系统配置源是 Jsonnet，`app.yaml` 描述 App，`package.py` 的 `PACKAGE` 描述功能包。
+  Package Python 文件是受信任的可执行代码，不能视为纯数据或隔离脚本。
+- `builder/config/jsonnet.py` 负责组合求值，`schema.py` 负责闭合结构与严格类型，`validate.py` 负责领域语义；
+  `app_spec.py` 将 YAML 转为 dataclass（数据类），`packages.py` 校验 Package 的 component 类型联合。
+- 系统、App、Package 拒绝未知字段和隐式类型转换；布尔值不能写成字符串，数组不能写成单字符串。
+  动态映射仅用于明确声明的名称到配置结构；所有真实入口执行相同校验，不以 dict 子类身份跳过约束。
+- Jsonnet 作者输入不得声明 `packages_meta` / `boot.package_overlay_sources` 等派生字段；这些只由包展开器生成。
+  错误须指出字段路径、期望类型和中文纠正说明。重复 YAML 键必须拒绝。
+- 未消费的 App `capabilities`、`lib.headers_dir` 已移除；头文件使用构建 install staging、`install` 映射与 include 约定。
+  `runtime.executable` 与 `systemd.auto_start` 必须在安装产物及生成维护脚本中兑现。
+- 每个新增字段同时说明类型、默认值、所属层、合法组合、消费位置和缓存影响；
+  需要运行行为的新字段必须同时验证解析、执行与缓存判定，不能只增加配置示例。
 
 ---
 
@@ -319,18 +386,36 @@ canonical JSON（规范化 JSON）交给 Python builder。
 ```
 flange/
 ├── pyproject.toml      # Python 项目配置
-├── envsetup.sh         # CLI 入口（source 加载，自动创建 target 软链接）
+├── envsetup.sh         # Python 环境初始化与 lunch 薄包装
 ├── docker-compose.yml  # Docker 编排配置
 ├── CLAUDE.md           # AI Agent 行为指引
 ├── ProjectSpec.md      # 本文档
 │
 ├── builder/            # 【代码层】Python 构建引擎（唯一顶层 Python 包）
-│   ├── engine.py       #   依赖图 + 调度
+│   ├── cli.py          #   Python 公共入口与参数解析
+│   ├── commands.py     #   CLI 命令组与工作区服务分派
+│   ├── workspace.py    #   工作区、目标、状态与路径
+│   ├── graph.py        #   TaskPlan / InputSpec / TaskFingerprint
+│   ├── artifacts.py    #   必需产物声明与 manifest
+│   ├── engine.py       #   依赖计划、锁、调度与原子发布
+│   ├── dev.py          #   App / Package 资源优先 CLI
+│   ├── app_spec.py     #   App 描述数据模型与解析
+│   ├── app.py          #   系统组件与 AppBuilder 的适配入口
+│   ├── app_build.py    #   App 隔离构建、依赖前缀与产物发布
+│   ├── app_resolver.py #   来源解析与完整依赖闭包
+│   ├── app_model.py    #   AppBuildResult / AppBuildReport
+│   ├── package_build.py #  Package 显式 build action 的产物流水线
+│   ├── toolchain.py    #   目标 ABI 与构建系统工具变量
+│   ├── deploy.py       #   manifest 部署、测试、GDB 与会话记录
 │   ├── base.py         #   ComponentBuilder 基类
-│   ├── paths.py        #   PROJECT_ROOT/COMPONENTS_ROOT/BUILD_ROOT 锚点
+│   ├── paths.py        #   工具仓库默认锚点与纯路径辅助
 │   ├── docker.py       #   Docker 容器执行封装
 │   ├── source.py       #   源码仓库管理
-│   ├── cache.py        #   增量构建缓存（内容哈希）
+│   ├── cache.py        #   按计划与产物完整性判断缓存
+│   ├── digest.py       #   文件/目录摘要，包含权限与符号链接
+│   ├── locking.py      #   进程间锁与原子写入
+│   ├── rootfs_base.py  #   共用 Phase 1 计划与执行
+│   ├── rootfs_storage.py # rootfs/recovery 原生活树与安全清理
 │   ├── chroot.py       #   ChrootContext（mount/umount 管理）
 │   ├── snapshot.py     #   Phase 1 base 快照存取与 LRU 回收
 │   ├── lunch_tui.py    #   lunch 的层级目标选择界面
@@ -345,6 +430,8 @@ flange/
 │   │   ├── jsonnet.py  #     Jsonnet 求值与固定层级组合
 │   │   ├── registry.py #     Jsonnet 配置注册表
 │   │   ├── query.py    #     target 解析与层级目标树（给 CLI lunch 用）
+│   │   ├── schema.py   #     系统/复用配置结构与严格类型
+│   │   ├── validate.py #     字段组合与平台语义
 │   │   └── summary.py  #     目标配置摘要表
 │   ├── partition/      #   分区表系统
 │   │   ├── __init__.py #     中间格式（PartitionTable/Partition）
@@ -366,7 +453,7 @@ flange/
 │   │       ├── patches/    #     平台级补丁（kernel/bootloader）
 │   │       └── rk3566/
 │   │           └── config.jsonnet # RK3566 SoC 配置
-│   ├── board/          #   板级配置（第三层）+ 板级数据
+│   ├── board/          #   板级配置（基础组合第四层）+ 板级数据
 │   │   └── <board-name>/
 │   │       ├── config.jsonnet #  板级配置（含 products/variants 声明）
 │   │       ├── overlay/    #     文件系统覆盖层
@@ -383,42 +470,42 @@ flange/
 ├── docs/               # 设计文档
 │
 ├── .build/             # 【产物层】运行时派生物（git ignored）
-│   ├── cache/          #   工具缓存（apt 等）
-│   ├── sources/        #   源码仓库 clone/下载
+│   ├── cache/          #   apt / rootfs-base / 工具缓存
+│   ├── sources/        #   共享仓库与下载
+│   ├── locks/          #   目标与共享资源锁
+│   ├── work/           #   按目标隔离的源码、组件与 App 中间目录
 │   └── target/         #   构建产物
 │       └── <board>/<product>/<variant>/
-├── target -> .build/target  # envsetup.sh 创建的便捷软链接（git ignored）
 └── .flange/            # 运行时状态（git ignored）
 ```
 
 > 上述目录树仅示意核心模块。`builder/` 下另有 app/deb 打包、deploy、output、
 > recovery、overlays、scaffold 等支撑模块；各 `builder/platforms/<vendor>/` 除
 > kernel/bootloader/rootfs/image 外还可有 boot.py、recovery.py。完整列表执行
-> `find builder -name '*.py'` 查看。
+> `rg --files builder` 查看。
 
 分层契约：
 - **代码层** 仅放可 import 的 Python 模块；`builder/` 是项目唯一顶层包。
 - **内容层** 仅放仓库携带的原料；不得出现派生物。平台的"数据部分"（patches/config）在 `components/platform/`，"逻辑部分"（builder 子类）在 `builder/platforms/`。
 - **产物层** 聚合所有运行时生成物；可 `rm -rf .build/` 触发完整重建。
-- 跨层路径解析 MUST 通过 `builder.paths` 暴露的 `COMPONENTS_ROOT`/`BUILD_ROOT` 等锚点拼接，不得直接使用旧顶层名字面量。
+- 运行期路径 MUST 来自显式 WorkspaceContext；`builder.paths` 只提供工具默认根与纯路径辅助。
+  不得在下层通过 cwd、全局 BUILD_ROOT 或旧顶层目录重新推断工作区。
 
 ### 9.1 App 来源查找优先级
 
-App 源可来自三个层级，构建系统按下述顺序查找，任一命中即终止（不回退）：
+所有入口通过 AppResolver 解析，显式路径相对调用目录，`build.deps` 中的路径相对声明 App。
+名称查找依次为工作区 `[apps]`、相对基准下的真实目录、工作区 `app_dirs`，再进入工具来源注册表。
+多个 `app_dirs` 命中同名 App 必须显式注册消歧；已命中但缺少 app.yaml 不得静默回退。
 
-1. **本地层** — `<project_root>/components/app/<name>/`，始终扫描，不受配置影响
-2. **external_apps** — FINAL_CONFIG 中 `external_apps[<name>]` 显式注册：
-   - `local_path` 分支：指向宿主机任意目录，不触发 git
-   - `git` 分支：由 `SourceManager` 克隆到 `.build/sources/apps/<name>/`
-   - 两分支 MUST 互斥声明；同时存在或均不存在时配置解析阶段立即报错
-3. **external_app_dirs** — FINAL_CONFIG 顶层 `list[str]`，每项是一个父目录；按顺序检查 `<dir>/<name>/app.yaml`，首个命中即采用
+工具来源注册表依次查找：
 
-`local_path` 与 `external_app_dirs[*]` 均支持 `~` 展开，相对路径相对 **project_root** 解析，
-并在配置加载时统一 resolve 为绝对路径存入 FINAL_CONFIG（详见 `builder/config/apps.py`）。
+1. `<tool_root>/components/app/<name>/`。
+2. canonical config 的 `external_apps[<name>]`：`local_path` 与 `git` 必须互斥。
+3. config 的 `external_app_dirs`，按声明顺序查找 `<dir>/<name>/app.yaml`。
 
-`flange list apps` 遍历全部三层并为每行加来源标签 `[local]` / `[external:local]` /
-`[external:git]` / `[dir:<path>]`；同名多来源时以优先级最高者为主来源，其它来源以
-`(also found in: ...)` 形式在次行展示。
+系统 Jsonnet 中的相对外部路径相对工具根归一化；工作区的 `[apps]` / `app_dirs` 相对 `flange.toml`。
+工具内容、工作区状态和用户源码各有明确所有者；同名不同源码不能进入同一依赖闭包。
+`flange app list` 展示来源；`flange app plan <name-or-path>` 查看实际解析结果。
 
 ---
 
@@ -477,24 +564,31 @@ feat(kernel): 添加内核编译支持
 ### 11.1 Python 构建引擎
 - Python 是项目的构建引擎语言，所有构建/刷写操作通过 `flange` 命令执行
 - 组件间依赖由 `builder/engine.py` 的依赖图自动推断，变更后基于内容哈希仅增量重建
-- 通过 `lunch <board>-<product>-<variant>` 选择配置，状态持久化到 `.flange/current_config`
-- 增量构建基于内容哈希（config + source commit + patches），无需全量重建
+- 通过 `flange target select` 或 `lunch` 选择目标，状态保存在当前工作区 `.flange/current_config`
+- 计划、执行、缓存与解释必须使用同一输入声明，所有必需产物完整且摘要吻合才允许命中
 
 ### 11.2 Docker 构建环境
 - 所有编译构建操作**必须在 Docker 容器内**完成
 - Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖；另装 kernel.org crosstool gcc-10.5 到 `/opt/aarch64-gcc10` 作为 AArch64 u-boot/kernel 默认工具链，并安装 Arm GNU Toolchain 10.3-2021.07 到 `/opt/arm-linux-gcc10` 供 RK3506B ARM32 u-boot/kernel 使用（见 §11.3）
-- 项目根目录通过 volume mount 映射到容器内
+- 工具根、工作区、输出根和外部源码通过同绝对路径 volume mount 映射到容器内
 - 源码仓库目录 `.build/sources/` 和 APT 缓存 `.build/cache/apt/` 通过 volume 持久化
+- rootfs/recovery 活树使用容器原生磁盘，不在宿主共享卷解包；需要同时为 Docker 原生磁盘和宿主产物目录预留空间。
 - 宿主机 `~/.ssh` 以只读方式挂载，通过 entrypoint 脚本修正权限
+- 系统镜像、rootfs 等需要 mount（挂载）的调用必须显式启用容器特权模式；普通 App、Package 编译默认非特权
+- 特权模式通过 Compose（容器编排）服务的 `privileged` 属性配置，默认关闭；禁止将 `docker run` 的
+  `--privileged` 参数传给 `docker compose run`。DockerRunner 每次在子进程环境中显式设置
+  `FLANGE_BUILD_PRIVILEGED=true/false`，不得继承宿主同名变量的权限选择或修改宿主进程环境
+- `envsetup.sh` 自动准备宿主 Python 虚拟环境。Jsonnet 依赖缺少可用 wheel 时安装阶段
+  需要宿主 C++ 工具；这与目标代码统一在 Docker 编译的约定不同，不应宣称宿主零依赖
 
 ### 11.3 交叉编译
 - **u-boot / kernel 构建**按目标架构使用容器内独立固定的 gcc-10 工具链。AArch64 默认使用 kernel.org crosstool **gcc-10.5**（前缀 `/opt/aarch64-gcc10/bin/aarch64-linux-`），由 `builder/base.py` 的 `ComponentBuilder.CROSS` 声明；RK3506B ARM32 通过 SoC 配置覆盖为 ATK SDK 同款 Arm GNU Toolchain **gcc-10.3.1**（前缀 `/opt/arm-linux-gcc10/bin/arm-none-linux-gnueabihf-`）。不得把 Ubuntu 24.04 的系统 gcc-13 用于这些老 Rockchip 低层产物；RK3576 的实机根因详见 openspec `selfbuild-rk3576-spi-image`，RK3506B 的工具链约束详见 openspec `add-rk3506b-atk-rk3506b`
-- **app / deb 组件构建**（`builder/app.py`）仍用 Docker 系统包交叉编译器（`gcc-aarch64-linux-gnu` / `gcc-arm-linux-gnueabihf`）
+- **app / deb 组件构建**（`builder/app_build.py`、`builder/toolchain.py`）使用 Docker 系统包交叉编译器（`gcc-aarch64-linux-gnu` / `gcc-arm-linux-gnueabihf`）
 - 平台策略类（builder/platforms/）直接调用交叉编译器，无需额外工具链注册机制
 - 板级配置通过 `config.jsonnet` 声明（rootfs/platform/SoC/board 固定组合）
 
 ### 11.4 输出管理
-- 构建产物收集到 `.build/target/<board>/<product>/<variant>/`（git ignored，根目录 `target` 软链接直达）
+- 构建产物发布到工作区 `build_root/target/<board>/<product>/<variant>/`（git ignored）；路径以 `flange status` 为准
 - 内核产出按 FINAL_CONFIG 路由：ARM64/extlinux 通常为 `Image`、精确目标 DTB、modules；
   ARM32/vendor FIT 通常为 `zImage`、精确目标 DTB、modules 与 FIT `boot.img`
 - 内核构建支持 out-of-tree 模块：通过 `kernel.oot_modules` 配置声明，在 `make modules` 后独立编译并统一安装到 rootfs；OOT 编译入口若是独立 git 仓库（如 vendor WiFi/BT 包），通过 `kernel.oot_sources` 声明源（每次 ensure 后路径作为 `{<name>_src}` 模板变量注入），仓库 git HEAD 入 kernel hash；安装末尾跑 `depmod -b` 重建 modules.{dep,alias,symbols}+`.bin` 索引，开机 PCI/USB hotplug 才能自动 load
@@ -515,7 +609,7 @@ feat(kernel): 添加内核编译支持
 
 ### 12.2 组件级刷写
 - 支持单独刷写各组件到设备的特定分区
-- 刷写通过 `flange flash [component]` 执行（如 `flange flash kernel`）
+- 刷写通过 `flange flash [partition]` 执行（如清单包含该分区时使用 `flange flash boot`）
 - 全量刷写：`flange flash`（重写分区表 + 所有分区）
 - `flash-config.json` 由构建引擎生成，声明各分区的镜像、偏移、大小与保护属性
 - 任何持久写入前必须完成本地产物 preflight；parameter 与 flash config 应使用摘要及
@@ -539,72 +633,125 @@ feat(kernel): 添加内核编译支持
 
 ## 14. 输出规范
 
-构建系统的终端输出和日志持久化遵循本节规范。
+构建输出首先回答开发者的问题：正在构建哪个目标、当前执行什么动作、是否仍在运行、最终结果是什么、
+失败后在哪里查看证据以及怎样继续。终端呈现和日志记录由一次构建的单一输出服务管理。
+
+公共 CLI 支持 `--json`、`--no-color`、`--no-interaction`、`--target` 和 `-C/--workspace`。
+机器输出带 `schema_version`，过程与诊断走 stderr；非交互场景不弹菜单。
+退出码为 0 成功、1 操作失败、2 参数/配置错误、130 取消；App/test 保留程序退出码，测试超时为 124。
+Shell 与 CI 不解析中文状态文案。完整用户旅程与本轮实际日志评审见 [CLI 评审](docs/cli-experience-review.md)。
 
 ### 14.1 输出层级
 
 | 层级 | 内容 | 显示条件 |
 |------|------|---------|
-| L1 阶段标题 | 组件名 + 状态标记（`▸`/`✓`/`✗`/`⊘`） | 始终显示 |
-| L2 状态行 | 阶段进度、缓存决策、关键事件 | NORMAL 和 VERBOSE 显示 |
-| L3 工具输出 | make/git/apt 等外部命令原始输出 | 仅 VERBOSE 全量显示；NORMAL 仅在失败时显示错误上下文 |
+| L1 目标与结果 | 当前目标、本次请求、阶段结果和最终结论 | 始终保留；QUIET 使用紧凑摘要 |
+| L2 当前动作 | 实际步骤、源码准备、缓存决策和关键事件 | NORMAL、VERBOSE 显示 |
+| L3 工具原文 | Git、make、apt 和其他子进程的输出 | 全部写入日志；VERBOSE 展开，失败时提取相关上下文 |
 
-### 14.2 Verbose 级别
+NORMAL 使用短文本与缩进表达目标、阶段、动作和结果，不绘制全宽横线、错误框或耗时占比条。
+资源名称足以定位时不显示内部 resource_id 摘要。正文布局宽度上限约 96 列；
+不能为了对齐把耗时放到宽终端的最右边。日志路径、异常原文和重试命令应完整、可复制。
+
+### 14.2 输出级别
+
+`flange build`、`flange app build`、`flange package build` 使用相同的互斥选项：
 
 | CLI 标志 | 行为 |
 |---------|------|
-| （默认） | L1 + L2 + L3 仅错误上下文 |
-| `-v` | L1 + L2 + L3 全量（灰色 `│` 前缀） |
-| `-q` | L1 仅摘要行 |
+| 默认 NORMAL | 目标、阶段、当前动作和紧凑结果；工具原文仅在失败时提取上下文 |
+| `-v` / `--verbose` | 展开完整工具原文，结束时可显示简洁组件状态与耗时记录 |
+| `-q` / `--quiet` | 保留摘要、必要失败上下文和日志位置 |
 
-### 14.3 颜色编码
+所有级别都保留完整日志。输出级别是执行选项，不写入配置，不改变构建输入指纹或缓存结论。
+工具 warning 原文仅在 VERBOSE 展示，始终写入日志。
 
-| 元素 | 颜色 | ANSI 码 | 符号 |
-|------|------|---------|------|
-| 阶段标题 | 蓝色加粗 | `\033[1;34m` | `▸` |
-| 成功状态 | 绿色 | `\033[0;32m` | `✓` |
-| 警告信息 | 黄色 | `\033[1;33m` | `⚠` |
-| 错误信息 | 红色加粗 | `\033[1;31m` | `✗` |
-| 跳过状态 | 灰色 | `\033[0;90m` | `⊘` |
-| 工具输出 | 暗灰 | `\033[0;90m` | `│` |
-| 错误框线 | 红色 | `\033[0;31m` | `┄` |
+### 14.3 语义颜色
 
-非 TTY 环境（管道/重定向/CI）自动禁用颜色和 Spinner。
+公共 CLI、构建、刷写和目标选择共用 `builder/term.py` 的语义角色与样式接口。
+调用方根据结构化结果选择角色，不从整段文字中的关键词猜测状态；颜色仅辅助定位，文字与符号必须保留。
 
-### 14.4 Spinner
+| 语义 | 样式 | 典型内容 |
+|------|------|---------|
+| 标题、正常需构建、进行中 | 蓝色，标题加粗 | 阶段、需构建、正在编译 |
+| 成功、可复用 | 绿色 | 完成、检查通过、缓存复用 |
+| 警告、受阻待准备、取消 | 黄色 | 缺少前置条件、用户取消 |
+| 错误、失败 | 红色加粗 | 失败、无效配置、根因 |
+| 路径、命令 | 青色 | 日志位置、下一步命令 |
+| 正文 | 终端默认前景 | 名称、字段值、说明 |
+| 次要说明 | 默认前景并降低亮度 | 耗时、辅助标签、工具原文 |
 
-编译等长时间操作进行中显示 braille 旋转动画 + 实时计时器：
-- 字符集：`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`
-- 格式：`⠹ 编译内核...  38s`（`\r` 原地刷新）
-- 完成后替换为 `✓ 编译完成  42.3s`
+首次构建或输入变化导致的缓存未命中是正常“需构建”，不能显示成警告或失败。
+成功和复用必须来自执行报告与产物验证，目录存在不能单独作为依据。
 
-### 14.5 构建摘要
+按实际输出流动态判断终端能力；stdout 与 stderr 分别检测。非 TTY、`TERM=dumb`、
+存在 `NO_COLOR`（包括空值）或指定 `--no-color` 时，普通命令禁用颜色、动画和光标重绘。
+交互目标菜单禁色后仍保留导航所需绘制与焦点反显；非 TTY 不进入菜单。
+JSON 使用原始结果，stdout 只有一份结果文档；其 stderr 过程与持久化日志也不含 ANSI（终端控制序列）。
+正文不强制白色或固定背景色。
 
-每次构建结束（成功或失败）打印摘要：
-- 分隔线 + 成功/失败状态 + 总耗时
-- 各组件状态表：名称、状态（构建/跳过/失败）、耗时、耗时占比条形图
-- 日志文件路径
+### 14.4 当前动作与长任务
+
+有能力的 NORMAL 交互终端最多显示一条实时活动行，内容为当前阶段、动作和实际已耗时。
+活动行可按窄终端宽度缩短，关键结果与完整路径仍要落成普通文本。
+源码准备与编译子进程不得同时直写终端，避免 Git 回车进度插进活动行。
+
+NORMAL/VERBOSE 在非 TTY、无颜色等无法重绘的场景，步骤开始时立即输出动作文本，结束时再给出结果；
+QUIET 保留最终摘要。
+不能等一个耗时 45 分钟的编译结束后才第一次显示“编译内核”。
+真实阶段顺序或已完成数量可以展示，但不换算成百分比；组件工作量不同，数量不能预测时间进度。
+不输出未经测量的 ETA（预计完成时间），缓存跳过不虚构执行耗时。
+即时状态只说明当前事实，不开启计时，也不自动确认一次动作成功。
+步骤结果与耗时必须对应实际执行范围，不能把后续编译耗时归到“源码已就绪”等通知上。
+计时使用 monotonic（单调时钟），避免系统时间调整导致负数或跳变；嵌套步骤各自保留真实执行范围。
+
+### 14.5 构建结果
+
+结束时停止并清除活动行，再输出一次紧凑结论：结果、阶段完成/复用等真实计数、实际总耗时和日志位置。
+阶段计数不等于重新编译的 App 数量；App 自身的缓存复用由逐项状态与构建报告说明。
+NORMAL 不重复完整阶段耗时表；VERBOSE 可列出组件、状态和耗时，不绘制条形图。
+成功编译、缓存复用、配置关闭、执行失败和用户取消必须区分，取消不能标为成功。
 
 ### 14.6 日志持久化
 
-- 全量构建输出（L1 + L2 + L3）写入 `.build/target/<board>/<product>/<variant>/build.log`
-- 每次构建覆盖写入（非追加），避免日志无限增长
-- 日志文件不含 ANSI 颜色码
-- 摘要末尾打印日志文件路径
+- 全量状态与工具原文写入 `WorkspaceContext.target_dir/build.log`，默认路径为工作区的
+  `.build/target/<board>/<product>/<variant>/build.log`。
+- 系统、App、Package 构建在取得目标锁后初始化日志，先轮转旧日志再执行；默认保留 3 份历史，
+  `FLANGE_LOG_KEEP` 控制保留数量。等待锁的请求不得提前轮转正在使用的日志。
+- 日志流式记录命令与上下文，移除 ANSI 和原地刷新残留，保留实际时间信息。
+- 成功、失败和取消均关闭日志，终端结果只提供一次完整日志位置。
 
-### 14.7 错误呈现
+### 14.7 错误呈现与继续工作
 
-- 外部命令失败时，从捕获的输出中匹配错误模式行（`error:`, `make[N]: ***`, `undefined reference`, `^E:`, `dpkg: error`, `fatal:`）
-- 匹配行用红色 `┄` 框线包裹高亮显示
-- 无匹配时 fallback 显示最后 20 行输出
-- 构建摘要重复列出失败组件名称
+失败诊断集中在一个区域：失败阶段/动作、真实原因、相关命令上下文、日志位置和适用的恢复提示。
+匹配到 `error:`、`undefined reference`、`E:`、`dpkg: error` 等错误时优先展示相关行；
+无匹配时使用该失败命令的有限尾部。早先成功命令的输出不能冒充后续配置错误的原因。
+失败命令的上下文绑定到实际异常，后续 rm、umount 等清理命令不能覆盖它；
+已被业务捕获并恢复的失败不能污染新的无关异常。清理另有错误时附加诊断并保留主操作异常，
+只有清理自身失败时也必须报告失败。
+完整 traceback 写入日志，终端不用错误框或多次复制异常。
+
+内层已经呈现的失败由 Docker 与外层 CLI 传播状态，不再重复同一原因，
+也不能把笼统的“Docker 命令失败”追加成新的根因。容器未启动或未呈现过的外层故障仍需独立诊断。
+JSON 保留单一结构化结果和真实失败状态。
+
+恢复提示以本次请求为准：默认 image 构建提示修复后 `flange build`，指定 kernel 则保留 `flange build kernel`；
+适用时保留工作区和临时目标信息。先修复根因再重试，不默认建议 `clean` 或强制重建。
+重试时仍以输入和实际产物校验决定复用，不能向用户保证所有已完成阶段一定跳过。
 
 ### 14.8 Python 输出接口
 
-- 所有构建模块通过 `builder/output.py` 的 `BuildOutput` 类输出用户可见信息
-- 构建管线内禁止直接 `print()` 或 `logging.info()` 输出
-- `BuildOutput` 由 `BuildEngine` 创建，通过 `DockerRunner` 和 `ComponentBuilder` 注入
-- Warning 仅在 VERBOSE 模式显示，但始终写入日志文件
+- 构建模块通过 `builder/output.py` 的 `BuildOutput` 输出状态，禁止在已建立的构建管线中直接 `print()`
+  或 `logging.info()` 竞争终端。
+- 系统构建由 `BuildEngine`，独立资源构建由 `development_output.run_logged` 管理输出生命周期；
+  实例注入构建器、Docker 和源码/子进程执行通道。
+- 子进程负责提供原文，BuildOutput 负责日志、过滤、计时和终端绘制；宿主转发内层已格式化结果，不另建竞争状态行。
+- `status(msg)` 是即时信息；`step(label)` 上下文管理器或 `spinner_start` / `spinner_stop`
+  标明实际步骤的开始和结束，只有这些明确边界才输出步骤结果与耗时。
+- `BuildOutput` 的 `retry_command` 可携带本次工作区、目标和资源请求；恢复提示只展示命令，不自动执行。
+- 进程通道在失败时调用 `command_failed(error)` 保存异常所属命令的诊断；
+  `command_start` 仍为下一条命令建立独立活动缓冲，不能使用全局“第一条失败”替代异常归属。
+- 颜色通过 `Role` 与 `style(text, role, *, stream=None)` 表达，传递实际输出流，不另行维护调色板。
 
 ---
 
@@ -614,3 +761,26 @@ feat(kernel): 添加内核编译支持
 - 对规范的修改需通过 OpenSpec 变更流程提案
 - AI Agent 在生成代码时必须遵循本规范
 - Code Review 时应检查是否符合本规范
+
+### 15.1 当前文档与历史记录
+
+- [README](README.md) 提供公开入口和任务分流；[入门指南](docs/first-steps.md)解释必要概念，
+  提供无需设备的第一次成功与后续学习路径；[开发指南](docs/development-guide.md)提供从 clone 到构建、
+  刷写、App 开发、验证与调试的完整操作参考。
+- [维护指南](docs/maintenance-guide.md)说明如何定位代码、复现、验证和提交；
+  [扩展指南](docs/extension-guide.md)说明 App、产品、Package、板卡与平台的扩展落点。
+- 教程应明确运行目录、前置条件、预期结果与下一步，区分计划、实际编译和设备验收。
+  图示应有文字解释，主要导航使用 GitHub 可直接访问的 Markdown 链接；Wiki 核心概念指向当前参考，
+  不能重复维护已被替代的命令和路径模型。
+- [架构指南](docs/build-system-design.md) 描述当前模块职责，本规格规定约束，
+  `openspec/specs/` 记录能力契约；新增或改变用户可见行为必须在同一变更中同步相关文档。
+- 历史设计、实验记录与路线图保留当时事实，必须标识历史范围；新的目标设计不能写成当前实现。
+- 代码与规范矛盾时记录缺陷或通过 OpenSpec 修正规范，不能靠删除失败检查来宣称一致。
+- README 命令、配置样例、路径链接、支持矩阵与实际 CLI / schema / 注册表应交叉验证；
+  当前 pytest 和 OpenSpec 语法校验尚不能自动证明全部文档语义同步。
+
+### 15.2 开源许可
+
+flange 自有代码与文档采用根目录 [Apache License 2.0](LICENSE)。第三方源码、固件、工具、
+补丁和生成镜像内的软件包保留各自许可，详见[许可说明](docs/licensing.md)。
+标准许可证原文保持原语言；不能用根目录许可覆盖已有第三方权利声明。

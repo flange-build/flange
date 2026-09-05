@@ -26,9 +26,9 @@ from builder.app_spec import APP_NAME_PATTERN, APP_VERSION_PATTERN, AppSpec
 
 _ARCH_MAP: Dict[str, str] = {
     "aarch64": "arm64",
-    "armhf":   "armhf",
-    "x86_64":  "amd64",
-    "i386":    "i386",
+    "armhf": "armhf",
+    "x86_64": "amd64",
+    "i386": "i386",
     "riscv64": "riscv64",
 }
 
@@ -41,7 +41,7 @@ class DebBuildError(RuntimeError):
 # 安全校验
 # ---------------------------------------------------------------------------
 
-_SAFE_SHELL_RE = re.compile(r'^[a-zA-Z0-9._@:/-]+$')
+_SAFE_SHELL_RE = re.compile(r"^[a-zA-Z0-9._@:/-]+$")
 
 
 def _validate_shell_safe(value: str, context: str) -> None:
@@ -71,6 +71,7 @@ def _map_arch(arch: str) -> str:
 # ---------------------------------------------------------------------------
 # 控制文件生成
 # ---------------------------------------------------------------------------
+
 
 def _generate_control_text(
     name: str,
@@ -139,7 +140,12 @@ def _generate_conffiles_text(conffiles: List[str]) -> str:
     return "\n".join(valid) + "\n"
 
 
-def _generate_postinst(service_name: str, data_dirs: List[str]) -> str:
+def _generate_postinst(
+    service_name: str,
+    data_dirs: List[str],
+    *,
+    auto_start: bool = False,
+) -> str:
     """生成 postinst 脚本，兼容 chroot 环境。
 
     chroot 中没有 /run/systemd/system，无法直接调用 systemctl。
@@ -161,24 +167,29 @@ def _generate_postinst(service_name: str, data_dirs: List[str]) -> str:
             mkdir_lines.append(f"    mkdir -p {d}")
     mkdir_block = "\n".join(mkdir_lines) if mkdir_lines else "    # 无需创建数据目录"
 
-    script = f"""\
-#!/bin/bash
-set -e
-
-# 启用 systemd 服务（兼容 chroot 环境）
+    enable_block = ""
+    if auto_start:
+        enable_block = f"""
+# 仅显式 auto_start=true 才注册启动目标；安装本身不启动服务。
 if [ -d /run/systemd/system ]; then
-    # 运行中的系统：通过 systemctl 启用
-    systemctl daemon-reload
     systemctl enable {service_name}
 else
-    # chroot 环境：手动创建 .wants 软链接
     WANTED_BY=$(grep "^WantedBy=" /lib/systemd/system/{service_name} 2>/dev/null | cut -d= -f2)
     for target in $WANTED_BY; do
         mkdir -p /etc/systemd/system/$target.wants
         ln -sf /lib/systemd/system/{service_name} /etc/systemd/system/$target.wants/
     done
 fi
+"""
+    script = f"""\
+#!/bin/bash
+set -e
 
+# 更新 unit 索引，适用于手动启动与自动启动两种服务。
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+fi
+{enable_block}
 # 创建运行时数据目录
 {mkdir_block}
 """
@@ -248,7 +259,9 @@ def generate_control(spec: AppSpec, arch: str) -> Dict[str, str]:
     if spec.app.type == "service" and spec.systemd and spec.systemd.unit:
         # 从 unit 路径提取文件名（如 systemd/my.service → my.service）
         service_name = Path(spec.systemd.unit).name
-        result["postinst"] = _generate_postinst(service_name, spec.data_dirs)
+        result["postinst"] = _generate_postinst(
+            service_name, spec.data_dirs, auto_start=spec.systemd.auto_start
+        )
         result["prerm"] = _generate_prerm(service_name)
 
     # vendor 参考包的脚本必须先完成平台适配，再由 app.yaml 显式映射。
@@ -260,6 +273,7 @@ def generate_control(spec: AppSpec, arch: str) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 # tar.gz 构建辅助
 # ---------------------------------------------------------------------------
+
 
 def _build_control_tar(control_files: Dict[str, str]) -> bytes:
     """将控制文件字典打包为 control.tar.gz bytes。
@@ -374,6 +388,7 @@ def _ensure_parent_dirs(
 # DebBuilder 主类
 # ---------------------------------------------------------------------------
 
+
 def _write_ar(output_path: Path, members: List[tuple[str, bytes]]) -> None:
     """以纯 Python 实现的 ar 归档写入器，生成符合 POSIX ar 格式的归档文件。
 
@@ -396,12 +411,12 @@ def _write_ar(output_path: Path, members: List[tuple[str, bytes]]) -> None:
             #   文件名（16 字节）、修改时间（12 字节）、uid（6 字节）、
             #   gid（6 字节）、权限（8 字节）、文件大小（10 字节）、结束 magic（2 字节）
             name_field = filename.encode("ascii")[:16].ljust(16)
-            mtime_field = b"0           "          # 12 字节，固定 0
-            uid_field   = b"0     "                # 6 字节
-            gid_field   = b"0     "                # 6 字节
-            mode_field  = b"100644  "              # 8 字节
-            size_field  = str(len(data)).encode("ascii").ljust(10)
-            end_magic   = b"\x60\x0a"              # 2 字节
+            mtime_field = b"0           "  # 12 字节，固定 0
+            uid_field = b"0     "  # 6 字节
+            gid_field = b"0     "  # 6 字节
+            mode_field = b"100644  "  # 8 字节
+            size_field = str(len(data)).encode("ascii").ljust(10)
+            end_magic = b"\x60\x0a"  # 2 字节
 
             header = (
                 name_field
@@ -486,11 +501,14 @@ class DebBuilder:
         data_tar_data = _build_data_tar(files)
 
         # 4. 使用纯 Python ar 写入器组合为 .deb
-        _write_ar(deb_path, [
-            ("debian-binary",  debian_binary_data),
-            ("control.tar.gz", control_tar_data),
-            ("data.tar.gz",    data_tar_data),
-        ])
+        _write_ar(
+            deb_path,
+            [
+                ("debian-binary", debian_binary_data),
+                ("control.tar.gz", control_tar_data),
+                ("data.tar.gz", data_tar_data),
+            ],
+        )
 
         return deb_path
 

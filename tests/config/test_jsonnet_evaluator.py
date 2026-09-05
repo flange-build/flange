@@ -153,7 +153,7 @@ def _layered_config_tree(tmp_path: Path) -> None:
         ),
         "platform/demo/chip/config.jsonnet": (
             "{ platform: 'demo', soc: 'chip', "
-            "kernel: {config: {CHIP_FACT: 'y'}, "
+            "kernel: {config: {CONFIG_CHIP_FACT: 'y'}, "
             "device_tree: {directory: 'demo'}} }"
         ),
         "board/demo-board/config.jsonnet": (
@@ -186,7 +186,7 @@ def test_layer_loader_composes_in_fixed_order_and_separates_dimensions(
         "base", "platform", "product",
     ]
     assert config["boot"]["kernel_args"] == "product"
-    assert config["kernel"]["config"]["CHIP_FACT"] == "y"
+    assert config["kernel"]["config"]["CONFIG_CHIP_FACT"] == "y"
     assert config["product"] == "same"
     assert config["variant"] == "release"
     assert config["sources"]["overlays"]["url"].endswith("overlays.git")

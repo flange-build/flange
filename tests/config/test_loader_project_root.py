@@ -1,49 +1,40 @@
-"""lunch state 始终锚定项目根目录。"""
-
-from __future__ import annotations
+"""目标状态按工作区隔离，显式上下文不受调用目录干扰。"""
 
 import json
-from pathlib import Path
 
-from builder.config import loader
+import pytest
+
+from builder.config.loader import load_current_config, save_state
 from builder.paths import PROJECT_ROOT
+from builder.workspace import init_workspace, load_workspace
 
 
-def test_state_file_is_anchored_to_project_root() -> None:
-    assert loader.STATE_FILE == PROJECT_ROOT / ".flange" / "current_config"
-    assert loader.STATE_FILE.is_absolute()
+def test_two_workspaces_do_not_share_target_state(tmp_path, monkeypatch):
+    first, second, outside = (tmp_path / name for name in ("first", "second", "outside"))
+    for root in (first, second):
+        init_workspace(root, tool_root=PROJECT_ROOT)
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    save_state("radxa-zero3w", "default", "debug", workspace_root=first)
+    save_state("radxa-zero3w", "default", "release", workspace_root=second)
+    first_context, second_context = load_workspace(first), load_workspace(second)
+    assert load_current_config(first_context)["variant"] == "debug"
+    assert load_current_config(second_context)["variant"] == "release"
+    assert not (outside / ".flange/current_config").exists()
+    save_state("radxa-zero3w", "default", "release", context=first_context)
+    assert json.loads(first_context.state_file.read_text())["variant"] == "release"
+    assert json.loads(second_context.state_file.read_text())["variant"] == "release"
 
 
-def test_state_round_trip_does_not_depend_on_caller_cwd(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    state_file = tmp_path / "project" / ".flange" / "current_config"
-    caller_cwd = tmp_path / "outside"
-    caller_cwd.mkdir()
-    monkeypatch.chdir(caller_cwd)
-    monkeypatch.setattr(loader, "STATE_FILE", state_file)
-    monkeypatch.setattr(
-        loader,
-        "resolve_config",
-        lambda board, product, variant: {
-            "board": board,
-            "product": product,
-            "variant": variant,
-        },
-    )
-    monkeypatch.setattr(loader, "validate_config", lambda _: None)
+def test_implicit_load_discovers_workspace_from_subdirectory(tmp_path, monkeypatch):
+    init_workspace(tmp_path, tool_root=PROJECT_ROOT)
+    save_state("radxa-zero3w", "default", "debug", workspace_root=tmp_path)
+    nested = tmp_path / "apps/demo"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+    assert load_current_config()["variant"] == "debug"
 
-    loader.save_state("demo-board", "demo-product", "debug")
 
-    assert json.loads(state_file.read_text(encoding="utf-8")) == {
-        "board": "demo-board",
-        "product": "demo-product",
-        "variant": "debug",
-    }
-    assert not (caller_cwd / ".flange" / "current_config").exists()
-    assert loader.load_current_config() == {
-        "board": "demo-board",
-        "product": "demo-product",
-        "variant": "debug",
-    }
+def test_save_requires_explicit_workspace():
+    with pytest.raises(ValueError, match="context 或 workspace_root"):
+        save_state("radxa-zero3w", "default", "debug")

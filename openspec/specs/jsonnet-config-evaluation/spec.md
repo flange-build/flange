@@ -3,7 +3,6 @@
 ## Purpose
 
 定义 Jsonnet 配置的求值契约：层次顺序、product/variant 作为显式参数、import 的根限制、求值结果的确定性，以及依赖如何参与配置内容哈希。
-
 ## Requirements
 ### Requirement: Jsonnet 配置源声明中文职责注释
 
@@ -85,9 +84,9 @@ Evaluator SHALL 返回本次求值实际读取的 Jsonnet/Libsonnet 文件集合
 
 ### Requirement: flange 自带 Jsonnet 求值运行时
 
-项目 MUST 固定并声明 Jsonnet 求值依赖，`flange lunch`、`flange build` 和配置查询不得要求用户预先在 PATH 中安装 `jsonnet` CLI。运行时缺失或版本不兼容时 MUST 在配置加载阶段给出明确安装错误。
+项目 MUST 固定并声明 Python Jsonnet 求值依赖，`flange target select`、`lunch`、`flange build` 和配置查询不得要求 PATH 中安装 jsonnet CLI。
+运行时缺失或版本不兼容 MUST 在配置加载阶段给出明确安装错误。
 
 #### Scenario: PATH 中没有 jsonnet CLI
-- **WHEN** 用户环境的 PATH 不包含 `jsonnet` 可执行文件但项目 Python 依赖完整
-- **THEN** 配置发现、lunch 和 build 正常工作
-
+- **WHEN** PATH 不含 jsonnet 可执行文件但项目 Python 依赖完整
+- **THEN** 目标发现、选择与构建配置解析正常工作

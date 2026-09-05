@@ -1,6 +1,7 @@
 """AIC8800 USB Wi-Fi 适配测试。"""
 
 from pathlib import Path
+from tests.builder.context import component_context
 from unittest.mock import MagicMock
 
 from builder.cache import DEPENDENCY_GRAPH
@@ -189,6 +190,7 @@ def test_rootfs安装kernel_modules到lib_modules(monkeypatch, tmp_path):
     cache.target_dir = (
         tmp_path / ".build/target/radxa-cubie-a7z/default/release")
     builder.cache = cache
+    builder.context = component_context(tmp_path, {"board": "radxa-cubie-a7z"})
 
     builder._install_kernel_modules(
         rootfs_dir,

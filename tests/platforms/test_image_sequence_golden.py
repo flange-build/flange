@@ -18,6 +18,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.builder.context import component_context
+
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
 PLATFORMS = {
@@ -81,7 +83,8 @@ def _config() -> dict:
     }
 
 
-def _run_compile(platform: str, tmp_path: Path) -> list[str]:
+def _run_compile(platform: str, tmp_path: Path, config=None) -> list[str]:
+    tmp_path = tmp_path.resolve()
     target = tmp_path / "target"
     for relative in UPSTREAM_ARTIFACTS:
         path = target / relative
@@ -92,6 +95,7 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
     cache = MagicMock()
     cache.target_dir = target
     builder.cache = cache
+    builder.context = component_context(tmp_path, {"board": "golden-board"}, target_dir=target)
     builder.output = None
 
     calls: list[str] = []
@@ -100,8 +104,10 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
         def call(command, **kwargs):
             rendered = " ".join(str(part) for part in command)
             rendered = rendered.replace(str(target), "<TARGET>")
+            rendered = rendered.replace(str(tmp_path), "<WORK>")
             rendered = re.sub(
                 r"/[^ ]*flange-image-[A-Za-z0-9_]+", "<TMP>", rendered)
+            rendered = re.sub(r"<WORK>/.build/work/[^ ]+/image/run-[^ /]+", "<TMP>", rendered)
             calls.append(f"{name}: {rendered}")
             return MagicMock()
         return call
@@ -110,7 +116,7 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
     builder.docker.run_privileged.side_effect = record("priv")
 
     try:
-        builder.compile(None, _config())
+        builder.compile(None, config or _config())
     finally:
         work = getattr(builder, "_work_dir", None)
         if work and Path(work).exists():
@@ -172,3 +178,12 @@ def test_raw类型分区不进GPT分区表(tmp_path: Path):
         for name in raw_names:
             assert not any(f"mkpart {name} " in c for c in mkpart), (
                 f"{platform} 把 raw 分区 {name} 建进了 GPT")
+
+
+@pytest.mark.parametrize("platform", PLATFORMS)
+def test_disabled_recovery_is_not_written_even_when_old_image_exists(platform, tmp_path):
+    config = _config()
+    config["recovery"]["enabled"] = False
+    commands = _run_compile(platform, tmp_path, config)
+    assert any("if=<TARGET>/rootfs/rootfs.img" in command for command in commands)
+    assert not any("if=<TARGET>/recovery/recovery.img" in command for command in commands)

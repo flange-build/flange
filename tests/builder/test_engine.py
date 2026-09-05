@@ -1,412 +1,140 @@
-"""构建引擎集成测试 — 依赖图拓扑排序与 App 组件集成。
+"""调度、上下文、原子产物发布和取消的集成契约。"""
 
-覆盖场景：
-- DEPENDENCY_GRAPH 包含 app 节点，rootfs 依赖 app
-- 构建 image 时，app 出现在 rootfs 之前
-- 构建 rootfs 时，app 出现在 rootfs 之前
-- 单独构建 app 时，只包含 app 本身
-- BuildEngine.build() 对 app 组件正确使用 AppBuilder（AppBuilder.build_all 被调用）
-- App 组件 cache 哈希随 app.yaml 变化而改变
-- App 组件 cache 哈希随 custom_packages 列表变化而改变
-"""
-
-from __future__ import annotations
-
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from builder.engine import DEPENDENCY_GRAPH, BuildEngine, _topo_sort
-from builder.cache import BuildCache
-
-
-# ---------------------------------------------------------------------------
-# 拓扑排序测试
-# ---------------------------------------------------------------------------
-
-class TestDependencyGraph:
-    """验证 DEPENDENCY_GRAPH 结构与拓扑排序结果。"""
-
-    def test_app节点存在于依赖图(self):
-        """DEPENDENCY_GRAPH 必须包含 app 节点。"""
-        assert "app" in DEPENDENCY_GRAPH
-
-    def test_app无依赖(self):
-        """app 节点自身不依赖其他组件。"""
-        assert DEPENDENCY_GRAPH["app"] == []
-
-    def test_rootfs依赖app(self):
-        """rootfs 必须依赖 app（确保 .deb 先于 rootfs 构建）。"""
-        assert "app" in DEPENDENCY_GRAPH["rootfs"]
-
-    def test_构建image时app在rootfs之前(self):
-        """topo_sort(image) 中 app 的索引必须小于 rootfs 的索引。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "image")
-        assert "app" in order
-        assert "rootfs" in order
-        assert order.index("app") < order.index("rootfs")
-
-    def test_构建image时包含所有必要组件(self):
-        """构建 image 时，依赖链应包含 app、rootfs、boot、bootloader、kernel。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "image")
-        for component in ("app", "rootfs", "boot", "kernel", "bootloader", "image"):
-            assert component in order, f"{component} 应出现在 image 构建顺序中"
-
-    def test_构建rootfs时app在rootfs之前(self):
-        """topo_sort(rootfs) 中 app 必须先于 rootfs。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "rootfs")
-        assert "app" in order
-        assert order.index("app") < order.index("rootfs")
-
-    def test_构建rootfs时包含kernel但不含镜像组件(self):
-        """构建 rootfs 时，应包含 kernel 模块产物，但不包含刷写镜像组件。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "rootfs")
-        assert "kernel" in order
-        assert order.index("kernel") < order.index("rootfs")
-        for irrelevant in ("bootloader", "boot", "image"):
-            assert irrelevant not in order, f"{irrelevant} 不应出现在 rootfs 构建路径中"
-
-    def test_单独构建app只含app本身(self):
-        """topo_sort(app) 结果只包含 app 节点。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "app")
-        assert order == ["app"]
-
-    def test_构建kernel不含app(self):
-        """构建 kernel 时不需要 app 组件。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "kernel")
-        assert "app" not in order
-
-
-# ---------------------------------------------------------------------------
-# BuildEngine.build() app 分支测试
-# ---------------------------------------------------------------------------
-
-class TestBuildEngineApp:
-    """验证 BuildEngine 对 app 组件使用 AppBuilder。"""
-
-    def _make_config(self) -> dict:
-        return {
-            "board":    "test-board",
-            "product":  "default",
-            "variant":  "release",
-            "architecture": {
-                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
-            },
-            "platform": "rockchip",
-            "soc":      "rk3566",
-            "rootfs":   {"custom_packages": []},
-        }
-
-    def test_build_app组件调用AppBuilder_build_all(self, tmp_path):
-        """engine.build('app') 应创建 AppBuilder 并调用 build_all()。"""
-        config = self._make_config()
-
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-        ):
-            # 缓存始终认为需要重建
-            mock_cache_instance = MockCache.return_value
-            mock_cache_instance.is_up_to_date.return_value = False
-            mock_cache_instance.compute_hash.return_value = "abc123"
-            mock_cache_instance.target_dir = tmp_path / "target"
-
-            # AppBuilder.build_all 返回空字典
-            mock_app_builder_instance = MockAppBuilder.return_value
-            mock_app_builder_instance.build_all.return_value = {}
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("app")
-
-            # 断言 AppBuilder 被实例化
-            assert MockAppBuilder.called, "AppBuilder 应被实例化"
-            # 断言 build_all 被调用
-            mock_app_builder_instance.build_all.assert_called_once()
-
-    def test_build_app结果存入outputs(self, tmp_path):
-        """build_all 的返回值应存入 engine._outputs['app']。"""
-        config = self._make_config()
-        fake_deb = tmp_path / "hello_1.0.0_aarch64.deb"
-        fake_deb.touch()
-
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-        ):
-            mock_cache_instance = MockCache.return_value
-            mock_cache_instance.is_up_to_date.return_value = False
-            mock_cache_instance.compute_hash.return_value = "abc123"
-            mock_cache_instance.target_dir = tmp_path / "target"
-            mock_cache_instance.target_dir = tmp_path / "target"
-
-            mock_app_builder_instance = MockAppBuilder.return_value
-            mock_app_builder_instance.build_all.return_value = {"hello": fake_deb}
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("app")
-
-            assert engine._outputs.get("app") == {"hello": fake_deb}
-
-    def test_build_rootfs时不会直接构建app(self, tmp_path):
-        """构建 rootfs 时，app 组件也经由依赖图触发，AppBuilder 应被调用。"""
-        config = self._make_config()
-
-        call_log: list[str] = []
-
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-            patch("builder.engine.importlib") as mock_importlib,
-        ):
-            mock_cache_instance = MockCache.return_value
-            mock_cache_instance.is_up_to_date.return_value = False
-            mock_cache_instance.compute_hash.return_value = "abc123"
-            mock_cache_instance.target_dir = tmp_path / "target"
-
-            mock_app_builder_instance = MockAppBuilder.return_value
-            mock_app_builder_instance.build_all.return_value = {}
-
-            # rootfs 平台构建器 mock
-            mock_mod = MagicMock()
-            mock_mod.create_builder.return_value.build.return_value = {}
-            mock_importlib.import_module.return_value = mock_mod
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("rootfs")
-
-            # AppBuilder 应在 rootfs 构建前被调用
-            mock_app_builder_instance.build_all.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# BuildCache app 组件哈希测试
-# ---------------------------------------------------------------------------
-
-class TestFlashConfigGeneration:
-    """验证 BuildEngine 在 image 构建后生成 flash-config.json。"""
-
-    def test_image_build_generates_flash_config(self, tmp_path):
-        config = {
-            "board": "test-board", "product": "default", "variant": "release",
-            "architecture": {
-                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
-            },
-            "platform": "rockchip", "soc": "rk3566",
-            "flash_tool": "upgrade_tool",
-            "rootfs": {"custom_packages": []},
-            "partitions": {
-                "format": "gpt", "sector_size": 512,
-                "entries": [
-                    {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
-                    {"name": "rootfs", "offset": "0x40000", "size": "0x200000", "type": "ext4"},
-                ],
-            },
-        }
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-            patch("builder.engine.importlib") as mock_importlib,
-        ):
-            mock_cache = MockCache.return_value
-            mock_cache.is_up_to_date.return_value = False
-            mock_cache.compute_hash.return_value = "abc"
-            mock_cache.target_dir = tmp_path / "target" / "test-board" / "default" / "release"
-            mock_cache.target_dir.mkdir(parents=True)
-
-            mock_app = MockAppBuilder.return_value
-            mock_app.build_all.return_value = {}
-
-            mock_mod = MagicMock()
-            mock_mod.create_builder.return_value.build.return_value = {}
-            mock_importlib.import_module.return_value = mock_mod
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("image")
-
-            flash_json = mock_cache.target_dir / "flash-config.json"
-            assert flash_json.exists()
-            import json
-            data = json.loads(flash_json.read_text())
-            assert data["platform"] == "rockchip"
-            partition_names = [p["name"] for p in data["partitions"]]
-            assert "boot" in partition_names
-            assert "rootfs" in partition_names
-
-    def test_rootfs_build_does_not_generate_flash_config(self, tmp_path):
-        config = {
-            "board": "test-board", "product": "default", "variant": "release",
-            "architecture": {
-                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
-            },
-            "platform": "rockchip", "soc": "rk3566",
-            "rootfs": {"custom_packages": []},
-        }
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-            patch("builder.engine.importlib") as mock_importlib,
-        ):
-            mock_cache = MockCache.return_value
-            mock_cache.is_up_to_date.return_value = False
-            mock_cache.compute_hash.return_value = "abc"
-            mock_cache.target_dir = tmp_path / "target" / "test-board" / "default" / "release"
-            mock_cache.target_dir.mkdir(parents=True)
-
-            mock_app = MockAppBuilder.return_value
-            mock_app.build_all.return_value = {}
-
-            mock_mod = MagicMock()
-            mock_mod.create_builder.return_value.build.return_value = {}
-            mock_importlib.import_module.return_value = mock_mod
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("rootfs")
-
-            flash_json = mock_cache.target_dir / "flash-config.json"
-            assert not flash_json.exists()
-
-
-class TestCacheInjection:
-    """验证 BuildEngine 向 ComponentBuilder 注入 cache 引用。"""
-
-    def test_builder_receives_cache(self, tmp_path):
-        config = {
-            "board": "test-board", "product": "default", "variant": "release",
-            "architecture": {
-                "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
-            },
-            "platform": "rockchip", "soc": "rk3566",
-            "rootfs": {"custom_packages": []},
-        }
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.importlib") as mock_importlib,
-        ):
-            mock_cache = MockCache.return_value
-            mock_cache.is_up_to_date.return_value = False
-            mock_cache.compute_hash.return_value = "abc"
-
-            mock_builder = MagicMock()
-            mock_builder.build.return_value = {}
-            mock_mod = MagicMock()
-            mock_mod.create_builder.return_value = mock_builder
-            mock_importlib.import_module.return_value = mock_mod
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("kernel")
-
-            assert mock_builder.cache is mock_cache
-
-
-class TestBuildCacheApp:
-    """验证 BuildCache.compute_hash 对 app 组件的哈希行为。"""
-
-    def _make_cache(self, config: dict, tmpdir: str) -> BuildCache:
-        config.setdefault("architecture", {
-            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
-        })
-        cache = BuildCache.__new__(BuildCache)
-        cache.config = config
-        board = config["board"]
-        product = config.get("product", "default")
-        variant = config.get("variant", "release")
-        cache.target_dir = Path(tmpdir) / board / product / variant
-        cache.project_root = Path(tmpdir)
-        return cache
-
-    def test_app哈希可重复计算(self):
-        """相同配置下，app 组件哈希应每次一致（幂等性）。"""
-        config = {
-            "board": "test", "product": "default", "variant": "release",
-            "platform": "rockchip", "soc": "rk3566",
-            "rootfs": {"custom_packages": []},
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache = self._make_cache(config, tmpdir)
-            h1 = cache.compute_hash("app")
-            h2 = cache.compute_hash("app")
-            assert h1 == h2
-
-    def test_custom_packages变化导致哈希改变(self):
-        """custom_packages 列表变化时，app 哈希应发生变化。"""
-        config1 = {
-            "board": "test", "product": "default", "variant": "release",
-            "platform": "rockchip", "soc": "rk3566",
-            "rootfs": {"custom_packages": []},
-        }
-        config2 = {
-            "board": "test", "product": "default", "variant": "release",
-            "platform": "rockchip", "soc": "rk3566",
-            "rootfs": {"custom_packages": ["mypkg"]},
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            h1 = self._make_cache(config1, tmpdir).compute_hash("app")
-            h2 = self._make_cache(config2, tmpdir).compute_hash("app")
-            assert h1 != h2, "增加 custom_packages 条目后哈希应改变"
-
-    def test_app_yaml内容变化导致哈希改变(self, tmp_path):
-        """app.yaml 文件内容改变时，app 哈希应发生变化。"""
-        config = {
-            "board": "test", "product": "default", "variant": "release",
-            "platform": "rockchip", "soc": "rk3566",
-            "rootfs": {"custom_packages": ["mypkg"]},
-        }
-
-        # App 源路径始终相对显式 project_root，不依赖调用方当前工作目录。
-        app_dir = tmp_path / "components" / "app" / "mypkg"
-        app_dir.mkdir(parents=True)
-        app_yaml = app_dir / "app.yaml"
-
-        app_yaml.write_text("app:\n  name: mypkg\n  version: 1.0.0\n")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache = self._make_cache(config, tmpdir)
-            cache.project_root = tmp_path
-
-            h1 = cache.compute_hash("app")
-            app_yaml.write_text("app:\n  name: mypkg\n  version: 2.0.0\n")
-            second = self._make_cache(config, tmpdir)
-            second.project_root = tmp_path
-            h2 = second.compute_hash("app")
-
-        assert h1 != h2, "app.yaml 内容变更后哈希应改变"
-
-    def test_app哈希与kernel哈希独立(self):
-        """app 与 kernel 组件的哈希计算互不干扰。"""
-        config = {
-            "board": "test", "product": "default", "variant": "release",
-            "platform": "rockchip", "soc": "rk3566",
-            "rootfs": {"custom_packages": []},
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache = self._make_cache(config, tmpdir)
-            h_app = cache.compute_hash("app")
-            h_kernel = cache.compute_hash("kernel")
-            assert h_app != h_kernel, "app 与 kernel 哈希应不同"
-
-    def test_store_and_is_up_to_date_app组件(self):
-        """store 后，app 组件应判定为最新（is_up_to_date 返回 True）。"""
-        config = {
-            "board": "test", "product": "default", "variant": "release",
-            "platform": "rockchip", "soc": "rk3566",
-            "rootfs": {"custom_packages": []},
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache = self._make_cache(config, tmpdir)
-            assert not cache.is_up_to_date("app")
-            cache.store("app")
-            assert cache.is_up_to_date("app")
+from builder.artifacts import ArtifactSpec
+from builder.engine import BuildEngine
+from builder.graph import InputSpec, TaskPlan
+from builder.workspace import Target, WorkspaceContext
+
+
+def setup(tmp_path, monkeypatch):
+    context = WorkspaceContext(tmp_path, tmp_path, tmp_path / '.build', Target('board', 'default', 'release'))
+    engine = BuildEngine({'platform': 'rockchip', 'board': 'board', 'product': 'default', 'variant': 'release'}, context=context, output=MagicMock())
+    monkeypatch.setattr('builder.engine.DEPENDENCY_GRAPH', {'kernel': [], 'boot': ['kernel']})
+    events = []
+    engine.source.prepare_cache_inputs = lambda name, config: events.append(('prepare', name))
+
+    def plan(name):
+        events.append(('plan', name))
+        return TaskPlan(name, f'{name}-v1', (InputSpec.value('config', {}),),
+                        (ArtifactSpec(name, context.target_dir / name / f'{name}.img', allow_empty=False),),
+                        ('kernel',) if name == 'boot' else ())
+
+    engine._plan_component = plan
+    engine._get_artifact_names = lambda: {}
+
+    class Recipe:
+        def execute(self, plan):
+            assert self.context is context
+            events.append(('execute', plan.task_id))
+            work = context.build_root / 'work' / plan.task_id
+            work.mkdir(parents=True, exist_ok=True)
+            file = work / f'{plan.task_id}.img'
+            file.write_text(plan.task_id)
+            return {plan.task_id: file}
+
+    engine._get_builder = lambda name: Recipe()
+    return engine, events
+
+
+def test_先准备源码后查询计划且第二次跳过执行(tmp_path, monkeypatch):
+    engine, events = setup(tmp_path, monkeypatch)
+    engine.build('boot')
+    assert events == [('prepare', 'kernel'), ('plan', 'kernel'), ('execute', 'kernel'),
+                      ('prepare', 'boot'), ('plan', 'boot'), ('execute', 'boot')]
+    events.clear()
+    engine.build('boot')
+    assert not any(event[0] == 'execute' for event in events)
+    assert engine.cache.load('kernel').validate()
+    assert engine.cache.load('boot').validate()
+    engine.output.build_end.assert_called_with(success=True)
+
+
+def test_损坏依赖产物触发重建下游按实际结果复用(tmp_path, monkeypatch):
+    engine, events = setup(tmp_path, monkeypatch)
+    engine.build('boot')
+    (engine.context.target_dir / 'kernel/kernel.img').write_text('corrupt')
+    events.clear()
+    engine.build('boot')
+    assert ('execute', 'kernel') in events
+    assert ('execute', 'boot') not in events
+
+
+def test_强制构建且原子目录发布删除旧残留(tmp_path, monkeypatch):
+    engine, events = setup(tmp_path, monkeypatch)
+    engine.build('kernel')
+    stale = engine.context.target_dir / 'kernel/stale.img'
+    stale.write_text('old')
+    engine.build('kernel', force='kernel')
+    assert not stale.exists()
+    assert sum(event == ('execute', 'kernel') for event in events) == 2
+
+
+def test_失败或取消不发布成功manifest(tmp_path, monkeypatch):
+    engine, events = setup(tmp_path, monkeypatch)
+
+    class Cancel:
+        def execute(self, plan):
+            raise KeyboardInterrupt()
+
+    engine._get_builder = lambda _: Cancel()
+    with pytest.raises(KeyboardInterrupt):
+        engine.build('kernel')
+    assert engine.cache.load('kernel') is None
+    engine.output.build_end.assert_called_with(success=False)
+    assert engine.output.phase_end.call_args.kwargs['success'] is False
+
+
+def test_缺产物不替换上次完整结果(tmp_path, monkeypatch):
+    engine, events = setup(tmp_path, monkeypatch)
+    engine.build('kernel')
+    identity = engine.cache.load('kernel').identity
+
+    class Missing:
+        def execute(self, plan):
+            return {}
+
+    engine._get_builder = lambda _: Missing()
+    with pytest.raises(ValueError, match='缺少必需产物'):
+        engine.build('kernel', force='all')
+    assert engine.cache.load('kernel').identity == identity
+    assert engine.cache.load('kernel').validate()
+
+
+def test_纯查询不创建目录或输出文件(tmp_path):
+    context = WorkspaceContext(tmp_path, tmp_path, tmp_path / '.build', Target('board', 'default', 'release'))
+    engine = BuildEngine({'platform': 'rockchip', 'board': 'board', 'product': 'default', 'variant': 'release', 'kernel': {
+        'device_tree': {'directory': '', 'name': 'board'}}}, context=context)
+    assert engine.plan('kernel')[0].task_id == 'kernel'
+    assert engine.explain('kernel')[0]['status'] in {'miss', 'blocked'}
+    assert engine.output is None
+    assert not context.build_root.exists()
+
+
+def test_产物路径越界不能在暂存区之外写入(tmp_path, monkeypatch):
+    engine, _ = setup(tmp_path, monkeypatch)
+    source = tmp_path / 'data'
+    source.write_text('data')
+    engine._get_artifact_names = lambda: {('kernel', 'kernel'): '../outside'}
+    with pytest.raises(ValueError, match='产物文件名'):
+        engine._collect_artifacts(engine._plan_component('kernel'), {'kernel': source})
+    assert not (engine.context.target_dir / 'outside').exists()
+
+
+def test_配置目标与工作区不一致在执行前拒绝(tmp_path):
+    context = WorkspaceContext(tmp_path, tmp_path, tmp_path / '.build', Target('board', 'product', 'debug'))
+    with pytest.raises(ValueError, match='目标与工作区不一致'):
+        BuildEngine({'board': 'board', 'product': 'other', 'variant': 'debug'}, context=context)
+    assert not context.build_root.exists()
+
+
+def test_构造后调用方修改字典不改变已接受配置(tmp_path):
+    context = WorkspaceContext(tmp_path, tmp_path, tmp_path / '.build', Target('board', 'default', 'release'))
+    config = {'board': 'board', 'product': 'default', 'variant': 'release', 'kernel': {'defconfig': ['base']}}
+    engine = BuildEngine(config, context=context)
+    config['kernel']['defconfig'].append('mutation')
+    assert engine.config['kernel']['defconfig'] == ['base']

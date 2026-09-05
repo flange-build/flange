@@ -18,6 +18,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.builder.context import component_context
+
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
 PLATFORMS = {
@@ -79,6 +81,7 @@ def _config(platform: str) -> dict:
 
 
 def _run_compile(platform: str, tmp_path: Path) -> list[str]:
+    tmp_path = tmp_path.resolve()
     project_root = tmp_path / "project"
     (project_root / "components/recovery/overlay").mkdir(parents=True)
     (project_root / "components/recovery/overlay/hosts").write_text("127.0.0.1\n")
@@ -90,14 +93,18 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
 
     docker = MagicMock()
     source = MagicMock()
-    source.ensure_rootfs_tarball.return_value = Path("<TARBALL>")
+    source.ensure_download.return_value = Path("<TARBALL>")
 
     builder = _load(PLATFORMS[platform])(docker, source)
     cache = MagicMock()
     cache.target_dir = target
     cache.compute_phase_hash.return_value = "deadbeef"
     builder.cache = cache
+    builder.context = component_context(project_root, {"board": "golden-board"}, target_dir=target)
     builder.output = None
+    builder.app_report = MagicMock()
+    builder.app_report.validate.return_value = True
+    builder.app_report.runtime_debs_for.return_value = tuple((target / "app").glob("*.deb"))
 
     calls: list[str] = []
 
@@ -110,11 +117,16 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
                 r"/[^ ]*flange-recovery-[A-Za-z0-9_]+", "<TMP>", rendered)
             rendered = re.sub(
                 r"recovery-base-[0-9a-f]+", "recovery-base-<HASH>", rendered)
+            rendered = re.sub(r"<PROJECT>/.build/work/[^ ]+/recovery/run-[^ /]+", "<TMP>", rendered)
+            rendered = re.sub(r"base-[0-9a-f]+", "base-<HASH>", rendered)
+            rendered = re.sub(r"(base-<HASH>\.tar\.zst)\.[^ /]+\.tmp", r"\1.<TEMP>.tmp", rendered)
             calls.append(f"{name}: {rendered}")
             result = MagicMock()
             # recovery 分区 64MB，容量门禁保留 20%/至少 128MB —— 给一个
             # 真实救援系统量级的占用，否则门禁必然报"装不下"。
             result.stdout = "24\t<dir>"
+            if command and str(command[0]) == "tar" and "-cf" in command:
+                Path(command[command.index("-cf") + 1]).write_bytes(b"snapshot")
             # tar 是 mock 的，但后续步骤要往解出来的树里写文件
             if command and str(command[0]) == "tar" and "-C" in command:
                 dest = Path(str(command[command.index("-C") + 1]))

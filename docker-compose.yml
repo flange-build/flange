@@ -1,9 +1,12 @@
 services:
   build:
+    image: ${FLANGE_BUILD_IMAGE:-flange-build}
+    platform: linux/amd64
     build:
       context: .
       dockerfile: docker/Dockerfile
-    privileged: true
+    # 普通 App 编译无需特权；系统镜像命令按需显式启用。
+    privileged: ${FLANGE_BUILD_PRIVILEGED:-false}
     environment:
       CCACHE_DIR: /workspace/.build/cache/ccache
       CCACHE_MAXSIZE: 20G

@@ -7,6 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.builder.context import component_context
+from builder.rootfs_base import base_plan
+
 from builder.config.apps import gather_custom_packages
 from builder.docker import BuildError
 from builder.platforms.rockchip import ARTIFACT_NAMES
@@ -44,7 +47,7 @@ class FakeSource:
     def __init__(self, tarball: Path):
         self.tarball = tarball
 
-    def ensure_rootfs_tarball(self, config: dict) -> Path:
+    def ensure_download(self, *args, **kwargs) -> Path:
         return self.tarball
 
 
@@ -142,13 +145,16 @@ def test_phase1_injects_arch_specific_emulator(
     expected_source,
 ):
     monkeypatch.setattr(
-        "builder.rootfs.ChrootContext", FakeChroot)
+        "builder.rootfs_base.ChrootContext", FakeChroot)
     rootfs_dir = tmp_path / "rootfs"
     (rootfs_dir / "usr/bin").mkdir(parents=True)
     docker = FakeDocker()
     builder = RockchipRootfsBuilder(
         docker=docker, source=FakeSource(tmp_path / "base.tar.gz"))
 
+    builder.context = component_context(tmp_path)
+    builder._phase1_plan = base_plan({"architecture": {"userspace": arch},
+                                    "rootfs": {"packages": []}}, "rootfs", builder.context)
     builder._build_phase1(
         rootfs_dir,
         {

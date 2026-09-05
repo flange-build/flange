@@ -16,7 +16,9 @@ def test_demo_metadata_selects_armhf_rk3506_scons_overlay():
     assert spec.app.type == "amp"
     assert spec.app.arch == ["armhf"]
     assert spec.build.system == "scons"
-    assert spec.build.options["bsp"] == "rk3506-32"
+    from builder.config.registry import resolve_config
+    config = resolve_config("atk-rk3506b", "default", "debug")
+    assert config["amp"]["soc_project"] == "rk3506"
     assert (DEMO / "applications/SConscript").is_file()
 
 

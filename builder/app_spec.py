@@ -10,17 +10,26 @@ from typing import Dict, List, Optional
 import yaml
 
 from builder.actions import validate_actions
+from builder.config.schema import BOOLEAN, STRING, STRINGS, TEXT, ListOf, Map, Object, SchemaError
 
 
 # 允许的 App 类型。amp = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户
-# 应用），产物是固件而非装进 rootfs 的 deb，走独立构建路径（见 app.py
-# build_one 的 amp 分叉与 platforms/rockchip/amp.py 的应用槽位 staging）。
+# 应用），产物是固件而非装进 rootfs 的 deb，由系统 amp 组件驱动
+# platforms/rockchip/amp.py 中的应用槽位 staging。
 # staging = 只产出供下游 App 消费的交叉编译产物树（DESTDIR 安装树），不打
 # deb、不进 rootfs。用于把一条长编译链拆成可独立增量的单元：链上的中间环节
 # （如 GStreamer core/base 之于 Rockchip 插件）本身不交付任何包，只提供下游
 # configure 所需的头文件与库。
+SUPPORTED_APP_ARCHITECTURES = ("aarch64", "armhf")
+
 VALID_APP_TYPES = {
-    "exec", "service", "lib", "test", "vendor", "amp", "staging",
+    "exec",
+    "service",
+    "lib",
+    "test",
+    "vendor",
+    "amp",
+    "staging",
 }
 
 # 允许的构建系统取值。amp = 经 SDK（HAL Makefile / RT-Thread scons）+ mkimage
@@ -29,14 +38,16 @@ VALID_BUILD_SYSTEMS = {"none", "cmake", "meson", "make", "swift", "custom", "amp
 
 # vendor App 可映射进 deb control.tar.gz 的维护脚本与触发器。
 VALID_MAINTAINER_SCRIPT_NAMES = {
-    "preinst", "postinst", "prerm", "postrm", "triggers",
+    "preinst",
+    "postinst",
+    "prerm",
+    "postrm",
+    "triggers",
 }
 
 # build.apt_packages 仅接受 Debian 包名和可选架构限定符。允许 {arch}
 # 占位符在构建时替换成当前目标架构，拒绝以 '-' 开头的 APT 选项注入。
-APT_PACKAGE_PATTERN = re.compile(
-    r"^[a-z0-9][a-z0-9+.-]*(?::(?:\{arch\}|[a-z0-9][a-z0-9-]*))?$"
-)
+APT_PACKAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9+.-]*(?::(?:\{arch\}|[a-z0-9][a-z0-9-]*))?$")
 APP_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._-]*$")
 APP_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+.:~_-]*$")
 
@@ -48,6 +59,7 @@ class AppSpecError(ValueError):
 @dataclass
 class MaintainerInfo:
     """维护者信息。"""
+
     name: str
     email: str
 
@@ -55,6 +67,7 @@ class MaintainerInfo:
 @dataclass
 class BuildConfig:
     """构建配置段（build:）。"""
+
     # 构建系统，默认 none
     system: str = "none"
     # 传递给构建系统的选项，如 CMake 变量
@@ -77,6 +90,7 @@ class BuildConfig:
 @dataclass
 class SwiftBuildConfig:
     """Embedded Swift / SwiftPM 构建配置段（build.swift:）。"""
+
     # 是否启用 SwiftPM 构建
     enabled: bool = False
     # Swift package 路径（相对于 App 根目录）
@@ -94,6 +108,7 @@ class SwiftBuildConfig:
 @dataclass
 class SystemdConfig:
     """systemd 服务配置段（systemd:），仅 service 类型使用。"""
+
     # service unit 文件路径（相对于 App 目录）
     unit: str = ""
     # 是否随系统自动启动，默认 false
@@ -103,15 +118,22 @@ class SystemdConfig:
 @dataclass
 class LibConfig:
     """链接库配置段（lib:），仅 lib 类型使用。"""
-    # 头文件目录（相对于 App 目录）
-    headers_dir: str = "include/"
+
     # dev 包后缀，默认 -dev
     dev_suffix: str = "-dev"
 
 
 @dataclass
+class RuntimeConfig:
+    """exec/test 的目标运行路径；空值使用 /usr/bin/<app.name>。"""
+
+    executable: str = ""
+
+
+@dataclass
 class AppInfo:
     """app: 段的基本信息。"""
+
     name: str
     version: str
     description: str
@@ -124,10 +146,11 @@ class AppInfo:
 @dataclass
 class AppSpec:
     """app.yaml 的完整结构化表示。"""
+
     app: AppInfo
     maintainer: MaintainerInfo
-    # 能力声明（可选）
-    capabilities: List[str] = field(default_factory=list)
+    # 可执行程序运行契约；由部署与调试入口消费。
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     # 构建配置（可选，缺省值见 BuildConfig）
     build: BuildConfig = field(default_factory=BuildConfig)
     # 安装路径映射：源文件路径 -> 目标路径（可选，覆盖约定默认值）
@@ -148,11 +171,97 @@ class AppSpec:
     actions: Dict[str, List[str]] = field(default_factory=dict)
 
 
+APP_INFO_SCHEMA = Object(
+    dict.fromkeys(("name", "version", "description", "type"), STRING) | {"arch": STRINGS},
+    ("name", "version", "description", "type", "arch"),
+)
+MAINTAINER_SCHEMA = Object({"name": STRING, "email": STRING}, ("name", "email"))
+SYSTEMD_SCHEMA = Object({"unit": STRING, "auto_start": BOOLEAN}, ("unit",))
+LIB_SCHEMA = Object({"dev_suffix": STRING})
+SWIFT_SCHEMA = Object(
+    {
+        "enabled": BOOLEAN,
+        "package_path": STRING,
+        "product": TEXT,
+        "c_header": TEXT,
+        "target_triple": STRING,
+        "extra_flags": STRINGS,
+    }
+)
+BUILD_SCHEMA = Object(
+    {
+        "system": STRING,
+        "options": Map(TEXT),
+        "deb_outputs": STRINGS,
+        "staging": TEXT,
+        "deps": STRINGS,
+        "apt_packages": STRINGS,
+        "commands": ListOf(STRINGS),
+        "swift": SWIFT_SCHEMA,
+    }
+)
+APP_SCHEMA = Object(
+    {
+        "app": APP_INFO_SCHEMA,
+        "maintainer": MAINTAINER_SCHEMA,
+        "build": BUILD_SCHEMA,
+        "install": Map(STRING),
+        "systemd": SYSTEMD_SCHEMA,
+        "depends": STRINGS,
+        "conffiles": STRINGS,
+        "data_dirs": STRINGS,
+        "maintainer_scripts": Map(STRING),
+        "lib": LIB_SCHEMA,
+        "actions": Map(STRINGS),
+        "runtime": Object({"executable": TEXT}),
+    },
+    ("app", "maintainer"),
+)
+
+
+def _check(schema, value, path: str) -> None:
+    try:
+        schema.check(value, path)
+    except SchemaError as exc:
+        raise AppSpecError(str(exc)) from exc
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """拒绝重复键，避免后一个字段静默覆盖维护者看到的前一个字段。"""
+
+    def construct_mapping(self, node, deep=False):
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, str):
+                raise AppSpecError(f"app.yaml 第 {key_node.start_mark.line + 1} 行的键必须是字符串")
+            if key in mapping:
+                raise AppSpecError(f"app.yaml 第 {key_node.start_mark.line + 1} 行重复字段：{key}")
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
+
+def _validate_target_path(value: str, field: str) -> str:
+    """目标设备路径与宿主源码路径是不同域，禁止归一化掩盖错误。"""
+    _check(STRING, value, field)
+    path = PurePosixPath(value)
+    if (
+        not path.is_absolute()
+        or ".." in path.parts
+        or str(path) != value.rstrip("/")
+        or value == "/"
+        or any(c in value for c in "\0\r\n")
+    ):
+        raise AppSpecError(f"{field} 必须是规范的目标绝对路径，不能含 '..'、换行或根目录")
+    return value
+
+
 def _parse_app_info(raw: dict) -> AppInfo:
     """解析 app: 段，校验必填字段与类型合法性。"""
     if not isinstance(raw, dict):
         raise AppSpecError("app: 段必须是字典")
 
+    _check(APP_INFO_SCHEMA, raw, "app")
     # 校验必填字段
     for key in ("name", "version", "description", "type"):
         if key not in raw:
@@ -164,8 +273,7 @@ def _parse_app_info(raw: dict) -> AppInfo:
     version = raw["version"]
     if not APP_NAME_PATTERN.fullmatch(name):
         raise AppSpecError(
-            "app.name 只能包含字母、数字、加号、点、下划线和连字符，"
-            "且必须以字母或数字开头"
+            "app.name 只能包含字母、数字、加号、点、下划线和连字符，且必须以字母或数字开头"
         )
     if not APP_VERSION_PATTERN.fullmatch(version):
         raise AppSpecError(
@@ -176,18 +284,13 @@ def _parse_app_info(raw: dict) -> AppInfo:
     # 校验 type 取值
     app_type = raw["type"]
     if app_type not in VALID_APP_TYPES:
-        raise AppSpecError(
-            f"app.type 取值无效：'{app_type}'，允许值：{sorted(VALID_APP_TYPES)}"
-        )
+        raise AppSpecError(f"app.type 取值无效：'{app_type}'，允许值：{sorted(VALID_APP_TYPES)}")
 
-    # 解析 arch（可选，允许字符串或列表）
-    raw_arch = raw.get("arch", [])
-    if isinstance(raw_arch, str):
-        arch = [raw_arch]
-    elif isinstance(raw_arch, list):
-        arch = [str(a) for a in raw_arch]
-    else:
-        raise AppSpecError("app.arch 必须是字符串或列表")
+    arch = _parse_str_list_value(raw.get("arch", []), "app.arch")
+    if any(item not in SUPPORTED_APP_ARCHITECTURES for item in arch):
+        raise AppSpecError("app.arch 只允许 aarch64 或 armhf，请声明实际支持的目标架构")
+    if len(set(arch)) != len(arch):
+        raise AppSpecError("app.arch 不得重复")
 
     # 校验 arch 非空
     if not arch:
@@ -206,6 +309,7 @@ def _parse_maintainer(raw: dict) -> MaintainerInfo:
     """解析 maintainer: 段，校验必填字段。"""
     if not isinstance(raw, dict):
         raise AppSpecError("maintainer: 段必须是字典")
+    _check(MAINTAINER_SCHEMA, raw, "maintainer")
     for key in ("name", "email"):
         if key not in raw:
             raise AppSpecError(f"app.yaml 缺少必填字段：maintainer.{key}")
@@ -241,34 +345,23 @@ def _parse_maintainer_scripts(
         try:
             script_path.relative_to(app_root)
         except ValueError as exc:
-            raise AppSpecError(
-                f"maintainer_scripts.{name} 必须位于 App 目录内"
-            ) from exc
+            raise AppSpecError(f"maintainer_scripts.{name} 必须位于 App 目录内") from exc
         if not script_path.is_file():
-            raise AppSpecError(
-                f"maintainer_scripts.{name} 文件不存在：{script_path}"
-            )
+            raise AppSpecError(f"maintainer_scripts.{name} 文件不存在：{script_path}")
         try:
             content = script_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
-            raise AppSpecError(
-                f"maintainer_scripts.{name} 必须是 UTF-8 文本"
-            ) from exc
+            raise AppSpecError(f"maintainer_scripts.{name} 必须是 UTF-8 文本") from exc
         if name != "triggers" and not content.startswith("#!"):
-            raise AppSpecError(
-                f"maintainer_scripts.{name} 必须以 shebang 开头"
-            )
+            raise AppSpecError(f"maintainer_scripts.{name} 必须以 shebang 开头")
         scripts[name] = content
     return scripts
 
 
 def _parse_str_list_value(value, field: str) -> List[str]:
-    """把字符串或字符串列表解析成 List[str]。"""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        return [str(v) for v in value]
-    raise AppSpecError(f"{field} 必须是字符串或列表")
+    """解析严格字符串列表，不把错误的标量隐式转换。"""
+    _check(STRINGS, value, field)
+    return list(value)
 
 
 def _validate_relative_path(value, field: str, *, allow_empty: bool = False) -> str:
@@ -282,7 +375,7 @@ def _validate_relative_path(value, field: str, *, allow_empty: bool = False) -> 
         raise AppSpecError(f"{field} 不能为空")
 
     pure = PurePosixPath(path)
-    if pure.is_absolute() or ".." in pure.parts:
+    if pure.is_absolute() or ".." in pure.parts or any(c in path for c in "\0\r\n"):
         raise AppSpecError(f"{field} 必须是相对 app 根目录且不得包含 '..'")
     return path
 
@@ -293,6 +386,7 @@ def _parse_swift_build(raw, app_info: AppInfo, system: str) -> Optional[SwiftBui
         return None
     if not isinstance(raw, dict):
         raise AppSpecError("build.swift 必须是字典")
+    _check(SWIFT_SCHEMA, raw, "build.swift")
     if app_info.type != "amp" or system != "scons":
         raise AppSpecError("build.swift 仅允许用于 app.type=amp 且 build.system=scons")
 
@@ -304,7 +398,7 @@ def _parse_swift_build(raw, app_info: AppInfo, system: str) -> Optional[SwiftBui
         raw.get("package_path", "."),
         "build.swift.package_path",
     )
-    product = str(raw.get("product", "")).strip()
+    product = raw.get("product", "").strip()
     if enabled and not product:
         raise AppSpecError("build.swift.product 在 enabled=true 时必须是非空字符串")
 
@@ -313,7 +407,7 @@ def _parse_swift_build(raw, app_info: AppInfo, system: str) -> Optional[SwiftBui
         "build.swift.c_header",
         allow_empty=True,
     )
-    target_triple = str(raw.get("target_triple", "armv7-none-none-eabi")).strip()
+    target_triple = raw.get("target_triple", "armv7-none-none-eabi").strip()
     if enabled and not target_triple:
         raise AppSpecError("build.swift.target_triple 在 enabled=true 时必须是非空字符串")
 
@@ -335,46 +429,49 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
     if not isinstance(raw, dict):
         raise AppSpecError("build: 段必须是字典")
 
+    _check(BUILD_SCHEMA, raw, "build")
     system = raw.get("system", "none")
     if system not in VALID_BUILD_SYSTEMS:
         raise AppSpecError(
             f"build.system 取值无效：'{system}'，允许值：{sorted(VALID_BUILD_SYSTEMS)}"
         )
 
+    if system in {"amp", "scons"} and app_info.type != "amp":
+        raise AppSpecError("build.system=amp/scons 仅允许 app.type=amp")
     # 解析 options
     options = raw.get("options", {})
     if not isinstance(options, dict):
         raise AppSpecError("build.options 必须是字典")
-    options = {str(k): str(v) for k, v in options.items()}
+    _check(Map(TEXT), options, "build.options")
+    if options and (system not in {"cmake", "meson", "make", "swift"} or app_info.type == "amp"):
+        raise AppSpecError("build.options 在该构建系统没有消费者，请删除或改用支持的构建系统")
 
     staging = raw.get("staging", "")
-    if staging is not None and not isinstance(staging, str):
+    if not isinstance(staging, str):
         raise AppSpecError("build.staging 必须是字符串")
     staging = (staging or "").strip()
     if staging:
         path = PurePosixPath(staging)
         if path.is_absolute() or ".." in path.parts:
-            raise AppSpecError(
-                f"build.staging 必须是工作目录内的相对路径: {staging!r}")
+            raise AppSpecError(f"build.staging 必须是工作目录内的相对路径: {staging!r}")
     if app_info.type == "staging" and not staging:
-        raise AppSpecError(
-            "app.type=staging 必须声明 build.staging（供下游消费的产物树）")
+        raise AppSpecError("app.type=staging 必须声明 build.staging（供下游消费的产物树）")
     deb_outputs = _parse_str_list_value(
-        raw.get("deb_outputs", []), "build.deb_outputs",
+        raw.get("deb_outputs", []),
+        "build.deb_outputs",
     )
     if deb_outputs and (app_info.type != "vendor" or system != "custom"):
-        raise AppSpecError(
-            "build.deb_outputs 仅允许用于 app.type=vendor 且 "
-            "build.system=custom"
-        )
+        raise AppSpecError("build.deb_outputs 仅允许用于 app.type=vendor 且 build.system=custom")
     for filename in deb_outputs:
         path = PurePosixPath(filename)
-        if (path.name != filename or not filename.endswith(".deb")
-                or filename == ".deb"
-                or any(char in filename for char in "*?[]")):
+        if (
+            path.name != filename
+            or not filename.endswith(".deb")
+            or filename == ".deb"
+            or any(char in filename for char in "*?[]")
+        ):
             raise AppSpecError(
-                "build.deb_outputs 只能包含输出目录内的安全 .deb 文件名: "
-                f"{filename!r}"
+                f"build.deb_outputs 只能包含输出目录内的安全 .deb 文件名: {filename!r}"
             )
     deps = _parse_str_list_value(raw.get("deps", []), "build.deps")
     apt_packages = _parse_str_list_value(
@@ -388,19 +485,17 @@ def _parse_build(raw: dict, app_info: AppInfo) -> BuildConfig:
                 f"'{package}'，仅允许 Debian 包名及可选的 :{{arch}} 架构限定符"
             )
 
-    # 解析 commands（custom 专用）
-    commands = raw.get("commands", [])
-    if not isinstance(commands, list):
-        raise AppSpecError("build.commands 必须是列表")
-    parsed_commands = []
-    for i, cmd in enumerate(commands):
-        if isinstance(cmd, list):
-            parsed_commands.append([str(c) for c in cmd])
-        elif isinstance(cmd, str):
-            # 兼容单字符串写法
-            parsed_commands.append([cmd])
-        else:
-            raise AppSpecError(f"build.commands[{i}] 必须是字符串或列表")
+    # custom 命令只接受 argv 数组，不进行 shell 或字符串隐式展开。
+    parsed_commands = raw.get("commands", [])
+    _check(ListOf(STRINGS), parsed_commands, "build.commands")
+    if any(not command for command in parsed_commands):
+        raise AppSpecError("build.commands 每个命令必须是非空 argv 列表")
+    if parsed_commands and system != "custom":
+        raise AppSpecError(
+            "build.commands 仅由 build.system=custom 消费，请修改 system 或删除 commands"
+        )
+    if system == "custom" and not parsed_commands:
+        raise AppSpecError("build.system=custom 必须声明非空 build.commands")
 
     return BuildConfig(
         system=system,
@@ -418,8 +513,11 @@ def _parse_systemd(raw: dict) -> SystemdConfig:
     """解析 systemd: 段，填充默认值。"""
     if not isinstance(raw, dict):
         raise AppSpecError("systemd: 段必须是字典")
-    unit = str(raw.get("unit", ""))
-    auto_start = bool(raw.get("auto_start", False))
+    _check(SYSTEMD_SCHEMA, raw, "systemd")
+    unit = _validate_relative_path(raw.get("unit", ""), "systemd.unit")
+    if not unit.endswith(".service"):
+        raise AppSpecError("systemd.unit 必须指向 .service 文件")
+    auto_start = raw.get("auto_start", False)
     return SystemdConfig(unit=unit, auto_start=auto_start)
 
 
@@ -427,9 +525,11 @@ def _parse_lib(raw: dict) -> LibConfig:
     """解析 lib: 段，填充默认值。"""
     if not isinstance(raw, dict):
         raise AppSpecError("lib: 段必须是字典")
-    headers_dir = str(raw.get("headers_dir", "include/"))
-    dev_suffix = str(raw.get("dev_suffix", "-dev"))
-    return LibConfig(headers_dir=headers_dir, dev_suffix=dev_suffix)
+    _check(LIB_SCHEMA, raw, "lib")
+    dev_suffix = raw.get("dev_suffix", "-dev")
+    if not re.fullmatch(r"-[a-z0-9][a-z0-9+.-]*", dev_suffix):
+        raise AppSpecError("lib.dev_suffix 必须是以连字符开头的 Debian 包名后缀")
+    return LibConfig(dev_suffix=dev_suffix)
 
 
 def load_spec(app_dir: Path) -> AppSpec:
@@ -450,12 +550,14 @@ def load_spec(app_dir: Path) -> AppSpec:
         raise FileNotFoundError(f"app.yaml 不存在：{yaml_path}")
 
     try:
-        raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        raw = yaml.load(yaml_path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
     except yaml.YAMLError as exc:
         raise AppSpecError(f"app.yaml YAML 解析失败：{exc}") from exc
 
     if not isinstance(raw, dict):
         raise AppSpecError("app.yaml 顶层必须是字典")
+
+    _check(APP_SCHEMA, raw, str(yaml_path))
 
     # 解析必填顶层段
     if "app" not in raw:
@@ -465,15 +567,6 @@ def load_spec(app_dir: Path) -> AppSpec:
 
     app_info = _parse_app_info(raw["app"])
     maintainer = _parse_maintainer(raw["maintainer"])
-
-    # 解析可选段：capabilities
-    raw_caps = raw.get("capabilities", [])
-    if isinstance(raw_caps, str):
-        capabilities = [raw_caps]
-    elif isinstance(raw_caps, list):
-        capabilities = [str(c) for c in raw_caps]
-    else:
-        raise AppSpecError("capabilities 必须是字符串或列表")
 
     # 解析可选段：actions。与 Package 共用严格 argv 契约。
     try:
@@ -488,12 +581,19 @@ def load_spec(app_dir: Path) -> AppSpec:
     raw_install = raw.get("install", {})
     if not isinstance(raw_install, dict):
         raise AppSpecError("install: 段必须是字典")
-    install = {str(k): str(v) for k, v in raw_install.items()}
+    install = dict(raw_install)
+    for source, destination in install.items():
+        _validate_relative_path(source, f"install.{source}")
+        _validate_target_path(destination, f"install.{source}")
 
     # 解析可选段：systemd
     systemd: Optional[SystemdConfig] = None
     if "systemd" in raw:
+        if app_info.type != "service":
+            raise AppSpecError("systemd 仅允许 app.type=service")
         systemd = _parse_systemd(raw["systemd"])
+    if app_info.type == "service" and systemd is None:
+        raise AppSpecError("app.type=service 必须声明 systemd.unit")
 
     # 解析可选段：depends / conffiles / data_dirs
     def _parse_str_list(key: str) -> List[str]:
@@ -502,6 +602,16 @@ def load_spec(app_dir: Path) -> AppSpec:
     depends = _parse_str_list("depends")
     conffiles = _parse_str_list("conffiles")
     data_dirs = _parse_str_list("data_dirs")
+    for name, paths in (("conffiles", conffiles), ("data_dirs", data_dirs)):
+        for index, path in enumerate(paths):
+            _validate_target_path(path, f"{name}[{index}]")
+    if data_dirs and app_info.type != "service":
+        raise AppSpecError("data_dirs 仅由 app.type=service 的安装脚本消费")
+    runtime = RuntimeConfig(**raw.get("runtime", {}))
+    if "runtime" in raw and app_info.type not in {"exec", "test"}:
+        raise AppSpecError("runtime 仅允许 app.type=exec 或 test")
+    if runtime.executable:
+        _validate_target_path(runtime.executable, "runtime.executable")
 
     # vendor deb 可显式映射安装、升级、卸载脚本与 dpkg trigger。
     maintainer_scripts = _parse_maintainer_scripts(
@@ -513,12 +623,14 @@ def load_spec(app_dir: Path) -> AppSpec:
     # 解析可选段：lib
     lib: Optional[LibConfig] = None
     if "lib" in raw:
+        if app_info.type != "lib":
+            raise AppSpecError("lib 仅允许 app.type=lib")
         lib = _parse_lib(raw["lib"])
 
     return AppSpec(
         app=app_info,
         maintainer=maintainer,
-        capabilities=capabilities,
+        runtime=runtime,
         actions=actions,
         build=build,
         install=install,

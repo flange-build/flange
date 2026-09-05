@@ -73,7 +73,7 @@ def test_collect_returns_rootfs_key(builder, tmp_path):
     assert out == {"rootfs": tmp_path / "rootfs.img"}
 
 
-def test_get_base_cache_path_returns_none_without_cache(builder):
-    """无 cache 注入时 _get_base_cache_path 返回 None（compile 走非缓存分支）。"""
-    builder.cache = None
-    assert builder._get_base_cache_path({"board": "x"}) is None
+def test_base_cache_requires_explicit_context(builder):
+    """缺少上下文时不能猜测共享缓存位置。"""
+    with pytest.raises(RuntimeError, match="WorkspaceContext"):
+        builder._get_base_cache_path({"board": "x"})

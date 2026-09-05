@@ -1,14 +1,14 @@
 """DockerRunner 命令输出捕获测试。"""
 
 import subprocess
+import sys
 from io import StringIO
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from builder.docker import DockerRunner, BuildError
-from builder.output import BuildOutput, OutputLevel, strip_ansi
+from builder.output import BuildOutput, OutputLevel
 
 
 @pytest.fixture
@@ -37,6 +37,77 @@ def output_verbose(tmp_target):
 # ---------------------------------------------------------------------------
 
 class TestDockerRunnerCapture:
+    @pytest.mark.parametrize("level", [OutputLevel.NORMAL, OutputLevel.VERBOSE])
+    def test_宿主构建同样捕获工具双流(self, tmp_path, capsys, monkeypatch, level):
+        output = BuildOutput(tmp_path, level=level)
+        runner = DockerRunner(tmp_path, output=output)
+        runner._in_container = False
+        monkeypatch.setattr(runner, "environment_identity", lambda: "sha256:test")
+        # 用真实进程代替 Docker 传输，验证宿主路径没有绕开输出通道。
+        monkeypatch.setattr(runner, "compose_command", lambda *args: [
+            sys.executable, "-c",
+            "import sys; print('CC main.o'); print('linker progress', file=sys.stderr)",
+        ])
+        try:
+            runner.run(["make"], env={"PRIVATE_TOKEN": "should-not-be-logged"})
+        finally:
+            output.close()
+        terminal = capsys.readouterr()
+        log = (tmp_path / "build.log").read_text()
+        assert "CC main.o" in log and "linker progress" in log
+        assert ("CC main.o" in terminal.out) is (level == OutputLevel.VERBOSE)
+        assert terminal.err == ""
+        assert "should-not-be-logged" not in log
+        assert "\033" not in terminal.out + log
+
+    def test_环境配置失败保留Compose诊断(self, tmp_path, monkeypatch):
+        runner = DockerRunner(tmp_path)
+        error = subprocess.CalledProcessError(1, ["docker"], stderr="invalid compose property")
+        with patch("subprocess.run", side_effect=error):
+            with pytest.raises(BuildError, match="invalid compose property"):
+                runner.environment_identity()
+
+    def test_捕获模式保留Docker本身的失败(self, tmp_path, monkeypatch):
+        runner = DockerRunner(tmp_path)
+        runner._in_container = False
+        monkeypatch.setattr(runner, "environment_identity", lambda: "sha256:test")
+        result = subprocess.CompletedProcess(["docker"], 1, "", "permission denied")
+        with patch("subprocess.run", return_value=result):
+            with pytest.raises(BuildError, match="permission denied"):
+                runner.run(["make"], capture=True)
+
+    @pytest.mark.parametrize("cancelled", [False, True])
+    def test_命令失败或取消不能落为成功(self, output, cancelled):
+        class Terminal(StringIO):
+            def isatty(self):
+                return True
+
+        def command_lines():
+            if cancelled:
+                raise KeyboardInterrupt
+            yield "编译失败\n"
+
+        runner = DockerRunner(output=output)
+        proc = MagicMock()
+        proc.stdout = command_lines()
+        proc.returncode = -15 if cancelled else 2
+        output._tty = True
+        output._sticky_enabled = False
+        stream = Terminal()
+        expected = KeyboardInterrupt if cancelled else BuildError
+        with patch("sys.stdout", stream), \
+             patch.dict("os.environ", {"TERM": "xterm-256color"}, clear=True), \
+             patch("subprocess.Popen", return_value=proc), \
+             patch.object(output, "_spinner_loop"):
+            with pytest.raises(expected):
+                runner._run_with_capture(["make"], label="编译内核")
+        text = stream.getvalue()
+        assert "\033[32m" not in text
+        if cancelled:
+            assert "\033[33m  ⚠ 编译内核（已取消）" in text
+        else:
+            assert "\033[1;31m  ✖ 编译内核" in text
+
     def test_output_injected(self, output):
         runner = DockerRunner(output=output)
         assert runner.output is output

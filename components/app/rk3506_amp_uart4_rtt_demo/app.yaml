@@ -12,5 +12,3 @@ maintainer:
 
 build:
   system: scons
-  options:
-    bsp: rk3506-32

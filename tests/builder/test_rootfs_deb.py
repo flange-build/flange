@@ -17,6 +17,8 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from tests.builder.context import component_context
+
 from builder.platforms.rockchip.rootfs import RockchipRootfsBuilder
 
 
@@ -59,6 +61,7 @@ def _make_builder(tmp_path: Path) -> RockchipRootfsBuilder:
     cache = MagicMock()
     cache.target_dir = tmp_path / ".build/target/zero3w/default/release"
     builder.cache = cache
+    builder.context = component_context(tmp_path, {"board": "zero3w"})
     return builder
 
 
@@ -384,6 +387,7 @@ class TestRootfsDebInstallIntegration:
         work_dir.mkdir()
         isolated = {
             "_build_phase1": MagicMock(),
+            "_save_base_snapshot": MagicMock(),
             "_build_image": MagicMock(),
             "_install_extra_debs": MagicMock(),
             "_install_kernel_modules": MagicMock(),
@@ -396,9 +400,10 @@ class TestRootfsDebInstallIntegration:
         with patch.multiple(builder, **isolated), patch(
             "builder.rootfs.ChrootContext",
             return_value=chroot_ctx,
-        ) as chroot_cls, patch(
-            "builder.rootfs.tempfile.mkdtemp",
-            return_value=str(work_dir),
+        ) as chroot_cls, patch.object(
+            builder,
+            "work_dir",
+            return_value=work_dir,
         ):
             builder.compile(None, config)
         return chroot_cls
@@ -420,6 +425,10 @@ class TestRootfsDebInstallIntegration:
         deb_file.write_bytes(b"integration deb")
 
         builder = _make_builder(tmp_path)
+        builder.app_report = MagicMock()
+        builder.app_report.validate.return_value = True
+        builder.app_report.runtime_debs_for.return_value = (deb_file,)
+        config["rootfs"]["custom_packages"] = ["integrate"]
         chroot = MagicMock()
         chroot_ctx = MagicMock()
         chroot_ctx.__enter__.return_value = chroot
@@ -448,6 +457,9 @@ class TestRootfsDebInstallIntegration:
         monkeypatch.chdir(tmp_path)
 
         builder = _make_builder(tmp_path)
+        builder.app_report = MagicMock()
+        builder.app_report.validate.return_value = True
+        builder.app_report.runtime_debs_for.return_value = ()
         chroot_ctx = MagicMock()
         chroot_cls = self._compile_isolated(
             builder, config, tmp_path / "work", chroot_ctx)

@@ -3,8 +3,7 @@
 把"配置上的隐性约定"显式化，让早期错误（缺字段、布局不一致）在 lunch /
 load_current_config 阶段就抛出，而不是等到 build/flash 失败时才暴露。
 
-覆盖范围（按需扩展，不追求完备）：
-- recovery 子配置启用时，partitions.entries 必须包含 recovery 分区。
+结构规则集中在 schema.py；本模块校验引用、平台能力、账户和分区等跨字段语义。
 
 Recovery 子配置 schema（顶层 ``config["recovery"]``，全部可选；缺省即关闭）:
 
@@ -13,6 +12,8 @@ Recovery 子配置 schema（顶层 ``config["recovery"]``，全部可选；缺�
                                           # 进入构建图，分区表必须含 recovery
       packages: list[str]                 # recovery rootfs 内 apt 安装的包
                                           # （systemd / udev / parted 等）
+      install_recommends: bool          # 默认 False，进入共用 Phase 1 计划
+      extra_apt_sources: list[dict]       # 与 rootfs 相同的源/key 下载声明
       custom_packages: list[str]          # 装入 recovery rootfs 的 custom App
                                           # 名（构建系统会从 components/app/ 取）
       transport: str                      # 首版仅支持 "adb"（USB ADB）
@@ -27,10 +28,12 @@ Recovery 子配置 schema（顶层 ``config["recovery"]``，全部可选；缺�
 from __future__ import annotations
 
 import importlib
+import re
 from pathlib import PurePosixPath
 
 from builder.config.canonical import kernel_arch, kernel_device_tree
-from builder.config.jsonnet import ResolvedConfig
+from builder.config import schema as _schema
+from builder.config.schema import SchemaError, validate_system_shape
 from builder.partition.size import parse_size
 from builder.patches import normalize_excluded_patches
 from builder.platforms.spec import capability as platform_capability
@@ -41,85 +44,25 @@ class ConfigError(ValueError):
     """配置层面的硬错误：在构建/刷写之前就应阻断。"""
 
 
-_CANONICAL_TOP_LEVEL_FIELDS = {
-    "amp", "architecture", "board", "boot", "bootloader",
-    "device-tree-overlay", "external_app_dirs", "external_apps",
-    "flash_identity", "flash_spi_loader", "flash_storage", "flash_tool",
-    "jobs", "kernel", "kernel_bsp", "kernel_device", "packages",
-    "packages_meta", "partitions", "platform", "product", "products",
-    "recovery", "rkbin", "rootfs", "soc", "sources", "storage",
-    "variant", "variants", "vendor",
-}
-
+# 字段集合从结构 schema 派生，语义校验不维护第二份字段白名单。
 _CANONICAL_COMPONENT_FIELDS = {
-    "kernel": {
-        "boot_format", "boot_its", "config", "cross_compile", "defconfig",
-        "device_tree", "exclude_patches", "image", "oot_modules",
-        "oot_sources", "source",
-    },
-    "bootloader": {
-        "config", "cross_compile", "defconfig", "edk2_firmware",
-        "exclude_patches", "fip_board_dir", "fip_tool", "firehose_loader",
-        "fit_pack", "idbloader_method", "idbloader_selfbuilt_spl",
-        "riscv_toolchain", "source", "spi_patch", "spi_rawprogram", "target",
-        "toolchain", "trust_mode", "ufs_firehose", "ufs_provisions",
-    },
-    "boot": {"kernel_args", "overlays", "package_overlay_sources"},
-    "kernel_bsp": {"dtsi_dir", "source"},
-    "kernel_device": {"board_dts_path", "bsp_defconfig_path", "source"},
-    "rkbin": {
-        "ini_prefix", "loader_ini", "mkimage_chip", "source", "trust_ini",
-        "trust_ini_prefix",
-    },
-    "rootfs": {
-        "custom_packages", "default_locale", "default_session",
-        "default_user",
-        "disable_root_login", "emulator",
-        "extra_apt_sources", "extra_debs", "extra_firmware", "groups",
-        "gnome_remote_desktop_login", "image_format", "install_recommends",
-        "package_set",
-        "package_sets", "packages", "panel_firmware", "root_password",
-        "sha256", "ubi", "url", "users",
-    },
+    name: set(_schema.SYSTEM.fields[name].fields)
+    for name in ("kernel", "bootloader", "boot", "kernel_bsp", "kernel_device", "rkbin", "rootfs")
 }
-
-_CANONICAL_SOURCE_FIELDS = {
-    "url", "branch", "commit", "recurse_submodules", "local_path",
-}
-_CANONICAL_SOURCE_REF_FIELDS = {"name", "subpath"}
-_CANONICAL_DEVICE_TREE_FIELDS = {"directory", "name", "build_overlays"}
-_CANONICAL_OVERLAY_FIELDS = {
-    "intree", "vendor", "board", "package", "enabled",
-}
-_DOWNLOAD_FIELDS = {"url", "sha256", "filename"}
+_CANONICAL_SOURCE_FIELDS = set(_schema.SOURCE.fields)
+_CANONICAL_SOURCE_REF_FIELDS = set(_schema.SOURCE_REF.fields)
+_CANONICAL_DEVICE_TREE_FIELDS = set(_schema.SYSTEM.fields["kernel"].fields["device_tree"].fields)
+_CANONICAL_OVERLAY_FIELDS = set(_schema.SYSTEM.fields["boot"].fields["overlays"].fields)
+_DOWNLOAD_FIELDS = set(_schema.DOWNLOAD_FIELDS)
 _CANONICAL_OOT_SOURCE_FIELDS = {"source"}
-_CANONICAL_EXTRA_DEB_FIELDS = {
-    "name", "url", "sha256", "filename", "force_overwrite",
-    "hold_packages",
-}
-_CANONICAL_EXTRA_FIRMWARE_FIELDS = {
-    "name", "source", "files", "dest", "url", "sha256", "filename",
-}
+_CANONICAL_EXTRA_DEB_FIELDS = set(_schema.ROOTFS.fields["extra_debs"].item.fields)
+_CANONICAL_EXTRA_FIRMWARE_FIELDS = set(_schema.ROOTFS.fields["extra_firmware"].item.fields)
 
 
 def _reject_unknown(mapping: dict, allowed: set[str], path: str) -> None:
     unknown = sorted(set(mapping) - allowed)
     if unknown:
         raise ConfigError(f"{path} 包含未知字段: {', '.join(unknown)}")
-
-
-def _validate_no_nested_dimensions(value, path: str = "") -> None:
-    if isinstance(value, dict):
-        for key, child in value.items():
-            child_path = f"{path}.{key}" if path else key
-            if path and key in ("product", "variant"):
-                raise ConfigError(f"{child_path} 只允许出现在 canonical JSON 顶层")
-            if key.startswith("+") or ":" in key:
-                raise ConfigError(f"{child_path} 是未求值的旧配置操作字段")
-            _validate_no_nested_dimensions(child, child_path)
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            _validate_no_nested_dimensions(child, f"{path}[{index}]")
 
 
 def _validate_download_descriptor(descriptor, path: str) -> None:
@@ -129,13 +72,16 @@ def _validate_download_descriptor(descriptor, path: str) -> None:
     if not isinstance(descriptor.get("url"), str) or not descriptor["url"]:
         raise ConfigError(f"{path}.url 必须是非空字符串")
     sha256 = descriptor.get("sha256")
-    if (not isinstance(sha256, str) or len(sha256) != 64
-            or any(char not in "0123456789abcdefABCDEF" for char in sha256)):
+    if (
+        not isinstance(sha256, str)
+        or len(sha256) != 64
+        or any(char not in "0123456789abcdefABCDEF" for char in sha256)
+    ):
         raise ConfigError(f"{path}.sha256 必须是 64 位十六进制 SHA256")
     filename = descriptor.get("filename")
     if filename is not None and (
-            not isinstance(filename, str) or not filename
-            or PurePosixPath(filename).name != filename):
+        not isinstance(filename, str) or not filename or PurePosixPath(filename).name != filename
+    ):
         raise ConfigError(f"{path}.filename 必须是安全的单个文件名")
 
 
@@ -156,44 +102,68 @@ def _validate_source_ref(ref, sources: dict, path: str) -> None:
 
 def validate_canonical_config(config: dict) -> None:
     """校验 Jsonnet 求值后的 canonical JSON 契约。"""
-    _reject_unknown(config, _CANONICAL_TOP_LEVEL_FIELDS, "配置顶层")
-    _validate_no_nested_dimensions(config)
+    try:
+        validate_system_shape(config)
+    except SchemaError as exc:
+        raise ConfigError(str(exc)) from exc
 
     architecture = config.get("architecture") or {}
     if not isinstance(architecture, dict):
         raise ConfigError("architecture 必须是字典")
-    _reject_unknown(
-        architecture, {"userspace", "kernel", "bootloader"}, "architecture"
-    )
-    if not architecture.get("userspace") or architecture.get("kernel") not in (
-        "arm", "arm64",
-    ) or architecture.get("bootloader") not in ("arm", "arm64"):
-        raise ConfigError(
-            "architecture 必须声明 userspace，且 kernel/bootloader 须为 arm 或 arm64"
+    _reject_unknown(architecture, {"userspace", "kernel", "bootloader"}, "architecture")
+    if (
+        not architecture.get("userspace")
+        or architecture.get("kernel")
+        not in (
+            "arm",
+            "arm64",
         )
+        or architecture.get("bootloader") not in ("arm", "arm64")
+    ):
+        raise ConfigError("architecture 必须声明 userspace，且 kernel/bootloader 须为 arm 或 arm64")
 
+    if architecture["userspace"] not in {"aarch64", "armhf"}:
+        raise ConfigError("architecture.userspace 必须是 aarch64 或 armhf")
+    if config.get("jobs", 0) < 0:
+        raise ConfigError("jobs 必须是非负整数；0 表示自动选择并行数")
     sources = config.get("sources") or {}
     if not isinstance(sources, dict):
         raise ConfigError("sources 必须是字典")
     for name, descriptor in sources.items():
         if not isinstance(descriptor, dict):
             raise ConfigError(f"sources.{name} 必须是字典")
-        _reject_unknown(
-            descriptor, _CANONICAL_SOURCE_FIELDS, f"sources.{name}"
-        )
+        _reject_unknown(descriptor, _CANONICAL_SOURCE_FIELDS, f"sources.{name}")
         has_local = bool(descriptor.get("local_path"))
         has_remote = bool(descriptor.get("url"))
         if has_local == has_remote:
-            raise ConfigError(
-                f"sources.{name} 必须且只能声明 local_path 或 url 之一"
-            )
+            raise ConfigError(f"sources.{name} 必须且只能声明 local_path 或 url 之一")
         if has_local and any(
-            key in descriptor
-            for key in ("branch", "commit", "recurse_submodules")
+            key in descriptor for key in ("branch", "commit", "recurse_submodules")
         ):
-            raise ConfigError(
-                f"sources.{name}.local_path 与远端 revision 字段互斥"
-            )
+            raise ConfigError(f"sources.{name}.local_path 与远端 revision 字段互斥")
+
+    from builder.config.apps import AppSourceConfigError, validate_app_source_entry
+
+    for name, entry in config.get("external_apps", {}).items():
+        try:
+            validate_app_source_entry(name, entry)
+        except AppSourceConfigError as exc:
+            raise ConfigError(str(exc)) from exc
+    for namespace in ("sources", "external_apps"):
+        for name in config.get(namespace, {}):
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+._-]*", name):
+                raise ConfigError(f"{namespace}.{name} 的名称必须是单个资源标识，不能使用路径")
+
+    from builder.packages import _parse_opt_in
+
+    selections = []
+    for index, entry in enumerate(config.get("packages", [])):
+        try:
+            selections.append(_parse_opt_in(entry)[0])
+        except ValueError as exc:
+            raise ConfigError(f"packages[{index}]: {exc}") from exc
+    if len(selections) != len(set(selections)):
+        raise ConfigError("packages 不得重复选择同一个包，请合并为一项")
 
     for component_name, allowed in _CANONICAL_COMPONENT_FIELDS.items():
         component = config.get(component_name)
@@ -204,8 +174,7 @@ def validate_canonical_config(config: dict) -> None:
         _reject_unknown(component, allowed, component_name)
         source = component.get("source")
         if source is not None:
-            _validate_source_ref(
-                source, sources, f"{component_name}.source")
+            _validate_source_ref(source, sources, f"{component_name}.source")
 
     kernel = config.get("kernel") or {}
     for name, descriptor in (kernel.get("oot_sources") or {}).items():
@@ -219,7 +188,8 @@ def validate_canonical_config(config: dict) -> None:
         if not isinstance(device_tree, dict):
             raise ConfigError("kernel.device_tree 必须是字典")
         _reject_unknown(
-            device_tree, _CANONICAL_DEVICE_TREE_FIELDS,
+            device_tree,
+            _CANONICAL_DEVICE_TREE_FIELDS,
             "kernel.device_tree",
         )
         for field in ("directory", "name"):
@@ -234,6 +204,7 @@ def validate_canonical_config(config: dict) -> None:
         _reject_unknown(overlays, _CANONICAL_OVERLAY_FIELDS, "boot.overlays")
         try:
             from builder.dtb_overlay import build_overlays, runtime_overlays
+
             runtime = runtime_overlays(config)
             build = build_overlays(config)
         except (TypeError, ValueError) as exc:
@@ -245,23 +216,42 @@ def validate_canonical_config(config: dict) -> None:
         if merge_at_build and runtime:
             raise ConfigError(
                 f"平台 {platform} 不支持 boot 运行期 overlay；"
-                "请改用 kernel.device_tree.build_overlays")
+                "请改用 kernel.device_tree.build_overlays"
+            )
         if not merge_at_build and build:
             raise ConfigError(
-                f"平台 {platform} 不支持构建期 DTBO 合并；"
-                "请改用 boot.overlays.enabled")
+                f"平台 {platform} 不支持构建期 DTBO 合并；请改用 boot.overlays.enabled"
+            )
 
     bootloader = config.get("bootloader") or {}
-    for field in ("edk2_firmware", "toolchain", "riscv_toolchain",
-                  "ufs_firehose"):
+    for field in ("edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose"):
         descriptor = bootloader.get(field)
         if descriptor is not None:
             _validate_download_descriptor(descriptor, f"bootloader.{field}")
     for name, descriptor in (bootloader.get("ufs_provisions") or {}).items():
-        _validate_download_descriptor(
-            descriptor, f"bootloader.ufs_provisions.{name}")
+        _validate_download_descriptor(descriptor, f"bootloader.ufs_provisions.{name}")
 
     rootfs = config.get("rootfs") or {}
+    if "hostname" in rootfs:
+        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", rootfs["hostname"]):
+            raise ConfigError("rootfs.hostname 必须是有效的主机名，不能包含空格或换行")
+    users = rootfs.get("users", {})
+    default_user = rootfs.get("default_user")
+    if default_user is not None and default_user not in users:
+        raise ConfigError("rootfs.default_user 必须引用 rootfs.users 中已声明的用户")
+    if rootfs.get("disable_root_login") and not users:
+        raise ConfigError(
+            "rootfs.disable_root_login=true 时必须声明 rootfs.users，避免系统无法登录"
+        )
+    if rootfs.get("gnome_remote_desktop_login") and (
+        default_user is None or not users[default_user].get("password")
+    ):
+        raise ConfigError(
+            "rootfs.gnome_remote_desktop_login=true 需要具有密码的 rootfs.default_user"
+        )
+    recovery = config.get("recovery", {})
+    if "transport" in recovery and recovery["transport"] != "adb":
+        raise ConfigError("recovery.transport 当前只支持 adb，请修改为 adb")
     install_recommends = rootfs.get("install_recommends", False)
     if not isinstance(install_recommends, bool):
         raise ConfigError("rootfs.install_recommends 必须是布尔值")
@@ -270,24 +260,25 @@ def validate_canonical_config(config: dict) -> None:
         if not isinstance(default_locale, dict):
             raise ConfigError("rootfs.default_locale 必须是字典")
         _reject_unknown(
-            default_locale, {"lang", "language"},
+            default_locale,
+            {"lang", "language"},
             "rootfs.default_locale",
         )
         for field in ("lang", "language"):
             value = default_locale.get(field)
-            if (not isinstance(value, str) or not value
-                    or "\n" in value or "\r" in value):
-                raise ConfigError(
-                    f"rootfs.default_locale.{field} 必须是非空单行字符串")
+            if not isinstance(value, str) or not value or "\n" in value or "\r" in value:
+                raise ConfigError(f"rootfs.default_locale.{field} 必须是非空单行字符串")
     default_session = rootfs.get("default_session")
     if default_session is not None and (
-            not isinstance(default_session, str) or not default_session
-            or "\n" in default_session or "\r" in default_session
-            or PurePosixPath(default_session).name != default_session):
+        not isinstance(default_session, str)
+        or not default_session
+        or "\n" in default_session
+        or "\r" in default_session
+        or PurePosixPath(default_session).name != default_session
+    ):
         raise ConfigError("rootfs.default_session 必须是安全的非空 session 名")
     if default_session and rootfs.get("default_user") is None:
-        raise ConfigError(
-            "设置 rootfs.default_session 时 rootfs.default_user 不能为空")
+        raise ConfigError("设置 rootfs.default_session 时 rootfs.default_user 不能为空")
     if rootfs.get("url") is not None:
         _validate_download_descriptor(
             {key: rootfs[key] for key in _DOWNLOAD_FIELDS if key in rootfs},
@@ -299,25 +290,28 @@ def validate_canonical_config(config: dict) -> None:
             raise ConfigError(f"{path}.name 未声明")
         _reject_unknown(descriptor, _CANONICAL_EXTRA_DEB_FIELDS, path)
         _validate_download_descriptor(
-            {key: descriptor[key] for key in _DOWNLOAD_FIELDS
-             if key in descriptor},
+            {key: descriptor[key] for key in _DOWNLOAD_FIELDS if key in descriptor},
             path,
         )
         force_overwrite = descriptor.get("force_overwrite", False)
         if not isinstance(force_overwrite, bool):
             raise ConfigError(f"{path}.force_overwrite 必须是布尔值")
         hold_packages = descriptor.get("hold_packages", [])
-        if (not isinstance(hold_packages, list)
-                or any(not isinstance(package, str) or not package
-                       for package in hold_packages)):
+        if not isinstance(hold_packages, list) or any(
+            not isinstance(package, str) or not package for package in hold_packages
+        ):
             raise ConfigError(f"{path}.hold_packages 必须是非空字符串数组")
-    for index, apt_source in enumerate(rootfs.get("extra_apt_sources") or []):
-        if not isinstance(apt_source, dict) or not apt_source.get("name"):
-            raise ConfigError(f"rootfs.extra_apt_sources[{index}].name 未声明")
-        _validate_download_descriptor(
-            apt_source.get("key"),
-            f"rootfs.extra_apt_sources[{index}].key",
-        )
+    for component in ("rootfs", "recovery"):
+        apt_names = set()
+        for index, apt_source in enumerate(config.get(component, {}).get("extra_apt_sources", [])):
+            path = f"{component}.extra_apt_sources[{index}]"
+            name = apt_source["name"]
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+                raise ConfigError(f"{path}.name 必须是单个安全名称，不能包含路径")
+            if name in apt_names:
+                raise ConfigError(f"{path}.name 重复；请为每个 APT 源指定唯一名称")
+            apt_names.add(name)
+            _validate_download_descriptor(apt_source["key"], f"{path}.key")
     for index, descriptor in enumerate(rootfs.get("extra_firmware") or []):
         path = f"rootfs.extra_firmware[{index}]"
         if not isinstance(descriptor, dict) or not descriptor.get("name"):
@@ -327,14 +321,12 @@ def validate_canonical_config(config: dict) -> None:
         has_source = isinstance(source, dict)
         has_download = "url" in descriptor
         if has_source == has_download:
-            raise ConfigError(
-                f"{path} 必须且只能声明 source 或下载 descriptor 之一")
+            raise ConfigError(f"{path} 必须且只能声明 source 或下载 descriptor 之一")
         if has_source:
             _validate_source_ref(source, sources, f"{path}.source")
         else:
             _validate_download_descriptor(
-                {key: descriptor[key] for key in _DOWNLOAD_FIELDS
-                 if key in descriptor},
+                {key: descriptor[key] for key in _DOWNLOAD_FIELDS if key in descriptor},
                 path,
             )
 
@@ -385,41 +377,42 @@ def validate_build_routes(config: dict) -> None:
     kernel_arch_value = kernel_arch(config)
     if kernel_arch_value not in ("arm", "arm64"):
         raise ConfigError(
-            f"architecture.kernel 非法: {kernel_arch_value!r}"
-            "（须为 'arm' 或 'arm64'）")
+            f"architecture.kernel 非法: {kernel_arch_value!r}（须为 'arm' 或 'arm64'）"
+        )
     for field in ("cross_compile", "image"):
         value = kernel.get(field)
         if value is not None and (not isinstance(value, str) or not value):
             raise ConfigError(f"kernel.{field} 必须是非空字符串")
     dts_dir, _ = kernel_device_tree(config) if kernel else ("", "")
     if not isinstance(dts_dir, str):
-        raise ConfigError(
-            "kernel.device_tree.directory 必须是字符串（根目录使用空字符串）"
-        )
+        raise ConfigError("kernel.device_tree.directory 必须是字符串（根目录使用空字符串）")
     boot_format = kernel.get("boot_format", "extlinux")
     if boot_format not in ("extlinux", "fit"):
-        raise ConfigError(
-            f"kernel.boot_format 非法: {boot_format!r}（须为 extlinux 或 fit）")
+        raise ConfigError(f"kernel.boot_format 非法: {boot_format!r}（须为 extlinux 或 fit）")
     if boot_format == "fit" and not kernel.get("boot_its"):
-        raise ConfigError(
-            "kernel.boot_format=fit 时必须声明 kernel.boot_its")
+        raise ConfigError("kernel.boot_format=fit 时必须声明 kernel.boot_its")
+
+    from builder.kconfig import defconfig_targets, render_kconfig
+
+    for name in ("kernel", "bootloader"):
+        component = config.get(name, {})
+        try:
+            defconfig_targets(component.get("defconfig", []), f"{name}.defconfig")
+            render_kconfig(component.get("config", {}), f"{name}.config")
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
 
     bootloader = config.get("bootloader") or {}
     cross_compile = bootloader.get("cross_compile")
-    if cross_compile is not None and (
-        not isinstance(cross_compile, str) or not cross_compile
-    ):
+    if cross_compile is not None and (not isinstance(cross_compile, str) or not cross_compile):
         raise ConfigError("bootloader.cross_compile 必须是非空字符串")
 
-    rootfs_format = (config.get("rootfs") or {}).get(
-        "image_format", "ext4")
+    rootfs_format = (config.get("rootfs") or {}).get("image_format", "ext4")
     if rootfs_format not in ("ext4", "ubi"):
-        raise ConfigError(
-            f"rootfs.image_format 非法: {rootfs_format!r}（须为 ext4 或 ubi）")
+        raise ConfigError(f"rootfs.image_format 非法: {rootfs_format!r}（须为 ext4 或 ubi）")
     partition_format = (config.get("partitions") or {}).get("format", "gpt")
     if partition_format not in ("gpt", "mtd"):
-        raise ConfigError(
-            f"partitions.format 非法: {partition_format!r}（须为 gpt 或 mtd）")
+        raise ConfigError(f"partitions.format 非法: {partition_format!r}（须为 gpt 或 mtd）")
     # parameter、存储介质与 mtd index 属于平台语义，由平台扩展校验。
     for component, component_config in config.items():
         if not isinstance(component_config, dict):
@@ -469,8 +462,7 @@ def validate_ubi_geometry(config: dict) -> None:
     )
     missing = [field for field in required if ubi.get(field) is None]
     if missing:
-        raise ConfigError(
-            "rootfs.ubi 缺少 NAND/UBI 几何字段: " + ", ".join(missing))
+        raise ConfigError("rootfs.ubi 缺少 NAND/UBI 几何字段: " + ", ".join(missing))
     if "space_fixup" in ubi and not isinstance(ubi["space_fixup"], bool):
         raise ConfigError("rootfs.ubi.space_fixup 必须是 bool")
 
@@ -480,8 +472,7 @@ def validate_ubi_geometry(config: dict) -> None:
     vid = _positive_int(ubi["vid_hdr_offset"], "rootfs.ubi.vid_hdr_offset")
     leb = _positive_int(ubi["leb_size"], "rootfs.ubi.leb_size")
     max_leb = _positive_int(ubi["max_leb_count"], "rootfs.ubi.max_leb_count")
-    reserved = _positive_int(
-        ubi["reserved_pebs"], "rootfs.ubi.reserved_pebs", allow_zero=True)
+    reserved = _positive_int(ubi["reserved_pebs"], "rootfs.ubi.reserved_pebs", allow_zero=True)
     volume_size = _byte_size(ubi["volume_size"], "rootfs.ubi.volume_size")
 
     if peb % min_io:
@@ -489,16 +480,13 @@ def validate_ubi_geometry(config: dict) -> None:
     if min_io % subpage:
         raise ConfigError("rootfs.ubi.min_io_size 必须是 subpage_size 的整数倍")
     if vid % subpage or vid >= peb:
-        raise ConfigError(
-            "rootfs.ubi.vid_hdr_offset 必须按 subpage_size 对齐且小于 peb_size")
+        raise ConfigError("rootfs.ubi.vid_hdr_offset 必须按 subpage_size 对齐且小于 peb_size")
     data_offset = ((vid + 64 + min_io - 1) // min_io) * min_io
     expected_leb = peb - data_offset
     if leb != expected_leb:
-        raise ConfigError(
-            f"rootfs.ubi.leb_size={leb} 与几何推导值 {expected_leb} 不一致")
+        raise ConfigError(f"rootfs.ubi.leb_size={leb} 与几何推导值 {expected_leb} 不一致")
     if volume_size > max_leb * leb:
-        raise ConfigError(
-            "rootfs.ubi.volume_size 超过 max_leb_count × leb_size")
+        raise ConfigError("rootfs.ubi.volume_size 超过 max_leb_count × leb_size")
     _ = (reserved, peb)
 
 
@@ -542,16 +530,12 @@ def validate_recovery_partition(config: dict) -> None:
         )
 
     if entry.get("type") != "ext4":
-        raise ConfigError(
-            f"recovery 分区 type 必须为 ext4，当前: {entry.get('type')!r}"
-        )
+        raise ConfigError(f"recovery 分区 type 必须为 ext4，当前: {entry.get('type')!r}")
 
     for field in ("offset", "size"):
         value = entry.get(field)
         if not value:
-            raise ConfigError(
-                f"recovery 分区缺少 {field}；offset 与 size 都必须显式声明。"
-            )
+            raise ConfigError(f"recovery 分区缺少 {field}；offset 与 size 都必须显式声明。")
 
 
 def validate_rootfs_auto_grow(config: dict) -> None:
@@ -570,14 +554,12 @@ def validate_rootfs_auto_grow(config: dict) -> None:
             raise ConfigError("grow_on_first_boot 要求 rootfs 分区 type 为 ext4。")
         image_size = entry.get("image_size")
         if not image_size:
-            raise ConfigError(
-                "grow_on_first_boot=True 时 rootfs 分区必须声明 image_size。"
-            )
+            raise ConfigError("grow_on_first_boot=True 时 rootfs 分区必须声明 image_size。")
 
         image = parse_size(image_size)
         size = entry.get("size")
         if size == "remaining":
-            for later in entries[index + 1:]:
+            for later in entries[index + 1 :]:
                 if later.get("type") != "raw":
                     raise ConfigError(
                         "grow_on_first_boot=True 且 size=remaining 时，"
@@ -610,9 +592,7 @@ def validate_amp_common(config: dict) -> None:
             f"amp.enabled=True 但 amp.mode 非法: {mode!r}（须为 'hal' 或 'rt-thread'）。"
         )
     if not amp.get("soc_project"):
-        raise ConfigError(
-            "amp.enabled=True 但缺少 amp.soc_project（如 rk3566 应设为 'rk3568'）。"
-        )
+        raise ConfigError("amp.enabled=True 但缺少 amp.soc_project（如 rk3566 应设为 'rk3568'）。")
 
     memory = amp.get("memory") or {}
     memory_fields = (
@@ -626,13 +606,9 @@ def validate_amp_common(config: dict) -> None:
         "rpmsg_base",
         "rpmsg_size",
     )
-    missing_memory = [field for field in memory_fields
-                      if memory.get(field) is None]
+    missing_memory = [field for field in memory_fields if memory.get(field) is None]
     if missing_memory:
-        raise ConfigError(
-            "amp.enabled=True 但 amp.memory 缺少字段: "
-            + ", ".join(missing_memory))
-
+        raise ConfigError("amp.enabled=True 但 amp.memory 缺少字段: " + ", ".join(missing_memory))
 
 
 def validate_amp(config: dict) -> None:
@@ -653,16 +629,50 @@ def validate_platform(config: dict) -> None:
         return
     known = known_platforms()
     if platform not in known:
-        raise ConfigError(
-            f"未知平台 {platform!r}；已注册的平台: {', '.join(known)}")
+        raise ConfigError(f"未知平台 {platform!r}；已注册的平台: {', '.join(known)}")
+
+
+def validate_partition_values(config: dict) -> None:
+    """校验通用布局值；平台负责约束自身分区名称和路由。"""
+    partitions = config.get("partitions", {})
+    sector_size = partitions.get("sector_size", 512)
+    if sector_size not in {512, 4096}:
+        raise ConfigError("partitions.sector_size 必须是 512 或 4096 字节")
+    names = set()
+    for index, entry in enumerate(partitions.get("entries", [])):
+        field = f"partitions.entries[{index}]"
+        name = entry["name"]
+        if name in names:
+            raise ConfigError(f"{field}.name 重复：{name}")
+        names.add(name)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+            raise ConfigError(f"{field}.name 必须是安全的单个分区名")
+        if "offset" in entry:
+            try:
+                offset = int(entry["offset"], 0)
+                if offset < 0:
+                    raise ValueError("不能为负数")
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{field}.offset 必须是非负十进制或 0x 十六进制 sector 数"
+                ) from exc
+        for key in ("size", "image_size"):
+            if key not in entry or (key == "size" and entry[key] == "remaining"):
+                continue
+            try:
+                parse_size(entry[key])
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{field}.{key}: {exc}；请使用有效的 sector 数或 M/G 容量"
+                ) from exc
 
 
 def validate_config(config: dict) -> None:
     """对 FINAL_CONFIG 执行全部已知校验，第一项失败即抛 ConfigError。"""
-    if isinstance(config, ResolvedConfig):
-        validate_canonical_config(config)
+    validate_canonical_config(config)
     validate_platform(config)
     validate_build_routes(config)
+    validate_partition_values(config)
     validate_flash_identity(config)
     validate_recovery_partition(config)
     validate_rootfs_auto_grow(config)

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from builder.cache import BuildCache, DEPENDENCY_GRAPH, REQUIRED_ARTIFACTS
+from builder.graph import DEPENDENCY_GRAPH, component_enabled, topological_order
 from builder.engine import _topo_sort
 
 
@@ -46,109 +46,12 @@ class TestRecoveryDependencyGraph:
         assert "kernel" in order
         assert "app" in order
 
-    def test_required_artifacts_recovery(self):
-        assert REQUIRED_ARTIFACTS.get("recovery") == ["recovery.img"]
+    def test_disabled_recovery仍在图中但不参与执行(self):
+        assert not component_enabled({'recovery': {'enabled': False}}, 'recovery')
 
 
-# ── recovery 内容哈希 ──────────────────────────────────────────────
-
-
-def _make_cache(tmpdir: Path, **config_overrides) -> BuildCache:
-    config = {
-        "board": "test-board",
-        "product": "default",
-        "variant": "release",
-        "platform": "rockchip",
-        "soc": "rk3566",
-        "architecture": {
-            "userspace": "aarch64", "kernel": "arm64", "bootloader": "arm",
-        },
-        "rootfs": {
-            "url": "https://example.com/ubuntu-base.tar.gz",
-            "packages": ["systemd"],
-            "custom_packages": [],
-        },
-        "recovery": {
-            "enabled": True,
-            "packages": ["systemd", "udev"],
-            "custom_packages": ["adbd", "recoveryctl"],
-            "transport": "adb",
-            "protected_partitions": ["recovery"],
-        },
-        "partitions": {
-            "format": "gpt",
-            "entries": [
-                {"name": "boot", "offset": "0x8000", "size": "0x20000", "type": "ext4"},
-                {"name": "rootfs", "offset": "0x40000", "size": "0x200000", "type": "ext4"},
-                {"name": "recovery", "offset": "0x240000", "size": "0x100000", "type": "ext4"},
-            ],
-        },
-    }
-    config.update(config_overrides)
-    cache = BuildCache.__new__(BuildCache)
-    cache.config = config
-    cache.target_dir = tmpdir / "test-board" / "default" / "release"
-    cache._hash_cache = {}
-    return cache
-
-
-class TestRecoveryHash:
-    def test_recovery_hash_stable(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache1 = _make_cache(Path(tmpdir))
-            cache2 = _make_cache(Path(tmpdir))
-            assert cache1.compute_hash("recovery") == cache2.compute_hash("recovery")
-
-    def test_recovery_hash_changes_on_recovery_config(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache1 = _make_cache(Path(tmpdir))
-            h1 = cache1.compute_hash("recovery")
-
-            cache2 = _make_cache(Path(tmpdir))
-            cache2.config["recovery"]["packages"].append("strace")
-            h2 = cache2.compute_hash("recovery")
-            assert h1 != h2
-
-    def test_recovery_hash_changes_on_partition_size(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache1 = _make_cache(Path(tmpdir))
-            h1 = cache1.compute_hash("recovery")
-
-            cache2 = _make_cache(Path(tmpdir))
-            for entry in cache2.config["partitions"]["entries"]:
-                if entry["name"] == "recovery":
-                    entry["size"] = "0x80000"
-            h2 = cache2.compute_hash("recovery")
-            assert h1 != h2
-
-    def test_recovery_hash_propagates_kernel_change(self):
-        """kernel 上游哈希变化必须级联到 recovery（Merkle 链）。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache1 = _make_cache(Path(tmpdir), kernel={"defconfig": "a"})
-            h1 = cache1.compute_hash("recovery")
-
-            cache2 = _make_cache(Path(tmpdir), kernel={"defconfig": "b"})
-            h2 = cache2.compute_hash("recovery")
-            assert h1 != h2
-
-    def test_recovery_hash_propagates_app_change(self):
-        """app 组件哈希变化必须级联到 recovery。
-
-        recovery.custom_packages 增加包名时（recovery 自有 deb 列表变化），
-        app 子系统的并集变了 → app 组件哈希变 → Merkle 链上 recovery 哈希也变。
-        """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache1 = _make_cache(Path(tmpdir))
-            cache1.config["recovery"]["custom_packages"] = ["adbd"]
-            h1 = cache1.compute_hash("recovery")
-
-            cache2 = _make_cache(Path(tmpdir))
-            cache2.config["recovery"]["custom_packages"] = ["adbd", "recoveryctl"]
-            h2 = cache2.compute_hash("recovery")
-            assert h1 != h2
-
-    def test_recovery_hash_distinct_from_rootfs(self):
-        """recovery 与 rootfs 必须有不同的哈希命名空间。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache = _make_cache(Path(tmpdir))
-            assert cache.compute_hash("recovery") != cache.compute_hash("rootfs")
+def test_未知任务与依赖环给明确错误():
+    with pytest.raises(ValueError, match='未知构建任务'):
+        topological_order(DEPENDENCY_GRAPH, ['missing'])
+    with pytest.raises(ValueError, match='a → b → a'):
+        topological_order({'a': ['b'], 'b': ['a']}, ['a'])

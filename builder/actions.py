@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-VALID_ACTIONS = frozenset({"build", "deploy", "run", "debug", "log"})
+VALID_ACTIONS = frozenset({"build", "deploy", "run", "debug", "log", "test"})
 
 
 def validate_actions(
@@ -25,18 +25,15 @@ def validate_actions(
     for name, argv in raw.items():
         if not isinstance(name, str) or name not in VALID_ACTIONS:
             raise ValueError(
-                f"{field} 包含未知 action {name!r}；允许值："
-                f"{', '.join(sorted(VALID_ACTIONS))}"
+                f"{field} 包含未知 action {name!r}；允许值：{', '.join(sorted(VALID_ACTIONS))}"
             )
         if not isinstance(argv, list):
             raise ValueError(f"{field}.{name} 必须是非空字符串 argv 列表")
         if not argv:
             raise ValueError(f"{field}.{name} 的 argv 不能为空")
         for index, argument in enumerate(argv):
-            if not isinstance(argument, str) or not argument.strip():
-                raise ValueError(
-                    f"{field}.{name}[{index}] 必须是非空字符串"
-                )
+            if not isinstance(argument, str) or not argument.strip() or "\0" in argument:
+                raise ValueError(f"{field}.{name}[{index}] 必须是非空字符串")
         actions[name] = list(argv)
 
     return actions

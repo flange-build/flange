@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from builder.overlays import OverlaysBuilder
+from tests.builder.context import component_context
 
 
 class FakeDocker:
@@ -32,8 +33,15 @@ class FakeSource:
 
     def __init__(self, kernel_src: Path, overlay_src: Path):
         self._map = {"kernel": kernel_src, "device-tree-overlay": overlay_src}
+        self.ensure_calls: list[str] = []
+        self.source_path_calls: list[str] = []
 
     def ensure(self, component: str, config: dict) -> Path:
+        self.ensure_calls.append(component)
+        return self._map[component]
+
+    def source_path(self, component: str, config: dict) -> Path:
+        self.source_path_calls.append(component)
         return self._map[component]
 
 
@@ -90,6 +98,7 @@ def _builder(tmp_path: Path, *, kernel_src: Path, overlay_src: Path) -> Overlays
     docker = FakeDocker()
     source = FakeSource(kernel_src=kernel_src, overlay_src=overlay_src)
     b = OverlaysBuilder(docker, source)
+    b.context = component_context(Path.cwd() if Path.cwd().is_relative_to(tmp_path) else tmp_path)
     return b
 
 
@@ -144,6 +153,8 @@ def test_compile_invokes_cpp_then_dtc_with_correct_includes(tmp_path):
     assert out_path.parent == out["overlays"]
     assert out_path.name == "rk3568-i2c1.dtbo"
     assert out_path.read_bytes() == b"FAKE_DTBO"
+    assert b.source.ensure_calls == ["device-tree-overlay"]
+    assert b.source.source_path_calls == ["kernel"]
 
 
 def test_compile_unknown_stem_lists_candidates(tmp_path):

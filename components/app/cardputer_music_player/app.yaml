@@ -10,12 +10,6 @@ maintainer:
   name: flange
   email: flange@localhost
 
-capabilities:
-  - display
-  - audio
-  - keyboard
-  - network
-
 build:
   system: cmake
   apt_packages:

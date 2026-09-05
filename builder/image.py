@@ -16,11 +16,11 @@
 分区表 —— 这条规则对所有平台一致。
 """
 
-import tempfile
 from pathlib import Path
 
 from builder.base import ComponentBuilder
 from builder.docker import BuildError
+from builder.graph import component_enabled
 from builder.partition.layout import PartitionLayout, ResolvedPartition
 
 
@@ -61,7 +61,7 @@ class GptImageBuilder(ComponentBuilder):
         return {"image": self._raw_img}
 
     def compile(self, src_dir: Path, config: dict):
-        self._work_dir = Path(tempfile.mkdtemp(prefix="flange-image-"))
+        self._work_dir = self.work_dir()
         self._sector = self._sector_size(config)
         # 几何解析只在这一处发生：config 按 512B 声明，换算到目标介质的逻辑
         # 块大小由 PartitionLayout 统一完成。
@@ -70,9 +70,7 @@ class GptImageBuilder(ComponentBuilder):
 
         total_bytes = (layout.total_sectors + 2048) * self._sector
         raw_img = self._work_dir / "raw.img"
-        self._status(
-            f"创建空镜像 ({total_bytes // (1024 * 1024)}MB, "
-            f"扇区 {self._sector})...")
+        self._status(f"创建空镜像 ({total_bytes // (1024 * 1024)}MB, 扇区 {self._sector})...")
         self.docker.run(["truncate", "-s", str(total_bytes), str(raw_img)])
 
         self._write_gpt(raw_img, entries)
@@ -89,21 +87,25 @@ class GptImageBuilder(ComponentBuilder):
         几何解析只在这一处发生 —— 消费方拿到的是数字，不再各自解析
         `partitions.entries` 里的字符串。
         """
-        return PartitionLayout.from_config(config).for_sector_size(
-            self._sector_size(config))
+        return PartitionLayout.from_config(config).for_sector_size(self._sector_size(config))
 
     def _sector_size(self, config: dict) -> int:
         """目标逻辑块大小。"""
-        return int(
-            (config.get("partitions") or {}).get(
-                "sector_size", self.SECTOR_SIZE))
+        return int((config.get("partitions") or {}).get("sector_size", self.SECTOR_SIZE))
 
     def _partition_images(self, config: dict) -> dict:
         """分区名 → 产物相对路径。平台可按配置路由（UBI / recovery 开关等）。"""
-        return dict(self.PARTITION_IMAGES)
+        return {
+            name: path
+            for name, path in self.PARTITION_IMAGES.items()
+            if component_enabled(config, name)
+        }
 
     def _gpt_partition_ops(
-        self, entry: ResolvedPartition, gpt_index: int, device: str,
+        self,
+        entry: ResolvedPartition,
+        gpt_index: int,
+        device: str,
     ) -> list[list[str]]:
         """该分区在 mkpart 之后的额外 GPT 操作。
 
@@ -111,8 +113,7 @@ class GptImageBuilder(ComponentBuilder):
         `root=PARTUUID=` 引用）。启动固件 quirk 由平台覆写补充。
         """
         if entry.name == "rootfs" and self.ROOTFS_PARTUUID:
-            return [["sfdisk", "--part-uuid", device,
-                     str(gpt_index), self.ROOTFS_PARTUUID]]
+            return [["sfdisk", "--part-uuid", device, str(gpt_index), self.ROOTFS_PARTUUID]]
         return []
 
     # ------------------------------------------------------------------
@@ -130,8 +131,7 @@ class GptImageBuilder(ComponentBuilder):
         gpt_entries = [e for e in entries if not e.is_raw]
         if self._sector == self.FLANGE_SECTOR:
             self._status("写 GPT 分区表...")
-            self.docker.run(
-                ["parted", "-s", str(raw_img), "mklabel", "gpt"])
+            self.docker.run(["parted", "-s", str(raw_img), "mklabel", "gpt"])
             for gpt_index, entry in enumerate(gpt_entries, start=1):
                 for command in self._mkpart_ops(entry, gpt_index, str(raw_img)):
                     self.docker.run(command)
@@ -140,9 +140,7 @@ class GptImageBuilder(ComponentBuilder):
         self._status(f"写 GPT 分区表（loop -b {self._sector} + parted）...")
         commands = ["parted -s $LOOP mklabel gpt"]
         for gpt_index, entry in enumerate(gpt_entries, start=1):
-            commands.extend(
-                " ".join(op)
-                for op in self._mkpart_ops(entry, gpt_index, "$LOOP"))
+            commands.extend(" ".join(op) for op in self._mkpart_ops(entry, gpt_index, "$LOOP"))
         script = (
             f"set -e; LOOP=$(losetup -b {self._sector} -f --show {raw_img}); "
             f"trap 'losetup -d $LOOP' EXIT; " + "; ".join(commands)
@@ -150,18 +148,23 @@ class GptImageBuilder(ComponentBuilder):
         self.docker.run_privileged(["sh", "-c", script])
 
     def _mkpart_ops(
-        self, entry: ResolvedPartition, gpt_index: int, device: str,
+        self,
+        entry: ResolvedPartition,
+        gpt_index: int,
+        device: str,
     ) -> list[list[str]]:
         """一个分区的 mkpart 及其后续 GPT 操作。"""
         start = entry.offset_sectors * self._sector
         end = start + entry.size_sectors * self._sector - 1
-        ops = [["parted", "-s", device, "mkpart",
-                entry.label, entry.type, f"{start}B", f"{end}B"]]
+        ops = [["parted", "-s", device, "mkpart", entry.label, entry.type, f"{start}B", f"{end}B"]]
         ops.extend(self._gpt_partition_ops(entry, gpt_index, device))
         return ops
 
     def _write_partitions(
-        self, raw_img: Path, entries: list, config: dict,
+        self,
+        raw_img: Path,
+        entries: list,
+        config: dict,
     ) -> None:
         """按 entries 顺序把各分区镜像 dd 到对应偏移。"""
         image_map = self._partition_images(config)
@@ -172,26 +175,29 @@ class GptImageBuilder(ComponentBuilder):
                 continue  # userdata 等无镜像的分区
             image_path = target_dir / image_rel
             if not image_path.exists():
-                self._status(f"跳过 {entry.name}: {image_path} 不存在")
-                continue
+                raise BuildError(f"启用分区 {entry.name} 的产物缺失: {image_path}")
             self._ensure_partition_image_fits(image_path, entry)
             offset_sectors = entry.offset_sectors
             self._status(f"dd {image_rel} → sector {offset_sectors}")
-            self.docker.run([
-                "dd",
-                f"if={image_path}",
-                f"of={raw_img}",
-                f"seek={offset_sectors}",
-                # sparse：rootfs.img 声明尺寸远大于实占（ext4 实测 8GiB 声明
-                # 只用 2.7GiB），写全零块既慢又让 raw.img 失去稀疏性。
-                # notrunc 保证不截断已写入的 GPT 与前序分区。
-                "conv=notrunc,sparse",
-                f"bs={self._sector}",
-                "status=none",
-            ])
+            self.docker.run(
+                [
+                    "dd",
+                    f"if={image_path}",
+                    f"of={raw_img}",
+                    f"seek={offset_sectors}",
+                    # sparse：rootfs.img 声明尺寸远大于实占（ext4 实测 8GiB 声明
+                    # 只用 2.7GiB），写全零块既慢又让 raw.img 失去稀疏性。
+                    # notrunc 保证不截断已写入的 GPT 与前序分区。
+                    "conv=notrunc,sparse",
+                    f"bs={self._sector}",
+                    "status=none",
+                ]
+            )
 
     def _ensure_partition_image_fits(
-        self, image_path: Path, entry: ResolvedPartition,
+        self,
+        image_path: Path,
+        entry: ResolvedPartition,
     ) -> None:
         """确保分区镜像不超过初始 GPT 分区大小。"""
         max_bytes = entry.size_sectors * self._sector
@@ -201,4 +207,3 @@ class GptImageBuilder(ComponentBuilder):
                 f"{entry.name} 镜像 {image_bytes} bytes 超过初始分区大小 "
                 f"{max_bytes} bytes，请增大 image_size 或分区 size。"
             )
-

@@ -22,7 +22,7 @@ from typing import Optional
 
 import yaml
 
-from builder.app_spec import APP_VERSION_PATTERN
+from builder.app_spec import APP_VERSION_PATTERN, SUPPORTED_APP_ARCHITECTURES
 
 # 模板目录（与本文件同级的 templates/ 子目录）
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -33,11 +33,11 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 _VALID_COMBINATIONS: set[tuple[str, str]] = {
     # exec
-    ("exec",    "none"),
-    ("exec",    "cmake"),
-    ("exec",    "meson"),
-    ("exec",    "make"),
-    ("exec",    "swift"),
+    ("exec", "none"),
+    ("exec", "cmake"),
+    ("exec", "meson"),
+    ("exec", "make"),
+    ("exec", "swift"),
     # service
     ("service", "none"),
     ("service", "cmake"),
@@ -45,15 +45,15 @@ _VALID_COMBINATIONS: set[tuple[str, str]] = {
     ("service", "make"),
     ("service", "swift"),
     # lib（不支持 none / swift）
-    ("lib",     "cmake"),
-    ("lib",     "meson"),
-    ("lib",     "make"),
+    ("lib", "cmake"),
+    ("lib", "meson"),
+    ("lib", "make"),
     # test（仅 none）
-    ("test",    "none"),
+    ("test", "none"),
     # amp（协处理器固件）：amp=hal（CMake 引用 HAL SDK），scons=rt-thread
     # （叠到 RT-Thread BSP 模板的轻量 overlay）
-    ("amp",     "amp"),
-    ("amp",     "scons"),
+    ("amp", "amp"),
+    ("amp", "scons"),
 }
 
 
@@ -94,6 +94,7 @@ class AppScaffold:
         description: str = "",
         embedded_swift: bool = False,
         show_registration_hint: bool = True,
+        arch: str = "aarch64",
     ) -> Path:
         """生成 App 工程目录。
 
@@ -109,6 +110,7 @@ class AppScaffold:
             description:  描述字符串，默认空
             embedded_swift: amp+scons 专用；生成 SwiftPM static library 骨架
             show_registration_hint: 是否输出仓库外 registry 注册提示
+            arch: 用户态架构，由 CLI 默认取当前工作区 target
 
         返回：
             已创建的 App 目录路径（Path）
@@ -118,12 +120,12 @@ class AppScaffold:
         """
         # 1. 参数校验
         self._validate(name, app_type, build_system, version)
+        if arch not in SUPPORTED_APP_ARCHITECTURES:
+            raise ScaffoldError(f"未知用户态架构：{arch}")
         if embedded_swift and (app_type, build_system) != ("amp", "scons"):
             raise ScaffoldError("embedded_swift 仅支持 type=amp 且 build_system=scons")
         if target_dir is not None and parent_dir is not None:
-            raise ScaffoldError(
-                "target_dir 与 parent_dir 不能同时指定，请二选一"
-            )
+            raise ScaffoldError("target_dir 与 parent_dir 不能同时指定，请二选一")
 
         # 2. 确定目标目录
         if target_dir is not None:
@@ -138,15 +140,17 @@ class AppScaffold:
 
         # 3. 构建模板变量映射
         variables = self._make_variables(
-            name, app_type, build_system, version, description, embedded_swift)
+            name, app_type, build_system, version, description, embedded_swift
+        )
+        variables["arch"] = arch
 
         # 4. 渲染并写入文件
         try:
             dest.mkdir(parents=True, exist_ok=False)
             self._render_app_yaml(dest, variables)
             self._render_type_templates(
-                dest, app_type, build_system, variables,
-                embedded_swift=embedded_swift)
+                dest, app_type, build_system, variables, embedded_swift=embedded_swift
+            )
         except Exception:
             # 出错时清理已创建目录，保证原子性
             if dest.exists():
@@ -169,12 +173,11 @@ class AppScaffold:
         同时给出 ``external_apps`` 与 ``external_app_dirs`` 两种示例片段。
         """
         import os as _os
+
         # 用 realpath 比较：在 macOS 上 /var 是 /private/var 的符号链接，
         # .resolve() 在路径不存在的中间段行为不稳，realpath 能更一致地展平前缀。
         # 拼 os.sep 避免 "/a/apps" 被误匹配到 "/a/app" 下。
-        default_prefix = (
-            _os.path.realpath(str(self._root / "components" / "app")) + _os.sep
-        )
+        default_prefix = _os.path.realpath(str(self._root / "components" / "app")) + _os.sep
         abs_dest_str = _os.path.realpath(str(dest))
         if abs_dest_str.startswith(default_prefix):
             return None
@@ -187,13 +190,13 @@ class AppScaffold:
             "以下任一片段（择一即可）：",
             "",
             "  # 方式 A：external_apps 显式注册单个 App",
-            "  \"external_apps\": {",
-            f"      \"{name}\": {{\"local_path\": \"{abs_dest_str}\"}},",
+            '  "external_apps": {',
+            f'      "{name}": {{"local_path": "{abs_dest_str}"}},',
             "  },",
             "",
             "  # 方式 B：external_app_dirs 把整个父目录加入搜索路径",
-            "  \"external_app_dirs\": [",
-            f"      \"{parent_str}\",",
+            '  "external_app_dirs": [',
+            f'      "{parent_str}",',
             "  ],",
             "",
             "详见 docs/app-architecture.md。",
@@ -216,25 +219,20 @@ class AppScaffold:
             raise ScaffoldError("name 不能为空")
         # 名称只允许字母、数字、连字符、下划线
         import re
-        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', name):
+
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
             raise ScaffoldError(
-                f"name 包含非法字符：'{name}'，仅允许字母、数字、'-'、'_'，"
-                "且必须以字母或数字开头"
+                f"name 包含非法字符：'{name}'，仅允许字母、数字、'-'、'_'，且必须以字母或数字开头"
             )
-        if not isinstance(version, str) or not APP_VERSION_PATTERN.fullmatch(
-            version
-        ):
+        if not isinstance(version, str) or not APP_VERSION_PATTERN.fullmatch(version):
             raise ScaffoldError("version 包含非法字符")
 
         if (app_type, build_system) not in _VALID_COMBINATIONS:
-            valid_systems = sorted(
-                bs for (at, bs) in _VALID_COMBINATIONS if at == app_type
-            )
+            valid_systems = sorted(bs for (at, bs) in _VALID_COMBINATIONS if at == app_type)
             if not valid_systems:
                 raise ScaffoldError(f"不支持的 App 类型：'{app_type}'")
             raise ScaffoldError(
-                f"类型 '{app_type}' 不支持构建系统 '{build_system}'，"
-                f"允许值：{valid_systems}"
+                f"类型 '{app_type}' 不支持构建系统 '{build_system}'，允许值：{valid_systems}"
             )
 
     @staticmethod
@@ -250,12 +248,12 @@ class AppScaffold:
         # 将 name 中的连字符替换为下划线作为 C 标识符
         name_ident = name.replace("-", "_")
         return {
-            "name":         name,
-            "name_upper":   name_ident.upper(),
-            "name_ident":   name_ident,
-            "version":      version,
-            "description":  description or f"{name} App",
-            "type":         app_type,
+            "name": name,
+            "name_upper": name_ident.upper(),
+            "name_ident": name_ident,
+            "version": version,
+            "description": description or f"{name} App",
+            "type": app_type,
             "build_system": build_system,
             "embedded_swift": "true" if embedded_swift else "false",
         }
@@ -373,14 +371,13 @@ class PackageScaffold:
         build_system: str = "cmake",
         version: str = "0.1.0",
         description: str = "",
+        arch: str = "aarch64",
     ) -> Path:
         """在 ``parent_dir/name`` 创建 Package 与内嵌 vendor App。"""
         import re
 
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
-            raise ScaffoldError(
-                "Package 名称必须是 kebab-case 小写字母、数字和连字符"
-            )
+            raise ScaffoldError("Package 名称必须是 kebab-case 小写字母、数字和连字符")
 
         dest = Path(parent_dir).expanduser().resolve() / name
         if dest.exists():
@@ -396,6 +393,7 @@ class PackageScaffold:
                 version=version,
                 description=description,
                 show_registration_hint=False,
+                arch=arch,
             )
             package = (
                 '"""Package 清单。"""\n\n'

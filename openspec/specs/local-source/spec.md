@@ -4,75 +4,47 @@
 
 定义 `local_path` 源码模式的语义：开发者把某个组件指向自己本机正在改的源码树
 时，框架在**源码处理**与**缓存决策**两侧分别该做什么。
-
 ## Requirements
-
 ### Requirement: local_path 在顶层 source descriptor 声明
 
-本地源码 SHALL 通过顶层 `sources.<name>.local_path` 声明，组件按
-`source.name` 引用（见 `shared-repo-references`）。descriptor MUST 且只能
-声明 `url` 或 `local_path` 之一；声明 `local_path` 时 MUST NOT 声明
-`branch` / `commit` 之类的 revision 字段。
+本地组件源码 SHALL 通过 `sources.<name>.local_path` 声明，组件按 `source.name` 引用。descriptor MUST 且只能声明 url 或 local_path 之一；本地来源 MUST NOT 混用远端 revision 字段。构建时 SourceManager SHALL 将用户当前内容复制到目标独立工作目录；共享下载和目标产物不得写入用户原树。
 
 #### Scenario: 组件使用本地源码
-- **WHEN** `sources.linux` 只声明 `local_path`，且 `kernel.source.name == "linux"`
-- **THEN** SourceManager 直接使用该目录，不执行任何 git 操作
+- **WHEN** sources.linux 声明 local_path 且 kernel 引用该 source
+- **THEN** SourceManager 按内容摘要准备目标副本，不在用户原目录执行 Git 重置或编译
 
 #### Scenario: 来源互斥
-- **WHEN** 同一 descriptor 同时声明 `url` 与 `local_path`
-- **THEN** canonical validator 在构建前拒绝配置
+- **WHEN** 同一 descriptor 同时声明 url 与 local_path
+- **THEN** 配置校验在构建前拒绝该输入
 
 ### Requirement: 本地模式跳过源码重置与补丁
 
-组件构建在本地模式下 MUST 跳过 `git reset` 与全部补丁应用，直接用源码树的
-当前状态构建。
+本地模式 SHALL 把用户当前内容视为已经准备好的源码快照；目标副本构建 MUST 跳过自动 Git 重置与补丁应用。用户原目录中的未提交内容 MUST 保持不变。原内容不变时目标副本 MAY 保留底层增量产物；原内容变化时 SHALL 重新准备副本，避免把上次目标修改当作用户输入。
 
-理由是这个目录属于开发者：重置会丢掉未提交的改动，重复打补丁会失败或产生
-重复 hunk。这一判据 MUST 与缓存侧共用 `builder/source.py` 的同一个函数 ——
-两处各写一份的后果是 `local_path` 的两半语义只兑现一半（缓存放弃了决策，
-构建却仍在重置用户的工作树）。
+#### Scenario: 本地模式不重置原树
+- **WHEN** 本地源码含未提交修改，构建器在目标副本生成文件
+- **THEN** 用户原树保持原样，目标变更不会回写
 
-#### Scenario: 本地模式不重置源码
-- **WHEN** 组件的 source 声明了 `local_path`
-- **THEN** 构建不执行 `git reset`，也不应用任何补丁，并在状态行说明原因
-
-#### Scenario: 远端模式保持既有行为
-- **WHEN** 组件的 source 声明的是 `url`
-- **THEN** 构建照常重置源码树并按顺序应用补丁
-
-### Requirement: 本地模式下框架放弃缓存决策
-
-当组件自身**或任意传递上游**声明了 `local_path` 时，`is_up_to_date` MUST
-返回 False，强制重建并级联到下游。
-
-不做源码树哈希是有意的：这个目录的内容变化不走 git，没有可靠的廉价指纹；
-按树哈希会产生假命中（"内容变了但哈希没变"），而假命中在这里意味着开发者
-改了代码却拿到旧产物。真正的增量交给底层构建系统（make / mke2fs）自己做,
-它们本来就有可靠的时间戳依赖。
-
-#### Scenario: 本地组件每次都重建
-- **WHEN** kernel 的 source 声明了 `local_path`
-- **THEN** 每次 `flange build kernel` 都进入构建，由 make 决定编译哪些文件
-
-#### Scenario: 级联到下游
-- **WHEN** kernel 声明了 `local_path`
-- **THEN** boot 与 image 也强制重建，确保下游产物基于最新的 kernel 产物组装
-
-#### Scenario: 缓存决策可解释
-- **WHEN** 对本地模式的组件执行 `flange why`
-- **THEN** 输出说明"组件或其上游声明了 local_path，框架放弃缓存决策"
+#### Scenario: 远端模式修改目标工作树
+- **WHEN** 组件使用远端 descriptor
+- **THEN** 补丁和编译操作作用于该目标的独立工作树，共享获取仓库不会成为编译目录
 
 ### Requirement: 本地 App 目录同样适用
 
-`external_apps` / `external_app_dirs` 指向的本地 App 目录 MUST 与组件的
-`local_path` 适用同一规则：app 组件强制重建并级联。App 描述符进入哈希输入
-时，绝对 `local_path` MUST 归一化为项目相对路径，使同一份源码在不同机器上
-算出相同的哈希。
+本地 App SHALL 在显式资源工作目录中构建，并以其来源、源码内容、配方、环境和依赖产物构造计划。项目外 local_path 或 app_dirs 来源 MUST 与仓库内 App 使用相同的内容缓存规则；不同来源的同名 App MUST 拥有不同资源身份，不得共享发布目录。不能要求不同绝对来源自动拥有相同资源身份。
 
-#### Scenario: 本地 App 触发 app 组件重建
-- **WHEN** 某个 custom package 指向本地 App 目录
-- **THEN** app 组件强制重建
+#### Scenario: 本地 App 无变化
+- **WHEN** 所有计划输入与发布产物保持不变
+- **THEN** App 节点允许命中缓存，位置在工具仓库外不构成强制重建理由
 
-#### Scenario: 绝对路径不进哈希
-- **WHEN** 两台机器把同一个仓库检出到不同目录
-- **THEN** 两边算出的 app 哈希相同
+#### Scenario: 同名不同来源
+- **WHEN** 两个 App 描述符声明相同名称但来源路径不同
+- **THEN** 单独构建时使用不同资源输出目录；同一依赖闭包中的名称歧义应被拒绝
+
+### Requirement: 本地模式使用内容与产物缓存
+
+本地源码 SHALL 纳入具名树输入。相同输入与完整产物允许命中；有效源码内容或元数据变化必须失效，下游依据实际发布的产物身份决定是否重建。
+
+#### Scenario: 修改本地源文件
+- **WHEN** 本地 kernel 源码内容或权限改变
+- **THEN** kernel 计划指纹改变，缓存解释列出源输入变化；构建前后输入不一致时拒绝发布成功记录

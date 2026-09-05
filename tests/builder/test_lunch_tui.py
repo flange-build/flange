@@ -9,18 +9,21 @@ from __future__ import annotations
 
 import threading
 import time
+from io import StringIO
+from types import SimpleNamespace
 
 import pytest
 
 from builder.config.query import build_target_tree
 from builder.lunch_tui import (
+    _App,
+    _curses_styles,
+    _summary_lines,
     SummaryLoader,
     leaf_parts,
     TreeView,
-    display_width,
-    pad,
-    truncate,
 )
+from builder.term import Role, display_width, pad, truncate
 
 BOARDS = {
     "board-a": {"board": "board-a", "platform": "rockchip", "soc": "rk3588",
@@ -264,3 +267,60 @@ def test_叶子的三段直接取自树而不是解析目标名(view: TreeView):
     view.reveal_target("board-a-desktop-release")
 
     assert leaf_parts(view.current) == ("board-a", "desktop", "release")
+
+
+def test_配置加载与错误分别使用进行中和错误角色(view: TreeView):
+    view.reveal_target("board-a-desktop-release")
+    loading = SimpleNamespace(get=lambda *_: None)
+    failed = SimpleNamespace(get=lambda *_: "配置求值失败: 坏了")
+    ready = SimpleNamespace(get=lambda *_: [("身份", [("board", "board-a")])])
+    assert _summary_lines(view.current, loading)[-1] == ("配置求值中…", Role.ACTIVE)
+    assert _summary_lines(view.current, failed)[-1] == ("配置求值失败: 坏了", Role.ERROR)
+    assert ("  board         board-a", Role.TEXT) in _summary_lines(view.current, ready)
+
+
+@pytest.mark.parametrize("no_color", ["", "1"])
+def test_NO_COLOR保留反显导航但不初始化色对(monkeypatch, no_color):
+    import curses
+
+    class Terminal(StringIO):
+        def isatty(self):
+            return True
+
+    def unexpected():
+        pytest.fail("NO_COLOR 下不应初始化 curses 颜色")
+
+    monkeypatch.setenv("NO_COLOR", no_color)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr("sys.stdout", Terminal())
+    monkeypatch.setattr(curses, "start_color", unexpected)
+    monkeypatch.setattr(curses, "has_colors", lambda: True)
+    defaults = []
+    monkeypatch.setattr(curses, "use_default_colors", lambda: defaults.append(True))
+    monkeypatch.setattr(curses, "init_pair", lambda *args: unexpected())
+    styles = _curses_styles()
+    assert defaults == [True]
+    assert styles[Role.TEXT] == 0 and styles[Role.ACTIVE] == 0
+    drawn = []
+    screen = SimpleNamespace(addnstr=lambda *args: drawn.append(args))
+    app = _App(build_target_tree(BOARDS), None, None)
+    app._styles = styles
+    app._draw_tree(screen, 10, 30)
+    assert drawn[0][-1] & curses.A_REVERSE
+
+
+def test_curses语义颜色保留终端默认背景(monkeypatch):
+    import curses
+
+    monkeypatch.setattr("builder.lunch_tui.supports_color", lambda: True)
+    monkeypatch.setattr(curses, "has_colors", lambda: True)
+    monkeypatch.setattr(curses, "start_color", lambda: None)
+    monkeypatch.setattr(curses, "use_default_colors", lambda: None)
+    pairs = []
+    monkeypatch.setattr(curses, "init_pair", lambda *args: pairs.append(args))
+    monkeypatch.setattr(curses, "color_pair", lambda pair: pair << 8)
+    styles = _curses_styles()
+    active_pair = (styles[Role.ACTIVE] >> 8)
+    assert (active_pair, curses.COLOR_BLUE, -1) in pairs
+    assert all(background == -1 for _, _, background in pairs)
+    assert styles[Role.TEXT] == 0

@@ -51,8 +51,6 @@ STAGE = WORK_ROOT / "stage"
 SYSROOT = WORK_ROOT / "sysroot"
 TEMPLATE_WORK = WORK_ROOT / "templates"
 
-# 上游单元的 staging 树位置，与 AppBuilder 注入的 FLANGE_APP_WORK_DIR 同构。
-APPS_WORK_ROOT = BUILD_ROOT / "work" / "apps"
 
 
 # ---------------------------------------------------------------------------
@@ -399,8 +397,12 @@ def prepare_source(unit: Unit) -> Path:
 # ---------------------------------------------------------------------------
 
 def upstream_stage(app: str) -> Path:
-    """上游单元的 staging 树路径（与其 FLANGE_APP_WORK_DIR 同构）。"""
-    return APPS_WORK_ROOT / app / TARGET_ARCH / "stage"
+    """从构建报告注入的准确依赖映射读取 staging，不推测工作目录。"""
+    import json
+    dependencies = json.loads(os.environ.get("FLANGE_DEPENDENCY_DIRS", "{}"))
+    if app not in dependencies:
+        raise ValueError(f"缺少依赖 {app} 的已发布安装树，请在 build.deps 声明依赖")
+    return Path(dependencies[app])
 
 
 def merge_into_sysroot(stage: Path) -> None:

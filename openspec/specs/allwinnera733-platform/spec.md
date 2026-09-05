@@ -8,7 +8,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 
 #### Scenario: BSP 目录集成
 - **WHEN** 执行 `allwinnera733` 平台的内核构建，`sources.linux-a733` 已声明
-- **THEN** 内核源码树中的 `bsp/` 为 `.build/sources/repos/linux-a733/bsp/` 的 symlink 或副本
+- **THEN** 内核源码树中的 `bsp/` 为 `<build_root>/work/<target.key>/sources/<linux-a733-worktree-id>/bsp/` 的 symlink 或副本
 
 #### Scenario: kernel/BSP/device 版本一致
 - **WHEN** linux-a733 聚合仓库的 `.gitmodules` 声明特定 commit
@@ -16,7 +16,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 
 #### Scenario: DTS 文件准备
 - **WHEN** config 指定 `kernel_device.board_dts_path` 为 `"configs/cubie_a7z/linux-5.15/board.dts"` 且 `kernel.device_tree.name` 为 `"sun60i-a733-cubie-a7z"`
-- **THEN** board.dts 从 `.build/sources/repos/linux-a733/device-a733/configs/cubie_a7z/linux-5.15/board.dts` 复制到 `arch/arm64/boot/dts/allwinner/sun60i-a733-cubie-a7z.dts`（内核上游 DTS 目录名保持 `allwinner`，不随 flange 平台重命名而变化）
+- **THEN** board.dts 从 `<build_root>/work/<target.key>/sources/<linux-a733-worktree-id>/device-a733/configs/cubie_a7z/linux-5.15/board.dts` 复制到 `arch/arm64/boot/dts/allwinner/sun60i-a733-cubie-a7z.dts`（内核上游 DTS 目录名保持 `allwinner`，不随 flange 平台重命名而变化）
 
 #### Scenario: BSP DTSI 链接
 - **WHEN** BSP 目录的 `configs/linux-5.15/` 包含 DTSI 文件
@@ -48,7 +48,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 
 #### Scenario: 源码构建
 - **WHEN** 执行 `allwinnera733` 平台的 bootloader 构建
-- **THEN** 构建器从 `.build/sources/repos/u-boot-aw2501/` 获取源码并执行目标板 `make`
+- **THEN** 构建器从 `<build_root>/work/<target.key>/sources/<u-boot-aw2501-worktree-id>/` 获取源码并执行目标板 `make`
 - **AND** 收集 `boot0_sdcard.bin`、`boot0_ufs.bin`、`boot_package.fex` 等产物
 
 #### Scenario: bootloader patches
@@ -168,7 +168,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** `usb_gadget.config` 在 `radxa.config` 和 `radxa_custom.config` 之后应用，最终 `.config` 中 `CONFIG_USB_CONFIGFS=y`（非 `=m`）
 
 #### Scenario: 最终 `.config` 校验
-- **WHEN** 内核构建完成，读取 `.build/sources/repos/linux-a733/src/.config`
+- **WHEN** 内核构建完成，读取 `<build_root>/work/<target.key>/sources/<linux-a733-worktree-id>/src/.config`
 - **THEN** `CONFIG_USB_GADGET=y`、`CONFIG_USB_CONFIGFS=y`、`CONFIG_USB_CONFIGFS_F_FS=y`、`CONFIG_CONFIGFS_FS=y` 四项同时成立
 
 ### Requirement: A7Z 板级 USB gadget 配置
@@ -187,15 +187,15 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **THEN** `USB_FUNCS=adb`，宿主机执行 `adb devices` 可识别到设备并进入 shell
 
 ### Requirement: A733 直接使用 linux-a733 原始 patches
-`AllwinnerA733KernelBuilder` 必须（SHALL）直接应用 `.build/sources/repos/linux-a733/debian/patches/` 中的原始补丁，不再维护手动适配 `src/` 前缀的自定义版本。
+`AllwinnerA733KernelBuilder` 必须（SHALL）直接应用 `<build_root>/work/<target.key>/sources/<linux-a733-worktree-id>/debian/patches/` 中的原始补丁，不再维护手动适配 `src/` 前缀的自定义版本。
 
 #### Scenario: patches 从聚合仓库应用
 - **WHEN** 执行 `allwinnera733` 平台的内核构建
-- **THEN** 按 `.build/sources/repos/linux-a733/debian/patches/series` 声明的顺序应用补丁
+- **THEN** 按 `<build_root>/work/<target.key>/sources/<linux-a733-worktree-id>/debian/patches/series` 声明的顺序应用补丁
 
 #### Scenario: patch 应用目录是聚合仓库根
 - **WHEN** 应用含 `a/src/...` 和 `a/bsp/...` 路径的补丁
-- **THEN** patch 在 `.build/sources/repos/linux-a733/` 根目录应用，路径前缀自然匹配（无需 -p2 或路径改写）
+- **THEN** patch 在 `<build_root>/work/<target.key>/sources/<linux-a733-worktree-id>/` 根目录应用，路径前缀自然匹配（无需 -p2 或路径改写）
 
 #### Scenario: patches 顺序由 series 文件决定
 - **WHEN** `debian/patches/series` 列出 4 个补丁
@@ -206,7 +206,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 
 #### Scenario: bootloader 从命名仓库构建
 - **WHEN** 执行 `allwinnera733` 平台的 bootloader 构建
-- **THEN** 源码目录为 `.build/sources/repos/u-boot-aw2501/`（含所有子模块）
+- **THEN** 源码目录为 `<build_root>/work/<target.key>/sources/<u-boot-aw2501-worktree-id>/`（含所有子模块）
 
 ### Requirement: A733 AIC8800 USB 内核模块配置
 `AllwinnerA733KernelBuilder` 必须（SHALL）支持生成并合并 AIC8800 USB Wi-Fi 的 kernel config fragment，
@@ -227,7 +227,7 @@ Allwinner A733 SoC 家族（sun60iw2p1）的平台级构建策略，覆盖 kerne
 - **AND** `aic8800_wlan.config` 在 `case_insensitive_fix.config` 之前应用
 
 #### Scenario: 最终内核配置启用 USB 模式
-- **WHEN** 内核构建完成，读取 `.build/sources/repos/linux-a733/src/.config`
+- **WHEN** 内核构建完成，读取 `<build_root>/work/<target.key>/sources/<linux-a733-worktree-id>/src/.config`
 - **THEN** `CONFIG_AIC_WLAN_SUPPORT=y`
 - **AND** `CONFIG_AIC8800_USB=y`
 - **AND** `CONFIG_AIC8800_SDIO` 未启用

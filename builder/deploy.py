@@ -1,551 +1,438 @@
-"""App 热部署、运行、日志与调试——通过 ADB 操作单个应用。"""
+"""准确产物驱动的设备部署、运行、测试与调试会话。"""
 
 from __future__ import annotations
 
-import argparse
+import json
+import os
 import shlex
 import shutil
 import subprocess
 import sys
+import time
+import uuid
+from dataclasses import asdict
+from hashlib import sha256
 from pathlib import Path
+from typing import Protocol, Sequence
 
-from builder.app_list import list_all
-from builder.app_spec import AppSpec, load_spec
-from builder.config.canonical import userspace_arch
-from builder.config.loader import load_current_config
+from builder.app_model import AppBuildReport
 from builder.deb import _map_arch
-from builder.oot_mounts import CONTAINER_PROJECT_ROOT, oot_volume_arguments
-from builder.paths import PROJECT_ROOT, build_dir
+from builder.artifacts import ArtifactManifest
+from builder.locking import atomic_write
+from builder.locking import FileLock
+from builder.workspace import WorkspaceContext
 
 
 class DeployError(RuntimeError):
-    """设备生命周期操作无法安全继续。"""
+    """设备身份、产物或生命周期操作不满足契约。"""
+
+
+class DeviceTransport(Protocol):
+    serial: str
+
+    def shell(self, argv: Sequence[str], **kwargs) -> subprocess.CompletedProcess: ...
+    def push(self, source: Path, destination: str) -> None: ...
 
 
 def _run_checked(
-    argv: list[str],
-    *,
-    capture_output: bool = False,
-    cwd: Path | None = None,
+    argv: list[str], *, capture_output=False, check=True, timeout=None, cwd=None
 ) -> subprocess.CompletedProcess:
-    """执行 argv，并把进程错误转换为可由 CLI 统一呈现的异常。"""
-    kwargs: dict = {"check": True}
-    if capture_output:
-        kwargs.update(capture_output=True, text=True)
-    if cwd is not None:
-        kwargs["cwd"] = cwd
     try:
-        return subprocess.run(argv, **kwargs)
+        output = (
+            {"capture_output": True}
+            if capture_output
+            else {"stdout": sys.stdout, "stderr": sys.stderr}
+        )
+        return subprocess.run(argv, check=check, text=True, timeout=timeout, cwd=cwd, **output)
     except FileNotFoundError as exc:
         raise DeployError(f"命令不存在：{argv[0]}") from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
-        suffix = f"\n{detail}" if detail else ""
         raise DeployError(
-            f"命令执行失败（exit {exc.returncode}）：{' '.join(argv)}{suffix}"
+            f"命令失败（exit {exc.returncode}）：{shlex.join(argv)}\n{detail}"
         ) from exc
 
 
-def _adb_shell_argv(
-    serial: str,
-    remote_argv: list[str],
-    *,
-    pty: bool = False,
-) -> list[str]:
-    """构造不会被设备端 shell 重新拆解参数的 ADB argv。"""
-    options = ["-t"] if pty else []
-    return [
-        "adb", "-s", serial, "shell", *options, shlex.join(remote_argv),
-    ]
-
-
-def check_adb() -> bool:
-    """检查宿主机是否安装了 adb。"""
-    return shutil.which("adb") is not None
+def _adb_shell_argv(serial: str, argv: Sequence[str], *, pty=False) -> list[str]:
+    return ["adb", "-s", serial, "shell", *(["-t"] if pty else []), shlex.join(argv)]
 
 
 def list_adb_devices() -> dict[str, str]:
-    """返回 ADB serial 到状态的映射。"""
-    if not check_adb():
-        raise DeployError(
-            "宿主机未安装 adb，macOS 可执行 "
-            "`brew install android-platform-tools`，"
-            "Ubuntu/Debian 可执行 `sudo apt install adb`"
-        )
-
-    result = _run_checked(["adb", "devices"], capture_output=True)
-    devices: dict[str, str] = {}
-    for line in result.stdout.splitlines()[1:]:
-        fields = line.split()
-        if len(fields) >= 2 and not fields[0].startswith("*"):
-            devices[fields[0]] = fields[1]
-    return devices
+    output = _run_checked(["adb", "devices"], capture_output=True).stdout
+    return {
+        fields[0]: fields[1]
+        for line in output.splitlines()[1:]
+        if len(fields := line.split()) >= 2 and not fields[0].startswith("*")
+    }
 
 
 def select_adb_device(serial: str | None = None) -> str:
-    """选择唯一在线设备，或校验显式 serial。"""
     devices = list_adb_devices()
     if serial:
-        state = devices.get(serial)
-        if state != "device":
-            detail = f"（当前状态：{state}）" if state else "（未发现）"
-            raise DeployError(f"ADB 设备 '{serial}' 不可用{detail}")
+        if devices.get(serial) != "device":
+            raise DeployError(
+                f"ADB 设备 {serial!r} 不可用（状态：{devices.get(serial, '未发现')}）"
+            )
         return serial
-
-    ready = sorted(key for key, state in devices.items() if state == "device")
-    if not ready:
-        raise DeployError("未发现状态为 device 的 ADB 设备")
-    if len(ready) > 1:
-        raise DeployError(
-            "发现多台 ADB 设备，请使用 --serial 指定：" + ", ".join(ready)
-        )
+    ready = [name for name, state in devices.items() if state == "device"]
+    if len(ready) != 1:
+        raise DeployError("需要唯一在线 ADB 设备；使用 --serial 明确选择：" + ", ".join(ready))
     return ready[0]
 
 
-def get_adb_device(serial: str | None = None) -> str:
-    """兼容旧调用；新代码应使用 select_adb_device。"""
-    return select_adb_device(serial)
+class AdbTransport:
+    def __init__(self, serial: str) -> None:
+        self.serial = serial
 
-
-def find_latest_deb(
-    app_name: str,
-    config: dict,
-    project_root: Path = PROJECT_ROOT,
-) -> Path | None:
-    """在仓库统一 target 目录中查找最新的 App deb。"""
-    target_dir = _app_output_dir(config, project_root)
-    if not target_dir.is_dir():
-        return None
-    prefix = f"{app_name}_"
-    deb_files = [
-        path
-        for path in target_dir.iterdir()
-        if path.is_file()
-        and path.name.startswith(prefix)
-        and path.name.endswith(".deb")
-    ]
-    return max(deb_files, key=lambda path: path.stat().st_mtime, default=None)
-
-
-def _app_output_dir(config: dict, project_root: Path) -> Path:
-    return (
-        build_dir(project_root)
-        / "target"
-        / config["board"]
-        / config["product"]
-        / config["variant"]
-        / "app"
-    )
-
-
-def find_latest_debs(
-    spec: AppSpec,
-    config: dict,
-    project_root: Path = PROJECT_ROOT,
-) -> list[Path]:
-    """返回待部署 deb；vendor 保持声明顺序，lib 只取 runtime。"""
-    if spec.build.deb_outputs:
-        output_dir = _app_output_dir(config, project_root)
-        paths = [output_dir / filename for filename in spec.build.deb_outputs]
-        missing = [path.name for path in paths if not path.is_file()]
-        if missing:
-            raise DeployError(
-                f"App '{spec.app.name}' 缺少声明的 .deb 构建产物："
-                f"{', '.join(missing)}"
-            )
-        return paths
-
-    package_name = (
-        f"lib{spec.app.name}" if spec.app.type == "lib" else spec.app.name
-    )
-    filename = (
-        f"{package_name}_{spec.app.version}_"
-        f"{_map_arch(userspace_arch(config))}.deb"
-    )
-    output_dir = _app_output_dir(config, project_root)
-    if not output_dir.is_dir():
-        return []
-    exact = next(
-        (
-            path
-            for path in output_dir.iterdir()
-            if path.is_file() and path.name == filename
-        ),
-        None,
-    )
-    return [exact] if exact is not None else []
-
-
-def _resolve_app_arg(
-    name_or_path: str | Path,
-    project_root: Path,
-    config: dict,
-    caller_cwd: Path | None = None,
-) -> tuple[Path, str]:
-    """按调用者 cwd 解析路径，纯名称从 project root 的 registry 查找。"""
-    raw = str(name_or_path)
-    base_dir = Path(caller_cwd or Path.cwd()).expanduser().resolve()
-    candidate = Path(raw).expanduser()
-    if not candidate.is_absolute():
-        candidate = base_dir / candidate
-    is_path = (
-        "/" in raw
-        or raw.startswith(".")
-        or candidate.is_dir()
-    )
-    if is_path:
-        resolved = candidate.resolve()
-        if not (resolved.is_dir() and (resolved / "app.yaml").is_file()):
-            raise DeployError(f"App 路径 '{raw}' 不存在或缺失 app.yaml")
-        return resolved, load_spec(resolved).app.name
-
-    entries = list_all(Path(project_root).resolve(), config)
-    app_entry = next((entry for entry in entries if entry.name == raw), None)
-    if app_entry is None:
-        raise DeployError(f"找不到名为 '{raw}' 的 App")
-    return app_entry.source_path.resolve(), app_entry.name
-
-
-def _load_app(
-    name_or_path: str | Path,
-    *,
-    config: dict | None,
-    project_root: Path,
-    caller_cwd: Path | None,
-) -> tuple[dict, Path, AppSpec]:
-    cfg = load_current_config() if config is None else config
-    app_dir, _ = _resolve_app_arg(
-        name_or_path,
-        project_root,
-        cfg,
-        caller_cwd,
-    )
-    return cfg, app_dir, load_spec(app_dir)
-
-
-def _build_app(app_dir: Path, config: dict, project_root: Path) -> None:
-    """在最外层 Docker 中构建已在宿主机解析的 App。"""
-    root = Path(project_root).resolve()
-    resolved = app_dir.resolve()
-    volume_arguments = oot_volume_arguments(config)
-    try:
-        relative = resolved.relative_to(root)
-        container_app = CONTAINER_PROJECT_ROOT / relative
-    except ValueError:
-        mount = f"{resolved}:{resolved}:rw"
-        if mount not in volume_arguments:
-            volume_arguments.extend(["--volume", mount])
-        container_app = resolved
-
-    command = [
-        "docker",
-        "compose",
-        "run",
-        "--rm",
-        *volume_arguments,
-        "build",
-        "python3",
-        "-m",
-        "builder.dev",
-        "_build-app",
-        str(container_app),
-        config["board"],
-        config.get("product", "default"),
-        config.get("variant", "release"),
-    ]
-    _run_checked(command, cwd=root)
-
-
-def _prepare_debs(
-    app_dir: Path,
-    spec: AppSpec,
-    config: dict,
-    project_root: Path,
-    build_deb: bool,
-) -> list[Path]:
-    if build_deb:
-        print(f"==> 构建 App '{spec.app.name}' ...")
-        _build_app(app_dir, config, project_root)
-
-    deb_paths = find_latest_debs(spec, config, project_root)
-    if not deb_paths:
-        raise DeployError(
-            f"未找到 '{spec.app.name}' 的 .deb 构建产物，请先构建该 App"
+    def shell(
+        self, argv: Sequence[str], *, pty=False, capture_output=False, check=True, timeout=None
+    ) -> subprocess.CompletedProcess:
+        return _run_checked(
+            _adb_shell_argv(self.serial, argv, pty=pty),
+            capture_output=capture_output,
+            check=check,
+            timeout=timeout,
         )
-    print("==> 使用构建产物: " + ", ".join(path.name for path in deb_paths))
-    return deb_paths
 
-
-def _deploy_debs(deb_paths: list[Path], serial: str) -> None:
-    """先推送全部 deb，再用一次 dpkg 事务按清单顺序安装。"""
-    remote_paths = [f"/tmp/{path.name}" for path in deb_paths]
-    pushed: list[str] = []
-    try:
-        for deb_path, remote_path in zip(deb_paths, remote_paths):
-            print(f"==> 推送 {deb_path.name} 到设备 {serial} ...")
-            _run_checked(
-                ["adb", "-s", serial, "push", str(deb_path), remote_path]
-            )
-            pushed.append(remote_path)
+    def push(self, source: Path, destination: str) -> None:
         _run_checked(
-            _adb_shell_argv(serial, ["dpkg", "-i", *remote_paths]),
-            capture_output=True,
+            ["adb", "-s", self.serial, "push", str(source), destination], capture_output=True
         )
+
+
+class DeviceSession:
+    """成功、失败和中断均保留设备与产物关联的机器可读记录。"""
+
+    def __init__(
+        self,
+        context: WorkspaceContext,
+        report: AppBuildReport | ArtifactManifest,
+        action: str,
+        serial: str,
+    ) -> None:
+        identifier = f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{uuid.uuid4().hex[:10]}"
+        self.directory = context.target_dir / "sessions" / identifier
+        self.directory.mkdir(parents=True)
+        self.path = self.directory / "session.json"
+        self.data = {
+            "schema_version": 1,
+            "id": identifier,
+            "action": action,
+            "target": asdict(context.target),
+            "device": {"transport": "adb", "serial": serial},
+            "artifact_identity": report.identity,
+            "artifacts": (
+                {item.resource_id: item.identity for item in report.ordered}
+                if isinstance(report, AppBuildReport)
+                else {report.task_id: report.identity}
+            ),
+            "status": "running",
+            "started_at": time.time(),
+            "report_path": str(self.path),
+        }
+        self.save()
+
+    def save(self) -> None:
+        atomic_write(self.path, json.dumps(self.data, ensure_ascii=False, indent=2) + "\n")
+
+    def finish(self, status: str, *, exit_code=0, error=None) -> dict:
+        self.data.update(status=status, exit_code=exit_code, finished_at=time.time())
+        if error:
+            self.data["error"] = str(error)
+        self.save()
+        return self.data
+
+
+def _preflight(
+    context: WorkspaceContext, report: AppBuildReport, transport: DeviceTransport
+) -> str:
+    if report.target != asdict(context.target) or not report.validate():
+        raise DeployError("当前 target 或实际产物与构建报告不匹配；请重新构建")
+    expected = _map_arch(report.architecture)
+    actual = transport.shell(["dpkg", "--print-architecture"], capture_output=True).stdout.strip()
+    if actual != expected:
+        raise DeployError(f"设备架构 {actual!r} 与构建目标 {expected!r} 不匹配")
+    return actual
+
+
+def _deploy(report: AppBuildReport, transport: DeviceTransport, session: DeviceSession) -> None:
+    if not report.runtime_debs:
+        raise DeployError("该 App 闭包没有可部署的 runtime deb")
+    remote_dir = f"/tmp/flange-{session.data['id']}"
+    transport.shell(["mkdir", "-p", remote_dir])
+    remote_paths = []
+    try:
+        for index, path in enumerate(report.runtime_debs):
+            remote = f"{remote_dir}/{index}-{path.name}"
+            transport.push(path, remote)
+            expected = sha256(path.read_bytes()).hexdigest()
+            actual = transport.shell(["sha256sum", remote], capture_output=True).stdout.split()[0]
+            if actual != expected:
+                raise DeployError(f"设备收到的 deb 内容校验失败：{path.name}")
+            remote_paths.append(remote)
+        transport.shell(["dpkg", "-i", *remote_paths], capture_output=True)
     finally:
-        for remote_path in pushed:
-            try:
-                subprocess.run(
-                    _adb_shell_argv(serial, ["rm", "-f", remote_path]),
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-            except OSError:
-                pass
+        transport.shell(["rm", "-rf", remote_dir], check=False, capture_output=True)
 
 
-def _service_unit(spec: AppSpec) -> str:
-    if spec.systemd and spec.systemd.unit:
-        return Path(spec.systemd.unit).name
-    return f"{spec.app.name}.service"
+def _runtime_command(report: AppBuildReport, args: Sequence[str]) -> list[str]:
+    root = report.root()
+    if root.app_type in {"exec", "test"} and root.executable:
+        return [root.executable, *args]
+    if root.app_type == "service":
+        if args:
+            raise DeployError("service 默认运行方式不接受额外 argv")
+        return ["systemctl", "restart", root.service_unit]
+    raise DeployError(f"App 类型 {root.app_type!r} 没有默认运行入口")
 
 
-def _executable_path(spec: AppSpec) -> str:
-    for source, destination in spec.install.items():
-        if source.startswith("bin/") and destination.startswith("/"):
-            if destination.endswith("/"):
-                return destination + Path(source).name
-            return destination
-    return f"/usr/bin/{spec.app.name}"
-
-
-def _validate_runtime(spec: AppSpec, args: list[str]) -> None:
-    if spec.app.type not in {"exec", "service"}:
-        raise ValueError(
-            f"App '{spec.app.name}' 类型为 {spec.app.type!r}，"
-            "无法推断默认运行对象"
-        )
-    if spec.app.type == "service" and args:
-        raise ValueError("service App 的默认 run/debug 不接受额外 argv")
-
-
-def deploy_app(
-    name_or_path: str | Path,
-    build_deb: bool = True,
-    run: bool = False,
-    *,
-    serial: str | None = None,
-    config: dict | None = None,
-    project_root: Path = PROJECT_ROOT,
-    caller_cwd: Path | None = None,
-) -> str:
-    """构建（可选）并通过 dpkg 部署 App，返回实际设备 serial。"""
-    if run:
-        return run_app(
-            name_or_path,
-            build_deb,
-            serial=serial,
-            config=config,
-            project_root=project_root,
-            caller_cwd=caller_cwd,
-        )
-    cfg, app_dir, spec = _load_app(
-        name_or_path,
-        config=config,
-        project_root=project_root,
-        caller_cwd=caller_cwd,
+def _debug(
+    context: WorkspaceContext,
+    report: AppBuildReport,
+    transport: DeviceTransport,
+    session: DeviceSession,
+    args: Sequence[str],
+    mode: str,
+    port: int,
+) -> None:
+    root = report.root()
+    if context.target.variant != "debug":
+        raise DeployError("GDB 调试需要 debug target")
+    if root.app_type not in {"exec", "service"}:
+        raise DeployError("默认 GDB 只支持 exec/service App")
+    session.data["debug"] = {
+        "mode": mode,
+        "source_dir": root.debug_source_dir,
+        "compile_source_dir": root.compile_source_dir,
+        "symbol_tree": str(root.install_dir),
+        "executable": root.executable,
+        "transport": "adb shell" if mode == "target" else "gdb remote over adb forward",
+        "port": port if mode == "remote" else None,
+    }
+    pid = None
+    if root.app_type == "service":
+        if args:
+            raise DeployError("service GDB 不接受额外 argv")
+        pid = transport.shell(
+            ["systemctl", "show", root.service_unit, "--property", "MainPID", "--value"],
+            capture_output=True,
+        ).stdout.strip()
+        if not pid.isdecimal() or int(pid) <= 0:
+            raise DeployError(f"service {root.service_unit} 没有运行中的 MainPID；请先 app run")
+        if mode == "remote":
+            executable = transport.shell(
+                ["readlink", f"/proc/{pid}/exe"], capture_output=True
+            ).stdout.strip()
+            symbol = root.install_dir / executable.lstrip("/")
+            if (
+                not executable.startswith("/")
+                or ".." in Path(executable).parts
+                or not symbol.is_file()
+            ):
+                raise DeployError(f"服务进程的符号文件不在当前 App 安装清单中：{executable}")
+            session.data["debug"]["executable"] = executable
+    session.save()
+    if mode == "target":
+        transport.shell(["gdb", "--version"], capture_output=True)
+        source_target = f"/tmp/flange-source-{session.data['id']}"
+        transport.push(Path(root.debug_source_dir), source_target)
+        command = [
+            "gdb",
+            "-ex",
+            f"directory {source_target}",
+            "-ex",
+            f"set substitute-path {root.compile_source_dir} {source_target}",
+        ]
+        command += ["-p", pid] if pid else ["--args", root.executable, *args]
+        session.data["debug"]["source_mapping"] = {root.compile_source_dir: source_target}
+        session.save()
+        try:
+            transport.shell(command, pty=True)
+        finally:
+            transport.shell(["rm", "-rf", source_target], capture_output=True, check=False)
+        return
+    debugger = shutil.which("gdb-multiarch") or shutil.which("gdb")
+    if not debugger:
+        raise DeployError("remote 模式需要宿主 gdb-multiarch 或支持目标架构的 gdb")
+    transport.shell(["gdbserver", "--version"], capture_output=True)
+    endpoint = f"tcp:{port}"
+    _run_checked(
+        ["adb", "-s", transport.serial, "forward", endpoint, endpoint], capture_output=True
     )
-    device = select_adb_device(serial)
-    deb_paths = _prepare_debs(app_dir, spec, cfg, project_root, build_deb)
-    _deploy_debs(deb_paths, device)
-    print(f"App '{spec.app.name}' 已部署到 {device}")
-    return device
-
-
-def run_app(
-    name_or_path: str | Path,
-    build_deb: bool = True,
-    *,
-    serial: str | None = None,
-    args: list[str] | None = None,
-    config: dict | None = None,
-    project_root: Path = PROJECT_ROOT,
-    caller_cwd: Path | None = None,
-) -> str:
-    """构建、部署并运行 exec/service App。"""
-    cfg, app_dir, spec = _load_app(
-        name_or_path,
-        config=config,
-        project_root=project_root,
-        caller_cwd=caller_cwd,
-    )
-    extra_args = list(args or [])
-    _validate_runtime(spec, extra_args)
-    device = select_adb_device(serial)
-    deb_paths = _prepare_debs(app_dir, spec, cfg, project_root, build_deb)
-    _deploy_debs(deb_paths, device)
-
-    if spec.app.type == "exec":
-        _run_checked(
-            _adb_shell_argv(device, [
-                _executable_path(spec),
-                *extra_args,
-            ])
-        )
-    else:
-        unit = _service_unit(spec)
-        _run_checked(
-            _adb_shell_argv(device, ["systemctl", "daemon-reload"])
-        )
-        _run_checked(
-            _adb_shell_argv(device, ["systemctl", "restart", unit])
-        )
-        _run_checked(
-            _adb_shell_argv(device, [
-                "systemctl",
-                "status",
-                unit,
-                "--no-pager",
-            ])
-        )
-    return device
-
-
-def log_app(
-    name_or_path: str | Path,
-    *,
-    serial: str | None = None,
-    follow: bool = True,
-    lines: int | None = None,
-    since: str | None = None,
-    config: dict | None = None,
-    project_root: Path = PROJECT_ROOT,
-    caller_cwd: Path | None = None,
-) -> str:
-    """读取 service App 的 journal，默认持续跟随。"""
-    _, _, spec = _load_app(
-        name_or_path,
-        config=config,
-        project_root=project_root,
-        caller_cwd=caller_cwd,
-    )
-    if spec.app.type != "service":
-        raise ValueError(
-            f"App '{spec.app.name}' 类型为 {spec.app.type!r}，"
-            "无法推断默认日志源"
-        )
-    if lines is not None and lines < 0:
-        raise ValueError("日志行数不得为负数")
-    device = select_adb_device(serial)
-    remote_command = [
-        "journalctl",
-        "-u",
-        _service_unit(spec),
-        "--no-pager",
-    ]
-    if lines is not None:
-        remote_command.extend(["-n", str(lines)])
-    if since is not None:
-        remote_command.extend(["--since", since])
-    if follow:
-        remote_command.append("-f")
-    _run_checked(_adb_shell_argv(device, remote_command))
-    return device
-
-
-def debug_app(
-    name_or_path: str | Path,
-    *,
-    serial: str | None = None,
-    args: list[str] | None = None,
-    config: dict | None = None,
-    project_root: Path = PROJECT_ROOT,
-    caller_cwd: Path | None = None,
-) -> str:
-    """在 debug target 上用目标机 GDB 启动或 attach App。"""
-    cfg, _, spec = _load_app(
-        name_or_path,
-        config=config,
-        project_root=project_root,
-        caller_cwd=caller_cwd,
-    )
-    extra_args = list(args or [])
-    _validate_runtime(spec, extra_args)
-    if cfg.get("variant") != "debug":
-        raise ValueError(
-            "默认 GDB 调试仅支持 debug variant，"
-            f"当前为 {cfg.get('variant')!r}；"
-            "请先选择 debug target 或声明显式 debug action"
-        )
-    device = select_adb_device(serial)
-
-    if spec.app.type == "exec":
-        _run_checked(
-            _adb_shell_argv(
-                device,
-                ["gdb", "--args", _executable_path(spec), *extra_args],
-                pty=True,
-            )
-        )
-        return device
-
-    unit = _service_unit(spec)
-    result = _run_checked(
-        _adb_shell_argv(device, [
-            "systemctl",
-            "show",
-            unit,
-            "--property",
-            "MainPID",
-            "--value",
-        ]),
-        capture_output=True,
-    )
-    pid = result.stdout.strip()
-    if not pid.isdecimal() or int(pid) <= 0:
-        raise DeployError(f"service {unit} 当前没有可 attach 的 MainPID")
-    _run_checked(_adb_shell_argv(device, ["gdb", "-p", pid], pty=True))
-    return device
-
-
-def main(argv: list[str] | None = None) -> int:
-    """兼容旧的 ``python -m builder.deploy`` 入口。"""
-    parser = argparse.ArgumentParser(description="flange 单 App 热部署工具")
-    parser.add_argument("app", help="App 名称或宿主机目录路径")
-    parser.add_argument(
-        "--no-build",
-        action="store_true",
-        help="跳过构建步骤，直接推送现有的 .deb",
-    )
-    parser.add_argument(
-        "--run",
-        action="store_true",
-        help="部署完成后立即运行 exec 或重启 service",
-    )
-    parser.add_argument("--serial", help="目标 ADB 设备 serial")
-    parsed = parser.parse_args(argv)
-
+    server_args = ["gdbserver", "--once"]
+    server_args += ["--attach", f":{port}", pid] if pid else [f":{port}", root.executable, *args]
+    log_path = session.directory / "gdbserver.log"
+    server = None
     try:
-        if parsed.run:
-            run_app(
-                parsed.app,
-                build_deb=not parsed.no_build,
-                serial=parsed.serial,
+        with log_path.open("w") as log:
+            server = subprocess.Popen(
+                _adb_shell_argv(transport.serial, server_args), stdout=log, stderr=log, text=True
             )
-        else:
-            deploy_app(
-                parsed.app,
-                build_deb=not parsed.no_build,
-                serial=parsed.serial,
+            deadline = time.monotonic() + 10
+            while "Listening on port" not in log_path.read_text():
+                if server.poll() is not None or time.monotonic() >= deadline:
+                    raise DeployError(f"gdbserver 未能开始监听：{log_path.read_text().strip()}")
+                time.sleep(0.1)
+            command = [
+                debugger,
+                "-ex",
+                f"set sysroot {root.install_dir}",
+                "-ex",
+                f"directory {root.debug_source_dir}",
+                "-ex",
+                f"set substitute-path {root.compile_source_dir} {root.debug_source_dir}",
+                "-ex",
+                f"target remote localhost:{port}",
+            ]
+            executable = session.data["debug"]["executable"]
+            if executable:
+                command.insert(1, str(root.install_dir / executable.lstrip("/")))
+            session.data["debug"].update(
+                host_command=command,
+                server_command=server_args,
+                server_log=str(log_path),
+                endpoint=f"localhost:{port}",
             )
-    except (DeployError, ValueError, FileNotFoundError) as exc:
-        print(f"错误：{exc}", file=sys.stderr)
-        return 1
+            session.save()
+            _run_checked(command)
+    finally:
+        if server is not None:
+            server.terminate()
+            try:
+                server.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait()
+        _run_checked(["adb", "-s", transport.serial, "forward", "--remove", endpoint], check=False)
+
+
+def operate_report(
+    context: WorkspaceContext, report: AppBuildReport, action: str, **options
+) -> dict:
+    """会话期间锁定目标产物，避免构建或清理替换正在读取的符号与包。"""
+    with FileLock(context.build_root / "locks" / f"{context.target.key}.lock"):
+        return _operate_report(context, report, action, **options)
+
+
+def _operate_report(
+    context: WorkspaceContext,
+    report: AppBuildReport,
+    action: str,
+    *,
+    serial=None,
+    args: Sequence[str] = (),
+    lines=None,
+    since=None,
+    follow=True,
+    timeout=60,
+    debug_mode="target",
+    port=2345,
+    transport: DeviceTransport | None = None,
+) -> dict:
+    """执行设备会话；测试失败返回含退出状态的持久化结果。"""
+    if timeout <= 0 or not 1 <= port <= 65535 or (lines is not None and lines < 0):
+        raise DeployError("timeout/port/lines 参数超出允许范围")
+    if action != "deploy":
+        root = report.root()
+        if action in {"run", "test"}:
+            _runtime_command(report, args)
+        if action == "debug" and (
+            context.target.variant != "debug"
+            or root.app_type not in {"exec", "service"}
+            or not root.debug_source_dir
+        ):
+            raise DeployError("默认 GDB 需要 debug target 的 exec/service 产物与源码清单")
+        if action == "debug" and os.environ.get("FLANGE_NO_INTERACTION") == "1":
+            raise DeployError(
+                "GDB 需要交互终端；请取消 FLANGE_NO_INTERACTION 后在终端执行 app debug"
+            )
+        if action == "log" and root.app_type != "service":
+            raise DeployError("默认日志源仅支持 service App")
+    if action not in {"deploy", "run", "test", "debug", "log"}:
+        raise DeployError(f"未知设备操作：{action}")
+    if not report.validate():
+        raise DeployError("App 产物校验失败，请重新构建")
+    device = transport or AdbTransport(select_adb_device(serial))
+    session = DeviceSession(context, report, action, device.serial)
+    try:
+        session.data["device"]["architecture"] = _preflight(context, report, device)
+        if action in {"deploy", "run", "test", "debug"}:
+            _deploy(report, device, session)
+        root = report.root() if action != "deploy" else None
+        if action == "run":
+            if root.app_type == "service":
+                device.shell(["systemctl", "daemon-reload"])
+            result = device.shell(_runtime_command(report, args), check=False, capture_output=True)
+            session.data.update(stdout=result.stdout, stderr=result.stderr)
+            if result.returncode:
+                return session.finish("failed", exit_code=result.returncode)
+        elif action == "test":
+            command = (
+                ["systemctl", "is-active", "--quiet", root.service_unit]
+                if root.app_type == "service"
+                else _runtime_command(report, args)
+            )
+            stdout_path, stderr_path = (
+                session.directory / "stdout.log",
+                session.directory / "stderr.log",
+            )
+            session.data["test"] = {
+                "command": command,
+                "timeout_seconds": timeout,
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+            }
+            session.save()
+            try:
+                if root.app_type == "service":
+                    preparation = [
+                        ["systemctl", "daemon-reload"],
+                        ["systemctl", "restart", root.service_unit],
+                    ]
+                    session.data["test"]["preparation_commands"] = preparation
+                    session.save()
+                    for preparation_command in preparation:
+                        device.shell(preparation_command, capture_output=True, timeout=timeout)
+                result = device.shell(command, capture_output=True, check=False, timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+
+                def decoded(value):
+                    return (
+                        value.decode(errors="replace")
+                        if isinstance(value, bytes)
+                        else (value or "")
+                    )
+
+                stdout_path.write_text(decoded(exc.stdout))
+                stderr_path.write_text(decoded(exc.stderr))
+                raise
+            stdout_path.write_text(result.stdout or "")
+            stderr_path.write_text(result.stderr or "")
+            return session.finish(
+                "passed" if result.returncode == 0 else "failed", exit_code=result.returncode
+            )
+        elif action == "debug":
+            _debug(context, report, device, session, args, debug_mode, port)
+        elif action == "log":
+            if root.app_type != "service":
+                raise DeployError("默认日志源仅支持 service App")
+            command = ["journalctl", "-u", root.service_unit, "--no-pager"]
+            if lines is not None:
+                command += ["-n", str(lines)]
+            if since:
+                command += ["--since", since]
+            if follow:
+                command.append("-f")
+            session.data["log"] = {"command": command}
+            device.shell(command)
+        elif action != "deploy":
+            raise DeployError(f"未知设备操作：{action}")
+        return session.finish("succeeded")
+    except subprocess.TimeoutExpired as exc:
+        return session.finish("timed_out", exit_code=124, error=exc)
     except KeyboardInterrupt:
-        print("\n已停止。", file=sys.stderr)
-        return 130
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        session.finish("interrupted", exit_code=130)
+        raise
+    except BaseException as exc:
+        session.finish("failed", exit_code=1, error=exc)
+        raise

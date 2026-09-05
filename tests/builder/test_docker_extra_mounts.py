@@ -1,126 +1,76 @@
-"""DockerRunner.extra_mounts 单元测试。
-
-覆盖三个场景：
-- _run_docker 分支：extra_mounts 拼成 `-v <realpath>:<realpath>:rw`
-- symlink 路径经 realpath 解析后挂载
-- _run_direct 分支（容器内）忽略 extra_mounts
-"""
-
-from __future__ import annotations
+"""容器边界验证：同绝对路径、去重挂载、构建环境身份和管道输出。"""
 
 import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from builder.docker import DockerRunner
+from builder.workspace import Target, WorkspaceContext
 
 
-class TestExtraMountsRunDocker:
-    """容器外 _run_docker 分支的 extra_mounts 拼接。"""
-
-    @patch("builder.docker._is_inside_container", return_value=False)
-    def test_extra_mounts_拼成_v参数(self, mock_container, tmp_path):
-        """传入 extra_mounts 时，docker compose run 命令含 -v src:src:rw。"""
-        target = tmp_path / "ext-app"
-        target.mkdir()
-
-        runner = DockerRunner(project_dir=tmp_path)
-        mock_result = MagicMock(returncode=0)
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            runner.run(["echo", "hello"], extra_mounts=[target])
-
-        # 取出实际调用的命令列表
-        args, _ = mock_run.call_args
-        cmd = args[0]
-        real = os.path.realpath(str(target))
-        # docker compose run --rm -v <real>:<real>:rw ... build echo hello
-        assert "-v" in cmd
-        v_index = cmd.index("-v")
-        assert cmd[v_index + 1] == f"{real}:{real}:rw"
-        assert "build" in cmd
-        assert "echo" in cmd and "hello" in cmd
-
-    @patch("builder.docker._is_inside_container", return_value=False)
-    def test_无_extra_mounts_时不注入_v(self, mock_container, tmp_path):
-        """未传 extra_mounts 时 docker compose run 命令中无 -v。"""
-        runner = DockerRunner(project_dir=tmp_path)
-        mock_result = MagicMock(returncode=0)
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            runner.run(["echo", "x"])
-
-        args, _ = mock_run.call_args
-        cmd = args[0]
-        assert "-v" not in cmd
-
-    @patch("builder.docker._is_inside_container", return_value=False)
-    def test_多条_extra_mounts_全部注入(self, mock_container, tmp_path):
-        """多条 extra_mounts 时，每条都产生一组 -v。"""
-        a = tmp_path / "a"
-        b = tmp_path / "b"
-        a.mkdir()
-        b.mkdir()
-
-        runner = DockerRunner(project_dir=tmp_path)
-        mock_result = MagicMock(returncode=0)
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            runner.run(["true"], extra_mounts=[a, b])
-
-        args, _ = mock_run.call_args
-        cmd = args[0]
-        v_args = [cmd[i + 1] for i, t in enumerate(cmd) if t == "-v"]
-        real_a = os.path.realpath(str(a))
-        real_b = os.path.realpath(str(b))
-        assert f"{real_a}:{real_a}:rw" in v_args
-        assert f"{real_b}:{real_b}:rw" in v_args
+@pytest.fixture
+def host(monkeypatch):
+    monkeypatch.setattr('builder.docker._is_inside_container', lambda: False)
+    monkeypatch.setattr(DockerRunner, 'environment_identity', lambda self: 'sha256:test-image')
 
 
-class TestExtraMountsRealpath:
-    """挂载源路径必须经 os.path.realpath 解析。"""
-
-    @patch("builder.docker._is_inside_container", return_value=False)
-    def test_symlink_路径经_realpath_解析(self, mock_container, tmp_path):
-        """传入的路径含 symlink 时，-v 用的是 deref 后的真实路径。"""
-        real_dir = tmp_path / "real" / "foo"
-        real_dir.mkdir(parents=True)
-        link_dir = tmp_path / "link"
-        link_dir.symlink_to(tmp_path / "real")
-
-        # 通过 symlink 访问
-        symlinked = link_dir / "foo"
-
-        runner = DockerRunner(project_dir=tmp_path)
-        mock_result = MagicMock(returncode=0)
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            runner.run(["true"], extra_mounts=[symlinked])
-
-        args, _ = mock_run.call_args
-        cmd = args[0]
-        # symlink 一定 deref 到 real_dir
-        deref = os.path.realpath(str(symlinked))
-        assert deref == os.path.realpath(str(real_dir))
-        assert f"{deref}:{deref}:rw" in cmd
+def command(runner, **kwargs):
+    with patch('subprocess.run', return_value=MagicMock(returncode=0)) as call:
+        runner.run(['true'], **kwargs)
+    return call.call_args.args[0], call.call_args.kwargs
 
 
-class TestExtraMountsRunDirect:
-    """容器内 _run_direct 分支必须忽略 extra_mounts。"""
+def mounts(cmd):
+    return [cmd[index + 1] for index, value in enumerate(cmd) if value == '-v']
 
-    @patch("builder.docker._is_inside_container", return_value=True)
-    def test_run_direct_忽略_extra_mounts(self, mock_container, tmp_path):
-        """已在容器内时，extra_mounts 不会被传递到 subprocess.run。"""
-        target = tmp_path / "ext"
-        target.mkdir()
 
-        runner = DockerRunner(project_dir=tmp_path)
-        mock_result = MagicMock(returncode=0)
-        with patch("subprocess.run", return_value=mock_result) as mock_run:
-            runner.run(["echo", "x"], extra_mounts=[target])
+def test_工具与外部目录同绝对路径挂载(host, tmp_path):
+    tool, app = tmp_path / 'tool', tmp_path / 'external app'
+    tool.mkdir()
+    app.mkdir()
+    cmd, _ = command(DockerRunner(tool), extra_mounts=[app], cwd=str(app))
+    assert f'{tool}:{tool}:rw' in mounts(cmd)
+    assert f'{app}:{app}:rw' in mounts(cmd)
+    assert cmd[cmd.index('-w') + 1] == str(app)
+    assert 'FLANGE_BUILD_ENVIRONMENT=sha256:test-image' in cmd
+    assert f'PYTHONPATH={tool}' in cmd
+    assert cmd[cmd.index('--progress') + 1] == 'quiet'
 
-        args, _ = mock_run.call_args
-        cmd = args[0]
-        # _run_direct 直接 subprocess.run([str(c) for c in cmd])，
-        # 命令应当是原 cmd，不含 docker / -v 等参数
-        assert "-v" not in cmd
-        assert "docker" not in cmd
-        assert cmd == ["echo", "x"]
+
+def test_父目录覆盖子目录并解析符号链接(host, tmp_path):
+    nested = tmp_path / 'app'
+    nested.mkdir()
+    link = tmp_path / 'alias'
+    link.symlink_to(nested)
+    cmd, _ = command(DockerRunner(tmp_path), extra_mounts=[link, nested])
+    assert mounts(cmd) == [f'{tmp_path}:{tmp_path}:rw']
+
+
+def test_任意产物根可挂载且管道关闭TTY(host, tmp_path, monkeypatch):
+    tool, workspace = tmp_path / 'tool', tmp_path / 'workspace'
+    tool.mkdir()
+    workspace.mkdir()
+    context = WorkspaceContext(tool, workspace, tmp_path / 'outputs', Target('b', 'p', 'debug'))
+    monkeypatch.setattr('sys.stdout.isatty', lambda: False)
+    cmd, kwargs = command(DockerRunner(context=context))
+    assert f'{context.build_root}:{context.build_root}:rw' in mounts(cmd)
+    assert '-T' in cmd
+    assert kwargs['stdout'] is not None
+
+
+def test_容器内不嵌套Docker(tmp_path, monkeypatch):
+    monkeypatch.setattr('builder.docker._is_inside_container', lambda: True)
+    cmd, _ = command(DockerRunner(tmp_path), extra_mounts=[tmp_path])
+    assert cmd == ['true']
+
+
+@pytest.mark.parametrize('privileged', [False, True])
+@pytest.mark.parametrize('inherited', ['false', 'true'])
+def test_特权由Compose服务配置按次设置而非run参数(host, tmp_path, monkeypatch, privileged, inherited):
+    monkeypatch.setenv('FLANGE_BUILD_PRIVILEGED', inherited)
+    cmd, kwargs = command(DockerRunner(tmp_path), privileged=privileged)
+    assert '--privileged' not in cmd
+    assert kwargs['env']['FLANGE_BUILD_PRIVILEGED'] == ('true' if privileged else 'false')
+    assert kwargs['env']['FLANGE_BUILD_IMAGE'] == 'sha256:test-image'
+    assert os.environ['FLANGE_BUILD_PRIVILEGED'] == inherited

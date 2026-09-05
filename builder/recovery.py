@@ -70,13 +70,15 @@ def build_recovery_config(config: dict) -> dict:
     for entry in (config.get("partitions") or {}).get("entries") or []:
         is_raw = entry.get("type") == "raw"
         protected = bool(is_raw or entry.get("name") in protected_set)
-        partitions_out.append({
-            "name": entry["name"],
-            "offset": entry.get("offset", ""),
-            "size": entry.get("size", ""),
-            "type": entry.get("type", ""),
-            "protected": protected,
-        })
+        partitions_out.append(
+            {
+                "name": entry["name"],
+                "offset": entry.get("offset", ""),
+                "size": entry.get("size", ""),
+                "type": entry.get("type", ""),
+                "protected": protected,
+            }
+        )
 
     return {
         "version": 1,
@@ -110,14 +112,6 @@ class RecoveryBuilder(RootfsBuilder):
     #: components/platform/<p>/recovery-overlay/、components/board/<b>/…
     OVERLAY_SUBDIR = "recovery-overlay"
 
-    def _selected_debs(self, config: dict) -> set[str]:
-        """只装 `recovery.custom_packages` 声明的那几个 App 的 deb。
-
-        recovery 是几十 MB 的救援系统 —— 全装既放不下，也把救援通道的可靠性
-        绑在了无关 App 上。
-        """
-        return set(self._component_config(config).get("custom_packages") or [])
-
     def _build_phase2(self, recovery_dir: Path, config: dict) -> None:
         """deb + 内核模块 + overlay。
 
@@ -135,7 +129,6 @@ class RecoveryBuilder(RootfsBuilder):
         target = recovery_dir / self.config_rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
-            json.dumps(build_recovery_config(config), indent=2,
-                       ensure_ascii=False) + "\n",
+            json.dumps(build_recovery_config(config), indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )

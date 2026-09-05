@@ -1,109 +1,55 @@
 """Rockchip 平台构建策略工厂。"""
 
-from pathlib import Path
-
 from builder.docker import DockerRunner
 from builder.source import SourceManager
 
 # 产物名映射：(组件, collect key) → target 目录下的文件名/目录名
 ARTIFACT_NAMES = {
-    ("kernel",     "fit_boot"):   "boot.img",
-    ("kernel",     "dtbos"):      "overlay",
-    ("kernel",     "modules"):    "modules",
+    ("kernel", "fit_boot"): "boot.img",
+    ("kernel", "dtbos"): "overlay",
+    ("kernel", "modules"): "modules",
     ("bootloader", "bootloader"): "u-boot.itb",
-    ("bootloader", "idbloader"):  "idbloader.img",
+    ("bootloader", "idbloader"): "idbloader.img",
     ("bootloader", "miniloader"): "miniloader.bin",
-    ("boot",       "boot"):       "boot.img",
-    ("rootfs",     "rootfs"):     "rootfs.img",
-    ("rootfs",     "ubi"):        "rootfs.ubi",
-    ("recovery",   "recovery"):   "recovery.img",
-    ("amp",        "amp"):        "amp.img",
-    ("image",      "image"):      "raw.img",
-    ("image",      "bundle"):     "mtd-bundle.json",
+    ("boot", "boot"): "boot.img",
+    ("rootfs", "rootfs"): "rootfs.img",
+    ("rootfs", "ubi"): "rootfs.ubi",
+    ("recovery", "recovery"): "recovery.img",
+    ("amp", "amp"): "amp.img",
+    ("image", "image"): "raw.img",
+    ("image", "bundle"): "mtd-bundle.json",
 }
-
-
-def _amp_app_source_dir(config: dict) -> str | None:
-    """按 app-registry 优先级返回 amp app 的可哈希源码目录。
-
-    该函数不触发 clone，仅解析已经存在或由 FINAL_CONFIG 归一化后的目录；
-    真正的来源获取仍由 SourceManager.ensure_app 负责。
-    """
-    amp = config.get("amp") or {}
-    app = amp.get("app", "")
-    if not app:
-        return None
-
-    local = Path("components/app") / app
-    if (local / "app.yaml").is_file():
-        return str(local)
-
-    external = (config.get("external_apps") or {}).get(app)
-    if external:
-        local_path = external.get("local_path")
-        if local_path:
-            return str(Path(local_path))
-        if external.get("git"):
-            return str(Path(".build/sources/apps") / app)
-
-    for directory in config.get("external_app_dirs") or []:
-        candidate = Path(directory) / app
-        if (candidate / "app.yaml").is_file():
-            return str(candidate)
-    return str(local)
-
-
-def amp_source_dirs(config: dict) -> list:
-    """返回 amp 增量哈希应覆盖的源码目录。
-
-    由 cache._mix_amp_sources 委托调用（cache 本身平台无关）。新模型下 amp 固件
-    由 amp app（components/app/<amp.app>，自带 CMake 引用 HAL SDK）产出——固件
-    内容主要随 app 源变化，故哈希 app 目录 + rockchip-hal.cmake 接口文件。HAL SDK
-    本体（lib/middleware，vendored 稳定）改动罕见，不纳入哈希以省时；SDK 或 .cmake
-    变更时用 `flange build -f amp` 强制重建。别的平台各自导出同名函数。
-    """
-    amp = config.get("amp") or {}
-    dirs = []
-    app_dir = _amp_app_source_dir(config)
-    if app_dir:
-        dirs.append(app_dir)
-    # rockchip-hal.cmake 是 amp app 的构建接口，改动须触发重建（虽是单文件，
-    # _hash_directory 接受目录——故指其所在 hal 根的该文件不便单列；改放 app
-    # 目录哈希为主，.cmake 变更走 -f）。
-    # rt-thread：BSP 模板（链接脚本/Kconfig/board_base/rpmsg_base 直接决定产物）
-    # 随构建纳入哈希；庞大稳定的 RTOS 内核树（src/components/libcpu）不纳入，改动
-    # 罕见时走 `flange build -f amp`。
-    if amp.get("mode") == "rt-thread":
-        dirs.append("components/platform/rockchip/amp")
-        soc = amp.get("soc_project", "")
-        if soc:
-            dirs.append(
-                f"components/amp/rockchip/rt-thread/bsp/rockchip/{soc}-32")
-    return dirs
 
 
 def create_builder(component: str, docker: DockerRunner, source: SourceManager):
     """根据组件名创建对应的 Rockchip 构建器。"""
     if component == "kernel":
         from builder.platforms.rockchip.kernel import RockchipKernelBuilder
+
         return RockchipKernelBuilder(docker, source)
     elif component == "bootloader":
         from builder.platforms.rockchip.bootloader import RockchipBootloaderBuilder
+
         return RockchipBootloaderBuilder(docker, source)
     elif component == "rootfs":
         from builder.platforms.rockchip.rootfs import RockchipRootfsBuilder
+
         return RockchipRootfsBuilder(docker, source)
     elif component == "boot":
         from builder.platforms.rockchip.boot import RockchipBootBuilder
+
         return RockchipBootBuilder(docker, source)
     elif component == "recovery":
         from builder.platforms.rockchip.recovery import RockchipRecoveryBuilder
+
         return RockchipRecoveryBuilder(docker, source)
     elif component == "image":
         from builder.platforms.rockchip.image import RockchipImageBuilder
+
         return RockchipImageBuilder(docker, source)
     elif component == "amp":
         from builder.platforms.rockchip.amp import RockchipAmpBuilder
+
         return RockchipAmpBuilder(docker, source)
     else:
         raise ValueError(f"未知组件: {component}")

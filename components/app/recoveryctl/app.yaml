@@ -17,6 +17,10 @@ build:
 install:
   bin/recoveryctl: /usr/sbin/recoveryctl
 
+runtime:
+  # 系统维护命令安装在 sbin，运行入口必须与安装路径一致。
+  executable: /usr/sbin/recoveryctl
+
 depends:
   # python3 是 metapackage，会带入完整 stdlib（含 json / argparse / pathlib /
   # dataclasses 等 recoveryctl 必需模块）；python3-minimal 不够。

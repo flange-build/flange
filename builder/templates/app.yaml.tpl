@@ -4,7 +4,7 @@ app:
   description: ${description}
   type: ${type}
   arch:
-    - aarch64
+    - ${arch}
 
 maintainer:
   name: flange

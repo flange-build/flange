@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.builder.context import component_context
+
 from builder.firmware_panel import HEADER, encode_panel_firmware
 from builder.rootfs import RootfsBuilder
 
@@ -33,8 +35,10 @@ class _StubRootfsBuilder(RootfsBuilder):
 
 
 @pytest.fixture
-def builder():
-    return _StubRootfsBuilder()
+def builder(tmp_path):
+    result = _StubRootfsBuilder()
+    result.context = component_context(tmp_path)
+    return result
 
 
 def _make_board(tmp_path: Path, board: str, src_rel: str, text: str) -> Path:

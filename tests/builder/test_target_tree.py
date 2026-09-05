@@ -192,7 +192,7 @@ def test_布尔渲染成中文():
 
 
 def test_真实目标的摘要可渲染():
-    from builder.config.loader import resolve_config
+    from builder.config.registry import resolve_config
 
     sections = summarize_config(
         resolve_config("radxa-rock5b", "desktop", "debug"))

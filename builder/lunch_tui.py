@@ -26,7 +26,7 @@ import threading
 from pathlib import Path
 
 from builder.config.query import TargetNode, build_target_tree
-from builder.term import display_width, pad, truncate
+from builder.term import Role, pad, supports_color, truncate
 
 # 各层级在树上的标记，让用户一眼看出自己在哪一层。
 LEVEL_MARK = {
@@ -38,6 +38,46 @@ LEVEL_MARK = {
 }
 
 _HELP = "↑↓ 移动   ←→ 折叠/展开   PgUp/PgDn 翻配置表   Enter 选中   / 过滤   q 取消"
+
+
+def _plain_styles() -> dict[Role, int]:
+    """无颜色时保留标题与辅助信息的既有层级。"""
+    attrs = {role: 0 for role in Role}
+    attrs.update({Role.HEADING: curses.A_BOLD, Role.ERROR: curses.A_BOLD,
+                  Role.MUTED: curses.A_DIM})
+    return attrs
+
+
+def _curses_styles() -> dict[Role, int]:
+    """把共享语义映射到 curses 色对，背景保持终端默认色。"""
+    attrs = _plain_styles()
+    try:
+        if not curses.has_colors():
+            return attrs
+        # wrapper 已启动颜色支持；即使禁色，也要清除它默认的白字黑底色对。
+        curses.use_default_colors()
+        if not supports_color():
+            return attrs
+        colors = {
+            Role.HEADING: curses.COLOR_BLUE,
+            Role.ACTIVE: curses.COLOR_BLUE,
+            Role.SUCCESS: curses.COLOR_GREEN,
+            Role.WARNING: curses.COLOR_YELLOW,
+            Role.ERROR: curses.COLOR_RED,
+            Role.PATH: curses.COLOR_CYAN,
+            Role.COMMAND: curses.COLOR_CYAN,
+        }
+        pairs = {}
+        for role, color in colors.items():
+            if color not in pairs:
+                pair = len(pairs) + 1
+                curses.init_pair(pair, color, -1)
+                pairs[color] = curses.color_pair(pair)
+            attrs[role] |= pairs[color]
+    except curses.error:
+        # 不支持默认背景或色对的终端继续使用原有单色导航。
+        return _plain_styles()
+    return attrs
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +215,7 @@ class SummaryLoader:
     def __init__(self, resolve=None, summarize=None):
         # 延迟导入：求值链较重，界面启动时不该为它付时间
         if resolve is None or summarize is None:
-            from builder.config.loader import resolve_config
+            from builder.config.registry import resolve_config
             from builder.config.summary import summarize_config
 
             resolve = resolve or resolve_config
@@ -238,34 +278,34 @@ def leaf_parts(node: TargetNode) -> tuple[str, str, str]:
     return board, product, variant
 
 
-def _summary_lines(node: TargetNode | None, loader: SummaryLoader) -> list[tuple[str, int]]:
-    """右栏内容：(文本, curses 属性)。"""
+def _summary_lines(node: TargetNode | None, loader: SummaryLoader) -> list[tuple[str, Role]]:
+    """右栏内容：(文本, 语义角色)。"""
     if node is None:
-        return [("没有匹配的目标", curses.A_DIM)]
+        return [("没有匹配的目标", Role.MUTED)]
 
     if not node.is_leaf:
         leaves = node.leaves()
-        lines = [(f"{node.level or '根'}: {node.name}", curses.A_BOLD), ("", 0)]
-        lines.append((f"子项      {len(node.children)} 个", 0))
-        lines.append((f"可选目标   {len(leaves)} 个", 0))
-        lines.append(("", 0))
-        lines.append(("展开继续下钻到具体 variant，", curses.A_DIM))
-        lines.append(("停在 variant 上会显示它的完整配置。", curses.A_DIM))
+        lines = [(f"{node.level or '根'}: {node.name}", Role.HEADING), ("", Role.TEXT)]
+        lines.append((f"子项      {len(node.children)} 个", Role.TEXT))
+        lines.append((f"可选目标   {len(leaves)} 个", Role.TEXT))
+        lines.append(("", Role.TEXT))
+        lines.append(("展开继续下钻到具体 variant，", Role.MUTED))
+        lines.append(("停在 variant 上会显示它的完整配置。", Role.MUTED))
         return lines
 
     summary = loader.get(node.target, leaf_parts(node))
-    header = [(node.target or "", curses.A_BOLD), ("", 0)]
+    header = [(node.target or "", Role.HEADING), ("", Role.TEXT)]
     if summary is None:
-        return header + [("配置求值中…", curses.A_DIM)]
+        return header + [("配置求值中…", Role.ACTIVE)]
     if isinstance(summary, str):
-        return header + [(summary, curses.A_BOLD)]
+        return header + [(summary, Role.ERROR)]
 
-    lines: list[tuple[str, int]] = header
+    lines: list[tuple[str, Role]] = header
     for title, rows in summary:
-        lines.append((f"── {title}", curses.A_BOLD))
+        lines.append((f"── {title}", Role.HEADING))
         for key, value in rows:
-            lines.append((f"  {pad(key, 14)}{value}", 0))
-        lines.append(("", 0))
+            lines.append((f"  {pad(key, 14)}{value}", Role.TEXT))
+        lines.append(("", Role.TEXT))
     return lines
 
 
@@ -278,11 +318,13 @@ class _App:
         self.selected: str | None = None
         self.filtering = False
         self.summary_scroll = 0
+        self._styles = _plain_styles()
         if current:
             self.view.reveal_target(current)
 
     def run(self, stdscr) -> str | None:
         curses.curs_set(0)
+        self._styles = _curses_styles()
         stdscr.timeout(150)  # 让后台加载完成后能自动重绘
         while True:
             self._draw(stdscr)
@@ -348,7 +390,8 @@ class _App:
         stdscr.erase()
         height, width = stdscr.getmaxyx()
         if height < 6 or width < 40:
-            self._safe(stdscr, 0, 0, "终端太小，请放大窗口", width, 0)
+            self._safe(stdscr, 0, 0, "终端太小，请放大窗口", width,
+                       self._styles[Role.WARNING])
             stdscr.refresh()
             return
 
@@ -359,13 +402,13 @@ class _App:
         self._draw_summary(stdscr, body, left, width - left - 1)
 
         for row in range(body):
-            self._safe(stdscr, row, left - 1, "│", 1, curses.A_DIM)
+            self._safe(stdscr, row, left - 1, "│", 1, self._styles[Role.MUTED])
 
         status = (f"过滤: {self.view.filter}_" if self.filtering
                   else (f"过滤: {self.view.filter}" if self.view.filter else _HELP))
-        self._safe(stdscr, height - 2, 0, "─" * width, width, curses.A_DIM)
+        self._safe(stdscr, height - 2, 0, "─" * width, width, self._styles[Role.MUTED])
         self._safe(stdscr, height - 1, 0, status, width - 1,
-                   curses.A_BOLD if self.filtering else 0)
+                   self._styles[Role.ACTIVE] | curses.A_BOLD if self.filtering else 0)
         stdscr.refresh()
 
     def _draw_tree(self, stdscr, body: int, left: int) -> None:
@@ -378,9 +421,12 @@ class _App:
             node, depth = rows[index]
             label = _row_label(node, depth, id(node) in self.view.expanded
                                or bool(self.view.filter))
-            attr = curses.A_REVERSE if index == self.view.cursor else 0
-            if node.is_leaf and index != self.view.cursor:
-                attr |= curses.A_DIM
+            if index == self.view.cursor:
+                attr = self._styles[Role.ACTIVE] | curses.A_REVERSE
+            elif node.is_leaf:
+                attr = self._styles[Role.MUTED]
+            else:
+                attr = self._styles[Role.HEADING]
             self._safe(stdscr, offset, 0, pad(truncate(label, left - 2), left - 2),
                        left - 2, attr)
 
@@ -392,8 +438,8 @@ class _App:
             index = self.summary_scroll + offset
             if index >= len(lines):
                 break
-            text, attr = lines[index]
-            self._safe(stdscr, offset, left, truncate(text, width), width, attr)
+            text, role = lines[index]
+            self._safe(stdscr, offset, left, truncate(text, width), width, self._styles[role])
 
     @staticmethod
     def _safe(stdscr, row: int, col: int, text: str, width: int, attr: int) -> None:
@@ -408,12 +454,14 @@ class _App:
 # 入口
 # ---------------------------------------------------------------------------
 
-def select_target(current: str | None = None) -> str | None:
+def select_target(current: str | None = None, *, project_root: Path | None = None) -> str | None:
     """打开界面并返回选中的目标；取消时返回 None。"""
-    root = build_target_tree()
+    from functools import partial
+    from builder.config.registry import resolve_config
+    root = build_target_tree(project_root=project_root)
     if not root.children:
         raise RuntimeError("未发现任何目标配置")
-    app = _App(root, current, SummaryLoader())
+    app = _App(root, current, SummaryLoader(resolve=partial(resolve_config, project_root=project_root)))
     return curses.wrapper(app.run)
 
 

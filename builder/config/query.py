@@ -67,7 +67,7 @@ def parse_target(
     for board_name in sorted_names:
         prefix = board_name + "-"
         if target.startswith(prefix):
-            remainder = target[len(prefix):]
+            remainder = target[len(prefix) :]
             # remainder 应为 <product>-<variant>
             parts = remainder.rsplit("-", 1)
             if len(parts) == 2:
@@ -162,8 +162,7 @@ def build_target_tree(
         variants = identity.get("variants") or ["release"]
 
         node = root
-        for level, name in (("platform", platform), ("soc", soc),
-                            ("board", board_name)):
+        for level, name in (("platform", platform), ("soc", soc), ("board", board_name)):
             existing = node.child(name)
             if existing is None:
                 existing = TargetNode(name, level, node)

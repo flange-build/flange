@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.builder.context import component_context
+
 from builder.platforms.amlogic.boot import AmlogicBootBuilder
 
 
@@ -78,6 +80,7 @@ def test_compile_writes_extlinux_and_dtb_to_amlogic_subdir(tmp_path):
 
     builder = AmlogicBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config())
 
     work_dir = builder._work_dir
@@ -95,6 +98,7 @@ def test_extlinux_conf_contains_amlogic_paths_and_console(tmp_path):
 
     builder = AmlogicBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config())
 
     conf = (builder._work_dir / "staging" / "extlinux"
@@ -111,6 +115,7 @@ def test_recovery_conf_emitted_when_enabled(tmp_path):
 
     builder = AmlogicBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config(recovery_enabled=True))
 
     rec = (builder._work_dir / "staging" / "extlinux"
@@ -125,6 +130,7 @@ def test_recovery_conf_absent_when_disabled(tmp_path):
 
     builder = AmlogicBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config(recovery_enabled=False))
 
     assert not (builder._work_dir / "staging" / "extlinux"
@@ -139,6 +145,7 @@ def test_mke2fs_command_uses_boot_label(tmp_path):
     docker = FakeDocker()
     builder = AmlogicBootBuilder(docker=docker, source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config())
 
     mke2fs_calls = [c for c in docker.commands if c and c[0] == "mke2fs"]
@@ -153,6 +160,7 @@ def test_collect_returns_boot_img(tmp_path):
 
     builder = AmlogicBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config())
 
     out = builder.collect(None, _config())
@@ -167,6 +175,7 @@ def test_compile_raises_when_kernel_image_missing(tmp_path):
 
     builder = AmlogicBootBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
 
     with pytest.raises(FileNotFoundError, match="kernel Image"):
         builder.compile(None, _config())

@@ -10,6 +10,7 @@
 import json
 import subprocess
 import tempfile
+from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
@@ -20,6 +21,39 @@ from builder.flash import (
     FlashIdentityConfig, FlashPartition, FlashStrategy, PreFlashConfig,
     RockchipFlashStrategy, DeviceInfo, get_flash_strategy,
 )
+from builder.flash.console import _header, _info, _ok, _step, _warn
+from builder.term import Role
+
+
+@pytest.mark.parametrize("no_color", [None, "", "1"])
+def test_刷写状态颜色区分进行中成功取消与跳过(monkeypatch, no_color):
+    class Terminal(StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    if no_color is not None:
+        monkeypatch.setenv("NO_COLOR", no_color)
+    stream = Terminal()
+    monkeypatch.setattr("sys.stdout", stream)
+    _header("flange flash")
+    _step("等待设备连接")
+    _info("写入 boot.img", role=Role.ACTIVE)
+    _ok("boot.img 已写入")
+    _warn("已取消")
+    _info("跳过重启")
+    text = stream.getvalue()
+    if no_color is None:
+        assert "\033[1;34m flange flash" in text
+        assert "\033[34m▸ 等待设备连接" in text
+        assert "\033[34m  · 写入 boot.img" in text
+        assert "\033[32m  ✓ boot.img 已写入" in text
+        assert "\033[33m  ⚠ 已取消" in text
+        assert "\033[2m  · 跳过重启" in text
+        assert "\033[0;37m" not in text
+    else:
+        assert "\033" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +541,7 @@ class TestFlashExecutor:
                  patch("builtins.input", return_value="y"), \
                  patch("builder.flash.strategy.subprocess.run") as mock_run:
                 executor = FlashExecutor(target_dir, Path(tmpdir))
-                executor.flash_raw("/dev/sdX")
+                executor.flash_raw("/dev/sdX", yes=True)
 
             # 验证 dd 命令
             dd_call = mock_run.call_args_list[0]
@@ -524,9 +558,11 @@ class TestFlashExecutor:
             mock_strategy = MagicMock(spec=RockchipFlashStrategy)
             with patch("builder.flash.execute.get_flash_strategy", return_value=mock_strategy), \
                  patch("builtins.input", return_value="n"), \
+                 patch("sys.stdin.isatty", return_value=True), \
                  patch("builder.flash.strategy.subprocess.run") as mock_run:
                 executor = FlashExecutor(target_dir, Path(tmpdir))
-                executor.flash_raw("/dev/sdX")
+                with pytest.raises(KeyboardInterrupt):
+                    executor.flash_raw("/dev/sdX")
 
             # dd 不应被调用
             mock_run.assert_not_called()
@@ -590,23 +626,15 @@ class TestCLI入口:
             f"python3 -m builder.flash 执行失败:\n{result.stderr}")
         assert "run" in result.stdout, "帮助里应列出 run 子命令"
 
-    def test_envsetup里的每个python模块入口都可执行(self):
-        """envsetup.sh 直接写模块名调用；模块改包、改名都会静默打断它。"""
+    def test_安装入口与模块入口共用可调用的main(self):
+        """Shell 不承载业务路由；安装命令与模块调用指向同一服务。"""
         import importlib.util
-        import re
+        import importlib
+        import tomllib
         from pathlib import Path
 
         root = Path(__file__).resolve().parents[2]
-        text = (root / "envsetup.sh").read_text(encoding="utf-8")
-        modules = set(re.findall(r"python3 -m (builder[\w.]*)", text))
-        assert modules, "没有从 envsetup.sh 里解析出模块入口"
-
-        for name in sorted(modules):
-            spec = importlib.util.find_spec(name)
-            assert spec is not None, f"envsetup.sh 调用了不存在的模块 {name}"
-            runnable = (
-                spec.submodule_search_locations is None  # 普通模块
-                or importlib.util.find_spec(f"{name}.__main__") is not None
-            )
-            assert runnable, (
-                f"{name} 是包但缺少 __main__.py，`python3 -m {name}` 会失败")
+        project = tomllib.loads((root / "pyproject.toml").read_text())
+        module, function = project["project"]["scripts"]["flange"].split(":")
+        assert callable(getattr(importlib.import_module(module), function))
+        assert importlib.util.find_spec("builder.__main__") is not None

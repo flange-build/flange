@@ -28,6 +28,7 @@ from builder.app import AppBuilder
 from builder.config.registry import resolve_config
 from builder.engine import DEPENDENCY_GRAPH, BuildEngine, _topo_sort
 from builder.source import SourceManager
+from builder.workspace import WorkspaceContext, Target
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +113,11 @@ def test_q8b_firmware_package_builds_flange_deb(tmp_path: Path):
         docker=MagicMock(),
         source=source,
         config=config,
-        project_dir=_PROJECT_ROOT,
+        context=WorkspaceContext(_PROJECT_ROOT, tmp_path, tmp_path / "build",
+                                 Target(config["board"], config["product"], config["variant"])),
     )
-    builder._output_dir = tmp_path / "app"
 
-    deb_path = builder.build_one("firmware-qcom-audioreach")
+    deb_path = builder.build_one("firmware-qcom-audioreach").root().runtime_debs[0]
 
     assert deb_path.name == "firmware-qcom-audioreach_1.0.4-2_arm64.deb"
     members = _read_ar_members(deb_path)
@@ -150,11 +151,11 @@ def test_q8b_fastrpc_packages_follow_radxa_boundaries(tmp_path: Path):
         docker=MagicMock(),
         source=source,
         config=config,
-        project_dir=_PROJECT_ROOT,
+        context=WorkspaceContext(_PROJECT_ROOT, tmp_path, tmp_path / "build",
+                                 Target(config["board"], config["product"], config["variant"])),
     )
-    builder._output_dir = tmp_path / "app"
 
-    packages = builder.build_all()
+    packages = {item.name: item.runtime_debs[0] for item in builder.build_all().ordered if item.runtime_debs}
 
     assert {
         "radxa-firmware-sc8280xp",
@@ -246,11 +247,11 @@ def test_q8b_fastrpc_test_uses_official_package_name(tmp_path: Path):
             project_root=_PROJECT_ROOT,
         ),
         config=config,
-        project_dir=_PROJECT_ROOT,
+        context=WorkspaceContext(_PROJECT_ROOT, tmp_path, tmp_path / "build",
+                                 Target(config["board"], config["product"], config["variant"])),
     )
-    builder._output_dir = tmp_path / "app"
 
-    deb_path = builder.build_one("fastrpc-test")
+    deb_path = builder.build_one("fastrpc-test").root().runtime_debs[0]
 
     assert deb_path.name == "fastrpc-test_1.0.7-1flange1_arm64.deb"
     members = _read_ar_members(deb_path)
@@ -284,14 +285,14 @@ def _build_adbd_deb(output_dir: Path) -> Path:
     }
     builder = AppBuilder(
         docker=MagicMock(),
-        source=None,
+        source=SourceManager(project_root=_PROJECT_ROOT, sources_dir=output_dir / "sources"),
         config=config,
-        project_dir=_PROJECT_ROOT,
+        context=WorkspaceContext(_PROJECT_ROOT, output_dir, output_dir / "build",
+                                 Target(config["board"], config["product"], config["variant"])),
     )
-    # 将输出目录临时重写为 tmp_path 下的子目录，不污染 target/
-    builder._output_dir = output_dir
+    # 显式工作区把全部产物限制在测试临时目录。
     output_dir.mkdir(parents=True, exist_ok=True)
-    return builder.build_one("adbd")
+    return builder.build_one("adbd").root().runtime_debs[0]
 
 
 # ---------------------------------------------------------------------------
@@ -513,216 +514,24 @@ class TestAdbdEndToEnd:
 # ---------------------------------------------------------------------------
 
 class TestEngineAppIntegration:
-    """13.2 — 验证构建引擎依赖图拓扑排序与 App 组件集成逻辑。
+    """真实空 App 报告也经过引擎成功清单，不能用旧 dict 伪造成功。"""
 
-    不需要 Docker 也不需要 adbd 真实目录，所有重依赖均通过 Mock 隔离。
-    """
-
-    # -------------------------------------------------------------------
-    # 依赖图结构验证
-    # -------------------------------------------------------------------
-
-    def test_app节点在依赖图中存在(self):
-        """DEPENDENCY_GRAPH 必须包含 app 节点。"""
-        assert "app" in DEPENDENCY_GRAPH
-
-    def test_rootfs依赖app(self):
-        """rootfs 必须依赖 app，确保 .deb 在 rootfs 构建前完成。"""
-        assert "app" in DEPENDENCY_GRAPH["rootfs"]
-
-    def test_app无前置依赖(self):
-        """app 节点本身无依赖（预编译 App 无需依赖其他组件）。"""
-        assert DEPENDENCY_GRAPH["app"] == []
-
-    # -------------------------------------------------------------------
-    # 拓扑排序：rootfs 构建路径
-    # -------------------------------------------------------------------
-
-    def test_构建rootfs时app在rootfs之前(self):
-        """_topo_sort(rootfs) 中 app 的索引必须小于 rootfs 的索引。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "rootfs")
-        assert "app" in order
-        assert "rootfs" in order
-        assert order.index("app") < order.index("rootfs"), (
-            f"期望 app 在 rootfs 之前，实际顺序：{order}"
-        )
-
-    def test_构建rootfs时包含kernel但不含镜像组件(self):
-        """构建 rootfs 路径应包含 kernel 模块产物，但不包含刷写镜像组件。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "rootfs")
-        assert "kernel" in order
-        assert order.index("kernel") < order.index("rootfs"), (
-            f"期望 kernel 在 rootfs 之前，实际顺序：{order}"
-        )
-        for irrelevant in ("bootloader", "boot", "image"):
-            assert irrelevant not in order, (
-                f"{irrelevant} 不应出现在 rootfs 构建路径中，实际顺序：{order}"
-            )
-
-    # -------------------------------------------------------------------
-    # 拓扑排序：image 构建路径
-    # -------------------------------------------------------------------
-
-    def test_构建image时app在rootfs之前(self):
-        """_topo_sort(image) 中 app 的索引必须小于 rootfs 的索引。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "image")
-        assert order.index("app") < order.index("rootfs"), (
-            f"期望 app 在 rootfs 之前，实际顺序：{order}"
-        )
-
-    def test_构建image时包含所有必要组件(self):
-        """image 构建路径应包含 app、rootfs、kernel、bootloader 等所有必要组件。"""
-        order = _topo_sort(DEPENDENCY_GRAPH, "image")
-        for component in ("app", "rootfs", "boot", "kernel", "bootloader", "image"):
-            assert component in order, (
-                f"{component} 应出现在 image 构建顺序中，实际：{order}"
-            )
-
-    # -------------------------------------------------------------------
-    # BuildEngine.build("app") 调用 AppBuilder.build_all()
-    # -------------------------------------------------------------------
-
-    def _make_config(self) -> dict:
-        """构造最小可用的构建配置。"""
-        return {
-            "board":    "test-board",
-            "product":  "default",
-            "variant":  "release",
-            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
-            "platform": "rockchip",
-            "soc":      "rk3566",
-            "rootfs":   {"custom_packages": []},
-        }
-
-    def test_build_app调用AppBuilder_build_all(self, tmp_path):
-        """engine.build('app') 应实例化 AppBuilder 并调用 build_all()。"""
-        config = self._make_config()
-
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-        ):
-            # 缓存始终认为需要重建
-            mock_cache_instance = MockCache.return_value
-            mock_cache_instance.is_up_to_date.return_value = False
-            mock_cache_instance.compute_hash.return_value = "abc123"
-            mock_cache_instance.target_dir = tmp_path / "target"
-
-            # AppBuilder.build_all 返回空字典（无 App 需要构建）
-            mock_builder = MockAppBuilder.return_value
-            mock_builder.build_all.return_value = {}
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("app")
-
-            # 验证 AppBuilder 被实例化
-            assert MockAppBuilder.called, "AppBuilder 应被实例化"
-            # 验证 build_all 被调用一次
-            mock_builder.build_all.assert_called_once()
-
-    def test_build_app结果存入outputs(self, tmp_path):
-        """build_all 的返回值应存入 engine._outputs['app']。"""
-        config = self._make_config()
-        fake_deb = tmp_path / "adbd_1.0.0_arm64.deb"
-        fake_deb.touch()
-
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-        ):
-            mock_cache_instance = MockCache.return_value
-            mock_cache_instance.is_up_to_date.return_value = False
-            mock_cache_instance.compute_hash.return_value = "abc123"
-            mock_cache_instance.target_dir = tmp_path / "target"
-
-            mock_builder = MockAppBuilder.return_value
-            mock_builder.build_all.return_value = {"adbd": fake_deb}
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("app")
-
-            assert engine._outputs.get("app") == {"adbd": fake_deb}, (
-                f"engine._outputs['app'] 应为 {{'adbd': {fake_deb}}}，"
-                f"实际：{engine._outputs.get('app')}"
-            )
-
-    def test_build_rootfs时AppBuilder被调用(self, tmp_path):
-        """engine.build('rootfs') 通过依赖图先构建 app，AppBuilder 应被调用。"""
-        config = self._make_config()
-
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-            patch("builder.engine.importlib") as mock_importlib,
-        ):
-            mock_cache_instance = MockCache.return_value
-            mock_cache_instance.is_up_to_date.return_value = False
-            mock_cache_instance.compute_hash.return_value = "abc123"
-            mock_cache_instance.target_dir = tmp_path / "target"
-
-            mock_builder = MockAppBuilder.return_value
-            mock_builder.build_all.return_value = {}
-
-            # 模拟 rootfs 平台构建器
-            mock_mod = MagicMock()
-            mock_mod.create_builder.return_value.build.return_value = {}
-            mock_importlib.import_module.return_value = mock_mod
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("rootfs")
-
-            # AppBuilder 应在 rootfs 构建前被调用
-            mock_builder.build_all.assert_called_once(), (
-                "构建 rootfs 时 AppBuilder.build_all 应被调用一次"
-            )
-
-    def test_build_rootfs时app先于rootfs执行(self, tmp_path):
-        """engine.build('rootfs') 中 app 组件的 build_all 应在 rootfs 构建器之前调用。"""
-        config = self._make_config()
-        call_order: list[str] = []
-
-        with (
-            patch("builder.engine.DockerRunner"),
-            patch("builder.engine.SourceManager"),
-            patch("builder.engine.BuildCache") as MockCache,
-            patch("builder.engine.AppBuilder") as MockAppBuilder,
-            patch("builder.engine.importlib") as mock_importlib,
-        ):
-            mock_cache_instance = MockCache.return_value
-            mock_cache_instance.is_up_to_date.return_value = False
-            mock_cache_instance.compute_hash.return_value = "abc123"
-            mock_cache_instance.target_dir = tmp_path / "target"
-
-            # 记录 build_all 调用顺序
-            mock_builder = MockAppBuilder.return_value
-            def _track_app_build(force=False):
-                call_order.append("app")
-                return {}
-            mock_builder.build_all.side_effect = _track_app_build
-
-            # 记录 rootfs 构建器调用顺序
-            mock_rootfs_builder = MagicMock()
-            def _track_rootfs_build(cfg):
-                call_order.append("rootfs")
-                return {}
-            mock_rootfs_builder.build.side_effect = _track_rootfs_build
-
-            mock_mod = MagicMock()
-            mock_mod.create_builder.return_value = mock_rootfs_builder
-            mock_importlib.import_module.return_value = mock_mod
-
-            engine = BuildEngine(config, project_dir=tmp_path)
-            engine.build("rootfs")
-
-            # 验证 app 先于 rootfs 执行
-            assert "app" in call_order, "app 组件应被构建"
-            assert "rootfs" in call_order, "rootfs 组件应被构建"
-            assert call_order.index("app") < call_order.index("rootfs"), (
-                f"app 应在 rootfs 之前执行，实际顺序：{call_order}"
-            )
+    def test_app报告与引擎manifest联通(self, tmp_path):
+        from builder.workspace import WorkspaceContext, Target
+        from builder.artifacts import ArtifactManifest
+        context = WorkspaceContext(tmp_path, tmp_path, tmp_path / '.build',
+                                   Target('board', 'default', 'release'))
+        config = {'board': 'board', 'product': 'default', 'variant': 'release', 'platform': 'rockchip',
+                  'architecture': {'userspace': 'aarch64', 'kernel': 'arm64', 'bootloader': 'arm64'},
+                  'rootfs': {'custom_packages': []}}
+        engine = BuildEngine(config, context=context, output=MagicMock())
+        engine.build('app')
+        report_path = context.target_dir / 'apps/build-report.json'
+        assert report_path.is_file()
+        manifest = ArtifactManifest.load(context.target_dir / 'app/manifest.json')
+        assert manifest and manifest.validate()
+        assert manifest.artifacts[0].path == report_path
+        assert engine._app_report.runtime_debs == ()
+        identity = manifest.identity
+        engine.build('app')
+        assert ArtifactManifest.load(context.target_dir / 'app/manifest.json').identity == identity

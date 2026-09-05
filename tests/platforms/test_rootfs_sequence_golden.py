@@ -27,6 +27,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.builder.context import component_context
+
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
 PLATFORMS = {
@@ -108,7 +110,9 @@ class _Recorder:
             text = text.replace(raw, token)
         # 每次构建新建的临时目录、内容哈希、时间戳都不该进 golden
         text = re.sub(r"/[^ ]*flange-rootfs-[A-Za-z0-9_]+", "<TMP>", text)
-        text = re.sub(r"rootfs-base-[0-9a-f]+", "rootfs-base-<HASH>", text)
+        text = re.sub(r"<PROJECT>/.build/work/[^ ]+/rootfs/run-[^ /]+", "<TMP>", text)
+        text = re.sub(r"base-[0-9a-f]+", "base-<HASH>", text)
+        text = re.sub(r"(base-<HASH>\.tar\.zst)\.[^ /]+\.tmp", r"\1.<TEMP>.tmp", text)
         return text
 
     def probe(self, name):
@@ -129,6 +133,8 @@ class _Recorder:
             if kwargs.get("input"):
                 entry += f"  <stdin:{self._norm(str(kwargs['input'])).strip()}>"
             self.calls.append(entry)
+            if command and str(command[0]) == "tar" and "-cf" in command:
+                Path(command[command.index("-cf") + 1]).write_bytes(b"snapshot")
             # tar 解压是 mock 的，但后续步骤（locale / hostname / fstab）会往
             # 解出来的树里写真实文件；建一个最小骨架让序列能跑完。
             if command and str(command[0]) == "tar" and "-C" in command:
@@ -144,6 +150,7 @@ class _Recorder:
 
 
 def _run_compile(platform: str, tmp_path: Path) -> list[str]:
+    tmp_path = tmp_path.resolve()
     """跑一次 compile()，返回归一化后的命令序列。"""
     project_root = tmp_path / "project"
     (project_root / "components/rootfs/overlay").mkdir(parents=True)
@@ -163,14 +170,18 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
     docker = MagicMock()
     source = MagicMock()
     source.ensure_rootfs_tarball.return_value = Path("<TARBALL>")
-    source.ensure_download.return_value = Path("<APTKEY>")
+    source.ensure_download.side_effect = lambda namespace, *args: Path("<TARBALL>" if namespace == "rootfs" else "<APTKEY>")
 
     builder = builder_cls(docker, source)
     cache = MagicMock()
     cache.target_dir = project_root / ".build/target/golden-board/default/release"
     cache.compute_phase_hash.return_value = "deadbeef"
     builder.cache = cache
+    builder.context = component_context(project_root, {"board": "golden-board"}, target_dir=target)
     builder.output = None
+    builder.app_report = MagicMock()
+    builder.app_report.validate.return_value = True
+    builder.app_report.runtime_debs_for.return_value = tuple((target / "app").glob("*.deb"))
 
     recorder = _Recorder(tmp_path, project_root)
     docker.run.side_effect = recorder._record("run")

@@ -26,7 +26,6 @@ dts/dtso 中的 ``#include <dt-bindings/...>``。
 from __future__ import annotations
 
 import shutil
-import tempfile
 from pathlib import Path
 
 from builder.base import ComponentBuilder
@@ -100,7 +99,7 @@ class OverlaysBuilder(ComponentBuilder):
         v_names = vendor_overlays(config)
         b_names = board_overlays(config)
         p_names = package_overlays(config)
-        self._work_dir = Path(tempfile.mkdtemp(prefix="flange-overlays-"))
+        self._work_dir = self.work_dir()
         self._build_dir = self._work_dir / "overlays"
         self._build_dir.mkdir()
 
@@ -153,7 +152,7 @@ class OverlaysBuilder(ComponentBuilder):
             raise ValueError(
                 "boot.overlays.board 非空但 config 缺少 board 字段（不应发生）"
             )
-        overlays_dir = Path(f"components/board/{board}/dtso").resolve()
+        overlays_dir = (self.components_root / "board" / board / "dtso").resolve()
         if not overlays_dir.is_dir():
             raise FileNotFoundError(
                 f"board overlay 源目录不存在: {overlays_dir}；"
@@ -225,9 +224,7 @@ class OverlaysBuilder(ComponentBuilder):
     def _kernel_src_dir(self, config: dict) -> Path:
         """解析 kernel 组件的源码目录（用作 KSRC）。
 
-        优先使用 SourceManager.ensure 同样的解析路径——直接传 config 给它，
-        与 kernel 组件 build 时拿到的目录一致；这样不依赖 kernel 是否已经
-        compile，只要 fetch 完成就够（实际 device-tree-overlay 依赖 kernel
-        是为了内容哈希级联，而非 compile 产物）。
+        device-tree-overlay 依赖 kernel，执行到这里时源码已经就绪。这里只解析
+        同一个目录，避免再次 fetch/reset/clean 内核工作树。
         """
-        return self.source.ensure("kernel", config)
+        return self.source.source_path("kernel", config)

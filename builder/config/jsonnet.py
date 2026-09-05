@@ -11,6 +11,7 @@ from typing import Any
 import _jsonnet
 
 from builder.paths import components_dir
+from builder.config.schema import Object, STRING, STRINGS, SchemaError, validate_system_shape
 
 
 class JsonnetConfigError(ValueError):
@@ -24,13 +25,11 @@ def _unique(items: list[str]) -> list[str]:
 def _expand_package_sets(config: dict) -> None:
     rootfs = config.get("rootfs") or {}
     selected = rootfs.get("package_set") or []
-    selected = [selected] if isinstance(selected, str) else selected
     package_sets = rootfs.get("package_sets") or {}
     packages: list[str] = []
     for name in selected:
         if name not in package_sets:
-            raise JsonnetConfigError(
-                f"rootfs.package_set 引用了未知集合: {name}")
+            raise JsonnetConfigError(f"rootfs.package_set 引用了未知集合: {name}")
         packages.extend(package_sets[name])
     rootfs["packages"] = _unique(packages + (rootfs.get("packages") or []))
 
@@ -92,8 +91,7 @@ class JsonnetEvaluator:
             source_name = self.config_root / source_name
         source_name = source_name.resolve()
         self._dependencies = {
-            self._resolve_config_path(path, label="配置依赖")
-            for path in dependencies
+            self._resolve_config_path(path, label="配置依赖") for path in dependencies
         }
         try:
             rendered = _jsonnet.evaluate_snippet(
@@ -133,9 +131,7 @@ class JsonnetEvaluator:
             raise JsonnetConfigError(f"Jsonnet 未生成合法 JSON: {exc}") from exc
         if not isinstance(config, dict):
             raise JsonnetConfigError("Jsonnet 配置顶层必须求值为 object")
-        canonical = json.dumps(
-            config, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-        )
+        canonical = json.dumps(config, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
         return JsonnetResult(
             config=config,
             dependencies=tuple(sorted(self._dependencies)),
@@ -161,13 +157,9 @@ class JsonnetEvaluator:
         try:
             resolved.relative_to(self.config_root)
         except ValueError as exc:
-            raise JsonnetConfigError(
-                f"{label}越过允许根目录 {self.config_root}: {path}"
-            ) from exc
+            raise JsonnetConfigError(f"{label}越过允许根目录 {self.config_root}: {path}") from exc
         if resolved.suffix not in self._ALLOWED_SUFFIXES:
-            raise JsonnetConfigError(
-                f"{label}扩展名必须是 .jsonnet 或 .libsonnet: {path}"
-            )
+            raise JsonnetConfigError(f"{label}扩展名必须是 .jsonnet 或 .libsonnet: {path}")
         return resolved
 
 
@@ -192,6 +184,22 @@ class JsonnetConfigLoader:
             )
         identity.setdefault("products", ["default"])
         identity.setdefault("variants", ["release"])
+        try:
+            Object(
+                {
+                    "board": STRING,
+                    "platform": STRING,
+                    "soc": STRING,
+                    "products": STRINGS,
+                    "variants": STRINGS,
+                },
+                ("board", "platform", "soc", "products", "variants"),
+            ).check(identity, "board")
+            for field in ("products", "variants"):
+                if not identity[field] or len(set(identity[field])) != len(identity[field]):
+                    raise SchemaError(f"board.{field} 必须是非空且不重复的字符串列表")
+        except SchemaError as exc:
+            raise JsonnetConfigError(str(exc)) from exc
         return identity
 
     def evaluate_board(
@@ -209,9 +217,7 @@ class JsonnetConfigLoader:
         platform = identity["platform"]
         soc = identity["soc"]
         rootfs_path = self.config_root / "rootfs" / "config.jsonnet"
-        overlay_path = (
-            self.config_root / "device-tree-overlay" / "config.jsonnet"
-        )
+        overlay_path = self.config_root / "device-tree-overlay" / "config.jsonnet"
         platform_path = self.config_root / "platform" / platform / "config.jsonnet"
         soc_path = self.config_root / "platform" / platform / soc / "config.jsonnet"
         board_path = self.config_root / "board" / board / "config.jsonnet"
@@ -219,14 +225,12 @@ class JsonnetConfigLoader:
         platform_identity = self._identity_projection(platform_path, ("platform",))
         if platform_identity.get("platform") != platform:
             raise JsonnetConfigError(
-                f"platform 身份与目录不一致: "
-                f"{platform_identity.get('platform')!r} != {platform!r}"
+                f"platform 身份与目录不一致: {platform_identity.get('platform')!r} != {platform!r}"
             )
         soc_identity = self._identity_projection(soc_path, ("platform", "soc"))
         if soc_identity.get("platform") != platform or soc_identity.get("soc") != soc:
             raise JsonnetConfigError(
-                f"SoC 身份与路径不一致: {soc_identity!r}，期望 "
-                f"platform={platform!r}, soc={soc!r}"
+                f"SoC 身份与路径不一致: {soc_identity!r}，期望 platform={platform!r}, soc={soc!r}"
             )
 
         imports = [rootfs_path]
@@ -235,13 +239,14 @@ class JsonnetConfigLoader:
         baseline_count = len(imports)
         imports.extend([platform_path, soc_path, board_path])
         platform_result = self._evaluate_layers(
-            imports[:baseline_count + 1], product=product, variant=variant
+            imports[: baseline_count + 1], product=product, variant=variant
         )
         soc_result = self._evaluate_layers(
-            imports[:baseline_count + 2], product=product, variant=variant
+            imports[: baseline_count + 2], product=product, variant=variant
         )
         self._audit_soc_layer(platform_result.config, soc_result.config)
         result = self._evaluate_layers(imports, product=product, variant=variant)
+        self._validate_authored_shape(result.config)
         selected_packages = list(result.config.get("packages") or [])
         package_configs = self._package_config_paths(selected_packages)
         if package_configs:
@@ -250,11 +255,14 @@ class JsonnetConfigLoader:
             )
             # package 选择以 board 首次求值结果为准，不递归加载或注入依赖包。
             result.config["packages"] = selected_packages
+        self._validate_authored_shape(result.config)
         resolved = ResolvedConfig(result.config)
         _expand_package_sets(resolved)
         from builder.packages import expand_hardware_packages
+
         expand_hardware_packages(resolved, project_root=self.project_root)
         from builder.config.apps import normalize_app_sources
+
         normalized = normalize_app_sources(resolved, self.project_root)
         resolved = ResolvedConfig(normalized)
         resolved.jsonnet_dependencies = result.dependencies
@@ -270,8 +278,18 @@ class JsonnetConfigLoader:
             normalized_result, board=board, product=product, variant=variant
         )
         from builder.config.validate import validate_config
+
         validate_config(resolved)
         return resolved
+
+    @staticmethod
+    def _validate_authored_shape(config: dict) -> None:
+        from builder.config.validate import ConfigError
+
+        try:
+            validate_system_shape(config, authored=True)
+        except SchemaError as exc:
+            raise ConfigError(str(exc)) from exc
 
     def _evaluate_layers(
         self,
@@ -280,14 +298,13 @@ class JsonnetConfigLoader:
         product: str,
         variant: str,
     ) -> JsonnetResult:
-        import_exprs = [
-            f'(import {json.dumps(self._import_name(path))})'
-            for path in paths
-        ]
-        snippet = " + ".join([
-            *import_exprs,
-            "{ product: std.extVar('product'), variant: std.extVar('variant') }",
-        ])
+        import_exprs = [f"(import {json.dumps(self._import_name(path))})" for path in paths]
+        snippet = " + ".join(
+            [
+                *import_exprs,
+                "{ product: std.extVar('product'), variant: std.extVar('variant') }",
+            ]
+        )
         return self.evaluator.evaluate_snippet(
             "config/__compose__.jsonnet",
             snippet,
@@ -298,11 +315,12 @@ class JsonnetConfigLoader:
         """返回 board 直接启用且携带 Jsonnet 配置的 package。"""
         paths: list[Path] = []
         for entry in entries:
-            name = entry if isinstance(entry, str) else (
-                entry.get("name") if isinstance(entry, dict) else None
+            name = (
+                entry
+                if isinstance(entry, str)
+                else (entry.get("name") if isinstance(entry, dict) else None)
             )
-            if (not isinstance(name, str) or not name
-                    or Path(name).name != name):
+            if not isinstance(name, str) or not name or Path(name).name != name:
                 continue
             path = self.config_root / "packages" / name / "config.jsonnet"
             if path.is_file():
@@ -320,10 +338,9 @@ class JsonnetConfigLoader:
             ("rootfs", "custom_packages"),
         )
         for path in sorted(changed):
-            if any(path[:len(prefix)] == prefix for prefix in forbidden):
+            if any(path[: len(prefix)] == prefix for prefix in forbidden):
                 raise JsonnetConfigError(
-                    "SoC overlay 不得声明板级事实或产品策略: "
-                    + ".".join(path)
+                    "SoC overlay 不得声明板级事实或产品策略: " + ".".join(path)
                 )
         if ("amp", "enabled") in changed:
             enabled = (after.get("amp") or {}).get("enabled")
@@ -347,9 +364,7 @@ class JsonnetConfigLoader:
                 if key not in after:
                     changed.update(cls._leaf_paths(before[key], child_prefix))
                     continue
-                changed.update(cls._changed_paths(
-                    before[key], after[key], child_prefix
-                ))
+                changed.update(cls._changed_paths(before[key], after[key], child_prefix))
             return changed
         return set() if before == after else {prefix}
 
@@ -382,9 +397,7 @@ class JsonnetConfigLoader:
             f"local config = import {import_name}; {{{projected}}}",
             ext_vars={"product": "", "variant": ""},
         )
-        return {
-            key: value for key, value in result.config.items() if value is not None
-        }
+        return {key: value for key, value in result.config.items() if value is not None}
 
     def _import_name(self, path: Path) -> str:
         resolved = self.evaluator._resolve_config_path(path, label="配置层")

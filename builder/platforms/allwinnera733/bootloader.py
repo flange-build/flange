@@ -57,7 +57,7 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
         # -j1 强制串行：Allwinner 构建规则中存在 race condition
         # （sys_config.bin 被多个 boot0 target 共享，并行时相互覆盖）
         self.docker.run(
-            ["make", "-C", str(src_dir), f"-j1", target],
+            ["make", "-C", str(src_dir), "-j1", target],
             label=f"make {target}...",
         )
 

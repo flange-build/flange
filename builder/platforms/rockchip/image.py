@@ -26,7 +26,6 @@ from builder.partition.rockchip import (
     validate_parameter_capacity,
 )
 from builder.partition.size import parse_size
-from builder.paths import PROJECT_ROOT
 
 
 class RockchipImageBuilder(GptImageBuilder):
@@ -38,28 +37,23 @@ class RockchipImageBuilder(GptImageBuilder):
 
     PARTITION_IMAGES = {
         "idbloader": "bootloader/idbloader.img",
-        "uboot":     "bootloader/u-boot.itb",
-        "boot":      "boot/boot.img",
-        "rootfs":    "rootfs/rootfs.img",
+        "uboot": "bootloader/u-boot.itb",
+        "boot": "boot/boot.img",
+        "rootfs": "rootfs/rootfs.img",
         # recovery / amp 未启用时由 _partition_images 摘掉。
-        "recovery":  "recovery/recovery.img",
-        "amp":       "amp/amp.img",
+        "recovery": "recovery/recovery.img",
+        "amp": "amp/amp.img",
     }
 
     def compile(self, src_dir: Path, config: dict):
         if self._uses_named_nand_bundle(config):
-            import tempfile
-
-            self._work_dir = Path(tempfile.mkdtemp(prefix="flange-image-"))
+            self._work_dir = self.work_dir()
             self._compile_mtd_bundle(config)
             return
         super().compile(src_dir, config)
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         if self._uses_named_nand_bundle(config):
-            stale_raw = self.cache.target_dir / "image" / "raw.img"
-            if stale_raw.is_file():
-                stale_raw.unlink()
             return {
                 "bundle": self._bundle_manifest,
                 "parameter": self._parameter,
@@ -70,16 +64,14 @@ class RockchipImageBuilder(GptImageBuilder):
         """4K 介质上给 rootfs 额外伪装 Type-UUID（见类常量说明）。"""
         ops = []
         if entry.name == "rootfs" and self._sector != self.FLANGE_SECTOR:
-            ops.append(["sfdisk", "--part-type", device,
-                        str(gpt_index), self.EFI_TYPE_GUID])
+            ops.append(["sfdisk", "--part-type", device, str(gpt_index), self.EFI_TYPE_GUID])
         ops.extend(super()._gpt_partition_ops(entry, gpt_index, device))
         return ops
 
     @staticmethod
     def _uses_named_nand_bundle(config: dict) -> bool:
         """SPI NAND 始终使用 parameter + 具名 DI，不生成整片 raw.img。"""
-        partition_format = (config.get("partitions") or {}).get(
-            "format", "gpt")
+        partition_format = (config.get("partitions") or {}).get("format", "gpt")
         storage_type = (config.get("storage") or {}).get("type")
         return partition_format == "mtd" or storage_type == "spinand"
 
@@ -91,15 +83,16 @@ class RockchipImageBuilder(GptImageBuilder):
         if partition_format == "mtd":
             parameter_source = Path(config["partitions"]["parameter"])
             if not parameter_source.is_absolute():
-                parameter_source = PROJECT_ROOT / parameter_source
+                parameter_source = self.context.tool_root / parameter_source
             shutil.copy2(parameter_source, parameter)
         else:
-            machine = (config.get("rkbin") or {}).get(
-                "mkimage_chip", "rockchip").upper()
-            parameter.write_text(generate_parameter_txt(
-                config["partitions"].get("entries") or [],
-                machine=machine,
-            ))
+            machine = (config.get("rkbin") or {}).get("mkimage_chip", "rockchip").upper()
+            parameter.write_text(
+                generate_parameter_txt(
+                    config["partitions"].get("entries") or [],
+                    machine=machine,
+                )
+            )
 
         entries = parse_parameter_file(parameter)
         storage_bytes = parse_size(config["storage"]["size"]).bytes
@@ -109,8 +102,9 @@ class RockchipImageBuilder(GptImageBuilder):
         target_dir = self.cache.target_dir
         manifest_parts = []
         required_names = {"uboot", "boot", "rootfs"}
-        if (config.get("amp") or {}).get("enabled", False):
-            required_names.add("amp")
+        for name in ("amp", "recovery"):
+            if (config.get(name) or {}).get("enabled", False):
+                required_names.add(name)
 
         for entry in entries:
             name = entry.name
@@ -119,32 +113,28 @@ class RockchipImageBuilder(GptImageBuilder):
                 continue
             image = target_dir / relative
             if not image.is_file():
-                if name in required_names:
-                    raise FileNotFoundError(
-                        f"MTD 分区 {name} 的镜像不存在: {image}")
-                continue
+                raise FileNotFoundError(f"MTD 分区 {name} 的镜像不存在: {image}")
             limit = entry.size_bytes(storage_bytes)
             if limit is None or image.stat().st_size > limit:
                 raise BuildError(
-                    f"{name} 镜像 {image.stat().st_size} bytes 超过 MTD 分区 "
-                    f"{limit} bytes")
-            manifest_parts.append({
-                "name": name,
-                "offset": f"0x{entry.offset:x}",
-                "size": "remaining" if entry.size is None
-                else f"0x{entry.size:x}",
-                "image": relative,
-                "image_bytes": image.stat().st_size,
-            })
+                    f"{name} 镜像 {image.stat().st_size} bytes 超过 MTD 分区 {limit} bytes"
+                )
+            manifest_parts.append(
+                {
+                    "name": name,
+                    "offset": f"0x{entry.offset:x}",
+                    "size": "remaining" if entry.size is None else f"0x{entry.size:x}",
+                    "image": relative,
+                    "image_bytes": image.stat().st_size,
+                }
+            )
         missing_names = required_names - set(by_name)
         if missing_names:
             raise BuildError(
-                "MTD parameter 缺少必需的具名分区: "
-                + ", ".join(sorted(missing_names)))
+                "MTD parameter 缺少必需的具名分区: " + ", ".join(sorted(missing_names))
+            )
 
-        rootfs_index = next(
-            index for index, entry in enumerate(entries)
-            if entry.name == "rootfs")
+        rootfs_index = next(index for index, entry in enumerate(entries) if entry.name == "rootfs")
         self._validate_dtb_ubi_mtd(target_dir, config, rootfs_index)
         bootloader_artifacts = [
             "bootloader/miniloader.bin",
@@ -152,13 +142,12 @@ class RockchipImageBuilder(GptImageBuilder):
             "bootloader/u-boot.itb",
         ]
         missing_bootloader = [
-            relative for relative in bootloader_artifacts
-            if not (target_dir / relative).is_file()
+            relative for relative in bootloader_artifacts if not (target_dir / relative).is_file()
         ]
         if missing_bootloader:
             raise FileNotFoundError(
-                "MTD 刷写包缺少 bootloader 产物: "
-                + ", ".join(missing_bootloader))
+                "MTD 刷写包缺少 bootloader 产物: " + ", ".join(missing_bootloader)
+            )
         manifest = {
             "format": partition_format,
             "storage_type": (config.get("storage") or {}).get("type", ""),
@@ -170,8 +159,7 @@ class RockchipImageBuilder(GptImageBuilder):
             "partitions": manifest_parts,
         }
         self._bundle_manifest = self._work_dir / "mtd-bundle.json"
-        self._bundle_manifest.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+        self._bundle_manifest.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
         self._parameter = parameter
 
     def _partition_images(self, config: dict) -> dict[str, str]:
@@ -200,13 +188,9 @@ class RockchipImageBuilder(GptImageBuilder):
             ["fdtget", "-t", "s", str(dtb), "/chosen", "bootargs"],
             capture=True,
         )
-        match = re.search(
-            r"(?:^|\s)ubi\.mtd=(\d+)(?:\s|$)", result.stdout.strip())
+        match = re.search(r"(?:^|\s)ubi\.mtd=(\d+)(?:\s|$)", result.stdout.strip())
         if not match:
-            raise BuildError(
-                f"目标 DTB {dtb.name} chosen.bootargs 缺少 ubi.mtd=<index>")
+            raise BuildError(f"目标 DTB {dtb.name} chosen.bootargs 缺少 ubi.mtd=<index>")
         actual = int(match.group(1))
         if actual != rootfs_index:
-            raise BuildError(
-                f"DTB ubi.mtd={actual} 与 parameter rootfs=mtd{rootfs_index} "
-                "不一致")
+            raise BuildError(f"DTB ubi.mtd={actual} 与 parameter rootfs=mtd{rootfs_index} 不一致")

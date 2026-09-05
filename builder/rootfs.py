@@ -17,15 +17,21 @@
 import json
 import math
 import shutil
-import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.chroot import ChrootContext
-from builder.config.canonical import userspace_arch
 from builder.docker import BuildError
 from builder.firmware_panel import encode_file as _encode_panel_file
 from builder.partition.layout import PartitionLayout
 from builder.snapshot import SnapshotStore
+from builder.rootfs_storage import rootfs_staging
+from builder.rootfs_base import (
+    base_plan,
+    build_base,
+    emulator_for,
+    apt_command,
+    install_extra_sources,
+)
 
 
 # 写入 /etc/sudoers.d/ 时统一使用 0440，与 visudo 默认权限和 sudo 自身的
@@ -72,17 +78,18 @@ class RootfsBuilder(ComponentBuilder):
         pass  # rootfs 无 configure 步骤
 
     def compile(self, src_dir: Path, config: dict):
-        self._work_dir = Path(
-            tempfile.mkdtemp(prefix=f"flange-{self.component}-"))
-        rootfs_dir = self._work_dir / self.component
-        rootfs_dir.mkdir()
+        self._work_dir = self.work_dir()
+        with rootfs_staging(self.component) as rootfs_dir:
+            self._compile_rootfs(rootfs_dir, config)
+
+    def _compile_rootfs(self, rootfs_dir: Path, config: dict) -> None:
+        """完整可变文件树生命周期在同一原生存储中执行。"""
 
         # Phase 1：解压 base tarball + apt install。切口选在"apt 不做增量"
         # 这个真实的工具边界上，产物按内容哈希缓存、跨 target 共享。
         base_cache_path = self._get_base_cache_path(config)
-        if base_cache_path and base_cache_path.exists():
+        if base_cache_path and self._extract_base(base_cache_path, rootfs_dir):
             self._status("Phase 1: base 缓存命中")
-            self._extract_base(base_cache_path, rootfs_dir)
         else:
             self._status("Phase 1: base 构建")
             if self.output:
@@ -113,7 +120,10 @@ class RootfsBuilder(ComponentBuilder):
         self._build_image(rootfs_dir, config)
 
     def collect(self, src_dir: Path, config: dict) -> dict:
-        return {self.component: self._output}
+        outputs = {self.component: self._output}
+        if getattr(self, "_packages_manifest", None):
+            outputs["packages"] = self._packages_manifest
+        return outputs
 
     def _post_customize(self, rootfs_dir: Path, config: dict) -> None:
         """Phase 2 之后、写 fstab 之前的平台钩子。默认无操作。"""
@@ -125,55 +135,36 @@ class RootfsBuilder(ComponentBuilder):
         size_mb = self._partition_size_mb(config, self.component)
         self._ensure_rootfs_fits_image(rootfs_dir, size_mb)
         self._status(f"生成 {image_name} ({size_mb}MB)...")
+        self.docker.run(["truncate", "-s", f"{size_mb}M", str(self._output)])
         self.docker.run(
-            ["truncate", "-s", f"{size_mb}M", str(self._output)])
-        self.docker.run([
-            "mke2fs", "-t", "ext4", "-L", self.component, "-F", "-q",
-            "-d", str(rootfs_dir), str(self._output),
-        ])
+            [
+                "mke2fs",
+                "-t",
+                "ext4",
+                "-L",
+                self.component,
+                "-F",
+                "-q",
+                "-d",
+                str(rootfs_dir),
+                str(self._output),
+            ]
+        )
 
     def _build_phase1(self, rootfs_dir: Path, config: dict) -> None:
-        """解压 base tarball + chroot apt install。"""
-        tarball_path = self.source.ensure_rootfs_tarball(config)
-        self._status("解压 base tarball...")
-        self.docker.run_privileged(
-            ["tar", "xf", str(tarball_path), "-C", str(rootfs_dir)])
-        emulator = self._rootfs_emulator(config)
-        self.docker.run_privileged(
-            ["cp", f"/usr/bin/{emulator}",
-             str(rootfs_dir / "usr" / "bin" / "")])
-
-        with ChrootContext(rootfs_dir, self.docker) as chroot:
-            apt_cache = rootfs_dir / "var" / "cache" / "apt" / "archives"
-            apt_cache.mkdir(parents=True, exist_ok=True)
-            chroot.bind_mount("/cache/apt", apt_cache)
-
-            self._status("apt-get update...")
-            chroot.run(["apt-get", "update"], label="apt-get update...")
-
-            if self._has_extra_apt_sources(config):
-                # ubuntu-base 最小系统不带 CA 证书，直接写 HTTPS 源会让下一次
-                # apt-get update 卡在证书验证上。必须先用官方源把证书装上，
-                # 再写入额外源重新 update。
-                self._status("安装 ca-certificates（额外 APT 源需要）...")
-                chroot.run(
-                    ["apt-get", "install", "-y", "--no-install-recommends",
-                     "ca-certificates"],
-                    label="安装 ca-certificates...")
-                # postinst 在 chroot 内可能没触发，显式生成证书 bundle。
-                chroot.run(["update-ca-certificates"],
-                           label="update-ca-certificates...")
-                self._setup_extra_apt_sources(rootfs_dir, config)
-                self._status("apt-get update（含额外源）...")
-                chroot.run(["apt-get", "update"],
-                           label="apt-get update（含额外源）...")
-
-            packages = self._component_config(config).get("packages") or []
-            if packages:
-                self._status(f"apt-get install ({len(packages)} 个包)...")
-                chroot.run(self._apt_install_command(packages, config),
-                           label=f"安装 {len(packages)} 个包...")
-            chroot.run(["apt-get", "clean"])
+        """执行用于查询快照的同一份 Phase 1 计划。"""
+        plan = self._phase1_plan
+        before = plan.fingerprint()
+        build_base(
+            plan,
+            rootfs_dir,
+            context=self.context,
+            source=self.source,
+            docker=self.docker,
+            status=self._status,
+        )
+        if plan.fingerprint() != before:
+            raise BuildError("base 构建期间输入变化，拒绝保存快照")
 
     def _build_phase2(self, rootfs_dir: Path, config: dict) -> None:
         """custom deb → extra deb → 模块 → 固件 → overlay → locale → 账号。"""
@@ -204,51 +195,32 @@ class RootfsBuilder(ComponentBuilder):
         self._status("导出已安装包清单...")
         with ChrootContext(rootfs_dir, self.docker) as chroot:
             chroot.run(
-                ["/bin/sh", "-c",
-                 "dpkg-query -W -f='${binary:Package}\t${Version}\n' "
-                 "| sort > /etc/flange/packages.manifest"],
-                label="dpkg-query 导出包清单...")
-        # 同时落到产物目录：不刷机也能 diff 两次构建装了什么
-        if self.cache is not None and manifest.is_file():
-            target = self._target_dir() / self.component
-            target.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(manifest, target / "packages.manifest")
+                [
+                    "/bin/sh",
+                    "-c",
+                    "dpkg-query -W -f='${binary:Package}\t${Version}\n' "
+                    "| sort > /etc/flange/packages.manifest",
+                ],
+                label="dpkg-query 导出包清单...",
+            )
+        if manifest.is_file():
+            self._packages_manifest = self._work_dir / "packages.manifest"
+            shutil.copy2(manifest, self._packages_manifest)
 
     def _target_dir(self) -> Path:
-        """当前 target 的产物目录。
-
-        锚点是 engine 注入的 cache，不是 cwd 相对字面量、也不是模块级
-        BUILD_ROOT 常量 —— 前者只在仓库根启动时才对，后者不跟随注入的
-        project_root（ProjectSpec §9）。
-
-        与 base 快照不同，这个目录是**必需输入**：app deb 与内核模块都从
-        这里取，缺了会静默产出没有它们的残缺镜像。所以宁可明确失败。
-        """
-        if self.cache is None:
-            raise RuntimeError(
-                "rootfs 构建需要注入 cache 以定位 target 产物目录"
-                "（app deb 与内核模块都从那里取）")
-        return self.cache.target_dir
-
-    def _selected_debs(self, config: dict) -> set[str] | None:
-        """要安装哪些 App 的 deb；None 表示 app/ 目录下全装。
-
-        normal rootfs 全装：App 与 deb 是一对多（一个 vendor App 可以产 17
-        个 deb），按名挑选必然漏。recovery 是几十 MB 的救援系统，装不下也
-        不需要全部 App，所以它覆写这个方法按 `recovery.custom_packages` 挑。
-        """
-        return None
+        """依赖产物严格来自当前显式目标。"""
+        if self.context is None:
+            raise RuntimeError("rootfs 构建必须注入 WorkspaceContext")
+        return self.context.target_dir
 
     def _install_app_debs(self, rootfs_dir: Path, config: dict) -> None:
-        """把 app 组件产出的 deb 装进 rootfs（范围由 `_selected_debs` 决定）。"""
-        app_deb_dir = self._target_dir() / "app"
-        if not app_deb_dir.is_dir():
-            return
-        deb_files = sorted(app_deb_dir.glob("*.deb"))
-        selected = self._selected_debs(config)
-        if selected is not None:
-            deb_files = [deb for deb in deb_files
-                         if deb.stem.split("_", 1)[0] in selected]
+        """只安装本次报告中请求 App 的完整运行依赖闭包。"""
+        names = self._component_config(config).get("custom_packages") or []
+        if self.app_report is None:
+            raise BuildError("rootfs 缺少本次构建的 AppBuildReport")
+        if not self.app_report.validate():
+            raise BuildError("App 产物已经变更或缺失，拒绝安装")
+        deb_files = self.app_report.runtime_debs_for(names)
         if not deb_files:
             return
         names = [deb.name for deb in deb_files]
@@ -261,7 +233,8 @@ class RootfsBuilder(ComponentBuilder):
             chroot.run(
                 ["dpkg", "-i", "--force-confnew"]
                 + [f"/tmp/flange-debs/{deb.name}" for deb in deb_files],
-                label=f"dpkg -i ({len(deb_files)} 个包)...")
+                label=f"dpkg -i ({len(deb_files)} 个包)...",
+            )
         shutil.rmtree(deb_tmp)
 
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict) -> None:
@@ -270,14 +243,18 @@ class RootfsBuilder(ComponentBuilder):
         保持目录结构原样，modprobe 才能读到 modules.dep / modules.alias
         这些索引。
         """
-        modules_src = self._target_dir() / "kernel" / "modules" / "lib" / "modules"
+        modules_root = self._target_dir() / "kernel" / "modules"
+        if not modules_root.is_dir():
+            raise BuildError(f"内核模块产物缺失: {modules_root}")
+        modules_src = modules_root / "lib/modules"
         if not modules_src.is_dir():
+            if any(modules_root.iterdir()):
+                raise BuildError(f"内核模块产物目录结构不完整: {modules_root}")
             return
         self._status("安装内核模块...")
         dest = rootfs_dir / "lib" / "modules"
         dest.mkdir(parents=True, exist_ok=True)
-        self.docker.run_privileged(
-            ["cp", "-a", f"{modules_src}/.", str(dest)])
+        self.docker.run_privileged(["cp", "-a", f"{modules_src}/.", str(dest)])
 
     def _fstab_mounts(self, config: dict) -> tuple:
         """返回本次要写进 fstab 的挂载项。默认取类常量，可按配置路由。"""
@@ -293,82 +270,66 @@ class RootfsBuilder(ComponentBuilder):
         fstab = rootfs_dir / "etc" / "fstab"
         if fstab.exists():
             existing = fstab.read_text()
-            if any(marker in existing
-                   for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")):
+            if any(marker in existing for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")):
                 return
         fstab.parent.mkdir(parents=True, exist_ok=True)
 
         mounts = self._fstab_mounts(config)
         if not mounts:
-            fstab.write_text(
-                "# 根文件系统不由 fstab 挂载（由 kernel bootargs 指定）。\n")
+            fstab.write_text("# 根文件系统不由 fstab 挂载（由 kernel bootargs 指定）。\n")
             return
 
-        lines = [
-            "# <file system>  <mount point>  <type>  <options>  <dump>  <pass>"
-        ]
+        lines = ["# <file system>  <mount point>  <type>  <options>  <dump>  <pass>"]
         for index, (spec, mount, fstype) in enumerate(mounts):
             lines.append(
-                f"{spec:<16} {mount:<14} {fstype:<7} defaults   0       "
-                f"{1 if index == 0 else 2}")
+                f"{spec:<16} {mount:<14} {fstype:<7} defaults   0       {1 if index == 0 else 2}"
+            )
         fstab.write_text("\n".join(lines) + "\n")
         for _spec, mount, _fstype in mounts:
             if mount != "/":
-                (rootfs_dir / mount.lstrip("/")).mkdir(
-                    parents=True, exist_ok=True)
+                (rootfs_dir / mount.lstrip("/")).mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _ensure_api_mountpoints(rootfs_dir: Path) -> None:
         """确保 systemd 启动早期使用的 API 文件系统挂载点存在。"""
         for relative in (
-            "proc", "sys", "sys/fs/cgroup", "dev", "dev/pts", "dev/shm",
-            "run", "run/lock", "tmp",
+            "proc",
+            "sys",
+            "sys/fs/cgroup",
+            "dev",
+            "dev/pts",
+            "dev/shm",
+            "run",
+            "run/lock",
+            "tmp",
         ):
             (rootfs_dir / relative).mkdir(parents=True, exist_ok=True)
         (rootfs_dir / "tmp").chmod(0o1777)
 
     @staticmethod
     def _rootfs_emulator(config: dict) -> str:
-        """按用户态 ABI 选 chroot emulator，允许 rootfs.emulator 覆盖。
-
-        硬编码 qemu-aarch64-static 会让 armhf 板拿错 emulator —— 这是抄件
-        漂移的典型后果。
-        """
-        rootfs = config.get("rootfs") or {}
-        explicit = rootfs.get("emulator")
-        if explicit:
-            return explicit
-        arch = userspace_arch(config)
-        mapping = {
-            "aarch64": "qemu-aarch64-static",
-            "armhf": "qemu-arm-static",
-        }
-        try:
-            return mapping[arch]
-        except KeyError as exc:
-            raise ValueError(
-                f"未定义 arch={arch!r} 的 rootfs chroot emulator；"
-                "请声明 rootfs.emulator") from exc
+        """与 Phase 1 计划共用 emulator 解析。"""
+        return emulator_for(config)
 
     # ------------------------------------------------------------------
     # Phase 1 base 快照（跨 board/product/variant 共享，四个平台共用同一套）
     # ------------------------------------------------------------------
 
     def _base_snapshot_store(self) -> SnapshotStore:
-        """快照目录是 ``.build/target/.cache``（target_dir 上溯三层）。"""
+        """base 产物按输入寻址，在同一 build_root 的目标间共享。"""
         return SnapshotStore(
-            self.cache.target_dir.parent.parent.parent / ".cache",
-            f"{self.component}-base-",
+            self.context.build_root / "cache/rootfs-base",
+            "base-",
             self.docker,
             status=self._status,
         )
 
     def _get_base_cache_path(self, config: dict) -> Path | None:
-        """按 Phase 1 内容哈希解析快照路径；无 cache 注入时返回 None。"""
-        if not self.cache:
-            return None
-        base_hash = self.cache.compute_phase_hash(self.component, "base")
-        return self._base_snapshot_store().resolve(base_hash)
+        """计划同时决定快照身份与实际执行参数。"""
+        if self.context is None:
+            raise RuntimeError("base 构建必须注入 WorkspaceContext")
+        self._phase1_plan = base_plan(config, self.component, self.context)
+        return self._base_snapshot_store().resolve(self._phase1_plan.fingerprint().digest)
 
     def _save_base_snapshot(self, rootfs_dir: Path, cache_path: Path):
         """把 Phase 1 产物保存为快照，并回收超额的旧快照。"""
@@ -376,7 +337,7 @@ class RootfsBuilder(ComponentBuilder):
 
     def _extract_base(self, cache_path: Path, rootfs_dir: Path):
         """从快照解压到 rootfs 目录。"""
-        self._base_snapshot_store().restore(cache_path, rootfs_dir)
+        return self._base_snapshot_store().restore(cache_path, rootfs_dir)
 
     def apply_overlays(self, rootfs_dir: Path, config: dict):
         """按优先级顺序应用 overlay 文件：rootfs → platform → board。
@@ -388,27 +349,28 @@ class RootfsBuilder(ComponentBuilder):
         """
         subdir = self.OVERLAY_SUBDIR
         for overlay_dir, label in [
-            (Path(f"components/{self.component}/overlay"), self.component),
-            (Path(f"components/platform/{config['platform']}/{subdir}"),
-             "platform"),
-            (Path(f"components/board/{config['board']}/{subdir}"), "board"),
+            (self.components_root / self.component / "overlay", self.component),
+            (self.components_root / "platform" / config["platform"] / subdir, "platform"),
+            (self.components_root / "board" / config["board"] / subdir, "board"),
         ]:
             if overlay_dir.exists() and any(overlay_dir.iterdir()):
                 self._status(f"复制 {label} overlay 文件...")
-                self.docker.run_privileged(
-                    ["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
+                self.docker.run_privileged(["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
 
     def _partition_size_mb(self, config: dict, name: str) -> int:
         """指定分区的初始镜像大小（MiB）。几何解析统一走 PartitionLayout。"""
         return PartitionLayout.from_config(config).size_mb(name)
 
-    def _apt_install_command(self, packages: list[str],
-                             config: dict) -> list[str]:
-        """生成 APT 安装命令；Recommends 默认关闭，可显式开启。"""
-        command = ["apt-get", "install", "-y"]
-        if not self._component_config(config).get("install_recommends", False):
-            command.append("--no-install-recommends")
-        return command + packages
+    def _apt_install_command(self, packages: list[str], config: dict) -> list[str]:
+        """与 Phase 1 执行共用命令生成。"""
+        return apt_command(
+            {
+                "packages": packages,
+                "install_recommends": self._component_config(config).get(
+                    "install_recommends", False
+                ),
+            }
+        )
 
     def _ensure_rootfs_fits_image(self, rootfs_dir: Path, image_size_mb: int):
         """构建 ext4 前检查 rootfs 内容是否能放入初始镜像。
@@ -455,56 +417,22 @@ class RootfsBuilder(ComponentBuilder):
         return bool(self._component_config(config).get("extra_apt_sources"))
 
     def _setup_extra_apt_sources(self, rootfs_dir: Path, config: dict):
-        """在 Phase 1 apt-get update 前写入额外 APT 源和 GPG key。
+        """与 Phase 1 执行共用软件源设置。"""
+        install_extra_sources(
+            rootfs_dir,
+            self._component_config(config).get("extra_apt_sources") or [],
+            self.source,
+            self.docker,
+            self._status,
+        )
 
-        config["rootfs"]["extra_apt_sources"] 格式：
-          [
-            {
-              "name": "qcom-ppa",
-              "key": {"url": "https://...", "sha256": "<hex>"},
-              "source": "deb [arch=arm64 signed-by=/etc/apt/keyrings/qcom-ppa.gpg] "
-                        "https://ppa.launchpadcontent.net/.../ubuntu noble main",
-            },
-          ]
-
-        GPG key 经 gpg --dearmor 写入 rootfs /etc/apt/keyrings/<name>.gpg；
-        source 行写入 /etc/apt/sources.list.d/<name>.list。
-        须在 _build_phase1 的 apt-get update 之前调用。
-        """
-        sources = self._component_config(config).get("extra_apt_sources") or []
-        if not sources:
-            return
-        keyrings_dir = rootfs_dir / "etc" / "apt" / "keyrings"
-        sources_dir = rootfs_dir / "etc" / "apt" / "sources.list.d"
-        keyrings_dir.mkdir(parents=True, exist_ok=True)
-        sources_dir.mkdir(parents=True, exist_ok=True)
-        for src in sources:
-            name = src["name"]
-            source_line = src["source"]
-            key_path = keyrings_dir / f"{name}.gpg"
-            key_file = self.source.ensure_download(
-                "apt-keys", name, src["key"])
-            self._status(f"导入 APT key: {name}")
-            self.docker.run(
-                ["gpg", "--batch", "--yes", "--dearmor",
-                 "-o", str(key_path), str(key_file)],
-                label=f"导入 APT key: {name}",
-            )
-            (sources_dir / f"{name}.list").write_text(source_line + "\n")
-            self._status(f"添加 APT 源: {name}")
-
-    def _configure_default_locale(
-        self, rootfs_dir: Path, config: dict
-    ) -> None:
+    def _configure_default_locale(self, rootfs_dir: Path, config: dict) -> None:
         """按 canonical 配置写入 systemd 与 Debian 的默认 locale 路径。"""
         locale = (config.get("rootfs") or {}).get("default_locale")
         if locale is None:
             return
 
-        content = (
-            f"LANG={locale['lang']}\n"
-            f"LANGUAGE={locale['language']}\n"
-        )
+        content = f"LANG={locale['lang']}\nLANGUAGE={locale['language']}\n"
         self._status(f"设置默认 locale: {locale['lang']}")
         locale_conf = rootfs_dir / "etc/locale.conf"
         locale_conf.parent.mkdir(parents=True, exist_ok=True)
@@ -561,30 +489,33 @@ class RootfsBuilder(ComponentBuilder):
                 command = ["dpkg", "-i", "--force-confnew"]
                 if force_overwrite:
                     command.append("--force-overwrite")
-                command.extend(
-                    f"/tmp/flange-extra-debs/{deb.name}" for deb in batch)
+                command.extend(f"/tmp/flange-extra-debs/{deb.name}" for deb in batch)
                 chroot.run(
                     command,
                     label=f"dpkg -i ({len(batch)} 个外部包)...",
                 )
 
-            hold_packages = list(dict.fromkeys(
-                package
-                for deb_cfg, _ in deb_entries
-                for package in deb_cfg.get("hold_packages", [])
-            ))
+            hold_packages = list(
+                dict.fromkeys(
+                    package
+                    for deb_cfg, _ in deb_entries
+                    for package in deb_cfg.get("hold_packages", [])
+                )
+            )
             if hold_packages:
                 chroot.run(
                     [
-                        "/bin/sh", "-c",
+                        "/bin/sh",
+                        "-c",
                         "set -xe\n"
                         "for package do\n"
                         "    if dpkg-query -W -f='${db:Status-Abbrev}' "
                         "\"$package\" 2>/dev/null | grep -q '^ii '; then\n"
-                        "        apt-mark hold \"$package\"\n"
+                        '        apt-mark hold "$package"\n'
                         "    fi\n"
                         "done",
-                        "flange-apt-hold", *hold_packages,
+                        "flange-apt-hold",
+                        *hold_packages,
                     ],
                     label=f"锁定 {len(hold_packages)} 个外部包相关版本...",
                 )
@@ -599,8 +530,7 @@ class RootfsBuilder(ComponentBuilder):
         for fw in extra_firmware:
             name = fw["name"]
             self._status(f"同步固件源: {name}")
-            fw_dir = self.source.ensure_extra_firmware(
-                name, fw, config=config)
+            fw_dir = self.source.ensure_extra_firmware(name, fw, config=config)
             dest_base = rootfs_dir / fw.get("dest", "lib/firmware")
             for entry in fw.get("files", []):
                 if isinstance(entry, dict):
@@ -609,8 +539,7 @@ class RootfsBuilder(ComponentBuilder):
                     src_rel = dest_rel = entry
                 src = fw_dir / src_rel
                 if not src.exists():
-                    raise FileNotFoundError(
-                        f"固件文件不存在: {src}（仓库: {name}）")
+                    raise FileNotFoundError(f"固件文件不存在: {src}（仓库: {name}）")
                 dest = dest_base / dest_rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
@@ -637,28 +566,29 @@ class RootfsBuilder(ComponentBuilder):
         if default_user is not None and default_user not in users:
             raise ValueError(
                 f"rootfs.default_user={default_user!r} 不在 rootfs.users 中；"
-                f"已声明用户: {sorted(users.keys()) or '(空)'}")
+                f"已声明用户: {sorted(users.keys()) or '(空)'}"
+            )
         if rootfs_cfg.get("default_session") and default_user is None:
-            raise ValueError(
-                "设置 rootfs.default_session 时 rootfs.default_user 不能为空")
+            raise ValueError("设置 rootfs.default_session 时 rootfs.default_user 不能为空")
         if rootfs_cfg.get("disable_root_login") and not users:
             raise ValueError(
                 "rootfs.disable_root_login=True 但 rootfs.users 为空 — "
                 "镜像将无任何普通用户可登录、串口/SSH 全失联（adb 仍可达"
-                "但不构成可登录通道），请至少声明一个 user 后再启用。")
+                "但不构成可登录通道），请至少声明一个 user 后再启用。"
+            )
 
         remote_login = rootfs_cfg.get("gnome_remote_desktop_login", False)
         if not isinstance(remote_login, bool):
             raise ValueError("rootfs.gnome_remote_desktop_login 必须是布尔值")
         if remote_login:
             if default_user is None:
-                raise ValueError(
-                    "启用 GNOME Remote Login 时 rootfs.default_user 不能为空")
+                raise ValueError("启用 GNOME Remote Login 时 rootfs.default_user 不能为空")
             password = (users.get(default_user) or {}).get("password")
             if not isinstance(password, str) or not password:
                 raise ValueError(
                     "启用 GNOME Remote Login 时 rootfs.users."
-                    f"{default_user}.password 必须是非空字符串")
+                    f"{default_user}.password 必须是非空字符串"
+                )
 
     def _configure_users(self, rootfs_dir: Path, config: dict):
         """创建 group / 用户 / 设密码 / sudo / 锁 root / sshd drop-in。
@@ -693,8 +623,7 @@ class RootfsBuilder(ComponentBuilder):
             # (2) 预创顶层 groups（即便没有 user，下游 udev rule 也可能
             #     依赖 i2c / spi / gpio 等 group 存在）
             if groups:
-                self._status(f"创建 group ({len(groups)} 个): "
-                             f"{', '.join(groups)}")
+                self._status(f"创建 group ({len(groups)} 个): {', '.join(groups)}")
                 for g in groups:
                     chroot.run(["groupadd", "-r", "-f", g])
 
@@ -712,10 +641,19 @@ class RootfsBuilder(ComponentBuilder):
                 # GID 1000 用户私有组作为主组；冲突时由 shadow 工具直接失败。
                 if name == default_user:
                     chroot.run(["groupadd", "-g", "1000", name])
-                    chroot.run([
-                        "useradd", "-m", "-u", "1000", "-g", name,
-                        "-s", shell, name,
-                    ])
+                    chroot.run(
+                        [
+                            "useradd",
+                            "-m",
+                            "-u",
+                            "1000",
+                            "-g",
+                            name,
+                            "-s",
+                            shell,
+                            name,
+                        ]
+                    )
                 else:
                     chroot.run(["useradd", "-m", "-U", "-s", shell, name])
 
@@ -744,8 +682,7 @@ class RootfsBuilder(ComponentBuilder):
 
             # (6) 硬校验
             if root_password:
-                self._verify_root_password(rootfs_dir,
-                                          expect_locked=disable_root_login)
+                self._verify_root_password(rootfs_dir, expect_locked=disable_root_login)
             elif disable_root_login:
                 # 无 root_password 但锁了 root：shadow 字段应当以 ! 起首
                 self._verify_root_locked(rootfs_dir)
@@ -759,9 +696,7 @@ class RootfsBuilder(ComponentBuilder):
         self._write_default_session(rootfs_dir, rootfs_cfg)
         self._write_gnome_remote_desktop_credentials(rootfs_dir, rootfs_cfg)
 
-    def _write_default_session(
-        self, rootfs_dir: Path, rootfs_cfg: dict
-    ) -> None:
+    def _write_default_session(self, rootfs_dir: Path, rootfs_cfg: dict) -> None:
         """通过 AccountsService 设置 default_user 的默认图形会话。"""
         session = rootfs_cfg.get("default_session")
         if not session:
@@ -772,36 +707,30 @@ class RootfsBuilder(ComponentBuilder):
         )
         if not any(path.is_file() for path in launchers):
             raise FileNotFoundError(
-                f"rootfs.default_session={session!r} 没有对应的 session launcher")
+                f"rootfs.default_session={session!r} 没有对应的 session launcher"
+            )
 
-        path = (
-            rootfs_dir / "var/lib/AccountsService/users"
-            / rootfs_cfg["default_user"]
-        )
+        path = rootfs_dir / "var/lib/AccountsService/users" / rootfs_cfg["default_user"]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"[User]\nXSession={session}\n", encoding="utf-8")
         path.chmod(0o600)
         self.docker.run_privileged(["chown", "root:root", str(path)])
 
-    def _write_gnome_remote_desktop_credentials(
-        self, rootfs_dir: Path, rootfs_cfg: dict
-    ) -> None:
+    def _write_gnome_remote_desktop_credentials(self, rootfs_dir: Path, rootfs_cfg: dict) -> None:
         """写入 root-only 首启凭据，由 desktop App 配置系统级 RDP。"""
         if not rootfs_cfg.get("gnome_remote_desktop_login"):
             return
 
         username = rootfs_cfg["default_user"]
         password = rootfs_cfg["users"][username]["password"]
-        path = (
-            rootfs_dir / "var/lib/flange"
-            / "gnome-remote-desktop-login.json"
-        )
+        path = rootfs_dir / "var/lib/flange" / "gnome-remote-desktop-login.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(
                 {"username": username, "password": password},
                 ensure_ascii=False,
-            ) + "\n",
+            )
+            + "\n",
             encoding="utf-8",
         )
         path.chmod(0o600)
@@ -809,9 +738,9 @@ class RootfsBuilder(ComponentBuilder):
 
     def _merge_user_groups(self, top_groups: list, spec: dict) -> list:
         """合并 user 实际入组集合：
-          - 先取顶层 groups
-          - 若 user.sudo == False 则从中扣除 "sudo"
-          - 再追加 user.groups 中的额外项（去重保序）
+        - 先取顶层 groups
+        - 若 user.sudo == False 则从中扣除 "sudo"
+        - 再追加 user.groups 中的额外项（去重保序）
         """
         sudo_spec = spec.get("sudo", True)
         merged: list[str] = []
@@ -819,7 +748,7 @@ class RootfsBuilder(ComponentBuilder):
             if g == "sudo" and sudo_spec is False:
                 continue
             merged.append(g)
-        for g in (spec.get("groups") or []):
+        for g in spec.get("groups") or []:
             if g not in merged:
                 merged.append(g)
         return merged
@@ -876,8 +805,7 @@ class RootfsBuilder(ComponentBuilder):
             self._set_root_password_in_chroot(chroot, password)
         self._verify_root_password(rootfs_dir)
 
-    def _verify_root_password(self, rootfs_dir: Path,
-                               expect_locked: bool = False):
+    def _verify_root_password(self, rootfs_dir: Path, expect_locked: bool = False):
         """校验 /etc/shadow 中 root 行密码字段。
 
         expect_locked=True 时：允许字段以 ``!`` 起首（passwd -l 后正常状态），
@@ -892,29 +820,25 @@ class RootfsBuilder(ComponentBuilder):
                 continue
             fields = line.split(":")
             if len(fields) < 2:
-                raise RuntimeError(
-                    f"/etc/shadow root 行格式错误: {line!r}")
+                raise RuntimeError(f"/etc/shadow root 行格式错误: {line!r}")
             pw_hash = fields[1]
             if expect_locked:
                 if not pw_hash.startswith("!"):
                     raise RuntimeError(
-                        f"disable_root_login=True 但 /etc/shadow root 字段未锁定: "
-                        f"{pw_hash[:40]!r}")
+                        f"disable_root_login=True 但 /etc/shadow root 字段未锁定: {pw_hash[:40]!r}"
+                    )
                 inner = pw_hash.lstrip("!")
                 if not inner.startswith("$"):
-                    raise RuntimeError(
-                        f"root 密码哈希格式非预期（去 ! 前缀后）: "
-                        f"{inner[:40]!r}")
-                self._status(
-                    f"root 密码已写入并锁定 (hash: {pw_hash[:13]}...)")
+                    raise RuntimeError(f"root 密码哈希格式非预期（去 ! 前缀后）: {inner[:40]!r}")
+                self._status(f"root 密码已写入并锁定 (hash: {pw_hash[:13]}...)")
                 return
             if pw_hash in ("", "!", "*", "!!", "x"):
                 raise RuntimeError(
                     f"root 密码未生效：/etc/shadow 字段仍为 {pw_hash!r}，"
-                    f"chpasswd 未成功写入（检查 chroot/qemu 环境）")
+                    f"chpasswd 未成功写入（检查 chroot/qemu 环境）"
+                )
             if not pw_hash.startswith("$"):
-                raise RuntimeError(
-                    f"root 密码哈希格式非预期: {pw_hash[:40]!r}")
+                raise RuntimeError(f"root 密码哈希格式非预期: {pw_hash[:40]!r}")
             self._status(f"root 密码已写入 (hash: {pw_hash[:12]}...)")
             return
         raise RuntimeError("/etc/shadow 中未找到 root 账号行")
@@ -928,21 +852,18 @@ class RootfsBuilder(ComponentBuilder):
                 pw = line.split(":")[1] if ":" in line else ""
                 if not pw.startswith("!"):
                     raise RuntimeError(
-                        f"disable_root_login=True 但 /etc/shadow root 字段未锁定: "
-                        f"{pw[:40]!r}")
+                        f"disable_root_login=True 但 /etc/shadow root 字段未锁定: {pw[:40]!r}"
+                    )
                 return
         raise RuntimeError("/etc/shadow 中未找到 root 账号行")
 
     def _verify_sshd_no_root(self, rootfs_dir: Path):
         path = rootfs_dir / "etc" / "ssh" / "sshd_config.d" / "10-flange.conf"
         if not path.exists():
-            raise RuntimeError(
-                f"disable_root_login=True 但 sshd drop-in 缺失: {path}")
+            raise RuntimeError(f"disable_root_login=True 但 sshd drop-in 缺失: {path}")
         content = path.read_text()
         if "PermitRootLogin no" not in content:
-            raise RuntimeError(
-                f"sshd drop-in 内容异常，缺少 'PermitRootLogin no': "
-                f"{path}")
+            raise RuntimeError(f"sshd drop-in 内容异常，缺少 'PermitRootLogin no': {path}")
 
     def _install_panel_firmware(self, rootfs_dir: Path, config: dict):
         """编译并安装 panel firmware（mainline panel-mipi-dbi-spi 兼容）。
@@ -965,20 +886,19 @@ class RootfsBuilder(ComponentBuilder):
         if not panel_firmwares:
             return
         board = config["board"]
-        board_root = Path(f"components/board/{board}")
+        board_root = self.components_root / "board" / board
         dest_base = rootfs_dir / "lib" / "firmware"
         for fw in panel_firmwares:
             src = board_root / fw["src"]
             if not src.exists():
-                raise FileNotFoundError(
-                    f"panel firmware 文本源不存在: {src} (board: {board})")
+                raise FileNotFoundError(f"panel firmware 文本源不存在: {src} (board: {board})")
             payload = _encode_panel_file(src)
             dest = dest_base / fw["dest"]
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(payload)
             self._status(
-                f"panel firmware: {src.name} → /lib/firmware/{fw['dest']} "
-                f"({len(payload)} 字节)")
+                f"panel firmware: {src.name} → /lib/firmware/{fw['dest']} ({len(payload)} 字节)"
+            )
 
     def _install_hostname(self, rootfs_dir: Path, config: dict):
         """写 /etc/hostname 为 board 名，并补 /etc/hosts 一行让 sudo/glibc 解析通。

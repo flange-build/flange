@@ -2,33 +2,21 @@
 
 ## Purpose
 
-约定 flange Docker 构建容器（`docker-compose.yml` 中的 `build` service）内部**必须具备的工具链与跨架构能力**，是所有 app/kernel/u-boot 构建的隐式契约。规定容器内 C/C++ 构建系统（cmake/meson/ninja/pkg-config）、跨架构开发包（dpkg multiarch + libc6-dev:arm64/armhf）、meson 交叉编译配置文件三类资产的存在性与一致性约束，确保 `builder/app.py` 中 `_BUILD_SYSTEMS` 声明的构建系统模板在容器内可直接执行。
+规定 Docker 构建环境需要的工具链、系统库与跨架构执行能力，使用明确的 Toolchain、实际镜像身份和工作区挂载约束，使系统、App 与 Package 可以在干净环境中获得一致的编译与依赖行为。
 ## Requirements
 ### Requirement: 容器内必须具备主流 C/C++ 构建系统
 
-Docker 构建容器（`docker/Dockerfile` 构建出的 `build` service 镜像）SHALL 预装以下构建工具，使 `builder/app.py` 中 `_BUILD_SYSTEMS` 已声明的构建系统（cmake/meson/make）均可直接执行：
+Docker 构建镜像 SHALL 提供 cmake、meson、ninja-build、pkg-config、ccache 与 gdb-multiarch。
+App 的实际构建 argv SHALL 由 Toolchain 模型生成，不再依赖 builder/app.py 中的静态 _BUILD_SYSTEMS 表。
+宿主构建 MUST 在执行前获得实际镜像身份；镜像不存在时给出 flange docker build 修复命令。
 
-- `cmake`
-- `meson`
-- `ninja-build`（提供 `ninja`）
-- `pkg-config`
-- `ccache`
-- `gdb-multiarch`
+#### Scenario: 容器内可直接调用构建工具
+- **WHEN** 在构建容器查询 cmake、meson、ninja、pkg-config、ccache、gdb-multiarch
+- **THEN** 所有声明工具存在且可执行
 
-#### Scenario: 容器内可直接调用 cmake
-
-- **WHEN** 在 `build` 容器内执行 `which cmake` 与 `cmake --version`
-- **THEN** 返回非空路径与版本号，退出码为 0
-
-#### Scenario: 容器内可直接调用 meson 与 ninja
-
-- **WHEN** 在 `build` 容器内分别执行 `which meson`、`which ninja`、`meson --version`、`ninja --version`
-- **THEN** 全部返回成功，退出码为 0
-
-#### Scenario: 容器内可直接调用 pkg-config / ccache / gdb-multiarch
-
-- **WHEN** 在 `build` 容器内分别执行 `which pkg-config`、`which ccache`、`which gdb-multiarch`
-- **THEN** 全部返回非空路径，退出码为 0
+#### Scenario: 干净环境尚未准备镜像
+- **WHEN** flange build 所需镜像不存在
+- **THEN** 命令在执行编译前明确提示先运行 flange docker build
 
 ### Requirement: 容器内必须启用 dpkg multiarch 支持 arm64 与 armhf
 
@@ -60,29 +48,16 @@ Docker 构建容器 SHALL 预装 `libc6-dev:arm64` 与 `libc6-dev:armhf`，保�
 
 ### Requirement: 容器内必须提供 meson 交叉编译配置文件
 
-Docker 构建容器 SHALL 在 `/etc/meson/` 目录下提供 `cross-aarch64.ini` 与 `cross-armhf.ini` 两个 meson cross-file，与 `builder/app.py` 中 `_BUILD_SYSTEMS["meson"]` 模板引用的 `--cross-file /etc/meson/cross-aarch64.ini` 路径一致。
+每个 Meson App 构建 MUST 由 Toolchain 在当前资源的隔离工作目录生成实际 cross-file，包含对应目标编译器、CPU、ABI 和依赖安装前缀。
+Meson setup MUST 引用本次生成文件，不得固定使用 AArch64 文件处理 armhf。镜像可携带通用参考文件，但不得作为各 target 的隐式选择器。
 
-cross-file 内容 SHALL 正确声明：
+#### Scenario: ARM32 App 使用本次 cross-file
+- **WHEN** armhf App 构建 Meson 工程
+- **THEN** setup 使用其隔离目录中的 cross-file，编译器为 arm-linux-gnueabihf 工具链且 CPU family 为 arm
 
-- `[binaries]` 段：c/cpp/ar/strip/pkg-config 等指向对应交叉前缀（aarch64-linux-gnu-* / arm-linux-gnueabihf-*）
-- `[host_machine]` 段：`system = 'linux'`、`cpu_family` 与 `cpu` 与目标架构一致、`endian = 'little'`
-
-为使内容可审、可改、可版本化，cross-file SHALL 以独立文件形式保存于仓库 `docker/meson/` 目录，并通过 Dockerfile 的 `COPY` 指令投放到容器内 `/etc/meson/`，不得在 Dockerfile 内通过 heredoc 现场生成。
-
-#### Scenario: 容器内 meson cross-file 存在
-
-- **WHEN** 在 `build` 容器内执行 `test -f /etc/meson/cross-aarch64.ini && test -f /etc/meson/cross-armhf.ini`
-- **THEN** 退出码为 0
-
-#### Scenario: 仓库源码树中可见 cross-file
-
-- **WHEN** 在宿主机仓库内查看 `docker/meson/cross-aarch64.ini` 与 `docker/meson/cross-armhf.ini`
-- **THEN** 两个文件存在，且内容与容器内 `/etc/meson/` 下对应文件**逐字节一致**（由 `COPY` 保证）
-
-#### Scenario: meson cross-file 内容可被 meson 接受
-
-- **WHEN** 在 `build` 容器内对一个最小 meson 项目执行 `meson setup build --cross-file /etc/meson/cross-aarch64.ini`
-- **THEN** setup 成功，`build/meson-info/intro-buildoptions.json` 报告 `host_machine.cpu_family == "aarch64"`
+#### Scenario: AArch64 App 使用本次依赖前缀
+- **WHEN** aarch64 App 依赖另一个 App
+- **THEN** 生成文件包含 AArch64 工具变量和当前闭包安装前缀，产物 ELF 机器架构通过打包前校验
 
 ### Requirement: 容器构建不得删除已安装工具链
 
@@ -144,19 +119,21 @@ TLS 证书或主机名校验绕过信任链错误。
 
 ### Requirement: 构建缓存通过 volume 持久化
 
-Docker Compose 配置 SHALL 把源码检出、APT 下载缓存与 APT 索引映射到宿主机
-`.build/` 下的目录，确保容器重建后这些高代价输入不需要重新获取。
+构建容器 SHALL 通过挂载保留工具下载缓存，并通过 WorkspaceContext 的 build_root 保留当前工作区源码存储、APT 基础缓存和目标产物。
+共享下载与目标可变源码树 MUST 分离；不得将共享下载目录直接作为多个目标同时写入的编译目录。
 
 #### Scenario: 容器重建后缓存保留
-- **WHEN** 销毁并重建构建容器后再次构建
-- **THEN** 已检出的源码仓库与已下载的 deb 被复用，不重新下载
+- **WHEN** 构建容器退出后重新执行同一工作区构建
+- **THEN** 已校验下载与有效产物可复用，缓存仍须通过输入和产物完整性门禁
 
 ### Requirement: 项目目录挂载到容器
-Docker Compose 配置 SHALL 将宿主机项目根目录挂载到容器内的工作目录。
 
-#### Scenario: 容器内可访问项目文件
-- **WHEN** 在构建容器内查看工作目录
-- **THEN** 可看到 `builder/`、`components/`、`envsetup.sh` 等项目文件
+DockerRunner SHALL 按统一挂载计划把工具根、工作区、build_root 和外部源码映射到相同绝对路径。
+容器不得重新解释调用者 cwd 或用户目录；重复与被父目录覆盖的挂载应去重。
+
+#### Scenario: 工具与工作区位于兄弟目录
+- **WHEN** 外部 App 从独立工作区发起构建
+- **THEN** 容器能通过与宿主相同的绝对路径读取配置、工具和源码
 
 ### Requirement: 容器内必须具备裸机 ARM 工具链
 
@@ -221,3 +198,63 @@ Docker 构建容器 SHALL 安装 `u-boot-tools` 并提供可执行的 `mkimage`�
 #### Scenario: FIT 打包工具可执行
 - **WHEN** 在 build 容器内执行 `mkimage -V`
 - **THEN** 命令成功输出版本信息
+
+### Requirement: 固件 CI MUST 复用正式入口与固定工具身份
+
+固件工作流 MUST 通过 config.query.parse_target 解析完整 target，不得在 Shell 重新按连字符拆分 board/product。
+工作流 MUST 在构建前安装 flange、准备 Docker 镜像并注册 ARM32/ARM64 的 QEMU 能力；OpenSpec 质量门禁 MUST 使用固定的官方包版本。
+
+#### Scenario: 含连字符 product 的产物目录
+- **WHEN** 工作流输入 orangepi-cm4-amp-rtt-release
+- **THEN** 正式解析器返回 board=orangepi-cm4、product=amp-rtt、variant=release，上传路径与构建 target_dir 一致
+
+#### Scenario: 干净 Runner 的规格门禁
+- **WHEN** Runner 没有预装 OpenSpec
+- **THEN** 使用 npx --yes @fission-ai/openspec@1.2.0 validate --all --strict 执行官方固定版本
+
+### Requirement: 构建容器权限必须通过合法 Compose 服务配置传递
+
+DockerRunner MUST 使用 Docker Compose（容器编排）支持的服务配置传递容器特权模式，
+MUST NOT 将仅属于 `docker run` 的 `--privileged` 选项追加到 `docker compose run`。
+`docker-compose.yml` 中 `build` 服务的运行时 `privileged` 属性 MUST 默认关闭，
+并允许 DockerRunner 为本次调用明确选择。
+
+#### Scenario: 特权容器启动命令可由 Compose 解析
+- **WHEN** DockerRunner 请求以特权模式启动构建容器
+- **THEN** Compose 命令不包含 `--privileged`，服务配置将本次容器的 `privileged` 解析为 `true`
+- **AND** 容器不会因该选项触发 `unknown flag: --privileged`
+
+#### Scenario: 服务配置缺省关闭特权模式
+- **WHEN** 未显式提供构建容器的特权开关并解析 Compose 配置
+- **THEN** `build` 服务以非特权模式运行；解析结果可显式输出 `privileged: false` 或省略该默认属性
+
+### Requirement: 系统构建必须保留所需容器权限
+
+系统镜像、rootfs 等需要 mount（挂载）能力的构建调用 MUST 显式启用特权模式。
+Compose 参数兼容性修复 MUST 保留这些操作的实际容器权限，不得通过移除权限使其在后续步骤失败。
+
+#### Scenario: 系统构建容器具备挂载能力
+- **WHEN** 在允许特权容器的 Docker 主机执行需要挂载文件系统的系统构建调用
+- **THEN** 该次调用启动的容器启用特权模式，并能完成临时文件系统的挂载与卸载
+
+### Requirement: 容器权限必须按调用隔离
+
+所有通过 `DockerRunner.run` 启动 Compose 的调用 MUST 在各自子进程环境中
+按本次 `privileged` 参数显式设置 `FLANGE_BUILD_PRIVILEGED` 为 `true` 或 `false`，
+MUST NOT 修改宿主进程环境或让宿主同名变量覆盖调用参数。
+`capture=True` 的输出捕获调用和通过 `run_privileged` 委托的调用 MUST 遵循相同权限选择规则。
+普通 App、Package 编译 MUST 默认使用非特权容器。
+
+#### Scenario: 普通编译不继承宿主特权开关
+- **WHEN** 宿主 `FLANGE_BUILD_PRIVILEGED=true`，而普通 App 或 Package 编译未请求特权模式
+- **THEN** 本次 Compose 子进程收到 `FLANGE_BUILD_PRIVILEGED=false`，容器保持非特权
+- **AND** 宿主进程原有环境变量不变
+
+#### Scenario: 系统调用不继承宿主关闭开关
+- **WHEN** 宿主 `FLANGE_BUILD_PRIVILEGED=false`，而 DockerRunner 本次请求特权模式
+- **THEN** 本次 Compose 子进程收到 `FLANGE_BUILD_PRIVILEGED=true`
+- **AND** 宿主进程原有环境变量不变
+
+#### Scenario: 相邻调用互不污染
+- **WHEN** 先执行特权调用，再执行普通调用，或以相反顺序执行
+- **THEN** 每个容器均按各自调用参数选择权限，输出捕获或 `run_privileged` 委托不改变该规则

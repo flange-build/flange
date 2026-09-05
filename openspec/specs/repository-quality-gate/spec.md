@@ -3,7 +3,6 @@
 ## Purpose
 
 定义变更收尾时完整 pytest、OpenSpec strict validation 与环境能力复验的仓库质量门禁。
-
 ## Requirements
 ### Requirement: 仓库收尾 SHALL 通过完整自动化质量门禁
 
@@ -21,17 +20,19 @@
 
 ### Requirement: 缓存命中测试 MUST 同时验证哈希与必需产物
 
-对 `BuildCache.is_up_to_date()` 的正向测试 MUST 创建与目标组件匹配的最小必需产物，并保存对应内容哈希。测试 SHALL 通过公开哈希接口构造预期状态，不得依赖已删除的私有 helper。
+缓存正向测试 MUST 创建 TaskPlan 声明的必需产物，通过 `TaskPlan.fingerprint()` 获取输入身份，并由 `BuildCache.store(plan, before, dependencies)` 发布成功 ArtifactManifest。命中判断 MUST 同时验证输入和每项输出的内容、权限、节点类型与链接目标；测试不得依赖旧 hash 标记或已删除的私有 helper。
 
-#### Scenario: 哈希一致但必需产物缺失
+#### Scenario: 缺少必需产物
+- **WHEN** 测试没有创建声明的 modules、镜像或 deb
+- **THEN** 成功发布被拒绝，不能构造仅有输入摘要的假命中
 
-- **WHEN** 测试已保存组件哈希但未创建该组件要求的产物
-- **THEN** `is_up_to_date()` 返回 false，测试不得把该状态误判为 cache hit
+#### Scenario: 源码变化后查询
+- **WHEN** 测试修改具名源码输入
+- **THEN** 使用同一公开计划重新计算指纹或重新构造计划后查询，观察到输入变化和缓存 miss
 
-#### Scenario: 源码变化后重新计算公开哈希
-
-- **WHEN** 测试修改 App 或 rootfs customize 的哈希输入
-- **THEN** 测试使用新的构建缓存上下文重新调用公开哈希接口，并观察到哈希变化
+#### Scenario: 已发布产物损坏
+- **WHEN** 成功 manifest 已存在，但产物被删除或权限改变
+- **THEN** BuildCache.explain 返回 miss 并指出受影响的产物
 
 ### Requirement: 环境能力限制 MUST 与功能回归分开验证
 

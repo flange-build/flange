@@ -6,7 +6,6 @@
   3. device 仓库的 board.dts 复制到内核 DTS 目录
 """
 
-import os
 import shutil
 from pathlib import Path
 from builder.config.canonical import kernel_arch, kernel_device_tree
