@@ -9,6 +9,7 @@ include = ["builder*"]
 name = "flange"
 version = "2.0.0"
 description = "嵌入式 Linux 系统构建框架"
+license = {file = "LICENSE"}
 requires-python = ">=3.12"
 dependencies = [
     "jsonnet==0.22.0",
