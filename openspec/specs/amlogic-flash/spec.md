@@ -2,9 +2,7 @@
 
 ## Purpose
 Amlogic 平台 USB Burning 刷写契约。`AmlogicFlashStrategy` 在 pre_flash 阶段用 `pyamlboot` 把 u-boot 推到 SoC DDR；u-boot 在 `board_late_init` 暴露 `${boot_source}` env var（mainline meson 共用代码），fragment 的 PREBOOT 检测 `boot_source=usb` 自动进 fastboot gadget。host 端 `fastboot oem format` 按真实 eMMC 容量重建 GPT，然后 `fastboot flash bootloader` 路由到 mmc{N} hw boot0（u-boot `CONFIG_FASTBOOT_MMC_BOOT_SUPPORT` + `MMC_BOOT1_NAME="bootloader"` 命名），`flash boot/rootfs` 写 user area GPT 分区。整个 flow 无需接串口。
-
 ## Requirements
-
 ### Requirement: AmlogicFlashStrategy 注册到 FlashStrategy 工厂
 
 `builder/flash/strategy.py` 必须（SHALL）实现 `AmlogicFlashStrategy(FlashStrategy)` 类并把它注册到 `_FLASH_STRATEGIES["amlogic"]`，使 `get_flash_strategy("amlogic")` 返回该策略实例。
@@ -23,32 +21,37 @@ Amlogic 平台 USB Burning 刷写契约。`AmlogicFlashStrategy` 在 pre_flash �
 
 ### Requirement: AmlogicFlashStrategy 两段式 USB Burning 流程
 
-`AmlogicFlashStrategy.pre_flash()` 必须（SHALL）调用 `pyamlboot` 把 target 目录下的**裸 FIP** `bootloader/u-boot.bin`（build-fip.sh 直接产出，BL2 位于 binary offset 0）推入 SoC DDR；**不得**推送 SD 格式 `u-boot.bin.sd.bin`（其前置了 block-1 header，BL2 被推到错误偏移，boot-g12.py 的 AMLC chunk 握手会超时）。u-boot 进入 fastboot 模式后，主 flash 流程必须（SHALL）通过 host 端 `fastboot` 工具写入各分区（其中 `fastboot flash bootloader` 写的才是 SD 格式 `u-boot.bin.sd.bin`，落 eMMC hw boot0）。整个过程 host 端依赖：`pyamlboot`（pip 安装或 git submodule）+ `android-tools-fastboot`（Ubuntu apt 包），不得（MUST NOT）依赖 vendor 闭源工具。
+`AmlogicFlashStrategy.pre_flash()` 必须（SHALL）调用 `pyamlboot` 把 target 目录下的裸 FIP
+`bootloader/u-boot.bin` 推入 SoC DDR；不得（MUST NOT）推送前置 block-1 header 的 SD 格式
+`u-boot.bin.sd.bin`。U-Boot 进入 fastboot 后，主 flash 流程必须（SHALL）通过 host 端 `fastboot` 写入各分区，
+其中 bootloader 使用 SD 格式并落到 eMMC hardware boot0。host 端只依赖 `pyamlboot`、
+`libusb` 与 `android-tools-fastboot`，不得（MUST NOT）依赖 vendor 闭源刷写工具。
 
-#### Scenario: pre_flash 阶段调用 pyamlboot
+#### Scenario: 按板卡流程进入 MaskROM 后调用 pyamlboot
 
-- **WHEN** `AmlogicFlashStrategy.pre_flash(tool, target_dir, config, device)` 被调用
-- **AND** 板已按住 KEY1 上电，进入 MaskROM (USB device 1b8e:c003)
-- **THEN** 实现调用 `pyamlboot` 把裸 FIP `target_dir/bootloader/u-boot.bin` 推入 SoC DDR
-- **AND** SoC 接收完整 u-boot 镜像后自动跳转到 BL2 → BL31 → u-boot proper
-- **AND** u-boot 在 host 端注册为 fastboot 设备
+- **WHEN** 目标板已按自身板卡文档进入 MaskROM（USB device `1b8e:c003`）
+- **THEN** pre_flash 调用 pyamlboot 把 `target_dir/bootloader/u-boot.bin` 推入 SoC DDR
+- **AND** SoC 接收完整镜像后跳转到 BL2 → BL31 → U-Boot proper
+- **AND** U-Boot 在 host 端注册为 fastboot 设备
+
+#### Scenario: VIM3 系列使用 TST 三击流程
+
+- **WHEN** Khadas VIM3 或 VIM3L 通过推荐的 TST（Terry's Smart Tweezers，无镊子升级模式）进入 MaskROM
+- **THEN** 用户连接 USB-C 后在两秒内快速按 Function 键三次并立即松开
+- **AND** 流程不得要求用户把 Function 键保持到刷写或重启阶段
 
 #### Scenario: 主 flash 阶段写入分区
 
-- **WHEN** pre_flash 成功，u-boot 在 host 端注册为 fastboot 设备
-- **AND** `AmlogicFlashStrategy.flash()` 主流程被调用
-- **THEN** host 端 `fastboot` 命令依次执行：
-  - `fastboot flash bootloader target/bootloader/u-boot.bin.sd.bin`（写入 eMMC boot0 hw 分区）
-  - `fastboot flash boot target/boot.img`
-  - `fastboot flash recovery target/recovery.img`（若存在）
-  - `fastboot flash rootfs target/rootfs.img`
-  - `fastboot reboot`
+- **WHEN** pre_flash 成功且 U-Boot 已注册为 fastboot 设备
+- **THEN** host 依次写入 `target_dir/bootloader/u-boot.bin.sd.bin`、`target_dir/boot/boot.img`、
+  可选的 `target_dir/recovery/recovery.img` 与 `target_dir/rootfs/rootfs.img`
+- **AND** 最后执行 `fastboot reboot`
 
 #### Scenario: 不依赖 vendor 闭源工具
 
-- **WHEN** 在干净环境实现 `flange flash khadas-vim3l-default-debug`
-- **THEN** host 端依赖仅有 `pyamlboot`（MIT）与 `android-tools-fastboot`（Apache 2.0）
-- **AND** 不得（MUST NOT）依赖 Amlogic SDK 内 `update.exe` / `Aml_USB_Burn_Tool.exe` 等闭源工具
+- **WHEN** 在干净环境执行任意 Amlogic board 的 `flange flash`
+- **THEN** host 端依赖仅有 `pyamlboot`、`libusb` 与 `android-tools-fastboot`
+- **AND** 不得（MUST NOT）依赖 Amlogic SDK 的闭源 USB Burning 工具
 
 ### Requirement: AmlogicFlashStrategy 配置生成
 
@@ -68,17 +71,21 @@ Amlogic 平台 USB Burning 刷写契约。`AmlogicFlashStrategy` 在 pre_flash �
 
 ### Requirement: eMMC boot0 hw 分区写入
 
-`AmlogicFlashStrategy` 写入 `bootloader` 分区时必须（SHALL）通过 fastboot 协议把数据落到 eMMC 硬件 boot0 分区（mmc0 partition 1，offset 0x200）；不得（MUST NOT）写到 user area。这是 Amlogic BootROM 的硬性要求 —— BootROM 上电后只读 hw boot0 分区。
+`AmlogicFlashStrategy` 写入 `bootloader` 时必须（SHALL）通过 fastboot 把数据落到板级
+`CONFIG_FASTBOOT_FLASH_MMC_DEV` 指定 eMMC 的 hardware boot0（partition 1，offset `0x200`），不得
+（MUST NOT）写到 user area。MMC 序号属于板级存储拓扑，不得在共享 flash strategy 中硬编码；当前 VIM3 与
+VIM3L 的 U-Boot 都枚举 eMMC 为 `mmc2`。
 
-#### Scenario: bootloader 写入 hw boot0
+#### Scenario: VIM3 bootloader 写入 mmc2 boot0
 
 - **WHEN** `fastboot flash bootloader u-boot.bin.sd.bin` 被执行
-- **AND** u-boot 端 `BOOTLOADER_PARTITION` 配置（来自 mainline `khadas-vim3l_defconfig`）指向 mmc0 hw boot0
-- **THEN** 数据落到 eMMC partition 1（hw boot0）的 offset 0x200
-- **AND** 重启后 BootROM 能从 hw boot0 加载 BL2
+- **AND** VIM3 板级 fragment 声明 `CONFIG_FASTBOOT_FLASH_MMC_DEV=2`
+- **AND** `CONFIG_FASTBOOT_MMC_BOOT1_NAME="bootloader"`
+- **THEN** 数据落到 `mmc2` partition 1（hardware boot0）的 offset `0x200`
+- **AND** 重启后 BootROM 能从 hardware boot0 加载 BL2
 
 #### Scenario: 其余分区写入 user area GPT
 
 - **WHEN** `fastboot flash boot/recovery/rootfs` 被执行
-- **THEN** 数据写入 eMMC user area（partition 0）的 GPT 中对应分区
-- **AND** GPT 必须（SHALL）由前一次 `fastboot flash gpt`（或 fastboot OEM 命令等价机制）已建立
+- **THEN** 数据写入同一 eMMC user area（partition 0）的 GPT 对应分区
+- **AND** GPT 已由前一次 `fastboot oem format` 按设备实际容量建立
