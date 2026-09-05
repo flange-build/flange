@@ -613,6 +613,9 @@ feat(kernel): 添加内核编译支持
 - 刷写脚本应检测设备连接状态，未连接时给出明确提示
 - macOS Amlogic 刷写先将 pyenv 的 `boot-g12.py` shim 解析为当前环境的真实入口，
   再通过 `sudo env` 传递 Homebrew libusb 搜索路径；解析失败必须在设备传输前报告。
+- Amlogic 上传 U-Boot 或复用 fastboot 设备后，必须在 30 秒内完成唯一设备枚举与
+  `getvar version` 只读握手（单次探测最多 5 秒）；后续操作通过 `-s` 绑定该序列号。
+  `--no-wait` 不绕过握手。GPT 命令最多等待 30 秒，失败或超时停止后续刷写且不自动重放。
 
 ### 12.2 组件级刷写
 - 支持单独刷写各组件到设备的特定分区

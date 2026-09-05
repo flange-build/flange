@@ -302,6 +302,31 @@ flange flash
 flange flash boot
 ```
 
+### Amlogic 首次 USB 刷写
+
+Khadas VIM3 等 Amlogic 板卡会先在 MaskROM（芯片内置下载模式）接收 U-Boot，
+再切换到 fastboot（快速刷写协议）。上传结束后，flange 等待 USB 枚举并读取协议版本，
+看到“fastboot 已就绪”后才开始写 GPT（GUID 分区表）和分区；全量刷写时输出顺序为：
+
+```text
+  ✓ U-Boot 已上传到 DDR
+  · 等待 fastboot 就绪（USB 枚举与通信握手，最长 30s）...
+  ✓ fastboot 已就绪 · <设备序列号>
+▸ 刷写分区
+```
+
+枚举或只读握手卡住时，flange 在总计 30 秒内结束无响应的探测进程并重试。
+板卡已在 fastboot 模式时可直接重试 `flange flash`，工具会跳过上传但仍检查通信。
+`--no-wait` 只跳过最初的设备等待，不跳过写入前握手；请只连接一台待刷写的 fastboot 设备。
+
+若“等待 fastboot 就绪”超时，此次尚未写 GPT 或分区。检查 USB 连接、板卡下载模式及
+是否有其他刷写进程占用设备后重试。若 `oem format` 超时，板端执行结果未知，
+flange 会停止后续写入；检查连接并重新进入刷写模式后，再运行 `flange flash`。
+串口中的 `crq->brequest:0x0` 是当前 U-Boot DWC2 驱动处理 USB `GET_STATUS` 的打印，
+它本身不表示错误，也不能证明 fastboot 已经完成通信握手。
+
+### 分区与启动验证
+
 Radxa Zero 3W 的普通 GPT 流程用 `boot` 分区更新内核启动内容。
 `kernel` 不是所有目标共有的刷写分区名；SPI NAND/MTD 的具名分区以清单为准。
 不要把 SPI NAND 镜像当 GPT 整盘镜像使用。

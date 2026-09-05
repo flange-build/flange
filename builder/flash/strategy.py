@@ -136,6 +136,8 @@ class FlashStrategy(FlashPlan, ABC):
         while time.time() < deadline:
             info = self.detect_device(tool)
             if info:
+                if _tty() and supports_color():
+                    sys.stdout.write("\r\033[K")
                 _ok(f"已检测到 {info.platform} 设备 ({info.mode} 模式)")
                 return info
             remaining = int(deadline - time.time())
@@ -642,9 +644,13 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
     # 协议（同代加密 v3），与 G12A/G12B/S905X3 共用。
     PYAMLBOOT_ENTRY = "boot-g12.py"
 
-    # 进入 fastboot 模式后，host 端等待设备出现的超时（秒）。与
-    # RockchipFlashStrategy.wait_for_device 默认 30s 对齐。
+    # 枚举和只读握手共用总时限，每次探测还受剩余时限约束。
     FASTBOOT_WAIT_TIMEOUT = 30
+    FASTBOOT_PROBE_TIMEOUT = 5
+    FASTBOOT_GPT_TIMEOUT = 30
+
+    def __init__(self) -> None:
+        self._fastboot_serial: str | None = None
 
     def find_tool(self, project_dir: Path) -> Path:
         """查找 host 端 fastboot 工具。
@@ -681,17 +687,74 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
 
         # 2) fastboot 阶段（pre_flash 推完 u-boot 之后）
         try:
-            result = subprocess.run(
-                [str(tool), "devices"],
-                capture_output=True, text=True, timeout=5,
-            )
-            output = result.stdout.strip()
-            if output:
-                # `fastboot devices` 在有设备时仅输出 `<serial>\tfastboot`
+            if self._find_fastboot_serial(tool, self.FASTBOOT_PROBE_TIMEOUT):
                 return DeviceInfo("amlogic", "fastboot", "Amlogic fastboot 设备")
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        except (subprocess.SubprocessError, OSError):
             pass
         return None
+
+    @staticmethod
+    def _find_fastboot_serial(tool: Path, timeout: float) -> str | None:
+        """枚举唯一 fastboot 设备；错误输出不能当作设备序列号。"""
+        result = subprocess.run(
+            [str(tool), "devices"], check=True,
+            capture_output=True, text=True, timeout=timeout,
+        )
+        serials = []
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[1] == "fastboot":
+                serials.append(fields[0])
+        if len(serials) > 1:
+            raise FlashError("检测到多台 fastboot 设备；请只连接待刷写的一台设备")
+        return serials[0] if serials else None
+
+    def _wait_fastboot_ready(self, tool: Path) -> None:
+        """在写入前确认 USB 枚举和协议响应；只重试只读命令。"""
+        self._fastboot_serial = None
+        timeout = self.FASTBOOT_WAIT_TIMEOUT
+        deadline = time.monotonic() + timeout
+        last_error = "尚未枚举到 fastboot 设备"
+        _info(f"等待 fastboot 就绪（USB 枚举与通信握手，最长 {timeout}s）...",
+              role=Role.ACTIVE)
+        while (remaining := deadline - time.monotonic()) > 0:
+            phase = "USB 枚举"
+            try:
+                serial = self._find_fastboot_serial(
+                    tool, min(self.FASTBOOT_PROBE_TIMEOUT, remaining))
+                remaining = deadline - time.monotonic()
+                if serial and remaining > 0:
+                    phase = "通信握手"
+                    result = subprocess.run(
+                        [str(tool), "-s", serial, "getvar", "version"],
+                        check=True, capture_output=True, text=True,
+                        timeout=min(self.FASTBOOT_PROBE_TIMEOUT, remaining),
+                    )
+                    output = result.stdout + result.stderr
+                    if re.search(r"^[ \t]*(?:\(bootloader\)[ \t]*)?version:[ \t]*\S+",
+                                 output, re.MULTILINE):
+                        self._fastboot_serial = serial
+                        _ok(f"fastboot 已就绪 · {serial}")
+                        return
+                    last_error = "fastboot 未返回有效的 version 响应"
+                else:
+                    last_error = "尚未枚举到 fastboot 设备"
+            except subprocess.TimeoutExpired:
+                # run 会终止并回收超时进程；下一次探测重新打开 USB 会话。
+                last_error = f"fastboot {phase}无响应"
+            except subprocess.CalledProcessError as error:
+                detail = str(error.stderr or error.stdout or error).strip()
+                last_error = f"fastboot {phase}失败：{detail[-500:]}"
+            except OSError as error:
+                raise FlashError(f"无法执行 fastboot：{error}") from error
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(1, remaining))
+        raise FlashError(
+            f"等待 fastboot 就绪超时（{timeout}s）：{last_error}。\n"
+            "尚未写入 GPT 或分区。请检查 USB 连接及其他刷写进程，"
+            "确认板卡进入 fastboot 模式后重新运行 flange flash。"
+        )
 
     def _probe_maskrom(self) -> bool:
         """探测 USB 总线上是否有 MaskROM 设备（``1b8e:c003``）。
@@ -807,15 +870,17 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
             场景：上一轮 ``flange flash`` 用 ``fastboot reboot bootloader``
             重回 fastboot，或 Linux 跑 ``reboot bootloader`` 后 u-boot
             PREBOOT 检测 reboot_mode 自动进 fastboot）。此时 u-boot 已在
-            DDR 跑，直接进 flash 分区流程即可。
+            DDR 跑，确认通信就绪后进入分区刷写。
 
-        跳过 pyamlboot 不仅省一次 sudo 提示 + ~3s 推送时间，更关键的是
+        跳过 pyamlboot 可省去重复上传和 sudo 提示，同时
         避免要求用户接串口手动敲 ``fastboot usb 0`` —— PREBOOT 条件触发
         让 u-boot 自动进 fastboot，host 端 ``flange flash`` 就能纯 USB
         无人值守完成。
         """
+        self._fastboot_serial = None
         if device is not None and device.mode == "fastboot":
             _info("板已在 fastboot 模式（u-boot 已在 DDR），跳过 pyamlboot 推送")
+            self._wait_fastboot_ready(tool)
             return
 
         from shutil import which
@@ -836,7 +901,6 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
                 "  或 git clone https://github.com/superna9999/pyamlboot.git\n"
                 "    并把仓库根目录加入 PATH"
             )
-
         if sys.platform == "darwin":
             pyamlboot = self._resolve_pyamlboot_entry(pyamlboot)
 
@@ -862,16 +926,24 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
             cmd += ["env", f"DYLD_FALLBACK_LIBRARY_PATH={dyld_extra}"]
         cmd += [str(pyamlboot), str(boot_image)]
         subprocess.run(cmd, check=True)
-        # u-boot 已进 DDR，等待主线 USB gadget 完成枚举。
-        _info("u-boot 已推入 DDR，等待 fastboot 设备枚举...", role=Role.ACTIVE)
-        # u-boot 主线 USB 枚举需要 ~1.5s，留出余量到 3s。
-        time.sleep(3)
-        _info("u-boot 已推送，等待 fastboot 设备", role=Role.ACTIVE)
+        _ok("U-Boot 已上传到 DDR")
+        self._wait_fastboot_ready(tool)
 
-    def _run_fastboot(self, tool: Path, *args: str) -> None:
-        """执行 fastboot 子命令，带 stdout/stderr 透传。"""
-        cmd = [str(tool), *args]
-        subprocess.run(cmd, check=True)
+    def _run_fastboot(
+        self, tool: Path, *args: str, timeout: float | None = None,
+    ) -> None:
+        """绑定已握手设备执行命令，透传输出，写入失败不自动重试。"""
+        if self._fastboot_serial is None:
+            raise FlashError("fastboot 尚未完成就绪握手；请重新运行 flange flash")
+        cmd = [str(tool), "-s", self._fastboot_serial, *args]
+        try:
+            subprocess.run(cmd, check=True, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            action = " ".join(args[:2])
+            raise FlashError(
+                f"fastboot {action} 超时（{timeout}s），设备端执行结果未知。\n"
+                "已停止后续刷写，请检查 USB 连接并重新进入刷写模式后运行 flange flash。"
+            ) from error
 
     def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
         """``fastboot oem format`` 让 u-boot 按实际 eMMC 容量重建 GPT。
@@ -889,7 +961,7 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
         分区。本步骤必须在 ``fastboot flash boot/rootfs`` 之前。
         """
         _info("用 u-boot oem format 按实际 eMMC 容量重建 GPT...", role=Role.ACTIVE)
-        self._run_fastboot(tool, "oem", "format")
+        self._run_fastboot(tool, "oem", "format", timeout=self.FASTBOOT_GPT_TIMEOUT)
         _ok("GPT")
 
     def write_partition(self, tool: Path, offset: int, image: Path):

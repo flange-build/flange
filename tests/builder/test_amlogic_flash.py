@@ -34,6 +34,17 @@ from builder.flash import (
 )
 
 
+@pytest.fixture
+def ready_strategy():
+    strategy = AmlogicFlashStrategy()
+    with patch("builder.flash.strategy.subprocess.run", side_effect=[
+        subprocess.CompletedProcess([], 0, "board-serial\tfastboot\n", ""),
+        subprocess.CompletedProcess([], 0, "", "version: 0.4\n"),
+    ]):
+        strategy._wait_fastboot_ready(Path("/fastboot"))
+    return strategy
+
+
 # ---------------------------------------------------------------------------
 # 注册表
 # ---------------------------------------------------------------------------
@@ -130,8 +141,9 @@ class TestPreFlash:
             with patch("shutil.which", return_value="/usr/local/bin/boot-g12.py"), \
                  patch("builder.flash.strategy.subprocess.run") as mock_run, \
                  patch.object(s, "_wait_maskrom_device"), \
-                 patch("builder.flash.strategy.time.sleep"):
+                 patch.object(s, "_wait_fastboot_ready") as ready:
                 s.pre_flash(Path("/usr/bin/fastboot"), target_dir, cfg)
+            ready.assert_called_once_with(Path("/usr/bin/fastboot"))
 
             # 至少有一次调用是 boot-g12.py 推 u-boot
             calls = mock_run.call_args_list
@@ -156,7 +168,7 @@ class TestPreFlash:
              patch.object(s, "_resolve_pyamlboot_entry", return_value="/python/bin/boot-g12.py") as resolve, \
              patch.object(s, "_darwin_dyld_lib_path", return_value="/opt/homebrew/lib"), \
              patch.object(s, "_wait_maskrom_device"), \
-             patch("builder.flash.strategy.time.sleep"), \
+             patch.object(s, "_wait_fastboot_ready"), \
              patch("builder.flash.strategy.subprocess.run") as run:
             s.pre_flash(Path("/bin/fastboot"), tmp_path, self._make_config())
         resolve.assert_called_once_with("/pyenv/shims/boot-g12.py")
@@ -188,18 +200,18 @@ class TestPreFlash:
 
     def test_pre_flash_skips_pyamlboot_when_already_fastboot(self):
         """如果 detect_device 已识别为 fastboot 模式（u-boot 在 DDR 跑着），
-        pre_flash 应直接返回，跳过 pyamlboot 推送 ——避免要求用户接串口
-        手动 ``fastboot usb 0``，也省一次 sudo 提示与 3s 推送等待。"""
+        pre_flash 跳过 pyamlboot 推送，但必须确认 fastboot 通信就绪。"""
         s = AmlogicFlashStrategy()
         cfg = self._make_config()
         fb_device = DeviceInfo(
             platform="amlogic", mode="fastboot",
             description="Amlogic fastboot 设备",
         )
-        # 关键断言：subprocess.run 与 which 都不应被调用（没下载、没 sudo）
-        with patch("builder.flash.strategy.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run, \
+             patch.object(s, "_wait_fastboot_ready") as ready:
             s.pre_flash(Path("/fastboot"), Path("/target"), cfg, device=fb_device)
             mock_run.assert_not_called()
+            ready.assert_called_once_with(Path("/fastboot"))
 
     def test_pre_flash_missing_download_boot_field_raises(self):
         s = AmlogicFlashStrategy()
@@ -215,49 +227,49 @@ class TestPreFlash:
 # ---------------------------------------------------------------------------
 
 class TestWritePartition:
-    def test_bootloader_writes_via_fastboot_flash(self):
-        s = AmlogicFlashStrategy()
+    def test_bootloader_writes_via_fastboot_flash(self, ready_strategy):
+        s = ready_strategy
         img = Path("/target/bootloader/u-boot.bin.sd.bin")
         with patch("builder.flash.strategy.subprocess.run") as mock_run:
             # bypass image.stat() OSError handling
             with patch.object(Path, "stat", side_effect=OSError):
                 s.write_partition(Path("/usr/bin/fastboot"), 0x200, img)
             mock_run.assert_called_once_with(
-                ["/usr/bin/fastboot", "flash", "bootloader",
+                ["/usr/bin/fastboot", "-s", "board-serial", "flash", "bootloader",
                  "/target/bootloader/u-boot.bin.sd.bin"],
-                check=True,
+                check=True, timeout=None,
             )
 
-    def test_boot_writes_via_fastboot_flash(self):
-        s = AmlogicFlashStrategy()
+    def test_boot_writes_via_fastboot_flash(self, ready_strategy):
+        s = ready_strategy
         img = Path("/target/boot/boot.img")
         with patch("builder.flash.strategy.subprocess.run") as mock_run, \
              patch.object(Path, "stat", side_effect=OSError):
             s.write_partition(Path("/usr/bin/fastboot"), 0x40, img)
             mock_run.assert_called_once_with(
-                ["/usr/bin/fastboot", "flash", "boot",
+                ["/usr/bin/fastboot", "-s", "board-serial", "flash", "boot",
                  "/target/boot/boot.img"],
-                check=True,
+                check=True, timeout=None,
             )
 
-    def test_rootfs_writes_via_fastboot_flash(self):
-        s = AmlogicFlashStrategy()
+    def test_rootfs_writes_via_fastboot_flash(self, ready_strategy):
+        s = ready_strategy
         img = Path("/target/rootfs/rootfs.img")
         with patch("builder.flash.strategy.subprocess.run") as mock_run, \
              patch.object(Path, "stat", side_effect=OSError):
             s.write_partition(Path("/fastboot"), 0x120040, img)
             cmd = mock_run.call_args[0][0]
-            assert cmd == ["/fastboot", "flash", "rootfs",
+            assert cmd == ["/fastboot", "-s", "board-serial", "flash", "rootfs",
                            "/target/rootfs/rootfs.img"]
 
-    def test_recovery_writes_via_fastboot_flash(self):
-        s = AmlogicFlashStrategy()
+    def test_recovery_writes_via_fastboot_flash(self, ready_strategy):
+        s = ready_strategy
         img = Path("/target/recovery/recovery.img")
         with patch("builder.flash.strategy.subprocess.run") as mock_run, \
              patch.object(Path, "stat", side_effect=OSError):
             s.write_partition(Path("/fastboot"), 0x20040, img)
             cmd = mock_run.call_args[0][0]
-            assert cmd == ["/fastboot", "flash", "recovery",
+            assert cmd == ["/fastboot", "-s", "board-serial", "flash", "recovery",
                            "/target/recovery/recovery.img"]
 
 
@@ -266,13 +278,13 @@ class TestWritePartition:
 # ---------------------------------------------------------------------------
 
 class TestReboot:
-    def test_reboot_calls_fastboot_reboot(self):
-        s = AmlogicFlashStrategy()
+    def test_reboot_calls_fastboot_reboot(self, ready_strategy):
+        s = ready_strategy
         with patch("builder.flash.strategy.subprocess.run") as mock_run:
             s.reboot(Path("/usr/bin/fastboot"))
             mock_run.assert_called_once_with(
-                ["/usr/bin/fastboot", "reboot"],
-                check=True,
+                ["/usr/bin/fastboot", "-s", "board-serial", "reboot"],
+                check=True, timeout=None,
             )
 
 

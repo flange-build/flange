@@ -31,7 +31,7 @@ updated: 2026-09-05
 ## TL;DR
 
 Khadas VIM3 使用 Amlogic A311D（G12B，2×Cortex-A53 + 4×Cortex-A73），复用现有 Amlogic
-mainline 构建和 pyamlboot → fastboot（快速刷写协议）链路。软件配置与构建输入已验证，实板启动、V14 DRAM
+mainline 构建和 pyamlboot → fastboot（快速刷写协议）链路。软件配置、构建输入及实板 U-Boot 进入 fastboot 已验证；完整系统启动、V14 DRAM
 （Dynamic Random-Access Memory，动态随机存取存储器）兼容性和外设状态待验收。
 
 ## target
@@ -69,7 +69,15 @@ flange flash
 ```
 
 现有 `AmlogicFlashStrategy` 会用 `boot-g12.py` 推裸 FIP，U-Boot fragment 自动进入 fastboot，随后执行
-`fastboot oem format` 并刷写 bootloader/boot/rootfs。
+唯一设备枚举及 `getvar version` 只读握手。看到“fastboot 已就绪”后才执行
+`fastboot oem format` 并刷写 bootloader/boot/rootfs；后续命令绑定该设备的序列号。
+
+2026-09-05 的现场反馈：MacBook 使用 USB-C to USB-C 线时，旧流程首次调用在 `oem format`
+等待，中断后重试恢复；用户确认其他连接方式未触发同一现象。串口已进入 U-Boot fastboot，
+`crq->brequest:0x0` 为 USB 状态请求的普通打印，不能据此判定协议就绪。
+当前宿主机流程以最长 30 秒的枚举与握手取代固定 3 秒休眠，单次探测最多 5 秒，
+GPT 写入另有 30 秒超时。自动恢复与停止写入边界已通过模拟测试，C-to-C 冷启动首刷仍待实机复测。
+具体状态与恢复步骤见[开发指南](../../docs/development-guide.md#amlogic-首次-usb-刷写)。
 
 ## 板级数据
 
