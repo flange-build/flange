@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from builder.output import BuildOutput, OutputLevel, rotate_log
 
@@ -114,9 +113,10 @@ def test_日志头部记录绝对时间与target(tmp_path: Path, capsys):
 # ---------------------------------------------------------------------------
 
 def _fail_once(out: BuildOutput, error: Exception) -> str:
-    out.build_start("golden-board", {})
+    out.build_start("image", {"board": "golden-board"})
     out.phase_start("rootfs")
     out.phase_end("rootfs", success=False, error=error)
+    out.build_end(success=False)
     return ""
 
 
@@ -128,7 +128,8 @@ def test_异常原文出现在终端(tmp_path: Path, capsys):
 
     stdout = capsys.readouterr().out
     assert "rootfs 分区 2G 装不下 3.1G 的镜像" in stdout
-    assert "ValueError" in stdout, "异常类型也要在，否则分不清是谁抛的"
+    assert "原因" in stdout
+    assert "ValueError" in (tmp_path / "build.log").read_text()
 
 
 def test_失败时给出完整日志路径(tmp_path: Path, capsys):
@@ -152,7 +153,7 @@ def test_多行异常在终端保持多行(tmp_path: Path, capsys):
 def test_摘要取首行而不是前40字符(tmp_path: Path, capsys):
     """按字符截断会切在 Traceback 或路径中间；首行才是结论。"""
     out = BuildOutput(tmp_path, OutputLevel.NORMAL)
-    out.build_start("golden-board", {})
+    out.build_start("image", {"board": "golden-board"})
     out.phase_start("kernel")
     out.phase_end("kernel", success=False,
                   error=RuntimeError("交叉编译器缺失：aarch64-linux-gnu-gcc\n"
@@ -161,7 +162,7 @@ def test_摘要取首行而不是前40字符(tmp_path: Path, capsys):
     out.build_end()
 
     stdout = capsys.readouterr().out
-    summary = [l for l in stdout.splitlines() if "kernel" in l and "失败" in l]
+    summary = [line for line in stdout.splitlines() if "原因" in line]
     assert summary, stdout
     assert "Traceback" not in summary[0], "摘要不该带上 traceback"
     assert "交叉编译器缺失" in summary[0]
@@ -183,9 +184,10 @@ def test_traceback只进日志不进终端(tmp_path: Path, capsys):
     try:
         raise RuntimeError("装配失败")
     except RuntimeError as error:
-        out.build_start("golden-board", {})
+        out.build_start("image", {"board": "golden-board"})
         out.phase_start("image")
         out.phase_end("image", success=False, error=error)
+    out.build_end(success=False)
     out.close()
 
     stdout = capsys.readouterr().out

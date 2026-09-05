@@ -1,14 +1,4 @@
-"""构建输出的进度模型、粘性底栏与步骤耗时。
-
-这次改造的三条主张，各自对应一类此前缺失的信息：
-
-  - **进度感知**：全量构建近一小时，此前终端上没有"第几个 / 共几个 / 还要
-    多久"，只有一串 ✓ 往下滚。
-  - **问题可定位**：组件级耗时摘要里有，组件内部没有 —— rootfs 那 82 秒
-    花在哪只能去翻日志。
-  - **降级不丢信息**：同一份构建会跑在交互终端、CI 日志、管道里，非 TTY
-    下不能因为画不了动画就把耗时一并丢掉。
-"""
+"""阶段顺序、真实动作计时与非交互输出的行为回归。"""
 
 from __future__ import annotations
 
@@ -103,7 +93,7 @@ def test_跳过是单行(out: BuildOutput):
         for name in ("a", "b", "c"):
             out.phase_skip(name)
 
-    lines = [l for l in _run(out, body).splitlines() if "⊘" in l]
+    lines = [line for line in _run(out, body).splitlines() if "⊘" in line]
     assert len(lines) == 3
 
 
@@ -122,18 +112,19 @@ def test_跳过原因进摘要(out: BuildOutput):
 # ---------------------------------------------------------------------------
 
 def test_步骤行带耗时(out: BuildOutput):
-    """仓库里 126 处 _status 调用，不可能逐处声明起止 —— 必须自动测。"""
+    """动作耗时只能通过明确的起止边界测量。"""
     def body():
         out.plan(["rootfs"])
         out.build_start("image", {"board": "b"})
         out.phase_start("rootfs")
-        out.status("安装内核模块")
+        out.spinner_start("安装内核模块")
         time.sleep(0.12)
+        out.spinner_stop()
         out.status("导出包清单")
         out.phase_end("rootfs")
 
     text = _run(out, body)
-    module_line = [l for l in text.splitlines() if "安装内核模块" in l][0]
+    module_line = [line for line in text.splitlines() if "安装内核模块" in line and "✔" in line][0]
     assert "✔" in module_line
     assert "0.1s" in module_line or "0.2s" in module_line
 
@@ -148,7 +139,7 @@ def test_极短步骤不标耗时(out: BuildOutput):
         out.status("下一步")
         out.phase_end("rootfs")
 
-    line = [l for l in _run(out, body).splitlines() if "跳过重置" in l][0]
+    line = [line for line in _run(out, body).splitlines() if "跳过重置" in line][0]
     assert "0.0s" not in line
 
 
@@ -170,11 +161,54 @@ def test_失败时未完成的步骤仍落盘(out: BuildOutput):
         out.plan(["recovery"])
         out.build_start("image", {"board": "b"})
         out.phase_start("recovery")
-        out.status("生成 recovery.img")
+        out.spinner_start("生成 recovery.img")
         out.phase_end("recovery", success=False, error=RuntimeError("装不下"))
+        out.build_end(success=False)
 
     text = _run(out, body)
     assert "生成 recovery.img" in text and "装不下" in text
+    step = next(line for line in text.splitlines() if "生成 recovery.img" in line and "✖" in line)
+    assert "✖" in step and "✔" not in step
+
+
+def test_取消时步骤与构建摘要不显示成功(out: BuildOutput):
+    def body():
+        out.build_start("image", {"board": "b"})
+        out.phase_start("kernel")
+        out.spinner_start("编译内核")
+        try:
+            raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            out.build_end(success=False)
+
+    text = _run(out, body)
+    assert "⚠ 编译内核（已取消）" in text
+    assert "⚠ 构建已取消" in text
+    assert "✔" not in text and "构建失败" not in text
+
+
+def test_关闭输出不把未确认的步骤标为成功(out: BuildOutput):
+    def body():
+        out.spinner_start("编译内核")
+        out.close()
+
+    text = _run(out, body)
+    assert "编译内核" in text
+    assert "✔" not in text
+
+
+def test_组件显式取消不会先显示失败再显示取消(out: BuildOutput):
+    def body():
+        out.build_start("image", {"board": "b"})
+        out.phase_start("kernel")
+        out.spinner_start("编译内核")
+        out.phase_end("kernel", success=False, error=KeyboardInterrupt())
+        out.build_end(success=False)
+
+    text = _run(out, body)
+    assert "⚠ 编译内核（已取消）" in text
+    assert "⚠ 已取消" in text and "⚠ 构建已取消" in text
+    assert "✖ 失败" not in text and "构建失败" not in text and "✔" not in text
 
 
 def test_非TTY同样保留步骤耗时(out: BuildOutput):
@@ -188,11 +222,11 @@ def test_非TTY同样保留步骤耗时(out: BuildOutput):
         out.plan(["rootfs"])
         out.build_start("image", {"board": "b"})
         out.phase_start("rootfs")
-        out.status("安装内核模块")
+        out.spinner_start("安装内核模块")
         time.sleep(0.12)
         out.phase_end("rootfs")
 
-    line = [l for l in _run(out, body).splitlines() if "安装内核模块" in l][0]
+    line = [line for line in _run(out, body).splitlines() if "安装内核模块" in line and "✔" in line][0]
     assert "✔" in line and "s" in line
 
 
@@ -235,8 +269,8 @@ def test_长组件名不挤掉状态列(out: BuildOutput):
         out.phase_skip("device-tree-overlay")
         out.build_end()
 
-    summary = [l for l in _run(out, body).splitlines()
-               if "device-tree-overlay" in l and "缓存命中" in l]
+    summary = [line for line in _run(out, body).splitlines()
+               if "device-tree-overlay" in line and "缓存命中" in line]
     assert summary, "摘要里组件名与状态挤到了一起"
     assert "device-tree-overlay缓存命中" not in "".join(summary)
 
@@ -251,9 +285,10 @@ def test_异常原文折行而不截断(out: BuildOutput, monkeypatch):
         out.build_start("image", {"board": "b"})
         out.phase_start("image")
         out.phase_end("image", success=False, error=ValueError(long_error))
+        out.build_end(success=False)
 
     text = _run(out, body)
-    assert "…" not in text.split("ValueError")[1].split("┄")[0]
+    assert "…" not in text.split("原因")[1].split("日志")[0]
     assert long_error[-12:] in text.replace("\n", "")
 
 
@@ -264,7 +299,7 @@ def test_异常原文折行而不截断(out: BuildOutput, monkeypatch):
 def test_非TTY不启用底栏(tmp_path: Path):
     output = BuildOutput(tmp_path, level=OutputLevel.NORMAL)
     output._tty = False
-    assert not output._sticky_enabled or not output._sticky_lines()
+    assert not output._sticky_enabled or not output._sticky_line()
 
 
 def test_QUIET与VERBOSE不启用底栏(tmp_path: Path):
@@ -294,21 +329,30 @@ def test_底栏内容不进日志(tmp_path: Path):
         assert glyph not in log
 
 
-def test_底栏两行含进度与当前步骤(tmp_path: Path):
+def test_底栏单行含进度与当前步骤(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("builder.output.terminal_width", lambda: 80)
     output = BuildOutput(tmp_path, level=OutputLevel.NORMAL)
     output._sticky_enabled = True
     output.plan(["kernel", "rootfs", "image"])
-    output._build_start_time = time.time()
+    output._build_start_time = time.monotonic()
     output._current_component = "rootfs"
     output._done_components = 1
     output._step_label = "安装内核模块"
-    output._step_start = time.time()
+    output._step_start = time.monotonic()
 
-    lines = [strip_ansi(l) for l in output._sticky_lines()]
+    line = strip_ansi(output._sticky_line())
 
-    assert len(lines) == 2
-    assert "rootfs" in lines[0] and "安装内核模块" in lines[0]
-    assert "[1/3]" in lines[1] and "%" in lines[1]
+    assert "\n" not in line
+    assert "rootfs" in line and "安装内核模块" in line
+    assert "[2/3]" in line and "%" not in line
+    assert "已用" in line
+    assert display_width(line) < 80
+
+    with patch("sys.stdout", StringIO()) as stdout:
+        output._draw_sticky()
+        output._erase_sticky()
+        output._draw_sticky()
+    assert "\n" not in stdout.getvalue()
 
 
 def test_停止底栏后不再重绘(tmp_path: Path):
@@ -341,8 +385,8 @@ def test_命令的耗时不算到上一行状态头上(out: BuildOutput):
         out.phase_end("kernel")
 
     lines = _run(out, body).splitlines()
-    config_line = [l for l in lines if "flange_overrides" in l][0]
-    compile_line = [l for l in lines if "编译内核" in l][0]
+    config_line = [line for line in lines if "flange_overrides" in line][0]
+    compile_line = [line for line in lines if "编译内核" in line and "✔" in line][0]
 
     assert "2m" not in config_line and "0.1s" not in config_line
     assert "0.1s" in compile_line or "0.2s" in compile_line
@@ -360,7 +404,7 @@ def test_命令结束后留下结果行(out: BuildOutput):
         out.spinner_stop()
         out.phase_end("rootfs")
 
-    line = [l for l in _run(out, body).splitlines() if "安装 52 个包" in l][0]
+    line = [line for line in _run(out, body).splitlines() if "安装 52 个包" in line and "✔" in line][0]
     assert "✔" in line and "s" in line
 
 
@@ -374,7 +418,7 @@ def test_命令标签去掉尾部省略号(out: BuildOutput):
         out.spinner_stop()
         out.phase_end("kernel")
 
-    line = [l for l in _run(out, body).splitlines() if "编译内核" in l][0]
+    line = [line for line in _run(out, body).splitlines() if "编译内核" in line and "✔" in line][0]
     assert "编译内核..." not in line
 
 
@@ -394,9 +438,10 @@ def test_同名的状态与命令合成一步(out: BuildOutput):
         out.spinner_stop()
         out.phase_end("kernel")
 
-    lines = [l for l in _run(out, body).splitlines() if "rtl8852be" in l]
-    assert len(lines) == 1, f"同一件事落了 {len(lines)} 行: {lines}"
-    assert "0.1s" in lines[0] or "0.2s" in lines[0]
+    lines = [line for line in _run(out, body).splitlines() if "rtl8852be" in line]
+    assert len(lines) == 2, f"非 TTY 应只有开始与完成两条: {lines}"
+    assert "·" in lines[0] and "✔" in lines[1]
+    assert "0.1s" in lines[1] or "0.2s" in lines[1]
 
 
 def test_不同名的状态与命令仍是两步(out: BuildOutput):

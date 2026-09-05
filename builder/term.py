@@ -15,6 +15,8 @@ import os
 import shutil
 import sys
 import unicodedata
+from enum import Enum
+from types import MappingProxyType
 
 #: 终端宽度取不到时的兜底。80 太窄会让摘要表频繁折行，100 更贴近现代终端。
 DEFAULT_WIDTH = 100
@@ -23,13 +25,43 @@ DEFAULT_WIDTH = 100
 MAX_WIDTH = 120
 
 
+class Role(Enum):
+    """信息的含义；调用者选择语义，不自行决定终端颜色。"""
+
+    HEADING = "heading"
+    ACTIVE = "active"
+    SUCCESS = "success"
+    WARNING = "warning"
+    ERROR = "error"
+    PATH = "path"
+    COMMAND = "command"
+    MUTED = "muted"
+    TEXT = "text"
+
+
+# 使用终端基础色，让用户的明暗主题决定具体色值；正文不强制白色或背景色。
+ANSI_STYLES = MappingProxyType(
+    {
+        Role.HEADING: "1;34",
+        Role.ACTIVE: "34",
+        Role.SUCCESS: "32",
+        Role.WARNING: "33",
+        Role.ERROR: "1;31",
+        Role.PATH: "36",
+        Role.COMMAND: "36",
+        Role.MUTED: "2",
+        Role.TEXT: "",
+    }
+)
+
+
 def terminal_width() -> int:
     """当前终端宽度，限制在可读范围内。"""
     try:
         columns = shutil.get_terminal_size((DEFAULT_WIDTH, 24)).columns
     except OSError:
         columns = DEFAULT_WIDTH
-    return max(48, min(columns, MAX_WIDTH))
+    return max(1, min(columns, MAX_WIDTH))
 
 
 def is_tty(stream=None) -> bool:
@@ -43,16 +75,36 @@ def supports_color(stream=None) -> bool:
     尊重 `NO_COLOR`（https://no-color.org）与 `TERM=dumb` —— 用户把输出
     重定向到文件或在不支持的终端里跑时，颜色码会变成满屏乱码。
     """
-    if os.environ.get("NO_COLOR"):
+    if "NO_COLOR" in os.environ:
         return False
     if os.environ.get("TERM") == "dumb":
         return False
     return is_tty(stream)
 
 
+def style(text: object, role: Role, *, stream=None) -> str:
+    """仅为支持颜色的实际输出流添加样式；纯文本内容和换行保持不变。"""
+    value = str(text)
+    code = ANSI_STYLES[role]
+    if not value or not code or not supports_color(stream):
+        return value
+    return f"\033[{code}m{value}\033[0m"
+
+
 # ---------------------------------------------------------------------------
 # 宽度：中文是双宽字符
 # ---------------------------------------------------------------------------
+
+
+def _character_width(character: str) -> int:
+    if unicodedata.combining(character) or unicodedata.category(character) in {
+        "Cf",
+        "Mn",
+        "Me",
+    }:
+        return 0
+    return 2 if unicodedata.east_asian_width(character) in ("W", "F") else 1
+
 
 def display_width(text: str) -> int:
     """字符串在终端上占的列数。
@@ -60,8 +112,7 @@ def display_width(text: str) -> int:
     中文、全角标点占两列。按 len() 算会让表格错位、让截断切出半个字符 ——
     而且只在含中文的那几行出错，开发时很容易漏掉。
     """
-    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-               for ch in text)
+    return sum(_character_width(ch) for ch in text)
 
 
 def truncate(text: str, width: int) -> str:
@@ -73,7 +124,7 @@ def truncate(text: str, width: int) -> str:
     out: list[str] = []
     used = 0
     for ch in text:
-        step = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        step = _character_width(ch)
         if used + step > width - 1:
             break
         out.append(ch)
@@ -94,6 +145,7 @@ def rpad(text: str, width: int) -> str:
 # ---------------------------------------------------------------------------
 # 图形元素
 # ---------------------------------------------------------------------------
+
 
 def progress_bar(fraction: float, width: int) -> str:
     """进度条：已完成用实线，进行中的那一格用端点符，未完成用细线。
@@ -152,7 +204,7 @@ def wrap(text: str, width: int) -> list[str]:
     current: list[str] = []
     used = 0
     for ch in text:
-        step = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        step = _character_width(ch)
         if used + step > width and current:
             lines.append("".join(current))
             current, used = [], 0
