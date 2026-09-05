@@ -136,6 +136,10 @@ Python 构建引擎 (builder/engine.py) 管理组件依赖图，基于内容哈�
   `name-or-path` 可以是名称或路径，省略时使用调用者目录；create 的 `--dir` 指定父目录。
 - App 名称、路径和 cwd 入口统一进入 AppResolver，递归解析 `build.deps`，拒绝缺失、循环和同名不同源歧义。
   AppBuilder 使用统一 Toolchain、目标隔离工作树、依赖安装前缀与准确 AppBuildReport；打包前检查 ELF 架构。
+- App 安装树、隔离源码、调试快照及 Package 源码快照共用 `file_tree.py` 的复制策略：
+  符号链接保留目标文本，不展开目标，也不复制链接自身的宿主扩展属性或时间戳；
+  普通文件保留内容与权限，目录保留空目录并在子项复制后设置权限。真实 I/O 失败必须中止发布，
+  保留上次成功产物；复制配方纳入 App/Package 输入身份。
 - 默认部署通过宿主 ADB（Android 调试桥），校验设备架构、实际产物及传输摘要，按运行依赖顺序安装 deb；
   多设备必须指定 `--serial`。`--no-build` 仍验证成功报告和实际文件。
 - exec/test 使用已验证安装树中的 `runtime.executable`，默认 `/usr/bin/<name>`；service 使用 `systemd.unit`。
@@ -402,6 +406,7 @@ flange/
 │   ├── app_spec.py     #   App 描述数据模型与解析
 │   ├── app.py          #   系统组件与 AppBuilder 的适配入口
 │   ├── app_build.py    #   App 隔离构建、依赖前缀与产物发布
+│   ├── file_tree.py    #   App/Package 文件树复制，保留链接对象及普通节点权限
 │   ├── app_resolver.py #   来源解析与完整依赖闭包
 │   ├── app_model.py    #   AppBuildResult / AppBuildReport
 │   ├── package_build.py #  Package 显式 build action 的产物流水线

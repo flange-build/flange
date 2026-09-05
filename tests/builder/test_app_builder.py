@@ -1,6 +1,11 @@
 """完整闭包、安装内容、架构和发布失败的行为回归。"""
 from dataclasses import replace
+import errno
 import json
+import os
+from pathlib import Path
+import shutil
+import stat
 from unittest.mock import patch
 import pytest
 from tests.builder.app_support import app, builder
@@ -152,3 +157,167 @@ def test_App资源身份始终写日志而仅在详细模式展示(tmp_path, cap
     assert (result.resource_id in capsys.readouterr().out) is visible
     log = (engine.context.target_dir / "build.log").read_text()
     assert result.resource_id in log
+
+
+def _linked_install_tree(directory, external):
+    """先创建链接再物化目标，模拟动态库 install 的任意创建顺序。"""
+    links = {
+        "usr/lib/libdemo.so": "libdemo.so.1",
+        "usr/lib/libdemo.so.1": "libdemo.so.1.2",
+        "usr/lib/absolute.so": "/opt/flange-test-target/libdemo.so.9",
+        "usr/lib/optional.so": "future-optional.so",
+        "usr/share/config-link": "config",
+        "usr/share/external-link": str(external),
+    }
+    for relative, target in links.items():
+        link = directory / relative
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+    library = directory / "usr/lib/libdemo.so.1.2"
+    library.write_bytes(b"library fixture")
+    library.chmod(0o640)
+    executable = directory / "usr/bin/demo-tool"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o751)
+    config = directory / "usr/share/config"
+    config.mkdir(mode=0o710)
+    (config / "default.conf").write_text("enabled=true\n")
+    empty = directory / "var/lib/demo/empty"
+    empty.mkdir(parents=True)
+    empty.chmod(0o750)
+    return links
+
+
+def _assert_linked_install_tree(directory, links):
+    for relative, target in links.items():
+        link = directory / relative
+        assert link.is_symlink(), relative
+        assert os.readlink(link) == target
+    assert (directory / "usr/lib/libdemo.so").read_bytes() == b"library fixture"
+    assert not (directory / "usr/lib/optional.so").exists()
+    assert (directory / "usr/share/config-link/default.conf").read_text() == "enabled=true\n"
+    assert stat.S_IMODE((directory / "usr/lib/libdemo.so.1.2").stat().st_mode) == 0o640
+    assert stat.S_IMODE((directory / "usr/bin/demo-tool").stat().st_mode) == 0o751
+    empty = directory / "var/lib/demo/empty"
+    assert empty.is_dir() and not any(empty.iterdir())
+    assert stat.S_IMODE(empty.stat().st_mode) == 0o750
+    assert stat.S_IMODE((directory / "usr/share/config").stat().st_mode) == 0o710
+
+
+def _restrict_shared_link_metadata(monkeypatch):
+    """共享卷的链接元数据操作可能错误地访问尚不存在的目标。"""
+    original = shutil.copystat
+
+    def copystat(source, destination, *, follow_symlinks=True):
+        destination = Path(destination)
+        if Path(source).is_symlink() and destination.is_symlink() and not destination.exists():
+            raise FileNotFoundError(errno.ENOENT, "共享卷无法复制悬空链接的扩展属性", str(destination))
+        return original(source, destination, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(shutil, "copystat", copystat)
+
+
+@pytest.mark.parametrize("limited_metadata", [False, True])
+def test_App_staging发布保留符号链接与权限且可以复用(tmp_path, monkeypatch, limited_metadata):
+    source = app(tmp_path / "sdk", kind="staging", system="custom",
+                 build={"staging": "stage", "commands": [["produce-stage"]]})
+    external = tmp_path / "external-config"
+    external.mkdir()
+    (external / "sentinel").write_text("宿主目录不能被解引用复制")
+    engine = builder(tmp_path, apps={"sdk": source}, variant="release")
+    links = {}
+
+    def execute(command, **options):
+        assert command == ["produce-stage"]
+        staged = Path(options["env"]["FLANGE_APP_WORK_DIR"]) / "stage"
+        links.update(_linked_install_tree(staged, external))
+
+    engine._docker.run.side_effect = execute
+    if limited_metadata:
+        _restrict_shared_link_metadata(monkeypatch)
+    report = engine.build_one("sdk")
+    result = report.root()
+    _assert_linked_install_tree(result.install_dir, links)
+    assert report.validate() and result.manifest.validate()
+    assert not result.reused
+    reused = engine.build_one("sdk")
+    assert reused.root().reused and reused.validate()
+    assert reused.identity == report.identity
+    assert engine._docker.run.call_count == 1
+    assert (external / "sentinel").read_text() == "宿主目录不能被解引用复制"
+
+
+@pytest.mark.parametrize("limited_metadata", [False, True])
+def test_App编译与调试源码快照保留链接原文(tmp_path, monkeypatch, limited_metadata):
+    source = app(tmp_path / "sdk", kind="staging", system="custom",
+                 build={"staging": "stage", "commands": [["produce-stage"]]})
+    external = tmp_path / "external-config"
+    external.mkdir()
+    links = _linked_install_tree(source / "fixtures", external)
+    engine = builder(tmp_path, apps={"sdk": source}, variant="debug")
+
+    def execute(command, **options):
+        assert command == ["produce-stage"]
+        compiled = Path(options["cwd"])
+        assert compiled != source
+        _assert_linked_install_tree(compiled / "fixtures", links)
+        staged = Path(options["env"]["FLANGE_APP_WORK_DIR"]) / "stage"
+        staged.mkdir()
+        (staged / "sdk.bin").write_bytes(b"staging fixture")
+
+    engine._docker.run.side_effect = execute
+    if limited_metadata:
+        _restrict_shared_link_metadata(monkeypatch)
+    report = engine.build_one("sdk")
+    result = report.root()
+    _assert_linked_install_tree(Path(result.compile_source_dir) / "fixtures", links)
+    _assert_linked_install_tree(Path(result.debug_source_dir) / "fixtures", links)
+    _assert_linked_install_tree(source / "fixtures", links)
+    assert report.validate() and result.manifest.validate()
+    reused = engine.build_one("sdk")
+    assert reused.root().reused and reused.validate()
+    assert reused.identity == report.identity
+    assert engine._docker.run.call_count == 1
+
+
+@pytest.mark.parametrize("failure_kind", ["file", "directory_metadata"])
+def test_App_staging实际复制失败保留上次成功产物(tmp_path, monkeypatch, failure_kind):
+    source = app(tmp_path / "sdk", kind="staging", system="custom",
+                 build={"staging": "stage", "commands": [["produce-stage"]]})
+    source_input = source / "input.txt"
+    source_input.write_text("first build")
+    external = tmp_path / "external-config"
+    external.mkdir()
+    engine = builder(tmp_path, apps={"sdk": source}, variant="release")
+    stage_directories = []
+
+    def execute(command, **options):
+        assert command == ["produce-stage"]
+        staged = Path(options["env"]["FLANGE_APP_WORK_DIR"]) / "stage"
+        stage_directories.append(staged)
+        _linked_install_tree(staged, external)
+        (staged / "usr/lib/libdemo.so.1.2").write_text(source_input.read_text())
+
+    engine._docker.run.side_effect = execute
+    previous = engine.build_one("sdk")
+    original = previous.root()
+    manifest_bytes = original.manifest_path.read_bytes()
+    source_input.write_text("second build must not replace the first")
+    copy_operation = shutil.copy2 if failure_kind == "file" else shutil.copystat
+
+    def fail_copy(source_path, destination, *args, **kwargs):
+        source_path = Path(source_path)
+        expected_name = "libdemo.so.1.2" if failure_kind == "file" else "empty"
+        if source_path.name == expected_name and source_path.is_relative_to(stage_directories[-1]):
+            raise OSError(errno.EIO, "模拟共享卷真实读写故障", str(destination))
+        return copy_operation(source_path, destination, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2" if failure_kind == "file" else "copystat", fail_copy)
+    with pytest.raises(OSError, match="真实读写故障"):
+        engine.build_one("sdk")
+    assert original.manifest_path.read_bytes() == manifest_bytes
+    assert (original.install_dir / "usr/lib/libdemo.so").read_text() == "first build"
+    assert original.manifest.validate() and previous.validate()
+    recorded = AppBuildReport.load(engine.report_path(previous.roots))
+    assert recorded.identity == previous.identity and recorded.validate()

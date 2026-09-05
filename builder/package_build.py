@@ -11,6 +11,7 @@ from builder.app_build import AppBuilder
 from builder.artifacts import ArtifactManifest, ArtifactSpec
 from builder.digest import digest_value
 from builder.environment import environment_identity
+from builder.file_tree import copy_tree
 from builder.graph import InputSpec, TaskPlan
 from builder.locking import FileLock
 from builder.workspace import WorkspaceContext
@@ -43,6 +44,7 @@ class PackageBuilder:
                 ),
                 InputSpec.file("recipe", Path(__file__)),
                 InputSpec.file("publish_recipe", Path(__file__).with_name("app_build.py")),
+                InputSpec.file("copy_recipe", Path(__file__).with_name("file_tree.py")),
             ),
             (
                 ArtifactSpec("artifacts", output / "artifacts", "tree", allow_empty=False),
@@ -88,7 +90,7 @@ class PackageBuilder:
                     if name == ".git" or (Path(parent) / name).resolve() == self.context.build_root
                 ]
 
-            shutil.copytree(plan.path("source"), source, symlinks=True, ignore=excluded)
+            copy_tree(plan.path("source"), source, ignore=excluded)
             artifacts = publish / "artifacts"
             artifacts.mkdir(parents=True)
             model = plan.value("package")

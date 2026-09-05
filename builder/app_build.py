@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import stat
 import sys
@@ -21,20 +20,11 @@ from builder.config.canonical import userspace_arch
 from builder.deb import DebBuilder, _map_arch
 from builder.digest import digest_value, hash_path
 from builder.environment import environment_identity
+from builder.file_tree import copy_entry, copy_tree
 from builder.graph import InputSpec, TaskPlan
 from builder.locking import FileLock
 from builder.toolchain import Toolchain
 from builder.workspace import WorkspaceContext
-
-
-def _copy_entry(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.is_symlink() or destination.is_file():
-        destination.unlink()
-    if source.is_symlink():
-        destination.symlink_to(os.readlink(source))
-    else:
-        shutil.copy2(source, destination)
 
 
 def validate_elf_architecture(files: Sequence[tuple[Path, str, int]], arch: str) -> None:
@@ -211,6 +201,7 @@ class AppBuilder:
             "app_resolver.py",
             "app_spec.py",
             "deb.py",
+            "file_tree.py",
             "toolchain.py",
         ):
             inputs.append(InputSpec.file(f"recipe:{name}", logic / name))
@@ -309,14 +300,14 @@ class AppBuilder:
                     staged = work / spec.build.staging
                     if not staged.is_dir() or not any(staged.iterdir()):
                         raise ValueError(f"缺少 App staging 产物：{staged}")
-                    shutil.copytree(staged, install, dirs_exist_ok=True, symlinks=True)
+                    copy_tree(staged, install)
                 files = self._collect(source_dir, spec, install)
                 validate_elf_architecture(files, self._arch)
                 # 原生安装与约定文件组成单一发布树，依赖与调试读取同一份内容。
                 for source_file, destination, mode in files:
                     target_file = install / destination.lstrip("/")
                     if source_file != target_file:
-                        _copy_entry(source_file, target_file)
+                        copy_entry(source_file, target_file)
                         if not target_file.is_symlink():
                             target_file.chmod(mode)
                 files = self._installed_files(install)
@@ -388,7 +379,7 @@ class AppBuilder:
                 if name == ".git" or (Path(directory) / name).resolve() == self.context.build_root
             ]
 
-        shutil.copytree(original, snapshot, symlinks=True, ignore=excluded)
+        copy_tree(original, snapshot, ignore=excluded)
 
     @staticmethod
     def _compose_dependencies(dependencies: Sequence[AppBuildResult], target: Path) -> None:
@@ -407,7 +398,7 @@ class AppBuilder:
                     if hash_path(source) != hash_path(destination):
                         raise ValueError(f"依赖安装路径冲突：{destination.relative_to(target)}")
                 else:
-                    _copy_entry(source, destination)
+                    copy_entry(source, destination)
         # .pc 的 /usr 前缀属于目标安装布局；只重定位依赖副本，保留系统 APT
         # 的 pkg-config 搜索根，不能把局部依赖树冒充完整系统 sysroot。
         for metadata in target.rglob("*.pc"):

@@ -97,6 +97,15 @@ install:
 
 原生构建先把 install 输出放入发布 staging。随后合并约定目录和显式 `install`，形成唯一安装树。
 
+安装树复制由 `builder/file_tree.py` 的 `copy_tree` / `copy_entry` 处理。动态库的
+`libfoo.so → libfoo.so.1 → libfoo.so.0` 按链接对象复制，保留各链接的目标文本；
+复制不要求目标已经落地，也不把链接展开成目标文件。链接自身的宿主扩展属性和时间戳不进入复制流程，
+避免共享卷在处理暂时悬空的链接元数据时错误访问目标。
+
+普通文件仍保留内容和权限，普通目录保留结构与空目录，并在子项复制后设置目录权限。
+读取、写入和普通对象权限设置的真实错误仍会中止构建；部分文件已经存在不代表发布成功，
+只有全部产物通过校验后才替换上次成功目录和清单。
+
 | App 子目录 | 默认目标 |
 | --- | --- |
 | `bin/` | `/usr/bin/` |
@@ -135,6 +144,8 @@ AppResolver 的优先级为：显式路径 → 工作区 `[apps]` 注册 → 当
 
 CMake/Meson 的原生中间目录独立；Make/custom 在隔离源码副本中执行，避免修改用户源或串用目标。
 Toolchain 为目标统一提供 CC/CXX/AR/STRIP。依赖安装树组成当前节点编译前缀，不冒充完整系统 sysroot。
+隔离源码与 `debug-source` 快照复用相同文件树复制策略，保留目录内的链接对象；
+复制 helper 属于 App 配方输入，修改它会使相关 App 重新构建。
 
 custom 构建环境包括：
 
@@ -201,6 +212,8 @@ actions:
 App build action 在隔离源码的 Docker 环境执行，之后仍经过安装收集、架构与清单验证。
 设备动作的覆盖脚本在宿主资源目录执行，可自行使用 SSH 等传输；其产物与执行结果仍需关联报告。
 Package 的显式 `actions.build` 由 `package_build.py` 在隔离副本的 Docker 环境执行。
+源码副本同样使用 `file_tree.py`，其复制配方单独纳入 Package 计划；链接目标由构建动作后续生成时，
+快照复制仍保留该链接，不要求提前存在目标文件。
 `FLANGE_PACKAGE_OUTPUT_DIR` 与 `FLANGE_TARGET_DIR` 都指向当前包的产物暂存树；
 成功后发布 `<target_dir>/packages/<resource-id>/{artifacts,resource.json,manifest.json}`。
 后续显式动作消费经过验证的同一 manifest；不依赖 vendor 回退，因此 actions-only、非 vendor 和混合包均可使用。
@@ -209,6 +222,6 @@ Package 的显式 `actions.build` 由 `package_build.py` 在隔离副本的 Dock
 ## 7. 维护与验证
 
 新增字段同时更新 AppSpec/Package schema、消费者、计划输入、有效/无效测试和本文。
-构建模型见 `app_build.py`，文件收集见 `app.py`，打包见 `deb.py`，设备会话见 `deploy.py`。
+构建模型见 `app_build.py`，文件收集见 `app.py`，文件树复制见 `file_tree.py`，打包见 `deb.py`，设备会话见 `deploy.py`。
 真实 App/Package 清单纳入严格校验；跨目标编译、损坏产物和设备故障分别验证。
 当前交付状态见[设计评审](build-system-review.md)，不能把模拟设备测试表述为板卡实机验收。
