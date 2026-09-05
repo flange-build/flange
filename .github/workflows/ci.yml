@@ -59,4 +59,4 @@ jobs:
           node-version: '22'
 
       - name: 校验全部规格
-        run: npx --yes openspec@latest validate --all --strict
+        run: npx --yes @fission-ai/openspec@1.2.0 validate --all --strict
