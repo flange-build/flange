@@ -2,9 +2,9 @@
 
 覆盖：
 - configure 阶段把 fragment 复制到 u-boot ``configs/``
-- compile 调用顺序：u-boot make → build-fip.sh → aml_encrypt_g12a --bootsd / --bootusb
-- collect 返回 fip / usb_bl2 / usb_tpl 三个产物路径
-- 命令行参数（fip_board_dir 来自 board config，fip_tool 来自 SoC config）
+- compile 调用顺序：u-boot make → build-fip.sh
+- collect 返回 fip / sd / usb_bl2 / usb_tpl 四个产物路径
+- 命令行参数（fip_board_dir 来自 board config）
 """
 
 from __future__ import annotations
@@ -171,8 +171,8 @@ def test_configure_applies_canonical_kconfig_after_defconfig(tmp_path):
     ]
 
 
-def test_compile_invokes_build_fip_then_aml_encrypt(tmp_path):
-    """compile 三段式：u-boot make → build-fip.sh → aml_encrypt_g12a 两次。"""
+def test_compile_invokes_build_fip_once(tmp_path):
+    """build-fip.sh 的 --bootmk 已生成四件产物，不再重复调用加密工具。"""
     builder, docker, source, src_dir, fip_src = _make_builder(tmp_path)
     cfg = _config()
 
@@ -190,21 +190,7 @@ def test_compile_invokes_build_fip_then_aml_encrypt(tmp_path):
     assert build_fip[3] == str(src_dir / "u-boot.bin")
     assert build_fip[4] == str(src_dir / "fip" / "khadas-vim3l")
 
-    # 第三段：aml_encrypt_g12a --bootsd（来自 SoC config 的 fip_tool）
-    encrypt_tool = str(fip_src / "khadas-vim3l" / "aml_encrypt_g12a")
-    bootsd = next(c for c in cmds if c[:1] == [encrypt_tool]
-                  and "--bootsd" in c)
-    assert bootsd[1] == "--bootsd"
-    assert bootsd[2:4] == ["--infile",
-                           str(src_dir / "fip" / "khadas-vim3l" / "u-boot.bin")]
-    assert bootsd[4] == "--output"
-    assert bootsd[5].endswith("u-boot.bin.sd.bin")
-
-    # 第四段：aml_encrypt_g12a --bootusb（派生 USB BL2/TPL）
-    bootusb = next(c for c in cmds if c[:1] == [encrypt_tool]
-                   and "--bootusb" in c)
-    assert bootusb[1] == "--bootusb"
-    assert bootusb[5].endswith("u-boot.bin.usb")
+    assert len(cmds) == 2
 
     # ensure_extra 通过 canonical source 引用复用命名仓库
     assert source.calls[0][0] == "amlogic-boot-fip"
@@ -222,23 +208,10 @@ def test_compile_missing_fip_board_dir_raises(tmp_path):
         builder.compile(src_dir, cfg)
 
 
-def test_compile_uses_custom_fip_tool(tmp_path):
-    """SoC 层 fip_tool 被尊重（如未来若有 aml_encrypt_sc2 则用之）。"""
-    builder, docker, _, src_dir, fip_src = _make_builder(tmp_path)
-    cfg = _config()
-    cfg["bootloader"]["fip_tool"] = "aml_encrypt_custom"
-    (fip_src / "khadas-vim3l" / "aml_encrypt_custom").write_text("")
-    builder.compile(src_dir, cfg)
-
-    cmds = [c["cmd"] for c in docker.commands]
-    custom = str(fip_src / "khadas-vim3l" / "aml_encrypt_custom")
-    assert any(c[:1] == [custom] and "--bootsd" in c for c in cmds)
-
-
 def test_collect_returns_four_artifacts(tmp_path):
     """collect 返回 fip / sd / usb_bl2 / usb_tpl 四个 key：fip 是裸 FIP
     （build-fip.sh 直接产出，pyamlboot 推 MaskROM 用），sd 是 SD/eMMC dd
-    格式（aml_encrypt_g12a --bootsd 派生，fastboot flash bootloader 用），
+    格式（build-fip.sh 直接产出，fastboot flash bootloader 用），
     usb_bl2/usb_tpl 是备用的旧式两段 USB 上传产物。"""
     builder, _, _, src_dir, _ = _make_builder(tmp_path)
     cfg = _config()

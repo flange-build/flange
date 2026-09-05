@@ -616,16 +616,15 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
 
     流程（详见 design.md Decision 5）：
 
-    pre_flash 阶段：板上按住 KEY1 + USB-C 上电 → 设备以 MaskROM 模式枚举
+    pre_flash 阶段：按板卡文档进入 MaskROM 模式
     （USB ``1b8e:c003``）。host 端调 ``boot-g12.py``（pyamlboot 提供的
     G12A/G12B/SM1 系列入口脚本，VIM3L 的 S905D3 属 SM1，复用 G12 协议）
-    把 ``bootloader/u-boot.bin.sd.bin`` 推到 SoC DDR；BL2 在 SRAM 解密执行
+    把裸 FIP ``bootloader/u-boot.bin`` 推到 SoC DDR；BL2 在 SRAM 解密执行
     → BL31 → u-boot proper；u-boot 启动后自动进入 fastboot gadget 模式
-    （由 mainline ``khadas-vim3l_defconfig`` + ``flange_fastboot.config``
-    fragment 启用）。
+    （由 mainline board defconfig + ``flange_fastboot.config`` fragment 启用）。
 
     flash 主流程：host 端 ``fastboot`` 命令依次写各分区，``bootloader``
-    分区由 u-boot 端 ``CONFIG_FASTBOOT_FLASH_MMC_DEV=1`` 指向 eMMC hw
+    分区由 u-boot 端板级 ``CONFIG_FASTBOOT_FLASH_MMC_DEV`` 指向 eMMC hw
     boot0 分区，offset 0x200；其他分区写 user area GPT。最后
     ``fastboot reboot``。
 
@@ -836,9 +835,8 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
             cmd += ["env", f"DYLD_FALLBACK_LIBRARY_PATH={dyld_extra}"]
         cmd += [str(pyamlboot), str(boot_image)]
         subprocess.run(cmd, check=True)
-        # u-boot 已进 DDR；提示用户松开 KEY1，避免 fastboot reboot 后再次
-        # 进 MaskROM（按住 KEY1 状态下 BootROM 优先尝试 USB Burning）。
-        _info("u-boot 已推入 DDR — 现在可松开 KEY1，等待 fastboot 设备枚举...")
+        # u-boot 已进 DDR，等待主线 USB gadget 完成枚举。
+        _info("u-boot 已推入 DDR，等待 fastboot 设备枚举...")
         # u-boot 主线 USB 枚举需要 ~1.5s，留出余量到 3s。
         time.sleep(3)
         _ok("u-boot 已推送，等待 fastboot 设备")
@@ -851,8 +849,7 @@ class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
     def write_gpt(self, tool: Path, target_dir: Path, config: "FlashConfig"):
         """``fastboot oem format`` 让 u-boot 按实际 eMMC 容量重建 GPT。
 
-        u-boot 端约定（详见 components/platform/amlogic/s905d3/patches/
-        bootloader/flange_fastboot.config）：
+        u-boot 端约定（详见目标板采用的 ``flange_fastboot.config``）：
           - PREBOOT 设 ``partitions`` env，含 user area GPT 分区描述
             （boot + rootfs；bootloader 在 hw boot0 不入 user area GPT）
           - ``CONFIG_FASTBOOT_CMD_OEM_FORMAT=y`` 启 ``oem format`` 子命令
@@ -1069,5 +1066,3 @@ def get_flash_strategy(platform: str) -> FlashStrategy:
     if not cls:
         raise FlashError(f"不支持的平台: {platform}（支持: {', '.join(_FLASH_STRATEGIES)}）")
     return cls()
-
-

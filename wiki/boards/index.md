@@ -1,7 +1,7 @@
 ---
 title: 板级索引
 type: index
-updated: 2026-08-24
+updated: 2026-09-04
 ---
 
 # 板级索引
@@ -21,6 +21,7 @@ updated: 2026-08-24
 - [[radxa-rock5b]] — RK3588（首颗 RK3588 板，status: wip）
 - [[orangepi-5-plus]] — RK3588（第二块 RK3588 板，复用 rock5b 模板 + RTL8852BE WiFi/BT，status: wip）
 - [[orangepi-cm5-tablet]] — RK3588S（首块原生 RK3588S 实板，AP6256 in-tree bcmdhd 复用 cm4 路径，status: wip）
+- [[khadas-vim3]] — A311D（G12B，AP6398S WiFi/BT，软件配置就绪、待实板验收）
 - [[khadas-vim3l]] — S905D3（首颗 Amlogic 板，AP6398S WiFi/BT，status: wip）
 - [[radxa-zero]] — S905Y2（第二块 Amlogic 板，G12A，AW-CM256SM WiFi/BT，关 recovery，macOS host，status: wip）
 - [[radxa-dragon-q6a]] — QCS6490（首颗 Qualcomm 板，UEFI/GRUB + UFS 4K LBA + Adreno 643 freedreno + AIC8800 USB，status: wip）

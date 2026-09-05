@@ -406,7 +406,7 @@ def test_all_supported_boards_resolve_desktop_products():
         if "desktop" in identity["products"]
     }
 
-    assert len(desktop_boards) == 17
+    assert len(desktop_boards) == 18
     for board in desktop_boards:
         for variant in ("debug", "release"):
             config = resolve_config(board, "desktop", variant, boards=boards)

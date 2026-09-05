@@ -217,6 +217,7 @@ rootfs 分区可以同时声明设备最终容量和构建产物初始大小：
 | radxa-rock5b | RK3588 | Rockchip |
 | orangepi-5-plus | RK3588 | Rockchip |
 | orangepi-cm5-tablet | RK3588s | Rockchip |
+| khadas-vim3 | A311D | Amlogic |
 | khadas-vim3l | S905D3 | Amlogic |
 | radxa-zero | S905Y2 | Amlogic |
 | radxa-cubie-a7a | A733 | Allwinner |

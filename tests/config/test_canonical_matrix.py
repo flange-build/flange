@@ -4,8 +4,13 @@ import pytest
 
 from builder.config.canonical import kernel_device_tree
 from builder.config.query import get_valid_targets, parse_target
-from builder.config.registry import discover_boards, resolve_config
+from builder.config.registry import (
+    _load_soc_config,
+    discover_boards,
+    resolve_config,
+)
 from builder.kconfig import defconfig_targets, render_kconfig
+from builder.paths import COMPONENTS_ROOT
 
 
 FORBIDDEN_KEYS = {
@@ -20,8 +25,8 @@ FORBIDDEN_KEYS = {
 def configs():
     boards = discover_boards()
     targets = get_valid_targets(boards)
-    assert len(boards) == 18
-    assert len(targets) == 90
+    assert len(boards) == 19
+    assert len(targets) == 94
     return {
         target: resolve_config(**{
             "board_name": parsed["board"],
@@ -81,11 +86,28 @@ PLATFORM_CASES = {
     },
     "khadas-vim3l-default-release": {
         "platform": "amlogic",
+        "soc": "s905d3",
         "tree": ("amlogic", "meson-sm1-khadas-vim3l"),
         "source": ("linux-s905d3", "branch", "v6.12"),
         "kconfig": "CONFIG_ANDROID_BINDER_IPC=y",
         "bootloader_targets": ["khadas-vim3l_defconfig", "flange_fastboot.config"],
         "download": ("rootfs", "sha256", "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2"),
+    },
+    "khadas-vim3-default-release": {
+        "platform": "amlogic",
+        "soc": "a311d",
+        "tree": ("amlogic", "meson-g12b-a311d-khadas-vim3"),
+        "source": ("linux-a311d", "branch", "v6.12"),
+        "kconfig": "CONFIG_ANDROID_BINDER_IPC=y",
+        "bootloader_targets": [
+            "khadas-vim3_defconfig", "flange_fastboot.config",
+        ],
+        "fip_board_dir": "khadas-vim3",
+        "fip_tool": "aml_encrypt_g12b",
+        "download": (
+            "rootfs", "sha256",
+            "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
+        ),
     },
     "radxa-cubie-a7z-default-release": {
         "platform": "allwinnera733",
@@ -129,6 +151,8 @@ def test_platform_builder_inputs_match_canonical_config(configs, target):
     download_path, download_key, download_value = expected["download"]
 
     assert config["platform"] == expected["platform"]
+    if "soc" in expected:
+        assert config["soc"] == expected["soc"]
     assert kernel_device_tree(config) == expected["tree"]
     assert config["kernel"]["source"]["name"] == source
     assert config["sources"][source][revision_key] == revision
@@ -138,4 +162,39 @@ def test_platform_builder_inputs_match_canonical_config(configs, target):
     assert defconfig_targets(
         config["bootloader"].get("defconfig", []), "bootloader.defconfig"
     ) == expected["bootloader_targets"]
+    for key in ("fip_board_dir", "fip_tool"):
+        if key in expected:
+            assert config["bootloader"][key] == expected[key]
     assert _get(config, download_path)[download_key] == download_value
+
+
+def test_khadas_vim3_board_contract(configs):
+    config = configs["khadas-vim3-default-release"]
+    firmware = config["rootfs"]["extra_firmware"]
+    assert "bluez" in config["rootfs"]["packages"]
+    assert [(item["src"], item["dest"]) for item in firmware[0]["files"]] == [
+        ("brcmfmac4359-sdio_ap6398s.bin", "brcmfmac4359-sdio.bin"),
+        ("brcmfmac4359-sdio_ap6398s.txt", "brcmfmac4359-sdio.txt"),
+        ("BCM4359C0_ap6398s.hcd", "BCM4359C0.hcd"),
+    ]
+    assert config["boot"]["overlays"]["board"] == [
+        "vim3-spidev-spicc1.dtbo",
+    ]
+    assert config["boot"]["overlays"]["enabled"] == [
+        "vim3-spidev-spicc1.dtbo",
+    ]
+    assert [entry["name"] for entry in config["partitions"]["entries"]] == [
+        "bootloader", "boot", "rootfs",
+    ]
+    assert config["recovery"]["enabled"] is False
+
+    board_dir = COMPONENTS_ROOT / "board" / "khadas-vim3"
+    fragment = board_dir / "patches" / "bootloader" / "flange_fastboot.config"
+    assert "CONFIG_FASTBOOT_FLASH_MMC_DEV=2" in fragment.read_text().splitlines()
+    assert (board_dir / "dtso" / "vim3-spidev-spicc1.dtso").is_file()
+    usb_config = board_dir / "overlay" / "etc" / "usbdevice.conf"
+    assert 'USB_PRODUCT_NAME="khadas-vim3"' in usb_config.read_text().splitlines()
+
+    soc = _load_soc_config("a311d")
+    assert "partitions" not in soc
+    assert soc["sources"]["u-boot-a311d"]["branch"] == "v2024.10"

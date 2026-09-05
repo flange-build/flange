@@ -5,19 +5,19 @@ from builder.source import SourceManager
 
 # 产物名映射：(组件, collect key) → target 目录下的文件名/目录名
 #
-# bootloader.fip 是 SD/eMMC 可启动的最终镜像，由 LibreELEC/amlogic-boot-fip
-# 仓库内 build-fip.sh 拼装 + aml_encrypt_g12a --bootsd 派生。boot0 hw 分区
-# 直接 dd 该文件（offset 0x200）。
+# bootloader 的 FIP、SD 与 USB 格式均由 LibreELEC/amlogic-boot-fip 仓库内
+# build-fip.sh 生成；board Makefile 的 aml_encrypt_* --bootmk 一次产齐。
+# fastboot 把 SD 格式写入 eMMC boot0 hw 分区（offset 0x200）。
 #
 # bootloader.usb_bl2 / bootloader.usb_tpl 是 pyamlboot USB 推送 (MaskROM
-# 模式) 用的双段镜像，由 aml_encrypt_g12a --bootusb 派生；首版可选产出。
+# 模式) 用的双段镜像，同样由 build-fip.sh 产出；首版可选使用。
 ARTIFACT_NAMES = {
     ("kernel",     "dtbos"):     "overlay",
     ("kernel",     "modules"):   "modules",
     # bootloader 产出 4 个变体：
     #   fip      —— 裸 FIP（build-fip.sh 产出），pyamlboot 推 MaskROM 用
-    #   sd       —— SD/eMMC dd 格式（aml_encrypt_g12a --bootsd 派生），
-    #               fastboot flash bootloader 写 mmc1 hw boot0 用
+    #   sd       —— SD/eMMC dd 格式，fastboot flash bootloader 写入板级
+    #               CONFIG_FASTBOOT_FLASH_MMC_DEV 指定的 eMMC hw boot0
     #   usb_bl2/usb_tpl —— 旧式两段 USB 上传（备用，本流程不使用）
     ("bootloader", "fip"):       "u-boot.bin",
     ("bootloader", "sd"):        "u-boot.bin.sd.bin",

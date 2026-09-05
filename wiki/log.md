@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-09-04] sync | 新增 Khadas VIM3（A311D/G12B）板卡支持
+
+新增 `khadas-vim3-{default,desktop}-{debug,release}` 四个 target，接入 mainline U-Boot v2024.10、Linux v6.12、VIM3 专属 G12B FIP 与 AP6398S 固件；VIM3/VIM3L 的公共板级数据提取到共享 Jsonnet helper，A311D SoC 层只保留芯片事实。
+
+同时修正 Amlogic bootloader builder 对 `build-fip.sh` 产物契约的误解：board Makefile 的 `--bootmk` 已生成 FIP、SD 和 USB 四件产物，删除 G12B 不支持的重复 `--bootsd` / `--bootusb` 调用。配置、构建器、刷写与 OpenSpec 校验通过；V14 DRAM 与外设实板验收仍待完成。
+
 ## [2026-08-27] sync | rock5b USB adb 不可用根因定位与 adbd 升级至 ADB 36.0.1
 
 `wiki/apps/adbd.md`：全面更新。二进制描述改为 ADB 36.0.1 standalone（arm64 上游 release / armhf 自编译，来源见 bin/README.md）；unit `Type=forking → oneshot`（forking 把守护循环误当 main process 的连带坑）；conf 新增 `ADB_TCP_PORT` / `ADBD_SHELL` 语义（login bash，与 ssh 体验一致）；「易踩坑」补 4 条（udc state 文件 stale、close(ep0) 连带 unbind gadget、板级 conf 整文件覆盖 App conf、macOS tar 的 AppleDouble 污染）；新增「2026-08-27 根因定位」整节——两层根因（守护循环泄漏雪崩为放大器 + 旧 adbd 1.0.28 对 macOS adb host 预防性 ClearFeature(HALT) 引发的 EPIPE 误判为 USB 断开而 close(ep0) 拆 gadget，Linux host 不发 Clear Halt 故从未暴露）、三个分离实验（ACM gadget 对照 / 停 adb server / 稳定期启动 server）、dwc3 ftrace × strace 对时取证、29 轮 rebind 不收敛反证、AOSP Android 10 官方修复（EPIPE→resubmit）对照、验证数据（85.6MB/s、冷启动零干预）与残留疑点（一次整机失联未复现）。

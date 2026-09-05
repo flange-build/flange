@@ -88,7 +88,7 @@ class AmlogicFlashPlan(FlashPlan):
 
         ``bootloader`` 指向 FIP 封装的 SD/eMMC 启动镜像
         （``u-boot.bin.sd.bin``），由 fastboot 写入 eMMC hw boot0 分区
-        （u-boot ``CONFIG_FASTBOOT_FLASH_MMC_DEV=1`` 路由）。
+        （由 u-boot 板级 ``CONFIG_FASTBOOT_FLASH_MMC_DEV`` 路由）。
         """
         m = {
             "bootloader": "bootloader/u-boot.bin.sd.bin",

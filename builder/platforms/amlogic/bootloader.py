@@ -1,14 +1,12 @@
 """Amlogic Bootloader 构建策略。
 
 mainline u-boot 编译产出 ``u-boot.bin``，再通过 LibreELEC/amlogic-boot-fip
-仓库的 ``build-fip.sh <board_dir> <u-boot.bin> <out>`` 拼装 FIP（含 BL2
-SIG / BL30+BL301 加密 / BL31 加密 / BL33 加密 / DDR fw 嵌入），最后用
-仓库内 ``aml_encrypt_g12a --bootsd`` 派生 SD/eMMC 可启动镜像
-``u-boot.bin.sd.bin``，并通过 ``--bootusb`` 派生 USB BL2/TPL（pyamlboot
-推送 MaskROM 用）。
+仓库的 ``build-fip.sh <board_dir> <u-boot.bin> <out>`` 拼装 FIP（Firmware
+Image Package，固件镜像包）。board Makefile 会调用对应 family 的
+``aml_encrypt_* --bootmk``，一次生成 FIP、SD/eMMC 与 USB BL2/TPL 四件产物。
 
 字段分层：
-- SoC 层 ``bootloader.fip_tool`` —— FIP 工具名
+- SoC 层 ``bootloader.fip_tool`` —— board Makefile 应选择的 family 工具名
 - Board 层 ``bootloader.fip_board_dir`` —— amlogic-boot-fip 仓库内 board 子目录名
 """
 
@@ -101,17 +99,16 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         return None
 
     def compile(self, src_dir: Path, config: dict):
-        """编译 u-boot → build-fip.sh 拼装 → aml_encrypt_g12a 派生。
+        """编译 u-boot，再由 build-fip.sh 生成全部启动产物。
 
-        三段式：
+        两段式：
           1. ``make`` 出 ``u-boot.bin``（mainline u-boot 标准产物）
           2. ``build-fip.sh <board_dir> <u-boot.bin> <out>`` 把 vendor blob
-             与 u-boot proper 拼成 FIP 镜像（``<out>/u-boot.bin``）
-          3. ``aml_encrypt_g12a --bootsd`` 派生 SD/eMMC 启动镜像；
-             ``--bootusb`` 派生 USB BL2/TPL（pyamlboot 推送）
+             与 u-boot proper 拼成 FIP，并由 board Makefile 的
+             ``aml_encrypt_* --bootmk`` 同时生成 SD/eMMC 与 USB 镜像
 
         所有产物落在 ``<src_dir>/fip/<board_dir>/`` 下，collect 阶段引用
-        其中三个具名文件。
+        四个具名文件。
         """
         jobs = config.get("jobs", 0)
         self.make(src_dir, [], arch=self.ARCH, cross=self.CROSS, jobs=jobs,
@@ -130,8 +127,6 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
                 "该字段是 LibreELEC/amlogic-boot-fip 仓库内 board 子目录名"
                 "（如 'khadas-vim3l'），由 board config 声明（不在 SoC 层）。"
             )
-        fip_tool = bl_cfg.get("fip_tool", "aml_encrypt_g12a")
-
         out_dir = src_dir / "fip" / board_dir
         out_dir.mkdir(parents=True, exist_ok=True)
         u_boot_bin = src_dir / "u-boot.bin"
@@ -145,29 +140,7 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
             label="build-fip.sh ...",
         )
 
-        # aml_encrypt_g12a 二进制位于 board 子目录内（每个 board 各自一份）
-        encrypt_tool = fip_src / board_dir / fip_tool
         fip_image = out_dir / "u-boot.bin"
-
-        # SD/eMMC 启动镜像：boot0 hw 分区写入 offset 0x200
-        self._status("派生 SD-bootable 镜像...")
-        self.docker.run(
-            [str(encrypt_tool), "--bootsd",
-             "--infile", str(fip_image),
-             "--output", str(fip_image) + ".sd.bin"],
-            label="aml_encrypt_g12a --bootsd",
-        )
-
-        # USB BL2/TPL：pyamlboot 推 MaskROM 用，--bootusb 一次产出两个文件
-        # （u-boot.bin.usb.bl2 / u-boot.bin.usb.tpl），输出名以 --output 为
-        # 前缀
-        self._status("派生 USB BL2/TPL...")
-        self.docker.run(
-            [str(encrypt_tool), "--bootusb",
-             "--infile", str(fip_image),
-             "--output", str(fip_image) + ".usb"],
-            label="aml_encrypt_g12a --bootusb",
-        )
 
         self._fip_image = fip_image
 
@@ -176,9 +149,12 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
 
         ARTIFACT_NAMES 映射（详见 builder/platforms/amlogic/__init__.py）：
           - (bootloader, fip)     → u-boot.bin       （裸 FIP，pyamlboot 推送用）
-          - (bootloader, sd)      → u-boot.bin.sd.bin（SD/eMMC dd 格式，fastboot flash bootloader → mmc1 hw boot0）
-          - (bootloader, usb_bl2) → u-boot.bin.usb.bl2（备用：旧式两段 USB 上传 BL2 stub）
-          - (bootloader, usb_tpl) → u-boot.bin.usb.tpl（备用：旧式两段 USB 上传 TPL）
+          - (bootloader, sd)      → u-boot.bin.sd.bin
+            （SD/eMMC dd 格式，fastboot 写入板级配置指定的 eMMC boot0）
+          - (bootloader, usb_bl2) → u-boot.bin.usb.bl2
+            （备用：旧式两段 USB 上传 BL2 stub）
+          - (bootloader, usb_tpl) → u-boot.bin.usb.tpl
+            （备用：旧式两段 USB 上传 TPL）
         """
         fip_image = self._fip_image
         return {
