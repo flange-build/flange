@@ -1,7 +1,9 @@
 # recovery-usb-flash Specification
 
 ## Purpose
-TBD - created by archiving change add-recovery-boot. Update Purpose after archive.
+
+定义 recovery 模式下宿主机与设备之间的 USB 线刷协议：命令组、ADB transport 抽象、模式检测、分区刷写与备份、受保护分区的边界，以及数据面的失败语义、内存上界与写后校验。
+
 ## Requirements
 ### Requirement: Recovery 宿主机命令组
 flange CLI 必须（SHALL）提供 `flange recovery` 命令组，首版至少包含 `enter`、`list`、`flash`、`backup`、`shell` 和 `reboot` 子命令。

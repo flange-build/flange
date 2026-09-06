@@ -48,9 +48,21 @@ def test_patch_set完整迁移且内容固定():
     )
 
 
-def test_build_app声明标准runtime分包且不发布dev包():
-    spec = load_spec(PACKAGE_ROOT / "build")
-    outputs = spec.build.deb_outputs
+def _unit_specs() -> dict:
+    """加载全部单元 App 的规格，按 App 名索引。"""
+    return {
+        directory.name: load_spec(directory)
+        for directory in sorted((PACKAGE_ROOT / "units").iterdir())
+        if directory.is_dir()
+    }
+
+
+def test_单元集合声明标准runtime分包且不发布dev包():
+    """17 个 deb 的交付契约不变，只是分散到了 4 个产 deb 的单元上。"""
+    specs = _unit_specs()
+    outputs = [
+        name for spec in specs.values() for name in spec.build.deb_outputs
+    ]
 
     assert len(outputs) == 17
     assert all(name.endswith("_arm64.deb") for name in outputs)
@@ -80,14 +92,13 @@ def test_aarch64_Rockchip板显式启用本地多媒体package():
         config = resolve_config(board, "default", "release")
         assert config["architecture"]["userspace"] == "aarch64"
         assert "rockchip-multimedia" in config["packages"]
-        assert {
-            "rockchip-multimedia-build",
-            "flange-rockchip-multimedia",
-        } <= set(config["rootfs"]["custom_packages"])
-        assert {
-            "rockchip-multimedia-build",
-            "flange-rockchip-multimedia",
-        } <= set(config["external_apps"])
+        expected = {
+            "rkmm-mpp", "rkmm-rga", "rkmm-gstreamer", "rkmm-gst-base",
+            "rkmm-gst-good", "rkmm-gst-bad", "rkmm-gst-rockchip",
+            "rkmm-gst-repack", "flange-rockchip-multimedia",
+        }
+        assert expected <= set(config["rootfs"]["custom_packages"])
+        assert expected <= set(config["external_apps"])
 
 
 def test_旧远程DEB与强制覆盖策略已删除():

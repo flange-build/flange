@@ -1,7 +1,9 @@
 # extlinux-dtb-overlays Specification
 
 ## Purpose
-TBD - created by archiving change add-extlinux-dtb-overlays. Update Purpose after archive.
+
+定义 Device Tree Overlay 从声明到落盘的完整链路：配置契约、内核 overlay 产物收集、extlinux fdtoverlays 渲染、boot 分区布局、vendor 仓库 pin 与板私有 overlay 的编译。
+
 ## Requirements
 ### Requirement: Device Tree Overlay 配置契约
 平台、SoC、board 或 product 配置 MUST 通过 `boot.overlays.intree` 声明需要从内核源码树（in-tree）构建并打包的 Device Tree Overlay 文件列表，MUST 通过 `boot.overlays.vendor` 声明需要从外部 vendor overlay 仓库构建并打包的列表，MUST 通过 `boot.overlays.board` 声明需要从板私有源目录 `components/board/<board>/dtso/` 构建并打包的列表，MUST 通过 `boot.overlays.package` 接收硬件包提供的列表，并 MUST 通过 `boot.overlays.enabled` 声明运行期应用顺序。

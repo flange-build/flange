@@ -69,7 +69,7 @@ fragment（满足 `make <name>.config` 合并要求，且不影响其他 SoC）�
 
 `components/board/radxa-rock-4d/config.jsonnet` 必须（SHALL）manifest 合法 board overlay，使 Jsonnet 固定层级组合后产出可构建的 canonical 配置。该 board 配置 MUST 声明 `board="radxa-rock-4d"`、`soc="rk3576"`、`platform="rockchip"`、`kernel.device_tree.name="rk3576-rock-4d"`。
 
-该 board 配置 MUST 走**自编 spi.img**：移除 `bootloader.prebuilt_spi_image`，声明 `flash_spi_loader=True`，使 `builder/flash.py` 经 `build_spi_image` 组装 spi.img（`idbloader.img`@sector 64、`u-boot.itb`@sector 16384）。bootloader 经 self-build 路径产 idbloader + u-boot.itb：idbloader 经 `boot_merger` 装配（见「Rockchip 平台 RK3576 idbloader 经 boot_merger 装配」requirement），含引导级 `rk3576_boost`；u-boot.itb 自编（radxa u-boot proper + rkbin BL31/OP-TEE）。该 board MUST 在 board 层覆盖 `bootloader.defconfig="rock-4d-spi-rk3576_defconfig"`（其 `DEFAULT_DEVICE_TREE="rk3576-rock-4d-spi"`，含 ROCK 4D 的 SPI NOR 控制器 pinmux 与板级节点），**不得**沿用 SoC 层 generic `rk3576_defconfig`（`DEFAULT_DEVICE_TREE="rk3576-evb"`，缺板级节点 → 产「错板」proper u-boot）。该 board MUST 自编 SPL：boot_merger 路径把 `RK3576MINIALL.ini` 副本的 `FlashBoot=` sed 为自编 `spl/u-boot-spl.bin`（boost/DDR 仍取 rkbin），不经 `bootloader.idbloader_spl` 配置项（该键已移除）。
+该 board 配置 MUST 走**自编 spi.img**：移除 `bootloader.prebuilt_spi_image`，声明 `flash_spi_loader=True`，使 `builder/flash/spi.py` 的 `build_spi_image` 组装 spi.img（`idbloader.img`@sector 64、`u-boot.itb`@sector 16384）。bootloader 经 self-build 路径产 idbloader + u-boot.itb：idbloader 经 `boot_merger` 装配（见「Rockchip 平台 RK3576 idbloader 经 boot_merger 装配」requirement），含引导级 `rk3576_boost`；u-boot.itb 自编（radxa u-boot proper + rkbin BL31/OP-TEE）。该 board MUST 在 board 层覆盖 `bootloader.defconfig="rock-4d-spi-rk3576_defconfig"`（其 `DEFAULT_DEVICE_TREE="rk3576-rock-4d-spi"`，含 ROCK 4D 的 SPI NOR 控制器 pinmux 与板级节点），**不得**沿用 SoC 层 generic `rk3576_defconfig`（`DEFAULT_DEVICE_TREE="rk3576-evb"`，缺板级节点 → 产「错板」proper u-boot）。该 board MUST 自编 SPL：boot_merger 路径把 `RK3576MINIALL.ini` 副本的 `FlashBoot=` sed 为自编 `spl/u-boot-spl.bin`（boost/DDR 仍取 rkbin），不经 `bootloader.idbloader_spl` 配置项（该键已移除）。
 
 该 board 配置 MUST 在 board 层整块覆盖 `partitions`，其 `partitions.sector_size` 为 `4096`；SoC 层 `rk3576/config.jsonnet` 的 512 字节 eMMC 默认布局保持不变（不得被本变更修改）。
 
@@ -122,7 +122,7 @@ fragment（满足 `make <name>.config` 合并要求，且不影响其他 SoC）�
 
 ### Requirement: Rockchip 刷写策略按 sector_size 参数化 GPT 写入
 
-`builder/flash.py` 的 `RockchipFlashStrategy.write_gpt` 必须（SHALL）从合并配置的 `partitions.sector_size` 读取扇区大小（缺省 512），并据此计算从 `raw.img` 截取 GPT header/entries 的字节偏移与长度。对未声明 `flash_storage` 的 eMMC/SD 板，`pre_flash`（`upgrade_tool DB`）、`write_partition`（`upgrade_tool WL`）、`reboot`（`upgrade_tool RD`）流程 MUST 保持不变。
+`builder/flash/strategy.py` 的 `RockchipFlashStrategy.write_gpt` 必须（SHALL）从合并配置的 `partitions.sector_size` 读取扇区大小（缺省 512），并据此计算从 `raw.img` 截取 GPT header/entries 的字节偏移与长度。对未声明 `flash_storage` 的 eMMC/SD 板，`pre_flash`（`upgrade_tool DB`）、`write_partition`（`upgrade_tool WL`）、`reboot`（`upgrade_tool RD`）流程 MUST 保持不变。
 
 > ⚠️ **实施期演进**：对 UFS 板（声明 `flash_storage`，如 ROCK 4D），`write_gpt` MUST 因 `config.storage` 非空直接 return（不截取 raw.img GPT）；分区表改由 `flash_whole_disk` 经 `upgrade_tool DI -p parameter.txt` 建（loader 按设备实际 LBA 落盘），各分区经 `DI -<abbr>` 写入。即本变更**确实引入了** `flash_whole_disk` 路径（原 proposal Non-Goal「不引入」已被实施期推翻），但该路径用 `upgrade_tool DI`、**不使用整盘 `dd`**，与「保留 upgrade_tool 路线」初衷一致。
 
@@ -159,3 +159,22 @@ RK3576 的 idbloader 必须（SHALL）由 `boot_merger` 按 `RK3576MINIALL.ini` 
 - **WHEN** 为未声明 `idbloader_method` 的 RK3566/RK3588 板构建 bootloader
 - **THEN** `bootloader.py` 用 `mkimage -n {mkimage_chip} -T rksd -d {ddr}:{spl}` 产 `idbloader.img`
 - **AND** idbloader 为旧 idblock 格式（魔数 `0x0FF0AA55`），行为与本变更前一致
+
+### Requirement: 支持的 RK35xx board SHALL 显式启用本地多媒体 package
+
+现有 RK3566、RK3568、RK3576、RK3582、RK3588 与 RK3588S board MUST 在 board 层通过顶层 `packages` opt-in
+`rockchip-multimedia`。对应 SoC 配置 MUST NOT 再注入 `common.multimediaDebs`，共享配置 MUST NOT 保留远程 release DEB、
+`force_overwrite` 或 `hold_packages` 描述。
+
+#### Scenario: RK3588 board 解析本地 package
+
+- **WHEN** 解析 `radxa-rock5b-default-debug` 或 `orangepi-5-plus-default-debug`
+- **THEN** 顶层 `packages` 含 `rockchip-multimedia`
+- **AND** `rootfs.custom_packages` 含其多 DEB 构建 App 与 udev 配置 App
+- **AND** `rootfs.extra_debs` 不含旧 `CmST0us/rockchip-multimedia-ubuntu` URL
+
+#### Scenario: 新 board 不隐式继承
+
+- **WHEN** 新增相同 SoC 但未 opt-in `rockchip-multimedia` 的 board
+- **THEN** 该 board 不构建或安装多媒体 package
+

@@ -10,6 +10,7 @@ sources:
   - components/board/tspi-rk3566/overlay/etc/hostname
   - components/board/tspi-rk3566/overlay/etc/usbdevice.conf
   - components/board/tspi-rk3566/dtso/tspi-rk3566-amp-foc.dtso
+  - docs/first-steps.md
 related:
   - "[[rockchip 平台]]"
   - "[[lunch-build-flash 流程]]"
@@ -17,8 +18,13 @@ related:
   - "[[AMP 协处理器与 rpmsg]]"
   - "[[amp 构建器]]"
   - "[[rk3568_amp_rtt_foc]]"
-updated: 2026-07-06
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list tspi-rk3566` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 

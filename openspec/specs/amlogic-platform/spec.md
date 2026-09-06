@@ -2,9 +2,7 @@
 
 ## Purpose
 Amlogic SoC 家族（GXBB / G12A / G12B / SM1 / SC2 等）的平台级构建策略，覆盖 kernel / bootloader / rootfs / boot / image 全套 ComponentBuilder 与 PLATFORM + SOC 两层配置继承。bootloader 走 mainline u-boot + LibreELEC/amlogic-boot-fip 仓库（board-organized） + `aml_encrypt_<family>` 工具的 FIP 打包链路；boot 入口位于 eMMC hw boot0 分区（与 Rockchip / Allwinner 把 bootloader 放 user area 形成对照）。作为 flange 内 `platform = "amlogic"` 的权威规范；首版由 change `add-amlogic-khadas-vim3l` 引入，覆盖 s905d3 SoC 与 khadas-vim3l 板。
-
 ## Requirements
-
 ### Requirement: amlogic 平台模块自动发现
 
 `builder/platforms/amlogic/__init__.py` 必须（SHALL）导出 `ARTIFACT_NAMES` 字典与 `create_builder(component, docker, source)` 工厂函数，使 `builder/engine.py` 通过 `import builder.platforms.amlogic` 即可获取平台所有 ComponentBuilder。模块布局必须（SHALL）与 `builder/platforms/rockchip/` 同形：`kernel.py` / `bootloader.py` / `boot.py` / `rootfs.py` / `recovery.py` / `image.py` 各自实现一个 ComponentBuilder。
@@ -78,50 +76,59 @@ Amlogic SoC 家族（GXBB / G12A / G12B / SM1 / SC2 等）的平台级构建策�
 
 ### Requirement: amlogic bootloader 构建走 FIP 打包流程
 
-`builder/platforms/amlogic/bootloader.py` 的 ComponentBuilder 必须（SHALL）在 mainline u-boot 编译产出 `u-boot.bin` 之后，通过 `amlogic-boot-fip` source 内的 `build-fip.sh <board_dir> <u-boot.bin> <out>` 拼装 FIP，然后调 `aml_encrypt_g12a --bootsd` 派生 `u-boot.bin.sd.bin`。`<board_dir>` 必须从 `bootloader.fip_board_dir` 读取；fip source 必须通过顶层 `sources.amlogic-boot-fip` 获取。
+`builder/platforms/amlogic/bootloader.py` 的 ComponentBuilder 必须（SHALL）使用 Amlogic 板级工具打包 FIP（Firmware Image Package，固件镜像包）。
+在 mainline U-Boot 编译产出 `u-boot.bin` 后，必须通过 `amlogic-boot-fip` source 内的
+`build-fip.sh <board_dir> <u-boot.bin> <out>` 调用 board Makefile；该 Makefile 必须使用 board-local
+`aml_encrypt_* --bootmk` 一次生成 `u-boot.bin`、`u-boot.bin.sd.bin` 和 USB BL2/TPL，builder 不得重复调用
+family-specific 二次派生接口。
+`<board_dir>` 必须从 `bootloader.fip_board_dir` 读取，FIP source 必须通过顶层
+`sources.amlogic-boot-fip` 获取，工具不得（MUST NOT）从 host `$PATH` 查找。
 
-#### Scenario: bootloader 产物为 u-boot.bin.sd.bin
+#### Scenario: VIM3L 使用 G12A FIP 工具
 
 - **WHEN** 构建 khadas-vim3l 的 bootloader 组件
-- **THEN** `target/bootloader/u-boot.bin.sd.bin` 存在
-- **AND** 该文件由 `aml_encrypt_g12a --bootsd` 派生，是合法的 Amlogic SD/eMMC 启动镜像
+- **THEN** 调用 `build-fip.sh khadas-vim3l <u-boot.bin> <out>`
+- **AND** board Makefile 使用 `<amlogic-boot-fip_src>/khadas-vim3l/aml_encrypt_g12a --bootmk`
+- **AND** `target/bootloader/u-boot.bin.sd.bin` 存在
 
-#### Scenario: FIP 流程使用 build-fip.sh
+#### Scenario: VIM3 使用 G12B FIP 工具
 
-- **WHEN** bootloader 构建过程
-- **THEN** 调用 `<amlogic-boot-fip_src>/build-fip.sh khadas-vim3l <u-boot.bin> <out>` 完成 FIP 拼装
-- **AND** 后续派生步骤使用同仓库内 `khadas-vim3l/aml_encrypt_g12a` 工具（不得（MUST NOT）从 host `$PATH` 查找）
+- **WHEN** 构建 khadas-vim3 的 bootloader 组件
+- **THEN** 调用 `build-fip.sh khadas-vim3 <u-boot.bin> <out>`
+- **AND** board Makefile 使用 `<amlogic-boot-fip_src>/khadas-vim3/aml_encrypt_g12b --bootmk`
+- **AND** `target/bootloader/u-boot.bin.sd.bin` 存在
 
-#### Scenario: board 粒度 fip 子目录
+#### Scenario: board 粒度 FIP 子目录与 SoC 粒度工具
 
-- **WHEN** 加载 khadas-vim3l 完整合并配置
-- **THEN** `bootloader.fip_board_dir == "khadas-vim3l"`
-- **AND** 该字段由 board 层声明（不在 SoC 层）—— 同 SoC 不同 board 在 LibreELEC/amlogic-boot-fip 内使用不同 blob 集
+- **WHEN** 加载任意 Amlogic board 的完整合并配置
+- **THEN** `bootloader.fip_board_dir` 由 board 层声明
+- **AND** `bootloader.fip_tool` 由 SoC 层声明
 
 ### Requirement: amlogic 平台产物映射
 
-`builder/platforms/amlogic/__init__.py` 的 `ARTIFACT_NAMES` 字典必须（SHALL）至少声明以下映射：
+`builder/platforms/amlogic/__init__.py` 的 `ARTIFACT_NAMES` 字典必须（SHALL）声明 kernel、bootloader、boot、
+rootfs、recovery 与 image 的 canonical 产物映射。bootloader 必须分别保留裸 FIP、SD/eMMC 和两段 USB
+产物，禁止把不同格式折叠到同一个 key。
 
 | (component, key) | 目标文件名 |
 |---|---|
 | (kernel, dtbos) | overlay |
 | (kernel, modules) | modules |
-| (bootloader, fip) | u-boot.bin.sd.bin |
+| (bootloader, fip) | u-boot.bin |
+| (bootloader, sd) | u-boot.bin.sd.bin |
+| (bootloader, usb_bl2) | u-boot.bin.usb.bl2 |
+| (bootloader, usb_tpl) | u-boot.bin.usb.tpl |
 | (boot, boot) | boot.img |
 | (rootfs, rootfs) | rootfs.img |
 | (recovery, recovery) | recovery.img |
 | (image, image) | raw.img |
 
-#### Scenario: bootloader fip 产物落地
+#### Scenario: bootloader 四件产物分别落地
 
-- **WHEN** 构建 khadas-vim3l bootloader
-- **THEN** `target/bootloader/u-boot.bin.sd.bin` 存在
-- **AND** 该路径由 `ARTIFACT_NAMES[("bootloader", "fip")] == "u-boot.bin.sd.bin"` 决定
-
-#### Scenario: image 产物为 raw.img
-
-- **WHEN** 构建 khadas-vim3l image
-- **THEN** `target/raw.img` 存在并包含完整 GPT 与所有分区数据
+- **WHEN** 构建任意受支持 Amlogic board 的 bootloader
+- **THEN** `target/bootloader/u-boot.bin` 是 pyamlboot 使用的裸 FIP
+- **AND** `target/bootloader/u-boot.bin.sd.bin` 是写入 eMMC boot0 的 SD 格式
+- **AND** USB BL2/TPL 分别落为 `u-boot.bin.usb.bl2` 与 `u-boot.bin.usb.tpl`
 
 ### Requirement: khadas-vim3l 板级配置完整
 
@@ -255,3 +262,103 @@ overlay 源文件 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso` 
 - **WHEN** 将 spicc1 的 MOSI 与 MISO 在 40-pin header 上短接，执行 `spidev_test -D /dev/spidev<N>.0 -s 1000000 -v`
 - **THEN** spidev_test 退出码为 0
 - **AND** 输出的 RX 缓冲与 TX 缓冲完全一致
+
+### Requirement: a311d SoC 配置完整声明
+
+`components/platform/amlogic/a311d/config.jsonnet` 必须（SHALL）声明 A311D/G12B 的 canonical SoC 配置，
+至少包含 identity、三个 source descriptor、bootloader source/FIP tool、kernel source/defconfig/config/Device Tree
+目录与启动参数。A311D 必须（MUST）作为独立 SoC 被发现，不得冒用 `s905d3` identity；板载存储分区不得下沉
+到 SoC 层。
+
+#### Scenario: 自动发现 a311d SoC
+
+- **WHEN** `_load_soc_config("a311d")` 被调用
+- **THEN** 返回配置的 `platform == "amlogic"` 且 `soc == "a311d"`
+- **AND** `architecture.userspace == "aarch64"`
+
+#### Scenario: A311D 使用正确的主线源码和 G12B 工具
+
+- **WHEN** 加载 A311D SoC 配置
+- **THEN** U-Boot source 为 `https://github.com/u-boot/u-boot.git` 的 `v2024.10`
+- **AND** Linux source 为 `https://github.com/torvalds/linux.git` 的 `v6.12`
+- **AND** `bootloader.fip_tool == "aml_encrypt_g12b"`
+- **AND** `kernel.device_tree.directory == "amlogic"`
+
+#### Scenario: A311D 保持 Amlogic 通用启动输入
+
+- **WHEN** 加载 A311D SoC 配置
+- **THEN** `kernel.defconfig == ["defconfig"]`
+- **AND** `kernel.config.CONFIG_DRM_GUD == "y"`
+- **AND** `boot.kernel_args` 包含 `earlycon` 与 `console=ttyAML0,115200n8`
+
+### Requirement: khadas-vim3 板级配置完整
+
+`components/board/khadas-vim3/config.jsonnet` 必须（SHALL）声明
+`board="khadas-vim3"`、`soc="a311d"`、`platform="amlogic"`，并选择
+`meson-g12b-a311d-khadas-vim3` DTB、`khadas-vim3_defconfig`、`flange_fastboot.config` 与
+`khadas-vim3` FIP board 目录。它必须（SHALL）支持 `default`/`desktop` product 和 `debug`/`release` variant。
+
+#### Scenario: 三层合并产生 VIM3 canonical 配置
+
+- **WHEN** 解析 `khadas-vim3-default-release`
+- **THEN** `kernel.device_tree == {"directory": "amlogic", "name": "meson-g12b-a311d-khadas-vim3"}`
+- **AND** `bootloader.defconfig == ["khadas-vim3_defconfig", "flange_fastboot.config"]`
+- **AND** `bootloader.fip_board_dir == "khadas-vim3"`
+- **AND** `bootloader.fip_tool == "aml_encrypt_g12b"`
+
+#### Scenario: lunch target 自动派生
+
+- **WHEN** 枚举全部 lunch target
+- **THEN** 结果包含 `khadas-vim3-default-debug`、`khadas-vim3-default-release`、
+  `khadas-vim3-desktop-debug` 和 `khadas-vim3-desktop-release`
+
+### Requirement: khadas-vim3 共用板载外设策略
+
+Khadas VIM3 必须（SHALL）复用与 VIM3L 相同的 AP6398S Wi-Fi/BT 固件、板载 eMMC GPT 布局、ADB gadget
+配置和 SPICC1 用户态访问。fastboot 必须（MUST）操作 U-Boot 的 `mmc2`，bootloader 写入 eMMC hardware
+boot0，boot/rootfs 写入 user-area GPT。
+
+#### Scenario: AP6398S 固件进入 rootfs 配置
+
+- **WHEN** 解析 khadas-vim3 的完整配置
+- **THEN** `rootfs.extra_firmware` 包含 fenix `_ap6398s` 的 Wi-Fi firmware、NVRAM 和 BT patchram 三件套
+- **AND** `rootfs.packages` 包含 `bluez`
+- **AND** 不声明 out-of-tree Wi-Fi/BT 模块
+
+#### Scenario: VIM3 使用板级 fastboot fragment
+
+- **WHEN** 配置 khadas-vim3 U-Boot
+- **THEN** 从板级 patches 目录取得 `flange_fastboot.config`
+- **AND** fragment 声明 `CONFIG_FASTBOOT_FLASH_MMC_DEV=2`
+- **AND** `fastboot flash bootloader` 映射到 eMMC hardware boot0
+
+#### Scenario: VIM3 默认启用 SPICC1 overlay
+
+- **WHEN** 解析 khadas-vim3 的完整配置
+- **THEN** `boot.overlays.board` 与 `boot.overlays.enabled` 均包含 `vim3-spidev-spicc1.dtbo`
+- **AND** 对应源文件位于 `components/board/khadas-vim3/dtso/`
+
+### Requirement: VIM3 板载风扇与 LED 默认策略
+
+Khadas VIM3 必须（SHALL）通过主线驱动和板级设备树覆盖实现自动温控风扇与双色 LED（发光二极管）运行指示。
+
+#### Scenario: 冷启动自动温控
+
+- **WHEN** 任意 VIM3 product/variant 使用默认 boot 启动
+- **THEN** MCU 风扇及其 I2C、thermal 依赖内建于内核
+- **AND** CPU 升温到 50/60/70°C 时分别请求 1/2/3 档，降温采用 5°C 回差，低温最终停转
+- **AND** 保留上游 CPU 降频与过热保护
+
+#### Scenario: LED 默认状态与用户控制
+
+- **WHEN** VIM3 LED 驱动完成 probe
+- **THEN** `white:status` 使用 heartbeat，`red:status` 使用 default-on
+- **AND** GPIO LED、TCA6408 扩展器和上述 trigger 内建
+- **AND** 用户可通过标准 LED sysfs 修改 trigger 和 brightness
+
+#### Scenario: 板级边界与已有功能
+
+- **WHEN** 解析 VIM3 和 VIM3L 配置
+- **THEN** 仅 VIM3 默认声明并启用风扇/LED overlay
+- **AND** VIM3 原有 SPI overlay 保持启用
+- **AND** 不添加用户态温控服务或直接写 I2C 的脚本

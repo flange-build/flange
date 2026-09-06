@@ -30,7 +30,7 @@ def test_install_fstab_writes_label_mounts(builder, tmp_path):
     rootfs = tmp_path / "rootfs"
     (rootfs / "etc").mkdir(parents=True)
 
-    builder._install_fstab(rootfs)
+    builder._install_fstab(rootfs, {})
 
     fstab = (rootfs / "etc" / "fstab").read_text()
     assert "LABEL=rootfs" in fstab
@@ -48,7 +48,7 @@ def test_install_fstab_respects_existing_overlay(builder, tmp_path):
     )
     (rootfs / "etc" / "fstab").write_text(overlay_text)
 
-    builder._install_fstab(rootfs)
+    builder._install_fstab(rootfs, {})
 
     assert (rootfs / "etc" / "fstab").read_text() == overlay_text
 
@@ -59,7 +59,7 @@ def test_install_fstab_overwrites_ubuntu_base_placeholder(builder, tmp_path):
     (rootfs / "etc").mkdir(parents=True)
     (rootfs / "etc" / "fstab").write_text("# UNCONFIGURED FSTAB FOR BASE SYSTEM\n")
 
-    builder._install_fstab(rootfs)
+    builder._install_fstab(rootfs, {})
 
     fstab = (rootfs / "etc" / "fstab").read_text()
     assert "LABEL=rootfs" in fstab
@@ -73,7 +73,7 @@ def test_collect_returns_rootfs_key(builder, tmp_path):
     assert out == {"rootfs": tmp_path / "rootfs.img"}
 
 
-def test_get_base_cache_path_returns_none_without_cache(builder):
-    """无 cache 注入时 _get_base_cache_path 返回 None（compile 走非缓存分支）。"""
-    builder.cache = None
-    assert builder._get_base_cache_path({"board": "x"}) is None
+def test_base_cache_requires_explicit_context(builder):
+    """缺少上下文时不能猜测共享缓存位置。"""
+    with pytest.raises(RuntimeError, match="WorkspaceContext"):
+        builder._get_base_cache_path({"board": "x"})

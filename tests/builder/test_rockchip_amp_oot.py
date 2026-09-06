@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from builder.cache import BuildCache
+from builder.component_plan import create_component_plan
+from builder.source import SourceManager
+from builder.workspace import Target, WorkspaceContext
 from builder.config.registry import resolve_config
 from builder.platforms.rockchip.amp import RockchipAmpBuilder
 
@@ -33,7 +35,7 @@ def make_amp_app(tmp_path: Path, *, app_type: str = "amp") -> Path:
         "  name: flange\n"
         "  email: flange@localhost\n"
         "build:\n"
-        "  system: scons\n"
+        + ("  system: scons\n" if app_type == "amp" else "  system: none\n")
     )
     return app_dir
 
@@ -58,6 +60,7 @@ def test_amp_builder_resolves_app_through_source_manager(tmp_path):
     source = FakeSource(app_dir)
     config = amp_config(app_dir)
     builder = RockchipAmpBuilder(docker=None, source=source)
+    builder.context = WorkspaceContext(tmp_path / "tool", tmp_path / "workspace", tmp_path / ".build", Target("board", "default", "release"))
 
     assert builder._amp_app_dir(config) == app_dir
     assert source.calls == [("rk3506_amp_fluxion_foc", config)]
@@ -65,46 +68,30 @@ def test_amp_builder_resolves_app_through_source_manager(tmp_path):
 
 def test_amp_builder_rejects_non_amp_external_app(tmp_path):
     """OOT 目录存在也不能绕过 app.type 安全校验。"""
-    app_dir = make_amp_app(tmp_path, app_type="service")
+    app_dir = make_amp_app(tmp_path, app_type="exec")
     builder = RockchipAmpBuilder(docker=None, source=FakeSource(app_dir))
+    builder.context = WorkspaceContext(tmp_path / "tool", tmp_path / "workspace", tmp_path / ".build", Target("board", "default", "release"))
 
     with pytest.raises(ValueError, match="app.type 必须是 amp"):
         builder._amp_app_dir(amp_config(app_dir))
 
 
-def test_local_oot_amp_and_bridge_disable_stale_cache(tmp_path):
-    """本地 OOT 修改必须让 amp/app 及其下游放弃缓存命中。"""
-    amp_dir = make_amp_app(tmp_path)
-    bridge_dir = tmp_path / "fluxion_rpmsg_bridge"
-    bridge_dir.mkdir()
-    config = {
-        "board": "test-board",
-        "product": "fluxion",
-        "variant": "debug",
-        "platform": "rockchip",
-        "amp": {
-            "enabled": True,
-            "app": "rk3506_amp_fluxion_foc",
-            "mode": "rt-thread",
-        },
-        "rootfs": {
-            "custom_packages": ["fluxion-rpmsg-bridge"],
-        },
-        "external_apps": {
-            "rk3506_amp_fluxion_foc": {"local_path": str(amp_dir)},
-            "fluxion-rpmsg-bridge": {"local_path": str(bridge_dir)},
-        },
-    }
-    cache = BuildCache(
-        config,
-        target_base=tmp_path / "target",
-        project_root=tmp_path / "flange",
-    )
-
-    assert cache._has_local_upstream("amp") is True
-    assert cache._has_local_upstream("app") is True
-    assert cache._has_local_upstream("rootfs") is True
-    assert cache._has_local_upstream("image") is True
+def test_local_oot_amp内容变化使计划失效(tmp_path):
+    app = make_amp_app(tmp_path)
+    context = WorkspaceContext(tmp_path / 'tool', tmp_path / 'workspace', tmp_path / '.build',
+                               Target('board', 'default', 'release'), apps={'rk3506_amp_fluxion_foc': app})
+    config = {**amp_config(app), 'board': 'board', 'platform': 'rockchip'}
+    config['amp']['enabled'] = True
+    source = SourceManager(context=context)
+    first = create_component_plan('amp', config, context, source)
+    before = first.fingerprint({'kernel': 'same'}).digest
+    (app / 'applications/main.c').write_text('new')
+    second = create_component_plan('amp', config, context, source)
+    assert second.fingerprint({'kernel': 'same'}).digest != before
+    before = second.fingerprint({'kernel': 'same'}).digest
+    (app / 'applications/main.c').write_text('changed')
+    assert first.fingerprint({'kernel': 'same'}).digest != before
+    assert second.path('amp:application') == app
 
 
 def test_atk_rk3506b_fluxion_product_selects_runtime_only():

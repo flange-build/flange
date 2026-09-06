@@ -1,6 +1,7 @@
-CC      ?= gcc
+CC      := $$(CROSS_COMPILE)gcc
 CFLAGS  ?= -Wall -O2
-TARGET  := ${name}
+BUILD_DIR ?= build
+TARGET  := $$(BUILD_DIR)/${name}
 SRCS    := src/main.c
 
 .PHONY: all clean install
@@ -8,10 +9,11 @@ SRCS    := src/main.c
 all: $$(TARGET)
 
 $$(TARGET): $$(SRCS)
-	$$(CC) $$(CFLAGS) -o $$@ $$^
+	mkdir -p $$(BUILD_DIR)
+	$$(CC) $$(CPPFLAGS) $$(CFLAGS) -o $$@ $$^ $$(LDFLAGS)
 
 install: $$(TARGET)
-	install -Dm755 $$(TARGET) $$(DESTDIR)/usr/bin/$$(TARGET)
+	install -Dm755 $$(TARGET) $$(DESTDIR)/usr/bin/${name}
 
 clean:
 	rm -f $$(TARGET)

@@ -1,0 +1,14 @@
+[
+  "run: truncate -s 688914432 <TMP>/raw.img",
+  "run: parted -s <TMP>/raw.img mklabel gpt",
+  "run: parted -s <TMP>/raw.img mkpart boot ext4 16777216B 83886079B",
+  "run: parted -s <TMP>/raw.img mkpart recovery ext4 83886080B 150994943B",
+  "run: parted -s <TMP>/raw.img mkpart rootfs ext4 150994944B 687865855B",
+  "run: sfdisk --part-uuid <TMP>/raw.img 3 614e0000-0000-4000-8000-000000000001",
+  "run: dd if=<TARGET>/bootloader/boot0_sdcard.bin of=<TMP>/raw.img seek=256 conv=notrunc,sparse bs=512 status=none",
+  "run: dd if=<TARGET>/bootloader/boot0_ufs.bin of=<TMP>/raw.img seek=2064 conv=notrunc,sparse bs=512 status=none",
+  "run: dd if=<TARGET>/bootloader/boot_package.fex of=<TMP>/raw.img seek=24576 conv=notrunc,sparse bs=512 status=none",
+  "run: dd if=<TARGET>/boot/boot.img of=<TMP>/raw.img seek=32768 conv=notrunc,sparse bs=512 status=none",
+  "run: dd if=<TARGET>/recovery/recovery.img of=<TMP>/raw.img seek=163840 conv=notrunc,sparse bs=512 status=none",
+  "run: dd if=<TARGET>/rootfs/rootfs.img of=<TMP>/raw.img seek=294912 conv=notrunc,sparse bs=512 status=none"
+]

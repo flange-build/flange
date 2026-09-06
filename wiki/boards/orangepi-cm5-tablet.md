@@ -7,14 +7,20 @@ sources:
   - components/board/orangepi-cm5-tablet/overlay/etc/hostname
   - components/board/orangepi-cm5-tablet/patches/kernel/0001-bcmdhd-set-fw-ampak-path-brcm.patch
   - components/platform/rockchip/rk3588s/config.jsonnet
+  - docs/first-steps.md
 related:
   - "[[orangepi-cm4]]"
   - "[[orangepi-5-plus]]"
   - "[[radxa-rock5c-lite]]"
   - "[[rockchip 平台]]"
   - "[[新增板级支持]]"
-updated: 2026-05-18
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list orangepi-cm5-tablet` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 

@@ -1,77 +1,50 @@
 # local-source Specification
 
 ## Purpose
-TBD - created by archiving change local-source-support. Update Purpose after archive.
+
+定义 `local_path` 源码模式的语义：开发者把某个组件指向自己本机正在改的源码树
+时，框架在**源码处理**与**缓存决策**两侧分别该做什么。
 ## Requirements
-### Requirement: board 配置支持 local_path 字段
+### Requirement: local_path 在顶层 source descriptor 声明
 
-board 配置的 `kernel` 和 `bootloader` 字典 SHALL 支持可选的 `local_path` 字段。当 `local_path` 为非空字符串时，构建系统 MUST 使用该本地路径作为源码来源；当 `local_path` 为空字符串或未设置时，MUST 使用 `repo` + `branch` 从远程 git 仓库获取源码。
+本地组件源码 SHALL 通过 `sources.<name>.local_path` 声明，组件按 `source.name` 引用。descriptor MUST 且只能声明 url 或 local_path 之一；本地来源 MUST NOT 混用远端 revision 字段。构建时 SourceManager SHALL 将用户当前内容复制到目标独立工作目录；共享下载和目标产物不得写入用户原树。
 
-#### Scenario: 设置 local_path 启用本地模式
-- **WHEN** board.bzl 的 kernel 配置中 `local_path` 设为 `"/home/user/kernel"`
-- **THEN** 构建系统使用 `/home/user/kernel` 作为内核源码目录，不执行 git clone
+#### Scenario: 组件使用本地源码
+- **WHEN** sources.linux 声明 local_path 且 kernel 引用该 source
+- **THEN** SourceManager 按内容摘要准备目标副本，不在用户原目录执行 Git 重置或编译
 
-#### Scenario: local_path 为空使用远程模式
-- **WHEN** board.bzl 的 kernel 配置中 `local_path` 为 `""` 或未设置
-- **THEN** 构建系统从 `repo` 指定的远程 git 仓库浅克隆源码（现有行为不变）
+#### Scenario: 来源互斥
+- **WHEN** 同一 descriptor 同时声明 url 与 local_path
+- **THEN** 配置校验在构建前拒绝该输入
 
-#### Scenario: bootloader 同样支持 local_path
-- **WHEN** board.bzl 的 bootloader 配置中 `local_path` 设为非空路径
-- **THEN** 构建系统使用该路径作为 U-Boot 源码目录
+### Requirement: 本地模式跳过源码重置与补丁
 
-### Requirement: 本地模式使用 symlink 挂载源码
+本地模式 SHALL 把用户当前内容视为已经准备好的源码快照；目标副本构建 MUST 跳过自动 Git 重置与补丁应用。用户原目录中的未提交内容 MUST 保持不变。原内容不变时目标副本 MAY 保留底层增量产物；原内容变化时 SHALL 重新准备副本，避免把上次目标修改当作用户输入。
 
-repository rule 在本地模式下 MUST 使用 `ctx.symlink()` 将源码目录 symlink 到 external 仓库的 `src/` 路径下，而非复制文件。
+#### Scenario: 本地模式不重置原树
+- **WHEN** 本地源码含未提交修改，构建器在目标副本生成文件
+- **THEN** 用户原树保持原样，目标变更不会回写
 
-#### Scenario: symlink 创建
-- **WHEN** `local_path` 为 `/home/user/kernel`
-- **THEN** 外部仓库中 `src/` 为指向 `/home/user/kernel` 的 symlink
+#### Scenario: 远端模式修改目标工作树
+- **WHEN** 组件使用远端 descriptor
+- **THEN** 补丁和编译操作作用于该目标的独立工作树，共享获取仓库不会成为编译目录
 
-#### Scenario: 本地路径不存在时报错
-- **WHEN** `local_path` 指向一个不存在的目录
-- **THEN** repository rule MUST 以明确的错误信息失败，提示路径不存在
+### Requirement: 本地 App 目录同样适用
 
-### Requirement: 基于 .git/index 的变更检测
+本地 App SHALL 在显式资源工作目录中构建，并以其来源、源码内容、配方、环境和依赖产物构造计划。项目外 local_path 或 app_dirs 来源 MUST 与仓库内 App 使用相同的内容缓存规则；不同来源的同名 App MUST 拥有不同资源身份，不得共享发布目录。不能要求不同绝对来源自动拥有相同资源身份。
 
-本地模式下，repository rule MUST 使用 `ctx.watch()` 监控本地源码目录的 `.git/index` 文件。当该文件变更时（如执行 `git add`），Bazel MUST 自动重新 fetch 该 repository，从而触发下游构建 action 重新执行。
+#### Scenario: 本地 App 无变化
+- **WHEN** 所有计划输入与发布产物保持不变
+- **THEN** App 节点允许命中缓存，位置在工具仓库外不构成强制重建理由
 
-#### Scenario: git add 后自动触发重建
-- **WHEN** 用户修改了本地内核源码并执行 `git add`
-- **THEN** `.git/index` 变更，Bazel 自动 re-fetch repository，下游 kernel_build action 重新执行
+#### Scenario: 同名不同来源
+- **WHEN** 两个 App 描述符声明相同名称但来源路径不同
+- **THEN** 单独构建时使用不同资源输出目录；同一依赖闭包中的名称歧义应被拒绝
 
-#### Scenario: touch .git/index 手动触发重建
-- **WHEN** 用户修改了文件但不想执行 `git add`，改为执行 `touch <local_path>/.git/index`
-- **THEN** Bazel 同样检测到变更，触发 re-fetch 和重建
+### Requirement: 本地模式使用内容与产物缓存
 
-### Requirement: .fetch_stamp 保证下游 action 重跑
+本地源码 SHALL 纳入具名树输入。相同输入与完整产物允许命中；有效源码内容或元数据变化必须失效，下游依据实际发布的产物身份决定是否重建。
 
-本地模式下，repository rule MUST 在每次 fetch 时生成 `.fetch_stamp` 文件（内容为当前时间戳），并将其纳入导出的 filegroup srcs。该文件确保即使 `src/Makefile` 内容不变，下游 build action 也能检测到输入变更并重新执行。
-
-#### Scenario: re-fetch 后 .fetch_stamp 内容变化
-- **WHEN** repository rule 被重新 fetch
-- **THEN** `.fetch_stamp` 内容更新为新的时间戳，Bazel 重新执行依赖此 filegroup 的 build action
-
-### Requirement: 本地模式跳过源码重置和补丁
-
-本地模式下，build rule 生成的构建脚本 MUST 跳过 `git reset --hard HEAD` 和所有补丁应用步骤，直接使用本地源码树的当前状态进行构建。
-
-#### Scenario: 本地模式不执行 git reset
-- **WHEN** 检测到 `.local_mode` 标记文件存在
-- **THEN** 构建脚本跳过 `git reset --hard HEAD`，不修改本地源码树
-
-#### Scenario: 本地模式不应用补丁
-- **WHEN** 检测到 `.local_mode` 标记文件存在
-- **THEN** 构建脚本跳过所有 `git apply` / `patch` 命令
-
-#### Scenario: 远程模式保持现有行为
-- **WHEN** `.local_mode` 标记文件不存在
-- **THEN** 构建脚本执行 `git reset --hard HEAD` 并应用所有补丁（现有行为不变）
-
-### Requirement: 本地模式支持 make 增量编译
-
-本地模式下的构建 MUST 保留 `make` 自身的增量编译能力。构建脚本不得执行 `make clean` 或其他会清除已有编译产物的操作。
-
-#### Scenario: 增量编译
-- **WHEN** 用户修改了一个 `.c` 文件并触发重建
-- **THEN** `make` 仅重新编译被修改的文件及其依赖，不执行全量编译
-
+#### Scenario: 修改本地源文件
+- **WHEN** 本地 kernel 源码内容或权限改变
+- **THEN** kernel 计划指纹改变，缓存解释列出源输入变化；构建前后输入不一致时拒绝发布成功记录

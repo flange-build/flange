@@ -2,7 +2,6 @@
 
 import time
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -11,10 +10,10 @@ from builder.output import (
     BuildOutput,
     OutputLevel,
     strip_ansi,
-    _is_tty,
     ERROR_PATTERNS,
     WARNING_PATTERNS,
 )
+from builder.term import Role
 
 
 @pytest.fixture
@@ -181,6 +180,12 @@ class TestFeedLine:
         assert output_normal._tail_buffer[0] == "line 10"
         assert output_normal._tail_buffer[-1] == "line 29"
 
+    def test_外部工具自带颜色也不会进入日志(self, output_normal, tmp_target):
+        output_normal.feed_line("\033[32mCC main.o\033[0m")
+        output_normal.close()
+        text = (tmp_target / "build.log").read_text()
+        assert "CC main.o" in text and "\033" not in text
+
     def test_error_detection(self, output_normal):
         output_normal.feed_line("drivers/gpu/foo.c:42: error: undefined symbol")
         assert len(output_normal._errors) == 1
@@ -251,7 +256,7 @@ class TestErrorContext:
             output_normal._show_error_context()
         output_text = strip_ansi(buf.getvalue())
         assert "foo.c:10: error: bad" in output_text
-        assert "┄" in output_text
+        assert "│" in output_text and "┄" not in output_text
 
     def test_fallback_to_tail(self, output_normal):
         for i in range(5):
@@ -269,7 +274,7 @@ class TestErrorContext:
 
 class TestBuildSummary:
     def test_summary_contains_components(self, output_normal):
-        output_normal._build_start_time = time.time() - 10
+        output_normal._build_start_time = time.monotonic() - 10
         output_normal._results = [
             {"component": "kernel", "status": "ok", "elapsed": 8.0},
             {"component": "bootloader", "status": "skip", "elapsed": 0.1},
@@ -278,13 +283,14 @@ class TestBuildSummary:
         with patch("sys.stdout", buf):
             output_normal.build_end()
         text = strip_ansi(buf.getvalue())
-        assert "kernel" in text
-        assert "bootloader" in text
+        assert "完成 1" in text
+        assert "复用 1" in text
+        assert "耗时占比" not in text
         assert "构建完成" in text
         assert "build.log" in text
 
     def test_summary_failure(self, output_normal):
-        output_normal._build_start_time = time.time() - 5
+        output_normal._build_start_time = time.monotonic() - 5
         output_normal._results = [
             {"component": "kernel", "status": "fail", "elapsed": 4.0,
              "error": "编译错误"},
@@ -305,7 +311,7 @@ class TestNonTTY:
     def test_no_ansi_when_not_tty(self, tmp_target):
         out = BuildOutput(tmp_target, level=OutputLevel.NORMAL)
         out._tty = False
-        colored = out._c("\033[1;34m", "hello")
+        colored = out._c(Role.HEADING, "hello")
         assert colored == "hello"
         out.close()
 
@@ -316,3 +322,38 @@ class TestNonTTY:
         # 无 spinner 线程启动
         assert out._spinner_thread is None
         out.close()
+
+
+class TestSemanticColors:
+    @pytest.mark.parametrize("no_color", [None, "", "1"])
+    def test_阶段状态使用语义颜色且日志始终纯文本(self, tmp_target, monkeypatch, no_color):
+        class Terminal(StringIO):
+            def isatty(self):
+                return True
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("TERM", "xterm-256color")
+        if no_color is not None:
+            monkeypatch.setenv("NO_COLOR", no_color)
+        out = BuildOutput(tmp_target)
+        out._tty = True
+        out._sticky_enabled = False
+        stream = Terminal()
+        with patch("sys.stdout", stream):
+            out.phase_skip("bootloader")
+            out.phase_skip("amp", reason="disabled")
+            out.phase_start("kernel")
+            out.spinner_start("编译内核")
+            out.phase_end("kernel", success=False)
+            out.close()
+        text = stream.getvalue()
+        assert "缓存命中" in text and "✖ 编译内核" in text
+        if no_color is None:
+            assert "\033[1;34m▸ kernel" in text
+            assert "\033[32m⊘ bootloader" in text
+            assert "\033[2m⊘ amp" in text
+            assert "\033[1;31m    ✖ 编译内核" in text
+            assert "\033[32m    ✔ 编译内核" not in text
+        else:
+            assert "\033" not in text
+        assert "\033" not in (tmp_target / "build.log").read_text()

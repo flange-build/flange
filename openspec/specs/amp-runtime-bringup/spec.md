@@ -1,7 +1,9 @@
 # amp-runtime-bringup Specification
 
 ## Purpose
-TBD - created by archiving change add-amp-firmware-support. Update Purpose after archive.
+
+定义 AMP 从核在真实硬件上跑起来的契约：U-Boot 怎么拉起从核、Linux DTS 怎么接入通信节点、rpmsg 链路怎么建立，以及 console UART 在板级、DTS、固件三方之间如何保持一致。
+
 ## Requirements
 ### Requirement: U-Boot 启用 AMP loader 从 amp 分区拉起从核
 

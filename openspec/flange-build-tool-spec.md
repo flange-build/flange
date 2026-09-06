@@ -121,7 +121,7 @@ ComponentBuilder SHALL 先应用平台补丁，再应用板级补丁，均按文
 ## 5. Flash 系统
 
 #### Requirement: flash.sh 自动生成
-`builder/flash.py` SHALL 从 FINAL_CONFIG 生成可执行的 `flash.sh`，包含 `flash_bootloader`、`flash_kernel`、`flash_rootfs`、`flash_all` 函数。
+`builder/flash/generate.py` 的 `FlashConfigGenerator` SHALL 从 FINAL_CONFIG 生成 `flash-config.json`，描述每个分区的镜像、偏移与保护属性；宿主机侧由 `builder/flash/execute.py` 读取它执行刷写。
 
 #### Requirement: 刷写工具配置化
 flash.sh 中的刷写工具 SHALL 从 FINAL_CONFIG 的 `flash_tool` 字段读取。

@@ -1,615 +1,323 @@
-"""AppBuilder 单元测试。
-
-覆盖场景：
-- build_one()：使用 prebuilt App（build.system=none）端到端构建流程
-- build_all()：多个 App 的批量构建
-- _resolve_build_order()：含依赖关系的拓扑排序
-- 循环依赖检测（CircularDependencyError）
-- _find_app_dir()：正确查找 app/ 目录，缺失时抛出 FileNotFoundError
-- _topo_sort_apps()：独立函数的直接测试
-"""
-
-from __future__ import annotations
-
+"""完整闭包、安装内容、架构和发布失败的行为回归。"""
+from dataclasses import replace
+import errno
+import json
+import os
 from pathlib import Path
-from unittest.mock import MagicMock
-
+import shutil
+import stat
+from unittest.mock import patch
 import pytest
-
-from builder.app import AppBuilder, CircularDependencyError, _topo_sort_apps
-from builder.docker import BuildError
-
-
-# ---------------------------------------------------------------------------
-# 测试辅助：构造临时 App 目录
-# ---------------------------------------------------------------------------
-
-def _make_app_dir(
-    tmp_path: Path,
-    name: str,
-    version: str = "1.0.0",
-    app_type: str = "exec",
-    build_system: str = "none",
-    build_deps: list[str] | None = None,
-    arch: list[str] | None = None,
-    bin_files: list[str] | None = None,
-    deb_outputs: list[str] | None = None,
-) -> Path:
-    """在 tmp_path/app/<name>/ 下创建一个最小可用的 App 目录，包含 app.yaml。
-
-    参数：
-        tmp_path:    pytest 提供的临时目录
-        name:        App 名称
-        version:     版本号
-        app_type:    App 类型（exec / service / lib / test）
-        build_system: 构建系统（none / cmake / meson 等）
-        build_deps:  构建依赖列表（App 名称）
-        arch:        支持的架构列表
-        bin_files:   在 bin/ 子目录下创建的文件名列表（内容为空字节）
-
-    返回：
-        App 目录路径（tmp_path/app/<name>/）
-    """
-    deps = build_deps or []
-    archs = arch or ["aarch64"]
-
-    # 逐行组装 YAML，避免 textwrap.dedent 与 f-string 插值冲突导致缩进错误
-    lines: list[str] = [
-        "app:",
-        f"  name: {name}",
-        f"  version: {version}",
-        f"  description: {name} 测试 App",
-        f"  type: {app_type}",
-        "  arch:",
-    ]
-    for a in archs:
-        lines.append(f"    - {a}")
-
-    lines += [
-        "",
-        "maintainer:",
-        "  name: tester",
-        "  email: tester@localhost",
-        "",
-        "build:",
-        f"  system: {build_system}",
-    ]
-
-    if deps:
-        lines.append("  deps:")
-        for d in deps:
-            lines.append(f"    - {d}")
-
-    if deb_outputs:
-        lines.append("  commands:")
-        lines.append("    - [true]")
-        lines.append("  deb_outputs:")
-        for filename in deb_outputs:
-            lines.append(f"    - {filename}")
-
-    yaml_content = "\n".join(lines) + "\n"
-
-    app_dir = tmp_path / "components" / "app" / name
-    app_dir.mkdir(parents=True, exist_ok=True)
-    (app_dir / "app.yaml").write_text(yaml_content, encoding="utf-8")
-
-    # 在 bin/ 子目录创建占位文件，collect_files 需要真实文件存在
-    if bin_files:
-        bin_dir = app_dir / "bin"
-        bin_dir.mkdir(exist_ok=True)
-        for fname in bin_files:
-            (bin_dir / fname).write_bytes(b"\x7fELF")  # 伪 ELF 魔数
-
-    return app_dir
+from tests.builder.app_support import app, builder
+from builder.app_model import AppBuildReport
+from builder.app_build import validate_elf_architecture
+from builder.artifacts import ArtifactManifest
 
 
-def _make_builder(tmp_path: Path, arch: str = "aarch64") -> AppBuilder:
-    """构造一个使用 tmp_path 作为项目根目录的 AppBuilder 实例。
+def test_standalone_closure_builds_unselected_dependency_and_exact_runtime(tmp_path):
+    dep = app(tmp_path / 'deps' / 'library', kind='vendor', install={'header.h': '/usr/include/demo.h'})
+    (dep / 'header.h').write_text('int demo(void);')
+    root = app(tmp_path / 'apps' / 'hello', deps=['library'])
+    engine = builder(tmp_path, apps={'hello': root, 'library': dep})
+    report = engine.build_one('hello')
+    assert [item.name for item in report.ordered] == ['library', 'hello']
+    assert len(report.runtime_debs) == 2
+    assert report.root().dependency_ids == (report.ordered[0].resource_id,)
+    assert report.runtime_debs_for(['hello']) == report.runtime_debs
+    assert report.runtime_debs_for(['library']) == report.ordered[0].runtime_debs
+    assert report.validate()
+    loaded = AppBuildReport.load(engine.report_path(report.roots))
+    assert not any(item.reused for item in loaded.ordered)
+    assert all(item.reused for item in engine.build_one(root).ordered)
 
-    DockerRunner 使用 MagicMock（prebuilt App 不需要 Docker 编译）；
-    SourceManager 使用真实实例指向 tmp_path，让 _find_app_dir 走完整
-    三层查找路径——测试用的 App 建在 tmp_path/components/app/ 下。
-    """
-    from builder.source import SourceManager  # 延迟导入避免 top-level 循环
 
-    config = {
-        "board":   "test-board",
-        "product": "default",
-        "variant": "release",
-        "architecture": {"userspace": arch, "kernel": "arm64", "bootloader": "arm64"},
-        "rootfs":  {"custom_packages": []},
-        "external_app_dirs": [],
+def test_cycle_and_missing_dependency_fail_before_execution(tmp_path):
+    alpha = app(tmp_path / 'alpha', deps=['beta'])
+    beta = app(tmp_path / 'beta', deps=['alpha'])
+    engine = builder(tmp_path, apps={'alpha': alpha, 'beta': beta})
+    with pytest.raises(ValueError, match='循环依赖'):
+        engine.build_one('alpha')
+    app(beta, deps=['missing'])
+    with pytest.raises((ValueError, FileNotFoundError), match='missing'):
+        engine.build_one('alpha')
+    engine._docker.run.assert_not_called()
+
+
+def test_failure_preserves_published_manifest_and_packages(tmp_path):
+    source = app(tmp_path / 'hello')
+    engine = builder(tmp_path, apps={'hello': source})
+    old = engine.build_one('hello').root()
+    old_bytes = old.runtime_debs[0].read_bytes()
+    (source / 'bin/hello').write_text('#!/bin/sh\necho changed\n')
+    with patch.object(ArtifactManifest, 'capture', side_effect=ValueError('发布故障')):
+        with pytest.raises(ValueError, match='发布故障'):
+            engine.build_one('hello')
+    assert old.manifest.validate()
+    assert old.runtime_debs[0].read_bytes() == old_bytes
+
+
+def test_plan_is_read_only_and_does_not_fetch(tmp_path):
+    source = app(tmp_path / 'hello')
+    engine = builder(tmp_path)
+    engine._source.locate_app = lambda name, config: source
+    engine._source.ensure_app = lambda *args: pytest.fail('只读计划不能下载源码')
+    plans = engine.plan(['hello'])
+    assert len(plans) == 1
+    assert not engine.context.build_root.exists()
+
+
+def test_invalid_runtime_and_architecture_refuse_success(tmp_path):
+    source = app(tmp_path / 'hello', runtime={'executable': '/opt/missing'})
+    engine = builder(tmp_path, apps={'hello': source})
+    with pytest.raises(ValueError, match='运行入口'):
+        engine.build_one('hello')
+    app(source, arch='armhf')
+    with pytest.raises(ValueError, match='未声明支持架构'):
+        engine.build_one('hello')
+
+
+def test_linux_elf_checks_class_and_machine_but_firmware_has_own_arch(tmp_path):
+    binary = tmp_path / 'elf'
+    header = bytearray(20)
+    header[:6] = b'\x7fELF\x02\x01'
+    header[18:20] = (62).to_bytes(2, 'little')
+    binary.write_bytes(header)
+    with pytest.raises(ValueError, match='ELF 架构'):
+        validate_elf_architecture([(binary, '/usr/bin/hello', 0o755)], 'aarch64')
+    validate_elf_architecture([(binary, '/lib/firmware/aux.bin', 0o644)], 'aarch64')
+
+
+def test_debug_source_is_immutable_and_manifested(tmp_path):
+    source = app(tmp_path / 'hello')
+    engine = builder(tmp_path, apps={'hello': source})
+    report = engine.build_one('hello')
+    result = report.root()
+    from pathlib import Path
+    before = (Path(result.debug_source_dir) / 'bin/hello').read_text()
+    (source / 'bin/hello').write_text('#!/bin/sh\necho edited\n')
+    assert (Path(result.debug_source_dir) / 'bin/hello').read_text() == before
+    assert result.validate()
+    assert result.compile_source_dir == str(source)
+
+
+def test_report_metadata_tampering_is_rejected(tmp_path):
+    source = app(tmp_path / 'hello')
+    engine = builder(tmp_path, apps={'hello': source})
+    report = engine.build_one('hello')
+    path = engine.report_path(report.roots)
+    content = json.loads(path.read_text())
+    content['ordered'][0]['executable'] = '/usr/bin/other'
+    path.write_text(json.dumps(content))
+    with pytest.raises(ValueError, match='校验失败'):
+        AppBuildReport.load(path)
+
+
+def test_library_dev_package_and_runtime_are_separate(tmp_path):
+    source = app(tmp_path / 'demo', kind='lib')
+    (source / 'include').mkdir()
+    (source / 'include/demo.h').write_text('int demo(void);')
+    (source / 'lib').mkdir()
+    (source / 'lib/libdemo.so').write_text('library fixture')
+    engine = builder(tmp_path, apps={'demo': source})
+    result = engine.build_one('demo').root()
+    debs = [item.path for item in result.manifest.artifacts if item.path.suffix == '.deb']
+    assert len(debs) == 2
+    assert len(result.runtime_debs) == 1
+    assert '-dev_' not in result.runtime_debs[0].name
+
+
+def test_direct_api_rejects_config_context_target_mismatch(tmp_path):
+    from builder.app import AppBuilder
+    engine = builder(tmp_path)
+    with pytest.raises(ValueError, match='WorkspaceContext 不匹配'):
+        AppBuilder(engine._docker, engine._source, {**engine._config, 'board': 'other'}, context=engine.context)
+
+
+def test_report_cannot_relabel_existing_artifacts_as_another_target(tmp_path):
+    source = app(tmp_path / 'hello')
+    engine = builder(tmp_path, apps={'hello': source})
+    report = engine.build_one('hello')
+    forged = replace(report, target={**report.target, 'board': 'other'})
+    assert not forged.validate()
+    assert not replace(report, architecture='armhf').validate()
+
+
+@pytest.mark.parametrize("level,visible", [("normal", False), ("quiet", False), ("verbose", True)])
+def test_App资源身份始终写日志而仅在详细模式展示(tmp_path, capsys, level, visible):
+    from builder.development_output import run_logged
+
+    source = app(tmp_path / "hello")
+    engine = builder(tmp_path, apps={"hello": source})
+
+    def execute(output):
+        engine.output = output
+        return engine.build_one("hello")
+
+    result = run_logged(engine.context, engine._config, "app", level, execute).root()
+    assert (result.resource_id in capsys.readouterr().out) is visible
+    log = (engine.context.target_dir / "build.log").read_text()
+    assert result.resource_id in log
+
+
+def _linked_install_tree(directory, external):
+    """先创建链接再物化目标，模拟动态库 install 的任意创建顺序。"""
+    links = {
+        "usr/lib/libdemo.so": "libdemo.so.1",
+        "usr/lib/libdemo.so.1": "libdemo.so.1.2",
+        "usr/lib/absolute.so": "/opt/flange-test-target/libdemo.so.9",
+        "usr/lib/optional.so": "future-optional.so",
+        "usr/share/config-link": "config",
+        "usr/share/external-link": str(external),
     }
-    docker = MagicMock()
-    source = SourceManager(
-        sources_dir=tmp_path / ".build" / "sources",
-        project_root=tmp_path,
-    )
-    return AppBuilder(docker, source, config, project_dir=tmp_path)
-
-
-# ---------------------------------------------------------------------------
-# _topo_sort_apps 独立函数测试
-# ---------------------------------------------------------------------------
-
-class TestTopoSortApps:
-    """测试 _topo_sort_apps 独立函数。"""
-
-    def test_无依赖单节点(self):
-        """单个节点，无依赖，直接返回该节点。"""
-        result = _topo_sort_apps({"alpha": []})
-        assert result == ["alpha"]
-
-    def test_线性依赖链(self):
-        """a → b → c，应返回 [c, b, a]（依赖先于被依赖方）。"""
-        graph = {"a": ["b"], "b": ["c"], "c": []}
-        result = _topo_sort_apps(graph)
-        # 校验 c 在 b 前，b 在 a 前
-        assert result.index("c") < result.index("b") < result.index("a")
-
-    def test_多根无依赖(self):
-        """三个无依赖节点，顺序不固定但应全部出现。"""
-        graph = {"x": [], "y": [], "z": []}
-        result = _topo_sort_apps(graph)
-        assert sorted(result) == ["x", "y", "z"]
-
-    def test_菱形依赖(self):
-        """a → {b, c}，b → d，c → d，d 必须最先构建。"""
-        graph = {"a": ["b", "c"], "b": ["d"], "c": ["d"], "d": []}
-        result = _topo_sort_apps(graph)
-        assert result.index("d") < result.index("b")
-        assert result.index("d") < result.index("c")
-        assert result.index("b") < result.index("a")
-        assert result.index("c") < result.index("a")
-
-    def test_循环依赖两节点(self):
-        """a → b，b → a，应抛出 CircularDependencyError。"""
-        graph = {"a": ["b"], "b": ["a"]}
-        with pytest.raises(CircularDependencyError):
-            _topo_sort_apps(graph)
-
-    def test_循环依赖三节点(self):
-        """a → b → c → a，应抛出 CircularDependencyError。"""
-        graph = {"a": ["b"], "b": ["c"], "c": ["a"]}
-        with pytest.raises(CircularDependencyError):
-            _topo_sort_apps(graph)
-
-    def test_自依赖(self):
-        """a → a 自依赖，应抛出 CircularDependencyError。"""
-        graph = {"a": ["a"]}
-        with pytest.raises(CircularDependencyError):
-            _topo_sort_apps(graph)
-
-    def test_空图(self):
-        """空图返回空列表。"""
-        result = _topo_sort_apps({})
-        assert result == []
-
-
-# ---------------------------------------------------------------------------
-# AppBuilder._find_app_dir 测试
-# ---------------------------------------------------------------------------
-
-class TestFindAppDir:
-    """测试 _find_app_dir 查找逻辑。"""
-
-    def test_在本地app目录找到(self, tmp_path):
-        """App 目录存在时正确返回路径。"""
-        _make_app_dir(tmp_path, "myapp")
-        builder = _make_builder(tmp_path)
-        result = builder._find_app_dir("myapp")
-        assert result == tmp_path / "components" / "app" / "myapp"
-        assert result.is_dir()
-
-    def test_目录不存在时抛出ValueError(self, tmp_path):
-        """App 目录不存在且未在 external_apps / external_app_dirs 声明时抛出 ValueError。"""
-        builder = _make_builder(tmp_path)
-        with pytest.raises(ValueError, match="nonexistent"):
-            builder._find_app_dir("nonexistent")
-
-
-# ---------------------------------------------------------------------------
-# AppBuilder._resolve_build_order 测试
-# ---------------------------------------------------------------------------
-
-class TestResolveBuildOrder:
-    """测试 _resolve_build_order 方法（基于真实 app.yaml 文件）。"""
-
-    def test_无依赖单app(self, tmp_path):
-        """单个无依赖 App，返回该 App 名称。"""
-        _make_app_dir(tmp_path, "alpha")
-        builder = _make_builder(tmp_path)
-        result = builder._resolve_build_order(["alpha"])
-        assert result == ["alpha"]
-
-    def test_线性依赖(self, tmp_path):
-        """appA 依赖 appB，构建顺序应为 [appB, appA]。"""
-        _make_app_dir(tmp_path, "appA", build_deps=["appB"])
-        _make_app_dir(tmp_path, "appB")
-        builder = _make_builder(tmp_path)
-        result = builder._resolve_build_order(["appA", "appB"])
-        assert result.index("appB") < result.index("appA")
-
-    def test_集合外依赖被忽略(self, tmp_path):
-        """appA 依赖 external_lib（不在本次构建集合中），该依赖应被忽略。"""
-        _make_app_dir(tmp_path, "appA", build_deps=["external_lib"])
-        builder = _make_builder(tmp_path)
-        # 只构建 appA，external_lib 不在集合中
-        result = builder._resolve_build_order(["appA"])
-        assert result == ["appA"]
-
-    def test_多app有序依赖(self, tmp_path):
-        """三个 App 的依赖链：appC → appB → appA，应返回正确顺序。"""
-        _make_app_dir(tmp_path, "appA")
-        _make_app_dir(tmp_path, "appB", build_deps=["appA"])
-        _make_app_dir(tmp_path, "appC", build_deps=["appB"])
-        builder = _make_builder(tmp_path)
-        result = builder._resolve_build_order(["appA", "appB", "appC"])
-        assert result.index("appA") < result.index("appB") < result.index("appC")
-
-    def test_循环依赖抛出异常(self, tmp_path):
-        """两个 App 互相依赖，应抛出 CircularDependencyError。"""
-        _make_app_dir(tmp_path, "appX", build_deps=["appY"])
-        _make_app_dir(tmp_path, "appY", build_deps=["appX"])
-        builder = _make_builder(tmp_path)
-        with pytest.raises(CircularDependencyError):
-            builder._resolve_build_order(["appX", "appY"])
-
-
-# ---------------------------------------------------------------------------
-# AppBuilder.build_one 测试
-# ---------------------------------------------------------------------------
-
-class TestBuildOne:
-    """测试 build_one() 方法。"""
-
-    def test_prebuilt_app_生成deb(self, tmp_path):
-        """prebuilt App（build.system=none）应正常生成 .deb 文件。"""
-        _make_app_dir(tmp_path, "hello", bin_files=["hello"])
-        builder = _make_builder(tmp_path)
-        deb_path = builder.build_one("hello")
-
-        # .deb 文件应真实存在
-        assert deb_path.exists()
-        assert deb_path.suffix == ".deb"
-        # 文件名应包含 App 名称和版本
-        assert "hello" in deb_path.name
-        assert "1.0.0" in deb_path.name
-
-    def test_deb输出到正确目录(self, tmp_path):
-        """生成的 .deb 应位于 target/<board>/<product>/<variant>/app/ 下。"""
-        _make_app_dir(tmp_path, "mypkg", bin_files=["mypkg"])
-        builder = _make_builder(tmp_path)
-        deb_path = builder.build_one("mypkg")
-
-        expected_dir = tmp_path / ".build" / "target" / "test-board" / "default" / "release" / "app"
-        assert deb_path.parent == expected_dir
-
-    def test_app目录不存在时抛出ValueError(self, tmp_path):
-        """App 目录不存在且未在 external_apps 声明时，应抛出 ValueError。"""
-        builder = _make_builder(tmp_path)
-        with pytest.raises(ValueError):
-            builder.build_one("does_not_exist")
-
-    def test_无文件app生成空deb(self, tmp_path):
-        """无任何安装文件的 App 也能生成 .deb（data.tar.gz 内容为空）。"""
-        _make_app_dir(tmp_path, "empty_app")  # 不创建 bin_files
-        builder = _make_builder(tmp_path)
-        deb_path = builder.build_one("empty_app")
-        assert deb_path.exists()
-
-    def test_non_none_build_system_编译执行(self, tmp_path):
-        """build.system != "none" 时，_compile 应执行编译流程。"""
-        _make_app_dir(tmp_path, "cmake_app", build_system="cmake", bin_files=["cmake_app"])
-        builder = _make_builder(tmp_path)
-        deb_path = builder.build_one("cmake_app")
-        assert deb_path.exists()
-
-    def test_custom_vendor_直接交付多个deb(self, tmp_path):
-        """声明的完整 deb 直接交付，不生成同名 wrapper 包。"""
-        outputs = ["libfoo_1.0_arm64.deb", "foo-tools_1.0_arm64.deb"]
-        _make_app_dir(
-            tmp_path,
-            "source-unit",
-            app_type="vendor",
-            build_system="custom",
-            deb_outputs=outputs,
-        )
-        builder = _make_builder(tmp_path)
-        builder._output_dir.mkdir(parents=True)
-        for filename in outputs:
-            (builder._output_dir / filename).write_bytes(b"deb")
-
-        result = builder.build_one("source-unit")
-
-        assert result == builder._output_dir / outputs[0]
-        assert sorted(path.name for path in builder._output_dir.glob("*.deb")) == sorted(outputs)
-
-    def test_custom_vendor_缺少声明deb时报错(self, tmp_path):
-        """任一声明产物缺失均使构建失败。"""
-        _make_app_dir(
-            tmp_path,
-            "source-unit",
-            app_type="vendor",
-            build_system="custom",
-            deb_outputs=["missing_1.0_arm64.deb"],
-        )
-        builder = _make_builder(tmp_path)
-
-        with pytest.raises(BuildError, match="missing_1.0_arm64.deb"):
-            builder.build_one("source-unit")
-
-    def test_custom命令注入标准构建环境(self, tmp_path):
-        """custom 命令收到 paths.py 计算的构建路径与目标架构。"""
-        output = "foo_1.0_arm64.deb"
-        _make_app_dir(
-            tmp_path,
-            "source-unit",
-            app_type="vendor",
-            build_system="custom",
-            deb_outputs=[output],
-        )
-        builder = _make_builder(tmp_path)
-        builder._output_dir.mkdir(parents=True)
-        (builder._output_dir / output).write_bytes(b"deb")
-
-        builder.build_one("source-unit")
-
-        build_call = builder._docker.run.call_args_list[-1]
-        env = build_call.kwargs["env"]
-        assert env == {
-            "FLANGE_BUILD_ROOT": str((tmp_path / ".build").resolve()),
-            "FLANGE_APP_WORK_DIR": str(
-                (tmp_path / ".build/work/apps/source-unit/aarch64").resolve()
-            ),
-            "FLANGE_APP_OUTPUT_DIR": str(builder._output_dir.resolve()),
-            "FLANGE_TARGET_ARCH": "aarch64",
-        }
-
-
-# ---------------------------------------------------------------------------
-# AppBuilder.build_all 测试
-# ---------------------------------------------------------------------------
-
-class TestBuildAll:
-    """测试 build_all() 方法。"""
-
-    def test_空custom_packages返回空字典(self, tmp_path):
-        """custom_packages 为空时，build_all 应返回空字典。"""
-        builder = _make_builder(tmp_path)
-        result = builder.build_all()
-        assert result == {}
-
-    def test_build_all清理上一路由残留deb(self, tmp_path):
-        """ext4→UBI 等路由切换不得把已过滤 App 的旧 deb 留给 rootfs。"""
-        builder = _make_builder(tmp_path)
-        stale = builder._output_dir / "flange-rootfs-grow_1.0_arm64.deb"
-        stale.parent.mkdir(parents=True)
-        stale.write_bytes(b"stale")
-
-        assert builder.build_all() == {}
-        assert not stale.exists()
-
-    def test_单app批量构建(self, tmp_path):
-        """custom_packages 中只有一个 App 时，返回包含该 App 的字典。"""
-        from builder.source import SourceManager
-        _make_app_dir(tmp_path, "solo", bin_files=["solo"])
-        config = {
-            "board":   "test-board",
-            "product": "default",
-            "variant": "release",
-            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
-            "rootfs":  {"custom_packages": ["solo"]},
-            "external_app_dirs": [],
-        }
-        source = SourceManager(sources_dir=tmp_path / ".build/sources", project_root=tmp_path)
-        builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
-        result = builder.build_all()
-
-        assert "solo" in result
-        assert result["solo"].exists()
-
-    def test_多app按依赖顺序构建(self, tmp_path):
-        """多个 App 按拓扑排序顺序构建，全部出现在结果字典中。"""
-        from builder.source import SourceManager
-        _make_app_dir(tmp_path, "libbase", bin_files=["libbase.so"])
-        _make_app_dir(tmp_path, "daemon", build_deps=["libbase"], bin_files=["daemon"])
-        _make_app_dir(tmp_path, "cli",    build_deps=["libbase"], bin_files=["cli"])
-
-        config = {
-            "board":   "test-board",
-            "product": "default",
-            "variant": "release",
-            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
-            "rootfs":  {"custom_packages": ["libbase", "daemon", "cli"]},
-            "external_app_dirs": [],
-        }
-        source = SourceManager(sources_dir=tmp_path / ".build/sources", project_root=tmp_path)
-        builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
-        result = builder.build_all()
-
-        assert set(result.keys()) == {"libbase", "daemon", "cli"}
-        for name, path in result.items():
-            assert path.exists(), f"{name} 的 .deb 文件应存在"
-
-    def test_custom_packages中app不存在时抛出错误(self, tmp_path):
-        """custom_packages 包含不存在的 App 时，应抛出 ValueError（SourceManager 报告未找到）。"""
-        from builder.source import SourceManager
-        config = {
-            "board":   "test-board",
-            "product": "default",
-            "variant": "release",
-            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
-            "rootfs":  {"custom_packages": ["ghost_app"]},
-            "external_app_dirs": [],
-        }
-        source = SourceManager(sources_dir=tmp_path / ".build/sources", project_root=tmp_path)
-        builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
-        with pytest.raises(ValueError):
-            builder.build_all()
-
-    def test_循环依赖在build_all中抛出错误(self, tmp_path):
-        """custom_packages 中存在循环依赖时，build_all 应抛出 CircularDependencyError。"""
-        from builder.source import SourceManager
-        _make_app_dir(tmp_path, "nodeA", build_deps=["nodeB"])
-        _make_app_dir(tmp_path, "nodeB", build_deps=["nodeA"])
-
-        config = {
-            "board":   "test-board",
-            "product": "default",
-            "variant": "release",
-            "architecture": {"userspace": "aarch64", "kernel": "arm64", "bootloader": "arm64"},
-            "rootfs":  {"custom_packages": ["nodeA", "nodeB"]},
-            "external_app_dirs": [],
-        }
-        source = SourceManager(sources_dir=tmp_path / ".build/sources", project_root=tmp_path)
-        builder = AppBuilder(MagicMock(), source, config, project_dir=tmp_path)
-        with pytest.raises(CircularDependencyError):
-            builder.build_all()
-
-
-# ---------------------------------------------------------------------------
-# AppBuilder._resolve_app_dir 测试（out-of-tree 路径支持）
-# ---------------------------------------------------------------------------
-
-class TestResolveAppDir:
-    """_resolve_app_dir 三种路径判定规则与名称分支兜底。"""
-
-    def test_含斜杠的路径直接定位(self, tmp_path):
-        """字符串含 / 时按路径分支处理。"""
-        ext_dir = tmp_path / "ext" / "foo"
-        _make_app_dir_at(ext_dir, "foo")
-        builder = _make_builder(tmp_path)
-        result = builder._resolve_app_dir(str(ext_dir))
-        assert result == ext_dir.resolve()
-
-    def test_点开头的路径直接定位(self, tmp_path, monkeypatch):
-        """字符串以 . 开头时按路径分支处理（cwd 切到含目标 App 的位置）。"""
-        ext_dir = tmp_path / "myapp"
-        _make_app_dir_at(ext_dir, "myapp")
-        monkeypatch.chdir(tmp_path)
-        builder = _make_builder(tmp_path)
-        result = builder._resolve_app_dir("./myapp")
-        assert result == ext_dir.resolve()
-
-    def test_目录存在且含app_yaml的纯名称走路径分支(self, tmp_path, monkeypatch):
-        """当 cwd 下恰好有一个同名目录且含 app.yaml 时，视为路径。"""
-        # 在 tmp_path 下创建一个不在 components/app/ 下的同名目录
-        adhoc = tmp_path / "adhoc-bar"
-        _make_app_dir_at(adhoc, "adhoc-bar")
-        monkeypatch.chdir(tmp_path)
-        builder = _make_builder(tmp_path)
-        result = builder._resolve_app_dir("adhoc-bar")
-        assert result == adhoc.resolve()
-
-    def test_纯名称走_SourceManager_三层查找(self, tmp_path):
-        """字符串不含 / . 且 cwd 下无同名目录时，走 SourceManager 三层查找。"""
-        _make_app_dir(tmp_path, "myapp")
-        builder = _make_builder(tmp_path)
-        result = builder._resolve_app_dir("myapp")
-        assert result == tmp_path / "components" / "app" / "myapp"
-
-    def test_路径不存在时抛_FileNotFoundError_含原始字符串(self, tmp_path):
-        """路径分支下目录或 app.yaml 缺失时，错误信息包含原始入参字符串。"""
-        builder = _make_builder(tmp_path)
-        with pytest.raises(FileNotFoundError, match="/tmp/nonexistent-abc"):
-            builder._resolve_app_dir("/tmp/nonexistent-abc")
-
-    def test_存在的目录但缺_app_yaml_抛错(self, tmp_path):
-        """目录存在但缺 app.yaml 时按路径判定（含 /）后报错。"""
-        empty = tmp_path / "empty-dir"
-        empty.mkdir()
-        builder = _make_builder(tmp_path)
-        with pytest.raises(FileNotFoundError, match="empty-dir"):
-            builder._resolve_app_dir(str(empty))
-
-
-def _make_app_dir_at(target: Path, name: str) -> Path:
-    """在任意路径 target 处创建一个最小 App，写入 app.yaml。"""
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "app.yaml").write_text(
-        "app:\n"
-        f"  name: {name}\n"
-        "  version: 1.0.0\n"
-        f"  description: {name} 测试\n"
-        "  type: exec\n"
-        "  arch:\n"
-        "    - aarch64\n"
-        "\n"
-        "maintainer:\n"
-        "  name: tester\n"
-        "  email: tester@localhost\n"
-        "\n"
-        "build:\n"
-        "  system: none\n",
-        encoding="utf-8",
-    )
-    return target
-
-
-# ---------------------------------------------------------------------------
-# AppBuilder.build_one(path) 与 extra_mounts 注入测试
-# ---------------------------------------------------------------------------
-
-class TestBuildOneWithPath:
-    """build_one 接受路径入参，_compile 对外部目录注入 extra_mounts。"""
-
-    def test_build_one_接受外部路径走_path_分支(self, tmp_path):
-        """build_one(<外部路径>) 正确加载 spec 并生成 .deb。"""
-        ext_dir = tmp_path / "ext" / "demo"
-        _make_app_dir_at(ext_dir, "demo")
-        builder = _make_builder(tmp_path)
-        deb_path = builder.build_one(str(ext_dir))
-        # .deb 应落在仓库内 .build/target/.../app/，不在外部目录
-        assert deb_path.parent == (
-            tmp_path / ".build" / "target" / "test-board" / "default" / "release" / "app"
-        )
-        assert not list(ext_dir.glob("*.deb"))
-
-    def test_纯名称_build_one_不注入_extra_mounts(self, tmp_path):
-        """build_one(<纯 name>) 时 _compile 不应给出 extra_mounts（None）。
-
-        通过把 build.system 改成 cmake 让 _compile 走到 docker.run 调用，
-        然后断言传给 docker.run 的 extra_mounts 为 None。
-        """
-        _make_app_dir(tmp_path, "namedapp", build_system="cmake")
-        builder = _make_builder(tmp_path)
-        # docker 已是 MagicMock；触发编译
-        builder.build_one("namedapp")
-        # 找出所有 docker.run 调用，确保 extra_mounts 全是 None
-        for call_obj in builder._docker.run.call_args_list:
-            assert call_obj.kwargs.get("extra_mounts") is None
-
-    def test_外部路径_build_one_注入_extra_mounts(self, tmp_path):
-        """build_one(<外部路径>) 触发编译时，extra_mounts 含外部目录。"""
-        ext_dir = tmp_path.parent / f"ext-build-{tmp_path.name}"
-        try:
-            _make_app_dir_at(ext_dir, "extbuild")
-            # 把 build.system 改成 cmake 触发 _compile
-            (ext_dir / "app.yaml").write_text(
-                (ext_dir / "app.yaml").read_text().replace("system: none", "system: cmake"),
-                encoding="utf-8",
-            )
-            builder = _make_builder(tmp_path)
-            try:
-                builder.build_one(str(ext_dir))
-            except Exception:
-                # 编译命令是 MagicMock，本测试只关心 extra_mounts 参数
-                pass
-            # 至少有一次 docker.run 调用，extra_mounts 含 ext_dir
-            calls = builder._docker.run.call_args_list
-            assert any(
-                c.kwargs.get("extra_mounts") and ext_dir.resolve()
-                in [Path(p).resolve() for p in c.kwargs["extra_mounts"]]
-                for c in calls
-            )
-        finally:
-            import shutil
-            if ext_dir.exists():
-                shutil.rmtree(ext_dir, ignore_errors=True)
-
-    def test_build_one_不存在的路径报错(self, tmp_path):
-        """build_one(<不存在路径>) 抛 FileNotFoundError，错误信息含原始字符串。"""
-        builder = _make_builder(tmp_path)
-        with pytest.raises(FileNotFoundError, match="/tmp/abs-not-exist-xyz"):
-            builder.build_one("/tmp/abs-not-exist-xyz")
+    for relative, target in links.items():
+        link = directory / relative
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+    library = directory / "usr/lib/libdemo.so.1.2"
+    library.write_bytes(b"library fixture")
+    library.chmod(0o640)
+    executable = directory / "usr/bin/demo-tool"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o751)
+    config = directory / "usr/share/config"
+    config.mkdir(mode=0o710)
+    (config / "default.conf").write_text("enabled=true\n")
+    empty = directory / "var/lib/demo/empty"
+    empty.mkdir(parents=True)
+    empty.chmod(0o750)
+    return links
+
+
+def _assert_linked_install_tree(directory, links):
+    for relative, target in links.items():
+        link = directory / relative
+        assert link.is_symlink(), relative
+        assert os.readlink(link) == target
+    assert (directory / "usr/lib/libdemo.so").read_bytes() == b"library fixture"
+    assert not (directory / "usr/lib/optional.so").exists()
+    assert (directory / "usr/share/config-link/default.conf").read_text() == "enabled=true\n"
+    assert stat.S_IMODE((directory / "usr/lib/libdemo.so.1.2").stat().st_mode) == 0o640
+    assert stat.S_IMODE((directory / "usr/bin/demo-tool").stat().st_mode) == 0o751
+    empty = directory / "var/lib/demo/empty"
+    assert empty.is_dir() and not any(empty.iterdir())
+    assert stat.S_IMODE(empty.stat().st_mode) == 0o750
+    assert stat.S_IMODE((directory / "usr/share/config").stat().st_mode) == 0o710
+
+
+def _restrict_shared_link_metadata(monkeypatch):
+    """共享卷的链接元数据操作可能错误地访问尚不存在的目标。"""
+    original = shutil.copystat
+
+    def copystat(source, destination, *, follow_symlinks=True):
+        destination = Path(destination)
+        if Path(source).is_symlink() and destination.is_symlink() and not destination.exists():
+            raise FileNotFoundError(errno.ENOENT, "共享卷无法复制悬空链接的扩展属性", str(destination))
+        return original(source, destination, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(shutil, "copystat", copystat)
+
+
+@pytest.mark.parametrize("limited_metadata", [False, True])
+def test_App_staging发布保留符号链接与权限且可以复用(tmp_path, monkeypatch, limited_metadata):
+    source = app(tmp_path / "sdk", kind="staging", system="custom",
+                 build={"staging": "stage", "commands": [["produce-stage"]]})
+    external = tmp_path / "external-config"
+    external.mkdir()
+    (external / "sentinel").write_text("宿主目录不能被解引用复制")
+    engine = builder(tmp_path, apps={"sdk": source}, variant="release")
+    links = {}
+
+    def execute(command, **options):
+        assert command == ["produce-stage"]
+        staged = Path(options["env"]["FLANGE_APP_WORK_DIR"]) / "stage"
+        links.update(_linked_install_tree(staged, external))
+
+    engine._docker.run.side_effect = execute
+    if limited_metadata:
+        _restrict_shared_link_metadata(monkeypatch)
+    report = engine.build_one("sdk")
+    result = report.root()
+    _assert_linked_install_tree(result.install_dir, links)
+    assert report.validate() and result.manifest.validate()
+    assert not result.reused
+    reused = engine.build_one("sdk")
+    assert reused.root().reused and reused.validate()
+    assert reused.identity == report.identity
+    assert engine._docker.run.call_count == 1
+    assert (external / "sentinel").read_text() == "宿主目录不能被解引用复制"
+
+
+@pytest.mark.parametrize("limited_metadata", [False, True])
+def test_App编译与调试源码快照保留链接原文(tmp_path, monkeypatch, limited_metadata):
+    source = app(tmp_path / "sdk", kind="staging", system="custom",
+                 build={"staging": "stage", "commands": [["produce-stage"]]})
+    external = tmp_path / "external-config"
+    external.mkdir()
+    links = _linked_install_tree(source / "fixtures", external)
+    engine = builder(tmp_path, apps={"sdk": source}, variant="debug")
+
+    def execute(command, **options):
+        assert command == ["produce-stage"]
+        compiled = Path(options["cwd"])
+        assert compiled != source
+        _assert_linked_install_tree(compiled / "fixtures", links)
+        staged = Path(options["env"]["FLANGE_APP_WORK_DIR"]) / "stage"
+        staged.mkdir()
+        (staged / "sdk.bin").write_bytes(b"staging fixture")
+
+    engine._docker.run.side_effect = execute
+    if limited_metadata:
+        _restrict_shared_link_metadata(monkeypatch)
+    report = engine.build_one("sdk")
+    result = report.root()
+    _assert_linked_install_tree(Path(result.compile_source_dir) / "fixtures", links)
+    _assert_linked_install_tree(Path(result.debug_source_dir) / "fixtures", links)
+    _assert_linked_install_tree(source / "fixtures", links)
+    assert report.validate() and result.manifest.validate()
+    reused = engine.build_one("sdk")
+    assert reused.root().reused and reused.validate()
+    assert reused.identity == report.identity
+    assert engine._docker.run.call_count == 1
+
+
+@pytest.mark.parametrize("failure_kind", ["file", "directory_metadata"])
+def test_App_staging实际复制失败保留上次成功产物(tmp_path, monkeypatch, failure_kind):
+    source = app(tmp_path / "sdk", kind="staging", system="custom",
+                 build={"staging": "stage", "commands": [["produce-stage"]]})
+    source_input = source / "input.txt"
+    source_input.write_text("first build")
+    external = tmp_path / "external-config"
+    external.mkdir()
+    engine = builder(tmp_path, apps={"sdk": source}, variant="release")
+    stage_directories = []
+
+    def execute(command, **options):
+        assert command == ["produce-stage"]
+        staged = Path(options["env"]["FLANGE_APP_WORK_DIR"]) / "stage"
+        stage_directories.append(staged)
+        _linked_install_tree(staged, external)
+        (staged / "usr/lib/libdemo.so.1.2").write_text(source_input.read_text())
+
+    engine._docker.run.side_effect = execute
+    previous = engine.build_one("sdk")
+    original = previous.root()
+    manifest_bytes = original.manifest_path.read_bytes()
+    source_input.write_text("second build must not replace the first")
+    copy_operation = shutil.copy2 if failure_kind == "file" else shutil.copystat
+
+    def fail_copy(source_path, destination, *args, **kwargs):
+        source_path = Path(source_path)
+        expected_name = "libdemo.so.1.2" if failure_kind == "file" else "empty"
+        if source_path.name == expected_name and source_path.is_relative_to(stage_directories[-1]):
+            raise OSError(errno.EIO, "模拟共享卷真实读写故障", str(destination))
+        return copy_operation(source_path, destination, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2" if failure_kind == "file" else "copystat", fail_copy)
+    with pytest.raises(OSError, match="真实读写故障"):
+        engine.build_one("sdk")
+    assert original.manifest_path.read_bytes() == manifest_bytes
+    assert (original.install_dir / "usr/lib/libdemo.so").read_text() == "first build"
+    assert original.manifest.validate() and previous.validate()
+    recorded = AppBuildReport.load(engine.report_path(previous.roots))
+    assert recorded.identity == previous.identity and recorded.validate()

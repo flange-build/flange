@@ -5,11 +5,17 @@ status: stable
 sources:
   - components/packages/meizu-e3-panel/driver/sec_ts/sec_ts_main.c
   - components/packages/meizu-e3-panel/device-tree/sun60i-a733-cubie-a7a-meizu-e3-panel.dtso
-  - docs/proposal/t6_dsi_power_analysis.md
+  - docs/development-guide.md
+  - docs/extension-guide.md
 related:
   - "[[radxa-cubie-a7a]]"
   - "[[硬件特性包]]"
+updated: 2026-09-05
 ---
+
+> 阅读前提：先确认[板卡配置与硬件范围](../boards/index.md)，再阅读本专题。
+> 下文接线、内核/固件行为和测试结果只覆盖注明的设备、版本与产品；历史排障记录不代表全部目标已验收。
+> 当前构建入口见[开发指南](../../docs/development-guide.md)，新增驱动/配置见[扩展指南](../../docs/extension-guide.md)。
 
 ## TL;DR
 
@@ -33,3 +39,6 @@ radxa-cubie-a7a 上魅族 E3 屏触摸 `sec_ts`(g_6ft0.v00, 0x48) **不可用**�
 
 - **根治＝硬件**：DSI 模组/5V 入口加 **100µF/16V 1210 MLCC** bulk 电容(T6 §5.1)，吸收浪涌，覆盖 ~95%。
 - **软件缓解（让整机可用，触摸仍死）**：`sec_ts_irq_thread` 限速 100Hz（`if(time_before(jiffies,last+HZ/100)) return IRQ_HANDLED`）跳过 i2c 读→总线放空、背光恢复、不挂死；IRQ 亲和性钉小核(A55=cpu0-5,掩码 `0x3f`)防大核空转。实测背光复活、`engine timeout=0`、load 0.4。
+
+来源范围：历史参考 `docs/proposal/t6_dsi_power_analysis.md` 当前未在仓库中找到，
+涉及该报告的数量、覆盖率与电容建议在此作为历史记录保留，本轮未重新验证；实际硬件修改应以对应板卡测量为依据。

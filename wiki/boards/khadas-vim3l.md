@@ -3,21 +3,33 @@ title: khadas-vim3l
 type: board
 status: wip
 sources:
+  - builder/flash/strategy.py
   - components/board/khadas-vim3l/config.jsonnet
   - components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso
   - components/board/khadas-vim3l/overlay/etc/hostname
+  - components/board/khadas-vim3l/overlay/etc/modules-load.d/flange-usbgadget.conf
   - components/board/khadas-vim3l/overlay/etc/systemd/system/bluetooth-vim3l.service
+  - components/board/khadas-vim3l/overlay/etc/usbdevice.conf
+  - components/config/khadas-vim3-common.libsonnet
+  - components/platform/amlogic/s905d3/patches/bootloader/flange_fastboot.config
   - components/platform/amlogic/config.jsonnet
   - components/platform/amlogic/s905d3/config.jsonnet
-  - openspec/changes/add-amlogic-khadas-vim3l/design.md
-  - openspec/changes/vim3l-enable-spidev/design.md
+  - openspec/specs/amlogic-flash/spec.md
+  - openspec/changes/archive/2026-05-15-add-amlogic-khadas-vim3l/design.md
+  - openspec/changes/archive/2026-05-15-vim3l-enable-spidev/design.md
+  - docs/first-steps.md
 related:
   - "[[amlogic 平台]]"
   - "[[FlashStrategy 抽象]]"
   - "[[USB 线刷协议]]"
   - "[[新增板级支持]]"
-updated: 2026-05-15
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list khadas-vim3l` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 
@@ -25,11 +37,13 @@ Khadas VIM3L，Amlogic S905D3 SoC（SM1 family，4×Cortex-A55 @ 1.9GHz，Mali-G
 
 ## product / variant
 
-继承平台默认：`products: [default]`，`variants: [debug, release]`。
+与 VIM3 共用：`products: [default, desktop]`，`variants: [debug, release]`。
 
 ```
 lunch khadas-vim3l-default-debug
 lunch khadas-vim3l-default-release
+lunch khadas-vim3l-desktop-debug
+lunch khadas-vim3l-desktop-release
 ```
 
 ## 关键差异点
@@ -59,17 +73,16 @@ eMMC user area (GPT, sector size 512B)
   └ rootfs   offset 0x20040, size remaining (ext4, image_size 2G, grow_on_first_boot=True)
 ```
 
-VIM3L 不交付 recovery 维护系统：首启失败直接 KEY1 + USB-C 进 MaskROM 重刷比 adb 拉 recovery 简单，板级 `recovery.enabled = False` 关掉之后 SoC 层默认的 512MB recovery 分区也一并去掉，让位给 rootfs。env 分区也不引入：mainline u-boot 默认走 mmc raw offset 存 env，无单独分区也能工作。
+VIM3L 不交付 recovery 维护系统：首启失败直接连接 USB-C 并用 Function 键三击进 MaskROM 重刷比 adb 拉 recovery 简单，板级 `recovery.enabled = False` 关掉之后 SoC 层默认的 512MB recovery 分区也一并去掉，让位给 rootfs。env 分区也不引入：mainline u-boot 默认走 mmc raw offset 存 env，无单独分区也能工作。
 
 ## MaskROM 进入与刷写流程
 
-VIM3L 走 KEY1（板上"Function"键，靠近 USB-C）按键进 USB Burning：
+VIM3L 用板上靠近 USB-C 的 Function 键进 USB Burning：
 
-1. 拔电源
-2. **按住** KEY1 + 插 USB-C 上电
-3. host 端 `lsusb` 应见 `1b8e:c003`（Amlogic MaskROM）；macOS 用 `ioreg -p IOUSB -l | grep -A2 1b8e` 等价探测
-4. 跑 `flange flash` —— **无需接串口、无需手动 `fastboot usb 0`**：u-boot fragment 的 `CONFIG_PREBOOT` 检测 `${boot_source}=usb` 自动进 fastboot gadget
-5. **fastboot reboot 之前松开 KEY1**，否则板会反复回到 MaskROM
+1. 连接 USB-C。
+2. 在两秒内快速按 Function 键三次，然后立即松开。
+3. host 端 `lsusb` 应见 `1b8e:c003`（Amlogic MaskROM）；macOS 用 `ioreg -p IOUSB -l | grep -A2 1b8e` 等价探测。
+4. 跑 `flange flash` —— **无需接串口、无需手动 `fastboot usb 0`**：u-boot fragment 的 `CONFIG_PREBOOT` 检测 `${boot_source}=usb` 自动进 fastboot gadget。
 
 host 端依赖（详见 envsetup.sh 顶部注释）：
 - `pip install pyamlboot`（boot-g12.py 入口）
@@ -80,7 +93,7 @@ host 端依赖（详见 envsetup.sh 顶部注释）：
 
 ```
 host                                          board
-  │ 按住 KEY1 + 插 USB-C 上电
+  │ 连 USB-C，两秒内三击 Function 后松开
   │                                       ──▶ MaskROM (1b8e:c003)
   │ flange flash
   │   ├─ pyamlboot 推 u-boot.bin (FIP) 到 DDR
@@ -93,7 +106,6 @@ host                                          board
   │   ├─ fastboot flash boot        → GPT boot 分区
   │   ├─ fastboot flash rootfs      → GPT rootfs 分区
   │   └─ fastboot reboot
-  │ 用户松开 KEY1
   │                                       ──▶ 冷启动 BootROM 从 hw boot0 起 BL2 → u-boot
   │                                           board_late_init setenv boot_source=emmc
   │                                           PREBOOT 不触发 fastboot → Distroboot →
@@ -196,7 +208,7 @@ fenix 仓库内路径：`archives/hwpacks/wlan-firmware/brcm/`。三件套由 bo
 ## SPI（spidev）
 
 - **来源**：`boot.overlays.board`，dtso 落 `components/board/khadas-vim3l/dtso/vim3l-spidev-spicc1.dtso`，由 device-tree-overlay 组件 `cpp + dtc` 编译；`boot.overlays.enabled` 含同一项，开机即应用
-- **控制器**：SPICC1（`spi@ffd15000`，mainline `meson-g12-common.dtsi` line 2282）；spicc0 与 eMMC 共 GPIOC 不可用，详见 `openspec/changes/vim3l-enable-spidev/design.md` 决策 1
+- **控制器**：SPICC1（`spi@ffd15000`，mainline `meson-g12-common.dtsi` line 2282）；spicc0 与 eMMC 共 GPIOC 不可用，详见 `openspec/changes/archive/2026-05-15-vim3l-enable-spidev/design.md` 决策 1
 - **pinmux**：引用 g12-common.dtsi 预定义 `spicc1_pins`（MOSI/MISO/CLK）+ `spicc1_ss0_pins`（native CS0），不重声明
 - **默认参数**：1 路 native CS0、`spi-max-frequency = <24000000>`（24MHz，Fenix BSP 推荐稳态值；外设若需降速由 ioctl `SPI_IOC_WR_MAX_SPEED_HZ` 覆盖），模式由用户态决定
 - **设备命名**：以启动后 `ls /sys/class/spi_master/` 为准，N 取决于 mainline meson-sm1.dtsi 中 `aliases { spiN = ...; }` 注册顺序；不在 dtso / wiki 写死编号。**实测 mainline 6.12 + 本 overlay**：`/sys/class/spi_master/spi0` → **`/dev/spidev0.0`**（spicc1 是 active DT 中唯一 enable 的 spi master，所以拿到 bus 0）
@@ -212,7 +224,7 @@ fenix 仓库内路径：`archives/hwpacks/wlan-firmware/brcm/`。三件套由 bo
   注：本仓库 `components/board/khadas-vim3l/docs/vim3-sch-v12.pdf` 第 6 页 GPIO Header 区右下角的 "VIM3 SPI:" 注释把 SS/SCLK 标到 PIN33/PIN31 上是颠倒的（schematic 内部矛盾：同一 pin 既标 UARTC_TX 又标 SPIB_SS，但 mainline pinctrl 中 uart_c_tx=GPIOH_7=spi1_clk，不可能同时为 spi1_ss0=GPIOH_6）。GPIOH_6/_7 同 pad 兼具 SPI / UART_C / I²C_M1 / ISO7816 多个 alternate function，电气上 PIN31/33 这一对 pin 怎么连都对，只是软件 mux 决定它们当 SPI 用还是当 UART 用。
 - **自环验证**：MOSI(PIN37) ↔ MISO(PIN35) 短接 → `spidev_test -D /dev/spidev0.0 -s 1000000 -v`（rootfs 默认不含 spidev_test，可走 Python `fcntl.ioctl(SPI_IOC_MESSAGE)` 直接打——5 行脚本，不需要装 `python3-spidev`），期望 RX 缓冲与 TX 缓冲完全一致
 - **实测稳态速率（杜邦线连接）**：1 MHz / 8 MHz 完全可靠 TX==RX；**16 MHz 及以上 ioctl 返回 `ETIMEDOUT`**（mainline `drivers/spi/spi-meson-spicc.c` 等不到 transfer-done 中断），这是杜邦线物理层 SI + meson_spicc 驱动 burst 边界的已知现象，与 dtso 无关。DT `spi-max-frequency = 24000000` 是"don't exceed"上限，每次 transfer 由用户态 `SPI_IOC_WR_MAX_SPEED_HZ` 选定实际速率；杜邦线场景下建议 ≤ 8 MHz，焊接走线场景可向上探
-- **为什么 compatible 是 `rohm,dh2228fv`**：mainline `drivers/spi/spidev.c` 自 v5.18 起拒绝裸 `linux,spidev`（`WARN_ON: buggy DT`），社区主流借壳法 —— `rohm,dh2228fv` 是 spidev 既有 `of_match_table` 项之一，Raspberry Pi / Khadas / Armbian / Buildroot 同款做法。完整论证见 `openspec/changes/vim3l-enable-spidev/design.md` 决策 2
+- **为什么 compatible 是 `rohm,dh2228fv`**：mainline `drivers/spi/spidev.c` 自 v5.18 起拒绝裸 `linux,spidev`（`WARN_ON: buggy DT`），社区主流借壳法 —— `rohm,dh2228fv` 是 spidev 既有 `of_match_table` 项之一，Raspberry Pi / Khadas / Armbian / Buildroot 同款做法。完整论证见 `openspec/changes/archive/2026-05-15-vim3l-enable-spidev/design.md` 决策 2
 - **不绑定如何排查**：`dmesg | grep -i spi` 看 spicc1 与 spidev 探测顺序；`cat /sys/class/spi_master/spi*/of_node/compatible` 应为 `amlogic,meson-g12a-spicc`，其子设备 of_node compatible 应为 `rohm,dh2228fv`；若上游某天进一步收紧借壳法，切换路径是改 dtso 内 compatible 到 `of_match_table` 中另一既有项（`lineartechnology,ltc2488` / `ge,achc` / `semtech,sx1301` 等任选）
 
 ## 后续优化项（不阻塞首版交付）

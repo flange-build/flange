@@ -125,6 +125,21 @@ def test_components_relative_library_without_preserves_order(tmp_path):
     assert library in result.dependencies
 
 
+def _skip_platform_validation(monkeypatch) -> None:
+    """本组测试用合成平台 `demo` 验证 layer loader 的组合顺序。
+
+    `demo` 没有对应的 `builder/platforms/demo/` 包，所以两处平台相关校验都
+    不在本测试范围内：平台扩展校验（找不到模块本就静默跳过）与平台名注册
+    校验（`validate_platform`，它保证写错的平台名在配置阶段就报错）。
+    """
+    monkeypatch.setattr(
+        "builder.config.validate._run_platform_validation", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "builder.config.validate.validate_platform", lambda *_: None
+    )
+
+
 def _layered_config_tree(tmp_path: Path) -> None:
     files = {
         "rootfs/config.jsonnet": "{ rootfs: { packages: ['base'] } }",
@@ -138,7 +153,7 @@ def _layered_config_tree(tmp_path: Path) -> None:
         ),
         "platform/demo/chip/config.jsonnet": (
             "{ platform: 'demo', soc: 'chip', "
-            "kernel: {config: {CHIP_FACT: 'y'}, "
+            "kernel: {config: {CONFIG_CHIP_FACT: 'y'}, "
             "device_tree: {directory: 'demo'}} }"
         ),
         "board/demo-board/config.jsonnet": (
@@ -161,9 +176,7 @@ def test_layer_loader_composes_in_fixed_order_and_separates_dimensions(
     tmp_path, monkeypatch
 ):
     _layered_config_tree(tmp_path)
-    monkeypatch.setattr(
-        "builder.config.validate._run_platform_validation", lambda *_: None
-    )
+    _skip_platform_validation(monkeypatch)
     loader = JsonnetConfigLoader(tmp_path)
 
     config = loader.evaluate_board("demo-board", "same", "release")
@@ -173,7 +186,7 @@ def test_layer_loader_composes_in_fixed_order_and_separates_dimensions(
         "base", "platform", "product",
     ]
     assert config["boot"]["kernel_args"] == "product"
-    assert config["kernel"]["config"]["CHIP_FACT"] == "y"
+    assert config["kernel"]["config"]["CONFIG_CHIP_FACT"] == "y"
     assert config["product"] == "same"
     assert config["variant"] == "release"
     assert config["sources"]["overlays"]["url"].endswith("overlays.git")
@@ -201,9 +214,7 @@ def test_layer_loader_appends_selected_package_config_once(
         "// 测试 package 配置：验证后置 overlay 与非递归选择。\n"
         "{ rootfs+: { packages+: ['desktop'] }, packages+: ['nested'] }\n"
     )
-    monkeypatch.setattr(
-        "builder.config.validate._run_platform_validation", lambda *_: None
-    )
+    _skip_platform_validation(monkeypatch)
 
     config = JsonnetConfigLoader(tmp_path).evaluate_board(
         "demo-board", "same", "release"

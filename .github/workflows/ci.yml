@@ -1,6 +1,7 @@
-# CI 工作流：在 push 与 Pull Request 时运行 Python 测试套件
-# flange 的构建/刷写依赖 Docker 与硬件，无法在 CI 中执行；
-# 这里仅运行不依赖外部环境的 pytest 单元测试（builder / config / platforms）。
+# CI 工作流：在 push 与 Pull Request 时运行 repository-quality-gate spec
+# 要求的两道门禁 —— 完整 pytest 与 `openspec validate --all --strict`。
+# flange 的构建/刷写依赖 Docker 与硬件，无法在 CI 中执行；这里只跑不依赖
+# 外部环境的部分（builder / config / platforms 单元测试 + 规格校验）。
 name: CI
 
 on:
@@ -41,3 +42,21 @@ jobs:
 
       - name: 运行测试
         run: pytest
+
+  # repository-quality-gate spec 自己要求 `openspec validate --all --strict`
+  # 零失败，但此前只在人工收尾时跑 —— 于是规格与实现的漂移（描述了生产代码
+  # 不走的路径、引用了仓库里不存在的文件）能长期存在而无人察觉。
+  spec:
+    name: openspec validate --all --strict
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 校验全部规格
+        run: npx --yes @fission-ai/openspec@1.2.0 validate --all --strict

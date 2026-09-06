@@ -8,14 +8,20 @@ sources:
   - components/platform/qualcommsc8280xp/sc8280xp/config.jsonnet
   - components/platform/qualcommsc8280xp/patches/kernel/0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch
   - components/platform/qualcommsc8280xp/patches/kernel/0002-net-tc956x-zero-init-irq-domain-info.patch
-  - openspec/changes/add-radxa-dragon-q8b/
-  - openspec/changes/fix-radxa-dragon-q8b-usb-ethernet/
+  - openspec/changes/archive/2026-08-30-add-radxa-dragon-q8b/
+  - openspec/changes/archive/2026-08-30-fix-radxa-dragon-q8b-usb-ethernet/
+  - docs/first-steps.md
 related:
   - "[[qualcommsc8280xp 平台]]"
   - "[[radxa-dragon-q6a]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-08-24
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list radxa-dragon-q8b` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 

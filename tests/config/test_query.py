@@ -26,9 +26,9 @@ class TestGetValidTargets:
         assert isinstance(targets, list)
 
     def test_expected_count(self, boards):
-        """当前 18 个 board 的全部 product/variant 组合应完整枚举。"""
+        """当前 19 个 board 的全部 product/variant 组合应完整枚举。"""
         targets = get_valid_targets(boards=boards)
-        assert len(targets) == 90
+        assert len(targets) == 94
 
     def test_contains_radxa_targets(self, boards):
         targets = get_valid_targets(boards=boards)
@@ -36,6 +36,15 @@ class TestGetValidTargets:
         assert "radxa-zero3w-default-release" in targets
         assert "radxa-zero3w-desktop-debug" in targets
         assert "radxa-zero3w-desktop-release" in targets
+
+    def test_contains_khadas_vim3_targets(self, boards):
+        targets = get_valid_targets(boards=boards)
+        assert {
+            "khadas-vim3-default-debug",
+            "khadas-vim3-default-release",
+            "khadas-vim3-desktop-debug",
+            "khadas-vim3-desktop-release",
+        } <= set(targets)
 
     def test_small_spinand_board_excludes_desktop(self, boards):
         targets = get_valid_targets(boards=boards)

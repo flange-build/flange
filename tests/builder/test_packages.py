@@ -20,6 +20,8 @@ from builder.packages import (
     _parse_opt_in,
     expand_hardware_packages,
     load_package_manifest,
+    load_package_manifest_dir,
+    resolve_package_dir,
 )
 
 
@@ -108,6 +110,14 @@ PACKAGE = {"name": "bar", "components": []}
         load_package_manifest("foo", tmp_path)
 
 
+def test_package_name_must_be_kebab_case(tmp_path: Path):
+    _write_package(tmp_path, "bad_name", """
+PACKAGE = {"name": "bad_name", "components": []}
+""")
+    with pytest.raises(ValueError, match="kebab-case"):
+        load_package_manifest("bad_name", tmp_path)
+
+
 def test_missing_package(tmp_path: Path):
     with pytest.raises(ValueError, match="不存在"):
         load_package_manifest("nope", tmp_path)
@@ -127,7 +137,7 @@ def test_vendor_requires_name_and_dir(tmp_path: Path):
 PACKAGE = {"name": "p", "components": [
     {"type": "vendor", "name": "demo"}]}
 """)
-    with pytest.raises(ValueError, match="vendor component.*name 与 dir"):
+    with pytest.raises(ValueError, match=r"components\[0\].dir.*必填"):
         load_package_manifest("p", tmp_path)
 
 
@@ -138,6 +148,144 @@ PACKAGE = {"name": "p", "components": [
 """)
     with pytest.raises(ValueError, match="variants 必须是非空字符串列表"):
         load_package_manifest("p", tmp_path)
+
+
+def test_load_manifest_dir_accepts_actions_and_ignores_jsonnet(tmp_path: Path):
+    pkg_dir = tmp_path / "external-demo"
+    pkg_dir.mkdir()
+    (pkg_dir / "package.py").write_text(
+        "PACKAGE = {\n"
+        "    'name': 'external-demo',\n"
+        "    'components': [],\n"
+        "    'actions': {\n"
+        "        'build': ['./build.sh', '--release'],\n"
+        "        'log': ['./log.sh', '--follow'],\n"
+        "    },\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    # ad-hoc 清单加载不得尝试解析或合并同目录的配置。
+    (pkg_dir / "config.jsonnet").write_text("这不是合法 Jsonnet", encoding="utf-8")
+
+    manifest = load_package_manifest_dir(pkg_dir)
+
+    assert manifest["actions"] == {
+        "build": ["./build.sh", "--release"],
+        "log": ["./log.sh", "--follow"],
+    }
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        {"publish": ["./publish.sh"]},
+        {"run": "./run.sh"},
+        {"run": []},
+        {"run": ["./run.sh", 1]},
+        {"run": ["./run.sh", ""]},
+        None,
+    ],
+)
+def test_package_actions_reject_invalid_argv(tmp_path: Path, actions):
+    _write_package(
+        tmp_path,
+        "invalid-actions",
+        "PACKAGE = {"
+        "'name': 'invalid-actions', "
+        "'components': [], "
+        f"'actions': {actions!r}"
+        "}\n",
+    )
+
+    with pytest.raises(ValueError, match="actions"):
+        load_package_manifest("invalid-actions", tmp_path)
+
+
+def test_package_without_actions_defaults_to_empty_mapping(demo_root: Path):
+    manifest = load_package_manifest("demo-panel", demo_root)
+
+    assert manifest["actions"] == {}
+
+
+class TestResolvePackageDir:
+    """Package 名称、路径与调用者 cwd 的解析。"""
+
+    def test_name_resolves_from_project_packages(self, tmp_path: Path):
+        _write_package(
+            tmp_path,
+            "named-package",
+            "PACKAGE = {'name': 'named-package', 'components': []}\n",
+        )
+        caller_cwd = tmp_path / "elsewhere"
+        caller_cwd.mkdir()
+
+        resolved = resolve_package_dir(
+            "named-package",
+            project_root=tmp_path,
+            caller_cwd=caller_cwd,
+        )
+
+        assert resolved == (
+            tmp_path / "components" / "packages" / "named-package"
+        ).resolve()
+
+    def test_relative_path_uses_caller_cwd(self, tmp_path: Path):
+        project_root = tmp_path / "project"
+        caller_cwd = tmp_path / "vendor"
+        pkg_dir = caller_cwd / "nested" / "external-package"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "package.py").write_text(
+            "PACKAGE = {'name': 'external-package', 'components': []}\n",
+            encoding="utf-8",
+        )
+
+        resolved = resolve_package_dir(
+            "./nested/external-package",
+            project_root=project_root,
+            caller_cwd=caller_cwd,
+        )
+
+        assert resolved == pkg_dir.resolve()
+
+    def test_omitted_target_uses_caller_cwd(self, tmp_path: Path):
+        caller_cwd = tmp_path / "current-package"
+        caller_cwd.mkdir()
+        (caller_cwd / "package.py").write_text(
+            "PACKAGE = {'name': 'current-package', 'components': []}\n",
+            encoding="utf-8",
+        )
+
+        assert resolve_package_dir(
+            None,
+            project_root=tmp_path / "project",
+            caller_cwd=caller_cwd,
+        ) == caller_cwd.resolve()
+
+    def test_existing_relative_directory_takes_precedence(self, tmp_path: Path):
+        caller_cwd = tmp_path / "vendor"
+        pkg_dir = caller_cwd / "demo"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "package.py").write_text(
+            "PACKAGE = {'name': 'demo', 'components': []}\n",
+            encoding="utf-8",
+        )
+
+        assert resolve_package_dir(
+            "demo",
+            project_root=tmp_path / "project",
+            caller_cwd=caller_cwd,
+        ) == pkg_dir.resolve()
+
+    def test_path_without_manifest_is_rejected(self, tmp_path: Path):
+        invalid = tmp_path / "invalid"
+        invalid.mkdir()
+
+        with pytest.raises(FileNotFoundError, match="package.py"):
+            resolve_package_dir(
+                str(invalid),
+                project_root=tmp_path / "project",
+                caller_cwd=tmp_path,
+            )
 
 
 # ---- opt-in 解析 ----
@@ -156,7 +304,7 @@ def test_parse_opt_in_dict_without_drivers():
 
 
 def test_parse_opt_in_missing_name():
-    with pytest.raises(ValueError, match="缺少 name"):
+    with pytest.raises(ValueError, match="packages.name.*必填"):
         _parse_opt_in({"drivers": ["a"]})
 
 
@@ -347,3 +495,67 @@ def test_runtime_overlays_missing_lists_package_candidates():
     }}}
     with pytest.raises(ValueError, match="package="):
         runtime_overlays(cfg)
+
+
+# ---- vendor component 的额外哈希输入（inputs） ----
+
+_VENDOR_WITH_INPUTS = """
+PACKAGE = {
+    "name": "demo-firmware",
+    "components": [
+        {"type": "vendor", "name": "demo-firmware", "dir": "build",
+         "inputs": ["patches"]},
+    ],
+}
+"""
+
+
+def test_vendor_inputs_登记为app附加哈希输入(tmp_path: Path):
+    """位于 App 目录之外、却参与构建的包内容必须显式登记进缓存输入。"""
+    _write_package(
+        tmp_path,
+        "demo-firmware",
+        _VENDOR_WITH_INPUTS,
+        files={
+            "build/app.yaml": _VENDOR_APP,
+            "patches/0001-fix.patch": "--- a\n+++ b\n",
+        },
+    )
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    expand_hardware_packages(cfg, project_root=tmp_path)
+
+    assert cfg["packages_meta"]["app_src_paths"] == {
+        "demo-firmware": ["components/packages/demo-firmware/patches"],
+    }
+
+
+def test_vendor_inputs_缺省时不登记(tmp_path: Path):
+    _write_package(
+        tmp_path, "demo-firmware", _VENDOR_PACKAGE,
+        files={"app.yaml": _VENDOR_APP},
+    )
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    expand_hardware_packages(cfg, project_root=tmp_path)
+
+    assert cfg["packages_meta"]["app_src_paths"] == {}
+
+
+def test_vendor_inputs_路径不存在时报错(tmp_path: Path):
+    _write_package(
+        tmp_path, "demo-firmware", _VENDOR_WITH_INPUTS,
+        files={"build/app.yaml": _VENDOR_APP},
+    )
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    with pytest.raises(FileNotFoundError, match="inputs 不存在"):
+        expand_hardware_packages(cfg, project_root=tmp_path)
+
+
+def test_vendor_inputs_必须是字符串列表(tmp_path: Path):
+    _write_package(tmp_path, "demo-firmware", """
+PACKAGE = {"name": "demo-firmware", "components": [
+    {"type": "vendor", "name": "demo-firmware", "dir": "build",
+     "inputs": "patches"}]}
+""", files={"build/app.yaml": _VENDOR_APP})
+    cfg = {"board": "my-board", "packages": ["demo-firmware"]}
+    with pytest.raises(ValueError, match="inputs 必须是列表"):
+        expand_hardware_packages(cfg, project_root=tmp_path)

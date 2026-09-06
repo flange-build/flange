@@ -9,14 +9,20 @@ sources:
   - components/board/rp-pro-rk3568-h/overlay/etc/hostname
   - components/board/rp-pro-rk3568-h/overlay/etc/usbdevice.conf
   - components/platform/rockchip/rk3568/config.jsonnet
+  - docs/first-steps.md
 related:
   - "[[rockchip 平台]]"
   - "[[out-of-tree 模块]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
   - "[[GUD 屏作 X11 显示]]"
-updated: 2026-06-19
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list rp-pro-rk3568-h` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 

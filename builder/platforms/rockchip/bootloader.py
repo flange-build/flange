@@ -423,7 +423,6 @@ class RockchipBootloaderBuilder(ComponentBuilder):
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         firmware_dir = self._firmware_dir
-        ini_prefix = self._ini_prefix
         # 从 RKBOOT INI 的 [OUTPUT] 段提取 miniloader 实际文件名
         loader_ini = self._loader_ini
         output_name = self._extract_output_path(loader_ini.read_text())

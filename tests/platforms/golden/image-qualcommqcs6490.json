@@ -1,0 +1,5 @@
+[
+  "run: truncate -s 696254464 <TMP>/raw.img",
+  "priv: sh -c set -e; LOOP=$(losetup -b 4096 -f --show <TMP>/raw.img); trap 'losetup -d $LOOP' EXIT; parted -s $LOOP mklabel gpt; parted -s $LOOP mkpart boot ext4 16777216B 83886079B; parted -s $LOOP mkpart recovery ext4 83886080B 150994943B; parted -s $LOOP mkpart rootfs ext4 150994944B 687865855B",
+  "run: dd if=<TARGET>/rootfs/rootfs.img of=<TMP>/raw.img seek=36864 conv=notrunc,sparse bs=4096 status=none"
+]

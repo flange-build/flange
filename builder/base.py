@@ -1,12 +1,19 @@
 """组件构建基类 — 管理源码生命周期、补丁应用。"""
 
 import os
+import tempfile
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from pathlib import Path
+from typing import TYPE_CHECKING
 from builder.docker import DockerRunner
 from builder.patches import normalize_excluded_patches
 from builder.paths import COMPONENTS_ROOT
-from builder.source import SourceManager
+from builder.source import SourceManager, component_local_path
+
+if TYPE_CHECKING:
+    from builder.cache import BuildCache
+    from builder.output import BuildOutput
 
 
 class ComponentBuilder(ABC):
@@ -15,8 +22,12 @@ class ComponentBuilder(ABC):
     子类声明 component 属性并实现 configure/compile/collect。
     基类负责：源码获取 → 源码重置 → 补丁应用 → 调子类 → 返回产物。
     """
+
     component: str = ""
-    cache: "BuildCache | None" = None   # 由 engine 注入，供子类使用分阶段缓存
+    context = None
+    task_plan = None
+    app_report = None
+    cache: "BuildCache | None" = None  # 由 engine 注入，供子类使用分阶段缓存
     output: "BuildOutput | None" = None  # 由 engine 注入，统一输出
 
     # 全平台 u-boot/kernel 交叉编译默认工具链前缀 = gcc-10（容器内 /opt/aarch64-gcc10，见
@@ -31,25 +42,52 @@ class ComponentBuilder(ABC):
         self.docker = docker
         self.source = source
 
+    @property
+    def components_root(self) -> Path:
+        return self.context.components_root if self.context else COMPONENTS_ROOT
+
+    def work_dir(self, label: str | None = None) -> Path:
+        """每次执行使用目标所属目录中的独立暂存区。"""
+        if self.context is None:
+            raise RuntimeError("组件执行必须注入 WorkspaceContext")
+        root = (
+            self.context.build_root / "work" / self.context.target.key / (label or self.component)
+        )
+        root.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix="run-", dir=root))
+
+    def execute(self, plan) -> dict:
+        """执行与 fingerprint 消费同一份声明配置。"""
+        self.task_plan = plan
+        return self.build(plan.value("config"))
+
     def _status(self, msg: str):
         """通过 output 输出状态（兼容 output 未注入的场景）。"""
         if self.output:
             self.output.status(msg)
 
+    def _step(self, label: str):
+        """生命周期动作拥有明确边界，输出未注入时仍可独立执行。"""
+        return self.output.step(label) if self.output else nullcontext()
+
     def build(self, config: dict) -> dict:
-        src_dir = self.source.ensure(self.component, config)
-        self._status("源码就绪")
-        if not config.get("_local_mode", {}).get(self.component):
-            self.reset_source(src_dir)
-            self._remove_patch_created_files(src_dir, config)
-            patches = self._count_patches(config)
-            self.apply_patches(src_dir, config)
-            if patches > 0:
-                self._status(f"补丁应用 ({patches} patches)")
-        self.configure(src_dir, config)
+        with self._step("准备源码"):
+            src_dir = self.source.ensure(self.component, config)
+            if component_local_path(config, self.component):
+                # 本地源已经复制隔离，不重置用户快照或重复打补丁。
+                self._status("使用本地源码快照")
+            else:
+                self.reset_source(src_dir)
+                self._remove_patch_created_files(src_dir, config)
+                patches = self._count_patches(config)
+                self.apply_patches(src_dir, config)
+                if patches > 0:
+                    self._status(f"已应用 {patches} 个补丁")
+        with self._step("配置构建"):
+            self.configure(src_dir, config)
         self.compile(src_dir, config)
-        result = self.collect(src_dir, config)
-        self._status("产物收集")
+        with self._step("收集产物"):
+            result = self.collect(src_dir, config)
         return result
 
     def _count_patches(self, config: dict) -> int:
@@ -65,16 +103,16 @@ class ComponentBuilder(ABC):
 
         默认不排除任何补丁，既有 target 行为保持不变。
         """
-        platform = config["platform"]
-        board = config["board"]
         component_config = config.get(self.component, {}) or {}
-        excluded_names = set(normalize_excluded_patches(
-            component_config.get("exclude_patches"),
-            f"{self.component}.exclude_patches",
-        ))
+        excluded_names = set(
+            normalize_excluded_patches(
+                component_config.get("exclude_patches"),
+                f"{self.component}.exclude_patches",
+            )
+        )
         applicable: list[Path] = []
         for patch in self._all_patch_paths(config):
-            relative = patch.relative_to(COMPONENTS_ROOT.parent).as_posix()
+            relative = patch.relative_to(self.components_root.parent).as_posix()
             if patch.name in excluded_names or relative in excluded_names:
                 continue
             applicable.append(patch)
@@ -86,8 +124,8 @@ class ComponentBuilder(ABC):
         board = config["board"]
         patches: list[Path] = []
         for patch_dir in (
-            COMPONENTS_ROOT / "platform" / platform / "patches" / self.component,
-            COMPONENTS_ROOT / "board" / board / "patches" / self.component,
+            self.components_root / "platform" / platform / "patches" / self.component,
+            self.components_root / "board" / board / "patches" / self.component,
         ):
             if patch_dir.is_dir():
                 patches.extend(sorted(patch_dir.glob("*.patch")))
@@ -96,12 +134,10 @@ class ComponentBuilder(ABC):
     def reset_source(self, src_dir: Path):
         """重置源码树，保留 .o 等编译产物（增量编译）。
 
-        Linux 内核源码中存在仅大小写不同的文件（如 xt_connmark.h / xt_CONNMARK.h），
-        在 macOS 大小写不敏感文件系统上 git checkout 会报 "unable to create file"
-        并返回非零退出码，但实际已完成重置，因此不检查返回值。
+        只操作 SourceManager 提供的目标独立工作树。重置失败必须停止，
+        避免把不完整源码当作有效构建输入。
         """
-        self.docker.run(["git", "checkout", "-f", "."], cwd=str(src_dir),
-                        check=False)
+        self.docker.run(["git", "checkout", "-f", "."], cwd=str(src_dir))
 
     def _remove_patch_created_files(self, src_dir: Path, config: dict) -> None:
         """删除上次 patch 明确新增的文件，使增量源码树可重复打补丁。
@@ -123,16 +159,14 @@ class ComponentBuilder(ABC):
                 target_line = lines[index + 1]
                 if not target_line.startswith("+++ b/"):
                     continue
-                relative = target_line[len("+++ b/"):]
+                relative = target_line[len("+++ b/") :]
                 target = (src_dir / relative).resolve()
                 if not target.is_relative_to(root):
-                    raise ValueError(
-                        f"补丁新增文件路径越出源码树: {patch}: {relative}")
+                    raise ValueError(f"补丁新增文件路径越出源码树: {patch}: {relative}")
                 if target.is_symlink() or target.is_file():
                     target.unlink()
                 elif target.exists():
-                    raise IsADirectoryError(
-                        f"补丁声明新增文件但目标是目录: {target}")
+                    raise IsADirectoryError(f"补丁声明新增文件但目标是目录: {target}")
 
     def apply_patches(self, src_dir: Path, config: dict):
         """按序应用平台补丁 + 板级补丁"""
@@ -152,13 +186,23 @@ class ComponentBuilder(ABC):
     @abstractmethod
     def collect(self, src_dir: Path, config: dict) -> dict: ...
 
-    def make(self, src_dir: Path, targets: list, *,
-             arch: str = "", cross: str = "", jobs: int = 0, extra: list = None,
-             label: str = ""):
+    def make(
+        self,
+        src_dir: Path,
+        targets: list,
+        *,
+        arch: str = "",
+        cross: str = "",
+        jobs: int = 0,
+        extra: list = None,
+        label: str = "",
+    ):
         """封装 make 调用"""
         cmd = ["make"]
-        if arch: cmd.append(f"ARCH={arch}")
-        if cross: cmd.append(f"CROSS_COMPILE={cross}")
+        if arch:
+            cmd.append(f"ARCH={arch}")
+        if cross:
+            cmd.append(f"CROSS_COMPILE={cross}")
         cmd.append(f"-j{jobs or max((os.cpu_count() or 1) - 6, 1)}")
         cmd.extend(extra or [])
         cmd.extend(targets)

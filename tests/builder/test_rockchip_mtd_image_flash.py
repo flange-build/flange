@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.builder.context import component_context
+
 from builder.flash import (
     DeviceInfo,
     FlashConfig,
@@ -160,6 +162,7 @@ def test_mtd_image_builds_manifest_without_raw_gpt_or_dd(tmp_path):
     docker = FdtDocker()
     builder = RockchipImageBuilder(docker=docker, source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     outputs = builder.build(config)
 
@@ -185,6 +188,7 @@ def test_mtd_image_rejects_dtb_ubi_index_mismatch(tmp_path):
     builder = RockchipImageBuilder(
         docker=FdtDocker("ubi.mtd=4 root=ubi0:rootfs"), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     with pytest.raises(Exception, match="ubi.mtd=4"):
         builder.build(config)
@@ -197,6 +201,7 @@ def test_gpt_spinand_builds_named_bundle_without_raw_image(tmp_path):
     docker = FdtDocker()
     builder = RockchipImageBuilder(docker=docker, source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
     stale_raw = target_dir / "image/raw.img"
     stale_raw.parent.mkdir(parents=True)
     stale_raw.write_bytes(b"stale raw image")
@@ -209,7 +214,10 @@ def test_gpt_spinand_builds_named_bundle_without_raw_image(tmp_path):
     assert manifest["rootfs_mtd_index"] == 5
     assert outputs["parameter"].read_text().startswith("FIRMWARE_VER: 1.0\n")
     assert not (builder._work_dir / "raw.img").exists()
-    assert not stale_raw.exists()
+    # 配方不修改上一版发布目录；引擎成功发布后才统一替换。
+    assert stale_raw.read_bytes() == b"stale raw image"
+    assert "image" not in outputs
+    assert "raw.img" not in outputs["bundle"].read_text()
     assert [cmd[0] for cmd in docker.commands] == ["fdtget"]
 
 
@@ -220,6 +228,7 @@ def test_gpt_spinand_rejects_dtb_ubi_index_mismatch(tmp_path):
     builder = RockchipImageBuilder(
         docker=FdtDocker("ubi.mtd=4 root=ubi0:rootfs"), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, target_dir=target_dir)
 
     with pytest.raises(Exception, match="ubi.mtd=4"):
         builder.build(config)
@@ -264,7 +273,7 @@ def test_gpt_spinand_generates_parameter_and_uses_named_di(tmp_path):
     strategy.preflight(target_dir, flash, flash.partitions)
 
     amp = next(part for part in flash.partitions if part.name == "amp")
-    with patch("builder.flash.subprocess.run") as run:
+    with patch("builder.flash.strategy.subprocess.run") as run:
         strategy.write_named_partition(
             Path("upgrade_tool"), amp, target_dir / amp.image, flash)
     assert run.call_args.args[0][1:3] == ["DI", "-amp"]
@@ -283,7 +292,7 @@ def test_spinand_preflight_checks_all_images_before_device_write(tmp_path):
     (target_dir / "amp/amp.img").unlink()
     strategy = RockchipFlashStrategy()
 
-    with patch("builder.flash.subprocess.run") as run:
+    with patch("builder.flash.strategy.subprocess.run") as run:
         with pytest.raises(FlashError, match="amp.*镜像不存在"):
             strategy.preflight(target_dir, flash, flash.partitions)
     run.assert_not_called()
@@ -302,7 +311,7 @@ def test_spinand_preflight_rejects_stale_idbloader_manifest(tmp_path):
         image="bootloader/idbloader.img",
     ))
 
-    with patch("builder.flash.subprocess.run") as run:
+    with patch("builder.flash.strategy.subprocess.run") as run:
         with pytest.raises(FlashError, match="旧版构建产物.*build image -f"):
             RockchipFlashStrategy().preflight(
                 target_dir, flash, flash.partitions)
@@ -352,8 +361,8 @@ def test_spinand_full_flash_order_is_ul_parameter_named_parts_without_ssd(
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     strategy.preflight(target_dir, flash, flash.partitions)
-    with patch("builder.flash.subprocess.run", side_effect=fake_run) as run, \
-         patch("builder.flash.time.sleep"):
+    with patch("builder.flash.strategy.subprocess.run", side_effect=fake_run) as run, \
+         patch("builder.flash.strategy.time.sleep"):
         strategy.pre_flash_all(
             Path("upgrade_tool"), target_dir, flash,
             DeviceInfo("rockchip", "maskrom", ""),
@@ -387,8 +396,8 @@ def test_explicit_spinand_storage_selector_still_fails_when_missing(tmp_path):
                 returncode=0, stdout="No=9\tSATA(*)\n", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    with patch("builder.flash.subprocess.run", side_effect=fake_run) as run, \
-         patch("builder.flash.time.sleep"):
+    with patch("builder.flash.strategy.subprocess.run", side_effect=fake_run) as run, \
+         patch("builder.flash.strategy.time.sleep"):
         with pytest.raises(FlashError, match="未找到存储 'SPINAND'"):
             strategy.pre_flash(
                 Path("upgrade_tool"), target_dir, flash,
@@ -402,7 +411,7 @@ def test_spinand_loader_mode_skips_db_and_ssd(tmp_path):
     target_dir, flash = _flash_target(tmp_path)
     strategy = RockchipFlashStrategy()
 
-    with patch("builder.flash.subprocess.run") as run:
+    with patch("builder.flash.strategy.subprocess.run") as run:
         strategy.pre_flash(
             Path("upgrade_tool"), target_dir, flash,
             DeviceInfo("rockchip", "loader", ""),
@@ -417,7 +426,7 @@ def test_spinand_write_gpt_waits_for_di_parameter_even_without_storage(
     target_dir, flash = _flash_target(tmp_path)
     strategy = RockchipFlashStrategy()
 
-    with patch("builder.flash.subprocess.run") as run:
+    with patch("builder.flash.strategy.subprocess.run") as run:
         strategy.write_gpt(Path("upgrade_tool"), target_dir, flash)
 
     run.assert_not_called()
@@ -438,11 +447,11 @@ def test_mtd_single_component_uses_only_named_partition(
 ):
     target_dir, _ = _flash_target(tmp_path)
     strategy = RockchipFlashStrategy()
-    with patch("builder.flash.get_flash_strategy", return_value=strategy):
+    with patch("builder.flash.execute.get_flash_strategy", return_value=strategy):
         executor = FlashExecutor(target_dir, tmp_path)
     with patch.object(strategy, "find_tool", return_value=Path("upgrade_tool")), \
          patch.object(strategy, "pre_flash"), \
-         patch("builder.flash.subprocess.run") as run:
+         patch("builder.flash.strategy.subprocess.run") as run:
         executor.flash_partition(requested, no_wait=True, no_reboot=True)
 
     commands = [call.args[0] for call in run.call_args_list]
@@ -468,11 +477,11 @@ def test_spinand_bootloader_component_updates_loader_then_uboot(
             )
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    with patch("builder.flash.get_flash_strategy", return_value=strategy):
+    with patch("builder.flash.execute.get_flash_strategy", return_value=strategy):
         executor = FlashExecutor(target_dir, tmp_path)
     with patch.object(strategy, "find_tool", return_value=Path("upgrade_tool")), \
-         patch("builder.flash.subprocess.run", side_effect=fake_run) as run, \
-         patch("builder.flash.time.sleep"):
+         patch("builder.flash.strategy.subprocess.run", side_effect=fake_run) as run, \
+         patch("builder.flash.strategy.time.sleep"):
         executor.flash_partition(
             requested, no_wait=True, no_reboot=True)
 

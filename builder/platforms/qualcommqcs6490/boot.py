@@ -10,9 +10,7 @@ flange 无 UEFI/GRUB 先例（现有平台皆 U-Boot/extlinux），本模块为�
    下 DT 启动链。grub-efi-arm64-bin + grub-common + mtools 需在构建 Docker 镜像内。
 """
 
-import tempfile
-from pathlib import Path
-
+from builder.partition.layout import PartitionLayout
 from builder.base import ComponentBuilder
 from builder.config.canonical import kernel_device_tree
 
@@ -20,9 +18,25 @@ from builder.config.canonical import kernel_device_tree
 # 注：Ubuntu 的 grub-efi-arm64-bin 把 `devicetree` 命令打包在 fdt.mod 里
 # （上游 GRUB 模块命名不一致），故此处模块名是 `fdt`，但 grub.cfg 里命令仍写 `devicetree`。
 GRUB_MODULES = [
-    "part_gpt", "fat", "ext2", "search", "search_label", "search_fs_uuid",
-    "linux", "fdt", "normal", "configfile", "boot", "echo", "ls",
-    "cat", "test", "all_video", "gfxterm", "serial", "terminal",
+    "part_gpt",
+    "fat",
+    "ext2",
+    "search",
+    "search_label",
+    "search_fs_uuid",
+    "linux",
+    "fdt",
+    "normal",
+    "configfile",
+    "boot",
+    "echo",
+    "ls",
+    "cat",
+    "test",
+    "all_video",
+    "gfxterm",
+    "serial",
+    "terminal",
 ]
 
 
@@ -37,7 +51,7 @@ class Qcs6490BootBuilder(ComponentBuilder):
         pass
 
     def compile(self, src_dir, config: dict):
-        self._work_dir = Path(tempfile.mkdtemp(prefix="flange-boot-"))
+        self._work_dir = self.work_dir()
         esp = self._work_dir / "esp"
         efi_boot = esp / "EFI" / "BOOT"
         efi_boot.mkdir(parents=True)
@@ -45,7 +59,8 @@ class Qcs6490BootBuilder(ComponentBuilder):
         _, dtb = kernel_device_tree(config)
         board_name = config["board"].replace("-", " ").title()
         kargs = config["boot"].get(
-            "kernel_args", "acpi=off console=ttyMSM0,115200 root=LABEL=rootfs rootwait")
+            "kernel_args", "acpi=off console=ttyMSM0,115200 root=LABEL=rootfs rootwait"
+        )
 
         # grub.cfg：search 到 rootfs 分区，从其 /boot 加载内核 + dtb（grub-with-dtb）
         grub_cfg = efi_boot / "grub.cfg"
@@ -63,10 +78,19 @@ class Qcs6490BootBuilder(ComponentBuilder):
         # 生成独立 GRUB EFI（prefix 指向 /EFI/BOOT，使其找到同目录 grub.cfg）
         bootaa64 = efi_boot / "BOOTAA64.EFI"
         self._status("grub-mkimage 生成 BOOTAA64.EFI...")
-        self.docker.run([
-            "grub-mkimage", "-O", "arm64-efi", "-p", "/EFI/BOOT",
-            "-o", str(bootaa64), *GRUB_MODULES,
-        ], label="grub-mkimage")
+        self.docker.run(
+            [
+                "grub-mkimage",
+                "-O",
+                "arm64-efi",
+                "-p",
+                "/EFI/BOOT",
+                "-o",
+                str(bootaa64),
+                *GRUB_MODULES,
+            ],
+            label="grub-mkimage",
+        )
 
         # 组装 ESP FAT 镜像（boot.img），用 mtools 填充（免特权挂载）
         esp_mb = self._esp_size_mb(config)
@@ -76,20 +100,21 @@ class Qcs6490BootBuilder(ComponentBuilder):
         self.docker.run(["mkfs.vfat", "-F", "32", "-n", "efi", str(self._boot_img)])
         # mmd/mcopy：建 /EFI/BOOT 并拷入 EFI + grub.cfg
         self.docker.run(["mmd", "-i", str(self._boot_img), "::/EFI", "::/EFI/BOOT"])
-        self.docker.run(["mcopy", "-i", str(self._boot_img),
-                         str(bootaa64), "::/EFI/BOOT/BOOTAA64.EFI"])
-        self.docker.run(["mcopy", "-i", str(self._boot_img),
-                         str(grub_cfg), "::/EFI/BOOT/grub.cfg"])
+        self.docker.run(
+            ["mcopy", "-i", str(self._boot_img), str(bootaa64), "::/EFI/BOOT/BOOTAA64.EFI"]
+        )
+        self.docker.run(["mcopy", "-i", str(self._boot_img), str(grub_cfg), "::/EFI/BOOT/grub.cfg"])
 
     def _esp_size_mb(self, config: dict) -> int:
-        """ESP 大小 → MB。config 的 size 按 flange 约定是 **512 字节扇区**计，
-        故直接 ×512 转字节（与介质 sector_size 无关）。不足 64MB 兜底。"""
-        parts = config.get("partitions", {})
-        for e in parts.get("entries", []):
-            if e["name"] == "esp" and e.get("size"):
-                mb = int(e["size"], 0) * 512 // (1024 * 1024)
-                return max(mb, 64)
-        return 256
+        """ESP 大小 → MB。几何解析走 PartitionLayout，不再自己算。
+
+        未声明 esp 分区时兜底 256MB；声明了但小于 64MB 时抬到 64MB ——
+        grub + kernel + initrd 放不进更小的 ESP。
+        """
+        esp = PartitionLayout.from_config(config).get("esp")
+        if esp is None:
+            return 256
+        return max(esp.size_mb, 64)
 
     def collect(self, src_dir, config: dict) -> dict:
         return {"boot": self._boot_img}

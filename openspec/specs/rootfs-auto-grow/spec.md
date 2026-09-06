@@ -1,7 +1,9 @@
 # rootfs-auto-grow Specification
 
 ## Purpose
-TBD - created by archiving change shrink-rootfs-image-grow-first-boot. Update Purpose after archive.
+
+定义 rootfs「初始镜像小、首次启动扩容」的契约：初始镜像大小从哪里来、raw 镜像的初始分区布局、首启动扩容如何触发，以及可增长布局必须通过的校验。
+
 ## Requirements
 ### Requirement: Rootfs 初始镜像大小
 构建系统必须（SHALL）支持在 rootfs 分区 entry 中声明 `image_size`，用于控制构建产物中的

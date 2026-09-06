@@ -232,28 +232,28 @@ class TestPostinstGeneration:
 
     def test_postinst_shebang(self):
         """postinst 必须有 bash shebang。"""
-        script = _generate_postinst("my-daemon.service", [])
+        script = _generate_postinst("my-daemon.service", [], auto_start=True)
         assert script.startswith("#!/bin/bash")
 
     def test_postinst_set_e(self):
         """postinst 必须包含 set -e。"""
-        script = _generate_postinst("my-daemon.service", [])
+        script = _generate_postinst("my-daemon.service", [], auto_start=True)
         assert "set -e" in script
 
     def test_chroot_detection_present(self):
         """postinst 必须包含 chroot 检测逻辑（/run/systemd/system 判断）。"""
-        script = _generate_postinst("my-daemon.service", [])
+        script = _generate_postinst("my-daemon.service", [], auto_start=True)
         assert "[ -d /run/systemd/system ]" in script
 
     def test_systemctl_enable_in_live_branch(self):
         """运行中系统分支必须调用 systemctl enable。"""
-        script = _generate_postinst("my-daemon.service", [])
+        script = _generate_postinst("my-daemon.service", [], auto_start=True)
         assert "systemctl enable my-daemon.service" in script
         assert "systemctl daemon-reload" in script
 
     def test_chroot_symlink_in_chroot_branch(self):
         """chroot 分支必须手动创建 .wants 软链接。"""
-        script = _generate_postinst("my-daemon.service", [])
+        script = _generate_postinst("my-daemon.service", [], auto_start=True)
         assert "ln -sf" in script
         assert ".wants" in script
 
@@ -273,7 +273,7 @@ class TestPostinstGeneration:
 
     def test_service_name_in_script(self):
         """service 文件名正确出现在脚本中。"""
-        script = _generate_postinst("usbdevice.service", [])
+        script = _generate_postinst("usbdevice.service", [], auto_start=True)
         assert "usbdevice.service" in script
 
     def test_service_name_with_shell_metachar_raises(self):
@@ -679,6 +679,22 @@ class TestEndToEnd:
         """输出文件名格式为 {name}_{version}_{deb_arch}.deb。"""
         deb_path, _ = self._build_minimal_deb(tmp_path)
         assert deb_path.name == "my-daemon_1.0.0_arm64.deb"
+
+    @pytest.mark.parametrize(
+        ("name", "version"),
+        [("../escape", "1.0"), ("safe", "../1.0")],
+    )
+    def test_unsafe_output_identity_rejected(self, tmp_path, name, version):
+        with pytest.raises(DebBuildError, match="不安全"):
+            DebBuilder().build_deb(
+                name=name,
+                version=version,
+                arch="aarch64",
+                control_fields={},
+                files=[],
+                output_dir=tmp_path / "dist",
+            )
+        assert not (tmp_path / "dist").exists()
 
     def test_deb_ar_magic(self, tmp_path):
         """.deb 文件以标准 ar magic 开头。"""

@@ -70,10 +70,9 @@ class TestImageBuilderInitialPartitionSize:
     )
     def test_remaining_rootfs_uses_image_size_for_gpt_entry(self, builder_cls):
         builder = builder_cls(docker=MagicMock(), source=MagicMock())
-        entries = builder._resolve_entries(
-            _cfg({"size": "remaining", "image_size": "2G"})["partitions"]["entries"])
-        rootfs = next(e for e in entries if e["name"] == "rootfs")
-        assert rootfs["_size_sectors"] == (2 * 1024 * 1024 * 1024) // 512
+        entries = builder._layout(_cfg({"size": "remaining", "image_size": "2G"}))
+        rootfs = next(e for e in entries if e.name == "rootfs")
+        assert rootfs.size_sectors == (2 * 1024 * 1024 * 1024) // 512
 
     @pytest.mark.parametrize(
         "builder_cls",
@@ -81,7 +80,6 @@ class TestImageBuilderInitialPartitionSize:
     )
     def test_remaining_without_image_size_keeps_compat_default(self, builder_cls):
         builder = builder_cls(docker=MagicMock(), source=MagicMock())
-        entries = builder._resolve_entries(
-            _cfg({"size": "remaining"})["partitions"]["entries"])
-        rootfs = next(e for e in entries if e["name"] == "rootfs")
-        assert rootfs["_size_sectors"] == (4 * 1024 * 1024 * 1024) // 512
+        entries = builder._layout(_cfg({"size": "remaining"}))
+        rootfs = next(e for e in entries if e.name == "rootfs")
+        assert rootfs.size_sectors == (4 * 1024 * 1024 * 1024) // 512

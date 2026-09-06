@@ -1,156 +1,187 @@
-"""deploy_app 入口路径解析测试。
-
-不触发 docker / adb，验证：
-- `_resolve_app_arg` 三种判定规则
-- `deploy_app("<path>", build_deb=False, run=False)` 能解析路径并按 spec.app.name 查 .deb
-- `deploy_app("<name>", ...)` 纯名称行为不变（走 list_all）
-"""
-
-from __future__ import annotations
-
+"""设备流程通过可控传输验证，不接触任何真实设备。"""
+import json
+import subprocess
+from hashlib import sha256
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
-
 import pytest
-
+from tests.builder.app_support import app, builder
 from builder import deploy
 
 
-def _write_app(target: Path, name: str) -> Path:
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "app.yaml").write_text(
-        "app:\n"
-        f"  name: {name}\n"
-        "  version: 1.0.0\n"
-        f"  description: {name} 测试\n"
-        "  type: exec\n"
-        "  arch:\n"
-        "    - aarch64\n"
-        "\n"
-        "maintainer:\n"
-        "  name: tester\n"
-        "  email: tester@localhost\n"
-        "\n"
-        "build:\n"
-        "  system: none\n",
-        encoding="utf-8",
-    )
-    return target
+class FakeDevice:
+    serial = 'fixture-device'
+    def __init__(self, *, architecture='arm64', code=0, timeout=False, bad_hash=False):
+        self.architecture, self.code, self.timeout, self.bad_hash = architecture, code, timeout, bad_hash
+        self.calls, self.uploads = [], {}
+    def push(self, source, destination):
+        self.calls.append(('push', str(source), destination))
+        self.uploads[destination] = Path(source)
+    def shell(self, argv, **options):
+        self.calls.append(('shell', argv, options))
+        output, code = '', 0
+        if argv == ['dpkg', '--print-architecture']:
+            output = self.architecture + '\n'
+        elif argv[0] == 'sha256sum':
+            output = ('bad' if self.bad_hash else sha256(self.uploads[argv[1]].read_bytes()).hexdigest()) + '  file\n'
+        elif argv[0].startswith('/usr/bin/'):
+            if self.timeout:
+                raise subprocess.TimeoutExpired(argv, options.get('timeout'))
+            code, output = self.code, '测试输出\n'
+        elif argv[:2] == ['systemctl', 'show']:
+            output = '42\n'
+        return subprocess.CompletedProcess(argv, code, output, '测试诊断\n' if code else '')
 
 
-class TestResolveAppArg:
-    """_resolve_app_arg 三种判定。"""
-
-    def test_含斜杠按路径解析(self, tmp_path):
-        ext = _write_app(tmp_path / "ext" / "foo", "foo")
-        config = SimpleNamespace(board="b", product="p", variant="v")
-        result = deploy._resolve_app_arg(str(ext), tmp_path, config)
-        assert result == (ext.resolve(), "foo")
-
-    def test_点开头按路径解析(self, tmp_path, monkeypatch):
-        ext = _write_app(tmp_path / "demo", "demo")
-        monkeypatch.chdir(tmp_path)
-        config = SimpleNamespace(board="b", product="p", variant="v")
-        result = deploy._resolve_app_arg("./demo", tmp_path, config)
-        assert result == (ext.resolve(), "demo")
-
-    def test_纯名称走_list_all(self, tmp_path):
-        # 在仓库内 components/app/ 下放一个 App，让 list_all 能发现
-        local = _write_app(tmp_path / "components" / "app" / "adbd", "adbd")
-        config = SimpleNamespace(board="b", product="p", variant="v")
-        # 用 _scan_local 的真实行为；list_all 接受 project_root 与 config
-        # config 在 list_all 内会取 external_apps/external_app_dirs，给空 dict
-        with patch.object(deploy, "list_all") as mock_list:
-            from builder.app_list import AppEntry
-            mock_list.return_value = [
-                AppEntry(
-                    name="adbd",
-                    type="exec",
-                    version="1.0.0",
-                    description="",
-                    source_label="local",
-                    source_path=local,
-                )
-            ]
-            result = deploy._resolve_app_arg("adbd", tmp_path, config)
-        assert result == (local, "adbd")
-
-    def test_路径不存在时退出(self, tmp_path):
-        config = SimpleNamespace(board="b", product="p", variant="v")
-        with pytest.raises(SystemExit):
-            deploy._resolve_app_arg("/tmp/nonexistent-deploy-xyz", tmp_path, config)
-
-    def test_未注册的名称退出(self, tmp_path):
-        config = SimpleNamespace(board="b", product="p", variant="v")
-        with patch.object(deploy, "list_all", return_value=[]):
-            with pytest.raises(SystemExit):
-                deploy._resolve_app_arg("unknown-app-name", tmp_path, config)
+def _built(tmp_path, **options):
+    source = app(tmp_path / 'hello', **options)
+    engine = builder(tmp_path, apps={'hello': source})
+    return engine, engine.build_one('hello')
 
 
-class TestDeployAppPathEntry:
-    """deploy_app 路径入口能正确进到 find_latest_deb 阶段。"""
-
-    def test_path_入口解析后能按_app_name_查_deb(self, tmp_path, monkeypatch, capsys):
-        """当 --no-build 模式时，路径解析后应按 spec.app.name 找 .deb。"""
-        # 准备外部 App
-        ext = _write_app(tmp_path / "ext-mypkg", "mypkg")
-
-        # 准备伪造的 .deb，让 find_latest_deb 能命中
-        deb_dir = tmp_path / ".build" / "target" / "test-board" / "default" / "release" / "app"
-        deb_dir.mkdir(parents=True)
-        deb_file = deb_dir / "mypkg_1.0.0_arm64.deb"
-        deb_file.write_bytes(b"fake-deb")
-
-        # cwd 设为 tmp_path 让 find_latest_deb 的相对路径解析正确
-        monkeypatch.chdir(tmp_path)
-
-        # mock load_current_config 返回 dict（与真实返回类型一致；find_latest_deb 用下标访问）
-        fake_config = {"board": "test-board", "product": "default", "variant": "release"}
-        monkeypatch.setattr(deploy, "load_current_config", lambda: fake_config)
-
-        # mock check_adb / get_adb_device 让流程在 adb 之前结束（或 mock 整条 adb）
-        monkeypatch.setattr(deploy, "check_adb", lambda: False)
-
-        # 调用 deploy_app，应在 adb 检查阶段 sys.exit
-        with pytest.raises(SystemExit):
-            deploy.deploy_app(str(ext), build_deb=False, run=False)
-
-        # 验证输出里出现了正确的 deb 文件名（说明 find_latest_deb 命中了）
-        out = capsys.readouterr().out
-        assert "mypkg_1.0.0_arm64.deb" in out
+def test_architecture_mismatch_before_any_upload_and_failure_record(tmp_path):
+    engine, report = _built(tmp_path)
+    device = FakeDevice(architecture='armhf')
+    with pytest.raises(deploy.DeployError, match='设备架构'):
+        deploy.operate_report(engine.context, report, 'deploy', transport=device)
+    assert not device.uploads
+    sessions = list((engine.context.target_dir / 'sessions').glob('*/session.json'))
+    record = json.loads(sessions[0].read_text())
+    assert record['status'] == 'failed' and record['artifact_identity'] == report.identity
 
 
-class TestDeployAppNamePreservedBehavior:
-    """deploy_app 纯名称分支行为不变（用 mock 隔离 list_all）。"""
+def test_corrupted_local_artifact_rejects_before_device_contact(tmp_path):
+    engine, report = _built(tmp_path)
+    report.runtime_debs[0].write_text('broken')
+    device = FakeDevice()
+    with pytest.raises(deploy.DeployError, match='产物校验失败'):
+        deploy.operate_report(engine.context, report, 'deploy', transport=device)
+    assert device.calls == []
 
-    def test_name_分支走_list_all(self, tmp_path, monkeypatch):
-        """纯名称入参时应调用 list_all 查找。"""
-        local = _write_app(tmp_path / "components" / "app" / "adbd", "adbd")
 
-        fake_config = {"board": "test-board", "product": "default", "variant": "release"}
-        monkeypatch.setattr(deploy, "load_current_config", lambda: fake_config)
-        monkeypatch.setattr(deploy, "check_adb", lambda: False)
-        monkeypatch.chdir(tmp_path)
+def test_remote_hash_failure_never_runs_dpkg_and_cleans_staging(tmp_path):
+    engine, report = _built(tmp_path)
+    device = FakeDevice(bad_hash=True)
+    with pytest.raises(deploy.DeployError, match='内容校验失败'):
+        deploy.operate_report(engine.context, report, 'deploy', transport=device)
+    commands = [call[1] for call in device.calls if call[0] == 'shell']
+    assert not any(command[:2] == ['dpkg', '-i'] for command in commands)
+    assert commands[-1][:2] == ['rm', '-rf']
 
-        from builder.app_list import AppEntry
-        called = {}
 
-        def fake_list_all(project_root, config):
-            called["called"] = True
-            return [AppEntry(
-                name="adbd",
-                type="exec",
-                version="1.0.0",
-                description="",
-                source_label="local",
-                source_path=local,
-            )]
+def test_deployment_installs_exact_transitive_runtime_closure_once(tmp_path):
+    dep = app(tmp_path / 'dep', kind='lib')
+    main = app(tmp_path / 'main', deps=['dep'])
+    engine = builder(tmp_path, apps={'main': main, 'dep': dep})
+    report = engine.build_one('main')
+    stray = engine.context.target_dir / 'unrelated.deb'
+    stray.write_text('must not deploy')
+    device = FakeDevice()
+    result = deploy.operate_report(engine.context, report, 'deploy', transport=device)
+    assert result['status'] == 'succeeded'
+    assert set(device.uploads.values()) == set(report.runtime_debs)
+    assert not any('-dev_' in path.name for path in device.uploads.values())
+    installs = [call for call in device.calls if call[0] == 'shell' and call[1][:2] == ['dpkg', '-i']]
+    assert len(installs) == 1 and len(installs[0][1]) == 4
 
-        monkeypatch.setattr(deploy, "list_all", fake_list_all)
 
-        # 没准备 .deb，find_latest_deb 返回 None → 退出
-        with pytest.raises(SystemExit):
-            deploy.deploy_app("adbd", build_deb=False, run=False)
+@pytest.mark.parametrize('code,expected', [(0, 'passed'), (7, 'failed')])
+def test_test_result_persists_exit_output_target_and_artifact(tmp_path, code, expected):
+    engine, report = _built(tmp_path)
+    result = deploy.operate_report(engine.context, report, 'test', args=['one argument'], transport=FakeDevice(code=code))
+    assert result['status'] == expected and result['exit_code'] == code
+    assert Path(result['test']['stdout_path']).read_text() == '测试输出\n'
+    assert result['test']['command'] == ['/usr/bin/hello', 'one argument']
+    assert json.loads(Path(result['report_path']).read_text())['artifact_identity'] == report.identity
 
-        assert called.get("called"), "纯名称分支应调用 list_all"
+
+def test_timeout_is_explicit_nonzero_record(tmp_path):
+    engine, report = _built(tmp_path)
+    result = deploy.operate_report(engine.context, report, 'test', timeout=1, transport=FakeDevice(timeout=True))
+    assert result['status'] == 'timed_out' and result['exit_code'] == 124
+
+
+def test_target_gdb_consumes_snapshot_and_compiler_path_mapping(tmp_path):
+    engine, report = _built(tmp_path)
+    device = FakeDevice()
+    result = deploy.operate_report(engine.context, report, 'debug', transport=device)
+    command = next(call[1] for call in device.calls if call[0] == 'shell' and call[1][0] == 'gdb' and '-ex' in call[1])
+    assert f"set substitute-path {report.root().compile_source_dir} /tmp/flange-source-{result['id']}" in command
+    assert Path(report.root().debug_source_dir) in device.uploads.values()
+    assert result['debug']['source_mapping']
+    assert device.calls[-1][1][:2] == ['rm', '-rf']
+
+
+def test_noninteractive_debug_refuses_before_device_access(tmp_path, monkeypatch):
+    engine, report = _built(tmp_path)
+    monkeypatch.setenv('FLANGE_NO_INTERACTION', '1')
+    device = FakeDevice()
+    with pytest.raises(deploy.DeployError, match='交互终端'):
+        deploy.operate_report(engine.context, report, 'debug', transport=device)
+    assert not device.calls
+
+
+def test_unsupported_runtime_refuses_before_deploy(tmp_path):
+    engine, report = _built(tmp_path, kind='lib')
+    device = FakeDevice()
+    with pytest.raises(deploy.DeployError, match='运行入口'):
+        deploy.operate_report(engine.context, report, 'run', transport=device)
+    assert not device.calls
+
+
+def test_multi_root_deploy_keeps_complete_request_identity(tmp_path):
+    first, second = app(tmp_path / 'one'), app(tmp_path / 'two')
+    engine = builder(tmp_path, apps={'one': first, 'two': second})
+    report = engine.build(['one', 'two'])
+    result = deploy.operate_report(engine.context, report, 'deploy', transport=FakeDevice())
+    assert result['artifact_identity'] == report.identity
+
+
+def test_adb_argv_preserves_spaces_and_shell_metacharacters():
+    import shlex
+    command = deploy._adb_shell_argv('serial', ['/usr/bin/demo', 'one argument', '$(id)', 'semi;colon'])
+    assert shlex.split(command[-1]) == ['/usr/bin/demo', 'one argument', '$(id)', 'semi;colon']
+
+
+def test_remote_gdb_waits_for_server_and_cleans_forward_on_debugger_failure(tmp_path, monkeypatch):
+    engine, report = _built(tmp_path)
+    monkeypatch.setattr(deploy.shutil, 'which', lambda name: '/usr/bin/gdb')
+    commands = []
+    server_state = {'terminated': False}
+    class Server:
+        def __init__(self, argv, stdout, **options):
+            stdout.write('Listening on port 2345\n')
+            stdout.flush()
+        def poll(self):
+            return None
+        def terminate(self):
+            server_state['terminated'] = True
+        def wait(self, **options):
+            return 0
+    monkeypatch.setattr(deploy.subprocess, 'Popen', Server)
+    def run(argv, **options):
+        commands.append(argv)
+        if argv[0] == '/usr/bin/gdb':
+            assert str(report.root().install_dir / 'usr/bin/hello') in argv
+            assert f'set substitute-path {report.root().compile_source_dir} {report.root().debug_source_dir}' in argv
+            raise deploy.DeployError('调试器退出失败')
+        return subprocess.CompletedProcess(argv, 0, '', '')
+    monkeypatch.setattr(deploy, '_run_checked', run)
+    with pytest.raises(deploy.DeployError, match='调试器退出失败'):
+        deploy.operate_report(engine.context, report, 'debug', transport=FakeDevice(), debug_mode='remote')
+    assert server_state['terminated']
+    assert commands[-1] == ['adb', '-s', 'fixture-device', 'forward', '--remove', 'tcp:2345']
+    record = json.loads(next((engine.context.target_dir / 'sessions').glob('*/session.json')).read_text())
+    assert record['status'] == 'failed'
+    assert record['debug']['server_log']
+
+
+def test_service_test_restarts_published_service_before_checking_active(tmp_path):
+    engine, report = _built(tmp_path, kind='service')
+    device = FakeDevice()
+    result = deploy.operate_report(engine.context, report, 'test', transport=device)
+    commands = [call[1] for call in device.calls if call[0] == 'shell']
+    restart = ['systemctl', 'restart', 'hello.service']
+    active = ['systemctl', 'is-active', '--quiet', 'hello.service']
+    assert commands.index(restart) < commands.index(active)
+    assert result['status'] == 'passed'
+    assert restart in result['test']['preparation_commands']

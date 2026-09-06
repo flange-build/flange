@@ -15,6 +15,7 @@
 from pathlib import Path
 
 from builder.base import ComponentBuilder
+from builder.source import component_local_path
 
 
 class AllwinnerA733BootloaderBuilder(ComponentBuilder):
@@ -26,7 +27,9 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
         self._status("U-Boot 源码就绪（含子模块）")
 
         # 源码重置 — recurse 模式需要同时重置子模块
-        if not config.get("_local_mode", {}).get(self.component):
+        if component_local_path(config, self.component):
+            self._status("local_path 源码：跳过重置与补丁")
+        else:
             self._reset_with_submodules(src_dir)
             patches = self._count_patches(config)
             self.apply_patches(src_dir, config)
@@ -54,7 +57,7 @@ class AllwinnerA733BootloaderBuilder(ComponentBuilder):
         # -j1 强制串行：Allwinner 构建规则中存在 race condition
         # （sys_config.bin 被多个 boot0 target 共享，并行时相互覆盖）
         self.docker.run(
-            ["make", "-C", str(src_dir), f"-j1", target],
+            ["make", "-C", str(src_dir), "-j1", target],
             label=f"make {target}...",
         )
 

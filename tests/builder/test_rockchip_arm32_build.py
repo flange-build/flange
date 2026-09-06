@@ -141,7 +141,9 @@ def _arm64_config() -> dict:
     }
 
 
-def test_kernel_arm32_context_and_override_fragment_use_arm_path(tmp_path):
+def test_kernel_arm32_context_and_override_fragment_use_arm_path(tmp_path, monkeypatch):
+    # 本用例只验证 ARM32 参数；存储门禁由 test_filesystem.py 独立覆盖。
+    monkeypatch.setattr("builder.filesystem.require_case_sensitive", lambda _path: None)
     src = tmp_path / "linux"
     (src / "arch" / "arm" / "configs").mkdir(parents=True)
     builder = RecordingKernelBuilder()

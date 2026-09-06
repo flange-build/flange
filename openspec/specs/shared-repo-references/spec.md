@@ -2,10 +2,8 @@
 
 ## Purpose
 
-定义所有源码组件共享的唯一 source descriptor 与引用语义。
-
+定义所有源码组件共享的唯一 source descriptor 与引用语义：仓库地址、版本锚点（commit / tag / branch / local_path）与子路径只在一处声明，组件按名引用；多个组件引用同一名字即共享同一份检出。
 ## Requirements
-
 ### Requirement: 顶层命名 source
 
 配置 MUST 在顶层 `sources.<name>` 声明 source descriptor。descriptor MUST 且
@@ -20,7 +18,7 @@
 #### Scenario: 本地 source
 
 - **WHEN** `sources.linux` 只声明 `local_path`
-- **THEN** SourceManager 直接使用该目录且不执行 git 操作
+- **THEN** SourceManager 从该目录准备目标独立副本，不在用户原树执行 Git 或编译操作
 
 #### Scenario: 来源互斥
 
@@ -41,7 +39,7 @@ alias。
 #### Scenario: 多组件共享 checkout
 
 - **WHEN** kernel、kernel_bsp 与 kernel_device 引用同一 source name 但使用不同 subpath
-- **THEN** 三者共享一次 checkout，并分别返回各自子目录
+- **THEN** 同一目标内三者共享该 descriptor 的独立工作树，并返回各自子目录；不同目标不共享可变工作树
 
 #### Scenario: 未声明的引用
 
@@ -55,10 +53,12 @@ alias。
 
 ### Requirement: checkout 身份隔离
 
-远端 checkout 目录 MUST 由完整 descriptor 的稳定摘要决定，使相同 URL 的不同
-branch/commit 互不覆盖；多个组件引用完全相同 descriptor 时 MUST 复用目录。
+共享获取仓库 SHALL 位于 `<build_root>/sources/repos/<descriptor-digest>/`，身份由完整远端 descriptor 决定。目标可变工作树 SHALL 位于 `<build_root>/work/<target.key>/sources/<worktree-id>/`。SourceManager MUST 在仓库锁内同步共享源并准备目标工作树；实际构建与 source fetch MUST 遵循目标锁先于共享仓库锁的顺序。
 
 #### Scenario: revision 身份不同
+- **WHEN** 两个 source 使用相同 URL 但不同 commit
+- **THEN** 两者使用不同 descriptor 获取仓库，互不覆盖
 
-- **WHEN** 两个 source 使用相同 URL 但 commit 不同
-- **THEN** SourceManager 将其放入不同 checkout 目录
+#### Scenario: 相同源供多个目标使用
+- **WHEN** debug 与 release 引用相同 descriptor
+- **THEN** 两者复用获取仓库，但配置、补丁和编译写入不同的目标工作树

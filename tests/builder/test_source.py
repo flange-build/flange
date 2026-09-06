@@ -103,6 +103,28 @@ class TestCanonicalSources:
         assert result == tmp_path / "vendor" / "src"
         ensure_repo.assert_not_called()
 
+    def test_source_path只解析远端路径不同步(self, manager: SourceManager):
+        config = {
+            "sources": {
+                "linux": {
+                    "url": "https://example.com/linux.git",
+                    "commit": "abc",
+                },
+            },
+            "kernel": {"source": {"name": "linux", "subpath": "src"}},
+        }
+
+        with patch.object(manager, "_ensure_repo") as ensure_repo:
+            result = manager.source_path("kernel", config)
+
+        expected = (
+            manager.sources_dir / "repos"
+            / manager.source_identity(config["sources"]["linux"])
+            / "src"
+        )
+        assert result == expected
+        ensure_repo.assert_not_called()
+
     def testoot与固件复用canonical_source(self, manager: SourceManager):
         config = {
             "sources": {

@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-from builder.platforms.rockchip import amp_source_dirs
+from builder.component_plan import create_component_plan
+from builder.source import SourceManager
+from builder.workspace import Target, WorkspaceContext
 from builder.platforms.rockchip.amp import RockchipAmpBuilder
 
 
@@ -57,35 +59,13 @@ def test_rtthread_config_merge_order_is_bsp_base_then_app(tmp_path):
     ]
 
 
-def test_rtthread_amp_cache_includes_flange_base_config():
-    """基线配置变化应使 amp 增量缓存失效。"""
-    paths = amp_source_dirs({
-        "amp": {"mode": "rt-thread", "soc_project": "rk3568"},
-    })
-
-    assert "components/platform/rockchip/amp" in paths
-
-
-def test_rtthread_amp_cache_includes_external_local_app(tmp_path):
-    """AMP OOT local_path 必须进入增量哈希输入。"""
-    app_dir = tmp_path / "rk3506_amp_fluxion_foc"
-    app_dir.mkdir()
-    (app_dir / "app.yaml").write_text("app:\n")
-
-    paths = amp_source_dirs({
-        "amp": {
-            "app": "rk3506_amp_fluxion_foc",
-            "mode": "rt-thread",
-            "soc_project": "rk3506",
-        },
-        "external_apps": {
-            "rk3506_amp_fluxion_foc": {
-                "local_path": str(app_dir),
-            },
-        },
-    })
-
-    assert str(app_dir) in paths
+def test_rtthread_amp_cache_includes_sdk_and_flange_base_config(tmp_path):
+    """完整 SDK 和平台基线均由计划声明，不再依赖手工强制重建。"""
+    context = WorkspaceContext(ROOT, tmp_path, tmp_path / '.build', Target('board', 'default', 'release'))
+    plan = create_component_plan('amp', {'board': 'board', 'platform': 'rockchip',
+        'amp': {'enabled': True}, 'kernel': {}}, context, SourceManager(context=context))
+    assert plan.path('amp:sdk') == ROOT / 'components/amp'
+    assert plan.path('amp:platform') == ROOT / 'components/platform/rockchip/amp'
 
 
 def test_serial_open_notifies_rockchip_uart_clock_control():

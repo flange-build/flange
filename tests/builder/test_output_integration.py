@@ -1,15 +1,12 @@
 """构建输出系统集成测试。"""
 
-import subprocess
 import time
 from io import StringIO
-from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import patch
 
 import pytest
 
 from builder.output import BuildOutput, OutputLevel, strip_ansi
-from builder.docker import DockerRunner, BuildError
 
 
 @pytest.fixture
@@ -60,8 +57,10 @@ class TestBuildFlowIntegration:
         assert "tspi-rk3566" in text
 
         # 组件阶段
-        assert "▸ app" in text
-        assert "⊘" in text
+        # 跳过的组件是**单行** `⊘ app`，不再是"▸ 标题 + ⊘ 说明"两行：
+        # 跳过通常占多数，每个两行会把真正在构建的那个挤出屏幕
+        assert "⊘ app" in text
+        assert "▸ app" not in text
         assert "▸ kernel" in text
         assert "源码就绪" in text
         assert "▸ rootfs" in text
@@ -111,7 +110,7 @@ class TestBuildFlowIntegration:
         text = strip_ansi(buf.getvalue())
         # 应包含秒数
         assert "s" in text
-        assert "总耗时" in text
+        assert "构建完成 · " in text
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +140,7 @@ class TestErrorScenarios:
         text = strip_ansi(buf.getvalue())
         # 错误上下文
         assert "error: bad thing" in text
-        assert "┄" in text
+        assert "│" in text and "┄" not in text
         # 失败摘要
         assert "构建失败" in text
         assert "失败" in text
@@ -165,7 +164,7 @@ class TestErrorScenarios:
         text = strip_ansi(buf.getvalue())
         # 应显示最后几行（tail buffer）
         assert "some output line 24" in text
-        assert "┄" in text
+        assert "│" in text and "┄" not in text
 
     def test_error_log_contains_full_output(self, tmp_target):
         """build.log 包含完整错误输出。"""
@@ -222,6 +221,6 @@ class TestOutputLevels:
 
     def test_quiet_mode(self, tmp_target):
         text = self._run_build(tmp_target, OutputLevel.QUIET)
-        assert "flange build" in text  # 横幅仍显示
+        assert "flange build" not in text  # 静默模式只保留最终摘要
         assert "源码就绪" not in text  # L2 status 被压缩
         assert "构建完成" in text  # 摘要仍显示

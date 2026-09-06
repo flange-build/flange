@@ -25,6 +25,7 @@ sources:
   - openspec/changes/archive/2026-07-15-align-rk3506b-yt8512c-init/evidence/rk3506b-yt8512c-hardware.md
   - openspec/changes/archive/2026-07-14-add-atk-rk3506b-rtl8733bu-wifi-bt/evidence/rtl8733bu-acceptance.md
   - openspec/changes/add-rk3506-fluxion-foc-amp/
+  - docs/first-steps.md
 related:
   - "[[rockchip 平台]]"
   - "[[amp 构建器]]"
@@ -33,8 +34,13 @@ related:
   - "[[rk3506 AMP UART4 RPMsg demo]]"
   - "[[Cardputer USB 复合设备]]"
   - "[[Cardputer 在线音乐播放器]]"
-updated: 2026-08-24
+updated: 2026-09-05
 ---
+
+> 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
+> `flange target list atk-rk3506b` 确认当前目标，再按该型号硬件说明匹配介质、接口与下载模式。
+> 本页是配置摘要与硬件记录；下文验收只覆盖记录的版本、产品和测试项，不代表当前全部组合已实测。
+> [返回板卡索引](index.md) · [构建与刷写流程](../workflows/lunch-build-flash-流程.md)
 
 ## TL;DR
 

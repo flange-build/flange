@@ -4,28 +4,32 @@ type: subsystem
 status: stable
 sources:
   - builder/paths.py
-related:
-  - "[[仓库三层结构]]"
-updated: 2026-04-26
+  - builder/workspace.py
+  - docs/build-system-design.md
+updated: 2026-09-05
 ---
 
-## TL;DR
+# 路径锚点与工作区上下文
 
-`builder/paths.py` 暴露三个全局锚点常量（`PROJECT_ROOT`、`COMPONENTS_ROOT`、`BUILD_ROOT`）和两个辅助函数（`components_dir`、`build_dir`）；所有模块通过此文件取路径，禁止散落字面量拼接旧顶层目录名。
+[`builder/paths.py`](../../builder/paths.py) 集中定义 `COMPONENTS_DIRNAME`、`BUILD_DIRNAME`
+以及工具仓库默认 `PROJECT_ROOT`、`COMPONENTS_ROOT`、`BUILD_ROOT`。
+这些默认值不能替代外部工作区自己的路径。
 
-## 关键设计要点
+运行期使用 [`builder/workspace.py`](../../builder/workspace.py) 的不可变 WorkspaceContext：
 
-- **三锚点**：`PROJECT_ROOT` 由 `Path(__file__).resolve().parent.parent` 自动定位仓库根，对任意工作目录均正确；`COMPONENTS_ROOT = PROJECT_ROOT / "components"`；`BUILD_ROOT = PROJECT_ROOT / ".build"`
-- **目录名常量**：`COMPONENTS_DIRNAME = "components"`、`BUILD_DIRNAME = ".build"` 集中管理，重命名时只改一处
-- **辅助函数用于测试注入**：`components_dir(project_root)` / `build_dir(project_root)` 接受外部 `project_root` 参数，让测试可传入临时目录替代真实仓库根，避免全局状态污染
-- **与 ProjectSpec §9 的呼应**：ProjectSpec 定义仓库三层（builder/ → components/ → .build/），paths.py 是其在代码中的单一权威映射
-- **强制规范**：CLAUDE.md 与 ProjectSpec 明确禁止直接拼接旧顶层名字面量，所有模块 `import` 此处常量，lint 可静态检测违规
+| 字段 | 归属 |
+| --- | --- |
+| `tool_root` / `components_root` | 工具代码、平台内容、模板与 Docker 配置 |
+| `workspace_root` / `state_file` | `flange.toml` 与 `.flange/current_config` |
+| `build_root` / `sources_dir` | 当前工作区的输出和下载存储 |
+| `target` / `target_dir` | 结构化目标与该目标发布目录 |
+| `invocation_dir` | 解释用户命令中的相对路径 |
+| `apps` / `app_dirs` | 从工作区清单解析的外部 App 来源 |
 
-## 关键代码位置
+清单内路径相对 `flange.toml` 所在目录解析一次；用户命令中的路径相对调用者目录解释。
+把这些目录重新合成一个 `project_root` 会使外部工作区、缓存和部署互相污染。
 
-- [`builder/paths.py`](../../builder/paths.py) — 完整文件（约 25 行）
-  - `PROJECT_ROOT` — 仓库根锚点
-  - `COMPONENTS_ROOT` — 内容层锚点
-  - `BUILD_ROOT` — 产物层锚点
-  - `components_dir(project_root)` — 测试注入辅助
-  - `build_dir(project_root)` — 测试注入辅助
+`components_dir(root)` / `build_dir(root)` 仍用于计算默认目录及测试注入。
+新代码应从调用链传入 context，避免硬编码工具 checkout 的 `.build`，也不依赖旧 `target` 软链接。
+示例布局见[仓库三层结构](../concepts/仓库三层结构.md)，维护规则见
+[构建系统设计](../../docs/build-system-design.md)。

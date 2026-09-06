@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from builder.app_spec import (
     AppSpec,
@@ -35,6 +36,9 @@ app:
   description: 测试服务
   type: service
   arch: [aarch64]
+
+systemd:
+  unit: systemd/my.service
 
 maintainer:
   name: flange
@@ -112,10 +116,6 @@ maintainer:
   name: flange
   email: flange@localhost
 
-capabilities:
-  - network
-  - usb-gadget
-
 build:
   system: cmake
   apt_packages:
@@ -123,8 +123,6 @@ build:
     - zlib1g-dev
   options:
     CMAKE_BUILD_TYPE: Release
-  outputs:
-    - bin/my-daemon
   deps:
     - libfoo
   commands: []
@@ -163,11 +161,8 @@ maintainer:
 
 build:
   system: make
-  outputs:
-    - lib/libbar.so
 
 lib:
-  headers_dir: include/bar/
   dev_suffix: "-dev"
 """
 
@@ -189,8 +184,6 @@ build:
   commands:
     - ["./configure", "--host=aarch64-linux-gnu"]
     - ["make", "-j4"]
-  outputs:
-    - bin/legacy-app
 """
 
 # RT-Thread AMP + Embedded Swift
@@ -276,14 +269,9 @@ class TestFullFieldParsing:
         assert spec.maintainer.name == "flange"
         assert spec.maintainer.email == "flange@localhost"
 
-        # capabilities
-        assert "network" in spec.capabilities
-        assert "usb-gadget" in spec.capabilities
-
         # build 段
         assert spec.build.system == "cmake"
         assert spec.build.options == {"CMAKE_BUILD_TYPE": "Release"}
-        assert spec.build.outputs == ["bin/my-daemon"]
         assert spec.build.deps == ["libfoo"]
         assert spec.build.apt_packages == ["libssl-dev:{arch}", "zlib1g-dev"]
 
@@ -307,7 +295,6 @@ class TestFullFieldParsing:
         assert spec.app.type == "lib"
         assert spec.build.system == "make"
         assert spec.lib is not None
-        assert spec.lib.headers_dir == "include/bar/"
         assert spec.lib.dev_suffix == "-dev"
 
     def test_custom_build_commands(self):
@@ -351,20 +338,20 @@ class TestDefaultValues:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
         assert spec.build.options == {}
 
-    def test_build_outputs_defaults_to_empty_list(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
-        assert spec.build.outputs == []
-
     def test_build_apt_packages_defaults_to_empty_list(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
         assert spec.build.apt_packages == []
 
-    def test_capabilities_defaults_to_empty_list(self):
+    def test_runtime_executable_defaults_to_convention(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spec = load_spec(_write_yaml(tmpdir, _MINIMAL_EXEC))
+        assert spec.runtime.executable == ""
+
+    def test_actions_defaults_to_empty_dict(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
-        assert spec.capabilities == []
+        assert spec.actions == {}
 
     def test_install_defaults_to_empty_dict(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -372,14 +359,14 @@ class TestDefaultValues:
         assert spec.install == {}
 
     def test_systemd_defaults_to_none(self):
-        """未指定 systemd 段时，systemd 为 None。"""
+        """exec 不需要 systemd。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            spec = load_spec(_write_yaml(tmpdir, _MINIMAL_SERVICE))
+            spec = load_spec(_write_yaml(tmpdir, _MINIMAL_EXEC))
         assert spec.systemd is None
 
     def test_auto_start_defaults_to_false(self):
         """systemd 段存在但未指定 auto_start 时，默认为 False。"""
-        yaml_content = _MINIMAL_SERVICE + "\nsystemd:\n  unit: systemd/my.service\n"
+        yaml_content = _MINIMAL_SERVICE
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, yaml_content))
         assert spec.systemd is not None
@@ -397,7 +384,6 @@ class TestDefaultValues:
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, yaml_content))
         assert spec.lib is not None
-        assert spec.lib.headers_dir == "include/"
         assert spec.lib.dev_suffix == "-dev"
 
     def test_depends_defaults_to_empty_list(self):
@@ -419,6 +405,45 @@ class TestDefaultValues:
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, _MINIMAL_VENDOR))
         assert spec.maintainer_scripts == {}
+
+
+class TestActions:
+    """验证 App 顶层 actions 与 Package 使用相同 argv 契约。"""
+
+    def test_valid_actions_are_parsed_without_shell_splitting(self, tmp_path: Path):
+        app_dir = _write_yaml(
+            str(tmp_path),
+            _MINIMAL_EXEC
+            + "actions:\n"
+            + "  build: [./build.sh, --release]\n"
+            + "  run: [./run.sh, 'safe;literal']\n"
+            + "  debug: [./debug.sh]\n"
+            + "  log: [./log.sh, --follow]\n"
+            + "  deploy: [./deploy.sh]\n",
+        )
+
+        spec = load_spec(app_dir)
+
+        assert spec.actions["build"] == ["./build.sh", "--release"]
+        assert spec.actions["run"] == ["./run.sh", "safe;literal"]
+        assert set(spec.actions) == {"build", "deploy", "run", "debug", "log"}
+
+    @pytest.mark.parametrize(
+        "actions_yaml",
+        [
+            "actions:\n  publish: [./publish.sh]\n",
+            "actions: ./run.sh\n",
+            "actions:\n  run: []\n",
+            "actions:\n  run: [./run.sh, 1]\n",
+            "actions:\n  run: [./run.sh, '']\n",
+            "actions: null\n",
+        ],
+    )
+    def test_invalid_actions_are_rejected(self, tmp_path: Path, actions_yaml: str):
+        app_dir = _write_yaml(str(tmp_path), _MINIMAL_EXEC + actions_yaml)
+
+        with pytest.raises(AppSpecError, match="actions"):
+            load_spec(app_dir)
 
 
 class TestMaintainerScripts:
@@ -539,6 +564,38 @@ class TestRequiredFieldValidation:
             with pytest.raises(AppSpecError, match="app.version"):
                 load_spec(_write_yaml(tmpdir, yaml_content))
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("name", "../escape"),
+            ("name", "bad/name"),
+            ("name", "bad\nname"),
+            ("name", " safe-app "),
+            ("version", "../1.0"),
+            ("version", "1.0 bad"),
+            ("version", "1.0\nnext"),
+            ("version", " 1.0 "),
+        ],
+    )
+    def test_unsafe_artifact_identity_rejected(self, tmp_path, field, value):
+        data = {
+            "app": {
+                "name": "safe-app",
+                "version": "1.0.0",
+                "description": "desc",
+                "type": "exec",
+                "arch": ["aarch64"],
+            },
+            "maintainer": {"name": "flange", "email": "a@b.com"},
+        }
+        data["app"][field] = value
+        app_dir = _write_yaml(
+            str(tmp_path), yaml.safe_dump(data, allow_unicode=True)
+        )
+
+        with pytest.raises(AppSpecError, match=f"app.{field}"):
+            load_spec(app_dir)
+
     def test_missing_app_description(self):
         yaml_content = (
             "app:\n  name: foo\n  version: 1.0.0\n  type: exec\n"
@@ -596,7 +653,7 @@ class TestAppTypeValidation:
 
     def test_invalid_type_rejected(self):
         yaml_content = (
-            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: daemon\n"
+            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: daemon\n  arch: [aarch64]\n"
             "maintainer:\n  name: flange\n  email: a@b.com\n"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -609,6 +666,8 @@ class TestAppTypeValidation:
             f"app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: {app_type}\n  arch: [aarch64]\n"
             "maintainer:\n  name: flange\n  email: a@b.com\n"
         )
+        if app_type == "service":
+            yaml_content += "systemd:\n  unit: foo.service\n"
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, yaml_content))
         assert spec.app.type == app_type
@@ -628,7 +687,7 @@ class TestAppArchValidation:
             "maintainer:\n  name: flange\n  email: a@b.com\n"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(AppSpecError, match="app.arch 不能为空"):
+            with pytest.raises(AppSpecError, match="app.arch"):
                 load_spec(_write_yaml(tmpdir, yaml_content))
 
     def test_missing_arch_defaults_to_empty_and_raises(self):
@@ -638,7 +697,7 @@ class TestAppArchValidation:
             "maintainer:\n  name: flange\n  email: a@b.com\n"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(AppSpecError, match="app.arch 不能为空"):
+            with pytest.raises(AppSpecError, match="app.arch"):
                 load_spec(_write_yaml(tmpdir, yaml_content))
 
 
@@ -656,6 +715,8 @@ class TestBuildSystemValues:
             "maintainer:\n  name: flange\n  email: a@b.com\n"
             f"build:\n  system: {system}\n"
         )
+        if system == "custom":
+            yaml_content += "  commands: [[make]]\n"
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, yaml_content))
         assert spec.build.system == system
@@ -675,7 +736,7 @@ class TestBuildSystemValues:
         yaml_content = (
             "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n  arch: [aarch64]\n"
             "maintainer:\n  name: flange\n  email: a@b.com\n"
-            "build:\n  outputs: [bin/foo]\n"
+            "build: {}\n"
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             spec = load_spec(_write_yaml(tmpdir, yaml_content))

@@ -1,11 +1,13 @@
 # amp-partition-flash Specification
 
 ## Purpose
-TBD - created by archiving change add-amp-firmware-support. Update Purpose after archive.
+
+定义 amp.img 从镜像装配到刷写的落地契约：amp 分区在分区表中怎么声明、配置怎么校验自洽、以及不同存储能力下 image 与 flash 两侧如何处理它。
+
 ## Requirements
 ### Requirement: 刷写映射识别 amp 分区
 
-`builder/flash.py` 的 `RockchipFlashStrategy.partition_image_map` SHALL 新增 `"amp": "amp/amp.img"`（并以 `amp.enabled` 作为 gate，仿 recovery），使 `FlashConfigGenerator` 生成的 `flash-config.json` 含 amp 分区。`flange flash`（全量）SHALL 写入 amp.img，`flange flash amp`（单刷）SHALL 仅写 amp 分区，`flange flash --list` SHALL 列出 amp。
+`builder/flash/plan.py` 的 `RockchipFlashPlan.partition_image_map` SHALL 新增 `"amp": "amp/amp.img"`（并以 `amp.enabled` 作为 gate，仿 recovery），使 `FlashConfigGenerator` 生成的 `flash-config.json` 含 amp 分区。`flange flash`（全量）SHALL 写入 amp.img，`flange flash amp`（单刷）SHALL 仅写 amp 分区，`flange flash --list` SHALL 列出 amp。
 
 #### Scenario: flash-config.json 含 amp
 

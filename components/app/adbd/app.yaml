@@ -11,10 +11,6 @@ maintainer:
   name: flange
   email: flange@localhost
 
-capabilities:
-  - usb-gadget
-  - adb-debug
-
 install:
   conf/usbdevice.conf: /etc/usbdevice.conf
   scripts/usbdevice: /usr/sbin/usbdevice

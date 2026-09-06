@@ -8,7 +8,10 @@ sources:
   - builder/platforms/allwinnera733/kernel.py
   - builder/platforms/amlogic/kernel.py
   - builder/base.py
+  - builder/filesystem.py
+  - builder/source.py
   - ProjectSpec.md#63-框架与策略分离
+  - docs/development-guide.md
 related:
   - "[[ComponentBuilder 基类]]"
   - "[[rockchip 平台]]"
@@ -17,12 +20,13 @@ related:
   - "[[Docker 执行封装]]"
   - "[[内容哈希与增量构建]]"
   - "[[out-of-tree 模块]]"
-updated: 2026-06-25
+updated: 2026-09-05
 ---
 
 ## TL;DR
 
-跨平台内核构建：获取源码 → 应用补丁 → defconfig + make → 收集 Image/DTB/modules。平台子类实现策略；`ComponentBuilder.build`（L29）编排生命周期。
+跨平台内核构建：获取源码 → 应用补丁 → defconfig + make → 收集 Image/DTB/modules。平台子类实现策略；`ComponentBuilder.build` 编排生命周期。编译使用目标独立源码工作树，
+产物由引擎清单验证后发布；背景见[源码管理](../subsystems/源码管理-SourceManager.md)。
 
 ## 关键设计要点
 
@@ -44,4 +48,6 @@ updated: 2026-06-25
 ## 易踩坑
 
 - DTB 目标用 `<dts_dir>/<dts>.dtb` 子目录相对路径（非 arch/.../dts/ 完整路径）；kbuild 按此展开（注释于 `rockchip/kernel.py:19`）
-- macOS 大小写不敏感 FS：`git checkout -f` 对大小写冲突文件非零退出但已完成；基类 `check=False` 忽略
+- 内核源码与实际工作树必须位于大小写敏感文件系统；源码准备前不满足条件就失败。
+  macOS 使用 APFS Case-sensitive 输出卷或 Linux ext4，不能忽略 checkout 错误或自动禁用冲突驱动。
+  具体设置见[开发指南](../../docs/development-guide.md)。

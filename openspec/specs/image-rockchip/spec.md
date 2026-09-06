@@ -1,7 +1,9 @@
 # image-rockchip Specification
 
 ## Purpose
-TBD - created by archiving change 2026-03-29-phase6-image-flash. Update Purpose after archive.
+
+定义 Rockchip 平台镜像侧的落地契约：boot 分区构建、镜像装配、parameter.txt 分区定义、产物收集，以及生成的分区表与 DTS 启动参数之间的交叉校验。
+
 ## Requirements
 ### Requirement: Rockchip 平台 boot 分区构建脚本
 
@@ -64,12 +66,22 @@ SHALL 创建磁盘 `raw.img` 并写入 GPT/bootloader/boot/rootfs；`storage.typ
 - **WHEN** 查看 parameter.txt 的 TYPE 字段
 - **THEN** 值为 `GPT`
 
-### Requirement: Rockchip 镜像 BUILD.bazel 实例化
-`image/rockchip/BUILD.bazel` SHALL 实例化 `boot_partition` 和 `image_build` rule，通过 `select()` 按板级配置传入参数。
+### Requirement: Rockchip 镜像装配由平台工厂实例化
 
-#### Scenario: radxa-zero3w 构建参数
-- **WHEN** 使用 `--config=radxa-zero3w` 构建
-- **THEN** boot_partition 使用 `//kernel/rockchip` 的产物、board.bzl 中的 boot 配置；image_build 聚合 boot + bootloader + rootfs 产物
+`builder/platforms/rockchip/__init__.py` 的 `create_builder` SHALL 按组件名
+返回对应的 Rockchip 构建器；镜像装配 SHALL 由 `RockchipImageBuilder` 承担，
+它继承公共的 `GptImageBuilder`，只覆写平台声明位（见 `image-build-rule`）。
+
+平台选择由配置的 `platform` 字段驱动，不需要在框架层维护条件分支。
+
+#### Scenario: 按组件名返回构建器
+- **WHEN** engine 为 rockchip 平台请求 `image` 组件的构建器
+- **THEN** 返回 `RockchipImageBuilder` 实例
+
+#### Scenario: 装配聚合上游产物
+- **WHEN** 构建 rockchip 的 image 组件
+- **THEN** 从当前 target 目录读取 bootloader、boot、rootfs（以及启用时的
+  recovery）产物，按分区表装配进 raw.img
 
 ### Requirement: Rockchip 镜像产物收集
 

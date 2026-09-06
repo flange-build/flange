@@ -1,14 +1,12 @@
 """Amlogic Bootloader 构建策略。
 
 mainline u-boot 编译产出 ``u-boot.bin``，再通过 LibreELEC/amlogic-boot-fip
-仓库的 ``build-fip.sh <board_dir> <u-boot.bin> <out>`` 拼装 FIP（含 BL2
-SIG / BL30+BL301 加密 / BL31 加密 / BL33 加密 / DDR fw 嵌入），最后用
-仓库内 ``aml_encrypt_g12a --bootsd`` 派生 SD/eMMC 可启动镜像
-``u-boot.bin.sd.bin``，并通过 ``--bootusb`` 派生 USB BL2/TPL（pyamlboot
-推送 MaskROM 用）。
+仓库的 ``build-fip.sh <board_dir> <u-boot.bin> <out>`` 拼装 FIP（Firmware
+Image Package，固件镜像包）。board Makefile 会调用对应 family 的
+``aml_encrypt_* --bootmk``，一次生成 FIP、SD/eMMC 与 USB BL2/TPL 四件产物。
 
 字段分层：
-- SoC 层 ``bootloader.fip_tool`` —— FIP 工具名
+- SoC 层 ``bootloader.fip_tool`` —— board Makefile 应选择的 family 工具名
 - Board 层 ``bootloader.fip_board_dir`` —— amlogic-boot-fip 仓库内 board 子目录名
 """
 
@@ -19,7 +17,6 @@ from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.config.canonical import bootloader_arch
 from builder.kconfig import defconfig_targets, render_kconfig
-from builder.paths import COMPONENTS_ROOT
 
 
 class AmlogicBootloaderBuilder(ComponentBuilder):
@@ -41,14 +38,10 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         """
         self.ARCH = bootloader_arch(config)
         self._stage_fragments(src_dir, config)
-        targets = defconfig_targets(
-            config["bootloader"]["defconfig"], "bootloader.defconfig"
-        )
+        targets = defconfig_targets(config["bootloader"]["defconfig"], "bootloader.defconfig")
         for dc in targets:
             self.make(src_dir, [dc], arch=self.ARCH, cross=self.CROSS)
-        overrides = render_kconfig(
-            config["bootloader"].get("config"), "bootloader.config"
-        )
+        overrides = render_kconfig(config["bootloader"].get("config"), "bootloader.config")
         if overrides:
             payload = "".join(line + "\n" for line in overrides)
             self.docker.run(
@@ -67,17 +60,15 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         缺失视为致命错误（fail-fast，避免 make 阶段以"target 不存在"形式
         报错而难定位）。
         """
-        defconfig = defconfig_targets(
-            config["bootloader"]["defconfig"], "bootloader.defconfig"
-        )
+        defconfig = defconfig_targets(config["bootloader"]["defconfig"], "bootloader.defconfig")
         platform = config["platform"]
         soc = config["soc"]
         board = config["board"]
         # 用 paths.py 暴露的绝对锚点，避免依赖调用时 cwd（ProjectSpec §9）。
         search_dirs = [
-            COMPONENTS_ROOT / "board" / board / "patches" / "bootloader",
-            COMPONENTS_ROOT / "platform" / platform / soc / "patches" / "bootloader",
-            COMPONENTS_ROOT / "platform" / platform / "patches" / "bootloader",
+            self.components_root / "board" / board / "patches" / "bootloader",
+            self.components_root / "platform" / platform / soc / "patches" / "bootloader",
+            self.components_root / "platform" / platform / "patches" / "bootloader",
         ]
         configs_dir = src_dir / "configs"
         configs_dir.mkdir(parents=True, exist_ok=True)
@@ -87,8 +78,7 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
             src = self._find_fragment(name, search_dirs)
             if src is None:
                 searched = ", ".join(str(d) for d in search_dirs)
-                raise FileNotFoundError(
-                    f"defconfig fragment 未找到: {name}（已搜索 {searched}）")
+                raise FileNotFoundError(f"defconfig fragment 未找到: {name}（已搜索 {searched}）")
             shutil.copy2(src, configs_dir / name)
             self._status(f"defconfig fragment 就位: {name}")
 
@@ -101,27 +91,24 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         return None
 
     def compile(self, src_dir: Path, config: dict):
-        """编译 u-boot → build-fip.sh 拼装 → aml_encrypt_g12a 派生。
+        """编译 u-boot，再由 build-fip.sh 生成全部启动产物。
 
-        三段式：
+        两段式：
           1. ``make`` 出 ``u-boot.bin``（mainline u-boot 标准产物）
           2. ``build-fip.sh <board_dir> <u-boot.bin> <out>`` 把 vendor blob
-             与 u-boot proper 拼成 FIP 镜像（``<out>/u-boot.bin``）
-          3. ``aml_encrypt_g12a --bootsd`` 派生 SD/eMMC 启动镜像；
-             ``--bootusb`` 派生 USB BL2/TPL（pyamlboot 推送）
+             与 u-boot proper 拼成 FIP，并由 board Makefile 的
+             ``aml_encrypt_* --bootmk`` 同时生成 SD/eMMC 与 USB 镜像
 
         所有产物落在 ``<src_dir>/fip/<board_dir>/`` 下，collect 阶段引用
-        其中三个具名文件。
+        四个具名文件。
         """
         jobs = config.get("jobs", 0)
-        self.make(src_dir, [], arch=self.ARCH, cross=self.CROSS, jobs=jobs,
-                  label="编译 U-Boot...")
+        self.make(src_dir, [], arch=self.ARCH, cross=self.CROSS, jobs=jobs, label="编译 U-Boot...")
 
         # 通过 canonical source 引用复用 FIP 仓库 checkout。
         fip_src = self.source.ensure_extra(
-            "amlogic-boot-fip",
-            {"source": {"name": "amlogic-boot-fip"}},
-            config=config)
+            "amlogic-boot-fip", {"source": {"name": "amlogic-boot-fip"}}, config=config
+        )
         bl_cfg = config["bootloader"]
         board_dir = bl_cfg.get("fip_board_dir")
         if not board_dir:
@@ -130,8 +117,6 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
                 "该字段是 LibreELEC/amlogic-boot-fip 仓库内 board 子目录名"
                 "（如 'khadas-vim3l'），由 board config 声明（不在 SoC 层）。"
             )
-        fip_tool = bl_cfg.get("fip_tool", "aml_encrypt_g12a")
-
         out_dir = src_dir / "fip" / board_dir
         out_dir.mkdir(parents=True, exist_ok=True)
         u_boot_bin = src_dir / "u-boot.bin"
@@ -139,35 +124,12 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         # build-fip.sh 是仓库顶层入口脚本，参数序列：board / u-boot.bin / out
         self._status("FIP 拼装...")
         self.docker.run(
-            ["bash", str(fip_src / "build-fip.sh"),
-             board_dir, str(u_boot_bin), str(out_dir)],
+            ["bash", str(fip_src / "build-fip.sh"), board_dir, str(u_boot_bin), str(out_dir)],
             cwd=str(fip_src),
             label="build-fip.sh ...",
         )
 
-        # aml_encrypt_g12a 二进制位于 board 子目录内（每个 board 各自一份）
-        encrypt_tool = fip_src / board_dir / fip_tool
         fip_image = out_dir / "u-boot.bin"
-
-        # SD/eMMC 启动镜像：boot0 hw 分区写入 offset 0x200
-        self._status("派生 SD-bootable 镜像...")
-        self.docker.run(
-            [str(encrypt_tool), "--bootsd",
-             "--infile", str(fip_image),
-             "--output", str(fip_image) + ".sd.bin"],
-            label="aml_encrypt_g12a --bootsd",
-        )
-
-        # USB BL2/TPL：pyamlboot 推 MaskROM 用，--bootusb 一次产出两个文件
-        # （u-boot.bin.usb.bl2 / u-boot.bin.usb.tpl），输出名以 --output 为
-        # 前缀
-        self._status("派生 USB BL2/TPL...")
-        self.docker.run(
-            [str(encrypt_tool), "--bootusb",
-             "--infile", str(fip_image),
-             "--output", str(fip_image) + ".usb"],
-            label="aml_encrypt_g12a --bootusb",
-        )
 
         self._fip_image = fip_image
 
@@ -176,14 +138,17 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
 
         ARTIFACT_NAMES 映射（详见 builder/platforms/amlogic/__init__.py）：
           - (bootloader, fip)     → u-boot.bin       （裸 FIP，pyamlboot 推送用）
-          - (bootloader, sd)      → u-boot.bin.sd.bin（SD/eMMC dd 格式，fastboot flash bootloader → mmc1 hw boot0）
-          - (bootloader, usb_bl2) → u-boot.bin.usb.bl2（备用：旧式两段 USB 上传 BL2 stub）
-          - (bootloader, usb_tpl) → u-boot.bin.usb.tpl（备用：旧式两段 USB 上传 TPL）
+          - (bootloader, sd)      → u-boot.bin.sd.bin
+            （SD/eMMC dd 格式，fastboot 写入板级配置指定的 eMMC boot0）
+          - (bootloader, usb_bl2) → u-boot.bin.usb.bl2
+            （备用：旧式两段 USB 上传 BL2 stub）
+          - (bootloader, usb_tpl) → u-boot.bin.usb.tpl
+            （备用：旧式两段 USB 上传 TPL）
         """
         fip_image = self._fip_image
         return {
-            "fip":     fip_image,                          # build-fip.sh 直接产出
-            "sd":      Path(str(fip_image) + ".sd.bin"),
+            "fip": fip_image,  # build-fip.sh 直接产出
+            "sd": Path(str(fip_image) + ".sd.bin"),
             "usb_bl2": Path(str(fip_image) + ".usb.bl2"),
             "usb_tpl": Path(str(fip_image) + ".usb.tpl"),
         }

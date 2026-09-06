@@ -11,7 +11,7 @@
   products: ['default'],
   variants: ['debug', 'release'],
   // host 端 flash 主流程通过 fastboot；pre_flash 阶段调 pyamlboot 把 u-boot
-  // 推到 SoC DDR（详见 builder/flash.py:AmlogicFlashStrategy）。
+  // 推到 SoC DDR（详见 builder/flash/strategy.py:AmlogicFlashStrategy）。
   flash_tool: 'fastboot',
   rootfs+: {
     // 与 Rockchip / Allwinner 同样：normal 系统也安装 recoveryctl，便于

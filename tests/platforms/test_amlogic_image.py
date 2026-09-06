@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.builder.context import component_context
+
 from builder.platforms.amlogic.image import AmlogicImageBuilder
 
 
@@ -36,6 +38,7 @@ def _config():
         "platform": "amlogic",
         "soc": "s905d3",
         "board": "test-vim3l",
+        "recovery": {"enabled": True},
         "partitions": {
             "entries": [
                 {"name": "boot",     "offset": "0x40",     "size": "0x20000",  "type": "ext4"},
@@ -87,6 +90,7 @@ def test_compile_writes_gpt_and_dd_each_partition(tmp_path):
     docker = FakeDocker()
     builder = AmlogicImageBuilder(docker=docker, source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config())
 
     # 第 1 个 docker 命令是 truncate 创建空镜像
@@ -104,8 +108,8 @@ def test_compile_writes_gpt_and_dd_each_partition(tmp_path):
     assert len(dd_calls) == 3
 
 
-def test_compile_skips_recovery_when_missing(tmp_path):
-    """recovery 镜像不存在时跳过 dd 而非报错。"""
+def test_compile_rejects_missing_enabled_recovery(tmp_path):
+    """显式启用的 recovery 产物缺失必须失败，不能装配不完整镜像。"""
     target_dir = tmp_path / "target"
     target_dir.mkdir()
     _prepare_target(target_dir, with_recovery=False)
@@ -113,11 +117,10 @@ def test_compile_skips_recovery_when_missing(tmp_path):
     docker = FakeDocker()
     builder = AmlogicImageBuilder(docker=docker, source=None)
     builder.cache = FakeCache(target_dir)
-    builder.compile(None, _config())
-
-    dd_calls = [c for c in docker.commands if c[0] == "dd"]
-    # 只 dd boot 与 rootfs 两个分区
-    assert len(dd_calls) == 2
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
+    from builder.docker import BuildError
+    with pytest.raises(BuildError, match="recovery.*产物缺失"):
+        builder.compile(None, _config())
 
 
 def test_no_dd_targets_outside_user_area(tmp_path):
@@ -130,6 +133,7 @@ def test_no_dd_targets_outside_user_area(tmp_path):
     docker = FakeDocker()
     builder = AmlogicImageBuilder(docker=docker, source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config())
 
     dd_calls = [c for c in docker.commands if c[0] == "dd"]
@@ -151,6 +155,7 @@ def test_collect_returns_image_key(tmp_path):
 
     builder = AmlogicImageBuilder(docker=FakeDocker(), source=None)
     builder.cache = FakeCache(target_dir)
+    builder.context = component_context(tmp_path, _config(), target_dir=target_dir)
     builder.compile(None, _config())
 
     out = builder.collect(None, _config())

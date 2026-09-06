@@ -1,7 +1,9 @@
 # rockchip-arm32-spinand-ubi Specification
 
 ## Purpose
-TBD - created by archiving change add-rk3506b-atk-rk3506b. Update Purpose after archive.
+
+定义 Rockchip ARM32 + SPI NAND + UBI 这条路由的契约：架构与交叉编译器由配置决定、vendor FIT boot、armhf rootfs 打包为 UBI、systemd 所需的最小 API 文件系统，以及产物缓存必须按构建路由校验。
+
 ## Requirements
 ### Requirement: Rockchip 组件架构与交叉编译器由配置决定
 

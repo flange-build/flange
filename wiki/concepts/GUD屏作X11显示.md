@@ -4,11 +4,17 @@ type: concept
 status: stable
 sources:
   - docs/proposal/use_gud_as_x_display.md
+  - docs/development-guide.md
+  - docs/extension-guide.md
 related:
   - "[[rp-pro-rk3568-h]]"
   - "[[rockchip 平台]]"
-updated: 2026-06-19
+updated: 2026-09-05
 ---
+
+> 阅读前提：先确认[板卡配置与硬件范围](../boards/index.md)，再阅读本专题。
+> 下文接线、内核/固件行为和测试结果只覆盖注明的设备、版本与产品；历史排障记录不代表全部目标已验收。
+> 当前构建入口见[开发指南](../../docs/development-guide.md)，新增驱动/配置见[扩展指南](../../docs/extension-guide.md)。
 
 ## TL;DR
 

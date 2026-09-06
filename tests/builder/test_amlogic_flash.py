@@ -34,6 +34,17 @@ from builder.flash import (
 )
 
 
+@pytest.fixture
+def ready_strategy():
+    strategy = AmlogicFlashStrategy()
+    with patch("builder.flash.strategy.subprocess.run", side_effect=[
+        subprocess.CompletedProcess([], 0, "board-serial\tfastboot\n", ""),
+        subprocess.CompletedProcess([], 0, "", "version: 0.4\n"),
+    ]):
+        strategy._wait_fastboot_ready(Path("/fastboot"))
+    return strategy
+
+
 # ---------------------------------------------------------------------------
 # 注册表
 # ---------------------------------------------------------------------------
@@ -128,9 +139,11 @@ class TestPreFlash:
 
             cfg = self._make_config()
             with patch("shutil.which", return_value="/usr/local/bin/boot-g12.py"), \
-                 patch("builder.flash.subprocess.run") as mock_run, \
-                 patch("builder.flash.time.sleep"):
+                 patch("builder.flash.strategy.subprocess.run") as mock_run, \
+                 patch.object(s, "_wait_maskrom_device"), \
+                 patch.object(s, "_wait_fastboot_ready") as ready:
                 s.pre_flash(Path("/usr/bin/fastboot"), target_dir, cfg)
+            ready.assert_called_once_with(Path("/usr/bin/fastboot"))
 
             # 至少有一次调用是 boot-g12.py 推 u-boot
             calls = mock_run.call_args_list
@@ -144,6 +157,25 @@ class TestPreFlash:
             assert "sudo" in cmd
             assert "/usr/local/bin/boot-g12.py" in cmd
             assert str(boot_img) in cmd
+
+    def test_macos_resolves_shim_before_launch(self, tmp_path):
+        s = AmlogicFlashStrategy()
+        boot = tmp_path / "bootloader/u-boot.bin.sd.bin"
+        boot.parent.mkdir()
+        boot.write_bytes(b"boot")
+        with patch("builder.flash.strategy.sys.platform", "darwin"), \
+             patch("shutil.which", return_value="/pyenv/shims/boot-g12.py"), \
+             patch.object(s, "_resolve_pyamlboot_entry", return_value="/python/bin/boot-g12.py") as resolve, \
+             patch.object(s, "_darwin_dyld_lib_path", return_value="/opt/homebrew/lib"), \
+             patch.object(s, "_wait_maskrom_device"), \
+             patch.object(s, "_wait_fastboot_ready"), \
+             patch("builder.flash.strategy.subprocess.run") as run:
+            s.pre_flash(Path("/bin/fastboot"), tmp_path, self._make_config())
+        resolve.assert_called_once_with("/pyenv/shims/boot-g12.py")
+        run.assert_called_once_with([
+            "sudo", "env", "DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib",
+            "/python/bin/boot-g12.py", str(boot),
+        ], check=True)
 
     def test_pre_flash_missing_boot_image_raises(self):
         s = AmlogicFlashStrategy()
@@ -168,18 +200,18 @@ class TestPreFlash:
 
     def test_pre_flash_skips_pyamlboot_when_already_fastboot(self):
         """如果 detect_device 已识别为 fastboot 模式（u-boot 在 DDR 跑着），
-        pre_flash 应直接返回，跳过 pyamlboot 推送 ——避免要求用户接串口
-        手动 ``fastboot usb 0``，也省一次 sudo 提示与 3s 推送等待。"""
+        pre_flash 跳过 pyamlboot 推送，但必须确认 fastboot 通信就绪。"""
         s = AmlogicFlashStrategy()
         cfg = self._make_config()
         fb_device = DeviceInfo(
             platform="amlogic", mode="fastboot",
             description="Amlogic fastboot 设备",
         )
-        # 关键断言：subprocess.run 与 which 都不应被调用（没下载、没 sudo）
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run, \
+             patch.object(s, "_wait_fastboot_ready") as ready:
             s.pre_flash(Path("/fastboot"), Path("/target"), cfg, device=fb_device)
             mock_run.assert_not_called()
+            ready.assert_called_once_with(Path("/fastboot"))
 
     def test_pre_flash_missing_download_boot_field_raises(self):
         s = AmlogicFlashStrategy()
@@ -195,49 +227,49 @@ class TestPreFlash:
 # ---------------------------------------------------------------------------
 
 class TestWritePartition:
-    def test_bootloader_writes_via_fastboot_flash(self):
-        s = AmlogicFlashStrategy()
+    def test_bootloader_writes_via_fastboot_flash(self, ready_strategy):
+        s = ready_strategy
         img = Path("/target/bootloader/u-boot.bin.sd.bin")
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             # bypass image.stat() OSError handling
             with patch.object(Path, "stat", side_effect=OSError):
                 s.write_partition(Path("/usr/bin/fastboot"), 0x200, img)
             mock_run.assert_called_once_with(
-                ["/usr/bin/fastboot", "flash", "bootloader",
+                ["/usr/bin/fastboot", "-s", "board-serial", "flash", "bootloader",
                  "/target/bootloader/u-boot.bin.sd.bin"],
-                check=True,
+                check=True, timeout=None,
             )
 
-    def test_boot_writes_via_fastboot_flash(self):
-        s = AmlogicFlashStrategy()
+    def test_boot_writes_via_fastboot_flash(self, ready_strategy):
+        s = ready_strategy
         img = Path("/target/boot/boot.img")
-        with patch("builder.flash.subprocess.run") as mock_run, \
+        with patch("builder.flash.strategy.subprocess.run") as mock_run, \
              patch.object(Path, "stat", side_effect=OSError):
             s.write_partition(Path("/usr/bin/fastboot"), 0x40, img)
             mock_run.assert_called_once_with(
-                ["/usr/bin/fastboot", "flash", "boot",
+                ["/usr/bin/fastboot", "-s", "board-serial", "flash", "boot",
                  "/target/boot/boot.img"],
-                check=True,
+                check=True, timeout=None,
             )
 
-    def test_rootfs_writes_via_fastboot_flash(self):
-        s = AmlogicFlashStrategy()
+    def test_rootfs_writes_via_fastboot_flash(self, ready_strategy):
+        s = ready_strategy
         img = Path("/target/rootfs/rootfs.img")
-        with patch("builder.flash.subprocess.run") as mock_run, \
+        with patch("builder.flash.strategy.subprocess.run") as mock_run, \
              patch.object(Path, "stat", side_effect=OSError):
             s.write_partition(Path("/fastboot"), 0x120040, img)
             cmd = mock_run.call_args[0][0]
-            assert cmd == ["/fastboot", "flash", "rootfs",
+            assert cmd == ["/fastboot", "-s", "board-serial", "flash", "rootfs",
                            "/target/rootfs/rootfs.img"]
 
-    def test_recovery_writes_via_fastboot_flash(self):
-        s = AmlogicFlashStrategy()
+    def test_recovery_writes_via_fastboot_flash(self, ready_strategy):
+        s = ready_strategy
         img = Path("/target/recovery/recovery.img")
-        with patch("builder.flash.subprocess.run") as mock_run, \
+        with patch("builder.flash.strategy.subprocess.run") as mock_run, \
              patch.object(Path, "stat", side_effect=OSError):
             s.write_partition(Path("/fastboot"), 0x20040, img)
             cmd = mock_run.call_args[0][0]
-            assert cmd == ["/fastboot", "flash", "recovery",
+            assert cmd == ["/fastboot", "-s", "board-serial", "flash", "recovery",
                            "/target/recovery/recovery.img"]
 
 
@@ -246,13 +278,13 @@ class TestWritePartition:
 # ---------------------------------------------------------------------------
 
 class TestReboot:
-    def test_reboot_calls_fastboot_reboot(self):
-        s = AmlogicFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+    def test_reboot_calls_fastboot_reboot(self, ready_strategy):
+        s = ready_strategy
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             s.reboot(Path("/usr/bin/fastboot"))
             mock_run.assert_called_once_with(
-                ["/usr/bin/fastboot", "reboot"],
-                check=True,
+                ["/usr/bin/fastboot", "-s", "board-serial", "reboot"],
+                check=True, timeout=None,
             )
 
 
@@ -288,14 +320,14 @@ class TestPartitionImageMap:
 class TestDetectDevice:
     def test_no_device_returns_none(self):
         s = AmlogicFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="", stderr="")
             info = s.detect_device(Path("/fastboot"))
             assert info is None
 
     def test_fastboot_device_detected(self):
         s = AmlogicFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 stdout="1234567890\tfastboot\n",
                 stderr="",
@@ -307,7 +339,7 @@ class TestDetectDevice:
 
     def test_timeout_returns_none(self):
         s = AmlogicFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="", timeout=5)
             info = s.detect_device(Path("/fastboot"))
             assert info is None
@@ -318,7 +350,7 @@ class TestDetectDevice:
         在 wait_for_device 死循环。
         """
         s = AmlogicFlashStrategy()
-        with patch("builder.flash.subprocess.run") as mock_run:
+        with patch("builder.flash.strategy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout="Bus 003 Device 042: ID 1b8e:c003 Amlogic, Inc.\n",
@@ -348,7 +380,43 @@ class TestDetectDevice:
                 return MagicMock(returncode=0, stdout=ioreg_output, stderr="")
             # fastboot devices 兜底
             return MagicMock(returncode=0, stdout="", stderr="")
-        with patch("builder.flash.subprocess.run", side_effect=fake_run):
+        with patch("builder.flash.strategy.subprocess.run", side_effect=fake_run):
             info = s.detect_device(Path("/fastboot"))
             assert info is not None
             assert info.mode == "maskrom"
+
+
+class TestPyenvEntry:
+    def test_direct_entry_does_not_invoke_pyenv(self, tmp_path):
+        entry = tmp_path / "boot-g12.py"
+        with patch("builder.flash.strategy.subprocess.check_output") as command:
+            assert AmlogicFlashStrategy._resolve_pyamlboot_entry(str(entry)) == str(entry)
+        command.assert_not_called()
+
+    @pytest.mark.parametrize("invalid", [False, True])
+    def test_shim_resolves_selected_environment_or_fails(self, tmp_path, invalid):
+        root = tmp_path / "pyenv"
+        shim = root / "shims/boot-g12.py"
+        shim.parent.mkdir(parents=True)
+        shim.write_text("#!/bin/sh\n")
+        real = root / "versions/custom/bin/boot-g12.py"
+        real.parent.mkdir(parents=True)
+        real.write_text("#!/python\n")
+        real.chmod(0o755)
+        with patch("shutil.which", return_value="/bin/pyenv"), \
+             patch("builder.flash.strategy.subprocess.check_output",
+                   side_effect=[str(root), str(shim if invalid else real)]) as command:
+            if invalid:
+                with pytest.raises(FlashError, match="真实"):
+                    AmlogicFlashStrategy._resolve_pyamlboot_entry(str(shim))
+            else:
+                assert AmlogicFlashStrategy._resolve_pyamlboot_entry(str(shim)) == str(real)
+                assert command.call_args[0][0] == ["/bin/pyenv", "which", "boot-g12.py"]
+
+    def test_resolution_failure_is_actionable(self, tmp_path):
+        shim = tmp_path / "shims/boot-g12.py"
+        with patch("shutil.which", return_value="/bin/pyenv"), \
+             patch("builder.flash.strategy.subprocess.check_output",
+                   side_effect=subprocess.TimeoutExpired("pyenv", 5)), \
+             pytest.raises(FlashError, match="无法解析 pyenv"):
+            AmlogicFlashStrategy._resolve_pyamlboot_entry(str(shim))

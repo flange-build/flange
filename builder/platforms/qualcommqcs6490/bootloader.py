@@ -6,9 +6,7 @@ QualcommFlashStrategy 经 edl-ng 刷写。
 """
 
 import shutil
-import tempfile
 import zipfile
-from pathlib import Path
 
 from builder.base import ComponentBuilder
 
@@ -30,13 +28,14 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
         if not isinstance(firmware, dict):
             raise ValueError("bootloader.edk2_firmware 未配置")
 
-        self._work_dir = Path(tempfile.mkdtemp(prefix="flange-edk2-"))
+        self._work_dir = self.work_dir()
         extract_dir = self._work_dir / "edk2"
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         self._status("下载并校验 Radxa 预编 EDK2 SPI 固件（不编译）...")
         zip_path = self.source.ensure_prebuilt_image(
-            f"{config['board']}-edk2", firmware,
+            f"{config['board']}-edk2",
+            firmware,
         )
         with zipfile.ZipFile(zip_path) as archive:
             archive.extractall(extract_dir)
@@ -44,17 +43,20 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
         ufs_firehose = bl.get("ufs_firehose")
         ufs_provisions = bl.get("ufs_provisions") or {}
         if bool(ufs_firehose) != bool(ufs_provisions):
-            raise ValueError(
-                "bootloader.ufs_firehose/ufs_provisions 必须同时配置")
+            raise ValueError("bootloader.ufs_firehose/ufs_provisions 必须同时配置")
         self._ufs_assets = []
         if ufs_firehose:
-            self._ufs_assets.append(self.source.ensure_prebuilt_image(
-                f"{config['board']}-ufs-firehose", ufs_firehose))
+            self._ufs_assets.append(
+                self.source.ensure_prebuilt_image(f"{config['board']}-ufs-firehose", ufs_firehose)
+            )
         for profile, asset in ufs_provisions.items():
             if not isinstance(asset, dict) or not asset.get("url"):
                 continue
-            self._ufs_assets.append(self.source.ensure_prebuilt_image(
-                f"{config['board']}-ufs-provision-{profile}", asset))
+            self._ufs_assets.append(
+                self.source.ensure_prebuilt_image(
+                    f"{config['board']}-ufs-provision-{profile}", asset
+                )
+            )
 
     def collect(self, src_dir, config: dict) -> dict:
         # flat_build/spinor/<board>/ 下含 firehose loader + rawprogram*.xml + 固件 blob。
@@ -65,8 +67,7 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
         if matches:
             edk2_dir = matches[0].parent
         else:
-            self._status(f"警告：未在固件包中找到 {loader}，回退解压根目录")
-            edk2_dir = self._work_dir / "edk2"
+            raise FileNotFoundError(f"固件包缺少声明的 firehose loader: {loader}")
         for asset in self._ufs_assets:
             shutil.copy2(asset, edk2_dir / asset.name)
         return {"edk2": edk2_dir}

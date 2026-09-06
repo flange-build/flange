@@ -6,7 +6,8 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from builder.scaffold import AppScaffold, ScaffoldError
+from builder.app_spec import load_spec
+from builder.scaffold import AppScaffold, PackageScaffold, ScaffoldError
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +57,28 @@ class TestAppYaml:
             version="2.3.4",
             description="测试描述",
         )
-        content = (dest / "app.yaml").read_text()
-        assert "name: hello" in content
-        assert "version: 2.3.4" in content
-        assert "测试描述" in content
-        assert "type: exec" in content
-        assert "system: cmake" in content
+        spec = load_spec(dest)
+        assert spec.app.name == "hello"
+        assert spec.app.version == "2.3.4"
+        assert spec.app.description == "测试描述"
+        assert spec.app.type == "exec"
+        assert spec.build.system == "cmake"
+
+    def test_yaml_scalar_round_trip(self, tmp_path):
+        """版本和含 YAML 特殊字符的描述应保持字符串语义。"""
+        description = '包含: 冒号 # 标签与 "引号"'
+        dest = _create(
+            tmp_path,
+            "hello",
+            "exec",
+            "none",
+            version="1.0",
+            description=description,
+        )
+
+        spec = load_spec(dest)
+        assert spec.app.version == "1.0"
+        assert spec.app.description == description
 
     def test_app_yaml_no_template_tokens(self, tmp_path):
         """app.yaml 中不应存在未替换的 $ 占位符。"""
@@ -291,11 +308,11 @@ class TestAmpType:
         assert (dest / "include" / "swift_bridge.h").exists()
         assert (dest / "applications" / "main.c").exists()
 
-        app_yaml = (dest / "app.yaml").read_text()
-        assert "system: scons" in app_yaml
-        assert "swift:" in app_yaml
-        assert "enabled: true" in app_yaml
-        assert "product: AmpLogic" in app_yaml
+        spec = load_spec(dest)
+        assert spec.build.system == "scons"
+        assert spec.build.swift is not None
+        assert spec.build.swift.enabled is True
+        assert spec.build.swift.product == "AmpLogic"
 
     def test_embedded_swift_only_for_amp_scons(self, tmp_path):
         """embedded_swift 只能配合 amp+scons 使用。"""
@@ -343,11 +360,16 @@ class TestInvalidCombinations:
         with pytest.raises(ScaffoldError, match="name"):
             s.create("", "exec", "cmake", target_dir=tmp_path / "out")
 
-    def test_name_with_spaces(self, tmp_path):
-        """含空格的名称应抛出 ScaffoldError。"""
+    @pytest.mark.parametrize("name", ["my app", "_demo", "-demo", "demo\n"])
+    def test_invalid_name(self, tmp_path, name):
+        """脚手架不应生成身份非法、无法加载的 App。"""
         s = _make_scaffold(tmp_path)
         with pytest.raises(ScaffoldError, match="非法字符"):
-            s.create("my app", "exec", "cmake", target_dir=tmp_path / "out")
+            s.create(name, "exec", "cmake", target_dir=tmp_path / "out")
+
+    def test_invalid_version(self, tmp_path):
+        with pytest.raises(ScaffoldError, match="version"):
+            _create(tmp_path, "demo", "exec", "none", version="../1.0")
 
     def test_existing_directory_raises(self, tmp_path):
         """目标目录已存在时应抛出 ScaffoldError。"""
@@ -478,3 +500,36 @@ class TestAtomicCleanup:
             s.create("fail_app", "exec", "cmake", target_dir=target)
         # 目录应已被清理
         assert not target.exists()
+
+
+class TestPackageScaffold:
+    """Package 默认生成一个可复用 App 流水线的 vendor component。"""
+
+    def test_create_vendor_package(self, tmp_path):
+        description = '包含: 冒号 # 标签与 "引号"'
+        dest = PackageScaffold(tmp_path).create(
+            "demo-package",
+            parent_dir=tmp_path / "outside",
+            version="1.0",
+            description=description,
+        )
+
+        assert (dest / "package.py").is_file()
+        assert (dest / "app" / "app.yaml").is_file()
+        namespace = {}
+        exec((dest / "package.py").read_text(), namespace)
+        assert namespace["PACKAGE"]["components"] == [{
+            "type": "vendor",
+            "name": "demo-package",
+            "dir": "app",
+        }]
+        spec = load_spec(dest / "app")
+        assert spec.app.version == "1.0"
+        assert spec.app.description == description
+
+    def test_rejects_non_kebab_case_name(self, tmp_path):
+        with pytest.raises(ScaffoldError, match="kebab-case"):
+            PackageScaffold(tmp_path).create(
+                "Demo_Package",
+                parent_dir=tmp_path,
+            )

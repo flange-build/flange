@@ -1,7 +1,9 @@
 # usbdevice-gadget Specification
 
 ## Purpose
-TBD - created by archiving change add-app-adbd. Update Purpose after archive.
+
+定义平台无关的 USB gadget 管理契约：配置文件格式、PID 动态映射、gadget 生命周期、adb function 实现、hook 扩展机制，以及 systemd 服务与 udev 规则的挂接。
+
 ## Requirements
 ### Requirement: 平台无关的 USB gadget 管理
 

@@ -1,23 +1,23 @@
 ---
 title: 子系统索引
 type: index
-updated: 2026-04-26
+updated: 2026-09-05
 ---
 
 # 子系统索引
 
-`builder/` 下的实现模块，被组件构建器与策略类调用。
+先读[架构总览](../concepts/架构总览.md)。完整修改边界见[构建系统设计](../../docs/build-system-design.md)。
 
-- [[配置子系统]] — 三层继承 + condition-markers + apps 注册 + 校验
-- [[构建引擎 BuildEngine]] — 依赖图 + 调度 + cache 注入
-- [[ComponentBuilder 基类]] — 阶段生命周期框架
-- [[Docker 执行封装]] — 容器内执行命令
-- [[Docker 构建环境]] — 容器内预装的工具链 / multiarch / meson cross-file
-- [[源码管理 SourceManager]] — git / tarball 克隆与缓存
-- [[缓存系统]] — 哈希接口与阶段缓存
-- [[chroot 上下文]] — mount / umount 自动管理
-- [[deb 打包引擎]] — pure python tarfile + ar
-- [[输出系统 BuildOutput]] — L1/L2/L3 输出 + 颜色 + spinner
-- [[scaffold 生成器]] — App 骨架生成
-- [[路径锚点 paths]] — PROJECT_ROOT / COMPONENTS_ROOT / BUILD_ROOT
-- [[recovery-host-CLI]] — 宿主机 ADB 编排
+- [路径与工作区](路径锚点-paths.md)：工具根、项目根、输出根和 Target 的归属。
+- [配置子系统](配置子系统.md)：Jsonnet 求值、严格 schema、来源与语义校验。
+- [构建引擎 BuildEngine](构建引擎-BuildEngine.md)：TaskPlan 依赖调度与产物发布。
+- [ComponentBuilder 基类](ComponentBuilder-基类.md)：平台配方生命周期。
+- [源码管理 SourceManager](源码管理-SourceManager.md)：共享下载与目标独立工作树。
+- [缓存系统](缓存系统.md)：输入指纹、有效清单与重建解释。
+- [Docker 执行封装](Docker-执行封装.md)：容器执行与外部工作区挂载。
+- [Docker 构建环境](Docker-构建环境.md)：工具链、multiarch 和构建依赖。
+- [chroot 上下文](chroot-上下文.md)：挂载与清理。
+- [deb 打包引擎](deb-打包引擎.md)：安装树转 Debian 包。
+- [输出系统 BuildOutput](输出系统-BuildOutput.md)：分层终端输出与持久日志。
+- [scaffold 生成器](scaffold-生成器.md)：生成 App/Package 工程。
+- [Recovery 宿主 CLI](recovery-host-CLI.md)：ADB 维护编排。

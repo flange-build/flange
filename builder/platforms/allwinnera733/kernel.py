@@ -6,7 +6,6 @@
   3. device 仓库的 board.dts 复制到内核 DTS 目录
 """
 
-import os
 import shutil
 from pathlib import Path
 from builder.config.canonical import kernel_arch, kernel_device_tree
@@ -17,6 +16,7 @@ from builder.dtb_overlay import (
     overlay_make_targets,
     require_overlay_files,
 )
+from builder.source import component_local_path
 
 
 class AllwinnerA733KernelBuilder(KernelBuilder):
@@ -52,7 +52,9 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         repo_root = self._locate_aggregate_root(src_dir, config)
 
         # 源码重置（主仓库 + 子模块）
-        if not config.get("_local_mode", {}).get(self.component):
+        if component_local_path(config, self.component):
+            self._status("local_path 源码：跳过重置与补丁")
+        else:
             self._reset_aggregate_repo(repo_root)
             self._apply_upstream_patches(repo_root)
             # 平台/板级补丁（components/platform/<p>/patches/kernel/*.patch

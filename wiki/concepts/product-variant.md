@@ -3,33 +3,37 @@ title: product-variant
 type: concept
 status: stable
 sources:
-  - ProjectSpec.md#11-构建系统约定
+  - builder/workspace.py
   - builder/config/query.py
-related:
-  - "[[FINAL_CONFIG]]"
-  - "[[condition-markers]]"
-updated: 2026-04-26
+  - components/board/radxa-zero3w/config.jsonnet
+  - docs/development-guide.md
+updated: 2026-09-05
 ---
 
-## TL;DR
+# board、product 与 variant
 
-`lunch <board>-<product>-<variant>` 选择构建目标，持久化到 `.build/state.json`，后续 `flange build/flash` 命令均以此为准。
+Target（构建目标）是 `board + product + variant`：board 指硬件，product 指软件用途，
+variant 指调试/发布差异。例如 `radxa-zero3w-desktop-debug` 选择 Zero 3W 的桌面调试系统。
+每块板支持的维度来自其配置，不能假定所有板都提供同一 product。
 
-## 关键设计要点
+```bash
+flange target list radxa-zero3w
+flange target select radxa-zero3w-default-debug
+flange target show
+flange --target radxa-zero3w-desktop-release plan image
+```
 
-- **product**：对应同一硬件板的不同软件套件或使用场景，如 `default`、`smart-display`；在 board `config.jsonnet` 的 `products` 列表中声明
-- **variant**：通常为 `release` / `debug`；通过 Jsonnet `if std.extVar('variant')` 选择差异；在 `variants` 列表中声明
-- **目标格式 `<board>-<product>-<variant>`**：板名可含连字符（如 `radxa-zero3w`），`parse_target()` 用最长板名优先匹配策略解析
-- **有效目标枚举**：`get_valid_targets()` 遍历所有 board × product × variant 组合，供 `lunch` tab 补全
-- **产物路径隔离**：`.build/target/<board>/<product>/<variant>/` — 不同 product/variant 产物互不覆盖
+`lunch <完整目标>` 是 `flange target select <完整目标>` 的薄包装。
+当前选择保存到 `<workspace_root>/.flange/current_config`，只记录三个目标字段；后续命令重新求值配置。
+优先级为本次 `--target` → 当前工作区保存选择 → `flange.toml` 的 `[target]` 默认值。
 
-## 关键代码位置
+board 与 product 都可以包含连字符。所有入口使用
+[`builder/config/query.py`](../../builder/config/query.py) 的统一解析器，不应自己按 `-` 简单拆分。
+切换目标时选择完整名称，旧 `lunch --variant=...` 用法已不适用。
 
-- [`builder/config/query.py:parse_target`](../../builder/config/query.py) — 目标字符串解析，L49
-- [`builder/config/query.py:get_valid_targets`](../../builder/config/query.py) — 有效目标枚举，L26
+每个目标有独立的 `<build_root>/work/<target.key>/` 和
+`<build_root>/target/<board>/<product>/<variant>/`。同一工作区的终端共享保存选择；
+同时操作不同目标时，显式 `--target` 能避免互相切换。
 
-## 延伸阅读
-
-- [ProjectSpec §6.2](../../ProjectSpec.md#62-配置体系)
-- [[FINAL_CONFIG]]
-- [[condition-markers]]
+product/variant 条件在 Jsonnet 中求值，详见[配置组合](三层继承.md)与
+[最终配置](FINAL_CONFIG.md)；完整非交互用法见[开发指南](../../docs/development-guide.md)。

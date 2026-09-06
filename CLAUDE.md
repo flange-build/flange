@@ -51,7 +51,8 @@ flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建�
 source envsetup.sh            # 加载 flange / lunch 函数（每个新 shell 都要重新 source）
 lunch <board>                 # 选配置，例：lunch radxa-zero3w
                               # 完整格式 <board>-<product>-<variant>；省略时 product=default、variant=release
-lunch                         # 不带参数 → 交互式列出全部可选 target
+lunch                         # 不带参数 → 层级选择界面（平台→SoC→板→product→variant，
+                              # 末级显示该目标的配置表）；--no-tui 回退编号列表
 ```
 
 配置持久化到 `.flange/current_config`，后续 `source envsetup.sh` 会自动恢复，无需重复 lunch。
@@ -86,6 +87,7 @@ flange flash --raw /dev/sdX   # dd 整盘刷写
 | 命令 | 用途 |
 |------|------|
 | `flange clean` | 清理当前配置的构建产物 |
+| `flange why [component]` | 解释缓存决策：哪一段输入变了导致重建 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
 | `flange create app <name>` | 生成 App 工程脚手架 |
 | `flange list apps` | 列出全部可用 App |
@@ -98,7 +100,8 @@ flange flash --raw /dev/sdX   # dd 整盘刷写
 - **不要绕过 flange** 直接调用 `docker` / `make` / `dd`；构建一律走 `flange build`，刷写一律走 `flange flash`
 - **不要手编辑 `.build/`**（纯派生物，可随时 `rm -rf` 重建）；切换配置改用 `lunch`，不要手改 `.flange/current_config`
 - 改 config 后**无需** `flange clean`，增量系统会处理；仅当切换组件的 git `branch` 字段时需手动删 `.build/sources/<component>/<board>/`
-- `flange flash` 是对真实硬件的破坏性操作，执行前务必确认 `flange status` 显示的配置与所连目标设备一致
+- 觉得"不该重建却重建了"时先跑 `flange why`，它会指出是哪一段输入变化（上游 / 构建身份 / 配置切片 / 构建逻辑 / 组件自身），不要靠删缓存试错
+- `flange flash` 是对真实硬件的破坏性操作。所有写盘 / 写硬件的命令都以 `.flange/current_config` 为准（`flange build` 读的就是它），shell 变量只是显示投影；两者分叉时命令会告警并按文件走，刷写前还会打印目标与产物生成时间
 
 ## 知识库
 

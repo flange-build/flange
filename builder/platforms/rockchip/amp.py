@@ -29,7 +29,6 @@ import os
 import re
 import shlex
 import shutil
-import tempfile
 from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.config.canonical import kernel_arch, kernel_device_tree
@@ -40,8 +39,8 @@ from builder.app_spec import AppSpecError, SwiftBuildConfig, load_spec
 # 兜底默认）。cpu_base 不用 SDK 默认 0x2800000——会与 flange ~37MB 内核镜像
 # 冲突致固件保留失败；权威值见 rk3566/config.jsonnet 的 amp.memory 注释。
 _DEFAULT_MEMORY = {
-    "cpu": 3,                  # 从核 mpidr index（amp_linux.its 的 amp3）
-    "cpu_base": 0x07000000,    # 从核固件 link/load 地址（同时写进 .its 的 load）
+    "cpu": 3,  # 从核 mpidr index（amp_linux.its 的 amp3）
+    "cpu_base": 0x07000000,  # 从核固件 link/load 地址（同时写进 .its 的 load）
     "dram_size": 0x00800000,
     "sram_base": 0xFF000000,
     "sram_size": 0x00100000,
@@ -51,9 +50,6 @@ _DEFAULT_MEMORY = {
     "rpmsg_size": 0x00500000,
 }
 
-_HAL_ROOT = "components/amp/rockchip/hal"
-_RTT_ROOT = "components/amp/rockchip/rt-thread"
-_RTT_AMP_BASE_CONFIG = "components/platform/rockchip/amp/rt-thread.config"
 # 容器内官方裸机工具链（docker/Dockerfile 安装），供 rt-thread rtconfig.py 的
 # os.getenv("RTT_EXEC_PATH") 覆盖其写死的 prebuilts 路径。
 _RTT_EXEC_PATH = "/opt/arm-none-eabi-gcc10/bin"
@@ -87,8 +83,7 @@ class RockchipAmpBuilder(ComponentBuilder):
     def _soc_project(self, config: dict) -> str:
         soc = self._amp_cfg(config).get("soc_project")
         if not soc:
-            raise ValueError(
-                "amp.soc_project 未声明；应由 SoC 配置提供（如 rk3566 设为 'rk3568'）")
+            raise ValueError("amp.soc_project 未声明；应由 SoC 配置提供（如 rk3566 设为 'rk3568'）")
         return soc
 
     def _memory(self, config: dict) -> dict:
@@ -114,14 +109,14 @@ class RockchipAmpBuilder(ComponentBuilder):
         )
         missing = [field for field in required if runtime.get(field) is None]
         if missing:
-            raise ValueError(
-                "amp.runtime 缺少 SoC 通信字段: " + ", ".join(missing))
+            raise ValueError("amp.runtime 缺少 SoC 通信字段: " + ", ".join(missing))
         minimum_heap_size = runtime["minimum_heap_size"]
-        if (isinstance(minimum_heap_size, bool)
-                or not isinstance(minimum_heap_size, int)
-                or minimum_heap_size <= 0):
-            raise ValueError(
-                "amp.runtime.minimum_heap_size 必须是正整数 byte 数")
+        if (
+            isinstance(minimum_heap_size, bool)
+            or not isinstance(minimum_heap_size, int)
+            or minimum_heap_size <= 0
+        ):
+            raise ValueError("amp.runtime.minimum_heap_size 必须是正整数 byte 数")
         return runtime
 
     def _jobs(self) -> int:
@@ -146,48 +141,41 @@ class RockchipAmpBuilder(ComponentBuilder):
         if self.source is None:
             self._status("跳过 dts 交叉校验：kernel source manager 不可用")
             return
-        kernel_root = self.source.ensure("kernel", config)
+        kernel_root = self.source.source_path("kernel", config)
         arch = kernel_arch(config)
         dts_root = kernel_root / "arch" / arch / "boot" / "dts"
         dts_dir, dts = kernel_device_tree(config)
         target = dts_root / dts_dir / f"{dts}.dts"
         if not target.is_file():
-            self._status(
-                f"跳过 dts 交叉校验：目标 DTS 未就绪（{target}）")
+            self._status(f"跳过 dts 交叉校验：目标 DTS 未就绪（{target}）")
             return
         text = self._read_dts_closure(target, dts_root)
         regions = self._dts_regions(text)
-        self._require_region(
-            regions, "shmem", mem["shmem_base"], mem["shmem_size"])
-        self._require_contiguous_region(
-            regions, "rpmsg", mem["rpmsg_base"], mem["rpmsg_size"])
-        self._require_region(
-            regions, "sram", mem["sram_base"], mem["sram_size"])
+        self._require_region(regions, "shmem", mem["shmem_base"], mem["shmem_size"])
+        self._require_contiguous_region(regions, "rpmsg", mem["rpmsg_base"], mem["rpmsg_size"])
+        self._require_region(regions, "sram", mem["sram_base"], mem["sram_size"])
         if runtime.get("firmware_reserved_in_dts", True):
-            self._require_region(
-                regions, "firmware", mem["cpu_base"], mem["dram_size"])
+            self._require_region(regions, "firmware", mem["cpu_base"], mem["dram_size"])
 
         cpu_delete = runtime["cpu_delete"]
         if not re.search(rf"/delete-node/\s+{re.escape(cpu_delete)}\s*;", text):
-            raise ValueError(
-                f"dts 交叉校验失败：未从 Linux 删除 {cpu_delete}")
-        links = re.findall(
-            r"rockchip,link-id\s*=\s*<\s*(0x[0-9a-fA-F]+|\d+)", text)
+            raise ValueError(f"dts 交叉校验失败：未从 Linux 删除 {cpu_delete}")
+        links = re.findall(r"rockchip,link-id\s*=\s*<\s*(0x[0-9a-fA-F]+|\d+)", text)
         actual = int(links[-1], 0) if links else None
         if actual != runtime["link_id"]:
             raise ValueError(
                 f"dts 交叉校验失败：link-id={actual!r} != "
-                f"amp.runtime.link_id={runtime['link_id']:#x}")
+                f"amp.runtime.link_id={runtime['link_id']:#x}"
+            )
         mailbox_matches = re.findall(r"mboxes\s*=\s*<([^>]+)>", text, re.S)
-        mailboxes = re.findall(r"&([A-Za-z0-9_]+)",
-                               mailbox_matches[-1] if mailbox_matches else "")
+        mailboxes = re.findall(r"&([A-Za-z0-9_]+)", mailbox_matches[-1] if mailbox_matches else "")
         if mailboxes != list(runtime["mailboxes"]):
             raise ValueError(
                 f"dts 交叉校验失败：mailboxes={mailboxes} != "
-                f"amp.runtime.mailboxes={runtime['mailboxes']}")
+                f"amp.runtime.mailboxes={runtime['mailboxes']}"
+            )
         if not re.search(rf"\b{runtime['mailbox_irq']}\b", text):
-            raise ValueError(
-                f"dts 交叉校验失败：缺 mailbox IRQ {runtime['mailbox_irq']}")
+            raise ValueError(f"dts 交叉校验失败：缺 mailbox IRQ {runtime['mailbox_irq']}")
         self._status("dts 交叉校验通过（内存/CPU/link-id/mailbox 一致）")
 
     @classmethod
@@ -223,9 +211,7 @@ class RockchipAmpBuilder(ComponentBuilder):
         regions: dict[int, int] = {}
         for match in re.finditer(r"\breg\s*=\s*<([^>]+)>", text, re.S):
             values = [
-                int(token, 0)
-                for token in re.findall(r"0x[0-9a-fA-F]+|\b\d+\b",
-                                        match.group(1))
+                int(token, 0) for token in re.findall(r"0x[0-9a-fA-F]+|\b\d+\b", match.group(1))
             ]
             if len(values) == 2:
                 base, size = values
@@ -247,8 +233,8 @@ class RockchipAmpBuilder(ComponentBuilder):
         actual = regions.get(base)
         if actual != size:
             raise ValueError(
-                f"dts 交叉校验失败：{name} {base:#x}/{actual!r} != "
-                f"config {base:#x}/{size:#x}")
+                f"dts 交叉校验失败：{name} {base:#x}/{actual!r} != config {base:#x}/{size:#x}"
+            )
 
     @staticmethod
     def _require_contiguous_region(
@@ -262,12 +248,10 @@ class RockchipAmpBuilder(ComponentBuilder):
         while cursor < end:
             region_size = regions.get(cursor)
             if not region_size:
-                raise ValueError(
-                    f"dts 交叉校验失败：{name} 在 {cursor:#x} 存在空洞")
+                raise ValueError(f"dts 交叉校验失败：{name} 在 {cursor:#x} 存在空洞")
             cursor += region_size
         if cursor != end:
-            raise ValueError(
-                f"dts 交叉校验失败：{name} 末端 {cursor:#x} != {end:#x}")
+            raise ValueError(f"dts 交叉校验失败：{name} 末端 {cursor:#x} != {end:#x}")
 
     def _amp_app_dir(self, config: dict) -> Path:
         """解析 config.amp.app → amp app 工程目录。
@@ -284,48 +268,55 @@ class RockchipAmpBuilder(ComponentBuilder):
         if not app_name:
             raise ValueError(
                 "amp.app 未声明：amp 固件由一个 amp 类型 app 提供。在 board 的 amp "
-                "段设 \"app:amp\": \"<name>\"；新建用 "
-                "`flange create app --type amp --mode <hal|rt-thread> <name>`。")
+                '段设 "app:amp": "<name>"；新建用 '
+                "`flange create app --type amp --mode <hal|rt-thread> <name>`。"
+            )
         if self.source is None:
             # 仅保留给少量直接构造 builder 的单元测试；生产 Engine 始终注入
             # SourceManager。不要在这里重新实现 external app 查找规则。
-            app_dir = Path("components/app") / app_name
+            app_dir = self.components_root / "app" / app_name
         else:
-            app_dir = self.source.ensure_app(app_name, config)
+            from builder.app_resolver import AppResolver
+
+            app_dir = AppResolver(self.context, self.source, config).resolve(app_name)
 
         try:
             spec = load_spec(app_dir)
         except AppSpecError as exc:
-            raise ValueError(
-                f"amp app 描述文件无效（{app_dir}/app.yaml）：{exc}") from exc
+            raise ValueError(f"amp app 描述文件无效（{app_dir}/app.yaml）：{exc}") from exc
         if spec.app.name != app_name:
             raise ValueError(
                 f"amp.app 名称不一致：配置为 {app_name!r}，"
-                f"{app_dir}/app.yaml 声明为 {spec.app.name!r}")
+                f"{app_dir}/app.yaml 声明为 {spec.app.name!r}"
+            )
         if spec.app.type != "amp":
             raise ValueError(
-                f"amp.app '{app_name}' 的 app.type 必须是 amp，"
-                f"实际为 {spec.app.type!r}")
+                f"amp.app '{app_name}' 的 app.type 必须是 amp，实际为 {spec.app.type!r}"
+            )
 
         mode = self._mode(config)
         if mode == "hal":
             if spec.build.system != "cmake":
                 raise ValueError(
                     f"hal amp app '{app_name}' 的 build.system 必须是 cmake，"
-                    f"实际为 {spec.build.system!r}")
+                    f"实际为 {spec.build.system!r}"
+                )
             if not (app_dir / "CMakeLists.txt").is_file():
                 raise FileNotFoundError(
                     f"amp.app '{app_name}' 缺 CMakeLists.txt（{app_dir}）；hal amp "
-                    "app 须是引用 rockchip-hal.cmake 的 CMake 工程。")
+                    "app 须是引用 rockchip-hal.cmake 的 CMake 工程。"
+                )
         else:  # rt-thread
             if spec.build.system != "scons":
                 raise ValueError(
                     f"rt-thread amp app '{app_name}' 的 build.system 必须是 scons，"
-                    f"实际为 {spec.build.system!r}")
+                    f"实际为 {spec.build.system!r}"
+                )
             if not (app_dir / "applications").is_dir():
                 raise FileNotFoundError(
                     f"amp.app '{app_name}' 缺 applications/ 目录（{app_dir}）；"
-                    "rt-thread amp app 须是叠到 BSP 模板的 overlay。")
+                    "rt-thread amp app 须是叠到 BSP 模板的 overlay。"
+                )
         return app_dir
 
     def _compile_hal(self, config: dict) -> Path:
@@ -340,38 +331,54 @@ class RockchipAmpBuilder(ComponentBuilder):
         cpu = mem["cpu"]
         app_dir = self._amp_app_dir(config)
 
-        hal_cmake = os.path.abspath(f"{_HAL_ROOT}/rockchip-hal.cmake")
-        build_dir = Path(tempfile.mkdtemp(prefix="flange-amp-build-"))
+        hal_cmake = str(self.components_root / "amp/rockchip/hal/rockchip-hal.cmake")
+        build_dir = self.work_dir()
         self._status(
             f"AMP(cmake) 配置 {app_dir.name}（{soc.upper()}, cpu{cpu}, "
-            f"base={hex(mem['cpu_base'])}）...")
+            f"base={hex(mem['cpu_base'])}）..."
+        )
         self.docker.run(
-            ["cmake", "-S", str(app_dir), "-B", str(build_dir),
-             f"-DCMAKE_TOOLCHAIN_FILE={hal_cmake}",
-             f"-DROCKCHIP_AMP_SOC={soc.upper()}",
-             f"-DROCKCHIP_AMP_CPU={cpu}",
-             f"-DROCKCHIP_AMP_FIRMWARE_BASE={hex(mem['cpu_base'])}",
-             f"-DROCKCHIP_AMP_DRAM_SIZE={hex(mem['dram_size'])}",
-             f"-DROCKCHIP_AMP_SHMEM_BASE={hex(mem['shmem_base'])}",
-             f"-DROCKCHIP_AMP_SHMEM_SIZE={hex(mem['shmem_size'])}",
-             f"-DROCKCHIP_AMP_LINUX_RPMSG_BASE={hex(mem['rpmsg_base'])}",
-             f"-DROCKCHIP_AMP_LINUX_RPMSG_SIZE={hex(mem['rpmsg_size'])}"],
-            label="amp:cmake")
+            [
+                "cmake",
+                "-S",
+                str(app_dir),
+                "-B",
+                str(build_dir),
+                f"-DCMAKE_TOOLCHAIN_FILE={hal_cmake}",
+                f"-DROCKCHIP_AMP_SOC={soc.upper()}",
+                f"-DROCKCHIP_AMP_CPU={cpu}",
+                f"-DROCKCHIP_AMP_FIRMWARE_BASE={hex(mem['cpu_base'])}",
+                f"-DROCKCHIP_AMP_DRAM_SIZE={hex(mem['dram_size'])}",
+                f"-DROCKCHIP_AMP_SHMEM_BASE={hex(mem['shmem_base'])}",
+                f"-DROCKCHIP_AMP_SHMEM_SIZE={hex(mem['shmem_size'])}",
+                f"-DROCKCHIP_AMP_LINUX_RPMSG_BASE={hex(mem['rpmsg_base'])}",
+                f"-DROCKCHIP_AMP_LINUX_RPMSG_SIZE={hex(mem['rpmsg_size'])}",
+            ],
+            label="amp:cmake",
+        )
         self.docker.run(
             ["cmake", "--build", str(build_dir), f"-j{self._jobs()}"],
-            label=f"amp:build:{app_dir.name}")
+            label=f"amp:build:{app_dir.name}",
+        )
 
         firmware_bin = build_dir / "firmware.bin"
         if not firmware_bin.is_file():
             raise FileNotFoundError(
                 f"amp app 未产出 firmware.bin（{firmware_bin}）；确认 CMakeLists "
-                "的 executable target 名为 'firmware'（见 rockchip-hal.cmake 用法）。")
-        return self._mkimage_fit(
-            soc, firmware_bin, cpu, mem, runtime=self._runtime(config))
+                "的 executable target 名为 'firmware'（见 rockchip-hal.cmake 用法）。"
+            )
+        return self._mkimage_fit(soc, firmware_bin, cpu, mem, runtime=self._runtime(config))
 
-    def _mkimage_fit(self, soc: str, firmware_bin: Path, cpu: int,
-                     mem: dict, its_path=None, incbin_name=None,
-                     runtime=None) -> Path:
+    def _mkimage_fit(
+        self,
+        soc: str,
+        firmware_bin: Path,
+        cpu: int,
+        mem: dict,
+        its_path=None,
+        incbin_name=None,
+        runtime=None,
+    ) -> Path:
         """用 SDK 自带 mkimage 把从核固件 .bin 打成 FIT amp.img。
 
         amp_linux.its 的 load 改成 config.cpu_base（单一事实源），与固件链接地址
@@ -384,8 +391,11 @@ class RockchipAmpBuilder(ComponentBuilder):
         rtt<cpu>.bin。mkimage 为通用 U-Boot 工具，两 mode 复用 HAL SDK 内置的。
         """
         if its_path is None:
-            its_path = (Path(f"{_HAL_ROOT}/project/{soc}")
-                        / "Image" / "amp_linux.its")
+            its_path = (
+                (self.components_root / "amp/rockchip/hal/project" / soc)
+                / "Image"
+                / "amp_linux.its"
+            )
         if incbin_name is None:
             incbin_name = f"hal{cpu}.bin"
         if runtime is None:
@@ -393,29 +403,29 @@ class RockchipAmpBuilder(ComponentBuilder):
         firmware_size = firmware_bin.stat().st_size
         if firmware_size > mem["dram_size"]:
             raise BuildError(
-                f"AMP firmware {firmware_size} bytes 超过 dram_size "
-                f"{mem['dram_size']} bytes")
+                f"AMP firmware {firmware_size} bytes 超过 dram_size {mem['dram_size']} bytes"
+            )
         its_txt = Path(its_path).read_text()
-        its_txt = self._render_fit_its(
-            its_txt, cpu, mem, runtime, incbin_name)
-        work = Path(tempfile.mkdtemp(prefix="flange-amp-"))
+        its_txt = self._render_fit_its(its_txt, cpu, mem, runtime, incbin_name)
+        work = self.work_dir()
         (work / "amp_linux.its").write_text(its_txt)
         shutil.copy2(firmware_bin, work / incbin_name)
-        mkimage = os.path.abspath(f"{_HAL_ROOT}/tools/mkimage")
+        mkimage = os.path.abspath(str(self.components_root / "amp/rockchip/hal/tools/mkimage"))
         self._status(f"AMP 打包 amp.img（FIT, load={hex(mem['cpu_base'])}）...")
         self.docker.run(
             [mkimage, "-f", "amp_linux.its", "-E", "-p", "0xe00", "amp.img"],
-            cwd=str(work), extra_mounts=[work], label="amp:mkimage")
+            cwd=str(work),
+            extra_mounts=[work],
+            label="amp:mkimage",
+        )
         return work / "amp.img"
 
     @staticmethod
     def _fit_node_span(text: str, name: str) -> tuple[int, int]:
         """返回 ITS 中唯一具名 node 的 [start,end)；用 brace matching 定界。"""
-        matches = list(re.finditer(
-            rf"(?m)^\s*{re.escape(name)}\s*\{{", text))
+        matches = list(re.finditer(rf"(?m)^\s*{re.escape(name)}\s*\{{", text))
         if len(matches) != 1:
-            raise ValueError(
-                f"AMP ITS 期望唯一节点 {name!r}，实际 {len(matches)} 个")
+            raise ValueError(f"AMP ITS 期望唯一节点 {name!r}，实际 {len(matches)} 个")
         start = matches[0].start()
         brace = text.find("{", matches[0].start(), matches[0].end())
         depth = 0
@@ -440,8 +450,7 @@ class RockchipAmpBuilder(ComponentBuilder):
         insert_after: str | None = None,
     ) -> str:
         """只在给定 node 文本内替换属性；可在缺失时按锚点插入。"""
-        pattern = re.compile(
-            rf"(?m)^(?P<indent>\s*){re.escape(prop)}\s*=\s*[^;]+;")
+        pattern = re.compile(rf"(?m)^(?P<indent>\s*){re.escape(prop)}\s*=\s*[^;]+;")
         match = pattern.search(node)
         if match:
             return pattern.sub(
@@ -451,16 +460,12 @@ class RockchipAmpBuilder(ComponentBuilder):
             )
         if not insert_after:
             raise ValueError(f"AMP ITS 目标节点缺少属性 {prop}")
-        anchor = re.compile(
-            rf"(?m)^(?P<indent>\s*){re.escape(insert_after)}\s*=\s*[^;]+;")
+        anchor = re.compile(rf"(?m)^(?P<indent>\s*){re.escape(insert_after)}\s*=\s*[^;]+;")
         anchor_match = anchor.search(node)
         if not anchor_match:
-            raise ValueError(
-                f"AMP ITS 无法插入 {prop}：缺少锚点 {insert_after}")
-        insertion = (
-            anchor_match.group(0)
-            + f"\n{anchor_match.group('indent')}{prop} = {value};")
-        return node[:anchor_match.start()] + insertion + node[anchor_match.end():]
+            raise ValueError(f"AMP ITS 无法插入 {prop}：缺少锚点 {insert_after}")
+        insertion = anchor_match.group(0) + f"\n{anchor_match.group('indent')}{prop} = {value};"
+        return node[: anchor_match.start()] + insertion + node[anchor_match.end() :]
 
     @classmethod
     def _render_fit_its(
@@ -475,19 +480,18 @@ class RockchipAmpBuilder(ComponentBuilder):
         node_name = f"amp{cpu}"
         start, end = cls._fit_node_span(text, node_name)
         node = text[start:end]
+        node = cls._replace_fit_property(node, "data", f'/incbin/("{incbin_name}")')
+        node = cls._replace_fit_property(node, "load", f"<{mem['cpu_base']:#x}>")
         node = cls._replace_fit_property(
-            node, "data", f'/incbin/("{incbin_name}")')
-        node = cls._replace_fit_property(
-            node, "load", f"<{mem['cpu_base']:#x}>")
-        node = cls._replace_fit_property(
-            node, "size", f"<{mem['dram_size']:#x}>", insert_after="load")
+            node, "size", f"<{mem['dram_size']:#x}>", insert_after="load"
+        )
         if "srambase" in node or runtime.get("fit_requires_sram"):
             node = cls._replace_fit_property(
-                node, "srambase", f"<{mem['sram_base']:#x}>",
-                insert_after="size")
+                node, "srambase", f"<{mem['sram_base']:#x}>", insert_after="size"
+            )
             node = cls._replace_fit_property(
-                node, "sramsize", f"<{mem['sram_size']:#x}>",
-                insert_after="srambase")
+                node, "sramsize", f"<{mem['sram_size']:#x}>", insert_after="srambase"
+            )
         rendered = text[:start] + node + text[end:]
         cls._assert_fit_its(rendered, node_name, mem, runtime, incbin_name)
         return rendered
@@ -508,7 +512,9 @@ class RockchipAmpBuilder(ComponentBuilder):
         def int_property(node: str, prop: str) -> int | None:
             match = re.search(
                 rf"\b{re.escape(prop)}\s*=\s*<\s*"
-                rf"(0x[0-9a-fA-F]+|\d+)\s*>", node)
+                rf"(0x[0-9a-fA-F]+|\d+)\s*>",
+                node,
+            )
             return int(match.group(1), 0) if match else None
 
         checks = {
@@ -517,14 +523,11 @@ class RockchipAmpBuilder(ComponentBuilder):
             "size": (int_property(amp_node, "size"), mem["dram_size"]),
         }
         if runtime.get("fit_requires_sram"):
-            checks["srambase"] = (
-                int_property(amp_node, "srambase"), mem["sram_base"])
-            checks["sramsize"] = (
-                int_property(amp_node, "sramsize"), mem["sram_size"])
+            checks["srambase"] = (int_property(amp_node, "srambase"), mem["sram_base"])
+            checks["sramsize"] = (int_property(amp_node, "sramsize"), mem["sram_size"])
         for field, (actual, expected) in checks.items():
             if actual != expected:
-                raise ValueError(
-                    f"AMP ITS {node_name}.{field}={actual!r} != {expected:#x}")
+                raise ValueError(f"AMP ITS {node_name}.{field}={actual!r} != {expected:#x}")
         arch = re.search(r'\barch\s*=\s*"([^"]+)"', amp_node)
         if not arch or arch.group(1) != "arm":
             raise ValueError(f"AMP ITS {node_name}.arch 必须为 arm")
@@ -534,32 +537,24 @@ class RockchipAmpBuilder(ComponentBuilder):
         linux_start, linux_end = cls._fit_node_span(text, "linux")
         linux = text[linux_start:linux_end]
         linux_arch = re.search(r'\barch\s*=\s*"([^"]+)"', linux)
-        if (not linux_arch
-                or linux_arch.group(1) != runtime["linux_arch"]):
-            raise ValueError(
-                f"AMP ITS linux.arch 与 runtime {runtime['linux_arch']} 不一致")
+        if not linux_arch or linux_arch.group(1) != runtime["linux_arch"]:
+            raise ValueError(f"AMP ITS linux.arch 与 runtime {runtime['linux_arch']} 不一致")
         linux_cpu = int_property(linux, "cpu")
         if linux_cpu != runtime["linux_mpidr"]:
-            raise ValueError(
-                f"AMP ITS linux.cpu={linux_cpu!r} != "
-                f"{runtime['linux_mpidr']:#x}")
+            raise ValueError(f"AMP ITS linux.cpu={linux_cpu!r} != {runtime['linux_mpidr']:#x}")
         if runtime.get("linux_load") is not None:
             linux_load = int_property(linux, "load")
             if linux_load != runtime["linux_load"]:
-                raise ValueError(
-                    f"AMP ITS linux.load={linux_load!r} != "
-                    f"{runtime['linux_load']:#x}")
+                raise ValueError(f"AMP ITS linux.load={linux_load!r} != {runtime['linux_load']:#x}")
         loadables = re.search(r'\bloadables\s*=\s*"([^"]+)"', text)
         if not loadables or loadables.group(1) != node_name:
-            raise ValueError(
-                f"AMP ITS loadables 必须仅引用 {node_name}")
+            raise ValueError(f"AMP ITS loadables 必须仅引用 {node_name}")
 
     def _rtt_bsp_dir(self, soc: str) -> Path:
         """定位 RT-Thread BSP 模板目录：<soc>-32（32 位 Cortex-A profile）。"""
-        bsp = Path(_RTT_ROOT) / "bsp" / "rockchip" / f"{soc}-32"
+        bsp = (self.components_root / "amp/rockchip/rt-thread") / "bsp" / "rockchip" / f"{soc}-32"
         if not (bsp / "SConstruct").is_file():
-            raise FileNotFoundError(
-                f"RT-Thread BSP 模板不存在或不完整: {bsp}（缺 SConstruct）")
+            raise FileNotFoundError(f"RT-Thread BSP 模板不存在或不完整: {bsp}（缺 SConstruct）")
         return bsp
 
     def _rtthread_swift_arch_flags(
@@ -583,23 +578,21 @@ class RockchipAmpBuilder(ComponentBuilder):
                 try:
                     device_value = ast.literal_eval(match.group("value"))
                 except (SyntaxError, ValueError) as exc:
-                    raise ValueError(
-                        f"RT-Thread BSP DEVICE 声明非法: {rtconfig}") from exc
+                    raise ValueError(f"RT-Thread BSP DEVICE 声明非法: {rtconfig}") from exc
                 break
         if not isinstance(device_value, str):
-            raise ValueError(
-                f"RT-Thread BSP 缺少静态 DEVICE 声明: {rtconfig}")
+            raise ValueError(f"RT-Thread BSP 缺少静态 DEVICE 声明: {rtconfig}")
 
         accepted_prefixes = ("-mcpu=", "-march=", "-mfpu=", "-mfloat-abi=")
         accepted_exact = {"-marm", "-mthumb", "-mno-unaligned-access"}
         c_flags = [
-            flag for flag in shlex.split(device_value)
+            flag
+            for flag in shlex.split(device_value)
             if flag.startswith(accepted_prefixes) or flag in accepted_exact
         ]
         cpu_flags = [flag for flag in c_flags if flag.startswith("-mcpu=")]
         if len(cpu_flags) != 1:
-            raise ValueError(
-                f"RT-Thread BSP DEVICE 必须且只能声明一个 -mcpu: {rtconfig}")
+            raise ValueError(f"RT-Thread BSP DEVICE 必须且只能声明一个 -mcpu: {rtconfig}")
         swift_cpu = cpu_flags[0].split("=", 1)[1].split("+", 1)[0]
         return swift_cpu, c_flags
 
@@ -611,6 +604,7 @@ class RockchipAmpBuilder(ComponentBuilder):
         既有行，base 无则追加。让 rt-thread app 只需声明 Kconfig 增量（轻量 overlay）
         而非整份 .config；合并后由 scons --useconfig 从结果重生成 rtconfig.h。
         """
+
         def _sym(line: str):
             m = re.match(r"\s*#?\s*(CONFIG_[A-Za-z0-9_]+)", line)
             return m.group(1) if m else None
@@ -652,8 +646,7 @@ class RockchipAmpBuilder(ComponentBuilder):
     ) -> None:
         """确认 ARM 产物使用 AAPCS-VFP hard-float 调用约定。"""
         if not artifact.is_file():
-            raise FileNotFoundError(
-                f"hard-float ABI 门禁找不到待检查产物: {artifact}")
+            raise FileNotFoundError(f"hard-float ABI 门禁找不到待检查产物: {artifact}")
         result = self.docker.run(
             [_RTT_READELF, "-A", str(artifact)],
             env={"LC_ALL": "C"},
@@ -672,13 +665,14 @@ class RockchipAmpBuilder(ComponentBuilder):
             raise BuildError(
                 "hard-float ABI 门禁失败："
                 f"{artifact} 未声明 Tag_ABI_VFP_args: VFP registers；"
-                "不能与 RT-Thread 的 -mfloat-abi=hard 对象安全链接。")
-        if ("Tag_ABI_enum_size: small" not in attributes
-                or "Tag_ABI_enum_size: int" in attributes):
+                "不能与 RT-Thread 的 -mfloat-abi=hard 对象安全链接。"
+            )
+        if "Tag_ABI_enum_size: small" not in attributes or "Tag_ABI_enum_size: int" in attributes:
             raise BuildError(
                 "ARM enum ABI 门禁失败："
                 f"{artifact} 未统一为 Tag_ABI_enum_size: small；"
-                "Embedded Swift 必须匹配 BSP/newlib 的 variable-size enum ABI。")
+                "Embedded Swift 必须匹配 BSP/newlib 的 variable-size enum ABI。"
+            )
 
     def _assert_rtthread_heap_capacity(
         self,
@@ -690,14 +684,11 @@ class RockchipAmpBuilder(ComponentBuilder):
     ) -> int:
         """用固定裸机工具链交叉确认最终 ELF 的可用 heap 及保留区边界。"""
         if not artifact.is_file():
-            raise FileNotFoundError(
-                f"RT-Thread heap 门禁找不到最终 ELF: {artifact}")
+            raise FileNotFoundError(f"RT-Thread heap 门禁找不到最终 ELF: {artifact}")
 
         minimum = runtime.get("minimum_heap_size")
-        if (isinstance(minimum, bool) or not isinstance(minimum, int)
-                or minimum <= 0):
-            raise ValueError(
-                "amp.runtime.minimum_heap_size 必须是正整数 byte 数")
+        if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum <= 0:
+            raise ValueError("amp.runtime.minimum_heap_size 必须是正整数 byte 数")
 
         nm_result = self.docker.run(
             [_RTT_NM, "-n", "--defined-only", str(artifact)],
@@ -721,14 +712,11 @@ class RockchipAmpBuilder(ComponentBuilder):
                 nm_output,
             )
         }
-        missing = [
-            name for name in ("__heap_begin", "__heap_end")
-            if name not in symbols
-        ]
+        missing = [name for name in ("__heap_begin", "__heap_end") if name not in symbols]
         if missing:
             raise BuildError(
-                "RT-Thread heap 门禁失败：最终 ELF 缺少链接器符号 "
-                + ", ".join(missing))
+                "RT-Thread heap 门禁失败：最终 ELF 缺少链接器符号 " + ", ".join(missing)
+            )
 
         readelf_result = self.docker.run(
             [_RTT_READELF, "-SW", str(artifact)],
@@ -751,8 +739,7 @@ class RockchipAmpBuilder(ComponentBuilder):
             section_output,
         )
         if heap_section is None:
-            raise BuildError(
-                "RT-Thread heap 门禁失败：最终 ELF 缺少 .heap section")
+            raise BuildError("RT-Thread heap 门禁失败：最终 ELF 缺少 .heap section")
 
         begin = symbols["__heap_begin"]
         end = symbols["__heap_end"]
@@ -760,14 +747,15 @@ class RockchipAmpBuilder(ComponentBuilder):
         section_size = int(heap_section.group("size"), 16)
         if end <= begin:
             raise BuildError(
-                "RT-Thread heap 门禁失败："
-                f"__heap_begin={begin:#x}, __heap_end={end:#x}")
+                f"RT-Thread heap 门禁失败：__heap_begin={begin:#x}, __heap_end={end:#x}"
+            )
         available = end - begin
         if section_address != begin or section_size != available:
             raise BuildError(
                 "RT-Thread heap 门禁失败：.heap section 与链接器符号不一致："
                 f"section={section_address:#x}/{section_size:#x}, "
-                f"symbols={begin:#x}/{available:#x}")
+                f"symbols={begin:#x}/{available:#x}"
+            )
 
         firmware_begin = memory["cpu_base"]
         firmware_end = firmware_begin + memory["dram_size"]
@@ -775,17 +763,20 @@ class RockchipAmpBuilder(ComponentBuilder):
             raise BuildError(
                 "RT-Thread heap 门禁失败：heap 越出 CPU firmware carveout："
                 f"heap={begin:#x}..{end:#x}, "
-                f"carveout={firmware_begin:#x}..{firmware_end:#x}")
+                f"carveout={firmware_begin:#x}..{firmware_end:#x}"
+            )
         if available < minimum:
             raise BuildError(
                 "RT-Thread heap 门禁失败："
                 f"可用 {available} bytes，小于 "
-                f"amp.runtime.minimum_heap_size={minimum} bytes")
+                f"amp.runtime.minimum_heap_size={minimum} bytes"
+            )
 
         self._status(
             "RT-Thread heap 门禁通过："
             f"可用 {available // 1024} KiB，最低 {minimum // 1024} KiB，"
-            f"余量 {(available - minimum) // 1024} KiB")
+            f"余量 {(available - minimum) // 1024} KiB"
+        )
         return available
 
     def _build_swift_package(
@@ -799,11 +790,9 @@ class RockchipAmpBuilder(ComponentBuilder):
         """用 SwiftPM 构建 Embedded Swift static archive 并复制进 staged BSP。"""
         package_dir = app_dir / swift_cfg.package_path
         if not package_dir.is_dir():
-            raise FileNotFoundError(
-                f"build.swift.package_path 不存在或不是目录: {package_dir}")
+            raise FileNotFoundError(f"build.swift.package_path 不存在或不是目录: {package_dir}")
         if not (package_dir / "Package.swift").is_file():
-            raise FileNotFoundError(
-                f"SwiftPM package 缺 Package.swift: {package_dir}")
+            raise FileNotFoundError(f"SwiftPM package 缺 Package.swift: {package_dir}")
 
         archive_name = f"lib{swift_cfg.product}.a"
         scratch_dir = bsp_tmp / "build" / "flange-swiftpm"
@@ -822,48 +811,78 @@ class RockchipAmpBuilder(ComponentBuilder):
         pch_dir.mkdir(parents=True, exist_ok=True)
 
         self._status(
-            f"AMP(scons) 构建 Embedded Swift package "
-            f"{package_dir.name}:{swift_cfg.product}...")
+            f"AMP(scons) 构建 Embedded Swift package {package_dir.name}:{swift_cfg.product}..."
+        )
         try:
             self.docker.run(["swift", "--version"], capture=True)
         except Exception as exc:
             raise BuildError(
                 "build.swift.enabled=true 但 Docker build 容器内不可调用 swift；"
-                "请先在 docker/Dockerfile 固定安装 Embedded Swift 工具链。") from exc
+                "请先在 docker/Dockerfile 固定安装 Embedded Swift 工具链。"
+            ) from exc
 
         cmd = [
-            "swift", "build",
-            "-c", "release",
-            "--package-path", str(package_dir),
-            "--scratch-path", str(scratch_dir),
-            "--product", swift_cfg.product,
-            "--triple", swift_cfg.target_triple,
-            "-Xswiftc", "-target",
-            "-Xswiftc", swift_cfg.target_triple,
-            "-Xswiftc", "-enable-experimental-feature",
-            "-Xswiftc", "Embedded",
-            "-Xswiftc", "-wmo",
-            "-Xswiftc", "-parse-as-library",
-            "-Xswiftc", "-Osize",
-            "-Xswiftc", "-no-allocations",
-            "-Xswiftc", "-Xfrontend",
-            "-Xswiftc", "-disable-stack-protector",
-            "-Xswiftc", "-Xfrontend",
-            "-Xswiftc", "-function-sections",
-            "-Xswiftc", "-Xfrontend",
-            "-Xswiftc", "-enable-single-module-llvm-emission",
-            "-Xswiftc", "-pch-output-dir",
-            "-Xswiftc", str(pch_dir),
-            "-Xswiftc", "-target-cpu",
-            "-Xswiftc", swift_target_cpu,
-            "-Xcc", "-fno-pic",
-            "-Xcc", "-fno-pie",
+            "swift",
+            "build",
+            "-c",
+            "release",
+            "--package-path",
+            str(package_dir),
+            "--scratch-path",
+            str(scratch_dir),
+            "--product",
+            swift_cfg.product,
+            "--triple",
+            swift_cfg.target_triple,
+            "-Xswiftc",
+            "-target",
+            "-Xswiftc",
+            swift_cfg.target_triple,
+            "-Xswiftc",
+            "-enable-experimental-feature",
+            "-Xswiftc",
+            "Embedded",
+            "-Xswiftc",
+            "-wmo",
+            "-Xswiftc",
+            "-parse-as-library",
+            "-Xswiftc",
+            "-Osize",
+            "-Xswiftc",
+            "-no-allocations",
+            "-Xswiftc",
+            "-Xfrontend",
+            "-Xswiftc",
+            "-disable-stack-protector",
+            "-Xswiftc",
+            "-Xfrontend",
+            "-Xswiftc",
+            "-function-sections",
+            "-Xswiftc",
+            "-Xfrontend",
+            "-Xswiftc",
+            "-enable-single-module-llvm-emission",
+            "-Xswiftc",
+            "-pch-output-dir",
+            "-Xswiftc",
+            str(pch_dir),
+            "-Xswiftc",
+            "-target-cpu",
+            "-Xswiftc",
+            swift_target_cpu,
+            "-Xcc",
+            "-fno-pic",
+            "-Xcc",
+            "-fno-pie",
             # GNU Arm Embedded 的 BSP/newlib/libgcc 使用 variable-size enum
             # ABI；Swift/Clang 对象必须显式匹配，否则最终 ld 会报告 enum-size
             # 混用。只作用于 Swift package，不改变无 Swift 的救援 BSP。
-            "-Xcc", "-fshort-enums",
-            "-Xcc", f"-I{app_dir / 'include'}",
-            "-Xcc", f"-I{bsp_tmp}",
+            "-Xcc",
+            "-fshort-enums",
+            "-Xcc",
+            f"-I{app_dir / 'include'}",
+            "-Xcc",
+            f"-I{bsp_tmp}",
         ]
         for flag in c_arch_flags:
             cmd.extend(["-Xcc", flag])
@@ -872,12 +891,12 @@ class RockchipAmpBuilder(ComponentBuilder):
             cmd,
             env={"FLUXION_EMBEDDED_PACKAGE_ONLY": "1"},
             extra_mounts=[bsp_tmp.parent],
-            label=f"amp:rtt:swift:{swift_cfg.product}")
+            label=f"amp:rtt:swift:{swift_cfg.product}",
+        )
 
         candidates = sorted(scratch_dir.rglob(archive_name))
         if not candidates:
-            raise FileNotFoundError(
-                f"SwiftPM 未产出 {archive_name}（scratch={scratch_dir}）")
+            raise FileNotFoundError(f"SwiftPM 未产出 {archive_name}（scratch={scratch_dir}）")
         shutil.copy2(candidates[-1], staged_archive)
         if "-mfloat-abi=hard" in c_arch_flags:
             self._assert_hard_float_abi(
@@ -898,8 +917,7 @@ class RockchipAmpBuilder(ComponentBuilder):
 
         header_src = app_dir / swift_cfg.c_header
         if not header_src.is_file():
-            raise FileNotFoundError(
-                f"build.swift.c_header 不存在: {header_src}")
+            raise FileNotFoundError(f"build.swift.c_header 不存在: {header_src}")
 
         rel_parent = Path(swift_cfg.c_header).parent
         if str(rel_parent) == ".":
@@ -919,10 +937,8 @@ class RockchipAmpBuilder(ComponentBuilder):
         """在 staged applications 目录生成 SConscript，把 Swift archive 注入链接。"""
         include_exprs = ["cwd", "str(Dir('#'))"]
         for rel_dir in include_dirs:
-            include_exprs.append(
-                f"os.path.abspath(os.path.join(cwd, {rel_dir!r}))")
-        include_exprs.append(
-            f"os.path.abspath(os.path.join(cwd, {_SWIFT_ARCHIVE_SUBDIR!r}))")
+            include_exprs.append(f"os.path.abspath(os.path.join(cwd, {rel_dir!r}))")
+        include_exprs.append(f"os.path.abspath(os.path.join(cwd, {_SWIFT_ARCHIVE_SUBDIR!r}))")
         include_text = "[" + ", ".join(include_exprs) + "]"
         content = f"""from building import *
 import os
@@ -953,7 +969,8 @@ Return('group')
         if app_sconscript.exists():
             raise ValueError(
                 "启用 build.swift 时暂不支持 app 自带 applications/SConscript；"
-                f"请删除或改由 builder 生成（{app_sconscript}）。")
+                f"请删除或改由 builder 生成（{app_sconscript}）。"
+            )
 
         applications_dir = bsp_tmp / "applications"
         archive = self._build_swift_package(
@@ -963,8 +980,7 @@ Return('group')
             swift_target_cpu,
             c_arch_flags,
         )
-        include_dirs = self._stage_swift_bridge_header(
-            app_dir, applications_dir, swift_cfg)
+        include_dirs = self._stage_swift_bridge_header(app_dir, applications_dir, swift_cfg)
         self._write_swift_sconscript(applications_dir, swift_cfg, include_dirs)
         return archive
 
@@ -978,7 +994,7 @@ Return('group')
             "#pragma once\n"
             f"#define FLANGE_AMP_LINK_ID {runtime['link_id']:#x}U\n"
             f"#define FLANGE_AMP_EPT_ADDR {runtime['endpoint_address']:#x}U\n"
-            f"#define FLANGE_AMP_EPT_NAME \"{runtime['endpoint_name']}\"\n"
+            f'#define FLANGE_AMP_EPT_NAME "{runtime["endpoint_name"]}"\n'
         )
         return header
 
@@ -1013,23 +1029,37 @@ Return('group')
         # 期望 <common>/hal/lib/ 提供 hal_base.h 等），而 _HAL_ROOT 的 lib/ 布局与之逐一
         # 匹配；HAL 源经 variant_dir='common/hal' 编译、对象落 tmpdir，HAL SDK 只读。
         _ignore = shutil.ignore_patterns(
-            "build", ".sconsign.dblite", "*.o", "*.pyc", "__pycache__",
-            "rtthread.*", "gcc_arm.ld", "amp*.img")
+            "build",
+            ".sconsign.dblite",
+            "*.o",
+            "*.pyc",
+            "__pycache__",
+            "rtthread.*",
+            "gcc_arm.ld",
+            "amp*.img",
+        )
         # common/hal 由下方统一链接到 flange 的 HAL SDK；源 SDK 中的同名链接
         # 可能指向带断链 .git 的 vendor repo，不能在 staging 时跟随复制。
         _ignore_common = shutil.ignore_patterns(
-            "build", ".sconsign.dblite", "*.o", "*.pyc", "__pycache__",
-            "rtthread.*", "gcc_arm.ld", "amp*.img", "hal")
-        sdk_root = Path(_RTT_ROOT)
-        staged_root = Path(tempfile.mkdtemp(prefix="flange-amp-rtt-"))
+            "build",
+            ".sconsign.dblite",
+            "*.o",
+            "*.pyc",
+            "__pycache__",
+            "rtthread.*",
+            "gcc_arm.ld",
+            "amp*.img",
+            "hal",
+        )
+        sdk_root = self.components_root / "amp/rockchip/rt-thread"
+        staged_root = self.work_dir()
 
         def _mirror(src_dir: Path, dst_dir: Path, skip: set) -> None:
             """dst_dir 下逐项 symlink 到 src_dir（skip 的项留给调用方 copy）。"""
             dst_dir.mkdir(parents=True, exist_ok=True)
             for entry in os.listdir(src_dir):
                 if entry not in skip:
-                    os.symlink(os.path.abspath(src_dir / entry),
-                               dst_dir / entry)
+                    os.symlink(os.path.abspath(src_dir / entry), dst_dir / entry)
 
         # 顶层：除 bsp 外全 symlink（examples/documentation/… 也被部分 SConscript 引用）
         _mirror(sdk_root, staged_root, skip={"bsp"})
@@ -1039,41 +1069,37 @@ Return('group')
         # tools symlink 即可：SConstruct 以 ../tools 加 sys.path 只读导入 buildutil
         # （PYTHONDONTWRITEBYTECODE=1 兜 __pycache__）。
         bsp_rk = staged_root / "bsp" / "rockchip"
-        _mirror(sdk_root / "bsp" / "rockchip", bsp_rk,
-                skip={"common", f"{soc}-32"})
+        _mirror(sdk_root / "bsp" / "rockchip", bsp_rk, skip={"common", f"{soc}-32"})
         bsp_tmp = bsp_rk / f"{soc}-32"
-        shutil.copytree(bsp_src, bsp_tmp, ignore=_ignore,
-                        ignore_dangling_symlinks=True)
-        shutil.copytree(bsp_src.parent / "common", bsp_rk / "common",
-                        ignore=_ignore_common,
-                        ignore_dangling_symlinks=True)
-        os.symlink(os.path.abspath(_HAL_ROOT), bsp_rk / "common" / "hal")
+        shutil.copytree(bsp_src, bsp_tmp, ignore=_ignore, ignore_dangling_symlinks=True)
+        shutil.copytree(
+            bsp_src.parent / "common",
+            bsp_rk / "common",
+            ignore=_ignore_common,
+            ignore_dangling_symlinks=True,
+        )
+        os.symlink(self.components_root / "amp/rockchip/hal", bsp_rk / "common" / "hal")
 
         # --- 配置叠加：BSP 默认 → flange AMP 基线 → app 差异配置 ---
-        base_config = Path(_RTT_AMP_BASE_CONFIG)
+        base_config = self.components_root / "platform/rockchip/amp/rt-thread.config"
         if not base_config.is_file():
-            raise FileNotFoundError(
-                f"RT-Thread AMP 基线配置不存在: {base_config}")
+            raise FileNotFoundError(f"RT-Thread AMP 基线配置不存在: {base_config}")
         self._merge_kconfig_fragment(bsp_tmp / ".config", base_config)
 
         # app overlay：applications/ + 可选 .config 差异配置。
         app_apps = app_dir / "applications"
         if app_apps.is_dir():
-            shutil.copytree(app_apps, bsp_tmp / "applications",
-                            dirs_exist_ok=True)
+            shutil.copytree(app_apps, bsp_tmp / "applications", dirs_exist_ok=True)
         runtime = self._runtime(config)
         self._write_runtime_header(bsp_tmp / "applications", runtime)
         app_config = app_dir / ".config"
         if app_config.is_file():
-            self._merge_kconfig_fragment(bsp_tmp / ".config",
-                                         app_config)
+            self._merge_kconfig_fragment(bsp_tmp / ".config", app_config)
 
         swift_cfg = app_spec.build.swift
         swift_uses_hard_float = False
         if self._swift_cfg_enabled(swift_cfg):
-            swift_target_cpu, c_arch_flags = (
-                self._rtthread_swift_arch_flags(soc)
-            )
+            swift_target_cpu, c_arch_flags = self._rtthread_swift_arch_flags(soc)
             swift_uses_hard_float = "-mfloat-abi=hard" in c_arch_flags
             self._prepare_rtthread_swift(
                 app_dir,
@@ -1098,17 +1124,24 @@ Return('group')
         }
         self._status(
             f"AMP(scons) 配置 {app_dir.name}（RT-Thread {soc}-32, cpu{cpu}, "
-            f"base={hex(mem['cpu_base'])}）...")
+            f"base={hex(mem['cpu_base'])}）..."
+        )
         # 合并基线/app 配置后必须从 .config 重生成 rtconfig.h（编译实际读
         # rtconfig.h，.config 仅是 Kconfig 状态）。
         self.docker.run(
             ["scons", "--useconfig=.config"],
-            cwd=str(bsp_tmp), env=env, extra_mounts=[staged_root],
-            label="amp:rtt:config")
+            cwd=str(bsp_tmp),
+            env=env,
+            extra_mounts=[staged_root],
+            label="amp:rtt:config",
+        )
         self.docker.run(
             ["scons", f"-j{self._jobs()}"],
-            cwd=str(bsp_tmp), env=env, extra_mounts=[staged_root],
-            label=f"amp:rtt:build:{app_dir.name}")
+            cwd=str(bsp_tmp),
+            env=env,
+            extra_mounts=[staged_root],
+            label=f"amp:rtt:build:{app_dir.name}",
+        )
 
         final_elf = bsp_tmp / "rtthread.elf"
         self._assert_rtthread_heap_capacity(
@@ -1127,7 +1160,8 @@ Return('group')
         rtt_bin = bsp_tmp / "rtthread.bin"
         if not rtt_bin.is_file():
             raise FileNotFoundError(
-                f"RT-Thread 未产出 rtthread.bin（{rtt_bin}）；检查 scons 日志。")
+                f"RT-Thread 未产出 rtthread.bin（{rtt_bin}）；检查 scons 日志。"
+            )
         its_path = bsp_tmp / "Image" / "amp_linux.its"
         return self._mkimage_fit(
             soc,

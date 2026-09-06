@@ -7,17 +7,23 @@ sources:
   - builder/config/jsonnet.py
   - builder/config/registry.py
   - builder/config/validate.py
+  - builder/config/schema.py
+  - builder/component_plan.py
+  - docs/build-system-design.md
+  - docs/extension-guide.md
 related:
   - "[[三层继承]]"
   - "[[condition-markers]]"
   - "[[product-variant]]"
   - "[[配置子系统]]"
-updated: 2026-08-26
+updated: 2026-09-05
 ---
 
 ## TL;DR
 
-FINAL_CONFIG 是 Jsonnet 求值、包集合展开和 canonical 校验后的普通 JSON object，也是所有 ComponentBuilder 的配置事实源。
+FINAL_CONFIG（最终配置）是 Jsonnet 求值、包集合展开和 canonical（规范化）校验后的配置事实源。
+当前 Python 求值结果以 `ResolvedConfig` 携带配置与依赖/hash 元数据；执行者消费已求值字段，不再解释条件。
+完整输入边界见[构建系统设计](../../docs/build-system-design.md)，新增字段见[扩展指南](../../docs/extension-guide.md)。
 
 ## 关键设计要点
 
@@ -34,5 +40,5 @@ FINAL_CONFIG 是 Jsonnet 求值、包集合展开和 canonical 校验后的普�
 
 - [`builder/config/registry.py:resolve_config`](../../builder/config/registry.py) — 产生入口
 - [`builder/config/jsonnet.py:JsonnetConfigLoader`](../../builder/config/jsonnet.py) — 求值与规范化
-- [`builder/config/validate.py:validate_canonical_config`](../../builder/config/validate.py) — canonical 契约
-- [`builder/cache.py:BuildCache`](../../builder/cache.py) — 配置与 Jsonnet 依赖哈希消费者
+- [`builder/config/schema.py`](../../builder/config/schema.py) 与 [`validate.py`](../../builder/config/validate.py) — 闭合字段、严格类型与跨字段语义
+- [`builder/component_plan.py`](../../builder/component_plan.py) — 声明配置、Jsonnet 依赖及组件输入

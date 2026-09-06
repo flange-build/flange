@@ -4,32 +4,33 @@ type: subsystem
 status: stable
 sources:
   - builder/engine.py
-related:
-  - "[[ComponentBuilder 基类]]"
-  - "[[缓存系统]]"
-  - "[[内容哈希与增量构建]]"
-  - "[[输出系统 BuildOutput]]"
-updated: 2026-04-26
+  - builder/graph.py
+  - builder/component_plan.py
+  - builder/cache.py
+  - builder/artifacts.py
+  - docs/build-system-design.md
+  - docs/maintenance-guide.md
+updated: 2026-09-05
 ---
 
-## TL;DR
+# 构建引擎 BuildEngine
 
-`BuildEngine` 是从 `lunch` 选好配置到刷写 config 生成的中央编排器；负责拓扑排序依赖、按序实例化组件构建器、查询缓存跳过重复构建、汇总产物并生成 flash-config.json。
+`BuildEngine(config, context=...)` 将某个系统组件请求展开为依赖计划并执行。
+它验证配置目标与 WorkspaceContext（工作区上下文）一致，不负责保存目标选择或解释 Shell 状态。
 
-## 关键设计要点
+| 阶段 | 实现职责 |
+| --- | --- |
+| `plan()` / `explain()` | 创建 TaskPlan，展示输入、依赖、启用状态、输出与缓存原因；不隐式 fetch |
+| `build()` | 持有当前目标锁，建立统一 BuildOutput 日志，执行所需依赖闭包 |
+| `_build_components()` | 准备源码，比较输入与有效产物清单，执行或复用各组件 |
+| `_get_builder()` | 从当前平台工厂取得策略；公共 overlay 组件走共享构建器 |
+| `_collect_artifacts()` | 暂存并校验完整输出，再替换组件发布目录 |
+| 完成 image | 调用 FlashConfigGenerator 生成当前目标的 `flash-config.json` |
 
-- **拓扑排序**：`_topo_sort` 使用 DFS 对组件依赖图排序，保证 bootloader/kernel 先于 rootfs/image 构建
-- **组件实例化**：`_get_builder` 按组件名动态选取对应 ComponentBuilder 子类（kernel/bootloader/rootfs/recovery/image/app）
-- **增量跳过**：`_build_components` 在构建每个组件前调用 `BuildCache.is_up_to_date`，命中则跳过并取缓存产物
-- **组件禁用**：`_component_disabled` 读取 config 中 `disabled: true` 字段；recovery 未开启时跳过 recovery 构建
-- **产物汇总**：`_collect_artifacts` 将各组件 `collect()` 返回的路径映射统一存入 `_artifact_names`
-- **flash-config 生成**：`_generate_flash_config` 以 FINAL_CONFIG 中的分区表为骨架，注入产物路径，输出 `.build/flash-config.json`
-- **BuildOutput 注入**：`BuildEngine.__init__` 创建 `BuildOutput` 实例并下传给所有子构建器，统一格式化输出
+App 有独立的依赖闭包和逐 App 缓存；系统 `app` 组件收集 AppBuildReport，
+rootfs/recovery 只安装自己选择的准确集合。组件启用状态来自配置，不能由旧文件是否存在推断。
 
-## 关键代码位置
-
-- [`builder/engine.py:BuildEngine`](../../builder/engine.py) — 主类，L38
-- [`builder/engine.py:BuildEngine.build`](../../builder/engine.py) — 入口，L56
-- [`builder/engine.py:BuildEngine._build_components`](../../builder/engine.py) — 增量调度，L73
-- [`builder/engine.py:BuildEngine._generate_flash_config`](../../builder/engine.py) — 产物配置，L158
-- [`builder/engine.py:_topo_sort`](../../builder/engine.py) — 依赖排序，L14
+修改依赖、缓存或发布逻辑前读[构建系统设计](../../docs/build-system-design.md)与
+[维护指南](../../docs/maintenance-guide.md)。源码入口：
+[`engine.py`](../../builder/engine.py)、[`graph.py`](../../builder/graph.py)、
+[`component_plan.py`](../../builder/component_plan.py)、[缓存系统](缓存系统.md)。

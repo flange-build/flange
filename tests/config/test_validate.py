@@ -54,7 +54,7 @@ class TestCanonicalConfig:
             ("kernel.enable_configs", ["NET"], "enable_configs"),
             ("bootloader.fip_family_inc", "g12a.inc", "fip_family_inc"),
             ("boot.grub_with_dtb", True, "grub_with_dtb"),
-            ("kernel.product", "default", "只允许出现在"),
+            ("kernel.product", "default", "未知字段"),
         ],
     )
     def test_unknown_alias_and_nested_dimension_fail(self, path, value, message):

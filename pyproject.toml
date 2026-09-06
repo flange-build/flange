@@ -7,13 +7,20 @@ include = ["builder*"]
 
 [project]
 name = "flange"
-version = "2.0.0"
+version = "3.0.0"
 description = "嵌入式 Linux 系统构建框架"
+license = {file = "LICENSE"}
 requires-python = ">=3.12"
 dependencies = [
     "jsonnet==0.22.0",
     "pyyaml>=6.0",
 ]
+
+[project.scripts]
+flange = "builder.cli:main"
+
+[tool.setuptools.package-data]
+builder = ["templates/**/*.tpl"]
 
 [project.optional-dependencies]
 dev = [

@@ -12,7 +12,7 @@ local product = std.extVar('product');
             (if product == 'desktop' then ['ubuntu-desktop'] else []),
   sources+: {
     'rockchip-kernel': {
-      url: 'ssh://git@gitlab-r.eric3u.xyz:20022/argon/kernel.git',
+      url: 'https://github.com/flange-build/kernel.git',
       branch: 'linux-6.1-stan-rkr5.1',
       commit: 'e62b45adc7f89f5c8ea1918960b8c78e7c97ebf5',
     },

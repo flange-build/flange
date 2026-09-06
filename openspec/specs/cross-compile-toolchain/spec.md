@@ -1,48 +1,64 @@
 # cross-compile-toolchain Specification
 
 ## Purpose
-TBD - created by archiving change 2026-03-29-phase1-cross-toolchain. Update Purpose after archive.
+
+定义 flange 如何为目标架构选择交叉编译工具链：架构从哪里声明、工具链前缀
+如何推导、以及组件与 App 两侧如何共用同一份推导。
+
 ## Requirements
-### Requirement: Bazel CC toolchain 注册 aarch64-linux-gnu
-项目 SHALL 在 `toolchain/BUILD.bazel` 中定义 `cc_toolchain` 和 `toolchain`，声明 aarch64-linux-gnu 交叉编译工具链。工具链 SHALL 在 `MODULE.bazel` 中通过 `register_toolchains` 注册。
 
-#### Scenario: toolchain 在 MODULE.bazel 中注册
-- **WHEN** 查看 `MODULE.bazel` 文件
-- **THEN** 包含 `register_toolchains("//toolchain:aarch64_linux_toolchain")`
+### Requirement: 目标架构由 canonical 配置声明
 
-#### Scenario: toolchain 定义包含完整工具路径
-- **WHEN** 查看 `toolchain/cc_toolchain_config.bzl` 的工具声明
-- **THEN** 包含 `gcc`、`g++`、`ar`、`ld`、`nm`、`objdump`、`strip` 等 aarch64-linux-gnu 前缀工具的路径
+配置 MUST 在 `architecture` 下分别声明 `userspace`、`kernel`、`bootloader`
+三个架构 —— 它们并不总是相同（Amlogic 的 bootloader 有 32 位阶段，而
+kernel 是 arm64）。访问 MUST 通过 `builder.config.canonical` 的访问器，
+这些访问器不提供默认值：缺字段直接 KeyError，而不是静默拿到 aarch64。
 
-### Requirement: aarch64 linux platform 定义
-项目 SHALL 在 `toolchain/BUILD.bazel` 中定义 `platform(name = "aarch64_linux")`，声明目标操作系统为 linux、目标 CPU 为 aarch64。
+#### Scenario: 三个架构分别声明
+- **WHEN** 板级配置声明 `architecture.kernel = "arm64"` 与 `architecture.bootloader = "arm"`
+- **THEN** kernel 与 bootloader 各自按自己的架构选择工具链
 
-#### Scenario: platform 约束正确
-- **WHEN** 查看 `toolchain/BUILD.bazel` 中的 platform 定义
-- **THEN** `constraint_values` 包含 `@platforms//os:linux` 和 `@platforms//cpu:aarch64`
+#### Scenario: 缺失架构字段
+- **WHEN** 配置未声明 `architecture.userspace`
+- **THEN** `userspace_arch()` 抛 KeyError，而不是回退到某个默认架构
 
-### Requirement: --config=aarch64 快捷配置
-`.bazelrc` SHALL 保留 `build:aarch64` 配置，映射到 `--platforms=//toolchain:aarch64_linux`。板级配置（如 `--config=radxa-zero3w`）SHALL 复用此 platform 声明，而非重复定义。
+### Requirement: 工具链前缀由架构推导
 
-#### Scenario: 使用 config 切换到交叉编译
-- **WHEN** 在构建容器内执行 `bazel build --config=aarch64 //<target>`
-- **THEN** Bazel 使用 aarch64-linux-gnu 工具链编译，产出 aarch64 二进制
+App 构建 SHALL 按目标架构推导 `CROSS_COMPILE` 前缀，覆盖 aarch64、armhf、
+riscv64 与原生 x86_64 / i386（前缀为空）。未覆盖的架构 SHALL 有明确行为，
+不得静默产出宿主机架构的二进制。
 
-#### Scenario: 板级配置复用 aarch64 platform
-- **WHEN** 使用 `--config=radxa-zero3w` 构建
-- **THEN** 构建使用 `//toolchain:aarch64_linux` platform，与 `--config=aarch64` 效果相同
+#### Scenario: aarch64 目标
+- **WHEN** App 的目标架构为 aarch64
+- **THEN** 构建命令中的 `CROSS_COMPILE=aarch64-linux-gnu-`
 
-### Requirement: 交叉编译产出 aarch64 ELF
-使用已注册的 toolchain 编译 C 代码 SHALL 产出 aarch64 架构的 ELF 可执行文件。
+#### Scenario: armhf 目标
+- **WHEN** App 的目标架构为 armhf
+- **THEN** 构建命令中的 `CROSS_COMPILE=arm-linux-gnueabihf-`
 
-#### Scenario: 编译简单 C 程序
-- **WHEN** 在构建容器内执行 `bazel build --config=aarch64 //toolchain/test:hello`
-- **THEN** 产出的二进制文件 `file` 命令输出包含 `ELF 64-bit LSB` 和 `ARM aarch64`
+#### Scenario: 原生架构
+- **WHEN** App 的目标架构为 x86_64
+- **THEN** `CROSS_COMPILE` 为空，使用宿主机工具链
 
-### Requirement: cc_toolchain_config 包含正确的 include 路径
-`cc_toolchain_config.bzl` SHALL 在 `cxx_builtin_include_directories` 中声明容器内 aarch64-linux-gnu 交叉编译器的系统头文件路径。
+### Requirement: 组件构建统一经 make 封装传入工具链
 
-#### Scenario: 包含标准库头文件可用
-- **WHEN** 交叉编译一个包含 `#include <stdio.h>` 的 C 程序
-- **THEN** 编译成功，无"头文件未找到"错误
+`ComponentBuilder.make()` SHALL 是组件调用 make 的唯一入口，由它统一拼接
+`ARCH=` 与 `CROSS_COMPILE=`。各组件 SHALL NOT 自行拼装 make 命令行 ——
+分散拼装是"某个平台忘了传 CROSS_COMPILE、静默编出宿主机二进制"的来源。
 
+#### Scenario: 组件传入架构与前缀
+- **WHEN** kernel 组件调用 `self.make(src, ["Image"], arch="arm64", cross="aarch64-linux-gnu-")`
+- **THEN** 实际执行的命令包含 `ARCH=arm64` 与 `CROSS_COMPILE=aarch64-linux-gnu-`
+
+#### Scenario: 并行度默认值
+- **WHEN** 调用 `make()` 未指定 jobs
+- **THEN** 使用宿主 CPU 数留出余量后的并行度，且至少为 1
+
+### Requirement: 工具链由构建容器提供
+
+交叉编译器 SHALL 由构建容器预装（见 `docker-build-env`），构建过程
+SHALL NOT 在构建期下载或安装工具链。
+
+#### Scenario: 容器内工具链可用
+- **WHEN** 在构建容器内执行 `aarch64-linux-gnu-gcc --version`
+- **THEN** 输出 GCC 版本信息

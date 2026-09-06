@@ -1,11 +1,35 @@
-"""源码仓库管理 — 替代 Bazel module extensions。"""
+"""源码生命周期：共享下载仓库、目标独立工作树与本地内容隔离。"""
 
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from builder.digest import digest_value, hash_path
+from builder.locking import FileLock, atomic_write
+from builder.process import run_logged
+
+
+def component_source_descriptor(config: dict, component: str) -> dict:
+    """返回组件实际引用的 source descriptor；未声明来源时返回空 dict。
+
+    组件只声明 ``{source: {name: ...}}``，真正的仓库地址与版本锚点集中在顶层
+    ``sources``。这个解析是 builder 与 cache 共用的单一判据 —— 两处各写一份
+    曾让"框架不动 local_path 工作树"的承诺只兑现了一半。
+    """
+    name = ((config.get(component) or {}).get("source") or {}).get("name")
+    if not name:
+        return {}
+    return (config.get("sources") or {}).get(name) or {}
+
+
+def component_local_path(config: dict, component: str) -> str | None:
+    """返回用户维护的本地源码路径；内容复制到独立目标目录后参与缓存。"""
+    return component_source_descriptor(config, component).get("local_path") or None
 
 
 class SourceManager:
@@ -15,13 +39,20 @@ class SourceManager:
         self,
         sources_dir: Path = None,
         project_root: Path | None = None,
+        *,
+        context=None,
+        output=None,
     ):
-        self.sources_dir = sources_dir or Path(".build/sources")
+        self.context = context
+        self.output = output
+        self.sources_dir = (
+            context.sources_dir if context is not None else sources_dir or Path(".build/sources")
+        )
+        if context is not None:
+            project_root = context.tool_root
         # project_root 为 None 时，ensure_app 访问本地 components/app/ 时以 cwd
         # 为锚点（保持既有行为与测试兼容）；显式传入可避免依赖当前工作目录。
-        self._project_root: Path | None = (
-            Path(project_root) if project_root is not None else None
-        )
+        self._project_root: Path | None = Path(project_root) if project_root is not None else None
         # 缓存判定前的 ensure 与紧随其后的实际构建共享一次同步结果，避免
         # branch 仓库重复 fetch。每个组件准备时清空，防止跨组件共享仓库跳过
         # 原有的 reset/clean 语义。
@@ -32,8 +63,16 @@ class SourceManager:
         self._preparing_cache_inputs = False
         self._builder_resets_source = False
 
+    def _run(self, cmd, **kwargs):
+        """源码工具与编译工具共用构建日志，原始输出不直接写入终端。"""
+        return run_logged(cmd, self.output, **kwargs)
+
     def prepare_cache_inputs(self, component: str, config: dict) -> None:
         """在缓存判定前同步当前组件会消费的 git 输入。"""
+        if component == "kernel" and self.context is not None:
+            from builder.filesystem import require_case_sensitive
+
+            require_case_sensitive(self.context.build_root)
         self._prepared_repos.clear()
         self._unclean_prepared_repos.clear()
         self._builder_reset_prepared_repos.clear()
@@ -42,8 +81,7 @@ class SourceManager:
         try:
             source_cfg = config.get(component, {}) or {}
             if source_cfg.get("source"):
-                self._builder_resets_source = component in {
-                    "kernel", "bootloader"}
+                self._builder_resets_source = component in {"kernel", "bootloader"}
                 try:
                     self.ensure(component, config)
                 finally:
@@ -66,8 +104,14 @@ class SourceManager:
                         config=config,
                     )
 
+            if component == "amp" and (config.get("amp") or {}).get("app"):
+                from builder.app_resolver import AppResolver
+
+                AppResolver(self.context, self, config).resolve(config["amp"]["app"])
+
             if component == "app":
                 from builder.config.apps import gather_custom_packages
+
                 for name in gather_custom_packages(config):
                     self.ensure_app(name, config)
 
@@ -92,8 +136,16 @@ class SourceManager:
             component,
         )
 
-    def ensure_extra(self, name: str, cfg: dict,
-                     config: dict | None = None) -> Path:
+    def source_path(self, component: str, config: dict) -> Path:
+        """解析已准备组件的源码路径，不同步仓库；调用方负责先 ensure。"""
+        return self._ensure_source_ref(
+            (config.get(component) or {}).get("source"),
+            config,
+            component,
+            sync_remote=False,
+        )
+
+    def ensure_extra(self, name: str, cfg: dict, config: dict | None = None) -> Path:
         """按额外组件的 canonical source 引用确保源码就绪。"""
         if config is None:
             raise ValueError(f"ensure_extra({name}) 需要 config 参数")
@@ -103,12 +155,21 @@ class SourceManager:
     def source_identity(descriptor: dict) -> str:
         """返回决定远端 checkout 工作树身份的稳定摘要。"""
         payload = json.dumps(
-            descriptor, sort_keys=True, separators=(",", ":"),
+            descriptor,
+            sort_keys=True,
+            separators=(",", ":"),
             ensure_ascii=False,
         ).encode()
         return hashlib.sha256(payload).hexdigest()
 
-    def _ensure_source_ref(self, ref, config: dict, label: str) -> Path:
+    def _ensure_source_ref(
+        self,
+        ref,
+        config: dict,
+        label: str,
+        *,
+        sync_remote: bool = True,
+    ) -> Path:
         """解析唯一 source descriptor，获取根目录后追加安全子路径。"""
         if not isinstance(ref, dict) or not ref.get("name"):
             raise ValueError(f"{label}.source.name 未声明")
@@ -117,38 +178,116 @@ class SourceManager:
         if name not in sources:
             available = ", ".join(sorted(sources)) or "无"
             raise ValueError(
-                f"{label}.source.name 引用了未知 source: {name!r}"
-                f"（可用: {available}）")
+                f"{label}.source.name 引用了未知 source: {name!r}（可用: {available}）"
+            )
 
         descriptor = sources[name]
         has_local = bool(descriptor.get("local_path"))
         has_remote = bool(descriptor.get("url"))
         if has_local == has_remote:
-            raise ValueError(
-                f"sources.{name} 必须且只能声明 local_path 或 url 之一")
+            raise ValueError(f"sources.{name} 必须且只能声明 local_path 或 url 之一")
         if has_local and any(
-            key in descriptor
-            for key in ("branch", "commit", "recurse_submodules")
+            key in descriptor for key in ("branch", "commit", "recurse_submodules")
         ):
-            raise ValueError(
-                f"sources.{name}.local_path 与远端 revision 字段互斥")
+            raise ValueError(f"sources.{name}.local_path 与远端 revision 字段互斥")
 
         if has_local:
             source_dir = Path(descriptor["local_path"])
             if not source_dir.is_absolute():
                 from builder.paths import PROJECT_ROOT
+
                 source_dir = (self._project_root or PROJECT_ROOT) / source_dir
+            if self.context is not None:
+                source_dir = self._local_checkout(source_dir, sync=sync_remote)
         else:
-            source_dir = (
-                self.sources_dir / "repos" / self.source_identity(descriptor)
-            )
-            self._ensure_repo(source_dir, descriptor)
+            source_dir = self.sources_dir / "repos" / self.source_identity(descriptor)
+            if sync_remote:
+                with self.repo_lock(source_dir):
+                    self._ensure_repo(source_dir, descriptor)
+                    source_dir = self._target_checkout(source_dir, descriptor)
+            elif self.context is not None:
+                source_dir = self._target_checkout_path(source_dir)
 
         subpath = ref.get("subpath", "")
         subpath_obj = Path(subpath)
         if subpath_obj.is_absolute() or ".." in subpath_obj.parts:
             raise ValueError(f"{label}.source.subpath 不得越出 source 根目录")
         return source_dir / subpath_obj if subpath else source_dir
+
+    def repo_lock(self, path: Path) -> FileLock:
+        """共享下载仓库的锁，覆盖 fetch 与目标工作树创建。"""
+        identity = digest_value(str(Path(path).absolute()))
+        return FileLock(self.sources_dir / ".locks" / f"{identity}.lock")
+
+    def _target_checkout_path(self, shared: Path) -> Path:
+        if self.context is None:
+            return shared
+        return (
+            self.context.build_root
+            / "work"
+            / self.context.target.key
+            / "sources"
+            / digest_value(str(shared.absolute()))
+        )
+
+    def _target_checkout(self, shared: Path, descriptor: dict | None = None) -> Path:
+        """共享仓库仅用于获取源码；configure/patch/make 只写目标独立工作树。"""
+        if self.context is None:
+            return shared
+        destination = self._target_checkout_path(shared)
+        revision = self._rev_parse(shared)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            self._run(
+                ["git", "worktree", "add", "--detach", str(destination), revision],
+                cwd=shared,
+                check=True,
+            )
+        elif self._rev_parse(destination) != revision:
+            self._run(["git", "reset", "--hard", revision], cwd=destination, check=True)
+            self._run(["git", "clean", "-fd"], cwd=destination, check=True)
+        if descriptor and descriptor.get("recurse_submodules"):
+            self._update_submodules(destination)
+        return destination
+
+    def _local_checkout(self, original: Path, *, sync: bool) -> Path:
+        """把用户当前内容复制到目标工作目录，始终保留用户原树。"""
+        original = original.absolute()
+        destination = self._target_checkout_path(original)
+        if not sync:
+            return destination
+        with self.repo_lock(original):
+            digest = hash_path(
+                original,
+                exclude_names={".git", "__pycache__"},
+                exclude_paths={self.context.build_root},
+            )
+            stamp = destination / ".flange-source-input"
+            if stamp.is_file() and stamp.read_text() == digest:
+                return destination
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = Path(tempfile.mkdtemp(prefix=".source-", dir=destination.parent))
+            try:
+
+                def ignore(directory, names):
+                    return [
+                        name
+                        for name in names
+                        if name in {".git", "__pycache__"}
+                        or (Path(directory) / name).absolute() == self.context.build_root
+                    ]
+
+                shutil.copytree(
+                    original, temporary, symlinks=True, dirs_exist_ok=True, ignore=ignore
+                )
+                atomic_write(temporary / stamp.name, digest)
+                if destination.exists():
+                    shutil.rmtree(destination)
+                temporary.rename(destination)
+            finally:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+            return destination
 
     def ensure_firmware(self, config: dict) -> Path:
         """确保平台固件仓库就绪（如 rkbin）。"""
@@ -157,23 +296,19 @@ class SourceManager:
             return Path("")
         return self._ensure_source_ref(rkbin_config.get("source"), config, "rkbin")
 
-    def ensure_oot_source(self, name: str, cfg: dict,
-                          config: dict | None = None) -> Path:
+    def ensure_oot_source(self, name: str, cfg: dict, config: dict | None = None) -> Path:
         """确保 OOT module 的 canonical source 就绪。"""
         if config is None:
             raise ValueError(f"kernel.oot_sources.{name} 需要 config 参数")
-        return self._ensure_source_ref(
-            cfg.get("source"), config, f"kernel.oot_sources.{name}")
+        return self._ensure_source_ref(cfg.get("source"), config, f"kernel.oot_sources.{name}")
 
-    def ensure_extra_firmware(self, name: str, cfg: dict,
-                              config: dict | None = None) -> Path:
+    def ensure_extra_firmware(self, name: str, cfg: dict, config: dict | None = None) -> Path:
         """确保额外固件的 canonical source 或下载 descriptor 就绪。"""
         if cfg.get("url"):
             return self.ensure_download("firmware", name, cfg).parent
         if config is None:
             raise ValueError(f"rootfs.extra_firmware.{name} 需要 config 参数")
-        return self._ensure_source_ref(
-            cfg.get("source"), config, f"rootfs.extra_firmware.{name}")
+        return self._ensure_source_ref(cfg.get("source"), config, f"rootfs.extra_firmware.{name}")
 
     def ensure_extra_deb(self, name: str, cfg: dict) -> Path:
         """确保外部 deb 包已下载。"""
@@ -190,12 +325,10 @@ class SourceManager:
         sha256 = raw_sha256.lower() if isinstance(raw_sha256, str) else ""
         if not isinstance(url, str) or not url:
             raise ValueError(f"{name}.url 必须是非空字符串")
-        if len(sha256) != 64 or any(
-                char not in "0123456789abcdef" for char in sha256):
+        if len(sha256) != 64 or any(char not in "0123456789abcdef" for char in sha256):
             raise ValueError(f"{name}.sha256 必须是 64 位十六进制 SHA256")
         filename = cfg.get("filename") or Path(urlsplit(url).path).name
-        if (not isinstance(filename, str) or not filename
-                or Path(filename).name != filename):
+        if not isinstance(filename, str) or not filename or Path(filename).name != filename:
             raise ValueError(f"{name}.filename 必须是安全的单个文件名")
         if Path(category).name != category:
             raise ValueError(f"非法下载类别: {category!r}")
@@ -205,15 +338,19 @@ class SourceManager:
         if path.is_file() and self._sha256_file(path) == sha256:
             return path
 
-        partial = path.with_suffix(path.suffix + ".download")
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{filename}.", suffix=".download", dir=path.parent
+        )
+        os.close(descriptor)
+        partial = Path(temporary)
         try:
-            subprocess.run(
+            self._run(
                 ["wget", "-q", "--show-progress", "-O", str(partial), url],
-                check=True, timeout=600,
+                check=True,
+                timeout=600,
             )
             if self._sha256_file(partial) != sha256:
-                raise RuntimeError(
-                    f"{name}: sha256 校验失败（URL: {url}）")
+                raise RuntimeError(f"{name}: sha256 校验失败（URL: {url}）")
             partial.replace(path)
         except Exception:
             partial.unlink(missing_ok=True)
@@ -240,7 +377,7 @@ class SourceManager:
           1. 仓库内 ``<project_root>/components/app/<name>/app.yaml``（本地优先）
           2. ``external_apps[<name>]`` 显式注册：
              - ``local_path`` 分支：直接指向宿主机任意目录，不触发 git
-             - ``git`` 分支：克隆到 ``<sources_dir>/apps/<name>/``
+             - ``git`` 分支：按 descriptor 寻址共享仓库，再创建目标独立工作树
           3. ``external_app_dirs`` 搜索路径列表：顺序遍历，首个含
              ``<dir>/<name>/app.yaml`` 的目录命中即采用
 
@@ -263,8 +400,7 @@ class SourceManager:
         if local_yaml.is_file():
             return local_dir
         attempted.append(
-            f"本地 {local_dir} "
-            f"({'目录不存在' if not local_dir.exists() else 'app.yaml 缺失'})"
+            f"本地 {local_dir} ({'目录不存在' if not local_dir.exists() else 'app.yaml 缺失'})"
         )
 
         # ---- 层 2：external_apps 显式注册 ----------------------------------
@@ -285,19 +421,19 @@ class SourceManager:
                     f"{'不存在' if not local_path.exists() else '缺失 app.yaml'}"
                 )
 
-            # 2b. git 分支：克隆到 sources_dir/apps/<name>/
+            # 2b. Git 分支：共享获取仓库与目标可变工作树分离。
             if "git" in ext:
-                app_dir = self.sources_dir / "apps" / app_name
                 repo_cfg = {**ext, "url": ext["git"]}
-                self._ensure_repo(app_dir, repo_cfg)
-                return app_dir
+                app_dir = self.sources_dir / "repos" / self.source_identity(repo_cfg)
+                with self.repo_lock(app_dir):
+                    self._ensure_repo(app_dir, repo_cfg)
+                    return self._target_checkout(app_dir, repo_cfg)
 
             # external_apps 有条目但两个分支都没命中 —— 正常情况下
             # normalize_app_sources 会在解析阶段拦住此分支；这里仅做防御性
             # 报错，不悄悄回退到搜索路径。
             raise ValueError(
-                f"App '{app_name}': external_apps[{app_name!r}] 缺少 "
-                f"local_path 或 git 字段"
+                f"App '{app_name}': external_apps[{app_name!r}] 缺少 local_path 或 git 字段"
             )
 
         # ---- 层 3：external_app_dirs 搜索路径 ------------------------------
@@ -313,13 +449,43 @@ class SourceManager:
 
         # ---- 三层均未命中 --------------------------------------------------
         bullets = "\n  - ".join(attempted) if attempted else "（无）"
-        raise ValueError(
-            f"App '{app_name}' 未找到。已尝试：\n  - {bullets}"
-        )
+        raise ValueError(f"App '{app_name}' 未找到。已尝试：\n  - {bullets}")
+
+    def locate_app(self, app_name: str, config: dict) -> Path:
+        """只读定位 App；远端未准备时明确失败，不隐式 fetch。"""
+        root = self._project_root or Path.cwd()
+        local = root / "components/app" / app_name
+        if (local / "app.yaml").is_file():
+            return local
+        descriptor = (config.get("external_apps") or {}).get(app_name)
+        if descriptor:
+            if "local_path" in descriptor:
+                path = Path(descriptor["local_path"])
+            elif "git" in descriptor:
+                repo = {**descriptor, "url": descriptor["git"]}
+                path = self._target_checkout_path(
+                    self.sources_dir / "repos" / self.source_identity(repo)
+                )
+            else:
+                raise ValueError(f"App {app_name!r} 缺少 source descriptor")
+            if (path / "app.yaml").is_file():
+                return path
+            raise FileNotFoundError(
+                f"App {app_name!r} 的源码未准备：{path}；请先执行 source fetch 或 build"
+            )
+        for directory in config.get("external_app_dirs") or []:
+            path = Path(directory) / app_name
+            if (path / "app.yaml").is_file():
+                return path
+        raise FileNotFoundError(f"找不到 App {app_name!r}，请检查工作区注册和搜索路径")
 
     # --- 仓库同步核心 ---
 
     def _ensure_repo(self, repo_dir: Path, cfg: dict) -> None:
+        with self.repo_lock(repo_dir):
+            self._ensure_repo_locked(repo_dir, cfg)
+
+    def _ensure_repo_locked(self, repo_dir: Path, cfg: dict) -> None:
         """统一的 clone + 同步入口。
 
         四种路径：
@@ -342,10 +508,8 @@ class SourceManager:
         if self._reuse_prepared and prepared_key in self._prepared_repos:
             if prepared_key in self._unclean_prepared_repos:
                 if prepared_key not in self._builder_reset_prepared_repos:
-                    subprocess.run(["git", "checkout", "-f", "."],
-                                   cwd=repo_dir, check=False)
-                    subprocess.run(["git", "clean", "-fd"],
-                                   cwd=repo_dir, check=False)
+                    self._run(["git", "checkout", "-f", "."], cwd=repo_dir, check=False)
+                    self._run(["git", "clean", "-fd"], cwd=repo_dir, check=False)
                     if cfg.get("recurse_submodules", False):
                         self._update_submodules(repo_dir)
                 self._unclean_prepared_repos.discard(prepared_key)
@@ -412,17 +576,28 @@ class SourceManager:
 
     def _update_submodules(self, repo_dir: Path):
         """同步更新子模块到当前 HEAD 声明的版本。"""
-        env = {**os.environ,
-               "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
-        subprocess.run(["git", "submodule", "update", "--init", "--recursive"],
-                       cwd=repo_dir, env=env, check=True, timeout=3600)
+        env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
+        self._run(
+            ["git", "submodule", "update", "--init", "--recursive"],
+            cwd=repo_dir,
+            env=env,
+            check=True,
+            timeout=3600,
+        )
 
     def _resolve_clone_url(self, cfg: dict) -> str:
         """返回 canonical git URL。"""
         return cfg["url"]
 
-    def _clone(self, repo: str, branch: str, dest: Path, commit: str = "",
-               recurse: bool = False, is_tag: bool = False):
+    def _clone(
+        self,
+        repo: str,
+        branch: str,
+        dest: Path,
+        commit: str = "",
+        recurse: bool = False,
+        is_tag: bool = False,
+    ):
         dest.parent.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
         # recurse_submodules 场景下避免 --depth=1（浅克隆 + 子模块常出问题）
@@ -433,16 +608,17 @@ class SourceManager:
         if branch:
             cmd += ["-b", branch]
         cmd += [repo, str(dest)]
-        subprocess.run(cmd, env=env, check=True, timeout=3600)
+        self._run(cmd, env=env, check=True, timeout=3600)
         if commit:
             self._fetch_ref(dest, commit, env=env, is_tag=is_tag)
-            subprocess.run(["git", "checkout", commit], cwd=dest, check=True)
+            self._run(["git", "checkout", commit], cwd=dest, check=True)
             if recurse:
                 self._update_submodules(dest)
 
     def _rev_parse(self, repo_dir: Path) -> str:
-        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir,
-                                capture_output=True, text=True, check=True)
+        result = self._run(
+            ["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True, check=True
+        )
         return result.stdout.strip()
 
     def _rev_parse_ref(self, repo_dir: Path, ref: str) -> str:
@@ -452,9 +628,12 @@ class SourceManager:
         返回空字符串，调用方走 fetch + checkout 路径。
         """
         try:
-            result = subprocess.run(
+            result = self._run(
                 ["git", "rev-parse", ref],
-                cwd=repo_dir, capture_output=True, text=True, check=True,
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             return result.stdout.strip()
         except subprocess.CalledProcessError:
@@ -464,19 +643,16 @@ class SourceManager:
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
         # 上一次构建应用的 patch 会留下 tracked 修改；先复位当前 HEAD，
         # 否则切到另一块板的 commit 时 checkout 会拒绝覆盖这些文件。
-        subprocess.run(["git", "checkout", "-f", "."],
-                       cwd=repo_dir, check=False)
-        subprocess.run(["git", "clean", "-fd"],
-                       cwd=repo_dir, check=False)
+        self._run(["git", "checkout", "-f", "."], cwd=repo_dir, check=False)
+        self._run(["git", "clean", "-fd"], cwd=repo_dir, check=False)
         self._fetch_ref(repo_dir, commit, env=env, is_tag=is_tag)
         # 固定 ref 路径继续用 mixed reset + checkout -f，避开 macOS
         # 大小写不敏感文件系统上 kernel 同名异写文件导致的 hard reset 失败。
-        subprocess.run(["git", "reset", "--mixed", "--no-refresh", commit],
-                       cwd=repo_dir, check=True)
-        subprocess.run(["git", "checkout", "-f", "."],
-                       cwd=repo_dir, check=False)
-        subprocess.run(["git", "clean", "-fd"],
-                       cwd=repo_dir, check=False)
+        self._run(
+            ["git", "reset", "--mixed", "--no-refresh", commit], cwd=repo_dir, check=True
+        )
+        self._run(["git", "checkout", "-f", "."], cwd=repo_dir, check=False)
+        self._run(["git", "clean", "-fd"], cwd=repo_dir, check=False)
 
     def _fetch_ref(self, repo_dir: Path, ref: str, env: dict, is_tag: bool):
         """fetch 单个 ref。
@@ -493,11 +669,21 @@ class SourceManager:
         """
         if is_tag:
             refspec = f"+refs/tags/{ref}:refs/tags/{ref}"
-            subprocess.run(["git", "fetch", "--depth=1", "origin", refspec],
-                           cwd=repo_dir, env=env, check=True, timeout=600)
+            self._run(
+                ["git", "fetch", "--depth=1", "origin", refspec],
+                cwd=repo_dir,
+                env=env,
+                check=True,
+                timeout=600,
+            )
         else:
-            subprocess.run(["git", "fetch", "--depth=1", "origin", ref],
-                           cwd=repo_dir, env=env, check=True, timeout=600)
+            self._run(
+                ["git", "fetch", "--depth=1", "origin", ref],
+                cwd=repo_dir,
+                env=env,
+                check=True,
+                timeout=600,
+            )
 
     def _fetch_reset_branch(self, repo_dir: Path, branch: str) -> bool:
         """追远端最新，HEAD 变化时优先 hard reset。
@@ -534,24 +720,31 @@ class SourceManager:
         语义上就是镜像远端 tip，跟随 rewind 是预期行为；``git clone`` 默认
         写入 ``remote.origin.fetch`` 的 refspec 同样带 ``+``。
         """
-        env = {**os.environ,
-               "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
+        env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o StrictHostKeyChecking=accept-new"}
         refspec = f"+{branch}:refs/remotes/origin/{branch}"
         current_head = self._rev_parse(repo_dir)
-        probe = subprocess.run(
-            ["git", "ls-remote", "--exit-code", "origin",
-             f"refs/heads/{branch}"],
-            cwd=repo_dir, env=env, check=False, timeout=600,
-            capture_output=True, text=True,
+        probe = self._run(
+            ["git", "ls-remote", "--exit-code", "origin", f"refs/heads/{branch}"],
+            cwd=repo_dir,
+            env=env,
+            check=False,
+            timeout=600,
+            capture_output=True,
+            text=True,
         )
         remote_output = (probe.stdout or "").strip()
-        remote_head = (remote_output.split(maxsplit=1)[0]
-                       if probe.returncode == 0 and remote_output else "")
+        remote_head = (
+            remote_output.split(maxsplit=1)[0] if probe.returncode == 0 and remote_output else ""
+        )
         if not remote_head or current_head != remote_head:
-            subprocess.run(["git", "fetch", "--depth=1", "origin", refspec],
-                           cwd=repo_dir, env=env, check=True, timeout=600)
-            remote_head = self._rev_parse_ref(
-                repo_dir, f"refs/remotes/origin/{branch}")
+            self._run(
+                ["git", "fetch", "--depth=1", "origin", refspec],
+                cwd=repo_dir,
+                env=env,
+                check=True,
+                timeout=600,
+            )
+            remote_head = self._rev_parse_ref(repo_dir, f"refs/remotes/origin/{branch}")
         if current_head == remote_head:
             # cache hit 只需要已同步的 commit；不要为检查 dirty 扫描大源码树。
             # miss 后的第二次 ensure 会恢复原有 reset/clean 语义。
@@ -560,27 +753,25 @@ class SourceManager:
             # HEAD 未变化时只在确有 tracked 修改（上次构建应用的 patch）时
             # reset 当前 HEAD。`checkout -f .` 会重写内核整树约 9 万个文件的
             # 时间戳，既慢又会破坏 make 增量判断。
-            dirty = subprocess.run(
+            dirty = self._run(
                 ["git", "diff-index", "--quiet", "HEAD", "--"],
-                cwd=repo_dir, check=False,
+                cwd=repo_dir,
+                check=False,
             )
             if dirty.returncode:
-                result = subprocess.run(
+                result = self._run(
                     ["git", "reset", "--hard", "HEAD"],
-                    cwd=repo_dir, check=False,
+                    cwd=repo_dir,
+                    check=False,
                 )
                 if result.returncode:
-                    subprocess.run(["git", "checkout", "-f", "."],
-                                   cwd=repo_dir, check=False)
-            subprocess.run(["git", "clean", "-fd"],
-                           cwd=repo_dir, check=False)
+                    self._run(["git", "checkout", "-f", "."], cwd=repo_dir, check=False)
+            self._run(["git", "clean", "-fd"], cwd=repo_dir, check=False)
             return True
         target = f"origin/{branch}"
-        result = subprocess.run(["git", "reset", "--hard", target],
-                                cwd=repo_dir, check=False)
+        result = self._run(["git", "reset", "--hard", target], cwd=repo_dir, check=False)
         if result.returncode == 0:
-            subprocess.run(["git", "clean", "-fd"],
-                           cwd=repo_dir, check=False)
+            self._run(["git", "clean", "-fd"], cwd=repo_dir, check=False)
             return True
 
         # `--no-refresh`：跳过 reset 后的 index stat 刷新。kernel 级大树
@@ -588,11 +779,10 @@ class SourceManager:
         # 刷 index 极慢且会被 SIGKILL（exit 137，git 自身 hint 即建议
         # --no-refresh）。后续 `checkout -f .` 会重新物化工作树，stat 信息
         # 随之更新，跳过刷新无副作用。
-        subprocess.run(["git", "reset", "--mixed", "--no-refresh",
-                        target],
-                       cwd=repo_dir, check=True)
-        subprocess.run(["git", "checkout", "-f", "."],
-                       cwd=repo_dir, check=False)
+        self._run(
+            ["git", "reset", "--mixed", "--no-refresh", target], cwd=repo_dir, check=True
+        )
+        self._run(["git", "checkout", "-f", "."], cwd=repo_dir, check=False)
         # 切 branch 后清残留：reset --mixed + checkout -f 只把 index 同步到新
         # HEAD，工作树里上一 branch 才有的 tracked 文件会留为 untracked，污染
         # 新 branch 构建（实测：kernel 从 linux-6.18.2 切到 qclinux 6.6 BSP，
@@ -600,6 +790,5 @@ class SourceManager:
         # Makefile 不再生成 cpucap-defs.h，残留 cpucaps.h 强引用它致编译失败）。
         # `-fd` 不带 `-x`：清未跟踪但保留 gitignored 构建产物（generated/、
         # .o、.cmd），同 branch 增量重建不受影响。
-        subprocess.run(["git", "clean", "-fd"],
-                       cwd=repo_dir, check=False)
+        self._run(["git", "clean", "-fd"], cwd=repo_dir, check=False)
         return True

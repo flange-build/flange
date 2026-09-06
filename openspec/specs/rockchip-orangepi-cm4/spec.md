@@ -1,7 +1,9 @@
 # rockchip-orangepi-cm4 Specification
 
 ## Purpose
-TBD - created by archiving change orangepi-cm4-bringup-wifi-and-npu-fix. Update Purpose after archive.
+
+定义 Orange Pi CM4 的板级落地契约：WiFi/BT 固件部署与搜索路径、bootargs 与 extlinux 协作、不可用外设的禁用边界、上游 DTS 的只读约束，以及 AMP product 与从核 console 的 pinmux 独占。
+
 ## Requirements
 ### Requirement: orangepi-cm4 部署 AP6256 WiFi/BT 固件
 

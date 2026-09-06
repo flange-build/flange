@@ -63,6 +63,7 @@ local panel = product == 'meizu-e3-bringup';
     },
   },
   kernel+: {
+    // 内核源继承平台层的 rockchip-kernel，不在板级覆盖。
     // argon BSP linux-6.1-stan-rkr5.1 已包含 rk3588-rock-5b.dts。
     device_tree+: { name: 'rk3588-rock-5b' },
     // 复用 kernel.oot_sources 已 ensure 的源

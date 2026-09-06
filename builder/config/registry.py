@@ -15,11 +15,15 @@ def _discover_platform_configs(
 ) -> dict[str, str]:
     root = _root(project_root)
     platform_dir = components_dir(root) / "platform"
-    return {
-        child.name: str((child / "config.jsonnet").relative_to(root))
-        for child in sorted(platform_dir.iterdir())
-        if child.is_dir() and (child / "config.jsonnet").is_file()
-    } if platform_dir.is_dir() else {}
+    return (
+        {
+            child.name: str((child / "config.jsonnet").relative_to(root))
+            for child in sorted(platform_dir.iterdir())
+            if child.is_dir() and (child / "config.jsonnet").is_file()
+        }
+        if platform_dir.is_dir()
+        else {}
+    )
 
 
 def _discover_soc_configs(
@@ -37,20 +41,23 @@ def _discover_soc_configs(
 
 
 def _evaluate_overlay(path: Path, project_root: Path) -> dict:
-    return JsonnetEvaluator(project_root).evaluate_file(
-        path, ext_vars={"product": "default", "variant": "release"}
-    ).config
+    result = (
+        JsonnetEvaluator(project_root)
+        .evaluate_file(path, ext_vars={"product": "default", "variant": "release"})
+        .config
+    )
+    JsonnetConfigLoader._validate_authored_shape(result)
+    return result
 
 
 def _load_platform_config(
-    platform: str, project_root: Path | None = None,
+    platform: str,
+    project_root: Path | None = None,
 ) -> dict:
     root = _root(project_root)
     configs = _discover_platform_configs(root)
     if platform not in configs:
-        raise ValueError(
-            f"未发现平台：{platform}（可用: "
-            f"{', '.join(sorted(configs)) or '无'}）")
+        raise ValueError(f"未发现平台：{platform}（可用: {', '.join(sorted(configs)) or '无'}）")
     return _evaluate_overlay(root / configs[platform], root)
 
 
@@ -58,9 +65,7 @@ def _load_soc_config(soc: str, project_root: Path | None = None) -> dict:
     root = _root(project_root)
     configs = _discover_soc_configs(root)
     if soc not in configs:
-        raise ValueError(
-            f"未发现 SoC：{soc}（可用: "
-            f"{', '.join(sorted(configs)) or '无'}）")
+        raise ValueError(f"未发现 SoC：{soc}（可用: {', '.join(sorted(configs)) or '无'}）")
     return _evaluate_overlay(root / configs[soc], root)
 
 
@@ -85,9 +90,7 @@ def _require_board(
 ) -> dict:
     available = boards if boards is not None else discover_boards(root)
     if board_name not in available:
-        raise KeyError(
-            f"未找到板子 {board_name!r}；可用: "
-            f"{', '.join(sorted(available)) or '无'}")
+        raise KeyError(f"未找到板子 {board_name!r}；可用: {', '.join(sorted(available)) or '无'}")
     return available[board_name]
 
 
@@ -116,5 +119,4 @@ def resolve_config(
     """按显式 product/variant 求值并返回最终 canonical 配置。"""
     root = _root(project_root)
     _require_board(board_name, boards, root)
-    return JsonnetConfigLoader(root).evaluate_board(
-        board_name, product, variant)
+    return JsonnetConfigLoader(root).evaluate_board(board_name, product, variant)

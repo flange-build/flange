@@ -6,7 +6,7 @@ sources:
   - components/app/adbd/app.yaml
   - components/app/adbd/bin/adbd-arm64
   - components/app/adbd/bin/adbd-armhf
-  - components/app/adbd/bin/README.md
+  - components/app/adbd/README.md
   - components/app/adbd/conf/usbdevice.conf
   - components/app/adbd/scripts/usbdevice
   - components/app/adbd/systemd/usbdevice.service
@@ -20,17 +20,19 @@ related:
   - "[[recovery 系统]]"
   - "[[atk-rk3506b]]"
   - "[[radxa-rock5b]]"
-updated: 2026-08-27
+updated: 2026-09-05
 ---
 
 ## TL;DR
 
-USB ADB gadget 服务，可运行于 normal 或 recovery rootfs，提供 host ↔ device 调试通道。支持 DWC2/DWC3 与模块化 ConfigFS gadget。daemon 为 **ADB 36.0.1 standalone adbd**（2026-08 从 Android 5 时代的 vendor adbd 升级，根因见下文定位记录）；[[atk-rk3506b]] 与 [[radxa-rock5b]] 均已验证断电冷启动后自动绑定并可 `adb shell`。
+USB ADB gadget（USB 设备侧功能）服务，可运行于 normal 或 recovery rootfs，提供宿主机与开发板之间的调试通道。支持 DWC2/DWC3 与模块化 ConfigFS gadget。当前 daemon（守护进程）为 **ADB 36.0.1 standalone adbd**，含 2026-08-31 的线程退出修复；当前二进制来源、摘要和各架构验证范围以 [App README](../../components/app/adbd/README.md) 为准。下文带日期的冷启动与连接实验属于对应历史版本，不能直接代表当前二进制的验证结果。
+
+第一次连接设备，先阅读[开发指南的设备验证](../../docs/development-guide.md#4-刷写与设备验证)；本页用于理解服务实现及排查 USB 问题。
 
 ## 关键设计要点
 
-- **app.yaml 类型**：`type: service`，`arch: [aarch64, armhf]`，`capabilities: [usb-gadget, adb-debug]`
-- **二进制**：预编译 `bin/adbd-arm64` / `bin/adbd-armhf`，无编译步骤。均为 ADB 36.0.1 静态链接（arm64 取上游 release，armhf 自行交叉编译；来源与 SHA256 见 [bin/README.md](../../components/app/adbd/bin/README.md)）
+- **app.yaml 类型**：`app.type: service`，`app.arch: [aarch64, armhf]`。通过安装脚本、配置和 systemd unit 提供 USB ADB 功能。
+- **二进制**：App 打包时使用预编译 `bin/adbd-arm64` / `bin/adbd-armhf`，不重新编译。当前两种架构均在 Docker 中从 ADB 36.0.1 源码交叉编译并加入本地补丁；来源、SHA256 与重建方法见 [App README](../../components/app/adbd/README.md)。
 - **systemd unit**：`usbdevice.service`（`Type=oneshot` + `RemainAfterExit=yes`）要求 `sys-kernel-config.mount`，并排在 `systemd-modules-load.service` 之后；入口 `/usr/sbin/usbdevice start` 负责启动 adbd。历史上曾用 `Type=forking`，systemd 会把脚本 spawn 的 daemon 守护循环误当 main process 追踪——服务"存活"实际依赖该循环永不退出这一 bug，循环被正常回收即触发 `ExecStop` 拆掉刚建好的 gadget（commit 0c9b03a2 修正）
 - **udev 规则**：`61-usbdevice.rules` 监听 `android_usb` 状态变化，触发 `usbdevice update`
 - **配置文件**：`/etc/usbdevice.conf`（conffiles，升级不覆盖）；板级 overlay 覆盖 VID/PID；默认 `USB_FUNCS=adb`，序列号取自 cpuinfo。ADB 36 adbd 额外读取两个 export：`ADB_TCP_PORT=5555`（旧 adbd 内建监听、新 adbd 须显式指定）与 `ADBD_SHELL=/bin/bash`（`adb shell` 以 argv[0]=`-/bin/bash` 启动 **login bash**，经 `/etc/profile` → `/root/.profile` 读到 [/root/.bashrc](../../components/rootfs/overlay/root/.bashrc)，提示符/补全/历史与 ssh 登录一致；旧 adbd 固定 `/bin/sh`→dash）
@@ -46,7 +48,7 @@ USB ADB gadget 服务，可运行于 normal 或 recovery rootfs，提供 host �
 - [conf/usbdevice.conf](../../components/app/adbd/conf/usbdevice.conf) — 默认配置，板级 overlay 覆盖
 - [systemd/usbdevice.service](../../components/app/adbd/systemd/usbdevice.service) — systemd unit
 - [udev/61-usbdevice.rules](../../components/app/adbd/udev/61-usbdevice.rules) — udev 触发
-- [bin/README.md](../../components/app/adbd/bin/README.md) — 二进制来源、SHA256 与升级缘由
+- [App README](../../components/app/adbd/README.md) — 当前二进制来源、SHA256、重建方法与验证范围
 
 ## 易踩坑
 

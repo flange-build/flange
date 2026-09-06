@@ -1,6 +1,8 @@
-CC      ?= gcc
-CFLAGS  ?= -Wall -O2 -fPIC -Iinclude
-TARGET  := lib${name}.so
+CC      := $$(CROSS_COMPILE)gcc
+CFLAGS  ?= -Wall -O2
+BUILD_DIR ?= build
+LIBRARY := lib${name}.so
+TARGET  := $$(BUILD_DIR)/$$(LIBRARY)
 SRCS    := src/${name}.c
 
 .PHONY: all clean install
@@ -8,14 +10,16 @@ SRCS    := src/${name}.c
 all: $$(TARGET)
 
 $$(TARGET): $$(SRCS)
-	$$(CC) $$(CFLAGS) -shared -Wl,-soname,$$(TARGET).1 -o $$(TARGET).${version} $$^
-	ln -sf $$(TARGET).${version} $$(TARGET).1
-	ln -sf $$(TARGET).1 $$(TARGET)
+	mkdir -p $$(BUILD_DIR)
+	$$(CC) $$(CPPFLAGS) $$(CFLAGS) -fPIC -Iinclude -shared \
+	    -Wl,-soname,$$(LIBRARY).1 -o $$(TARGET).${version} $$^ $$(LDFLAGS)
+	ln -sf $$(LIBRARY).${version} $$(TARGET).1
+	ln -sf $$(LIBRARY).1 $$(TARGET)
 
 install: $$(TARGET)
-	install -Dm755 $$(TARGET).${version} $$(DESTDIR)/usr/lib/$$(TARGET).${version}
-	ln -sf $$(TARGET).${version} $$(DESTDIR)/usr/lib/$$(TARGET).1
-	ln -sf $$(TARGET).1 $$(DESTDIR)/usr/lib/$$(TARGET)
+	install -Dm755 $$(TARGET).${version} $$(DESTDIR)/usr/lib/$$(LIBRARY).${version}
+	ln -sf $$(LIBRARY).${version} $$(DESTDIR)/usr/lib/$$(LIBRARY).1
+	ln -sf $$(LIBRARY).1 $$(DESTDIR)/usr/lib/$$(LIBRARY)
 	install -Dm644 include/${name}.h $$(DESTDIR)/usr/include/${name}.h
 
 clean:

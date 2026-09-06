@@ -1,6 +1,7 @@
-CC      ?= gcc
+CC      := $$(CROSS_COMPILE)gcc
 CFLAGS  ?= -Wall -O2
-TARGET  := ${name}
+BUILD_DIR ?= build
+TARGET  := $$(BUILD_DIR)/${name}
 SRCS    := src/main.c
 
 .PHONY: all clean install
@@ -8,14 +9,15 @@ SRCS    := src/main.c
 all: $$(TARGET)
 
 $$(TARGET): $$(SRCS)
-	$$(CC) $$(CFLAGS) -o $$@ $$^
+	mkdir -p $$(BUILD_DIR)
+	$$(CC) $$(CPPFLAGS) $$(CFLAGS) -o $$@ $$^ $$(LDFLAGS)
 
 install: $$(TARGET)
-	install -Dm755 $$(TARGET) $$(DESTDIR)/usr/bin/$$(TARGET)
-	install -Dm644 systemd/$$(TARGET).service \
-	    $$(DESTDIR)/lib/systemd/system/$$(TARGET).service
+	install -Dm755 $$(TARGET) $$(DESTDIR)/usr/bin/${name}
+	install -Dm644 systemd/${name}.service \
+	    $$(DESTDIR)/lib/systemd/system/${name}.service
 	install -Dm644 conf/config.yaml \
-	    $$(DESTDIR)/etc/$$(TARGET)/config.yaml
+	    $$(DESTDIR)/etc/${name}/config.yaml
 
 clean:
 	rm -f $$(TARGET)

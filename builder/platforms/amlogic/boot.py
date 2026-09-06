@@ -17,8 +17,8 @@ boot，会自动扫描 /extlinux/extlinux.conf。运行时通过 fstab 中
 """
 
 import shutil
-import tempfile
 from pathlib import Path
+from builder.partition.layout import PartitionLayout
 from builder.base import ComponentBuilder
 from builder.config.canonical import kernel_device_tree
 from builder.dtb_overlay import (
@@ -55,7 +55,7 @@ class AmlogicBootBuilder(ComponentBuilder):
 
     def compile(self, src_dir: Path, config: dict):
         """从 kernel 产物 + config 构建 boot.img。"""
-        self._work_dir = Path(tempfile.mkdtemp(prefix="flange-boot-"))
+        self._work_dir = self.work_dir()
         staging = self._work_dir / "staging"
         staging.mkdir()
 
@@ -67,8 +67,8 @@ class AmlogicBootBuilder(ComponentBuilder):
 
         if not kernel_src_image.exists():
             raise FileNotFoundError(
-                f"kernel Image 未找到: {kernel_src_image}；"
-                "确认 kernel 组件构建成功且产物已收集")
+                f"kernel Image 未找到: {kernel_src_image}；确认 kernel 组件构建成功且产物已收集"
+            )
         if not kernel_src_dtb.exists():
             raise FileNotFoundError(f"kernel DTB 未找到: {kernel_src_dtb}")
 
@@ -110,22 +110,39 @@ class AmlogicBootBuilder(ComponentBuilder):
         # 生成 normal/recovery extlinux 配置；是否读取 recovery.conf 由 U-Boot 决定
         # （flange U-Boot 补丁在 reboot recovery / boot-once 请求存在时切换）。
         (extlinux_dir / NORMAL_CONFIG).write_text(
-            self._build_extlinux_conf(config, kernel_src_dtb.name))
+            self._build_extlinux_conf(config, kernel_src_dtb.name)
+        )
         if (config.get("recovery") or {}).get("enabled", False):
             (extlinux_dir / RECOVERY_CONFIG).write_text(
-                self._build_recovery_extlinux_conf(config, kernel_src_dtb.name))
+                self._build_recovery_extlinux_conf(config, kernel_src_dtb.name)
+            )
 
         # mke2fs -d 从 staging 目录直接生成 ext4 镜像（免 mount）
-        boot_size_mb = self._partition_size_mb(config, "boot")
+        boot_size_mb = PartitionLayout.from_config(config).size_mb("boot")
         boot_img = self._work_dir / "boot.img"
         self._status(f"生成 boot.img ({boot_size_mb}MB)...")
-        self.docker.run([
-            "truncate", "-s", f"{boot_size_mb}M", str(boot_img),
-        ])
-        self.docker.run([
-            "mke2fs", "-t", "ext4", "-L", "boot", "-F", "-q",
-            "-d", str(staging), str(boot_img),
-        ])
+        self.docker.run(
+            [
+                "truncate",
+                "-s",
+                f"{boot_size_mb}M",
+                str(boot_img),
+            ]
+        )
+        self.docker.run(
+            [
+                "mke2fs",
+                "-t",
+                "ext4",
+                "-L",
+                "boot",
+                "-F",
+                "-q",
+                "-d",
+                str(staging),
+                str(boot_img),
+            ]
+        )
         self._boot_img = boot_img
 
     def _build_extlinux_conf(self, config: dict, dtb_filename: str) -> str:
@@ -141,9 +158,7 @@ class AmlogicBootBuilder(ComponentBuilder):
             kernel="/extlinux/Image",
             fdt=f"/{self.DTB_VENDOR_DIR}/{dtb_filename}",
             fdt_directive="fdt",
-            fdtoverlays=[
-                f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in overlay_names
-            ],
+            fdtoverlays=[f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in overlay_names],
             append=f"root=PARTLABEL=rootfs rootfstype=ext4 rootwait rw {kernel_args}".rstrip(),
         )
         return render_extlinux(NORMAL_LABEL, [normal])
@@ -159,23 +174,13 @@ class AmlogicBootBuilder(ComponentBuilder):
             kernel="/extlinux/Image",
             fdt=f"/{self.DTB_VENDOR_DIR}/{dtb_filename}",
             fdt_directive="fdt",
-            fdtoverlays=[
-                f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in overlay_names
-            ],
+            fdtoverlays=[f"/{self.DTB_VENDOR_DIR}/overlay/{o}" for o in overlay_names],
             append=(
                 f"root=PARTLABEL=recovery rootfstype=ext4 rootwait rw "
                 f"flange.mode=recovery {kernel_args}"
             ).rstrip(),
         )
         return render_extlinux(RECOVERY_LABEL, [recovery])
-
-    def _partition_size_mb(self, config: dict, name: str) -> int:
-        """从 config 中读取指定分区大小（MB）。"""
-        for entry in config.get("partitions", {}).get("entries", []):
-            if entry["name"] == name:
-                size_sectors = int(entry["size"], 0)
-                return (size_sectors * 512) // (1024 * 1024)
-        raise KeyError(f"partitions.entries 中未定义分区: {name}")
 
     def collect(self, src_dir: Path, config: dict) -> dict:
         return {"boot": self._boot_img}
