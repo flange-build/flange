@@ -1,7 +1,7 @@
 ---
 title: 板级索引
 type: index
-updated: 2026-09-05
+updated: 2026-09-06
 ---
 
 # 板级索引
@@ -31,4 +31,4 @@ updated: 2026-09-05
 - [radxa-dragon-q6a](radxa-dragon-q6a.md) — QCS6490（首颗 Qualcomm 板，UEFI/GRUB + UFS 4K LBA + Adreno 643 freedreno + AIC8800 USB，status: wip）
 - [radxa-dragon-q8b](radxa-dragon-q8b.md) — SC8280XP（UEFI/GRUB + UFS 4K LBA + Adreno/MSM + QPS615/TC956x 双网口，status: wip）
 
-- [radxa-rock5c-lite](radxa-rock5c-lite.md) — RK3588S，含 USB-C OTG 与 LCD HAT 专题。
+- [radxa-rock5c-lite](radxa-rock5c-lite.md) — RK3582，含 USB-C OTG 与 LCD HAT 专题。

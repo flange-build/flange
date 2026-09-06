@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+<title id="title">flange 分层设计</title><desc id="desc">仓库按代码、内容、产物分工；工作区显式组合基础层与扩展层；配置按阶段、再按层序求值。</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#ef6939"/></marker></defs>
+<rect width="1200" height="900" rx="16" fill="#ffffff"/>
+<g font-family="Arial, PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+<text x="40" y="48" font-size="30" fill="#24272b" font-weight="700">flange / 分层设计</text>
+<text x="40" y="82" font-size="20" fill="#66717c" font-weight="400">组织源码、复用产品内容，让每个工作区拥有自己的构建状态。</text>
+<text x="40" y="132" font-size="21" fill="#24272b" font-weight="700">01  仓库分工</text>
+<rect x="40" y="153" width="340" height="112" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="60" y="182" font-size="18" fill="#66717c" font-weight="400">代码</text>
+<text x="60" y="214" font-size="24" fill="#24272b" font-weight="700">builder/</text>
+<text x="60" y="245" font-size="18" fill="#24272b" font-weight="400">配置解析 · 引擎 · 平台策略</text>
+<rect x="430" y="153" width="340" height="112" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="450" y="182" font-size="18" fill="#66717c" font-weight="400">内容</text>
+<text x="450" y="214" font-size="24" fill="#24272b" font-weight="700">components/</text>
+<text x="450" y="245" font-size="18" fill="#24272b" font-weight="400">板卡 · 补丁 · 应用 · 功能包</text>
+<rect x="820" y="153" width="340" height="112" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="840" y="182" font-size="18" fill="#66717c" font-weight="400">产物</text>
+<text x="840" y="214" font-size="24" fill="#24272b" font-weight="700">.build/</text>
+<text x="840" y="245" font-size="18" fill="#24272b" font-weight="400">下载 · 中间文件 · 最终镜像</text>
+<text x="40" y="298" font-size="18" fill="#66717c" font-weight="400">.build/ 是默认构建目录；外部工作区可通过 build_dir 指定产物位置。</text>
+<path d="M40 320 H1160" stroke="#dce1e5"/>
+<text x="40" y="359" font-size="21" fill="#24272b" font-weight="700">02  多层组合</text>
+<text x="40" y="392" font-size="18" fill="#66717c" font-weight="400">从低层到高层显式排列；以下 BSP、公共层、产品层仅为示例。</text>
+<rect x="40" y="421" width="190" height="92" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="55" y="456" font-size="20" fill="#24272b" font-weight="700">flange 基础层</text>
+<text x="55" y="485" font-size="17" fill="#66717c" font-weight="400">隐式最低层</text>
+<path d="M230 467 H254" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="262" y="421" width="190" height="92" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="277" y="456" font-size="20" fill="#24272b" font-weight="700">BSP 扩展层</text>
+<text x="277" y="485" font-size="17" fill="#66717c" font-weight="400">板级支持包</text>
+<path d="M452 467 H476" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="484" y="421" width="190" height="92" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="499" y="456" font-size="20" fill="#24272b" font-weight="700">公共扩展层</text>
+<text x="499" y="485" font-size="17" fill="#66717c" font-weight="400">复用应用与功能</text>
+<path d="M674 467 H698" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="706" y="421" width="190" height="92" rx="12" fill="#fff2eb" stroke="#dce1e5"/>
+<text x="721" y="456" font-size="20" fill="#24272b" font-weight="700">产品扩展层</text>
+<text x="721" y="485" font-size="17" fill="#66717c" font-weight="400">产品差异与定制</text>
+<path d="M896 467 H928" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="940" y="411" width="220" height="112" rx="12" fill="#24272b" stroke="#24272b"/>
+<text x="960" y="445" font-size="20" fill="#ffffff" font-weight="700">Workspace 工作区</text>
+<text x="960" y="477" font-size="17" fill="#ffffff" font-weight="400">声明层序与选择目标</text>
+<text x="960" y="504" font-size="17" fill="#ffffff" font-weight="400">拥有状态、缓存与产物</text>
+<text x="40" y="553" font-size="18" fill="#66717c" font-weight="400">各层提供 components/；扩展策略位于 strategies/。产品层与工作区可以同目录。</text>
+<text x="40" y="585" font-size="18" fill="#66717c" font-weight="400">同名 App、Package 与策略选择最高层完整定义；补丁与文件覆盖按各自规则组合。</text>
+<path d="M40 609 H1160" stroke="#dce1e5"/>
+<text x="40" y="648" font-size="21" fill="#24272b" font-weight="700">03  配置求值</text>
+<text x="40" y="681" font-size="18" fill="#66717c" font-weight="400">先按配置阶段推进，每个阶段内部再按低层 → 高层组合。</text>
+<rect x="40" y="711" width="184" height="84" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="52" y="744" font-size="19" fill="#24272b" font-weight="700">发行版基线</text>
+<text x="52" y="775" font-size="17" fill="#66717c" font-weight="400">Ubuntu 等</text>
+<path d="M224 753 H264" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="274" y="711" width="184" height="84" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="286" y="744" font-size="19" fill="#24272b" font-weight="700">platform 平台</text>
+<text x="286" y="775" font-size="17" fill="#66717c" font-weight="400">厂商公共配置</text>
+<path d="M458 753 H498" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="508" y="711" width="184" height="84" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="520" y="744" font-size="19" fill="#24272b" font-weight="700">SoC 芯片</text>
+<text x="520" y="775" font-size="17" fill="#66717c" font-weight="400">架构与芯片事实</text>
+<path d="M692 753 H732" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="742" y="711" width="184" height="84" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="754" y="744" font-size="19" fill="#24272b" font-weight="700">board 板卡</text>
+<text x="754" y="775" font-size="17" fill="#66717c" font-weight="400">板级配置</text>
+<path d="M926 753 H966" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="976" y="711" width="184" height="84" rx="12" fill="#f7f8f9" stroke="#dce1e5"/>
+<text x="988" y="744" font-size="19" fill="#24272b" font-weight="700">Package 功能包</text>
+<text x="988" y="775" font-size="17" fill="#66717c" font-weight="400">目标直接启用项</text>
+<text x="40" y="836" font-size="19" fill="#24272b" font-weight="400">product / variant（产品 / 变体）参与求值，最终得到统一配置。</text>
+<text x="40" y="867" font-size="17" fill="#66717c" font-weight="400">存在共享设备树覆盖基线时，在 platform 之前加载。配置组合遵循 Jsonnet 原生语义。</text>
+</g></svg>

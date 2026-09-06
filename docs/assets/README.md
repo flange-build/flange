@@ -1,8 +1,13 @@
-# 文档品牌资源
+# 文档品牌与架构资源
 
-- `flange-logo-readme.png`：2026-09-05 为 GitHub README 设计的 Logo，深墨色字标与青绿色连接图形，
-  表达 flange 连接源码与设备的角色。由 imagegen 生成，保存在仓库内，白底适配 GitHub 明暗主题。
-- `flange-logo.svg`、`flange-logo.png`：既有品牌资源，保留供历史材料使用。
+- `flange-logo.png`：2026-09-06 确定的正式 Logo，采用 C2「石墨 × 橙」方向。
+  三层模块与 `f` 负形表达组件组合，搭配小写 flange 字标。由内置 imagegen 基于 C 方案润色生成，
+  使用浅色不透明背景。当前为 PNG（位图），尚无正式矢量源文件；其他候选及旧版 Logo 已移除。
+- `architecture/flange-layers.svg`：分层设计图，展示仓库分工、扩展层组合与配置求值顺序。
+- `architecture/flange-architecture.svg`：构建部署架构图，展示宿主机、Docker、工作区产物和设备边界。
+  两图使用可编辑 SVG（可缩放矢量图），石墨与橙色配色，中文标签；事实来源为
+  [项目规格](../../ProjectSpec.md)、[多层工作区](../layers.md)和[架构设计](../build-system-design.md)。
+  README 使用图片嵌入并链接原图，可点击放大。
 - `terminal-colors.png`：2026-09-05 从临时工作区的真实 PTY（伪终端）输出生成的语义颜色预览，
   对照深浅背景；展示 source 就绪、工作区状态、目标列举与选择、无效参数反馈。
   色值是预览主题，实际颜色由用户终端决定。记录命令未编译或操作设备。
