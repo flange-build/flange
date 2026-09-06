@@ -45,8 +45,15 @@ CAPABILITIES: dict[str, Any] = {
 REQUIRED_ATTRS = ("ARTIFACT_NAMES", "create_builder")
 
 
-def load(platform: str) -> ModuleType:
+def load(platform: str, layer_stack=None) -> ModuleType:
     """按平台名加载平台包。"""
+    if layer_stack is not None:
+        module = layer_stack.provider("platform", platform)
+        if module is not None:
+            missing = missing_attrs(module)
+            if missing:
+                raise ValueError(f"平台策略 {platform} 缺少接口：{', '.join(missing)}")
+            return module
     return importlib.import_module(f"builder.platforms.{platform}")
 
 
@@ -54,7 +61,7 @@ def load_for(config: dict) -> ModuleType:
     platform = config.get("platform", "")
     if not platform:
         raise ValueError("config 缺少 platform 字段")
-    return load(platform)
+    return load(platform, getattr(config, "layer_stack", None))
 
 
 def capability(config: dict, name: str) -> Any:
@@ -78,16 +85,20 @@ def capability(config: dict, name: str) -> Any:
     return getattr(module, name.upper(), CAPABILITIES[name])
 
 
-def known_platforms() -> list[str]:
+def known_platforms(layer_stack=None) -> list[str]:
     """磁盘上已注册的平台包名。"""
     from pathlib import Path
 
     root = Path(__file__).parent
-    return sorted(
+    builtin = {
         entry.name for entry in root.iterdir()
         if entry.is_dir() and entry.name != "__pycache__"
         and (entry / "__init__.py").is_file()
-    )
+    }
+    if layer_stack is not None:
+        builtin.update(provider.name for layer in layer_stack.layers
+                       for provider in layer.providers if provider.kind == "platform")
+    return sorted(builtin)
 
 
 def missing_attrs(module: ModuleType) -> list[str]:

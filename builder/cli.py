@@ -101,6 +101,12 @@ def _parser() -> ArgumentParser:
     selection = actions.add_parser("select", help="选择工作区目标；TTY 中可交互选择")
     selection.add_argument("name", nargs="?")
     actions.add_parser("show", help="显示当前目标的有效配置摘要")
+    layer = commands.add_parser("layer", help="查看和校验本地扩展层")
+    layer_actions = layer.add_subparsers(dest="action", required=True)
+    layer_actions.add_parser("list", help="按优先级列出启用层")
+    layer_actions.add_parser("check", help="校验层清单、依赖及配置目标")
+    layer_show = layer_actions.add_parser("show", help="查看层声明或资源覆盖链")
+    layer_show.add_argument("name", help="层名称或 components 下的资源路径")
     commands.add_parser("status", help="显示工作区、目标及已记录的产物")
     commands.add_parser("doctor", help="检查 Python、Docker 和工作区，并给出修复步骤")
     for name, help_text in (

@@ -36,8 +36,11 @@ class DevelopmentError(RuntimeError):
 
 
 def _builder(context: WorkspaceContext, config: dict) -> AppBuilder:
+    from builder.config.jsonnet import ResolvedConfig
+    config = ResolvedConfig(config)
+    config.layer_stack = context.layer_stack
     return AppBuilder(
-        DockerRunner(context=context), SourceManager(context=context), config, context=context
+        DockerRunner(context=context, config=config), SourceManager(context=context), config, context=context
     )
 
 
@@ -50,10 +53,16 @@ def _context_payload(context: WorkspaceContext) -> dict:
         "invocation_dir": str(context.invocation_dir),
         "apps": {name: str(path) for name, path in context.apps.items()},
         "app_dirs": [str(path) for path in context.app_dirs],
+        "layers": context.layer_stack.to_dict(),
     }
 
 
 def _context_from_payload(value: dict) -> WorkspaceContext:
+    from builder.layers import Layer, LayerStack, ProviderRef
+    layers = value.get("layers")
+    stack = LayerStack(tuple(Layer(item["name"], Path(item["root"]),
+        tuple(item["requires"]), tuple(ProviderRef(**provider) for provider in item["providers"]))
+        for item in layers)) if layers else LayerStack.base(Path(value["tool_root"]))
     return WorkspaceContext(
         tool_root=Path(value["tool_root"]),
         workspace_root=Path(value["workspace_root"]),
@@ -62,6 +71,7 @@ def _context_from_payload(value: dict) -> WorkspaceContext:
         invocation_dir=Path(value["invocation_dir"]),
         apps={name: Path(path) for name, path in value["apps"].items()},
         app_dirs=tuple(Path(path) for path in value["app_dirs"]),
+        layer_stack=stack,
     )
 
 
@@ -76,6 +86,10 @@ def build_report(
 ) -> AppBuildReport:
     """宿主解析全部依赖并挂载，再把同一请求上下文交给构建容器。"""
     config = resolve_config(context) if config is None else config
+    from builder.build_environment import resolve_environment
+    if no_build and (config.get("userland_toolchain") or resolve_environment(config, context) is not None):
+        runner = DockerRunner(context=context, config=config)
+        context.environment_ids[runner.environment_name] = runner.environment_identity()
     builder = _builder(context, config)
     if no_build:
         return builder.existing(requests)
@@ -344,7 +358,7 @@ def _app_request(args, forwarded: Sequence[str], context: WorkspaceContext, conf
         else builder.resolver
     )
     path = resolver.resolve(args.target)
-    spec = load_spec(path)
+    spec = load_spec(path, layer_stack=context.layer_stack)
     if args.action == "build" and forwarded:
         raise DevelopmentError("build 的配置由 AppSpec 描述，不接受额外 argv")
     if args.action == "deploy" and forwarded and "deploy" not in spec.actions:
@@ -402,7 +416,8 @@ def _package_request(
     from builder.packages import load_package_manifest_dir, resolve_package_dir
 
     directory = resolve_package_dir(
-        args.target, project_root=context.tool_root, caller_cwd=context.invocation_dir
+        args.target, project_root=context.tool_root, caller_cwd=context.invocation_dir,
+        layer_stack=context.layer_stack,
     )
     package = load_package_manifest_dir(directory)
     actions = package.get("actions", {})

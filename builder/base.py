@@ -59,7 +59,12 @@ class ComponentBuilder(ABC):
     def execute(self, plan) -> dict:
         """执行与 fingerprint 消费同一份声明配置。"""
         self.task_plan = plan
-        return self.build(plan.value("config"))
+        from builder.config.jsonnet import ResolvedConfig
+        from builder.layers import stack_for
+
+        config = ResolvedConfig(plan.value("config"))
+        config.layer_stack = stack_for(context=self.context, project_root=self.components_root.parent)
+        return self.build(config)
 
     def _status(self, msg: str):
         """通过 output 输出状态（兼容 output 未注入的场景）。"""
@@ -103,33 +108,19 @@ class ComponentBuilder(ABC):
 
         默认不排除任何补丁，既有 target 行为保持不变。
         """
-        component_config = config.get(self.component, {}) or {}
-        excluded_names = set(
-            normalize_excluded_patches(
-                component_config.get("exclude_patches"),
-                f"{self.component}.exclude_patches",
-            )
-        )
-        applicable: list[Path] = []
-        for patch in self._all_patch_paths(config):
-            relative = patch.relative_to(self.components_root.parent).as_posix()
-            if patch.name in excluded_names or relative in excluded_names:
-                continue
-            applicable.append(patch)
-        return applicable
+        from builder.layer_resources import patch_resources
+        from builder.layers import stack_for
+
+        stack = stack_for(config, self.context, self.components_root.parent)
+        return [ref.path for ref in patch_resources(stack, config, self.component)]
 
     def _all_patch_paths(self, config: dict) -> list[Path]:
-        """返回当前平台/board 为组件声明的全部 patch，包括被路由排除者。"""
-        platform = config["platform"]
-        board = config["board"]
-        patches: list[Path] = []
-        for patch_dir in (
-            self.components_root / "platform" / platform / "patches" / self.component,
-            self.components_root / "board" / board / "patches" / self.component,
-        ):
-            if patch_dir.is_dir():
-                patches.extend(sorted(patch_dir.glob("*.patch")))
-        return patches
+        """包括被路由排除者，用于清理补丁创建的源码文件。"""
+        from builder.layer_resources import patch_resources
+        from builder.layers import stack_for
+
+        stack = stack_for(config, self.context, self.components_root.parent)
+        return [ref.path for ref in patch_resources(stack, config, self.component, excluded=False)]
 
     def reset_source(self, src_dir: Path):
         """重置源码树，保留 .o 等编译产物（增量编译）。

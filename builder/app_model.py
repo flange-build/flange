@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -88,6 +88,7 @@ class AppBuildReport:
     ordered: tuple[AppBuildResult, ...]
     target: dict[str, str]
     architecture: str
+    userland_identity: dict = field(default_factory=dict)
 
     @property
     def identity(self) -> str:
@@ -96,6 +97,7 @@ class AppBuildReport:
                 "roots": self.roots,
                 "target": self.target,
                 "architecture": self.architecture,
+                "userland_identity": self.userland_identity,
                 "artifacts": {item.resource_id: item.identity for item in self.ordered},
             }
         )
@@ -158,6 +160,7 @@ class AppBuildReport:
                 if (
                     metadata["target"] != self.target
                     or metadata["architecture"] != self.architecture
+                    or metadata.get("userland_identity") != self.userland_identity
                 ):
                     return False
             except (OSError, ValueError, KeyError, StopIteration):
@@ -168,7 +171,8 @@ class AppBuildReport:
     def write(self, path: Path) -> None:
         path = Path(path)
         value = {
-            "schema_version": 2,
+            "schema_version": 3,
+            "userland_identity": self.userland_identity,
             "roots": self.roots,
             "target": self.target,
             "architecture": self.architecture,
@@ -204,7 +208,7 @@ class AppBuildReport:
     @classmethod
     def load(cls, path: Path) -> AppBuildReport:
         value = json.loads(Path(path).read_text())
-        if value.get("schema_version") != 2:
+        if value.get("schema_version") != 3 or not value.get("userland_identity"):
             raise ValueError(f"不支持的 App 报告版本，请重新运行 flange app build：{path}")
         results = []
         for entry in value["ordered"]:
@@ -232,7 +236,7 @@ class AppBuildReport:
             if any(package.path.resolve() not in recorded for package in result.packages):
                 raise ValueError("App 报告引用了清单之外的包")
             results.append(result)
-        report = cls(tuple(value["roots"]), tuple(results), value["target"], value["architecture"])
+        report = cls(tuple(value["roots"]), tuple(results), value["target"], value["architecture"], value["userland_identity"])
         if report.identity != value["identity"] or not report.validate():
             raise ValueError(f"App 报告或实际产物校验失败：{path}")
         return report

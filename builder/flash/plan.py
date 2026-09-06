@@ -137,8 +137,15 @@ _FLASH_PLANS: dict[str, type[FlashPlan]] = {
 }
 
 
-def get_flash_plan(platform: str) -> FlashPlan:
+def get_flash_plan(platform: str, layer_stack=None) -> FlashPlan:
     """取平台的构建期刷写计划。"""
+    if layer_stack is not None:
+        module = layer_stack.provider("flash_plan", platform)
+        if module is not None:
+            result = module.create_plan()
+            if not isinstance(result, FlashPlan):
+                raise ValueError("create_plan 必须返回 FlashPlan")
+            return result
     cls = _FLASH_PLANS.get(platform)
     if cls is None:
         raise KeyError(

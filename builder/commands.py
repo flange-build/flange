@@ -36,12 +36,11 @@ def _container_environment(context) -> None:
     """只读查询实际镜像；缺少 Docker 时计划仍可展示未解析输入。"""
     from builder.docker import BuildError, DockerRunner, _is_inside_container
 
-    if _is_inside_container() or os.environ.get("FLANGE_BUILD_ENVIRONMENT"):
+    if _is_inside_container():
         return
     try:
-        os.environ["FLANGE_BUILD_ENVIRONMENT"] = DockerRunner(
-            context=context
-        ).environment_identity()
+        runner = DockerRunner(context=context)
+        context.environment_ids[runner.environment_name] = runner.environment_identity()
     except (BuildError, OSError, subprocess.SubprocessError, IndexError):
         pass
 
@@ -50,7 +49,7 @@ def _settings(start: Path) -> dict:
     return workspace_settings(discover_workspace(start))
 
 
-def _doctor(start: Path) -> list[dict]:
+def _doctor(start: Path, target=None) -> list[dict]:
     checks = [
         {
             "name": "Python",
@@ -59,6 +58,7 @@ def _doctor(start: Path) -> list[dict]:
             "fix": "安装 Python 3.12 或更新版本",
         }
     ]
+    values = None
     try:
         values = _settings(start)
         checks.append(
@@ -99,8 +99,11 @@ def _doctor(start: Path) -> list[dict]:
         if ready:
             from builder.docker import DockerRunner
 
-            runner = DockerRunner(root)
             try:
+                context = None
+                if values and (target or selected_target(values["workspace_root"], values["target"])):
+                    context = load_workspace(start, target=target)
+                runner = DockerRunner(root, context=context)
                 identity = runner.environment_identity()
                 checks.append(
                     {"name": "构建镜像", "ok": True, "detail": identity, "fix": ""}
@@ -133,7 +136,7 @@ def _target(args, options, start: Path, output: Presenter) -> int:
     root, tool = settings["workspace_root"], settings["tool_root"]
     if args.action == "list":
         targets = [
-            name for name in get_valid_targets(project_root=tool) if args.filter in name
+            name for name in get_valid_targets(project_root=tool, layer_stack=settings["layer_stack"]) if args.filter in name
         ]
         output.result(
             "target list", targets, lines=[style(name, Role.ACTIVE) for name in targets]
@@ -154,10 +157,11 @@ def _target(args, options, start: Path, output: Presenter) -> int:
             from builder.lunch_tui import select_target
 
             current = selected_target(root, settings["target"])
-            name = select_target(current.key if current else None, project_root=tool)
+            name = select_target(current.key if current else None, project_root=tool,
+                                 layer_stack=settings["layer_stack"])
             if name is None:
                 return 130
-        target = Target.parse(name, tool)
+        target = Target.parse(name, tool, settings["layer_stack"])
         # 持久化之前完整求值，错误配置不能变成当前选择。
         context = load_workspace(start, target=target)
         resolve_config(context)
@@ -255,16 +259,20 @@ def _system(args, options, start: Path, output: Presenter) -> int:
             else level
         )
     engine = BuildEngine(config, context=context, output_level=level)
+    from builder.layer_diagnostics import composition_report, composition_lines
+    composition = composition_report(config, context)
     if args.command == "plan":
         plans = [plan.to_dict() for plan in engine.plan(args.component)]
         output.result(
             "plan",
-            {"target": context.target.key, "tasks": plans},
-            lines=render_plan(plans, context.target.key),
+            {"target": context.target.key, "tasks": plans, "composition": composition},
+            lines=render_plan(plans, context.target.key) + composition_lines(composition),
         )
     elif args.command == "why":
         reports = engine.explain(args.component)
-        output.result("why", reports, lines=render_why(reports, context.target.key))
+        for report in reports:
+            report["composition"] = composition
+        output.result("why", reports, lines=render_why(reports, context.target.key) + composition_lines(composition))
     else:
         force = "all" if args.force_all else args.component if args.force else None
         with redirect_stdout(sys.stderr):
@@ -277,7 +285,34 @@ def _system(args, options, start: Path, output: Presenter) -> int:
     return 0
 
 
+def _layer(args, start: Path, output: Presenter) -> int:
+    from builder.config.registry import discover_boards
+
+    settings = _settings(start)
+    stack = settings["layer_stack"]
+    if args.action == "check":
+        stack.check_providers()
+        boards = discover_boards(settings["tool_root"], layer_stack=stack)
+        data = {"layers": stack.to_dict(), "boards": sorted(boards)}
+        lines = [f"层校验通过：{len(stack.layers)} 层，{len(boards)} 个板卡"]
+    elif args.action == "show":
+        if "/" in args.name:
+            refs = stack.all(args.name)
+            data = {"resource": args.name, "sources": [ref.to_dict() for ref in refs]}
+            lines = [ref.identity for ref in refs] or ["资源不存在"]
+        else:
+            data = stack.layer(args.name).to_dict()
+            lines = [f"{data['name']}: {data['root']}", f"依赖：{', '.join(data['requires']) or '无'}"]
+    else:
+        data = stack.to_dict()
+        lines = [f"{item['order']}: {item['name']}  {item['root']}" for item in data]
+    output.result(f"layer {args.action}", data, lines=lines)
+    return 0
+
+
 def _dispatch(args, options, start: Path, output: Presenter) -> int:
+    if args.command == "layer":
+        return _layer(args, start, output)
     if args.command == "init":
         path = (
             args.directory if args.directory.is_absolute() else start / args.directory
@@ -300,7 +335,7 @@ def _dispatch(args, options, start: Path, output: Presenter) -> int:
     if args.command == "doctor" or (
         args.command == "docker" and args.action == "status"
     ):
-        checks = _doctor(start)
+        checks = _doctor(start, options.target)
         ready = all(check["ok"] for check in checks)
         output.result(
             args.command,
@@ -360,7 +395,11 @@ def _dispatch(args, options, start: Path, output: Presenter) -> int:
     if args.command == "docker":
         from builder.docker import DockerRunner
 
-        runner = DockerRunner(_settings(start)["tool_root"])
+        settings = _settings(start)
+        context = None
+        if options.target or selected_target(settings["workspace_root"], settings["target"]):
+            context = load_workspace(start, target=options.target)
+        runner = DockerRunner(settings["tool_root"], context=context)
         command = runner.compose_command(
             "build", *(["--no-cache"] if args.action == "rebuild" else [])
         )
@@ -444,6 +483,7 @@ def _dispatch(args, options, start: Path, output: Presenter) -> int:
                 public=True,
                 target_dir=context.target_dir,
                 project_dir=context.tool_root,
+                layer_stack=context.layer_stack,
             )
         output.result("flash", {"target": context.target.key}, lines=[])
         return 0

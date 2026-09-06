@@ -77,7 +77,7 @@ class AppResolver:
                 raise ValueError("App 循环依赖：" + " → ".join(map(str, chain)))
             if path in resolved:
                 return resolved[path]
-            spec = load_spec(path)
+            spec = load_spec(path, layer_stack=self.context.layer_stack)
             other = names.get(spec.app.name)
             if other is not None and other != path:
                 raise ValueError(

@@ -344,11 +344,18 @@ class SourceManager:
         os.close(descriptor)
         partial = Path(temporary)
         try:
-            self._run(
-                ["wget", "-q", "--show-progress", "-O", str(partial), url],
-                check=True,
-                timeout=600,
-            )
+            parsed = urlsplit(url)
+            if parsed.scheme == "file":
+                from urllib.parse import unquote
+                if parsed.netloc not in {"", "localhost"}:
+                    raise ValueError("file URL 必须引用本地文件")
+                shutil.copyfile(Path(unquote(parsed.path)), partial)
+            else:
+                self._run(
+                    ["wget", "-q", "--show-progress", "-O", str(partial), url],
+                    check=True,
+                    timeout=600,
+                )
             if self._sha256_file(partial) != sha256:
                 raise RuntimeError(f"{name}: sha256 校验失败（URL: {url}）")
             partial.replace(path)
@@ -395,7 +402,12 @@ class SourceManager:
         project_root = self._project_root or Path.cwd()
 
         # ---- 层 1：仓库内 components/app/<name>/ ---------------------------
-        local_dir = project_root / "components" / "app" / app_name
+        from builder.layers import stack_for
+
+        ref = stack_for(config, project_root=project_root).selected(f"components/app/{app_name}")
+        local_dir = ref.path if ref else project_root / "components" / "app" / app_name
+        if ref is not None and not (local_dir / "app.yaml").is_file():
+            raise ValueError(f"App {app_name!r} 的胜出层缺少 app.yaml：{local_dir}")
         local_yaml = local_dir / "app.yaml"
         if local_yaml.is_file():
             return local_dir
@@ -454,7 +466,12 @@ class SourceManager:
     def locate_app(self, app_name: str, config: dict) -> Path:
         """只读定位 App；远端未准备时明确失败，不隐式 fetch。"""
         root = self._project_root or Path.cwd()
-        local = root / "components/app" / app_name
+        from builder.layers import stack_for
+
+        ref = stack_for(config, project_root=root).selected(f"components/app/{app_name}")
+        local = ref.path if ref else root / "components/app" / app_name
+        if ref is not None and not (local / "app.yaml").is_file():
+            raise FileNotFoundError(f"App {app_name!r} 的胜出层缺少 app.yaml：{local}")
         if (local / "app.yaml").is_file():
             return local
         descriptor = (config.get("external_apps") or {}).get(app_name)

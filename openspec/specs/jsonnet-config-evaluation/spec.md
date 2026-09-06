@@ -19,7 +19,7 @@
 
 ### Requirement: Jsonnet 配置按固定层次求值
 
-配置系统 SHALL 以 `components/rootfs/config.jsonnet`、`components/platform/<platform>/config.jsonnet`、`components/platform/<platform>/<soc>/config.jsonnet`、`components/board/<board>/config.jsonnet` 为层级 overlay，并 MUST 按 rootfs → platform → SoC → board 的固定顺序通过 Jsonnet 对象继承求值。每个 overlay MUST 使用相同的 canonical 字段，不得由注册表按平台改写字段。
+配置系统 SHALL 以 `components/rootfs/config.jsonnet`、`components/platform/<platform>/config.jsonnet`、`components/platform/<platform>/<soc>/config.jsonnet`、`components/board/<board>/config.jsonnet` 为层级 overlay，先选择发行版基线、每阶段内按层从低到高组合，并 MUST 按 rootfs → platform → SoC → board 的固定顺序通过 Jsonnet 对象继承求值。每个 overlay MUST 使用相同的 canonical 字段，不得由注册表按平台改写字段。
 
 #### Scenario: 板级覆盖 SoC 配置
 - **WHEN** SoC overlay 声明一个 canonical 字段，board overlay 通过 Jsonnet 继承覆盖同一字段
@@ -47,7 +47,7 @@ Jsonnet evaluator SHALL 只通过名为 `product` 和 `variant` 的外部参数�
 
 ### Requirement: Jsonnet import 受配置根限制
 
-Evaluator MUST 使用受限 import callback。规范化后的 import 路径 MUST 位于项目 `components/` 配置根内，且扩展名 MUST 为 `.jsonnet` 或 `.libsonnet`；绝对路径、路径越界、符号链接越界和其他扩展名 MUST 被拒绝，并给出包含原始 import 的错误信息。
+Evaluator MUST 使用受限 import callback。规范化后的 import 路径 MUST 位于所属启用层 `components/` 配置根内；跨层 MUST 使用明确的 layer 标识，且扩展名 MUST 为 `.jsonnet` 或 `.libsonnet`；绝对路径、路径越界、符号链接越界和其他扩展名 MUST 被拒绝，并给出包含原始 import 的错误信息。
 
 #### Scenario: 合法公共库 import
 - **WHEN** 配置 import `components/config/lib.libsonnet` 内的公共函数

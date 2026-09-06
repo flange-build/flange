@@ -531,7 +531,7 @@ def _parse_systemd(raw: dict) -> SystemdConfig:
     return SystemdConfig(unit=unit, auto_start=auto_start)
 
 
-def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig) -> PackagingConfig:
+def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig, layer_stack=None) -> PackagingConfig:
     from builder.packaging import get_backend
 
     if "packaging" in raw and build.deb_outputs:
@@ -545,7 +545,7 @@ def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig) -> Packag
             if build.deb_outputs else [PackageOutput(**item) for item in value.get("outputs", [])]
         )
         format = value.get("format", "deb")
-        backend = get_backend(format)
+        backend = get_backend(format, layer_stack)
         for output in outputs:
             backend.validate_output(output)
         if len({item.file for item in outputs}) != len(outputs):
@@ -578,7 +578,7 @@ def _parse_lib(raw: dict) -> LibConfig:
     return LibConfig(dev_suffix=dev_suffix)
 
 
-def load_spec(app_dir: Path) -> AppSpec:
+def load_spec(app_dir: Path, *, layer_stack=None) -> AppSpec:
     """从 app_dir/app.yaml 加载并返回 AppSpec。
 
     参数：
@@ -622,7 +622,7 @@ def load_spec(app_dir: Path) -> AppSpec:
 
     # 解析可选段：build
     build = _parse_build(raw["build"], app_info) if "build" in raw else BuildConfig()
-    packaging = _parse_packaging(raw, app_info, build)
+    packaging = _parse_packaging(raw, app_info, build, layer_stack)
 
     # 解析可选段：install（文件映射）
     raw_install = raw.get("install", {})

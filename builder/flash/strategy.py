@@ -1159,8 +1159,15 @@ _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
 }
 
 
-def get_flash_strategy(platform: str) -> FlashStrategy:
+def get_flash_strategy(platform: str, layer_stack=None) -> FlashStrategy:
     """根据平台名获取刷写策略实例。"""
+    if layer_stack is not None:
+        module = layer_stack.provider("flash", platform)
+        if module is not None:
+            result = module.create_strategy()
+            if not isinstance(result, FlashStrategy):
+                raise FlashError("create_strategy 必须返回 FlashStrategy")
+            return result
     cls = _FLASH_STRATEGIES.get(platform)
     if not cls:
         raise FlashError(f"不支持的平台: {platform}（支持: {', '.join(_FLASH_STRATEGIES)}）")

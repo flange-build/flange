@@ -454,14 +454,14 @@ class _App:
 # 入口
 # ---------------------------------------------------------------------------
 
-def select_target(current: str | None = None, *, project_root: Path | None = None) -> str | None:
+def select_target(current: str | None = None, *, project_root: Path | None = None, layer_stack=None) -> str | None:
     """打开界面并返回选中的目标；取消时返回 None。"""
     from functools import partial
     from builder.config.registry import resolve_config
-    root = build_target_tree(project_root=project_root)
+    root = build_target_tree(project_root=project_root, layer_stack=layer_stack)
     if not root.children:
         raise RuntimeError("未发现任何目标配置")
-    app = _App(root, current, SummaryLoader(resolve=partial(resolve_config, project_root=project_root)))
+    app = _App(root, current, SummaryLoader(resolve=partial(resolve_config, project_root=project_root, layer_stack=layer_stack)))
     return curses.wrapper(app.run)
 
 

@@ -104,6 +104,7 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
     builder.context = component_context(project_root, {"board": "golden-board"}, target_dir=target)
     builder.output = None
     builder.app_report = MagicMock()
+    builder.app_report.userland_identity = {"distro": "ubuntu", "profile": "ubuntu", "sdk": "", "architecture": "aarch64", "triple": "aarch64-linux-gnu"}
     builder.app_report.validate.return_value = True
     builder.app_report.runtime_packages_for.return_value = tuple(
         PackageArtifact(path, "deb", "runtime") for path in (target / "app").glob("*.deb")

@@ -6,6 +6,10 @@
 第一次阅读源码，可先沿[维护指南的一条命令](maintenance-guide.md#2-跟着一条命令读代码)走一遍；
 已经明确要添加功能时，按[扩展指南](extension-guide.md)选择修改层。本页用于查阅内部契约。
 
+工作区的 `LayerStack` 是内容、配置和策略解析的共同入口。`layers.py` 管理声明、依赖、资源身份与隔离模块，
+`layer_resources.py` 管理补丁和 overlay 顺序，`distro.py`、`build_environment.py`、`toolchain.py` 提供
+发行版、完整容器和独立 SDK 接口。扩展层格式及缓存边界见[多层工作区](layers.md)。
+
 ## 1. 设计原则与边界
 
 构建工具应把一组声明输入转换为可验证产物，再让部署和验证消费同一产物身份。

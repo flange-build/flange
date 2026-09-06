@@ -155,7 +155,8 @@ class RootfsBuilder(ComponentBuilder):
         """执行用于查询快照的同一份 Phase 1 计划。"""
         plan = self._phase1_plan
         before = plan.fingerprint()
-        build_base(
+        from builder.distro import get_distro
+        get_distro(config, self.context).build_base(
             plan,
             rootfs_dir,
             context=self.context,
@@ -168,16 +169,16 @@ class RootfsBuilder(ComponentBuilder):
 
     def _build_phase2(self, rootfs_dir: Path, config: dict) -> None:
         """custom deb → extra deb → 模块 → 固件 → overlay → locale → 账号。"""
-        self._install_app_debs(rootfs_dir, config)
-        self._install_extra_debs(rootfs_dir, config)
+        from builder.distro import get_distro
+        distro = get_distro(config, self.context)
+        distro.install_apps(self, rootfs_dir, config)
+        distro.install_extra(self, rootfs_dir, config)
         self._install_kernel_modules(rootfs_dir, config)
         self._install_extra_firmware(rootfs_dir, config)
         self._install_panel_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)
-        self._configure_default_locale(rootfs_dir, config)
-        self._configure_users(rootfs_dir, config)
-        self._install_hostname(rootfs_dir, config)
-        self._export_package_manifest(rootfs_dir)
+        distro.customize(self, rootfs_dir, config)
+        distro.export_packages(self, rootfs_dir)
 
     def _export_package_manifest(self, rootfs_dir: Path) -> None:
         """导出镜像内已安装包的名称与版本清单。
@@ -220,9 +221,12 @@ class RootfsBuilder(ComponentBuilder):
             raise BuildError("rootfs 缺少本次构建的 AppBuildReport")
         if not self.app_report.validate():
             raise BuildError("App 产物已经变更或缺失，拒绝安装")
+        from builder.toolchain import userland_identity
+        if self.context is not None and self.app_report.userland_identity != userland_identity(config, self.context):
+            raise BuildError("App 报告发行版/ABI 与 rootfs 不匹配，请重新构建")
         packages = self.app_report.runtime_packages_for(names)
         if any(package.format != "deb" for package in packages):
-            raise BuildError("Ubuntu rootfs 仅支持安装 DEB 格式的 App 包")
+            raise BuildError("APT rootfs 策略仅支持安装 DEB 格式的 App 包")
         deb_files = tuple(package.path for package in packages)
         if not deb_files:
             return
@@ -331,7 +335,8 @@ class RootfsBuilder(ComponentBuilder):
         """计划同时决定快照身份与实际执行参数。"""
         if self.context is None:
             raise RuntimeError("base 构建必须注入 WorkspaceContext")
-        self._phase1_plan = base_plan(config, self.component, self.context)
+        from builder.distro import distro_base_plan
+        self._phase1_plan = distro_base_plan(config, self.component, self.context)
         return self._base_snapshot_store().resolve(self._phase1_plan.fingerprint().digest)
 
     def _save_base_snapshot(self, rootfs_dir: Path, cache_path: Path):
@@ -350,15 +355,16 @@ class RootfsBuilder(ComponentBuilder):
           components/platform/<p>/overlay/    与芯片平台绑定
           components/board/<b>/overlay/       与具体板子绑定
         """
-        subdir = self.OVERLAY_SUBDIR
-        for overlay_dir, label in [
-            (self.components_root / self.component / "overlay", self.component),
-            (self.components_root / "platform" / config["platform"] / subdir, "platform"),
-            (self.components_root / "board" / config["board"] / subdir, "board"),
-        ]:
-            if overlay_dir.exists() and any(overlay_dir.iterdir()):
-                self._status(f"复制 {label} overlay 文件...")
-                self.docker.run_privileged(["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
+        from builder.layers import stack_for
+        from builder.layer_resources import overlay_resources
+
+        stack = stack_for(config, self.context, self.components_root.parent)
+        for ref in overlay_resources(stack, config, self.component):
+            if ref.path.is_dir() and any(ref.path.iterdir()):
+                self._status(f"复制 overlay：{ref.identity}")
+                self.docker.run_privileged([
+                    "python3", "-m", "builder.layer_resources", str(ref.path), str(rootfs_dir)
+                ])
 
     def _partition_size_mb(self, config: dict, name: str) -> int:
         """指定分区的初始镜像大小（MiB）。几何解析统一走 PartitionLayout。"""
@@ -892,7 +898,13 @@ class RootfsBuilder(ComponentBuilder):
         board_root = self.components_root / "board" / board
         dest_base = rootfs_dir / "lib" / "firmware"
         for fw in panel_firmwares:
-            src = board_root / fw["src"]
+            from builder.layer_resources import content_path
+            from builder.layers import stack_for
+            raw = Path(fw["src"])
+            src = raw if raw.is_absolute() else content_path(
+                stack_for(config, self.context, self.components_root.parent),
+                f"board/{board}/{fw['src']}",
+            )
             if not src.exists():
                 raise FileNotFoundError(f"panel firmware 文本源不存在: {src} (board: {board})")
             payload = _encode_panel_file(src)

@@ -152,24 +152,20 @@ class OverlaysBuilder(ComponentBuilder):
             raise ValueError(
                 "boot.overlays.board 非空但 config 缺少 board 字段（不应发生）"
             )
-        overlays_dir = (self.components_root / "board" / board / "dtso").resolve()
-        if not overlays_dir.is_dir():
-            raise FileNotFoundError(
-                f"board overlay 源目录不存在: {overlays_dir}；"
-                f"声明了 boot.overlays.board={names} 但目录缺失，"
-                "请创建该目录并放入对应 .dts/.dtso 文件"
-            )
-
-        for stem in (n.removesuffix(".dtbo") for n in names):
-            dts = _find_overlay_source(overlays_dir, stem)
+        from builder.layers import stack_for
+        stack = stack_for(config, self.context, self.components_root.parent)
+        directories = stack.all(f"components/board/{board}/dtso")
+        if not directories:
+            raise FileNotFoundError(f"board overlay 源目录不存在: board/{board}/dtso")
+        for stem in (name.removesuffix(".dtbo") for name in names):
+            dts = next((source for ref in reversed(directories)
+                        if (source := _find_overlay_source(ref.path, stem)) is not None), None)
             if dts is None:
                 raise FileNotFoundError(
-                    f"board overlay 源文件不存在: {overlays_dir}/{stem}"
-                    f"{{{','.join(_OVERLAY_SOURCE_EXTS)}}}；"
-                    f"可用 stem 候选: {_format_available_stems(overlays_dir)}"
+                    f"board overlay 源文件不存在: board/{board}/dtso/{stem}；可用 stem 候选: "
+                    + ", ".join(_format_available_stems(ref.path) for ref in directories)
                 )
-            self._compile_one(dts, stem, kernel_src, overlays_dir,
-                              kind="board")
+            self._compile_one(dts, stem, kernel_src, dts.parent, kind="board")
 
     def _compile_package_overlays(self, kernel_src: Path, config: dict,
                                    names: list[str]) -> None:

@@ -92,6 +92,7 @@ def test_sdk实现变化使AMP失效(tmp_path):
 
 
 def test_环境镜像ID是宿主与容器共同身份(monkeypatch):
+    monkeypatch.setenv('FLANGE_ENVIRONMENT_PROVIDER', 'ubuntu')
     monkeypatch.setenv('FLANGE_BUILD_ENVIRONMENT', 'sha256:immutable')
     assert environment_identity() == {'image': 'sha256:immutable'}
     assert environment_identity(emulator='qemu-arm-static') == environment_identity()

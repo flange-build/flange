@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
-import importlib
+from builder.platforms.spec import load_for as load_platform
+from builder.layers import stack_for
+from builder.layer_resources import patch_resources, overlay_resources, overlay_entries, content_path
 import inspect
 import subprocess
 from pathlib import Path
@@ -67,6 +69,15 @@ CONFIG_BOUNDARIES = {
 
 
 def output_contract(component: str, config: dict, context) -> tuple[ArtifactSpec, ...]:
+    stack = stack_for(config, context)
+    provider = stack.provider("platform", config.get("platform", ""))
+    if provider is not None and hasattr(provider, "output_contract"):
+        result = provider.output_contract(component, config, context)
+        if result is not None:
+            for item in result:
+                if not isinstance(item, ArtifactSpec) or not item.path.is_relative_to(context.target_dir):
+                    raise ValueError("平台 output_contract 必须返回目标目录内的 ArtifactSpec")
+            return tuple(result)
     root = context.target_dir / component
     outputs: list[ArtifactSpec] = []
 
@@ -205,7 +216,7 @@ def _source_input(name: str, ref: dict, config: dict, context, source) -> InputS
 
 def recipe_files(component: str, config: dict, context) -> set[Path]:
     """从实际配方继承链展开静态 builder 依赖；动态平台工厂只记录选中的实现。"""
-    module = importlib.import_module(f"builder.platforms.{config['platform']}")
+    module = load_platform(config)
     instance = module.create_builder(component, None, None)
     actual_root = Path(__file__).resolve().parent.parent
     pending = [
@@ -247,11 +258,20 @@ def recipe_files(component: str, config: dict, context) -> set[Path]:
             "locking.py",
         )
     )
-    found.add(context.tool_root / "builder/platforms" / config["platform"] / "__init__.py")
+    stack = stack_for(config, context)
+    external = stack.provider_inputs("platform", config["platform"])
+    if external:
+        found.update(ref.path for ref in external)
+    else:
+        found.add(context.tool_root / "builder/platforms" / config["platform"] / "__init__.py")
     return found
 
 
 def create_component_plan(component: str, config: dict, context, source: SourceManager) -> TaskPlan:
+    from builder.config.jsonnet import ResolvedConfig
+    config = ResolvedConfig(config)
+    config.layer_stack = stack_for(context=context)
+    stack = config.layer_stack
     enabled = component_enabled(config, component)
     execution_config = {
         key: value
@@ -265,7 +285,7 @@ def create_component_plan(component: str, config: dict, context, source: SourceM
         return TaskPlan(component, f"component:{component}:v1", (), (), (), False)
     inputs = [
         InputSpec.value("config", execution_config),
-        InputSpec.value("environment", environment_identity()),
+        InputSpec.value("environment", environment_identity(config=config, context=context)),
     ]
     refs = source_references(component, config)
     for name, ref in sorted(refs.items()):
@@ -293,51 +313,66 @@ def create_component_plan(component: str, config: dict, context, source: SourceM
     # 配方实现是声明输入；叶子组件采用实际实现类的继承链，其他动态流程覆盖构建代码。
     if component in {"kernel", "bootloader"}:
         for path in sorted(recipe_files(component, config, context)):
-            file(f"recipe:{path.relative_to(context.tool_root)}", path)
+            file(f"recipe:{stack.reference(path).identity}", path)
     else:
         tree("recipe:builder", context.tool_root / "builder")
-    file("environment:dockerfile", context.tool_root / "docker/Dockerfile")
+    from builder.build_environment import resolve_environment
+    if resolve_environment(config, context) is None:
+        file("environment:dockerfile", context.tool_root / "docker/Dockerfile")
 
-    components = context.components_root
-    platform = config.get("platform", "")
-    board = config["board"]
-    if component in {"kernel", "bootloader"}:
-        excluded = set(
-            normalize_excluded_patches(
-                (config.get(component) or {}).get("exclude_patches"), f"{component}.exclude_patches"
-            )
-        )
-        for scope, directory in (
-            ("platform", components / "platform" / platform / "patches" / component),
-            ("board", components / "board" / board / "patches" / component),
-        ):
-            for patch in sorted(directory.glob("*.patch")):
-                relative = patch.relative_to(context.tool_root).as_posix()
-                if patch.name not in excluded and relative not in excluded:
-                    file(f"patch:{scope}:{patch.name}", patch)
-        # 同目录中的配置片段也被平台配方读取。
-        for directory in (
-            components / "board" / board / "patches" / component,
-            components / "platform" / platform / config.get("soc", "") / "patches" / component,
-        ):
-            for fragment in sorted(directory.glob("*.config")):
-                file(f"fragment:{fragment.relative_to(components)}", fragment)
+    provider = stack.provider("platform", config["platform"])
+    if provider is not None:
+        for ref in stack.provider_inputs("platform", config["platform"]):
+            name = f"recipe:{ref.identity}"
+            if not any(item.name == name for item in inputs):
+                file(name, ref.path)
+        if hasattr(provider, "extra_inputs"):
+            inputs.extend(provider.extra_inputs(component, config, context))
+    from builder.build_environment import environment_inputs
+    inputs.extend(environment_inputs(config, context))
     if component in {"rootfs", "recovery"}:
-        subdir = "overlay" if component == "rootfs" else "recovery-overlay"
-        for name, path in (
-            ("base", components / component / "overlay"),
-            ("platform", components / "platform" / platform / subdir),
-            ("board", components / "board" / board / subdir),
+        for ref in stack.provider_inputs("distro", config.get("distro", "ubuntu")):
+            file(f"distro:{ref.identity}", ref.path)
+    if component == "image":
+        for ref in stack.provider_inputs("flash_plan", config["platform"]):
+            file(f"flash-plan:{ref.identity}", ref.path)
+        flash_ref = stack.provider_ref("flash", config["platform"])
+        inputs.append(InputSpec.value("flash:provider", flash_ref.identity if flash_ref else ""))
+    components = context.components_root
+    platform, board = config["platform"], config["board"]
+    if component in {"kernel", "bootloader"}:
+        patches = patch_resources(stack, config, component)
+        inputs.append(InputSpec.value("patch:sequence", [ref.identity for ref in patches]))
+        for ref in patches:
+            file(f"patch:{ref.identity}", ref.path)
+        for directory in (
+            f"components/board/{board}/patches/{component}",
+            f"components/platform/{platform}/{config.get('soc', '')}/patches/{component}",
+            f"components/platform/{platform}/patches/{component}",
         ):
-            tree(f"overlay:{name}", path)
+            for ref in stack.files(directory, "*.config"):
+                file(f"fragment:{ref.identity}", ref.path)
+    if component in {"rootfs", "recovery"}:
+        overlays = overlay_resources(stack, config, component)
+        inputs.append(InputSpec.value("overlay:sequence", [ref.identity for ref in overlays]))
+        import stat
+        for relative, ref in overlay_entries(stack, config, component).items():
+            mode = ref.path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                inputs.append(InputSpec.value(f"overlay:directory:{relative}", stat.S_IMODE(mode)))
+            else:
+                file(f"overlay:file:{relative}", ref.path)
         for entry in (config.get("rootfs") or {}).get("panel_firmware") or []:
-            file(f"panel:{entry['src']}", components / "board" / board / entry["src"])
+            path = Path(entry["src"])
+            file(f"panel:{entry['src']}", path if path.is_absolute() else
+                 content_path(stack, f"board/{board}/{entry['src']}"))
     meta = config.get("packages_meta") or {}
     if component == "kernel":
         for relative in meta.get("kernel_src_paths") or []:
             tree(f"driver:{relative}", context.tool_root / relative)
     if component == "device-tree-overlay":
-        tree("overlay:board-sources", components / "board" / board / "dtso")
+        for ref in stack.files(f"components/board/{board}/dtso", "**/*"):
+            file(f"overlay:board:{ref.identity}", ref.path)
         for relative in meta.get("overlay_src_paths") or []:
             file(f"overlay:{relative}", context.tool_root / relative)
     if component == "amp":

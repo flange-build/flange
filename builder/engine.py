@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-import importlib
+from builder.platforms.spec import load_for as load_platform
 import shutil
 import subprocess
 import tempfile
@@ -66,7 +66,10 @@ class BuildEngine:
             raise ValueError(
                 f"构建配置目标与工作区不一致: {identity} != {context.target.to_dict()}"
             )
-        self.config = copy.deepcopy(config)
+        from builder.config.jsonnet import ResolvedConfig
+
+        self.config = ResolvedConfig(copy.deepcopy(config))
+        self.config.layer_stack = context.layer_stack
         self.context = context
         self.project_dir = context.tool_root
         self.cache = BuildCache(context=context)
@@ -216,7 +219,7 @@ class BuildEngine:
         return not component_enabled(self.config, component)
 
     def _get_artifact_names(self) -> dict:
-        module = importlib.import_module(f"builder.platforms.{self.config['platform']}")
+        module = load_platform(self.config)
         return getattr(module, "ARTIFACT_NAMES", {})
 
     def _collect_artifacts(self, plan: TaskPlan, outputs: dict) -> tuple[ArtifactSpec, ...]:
@@ -281,5 +284,5 @@ class BuildEngine:
             from builder.overlays import OverlaysBuilder
 
             return OverlaysBuilder(self.docker, self.source)
-        module = importlib.import_module(f"builder.platforms.{self.config['platform']}")
+        module = load_platform(self.config)
         return module.create_builder(component, self.docker, self.source)

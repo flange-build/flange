@@ -34,7 +34,7 @@ class DockerRunner:
     """
 
     def __init__(
-        self, project_dir: Path = None, output=None, *, context: "WorkspaceContext | None" = None
+        self, project_dir: Path = None, output=None, *, context: "WorkspaceContext | None" = None, config: dict | None = None
     ):
         self.context = context
         self.project_dir = Path(
@@ -43,15 +43,49 @@ class DockerRunner:
         self.output = output  # BuildOutput | None
         self._in_container = _is_inside_container()
         self._environment_id = None
+        from builder.build_environment import environment_name, resolve_environment
+        if config is None and context is not None and len(context.layer_stack.layers) > 1:
+            from builder.workspace import resolve_config
+            config = resolve_config(context)
+        self.config = config or {}
+        self.environment_name = environment_name(self.config, context)
+        self.environment_spec = resolve_environment(self.config, context)
+        marker = os.environ.get("FLANGE_ENVIRONMENT_PROVIDER", "")
+        if self._in_container:
+            if marker != self.environment_name or not os.environ.get("FLANGE_BUILD_ENVIRONMENT"):
+                raise BuildError(f"容器环境与请求不一致：{marker or '未标识'} != {self.environment_name}；请从宿主机启动构建")
+            self._environment_id = os.environ["FLANGE_BUILD_ENVIRONMENT"]
+            for tool, version in (self.environment_spec.required_tools if self.environment_spec else ()):
+                result = subprocess.run([tool, "--version"], capture_output=True, text=True, check=True)
+                if version not in result.stdout:
+                    raise BuildError(f"工具版本不匹配：{tool}，需要 {version}")
 
     def compose_command(self, *args: str) -> list[str]:
+        compose = self.project_dir / "docker-compose.yml"
+        if self.environment_spec is not None:
+            import json
+            from builder.locking import atomic_write
+            spec = self.environment_spec
+            root = self.context.build_root if self.context else self.project_dir / ".build"
+            compose = root / "environments" / spec.name / "compose.json"
+            service = {
+                "image": "${FLANGE_BUILD_IMAGE:-" + spec.image + "}",
+                "platform": spec.platform,
+                "privileged": "${FLANGE_BUILD_PRIVILEGED:-false}",
+                "working_dir": str(self.project_dir),
+            }
+            if spec.dockerfile is not None:
+                service["build"] = {"context": str(spec.build_context), "dockerfile": str(spec.dockerfile)}
+            content = json.dumps({"services": {"build": service}}, indent=2) + "\n"
+            if not compose.is_file() or compose.read_text() != content:
+                atomic_write(compose, content)
         return [
             "docker",
             "compose",
             "--project-directory",
             str(self.project_dir),
             "-f",
-            str(self.project_dir / "docker-compose.yml"),
+            str(compose),
             *args,
         ]
 
@@ -292,7 +326,9 @@ class DockerRunner:
         mounts = [self.project_dir, *(extra_mounts or [])]
         environment = {
             "PYTHONPATH": str(self.project_dir),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "FLANGE_BUILD_ENVIRONMENT": self.environment_identity(),
+            "FLANGE_ENVIRONMENT_PROVIDER": self.environment_name,
         }
         if self.context:
             self.context.build_root.mkdir(parents=True, exist_ok=True)
@@ -302,6 +338,7 @@ class DockerRunner:
                     self.context.build_root,
                     *self.context.apps.values(),
                     *self.context.app_dirs,
+                    *(layer.root for layer in self.context.layer_stack.layers),
                 ]
             )
             environment["CCACHE_DIR"] = str(self.context.build_root / "cache" / "ccache")

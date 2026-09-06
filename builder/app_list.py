@@ -134,7 +134,20 @@ def list_all(
         config:       FINAL_CONFIG；``None`` 时仅扫描本地层。
     """
     groups: list[list[_Found]] = []
-    groups.append(_scan_local(project_root))
+    from builder.layers import stack_for
+    stack = stack_for(config, project_root=project_root)
+    if len(stack.layers) == 1:
+        groups.append(_scan_local(stack.layers[0].root))
+    else:
+        # 联合发现名称后使用同一目录解析；上层缺描述文件也不能显示成下层命中。
+        for directory in stack.names("components/app", "app.yaml"):
+            found = []
+            for ref in reversed(stack.all(f"components/app/{directory}")):
+                meta = _load_app_meta(ref.path)
+                name = meta.get("name", directory) if meta else directory
+                label = "local" if ref.layer.name == "flange" else f"layer:{ref.layer.name}"
+                found.append(_Found(name, label, ref.path))
+            groups.append(found)
     if config is not None:
         groups.append(_scan_external_apps(config))
         groups.append(_scan_external_app_dirs(config))

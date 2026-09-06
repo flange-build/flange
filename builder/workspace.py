@@ -10,6 +10,7 @@ from typing import Mapping
 
 from builder.paths import PROJECT_ROOT, build_dir, components_dir
 from builder.locking import atomic_write
+from builder.layers import LayerStack
 
 
 class WorkspaceError(ValueError):
@@ -36,10 +37,10 @@ class Target:
         return {"board": self.board, "product": self.product, "variant": self.variant}
 
     @classmethod
-    def parse(cls, value: str, tool_root: Path = PROJECT_ROOT):
+    def parse(cls, value: str, tool_root: Path = PROJECT_ROOT, layer_stack=None):
         from builder.config.query import parse_target
 
-        return cls(**parse_target(value, project_root=tool_root))
+        return cls(**parse_target(value, project_root=tool_root, layer_stack=layer_stack))
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,12 @@ class WorkspaceContext:
     invocation_dir: Path | None = None
     apps: Mapping[str, Path] = field(default_factory=dict)
     app_dirs: tuple[Path, ...] = ()
+    layer_stack: LayerStack | None = None
+    environment_ids: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self):
+        if self.layer_stack is None:
+            object.__setattr__(self, "layer_stack", LayerStack.base(self.tool_root))
         for name in ("tool_root", "workspace_root", "build_root"):
             object.__setattr__(self, name, Path(getattr(self, name)).resolve())
         object.__setattr__(
@@ -96,6 +101,7 @@ class WorkspaceContext:
             "target_dir": str(self.target_dir),
             "apps": {k: str(v) for k, v in self.apps.items()},
             "app_dirs": [str(p) for p in self.app_dirs],
+            "layers": self.layer_stack.to_dict(),
         }
 
 
@@ -140,11 +146,11 @@ def workspace_settings(root: Path, *, tool_root: Path = PROJECT_ROOT) -> dict:
             raise WorkspaceError(f"无法读取 {manifest}：{exc}") from exc
         _fields(
             data,
-            {"schema_version", "tool_root", "build_dir", "app_dirs", "apps", "target"},
+            {"schema_version", "tool_root", "build_dir", "app_dirs", "apps", "target", "layers"},
             "flange.toml",
         )
-        if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
-            raise WorkspaceError("flange.toml 的 schema_version 必须是整数 1")
+        if type(data.get("schema_version")) is not int or data["schema_version"] not in (1, 2):
+            raise WorkspaceError("flange.toml 的 schema_version 必须是整数 1 或 2")
     else:
         if root != Path(tool_root).resolve():
             raise WorkspaceError(f"{root} 缺少 flange.toml；请运行 flange init {root}")
@@ -155,6 +161,14 @@ def workspace_settings(root: Path, *, tool_root: Path = PROJECT_ROOT) -> dict:
         or not (resolved_tool / "docker-compose.yml").is_file()
     ):
         raise WorkspaceError(f"tool_root 不是完整的 flange 工具仓库：{resolved_tool}")
+    raw_layers = data.get("layers", [])
+    if "layers" in data and data.get("schema_version") != 2:
+        raise WorkspaceError("layers 需要 flange.toml schema_version = 2")
+    if not isinstance(raw_layers, list):
+        raise WorkspaceError("layers 必须是本地路径数组")
+    layer_stack = LayerStack.load(resolved_tool, [
+        _path(value, root, f"layers[{index}]") for index, value in enumerate(raw_layers)
+    ])
     output = _path(data.get("build_dir", str(build_dir(root))), root, "build_dir")
     if (
         output == root
@@ -163,6 +177,8 @@ def workspace_settings(root: Path, *, tool_root: Path = PROJECT_ROOT) -> dict:
         or output in resolved_tool.parents
     ):
         raise WorkspaceError("build_dir 必须是独立的产物目录，不能覆盖工作区或工具根")
+    if any(output == layer.root or output in layer.root.parents for layer in layer_stack.layers):
+        raise WorkspaceError("build_dir 不能覆盖任一扩展层根目录")
     app_dirs = data.get("app_dirs", [])
     if not isinstance(app_dirs, list):
         raise WorkspaceError("app_dirs 必须是路径字符串数组")
@@ -178,6 +194,7 @@ def workspace_settings(root: Path, *, tool_root: Path = PROJECT_ROOT) -> dict:
             raise WorkspaceError("target 必须完整声明 board、product、variant") from exc
     return {
         "tool_root": resolved_tool,
+        "layer_stack": layer_stack,
         "workspace_root": root,
         "build_root": output,
         "target": target,
@@ -208,7 +225,7 @@ def load_workspace(
     invocation = Path(start or Path.cwd()).resolve()
     root = discover_workspace(invocation, tool_root=tool_root)
     values = workspace_settings(root, tool_root=tool_root)
-    chosen = Target.parse(target, values["tool_root"]) if isinstance(target, str) else target
+    chosen = Target.parse(target, values["tool_root"], values["layer_stack"]) if isinstance(target, str) else target
     chosen = chosen or selected_target(root, values["target"])
     if chosen is None:
         raise WorkspaceError(
@@ -234,6 +251,7 @@ def resolve_config(context: WorkspaceContext) -> dict:
         context.target.product,
         context.target.variant,
         project_root=context.tool_root,
+        layer_stack=context.layer_stack,
     )
     validate_config(config)
     return config

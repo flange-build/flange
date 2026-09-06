@@ -119,10 +119,12 @@ class RecoveryBuilder(RootfsBuilder):
         sudoers.d、不锁 root）、不装 locale、不装 extra_firmware：它只通过
         adb 通道交互运行，这些都没有意义，且每一项都要占救援分区的空间。
         """
-        self._install_app_debs(recovery_dir, config)
+        from builder.distro import get_distro
+        distro = get_distro(config, self.context)
+        distro.install_apps(self, recovery_dir, config)
         self._install_kernel_modules(recovery_dir, config)
         self.apply_overlays(recovery_dir, config)
-        self._export_package_manifest(recovery_dir)
+        distro.export_packages(self, recovery_dir)
 
     def _post_customize(self, recovery_dir: Path, config: dict) -> None:
         """写入设备端读取的分区表/刷写策略事实源。"""

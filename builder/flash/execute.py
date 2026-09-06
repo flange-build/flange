@@ -32,14 +32,19 @@ from builder.term import Role
 class FlashExecutor:
     """读取 flash-config.json 并执行刷写。"""
 
-    def __init__(self, target_dir: Path, project_dir: Path = None):
+    def __init__(self, target_dir: Path, project_dir: Path = None, *, layer_stack=None):
         config_path = target_dir / "flash-config.json"
         if not config_path.exists():
             raise FlashError(f"未找到 flash-config.json: {config_path}\n请先执行 flange build")
         self.config = FlashConfig.from_json(config_path)
         self.target_dir = target_dir
         self.project_dir = project_dir or Path.cwd()
-        self.strategy = get_flash_strategy(self.config.platform)
+        from builder.layers import LayerStack
+        stack = layer_stack or LayerStack.base(self.project_dir)
+        ref = stack.provider_ref("flash", self.config.platform)
+        if self.config.provider_api != 1 or self.config.provider != (ref.identity if ref else ""):
+            raise FlashError("刷写策略身份与构建清单不一致；请恢复构建时的扩展层或重新构建")
+        self.strategy = get_flash_strategy(self.config.platform, stack)
 
     def flash_all(self, no_wait: bool = False, no_reboot: bool = False):
         """全量刷写所有分区。"""
@@ -187,7 +192,7 @@ class FlashExecutor:
 # ---------------------------------------------------------------------------
 
 
-def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
+def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None, layer_stack=None):
     from builder.presentation import ArgumentParser
 
     parser = ArgumentParser(
@@ -235,7 +240,7 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
     if args.command == "run":
         target_dir = Path(args.target_dir)
         project_dir = Path(args.project_dir)
-        executor = FlashExecutor(target_dir, project_dir)
+        executor = FlashExecutor(target_dir, project_dir, layer_stack=layer_stack)
 
         if args.list_parts:
             executor.list_partitions()

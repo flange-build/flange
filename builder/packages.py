@@ -37,6 +37,7 @@ from typing import Any
 from builder.config.schema import STRING, STRINGS, Map, Object
 from builder.actions import validate_actions
 from builder.paths import PROJECT_ROOT, components_dir
+from builder.layers import stack_for
 from builder.platforms.spec import capability as platform_capability
 
 # component 合法类型集合。未知类型 → 构建失败。
@@ -178,9 +179,10 @@ def load_package_manifest_dir(package_dir: Path) -> dict:
     return normalized
 
 
-def load_package_manifest(pkg_name: str, project_root: Path) -> dict:
+def load_package_manifest(pkg_name: str, project_root: Path, *, layer_stack=None) -> dict:
     """按仓库内名称加载包清单，保持 board opt-in 的既有 API。"""
-    pkg_dir = components_dir(project_root) / "packages" / pkg_name
+    ref = (layer_stack or stack_for(project_root=project_root)).selected(f"components/packages/{pkg_name}")
+    pkg_dir = ref.path if ref else components_dir(project_root) / "packages" / pkg_name
     return load_package_manifest_dir(pkg_dir)
 
 
@@ -188,6 +190,7 @@ def resolve_package_dir(
     name_or_path: str | Path | None,
     project_root: Path | None = None,
     caller_cwd: Path | None = None,
+    layer_stack=None,
 ) -> Path:
     """把仓库内包名或调用者 cwd 下的路径解析为 Package 目录。
 
@@ -207,7 +210,8 @@ def resolve_package_dir(
         path = Path(raw).expanduser()
         candidate = path if path.is_absolute() else cwd / path
         is_path = path.is_absolute() or raw.startswith(".") or "/" in raw or candidate.is_dir()
-        package_dir = candidate if is_path else components_dir(root) / "packages" / raw
+        ref = (layer_stack or stack_for(project_root=root)).selected(f"components/packages/{raw}") if not is_path else None
+        package_dir = candidate if is_path else (ref.path if ref else components_dir(root) / "packages" / raw)
 
     resolved = package_dir.resolve()
     manifest = resolved / "package.py"
@@ -297,14 +301,19 @@ def expand_hardware_packages(config: dict, project_root: Path | None = None) -> 
     overlay_src_paths: list[str] = meta.setdefault("overlay_src_paths", [])
     app_src_paths: dict[str, list[str]] = meta.setdefault("app_src_paths", {})
 
+    def resource_path(path: Path) -> str:
+        # 基础层保留既有相对路径，外部层记录实际归属。
+        return str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
+
     seen_packages: set[str] = set()
     for entry in pkgs:
         pkg_name, selected = _parse_opt_in(entry)
         if pkg_name in seen_packages:
             raise ValueError(f"packages 重复选择包：{pkg_name}，请合并为一项")
         seen_packages.add(pkg_name)
-        pkg = load_package_manifest(pkg_name, root)
-        pkg_dir = components_dir(root) / "packages" / pkg_name
+        stack = stack_for(config, project_root=root)
+        pkg = load_package_manifest(pkg_name, root, layer_stack=stack)
+        pkg_dir = stack.selected(f"components/packages/{pkg_name}").path
 
         # 校验显式选中的 driver 都存在于包内
         if selected is not None:
@@ -325,7 +334,7 @@ def expand_hardware_packages(config: dict, project_root: Path | None = None) -> 
                 # 按需编译：未选中的 driver 不注入 oot_modules（不编译/不安装）
                 if selected is not None and comp["name"] not in selected:
                     continue
-                driver_rel = f"components/packages/{pkg_name}/{comp['dir']}"
+                driver_rel = resource_path(pkg_dir / comp["dir"])
                 driver_abs = (pkg_dir / comp["dir"]).resolve()
                 ko_abs = [str(driver_abs / ko) for ko in comp["ko_pattern"]]
                 oot_modules.append(
@@ -363,7 +372,7 @@ def expand_hardware_packages(config: dict, project_root: Path | None = None) -> 
                     if dtbo_name not in build_overlays:
                         build_overlays.append(dtbo_name)
                 overlay_sources[dtbo_name] = str(dtso_abs)
-                overlay_src_paths.append(f"components/packages/{pkg_name}/{dtso_rel}")
+                overlay_src_paths.append(resource_path(dtso_abs))
 
             elif ctype == "vendor":
                 app_dir = (pkg_dir / comp["dir"]).resolve()
@@ -384,7 +393,7 @@ def expand_hardware_packages(config: dict, project_root: Path | None = None) -> 
                 # 位于 App 目录之外、但确实参与该 App 构建的包内内容（补丁、
                 # 共享脚本等）：登记为附加哈希输入，否则改补丁不会触发重建。
                 extra = [
-                    f"components/packages/{pkg_name}/{item}"
+                    resource_path(pkg_dir / item)
                     for item in _vendor_inputs(pkg_name, comp, pkg_dir)
                 ]
                 if extra:

@@ -45,6 +45,7 @@ def test_emulator_tarball环境与配方均属于base输入(tmp_path, monkeypatc
     cfg['rootfs']['emulator'] = 'qemu-custom-static'
     assert base_plan(cfg, 'rootfs', ctx).fingerprint() != before
     cfg = config()
+    monkeypatch.setenv('FLANGE_ENVIRONMENT_PROVIDER', 'ubuntu')
     monkeypatch.setenv('FLANGE_BUILD_ENVIRONMENT', 'sha256:new')
     assert base_plan(cfg, 'rootfs', ctx).fingerprint() != before
 

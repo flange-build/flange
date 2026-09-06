@@ -60,6 +60,8 @@ def test_任意产物根可挂载且管道关闭TTY(host, tmp_path, monkeypatch)
 
 
 def test_容器内不嵌套Docker(tmp_path, monkeypatch):
+    monkeypatch.setenv('FLANGE_ENVIRONMENT_PROVIDER', 'ubuntu')
+    monkeypatch.setenv('FLANGE_BUILD_ENVIRONMENT', 'sha256:test-image')
     monkeypatch.setattr('builder.docker._is_inside_container', lambda: True)
     cmd, _ = command(DockerRunner(tmp_path), extra_mounts=[tmp_path])
     assert cmd == ['true']

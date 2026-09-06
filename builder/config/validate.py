@@ -495,6 +495,15 @@ def _run_platform_validation(config: dict, function: str) -> None:
     platform = config.get("platform")
     if not platform:
         return
+    stack = getattr(config, "layer_stack", None)
+    external = stack.provider("platform", platform) if stack is not None else None
+    if external is not None:
+        from builder.platforms.spec import load_for
+        load_for(config)
+        validator = getattr(external, function, None)
+        if validator:
+            validator(config)
+        return
     module_name = f"builder.platforms.{platform}.validation"
     try:
         module = importlib.import_module(module_name)
@@ -627,7 +636,7 @@ def validate_platform(config: dict) -> None:
     platform = config.get("platform")
     if not platform:
         return
-    known = known_platforms()
+    known = known_platforms(getattr(config, "layer_stack", None))
     if platform not in known:
         raise ConfigError(f"未知平台 {platform!r}；已注册的平台: {', '.join(known)}")
 
@@ -670,6 +679,16 @@ def validate_partition_values(config: dict) -> None:
 def validate_config(config: dict) -> None:
     """对 FINAL_CONFIG 执行全部已知校验，第一项失败即抛 ConfigError。"""
     validate_canonical_config(config)
+    from builder.layers import stack_for, PROVIDER_KINDS
+    for namespace, value in (config.get("extensions") or {}).items():
+        kind, separator, name = namespace.partition(":")
+        if not separator or kind not in PROVIDER_KINDS:
+            raise ConfigError(f"extensions.{namespace} 必须使用 策略种类:名称")
+        provider = stack_for(config).provider(kind, name)
+        schema = getattr(provider, "EXTENSION_SCHEMA", None)
+        if not isinstance(schema, _schema.Object):
+            raise ConfigError(f"策略 {namespace} 未声明闭合 EXTENSION_SCHEMA")
+        schema.check(value, f"extensions.{namespace}")
     validate_platform(config)
     validate_build_routes(config)
     validate_partition_values(config)

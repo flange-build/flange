@@ -15,6 +15,11 @@ class Toolchain:
     triple: str
     processor: str
     cpu_family: str
+    profile: str = "ubuntu"
+    prefix: str = ""
+    target_sysroot: str = ""
+    sdk_identity: str = ""
+    sdk_source: str = "environment"
 
     @classmethod
     def for_arch(cls, arch: str) -> Toolchain:
@@ -32,7 +37,7 @@ class Toolchain:
     @property
     def tools(self) -> dict[str, str]:
         return {
-            name: f"{self.triple}-{program}"
+            name: f"{self.prefix or self.triple + '-'}{program}"
             for name, program in {
                 "CC": "gcc",
                 "CXX": "g++",
@@ -44,6 +49,23 @@ class Toolchain:
         }
 
     def environment(self, dependency_root: Path) -> dict[str, str]:
+        if self.target_sysroot:
+            directories = [
+                dependency_root / "usr/lib" / self.triple / "pkgconfig",
+                dependency_root / "usr/lib/pkgconfig",
+                dependency_root / "usr/share/pkgconfig",
+            ]
+            flag = f"--sysroot={dependency_root}"
+            return {
+                **self.tools,
+                "PKG_CONFIG_SYSROOT_DIR": str(dependency_root),
+                "PKG_CONFIG_LIBDIR": ":".join(map(str, directories)),
+                "PKG_CONFIG_PATH": "",
+                "CFLAGS": flag,
+                "CXXFLAGS": flag,
+                "CPPFLAGS": flag,
+                "LDFLAGS": flag,
+            }
         return {
             **self.tools,
             "PKG_CONFIG_SYSROOT_DIR": "",
@@ -61,7 +83,13 @@ class Toolchain:
     def meson_file(self, path: Path, dependency_root: Path) -> None:
         """把实际架构与依赖前缀写入本节点的 cross-file。"""
         flags = [f"-I{dependency_root}/usr/include"]
-        links = [f"-L{dependency_root}/usr/lib", f"-Wl,-rpath-link,{dependency_root}/usr/lib"]
+        links = [
+            f"-L{dependency_root}/usr/lib",
+            f"-Wl,-rpath-link,{dependency_root}/usr/lib",
+        ]
+        if self.target_sysroot:
+            flags = [f"--sysroot={dependency_root}"]
+            links = flags + [f"-Wl,-rpath-link,{dependency_root}/usr/lib/{self.triple}"]
         text = (
             "# flange 生成的目标工具链；修改目标后重新生成。\n"
             "[binaries]\n"
@@ -74,6 +102,12 @@ class Toolchain:
             f"c_args = {flags!r}\ncpp_args = {flags!r}\n"
             f"c_link_args = {links!r}\ncpp_link_args = {links!r}\n"
         )
+        if self.target_sysroot:
+            text += (
+                "[properties]\n"
+                + f"sys_root = {str(dependency_root)!r}\n"
+                + f"pkg_config_libdir = {self.environment(dependency_root)['PKG_CONFIG_LIBDIR'].split(':')!r}\n"
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
@@ -112,6 +146,11 @@ class Toolchain:
                 f"-DCMAKE_BUILD_TYPE={'Debug' if debug else 'Release'}",
                 f"-DCMAKE_PREFIX_PATH={dependency_root}/usr",
             ]
+            if self.target_sysroot:
+                toolchain_file = build.parent / "flange-toolchain.cmake"
+                self.cmake_file(toolchain_file, dependency_root)
+                configure.append(f"-DCMAKE_TOOLCHAIN_FILE={toolchain_file}")
+                configure.append("-DCMAKE_PREFIX_PATH=/usr")
             configure.extend(f"-D{key}={value}" for key, value in options.items())
             return [configure, ["cmake", "--build", str(build), "--parallel", jobs]], [
                 "cmake",
@@ -121,10 +160,19 @@ class Toolchain:
         if system == "meson":
             cross = build.parent / "meson-cross.ini"
             self.meson_file(cross, dependency_root)
-            setup = ["meson", "setup", str(build), str(source), "--cross-file", str(cross)]
+            setup = [
+                "meson",
+                "setup",
+                str(build),
+                str(source),
+                "--cross-file",
+                str(cross),
+            ]
             if (build / "meson-private/coredata.dat").is_file():
                 setup.append("--reconfigure")
-            setup.extend([f"--buildtype={'debug' if debug else 'release'}", "--prefix=/usr"])
+            setup.extend(
+                [f"--buildtype={'debug' if debug else 'release'}", "--prefix=/usr"]
+            )
             setup.extend(f"-D{key}={value}" for key, value in options.items())
             return [setup, ["meson", "compile", "-C", str(build), "-j", jobs]], [
                 "meson",
@@ -145,6 +193,14 @@ class Toolchain:
                 "BUILD_DIR": str(build),
                 **options,
             }
+            if self.target_sysroot:
+                sdk_flags = self.environment(dependency_root)
+                variables.update(
+                    {key: sdk_flags[key] for key in ("CPPFLAGS", "LDFLAGS")}
+                )
+                variables["CFLAGS"] = flags + " " + sdk_flags["CFLAGS"]
+                variables["CXXFLAGS"] = flags + " " + sdk_flags["CXXFLAGS"]
+                variables["CROSS_COMPILE"] = self.prefix or f"{self.triple}-"
             argv = [f"{key}={value}" for key, value in variables.items()]
             return [["make", f"-j{jobs}", *argv]], [
                 "make",
@@ -152,8 +208,12 @@ class Toolchain:
                 *argv,
                 f"DESTDIR={install}",
             ]
+        if system == "swift" and self.target_sysroot:
+            raise ValueError("该用户态 SDK 尚未声明 Swift 适配，请提供支持的构建方式")
         if system == "swift":
-            configuration = options.get("configuration", "debug" if debug else "release")
+            configuration = options.get(
+                "configuration", "debug" if debug else "release"
+            )
             triple = {
                 "aarch64": "aarch64-unknown-linux-gnu",
                 "armhf": "armv7-unknown-linux-gnueabihf",
@@ -184,3 +244,95 @@ class Toolchain:
                 str(install / "usr/bin" / spec.app.name),
             ]
         raise ValueError(f"{system!r} 必须通过对应系统组件构建，不能独立构建 App")
+
+    def cmake_file(self, path: Path, sysroot: Path) -> None:
+        """CMake 必须在 toolchain file 中设置 sysroot 与目标查找范围。"""
+        import json
+
+        values = {
+            "CMAKE_SYSTEM_NAME": "Linux",
+            "CMAKE_SYSTEM_PROCESSOR": self.processor,
+            "CMAKE_C_COMPILER": self.tools["CC"],
+            "CMAKE_CXX_COMPILER": self.tools["CXX"],
+            "CMAKE_SYSROOT": str(sysroot),
+            "CMAKE_FIND_ROOT_PATH": str(sysroot),
+            "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
+            "CMAKE_FIND_ROOT_PATH_MODE_LIBRARY": "ONLY",
+            "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE": "ONLY",
+            "CMAKE_FIND_ROOT_PATH_MODE_PACKAGE": "ONLY",
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# flange 生成的目标工具链。\n"
+            + "".join(
+                f"set({key} {json.dumps(value)})\n" for key, value in values.items()
+            )
+        )
+
+
+def resolve_toolchain(config, context):
+    from builder.build_environment import resolve_environment
+    from builder.config.canonical import userspace_arch
+    from builder.layers import stack_for
+
+    arch = userspace_arch(config)
+    environment = resolve_environment(config, context)
+    name = config.get("userland_toolchain") or (
+        environment.toolchain if environment else ""
+    )
+    if not name:
+        if config.get("distro", "ubuntu") != "ubuntu":
+            raise ValueError("非 Ubuntu 发行版必须声明用户态工具链")
+        return Toolchain.for_arch(arch)
+    module = stack_for(config, context).provider("toolchain", name)
+    if module is None:
+        raise ValueError(f"未注册用户态工具链：{name}")
+    toolchain = module.create_toolchain(config, context)
+    if not isinstance(toolchain, Toolchain) or toolchain.arch != arch:
+        raise ValueError("工具链必须返回与目标架构一致的 Toolchain")
+    if (
+        not toolchain.profile
+        or not toolchain.sdk_identity
+        or not Path(toolchain.target_sysroot).is_absolute()
+    ):
+        raise ValueError(
+            "外部工具链必须声明 profile、sdk_identity 和绝对 target_sysroot"
+        )
+    if toolchain.sdk_source not in {"environment", "directory"}:
+        raise ValueError("SDK 来源必须是 environment 或 directory")
+    return toolchain
+
+
+def userland_identity(config, context):
+    toolchain = resolve_toolchain(config, context)
+    result = {
+        "distro": config.get("distro", "ubuntu"),
+        "profile": toolchain.profile,
+        "sdk": toolchain.sdk_identity,
+        "architecture": toolchain.arch,
+        "triple": toolchain.triple,
+    }
+    if toolchain.target_sysroot:
+        from builder.digest import hash_path
+        from builder.environment import environment_identity
+        from builder.layers import stack_for
+        from builder.build_environment import resolve_environment
+
+        environment = resolve_environment(config, context)
+        name = config.get("userland_toolchain") or (
+            environment.toolchain if environment else ""
+        )
+        result["toolchain_inputs"] = {
+            ref.identity: hash_path(ref.path)
+            for ref in stack_for(config, context).provider_inputs("toolchain", name)
+        }
+        if toolchain.sdk_source == "directory":
+            sdk = Path(toolchain.target_sysroot)
+            if not sdk.is_dir():
+                raise ValueError(f"SDK 目录不存在：{sdk}")
+            result["sdk_digest"] = hash_path(sdk)
+        else:
+            result["sdk_environment"] = environment_identity(
+                config=config, context=context
+            )
+    return result

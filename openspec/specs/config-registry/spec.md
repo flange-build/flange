@@ -8,7 +8,7 @@
 
 registry SHALL 提供 get_board_config(board_name) 与 resolve_config(board_name, product, variant)，并接受显式 project_root 作为工具内容根。
 前者使用 board 声明的第一个 product/variant，后者使用调用者明确目标；两者都按固定 Jsonnet 组合和 Package 展开返回严格校验结果。
-工作区入口 MUST 通过 workspace.resolve_config(context) 传入 tool_root，不得把调用目录或 workspace_root 当作系统配置根。
+工作区入口 MUST 通过 workspace.resolve_config(context) 传入已解析 LayerStack，未提供时仅使用 tool_root 基础层；不得把调用目录当作系统配置根。
 
 #### Scenario: 查询已注册 board 配置
 - **WHEN** 调用 get_board_config 且 board 声明多个 product/variant
@@ -20,7 +20,7 @@ registry SHALL 提供 get_board_config(board_name) 与 resolve_config(board_name
 
 #### Scenario: 外部工作区解析目标
 - **WHEN** 工作区与工具 checkout 不同目录
-- **THEN** 系统配置来自 context.tool_root，目标状态只保存于 workspace_root
+- **THEN** 系统配置来自 context 的有序启用层，目标状态只保存于 workspace_root
 
 ### Requirement: 查询不存在的板子名称时报错
 
@@ -32,7 +32,7 @@ registry SHALL 提供 get_board_config(board_name) 与 resolve_config(board_name
 
 ### Requirement: 注册表导出已注册板子列表
 
-discover_boards SHALL 扫描工具根 components/board/*/config.jsonnet，严格校验 board 身份及非空、无重复的 products/variants。
+discover_boards SHALL 扫描各启用层 components/board/*/config.jsonnet 并按层组合身份，严格校验 board 身份及非空、无重复的 products/variants。
 不合法身份或目录不一致 MUST 报错，不得把损坏配置静默隐藏。目标列表 MUST 从这些维度生成，不维护硬编码注册表。
 
 #### Scenario: 获取已注册 board 列表

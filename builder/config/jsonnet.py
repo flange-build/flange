@@ -11,6 +11,7 @@ from typing import Any
 import _jsonnet
 
 from builder.paths import components_dir
+from builder.layers import LayerStack, LayerError
 from builder.config.schema import Object, STRING, STRINGS, SchemaError, validate_system_shape
 
 
@@ -39,6 +40,8 @@ class ResolvedConfig(dict):
 
     jsonnet_dependencies: tuple[Path, ...] = ()
     jsonnet_hash: str = ""
+    layer_stack: LayerStack | None = None
+    config_chain: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,9 +58,10 @@ class JsonnetEvaluator:
 
     _ALLOWED_SUFFIXES = {".jsonnet", ".libsonnet"}
 
-    def __init__(self, project_root: Path):
+    def __init__(self, project_root: Path, *, layer_stack: LayerStack | None = None):
         self.project_root = Path(project_root).resolve()
         self.config_root = components_dir(self.project_root).resolve()
+        self.layer_stack = layer_stack or LayerStack.base(self.project_root)
         self._dependencies: set[Path] = set()
 
     def evaluate_file(
@@ -118,7 +122,7 @@ class JsonnetEvaluator:
             digest.update(value.encode())
             digest.update(b"\0")
         for path in result.dependencies:
-            digest.update(str(path.relative_to(self.project_root)).encode())
+            digest.update(self.layer_stack.reference(path).identity.encode())
             digest.update(b"\0")
             digest.update(path.read_bytes())
             digest.update(b"\0")
@@ -139,13 +143,24 @@ class JsonnetEvaluator:
         )
 
     def _import_callback(self, base: str, relative: str) -> tuple[str, bytes]:
-        rel_path = PurePosixPath(relative)
-        if rel_path.is_absolute() or ".." in rel_path.parts:
-            raise RuntimeError(f"Jsonnet import 越过允许根目录: {relative}")
-        rel = Path(*rel_path.parts)
-        local_path = Path(base) / rel
-        path = local_path if local_path.exists() else self.config_root / rel
-        path = self._resolve_config_path(path, label=f"Jsonnet import {relative}")
+        try:
+            owner = self.layer_stack.reference(Path(base)).layer
+            if relative == "flange/layer.libsonnet":
+                prefix = json.dumps(f"layer://{owner.name}/")
+                source = "{path(p):: " + prefix + " + p}"
+                return str(owner.components / "__layer_helper__.libsonnet"), source.encode()
+            if relative.startswith("layer://"):
+                path = self.layer_stack.uri(relative).path
+            else:
+                rel_path = PurePosixPath(relative)
+                if rel_path.is_absolute() or ".." in rel_path.parts:
+                    raise LayerError(f"Jsonnet import 越过允许根目录: {relative}")
+                rel = Path(*rel_path.parts)
+                local_path = Path(base) / rel
+                path = local_path if local_path.exists() else owner.components / rel
+            path = self._resolve_config_path(path, label=f"Jsonnet import {relative}")
+        except LayerError as exc:
+            raise RuntimeError(str(exc)) from exc
         self._dependencies.add(path)
         return str(path), path.read_bytes()
 
@@ -155,8 +170,9 @@ class JsonnetEvaluator:
         except OSError as exc:
             raise JsonnetConfigError(f"{label}不存在: {path}") from exc
         try:
-            resolved.relative_to(self.config_root)
-        except ValueError as exc:
+            owner = self.layer_stack.reference(path).layer
+            resolved.relative_to(owner.components.resolve())
+        except (ValueError, LayerError) as exc:
             raise JsonnetConfigError(f"{label}越过允许根目录 {self.config_root}: {path}") from exc
         if resolved.suffix not in self._ALLOWED_SUFFIXES:
             raise JsonnetConfigError(f"{label}扩展名必须是 .jsonnet 或 .libsonnet: {path}")
@@ -166,17 +182,19 @@ class JsonnetEvaluator:
 class JsonnetConfigLoader:
     """发现身份并组合 rootfs/platform/SoC/board 四层 overlay。"""
 
-    def __init__(self, project_root: Path):
+    def __init__(self, project_root: Path, *, layer_stack: LayerStack | None = None):
         self.project_root = Path(project_root).resolve()
         self.config_root = components_dir(self.project_root).resolve()
-        self.evaluator = JsonnetEvaluator(self.project_root)
+        self.layer_stack = layer_stack or LayerStack.base(self.project_root)
+        self.evaluator = JsonnetEvaluator(self.project_root, layer_stack=self.layer_stack)
 
     def board_identity(self, board: str) -> dict[str, Any]:
         if Path(board).name != board:
             raise JsonnetConfigError(f"非法 board 名称: {board}")
         board_path = self.config_root / "board" / board / "config.jsonnet"
         identity = self._identity_projection(
-            board_path, ("board", "platform", "soc", "products", "variants")
+            self._paths(f"board/{board}/config.jsonnet", required=True),
+            ("board", "platform", "soc", "products", "variants")
         )
         if identity.get("board") != board:
             raise JsonnetConfigError(
@@ -216,35 +234,32 @@ class JsonnetConfigLoader:
 
         platform = identity["platform"]
         soc = identity["soc"]
-        rootfs_path = self.config_root / "rootfs" / "config.jsonnet"
-        overlay_path = self.config_root / "device-tree-overlay" / "config.jsonnet"
-        platform_path = self.config_root / "platform" / platform / "config.jsonnet"
-        soc_path = self.config_root / "platform" / platform / soc / "config.jsonnet"
-        board_path = self.config_root / "board" / board / "config.jsonnet"
-
-        platform_identity = self._identity_projection(platform_path, ("platform",))
-        if platform_identity.get("platform") != platform:
-            raise JsonnetConfigError(
-                f"platform 身份与目录不一致: {platform_identity.get('platform')!r} != {platform!r}"
-            )
-        soc_identity = self._identity_projection(soc_path, ("platform", "soc"))
-        if soc_identity.get("platform") != platform or soc_identity.get("soc") != soc:
-            raise JsonnetConfigError(
-                f"SoC 身份与路径不一致: {soc_identity!r}，期望 platform={platform!r}, soc={soc!r}"
-            )
-
-        imports = [rootfs_path]
-        if overlay_path.is_file():
-            imports.append(overlay_path)
-        baseline_count = len(imports)
-        imports.extend([platform_path, soc_path, board_path])
+        platform_paths = self._paths(f"platform/{platform}/config.jsonnet", required=True)
+        soc_paths = self._paths(f"platform/{platform}/{soc}/config.jsonnet", required=True)
+        board_paths = self._paths(f"board/{board}/config.jsonnet", required=True)
+        if self._identity_projection(platform_paths, ("platform",)).get("platform") != platform:
+            raise JsonnetConfigError(f"platform 身份与目录不一致: {platform}")
+        soc_identity = self._identity_projection(soc_paths, ("platform", "soc"))
+        if soc_identity != {"platform": platform, "soc": soc}:
+            raise JsonnetConfigError(f"SoC 身份与路径不一致: {soc_identity!r}")
+        selector = self._identity_projection(
+            [*platform_paths, *soc_paths, *board_paths], ("distro",),
+            product=product, variant=variant,
+        )
+        distro = selector.get("distro", "ubuntu")
+        if not isinstance(distro, str) or not distro or Path(distro).name != distro:
+            raise JsonnetConfigError("distro 必须是发行版名称")
+        baseline = "rootfs/config.jsonnet" if distro == "ubuntu" else f"distro/{distro}/config.jsonnet"
+        imports = self._paths(baseline, required=True)
+        imports += self._paths("device-tree-overlay/config.jsonnet")
         platform_result = self._evaluate_layers(
-            imports[: baseline_count + 1], product=product, variant=variant
+            [*imports, *platform_paths], product=product, variant=variant
         )
         soc_result = self._evaluate_layers(
-            imports[: baseline_count + 2], product=product, variant=variant
+            [*imports, *platform_paths, *soc_paths], product=product, variant=variant
         )
         self._audit_soc_layer(platform_result.config, soc_result.config)
+        imports += [*platform_paths, *soc_paths, *board_paths]
         result = self._evaluate_layers(imports, product=product, variant=variant)
         self._validate_authored_shape(result.config)
         selected_packages = list(result.config.get("packages") or [])
@@ -256,7 +271,8 @@ class JsonnetConfigLoader:
             # package 选择以 board 首次求值结果为准，不递归加载或注入依赖包。
             result.config["packages"] = selected_packages
         self._validate_authored_shape(result.config)
-        resolved = ResolvedConfig(result.config)
+        resolved = ResolvedConfig(self.layer_stack.resolve_values(result.config))
+        resolved.layer_stack = self.layer_stack
         _expand_package_sets(resolved)
         from builder.packages import expand_hardware_packages
 
@@ -265,6 +281,8 @@ class JsonnetConfigLoader:
 
         normalized = normalize_app_sources(resolved, self.project_root)
         resolved = ResolvedConfig(normalized)
+        resolved.layer_stack = self.layer_stack
+        resolved.config_chain = tuple(self._import_name(p) for p in [*imports, *package_configs])
         resolved.jsonnet_dependencies = result.dependencies
         canonical_json = json.dumps(
             resolved, ensure_ascii=False, separators=(",", ":"), sort_keys=True
@@ -322,9 +340,11 @@ class JsonnetConfigLoader:
             )
             if not isinstance(name, str) or not name or Path(name).name != name:
                 continue
-            path = self.config_root / "packages" / name / "config.jsonnet"
-            if path.is_file():
-                paths.append(path)
+            resource = self.layer_stack.selected(f"components/packages/{name}")
+            if resource is not None:
+                path = resource.path / "config.jsonnet"
+                if path.is_file():
+                    paths.append(path)
         return paths
 
     def _audit_soc_layer(self, before: dict, after: dict) -> None:
@@ -383,10 +403,12 @@ class JsonnetConfigLoader:
 
     def _identity_projection(
         self,
-        path: Path,
+        path: Path | list[Path],
         fields: tuple[str, ...],
+        *, product: str = "", variant: str = "",
     ) -> dict[str, Any]:
-        import_name = json.dumps(self._import_name(path))
+        paths = path if isinstance(path, list) else [path]
+        expression = " + ".join(f"(import {json.dumps(self._import_name(p))})" for p in paths)
         projected = ", ".join(
             f"{field}: if std.objectHas(config, {json.dumps(field)}) "
             f"then config[{json.dumps(field)}] else null"
@@ -394,11 +416,17 @@ class JsonnetConfigLoader:
         )
         result = self.evaluator.evaluate_snippet(
             "config/__identity__.jsonnet",
-            f"local config = import {import_name}; {{{projected}}}",
-            ext_vars={"product": "", "variant": ""},
+            f"local config = {expression}; {{{projected}}}",
+            ext_vars={"product": product, "variant": variant},
         )
         return {key: value for key, value in result.config.items() if value is not None}
 
     def _import_name(self, path: Path) -> str:
         resolved = self.evaluator._resolve_config_path(path, label="配置层")
-        return resolved.relative_to(self.config_root).as_posix()
+        return self.layer_stack.reference(resolved).identity
+
+    def _paths(self, relative: str, *, required: bool = False) -> list[Path]:
+        paths = [ref.path for ref in self.layer_stack.all(f"components/{relative}")]
+        if required and not paths:
+            raise JsonnetConfigError(f"配置入口不存在: {relative}")
+        return paths

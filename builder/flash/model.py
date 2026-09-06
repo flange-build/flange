@@ -70,6 +70,9 @@ class FlashConfig:
     variant: str
     # SoC 身份用于 Rockchip 首次持久写入前的设备校验；空值兼容旧清单。
     soc: str = ""
+    # 外部刷写实现的逻辑身份；不把执行代码摘要绑定到系统镜像。
+    provider: str = ""
+    provider_api: int = 1
     # 目标存储逻辑块大小：eMMC/SD 为 512，UFS 为 4096。缺省 512 向前兼容
     # 旧 flash-config.json。供 write_gpt 按扇区截取 GPT。
     sector_size: int = 512
@@ -115,6 +118,8 @@ class FlashConfig:
             product=data["product"],
             variant=data["variant"],
             soc=data.get("soc", ""),
+            provider=data.get("provider", ""),
+            provider_api=data.get("provider_api", 1),
             sector_size=data.get("sector_size", 512),
             storage=data.get("storage", ""),
             storage_type=data.get("storage_type", ""),

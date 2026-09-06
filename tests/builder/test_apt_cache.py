@@ -163,7 +163,7 @@ def test_rootfs_mount_clean_and_unmount_are_inside_actual_cache_lock(
 
     @contextmanager
     def locked(cache):
-        assert cache.archives == context.build_root / "cache/apt"
+        assert cache.archives.parent == context.build_root / "cache/apt"
         assert cache.lists is None
         events.append("lock")
         yield
@@ -182,6 +182,8 @@ def test_rootfs_mount_clean_and_unmount_are_inside_actual_cache_lock(
     monkeypatch.setattr(AptCache, "locked", locked)
     monkeypatch.setattr("builder.rootfs_base.ChrootContext", chroot)
     values = {
+        "distro": "ubuntu",
+        "architecture": "aarch64",
         "tarball": {},
         "emulator": "qemu-aarch64-static",
         "apt": {"extra_sources": [], "packages": []},
@@ -198,9 +200,12 @@ def test_rootfs_mount_clean_and_unmount_are_inside_actual_cache_lock(
         docker=MagicMock(),
         status=lambda value: None,
     )
+    from builder.digest import digest_value
+    identity = digest_value({"distro": "ubuntu", "architecture": "aarch64",
+                             "tarball": {}, "sources": []})[:20]
     assert events == [
         "lock",
-        (str(context.build_root / "cache/apt"), str(root / "var/cache/apt/archives")),
+        (str(context.build_root / "cache/apt" / identity), str(root / "var/cache/apt/archives")),
         ["apt-get", "update"],
         ["apt-get", "clean"],
         "unmount",

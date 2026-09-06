@@ -11,6 +11,7 @@ from builder.app_build import AppBuilder
 from builder.artifacts import ArtifactManifest, ArtifactSpec
 from builder.digest import digest_value
 from builder.environment import environment_identity
+from builder.build_environment import environment_inputs
 from builder.file_tree import copy_tree
 from builder.graph import InputSpec, TaskPlan
 from builder.locking import FileLock
@@ -25,6 +26,9 @@ class PackageBuilder:
         self.docker = docker
 
     def plan(self, directory: Path, package: dict) -> TaskPlan:
+        config = getattr(self.docker, "config", {})
+        if not isinstance(config, dict):
+            config = {}
         key = f"{package['name']}-{digest_value(str(directory.resolve()))[:12]}"
         output = self.context.target_dir / "packages" / key
         return TaskPlan(
@@ -33,7 +37,8 @@ class PackageBuilder:
             (
                 InputSpec.value("package", package),
                 InputSpec.value("target", asdict(self.context.target)),
-                InputSpec.value("environment", environment_identity()),
+                InputSpec.value("environment", environment_identity(config=config, context=self.context)),
+                *environment_inputs(config, self.context),
                 InputSpec.tree(
                     "source",
                     directory,

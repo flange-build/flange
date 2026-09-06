@@ -43,7 +43,10 @@ class FlashConfigGenerator:
         分区始终视为受保护（设备端不允许从 recovery 内重写自己）。
         """
         platform = config.get("platform", "")
-        plan = get_flash_plan(platform)
+        from builder.layers import stack_for
+        stack = stack_for(config, context)
+        plan = get_flash_plan(platform, stack)
+        provider = stack.provider_ref("flash", platform)
         image_map = plan.partition_image_map(config)
 
         recovery_cfg = config.get("recovery") or {}
@@ -158,6 +161,7 @@ class FlashConfigGenerator:
 
         flash_config = FlashConfig(
             platform=platform,
+            provider=provider.identity if provider else "",
             flash_tool=config.get("flash_tool", ""),
             board=config["board"],
             product=config.get("product", "default"),

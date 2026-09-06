@@ -56,6 +56,28 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
   宿主共享目录即使大小写敏感，也不能据此认定具备 Linux 权限和 UID/GID 语义。
   最终镜像、清单与基础快照归档仍写入工作区持久化目录。
 
+#### 2.1.1 多层仓库组合
+
+- flange 由基础层、多个 out-of-tree（仓库外）Layer（扩展层）和工作区共同组成。
+  工作区 schema 2 的 `layers` 显式按低到高列出本地层，基础层 `flange` 隐式在底层。
+- 每层 `layer.toml` 声明唯一名称、schema/API 版本、多个依赖和可选 Python 策略入口。
+  MUST 校验真实路径与名称唯一、依赖已启用且在下层；不自动重排，不负责下载、同步和版本锁定。
+- 层提供 `components/` 内容与独立 `strategies/` 代码，工作区拥有状态、缓存、可变源码与产物。
+  产品仓库 MAY 同时充当工作区及最高层。默认每个工作区只有一套启用层。
+- 配置 MUST 按发行版基线 → platform → SoC → board → 直接启用 Package 组合；
+  每个阶段内部按层序，保持 Jsonnet 原生语义。App/Package/同种同名策略整体选择最高层。
+- 目标发现和构建 MUST 共用组合后的板卡身份，目标仍为 `<board>-<product>-<variant>`。
+  路径引用 MUST 保留所属层，不得在继承后统一重定向到最高层。跨层 Jsonnet import 必须显式标识层。
+- 补丁保持 platform → board 作用域顺序，作用域内按层追加，同相对文件名原位替换。
+  rootfs overlay 保持发行版 → platform → board 顺序，各阶段内按层覆盖，MUST 安全替换节点类型。
+- 策略通过隔离命名空间加载；专有配置须声明闭合 schema。有限接口覆盖平台、发行版、完整构建环境、
+  用户态工具链、打包和构建期/宿主期刷写；不允许任意新增任务图或独立 RTOS 目标。
+- 任务指纹 MUST 包含选中输入、策略辅助代码、镜像及 SDK 身份和资源顺序，不使用整个层 Git HEAD。
+  App 报告记录发行版/ABI，rootfs 安装及 `--no-build` MUST 拒绝不匹配或缺身份的报告。
+  刷写清单与当前策略提供者不一致 MUST 报错，不能静默替换。
+
+详细格式、API 和验证范围见[多层工作区指南](docs/layers.md)。
+
 ### 2.2 支持平台
 
 支持多种嵌入式 SoC 平台，每个平台有对应的刷写工具链：
@@ -224,7 +246,7 @@ canonical JSON（规范化 JSON）交给 Python builder。
 - 配置引擎位于 `builder/config/` 子包（jsonnet.py、registry.py、query.py、loader.py、apps.py、validate.py）
 - 构建引擎位于 `builder/` 目录
 - 平台策略类位于 `builder/platforms/<vendor>/`（如 `builder/platforms/rockchip/kernel.py`）
-- 平台无关 rootfs 基线配置位于 `components/rootfs/config.jsonnet`
+- 默认 Ubuntu rootfs 基线位于 `components/rootfs/config.jsonnet`；其他发行版基线位于所选层 `components/distro/<name>/config.jsonnet`
 - 平台/SoC/板级配置位于 `components/platform/` 和 `components/board/` 下的 `config.jsonnet` 文件
 - 分区表转换器位于 `builder/partition/`
 
@@ -275,7 +297,7 @@ canonical JSON（规范化 JSON）交给 Python builder。
   安装、升级、卸载语义时，MAY 通过 `maintainer_scripts` 将 App 内的
   `preinst` / `postinst` / `prerm` / `postrm` / `triggers` 映射进 deb
   `control.tar.gz`，脚本路径 MUST 为 App 目录内的相对路径。
-- 固定基础组合顺序：rootfs → platform → SoC → board；随后按 board 直接启用的
+- 固定基础组合顺序：发行版基线 → platform → SoC → board；每个阶段内按层低到高组合，随后按目标直接启用的
   `packages` 顺序追加包内可选 `config.jsonnet`（单层、不递归）。组合统一由
   Jsonnet 对象继承、`+:` 和数组表达式完成
 - `rootfs.gnome_remote_desktop_login=true` 时，构建 MUST 使用
@@ -289,7 +311,7 @@ canonical JSON（规范化 JSON）交给 Python builder。
 - 配置选择：`flange target select <board>-<product>-<variant>`（或 `lunch`）保存到当前工作区
   `.flange/current_config`；无参数仅在 TTY 进入层级界面，非交互环境要求明确目标。`--target` 仅覆盖本次调用。
 - 目标解析统一使用注册表和 `config.query.parse_target`，不得在 CI/Shell 中按连字符重新拆分。
-- 配置解析：`workspace.resolve_config(context)` 基于工具根调用配置注册表，返回严格校验的 canonical JSON dict；
+- 配置解析：`workspace.resolve_config(context)` 基于工作区不可变层集合调用配置注册表，返回严格校验的 canonical JSON dict；
   工作区 App 来源由 AppResolver 消费，不向系统配置临时注入路径或执行开关。
 - 新增板级支持只需创建 `components/board/<name>/config.jsonnet`，无需修改框架代码
 
@@ -297,7 +319,7 @@ canonical JSON（规范化 JSON）交给 Python builder。
 - **框架层**（`builder/base.py`）：ComponentBuilder 基类，负责源码生命周期、补丁管理、增量编译
 - **策略层**（`builder/platforms/<vendor>/*.py`）：平台子类，实现 `configure()`、`compile()`、`collect()` 方法
 - 配置通过求值后的 Python dict 传入（无环境变量契约）
-- 新增平台时只需在 `builder/platforms/` 下添加策略子类，MUST NOT 修改框架层代码
+- 新增平台可在扩展层声明 `providers.platform`，复用 `PlatformSpec`、产物契约和输入接口；MUST NOT 为产品私有策略修改框架层代码
 
 当前 rootfs 与 recovery 复用 `builder/rootfs.py` 的公共构建编排，GPT（GUID 分区表）镜像
 复用 `builder/image.py`，分区几何统一由 `builder/partition/layout.py` 解析。
@@ -511,7 +533,7 @@ flange/
 
 工具来源注册表依次查找：
 
-1. `<tool_root>/components/app/<name>/`。
+1. 启用层内 `components/app/<name>/`，最高层完整目录优先；未声明层时仅工具基础层。
 2. canonical config 的 `external_apps[<name>]`：`local_path` 与 `git` 必须互斥。
 3. config 的 `external_app_dirs`，按声明顺序查找 `<dir>/<name>/app.yaml`。
 
@@ -581,10 +603,11 @@ feat(kernel): 添加内核编译支持
 
 ### 11.2 Docker 构建环境
 - 所有编译构建操作**必须在 Docker 容器内**完成
-- Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖；另装 kernel.org crosstool gcc-10.5 到 `/opt/aarch64-gcc10` 作为 AArch64 u-boot/kernel 默认工具链，并安装 Arm GNU Toolchain 10.3-2021.07 到 `/opt/arm-linux-gcc10` 供 RK3506B ARM32 u-boot/kernel 使用（见 §11.3）
-- 工具根、工作区、输出根和外部源码通过同绝对路径 volume mount 映射到容器内
+- 默认 Dockerfile 基于 Ubuntu 24.04 LTS，安装交叉编译工具链及构建依赖；另装 kernel.org crosstool gcc-10.5 到 `/opt/aarch64-gcc10` 作为 AArch64 u-boot/kernel 默认工具链，并安装 Arm GNU Toolchain 10.3-2021.07 到 `/opt/arm-linux-gcc10` 供 RK3506B ARM32 u-boot/kernel 使用（见 §11.3）
+- 工具根、工作区、输出根、启用层、目录 SDK 和外部源码通过同绝对路径 volume mount 映射到容器内
+- 目标可选择完整外部 `build_environment`；Docker、系统、独立 App/Package 共用环境解析。容器直接执行 MUST 校验所选环境名称和实际镜像身份
 - 源码仓库目录 `.build/sources/` 和 APT 缓存 `.build/cache/apt/` 通过 volume 持久化
-- App 的 APT 下载缓存与索引由工具仓库共享；rootfs/recovery 按实际 bind mount 源使用下载缓存。
+- App 的 APT 下载缓存与索引由工具仓库共享；rootfs/recovery 按发行版、架构、基础归档及软件源身份隔离下载缓存；外部 SDK 依赖适配器不得混用 Ubuntu 缓存。
   `AptCache` 以实际源目录的规范路径确定独立锁，锁位于缓存外侧，避免被 APT clean 删除。
   App 依赖安装、基础 rootfs/recovery 安装及内置模板下载均须使用它；多目录排序加锁，
   目标/资源锁在外层，APT 锁在内层且不得覆盖无关编译。禁止以各工作区的独立锁保护同一共享缓存。
@@ -599,8 +622,8 @@ feat(kernel): 添加内核编译支持
 
 ### 11.3 交叉编译
 - **u-boot / kernel 构建**按目标架构使用容器内独立固定的 gcc-10 工具链。AArch64 默认使用 kernel.org crosstool **gcc-10.5**（前缀 `/opt/aarch64-gcc10/bin/aarch64-linux-`），由 `builder/base.py` 的 `ComponentBuilder.CROSS` 声明；RK3506B ARM32 通过 SoC 配置覆盖为 ATK SDK 同款 Arm GNU Toolchain **gcc-10.3.1**（前缀 `/opt/arm-linux-gcc10/bin/arm-none-linux-gnueabihf-`）。不得把 Ubuntu 24.04 的系统 gcc-13 用于这些老 Rockchip 低层产物；RK3576 的实机根因详见 openspec `selfbuild-rk3576-spi-image`，RK3506B 的工具链约束详见 openspec `add-rk3506b-atk-rk3506b`
-- **app / deb 组件构建**（`builder/app_build.py`、`builder/toolchain.py`）使用 Docker 系统包交叉编译器（`gcc-aarch64-linux-gnu` / `gcc-arm-linux-gnueabihf`）
-- 平台策略类（builder/platforms/）直接调用交叉编译器，无需额外工具链注册机制
+- **app / deb 组件构建**（`builder/app_build.py`、`builder/toolchain.py`）默认使用 Docker 系统包交叉编译器（`gcc-aarch64-linux-gnu` / `gcc-arm-linux-gnueabihf`）
+- 用户态可通过外部 Toolchain 声明编译器、独立 target sysroot 和 ABI 身份；SDK MUST 独立准备，不依赖最终 rootfs。CMake/Meson/Make/custom MUST 一致限制目标库查找；上游 App 安装前缀不得冒充完整 sysroot
 - 板级配置通过 `config.jsonnet` 声明（rootfs/platform/SoC/board 固定组合）
 
 ### 11.4 输出管理

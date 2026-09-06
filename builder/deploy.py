@@ -162,7 +162,7 @@ def _deployment_backend(report: AppBuildReport):
         raise DeployError("该 App 闭包没有可部署的 runtime 包")
     if len(formats) != 1:
         raise DeployError("一次设备部署不能混用多种包格式")
-    return get_backend(next(iter(formats)))
+    return get_backend(next(iter(formats)), getattr(report, "layer_stack", None))
 
 
 def _deploy(report: AppBuildReport, transport: DeviceTransport, session: DeviceSession) -> None:
@@ -320,6 +320,7 @@ def operate_report(
     context: WorkspaceContext, report: AppBuildReport, action: str, **options
 ) -> dict:
     """会话期间锁定目标产物，避免构建或清理替换正在读取的符号与包。"""
+    object.__setattr__(report, "layer_stack", context.layer_stack)
     with FileLock(context.build_root / "locks" / f"{context.target.key}.lock"):
         return _operate_report(context, report, action, **options)
 

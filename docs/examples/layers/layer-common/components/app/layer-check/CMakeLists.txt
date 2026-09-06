@@ -1,0 +1,10 @@
+# 只从目标 sysroot 查找 zlib 与上游 App 库。
+cmake_minimum_required(VERSION 3.16)
+project(layer_check C)
+find_package(ZLIB REQUIRED)
+find_path(SAMPLE_INCLUDE sample.h REQUIRED)
+find_library(SAMPLE_LIBRARY layer_sample REQUIRED)
+add_executable(layer-check main.c)
+target_include_directories(layer-check PRIVATE ${SAMPLE_INCLUDE})
+target_link_libraries(layer-check PRIVATE ${SAMPLE_LIBRARY} ZLIB::ZLIB)
+install(TARGETS layer-check RUNTIME DESTINATION bin)
