@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-09-06] sync | VIM3 风扇与双色 LED 板级策略
+
+VIM3 内建主线 MCU 风扇与 GPIO LED 驱动，新增默认 `vim3-fan-led.dtbo`：CPU 50/60/70°C 对应三档风速、5°C 回差，保留降频与过热保护；白灯心跳、红灯运行常亮。板卡页补充标准 thermal/LED sysfs 使用方法及实板验收项，VIM3L 默认配置不变。
+
+用户刷入后，实板模拟温度测试验证风扇自动三档及回差，用户确认实际转速变化与红灯控制；测试后恢复真实温度控制。白灯配置及 GPIO 读回正常但实物未亮，用户决定暂缓排查，未计为通过；未做实际加热压力测试或 RPM 测量。
+
 ## [2026-09-04] sync | 新增 Khadas VIM3（A311D/G12B）板卡支持
 
 新增 `khadas-vim3-{default,desktop}-{debug,release}` 四个 target，接入 mainline U-Boot v2024.10、Linux v6.12、VIM3 专属 G12B FIP 与 AP6398S 固件；VIM3/VIM3L 的公共板级数据提取到共享 Jsonnet helper，A311D SoC 层只保留芯片事实。

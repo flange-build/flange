@@ -178,10 +178,10 @@ def test_khadas_vim3_board_contract(configs):
         ("BCM4359C0_ap6398s.hcd", "BCM4359C0.hcd"),
     ]
     assert config["boot"]["overlays"]["board"] == [
-        "vim3-spidev-spicc1.dtbo",
+        "vim3-spidev-spicc1.dtbo", "vim3-fan-led.dtbo",
     ]
     assert config["boot"]["overlays"]["enabled"] == [
-        "vim3-spidev-spicc1.dtbo",
+        "vim3-spidev-spicc1.dtbo", "vim3-fan-led.dtbo",
     ]
     assert [entry["name"] for entry in config["partitions"]["entries"]] == [
         "bootloader", "boot", "rootfs",
@@ -198,3 +198,24 @@ def test_khadas_vim3_board_contract(configs):
     soc = _load_soc_config("a311d")
     assert "partitions" not in soc
     assert soc["sources"]["u-boot-a311d"]["branch"] == "v2024.10"
+
+
+def test_vim3_fan_led_is_board_local_for_all_products(configs):
+    """所有 VIM3 产品有启动早期驱动，VIM3L 不继承这次温控策略。"""
+    for product in ("default", "desktop"):
+        for variant in ("debug", "release"):
+            config = configs[f"khadas-vim3-{product}-{variant}"]
+            for option in (
+                "CONFIG_MFD_KHADAS_MCU", "CONFIG_KHADAS_MCU_FAN_THERMAL",
+                "CONFIG_I2C_MESON", "CONFIG_AMLOGIC_THERMAL",
+                "CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE", "CONFIG_GPIO_PCA953X",
+                "CONFIG_LEDS_GPIO", "CONFIG_LEDS_TRIGGER_HEARTBEAT",
+                "CONFIG_LEDS_TRIGGER_DEFAULT_ON",
+            ):
+                assert config["kernel"]["config"][option] == "y"
+            assert "vim3-fan-led.dtbo" in config["boot"]["overlays"]["enabled"]
+            sibling = configs[f"khadas-vim3l-{product}-{variant}"]
+            assert sibling["boot"]["overlays"]["enabled"] == [
+                "vim3l-spidev-spicc1.dtbo",
+            ]
+            assert "CONFIG_KHADAS_MCU_FAN_THERMAL" not in sibling["kernel"]["config"]
