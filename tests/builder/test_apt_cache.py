@@ -14,17 +14,7 @@ from builder.build_dependencies import UbuntuBuildDependencies
 from builder.paths import PROJECT_ROOT
 from builder.rootfs_base import build_base
 from tests.builder.app_support import builder
-
-
-def _install(tool, tag, events, release):
-    class Runner:
-        def run(self, command):
-            events.put((tag, command[1]))
-            if command[1] == "update" and not release.wait(10):
-                raise TimeoutError("测试未释放 APT 事务")
-
-    events.put((tag, "ready"))
-    UbuntuBuildDependencies(Runner(), Path(tool)).install(["example:{arch}"], "aarch64")
+from tests.builder.apt_support import install as _install
 
 
 def test_external_workspaces_lock_the_compose_cache(tmp_path):
@@ -67,24 +57,27 @@ def test_apt_transactions_serialize_only_when_cache_is_shared(tmp_path, shared):
     )
     first.start()
     try:
-        assert events.get(timeout=5) == ("first", "ready")
-        assert events.get(timeout=5) == ("first", "update")
+        assert events.get(timeout=5)[:2] == ("first", "ready")
+        assert events.get(timeout=5)[:2] == ("first", "update")
         second.start()
-        assert events.get(timeout=5) == ("second", "ready")
+        assert events.get(timeout=5)[:2] == ("second", "ready")
         if shared:
             with pytest.raises(queue.Empty):
                 events.get(timeout=0.2)
             release_first.set()
-            assert [events.get(timeout=5) for _ in range(3)] == [
+            # Queue 只保证同一生产者顺序；使用锁内时间戳验证真实事务顺序。
+            remaining = [events.get(timeout=5) for _ in range(3)]
+            ordered = sorted(remaining, key=lambda event: event[2])
+            assert [event[:2] for event in ordered] == [
                 ("first", "install"),
                 ("second", "update"),
                 ("second", "install"),
             ]
         else:
-            assert events.get(timeout=5) == ("second", "update")
-            assert events.get(timeout=5) == ("second", "install")
+            assert events.get(timeout=5)[:2] == ("second", "update")
+            assert events.get(timeout=5)[:2] == ("second", "install")
             release_first.set()
-            assert events.get(timeout=5) == ("first", "install")
+            assert events.get(timeout=5)[:2] == ("first", "install")
     finally:
         release_first.set()
         for process in (first, second):
