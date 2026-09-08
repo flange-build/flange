@@ -1,0 +1,3 @@
+[
+  "bundle: <TARGET>/bootloader/firmware boot_a=<TARGET>/bootloader/uboot-boot.img efi=<TARGET>/boot/boot.img rootfs=<TARGET>/rootfs/rootfs.img userdata=<TARGET>/rootfs/userdata.img <TMP>/flash-bundle"
+]

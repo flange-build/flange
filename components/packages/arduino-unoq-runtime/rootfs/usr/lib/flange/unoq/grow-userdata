@@ -1,0 +1,34 @@
+#!/usr/bin/python3
+"""仅扩展已挂载 userdata 的 ext4 文件系统，绝不改写 GPT。"""
+import re
+import stat
+import subprocess
+from pathlib import Path
+
+UUID = '66f6d9a8-6ce3-46f6-b679-a1a1d991ba19'
+
+
+def mount_source(output):
+    fields = output.split()
+    if len(fields) != 3:
+        raise ValueError('userdata 未独立挂载，拒绝扩容')
+    source, filesystem, uuid = fields
+    if filesystem != 'ext4' or uuid != UUID or not re.fullmatch(r'/dev/mmcblk0p[0-9]+', source):
+        raise ValueError('userdata 挂载类型、UUID 或 eMMC 设备不匹配，拒绝扩容')
+    return source
+
+
+def main():
+    identity = Path('/sys/firmware/devicetree/base/compatible').read_bytes().split(b'\0')
+    if b'arduino,imola' not in identity:
+        raise ValueError('非 UNO Q，拒绝扩容')
+    output = subprocess.check_output(['findmnt', '-n', '-o', 'SOURCE,FSTYPE,UUID',
+                                      '--mountpoint', '/home/arduino'], text=True)
+    source = mount_source(output)
+    if not stat.S_ISBLK(Path(source).stat().st_mode):
+        raise ValueError('userdata 不是块设备，拒绝扩容')
+    subprocess.run(['resize2fs', source], check=True)
+
+
+if __name__ == '__main__':
+    main()

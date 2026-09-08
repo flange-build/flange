@@ -1,0 +1,12 @@
+[Unit]
+Description=UNO Q 的 Linux 与 MCU 消息路由
+After=systemd-udev-settle.service
+ConditionPathExists=/dev/ttyHS1
+[Service]
+ExecStartPre=/usr/lib/flange/unoq/gpio 37=0
+ExecStart=/usr/bin/arduino-router --unix-port /var/run/arduino-router.sock --serial-port /dev/ttyHS1 --serial-baudrate 115200 --after-ready "/usr/lib/flange/unoq/gpio 70=1"
+ExecStopPost=/usr/lib/flange/unoq/gpio 70=0
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

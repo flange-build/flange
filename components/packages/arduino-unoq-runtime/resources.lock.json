@@ -1,0 +1,746 @@
+{
+  "schema": 1,
+  "description": "\u5b98\u65b9 APT \u4e0e Arduino package_index \u7684 2026-09-07 \u56fa\u5b9a\u8f93\u5165\uff1b\u8bb8\u53ef\u968f\u539f\u59cb\u8d44\u6e90\u4fdd\u7559\u3002",
+  "resources": [
+    {
+      "name": "arduino-app-cli",
+      "version": "0.13.0",
+      "kind": "deb",
+      "url": "https://apt-repo.arduino.cc/pool/main/a/arduino-app-cli/arduino-app-cli_0.13.0-1_arm64.deb",
+      "sha256": "ba5bfefcacdb3075066355eb25330c7f40301970ca1546b183e1cc30d8835446"
+    },
+    {
+      "name": "arduino-app-lab",
+      "version": "0.10.0",
+      "kind": "deb",
+      "url": "https://apt-repo.arduino.cc/pool/main/a/arduino-app-lab/arduino-app-lab_0.10.0-1_arm64.deb",
+      "sha256": "916a36b2cb17534c812d73cff327460547c935cbf296f3f2a540358c2e27bcb3"
+    },
+    {
+      "name": "arduino-cli",
+      "version": "1.5.1",
+      "kind": "deb",
+      "url": "https://apt-repo.arduino.cc/pool/main/a/arduino-cli/arduino-cli_1.5.1-1_arm64.deb",
+      "sha256": "a8a626e021a88dcb88c8a4d856075545007c9b33f1ce727bc2a35dc20e63f5fa"
+    },
+    {
+      "name": "arduino-cloud-connector",
+      "version": "0.1.0",
+      "kind": "deb",
+      "url": "https://apt-repo.arduino.cc/pool/main/a/arduino-cloud-connector/arduino-cloud-connector_0.1.0-1_arm64.deb",
+      "sha256": "64e2e07b6692a05ed950cd22cdb897f86099ecea30ddc1623fd4dee4643f3a5e"
+    },
+    {
+      "name": "arduino-linux-config",
+      "version": "0.2.0",
+      "kind": "deb",
+      "url": "https://apt-repo.arduino.cc/pool/main/a/arduino-linux-config/arduino-linux-config_0.2.0-1_arm64.deb",
+      "sha256": "7050e259448c0a64291ab0a6e0c74d9099dd51a1cef6e19c66fca14530e74534"
+    },
+    {
+      "name": "arduino-router",
+      "version": "0.10.0",
+      "kind": "deb",
+      "url": "https://apt-repo.arduino.cc/pool/main/a/arduino-router/arduino-router_0.10.0-1_arm64.deb",
+      "sha256": "f538bc988178a93566a31e372ee00ecac0254c883ffed7a1122e3a08e977ec53"
+    },
+    {
+      "name": "arduino-unoq-radio-firmware",
+      "version": "0.7.0",
+      "kind": "deb",
+      "url": "https://apt-repo.arduino.cc/pool/main/a/arduino-unoq-radio-firmware/arduino-unoq-radio-firmware_0.7.0-1_arm64.deb",
+      "sha256": "dcd60ee113307d16529c65a05c2dbb180fac2526e9be4e7a6ae8053383041f69"
+    },
+    {
+      "name": "zephyr-core",
+      "version": "0.90.0",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/hardware/zephyr/0.90.0",
+      "url": "https://downloads.arduino.cc/cores/zephyr/ArduinoCore-zephyr_unoq-ad874167.tar.bz2",
+      "sha256": "40bd47ae9503624a11ee11368fc6cb841030818df7abb0413939a9aa39f9a1e6"
+    },
+    {
+      "name": "adb",
+      "version": "32.0.0",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/adb/32.0.0",
+      "url": "https://downloads.arduino.cc/tools/android/adb_r32.0.0-linux-aarch64.tar.bz2",
+      "sha256": "684b27537fbedfce5f4b310e7a0706c7274ef467bf8d227d1512ef6f4a5597fe"
+    },
+    {
+      "name": "arm-zephyr-eabi",
+      "version": "0.16.8",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/zephyr/tools/arm-zephyr-eabi/0.16.8",
+      "url": "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.8/toolchain_linux-aarch64_arm-zephyr-eabi.tar.xz",
+      "sha256": "40be45463b5c2ddcdcb6a2a490c7f0dc6df18599659ef435ae1197becd50d747"
+    },
+    {
+      "name": "bin2uf2",
+      "version": "0.1.0",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/bin2uf2/0.1.0",
+      "url": "https://downloads.arduino.cc/tools/bin2uf2-0.1.0-aarch64-linux-gnu.tar.gz",
+      "sha256": "6dfedaa4f695f616e0b1422eacd902e7ee3c2339673b617d92ddbf313a6dc096"
+    },
+    {
+      "name": "bossac",
+      "version": "1.9.1-arduino2",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/bossac/1.9.1-arduino2",
+      "url": "https://downloads.arduino.cc/tools/bossac-1.9.1-arduino2-linuxaarch64.tar.gz",
+      "sha256": "c167fa0ea223966f4d21f5592da3888bcbfbae385be6c5c4e41f8abff35f5cb1"
+    },
+    {
+      "name": "dfu-util",
+      "version": "0.11.0-arduino5",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/dfu-util/0.11.0-arduino5",
+      "url": "https://downloads.arduino.cc/tools/dfu-util-0.11-arduino5-linux_arm64.tar.gz",
+      "sha256": "b3f46a65da0c2fed2449dc5a3351c3c74953a868aa7f8d99ba2bb8c418344fe9"
+    },
+    {
+      "name": "gen-rodata-ld",
+      "version": "0.1.1",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/gen-rodata-ld/0.1.1",
+      "url": "https://downloads.arduino.cc/tools/gen-rodata-ld-0.1.1-aarch64-linux-gnu.tar.gz",
+      "sha256": "a058a80fda2158f1a70eec117a2c0d68ed019933dd6c00a18c2067c3607c7828"
+    },
+    {
+      "name": "openocd",
+      "version": "0.12.0-arduino1-static",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/SiliconLabs/tools/openocd/0.12.0-arduino1-static",
+      "url": "https://downloads.arduino.cc/tools/openocd-0.12.0-arduino1-static-aarch64-linux-gnu.tar.bz2",
+      "sha256": "d6d78fb9f422647a7606213925f037593e5dbd6ad4d6670c3a54ab9ec1cc0cd1"
+    },
+    {
+      "name": "remoteocd",
+      "version": "0.1.1",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/remoteocd/0.1.1",
+      "url": "https://downloads.arduino.cc/tools/remoteocd-0.1.1-linux-arm64.tar.gz",
+      "sha256": "b810cd57831b29e8bb54a9990166956cc53e43fd0359fcc6fbe462b14c13f464"
+    },
+    {
+      "name": "rp2040tools",
+      "version": "1.1.0-rc1",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/rp2040tools/1.1.0-rc1",
+      "url": "https://downloads.arduino.cc/tools/rp2040tools-1.1.0-rc1-linux_arm64.tar.bz2",
+      "sha256": "3bd7c1d7a33fe8b3ae5768655d7cc4b228ca89a972422f9dec946ee67ed150c8"
+    },
+    {
+      "name": "scripting-tools",
+      "version": "0.0.7",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/scripting-tools/0.0.7",
+      "url": "https://downloads.arduino.cc/scripting-tools/scripting-tools_v0.0.7_Linux_ARM64.tar.gz",
+      "sha256": "ba0ec1d1fabdd6cd443762c153ed0be9ea9ae31270c7638353f1f1f501e08294"
+    },
+    {
+      "name": "sync-zephyr-artifacts",
+      "version": "0.2.1",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/sync-zephyr-artifacts/0.2.1",
+      "url": "https://downloads.arduino.cc/tools/sync-zephyr-artifacts-0.2.1-aarch64-linux-gnu.tar.gz",
+      "sha256": "5ce682d0e61f99e00232fd8a36745d35236da81206d9424d56a6a1a6868041f3"
+    },
+    {
+      "name": "zephyr-check-size",
+      "version": "0.1.0",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/zephyr-check-size/0.1.0",
+      "url": "https://downloads.arduino.cc/tools/zephyr-check-size-0.1.0-aarch64-linux-gnu.tar.gz",
+      "sha256": "efc75eb9470a2eaeb47b364ae1d0402516289aead4c5d2f3a18b42b7a54181c0"
+    },
+    {
+      "name": "zephyr-sketch-tool",
+      "version": "0.4.0",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/arduino/tools/zephyr-sketch-tool/0.4.0",
+      "url": "https://downloads.arduino.cc/tools/zephyr-sketch-tool-0.4.0-aarch64-linux-gnu.tar.gz",
+      "sha256": "54c084b55069e5445430f883a294ef89498a1d165e870c430ec7b44ec7cd62aa"
+    },
+    {
+      "name": "firmware-atheros",
+      "version": "20250410-2",
+      "kind": "firmware-deb",
+      "url": "https://deb.debian.org/debian/pool/non-free-firmware/f/firmware-nonfree/firmware-atheros_20250410-2_all.deb",
+      "sha256": "8387a45e9307052858185620ab30efebbf9660b072d6c8309673bf112e291f35"
+    },
+    {
+      "name": "firmware-qcom-soc",
+      "version": "20250410-2",
+      "kind": "firmware-deb",
+      "url": "https://deb.debian.org/debian/pool/non-free-firmware/f/firmware-nonfree/firmware-qcom-soc_20250410-2_all.deb",
+      "sha256": "793d3b514e6d79644a2fa8ce97abc82570b8db3d17c2f723708841c9affb151f"
+    },
+    {
+      "name": "overlay:opt/openocd/COPYING",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/COPYING",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/COPYING",
+      "sha256": "6a9a5520268c8f4bec71febd9b209858d83487b4217f7af4438274989ca07ca5",
+      "executable": false
+    },
+    {
+      "name": "overlay:opt/openocd/LICENSE",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/LICENSE",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/LICENSE",
+      "sha256": "bce9a6f32a1f45a60e136e0f2de23e4bd947e2d96c71ea16b26804e94474f73d",
+      "executable": false
+    },
+    {
+      "name": "overlay:opt/openocd/README",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/README",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/README",
+      "sha256": "ca660e4a203e5c75a16cf966a5c0420962a3b21ae5f1d76170dc48ec5f8f4919",
+      "executable": false
+    },
+    {
+      "name": "overlay:opt/openocd/bin/arduino-debug.sh",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/bin/arduino-debug.sh",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/bin/arduino-debug.sh",
+      "sha256": "d054876b9c6b6f36a43c19292ed492fc84c7f75eda37a6b7adf2e4408c795beb",
+      "executable": true
+    },
+    {
+      "name": "overlay:opt/openocd/bin/arduino-flash.sh",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/bin/arduino-flash.sh",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/bin/arduino-flash.sh",
+      "sha256": "4fb2e4dcd62391760e43f5d143f1241b1f7883789d5a0af439f1ff020c227b57",
+      "executable": true
+    },
+    {
+      "name": "overlay:opt/openocd/bin/arduino-reset.sh",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/bin/arduino-reset.sh",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/bin/arduino-reset.sh",
+      "sha256": "3879da81ee5ee959cbb5bab214effbaf8b6b994b28562ae2edeb6289d6aa8272",
+      "executable": true
+    },
+    {
+      "name": "overlay:opt/openocd/bin/openocd",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/bin/openocd",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/bin/openocd",
+      "sha256": "04778a80c5c619ee4eef7505db91328f1d7e789107c496f2ddcf96d081f5b0ff",
+      "executable": true
+    },
+    {
+      "name": "overlay:opt/openocd/openocd_gpiod.cfg",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/openocd_gpiod.cfg",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/openocd_gpiod.cfg",
+      "sha256": "58c0c341ba2a0c758bb044683884fb4af01ff6c9cf292bec6b2115c44f7ff836",
+      "executable": false
+    },
+    {
+      "name": "overlay:opt/openocd/share/openocd/scripts/mem_helper.tcl",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/share/openocd/scripts/mem_helper.tcl",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/share/openocd/scripts/mem_helper.tcl",
+      "sha256": "01794a37e9a8bdc20e2304ee64e9d70549c0872f5f6c40fa032a165bcbba1fd2",
+      "executable": false
+    },
+    {
+      "name": "overlay:opt/openocd/share/openocd/scripts/target/swj-dp.tcl",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/share/openocd/scripts/target/swj-dp.tcl",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/share/openocd/scripts/target/swj-dp.tcl",
+      "sha256": "aad132008735bbafea3d18a304632c638f0fb99bfc19530c9f577eda2b10410a",
+      "executable": false
+    },
+    {
+      "name": "overlay:opt/openocd/stm32u5x.cfg",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/stm32u5x.cfg",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/stm32u5x.cfg",
+      "sha256": "8c0ffc41eadd0593168b825d60d6736329c08974c047fdac722fabb93c0ee46a",
+      "executable": false
+    },
+    {
+      "name": "overlay:opt/openocd/stm32x5x_common.cfg",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "opt/openocd/stm32x5x_common.cfg",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/opt/openocd/stm32x5x_common.cfg",
+      "sha256": "139a2c4167e4fc649ab0057560858e03a24dcafeb5b0b3a3bcb7b9373e0869e4",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/Qualcomm/qcm2290/Arduino-Imola.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/Qualcomm/qcm2290/Arduino-Imola.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/Qualcomm/qcm2290/Arduino-Imola.conf",
+      "sha256": "3590e8dc4341ffea5300e2c5313c99475666497cfd2eff42179bacead1953ca7",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/Qualcomm/qcm2290/Earphones.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/Qualcomm/qcm2290/Earphones.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/Qualcomm/qcm2290/Earphones.conf",
+      "sha256": "f448cc62fff07ee65eea640cfe9b3efac17e9329654ee6798ff3dad6daa03603",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/Qualcomm/qcm2290/HDMI.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/Qualcomm/qcm2290/HDMI.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/Qualcomm/qcm2290/HDMI.conf",
+      "sha256": "b19c7b5b4d43e5420097550471ae81a0d334798ebdae85c1300caa0bd7f22d14",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/Qualcomm/qcm2290/Headphones.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/Qualcomm/qcm2290/Headphones.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/Qualcomm/qcm2290/Headphones.conf",
+      "sha256": "f853cc2373fa365b6e594d5717eef094d0c388520d5fbb5dc0d11c97e29db200",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/Qualcomm/qcm2290/Lineout.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/Qualcomm/qcm2290/Lineout.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/Qualcomm/qcm2290/Lineout.conf",
+      "sha256": "55ce96f4f9dac1db39c7fe92d7172fdfccc12aaea13fb824b3cd052e7287f3b5",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/Qualcomm/qcm2290/qcm2290.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/Qualcomm/qcm2290/qcm2290.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/Qualcomm/qcm2290/qcm2290.conf",
+      "sha256": "889c7ab11ec52561f13f8969c7d01e901e1c0b49d3a0efd67363aa34dc52d940",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/pm4125/EarphoneDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/pm4125/EarphoneDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/pm4125/EarphoneDisableSeq.conf",
+      "sha256": "a1206b1932ed5078a292033e8ed029c884a39d932f8236bbdd7521ea3fc3f28f",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/pm4125/EarphoneEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/pm4125/EarphoneEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/pm4125/EarphoneEnableSeq.conf",
+      "sha256": "be5892a9bb9db2cf467a56ada5fc9e7cb7f302365e76717cf1d3399e96616476",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/pm4125/HeadphoneDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/pm4125/HeadphoneDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/pm4125/HeadphoneDisableSeq.conf",
+      "sha256": "192f7495a52b0ea370849cbe495180359ba4e2d47ada56de6ad24a618ce2b627",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/pm4125/HeadphoneEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/pm4125/HeadphoneEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/pm4125/HeadphoneEnableSeq.conf",
+      "sha256": "57ad5add88db0d99c13867ae5662a4a539b88df04cf4d70d9c9983fae440f380",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/pm4125/HeadphoneMicDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/pm4125/HeadphoneMicDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/pm4125/HeadphoneMicDisableSeq.conf",
+      "sha256": "84b05f0d3a15018c5f5e68e452ec89db7bd8b6aaa9b3c1b68acbedecff889a2e",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/pm4125/HeadphoneMicEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/pm4125/HeadphoneMicEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/pm4125/HeadphoneMicEnableSeq.conf",
+      "sha256": "5d513b8ef2b9a7b49d0d5fa39f49baccae314ce92b5b68ab09680cf753fd7136",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/pm4125/LineoutDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/pm4125/LineoutDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/pm4125/LineoutDisableSeq.conf",
+      "sha256": "ee96e203999ca718e1bcc6443ce85d7074402d74939bfe2dc8bc0bd0689d0d25",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/pm4125/LineoutEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/pm4125/LineoutEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/pm4125/LineoutEnableSeq.conf",
+      "sha256": "031f2de905855fc2dd4c369bc3773b935210253e655cf3cb963ae4799d42f11a",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneDisableSeq.conf",
+      "sha256": "77aed487604e91d207a030fcefa4e0bdc07beed7065905927b28be2c8af0862e",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneEnableSeq.conf",
+      "sha256": "18d256f275a0641999dd0f5e3b3cba1dd70600414c2c08e05d4ea2240e4651ca",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneLDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneLDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneLDisableSeq.conf",
+      "sha256": "3f839aacaf0d5d66a2e6ed7162d6ffab47bd3ea54f6f971340e5182293dbfcf6",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneLEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneLEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/HeadphoneLEnableSeq.conf",
+      "sha256": "9f3c7df1a4dfb949548a82cbcecd95198b8298c732a2d9692717a2d06513567c",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/init.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/init.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/rx-macro/init.conf",
+      "sha256": "fabc5f0c95e5ab45cdab6bd0813d4cc129d002041cab69f4cb5982e8d79f12ac",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/DMIC0DisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/DMIC0DisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/DMIC0DisableSeq.conf",
+      "sha256": "edc1aa9d188a858ad616cd83e33bb987fbe4a1f858d83bc528e6a9872c473c92",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/DMIC0EnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/DMIC0EnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/DMIC0EnableSeq.conf",
+      "sha256": "d59d105e85b3a98de809dbf3d5d5c7ffe1dbae199902e1fa5a15910af41e2ddc",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/HeadphoneMicDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/HeadphoneMicDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/HeadphoneMicDisableSeq.conf",
+      "sha256": "2c5ea8138eb22dbcc0e6d6d393f2c86987d60d1795ac2ea032495c4b5cca7eae",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/HeadphoneMicEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/HeadphoneMicEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/HeadphoneMicEnableSeq.conf",
+      "sha256": "3538455be6b2e5e951206a9a680c1ec091729eccf2a25f67a6e2bd35022d822e",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMic0EnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMic0EnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMic0EnableSeq.conf",
+      "sha256": "ef73aaea21da65307616041a3cf93e488bb9692301c6cebe5371db46239d3859",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMic1EnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMic1EnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMic1EnableSeq.conf",
+      "sha256": "bf8e89230dee6ea3e612af9ceaf12574a0987550f1cd6b0965be06103457ba56",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMicDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMicDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/tx-macro/SoundwireMicDisableSeq.conf",
+      "sha256": "2c5ea8138eb22dbcc0e6d6d393f2c86987d60d1795ac2ea032495c4b5cca7eae",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC0DisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC0DisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC0DisableSeq.conf",
+      "sha256": "69908cb72a1be42309447a4dd9cad1a02e5a869876874c2d9f01506d2c7c223d",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC0EnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC0EnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC0EnableSeq.conf",
+      "sha256": "65a28399678c91ecbb88345b99dfad96adeab43747f88ab85f554f85129531a1",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC1DisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC1DisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC1DisableSeq.conf",
+      "sha256": "a362159080f8e8898996be687c8e0b51c989c1fa1d0a5dea1954f7f179e240b9",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC1EnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC1EnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/va-macro/DMIC1EnableSeq.conf",
+      "sha256": "ad638327f00aaff89b6f19ce4151fbf4c345c2d9394088074eda11b106e8f9eb",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/SpeakerDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/SpeakerDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/SpeakerDisableSeq.conf",
+      "sha256": "d112b3c2b997be631534f10b3806f502e7445852af6f320376b69371a667a79e",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/SpeakerEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/SpeakerEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/SpeakerEnableSeq.conf",
+      "sha256": "e05fa6a2042c1f0987485cbab61896bc0fbca8ecc2cde827b34c3d14fb19cd5b",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa1SpeakerDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa1SpeakerDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa1SpeakerDisableSeq.conf",
+      "sha256": "f75361eccc17673111568a296626f36a52c4ba405bed850fb5ef1c3ee0a9b85a",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa1SpeakerEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa1SpeakerEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa1SpeakerEnableSeq.conf",
+      "sha256": "852db37730fbbfe7158fcc266bc3de52542e37fda706766a9987a3f1c4d7fcd1",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa2SpeakerDisableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa2SpeakerDisableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa2SpeakerDisableSeq.conf",
+      "sha256": "390f0a4ac5e41b217a018d2ec7e53aa3553c5ffdac8d24eec6248b541466a7d7",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa2SpeakerEnableSeq.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa2SpeakerEnableSeq.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/Wsa2SpeakerEnableSeq.conf",
+      "sha256": "0abe1a44a060ec3684e49cbaba8a19fd36cbb8ea0e3d562bee174f6401b61475",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/four-speakers/init.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/four-speakers/init.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/four-speakers/init.conf",
+      "sha256": "1573c931acc182008a3ca90cf609815b476e05619f2b6848d2463b17b420646f",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/init.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/init.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/init.conf",
+      "sha256": "b1595aa14e6bc1dcdd5d3f5d1b57616213a4f67dc72735dc47abc0dbb2f2ed0a",
+      "executable": false
+    },
+    {
+      "name": "overlay:usr/share/alsa/ucm2/conf.d/qcm2290/qcm2290.conf",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "usr/share/alsa/ucm2/conf.d/qcm2290/qcm2290.conf",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/usr/share/alsa/ucm2/conf.d/qcm2290/qcm2290.conf",
+      "sha256": "e0439bff6f76d25b23d3ab8100a404df46e18002a5a4d73d0522577a103d8966",
+      "executable": false
+    },
+    {
+      "name": "Arduino_RouterBridge",
+      "version": "0.4.3",
+      "kind": "library-zip",
+      "destination": "home/arduino/Arduino/libraries/Arduino_RouterBridge",
+      "url": "https://downloads.arduino.cc/libraries/github.com/arduino-libraries/Arduino_RouterBridge-0.4.3.zip",
+      "sha256": "700e12d2d26dbf8365b4a9df5e2dc596b573392ef83e81e41d12db1e2cf5dceb"
+    },
+    {
+      "name": "Arduino_RPClite",
+      "version": "0.3.0",
+      "kind": "library-zip",
+      "destination": "home/arduino/Arduino/libraries/Arduino_RPClite",
+      "url": "https://downloads.arduino.cc/libraries/github.com/arduino-libraries/Arduino_RPClite-0.3.0.zip",
+      "sha256": "f81477cbe2ad3a454f6196754cd5103aaadb0c7e0d20d91d3209707624c2adb0"
+    },
+    {
+      "name": "builtin-ctags",
+      "version": "5.8-arduino11",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/builtin/tools/ctags/5.8-arduino11",
+      "url": "https://downloads.arduino.cc/tools/ctags-5.8-arduino11-pm-aarch64-linux-gnu.tar.bz2",
+      "sha256": "89b6f8adb7b7124ebe2eb30970ea77c754cd2239e0d8a6b0102ae2a36416c6ef"
+    },
+    {
+      "name": "builtin-serial-discovery",
+      "version": "1.5.2",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/builtin/tools/serial-discovery/1.5.2",
+      "url": "https://downloads.arduino.cc/discovery/serial-discovery/serial-discovery_v1.5.2_Linux_ARM64.tar.gz",
+      "sha256": "489c81d0162e28e9c6602ecbce092e5a4669e7410d95067ed6dd1944e6a3cd34"
+    },
+    {
+      "name": "builtin-mdns-discovery",
+      "version": "1.1.0",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/builtin/tools/mdns-discovery/1.1.0",
+      "url": "https://downloads.arduino.cc/discovery/mdns-discovery/mdns-discovery_v1.1.0_Linux_ARM64.tar.gz",
+      "sha256": "19597d8d15aac922813b34064deb870c0e5efc08d7430d15c8501768890f7725"
+    },
+    {
+      "name": "builtin-dfu-discovery",
+      "version": "0.1.2",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/builtin/tools/dfu-discovery/0.1.2",
+      "url": "https://downloads.arduino.cc/discovery/dfu-discovery/dfu-discovery_v0.1.2_Linux_ARM64.tar.gz",
+      "sha256": "4bda54b9031d5b1fb1af70d1c38bf1b1f8cfd0eb0cd81f6c3a43253c31dea92d"
+    },
+    {
+      "name": "builtin-serial-monitor",
+      "version": "0.15.0",
+      "kind": "arduino-archive",
+      "destination": "home/arduino/.arduino15/packages/builtin/tools/serial-monitor/0.15.0",
+      "url": "https://downloads.arduino.cc/monitor/serial-monitor/serial-monitor_v0.15.0_Linux_ARM64.tar.gz",
+      "sha256": "bb16cf208befb19cef8710f753272f9e1ddbc1bd851d57be371f6d4b77af6c5e"
+    },
+    {
+      "name": "qbootctl-source",
+      "version": "0.2.2",
+      "kind": "qbootctl-source",
+      "url": "https://deb.debian.org/debian/pool/main/q/qbootctl/qbootctl_0.2.2.orig.tar.gz",
+      "sha256": "e66b361f86fac413f6a96974b4045a1fbc385f9eb6cee7fa8a26e0ca77c74a51"
+    },
+    {
+      "name": "libgpiod-source",
+      "version": "2.2.2",
+      "kind": "libgpiod-source",
+      "url": "https://mirrors.edge.kernel.org/pub/software/libs/libgpiod/libgpiod-2.2.2.tar.xz",
+      "sha256": "7e3bff0209d75fbca2e9fcff1fd5f07cc58b543e129e08b6d4bb1e4a56cfec0d"
+    },
+    {
+      "name": "MsgPack",
+      "version": "0.4.2",
+      "url": "https://downloads.arduino.cc/libraries/github.com/hideakitai/MsgPack-0.4.2.zip",
+      "sha256": "1195c3e243db14841356073b791771be40d1e986a8ae97c67ed8886cc0599023",
+      "kind": "library-zip",
+      "license_note": "\u4fdd\u7559\u5f52\u6863\u4e2d\u7684\u4e0a\u6e38\u8bb8\u53ef\u8bc1\uff0c\u6765\u6e90 Arduino library index",
+      "destination": "home/arduino/Arduino/libraries/MsgPack"
+    },
+    {
+      "name": "DebugLog",
+      "version": "0.8.4",
+      "url": "https://downloads.arduino.cc/libraries/github.com/hideakitai/DebugLog-0.8.4.zip",
+      "sha256": "667d10ef3ac2a6cef381880983549239c18886e7c126abbd6cb299ad83ebbd18",
+      "kind": "library-zip",
+      "license_note": "\u4fdd\u7559\u5f52\u6863\u4e2d\u7684\u4e0a\u6e38\u8bb8\u53ef\u8bc1\uff0c\u6765\u6e90 Arduino library index",
+      "destination": "home/arduino/Arduino/libraries/DebugLog"
+    },
+    {
+      "name": "ArxTypeTraits",
+      "version": "0.3.2",
+      "url": "https://downloads.arduino.cc/libraries/github.com/hideakitai/ArxTypeTraits-0.3.2.zip",
+      "sha256": "778a8cf6f279d9e86cbe45dcadacfda6c5b2938e886de7dcf727ba0361696d47",
+      "kind": "library-zip",
+      "license_note": "\u4fdd\u7559\u5f52\u6863\u4e2d\u7684\u4e0a\u6e38\u8bb8\u53ef\u8bc1\uff0c\u6765\u6e90 Arduino library index",
+      "destination": "home/arduino/Arduino/libraries/ArxTypeTraits"
+    },
+    {
+      "name": "ArxContainer",
+      "version": "0.7.0",
+      "url": "https://downloads.arduino.cc/libraries/github.com/hideakitai/ArxContainer-0.7.0.zip",
+      "sha256": "d0dea8dd2af43fb7edd88b136f025958cae6bbb7b878e02d8f2f02603d93d6b9",
+      "kind": "library-zip",
+      "license_note": "\u4fdd\u7559\u5f52\u6863\u4e2d\u7684\u4e0a\u6e38\u8bb8\u53ef\u8bc1\uff0c\u6765\u6e90 Arduino library index",
+      "destination": "home/arduino/Arduino/libraries/ArxContainer"
+    }
+  ]
+}

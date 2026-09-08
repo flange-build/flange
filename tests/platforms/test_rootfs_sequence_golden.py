@@ -39,6 +39,8 @@ PLATFORMS = {
     "amlogic": "builder.platforms.amlogic.rootfs:AmlogicRootfsBuilder",
     "qualcommqcs6490": (
         "builder.platforms.qualcommqcs6490.rootfs:Qcs6490RootfsBuilder"),
+    "qualcommqrb2210": (
+        "builder.platforms.qualcommqrb2210.rootfs:Qrb2210RootfsBuilder"),
 }
 
 
@@ -99,7 +101,8 @@ def _config(platform: str, root: Path) -> dict:
 class _Recorder:
     """记录 docker 调用，并把易变路径归一化成占位符。"""
 
-    def __init__(self, work_root: Path, project_root: Path):
+    def __init__(self, work_root: Path, project_root: Path, *, unoq=False):
+        self.unoq = unoq
         self.calls: list[str] = []
         self._subs = [
             (str(project_root), "<PROJECT>"),
@@ -143,9 +146,19 @@ class _Recorder:
                 for sub in ("etc", "etc/default", "etc/ssh/sshd_config.d",
                             "usr/bin", "usr/sbin", "lib/modules"):
                     (dest / sub).mkdir(parents=True, exist_ok=True)
+                if self.unoq:
+                    # 这里只建立被 mock 的解包/安装结果，实际文件系统及 ELF 由容器检查。
+                    for sub in ("home/arduino", "lib/modules/6.1.0", "boot",
+                                "usr/lib/systemd/boot/efi", "usr/share/flange/unoq"):
+                        (dest / sub).mkdir(parents=True, exist_ok=True)
+                    (dest / "boot/initrd.img-6.1.0").write_bytes(b"mock-initrd")
+                    (dest / "lib/modules/6.1.0/ath10k_snoc.ko").write_bytes(b"mock-module")
+                    (dest / "usr/lib/systemd/boot/efi/systemd-bootaa64.efi").write_bytes(b"mock-efi")
             result = MagicMock()
             # du -sm / du -sb 的返回值参与容量门禁计算
             result.stdout = "512\t<dir>" if "-sm" in command else "512000\t<dir>"
+            if self.unoq and "lsinitramfs" in command:
+                result.stdout = "scripts/local-bottom/unoq-bdf\n"
             return result
         return call
 
@@ -165,6 +178,14 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
     (target / "kernel/modules/lib/modules/6.1.0").mkdir(parents=True)
 
     config = _config(platform, project_root)
+    if platform == "qualcommqrb2210":
+        config["rootfs"]["default_user"] = "arduino"
+        config["rootfs"]["users"] = {"arduino": {"password": "golden", "shell": "/bin/bash"}}
+        config["partitions"]["entries"].append(
+            {"name": "userdata", "type": "ext4", "size": "remaining", "image_size": "3G"}
+        )
+        (target / "kernel/Image").write_bytes(b"mock-kernel")
+        (target / "kernel/config").write_text("CONFIG_BLK_DEV_INITRD=y\nCONFIG_ATH10K_SNOC=m\n")
     config["rootfs"]["custom_packages"] = ["golden"]
     builder_cls = _load(PLATFORMS[platform])
 
@@ -186,7 +207,7 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
         PackageArtifact(path, "deb", "runtime") for path in (target / "app").glob("*.deb")
     )
 
-    recorder = _Recorder(tmp_path, project_root)
+    recorder = _Recorder(tmp_path, project_root, unoq=platform == "qualcommqrb2210")
     docker.run.side_effect = recorder._record("run")
     docker.run_privileged.side_effect = recorder._record("priv")
     # chroot 是 mock 的，/etc/shadow 等不会真的生成；把内容校验换成留痕的桩

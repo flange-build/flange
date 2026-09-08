@@ -1,0 +1,27 @@
+#!/usr/bin/python3
+"""验证真实前级启动槽位后标记成功，禁止 qbootctl 缺省猜测槽位 A。"""
+import subprocess
+from pathlib import Path
+
+
+def boot_slot(cmdline, chosen=None):
+    values = [word.split('=', 1)[1] for word in cmdline.split()
+              if word.split('=', 1)[0] in ('slot_suffix', 'androidboot.slot_suffix') and '=' in word]
+    if chosen is not None:
+        if chosen not in (b'_a\0', b'_b\0'):
+            raise ValueError('设备树启动槽位属性非法')
+        slot = chosen[:-1].decode()
+        if values and values != [slot]:
+            raise ValueError('设备树与命令行启动槽位冲突')
+        return slot[1:]
+    if len(values) != 1 or values[0] not in ('_a', '_b'):
+        raise ValueError('缺少唯一合法启动槽位；拒绝改写 GPT 成功标记')
+    return values[0][1:]
+
+
+if __name__ == '__main__':
+    if b'arduino,imola' not in Path('/sys/firmware/devicetree/base/compatible').read_bytes().split(b'\0'):
+        raise SystemExit('板卡身份不匹配，拒绝更新启动标记')
+    chosen = Path('/sys/firmware/devicetree/base/chosen/arduino,boot-slot')
+    slot = boot_slot(Path('/proc/cmdline').read_text(), chosen.read_bytes() if chosen.is_file() else None)
+    subprocess.run(['/usr/bin/qbootctl', '-m', slot], check=True)

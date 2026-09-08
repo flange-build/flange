@@ -287,6 +287,7 @@ SYSTEM = Object(
                         "fip_board_dir",
                         "fip_tool",
                         "firehose_loader",
+                        "device_tree",
                         "idbloader_method",
                         "spi_patch",
                         "spi_rawprogram",
@@ -296,7 +297,8 @@ SYSTEM = Object(
                     STRING,
                 ),
                 **dict.fromkeys(
-                    ("edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose"), DOWNLOAD
+                    ("edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose",
+                     "recovery_firmware"), DOWNLOAD
                 ),
                 "ufs_provisions": Map(DOWNLOAD),
                 "fit_pack": Object(

@@ -206,6 +206,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
 
 ENV PYTHONPATH=/workspace
 
+# UNO Q 使用包内 unpack_bootimg 独立校验 Android v0；打包不依赖缺失 gki 的入口。
+RUN apt-get update && apt-get install -y --no-install-recommends mkbootimg \
+    && command -v unpack_bootimg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace

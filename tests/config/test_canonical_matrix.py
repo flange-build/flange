@@ -25,8 +25,8 @@ FORBIDDEN_KEYS = {
 def configs():
     boards = discover_boards()
     targets = get_valid_targets(boards)
-    assert len(boards) == 19
-    assert len(targets) == 94
+    assert len(boards) == 20
+    assert len(targets) == 96
     return {
         target: resolve_config(**{
             "board_name": parsed["board"],
@@ -76,6 +76,18 @@ def test_all_targets_are_canonical(configs):
 
 
 PLATFORM_CASES = {
+    "arduino-uno-q-default-release": {
+        "platform": "qualcommqrb2210",
+        "soc": "qrb2210",
+        "tree": ("qcom", "qrb2210-arduino-imola"),
+        "source": ("linux-unoq", "commit", "122c2c22d838ca826e7f4e7360df96fb4e8f7ad2"),
+        "kconfig": "# CONFIG_MODULE_SIG_FORCE is not set",
+        "bootloader_targets": ["qcom_defconfig"],
+        "download": (
+            "bootloader.recovery_firmware", "sha256",
+            "c606e95d0107f8c58d0dd9494e00624d1db7c4361cca20513bc78ef02ca28dd1",
+        ),
+    },
     "radxa-zero3w-default-release": {
         "platform": "rockchip",
         "tree": ("rockchip", "rk3566-radxa-zero-3w"),

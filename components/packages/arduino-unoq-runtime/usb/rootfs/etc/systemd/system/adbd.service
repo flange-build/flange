@@ -1,0 +1,18 @@
+[Unit]
+Description=Arduino UNO Q ADB 与 USB 串口
+Requires=sys-kernel-config.mount
+After=sys-kernel-config.mount systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+RequiresMountsFor=/home/arduino
+
+[Service]
+Type=notify
+ExecStartPre=/usr/lib/flange/unoq/adbd-usb-gadget setup
+ExecStart=/usr/lib/android-sdk/platform-tools/adbd
+ExecStartPost=/usr/lib/flange/unoq/adbd-usb-gadget activate
+ExecStopPost=/usr/lib/flange/unoq/adbd-usb-gadget reset
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

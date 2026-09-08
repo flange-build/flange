@@ -44,6 +44,11 @@ class FlashConfigGenerator:
         """
         platform = config.get("platform", "")
         plan = get_flash_plan(platform)
+        platform_config = plan.generate_flash_config(config, target_dir)
+        if platform_config is not None:
+            output = target_dir / "flash-config.json"
+            platform_config.to_json(output)
+            return output
         image_map = plan.partition_image_map(config)
 
         recovery_cfg = config.get("recovery") or {}

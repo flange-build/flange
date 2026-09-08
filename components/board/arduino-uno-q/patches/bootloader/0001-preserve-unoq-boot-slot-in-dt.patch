@@ -1,0 +1,82 @@
+Subject: [PATCH] 将 UNO Q 前级启动槽位传入 Linux 设备树
+
+systemd-boot 会设置独立的命令行，使用经过严格校验的设备树属性避免误标槽位。
+仅适用 Arduino Imola；缺失、重复或非法值保持未知，不猜测槽位。
+
+--- a/arch/arm/mach-snapdragon/of_fixup.c
++++ b/arch/arm/mach-snapdragon/of_fixup.c
+@@ -21,6 +21,7 @@
+ #include <dt-bindings/input/linux-event-codes.h>
+ #include <dm/of_access.h>
+ #include <dm/of.h>
++#include <dm/ofnode.h>
+ #include <event.h>
+ #include <fdt_support.h>
+ #include <linux/errno.h>
+@@ -282,9 +283,64 @@
+ 	return 0;
+ }
+ 
++/* 将实际启动槽位独立传给 Linux，避免 EFI load options 覆盖前级 bootargs。 */
++static int qcom_fixup_unoq_boot_slot(void *fdt)
++{
++	const char *cmdline, *value;
++	const char android_key[] = "androidboot.slot_suffix=";
++	const char slot_key[] = "slot_suffix=";
++	char slot[3] = { 0 };
++	size_t len, keylen;
++	int chosen;
++
++	if (!ofnode_device_is_compatible(ofnode_root(), "arduino,imola"))
++		return 0;
++
++	chosen = fdt_path_offset(fdt, "/chosen");
++	if (chosen < 0)
++		chosen = fdt_add_subnode(fdt, 0, "chosen");
++	if (chosen < 0)
++		return chosen;
++	/* 外部 DTB 不能自行声称启动槽位；只接受前级实际传入的唯一值。 */
++	fdt_delprop(fdt, chosen, "arduino,boot-slot");
++	cmdline = ofnode_read_string(ofnode_path("/chosen"), "bootargs");
++	if (!cmdline)
++		return 0;
++
++	while (*cmdline) {
++		cmdline += strspn(cmdline, " \t");
++		len = strcspn(cmdline, " \t");
++		if (!len)
++			break;
++		keylen = 0;
++		if (len >= sizeof(android_key) - 1 &&
++		    !strncmp(cmdline, android_key, sizeof(android_key) - 1))
++			keylen = sizeof(android_key) - 1;
++		else if (len >= sizeof(slot_key) - 1 &&
++			 !strncmp(cmdline, slot_key, sizeof(slot_key) - 1))
++			keylen = sizeof(slot_key) - 1;
++		if (keylen) {
++			value = cmdline + keylen;
++			if (slot[0] || len != keylen + 2 || value[0] != '_' ||
++			    (value[1] != 'a' && value[1] != 'b')) {
++				log_warning("无法确认唯一的 UNO Q 启动槽位\n");
++				return 0;
++			}
++			slot[0] = value[0];
++			slot[1] = value[1];
++		}
++		cmdline += len;
++	}
++	if (!slot[0]) {
++		log_warning("前级未提供 UNO Q 启动槽位\n");
++		return 0;
++	}
++	return fdt_setprop_string(fdt, chosen, "arduino,boot-slot", slot);
++}
++
+ int ft_board_setup(void __maybe_unused *blob, struct bd_info __maybe_unused *bd)
+ {
+ 	qcom_fixup_addrs(blob);
+ 
+-	return 0;
+-}
++	return qcom_fixup_unoq_boot_slot(blob);
++}

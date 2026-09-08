@@ -1,0 +1,56 @@
+#!/usr/bin/python3
+"""构建期核验实际 ELF 依赖、固定 MCU core 和固件；不执行任何刷写。"""
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+required = [
+    '/usr/bin/arduino-cli', '/usr/bin/arduino-router', '/usr/bin/arduino-app-cli',
+    '/usr/bin/app-lab', '/opt/openocd/bin/openocd',
+    '/home/arduino/.arduino15/packages/arduino/hardware/zephyr/0.90.0/boards.txt',
+    '/usr/lib/firmware/updates/qcom/qcm2290/adsp.mbn',
+    '/usr/lib/firmware/updates/qcom/qcm2290/modem.mbn',
+    '/usr/lib/firmware/updates/qcom/qcm2290/wlanmdsp.mbn',
+    '/usr/lib/firmware/updates/ath10k/WCN3990/hw1.0/firmware-5.bin',
+    '/usr/lib/firmware/updates/qcom/qcm2290/a702_zap.mbn',
+    '/usr/lib/firmware/updates/qcom/a702_sqe.fw',
+    '/usr/lib/firmware/updates/ath10k/WCN3990/hw1.0/board-2.bin',
+    '/usr/share/arduino-unoq-radio-firmware/board-2.bin_CTL_061125_REGDM4067_CCA22',
+    '/usr/share/arduino-unoq-radio-firmware/board-2.bin_CTL_061125_REGDM4067_CCA22_OldPCB',
+]
+for item in required:
+    if not Path(item).is_file():
+        raise SystemExit(f'UNO Q 必需资源缺失：{item}')
+# WCN3988 从控制器 ROM 版本派生 apbtfwNN/apnvNN，离线保证提供成对资源。
+qca = Path('/usr/lib/firmware/updates/qca')
+pairs = [p for p in qca.glob('apbtfw*.tlv') if (qca / ('apnv' + p.stem[6:] + '.bin')).is_file()]
+if not pairs:
+    raise SystemExit('WCN3988 Bluetooth firmware 缺少 apbtfwNN.tlv/apnvNN.bin 配对')
+for program in ['rmtfs', 'tqftpserv', 'qbootctl', 'gpioset', 'docker', 'readelf']:
+    if not shutil.which(program):
+        raise SystemExit(f'UNO Q 缺少运行时命令：{program}')
+results = []
+for item in required[:5]:
+    header = subprocess.check_output(['readelf', '-h', item], text=True)
+    if 'AArch64' not in header:
+        raise SystemExit(f'运行时 ELF 架构错误：{item}')
+    program = subprocess.check_output(['readelf', '-l', item], text=True)
+    if 'INTERP' not in program:
+        results.append({'path': item, 'linkage': 'static'})
+        continue
+    check = subprocess.run(['ldd', '-r', item], text=True, capture_output=True)
+    output = check.stdout + check.stderr
+    if check.returncode or 'not found' in output or 'undefined symbol' in output:
+        raise SystemExit(f'Ubuntu ABI 不兼容：{item}\n{output}')
+    results.append({'path': item, 'linkage': 'dynamic', 'dependencies': output})
+subprocess.run(['arduino-cli', 'version'], check=True)
+subprocess.run(['arduino-cli', 'core', 'list', '--config-file',
+                '/home/arduino/.arduino15/arduino-cli.yaml'], check=True)
+# 真正编译一个无外设 sketch，验证工具链和 core，不调用 upload 或 burn-bootloader。
+subprocess.run(['arduino-cli', 'compile', '--config-file',
+                '/home/arduino/.arduino15/arduino-cli.yaml', '--fqbn', 'arduino:zephyr:unoq',
+                '--build-path', '/var/tmp/flange-unoq-smoke', '/usr/share/flange/unoq/smoke'], check=True)
+shutil.rmtree('/var/tmp/flange-unoq-smoke')
+Path('/usr/share/flange/unoq/abi-report.json').write_text(json.dumps(results, indent=2) + '\n')
+print('UNO Q Ubuntu 依赖与 MCU 编译检查通过；硬件运行仍需实板验收')

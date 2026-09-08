@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -26,6 +27,7 @@ from builder.graph import (
 )
 from builder.locking import FileLock
 from builder.output import BuildOutput, OutputLevel
+from builder.platforms.spec import dependency_graph
 from builder.source import SourceManager
 from builder.workspace import WorkspaceContext
 
@@ -35,15 +37,26 @@ def _topo_sort(graph: dict, target: str) -> list:
 
 
 def _copy_sparse(src: Path, dest: Path) -> None:
-    """GNU cp 保留稀疏镜像；非 GNU 宿主用于测试时回退普通复制。"""
+    """保留大镜像空洞；没有 GNU cp 的宿主也不能展开全部零块。"""
+    copy_tool = shutil.which("gcp") or "cp"
     try:
         subprocess.run(
-            ["cp", "--sparse=auto", "--preserve=mode,timestamps", str(src), str(dest)],
+            [copy_tool, "--sparse=auto", "--preserve=mode,timestamps", str(src), str(dest)],
             check=True,
             capture_output=True,
         )
     except (subprocess.CalledProcessError, OSError):
-        shutil.copy2(src, dest)
+        # BSD cp 没有 --sparse；按块跳过全零内容，避免 macOS 发布时耗尽空间。
+        block_size = 1024 * 1024
+        zeros = bytes(block_size)
+        with src.open("rb") as source, dest.open("wb") as target:
+            while block := source.read(block_size):
+                if block == zeros[:len(block)]:
+                    target.seek(len(block), os.SEEK_CUR)
+                else:
+                    target.write(block)
+            target.truncate()
+        shutil.copystat(src, dest)
 
 
 class BuildEngine:
@@ -109,7 +122,8 @@ class BuildEngine:
 
     def plan(self, target: str = "image") -> tuple[TaskPlan, ...]:
         """只读计划：未准备源码以 unresolved 输入表示，绝不隐式 fetch。"""
-        return tuple(self._plan_component(name) for name in _topo_sort(DEPENDENCY_GRAPH, target))
+        graph = dependency_graph(self.config, DEPENDENCY_GRAPH)
+        return tuple(self._plan_component(name) for name in _topo_sort(graph, target))
 
     def explain(self, target: str = "image") -> list[dict]:
         results = []
@@ -148,7 +162,7 @@ class BuildEngine:
                 self.output.build_end(success=success)
 
     def _build_components(self, target: str, force=None):
-        order = _topo_sort(DEPENDENCY_GRAPH, target)
+        order = _topo_sort(dependency_graph(self.config, DEPENDENCY_GRAPH), target)
         self.output.plan([name for name in order if component_enabled(self.config, name)])
         manifests = {}
         for component in order:
@@ -247,7 +261,8 @@ class BuildEngine:
                     target.symlink_to(source.readlink())
                     kind = "symlink"
                 elif source.is_dir():
-                    shutil.copytree(source, target, symlinks=True)
+                    # QDL 发布目录包含多个稀疏文件系统镜像，目录复制也必须保留空洞。
+                    shutil.copytree(source, target, symlinks=True, copy_function=_copy_sparse)
                     kind = "tree"
                 else:
                     _copy_sparse(source, target)

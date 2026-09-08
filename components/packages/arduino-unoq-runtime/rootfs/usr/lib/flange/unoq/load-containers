@@ -1,0 +1,56 @@
+#!/usr/bin/python3
+"""从 userdata 导入已校验的离线 Docker 归档，按内容而非首启标记恢复。"""
+import hashlib
+import json
+import re
+import subprocess
+from pathlib import Path
+
+home = Path('/home/arduino')
+expected_environment = Path('/usr/share/flange/unoq/environment.lock.json').read_bytes()
+actual_environment = home / '.arduino15/flange-environment.lock.json'
+if not actual_environment.is_file() or actual_environment.read_bytes() != expected_environment:
+    raise SystemExit('UNO Q userdata 的 core/tools/libraries/model 锁与 rootfs 不匹配；请成套迁移环境，未覆盖用户数据')
+archives = home / '.cache/flange-containers'
+lock = json.loads((archives / 'containers.lock.json').read_text())
+expected = json.loads(Path('/usr/share/flange/unoq/containers.lock.json').read_text())
+if lock != expected:
+    raise SystemExit('UNO Q userdata 与 rootfs 的 Arduino 版本不匹配；请备份后成套迁移运行时，未自动覆盖用户数据')
+for item in lock['images']:
+    current = subprocess.run(['docker', 'image', 'inspect', item['tag']], text=True, capture_output=True)
+    if current.returncode == 0:
+        existing = json.loads(current.stdout)[0]
+        if existing.get('Id') == item['config_digest'] and existing.get('Architecture') == 'arm64':
+            continue
+    archive = archives / item['archive']
+    checksum = archive.with_suffix('.sha256').read_text().strip()
+    digest = hashlib.file_digest(archive.open('rb'), 'sha256').hexdigest()
+    if digest != checksum:
+        raise SystemExit(f'容器归档损坏：{archive}')
+    # 导入本地已锁资源，不访问浮动 registry tag。
+    subprocess.run(['docker', 'load', '--input', str(archive)], check=True)
+    inspect = json.loads(subprocess.check_output(['docker', 'image', 'inspect', item['tag']]))[0]
+    if inspect.get('Architecture') != 'arm64' or inspect.get('Id') != item['config_digest']:
+        raise SystemExit(f'容器架构错误：{item["tag"]}')
+# docker-archive 不保证 RepoDigests；把真实消费的 Compose 指向已校验的本地 Image ID。
+assets = home / '.local/share/arduino-app-cli/assets/0.12.0'
+for path in assets.rglob('*.yaml'):
+    lines = path.read_text().splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        match = re.match(r'^(\s*image:\s*)(.*?)(\r?\n)?$', line)
+        if not match:
+            continue
+        for item in lock['images']:
+            value = match[2].strip()
+            if value in (item['image'], item['config_digest']) or value.endswith(item['tag'].split('/')[-1]):
+                lines[index] = match[1] + item['config_digest'] + '\n'
+    path.write_text(''.join(lines))
+
+# 上游 Compose 使用这一标准模型目录；实际内容保留在 userdata。
+base = home / '.local/share/arduino-app-cli'
+base.mkdir(parents=True, exist_ok=True)
+subprocess.run(['chown', '-R', 'arduino:arduino', str(base)], check=True)
+
+cloud = home / '.local/share/arduino-cloud-connector'
+cloud.mkdir(parents=True, exist_ok=True)
+subprocess.run(['chown', 'arduino:arduino', str(cloud)], check=True)

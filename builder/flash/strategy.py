@@ -62,6 +62,9 @@ from builder.term import Role, supports_color
 class FlashStrategy(FlashPlan, ABC):
     """平台刷写策略基类。"""
 
+    supports_no_reboot = True
+    uses_named_partitions = False
+
     @abstractmethod
     def find_tool(self, project_dir: Path) -> Path:
         """查找平台刷写工具路径，未找到抛 FlashError。"""
@@ -1161,6 +1164,9 @@ _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
 
 def get_flash_strategy(platform: str) -> FlashStrategy:
     """根据平台名获取刷写策略实例。"""
+    if platform == "qualcommqrb2210":
+        from builder.flash.unoq import UnoQFlashStrategy
+        return UnoQFlashStrategy()
     cls = _FLASH_STRATEGIES.get(platform)
     if not cls:
         raise FlashError(f"不支持的平台: {platform}（支持: {', '.join(_FLASH_STRATEGIES)}）")

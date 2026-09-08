@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "bricks_version": "0.12.0",
+  "images": [
+    {
+      "tag": "ghcr.io/arduino/app-bricks/python-apps-base:0.12.0",
+      "image": "ghcr.io/arduino/app-bricks/python-apps-base@sha256:35eb218ee65c4886a2e0ead685ae8d16a68ecd6bc0a0dfc678669f69d7987a7a",
+      "config_digest": "sha256:22b878f2712b7b2fe0fddaa677393886045746819e127615cafca4c63b306015",
+      "compressed_bytes": 307975192
+    },
+    {
+      "tag": "ghcr.io/arduino/app-bricks/models-downloader:0.12.0",
+      "image": "ghcr.io/arduino/app-bricks/models-downloader@sha256:1327580597a2ab330e04840075959ae9eac2ff7171f25209294a472a7e82c103",
+      "config_digest": "sha256:6dac736dc0de056584c278b15408a2a9f684149712877853c40c9f66f53ab7c9",
+      "compressed_bytes": 66531417
+    },
+    {
+      "tag": "ghcr.io/arduino/app-bricks/ei-models-runner:0.12.1",
+      "image": "ghcr.io/arduino/app-bricks/ei-models-runner@sha256:276a61c1fbf7dd601e6a62c89bebc79733765f9ee2822e4d8ac252792c9a2f4b",
+      "config_digest": "sha256:0cace99ddd384adcc7557464870422aeaffa9c271887d5acb1f220ebee9b770e",
+      "compressed_bytes": 385047674
+    },
+    {
+      "image": "docker.io/library/influxdb@sha256:60a3f373381b09462258e271ecea61a37a55ca74753b301e7a61622fa88aabb1",
+      "tag": "influxdb:2.7-alpine",
+      "config_digest": "sha256:81a53e86cb3506f8bb853a46b6655c04d7f48747acf176743b9b5092cd1755f5",
+      "compressed_size": 79340199
+    },
+    {
+      "image": "ghcr.io/arduino/app-bricks/llamacpp-runner@sha256:d953299b5fa1c7d1b73398211f3cf8e7f47b183835c0d387fff515cfead77b28",
+      "tag": "ghcr.io/arduino/app-bricks/llamacpp-runner:0.12.1",
+      "config_digest": "sha256:6cd1b18bdcb97180270f2725de6c7459d47395b805d9df610d3758ba55bbf2cd",
+      "compressed_size": 70790899
+    }
+  ],
+  "models_policy": "UNO Q \u9884\u7f6e\u6a21\u578b\u968f\u56fa\u5b9a ei-models-runner \u5c42\u6458\u8981\u9501\u5b9a\uff1b\u7528\u6237\u65b0\u589e\u6a21\u578b\u987b\u53e6\u5916\u8bb0\u5f55\u6458\u8981\u3002"
+}
