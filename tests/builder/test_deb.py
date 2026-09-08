@@ -4,6 +4,7 @@ data.tar.gz 文件树结构与权限、端到端 .deb 构建验证。
 
 from __future__ import annotations
 
+import gzip
 import io
 import tarfile
 import tempfile
@@ -505,6 +506,31 @@ class TestControlTarBuild:
 
 class TestDataTarBuild:
     """验证 _build_data_tar 的输出结构与文件权限。"""
+
+    def test_long_paths_and_links_use_dpkg_supported_headers(self, tmp_path):
+        """工具链长路径及长链接必须原样保留，且不生成 dpkg 拒绝的 PAX 头。"""
+        src = tmp_path / "payload"
+        src.write_bytes(b"toolchain")
+        destination = "/usr/share/" + "/".join(["a" * 80] * 4) + "/payload"
+        link = tmp_path / "link"
+        link.symlink_to(destination)
+        archive = _build_data_tar([
+            (src, destination, 0o755), (link, "/usr/bin/toolchain-link", 0o777),
+        ])
+        raw = gzip.decompress(archive)
+        types = []
+        offset = 0
+        while raw[offset:offset + 512].strip(b"\0"):
+            header = raw[offset:offset + 512]
+            types.append(header[156:157])
+            size = int(header[124:136].strip(b"\0 ") or b"0", 8)
+            offset += 512 + ((size + 511) // 512) * 512
+        assert not {b"x", b"g"}.intersection(types)
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tf:
+            payload = tf.getmember("." + destination)
+            assert payload.mode == 0o755
+            assert tf.extractfile(payload).read() == b"toolchain"
+            assert tf.getmember("./usr/bin/toolchain-link").linkname == destination
 
     def test_file_present_in_tar(self, tmp_path):
         """安装文件出现在 data.tar.gz 中。"""
