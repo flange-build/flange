@@ -91,6 +91,9 @@ class FlashConfig:
     partitions: list[FlashPartition] = field(default_factory=list)
     pre_flash: PreFlashConfig = field(default_factory=PreFlashConfig)
     identity: FlashIdentityConfig = field(default_factory=FlashIdentityConfig)
+    # 非整盘镜像平台的独立发布包；摘要绑定具体构建，防止清单和镜像漂移。
+    bundle_manifest: str = ""
+    bundle_manifest_sha256: str = ""
 
     def to_json(self, path: Path):
         """原子序列化为 JSON 文件。"""
@@ -126,6 +129,8 @@ class FlashConfig:
             partitions=partitions,
             pre_flash=pre_flash,
             identity=identity,
+            bundle_manifest=data.get("bundle_manifest", ""),
+            bundle_manifest_sha256=data.get("bundle_manifest_sha256", ""),
         )
 
 
@@ -160,4 +165,4 @@ class DeviceInfo:
     platform: str
     mode: str         # "maskrom", "loader" 等
     description: str
-
+    serial: str = ""

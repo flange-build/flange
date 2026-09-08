@@ -27,6 +27,7 @@
 | 如何备份、恢复或在线刷写分区 | [Recovery（维护系统）](recovery.md) |
 | 如何开发同一芯片上的异构从核 | [AMP（非对称多处理）](amp.md) |
 | 这块板或外设验证过哪些功能 | [板卡索引](../wiki/boards/index.md)、[Wiki](../wiki/index.md) |
+| Arduino UNO Q 如何构建、刷写及验收 | [UNO Q 适配指南](boards/arduino-uno-q.md) |
 | 哪些能力仍有缺口，哪些结果已验证 | [构建系统设计评审](build-system-review.md)、[CLI 体验评审](cli-experience-review.md) |
 | 代码、固件和生成镜像如何遵守许可证 | [许可说明](licensing.md) |
 

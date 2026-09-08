@@ -1,0 +1,13 @@
+[Unit]
+Description=扩展 UNO Q userdata 文件系统至现有分区容量
+RequiresMountsFor=/home/arduino
+After=local-fs.target
+Before=flange-unoq-data.service arduino-app-cli.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/flange/unoq/grow-userdata
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+#!/bin/bash
+set -xe
+case "${1:-}" in prereqs) exit 0;; esac
+# 板级脚本遵循项目 Bash 约定，显式携带解释器与动态依赖。
+. /usr/share/initramfs-tools/hook-functions
+copy_exec /bin/bash /bin/bash

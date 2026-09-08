@@ -25,6 +25,18 @@ def system_config():
     }
 
 
+def test_recovery_firmware_descriptor_requires_valid_digest():
+    config = system_config()
+    config["bootloader"] = {
+        "device_tree": "qcom/qrb2210-arduino-imola",
+        "recovery_firmware": {"url": "https://example.test/rescue.zip", "sha256": "a" * 64},
+    }
+    validate_config(config)
+    config["bootloader"]["recovery_firmware"]["sha256"] = "invalid"
+    with pytest.raises(ConfigError, match="recovery_firmware.sha256"):
+        validate_config(config)
+
+
 @pytest.mark.parametrize("wrapper", [dict, ResolvedConfig])
 @pytest.mark.parametrize(
     "section,value,field",

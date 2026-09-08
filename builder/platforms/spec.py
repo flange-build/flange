@@ -17,8 +17,12 @@ overlay"，此前在两个文件里各写了一遍 `platform.startswith("qualcom
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Protocol, runtime_checkable
+
+from builder.artifacts import ArtifactSpec
 
 
 @runtime_checkable
@@ -97,3 +101,73 @@ def missing_attrs(module: ModuleType) -> list[str]:
 
 def conforms(module: ModuleType) -> bool:
     return not missing_attrs(module)
+
+
+def _optional_platform(config: Mapping) -> ModuleType | None:
+    """允许不带平台的纯计划夹具，不吞掉真实平台内部的导入错误。"""
+    platform = config.get("platform")
+    if not platform:
+        return None
+    try:
+        return load(platform)
+    except ModuleNotFoundError as error:
+        if error.name == f"builder.platforms.{platform}":
+            return None
+        raise
+
+
+def dependency_graph(config: Mapping, base: Mapping | None = None) -> dict[str, list[str]]:
+    """在基础图上追加平台依赖，规划、执行和指纹共用同一声明。"""
+    from builder.graph import DEPENDENCY_GRAPH, topological_order
+
+    source = base if base is not None else DEPENDENCY_GRAPH
+    graph = {name: list(deps) for name, deps in source.items()}
+    module = _optional_platform(config)
+    extra = getattr(module, "EXTRA_DEPENDENCIES", {})
+    if not isinstance(extra, dict):
+        raise ValueError("平台 EXTRA_DEPENDENCIES 必须是组件到依赖列表的映射")
+    for component, dependencies in extra.items():
+        if component not in graph:
+            raise ValueError(f"平台声明未知组件: {component}")
+        if not isinstance(dependencies, (list, tuple)) or any(
+            not isinstance(name, str) for name in dependencies
+        ):
+            raise ValueError(f"平台 {component} 依赖必须是字符串列表")
+        if len(set(dependencies)) != len(dependencies):
+            raise ValueError(f"平台 {component} 包含重复依赖")
+        for name in dependencies:
+            if name not in graph:
+                raise ValueError(f"平台 {component} 依赖未知组件: {name}")
+            if name not in graph[component]:
+                graph[component].append(name)
+    topological_order(graph, tuple(graph))
+    return graph
+
+
+def required_artifacts(
+    component: str, root: Path, config: dict
+) -> tuple[ArtifactSpec, ...] | None:
+    """平台可覆盖组件输出契约；None 表示使用原有默认契约。"""
+    module = _optional_platform(config)
+    hook = getattr(module, "required_artifacts", None)
+    if hook is None:
+        return None
+    if not callable(hook):
+        raise ValueError("平台 required_artifacts 必须可调用")
+    outputs = hook(component, root, config)
+    if outputs is None:
+        return None
+    if not isinstance(outputs, (list, tuple)) or not outputs:
+        raise ValueError(f"平台 {component} 必需产物必须是非空列表")
+    names, paths = set(), set()
+    for output in outputs:
+        if not isinstance(output, ArtifactSpec):
+            raise ValueError(f"平台 {component} 产物必须使用 ArtifactSpec")
+        path = output.path
+        if ".." in path.parts or not path.is_relative_to(root.absolute()) or path == root.absolute():
+            raise ValueError(f"平台 {component} 产物路径超出组件目录: {path}")
+        if output.name in names or path in paths:
+            raise ValueError(f"平台 {component} 包含重复产物: {output.name}")
+        names.add(output.name)
+        paths.add(path)
+    return tuple(outputs)

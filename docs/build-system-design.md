@@ -140,6 +140,12 @@ SoC 层声明架构、工具链和芯片事实；具体显示、存储、rootfs 
 引擎展开所需组件依赖，准备源码，计算计划指纹；只有输入与必需产物同时有效才复用缓存。
 任务完成后重新检查输入，验证全部产物，再原子发布清单。
 
+平台包可用 `EXTRA_DEPENDENCIES` 声明附加组件依赖；`platforms/spec.py` 合并基础图并拒绝未知节点、
+重复边和环。组件计划与执行排序消费同一张图。例如 UNO Q 的 boot 消费 rootfs 的 initrd，
+因此 rootfs 的产物身份必须进入 boot 缓存指纹。
+可选 `required_artifacts(component, root, config)` 返回平台完整产物契约，返回 `None` 沿用公共契约；
+声明路径必须位于组件发布目录内。image 的全局 `flash-config.json` 仍由公共层要求，不能被平台覆盖掉。
+
 `InputSpec` 区分值与文件树；树摘要包含节点类型、模式位、符号链接目标和文件内容，不使用 mtime 作为身份。
 源码中名为 `build` 的目录不是全局排除条件；排除仅用于 VCS 元数据及明确的派生目录。
 下游消费上游实际 ArtifactManifest.identity；输入变化但上游结果未变化时，不必传播无关重建。

@@ -1,0 +1,16 @@
+[Unit]
+Description=Arduino 应用管理服务
+After=network-online.target docker.service arduino-router.service flange-unoq-data.service
+Wants=network-online.target docker.service arduino-router.service
+Requires=flange-unoq-data.service
+[Service]
+User=arduino
+Group=arduino
+Environment=ARDUINO_APP_CLI__REQUIRED_RUNTIMES=arduino-router,arduino-cloud-connector
+Environment=ARDUINO_APP_CLI__PLATFORM_VERSION_CONSTRAINT=0.90.0
+Environment=ARDUINO_APP_CLI__DATA_DIR=/home/arduino/.local/share/arduino-app-cli
+ExecStart=/usr/bin/arduino-app-cli daemon --port 8800 --log-level error
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

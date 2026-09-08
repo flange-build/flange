@@ -41,9 +41,12 @@ class FlashExecutor:
         self.project_dir = project_dir or Path.cwd()
         self.strategy = get_flash_strategy(self.config.platform)
 
-    def flash_all(self, no_wait: bool = False, no_reboot: bool = False):
+    def flash_all(self, no_wait: bool = False, no_reboot: bool = False, *, yes: bool = False):
         """全量刷写所有分区。"""
         cfg = self.config
+        self.strategy.allow_protected = yes
+        if no_reboot and not self.strategy.supports_no_reboot:
+            raise FlashError("该平台的 QDL 在读写结束时自动复位，不支持 --no-reboot")
         _header(f"flange flash · {cfg.board} · {cfg.product}-{cfg.variant}")
         # 先做所有本地、非破坏性校验；镜像/parameter 不一致时不等待设备，
         # 更不会上传 loader 或写入任何分区。
@@ -85,9 +88,12 @@ class FlashExecutor:
         print(_c(Role.MUTED, sep))
         print()
 
-    def flash_partition(self, name: str, no_wait: bool = False, no_reboot: bool = False):
+    def flash_partition(self, name: str, no_wait: bool = False, no_reboot: bool = False, *, yes: bool = False):
         """刷写指定分区。"""
         requested_name = name
+        self.strategy.allow_protected = yes
+        if no_reboot and not self.strategy.supports_no_reboot:
+            raise FlashError("该平台的 QDL 在读写结束时自动复位，不支持 --no-reboot")
         if self.config.partition_format == "mtd" or self.config.storage_type == "spinand":
             name = {
                 "bootloader": "uboot",
@@ -117,7 +123,8 @@ class FlashExecutor:
             self.strategy.pre_flash_all(tool, self.target_dir, self.config, device)
         else:
             self.strategy.pre_flash(tool, self.target_dir, self.config, device)
-        if self.config.partition_format == "mtd" or self.config.storage_type == "spinand":
+        if (self.config.partition_format == "mtd" or self.config.storage_type == "spinand"
+                or self.strategy.uses_named_partitions is True):
             self.strategy.write_named_partition(tool, part, image, self.config)
         else:
             self.strategy.write_partition(tool, int(part.offset, 0), image)
@@ -206,7 +213,7 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
     run_parser.add_argument("--no-wait", action="store_true", help="跳过设备等待")
     run_parser.add_argument("--no-reboot", action="store_true", help="刷写完成后不触发设备重启")
     run_parser.add_argument("--raw", metavar="DEVICE", help="dd 整盘刷写到指定设备")
-    run_parser.add_argument("--yes", action="store_true", help="明确确认 --raw 覆盖整盘数据")
+    run_parser.add_argument("--yes", action="store_true", help="明确确认 --raw 整盘覆盖或平台受保护启动固件写入")
     run_parser.add_argument("--list", action="store_true", dest="list_parts", help="列出可刷写分区")
     run_parser.add_argument(
         "--spi-firmware",
@@ -261,9 +268,9 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
                 device = executor.strategy.wait_for_device(tool)
             executor.strategy.flash_spi_firmware(tool, executor.target_dir, device)
         elif args.partition:
-            executor.flash_partition(args.partition, no_wait=args.no_wait, no_reboot=args.no_reboot)
+            executor.flash_partition(args.partition, no_wait=args.no_wait, no_reboot=args.no_reboot, yes=args.yes)
         else:
-            executor.flash_all(no_wait=args.no_wait, no_reboot=args.no_reboot)
+            executor.flash_all(no_wait=args.no_wait, no_reboot=args.no_reboot, yes=args.yes)
 
     elif args.command == "generate":
         config = json.loads(Path(args.config).read_text())

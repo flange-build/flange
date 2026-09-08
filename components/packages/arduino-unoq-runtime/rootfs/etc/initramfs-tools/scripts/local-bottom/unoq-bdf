@@ -1,0 +1,30 @@
+#!/bin/bash
+set -xe
+PREREQ=""
+case "${1:-}" in prereqs) echo "$PREREQ"; exit 0;; esac
+# 官方 revision 位于 eMMC boot0 的第三分区；缺失身份时不猜测校准。
+compatible=$(tr '\000' '\n' < /sys/firmware/devicetree/base/compatible)
+if ! printf '%s\n' "$compatible" | grep -qx 'arduino,imola'; then
+    echo 'UNO Q BDF：板卡身份不匹配，拒绝校准' >/dev/kmsg
+    exit 1
+fi
+if [ ! -b /dev/mmcblk0boot0p3 ]; then
+    echo 'UNO Q BDF：缺少 PCB revision 分区，不能确认无线校准' >/dev/kmsg
+    exit 1
+fi
+revision=$(tr -d '\000\n\r' < /dev/mmcblk0boot0p3)
+if [ -z "$revision" ]; then
+    echo 'UNO Q BDF：PCB revision 为空，拒绝选择校准文件' >/dev/kmsg
+    exit 1
+fi
+name=board-2.bin_CTL_061125_REGDM4067_CCA22
+if [ "$revision" = void ]; then name=${name}_OldPCB; fi
+source=${rootmnt}/usr/share/arduino-unoq-radio-firmware/$name
+dest=${rootmnt}/usr/lib/firmware/updates/ath10k/WCN3990/hw1.0/board-2.bin
+if ! cmp -s "$source" "$dest"; then
+    mount -o remount,rw "$rootmnt"
+    trap 'mount -o remount,ro "$rootmnt"' EXIT
+    cp "$source" "$dest.tmp"
+    mv "$dest.tmp" "$dest"
+fi
+echo "UNO Q BDF：已选择 $name" >/dev/kmsg

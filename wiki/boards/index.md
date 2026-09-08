@@ -30,5 +30,6 @@ updated: 2026-09-06
 - [radxa-zero](radxa-zero.md) — S905Y2（第二块 Amlogic 板，G12A，AW-CM256SM WiFi/BT，关 recovery，macOS host，status: wip）
 - [radxa-dragon-q6a](radxa-dragon-q6a.md) — QCS6490（首颗 Qualcomm 板，UEFI/GRUB + UFS 4K LBA + Adreno 643 freedreno + AIC8800 USB，status: wip）
 - [radxa-dragon-q8b](radxa-dragon-q8b.md) — SC8280XP（UEFI/GRUB + UFS 4K LBA + Adreno/MSM + QPS615/TC956x 双网口，status: wip）
+- [arduino-uno-q](../../docs/boards/arduino-uno-q.md) — QRB2210 + STM32U585（U-Boot/systemd-boot + eMMC/QDL，完整 Arduino 生态适配中，待实板验收）
 
 - [radxa-rock5c-lite](radxa-rock5c-lite.md) — RK3582，含 USB-C OTG 与 LCD HAT 专题。

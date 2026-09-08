@@ -1,0 +1,8 @@
+{
+  "name": "adbd",
+  "version": "34.0.5-12arduino7",
+  "url": "https://apt-repo.arduino.cc/pool/main/a/android-platform-tools/adbd_34.0.5-12arduino7_arm64.deb",
+  "sha256": "4dc3c7ac1371afadbcd89d1a1d8c9e57a5a8f40386f5e28925f6920bc080e41d",
+  "license": "保留原包 copyright 与 NOTICE；只提取 patched daemon，不安装其 Debian 控制信息及动态库",
+  "source_patch": "https://github.com/arduino/arduino-deb-images/blob/e7713f1797945296e4ab77dc7040b5d2c32aa047/overlay-debs/android-platform-tools/android-platform-tools_34.0.5-12arduino1.debdiff"
+}

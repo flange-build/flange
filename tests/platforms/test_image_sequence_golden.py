@@ -14,7 +14,7 @@ import json
 import re
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,6 +29,8 @@ PLATFORMS = {
     "amlogic": "builder.platforms.amlogic.image:AmlogicImageBuilder",
     "qualcommqcs6490": (
         "builder.platforms.qualcommqcs6490.image:Qcs6490ImageBuilder"),
+    "qualcommqrb2210": (
+        "builder.platforms.qualcommqrb2210.image:Qrb2210ImageBuilder"),
 }
 
 # 覆盖各平台会消费的全部分区名，让"分区名→产物路径"映射的差异可见。
@@ -116,7 +118,19 @@ def _run_compile(platform: str, tmp_path: Path, config=None) -> list[str]:
     builder.docker.run_privileged.side_effect = record("priv")
 
     try:
-        builder.compile(None, config or _config())
+        if platform == "qualcommqrb2210":
+            # QDL 组装器直接消费完整输入树；协议内容另由 UNO Q flash 测试校验。
+            def bundle(firmware, images, output):
+                record("bundle")([firmware, *[
+                    f"{name}={path}" for name, path in images.items()
+                ], output])
+                return output
+
+            with patch("builder.platforms.qualcommqrb2210.image.build_bundle", bundle):
+                builder.compile(None, config or _config())
+                assert builder.collect(None, config or _config()) == {"bundle": builder._bundle}
+        else:
+            builder.compile(None, config or _config())
     finally:
         work = getattr(builder, "_work_dir", None)
         if work and Path(work).exists():
@@ -185,5 +199,6 @@ def test_disabled_recovery_is_not_written_even_when_old_image_exists(platform, t
     config = _config()
     config["recovery"]["enabled"] = False
     commands = _run_compile(platform, tmp_path, config)
-    assert any("if=<TARGET>/rootfs/rootfs.img" in command for command in commands)
+    rootfs = "rootfs=<TARGET>/rootfs/rootfs.img" if platform == "qualcommqrb2210" else "if=<TARGET>/rootfs/rootfs.img"
+    assert any(rootfs in command for command in commands)
     assert not any("if=<TARGET>/recovery/recovery.img" in command for command in commands)

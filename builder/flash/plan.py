@@ -29,6 +29,10 @@ class FlashPlan(ABC):
         """生成平台特定的 pre_flash 配置。默认返回空配置。"""
         return PreFlashConfig()
 
+    def generate_flash_config(self, config: dict, target_dir):
+        """平台可从独立发布包生成计划；默认使用公共 PartitionLayout。"""
+        return None
+
 
 class RockchipFlashPlan(FlashPlan):
     """Rockchip：idbloader + u-boot.itb + 逐分区镜像。"""
@@ -125,6 +129,19 @@ class QualcommFlashPlan(FlashPlan):
         return {"system": "image/raw.img"}
 
 
+class UnoQFlashPlan(FlashPlan):
+    """UNO Q 的分区来自官方 XML/GPT 发布包，不用简化 GPT 配置重建。"""
+
+    def partition_image_map(self, config):
+        return {"boot_a": "bootloader/uboot-boot.img", "boot_b": "bootloader/uboot-boot.img",
+                "efi": "boot/boot.img", "rootfs": "rootfs/rootfs.img",
+                "userdata": "rootfs/userdata.img"}
+
+    def generate_flash_config(self, config, target_dir):
+        from builder.flash.unoq import make_flash_config
+        return make_flash_config(config, target_dir)
+
+
 
 
 #: 平台 → 构建期刷写计划。宿主机策略类继承同名 Plan，两侧不会漂移。
@@ -134,6 +151,7 @@ _FLASH_PLANS: dict[str, type[FlashPlan]] = {
     "amlogic": AmlogicFlashPlan,
     "qualcommqcs6490": QualcommFlashPlan,
     "qualcommsc8280xp": QualcommFlashPlan,
+    "qualcommqrb2210": UnoQFlashPlan,
 }
 
 

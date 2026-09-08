@@ -1,0 +1,15 @@
+app:
+  name: flange-arduino-unoq-usb
+  version: 0.1.0
+  description: UNO Q 的 patched ADB daemon 与幂等 USB gadget
+  type: vendor
+  arch: [aarch64]
+maintainer:
+  name: flange
+  email: flange@localhost
+build:
+  system: custom
+  apt_packages: [python3]
+  commands:
+    - [python3, prepare.py]
+depends: [android-libbase, android-libboringssl, android-libcutils, android-liblog, libprotobuf32t64, libbrotli1, liblz4-1, libsystemd0, libzstd1, libstdc++6, bash, util-linux, mount]

@@ -1,0 +1,163 @@
+{
+  "libraries": [
+    {
+      "name": "Arduino_RPClite",
+      "version": "0.3.0",
+      "author": "Arduino, Lucio Rossi (eigen-value)",
+      "maintainer": "Arduino, Lucio Rossi (eigen-value)",
+      "sentence": "A MessagePack RPC library for Arduino",
+      "paragraph": "allows to create a client/server architecture using MessagePack as the serialization format. It follows the MessagePack-RPC protocol specification. It is designed to be lightweight and easy to use, making it suitable for embedded systems and IoT applications.",
+      "website": "https://github.com/arduino-libraries/Arduino_RPCLite",
+      "category": "Communication",
+      "architectures": [
+        "*"
+      ],
+      "types": [
+        "Arduino"
+      ],
+      "repository": "https://github.com/arduino-libraries/Arduino_RPCLite.git",
+      "dependencies": [
+        {
+          "name": "MsgPack",
+          "version": ">=0.4.2"
+        }
+      ],
+      "url": "https://downloads.arduino.cc/libraries/github.com/arduino-libraries/Arduino_RPClite-0.3.0.zip",
+      "archiveFileName": "Arduino_RPClite-0.3.0.zip",
+      "size": 47760,
+      "checksum": "SHA-256:f81477cbe2ad3a454f6196754cd5103aaadb0c7e0d20d91d3209707624c2adb0"
+    },
+    {
+      "name": "MsgPack",
+      "version": "0.4.2",
+      "author": "hideakitai",
+      "maintainer": "hideakitai",
+      "sentence": "MessagePack implementation for Arduino (compatible with other C++ apps)",
+      "paragraph": "MessagePack implementation for Arduino (compatible with other C++ apps)",
+      "website": "https://github.com/hideakitai/MsgPack",
+      "category": "Communication",
+      "architectures": [
+        "*"
+      ],
+      "types": [
+        "Contributed"
+      ],
+      "repository": "https://github.com/hideakitai/MsgPack.git",
+      "dependencies": [
+        {
+          "name": "ArxContainer",
+          "version": ">=0.6.0"
+        },
+        {
+          "name": "ArxTypeTraits"
+        },
+        {
+          "name": "DebugLog",
+          "version": ">=0.8.1"
+        }
+      ],
+      "url": "https://downloads.arduino.cc/libraries/github.com/hideakitai/MsgPack-0.4.2.zip",
+      "archiveFileName": "MsgPack-0.4.2.zip",
+      "size": 329227,
+      "checksum": "SHA-256:1195c3e243db14841356073b791771be40d1e986a8ae97c67ed8886cc0599023"
+    },
+    {
+      "name": "DebugLog",
+      "version": "0.8.4",
+      "author": "hideakitai",
+      "maintainer": "hideakitai",
+      "sentence": "Logging library for Arduino that can output to both Serial and File with one line",
+      "paragraph": "DebugLog can output level-controlled logs to both Serial and File with one line at the same time. It also supports variadic arguments, log level control, assertion, manual file flushing, etc.",
+      "website": "https://github.com/hideakitai/DebugLog",
+      "category": "Communication",
+      "architectures": [
+        "*"
+      ],
+      "types": [
+        "Contributed"
+      ],
+      "repository": "https://github.com/hideakitai/Debug.git",
+      "dependencies": [
+        {
+          "name": "ArxContainer",
+          "version": ">=0.6.0"
+        },
+        {
+          "name": "ArxTypeTraits"
+        }
+      ],
+      "url": "https://downloads.arduino.cc/libraries/github.com/hideakitai/DebugLog-0.8.4.zip",
+      "archiveFileName": "DebugLog-0.8.4.zip",
+      "size": 24033,
+      "checksum": "SHA-256:667d10ef3ac2a6cef381880983549239c18886e7c126abbd6cb299ad83ebbd18"
+    },
+    {
+      "name": "ArxTypeTraits",
+      "version": "0.3.2",
+      "author": "hideakitai",
+      "maintainer": "hideakitai",
+      "sentence": "C++ type_traits for Arduino which cannot use it as default",
+      "paragraph": "C++ type_traits for Arduino which cannot use it as default",
+      "website": "https://github.com/hideakitai/ArxTypeTraits",
+      "category": "Data Storage",
+      "architectures": [
+        "*"
+      ],
+      "types": [
+        "Contributed"
+      ],
+      "repository": "https://github.com/hideakitai/ArxTypeTraits.git",
+      "url": "https://downloads.arduino.cc/libraries/github.com/hideakitai/ArxTypeTraits-0.3.2.zip",
+      "archiveFileName": "ArxTypeTraits-0.3.2.zip",
+      "size": 19262,
+      "checksum": "SHA-256:778a8cf6f279d9e86cbe45dcadacfda6c5b2938e886de7dcf727ba0361696d47"
+    },
+    {
+      "name": "ArxContainer",
+      "version": "0.7.0",
+      "author": "hideakitai",
+      "maintainer": "hideakitai",
+      "sentence": "C++ container-like classes (vector, map, etc.) for Arduino which cannot use STL",
+      "paragraph": "C++ container-like classes (vector, map, etc.) for Arduino which cannot use STL",
+      "website": "https://github.com/hideakitai/ArxContainer",
+      "category": "Data Storage",
+      "architectures": [
+        "*"
+      ],
+      "types": [
+        "Contributed"
+      ],
+      "repository": "https://github.com/hideakitai/ArxContainer.git",
+      "url": "https://downloads.arduino.cc/libraries/github.com/hideakitai/ArxContainer-0.7.0.zip",
+      "archiveFileName": "ArxContainer-0.7.0.zip",
+      "size": 16045,
+      "checksum": "SHA-256:d0dea8dd2af43fb7edd88b136f025958cae6bbb7b878e02d8f2f02603d93d6b9"
+    },
+    {
+      "name": "Arduino_RouterBridge",
+      "version": "0.4.3",
+      "author": "Arduino",
+      "maintainer": "Arduino",
+      "sentence": "A RPC bridge for Arduino UNO Q boards",
+      "paragraph": "This library provides a simple RPC bridge for Arduino UNO Q boards, allowing communication between the board and other devices using MsgPack serialization.",
+      "website": "https://github.com/arduino-libraries/Arduino_RouterBridge",
+      "category": "Communication",
+      "architectures": [
+        "zephyr"
+      ],
+      "types": [
+        "Arduino"
+      ],
+      "repository": "https://github.com/arduino-libraries/Arduino_RouterBridge.git",
+      "dependencies": [
+        {
+          "name": "Arduino_RPClite"
+        }
+      ],
+      "url": "https://downloads.arduino.cc/libraries/github.com/arduino-libraries/Arduino_RouterBridge-0.4.3.zip",
+      "archiveFileName": "Arduino_RouterBridge-0.4.3.zip",
+      "size": 49516,
+      "checksum": "SHA-256:700e12d2d26dbf8365b4a9df5e2dc596b573392ef83e81e41d12db1e2cf5dceb"
+    }
+  ]
+}

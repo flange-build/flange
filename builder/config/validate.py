@@ -224,7 +224,9 @@ def validate_canonical_config(config: dict) -> None:
             )
 
     bootloader = config.get("bootloader") or {}
-    for field in ("edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose"):
+    for field in (
+        "edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose", "recovery_firmware"
+    ):
         descriptor = bootloader.get(field)
         if descriptor is not None:
             _validate_download_descriptor(descriptor, f"bootloader.{field}")

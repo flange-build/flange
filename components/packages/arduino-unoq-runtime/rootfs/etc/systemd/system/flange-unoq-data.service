@@ -1,0 +1,14 @@
+[Unit]
+Requires=flange-unoq-grow-userdata.service
+After=flange-unoq-grow-userdata.service
+Description=载入 UNO Q 已锁定的 Arduino 容器
+RequiresMountsFor=/home/arduino
+After=docker.service
+Requires=docker.service
+Before=arduino-app-cli.service
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/flange/unoq/load-containers
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
