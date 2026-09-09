@@ -1,0 +1,2 @@
+tools/macos/qdl/*/qdl filter=lfs diff=lfs merge=lfs -text
+tools/linux/qdl/*/qdl filter=lfs diff=lfs merge=lfs -text

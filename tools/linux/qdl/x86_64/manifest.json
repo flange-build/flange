@@ -1,0 +1,13 @@
+{
+  "version": "v2.4-26",
+  "release_url": "https://github.com/arduino/qdl-packing/releases/tag/v2.4-26",
+  "archive_url": "https://github.com/arduino/qdl-packing/releases/download/v2.4-26/qdl_v2.4-26_Linux_64bit.tar.gz",
+  "archive_sha256": "96fd6dead243aa4e9c00534f712657dd2e0b935868551e11e0beec1603ac8c43",
+  "packing_commit": "81e410a3f6b86b86531e713acf87188ee9a583bf",
+  "source_url": "https://github.com/linux-msm/qdl/tree/v2.4",
+  "files": {
+    "LICENSE": "85814c88fc75be2523c03551ee2abefc0c30b423edda343197796e0c0e168058",
+    "README.upstream.md": "97072d5a3e790a46f1a71f0cdf6955a704491756b210ede4c9d26651bd34a5a9",
+    "qdl": "a41bcdf4a2c44e2b4e0a20564cbcf0ce01da29d2c2ee40672e873c05490457b1"
+  }
+}
