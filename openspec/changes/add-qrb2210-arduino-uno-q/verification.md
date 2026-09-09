@@ -416,3 +416,201 @@ Docker Python 3.12 的实际目录备用复制也通过。本轮未重新执行�
 
 证据：.build/verification/arduino-uno-q/20260909/after-user-flash.json 和 after-user-flash-details.txt。
 完整适配验收仍未通过，下一步需定位槽位传递及首次容器导入与校时的顺序问题。
+
+
+## 2026-09-09 ABL 槽位格式与容器导入修复
+
+### 根因与实现
+
+只读比对板上 boot_a/boot_b 前 577536 字节，两者均与当时发布的 uboot-boot.img 一致，
+SHA256 为 e55c0ef878ec8c9e58c2fda9bbbc71ee0be1b0ff43b8681d461a6acbf7fb7a1e，排除烧入旧固件。
+三路 agent 分别修复槽位、修复容器导入，并独立复核 ABL/EFI 调用链。
+
+槽位的确定问题是接口遗漏：对固定官方 abl.elf 只读解压和反汇编，确认正常 multislot
+启动选择 `systemd.setenv="SLOT_SUFFIX=_a"` / `_b`，而旧解析器仅识别
+androidboot.slot_suffix 和 slot_suffix。不是仅凭存在某个未使用字符串作判断；
+格式选择函数 RVA 0xd550 恒返回 1，调用点 0x150b0 进入 systemd 分支，0x150f0 填入当前槽位字符。
+官方救援 ZIP 的来源和摘要未变，abl.elf SHA256 为
+4e5d35d7860dc56fdb8cfdcc54f90c00b5eca53fd14a672105349aec7a0ac91c。
+
+修复增加 systemd 参数解析，处理带引号、无引号和跨格式冲突；捕获提前至
+board_fdt_blob_setup，纯值保存于 .data，并提供 Linux 可读的来源和状态属性。
+这同时消除了重定位后重新读取原始 ABL 内存的风险；没有实板证据证明内存覆盖就是本次触发原因。
+缺失、重复、非法或冲突槽位仍不允许标记 GPT 成功，不从分区优先级猜测。
+
+容器侧实际为 Docker 29.1.3 / containerd 2.2.1。上游默认导入租约为 24 小时，
+以墙钟时间计算绝对到期值；板上导入期间从 7 月 28 日跳到 9 月 9 日，随后租约丢失，
+机制与日志吻合，但未通过受控时钟跳变复现来完全证明现场触发原因。
+依据：[默认租约](https://github.com/containerd/containerd/blob/v2.2.1/client/lease.go)、
+[绝对到期时间](https://github.com/containerd/containerd/blob/v2.2.1/core/leases/lease.go)。
+现实现首次导入前最多等待本次 NTP 同步 30 秒；离线继续，只有明确的租约不存在错误才重试一次。
+已有镜像仍核验平台和 config 身份，归档仍校验 SHA256，其他错误和再次失败不会被吞掉。
+
+### 实板热修复结果
+
+- 备份原文件后更新 load-containers 与 flange-unoq-data.service，未重启板子、写入启动分区或 MCU。
+- 从 2/5 镜像状态恢复，剩余三个全部导入；data 与 App CLI 服务 active，版本 API 返回 0.13.0。
+- 再次执行加载脚本约 1.81 秒完成，无新增导入、无校时等待。
+- 专用无 MCU 应用 flange-recovery-20260909 完成创建、启动、停止、再次启动，容器输出 Hello world!；
+  验证结束时停止测试应用，保留其文件供查看。
+- 修复后只读采集确认仍仅 qbootctl 为 failed；板上尚未烧入新 U-Boot，不能将此项写成已通过。
+
+### 离线验证与边界
+
+- 旧 C 解析器使用官方 systemd 参数可复现断言失败；新实现通过 43 个真实 libfdt 场景，
+  覆盖参数、源 DTB 覆盖、重复 EFI 修正及错误传播；objdump 确认早期状态位于 .data。
+- 116 项 Python 回归通过；OpenSpec 严格校验及 git diff --check 通过。
+- C 回归没有实际执行 ARM64 重定位或 EFI Protocol（协议）完整启动链；新启动固件仍须烧入验收。
+
+证据位于 .build/verification/arduino-uno-q/20260909/：boot-provenance.txt、abl-slot-analysis.txt、
+boot-slot-fix/、container-recovery/、after-container-repair.json、repair-regression.log。
+永久 C 回归入口为 tests/bootloader/verify_unoq_boot_slot.py。
+
+### 修复后的正式构建与交付校验
+
+完整 `flange build` 已成功，耗时 19 分 40 秒，5 个阶段完成、2 个阶段复用。
+最终 image 已发布，并通过与 `flange flash` 相同的本地 preflight：34 个分区的文件集合、
+原始摘要、GPT/XML、分区映射和 flash-config 绑定一致，组件 Artifact.validate 及组件到发布包的
+原始文件 SHA256 比对均通过。没有执行设备刷写。
+
+- ARM64 U-Boot 正式编译、Android v0 独立解包通过；实际 ELF 的槽位状态位于 `.data`，
+  生产源码与补丁一致。新 uboot-boot.img 为 581632 字节，SHA256 为
+  `f9ac1f0b8ec313947b36b246c52314b5f7e2358b44b9a3fdd9851b59502b76ea`。
+- 直接检查本次最终 rootfs.img，容器加载脚本和 data 服务与仓库逐字节一致；
+  固件、运行时 ABI、initramfs 与 Arduino core 检查通过，rootfs/userdata 的 `e2fsck -fn` 通过。
+- 最终 EFI 镜像内的内核、initrd 和 BOOTAA64 与对应组件一致，DTB 身份和启动项检查通过。
+- 本次发布包 manifest SHA256 为
+  `c1adf28cad5b322ffce5fbb22d86d2f39931e803e54640cc9c666cea90b091b8`，替代前述旧交付包。
+
+构建证据为 repair-image-build.log；交付证据位于同目录的 repair-final/：
+uboot-report.json、final-rootfs-report.json、final-esp-report.json、bundle-check.log、delivery.json。
+当前已热修设备仅需依次刷写 boot_a 和 boot_b；两次成功后移除 EDL 跳线并重新上电，
+保留 rootfs、userdata 和 Wi-Fi 配置。ADB 后续已断开，新 U-Boot 尚未部署，
+qbootctl 和完整硬件验收仍待烧入后确认，任务 9.10 不勾选，变更不归档。
+
+
+## 2026-09-09 启动回归：撤回本轮槽位修复
+
+用户报告新 U-Boot 烧入后系统无法启动。此前编译、C 回归和本地发布包校验通过，
+不能证明真实启动链可用；本次启动修复不得继续标为可交付。
+按用户要求，启动补丁和采集器恢复到 HEAD 59ed0664f 对应版本，撤回本轮新增 C 测试，
+停止推进 qbootctl。保留已实板验证的容器导入修复与其测试。
+已找到此前正常启动的 U-Boot，SHA256 为
+`e55c0ef878ec8c9e58c2fda9bbbc71ee0be1b0ff43b8681d461a6acbf7fb7a1e`，
+与 boot-provenance.txt 中回退前正常运行设备的 boot_a/boot_b 摘要一致。
+本轮仅回退源码及文档，未替换发布包、执行构建、刷写或重启；用户将自行重新构建和刷写。
+现有发布包为失败版本，必须等待用户的新构建成功后再使用。恢复启动结果仍待用户确认。
+撤回实现保存在本地证据目录 reverted-slot-fix/，不参与构建。
+
+
+### 回退后的构建完成
+
+随后按用户要求执行完整 `flange build`，退出码 0，耗时 13 分 58 秒；3 个阶段完成、4 个阶段复用。
+回退后的 U-Boot 正式编译和 Android v0 解包通过；最终发布包中的 U-Boot 与组件文件及
+manifest 摘要一致，flash-config 与发布包 manifest 绑定检查通过。
+U-Boot 为 577536 字节，SHA256 为
+`8fc42cb2889c93b7957fee65ea417c09a4867624e041c215fdeaef1ccfa9a380`；
+发布包 manifest SHA256 为
+`d129113cc559b088fd9f87f6f5cd67736543a52f10fbbd6bc679232a2eac17d1`。
+已替换前述失败发布包；证据为本地 rollback-build/build.log 与 rollback-build/delivery.json。
+本轮未执行刷写，恢复启动仍需用户烧入后确认，qbootctl 继续暂停处理。
+
+
+## 2026-09-09 回退后无法启动：GPT 启动状态被全量刷写保留
+
+本轮证据修正前述“新 U-Boot 启动回归”的归因：那是按报障时序作出的判断，
+不能继续作为已证实根因。独立比对正常 e55c0ef 与回退 8fc42 的镜像，gzip 解压后
+均为 1235320 字节，仅横幅编译时间的 5 字节不同；机器码、其他数据、追加 DTB 完全一致。
+追加 DTB SHA256 为 f2e7be1f821f18b520d3b0da860e211b8a3e3378b0cda1a05315dc8afcaf87d5。
+当前链接表和 built-in.a 未引用新增 boot_slot.o，不能归因为回退不彻底或遗留对象进入产物。
+
+### 已确认的阻断
+
+对保存的真实主备 GPT 验证 CRC 和属性：
+
+| 记录 | boot_a 属性字节 | 状态 | 写出行为 |
+| --- | --- | --- | --- |
+| unoq-004tb_bc | 0x2f | active，未标成功，剩余重试位值 5 | 全刷保留；后续已有 ADB 正常运行证据 |
+| unoq-mafjoxho / unoq-deev7asi | 0x87 | active、unbootable，重试位值 0 | 新槽位补丁首次单刷前读取就已如此 |
+| unoq-6wubrqsl / unoq-tygkobd6 | 0x87 | 同上 | 后续两次全刷的读前及写出 GPT 都保留该值 |
+
+宿主 `_write(full=True)` 以实板 GPT 调用 resize_gpt，仅调整容量，原样保留坏启动状态；
+因此重编或回退镜像没有解除 ABL 的启动阻断。
+
+固定官方 ABL 的只读机器码复核：GetActiveSlot 在 priority、active、successful、
+unbootable 均为零时进入 First boot 分支；RVA 0x1720c–0x17214 将 GPT entry byte54
+设为 0x3f（优先级 3、active、7 次重试，未标成功），0x17284 调用属性提交。
+现场记录也吻合：unoq-8rkobgv6 生成的 GPT 启动字节全零，后续 unoq-w0s7ld1i
+实际读回 boot_a=0x37、其他 A 项=0x04。前一记录最终状态为 writing，不能称该次全刷完整成功。
+
+### 修复与验证
+
+只修改宿主全量刷写器：从写前重新校验的官方模板恢复成对 A/B 分区的 byte54，
+不复制模板 GUID、布局或其他属性字节，不代写启动成功。单分区刷写不生成或写入 GPT，
+不完整全量范围拒绝恢复。当前回退镜像保留，未再次构建、替换发布包或操作设备。
+
+- 新故障回归在旧实现失败，修复后 77 项相关测试通过。覆盖两种容量、扩大 rootfs 的实板布局、
+  不可启动/旧成功状态、无镜像 A/B 项、非槽位和非目标属性保留，以及单分区和不完整计划边界。
+- 使用最新 unoq-tygkobd6 的真实 GPT 做本地演算：19 个 A 项仅 byte54 改变，boot_a 0x87→0；
+  其余分区记录逐字节不变，GUID、容量、主备 CRC 通过。
+- 当前 d129113c 发布包完整 preflight 通过，未访问 USB 或执行刷写。
+- 旧完整 6bad1a37 发布包也核验通过，保留为恢复基线；本轮未重新发布它。
+
+证据目录 .build/verification/arduino-uno-q/20260909/gpt-recovery/：
+observed-slot-history.json、candidate-primary.bin、candidate-backup.bin、candidate-report.json、preflight.log。
+用户将自行在 EDL 执行 `flange flash --yes`，无需重新 build；应出现
+“恢复官方 A/B 启动初始状态并生成主备 GPT”。设备启动结果仍待确认，9.13 不勾选。
+qbootctl 按用户要求暂停，未解决启动成功确认，反复重启仍可能耗尽重试次数；
+本次不能视为长期启动可靠性已验收。
+
+
+## 2026-09-09 用户确认恢复启动与提交前整理
+
+用户全量刷写后确认系统可正常启动，主机重新枚举 ADB 2058906363；9.13 按这一范围完成。
+本次记录 unoq-mexl4j72 的发布包 manifest 为
+`4a6013d799f32ff7f05ac6dc76b767a35cae7de4fd788a33cbc267244c33f723`，
+与前述助手构建记录不同，不能把用户后续刷写自动归到旧的 d129113c 包。
+
+QDL 日志中所有 36 个条目均已报告写入成功，末尾为 `partition 0 is now bootable`。
+用户在该处等待后按 Ctrl-C，再上电正常启动。只读检查 v2.4 源码可知此行之后还有
+firehose_reset 与 USB 关闭流程；当前日志不足以定位其中具体阻塞调用。
+本机 PTY 转发的 4 项测试及普通子进程退出检查通过，不能直接归因为 PTY EOF 故障。
+Flange 仅有 3600 秒整体写入超时；KeyboardInterrupt 未被 _write 的 FlashError 分支捕获，
+因此记录仍为 writing。该问题保留为 9.14，不凭最后一行成功文本强行改写状态或认定完整退出。
+
+本轮提交只包含容器租约恢复、完整刷写的启动属性复原及相关测试/规格/文档。
+实验性早期槽位补丁已撤回，不纳入本轮提交；qbootctl 继续暂停。
+交付说明已移除过期固定摘要，并区分已确认恢复启动、尚未实现的成功标记及完整硬件验收。
+
+
+### 提交前当前实板 ADB 复验
+
+按用户要求先检查当前设备，不重启、不刷写、不上传 MCU、不更改网络。
+首次采集时 data 服务仍在导入容器、App CLI 尚未启动；等待自然初始化完成后再次采集，
+五份归档均首次导入成功，没有租约重试，data 与 App CLI 均 active，版本 API 返回 0.13.0。
+以服务运行所需的 root 权限只读核验五个本地镜像的 linux/arm64 平台和固定 config 摘要，全部通过。
+最初普通 ADB 用户的身份检查无法读取 containerd 内容库，返回未验证；
+此项是检查权限不足，不是镜像身份错误，原输出保留为 unprivileged 证据。
+
+- 已通过：Linux 7.0.0-flange-unoq+、ADB、Wi-Fi 地址/默认路由、DNS、HTTPS 200、NTP；
+  rootfs 及独立 userdata 挂载正常，userdata 约 18 GiB；zram 活跃。
+- 服务正常：Router、App CLI、容器加载、rmtfs、tqftpserv、qrtr-ns、LightDM、Avahi、Bluetooth、NetworkManager。
+  systemctl --failed 仅有 qbootctl。板上容器加载器、身份验证模块和 data 单元摘要与仓库一致。
+- 明确未就绪：CPUidle current_driver=none，无 cpu*/cpuidle 节点；日志有 PSCI CPU PM 域初始化 -517。
+- 音频待验证：声卡、播放/录音设备与 UCM 均可枚举，初始化单次服务成功结束；
+  日志有 SoundWire 端口数量和 ASoC 无 backend DAI 路由报错，未做实际播放录音，不能称音频通过。
+- Bluetooth 控制器已上电且未 rfkill 阻断，未验证配对；DRM/Venus 节点存在但未连接显示；
+  MCU 双向 RPC、USB Host 及其他外设完整流程仍待实测。板上未安装 lsusb，不据此判定 USB 驱动失败。
+
+证据位于 pre-pr/：runtime.json、runtime-extra.json、runtime-details.json、runtime-final.json、
+container-identities.json。完整系统仍不能表述为“除 qbootctl 外全部通过”。
+
+
+### 提交前最终门禁
+
+完整 pytest 首轮发现唯一失败：QRB2210 rootfs golden 遗漏了此前已实现的 zram lzo-rle
+配置命令。核对生产配方后仅补齐这一条快照，6 项 rootfs 序列复验通过；
+再次运行完整测试，2040 passed、15 skipped（222.63 秒）。
+OpenSpec 全部严格校验 80 passed、0 failed，git diff --check 通过。
+日志：pre-pr/pytest.log、golden-recheck.log、pytest-final.log、openspec.log。
+本次测试在宿主 Python 3.13 执行；GitHub CI 的 Linux/Python 3.12 结果仍以 PR 检查为准。
