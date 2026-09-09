@@ -1,2 +1,5 @@
 tools/macos/qdl/*/qdl filter=lfs diff=lfs merge=lfs -text
 tools/linux/qdl/*/qdl filter=lfs diff=lfs merge=lfs -text
+
+# UNO Q 补丁的上下文前缀允许空格加 Tab 和仅含上下文空格的行。
+components/board/arduino-uno-q/patches/bootloader/*.patch whitespace=-blank-at-eol,-space-before-tab
