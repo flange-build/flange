@@ -4,59 +4,118 @@ import hashlib
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 from container_identity import verified_image_id
 
-home = Path('/home/arduino')
-expected_environment = Path('/usr/share/flange/unoq/environment.lock.json').read_bytes()
-actual_environment = home / '.arduino15/flange-environment.lock.json'
-if not actual_environment.is_file() or actual_environment.read_bytes() != expected_environment:
-    raise SystemExit('UNO Q userdata 的 core/tools/libraries/model 锁与 rootfs 不匹配；请成套迁移环境，未覆盖用户数据')
-archives = home / '.cache/flange-containers'
-lock = json.loads((archives / 'containers.lock.json').read_text())
-expected = json.loads(Path('/usr/share/flange/unoq/containers.lock.json').read_text())
-if lock != expected:
-    raise SystemExit('UNO Q userdata 与 rootfs 的 Arduino 版本不匹配；请备份后成套迁移运行时，未自动覆盖用户数据')
-resolved = {}
-for item in lock['images']:
-    current = subprocess.run(['docker', 'image', 'inspect', item['tag']], text=True, capture_output=True)
-    if current.returncode == 0:
-        existing = json.loads(current.stdout)[0]
-        identity = verified_image_id(existing, item['config_digest'])
-        if identity:
-            resolved[item['tag']] = identity
-            continue
-    archive = archives / item['archive']
-    checksum = archive.with_suffix('.sha256').read_text().strip()
-    digest = hashlib.file_digest(archive.open('rb'), 'sha256').hexdigest()
-    if digest != checksum:
-        raise SystemExit(f'容器归档损坏：{archive}')
-    # 导入本地已锁资源，不访问浮动 registry tag。
-    subprocess.run(['docker', 'load', '--input', str(archive)], check=True)
-    inspect = json.loads(subprocess.check_output(['docker', 'image', 'inspect', item['tag']]))[0]
-    identity = verified_image_id(inspect, item['config_digest'])
-    if not identity:
-        raise SystemExit(f'容器身份不符（平台或 config 摘要）：{item["tag"]}')
-    resolved[item['tag']] = identity
-# docker-archive 不保证 RepoDigests；把真实消费的 Compose 指向已校验的本地 Image ID。
-assets = home / '.local/share/arduino-app-cli/assets/0.12.0'
-for path in assets.rglob('*.yaml'):
-    lines = path.read_text().splitlines(keepends=True)
-    for index, line in enumerate(lines):
-        match = re.match(r'^(\s*image:\s*)(.*?)(\r?\n)?$', line)
-        if not match:
-            continue
-        for item in lock['images']:
-            value = match[2].strip()
-            if value in (item['image'], item['config_digest']) or value.endswith(item['tag'].split('/')[-1]):
-                lines[index] = match[1] + resolved[item['tag']] + '\n'
-    path.write_text(''.join(lines))
 
-# 上游 Compose 使用这一标准模型目录；实际内容保留在 userdata。
-base = home / '.local/share/arduino-app-cli'
-base.mkdir(parents=True, exist_ok=True)
-subprocess.run(['chown', '-R', 'arduino:arduino', str(base)], check=True)
+def wait_for_time_sync(
+    timeout: float = 30,
+    marker: Path = Path('/run/systemd/timesync/synchronized'),
+) -> None:
+    """首次导入前给 NTP 校时留出时间，离线启动不依赖网络可用。"""
+    deadline = time.monotonic() + timeout
+    if marker.exists():
+        return
+    print(f'容器导入前等待首次校时，最多 {timeout:g} 秒；离线时继续导入', flush=True)
+    while not marker.exists():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print('尚未完成校时，继续导入离线容器', flush=True)
+            return
+        time.sleep(min(1, remaining))
 
-cloud = home / '.local/share/arduino-cloud-connector'
-cloud.mkdir(parents=True, exist_ok=True)
-subprocess.run(['chown', 'arduino:arduino', str(cloud)], check=True)
+
+def load_archive(archive: Path) -> None:
+    """仅对已丢失的 containerd lease（租约）重试一次，保留所有错误输出。"""
+    command = ['docker', 'load', '--input', str(archive)]
+    for attempt in range(2):
+        print(f'导入离线容器：{archive.name}（尝试 {attempt + 1}/2）', flush=True)
+        started = time.time()
+        monotonic_started = time.monotonic()
+        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        print(result.stdout, end='', flush=True)
+        if result.returncode == 0:
+            return
+        clock_step = (time.time() - started) - (time.monotonic() - monotonic_started)
+        if abs(clock_step) >= 1:
+            print(f'本次导入期间系统时钟跳变约 {clock_step:.1f} 秒', flush=True)
+        if attempt == 0 and 'lease does not exist: not found' in result.stdout:
+            # 首次校时可能使 containerd 的限时租约过期；重新导入会创建新租约。
+            # 不重启 Docker、不清理镜像，不把其他导入错误当成瞬时错误。
+            print('containerd 导入租约已丢失，使用同一已校验归档重试一次', flush=True)
+            continue
+        result.check_returncode()
+
+
+def main(
+    home: Path = Path('/home/arduino'),
+    resources: Path = Path('/usr/share/flange/unoq'),
+) -> None:
+    expected_environment = (resources / 'environment.lock.json').read_bytes()
+    actual_environment = home / '.arduino15/flange-environment.lock.json'
+    if not actual_environment.is_file() or actual_environment.read_bytes() != expected_environment:
+        raise SystemExit(
+            'UNO Q userdata 的 core/tools/libraries/model 锁与 rootfs 不匹配；'
+            '请成套迁移环境，未覆盖用户数据')
+    archives = home / '.cache/flange-containers'
+    lock = json.loads((archives / 'containers.lock.json').read_text())
+    expected = json.loads((resources / 'containers.lock.json').read_text())
+    if lock != expected:
+        raise SystemExit(
+            'UNO Q userdata 与 rootfs 的 Arduino 版本不匹配；'
+            '请备份后成套迁移运行时，未自动覆盖用户数据')
+    resolved = {}
+    waited_for_sync = False
+    for item in lock['images']:
+        current = subprocess.run(['docker', 'image', 'inspect', item['tag']],
+                                 text=True, capture_output=True)
+        if current.returncode == 0:
+            existing = json.loads(current.stdout)[0]
+            identity = verified_image_id(existing, item['config_digest'])
+            if identity:
+                resolved[item['tag']] = identity
+                continue
+        archive = archives / item['archive']
+        checksum = archive.with_suffix('.sha256').read_text().strip()
+        with archive.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if digest != checksum:
+            raise SystemExit(f'容器归档损坏：{archive}')
+        if not waited_for_sync:
+            wait_for_time_sync()
+            waited_for_sync = True
+        # 导入本地已锁资源，不访问浮动 registry tag。
+        load_archive(archive)
+        inspect = json.loads(subprocess.check_output(['docker', 'image', 'inspect', item['tag']]))[0]
+        identity = verified_image_id(inspect, item['config_digest'])
+        if not identity:
+            raise SystemExit(f'容器身份不符（平台或 config 摘要）：{item["tag"]}')
+        resolved[item['tag']] = identity
+    # docker-archive 不保证 RepoDigests；Compose 只消费已校验的本地 Image ID。
+    assets = home / '.local/share/arduino-app-cli/assets/0.12.0'
+    for path in assets.rglob('*.yaml'):
+        lines = path.read_text().splitlines(keepends=True)
+        for index, line in enumerate(lines):
+            match = re.match(r'^(\s*image:\s*)(.*?)(\r?\n)?$', line)
+            if not match:
+                continue
+            for item in lock['images']:
+                value = match[2].strip()
+                if (value in (item['image'], item['config_digest'])
+                        or value.endswith(item['tag'].split('/')[-1])):
+                    lines[index] = match[1] + resolved[item['tag']] + '\n'
+        path.write_text(''.join(lines))
+
+    # 上游 Compose 使用这一标准模型目录；实际内容保留在 userdata。
+    base = home / '.local/share/arduino-app-cli'
+    base.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['chown', '-R', 'arduino:arduino', str(base)], check=True)
+
+    cloud = home / '.local/share/arduino-cloud-connector'
+    cloud.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['chown', 'arduino:arduino', str(cloud)], check=True)
+
+
+if __name__ == '__main__':
+    main()
