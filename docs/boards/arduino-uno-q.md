@@ -9,6 +9,12 @@ Ubuntu 系统及完整 Arduino 工具链、Router/Bridge、App Lab 和 Bricks。
 
 公共构建器改动、可复用新增能力及板级实现的边界，见[适配影响清单](arduino-uno-q-integration.md)。
 
+当前已知限制：qbootctl 启动成功确认尚未完成，反复重启仍可能耗尽 A/B 尝试次数；
+QDL 在写完后的复位或 USB 收尾阶段曾出现等待不退出，具体阻塞点待定位。
+当前 CPUidle 驱动也未注册；音频声卡/UCM 可枚举但存在启动路由报错，实际音频未验证。
+这些问题和未完成的硬件验收需在合入评审中明确保留，不能声明完整生产可用。
+
+
 ## 目标与构建
 
 2GB/16GB 与 4GB/32GB 共用一个板级配置，不需要选择不同内核或 rootfs。
@@ -76,7 +82,9 @@ Linux 启动顺序为 Qualcomm 前级固件 → ABL → U-Boot → EFI systemd-b
 flange flash --yes
 ```
 
-全量写入会替换 rootfs、userdata 和列入发布包的启动固件。官方 XML 中空 filename 的校准及持久化区域被保留。
+全量写入会替换 rootfs、userdata 和列入发布包的启动固件，并从官方 GPT 模板恢复成对 A/B 分区的
+启动属性，清除旧不可启动/重试耗尽状态；不改其他属性、实板 GUID 或布局，不代写启动成功。
+官方 XML 中空 filename 的校准及持久化区域被保留。
 `--yes` 是现有 CLI 对受保护固件写入的明确确认。完成后移除 JCTL 跳线并重新上电。
 
 单刷使用 `flange flash --list` 中的物理分区名，例如：
