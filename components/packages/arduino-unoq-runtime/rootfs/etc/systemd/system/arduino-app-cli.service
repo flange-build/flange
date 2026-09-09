@@ -7,7 +7,7 @@ Requires=flange-unoq-data.service
 User=arduino
 Group=arduino
 Environment=ARDUINO_APP_CLI__REQUIRED_RUNTIMES=arduino-router,arduino-cloud-connector
-Environment=ARDUINO_APP_CLI__PLATFORM_VERSION_CONSTRAINT=0.90.0
+Environment="ARDUINO_APP_CLI__PLATFORM_VERSION_CONSTRAINT==0.90.0"
 Environment=ARDUINO_APP_CLI__DATA_DIR=/home/arduino/.local/share/arduino-app-cli
 ExecStart=/usr/bin/arduino-app-cli daemon --port 8800 --log-level error
 Restart=always

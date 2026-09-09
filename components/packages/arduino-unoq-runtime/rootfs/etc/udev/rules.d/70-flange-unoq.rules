@@ -1,0 +1,4 @@
+# UNO Q 开发用户的设备权限；不开放其它用户。
+SUBSYSTEM=="gpio", KERNEL=="gpiochip*", GROUP="gpiod", MODE="0660"
+SUBSYSTEM=="tty", KERNEL=="ttyHS1", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="leds", ACTION=="add", RUN+="/bin/chgrp -R video /sys%p", RUN+="/bin/chmod -R g+w /sys%p"

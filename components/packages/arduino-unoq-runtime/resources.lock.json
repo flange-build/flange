@@ -741,6 +741,33 @@
       "kind": "library-zip",
       "license_note": "\u4fdd\u7559\u5f52\u6863\u4e2d\u7684\u4e0a\u6e38\u8bb8\u53ef\u8bc1\uff0c\u6765\u6e90 Arduino library index",
       "destination": "home/arduino/Arduino/libraries/ArxContainer"
+    },
+    {
+      "name": "overlay:etc/avahi/services/arduino.service",
+      "version": "e7713f1797945296e4ab77dc7040b5d2c32aa047",
+      "kind": "file",
+      "destination": "etc/avahi/services/arduino.service",
+      "url": "https://raw.githubusercontent.com/arduino/arduino-deb-images/e7713f1797945296e4ab77dc7040b5d2c32aa047/debos-recipes/overlays/arduino-unoq-releases/etc/avahi/services/arduino.service",
+      "sha256": "f1d0f4c91d68f482424e1d9dc33f5ba6a92a09e100a96879cffad032857d4ad4",
+      "executable": false
+    },
+    {
+      "name": "venus-firmware",
+      "version": "20260221",
+      "kind": "file",
+      "destination": "usr/lib/firmware/updates/qcom/venus-6.0/venus.mbn",
+      "url": "https://gitlab.com/kernel-firmware/linux-firmware/-/raw/20260221/qcom/venus-6.0/venus.mbn",
+      "sha256": "602d18992dbc11c7141472d4c68778d49277491ca7452ebf6115be0e6119572a",
+      "executable": false
+    },
+    {
+      "name": "venus-license",
+      "version": "20260221",
+      "kind": "file",
+      "destination": "usr/share/doc/flange-arduino-unoq-runtime/venus/LICENSE.qcom",
+      "url": "https://gitlab.com/kernel-firmware/linux-firmware/-/raw/20260221/LICENSE.qcom",
+      "sha256": "be904cd28cb292b80cdb6cf412ab0d9159d431671e987ad433c1f62e0988a9bc",
+      "executable": false
     }
   ]
 }

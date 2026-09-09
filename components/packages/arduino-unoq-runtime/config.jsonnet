@@ -3,14 +3,14 @@
   rootfs+: {
     package_sets+: {
       unoq: [
-        'systemd', 'systemd-sysv', 'systemd-boot-efi', 'udev', 'initramfs-tools', 'kmod',
+        'systemd', 'systemd-sysv', 'systemd-timesyncd', 'systemd-boot-efi', 'udev', 'initramfs-tools', 'kmod',
         'python3', 'binutils', 'gpiod', 'network-manager', 'wpasupplicant', 'wireless-regdb',
-        'bluez', 'rmtfs', 'tqftpserv', 'alsa-ucm-conf', 'alsa-utils',
+        'bluez', 'qrtr-tools', 'rmtfs', 'tqftpserv', 'iw', 'rfkill', 'alsa-ucm-conf', 'alsa-utils',
         'pipewire', 'pipewire-pulse', 'wireplumber', 'libspa-0.2-bluetooth',
         'docker.io', 'docker-compose-v2', 'avahi-daemon', 'libnss-mdns', 'openssh-server',
         'libwebkit2gtk-4.1-0', 'fonts-noto-color-emoji', 'inotify-tools', 'socat',
         'device-tree-compiler', 'ca-certificates', 'curl', 'git', 'sudo', 'zram-tools',
-        'xfce4', 'lightdm', 'xserver-xorg', 'xserver-xorg-video-fbdev',
+        'xfce4', 'lightdm', 'lightdm-gtk-greeter', 'xserver-xorg', 'xserver-xorg-video-fbdev',
         'mesa-utils', 'mesa-vulkan-drivers', 'libgl1-mesa-dri', 'v4l-utils',
         'gstreamer1.0-libcamera', 'libcamera-tools', 'libusb-1.0-0', 'libgpiod2t64',
         'android-libbase', 'android-libboringssl', 'android-libcutils', 'android-liblog',
