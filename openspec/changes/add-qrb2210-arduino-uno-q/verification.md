@@ -185,3 +185,201 @@ GNU tar 1.35 稀疏流导出：128 MiB 探针实际只占 32768 字节且摘要�
 内核临时源码、对象、五个验证容器及独立卷已清理；保留最终产物、rootfs 容器和证据，位置见 `retained-artifacts.md`。
 
 OpenSpec 30/37 项完成，剩余 8.1–8.7 为实板验收与归档。严格规格校验及 diff 空白检查通过。
+
+## Docker/APFS 稀疏复制修复
+
+2026-09-08 用户标准 debug 构建完成前六个组件，但 image 失败。实际容器中 GNU cp 9.4 已存在；
+复制 rootfs 复现 `error deallocating ... Invalid argument`，添加 `--reflink=never` 仍复现。
+原实现把所有非零退出码误报为缺少 GNU cp。
+
+UNO Q 组包改为按零块 seek/truncate，保留空洞及真实 I/O 异常。38 项刷写回归通过，覆盖
+无外部 cp、数据/尾部空洞/权限保留和磁盘满诊断。随后在同一标准 amd64 Docker/APFS 路径中，
+使用用户实际 debug 的 U-Boot、EFI、rootfs、userdata 和固件完整执行 `build_bundle`、`validate_bundle`，
+成功退出。rootfs 逻辑 9663676416 字节、实占 2327314432 字节；userdata 逻辑 3221225472 字节、
+实占 2220359680 字节。清单 SHA256：`1d6bd9f72efe2838fdbbd55d7b42b10a0192c931965523b469e11af79b7aca07`。
+报告保存在 `.build/verification/unoq-sparse-copy-fix/result.json`；验证临时副本已清理。
+此检查复用了前六个组件的产物，没有重新执行整个 `flange build`，也未写入组件缓存成功标记。
+
+## 2026-09-08：仓库内置 QDL 宿主工具
+
+按用户最终选择保留 QDL，不实施 edl-ng 适配。入库官方 `qdl-packing v2.4-26`
+四个发行文件，覆盖 macOS/Linux 的 ARM64 和 x86_64，总二进制约 14 MiB。
+四个压缩包均与 GitHub Release API 提供的 SHA256 比对通过；每个架构目录的
+`manifest.json` 记录来源、压缩包摘要及入库文件摘要，保留随附 LICENSE 和上游 README。
+打包配方固定在 `81e410a3f6b86b86531e713acf87188ee9a583bf`，二进制未修改。
+
+验证结果：
+- macOS ARM64 原生与 x86_64（当前 Mac 的 Rosetta 环境）均成功运行 `--version`。
+- Linux x86_64 在已有 `flange-build:latest`、ARM64 在已有 `ubuntu:24.04` 容器运行通过；
+  两个容器使用 `--network none` 且未透传 USB，`ldd` 未发现缺失运行库。
+- 四者均输出上游 `qdl version v2.4-dirty`；macOS ARM64 的 `--help` 确认支持原有
+  `--serial`、`--storage` 和 read XML 参数。
+- `tests/test_unoq_tools.py` 与 `tests/test_unoq_flash.py`：45 项通过。
+- 仅增加宿主架构选择，无需重建 Docker、kernel、rootfs 或已有镜像发布包。
+
+没有连接或刷写设备，实板验收仍保持未完成。以上运行测试不代表 UNO Q USB 刷写已验收。
+
+## 2026-09-08：Finder 元数据导致发布包预检失败
+
+实际 debug 发布包比 manifest 多出根目录 `.DS_Store`，无缺失文件。
+文件集合校验仅豁免清单外的普通 `.DS_Store`；清单内文件照常校验，其他额外文件、
+普通及悬空符号链接均不享受豁免。错误消息列出缺失与额外路径。
+
+实际 debug 的 `UnoQFlashStrategy.preflight` 已通过，包含发布包全部文件摘要、
+XML/GPT 与 flash-config 计划比对；未删除元数据、改写镜像或 manifest，未访问 USB。
+工具选择与刷写测试合计 49 项通过，严格 OpenSpec 校验通过。
+
+## 2026-09-08：macOS USB 枚举修复
+
+实际 `ioreg -p IOUSB -a` 返回字典根节点，原遍历函数误将字典键当作节点，
+触发 `AttributeError`。同时该命令未包含 `-l`，实际结果缺少 idVendor/idProduct。
+改为 `ioreg -p IOUSB -l -a`，递归兼容字典与列表，只遍历 IORegistryEntryChildren。
+
+51 项工具与刷写回归通过；新增用例覆盖两种根节点、嵌套设备、非设备节点和不同 VID/PID。
+在当前 Mac 运行修复后的 detect_device，已识别一个具有有效串号的 EDL 候选设备。
+此次验证仅调用 ioreg，不启动 QDL、不读写设备存储；GPT 身份验证和实板刷写仍待执行。
+
+## 2026-09-09：实时刷写输出
+
+用户报告一次全量刷写成功，用时 292.2 秒；这是用户提供的写入完成结果，
+不等同于读回、冷启动和运行时功能验收。原 capture_output 隐藏了整个刷写过程。
+现使用 PTY 转发 QDL 输出，交互终端设置有效宽度启用原生进度，重定向设置零宽度仅保留普通消息。
+stdout/stderr 合流实时落盘；超时、非零退出保留日志，异常路径回收子进程，不自动重试。
+镜像复核、GPT 读取、实际写入分别显示阶段提示。
+
+模拟子进程握手验证：子进程等待终端已收到进度后才退出，同时断言磁盘日志已包含进度；
+覆盖交互/重定向、失败退出码及超时后日志保留和进程回收。本轮未启动实际刷写。
+
+## 2026-09-09：首次 ADB 实板核验，完整适配未通过
+
+通过指定 ADB serial 连接并确认 model 为 Arduino UnoQ，用户为 arduino，
+系统 Ubuntu 24.04.4，内核与 modules 目录均为 `7.0.0-flange-unoq+`。
+检查限于只读状态和无线扫描，未覆盖 MCU sketch、修改 GPT 或重启设备。
+板端时钟显示 2026-07-28，以下记录日期采用宿主时间。
+
+已观察到：系统启动及 ADB 登录成功；userdata 挂载于 /home/arduino 并扩至现有分区；
+Arduino Zephyr core 0.90.0 可列出，Router 启动并打开 ttyHS1；Bluetooth hci0 固件初始化成功。
+这些证据不等同 MCU 双向 RPC、蓝牙连接、重复冷启动及完整应用闭环验收。
+
+未通过及阻塞项：
+- Wi-Fi：ath10k_snoc 已加载并绑定 c800000.wifi，但 /sys/class/ieee80211 为空，
+  只有 lo/docker0 网卡，nmcli 无无线设备或扫描结果。modem remoteproc 为 offline，ADSP 为 running。
+  rmtfs 与 tqftpserv 都依赖不存在的 qrtr-ns.service，均 inactive；这是确定的依赖缺陷，
+  修复后仍须重新验证 Wi-Fi 注册、扫描、连接，不能推定为唯一原因。
+  wlanmdsp.mbn、modem.mbn 等存在于 /usr/lib/firmware/updates/qcom/qcm2290。
+- Arduino 容器：flange-unoq-data 报“容器架构错误”，实际镜像 Architecture 为 arm64，
+  但 Image ID 为 sha256:7254a587d6f9f090ceb50f344ede4ceac9e12f4ec83eb25461efde95bdc4db17，
+  与锁定 config_digest sha256:22b878f2712b7b2fe0fddaa677393886045746819e127615cafca4c63b306015
+  不同；需要核对归档转换流程，不能通过放宽校验解决。App CLI 因依赖失败未启动。
+- qbootctl：/chosen 和 cmdline 均没有可信槽位，成功标记服务正确拒绝写入，槽位传递尚未打通。
+- Avahi：arduino.service 发布文件缺失，串号配置失败。
+- zramswap：配置 lz4，但当前 zram 仅提供 lzo-rle/lzo。
+- lightdm：服务失败，桌面尚未通过验收；内核另报告缺少 qcom/venus-6.0/venus.mbn。
+
+原始补充诊断：`.build/verification/arduino-uno-q/20260909/diagnostics.txt`。
+8.1–8.7 仍保持未完成，不归档、不宣称完整适配完成。
+
+## 2026-09-09：首轮运行时修复及实板复验
+
+用户明确授权 arduino 用户密码和测试无线网络；设备操作固定 ADB serial，未执行 GPT 写入、
+MCU 上传或重启。用户密码及 Wi-Fi 密码不写入仓库。设备处于本轮热修复状态，尚未从新镜像冷启动。
+
+### 已修复且实板通过
+
+- 补齐 Ubuntu qrtr-tools 1.0-2ubuntu3；包 SHA256 与设备 APT 索引一致。
+  qrtr-ns/rmtfs/tqftpserv 启动后 modem 与 Wi-Fi 初始化，wlan0 注册成功，2.4/5 GHz 均可扫描。
+  连接用户指定网络后 DHCP 获得 192.168.10.130，默认路由、DNS 和 HTTPS（Ubuntu Release HTTP 200）通过。
+  无线与蓝牙均没有软硬阻断；蓝牙连接仍未测试。
+- Docker 29.1.3 使用 containerd 存储，inspect.Id 是 manifest 身份，不能等同 config digest。
+  新 helper 从本地 ctr 内容库读取 manifest，自行校验 manifest SHA256 与锁定 config_digest，
+  仍要求 linux/arm64；经典 Docker ID 路径继续支持。Compose 使用校验后的真实本地 ID。
+  五个离线镜像均成功导入，flange-unoq-data active；未修改源容器锁或放宽摘要检查。
+- App CLI 平台版本约束改为 `=0.90.0`（Environment 的赋值符加约束等号表现为双等号），
+  0.13.0 daemon 稳定运行；/v1/version 返回版本，/v1/apps 返回示例列表。
+  既有 NRestarts=52 为修复前失败计数，修复后观察未继续增长。
+- 从已固定 Arduino overlay 补回 Avahi arduino.service，串号服务 active。
+- 显式安装 lightdm-gtk-greeter 并选择 Xfce，LightDM active；未宣称实际外接显示画面已验收。
+- zram-tools 使用内核支持的 lzo-rle；zramswap active，/dev/zram0 已作为交换区启用。
+- 补齐 systemd-timesyncd；先校准旧时钟，随后 NTPSynchronized=yes，恢复正常 TLS 校验，未使用 -k。
+- 旧锁定 Debian firmware-qcom-soc 中 Venus 为 6.0.52，低于当前内核要求 6.0.55，
+  实测被拒绝。改为 Linux Firmware 固定 20260221 标签独立资源，SHA256
+  602d18992dbc11c7141472d4c68778d49277491ca7452ebf6115be0e6119572a，随附同标签 LICENSE.qcom。
+  重新加载后出现 Qualcomm Venus decoder /dev/video0、encoder /dev/video1；实际编解码未验收。
+
+构建配方同步增加依赖、登录界面配置、Avahi 与 Venus 资源锁、容器身份 helper、App CLI 约束，
+并扩充 verify-runtime 门禁。zram 配置在 rootfs 定制中修改，不由自有 DEB 占用发行版已拥有的文件。
+91 项 UNO Q 平台、运行时、USB、刷写与实时输出测试通过；包括错误 manifest/config/platform 拒绝。
+
+### 仍未完成
+
+systemctl --failed 仅剩 qbootctl.service；实际 /chosen 仍无可信 arduino,boot-slot。
+尚未修改启动固件或猜测 A/B 槽位。后续需定位并修复槽位跨 U-Boot/EFI 的传递，再做冷启动与成功标记验收。
+本轮未完整重建 rootfs/boot/image，现有发布包不包含这些热修复。MCU RPC、App Lab 创建运行闭环、
+真实编解码、显示音频及重复冷启动仍保持待验收，不归档变更。
+
+参考：Docker 官方 containerd 存储说明 https://docs.docker.com/engine/storage/containerd/ ，
+实际身份行为通过设备 ctr content 与 Docker inspect 交叉验证。
+
+
+## 2026-09-09 后续适配验证
+
+- U-Boot 槽位捕获移到 EVT_OF_LIVE_BUILT，在 EFI 修改 DTB 之前复制并校验前级 bootargs。
+  后续 ft_board_setup 仅传递已捕获值，并清除外部 DTB 自带的槽位声明。
+  这是针对 live tree 属性时序的修复假设，未用新固件重启，不能宣称 qbootctl 已恢复。
+- Docker 中 U-Boot 编译及 Android v0 容器校验通过；提取实际 C 捕获函数进行 12 个
+  分支检查，覆盖 A/B、重复键、非法值、缺失属性、未终止字符串及其他板型。
+- App CLI API 创建 flange-validation-20260909，指定 skip-sketch=true；完成
+  stopped → running → stopped → running，容器两次输出 Hello world!。
+  SSE 以 SERVER_CLOSED 结束，结果以 API 状态及容器日志交叉确认。
+  容器 socket 调用 $/version 收到 MessagePack 响应 [1, 1, null, "0.10.0"]。
+  该项只证明 Linux 容器与 Router 通路，不代表 MCU RPC 或桌面 App Lab 验收完成。
+- 编译专用 bridge_validation sketch，通过固定 Zephyr core 0.90.0 及 RouterBridge 0.4.3；
+  程序 72016 字节、全局变量 25698 字节，提供 flange.echo 回显和 flange.tick 递增通知。
+  尚未上传，不修改既有 MCU sketch 或 bootloader。
+- ALSA 枚举 Arduino-Imola-HPH-LOUT，DRM 提供 renderD128，DP-1 为 disconnected。
+  Venus 枚举 H.264/HEVC 编码及 H.264/VP9/HEVC 解码格式；均不替代实际音视频测试。
+- 修复 packages/.gitignore 的 *.d 规则对 LightDM 配置目录的误忽略。
+- 91 项相关 Python 回归通过。启动完整重建；因磁盘可用空间只有约 1.5 GiB，
+  清理三次旧构建的 rootfs/run-* 临时输出后恢复约 14 GiB，保留已发布镜像与验收记录。
+
+本轮证据位于 .build/verification/arduino-uno-q/20260909/：boot-slot-build.log、
+slot-parser-test.c/log、bridge-compile.log、bridge_validation/、peripheral-inventory.txt、full-rebuild.log。
+
+SQLStore Brick 已实测创建 SQLite 表、写入 value=42、读回；通过 App CLI 停止并再次启动 App 后，重新打开数据库仍读回同一记录，证明该 Brick 的本地数据持久化路径可用。测试数据仅位于专用验证 App 内。
+
+运行时安装包已完成重建（11 分 26 秒），完整构建进入 rootfs 的基础包安装阶段。
+成套镜像尚未完成，9.5 不勾选；新启动固件尚未部署，9.4/9.6 不勾选。
+可重复执行的 MCU 测试位于 tests/hardware/arduino_uno_q/，尚未授权上传。
+官方 flash_sketch.cfg 会在基础 Zephyr 固件不匹配时重写 filename0，后续上传必须额外核验写入范围。
+
+
+## 2026-09-09 最终实现与烧入包交付
+
+用户要求先完成适配实现，将烧入和最终实板验证留到最后交付。按此顺序，本轮不再对设备执行写入、
+MCU 上传或重启；OpenSpec 的硬件验收条目继续待完成，不归档。
+
+### 完成项及证据
+
+| 交付项 | 当前证据 |
+| --- | --- |
+| U-Boot 槽位修复 | 优先读取 ABL 实际 DTB；初始 live tree 为无外部 DTB 时的来源；合法值提前复制，EFI 阶段传递。Docker 编译、Android v0 独立解包通过，实际 C 函数 17 项边界用例通过 |
+| Ubuntu 与独立 userdata | 标准 Docker 成套重建完成；直接读取最终 ext4，逐字节比对热修复文件，固件摘要、ABI/initramfs 报告、core 0.90.0 检查通过；两份 ext4 的 e2fsck -fn 通过 |
+| EFI 启动输入 | 从最终 FAT 镜像提取 Image、DTB、initrd、BOOTAA64，与对应组件实际文件逐一比对一致；启动项及 DTB 身份通过 |
+| QDL 交付包 | 最终构建 18 分 18 秒，34 分区；调用与 flange flash 相同的纯本地 preflight，通过文件集合、摘要、GPT/XML、分区映射及 flash-config 绑定校验 |
+| 组件一致性 | 组件 Artifact.validate 通过，再用原始文件 SHA256 对比 QDL manifest；注意组件 sha256 是含类型/权限的 hash_path，不能直接当作文件原始 SHA256 |
+| 离线回归 | 91 项相关 Python 测试通过、OpenSpec 严格验证通过、git diff --check 通过 |
+| 用户验收入口 | docs/boards/arduino-uno-q-handoff.md；tests/hardware/arduino_uno_q/collect_runtime.py、bridge_validation/、verify_bridge.py；脚本语法和帮助入口检查通过 |
+
+最终包 manifest 原始 SHA256：`d558f55bf37af6619fe6c58c3dda15193f7c2c2f64a92b3779ba95a75317013f`。
+
+- `files/uboot-boot.img`：577536 字节；SHA256 `4011e09a8d691d0bd32d0d839520d8905fdb8c4e4b472ba7aa9650670f9a2ff8`。
+- `files/efi.img`：536870912 字节；SHA256 `c5eaf86bf44deba1f2d7680381526b6d67e1b7ef5ecc66b6ddfb39e5485d1499`。
+- `files/rootfs.img`：9663676416 字节；SHA256 `4e32c31b08821af76a9d01e5a95589207e4b2e42dae246138d228d0074f119cc`。
+- `files/userdata.img`：3221225472 字节；SHA256 `dccc822148da958c05d97e0a83cfb2a89bb0fa9aa764b36b5fb558774e4a451d`。
+
+证据位于 .build/verification/arduino-uno-q/20260909/：
+final-image-build.log、boot-slot-final-build.log、slot-parser-test.log、final-rootfs-report.json、
+final-esp-report.json、final-bundle-check.log、final-delivery.json、final-flash-list.log、final-regression.log。
+
+未把本地交付通过等同于硬件完成：最终镜像的 qbootctl 成功标记、断电重启与网络恢复、MCU 双向 RPC、
+App Lab 图形流程和实际 Bluetooth/USB Host/显示/音频/摄像头仍由烧入后的验收确认。
