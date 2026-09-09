@@ -149,6 +149,31 @@ def test_missing_required_image_fails(bundle, filename):
         unoq.validate_bundle(bundle)
 
 
+def test_finder_metadata_does_not_invalidate_bundle(bundle):
+    for directory in (bundle, bundle / "files"):
+        (directory / ".DS_Store").write_bytes(b"Finder metadata")
+    unoq.validate_bundle(bundle)
+
+
+def test_unexpected_file_reports_exact_difference(bundle):
+    (bundle / "unexpected.img").write_bytes(b"unexpected")
+    (bundle / "files/rootfs.img").unlink()
+    with pytest.raises(FlashError) as failure:
+        unoq.validate_bundle(bundle)
+    assert "unexpected.img" in str(failure.value)
+    assert "files/rootfs.img" in str(failure.value)
+
+
+@pytest.mark.parametrize("exists", [True, False])
+def test_finder_metadata_symlink_is_not_exempt(bundle, tmp_path, exists):
+    outside = tmp_path / "outside-metadata"
+    if exists:
+        outside.write_bytes(b"outside")
+    (bundle / ".DS_Store").symlink_to(outside)
+    with pytest.raises(FlashError, match="额外=.*DS_Store"):
+        unoq.validate_bundle(bundle)
+
+
 def test_tampered_image_and_manifest_schema_fail(bundle):
     (bundle / "files/rootfs.img").write_bytes(b"tampered")
     with pytest.raises(FlashError, match="摘要或长度"):
@@ -237,7 +262,12 @@ def test_gpt_invalid_ranges_fail_after_valid_crcs(first, last, error):
         unoq.parse_gpt(bytes(data))
 
 
-def test_bundle_copy_keeps_sparse_rootfs(bundle):
+def test_bundle_copy_keeps_sparse_rootfs(bundle, monkeypatch):
+    # GNU cp 即使存在也可能不支持共享文件系统；组包不能依赖该外部调用。
+    def unexpected_command(*args, **kwargs):
+        pytest.fail("稀疏镜像复制不应调用外部 cp")
+
+    monkeypatch.setattr(unoq.subprocess, "run", unexpected_command)
     root = bundle.parent.parent.parent
     image = root / "rootfs.img"
     with image.open("ab") as stream:
@@ -247,6 +277,33 @@ def test_bundle_copy_keeps_sparse_rootfs(bundle):
     copied = result / "files/rootfs.img"
     assert copied.stat().st_size == 64 * 1024 ** 2
     assert copied.stat().st_blocks * 512 < copied.stat().st_size // 4
+
+
+def test_sparse_copy_preserves_data_tail_and_permissions(tmp_path):
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    data = b"header" + bytes(3 * 1024 ** 2) + b"middle" + bytes(2 * 1024 ** 2 + 17)
+    source.write_bytes(data)
+    source.chmod(0o640)
+    unoq.copy_sparse_image(source, destination)
+    assert destination.read_bytes() == data
+    assert destination.stat().st_mode & 0o777 == 0o640
+
+
+def test_sparse_copy_reports_original_io_failure(tmp_path, monkeypatch):
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    source.write_bytes(b"payload")
+    original_open = Path.open
+
+    def no_space(path, *args, **kwargs):
+        if path == destination:
+            raise OSError(28, "No space left on device")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", no_space)
+    with pytest.raises(FlashError, match="No space left on device") as failure:
+        unoq.copy_sparse_image(source, destination)
+    assert str(destination) in str(failure.value)
+    assert isinstance(failure.value.__cause__, OSError)
 
 
 @pytest.mark.parametrize("sectors", [30_535_680, 61_071_360])
@@ -361,10 +418,10 @@ def test_qdl_argv_binds_serial_and_does_not_allow_missing(monkeypatch, bundle, t
     strategy.bundle = bundle
     strategy.device = DeviceInfo("qualcommqrb2210", "edl", "测试", "ABCDEF12")
     calls = []
-    def run(argv, **kwargs):
-        calls.append((argv, kwargs))
-        return subprocess.CompletedProcess(argv, 0, "测试日志", "")
-    monkeypatch.setattr(unoq.subprocess, "run", run)
+    def run(argv, directory, log, timeout):
+        calls.append((argv, {"timeout": timeout, "log": log}))
+        return 0
+    monkeypatch.setattr(unoq, "stream_qdl", run)
     xml = tmp_path / "read.xml"
     strategy._run(Path("/usr/bin/qdl"), tmp_path, xml)
     assert calls[0][0] == ["/usr/bin/qdl", "--storage", "emmc", "--serial", "ABCDEF12",

@@ -7,6 +7,8 @@
 import copy
 import hashlib
 import json
+import os
+import platform
 import plistlib
 import re
 import shutil
@@ -24,6 +26,7 @@ from builder.flash.model import (
 )
 from builder.flash.plan import UnoQFlashPlan
 from builder.flash.strategy import FlashStrategy
+from builder.flash.qdl_output import stream_qdl
 
 SECTOR = 512
 BUNDLE_PATH = "image/flash-bundle"
@@ -317,6 +320,24 @@ def write_xml(path: Path, nodes: list[dict], *, kind="program"):
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
 
+def copy_sparse_image(source: Path, destination: Path) -> None:
+    """按零块保留空洞，不依赖共享文件系统不一定支持的 hole punching。"""
+    block_size = 1024 * 1024
+    zeros = bytes(block_size)
+    try:
+        with source.open("rb") as reader, destination.open("wb") as writer:
+            while block := reader.read(block_size):
+                if block == zeros[:len(block)]:
+                    writer.seek(len(block), os.SEEK_CUR)
+                else:
+                    writer.write(block)
+            # 最后一段也可能是空洞，必须显式保留逻辑文件大小。
+            writer.truncate()
+        shutil.copystat(source, destination)
+    except OSError as error:
+        raise FlashError(f"复制 UNO Q 镜像失败：{source} -> {destination}：{error}") from error
+
+
 def build_bundle(firmware: Path, images: dict[str, Path], output: Path) -> Path:
     """将经 source 摘要校验的救援目录和构建镜像组装为独立发布目录。"""
     primary = parse_gpt(safe_file(firmware, "gpt_main0.bin").read_bytes(), template=True)
@@ -344,13 +365,9 @@ def build_bundle(firmware: Path, images: dict[str, Path], output: Path) -> Path:
         image = images[label]
         if image.is_symlink() or not image.is_file() or image.stat().st_size == 0:
             raise FlashError(f"缺少有效的 {label} 镜像: {image}")
-        # 镜像可能是数 GiB 的稀疏文件；GNU cp 保留空洞，避免发布副本占满磁盘。
+        # GNU cp --sparse=always 在部分 Docker/APFS 共享目录的空洞回收操作会失败。
         destination = output / "files" / name
-        copy_tool = shutil.which("gcp") or "cp"
-        result = subprocess.run([copy_tool, "--sparse=always", str(image), str(destination)],
-                                capture_output=True, text=True)
-        if result.returncode:
-            raise FlashError("UNO Q 镜像组装需要 Docker 内的 GNU cp（保留稀疏文件）")
+        copy_sparse_image(image, destination)
     for node in nodes:
         label, name = node["label"], node["filename"]
         if label in {"PrimaryGPT", "BackupGPT"}:
@@ -392,9 +409,18 @@ def validate_bundle(bundle: Path) -> tuple[dict, Gpt, list[dict]]:
     files = manifest.get("files")
     if not isinstance(files, dict) or not files:
         raise FlashError("QDL manifest 缺少文件清单")
-    actual = {p.relative_to(bundle).as_posix() for p in bundle.rglob("*") if p.is_file()}
-    if actual != set(files) | {MANIFEST}:
-        raise FlashError("QDL 发布包文件集合与 manifest 不符")
+    actual = {p.relative_to(bundle).as_posix() for p in bundle.rglob("*")
+              if p.is_file() or p.is_symlink()}
+    expected = set(files) | {MANIFEST}
+    missing = expected - actual
+    # Finder 浏览发布目录会生成元数据；只豁免未声明的普通 .DS_Store 文件。
+    # 清单内的文件仍须校验，符号链接也不能借此绕过路径保护。
+    extra = {name for name in actual - expected
+             if Path(name).name != ".DS_Store" or (bundle / name).is_symlink()}
+    if missing or extra:
+        raise FlashError(
+            "QDL 发布包文件集合与 manifest 不符："
+            f"缺失={sorted(missing)}，额外={sorted(extra)}")
     for name, info in files.items():
         if (not isinstance(name, str) or not isinstance(info, dict)
                 or not isinstance(info.get("bytes"), int)
@@ -466,22 +492,39 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
 
     def find_tool(self, project_dir: Path) -> Path:
         host = "macos" if sys.platform == "darwin" else "linux"
-        candidate = project_dir / "tools" / host / "qdl" / "qdl"
-        found = str(candidate) if candidate.is_file() else shutil.which("qdl")
+        machine = platform.machine().lower()
+        arch = {"aarch64": "arm64", "amd64": "x86_64"}.get(machine, machine)
+        directory = project_dir / "tools" / host / "qdl"
+        # 保留已有本地工具覆盖路径，其次使用按宿主架构入库的官方工具。
+        candidates = [directory / "qdl", directory / arch / "qdl"]
+        found = next((str(path) for path in candidates if path.is_file()), None)
+        found = found or shutil.which("qdl")
         if not found:
-            raise FlashError("未找到 QDL；请安装 Arduino qdl-packing v2.4-26 或兼容版本")
+            raise FlashError(
+                f"未找到适用于 {host}/{arch} 的 QDL；"
+                "请安装 Arduino qdl-packing v2.4-26 或兼容版本")
         return Path(found)
 
     def _usb_devices(self) -> list[DeviceInfo]:
         devices = []
         if sys.platform == "darwin":
-            run = subprocess.run(["ioreg", "-p", "IOUSB", "-a"], capture_output=True, check=True, timeout=5)
-            def visit(items):
-                for node in items:
-                    if node.get("idVendor") == 0x05c6 and node.get("idProduct") == 0x9008:
-                        devices.append(DeviceInfo("qualcommqrb2210", "edl", "UNO Q EDL 候选设备",
-                                                  serial=edl_serial(str(node.get("USB Product Name", "")))))
-                    visit(node.get("IORegistryEntryChildren", []))
+            run = subprocess.run(["ioreg", "-p", "IOUSB", "-l", "-a"],
+                                 capture_output=True, check=True, timeout=5)
+
+            def visit(node):
+                # ioreg 的 plist 根可为单个字典或节点列表；只遍历子节点树。
+                if isinstance(node, list):
+                    for child in node:
+                        visit(child)
+                    return
+                if not isinstance(node, dict):
+                    return
+                if node.get("idVendor") == 0x05c6 and node.get("idProduct") == 0x9008:
+                    devices.append(DeviceInfo(
+                        "qualcommqrb2210", "edl", "UNO Q EDL 候选设备",
+                        serial=edl_serial(str(node.get("USB Product Name", "")))))
+                visit(node.get("IORegistryEntryChildren", []))
+
             visit(plistlib.loads(run.stdout))
         else:
             for node in Path("/sys/bus/usb/devices").glob("*"):
@@ -505,6 +548,8 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
         return device
 
     def preflight(self, target_dir, config, partitions):
+        from builder.flash.console import _step
+        _step("校验发布包镜像摘要与分区计划（大镜像可能需要一些时间）")
         self.__dict__.pop("observed_gpt", None)
         if config.board != "arduino-uno-q" or config.soc != "qrb2210" or config.storage_type != "emmc":
             raise FlashError("UNO Q flash-config 身份不符")
@@ -529,15 +574,17 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
             raise FlashError("本次会写入受保护启动固件；核对 UNO Q 发布包后使用 --yes 明确确认")
 
     def _run(self, tool: Path, directory: Path, xml: Path, *, timeout=60):
+        from builder.flash.console import _info
         command = [str(tool), "--storage", "emmc", "--serial", self.device.serial,
                    str(self.bundle / "files" / LOADER), str(xml)]
+        log = directory / (xml.stem + ".log")
+        _info(f"QDL 实时日志：{log}")
         try:
-            result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=timeout)
+            returncode = stream_qdl(command, directory, log, timeout)
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise FlashError(f"QDL 执行失败或超时（不自动重试）: {exc}") from exc
-        (directory / (xml.stem + ".log")).write_text(result.stdout + result.stderr)
-        if result.returncode:
-            raise FlashError(f"QDL 失败，日志: {directory / (xml.stem + '.log')}")
+            raise FlashError(f"QDL 执行失败或超时（不自动重试），日志: {log}；{exc}") from exc
+        if returncode:
+            raise FlashError(f"QDL 失败（退出码 {returncode}），日志: {log}")
 
     def pre_flash(self, tool, target_dir, config, device=None):
         self.__dict__.pop("observed_gpt", None)
@@ -556,6 +603,8 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
             {"SECTOR_SIZE_IN_BYTES": "512", "filename": "backup.bin", "physical_partition_number": "0",
              "num_partition_sectors": "33", "start_sector": "NUM_DISK_SECTORS-33."},
         ], kind="read")
+        from builder.flash.console import _step
+        _step("读取设备主备 GPT 并核对身份与容量")
         self._run(tool, self.record_dir, read)
         try:
             primary = parse_gpt((self.record_dir / "primary.bin").read_bytes())
@@ -596,6 +645,8 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
         if current is None or current.serial != self.device.serial:
             raise FlashError("写入前目标设备发生变化")
         # 校验与 QDL 打开文件之间不再调用可修改发布包的流程。
+        from builder.flash.console import _step
+        _step("写入前复核镜像完整性")
         if digest(safe_file(self.bundle, MANIFEST)) != self.manifest_digest:
             raise FlashError("设备握手后 QDL manifest 发生变化，拒绝写入")
         validate_bundle(self.bundle)
@@ -633,6 +684,7 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
         record["program_sha256"] = digest(xml)
         record_path.write_text(json.dumps(record, indent=2) + "\n")
         try:
+            _step(f"QDL 写入 {len(nodes)} 个镜像条目（包含所选分区及必要 GPT）")
             self._run(tool, self.record_dir, xml, timeout=3600)
         except FlashError:
             record["status"] = "failed"
