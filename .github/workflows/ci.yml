@@ -28,6 +28,9 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          # QDL 完整性测试需要实际二进制，不能使用 Git LFS 指针文件。
+          lfs: true
 
       - name: 安装 Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
