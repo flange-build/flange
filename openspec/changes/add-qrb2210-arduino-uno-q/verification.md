@@ -383,3 +383,19 @@ final-esp-report.json、final-bundle-check.log、final-delivery.json、final-fla
 
 未把本地交付通过等同于硬件完成：最终镜像的 qbootctl 成功标记、断电重启与网络恢复、MCU 双向 RPC、
 App Lab 图形流程和实际 Bluetooth/USB Host/显示/音频/摄像头仍由烧入后的验收确认。
+
+
+## 目录发布字符串路径修复
+
+后续构建在 image 目录发布阶段失败：GNU cp 返回非零后，_copy_sparse 的备用分支对字符串调用
+.open()，产生 AttributeError。shutil.copytree 的 copy_function 参数实际为字符串，原测试只覆盖
+直接传入 Path 的文件复制，未覆盖这个调用方式。
+
+在 _copy_sparse 入口将 str/PathLike 统一为 Path；不改变复制策略和分区布局。
+新增真实 copytree 回归，分别模拟 cp 缺失和 cp 留下部分输出后失败，修复前两例均复现原异常，
+修复后验证文件内容、长度、权限、符号链接与稀疏占用。平台发布及 UNO Q 相关 73 项回归通过，
+Docker Python 3.12 的实际目录备用复制也通过。本轮未重新执行完整 flange build。
+
+构建盘当时仅剩约 1.5 GiB，清理此前由助手生成的 rootfs/run-dsq0v0dt 和 image/run-pwhqec5r
+旧临时副本；保留当前正式产物和用户本次失败构建的临时结果。原日志未保留 cp 的 stderr，
+不能据此断言该次 cp 的底层失败原因就是空间不足。
