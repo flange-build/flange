@@ -16,21 +16,28 @@ from builder.flash.generate import FlashConfigGenerator
 from builder.flash.model import DeviceInfo, FlashError
 
 
-def gpt_pair(sectors=unoq.USER_START + 33, *, root_sectors=None):
+def gpt_pair(sectors=unoq.USER_START + 33, *, root_sectors=None,
+             attributes=None, guid_seed=""):
     """独立生成 72 项测试 GPT，不依赖被测重算函数。"""
     rootsize = root_sectors or unoq.USER_START - unoq.ROOT_START
     user_start = unoq.ROOT_START + rootsize
     parts = [(name, 40 + i * 16, 16) for i, name in enumerate(sorted(unoq.PRESERVED))]
-    parts += [("xbl_a", 131072, 7168), ("boot_a", 166400, 8192),
-              ("boot_b", 174592, 8192), ("efi", unoq.EFI_START, 1048576),
+    parts += [("xbl_a", 131072, 7168), ("xbl_b", 138240, 7168),
+              ("boot_a", 166400, 8192), ("boot_b", 174592, 8192),
+              ("uefi_a", 200000, 16), ("uefi_b", 200016, 16),
+              ("efi", unoq.EFI_START, 1048576),
               ("rootfs", unoq.ROOT_START, rootsize),
               ("userdata", user_start, sectors - 33 - user_start)]
     entries = bytearray(72 * 128)
     for index, (name, start, size) in enumerate(parts):
         offset = index * 128
         entries[offset:offset + 16] = uuid.uuid5(uuid.NAMESPACE_DNS, "type-" + name).bytes_le
-        entries[offset + 16:offset + 32] = uuid.uuid5(uuid.NAMESPACE_DNS, name).bytes_le
+        entries[offset + 16:offset + 32] = uuid.uuid5(
+            uuid.NAMESPACE_DNS, guid_seed + name).bytes_le
         struct.pack_into("<QQ", entries, offset + 32, start, start + size - 1)
+        flags = (attributes or {}).get(name, 0x1000000000000000
+                                      if name.endswith(("_a", "_b")) else 0)
+        struct.pack_into("<Q", entries, offset + 48, flags)
         namebytes = name.encode("utf-16-le")
         entries[offset + 56:offset + 56 + len(namebytes)] = namebytes
     outputs = []
@@ -47,7 +54,8 @@ def gpt_pair(sectors=unoq.USER_START + 33, *, root_sectors=None):
         struct.pack_into("<II", header, 8, 0x10000, 92)
         struct.pack_into("<4Q", header, 24, sectors - 1 if backup else 1,
                          1 if backup else sectors - 1, 34, sectors - 34)
-        header[56:72] = uuid.uuid5(uuid.NAMESPACE_DNS, "test-unoq-disk").bytes_le
+        header[56:72] = uuid.uuid5(
+            uuid.NAMESPACE_DNS, guid_seed + "test-unoq-disk").bytes_le
         struct.pack_into("<QIII", header, 72, sectors - 33 if backup else 2,
                          72, 128, zlib.crc32(entries))
         struct.pack_into("<I", header, 16, zlib.crc32(header))
@@ -80,7 +88,8 @@ def bundle(tmp_path):
     (firmware / "xbl.elf").write_bytes(b"test-xbl")
     (firmware / "boot.img").write_bytes(b"test-uboot")
     table = unoq.parse_gpt(primary, template=True)
-    filenames = {"boot_a": "boot.img", "boot_b": "boot.img", "xbl_a": "xbl.elf",
+    filenames = {"boot_a": "boot.img", "boot_b": "boot.img",
+                 "xbl_a": "xbl.elf", "xbl_b": "xbl.elf",
                  "efi": "../disk-sdcard.img.esp", "rootfs": "../disk-sdcard.img.root",
                  "userdata": "../disk-sdcard.img.home"}
     nodes = []
@@ -111,7 +120,8 @@ def configured(bundle):
     return target, config
 
 
-def prepared(monkeypatch, bundle, *, sectors=30_535_680, names=None, root_sectors=None):
+def prepared(monkeypatch, bundle, *, sectors=30_535_680, names=None, root_sectors=None,
+             attributes=None, guid_seed=""):
     target, config = configured(bundle)
     strategy = unoq.UnoQFlashStrategy()
     strategy.allow_protected = True
@@ -124,7 +134,8 @@ def prepared(monkeypatch, bundle, *, sectors=30_535_680, names=None, root_sector
     def run(tool, directory, xml, **kwargs):
         calls.append(xml)
         if xml.name == "read-gpt.xml":
-            primary, backup = gpt_pair(sectors, root_sectors=root_sectors)
+            primary, backup = gpt_pair(
+                sectors, root_sectors=root_sectors, attributes=attributes, guid_seed=guid_seed)
             (directory / "primary.bin").write_bytes(primary)
             (directory / "backup.bin").write_bytes(backup)
     monkeypatch.setattr(strategy, "_run", run)
@@ -356,6 +367,77 @@ def test_full_flash_retains_device_guids_and_userdata_geometry(monkeypatch, bund
     backup = unoq.parse_gpt((strategy.record_dir / "gpt_backup0.bin").read_bytes(), backup=True)
     unoq.validate_pair(primary, backup)
     assert primary.entries == strategy.observed_gpt.entries
+
+
+@pytest.mark.parametrize("sectors,root_size", [
+    (30_535_680, None), (61_071_360, 20 * 1024 ** 3 // 512),
+])
+def test_full_flash_restores_exhausted_slots_without_changing_other_metadata(
+        monkeypatch, bundle, sectors, root_size):
+    # 实板故障 boot_a=0x1087...；同时覆盖旧成功位、未写镜像的 A/B 项和非槽位属性。
+    attributes = {"boot_a": 0x1087000012345678, "boot_b": 0x1040000087654321,
+                  "xbl_a": 0x1004000000000000, "uefi_a": 0x1004000011223344,
+                  "persist": 0x1287FEDCBA987654, "rootfs": 0xAB87567812345678}
+    strategy, config, calls = prepared(
+        monkeypatch, bundle, sectors=sectors, root_sectors=root_size,
+        attributes=attributes, guid_seed="real-device-")
+    observed = strategy.observed_gpt
+    strategy.flash_whole_disk(Path("qdl"), strategy.target_dir, config)
+    primary = unoq.parse_gpt((strategy.record_dir / "gpt_main0.bin").read_bytes())
+    backup = unoq.parse_gpt((strategy.record_dir / "gpt_backup0.bin").read_bytes(), backup=True)
+    unoq.validate_pair(primary, backup)
+    assert primary.entries == observed.entries
+    assert primary.header[56:72] == observed.header[56:72] != strategy.table.header[56:72]
+    assert primary.sectors == observed.sectors
+    for name, entry in observed.entries.items():
+        offset = entry.index * 128
+        before = observed.entries_raw[offset:offset + 128]
+        after = primary.entries_raw[offset:offset + 128]
+        if name.endswith(("_a", "_b")):
+            template_offset = strategy.table.entries[name].index * 128
+            assert after[54] == strategy.table.entries_raw[template_offset + 54] == 0
+            assert after[:54] == before[:54]
+            assert after[55:] == before[55:]
+        else:
+            assert after == before
+    # 恢复元数据不把无镜像项、持久化分区变成擦除或额外写入。
+    written = {node.get("label") for node in ET.parse(calls[-1]).getroot()}
+    assert not written & (unoq.PRESERVED | {"uefi_a", "uefi_b"})
+
+
+@pytest.mark.parametrize("name", ["boot_a", "boot_b", "rootfs"])
+def test_single_partition_with_exhausted_slot_never_changes_gpt(monkeypatch, bundle, name):
+    strategy, config, calls = prepared(
+        monkeypatch, bundle, names={name}, attributes={"boot_a": 0x1087000000000000})
+    observed = strategy.observed_gpt.data
+    part = next(p for p in config.partitions if p.name == name)
+    strategy.write_named_partition(Path("qdl"), part, strategy.target_dir / part.image, config)
+    assert [node.get("label") for node in ET.parse(calls[-1]).getroot()] == [name]
+    assert strategy.observed_gpt.data == observed
+    assert not (strategy.record_dir / "gpt_main0.bin").exists()
+    assert not (strategy.record_dir / "gpt_backup0.bin").exists()
+
+
+def test_full_flash_missing_one_boot_slot_cannot_reset_metadata(monkeypatch, bundle):
+    strategy, _, calls = prepared(monkeypatch, bundle)
+    with pytest.raises(FlashError, match="写入范围"):
+        strategy._write(Path("qdl"), strategy.all_names - {"boot_b"}, full=True)
+    assert len(calls) == 1
+    assert not (strategy.record_dir / "gpt_main0.bin").exists()
+
+
+@pytest.mark.parametrize("flags", [0x40, 0x80])
+def test_recovery_template_cannot_mark_boot_successful_or_unbootable(
+        monkeypatch, bundle, flags):
+    primary, backup = gpt_pair(attributes={"boot_a": 0x1000000000000000 | (flags << 48)})
+    (bundle / "gpt_main0.bin").write_bytes(primary)
+    (bundle / "gpt_backup0.bin").write_bytes(backup)
+    refresh_manifest(bundle)
+    strategy, config, calls = prepared(monkeypatch, bundle)
+    with pytest.raises(FlashError, match="不能预设启动成功或不可启动"):
+        strategy.flash_whole_disk(Path("qdl"), strategy.target_dir, config)
+    assert len(calls) == 1
+    assert not (strategy.record_dir / "gpt_main0.bin").exists()
 
 
 def test_unknown_capacity_fails_before_any_write(monkeypatch, bundle):

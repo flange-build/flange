@@ -35,6 +35,8 @@ LOADER = "prog_firehose_ddr.elf"
 ROOT_START = 2033984
 EFI_START = 985408
 USER_START = 22954552
+# Qualcomm 的 A/B 元数据位于 GPT 项 attributes 内偏移 6 的字节；其余属性不属于槽位状态。
+AB_FLAG_OFFSET = 54
 PRESERVED = {"persist", "modemst1", "modemst2", "fsg", "fsc", "ssd",
              "devinfo", "keystore", "frp", "uefivarstore"}
 SYSTEM_IMAGES = {
@@ -229,11 +231,26 @@ def validate_unoq(table: Gpt, *, observed=False):
         raise FlashError("UNO Q userdata 起点不兼容；请先备份并用官方工具恢复布局")
 
 
-def resize_gpt(primary: Gpt, sectors: int) -> tuple[bytes, bytes]:
-    """保留全部分区标识/起点，仅扩展末尾 userdata 并重算主备 CRC。"""
+def resize_gpt(
+    primary: Gpt, sectors: int, *, slot_template: Gpt | None = None,
+) -> tuple[bytes, bytes]:
+    """保留实板布局；全量恢复可从已校验模板重置 A/B 字节，再重算主备 CRC。"""
     if sectors < primary.entries["userdata"].first + 33 + 1:
         raise FlashError("目标容量不足以容纳 UNO Q 分区布局")
     entries = bytearray(primary.entries_raw)
+    if slot_template is not None:
+        for name, original in slot_template.entries.items():
+            if not name.endswith(("_a", "_b")):
+                continue
+            peer = name[:-1] + ("b" if name.endswith("_a") else "a")
+            if peer not in slot_template.entries:
+                continue
+            flags = slot_template.entries_raw[original.index * 128 + AB_FLAG_OFFSET]
+            if flags & 0xc0:
+                raise FlashError("UNO Q 恢复模板不能预设启动成功或不可启动标记")
+            # 仅恢复官方 A/B 初始状态；不复制模板 GUID、几何或其他 attributes。
+            entry = primary.entries[name]
+            entries[entry.index * 128 + AB_FLAG_OFFSET] = flags
     user = primary.entries["userdata"]
     struct.pack_into("<Q", entries, user.index * 128 + 40, sectors - 34)
     table_crc = zlib.crc32(entries)
@@ -649,9 +666,12 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
         _step("写入前复核镜像完整性")
         if digest(safe_file(self.bundle, MANIFEST)) != self.manifest_digest:
             raise FlashError("设备握手后 QDL manifest 发生变化，拒绝写入")
-        validate_bundle(self.bundle)
+        _, template, _ = validate_bundle(self.bundle)
         nodes = []
-        primary, backup = resize_gpt(self.observed_gpt, self.observed_gpt.sectors)
+        if full:
+            _step("恢复官方 A/B 启动初始状态并生成主备 GPT")
+            primary, backup = resize_gpt(
+                self.observed_gpt, self.observed_gpt.sectors, slot_template=template)
         for original in self.nodes:
             label = original["label"]
             is_gpt = label in {"PrimaryGPT", "BackupGPT"}
