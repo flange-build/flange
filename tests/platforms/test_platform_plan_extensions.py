@@ -37,6 +37,44 @@ def test_sparse_publish_without_gnu_cp_preserves_holes(tmp_path, monkeypatch):
         assert target.stat().st_blocks * 512 < target.stat().st_size // 2
 
 
+
+@pytest.mark.parametrize("missing_tool", [False, True])
+def test_sparse_copytree_fallback_accepts_string_paths(tmp_path, monkeypatch, missing_tool):
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from builder.engine import _copy_sparse
+
+    source = tmp_path / "source"
+    (source / "files").mkdir(parents=True)
+    image = source / "files/rootfs.img"
+    with image.open("wb") as stream:
+        stream.write(b"rootfs")
+        stream.seek(4 * 1024 * 1024)
+        stream.write(b"end")
+        stream.truncate(6 * 1024 * 1024)
+    image.chmod(0o640)
+    (source / "image-link").symlink_to("files/rootfs.img")
+
+    def failed_copy(command, **kwargs):
+        if missing_tool:
+            raise FileNotFoundError("cp")
+        # 模拟 cp 失败时留下比源文件更长的部分输出，备用复制必须截断它。
+        with Path(command[-1]).open("wb") as stream:
+            stream.truncate(9 * 1024 * 1024)
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr("builder.engine.subprocess.run", failed_copy)
+    destination = tmp_path / "published"
+    shutil.copytree(source, destination, symlinks=True, copy_function=_copy_sparse)
+    copied = destination / "files/rootfs.img"
+    assert copied.read_bytes() == image.read_bytes()
+    assert copied.stat().st_mode == image.stat().st_mode
+    assert (destination / "image-link").readlink() == Path("files/rootfs.img")
+    if image.stat().st_blocks * 512 < image.stat().st_size // 2:
+        assert copied.stat().st_blocks * 512 < copied.stat().st_size // 2
+
+
 def context_for(tmp_path):
     return WorkspaceContext(
         tmp_path, tmp_path, tmp_path / ".build", Target("test", "default", "debug")

@@ -36,8 +36,10 @@ def _topo_sort(graph: dict, target: str) -> list:
     return topological_order(graph, [target])
 
 
-def _copy_sparse(src: Path, dest: Path) -> None:
+def _copy_sparse(src: str | os.PathLike[str], dest: str | os.PathLike[str]) -> None:
     """保留大镜像空洞；没有 GNU cp 的宿主也不能展开全部零块。"""
+    # copytree 的 copy_function 接收字符串；直接发布文件时也接受 PathLike。
+    src, dest = Path(src), Path(dest)
     copy_tool = shutil.which("gcp") or "cp"
     try:
         subprocess.run(
