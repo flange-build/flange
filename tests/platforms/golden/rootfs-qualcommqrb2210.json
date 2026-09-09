@@ -68,6 +68,7 @@
   "priv: mount -o bind /dev/pts <TMP>/rootfs/dev/pts",
   "priv: cp /etc/resolv.conf <TMP>/rootfs/etc/resolv.conf",
   "priv: chroot <TMP>/rootfs ldconfig",
+  "priv: chroot <TMP>/rootfs sed -i s/^#\\?ALGO=.*/ALGO=lzo-rle/ /etc/default/zramswap",
   "priv: chroot <TMP>/rootfs /usr/lib/flange/unoq/verify-runtime --build",
   "priv: chroot <TMP>/rootfs /usr/lib/flange/unoq/verify-usb",
   "priv: chroot <TMP>/rootfs depmod -a 6.1.0",
