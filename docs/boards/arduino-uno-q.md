@@ -2,10 +2,12 @@
 
 UNO Q 使用 QRB2210 Linux 主处理器和 STM32U585 微控制器（MCU）。flange 的目标是提供
 Ubuntu 系统及完整 Arduino 工具链、Router/Bridge、App Lab 和 Bricks。已完成离线实现、组件构建和镜像组装验证，
-尚未完成实板验收；最新证据见 [OpenSpec 验证记录](../../openspec/changes/add-qrb2210-arduino-uno-q/verification.md)。
+已完成首次 debug 启动、ADB、Wi-Fi 联网和部分运行时热修复验证，完整实板验收仍未完成；最新证据见 [OpenSpec 验证记录](../../openspec/changes/add-qrb2210-arduino-uno-q/verification.md)。
 
-本次完整镜像为 release，使用原生 ARM64 Ubuntu Docker 进行实际组件验证；
-标准 amd64 容器的一次完整 `flange build image` 尚未端到端执行。debug 已核验配置与 DTB。
+2026-09-09 已通过标准 Docker 环境端到端构建 default-debug 成套镜像，包含首轮实板热修复。
+最终交付的烧入和冷启动验收由用户执行；release 的离线基线不代表这批 debug 修复已完成 release 实板验收。
+
+公共构建器改动、可复用新增能力及板级实现的边界，见[适配影响清单](arduino-uno-q-integration.md)。
 
 ## 目标与构建
 
@@ -53,8 +55,9 @@ Linux 启动顺序为 Qualcomm 前级固件 → ABL → U-Boot → EFI systemd-b
 
 ## 宿主刷写
 
-宿主需要 Arduino `qdl-packing v2.4-26` 或已验证兼容的 QDL，放入 PATH 或
-`tools/<macos|linux>/qdl/qdl`。USB 不传入构建容器。
+仓库已包含 Arduino `qdl-packing v2.4-26`，覆盖 macOS/Linux 的 ARM64 和 x86_64，
+`flange flash` 自动选择 `tools/<macos|linux>/qdl/<arch>/qdl`，无需额外安装。
+原有 `tools/<macos|linux>/qdl/qdl` 本地覆盖路径及 PATH 回退仍保留。USB 不传入构建容器。
 实板首次验证前，应记录官方系统和 GPT，并保存官方恢复工具所需资源及自己的用户数据备份。
 
 按 [Arduino 官方恢复说明](https://github.com/arduino/arduino-flasher-cli)进入 EDL（紧急下载模式）。
@@ -63,6 +66,9 @@ Linux 启动顺序为 Qualcomm 前级固件 → ABL → U-Boot → EFI systemd-b
 不接受无可绑定串号、多 EDL 设备或损坏/未知 GPT；后者应先使用官方工具恢复。
 设备主备 GPT、实际容量、发布包/执行计划摘要和 QDL 日志保存在目标目录的 `flash-records/unoq-*/`。
 记录中的 `written` 只代表工具完成写入，仍需单独验证读回、启动和功能。
+交互终端实时显示 QDL 分区进度和百分比；重定向时保留普通消息。QDL 输出同时持续写入
+本次记录目录的 `read-gpt.log`、`program.log`，失败和超时保留已有日志且不自动重试。
+镜像摘要复核和 GPT 读取均有阶段提示；摘要复核期间尚未开始写入。
 
 确认发布包匹配目标后，全量刷写命令为：
 
@@ -115,7 +121,8 @@ userdata 初始为 3 GiB，首启核对挂载点和 UUID 后扩展 ext4 至现�
 
 ## 实板验收清单
 
-以下项目目前均待执行，每项记录镜像摘要、设备状态、命令输出及失败日志。
+以下为最终烧入后的验收范围。此前热修复系统上的部分验证已经通过，仍须对最终镜像复验；
+每项记录镜像摘要、设备状态、命令输出及失败日志。操作步骤见[本轮交付与验收](arduino-uno-q-handoff.md)。
 
 - 官方系统基线、板卡身份和可恢复备份；EDL 恢复、全量刷写及 efi/rootfs/boot_a 单刷。
 - 冷启动、重复重启、正确内核/模块/initrd、独立 userdata 挂载、启动成功标记及更新后的数据保留。

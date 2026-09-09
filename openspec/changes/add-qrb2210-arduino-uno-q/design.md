@@ -40,7 +40,10 @@ arduino-flasher-cli `25b7adbabad58ae8bc2163f657195addba8fd758`。
 Ubuntu noble 的 `mkbootimg` 包缺少其顶层依赖 `gki`，连 v0 路径也无法执行。
 UNO Q 使用严格受限的 Android v0 打包器，仅支持固定 4 KiB 页、地址布局及空 ramdisk；
 与 AOSP 原始 v0 实现逐字节比对，并以独立解包工具核验实际 U-Boot 负载。
-U-Boot 将前级唯一合法的启动槽位传入最终 DTB 的 `/chosen/arduino,boot-slot`，
+U-Boot 在 EVT_OF_LIVE_BUILT 阶段优先读取 ABL 实际交付 DTB 的 bootargs；
+无有效外部 DTB 时才使用初始 live tree。复制唯一合法槽位，避免内置 control DTB
+缺少参数或 EFI 覆盖 bootargs；外部 DTB 存在但参数非法时不回退猜测。
+随后将槽位传入最终 DTB 的 `/chosen/arduino,boot-slot`，
 运行时据此显式调用 qbootctl；没有可信槽位时不猜测 A 槽。
 
 通用平台契约增加可选产物/依赖声明钩子（未声明沿用默认行为），组件计划和调度共同消费；
@@ -50,6 +53,11 @@ boot 若消费 rootfs 的 initrd 必须有真实依赖，哈希纳入所有使�
 ### QDL/eMMC 和分区保护
 
 以官方救援 XML/GPT 为起点，512 字节扇区。QDL 运行在宿主，构建容器不访问 USB。
+仓库收录 Arduino qdl-packing v2.4-26 的 macOS/Linux ARM64、x86_64 官方工具，
+按宿主架构选择，保留原有本地覆盖路径和 PATH 回退。发布摘要与每个入库文件的摘要、
+来源和上游许可证随工具保存。继续使用 QDL 的串号绑定及读写 XML，不改用 edl-ng。
+组包复制镜像时按全零块执行 seek/truncate 保留空洞，兼容 Docker 挂载的 APFS；
+不依赖 GNU cp 的 hole punching（空洞回收）操作。复制失败保留真实 I/O 原因和源、目标路径。
 完整发布前核验每个非空 filename 引用、SHA256、尺寸、分区范围、路径安全与 XML 类型；
 保留 filename 为空的 persist、modemst、fsg/fsc 等区域。禁止使用新建两分区 raw.img 覆盖设备。
 两容量共用构建目标与系统镜像。宿主读取并核对设备主备 GPT，按真实容量和现存分区位置生成运行期 XML；
@@ -109,3 +117,18 @@ Bricks 的 OCI 镜像与模型分别固定摘要，容器用户态与宿主 ABI 
 - https://github.com/arduino/arduino-app-cli
 - https://github.com/arduino/arduino-app-lab
 - https://github.com/arduino/app-bricks-py
+
+## 首轮实板修正（2026-09-09）
+
+Ubuntu 包集显式包含 qrtr-tools、LightDM GTK greeter 与 systemd-timesyncd；不依赖上游弱依赖自动补齐。
+Avahi 服务定义来自既有固定 Arduino overlay，Venus 改用满足内核最低版本的固定 Linux Firmware 资源。
+Docker 经典存储校验 config ID；containerd 存储校验本地 manifest 自身 SHA256 及其 config 引用，
+Compose 使用经过校验的本地 ID，不能把 inspect.Id 在两个后端中视为相同语义。
+App CLI 版本约束采用显式相等运算符；zram 配置选择内核实际提供的算法。
+启动槽位及冷启动验收仍未完成，不能用热修复成功替代成套镜像复验。
+
+## 最终交付顺序（2026-09-09）
+
+按用户要求先完成实现、成套构建和离线门禁，将最终烧写及实板验收交给用户执行。
+提供明确刷写步骤、只读状态采集脚本和双向 MCU RPC 测试，不自动覆盖板上 MCU 或重启设备。
+硬件验收条目仍保持待完成；本轮交付不触发 OpenSpec 归档。
