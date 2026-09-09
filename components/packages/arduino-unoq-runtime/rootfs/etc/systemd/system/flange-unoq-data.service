@@ -5,6 +5,8 @@ Description=载入 UNO Q 已锁定的 Arduino 容器
 RequiresMountsFor=/home/arduino
 After=docker.service
 Requires=docker.service
+Wants=systemd-timesyncd.service
+After=systemd-timesyncd.service time-set.target
 Before=arduino-app-cli.service
 [Service]
 Type=oneshot
