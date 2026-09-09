@@ -399,3 +399,20 @@ Docker Python 3.12 的实际目录备用复制也通过。本轮未重新执行�
 构建盘当时仅剩约 1.5 GiB，清理此前由助手生成的 rootfs/run-dsq0v0dt 和 image/run-pwhqec5r
 旧临时副本；保留当前正式产物和用户本次失败构建的临时结果。原日志未保留 cp 的 stderr，
 不能据此断言该次 cp 的底层失败原因就是空间不足。
+
+
+## 2026-09-09 用户烧入后 ADB 验收：未全部通过
+
+复制修复 27b9e9e34 已推送后，通过 ADB 执行只读验证，没有重启、重新加载容器或写入 MCU。
+设备运行新编译的 7.0.0-flange-unoq+ 内核；container_identity.py 与 load-containers 的原始摘要
+均与仓库一致，不能把本次容器失败归因于旧版加载脚本。
+
+- 通过：ADB 登录、Wi-Fi DHCP/默认路由/DNS、HTTPS 200、NTP 同步；独立 userdata 扩容至约 18 GiB。
+- 状态正常：Router、rmtfs、tqftpserv、qrtr-ns、LightDM、zram；Bluetooth 控制器可枚举且未 rfkill 阻断。
+- 驱动节点存在：DRM renderD128、Venus video0/video1、ALSA 声卡；外接显示未连接，不代表实际音视频已通过。
+- 失败：/chosen/arduino,boot-slot 仍缺失，qbootctl.service 失败。之前补丁的离线检查不能证明实际 ABL/EFI 通道有效。
+- 失败：flange-unoq-data 导入 ei-models-runner 时，containerd 返回 lease does not exist，App CLI 因依赖失败未启动，8800 端口不可用。只完成两个预装容器导入。
+- 日志显示首次 NTP 校时把系统时间从 7 月 28 日跳到 9 月 9 日，发生在导入期间；这可能使 containerd 租约过期，但当前仅为待验证假设。
+
+证据：.build/verification/arduino-uno-q/20260909/after-user-flash.json 和 after-user-flash-details.txt。
+完整适配验收仍未通过，下一步需定位槽位传递及首次容器导入与校时的顺序问题。
