@@ -12,12 +12,17 @@ required = [
     '/usr/lib/firmware/updates/qcom/qcm2290/adsp.mbn',
     '/usr/lib/firmware/updates/qcom/qcm2290/modem.mbn',
     '/usr/lib/firmware/updates/qcom/qcm2290/wlanmdsp.mbn',
+    '/usr/lib/firmware/updates/qcom/venus-6.0/venus.mbn',
     '/usr/lib/firmware/updates/ath10k/WCN3990/hw1.0/firmware-5.bin',
     '/usr/lib/firmware/updates/qcom/qcm2290/a702_zap.mbn',
     '/usr/lib/firmware/updates/qcom/a702_sqe.fw',
     '/usr/lib/firmware/updates/ath10k/WCN3990/hw1.0/board-2.bin',
     '/usr/share/arduino-unoq-radio-firmware/board-2.bin_CTL_061125_REGDM4067_CCA22',
     '/usr/share/arduino-unoq-radio-firmware/board-2.bin_CTL_061125_REGDM4067_CCA22_OldPCB',
+    '/usr/lib/systemd/system/qrtr-ns.service',
+    '/usr/lib/systemd/system/systemd-timesyncd.service',
+    '/etc/avahi/services/arduino.service',
+    '/usr/share/xgreeters/lightdm-gtk-greeter.desktop',
 ]
 for item in required:
     if not Path(item).is_file():
@@ -27,7 +32,7 @@ qca = Path('/usr/lib/firmware/updates/qca')
 pairs = [p for p in qca.glob('apbtfw*.tlv') if (qca / ('apnv' + p.stem[6:] + '.bin')).is_file()]
 if not pairs:
     raise SystemExit('WCN3988 Bluetooth firmware 缺少 apbtfwNN.tlv/apnvNN.bin 配对')
-for program in ['rmtfs', 'tqftpserv', 'qbootctl', 'gpioset', 'docker', 'readelf']:
+for program in ['qrtr-ns', 'rmtfs', 'tqftpserv', 'qbootctl', 'gpioset', 'docker', 'ctr', 'readelf']:
     if not shutil.which(program):
         raise SystemExit(f'UNO Q 缺少运行时命令：{program}')
 results = []

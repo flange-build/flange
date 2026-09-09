@@ -7,6 +7,8 @@
 *.cmd
 .*.cmd
 *.d
+# 放行 .d 配置目录，继续忽略编译生成的 .d 文件。
+!*.d/
 *.symvers
 Module.symvers
 modules.order

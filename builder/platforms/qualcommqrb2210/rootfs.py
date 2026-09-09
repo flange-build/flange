@@ -51,6 +51,8 @@ class Qrb2210RootfsBuilder(RootfsBuilder):
         self._efi = self._work_dir / "bootaa64.efi"
         with ChrootContext(rootfs_dir, self.docker) as chroot:
             chroot.run(["ldconfig"])
+            # 修改目标配置，不在自有 DEB 中占用 zram-tools 已拥有的文件。
+            chroot.run(["sed", "-i", "s/^#\\?ALGO=.*/ALGO=lzo-rle/", "/etc/default/zramswap"])
             chroot.run(["/usr/lib/flange/unoq/verify-runtime", "--build"],
                        label="核验 UNO Q 固件、工具链和 Ubuntu ABI")
             chroot.run(["/usr/lib/flange/unoq/verify-usb"], label="核验 patched adbd Ubuntu ABI")
