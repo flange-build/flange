@@ -1,5 +1,6 @@
 """调度、上下文、原子产物发布和取消的集成契约。"""
 
+import stat
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -72,6 +73,14 @@ def test_强制构建且原子目录发布删除旧残留(tmp_path, monkeypatch)
     engine.build('kernel', force='kernel')
     assert not stale.exists()
     assert sum(event == ('execute', 'kernel') for event in events) == 2
+
+
+def test_发布的产物目录宿主机可读(tmp_path, monkeypatch):
+    """容器内 root 发布的产物要让宿主机刷写进程读得到。"""
+    engine, _ = setup(tmp_path, monkeypatch)
+    engine.build('kernel')
+    mode = stat.S_IMODE((engine.context.target_dir / 'kernel').stat().st_mode)
+    assert mode & 0o055 == 0o055, f'产物目录权限 {mode:04o} 宿主机无法读取'
 
 
 def test_失败或取消不发布成功manifest(tmp_path, monkeypatch):

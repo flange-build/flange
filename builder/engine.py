@@ -241,6 +241,9 @@ class BuildEngine:
         destination = self.context.target_dir / component
         destination.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{component}-", dir=destination.parent))
+        # mkdtemp 固定 0700，而 rename 会把这个私有权限原样带成正式产物目录权限：
+        # 构建在容器内以 root 执行，宿主机上以普通用户运行的 flange flash 便读不到产物。
+        staging.chmod(0o755)
         backup = destination.with_name(f".{component}-previous")
         extra = []
         try:

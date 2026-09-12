@@ -201,6 +201,9 @@ class TestConventionMapping:
         daemon.chmod(0o755)
         library = tmp_path / "rootfs/usr/lib/libfastrpc.so.1.0.0"
         _touch(library)
+        # 该路径原样保留源文件权限，断言的权限必须显式声明，
+        # 否则 _touch 建出的权限随宿主 umask 变化（002 即得 0664）。
+        library.chmod(0o644)
         symlink = tmp_path / "rootfs/usr/lib/libfastrpc.so.1"
         symlink.symlink_to("libfastrpc.so.1.0.0")
         _touch(tmp_path / "rootfs/usr/lib/.DS_Store")
