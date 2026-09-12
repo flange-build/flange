@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-09-12] sync | orangepi-cm4 WiFi 转 brcmfmac 路线（两驱动抢 SDIO 根因定位）
+
+实机 `orangepi-cm4` 启动后一直没有 `wlan0`。根因不是缺驱动，而是驱动路线与部署固件的命名规范对不上：BSP 内核同时编入 Rockchip OOT `bcmdhd`（`rockchip_wlan/Kconfig` 中 `default y`，不在任何 defconfig、且是 `bool` 只能内建）与 mainline `brcmfmac`（`rockchip_linux_defconfig:668` 的 `=m`，经 SDIO MODALIAS 自动 modprobe）。brcmfmac 先绑定 SDIO func，而 rootfs 只部署了 bcmdhd 命名的 `fw_bcm43456c5_ag.bin` / `nvram_ap6256.txt`，于是陷入「`request_firmware -2` → `brcmf_sdio_htclk: HT Avail timeout` → `mmc2: card removed` → 重新枚举」的死循环（周期约 1.4s），持续占住 SDIO func，bcmdhd 永远等不到设备（`lsmod` 引用计数恒 0），两个驱动都不工作。归档 change `2026-05-17-orangepi-cm4-bringup-wifi-and-npu-fix` 的 bcmdhd 路线实际从未生效，其 spec 中「实机首启 WiFi 接口出现」场景属未验证条目。
+
+关键发现：`radxa-pkg/radxa-firmware` 仓本就同时带着两套命名的固件，brcmfmac 版的 `brcmfmac43456-sdio.{bin,txt,clm_blob}` 一直在那里只是没被 `extra_firmware.files` 列进去，其 nvram 文件头为 `#AP6256_NVRAM_V1.1_08252017`，确为本模组参数。故转 brcmfmac 路线不需要引入任何新 source。
+
+定为 brcmfmac 路线：`config.jsonnet` 换固件清单（三件套 + `BCM4345C5.hcd`，移除两个 bcmdhd 专用文件）、`kernel.config` 加 `CONFIG_BCMDHD=n`（bool menuconfig 只能内建，用户态 blacklist 无效，必须 Kconfig 层关），删除随之失效的 `0002-bcmdhd-set-fw-ampak-path-brcm.patch`。`CONFIG_BRCMFMAC` 维持 SoC 层 defconfig 的 `=m`，board 不覆盖。dtsi 不动——`wifi_chip_type="ap6256"` 只被 bcmdhd 读取，SDIO 上电与时钟由 `&sdio` / `rfkill_rk` 完成，与具体 WiFi 驱动解耦。
+
+CLM blob 是必需项，同 `armsom-cm5-io` 的教训：缺它则固件内置 Generic.Min CLM 不接受 `set country`、无可用信道、扫不到任何 AP。两块板选了相反方向——CM5 IO 的 BCM43752 在 mainline 支持不足，关的是 brcmfmac、走 rkwifibt OOT；本板 BCM43456 在 brcmfmac 上支持完整，关的是 bcmdhd。
+
+实机验证（运行时热补固件）：`Firmware: BCM4345/9 wl0 version 7.45.96.61` 加载成功，`wlan0` 出现，MAC `c0:f5:35:41:28:96` 取自模组 OTP 而非 NVRAM 缺省的 `00:90:4c:c5:12:38`，`nmcli dev wifi list` 扫到 2.4G（ch11 130 Mbit/s）与 5G（ch161 540 Mbit/s）双频 AP。构建侧确认 `.config` 中 `# CONFIG_BCMDHD is not set` + `CONFIG_BRCMFMAC=m`、`vmlinux` 中 `dhd_` 符号为 0、patch 由 4 条减为 3 条。完整刷写后的实机复验见 change `fix-orangepi-cm4-wifi-brcmfmac` 的 tasks 第 3 组。
+
 ## [2026-09-06] sync | VIM3 风扇与双色 LED 板级策略
 
 VIM3 内建主线 MCU 风扇与 GPIO LED 驱动，新增默认 `vim3-fan-led.dtbo`：CPU 50/60/70°C 对应三档风速、5°C 回差，保留降频与过热保护；白灯心跳、红灯运行常亮。板卡页补充标准 thermal/LED sysfs 使用方法及实板验收项，VIM3L 默认配置不变。

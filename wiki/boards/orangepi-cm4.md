@@ -5,7 +5,6 @@ status: stable
 sources:
   - components/board/orangepi-cm4/config.jsonnet
   - components/board/orangepi-cm4/patches/kernel/0001-dts-orangepi-cm4-bootargs-fix.patch
-  - components/board/orangepi-cm4/patches/kernel/0002-bcmdhd-set-fw-ampak-path-brcm.patch
   - components/board/orangepi-cm4/patches/kernel/0003-dts-orangepi-cm4-disable-rknpu.patch
   - components/board/orangepi-cm4/patches/kernel/0004-add-orangepi-cm4-amp-dts.patch
   - components/board/orangepi-cm4/docs/amp.md
@@ -49,16 +48,60 @@ lunch orangepi-cm4-amp-rtt-release
 |---|---|
 | DTB | default 用 `rk3566-orangepi-cm4-base`（保持空壳）；AMP products 用 `rk3566-orangepi-cm4-amp` |
 | board overlay | 无（dsi1 维持 dtsi 默认 disabled） |
-| kernel patches | `0001` bootargs、`0002` bcmdhd FW_AMPAK_PATH、`0003` disable rknpu、`0004` AMP dts |
-| extra_firmware | radxa-firmware 仓拉 AP6256 三件套到 `/lib/firmware/brcm/` |
+| kernel patches | `0001` bootargs、`0003` disable rknpu、`0004` AMP dts |
+| kernel config | `CONFIG_BCMDHD=n`（关掉与 brcmfmac 抢 SDIO 的 OOT 驱动，全 product/variant 生效） |
+| extra_firmware | radxa-firmware 仓拉 AP6256 brcmfmac 三件套 + BT patchram 到 `/lib/firmware/brcm/` |
 | bootloader | default 使用平台/SoC 默认；AMP products 追加 `CONFIG_AMP=y` / `CONFIG_ROCKCHIP_AMP=y` |
 
 ## AP6256 WiFi/BT
 
-固件三件套（BCM4345C5）：`fw_bcm43456c5_ag.bin` / `nvram_ap6256.txt` / `BCM4345C5.hcd` → `/lib/firmware/brcm/`。配套两条 kernel patch：
+WiFi 走 **mainline brcmfmac**（不是 Rockchip OOT bcmdhd，见下方踩坑）。部署到 `/lib/firmware/brcm/` 的四个文件：
 
+| 文件 | 用途 |
+|---|---|
+| `brcmfmac43456-sdio.bin` | WiFi 主固件。brcmfmac 对 chip `BCM4345/9` 由 `brcmf_fw_alloc_request()` 拼出该名 |
+| `brcmfmac43456-sdio.txt` | NVRAM 校准参数，文件头须为 `#AP6256_NVRAM_*` |
+| `brcmfmac43456-sdio.clm_blob` | CLM（Country Locale Matrix），**不可省** |
+| `BCM4345C5.hcd` | BT patchram（btbcm） |
+
+配套 kernel 侧两处：
+
+- `kernel.config` 的 `CONFIG_BCMDHD=n`，关掉抢 SDIO 的 OOT 驱动。
 - `0001` 改 `rk3566-orangepi-cm4.dtsi` chosen.bootargs：删硬编码 `root=PARTUUID`（避免覆盖 extlinux APPEND，断 normal/recovery 切换）、加 `firmware_class.path=/lib/firmware`。与 tspi-rk3566 0001 同因。
-- `0002` 启用 bcmdhd `FW_AMPAK_PATH="brcm"`，让固件名拼出 `brcm/` 前缀。与 tspi-rk3566 0002 一字不差。
+
+dtsi 的 `wifi_chip_type="ap6256"` 只被 bcmdhd 读取，对 brcmfmac 是惰性属性；SDIO 上电与时钟由 `&sdio` 节点和 `rfkill_rk` 完成，与具体 WiFi 驱动解耦，因此**不需要改 dtsi**。
+
+### 踩坑：两个 WiFi 驱动抢同一块 SDIO 卡
+
+BSP 内核同时编入两个能驱动 BCM43456 的驱动：
+
+- Rockchip OOT `bcmdhd`——`drivers/net/wireless/rockchip_wlan/Kconfig` 中 `menuconfig BCMDHD ... default y`，**不在任何 defconfig 里**，且是 `bool` 型只能内建，所以用户态 `modprobe` blacklist 对它无效，只能在 Kconfig 层关。
+- mainline `brcmfmac`——`rockchip_linux_defconfig:668` 的 `=m`，经 SDIO MODALIAS 自动 modprobe。
+
+brcmfmac 先绑定 SDIO func。早期版本只部署了 bcmdhd 命名的固件，brcmfmac 找不到自己要的 `brcmfmac43456-sdio.bin`，于是陷入死循环：
+
+```
+brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43456-sdio for chip BCM4345/9
+brcmfmac mmc2:0001:1: Direct firmware load for brcm/brcmfmac43456-sdio.bin failed with error -2
+brcmfmac: brcmf_sdio_htclk: HT Avail timeout (1000000): clkctl 0x50
+mmc2: card 0001 removed
+```
+
+周期约 1.4 秒，持续占住 SDIO func，bcmdhd 永远等不到设备（`lsmod` 引用计数恒 0），结果两个驱动都不工作、`ip link` 无 `wlan0`。同款症状见 `armsom-cm5-io`（那块板因 BCM43752 在 mainline 支持不足，选的是相反方向：关 brcmfmac 走 rkwifibt OOT）。
+
+CLM blob 同样是必需项：缺它时固件内置的 Generic.Min CLM 不接受 `set country`，表现为 `country setting failed`、无可用信道、扫不到任何 AP。
+
+### 实机验收
+
+```bash
+ip link | grep wlan0                       # 应有 wlan0
+dmesg | grep brcmf_c_preinit_dcmds         # 应见 Firmware: BCM4345/9 ... version 7.45.96.61
+dmesg | grep -E "error -2|HT Avail"        # 应为空
+lsmod | grep bcmdhd                        # 应为空
+nmcli dev wifi list                        # 应同时出现 2.4G 与 5G AP
+```
+
+`wlan0` 的 MAC 应取自模组 OTP，而非 NVRAM 缺省值 `00:90:4c:c5:12:38`——若等于缺省值说明 NVRAM 未正确生效。
 
 BT 仅做"硬件就绪 + patchram 到位"，未预装 bluez 等用户态包，应用层栈由产品方自取。
 
