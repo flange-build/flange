@@ -6,6 +6,22 @@
 
 ---
 
+## [2026-09-12] sync | orangepi-cm4 蓝牙开机自动 attach
+
+WiFi 打通后复查蓝牙，发现刷写后 `hciconfig -a` 里没有 `hci0`、`/sys/class/bluetooth/` 为空——归档 change `2026-05-17-orangepi-cm4-bringup-wifi-and-npu-fix` 写进 spec 的「实机首启 BT HCI 接口出现」Scenario 同样从未验证过，与上一条 WiFi 的情况同源。
+
+硬件与固件都没问题：`BCM4345C5.hcd` 在位，`hci_uart` 已加载且 H4/Broadcom 协议均注册，`rfkill_rk` 正确解析出 `BT,reset_gpio=79` 等 GPIO。缺的是两个开机环节：(1) 没有 UART attach——dtsi 只以独立 `wireless-bluetooth` 平台节点描述 BT，`uart1` 下没有 serdev 形态的 `bluetooth` 子节点，内核不会自动 attach（尽管 `CONFIG_BT_HCIUART_SERDEV=y`），而 `bluetooth.service` 只管已存在的 hci 设备；(2) `rfkill_rk` 的 `bt_default` 默认 soft-blocked，`systemd-rfkill` 还把该状态持久化并每次开机恢复。
+
+修法是 board overlay 加 `bluetooth-orangepi-cm4.service`（`Type=simple` 跑 `btattach -B /dev/ttyS1 -P bcm`）+ `multi-user.target.wants` 符号链接 + `usr/lib/flange/bt-unblock.sh`，并在 `rootfs.packages` 显式声明 `bluez`。
+
+三个踩坑值得记：**必须 `Type=simple`**——`btattach` 不 daemonize，持续持有 line discipline，`oneshot` 会卡在 activating 直到超时被 kill 连带销毁 `hci0`（`khadas-vim3l` 的同类 unit 正是 oneshot，且其 overlay 缺 `wants` 符号链接从未被 enable，属既有缺陷，本轮未动）。**`rfkill unblock bluetooth` 对 `rfkill_rk` 无效**——驱动没把 `set_block` 结果回写 `soft`，只能直接写 sysfs，且索引不能写死（`hci0` 就位后自身也注册成 rfkill 节点，索引右移）。**overlay 的 enable 只能靠符号链接**——`cp -a` 保留符号链接，而 `builder/deb.py` 的 `auto_start` 只服务 App deb。
+
+`btattach` 与 spec 用作验收手段的 `hciconfig` 同属 `bluez`，而 rootfs `base` 集合不含它——当时能在实机跑通只是因为 desktop product 被 `ubuntu-desktop` 顺带拉入。归档 proposal 的非目标「不预装 bluez」与同一份 spec 用 `hciconfig` 验收本就自相矛盾，本轮按「BT 开机即用」取舍，显式声明该包（约 5.3 MB）。
+
+实机验证：按 overlay 形态部署（符号链接 enable，非 `systemctl enable`），清除 `/var/lib/systemd/rfkill/*` 模拟刷写后首启并重启，`hci0` 在开机约 6 秒自动就位、服务 active、`hciconfig` 显示 `UP RUNNING` errors:0、`dmesg` 含 `BCM4345C5 'brcm/BCM4345C5.hcd' Patch` 与 `BT 5.2 [Version: 1039.1086]`、BLE 扫描 13 秒收到 724 条事件。BD Address `C0:F5:35:41:28:97` 与 WiFi 的 `…:96` 连号，同一模组 OTP 分配。
+
+更干净的 serdev 路线（给 `uart1` 加 `bluetooth` 子节点让内核自动 attach，可省掉 bluez 与常驻进程）未采用：BSP 的 `wireless-bluetooth` 持有 `BT,reset_gpio=79`，serdev 子节点需同一 GPIO 作 `shutdown-gpios`，冲突需先禁用前者，且该 BSP 上无先例、需实机反复试。留作后续可选优化。
+
 ## [2026-09-12] sync | orangepi-cm4 WiFi 转 brcmfmac 路线（两驱动抢 SDIO 根因定位）
 
 实机 `orangepi-cm4` 启动后一直没有 `wlan0`。根因不是缺驱动，而是驱动路线与部署固件的命名规范对不上：BSP 内核同时编入 Rockchip OOT `bcmdhd`（`rockchip_wlan/Kconfig` 中 `default y`，不在任何 defconfig、且是 `bool` 只能内建）与 mainline `brcmfmac`（`rockchip_linux_defconfig:668` 的 `=m`，经 SDIO MODALIAS 自动 modprobe）。brcmfmac 先绑定 SDIO func，而 rootfs 只部署了 bcmdhd 命名的 `fw_bcm43456c5_ag.bin` / `nvram_ap6256.txt`，于是陷入「`request_firmware -2` → `brcmf_sdio_htclk: HT Avail timeout` → `mmc2: card removed` → 重新枚举」的死循环（周期约 1.4s），持续占住 SDIO func，bcmdhd 永远等不到设备（`lsmod` 引用计数恒 0），两个驱动都不工作。归档 change `2026-05-17-orangepi-cm4-bringup-wifi-and-npu-fix` 的 bcmdhd 路线实际从未生效，其 spec 中「实机首启 WiFi 接口出现」场景属未验证条目。

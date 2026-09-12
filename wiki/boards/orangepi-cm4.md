@@ -10,6 +10,8 @@ sources:
   - components/board/orangepi-cm4/docs/amp.md
   - components/board/orangepi-cm4/overlay/etc/hostname
   - components/board/orangepi-cm4/overlay/etc/usbdevice.conf
+  - components/board/orangepi-cm4/overlay/etc/systemd/system/bluetooth-orangepi-cm4.service
+  - components/board/orangepi-cm4/overlay/usr/lib/flange/bt-unblock.sh
   - docs/first-steps.md
 related:
   - "[[rockchip 平台]]"
@@ -50,6 +52,7 @@ lunch orangepi-cm4-amp-rtt-release
 | board overlay | 无（dsi1 维持 dtsi 默认 disabled） |
 | kernel patches | `0001` bootargs、`0003` disable rknpu、`0004` AMP dts |
 | kernel config | `CONFIG_BCMDHD=n`（关掉与 brcmfmac 抢 SDIO 的 OOT 驱动，全 product/variant 生效） |
+| rootfs packages | `bluez`（BT attach 与验收都要它；base 集合不含，desktop 只是被 ubuntu-desktop 顺带拉入） |
 | extra_firmware | radxa-firmware 仓拉 AP6256 brcmfmac 三件套 + BT patchram 到 `/lib/firmware/brcm/` |
 | bootloader | default 使用平台/SoC 默认；AMP products 追加 `CONFIG_AMP=y` / `CONFIG_ROCKCHIP_AMP=y` |
 
@@ -103,7 +106,38 @@ nmcli dev wifi list                        # 应同时出现 2.4G 与 5G AP
 
 `wlan0` 的 MAC 应取自模组 OTP，而非 NVRAM 缺省值 `00:90:4c:c5:12:38`——若等于缺省值说明 NVRAM 未正确生效。
 
-BT 仅做"硬件就绪 + patchram 到位"，未预装 bluez 等用户态包，应用层栈由产品方自取。
+### 蓝牙开机自动 attach
+
+dtsi 只以独立的 `wireless-bluetooth` 平台节点（Rockchip `rfkill_rk`）描述 BT，`uart1` 下**没有** serdev 形态的 `bluetooth` 子节点，所以内核 `hci_uart` 不会自动 attach——即便 `CONFIG_BT_HCIUART_SERDEV=y` / `CONFIG_SERIAL_DEV_BUS=y` 都已启用。`bluetooth.service`(bluetoothd) 只管理已存在的 hci 设备，不做 attach。板级因此自备两个 overlay 文件：
+
+| 文件 | 作用 |
+|---|---|
+| `etc/systemd/system/bluetooth-orangepi-cm4.service` | `Type=simple` 跑 `btattach -B /dev/ttyS1 -P bcm` |
+| `etc/systemd/system/multi-user.target.wants/…`（符号链接） | 等价于 `systemctl enable`——overlay 经 `cp -a` 应用会保留符号链接，这是 overlay 层唯一的 enable 手段 |
+| `usr/lib/flange/bt-unblock.sh` | `ExecStartPre` 调用，解除 rfkill 软阻断 |
+
+**两个坑**：
+
+1. **必须 `Type=simple`，不能 `oneshot`**。`btattach` 不 daemonize，attach 后持续持有 line discipline，进程一退出 `hci0` 就消失。用 `Type=oneshot` 会卡在 activating 直到 `TimeoutStartSec` 超时被 kill，连带把 `hci0` 带走。（`khadas-vim3l` 的同类 unit 用的正是 oneshot，且其 overlay 缺 `wants` 符号链接，从未被 enable。）
+2. **`rfkill unblock bluetooth` 对 `rfkill_rk` 无效**。该驱动没把 `set_block` 的结果回写到 `soft` 属性，命令返回成功但 `soft` 仍是 1；只能直接写 `/sys/class/rfkill/<n>/soft`。而且 `systemd-rfkill` 会把 blocked 状态持久化到 `/var/lib/systemd/rfkill/platform-wireless-bluetooth:bluetooth` 并每次开机恢复。索引不能写死——`hci0` 就位后自己也会注册成一个 rfkill 节点，索引会右移。
+
+`btattach` 与 `hciconfig` 都来自 `bluez`，而 rootfs `base` 包集合不含它，故板级 `rootfs.packages` 显式声明，让 `default` / `amp` product 也拿得到。
+
+**验收**：
+
+```bash
+ls /sys/class/bluetooth/                        # 应有 hci0
+systemctl is-active bluetooth-orangepi-cm4      # active
+hciconfig -a                                    # hci0 UP RUNNING，errors:0
+dmesg | grep BCM4345C5                          # 应见 'brcm/BCM4345C5.hcd' Patch 与 BT 5.2
+bluetoothctl scan le                            # 应能收到广播事件
+```
+
+BD Address 应与 WiFi MAC 连号（实测 BT `C0:F5:35:41:28:97` / WiFi `…:96`），说明取自模组 OTP。
+
+BT 应用层栈（配对策略、音频 profile）不预装，由产品方自取。
+
+**更干净但未采用的路线**：给 `uart1` 加 `compatible = "brcm,bcm4345c5"` 的 `bluetooth` 子节点走 serdev，由内核自动 attach，可省掉 `bluez` 与常驻进程。没做是因为 BSP 的 `wireless-bluetooth` 节点持有 `BT,reset_gpio=79`，serdev 子节点要用同一个 GPIO 作 `shutdown-gpios`，冲突需先禁用前者，且该 BSP 上 serdev 路径无先例、需实机反复试。
 
 ## NPU
 

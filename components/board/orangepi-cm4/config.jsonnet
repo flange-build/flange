@@ -90,6 +90,12 @@ local amp = product == 'amp' || product == 'amp-rtt';
   // 编译时去后缀回仓库取 rk3568-i2c2-m1.dts。
   boot+: { overlays+: { vendor: ['rk3568-i2c2-m1.dtbo'] } },
   rootfs+: {
+    // btattach / hciconfig 都来自 bluez；base 包集合不含它，desktop 只是被
+    // ubuntu-desktop 顺带拉进来。BT 要在所有 product 上开机可用就得显式声明。
+    // dtsi 只给了 wireless-bluetooth 平台节点、uart1 下没有 serdev 形态的
+    // bluetooth 子节点，内核不会自动 attach，只能靠用户态 btattach——见
+    // overlay/etc/systemd/system/bluetooth-orangepi-cm4.service。
+    packages+: ['bluez'],
     extra_firmware+: [{
       name: 'radxa',
       source: {
