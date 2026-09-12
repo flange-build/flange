@@ -210,7 +210,11 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
             decoded.append("".join(
                 chr(value) if 32 <= value < 127 else " " for value in raw
             ))
-        return output + "\n" + "\n".join(decoded)
+        corpus = output + "\n" + "\n".join(decoded)
+        # 芯片名之后的填充字节可能落在正则单词字符内（RK3566 实机为 0x5F，解码
+        # 即 "8653_"），\b8653\b 一类模式便失去右侧单词边界。再附一份只留字母
+        # 数字的文本，让各 SoC 的边界模式不受填充字节影响。
+        return corpus + "\n" + re.sub(r"[^0-9A-Za-z]+", " ", corpus)
 
     @staticmethod
     def _read_identity(tool: Path, command: str) -> str:
