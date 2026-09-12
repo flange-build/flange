@@ -65,6 +65,9 @@ def atomic_write(path: Path, content: str | bytes) -> None:
             stream.write(content.encode() if isinstance(content, str) else content)
             stream.flush()
             os.fsync(stream.fileno())
+        # mkstemp 默认权限为 0600，而构建在 Docker 容器内以 root 运行；不放宽权限，
+        # 宿主机非 root 用户便读不到写出的元数据（同 flash/model.py 的原子写）。
+        os.chmod(temporary, 0o644)
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
