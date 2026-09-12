@@ -103,6 +103,7 @@ class DockerRunner:
         input: str = None,
         label: str = "",
         extra_mounts: list = None,
+        ensure_build_root: bool = True,
     ) -> subprocess.CompletedProcess:
         """执行并在失败离开本命令时冻结诊断；后续清理使用独立缓冲。"""
         if self.output is not None:
@@ -111,6 +112,7 @@ class DockerRunner:
             return self._execute(
                 cmd, cwd=cwd, env=env, privileged=privileged, check=check,
                 capture=capture, input=input, label=label, extra_mounts=extra_mounts,
+                ensure_build_root=ensure_build_root,
             )
         except BaseException as error:
             if self.output is not None:
@@ -129,6 +131,7 @@ class DockerRunner:
         input: str = None,
         label: str = "",
         extra_mounts: list = None,
+        ensure_build_root: bool = True,
     ) -> subprocess.CompletedProcess:
 
         # capture 或 input 模式不走输出捕获流
@@ -157,6 +160,7 @@ class DockerRunner:
             input=input,
             extra_mounts=extra_mounts,
             label=label,
+            ensure_build_root=ensure_build_root,
         )
 
     def _run_with_capture(
@@ -276,6 +280,7 @@ class DockerRunner:
         input: str = None,
         extra_mounts: list = None,
         label: str = "",
+        ensure_build_root: bool = True,
     ) -> subprocess.CompletedProcess:
         """通过 docker compose run 执行命令。
 
@@ -295,7 +300,11 @@ class DockerRunner:
             "FLANGE_BUILD_ENVIRONMENT": self.environment_identity(),
         }
         if self.context:
-            self.context.build_root.mkdir(parents=True, exist_ok=True)
+            # 只读命令（plan / why）不得创建构建目录：契约要求干净工作区查询计划时
+            # 不落任何目录、锁、日志或下载内容。不存在的挂载点由下面的 exists()
+            # 过滤自然跳过，容器内因此看到"源码未准备"并如实返回待准备信息。
+            if ensure_build_root:
+                self.context.build_root.mkdir(parents=True, exist_ok=True)
             mounts.extend(
                 [
                     self.context.workspace_root,
