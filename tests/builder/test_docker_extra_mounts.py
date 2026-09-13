@@ -74,3 +74,53 @@ def test_特权由Compose服务配置按次设置而非run参数(host, tmp_path,
     assert kwargs['env']['FLANGE_BUILD_PRIVILEGED'] == ('true' if privileged else 'false')
     assert kwargs['env']['FLANGE_BUILD_IMAGE'] == 'sha256:test-image'
     assert os.environ['FLANGE_BUILD_PRIVILEGED'] == inherited
+
+
+def test_容器跑完把宿主机要写的子树交还宿主机用户(host, tmp_path, monkeypatch):
+    """容器内 root 落下的 locks/requests/target/work-apps 归还给宿主机用户，不动 sources/cache。"""
+    tool, workspace = tmp_path / 'tool', tmp_path / 'workspace'
+    tool.mkdir()
+    workspace.mkdir()
+    context = WorkspaceContext(tool, workspace, tmp_path / 'outputs', Target('b', 'p', 'debug'))
+    for name in ('locks', 'requests', 'sources', 'cache', 'work/b-p-debug/apps',
+                 'work/b-p-debug/rootfs', 'work/b-p-debug/packages'):
+        (context.build_root / name).mkdir(parents=True)
+    context.target_dir.mkdir(parents=True)
+    monkeypatch.setattr('os.getuid', lambda: 1234)
+    monkeypatch.setattr('os.getgid', lambda: 5678)
+    with patch('subprocess.run', return_value=MagicMock(returncode=0)) as call:
+        DockerRunner(context=context).run(['true'])
+    assert call.call_count == 2
+    chown = call.call_args_list[1].args[0]
+    assert chown[chown.index('chown'):chown.index('1234:5678') + 1] == [
+        'chown', '-R', '-h', '--from=0', '1234:5678'
+    ]
+    owned = set(chown[chown.index('1234:5678') + 1:])
+    assert owned == {
+        str(context.build_root / 'locks'),
+        str(context.build_root / 'requests'),
+        str(context.target_dir),
+        str(context.build_root / 'work/b-p-debug/apps'),
+        str(context.build_root / 'work/b-p-debug/packages'),
+    }
+    assert call.call_args_list[1].kwargs['env']['FLANGE_BUILD_PRIVILEGED'] == 'false'
+
+
+def test_失败与只读查询不交还属主(host, tmp_path, monkeypatch):
+    """构建失败也要交还（否则下一次锁就 EACCES）；只读查询不落目录也不 chown；root 无需交还。"""
+    tool, workspace = tmp_path / 'tool', tmp_path / 'workspace'
+    tool.mkdir()
+    workspace.mkdir()
+    context = WorkspaceContext(tool, workspace, tmp_path / 'outputs', Target('b', 'p', 'debug'))
+    (context.build_root / 'locks').mkdir(parents=True)
+    monkeypatch.setattr('os.getuid', lambda: 1234)
+    with patch('subprocess.run', return_value=MagicMock(returncode=3)) as call:
+        DockerRunner(context=context).run(['false'], check=False)
+    assert call.call_count == 2 and 'chown' in call.call_args_list[1].args[0]
+    with patch('subprocess.run', return_value=MagicMock(returncode=0)) as call:
+        DockerRunner(context=context).run(['plan'], capture=True, ensure_build_root=False)
+    assert call.call_count == 1
+    monkeypatch.setattr('os.getuid', lambda: 0)
+    with patch('subprocess.run', return_value=MagicMock(returncode=0)) as call:
+        DockerRunner(context=context).run(['true'])
+    assert call.call_count == 1

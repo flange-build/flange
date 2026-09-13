@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import os
+import stat
 import tempfile
 import threading
 from pathlib import Path
@@ -11,6 +13,21 @@ from typing import IO
 
 _HELD: dict[tuple[str, int, int], tuple[IO[str], int]] = {}
 _GUARD = threading.RLock()
+
+# 锁目录与锁文件同时被两侧使用：宿主机普通用户（app/package build、deploy、
+# clean 先在宿主机申请目标锁）和构建容器内的 root（系统构建、run_logged）。谁先
+# 创建，另一侧都必须还能 open+flock，所以目录 1777、文件 0666，与创建者无关。
+LOCK_DIR_MODE = 0o1777
+LOCK_FILE_MODE = 0o666
+
+
+def _relax_mode(path: Path, mode: int) -> None:
+    """把权限放宽到 mode；文件归另一个用户时 chmod 会失败，静默跳过。"""
+    try:
+        if stat.S_IMODE(path.stat().st_mode) != mode:
+            path.chmod(mode)
+    except OSError:
+        pass
 
 
 class FileLock:
@@ -25,13 +42,24 @@ class FileLock:
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        _relax_mode(self.path.parent, LOCK_DIR_MODE)
         with _GUARD:
             held = _HELD.get(self._key)
             if held:
                 stream, depth = held
                 _HELD[self._key] = (stream, depth + 1)
                 return self
-        stream = self.path.open("a+")
+        try:
+            descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT, LOCK_FILE_MODE)
+        except PermissionError as exc:
+            raise PermissionError(
+                errno.EACCES,
+                f"无法打开锁文件 {self.path}：它归另一个用户所有（通常是旧版 flange 在"
+                "构建容器内以 root 创建）。一次性修复后重试："
+                f"sudo chown -R $(id -u):$(id -g) {self.path.parent}",
+            ) from exc
+        _relax_mode(self.path, LOCK_FILE_MODE)
+        stream = os.fdopen(descriptor, "a+")
         try:
             fcntl.flock(stream, fcntl.LOCK_EX)
         except BaseException:

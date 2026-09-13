@@ -245,6 +245,23 @@ def _target(args, options, start: Path, output: Presenter) -> int:
     return 0
 
 
+def _remove_build_tree(path: Path, context) -> None:
+    """删除构建产物树；宿主机删不动 root 留下的条目时改在容器内以 root 删除。
+
+    系统构建的中间目录（rootfs 的 run-* 等）由容器内 root 以 0700 创建，
+    普通用户的 rmtree 走到那里必然 EACCES。容器内的 rm 对同一 bind mount
+    路径没有这个限制；容器内运行时本来就是 root，直接抛出即可。
+    """
+    from builder.docker import DockerRunner, _is_inside_container
+
+    try:
+        shutil.rmtree(path)
+    except PermissionError:
+        if _is_inside_container():
+            raise
+        DockerRunner(context=context).run(["rm", "-rf", str(path)], capture=True)
+
+
 def _system(args, options, start: Path, output: Presenter) -> int:
     context = load_workspace(start, target=options.target)
     config = resolve_config(context)
@@ -466,7 +483,7 @@ def _dispatch(args, options, start: Path, output: Presenter) -> int:
                     if path.is_symlink():
                         path.unlink()
                     elif path.exists():
-                        shutil.rmtree(path)
+                        _remove_build_tree(path, context)
         output.result(
             "clean",
             {"dry_run": args.dry_run, "paths": paths},

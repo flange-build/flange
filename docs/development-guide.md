@@ -76,6 +76,17 @@ Docker Desktop 的处理器运行在其 Linux 虚拟机中；不要在 macOS 宿
 并确保 Docker 可访问该目录。构建在源码准备前检查环境，不再自动关闭驱动来规避文件名冲突。
 工具仓库直接构建时也可用 `flange init .` 创建工作区声明，再修改 `build_dir`。
 
+### 构建目录的属主
+
+构建容器内一切以 root 运行并直接写在 bind mount 的 `build_dir` 里，宿主机侧则以普通用户
+申请目标锁、写构建请求、记录部署会话和执行 `flange clean`。flange 为此做了两件事：
+锁目录与锁文件始终以 1777/0666 创建，先创建的一方不会把另一方锁在外面；每次容器
+执行结束后（成功、失败或中断），把 `locks`、`requests`、`target/<板卡>/<产品>/<变体>`
+和 `work/<目标>/apps`、`work/<目标>/packages` 交还给宿主机用户。`sources`（容器内 git
+按属主判定仓库可信）和 `cache` 保持 root。若工作区由更早版本的 flange 构建过，宿主机
+命令可能一次性报 `Permission denied: .../locks/<目标>.lock`，按提示执行
+`sudo chown -R $(id -u):$(id -g) <build_dir>/locks <build_dir>/target` 后即可恢复。
+
 ### 构建存储与磁盘空间
 
 源码、缓存归档和最终镜像保存在工作区 `build_dir`。rootfs/recovery 则需要完整 Linux 权限与 UID/GID 语义，

@@ -23,6 +23,30 @@ def _is_inside_container() -> bool:
     return os.path.exists("/.dockerenv")
 
 
+def host_owned_paths(context: "WorkspaceContext") -> list[Path]:
+    """构建容器（root）写过、而宿主机普通用户之后还要写或删的子树。
+
+    容器内一切以 root 运行并直接落在 bind mount 的构建根里，宿主机侧却要
+    在这些目录里申请锁（locks）、写构建请求（requests）、记录部署会话
+    （target/<...>/sessions）以及 ``flange clean`` 整树删除。容器跑完把它们
+    的属主交还宿主机用户，两侧才都写得动。
+
+    刻意不含 ``sources``（容器内 git 按属主 uid 判定仓库可信，换属主只会把
+    故障搬到另一侧）和 ``cache``（只有容器内的 apt/ccache 用）。``work`` 只
+    取 apps/packages 两个子树，系统构建的 rootfs 中间目录带 UID/GID 语义。
+    """
+    root = context.build_root
+    work = root / "work" / context.target.key
+    candidates = [
+        root / "locks",
+        root / "requests",
+        context.target_dir,
+        work / "apps",
+        work / "packages",
+    ]
+    return [path for path in candidates if path.exists()]
+
+
 class DockerRunner:
     """在 Docker 容器内执行命令。
 
@@ -355,31 +379,36 @@ class DockerRunner:
                 kwargs.pop("stdout", None)
                 kwargs["capture_output"] = True
 
-        if self.output and not capture and input is None:
-            result = None
-            cancelled = False
-            if label:
-                self.output.spinner_start(label)
-            try:
-                result = run_logged(
-                    docker_cmd, self.output, cwd=self.project_dir,
-                    env=kwargs["env"], start_command=False,
-                )
-            except KeyboardInterrupt:
-                cancelled = True
-                raise
-            finally:
+        try:
+            if self.output and not capture and input is None:
+                result = None
+                cancelled = False
                 if label:
-                    self.output.spinner_stop(
-                        success=result is not None and result.returncode == 0,
-                        cancelled=cancelled,
+                    self.output.spinner_start(label)
+                try:
+                    result = run_logged(
+                        docker_cmd, self.output, cwd=self.project_dir,
+                        env=kwargs["env"], start_command=False,
                     )
-        else:
-            result = subprocess.run(docker_cmd, **kwargs)
-            if self.output and (capture or input is not None):
-                for value in (result.stdout, result.stderr):
-                    for line in (value or "").splitlines(keepends=True):
-                        self.output.feed_line(line)
+                except KeyboardInterrupt:
+                    cancelled = True
+                    raise
+                finally:
+                    if label:
+                        self.output.spinner_stop(
+                            success=result is not None and result.returncode == 0,
+                            cancelled=cancelled,
+                        )
+            else:
+                result = subprocess.run(docker_cmd, **kwargs)
+                if self.output and (capture or input is not None):
+                    for value in (result.stdout, result.stderr):
+                        for line in (value or "").splitlines(keepends=True):
+                            self.output.feed_line(line)
+        finally:
+            # 成功、失败、Ctrl-C 都要交还属主，否则下一次宿主机侧申请锁就 EACCES。
+            if ensure_build_root:
+                self._restore_host_ownership(kwargs["env"])
         if check and result.returncode != 0:
             message = f"Docker 命令失败 (exit {result.returncode}): {' '.join(str(c) for c in cmd)}"
             if capture:
@@ -388,6 +417,44 @@ class DockerRunner:
                     message += "\n" + details
             raise BuildError(message)
         return result
+
+    def _restore_host_ownership(self, env: dict) -> None:
+        """容器以 root 写完构建根后，把宿主机要写的子树 chown 回宿主机用户。
+
+        只改仍归 root 的条目（``--from=0``），不跟随符号链接，失败只警告：
+        属主没交还时下一条命令会在锁文件处给出明确的修复提示。
+        """
+        if self.context is None or self._in_container or os.getuid() == 0:
+            return
+        paths = host_owned_paths(self.context)
+        if not paths:
+            return
+        owner = f"{os.getuid()}:{os.getgid()}"
+        build_root = self.context.build_root
+        docker_cmd = self.compose_command(
+            "--ansi", "never", "--progress", "quiet", "run", "--rm", "--no-deps", "-T",
+            "-v", f"{build_root}:{build_root}:rw", "build",
+            "chown", "-R", "-h", "--from=0", owner, *(str(path) for path in paths),
+        )
+        try:
+            result = subprocess.run(
+                docker_cmd,
+                cwd=self.project_dir,
+                env={**env, "FLANGE_BUILD_PRIVILEGED": "false"},
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            result = None
+            detail = str(exc)
+        else:
+            detail = (result.stderr or result.stdout or "").strip()
+        if result is None or result.returncode != 0:
+            print(
+                f"警告：未能把构建目录属主交还宿主机用户（{detail or '未知原因'}）；"
+                f"宿主机侧后续操作可能报权限错误：{', '.join(str(p) for p in paths)}",
+                file=sys.stderr,
+            )
 
     def run_privileged(self, cmd: list, **kwargs):
         """特权模式执行（rootfs chroot/mount 操作需要）"""
