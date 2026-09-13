@@ -336,6 +336,9 @@ class SourceManager:
         path = self.sources_dir / "downloads" / category / sha256 / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_file() and self._sha256_file(path) == sha256:
+            # 修复历史版本以 0600 落盘的缓存，否则宿主机非 root 用户读不到。
+            if not path.stat().st_mode & 0o044:
+                path.chmod(0o644)
             return path
 
         descriptor, temporary = tempfile.mkstemp(
@@ -351,6 +354,9 @@ class SourceManager:
             )
             if self._sha256_file(partial) != sha256:
                 raise RuntimeError(f"{name}: sha256 校验失败（URL: {url}）")
+            # mkstemp 默认权限为 0600；构建在 Docker 容器内以 root 运行，不放宽权限
+            # 的话，宿主机非 root 用户（如 flange flash 调用 edl-ng）无法读取该文件。
+            partial.chmod(0o644)
             partial.replace(path)
         except Exception:
             partial.unlink(missing_ok=True)

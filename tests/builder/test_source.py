@@ -185,12 +185,16 @@ class TestEnsureExtraDeb:
         )
         deb_path.parent.mkdir(parents=True)
         deb_path.write_bytes(content)
+        # 模拟旧版本以 mkstemp 默认 0600 落盘的缓存
+        deb_path.chmod(0o600)
 
         with patch("builder.source.subprocess.run") as mock_run:
             result = manager.ensure_extra_deb("foo", cfg)
 
         mock_run.assert_not_called()
         assert result == deb_path
+        # 命中缓存时应顺手放宽权限，否则宿主机非 root 用户读不到
+        assert result.stat().st_mode & 0o777 == 0o644
 
     def test_首次下载校验通过后落地(self, manager: SourceManager):
         """首次下载：wget 写 .download → sha256 通过 → rename 到目标。"""
@@ -208,6 +212,8 @@ class TestEnsureExtraDeb:
 
         assert result.read_bytes() == content
         assert result.name == "bar_2.0_arm64.deb"
+        # 容器内以 root 落盘，必须对宿主机非 root 用户可读（mkstemp 默认 0600）
+        assert result.stat().st_mode & 0o777 == 0o644
         # .download 临时文件不应残留
         assert not result.with_suffix(result.suffix + ".download").exists()
 
