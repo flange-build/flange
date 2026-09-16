@@ -1,0 +1,2 @@
+# 默认用户属于 video 组，可直接访问 BSP GPU。
+KERNEL=="mali[0-9]*", GROUP="video", MODE="0660"

@@ -19,7 +19,7 @@ related:
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
   - "[[adbd]]"
-updated: 2026-09-05
+updated: 2026-09-16
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -33,12 +33,20 @@ Radxa ROCK 5B，RK3588 SoC（4×A76 + 4×A55），项目首块 RK3588 适配板�
 
 ## product / variant
 
-继承平台默认：`products: [default]`，`variants: [debug, release]`。
+板级提供 `default`、`desktop`、`meizu-e3-bringup` 和 `rockmedia`，均支持 `debug/release`。
+`rockmedia` 是厂商 GPU 多媒体基座，其余产品使用 Panthor。
 
 ```
 lunch radxa-rock5b-default-debug
 lunch radxa-rock5b-default-release
+lunch radxa-rock5b-rockmedia-debug
+lunch radxa-rock5b-rockmedia-release
 ```
+
+选定目标后执行 `flange build`。`rockmedia` 包含 BSP mali_kbase + Mali-G610 g24p0
+X11/Wayland/GBM 用户态驱动，以及 MPP、RGA、GStreamer 与 Rockchip 插件；默认不启动图形桌面。
+完整说明及实机验收见 [厂商 GPU 多媒体基座](../../components/packages/rockchip-mali-g610/README.md)。
+切换 GPU 栈时必须同时更新 boot 和 rootfs；新增产品的硬件表现尚待实机验收。
 
 ## 关键差异点
 
@@ -48,7 +56,7 @@ lunch radxa-rock5b-default-release
 | DTB | `rk3588-rock-5b` |
 | u-boot 分支 | `radxa/u-boot @ next-dev-v2026.01`（RK3566/RK3588 全平台统一；v2024.10 在 tspi-rk3566 上 USB OTG configfs gadget 不枚举，整平台切到 v2026.01） |
 | u-boot defconfig | `rk3588_defconfig`（沿用 SoC generic，走 extlinux.conf；不用 board-specific 因其内置 androidboot 风格 bootargs 绕过 extlinux） |
-| GPU | mainline panthor（rkr5.1 dts 已 `arm,mali-valhall-csf`，SoC fragment 关 mali_kbase 启 panthor）；emergency rollback overlay 在板私有 dtso |
+| GPU | 默认 Panthor；rockmedia 使用 BSP mali_kbase CSF + g24p0 libmali，配套启用板私有 compatible overlay |
 | 调试串口 | UART2，1500000 bps（与 RK3566 一致） |
 | mkimage chip | `rk3588`（同 die RK3588S 共用） |
 | 分区布局 | 沿用 RK3566 5 分区（idbloader/uboot/boot/recovery/rootfs） |
@@ -63,7 +71,10 @@ M.2 E-Key 槽位（`pcie2x1l0`，dts 默认 okay，PCIe ID `10ec:b852`）走 RTL
 
 ## VPU / 多媒体加速
 
-继承 SoC 层 rk3588 默认安装的 Rockchip 多媒体栈（`+extra_debs` 9 个 deb，详见 [[rockchip 平台]]）：`rockchip-mpp` + `librga2` + `gstreamer1.0-rockchip` 全套。GStreamer element 含 `mppvideodec`（HEVC/AVC/VP8/VP9 多解）、`mpph264enc` / `mpph265enc` / `mppvp8enc` / `mppjpegenc` / `mppjpegdec`。/dev/mpp_service + /dev/rga 内核节点存在；实测 720p H264 编码 ~10× realtime、解码 ~40× realtime。
+板级显式启用 [rockchip-multimedia](../../components/packages/rockchip-multimedia/README.md)，
+在 Docker 中自编 MPP 1.3.9、RGA 2.1.0、带 Rockchip 补丁的 GStreamer 1.24.2 及
+`gstreamer1.0-rockchip`，重打为本地 DEB。GStreamer element（处理节点）包含 `mppvideodec`、
+`mpph264enc`、`mpph265enc` 等。历史板卡记录中的编解码性能不代表新增 rockmedia 组合已验收。
 
 ## MIPI-DSI 屏（meizu-e3-panel）
 
@@ -85,5 +96,5 @@ M.2 E-Key 槽位（`pcie2x1l0`，dts 默认 okay，PCIe ID `10ec:b852`）走 RTL
 
 ## 板私有 overlay
 
-- `dtso/rk3588-rock-5b-mali-valhall-compat.dtso` — emergency rollback：把 GPU compatible 改回 `arm,mali-valhall` 让 BSP mali_kbase 能绑（panthor 起不来时手改 extlinux 启用）
+- `dtso/rk3588-rock-5b-mali-valhall-compat.dtso` — rockmedia 默认启用，将 GPU compatible 改为 `arm,mali-valhall` 以匹配 BSP mali_kbase；其他产品不启用
 - `overlay/etc/hostname`、`overlay/etc/usbdevice.conf`（USB gadget group=rockchip，与 zero3w 同模板；含 `ADB_TCP_PORT`/`ADBD_SHELL` export——板级 conf 整文件覆盖 App 层 conf，App 新增键须在此跟进，详见 [[adbd]] 易踩坑）

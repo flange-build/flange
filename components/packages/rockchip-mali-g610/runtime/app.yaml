@@ -1,0 +1,36 @@
+app:
+  name: flange-mali-g610
+  version: 1.9.0+g24p0.flange1
+  description: Mali-G610 g24p0 X11 Wayland GBM 厂商驱动
+  type: vendor
+  arch: [aarch64]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: custom
+  commands:
+    - [python3, build.py]
+  apt_packages: [dpkg-dev]
+
+depends:
+  - libc6 (>= 2.34)
+  - libdrm2 (>= 2.4.31)
+  - libgcc-s1
+  - libstdc++6
+  - libwayland-client0 (>= 1.11.0)
+  - libwayland-server0 (>= 1.2.0)
+  - libx11-6
+  - libx11-xcb1 (>= 2:1.7.5)
+  - libxcb-dri2-0 (>= 1.8)
+  - libxcb1
+  - ocl-icd-libopencl1
+  - libvulkan1
+  - udev
+
+maintainer_scripts:
+  postinst: scripts/postinst
+  postrm: scripts/postrm
+  triggers: scripts/triggers
