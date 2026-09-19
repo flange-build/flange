@@ -54,6 +54,47 @@ def peer_credentials(sock: socket.socket) -> tuple[int, int, int]:
     return pid, uid, gid
 
 
+def ensure_group() -> bool:
+    """幂等创建特权 group。返回是否可用。
+
+    本该由 deb 的 postinst 承担，但 flange 的打包机制只对 app.type=vendor
+    开放 maintainer_scripts，本 App 是 service 类型。
+
+    也**不能**把它加进 rootfs 的顶层 groups —— 那个字段的第二职是「作为
+    每个 user 的默认入组集合」，加进去会让所有普通用户自动获得切换权限，
+    分级授权就形同虚设了。
+
+    因此由服务在启动时创建：以 -r 建为 system group，不占用普通用户 GID
+    区间，且不把任何用户加进去 —— 管理员按需 usermod -aG usbmode <user>。
+    创建失败不中断启动，此时授权降级为「仅 root」，是安全的方向。
+    """
+    try:
+        grp.getgrnam(PRIVILEGED_GROUP)
+        return True
+    except KeyError:
+        pass
+
+    import shutil
+    import subprocess
+
+    groupadd = shutil.which("groupadd")
+    if groupadd is None:
+        log.warning("groupadd 不可用，无法创建 %s 组；变更类命令将仅限 root", PRIVILEGED_GROUP)
+        return False
+    result = subprocess.run(
+        [groupadd, "-r", "-f", PRIVILEGED_GROUP], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        log.warning(
+            "创建 %s 组失败（%s）；变更类命令将仅限 root",
+            PRIVILEGED_GROUP,
+            result.stderr.strip(),
+        )
+        return False
+    log.info("已创建 system group：%s（需 usermod -aG 才能授予普通用户）", PRIVILEGED_GROUP)
+    return True
+
+
 def is_privileged(uid: int, gid: int) -> bool:
     """判断调用方是否有权执行变更类命令。"""
     if uid == 0:

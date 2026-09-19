@@ -42,7 +42,7 @@
 - `components/app/adbd/`：新增三层 Python 实现、控制接口、CLI、各能力的 systemd unit；`app.yaml` 大幅调整；`depends` 加入 `python3`（metapackage，非 `python3-minimal`）与 `python3-yaml`。
 - `components/app/adbd/conf/usbdevice.conf` 及 **12 份板级 overlay 配置**：迁移为新的场景定义格式（YAML，与 flange 既有配置风格一致）。
 - `components/app/adbd/udev/61-usbdevice.rules`：触发目标从 `systemctl reload usbdevice.service` 改为新服务的对应入口。
-- `components/rootfs/config.jsonnet`：`groups` 新增 `usbmode`。
+- `components/rootfs/config.jsonnet`：**不改动**。`usbmode` group 由服务启动时创建 —— 顶层 `groups` 会让所有用户默认入组，与分级授权的意图相悖。
 - 受影响板子：全部 12 块已配置 USB gadget 的板子，均需重新验证 USB 基本功能。
 - 风险集中：本变更采用一次性全量重写而非渐进迁移，13 项竞态知识需一次性全部迁移到位。
 

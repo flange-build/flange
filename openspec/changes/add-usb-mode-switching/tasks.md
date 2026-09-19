@@ -60,15 +60,15 @@
 
 ## 7. 打包与配置迁移
 
-- [ ] 7.1 服务 systemd unit：`local-fs.target` 与 `sys-kernel-config.mount` 之后启动，`sysinit.target` 与 `usb-gadget.target` 双链路拉起，含失败重启与限流
-- [ ] 7.2 各带 daemon 能力的 unit（adbd、mtp-server），含重启策略
-- [ ] 7.3 udev 规则改造：`android_usb` change 与 `udc` add/change 事件改为异步通知常驻服务
-- [ ] 7.4 `app.yaml` 调整：install 映射、`depends` 加 `python3`（metapackage，非 `python3-minimal`）与 `python3-yaml`、systemd unit 声明
-- [ ] 7.5 `components/rootfs/config.jsonnet` 的 `groups` 新增 `usbmode`，同步更新 `wiki/components/rootfs-构建器.md`
-- [ ] 7.6 App 层默认 gadget 配置与通用场景定义（YAML）
-- [ ] 7.7 板级配置迁移（第一批）：可实测的板子，按 1.3 对照表逐项迁移，以行为等价为准
-- [ ] 7.8 板级配置迁移（第二批）：无法实测的板子，迁移后明确标注「已迁移未验证」
-- [ ] 7.9 移除 `scripts/usbdevice`、`conf/usbdevice.conf` 及各板级 `overlay/etc/usbdevice.conf`
+- [x] 7.1 服务 systemd unit：`local-fs.target` 与 `sys-kernel-config.mount` 之后启动，`sysinit.target` 与 `usb-gadget.target` 双链路拉起，含失败重启与限流
+- [x] 7.2 各带 daemon 能力的 unit（adbd、mtp-server），含重启策略
+- [x] 7.3 udev 规则改造：`android_usb` change 与 `udc` add/change 事件改为异步通知常驻服务
+- [x] 7.4 `app.yaml` 调整：install 映射、`depends` 加 `python3`（metapackage，非 `python3-minimal`）与 `python3-yaml`、systemd unit 声明
+- [x] 7.5 特权 group `usbmode` 由服务启动时幂等创建（`groupadd -r -f`）。**不加入 `components/rootfs/config.jsonnet` 的顶层 `groups`** —— 该字段的第二职是「作为每个 user 的默认入组集合」，加入会使所有普通用户自动获得切换权限、分级授权失效；`maintainer_scripts` 又仅对 `app.type=vendor` 开放，故由服务承担
+- [x] 7.6 App 层默认 gadget 配置与通用场景定义（YAML）
+- [x] 7.7 板级配置迁移（第一批）：可实测的板子，按 1.3 对照表逐项迁移，以行为等价为准
+- [x] 7.8 板级配置迁移（第二批）：无法实测的板子，迁移后明确标注「已迁移未验证」
+- [x] 7.9 移除 `scripts/usbdevice`、`conf/usbdevice.conf` 及各板级 `overlay/etc/usbdevice.conf`
 
 ## 8. 验证
 

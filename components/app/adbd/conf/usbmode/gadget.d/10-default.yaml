@@ -1,0 +1,32 @@
+# usbmoded gadget 描述符 —— App 层通用默认值
+#
+# 板级 overlay 在 20-<board>.yaml 中只声明需要覆盖的键，两者按键合并。
+# 这与既有 usbdevice.conf 的整文件覆盖语义不同：那种语义下 App 层新增
+# 的键会在各板默默丢失，实测导致 7 个键在 12 份板级配置中各重复一遍。
+#
+# 十六进制值一律写成带引号的字符串。YAML 1.1 会把裸写的 0x2207 解析成
+# 整数 8711，加载层虽能兼容，但配置文件里所见即 configfs 所得更不易出错。
+
+gadget:
+  # Linux Foundation 的测试 VID。板级应覆盖为自己的 VID。
+  vendor_id: "0x1d6b"
+  product_name: linux-gadget
+  manufacturer: linux
+  # configfs 中 gadget 目录的名字。
+  group: linux
+
+  # 序列号来源：cpuinfo（取 /proc/cpuinfo 的 Serial）/ random / 其余值直接作为序列号
+  serial_source: cpuinfo
+
+  bcd_device: "0x0310"
+  bcd_usb: "0x0200"
+  max_power: 500
+
+  # 能力组合到 Product ID 的映射。键为能力名按字母排序、下划线连接，
+  # 例如 adb + mtp → adb_mtp。未命中时用 default。
+  pid_map:
+    adb: "0x0006"
+    default: "0x0019"
+
+# 开机进入的场景。存在持久化场景时以后者优先。
+default_scene: debug

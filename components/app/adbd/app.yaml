@@ -1,7 +1,7 @@
 app:
   name: adbd
-  version: 1.0.0
-  description: Android Debug Bridge daemon，通过 USB gadget 提供 adb 调试通道
+  version: 2.0.0
+  description: USB gadget 管理子系统（usbmoded）—— 原子能力层 + 场景层，提供 adb/ums/uvc/uac/mtp 等 USB 能力与运行时工作模式切换
   type: service
   arch:
     - aarch64
@@ -12,18 +12,56 @@ maintainer:
   email: flange@localhost
 
 install:
-  conf/usbdevice.conf: /etc/usbdevice.conf
-  scripts/usbdevice: /usr/sbin/usbdevice
+  # Python 包。install 是逐文件映射，不支持目录递归，
+  # 因此每个模块都要显式声明。dist-packages 是 Debian/Ubuntu
+  # 的第三方包标准路径，装在此处即可直接 import，无需 sys.path 调整。
+  usbmoded/__init__.py: /usr/lib/python3/dist-packages/usbmoded/__init__.py
+  usbmoded/capabilities/__init__.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/__init__.py
+  usbmoded/capabilities/adb.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/adb.py
+  usbmoded/capabilities/daemon.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/daemon.py
+  usbmoded/capabilities/media.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/media.py
+  usbmoded/capabilities/network.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/network.py
+  usbmoded/capabilities/serial_hid.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/serial_hid.py
+  usbmoded/capabilities/storage.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/storage.py
+  usbmoded/capability.py: /usr/lib/python3/dist-packages/usbmoded/capability.py
+  usbmoded/config.py: /usr/lib/python3/dist-packages/usbmoded/config.py
+  usbmoded/configfs.py: /usr/lib/python3/dist-packages/usbmoded/configfs.py
+  usbmoded/control.py: /usr/lib/python3/dist-packages/usbmoded/control.py
+  usbmoded/gadget.py: /usr/lib/python3/dist-packages/usbmoded/gadget.py
+  usbmoded/role.py: /usr/lib/python3/dist-packages/usbmoded/role.py
+  usbmoded/scene.py: /usr/lib/python3/dist-packages/usbmoded/scene.py
+  usbmoded/udc.py: /usr/lib/python3/dist-packages/usbmoded/udc.py
+
+  # 服务入口与 CLI。装在 sbin：与 recoveryctl 一致的系统维护命令定位。
+  bin/usbmoded: /usr/sbin/usbmoded
+  bin/usb-mode: /usr/sbin/usb-mode
+
+  # 配置。conf/ 的约定路径是 /etc/<app名>/，这里显式覆盖为 /etc/usbmode/
+  # —— 配置属于 usbmoded 子系统，不应挂在 adbd 这个历史 App 名下。
+  conf/usbmode/gadget.d/10-default.yaml: /etc/usbmode/gadget.d/10-default.yaml
+  conf/usbmode/scenes.d/10-common.yaml: /etc/usbmode/scenes.d/10-common.yaml
+
+  # udev 规则。约定路径为 /lib/udev/rules.d/，覆盖到 /etc 以便板级调试时修改。
   udev/61-usbdevice.rules: /etc/udev/rules.d/61-usbdevice.rules
 
 systemd:
-  unit: systemd/usbdevice.service
+  # 主服务。usbmoded-adbd.service 与 usbmoded-mtp-server.service 经
+  # systemd/ 约定目录一并安装，但刻意不 enable —— 它们的启停由 usbmoded
+  # 的对应能力驱动，而非开机自启。
+  unit: systemd/usbmoded.service
   auto_start: true
 
 depends:
+  # python3 是 metapackage，会带入完整 stdlib（含 json / argparse /
+  # dataclasses / socketserver 等必需模块）；python3-minimal 不够。
+  - python3
+  # 配置文件为 YAML，rootfs base 包集合不含 PyYAML，需显式依赖。
+  # 不把它加进 base 包集合 —— 单个 App 的需要不应污染全线 rootfs。
+  - python3-yaml
   - libc6
 
 conffiles:
-  - /etc/usbdevice.conf
+  - /etc/usbmode/gadget.d/10-default.yaml
+  - /etc/usbmode/scenes.d/10-common.yaml
 
 data_dirs: []

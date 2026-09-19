@@ -77,6 +77,10 @@ def main() -> int:
         # 静默退出会让本已失去 adb 的设备完全无从诊断。
         log.error("开机场景初始化失败：%s —— 控制接口仍将启动", exc)
 
+    # 幂等创建特权 group。见 control.ensure_group 的说明：不能走 rootfs
+    # 顶层 groups，那会让所有用户默认入组。
+    control.ensure_group()
+
     try:
         server = control.serve(manager)
     except RuntimeError as exc:

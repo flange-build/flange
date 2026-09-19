@@ -1,0 +1,13 @@
+# usbmoded gadget 配置 —— radxa-cubie-a7a 板级覆盖
+#
+# 只声明与 App 层默认值（10-default.yaml）不同的键，两者按键合并。
+# App 层后续新增的键会自动对本板生效，无需在此跟进 —— 这与旧的
+# usbdevice.conf 整文件覆盖语义不同。
+
+gadget:
+  vendor_id: "0x1f3a"
+  product_name: radxa-cubie-a7a
+  manufacturer: Allwinner
+  group: sunxi
+
+# pid_map 未声明：本板的 adb=0x0006、default=0x0019 与 App 层默认相同。

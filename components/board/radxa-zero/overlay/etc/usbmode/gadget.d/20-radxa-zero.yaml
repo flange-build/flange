@@ -1,0 +1,15 @@
+# usbmoded gadget 配置 —— radxa-zero 板级覆盖
+#
+# 只声明与 App 层默认值（10-default.yaml）不同的键，两者按键合并。
+# App 层后续新增的键会自动对本板生效，无需在此跟进 —— 这与旧的
+# usbdevice.conf 整文件覆盖语义不同。
+
+gadget:
+  vendor_id: "0x18d1"
+  product_name: radxa-zero
+  manufacturer: radxa
+  group: radxa-zero
+
+  pid_map:
+    adb: "0xd001"
+    default: "0xd002"
