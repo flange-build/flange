@@ -225,3 +225,16 @@ ROCK 5B 的 role 切换才第一次真正可测。随即又暴露 3 个缺陷，
 - **`net` 场景可用**：切换后设备侧出现 `usb0` 接口（此前因 ncm 缺失而失败）
 - **boot 分区仅 56M、可用 16M**，而 Image 有 38M：替换内核必须先删旧的，中间存在
   「无内核」窗口。备份只能放根分区，不能放 /boot。
+
+## 实板验证工具
+
+13 项竞态 + adbd×systemd×FFS + 并发的验证已固化为可复用脚本：
+`tests/usbmoded_field_verify.py`。
+
+不被 pytest 收集（需要真实硬件、必须 root 在目标板运行）。换板子只需调整
+文件头的 `GADGET_GROUP` 与 `UDC_NAME` 两个常量。
+
+ROCK 5B 实测 **15/15 通过**。它与 `tests/test_usbmoded.py` 不可互相替代：
+后者在宿主机的伪 configfs 上验证编排逻辑，模拟不了 configfs 的内核语义，
+也模拟不了 role 切换的异步性 —— 本次两轮实板发现的 12 个缺陷里，没有一个
+是伪 configfs 能暴露的。
