@@ -1,6 +1,113 @@
-# adbd 预编译二进制来源
+# USB gadget 子系统（usbmoded）
 
-## 当前二进制：ADB 36.0.1 standalone（2026-08-31）
+本 App 承载完整的 USB gadget 子系统。App 名沿用历史上的 `adbd`，但实际
+内容已远超 adb —— adb 只是其中一个原子能力。
+
+> 本 App 在 2.0.0 中以三层架构的 Python 服务替换了原先的 `usbdevice`
+> shell 脚本。脚本中积累的 13 项平台竞态知识已逐条迁移，对照表见
+> `openspec/changes/add-usb-mode-switching/race-checklist.md`；
+> **修改 L1 之前请先读它**。
+
+## 架构
+
+```
+L3  场景层 (scene.py)        场景 = 能力集合 + 参数 + role，切换编排
+L2  原子能力层 (capabilities/) 每个 USB function 一个能力，统一接口 + 参数
+L1  gadget 核心 (gadget/udc/configfs)  configfs 原语、UDC 生命周期、竞态处理
+```
+
+L1 不认识任何具体 USB function —— 所有 function 相关行为都通过
+`capability.Capability` 接口调用。这条约束有自动化校验（`tests/test_usbmoded.py`
+与变更任务 2.11），是分层是否真正成立的硬指标。
+
+daemon（adbd、mtp-server）的生命周期交给 systemd，不自制保活循环 ——
+后者的状态判断读写不对称曾在 ROCK 5B 上堆积 360+ 并发循环、USB 每 2 秒
+断连一次。
+
+## 能力清单
+
+按内核要求的排列顺序：
+
+| 能力 | configfs 实例 | 参数 | 说明 |
+|---|---|---|---|
+| `ncm` / `rndis` | `ncm.gs0` / `rndis.gs0` | — | USB 网卡，二者互斥 |
+| `uac1` / `uac2` | `uac1.gs0` / `uac2.gs0` | — | 音频，二者互斥 |
+| `uvc` | `uvc.gs6` | `formats` | 摄像头。**不含取流 daemon**（沿用既有缺口） |
+| `adb` | `ffs.adb` | `tcp_port` `shell` `mountpoint` | 调试通道 |
+| `ntb` | `ffs.ntb` | `mountpoint` | 自定义 FunctionFS 通道 |
+| `ums` | `mass_storage.0` | `file` `size` `fstype` `ro` `auto_mount` `mountpoint` | U 盘 |
+| `mtp` | `mtp.gs0` | `device` | 媒体传输 |
+| `acm` | `acm.gs6` | — | CDC 串口 |
+| `hid` | `hid.usb0` | `protocol` `subclass` `report_length` `report_desc` | 默认标准键盘 |
+
+## 配置
+
+均为 YAML，按文件名顺序加载、**按键合并**（App 层 `10-`，板级 `20-`）。
+这与旧的 `usbdevice.conf` 整文件覆盖语义不同：后者会让 App 层新增的键在
+各板默默丢失，实测曾导致 7 个键在 12 份板级配置中各重复一遍。
+
+| 路径 | 内容 |
+|---|---|
+| `/etc/usbmode/gadget.d/*.yaml` | VID/PID、产品名、厂商名、gadget group、默认场景 |
+| `/etc/usbmode/scenes.d/*.yaml` | 场景定义 |
+| `/etc/usbmode/persist.yaml` | 持久化场景（由 `usb-mode set -p` 写入） |
+
+十六进制值一律写成带引号的字符串。YAML 1.1 会把裸写的 `0x2207` 解析成
+整数 8711，加载层虽能兼容，但写成字符串才能做到配置文件所见即 configfs 所得。
+
+### 场景定义
+
+```yaml
+scenes:
+  debug:
+    capabilities: [adb]
+    params:
+      adb: {tcp_port: 5555, shell: /bin/bash}
+  storage:
+    capabilities: [ums]
+    params:
+      ums: {file: /userdata/ums_shared.img, size: 256M, fstype: vfat}
+  host:
+    role: host        # 只声明 role，不改变能力集合
+```
+
+能力集合与 role 是正交维度，场景可以只声明其一。
+
+## 命令行
+
+```
+usb-mode list              列出可用场景与本平台能力
+usb-mode get               当前场景 / 能力 / role / UDC 与枚举状态
+usb-mode set <scene>       切换（重启后回到默认场景）
+usb-mode set -p <scene>    持久化切换
+usb-mode reset             清除持久化，回到板级默认场景
+usb-mode confirm           确认当前场景，取消自动回滚
+```
+
+### 失联风险
+
+切换到不含 `adb` 的场景（或 `role: host`）会切断 adb 通道本身。服务对此有
+自锁保护：检测到会切断通道时启动回滚计时器，未在窗口内 `usb-mode confirm`
+则自动切回原场景。
+
+**`-p` 持久化到这类场景需要额外的 `--force`** —— 否则设备每次开机都会进入
+无法远程访问的状态，只能靠串口或重新刷写恢复。
+
+## 控制协议
+
+`/run/usbmode.sock`，行分隔 JSON，`socat` / `nc` 可直接调试：
+
+```sh
+echo '{"cmd":"get"}' | socat - UNIX-CONNECT:/run/usbmode.sock
+```
+
+授权基于 `SO_PEERCRED`：查询类命令对所有本机进程开放，变更类命令要求
+`uid == 0` 或属于 `usbmode` 组。该组由服务启动时幂等创建，**不会有任何
+用户默认加入** —— 授予普通用户需显式 `usermod -aG usbmode <user>`。
+
+---
+
+## adbd 二进制来源：ADB 36.0.1 standalone（2026-08-31）
 
 - 来源：[happyme531/standalone-linux-adbd](https://github.com/happyme531/standalone-linux-adbd)（nmeum/android-tools 的 daemon 扩展，AOSP ADB 36.0.1 源码 + CMake 静态构建）
 - 基线 tag：`v36.0.1-linux.2`，commit `bdb5cdc4b516b3bc71fd2b805bc36190041a9393`

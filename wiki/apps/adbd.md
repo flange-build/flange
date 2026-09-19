@@ -7,15 +7,16 @@ sources:
   - components/app/adbd/bin/adbd-arm64
   - components/app/adbd/bin/adbd-armhf
   - components/app/adbd/README.md
-  - components/app/adbd/conf/usbdevice.conf
-  - components/app/adbd/scripts/usbdevice
-  - components/app/adbd/systemd/usbdevice.service
+  - components/app/adbd/usbmoded/
+  - components/app/adbd/conf/usbmode/
+  - components/app/adbd/systemd/usbmoded.service
   - components/app/adbd/udev/61-usbdevice.rules
   - components/board/atk-rk3506b/overlay/etc/modules-load.d/flange-usbgadget.conf
-  - components/board/radxa-rock5b/overlay/etc/usbdevice.conf
+  - components/board/radxa-rock5b/overlay/etc/usbmode/gadget.d/20-radxa-rock5b.yaml
   - components/rootfs/overlay/root/.bashrc
   - builder/platforms/rockchip/rootfs.py
 related:
+  - "[[USB gadget 子系统（usbmoded）]]"
   - "[[recoveryctl]]"
   - "[[recovery 系统]]"
   - "[[atk-rk3506b]]"
