@@ -1,0 +1,128 @@
+#!/usr/bin/python3
+"""usbmoded 服务入口。
+
+取代既有的 usbdevice shell 脚本，承担开机时的 USB gadget 初始化。
+本服务处于开机关键路径 —— 多数板子上 adb 是唯一的调试通道，因此
+启动失败必须留下明确日志，不得静默退出。
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import signal
+import sys
+import threading
+
+from usbmoded import capabilities, config, control, udc
+from usbmoded.gadget import Gadget
+from usbmoded.scene import SceneManager
+
+log = logging.getLogger("usbmoded")
+
+
+def reevaluate(manager: SceneManager, gadget: Gadget) -> None:
+    """重新评估 gadget 状态，对应既有实现的 `usbdevice update`。
+
+    由 SIGHUP 触发（udev 在 USB 状态变化时经 systemctl reload 发出）。
+
+    UDC 意外解绑而能力集合未变时，走断连恢复而非完整重配 —— 后者会
+    移除 configfs 链接触发 functionfs_unbind，永久破坏 FunctionFS
+    （知识 #8）。恢复之后再走一次正常启用把 daemon 拉回来。
+
+    能力集合未变且 UDC 仍绑定时，gadget 的幂等守卫（知识 #13）会让这次
+    调用成为空操作 —— udev 在每次状态变化都会触发，没有守卫会造成
+    soft-disconnect 的无限重置环。
+    """
+    if manager.current is None:
+        return
+    active = gadget.active_capabilities()
+    if active and not udc.current_binding(gadget.gadget_dir):
+        gadget.recover_disconnect()
+    try:
+        manager.switch(manager.current, force=True)
+    except Exception as exc:  # noqa: BLE001 - 重新评估失败不应终止服务
+        log.error("重新评估失败：%s", exc)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="USB 工作模式管理服务")
+    parser.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+    try:
+        descriptor, default_scene = config.load_gadget()
+    except config.ConfigError as exc:
+        log.error("加载 gadget 配置失败：%s", exc)
+        return 1
+
+    gadget = Gadget(descriptor)
+    try:
+        manager = SceneManager(gadget, default_scene)
+    except config.ConfigError as exc:
+        log.error("加载场景定义失败：%s", exc)
+        return 1
+
+    try:
+        result = manager.boot()
+        log.info("开机场景已就绪：%s", result.scene)
+    except Exception as exc:  # noqa: BLE001
+        # 不在此退出：控制接口仍应可用，让使用者能查明原因并手工切换。
+        # 静默退出会让本已失去 adb 的设备完全无从诊断。
+        log.error("开机场景初始化失败：%s —— 控制接口仍将启动", exc)
+
+    try:
+        server = control.serve(manager)
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        return 1
+
+    stop = threading.Event()
+
+    def on_term(signum, frame):  # noqa: ANN001, ARG001
+        log.info("收到信号 %s，退出", signum)
+        stop.set()
+
+    def on_hup(signum, frame):  # noqa: ANN001, ARG001
+        log.debug("收到 SIGHUP，重新评估 gadget 状态")
+        threading.Thread(target=reevaluate, args=(manager, gadget), daemon=True).start()
+
+    signal.signal(signal.SIGTERM, on_term)
+    signal.signal(signal.SIGINT, on_term)
+    signal.signal(signal.SIGHUP, on_hup)
+
+    # 通知 systemd 已就绪（Type=notify）。无 NOTIFY_SOCKET 时静默跳过，
+    # 便于手工运行调试。
+    _sd_notify("READY=1")
+
+    stop.wait()
+    server.shutdown()
+    control.SOCKET_PATH.unlink(missing_ok=True)
+    return 0
+
+
+def _sd_notify(message: str) -> None:
+    import os
+    import socket as _socket
+
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    if addr.startswith("@"):
+        addr = "\0" + addr[1:]
+    try:
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_DGRAM) as sock:
+            sock.connect(addr)
+            sock.sendall(message.encode())
+    except OSError:
+        pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())

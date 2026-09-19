@@ -1,0 +1,192 @@
+#!/usr/bin/python3
+"""usb-mode —— USB 工作模式命令行客户端。
+
+通过 unix socket 与 usbmoded 通信，协议为行分隔 JSON。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+
+SOCKET_PATH = "/run/usbmode.sock"
+
+
+def call(request: dict) -> dict:
+    """发一条命令并读取响应。"""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(SOCKET_PATH)
+    except FileNotFoundError:
+        die(f"控制接口不存在：{SOCKET_PATH} —— usbmoded 是否在运行？")
+    except ConnectionRefusedError:
+        die(f"无法连接 {SOCKET_PATH} —— usbmoded 可能已退出")
+    except PermissionError:
+        die(f"无权访问 {SOCKET_PATH}")
+
+    with sock:
+        sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    if not data.strip():
+        die("usbmoded 未返回响应")
+    return json.loads(data.decode("utf-8"))
+
+
+def die(message: str) -> None:
+    print(f"错误：{message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def invoked_via_adb() -> bool:
+    """判断本进程是否经由 adb 通道启动。
+
+    向上遍历父进程链查找 adbd。用于在切换到会切断该通道的场景前给出
+    警告 —— 命令一旦生效，发出命令的通道本身就消失了，只能靠串口或
+    断电恢复。
+    """
+    pid = os.getppid()
+    for _ in range(16):  # 进程链深度上限，防止异常情况下的死循环
+        if pid <= 1:
+            return False
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            # comm 可能含空格与括号，取最后一个右括号之后的字段。
+            name = stat[stat.index("(") + 1 : stat.rindex(")")]
+            rest = stat[stat.rindex(")") + 2 :].split()
+            ppid = int(rest[1])
+        except (OSError, ValueError, IndexError):
+            return False
+        if name == "adbd":
+            return True
+        pid = ppid
+    return False
+
+
+def scene_cuts_adb(scene_name: str, listing: dict) -> bool:
+    """判断目标场景是否会移除 adb 能力或让出 gadget。"""
+    scene = (listing.get("scenes") or {}).get(scene_name)
+    if not scene:
+        return False
+    if scene.get("role") == "host":
+        return True
+    caps = scene.get("capabilities")
+    return caps is not None and "adb" not in caps
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    reply = call({"cmd": "list"})
+    if not reply.get("ok"):
+        die(reply.get("error", "未知错误"))
+    print("可用场景：")
+    for name, scene in sorted((reply.get("scenes") or {}).items()):
+        caps = scene.get("capabilities")
+        parts = []
+        if caps is not None:
+            parts.append("能力=" + (",".join(caps) or "无"))
+        if scene.get("role"):
+            parts.append(f"role={scene['role']}")
+        print(f"  {name:<14} {'  '.join(parts)}")
+    print("\n本平台已注册能力：")
+    print("  " + " ".join(reply.get("capabilities") or []))
+    return 0
+
+
+def cmd_get(args: argparse.Namespace) -> int:
+    reply = call({"cmd": "get"})
+    if not reply.get("ok"):
+        die(reply.get("error", "未知错误"))
+    print(f"当前场景  {reply.get('scene') or '(未设置)'}")
+    print(f"已启用能力 {' '.join(reply.get('capabilities') or []) or '无'}")
+    if reply.get("role_supported"):
+        print(f"USB 角色  {reply.get('role')}")
+    else:
+        print(f"USB 角色  不支持切换（{reply.get('role_detail') or '平台无可用节点'}）")
+    print(f"UDC       {reply.get('udc') or '(未绑定)'}  状态={reply.get('udc_state') or 'n/a'}")
+    return 0
+
+
+def cmd_set(args: argparse.Namespace) -> int:
+    listing = call({"cmd": "list"})
+    if listing.get("ok") and scene_cuts_adb(args.scene, listing) and invoked_via_adb():
+        print(
+            f"警告：场景 {args.scene} 不再提供 adb 能力，而本命令正经由 adb 下发。\n"
+            "      切换生效后当前通道会立即断开。若未在超时窗口内执行\n"
+            "      `usb-mode confirm`，系统将自动回滚到原场景。",
+            file=sys.stderr,
+        )
+        if not args.yes:
+            print("      加 --yes 确认执行。", file=sys.stderr)
+            return 1
+
+    reply = call({
+        "cmd": "set",
+        "scene": args.scene,
+        "persist": args.persist,
+        "force": args.force,
+    })
+    if not reply.get("ok"):
+        step = reply.get("step")
+        die(reply.get("error", "未知错误") + (f"（步骤：{step}）" if step else ""))
+    print(f"已切换到场景 {reply['scene']}")
+    if reply.get("rollback_armed"):
+        print(
+            f"注意：{reply['rollback_timeout']} 秒内未执行 `usb-mode confirm` "
+            f"将自动回滚到 {reply.get('previous')}"
+        )
+    return 0
+
+
+def cmd_reset(args: argparse.Namespace) -> int:
+    reply = call({"cmd": "reset"})
+    if not reply.get("ok"):
+        die(reply.get("error", "未知错误"))
+    print(f"已清除持久化配置并回到默认场景 {reply['scene']}")
+    return 0
+
+
+def cmd_confirm(args: argparse.Namespace) -> int:
+    reply = call({"cmd": "confirm"})
+    if not reply.get("ok"):
+        die(reply.get("error", "未知错误"))
+    if reply.get("cancelled"):
+        print(f"已确认场景 {reply.get('scene')}，回滚已取消")
+    else:
+        print("当前没有待确认的切换")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="usb-mode", description="USB 工作模式切换"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("list", help="列出可用场景与能力").set_defaults(func=cmd_list)
+    sub.add_parser("get", help="查询当前状态").set_defaults(func=cmd_get)
+
+    p_set = sub.add_parser("set", help="切换场景")
+    p_set.add_argument("scene", help="场景名")
+    p_set.add_argument("-p", "--persist", action="store_true", help="持久化，跨重启保持")
+    p_set.add_argument("-f", "--force", action="store_true",
+                       help="跳过自锁保护（持久化到会断开控制通道的场景时必需）")
+    p_set.add_argument("-y", "--yes", action="store_true", help="确认执行会断开当前通道的切换")
+    p_set.set_defaults(func=cmd_set)
+
+    sub.add_parser("reset", help="清除持久化并回到默认场景").set_defaults(func=cmd_reset)
+    sub.add_parser("confirm", help="确认当前场景，取消自动回滚").set_defaults(func=cmd_confirm)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
