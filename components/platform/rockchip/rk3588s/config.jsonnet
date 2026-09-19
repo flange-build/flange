@@ -24,7 +24,7 @@ local common = import 'config/rockchip.libsonnet';
     // rk3588_defconfig（RK3588 与 RK3588S 同 die，u-boot 阶段无差异）。
     defconfig: ['rk3588_defconfig'],
   },
-  kernel: {
+  kernel+: {
     source: { name: 'rockchip-kernel' },
     // 与 RK3588 同 branch（详见 rk3588/config.jsonnet 的注释）。
     // 同 RK3588 — fragment 详见 rk3588/config.jsonnet 注释。
@@ -34,7 +34,7 @@ local common = import 'config/rockchip.libsonnet';
     ],
     // GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
     // USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree: { directory: 'rockchip' },
   },
   rootfs+: {

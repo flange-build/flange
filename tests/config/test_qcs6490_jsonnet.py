@@ -55,13 +55,21 @@ def test_vim3l板层与soc层共用kernel_config且保留binder():
         "khadas-vim3l", "default", "release")
 
     validate_canonical_config(config)
-    assert config["kernel"]["config"] == {
-        "CONFIG_ANDROID_BINDERFS": "y",
-        "CONFIG_ANDROID_BINDER_IPC": "y",
-        "CONFIG_DRM_GUD": "y",
-        "CONFIG_NET": "y",
-        "CONFIG_TUN": "y",
-    }
+    kernel_config = config["kernel"]["config"]
+    # 板层与 SoC 层合并的结果，binder 相关配置必须保留。
+    # 不再断言精确相等：components/kernel/config.jsonnet 作为平台无关的内核
+    # 基线层，会向每块板合并 USB gadget 配置，全集不再由板层与 SoC 层独占。
+    for symbol in (
+        "CONFIG_ANDROID_BINDERFS",
+        "CONFIG_ANDROID_BINDER_IPC",
+        "CONFIG_DRM_GUD",
+        "CONFIG_NET",
+        "CONFIG_TUN",
+    ):
+        assert kernel_config[symbol] == "y", symbol
+    # 基线层确实参与了合并，而不是被板层/SoC 层覆盖掉。
+    assert kernel_config["CONFIG_USB_CONFIGFS"] == "y"
+    assert kernel_config["CONFIG_USB_ROLE_SWITCH"] == "y"
     assert config["kernel"]["defconfig"] == ["defconfig"]
     assert config["kernel"]["device_tree"] == {
         "directory": "amlogic",

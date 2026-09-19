@@ -13,7 +13,7 @@ local variant = std.extVar('variant');
     device_tree+: { name: 'qrb2210-arduino-imola' },
     defconfig: ['defconfig', 'arduino.config', 'docker.config', 'panel.config',
                 'systemd-boot.config', 'usb-can.config'],
-    config: {
+    config+: {
       CONFIG_EFI: 'y',
       CONFIG_EFI_STUB: 'y',
       CONFIG_BLK_DEV_INITRD: 'y',
