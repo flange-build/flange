@@ -1,12 +1,13 @@
 #!/usr/bin/python3
 """usb-mode —— USB 工作模式命令行客户端。
 
-通过 unix socket 与 usbmoded 通信，协议为行分隔 JSON。
+通过 unix socket 与 usbmoded 通信，协议为 JSON-RPC 2.0（行分隔传输）。
 """
 
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 import socket
@@ -16,8 +17,20 @@ from pathlib import Path
 SOCKET_PATH = "/run/usbmode.sock"
 
 
-def call(request: dict) -> dict:
-    """发一条命令并读取响应。"""
+_request_id = itertools.count(1)
+
+#: 服务端实现定义的错误码，用于给出比原始消息更贴切的提示。
+ERR_UNAUTHORIZED = -32000
+ERR_SCENE_UNDEFINED = -32001
+ERR_ROLE_UNSUPPORTED = -32004
+
+
+def call(method: str, params: dict | None = None) -> dict:
+    """发一次 JSON-RPC 调用并返回 result。出错时直接终止。"""
+    request = {"jsonrpc": "2.0", "method": method, "id": next(_request_id)}
+    if params:
+        request["params"] = params
+
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         sock.connect(SOCKET_PATH)
@@ -38,7 +51,22 @@ def call(request: dict) -> dict:
             data += chunk
     if not data.strip():
         die("usbmoded 未返回响应")
-    return json.loads(data.decode("utf-8"))
+
+    reply = json.loads(data.decode("utf-8"))
+    if "error" in reply:
+        err = reply["error"]
+        code = err.get("code")
+        message = err.get("message", "未知错误")
+        detail = err.get("data") or {}
+        if code == ERR_UNAUTHORIZED:
+            die(f"{message}\n提示：以 root 运行，或 sudo usermod -aG usbmode $USER 后重新登录")
+        if code == ERR_SCENE_UNDEFINED:
+            die(f"{message}\n提示：usb-mode list 查看可用场景")
+        if code == ERR_ROLE_UNSUPPORTED:
+            die(message)
+        step = detail.get("step")
+        die(message + (f"（步骤：{step}）" if step else "") + f" [code={code}]")
+    return reply.get("result") or {}
 
 
 def die(message: str) -> None:
@@ -83,9 +111,7 @@ def scene_cuts_adb(scene_name: str, listing: dict) -> bool:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    reply = call({"cmd": "list"})
-    if not reply.get("ok"):
-        die(reply.get("error", "未知错误"))
+    reply = call("scene.list")
     print("可用场景：")
     for name, scene in sorted((reply.get("scenes") or {}).items()):
         caps = scene.get("capabilities")
@@ -101,9 +127,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_get(args: argparse.Namespace) -> int:
-    reply = call({"cmd": "get"})
-    if not reply.get("ok"):
-        die(reply.get("error", "未知错误"))
+    reply = call("scene.get")
     print(f"当前场景  {reply.get('scene') or '(未设置)'}")
     print(f"已启用能力 {' '.join(reply.get('capabilities') or []) or '无'}")
     if reply.get("role_supported"):
@@ -115,8 +139,8 @@ def cmd_get(args: argparse.Namespace) -> int:
 
 
 def cmd_set(args: argparse.Namespace) -> int:
-    listing = call({"cmd": "list"})
-    if listing.get("ok") and scene_cuts_adb(args.scene, listing) and invoked_via_adb():
+    listing = call("scene.list")
+    if scene_cuts_adb(args.scene, listing) and invoked_via_adb():
         print(
             f"警告：场景 {args.scene} 不再提供 adb 能力，而本命令正经由 adb 下发。\n"
             "      切换生效后当前通道会立即断开。若未在超时窗口内执行\n"
@@ -127,15 +151,11 @@ def cmd_set(args: argparse.Namespace) -> int:
             print("      加 --yes 确认执行。", file=sys.stderr)
             return 1
 
-    reply = call({
-        "cmd": "set",
+    reply = call("scene.set", {
         "scene": args.scene,
         "persist": args.persist,
         "force": args.force,
     })
-    if not reply.get("ok"):
-        step = reply.get("step")
-        die(reply.get("error", "未知错误") + (f"（步骤：{step}）" if step else ""))
     print(f"已切换到场景 {reply['scene']}")
     if reply.get("rollback_armed"):
         print(
@@ -146,17 +166,13 @@ def cmd_set(args: argparse.Namespace) -> int:
 
 
 def cmd_reset(args: argparse.Namespace) -> int:
-    reply = call({"cmd": "reset"})
-    if not reply.get("ok"):
-        die(reply.get("error", "未知错误"))
+    reply = call("scene.reset")
     print(f"已清除持久化配置并回到默认场景 {reply['scene']}")
     return 0
 
 
 def cmd_confirm(args: argparse.Namespace) -> int:
-    reply = call({"cmd": "confirm"})
-    if not reply.get("ok"):
-        die(reply.get("error", "未知错误"))
+    reply = call("scene.confirm")
     if reply.get("cancelled"):
         print(f"已确认场景 {reply.get('scene')}，回滚已取消")
     else:

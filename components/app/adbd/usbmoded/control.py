@@ -1,7 +1,17 @@
-"""控制接口：unix socket 服务端、行分隔 JSON 协议与分级授权。
+"""控制接口：unix socket 服务端、JSON-RPC 2.0 协议与分级授权。
 
-协议：每行一个 JSON 对象。请求含 cmd 字段，响应含 ok 布尔字段。
-选择行分隔 JSON 是为了 socat / nc 可直接手工调试，无需专用客户端。
+协议为 JSON-RPC 2.0，传输是行分隔的 —— 每行一个 JSON 值（单个请求对象
+或批量请求数组）。选择行分隔而非 Content-Length 分帧，是为了 socat / nc
+能直接手工调试，无需专用客户端：
+
+    echo '{"jsonrpc":"2.0","method":"scene.get","id":1}' | socat - UNIX-CONNECT:/run/usbmode.sock
+
+支持规范的三种交互：请求（带 id，有响应）、通知（无 id，无响应）、
+批量（数组）。错误码遵循规范：-32700..-32603 为标准错误，
+-32000..-32099 是规范保留给服务端的实现定义区间。
+
+不用 gRPC：protobuf 与 grpcio 在 arm64 嵌入式 rootfs 上是重依赖，而这是
+低频控制面操作，收益为零。
 
 只监听本机 unix domain，不监听 TCP。
 """
@@ -21,7 +31,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import capabilities, config, role as role_mod
-from .scene import SceneError, SceneManager
+from .capability import CapabilityError
+from .scene import SceneError, SceneManager, Step
 
 log = logging.getLogger(__name__)
 
@@ -30,8 +41,24 @@ SOCKET_PATH = Path("/run/usbmode.sock")
 #: 允许执行变更类命令的 group。不属于该组的非 root 调用方只能查询。
 PRIVILEGED_GROUP = "usbmode"
 
-#: 变更类命令。其余命令视为查询类，对所有本机进程开放。
-MUTATING_COMMANDS = frozenset({"set", "reset", "confirm", "reload"})
+# ---- JSON-RPC 2.0 错误码
+
+#: 规范定义的标准错误码。
+PARSE_ERROR = -32700
+INVALID_REQUEST = -32600
+METHOD_NOT_FOUND = -32601
+INVALID_PARAMS = -32602
+INTERNAL_ERROR = -32603
+
+#: 实现定义的错误码。规范把 -32000..-32099 保留给服务端自定义。
+ERR_UNAUTHORIZED = -32000
+ERR_SCENE_UNDEFINED = -32001
+ERR_CAPABILITY_CONFLICT = -32002
+ERR_SWITCH_FAILED = -32003
+ERR_ROLE_UNSUPPORTED = -32004
+ERR_CONFIG = -32005
+
+JSONRPC_VERSION = "2.0"
 
 
 class AuthError(Exception):
@@ -115,45 +142,145 @@ def is_privileged(uid: int, gid: int) -> bool:
     return name in group.gr_mem
 
 
-class CommandHandler:
-    """命令分发与实现。"""
+class RpcError(Exception):
+    """携带 JSON-RPC 错误码的异常。"""
+
+    def __init__(self, code: int, message: str, data: Any = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.data = data
+
+    def to_object(self) -> dict:
+        obj: dict[str, Any] = {"code": self.code, "message": self.message}
+        if self.data is not None:
+            obj["data"] = self.data
+        return obj
+
+
+def _map_exception(exc: Exception) -> RpcError:
+    """把领域异常映射为带码的 RPC 错误。
+
+    映射到实现定义区间而非统统用 INTERNAL_ERROR，是为了让调用方能按码分支
+    处理 —— 「场景不存在」是调用方该改的，「切换失败」可能要重试或查硬件，
+    两者不该长一个样。
+    """
+    if isinstance(exc, SceneError):
+        code = ERR_SCENE_UNDEFINED if exc.step is Step.RESOLVE else ERR_SWITCH_FAILED
+        return RpcError(code, str(exc), {"step": exc.step.value})
+    if isinstance(exc, CapabilityError):
+        return RpcError(ERR_CAPABILITY_CONFLICT, str(exc))
+    if isinstance(exc, role_mod.RoleError):
+        return RpcError(ERR_ROLE_UNSUPPORTED, str(exc))
+    if isinstance(exc, config.ConfigError):
+        return RpcError(ERR_CONFIG, str(exc))
+    return RpcError(INTERNAL_ERROR, f"{type(exc).__name__}: {exc}")
+
+
+class RpcHandler:
+    """JSON-RPC 2.0 方法分发。
+
+    方法名按 `<域>.<动作>` 命名，便于将来扩展出与场景无关的域而不必担心
+    名字冲突。
+    """
 
     def __init__(self, manager: SceneManager) -> None:
         self._manager = manager
-        self._handlers: dict[str, Callable[[dict], dict]] = {
-            "list": self._cmd_list,
-            "get": self._cmd_get,
-            "set": self._cmd_set,
-            "reset": self._cmd_reset,
-            "confirm": self._cmd_confirm,
-            "reload": self._cmd_reload,
+        # 方法名 → (实现, 是否属于变更类)
+        self._methods: dict[str, tuple[Callable[[dict], Any], bool]] = {
+            "scene.list": (self._scene_list, False),
+            "scene.get": (self._scene_get, False),
+            "scene.set": (self._scene_set, True),
+            "scene.reset": (self._scene_reset, True),
+            "scene.confirm": (self._scene_confirm, True),
+            "config.reload": (self._config_reload, True),
         }
 
-    def dispatch(self, request: dict, uid: int, gid: int) -> dict:
-        cmd = str(request.get("cmd") or "")
-        handler = self._handlers.get(cmd)
-        if handler is None:
-            return {
-                "ok": False,
-                "error": f"未知命令：{cmd or '(空)'}"
-                f"（可用：{', '.join(sorted(self._handlers))}）",
-            }
-        if cmd in MUTATING_COMMANDS and not is_privileged(uid, gid):
-            return {
-                "ok": False,
-                "error": f"权限不足：命令 {cmd} 需要 root 或属于 {PRIVILEGED_GROUP} 组",
-            }
+    @property
+    def methods(self) -> list[str]:
+        return sorted(self._methods)
+
+    # ---- 协议层
+
+    def handle_line(self, text: str, uid: int, gid: int) -> str | None:
+        """处理一行输入，返回要回写的一行；通知类请求返回 None。"""
         try:
-            return handler(request)
-        except SceneError as exc:
-            return {"ok": False, "error": str(exc), "step": exc.step.value}
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            # 解析失败时按规范 id 必须为 null —— 连 id 都读不出来。
+            return _dump(_error_response(None, RpcError(PARSE_ERROR, f"JSON 解析失败：{exc}")))
+
+        if isinstance(payload, list):
+            if not payload:
+                return _dump(_error_response(None, RpcError(INVALID_REQUEST, "批量请求不能为空数组")))
+            responses = [
+                r for r in (self._handle_one(item, uid, gid) for item in payload) if r is not None
+            ]
+            # 批量请求全是通知时不回任何内容，这是规范要求。
+            return _dump(responses) if responses else None
+
+        response = self._handle_one(payload, uid, gid)
+        return _dump(response) if response is not None else None
+
+    def _handle_one(self, request: Any, uid: int, gid: int) -> dict | None:
+        if not isinstance(request, dict):
+            return _error_response(None, RpcError(INVALID_REQUEST, "请求应为 JSON 对象"))
+
+        # 通知（无 id）不产生响应，包括出错时 —— 规范明确要求。
+        has_id = "id" in request
+        req_id = request.get("id")
+
+        def fail(err: RpcError) -> dict | None:
+            return _error_response(req_id, err) if has_id else None
+
+        if request.get("jsonrpc") != JSONRPC_VERSION:
+            return fail(RpcError(INVALID_REQUEST, f"jsonrpc 字段必须为 {JSONRPC_VERSION!r}"))
+
+        method = request.get("method")
+        if not isinstance(method, str):
+            return fail(RpcError(INVALID_REQUEST, "method 字段缺失或不是字符串"))
+
+        entry = self._methods.get(method)
+        if entry is None:
+            return fail(RpcError(
+                METHOD_NOT_FOUND,
+                f"未知方法：{method}",
+                {"available": self.methods},
+            ))
+        impl, mutating = entry
+
+        params = request.get("params", {})
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            # 规范允许位置参数（数组），但本服务的方法都是具名参数，
+            # 明确拒绝比悄悄忽略好。
+            return fail(RpcError(INVALID_PARAMS, "params 必须是对象（本服务不支持位置参数）"))
+
+        if mutating and not is_privileged(uid, gid):
+            return fail(RpcError(
+                ERR_UNAUTHORIZED,
+                f"权限不足：{method} 需要 root 或属于 {PRIVILEGED_GROUP} 组",
+                {"uid": uid, "gid": gid},
+            ))
+
+        try:
+            result = impl(params)
+        except RpcError as err:
+            return fail(err)
         except Exception as exc:  # noqa: BLE001 - 任何异常都不应让服务退出
-            log.exception("命令 %s 执行失败", cmd)
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            err = _map_exception(exc)
+            if err.code == INTERNAL_ERROR:
+                log.exception("方法 %s 执行失败", method)
+            return fail(err)
 
-    # ---- 查询类
+        if not has_id:
+            return None
+        return {"jsonrpc": JSONRPC_VERSION, "result": result, "id": req_id}
 
-    def _cmd_list(self, request: dict) -> dict:
+    # ---- 查询类方法
+
+    def _scene_list(self, params: dict) -> dict:
         scenes = {
             name: {
                 "capabilities": scene.capabilities,
@@ -162,56 +289,60 @@ class CommandHandler:
             }
             for name, scene in self._manager.list_scenes().items()
         }
-        return {"ok": True, "scenes": scenes, "capabilities": capabilities.available()}
+        return {"scenes": scenes, "capabilities": capabilities.available()}
 
-    def _cmd_get(self, request: dict) -> dict:
+    def _scene_get(self, params: dict) -> dict:
         gadget = self._manager._gadget  # noqa: SLF001 - 同包内的受控访问
         current_role, role_unsupported = role_mod.current()
         from . import udc as udc_mod
 
         bound = udc_mod.current_binding(gadget.gadget_dir)
-        state = udc_mod.Udc(bound).state.value if bound else None
         return {
-            "ok": True,
             "scene": self._manager.current,
             "capabilities": sorted(gadget.active_capabilities()),
             "role": current_role.value,
             "role_supported": role_unsupported is None,
             "role_detail": role_unsupported,
             "udc": bound,
-            "udc_state": state,
+            "udc_state": udc_mod.Udc(bound).state.value if bound else None,
         }
 
-    # ---- 变更类
+    # ---- 变更类方法
 
-    def _cmd_set(self, request: dict) -> dict:
-        name = request.get("scene")
-        if not name:
-            return {"ok": False, "error": "缺少参数：scene"}
+    def _scene_set(self, params: dict) -> dict:
+        name = params.get("scene")
+        if not isinstance(name, str) or not name:
+            raise RpcError(INVALID_PARAMS, "参数 scene 缺失或不是非空字符串")
         result = self._manager.switch(
-            str(name),
-            persist=bool(request.get("persist")),
-            force=bool(request.get("force")),
+            name,
+            persist=bool(params.get("persist")),
+            force=bool(params.get("force")),
         )
         return {
-            "ok": True,
             "scene": result.scene,
             "previous": result.previous,
             "rollback_armed": result.rollback_armed,
             "rollback_timeout": result.rollback_timeout,
         }
 
-    def _cmd_reset(self, request: dict) -> dict:
-        result = self._manager.reset()
-        return {"ok": True, "scene": result.scene}
+    def _scene_reset(self, params: dict) -> dict:
+        return {"scene": self._manager.reset().scene}
 
-    def _cmd_confirm(self, request: dict) -> dict:
+    def _scene_confirm(self, params: dict) -> dict:
         cancelled = self._manager.confirm()
-        return {"ok": True, "cancelled": cancelled, "scene": self._manager.current}
+        return {"cancelled": cancelled, "scene": self._manager.current}
 
-    def _cmd_reload(self, request: dict) -> dict:
+    def _config_reload(self, params: dict) -> dict:
         self._manager.reload()
-        return {"ok": True, "scenes": sorted(self._manager.list_scenes())}
+        return {"scenes": sorted(self._manager.list_scenes())}
+
+
+def _error_response(req_id: Any, err: RpcError) -> dict:
+    return {"jsonrpc": JSONRPC_VERSION, "error": err.to_object(), "id": req_id}
+
+
+def _dump(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False)
 
 
 class _RequestHandler(socketserver.StreamRequestHandler):
@@ -219,29 +350,23 @@ class _RequestHandler(socketserver.StreamRequestHandler):
         try:
             _, uid, gid = peer_credentials(self.connection)
         except (AuthError, OSError) as exc:
-            self._send({"ok": False, "error": f"无法确定调用方身份：{exc}"})
+            self._write(_dump(_error_response(
+                None, RpcError(INTERNAL_ERROR, f"无法确定调用方身份：{exc}")
+            )))
             return
 
         for line in self.rfile:
             text = line.decode("utf-8", errors="replace").strip()
             if not text:
                 continue
-            try:
-                request = json.loads(text)
-            except json.JSONDecodeError as exc:
-                # 非法输入只回错误，连接保持可用，服务进程不受影响。
-                self._send({"ok": False, "error": f"JSON 解析失败：{exc}"})
-                continue
-            if not isinstance(request, dict):
-                self._send({"ok": False, "error": "请求应为 JSON 对象"})
-                continue
-            self._send(self.server.handler.dispatch(request, uid, gid))
+            reply = self.server.handler.handle_line(text, uid, gid)
+            # 通知类请求不回写任何内容，连接保持可用。
+            if reply is not None:
+                self._write(reply)
 
-    def _send(self, payload: dict[str, Any]) -> None:
+    def _write(self, line: str) -> None:
         try:
-            self.wfile.write(
-                (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-            )
+            self.wfile.write((line + "\n").encode("utf-8"))
             self.wfile.flush()
         except OSError:
             # 客户端提前断开，不是服务端的错误。
@@ -252,7 +377,7 @@ class _Server(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
     allow_reuse_address = False  # 单实例由绑定冲突保证，见 serve()
 
-    def __init__(self, path: str, handler: CommandHandler) -> None:
+    def __init__(self, path: str, handler: RpcHandler) -> None:
         self.handler = handler
         super().__init__(path, _RequestHandler)
 
@@ -280,7 +405,7 @@ def serve(manager: SceneManager, path: Path = SOCKET_PATH) -> _Server:
         finally:
             probe.close()
 
-    server = _Server(str(path), CommandHandler(manager))
+    server = _Server(str(path), RpcHandler(manager))
     # 0666：查询类命令对所有本机进程开放，变更类靠 SO_PEERCRED 在服务端
     # 判定。权限不放在文件模式上，是为了让授权策略集中于一处。
     os.chmod(path, 0o666)

@@ -240,3 +240,171 @@ def test_resync_rebuilds_state_from_configfs(fake_sys, gadget):
     assert fresh.active_capabilities() == set()
     fresh.resync_from_configfs({"adb": cap})
     assert fresh.active_capabilities() == {"adb"}
+
+
+# ---- JSON-RPC 2.0 协议合规
+
+class _FakeScene:
+    def __init__(self, caps=None, role=None):
+        self.capabilities = caps
+        self.role = role
+        self.params = {}
+
+
+class _FakeManager:
+    """只提供 RpcHandler 需要的接口。"""
+
+    def __init__(self):
+        self.current = "debug"
+        self.switched = []
+
+    def list_scenes(self):
+        return {"debug": _FakeScene(["adb"]), "host": _FakeScene(role="host")}
+
+    def switch(self, name, *, persist=False, force=False):
+        from usbmoded.scene import Step, SwitchResult, SceneError
+
+        if name not in self.list_scenes():
+            raise SceneError(f"未定义的场景：{name}", Step.RESOLVE)
+        self.switched.append(name)
+        return SwitchResult(scene=name, step=Step.DONE, previous=self.current)
+
+    def reset(self):
+        from usbmoded.scene import Step, SwitchResult
+
+        return SwitchResult(scene="debug", step=Step.DONE)
+
+    def confirm(self):
+        return True
+
+    def reload(self):
+        pass
+
+
+@pytest.fixture
+def rpc(monkeypatch):
+    from usbmoded import control
+
+    handler = control.RpcHandler(_FakeManager())
+    return handler, control
+
+
+def _send(handler, obj, uid=0, gid=0):
+    import json
+
+    line = handler.handle_line(json.dumps(obj), uid, gid)
+    return json.loads(line) if line is not None else None
+
+
+def test_rpc_normal_request(rpc):
+    handler, _ = rpc
+    reply = _send(handler, {"jsonrpc": "2.0", "method": "scene.list", "id": 7})
+    assert reply["jsonrpc"] == "2.0"
+    assert reply["id"] == 7
+    assert "debug" in reply["result"]["scenes"]
+    assert "error" not in reply
+
+
+def test_rpc_method_not_found(rpc):
+    handler, control = rpc
+    reply = _send(handler, {"jsonrpc": "2.0", "method": "nope", "id": 1})
+    assert reply["error"]["code"] == control.METHOD_NOT_FOUND
+    assert "available" in reply["error"]["data"]
+
+
+def test_rpc_parse_error_has_null_id(rpc):
+    """解析失败时读不出 id，规范要求 id 为 null。"""
+    import json
+
+    handler, control = rpc
+    reply = json.loads(handler.handle_line("{not json", 0, 0))
+    assert reply["error"]["code"] == control.PARSE_ERROR
+    assert reply["id"] is None
+
+
+def test_rpc_rejects_wrong_version(rpc):
+    handler, control = rpc
+    reply = _send(handler, {"jsonrpc": "1.0", "method": "scene.list", "id": 1})
+    assert reply["error"]["code"] == control.INVALID_REQUEST
+
+
+def test_rpc_rejects_positional_params(rpc):
+    """本服务只用具名参数，位置参数明确拒绝而非悄悄忽略。"""
+    handler, control = rpc
+    reply = _send(handler, {"jsonrpc": "2.0", "method": "scene.set",
+                            "params": ["debug"], "id": 1})
+    assert reply["error"]["code"] == control.INVALID_PARAMS
+
+
+def test_rpc_notification_gets_no_response(rpc):
+    """无 id 的通知不产生响应，但仍被执行。"""
+    handler, _ = rpc
+    manager = handler._manager  # noqa: SLF001
+    assert _send(handler, {"jsonrpc": "2.0", "method": "scene.set",
+                           "params": {"scene": "host"}}) is None
+    assert manager.switched == ["host"], "通知应当被执行"
+
+
+def test_rpc_failing_notification_still_silent(rpc):
+    """通知出错也不回响应 —— 规范明确要求。"""
+    handler, _ = rpc
+    assert _send(handler, {"jsonrpc": "2.0", "method": "nosuch"}) is None
+
+
+def test_rpc_batch(rpc):
+    import json
+
+    handler, _ = rpc
+    line = handler.handle_line(json.dumps([
+        {"jsonrpc": "2.0", "method": "scene.list", "id": 1},
+        {"jsonrpc": "2.0", "method": "scene.get", "id": 2},
+        {"jsonrpc": "2.0", "method": "scene.confirm"},  # 通知，不计入响应
+    ]), 0, 0)
+    replies = json.loads(line)
+    assert [r["id"] for r in replies] == [1, 2]
+
+
+def test_rpc_batch_of_notifications_is_silent(rpc):
+    import json
+
+    handler, _ = rpc
+    assert handler.handle_line(json.dumps([
+        {"jsonrpc": "2.0", "method": "scene.confirm"},
+    ]), 0, 0) is None
+
+
+def test_rpc_empty_batch_rejected(rpc):
+    import json
+
+    handler, control = rpc
+    reply = json.loads(handler.handle_line("[]", 0, 0))
+    assert reply["error"]["code"] == control.INVALID_REQUEST
+
+
+def test_rpc_unauthorized(rpc, monkeypatch):
+    """变更类方法对非特权调用方返回实现定义的授权错误码。"""
+    handler, control = rpc
+    monkeypatch.setattr(control, "is_privileged", lambda uid, gid: False)
+    reply = _send(handler, {"jsonrpc": "2.0", "method": "scene.set",
+                            "params": {"scene": "debug"}, "id": 1}, uid=1000, gid=1000)
+    assert reply["error"]["code"] == control.ERR_UNAUTHORIZED
+    # 查询类不受影响
+    ok = _send(handler, {"jsonrpc": "2.0", "method": "scene.list", "id": 2},
+               uid=1000, gid=1000)
+    assert "result" in ok
+
+
+def test_rpc_domain_error_mapped_to_code(rpc):
+    """场景不存在映射到专用码，便于调用方分支处理。"""
+    handler, control = rpc
+    reply = _send(handler, {"jsonrpc": "2.0", "method": "scene.set",
+                            "params": {"scene": "nosuch"}, "id": 1})
+    assert reply["error"]["code"] == control.ERR_SCENE_UNDEFINED
+    assert reply["error"]["data"]["step"]
+
+
+def test_rpc_missing_required_param(rpc):
+    handler, control = rpc
+    reply = _send(handler, {"jsonrpc": "2.0", "method": "scene.set",
+                            "params": {}, "id": 1})
+    assert reply["error"]["code"] == control.INVALID_PARAMS

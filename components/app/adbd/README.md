@@ -95,11 +95,34 @@ usb-mode confirm           确认当前场景，取消自动回滚
 
 ## 控制协议
 
-`/run/usbmode.sock`，行分隔 JSON，`socat` / `nc` 可直接调试：
+`/run/usbmode.sock` 上的 **JSON-RPC 2.0**，行分隔传输 —— `socat` / `nc` 可直接调试：
 
 ```sh
-echo '{"cmd":"get"}' | socat - UNIX-CONNECT:/run/usbmode.sock
+echo '{"jsonrpc":"2.0","method":"scene.get","id":1}' | socat - UNIX-CONNECT:/run/usbmode.sock
 ```
+
+| 方法 | 参数 | 权限 |
+|---|---|---|
+| `scene.list` | — | 查询 |
+| `scene.get` | — | 查询 |
+| `scene.set` | `scene`、`persist`、`force` | 变更 |
+| `scene.reset` | — | 变更 |
+| `scene.confirm` | — | 变更 |
+| `config.reload` | — | 变更 |
+
+支持规范的通知（无 `id`，不回响应）与批量（数组）。错误码：`-32700`..`-32603`
+为协议层标准错误；领域错误用规范保留给服务端的 `-32000`..`-32099`：
+
+| 码 | 含义 |
+|---|---|
+| `-32000` | 权限不足 |
+| `-32001` | 场景未定义 |
+| `-32002` | 能力冲突 |
+| `-32003` | 切换失败（`data.step` 指出失败步骤） |
+| `-32004` | 平台不支持 role 切换 |
+| `-32005` | 配置错误 |
+
+按码分支即可，不必解析消息文本。
 
 授权基于 `SO_PEERCRED`：查询类命令对所有本机进程开放，变更类命令要求
 `uid == 0` 或属于 `usbmode` 组。该组由服务启动时幂等创建，**不会有任何

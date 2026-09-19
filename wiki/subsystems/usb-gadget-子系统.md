@@ -23,7 +23,7 @@ related:
 
 设备端的 USB gadget 管理服务，提供原子能力的组合与运行时工作模式切换。
 三层架构：场景层（业务）→ 原子能力层（单个 USB function）→ gadget 核心层
-（configfs 与竞态处理）。以 `usb-mode` CLI 与 unix socket 对外。
+（configfs 与竞态处理）。以 `usb-mode` CLI 与 unix socket 上的 JSON-RPC 2.0 对外。
 
 2026-09-19 由三层 Python 服务替换了原先的 `usbdevice` shell 脚本。
 **当前状态：实现完成、单元与集成测试通过，但尚未在任何实板上验证。**
@@ -47,7 +47,7 @@ related:
 | 层 | 文件 | 职责 |
 |---|---|---|
 | L3 | `usbmoded/scene.py` | 场景模型、切换编排、自锁回滚、持久化 |
-| L3 | `usbmoded/control.py` | unix socket、行分隔 JSON、`SO_PEERCRED` 授权 |
+| L3 | `usbmoded/control.py` | unix socket、JSON-RPC 2.0、`SO_PEERCRED` 授权 |
 | L2 | `usbmoded/capability.py` | L1↔L2 接口契约、排序权重刻度 |
 | L2 | `usbmoded/capabilities/` | 各能力实现 + systemd daemon 设施 |
 | L1 | `usbmoded/gadget.py` | 描述符、生命周期编排、幂等守卫、断连恢复 |

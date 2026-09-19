@@ -15,7 +15,7 @@
 - **L1 gadget 核心层**：configfs 原语、UDC 生命周期、枚举校验、全部平台竞态处理。不认识任何具体 function。
 - **L2 原子能力层**：每个 USB function 是一个能力，实现统一接口（实例名、prepare、start、stop、状态、内核排序权重、互斥关系），并各自携带参数。覆盖 adb、ums、ncm/rndis、uvc、uac1/uac2，以及现有脚本已实现、不能回退的 mtp、hid、ntb。
 - **L3 场景层**：场景 = 能力集合 + 各能力参数 + role。控制命令驱动场景切换，由本层编排 role 与 gadget 的先后顺序。
-- **控制接口**：unix socket（行分隔 JSON）+ `usb-mode` CLI，基于 `SO_PEERCRED` 分级授权。
+- **控制接口**：unix socket 上的 JSON-RPC 2.0（行分隔传输）+ `usb-mode` CLI，基于 `SO_PEERCRED` 分级授权。
 - **daemon 生命周期交给 systemd**：每个带 daemon 的能力对应一个 unit，能力的 start/stop 即 `systemctl start/stop`。自制守护循环连同其整类 bug 一并消除。
 - 新增 device ↔ host 角色切换的平台抽象层。
 
