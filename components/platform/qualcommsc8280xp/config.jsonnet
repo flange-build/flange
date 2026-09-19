@@ -14,7 +14,8 @@ local variant = std.extVar('variant');
   variants: ['debug', 'release'],
   flash_tool: 'edl-ng',
   rootfs+: {
-    custom_packages: ['adbd', 'flange-rootfs-grow'],
+    // adbd 已在 rootfs 基线层默认启用，这里只追加本层特有的包。
+    custom_packages+: ['flange-rootfs-grow'],
     packages: [
       'bluez', 'bluetooth', 'protection-domain-mapper', 'qrtr-tools',
       'alsa-ucm-conf', 'acpi', 'zstd', 'libgl1-mesa-dri', 'libegl-mesa0',

@@ -33,7 +33,8 @@
     // recoveryctl 需要在 normal 系统中也能调用（`recoveryctl recovery`
     // 通过 reboot reason 从 normal 进入 recovery，由 `flange recovery enter`
     // 通过 ADB 触发）；flash/backup 子命令会在 normal 模式下硬性拒绝，安全。
-    custom_packages: ['adbd', 'recoveryctl', 'flange-rootfs-grow'],
+    // adbd 已在 rootfs 基线层默认启用，这里只追加本层特有的包。
+    custom_packages+: ['recoveryctl', 'flange-rootfs-grow'],
     // libdrm 用户态库 —— Mali GPU（panthor / mali_kbase）+ Rockchip VPU
     // （mpp）+ RGA 都通过 DRM render node / 私有 ioctl 与内核交互，需要
     // libdrm2 暴露的 ABI（drmGetDevice2 / drmIoctl 等）；libdrm-common
@@ -48,7 +49,9 @@
       // 如某个板子存储紧张可在 board 配置覆盖 enabled: false。
       // SoC/board 层需在 partitions.entries 中提供 recovery 分区，
       // 否则 validate_config 会拒绝配置。
-      'systemd', 'systemd-sysv', 'udev', 'dbus', 'python3', 'util-linux',
+      // python3-yaml：usbmoded 的场景/gadget 配置是 YAML，recovery 同样
+      // 装 adbd（经 build.deps 带入 usbmoded），缺它 dpkg 会因依赖不满足失败。
+      'systemd', 'systemd-sysv', 'udev', 'dbus', 'python3', 'python3-yaml', 'util-linux',
       'e2fsprogs', 'dosfstools', 'parted', 'gdisk', 'zstd', 'coreutils',
       'ca-certificates',
     ],
