@@ -20,18 +20,18 @@
 
 ## 3. L2 原子能力层
 
-- [ ] 3.1 定义统一能力接口：实例名、排序权重、互斥集合、参数模型、prepare/start/stop/status
-- [ ] 3.2 实现能力注册与互斥检查，启用前拒绝互斥组合并报告冲突能力对
-- [ ] 3.3 实现基于 systemd unit 的 daemon 管理设施，替代既有自制守护循环（知识 #10 不迁移而是消灭）
-- [ ] 3.4 adb 能力：FunctionFS 挂载 + adbd unit；就绪判定基于 adbd 实际持有 endpoint 文件描述符，不依赖 inode 存在性
-- [ ] 3.5 ums 能力：backing file 创建与格式化、lun 管理、停用后按策略本地挂载
-- [ ] 3.6 uvc 能力：yuyv / mjpeg / h264 描述符与各速度等级 class 链接；保持取流 daemon 的既有缺口不变
-- [ ] 3.7 uac1 与 uac2 能力：feature unit 使能
-- [ ] 3.8 网络能力 ncm 与 rndis，二者互斥；rndis 保持走 configfs 标准 function 通用路径
-- [ ] 3.9 mtp 能力：OS descriptor 设置与清理 + mtp-server unit
-- [ ] 3.10 hid 能力：protocol / subclass / report 长度 / 二进制 report descriptor
-- [ ] 3.11 ntb 能力：FunctionFS 挂载
-- [ ] 3.12 能力清单核对：逐一对照既有 shell 实现支持的 function，确认无遗漏
+- [x] 3.1 定义统一能力接口：实例名、排序权重、互斥集合、参数模型、prepare/start/stop/status
+- [x] 3.2 实现能力注册与互斥检查，启用前拒绝互斥组合并报告冲突能力对
+- [x] 3.3 实现基于 systemd unit 的 daemon 管理设施，替代既有自制守护循环（知识 #10 不迁移而是消灭）
+- [x] 3.4 adb 能力：FunctionFS 挂载 + adbd unit；就绪判定基于 adbd 实际持有 endpoint 文件描述符，不依赖 inode 存在性
+- [x] 3.5 ums 能力：backing file 创建与格式化、lun 管理、停用后按策略本地挂载
+- [x] 3.6 uvc 能力：yuyv / mjpeg / h264 描述符与各速度等级 class 链接；保持取流 daemon 的既有缺口不变
+- [x] 3.7 uac1 与 uac2 能力：feature unit 使能
+- [x] 3.8 网络能力 ncm 与 rndis，二者互斥；rndis 保持走 configfs 标准 function 通用路径
+- [x] 3.9 mtp 能力：OS descriptor 设置与清理 + mtp-server unit
+- [x] 3.10 hid 能力：protocol / subclass / report 长度 / 二进制 report descriptor
+- [x] 3.11 ntb 能力：FunctionFS 挂载
+- [x] 3.12 能力清单核对：逐一对照既有 shell 实现支持的 function，确认无遗漏
 
 ## 4. Role 抽象层
 

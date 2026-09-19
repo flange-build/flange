@@ -87,10 +87,15 @@ class Capability(Protocol):
 
         stop() → unlink → remove instances
 
-    prepare() 在 UDC 绑定**之前**调用，因此可以安全地写 configfs 属性；
-    start() 在绑定**之后**调用，用于拉起依赖 endpoint 就绪的 daemon。
-    这个区分不是风格问题 —— 写 configfs 属性时若 UDC 已绑定会触发
-    soft-disconnect 与重新枚举（见 race-checklist.md 知识 #6、#7）。
+    两个阶段的区别不是风格问题：
+
+    - prepare() 在 UDC 绑定**之前**。此时写 configfs 属性是安全的；
+      若等到绑定后再写会触发 soft-disconnect 与重新枚举（知识 #6、#7）。
+      **基于 FunctionFS 的能力必须在这一阶段启动自己的 daemon** ——
+      FFS 要求 daemon 先打开 ep0 并写入描述符，实例才会 ready，gadget
+      才能成功 bind。adb 与 ntb 属于这一类。
+    - start() 在绑定**之后**。用于依赖枚举已完成的动作，例如 mtp 的
+      mtp-server、ums 按主机连接状态挂载 lun。
     """
 
     @property

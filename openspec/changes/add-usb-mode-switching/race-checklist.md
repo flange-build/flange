@@ -92,7 +92,7 @@
 
 ## #10 守护循环（不迁移，改由 systemd 承担）
 
-- [ ] 已替换　- [ ] 已验证
+- [x] 已替换　- [ ] 已验证
 - **原位置**：`usb_start_daemon()` L254、`usb_reap_daemon_loop()` L300、`usb_stop_daemon()` L312
 - **知识**：原实现用 per-daemon TAG_FILE 控制保活循环活性，并在每次 spawn 前回收上一轮遗留循环
 - **硬件现象**：**ROCK 5B 雪崩**。旧实现 spawn 守卫读「文件内容非空」而循环退出条件读「文件存在」，disconnect recovery 只清空不删除该文件，导致守卫失效而旧循环永不退出；每次 disconnect 净泄漏一个永生循环。实测开机 11 分钟堆积 360+ 循环，多循环并发争抢同一 FunctionFS ep0，USB 每 2 秒断连一次，adbd 被反复 kill，adb 完全不可用
