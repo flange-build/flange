@@ -1,0 +1,38 @@
+[Unit]
+Description=USB 工作模式管理服务（usbmoded）
+Documentation=file:///usr/share/doc/adbd/README.md
+# 本服务处于开机关键路径：多数板子上 adb 是唯一的调试通道，
+# 因此需尽早启动，且启动失败必须留下明确日志而非静默退出。
+DefaultDependencies=no
+Requires=sys-kernel-config.mount
+After=systemd-modules-load.service sys-kernel-config.mount local-fs.target
+# 限速 30s 内允许 5 次 restart，给底层 UDC controller、role 检测与
+# FunctionFS daemon 留出就绪时间。超过后不再 burst 重试，便于保留
+# 真实的硬件或配置故障现场。
+StartLimitBurst=5
+StartLimitIntervalSec=30
+
+[Service]
+# 常驻服务：承载控制 socket 与场景状态。Type=notify 让 systemd 等到
+# gadget 初始化完成、socket 就绪后才认为启动成功。
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/sbin/usbmoded
+# udev 在 USB 状态变化时经 systemctl reload 通知本服务重新评估 gadget
+# 状态，对应既有实现的 `usbdevice update`。SIGHUP 处理是异步的，不会
+# 阻塞 udev 的事件上下文。
+ExecReload=/bin/kill -HUP $MAINPID
+# 短暂的 role/VBUS/deferred probe 竞态可自愈；持续失败由上面的限流兜底。
+Restart=on-failure
+RestartSec=2
+# /run/usbmoded 用于存放能力参数的环境文件等运行时状态。
+RuntimeDirectory=usbmoded
+RuntimeDirectoryMode=0755
+
+[Install]
+# sysinit.target：尽早启动，保持既有平台的早期启动路径不回归。
+# usb-gadget.target：systemd 自带 udev 规则在 UDC 设备就绪时
+#   (SUBSYSTEM=="udc", ENV{SYSTEMD_WANTS}+="usb-gadget.target") 拉起此
+#   target。高通 QCS6490 等 mainline dwc3 平台没有 android_usb class，
+#   靠这条链路在 controller ready 时兜底启动。两条并存 = 早启 + 兜底。
+WantedBy=sysinit.target usb-gadget.target

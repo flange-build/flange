@@ -218,6 +218,7 @@ class JsonnetConfigLoader:
         soc = identity["soc"]
         rootfs_path = self.config_root / "rootfs" / "config.jsonnet"
         overlay_path = self.config_root / "device-tree-overlay" / "config.jsonnet"
+        kernel_path = self.config_root / "kernel" / "config.jsonnet"
         platform_path = self.config_root / "platform" / platform / "config.jsonnet"
         soc_path = self.config_root / "platform" / platform / soc / "config.jsonnet"
         board_path = self.config_root / "board" / board / "config.jsonnet"
@@ -236,6 +237,11 @@ class JsonnetConfigLoader:
         imports = [rootfs_path]
         if overlay_path.is_file():
             imports.append(overlay_path)
+        # 平台无关的内核基线：让"全平台默认启用"的 Kconfig 有一个唯一落点，
+        # 而不是在每个 SoC 层重复声明（CONFIG_DRM_GUD 曾重复 14 处）。
+        # 位置在 platform 之前，因此平台/SoC/板级可用 `kernel+:` 追加或覆盖。
+        if kernel_path.is_file():
+            imports.append(kernel_path)
         baseline_count = len(imports)
         imports.extend([platform_path, soc_path, board_path])
         platform_result = self._evaluate_layers(

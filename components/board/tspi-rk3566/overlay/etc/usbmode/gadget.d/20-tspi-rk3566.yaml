@@ -1,0 +1,19 @@
+# usbmoded gadget 配置 —— tspi-rk3566 板级覆盖
+#
+# 只声明与 App 层默认值（10-default.yaml）不同的键，两者按键合并。
+# App 层后续新增的键会自动对本板生效，无需在此跟进 —— 这与旧的
+# usbdevice.conf 整文件覆盖语义不同。
+
+gadget:
+  vendor_id: "0x2207"
+  product_name: tspi-rk3566
+  manufacturer: rockchip
+  group: rockchip
+
+  pid_map:
+    mtp: "0x0001"
+    adb_mtp: "0x0011"
+    ums: "0x0000"
+    adb_ums: "0x0018"
+    adb_uvc: "0x0015"
+    acm: "0x1005"

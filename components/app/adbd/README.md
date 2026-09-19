@@ -1,6 +1,24 @@
-# adbd 预编译二进制来源
+# adbd
 
-## 当前二进制：ADB 36.0.1 standalone（2026-08-31）
+Android Debug Bridge daemon，作为 [usbmoded](../usbmoded/README.md) 的 adb
+能力后端。
+
+本 App 只提供两样东西：
+
+- `/usr/bin/adbd` —— 预编译二进制（来源见下）
+- `/lib/systemd/system/usbmoded-adbd.service` —— daemon unit
+
+**unit 不开机自启**（`auto_start: false`）。它的启停完全由 usbmoded 的 adb
+能力驱动：FunctionFS 要求 daemon 在 gadget 绑定 UDC 之前打开 ep0 并写入
+描述符，这个时序只有 usbmoded 知道。unit 因此没有 `[Install]` 段，
+`systemctl is-enabled` 显示 `static` 是预期结果。
+
+gadget 配置、场景定义、`usb-mode` CLI 与控制协议都属于 usbmoded，见
+[usbmoded 的 README](../usbmoded/README.md)。
+
+---
+
+## adbd 二进制来源：ADB 36.0.1 standalone（2026-08-31）
 
 - 来源：[happyme531/standalone-linux-adbd](https://github.com/happyme531/standalone-linux-adbd)（nmeum/android-tools 的 daemon 扩展，AOSP ADB 36.0.1 源码 + CMake 静态构建）
 - 基线 tag：`v36.0.1-linux.2`，commit `bdb5cdc4b516b3bc71fd2b805bc36190041a9393`

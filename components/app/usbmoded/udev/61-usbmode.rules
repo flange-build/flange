@@ -1,0 +1,14 @@
+# USB 状态变化时通知常驻的 usbmoded 重新评估 gadget 状态。
+#
+# 通知必须异步（--no-block）：udev 会在事件处理结束后清理该上下文中
+# 新拉起的进程，同步调用会连带杀掉刚启动的 daemon。
+
+# Rockchip 等带 android_usb vendor class 的平台：每次 USB 状态变化
+# （CONNECTED / CONFIGURED / DISCONNECTED）都通知服务重新评估。
+SUBSYSTEM=="android_usb", ACTION=="change", RUN+="/usr/bin/systemctl --no-block reload usbmoded.service"
+
+# 高通 QCS6490 等 mainline dwc3 平台没有 android_usb class，上面的规则
+# 永不触发。UDC 设备出现/变化时通知服务，作为 gadget 绑定的兜底触发
+# （与 unit 的 WantedBy=usb-gadget.target 互补；服务内有并发互斥与
+# 幂等守卫，重复触发安全）。
+SUBSYSTEM=="udc", ACTION=="add|change", RUN+="/usr/bin/systemctl --no-block reload usbmoded.service"

@@ -13,7 +13,8 @@
   flash_tool: 'dd',
   rootfs+: {
     // 同 Rockchip：normal 系统也安装 recoveryctl，便于 ADB 触发模式切换。
-    custom_packages: ['adbd', 'recoveryctl', 'flange-rootfs-grow'],
+    // adbd 已在 rootfs 基线层默认启用，这里只追加本层特有的包。
+    custom_packages+: ['recoveryctl', 'flange-rootfs-grow'],
     // PowerVR DDK（下方 xserver-xorg-img-bxm）的 control 没有 Depends，且
     // dpkg -i 不解析依赖；显式安装 libdrm/xcb/x11-xcb/xshmfence/wayland 等
     // 低层运行库，避免 libEGL.so.1 无法 dlopen。这些库不是 GL 实现，不与 PVR 冲突。
@@ -42,7 +43,7 @@
       // Recovery 子系统：与 Rockchip 平台等价的默认值。首版主要在 RK3566 上
       // 落地，A733 的 image 端集成（image dd / flash-config）按"静态预留"
       // 处理（详见 §5.2 / §5.4）。boards 可通过 enabled: false 关闭。
-      'systemd', 'systemd-sysv', 'udev', 'dbus', 'python3', 'util-linux',
+      'systemd', 'systemd-sysv', 'udev', 'dbus', 'python3', 'python3-yaml', 'util-linux',
       'e2fsprogs', 'dosfstools', 'parted', 'gdisk', 'zstd', 'coreutils',
       'ca-certificates',
     ],

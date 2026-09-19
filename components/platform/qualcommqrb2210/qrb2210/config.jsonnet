@@ -17,7 +17,7 @@
       recurse_submodules: false,
     },
   },
-  kernel: {
+  kernel+: {
     source: { name: 'linux-unoq' },
     cross_compile: 'aarch64-linux-gnu-',
     defconfig: ['defconfig'],

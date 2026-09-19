@@ -1,5 +1,6 @@
 """全部 target 的 canonical 语义矩阵与平台代表路径。"""
 
+import yaml
 import pytest
 
 from builder.config.canonical import kernel_device_tree
@@ -25,8 +26,10 @@ FORBIDDEN_KEYS = {
 def configs():
     boards = discover_boards()
     targets = get_valid_targets(boards)
-    assert len(boards) == 20
-    assert len(targets) == 96
+    # 不硬编码数量：加板子或加 product 都会让硬编码失效，而本 fixture 要保证的
+    # 是「所有目标都参与 canonical 校验」，不是「目标恰好有 N 个」。
+    assert boards, "至少应发现一块 board"
+    assert len(targets) >= len(boards), "每块 board 至少应有一个目标"
     return {
         target: resolve_config(**{
             "board_name": parsed["board"],
@@ -204,8 +207,15 @@ def test_khadas_vim3_board_contract(configs):
     fragment = board_dir / "patches" / "bootloader" / "flange_fastboot.config"
     assert "CONFIG_FASTBOOT_FLASH_MMC_DEV=2" in fragment.read_text().splitlines()
     assert (board_dir / "dtso" / "vim3-spidev-spicc1.dtso").is_file()
-    usb_config = board_dir / "overlay" / "etc" / "usbdevice.conf"
-    assert 'USB_PRODUCT_NAME="khadas-vim3"' in usb_config.read_text().splitlines()
+    # USB gadget 板级配置已从 shell 格式的 usbdevice.conf 迁移为 usbmoded 的
+    # YAML（见 openspec/changes/archive/2026-09-19-add-usb-mode-switching）。
+    usb_config = (
+        board_dir / "overlay" / "etc" / "usbmode" / "gadget.d" / "20-khadas-vim3.yaml"
+    )
+    assert usb_config.is_file(), f"板级 gadget 配置缺失：{usb_config}"
+    gadget = yaml.safe_load(usb_config.read_text())["gadget"]
+    assert gadget["product_name"] == "khadas-vim3"
+    assert gadget["vendor_id"] == "0x18d1"
 
     soc = _load_soc_config("a311d")
     assert "partitions" not in soc

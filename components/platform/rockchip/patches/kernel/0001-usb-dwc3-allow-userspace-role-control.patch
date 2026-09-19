@@ -1,0 +1,24 @@
+usb: dwc3: 允许 userspace 通过 sysfs 控制 USB 角色
+
+Rockchip BSP 内核注册 role switch 时未设置 allow_userspace_control，
+导致 /sys/class/usb_role/<dev>/role 属性被 usb_role_switch_is_visible()
+隐藏 —— 该属性仅在注册方声明允许 userspace 控制时才可见。
+
+表现是 role switch 设备目录存在（dr_mode=otg、usb-role-switch 已声明、
+Type-C 控制器正常工作），目录下却没有 role 文件，userspace 无从切换
+device/host 角色。ROCK 5B 实测确认。
+
+mainline 自 v5.9 起在此处设置该字段，本 patch 与之对齐。
+
+diff --git a/drivers/usb/dwc3/drd.c b/drivers/usb/dwc3/drd.c
+index 3bf470032..b6d3b8e89 100644
+--- a/drivers/usb/dwc3/drd.c
++++ b/drivers/usb/dwc3/drd.c
+@@ -538,6 +538,7 @@ static int dwc3_setup_role_switch(struct dwc3 *dwc)
+ 	dwc3_role_switch.set = dwc3_usb_role_switch_set;
+ 	dwc3_role_switch.get = dwc3_usb_role_switch_get;
+ 	dwc3_role_switch.driver_data = dwc;
++	dwc3_role_switch.allow_userspace_control = true;
+ 	dwc->role_sw = usb_role_switch_register(dwc->dev, &dwc3_role_switch);
+ 	if (IS_ERR(dwc->role_sw))
+ 		return PTR_ERR(dwc->role_sw);

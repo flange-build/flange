@@ -178,7 +178,8 @@ local product = std.extVar('product');
     // valgrind 与 Cardputer 验收工具；保留 gdb/strace/tcpdump。
     package_sets+: { debug: ['gdb', 'strace', 'tcpdump'] },
     // SPI NAND 不安装 ext4 grow/recovery 管理程序，仅保留 ADB 调试入口。
-    custom_packages: ['adbd', 'cardputer_music_player'],
+    // adbd 已在 rootfs 基线层默认启用，这里只追加本层特有的包。
+    custom_packages+: ['cardputer_music_player'],
     // NetworkManager/wpa_supplicant 已由 base package set 提供；追加
     // BlueZ 及 Cardputer HID/UAC1 实机验收工具。
     packages+: [

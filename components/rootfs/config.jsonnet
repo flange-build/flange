@@ -104,6 +104,17 @@ local variant = std.extVar('variant');
       'plugdev', 'users', 'netdev', 'input', 'render',
       'i2c', 'spi', 'gpio',
     ],
+    // — 默认 App 包 —
+    // 平台无关的基线：所有板子默认装 adbd，它经 build.deps 带入 usbmoded
+    // （USB gadget 管理服务）。adb 是多数板子唯一的调试通道，usbmoded 又是
+    // USB 能力的基础设施，二者应当开箱即有，而不是靠每个平台层重复声明 ——
+    // 后者正是 CONFIG_DRM_GUD 在 14 个文件里各写一遍的老毛病。
+    //
+    // 平台/SoC/板级用 `custom_packages+:` 追加自己的包；确实不需要的板子用
+    // lib.without 从基线中显式扣除（如 Arduino UNO Q 自带整套 USB gadget
+    // 方案，与 usbmoded 抢同一个 gadget，必须扣掉）。
+    custom_packages: ['adbd'],
+
     package_sets: {
       base: [
         // — 包集合 —

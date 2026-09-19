@@ -39,7 +39,7 @@ local common = import 'config/rockchip.libsonnet';
     // ——RK3582 GPU 熔断，无需切 panthor 也无需关 mali_kbase。
     defconfig: ['rk3588_defconfig'],
   },
-  kernel: {
+  kernel+: {
     source: { name: 'rockchip-kernel' },
     defconfig: [
       'rockchip_linux_defconfig', 'case_insensitive_fix.config',
@@ -51,7 +51,7 @@ local common = import 'config/rockchip.libsonnet';
     // configure() 阶段写到 arch/arm64/configs/panel_mipi_dbi.config。
     // GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
     // USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree: { directory: 'rockchip' },
   },
   // 不部署 mali-csf firmware —— GPU 已熔断（RK3588/RK3588S 配置中的

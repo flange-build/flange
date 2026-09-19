@@ -34,7 +34,7 @@
       'aic8800_wlan.config', 'usb_gadget.config', 'panel_mipi_dbi.config',
       'case_insensitive_fix.config', 'pd_test_disable.config',
     ],
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree+: { directory: 'allwinner' },
     oot_modules: [{
       dir: '{kernel_src}/bsp/modules/gpu/img-bxm/linux/rogue_km/build/linux/sunxi_linux',

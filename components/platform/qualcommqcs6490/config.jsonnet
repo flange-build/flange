@@ -20,7 +20,8 @@ local variant = std.extVar('variant');
   flash_tool: 'edl-ng',
   rootfs+: {
     // adbd 便于 USB 调试；flange-rootfs-grow 首启扩容 rootfs。
-    custom_packages: ['adbd', 'flange-rootfs-grow'],
+    // adbd 已在 rootfs 基线层默认启用，这里只追加本层特有的包。
+    custom_packages+: ['flange-rootfs-grow'],
     // Q6A 只支持 Ubuntu noble，与平台无关的 Ubuntu Base URL/SHA256 从 rootfs
     // 基线继承；这里追加 Mesa freedreno/turnip、Qualcomm 固件和无线用户态。
     packages: [

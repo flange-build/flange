@@ -1,0 +1,11 @@
+[Unit]
+Description=MTP server（由 usbmoded 管理）
+# 同 usbmoded-adbd.service：不 enable，启停由 usbmoded 的 mtp 能力驱动。
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mtp-server
+Restart=always
+RestartSec=1
+StartLimitBurst=10
+StartLimitIntervalSec=30

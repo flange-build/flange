@@ -33,7 +33,7 @@
     source: { name: 'linux-a311d' },
     defconfig: ['defconfig'],
     // GUD（Generic USB Display，通用 USB 显示）沿用全平台显式配置。
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree+: { directory: 'amlogic' },
   },
   boot+: {

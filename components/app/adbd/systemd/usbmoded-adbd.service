@@ -1,0 +1,20 @@
+[Unit]
+Description=Android Debug Bridge daemon（由 usbmoded 管理）
+# 刻意不声明对 usbmoded.service 的依赖，也不 enable：本 unit 的启停
+# 完全由 usbmoded 的 adb 能力驱动。FunctionFS 必须先挂载好 adbd 才能
+# 打开 ep0，这个顺序由 usbmoded 的 prepare 阶段保证，而非 systemd 依赖。
+
+[Service]
+Type=simple
+# 能力参数（ADBD_SHELL / ADB_TCP_PORT）由 usbmoded 写入。文件不存在时
+# 前缀 - 让 unit 仍可启动并使用 adbd 自身的默认值。
+EnvironmentFile=-/run/usbmoded/adbd.env
+ExecStart=/usr/bin/adbd
+# 保活交给 systemd，取代既有 shell 实现的自制守护循环 —— 后者的状态
+# 判断读写不对称会泄漏循环，ROCK 5B 上曾堆积 360+ 个并发循环争抢同一
+# FunctionFS ep0，导致 USB 每 2 秒断连一次。
+Restart=always
+RestartSec=1
+# 退避限流：FunctionFS 未就绪时 adbd 会立即退出，不限流会造成忙循环。
+StartLimitBurst=10
+StartLimitIntervalSec=30
