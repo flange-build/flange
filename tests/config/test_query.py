@@ -25,10 +25,28 @@ class TestGetValidTargets:
         targets = get_valid_targets(boards=boards)
         assert isinstance(targets, list)
 
-    def test_expected_count(self, boards):
-        """当前 20 个 board 的全部 product/variant 组合应完整枚举。"""
+    def test_enumeration_is_complete_and_consistent(self, boards):
+        """枚举必须覆盖每块 board 的全部 product × variant 组合，且自洽。
+
+        刻意不硬编码总数：每加一块板或一个 product 都会让硬编码失效，而本测试
+        要守的是「枚举完整且自洽」，不是「总数恰好是 N」。此处历史上写死 96，
+        加板之后实际为 98，导致本用例连同依赖它的 canonical 矩阵用例长期失败。
+        """
         targets = get_valid_targets(boards=boards)
-        assert len(targets) == 96
+
+        assert targets, "至少应枚举出一个目标"
+        assert len(targets) == len(set(targets)), "目标列表不应有重复"
+        assert targets == sorted(targets), "目标应按字母序排列"
+
+        # 每个 target 都能解析回合法三元组，且每块 board 都被覆盖到
+        covered = set()
+        for target in targets:
+            parsed = parse_target(target, boards)
+            assert parsed["board"] in boards, f"解析出未知 board：{target}"
+            covered.add(parsed["board"])
+        assert covered == set(boards), (
+            f"以下 board 未出现在枚举结果中：{sorted(set(boards) - covered)}"
+        )
 
     def test_contains_radxa_targets(self, boards):
         targets = get_valid_targets(boards=boards)
