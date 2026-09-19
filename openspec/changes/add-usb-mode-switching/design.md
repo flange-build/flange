@@ -101,11 +101,32 @@ rootfs 的 base 包集合中不含 PyYAML，因此 App 的 `depends` 需加入 `
 
 **注意区分载体**：配置文件用 YAML，控制协议是 JSON-RPC 2.0（见 D9）。前者面向人工编辑与板级维护，后者面向程序解析且需要 `socat` / `nc` 可手工调试，两者诉求不同，不强行统一。
 
-### D6：落在现有 `adbd` App 内，不新建独立 App
+### D6：usbmoded 独立成包，adbd 依赖它
 
-flange 的 App 系统**没有 App 间依赖的先例**（所有 `depends` 均为 apt 包名），引入它属于额外未知风险；且本变更替换的正是该 App 的核心内容。
+**选择**：拆成两个 App/deb：
 
-**已知问题（不在本次修复）**：`adbd` 这个 App 名在本变更后将彻底名不副实 —— 它承载的是完整的 USB gadget 子系统，adb 只是其中一个能力。合理做法是后续单独做一次纯重命名重构，而非在本次功能变更里顺带处理。
+- `usbmoded`：三层架构实现、CLI、gadget 配置、场景定义、主 unit、udev 规则
+- `adbd`：adbd 二进制与 `usbmoded-adbd.service`，`build.deps: [usbmoded]` + `depends: [usbmoded]`
+
+**本决策推翻了本变更早先的方案。** 早先决定「全部并入 adbd App」，理由是
+「flange 的 App 系统没有 App 间依赖的先例」—— 这个判断是错的。机制完整存在：
+`AppResolver.closure()` 按 `build.deps` 递归求依赖闭包，`runtime_packages_for()`
+把依赖 App 的 deb 一并纳入安装集合，`components/packages/arduino-unoq-runtime`
+就有 `build.deps: [flange-arduino-unoq-usb]` 的真实用例。没先例不等于不支持。
+
+拆分的收益是实际的：`adbd` 这个名字终于名副其实（只管 adbd 二进制），
+需要 USB 能力但不需要 adb 的产品可以只装 `usbmoded`。板级配置无需改动 ——
+`custom_packages: ['adbd']` 会通过依赖闭包自动带入 `usbmoded`（ROCK 5B 实测
+确认构建顺序为 usbmoded → adbd）。
+
+**注意 `build.deps` 与 `depends` 是两回事**，两者都要写：前者进构建与安装
+闭包，后者是 deb 的 Depends 字段。
+
+**已知限制**：flange 的 app.yaml 不支持 `Replaces` / `Breaks`。文件归属从
+adbd 迁到 usbmoded 后，**在已装旧版的设备上增量升级会撞 dpkg 的 overwrite
+冲突**（ROCK 5B 实测确认），必须先 `dpkg -r adbd` 再装。rootfs 全新构建是
+一次性装齐，不受影响 —— 而这正是 flange 的正常流程，所以本变更不为此扩展
+打包器。若将来要支持设备上的增量升级，需要给 app.yaml 加这两个字段。
 
 ### D7：实现语言 Python 3
 

@@ -39,6 +39,18 @@ class Step(str, Enum):
     DONE = "完成"
 
 
+class _ApplyFailure(Exception):
+    """内部异常：携带失败时已到达的步骤与原始异常。
+
+    只在 _apply 与 switch 之间传递，不越出本模块。
+    """
+
+    def __init__(self, step: "Step", cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.step = step
+        self.cause = cause
+
+
 class SceneError(Exception):
     """场景切换失败，携带失败步骤以便定位。"""
 
@@ -160,25 +172,16 @@ class SceneManager:
             self._cancel_rollback()
 
             try:
-                # 切到 host 前必须先让出 UDC。
-                if target_role is role_mod.Role.HOST:
-                    step = Step.STOP_GADGET
-                    self._gadget.disable()
-                    step = Step.SWITCH_ROLE
-                    role_mod.switch(target_role)
-                else:
-                    if target_role is not None:
-                        step = Step.SWITCH_ROLE
-                        role_mod.switch(target_role)
-                    if caps is not None:
-                        step = Step.START_GADGET
-                        self._gadget.enable(caps, scene.params)
-            except (GadgetError, CapabilityError, role_mod.RoleError) as exc:
+                self._apply(scene, caps, target_role)
+            except _ApplyFailure as failure:
+                step, exc = failure.step, failure.cause
+                # 失败不能停在中间状态：能力集合变化走的是「先停后启」，
+                # 启用失败时旧能力已经被停掉、UDC 已解绑，USB 会完全消失。
+                # ROCK 5B 实测：切到一个内核不支持的能力后 adb 直接断了且
+                # 不会自己回来 —— 若当时没有 SSH 这条带外通道，设备就失联了。
+                detail = self._recover(previous, name)
                 raise SceneError(
-                    f"切换到 {name} 失败于「{step.value}」：{exc}"
-                    f"（当前处于中间状态，已启用能力："
-                    f"{', '.join(sorted(self._gadget.active_capabilities())) or '无'}）",
-                    step,
+                    f"切换到 {name} 失败于「{step.value}」：{exc}{detail}", step
                 ) from exc
 
             self._current = name
@@ -195,6 +198,106 @@ class SceneManager:
 
             log.info("已切换到场景 %s（回滚待确认=%s）", name, result.rollback_armed)
             return result
+
+    def _apply(self, scene: Scene, caps: list | None, target_role) -> Step:
+        """执行一次场景应用，返回最后到达的步骤。
+
+        切到 host 必须先让出 UDC；切回 device 则相反。顺序颠倒会留下悬空
+        绑定 —— UDC 已被 role 切换接管，gadget 却仍认为自己处于 bound 状态。
+
+        调用方必须持有锁。本方法不做自锁保护与持久化，只负责把硬件状态
+        推到目标 —— 这样恢复路径可以复用它而不触发嵌套的保护逻辑。
+        """
+        step = Step.RESOLVE
+        try:
+            if target_role is role_mod.Role.HOST:
+                step = Step.STOP_GADGET
+                self._gadget.disable()
+                step = Step.SWITCH_ROLE
+                role_mod.switch(target_role)
+                return step
+
+            if target_role is not None:
+                step = Step.SWITCH_ROLE
+                role_mod.switch(target_role)
+            if caps is not None:
+                step = Step.START_GADGET
+                self._gadget.enable(caps, scene.params)
+            return step
+        except (GadgetError, CapabilityError, role_mod.RoleError) as exc:
+            # 把"失败在哪一步"随异常带出去。仅靠调用方的局部变量是不够的：
+            # 异常抛出时 `step = self._apply(...)` 这条赋值根本没执行，
+            # 调用方看到的永远是初值，报出的步骤会误导排查方向。
+            raise _ApplyFailure(step, exc) from exc
+
+    def _recover(self, previous: str | None, failed: str) -> str:
+        """切换失败后尽力恢复到原场景，返回给用户的描述片段。
+
+        恢复走 _apply 而非 switch：后者会再走一遍自锁保护与持久化，在失败
+        路径上那些都是噪声，还可能递归。
+
+        调用方必须持有锁。
+        """
+        active = ", ".join(sorted(self._gadget.active_capabilities())) or "无"
+        if not previous or previous == failed:
+            return f"（当前处于中间状态，已启用能力：{active}）"
+
+        try:
+            scene = self.get(previous)
+            caps = (
+                capabilities.resolve(scene.capabilities)
+                if scene.capabilities is not None
+                else None
+            )
+            role = role_mod.Role(scene.role) if scene.role else None
+            self._apply(scene, caps, role)
+        except Exception as exc:  # noqa: BLE001 - 恢复失败也要把信息带出去
+            log.error("恢复到场景 %s 失败：%s", previous, exc)
+            return (
+                f"（恢复到 {previous} 同样失败：{exc}；"
+                f"当前处于中间状态，已启用能力：{active}）"
+            )
+
+        self._current = previous
+        log.warning("切换到 %s 失败，已自动恢复到场景 %s", failed, previous)
+        return f"（已自动恢复到场景 {previous}）"
+
+    def reevaluate(self) -> None:
+        """响应 USB 状态变化，重新确保当前场景的 gadget 状态。
+
+        与 switch 的关键区别：**不碰自锁回滚计时器**，也不改变当前场景、
+        不做持久化。
+
+        这个区分不是洁癖。udev 在每次 USB 状态变化时触发本方法，而一次场景
+        切换本身必然引起状态变化 —— 若这里走 switch，switch 开头的
+        _cancel_rollback() 会把刚刚为这次切换装好的保护计时器取消掉。
+
+        ROCK 5B 实测确认：切到不含 adb 的场景后提示了「60 秒内未确认将回滚」，
+        但 70 秒后回滚从未发生，设备一直停在无 adb 的状态。自锁保护是设备
+        失联的最后一道防线，它被自己引发的 udev 事件取消掉是不可接受的。
+
+        gadget 层有启动幂等守卫，因此本方法在状态未变时是廉价的空操作。
+        """
+        with self._lock:
+            if self._current is None:
+                return
+            scene = self._scenes.get(self._current)
+            if scene is None:
+                return
+            try:
+                caps = (
+                    capabilities.resolve(scene.capabilities)
+                    if scene.capabilities is not None
+                    else None
+                )
+                role = role_mod.Role(scene.role) if scene.role else None
+                self._apply(scene, caps, role)
+            except _ApplyFailure as failure:
+                log.error(
+                    "重新评估失败于「%s」：%s", failure.step.value, failure.cause
+                )
+            except CapabilityError as exc:
+                log.error("重新评估失败：%s", exc)
 
     def confirm(self) -> bool:
         """确认当前场景，取消待执行的回滚。返回是否确实取消了计时器。"""

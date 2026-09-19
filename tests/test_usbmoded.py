@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-APP_DIR = Path(__file__).resolve().parent.parent / "components" / "app" / "adbd"
+APP_DIR = Path(__file__).resolve().parent.parent / "components" / "app" / "usbmoded"
 sys.path.insert(0, str(APP_DIR))
 
 from usbmoded import capability, configfs, udc  # noqa: E402
@@ -88,6 +88,32 @@ def test_write_attr_skips_when_unchanged(tmp_path):
     assert configfs.write_attr(attr, "0x0006") is True
     assert configfs.write_attr(attr, "0x0006") is False
     assert configfs.write_attr(attr, "0x0011") is True
+
+
+def test_empty_value_written_as_newline(tmp_path):
+    """清空属性必须落成换行符，不能是 0 字节写入。
+
+    configfs 的 store 回调按写入长度解析内容，0 字节写入不触发回调，
+    「清空属性」会静默失效。ROCK 5B 实测：UDC 属性写 "" 后回读仍是原
+    controller 名，gadget 根本没解绑 —— 而 disable()、切 host 前的解绑、
+    ums 清空 lun 全都依赖这个语义。
+
+    伪 configfs 复现不了内核行为（写什么读什么），所以这里直接断言写入的
+    字节形式，守住契约本身。
+    """
+    attr = tmp_path / "UDC"
+    attr.write_text("fc000000.usb")
+
+    assert configfs.write_attr(attr, "") is True
+    assert attr.read_bytes() == b"\n", "清空属性必须写换行符，不能写 0 字节"
+    assert configfs.read_attr(attr) == ""
+
+
+def test_nonempty_value_written_verbatim(tmp_path):
+    """非空值原样写入，不额外附加换行。"""
+    attr = tmp_path / "idProduct"
+    configfs.write_attr(attr, "0x0006")
+    assert attr.read_bytes() == b"0x0006"
 
 
 # ---- 知识 #2：绑定回读校验
@@ -217,6 +243,74 @@ def test_disconnect_recovery_preserves_configfs(fake_sys, gadget):
     assert sorted(p.name for p in gadget.config_dir.iterdir()) == links_before, \
         "断连恢复不得移除 configfs 链接"
     assert ("stop", "adb") in calls, "应停止 daemon 以便重新获取 endpoint"
+
+
+def test_disable_keeps_function_instances(fake_sys, gadget):
+    """停用只解除链接，MUST NOT 删除 function 实例。
+
+    删除 configfs 里的 function 实例会销毁底层对象，而 FunctionFS 的挂载点
+    仍在：daemon 随后能打开 ep0 却在写描述符时得到 EINVAL。ROCK 5B 实测，
+    adbd 由此陷入 "failed to write USB strings: Invalid argument" 重启循环，
+    USB 完全不可用。既有 shell 实现同样只删 configs/*/f-*。
+    """
+    calls = []
+    cap = FakeCapability("adb", capability.ORDER_ADB, calls, instances=("ffs.adb",))
+    gadget.enable([cap], {})
+    instance_dir = gadget.functions_dir / "ffs.adb"
+    assert instance_dir.is_dir()
+
+    gadget.disable()
+
+    assert instance_dir.is_dir(), "function 实例必须保留以便复用"
+    assert not [p for p in gadget.config_dir.iterdir() if p.name.startswith("f-")], \
+        "configuration 里的链接应当被解除"
+
+
+def test_switch_failure_recovers_previous_scene(fake_sys, gadget, monkeypatch):
+    """切换失败必须尽力恢复原场景，不能让 USB 停在空状态。
+
+    能力集合变化走「先停后启」，启用失败时旧能力已被停掉、UDC 已解绑。
+    不恢复就意味着 USB 彻底消失 —— 在只有 adb 一条通道的板子上等于失联。
+    """
+    import usbmoded.capabilities as caps_mod
+    from usbmoded.capability import CapabilityError
+    from usbmoded.scene import Scene, SceneManager, SceneError
+
+    calls = []
+    good = FakeCapability("adb", capability.ORDER_ADB, calls)
+
+    class Broken(FakeCapability):
+        def prepare(self, ctx):
+            raise CapabilityError("本平台不支持该能力")
+
+    broken = Broken("ncm", capability.ORDER_RNDIS, calls)
+    registry = {"adb": good, "ncm": broken}
+    monkeypatch.setattr(caps_mod, "REGISTRY", registry)
+    monkeypatch.setattr(caps_mod, "get", lambda n: registry[n])
+    monkeypatch.setattr(caps_mod, "resolve", lambda names: [registry[n] for n in names])
+
+    manager = SceneManager.__new__(SceneManager)
+    manager._gadget = gadget
+    manager._default_scene = "debug"
+    manager._scenes = {
+        "debug": Scene("debug", ["adb"], None, {}),
+        "net": Scene("net", ["adb", "ncm"], None, {}),
+    }
+    manager._current = None
+    import threading
+    manager._lock = threading.RLock()
+    manager._rollback_timer = None
+    manager._rollback_to = None
+
+    manager.switch("debug", force=True)
+    assert gadget.active_capabilities() == {"adb"}
+
+    with pytest.raises(SceneError) as excinfo:
+        manager.switch("net", force=True)
+
+    assert "已自动恢复到场景 debug" in str(excinfo.value)
+    assert gadget.active_capabilities() == {"adb"}, "必须恢复到原能力集合"
+    assert manager.current == "debug"
 
 
 # ---- 描述符与状态重建
@@ -408,3 +502,80 @@ def test_rpc_missing_required_param(rpc):
     reply = _send(handler, {"jsonrpc": "2.0", "method": "scene.set",
                             "params": {}, "id": 1})
     assert reply["error"]["code"] == control.INVALID_PARAMS
+
+
+def test_reevaluate_does_not_cancel_rollback(fake_sys, gadget, monkeypatch):
+    """udev 触发的重新评估 MUST NOT 取消自锁回滚计时器。
+
+    一次切换本身就会引起 USB 状态变化并触发 udev，若重新评估走 switch，
+    switch 开头的 _cancel_rollback() 会把刚装好的保护计时器取消掉。
+    ROCK 5B 实测：提示了「60 秒内未确认将回滚」，70 秒后回滚从未发生。
+    """
+    import threading
+
+    import usbmoded.capabilities as caps_mod
+    from usbmoded.scene import Scene, SceneManager
+
+    calls = []
+    adb = FakeCapability("adb", capability.ORDER_ADB, calls)
+    ums = FakeCapability("ums", capability.ORDER_UMS, calls)
+    registry = {"adb": adb, "ums": ums}
+    monkeypatch.setattr(caps_mod, "REGISTRY", registry)
+    monkeypatch.setattr(caps_mod, "resolve", lambda names: [registry[n] for n in names])
+
+    manager = SceneManager.__new__(SceneManager)
+    manager._gadget = gadget
+    manager._default_scene = "debug"
+    manager._scenes = {
+        "debug": Scene("debug", ["adb"], None, {}),
+        "storage": Scene("storage", ["ums"], None, {}),
+    }
+    manager._current = None
+    manager._lock = threading.RLock()
+    manager._rollback_timer = None
+    manager._rollback_to = None
+
+    manager.switch("debug", force=True)
+    result = manager.switch("storage", rollback_timeout=300)
+    assert result.rollback_armed, "切到不含 adb 的场景应当启动回滚保护"
+    assert manager._rollback_timer is not None
+
+    manager.reevaluate()
+
+    assert manager._rollback_timer is not None, "重新评估不得取消回滚计时器"
+    assert manager.current == "storage"
+    manager._cancel_rollback()
+
+
+def test_confirm_cancels_rollback(fake_sys, gadget, monkeypatch):
+    """显式确认才取消回滚。"""
+    import threading
+
+    import usbmoded.capabilities as caps_mod
+    from usbmoded.scene import Scene, SceneManager
+
+    calls = []
+    registry = {
+        "adb": FakeCapability("adb", capability.ORDER_ADB, calls),
+        "ums": FakeCapability("ums", capability.ORDER_UMS, calls),
+    }
+    monkeypatch.setattr(caps_mod, "REGISTRY", registry)
+    monkeypatch.setattr(caps_mod, "resolve", lambda names: [registry[n] for n in names])
+
+    manager = SceneManager.__new__(SceneManager)
+    manager._gadget = gadget
+    manager._default_scene = "debug"
+    manager._scenes = {
+        "debug": Scene("debug", ["adb"], None, {}),
+        "storage": Scene("storage", ["ums"], None, {}),
+    }
+    manager._current = None
+    manager._lock = threading.RLock()
+    manager._rollback_timer = None
+    manager._rollback_to = None
+
+    manager.switch("debug", force=True)
+    manager.switch("storage", rollback_timeout=300)
+    assert manager.confirm() is True
+    assert manager._rollback_timer is None
+    assert manager.confirm() is False, "没有待确认的切换时应返回 False"

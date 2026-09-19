@@ -253,7 +253,17 @@ class Gadget:
             for cap in ordered:
                 ctx = ctx_of[cap.name]
                 for instance in cap.instances:
-                    configfs.ensure_dir(ctx.instance_dir(instance))
+                    try:
+                        configfs.ensure_dir(ctx.instance_dir(instance))
+                    except configfs.ConfigfsError as exc:
+                        # configfs 下不存在对应的 function 类型时 mkdir 报
+                        # ENOENT。原始错误只说"没有那个文件"，对使用者毫无
+                        # 指向性 —— 实际含义是内核没有编入/加载该 function。
+                        raise CapabilityError(
+                            f"能力 {cap.name} 在本平台不可用：无法创建 function "
+                            f"实例 {instance}，内核可能未启用对应的 USB_F_* "
+                            f"配置或未加载模块（原始错误：{exc}）"
+                        ) from exc
                 try:
                     cap.prepare(ctx)
                 except CapabilityError:
@@ -325,14 +335,16 @@ class Gadget:
             if name.startswith("f-"):
                 configfs.remove_symlink(self.config_dir / name)
 
-        for cap in self._active.values():
-            ctx = self._context()
-            for instance in cap.instances:
-                try:
-                    configfs.remove_dir(ctx.instance_dir(instance))
-                except configfs.ConfigfsError as exc:
-                    # 实例可能仍被内核引用，留待下次启用时复用。
-                    log.debug("移除实例 %s 失败（将复用）：%s", instance, exc)
+        # 刻意**不删除** functions/ 下的 function 实例，只解除 configuration
+        # 里的链接 —— 与既有 shell 实现一致（它只做 rm -f configs/*/f-*）。
+        #
+        # 删除 configfs 里的 function 实例会销毁底层对象，而 FunctionFS 的
+        # 挂载点仍然存在：daemon 随后能成功打开 ep0，却在写描述符时得到
+        # EINVAL。ROCK 5B 实测，adbd 由此陷入 "failed to write USB strings:
+        # Invalid argument" 的重启循环，USB 完全不可用。
+        #
+        # 保留实例没有副作用：不在 configuration 中链接的 function 不参与
+        # gadget，下次启用时直接复用。
 
         self._active = {}
         log.info("已停用全部能力并解绑 UDC")

@@ -171,6 +171,13 @@ def cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reload(args: argparse.Namespace) -> int:
+    reply = call("config.reload")
+    scenes = reply.get("scenes") or []
+    print(f"已重新加载场景定义（{len(scenes)} 个）：{', '.join(scenes)}")
+    return 0
+
+
 def cmd_confirm(args: argparse.Namespace) -> int:
     reply = call("scene.confirm")
     if reply.get("cancelled"):
@@ -198,6 +205,9 @@ def main() -> int:
     p_set.set_defaults(func=cmd_set)
 
     sub.add_parser("reset", help="清除持久化并回到默认场景").set_defaults(func=cmd_reset)
+    # 改了 /etc/usbmode/scenes.d/ 下的定义后用它生效。注意 systemctl reload
+    # 只触发 gadget 重新评估，不重载场景定义 —— 那是给 udev 用的高频路径。
+    sub.add_parser("reload", help="重新加载场景定义").set_defaults(func=cmd_reload)
     sub.add_parser("confirm", help="确认当前场景，取消自动回滚").set_defaults(func=cmd_confirm)
 
     args = parser.parse_args()

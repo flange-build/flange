@@ -1,15 +1,12 @@
 ---
 title: USB gadget 子系统（usbmoded）
 type: subsystem
-status: implemented-unverified
+status: partially-verified
 updated: 2026-09-19
 sources:
-  - components/app/adbd/usbmoded/
+  - components/app/usbmoded/
   - components/app/adbd/app.yaml
-  - components/app/adbd/conf/usbmode/
-  - components/app/adbd/systemd/usbmoded.service
-  - components/app/adbd/udev/61-usbdevice.rules
-  - components/app/adbd/README.md
+  - openspec/changes/add-usb-mode-switching/field-findings.md
   - tests/test_usbmoded.py
   - openspec/changes/add-usb-mode-switching/
 related:
@@ -25,8 +22,13 @@ related:
 三层架构：场景层（业务）→ 原子能力层（单个 USB function）→ gadget 核心层
 （configfs 与竞态处理）。以 `usb-mode` CLI 与 unix socket 上的 JSON-RPC 2.0 对外。
 
-2026-09-19 由三层 Python 服务替换了原先的 `usbdevice` shell 脚本。
-**当前状态：实现完成、单元与集成测试通过，但尚未在任何实板上验证。**
+2026-09-19 由三层 Python 服务替换了原先的 `usbdevice` shell 脚本，并拆成两个包：
+`usbmoded`（服务本体）与 `adbd`（二进制 + daemon unit，`build.deps` 依赖前者）。
+
+**当前状态：ROCK 5B 已完成首轮实板验证**（等价性、场景切换、权限分级、自锁回滚、
+开机路径）。首轮验证发现并修复 8 个实板才能暴露的缺陷，见
+`openspec/changes/add-usb-mode-switching/field-findings.md`。其余 13 块板仍为
+「已迁移未验证」。
 
 ## 关键设计要点
 
@@ -46,7 +48,7 @@ related:
 
 | 层 | 文件 | 职责 |
 |---|---|---|
-| L3 | `usbmoded/scene.py` | 场景模型、切换编排、自锁回滚、持久化 |
+| L3 | `app/usbmoded/usbmoded/scene.py` | 场景模型、切换编排、自锁回滚、持久化 |
 | L3 | `usbmoded/control.py` | unix socket、JSON-RPC 2.0、`SO_PEERCRED` 授权 |
 | L2 | `usbmoded/capability.py` | L1↔L2 接口契约、排序权重刻度 |
 | L2 | `usbmoded/capabilities/` | 各能力实现 + systemd daemon 设施 |
@@ -98,15 +100,15 @@ udev 事件：USB 状态变化 → `systemctl --no-block reload` → SIGHUP →
 
 ## 板级支持矩阵
 
-**全部条目当前均为「已迁移未验证」** —— 配置已从 `usbdevice.conf` 迁移并通过
-脚本比对确认等价，但没有一块板做过实机验证。首次上板必须准备串口：本服务处于
-开机关键路径，失败会让 adb 通道消失、设备完全失联。
+**除 ROCK 5B 外均为「已迁移未验证」** —— 配置已从 `usbdevice.conf` 迁移并通过
+脚本比对确认等价。首次上板必须准备串口或其他带外通道（SSH over 网络即可）：
+本服务处于开机关键路径，失败会让 adb 通道消失。
 
 | 板子 | VID | gadget group | 配置来源 | role 切换 |
 |---|---|---|---|---|
 | orangepi-5-plus | 0x2207 | rockchip | 板级 | 未探测 |
 | orangepi-cm4 | 0x2207 | rockchip | 板级 | 未探测 |
-| radxa-rock5b | 0x2207 | rockchip | 板级 | 未探测 |
+| radxa-rock5b | 0x2207 | rockchip | 板级 | **不可用**（无可写节点） |
 | radxa-rock5c-lite | 0x2207 | rockchip | 板级 | 未探测 |
 | radxa-zero3w | 0x2207 | rockchip | 板级 | 未探测 |
 | rp-pro-rk3568-h | 0x2207 | rockchip | 板级 | 未探测 |
@@ -127,6 +129,17 @@ Dragon Q8B 的 role 切换不可用是确定的：其 DTS patch 把 `usb_0_dwc3`
 role switch 接口。这类板子上 `usb-mode set host` 会明确报错而非静默失败。
 
 ## 易踩坑
+
+- **清空 configfs 属性必须写换行符**，0 字节写入不触发内核 store 回调，
+  解绑 UDC、清空 ums lun 会**静默失效**。
+- **停用时不要删除 function 实例**，只解除 configuration 里的链接。删实例会
+  销毁底层对象而挂载点残留，daemon 打开 ep0 后写描述符得到 EINVAL。
+- **udev 触发的重新评估不能走 `switch`**，否则会取消自锁回滚计时器 ——
+  切换本身就会引起 USB 状态变化并触发 udev。
+- **ROCK 5B 内核只支持 ffs / mass_storage / acm / uvc**，通用场景里的
+  `media`（mtp）与 `net`（ncm）在该板不可用；系统也缺 `mkfs.vfat`。
+- **拆包后在已装旧版的设备上增量升级会撞 dpkg overwrite 冲突**，需先
+  `dpkg -r adbd`。rootfs 全新构建不受影响。
 
 - **首次上板必须有串口。** 本服务在 `sysinit.target` 阶段启动，失败即失联。
 - **`-p` 持久化到不含 adb 的场景会让设备每次开机都无法远程访问**，需 `--force`

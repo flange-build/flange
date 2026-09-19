@@ -40,7 +40,10 @@ def reevaluate(manager: SceneManager, gadget: Gadget) -> None:
     if active and not udc.current_binding(gadget.gadget_dir):
         gadget.recover_disconnect()
     try:
-        manager.switch(manager.current, force=True)
+        # 必须走 manager.reevaluate 而不是 manager.switch：后者会取消自锁
+        # 回滚计时器，而一次切换本身就会引起 USB 状态变化并触发本函数 ——
+        # 自锁保护会被自己引发的 udev 事件取消掉（ROCK 5B 实测）。
+        manager.reevaluate()
     except Exception as exc:  # noqa: BLE001 - 重新评估失败不应终止服务
         log.error("重新评估失败：%s", exc)
 
@@ -115,7 +118,10 @@ def _sd_notify(message: str) -> None:
     import os
     import socket as _socket
 
-    addr = os.environ.get("NOTIFY_SOCKET")
+    # pop 而非 get：本服务只 notify 一次（READY=1），用完即从环境中摘掉。
+    # 留着会被 subprocess 继承 —— systemctl 等子进程拿到 NOTIFY_SOCKET 后
+    # 也会往里发消息，systemd 因 NotifyAccess=main 拒收并刷警告日志。
+    addr = os.environ.pop("NOTIFY_SOCKET", None)
     if not addr:
         return
     if addr.startswith("@"):

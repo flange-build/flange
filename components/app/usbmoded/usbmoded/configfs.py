@@ -44,10 +44,31 @@ def read_attr(path: Path) -> str | None:
         raise ConfigfsError(f"读取属性失败：{path}: {exc}") from exc
 
 
+def _payload(value: str) -> str:
+    """把待写入的值转成 configfs 能正确解析的字节串。
+
+    **空字符串必须写成换行符。** configfs 的 store 回调按写入长度解析内容，
+    0 字节写入不会触发回调，"清空属性"这类操作会**静默失效** —— 属性看起来
+    写过了，实际纹丝不动。
+
+    这不是理论问题：ROCK 5B 实测，`UDC` 属性写 "" 后回读仍是原 controller
+    名，gadget 根本没有解绑。旧 shell 实现用 `echo ""`（输出一个换行符）
+    恰好绕过了它。内核在 store 里会剥掉结尾的 \n 得到空串，所以写 "\n"
+    与语义上的"清空"等价。
+
+    受影响的操作：解绑 UDC、清空 mass_storage 的 lun.0/file，以及任何
+    把属性置空的场景。
+    """
+    return value if value != "" else "\n"
+
+
 def write_attr(path: Path, value: str) -> bool:
     """幂等写属性。返回 True 表示实际发生了写入。
 
     知识 #6：写前先读取比对，值相同则跳过。
+
+    空字符串会被写成换行符，见 _payload —— 0 字节写入不会触发 configfs 的
+    store 回调，"清空属性"会静默失效。
 
     configfs / sysfs 上的属性写入不是无副作用的 —— 即便写入相同的值，
     gadget 框架也可能触发 soft-disconnect 与主机重新枚举。配合「每次
@@ -58,7 +79,7 @@ def write_attr(path: Path, value: str) -> bool:
     if current is not None and current == value:
         return False
     try:
-        path.write_text(value)
+        path.write_text(_payload(value))
     except OSError as exc:
         raise ConfigfsError(f"写入属性失败：{path} = {value!r}: {exc}") from exc
     return True

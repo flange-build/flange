@@ -135,6 +135,9 @@ def unbind(gadget_dir: Path) -> None:
     """解绑 gadget。
 
     写空值即解绑。已经是未绑定状态时为空操作（write_attr 的幂等语义）。
+
+    注意空值的写入形式由 configfs._payload 处理：直接写 0 字节不会触发
+    内核的 store 回调，解绑会静默失效（ROCK 5B 实测）。
     """
     configfs.write_attr(gadget_dir / "UDC", "")
 
