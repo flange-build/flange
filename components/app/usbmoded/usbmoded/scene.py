@@ -91,6 +91,7 @@ class SceneManager:
         self._lock = threading.RLock()
         self._rollback_timer: threading.Timer | None = None
         self._rollback_to: str | None = None
+        self._rollback_role = None
         self.reload()
 
     # ---- 场景定义
@@ -171,6 +172,12 @@ class SceneManager:
 
             self._cancel_rollback()
 
+            # 记录切换前的实际 role。恢复时必须切回它，而不是依赖原场景的
+            # role 声明 —— 多数场景（如 debug）不声明 role，意为"保持当前
+            # 角色"。若切 role 之后才失败，恢复时 role 已变，不切回就永远
+            # 等不到 UDC（host 模式下根本没有 UDC），恢复必然失败。
+            role_before, _ = role_mod.current()
+
             try:
                 self._apply(scene, caps, target_role)
             except _ApplyFailure as failure:
@@ -179,7 +186,7 @@ class SceneManager:
                 # 启用失败时旧能力已经被停掉、UDC 已解绑，USB 会完全消失。
                 # ROCK 5B 实测：切到一个内核不支持的能力后 adb 直接断了且
                 # 不会自己回来 —— 若当时没有 SSH 这条带外通道，设备就失联了。
-                detail = self._recover(previous, name)
+                detail = self._recover(previous, name, role_before)
                 raise SceneError(
                     f"切换到 {name} 失败于「{step.value}」：{exc}{detail}", step
                 ) from exc
@@ -192,7 +199,7 @@ class SceneManager:
 
             # 自锁保护：会切断控制通道且此前有可用场景时，启动回滚计时器。
             if cuts_channel and previous and previous != name and not force:
-                self._arm_rollback(previous, rollback_timeout)
+                self._arm_rollback(previous, rollback_timeout, role_before)
                 result.rollback_armed = True
                 result.rollback_timeout = rollback_timeout
 
@@ -230,7 +237,9 @@ class SceneManager:
             # 调用方看到的永远是初值，报出的步骤会误导排查方向。
             raise _ApplyFailure(step, exc) from exc
 
-    def _recover(self, previous: str | None, failed: str) -> str:
+    def _recover(
+        self, previous: str | None, failed: str, role_before=None
+    ) -> str:
         """切换失败后尽力恢复到原场景，返回给用户的描述片段。
 
         恢复走 _apply 而非 switch：后者会再走一遍自锁保护与持久化，在失败
@@ -243,6 +252,13 @@ class SceneManager:
             return f"（当前处于中间状态，已启用能力：{active}）"
 
         try:
+            # 先把 role 切回切换前的值。原场景多半不声明 role，靠 _apply
+            # 是切不回去的；而 role 停在 host 时 UDC 不存在，后面启用 gadget
+            # 必然超时。
+            if role_before is not None and role_mod.current()[0] is not role_before:
+                log.info("恢复：先把角色切回 %s", role_before.value)
+                role_mod.switch(role_before)
+
             scene = self.get(previous)
             caps = (
                 capabilities.resolve(scene.capabilities)
@@ -349,8 +365,13 @@ class SceneManager:
             return True
         return False
 
-    def _arm_rollback(self, target: str, timeout: int) -> None:
+    def _arm_rollback(self, target: str, timeout: int, role_before=None) -> None:
         self._rollback_to = target
+        # 回滚必须连 role 一起回退。目标场景多半不声明 role（意为"保持当前
+        # 角色"），若 role 停在 host，UDC 根本不存在，启用 gadget 必然超时。
+        # ROCK 5B 实测：切到 host 后自锁回滚失败，设备停在无 adb 的状态 ——
+        # 而自锁保护正是为了防止这种失联。
+        self._rollback_role = role_before
         self._rollback_timer = threading.Timer(timeout, self._do_rollback)
         self._rollback_timer.daemon = True
         self._rollback_timer.start()
@@ -363,17 +384,49 @@ class SceneManager:
             self._rollback_timer.cancel()
             self._rollback_timer = None
             self._rollback_to = None
+            self._rollback_role = None
 
     def _do_rollback(self) -> None:
+        """自锁回滚：把 role 与场景一并恢复到切换前的状态。
+
+        **刻意不走 switch。** switch 在失败时会调 _recover 恢复到 previous，
+        而回滚场景下的 previous 正是我们要离开的那个场景 —— ROCK 5B 实测：
+        回滚已经把 role 切回 device，_recover 又把它切回 host，UDC 随之消失，
+        回滚必然失败，设备停在无 adb 的状态。
+
+        这里直接用 _apply 应用目标场景：失败就是失败，不再叠加恢复语义。
+        """
         with self._lock:
             target = self._rollback_to
+            role_before = self._rollback_role
             self._rollback_timer = None
             self._rollback_to = None
-        if not target:
-            return
-        log.warning("未收到确认，自动回滚到场景 %s", target)
-        try:
-            self.switch(target, force=True)
-        except SceneError as exc:
-            # 回滚失败是最坏情况：设备可能已经失联。尽可能留下线索。
-            log.error("自动回滚失败：%s —— 设备可能需要串口或断电恢复", exc)
+            self._rollback_role = None
+            if not target:
+                return
+
+            log.warning("未收到确认，自动回滚到场景 %s", target)
+            try:
+                # 先把 role 切回。顺序不能反：role 停在 host 时没有 UDC，
+                # 启用 gadget 会卡在等待 UDC。
+                if (
+                    role_before is not None
+                    and role_mod.current()[0] is not role_before
+                ):
+                    log.warning("回滚：先把角色切回 %s", role_before.value)
+                    role_mod.switch(role_before)
+
+                scene = self.get(target)
+                caps = (
+                    capabilities.resolve(scene.capabilities)
+                    if scene.capabilities is not None
+                    else None
+                )
+                role = role_mod.Role(scene.role) if scene.role else None
+                self._apply(scene, caps, role)
+                self._current = target
+                log.warning("已回滚到场景 %s", target)
+            except Exception as exc:  # noqa: BLE001 - 回滚失败要把信息带出去
+                log.error(
+                    "自动回滚失败：%s —— 设备可能需要串口或断电恢复", exc
+                )

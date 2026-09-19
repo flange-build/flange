@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import glob
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -23,6 +24,11 @@ from pathlib import Path
 from . import configfs
 
 log = logging.getLogger(__name__)
+
+# role 切换是异步的：写入后 dwc3 要重新配置 controller 模式（peripheral↔host），
+# UDC 随之消失或出现。ROCK 5B 实测约 200ms。30 × 0.1s = 3s 留足余量。
+ROLE_WAIT_ATTEMPTS = 30
+ROLE_WAIT_INTERVAL = 0.1
 
 
 class Role(str, Enum):
@@ -78,12 +84,19 @@ class RoleBackend:
         except OSError as exc:
             raise RoleError(f"写入角色失败：{self.node} = {target}: {exc}") from exc
 
-        actual = self.read()
-        if actual is not role:
-            raise RoleError(
-                f"角色回读校验失败：{self.node} 期望 {role.value} "
-                f"实际 {actual.value}（原始写入值 {target}）"
-            )
+        # 必须轮询等待而不是立即回读。切换是异步的，写完瞬间读到的还是旧值 ——
+        # ROCK 5B 实测：立即回读拿到 device，200ms 后才变成 host，一次成功的
+        # 切换会被误判为失败，进而触发不必要的恢复流程。
+        for _ in range(ROLE_WAIT_ATTEMPTS):
+            actual = self.read()
+            if actual is role:
+                return
+            time.sleep(ROLE_WAIT_INTERVAL)
+        raise RoleError(
+            f"角色切换超时：{self.node} 期望 {role.value} "
+            f"实际 {self.read().value}（原始写入值 {target}，"
+            f"已等待 {ROLE_WAIT_ATTEMPTS * ROLE_WAIT_INTERVAL:.0f}s）"
+        )
 
 
 #: 探测表。按顺序尝试，命中即用。新增平台只需在此追加一项。

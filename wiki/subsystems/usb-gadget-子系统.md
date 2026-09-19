@@ -108,7 +108,7 @@ udev 事件：USB 状态变化 → `systemctl --no-block reload` → SIGHUP →
 |---|---|---|---|---|
 | orangepi-5-plus | 0x2207 | rockchip | 板级 | 未探测 |
 | orangepi-cm4 | 0x2207 | rockchip | 板级 | 未探测 |
-| radxa-rock5b | 0x2207 | rockchip | 板级 | 内核未暴露（dr_mode=otg，可 patch 开启） |
+| radxa-rock5b | 0x2207 | rockchip | 板级 | **已验证**（需 dwc3 patch） |
 | radxa-rock5c-lite | 0x2207 | rockchip | 板级 | 未探测 |
 | radxa-zero3w | 0x2207 | rockchip | 板级 | 未探测 |
 | rp-pro-rk3568-h | 0x2207 | rockchip | 板级 | 未探测 |
@@ -131,8 +131,12 @@ role 切换不可用有两种性质完全不同的原因，服务会分别诊断
 - **内核注册了但没暴露给 userspace** —— `role` 属性受
   `usb_role_switch_is_visible()` 控制，需注册方设置 `allow_userspace_control`。
   ROCK 5B 属于此类：`dr_mode=otg`、fusb302 工作正常、节点存在，只是属性被
-  隐藏。Rockchip BSP 6.1 的 dwc3 未设该字段（mainline 自 v5.9 已设），
-  **补一行内核 patch 即可开启**。
+  隐藏。Rockchip BSP 6.1 的 dwc3 未设该字段（mainline 自 v5.9 已设）。
+  `platform/rockchip/patches/kernel/0001-usb-dwc3-allow-userspace-role-control.patch`
+  补上该字段后，ROCK 5B 已完成 device↔host 切换的完整实板验证。
+
+**role 切换是异步的**（实测约 200ms）：写入后 dwc3 要重新配置 controller
+模式，UDC 随之消失或出现。任何「写完立即回读」的校验都会误判失败。
 
 ## 易踩坑
 

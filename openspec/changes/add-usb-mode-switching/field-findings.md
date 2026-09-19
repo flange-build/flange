@@ -162,3 +162,66 @@ dpkg -i usbmoded_*.deb adbd_*.deb                # 一次装两个，依赖在�
 
 板级配置 `/etc/usbmode/gadget.d/20-<board>.yaml` 来自 rootfs overlay、不属于
 任何包，purge 不会删它 —— 这是正确行为，全新安装后仍然生效（实测确认）。
+
+## 第二轮：内核 patch 后的 role 切换验证
+
+给 Rockchip BSP 补上 `allow_userspace_control` 并打开缺失的 gadget function 后，
+ROCK 5B 的 role 切换才第一次真正可测。随即又暴露 3 个缺陷，全部与 role 的
+**异步性**有关 —— 这类问题在伪 configfs 上永远不会出现。
+
+### F10 role 切换是异步的，立即回读会把成功误判为失败
+
+写入 role 节点后 dwc3 要重新配置 controller 模式（peripheral↔host），UDC 随之
+消失或出现。**实测约 200ms**：立即回读拿到的还是旧值。
+
+原实现写完就回读校验，于是一次成功的切换被判为失败，进而触发不必要的恢复流程。
+
+修复：改为轮询等待目标值（30 × 0.1s = 3s）。
+
+### F11 恢复时不把 role 切回去，恢复必然失败
+
+多数场景（如 `debug`）不声明 role，意为「保持当前角色」。若失败发生在切 role
+之后，恢复时 role 已是 host —— 而 host 模式下**根本没有 UDC**，启用 gadget 必然
+等待超时。
+
+修复：`switch` 记录切换前的实际 role，`_recover` 先切回再启用 gadget。
+
+### F12 自锁回滚走 switch，成果会被 _recover 撤销
+
+`_do_rollback` 原本调 `switch(target, force=True)`，而 `switch` 失败时会调
+`_recover` 恢复到 `previous` —— 回滚场景下的 `previous` 正是要离开的那个场景。
+
+实测日志：
+
+```
+回滚：先把角色切回 device
+切换角色：host -> device      ← 回滚生效
+切换角色：device -> host      ← _recover 又切回去了
+自动回滚失败：等待 UDC 超时
+```
+
+设备停在无 adb 的 host 模式。**自锁保护是防失联的最后一道防线，它自己把自己
+撤销了。**
+
+修复：`_do_rollback` 直接用 `_apply` 应用目标场景，不走 `switch`，不叠加恢复语义。
+
+### 修复后的完整闭环（实测）
+
+```
+切换角色：device -> host
+已启动自锁回滚：60 秒内未收到确认将切回场景 debug
+未收到确认，自动回滚到场景 debug
+回滚：先把角色切回 device
+切换角色：host -> device
+已回滚到场景 debug
+→ role=device  UDC=fc000000.usb  场景 debug  能力 adb  状态=configured
+```
+
+### 内核侧的确认
+
+- **patch 生效**：`/sys/class/usb_role/fc000000.usb-role-switch/role` 出现且可写
+- **function 全部可用**（实测 mkdir 探测）：`ffs`、`mass_storage`、`ncm`、`rndis`、
+  `acm`、`hid`、`uac1`、`uac2`、`uvc` —— 此前只有 4 个
+- **`net` 场景可用**：切换后设备侧出现 `usb0` 接口（此前因 ncm 缺失而失败）
+- **boot 分区仅 56M、可用 16M**，而 Image 有 38M：替换内核必须先删旧的，中间存在
+  「无内核」窗口。备份只能放根分区，不能放 /boot。

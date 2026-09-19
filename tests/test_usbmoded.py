@@ -579,3 +579,53 @@ def test_confirm_cancels_rollback(fake_sys, gadget, monkeypatch):
     assert manager.confirm() is True
     assert manager._rollback_timer is None
     assert manager.confirm() is False, "没有待确认的切换时应返回 False"
+
+
+def test_rollback_restores_role(fake_sys, gadget, monkeypatch):
+    """自锁回滚必须连 role 一起回退。
+
+    目标场景多半不声明 role（意为"保持当前角色"）。若 role 停在 host，
+    UDC 根本不存在，回滚时启用 gadget 必然超时 —— ROCK 5B 实测：切到 host
+    后自锁回滚失败、设备停在无 adb 的状态，而自锁保护正是为了防止这种失联。
+    """
+    import threading
+
+    import usbmoded.capabilities as caps_mod
+    from usbmoded import role as role_mod
+    from usbmoded.scene import Scene, SceneManager
+
+    calls = []
+    registry = {"adb": FakeCapability("adb", capability.ORDER_ADB, calls)}
+    monkeypatch.setattr(caps_mod, "REGISTRY", registry)
+    monkeypatch.setattr(caps_mod, "resolve", lambda names: [registry[n] for n in names])
+
+    # 模拟一个可切换 role 的平台
+    state = {"role": role_mod.Role.DEVICE}
+    monkeypatch.setattr(role_mod, "current", lambda: (state["role"], None))
+    monkeypatch.setattr(role_mod, "switch", lambda r: state.__setitem__("role", r))
+
+    manager = SceneManager.__new__(SceneManager)
+    manager._gadget = gadget
+    manager._default_scene = "debug"
+    manager._scenes = {
+        "debug": Scene("debug", ["adb"], None, {}),
+        "host": Scene("host", None, "host", {}),
+    }
+    manager._current = None
+    manager._lock = threading.RLock()
+    manager._rollback_timer = None
+    manager._rollback_to = None
+    manager._rollback_role = None
+
+    manager.switch("debug", force=True)
+    assert state["role"] is role_mod.Role.DEVICE
+
+    result = manager.switch("host", rollback_timeout=300)
+    assert result.rollback_armed, "切到 host 会断 adb，应启动回滚保护"
+    assert state["role"] is role_mod.Role.HOST
+    assert manager._rollback_role is role_mod.Role.DEVICE, "须记录切换前的 role"
+
+    manager._do_rollback()
+
+    assert state["role"] is role_mod.Role.DEVICE, "回滚必须把 role 切回去"
+    assert manager.current == "debug"
