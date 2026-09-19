@@ -138,14 +138,38 @@ def require_backend() -> RoleBackend:
     运行时切换本就不可用。
     """
     backend = probe()
-    if backend is None:
+    if backend is not None:
+        return backend
+
+    # 区分两种"不可用"，它们的解法完全不同：
+    #
+    # 1. usb_role class 下有设备但没有 role 属性 —— role switch 已经注册，
+    #    只是内核没把接口暴露给 userspace。`role` 属性受
+    #    usb_role_switch_is_visible() 控制，仅当注册方设置了
+    #    allow_userspace_control 才可见。mainline 的 dwc3 从 v5.9 起设置了
+    #    它，但厂商 BSP 常常没跟进 —— ROCK 5B 的 Rockchip 6.1 内核即是如此
+    #    （dr_mode=otg、fusb302 正常工作，接口却被藏着）。这种情况改一行
+    #    内核就能开启，与"平台真的不支持"是两回事。
+    # 2. 完全没有节点 —— 多半是 DTS 把 dr_mode 固定成了 host/peripheral。
+    #
+    # 不做这个区分，排查者会误以为硬件不支持而放弃。
+    registered = sorted(glob.glob("/sys/class/usb_role/*"))
+    if registered:
+        names = "、".join(Path(p).name for p in registered)
         raise RoleError(
-            "本平台不支持 USB 角色切换：已尝试 "
-            + "、".join(attempted_paths())
-            + " 均未找到可写节点。若为 dwc3 平台，检查 DTS 的 dr_mode "
-            "是否被固定为 host/peripheral —— 仅 otg 模式会注册 role switch 接口"
+            f"本平台已注册 USB role switch（{names}）但未向 userspace 暴露 "
+            f"role 属性：内核注册时未设置 allow_userspace_control，"
+            f"sysfs 接口被 usb_role_switch_is_visible() 隐藏。"
+            f"这不是硬件限制 —— 在 dwc3 的 role switch 注册处补上该字段即可开启"
         )
-    return backend
+
+    raise RoleError(
+        "本平台不支持 USB 角色切换：已尝试 "
+        + "、".join(attempted_paths())
+        + " 均未找到可写节点，且 /sys/class/usb_role/ 下没有任何设备。"
+        "若为 dwc3 平台，检查 DTS 的 dr_mode 是否被固定为 host/peripheral"
+        " —— 仅 otg 模式会注册 role switch 接口"
+    )
 
 
 def current() -> tuple[Role, str | None]:
@@ -156,6 +180,10 @@ def current() -> tuple[Role, str | None]:
     """
     backend = probe()
     if backend is None:
+        try:
+            require_backend()
+        except RoleError as exc:
+            return Role.NONE, str(exc)
         return Role.NONE, "本平台不支持角色切换"
     return backend.read(), None
 

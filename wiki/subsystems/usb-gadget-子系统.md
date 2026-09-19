@@ -108,7 +108,7 @@ udev 事件：USB 状态变化 → `systemctl --no-block reload` → SIGHUP →
 |---|---|---|---|---|
 | orangepi-5-plus | 0x2207 | rockchip | 板级 | 未探测 |
 | orangepi-cm4 | 0x2207 | rockchip | 板级 | 未探测 |
-| radxa-rock5b | 0x2207 | rockchip | 板级 | **不可用**（无可写节点） |
+| radxa-rock5b | 0x2207 | rockchip | 板级 | 内核未暴露（dr_mode=otg，可 patch 开启） |
 | radxa-rock5c-lite | 0x2207 | rockchip | 板级 | 未探测 |
 | radxa-zero3w | 0x2207 | rockchip | 板级 | 未探测 |
 | rp-pro-rk3568-h | 0x2207 | rockchip | 板级 | 未探测 |
@@ -124,9 +124,15 @@ udev 事件：USB 状态变化 → `systemctl --no-block reload` → SIGHUP →
 最后两块没有板级配置文件，使用 App 层默认值（Linux Foundation 测试 VID）——
 迁移前后一致，但迁移时容易遗漏，需专门确认。
 
-Dragon Q8B 的 role 切换不可用是确定的：其 DTS patch 把 `usb_0_dwc3` 的
-`dr_mode` 固定为 `peripheral`，而 dwc3 只在 `dr_mode = "otg"` 时才注册
-role switch 接口。这类板子上 `usb-mode set host` 会明确报错而非静默失败。
+role 切换不可用有两种性质完全不同的原因，服务会分别诊断：
+
+- **DTS 把 `dr_mode` 固定成 host/peripheral** —— dwc3 根本不注册 role switch
+  接口，无解。Dragon Q8B 属于此类（其 DTS patch 固定为 `peripheral`）。
+- **内核注册了但没暴露给 userspace** —— `role` 属性受
+  `usb_role_switch_is_visible()` 控制，需注册方设置 `allow_userspace_control`。
+  ROCK 5B 属于此类：`dr_mode=otg`、fusb302 工作正常、节点存在，只是属性被
+  隐藏。Rockchip BSP 6.1 的 dwc3 未设该字段（mainline 自 v5.9 已设），
+  **补一行内核 patch 即可开启**。
 
 ## 易踩坑
 

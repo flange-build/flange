@@ -108,11 +108,57 @@ adbd 随后能成功打开 ep0，却在写描述符时得到 EINVAL，陷入
 
 ## 平台事实（写入支持矩阵）
 
-- **ROCK 5B 不支持运行时 role 切换**：`/sys/class/usb_role/` 与
-  `otg_mode` 均无可写节点，服务明确报「本平台不支持」而非静默失败。
+- **ROCK 5B 的 role 切换被内核藏起来了，不是硬件不支持**（初判有误，已修正）：
+
+  DT 实际是 `dr_mode = "otg"` 且声明了 `usb-role-switch`，fusb302 Type-C
+  控制器正常工作，`/sys/class/usb_role/fc000000.usb-role-switch` 节点也确实
+  存在 —— 但该目录下**没有 `role` 属性文件**。
+
+  根因在内核：`role` 属性受 `usb_role_switch_is_visible()` 控制，仅当注册方
+  设置了 `allow_userspace_control` 才可见。mainline 的 dwc3 自 v5.9 起设置了
+  它，而 Rockchip BSP 6.1 的 `drivers/usb/dwc3/drd.c` 注册时没带这个字段：
+
+  ```c
+  struct usb_role_switch_desc dwc3_role_switch = {NULL};
+  dwc3_role_switch.fwnode = dev_fwnode(dwc->dev);
+  dwc->role_sw = usb_role_switch_register(dwc->dev, &dwc3_role_switch);
+  ```
+
+  **补一行 `dwc3_role_switch.allow_userspace_control = true;` 即可开启。**
+
+  探测逻辑已据此改进：区分「usb_role 下有设备但无 role 属性」（内核未暴露，
+  可 patch）与「完全没有节点」（多半 dr_mode 被固定），两者解法完全不同，
+  混为一谈会让排查者误以为硬件不支持而放弃。
 - **内核支持的 function 类型**（实测逐个 mkdir 探测）：
   `ffs`、`mass_storage`、`acm`、`uvc` 可用；
   `mtp`、`ncm`、`rndis`、`hid`、`uac1`、`uac2`、`eem`、`ecm` 不可用。
   因此 `media`（含 mtp）与 `net`（含 ncm）两个通用场景在本板不可用。
 - 系统缺 `mkfs.vfat`（无 dosfstools），`storage` 场景的默认 vfat 参数在本板
   不可用，需改 ext4 或补装 dosfstools。
+
+### F9 卸载后 __pycache__ 残留，包已 purge 仍可 import
+
+`dpkg --purge usbmoded` 后 `/usr/lib/python3/dist-packages/usbmoded/` 仍在，
+里面是 16 个 `.pyc`。目录存在使 Python 3 把它当作命名空间包（PEP 420），
+`import usbmoded` 依然成功（`__file__` 为 None）。
+
+标准 Debian Python 包由 `dh_python3` 在 postrm 清理 `__pycache__`，flange 的
+deb 生成器没有这一步；而 `maintainer_scripts` 只对 `app.type=vendor` 开放，
+App 层无法自行补 postrm。
+
+功能影响有限（Python 不会用没有对应 `.py` 的 `.pyc`），但卸载不干净，且会让
+「包是否可用」的探测失效。修复需要改 `builder/deb.py`：为含 Python 文件的包
+自动生成清理 `__pycache__` 的 postrm。**超出本变更范围，单独记录。**
+
+### 升级流程（实测可行）
+
+拆包后在已装旧版的设备上：
+
+```
+dpkg --purge adbd usbmoded     # 或 dpkg -r adbd，保留 conffiles
+rm -rf /usr/lib/python3/dist-packages/usbmoded   # 清 __pycache__ 残留（见 F9）
+dpkg -i usbmoded_*.deb adbd_*.deb                # 一次装两个，依赖在批内解决
+```
+
+板级配置 `/etc/usbmode/gadget.d/20-<board>.yaml` 来自 rootfs overlay、不属于
+任何包，purge 不会删它 —— 这是正确行为，全新安装后仍然生效（实测确认）。
