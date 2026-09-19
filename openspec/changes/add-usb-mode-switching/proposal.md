@@ -39,8 +39,8 @@
 ## Impact
 
 - `components/app/adbd/scripts/usbdevice`：**移除**。其 13 项竞态知识迁移至 L1。
-- `components/app/adbd/`：新增三层 Python 实现、控制接口、CLI、各能力的 systemd unit；`app.yaml` 大幅调整；`depends` 加入 `python3`（metapackage，非 `python3-minimal`）。
-- `components/app/adbd/conf/usbdevice.conf` 及 **12 份板级 overlay 配置**：迁移为新的场景定义格式（JSON —— rootfs 无 pyyaml，仅 stdlib 可用）。
+- `components/app/adbd/`：新增三层 Python 实现、控制接口、CLI、各能力的 systemd unit；`app.yaml` 大幅调整；`depends` 加入 `python3`（metapackage，非 `python3-minimal`）与 `python3-yaml`。
+- `components/app/adbd/conf/usbdevice.conf` 及 **12 份板级 overlay 配置**：迁移为新的场景定义格式（YAML，与 flange 既有配置风格一致）。
 - `components/app/adbd/udev/61-usbdevice.rules`：触发目标从 `systemctl reload usbdevice.service` 改为新服务的对应入口。
 - `components/rootfs/config.jsonnet`：`groups` 新增 `usbmode`。
 - 受影响板子：全部 12 块已配置 USB gadget 的板子，均需重新验证 USB 基本功能。

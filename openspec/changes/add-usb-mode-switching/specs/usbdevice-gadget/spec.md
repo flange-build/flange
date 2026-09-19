@@ -20,7 +20,7 @@ L1 gadget 核心层 SHALL 通过 Linux configfs 接口管理 USB gadget，自身
 
 ### Requirement: 配置文件格式
 
-板级 gadget 配置 SHALL 采用 JSON 格式（rootfs 中无 pyyaml，仅 Python stdlib 可用），支持以下配置项：
+板级 gadget 配置 SHALL 采用 YAML 格式，与 flange 既有的配置风格保持一致，支持以下配置项：
 
 | 配置项 | 说明 | 示例值 |
 |--------|------|--------|
@@ -206,4 +206,4 @@ L1 MUST NOT 硬编码具体的能力名称顺序表 —— 顺序信息由各能
 
 **Reason**: 该机制依赖 shell 的 `source` 语义在运行时注入函数与变量，随 shell 脚本一同移除。其承担的两项职责在新架构中由更明确的机制取代：新增 USB function 由 L2 的统一能力接口承担，配置覆盖由板级配置的分层合并承担。
 
-**Migration**: 现有 `/etc/usbdevice.d/` 下的扩展脚本需改写。新增 function 的扩展改为实现 L2 能力接口；变量覆盖类的扩展改为板级 JSON 配置中的对应键。本次变更中 flange 仓库内无实际使用该机制的扩展脚本，仅影响下游自定义扩展。
+**Migration**: 现有 `/etc/usbdevice.d/` 下的扩展脚本需改写。新增 function 的扩展改为实现 L2 能力接口；变量覆盖类的扩展改为板级 YAML 配置中的对应键。本次变更中 flange 仓库内无实际使用该机制的扩展脚本，仅影响下游自定义扩展。

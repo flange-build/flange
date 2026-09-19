@@ -1,22 +1,22 @@
 ## 1. 基线与验收依据
 
-- [ ] 1.1 把 design 中 13 项竞态知识整理为独立的可勾选验收表，每项含「原实现位置 / 知识内容 / 对应硬件现象 / 迁移目标 / 验证方法」，作为实现与验收的双向依据
+- [x] 1.1 把 design 中 13 项竞态知识整理为独立的可勾选验收表，每项含「原实现位置 / 知识内容 / 对应硬件现象 / 迁移目标 / 验证方法」，作为实现与验收的双向依据
 - [ ] 1.2 采集迁移前基线：在可实测的板子上记录默认 function 组合、枚举到的 VID/PID/产品名/序列号、`lsusb -v` 描述符输出，作为「行为等价」的判据
-- [ ] 1.3 清点现有 12 份板级 `usbdevice.conf` 的全部键值差异，产出迁移对照表
+- [x] 1.3 清点现有 12 份板级 `usbdevice.conf` 的全部键值差异，产出迁移对照表
 
 ## 2. L1 Gadget 核心层
 
-- [ ] 2.1 configfs 原语：目录管理、symlink、幂等写（写前先读比较，值相同则跳过 —— 知识 #6）
-- [ ] 2.2 UDC 探测与就绪等待，避免 deferred probe 竞态下取到空 UDC（知识 #1）
-- [ ] 2.3 UDC 绑定与回读校验，不以写入调用返回值判定成功（知识 #2）
-- [ ] 2.4 枚举状态校验，并区分「无主机连接」与真实故障（知识 #3、#5）
-- [ ] 2.5 枚举恢复：翻转 D+ 上拉强制重新枚举，实现中确保不触碰 configfs 链接与 FunctionFS（知识 #4）
-- [ ] 2.6 设备描述符管理，idProduct 仅在 UDC 未绑定时写入（知识 #7）
-- [ ] 2.7 断连恢复：UDC 意外解绑而能力集合未变时只重启 daemon，不清理 configfs 链接（知识 #8）
-- [ ] 2.8 启动幂等守卫：已绑定且能力集合未变时跳过重配（知识 #13）
-- [ ] 2.9 并发互斥，串行化 udev 触发与控制接口下发的操作（知识 #11）
-- [ ] 2.10 gadget 启用/停用/重配的完整流程编排，按能力声明的排序权重创建实例（知识 #12）
-- [ ] 2.11 层间隔离自查：确认 L1 中不存在任何具体 function 名称的判断分支
+- [x] 2.1 configfs 原语：目录管理、symlink、幂等写（写前先读比较，值相同则跳过 —— 知识 #6）
+- [x] 2.2 UDC 探测与就绪等待，避免 deferred probe 竞态下取到空 UDC（知识 #1）
+- [x] 2.3 UDC 绑定与回读校验，不以写入调用返回值判定成功（知识 #2）
+- [x] 2.4 枚举状态校验，并区分「无主机连接」与真实故障（知识 #3、#5）
+- [x] 2.5 枚举恢复：翻转 D+ 上拉强制重新枚举，实现中确保不触碰 configfs 链接与 FunctionFS（知识 #4）
+- [x] 2.6 设备描述符管理，idProduct 仅在 UDC 未绑定时写入（知识 #7）
+- [x] 2.7 断连恢复：UDC 意外解绑而能力集合未变时只重启 daemon，不清理 configfs 链接（知识 #8）
+- [x] 2.8 启动幂等守卫：已绑定且能力集合未变时跳过重配（知识 #13）
+- [x] 2.9 并发互斥，串行化 udev 触发与控制接口下发的操作（知识 #11）
+- [x] 2.10 gadget 启用/停用/重配的完整流程编排，按能力声明的排序权重创建实例（知识 #12）
+- [x] 2.11 层间隔离自查：确认 L1 中不存在任何具体 function 名称的判断分支
 
 ## 3. L2 原子能力层
 
@@ -43,7 +43,7 @@
 
 ## 5. L3 场景层
 
-- [ ] 5.1 场景模型与 JSON 定义加载，实现 App 层与板级的按键合并（非整文件覆盖）
+- [ ] 5.1 场景模型与 YAML 定义加载，实现 App 层与板级的按键合并（非整文件覆盖）
 - [ ] 5.2 场景切换编排 —— 仅能力集合变更的路径：先停用当前集合再启用目标集合
 - [ ] 5.3 场景切换编排 —— 含 role 变更的路径：切 host 先停 gadget 后写 role，切 device 先写 role 后启 gadget
 - [ ] 5.4 切换失败时的状态报告：指明失败步骤与当前中间状态，不谎报成功
@@ -63,9 +63,9 @@
 - [ ] 7.1 服务 systemd unit：`local-fs.target` 与 `sys-kernel-config.mount` 之后启动，`sysinit.target` 与 `usb-gadget.target` 双链路拉起，含失败重启与限流
 - [ ] 7.2 各带 daemon 能力的 unit（adbd、mtp-server），含重启策略
 - [ ] 7.3 udev 规则改造：`android_usb` change 与 `udc` add/change 事件改为异步通知常驻服务
-- [ ] 7.4 `app.yaml` 调整：install 映射、`depends` 加 `python3`（metapackage，非 `python3-minimal`）、systemd unit 声明
+- [ ] 7.4 `app.yaml` 调整：install 映射、`depends` 加 `python3`（metapackage，非 `python3-minimal`）与 `python3-yaml`、systemd unit 声明
 - [ ] 7.5 `components/rootfs/config.jsonnet` 的 `groups` 新增 `usbmode`，同步更新 `wiki/components/rootfs-构建器.md`
-- [ ] 7.6 App 层默认 gadget 配置与通用场景定义（JSON）
+- [ ] 7.6 App 层默认 gadget 配置与通用场景定义（YAML）
 - [ ] 7.7 板级配置迁移（第一批）：可实测的板子，按 1.3 对照表逐项迁移，以行为等价为准
 - [ ] 7.8 板级配置迁移（第二批）：无法实测的板子，迁移后明确标注「已迁移未验证」
 - [ ] 7.9 移除 `scripts/usbdevice`、`conf/usbdevice.conf` 及各板级 `overlay/etc/usbdevice.conf`

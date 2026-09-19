@@ -95,7 +95,11 @@ L1  Gadget 核心层          configfs 原语 · UDC 生命周期 · 枚举校�
 
 场景 = 能力集合 + 各能力参数 + role。role 与能力集合是两个正交维度，场景可以只设其一。
 
-场景定义格式为 JSON —— rootfs 的 base 包集合中**没有 pyyaml**，仅 Python stdlib 可用，`json` 是唯一无需新增依赖的结构化格式。
+场景定义格式为 YAML，与 flange 既有的配置风格（`app.yaml`）保持一致。
+
+rootfs 的 base 包集合中不含 PyYAML，因此 App 的 `depends` 需加入 `python3-yaml`（Ubuntu 标准包，体积很小）。不把它加进 base 包集合 —— 单个 App 的需要不应污染全线 rootfs。
+
+**注意区分载体**：配置文件用 YAML，控制协议仍为行分隔 JSON（见 D9）。前者面向人工编辑与板级维护，后者面向程序解析且需要 `socat` / `nc` 可手工调试，两者诉求不同，不强行统一。
 
 ### D6：落在现有 `adbd` App 内，不新建独立 App
 
