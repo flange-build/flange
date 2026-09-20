@@ -6,7 +6,7 @@ sources:
   - components/board/radxa-cubie-a7z/config.jsonnet
   - components/board/radxa-cubie-a7z/dtso/sun60iw2p1-spi1-st7789v-display.dtso
   - components/board/radxa-cubie-a7z/firmware/panel/st7789v2-240x280.txt
-  - components/board/radxa-cubie-a7z/overlay/etc/usbdevice.conf
+  - components/board/radxa-cubie-a7z/overlay/etc/usbmode/gadget.d/20-radxa-cubie-a7z.yaml
   - components/board/radxa-cubie-a7z/overlay/etc/modules-load.d/aic8800.conf
   - components/board/radxa-cubie-a7z/overlay/etc/modprobe.d/aic8800.conf
   - docs/first-steps.md
@@ -72,4 +72,4 @@ vendor overlay 位于 `boot.overlays.vendor`，ST7789V2 板私有 overlay 位于
 
 ## overlay
 
-`overlay/etc/usbdevice.conf`（ADB）、`overlay/etc/modules-load.d/aic8800.conf`、`overlay/etc/modprobe.d/aic8800.conf`。fbtft 阶段的 `console-setup` / `st7789v.conf` modules-load 已随 panel-mipi-dbi-spi 切换移除。
+`overlay/etc/usbmode/gadget.d/20-radxa-cubie-a7z.yaml`（USB gadget）、`overlay/etc/modules-load.d/aic8800.conf`、`overlay/etc/modprobe.d/aic8800.conf`。fbtft 阶段的 `console-setup` / `st7789v.conf` modules-load 已随 panel-mipi-dbi-spi 切换移除。

@@ -6,8 +6,9 @@
 # 适用场景：
 #   - ssh 登录普通用户后 sudo -s / sudo -i 切到的 root bash
 #   - adb shell：ADB 36 standalone adbd + ADBD_SHELL=/bin/bash（见
-#     app/adbd 的 usbdevice.conf）以 argv[0]="-/bin/bash" 启动 login
-#     bash，经 /root/.profile 读到本文件。
+#     app/usbmoded 的 conf/usbmode/scenes.d/10-common.yaml 中 adb 能力的
+#     shell 参数，由 usbmoded 写入 /run/usbmoded/adbd.env 交给 unit）
+#     以 argv[0]="-/bin/bash" 启动 login bash，经 /root/.profile 读到本文件。
 #     （历史：旧 vendor adbd 以 argv[0]="sh" 启动 → POSIX 模式不读
 #     ~/.bashrc，彼时由 /etc/bash.bashrc 承担 adb shell 体验。）
 

@@ -325,14 +325,14 @@ class TestInstallOverride:
 
     def test_explicit_install_non_convention_dir(self, tmp_path: Path):
         """install 段可以引用任意路径（不限于约定子目录），文件被正确添加。"""
-        _touch(tmp_path / "conf" / "usbdevice.conf")
+        _touch(tmp_path / "conf" / "other.conf")
         spec = _make_spec(
             name="myapp",
-            install={"conf/usbdevice.conf": "/etc/usbdevice.conf"},
+            install={"conf/other.conf": "/etc/other.conf"},
         )
         files = collect_files(tmp_path, spec, "aarch64")
         m = _result_map(files)
-        assert "/etc/usbdevice.conf" in m
+        assert "/etc/other.conf" in m
 
     def test_install_mode_inferred_for_bin_dest(self, tmp_path: Path):
         """install 段中安装到 /usr/bin/ 的文件推断权限为 0o755。"""
@@ -348,15 +348,15 @@ class TestInstallOverride:
 
     def test_install_mode_inferred_for_sbin_dest(self, tmp_path: Path):
         """install 段中安装到 /usr/sbin/ 的文件推断权限为 0o755。"""
-        _touch(tmp_path / "scripts" / "usbdevice")
+        _touch(tmp_path / "scripts" / "maintain")
         spec = _make_spec(
             name="myapp",
-            install={"scripts/usbdevice": "/usr/sbin/usbdevice"},
+            install={"scripts/maintain": "/usr/sbin/maintain"},
         )
         files = collect_files(tmp_path, spec, "aarch64")
         m = _result_map(files)
-        assert "/usr/sbin/usbdevice" in m
-        assert m["/usr/sbin/usbdevice"][1] == 0o755
+        assert "/usr/sbin/maintain" in m
+        assert m["/usr/sbin/maintain"][1] == 0o755
 
     def test_install_mode_inferred_for_etc_dest(self, tmp_path: Path):
         """install 段中安装到 /etc/ 的文件推断权限为 0o644。"""

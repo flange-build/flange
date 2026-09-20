@@ -7,7 +7,7 @@ sources:
   - components/platform/rockchip/config.jsonnet
   - docs/development-guide.md
   - components/board/radxa-zero3w/overlay/etc/hostname
-  - components/board/radxa-zero3w/overlay/etc/usbdevice.conf
+  - components/board/radxa-zero3w/overlay/etc/usbmode/gadget.d/20-radxa-zero3w.yaml
   - docs/first-steps.md
 related:
   - "[[rockchip 平台]]"
@@ -61,4 +61,4 @@ flange --target radxa-zero3w-desktop-release plan image
 
 ## overlay
 
-`overlay/etc/hostname` — 设备主机名；`overlay/etc/usbdevice.conf` — USB gadget 配置（ADB/串口）。其余均走平台默认。
+`overlay/etc/hostname` — 设备主机名；`overlay/etc/usbmode/gadget.d/20-radxa-zero3w.yaml` — usbmoded gadget 板级覆盖。其余均走平台默认。

@@ -274,8 +274,8 @@ class TestPostinstGeneration:
 
     def test_service_name_in_script(self):
         """service 文件名正确出现在脚本中。"""
-        script = _generate_postinst("usbdevice.service", [], auto_start=True)
-        assert "usbdevice.service" in script
+        script = _generate_postinst("usbmoded.service", [], auto_start=True)
+        assert "usbmoded.service" in script
 
     def test_service_name_with_shell_metachar_raises(self):
         """service_name 含 shell 元字符时抛出 DebBuildError。"""
@@ -413,10 +413,10 @@ class TestGenerateControl:
 
     def test_service_name_from_unit_path(self):
         """从 systemd.unit 路径提取 service 文件名（去除目录前缀）。"""
-        spec = _make_spec(systemd_unit="systemd/usbdevice.service")
+        spec = _make_spec(systemd_unit="systemd/usbmoded.service")
         result = generate_control(spec, "aarch64")
-        assert "usbdevice.service" in result["postinst"]
-        assert "usbdevice.service" in result["prerm"]
+        assert "usbmoded.service" in result["postinst"]
+        assert "usbmoded.service" in result["prerm"]
 
     def test_data_dirs_in_postinst(self):
         """data_dirs 中的目录出现在 postinst mkdir 命令中。"""

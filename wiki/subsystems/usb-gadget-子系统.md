@@ -2,13 +2,16 @@
 title: USB gadget 子系统（usbmoded）
 type: subsystem
 status: partially-verified
-updated: 2026-09-19
+updated: 2026-09-20
 sources:
   - components/app/usbmoded/
+  - components/app/usbmoded/README.md
   - components/app/adbd/app.yaml
-  - openspec/changes/add-usb-mode-switching/field-findings.md
+  - components/platform/rockchip/patches/kernel/0001-usb-dwc3-allow-userspace-role-control.patch
   - tests/test_usbmoded.py
-  - openspec/changes/add-usb-mode-switching/
+  - openspec/changes/archive/2026-09-19-add-usb-mode-switching/
+  - openspec/changes/archive/2026-09-19-add-usb-mode-switching/field-findings.md
+  - openspec/changes/archive/2026-09-19-add-usb-mode-switching/race-checklist.md
 related:
   - "[[adbd]]"
   - "[[recoveryctl]]"
@@ -27,7 +30,7 @@ related:
 
 **当前状态：ROCK 5B 已完成首轮实板验证**（等价性、场景切换、权限分级、自锁回滚、
 开机路径）。首轮验证发现并修复 8 个实板才能暴露的缺陷，见
-`openspec/changes/add-usb-mode-switching/field-findings.md`。其余 13 块板仍为
+`openspec/changes/archive/2026-09-19-add-usb-mode-switching/field-findings.md`。其余 13 块板仍为
 「已迁移未验证」。
 
 ## 关键设计要点
@@ -76,7 +79,7 @@ udev 事件：USB 状态变化 → `systemctl --no-block reload` → SIGHUP →
 
 这些知识来自被替换的 shell 脚本，每一项都对应一个在真实硬件上定位过的故障。
 完整对照表（含原实现位置与验证方法）见
-`openspec/changes/add-usb-mode-switching/race-checklist.md`，此处是独立于
+`openspec/changes/archive/2026-09-19-add-usb-mode-switching/race-checklist.md`，此处是独立于
 代码注释与变更目录的第三份备份。
 
 | # | 知识 | 丢失后果 | 自动化覆盖 |
@@ -164,5 +167,5 @@ role 切换不可用有两种性质完全不同的原因，服务会分别诊断
 ## 延伸阅读
 
 - [[adbd]] —— App 打包与 adbd 二进制来源
-- `components/app/adbd/README.md` —— 能力清单、场景格式、CLI 与协议
-- `openspec/changes/add-usb-mode-switching/` —— 设计决策与 13 项竞态对照表
+- `components/app/usbmoded/README.md` —— 能力清单、场景格式、CLI 与协议
+- `openspec/changes/archive/2026-09-19-add-usb-mode-switching/` —— 设计决策与 13 项竞态对照表

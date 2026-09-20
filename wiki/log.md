@@ -6,6 +6,18 @@
 
 ---
 
+## [2026-09-20] lint | 清理 usbdevice → usbmoded 重构后的过期引用
+
+`62090c80e` 用三层架构的 usbmoded 替换 `usbdevice` shell 脚本，但删除的文件（`scripts/usbdevice`、`conf/usbdevice.conf`、`systemd/usbdevice.service`、`udev/61-usbdevice.rules`、12 份板级 `overlay/etc/usbdevice.conf`）在仓库各处留下了仍以「现状」口吻描述它们的引用，CI 也因此有 22 个测试失败。
+
+**CI 修复**：`tests/builder/` 下四个文件的打包层断言仍在找已删除的文件。同时抓到一处真实迁移漏项——旧 `usbdevice.service` 的 `Environment=TERM=xterm` 与 `XDG_RUNTIME_DIR=/run/user/1000` 没迁到新的 `usbmoded-adbd.service`；adbd 是 `adb shell` 的父进程，这两个变量只能由跑 adbd 的 unit 注入，归档变更的 migration-table 只列了 `ADBD_SHELL` / `ADB_TCP_PORT`。已补回 unit，测试改为断言新 unit。
+
+**wiki 更新**：`apps/adbd.md` 的 `sources` 有 4 条指向 `components/app/adbd/usbmoded/` 一类根本不存在的路径（重构时对路径做了机械替换，把 usbmoded 的文件误挂在 adbd 目录下），正文整节按旧 shell 架构描述。按拆包后的职责边界重写：本页收敛到 App 打包、adbd 二进制来源与 adb shell 体验，gadget 编排指向 `subsystems/usb-gadget-子系统.md`。12 个 board 页的 `sources` 与正文文件名改为 `overlay/etc/usbmode/gadget.d/20-<board>.yaml`。子系统页的 `sources` 与正文引用的 change 目录已归档，补上 `archive/2026-09-19-` 前缀；其「延伸阅读」把能力清单/场景格式/CLI/协议指向 `app/adbd/README.md`，实际在 `app/usbmoded/README.md`。
+
+**一条语义被重构反转**，`apps/adbd.md` 易踩坑原写「板级 conf 整文件覆盖 App conf，App 层新增键必须在每块板手动跟进」——usbmoded 改为按键合并后结论相反。改为现状 + 历史两段并存，保留 commit `e13a6ec7` 为 11 块板补齐的历史结论，同时标明 overlay 叠加机制本身仍是整文件替换语义。
+
+带日期的历史小节（`2026-08-27` 根因定位、`2026-08-24` udev 自愈）按信息保全原则原样保留，仅为后者补一条迁移指向。`log.md` 既有条目不改写。
+
 ## [2026-09-12] sync | orangepi-cm4 蓝牙开机自动 attach
 
 WiFi 打通后复查蓝牙，发现刷写后 `hciconfig -a` 里没有 `hci0`、`/sys/class/bluetooth/` 为空——归档 change `2026-05-17-orangepi-cm4-bringup-wifi-and-npu-fix` 写进 spec 的「实机首启 BT HCI 接口出现」Scenario 同样从未验证过，与上一条 WiFi 的情况同源。

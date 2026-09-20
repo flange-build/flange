@@ -45,7 +45,7 @@ gadget 配置、场景定义、`usb-mode` CLI 与控制协议都属于 usbmoded�
 参见 [glibc 官方行为说明](https://sourceware.org/pipermail/glibc-cvs/2021q3/074935.html)。
 
 ROCK5B 的 vendor kernel 6.1.115 在重新打开 ep0 时仍会自动解绑 UDC（USB 设备控制器），
-现有 `usbdevice` 恢复分支会重新启动 adbd 并绑定。因此允许 PID 改变、TCP 连接中断后重连；
+usbmoded 的断连恢复分支会重新启动 adbd 并绑定。因此允许 PID 改变、TCP 连接中断后重连；
 验收要求是插拔后自动恢复，无需人工重启，不增加定时 watchdog（看门狗）。
 
 - arm64：已部署 ROCK5B；旧版一次模拟断连即恢复超时，修复版连续 9 轮恢复成功。

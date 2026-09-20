@@ -9,7 +9,7 @@ sources:
   - components/board/orangepi-cm4/patches/kernel/0004-add-orangepi-cm4-amp-dts.patch
   - components/board/orangepi-cm4/docs/amp.md
   - components/board/orangepi-cm4/overlay/etc/hostname
-  - components/board/orangepi-cm4/overlay/etc/usbdevice.conf
+  - components/board/orangepi-cm4/overlay/etc/usbmode/gadget.d/20-orangepi-cm4.yaml
   - components/board/orangepi-cm4/overlay/etc/systemd/system/bluetooth-orangepi-cm4.service
   - components/board/orangepi-cm4/overlay/usr/lib/flange/bt-unblock.sh
   - docs/first-steps.md
@@ -181,4 +181,4 @@ UART7_M2：
 
 ## overlay
 
-`overlay/etc/hostname` + `overlay/etc/usbdevice.conf`，无额外定制内容。
+`overlay/etc/hostname` + `overlay/etc/usbmode/gadget.d/20-orangepi-cm4.yaml`，无额外定制内容。

@@ -5,7 +5,7 @@ status: wip
 sources:
   - components/board/radxa-zero/config.jsonnet
   - components/board/radxa-zero/overlay/etc/hostname
-  - components/board/radxa-zero/overlay/etc/usbdevice.conf
+  - components/board/radxa-zero/overlay/etc/usbmode/gadget.d/20-radxa-zero.yaml
   - components/board/radxa-zero/overlay/etc/modules-load.d/flange-usbgadget.conf
   - components/platform/amlogic/config.jsonnet
   - components/platform/amlogic/s905y2/config.jsonnet
@@ -101,7 +101,7 @@ AW-CM256SM（CYW43455）三件套 + BT patchram 从权威 `radxa-pkg/radxa-firmw
 ## 板私有 overlay
 
 - `overlay/etc/hostname` → `radxa-zero`
-- `overlay/etc/usbdevice.conf` → adbd USB gadget（VID 0x18d1 AOSP，PRODUCT/GROUP `radxa-zero`）
+- `overlay/etc/usbmode/gadget.d/20-radxa-zero.yaml` → usbmoded gadget 板级覆盖（VID 0x18d1 AOSP，product_name/group `radxa-zero`）
 - `overlay/etc/modules-load.d/flange-usbgadget.conf` → `libcomposite`（mainline 6.12 模块化，adbd 依赖）
 - `+packages: [bluez]`
 

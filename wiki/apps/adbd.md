@@ -7,10 +7,9 @@ sources:
   - components/app/adbd/bin/adbd-arm64
   - components/app/adbd/bin/adbd-armhf
   - components/app/adbd/README.md
-  - components/app/adbd/usbmoded/
-  - components/app/adbd/conf/usbmode/
-  - components/app/adbd/systemd/usbmoded.service
-  - components/app/adbd/udev/61-usbdevice.rules
+  - components/app/adbd/systemd/usbmoded-adbd.service
+  - components/app/usbmoded/usbmoded/capabilities/adb.py
+  - components/app/usbmoded/usbmoded/capabilities/daemon.py
   - components/board/atk-rk3506b/overlay/etc/modules-load.d/flange-usbgadget.conf
   - components/board/radxa-rock5b/overlay/etc/usbmode/gadget.d/20-radxa-rock5b.yaml
   - components/rootfs/overlay/root/.bashrc
@@ -21,44 +20,54 @@ related:
   - "[[recovery 系统]]"
   - "[[atk-rk3506b]]"
   - "[[radxa-rock5b]]"
-updated: 2026-09-05
+updated: 2026-09-20
 ---
 
 ## TL;DR
 
 USB ADB gadget（USB 设备侧功能）服务，可运行于 normal 或 recovery rootfs，提供宿主机与开发板之间的调试通道。支持 DWC2/DWC3 与模块化 ConfigFS gadget。当前 daemon（守护进程）为 **ADB 36.0.1 standalone adbd**，含 2026-08-31 的线程退出修复；当前二进制来源、摘要和各架构验证范围以 [App README](../../components/app/adbd/README.md) 为准。下文带日期的冷启动与连接实验属于对应历史版本，不能直接代表当前二进制的验证结果。
 
+2026-09-19 起 gadget 编排移出本 App：本 App 只提供 adbd 二进制与其 daemon unit，
+gadget/场景/角色切换归 [USB gadget 子系统（usbmoded）](../subsystems/usb-gadget-子系统.md)。
+本页讲 App 打包、adbd 二进制来源与 adb shell 体验；gadget 侧问题去读子系统页。
+
 第一次连接设备，先阅读[开发指南的设备验证](../../docs/development-guide.md#4-刷写与设备验证)；本页用于理解服务实现及排查 USB 问题。
 
 ## 关键设计要点
 
-- **app.yaml 类型**：`app.type: service`，`app.arch: [aarch64, armhf]`。通过安装脚本、配置和 systemd unit 提供 USB ADB 功能。
+- **app.yaml 类型**：`app.type: service`，`app.arch: [aarch64, armhf]`。`install: {}` —— 无显式映射，`bin/adbd-<arch>` 按约定剥离架构后缀装成 `/usr/bin/adbd`，`systemd/` 下的 unit 按约定装入 `/lib/systemd/system/`。
+- **依赖 usbmoded**：`build.deps` 与 `depends` 都声明 `usbmoded`。前者进构建与安装闭包，后者只写进 deb 的 `Depends` 字段，两者都需要。
 - **二进制**：App 打包时使用预编译 `bin/adbd-arm64` / `bin/adbd-armhf`，不重新编译。当前两种架构均在 Docker 中从 ADB 36.0.1 源码交叉编译并加入本地补丁；来源、SHA256 与重建方法见 [App README](../../components/app/adbd/README.md)。
-- **systemd unit**：`usbdevice.service`（`Type=oneshot` + `RemainAfterExit=yes`）要求 `sys-kernel-config.mount`，并排在 `systemd-modules-load.service` 之后；入口 `/usr/sbin/usbdevice start` 负责启动 adbd。历史上曾用 `Type=forking`，systemd 会把脚本 spawn 的 daemon 守护循环误当 main process 追踪——服务"存活"实际依赖该循环永不退出这一 bug，循环被正常回收即触发 `ExecStop` 拆掉刚建好的 gadget（commit 0c9b03a2 修正）
-- **udev 规则**：`61-usbdevice.rules` 监听 `android_usb` 状态变化，触发 `usbdevice update`
-- **配置文件**：`/etc/usbdevice.conf`（conffiles，升级不覆盖）；板级 overlay 覆盖 VID/PID；默认 `USB_FUNCS=adb`，序列号取自 cpuinfo。ADB 36 adbd 额外读取两个 export：`ADB_TCP_PORT=5555`（旧 adbd 内建监听、新 adbd 须显式指定）与 `ADBD_SHELL=/bin/bash`（`adb shell` 以 argv[0]=`-/bin/bash` 启动 **login bash**，经 `/etc/profile` → `/root/.profile` 读到 [/root/.bashrc](../../components/rootfs/overlay/root/.bashrc)，提示符/补全/历史与 ssh 登录一致；旧 adbd 固定 `/bin/sh`→dash）
-- **USB gadget 依赖**：`usbdevice` 在 configfs 创建 gadget group、挂载 functionfs、等待 `ep1` 后写 UDC；函数顺序由内核要求排列
-- **daemon 守护循环**：`usb_start_daemon` 为每个 daemon 起一个 respawn 循环，活性由 per-daemon 的 `TAG_FILE` + PID 文件控制（`usb_reap_daemon_loop` 精确回收）。历史实现中 spawn 守卫读 `$USB_FUNCS_FILE` 的"内容非空"而循环退出读它的"文件存在"，disconnect recovery 只清空不删除——每次 USB disconnect 净泄漏一个永生循环，N 个循环并发 `start-stop-daemon` 抢同一 FunctionFS ep0 制造新 disconnect，正反馈雪崩（rock5b 实测开机 11 分钟堆积 360+ 进程、USB 每 2 秒断连；commit 0c9b03a2 修正）
-- **模块化内核自愈**：板级 `modules-load.d` 冷启动加载 `phy-rockchip-inno-usb2`、`dwc2`、`usb_f_fs`；脚本若未看到 `usb_gadget`，会幂等 `modprobe usb_f_fs` 并给出明确错误
-- **最小 rootfs**：`fuser` 仅用于占用诊断/清理；未安装 `psmisc` 时安全降级，不阻断 gadget 初始化
+- **systemd unit**：`usbmoded-adbd.service`（`Type=simple` + `Restart=always` + `RestartSec=1`，`StartLimitBurst=10`/`StartLimitIntervalSec=30` 退避限流）。**不开机自启**（`auto_start: false`，unit 无 `[Install]` 段），启停完全由 usbmoded 的 adb 能力驱动——FunctionFS 要求 daemon 在 gadget 绑定 UDC 之前打开 ep0，这个时序无法用 systemd 依赖表达，因此 unit 刻意不声明 `After=`/`Requires=usbmoded.service`。
+- **adb shell 运行环境**：unit 导出 `TERM=xterm` 与 `XDG_RUNTIME_DIR=/run/user/1000`。adbd 是 shell 的父进程，这两个变量只能由本 unit 注入：adb 协议不传 `TERM`，缺省为空会让 [/etc/bash.bashrc](../../components/rootfs/overlay/etc/bash.bashrc) 的颜色探测退化；`XDG_RUNTIME_DIR` 让 wayland client 在 `adb shell` 中直接可用（interactive non-login bash 不读 `/etc/profile.d/`）。
+- **能力参数**：`ADBD_SHELL` 与 `ADB_TCP_PORT` 由 usbmoded 的 adb 能力写入 `/run/usbmoded/adbd.env`，unit 以 `EnvironmentFile=-` 读取（前缀 `-` 使文件缺失时仍可启动并用 adbd 自身默认值）。默认值与场景覆盖见 [usbmoded 的 adb 能力](../../components/app/usbmoded/usbmoded/capabilities/adb.py)。`ADB_TCP_PORT=5555`（旧 adbd 内建监听、新 adbd 须显式指定）；`ADBD_SHELL=/bin/bash` 使 `adb shell` 以 argv[0]=`-/bin/bash` 启动 **login bash**，经 `/etc/profile` → `/root/.profile` 读到 [/root/.bashrc](../../components/rootfs/overlay/root/.bashrc)，提示符/补全/历史与 ssh 登录一致（旧 adbd 固定 `/bin/sh`→dash）。
+- **gadget 编排不在本 App**：configfs gadget、FunctionFS 挂载、等 `ep1` 后写 UDC、函数排序、udev 自愈均由 usbmoded 承担，详见 [USB gadget 子系统](../subsystems/usb-gadget-子系统.md)。
+- **保活交给 systemd**：不再自制守护循环。旧 shell 实现的 `usb_start_daemon` 为每个 daemon 起 respawn 循环，spawn 守卫读 `$USB_FUNCS_FILE` 的「内容非空」而循环退出读它的「文件存在」，disconnect recovery 只清空不删除——每次 USB disconnect 净泄漏一个永生循环，N 个循环并发抢同一 FunctionFS ep0 制造新 disconnect，正反馈雪崩（rock5b 实测开机 11 分钟堆积 360+ 进程、USB 每 2 秒断连；commit 0c9b03a2 先修了读写不对称，2026-09-19 改用 systemd unit 后这一整类 bug 不再可能发生，见 [capabilities/daemon.py](../../components/app/usbmoded/usbmoded/capabilities/daemon.py)）。
+- **模块化内核自愈**：板级 `modules-load.d` 冷启动加载 `phy-rockchip-inno-usb2`、`dwc2`、`usb_f_fs`；usbmoded 若未看到 `usb_gadget`，会幂等 `modprobe usb_f_fs` 并给出明确错误（`configfs.ensure_configfs`）。
+- **不再依赖 `fuser`**：旧脚本用 `fuser` 做 FFS 占用诊断，未装 `psmisc` 时降级。usbmoded 改为遍历 `/proc/<pid>/fd` 判断 endpoint 是否被真正打开，不依赖任何外部工具，最小 rootfs 无需 `psmisc`。
 - **与 normal rootfs 差异**：recovery rootfs 默认启用；normal rootfs 取决于板级配置
 
 ## 关键代码位置
 
-- [scripts/usbdevice](../../components/app/adbd/scripts/usbdevice) — gadget 编排（start / stop / update）
-- [conf/usbdevice.conf](../../components/app/adbd/conf/usbdevice.conf) — 默认配置，板级 overlay 覆盖
-- [systemd/usbdevice.service](../../components/app/adbd/systemd/usbdevice.service) — systemd unit
-- [udev/61-usbdevice.rules](../../components/app/adbd/udev/61-usbdevice.rules) — udev 触发
+- [app.yaml](../../components/app/adbd/app.yaml) — 打包定义（`install: {}`、`build.deps: [usbmoded]`、`auto_start: false`）
+- [systemd/usbmoded-adbd.service](../../components/app/adbd/systemd/usbmoded-adbd.service) — daemon unit，含 adb shell 运行环境
 - [App README](../../components/app/adbd/README.md) — 当前二进制来源、SHA256、重建方法与验证范围
+
+gadget 侧（在 usbmoded 包内）：
+
+- [capabilities/adb.py](../../components/app/usbmoded/usbmoded/capabilities/adb.py) — FunctionFS 挂载、写能力参数、启 adbd、等 `ep1` 被打开
+- [capabilities/daemon.py](../../components/app/usbmoded/usbmoded/capabilities/daemon.py) — 能力 daemon 的 systemd 生命周期管理
+- [udev/61-usbmode.rules](../../components/app/usbmoded/udev/61-usbmode.rules) — USB 状态变化时通知服务重新评估
 
 ## 易踩坑
 
-- UDC 已绑定时写 `idProduct` 触发软断开，与 udev 形成无限触发循环；`update` 动作会跳过此写入
-- adbd 须先打开 `ep1`，`usbdevice` 轮询 `/proc/<pid>/fd/` 确认后才写 UDC
-- **UDC bind 竞态**：脚本写 UDC 后立即 read-back；不一致则退出 1，由 systemd 以 2 秒间隔有界重试。持续失败应检查 controller `dr_mode`/role、VBUS/ID、PHY 与 dmesg，不能把所有 DWC2/DWC3 故障都归因于 USB-C PD
+- UDC 已绑定时写 `idProduct` 触发软断开，与 udev 形成无限触发循环；usbmoded 在 UDC 已绑定时跳过此写入
+- adbd 须先打开 `ep1`，usbmoded 的 adb 能力遍历 `/proc/<pid>/fd` 确认后才写 UDC。**不能用 ep 文件是否存在判断**：FunctionFS 挂载后 ep inode 即永久存在，与 daemon 是否打开它无关
+- **UDC bind 竞态**：usbmoded 写 UDC 后立即 read-back；不一致则报错，由 systemd 以 2 秒间隔有界重试（`usbmoded.service` 的 `Restart=on-failure` + `StartLimitBurst=5`）。持续失败应检查 controller `dr_mode`/role、VBUS/ID、PHY 与 dmesg，不能把所有 DWC2/DWC3 故障都归因于 USB-C PD
 - **`/sys/class/udc/*/state` 是 stale 的**：UDC 解绑后它仍报 `configured`。判断 gadget 是否真的 bind 只能读 `/sys/kernel/config/usb_gadget/*/UDC`；用 state 做"枚举成功"校验会被骗
 - **adbd close(ep0) 会连带解绑整个 gadget**：内核 f_fs 的 `ffs_closed()` 调 `unregister_gadget_item()` 清空 UDC。日志里"没人写 UDC 它却变空"多半是持有 ep0 的进程关闭/重开了 FFS
-- **板级 conf 整文件覆盖 App conf**：rootfs 构建 Phase 2 先 `dpkg -i` 装 app deb、最后 `cp -a` 叠 overlay（`rootfs → platform → board`，见 [builder/platforms/rockchip/rootfs.py](../../builder/platforms/rockchip/rootfs.py)）。语义是**替换不是合并**：App 层 conf 新增任何配置键，所有带自有 overlay 版本的板子必须手动跟进，否则静默丢失（`ADB_TCP_PORT` 首次落地时 rock5b 实测踩中；commit e13a6ec7 为全部 11 块板补齐并加警示注释）
+- **板级配置已改为按键合并**（2026-09-19 起）：usbmoded 分层加载 `/etc/usbmode/gadget.d/*.yaml`，板级只声明与 App 层默认值不同的键，App 层新增的键自动对各板生效。
+  历史上是**整文件覆盖**——rootfs 构建 Phase 2 先 `dpkg -i` 装 app deb、最后 `cp -a` 叠 overlay（`rootfs → platform → board`，见 [builder/platforms/rockchip/rootfs.py](../../builder/platforms/rockchip/rootfs.py)），语义是替换不是合并，App 层 conf 新增任何配置键，所有带自有 overlay 版本的板子必须手动跟进，否则静默丢失（`ADB_TCP_PORT` 首次落地时 rock5b 实测踩中；commit e13a6ec7 为全部 11 块板补齐并加警示注释）。该坑已随按键合并消除，但**注意 overlay 叠加机制本身未变**，其他 overlay 文件仍是整文件替换语义
 - **macOS 上 tar 打包源码传设备**：`._*` AppleDouble 文件会污染 git pack 与 `*.patch` glob，构建前 `find . -name '._*' -delete`
 
 ## 2026-08-27：USB adb 不可用根因定位（rock5b × macOS host）
@@ -67,7 +76,7 @@ USB ADB gadget（USB 设备侧功能）服务，可运行于 normal 或 recovery
 
 ### 第一层：usbdevice 守护循环泄漏雪崩（放大器）
 
-开机 11 分钟 `usbdevice` 进程堆到 361 个、服务内存 134.7M、dmesg 每 2 秒一轮 `device reset`。根因是守护循环的读写不对称（见上文"daemon 守护循环"）。修复后进程稳定 2–5 个，但 USB 仍在 bind→掉线循环——泄漏只是放大器，不是振荡源。
+开机 11 分钟 `usbdevice` 进程堆到 361 个、服务内存 134.7M、dmesg 每 2 秒一轮 `device reset`。根因是守护循环的读写不对称（见上文「保活交给 systemd」）。修复后进程稳定 2–5 个，但 USB 仍在 bind→掉线循环——泄漏只是放大器，不是振荡源。
 
 ### 第二层：三个分离实验锁定元凶
 
@@ -95,4 +104,6 @@ AOSP `packages/modules/adb/daemon/usb.cpp` 的注释一字不差描述此场景�
 
 ## 2026-08-24：udev 热插拔自愈修正
 
-早期 udev 规则直接执行 `usbdevice update`。进程如果由 udev worker 拉起，会在事件结束后的清理阶段被终止，表现为热插拔后 gadget 短暂出现、随后 adbd 消失。现在由 udev 执行 `systemctl --no-block reload usbdevice.service`，再通过 unit 的 `ExecReload=/usr/sbin/usbdevice update` 进入原有幂等更新路径。这样既保留 UDC `add|change` 和 `android_usb change` 的自愈能力，也让 adbd 归 systemd 生命周期管理。
+早期 udev 规则直接执行 `usbdevice update`。进程如果由 udev worker 拉起，会在事件结束后的清理阶段被终止，表现为热插拔后 gadget 短暂出现、随后 adbd 消失。改法是由 udev 执行 `systemctl --no-block reload usbdevice.service`，再通过 unit 的 `ExecReload=/usr/sbin/usbdevice update` 进入原有幂等更新路径。这样既保留 UDC `add|change` 和 `android_usb change` 的自愈能力，也让 adbd 归 systemd 生命周期管理。
+
+> 该结论已迁移进 usbmoded：[udev/61-usbmode.rules](../../components/app/usbmoded/udev/61-usbmode.rules) 同样只做 `systemctl --no-block reload usbmoded.service`，由服务的 SIGHUP 处理进入幂等的重新评估路径。异步通知这一约束的原因在规则文件注释中原样保留。

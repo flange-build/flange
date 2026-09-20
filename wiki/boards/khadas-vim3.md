@@ -11,7 +11,7 @@ sources:
   - components/board/khadas-vim3/dtso/vim3-fan-led.dtso
   - components/board/khadas-vim3/overlay/etc/hostname
   - components/board/khadas-vim3/overlay/etc/modules-load.d/flange-usbgadget.conf
-  - components/board/khadas-vim3/overlay/etc/usbdevice.conf
+  - components/board/khadas-vim3/overlay/etc/usbmode/gadget.d/20-khadas-vim3.yaml
   - components/platform/amlogic/config.jsonnet
   - components/platform/amlogic/a311d/config.jsonnet
   - components/config/khadas-vim3-common.libsonnet
@@ -85,7 +85,7 @@ GPT 写入另有 30 秒超时。自动恢复与停止写入边界已通过模拟
 - `dtso/vim3-spidev-spicc1.dtso`：默认启用 SPICC1；用户态设备编号以实机枚举为准。
 - `dtso/vim3-fan-led.dtso`：默认启用三档风扇温控、白灯心跳与红灯运行常亮。
 - `overlay/etc/hostname`：主机名 `khadas-vim3`。
-- `overlay/etc/usbdevice.conf`：ADB gadget 使用 AOSP VID `0x18d1`。
+- `overlay/etc/usbmode/gadget.d/20-khadas-vim3.yaml`：usbmoded gadget 板级覆盖，使用 AOSP VID `0x18d1`。
 - `overlay/etc/modules-load.d/flange-usbgadget.conf`：在 adbd 初始化前加载 `libcomposite`。
 - 不添加 `btattach` service：mainline DTS 已声明 Bluetooth serdev 子节点。
 

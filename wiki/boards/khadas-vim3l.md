@@ -9,7 +9,7 @@ sources:
   - components/board/khadas-vim3l/overlay/etc/hostname
   - components/board/khadas-vim3l/overlay/etc/modules-load.d/flange-usbgadget.conf
   - components/board/khadas-vim3l/overlay/etc/systemd/system/bluetooth-vim3l.service
-  - components/board/khadas-vim3l/overlay/etc/usbdevice.conf
+  - components/board/khadas-vim3l/overlay/etc/usbmode/gadget.d/20-khadas-vim3l.yaml
   - components/config/khadas-vim3-common.libsonnet
   - components/platform/amlogic/s905d3/patches/bootloader/flange_fastboot.config
   - components/platform/amlogic/config.jsonnet
@@ -203,7 +203,7 @@ fenix 仓库内路径：`archives/hwpacks/wlan-firmware/brcm/`。三件套由 bo
 ## 已落地的体验改进
 
 - ✓ **flange flash 全自动**：u-boot `CONFIG_PREBOOT` 检测 `${boot_source}=usb` 自动进 fastboot；host 端 `AmlogicFlashStrategy.detect_device` 把 fastboot 模式也算"设备就绪"，`pre_flash` 看到 fastboot 直接跳过 pyamlboot。首次 MaskROM 刷入与后续重刷都**无需接串口**，无需手动 `fastboot usb 0`。详见 commits `fc8aa3c` + `576636e`。
-- ✓ **adbd 通过 USB gadget 暴露**：board overlay 加 `/etc/modules-load.d/flange-usbgadget.conf` 自动 `modprobe libcomposite`（mainline 6.12 模块化），加板级 `/etc/usbdevice.conf`（USB_VENDOR_ID=0x18d1 Google AOSP / USB_PRODUCT_NAME=khadas-vim3l）。host 端 `adb devices` 直接见。详见 commit `<待 commit>`。
+- ✓ **adbd 通过 USB gadget 暴露**：board overlay 加 `/etc/modules-load.d/flange-usbgadget.conf` 自动 `modprobe libcomposite`（mainline 6.12 模块化），加板级 `/etc/usbmode/gadget.d/20-khadas-vim3l.yaml`（`vendor_id: "0x18d1"` Google AOSP / `product_name: khadas-vim3l`）。host 端 `adb devices` 直接见。详见 commit `<待 commit>`。
 
 ## SPI（spidev）
 

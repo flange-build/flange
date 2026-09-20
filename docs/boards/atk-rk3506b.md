@@ -333,10 +333,8 @@ usb_f_fs
 dwc2
 ```
 
-`usbdevice.service` 在 `systemd-modules-load.service` 与 `sys-kernel-config.mount` 之后
-启动，脚本也会在 gadget framework 缺失时尝试 `modprobe usb_f_fs`。
-最小 rootfs 可以不安装 `psmisc/fuser`，这只会让调试字段显示
-`unavailable`，不影响 gadget 启动。
+`usbmoded.service` 在 `systemd-modules-load.service` 与 `sys-kernel-config.mount` 之后
+启动，服务也会在 gadget framework 缺失时尝试 `modprobe usb_f_fs`。
 
 该修复只影响 rootfs，构建并刷写对应分区即可：
 
@@ -352,7 +350,7 @@ findmnt /sys/kernel/config
 lsmod | grep -E 'phy_rockchip_inno_usb2|usb_f_fs|libcomposite|dwc2|configfs'
 cat /sys/kernel/config/usb_gadget/linux/UDC
 cat /sys/class/udc/ff740000.usb/state
-systemctl --no-pager --full status usbdevice.service
+systemctl --no-pager --full status usbmoded.service
 ```
 
 连接主机时，通过标准是 `UDC=ff740000.usb`、state 为 `configured`，

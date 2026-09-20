@@ -8,7 +8,7 @@ sources:
   - components/board/radxa-rock5c-lite/dtso/rk3588s-rock-5c-st7789vm-lcd-keys.dtso
   - components/board/radxa-rock5c-lite/firmware/panel/st7789vm-240x240.txt
   - components/board/radxa-rock5c-lite/overlay/etc/hostname
-  - components/board/radxa-rock5c-lite/overlay/etc/usbdevice.conf
+  - components/board/radxa-rock5c-lite/overlay/etc/usbmode/gadget.d/20-radxa-rock5c-lite.yaml
   - docs/first-steps.md
 related:
   - "[[rockchip 平台]]"
@@ -94,4 +94,4 @@ GStreamer 这条管线 6 个参数缺一不可：
 
 ## Overlays
 
-均加入 `boot.overlays.enabled`：`rk3588s-rock-5c-otg-peripheral.dtbo`（OTG peripheral）、`rk3588s-rock-5c-st7789vm-lcd-keys.dtbo`（LCD+键）。`overlay/etc/hostname`=`radxa-rock5c-lite`，`overlay/etc/usbdevice.conf`（ADB）。
+均加入 `boot.overlays.enabled`：`rk3588s-rock-5c-otg-peripheral.dtbo`（OTG peripheral）、`rk3588s-rock-5c-st7789vm-lcd-keys.dtbo`（LCD+键）。`overlay/etc/hostname`=`radxa-rock5c-lite`，`overlay/etc/usbmode/gadget.d/20-radxa-rock5c-lite.yaml`（usbmoded gadget 板级覆盖）。

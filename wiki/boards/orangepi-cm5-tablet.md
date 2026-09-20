@@ -41,7 +41,7 @@ lunch orangepi-cm5-tablet-default-release
 | DTB | `rk3588s-orangepi-cm5-tablet`（rkr5.1 已含；含 `-tablet-lcd.dtsi` + 3 个 `-tablet-camera*.dtsi`，首版均不启用） |
 | hostname | `orangepi-cm5-tablet` |
 | board overlay | 不携带 `dtso/`、不携带 `boot.overlays.board` |
-| usbdevice.conf | 不携带（与 cm4 / rock5c-lite 对齐） |
+| usbmode/gadget.d/ | 不携带（与 cm4 / rock5c-lite 对齐） |
 | kernel patches | 仅 `0001` bcmdhd FW_AMPAK_PATH（cm4 0002 逐字节复用） |
 | extra_firmware | radxa-firmware 仓拉 AP6256 三件套到 `/lib/firmware/brcm/`（与 cm4 同源） |
 | bootloader | SoC 层 generic `rk3588_defconfig`，首版无板级覆盖 |

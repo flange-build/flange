@@ -6,7 +6,7 @@ sources:
   - components/board/radxa-rock5b/config.jsonnet
   - components/board/radxa-rock5b/dtso/rk3588-rock-5b-mali-valhall-compat.dtso
   - components/board/radxa-rock5b/overlay/etc/hostname
-  - components/board/radxa-rock5b/overlay/etc/usbdevice.conf
+  - components/board/radxa-rock5b/overlay/etc/usbmode/gadget.d/20-radxa-rock5b.yaml
   - components/board/radxa-rock5b/docs/radxa_rock_5b_v1423_sch.pdf
   - components/packages/meizu-e3-panel/package.py
   - components/packages/meizu-e3-panel/device-tree/rk3588-rock-5b-meizu-e3-panel.dtso
@@ -97,4 +97,4 @@ M.2 E-Key 槽位（`pcie2x1l0`，dts 默认 okay，PCIe ID `10ec:b852`）走 RTL
 ## 板私有 overlay
 
 - `dtso/rk3588-rock-5b-mali-valhall-compat.dtso` — rockmedia 默认启用，将 GPU compatible 改为 `arm,mali-valhall` 以匹配 BSP mali_kbase；其他产品不启用
-- `overlay/etc/hostname`、`overlay/etc/usbdevice.conf`（USB gadget group=rockchip，与 zero3w 同模板；含 `ADB_TCP_PORT`/`ADBD_SHELL` export——板级 conf 整文件覆盖 App 层 conf，App 新增键须在此跟进，详见 [[adbd]] 易踩坑）
+- `overlay/etc/hostname`、`overlay/etc/usbmode/gadget.d/20-radxa-rock5b.yaml`（usbmoded gadget 板级覆盖，group=rockchip，与 zero3w 同模板；只声明与 App 层默认值不同的键，两者**按键合并** —— App 层新增的键自动对本板生效，无需在此跟进，详见 [[USB gadget 子系统（usbmoded）]]）

@@ -5,7 +5,7 @@ status: wip
 sources:
   - components/board/orangepi-5-plus/config.jsonnet
   - components/board/orangepi-5-plus/overlay/etc/hostname
-  - components/board/orangepi-5-plus/overlay/etc/usbdevice.conf
+  - components/board/orangepi-5-plus/overlay/etc/usbmode/gadget.d/20-orangepi-5-plus.yaml
   - components/board/orangepi-5-plus/firmware/touch/goodix_911_cfg.bin
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hx8399a-gt911.dtso
   - components/board/orangepi-5-plus/dtso/rk3588-orangepi-5-plus-hdmirx-enable.dtso
