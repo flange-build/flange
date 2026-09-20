@@ -6,6 +6,14 @@ Description=Android Debug Bridge daemon（由 usbmoded 管理）
 
 [Service]
 Type=simple
+# adb shell 会话的运行环境 —— adbd 是 shell 的父进程，这两个变量只能由
+# 本 unit 提供：
+#   TERM：adb 协议不传 TERM，缺省为空会让 /etc/bash.bashrc 的颜色探测
+#     退化（其注释即以 "TERM=xterm（adb shell 默认）" 为前提）。
+#   XDG_RUNTIME_DIR：wayland client 在 adb shell 中直接可用，无需先手动
+#     export（interactive non-login bash 不读 /etc/profile.d/）。
+Environment=TERM=xterm
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 # 能力参数（ADBD_SHELL / ADB_TCP_PORT）由 usbmoded 写入。文件不存在时
 # 前缀 - 让 unit 仍可启动并使用 adbd 自身的默认值。
 EnvironmentFile=-/run/usbmoded/adbd.env
