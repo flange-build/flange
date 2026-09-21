@@ -599,27 +599,68 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
         subprocess.run([str(tool), "RD"], check=True)
 
 class AllwinnerA733FlashStrategy(AllwinnerA733FlashPlan, FlashStrategy):
-    """Allwinner A733 刷写策略 — SD 卡 dd 模式。"""
+    """Allwinner A733 刷写策略 — openixcli 经 USB 整盘写 raw.img。
+
+    设备处于 FEL（BootROM，``1f3a:efe8``）时，``flash-raw --bootstrap``
+    先用最小 LiveSuit 固件（boot0 + u-boot）把设备引导进 FES，再按 raw.img
+    写入 GPT + boot0 + toc1 + 各分区；写完由 openixcli 自行复位。
+    SD 卡仍可走 ``flange flash --raw /dev/sdX``。
+    """
+
+    # openixcli flash-raw 结束时按 --post-action 自行复位
+    supports_no_reboot = False
+    BOOTSTRAP = (PROJECT_ROOT / "components" / "platform" / "allwinnera733"
+                 / "firmware" / "a733_bootstrap.img")
 
     def find_tool(self, project_dir: Path) -> Path:
-        # SD 卡 dd 模式使用系统 dd，返回占位路径
-        return Path("/usr/bin/dd")
+        platform = "macos" if sys.platform == "darwin" else "linux"
+        tool = project_dir / "tools" / platform / "openixcli" / "openixcli"
+        if not tool.exists():
+            raise FlashError(f"未找到 openixcli: {tool}")
+        return tool
 
     def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
-        # SD 卡模式不依赖 USB 设备检测
-        return None
+        try:
+            result = subprocess.run([str(tool), "scan"], capture_output=True,
+                                    text=True, timeout=10)
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        match = re.search(r"Found\s+(\d+)\s+device", result.stdout)
+        count = int(match.group(1)) if match else 0
+        if count > 1:
+            raise FlashError(
+                f"检测到 {count} 台 Allwinner 设备；为防止误刷，请只连接一台")
+        if count == 0:
+            return None
+        return DeviceInfo(platform="Allwinner", mode="FEL/FES",
+                          description=result.stdout.strip())
 
     def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
                   device: Optional["DeviceInfo"] = None):
-        # SD 卡模式无需 pre_flash
+        # FEL → FES 引导由 flash-raw --bootstrap 一并完成
         pass
+
+    def flash_whole_disk(self, tool: Path, target_dir: Path,
+                         config: "FlashConfig") -> bool:
+        raw = target_dir / "image" / "raw.img"
+        if not raw.exists():
+            raise FlashError(f"未找到整盘镜像 {raw}；请先执行 flange build")
+        if not self.BOOTSTRAP.exists():
+            raise FlashError(f"未找到 bootstrap 固件: {self.BOOTSTRAP}")
+        _info("openixcli flash-raw 写整盘 raw.img...", role=Role.ACTIVE)
+        subprocess.run(
+            [str(tool), "flash-raw", "--bootstrap", str(self.BOOTSTRAP),
+             "--post-action", "reboot", str(raw)],
+            check=True)
+        _ok("raw.img")
+        return True
 
     def write_partition(self, tool: Path, offset: int, image: Path):
-        # SD 卡模式通过 raw.img dd，不逐分区写入
-        pass
+        raise FlashError(
+            "A733 暂不支持单分区刷写；请用 flange flash 整盘刷写")
 
     def reboot(self, tool: Path):
-        _info("SD 卡模式：请手动插入 SD 卡并重启设备")
+        _info("openixcli 已在刷写结束后复位设备")
 
 class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
     """Amlogic 刷写策略 — 两段式 USB Burning。

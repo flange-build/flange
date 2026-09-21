@@ -46,7 +46,7 @@ class FlashExecutor:
         cfg = self.config
         self.strategy.allow_protected = yes
         if no_reboot and not self.strategy.supports_no_reboot:
-            raise FlashError("该平台的 QDL 在读写结束时自动复位，不支持 --no-reboot")
+            raise FlashError("该平台的刷写工具在结束时自动复位，不支持 --no-reboot")
         _header(f"flange flash · {cfg.board} · {cfg.product}-{cfg.variant}")
         # 先做所有本地、非破坏性校验；镜像/parameter 不一致时不等待设备，
         # 更不会上传 loader 或写入任何分区。
@@ -93,7 +93,7 @@ class FlashExecutor:
         requested_name = name
         self.strategy.allow_protected = yes
         if no_reboot and not self.strategy.supports_no_reboot:
-            raise FlashError("该平台的 QDL 在读写结束时自动复位，不支持 --no-reboot")
+            raise FlashError("该平台的刷写工具在结束时自动复位，不支持 --no-reboot")
         if self.config.partition_format == "mtd" or self.config.storage_type == "spinand":
             name = {
                 "bootloader": "uboot",
