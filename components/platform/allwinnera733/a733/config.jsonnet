@@ -34,7 +34,15 @@
       'aic8800_wlan.config', 'usb_gadget.config', 'panel_mipi_dbi.config',
       'case_insensitive_fix.config', 'pd_test_disable.config',
     ],
-    config+: { CONFIG_DRM_GUD: 'y' },
+    config+: {
+      CONFIG_DRM_GUD: 'y',
+      // radxa.config 开启主线 imx214/imx219（drivers/media/i2c），bsp_defconfig
+      // 又开启 BSP VIN 同名 sensor（bsp/drivers/vin/modules/sensor），两者都产出
+      // imx214.ko / imx219.ko，make modules 在 modules_check 报 module name
+      // conflict。A733 摄像头走 sunxi VIN 管线，保留 BSP 版，关闭主线版。
+      CONFIG_VIDEO_IMX214: 'n',
+      CONFIG_VIDEO_IMX219: 'n',
+    },
     device_tree+: { directory: 'allwinner' },
     oot_modules: [{
       dir: '{kernel_src}/bsp/modules/gpu/img-bxm/linux/rogue_km/build/linux/sunxi_linux',
