@@ -94,4 +94,4 @@ GStreamer 这条管线 6 个参数缺一不可：
 
 ## Overlays
 
-均加入 `boot.overlays.enabled`：`rk3588s-rock-5c-otg-peripheral.dtbo`（OTG peripheral）、`rk3588s-rock-5c-st7789vm-lcd-keys.dtbo`（LCD+键）。`overlay/etc/hostname`=`radxa-rock5c-lite`，`overlay/etc/usbmode/gadget.d/20-radxa-rock5c-lite.yaml`（usbmoded gadget 板级覆盖）。
+`boot.overlays.enabled` 默认含 `rk3588s-rock-5c-otg-peripheral.dtbo`（OTG peripheral）；`rk3588s-rock-5c-st7789vm-lcd-keys.dtbo`（LCD+键）与 panel 固件仅在 `lcd-key-hat` product 启用（`lunch radxa-rock5c-lite-lcd-key-hat`），default / desktop 不启用。`overlay/etc/hostname`=`radxa-rock5c-lite`，`overlay/etc/usbmode/gadget.d/20-radxa-rock5c-lite.yaml`（usbmoded gadget 板级覆盖）。

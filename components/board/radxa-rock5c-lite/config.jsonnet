@@ -35,6 +35,10 @@ local firmwareFiles = [
   'lmacfw_rf_8800d80_u02.bin',
 ];
 local product = std.extVar('product');
+// lcd-key-hat product：堆叠 Waveshare 1.3" LCD HAT（ST7789VM + 7 键）时选用，
+// 启用对应 overlay 并部署 panel init 固件；default / desktop 不启用该 overlay，
+// 40-pin header 的 SPI4 / GPIO 保持空闲。
+local lcdKeyHat = product == 'lcd-key-hat';
 
 {
   // OOT driver 源根（{aic8800_src}/...）：仓库内 USB driver 子树根，
@@ -42,7 +46,7 @@ local product = std.extVar('product');
   board: 'radxa-rock5c-lite',
   soc: 'rk3582',
   platform: 'rockchip',
-  products: ['default', 'desktop'],
+  products: ['default', 'desktop', 'lcd-key-hat'],
   variants: ['debug', 'release'],
   packages: ['rockchip-multimedia'] +
             (if product == 'desktop' then ['ubuntu-desktop'] else []),
@@ -135,10 +139,13 @@ local product = std.extVar('product');
         // 默认走 device 模式，方便 adbd / 镜像更新流程。需要 host-only 用法
         // 时从 overlays.enabled 中剔除即可（运行时编辑 extlinux.conf
         // fdtoverlays，或 lunch 不同 product/variant 走条件配置）。
-        // LCD HAT overlay 也默认启用：开机即出图，无需手工启用。
         'rk3588s-rock-5c-otg-peripheral.dtbo',
+      ] + (if lcdKeyHat then [
+        // LCD HAT overlay 仅在 lcd-key-hat product 启用：开机即出图，
+        // 无需手工启用。dtbo 本身始终编译进 boot 分区，其他 product 可在
+        // 运行时改 extlinux.conf fdtoverlays 临时启用。
         'rk3588s-rock-5c-st7789vm-lcd-keys.dtbo',
-      ],
+      ] else []),
     },
   },
   rootfs+: {
@@ -156,7 +163,7 @@ local product = std.extVar('product');
       files: firmwareFiles,
       dest: 'lib/firmware/aic8800D80',
     }],
-    panel_firmware: [{
+    panel_firmware: if lcdKeyHat then [{
       // ST7789VM panel-mipi-dbi-spi 的 init 序列：构建期由
       // builder.firmware_panel 把文本源编为 mainline 兼容 panel.bin，
       // 落 rootfs /lib/firmware/panel-mipi-dbi-spi.bin。dest 名固定不可改：
@@ -164,6 +171,6 @@ local product = std.extVar('product');
       // 在 /lib/firmware/ 下查找。
       src: 'firmware/panel/st7789vm-240x240.txt',
       dest: 'panel-mipi-dbi-spi.bin',
-    }],
+    }] else [],
   },
 }
