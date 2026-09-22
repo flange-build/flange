@@ -11,6 +11,12 @@ local common = import 'config/rockchip.libsonnet';
 
 {
   platform: 'rockchip', soc: 'rk3588s', vendor: 'rockchip',
+  flash_identity: {
+    // 与 RK3588 同 die 同 BootROM：实机 RCI 返回 "38 38 35 33"（解码 "8853"，
+    // 即 "3588" 反转），不会出现 "rk3588s" 字面量，故不能靠 soc 字段兜底匹配
+    //（见 builder/flash/strategy.py _identity_corpus），照搬 rk3588 的模式。
+    chip_patterns: ['rk\\s*3588', '\\b3588\\b', '\\b8853\\b'],
+  },
   rkbin+: {
     // RK3588 / RK3588S 同 die 同 BootROM，rkbin 字段全部一致。
     ini_prefix: 'RK3588', trust_ini_prefix: 'RK3588', mkimage_chip: 'rk3588',
