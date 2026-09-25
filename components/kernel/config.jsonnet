@@ -11,9 +11,20 @@
 // 背景：在此之前没有这一层，"全平台默认启用"只能靠在每个 SoC 层重复声明
 // 实现 —— CONFIG_DRM_GUD 就是例子，它的注释写着"全平台默认启用"，实际在
 // 14 个配置文件里各写了一遍。同类配置可逐步收敛到本文件。
+local variant = std.extVar('variant');
 
 {
   kernel: {
+    // ---- linux-headers deb
+    //
+    // 为 true 时 kernel 构建额外产出 linux-headers-<release> deb，rootfs 构建
+    // 时 dpkg -i 装入镜像，设备上可直接
+    //   make -C /lib/modules/$(uname -r)/build M=$PWD
+    // 编译外部模块。仅 debug 默认开启；开启时 rootfs 自动追加
+    // components/rootfs/config.jsonnet 的 kernel_devel 包集合（编译工具链）。
+    // 板级空间不足时用 kernel+: { headers_package: false } 关闭。
+    headers_package: variant == 'debug',
+
     config: {
       // ---- USB gadget 基础设施
       //

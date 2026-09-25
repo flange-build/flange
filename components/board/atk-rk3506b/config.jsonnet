@@ -47,6 +47,8 @@ local product = std.extVar('product');
     defconfig: ['alientek_rk3506_defconfig', 'rk-amp.config'],
   },
   kernel+: {
+    // 414 MiB UBI rootfs 放不下编译工具链与 linux-headers，debug 也不装。
+    headers_package: false,
     // 原厂 SDK 的目标配置明确选择 alientek_rk3506，并只叠加通用
     // rk-amp.config。board patch 从 ATK tag 原样引入该 defconfig 与 DTS。
     defconfig: [

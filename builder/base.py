@@ -83,6 +83,7 @@ class ComponentBuilder(ABC):
                 self.apply_patches(src_dir, config)
                 if patches > 0:
                     self._status(f"已应用 {patches} 个补丁")
+        self.src_dir = src_dir
         with self._step("配置构建"):
             self.configure(src_dir, config)
         self.compile(src_dir, config)

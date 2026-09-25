@@ -265,6 +265,7 @@ SYSTEM = Object(
                 "cross_compile": STRING,
                 "defconfig": STRINGS,
                 "exclude_patches": STRINGS,
+                "headers_package": BOOLEAN,
                 "image": STRING,
                 "source": SOURCE_REF,
                 "oot_modules": ListOf(OOT_MODULE),

@@ -2,10 +2,81 @@
 
 import glob
 import os
+import re
 import shutil
 from pathlib import Path
 from builder.base import ComponentBuilder
+from builder.config.canonical import kernel_arch, kernel_headers_package, userspace_arch
+from builder.deb import _map_arch
 from builder.kconfig import defconfig_targets, write_kconfig_fragment
+
+
+# 在内核源码树根目录执行，把外部模块编译所需的文件收集到 $1。
+# 文件清单沿用 scripts/package/builddeb 的 headers 包规则（in-tree 构建，
+# srctree 与 objtree 相同），另补设备端 `make scripts` 重编宿主工具所需的头文件：
+# security/*/include（scripts/selinux 引用 classmap.h）与 tools/include
+# （scripts/sorttable 等引用其中的 byteshift 头文件）。
+_HEADERS_STAGE_SCRIPT = r"""
+set -xeuo pipefail
+dest=$1
+arch=$2
+list=$(mktemp)
+trap 'rm -f "$list"' EXIT
+mkdir -p "$dest"
+{
+    find . "arch/$arch" -maxdepth 1 -name 'Makefile*'
+    find include scripts -type f -o -type l
+    find "arch/$arch" -name module.lds -o -name Kbuild.platforms -o -name Platform
+    find $(find "arch/$arch" -name include -o -name scripts -type d) -type f
+    [ ! -d security ] || find security -path 'security/*/include/*' -type f
+    [ ! -d tools/include ] || find tools/include -type f
+    [ ! -d "tools/arch/$arch/include" ] || find "tools/arch/$arch/include" -type f
+    [ ! -f Module.symvers ] || echo Module.symvers
+} | sort -u > "$list"
+tar -cf - -T "$list" | tar -xf - -C "$dest"
+cp -p .config "$dest/.config"
+
+# scripts/ 下的 ELF（fixdep、modpost 等宿主工具及其 .o）是构建机架构，
+# 在设备上无法执行；删掉后由 postinst 在设备上重新编译。
+find "$dest/scripts" -type f -exec sh -c '
+    elf=$(printf "\177ELF")
+    for f; do [ "$(head -c 4 "$f")" != "$elf" ] || rm -f "$f"; done
+' sh {} +
+
+# auto.conf.cmd 记录了构建机的 CC_VERSION_TEXT 等环境。设备端编译器不同，
+# 顶层 make 会据此触发 syncconfig，用设备 gcc 重算 Kconfig（可能翻转
+# CC_HAS_* 等选项，与已编译的内核本体不一致）。清空它并对齐时间戳，
+# 设备端始终沿用构建时的配置。
+: > "$dest/include/config/auto.conf.cmd"
+touch -r "$dest/include/config/auto.conf" "$dest/include/config/auto.conf.cmd" "$dest/.config"
+"""
+
+# 安装后在设备（或 rootfs 构建时的 qemu chroot）里用目标架构编译器重建
+# 宿主工具：`make scripts` 覆盖 fixdep / genksyms / recordmcount 等，
+# modpost 只在 prepare 阶段构建，按外部模块方式单独编（完整 modules_prepare
+# 依赖 vdso 等未打包的源码）。
+_HEADERS_POSTINST = """\
+#!/bin/bash
+set -euo pipefail
+if [ "$1" = configure ]; then
+    cd {headers_dir}
+    make -s ARCH={arch} -j"$(nproc)" scripts
+    make -s ARCH={arch} -j"$(nproc)" M=scripts/mod
+fi
+"""
+
+# postinst 编出的文件不在 dpkg 清单里，移除包时一并清理。
+_HEADERS_POSTRM = """\
+#!/bin/bash
+set -euo pipefail
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+    rm -rf {headers_dir}
+fi
+"""
+
+# 设备端编译外部模块的最小工具链；rootfs 需通过 apt 预装（见
+# components/rootfs/config.jsonnet 的 kernel_devel 包集合）。
+_HEADERS_DEPENDS = "make, gcc, libc6-dev, bc, bison, flex, libssl-dev, libelf-dev"
 
 
 class KernelBuilder(ComponentBuilder):
@@ -19,6 +90,79 @@ class KernelBuilder(ComponentBuilder):
     """
 
     ARCH: str = ""
+
+    def build(self, config: dict) -> dict:
+        outputs = super().build(config)
+        return self._append_headers(self.src_dir, config, outputs)
+
+    # ---- linux-headers deb ----
+
+    def _append_headers(self, src_dir: Path, config: dict, outputs: dict) -> dict:
+        """平台产物收集完成后，按需追加 linux-headers deb。
+
+        自行覆写 build() 的平台（如 A733）须在收集产物后同样调用本方法。
+        """
+        if kernel_headers_package(config):
+            with self._step("打包内核 headers"):
+                outputs["headers"] = self._package_headers(src_dir, config)
+        return outputs
+
+    def _package_headers(self, src_dir: Path, config: dict) -> Path:
+        """把外部模块编译所需的 headers 打成 linux-headers-<release> deb。
+
+        返回只含该 deb 的目录，作为 ``headers`` 产物发布；rootfs 构建时
+        dpkg -i 安装，并建立 /lib/modules/<release>/build 链接，设备上即可
+        ``make -C /lib/modules/$(uname -r)/build M=$PWD`` 编译模块。
+        """
+        release = self.docker.run(
+            ["cat", "include/config/kernel.release"], cwd=str(src_dir), capture=True
+        ).stdout.strip()
+        arch = kernel_arch(config)
+        deb_arch = _map_arch(userspace_arch(config))
+        # deb 包名只允许小写字母数字与 .+-；版本号不允许 _ 等字符。
+        name = re.sub(r"[^a-z0-9.+-]", "-", f"linux-headers-{release}".lower())
+        version = re.sub(r"[^A-Za-z0-9.+~-]", "+", release)
+        headers_dir = f"/usr/src/linux-headers-{release}"
+
+        work = self.work_dir("kernel-headers")
+        pkg = work / "pkg"
+        pkg.mkdir()
+        self.docker.run(
+            ["bash", "-c", _HEADERS_STAGE_SCRIPT, "stage-headers",
+             str(pkg / headers_dir.lstrip("/")), arch],
+            cwd=str(src_dir),
+            label="收集内核 headers...",
+        )
+        build_link = pkg / "lib" / "modules" / release / "build"
+        build_link.parent.mkdir(parents=True)
+        build_link.symlink_to(headers_dir)
+
+        debian = pkg / "DEBIAN"
+        debian.mkdir()
+        (debian / "control").write_text(
+            f"Package: {name}\n"
+            f"Version: {version}\n"
+            f"Architecture: {deb_arch}\n"
+            "Maintainer: flange <flange@localhost>\n"
+            f"Depends: {_HEADERS_DEPENDS}\n"
+            "Section: kernel\n"
+            "Priority: optional\n"
+            f"Description: Linux kernel headers for {release}\n"
+            " 设备端编译外部内核模块所需的 headers 与构建脚本。\n"
+        )
+        for script, template in (("postinst", _HEADERS_POSTINST), ("postrm", _HEADERS_POSTRM)):
+            path = debian / script
+            path.write_text(template.format(headers_dir=headers_dir, arch=arch))
+            path.chmod(0o755)
+
+        out = work / "headers"
+        out.mkdir()
+        self.docker.run(
+            ["dpkg-deb", "--root-owner-group", "-Zgzip", "--build", str(pkg),
+             str(out / f"{name}_{version}_{deb_arch}.deb")],
+            label=f"打包 {name}...",
+        )
+        return out
 
     # ---- 构建存储能力 ----
 

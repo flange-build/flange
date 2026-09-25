@@ -79,7 +79,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         self.compile(src_dir, config)
         result = self.collect(src_dir, config)
         self._status("产物收集")
-        return result
+        return self._append_headers(src_dir, config, result)
 
     def _locate_aggregate_root(self, src_dir: Path, config: dict) -> Path:
         """定位聚合仓库根目录。

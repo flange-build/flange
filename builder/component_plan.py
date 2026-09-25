@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 from builder.artifacts import ArtifactSpec
-from builder.config.canonical import kernel_device_tree
+from builder.config.canonical import kernel_device_tree, kernel_headers_package
 from builder.dtb_overlay import board_overlays, intree_overlays, package_overlays, vendor_overlays
 from builder.environment import environment_identity
 from builder.graph import InputSpec, TaskPlan, component_enabled
@@ -91,6 +91,8 @@ def output_contract(component: str, config: dict, context) -> tuple[ArtifactSpec
             file("fit_boot", "boot.img")
         if intree_overlays(config):
             outputs.append(ArtifactSpec("dtbos", root / "overlay", kind="tree", allow_empty=False))
+        if kernel_headers_package(config):
+            outputs.append(ArtifactSpec("headers", root / "headers", kind="tree", allow_empty=False))
     elif component == "device-tree-overlay":
         outputs.append(ArtifactSpec("overlays", root / "overlays", kind="tree", allow_empty=True))
         for name in vendor_overlays(config) + board_overlays(config) + package_overlays(config):

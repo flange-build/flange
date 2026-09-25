@@ -48,6 +48,9 @@ def required_artifacts(component: str, root: Path, config: dict):
         from builder.dtb_overlay import intree_overlays
         if intree_overlays(config):
             outputs.append(ArtifactSpec("dtbos", root / "overlay", "tree", allow_empty=False))
+        from builder.config.canonical import kernel_headers_package
+        if kernel_headers_package(config):
+            outputs.append(ArtifactSpec("headers", root / "headers", "tree", allow_empty=False))
         return outputs
     if component == "image":
         return [ArtifactSpec("bundle", root / "flash-bundle", "tree", allow_empty=False)]

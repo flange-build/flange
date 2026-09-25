@@ -63,6 +63,7 @@
 //
 // — 包集合（与账号无关）—
 //   package_sets 定义集合；package_set 使用 Jsonnet variant 条件选择集合。
+//   kernel_devel 集合例外：kernel.headers_package 为 true 时自动选入。
 local variant = std.extVar('variant');
 
 {
@@ -126,6 +127,10 @@ local variant = std.extVar('variant');
         'net-tools', 'systemd-timesyncd', 'btop',
       ],
       debug: ['gdb', 'strace', 'tcpdump', 'valgrind'],
+      // 设备端编译内核模块的工具链，linux-headers deb 的 Depends 与 postinst
+      // 都依赖它。不在 package_set 中手选：kernel.headers_package 为 true 时
+      // 由配置展开自动追加，避免两处开关失配。
+      kernel_devel: ['make', 'gcc', 'libc6-dev', 'bc', 'bison', 'flex', 'libssl-dev', 'libelf-dev'],
       release: [],
     },
     package_set: ['base'] + (if variant == 'debug' then ['debug'] else ['release']),

@@ -24,7 +24,10 @@ def _unique(items: list[str]) -> list[str]:
 
 def _expand_package_sets(config: dict) -> None:
     rootfs = config.get("rootfs") or {}
-    selected = rootfs.get("package_set") or []
+    selected = list(rootfs.get("package_set") or [])
+    # linux-headers deb 的 postinst 要在设备端编译宿主工具，工具链随开关选入。
+    if (config.get("kernel") or {}).get("headers_package"):
+        selected.append("kernel_devel")
     package_sets = rootfs.get("package_sets") or {}
     packages: list[str] = []
     for name in selected:

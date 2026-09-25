@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-09-25] sync | debug 镜像内置 linux-headers，支持设备端编译内核模块
+
+新增 `kernel.headers_package` 开关（基线 = `variant == 'debug'`）：kernel 构建后按 builddeb 的 headers 清单打出 `linux-headers-<release>` deb，rootfs Phase 2 dpkg 安装，并自动选入 `kernel_devel` 包集合（make/gcc/libssl-dev 等）。更新 [[kernel 构建器]]、[[rootfs 构建器]]。
+
+实测 radxa-cubie-a7a debug（5.15.147）：deb 约 10 MB；在镜像 chroot 中 `make -C /lib/modules/5.15.147+/build M=...` 编出 hello.ko，vermagic 与内核一致。首次失败踩到 `make scripts` 会编 scripts/selinux，需一并打包 `security/*/include`。
+
 ## [2026-09-20] lint | 清理 usbdevice → usbmoded 重构后的过期引用
 
 `62090c80e` 用三层架构的 usbmoded 替换 `usbdevice` shell 脚本，但删除的文件（`scripts/usbdevice`、`conf/usbdevice.conf`、`systemd/usbdevice.service`、`udev/61-usbdevice.rules`、12 份板级 `overlay/etc/usbdevice.conf`）在仓库各处留下了仍以「现状」口吻描述它们的引用，CI 也因此有 22 个测试失败。

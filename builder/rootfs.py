@@ -20,6 +20,7 @@ import shutil
 from pathlib import Path
 from builder.base import ComponentBuilder
 from builder.chroot import ChrootContext
+from builder.config.canonical import kernel_headers_package
 from builder.docker import BuildError
 from builder.firmware_panel import encode_file as _encode_panel_file
 from builder.partition.layout import PartitionLayout
@@ -167,10 +168,11 @@ class RootfsBuilder(ComponentBuilder):
             raise BuildError("base 构建期间输入变化，拒绝保存快照")
 
     def _build_phase2(self, rootfs_dir: Path, config: dict) -> None:
-        """custom deb → extra deb → 模块 → 固件 → overlay → locale → 账号。"""
+        """custom deb → extra deb → 模块 → headers → 固件 → overlay → locale → 账号。"""
         self._install_app_debs(rootfs_dir, config)
         self._install_extra_debs(rootfs_dir, config)
         self._install_kernel_modules(rootfs_dir, config)
+        self._install_kernel_headers(rootfs_dir, config)
         self._install_extra_firmware(rootfs_dir, config)
         self._install_panel_firmware(rootfs_dir, config)
         self.apply_overlays(rootfs_dir, config)
@@ -258,6 +260,30 @@ class RootfsBuilder(ComponentBuilder):
         dest = rootfs_dir / "lib" / "modules"
         dest.mkdir(parents=True, exist_ok=True)
         self.docker.run_privileged(["cp", "-a", f"{modules_src}/.", str(dest)])
+
+    def _install_kernel_headers(self, rootfs_dir: Path, config: dict) -> None:
+        """安装 kernel 产物中的 linux-headers deb，供设备端编译外部模块。
+
+        postinst 会在 chroot（qemu）里用目标架构 gcc 重编 fixdep/modpost 等
+        宿主工具，因此编译工具链必须已在 Phase 1 经 apt 装好。
+        """
+        if not kernel_headers_package(config):
+            return
+        headers_root = self._target_dir() / "kernel" / "headers"
+        debs = sorted(headers_root.glob("*.deb"))
+        if not debs:
+            raise BuildError(f"内核 headers 产物缺失: {headers_root}")
+        self._status(f"安装内核 headers: {', '.join(deb.name for deb in debs)}")
+        deb_tmp = rootfs_dir / "tmp" / "flange-kernel-headers"
+        deb_tmp.mkdir(parents=True, exist_ok=True)
+        for deb in debs:
+            shutil.copy2(deb, deb_tmp)
+        with ChrootContext(rootfs_dir, self.docker) as chroot:
+            chroot.run(
+                ["dpkg", "-i"] + [f"/tmp/flange-kernel-headers/{deb.name}" for deb in debs],
+                label="dpkg -i linux-headers（编译宿主工具）...",
+            )
+        shutil.rmtree(deb_tmp)
 
     def _fstab_mounts(self, config: dict) -> tuple:
         """返回本次要写进 fstab 的挂载项。默认取类常量，可按配置路由。"""

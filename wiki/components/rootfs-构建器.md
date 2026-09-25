@@ -23,7 +23,7 @@ related:
   - "[[deb 打包引擎]]"
   - "[[app 打包系统]]"
   - "[[源码管理 SourceManager]]"
-updated: 2026-09-05
+updated: 2026-09-25
 ---
 
 ## TL;DR
@@ -35,7 +35,7 @@ ubuntu-base + apt + overlay + deb 两阶段 rootfs 构建；按 `architecture.us
 - **package_sets 基线**：`components/rootfs/config.jsonnet` 定义 `rootfs.package_sets`，platform/board 通过 `rootfs.package_set` 选择，product/variant 条件使用 Jsonnet 表达；求值边界展开为 `rootfs.packages` 扁平列表
 - **Phase 1 — base**：解压 ubuntu-base，chroot 内 `apt-get install` `rootfs.packages`；tar 存 base cache，下次跳过
 - **活树与产物分离**：解包、快照恢复、APT、定制和成像读取同一容器原生 `/var/tmp` 活树，不跟随 TMPDIR；最终镜像、清单与平台辅助文件仍写组件持久化工作目录。该边界同时适用于 recovery，避免宿主共享存储的权限/UID 语义影响目标系统
-- **Phase 2 顺序**（`_build_phase2`）：报告选定的 App deb → 额外 deb → kernel modules → 固件/面板文件 → overlay → locale → 账户 → hostname → 包清单
+- **Phase 2 顺序**（`_build_phase2`）：报告选定的 App deb → 额外 deb → kernel modules → linux-headers deb（`kernel.headers_package` 开启时，见 [[kernel 构建器]]）→ 固件/面板文件 → overlay → locale → 账户 → hostname → 包清单
 - **App 报告**：engine 在 rootfs 前构建 App 闭包并传入 AppBuildReport；`rootfs.custom_packages` 选择需要安装的运行依赖集合，拒绝缺失或损坏报告
 - **`extra_debs`**（基类 `_install_extra_debs`）：声明式下载并安装第三方 deb（不在 Ubuntu 官方源、又不便发布到 app 体系的预编译包）；通过 [[源码管理 SourceManager]] sha256 校验，批量 `dpkg -i` 后 `ldconfig`
 - **`extra_firmware`**（基类 `_install_extra_firmware`）：通过 `source: {name, subpath}` 引用顶层 `sources`，或使用带 SHA256 的下载描述符；同一来源经 SourceManager 复用，`files` 元素支持 `str` 或 `{src, dest}` dict 形态做重命名（如给无后缀 vendor 固件统一补 `.bin`）
