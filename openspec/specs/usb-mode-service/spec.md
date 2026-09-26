@@ -3,10 +3,8 @@
 ## Purpose
 
 定义 USB 工作模式切换服务（L3 场景层）：场景模型、场景定义格式与分层合并、JSON-RPC 2.0 控制接口、基于 SO_PEERCRED 的分级授权、切换编排、自锁保护与持久化策略。
-
 ## Requirements
 ### Requirement: 场景模型
-
 
 系统 SHALL 以「场景」作为 USB 工作模式的业务单元。一个场景由三部分构成：
 
@@ -33,7 +31,6 @@
 
 ### Requirement: 场景定义格式与加载
 
-
 场景定义 SHALL 采用 YAML 格式，与 flange 既有的配置风格保持一致。
 
 此格式选择要求 App 依赖 `python3-yaml`。控制协议不受此影响，采用 JSON-RPC 2.0 —— 配置文件面向人工编辑，控制协议面向程序解析与手工调试，两者载体不必统一。
@@ -53,7 +50,6 @@
 - **THEN** 该场景在所有板子上可用，无需逐板修改板级定义
 
 ### Requirement: unix socket 控制接口
-
 
 服务 SHALL 在 `/run/usbmode.sock` 上监听 unix domain socket，协议 SHALL 为 JSON-RPC 2.0。
 
@@ -118,7 +114,6 @@
 
 ### Requirement: 基于 SO_PEERCRED 的分级授权
 
-
 服务 SHALL 通过 `SO_PEERCRED` 获取调用方进程的 uid 与 gid 并据此授权：查询类命令对所有本机进程开放；变更类命令 SHALL 要求调用方 `uid == 0` 或属于 `usbmode` group。
 
 系统 SHALL 只监听单一 socket，授权判定在服务内部完成，MUST NOT 通过开设多个不同权限的 socket 实现分级。
@@ -139,7 +134,6 @@
 - **THEN** 服务执行切换并返回成功
 
 ### Requirement: 场景切换编排
-
 
 服务 SHALL 负责场景切换的完整编排，包括能力集合变更与 role 变更的先后顺序。
 
@@ -174,7 +168,6 @@ role 切换原语 MUST NOT 感知 gadget 状态，编排职责只属于本层。
 
 ### Requirement: 切断控制通道的自锁保护
 
-
 当目标场景会切断当前控制通道时（典型情况：经由 adb 下发切换到 host 角色或不含 adb 能力的场景，导致 adb 通道本身消失），服务 SHALL 提供超时自动回滚：切换后启动计时器，若在超时窗口内未收到显式确认，SHALL 自动切回原场景。
 
 持久化形式的此类切换 SHALL 要求额外的强制确认标志。
@@ -195,7 +188,6 @@ role 切换原语 MUST NOT 感知 gadget 状态，编排职责只属于本层。
 - **THEN** 服务返回失败并说明风险，不写入持久化配置
 
 ### Requirement: 持久化策略
-
 
 临时切换 SHALL 只改变运行时状态，重启后回到板级配置声明的默认场景。
 
@@ -220,12 +212,13 @@ role 切换原语 MUST NOT 感知 gadget 状态，编排职责只属于本层。
 
 ### Requirement: 服务处于开机关键路径
 
-
 本服务取代既有的 USB gadget 管理脚本，承担开机时的 gadget 初始化。服务 SHALL 在开机早期可靠启动，并在启动后自动进入板级配置声明的默认场景（存在持久化场景时优先使用持久化场景）。
 
 服务启动失败 SHALL 被明确记录，因为在多数板子上 adb 是唯一的调试通道，静默失败会导致设备完全失联。
 
 服务 SHALL 具备失败重启策略与重启次数限流，使短暂的硬件竞态可自愈，同时真实故障能保留现场而不被无限重试掩盖。
+
+UDC 晚于服务注册（deferred probe）导致开机场景失败、且尚无当前场景时，服务 SHALL 在 UDC 注册触发的重新评估中重试开机场景，无需人工切换；已有当前场景时的重新评估语义不变。
 
 #### Scenario: 开机自动进入默认场景
 
@@ -242,8 +235,12 @@ role 切换原语 MUST NOT 感知 gadget 状态，编排职责只属于本层。
 - **WHEN** 服务启动过程中 gadget 初始化失败
 - **THEN** 失败原因被写入日志，可通过串口或后续手段查明，不静默退出
 
-### Requirement: 命令行客户端
+#### Scenario: UDC 晚注册时重试开机场景
 
+- **WHEN** 开机场景因等待 UDC 超时而失败，之后 UDC 注册并触发 udev reload
+- **THEN** 服务重试开机场景并进入默认（或持久化）场景，adb 自动可用
+
+### Requirement: 命令行客户端
 
 系统 SHALL 提供 `usb-mode` 命令行工具作为控制接口的客户端，支持列举场景与能力、查询当前状态、临时切换、持久化切换、复位、确认。
 
@@ -258,3 +255,4 @@ role 切换原语 MUST NOT 感知 gadget 状态，编排职责只属于本层。
 
 - **WHEN** 经由 adb shell 执行会切断该通道的切换命令
 - **THEN** 命令在执行前输出警告，说明该操作会切断当前通道及自动回滚行为
+

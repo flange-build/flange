@@ -6,6 +6,20 @@
 
 ---
 
+## [2026-09-26] sync | usbmoded 在 UDC 晚注册时自动重试开机场景（RUBIK Pi 3 实板）
+
+RUBIK Pi 3 实板上 usbmoded 开机未进入 `debug`，需手动 `usb-mode set debug`。日志显示开机约 6 秒时等待 UDC 超时（`/sys/class/udc/ 仍为空`）；dwc3 依赖 pmic_glink 连接器，UDC 约 10 秒才注册。UDC 注册触发的 udev reload 确实到达，但 `reevaluate()` 在无当前场景时直接返回，开机场景从此不再重试。改为记录开机场景待完成，UDC 已注册时在 reevaluate 中重试；已有场景时的重新评估语义（不取消自锁回滚）不变。Q6A 的 usb1 被板级补丁固定为 peripheral，UDC 早注册，未暴露该竞态。
+
+同时把实板观察写入 [[thundercomm-rubikpi3]]：以太网确认为 Renesas USB3 下的 CDC-NCM 设备，`usb_fw` 挂载与 Renesas 固件加载、`wlan0`/`hci0` 均已出现。重刷后复验通过：8.7 秒等待 UDC 超时，10.5 秒 UDC 注册后重试，11.4 秒进入 `debug`。[[USB gadget 子系统（usbmoded）]] 板级矩阵补 RUBIK Pi 3 行，[[lunch-build-flash 流程]] 补 UFS 启动固件板的刷写差异。
+
+## [2026-09-26] sync | 新增 thundercomm-rubikpi3（QCS6490，UFS boot LUN 启动固件）
+
+参考 Thundercomm Yocto 工程（QLI 1.5）适配 RUBIK Pi 3，提供 default（无桌面）与 desktop 两个 product。内核、图形栈与启动链复用 [[qualcommqcs6490 平台]] 的主线 7.0.2 基线（已含 `qcs6490-thundercomm-rubikpi3.dts`），参考工程的 vendor 6.6.90 + KGSL/Adreno 私有栈只作为硬件事实来源。
+
+新增 [[thundercomm-rubikpi3]] 板页；平台页补「启动固件位于 UFS 的板」小节。与 Q6A 的核心差异是签名固件在 UFS LUN1-5：新增 `bootloader.ufs_rawprogram` / `ufs_patch`，`flange flash` 以单个 `edl-ng rawprogram` 会话写入固件、boot 组件生成的 `dtb.bin`（dtb_a）与 LUN0 raw.img。固件钉 `rubikpi-ai/boot-assets` main@10b8685（BOOT 00430）：参考工程 00364 与 Q6A 上已证实不兼容 7.0.2 的固件同代，`qli2.0`（00508）删除了存放 Renesas USB3 固件的 `usb_fw` 分区。
+
+尚未实板验收，板页「待验收」逐项列出。
+
 ## [2026-09-25] sync | debug 镜像内置 linux-headers，支持设备端编译内核模块
 
 新增 `kernel.headers_package` 开关（基线 = `variant == 'debug'`）：kernel 构建后按 builddeb 的 headers 清单打出 `linux-headers-<release>` deb，rootfs Phase 2 dpkg 安装，并自动选入 `kernel_devel` 包集合（make/gcc/libssl-dev 等）。更新 [[kernel 构建器]]、[[rootfs 构建器]]。
