@@ -106,6 +106,30 @@ class TestCanonicalConfig:
         with pytest.raises(ConfigError, match="sha256"):
             validate_canonical_config(config)
 
+    @pytest.mark.parametrize(
+        ("bootloader", "message"),
+        [
+            ({"ufs_rawprogram": ["rawprogram1.xml"]}, "同时声明且非空"),
+            ({"ufs_rawprogram": ["rawprogram1.xml"], "ufs_patch": []}, "同时声明且非空"),
+            ({"ufs_rawprogram": ["rawprogram1.xml"], "ufs_patch": ["patch1.xml"]},
+             "edk2_firmware"),
+            ({"ufs_rawprogram": ["sub/rawprogram1.xml"], "ufs_patch": ["patch1.xml"]},
+             "根目录内的 .xml"),
+            ({"ufs_rawprogram": ["rawprogram1.xml", "rawprogram1.xml"],
+              "ufs_patch": ["patch1.xml"]}, "重复"),
+        ],
+    )
+    def test_ufs_firmware_manifest_is_strict(self, bootloader, message):
+        config = _canonical_config()
+        firmware = {"url": "https://example.com/fw.zip", "sha256": "0" * 64}
+        config["bootloader"] = (
+            bootloader if message == "edk2_firmware"
+            else {"edk2_firmware": firmware, **bootloader}
+        )
+
+        with pytest.raises(ConfigError, match=message):
+            validate_canonical_config(config)
+
     def test_extra_deb_requires_sha256(self):
         config = _canonical_config()
         config["rootfs"] = {

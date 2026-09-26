@@ -1,14 +1,16 @@
-"""Qualcomm QCS6490 bootloader 构建器 —— 消费 Radxa 预编 EDK2 SPI 固件。
+"""Qualcomm QCS6490 bootloader 构建器 —— 消费预编启动固件包。
 
 高通启动固件（XBL / EDK2 UEFI(PILFv) / TZ / HYP / AOP / firehose loader）是签名
-blob，flange 不编译：下载 Radxa 预编 flat_build 包及可选 UFS 资源，供
-QualcommFlashStrategy 经 edl-ng 刷写。
+blob，flange 不编译：下载板厂预编 flat build 包（Radxa SPI 固件，或 RUBIK Pi 3
+等位于 UFS boot LUN 的固件）及可选 UFS 资源，供 QualcommFlashStrategy 经 edl-ng 刷写。
+声明 ``ufs_rawprogram`` 时在构建期校验固件包可被完整、安全地刷写。
 """
 
 import shutil
 import zipfile
 
 from builder.base import ComponentBuilder
+from builder.flash.qualcomm_ufs import check_firmware_bundle
 
 
 class Qcs6490BootloaderBuilder(ComponentBuilder):
@@ -32,7 +34,7 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
         extract_dir = self._work_dir / "edk2"
         extract_dir.mkdir(parents=True, exist_ok=True)
 
-        self._status("下载并校验 Radxa 预编 EDK2 SPI 固件（不编译）...")
+        self._status("下载并校验预编启动固件包（不编译）...")
         zip_path = self.source.ensure_prebuilt_image(
             f"{config['board']}-edk2",
             firmware,
@@ -70,4 +72,7 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
             raise FileNotFoundError(f"固件包缺少声明的 firehose loader: {loader}")
         for asset in self._ufs_assets:
             shutil.copy2(asset, edk2_dir / asset.name)
+        if bl.get("ufs_rawprogram"):
+            check_firmware_bundle(
+                edk2_dir, bl["ufs_rawprogram"], bl.get("ufs_patch") or [], None)
         return {"edk2": edk2_dir}

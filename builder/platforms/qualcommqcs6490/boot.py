@@ -6,6 +6,10 @@ flange 无 UEFI/GRUB 先例（现有平台皆 U-Boot/extlinux），本模块为�
   /EFI/BOOT/grub.cfg       ← search rootfs + linux/initrd/devicetree（acpi=off ttyMSM0）
 内核 Image/dtb/initrd 在 rootfs /boot（GRUB 经 ext2 模块读 rootfs 分区加载）。
 
+启动固件位于 UFS 的板（声明 ``bootloader.ufs_rawprogram``，如 RUBIK Pi 3）另产出
+dtb.bin：UEFI 从 dtb_a 分区读取其中的 combined-dtb.dtb，随全量刷写一并写入，
+内容与 GRUB devicetree 加载的 DTB 相同。
+
 ⚠️ 需构建/实板验证：grub-mkimage 模块集、initrd 生成、devicetree 加载、acpi=off
    下 DT 启动链。grub-efi-arm64-bin + grub-common + mtools 需在构建 Docker 镜像内。
 """
@@ -13,6 +17,7 @@ flange 无 UEFI/GRUB 先例（现有平台皆 U-Boot/extlinux），本模块为�
 from builder.partition.layout import PartitionLayout
 from builder.base import ComponentBuilder
 from builder.config.canonical import kernel_device_tree
+from builder.dtb_overlay import build_overlays
 
 # grub-mkimage 嵌入的模块集：GPT/FAT/ext2 读盘 + label 搜索 + linux/devicetree 加载。
 # 注：Ubuntu 的 grub-efi-arm64-bin 把 `devicetree` 命令打包在 fdt.mod 里
@@ -105,6 +110,40 @@ class Qcs6490BootBuilder(ComponentBuilder):
         )
         self.docker.run(["mcopy", "-i", str(self._boot_img), str(grub_cfg), "::/EFI/BOOT/grub.cfg"])
 
+        self._dtb_img = None
+        if (config.get("bootloader") or {}).get("ufs_rawprogram"):
+            self._dtb_img = self._build_dtb_image(config, dtb)
+
+    def _build_dtb_image(self, config: dict, dtb: str):
+        """生成 UEFI dtb 分区镜像：FAT16 内含 combined-dtb.dtb。
+
+        与 Thundercomm QLI 的 dtb.bin 布局一致（64MiB FAT16，512 字节逻辑扇区），
+        恰好等于 UFS dtb_a 分区容量。有构建期 overlay 时与 rootfs /boot 同样合并。
+        """
+        target_dir = self.context.target_dir
+        source = target_dir / "kernel" / f"{dtb}.dtb"
+        if not source.is_file():
+            raise FileNotFoundError(f"缺少内核 DTB：{source}")
+        overlays = build_overlays(config)
+        if overlays:
+            overlay_dir = target_dir / "device-tree-overlay" / "overlays"
+            missing = [name for name in overlays if not (overlay_dir / name).is_file()]
+            if missing:
+                raise FileNotFoundError(f"fdtoverlay 缺 .dtbo: {missing}（预期在 {overlay_dir}/）")
+            merged = self._work_dir / f"{dtb}.dtb"
+            self.docker.run(
+                ["fdtoverlay", "-i", str(source), "-o", str(merged),
+                 *[str(overlay_dir / name) for name in overlays]],
+                label=f"fdtoverlay {dtb}.dtb",
+            )
+            source = merged
+        image = self._work_dir / "dtb.bin"
+        self._status("生成 UEFI dtb 分区镜像 dtb.bin...")
+        self.docker.run(["truncate", "-s", "64M", str(image)])
+        self.docker.run(["mkfs.vfat", "-F", "16", str(image)])
+        self.docker.run(["mcopy", "-i", str(image), str(source), "::/combined-dtb.dtb"])
+        return image
+
     def _esp_size_mb(self, config: dict) -> int:
         """ESP 大小 → MB。几何解析走 PartitionLayout，不再自己算。
 
@@ -117,4 +156,7 @@ class Qcs6490BootBuilder(ComponentBuilder):
         return max(esp.size_mb, 64)
 
     def collect(self, src_dir, config: dict) -> dict:
-        return {"boot": self._boot_img}
+        outputs = {"boot": self._boot_img}
+        if self._dtb_img is not None:
+            outputs["dtb"] = self._dtb_img
+        return outputs

@@ -13,6 +13,7 @@ from builder.flash.model import (
     FlashError,
     FlashIdentityConfig,
     FlashPartition,
+    UfsFirmwareConfig,
     _atomic_write_text,
 )
 from builder.flash.plan import get_flash_plan
@@ -185,6 +186,7 @@ class FlashConfigGenerator:
                 ),
                 require_rid=bool((config.get("flash_identity") or {}).get("require_rid", False)),
             ),
+            ufs_firmware=_ufs_firmware(config),
         )
 
         # SPI 启动固件 spi.img → `flange flash --spi-firmware` 写入 SPI NOR。两条路:
@@ -222,3 +224,15 @@ class FlashConfigGenerator:
         output = target_dir / "flash-config.json"
         flash_config.to_json(output)
         return output
+
+
+def _ufs_firmware(config: dict) -> UfsFirmwareConfig:
+    """UFS boot LUN 启动固件清单；未声明时保持空，沿用平台原有整盘刷写。"""
+    bootloader = config.get("bootloader") or {}
+    if not bootloader.get("ufs_rawprogram"):
+        return UfsFirmwareConfig()
+    return UfsFirmwareConfig(
+        loader=bootloader.get("firehose_loader", "prog_firehose_ddr.elf"),
+        rawprogram=list(bootloader["ufs_rawprogram"]),
+        patch=list(bootloader.get("ufs_patch") or []),
+    )

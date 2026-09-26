@@ -85,6 +85,25 @@ def _validate_download_descriptor(descriptor, path: str) -> None:
         raise ConfigError(f"{path}.filename 必须是安全的单个文件名")
 
 
+def _validate_ufs_firmware(bootloader: dict) -> None:
+    """UFS 启动固件刷写清单：成对、非空，且只能引用固件包根目录内的 XML。"""
+    if not bootloader.get("ufs_rawprogram") or not bootloader.get("ufs_patch"):
+        raise ConfigError(
+            "bootloader.ufs_rawprogram 与 bootloader.ufs_patch 必须同时声明且非空"
+        )
+    if not bootloader.get("edk2_firmware"):
+        raise ConfigError(
+            "bootloader.ufs_rawprogram 需要 bootloader.edk2_firmware 提供预编固件包"
+        )
+    for field in ("ufs_rawprogram", "ufs_patch"):
+        names = bootloader[field]
+        if len(set(names)) != len(names):
+            raise ConfigError(f"bootloader.{field} 包含重复文件")
+        for name in names:
+            if not name.endswith(".xml") or PurePosixPath(name).name != name:
+                raise ConfigError(f"bootloader.{field} 只能是固件包根目录内的 .xml 文件名: {name!r}")
+
+
 def _validate_source_ref(ref, sources: dict, path: str) -> None:
     if not isinstance(ref, dict):
         raise ConfigError(f"{path} 必须是字典")
@@ -232,6 +251,8 @@ def validate_canonical_config(config: dict) -> None:
             _validate_download_descriptor(descriptor, f"bootloader.{field}")
     for name, descriptor in (bootloader.get("ufs_provisions") or {}).items():
         _validate_download_descriptor(descriptor, f"bootloader.ufs_provisions.{name}")
+    if "ufs_rawprogram" in bootloader or "ufs_patch" in bootloader:
+        _validate_ufs_firmware(bootloader)
 
     rootfs = config.get("rootfs") or {}
     if "hostname" in rootfs:

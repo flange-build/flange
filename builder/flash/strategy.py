@@ -37,6 +37,11 @@ from builder.flash.model import (
     PreFlashConfig,
     _atomic_write_text,
 )
+from builder.flash.qualcomm_ufs import (
+    FIRMWARE_DIR as UFS_FIRMWARE_DIR,
+    stage_bundle as stage_ufs_bundle,
+    validate_bundle as validate_ufs_bundle,
+)
 from builder.flash.spi import (
     SPI_IDBLOADER_OFFSET,
     SPI_IMG_ALIGN,
@@ -1101,6 +1106,12 @@ class QualcommFlashStrategy(QualcommFlashPlan, FlashStrategy):
                 pass
         return None
 
+    def preflight(self, target_dir: Path, config: FlashConfig,
+                  partitions: list[FlashPartition]) -> None:
+        """UFS 启动固件板：等待设备前校验固件包、dtb.bin 与系统盘齐全且可安全写入。"""
+        if config.ufs_firmware.rawprogram:
+            validate_ufs_bundle(target_dir, config)
+
     def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
                   device: Optional["DeviceInfo"] = None):
         # 系统盘刷写无需 pre_flash；SPI EDK2 固件单刷见 flash_spi_firmware（bring-up）。
@@ -1122,6 +1133,9 @@ class QualcommFlashStrategy(QualcommFlashPlan, FlashStrategy):
         raw = target_dir / "image" / "raw.img"
         if not raw.exists():
             raise FlashError(f"未找到整盘镜像 {raw}；请先执行 flange build")
+        if config.ufs_firmware.rawprogram:
+            self.flash_ufs_bundle(tool, target_dir, config)
+            return True
         loader = self._locate_loader(target_dir)
         if (config.board in {"radxa-dragon-q6a", "radxa-dragon-q8b"}
                 and loader.name != "prog_firehose_ufs.elf"):
@@ -1155,6 +1169,22 @@ class QualcommFlashStrategy(QualcommFlashPlan, FlashStrategy):
                "--memory", memory, "write-sector", "0", str(raw_img)]
         if subprocess.run(cmd).returncode != 0:
             raise FlashError("edl-ng write-sector 失败")
+
+    def flash_ufs_bundle(self, tool: Path, target_dir: Path, config: FlashConfig):
+        """一次 edl-ng 会话写入 UFS 启动固件 LUN、dtb 分区与 LUN0 系统盘。
+
+        固件与系统盘同处 UFS，分两次调用 edl-ng 会重复 Sahara 握手；合并为单个
+        rawprogram 会话，与官方 flat build 的 QDL 刷写流程一致。
+        """
+        loader = target_dir / UFS_FIRMWARE_DIR / config.ufs_firmware.loader
+        with tempfile.TemporaryDirectory(prefix="flange-ufs-") as stage:
+            xmls = stage_ufs_bundle(target_dir, config, Path(stage))
+            _step("edl-ng rawprogram → UFS 启动固件 LUN + LUN0 系统盘"
+                  f"（loader: {loader.name}）")
+            cmd = [str(tool), "--loader", str(loader), "--memory", "UFS",
+                   "rawprogram", *xmls]
+            if subprocess.run(cmd, cwd=stage).returncode != 0:
+                raise FlashError("edl-ng UFS rawprogram 刷写失败")
 
     def flash_spi_firmware(self, tool: Path, target_dir: Path,
                            device: Optional["DeviceInfo"] = None,

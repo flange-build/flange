@@ -302,6 +302,8 @@ SYSTEM = Object(
                      "recovery_firmware"), DOWNLOAD
                 ),
                 "ufs_provisions": Map(DOWNLOAD),
+                "ufs_rawprogram": STRINGS,
+                "ufs_patch": STRINGS,
                 "fit_pack": Object(
                     {"copies": INTEGER, "slot_size_kb": INTEGER, "external_data_offset": STRING}
                 ),

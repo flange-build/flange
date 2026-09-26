@@ -262,6 +262,10 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
             # Qualcomm bring-up：edl-ng 刷 SPI EDK2 固件（仅支持该方法的策略）
             if not hasattr(executor.strategy, "flash_spi_firmware"):
                 raise FlashError(f"平台 {executor.config.platform} 不支持 --spi-firmware")
+            if executor.config.ufs_firmware.rawprogram:
+                raise FlashError(
+                    f"{executor.config.board} 的启动固件位于 UFS，已随 flange flash 全量刷写；"
+                    "不支持 --spi-firmware")
             tool = executor.strategy.find_tool(executor.project_dir)
             device = None
             if not args.no_wait:

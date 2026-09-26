@@ -61,6 +61,15 @@ class FlashIdentityConfig:
 
 
 @dataclass
+class UfsFirmwareConfig:
+    """UFS boot LUN 启动固件的 rawprogram 清单；空列表表示固件不在 UFS。"""
+
+    loader: str = ""
+    rawprogram: list[str] = field(default_factory=list)
+    patch: list[str] = field(default_factory=list)
+
+
+@dataclass
 class FlashConfig:
     """flash-config.json 的完整数据模型。"""
     platform: str
@@ -94,6 +103,8 @@ class FlashConfig:
     # 非整盘镜像平台的独立发布包；摘要绑定具体构建，防止清单和镜像漂移。
     bundle_manifest: str = ""
     bundle_manifest_sha256: str = ""
+    # Qualcomm UFS 启动固件：全量刷写时与 LUN0 系统盘在同一 edl-ng 会话写入。
+    ufs_firmware: UfsFirmwareConfig = field(default_factory=UfsFirmwareConfig)
 
     def to_json(self, path: Path):
         """原子序列化为 JSON 文件。"""
@@ -131,6 +142,7 @@ class FlashConfig:
             identity=identity,
             bundle_manifest=data.get("bundle_manifest", ""),
             bundle_manifest_sha256=data.get("bundle_manifest_sha256", ""),
+            ufs_firmware=UfsFirmwareConfig(**data.get("ufs_firmware", {})),
         )
 
 
