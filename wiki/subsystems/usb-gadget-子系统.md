@@ -2,7 +2,7 @@
 title: USB gadget 子系统（usbmoded）
 type: subsystem
 status: partially-verified
-updated: 2026-09-20
+updated: 2026-09-26
 sources:
   - components/app/usbmoded/
   - components/app/usbmoded/README.md
@@ -73,7 +73,8 @@ related:
 按内核顺序建实例 → prepare → 建链接 → 绑定 UDC → start → 枚举校验。
 
 udev 事件：USB 状态变化 → `systemctl --no-block reload` → SIGHUP →
-重新评估（UDC 掉了走断连恢复；能力未变则被幂等守卫短路）。
+重新评估（UDC 掉了走断连恢复；能力未变则被幂等守卫短路；开机场景因 UDC 尚未
+注册而失败时，UDC 注册后在此重试开机场景）。
 
 ## 平台竞态知识（13 项）
 
@@ -123,14 +124,16 @@ udev 事件：USB 状态变化 → `systemctl --no-block reload` → SIGHUP →
 | radxa-cubie-a7z | 0x1f3a | sunxi | 板级 | 未探测 |
 | atk-rk3506b | 0x1d6b | linux | **App 默认** | 未探测 |
 | radxa-dragon-q8b | 0x1d6b | linux | **App 默认** | **不可用** |
+| thundercomm-rubikpi3 | 0x1d6b | linux | **App 默认** | **不可用**（开机进入 debug 已验证） |
 
-最后两块没有板级配置文件，使用 App 层默认值（Linux Foundation 测试 VID）——
+最后三块没有板级配置文件，使用 App 层默认值（Linux Foundation 测试 VID）——
 迁移前后一致，但迁移时容易遗漏，需专门确认。
 
 role 切换不可用有两种性质完全不同的原因，服务会分别诊断：
 
 - **DTS 把 `dr_mode` 固定成 host/peripheral** —— dwc3 根本不注册 role switch
-  接口，无解。Dragon Q8B 属于此类（其 DTS patch 固定为 `peripheral`）。
+  接口，无解。Dragon Q8B 属于此类（其 DTS patch 固定为 `peripheral`）。RUBIK Pi 3 的
+  Type-C dwc3 在 7.0.2 上打印 `dr_mode forced to gadget`，`/sys/class/usb_role` 为空，现象相同。
 - **内核注册了但没暴露给 userspace** —— `role` 属性受
   `usb_role_switch_is_visible()` 控制，需注册方设置 `allow_userspace_control`。
   ROCK 5B 属于此类：`dr_mode=otg`、fusb302 工作正常、节点存在，只是属性被
@@ -149,6 +152,9 @@ role 切换不可用有两种性质完全不同的原因，服务会分别诊断
   销毁底层对象而挂载点残留，daemon 打开 ep0 后写描述符得到 EINVAL。
 - **udev 触发的重新评估不能走 `switch`**，否则会取消自锁回滚计时器 ——
   切换本身就会引起 USB 状态变化并触发 udev。
+- **UDC 可能远晚于服务注册**：RUBIK Pi 3 的 dwc3 依赖 pmic_glink 连接器，约 10 秒
+  才出现，开机等待超时。重新评估若在无当前场景时直接返回，开机场景永不重试，
+  设备停在无 adb 状态；须在 UDC 注册后重试开机场景。
 - **ROCK 5B 内核只支持 ffs / mass_storage / acm / uvc**，通用场景里的
   `media`（mtp）与 `net`（ncm）在该板不可用；系统也缺 `mkfs.vfat`。
 - **拆包后在已装旧版的设备上增量升级会撞 dpkg overwrite 冲突**，需先

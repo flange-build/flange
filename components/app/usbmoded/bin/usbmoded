@@ -33,12 +33,14 @@ def reevaluate(manager: SceneManager, gadget: Gadget) -> None:
     能力集合未变且 UDC 仍绑定时，gadget 的幂等守卫（知识 #13）会让这次
     调用成为空操作 —— udev 在每次状态变化都会触发，没有守卫会造成
     soft-disconnect 的无限重置环。
+
+    尚无当前场景（开机场景因 UDC 未注册而失败）时也要交给 manager：
+    它会在 UDC 就绪后重试开机场景。
     """
-    if manager.current is None:
-        return
-    active = gadget.active_capabilities()
-    if active and not udc.current_binding(gadget.gadget_dir):
-        gadget.recover_disconnect()
+    if manager.current is not None:
+        active = gadget.active_capabilities()
+        if active and not udc.current_binding(gadget.gadget_dir):
+            gadget.recover_disconnect()
     try:
         # 必须走 manager.reevaluate 而不是 manager.switch：后者会取消自锁
         # 回滚计时器，而一次切换本身就会引起 USB 状态变化并触发本函数 ——

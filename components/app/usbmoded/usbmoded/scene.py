@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from . import capabilities, config, role as role_mod
+from . import capabilities, config, role as role_mod, udc
 from .capability import CapabilityError
 from .gadget import Gadget, GadgetError
 
@@ -82,6 +82,10 @@ class SwitchResult:
 
 class SceneManager:
     """场景的加载、切换与状态维护。"""
+
+    #: 开机场景是否仍待完成。UDC 晚于本服务注册（deferred probe）时开机场景
+    #: 会失败，由 UDC 出现触发的 reevaluate 重试。
+    _boot_pending = False
 
     def __init__(self, gadget: Gadget, default_scene: str) -> None:
         self._gadget = gadget
@@ -293,9 +297,20 @@ class SceneManager:
         失联的最后一道防线，它被自己引发的 udev 事件取消掉是不可接受的。
 
         gadget 层有启动幂等守卫，因此本方法在状态未变时是廉价的空操作。
+
+        开机场景失败且尚无当前场景时，一旦 UDC 已注册就重试开机场景。
+        RUBIK Pi 3 实测：dwc3 依赖 pmic_glink 连接器，UDC 在开机约 10 秒才
+        注册，本服务早已等待超时；此后 UDC 出现的 udev 事件是唯一的重试时机，
+        若在此直接返回，设备会一直停在无 gadget、无 adb 的状态。
         """
         with self._lock:
             if self._current is None:
+                if self._boot_pending and udc.list_udcs():
+                    log.info("UDC 已注册，重试开机场景")
+                    try:
+                        self.boot()
+                    except SceneError as exc:
+                        log.error("重试开机场景失败：%s", exc)
                 return
             scene = self._scenes.get(self._current)
             if scene is None:
@@ -344,7 +359,10 @@ class SceneManager:
         log.info("开机进入场景：%s（来源：%s）", name, "持久化" if persisted else "板级默认")
         # 开机路径不启用自锁回滚 —— 此时没有「上一个可用场景」可回退，
         # 且回滚会让开机行为变得不可预测。
-        return self.switch(name, force=True)
+        self._boot_pending = True
+        result = self.switch(name, force=True)
+        self._boot_pending = False
+        return result
 
     # ---- 自锁保护
 

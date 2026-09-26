@@ -74,6 +74,10 @@ scenes:
 
 能力集合与 role 是正交维度，场景可以只声明其一。
 
+开机进入持久化场景，没有则进入 `default_scene`（默认 `debug`）。UDC 晚于服务注册
+（deferred probe，如 RUBIK Pi 3 的 dwc3 依赖 pmic_glink，约 10 秒才出现）导致开机场景
+失败时，服务在 UDC 注册触发的 udev reload 中自动重试，无需手动 `usb-mode set`。
+
 ## 命令行
 
 ```

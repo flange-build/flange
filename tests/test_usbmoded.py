@@ -629,3 +629,68 @@ def test_rollback_restores_role(fake_sys, gadget, monkeypatch):
 
     assert state["role"] is role_mod.Role.DEVICE, "回滚必须把 role 切回去"
     assert manager.current == "debug"
+
+
+def test_boot_scene_retried_when_udc_registers_late(fake_sys, gadget, monkeypatch):
+    """开机时 UDC 尚未注册，UDC 出现触发的重新评估 MUST 重试开机场景。
+
+    RUBIK Pi 3 实测：dwc3 依赖 pmic_glink 连接器，UDC 在开机约 10 秒才注册，
+    usbmoded 早已等待超时；此前重新评估在无当前场景时直接返回，设备一直
+    停在无 adb 的状态，需手动 usb-mode set debug。
+    """
+    import threading
+
+    import usbmoded.capabilities as caps_mod
+    from usbmoded import config
+    from usbmoded.scene import Scene, SceneError, SceneManager
+
+    calls = []
+    adb = FakeCapability("adb", capability.ORDER_ADB, calls)
+    registry = {"adb": adb}
+    monkeypatch.setattr(caps_mod, "REGISTRY", registry)
+    monkeypatch.setattr(caps_mod, "resolve", lambda names: [registry[n] for n in names])
+    monkeypatch.setattr(config, "load_persisted_scene", lambda: None)
+
+    manager = SceneManager.__new__(SceneManager)
+    manager._gadget = gadget
+    manager._default_scene = "debug"
+    manager._scenes = {"debug": Scene("debug", ["adb"], None, {})}
+    manager._current = None
+    manager._lock = threading.RLock()
+    manager._rollback_timer = None
+    manager._rollback_to = None
+
+    controller = fake_sys["controller"]
+    parked = controller.parent.parent / "parked-udc"
+    controller.rename(parked)
+    with pytest.raises(SceneError):
+        manager.boot()
+    assert manager.current is None
+
+    manager.reevaluate()  # UDC 仍未注册：不重试
+    assert manager.current is None
+
+    parked.rename(controller)
+    manager.reevaluate()
+
+    assert manager.current == "debug"
+    assert ("start", "adb") in calls
+    assert manager._boot_pending is False
+
+
+def test_reevaluate_without_pending_boot_is_noop(fake_sys, gadget, monkeypatch):
+    """开机场景已成功或从未开始时，无当前场景的重新评估不得擅自进入场景。"""
+    import threading
+
+    from usbmoded.scene import Scene, SceneManager
+
+    manager = SceneManager.__new__(SceneManager)
+    manager._gadget = gadget
+    manager._default_scene = "debug"
+    manager._scenes = {"debug": Scene("debug", ["adb"], None, {})}
+    manager._current = None
+    manager._lock = threading.RLock()
+
+    manager.reevaluate()
+
+    assert manager.current is None
