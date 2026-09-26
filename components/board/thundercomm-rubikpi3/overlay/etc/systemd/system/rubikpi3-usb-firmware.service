@@ -1,0 +1,19 @@
+[Unit]
+Description=RUBIK Pi 3 Renesas USB3 host firmware from usb_fw partition
+# RUBIK Pi 3 的 USB3 Type-A 口挂在 PCIe Renesas uPD720201 xHCI 后（板载 USB 网卡
+# 可能也在其下游，待实板 lsusb -t 确认）。
+# 该主控无外置 ROM，每次上电都要由主机下发 renesas_usb_fw.mem；固件不可再分发，
+# 出厂存放在 UFS LUN3 的 usb_fw 分区（ext4）。udev coldplug 加载 xhci-pci-renesas
+# 时分区可能尚未挂载，探测因缺固件失败；本服务挂载分区后重新探测未绑定的主控。
+DefaultDependencies=no
+After=local-fs.target systemd-udev-trigger.service
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/flange/rubikpi3-usb-firmware
+
+[Install]
+WantedBy=sysinit.target

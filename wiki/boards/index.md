@@ -29,6 +29,7 @@ updated: 2026-09-06
 - [khadas-vim3l](khadas-vim3l.md) — S905D3（首颗 Amlogic 板，AP6398S WiFi/BT，status: wip）
 - [radxa-zero](radxa-zero.md) — S905Y2（第二块 Amlogic 板，G12A，AW-CM256SM WiFi/BT，关 recovery，macOS host，status: wip）
 - [radxa-dragon-q6a](radxa-dragon-q6a.md) — QCS6490（首颗 Qualcomm 板，UEFI/GRUB + UFS 4K LBA + Adreno 643 freedreno + AIC8800 USB，status: wip）
+- [thundercomm-rubikpi3](thundercomm-rubikpi3.md) — QCS6490（第二块 QCS6490 板，启动固件在 UFS boot LUN、单会话 rawprogram 全量刷写 + AP6256 brcmfmac，待实板验收）
 - [radxa-dragon-q8b](radxa-dragon-q8b.md) — SC8280XP（UEFI/GRUB + UFS 4K LBA + Adreno/MSM + QPS615/TC956x 双网口，status: wip）
 - [arduino-uno-q](../../docs/boards/arduino-uno-q.md) — QRB2210 + STM32U585（U-Boot/systemd-boot + eMMC/QDL，完整 Arduino 生态适配中，待实板验收）
 

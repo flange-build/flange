@@ -75,3 +75,32 @@ def test_vim3l板层与soc层共用kernel_config且保留binder():
         "directory": "amlogic",
         "name": "meson-sm1-khadas-vim3l",
     }
+
+
+@pytest.mark.parametrize("product", ["default", "desktop"])
+@pytest.mark.parametrize("variant", ["debug", "release"])
+def test_rubikpi3复用qcs6490基线并声明ufs启动固件(product, variant):
+    config = JsonnetConfigLoader(PROJECT_ROOT).evaluate_board(
+        "thundercomm-rubikpi3", product, variant)
+
+    validate_canonical_config(config)
+    assert config["kernel"]["source"] == {"name": "linux-qcs6490"}
+    assert config["kernel"]["device_tree"] == {
+        "directory": "qcom",
+        "name": "qcs6490-thundercomm-rubikpi3",
+    }
+    assert config["boot"]["kernel_args"].endswith(
+        "root=PARTLABEL=rootfs rootwait pcie_pme=nomsi deferred_probe_timeout=30")
+    bootloader = config["bootloader"]
+    assert bootloader["ufs_rawprogram"] == [f"rawprogram{n}.xml" for n in range(1, 6)]
+    assert bootloader["ufs_patch"] == [f"patch{n}.xml" for n in range(1, 6)]
+    assert "ufs_provisions" not in bootloader
+    assert config["partitions"]["sector_size"] == 4096
+    firmware = {entry["name"]: entry for entry in config["rootfs"]["extra_firmware"]}
+    assert {"rubikpi3-ap6256-wifi", "rubikpi3-ap6256-board"} <= set(firmware)
+    assert {"src": "nvram.txt",
+            "dest": "brcm/brcmfmac43456-sdio.thundercomm,rubikpi3.txt"} in (
+        firmware["rubikpi3-ap6256-board"]["files"])
+    assert "bluez" in config["rootfs"]["packages"]
+    desktop = "flange-ubuntu-desktop-config" in config["rootfs"]["custom_packages"]
+    assert desktop == (product == "desktop")

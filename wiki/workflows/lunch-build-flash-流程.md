@@ -10,7 +10,7 @@ sources:
   - builder/flash/execute.py
   - docs/development-guide.md
   - docs/first-steps.md
-updated: 2026-09-05
+updated: 2026-09-26
 ---
 
 # 从选择目标到构建与刷写
@@ -56,3 +56,5 @@ flange flash --list
 Qualcomm 的 SPI 启动固件与 UFS 系统盘是独立路径：普通 `flange flash` 写 UFS，
 `--spi-firmware` 写 SPI。全新 UFS 初始化会清除数据，具体 profile 与重新进入 EDL 的步骤见
 [Q6A](../boards/radxa-dragon-q6a.md)和[Q8B](../boards/radxa-dragon-q8b.md)，不要套用到其他平台。
+[RUBIK Pi 3](../boards/thundercomm-rubikpi3.md) 的启动固件位于 UFS boot LUN，普通 `flange flash`
+在一次 edl-ng 会话中同时重写固件与系统盘，不支持 `--spi-firmware` 与 `--provision-ufs`。

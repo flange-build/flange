@@ -140,6 +140,14 @@ PLATFORM_CASES = {
         "bootloader_targets": [],
         "download": ("bootloader.edk2_firmware", "sha256", "cf23a1742ae5d51c451947d82cb21fd3f1c10bbcd621d611f55520673e3f90ca"),
     },
+    "thundercomm-rubikpi3-default-release": {
+        "platform": "qualcommqcs6490",
+        "tree": ("qcom", "qcs6490-thundercomm-rubikpi3"),
+        "source": ("linux-qcs6490", "commit", "7473a9fca2b08623319e497f4f811746baddb7bc"),
+        "kconfig": "# CONFIG_MODULE_SIG_FORCE is not set",
+        "bootloader_targets": [],
+        "download": ("bootloader.edk2_firmware", "sha256", "5f5d0237d6dc836f847bb8294860db4a619f9fd9e82cfd6a4cf40d8c9ff3d648"),
+    },
     "radxa-dragon-q8b-default-release": {
         "platform": "qualcommsc8280xp",
         "tree": ("qcom", "sc8280xp-radxa-dragon-q8b"),

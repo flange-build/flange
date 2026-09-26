@@ -1,0 +1,38 @@
+dts: qcs6490-rubikpi3 LT9611 改用 DSI Port B（backport 上游 ebcf2240a249）
+
+RUBIK Pi 3 板上 LT9611 HDMI 桥的 DSI 输入物理连接在 Port B（port@1）。
+linux-7.0.2 的初版 DTS 把 mdss_dsi0_out 接到 port@0（Port A），HDMI 无输出。
+上游修复：
+
+  arm64: dts: qcom: qcs6490-rubikpi3: Use lt9611 DSI Port B
+  Fixes: f055a39f6874 ("arm64: dts: qcom: Add qcs6490-rubikpi3 board dts")
+  Link: https://lore.kernel.org/r/20260207-rubikpi-next-20260116-v3-3-23b9aa189a3a@thundersoft.com
+
+基线升级到已含该提交的内核后删除本补丁。
+
+diff --git a/arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dts b/arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dts
+--- a/arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dts
++++ b/arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dts
+@@ -755,10 +755,10 @@
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+ 
+-			port@0 {
+-				reg = <0>;
++			port@1 {
++				reg = <1>;
+ 
+-				lt9611_a: endpoint {
++				lt9611_b: endpoint {
+ 					remote-endpoint = <&mdss_dsi0_out>;
+ 				};
+ 			};
+@@ -801,7 +801,7 @@
+ };
+ 
+ &mdss_dsi0_out {
+-	remote-endpoint = <&lt9611_a>;
++	remote-endpoint = <&lt9611_b>;
+ 	data-lanes = <0 1 2 3>;
+ };
+ 
