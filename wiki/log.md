@@ -677,3 +677,7 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 ## [2026-09-27] sync | Radxa Dragon Q6A EL2 下 i2c10 改走 FIFO
 
 [[radxa-dragon-q6a]] 新增"EL2 启动与 GPI DMA"：`260120` 固件开启 `Hypervisor Override` 后，Radxa UEFI 自行给 GRUB 加载的 DTB 套用 KVM fixup，Linux 以 EL2 启动；此时 `i2c10`（RTC）申请 GPI 通道，在 `gpi_config_interrupts()` 读 gpii 1 的 MSI 寄存器处同步外部中止，系统无法启动。新增 `patches/kernel/0007` 删除 `i2c10` 的 `qcom,enable-gsi-dma`，由 `0006` 重 provision 回 FIFO，Q6A 不再使用 GPI。坑#11 原文"`i2c10` 的 GSI 正常"保留，并追加"仅 EL1 成立"的再更正。change `fix-qcs6490-i2c10-fifo-el2`。
+
+## [2026-09-27] sync | Radxa Dragon Q6A meizu-e3-bringup EL2 回归
+
+[[radxa-dragon-q6a]] 的"EL2 启动与 GPI DMA"补充 meizu-e3-bringup-debug 在 EL2 下的实板回归：DSI 屏 1080×2160 点亮，`sec_ts` 读到 `AC,6F,70` 且触摸上报坐标事件，`sgm37604a` 背光可写，i2c13 走 FIFO、无 GPI 使用。i2c10 改走 FIFO（`0007`）未影响屏幕功能。
