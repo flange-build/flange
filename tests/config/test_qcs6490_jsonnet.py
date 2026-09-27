@@ -77,7 +77,7 @@ def test_vim3l板层与soc层共用kernel_config且保留binder():
     }
 
 
-@pytest.mark.parametrize("product", ["default", "desktop"])
+@pytest.mark.parametrize("product", ["default", "desktop", "el1"])
 @pytest.mark.parametrize("variant", ["debug", "release"])
 def test_rubikpi3复用qcs6490基线并声明ufs启动固件(product, variant):
     config = JsonnetConfigLoader(PROJECT_ROOT).evaluate_board(
@@ -85,16 +85,24 @@ def test_rubikpi3复用qcs6490基线并声明ufs启动固件(product, variant):
 
     validate_canonical_config(config)
     assert config["kernel"]["source"] == {"name": "linux-qcs6490"}
-    assert config["kernel"]["device_tree"] == {
-        "directory": "qcom",
-        "name": "qcs6490-thundercomm-rubikpi3",
-    }
+    el2 = product != "el1"
+    expected_tree = {"directory": "qcom", "name": "qcs6490-thundercomm-rubikpi3"}
+    if el2:
+        expected_tree["build_overlays"] = ["rubikpi3-el2.dtbo"]
+    assert config["kernel"]["device_tree"] == expected_tree
+    assert config["boot"]["overlays"]["board"] == (["rubikpi3-el2.dtbo"] if el2 else [])
+    assert config["boot"]["overlays"]["enabled"] == []
     assert config["boot"]["kernel_args"].endswith(
         "root=PARTLABEL=rootfs rootwait pcie_pme=nomsi deferred_probe_timeout=30")
     bootloader = config["bootloader"]
     assert bootloader["ufs_rawprogram"] == [f"rawprogram{n}.xml" for n in range(1, 6)]
     assert bootloader["ufs_patch"] == [f"patch{n}.xml" for n in range(1, 6)]
     assert "ufs_provisions" not in bootloader
+    # EL2 product 刷 KVM 版 xbl_config；el1 保持固件包默认（Gunyah）。
+    if el2:
+        assert bootloader["ufs_file_overrides"] == {"xbl_config.elf": "xbl_config_kvm.elf"}
+    else:
+        assert "ufs_file_overrides" not in bootloader
     assert config["partitions"]["sector_size"] == 4096
     firmware = {entry["name"]: entry for entry in config["rootfs"]["extra_firmware"]}
     assert {"rubikpi3-ap6256-wifi", "rubikpi3-ap6256-board"} <= set(firmware)

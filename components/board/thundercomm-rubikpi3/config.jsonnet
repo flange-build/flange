@@ -14,17 +14,30 @@
 // dtb.bin，内含当前内核 DTB）与 LUN0 的 raw.img（ESP + rootfs）。详见
 // builder/flash/qualcomm_ufs.py。
 //
+// ## EL2（KVM）与 EL1（Gunyah）
+//
+// 固件自带两种 xbl_config，只差 uefiplat 启动模式字节（01 Gunyah / 02 KVM），二选一，
+// 实板验证是硬取舍（avocado-linux 在同 SoC 上结论一致）：
+// - EL2：刷 xbl_config_kvm.elf，Linux 运行在 EL2（/dev/kvm），venus 硬件编码可用；
+//   ADSP / CDSP 离线——EL2 PAS 需 TZ 实现 PAS_GET_RSCTABLE，本板 main（TZ 00126.1）与
+//   qli2.0（TZ 00146）实测均返回 -5，Qualcomm 通用 00142（TZ 00187）在本板进内核即停。
+// - EL1：刷默认 xbl_config.elf，Linux 运行在 Gunyah 之下，ADSP / CDSP 正常；venus 硬件
+//   编码喂帧即整机复位（与 Q6A EL1 现象一致），解码可用。
+// 切换 product 会改写 LUN1/2 的 xbl_config，须重新全量 flange flash。
+//
 // ## product
 //
-// - default：无桌面（headless），经串口 ttyMSM0 / adb / SSH 访问。
-// - desktop：启用 ubuntu-desktop 硬件特性包（GNOME，HDMI 经 LT9611 桥输出）。
+// - default：无桌面（headless），EL2；经串口 ttyMSM0 / adb / SSH 访问。
+// - desktop：启用 ubuntu-desktop 硬件特性包（GNOME，HDMI 经 LT9611 桥输出），EL2。
+// - el1：无桌面，EL1（Gunyah），需要 ADSP / CDSP 时使用。
 local product = std.extVar('product');
+local el2 = product != 'el1';
 
 {
   board: 'thundercomm-rubikpi3',
   platform: 'qualcommqcs6490',
   soc: 'qcs6490',
-  products: ['default', 'desktop'],
+  products: ['default', 'desktop', 'el1'],
   variants: ['debug', 'release'],
   packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
@@ -48,9 +61,14 @@ local product = std.extVar('product');
     // 板级 patches/kernel/ backport 两个上游 DTS 修复（LT9611 DSI Port B、
     // USB QMP PHY 供电对调）。外设驱动（brcmfmac、hci_uart bcm、LT9611、
     // xhci-pci-renesas、AX88179、pwm-fan、ES8316）已由 SoC 层 defconfig 链启用。
-    device_tree+: { name: 'qcs6490-thundercomm-rubikpi3' },
+    // EL2 product 构建期合并 dtso/rubikpi3-el2.dtso（GPU zap、DSP / venus SMMU 流、
+    // watchdog、SCM SHM bridge），见文件头；EL1 使用未修改的 base DTB。
+    device_tree+: { name: 'qcs6490-thundercomm-rubikpi3' } +
+                  (if el2 then { build_overlays: ['rubikpi3-el2.dtbo'] } else {}),
   },
   boot+: {
+    // 高通启动链不支持运行期 overlay，板私有 overlay 只作为构建期合并来源。
+    overlays+: { board+: if el2 then ['rubikpi3-el2.dtbo'] else [] },
     // pcie_pme=nomsi：Thundercomm 全部发行版 cmdline 均带，规避 qcom PCIe PME 走
     // MSI 的问题；deferred_probe_timeout=30：msm-mdss 在 LT9611 探测前（约
     // 17-18s）放弃会导致没有 /dev/dri/card0（meta-qcom-3rdparty rubikpi3.conf 同款）。
@@ -85,8 +103,9 @@ local product = std.extVar('product');
   // UFS boot LUN 启动固件：rubikpi-ai/boot-assets main@10b8685（BOOT.MXF.1.0.c1-00430、
   // TZ.XF.5.29.1-00126.1），即 meta-qcom-3rdparty 主线集成钉住的版本。
   // - 不选参考工程 QLI 1.5 的 00364：Q6A 已实证该代固件与 7.0.2 kodiak DTB 不匹配。
-  // - 不选 qli2.0 分支（00508）：其 LUN3 删除了 usb_fw 分区，会让出厂存放的
-  //   Renesas USB3 固件所在区域被重划为 ddr_a。
+  // - 不选 qli2.0 分支（00508 / TZ 00146）：其 LUN3 删除了 usb_fw 分区（出厂 Renesas USB3
+  //   固件所在区域会被重划为 ddr_a）；实板验证它同样不支持 EL2 下 DSP 所需的
+  //   PAS_GET_RSCTABLE，相对 main 没有功能收益。
   // 只刷 LUN1-5：LUN0 由 flange 系统盘占用；LUN6 是 QLI 用户态配置（ext 文件系统，
   // UEFI 不读），且 devcfg_full.img 在 GitHub 归档里只是 Git LFS 指针。
   bootloader: {
@@ -98,5 +117,8 @@ local product = std.extVar('product');
     firehose_loader: 'prog_firehose_ddr.elf',
     ufs_rawprogram: ['rawprogram%d.xml' % lun for lun in std.range(1, 5)],
     ufs_patch: ['patch%d.xml' % lun for lun in std.range(1, 5)],
-  },
+  } + (if el2 then {
+    // LUN1/2 的 xbl_config_a/_b 改写 KVM 版，使 Linux 以 EL2 启动（见文件头）。
+    ufs_file_overrides: { 'xbl_config.elf': 'xbl_config_kvm.elf' },
+  } else {}),
 }
