@@ -16,7 +16,7 @@ sources:
   - components/app/usbmoded/usbmoded/scene.py
   - openspec/changes/archive/2026-09-26-add-qcs6490-thundercomm-rubikpi3/
   - openspec/specs/qualcommqcs6490-thundercomm-rubikpi3/spec.md
-  - openspec/changes/enable-rubikpi3-el2/
+  - openspec/changes/archive/2026-09-27-enable-rubikpi3-el2/
 related:
   - "[[qualcommqcs6490 平台]]"
   - "[[radxa-dragon-q6a]]"
