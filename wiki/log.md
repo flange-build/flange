@@ -685,3 +685,7 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 ## [2026-09-27] sync | Radxa Dragon Q6A EL1 下 i2c 复验与 DSI 屏黑屏记录
 
 [[radxa-dragon-q6a]] 补充 EL1 结果：i2c10/i2c13 走 FIFO、RTC 与 `sec_ts` 正常，原"EL1 下未单独复验"更新为实测结果。新增"EL1 下魅族 DSI 屏黑屏"已知问题：`260120` 固件 + EL1 时 fbdev 与 modetest 均无画面，Linux 侧 DRM/DPU/DSI/SMMU 均无异常，推测 Gunyah stage-2 静默拦截显示 DMA（未证实）；已搁置，Q6A 以 EL2 为准。
+
+## [2026-09-27] sync | 更正 Q6A "EL1 下 DSI 屏黑屏"为面板偶发黑屏
+
+[[radxa-dragon-q6a]] 上一条"EL1 下魅族 DSI 屏黑屏、推测 Gunyah 拦截显示 DMA"是误判：实测 EL1 也能正常显示，黑屏与 EL 无关，更像面板初始化时复位未生效。条目改为"魅族 DSI 屏偶发黑屏（待查）"，保留黑屏时 Linux 侧各层正常的观测，删去 hypervisor 推测与 HDMI 对照建议，补充 `meizu_e3_prepare()` 复位时序与 `vcc_3v3_lcd` always-on 导致面板不断电的疑点。已知线索：热重启更易黑屏（用户观察），1.8V vccio 与 USB PHY 共用、热重启期间可能不断电；同一次启动内 fb0 blank/unblank 可恢复画面；热重启复现试验未完成。
