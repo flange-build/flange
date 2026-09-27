@@ -681,3 +681,7 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 ## [2026-09-27] sync | Radxa Dragon Q6A meizu-e3-bringup EL2 回归
 
 [[radxa-dragon-q6a]] 的"EL2 启动与 GPI DMA"补充 meizu-e3-bringup-debug 在 EL2 下的实板回归：DSI 屏 1080×2160 点亮，`sec_ts` 读到 `AC,6F,70` 且触摸上报坐标事件，`sgm37604a` 背光可写，i2c13 走 FIFO、无 GPI 使用。i2c10 改走 FIFO（`0007`）未影响屏幕功能。
+
+## [2026-09-27] sync | Radxa Dragon Q6A EL1 下 i2c 复验与 DSI 屏黑屏记录
+
+[[radxa-dragon-q6a]] 补充 EL1 结果：i2c10/i2c13 走 FIFO、RTC 与 `sec_ts` 正常，原"EL1 下未单独复验"更新为实测结果。新增"EL1 下魅族 DSI 屏黑屏"已知问题：`260120` 固件 + EL1 时 fbdev 与 modetest 均无画面，Linux 侧 DRM/DPU/DSI/SMMU 均无异常，推测 Gunyah stage-2 静默拦截显示 DMA（未证实）；已搁置，Q6A 以 EL2 为准。
