@@ -20,7 +20,7 @@ sources:
   - builder/source.py
   - openspec/changes/add-qcs6490-radxa-dragon-q6a/
   - openspec/changes/archive/2026-05-31-migrate-qcs6490-kernel-702/
-  - openspec/changes/fix-qcs6490-i2c10-fifo-el2/
+  - openspec/changes/archive/2026-09-27-fix-qcs6490-i2c10-fifo-el2/
   - docs/first-steps.md
 related:
   - "[[qualcommqcs6490 平台]]"

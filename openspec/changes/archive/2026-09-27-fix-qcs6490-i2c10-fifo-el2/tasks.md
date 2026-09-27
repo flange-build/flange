@@ -16,6 +16,7 @@
 - [x] 3.2 RTC 验证：`/dev/rtc*` 存在，`hwclock -r` / `hwclock -w` 成功；`dmesg` 无 `gpi` 通道相关报错
   - 实板：`rtc-ds1307 10-0068: registered as rtc0`；镜像无 `hwclock`，改用 `RTC_SET_TIME`/`RTC_RD_TIME` ioctl 与 sysfs：写入前 `date` 为 `EINVAL`（RTC 从未设时，非 i2c 错误），写入后读回 `2026-09-27 04:50:41`，8 s 后 sysfs 读 `04:50:49` 与宿主一致；`dmesg` 无 `gpi`/`GPI transfer`/Oops/SError，`/proc/interrupts` 无 `gpi-dma`（GPI 未被使用）
 - [ ] 3.3 （可选）关闭 `Hypervisor Override` 以 EL1 启动同一镜像，确认启动与 RTC 正常
+  - 未执行（可选项，归档时跳过）：EL1 下 FIFO 路径与 i2c13 相同，但本构建未单独实板复验；wiki 已注明
 
 ## 4. 文档
 
