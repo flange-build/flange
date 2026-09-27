@@ -6,6 +6,14 @@
 
 ---
 
+## [2026-09-27] sync | RK356x 全系打开 NPU：U-Boot 阶段提前打开 NPU 供电
+
+neons-core3566-nanob / orangepi-cm4 / rp-pro-rk3568-h 早先因 `rknpu_mmu` probe 时 `failed to get ack on domain 'npu'` → `panic_on_set_idle` 被判为"NPU 物理不可用"而禁用。重新定位：IOMMU probe 早于 PMIC 驱动，NPU 电源轨不在 PMIC 上电时序内，flange 通用 U-Boot（`rk3568-evb`、extlinux）从不打开它；rp-pro 旧补丁里的"调压排除实验"写的是 RK809 `0x9C`（电量计寄存器），实验无效。
+
+修法写入 [[rockchip 平台]]「RK356x NPU 供电」：各板 bootloader patch 在 U-Boot DTS 声明 NPU 供电 DCDC（RK809 四板用 DCDC4 `vdd_npu`，radxa-zero3w 为 RK817、用 DCDC2 `vdd_gpu`），rk3566/rk3568 SoC 层 `bootloader.config` 保留 `interrupt-parent`。删除 neons `0001`、rp-pro `0003`、orangepi-cm4 `0003` 三个 disable-rknpu 补丁；tspi-rk3566、radxa-zero3w 新增内核补丁打开 `bus_npu` / `rknpu` / `rknpu_mmu`。平台 U-Boot 补丁 `0002` 适配上游 `next-dev-v2026.01` 强推后的 `0f2b44c`，去掉 neons / orangepi-cm4 的 U-Boot pin。
+
+[[orangepi-cm4]] 实板验证通过；其余四板仅构建验证，待实板。radxa-zero3w 的 `device_tree.name`（`rk3566-radxa-zero-3w`）在当前内核分支不存在（只有 `-aic8800ds2` / `-ap6212` 变体），为既有问题，按板载模块改为 `rk3566-radxa-zero-3w-aic8800ds2`。
+
 ## [2026-09-26] sync | usbmoded 在 UDC 晚注册时自动重试开机场景（RUBIK Pi 3 实板）
 
 RUBIK Pi 3 实板上 usbmoded 开机未进入 `debug`，需手动 `usb-mode set debug`。日志显示开机约 6 秒时等待 UDC 超时（`/sys/class/udc/ 仍为空`）；dwc3 依赖 pmic_glink 连接器，UDC 约 10 秒才注册。UDC 注册触发的 udev reload 确实到达，但 `reevaluate()` 在无当前场景时直接返回，开机场景从此不再重试。改为记录开机场景待完成，UDC 已注册时在 reevaluate 中重试；已有场景时的重新评估语义（不取消自锁回滚）不变。Q6A 的 usb1 被板级补丁固定为 peripheral，UDC 早注册，未暴露该竞态。

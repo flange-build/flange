@@ -35,7 +35,7 @@ related:
   - "[[bootloader 构建器]]"
   - "[[USB 线刷协议]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-09-05
+updated: 2026-09-27
 ---
 
 > 阅读前提：先读[架构总览](../concepts/架构总览.md)，并从[板卡索引](../boards/index.md)确认型号。
@@ -90,4 +90,5 @@ dpkg -i 一次性传入 9 个 deb，按依赖拓扑顺序排列（mpp → rga �
 - RK3588 板不要用 vendor `<board>-rk3588_defconfig`（含 androidboot 风格固定 bootargs，绕过 extlinux），统一用 generic `rk3588_defconfig`
 - **真 RK3568 板必须挂 rk3568 SoC** 不是 rk3566：两者同 die，但 rkbin 的 `RK3568MINIALL.ini` 选 1560MHz DDR、`RK3566MINIALL.ini` 选 1056MHz，挂错砍 33% 性能
 - 平台 patch `0002-select-flange-recovery-extlinux-conf.patch`（及已删除的旧 disable-optee patch）历史上含 zero-context hunk 与缺 context 行，git apply 严格解析报 "corrupt patch at line 26"，base.py fallback 到 `patch -p1` 模糊匹配会**错位插入**（如往 `rk3568_common.h` 文件末尾乱写 fdtoverlay_addr_r 行，rock5b 走 rk3588_common.h 不读所以一直没暴露，rp-pro-rk3568-h 触雷才修齐）。所有平台 patch hunk header 必须含完整 context，文件 trailing whitespace 行也要精确保留
+- **RK356x NPU 供电**：`rk356x.dtsi` 的 `rknpu_mmu` 挂 `power-domains = <RK3568_PD_NPU>`，IOMMU（`drivers/iommu`）probe 早于 PMIC（`drivers/mfd`），而 NPU 电源轨不在 PMIC 硬件上电时序内 → 内核开 NPU 电源域时无电，NIU 不回 idle ack，BSP `pm_domains.c` 直接 `panic_on_set_idle`（`failed to get ack on domain 'npu' ... val=0x6`）。内核侧救不了（`npu-supply` 遇 `-EPROBE_DEFER` 被静默跳过）。RK3588/RK3576 的 `rknpu_mmu` 不挂电源域、由 rknpu 驱动先 `regulator_enable` 再开域，故无此问题。flange 通用 `rk3568_defconfig` 的 U-Boot DT（`rk3568-evb`）无 PMIC、extlinux 下也读不到内核 DTB，因此各 RK356x 板用 bootloader patch `0001-uboot-dts-enable-vdd-*` 在 U-Boot DTS 里声明 NPU 供电那一路 DCDC（RK809 方案 DCDC4 `vdd_npu`；RK817 方案 GPU/NPU 共用 DCDC2 `vdd_gpu`，**DCDC4 是 3.3V，切勿套 RK809 版**），SoC 层 `bootloader.config` 同时把 `interrupt-parent` 移出 `CONFIG_OF_SPL_REMOVE_PROPS`（否则 U-Boot rk8xx probe 失败）。U-Boot 串口应见 `PMIC:  RK8xx` 与 `<name> init 900000 uV`。早期 3 块板曾以"NPU 物理不可用"禁用 NPU，属误判。实板验证见 [[orangepi-cm4]]
 - **OP-TEE 全平台打包**：上游 `rk35xx` defconfig 都启用 `CONFIG_OPTEE_CLIENT`（u-boot 开机强制查 OP-TEE）。平台 patch `0006-rockchip-fit-uncomment-bl32-node.patch` 取消注释 FIT 生成器 `make_fit_atf.sh` 的 `gen_bl32_node`，把 rkbin BL32（tee.bin）打进 u-boot.itb，SPL 加载交 BL31、client 检查通过正常启动。arm64 下**不可**启 `CONFIG_SPL_OPTEE`（会拉 armv7 专用 `spl_optee.S` 编不过；`fit_args.sh` 令 ARCH=arm64 时 `gen_bl32_node` 自动跳过该门槛）。早期曾用 patch 0003/0005 关 `OPTEE_CLIENT` 绕过 halt，现已删除、改为打包 OP-TEE
