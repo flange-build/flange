@@ -1,0 +1,36 @@
+dts: radxa-dragon-q6a i2c10 去掉 qcom,enable-gsi-dma（EL2 下 GPI 访问中止）
+
+i2c10（QUP1 SE2 @a88000，RTC st,m41t11）在 base board dts 里声明了
+`qcom,enable-gsi-dma`，probe 时走 GPI DMA 申请 gpi_dma1 的通道。UEFI
+（SPI 固件 260120/00549-KODIAKWP）开启 Hypervisor Override、Linux 以 EL2
+启动时，gpi_config_interrupts() 读 gpii 1 的 GPII_n_CNTXT_MSI_BASE_LSB
+触发同步外部中止：
+
+  Internal error: synchronous external abort: 0000000096000010
+  pc : gpi_config_interrupts+0x130/0x208
+  ... dma_request_chan <- geni_i2c_probe [i2c_qcom_geni]
+
+另一次复现为异步 SError 直接 panic。同一 4K 页内前序寄存器（TYPE_IRQ_MSK …
+GPII_IRQ_EN）读写均成功，属于寄存器级访问控制。udev 加载 i2c_qcom_geni 即
+崩溃复位，系统无法启动；`module_blacklist=i2c_qcom_geni` 时 EL2 下可完整
+启动，GPI 是唯一阻断点。
+
+去掉该属性后，0006 在 probe 中发现"DT 未要 GSI 而 SE 被 bootloader 预
+provision 成 GSI"，把 SE 重 provision 回 FIFO，于是不再申请 GPI 通道。RTC
+只有少量字节事务，FIFO 足够。连同 0003（i2c13）一起，Q6A 所有启用的 i2c 都
+走 FIFO，EL1/EL2 行为一致。
+
+OpenSpec change: fix-qcs6490-i2c10-fifo-el2
+
+diff --git a/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts b/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts
+index 7491d0c..b44185d 100644
+--- a/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts
++++ b/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts
+@@ -528,7 +528,6 @@
+ };
+ 
+ &i2c10 {
+-	qcom,enable-gsi-dma;
+ 	status = "okay";
+ 
+ 	rtc: rtc@68 {
