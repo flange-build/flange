@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-09-27] sync | thundercomm-rubikpi3 EL2 / EL1 product 拆分与固件实验
+
+RUBIK Pi 3 在 EL1（Gunyah）下 venus 硬件编码喂帧即整机复位，改由 `xbl_config_kvm.elf`（`bootloader.ufs_file_overrides`）以 EL2 启动并合并 `rubikpi3-el2.dtso` 后编码可用，但 ADSP/CDSP 卡在 `Error in getting resource table: -5`：7.0.2 的 EL2 PAS 需 TZ 实现 `PAS_GET_RSCTABLE`。实测 boot-assets main（TZ 00126.1）、qli2.0（TZ 00146，保留 LUN3 `usb_fw`）均不支持，Qualcomm 通用 00142（TZ 00187）在本板进内核即停。据此 default / desktop 为 EL2，新增 `el1` product（DSP 可用、无硬件编码），固件基线保持 main；`el1` 实板 ADSP/CDSP running。
+
+同时修正 [[thundercomm-rubikpi3]] 两处：LT9611 在 EL1 / EL2 下都探测失败，原因是只 backport 了 DTS（port@1）而缺上游驱动补丁 `e8bd92c4a0d2`，已补 kernel patch 0003；Type-C UCSI 未注册在 EL1 下同样存在，与 EL 无关（此前误记为 EL2 下 DSP 离线所致）。固件校验新增分区容量检查。
+
 ## [2026-09-26] sync | usbmoded 在 UDC 晚注册时自动重试开机场景（RUBIK Pi 3 实板）
 
 RUBIK Pi 3 实板上 usbmoded 开机未进入 `debug`，需手动 `usb-mode set debug`。日志显示开机约 6 秒时等待 UDC 超时（`/sys/class/udc/ 仍为空`）；dwc3 依赖 pmic_glink 连接器，UDC 约 10 秒才注册。UDC 注册触发的 udev reload 确实到达，但 `reevaluate()` 在无当前场景时直接返回，开机场景从此不再重试。改为记录开机场景待完成，UDC 已注册时在 reevaluate 中重试；已有场景时的重新评估语义（不取消自锁回滚）不变。Q6A 的 usb1 被板级补丁固定为 peripheral，UDC 早注册，未暴露该竞态。

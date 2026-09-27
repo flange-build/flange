@@ -8,17 +8,20 @@ sources:
   - components/board/thundercomm-rubikpi3/patches/kernel/0002-dts-qcs6490-rubikpi3-usb-qmp-phy-supplies.patch
   - components/board/thundercomm-rubikpi3/overlay/etc/systemd/system/rubikpi3-usb-firmware.service
   - components/board/thundercomm-rubikpi3/overlay/usr/lib/flange/rubikpi3-usb-firmware
+  - components/board/thundercomm-rubikpi3/patches/kernel/0003-drm-bridge-lt9611-single-port-b-input.patch
+  - components/board/thundercomm-rubikpi3/dtso/rubikpi3-el2.dtso
   - components/platform/qualcommqcs6490/qcs6490/config.jsonnet
   - builder/flash/qualcomm_ufs.py
   - builder/platforms/qualcommqcs6490/boot.py
   - components/app/usbmoded/usbmoded/scene.py
   - openspec/changes/archive/2026-09-26-add-qcs6490-thundercomm-rubikpi3/
   - openspec/specs/qualcommqcs6490-thundercomm-rubikpi3/spec.md
+  - openspec/changes/enable-rubikpi3-el2/
 related:
   - "[[qualcommqcs6490 平台]]"
   - "[[radxa-dragon-q6a]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -37,8 +40,11 @@ boot LUN 1-5**（Q6A 在 SPI NOR），因此 `flange flash` 用一次 `edl-ng ra
 
 | target | 用途 |
 |---|---|
-| `thundercomm-rubikpi3-default-{debug,release}` | 无桌面，串口 `ttyMSM0` / adb / SSH |
-| `thundercomm-rubikpi3-desktop-{debug,release}` | `ubuntu-desktop` 包：GNOME，HDMI 经 LT9611 输出 |
+| `thundercomm-rubikpi3-default-{debug,release}` | 无桌面，EL2（KVM、硬件编码），串口 `ttyMSM0` / adb / SSH |
+| `thundercomm-rubikpi3-desktop-{debug,release}` | `ubuntu-desktop` 包：GNOME，HDMI 经 LT9611 输出，EL2 |
+| `thundercomm-rubikpi3-el1-{debug,release}` | 无桌面，EL1（Gunyah）：ADSP / CDSP 可用，硬件编码不可用 |
+
+EL1 / EL2 由 LUN1/2 的 `xbl_config` 决定，切换 product 须重新全量 `flange flash`。
 
 ## 板级契约
 
@@ -100,10 +106,71 @@ ext 文件系统，UEFI 不读）不刷写——其 `devcfg_full.img` 在 GitHub
   （见 [usbmoded README](../../components/app/usbmoded/README.md)）。重刷后复验：8.7 秒等待超时、
   10.5 秒 UDC 注册后重试、11.4 秒进入 `debug`，adb 无需人工干预即可连接。
 
+### 硬件视频编解码（2026-09-26）
+
+Venus（`qcom-venus`）probe 成功：解码器 `/dev/video1`（H.264 / HEVC / VP9 / MPEG-2 → NV12 / P010），
+编码器 `/dev/video0`（NV12 → H.264 / HEVC）；GStreamer 暴露 `v4l2{h264,h265,vp9,mpeg2}dec`、`v4l2{h264,h265}enc`。
+测试工具在板上经 apt 安装（v4l-utils、gstreamer1.0-plugins-{base,good,bad,ugly}），不在镜像内。
+
+| 项 | 结果 |
+|---|---|
+| H.264 720p 硬解 | ✓ 300 帧 / 1.07 s（约 280 fps），venus IRQ +523，末帧画面正确 |
+| HEVC 720p 硬解 | ✓ 300 帧 / 1.11 s，venus IRQ +827 |
+| VP9 720p 硬解 | ✓ 150 帧 / 0.52 s，venus IRQ +320 |
+| H.264 硬编（EL1） | ✗ `v4l2h264enc` 喂 720p NV12 即整机复位（无 panic 日志，uptime 1018 s → 重连后 14 s） |
+| H.264 硬编（EL2） | ✓ 300 帧 720p → 172,904 B Baseline 码流（SPS/PPS/1 IDR/299 P），venus IRQ +611，无复位；硬件回解 300 帧、末帧正确 |
+| HEVC 硬编（EL2） | ✓ 300 帧 720p → 128,200 B，2.8 s，硬件回解 300 帧 |
+
+- 测试码流须为 8-bit 4:2:0：`videotestsrc` 不限定格式时 `x264enc` 会协商成 High 4:4:4 10-bit，
+  硬解码器拒绝（`not-negotiated`），属测试方法问题而非硬件故障。
+- 编码复位与 [[radxa-dragon-q6a]] 在 EL1 下的现象一致（EL1 时无 `/dev/kvm`，Linux 运行在 Gunyah 之下）。
+  现已默认 EL2，见下节。
+
+### EL2（KVM）启动（2026-09-26，default / desktop）
+
+EL2 product 刷写 boot-assets 自带的 `xbl_config_kvm.elf`（`bootloader.ufs_file_overrides`，与
+`_gunyah` 版仅 `uefiplat` 启动模式字节 01→02 不同），并构建期合并 `dtso/rubikpi3-el2.dtso`：
+GPU zap shader 禁用、ADSP/CDSP PAS SMMU 流（上游 Qualcomm `kodiak-el2.dtso` v10）、watchdog、
+SCM SHM bridge 与 venus `video-firmware`（Q6A KVM overlay）。实板：
+
+- `CPU: All CPU(s) started at EL2`，`/dev/kvm` 出现；启动到 rootfs，UFS 无复位，无失败单元。
+- venus 硬件编解码可用（见上表）；usbmoded 开机 12 s 内自动进入 `debug`。
+- LT9611 探测成功（revision 0xe2），msm DRM 与 Adreno 初始化（`card1` / `renderD128`）。此前 EL1 下
+  同样探测失败——DTS 把 DSI 接到 port@1 却缺少上游驱动补丁 `e8bd92c4a0d2`，已补为 kernel patch 0003。
+- **ADSP / CDSP 在 EL2 下离线**：补齐 `iommus` 后越过 PAS 初始化的 `-22`，但卡在
+  `Error in getting resource table: -5`——7.0.2 的 EL2 PAS 路径要调用 TZ 的
+  `QCOM_SCM_PIL_PAS_GET_RSCTABLE`，当前固件 `TZ.XF.5.29.1-00126.1` 不支持。连带影响：ADSP/CDSP
+  上的 fastrpc 计算与依赖 ADSP 的服务不可用。
+- Type-C UCSI 端口未注册（`/sys/class/typec` 为空）与 EL 无关：EL1 下 ADSP 正常、`ucsi_glink`
+  已加载、pmic_glink 的 `ucsi` / `altmode` 辅助设备存在，端口仍未注册，待单独排查。
+
+### EL2 下 DSP 的固件实验与 product 拆分（2026-09-27）
+
+| 固件 | BOOT / TZ | EL2 结果 |
+|---|---|---|
+| boot-assets main@10b8685（配置基线） | 00430 / 00126.1 | 启动正常，DSP `-5` |
+| boot-assets qli2.0@eaf0c64，只刷 LUN1/2/4/5 | 00508 / 00146 | 启动正常；保留原 LUN3 后 `usb_fw`、USB3、以太网正常；DSP 仍 `-5` |
+| Qualcomm `QCM6490_bootbinaries` 00142 + main XML/CDT | 00569 / 00187 | UEFI 打印 `Non-Gunyah based bootup`，退出 EBS 进入内核后即停 |
+
+- 00142 是 meta-qcom 在 RB3 Gen2 默认 KVM、官方称 PIL 全部可用的版本，但不是本板构建。
+- avocado-linux 在本板与 RB3 Gen2 上结论相同（KVM 下 cdsp/adsp/gpu-zap 不加载），做成
+  Gunyah / KVM 可选。
+- 结论：EL1 / EL2 是硬取舍，以 product 区分（default / desktop 为 EL2，`el1` 为 EL1），固件基线
+  保持 main。待 Thundercomm 发布 TZ 支持 `PAS_GET_RSCTABLE` 的本板固件后再评估 EL2 下 DSP。
+- 实验前已备份板载 `usb_fw`（1 MiB ext4，含 `renesas_usb_fw.mem`）。
+
+### EL1 product 实板（2026-09-27，el1-release）
+
+- `CPU: All CPU(s) started at EL1`，无 `/dev/kvm`；ADSP / CDSP 开机约 10.5 s `is now up`，状态 running。
+- LT9611 探测成功、msm DRM 初始化，GPU zap 在 EL1 下正常走 TZ；usbmoded 自动进入 `debug`，无失败单元。
+- 硬件解码与 EL2 相同可用；硬件编码仍会整机复位（EL1 已知限制，见上）。
+- 音频在 EL1 下同样不可用：`qcom-sc7280-lpass-lpi-pinctrl: Failed to get clk 'core'`，与 EL2 无关。
+
 ## 待验收
 
 - UFS 长时间稳定性与冷/热重启
 - GRUB `devicetree` 与 UEFI dtb_a 两条 DTB 路径在本板 UEFI 上的实际行为
-- HDMI（LT9611）、desktop GNOME、GPU freedreno
-- AP6256 Wi-Fi 扫描/连接、蓝牙扫描；以太网链路；USB3 Type-A 外设；Type-C host 模式
+- 音频（LPASS LPI pinctrl `Failed to get clk 'core'`，EL1 / EL2 均存在）；Type-C UCSI 端口注册
+- HDMI 实际出图、desktop GNOME、GPU 渲染
+- 蓝牙扫描；以太网链路；USB3 Type-A 外设；Type-C host 模式（Wi-Fi 已联网取得地址并完成 apt 安装）
 - ADSP 音频、风扇温控
