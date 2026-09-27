@@ -40,6 +40,15 @@ local common = import 'config/rockchip.libsonnet';
     // case_insensitive_fix.config 由基类生成，macOS 默认大小写不敏感 FS 上
     // 禁用 netfilter 中仅大小写不同的源码对，避免 ipt_ECN/ipt_ecn 等互踩。
     defconfig: ['rk3568_defconfig'],
+    // U-Boot 的 dts/dt.dtb 经 fdtgrep 按 OF_SPL_REMOVE_PROPS 裁属性；
+    // rk3568_defconfig 默认列表含 interrupt-parent，而 rk8xx_ofdata_to_platdata()
+    // 读不到它就放弃 probe——board 在 U-Boot DTS 里声明的 RK809/RK817 节点
+    // （提前打开 NPU 供电，见各板 patches/bootloader/）因此不生效。与 Radxa /
+    // Orange Pi 板级 defconfig 一致，保留 interrupt-parent。
+    config: {
+      CONFIG_OF_SPL_REMOVE_PROPS:
+        '"clock-names assigned-clocks assigned-clock-rates assigned-clock-parents"',
+    },
   },
   kernel+: {
     source: { name: 'rockchip-kernel' },

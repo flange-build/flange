@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Sun, 27 Sep 2026 12:00:00 +0800
+Subject: [PATCH] dts: rk3566-radxa-zero3: 启用 NPU（bus_npu / rknpu / rknpu_mmu）
+
+rk3566-radxa-zero3.dtsi 只给 rknpu 设了 rknpu-supply，status 沿用
+rk356x.dtsi 默认的 disabled（Radxa 官方改由 radxa-overlays 的
+rk3568-npu-enable overlay 打开）。这里直接在 dtsi 打开，zero-3w 两个
+WiFi 变体与 zero-3e 共用。
+
+Zero 3 为 RK817 方案，GPU/NPU 共用 DCDC2（vdd_gpu），已由 bootloader
+patch 0001-uboot-dts-enable-vdd-gpu-npu 在 U-Boot 阶段打开并设 0.9V，
+内核 rknpu_mmu probe 打开 NPU 电源域时不再 ack 超时。bus_npu 供电
+与 Radxa overlay 一致（bus-supply=vdd_logic、pvtm-supply=vdd_cpu）。
+---
+diff --git a/arch/arm64/boot/dts/rockchip/rk3566-radxa-zero3.dtsi b/arch/arm64/boot/dts/rockchip/rk3566-radxa-zero3.dtsi
+index f6a6b5c3..eb7db15a 100644
+--- a/arch/arm64/boot/dts/rockchip/rk3566-radxa-zero3.dtsi
++++ b/arch/arm64/boot/dts/rockchip/rk3566-radxa-zero3.dtsi
+@@ -421,8 +421,19 @@ &rkvenc_mmu {
+ 	status = "okay";
+ };
+ 
++&bus_npu {
++	bus-supply = <&vdd_logic>;
++	pvtm-supply = <&vdd_cpu>;
++	status = "okay";
++};
++
+ &rknpu {
+ 	rknpu-supply = <&vdd_gpu>;
++	status = "okay";
++};
++
++&rknpu_mmu {
++	status = "okay";
+ };
+ 
+ &saradc {

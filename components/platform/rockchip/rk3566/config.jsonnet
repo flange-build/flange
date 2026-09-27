@@ -32,6 +32,15 @@ local common = import 'config/rockchip.libsonnet';
     // defconfig 数组只保存有序 make target；board 的 product 条件 symbol
     // 统一写入 bootloader.config，由公共 renderer 生成末尾 override fragment。
     defconfig: ['rk3568_defconfig'],
+    // U-Boot 的 dts/dt.dtb 经 fdtgrep 按 OF_SPL_REMOVE_PROPS 裁属性；
+    // rk3568_defconfig 默认列表含 interrupt-parent，而 rk8xx_ofdata_to_platdata()
+    // 读不到它就放弃 probe——board 在 U-Boot DTS 里声明的 RK809/RK817 节点
+    // （提前打开 NPU 供电，见各板 patches/bootloader/）因此不生效。与 Radxa /
+    // Orange Pi 板级 defconfig 一致，保留 interrupt-parent。
+    config: {
+      CONFIG_OF_SPL_REMOVE_PROPS:
+        '"clock-names assigned-clocks assigned-clock-rates assigned-clock-parents"',
+    },
   },
   kernel+: {
     source: { name: 'rockchip-kernel' },

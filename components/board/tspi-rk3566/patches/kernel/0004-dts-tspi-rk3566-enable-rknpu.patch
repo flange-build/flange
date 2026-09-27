@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Sun, 27 Sep 2026 12:00:00 +0800
+Subject: [PATCH] dts: tspi-rk3566: 启用 NPU（bus_npu / rknpu / rknpu_mmu）
+
+tspi-rk3566-core-v10.dtsi 原先把 bus_npu、rknpu、rknpu_mmu 全部标为
+disabled。NPU 供电为 RK809 DCDC4（vdd_npu），已由 bootloader patch
+0001-uboot-dts-enable-vdd-npu 在 U-Boot 阶段打开并设 0.9V，内核 rknpu_mmu
+probe 打开 NPU 电源域时不再 ack 超时（panic_on_set_idle）。这里改 core
+dtsi，default / amp 系列 product 共用。
+---
+diff --git a/arch/arm64/boot/dts/rockchip/tspi-rk3566-core-v10.dtsi b/arch/arm64/boot/dts/rockchip/tspi-rk3566-core-v10.dtsi
+index c9cd8f2b..08587938 100755
+--- a/arch/arm64/boot/dts/rockchip/tspi-rk3566-core-v10.dtsi
++++ b/arch/arm64/boot/dts/rockchip/tspi-rk3566-core-v10.dtsi
+@@ -284,7 +284,7 @@ &vp1 {
+ &bus_npu {
+ 	bus-supply = <&vdd_logic>;
+ 	pvtm-supply = <&vdd_cpu>;
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ //can0接口
+@@ -760,12 +760,12 @@ &rkvenc_mmu {
+ //神经网络处理
+ &rknpu {
+ 	rknpu-supply = <&vdd_npu>;
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ //神经网络内存管理
+ &rknpu_mmu {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ //ADC
