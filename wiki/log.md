@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-09-27] sync | Q6A EL2 下 ADSP / CDSP 实板验证
+
+Q6A（meizu-e3-bringup-debug，EL2）两个 DSP 均由启动固件预先拉起，内核 `qcom_q6v5_pas` 以 `attached` 状态接管，不加载 rootfs 里的 mbn；这与 [[thundercomm-rubikpi3]] 在 EL2 下由内核经 PAS 加载、卡在 TZ `PAS_GET_RSCTABLE` 不同。glink 通道与 QRTR 服务（ADSP node 5、CDSP node 10）齐全，FastRPC `GET_DSP_INFO` 与 `INIT_ATTACH` 在两个 DSP 上都成功，CDSP 报 v68 + HVX + HMX。未验证 DSP 崩溃后的恢复；声卡因缺少 topology 文件未实例化，开机有一次 APM `GET_SPF_STATE` 超时。
+
+同时更正 [[radxa-dragon-q6a]] 易踩坑中"`/dev/fastrpc-adsp` 不出现（-12 ENOMEM）"：该条是 2026-05 bring-up 时的记录，7.0.2 + EL2 下已不成立。
+
 ## [2026-09-27] sync | thundercomm-rubikpi3 EL2 / EL1 product 拆分与固件实验
 
 RUBIK Pi 3 在 EL1（Gunyah）下 venus 硬件编码喂帧即整机复位，改由 `xbl_config_kvm.elf`（`bootloader.ufs_file_overrides`）以 EL2 启动并合并 `rubikpi3-el2.dtso` 后编码可用，但 ADSP/CDSP 卡在 `Error in getting resource table: -5`：7.0.2 的 EL2 PAS 需 TZ 实现 `PAS_GET_RSCTABLE`。实测 boot-assets main（TZ 00126.1）、qli2.0（TZ 00146，保留 LUN3 `usb_fw`）均不支持，Qualcomm 通用 00142（TZ 00187）在本板进内核即停。据此 default / desktop 为 EL2，新增 `el1` product（DSP 可用、无硬件编码），固件基线保持 main；`el1` 实板 ADSP/CDSP running。
