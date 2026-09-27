@@ -117,6 +117,12 @@ class TestCanonicalConfig:
              "根目录内的 .xml"),
             ({"ufs_rawprogram": ["rawprogram1.xml", "rawprogram1.xml"],
               "ufs_patch": ["patch1.xml"]}, "重复"),
+            ({"ufs_rawprogram": ["rawprogram1.xml"], "ufs_patch": ["patch1.xml"],
+              "ufs_file_overrides": {"xbl_config.elf": "sub/kvm.elf"}}, "根目录内的文件名"),
+            ({"ufs_rawprogram": ["rawprogram1.xml"], "ufs_patch": ["patch1.xml"],
+              "ufs_file_overrides": {"xbl_config.elf": "xbl_config.elf"}}, "替换为自身"),
+            ({"ufs_file_overrides": {"xbl_config.elf": "xbl_config_kvm.elf"}},
+             "同时声明且非空"),
         ],
     )
     def test_ufs_firmware_manifest_is_strict(self, bootloader, message):

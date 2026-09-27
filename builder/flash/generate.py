@@ -235,4 +235,5 @@ def _ufs_firmware(config: dict) -> UfsFirmwareConfig:
         loader=bootloader.get("firehose_loader", "prog_firehose_ddr.elf"),
         rawprogram=list(bootloader["ufs_rawprogram"]),
         patch=list(bootloader.get("ufs_patch") or []),
+        overrides=dict(bootloader.get("ufs_file_overrides") or {}),
     )
