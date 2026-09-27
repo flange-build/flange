@@ -11,6 +11,7 @@ sources:
   - components/platform/qualcommqcs6490/patches/kernel/0004-feat-radxa-common-kernel-config.patch
   - components/platform/qualcommqcs6490/patches/kernel/0005-feat-radxa-custom-kernel-config.patch
   - components/platform/qualcommqcs6490/patches/kernel/0006-i2c-geni-force-fifo-on-gsi-mismatch.patch
+  - components/platform/qualcommqcs6490/patches/kernel/0007-dts-radxa-dragon-q6a-i2c10-drop-gsi-dma.patch
   - components/platform/qualcommqcs6490/patches/aic8800/0001-cfg80211-get-tx-power-6.18-signature.patch
   - components/platform/qualcommqcs6490/patches/aic8800/0002-in-irq-removed-linux-6.10.patch
   - components/packages/meizu-e3-panel/package.py
@@ -19,6 +20,7 @@ sources:
   - builder/source.py
   - openspec/changes/add-qcs6490-radxa-dragon-q6a/
   - openspec/changes/archive/2026-05-31-migrate-qcs6490-kernel-702/
+  - openspec/changes/fix-qcs6490-i2c10-fifo-el2/
   - docs/first-steps.md
 related:
   - "[[qualcommqcs6490 平台]]"
@@ -27,7 +29,7 @@ related:
   - "[[meizu-e3-panel]]"
   - "[[硬件特性包]]"
   - "[[构建期 dtb overlay 合并]]"
-updated: 2026-09-05
+updated: 2026-09-27
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -50,6 +52,8 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 **⚠️ UFS 开机整机复位（QHEE `PM: Reset by PSHOLD`）双根因 + 修复**：① 早期只用 `defconfig radxa.config`、漏 `qcom_module.config` → UFS probe 缺 qcom 平台驱动；② **板上 SPI 固件过旧**（`251013`/00364-KODIAKLA），与 7.0.2 `kodiak` DTB 资源/握手不匹配。两者都必修——补四段 config + `flange flash --spi-firmware` 刷 `260120`/00549-KODIAKWP。⚠️ `flange flash` 默认只刷 UFS、**不碰 SPI**，大版本内核/DTB 迁移极易漏固件。决策档见 openspec `migrate-qcs6490-kernel-702`。
 
 **硬件编码 = 可用（真根因＝UEFI Hypervisor Override，2026-06-01 修正）**：此前"喂帧即整机复位"的根因是 **UEFI `Hypervisor Settings → Hypervisor Override` 未开 → 系统以 EL1 启动（无 Gunyah hypervisor）→ 编码器访问 CP/secure 内存 fault → 复位**，并非固件/TZ/驱动。开机 F2 进 UEFI 开启后系统以 **EL2** 启动（`/dev/kvm` 出现、`/dev/mtd0` 消失），**flange 现有 mainline 7.0.2 venus + 通用固件直接编码通过**（`v4l2h264enc` 720p→6.46MB 有效 H264、零复位）。flange 默认 EL2 为待解项。见下表编码行。
+
+**EL2 启动与 GPI DMA（2026-09-27）**：`260120` 固件开启 `Hypervisor Override` 后，Radxa UEFI 在 ExitBootServices 前**自行**给 GRUB `devicetree` 加载的 flange DTB 打 KVM fixup：`/chosen` 加 `radxa,enable-kvm`、`radxa,dtb-fixup-applied`，并套用内核源里 `qcs6490-radxa-dragon-q6a-kvm.dtso` 的内容（GPU zap 禁用、scm `shm-bridge-vmid`、venus 追加 iommus 与 `video-firmware`、PCIe ranges、adsp/cdsp `qcom,broken-reset`），另有 PCIe iommu-map 等平台 fixup。因此 flange 无需像 [[thundercomm-rubikpi3]] 那样自带 el2 dtso。EL2 下 `i2c10`（RTC，原 DT 声明 `qcom,enable-gsi-dma`）申请 GPI 通道时，`gpi_config_interrupts()` 读 gpii 1 的 `GPII_n_CNTXT_MSI_BASE_LSB` 触发同步外部中止（`ESR 0x96000010`，另一次为异步 SError panic）。同页前序寄存器可访问，属于寄存器级访问控制。udev 加载 `i2c_qcom_geni` 即崩溃复位，GRUB 追加 `module_blacklist=i2c_qcom_geni` 可绕过。修复：`patches/kernel/0007` 删 `i2c10` 的 flag，由 `0006` 重 provision 回 FIFO。现在 Q6A 所有启用的 i2c 都走 FIFO、不使用 GPI。EL2 实板验证通过（2026-09-27，default-debug）：不加启动参数启动到 rootfs，`/proc/interrupts` 无 `gpi-dma`，RTC（`rtc-ds1307` 驱动 m41t11，`rtc0`）读写走时正常；EL1 下未单独复验。change `fix-qcs6490-i2c10-fifo-el2`。
 
 ## 内核基线：mainline 6.18.2（2026-05-30，前一步）
 
@@ -163,6 +167,8 @@ LCD FPC（J10，原理图 v1.21 sheet 31）引脚：
 11. **i2c13 `qcom,enable-gsi-dma` 致触摸/背光全失败（mainline 6.18.2，2026-05-30）**：mainline base board dts 给 i2c13（"External touchscreen" bus）声明了 `qcom,enable-gsi-dma`，GSI/GPI DMA 模式对 sec_ts(0x48)/sgm37604a(0x36) 的小事务**全部 `GPI transfer failed: -5`** → sec_ts 读 device id 全 0（应 AC,6F,70）、背光写失败。default 产物 i2c13 无从机不触发传输故不暴露。`fdtoverlay` 不支持 `/delete-property/`（libfdt overlay apply 纯加性、无删除编码），且布尔属性没法用赋值中和，故只能 patch base dts：`patches/kernel/0003` 删该行 → geni i2c 回退 FIFO 模式，触摸/背光恢复（对 default 无害）。
 
     > **⚠️ 7.0.2 更正（2026-06-01，已实机验证）**："删 `qcom,enable-gsi-dma` 即回退 FIFO"在 **mainline 7.0.2 不再成立**。7.0.2 的 `i2c-qcom-geni` probe 仅当 `proto==GENI_SE_INVALID_PROTO`（SE 未初始化）才调 `geni_load_se_firmware()`，而该 flag 的**唯一读取点**就在此函数内（i2c 驱动本身不读它，只读硬件 `GENI_IF_DISABLE_RO & FIFO_IF_DISABLE`）。bootloader（对齐 radxa rsdk）现把 SE5 预 provision 成 I2C-GSI（`proto==I2C`、`FIFO_IF_DISABLE` 置位），probe 跳过重载 → `0003` 删的 flag 永不被读、SE 仍 GSI（活动 DT 已确认 flag ABSENT 但仍 GSI）。对照 `i2c10`(RTC, SE3, 声明 gsi-dma) 的 GSI 正常 → 是 SE5 的 GSI provision 坏。**修复 = `patches/kernel/0006-i2c-geni-force-fifo-on-gsi-mismatch.patch`**：probe 里当 DT 无该 flag 但 SE 起来是 GSI 时强制重调 `geni_load_se_firmware(GENI_SE_I2C)` 回 FIFO（`0003` 保留，删 flag 是 0006 触发条件之一）。实机：device id `0,0,0`→`AC,6F,70`、`GPI transfer failed` 48→0、触摸 IRQ 0→430+evtest 识别、背光亮、`i2c10` 不回归、零 oops。**验证坑**：`i2c_qcom_geni` 不能 `rmmod` 热插（扯崩 i2c-13 背光→panel→DRM、内核 Oops），须替换 `/lib/modules/<ver>/.../i2c-qcom-geni.ko.zst`（`MODULE_SIG` 未开免签名）+ 重启；补丁在**模块**里不在 vmlinuz。详见记忆 `qcs6490-touch-i2c13-gsi-fifo`、change `fix-qcs6490-touch-i2c13-fifo`。
+
+    > **⚠️ 再更正（2026-09-27）**：上文"`i2c10` 的 GSI 正常"只在 EL1 下成立。`260120` 固件 + EL2 时，`i2c10` 申请 GPI 通道即同步外部中止、系统无法启动。现由 `0007` 删除 `i2c10` 的 flag，`i2c10` 同样经 `0006` 走 FIFO。见上文"EL2 启动与 GPI DMA"与 change `fix-qcs6490-i2c10-fifo-el2`。
 
 ## 易踩坑
 

@@ -673,3 +673,7 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 现行 schema 取消综合页 1200 非空白字符上限，拆页只以导航和主题边界为依据；新增“信息保全优先”原则，要求整理前后逐项确认唯一信息的保留或迁移去向。初次建库计划中的 600/1200 字规则保留为历史记录，但已明确标注失效。
 
 [[adbd]]、[[atk-rk3506b]]、[[radxa-dragon-q6a]]、[[qualcommqcs6490 平台]] 四页从 commit `e23fd87b` 恢复压缩前全文，再以新增章节补充 udev/systemd 自愈、fluxion product、QCS6490 7.0.2 当前基线和 UFS 初始化流程。早期验收、硬件约束、排障过程与版本迁移记录均保留；过时结论通过当前基线说明限定适用范围，不再用摘要覆盖原文。
+
+## [2026-09-27] sync | Radxa Dragon Q6A EL2 下 i2c10 改走 FIFO
+
+[[radxa-dragon-q6a]] 新增"EL2 启动与 GPI DMA"：`260120` 固件开启 `Hypervisor Override` 后，Radxa UEFI 自行给 GRUB 加载的 DTB 套用 KVM fixup，Linux 以 EL2 启动；此时 `i2c10`（RTC）申请 GPI 通道，在 `gpi_config_interrupts()` 读 gpii 1 的 MSI 寄存器处同步外部中止，系统无法启动。新增 `patches/kernel/0007` 删除 `i2c10` 的 `qcom,enable-gsi-dma`，由 `0006` 重 provision 回 FIFO，Q6A 不再使用 GPI。坑#11 原文"`i2c10` 的 GSI 正常"保留，并追加"仅 EL1 成立"的再更正。change `fix-qcs6490-i2c10-fifo-el2`。
