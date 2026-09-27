@@ -135,6 +135,7 @@ SCM SHM bridge 与 venus `video-firmware`（Q6A KVM overlay）。实板：
 
 - `CPU: All CPU(s) started at EL2`，`/dev/kvm` 出现；启动到 rootfs，UFS 无复位，无失败单元。
 - venus 硬件编解码可用（见上表）；usbmoded 开机 12 s 内自动进入 `debug`。
+- Wi-Fi 连网与蓝牙：2026-09-27 实板复验通过；Renesas USB3 与 CDC-NCM 以太网正常枚举。
 - LT9611 探测成功（revision 0xe2），msm DRM 与 Adreno 初始化（`card1` / `renderD128`）。此前 EL1 下
   同样探测失败——DTS 把 DSI 接到 port@1 却缺少上游驱动补丁 `e8bd92c4a0d2`，已补为 kernel patch 0003。
 - **ADSP / CDSP 在 EL2 下离线**：补齐 `iommus` 后越过 PAS 初始化的 `-22`，但卡在
@@ -172,5 +173,5 @@ SCM SHM bridge 与 venus `video-firmware`（Q6A KVM overlay）。实板：
 - GRUB `devicetree` 与 UEFI dtb_a 两条 DTB 路径在本板 UEFI 上的实际行为
 - 音频（LPASS LPI pinctrl `Failed to get clk 'core'`，EL1 / EL2 均存在）；Type-C UCSI 端口注册
 - HDMI 实际出图、desktop GNOME、GPU 渲染
-- 蓝牙扫描；以太网链路；USB3 Type-A 外设；Type-C host 模式（Wi-Fi 已联网取得地址并完成 apt 安装）
+- 以太网链路；USB3 Type-A 外设；Type-C host 模式
 - ADSP 音频、风扇温控

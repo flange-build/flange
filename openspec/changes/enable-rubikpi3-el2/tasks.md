@@ -9,11 +9,11 @@
 
 ## 2. 构建与实板验收
 
-- [ ] 2.1 Docker 构建 default/desktop，核对 DTB 合并结果与 flash-config（1 小时）
+- [x] 2.1 Docker 构建 default/desktop，核对 DTB 合并结果与 flash-config（1 小时）
 - [x] 2.2 全量刷写后确认 `/dev/kvm` 出现、启动到 rootfs、UFS 无复位（1 小时）
 - [x] 2.3 验证 venus 硬件编码 H.264/HEVC 与解码不回退（1 小时）
-- [ ] 2.4 复验 usbmoded、Wi-Fi、蓝牙、Renesas USB3 在 EL2 下正常（1 小时）
-- [ ] 2.5 验证 ADSP/CDSP 在 EL2 下 running、LT9611 探测成功且 msm DRM 初始化（1 小时）
+- [x] 2.4 复验 usbmoded、Wi-Fi、蓝牙、Renesas USB3 在 EL2 下正常（1 小时）
+- [x] 2.5 验证 ADSP/CDSP 在 EL2 下 running、LT9611 探测成功且 msm DRM 初始化（1 小时）——LT9611 与 msm DRM 通过；DSP 受 TZ 限制在 EL2 下离线，改由 `el1` product 提供（见 3.1–3.5）
 
 ## 3. 固件实验与 product 拆分
 
@@ -30,3 +30,5 @@ msm DRM + Adreno 初始化、usbmoded、蓝牙 hci0、Renesas USB3 与以太网�
 实板记录（2026-09-27，el1-release，main 固件）：EL1 启动、无 `/dev/kvm`，ADSP/CDSP running，
 LT9611 + msm DRM 正常，usbmoded 自动进入 debug。Type-C UCSI 端口在 EL1 下同样未注册，与 EL 无关，
 另行排查。
+
+实板记录（2026-09-27，EL2）：Wi-Fi 连网与蓝牙由用户在实板复验通过。
