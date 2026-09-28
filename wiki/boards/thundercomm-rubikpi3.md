@@ -156,11 +156,27 @@ EL2 下 DSP 的固件实验：
 7.0.11 的 mainline iris 已支持 sc7280 的 Gen2 固件，但只开了解码。实验前已备份板载 `usb_fw`
 （1 MiB ext4，含 `renesas_usb_fw.mem`）。
 
+## 验收补充（2026-09-28，default-debug）
+
+| 项 | 结果 |
+|---|---|
+| Wi-Fi 连网 | ✓ 5 GHz（5805 MHz），信号 -26 dBm，tx 433 Mbit/s；DHCP、DNS、网关/外网 ping、HTTPS 均正常 |
+| HDMI（LT9611）出图 | ✓ 接显示器后连接器 `connected`、EDID 正常（首选 1920×1080@60，另有 4K30）；`kmscube` 在 HDMI 上出图，用户目视确认 |
+| GPU 渲染（drm/msm + Mesa） | ✓ freedreno FD643（GL 4.6 / GLES 3.2）、turnip（Vulkan 1.3）；EGL surfaceless 离屏绘制 1000 次后读回像素正确 |
+| 以太网、USB3 Type-A 外设、冷启动 | ✓ 用户实测正常 |
+| 热重启 | ✓ `systemctl reboot` 后回到 running，DSP 与视频驱动恢复，两次启动均无 UFS 错误 |
+| 音频播放 | ✗ 声卡 `qcm6490-idp-snd-card` 已注册、ES8316 耳机通路可配，但原生 ALSA 写 `hw:0,2` 返回 `-EINVAL`：LPAIF 接口要由高通闭源 AGM/PAL 用户态先在 ADSP 上建立 AudioReach 音频图 |
+| Type-C UCSI | ✗ `ucsi_glink`/`pmic_glink` 已加载，`/sys/class/typec` 仍为空（mainline 下同样如此） |
+
+- 厂商 `qcom_defconfig` 关闭了 `CONFIG_DRM_FBDEV_EMULATION`，没有 fbcon，headless 镜像开机时 HDMI 不显示控制台
+  （Yocto 靠 Weston 出图）；有 DRM 客户端（如 `kmscube`、桌面合成器）时正常出图。暂不打开。
+- Mesa 25 在厂商 6.6 的 msm uapi 上会提示 `Failed to set BO metadata with DRM_MSM_GEM_INFO: -22`，不影响渲染与出图。
+
 ## 待验收
 
-- Wi-Fi 连网（扫描已通过；bcmdhd 使用固件内嵌 CLM，特定国家信道/功率表未验证）
-- HDMI（LT9611）实际出图、desktop GNOME、GPU 渲染（drm/msm + Mesa）
-- 音频播放（声卡已注册）；Type-C UCSI 端口注册
-- 以太网链路；USB3 Type-A 外设；Type-C host 模式
+- desktop product：GNOME 桌面
+- 音频播放（需要 AGM/PAL 用户态，或改走可由 ALSA 直接驱动的音频路径）
+- Type-C UCSI 端口注册；Type-C host 模式（厂商 DT 为 `dr_mode=otg`，切换会断开 adb，未测）
 - 摄像头（camera-kernel 模块、camera DT 与 CamX 均未集成）
-- UFS 长时间稳定性与冷/热重启
+- Wi-Fi 特定国家信道/功率表（bcmdhd 使用固件内嵌 CLM）
+- UFS 长时间稳定性

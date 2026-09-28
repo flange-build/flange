@@ -6,6 +6,10 @@
 
 ---
 
+## [2026-09-28] sync | RUBIK Pi 3 厂商内核下的外设验收
+
+[[thundercomm-rubikpi3]]（default-debug，厂商内核 6.6.90，EL1）补充验收：Wi-Fi 连 5 GHz 并通外网，HDMI 经 LT9611 由 `kmscube` 出图（用户目视），GPU 离屏渲染读回正确，以太网、USB3 外设、冷/热启动正常。未通过：音频播放（LPAIF 需要高通 AGM/PAL 用户态建立 ADSP 音频图，原生 ALSA 返回 `-EINVAL`）、Type-C UCSI 端口仍未注册。厂商配置未开 `CONFIG_DRM_FBDEV_EMULATION`，headless 镜像开机 HDMI 无控制台，暂不打开。
+
 ## [2026-09-28] sync | Q6A 默认进 EL2（UEFI Auto + KVM 组合 DTB）
 
 [[radxa-dragon-q6a]] 的 `device_tree.name` 改为内核构建的组合 DTB `qcs6490-radxa-dragon-q6a-kvm`（base 叠加 Radxa `qcs6490-radxa-dragon-q6a-kvm.dtso`，含 `/chosen/radxa,enable-kvm = <1>` 与 EL2 设备树修正），与 Radxa rsetup 开启 KVM 的方式一致。UEFI `Hypervisor Override` 出厂 `Auto` 即据此进 EL2 并预加载 DSP，此前「flange 默认 EL2 为待解项」已解决；不再支持 `Disabled`（EL1 下 GPU 与视频不可用）。用户实板验证通过。
