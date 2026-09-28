@@ -41,6 +41,9 @@ from builder.rootfs_base import (
 # 严格性检查一致；权限错则 sudo 直接拒绝读该文件，提权静默失败。
 _SUDOERS_D_MODE = 0o440
 
+# 使 sshd_config.d 下 drop-in 生效的主配置指令，与 Ubuntu 20.04+ 默认行一致。
+_SSHD_DROP_IN_INCLUDE = "Include /etc/ssh/sshd_config.d/*.conf"
+
 
 class RootfsBuilder(ComponentBuilder):
     """rootfs 构建器基类。
@@ -823,8 +826,10 @@ class RootfsBuilder(ComponentBuilder):
     def _write_sshd_no_root_drop_in(self, rootfs_dir: Path):
         """写入 /etc/ssh/sshd_config.d/10-flange.conf，禁 root SSH 登录。
 
-        sshd 加载顺序：/etc/ssh/sshd_config 末尾 ``Include sshd_config.d/*.conf``，
-        drop-in 设定覆盖主配置；ubuntu-base 默认即如此。
+        sshd 对同一关键字取**首个**出现的值，drop-in 必须经主配置开头的
+        ``Include`` 先于其他指令加载。Ubuntu 20.04 起的 OpenSSH 默认带这行；
+        18.04 的 OpenSSH 7.6 没有，drop-in 写了也不生效，所以缺失时在首行补上。
+        已包含时不修改主配置，保持发行版文件原样。
         """
         path = rootfs_dir / "etc" / "ssh" / "sshd_config.d" / "10-flange.conf"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -833,6 +838,18 @@ class RootfsBuilder(ComponentBuilder):
             "# adb 调试通道不受影响（adbd 不走 PAM）。\n"
             "PermitRootLogin no\n"
         )
+        main = rootfs_dir / "etc" / "ssh" / "sshd_config"
+        if main.is_file() and not self._sshd_includes_drop_ins(main):
+            main.write_text(f"{_SSHD_DROP_IN_INCLUDE}\n" + main.read_text())
+
+    @staticmethod
+    def _sshd_includes_drop_ins(main: Path) -> bool:
+        for line in main.read_text().splitlines():
+            words = line.split()
+            if len(words) == 2 and words[0].lower() == "include":
+                if words[1] == _SSHD_DROP_IN_INCLUDE.split()[1]:
+                    return True
+        return False
 
     def _set_root_password_in_chroot(self, chroot, password: str):
         """在已打开的 chroot 上下文中设置 root 密码。
@@ -922,6 +939,9 @@ class RootfsBuilder(ComponentBuilder):
         content = path.read_text()
         if "PermitRootLogin no" not in content:
             raise RuntimeError(f"sshd drop-in 内容异常，缺少 'PermitRootLogin no': {path}")
+        main = rootfs_dir / "etc" / "ssh" / "sshd_config"
+        if main.is_file() and not self._sshd_includes_drop_ins(main):
+            raise RuntimeError(f"{main} 未加载 sshd_config.d，drop-in 不会生效")
 
     def _install_panel_firmware(self, rootfs_dir: Path, config: dict):
         """编译并安装 panel firmware（mainline panel-mipi-dbi-spi 兼容）。
