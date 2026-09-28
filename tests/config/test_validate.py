@@ -136,6 +136,20 @@ class TestCanonicalConfig:
         with pytest.raises(ConfigError, match=message):
             validate_canonical_config(config)
 
+    @pytest.mark.parametrize(
+        ("component", "value", "message"),
+        [
+            ("rootfs", "nvidia-l4t-core", "必须是列表"),
+            ("recovery", ["nvidia-l4t-core"], "未知字段"),
+        ],
+    )
+    def test_phase2_packages_shape(self, component, value, message):
+        config = _canonical_config()
+        config[component] = {"phase2_packages": value}
+
+        with pytest.raises(ConfigError, match=message):
+            validate_canonical_config(config)
+
     def test_extra_deb_requires_sha256(self):
         config = _canonical_config()
         config["rootfs"] = {

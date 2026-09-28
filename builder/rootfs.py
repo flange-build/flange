@@ -4,6 +4,7 @@
   - apply_overlays：platform overlay → board overlay 两层覆盖
   - extra_apt_sources：写入外部 APT 源和 GPG key，供 Phase 1 apt-get update 前使用
   - extra_debs：下载第三方 deb 并安装
+  - phase2_packages：Phase 2 在外部 deb 之后用 APT 安装依赖平台前置条件的包
   - extra_firmware：从外部仓库拉取固件文件并写入 rootfs
   - panel_firmware：把板级 panel init 文本源编译为 panel.bin 写入 rootfs
   - configure_default_locale：写入系统默认 locale
@@ -18,6 +19,7 @@ import json
 import math
 import shutil
 from pathlib import Path
+from builder.apt import AptCache
 from builder.base import ComponentBuilder
 from builder.chroot import ChrootContext
 from builder.config.canonical import kernel_headers_package
@@ -168,9 +170,10 @@ class RootfsBuilder(ComponentBuilder):
             raise BuildError("base 构建期间输入变化，拒绝保存快照")
 
     def _build_phase2(self, rootfs_dir: Path, config: dict) -> None:
-        """custom deb → extra deb → 模块 → headers → 固件 → overlay → locale → 账号。"""
+        """custom deb → extra deb → Phase 2 APT 包 → 模块 → headers → 固件 → overlay → locale → 账号。"""
         self._install_app_debs(rootfs_dir, config)
         self._install_extra_debs(rootfs_dir, config)
+        self._install_phase2_packages(rootfs_dir, config)
         self._install_kernel_modules(rootfs_dir, config)
         self._install_kernel_headers(rootfs_dir, config)
         self._install_extra_firmware(rootfs_dir, config)
@@ -550,6 +553,32 @@ class RootfsBuilder(ComponentBuilder):
                 )
             chroot.run(["ldconfig"], label="ldconfig...")
         shutil.rmtree(deb_tmp)
+
+    def _install_phase2_packages(self, rootfs_dir: Path, config: dict) -> None:
+        """安装 ``phase2_packages``：依赖 Phase 2 前置条件、不能进共享 Phase 1 的 APT 包。
+
+        典型场景是 NVIDIA L4T 包：preinst 在 chroot 里读不到
+        ``/proc/device-tree``，必须由平台子类先放置标记文件，而 Phase 1 是所有
+        平台共享的基础快照，没有也不应有平台钩子。
+
+        Phase 1 结尾 ``apt-get clean`` 后快照里的索引可能已经过期，这里先
+        ``apt-get update`` 再安装；APT 下载与 Phase 1 共用同一 AptCache 与锁。
+        字段只在 rootfs 组件指纹中，不进入 Phase 1 基础快照身份。
+        """
+        packages = self._component_config(config).get("phase2_packages") or []
+        if not packages:
+            return
+        if self.context is None:
+            raise RuntimeError("rootfs 构建必须注入 WorkspaceContext")
+        apt_cache = AptCache(self.context.build_root / "cache/apt")
+        with apt_cache.locked(), ChrootContext(rootfs_dir, self.docker) as chroot:
+            chroot.bind_mount(str(apt_cache.archives), rootfs_dir / "var/cache/apt/archives")
+            chroot.run(["apt-get", "update"], label="apt-get update（Phase 2）...")
+            chroot.run(
+                self._apt_install_command(packages, config),
+                label=f"安装 {len(packages)} 个 Phase 2 包...",
+            )
+            chroot.run(["apt-get", "clean"])
 
     def _install_extra_firmware(self, rootfs_dir: Path, config: dict):
         """从 canonical source 引用安装额外固件。"""

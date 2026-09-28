@@ -161,6 +161,8 @@ ROOTFS = Object(
         "hostname": STRING,
         "custom_packages": STRINGS,
         "packages": STRINGS,
+        # Phase 2 在外部 deb 之后安装的 APT 包；只进 rootfs 组件指纹，不进 Phase 1 快照。
+        "phase2_packages": STRINGS,
         "package_set": STRINGS,
         "package_sets": Map(STRINGS),
         "default_locale": Object({"lang": STRING, "language": STRING}, ("lang", "language")),
