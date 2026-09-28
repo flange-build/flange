@@ -111,6 +111,70 @@ def _validate_ufs_firmware(bootloader: dict) -> None:
             raise ConfigError(f"bootloader.ufs_file_overrides.{referenced} 不能替换为自身")
 
 
+# tegraflash.py 的 BCT 配置参数（去掉 `--` 前缀）。只接受 T186 刷写实际使用的这组，
+# 拼错的参数名在宿主机上才会被 tegraflash 拒绝，届时设备已在 Recovery 中等待。
+_TEGRAFLASH_BCT_ARGS = {
+    "sdram_config", "misc_config", "pinmux_config", "pmic_config", "pmc_config",
+    "prod_config", "scr_config", "scr_cold_boot_config", "br_cmd_config", "dev_params",
+}
+
+
+def _flash_file_name(value: str, path: str) -> None:
+    """tegraflash 在刷写目录内按裸文件名引用文件。"""
+    if PurePosixPath(value).name != value or value in (".", ".."):
+        raise ConfigError(f"{path} 必须是刷写目录中的单个文件名，不能包含目录")
+
+
+def _bsp_relative_path(value: str, path: str) -> None:
+    candidate = PurePosixPath(value)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise ConfigError(f"{path} 必须是相对 BSP 根目录的路径，不能以 / 开头或包含 ..")
+
+
+def _validate_tegraflash(bootloader: dict) -> None:
+    """tegraflash 事实在构建前做形状以外的检查，避免错误拖到宿主刷写时才暴露。"""
+    tegraflash = bootloader["tegraflash"]
+    base = "bootloader.tegraflash"
+    if "l4t_bsp" not in bootloader:
+        raise ConfigError(f"{base} 需要同时声明 bootloader.l4t_bsp（提供这些文件的 BSP 包）")
+    for field in ("chip", "odmdata"):
+        if not re.fullmatch(r"0x[0-9a-fA-F]+", tegraflash[field]):
+            raise ConfigError(f"{base}.{field} 必须是 0x 开头的十六进制数")
+    for field in ("bl", "applet"):
+        _flash_file_name(tegraflash[field], f"{base}.{field}")
+    for field in ("layout_template", "uboot"):
+        _bsp_relative_path(tegraflash[field], f"{base}.{field}")
+
+    unknown = sorted(set(tegraflash["bct_configs"]) - _TEGRAFLASH_BCT_ARGS)
+    if unknown:
+        raise ConfigError(
+            f"{base}.bct_configs 包含 tegraflash 不支持的参数: {', '.join(unknown)}；"
+            f"可选: {', '.join(sorted(_TEGRAFLASH_BCT_ARGS))}"
+        )
+    for name, filename in tegraflash["bct_configs"].items():
+        _flash_file_name(filename, f"{base}.bct_configs.{name}")
+
+    seen_types = set()
+    for index, entry in enumerate(tegraflash["bins"]):
+        if entry["type"] in seen_types:
+            raise ConfigError(f"{base}.bins[{index}].type 重复: {entry['type']}")
+        seen_types.add(entry["type"])
+        _flash_file_name(entry["file"], f"{base}.bins[{index}].file")
+
+    seen_names: dict[str, str] = {}
+    for index, relative in enumerate(tegraflash.get("extra_files") or []):
+        _bsp_relative_path(relative, f"{base}.extra_files[{index}]")
+        name = PurePosixPath(relative).name
+        if name in seen_names:
+            raise ConfigError(
+                f"{base}.extra_files[{index}] 与 {seen_names[name]} 在刷写目录中同名: {name}"
+            )
+        seen_names[name] = relative
+
+    if not tegraflash["identity"]["fabs"]:
+        raise ConfigError(f"{base}.identity.fabs 至少声明一个已验证的模块 FAB")
+
+
 def _validate_source_ref(ref, sources: dict, path: str) -> None:
     if not isinstance(ref, dict):
         raise ConfigError(f"{path} 必须是字典")
@@ -251,7 +315,8 @@ def validate_canonical_config(config: dict) -> None:
 
     bootloader = config.get("bootloader") or {}
     for field in (
-        "edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose", "recovery_firmware"
+        "edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose", "recovery_firmware",
+        "l4t_bsp",
     ):
         descriptor = bootloader.get(field)
         if descriptor is not None:
@@ -260,6 +325,8 @@ def validate_canonical_config(config: dict) -> None:
         _validate_download_descriptor(descriptor, f"bootloader.ufs_provisions.{name}")
     if {"ufs_rawprogram", "ufs_patch", "ufs_file_overrides"} & set(bootloader):
         _validate_ufs_firmware(bootloader)
+    if "tegraflash" in bootloader:
+        _validate_tegraflash(bootloader)
 
     rootfs = config.get("rootfs") or {}
     if "hostname" in rootfs:

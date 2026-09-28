@@ -97,6 +97,7 @@ class TestCanonicalConfig:
         [
             ("edk2_firmware", {"url": "https://example.com/edk2.zip"}),
             ("toolchain", {"url": "https://example.com/gcc.tar.xz"}),
+            ("l4t_bsp", {"url": "https://example.com/l4t.tbz2"}),
         ],
     )
     def test_bootloader_download_requires_sha256(self, field, value):
@@ -132,6 +133,58 @@ class TestCanonicalConfig:
             bootloader if message == "edk2_firmware"
             else {"edk2_firmware": firmware, **bootloader}
         )
+
+        with pytest.raises(ConfigError, match=message):
+            validate_canonical_config(config)
+
+    @staticmethod
+    def _tegraflash_bootloader() -> dict:
+        return {
+            "l4t_bsp": {"url": "https://example.com/l4t.tbz2", "sha256": "0" * 64},
+            "tegraflash": {
+                "chip": "0x18",
+                "odmdata": "0x1090000",
+                "bl": "nvtboot_recovery_cpu.bin",
+                "applet": "mb1_recovery_prod.bin",
+                "layout_template": "bootloader/t186ref/cfg/flash_l4t_t186.xml",
+                "layout_tokens": {"MB1NAME": "mb1", "APPUUID": ""},
+                "bct_configs": {"sdram_config": "sdram.cfg", "dev_params": "emmc.cfg"},
+                "bins": [
+                    {"type": "mb2_bootloader", "file": "nvtboot_recovery.bin"},
+                    {"type": "bpmp_fw", "file": "bpmp.bin"},
+                ],
+                "extra_files": ["bootloader/t186ref/BCT/sdram.cfg"],
+                "uboot": "bootloader/t186ref/p2771-0000/500/u-boot.bin",
+                "identity": {"board_id": "3310", "board_sku": "1000", "fabs": ["B02"]},
+            },
+        }
+
+    def test_tegraflash_minimal_passes(self):
+        config = _canonical_config()
+        config["bootloader"] = self._tegraflash_bootloader()
+
+        validate_canonical_config(config)
+
+    @pytest.mark.parametrize(
+        ("mutate", "message"),
+        [
+            (lambda b: b.pop("l4t_bsp"), "l4t_bsp"),
+            (lambda b: b["tegraflash"].update(chip="18"), "十六进制"),
+            (lambda b: b["tegraflash"].update(bl="sub/nvtboot.bin"), "单个文件名"),
+            (lambda b: b["tegraflash"].update(uboot="/abs/u-boot.bin"), "相对 BSP"),
+            (lambda b: b["tegraflash"]["extra_files"].append("../escape.cfg"), "相对 BSP"),
+            (lambda b: b["tegraflash"]["extra_files"].append("kernel/dtb/sdram.cfg"), "同名"),
+            (lambda b: b["tegraflash"]["bct_configs"].update(pinmux="p.cfg"), "不支持的参数"),
+            (lambda b: b["tegraflash"]["bins"].append({"type": "bpmp_fw", "file": "b.bin"}),
+             "重复"),
+            (lambda b: b["tegraflash"]["identity"].update(fabs=[]), "至少声明"),
+        ],
+    )
+    def test_tegraflash_rejects_invalid_facts(self, mutate, message):
+        config = _canonical_config()
+        bootloader = self._tegraflash_bootloader()
+        mutate(bootloader)
+        config["bootloader"] = bootloader
 
         with pytest.raises(ConfigError, match=message):
             validate_canonical_config(config)
