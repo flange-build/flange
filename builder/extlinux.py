@@ -36,6 +36,7 @@ class LabelSpec:
     """
     name: str
     kernel: str                          # 例如 "/Image" 或 "/extlinux/Image"
+    initrd: str = ""                     # initramfs 路径；空值不输出 initrd 行
     fdt: str = ""                        # devicetree blob 路径
     fdt_directive: str = "fdt"           # "fdt" (Rockchip) 或 "devicetree" (Allwinner)
     fdtoverlays: list[str] = field(default_factory=list)
@@ -59,6 +60,8 @@ def render_extlinux(default_label: str, labels: list[LabelSpec]) -> str:
     for spec in labels:
         lines.append(f"label {spec.name}")
         lines.append(f"  kernel {spec.kernel}")
+        if spec.initrd:
+            lines.append(f"  initrd {spec.initrd}")
         if spec.fdt:
             lines.append(f"  {spec.fdt_directive} {spec.fdt}")
         if spec.fdtoverlays:
