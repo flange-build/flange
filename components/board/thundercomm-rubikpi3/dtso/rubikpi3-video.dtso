@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ */
+// RUBIK Pi 3 视频编解码设备树调整，构建期合并进厂商内核的 base DTB。
+//
+// 内容取自 CodeLinaro video-devicetree（video.qclinux.1.0.r1-rel @ 9f78e19）的
+// qcm6490-video.dtsi，即 Thundercomm Yocto（QLI 1.5）对本板合并的 qcm6490-video.dtbo：
+// 把 &venus 交给高通下游视频驱动（video-driver，iris_vpu.ko），并声明其非安全
+// context bank 的 SMMU 流。
+
+/dts-v1/;
+/plugin/;
+
+&venus {
+	compatible = "qcom,qcm6490-iris-vpu";
+	status = "okay";
+	interconnect-names = "iris-cnoc", "iris-ddr";
+	non-secure-cb {
+		compatible = "qcom,vidc,cb-ns";
+		iommus = <&apps_smmu 0x2180 0x20>;
+	};
+};

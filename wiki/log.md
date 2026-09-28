@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-09-27] sync | RUBIK Pi 3 改用 Yocto 同款厂商内核（EL1 下 DSP 与硬件编码同时可用）
+
+mainline 7.0.2 下 [[thundercomm-rubikpi3]] 无法同时拥有 DSP 与编码：EL1 下 venus（HFI Gen1）+ `vpu20_p1.mbn`（video-firmware 1.0）编码即复位，EL2 下 TZ 00126.1 不支持 `PAS_GET_RSCTABLE`，跳过资源表或换 TZ 00187 均失败。Thundercomm Yocto 参考镜像实为 EL1（`xbl_config.elf` == `xbl_config_gunyah.elf`）+ 下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），两边的内容保护区与 DMA mask 一致，差别在驱动与固件这一代。
+
+据此板级覆盖内核为 `rubikpi-ai/linux` 6.6.90 @ `a579877`（Yocto 同款 config 链，平台 mainline 补丁经 `exclude_patches` 排除），DTB 合并 Yocto 同款 video overlay（不合并 KGSL graphics、camera），`video-driver` 以 OOT 模块编出 `iris_vpu.ko`；统一 EL1，删除 `el1` product 与 EL2 dtso。实板（default-debug）：ADSP/CDSP running、FastRPC 往返成功，720p H.264 与 1080p HEVC 硬编不复位且硬解回读帧数一致，蓝牙、USB3 网卡、drm/msm、声卡注册正常。Wi-Fi 随厂商 config 改走 bcmdhd，rootfs 改装 `rubikpi3-firmware` 的 `fw_bcm43456c5_ag.bin`/`nvram.txt`/`config.txt`（与 Thundercomm Ubuntu 固件包一致；Yocto 的 CLM blob 来自不公开的高通固件包，未引入，dhd 使用固件内嵌 CLM），实板 2.4/5 GHz 扫描正常。同步 [[qualcommqcs6490 平台]] 与板卡索引。
+
 ## [2026-09-27] sync | Q6A EL2 下 ADSP / CDSP 实板验证
 
 Q6A（meizu-e3-bringup-debug，EL2）两个 DSP 均由启动固件预先拉起，内核 `qcom_q6v5_pas` 以 `attached` 状态接管，不加载 rootfs 里的 mbn；这与 [[thundercomm-rubikpi3]] 在 EL2 下由内核经 PAS 加载、卡在 TZ `PAS_GET_RSCTABLE` 不同。glink 通道与 QRTR 服务（ADSP node 5、CDSP node 10）齐全，FastRPC `GET_DSP_INFO` 与 `INIT_ATTACH` 在两个 DSP 上都成功，CDSP 报 v68 + HVX + HMX。未验证 DSP 崩溃后的恢复；声卡因缺少 topology 文件未实例化，开机有一次 APM `GET_SPF_STATE` 超时。

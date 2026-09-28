@@ -1,11 +1,12 @@
-// Thundercomm RUBIK Pi 3 板级配置：声明设备树、UFS 启动固件、板载无线固件与 product。
+// Thundercomm RUBIK Pi 3 板级配置：声明厂商内核、设备树、UFS 启动固件、板载无线固件与 product。
 // Thundercomm RUBIK Pi 3（Qualcomm QCS6490）板级配置 -- board overlay
 //
-// 与 radxa-dragon-q6a 同 SoC，复用 qualcommqcs6490 平台/SoC 层：主线内核
-// radxa/kernel@linux-7.0.2（已含 qcs6490-thundercomm-rubikpi3.dts）、开源 Mesa
-// freedreno/turnip、GRUB(grub-with-dtb) 启动、edl-ng 刷写。参考工程
-// thundercomm-qcom-linux（Yocto QLI 1.5：vendor 6.6.90 内核 + KGSL/Adreno 私有
-// 图形栈 + bcmdhd）只作为硬件事实来源，不沿用其 BSP 内核与私有用户态。
+// 与 radxa-dragon-q6a 同 SoC，复用 qualcommqcs6490 平台/SoC 层的 GRUB(grub-with-dtb) 启动、
+// LUN0 分区与 edl-ng 刷写；内核由本板覆盖为 Thundercomm Yocto（QLI 1.5）同款厂商内核
+// rubikpi-ai/linux 6.6.90。mainline 7.0.2 下本板无法同时拥有 DSP 与硬件编码（EL1 编码
+// 整机复位，EL2 下 TZ 不支持 PAS_GET_RSCTABLE、DSP 不启动）；厂商内核 + 高通下游视频驱动
+// 在 EL1 下两者都可用。GPU 仍走 drm/msm + Ubuntu Mesa，不引入 Yocto 的 KGSL 与闭源 Adreno
+// 用户态。详见 openspec/changes/align-rubikpi3-vendor-kernel。
 //
 // ## 启动固件位于 UFS（与 Q6A 的 SPI NOR 不同）
 //
@@ -14,64 +15,102 @@
 // dtb.bin，内含当前内核 DTB）与 LUN0 的 raw.img（ESP + rootfs）。详见
 // builder/flash/qualcomm_ufs.py。
 //
-// ## EL2（KVM）与 EL1（Gunyah）
+// ## EL1（Gunyah）
 //
-// 固件自带两种 xbl_config，只差 uefiplat 启动模式字节（01 Gunyah / 02 KVM），二选一，
-// 实板验证是硬取舍（avocado-linux 在同 SoC 上结论一致）：
-// - EL2：刷 xbl_config_kvm.elf，Linux 运行在 EL2（/dev/kvm），venus 硬件编码可用；
-//   ADSP / CDSP 离线——EL2 PAS 需 TZ 实现 PAS_GET_RSCTABLE，本板 main（TZ 00126.1）与
-//   qli2.0（TZ 00146）实测均返回 -5，Qualcomm 通用 00142（TZ 00187）在本板进内核即停。
-// - EL1：刷默认 xbl_config.elf，Linux 运行在 Gunyah 之下，ADSP / CDSP 正常；venus 硬件
-//   编码喂帧即整机复位（与 Q6A EL1 现象一致），解码可用。
-// 切换 product 会改写 LUN1/2 的 xbl_config，须重新全量 flange flash。
+// 刷写固件包默认 xbl_config.elf，Linux 运行在 Gunyah 之下，与 Yocto 参考镜像一致
+// （其 xbl_config.elf 与 xbl_config_gunyah.elf 逐字节相同）。由此前的 EL2 默认切换过来的
+// 设备须重新全量 flange flash，以改回 LUN1/2 的 xbl_config。
 //
 // ## product
 //
-// - default：无桌面（headless），EL2；经串口 ttyMSM0 / adb / SSH 访问。
-// - desktop：启用 ubuntu-desktop 硬件特性包（GNOME，HDMI 经 LT9611 桥输出），EL2。
-// - el1：无桌面，EL1（Gunyah），需要 ADSP / CDSP 时使用。
+// - default：无桌面（headless）；经串口 ttyMSM0 / adb / SSH 访问。
+// - desktop：启用 ubuntu-desktop 硬件特性包（GNOME）。
 local product = std.extVar('product');
-local el2 = product != 'el1';
 
 {
   board: 'thundercomm-rubikpi3',
   platform: 'qualcommqcs6490',
   soc: 'qcs6490',
-  products: ['default', 'desktop', 'el1'],
+  products: ['default', 'desktop'],
   variants: ['debug', 'release'],
   packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
-    // AP6256（BCM43456 / BCM4345C5）brcmfmac 固件与 CLM：与 radxa-dragon-q6a 的
-    // radxa-firmware-qcs6490 同 commit；orangepi-cm4 已在主线 brcmfmac 上实证这对
-    // bin + clm_blob（缺 clm_blob 时无法 set country、扫不到 AP）。
-    'radxa-firmware': {
-      url: 'https://github.com/radxa-pkg/radxa-firmware.git',
-      commit: '9915f1b39fb4f43807085917543dec4858820380',
+    // Thundercomm Yocto 的 linux-qcom-custom 内核树（基于 CLO kernel.qclinux.1.0.r1-rel
+    // c4b8666c，含 RUBIK Pi 3 DTS、LT9611 与 rubikpi3.config）。钉住参考工程
+    // qcom-multimedia-image 构建所用的 commit，与已知可用的镜像逐字对齐。
+    'rubikpi-linux': {
+      url: 'https://github.com/rubikpi-ai/linux.git',
+      branch: 'main',
+      commit: 'a579877ac6b4afc6df09d8e53564dfb08d9d693f',
     },
-    // Thundercomm 为本板 Ubuntu/Debian 发布的固件包：AP6256 板级 NVRAM
-    // （V1.4，含本板天线功率校准）与更新版 BT patchram。与参考工程 QLI 1.5
-    // rootfs 中的 nvram.txt / BCM4345C5.hcd 逐字节一致。
+    // 高通下游视频驱动（msm_vidc，HFI Gen2），Yocto qcom-videodlkm 同款。
+    'qcom-video-driver': {
+      url: 'https://git.codelinaro.org/clo/le/platform/vendor/opensource/video-driver.git',
+      branch: 'video.qclinux.1.0.r1-rel',
+      commit: '80f2b25ae580d0cd8cf30ac5e299d7d526e3e995',
+    },
+    // Thundercomm 为本板 Ubuntu/Debian 发布的固件包：AP6256 的 bcmdhd 固件、板级 NVRAM
+    // （V1.4，含本板天线功率校准）、dhd config.txt 与 BT patchram。fw 与 nvram 与参考工程
+    // QLI 1.5 rootfs 逐字节一致。
     'rubikpi3-firmware': {
       url: 'https://github.com/rubikpi-ai/rubikpi3-firmware.git',
       commit: '040261c20ef198bae98eecaba4eb70c614f02984',
     },
   },
   kernel+: {
-    // 主线 DTB 位于 radxa/kernel@linux-7.0.2 的 arch/arm64/boot/dts/qcom/。
-    // 板级 patches/kernel/ backport 两个上游 DTS 修复（LT9611 DSI Port B、
-    // USB QMP PHY 供电对调）。外设驱动（brcmfmac、hci_uart bcm、LT9611、
-    // xhci-pci-renesas、AX88179、pwm-fan、ES8316）已由 SoC 层 defconfig 链启用。
-    // EL2 product 构建期合并 dtso/rubikpi3-el2.dtso（GPU zap、DSP / venus SMMU 流、
-    // watchdog、SCM SHM bridge），见文件头；EL1 使用未修改的 base DTB。
-    device_tree+: { name: 'qcs6490-thundercomm-rubikpi3' } +
-                  (if el2 then { build_overlays: ['rubikpi3-el2.dtbo'] } else {}),
+    source: { name: 'rubikpi-linux' },
+    // 与 Yocto recipe 的 KERNEL_CONFIG + KERNEL_CONFIG_FRAGMENTS 顺序一致；SoC 层
+    // kernel.config（UFS / QMP PHY / USB gadget builtin 等）继续在其后覆盖。
+    // Yocto 仅在 DEBUG_BUILD 时追加的 qcom_debug.config 不引入：flange 的 variant 只区分 rootfs。
+    defconfig: ['qcom_defconfig', 'qcom_addons.config', 'rubikpi3.config'],
+    // 平台层补丁针对 radxa/kernel 7.0.2 与 Q6A DTS，不适用于厂商树。
+    exclude_patches: [
+      '0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch',
+      '0002-dts-radxa-dragon-q6a-usb1-peripheral-for-adb.patch',
+      '0003-dts-radxa-dragon-q6a-i2c13-drop-gsi-dma-for-panel.patch',
+      '0004-feat-radxa-common-kernel-config.patch',
+      '0005-feat-radxa-custom-kernel-config.patch',
+      '0006-i2c-geni-force-fifo-on-gsi-mismatch.patch',
+      '0007-dts-radxa-dragon-q6a-i2c10-drop-gsi-dma.patch',
+    ],
+    // 厂商树 arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dts。构建期合并
+    // Yocto 同款 video overlay；不合并 KGSL graphics overlay（会把 GPU 改为 qcom,kgsl）、
+    // camera overlay 与 rubikpi3-overlay.dtbo（其四个 dtsi 中只有 camera 有内容）。
+    device_tree+: {
+      name: 'qcs6490-thundercomm-rubikpi3',
+      build_overlays: ['rubikpi3-video.dtbo'],
+    },
+    oot_sources: {
+      'video-driver': { source: { name: 'qcom-video-driver' } },
+    },
+    // 驱动内建全部平台表，按 DT compatible qcom,qcm6490-iris-vpu 绑定，加载
+    // qcom/vpu-2.0/vpu20_1v.mbn（video-firmware 2.4.2，rootfs 由 linux-firmware-dragonwing
+    // 提供）。Makefile 的 modules 目标经 KERNEL_SRC 调用内核 kbuild，VIDEO_KERNEL_ROOT 自行设置；
+    // Kbuild 另引用 KERNEL_ROOT 作为头文件目录。
+    oot_modules: [{
+      label: 'CodeLinaro video-driver (iris_vpu)',
+      dir: '{video_driver_src}',
+      pre_build: [
+        // 固定 commit 已命中时 SourceManager 不重复 reset；先还原前次改动，保证幂等。
+        'git -C {video_driver_src} checkout -- .',
+      ],
+      make_args: [
+        'KERNEL_SRC={kernel_src_abs}',
+        'KERNEL_ROOT={kernel_src_abs}',
+        'ARCH={arch}',
+        'CROSS_COMPILE={cross_compile}',
+        'modules',
+      ],
+      ko_pattern: ['{video_driver_src}/iris_vpu.ko'],
+    }],
   },
   boot+: {
     // 高通启动链不支持运行期 overlay，板私有 overlay 只作为构建期合并来源。
-    overlays+: { board+: if el2 then ['rubikpi3-el2.dtbo'] else [] },
-    // pcie_pme=nomsi：Thundercomm 全部发行版 cmdline 均带，规避 qcom PCIe PME 走
-    // MSI 的问题；deferred_probe_timeout=30：msm-mdss 在 LT9611 探测前（约
-    // 17-18s）放弃会导致没有 /dev/dri/card0（meta-qcom-3rdparty rubikpi3.conf 同款）。
+    overlays+: { board+: ['rubikpi3-video.dtbo'] },
+    // pcie_pme=nomsi：Thundercomm 全部发行版 cmdline 均带（Yocto KERNEL_CMDLINE_EXTRA 同款），
+    // 规避 qcom PCIe PME 走 MSI 的问题；deferred_probe_timeout=30：给 msm-mdss 等待 LT9611
+    // 探测留出时间（meta-qcom-3rdparty rubikpi3.conf 同款）。Yocto 的 kpti/rcu/kasan/swiotlb/
+    // net.ifnames 等性能与命名参数不引入。
     kernel_args: super.kernel_args + ' pcie_pme=nomsi deferred_probe_timeout=30',
   },
   rootfs+: {
@@ -80,32 +119,25 @@ local el2 = product != 'el1';
     packages+: ['bluez'],
     extra_firmware+: [
       {
-        // brcmfmac 按 chip BCM4345/9 请求 brcm/brcmfmac43456-sdio.*；bin 与
-        // clm_blob 必须同源同版本。
-        name: 'rubikpi3-ap6256-wifi',
-        source: { name: 'radxa-firmware', subpath: 'radxa-firmware/lib/firmware' },
-        files: ['brcm/brcmfmac43456-sdio.bin', 'brcm/brcmfmac43456-sdio.clm_blob'],
-        dest: 'lib/firmware',
-      },
-      {
-        // brcmfmac 优先查找以 DT 根 compatible 命名的板级 NVRAM；btbcm 查找
-        // brcm/BCM4345C5.hcd。
-        name: 'rubikpi3-ap6256-board',
+        // 厂商 config 启用 bcmdhd（brcmfmac 关闭）：dhd 按芯片在 /lib/firmware 查找
+        // fw_bcm43456c5_ag.bin、nvram.txt 与 config.txt（autocountry、ccode=XZ）。与
+        // rubikpi3-firmware 的 Makefile install 布局一致；Yocto 另带的
+        // clm_bcm43456c5_ag.blob 来自不公开的 QCM6490_fw.zip，缺失时 dhd 使用固件内嵌 CLM。
+        // btbcm 查找 brcm/BCM4345C5.hcd。
+        name: 'rubikpi3-ap6256',
         source: { name: 'rubikpi3-firmware', subpath: 'lib/firmware' },
-        files: [
-          { src: 'nvram.txt', dest: 'brcm/brcmfmac43456-sdio.thundercomm,rubikpi3.txt' },
-          'brcm/BCM4345C5.hcd',
-        ],
+        files: ['fw_bcm43456c5_ag.bin', 'nvram.txt', 'config.txt', 'brcm/BCM4345C5.hcd'],
         dest: 'lib/firmware',
       },
     ],
   },
   // UFS boot LUN 启动固件：rubikpi-ai/boot-assets main@10b8685（BOOT.MXF.1.0.c1-00430、
-  // TZ.XF.5.29.1-00126.1），即 meta-qcom-3rdparty 主线集成钉住的版本。
-  // - 不选参考工程 QLI 1.5 的 00364：Q6A 已实证该代固件与 7.0.2 kodiak DTB 不匹配。
+  // TZ.XF.5.29.1-00126.1），即 meta-qcom-3rdparty 主线集成钉住的版本，本板 EL1 下已验证
+  // ADSP / CDSP 可用。
+  // - 参考工程 QLI 1.5 刷写的是 00364 / TZ 00084；仅在厂商内核与 00430 出现兼容性问题时
+  //   作为回退候选。
   // - 不选 qli2.0 分支（00508 / TZ 00146）：其 LUN3 删除了 usb_fw 分区（出厂 Renesas USB3
-  //   固件所在区域会被重划为 ddr_a）；实板验证它同样不支持 EL2 下 DSP 所需的
-  //   PAS_GET_RSCTABLE，相对 main 没有功能收益。
+  //   固件所在区域会被重划为 ddr_a）。
   // 只刷 LUN1-5：LUN0 由 flange 系统盘占用；LUN6 是 QLI 用户态配置（ext 文件系统，
   // UEFI 不读），且 devcfg_full.img 在 GitHub 归档里只是 Git LFS 指针。
   bootloader: {
@@ -117,8 +149,5 @@ local el2 = product != 'el1';
     firehose_loader: 'prog_firehose_ddr.elf',
     ufs_rawprogram: ['rawprogram%d.xml' % lun for lun in std.range(1, 5)],
     ufs_patch: ['patch%d.xml' % lun for lun in std.range(1, 5)],
-  } + (if el2 then {
-    // LUN1/2 的 xbl_config_a/_b 改写 KVM 版，使 Linux 以 EL2 启动（见文件头）。
-    ufs_file_overrides: { 'xbl_config.elf': 'xbl_config_kvm.elf' },
-  } else {}),
+  },
 }

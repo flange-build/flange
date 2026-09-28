@@ -17,6 +17,7 @@ sources:
   - builder/flash/qualcomm_ufs.py
   - openspec/changes/add-qcs6490-radxa-dragon-q6a/
   - openspec/changes/archive/2026-05-31-migrate-qcs6490-kernel-702/
+  - components/board/thundercomm-rubikpi3/config.jsonnet
   - docs/development-guide.md
   - docs/extension-guide.md
 related:
@@ -25,7 +26,7 @@ related:
   - "[[qualcommsc8280xp 平台]]"
   - "[[FlashStrategy 抽象]]"
   - "[[USB 线刷协议]]"
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 > 阅读前提：先读[架构总览](../concepts/架构总览.md)，并从[板卡索引](../boards/index.md)确认型号。
@@ -50,6 +51,11 @@ QCS6490 已从下方建库时记录的 vendor BSP 6.6.90，历经 mainline 6.18.
 rawprogram/patch、`dtb.bin` 与生成的 LUN0 `rawprogram0.xml`，在一次 `edl-ng rawprogram`
 会话中写入；固件 XML 写或 patch LUN0、引用 Git LFS 指针时在等待设备前拒绝。
 未声明这两个字段的 Q6A/Q8B 行为不变。
+
+RUBIK Pi 3 另在板级覆盖了内核（2026-09-27）：改用 Thundercomm Yocto（QLI 1.5）同款厂商内核
+`rubikpi-ai/linux` 6.6.90、`qcom_defconfig` 链与高通下游视频驱动，以 EL1 同时获得 ADSP/CDSP 与
+硬件编码，平台层 mainline 补丁经 `kernel.exclude_patches` 全部排除；SoC 层与 Q6A 仍是 mainline 7.0.2。
+详见 [[thundercomm-rubikpi3]]。
 
 下方 6.6.90 内容保留为早期 bring-up 基线，其中 UEFI/GRUB、4K LBA、ESP 挂载限制和排障过程仍有参考价值；涉及“当前内核”的表述以本节和 [[radxa-dragon-q6a]] 为准。
 
