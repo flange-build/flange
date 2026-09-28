@@ -148,6 +148,15 @@ PLATFORM_CASES = {
         "bootloader_targets": [],
         "download": ("bootloader.edk2_firmware", "sha256", "5f5d0237d6dc836f847bb8294860db4a619f9fd9e82cfd6a4cf40d8c9ff3d648"),
     },
+    "nvidia-jetson-tx2-default-release": {
+        "platform": "nvidiategra186",
+        "soc": "tegra186",
+        "tree": ("", "tegra186-quill-p3310-1000-c03-00-base"),
+        "source": ("linux-tegra-4.9", "commit", "6944a5ce1dae5947ff24ada6b6592d9e3062d38c"),
+        "kconfig": 'CONFIG_LOCALVERSION="-tegra"',
+        "bootloader_targets": [],
+        "download": ("bootloader.l4t_bsp", "sha256", "8818e8219beaf6876e71b25fdc72f96efe911046fa7a56f4db319d7c415fad0e"),
+    },
     "radxa-dragon-q8b-default-release": {
         "platform": "qualcommsc8280xp",
         "tree": ("qcom", "sc8280xp-radxa-dragon-q8b"),
@@ -189,6 +198,60 @@ def test_platform_builder_inputs_match_canonical_config(configs, target):
         if key in expected:
             assert config["bootloader"][key] == expected[key]
     assert _get(config, download_path)[download_key] == download_value
+
+
+L4T = "32.7.6-20241104234601"
+
+
+def test_jetson_tx2_rootfs_contract(configs):
+    config = configs["nvidia-jetson-tx2-default-release"]
+    rootfs = config["rootfs"]
+
+    assert rootfs["url"].endswith("ubuntu-base-18.04.5-base-arm64.tar.gz")
+    assert rootfs["sha256"] == "9327cf905e818c38ba04605e40fbe11ac6548537786dc12936ca5819f8a563ad"
+    assert "adbd" not in rootfs["custom_packages"]
+    assert not {"btop", "systemd-timesyncd"} & set(rootfs["packages"])
+    assert {"openssh-server", "network-manager"} <= set(rootfs["packages"])
+    phase2 = dict(item.split("=", 1) for item in rootfs["phase2_packages"])
+    assert set(phase2.values()) == {L4T}
+    assert {"nvidia-l4t-core", "nvidia-l4t-initrd", "nvidia-l4t-cuda"} <= set(phase2)
+    assert not {
+        "nvidia-l4t-kernel", "nvidia-l4t-kernel-dtbs", "nvidia-l4t-kernel-headers",
+        "nvidia-l4t-bootloader", "nvidia-l4t-jetson-io", "nvidia-l4t-oem-config",
+        "nvidia-l4t-apt-source",
+    } & set(phase2)
+    assert [source["name"] for source in rootfs["extra_apt_sources"]] == [
+        "nvidia-jetson-common", "nvidia-jetson-t186",
+    ]
+    assert config["recovery"]["enabled"] is False
+    assert config["flash_tool"] == "tegraflash"
+
+
+def test_jetson_tx2_jetpack_only_in_jetpack_product(configs):
+    default = configs["nvidia-jetson-tx2-default-release"]
+    jetpack = configs["nvidia-jetson-tx2-jetpack-release"]
+
+    assert not any(item.startswith("nvidia-jetpack=") for item in
+                   default["rootfs"]["phase2_packages"])
+    assert "nvidia-jetpack=4.6.6-b24" in jetpack["rootfs"]["phase2_packages"]
+    assert jetpack["rootfs"]["phase2_packages"][:-1] == default["rootfs"]["phase2_packages"]
+
+
+def test_jetson_tx2_tegraflash_facts(configs):
+    config = configs["nvidia-jetson-tx2-default-release"]
+    tegraflash = config["bootloader"]["tegraflash"]
+
+    assert tegraflash["identity"] == {"board_id": "3310", "board_sku": "1000", "fabs": ["B02"]}
+    assert tegraflash["odmdata"] == "0x1090000"
+    assert {entry["type"] for entry in tegraflash["bins"]} == {
+        "mb2_bootloader", "mts_preboot", "mts_bootpack", "bpmp_fw", "bpmp_fw_dtb",
+        "tlk", "eks", "bootloader_dtb",
+    }
+    assert len(tegraflash["bct_configs"]) == 10
+    rootfs_partition, = config["partitions"]["entries"]
+    assert (rootfs_partition["name"], rootfs_partition["label"], rootfs_partition["size"]) == (
+        "rootfs", "APP", "28G",
+    )
 
 
 def test_khadas_vim3_board_contract(configs):

@@ -41,6 +41,8 @@ PLATFORMS = {
         "builder.platforms.qualcommqcs6490.rootfs:Qcs6490RootfsBuilder"),
     "qualcommqrb2210": (
         "builder.platforms.qualcommqrb2210.rootfs:Qrb2210RootfsBuilder"),
+    "nvidiategra186": (
+        "builder.platforms.nvidiategra186.rootfs:Tegra186RootfsBuilder"),
 }
 
 
@@ -101,8 +103,9 @@ def _config(platform: str, root: Path) -> dict:
 class _Recorder:
     """记录 docker 调用，并把易变路径归一化成占位符。"""
 
-    def __init__(self, work_root: Path, project_root: Path, *, unoq=False):
+    def __init__(self, work_root: Path, project_root: Path, *, unoq=False, tegra=False):
         self.unoq = unoq
+        self.tegra = tegra
         self.calls: list[str] = []
         self._subs = [
             (str(project_root), "<PROJECT>"),
@@ -154,6 +157,10 @@ class _Recorder:
                     (dest / "boot/initrd.img-6.1.0").write_bytes(b"mock-initrd")
                     (dest / "lib/modules/6.1.0/ath10k_snoc.ko").write_bytes(b"mock-module")
                     (dest / "usr/lib/systemd/boot/efi/systemd-bootaa64.efi").write_bytes(b"mock-efi")
+                if self.tegra:
+                    # /boot/initrd 真实来自 Phase 2 安装的 nvidia-l4t-initrd。
+                    (dest / "boot").mkdir(exist_ok=True)
+                    (dest / "boot/initrd").write_bytes(b"mock-initrd")
             result = MagicMock()
             # du -sm / du -sb 的返回值参与容量门禁计算
             result.stdout = "512\t<dir>" if "-sm" in command else "512000\t<dir>"
@@ -186,6 +193,11 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
         )
         (target / "kernel/Image").write_bytes(b"mock-kernel")
         (target / "kernel/config").write_text("CONFIG_BLK_DEV_INITRD=y\nCONFIG_ATH10K_SNOC=m\n")
+    if platform == "nvidiategra186":
+        config["boot"] = {"kernel_args": "root=/dev/mmcblk0p1 rw rootwait"}
+        # 覆盖 Phase 2 APT 路径（L4T preinst 标记包裹的安装）。
+        config["rootfs"]["phase2_packages"] = ["nvidia-l4t-core=32.7.6-20241104234601"]
+        (target / "kernel/Image").write_bytes(b"mock-kernel")
     config["rootfs"]["custom_packages"] = ["golden"]
     builder_cls = _load(PLATFORMS[platform])
 
@@ -207,7 +219,8 @@ def _run_compile(platform: str, tmp_path: Path) -> list[str]:
         PackageArtifact(path, "deb", "runtime") for path in (target / "app").glob("*.deb")
     )
 
-    recorder = _Recorder(tmp_path, project_root, unoq=platform == "qualcommqrb2210")
+    recorder = _Recorder(tmp_path, project_root, unoq=platform == "qualcommqrb2210",
+                         tegra=platform == "nvidiategra186")
     docker.run.side_effect = recorder._record("run")
     docker.run_privileged.side_effect = recorder._record("priv")
     # chroot 是 mock 的，/etc/shadow 等不会真的生成；把内容校验换成留痕的桩

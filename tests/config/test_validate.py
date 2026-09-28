@@ -212,9 +212,10 @@ class TestCanonicalConfig:
         with pytest.raises(ConfigError, match="sha256"):
             validate_canonical_config(config)
 
-    def test_qualcomm_rejects_runtime_overlays(self):
+    @pytest.mark.parametrize("platform", ["qualcommqcs6490", "nvidiategra186"])
+    def test_build_merge_platforms_reject_runtime_overlays(self, platform):
         config = _canonical_config()
-        config["platform"] = "qualcommqcs6490"
+        config["platform"] = platform
         config["boot"] = {
             "overlays": {
                 "package": ["panel.dtbo"],
