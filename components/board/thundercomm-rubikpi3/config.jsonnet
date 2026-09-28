@@ -6,7 +6,7 @@
 // rubikpi-ai/linux 6.6.90。mainline 7.0.2 下本板无法同时拥有 DSP 与硬件编码（EL1 编码
 // 整机复位，EL2 下 TZ 不支持 PAS_GET_RSCTABLE、DSP 不启动）；厂商内核 + 高通下游视频驱动
 // 在 EL1 下两者都可用。GPU 仍走 drm/msm + Ubuntu Mesa，不引入 Yocto 的 KGSL 与闭源 Adreno
-// 用户态。详见 openspec/changes/align-rubikpi3-vendor-kernel。
+// 用户态。详见 openspec/changes/archive/2026-09-28-align-rubikpi3-vendor-kernel。
 //
 // ## 启动固件位于 UFS（与 Q6A 的 SPI NOR 不同）
 //

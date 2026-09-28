@@ -29,7 +29,7 @@
 ## 5. 文档
 
 - [x] 5.1 更新 `wiki/boards/thundercomm-rubikpi3.md`（内核基线、EL1、DTB 组合、视频驱动、验证结果与回退项）、`wiki/platforms/qualcommqcs6490-平台.md`、`wiki/log.md`
-- [ ] 5.2 更新 README 中 RUBIK Pi 3 的 product 列表；归档时同步主规格 Purpose（不再「复用主线 7.0.2 基线」）
+- [x] 5.2 更新 README 中 RUBIK Pi 3 的 product 列表（README 只列板名、无 product 列表，无需改动）；归档时同步主规格 Purpose（不再「复用主线 7.0.2 基线」）
 
 ## 6. Wi-Fi（bcmdhd）
 

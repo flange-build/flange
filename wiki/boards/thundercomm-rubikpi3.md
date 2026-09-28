@@ -14,13 +14,13 @@ sources:
   - components/app/usbmoded/usbmoded/scene.py
   - openspec/changes/archive/2026-09-26-add-qcs6490-thundercomm-rubikpi3/
   - openspec/changes/archive/2026-09-27-enable-rubikpi3-el2/
-  - openspec/changes/align-rubikpi3-vendor-kernel/
+  - openspec/changes/archive/2026-09-28-align-rubikpi3-vendor-kernel/
   - openspec/specs/qualcommqcs6490-thundercomm-rubikpi3/spec.md
 related:
   - "[[qualcommqcs6490 平台]]"
   - "[[radxa-dragon-q6a]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-09-27
+updated: 2026-09-28
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
