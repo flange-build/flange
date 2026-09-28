@@ -74,5 +74,6 @@ class Qcs6490BootloaderBuilder(ComponentBuilder):
             shutil.copy2(asset, edk2_dir / asset.name)
         if bl.get("ufs_rawprogram"):
             check_firmware_bundle(
-                edk2_dir, bl["ufs_rawprogram"], bl.get("ufs_patch") or [], None)
+                edk2_dir, bl["ufs_rawprogram"], bl.get("ufs_patch") or [], None,
+                bl.get("ufs_file_overrides") or {})
         return {"edk2": edk2_dir}

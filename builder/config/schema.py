@@ -304,6 +304,7 @@ SYSTEM = Object(
                 "ufs_provisions": Map(DOWNLOAD),
                 "ufs_rawprogram": STRINGS,
                 "ufs_patch": STRINGS,
+                "ufs_file_overrides": Map(STRING),
                 "fit_pack": Object(
                     {"copies": INTEGER, "slot_size_kb": INTEGER, "external_data_offset": STRING}
                 ),

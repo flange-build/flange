@@ -102,6 +102,13 @@ def _validate_ufs_firmware(bootloader: dict) -> None:
         for name in names:
             if not name.endswith(".xml") or PurePosixPath(name).name != name:
                 raise ConfigError(f"bootloader.{field} 只能是固件包根目录内的 .xml 文件名: {name!r}")
+    for referenced, replacement in (bootloader.get("ufs_file_overrides") or {}).items():
+        for name in (referenced, replacement):
+            if not name or PurePosixPath(name).name != name:
+                raise ConfigError(
+                    f"bootloader.ufs_file_overrides 只能使用固件包根目录内的文件名: {name!r}")
+        if referenced == replacement:
+            raise ConfigError(f"bootloader.ufs_file_overrides.{referenced} 不能替换为自身")
 
 
 def _validate_source_ref(ref, sources: dict, path: str) -> None:
@@ -251,7 +258,7 @@ def validate_canonical_config(config: dict) -> None:
             _validate_download_descriptor(descriptor, f"bootloader.{field}")
     for name, descriptor in (bootloader.get("ufs_provisions") or {}).items():
         _validate_download_descriptor(descriptor, f"bootloader.ufs_provisions.{name}")
-    if "ufs_rawprogram" in bootloader or "ufs_patch" in bootloader:
+    if {"ufs_rawprogram", "ufs_patch", "ufs_file_overrides"} & set(bootloader):
         _validate_ufs_firmware(bootloader)
 
     rootfs = config.get("rootfs") or {}

@@ -6,6 +6,16 @@
 
 ---
 
+## [2026-09-28] sync | RUBIK Pi 3 厂商内核下的外设验收
+
+[[thundercomm-rubikpi3]]（default-debug，厂商内核 6.6.90，EL1）补充验收：Wi-Fi 连 5 GHz 并通外网，HDMI 经 LT9611 由 `kmscube` 出图（用户目视），GPU 离屏渲染读回正确，以太网、USB3 外设、冷/热启动正常。未通过：音频播放（LPAIF 需要高通 AGM/PAL 用户态建立 ADSP 音频图，原生 ALSA 返回 `-EINVAL`）、Type-C UCSI 端口仍未注册。厂商配置未开 `CONFIG_DRM_FBDEV_EMULATION`，headless 镜像开机 HDMI 无控制台，暂不打开。
+
+## [2026-09-28] sync | Q6A 默认进 EL2（UEFI Auto + KVM 组合 DTB）
+
+[[radxa-dragon-q6a]] 的 `device_tree.name` 改为内核构建的组合 DTB `qcs6490-radxa-dragon-q6a-kvm`（base 叠加 Radxa `qcs6490-radxa-dragon-q6a-kvm.dtso`，含 `/chosen/radxa,enable-kvm = <1>` 与 EL2 设备树修正），与 Radxa rsetup 开启 KVM 的方式一致。UEFI `Hypervisor Override` 出厂 `Auto` 即据此进 EL2 并预加载 DSP，此前「flange 默认 EL2 为待解项」已解决；不再支持 `Disabled`（EL1 下 GPU 与视频不可用）。用户实板验证通过。
+
+更正 2026-06-01 条目中「RUBIK Pi 3（同 SoC）能编码也只因 QLI 默认 EL2（`xbl_config_gunyah`）」：Thundercomm QLI 参考镜像刷的 `xbl_config_gunyah.elf` 对应 EL1（Gunyah），它能编码是因为下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），见 [[thundercomm-rubikpi3]]。
+
 ## [2026-09-27] sync | RK356x 全系打开 NPU：U-Boot 阶段提前打开 NPU 供电
 
 neons-core3566-nanob / orangepi-cm4 / rp-pro-rk3568-h 早先因 `rknpu_mmu` probe 时 `failed to get ack on domain 'npu'` → `panic_on_set_idle` 被判为"NPU 物理不可用"而禁用。重新定位：IOMMU probe 早于 PMIC 驱动，NPU 电源轨不在 PMIC 上电时序内，flange 通用 U-Boot（`rk3568-evb`、extlinux）从不打开它；rp-pro 旧补丁里的"调压排除实验"写的是 RK809 `0x9C`（电量计寄存器），实验无效。
@@ -13,6 +23,24 @@ neons-core3566-nanob / orangepi-cm4 / rp-pro-rk3568-h 早先因 `rknpu_mmu` prob
 修法写入 [[rockchip 平台]]「RK356x NPU 供电」：各板 bootloader patch 在 U-Boot DTS 声明 NPU 供电 DCDC（RK809 四板用 DCDC4 `vdd_npu`，radxa-zero3w 为 RK817、用 DCDC2 `vdd_gpu`），rk3566/rk3568 SoC 层 `bootloader.config` 保留 `interrupt-parent`。删除 neons `0001`、rp-pro `0003`、orangepi-cm4 `0003` 三个 disable-rknpu 补丁；tspi-rk3566、radxa-zero3w 新增内核补丁打开 `bus_npu` / `rknpu` / `rknpu_mmu`。平台 U-Boot 补丁 `0002` 适配上游 `next-dev-v2026.01` 强推后的 `0f2b44c`，去掉 neons / orangepi-cm4 的 U-Boot pin。
 
 [[orangepi-cm4]] 实板验证通过；其余四板仅构建验证，待实板。radxa-zero3w 的 `device_tree.name`（`rk3566-radxa-zero-3w`）在当前内核分支不存在（只有 `-aic8800ds2` / `-ap6212` 变体），为既有问题，按板载模块改为 `rk3566-radxa-zero-3w-aic8800ds2`。
+
+## [2026-09-27] sync | RUBIK Pi 3 改用 Yocto 同款厂商内核（EL1 下 DSP 与硬件编码同时可用）
+
+mainline 7.0.2 下 [[thundercomm-rubikpi3]] 无法同时拥有 DSP 与编码：EL1 下 venus（HFI Gen1）+ `vpu20_p1.mbn`（video-firmware 1.0）编码即复位，EL2 下 TZ 00126.1 不支持 `PAS_GET_RSCTABLE`，跳过资源表或换 TZ 00187 均失败。Thundercomm Yocto 参考镜像实为 EL1（`xbl_config.elf` == `xbl_config_gunyah.elf`）+ 下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），两边的内容保护区与 DMA mask 一致，差别在驱动与固件这一代。
+
+据此板级覆盖内核为 `rubikpi-ai/linux` 6.6.90 @ `a579877`（Yocto 同款 config 链，平台 mainline 补丁经 `exclude_patches` 排除），DTB 合并 Yocto 同款 video overlay（不合并 KGSL graphics、camera），`video-driver` 以 OOT 模块编出 `iris_vpu.ko`；统一 EL1，删除 `el1` product 与 EL2 dtso。实板（default-debug）：ADSP/CDSP running、FastRPC 往返成功，720p H.264 与 1080p HEVC 硬编不复位且硬解回读帧数一致，蓝牙、USB3 网卡、drm/msm、声卡注册正常。Wi-Fi 随厂商 config 改走 bcmdhd，rootfs 改装 `rubikpi3-firmware` 的 `fw_bcm43456c5_ag.bin`/`nvram.txt`/`config.txt`（与 Thundercomm Ubuntu 固件包一致；Yocto 的 CLM blob 来自不公开的高通固件包，未引入，dhd 使用固件内嵌 CLM），实板 2.4/5 GHz 扫描正常。同步 [[qualcommqcs6490 平台]] 与板卡索引。
+
+## [2026-09-27] sync | Q6A EL2 下 ADSP / CDSP 实板验证
+
+Q6A（meizu-e3-bringup-debug，EL2）两个 DSP 均由启动固件预先拉起，内核 `qcom_q6v5_pas` 以 `attached` 状态接管，不加载 rootfs 里的 mbn；这与 [[thundercomm-rubikpi3]] 在 EL2 下由内核经 PAS 加载、卡在 TZ `PAS_GET_RSCTABLE` 不同。glink 通道与 QRTR 服务（ADSP node 5、CDSP node 10）齐全，FastRPC `GET_DSP_INFO` 与 `INIT_ATTACH` 在两个 DSP 上都成功，CDSP 报 v68 + HVX + HMX。未验证 DSP 崩溃后的恢复；声卡因缺少 topology 文件未实例化，开机有一次 APM `GET_SPF_STATE` 超时。
+
+同时更正 [[radxa-dragon-q6a]] 易踩坑中"`/dev/fastrpc-adsp` 不出现（-12 ENOMEM）"：该条是 2026-05 bring-up 时的记录，7.0.2 + EL2 下已不成立。
+
+## [2026-09-27] sync | thundercomm-rubikpi3 EL2 / EL1 product 拆分与固件实验
+
+RUBIK Pi 3 在 EL1（Gunyah）下 venus 硬件编码喂帧即整机复位，改由 `xbl_config_kvm.elf`（`bootloader.ufs_file_overrides`）以 EL2 启动并合并 `rubikpi3-el2.dtso` 后编码可用，但 ADSP/CDSP 卡在 `Error in getting resource table: -5`：7.0.2 的 EL2 PAS 需 TZ 实现 `PAS_GET_RSCTABLE`。实测 boot-assets main（TZ 00126.1）、qli2.0（TZ 00146，保留 LUN3 `usb_fw`）均不支持，Qualcomm 通用 00142（TZ 00187）在本板进内核即停。据此 default / desktop 为 EL2，新增 `el1` product（DSP 可用、无硬件编码），固件基线保持 main；`el1` 实板 ADSP/CDSP running。
+
+同时修正 [[thundercomm-rubikpi3]] 两处：LT9611 在 EL1 / EL2 下都探测失败，原因是只 backport 了 DTS（port@1）而缺上游驱动补丁 `e8bd92c4a0d2`，已补 kernel patch 0003；Type-C UCSI 未注册在 EL1 下同样存在，与 EL 无关（此前误记为 EL2 下 DSP 离线所致）。固件校验新增分区容量检查。
 
 ## [2026-09-26] sync | usbmoded 在 UDC 晚注册时自动重试开机场景（RUBIK Pi 3 实板）
 
@@ -675,3 +703,19 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 现行 schema 取消综合页 1200 非空白字符上限，拆页只以导航和主题边界为依据；新增“信息保全优先”原则，要求整理前后逐项确认唯一信息的保留或迁移去向。初次建库计划中的 600/1200 字规则保留为历史记录，但已明确标注失效。
 
 [[adbd]]、[[atk-rk3506b]]、[[radxa-dragon-q6a]]、[[qualcommqcs6490 平台]] 四页从 commit `e23fd87b` 恢复压缩前全文，再以新增章节补充 udev/systemd 自愈、fluxion product、QCS6490 7.0.2 当前基线和 UFS 初始化流程。早期验收、硬件约束、排障过程与版本迁移记录均保留；过时结论通过当前基线说明限定适用范围，不再用摘要覆盖原文。
+
+## [2026-09-27] sync | Radxa Dragon Q6A EL2 下 i2c10 改走 FIFO
+
+[[radxa-dragon-q6a]] 新增"EL2 启动与 GPI DMA"：`260120` 固件开启 `Hypervisor Override` 后，Radxa UEFI 自行给 GRUB 加载的 DTB 套用 KVM fixup，Linux 以 EL2 启动；此时 `i2c10`（RTC）申请 GPI 通道，在 `gpi_config_interrupts()` 读 gpii 1 的 MSI 寄存器处同步外部中止，系统无法启动。新增 `patches/kernel/0007` 删除 `i2c10` 的 `qcom,enable-gsi-dma`，由 `0006` 重 provision 回 FIFO，Q6A 不再使用 GPI。坑#11 原文"`i2c10` 的 GSI 正常"保留，并追加"仅 EL1 成立"的再更正。change `fix-qcs6490-i2c10-fifo-el2`。
+
+## [2026-09-27] sync | Radxa Dragon Q6A meizu-e3-bringup EL2 回归
+
+[[radxa-dragon-q6a]] 的"EL2 启动与 GPI DMA"补充 meizu-e3-bringup-debug 在 EL2 下的实板回归：DSI 屏 1080×2160 点亮，`sec_ts` 读到 `AC,6F,70` 且触摸上报坐标事件，`sgm37604a` 背光可写，i2c13 走 FIFO、无 GPI 使用。i2c10 改走 FIFO（`0007`）未影响屏幕功能。
+
+## [2026-09-27] sync | Radxa Dragon Q6A EL1 下 i2c 复验与 DSI 屏黑屏记录
+
+[[radxa-dragon-q6a]] 补充 EL1 结果：i2c10/i2c13 走 FIFO、RTC 与 `sec_ts` 正常，原"EL1 下未单独复验"更新为实测结果。新增"EL1 下魅族 DSI 屏黑屏"已知问题：`260120` 固件 + EL1 时 fbdev 与 modetest 均无画面，Linux 侧 DRM/DPU/DSI/SMMU 均无异常，推测 Gunyah stage-2 静默拦截显示 DMA（未证实）；已搁置，Q6A 以 EL2 为准。
+
+## [2026-09-27] sync | 更正 Q6A "EL1 下 DSI 屏黑屏"为面板偶发黑屏
+
+[[radxa-dragon-q6a]] 上一条"EL1 下魅族 DSI 屏黑屏、推测 Gunyah 拦截显示 DMA"是误判：实测 EL1 也能正常显示，黑屏与 EL 无关，更像面板初始化时复位未生效。条目改为"魅族 DSI 屏偶发黑屏（待查）"，保留黑屏时 Linux 侧各层正常的观测，删去 hypervisor 推测与 HDMI 对照建议，补充 `meizu_e3_prepare()` 复位时序与 `vcc_3v3_lcd` always-on 导致面板不断电的疑点。已知线索：热重启更易黑屏（用户观察），1.8V vccio 与 USB PHY 共用、热重启期间可能不断电；同一次启动内 fb0 blank/unblank 可恢复画面；热重启复现试验未完成。

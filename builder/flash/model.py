@@ -67,6 +67,8 @@ class UfsFirmwareConfig:
     loader: str = ""
     rawprogram: list[str] = field(default_factory=list)
     patch: list[str] = field(default_factory=list)
+    # XML 引用的文件名 → 实际写入的固件包文件（如 xbl_config.elf → xbl_config_kvm.elf）。
+    overrides: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

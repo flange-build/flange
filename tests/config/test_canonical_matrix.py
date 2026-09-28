@@ -134,7 +134,7 @@ PLATFORM_CASES = {
     },
     "radxa-dragon-q6a-default-release": {
         "platform": "qualcommqcs6490",
-        "tree": ("qcom", "qcs6490-radxa-dragon-q6a"),
+        "tree": ("qcom", "qcs6490-radxa-dragon-q6a-kvm"),
         "source": ("linux-qcs6490", "commit", "7473a9fca2b08623319e497f4f811746baddb7bc"),
         "kconfig": "# CONFIG_MODULE_SIG_FORCE is not set",
         "bootloader_targets": [],
@@ -143,7 +143,7 @@ PLATFORM_CASES = {
     "thundercomm-rubikpi3-default-release": {
         "platform": "qualcommqcs6490",
         "tree": ("qcom", "qcs6490-thundercomm-rubikpi3"),
-        "source": ("linux-qcs6490", "commit", "7473a9fca2b08623319e497f4f811746baddb7bc"),
+        "source": ("rubikpi-linux", "commit", "a579877ac6b4afc6df09d8e53564dfb08d9d693f"),
         "kconfig": "# CONFIG_MODULE_SIG_FORCE is not set",
         "bootloader_targets": [],
         "download": ("bootloader.edk2_firmware", "sha256", "5f5d0237d6dc836f847bb8294860db4a619f9fd9e82cfd6a4cf40d8c9ff3d648"),

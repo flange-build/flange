@@ -31,7 +31,7 @@ def target(tmp_path):
     """RUBIK Pi 3 形态的最小产物目录：LUN1 xbl、LUN4 dtb_a/uefi_a、LUN0 raw.img。"""
     firmware = tmp_path / qualcomm_ufs.FIRMWARE_DIR
     firmware.mkdir(parents=True)
-    for name in ("prog_firehose_ddr.elf", "xbl.elf", "uefi.elf",
+    for name in ("prog_firehose_ddr.elf", "xbl.elf", "xbl_kvm.elf", "uefi.elf",
                  "gpt_main1.bin", "gpt_main4.bin"):
         (firmware / name).write_bytes(b"\x7fELF" + name.encode())
     _write_xml(firmware / "rawprogram1.xml",
@@ -204,7 +204,9 @@ def test_生成器从bootloader声明推导ufs固件清单():
         "firehose_loader": "prog_firehose_ddr.elf",
         "ufs_rawprogram": ["rawprogram1.xml"],
         "ufs_patch": ["patch1.xml"],
-    }}) == UfsFirmwareConfig("prog_firehose_ddr.elf", ["rawprogram1.xml"], ["patch1.xml"])
+        "ufs_file_overrides": {"xbl_config.elf": "xbl_config_kvm.elf"},
+    }}) == UfsFirmwareConfig("prog_firehose_ddr.elf", ["rawprogram1.xml"], ["patch1.xml"],
+                             {"xbl_config.elf": "xbl_config_kvm.elf"})
 
 
 def test_ufs固件板拒绝spi_firmware(target):
@@ -212,3 +214,47 @@ def test_ufs固件板拒绝spi_firmware(target):
 
     with pytest.raises(FlashError, match="位于 UFS"):
         _cli_main(["run", "--target-dir", str(target), "--no-wait", "--spi-firmware"])
+
+
+def test_文件替换以原引用名暂存替换后的固件(target, tmp_path):
+    """ufs_file_overrides：XML 仍引用 xbl.elf，实际写入固件包内的 KVM 版。"""
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    config = _config()
+    config.ufs_firmware.overrides = {"xbl.elf": "xbl_kvm.elf"}
+
+    qualcomm_ufs.stage_bundle(target, config, stage)
+
+    assert (stage / "xbl.elf").read_bytes() == b"\x7fELFxbl_kvm.elf"
+    assert not (stage / "xbl_kvm.elf").exists()
+
+
+@pytest.mark.parametrize("overrides,message", [
+    ({"missing.elf": "xbl_kvm.elf"}, "未被任何 rawprogram 引用"),
+    ({"dtb.bin": "xbl_kvm.elf"}, "不可替换"),
+    ({"xbl.elf": "absent.elf"}, "不在固件包内"),
+])
+def test_文件替换非法时拒绝(target, overrides, message):
+    config = _config()
+    config.ufs_firmware.overrides = overrides
+
+    with pytest.raises(FlashError, match=message):
+        qualcomm_ufs.validate_bundle(target, config)
+
+
+def test_文件替换目标为lfs指针时拒绝(target):
+    (target / qualcomm_ufs.FIRMWARE_DIR / "xbl_kvm.elf").write_bytes(
+        b"version https://git-lfs.github.com/spec/v1\n")
+    config = _config()
+    config.ufs_firmware.overrides = {"xbl.elf": "xbl_kvm.elf"}
+
+    with pytest.raises(FlashError, match="LFS"):
+        qualcomm_ufs.validate_bundle(target, config)
+
+
+def test_固件超过分区容量时拒绝(target):
+    """rawprogram 按文件大小写入：超出 num_partition_sectors 会覆盖相邻分区。"""
+    (target / qualcomm_ufs.FIRMWARE_DIR / "uefi.elf").write_bytes(b"\0" * (SECTOR + 1))
+
+    with pytest.raises(FlashError, match="超过分区容量"):
+        qualcomm_ufs.validate_bundle(target, _config())

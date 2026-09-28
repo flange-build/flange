@@ -40,6 +40,8 @@ class Program:
     lun: str
     filename: str
     sector_size: int
+    #: 分区容量（扇区数）；0 表示随磁盘剩余空间或由 patch 决定，不做容量检查。
+    sectors: int = 0
 
 
 def read_programs(xml_path: Path) -> list[Program]:
@@ -57,12 +59,17 @@ def read_programs(xml_path: Path) -> list[Program]:
             sector_size = int(node.get("SECTOR_SIZE_IN_BYTES", ""))
         except ValueError as exc:
             raise FlashError(f"{xml_path.name} 的 {node.get('label')} 缺少扇区大小") from exc
+        try:
+            sectors = int(node.get("num_partition_sectors", "0"))
+        except ValueError as exc:
+            raise FlashError(f"{xml_path.name} 的 {node.get('label')} 分区大小非法") from exc
         programs.append(Program(
             xml=xml_path.name,
             label=node.get("label", ""),
             lun=node.get("physical_partition_number", ""),
             filename=filename,
             sector_size=sector_size,
+            sectors=sectors,
         ))
     return programs
 
@@ -73,13 +80,20 @@ def is_lfs_pointer(path: Path) -> bool:
 
 
 def check_firmware_bundle(
-    firmware_dir: Path, rawprogram: list[str], patch: list[str], sector_size: int | None
+    firmware_dir: Path,
+    rawprogram: list[str],
+    patch: list[str],
+    sector_size: int | None,
+    overrides: dict[str, str] | None = None,
 ) -> list[Program]:
     """校验预编固件包能被声明的 XML 完整、安全地刷写。
 
     COMPONENT_IMAGES 中的文件由其他组件提供，这里不检查其存在性。bootloader
     构建期看不到分区配置，``sector_size`` 传 None 时跳过扇区大小核对。
+    ``overrides`` 把 XML 引用的文件名换成固件包内另一文件（如启用 EL2 的
+    xbl_config_kvm.elf）；被替换的文件名必须确实被某条 program 引用。
     """
+    overrides = overrides or {}
     if SYSTEM_XML in rawprogram:
         raise FlashError(f"{SYSTEM_XML} 由 flange 生成（LUN0 系统盘），不能出现在 ufs_rawprogram")
     for name in [*rawprogram, *patch]:
@@ -94,6 +108,10 @@ def check_firmware_bundle(
             raise FlashError(f"{name} 修改 LUN0；LUN0 GPT 只允许来自 flange 系统盘")
     programs = [program for name in rawprogram
                 for program in read_programs(firmware_dir / name)]
+    referenced = {program.filename for program in programs}
+    for name in overrides:
+        if name in COMPONENT_IMAGES or name not in referenced:
+            raise FlashError(f"ufs_file_overrides 的 {name} 未被任何 rawprogram 引用或不可替换")
     for program in programs:
         where = f"{program.xml}:{program.label}"
         if program.lun == "0":
@@ -105,13 +123,19 @@ def check_firmware_bundle(
             continue
         if program.filename == SYSTEM_STAGED:
             raise FlashError(f"{where} 引用了保留文件名 {SYSTEM_STAGED}")
-        source = firmware_dir / program.filename
+        actual = overrides.get(program.filename, program.filename)
+        source = firmware_dir / actual
         if not source.is_file():
-            raise FlashError(f"{where} 引用的 {program.filename} 不在固件包内")
+            raise FlashError(f"{where} 引用的 {actual} 不在固件包内")
         if is_lfs_pointer(source):
             raise FlashError(
-                f"{where} 引用的 {program.filename} 是 Git LFS 指针而非真实固件；"
+                f"{where} 引用的 {actual} 是 Git LFS 指针而非真实固件；"
                 "请从 ufs_rawprogram 移除该 XML 或改用包含 LFS 内容的固件包")
+        # 超出分区的文件会被刷写工具连续写入相邻分区。
+        if program.sectors and source.stat().st_size > program.sectors * program.sector_size:
+            raise FlashError(
+                f"{where} 的 {actual}（{source.stat().st_size} 字节）超过分区容量 "
+                f"{program.sectors * program.sector_size} 字节")
     return programs
 
 
@@ -139,7 +163,8 @@ def _bundle_sources(target_dir: Path, config: FlashConfig) -> dict[str, Path]:
     if not firmware.loader or not loader.is_file():
         raise FlashError(f"未找到 firehose loader：{loader}；请先执行 flange build bootloader")
     programs = check_firmware_bundle(
-        firmware_dir, firmware.rawprogram, firmware.patch, config.sector_size)
+        firmware_dir, firmware.rawprogram, firmware.patch, config.sector_size,
+        firmware.overrides)
     raw = target_dir / SYSTEM_IMAGE
     if not raw.is_file():
         raise FlashError(f"未找到整盘镜像 {raw}；请先执行 flange build")
@@ -151,7 +176,8 @@ def _bundle_sources(target_dir: Path, config: FlashConfig) -> dict[str, Path]:
         if not program.filename:
             continue
         component = COMPONENT_IMAGES.get(program.filename)
-        source = target_dir / component if component else firmware_dir / program.filename
+        packaged = firmware.overrides.get(program.filename, program.filename)
+        source = target_dir / component if component else firmware_dir / packaged
         if not source.is_file():
             raise FlashError(f"{program.xml}:{program.label} 需要的 {source} 不存在；请先执行 flange build")
         sources[program.filename] = source
