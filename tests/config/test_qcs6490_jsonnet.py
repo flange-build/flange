@@ -18,8 +18,9 @@ def test_q6a求值为canonical配置(product, variant):
     validate_canonical_config(config)
     assert config["kernel"]["source"] == {"name": "linux-qcs6490"}
     assert config["kernel"]["device_tree"]["directory"] == "qcom"
+    # 内核构建的 KVM 组合 DTB：UEFI Hypervisor Override=Auto 时据 /chosen/radxa,enable-kvm 进 EL2。
     assert config["kernel"]["device_tree"]["name"] == (
-        "qcs6490-radxa-dragon-q6a")
+        "qcs6490-radxa-dragon-q6a-kvm")
     assert "enable_configs" not in config["kernel"]
     assert "disable_configs" not in config["kernel"]
     assert all(not item.startswith("CONFIG_")

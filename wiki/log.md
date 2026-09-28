@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-09-28] sync | Q6A 默认进 EL2（UEFI Auto + KVM 组合 DTB）
+
+[[radxa-dragon-q6a]] 的 `device_tree.name` 改为内核构建的组合 DTB `qcs6490-radxa-dragon-q6a-kvm`（base 叠加 Radxa `qcs6490-radxa-dragon-q6a-kvm.dtso`，含 `/chosen/radxa,enable-kvm = <1>` 与 EL2 设备树修正），与 Radxa rsetup 开启 KVM 的方式一致。UEFI `Hypervisor Override` 出厂 `Auto` 即据此进 EL2 并预加载 DSP，此前「flange 默认 EL2 为待解项」已解决；不再支持 `Disabled`（EL1 下 GPU 与视频不可用）。用户实板验证通过。
+
+更正 2026-06-01 条目中「RUBIK Pi 3（同 SoC）能编码也只因 QLI 默认 EL2（`xbl_config_gunyah`）」：Thundercomm QLI 参考镜像刷的 `xbl_config_gunyah.elf` 对应 EL1（Gunyah），它能编码是因为下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），见 [[thundercomm-rubikpi3]]。
+
 ## [2026-09-27] sync | RUBIK Pi 3 改用 Yocto 同款厂商内核（EL1 下 DSP 与硬件编码同时可用）
 
 mainline 7.0.2 下 [[thundercomm-rubikpi3]] 无法同时拥有 DSP 与编码：EL1 下 venus（HFI Gen1）+ `vpu20_p1.mbn`（video-firmware 1.0）编码即复位，EL2 下 TZ 00126.1 不支持 `PAS_GET_RSCTABLE`，跳过资源表或换 TZ 00187 均失败。Thundercomm Yocto 参考镜像实为 EL1（`xbl_config.elf` == `xbl_config_gunyah.elf`）+ 下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），两边的内容保护区与 DMA mask 一致，差别在驱动与固件这一代。

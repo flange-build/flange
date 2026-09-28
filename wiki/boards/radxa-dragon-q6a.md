@@ -21,6 +21,7 @@ sources:
   - openspec/changes/add-qcs6490-radxa-dragon-q6a/
   - openspec/changes/archive/2026-05-31-migrate-qcs6490-kernel-702/
   - openspec/changes/archive/2026-09-27-fix-qcs6490-i2c10-fifo-el2/
+  - openspec/changes/archive/2026-09-28-enable-q6a-auto-el2/
   - docs/first-steps.md
 related:
   - "[[qualcommqcs6490 平台]]"
@@ -29,7 +30,7 @@ related:
   - "[[meizu-e3-panel]]"
   - "[[硬件特性包]]"
   - "[[构建期 dtb overlay 合并]]"
-updated: 2026-09-27
+updated: 2026-09-28
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -51,9 +52,19 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 
 **⚠️ UFS 开机整机复位（QHEE `PM: Reset by PSHOLD`）双根因 + 修复**：① 早期只用 `defconfig radxa.config`、漏 `qcom_module.config` → UFS probe 缺 qcom 平台驱动；② **板上 SPI 固件过旧**（`251013`/00364-KODIAKLA），与 7.0.2 `kodiak` DTB 资源/握手不匹配。两者都必修——补四段 config + `flange flash --spi-firmware` 刷 `260120`/00549-KODIAKWP。⚠️ `flange flash` 默认只刷 UFS、**不碰 SPI**，大版本内核/DTB 迁移极易漏固件。决策档见 openspec `migrate-qcs6490-kernel-702`。
 
-**硬件编码 = 可用（真根因＝UEFI Hypervisor Override，2026-06-01 修正）**：此前"喂帧即整机复位"的根因是 **UEFI `Hypervisor Settings → Hypervisor Override` 未开 → 系统以 EL1 启动（无 Gunyah hypervisor）→ 编码器访问 CP/secure 内存 fault → 复位**，并非固件/TZ/驱动。开机 F2 进 UEFI 开启后系统以 **EL2** 启动（`/dev/kvm` 出现、`/dev/mtd0` 消失），**flange 现有 mainline 7.0.2 venus + 通用固件直接编码通过**（`v4l2h264enc` 720p→6.46MB 有效 H264、零复位）。flange 默认 EL2 为待解项。见下表编码行。
+**硬件编码 = 可用（真根因＝UEFI Hypervisor Override，2026-06-01 修正）**：此前"喂帧即整机复位"的根因是 **UEFI `Hypervisor Settings → Hypervisor Override` 未开 → 系统以 EL1 启动（无 Gunyah hypervisor）→ 编码器访问 CP/secure 内存 fault → 复位**，并非固件/TZ/驱动。开机 F2 进 UEFI 开启后系统以 **EL2** 启动（`/dev/kvm` 出现、`/dev/mtd0` 消失），**flange 现有 mainline 7.0.2 venus + 通用固件直接编码通过**（`v4l2h264enc` 720p→6.46MB 有效 H264、零复位）。2026-09-28 起 flange 默认进 EL2，无需进 UEFI 修改，见下文「默认 EL2」。见下表编码行。
 
 **EL2 启动与 GPI DMA（2026-09-27）**：`260120` 固件开启 `Hypervisor Override` 后，Radxa UEFI 在 ExitBootServices 前**自行**给 GRUB `devicetree` 加载的 flange DTB 打 KVM fixup：`/chosen` 加 `radxa,enable-kvm`、`radxa,dtb-fixup-applied`，并套用内核源里 `qcs6490-radxa-dragon-q6a-kvm.dtso` 的内容（GPU zap 禁用、scm `shm-bridge-vmid`、venus 追加 iommus 与 `video-firmware`、PCIe ranges、adsp/cdsp `qcom,broken-reset`），另有 PCIe iommu-map 等平台 fixup。因此 flange 无需像 [[thundercomm-rubikpi3]] 那样自带 el2 dtso。EL2 下 `i2c10`（RTC，原 DT 声明 `qcom,enable-gsi-dma`）申请 GPI 通道时，`gpi_config_interrupts()` 读 gpii 1 的 `GPII_n_CNTXT_MSI_BASE_LSB` 触发同步外部中止（`ESR 0x96000010`，另一次为异步 SError panic）。同页前序寄存器可访问，属于寄存器级访问控制。udev 加载 `i2c_qcom_geni` 即崩溃复位，GRUB 追加 `module_blacklist=i2c_qcom_geni` 可绕过。修复：`patches/kernel/0007` 删 `i2c10` 的 flag，由 `0006` 重 provision 回 FIFO。现在 Q6A 所有启用的 i2c 都走 FIFO、不使用 GPI。EL2 实板验证通过（2026-09-27，default-debug）：不加启动参数启动到 rootfs，`/proc/interrupts` 无 `gpi-dma`，RTC（`rtc-ds1307` 驱动 m41t11，`rtc0`）读写走时正常。EL1 下（`Hypervisor Override` 关闭，meizu-e3-bringup-debug，同日）i2c 同样正常：i2c10/i2c13 走 FIFO、无 `gpi-dma`，RTC 开机 hctosys 与宿主时间一致，`sec_ts` probe 读到 `AC,6F,70`。meizu-e3-bringup-debug 在 EL2 下同日回归通过：`card1-DSI-1` `connected`/`enabled` @ 1080×2160；`sec_ts` device id `AC,6F,70`，触摸 5 次按下、419 个输入事件、坐标连续（中断 193→304）；`sgm37604a` 背光写 1024/2048 读回一致；i2c13 无 `GPI transfer failed`，`gpi-dma` 中断为 0。change `fix-qcs6490-i2c10-fifo-el2`。
+
+**默认 EL2（2026-09-28）**：Radxa UEFI 的 `Hypervisor Override` 出厂为 `Auto`，依据 Linux 设备树
+`/chosen/radxa,enable-kvm` 决定是否进 EL2（UEFI 字符串“Auto: Auto enable or disable based on Linux DeviceTree”），
+DSP 预加载的 `Auto` 也是「以 EL2 启动时预加载」。Radxa 官方开启 KVM 的方式是 rsetup 叠加内核自带的
+`qcs6490-radxa-dragon-q6a-kvm.dtso`（`radxa,enable-kvm = <1>` 加 GPU zap、ADSP/CDSP `qcom,broken-reset`、SCM
+SHM bridge、venus `video-firmware`、PCIe 窗口修正）。flange 据此把 `device_tree.name` 改为内核 Makefile 构建的组合 DTB
+`qcs6490-radxa-dragon-q6a-kvm`（base + 该 overlay），`meizu-e3-bringup` 的面板 overlay 叠加在它之上，不复制
+overlay 内容。UEFI 保持 `Auto`（或 `Enabled`）即进 EL2，DSP 与硬件编码同时可用；**不支持 `Disabled`**：EL1 下
+这份 DTB 的 zap 禁用与 venus 非 TZ 启动会使 GPU 与视频不可用。实板（meizu-e3-bringup-debug，`Auto`）用户验证通过。
+change `enable-q6a-auto-el2`。
 
 **EL2 下 ADSP / CDSP（2026-09-27 实板，meizu-e3-bringup-debug）**：EL2 下两个 DSP 都可用。它们在进入 Linux 前已由启动固件拉起，内核 `qcom_q6v5_pas` 只做接管（attach）：`remoteproc0` adsp、`remoteproc1` cdsp 的 `state` 为 `attached`，`firmware` 为 `unknown`，rootfs 里的 `qcom/qcs6490/radxa/dragon-q6a/{adsp,cdsp}.mbn` 开机不会被加载。[[thundercomm-rubikpi3]] 不同：它在 EL2 下由内核自己经 PAS 加载 DSP，卡在 TZ 不支持 `PAS_GET_RSCTABLE`。实板证据：
 
@@ -77,7 +88,7 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 |---|---|
 | 启动链 → Kernel 6.18.2 + UFS（**无复位**）| ✓ |
 | **硬件视频解码 venus** | ✓ `/dev/video1` 解 H.264/HEVC/MPEG2/VP9（gst `v4l2h264dec` → NV12 1280×720 实跑 ~328fps）|
-| **硬件视频编码** | ✓（**需 EL2**）：venus `/dev/video1` 出 H.264/HEVC。**前提＝UEFI `Hypervisor Override` 开启、系统以 EL2 启动**（`/dev/kvm` 在、`/dev/mtd0` 失）；EL1（默认）下喂帧即整机复位。EL2 实测 `v4l2h264enc` 720p NV12→6.46MB 有效 H264（NAL 1/5/7/8、Baseline）、零复位。真根因是 EL1↔EL2（hypervisor 介导编码器 CP/secure 内存），**与驱动/固件/发行版无关**——此前"死路"证据矩阵（2 内核×2 驱动×2 发行版×2 工具）全是 EL1。详见记忆 `qcs6490-venus-encode-soc-reset` |
+| **硬件视频编码** | ✓（**需 EL2**）：venus `/dev/video1` 出 H.264/HEVC。**前提＝UEFI `Hypervisor Override` 开启、系统以 EL2 启动**（`/dev/kvm` 在、`/dev/mtd0` 失）；EL1 下喂帧即整机复位（2026-09-28 起 flange 用 KVM 组合 DTB，UEFI 保持出厂 `Auto` 即进 EL2）。EL2 实测 `v4l2h264enc` 720p NV12→6.46MB 有效 H264（NAL 1/5/7/8、Baseline）、零复位。真根因是 EL1↔EL2（hypervisor 介导编码器 CP/secure 内存），**与驱动/固件/发行版无关**——此前"死路"证据矩阵（2 内核×2 驱动×2 发行版×2 工具）全是 EL1。详见记忆 `qcs6490-venus-encode-soc-reset` |
 | GPU Adreno 643（`/dev/dri/card0`+`renderD128`，a660 fw）| ✓ |
 | 有线网 enp1s0（r8169 + REALTEK_PHY）| ✓ |
 | GENI i2c（qupv3fw.elf.zst 加载）| ✓ |
