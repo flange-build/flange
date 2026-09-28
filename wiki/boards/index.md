@@ -1,7 +1,7 @@
 ---
 title: 板级索引
 type: index
-updated: 2026-09-06
+updated: 2026-09-28
 ---
 
 # 板级索引
@@ -31,6 +31,7 @@ updated: 2026-09-06
 - [radxa-dragon-q6a](radxa-dragon-q6a.md) — QCS6490（首颗 Qualcomm 板，UEFI/GRUB + UFS 4K LBA + Adreno 643 freedreno + AIC8800 USB，status: wip）
 - [thundercomm-rubikpi3](thundercomm-rubikpi3.md) — QCS6490（第二块 QCS6490 板，启动固件在 UFS boot LUN、单会话 rawprogram 全量刷写；板级改用 Yocto 同款厂商内核 6.6.90，EL1 下 DSP 与硬件编码同时可用）
 - [radxa-dragon-q8b](radxa-dragon-q8b.md) — SC8280XP（UEFI/GRUB + UFS 4K LBA + Adreno/MSM + QPS615/TC956x 双网口，status: wip）
+- [nvidia-jetson-tx2](nvidia-jetson-tx2.md) — Tegra186（首块 NVIDIA 板，P2597 + P3310-1000 8GB，L4T R32.7.6 + Ubuntu 18.04，tegraflash 刷写前读 EEPROM 核对身份，status: wip）
 - [arduino-uno-q](../../docs/boards/arduino-uno-q.md) — QRB2210 + STM32U585（U-Boot/systemd-boot + eMMC/QDL，完整 Arduino 生态适配中，待实板验收）
 
 - [radxa-rock5c-lite](radxa-rock5c-lite.md) — RK3582，含 USB-C OTG 与 LCD HAT 专题。

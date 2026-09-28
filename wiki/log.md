@@ -711,3 +711,10 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 ## [2026-09-27] sync | 更正 Q6A "EL1 下 DSI 屏黑屏"为面板偶发黑屏
 
 [[radxa-dragon-q6a]] 上一条"EL1 下魅族 DSI 屏黑屏、推测 Gunyah 拦截显示 DMA"是误判：实测 EL1 也能正常显示，黑屏与 EL 无关，更像面板初始化时复位未生效。条目改为"魅族 DSI 屏偶发黑屏（待查）"，保留黑屏时 Linux 侧各层正常的观测，删去 hypervisor 推测与 HDMI 对照建议，补充 `meizu_e3_prepare()` 复位时序与 `vcc_3v3_lcd` always-on 导致面板不断电的疑点。已知线索：热重启更易黑屏（用户观察），1.8V vccio 与 USB PHY 共用、热重启期间可能不断电；同一次启动内 fb0 blank/unblank 可恢复画面；热重启复现试验未完成。
+
+## [2026-09-28] sync | 新增 nvidiategra186 平台与 Jetson TX2 板卡
+
+新增 [[nvidiategra186 平台]] 与 [[nvidia-jetson-tx2]]（openspec `add-tegra186-jetson-tx2`，实施中）：L4T R32.7.6、
+OE4T 4.9 内核、Ubuntu 18.04 + L4T 用户态（`rootfs.phase2_packages`）、BSP 预编译启动链、tegraflash 刷写包与宿主策略。
+构建期与 stock `flash.sh` 产物对照已记录在变更的 verification.md；实板验收项在板卡页标为待验收。
+平台索引、板卡索引同步新增条目。
