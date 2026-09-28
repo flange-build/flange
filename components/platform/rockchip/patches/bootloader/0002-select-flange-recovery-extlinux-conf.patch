@@ -24,9 +24,10 @@ extlinux 的 `fdtoverlays` 需要 `fdtoverlay_addr_r` 作为 overlay 临时加�
 fdt_addr_r=0x08300000 之前 1MB），无须额外 patch。
 
 diff --git a/arch/arm/mach-rockchip/boot_mode.c b/arch/arm/mach-rockchip/boot_mode.c
+index 484d134..0e74b07 100644
 --- a/arch/arm/mach-rockchip/boot_mode.c
 +++ b/arch/arm/mach-rockchip/boot_mode.c
-@@ -16,6 +16,12 @@ enum {
+@@ -21,6 +21,12 @@ enum {
  	PL,
  };
  
@@ -39,7 +40,7 @@ diff --git a/arch/arm/mach-rockchip/boot_mode.c b/arch/arm/mach-rockchip/boot_mo
  static int misc_require_recovery(u32 bcb_offset, int *bcb_recovery_msg)
  {
  	struct bootloader_message *bmsg;
-@@ -229,11 +235,61 @@ int rockchip_get_boot_mode(void)
+@@ -234,11 +240,61 @@ int rockchip_get_boot_mode(void)
  		return boot_mode[PL];
  }
  
@@ -89,29 +90,31 @@ diff --git a/arch/arm/mach-rockchip/boot_mode.c b/arch/arm/mach-rockchip/boot_mo
  {
  	char env_preboot[256] = {0};
 +	int boot_mode;
- 
--	switch (rockchip_get_boot_mode()) {
++
 +	/*
 +	 * flange 只让 U-Boot 消费一次性启动状态，然后选择 sysboot 读取的
 +	 * extlinux 配置文件。extlinux 文件自身只描述如何启动对应系统。
 +	 */
 +	boot_mode = rockchip_get_boot_mode();
 +	flange_select_extlinux_conf(boot_mode);
-+
+ 
+-	switch (rockchip_get_boot_mode()) {
 +	switch (boot_mode) {
  	case BOOT_MODE_BOOTLOADER:
  		printf("enter fastboot!\n");
  #if defined(CONFIG_FASTBOOT_FLASH_MMC_DEV)
 diff --git a/include/config_distro_bootcmd.h b/include/config_distro_bootcmd.h
+index d959bf6..47458d2 100644
 --- a/include/config_distro_bootcmd.h
 +++ b/include/config_distro_bootcmd.h
-@@ -323,18 +323,19 @@
+@@ -369,19 +369,20 @@
  	BOOTENV_SHARED_EFI \
  	"boot_prefixes=/ /boot/\0" \
  	"boot_scripts=boot.scr.uimg boot.scr\0" \
 +	"flange_extlinux_conf=extlinux.conf\0" \
  	"boot_script_dhcp=boot.scr.uimg\0" \
  	BOOTENV_BOOT_TARGETS \
+ 	BOOTENV_SCAN_LOGO \
  	\
  	"boot_extlinux="                                                  \
  		"sysboot ${devtype} ${devnum}:${distro_bootpart} any "    \

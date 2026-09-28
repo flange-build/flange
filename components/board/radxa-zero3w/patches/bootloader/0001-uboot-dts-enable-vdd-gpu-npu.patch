@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Sun, 27 Sep 2026 12:00:00 +0800
+Subject: [PATCH] dts: rk3568-evb: 在 U-Boot 阶段打开 NPU 供电（RK817 DCDC2 vdd_gpu_npu）
+
+仅适用于 RK817 方案的 RK3566 板：GPU/NPU 共用 DCDC2（vdd_gpu_npu），
+DCDC4 是 3.3V 系统电源，切勿套用 RK809 版本（会把 3.3V 调到 0.9V）。
+
+启用 NPU 后开机在 rknpu_mmu probe 时 panic：
+
+  failed to get ack on domain 'npu', target_idle = 0, target_ack = 0, val=0x6
+  Kernel panic - not syncing: panic_on_set_idle set ...
+
+根因：rk356x.dtsi 的 rknpu_mmu 挂 power-domains = <RK3568_PD_NPU>，
+drivers/iommu 链接顺序早于 drivers/mfd，IOMMU probe 打开 NPU 电源域时
+PMIC 驱动尚未 probe；NPU 电源轨不在 PMIC 硬件上电时序内（RK3566 硬件
+设计指南：NPU 电源可开机后再打开），此刻无电，NIU 不回 idle ack。
+RK3588/RK3576 的 rknpu_mmu 不挂电源域、由 rknpu 驱动先 regulator_enable
+再开域，故不受影响。
+
+厂商板（Radxa ROCK 3A/3B/3C、Orange Pi CM4/3B、Armbian vendor 分支）都
+靠板级 U-Boot DTS 里带 boot-on 的 NPU regulator 节点在进内核前上电；
+flange 用通用 rk3568_defconfig（DT=rk3568-evb，无 PMIC 节点）且 extlinux
+启动时 U-Boot 读不到内核 DTB，从未碰过这路电源。本补丁在 evb dts 追加
+最小 PMIC 节点，只声明 NPU 供电那一路，由 regulators_enable_boot_on()
+设 0.9V 并使能。串口应出现 "PMIC:  RK8xx" 与 "<name> init 900000 uV"。
+
+依赖：SoC 层 bootloader.config 把 interrupt-parent 移出
+CONFIG_OF_SPL_REMOVE_PROPS，否则 dt.dtb 丢掉该属性，
+rk8xx_ofdata_to_platdata() 失败、PMIC 不 probe。
+
+参考：armbian/linux-rockchip#297、armbian/build#7025。
+orangepi-cm4 实板验证：vdd_npu 900mV enabled，rknpu 0.9.8 加载，
+debugfs power on 后 NPU PD on / iommu active。
+---
+  arch/arm/dts/rk3568-evb.dts | 51 +++++++++++++++++++++++++++++++++++++++++++++
+  1 file changed, 51 insertions(+)
+
+diff --git a/arch/arm/dts/rk3568-evb.dts b/arch/arm/dts/rk3568-evb.dts
+index 614736a..6f0a01e 100644
+--- a/arch/arm/dts/rk3568-evb.dts
++++ b/arch/arm/dts/rk3568-evb.dts
+@@ -104,3 +104,54 @@
+ &uart2 {
+ 	status = "okay";
+ };
++
++/*
++ * flange: 在 U-Boot 阶段打开 NPU 供电（rk817 DCDC_REG2 / vdd_gpu）。
++ *
++ * BSP 内核的 rknpu_mmu 挂着 RK3568_PD_NPU，IOMMU probe 早于 rk817 驱动，
++ * 会在 NPU 电源轨尚未上电时打开 NPU 电源域 → NIU 不回 idle ack →
++ * pm_domains.c panic_on_set_idle。这里只声明该路 DCDC，由
++ * regulators_enable_boot_on() 调到 0.9V 并使能；PMIC 属性与内核 dts 一致。
++ * u-boot.dtb 经 fdtgrep 只保留 u-boot,dm-pre-reloc / dm-spl 节点，故
++ * i2c0 → pinctrl → pmic → regulator 整条链都要标记。
++ */
++&i2c0 {
++	u-boot,dm-pre-reloc;
++	status = "okay";
++
++	rk817: pmic@20 {
++		u-boot,dm-pre-reloc;
++		compatible = "rockchip,rk817";
++		reg = <0x20>;
++		interrupt-parent = <&gpio0>;
++		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;
++		/* 1: rst regs (default in codes), 0: rst the pmic */
++		pmic-reset-func = <0>;
++		/* not save the PMIC_POWER_EN register in uboot */
++		not-save-power-en = <1>;
++
++		regulators {
++			u-boot,dm-pre-reloc;
++
++			vdd_gpu: DCDC_REG2 {
++				u-boot,dm-pre-reloc;
++				regulator-always-on;
++				regulator-boot-on;
++				regulator-min-microvolt = <500000>;
++				regulator-max-microvolt = <1350000>;
++				regulator-init-microvolt = <900000>;
++				regulator-ramp-delay = <6001>;
++				regulator-initial-mode = <0x2>;
++				regulator-name = "vdd_gpu";
++			};
++		};
++	};
++};
++
++&i2c0_xfer {
++	u-boot,dm-pre-reloc;
++};
++
++&pcfg_pull_none_smt {
++	u-boot,dm-pre-reloc;
++};

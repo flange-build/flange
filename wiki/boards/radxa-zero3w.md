@@ -13,7 +13,7 @@ related:
   - "[[rockchip 平台]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-09-05
+updated: 2026-09-27
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -55,7 +55,7 @@ flange --target radxa-zero3w-desktop-release plan image
 
 | 项 | 值 |
 |---|---|
-| DTB | `rk3566-radxa-zero-3w` |
+| DTB | `rk3566-radxa-zero-3w-aic8800ds2`（板载 AIC8800DS2 WiFi 变体） |
 | kernel patches | 无（使用平台/SoC 默认） |
 | board patches | 无 |
 
