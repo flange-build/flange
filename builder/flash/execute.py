@@ -144,8 +144,8 @@ class FlashExecutor:
         if not firmware.is_file():
             raise FlashError(
                 f"未找到整盘镜像 {self.WHOLE_DISK_IMAGE}: {self.target_dir}\n"
-                f"  先执行 flange build 生成 image 产物；"
-                f"SPI NAND target 不产整盘镜像，请改用 flange flash <partition>"
+                f"  先执行 flange build 生成 image 产物；SPI NAND 与 Tegra（tegraflash）"
+                f"等 target 不产整盘镜像，请改用 flange flash 或 flange flash <partition>"
             )
 
         size_mb = firmware.stat().st_size / (1024 * 1024)

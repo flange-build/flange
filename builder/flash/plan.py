@@ -143,6 +143,19 @@ class UnoQFlashPlan(FlashPlan):
 
 
 
+class TegraFlashPlan(FlashPlan):
+    """Tegra186 的分区来自刷写包里渲染好的 NVIDIA 分区布局，不用简化 GPT 配置重建。"""
+
+    def partition_image_map(self, config):
+        return {"APP": "image/tegraflash-bundle/system.img"}
+
+    def generate_pre_flash_config(self, config):
+        return PreFlashConfig(usb_vid="0955", usb_pid="7c18")
+
+    def generate_flash_config(self, config, target_dir):
+        from builder.flash.tegra import make_flash_config
+        return make_flash_config(config, target_dir)
+
 
 #: 平台 → 构建期刷写计划。宿主机策略类继承同名 Plan，两侧不会漂移。
 _FLASH_PLANS: dict[str, type[FlashPlan]] = {
@@ -152,6 +165,7 @@ _FLASH_PLANS: dict[str, type[FlashPlan]] = {
     "qualcommqcs6490": QualcommFlashPlan,
     "qualcommsc8280xp": QualcommFlashPlan,
     "qualcommqrb2210": UnoQFlashPlan,
+    "nvidiategra186": TegraFlashPlan,
 }
 
 
