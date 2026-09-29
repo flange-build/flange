@@ -93,7 +93,7 @@ PLATFORM_CASES = {
     },
     "radxa-zero3w-default-release": {
         "platform": "rockchip",
-        "tree": ("rockchip", "rk3566-radxa-zero-3w"),
+        "tree": ("rockchip", "rk3566-radxa-zero-3w-aic8800ds2"),
         "source": ("rockchip-kernel", "branch", "linux-6.1-stan-rkr5.1"),
         "kconfig": "CONFIG_DRM_GUD=y",
         "bootloader_targets": ["rk3568_defconfig"],
