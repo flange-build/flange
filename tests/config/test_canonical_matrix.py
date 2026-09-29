@@ -209,9 +209,10 @@ def test_jetson_tx2_rootfs_contract(configs):
 
     assert rootfs["url"].endswith("ubuntu-base-18.04.5-base-arm64.tar.gz")
     assert rootfs["sha256"] == "9327cf905e818c38ba04605e40fbe11ac6548537786dc12936ca5819f8a563ad"
-    assert "adbd" not in rootfs["custom_packages"]
+    # adb 与其他平台相同走 adbd + usbmoded；usbmoded 需要 Python >= 3.8。
+    assert "adbd" in rootfs["custom_packages"]
     assert not {"btop", "systemd-timesyncd"} & set(rootfs["packages"])
-    assert {"openssh-server", "network-manager"} <= set(rootfs["packages"])
+    assert {"openssh-server", "network-manager", "python3.8", "python3-yaml"} <= set(rootfs["packages"])
     phase2 = dict(item.split("=", 1) for item in rootfs["phase2_packages"])
     assert set(phase2.values()) == {L4T}
     assert {"nvidia-l4t-core", "nvidia-l4t-initrd", "nvidia-l4t-cuda"} <= set(phase2)

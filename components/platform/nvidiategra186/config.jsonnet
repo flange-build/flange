@@ -37,14 +37,13 @@ local nvidiaKey = {
       // btop 从 22.04 起才有；18.04 的 timesyncd 包含在 systemd 包里，没有独立包名。
       base: lib.without(super.base, ['btop', 'systemd-timesyncd']),
     },
-    // nvidia-l4t-init 的 USB device mode 脚本直接调用 /sbin/brctl 与 /usr/sbin/dhcpd
-    // 建 l4tbr0（192.168.55.1）并下发地址，stock 镜像默认带这两个包，deb 却没声明依赖。
-    // isc-dhcp-server 自身的服务没有配置，overlay 中 mask 掉（stock 为 disabled）。
-    packages+: ['bridge-utils', 'isc-dhcp-server'],
-    // adbd 经 build.deps 带入的 usbmoded 需要 Python >= 3.7，18.04 只有 3.6；
-    // flange 编译型 App 又按容器内 glibc 2.39 编译，也不能在 18.04 上运行。
-    // 本平台的设备端通道是 L4T USB device mode（192.168.55.1）+ SSH 与 ttyS0 串口。
-    custom_packages: lib.without(super.custom_packages, ['adbd']),
+    // USB gadget 与其他平台一样由 usbmoded 管理（默认 debug 场景 = adb），L4T 自带的
+    // USB device mode（192.168.55.1）在 overlay 中 mask，两者会争用同一个 UDC。
+    // usbmoded 用到 typing.Protocol（Python >= 3.8），18.04 默认 python3 是 3.6，
+    // 因此装 universe 的 python3.8，overlay 中让 usbmoded 与 usb-mode 用它运行。
+    // python3-yaml 是 usbmoded 的 deb 依赖（自有 deb 以 dpkg 安装，不会自动补依赖）。
+    // flange 编译型 App 按容器内 glibc 2.39 编译，仍不能在 18.04 上运行；adbd 为静态链接。
+    packages+: ['python3.8', 'python3-yaml'],
     // 与 stock L4T 相同的两个源保留在镜像中，设备上可直接 apt install nvidia-jetpack。
     // 不再安装 nvidia-l4t-apt-source，避免同一源被配置两次。
     extra_apt_sources: [

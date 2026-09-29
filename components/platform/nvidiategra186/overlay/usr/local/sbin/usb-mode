@@ -1,0 +1,4 @@
+#!/bin/bash
+# usb-mode CLI 与 usbmoded 同样需要 Python >= 3.8；本路径在 PATH 中先于 /usr/sbin。
+set -euo pipefail
+exec /usr/bin/python3.8 /usr/sbin/usb-mode "$@"
