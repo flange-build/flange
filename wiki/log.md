@@ -718,3 +718,11 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 OE4T 4.9 内核、Ubuntu 18.04 + L4T 用户态（`rootfs.phase2_packages`）、BSP 预编译启动链、tegraflash 刷写包与宿主策略。
 构建期与 stock `flash.sh` 产物对照已记录在变更的 verification.md；实板验收项在板卡页标为待验收。
 平台索引、板卡索引同步新增条目。
+
+## [2026-09-29] sync | Jetson TX2 实板验收：adb、stock 服务对齐与蓝牙
+
+[[nvidiategra186 平台]] 新增"USB gadget：usbmoded + adb"：TX2 改用 usbmoded + adbd（`python3.8` 运行 usbmoded、
+adbd 专用 nsswitch 绑定避免静态 glibc 2.39 加载 18.04 NSS 模块 abort、udev 规则改 `/bin/systemctl`），mask L4T USB
+device mode；首版的 L4T USB 网络与 `bridge-utils` / `isc-dhcp-server` 改写为历史说明；sshd 条目保持。易踩坑补 L4T 蓝牙
+rfkill。[[nvidia-jetson-tx2]] 连接方式从 `192.168.55.1` 改为 adb（含 5555 免认证、`adb reboot` 无效、固定序列号、
+nsswitch 副本等注意事项），新增蓝牙说明，验收表按 verification.md 第 8–11 节更新为已验证 / 待验收。
