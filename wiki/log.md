@@ -726,3 +726,9 @@ adbd 专用 nsswitch 绑定避免静态 glibc 2.39 加载 18.04 NSS 模块 abort
 device mode；首版的 L4T USB 网络与 `bridge-utils` / `isc-dhcp-server` 改写为历史说明；sshd 条目保持。易踩坑补 L4T 蓝牙
 rfkill。[[nvidia-jetson-tx2]] 连接方式从 `192.168.55.1` 改为 adb（含 5555 免认证、`adb reboot` 无效、固定序列号、
 nsswitch 副本等注意事项），新增蓝牙说明，验收表按 verification.md 第 8–11 节更新为已验证 / 待验收。
+
+## [2026-09-29] sync | Jetson TX2 外设验收完成
+
+[[nvidia-jetson-tx2]] 验收表更新：镜像内置蓝牙、以太网 DHCP 与 SSH、kernel-dtb 单刷、USB3 Host、HDMI 均已实板验证；
+新增一行记录 overlay / 内核模块属主修复（`builder/rootfs.py` 改用 tar 合并，属主统一 root，所有平台 `/etc`、`/usr`
+不再归 uid 1000）后的实板复核。仅 jetpack product 仍待验收。

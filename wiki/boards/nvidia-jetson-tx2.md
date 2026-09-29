@@ -85,7 +85,8 @@ L4T R32.7.6（4.9 内核 + Ubuntu 18.04）。平台细节见 [nvidiategra186 平
 | Wi-Fi（NetworkManager DHCP） | 已验证 |
 | nvgpu（114.75–1300.5 MHz）、CUDA driver（Tegra X2，CC 6.2）、`tegrastats` | 已验证 |
 | `nvv4l2h264enc` 硬件编码、`nvv4l2decoder` 硬件解码（GStreamer 工具需另装） | 已验证 |
-| 蓝牙 | 临时安装 bluez 后已验证；镜像内置 `bluez` / `rfkill` 的版本待刷写复验 |
-| 以太网 DHCP 与 SSH、`flange flash kernel-dtb` 单刷 | 待验收（需网线 / Recovery） |
-| USB3 Host 外设、HDMI 控制台 | 待验收（需外设 / 显示器） |
+| 蓝牙（镜像自带 `bluez` / `rfkill`，开机即有 `hci0`，rfkill 选择可持久化） | 已验证（2026-09-29） |
+| 以太网 DHCP（千兆）与 SSH、`flange flash kernel-dtb` 单刷后冷启动 | 已验证（2026-09-29） |
+| USB3 Host（U 盘）、HDMI 控制台（1080p60） | 已验证（2026-09-29） |
+| `/home` 外无 uid 1000 文件、`systemctl --failed` 为 0（overlay / 模块属主修复后） | 已验证（2026-09-29） |
 | jetpack product（CUDA / cuDNN / TensorRT 样例） | 待验收 |
