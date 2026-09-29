@@ -1,0 +1,34 @@
+From: flange <flange@localhost>
+Subject: [PATCH 1/1] dts: rk3576-armsom-cm5-io: 删除占用 FUSB302 中断脚的 work_led
+
+gpio-leds 的 work_led 配在 GPIO0_B4、默认 heartbeat 触发。按 ArmSoM
+CM5 V1.1 原理图，GPIO0_B4 是 USBCC_INT_L，即 FUSB302（i2c0@0x22）的
+中断输出（开漏、上拉），本 dts 的 usbc0 节点也以 RK_PB4 作中断源。
+heartbeat 把这根线改成推挽输出并周期翻转，与 FUSB302 争抢总线电平，
+并在 LED 拉低时触发低电平中断，Type-C（OTG0 / adb / DP altmode）状态
+因此不可靠。
+
+CM5 + CM5-IO V1.1 上没有 SoC 可控的用户 LED：核心板只有以太网 PHY
+自带的 LAN 灯；IO 板 LED2 直接由 VCC_3V3_S0 点亮（电源灯）；网络名为
+LED_GREEN_EN / LED_RED_EN 的 GPIO2_D0 / GPIO2_D1 仅引到 40pin 排针的
+18 / 16 脚。因此直接删除该节点，不迁移到 GPIO2_D0，以免 heartbeat
+翻转排针引脚。
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3576-armsom-cm5-io.dts b/arch/arm64/boot/dts/rockchip/rk3576-armsom-cm5-io.dts
+--- a/arch/arm64/boot/dts/rockchip/rk3576-armsom-cm5-io.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3576-armsom-cm5-io.dts
+@@ -67,14 +67,6 @@
+ 		rockchip,jack-det;
+ 	};
+ 
+-	leds: leds {
+-		compatible = "gpio-leds";
+-		work_led: work {
+-			gpios = <&gpio0 RK_PB4 GPIO_ACTIVE_HIGH>;
+-			linux,default-trigger = "heartbeat";
+-		};
+-	};
+-
+ 	vcc12v_dcin: vcc12v-dcin {
+ 		compatible = "regulator-fixed";
+ 		regulator-name = "vcc12v_dcin";
