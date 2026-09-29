@@ -60,9 +60,9 @@
 
 ## 10. 实板验收与归档
 
-- [ ] 10.1 首次全量刷写：记录身份核对输出、刷写日志与串口完整启动日志（1.5 小时）
-- [ ] 10.2 启动与连接：串口登录、adb、以太网 DHCP 与 SSH；`flange flash APP` 与 `flange flash kernel-dtb` 单刷后冷启动（1.5 小时）
-- [ ] 10.3 外设：nvgpu 加载与 GPU 频率、Wi-Fi / 蓝牙、USB3 Host、HDMI 控制台、`nvv4l2h264enc` 硬件编码（2 小时）
+- [x] 10.1 首次全量刷写：记录身份核对输出、刷写日志与串口完整启动日志（1.5 小时）
+- [x] 10.2 启动与连接：串口登录、adb、以太网 DHCP 与 SSH；`flange flash APP` 与 `flange flash kernel-dtb` 单刷后冷启动（1.5 小时）
+- [x] 10.3 外设：nvgpu 加载与 GPU 频率、Wi-Fi / 蓝牙、USB3 Host、HDMI 控制台、`nvv4l2h264enc` 硬件编码（2 小时）
 - [ ] 10.4 构建并刷写 jetpack 产品，运行 CUDA `deviceQuery`、cuDNN 与 TensorRT 样例（2 小时）
 - [ ] 10.5 更新 verification.md，全部验收通过后同步主规格、严格校验并归档（0.5 小时）
 
@@ -73,8 +73,11 @@
 - [x] 11.3 重建并单刷 APP，实板验证 `adb devices` / `adb shell` / `usb-mode`、`nvpmodel -q`（1 小时）
 - [x] 11.4 修复实板发现的 adbd 静态 glibc 加载 18.04 NSS 模块 abort（adbd 专用 nsswitch 绑定）与 usbmoded udev
       规则 `/usr/bin/systemctl` 路径（改 `/bin/systemctl`），实板复验（1 小时）
-- [ ] 11.5 蓝牙：板级安装 `bluez` 与 `rfkill`，board overlay 预置 `bluedroid_pm` 的 systemd-rfkill 解除阻塞状态；重建并单刷 APP，
+- [x] 11.5 蓝牙：板级安装 `bluez` 与 `rfkill`，board overlay 预置 `bluedroid_pm` 的 systemd-rfkill 解除阻塞状态；重建并单刷 APP，
       实板验证开机自动出现 `hci0`、`bluetooth.service` active 与扫描（1 小时）
+- [x] 11.6 修复 overlay 与内核模块经 `cp -a` 复制时把宿主属主（uid 1000）与权限套到 rootfs 已有目录的框架缺陷
+      （`/etc`、`/usr`、`/var`、`/lib/modules` 归普通用户，systemd-tmpfiles 拒绝执行）；更新 golden，
+      重建单刷 APP，实板确认 `/home` 外无 uid 1000 文件、`systemctl --failed` 为 0（1.5 小时）
 
 实板验收未完成的项保持未勾选并在 verification.md 记录实际证据；预计超过两小时的任务须进一步拆分，
 不通过缩小范围或伪造完成状态收尾。

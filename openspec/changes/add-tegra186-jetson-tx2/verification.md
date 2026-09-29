@@ -252,3 +252,50 @@ DTB 与 BSP 预编译 DTB 反编译（`dtc -s`）对比：仅根节点 `nvidia,d
   `/etc/systemd/system/bluetooth.target.wants/bluetooth.service` 存在（bluez postinst 启用）。
   前一次重建在 Phase 2 解包 `humanity-icon-theme_0.6.15_all.deb` 时 dpkg 报 `corrupted filesystem tarfile`；
   APT 缓存中的该 deb 可完整列出（8161 项）且 SHA256 与上游一致，原样重跑即通过，按偶发处理。
+
+## 12. 蓝牙镜像复刷与其余外设（任务 10.2 / 10.3 / 11.5，2026-09-29）
+
+用户在 Recovery 下先后执行 `flange flash kernel-dtb` 与 `flange flash APP`，两次均冷启动成功。
+
+| 项 | 结果 |
+| --- | --- |
+| kernel-dtb 分区 | 跳过 0x190（400 B）tegraflash 签名头后，前 375312 B 与构建产物 `boot/kernel-dtb.dtb` SHA256 一致 |
+| 蓝牙（镜像自带 `bluez 5.48` / `rfkill 2.31.1`） | 开机无干预：`hci0` 存在，`nvwifibt` / `bluetooth.service` active，`bluedroid_pm` 未阻塞，`hciconfig` `UP RUNNING`；`hcitool lescan` 8 s 收到 596 条 LE 广播 |
+| 以太网 | `eth0` 1000 Mb/s 全双工，NetworkManager DHCP 得到 `172.17.10.183/24` 与默认路由 |
+| SSH（以太网） | 宿主 `ssh -o BatchMode=yes` 对 `flange` 与 `root` 均返回 `Permission denied (publickey,password)`；设备 `sshd -T` 为 `permitrootlogin no` |
+| HDMI | 用户目视控制台输出正常；dmesg `tegradc 15210000.nvdisplay: hdmi: plugged`，读取 EDID，fb0 当前模式 `1920x1080p-60` |
+| USB3 Host | 用户插入 U 盘确认可识别（验证后已拔出，未留存 lsusb 输出） |
+
+**回归：`systemd-tmpfiles-setup.service` failed。** 日志为 `Unsafe symlinks encountered in /var/log/…, refusing`。
+`/var`、`/var/lib` 属主为 `flange:flange`：新增的 board overlay `var/` 经 `cp -a <overlay>/. <rootfs>` 复制时，
+cp 把源目录（仓库检出，宿主 uid 1000、umask 002）的属主与权限套到了 rootfs 已有的目录上。同一机制使
+`/etc`、`/usr`、`/usr/local`、`/root` 为 `flange:flange 775`，`/lib/modules/4.9.337-tegra` 下 960 个模块文件
+（同样经 `cp -a` 安装）也归 flange 所有——普通用户可替换 `/etc` 下文件或内核模块，属提权缺陷。
+本机已构建的 Q6A、RubikPi3 rootfs 的 `/etc`、`/usr` 同样为 uid 1000，确认为所有平台共有的框架缺陷
+（第 7 节记录过该现象，当时另立任务；按用户决定在本变更内修复根因）。
+
+修复：`RootfsBuilder` 的 overlay 与内核模块复制改用 `_merge_tree_command`（GNU tar：打包端
+`--owner=0 --group=0 --mode=go-w`，解包端 `--no-overwrite-dir --keep-directory-symlink`），新条目一律 root 属主、
+去掉组 / 其他写权限，已存在目录的属主与权限不变，已存在的目录符号链接照常跟随。新增
+`tests/builder/test_rootfs_merge_tree.py`（以旧 `cp -a` 反向运行，已有目录权限被改为 775、目录符号链接处报错，
+新测试均失败）；rootfs / recovery golden 仅 overlay 与模块复制两类命令变化；完整 pytest 2284 passed。
+
+修复后构建复核（debugfs 读 `rootfs.img`）：
+
+- TX2（`flange build`，2m24s）：`/`、`/etc`、`/usr`、`/usr/local/sbin`、`/var`、`/var/lib`、`/lib/modules/4.9.337-tegra`、
+  `/etc/flange` 均为 `0:0 0755`，`/root` 为 `0:0 0700`；`/etc/nsswitch.conf`、rfkill 状态文件 `0:0 0644`，
+  `/usr/local/sbin/usb-mode` `0:0 0755`。
+- RubikPi3（Ubuntu 24.04 merged-usr，`flange --target thundercomm-rubikpi3-default-debug build rootfs`，1m23s）：
+  `/lib` 仍为符号链接，模块经其写入 `/usr/lib/modules`（`0:0 0755`）；`/etc`、`/usr`、`/usr/lib/firmware`、`/var`
+  为 `0:0 0755`，`/root` `0:0 0700`，`/root/.bashrc`、`/etc/skel/.bashrc` `0:0 0644`；overlay 的符号链接
+  （`/etc/resolv.conf`、`renesas_usb_fw.mem`、`sysinit.target.wants/rubikpi3-usb-firmware.service`）原样保留、属主 root。
+
+修复后实板（`flange flash APP` 冷启动）：
+
+- `systemctl --failed` 为 0，`systemd-tmpfiles-setup` active，本次启动日志无 `Unsafe`。
+- `find / -xdev -uid 1000` 与 `-gid 1000`（排除 `/home`）均无结果；`/`、`/etc`、`/usr`、`/var`、`/var/lib`、`/lib/modules`
+  为 `root:root 755`，`/root` 为 `root:root 700`，`nvgpu.ko`、`/etc/nsswitch.conf` 为 `root:root 644`。
+  `/etc`、`/usr`、`/lib/modules`、`/root` 下组 / 其他可写的目录只有 Debian 标准的 `root:staff 2775`
+  （`/usr/local/lib/python3.*/dist-packages`、`/usr/local/share/fonts`）。
+- 无回归：`hci0` `UP RUNNING`，`nvwifibt` / `bluetooth` / `ssh` / `usbmoded` / `usbmoded-adbd` active，
+  `sshd -T` 为 `permitrootlogin no`，`nvpmodel -q` 为 `MAXP_CORE_ARM`（`nvpmodel.service` 为 oneshot，已以 0 退出），adb 正常。

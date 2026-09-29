@@ -209,6 +209,24 @@ tegraflash 参数与参考 `flashcmd.txt` 一致。
 **备选**：像 orangepi-cm4 一样增加开机 oneshot 服务写 sysfs。多一个 unit，且用户 `rfkill block` 后下次开机
 又会被解除；预置状态文件则把默认值交给 systemd-rfkill，用户的选择照常持久化。
 
+### D12 overlay 与内核模块的属主（实板反馈后新增）
+
+D11 的 board overlay 首次带入 `var/` 后，实板 `systemd-tmpfiles-setup` 以 "Unsafe symlinks" 失败：`/var` 属主变成了
+flange。根因是 `cp -a <src>/. <dest>`——它把 src 目录自身的属主与权限套到 dest 上，递归时 rootfs 已有的 `/etc`、`/usr`、
+`/var`、`/lib/modules/<release>` 同样如此；src 是仓库检出或宿主构建产物，属主为宿主 uid 1000（恰与镜像第一个普通用户
+同号），umask 002 还带来组写权限。本机已构建的其他平台 rootfs 的 `/etc`、`/usr` 也是 uid 1000，属框架缺陷。
+
+- `builder/rootfs.py` 的 overlay 与模块复制统一走 `_merge_tree_command`：GNU tar 打包端 `--owner=0 --group=0
+  --numeric-owner --mode=go-w`，解包端 `-p --no-overwrite-dir --keep-directory-symlink`，外层 `bash -c 'set -euo pipefail'`
+  保证打包失败时整条命令失败。
+- 已存在的目录保留原属主与权限；已存在的目录符号链接（merged-usr 的 `/lib`）被跟随写入目标。旧 `cp -a` 在这种路径上
+  直接报错（wiki 中"overlay 必须用 `usr/lib` 起点"的约束因此放宽，写 `usr/lib` 仍然正确）。
+- overlay 中的符号链接照原样写入（`/dev/null` mask、`*.wants` 启用链接），与 cp 相同；现有 overlay 没有"普通文件覆盖
+  rootfs 已有符号链接"的路径，tar 替换链接而 cp 会写穿链接的差异不影响现有内容。
+
+**备选**：`cp -a --no-preserve=ownership` 只解决属主，已有目录仍被改成 775；构建后再 `chown -R root:` 会误伤 `/home`
+与包内有意的非 root 属主。均不采用。
+
 ## Risks / Trade-offs
 
 - [gcc-10.5 编 L4T 4.9 + NVIDIA 驱动出现新告警或错误] → OE4T 已适配 gcc 13；`-Wno-error` 兜底；仍失败则在平台

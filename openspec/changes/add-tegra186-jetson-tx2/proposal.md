@@ -31,6 +31,9 @@ TX2 的 CUDA / 硬件编解码 / 摄像头只在 L4T R32（4.9 内核 + Ubuntu 1
 - RootfsBuilder：`disable_root_login` 的 sshd 策略必须真正生效——主配置未加载 `sshd_config.d` 时
   （18.04 的 OpenSSH 7.6 不支持 `sshd_config` 的 `Include`），把 `PermitRootLogin no` 直接写在主配置首行；
   24.04 平台的构建结果不变。
+- RootfsBuilder：overlay 与内核模块改用 tar 合并进 rootfs——原 `cp -a <src>/. <rootfs>` 把仓库检出 / 宿主产物的
+  属主（uid 1000，即镜像第一个普通用户）与 775 权限套到已有的 `/etc`、`/usr`、`/var`、`/lib/modules` 上，普通用户
+  可改系统文件与内核模块（TX2 验收时发现，所有平台共有）。新条目一律 root 属主、去掉组 / 其他写权限，已有目录不动。
 - image：生成自包含的 tegraflash 刷写包——由 BSP 模板与板级分区尺寸生成分区布局 XML，把 rootfs 在构建期扩展到
   APP 分区大小后转为稀疏 `system.img`，附带全部文件的 SHA256 清单与 `flash-config.json`。
 - 宿主刷写：新增 `tegraflash` 刷写策略，检测唯一的 Recovery 设备（USB `0955:7c18`），先读模块 EEPROM
@@ -51,20 +54,22 @@ TX2 的 CUDA / 硬件编解码 / 摄像头只在 L4T R32（4.9 内核 + Ubuntu 1
 ### Modified Capabilities
 
 - `rootfs-user-system`: `disable_root_login` 的 sshd 策略必须在主配置不加载 drop-in 目录时同样生效，
-  校验从"drop-in 文件存在"改为"sshd 实际加载该策略"。
+  校验从"drop-in 文件存在"改为"sshd 实际加载该策略"；新增要求：overlay 与内核模块以 root 属主写入 rootfs，不改动已有目录。
 - `canonical-config-semantics`: 新增 rootfs `phase2_packages` 的 APT 声明边界（进入 rootfs 组件指纹，不进入 Phase 1 基础快照）。
 
 ## Impact
 
 - 代码：新增 `builder/platforms/nvidiategra186/`（kernel / bootloader / boot / rootfs / image）与 `builder/flash/tegra.py`，
   在 `builder/flash/plan.py`、`builder/flash/strategy.py` 注册；`builder/config/schema.py` / `validate.py` 增加
-  BSP 下载、`bootloader.tegraflash` 与 `rootfs.phase2_packages` 字段；`builder/rootfs.py` 的 sshd 策略写入与 Phase 2 APT 安装；
+  BSP 下载、`bootloader.tegraflash` 与 `rootfs.phase2_packages` 字段；`builder/rootfs.py` 的 sshd 策略写入、Phase 2 APT 安装与 overlay / 模块的属主修复；
   `builder/extlinux.py` 的可选 initrd。
 - 内容：`components/platform/nvidiategra186/`（含 `tegra186/` SoC 配置）、`components/board/nvidia-jetson-tx2/`、JetPack 功能包。
 - 外部输入：L4T R32.7.6 BSP 包（约 360 MB）、Ubuntu 18.04 ubuntu-base、OE4T 内核仓库、NVIDIA r32.7 APT 源，
   全部固定版本与摘要。不修改 Dockerfile。
-- 缓存：`builder/` 下新增文件会使所有现有 target 的非 kernel / bootloader 组件缓存失效一次，
-  构建结果不变；rootfs Phase 1 基础快照不受影响。
+- 缓存：`builder/` 下新增文件会使所有现有 target 的非 kernel / bootloader 组件缓存失效一次；
+  rootfs Phase 1 基础快照不受影响。
+- 全部平台镜像：overlay 文件与内核模块改为 root 属主、组 / 其他不可写，`/etc`、`/usr` 等恢复 `root:root 755`；
+  依赖"overlay 文件归 uid 1000"的行为（如普通用户直接改 overlay 下发的配置）不再成立，需经 sudo。
 - 宿主：刷写需要 x86_64 Linux、`python3` 与 root 权限（tegraflash 的宿主二进制只有 x86_64 版本）。
 
 ## 非目标
