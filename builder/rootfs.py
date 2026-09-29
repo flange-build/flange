@@ -4,6 +4,7 @@
   - apply_overlays：platform overlay → board overlay 两层覆盖
   - extra_apt_sources：写入外部 APT 源和 GPG key，供 Phase 1 apt-get update 前使用
   - extra_debs：下载第三方 deb 并安装
+  - phase2_packages：Phase 2 在外部 deb 之后用 APT 安装依赖平台前置条件的包
   - extra_firmware：从外部仓库拉取固件文件并写入 rootfs
   - panel_firmware：把板级 panel init 文本源编译为 panel.bin 写入 rootfs
   - configure_default_locale：写入系统默认 locale
@@ -18,6 +19,7 @@ import json
 import math
 import shutil
 from pathlib import Path
+from builder.apt import AptCache
 from builder.base import ComponentBuilder
 from builder.chroot import ChrootContext
 from builder.config.canonical import kernel_headers_package
@@ -38,6 +40,38 @@ from builder.rootfs_base import (
 # 写入 /etc/sudoers.d/ 时统一使用 0440，与 visudo 默认权限和 sudo 自身的
 # 严格性检查一致；权限错则 sudo 直接拒绝读该文件，提权静默失败。
 _SUDOERS_D_MODE = 0o440
+
+
+def _merge_tree_command(src: Path, dest: Path) -> list[str]:
+    """把宿主目录树合并进 rootfs 的命令：内容照抄，属主统一为 root，已存在的目录不动。
+
+    不用 ``cp -a src/. dest``：它把 src 目录自身的属主与权限套到 dest 上，逐层递归时
+    rootfs 已有的 /etc、/usr、/var、/lib/modules 也一样。src 是仓库检出或宿主构建产物，
+    属主是宿主用户（通常 uid 1000，恰好是镜像里第一个普通用户），检出时 umask 002 还带来
+    组写权限——结果普通用户拥有 /etc 与内核模块（可提权），systemd-tmpfiles 也因 /var
+    属主不是 root 拒绝执行。
+
+    - 打包端 ``--owner=0 --group=0``：条目属主一律 root（git 本就不记录属主）；
+      ``--mode=go-w`` 去掉组 / 其他写权限，还原 git 只记录 644 / 755 的语义。
+    - 解包端 ``--no-overwrite-dir``：已存在的目录保留原属主与权限；
+      ``--keep-directory-symlink``：已存在的目录符号链接（如 merged-usr 的 /lib）跟随写入
+      其目标，不被替换成真实目录（cp -a 遇到这种路径直接报错）。
+    """
+    script = (
+        "set -euo pipefail; "
+        'tar -C "$1" --owner=0 --group=0 --numeric-owner --mode=go-w -cf - . '
+        '| tar -C "$2" -xpf - --no-overwrite-dir --keep-directory-symlink'
+    )
+    return ["bash", "-c", script, "bash", str(src), str(dest)]
+
+
+# 使 sshd_config.d 下 drop-in 生效的主配置指令，与 Ubuntu 20.04+ 默认行一致。
+_SSHD_DROP_IN_INCLUDE = "Include /etc/ssh/sshd_config.d/*.conf"
+# 主配置不加载 drop-in 目录时直接写在首行的同一策略（sshd 取首个出现的值）。
+_SSHD_INLINE_NO_ROOT = (
+    "# flange: disable_root_login=true，本 OpenSSH 不加载 sshd_config.d，策略直接写在首行。\n"
+    "PermitRootLogin no\n"
+)
 
 
 class RootfsBuilder(ComponentBuilder):
@@ -168,9 +202,10 @@ class RootfsBuilder(ComponentBuilder):
             raise BuildError("base 构建期间输入变化，拒绝保存快照")
 
     def _build_phase2(self, rootfs_dir: Path, config: dict) -> None:
-        """custom deb → extra deb → 模块 → headers → 固件 → overlay → locale → 账号。"""
+        """custom deb → extra deb → Phase 2 APT 包 → 模块 → headers → 固件 → overlay → locale → 账号。"""
         self._install_app_debs(rootfs_dir, config)
         self._install_extra_debs(rootfs_dir, config)
+        self._install_phase2_packages(rootfs_dir, config)
         self._install_kernel_modules(rootfs_dir, config)
         self._install_kernel_headers(rootfs_dir, config)
         self._install_extra_firmware(rootfs_dir, config)
@@ -259,7 +294,7 @@ class RootfsBuilder(ComponentBuilder):
         self._status("安装内核模块...")
         dest = rootfs_dir / "lib" / "modules"
         dest.mkdir(parents=True, exist_ok=True)
-        self.docker.run_privileged(["cp", "-a", f"{modules_src}/.", str(dest)])
+        self.docker.run_privileged(_merge_tree_command(modules_src, dest))
 
     def _install_kernel_headers(self, rootfs_dir: Path, config: dict) -> None:
         """安装 kernel 产物中的 linux-headers deb，供设备端编译外部模块。
@@ -384,7 +419,7 @@ class RootfsBuilder(ComponentBuilder):
         ]:
             if overlay_dir.exists() and any(overlay_dir.iterdir()):
                 self._status(f"复制 {label} overlay 文件...")
-                self.docker.run_privileged(["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
+                self.docker.run_privileged(_merge_tree_command(overlay_dir, rootfs_dir))
 
     def _partition_size_mb(self, config: dict, name: str) -> int:
         """指定分区的初始镜像大小（MiB）。几何解析统一走 PartitionLayout。"""
@@ -550,6 +585,32 @@ class RootfsBuilder(ComponentBuilder):
                 )
             chroot.run(["ldconfig"], label="ldconfig...")
         shutil.rmtree(deb_tmp)
+
+    def _install_phase2_packages(self, rootfs_dir: Path, config: dict) -> None:
+        """安装 ``phase2_packages``：依赖 Phase 2 前置条件、不能进共享 Phase 1 的 APT 包。
+
+        典型场景是 NVIDIA L4T 包：preinst 在 chroot 里读不到
+        ``/proc/device-tree``，必须由平台子类先放置标记文件，而 Phase 1 是所有
+        平台共享的基础快照，没有也不应有平台钩子。
+
+        Phase 1 结尾 ``apt-get clean`` 后快照里的索引可能已经过期，这里先
+        ``apt-get update`` 再安装；APT 下载与 Phase 1 共用同一 AptCache 与锁。
+        字段只在 rootfs 组件指纹中，不进入 Phase 1 基础快照身份。
+        """
+        packages = self._component_config(config).get("phase2_packages") or []
+        if not packages:
+            return
+        if self.context is None:
+            raise RuntimeError("rootfs 构建必须注入 WorkspaceContext")
+        apt_cache = AptCache(self.context.build_root / "cache/apt")
+        with apt_cache.locked(), ChrootContext(rootfs_dir, self.docker) as chroot:
+            chroot.bind_mount(str(apt_cache.archives), rootfs_dir / "var/cache/apt/archives")
+            chroot.run(["apt-get", "update"], label="apt-get update（Phase 2）...")
+            chroot.run(
+                self._apt_install_command(packages, config),
+                label=f"安装 {len(packages)} 个 Phase 2 包...",
+            )
+            chroot.run(["apt-get", "clean"])
 
     def _install_extra_firmware(self, rootfs_dir: Path, config: dict):
         """从 canonical source 引用安装额外固件。"""
@@ -794,8 +855,11 @@ class RootfsBuilder(ComponentBuilder):
     def _write_sshd_no_root_drop_in(self, rootfs_dir: Path):
         """写入 /etc/ssh/sshd_config.d/10-flange.conf，禁 root SSH 登录。
 
-        sshd 加载顺序：/etc/ssh/sshd_config 末尾 ``Include sshd_config.d/*.conf``，
-        drop-in 设定覆盖主配置；ubuntu-base 默认即如此。
+        sshd 对同一关键字取**首个**出现的值。Ubuntu 20.04 起主配置开头
+        ``Include sshd_config.d/*.conf``，drop-in 先于其他指令生效，主配置保持原样。
+        sshd_config 的 ``Include`` 从 OpenSSH 8.2 才支持：18.04 的 7.6 既不加载
+        drop-in，写入 ``Include`` 还会让 sshd 因未知选项拒绝启动，所以主配置未加载
+        drop-in 目录时，把同一策略直接写在主配置首行。
         """
         path = rootfs_dir / "etc" / "ssh" / "sshd_config.d" / "10-flange.conf"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -804,6 +868,18 @@ class RootfsBuilder(ComponentBuilder):
             "# adb 调试通道不受影响（adbd 不走 PAM）。\n"
             "PermitRootLogin no\n"
         )
+        main = rootfs_dir / "etc" / "ssh" / "sshd_config"
+        if main.is_file() and not self._sshd_includes_drop_ins(main):
+            main.write_text(_SSHD_INLINE_NO_ROOT + main.read_text())
+
+    @staticmethod
+    def _sshd_includes_drop_ins(main: Path) -> bool:
+        for line in main.read_text().splitlines():
+            words = line.split()
+            if len(words) == 2 and words[0].lower() == "include":
+                if words[1] == _SSHD_DROP_IN_INCLUDE.split()[1]:
+                    return True
+        return False
 
     def _set_root_password_in_chroot(self, chroot, password: str):
         """在已打开的 chroot 上下文中设置 root 密码。
@@ -893,6 +969,14 @@ class RootfsBuilder(ComponentBuilder):
         content = path.read_text()
         if "PermitRootLogin no" not in content:
             raise RuntimeError(f"sshd drop-in 内容异常，缺少 'PermitRootLogin no': {path}")
+        main = rootfs_dir / "etc" / "ssh" / "sshd_config"
+        if main.is_file() and not self._sshd_includes_drop_ins(main):
+            directives = [line.split() for line in main.read_text().splitlines()
+                          if line.strip() and not line.lstrip().startswith("#")]
+            if not directives or [word.lower() for word in directives[0]] != [
+                    "permitrootlogin", "no"]:
+                raise RuntimeError(
+                    f"{main} 既未加载 sshd_config.d，首条指令也不是 PermitRootLogin no")
 
     def _install_panel_firmware(self, rootfs_dir: Path, config: dict):
         """编译并安装 panel firmware（mainline panel-mipi-dbi-spi 兼容）。

@@ -64,6 +64,11 @@ def test_高通两个平台都走构建期DTBO合并():
         assert spec.capability({"platform": platform}, "dtbo_merge_at_build") is True
 
 
+def test_tegra186走构建期DTBO合并():
+    """cboot 从 kernel-dtb 分区提供 DTB，extlinux 不写 FDT，没有运行期加载 overlay 的位置。"""
+    assert spec.capability({"platform": "nvidiategra186"}, "dtbo_merge_at_build") is True
+
+
 def test_非高通平台走运行期overlay():
     for platform in ("rockchip", "amlogic", "allwinnera733"):
         assert spec.capability(

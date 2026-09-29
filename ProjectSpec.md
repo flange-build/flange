@@ -66,6 +66,7 @@ flange 采用 **Docker 容器化构建 + 宿主机部署** 的分离架构：
 | Amlogic | `fastboot` | USB |
 | Allwinner | `dd` | SD 卡 / USB |
 | Qualcomm | `edl-ng` | USB（EDL） |
+| NVIDIA Tegra | `tegraflash`（L4T BSP 自带，仅 x86_64 Linux 宿主） | USB（Recovery / RCM） |
 
 刷写工具运行在宿主机上，不纳入 Docker 构建环境。各平台 `flash_tool` 在
 `components/platform/<vendor>/config.jsonnet` 声明。

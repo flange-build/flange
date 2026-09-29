@@ -1,7 +1,7 @@
 ---
 title: 平台索引
 type: index
-updated: 2026-09-05
+updated: 2026-09-28
 ---
 
 # 平台索引
@@ -14,3 +14,4 @@ updated: 2026-09-05
 - [amlogic 平台](amlogic-平台.md) — S905Y2 / A311D / S905D3；刷写 pyamlboot + fastboot 两段式
 - [qualcommqcs6490 平台](qualcommqcs6490-平台.md) — QCS6490 (SC7280-class) 进行中；首个 UEFI/GRUB 平台；刷写 edl-ng (EDL 9008)
 - [qualcommsc8280xp 平台](qualcommsc8280xp-平台.md) — SC8280XP；复用 Qualcomm UEFI/GRUB 与 edl-ng 策略
+- [nvidiategra186 平台](nvidiategra186-平台.md) — Tegra186 (TX2) 进行中；L4T R32.7.6（4.9 内核 + Ubuntu 18.04）；刷写 BSP tegraflash（USB Recovery 0955:7c18）

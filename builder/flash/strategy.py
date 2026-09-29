@@ -1242,6 +1242,9 @@ def get_flash_strategy(platform: str) -> FlashStrategy:
     if platform == "qualcommqrb2210":
         from builder.flash.unoq import UnoQFlashStrategy
         return UnoQFlashStrategy()
+    if platform == "nvidiategra186":
+        from builder.flash.tegra import TegraFlashStrategy
+        return TegraFlashStrategy()
     cls = _FLASH_STRATEGIES.get(platform)
     if not cls:
         raise FlashError(f"不支持的平台: {platform}（支持: {', '.join(_FLASH_STRATEGIES)}）")

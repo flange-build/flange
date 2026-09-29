@@ -17,7 +17,7 @@
 
 ## 支持的开发板
 
-**20 块板卡配置 · 4 个厂商平台**，按仓库内置配置核对于 2026-09-06。
+**21 块板卡配置 · 5 个厂商平台**，按仓库内置配置核对于 2026-09-06。
 点击板名查看存储介质、接线、刷写方式和功能记录。
 
 > **支持范围**：下表表示仓库已有对应板卡配置，不代表当前版本的所有外设都已完成实机验收。
@@ -64,6 +64,14 @@ VIM3 已验证 U-Boot 进入 fastboot，完整系统启动与外设待验收；R
 | [Radxa Dragon Q6A](wiki/boards/radxa-dragon-q6a.md) | QCS6490 | `radxa-dragon-q6a` |
 | [Radxa Dragon Q8B](wiki/boards/radxa-dragon-q8b.md) | SC8280XP | `radxa-dragon-q8b` |
 | [Thundercomm RUBIK Pi 3](wiki/boards/thundercomm-rubikpi3.md) | QCS6490 | `thundercomm-rubikpi3` |
+
+### NVIDIA · 1 块
+
+| 开发板 | SoC | 配置标识 |
+| --- | --- | --- |
+| [Jetson TX2 开发套件](wiki/boards/nvidia-jetson-tx2.md) | Tegra186 | `nvidia-jetson-tx2` |
+
+TX2 使用 L4T R32.7.6（4.9 内核 + Ubuntu 18.04 用户态），只能在 x86_64 Linux 宿主上刷写；实板验收进行中。
 
 找到板卡后，用 `flange target list <配置标识>` 查看可选产品与变体。
 [全部板卡记录](wiki/boards/index.md) · [新增板级支持](docs/extension-guide.md)

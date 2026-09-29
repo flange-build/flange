@@ -1,0 +1,19 @@
+From: flange <noreply@flange>
+Subject: [PATCH] actmon: 去掉 actmon_map_resource 的 __init
+
+tegra_actmon_register() 是导出函数，由各 actmon 驱动的 probe 调用，deferred
+probe 时 init 段可能已被释放。gcc 7（L4T 官方工具链）把 actmon_map_resource()
+内联进调用者掩盖了这个问题；gcc 10 不内联，tegra_defconfig 又把 section
+mismatch 设为致命（CONFIG_SECTION_MISMATCH_WARN_ONLY=n），modpost 直接失败。
+
+--- a/nvidia/drivers/platform/tegra/central_actmon/actmon_common.c
++++ b/nvidia/drivers/platform/tegra/central_actmon/actmon_common.c
+@@ -958,7 +958,7 @@
+ 
+ 	return ret;
+ }
+-static int __init actmon_map_resource(struct platform_device *pdev)
++static int actmon_map_resource(struct platform_device *pdev)
+ {
+ 	struct resource *res = NULL;
+ 	int ret = 0;

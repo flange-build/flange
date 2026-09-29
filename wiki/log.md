@@ -719,3 +719,24 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 ## [2026-09-27] sync | 更正 Q6A "EL1 下 DSI 屏黑屏"为面板偶发黑屏
 
 [[radxa-dragon-q6a]] 上一条"EL1 下魅族 DSI 屏黑屏、推测 Gunyah 拦截显示 DMA"是误判：实测 EL1 也能正常显示，黑屏与 EL 无关，更像面板初始化时复位未生效。条目改为"魅族 DSI 屏偶发黑屏（待查）"，保留黑屏时 Linux 侧各层正常的观测，删去 hypervisor 推测与 HDMI 对照建议，补充 `meizu_e3_prepare()` 复位时序与 `vcc_3v3_lcd` always-on 导致面板不断电的疑点。已知线索：热重启更易黑屏（用户观察），1.8V vccio 与 USB PHY 共用、热重启期间可能不断电；同一次启动内 fb0 blank/unblank 可恢复画面；热重启复现试验未完成。
+
+## [2026-09-28] sync | 新增 nvidiategra186 平台与 Jetson TX2 板卡
+
+新增 [[nvidiategra186 平台]] 与 [[nvidia-jetson-tx2]]（openspec `add-tegra186-jetson-tx2`，实施中）：L4T R32.7.6、
+OE4T 4.9 内核、Ubuntu 18.04 + L4T 用户态（`rootfs.phase2_packages`）、BSP 预编译启动链、tegraflash 刷写包与宿主策略。
+构建期与 stock `flash.sh` 产物对照已记录在变更的 verification.md；实板验收项在板卡页标为待验收。
+平台索引、板卡索引同步新增条目。
+
+## [2026-09-29] sync | Jetson TX2 实板验收：adb、stock 服务对齐与蓝牙
+
+[[nvidiategra186 平台]] 新增"USB gadget：usbmoded + adb"：TX2 改用 usbmoded + adbd（`python3.8` 运行 usbmoded、
+adbd 专用 nsswitch 绑定避免静态 glibc 2.39 加载 18.04 NSS 模块 abort、udev 规则改 `/bin/systemctl`），mask L4T USB
+device mode；首版的 L4T USB 网络与 `bridge-utils` / `isc-dhcp-server` 改写为历史说明；sshd 条目保持。易踩坑补 L4T 蓝牙
+rfkill。[[nvidia-jetson-tx2]] 连接方式从 `192.168.55.1` 改为 adb（含 5555 免认证、`adb reboot` 无效、固定序列号、
+nsswitch 副本等注意事项），新增蓝牙说明，验收表按 verification.md 第 8–11 节更新为已验证 / 待验收。
+
+## [2026-09-29] sync | Jetson TX2 外设验收完成
+
+[[nvidia-jetson-tx2]] 验收表更新：镜像内置蓝牙、以太网 DHCP 与 SSH、kernel-dtb 单刷、USB3 Host、HDMI 均已实板验证；
+新增一行记录 overlay / 内核模块属主修复（`builder/rootfs.py` 改用 tar 合并，属主统一 root，所有平台 `/etc`、`/usr`
+不再归 uid 1000）后的实板复核。仅 jetpack product 仍待验收。
