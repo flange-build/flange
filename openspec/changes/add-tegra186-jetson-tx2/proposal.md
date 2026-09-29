@@ -17,15 +17,20 @@ TX2 的 CUDA / 硬件编解码 / 摄像头只在 L4T R32（4.9 内核 + Ubuntu 1
   不从源码编译任何前级。
 - boot：产出 `kernel-dtb` 分区内容（cboot 读取、修正后经 U-Boot 传给内核的 DTB），DTBO 在构建期合并。
 - rootfs：TX2 的 rootfs 基线改为 Ubuntu 18.04 ubuntu-base arm64；在平台层剔除 18.04 不存在的包
-  （`btop`、`systemd-timesyncd`）和依赖 Python ≥ 3.7 的默认 `adbd`（经 `usbmoded` 带入）；
+  （`btop`、`systemd-timesyncd`）；
   通过 NVIDIA r32.7 APT 源（签名 key 摘要固定）按固定版本安装 L4T 用户态包（不含 kernel / bootloader 包），
   沿用 L4T 的 `/boot/initrd`（提供 xhci 固件），装入自建内核的 modules、`/boot/Image` 与
-  `/boot/extlinux/extlinux.conf`，保留 L4T USB device mode（192.168.55.1）与 ttyS0 串口控制台。
+  `/boot/extlinux/extlinux.conf`，保留 ttyS0 串口控制台。
+- USB gadget 与其他平台一致由 usbmoded + adbd 管理（默认 adb 场景）：usbmoded 需要 Python ≥ 3.8，
+  安装 18.04 universe 的 `python3.8` 运行它，并 mask 会争用同一 UDC 的 L4T USB device mode（192.168.55.1）。
+  按 NVIDIA `nv_customize_rootfs.sh` 对齐 stock：启用 `nvpmodel.service`，mask `ondemand` 与
+  `NetworkManager-wait-online`。
 - 新增通用 rootfs 字段 `phase2_packages`：在 Phase 2 安装、依赖平台前置条件的 APT 包
   （L4T 包的 preinst 在 chroot 中需要预置标记文件，Phase 1 共享实现无平台钩子）；未声明时行为不变。
   `extlinux` 渲染增加可选 `initrd`，未声明时输出不变。
-- RootfsBuilder：`disable_root_login` 写入的 sshd drop-in 必须真正生效——基线 `sshd_config` 未包含
-  `sshd_config.d` 时补上 `Include`（18.04 的 OpenSSH 7.6 默认不包含）；24.04 平台的构建结果不变。
+- RootfsBuilder：`disable_root_login` 的 sshd 策略必须真正生效——主配置未加载 `sshd_config.d` 时
+  （18.04 的 OpenSSH 7.6 不支持 `sshd_config` 的 `Include`），把 `PermitRootLogin no` 直接写在主配置首行；
+  24.04 平台的构建结果不变。
 - image：生成自包含的 tegraflash 刷写包——由 BSP 模板与板级分区尺寸生成分区布局 XML，把 rootfs 在构建期扩展到
   APP 分区大小后转为稀疏 `system.img`，附带全部文件的 SHA256 清单与 `flash-config.json`。
 - 宿主刷写：新增 `tegraflash` 刷写策略，检测唯一的 Recovery 设备（USB `0955:7c18`），先读模块 EEPROM
@@ -45,7 +50,7 @@ TX2 的 CUDA / 硬件编解码 / 摄像头只在 L4T R32（4.9 内核 + Ubuntu 1
 
 ### Modified Capabilities
 
-- `rootfs-user-system`: `disable_root_login` 的 sshd 策略必须在基线 `sshd_config` 不包含 drop-in 目录时同样生效，
+- `rootfs-user-system`: `disable_root_login` 的 sshd 策略必须在主配置不加载 drop-in 目录时同样生效，
   校验从"drop-in 文件存在"改为"sshd 实际加载该策略"。
 - `canonical-config-semantics`: 新增 rootfs `phase2_packages` 的 APT 声明边界（进入 rootfs 组件指纹，不进入 Phase 1 基础快照）。
 
@@ -53,7 +58,7 @@ TX2 的 CUDA / 硬件编解码 / 摄像头只在 L4T R32（4.9 内核 + Ubuntu 1
 
 - 代码：新增 `builder/platforms/nvidiategra186/`（kernel / bootloader / boot / rootfs / image）与 `builder/flash/tegra.py`，
   在 `builder/flash/plan.py`、`builder/flash/strategy.py` 注册；`builder/config/schema.py` / `validate.py` 增加
-  BSP 下载、`bootloader.tegraflash` 与 `rootfs.phase2_packages` 字段；`builder/rootfs.py` 的 sshd `Include` 与 Phase 2 APT 安装；
+  BSP 下载、`bootloader.tegraflash` 与 `rootfs.phase2_packages` 字段；`builder/rootfs.py` 的 sshd 策略写入与 Phase 2 APT 安装；
   `builder/extlinux.py` 的可选 initrd。
 - 内容：`components/platform/nvidiategra186/`（含 `tegra186/` SoC 配置）、`components/board/nvidia-jetson-tx2/`、JetPack 功能包。
 - 外部输入：L4T R32.7.6 BSP 包（约 360 MB）、Ubuntu 18.04 ubuntu-base、OE4T 内核仓库、NVIDIA r32.7 APT 源，
@@ -68,8 +73,10 @@ TX2 的 CUDA / 硬件编解码 / 摄像头只在 L4T R32（4.9 内核 + Ubuntu 1
 - 只支持 P3310-1000（TX2 8GB）+ P2597 载板；TX2 4GB（P3489-0888）、TX2i（P3489-0000）、TX2 NX
   及第三方载板不在本轮范围。
 - 不从源码编译 MB1/MB2/cboot/BPMP/TOS/U-Boot，不做 Secure Boot / 熔丝烧写，不启用 A/B 槽位与 OTA 升级。
-- 本轮不提供 flange recovery 分区与 ADB 在线维护，TX2 镜像不含 `adbd`；flange 编译型 App 由 24.04 容器按
-  glibc 2.39 编译，不能在 18.04 上运行，App 开发 / 部署流程暂不覆盖 TX2（需要 18.04 sysroot，另立变更）。
+- 本轮不提供 flange recovery 分区；flange 编译型 App 由 24.04 容器按 glibc 2.39 编译，不能在 18.04 上运行
+  （adbd 为静态链接不受影响），App 开发 / 部署流程暂不覆盖 TX2（需要 18.04 sysroot，另立变更）。
+- 不保留 L4T USB device mode 的 192.168.55.1 自动网络：usbmoded 的 ncm / rndis 场景不配置 IP 与 DHCP，
+  经 USB 访问改用 adb（含 `adb forward`）。
 - 不提供 NVIDIA 加速桌面产品；不支持 macOS 或 ARM 宿主刷写；不支持 SD 卡 / USB 启动；不生成整盘 `raw.img`，
   `flange flash --raw` 在该平台不可用。
 - 不以文档或构建通过替代实板验收；验收未完成前不归档。

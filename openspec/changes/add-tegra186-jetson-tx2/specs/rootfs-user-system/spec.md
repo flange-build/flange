@@ -5,8 +5,9 @@
 `disable_root_login: True` 时，框架 SHALL 在构建期：
 1. 在 chroot 内执行 `passwd -l root`（使 `/etc/shadow` 中 root 字段以 `!` 起首）
 2. 写入 `/etc/ssh/sshd_config.d/10-flange.conf`，内容包含 `PermitRootLogin no`
-3. 确认 `/etc/ssh/sshd_config` 加载 `/etc/ssh/sshd_config.d/*.conf`；基线配置未包含该目录时（如 Ubuntu 18.04 的 OpenSSH 7.6），
-   在文件首行插入 `Include /etc/ssh/sshd_config.d/*.conf`，使 drop-in 先于其他指令生效；已包含时不修改文件
+3. 确认 `PermitRootLogin no` 被 sshd 实际加载：`/etc/ssh/sshd_config` 已包含 `Include /etc/ssh/sshd_config.d/*.conf`
+   时不修改主配置；未包含时（如 Ubuntu 18.04 的 OpenSSH 7.6，其 `sshd_config` 不支持 `Include`，写入会使 sshd
+   拒绝启动），把 `PermitRootLogin no` 写在主配置首行，使其先于其他指令生效
 
 `disable_root_login: True` 时，框架 SHALL 不影响 adb 调试通道 — adbd 由 systemd 以 root 启动，不走 PAM，`adb shell` 行为不变。
 
@@ -22,7 +23,7 @@
 
 #### Scenario: 基线 sshd_config 未包含 drop-in 目录
 - **WHEN** 基线 `/etc/ssh/sshd_config` 不含 `Include /etc/ssh/sshd_config.d/*.conf`，配置声明 `disable_root_login = True`
-- **THEN** 镜像 `sshd_config` 第一条非注释指令为该 `Include`，`sshd -T` 输出 `permitrootlogin no`
+- **THEN** 镜像 `sshd_config` 第一条非注释指令为 `PermitRootLogin no`，不含 `Include`，sshd 可以启动且 `sshd -T` 输出 `permitrootlogin no`
 
 #### Scenario: 基线已包含 drop-in 目录
 - **WHEN** 基线 `sshd_config` 已包含该 `Include`（Ubuntu 24.04）

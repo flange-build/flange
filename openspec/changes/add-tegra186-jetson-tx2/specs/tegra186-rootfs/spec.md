@@ -2,12 +2,12 @@
 
 ### Requirement: TX2 rootfs 以 Ubuntu 18.04 为基线
 `nvidiategra186` 平台 SHALL 把 rootfs 基线覆盖为固定 SHA256 的 `ubuntu-base-18.04.5-base-arm64.tar.gz`，
-并在平台层剔除 18.04 不存在的包（`btop`、`systemd-timesyncd`）与依赖 Python ≥ 3.7 的默认 `adbd`。
+并在平台层剔除 18.04 不存在的包（`btop`、`systemd-timesyncd`）。
 其他平台的 rootfs 基线 SHALL 保持不变。
 
 #### Scenario: 基线版本
 - **WHEN** 构建 `nvidia-jetson-tx2-default-release` 的 rootfs
-- **THEN** 镜像 `/etc/os-release` 的 `VERSION_ID` 为 `18.04`，镜像中不含 `adbd` 与 `usbmoded`
+- **THEN** 镜像 `/etc/os-release` 的 `VERSION_ID` 为 `18.04`，包集合不含 `btop` 与独立的 `systemd-timesyncd`
 
 #### Scenario: 其他平台不受影响
 - **WHEN** 求值任一非 Tegra 目标
@@ -45,17 +45,48 @@ TX2 rootfs SHALL 包含 flange 内核的 `/boot/Image` 与模块、`nvidia-l4t-i
 - **WHEN** rootfs 构建完成
 - **THEN** `/lib/modules/` 下唯一目录名等于 kernel 组件的 release，且包含 `modules.dep`
 
-### Requirement: 保留 L4T 设备端连接方式
-TX2 rootfs SHALL 启用 `nv-l4t-usb-device-mode` 服务，使设备通过 micro-USB 提供 `192.168.55.1` 网络；
+### Requirement: USB gadget 由 usbmoded 管理并提供 adb
+TX2 rootfs SHALL 与其他平台一样安装 `adbd` 与 `usbmoded`，以 `python3.8` 运行 `usbmoded` 与 `usb-mode`
+（18.04 默认 Python 3.6 不满足 usbmoded 的 ≥ 3.8 要求），并 SHALL mask `nv-l4t-usb-device-mode` 与
+`nv-l4t-usb-device-mode-runtime`，避免两套 gadget 争用同一个 UDC。
 内核 cmdline SHALL 包含 `console=ttyS0,115200n8` 以提供串口登录。
 
-#### Scenario: USB 网络登录
+#### Scenario: adb 连接
 - **WHEN** 刷写后设备经 micro-USB 连接宿主并完成启动
-- **THEN** 宿主可以用默认用户经 `ssh flange@192.168.55.1` 登录
+- **THEN** 宿主 `adb devices` 列出设备，`adb shell` 以 root 进入 `/bin/bash`
+
+#### Scenario: adb shell 不因 NSS 崩溃
+- **WHEN** 宿主执行 `adb shell id`
+- **THEN** 返回 `uid=0(root)`，adbd 不 abort，gadget 保持绑定；adbd 进程看到的 `/etc/nsswitch.conf` 只含
+  `files` / `dns`，系统 `/etc/nsswitch.conf` 保持 18.04 原样
+
+#### Scenario: 场景切换 CLI
+- **WHEN** 在设备上执行 `usb-mode`
+- **THEN** CLI 以 python3.8 运行并能查询当前场景
 
 #### Scenario: 串口登录
 - **WHEN** 宿主经 J21 调试串口以 115200 连接
 - **THEN** 启动日志可见，并出现 ttyS0 登录提示
+
+### Requirement: 与 stock L4T 的系统服务一致
+TX2 rootfs SHALL 按 NVIDIA `nv_customize_rootfs.sh` 启用 `nvpmodel.service`，并 SHALL mask `ondemand.service`
+与 `NetworkManager-wait-online.service`。
+
+#### Scenario: nvpmodel 已初始化
+- **WHEN** 设备完成启动后执行 `nvpmodel -q`
+- **THEN** 输出当前功耗模式，而不是找不到 `/var/lib/nvpmodel/conf_file_path`
+
+### Requirement: 板载蓝牙开机可用
+TX2 rootfs SHALL 安装 `bluez` 与 `rfkill`，并 SHALL 预置 `bluedroid_pm` 的 systemd-rfkill 状态为解除阻塞，
+使 L4T `nvwifibt.service` 开机加载 BCM4354 固件并注册 `hci0`；用户之后的 rfkill 选择 SHALL 照常由 systemd-rfkill 持久化。
+
+#### Scenario: 开机即有蓝牙控制器
+- **WHEN** 刷写后设备完成启动
+- **THEN** `/sys/class/bluetooth/hci0` 存在，`nvwifibt.service` 与 `bluetooth.service` 为 active，`hciconfig hci0` 显示 `UP RUNNING`
+
+#### Scenario: 用户阻塞后保持
+- **WHEN** 用户执行 `rfkill block bluetooth` 后重启
+- **THEN** `bluedroid_pm` 保持阻塞，不出现 `hci0`
 
 ### Requirement: JetPack 作为可选功能包
 `nvidia-jetpack` 功能包 SHALL 只通过 `config.jsonnet` 向 `rootfs.phase2_packages` 追加固定版本的

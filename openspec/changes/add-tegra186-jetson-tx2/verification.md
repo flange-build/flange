@@ -132,7 +132,7 @@ DTB 与 BSP 预编译 DTB 反编译（`dtc -s`）对比：仅根节点 `nvidia,d
 | extlinux | `kernel /boot/Image`、`initrd /boot/initrd`、`append ${cbootargs} root=/dev/mmcblk0p1 …`，无 FDT |
 | `/lib/modules` | 仅 `4.9.337-tegra`，含 `modules.dep` 与 `nvgpu.ko` |
 | `/etc/fstab` | 由 nvidia-l4t-configs 提供：`/dev/root / ext4 defaults 0 1`（与 stock 相同） |
-| sshd | `sshd_config` 首行 `Include /etc/ssh/sshd_config.d/*.conf`，drop-in `PermitRootLogin no` |
+| sshd | 首版：`sshd_config` 首行 `Include /etc/ssh/sshd_config.d/*.conf`，drop-in `PermitRootLogin no`（实板上使 sshd 无法启动，见第 8 节，已更正） |
 | 账号 | `flange` UID/GID 1000，入 sudo/video/i2c/gpio；root 为 `!*` 锁定 |
 | USB device mode | `nv-l4t-usb-device-mode.service` 已启用；`/sbin/brctl`、`/usr/sbin/dhcpd`、`/sbin/ifconfig` 存在 |
 | GPU / USB 固件 | `/usr/lib/aarch64-linux-gnu/tegra/libcuda.so.1.1`、`/lib/firmware/tegra18x_xusb_firmware` 存在 |
@@ -159,3 +159,96 @@ DTB 与 BSP 预编译 DTB 反编译（`dtc -s`）对比：仅根节点 `nvidia,d
   参数可被 tegraflash 完整处理；BSP 的 `rollback/` 目录对 T186 不需要。
 - 发现框架已有问题（非本变更引入）：overlay 以 `cp -a` 复制，镜像内 overlay 文件属主为宿主 uid 1000、权限 0664，
   已另立任务处理。
+
+## 8. 实板首次全量刷写（任务 10.1，2026-09-29）
+
+- `lunch nvidia-jetson-tx2-default-release && flange flash`：刷写包摘要校验通过，检测到唯一 Recovery 设备，
+  EEPROM 身份核对通过后按确认执行；tegraflash 写完 BCT、MB1_BCT 与全部分区，`Flashing completed`，
+  冷启动；整个刷写 48.9 s（稀疏 system.img 只写有效数据）。成功后宿主工作目录已清理。
+- 启动后宿主出现 `0955:7020`（L4T 正在运行）与 `/dev/ttyACM0`，`192.168.55.1` 可 ping 通：
+  L4T USB device mode（RNDIS/ECM + ACM）工作。
+- **缺陷：SSH 端口 22 拒绝连接**。原因是任务 2.4 的首版实现在 `sshd_config` 首行插入
+  `Include /etc/ssh/sshd_config.d/*.conf`，而 `sshd_config` 的 `Include` 从 OpenSSH 8.2 才支持，镜像内为
+  `openssh 1:7.6p1-4ubuntu0.7`，sshd 以未知选项拒绝启动。已改为主配置未加载 drop-in 目录时把
+  `PermitRootLogin no` 直接写在主配置首行，校验与 spec 同步更正。
+- 串口：本次未接 USB-TTL，没有 ttyS0 启动日志。
+
+## 9. 修复后单刷 APP 与串口启动日志（任务 10.1 / 10.2，2026-09-29）
+
+- 修复 sshd 后重建镜像，`flange flash APP`：身份核对通过，tegraflash 只执行
+  `write APP system.img`（约 31 s）并冷启动，其他分区未写入。
+- 启动后 22 端口监听，`ssh -o BatchMode=yes flange@192.168.55.1` 返回
+  `Permission denied (publickey,password)`，sshd 正常；root 同样被拒。
+- 设备端（USB ACM 控制台登录后）：`systemctl --failed` 为 0 个单元，`uname -r` 为 `4.9.337-tegra`；
+  修复前 `sshd -t` 报 `line 1: Bad configuration option: Include`，与第 8 节结论一致。
+- ttyS0 串口日志（`~/Project/nvidia/baseline/tx2-flange-serial.log`，J21 USB-TTL）：MB2 → cboot
+  （`Cboot Version: t186-8828c893`）→ `U-Boot 2020.04-g904285e3a7` → `Found /boot/extlinux/extlinux.conf`，
+  依次加载 `/boot/initrd` 与 `/boot/Image` → `Linux version 4.9.337-tegra … gcc version 10.5.0` →
+  3.797 s `tegra-xusb … Firmware … Version: 55.18`（固件来自 L4T initrd）→ 5.6 s `EXT4-fs (mmcblk0p1): mounted` →
+  `nvidia-jetson-tx2 login:`。cboot 的 I2C EEPROM / display 报错来自未连接的相机与 HDMI，stock 同样出现。
+- 发现：`nvpmodel -q` 报 `Failed to open /var/lib/nvpmodel/conf_file_path`。stock 由 `nv_customize_rootfs.sh`
+  在有显示管理器时启用 `nvpmodel.service`，同一脚本还禁用 `ondemand.service` 与 `NetworkManager-wait-online.service`、
+  移除 isc-dhcp-server 的启用链接；flange 镜像需要对齐（见任务更新）。
+
+## 10. usbmoded + adb 与 stock 服务对齐（任务 11.1–11.4，2026-09-29）
+
+- 首次单刷（usbmoded 以 `python3.8` 运行、mask L4T USB device mode）后 usbmoded `state=configured`，`adb devices`
+  可见，但 `adb shell` 使 adbd abort（`_dl_call_libc_early_init` 断言）且 gadget 随之解绑、不再恢复。原因有两个：
+  - adbd 为静态链接 glibc 2.39，按 18.04 的 `/etc/nsswitch.conf`（`passwd: compat`）dlopen 系统 2.27 的
+    `libnss_compat`，版本不兼容。修复：只给 `usbmoded-adbd.service` 以 `BindReadOnlyPaths` 绑定一份仅含
+    `files` / `dns` 的 nsswitch（glibc ≥ 2.34 内建这两个后端，不再 dlopen），系统文件不改。
+  - adbd 关闭 ep0 后内核解绑 gadget，usbmoded 的 udev 规则调用 `/usr/bin/systemctl` 重新绑定，而 18.04 未合并
+    `/usr`，只有 `/bin/systemctl`，规则静默失败。修复：两条 `RUN` 改用 `/bin/systemctl --no-block reload`
+    （24.04 上 `/bin` 是 `/usr/bin` 的链接，行为不变）。
+- 修复后重建并 `flange flash APP`，冷启动后：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `adb devices -l` | `0123456789ABCDEF device usb:5-1`（序列号为 usbmoded 回落值：4.9 内核 `/proc/cpuinfo` 无 `Serial` 行，已另立任务） |
+| `adb shell id` | `uid=0(root) gid=0(root)`，shell 为 `/bin/bash`，adbd 不 abort |
+| adbd 看到的 nsswitch | `passwd: files`、`hosts: files dns`（`/proc/<adbd>/root/etc/nsswitch.conf`） |
+| 系统 nsswitch | `nsenter -t 1 -m` 读取为 `passwd: compat`，保持 18.04 原样 |
+| `usb-mode get` | 场景 `debug`，能力 `adb`，UDC `3550000.xudc` `configured`；USB 角色不支持切换（无 usb_role 节点） |
+| adbd 重启恢复 | `systemctl restart usbmoded-adbd.service` 后 udev 触发 usbmoded reload，约 1 s 内 ep0/ep2/ep3 重新启用，adb 自动重连 |
+| `systemctl --failed` | 0 个单元 |
+| `nvpmodel -q` | `NV Power Mode: MAXP_CORE_ARM` / `3`（stock TX2 默认模式），CPU online `0,3-5`（Denver 核按该模式关闭） |
+| 服务状态 | `nvpmodel` enabled；`ondemand`、`NetworkManager-wait-online`、`nv-l4t-usb-device-mode` masked |
+
+- 注意：`adb shell` 的子进程继承 adbd 的 mount namespace，看到的是绑定后的 nsswitch；需要修改系统
+  `/etc/nsswitch.conf` 时经串口、SSH 或 `nsenter -t 1 -m` 操作。
+- flange adbd 未实现 `adb reboot`（返回 `error: closed`，设备不重启，与平台无关）；重启用 `adb shell systemctl reboot`。
+
+## 11. 外设（任务 10.3，2026-09-29，经 adb 执行）
+
+| 项 | 结果 |
+| --- | --- |
+| GPU | `nvgpu` 已加载，可用频率 114.75–1300.5 MHz；`tegrastats` 正常输出 |
+| CUDA driver | ctypes 调 `libcuda.so.1`：`cuInit` 返回 0，1 个设备 `NVIDIA Tegra X2`，CC 6.2，总显存 7854 MB |
+| Wi-Fi | brcmfmac `wlan0` 经 NetworkManager 连上 AP，DHCP 得到 `172.17.30.181/24`，可访问 Ubuntu 源 |
+| 硬件编码 | 临时 `apt install gstreamer1.0-tools` 等（1.14.5）后，`videotestsrc` 1080p 300 帧 → `nvvidconv` → `nvv4l2h264enc`：日志 `NVMEDIA: NVENC`，用时 7.8 s，输出 5196861 B，码流以 AUD + SPS（`67 42 40 28`，Baseline L4.0）开头 |
+| 硬件解码 | 同一码流 `h264parse ! nvv4l2decoder ! fakesink`：0.54 s 解完 300 帧 |
+| USB3 Host | 仅见 `1d6b:0002` / `1d6b:0003` 两个 root hub，未插外设，**待验证** |
+| 以太网 | `eth0` carrier 0（未接网线），**待验证** |
+| HDMI | 未接显示器（fb0 仅默认 `640x480p-60`），**待验证** |
+
+蓝牙：
+
+- 首版镜像无 `hci0`。L4T 的 `99-nv-wifibt.rules` 只在 `bluedroid_pm` rfkill 解除阻塞时启动 `nvwifibt.service`，
+  该 rfkill 默认 soft-blocked；stock 由 GNOME 会话的 rfkill 插件解除阻塞，flange 无桌面，且未装 `bluez`（stock 已装）。
+- 手动 `echo 0 > /sys/class/rfkill/rfkill0/soft` 后，udev 启动 `nvwifibt`，`brcm_patchram_plus` 经 `/dev/ttyTHS3`
+  加载 `/lib/firmware/bcm4354.hcd`（`BCMCHIP=0x4354`），`hci_uart` / `btbcm` 加载，`hci0` 出现。
+  systemd-rfkill 把状态存为 `/var/lib/systemd/rfkill/platform-bluedroid_pm:bluetooth` = `0`；`systemctl reboot` 后
+  无需干预 `hci0` 自动出现，`nvwifibt` 与 `bluetooth.target` 为 active。
+- 临时安装 `bluez 5.48` 后：`bluetooth.service` enabled / active，控制器 `00:04:4B:A5:D6:E6`，`hciconfig` 为
+  `UP RUNNING`；`hcitool lescan` 10 s 收到 1273 条 LE 广播，`hcitool scan` 发现 1 个经典蓝牙设备。
+- 修复：板级 `rootfs.packages` 加 `bluez`，board overlay 预置上述 systemd-rfkill 状态文件（用户 `rfkill block`
+  后同样会被持久化）。
+- 用户选择持久化（临时装 `rfkill 2.31.1`，stock 已装）：`rfkill block bluetooth` 后 `hci0` 消失、`nvwifibt` 被 udev
+  停止，systemd-rfkill 约 5 s 后把状态文件改写为 `1`；重启后 `bluedroid_pm` 仍为 `Soft blocked: yes`、无 `hci0`。
+  `rfkill unblock bluetooth` 后 8 s 内 `hci0` 重新出现，`nvwifibt` / `bluetooth.service` active，`hciconfig` 为 `UP RUNNING`。
+  18.04 的 util-linux 不含 `rfkill` 命令，板级同时安装 `rfkill`。
+- 重建（`flange build`，5m43s）：`packages.manifest` 含 `bluez 5.48-0ubuntu3.9`、`rfkill 2.31.1-0.4ubuntu3.7`；
+  debugfs 读 `rootfs.img`：`/var/lib/systemd/rfkill/platform-bluedroid_pm:bluetooth` 内容为 `0\n`，
+  `/etc/systemd/system/bluetooth.target.wants/bluetooth.service` 存在（bluez postinst 启用）。
+  前一次重建在 Phase 2 解包 `humanity-icon-theme_0.6.15_all.deb` 时 dpkg 报 `corrupted filesystem tarfile`；
+  APT 缓存中的该 deb 可完整列出（8161 项）且 SHA256 与上游一致，原样重跑即通过，按偶发处理。

@@ -10,7 +10,7 @@
 - [x] 2.2 新增 `rootfs.phase2_packages`：rootfs 专属字段（recovery 拒绝）、Phase 2 在外部 deb 之后经 AptCache 安装、
       进入 rootfs 指纹不进入 Phase 1 快照；单测覆盖执行顺序、指纹与空值无副作用（2 小时）
 - [x] 2.3 `LabelSpec` 增加可选 `initrd` 并渲染 `initrd` 行，确认现有平台 extlinux 输出不变（0.5 小时）
-- [x] 2.4 sshd drop-in 在 `sshd_config` 缺少 `Include` 时于首行插入并纳入校验；单测覆盖已包含（字节一致）与缺失两种基线（1 小时）
+- [x] 2.4 主配置未加载 `sshd_config.d` 时把 `PermitRootLogin no` 写在首行并纳入校验（首版插入 `Include` 在实板上使 sshd 无法启动，已更正）；单测覆盖已包含（字节一致）与缺失两种基线（1 小时）
 
 ## 3. 平台包与配置
 
@@ -61,10 +61,20 @@
 ## 10. 实板验收与归档
 
 - [ ] 10.1 首次全量刷写：记录身份核对输出、刷写日志与串口完整启动日志（1.5 小时）
-- [ ] 10.2 启动与连接：串口登录、USB 网络 SSH、以太网 DHCP；`flange flash APP` 与 `flange flash kernel-dtb` 单刷后冷启动（1.5 小时）
+- [ ] 10.2 启动与连接：串口登录、adb、以太网 DHCP 与 SSH；`flange flash APP` 与 `flange flash kernel-dtb` 单刷后冷启动（1.5 小时）
 - [ ] 10.3 外设：nvgpu 加载与 GPU 频率、Wi-Fi / 蓝牙、USB3 Host、HDMI 控制台、`nvv4l2h264enc` 硬件编码（2 小时）
 - [ ] 10.4 构建并刷写 jetpack 产品，运行 CUDA `deviceQuery`、cuDNN 与 TensorRT 样例（2 小时）
 - [ ] 10.5 更新 verification.md，全部验收通过后同步主规格、严格校验并归档（0.5 小时）
+
+## 11. 实板反馈：adb 与 stock 对齐
+
+- [x] 11.1 TX2 改用 usbmoded + adbd：`python3.8` / `python3-yaml`、usbmoded drop-in 与 `usb-mode` 包装、mask L4T USB device mode；更新规格与测试（1 小时）
+- [x] 11.2 按 `nv_customize_rootfs.sh` 对齐：启用 `nvpmodel.service`，mask `ondemand` 与 `NetworkManager-wait-online`（0.5 小时）
+- [x] 11.3 重建并单刷 APP，实板验证 `adb devices` / `adb shell` / `usb-mode`、`nvpmodel -q`（1 小时）
+- [x] 11.4 修复实板发现的 adbd 静态 glibc 加载 18.04 NSS 模块 abort（adbd 专用 nsswitch 绑定）与 usbmoded udev
+      规则 `/usr/bin/systemctl` 路径（改 `/bin/systemctl`），实板复验（1 小时）
+- [ ] 11.5 蓝牙：板级安装 `bluez` 与 `rfkill`，board overlay 预置 `bluedroid_pm` 的 systemd-rfkill 解除阻塞状态；重建并单刷 APP，
+      实板验证开机自动出现 `hci0`、`bluetooth.service` active 与扫描（1 小时）
 
 实板验收未完成的项保持未勾选并在 verification.md 记录实际证据；预计超过两小时的任务须进一步拆分，
 不通过缩小范围或伪造完成状态收尾。

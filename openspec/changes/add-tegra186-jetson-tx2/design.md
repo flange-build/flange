@@ -119,14 +119,15 @@ extlinux 不放 boot 组件，因为 U-Boot 只从 APP 分区的 `/boot` 读取�
 - `_post_customize`：安装 `/boot/Image`；写 `/boot/extlinux/extlinux.conf`（`LINUX /boot/Image`、
   `INITRD /boot/initrd`、`APPEND ${cbootargs} <boot.kernel_args>`，不写 FDT）；按板级 TNSPEC 写
   `/etc/nv_boot_control.conf`；`FSTAB_MOUNTS` 只挂 rootfs。
-- 保留 `nv-l4t-usb-device-mode`（192.168.55.1）；串口 getty 由内核 `console=ttyS0` 自动拉起。
+- 串口 getty 由内核 `console=ttyS0` 自动拉起。USB gadget 见 D10。
 
 ### D6 sshd drop-in 在 18.04 上生效
 
 `disable_root_login` 写入 `/etc/ssh/sshd_config.d/10-flange.conf`，但 18.04 的 `sshd_config` 没有 `Include`
-（实板已确认）。RootfsBuilder 在写 drop-in 时，若 `sshd_config` 没有包含该目录，就在文件首行插入
-`Include /etc/ssh/sshd_config.d/*.conf`（sshd 取首个匹配值，必须在其他指令之前）；校验改为同时检查 Include。
-24.04 的 `sshd_config` 已包含该行，构建结果不变。
+（实板已确认），而且 `sshd_config` 的 `Include` 从 OpenSSH 8.2 才支持——18.04 的 7.6 遇到它会因未知选项
+拒绝启动（首版实现插入 `Include`，实板 sshd 无法启动，见 verification.md）。因此主配置未加载 drop-in 目录时，
+RootfsBuilder 把 `PermitRootLogin no` 直接写在主配置首行（sshd 取首个出现的值）；校验要求主配置加载
+drop-in 目录，或首条指令为 `PermitRootLogin no`。24.04 的 `sshd_config` 已包含 `Include`，构建结果不变。
 
 ### D7 image：自包含 tegraflash 刷写包，Python 重建 flash.sh 的必要逻辑
 
@@ -164,6 +165,49 @@ tegraflash 参数与参考 `flashcmd.txt` 一致。
 `components/packages/nvidia-jetpack/`：只含 `config.jsonnet`，向 `rootfs.phase2_packages` 追加
 `nvidia-jetpack=4.6.6-b24`（依赖闭包由 APT 解析：CUDA 10.2、cuDNN 8、TensorRT 8、VPI、VisionWorks、multimedia-api 等）。
 板卡以 product `jetpack` 启用，默认 product 不启用；体积数 GB，APP 分区须留足空间。
+
+### D10 adb：usbmoded + python3.8 取代 L4T USB device mode（实板反馈后新增）
+
+首轮实板验收后用户要求 TX2 支持 adb，并选择与其他平台一致的 flange 标准栈：
+
+- 保留基线 `custom_packages` 中的 `adbd`（经 build.deps 带入 `usbmoded`），平台层安装 `python3.8` 与
+  `python3-yaml`。usbmoded 使用 `typing.Protocol`，需要 Python ≥ 3.8；其余代码不含 3.9+ 的运行期写法
+  （`str | None` 只出现在 `from __future__ import annotations` 的注解中）。
+- 平台 overlay：`usbmoded.service.d/10-python3.8.conf` 以 `python3.8` 执行 `/usr/sbin/usbmoded`；
+  `/usr/local/sbin/usb-mode` 包装 CLI（PATH 先于 `/usr/sbin`）；mask `nv-l4t-usb-device-mode` 与
+  `-runtime`，否则两套 gadget 争用 `3550000.xudc`。
+- 4.9 内核没有 `usb_role` 类，usbmoded 的 host / device 角色场景不可用；默认 `debug` 场景（adb）不依赖它。
+- **adbd 的 NSS**：adbd 静态链接 glibc 2.39，解析用户时仍会 dlopen 系统 NSS 模块。18.04 的 nsswitch 为
+  `compat` / `db`，加载 glibc 2.27 的模块触发 `_dl_call_libc_early_init: assertion failed` 并 abort（实板
+  `adb shell` 即崩，随后 FunctionFS 关闭、gadget 被内核解绑）。glibc 2.34 起 `files` / `dns` 内置于 libc，
+  因此平台 overlay 用 `usbmoded-adbd.service.d/10-nsswitch.conf` 的 `BindReadOnlyPaths` 只在 adbd 及其 shell 的
+  挂载命名空间内换成仅含 `files` / `dns` 的配置，系统其余部分保持 stock。实板验证：把 passwd/group/shadow
+  改为 `files` 后 `adb shell` 正常。备选是给 adbd 打补丁绕开 NSS 并重建两种架构，代价更高，暂不采用。
+- **udev 规则路径**：usbmoded 的 `61-usbmode.rules` 写死 `/usr/bin/systemctl`，18.04 未合并 `/usr`，
+  规则执行失败，adbd 重启后 gadget 不会被重新绑定。改为 `/bin/systemctl`（20.04 起 `/bin` 指向 `usr/bin`，
+  对其他平台无行为变化）。
+- 同时按 NVIDIA `nv_customize_rootfs.sh` 对齐 stock：启用 `nvpmodel.service`（stock 带桌面时启用，
+  否则 `nvpmodel -q` 找不到 `/var/lib/nvpmodel/conf_file_path`），mask `ondemand`（会覆盖 L4T 调频策略）与
+  `NetworkManager-wait-online`。不再需要 `bridge-utils` / `isc-dhcp-server`。
+
+**备选**：把 adb 的 FunctionFS 追加进 L4T 自带 gadget，保留 192.168.55.1 与 ACM 串口，但属于 TX2 专用实现、
+没有 `usb-mode` 场景切换；用户选择了标准栈。**代价**：失去插上即有的 192.168.55.1 网络，USB 访问改走 adb。
+
+### D11 蓝牙：bluez + 预置 rfkill 状态（实板反馈后新增）
+
+模块上的 BCM4354 蓝牙挂在 `ttyTHS3`，由 `nvidia-l4t-firmware` 的 `99-nv-wifibt.rules` 在 `bluedroid_pm` rfkill
+解除阻塞时启动 `nvwifibt.service`（`brcm_patchram_plus` 下载 `bcm4354.hcd` 并挂 HCI 线路规程）。该 rfkill
+默认 soft-blocked，stock 靠 GNOME 会话的 rfkill 插件解除；flange 没有桌面，镜像也没装 `bluez`，因此没有 `hci0`。
+
+- 板级 `rootfs.packages` 加 `bluez` 与 `rfkill`（stock 均已装；bluetoothd 使用 L4T 自带的 `nv-bluetooth-service.conf`
+  drop-in；18.04 的 util-linux 不含 `rfkill` 命令）。
+- board overlay 预置 systemd-rfkill 状态 `/var/lib/systemd/rfkill/platform-bluedroid_pm:bluetooth` = `0`，
+  开机由 `systemd-rfkill` 恢复为解除阻塞，再由既有 udev 规则拉起 `nvwifibt`。键名是 udev `ID_PATH`
+  （`platform-bluedroid_pm`），由 DT 中固定的平台设备名决定。
+- 放在板级：蓝牙芯片属于 P3310 模块，其他 Tegra186 模块（如 TX2 NX）不一定有。
+
+**备选**：像 orangepi-cm4 一样增加开机 oneshot 服务写 sysfs。多一个 unit，且用户 `rfkill block` 后下次开机
+又会被解除；预置状态文件则把默认值交给 systemd-rfkill，用户的选择照常持久化。
 
 ## Risks / Trade-offs
 
