@@ -6,6 +6,12 @@
 
 ---
 
+## [2026-09-29] sync | rockchip U-Boot 0002 上下文漂移记入易踩坑；armsom-cm5-io 删除占用 FUSB302 中断脚的 work_led
+
+radxa/u-boot `next-dev-v2026.01` 上游 `31a7266f4d`（2026-09-18）在 `config_distro_bootcmd.h` 的 `BOOTENV_BOOT_TARGETS` 后插入 `BOOTENV_SCAN_LOGO`，平台 patch 0002 旧 hunk 以该处为 context，全 rockchip 板 bootloader 阶段打补丁失败（已由 commit 5eb5cfd 按新上下文重新生成修复）。把"跟踪分支 HEAD 导致平台 patch 上下文漂移"补入 [[rockchip 平台]] 易踩坑。
+
+armsom-cm5-io：按 ArmSoM CM5 / CM5-IO V1.1 原理图，BSP dts 的 heartbeat `work_led` 所在 GPIO0_B4 实为 FUSB302 中断 `USBCC_INT_L`，新增板级 kernel patch 0002 删除该节点（本板无 SoC 可控用户 LED，GPIO2_D0/D1 只引到 40pin）。同时把 USB-A 链路（RTS5411S hub ← USB3_OTG1，VBUS 使能 GPIO4_B0）的核对结论与"实板无反应、待诊断"状态写入 [[armsom-cm5-io]]。
+
 ## [2026-09-28] sync | RUBIK Pi 3 厂商内核下的外设验收
 
 [[thundercomm-rubikpi3]]（default-debug，厂商内核 6.6.90，EL1）补充验收：Wi-Fi 连 5 GHz 并通外网，HDMI 经 LT9611 由 `kmscube` 出图（用户目视），GPU 离屏渲染读回正确，以太网、USB3 外设、冷/热启动正常。未通过：音频播放（LPAIF 需要高通 AGM/PAL 用户态建立 ADSP 音频图，原生 ALSA 返回 `-EINVAL`）、Type-C UCSI 端口仍未注册。厂商配置未开 `CONFIG_DRM_FBDEV_EMULATION`，headless 镜像开机 HDMI 无控制台，暂不打开。

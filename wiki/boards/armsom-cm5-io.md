@@ -5,6 +5,7 @@ status: wip
 sources:
   - components/board/armsom-cm5-io/config.jsonnet
   - components/board/armsom-cm5-io/patches/kernel/0001-dts-armsom-cm5-wifi-chip-ap6275s.patch
+  - components/board/armsom-cm5-io/patches/kernel/0002-dts-armsom-cm5-io-drop-work-led-on-fusb302-int.patch
   - components/board/armsom-cm5-io/overlay/etc/modprobe.d/bcmdhd.conf
   - components/platform/rockchip/rk3576/config.jsonnet
   - docs/first-steps.md
@@ -12,7 +13,7 @@ related:
   - "[[rockchip 平台]]"
   - "[[radxa-rock5b]]"
   - "[[orangepi-cm4]]"
-updated: 2026-09-05
+updated: 2026-09-29
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -47,6 +48,15 @@ panfrost 渲染（GLES 3.1）通过。
   （`firmware/broadcom/AP6275S`）部署到 `/lib/firmware/brcm/`；overlay
   `modprobe.d/bcmdhd.conf` 用 `firmware_path` 覆盖 OOT 默认 Android 路径。实测
   country CN、扫到 2.4G+5G AP。BT(UART4) 固件就绪、不预装用户态栈。
+- **USB-A（4 口，排查中）**：IO 板 RTS5411S USB3 hub 上行接 SoC USB3_OTG1
+  （ComboPHY1 `combphy1_psu` + USB2 `u2phy1`，`usb_drd1_dwc3` host）；hub 由常开
+  VCC5V0_DEVICE_S0 供电、无 SoC 复位脚；口上 VBUS 由两颗 LPW5202 提供，EN 为 IO
+  板 `USB3_HOST_PWREN_H` ← CM5 pin49（SAI1_SDO1_M0）= **GPIO4_B0**，对应 dts
+  `vcc5v0_host`。按 CM5 / CM5-IO V1.1 原理图逐项核对 dts、最终 dtb 与 `.config`
+  （DWC3 / XHCI / NANENG combphy / USB_STORAGE 均 `=y`），与 Armbian rkr5.1、
+  mainline 写法一致；但实板插 U 盘完全无反应，根因待实板诊断（`23400000.usb`
+  是否绑定、`lsusb` 是否见 `0bda:5411` / `0bda:0411`、口上 VBUS 是否 5V）。IO 板
+  V1.0 的 hub OTG1_SSTX/SSRX 接反（V1.1 修正），只会退化到 USB2，不会完全无反应。
 
 ## 易踩坑
 
@@ -58,3 +68,9 @@ panfrost 渲染（GLES 3.1）通过。
   firmware/`（Android）→ `modprobe.d` 传 `firmware_path` 改 `/lib/firmware/brcm/`。
 - OOT bcmdhd 编译别用仓里 `bcmdhd_sdio` target（内部 `M=$(PWD)` 在容器里指错
   到 `/workspace`）→ 直接 `make -C {kernel_src} M=.../bcmdhd modules`。
+- BSP dts 的 `work_led`（gpio-leds，heartbeat）配在 **GPIO0_B4**，而该脚是
+  FUSB302 中断 `USBCC_INT_L`：heartbeat 推挽翻转会与 FUSB302 争电平、在 LED
+  拉低时误触发中断，Type-C（OTG0 / adb / DP altmode）不可靠。板级 kernel patch
+  `0002` 删除该节点。本板**没有 SoC 可控的用户 LED**：IO 板 LED2 是 VCC_3V3_S0
+  直驱的电源灯，`LED_GREEN_EN` / `LED_RED_EN`（GPIO2_D0 / GPIO2_D1）只引到 40pin
+  排针 18 / 16 脚——别照 mainline 把 LED 挪到这两脚，否则 heartbeat 会翻转排针。
