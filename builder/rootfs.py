@@ -43,6 +43,11 @@ _SUDOERS_D_MODE = 0o440
 
 # 使 sshd_config.d 下 drop-in 生效的主配置指令，与 Ubuntu 20.04+ 默认行一致。
 _SSHD_DROP_IN_INCLUDE = "Include /etc/ssh/sshd_config.d/*.conf"
+# 主配置不加载 drop-in 目录时直接写在首行的同一策略（sshd 取首个出现的值）。
+_SSHD_INLINE_NO_ROOT = (
+    "# flange: disable_root_login=true，本 OpenSSH 不加载 sshd_config.d，策略直接写在首行。\n"
+    "PermitRootLogin no\n"
+)
 
 
 class RootfsBuilder(ComponentBuilder):
@@ -826,10 +831,11 @@ class RootfsBuilder(ComponentBuilder):
     def _write_sshd_no_root_drop_in(self, rootfs_dir: Path):
         """写入 /etc/ssh/sshd_config.d/10-flange.conf，禁 root SSH 登录。
 
-        sshd 对同一关键字取**首个**出现的值，drop-in 必须经主配置开头的
-        ``Include`` 先于其他指令加载。Ubuntu 20.04 起的 OpenSSH 默认带这行；
-        18.04 的 OpenSSH 7.6 没有，drop-in 写了也不生效，所以缺失时在首行补上。
-        已包含时不修改主配置，保持发行版文件原样。
+        sshd 对同一关键字取**首个**出现的值。Ubuntu 20.04 起主配置开头
+        ``Include sshd_config.d/*.conf``，drop-in 先于其他指令生效，主配置保持原样。
+        sshd_config 的 ``Include`` 从 OpenSSH 8.2 才支持：18.04 的 7.6 既不加载
+        drop-in，写入 ``Include`` 还会让 sshd 因未知选项拒绝启动，所以主配置未加载
+        drop-in 目录时，把同一策略直接写在主配置首行。
         """
         path = rootfs_dir / "etc" / "ssh" / "sshd_config.d" / "10-flange.conf"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -840,7 +846,7 @@ class RootfsBuilder(ComponentBuilder):
         )
         main = rootfs_dir / "etc" / "ssh" / "sshd_config"
         if main.is_file() and not self._sshd_includes_drop_ins(main):
-            main.write_text(f"{_SSHD_DROP_IN_INCLUDE}\n" + main.read_text())
+            main.write_text(_SSHD_INLINE_NO_ROOT + main.read_text())
 
     @staticmethod
     def _sshd_includes_drop_ins(main: Path) -> bool:
@@ -941,7 +947,12 @@ class RootfsBuilder(ComponentBuilder):
             raise RuntimeError(f"sshd drop-in 内容异常，缺少 'PermitRootLogin no': {path}")
         main = rootfs_dir / "etc" / "ssh" / "sshd_config"
         if main.is_file() and not self._sshd_includes_drop_ins(main):
-            raise RuntimeError(f"{main} 未加载 sshd_config.d，drop-in 不会生效")
+            directives = [line.split() for line in main.read_text().splitlines()
+                          if line.strip() and not line.lstrip().startswith("#")]
+            if not directives or [word.lower() for word in directives[0]] != [
+                    "permitrootlogin", "no"]:
+                raise RuntimeError(
+                    f"{main} 既未加载 sshd_config.d，首条指令也不是 PermitRootLogin no")
 
     def _install_panel_firmware(self, rootfs_dir: Path, config: dict):
         """编译并安装 panel firmware（mainline panel-mipi-dbi-spi 兼容）。
