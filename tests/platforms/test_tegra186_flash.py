@@ -137,8 +137,11 @@ from builder.flash.tegra import TegraFlashStrategy  # noqa: E402
 
 
 @pytest.fixture
-def host(monkeypatch):
+def host(monkeypatch, tmp_path):
     """x86_64 Linux root 宿主，USB 设备树与子进程全部替换为记录桩。"""
+    # tegraflash 工作目录建在测试临时目录里，不在宿主 /tmp 留下残留。
+    monkeypatch.setattr(tegra_flash.tempfile, "tempdir", str(tmp_path / "work"))
+    (tmp_path / "work").mkdir()
     monkeypatch.setattr(tegra_flash.sys, "platform", "linux")
     monkeypatch.setattr(tegra_flash.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(tegra_flash.os, "geteuid", lambda: 0)
