@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
+from builder.config.registry import resolve_config
 from builder.flash import (
     FlashConfig, FlashConfigGenerator, FlashError, FlashExecutor,
     FlashIdentityConfig, FlashPartition, FlashStrategy, PreFlashConfig,
@@ -345,6 +346,39 @@ class TestRockchipFlashStrategy:
                     "7E EF FF B4\n"
                 ),
                 "RFI": "Flash Info:\n        Flash Size: 14910MB\n",
+                "RID": "Flash ID:15 01 00\n",
+            }
+            return MagicMock(
+                returncode=0, stdout=outputs[cmd[1]], stderr="")
+
+        with patch("builder.flash.strategy.subprocess.run", side_effect=fake_run):
+            strategy._verify_device_identity(Path("upgrade_tool"), config)
+
+    def test_device_identity_matches_rk3576_config_against_reversed_tag(self):
+        """RK3576 实机 RCI 为 "6753"（"3576" 的字节反转），SoC 配置须能匹配。"""
+        resolved = resolve_config("armsom-cm5-io", "default", "release")
+        strategy = RockchipFlashStrategy()
+        config = FlashConfig(
+            platform="rockchip",
+            flash_tool="upgrade_tool",
+            board="armsom-cm5-io",
+            product="default",
+            variant="release",
+            soc="rk3576",
+            storage_type="emmc",
+            identity=FlashIdentityConfig(
+                chip_patterns=list(
+                    (resolved.get("flash_identity") or {}).get("chip_patterns") or []
+                ),
+            ),
+        )
+
+        def fake_run(cmd, **kwargs):
+            outputs = {
+                # ArmSoM CM5-IO 实机 maskrom 输出：ASCII "6753" 之后是单个 "0"
+                # 的填充，不构成两位十六进制字节。
+                "RCI": "Chip Info: 36 37 35 33 0 0 0 0 0 0 0 0 0 0 0 0\n",
+                "RFI": "Flash Info:\n        Flash Size: 29820MB\n",
                 "RID": "Flash ID:15 01 00\n",
             }
             return MagicMock(

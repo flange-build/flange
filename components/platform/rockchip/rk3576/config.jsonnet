@@ -12,6 +12,12 @@ local common = import 'config/rockchip.libsonnet';
 
 {
   platform: 'rockchip', soc: 'rk3576', vendor: 'rockchip',
+  flash_identity: {
+    // 实机（ArmSoM CM5-IO）maskrom RCI 返回 "36 37 35 33"，解码为 "6753"，
+    // 是 "3576" 的字节反转，而非 "rk3576" 字面量，因此不能只靠 soc 字段兜底
+    // 匹配（见 builder/flash/strategy.py _identity_corpus）。
+    chip_patterns: ['rk\\s*3576', '\\b3576\\b', '\\b6753\\b'],
+  },
   rkbin+: {
     // RK3576 自有 die，BootROM 识别为 rk3576（不与 rk3568/rk3588 共标签）。
     ini_prefix: 'RK3576', trust_ini_prefix: 'RK3576', mkimage_chip: 'rk3576',
