@@ -41,6 +41,30 @@ from builder.rootfs_base import (
 # 严格性检查一致；权限错则 sudo 直接拒绝读该文件，提权静默失败。
 _SUDOERS_D_MODE = 0o440
 
+
+def _merge_tree_command(src: Path, dest: Path) -> list[str]:
+    """把宿主目录树合并进 rootfs 的命令：内容照抄，属主统一为 root，已存在的目录不动。
+
+    不用 ``cp -a src/. dest``：它把 src 目录自身的属主与权限套到 dest 上，逐层递归时
+    rootfs 已有的 /etc、/usr、/var、/lib/modules 也一样。src 是仓库检出或宿主构建产物，
+    属主是宿主用户（通常 uid 1000，恰好是镜像里第一个普通用户），检出时 umask 002 还带来
+    组写权限——结果普通用户拥有 /etc 与内核模块（可提权），systemd-tmpfiles 也因 /var
+    属主不是 root 拒绝执行。
+
+    - 打包端 ``--owner=0 --group=0``：条目属主一律 root（git 本就不记录属主）；
+      ``--mode=go-w`` 去掉组 / 其他写权限，还原 git 只记录 644 / 755 的语义。
+    - 解包端 ``--no-overwrite-dir``：已存在的目录保留原属主与权限；
+      ``--keep-directory-symlink``：已存在的目录符号链接（如 merged-usr 的 /lib）跟随写入
+      其目标，不被替换成真实目录（cp -a 遇到这种路径直接报错）。
+    """
+    script = (
+        "set -euo pipefail; "
+        'tar -C "$1" --owner=0 --group=0 --numeric-owner --mode=go-w -cf - . '
+        '| tar -C "$2" -xpf - --no-overwrite-dir --keep-directory-symlink'
+    )
+    return ["bash", "-c", script, "bash", str(src), str(dest)]
+
+
 # 使 sshd_config.d 下 drop-in 生效的主配置指令，与 Ubuntu 20.04+ 默认行一致。
 _SSHD_DROP_IN_INCLUDE = "Include /etc/ssh/sshd_config.d/*.conf"
 # 主配置不加载 drop-in 目录时直接写在首行的同一策略（sshd 取首个出现的值）。
@@ -270,7 +294,7 @@ class RootfsBuilder(ComponentBuilder):
         self._status("安装内核模块...")
         dest = rootfs_dir / "lib" / "modules"
         dest.mkdir(parents=True, exist_ok=True)
-        self.docker.run_privileged(["cp", "-a", f"{modules_src}/.", str(dest)])
+        self.docker.run_privileged(_merge_tree_command(modules_src, dest))
 
     def _install_kernel_headers(self, rootfs_dir: Path, config: dict) -> None:
         """安装 kernel 产物中的 linux-headers deb，供设备端编译外部模块。
@@ -395,7 +419,7 @@ class RootfsBuilder(ComponentBuilder):
         ]:
             if overlay_dir.exists() and any(overlay_dir.iterdir()):
                 self._status(f"复制 {label} overlay 文件...")
-                self.docker.run_privileged(["cp", "-a", f"{overlay_dir}/.", str(rootfs_dir)])
+                self.docker.run_privileged(_merge_tree_command(overlay_dir, rootfs_dir))
 
     def _partition_size_mb(self, config: dict, name: str) -> int:
         """指定分区的初始镜像大小（MiB）。几何解析统一走 PartitionLayout。"""
