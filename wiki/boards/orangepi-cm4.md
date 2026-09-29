@@ -5,7 +5,7 @@ status: stable
 sources:
   - components/board/orangepi-cm4/config.jsonnet
   - components/board/orangepi-cm4/patches/kernel/0001-dts-orangepi-cm4-bootargs-fix.patch
-  - components/board/orangepi-cm4/patches/kernel/0003-dts-orangepi-cm4-disable-rknpu.patch
+  - components/board/orangepi-cm4/patches/bootloader/0001-uboot-dts-enable-vdd-npu.patch
   - components/board/orangepi-cm4/patches/kernel/0004-add-orangepi-cm4-amp-dts.patch
   - components/board/orangepi-cm4/docs/amp.md
   - components/board/orangepi-cm4/overlay/etc/hostname
@@ -19,7 +19,7 @@ related:
   - "[[AMP 协处理器与 rpmsg]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-09-05
+updated: 2026-09-27
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -29,7 +29,7 @@ updated: 2026-09-05
 
 ## TL;DR
 
-Orange Pi CM4，RK3566 计算模块。当前交付范围：**无屏可启动 + AP6256 WiFi/BT 即插即用**，禁用不可用 NPU，并提供可选 `amp` / `amp-rtt` product。DSI 屏适配（实机用 Waveshare CM4-DISP-BASE-5A）尚未交付，单独立项推进。
+Orange Pi CM4，RK3566 计算模块。当前交付范围：**无屏可启动 + AP6256 WiFi/BT 即插即用**，NPU 可用（实板验证），并提供可选 `amp` / `amp-rtt` product。DSI 屏适配（实机用 Waveshare CM4-DISP-BASE-5A）尚未交付，单独立项推进。
 
 ## product / variant
 
@@ -50,7 +50,8 @@ lunch orangepi-cm4-amp-rtt-release
 |---|---|
 | DTB | default 用 `rk3566-orangepi-cm4-base`（保持空壳）；AMP products 用 `rk3566-orangepi-cm4-amp` |
 | board overlay | 无（dsi1 维持 dtsi 默认 disabled） |
-| kernel patches | `0001` bootargs、`0003` disable rknpu、`0004` AMP dts |
+| kernel patches | `0001` bootargs、`0004` AMP dts |
+| bootloader patches | `0001` U-Boot 阶段打开 vdd_npu（RK809 DCDC4） |
 | kernel config | `CONFIG_BCMDHD=n`（关掉与 brcmfmac 抢 SDIO 的 OOT 驱动，全 product/variant 生效） |
 | rootfs packages | `bluez`（BT attach 与验收都要它；base 集合不含，desktop 只是被 ubuntu-desktop 顺带拉入） |
 | extra_firmware | radxa-firmware 仓拉 AP6256 brcmfmac 三件套 + BT patchram 到 `/lib/firmware/brcm/` |
@@ -141,7 +142,7 @@ BT 应用层栈（配对策略、音频 profile）不预装，由产品方自取
 
 ## NPU
 
-`rk356x.dtsi` 默认禁用 `rknpu` / `rknpu_mmu`，但 Orange Pi CM4 dtsi 又改成 `okay`。实机日志显示 `rknpu_mmu` probe 拉起 NPU power domain 后，PMU 等不到 `npu` ack，会触发 BSP `panic_on_set_idle`。`0003` 把两处状态改回 `disabled`，优先保证默认镜像可启动。
+Orange Pi CM4 dtsi 把 `rknpu` / `rknpu_mmu` 设为 `okay`，NPU 供电是 RK809 DCDC4（`vdd_npu`）。早期因 `rknpu_mmu` probe 拉起 NPU power domain 时 PMU 等不到 `npu` ack（`panic_on_set_idle`）而禁用过 NPU，当时误判为硬件不可用；根因其实是 vdd_npu 在内核开电源域时尚未上电，见 [[rockchip 平台]]「RK356x NPU 供电」。现由 bootloader `0001` 在 U-Boot 阶段打开 vdd_npu（0.9V），实板验证：`vdd_npu ... 900 mV, enabled`、`rknpu 0.9.8` 加载、debugfs `power on` 后 NPU PD `on` / IOMMU `active`。尚未跑 RKNN 推理。
 
 ## AMP
 

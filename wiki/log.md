@@ -16,6 +16,14 @@
 
 更正 2026-06-01 条目中「RUBIK Pi 3（同 SoC）能编码也只因 QLI 默认 EL2（`xbl_config_gunyah`）」：Thundercomm QLI 参考镜像刷的 `xbl_config_gunyah.elf` 对应 EL1（Gunyah），它能编码是因为下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），见 [[thundercomm-rubikpi3]]。
 
+## [2026-09-27] sync | RK356x 全系打开 NPU：U-Boot 阶段提前打开 NPU 供电
+
+neons-core3566-nanob / orangepi-cm4 / rp-pro-rk3568-h 早先因 `rknpu_mmu` probe 时 `failed to get ack on domain 'npu'` → `panic_on_set_idle` 被判为"NPU 物理不可用"而禁用。重新定位：IOMMU probe 早于 PMIC 驱动，NPU 电源轨不在 PMIC 上电时序内，flange 通用 U-Boot（`rk3568-evb`、extlinux）从不打开它；rp-pro 旧补丁里的"调压排除实验"写的是 RK809 `0x9C`（电量计寄存器），实验无效。
+
+修法写入 [[rockchip 平台]]「RK356x NPU 供电」：各板 bootloader patch 在 U-Boot DTS 声明 NPU 供电 DCDC（RK809 四板用 DCDC4 `vdd_npu`，radxa-zero3w 为 RK817、用 DCDC2 `vdd_gpu`），rk3566/rk3568 SoC 层 `bootloader.config` 保留 `interrupt-parent`。删除 neons `0001`、rp-pro `0003`、orangepi-cm4 `0003` 三个 disable-rknpu 补丁；tspi-rk3566、radxa-zero3w 新增内核补丁打开 `bus_npu` / `rknpu` / `rknpu_mmu`。平台 U-Boot 补丁 `0002` 适配上游 `next-dev-v2026.01` 强推后的 `0f2b44c`，去掉 neons / orangepi-cm4 的 U-Boot pin。
+
+[[orangepi-cm4]] 实板验证通过；其余四板仅构建验证，待实板。radxa-zero3w 的 `device_tree.name`（`rk3566-radxa-zero-3w`）在当前内核分支不存在（只有 `-aic8800ds2` / `-ap6212` 变体），为既有问题，按板载模块改为 `rk3566-radxa-zero-3w-aic8800ds2`。
+
 ## [2026-09-27] sync | RUBIK Pi 3 改用 Yocto 同款厂商内核（EL1 下 DSP 与硬件编码同时可用）
 
 mainline 7.0.2 下 [[thundercomm-rubikpi3]] 无法同时拥有 DSP 与编码：EL1 下 venus（HFI Gen1）+ `vpu20_p1.mbn`（video-firmware 1.0）编码即复位，EL2 下 TZ 00126.1 不支持 `PAS_GET_RSCTABLE`，跳过资源表或换 TZ 00187 均失败。Thundercomm Yocto 参考镜像实为 EL1（`xbl_config.elf` == `xbl_config_gunyah.elf`）+ 下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），两边的内容保护区与 DMA mask 一致，差别在驱动与固件这一代。

@@ -8,8 +8,11 @@
 //   WiFi 走 SDIO 接 **mainline brcmfmac**、BT 走 UART 接 hci_uart/btbcm。dtsi 已
 //   声明 ``wifi_chip_type="ap6256"``、SDIO/BT 节点齐全；rootfs 固件从
 //   ``radxa-pkg/radxa-firmware`` 仓拉到 ``/lib/firmware/brcm/``（与 tspi-rk3566
-//   同源）。三条 board 私有 kernel patch 修 bootargs / NPU 启动 panic / AMP
-//   dts，见 ``patches/kernel/``。
+//   同源）。board 私有 kernel patch 修 bootargs / AMP dts，见
+//   ``patches/kernel/``。
+// - NPU：vdd_npu（RK809 DCDC4）不在 PMIC 上电时序内，BSP 内核 rknpu_mmu
+//   会在 RK809 驱动之前打开 NPU 电源域 → panic_on_set_idle。由 bootloader
+//   patch 在 U-Boot 阶段提前打开 vdd_npu，见 ``patches/bootloader/``。
 //
 //   踩坑：BSP 内核同时编入 Rockchip OOT bcmdhd（``menuconfig BCMDHD`` 在
 //   ``rockchip_wlan/Kconfig`` 中 ``default y``，未被 defconfig 显式设置）与

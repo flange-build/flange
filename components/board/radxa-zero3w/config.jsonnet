@@ -10,5 +10,7 @@ local product = std.extVar('product');
   variants: ['debug', 'release'],
   packages: ['rockchip-multimedia'] +
             (if product == 'desktop' then ['ubuntu-desktop'] else []),
-  kernel+: { device_tree+: { name: 'rk3566-radxa-zero-3w' } },
+  // 内核分支只有按板载 WiFi 模块区分的变体（-aic8800ds2 / -ap6212），
+  // 无通用 rk3566-radxa-zero-3w.dts；本板为 AIC8800DS2。
+  kernel+: { device_tree+: { name: 'rk3566-radxa-zero-3w-aic8800ds2' } },
 }
