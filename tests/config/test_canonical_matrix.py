@@ -213,6 +213,8 @@ def test_jetson_tx2_rootfs_contract(configs):
     assert "adbd" in rootfs["custom_packages"]
     assert not {"btop", "systemd-timesyncd"} & set(rootfs["packages"])
     assert {"openssh-server", "network-manager", "python3.8", "python3-yaml"} <= set(rootfs["packages"])
+    # 板载 BCM4354 蓝牙由 L4T nvwifibt 拉起，bluetoothd 来自 bluez，rfkill 命令需单独安装。
+    assert {"bluez", "rfkill"} <= set(rootfs["packages"])
     phase2 = dict(item.split("=", 1) for item in rootfs["phase2_packages"])
     assert set(phase2.values()) == {L4T}
     assert {"nvidia-l4t-core", "nvidia-l4t-initrd", "nvidia-l4t-cuda"} <= set(phase2)

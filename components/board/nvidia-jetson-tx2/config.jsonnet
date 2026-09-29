@@ -62,6 +62,15 @@ local product = std.extVar('product');
     kernel_args: 'root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 console=ttyS0,115200n8 ' +
                  'console=tty0 fbcon=map:0 net.ifnames=0 isolcpus=1-2',
   },
+  rootfs+: {
+    // 模块上的 BCM4354 蓝牙由 L4T nvwifibt.service（brcm_patchram_plus 经 ttyTHS3 加载
+    // bcm4354.hcd）拉起 hci0；它只在 bluedroid_pm rfkill 解除阻塞时由 udev 启动。stock 靠
+    // GNOME 会话解除阻塞，flange 无桌面，改由 overlay 预置 systemd-rfkill 状态
+    // （var/lib/systemd/rfkill/platform-bluedroid_pm:bluetooth = 0），开机即恢复为解除阻塞；
+    // 用户 rfkill block 后同样会被持久化。bluetoothd / bluetoothctl 来自 bluez；18.04 的 util-linux
+    // 不含 rfkill 命令，单独安装（两者 stock 均已装）。
+    packages+: ['bluez', 'rfkill'],
+  },
   // 只描述 flange 构建的 APP 分区（GPT 第 1 个分区，U-Boot 从这里读 /boot/extlinux）；
   // 其余 32 个启动链分区由 BSP 分区模板描述。size 即 APP 分区大小（stock 为 28 GiB），
   // image_size 是 rootfs 初始镜像大小，image 组件在构建期把文件系统扩展到 size。
