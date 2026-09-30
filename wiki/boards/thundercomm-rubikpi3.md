@@ -166,7 +166,7 @@ ext 文件系统，UEFI 不读）不刷写——其 `devcfg_full.img` 在 GitHub
 | H.264 720p 硬编 + 硬解回读 | ✓ 300 帧（High@4），2.6 s 编完，`boot_id` 不变、无 SMMU fault |
 | HEVC 1080p 硬编 + 硬解回读 | ✓ 120 帧，不复位 |
 | ADSP / CDSP | ✗ 如预期离线：`Error in getting resource table: -5` |
-| Wi-Fi（brcmfmac） | ✓ 固件 7.45.96.61 加载，扫到 2.4 GHz 12 个、5 GHz 2 个 BSS；未连网 |
+| Wi-Fi（brcmfmac） | ✓ 固件 7.45.96.61 加载，扫到 2.4 GHz 12 个、5 GHz 2 个 BSS；连网用户实测正常 |
 | 蓝牙 | ✓ `hci0` UP RUNNING |
 | USB3（Renesas）/ 以太网 | ✓ `xhci-pci-renesas` 注册 USB 2.0/3.0 总线，AX88179 枚举；以太网用户实测正常 |
 
@@ -218,7 +218,6 @@ EL2 下 DSP 的固件实验：
 
 ## 待验收
 
-- mainline product：Wi-Fi 连网
 - desktop product：GNOME 桌面
 - 音频播放（需要 AGM/PAL 用户态，或改走可由 ALSA 直接驱动的音频路径）
 - Type-C UCSI 端口注册；Type-C host 模式（厂商 DT 为 `dr_mode=otg`，切换会断开 adb，未测）
