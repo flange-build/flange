@@ -6,6 +6,10 @@
 
 ---
 
+## [2026-10-01] sync | RUBIK Pi 3 新增 mainline product（SoC 层 7.0.2 + EL2）
+
+[[thundercomm-rubikpi3]] 新增 `mainline` product：继承 SoC 层 `radxa/kernel@linux-7.0.2` 与平台层补丁（与 [[radxa-dragon-q6a]] 同一套内核与驱动），恢复板级 LT9611 Port B / USB QMP PHY backport 补丁与 `rubikpi3-el2.dtso`，刷 KVM 版 `xbl_config` 以 EL2 运行，Wi-Fi 走 brcmfmac。求值结果与 2026-09-27 实板验证过的 EL2 default（`ba1c69b27`）逐字段相同。default/desktop 不变，经 `exclude_patches` 排除板级补丁。已知限制：本板 TZ 不支持 `PAS_GET_RSCTABLE`，mainline 下 ADSP/CDSP 离线（Q6A 靠 Radxa UEFI 预加载 DSP）。实板（mainline-debug）：EL2 与 `/dev/kvm`、LT9611 Port B、H.264 720p / HEVC 1080p 硬编硬解回读、brcmfmac 扫描、蓝牙、Renesas USB3 均正常，ADSP/CDSP 如预期 `-5` 离线；HDMI 画面待目视。
+
 ## [2026-09-29] sync | rockchip U-Boot 0002 上下文漂移记入易踩坑；armsom-cm5-io 删除占用 FUSB302 中断脚的 work_led
 
 radxa/u-boot `next-dev-v2026.01` 上游 `31a7266f4d`（2026-09-18）在 `config_distro_bootcmd.h` 的 `BOOTENV_BOOT_TARGETS` 后插入 `BOOTENV_SCAN_LOGO`，平台 patch 0002 旧 hunk 以该处为 context，全 rockchip 板 bootloader 阶段打补丁失败（已由 commit 5eb5cfd 按新上下文重新生成修复）。把"跟踪分支 HEAD 导致平台 patch 上下文漂移"补入 [[rockchip 平台]] 易踩坑。

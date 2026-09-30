@@ -26,7 +26,7 @@ related:
   - "[[qualcommsc8280xp 平台]]"
   - "[[FlashStrategy 抽象]]"
   - "[[USB 线刷协议]]"
-updated: 2026-09-27
+updated: 2026-10-01
 ---
 
 > 阅读前提：先读[架构总览](../concepts/架构总览.md)，并从[板卡索引](../boards/index.md)确认型号。
@@ -55,7 +55,8 @@ rawprogram/patch、`dtb.bin` 与生成的 LUN0 `rawprogram0.xml`，在一次 `ed
 RUBIK Pi 3 另在板级覆盖了内核（2026-09-27）：改用 Thundercomm Yocto（QLI 1.5）同款厂商内核
 `rubikpi-ai/linux` 6.6.90、`qcom_defconfig` 链与高通下游视频驱动，以 EL1 同时获得 ADSP/CDSP 与
 硬件编码，平台层 mainline 补丁经 `kernel.exclude_patches` 全部排除；SoC 层与 Q6A 仍是 mainline 7.0.2。
-详见 [[thundercomm-rubikpi3]]。
+2026-10-01 另加 `mainline` product：继承 SoC 层内核与平台层补丁，刷 KVM 版 `xbl_config` 以 EL2 运行（与 Q6A
+同一套内核与驱动），代价是本板 TZ 不支持 `PAS_GET_RSCTABLE`、ADSP/CDSP 离线。详见 [[thundercomm-rubikpi3]]。
 
 下方 6.6.90 内容保留为早期 bring-up 基线，其中 UEFI/GRUB、4K LBA、ESP 挂载限制和排障过程仍有参考价值；涉及“当前内核”的表述以本节和 [[radxa-dragon-q6a]] 为准。
 

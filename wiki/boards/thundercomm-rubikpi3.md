@@ -5,6 +5,8 @@ status: wip
 sources:
   - components/board/thundercomm-rubikpi3/config.jsonnet
   - components/board/thundercomm-rubikpi3/dtso/rubikpi3-video.dtso
+  - components/board/thundercomm-rubikpi3/dtso/rubikpi3-el2.dtso
+  - components/board/thundercomm-rubikpi3/patches/kernel/
   - components/board/thundercomm-rubikpi3/overlay/etc/systemd/system/rubikpi3-usb-firmware.service
   - components/board/thundercomm-rubikpi3/overlay/usr/lib/flange/rubikpi3-usb-firmware
   - components/platform/qualcommqcs6490/qcs6490/config.jsonnet
@@ -15,12 +17,13 @@ sources:
   - openspec/changes/archive/2026-09-26-add-qcs6490-thundercomm-rubikpi3/
   - openspec/changes/archive/2026-09-27-enable-rubikpi3-el2/
   - openspec/changes/archive/2026-09-28-align-rubikpi3-vendor-kernel/
+  - openspec/changes/archive/2026-09-30-add-rubikpi3-mainline-product/
   - openspec/specs/qualcommqcs6490-thundercomm-rubikpi3/spec.md
 related:
   - "[[qualcommqcs6490 平台]]"
   - "[[radxa-dragon-q6a]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-09-28
+updated: 2026-10-01
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -41,9 +44,11 @@ ADSP/CDSP 与硬件编解码同时可用。GPU 仍走内核 drm/msm + Ubuntu Mes
 |---|---|
 | `thundercomm-rubikpi3-default-{debug,release}` | 无桌面，串口 `ttyMSM0` / adb / SSH |
 | `thundercomm-rubikpi3-desktop-{debug,release}` | `ubuntu-desktop` 包：GNOME |
+| `thundercomm-rubikpi3-mainline-{debug,release}` | 无桌面，SoC 层 mainline 内核 + EL2（`/dev/kvm`），ADSP/CDSP 离线，见下文「mainline product（EL2）」 |
 
-两个 product 都刷写固件包默认的（Gunyah）`xbl_config`。此前刷过 EL2 版 default/desktop 的设备，
-须重新全量 `flange flash` 才能改回。
+default/desktop 刷写固件包默认的（Gunyah）`xbl_config`，mainline 刷 KVM 版。在两类 product 之间切换
+（包括此前刷过旧 EL2 版 default/desktop 的设备）须重新全量 `flange flash`，以改写 LUN1/2 的 `xbl_config`。
+下文「板级契约」描述 default/desktop；mainline 的差异集中在「mainline product（EL2）」一节。
 
 ## 板级契约
 
@@ -130,6 +135,44 @@ ext 文件系统，UEFI 不读）不刷写——其 `devcfg_full.img` 在 GitHub
   （固件 7.45.96.215，NVRAM V1.4，国家码 `XZ`），`iw dev wlan0 scan` 扫到 2.4 GHz 14 个、5 GHz 11 个 BSS
   （先经 adb 手动放置文件验证，再写入配置）。
 
+## mainline product（EL2）
+
+2026-10-01 新增，复现 2026-09-27 实板验证过的 mainline + EL2 配置（`ba1c69b27` 的 default），求值结果与之逐字段
+相同，只差 product 名。用途是与 [[radxa-dragon-q6a]] 共用同一套上游内核与驱动、提供 `/dev/kvm`，便于跟进上游
+与复现 mainline 问题；需要 DSP 或 HFI Gen2 视频时用 default/desktop。
+
+- **内核**：继承 SoC 层 `radxa/kernel@linux-7.0.2`（`7473a9fca2b0`）、defconfig 链与平台层补丁 0001-0007，
+  与 Q6A 相同；另应用板级 `patches/kernel/` 的三个 backport：LT9611 DSI 改接 Port B、USB QMP PHY 供电对调、
+  LT9611 单 Port B 输入驱动（上游 e8bd92c4a0d2）。default/desktop 经 `exclude_patches` 排除这三个补丁。
+- **EL2**：`bootloader.ufs_file_overrides` 把 LUN1/2 的 `xbl_config.elf` 换成固件包内的 `xbl_config_kvm.elf`
+  （两者只差 uefiplat 启动模式字节）。
+- **DTB**：mainline 树的 `qcom/qcs6490-thundercomm-rubikpi3.dtb`，构建期合并 `dtso/rubikpi3-el2.dtso`：禁用 GPU zap
+  shader、ADSP/CDSP 声明 PAS SMMU 流、启用 APSS watchdog、SCM SHM bridge 归属自身、venus 追加 `0x2184` 流与
+  `video-firmware` 子节点（取自上游 kodiak-el2 overlay 与 radxa 的 Q6A KVM overlay）。
+- **视频**：mainline venus（HFI Gen1）+ linux-firmware `vpu20_p1.mbn`，EL2 下 H.264/HEVC 硬件编码可用。
+- **Wi-Fi/BT**：brcmfmac，`radxa-firmware` 的 `brcmfmac43456-sdio.{bin,clm_blob}` + `rubikpi3-firmware` 的 NVRAM
+  （改名为 `brcmfmac43456-sdio.thundercomm,rubikpi3.txt`）与 `BCM4345C5.hcd`。
+- **已知限制**：ADSP/CDSP 离线（`Error in getting resource table: -5`，原因与固件实验见下一节）。Q6A 在 EL2 下
+  DSP 可用是因为 Radxa UEFI 预加载 DSP、内核只做 attach，本板 UEFI 没有这一能力。厂商内核下注册的声卡
+  `qcm6490-idp-snd-card` 在 mainline 下没有。
+
+实板（2026-10-01，mainline-debug，全量刷写）：
+
+| 项 | 结果 |
+|---|---|
+| EL2 | ✓ `CPU: All CPU(s) started at EL2`，`/dev/kvm` 存在；内核 `7.0.2+`，`systemctl is-system-running` 为 running、无失败单元 |
+| LT9611 / HDMI | ✓ LT9611 以 Port B 探测（无 "primary dsi" 报错）；`card1-HDMI-A-1` connected，fbcon（`msmdrmfb`）接管控制台；HDMI 画面待目视 |
+| GPU | ✓ Adreno 绑定，`a660_sqe.fw` 加载，`renderD128` 存在 |
+| H.264 720p 硬编 + 硬解回读 | ✓ 300 帧（High@4），2.6 s 编完，`boot_id` 不变、无 SMMU fault |
+| HEVC 1080p 硬编 + 硬解回读 | ✓ 120 帧，不复位 |
+| ADSP / CDSP | ✗ 如预期离线：`Error in getting resource table: -5` |
+| Wi-Fi（brcmfmac） | ✓ 固件 7.45.96.61 加载，扫到 2.4 GHz 12 个、5 GHz 2 个 BSS；未连网 |
+| 蓝牙 | ✓ `hci0` UP RUNNING |
+| USB3（Renesas）/ AX88179 | ✓ `xhci-pci-renesas` 注册 USB 2.0/3.0 总线，AX88179 枚举；以太网当时未接线（NO-CARRIER），未测连网 |
+
+- 板上 RTC 未保持时间，开机时钟为 1970 年，apt 前需先校时。
+- GStreamer 与 v4l-utils 经宿主机临时代理 apt 安装，不在镜像内。
+
 ## 为什么换成厂商内核（mainline 时期的结论）
 
 2026-09-26 至 27 日本板用平台层 mainline `radxa/kernel@linux-7.0.2`，结论是无法同时拥有 DSP 与硬件编码：
@@ -139,7 +182,8 @@ ext 文件系统，UEFI 不读）不刷写——其 `devcfg_full.img` 在 GitHub
 - **EL2（KVM 版 `xbl_config`）**：编码可用；DSP 卡在 `Error in getting resource table: -5`——7.0.2
   的 EL2 PAS 路径要调用 TZ 的 `PAS_GET_RSCTABLE`，本板 TZ 不支持。跳过资源表后 TZ 接受认证，但 DSP
   不执行（smp2p/ready/handover 中断与 SMMU fault 均为 0）。
-- 当时以 product 拆分（default/desktop 为 EL2，`el1` 为 EL1），现已删除。
+- 当时以 product 拆分（default/desktop 为 EL2，`el1` 为 EL1）；2026-09-28 改用厂商内核时删除，
+  2026-10-01 以 `mainline` product 恢复 EL2 路线（见上一节）。
 
 EL2 下 DSP 的固件实验：
 
@@ -174,6 +218,7 @@ EL2 下 DSP 的固件实验：
 
 ## 待验收
 
+- mainline product：HDMI 画面目视、以太网与 Wi-Fi 连网
 - desktop product：GNOME 桌面
 - 音频播放（需要 AGM/PAL 用户态，或改走可由 ALSA 直接驱动的音频路径）
 - Type-C UCSI 端口注册；Type-C host 模式（厂商 DT 为 `dr_mode=otg`，切换会断开 adb，未测）

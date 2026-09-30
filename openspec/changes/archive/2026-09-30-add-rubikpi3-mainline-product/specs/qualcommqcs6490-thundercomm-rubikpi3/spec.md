@@ -1,8 +1,5 @@
-# qualcommqcs6490-thundercomm-rubikpi3 Specification
+## MODIFIED Requirements
 
-## Purpose
-定义 Thundercomm RUBIK Pi 3（QCS6490）在 qualcommqcs6490 平台上的板级契约：default/desktop 板级覆盖的 Yocto（QLI 1.5）同款厂商内核基线与 DTB 组合、EL1 下 DSP 与下游视频驱动硬件编码同时可用，mainline product 继承 SoC 层内核并以 EL2 运行、位于 UFS boot LUN 的启动固件清单与单会话 edl-ng 全量刷写、UEFI dtb 分区镜像，以及板载 AP6256（bcmdhd）与 Renesas USB3 固件的运行时准备。
-## Requirements
 ### Requirement: RUBIK Pi 3 板级目标
 
 系统 MUST 提供 `thundercomm-rubikpi3` 板级配置，绑定 `platform=qualcommqcs6490`、`soc=qcs6490`，
@@ -26,68 +23,6 @@ SoC 层（见「mainline product」）；设备树 MUST 为 `qcom/qcs6490-thunde
 
 - **WHEN** 求值 `thundercomm-rubikpi3-el1-release`
 - **THEN** 目标解析失败，提示该板没有 `el1` product
-
-### Requirement: UFS boot LUN 启动固件清单
-
-系统 MUST 支持板级通过 `bootloader.ufs_rawprogram` 与 `bootloader.ufs_patch` 声明位于 UFS boot LUN 的
-启动固件刷写清单。两者 MUST 成对且非空，MUST 同时声明 `bootloader.edk2_firmware`，元素 MUST 是
-固件包根目录内的 `.xml` 文件名且不重复。bootloader 构建 MUST 校验：声明的 XML 存在；program
-与 patch 不写 LUN0；引用的固件文件存在且不是 Git LFS 指针（由组件产出的 `dtb.bin` 除外）。
-
-板级 MAY 通过 `bootloader.ufs_file_overrides` 把 XML 引用的文件名映射到固件包内的另一文件；
-键与值 MUST 是固件包根目录内的单个文件名且不相等，键 MUST 被某条 program 引用且不能是 `dtb.bin`，
-替换目标 MUST 通过同样的存在性与 LFS 指针检查。刷写暂存 MUST 以原引用名放置替换后的文件。
-被写入文件 MUST 不超过其 program 的 `num_partition_sectors × SECTOR_SIZE_IN_BYTES`（为 0 时不检查）。
-
-#### Scenario: 非法清单在构建前拒绝
-
-- **WHEN** 只声明 `ufs_rawprogram`，或元素含路径分隔符，或缺少 `edk2_firmware`
-- **THEN** 配置校验失败并指出字段
-
-#### Scenario: LFS 指针拒绝
-
-- **WHEN** 声明的 XML 引用了 Git LFS 指针文件
-- **THEN** 构建与刷写 preflight 均失败，提示移除该 XML 或更换固件包
-
-#### Scenario: 固件超过分区容量时拒绝
-
-- **WHEN** 某固件文件大于其目标分区容量
-- **THEN** 构建与刷写 preflight 失败，不写入任何分区
-
-#### Scenario: 文件替换以原引用名写入
-
-- **WHEN** 声明 `ufs_file_overrides: {"xbl_config.elf": "xbl_config_kvm.elf"}`
-- **THEN** 暂存目录中的 `xbl_config.elf` 内容为 `xbl_config_kvm.elf`，XML 保持原样
-
-### Requirement: dtb 分区镜像
-
-声明 UFS 启动固件清单时，boot 组件 MUST 额外产出 `dtb.bin`：64MiB FAT16，根目录含
-`combined-dtb.dtb`，内容与 rootfs `/boot` 中 GRUB 加载的 DTB 相同（含构建期 overlay 合并）。
-该产物 MUST 进入 boot 输出契约；未声明时 boot 输出契约 MUST 保持只有 `boot.img`。
-
-#### Scenario: 输出契约随配置变化
-
-- **WHEN** qcs6490 平台声明 / 未声明 `ufs_rawprogram`
-- **THEN** boot 必需产物分别为 `{boot.img, dtb.bin}` / `{boot.img}`
-
-### Requirement: 单会话 UFS 全量刷写
-
-flash-config MUST 以 `ufs_firmware`（loader、rawprogram、patch）记录清单，旧清单缺省为空。
-清单非空时 `flange flash` MUST 在等待设备前完成本地 preflight（固件、`dtb.bin`、`raw.img`
-齐全，XML 扇区大小与分区配置一致，raw.img 为整扇区），随后在暂存目录生成把 `raw.img` 写到
-LUN0 扇区 0 的 `rawprogram0.xml`，并以单个
-`edl-ng --loader <loader> --memory UFS rawprogram rawprogram0.xml <rawprogram...> <patch...>`
-会话写入。清单为空时 MUST 保持原有 `write-sector` 行为。该板 MUST 拒绝 `--spi-firmware`。
-
-#### Scenario: 单会话命令
-
-- **WHEN** 对声明了清单的目标执行全量刷写
-- **THEN** 只调用一次 edl-ng，参数依次为生成的 `rawprogram0.xml`、声明的 rawprogram 与 patch
-
-#### Scenario: LUN0 保护
-
-- **WHEN** 固件 XML 的 program 或 patch 指向 LUN0
-- **THEN** 刷写在等待设备前失败，不写入任何分区
 
 ### Requirement: 板载无线与 USB3 固件
 
@@ -178,6 +113,8 @@ Linux 运行在 EL1。内核 MUST 以 out-of-tree 模块提供 CodeLinaro `video
 - **WHEN** 刷写 `default` 后启动
 - **THEN** ADSP 与 CDSP remoteproc 状态为 running，FastRPC `GET_DSP_INFO` 与 `INIT_ATTACH` 在两者上均成功
 
+## ADDED Requirements
+
 ### Requirement: mainline product
 
 `mainline` MUST 继承 SoC 层内核（`linux-qcs6490`，radxa `linux-7.0.2`）的 source、defconfig 链与平台层补丁，
@@ -213,4 +150,3 @@ SoC 层内核升级到已含修复的版本后 MUST 删除对应补丁。
 
 - **WHEN** `mainline` 设备启动
 - **THEN** LT9611 驱动探测成功，不出现 "failed to get remote node for primary dsi"
-
