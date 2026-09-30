@@ -161,14 +161,14 @@ ext 文件系统，UEFI 不读）不刷写——其 `devcfg_full.img` 在 GitHub
 | 项 | 结果 |
 |---|---|
 | EL2 | ✓ `CPU: All CPU(s) started at EL2`，`/dev/kvm` 存在；内核 `7.0.2+`，`systemctl is-system-running` 为 running、无失败单元 |
-| LT9611 / HDMI | ✓ LT9611 以 Port B 探测（无 "primary dsi" 报错）；`card1-HDMI-A-1` connected，fbcon（`msmdrmfb`）接管控制台；HDMI 画面待目视 |
+| LT9611 / HDMI | ✓ LT9611 以 Port B 探测（无 "primary dsi" 报错）；`card1-HDMI-A-1` connected，fbcon（`msmdrmfb`）接管控制台，HDMI 显示控制台（用户目视确认） |
 | GPU | ✓ Adreno 绑定，`a660_sqe.fw` 加载，`renderD128` 存在 |
 | H.264 720p 硬编 + 硬解回读 | ✓ 300 帧（High@4），2.6 s 编完，`boot_id` 不变、无 SMMU fault |
 | HEVC 1080p 硬编 + 硬解回读 | ✓ 120 帧，不复位 |
 | ADSP / CDSP | ✗ 如预期离线：`Error in getting resource table: -5` |
 | Wi-Fi（brcmfmac） | ✓ 固件 7.45.96.61 加载，扫到 2.4 GHz 12 个、5 GHz 2 个 BSS；未连网 |
 | 蓝牙 | ✓ `hci0` UP RUNNING |
-| USB3（Renesas）/ AX88179 | ✓ `xhci-pci-renesas` 注册 USB 2.0/3.0 总线，AX88179 枚举；以太网当时未接线（NO-CARRIER），未测连网 |
+| USB3（Renesas）/ 以太网 | ✓ `xhci-pci-renesas` 注册 USB 2.0/3.0 总线，AX88179 枚举；以太网用户实测正常 |
 
 - 板上 RTC 未保持时间，开机时钟为 1970 年，apt 前需先校时。
 - GStreamer 与 v4l-utils 经宿主机临时代理 apt 安装，不在镜像内。
@@ -218,7 +218,7 @@ EL2 下 DSP 的固件实验：
 
 ## 待验收
 
-- mainline product：HDMI 画面目视、以太网与 Wi-Fi 连网
+- mainline product：Wi-Fi 连网
 - desktop product：GNOME 桌面
 - 音频播放（需要 AGM/PAL 用户态，或改走可由 ALSA 直接驱动的音频路径）
 - Type-C UCSI 端口注册；Type-C host 模式（厂商 DT 为 `dr_mode=otg`，切换会断开 adb，未测）
