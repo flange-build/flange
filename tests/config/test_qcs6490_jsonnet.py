@@ -80,6 +80,14 @@ def test_vim3l板层与soc层共用kernel_config且保留binder():
     }
 
 
+def _mainline_kernel_patch_names():
+    names = set()
+    for layer in ("platform/qualcommqcs6490", "board/thundercomm-rubikpi3"):
+        patch_dir = PROJECT_ROOT / "components" / layer / "patches/kernel"
+        names |= {patch.name for patch in patch_dir.glob("*.patch")}
+    return names
+
+
 @pytest.mark.parametrize("product", ["default", "desktop"])
 @pytest.mark.parametrize("variant", ["debug", "release"])
 def test_rubikpi3使用厂商内核并声明ufs启动固件(product, variant):
@@ -95,11 +103,8 @@ def test_rubikpi3使用厂商内核并声明ufs启动固件(product, variant):
         "a579877ac6b4afc6df09d8e53564dfb08d9d693f")
     assert kernel["defconfig"] == [
         "qcom_defconfig", "qcom_addons.config", "rubikpi3.config"]
-    # 平台层补丁全部针对 mainline radxa/kernel，厂商树上必须全部排除。
-    platform_patches = PROJECT_ROOT / "components/platform/qualcommqcs6490/patches/kernel"
-    assert set(kernel["exclude_patches"]) == {
-        patch.name for patch in platform_patches.glob("*.patch")}
-    assert not (PROJECT_ROOT / "components/board/thundercomm-rubikpi3/patches/kernel").exists()
+    # 平台层与板级补丁全部针对 mainline radxa/kernel，厂商树上必须全部排除。
+    assert set(kernel["exclude_patches"]) == _mainline_kernel_patch_names()
     assert kernel["device_tree"] == {
         "directory": "qcom",
         "name": "qcs6490-thundercomm-rubikpi3",
@@ -131,11 +136,45 @@ def test_rubikpi3使用厂商内核并声明ufs启动固件(product, variant):
     assert desktop == (product == "desktop")
 
 
+@pytest.mark.parametrize("variant", ["debug", "release"])
+def test_rubikpi3_mainline_product以el2运行soc层内核(variant):
+    config = JsonnetConfigLoader(PROJECT_ROOT).evaluate_board(
+        "thundercomm-rubikpi3", "mainline", variant)
+
+    validate_canonical_config(config)
+    kernel = config["kernel"]
+    # 与 Q6A 相同的 SoC 层 mainline 内核，平台层与板级补丁全部应用。
+    assert kernel["source"] == {"name": "linux-qcs6490"}
+    assert kernel["defconfig"] == [
+        "defconfig", "qcom_module.config", "radxa.config", "radxa_custom.config"]
+    assert "exclude_patches" not in kernel
+    assert "oot_modules" not in kernel
+    assert len(_mainline_kernel_patch_names()) == 10
+    assert kernel["device_tree"] == {
+        "directory": "qcom",
+        "name": "qcs6490-thundercomm-rubikpi3",
+        "build_overlays": ["rubikpi3-el2.dtbo"],
+    }
+    assert config["boot"]["overlays"]["board"] == ["rubikpi3-el2.dtbo"]
+    assert config["bootloader"]["ufs_file_overrides"] == {
+        "xbl_config.elf": "xbl_config_kvm.elf"}
+    assert set(config["sources"]).isdisjoint({"rubikpi-linux", "qcom-video-driver"})
+    firmware = {entry["name"]: entry for entry in config["rootfs"]["extra_firmware"]}
+    assert "rubikpi3-ap6256" not in firmware
+    assert firmware["rubikpi3-ap6256-wifi"]["source"]["name"] == "radxa-firmware"
+    assert firmware["rubikpi3-ap6256-wifi"]["files"] == [
+        "brcm/brcmfmac43456-sdio.bin", "brcm/brcmfmac43456-sdio.clm_blob"]
+    assert firmware["rubikpi3-ap6256-board"]["files"][0] == {
+        "src": "nvram.txt", "dest": "brcm/brcmfmac43456-sdio.thundercomm,rubikpi3.txt"}
+    assert "bluez" in config["rootfs"]["packages"]
+    assert "flange-ubuntu-desktop-config" not in config["rootfs"]["custom_packages"]
+
+
 def test_rubikpi3不再提供el1_product():
     boards = discover_boards()
     targets = [t for t in get_valid_targets(boards) if t.startswith("thundercomm-rubikpi3-")]
     assert sorted(targets) == [
         f"thundercomm-rubikpi3-{product}-{variant}"
-        for product in ("default", "desktop") for variant in ("debug", "release")]
+        for product in ("default", "desktop", "mainline") for variant in ("debug", "release")]
     with pytest.raises(Exception, match="thundercomm-rubikpi3-el1-release"):
         parse_target("thundercomm-rubikpi3-el1-release", boards)
