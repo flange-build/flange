@@ -313,6 +313,24 @@ flange flash
 flange flash boot
 ```
 
+### ROCK 5B 清空 SPI 启动固件
+
+当前目标为 ROCK 5B、已有 `flash-config.json` 和 miniloader 时，将唯一一台板卡通过 USB
+连接并进入 MaskROM（芯片下载模式），在宿主机执行：
+
+```bash
+flange flash --erase-spi
+```
+
+这是独立操作，会清空 SPI NOR（串行非易失闪存）的全部内容，包括原有启动固件；
+不会继续刷写系统分区。工具显式切换并确认 SPINOR 后执行擦除；失败即停止。
+EF（全片擦除）命令会自动复位设备，不支持 `--no-reboot`，组合使用时会在访问设备前报错。
+`--no-wait` 只跳过等待轮询，仍检查设备。
+此选项不能与分区名、`--raw`、`--list`、`--spi-firmware` 或 `--provision-ufs` 混用。
+后续需要刷系统时，重新进入下载模式再运行 `flange flash`。
+缺少刷写清单时先执行 `flange build image`，仅缺 loader 时执行 `flange build bootloader`。
+用户实机日志已确认 EF 返回擦除成功并触发复位；修复后的完整命令退出状态与冷启动效果仍需验收。
+
 ### Amlogic 首次 USB 刷写
 
 Khadas VIM3 等 Amlogic 板卡会先在 MaskROM（芯片内置下载模式）接收 U-Boot，

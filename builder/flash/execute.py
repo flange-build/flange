@@ -138,6 +138,22 @@ class FlashExecutor:
     # 整盘镜像由 image 组件产出，各平台 ARTIFACT_NAMES 统一命名为 raw.img。
     WHOLE_DISK_IMAGE = "image/raw.img"
 
+    def erase_spi(self, no_wait: bool = False, no_reboot: bool = False) -> None:
+        """独立擦除 SPI NOR，不进入系统分区刷写流程。"""
+        if not hasattr(self.strategy, "erase_spi"):
+            raise FlashError(f"平台 {self.config.platform} 不支持 --erase-spi")
+        if no_reboot:
+            raise FlashError("--erase-spi 使用的 EF 命令会自动复位，不支持 --no-reboot")
+        loader_name = self.config.pre_flash.download_boot
+        if not loader_name or not (self.target_dir / loader_name).is_file():
+            raise FlashError("SPI 擦除缺少 miniloader；请先执行 flange build bootloader")
+        _header(f"flange flash --erase-spi · {self.config.board}")
+        tool = self.strategy.find_tool(self.project_dir)
+        device = None if no_wait else self.strategy.wait_for_device(tool)
+        self.strategy.erase_spi(tool, self.target_dir, self.config, device)
+        # EF 自带复位；此时再次 RD 会因设备已退出下载模式而误报失败。
+        _info("SPI NOR 擦除完成", role=Role.SUCCESS)
+
     def flash_raw(self, device: str, *, yes: bool = False):
         """dd 整盘刷写。"""
         firmware = self.target_dir / self.WHOLE_DISK_IMAGE
@@ -216,6 +232,10 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
     run_parser.add_argument("--yes", action="store_true", help="明确确认 --raw 整盘覆盖或平台受保护启动固件写入")
     run_parser.add_argument("--list", action="store_true", dest="list_parts", help="列出可刷写分区")
     run_parser.add_argument(
+        "--erase-spi", action="store_true",
+        help="独立清空 Rockchip SPI NOR 全部内容并自动复位（不支持 --no-reboot）",
+    )
+    run_parser.add_argument(
         "--spi-firmware",
         action="store_true",
         dest="spi_firmware",
@@ -240,11 +260,20 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
     args = parser.parse_args(argv)
 
     if args.command == "run":
+        if args.erase_spi and (
+            args.partition or args.raw or args.list_parts
+            or args.spi_firmware or args.provision_ufs
+        ):
+            parser.error(
+                "--erase-spi 不能与分区名、--raw、--list、"
+                "--spi-firmware 或 --provision-ufs 同时使用")
         target_dir = Path(args.target_dir)
         project_dir = Path(args.project_dir)
         executor = FlashExecutor(target_dir, project_dir)
 
-        if args.list_parts:
+        if args.erase_spi:
+            executor.erase_spi(no_wait=args.no_wait, no_reboot=args.no_reboot)
+        elif args.list_parts:
             executor.list_partitions()
         elif args.raw:
             executor.flash_raw(args.raw, yes=args.yes)

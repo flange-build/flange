@@ -19,7 +19,7 @@ related:
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
   - "[[adbd]]"
-updated: 2026-09-16
+updated: 2026-10-04
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -47,6 +47,22 @@ lunch radxa-rock5b-rockmedia-release
 X11/Wayland/GBM 用户态驱动，以及 MPP、RGA、GStreamer 与 Rockchip 插件；默认不启动图形桌面。
 完整说明及实机验收见 [厂商 GPU 多媒体基座](../../components/packages/rockchip-mali-g610/README.md)。
 切换 GPU 栈时必须同时更新 boot 和 rootfs；新增产品的硬件表现尚待实机验收。
+
+## 清空 SPI flash
+
+选择本板目标并准备好 `flash-config.json` 与 miniloader 后，让板卡进入 MaskROM（芯片下载模式），
+通过 USB 连接宿主机，执行：
+
+```bash
+flange flash --erase-spi
+```
+
+该命令独立清空 SPI NOR（串行非易失闪存）的全部内容，包括原有启动固件，不刷写 eMMC 系统分区。
+工具完成擦除后自动复位，不支持与 `--no-reboot` 组合使用。
+普通 `flange flash` 不会自动擦除 SPI。
+前置产物、参数互斥和验证边界见[开发指南](../../docs/development-guide.md#rock-5b-清空-spi-启动固件)。
+实机日志已确认 EF 返回擦除成功并触发复位；修复后的完整命令退出状态与冷启动效果仍需验收。
+硬件进入下载模式与 SPI 用途可参考 [Radxa 官方说明](https://docs.radxa.com/rock5/rock5b/low-level-dev/install-os/rkdevtool_spi)。
 
 ## 关键差异点
 

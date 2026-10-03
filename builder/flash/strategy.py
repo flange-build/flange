@@ -438,6 +438,8 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
     def _switch_storage(self, tool: Path, name: str):
         """把 loader 当前存储切到 name（如 UFS 的 "SATA"）。"""
         # SSD 无参时进入交互列表；喂 Q 退出以仅取列表。
+        # 工具正常响应 Q 也可能返回非零值，以目标列表项判断读取成功；
+        # 真正切换存储的命令仍必须返回成功。
         listing = subprocess.run(
             [str(tool), "SSD"], input="Q\n",
             capture_output=True, text=True)
@@ -445,7 +447,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
         if no is None:
             raise FlashError(
                 f"upgrade_tool SSD 列表中未找到存储 {name!r}；"
-                f"输出:\n{listing.stdout}")
+                f"输出:\n{listing.stdout}{listing.stderr}")
         _info(f"切换存储到 {name}（SSD {no}）...", role=Role.ACTIVE)
         subprocess.run([str(tool), "SSD", no], check=True)
         _ok(f"存储 → {name}")
@@ -602,6 +604,41 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
         _ok("spi.img")
         _info("重启设备...", role=Role.ACTIVE)
         subprocess.run([str(tool), "RD"], check=True)
+
+    def erase_spi(
+        self, tool: Path, target_dir: Path, config: FlashConfig,
+        device: Optional[DeviceInfo] = None,
+    ) -> None:
+        """确认 SPINOR 已激活后全片擦除；不使用仅支持 eMMC 的 EL。"""
+        loader_name = config.pre_flash.download_boot
+        miniloader = target_dir / loader_name
+        if not loader_name or not miniloader.is_file():
+            raise FlashError("SPI 擦除缺少 miniloader；请先执行 flange build bootloader")
+        if device is None:
+            device = self.detect_device(tool)
+        if device is None or device.mode not in {"maskrom", "loader"}:
+            raise FlashError("SPI 擦除需要唯一的 Rockchip MaskROM 或 Loader 设备")
+        if device.mode == "maskrom":
+            self._download_boot(tool, miniloader)
+
+        # 系统盘存储身份可能是 eMMC/UFS，本操作只复用 SoC 身份约束。
+        patterns = list(config.identity.chip_patterns)
+        if not patterns and config.soc:
+            patterns = [re.escape(config.soc)]
+        if not patterns:
+            raise FlashError("SPI 擦除缺少 SoC 身份信息；请重新生成 flash-config.json")
+        self._require_identity_match(
+            "SoC", self._identity_corpus(self._read_identity(tool, "RCI")), patterns)
+        self._switch_storage(tool, "SPINOR")
+        listing = subprocess.run(
+            [str(tool), "SSD"], input="Q\n", capture_output=True, text=True)
+        # 与选择前读取一致，Q 的退出码不能代替当前介质的激活标记。
+        if not re.search(
+            r"^\s*No=\d+\s+SPINOR\s*\(\*\)\s*$", listing.stdout, re.I | re.M,
+        ):
+            raise FlashError("无法确认当前存储为 SPINOR，已停止擦除")
+        _step("擦除 SPI NOR 全部内容（含启动固件）")
+        subprocess.run([str(tool), "EF", str(miniloader)], check=True)
 
 class AllwinnerA733FlashStrategy(AllwinnerA733FlashPlan, FlashStrategy):
     """Allwinner A733 刷写策略 — openixcli 经 USB 整盘写 raw.img。
