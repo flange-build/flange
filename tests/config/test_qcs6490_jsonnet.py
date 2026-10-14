@@ -149,7 +149,7 @@ def test_rubikpi3_mainline_product以el2运行soc层内核(variant):
         "defconfig", "qcom_module.config", "radxa.config", "radxa_custom.config"]
     assert "exclude_patches" not in kernel
     assert "oot_modules" not in kernel
-    assert len(_mainline_kernel_patch_names()) == 10
+    assert len(_mainline_kernel_patch_names()) == 11
     assert kernel["device_tree"] == {
         "directory": "qcom",
         "name": "qcs6490-thundercomm-rubikpi3",

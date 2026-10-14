@@ -101,6 +101,7 @@ local mainline = product == 'mainline';
       '0005-feat-radxa-custom-kernel-config.patch',
       '0006-i2c-geni-force-fifo-on-gsi-mismatch.patch',
       '0007-dts-radxa-dragon-q6a-i2c10-drop-gsi-dma.patch',
+      '0008-drm-msm-dp-gate-stream-irqs-with-clocks.patch',
       '0001-dts-qcs6490-rubikpi3-lt9611-dsi-port-b.patch',
       '0002-dts-qcs6490-rubikpi3-usb-qmp-phy-supplies.patch',
       '0003-drm-bridge-lt9611-single-port-b-input.patch',

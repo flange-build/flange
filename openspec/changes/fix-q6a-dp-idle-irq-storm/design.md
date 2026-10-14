@@ -16,6 +16,7 @@
 2. 用自旋锁串行化 STATUS2 掩码更新与 ISR（中断服务程序）的读写确认；ISR 使用保存的当前掩码，避免原来的 ACK（确认）操作无条件重新打开全部使能位。只向上报告使能的状态，启用前在时钟开启状态确认残留事件。
 3. 不通过调整 UFS 频率或中断亲和性掩盖显示中断源。整模块黑名单仅用于对照，最终删除。
 4. 候选补丁通过 `flange --target radxa-dragon-q6a-default-debug build kernel` 在 Docker 中构建；部署前备份原模块并核对 vermagic（模块版本信息），不强制加载不兼容模块。
+5. 共享平台新增补丁时同步 RUBIK Pi 3 的厂商内核 `exclude_patches`。其 default/desktop 产品使用不同源码，必须排除本补丁；mainline 产品继续继承平台补丁。配置回归保留排除集合与实际补丁集合严格相等的校验，补丁数量预期随清单更新；提交前执行完整 pytest 和全部 OpenSpec 严格校验。
 
 ## Risks / Trade-offs
 
