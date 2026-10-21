@@ -32,6 +32,7 @@ related:
   - "[[atk-rk3506b]]"
   - "[[radxa-rock5b]]"
   - "[[armsom-cm5-io]]"
+  - "[[embedfire-lubancat]]"
   - "[[kernel 构建器]]"
   - "[[bootloader 构建器]]"
   - "[[USB 线刷协议]]"

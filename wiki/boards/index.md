@@ -1,7 +1,7 @@
 ---
 title: 板级索引
 type: index
-updated: 2026-10-01
+updated: 2026-10-21
 ---
 
 # 板级索引
@@ -19,6 +19,7 @@ updated: 2026-10-01
 - [atk-rk3506b](atk-rk3506b.md) — RK3506B（ARM32，SPI NAND/UBI + CPU2 RT-Thread + Cardputer GUD/HID/UAC，status: stable）
 - [rp-pro-rk3568-h](rp-pro-rk3568-h.md) — RK3568（首颗真 RK3568，AP6275P PCIe WiFi6/BT5.2，status: wip）
 - [armsom-cm5-io](armsom-cm5-io.md) — RK3576（首颗 RK3576，Mali-G52 panfrost 开源 GPU，OP-TEE 打包，BW3752/AP6275S WiFi/BT，status: wip）
+- [embedfire-lubancat](embedfire-lubancat.md) — 野火鲁班猫 3（RK3576）/ 鲁班猫 5（RK3588），v1/v2 共 4 个 board，dts 在 flange-kernel 树内，status: wip
 - [radxa-rock-4d](radxa-rock-4d.md) — RK3576（首块 UFS 4K 存储板，image/flash 扇区参数化，UFS 启动 + SSH + WiFi/BT 上板通，status: done）
 - [radxa-cubie-a7z](radxa-cubie-a7z.md) — A733（首块 A733，ST7789V SPI 小屏 + AIC8800 USB，status: wip）
 - [radxa-cubie-a7a](radxa-cubie-a7a.md) — A733（A7 家族主线板，AXP318 + AC101B 直挂 + DSI/HDMI，沿用 a7z AIC8800 USB，status: wip）

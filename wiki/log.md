@@ -6,6 +6,10 @@
 
 ---
 
+## [2026-10-21] sync | 新增野火鲁班猫 3 / 鲁班猫 5（RK3576 / RK3588，v1/v2 共 4 个 board）
+
+[[embedfire-lubancat]] 新页。鲁班猫 3/5 的板级 dts 及 dtsi 闭包同步自野火官方 `LubanCat/kernel` lbc-develop-6.1，提交到 flange-kernel `linux-6.1-stan-rkr5.1`（`d2eccb6c9eff`），同时替换了树内未参与编译的旧版本。flange 侧：`config/embedfire-lubancat.libsonnet` 提供共享配置，`embedfire-lubancat-3`、`-3-v2`、`-5`、`-5-v2` 四个 board 各自只声明 SoC 和 dtb，其余继承 SoC 层。L3、L5 default-release 的 kernel 已构建成功，尚未实板验收。[[rockchip 平台]] 的 related 已补充，README 和板卡索引已登记。
+
 ## [2026-10-01] sync | RUBIK Pi 3 新增 mainline product（SoC 层 7.0.2 + EL2）
 
 [[thundercomm-rubikpi3]] 新增 `mainline` product：继承 SoC 层 `radxa/kernel@linux-7.0.2` 与平台层补丁（与 [[radxa-dragon-q6a]] 同一套内核与驱动），恢复板级 LT9611 Port B / USB QMP PHY backport 补丁与 `rubikpi3-el2.dtso`，刷 KVM 版 `xbl_config` 以 EL2 运行，Wi-Fi 走 brcmfmac。求值结果与 2026-09-27 实板验证过的 EL2 default（`ba1c69b27`）逐字段相同。default/desktop 不变，经 `exclude_patches` 排除板级补丁。已知限制：本板 TZ 不支持 `PAS_GET_RSCTABLE`，mainline 下 ADSP/CDSP 离线（Q6A 靠 Radxa UEFI 预加载 DSP）。实板（mainline-debug）：EL2 与 `/dev/kvm`、LT9611 Port B、H.264 720p / HEVC 1080p 硬编硬解回读、brcmfmac 扫描、蓝牙、Renesas USB3 均正常，ADSP/CDSP 如预期 `-5` 离线；HDMI 显示控制台（用户目视）、以太网与 Wi-Fi 连网正常（用户实测）。

@@ -17,13 +17,13 @@
 
 ## 支持的开发板
 
-**21 块板卡配置 · 5 个厂商平台**，按仓库内置配置核对于 2026-09-06。
+**25 块板卡配置 · 5 个厂商平台**，按仓库内置配置核对于 2026-10-21。
 点击板名查看存储介质、接线、刷写方式和功能记录。
 
 > **支持范围**：下表表示仓库已有对应板卡配置，不代表当前版本的所有外设都已完成实机验收。
 > 具体可用功能以各板卡页标明的目标、版本和验证记录为准。
 
-### Rockchip · 12 块
+### Rockchip · 16 块
 
 | 开发板 | SoC（片上系统） | 配置标识 |
 | --- | --- | --- |
@@ -35,8 +35,10 @@
 | [RP Pro RK3568 H](wiki/boards/rp-pro-rk3568-h.md) | RK3568 | `rp-pro-rk3568-h` |
 | [ArmSoM CM5 + IO](wiki/boards/armsom-cm5-io.md) | RK3576 | `armsom-cm5-io` |
 | [Radxa ROCK 4D](wiki/boards/radxa-rock-4d.md) | RK3576 | `radxa-rock-4d` |
+| [野火鲁班猫 3](wiki/boards/embedfire-lubancat.md) | RK3576 | `embedfire-lubancat-3` / `embedfire-lubancat-3-v2` |
 | [Radxa ROCK 5B](wiki/boards/radxa-rock5b.md) | RK3588 | `radxa-rock5b` |
 | [Orange Pi 5 Plus](wiki/boards/orangepi-5-plus.md) | RK3588 | `orangepi-5-plus` |
+| [野火鲁班猫 5](wiki/boards/embedfire-lubancat.md) | RK3588 | `embedfire-lubancat-5` / `embedfire-lubancat-5-v2` |
 | [Radxa ROCK 5C Lite](wiki/boards/radxa-rock5c-lite.md) | RK3582 | `radxa-rock5c-lite` |
 | [Orange Pi CM5 Tablet](wiki/boards/orangepi-cm5-tablet.md) | RK3588S | `orangepi-cm5-tablet` |
 
