@@ -4,8 +4,8 @@
 ``PACKAGE`` dict 描述。包内每个 component 带 ``type``，构建引擎按 type 分发到
 **既有**流水线：
 
-- ``oot-driver``：合成 ``kernel.oot_modules`` 条目（``make M=`` 对内核源树
-  编译 → strip → 装入 ``lib/modules/.../updates/``），复用
+- ``oot-driver``：合成 ``kernel.oot_modules`` 条目（驱动目录拷贝到构建根
+  工作目录后 ``make M=`` 对内核源树编译 → strip → 装入 ``lib/modules/.../updates/``），复用
   ``builder/kernel_base.py`` 的 OOT 模块编译/安装路径。
 - ``devicetree``：取该 board 对应 ``.dtso``，注册进
   ``boot.overlays.package``，由 ``builder/overlays.py`` 用 cpp+dtc 编译。
@@ -327,18 +327,20 @@ def expand_hardware_packages(config: dict, project_root: Path | None = None) -> 
                     continue
                 driver_rel = f"components/packages/{pkg_name}/{comp['dir']}"
                 driver_abs = (pkg_dir / comp["dir"]).resolve()
-                ko_abs = [str(driver_abs / ko) for ko in comp["ko_pattern"]]
+                # 包目录是内容层且整树计入 kernel 输入；拷贝到工作目录编译，
+                # 产物不写回包内（见 KernelBuilder._oot_build_dir）。
                 oot_modules.append(
                     {
                         "dir": str(driver_abs),
                         "label": f"{pkg_name}/{comp['name']} (package OOT driver)",
+                        "stage": True,
                         "make_args": [
                             "ARCH={arch}",
                             "CROSS_COMPILE={cross_compile}",
                             "KSRC={kernel_src_abs}",
-                            f"M={driver_abs}",
+                            "M={oot_build_dir}",
                         ],
-                        "ko_pattern": ko_abs,
+                        "ko_pattern": [f"{{oot_build_dir}}/{ko}" for ko in comp["ko_pattern"]],
                     }
                 )
                 kernel_src_paths.append(driver_rel)

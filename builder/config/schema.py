@@ -138,6 +138,7 @@ OOT_MODULE = Object(
         "ko_pattern": STRINGS,
         "pre_build": STRINGS,
         "post_build": STRINGS,
+        "stage": BOOLEAN,
     },
     ("dir", "label", "ko_pattern"),
 )

@@ -335,8 +335,10 @@ def test_expand_oot_make_args_absolute(demo_root: Path):
     assert Path(mod["dir"]).is_absolute()
     assert "ARCH={arch}" in mod["make_args"]
     assert "KSRC={kernel_src_abs}" in mod["make_args"]
-    assert any(a.startswith("M=/") for a in mod["make_args"])
-    assert mod["ko_pattern"][0].endswith("/touch.ko")
+    # 包驱动暂存到工作目录编译，M= 与 ko_pattern 指向实际编译目录。
+    assert mod["stage"] is True
+    assert "M={oot_build_dir}" in mod["make_args"]
+    assert mod["ko_pattern"] == ["{oot_build_dir}/touch.ko"]
 
 
 def test_expand_nonexistent_driver_errors(demo_root: Path):

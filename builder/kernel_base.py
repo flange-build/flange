@@ -234,6 +234,9 @@ class KernelBuilder(ComponentBuilder):
           - ko_pattern: str — glob 模式匹配编译产物 .ko，支持 {kernel_src}
           - pre_build: list|None  — 编译前执行的 shell 命令，支持 {kernel_src}
           - post_build: list|None — 编译后执行的 shell 命令，支持 {kernel_src}
+          - stage: bool|None — 为真时先把 ``dir`` 拷贝到构建根下的工作目录再编译，
+            源目录保持只读；``make_args`` / ``ko_pattern`` 用 ``{oot_build_dir}``
+            引用实际编译目录（未暂存时即 ``dir`` 本身）
 
         配置来源：config["kernel"]["oot_modules"]，在 SoC config.jsonnet 中声明。
 
@@ -277,6 +280,18 @@ class KernelBuilder(ComponentBuilder):
             tmpl[f"{name.replace('-', '_')}_src"] = str(path)
         return tmpl
 
+    def _oot_build_dir(self, index: int, mod: dict, tmpl: dict[str, str]) -> Path:
+        """模块实际编译目录；暂存模块落在产物层，路径对编译与安装两步确定。"""
+        source_dir = Path(mod["dir"].format(**tmpl))
+        if not mod.get("stage"):
+            return source_dir
+        if self.context is None:
+            raise RuntimeError("组件执行必须注入 WorkspaceContext")
+        return (
+            self.context.build_root / "work" / self.context.target.key
+            / "kernel-oot" / f"{index}-{source_dir.name}"
+        )
+
     def _compile_oot_modules(self, src_dir: Path, config: dict, jobs: int):
         """遍历配置中的 out-of-tree 模块并逐个编译。"""
         oot_modules = self._oot_modules_config(config)
@@ -284,12 +299,22 @@ class KernelBuilder(ComponentBuilder):
             return
 
         njobs = jobs or max((os.cpu_count() or 1) - 6, 1)
-        tmpl = self._oot_template_vars(src_dir, config)
-        for mod in oot_modules:
-            build_dir = Path(mod["dir"].format(**tmpl))
-            if not build_dir.is_dir():
+        base_tmpl = self._oot_template_vars(src_dir, config)
+        for index, mod in enumerate(oot_modules):
+            source_dir = Path(mod["dir"].format(**base_tmpl))
+            if not source_dir.is_dir():
                 self._status(f"跳过 {mod['label']}：目录不存在 {mod['dir']}")
                 continue
+            build_dir = self._oot_build_dir(index, mod, base_tmpl)
+            tmpl = {**base_tmpl, "oot_build_dir": str(build_dir)}
+            if build_dir != source_dir:
+                # 原地编译会把 .o/.ko 写进源目录，使其输入身份在执行期间变化；
+                # 每次从源目录全新拷贝，不继承上次编译的中间产物。
+                self.docker.run(["rm", "-rf", str(build_dir)], cwd=str(src_dir))
+                self.docker.run(["mkdir", "-p", str(build_dir.parent)], cwd=str(src_dir))
+                self.docker.run(
+                    ["cp", "-a", "--", str(source_dir), str(build_dir)], cwd=str(src_dir)
+                )
 
             label = f"编译 {mod['label']}..."
             self._status(label)
@@ -323,7 +348,7 @@ class KernelBuilder(ComponentBuilder):
         if not oot_modules:
             return
 
-        tmpl = self._oot_template_vars(src_dir, config)
+        base_tmpl = self._oot_template_vars(src_dir, config)
 
         kernel_release = self.docker.run(
             ["cat", "include/config/kernel.release"], cwd=str(src_dir), capture=True
@@ -333,7 +358,11 @@ class KernelBuilder(ComponentBuilder):
 
         strip = f"{self.CROSS}strip"
         installed = []
-        for mod in oot_modules:
+        for index, mod in enumerate(oot_modules):
+            if not Path(mod["dir"].format(**base_tmpl)).is_dir():
+                continue  # 编译阶段已跳过；不安装上次暂存残留的 .ko
+            build_dir = self._oot_build_dir(index, mod, base_tmpl)
+            tmpl = {**base_tmpl, "oot_build_dir": str(build_dir)}
             for pattern in mod.get("ko_pattern", []):
                 for ko_path in glob.glob(pattern.format(**tmpl)):
                     ko = Path(ko_path)
