@@ -1,0 +1,2 @@
+# intel-be200：iwlwifi 网卡出现时，把其中断分配到性能最强的一组 CPU。
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="iwlwifi", RUN+="/usr/lib/flange/iwlwifi-irq-affinity"
