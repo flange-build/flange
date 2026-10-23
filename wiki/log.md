@@ -6,6 +6,10 @@
 
 ---
 
+## [2026-10-23] sync | 修正 lunch 短格式示例
+
+[[radxa-rock5c-lite]] 的 `lunch radxa-rock5c-lite-lcd-key-hat` 补全为 `...-lcd-key-hat-debug`：`lunch` 即 `flange target select`，只接受完整 `<board>-<product>-<variant>`，省略 product/variant 会报“无法解析目标”。同批修正 CLAUDE.md 与 docs/amp.md 中的同类写法及 App 命令（`flange app build/create/list`）。
+
 ## [2026-10-21] sync | 新增野火鲁班猫 3 / 鲁班猫 5（RK3576 / RK3588，v1/v2 共 4 个 board）
 
 [[embedfire-lubancat]] 新页。鲁班猫 3/5 的板级 dts 及 dtsi 闭包同步自野火官方 `LubanCat/kernel` lbc-develop-6.1，提交到 flange-kernel `linux-6.1-stan-rkr5.1`（`d2eccb6c9eff`），同时替换了树内未参与编译的旧版本。flange 侧：`config/embedfire-lubancat.libsonnet` 提供共享配置，`embedfire-lubancat-3`、`-3-v2`、`-5`、`-5-v2` 四个 board 各自只声明 SoC 和 dtb，其余继承 SoC 层。L3、L5 default-release 的 kernel 已构建成功，尚未实板验收。[[rockchip 平台]] 的 related 已补充，README 和板卡索引已登记。

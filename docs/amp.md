@@ -54,7 +54,7 @@ flange build amp
 flange build kernel
 ```
 
-切回常规（无 AMP）：`lunch <board>`（= `<board>-default`）。
+切回常规（无 AMP）：`lunch <board>-default-debug`（目标名须完整写出 product 与 variant）。
 
 > ⚠️ amp product 的分区表在 recovery 与 rootfs 之间插入了 16MiB 的 amp 分区
 > （rootfs offset 后移）。从 default 布局首次切到 amp 布局需**整盘刷写**。
@@ -65,14 +65,14 @@ flange build kernel
 应用），**不打 deb、不进 rootfs**。
 
 ```bash
-flange create app --type amp --build-system amp my-amp-app
+flange app create --dir components/app --type amp --build-system amp my-amp-app
 ```
 
 生成 `components/app/my-amp-app/`（`app.yaml` + `src/main.c` + `README.md`）。
 把它打进固件：在 board 的 amp 段把 `amp.app` 指向它，例如
 `components/board/tspi-rk3566/config.jsonnet` 的 amp product 条件中设置
 `app: 'my-amp-app'`，
-再 `lunch tspi-rk3566-amp` + `flange build`。HAL app 是独立 CMake 工程，引用
+再 `lunch tspi-rk3566-amp-debug` + `flange build`。HAL app 是独立 CMake 工程，引用
 `components/amp/rockchip/hal` 的只读 HAL SDK；RT-Thread app 是叠到 BSP 模板上的
 overlay（`applications/` + 可选 `.config` 片段）。`amp.app` 必须显式声明。
 
