@@ -1,0 +1,4 @@
+# 构建时从目标内核拷入的源码（见 Makefile bt-sources），不入库。
+/btusb.c
+/btintel.c
+/*.h

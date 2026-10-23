@@ -1,0 +1,47 @@
+From: flange <flange@localhost>
+Subject: [PATCH] Bluetooth: btusb/btintel: 支持 Intel BE200 蓝牙（Gale Peak 2，8087:0036）
+
+BE200 的蓝牙为 USB 设备 8087:0036，hw_variant 0x1c（Gale Peak）。6.1 的
+btusb 设备表缺该 ID，btintel 的 TLV 型号白名单也不含 0x1c，导致接口无驱动
+绑定、没有 hci0。
+
+固件下载走 6.1 已有的 TLV 路径（ibt-<cnvi>-<cnvr>.sfi/.ddc），这里只补
+设备 ID 与 3 处 hw_variant 分支。主线另有的 ACPI DSM 复位方法与 DSBR 命令
+依赖 x86 的 ACPI / EFI 变量；ARM 板无 ACPI，DSBR 取值为 0（不启用），不回移。
+---
+--- a/drivers/bluetooth/btintel.c
++++ b/drivers/bluetooth/btintel.c
+@@ -450,6 +450,7 @@
+ 	case 0x18:	/* Slr */
+ 	case 0x19:	/* Slr-F */
+ 	case 0x1b:      /* Mgr */
++	case 0x1c:	/* Gale Peak (GaP) */
+ 		break;
+ 	default:
+ 		bt_dev_err(hdev, "Unsupported Intel hardware variant (0x%x)",
+@@ -2332,6 +2333,7 @@
+ 	case 0x18:
+ 	case 0x19:
+ 	case 0x1b:
++	case 0x1c:
+ 		hci_set_msft_opcode(hdev, 0xFC1E);
+ 		break;
+ 	default:
+@@ -2544,6 +2546,7 @@
+ 	case 0x18:
+ 	case 0x19:
+ 	case 0x1b:
++	case 0x1c:
+ 		/* Display version information of TLV type */
+ 		btintel_version_info_tlv(hdev, &ver_tlv);
+ 
+--- a/drivers/bluetooth/btusb.c
++++ b/drivers/bluetooth/btusb.c
+@@ -475,6 +475,7 @@
+ 	{ USB_DEVICE(0x8087, 0x0032), .driver_info = BTUSB_INTEL_COMBINED },
+ 	{ USB_DEVICE(0x8087, 0x0033), .driver_info = BTUSB_INTEL_COMBINED },
+ 	{ USB_DEVICE(0x8087, 0x0035), .driver_info = BTUSB_INTEL_COMBINED },
++	{ USB_DEVICE(0x8087, 0x0036), .driver_info = BTUSB_INTEL_COMBINED },
+ 	{ USB_DEVICE(0x8087, 0x07da), .driver_info = BTUSB_CSR },
+ 	{ USB_DEVICE(0x8087, 0x07dc), .driver_info = BTUSB_INTEL_COMBINED |
+ 						     BTUSB_INTEL_NO_WBS_SUPPORT |

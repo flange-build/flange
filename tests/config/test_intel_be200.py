@@ -1,9 +1,10 @@
-"""intel-be200 硬件特性包：板卡无关性与 backport 构建前准备脚本测试。"""
+"""intel-be200 硬件特性包：板卡无关性、backport 构建前准备脚本与蓝牙驱动测试。"""
 
 import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import _jsonnet
 import pytest
@@ -20,6 +21,13 @@ BACKPORT_TIMER_H = (
     + SHIM_GUARD
     + "\n{\n\treturn del_timer(timer);\n}\n#endif\n#endif\n"
 )
+
+
+BT_KCONFIG = {
+    "CONFIG_BT_HCIBTUSB": "m",
+    "CONFIG_BT_HCIUART_INTEL": "n",
+    "CONFIG_BT_HCIUART_AG6XX": "n",
+}
 
 
 def _package_on(platform: str) -> dict:
@@ -39,6 +47,7 @@ def test_rockchip平台额外关闭WL_ROCKCHIP():
         "CONFIG_CFG80211": "m",
         "CONFIG_MAC80211": "m",
         "CONFIG_IWLWIFI": "n",
+        **BT_KCONFIG,
         "CONFIG_WL_ROCKCHIP": "n",
     }
 
@@ -50,6 +59,7 @@ def test_非rockchip平台不带平台专有Kconfig(platform):
         "CONFIG_CFG80211": "m",
         "CONFIG_MAC80211": "m",
         "CONFIG_IWLWIFI": "n",
+        **BT_KCONFIG,
     }
     module = config["kernel"]["oot_modules"][0]
     # 交叉编译参数全部来自平台模板变量，不写死架构。
@@ -62,7 +72,11 @@ def test_固件按固定tag下载并校验():
     assert {entry["filename"] for entry in firmware} == {
         "iwlwifi-gl-c0-fm-c0-101.ucode",
         "iwlwifi-gl-c0-fm-c0.pnvm",
+        "ibt-0291-0291.sfi",
+        "ibt-0291-0291.ddc",
     }
+    dests = {entry["filename"]: entry["dest"] for entry in firmware}
+    assert dests["ibt-0291-0291.sfi"] == "lib/firmware/intel"
     for entry in firmware:
         assert entry["url"].endswith("?h=20261019")
         assert len(entry["sha256"]) == 64
@@ -144,6 +158,63 @@ def test_cfg80211内建时拒绝构建(fake_tree, symbol):
     result = _prepare(kernel, backport, bin_dir)
     assert result.returncode == 1
     assert f"CONFIG_{symbol}=y" in result.stderr
+
+
+BT_DRIVER = PACKAGE_ROOT / "driver/bt"
+
+
+@pytest.fixture
+def fake_bt(tmp_path):
+    """构造含 btusb/btintel 的最小内核树，并复制蓝牙驱动目录。"""
+    kernel = tmp_path / "kernel"
+    (kernel / "drivers/bluetooth").mkdir(parents=True)
+    (kernel / ".config").write_text("CONFIG_BT_HCIBTUSB=m\nCONFIG_BT_INTEL=m\n")
+    for name in ("btusb.c", "btintel.c", "btintel.h"):
+        (kernel / "drivers/bluetooth" / name).write_text(f"/* {name} */\n")
+    driver = tmp_path / "bt"
+    shutil.copytree(BT_DRIVER, driver, ignore=shutil.ignore_patterns(".gitignore"))
+    return kernel, driver
+
+
+def _bt_sources(kernel, driver):
+    return subprocess.run(
+        ["make", "-C", str(driver), "bt-sources", f"KSRC={kernel}", f"M={driver}"],
+        capture_output=True, text=True,
+    )
+
+
+def test_蓝牙驱动随包编译btusb与btintel():
+    config = resolve_config(
+        "embedfire-lubancat-5", "default", "debug", boards=discover_boards()
+    )
+    modules = [m for m in config["kernel"]["oot_modules"] if m["dir"] == str(BT_DRIVER)]
+    assert [Path(ko).name for ko in modules[0]["ko_pattern"]] == ["btusb.ko", "btintel.ko"]
+    assert "bluez" in config["rootfs"]["packages"]
+    patch = (BT_DRIVER / "0001-bluetooth-support-intel-gale-peak-8087-0036.patch").read_text()
+    assert "USB_DEVICE(0x8087, 0x0036)" in patch
+    assert patch.count("+\tcase 0x1c:") == 3
+
+
+@pytest.mark.parametrize("symbol", ["BT_HCIBTUSB", "BT_INTEL"])
+def test_蓝牙模块内建时拒绝构建(fake_bt, symbol):
+    kernel, driver = fake_bt
+    (kernel / ".config").write_text(
+        "CONFIG_BT_HCIBTUSB=m\nCONFIG_BT_INTEL=m\n".replace(f"CONFIG_{symbol}=m", f"CONFIG_{symbol}=y")
+    )
+    result = _bt_sources(kernel, driver)
+    assert result.returncode != 0
+    assert f"CONFIG_{symbol}=m" in result.stderr
+
+
+def test_内核已支持0036时不打补丁(fake_bt):
+    kernel, driver = fake_bt
+    native = "{ USB_DEVICE(0x8087, 0x0036), .driver_info = BTUSB_INTEL_COMBINED },\n"
+    (kernel / "drivers/bluetooth/btusb.c").write_text(native)
+    for _ in range(2):
+        result = _bt_sources(kernel, driver)
+        assert result.returncode == 0, result.stderr
+    assert (driver / "btusb.c").read_text() == native
+    assert (driver / "btintel.h").is_file()
 
 
 AFFINITY = PACKAGE_ROOT / "runtime/bin/iwlwifi-irq-affinity"

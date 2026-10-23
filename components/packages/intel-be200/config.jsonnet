@@ -10,8 +10,15 @@
 // - 关闭内核自带 IWLWIFI，避免旧驱动抢先 probe。
 // 代价：内核树内其他依赖 cfg80211 的模块（如 USB 无线网卡）与 backport 版
 // cfg80211 符号不匹配，无法加载；启用本包即表示无线只走 BE200。
+//
+// 蓝牙（USB 8087:0036）由包内 driver/bt 以 OOT 方式重编 btusb/btintel，要求二者
+// 为模块：BT_INTEL 无提示符，只能由选择者决定，故关掉会把它 select 成内建的
+// Intel/AG6XX UART 协议（板上不存在 Intel UART 蓝牙）。
 local iwlFirmwareUrl(file) =
   'https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/intel/iwlwifi/'
+  + file + '?h=20261019';
+local ibtFirmwareUrl(file) =
+  'https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/intel/'
   + file + '?h=20261019';
 local backportDir = '{backport_iwlwifi_src}';
 
@@ -29,6 +36,9 @@ local backportDir = '{backport_iwlwifi_src}';
       CONFIG_CFG80211: 'm',
       CONFIG_MAC80211: 'm',
       CONFIG_IWLWIFI: 'n',
+      CONFIG_BT_HCIBTUSB: 'm',
+      CONFIG_BT_HCIUART_INTEL: 'n',
+      CONFIG_BT_HCIUART_AG6XX: 'n',
     } + (
       // Rockchip BSP 的 WL_ROCKCHIP 会 select CFG80211/MAC80211=y 把它们钉成内建；
       // 启用 BE200 即放弃 Rockchip 自家 SDIO 无线（bcmdhd 等）。
@@ -60,8 +70,8 @@ local backportDir = '{backport_iwlwifi_src}';
     }],
   },
   rootfs+: {
-    // iw 用于诊断；wireless-regdb 提供 cfg80211 的 regulatory.db。
-    packages+: ['iw', 'wireless-regdb'],
+    // iw 用于诊断；wireless-regdb 提供 cfg80211 的 regulatory.db；bluez 为蓝牙用户态。
+    packages+: ['iw', 'wireless-regdb', 'bluez'],
     // core98 的 BZ/GL 固件 API 范围 94–101，取 101；pnvm 为 RF 校准数据。
     // Ubuntu Noble linux-firmware（20240318）最高只到 API 86，取上游固定 tag。
     extra_firmware+: [
@@ -80,6 +90,23 @@ local backportDir = '{backport_iwlwifi_src}';
         filename: 'iwlwifi-gl-c0-fm-c0.pnvm',
         files: ['iwlwifi-gl-c0-fm-c0.pnvm'],
         dest: 'lib/firmware',
+      },
+      // 蓝牙固件按 ibt-<cnvi>-<cnvr> 命名，Gale Peak 2 为 0291；ddc 为设备配置。
+      {
+        name: 'intel-ibt-0291-sfi',
+        url: ibtFirmwareUrl('ibt-0291-0291.sfi'),
+        sha256: 'ab04144f4b05dbd7baa2e3b0def81b87e27652accc35193582468f570f606018',
+        filename: 'ibt-0291-0291.sfi',
+        files: ['ibt-0291-0291.sfi'],
+        dest: 'lib/firmware/intel',
+      },
+      {
+        name: 'intel-ibt-0291-ddc',
+        url: ibtFirmwareUrl('ibt-0291-0291.ddc'),
+        sha256: 'e0fb10fe29f60607d6507ced3f697492d9611f62c4765feaee59c4bd4101d3e7',
+        filename: 'ibt-0291-0291.ddc',
+        files: ['ibt-0291-0291.ddc'],
+        dest: 'lib/firmware/intel',
       },
     ],
   },
