@@ -88,7 +88,7 @@ def _mainline_kernel_patch_names():
     return names
 
 
-@pytest.mark.parametrize("product", ["default", "desktop"])
+@pytest.mark.parametrize("product", ["default", "desktop", "default_ax210"])
 @pytest.mark.parametrize("variant", ["debug", "release"])
 def test_rubikpi3使用厂商内核并声明ufs启动固件(product, variant):
     config = JsonnetConfigLoader(PROJECT_ROOT).evaluate_board(
@@ -105,12 +105,14 @@ def test_rubikpi3使用厂商内核并声明ufs启动固件(product, variant):
         "qcom_defconfig", "qcom_addons.config", "rubikpi3.config"]
     # 平台层与板级补丁全部针对 mainline radxa/kernel，厂商树上必须全部排除。
     assert set(kernel["exclude_patches"]) == _mainline_kernel_patch_names()
+    overlays = ["rubikpi3-video.dtbo"] + (
+        ["rubikpi3-ax210.dtbo"] if product == "default_ax210" else [])
     assert kernel["device_tree"] == {
         "directory": "qcom",
         "name": "qcs6490-thundercomm-rubikpi3",
-        "build_overlays": ["rubikpi3-video.dtbo"],
+        "build_overlays": overlays,
     }
-    assert config["boot"]["overlays"]["board"] == ["rubikpi3-video.dtbo"]
+    assert config["boot"]["overlays"]["board"] == overlays
     assert config["boot"]["overlays"]["enabled"] == []
     assert kernel["oot_sources"] == {
         "video-driver": {"source": {"name": "qcom-video-driver"}}}
@@ -125,11 +127,21 @@ def test_rubikpi3使用厂商内核并声明ufs启动固件(product, variant):
     assert "ufs_file_overrides" not in bootloader
     assert config["partitions"]["sector_size"] == 4096
     firmware = {entry["name"]: entry for entry in config["rootfs"]["extra_firmware"]}
-    # 厂商 config 用 bcmdhd：固件布局与 rubikpi3-firmware 的 Makefile install 一致。
-    assert firmware["rubikpi3-ap6256"]["source"] == {
-        "name": "rubikpi3-firmware", "subpath": "lib/firmware"}
-    assert firmware["rubikpi3-ap6256"]["files"] == [
-        "fw_bcm43456c5_ag.bin", "nvram.txt", "config.txt", "brcm/BCM4345C5.hcd"]
+    if product == "default_ax210":
+        # 无线只用 AX210：启用 iwlwifi、连同目录开关关闭 bcmdhd，AP6256 只保留蓝牙 patchram。
+        assert {k: kernel["config"][k] for k in (
+            "CONFIG_IWLWIFI", "CONFIG_IWLMVM", "CONFIG_WLAN_VENDOR_BCMDHD", "CONFIG_BCMDHD")} == {
+            "CONFIG_IWLWIFI": "m", "CONFIG_IWLMVM": "m",
+            "CONFIG_WLAN_VENDOR_BCMDHD": "n", "CONFIG_BCMDHD": "n"}
+        assert "rubikpi3-ap6256" not in firmware
+        assert firmware["rubikpi3-ap6256-bt"]["files"] == ["brcm/BCM4345C5.hcd"]
+    else:
+        # 厂商 config 用 bcmdhd：固件布局与 rubikpi3-firmware 的 Makefile install 一致。
+        assert "CONFIG_IWLWIFI" not in kernel.get("config", {})
+        assert firmware["rubikpi3-ap6256"]["source"] == {
+            "name": "rubikpi3-firmware", "subpath": "lib/firmware"}
+        assert firmware["rubikpi3-ap6256"]["files"] == [
+            "fw_bcm43456c5_ag.bin", "nvram.txt", "config.txt", "brcm/BCM4345C5.hcd"]
     assert "radxa-firmware" not in config["sources"]
     assert "bluez" in config["rootfs"]["packages"]
     desktop = "flange-ubuntu-desktop-config" in config["rootfs"]["custom_packages"]
@@ -175,6 +187,7 @@ def test_rubikpi3不再提供el1_product():
     targets = [t for t in get_valid_targets(boards) if t.startswith("thundercomm-rubikpi3-")]
     assert sorted(targets) == [
         f"thundercomm-rubikpi3-{product}-{variant}"
-        for product in ("default", "desktop", "mainline") for variant in ("debug", "release")]
+        for product in ("default", "default_ax210", "desktop", "mainline")
+        for variant in ("debug", "release")]
     with pytest.raises(Exception, match="thundercomm-rubikpi3-el1-release"):
         parse_target("thundercomm-rubikpi3-el1-release", boards)

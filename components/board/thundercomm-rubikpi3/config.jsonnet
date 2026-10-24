@@ -32,14 +32,18 @@
 // - default：无桌面（headless），厂商内核，EL1；经串口 ttyMSM0 / adb / SSH 访问。
 // - desktop：启用 ubuntu-desktop 硬件特性包（GNOME），厂商内核，EL1。
 // - mainline：无桌面，mainline 内核，EL2。
+// - default_ax210：同 default，但无线只用 M.2 上的 Intel AX210（8086:2725）：厂商内核启用
+//   树内 iwlwifi/iwlmvm，关闭板载 AP6256 的 bcmdhd；AP6256 蓝牙（UART）保留。构建期合并
+//   dtso/rubikpi3-ax210.dtso，为 pcie1 交换芯片之后的 M.2 设备补 SMMU 流映射。
 local product = std.extVar('product');
 local mainline = product == 'mainline';
+local ax210 = product == 'default_ax210';
 
 {
   board: 'thundercomm-rubikpi3',
   platform: 'qualcommqcs6490',
   soc: 'qcs6490',
-  products: ['default', 'desktop', 'mainline'],
+  products: ['default', 'desktop', 'mainline', 'default_ax210'],
   variants: ['debug', 'release'],
   packages: if product == 'desktop' then ['ubuntu-desktop'] else [],
   sources+: {
@@ -91,6 +95,16 @@ local mainline = product == 'mainline';
     // kernel.config（UFS / QMP PHY / USB gadget builtin 等）继续在其后覆盖。
     // Yocto 仅在 DEBUG_BUILD 时追加的 qcom_debug.config 不引入：flange 的 variant 只区分 rootfs。
     defconfig: ['qcom_defconfig', 'qcom_addons.config', 'rubikpi3.config'],
+    // default_ax210：cfg80211 / mac80211 厂商 config 已为模块；AX210 固件
+    // iwlwifi-ty-a0-gf-a0-*.ucode.zst 与 pnvm 由 rootfs 的 linux-firmware 提供。
+    // bcmdhd 的 Makefile 写死 CONFIG_BCMDHD ?= m，只关 BCMDHD 仍会进目录按缺省选项编译
+    // （且编不过），须连同目录开关 WLAN_VENDOR_BCMDHD 一起关。
+    config+: if ax210 then {
+      CONFIG_IWLWIFI: 'm',
+      CONFIG_IWLMVM: 'm',
+      CONFIG_WLAN_VENDOR_BCMDHD: 'n',
+      CONFIG_BCMDHD: 'n',
+    } else {},
     // 平台层补丁针对 radxa/kernel 7.0.2 与 Q6A DTS，板级补丁是 mainline product 的 7.0.2
     // backport，均不适用于厂商树。
     exclude_patches: [
@@ -111,7 +125,7 @@ local mainline = product == 'mainline';
     // camera overlay 与 rubikpi3-overlay.dtbo（其四个 dtsi 中只有 camera 有内容）。
     device_tree+: {
       name: 'qcs6490-thundercomm-rubikpi3',
-      build_overlays: ['rubikpi3-video.dtbo'],
+      build_overlays: ['rubikpi3-video.dtbo'] + (if ax210 then ['rubikpi3-ax210.dtbo'] else []),
     },
     oot_sources: {
       'video-driver': { source: { name: 'qcom-video-driver' } },
@@ -140,7 +154,8 @@ local mainline = product == 'mainline';
   boot+: {
     // 高通启动链不支持运行期 overlay，板私有 overlay 只作为构建期合并来源。
     overlays+: {
-      board+: [if mainline then 'rubikpi3-el2.dtbo' else 'rubikpi3-video.dtbo'],
+      board+: [if mainline then 'rubikpi3-el2.dtbo' else 'rubikpi3-video.dtbo']
+              + (if ax210 then ['rubikpi3-ax210.dtbo'] else []),
     },
     // pcie_pme=nomsi：Thundercomm 全部发行版 cmdline 均带（Yocto KERNEL_CMDLINE_EXTRA 同款），
     // 规避 qcom PCIe PME 走 MSI 的问题；deferred_probe_timeout=30：给 msm-mdss 等待 LT9611
@@ -170,6 +185,14 @@ local mainline = product == 'mainline';
           { src: 'nvram.txt', dest: 'brcm/brcmfmac43456-sdio.thundercomm,rubikpi3.txt' },
           'brcm/BCM4345C5.hcd',
         ],
+        dest: 'lib/firmware',
+      },
+    ] else if ax210 then [
+      {
+        // bcmdhd 已关闭，只装蓝牙 patchram：btbcm 查找 brcm/BCM4345C5.hcd。
+        name: 'rubikpi3-ap6256-bt',
+        source: { name: 'rubikpi3-firmware', subpath: 'lib/firmware' },
+        files: ['brcm/BCM4345C5.hcd'],
         dest: 'lib/firmware',
       },
     ] else [
