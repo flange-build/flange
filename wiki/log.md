@@ -758,3 +758,10 @@ nsswitch 副本等注意事项），新增蓝牙说明，验收表按 verificati
 [[nvidia-jetson-tx2]] 验收表更新：镜像内置蓝牙、以太网 DHCP 与 SSH、kernel-dtb 单刷、USB3 Host、HDMI 均已实板验证；
 新增一行记录 overlay / 内核模块属主修复（`builder/rootfs.py` 改用 tar 合并，属主统一 root，所有平台 `/etc`、`/usr`
 不再归 uid 1000）后的实板复核。仅 jetpack product 仍待验收。
+
+## [2026-10-25] sync | RUBIK Pi 3 USB 插拔后 adb 失联
+
+[[thundercomm-rubikpi3]] 新增"USB 插拔后 adb 失联"一节：拔线后 HS PHY 被外部执行者置为 UTMI 数据通路覆盖 +
+non-driving，UCSI/pmic_glink 不工作导致无人恢复；板级 `vendor-0001` 补丁让 femto v2 PHY 驱动经 PM7250B
+`ADC5_USB_IN_V_16` 检测 VBUS 并释放覆盖（mainline product 排除）。Type-C UCSI 行补充 ADSP 无 `charger_pd`、
+无 pd-mapper；实板验证拔插与开机后冷插 adb 均自动恢复。

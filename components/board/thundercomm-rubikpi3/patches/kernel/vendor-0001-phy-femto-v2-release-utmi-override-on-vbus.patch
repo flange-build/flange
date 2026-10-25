@@ -1,0 +1,175 @@
+phy: qcom-snps-femto-v2: VBUS 恢复后释放 UTMI 数据通路覆盖（仅厂商内核 rubikpi-ai/linux）
+
+RUBIK Pi 3 拔掉 USB 线约 6 秒后，HS PHY（88e3000）被内核以外的执行者（推测为
+ADSP 固件）接管：CFG0 置 UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN、UTMI_CTRL0 设为
+OPMODE_NONDRIVING、HS_PHY_CTRL2 置 USB2_SUSPEND_N_SEL。PHY 撤掉 D+ 上拉，dwc3
+把随之出现的 SE0 当作总线复位，adbd FunctionFS 随之失效。
+
+高通设计里，再插线时由 pmic_glink/UCSI 发角色切换，驱动重新初始化 PHY 解除
+覆盖；本板 ADSP 没有 charger_pd、也没有 pd-mapper，UCSI 不注册任何端口，这条
+链路不存在。PHY 一直停在 non-driving，插回后主机端口检测不到设备，只有带线
+重启才能恢复（开机前 VBUS 已在，PHY 从未被接管）。dwc3 的 DEVICE→DEVICE 角色
+切换不做任何事，且 device 路径只软复位控制器、不碰 PHY 寄存器，模拟 UCSI 事件
+解决不了。
+
+本补丁在 PHY 驱动里新增可选的 "vbus" IIO 通道：PHY 初始化后每 500 ms 读一次
+VBUS，VBUS > 4 V、非 host 模式且数据通路覆盖仍置位时，清掉 USB2_SUSPEND_N_SEL
+与 UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN，把 UTMI 交还控制器（与实机手动写寄存器
+立即恢复枚举的操作一致）。未配置 io-channels 的平台行为不变。DT 为 usb_1_hsphy
+接 PM7250B ADC 的 ADC5_USB_IN_V_16。
+
+mainline product（radxa/kernel 7.0.2）经 exclude_patches 排除本补丁。
+
+diff --git a/arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dtsi b/arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dtsi
+index 94ea102..1bb2d7d 100644
+--- a/arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dtsi
++++ b/arch/arm64/boot/dts/qcom/qcs6490-thundercomm-rubikpi3.dtsi
+@@ -877,6 +877,9 @@
+ 	qcom,hs-crossover-voltage-microvolt = <(-31000)>;
+ 	qcom,hs-output-impedance-micro-ohms = <2600000>;
+ 
++	io-channels = <&pm7250b_adc ADC5_USB_IN_V_16>;
++	io-channel-names = "vbus";
++
+ 	status = "okay";
+ };
+ 
+diff --git a/drivers/phy/qualcomm/Kconfig b/drivers/phy/qualcomm/Kconfig
+index d891058..b7b2345 100644
+--- a/drivers/phy/qualcomm/Kconfig
++++ b/drivers/phy/qualcomm/Kconfig
+@@ -166,6 +166,7 @@ config PHY_QCOM_USB_HS
+ config PHY_QCOM_USB_SNPS_FEMTO_V2
+ 	tristate "Qualcomm SNPS FEMTO USB HS PHY V2 module"
+ 	depends on OF && (ARCH_QCOM || COMPILE_TEST)
++	depends on IIO || !IIO
+ 	select GENERIC_PHY
+ 	help
+ 	  Enable support for the USB high-speed SNPS Femto phy on Qualcomm
+diff --git a/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c b/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c
+index eb0b0f6..43c8da1 100644
+--- a/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c
++++ b/drivers/phy/qualcomm/phy-qcom-snps-femto-v2.c
+@@ -6,6 +6,7 @@
+ #include <linux/clk.h>
+ #include <linux/delay.h>
+ #include <linux/err.h>
++#include <linux/iio/consumer.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+@@ -16,6 +17,7 @@
+ #include <linux/regulator/consumer.h>
+ #include <linux/reset.h>
+ #include <linux/slab.h>
++#include <linux/workqueue.h>
+ 
+ #define USB2_PHY_USB_PHY_UTMI_CTRL0		(0x3c)
+ #define SLEEPM					BIT(0)
+@@ -78,6 +80,9 @@
+ 
+ #define LS_FS_OUTPUT_IMPEDANCE_MASK		GENMASK(3, 0)
+ 
++#define VBUS_POLL_INTERVAL_MS			500
++#define VBUS_PRESENT_THRESHOLD_UV		4000000
++
+ static const char * const qcom_snps_hsphy_vreg_names[] = {
+ 	"vdda-pll", "vdda33", "vdda18",
+ };
+@@ -121,6 +126,9 @@ struct phy_override_seq {
+  * @phy_initialized: if PHY has been initialized correctly
+  * @mode: contains the current mode the PHY is in
+  * @update_seq_cfg: tuning parameters for phy init
++ *
++ * @vbus_chan: optional VBUS voltage channel, enables @vbus_work
++ * @vbus_work: releases a stale UTMI datapath override once VBUS returns
+  */
+ struct qcom_snps_hsphy {
+ 	struct device *dev;
+@@ -136,6 +144,9 @@ struct qcom_snps_hsphy {
+ 	bool phy_initialized;
+ 	enum phy_mode mode;
+ 	struct phy_override_seq update_seq_cfg[NUM_HSPHY_TUNING_PARAMS];
++
++	struct iio_channel *vbus_chan;
++	struct delayed_work vbus_work;
+ };
+ 
+ static int qcom_snps_hsphy_clk_init(struct qcom_snps_hsphy *hsphy)
+@@ -235,6 +246,38 @@ static int qcom_snps_hsphy_set_mode(struct phy *phy, enum phy_mode mode,
+ 	return 0;
+ }
+ 
++/*
++ * Firmware may take over the UTMI datapath and leave the PHY non-driving
++ * after VBUS goes away. Without a Type-C or extcon notification nothing
++ * re-initializes the PHY on reattach, so D+ is never pulled up. Poll VBUS
++ * and hand the datapath back to the controller once it is present again.
++ */
++static void qcom_snps_hsphy_vbus_work(struct work_struct *work)
++{
++	struct qcom_snps_hsphy *hsphy = container_of(to_delayed_work(work),
++					struct qcom_snps_hsphy, vbus_work);
++	int vbus_uv, ret;
++
++	/* Returns an IIO_VAL_* type (positive) on success */
++	ret = iio_read_channel_processed(hsphy->vbus_chan, &vbus_uv);
++	if (ret >= 0 && vbus_uv > VBUS_PRESENT_THRESHOLD_UV &&
++	    hsphy->mode != PHY_MODE_USB_HOST &&
++	    (readl_relaxed(hsphy->base + USB2_PHY_USB_PHY_CFG0) &
++	     UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN)) {
++		qcom_snps_hsphy_write_mask(hsphy->base,
++					   USB2_PHY_USB_PHY_HS_PHY_CTRL2,
++					   USB2_SUSPEND_N_SEL, 0);
++		qcom_snps_hsphy_write_mask(hsphy->base, USB2_PHY_USB_PHY_CFG0,
++					   UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN, 0);
++		dev_info(hsphy->dev,
++			 "VBUS present, released UTMI datapath override\n");
++	}
++
++	queue_delayed_work(system_freezable_power_efficient_wq,
++			   &hsphy->vbus_work,
++			   msecs_to_jiffies(VBUS_POLL_INTERVAL_MS));
++}
++
+ static const struct override_param hs_disconnect_sc7280[] = {
+ 	{ -272, 0 },
+ 	{ 0, 1 },
+@@ -466,6 +509,10 @@ static int qcom_snps_hsphy_init(struct phy *phy)
+ 
+ 	hsphy->phy_initialized = true;
+ 
++	if (hsphy->vbus_chan)
++		queue_delayed_work(system_freezable_power_efficient_wq,
++				   &hsphy->vbus_work, 0);
++
+ 	return 0;
+ 
+ disable_clks:
+@@ -480,6 +527,9 @@ static int qcom_snps_hsphy_exit(struct phy *phy)
+ {
+ 	struct qcom_snps_hsphy *hsphy = phy_get_drvdata(phy);
+ 
++	if (hsphy->vbus_chan)
++		cancel_delayed_work_sync(&hsphy->vbus_work);
++
+ 	reset_control_assert(hsphy->phy_reset);
+ 	clk_bulk_disable_unprepare(hsphy->num_clks, hsphy->clks);
+ 	regulator_bulk_disable(ARRAY_SIZE(hsphy->vregs), hsphy->vregs);
+@@ -599,6 +649,16 @@ static int qcom_snps_hsphy_probe(struct platform_device *pdev)
+ 		return dev_err_probe(dev, ret,
+ 				     "failed to get regulator supplies\n");
+ 
++	hsphy->vbus_chan = devm_iio_channel_get(dev, "vbus");
++	if (IS_ERR(hsphy->vbus_chan)) {
++		ret = PTR_ERR(hsphy->vbus_chan);
++		if (ret != -ENODEV)
++			return dev_err_probe(dev, ret,
++					     "failed to get vbus channel\n");
++		hsphy->vbus_chan = NULL;
++	}
++	INIT_DELAYED_WORK(&hsphy->vbus_work, qcom_snps_hsphy_vbus_work);
++
+ 	pm_runtime_set_active(dev);
+ 	pm_runtime_enable(dev);
+ 	/*

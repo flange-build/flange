@@ -23,7 +23,7 @@ related:
   - "[[qualcommqcs6490 平台]]"
   - "[[radxa-dragon-q6a]]"
   - "[[FlashStrategy 抽象]]"
-updated: 2026-10-01
+updated: 2026-10-25
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -210,17 +210,42 @@ EL2 下 DSP 的固件实验：
 | 以太网、USB3 Type-A 外设、冷启动 | ✓ 用户实测正常 |
 | 热重启 | ✓ `systemctl reboot` 后回到 running，DSP 与视频驱动恢复，两次启动均无 UFS 错误 |
 | 音频播放 | ✗ 声卡 `qcm6490-idp-snd-card` 已注册、ES8316 耳机通路可配，但原生 ALSA 写 `hw:0,2` 返回 `-EINVAL`：LPAIF 接口要由高通闭源 AGM/PAL 用户态先在 ADSP 上建立 AudioReach 音频图 |
-| Type-C UCSI | ✗ `ucsi_glink`/`pmic_glink` 已加载，`/sys/class/typec` 仍为空（mainline 下同样如此） |
+| Type-C UCSI | ✗ `ucsi_glink`/`pmic_glink` 已加载，`/sys/class/typec` 仍为空（mainline 下同样如此）。ADSP 只声明 root/sensor/audio PD，没有 `charger_pd`，系统也没有 pd-mapper，battmgr 节点同样为空 |
 
 - 厂商 `qcom_defconfig` 关闭了 `CONFIG_DRM_FBDEV_EMULATION`，没有 fbcon，headless 镜像开机时 HDMI 不显示控制台
   （Yocto 靠 Weston 出图）；有 DRM 客户端（如 `kmscube`、桌面合成器）时正常出图。暂不打开。
 - Mesa 25 在厂商 6.6 的 msm uapi 上会提示 `Failed to set BO metadata with DRM_MSM_GEM_INFO: -22`，不影响渲染与出图。
 
+## USB 插拔后 adb 失联（2026-10-25，厂商内核）
+
+现象：开机前已插线时 adb 正常；拔线再插、或开机后才插线，主机端口始终 `not attached`，只有带线重启能恢复。
+主机 Type-A 口与 A-to-C 线，换主机口无效。
+
+根因（串口 + dwc3 trace + 寄存器对比定位）：
+
+- 拔线约 6 s 后，HS PHY（`88e3000`）被内核以外的执行者（推测 ADSP 固件）接管：`CFG0` 置
+  `UTMI_PHY_DATAPATH_CTRL_OVERRIDE_EN`、`UTMI_CTRL0` 为 `OPMODE_NONDRIVING`、`HS_PHY_CTRL2` 置
+  `USB2_SUSPEND_N_SEL`。PHY 撤掉 D+ 上拉，dwc3 把随之出现的 SE0 当作 `Reset`，adbd FunctionFS 失效，
+  usbmoded 随后重连。dwc3 本身看不到 VBUS（dwc3-qcom 把 VBUS valid 强制置 1）。
+- 正常高通设计靠 pmic_glink/UCSI 的角色切换让驱动重新初始化 PHY；本板 UCSI 不工作（见上表），PHY 一直
+  non-driving。dwc3 的 DEVICE→DEVICE 角色切换是空操作，device 路径也只软复位控制器，模拟 UCSI 事件无效。
+- 已排除：主机端口、PMIC APSD（结果 SDP、已完成）、Type-C CC、SuperSpeed 训练、SBU mux（PI3USB102 不在
+  D+/D- 通路上）、EUD（关闭、寄存器全 0）。
+
+修复：板级补丁 `vendor-0001-phy-femto-v2-release-utmi-override-on-vbus.patch`（仅厂商树，mainline 经
+`exclude_patches` 排除）给 femto v2 PHY 驱动加可选 `vbus` IIO 通道，DT 接 PM7250B ADC 的
+`ADC5_USB_IN_V_16`。PHY 初始化后每 500 ms 读 VBUS，> 4 V、非 host 模式且数据通路覆盖仍置位时清掉
+`USB2_SUSPEND_N_SEL` 与覆盖位，dmesg 打印 `VBUS present, released UTMI datapath override`。
+
+实板验收（`default_ax210-debug`）：开机前插线、拔线再插（接管后约 0.23 s 释放）、开机后冷插，三种场景
+adb 均自动连上；线缆在位时人为写入卡死寄存器值，0.35 s 内释放。
+
+易踩坑：`iio_read_channel_processed()` 成功时返回 `IIO_VAL_INT`（正数）而不是 0，判断要写 `ret >= 0`。
+
 ## 待验收
 
 - desktop product：GNOME 桌面
 - 音频播放（需要 AGM/PAL 用户态，或改走可由 ALSA 直接驱动的音频路径）
-- Type-C UCSI 端口注册；Type-C host 模式（厂商 DT 为 `dr_mode=otg`，切换会断开 adb，未测）
-- 摄像头（camera-kernel 模块、camera DT 与 CamX 均未集成）
+- Type-C UCSI 端口注册；Type-C host 模式（厂商 DT 为 `dr_mode=otg`，切换会断开 adb，未测）- 摄像头（camera-kernel 模块、camera DT 与 CamX 均未集成）
 - Wi-Fi 特定国家信道/功率表（bcmdhd 使用固件内嵌 CLM）
 - UFS 长时间稳定性

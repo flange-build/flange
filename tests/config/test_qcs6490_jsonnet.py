@@ -80,12 +80,22 @@ def test_vim3l板层与soc层共用kernel_config且保留binder():
     }
 
 
-def _mainline_kernel_patch_names():
+def _kernel_patch_names(layers):
     names = set()
-    for layer in ("platform/qualcommqcs6490", "board/thundercomm-rubikpi3"):
+    for layer in layers:
         patch_dir = PROJECT_ROOT / "components" / layer / "patches/kernel"
         names |= {patch.name for patch in patch_dir.glob("*.patch")}
     return names
+
+
+def _mainline_kernel_patch_names():
+    names = _kernel_patch_names(("platform/qualcommqcs6490", "board/thundercomm-rubikpi3"))
+    return {name for name in names if not name.startswith("vendor-")}
+
+
+def _vendor_kernel_patch_names():
+    names = _kernel_patch_names(("board/thundercomm-rubikpi3",))
+    return {name for name in names if name.startswith("vendor-")}
 
 
 @pytest.mark.parametrize("product", ["default", "desktop", "default_ax210"])
@@ -155,11 +165,13 @@ def test_rubikpi3_mainline_product以el2运行soc层内核(variant):
 
     validate_canonical_config(config)
     kernel = config["kernel"]
-    # 与 Q6A 相同的 SoC 层 mainline 内核，平台层与板级补丁全部应用。
+    # 与 Q6A 相同的 SoC 层 mainline 内核，平台层与板级补丁全部应用，只排除厂商树补丁。
     assert kernel["source"] == {"name": "linux-qcs6490"}
     assert kernel["defconfig"] == [
         "defconfig", "qcom_module.config", "radxa.config", "radxa_custom.config"]
-    assert "exclude_patches" not in kernel
+    assert set(kernel["exclude_patches"]) == _vendor_kernel_patch_names()
+    assert _vendor_kernel_patch_names() == {
+        "vendor-0001-phy-femto-v2-release-utmi-override-on-vbus.patch"}
     assert "oot_modules" not in kernel
     assert len(_mainline_kernel_patch_names()) == 11
     assert kernel["device_tree"] == {

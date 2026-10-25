@@ -85,6 +85,8 @@ local ax210 = product == 'default_ax210';
     // hci_uart bcm、LT9611、xhci-pci-renesas、AX88179、pwm-fan、ES8316）已由 SoC 层
     // defconfig 链启用。构建期合并 dtso/rubikpi3-el2.dtso（GPU zap、DSP / venus SMMU 流、
     // watchdog、SCM SHM bridge），见该文件头。
+    // vendor- 前缀补丁只针对厂商树 rubikpi-ai/linux，mainline 排除。
+    exclude_patches: ['vendor-0001-phy-femto-v2-release-utmi-override-on-vbus.patch'],
     device_tree+: {
       name: 'qcs6490-thundercomm-rubikpi3',
       build_overlays: ['rubikpi3-el2.dtbo'],
@@ -106,7 +108,7 @@ local ax210 = product == 'default_ax210';
       CONFIG_BCMDHD: 'n',
     } else {},
     // 平台层补丁针对 radxa/kernel 7.0.2 与 Q6A DTS，板级补丁是 mainline product 的 7.0.2
-    // backport，均不适用于厂商树。
+    // backport，均不适用于厂商树。板级 vendor-*.patch 只针对厂商树，照常应用。
     exclude_patches: [
       '0001-dwc3-gadget-preserve-pending-requests-on-clear-stall.patch',
       '0002-dts-radxa-dragon-q6a-usb1-peripheral-for-adb.patch',
