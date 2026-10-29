@@ -19,6 +19,12 @@ local common = import 'config/rockchip.libsonnet';
   // 约定一致），device-tree-overlay 组件用它定位 arch/arm64/boot/dts/<vendor>/
   // overlays/<stem>.dts。对 rockchip 平台恰好与 platform 同名。
   platform: 'rockchip', soc: 'rk3568', vendor: 'rockchip',
+  flash_identity: {
+    // 实机（RP-PRO-RK3568-H）maskrom RCI 返回 "38 36 35 33"，解码为 "8653"，
+    // 是 "3568" 的字节反转，而非 "rk3568" 字面量，因此不能只靠 soc 字段兜底
+    // 匹配（见 builder/flash/strategy.py _identity_corpus）。
+    chip_patterns: ['rk\\s*3568', '\\b3568\\b', '\\b8653\\b'],
+  },
   rkbin+: {
     // RK3568MINIALL.ini 选 1560MHz DDR4 训练参数，对应 RK3568 完整版
     // 硬件规格；与 rk3566 SoC 的 RK3566MINIALL.ini (1056MHz) 是关键
