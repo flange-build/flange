@@ -88,6 +88,7 @@ class TestGetValidTargets:
         assert "orangepi-cm4-amp-release" in targets
         assert "orangepi-cm4-amp-rtt-debug" in targets
         assert "orangepi-cm4-amp-rtt-release" in targets
+        assert "orangepi-cm4-waveshare-display-5a-release" in targets
 
     def test_sorted_order(self, boards):
         """结果应按字母序排列。"""

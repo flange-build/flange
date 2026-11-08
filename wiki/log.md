@@ -6,6 +6,14 @@
 
 ---
 
+## [2026-11-08] sync | orangepi-cm4 新增 waveshare-display-5a product（CM4-DISP-BASE-5A VER2 底板）
+
+[[orangepi-cm4]] 新增 `waveshare-display-5a` product，两个板私有 overlay 均默认加载：底板外设（PCF85063A RTC 定为 rtc0；EMC2301 风扇由用户态服务按 soc-thermal 分档，因 RK3566 两路 tsadc 被 soc/gpu 热区独占且 power_allocator 不驱动风扇；OTG 固定 host 以启用板载 FE1.1s 4 口 hub）与 5" DSI 屏。屏走 vendor dtsi 现成的 `raspits_panel@45` / `raspits_touch_ft5426@38`（i2c1 → dsi1）：VER2 底板 MCU 仿真 RPi 7" 屏的 ATTiny 协议并代管 ICN6211，与 Waveshare 官方用法 `vc4-kms-dsi-7inch` 一致，Waveshare 公开的原理图（ICN6211 接 DSI0）不适用于 VER2。
+
+屏需要两处 BSP 修正，均为板级 kernel patch：`0005` 让 DSI 对 I2C 面板改在 host attach 时 `component_add`，否则 DSI 与面板互等形成 deferred probe 活锁、内核挂不上 rootfs；`0006` 把面板 mode 改为 29 MHz / HFP 100，配合 panel overlay 的 `rockchip,lane-rate = <696>` 使像素速率与 1-lane 链路严格相等，否则非 burst 模式下链路偏快，差额积压在 DW DSI 像素 FIFO，画面右移约 80 px 并卷绕。根因与排查方法写入板页。
+
+实板（debug）验收通过：外设正常，屏幕画面对正、触摸方向一致，DSI mode 29 MHz / lane 696 Mbps 生效，开机 11.7 s、无失败单元；热插 HDMI 后 vp0 / vp1 两路同时出图。
+
 ## [2026-10-23] sync | 修正 lunch 短格式示例
 
 [[radxa-rock5c-lite]] 的 `lunch radxa-rock5c-lite-lcd-key-hat` 补全为 `...-lcd-key-hat-debug`：`lunch` 即 `flange target select`，只接受完整 `<board>-<product>-<variant>`，省略 product/variant 会报“无法解析目标”。同批修正 CLAUDE.md 与 docs/amp.md 中的同类写法及 App 命令（`flange app build/create/list`）。

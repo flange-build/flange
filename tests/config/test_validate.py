@@ -321,7 +321,8 @@ class TestValidateConfig:
         with pytest.raises((ConfigError, KeyError)):
             validate_config({})
 
-    @pytest.mark.parametrize("product", ["default", "amp", "amp-rtt"])
+    @pytest.mark.parametrize(
+        "product", ["default", "amp", "amp-rtt", "waveshare-display-5a"])
     def test_orangepi_cm4_products_pass_validation(self, product):
         cfg = resolve_config("orangepi-cm4", product=product, variant="release")
         validate_config(cfg)  # no raise
@@ -333,6 +334,20 @@ class TestValidateConfig:
 
         assert names.index("amp") < names.index("rootfs")
         assert cfg["partitions"]["entries"][names.index("amp")]["type"] != "raw"
+
+    def test_orangepi_cm4_waveshare_display_5a_overlay_scoped(self):
+        overlay = "rk3566-orangepi-cm4-waveshare-display-5a.dtbo"
+        cfg = resolve_config(
+            "orangepi-cm4", product="waveshare-display-5a", variant="release")
+        panel = "rk3566-orangepi-cm4-waveshare-display-5a-panel.dtbo"
+        assert overlay in cfg["boot"]["overlays"]["board"]
+        assert overlay in cfg["boot"]["overlays"]["enabled"]
+        assert panel in cfg["boot"]["overlays"]["board"]
+        assert panel in cfg["boot"]["overlays"]["enabled"]
+        default = resolve_config(
+            "orangepi-cm4", product="default", variant="release")
+        assert overlay not in default["boot"]["overlays"]["board"]
+        assert overlay not in default["boot"]["overlays"]["enabled"]
 
 
 # ── rootfs 首次启动扩容布局校验 ───────────────────────────────────

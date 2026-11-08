@@ -12,6 +12,13 @@ sources:
   - components/board/orangepi-cm4/overlay/etc/usbmode/gadget.d/20-orangepi-cm4.yaml
   - components/board/orangepi-cm4/overlay/etc/systemd/system/bluetooth-orangepi-cm4.service
   - components/board/orangepi-cm4/overlay/usr/lib/flange/bt-unblock.sh
+  - components/board/orangepi-cm4/dtso/rk3566-orangepi-cm4-waveshare-display-5a.dtso
+  - components/board/orangepi-cm4/dtso/rk3566-orangepi-cm4-waveshare-display-5a-panel.dtso
+  - components/board/orangepi-cm4/overlay/usr/lib/flange/waveshare-fan.sh
+  - components/board/orangepi-cm4/overlay/etc/systemd/system/waveshare-fan.service
+  - components/board/orangepi-cm4/overlay/etc/udev/rules.d/90-waveshare-fan.rules
+  - components/board/orangepi-cm4/patches/kernel/0005-drm-rockchip-dsi-add-component-on-host-attach-for-external-panel.patch
+  - components/board/orangepi-cm4/patches/kernel/0006-drm-panel-rpi-touchscreen-match-pixel-clock-to-dsi-lane-rate.patch
   - docs/first-steps.md
 related:
   - "[[rockchip 平台]]"
@@ -19,7 +26,7 @@ related:
   - "[[AMP 协处理器与 rpmsg]]"
   - "[[lunch-build-flash 流程]]"
   - "[[新增板级支持]]"
-updated: 2026-09-27
+updated: 2026-11-08
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -29,11 +36,11 @@ updated: 2026-09-27
 
 ## TL;DR
 
-Orange Pi CM4，RK3566 计算模块。当前交付范围：**无屏可启动 + AP6256 WiFi/BT 即插即用**，NPU 可用（实板验证），并提供可选 `amp` / `amp-rtt` product。DSI 屏适配（实机用 Waveshare CM4-DISP-BASE-5A）尚未交付，单独立项推进。
+Orange Pi CM4，RK3566 计算模块。当前交付范围：**无屏可启动 + AP6256 WiFi/BT 即插即用**，NPU 可用（实板验证），并提供可选 `amp` / `amp-rtt` product。`waveshare-display-5a` product 适配 Waveshare CM4-DISP-BASE-5A VER2 底板（5" DSI 触摸屏、RTC、风扇、USB hub），**实板验收通过**（含 HDMI 与屏同时输出）。
 
 ## product / variant
 
-板级声明：`products: [default, amp, amp-rtt]`，`variants: [debug, release]`。
+板级声明：`products: [default, desktop, amp, amp-rtt, waveshare-display-5a]`，`variants: [debug, release]`。
 
 ```
 lunch orangepi-cm4-default-debug
@@ -42,6 +49,8 @@ lunch orangepi-cm4-amp-debug
 lunch orangepi-cm4-amp-release
 lunch orangepi-cm4-amp-rtt-debug
 lunch orangepi-cm4-amp-rtt-release
+lunch orangepi-cm4-waveshare-display-5a-debug
+lunch orangepi-cm4-waveshare-display-5a-release
 ```
 
 ## 关键差异点
@@ -50,7 +59,8 @@ lunch orangepi-cm4-amp-rtt-release
 |---|---|
 | DTB | default 用 `rk3566-orangepi-cm4-base`（保持空壳）；AMP products 用 `rk3566-orangepi-cm4-amp` |
 | board overlay | 无（dsi1 维持 dtsi 默认 disabled） |
-| kernel patches | `0001` bootargs、`0004` AMP dts |
+| kernel patches | `0001` bootargs、`0004` AMP dts、`0005` DSI 对 I2C 面板改在 host attach 时 component_add、`0006` 面板像素时钟与 DSI lane 速率对齐 |
+| board dtso | `waveshare-display-5a` product 专用：底板外设 `rk3566-orangepi-cm4-waveshare-display-5a.dtbo` 与屏 `…-5a-panel.dtbo`，均编译并默认加载 |
 | bootloader patches | `0001` U-Boot 阶段打开 vdd_npu（RK809 DCDC4） |
 | kernel config | `CONFIG_BCMDHD=n`（关掉与 brcmfmac 抢 SDIO 的 OOT 驱动，全 product/variant 生效） |
 | rootfs packages | `bluez`（BT attach 与验收都要它；base 集合不含，desktop 只是被 ubuntu-desktop 顺带拉入） |
@@ -168,18 +178,59 @@ UART7_M2：
   `CONFIG_RT_CONSOLE_DEVICE_NAME="uart7"`，关闭 `RT_USING_UART4`，启用 `RT_USING_UART7`，
   RT-Thread console baud rate 为 115200。
 
-## DSI 屏适配（未交付，单独立项）
+## Waveshare CM4-DISP-BASE-5A 底板（waveshare-display-5a）
 
-实机底板是 Waveshare CM4-DISP-BASE-5A（5" DSI 屏），桥芯片 Chipone ICN6211 在 i2c1@0x2c，EN 板上拉死高无独立 reset GPIO。本轮 change（`orangepi-cm4-bringup-wifi-and-npu-fix`）尝试一次性带屏适配但实机不能正常启动，已撤回。详细踩坑见 `wiki/log.md` 2026-05-17 条目：
+`lunch orangepi-cm4-waveshare-display-5a-<variant>`。底板差异分两个板私有 overlay，均默认加载：外设（RTC / 风扇 / USB host）`rk3566-orangepi-cm4-waveshare-display-5a.dtso`，5" DSI 屏 `…-5a-panel.dtso`。面板 / 触摸驱动沿用 defconfig 的内建。另有风扇温控服务，追加 `i2c-tools` 便于排查。**状态：屏（画面对正）、触摸、RTC、风扇、USB hub、HDMI 与屏同时输出均实机通过。** 下表“依据”列说明每项结论来自哪里。
 
-- dtsi 错抄的 RPi 7" panel 模板（`raspits_panel@45` / `raspits_touch_ft5426@38`）与实际 ICN6211 链路不匹配
-- BSP `drm_mipi_dsi.c::mipi_dsi_remove_device_fn` 缺 `bus_type` 校验，DSI defer cleanup NULL deref（上游 commit `7977c539e9b1` 等价 fix 未合）
-- `CONFIG_DRM_CHIPONE_ICN6211` 未启用，driver 编不进
-- mainline ICN6211 driver 强制要求 `enable-gpios`，与本板硬件不符
-- dtso 根级新增节点必须 `&{/} {}` 显式包成 fragment，否则 u-boot `FDT_ERR_BADOVERLAY`
+DSI 屏的两个关键结论：
 
-未来开屏适配 change 时直接复用上述路标。
+- **DSI 与 I2C 面板的 probe 顺序（`0005`）**：Rockchip BSP 的 DSI 在 probe 时就 `component_add`，bind 要求面板已 `drm_panel_add`，否则 probe 失败并注销 DSI host；`panel-raspberrypi-touchscreen` 挂在 I2C 上，要先查到已注册的 DSI host 才能注册 DSI 设备并 `drm_panel_add`。两边互等，HDMI 子设备（`dw-hdmi-cec` 等）的 probe 又不断触发 deferred 重试，内核空转在 deferred probe 里挂不上 rootfs（串口上 `failed to find panel or bridge: -517` 循环），面板驱动编成模块也一样。`0005` 对“外设不是 DSI 子节点”的情况改用 mainline 做法：probe 只注册 host，外设 `mipi_dsi_attach()` 时经 `host_ops->attach` 再 `component_add`；外设是 DSI 子节点的 BSP 原有流程不变。Synopsys 核心的 `host_attach` 同时补上平台回调失败时的回滚，避免外设 deferred 重试时 `drm_bridge_add()` 重复入链。代价：启用屏后 Rockchip DRM 要等面板 attach 才 bind，屏没接或面板 probe 失败时 HDMI 也不出图。
+- **像素时钟必须等于 lane 速率 / 24（`0006` + `rockchip,lane-rate`）**：面板走非 burst 同步脉冲模式、1-lane RGB888。BSP 默认按像素时钟向上取整到 MHz 后 ×24/0.9 推算 lane 速率（25.979 MHz → 696 Mbps），链路比像素流快约 11.6%，DSI 发完一行时 VOP 还没送完，差额在 DW DSI 像素 FIFO 里形成固定积压，画面右移 800 × (1 − 像素速率 / 链路速率) ≈ 80 px 并卷绕上一行末尾。特征是 DSI 自带 pattern generator（debugfs `fe070000.dsi/vpg`）出图是正的，改 porch / 像素时钟、切 burst 模式都不改变偏移。RPi 的 vc4 会把像素时钟抬到与链路匹配，原 modeline 在 RPi 上没有这个问题。修法：panel dtso 用 `rockchip,lane-rate = <696>` 固定链路，`0006` 把面板 mode 改为 29 MHz（= 696 / 24）、HFP 1 → 100（59.98 Hz）。**两处必须成对修改**。
+
+| 底板功能 | 适配方式 | 依据 |
+|---|---|---|
+| 5" DSI 屏 | `&dsi1`（`rockchip,lane-rate = <696>`）+ `&dsi1_in_vp1` + `&video_phy1` + vendor dtsi 现成的 `raspits_panel@45`（i2c1，BSP `panel-raspberrypi-touchscreen`，800×480、1-lane，mode 经 `0006` 改为 29 MHz / HFP 100） | Waveshare 对 VER2 的官方用法为 RPi `dtoverlay=vc4-kms-dsi-7inch`（DSI1 + I2C-10），即板上 MCU 仿真 RPi 7" 屏的 ATTiny 协议 |
+| 电容触摸 | vendor dtsi 的 `raspits_touch_ft5426@38`（BSP 轮询驱动，800×480） | 同上 |
+| RTC PCF85063A @0x51 | i2c1 新增节点；`/aliases` 把它定为 `rtc0`、RK809 RTC 让到 `rtc1` | Waveshare wiki + 原理图；hctosys 与 `/dev/rtc` 默认用 rtc0 |
+| 风扇 EMC2301 @0x2f | i2c1 新增节点（`emc2305` 驱动，=m 自动加载）+ `waveshare-fan.service` 按 soc-thermal 分档写 `pwm1`（45/55/65°C → 40%/70%/100%，降档回差 5°C） | 原理图 |
+| 4 口 USB2 hub | `&usbdrd_dwc3 { dr_mode = "host"; }` | 原理图：FSUSB42 在 BOOT 拨码 OFF 时把 CM4 USB0 接到 FE1.1s hub，ID 脚悬空 |
+| 千兆网口 / HDMI0 / M.2(PCIe) / TF 卡 / 40PIN | 基础 dts 已启用，无改动 | vendor dtsi |
+
+CM4 引脚到 RK3566 控制器的映射（SCL0/SDA0 → `i2c1`、DSI1 → `dsi1`、ID_SD/ID_SC → `i2c3`、40PIN GPIO2/3 → `i2c2` m1）取自 vendor dtsi 的节点配对与 40pin 复用表，没有 Orange Pi CM4 原理图佐证。
+
+### 已知限制与取舍
+
+- **没有 USB adb / gadget**：OTG 口固定为 host，正常运行时调试走千兆网口 ssh。BOOT 拨码 ON 时 USB0 切到 Type-C 烧录口（同时拉低 nRPIBOOT，它在 Orange Pi CM4 上的作用未验证）。
+- **风扇温控在用户态**：RK3566 只有两路 tsadc，已被 soc-thermal / gpu-thermal 各占一路（`thermal_of` 一路传感器只能挂一个热区），而两个热区都跑 `power_allocator`，它不会驱动非功率型 cooling device。服务由 udev 在 `emc2305` hwmon 出现时经 `SYSTEMD_WANTS` 拉起，其它 product 上不会启动。
+- **RTC 中断**：底板默认把 RTC INT 接到 PI_RUN（闹钟触发复位），不接 SoC GPIO，dtso 不声明中断。
+- **RTC/FAN I2C 跳线**：按默认（SDA0/SCL0）适配。跳到 GPIO2/3 时两颗芯片会挂到 i2c2，需要改 dtso。
+- **摄像头**：CSI 接口取决于所接模组（ov5647 / imx219 等），需 ISP IQ 文件等配套，未纳入本 product。
+- 仅适用 VER2。Waveshare 公开的（部分）原理图是 ICN6211 直连 CM4 DSI0，与 VER2 官方用法不一致。
+
+### 实机验收
+
+```bash
+i2cdetect -y 1                    # 应见 0x2f(风扇) 0x38(触摸) 0x45(屏控 MCU) 0x51(RTC，驱动占用显示 UU)
+dmesg | grep -iE "rpi_touchscreen|raspits|dsi"   # 不应有 "Atmel I2C read failed" / "Unknown Atmel firmware revision"
+cat /sys/class/drm/card*-DSI-1/status            # connected
+grep dclk_vop1 /sys/kernel/debug/clk/clk_summary  # 29000000（0006 生效）；画面左右边缘对齐、无卷绕
+evtest                            # 触摸四角坐标约 (0,0)/(800,0)/(0,480)/(800,480)
+cat /sys/class/rtc/rtc0/name      # 应为 rtc-pcf85063
+hwclock -w && hwclock -r          # 写读 RTC；断电（装 CR1220）后重启时间应保留
+systemctl status waveshare-fan    # active；温度升降时日志打印档位变化
+lsusb -t                          # 应见 FE1.1s hub 及其下游设备
+```
+
+实测（2026-11-08，debug 镜像）：`i2cdetect -y 1` 见 0x2f / 0x38 / 0x45 / 0x51，0x45 的 REG_ID 为 0xc3（RPi 7" ATTiny v2 固件），0x38 为 FT5426；`rtc0 = rtc-pcf85063`，`emc2305` hwmon 与 `waveshare-fan` 服务正常，FE1.1s 4 口 hub 枚举；开机 11.7 s（内核 2.9 s + 用户态 8.9 s），无失败单元；DSI 首次 attach 报一次 `-517` 后 bind 成功，`card0-DSI-1` connected / 800x480，mode 为 29 MHz / HFP 100，`dclk_vop1` 29.000 MHz，`VID_HLINE_TIME` 2844（即 lane 696 Mbps）；屏上刻度尺左右对正、无卷绕（用户目视）；`fts_ts` 四角坐标约 (31,24) / (788,41) / (14,441) / (770,434)，原点在左上、X 向右、Y 向下，与显示同向，`XY_REVERSE` 无需调整。屏点亮时热插 HDMI，vp0 输出 720x480p60（dclk 27.027 MHz），vp1 上的 DSI 不受影响，两路同时出图（用户目视）。
+
+屏默认启用。只想回退屏时，从 `/boot/extlinux/extlinux.conf` 的 `fdtoverlays` 删掉 `-panel.dtbo` 并重启。
+
+屏不亮时的判断顺序（串口 1500000 波特率）：`dmesg | grep -iE "dsi|rpi_touchscreen|vop|flip_done"` 看面板注册、bind 与 modeset，开机阶段 DSI 设备首次 attach 报一次 `-517` 属预期，反复出现说明 `0005` 没生效；`ls /sys/class/drm` 应有 `card*-DSI-1`。若 connector 存在、modeset 无报错但无画面，先查排线与底板供电。画面横向错位并卷绕时，核对 `/proc/device-tree/dsi@fe070000/rockchip,lane-rate`（应为 696）与 `dclk_vop1`（应为 29 MHz）；DSI 寄存器 `0xfe070050`（`VID_HLINE_TIME`）= htotal × lane Mbps / 8 / 像素 MHz，可反推实际 lane 速率。
+
+### 历史：2026-05 的撤回尝试
+
+当时按 ICN6211 直连路线（i2c1@0x2c、mainline `chipone-icn6211`）接屏，连撞 BSP 缺陷后撤回，详见 `wiki/log.md` 2026-05-17 条目。其中两条结论仍然有效：BSP `mipi_dsi_remove_device_fn` 缺 bus 过滤，注销 DSI host 时会把 DSI 下的非 DSI 子设备当 `mipi_dsi_device` 解引用而 NULL deref（上游等价修复 `7977c539e9b1` 未合入）——`0005` 之后外接面板不再走“probe 失败注销 host”的路径，正常流程触发不到，故不单独打补丁，仅手动 unbind DSI 驱动时仍会触发；dtso 根级不能新增裸节点，否则 U-Boot `FDT_ERR_BADOVERLAY`。
 
 ## overlay
 
-`overlay/etc/hostname` + `overlay/etc/usbmode/gadget.d/20-orangepi-cm4.yaml`，无额外定制内容。
+`overlay/etc/hostname`、`overlay/etc/usbmode/gadget.d/20-orangepi-cm4.yaml`、蓝牙 attach 服务（见上文），以及 `waveshare-display-5a` 用的风扇温控三件套（`waveshare-fan.service` + `90-waveshare-fan.rules` + `usr/lib/flange/waveshare-fan.sh`）。rootfs overlay 不区分 product，风扇服务靠 udev 匹配 `emc2305` hwmon 才启动，其它 product 上是惰性文件。

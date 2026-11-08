@@ -1,0 +1,11 @@
+[Unit]
+Description=Waveshare CM4-DISP-BASE-5A fan control (EMC2301)
+# 不走 [Install] / multi-user.target.wants：由 udev 规则在 emc2305 hwmon
+# 出现时经 SYSTEMD_WANTS 拉起，只在接了该底板（waveshare-display-5a
+# product 的 overlay 启用 fan@2f）时运行，其它 product 上永不启动。
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/flange/waveshare-fan.sh
+Restart=on-failure
+RestartSec=5

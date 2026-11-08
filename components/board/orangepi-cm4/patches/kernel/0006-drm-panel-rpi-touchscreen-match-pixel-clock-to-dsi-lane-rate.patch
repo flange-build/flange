@@ -1,0 +1,43 @@
+From: flange <flange@localhost>
+Subject: [PATCH] drm/panel: rpi-touchscreen 像素时钟与 DSI lane 速率对齐
+
+面板工作在非 burst 同步脉冲模式（1-lane RGB888）。Rockchip dw-mipi-dsi
+的 lane 速率按像素时钟向上取整到 MHz 后 ×24/0.9 推算（25.979 MHz →
+696 Mbps），链路比像素流快约 11.6%：DSI 发完一行时 VOP 尚未送完，差额在
+像素 FIFO 里形成固定积压，画面右移 800 × (1 − 像素速率/链路速率)
+≈ 80 px，并卷绕上一行末尾。RPi 的 vc4 会把像素时钟抬到与链路匹配，原
+modeline 在 RPi 上没有这个问题。
+
+像素时钟改为 29 MHz（= 696 Mbps / 24 bpp），HFP 由 1 加到 100，刷新率
+59.98 Hz。lane 速率须由 DT 固定为 rockchip,lane-rate = <696>（见
+waveshare-display-5a-panel overlay），否则驱动会按 29 MHz 再推出
+768 Mbps。
+
+diff --git a/drivers/gpu/drm/panel/panel-raspberrypi-touchscreen.c b/drivers/gpu/drm/panel/panel-raspberrypi-touchscreen.c
+--- a/drivers/gpu/drm/panel/panel-raspberrypi-touchscreen.c
++++ b/drivers/gpu/drm/panel/panel-raspberrypi-touchscreen.c
+@@ -198,14 +198,18 @@
+ 
+ static const struct drm_display_mode rpi_touchscreen_modes[] = {
+ 	{
+-		/* Modeline comes from the Raspberry Pi firmware, with HFP=1
+-		 * plugged in and clock re-computed from that.
++		/*
++		 * 像素时钟须等于 DSI 链路速率 / 24 bpp：非 burst 模式下链路比
++		 * 像素流快时，差额积压在 dw-mipi-dsi 像素 FIFO，画面右移并卷绕。
++		 * 29 MHz 对应 DT 里 dsi 节点固定的 rockchip,lane-rate = <696>
++		 * （1-lane）；HFP 由 RPi 固件 modeline 的 1 加到 100，刷新率仍约
++		 * 60 Hz（59.98 Hz）。
+ 		 */
+-		.clock = 25979400 / 1000,
++		.clock = 29000,
+ 		.hdisplay = 800,
+-		.hsync_start = 800 + 1,
+-		.hsync_end = 800 + 1 + 2,
+-		.htotal = 800 + 1 + 2 + 46,
++		.hsync_start = 800 + 100,
++		.hsync_end = 800 + 100 + 2,
++		.htotal = 800 + 100 + 2 + 46,
+ 		.vdisplay = 480,
+ 		.vsync_start = 480 + 7,
+ 		.vsync_end = 480 + 7 + 2,
