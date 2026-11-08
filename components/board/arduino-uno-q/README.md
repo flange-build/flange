@@ -1,6 +1,7 @@
 # Arduino UNO Q
 
-目标为 `arduino-uno-q-default-debug` 和 `arduino-uno-q-default-release`。
+目标为 `arduino-uno-q-default-{debug,release}` 与接 Waveshare 10.1" DSI 屏的
+`arduino-uno-q-waveshare-display-10.1a-{debug,release}`（见板级文档）。
 2 GB/16 GB 与 4 GB/32 GB 共用板级设备树；QDL 按实际容量校验分区布局。
 当前代码和离线检查不能替代实板的冷启动、USB、Wi-Fi、音频和 MCU 验收。
 
@@ -16,10 +17,10 @@ EFI 包含 Image、最终合成 DTB、匹配 initrd 与 ARM64 systemd-boot。
 release 使用无 DWARF 的完整驱动配置，debug 保留调试信息；两者保持相同驱动集合。
 `ath10k_snoc` 保持模块形式，由运行时先选择板级 BDF（无线校准文件），再加载无线驱动。
 
-板级 U-Boot 补丁将 ABL 的实际 `_a`/`_b` 槽位通过 Linux 设备树
-`/chosen/arduino,boot-slot` 传递给运行时。缺失、重复或非法槽位不会默认成 `_a`。
-独立 C 测试只能验证解析逻辑；ABL 参数、EFI 替换 DTB 后的 fixup（修正）
-以及双槽启动成功标记仍需要实板逐槽验证。
+板级 U-Boot 补丁在重定位前解析 ABL 交付的 bootargs，有槽位时经
+`/chosen/arduino,boot-slot` 传给运行时，并总写入 `arduino,boot-slot-status`、
+`arduino,abl-bootargs` 供诊断。实板证实官方 251020 ABL 不下发槽位（status=no-slot），
+此时 mark-boot-success 按 GPT 唯一可启动 boot 槽位标记成功；两个槽位均可启动时拒绝。
 
 Android v0 容器按 [AOSP bootimg 头格式](https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/tags/android-14.0.0_r1/include/bootimg/bootimg.h)
 生成，并通过独立 `unpack_bootimg` 解包比对负载；固定空 ramdisk、4096 字节页、

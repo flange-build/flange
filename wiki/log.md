@@ -773,3 +773,9 @@ nsswitch 副本等注意事项），新增蓝牙说明，验收表按 verificati
 non-driving，UCSI/pmic_glink 不工作导致无人恢复；板级 `vendor-0001` 补丁让 femto v2 PHY 驱动经 PM7250B
 `ADC5_USB_IN_V_16` 检测 VBUS 并释放覆盖（mainline product 排除）。Type-C UCSI 行补充 ADSP 无 `charger_pd`、
 无 pd-mapper；实板验证拔插与开机后冷插 adb 均自动恢复。
+
+## [2026-11-08] sync | Arduino UNO Q 新增 waveshare-display-10.1a product
+
+[arduino-uno-q](../docs/boards/arduino-uno-q.md) 新增 Waveshare UNO-Q-DSI-TOUCH-10.1A product：以 base DTB 构建期合并
+官方 media carrier 与 10" 面板 overlay（合并顺序决定 pca9555 phandle，否则 LED 全组失败），板私有 dtso 修正 GT9271
+默认坐标范围并在内核旋转触摸，LightDM 脚本默认顺时针 90° 横屏。实板验证显示、触摸、LED。

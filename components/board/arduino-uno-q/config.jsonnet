@@ -1,16 +1,42 @@
 // Arduino UNO Q 板级配置：两种内存容量共用板支持，完整运行时由功能包提供。
+//
+// waveshare-display-10.1a：UNO Q 插在 Waveshare UNO-Q-DSI-TOUCH-10.1A（Arduino
+// media carrier 兼容载板，经 JMEDIA/JMISC 板对板连接）上，800×1280 DSI 屏 +
+// Goodix 触摸 + 4 组 RGB LED。对应官方
+// `arduino-linux-config carrier enable media-carrier display=10-dsi-touch-a`，
+// 这里改为构建期合并内核自带 overlay。DSI0 只能接一路：默认 DTB 已把 DSI0 接到
+// USB-C 的 anx7625，与屏冲突，因此本 product 以 base DTB 为底，不含 USB-C 视频输出。
+// 摄像头接口未启用（官方 camera0/1=none）。显示默认顺时针旋转 90°（横屏 1280×800）：
+// 板私有 dtso 修正 Goodix 坐标范围并在内核旋转触摸，overlay/ 下的 LightDM
+// display-setup 脚本检测到该面板时用 xrandr 旋转 DSI-1，两者须同向修改。
 local variant = std.extVar('variant');
+local product = std.extVar('product');
+local ws101a = product == 'waveshare-display-10.1a';
+// 顺序不可对调：两个 overlay 都 include carrier-media-common.dtsi，各带一份
+// pca9555 节点，后合并者的 phandle 覆盖前者。carrier-media 必须最后合并，让 LED 与
+// 摄像头供电对 pca9555 的引用随其一并重写；反之 LED 引用悬空，leds-gpio 整组
+// （含 UNO Q 板载 LED）probe 失败。
+local ws101aOverlays = [
+  'qrb2210-arduino-imola-carrier-media-panel-10in_touch_a-dsi.dtbo',
+  'qrb2210-arduino-imola-carrier-media.dtbo',
+];
+local ws101aTouchOverlay = 'qrb2210-arduino-uno-q-waveshare-10.1a-touch.dtbo';
 {
   board: 'arduino-uno-q',
   platform: 'qualcommqrb2210',
   soc: 'qrb2210',
-  products: ['default'],
+  products: ['default', 'waveshare-display-10.1a'],
   variants: ['debug', 'release'],
   packages: ['arduino-unoq-runtime'],
   storage: { type: 'emmc' },
   kernel+: {
-    // 最终 DTB 由官方内核合并 base 与 USB-C 音视频 overlay，不能仅使用 base。
-    device_tree+: { name: 'qrb2210-arduino-imola' },
+    // 默认 DTB 由官方内核合并 base 与 USB-C 音视频 overlay，不能仅使用 base；
+    // 接屏 product 以 base 为底，构建期合并 media carrier 与面板 overlay。
+    device_tree+: if ws101a then {
+      name: 'qrb2210-arduino-imola-base',
+      // 触摸修正以路径定位 panel overlay 新增的 goodix 节点，必须最后合并。
+      build_overlays: ws101aOverlays + [ws101aTouchOverlay],
+    } else { name: 'qrb2210-arduino-imola' },
     defconfig: ['defconfig', 'arduino.config', 'docker.config', 'panel.config',
                 'systemd-boot.config', 'usb-can.config'],
     config+: {
@@ -47,7 +73,9 @@ local variant = std.extVar('variant');
   },
   boot: {
     kernel_args: 'earlycon console=ttyMSM0,115200n8 root=PARTLABEL=rootfs rootwait rw',
-    overlays: { intree: [], vendor: [], board: [], package: [], enabled: [] },
+    overlays: { intree: if ws101a then ws101aOverlays else [],
+                vendor: [], board: if ws101a then [ws101aTouchOverlay] else [],
+                package: [], enabled: [] },
   },
   rootfs+: {
     default_user: 'arduino',

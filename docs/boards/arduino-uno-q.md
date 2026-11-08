@@ -149,6 +149,34 @@ App Lab 可免密修改板名。arduino-router 停止或重启时会经 GPIO 38 
 云服务需要用户自己的网络和凭据。资源锁、版本和离线范围详见
 [运行时说明](../../components/packages/arduino-unoq-runtime/README.md)。
 
+## Waveshare 10.1" DSI 触摸屏（waveshare-display-10.1a）
+
+适配 UNO Q 插在 [Waveshare UNO-Q-DSI-TOUCH-10.1A](https://docs.waveshare.net/UNO-Q-DSI-TOUCH-10.1A)
+（Arduino media carrier 兼容载板，经 JMEDIA/JMISC 板对板连接）上的组合：
+
+```bash
+lunch arduino-uno-q-waveshare-display-10.1a-debug
+flange build
+flange flash --yes
+```
+
+- 等价于官方 `arduino-linux-config carrier enable media-carrier display=10-dsi-touch-a
+  camera0=none camera1=none`，但在构建期用 fdtoverlay 合成 DTB，不依赖运行期工具。
+- DSI0 只能接一路：以 `qrb2210-arduino-imola-base.dtb` 为底，**不含 USB-C 视频输出**。
+- overlay 合并顺序为面板 → carrier-media → 板私有触摸修正，不可对调：两个官方 overlay 各带
+  一份 pca9555 节点，carrier-media 不在最后时 LED 引用的 phandle 悬空，`leds-gpio` 整组
+  （含板载 LED）probe 失败。
+- 显示默认顺时针旋转 90°（1280×800 横屏），由 LightDM display-setup 脚本在检测到该面板时执行
+  `xrandr --output DSI-1 --rotate right`。
+- GT9271 经 CCI 读配置返回 -EOPNOTSUPP，驱动退回 0..4095 默认范围；板私有 dtso 声明 800×1280
+  原始尺寸，并以 `touchscreen-inverted-x` + `touchscreen-swapped-x-y` 在内核与显示同向旋转。
+  官方 udev 近似校准矩阵依赖 fb0 先于触摸出现，此时被板级 udev 规则置为单位矩阵。
+- 改方向须同时修改 dtso 的触摸属性和 `waveshare-display-setup` 的 `--rotate` 参数。
+- 摄像头接口未启用；4 组 RGB LED 为 `/sys/class/leds/media-carrier:{red,green,blue}{1..4}`。
+
+实板（debug）已验证：横屏显示、触摸四角与拖动对齐、12 个载板 LED 与板载 LED 均注册、
+无失败单元。音频与摄像头未验证。
+
 ## 实板验收清单
 
 以下为最终烧入后的验收范围。此前热修复系统上的部分验证已经通过，仍须对最终镜像复验；

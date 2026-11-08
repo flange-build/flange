@@ -161,3 +161,36 @@ def test_rootfs_applies_official_first_setup_password_policy():
     source = (PROJECT_ROOT / "builder/platforms/qualcommqrb2210/rootfs.py").read_text()
     assert '["passwd", "-d", "arduino"]' in source
     assert '["chage", "-d", "0", "arduino"]' in source
+
+
+@pytest.mark.parametrize("variant", ["debug", "release"])
+def test_waveshare_display_101a_merges_carrier_and_panel_on_base_dtb(variant):
+    from builder.dtb_overlay import build_overlays, intree_overlays
+    config = JsonnetConfigLoader(PROJECT_ROOT).evaluate_board(
+        "arduino-uno-q", "waveshare-display-10.1a", variant)
+    validate_canonical_config(config)
+    # carrier-media 必须最后合并，否则两份 pca9555 的 phandle 冲突使 LED 引用悬空。
+    overlays = ["qrb2210-arduino-imola-carrier-media-panel-10in_touch_a-dsi.dtbo",
+                "qrb2210-arduino-imola-carrier-media.dtbo"]
+    # DSI0 只能接一路：以不含 USB-C anx7625 视频 overlay 的 base DTB 为底。
+    assert config["kernel"]["device_tree"]["name"] == "qrb2210-arduino-imola-base"
+    assert intree_overlays(config) == overlays
+    touch = "qrb2210-arduino-uno-q-waveshare-10.1a-touch.dtbo"
+    assert config["boot"]["overlays"]["board"] == [touch]
+    assert build_overlays(config) == overlays + [touch]
+    assert not config["boot"]["overlays"]["enabled"]
+    default = JsonnetConfigLoader(PROJECT_ROOT).evaluate_board("arduino-uno-q", "default", variant)
+    assert not build_overlays(default)
+
+
+def test_waveshare_display_rotation_script_is_panel_scoped_and_never_fails():
+    board = PROJECT_ROOT / "components/board/arduino-uno-q"
+    script = (board / "overlay/usr/lib/flange/unoq/waveshare-display-setup").read_text()
+    # LightDM 在 display-setup 失败时放弃 seat：脚本只认 10.1" 面板且总返回 0。
+    assert "waveshare,10.1-dsi-touch-a" in script
+    assert "--rotate right || true" in script and script.rstrip().endswith("exit 0")
+    dtso = (board / "dtso/qrb2210-arduino-uno-q-waveshare-10.1a-touch.dtso").read_text()
+    # 触摸与显示同向：xrandr right 对应先翻转 X 再交换 XY。
+    for prop in ("touchscreen-inverted-x", "touchscreen-swapped-x-y",
+                 "touchscreen-size-x = <800>", "touchscreen-size-y = <1280>"):
+        assert prop in dtso

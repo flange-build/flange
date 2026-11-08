@@ -1,0 +1,3 @@
+# 设备树已声明 Goodix 触摸精确尺寸（waveshare-display-10.1a）时，取消
+# arduino-linux-config 90-touchscreen-resize.rules 的近似校准矩阵，避免二次缩放。
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Goodix Capacitive TouchScreen", TEST=="device/device/of_node/touchscreen-size-x", ENV{LIBINPUT_CALIBRATION_MATRIX}="1 0 0 0 1 0 0 0 1"

@@ -33,6 +33,6 @@ updated: 2026-10-21
 - [thundercomm-rubikpi3](thundercomm-rubikpi3.md) — QCS6490（第二块 QCS6490 板，启动固件在 UFS boot LUN、单会话 rawprogram 全量刷写；default/desktop 用 Yocto 同款厂商内核 6.6.90，EL1 下 DSP 与硬件编码同时可用；mainline product 用 SoC 层 7.0.2 + EL2）
 - [radxa-dragon-q8b](radxa-dragon-q8b.md) — SC8280XP（UEFI/GRUB + UFS 4K LBA + Adreno/MSM + QPS615/TC956x 双网口，status: wip）
 - [nvidia-jetson-tx2](nvidia-jetson-tx2.md) — Tegra186（首块 NVIDIA 板，P2597 + P3310-1000 8GB，L4T R32.7.6 + Ubuntu 18.04，tegraflash 刷写前读 EEPROM 核对身份，status: wip）
-- [arduino-uno-q](../../docs/boards/arduino-uno-q.md) — QRB2210 + STM32U585（U-Boot/systemd-boot + eMMC/QDL，完整 Arduino 生态适配中，待实板验收）
+- [arduino-uno-q](../../docs/boards/arduino-uno-q.md) — QRB2210 + STM32U585（U-Boot/systemd-boot + eMMC/QDL；启动槽位与 MCU 链路已实板验收；waveshare-display-10.1a product 接 10.1" DSI 触摸屏）
 
 - [radxa-rock5c-lite](radxa-rock5c-lite.md) — RK3582，含 USB-C OTG 与 LCD HAT 专题。
