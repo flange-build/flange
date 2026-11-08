@@ -1,12 +1,44 @@
 #!/usr/bin/python3
-"""验证真实前级启动槽位后标记成功，禁止 qbootctl 缺省猜测槽位 A。"""
+"""验证真实前级启动槽位后标记成功，禁止 qbootctl 缺省猜测槽位 A。
+
+实板证据：官方 ABL 交给 U-Boot 的 bootargs 不含任何槽位参数，U-Boot 只能写入
+arduino,boot-slot-status=no-slot。此时改从 GPT A/B 属性判定：仅当恰有一个 boot 槽位可启动、
+另一个完全不可启动时，ABL 只可能启动了该槽位；两个都可启动则拒绝，不猜测。
+"""
+import struct
 import subprocess
+import zlib
 from pathlib import Path
+
+SECTOR = 512
+# GPT 项 attributes 偏移 6 的字节：bit0-1 优先级，bit2 active，bit3-5 重试，bit6 成功，bit7 不可启动。
+AB_FLAG_OFFSET = 54
+
+
+def cmdline_slots(cmdline):
+    """提取命令行槽位，兼容 systemd.setenv="SLOT_SUFFIX=_x" 与 Android 写法。"""
+    values = []
+    for word in cmdline.split():
+        key, sep, value = word.partition('=')
+        if not sep:
+            continue
+        if key in ('slot_suffix', 'androidboot.slot_suffix'):
+            values.append(value)
+        elif key == 'systemd.setenv':
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                value = value[1:-1]
+            name, sep, slot = value.partition('=')
+            if sep and name == 'SLOT_SUFFIX':
+                values.append(slot)
+    return values
 
 
 def boot_slot(cmdline, chosen=None):
-    values = [word.split('=', 1)[1] for word in cmdline.split()
-              if word.split('=', 1)[0] in ('slot_suffix', 'androidboot.slot_suffix') and '=' in word]
+    values = cmdline_slots(cmdline)
+    # 多种写法给出相同槽位可以接受；非法或互相冲突一律拒绝。
+    if any(value not in ('_a', '_b') for value in values) or len(set(values)) > 1:
+        raise ValueError('命令行启动槽位非法或冲突；拒绝改写 GPT 成功标记')
+    values = sorted(set(values))
     if chosen is not None:
         if chosen not in (b'_a\0', b'_b\0'):
             raise ValueError('设备树启动槽位属性非法')
@@ -14,14 +46,57 @@ def boot_slot(cmdline, chosen=None):
         if values and values != [slot]:
             raise ValueError('设备树与命令行启动槽位冲突')
         return slot[1:]
-    if len(values) != 1 or values[0] not in ('_a', '_b'):
-        raise ValueError('缺少唯一合法启动槽位；拒绝改写 GPT 成功标记')
+    if not values:
+        raise ValueError('缺少合法启动槽位；拒绝改写 GPT 成功标记')
     return values[0][1:]
+
+
+def gpt_boot_flags(disk):
+    """读取并校验主 GPT，返回 boot_a/boot_b 的 A/B 属性字节。"""
+    header = disk[SECTOR:SECTOR + 92]
+    if header[:8] != b'EFI PART':
+        raise ValueError('主 GPT 签名无效')
+    crc = struct.unpack_from('<I', header, 16)[0]
+    if zlib.crc32(header[:16] + bytes(4) + header[20:]) != crc:
+        raise ValueError('主 GPT header CRC 不符')
+    table_lba, count, size, table_crc = struct.unpack_from('<QIII', header, 72)
+    table = disk[table_lba * SECTOR:table_lba * SECTOR + count * size]
+    if size != 128 or len(table) != count * size or zlib.crc32(table) != table_crc:
+        raise ValueError('主 GPT 分区数组无效')
+    flags = {}
+    for index in range(count):
+        entry = table[index * size:(index + 1) * size]
+        name = entry[56:128].decode('utf-16-le', 'replace').rstrip('\0')
+        if name in ('boot_a', 'boot_b'):
+            if name in flags:
+                raise ValueError('GPT 中 boot 槽位重复')
+            flags[name] = entry[AB_FLAG_OFFSET]
+    if set(flags) != {'boot_a', 'boot_b'}:
+        raise ValueError('GPT 缺少 boot_a/boot_b')
+    return flags
+
+
+def slot_from_gpt(flags):
+    """恰有一个可启动槽位且另一个完全不可启动时返回它，否则拒绝。"""
+    def bootable(value):
+        return value & 0x03 and value & 0x04 and not value & 0x80
+    candidates = [name[-1] for name, value in flags.items() if bootable(value)]
+    others = [value for name, value in flags.items() if name[-1] not in candidates]
+    if len(candidates) != 1 or any(value & 0x03 and not value & 0x80 for value in others):
+        raise ValueError('GPT 中可启动槽位不唯一；拒绝改写 GPT 成功标记')
+    return candidates[0]
 
 
 if __name__ == '__main__':
     if b'arduino,imola' not in Path('/sys/firmware/devicetree/base/compatible').read_bytes().split(b'\0'):
         raise SystemExit('板卡身份不匹配，拒绝更新启动标记')
     chosen = Path('/sys/firmware/devicetree/base/chosen/arduino,boot-slot')
-    slot = boot_slot(Path('/proc/cmdline').read_text(), chosen.read_bytes() if chosen.is_file() else None)
+    cmdline = Path('/proc/cmdline').read_text()
+    if chosen.is_file() or cmdline_slots(cmdline):
+        # 有任何槽位来源时严格校验，冲突或非法值直接失败。
+        slot = boot_slot(cmdline, chosen.read_bytes() if chosen.is_file() else None)
+    else:
+        with open('/dev/mmcblk0', 'rb') as disk:
+            slot = slot_from_gpt(gpt_boot_flags(disk.read(34 * SECTOR)))
+        print(f'前级未传递槽位，按 GPT 唯一可启动槽位标记：_{slot}', flush=True)
     subprocess.run(['/usr/bin/qbootctl', '-m', slot], check=True)

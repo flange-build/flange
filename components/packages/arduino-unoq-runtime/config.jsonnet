@@ -20,8 +20,9 @@
     },
     package_set: ['unoq'],
     default_session: 'xfce',
-    // App CLI 与 MCU 上传服务沿用上游固定用户身份。
+    // App CLI 与 MCU 上传服务沿用上游固定用户身份；sysupgrade 供上游
+    // 90-arduino-sysupgrade 免密执行改板名与更新检查，与官方 preinst 建组一致。
     groups+: ['adm', 'video', 'docker', 'netdev', 'dialout', 'audio', 'render',
-              'bluetooth', 'input', 'gpiod'],
+              'bluetooth', 'input', 'gpiod', 'sysupgrade', 'users'],
   },
 }

@@ -87,6 +87,20 @@ flange flash --yes
 官方 XML 中空 filename 的校准及持久化区域被保留。
 `--yes` 是现有 CLI 对受保护固件写入的明确确认。完成后移除 JCTL 跳线并重新上电。
 
+需要保留设备上的用户数据时，追加 `--keep-userdata`：照常写入启动固件、efi、rootfs 并恢复 A/B
+启动属性，但跳过 userdata 镜像，实板 userdata 的起点、GUID 和内容不变：
+
+```bash
+flange flash --yes --keep-userdata
+```
+
+若只是启动槽位重试耗尽（boot_a 不可启动）而系统本身完好，可只重写主备 GPT 的 A/B 启动属性，
+不写任何分区镜像：
+
+```bash
+flange flash --reset-slots --yes
+```
+
 单刷使用 `flange flash --list` 中的物理分区名，例如：
 
 ```bash
@@ -120,7 +134,15 @@ Linux 首启、重启及 rootfs 更新均不自动覆盖 MCU sketch。确实需�
 `/usr/lib/flange/unoq/mcu-initialize --replace-mcu-firmware`；该操作会替换 MCU 固件及 sketch。
 相同版本初始化成功后再次执行会跳过；确需重新初始化时追加 `--force`。
 
-userdata 初始为 3 GiB，首启核对挂载点和 UUID 后扩展 ext4 至现有分区容量，不改变 GPT。
+userdata 初始为 3 GiB，rootfs 镜像也小于分区；每次启动核对挂载点、LABEL/UUID 和 eMMC 设备后，
+在线把两者的 ext4 扩展至现有分区容量，不改变 GPT。
+
+release 与官方镜像一致，`arduino` 用户构建时不设口令（空口令且立即过期），首次用 App Lab 连接时会引导
+设置口令；在此之前 SSH 不能用该账户登录（sshd 不接受空口令），ADB 不受影响。
+debug 保留研发默认口令 `arduino`，不强制过期，因此 App Lab 不会进入首次设置口令流程。`arduino` 属于 `sysupgrade` 组，
+App Lab 可免密修改板名。arduino-router 停止或重启时会经 GPIO 38 复位 MCU，与官方行为一致。
+离线容器导入失败或运行时锁不匹配时，`flange-unoq-data` 失败但 App CLI 仍会启动，
+可用 `journalctl -u flange-unoq-data` 查看原因。
 预装五种 UNO Q 容器服务及 EI runner 的 10 个模型；两个可选 GGUF 模型仍按固定版本联网下载。
 板端 ADB 由独立运行时组件提供，使用 Arduino 补丁版 `adbd` 和 Ubuntu 原生 Android 库，
 并配置 ADB/USB 串口组合设备；USB 枚举、重连及双角色切换仍需实板验收。

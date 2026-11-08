@@ -40,11 +40,13 @@ def test_unoq_pins_sources_and_physical_partitions(variant):
         "y" if variant == "release" else "n")
     assert config["kernel"]["config"]["CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT"] == (
         "y" if variant == "debug" else "n")
+    # release 由构建期置空并过期（官方首次配置契约）；debug 保留研发默认口令。
     user = config["rootfs"]["users"]["arduino"]
     if variant == "release":
         assert "password" not in user
     else:
         assert user["password"] == "arduino"
+    assert {"sysupgrade", "users", "gpiod", "dialout"} <= set(config["rootfs"]["groups"])
 
 
 def test_recovery_archive_rejects_path_escape(tmp_path):
@@ -153,3 +155,9 @@ def test_boot_refuses_missing_declared_initrd_before_packaging(tmp_path):
     with pytest.raises(FileNotFoundError, match="initrd"):
         builder.build(config)
     docker.run.assert_not_called()
+
+
+def test_rootfs_applies_official_first_setup_password_policy():
+    source = (PROJECT_ROOT / "builder/platforms/qualcommqrb2210/rootfs.py").read_text()
+    assert '["passwd", "-d", "arduino"]' in source
+    assert '["chage", "-d", "0", "arduino"]' in source

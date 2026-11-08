@@ -142,8 +142,10 @@ def test_partial_first_boot_recovers_and_second_run_is_idempotent(
     assert imports[0] == imports[1]
     assert waits == [True]
     assert len(loaded) == 5
+    # 旧版改写的摘要引用还原为官方 tag，供 App CLI system cleanup 识别为必需镜像。
     for item in images:
-        assert 'image: ' + item['config_digest'] in compose.read_text()
+        assert 'image: ' + item['tag'] + '\n' in compose.read_text()
+    assert '@sha256:' not in compose.read_text()
     loader['main'](home, resources)
     assert len(imports) == 4
     assert waits == [True]
@@ -168,3 +170,15 @@ def test_import_failures_do_not_publish_compose(loader, monkeypatch, runtime_tre
         loader['main'](home, resources)
     assert len(imports) == (1 if damage == 'identity' else 0)
     assert compose.read_bytes() == original
+
+
+def test_official_tag_references_are_left_untouched(loader, monkeypatch, runtime_tree):
+    home, resources, images, compose = runtime_tree
+    text = 'services:\n' + ''.join(
+        f'  image-{n}:\n    image: ${{REG:-example/}}image-{n}:1.0\n' for n in range(len(images)))
+    compose.write_text(text)
+    monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 0, json.dumps([{'Id': next(i for i in images if i['tag'] == command[-1])['config_digest'],
+                                 'Architecture': 'arm64', 'Os': 'linux'}]) if command[1] == 'image' else ''))
+    loader['main'](home, resources)
+    assert compose.read_text() == text

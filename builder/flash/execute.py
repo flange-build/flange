@@ -41,10 +41,15 @@ class FlashExecutor:
         self.project_dir = project_dir or Path.cwd()
         self.strategy = get_flash_strategy(self.config.platform)
 
-    def flash_all(self, no_wait: bool = False, no_reboot: bool = False, *, yes: bool = False):
+    def flash_all(self, no_wait: bool = False, no_reboot: bool = False, *, yes: bool = False,
+                  keep_userdata: bool = False):
         """全量刷写所有分区。"""
         cfg = self.config
         self.strategy.allow_protected = yes
+        if keep_userdata:
+            if not hasattr(self.strategy, "keep_userdata"):
+                raise FlashError(f"平台 {cfg.platform} 不支持 --keep-userdata")
+            self.strategy.keep_userdata = True
         if no_reboot and not self.strategy.supports_no_reboot:
             raise FlashError("该平台的刷写工具在结束时自动复位，不支持 --no-reboot")
         _header(f"flange flash · {cfg.board} · {cfg.product}-{cfg.variant}")
@@ -134,6 +139,22 @@ class FlashExecutor:
             self.strategy.reboot(tool)
         print()
         print(_c(Role.SUCCESS, f" ✓ 分区 {requested_name} 刷写完成"))
+
+    def reset_slots(self, no_wait: bool = False, *, yes: bool = False):
+        """只重写分区表中的 A/B 启动状态，不写任何分区镜像（UNO Q 启动槽位耗尽时的恢复手段）。"""
+        cfg = self.config
+        if not hasattr(self.strategy, "reset_slots"):
+            raise FlashError(f"平台 {cfg.platform} 不支持 --reset-slots")
+        self.strategy.allow_protected = yes
+        _header(f"flange flash --reset-slots · {cfg.board}")
+        self.strategy.preflight(self.target_dir, cfg, cfg.partitions)
+        tool = self.strategy.find_tool(self.project_dir)
+        device = None if no_wait else self.strategy.wait_for_device(tool)
+        self.strategy.pre_flash(tool, self.target_dir, cfg, device)
+        self.strategy.reset_slots(tool, self.target_dir, cfg)
+        self.strategy.reboot(tool)
+        print()
+        print(_c(Role.SUCCESS, " ✓ A/B 启动状态已恢复"))
 
     # 整盘镜像由 image 组件产出，各平台 ARTIFACT_NAMES 统一命名为 raw.img。
     WHOLE_DISK_IMAGE = "image/raw.img"
@@ -249,6 +270,14 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
         metavar="PROFILE",
         help=("一次性初始化全新 Qualcomm UFS：lun0-only 为单用户 LUN；qcom 为官方 LUN 0-7 布局"),
     )
+    run_parser.add_argument(
+        "--keep-userdata", action="store_true",
+        help="全量刷写时保留设备上的 userdata 分区（目前仅 Arduino UNO Q）",
+    )
+    run_parser.add_argument(
+        "--reset-slots", action="store_true",
+        help="只恢复 A/B 启动状态并重写主备 GPT，不写分区镜像（目前仅 Arduino UNO Q）",
+    )
     run_parser.add_argument("partition", nargs="?", help="指定分区名（不指定则全量刷写）")
 
     # generate 子命令（构建引擎调用）
@@ -267,11 +296,20 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
             parser.error(
                 "--erase-spi 不能与分区名、--raw、--list、"
                 "--spi-firmware 或 --provision-ufs 同时使用")
+        if (args.keep_userdata or args.reset_slots) and (
+            args.partition or args.raw or args.list_parts or args.erase_spi
+            or args.spi_firmware or args.provision_ufs
+        ):
+            parser.error("--keep-userdata / --reset-slots 只能用于全量刷写，不能与分区名或其他模式同时使用")
+        if args.keep_userdata and args.reset_slots:
+            parser.error("--reset-slots 不写分区镜像，无需 --keep-userdata")
         target_dir = Path(args.target_dir)
         project_dir = Path(args.project_dir)
         executor = FlashExecutor(target_dir, project_dir)
 
-        if args.erase_spi:
+        if args.reset_slots:
+            executor.reset_slots(no_wait=args.no_wait, yes=args.yes)
+        elif args.erase_spi:
             executor.erase_spi(no_wait=args.no_wait, no_reboot=args.no_reboot)
         elif args.list_parts:
             executor.list_partitions()
@@ -303,7 +341,8 @@ def _cli_main(argv=None, *, public=False, target_dir=None, project_dir=None):
         elif args.partition:
             executor.flash_partition(args.partition, no_wait=args.no_wait, no_reboot=args.no_reboot, yes=args.yes)
         else:
-            executor.flash_all(no_wait=args.no_wait, no_reboot=args.no_reboot, yes=args.yes)
+            extra = {"keep_userdata": True} if args.keep_userdata else {}
+            executor.flash_all(no_wait=args.no_wait, no_reboot=args.no_reboot, yes=args.yes, **extra)
 
     elif args.command == "generate":
         config = json.loads(Path(args.config).read_text())

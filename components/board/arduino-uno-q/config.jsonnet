@@ -51,7 +51,8 @@ local variant = std.extVar('variant');
   },
   rootfs+: {
     default_user: 'arduino',
-    // release 不传 password，让 useradd 保持账户口令锁定；空字符串会被 chpasswd 拒绝。
+    // release 与官方镜像一致：不预设口令，构建期置为空口令且立即过期，由 App Lab 首次连接时
+    // 引导设置（见 qualcommqrb2210 rootfs 的 _post_customize）。debug 保留研发用默认口令。
     users: { arduino: { shell: '/bin/bash', sudo: true }
              + (if variant == 'debug' then { password: 'arduino' } else {}) },
     image_format: 'ext4',

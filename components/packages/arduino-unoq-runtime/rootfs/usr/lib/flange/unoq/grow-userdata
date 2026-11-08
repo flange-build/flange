@@ -1,20 +1,25 @@
 #!/usr/bin/python3
-"""仅扩展已挂载 userdata 的 ext4 文件系统，绝不改写 GPT。"""
+"""在线扩展已挂载 rootfs 与 userdata 的 ext4 文件系统至现有分区容量，绝不改写 GPT。"""
 import re
 import stat
 import subprocess
 from pathlib import Path
 
 UUID = '66f6d9a8-6ce3-46f6-b679-a1a1d991ba19'
+# (挂载点, findmnt 身份列, 期望值, 名称)；rootfs 镜像小于分区，与官方 debos-grow-rootfs 一致扩容。
+TARGETS = (
+    ('/', 'LABEL', 'rootfs', 'rootfs'),
+    ('/home/arduino', 'UUID', UUID, 'userdata'),
+)
 
 
-def mount_source(output):
+def mount_source(output, expected=UUID, name='userdata'):
     fields = output.split()
     if len(fields) != 3:
-        raise ValueError('userdata 未独立挂载，拒绝扩容')
-    source, filesystem, uuid = fields
-    if filesystem != 'ext4' or uuid != UUID or not re.fullmatch(r'/dev/mmcblk0p[0-9]+', source):
-        raise ValueError('userdata 挂载类型、UUID 或 eMMC 设备不匹配，拒绝扩容')
+        raise ValueError(f'{name} 未独立挂载，拒绝扩容')
+    source, filesystem, identity = fields
+    if filesystem != 'ext4' or identity != expected or not re.fullmatch(r'/dev/mmcblk0p[0-9]+', source):
+        raise ValueError(f'{name} 挂载类型、身份或 eMMC 设备不匹配，拒绝扩容')
     return source
 
 
@@ -22,12 +27,21 @@ def main():
     identity = Path('/sys/firmware/devicetree/base/compatible').read_bytes().split(b'\0')
     if b'arduino,imola' not in identity:
         raise ValueError('非 UNO Q，拒绝扩容')
-    output = subprocess.check_output(['findmnt', '-n', '-o', 'SOURCE,FSTYPE,UUID',
-                                      '--mountpoint', '/home/arduino'], text=True)
-    source = mount_source(output)
-    if not stat.S_ISBLK(Path(source).stat().st_mode):
-        raise ValueError('userdata 不是块设备，拒绝扩容')
-    subprocess.run(['resize2fs', source], check=True)
+    failures = []
+    # 两个分区相互独立：一个校验失败不阻止另一个扩容，最后统一报告失败。
+    for mountpoint, column, expected, name in TARGETS:
+        try:
+            output = subprocess.check_output(['findmnt', '-n', '-o', 'SOURCE,FSTYPE,' + column,
+                                              '--mountpoint', mountpoint], text=True)
+            source = mount_source(output, expected, name)
+            if not stat.S_ISBLK(Path(source).stat().st_mode):
+                raise ValueError(f'{name} 不是块设备，拒绝扩容')
+            subprocess.run(['resize2fs', source], check=True)
+        except (ValueError, subprocess.CalledProcessError) as error:
+            print(f'{name} 扩容失败：{error}', flush=True)
+            failures.append(name)
+    if failures:
+        raise SystemExit('扩容失败：' + ', '.join(failures))
 
 
 if __name__ == '__main__':

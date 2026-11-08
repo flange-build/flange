@@ -6,6 +6,9 @@ ConditionPathExists=/dev/ttyHS1
 ExecStartPre=/usr/lib/flange/unoq/gpio 37=0
 ExecStart=/usr/bin/arduino-router --unix-port /var/run/arduino-router.sock --serial-port /dev/ttyHS1 --serial-baudrate 115200 --after-ready "/usr/lib/flange/unoq/gpio 70=1"
 ExecStopPost=/usr/lib/flange/unoq/gpio 70=0
+# 与官方 10-imola.conf 一致：router 退出后经 line 38 复位 MCU，重启后 RPC 状态重新同步。
+ExecStopPost=/usr/lib/flange/unoq/gpio 38=0
+ExecStopPost=/usr/lib/flange/unoq/gpio 38=1
 Restart=always
 RestartSec=3
 [Install]

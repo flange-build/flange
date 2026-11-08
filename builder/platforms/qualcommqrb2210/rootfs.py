@@ -51,6 +51,13 @@ class Qrb2210RootfsBuilder(RootfsBuilder):
         self._efi = self._work_dir / "bootaa64.efi"
         with ChrootContext(rootfs_dir, self.docker) as chroot:
             chroot.run(["ldconfig"])
+            # 未预设口令（release）时遵循官方首次配置契约：空口令且立即过期，
+            # App CLI 据 chage -l 引导 App Lab 设置口令；sshd 默认拒绝空口令登录。
+            # debug 预设的研发口令保持可用，不强制过期。
+            user = config.get("rootfs", {}).get("users", {}).get("arduino", {})
+            if user.get("password") is None:
+                chroot.run(["passwd", "-d", "arduino"])
+                chroot.run(["chage", "-d", "0", "arduino"])
             # 修改目标配置，不在自有 DEB 中占用 zram-tools 已拥有的文件。
             chroot.run(["sed", "-i", "s/^#\\?ALGO=.*/ALGO=lzo-rle/", "/etc/default/zramswap"])
             chroot.run(["/usr/lib/flange/unoq/verify-runtime", "--build"],

@@ -67,6 +67,22 @@ class UnoQRuntimeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             command('v1.6.3', '999=1')
 
+    def test_router_stop_resets_mcu_like_official(self):
+        unit = (PACKAGE / 'rootfs/etc/systemd/system/arduino-router.service').read_text()
+        stops = [line.split('=', 1)[1] for line in unit.splitlines()
+                 if line.startswith('ExecStopPost=')]
+        self.assertEqual(stops, ['/usr/lib/flange/unoq/gpio 70=0',
+                                 '/usr/lib/flange/unoq/gpio 38=0',
+                                 '/usr/lib/flange/unoq/gpio 38=1'])
+
+    def test_app_cli_survives_container_import_failure(self):
+        units = PACKAGE / 'rootfs/etc/systemd/system'
+        for path in (units / 'arduino-app-cli.service',
+                     units / 'arduino-cloud-connector.service.d/unoq.conf'):
+            text = path.read_text()
+            self.assertNotIn('Requires=flange-unoq-data.service', text)
+            self.assertRegex(text, r'(?m)^Wants=.*flange-unoq-data\.service')
+
     def test_locked_inputs_and_no_debian_kernel_metapackage(self):
         resources = json.loads((PACKAGE / 'resources.lock.json').read_text())['resources']
         names = {r['name'] for r in resources}
@@ -88,8 +104,17 @@ class UnoQRuntimeTest(unittest.TestCase):
         slot = code['boot_slot']
         self.assertEqual(slot('root=LABEL=rootfs', b'_b\0'), 'b')
         self.assertEqual(slot('androidboot.slot_suffix=_a'), 'a')
+        # systemd 写法，带引号与不带引号。
+        self.assertEqual(slot('quiet systemd.setenv="SLOT_SUFFIX=_b" rw'), 'b')
+        self.assertEqual(slot('systemd.setenv=SLOT_SUFFIX=_a'), 'a')
+        self.assertEqual(slot('systemd.setenv="FOO=1" systemd.setenv="SLOT_SUFFIX=_a"'), 'a')
+        self.assertEqual(slot('slot_suffix=_a systemd.setenv="SLOT_SUFFIX=_a"'), 'a')
+        self.assertEqual(slot('systemd.setenv="SLOT_SUFFIX=_a"', b'_a\0'), 'a')
         for cmdline, chosen in [('', None), ('slot_suffix=_c', None),
-                                ('slot_suffix=_a slot_suffix=_a', None),
+                                ('systemd.setenv="SLOT_SUFFIX=_c"', None),
+                                ('systemd.setenv="SLOT_SUFFIX=_a', None),
+                                ('slot_suffix=_a systemd.setenv="SLOT_SUFFIX=_b"', None),
+                                ('systemd.setenv="SLOT_SUFFIX=_a"', b'_b\0'),
                                 ('slot_suffix=_a', b'_b\0'), ('', b'_a')]:
             with self.assertRaises(ValueError):
                 slot(cmdline, chosen)
@@ -121,6 +146,16 @@ class UnoQRuntimeTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 parse(output)
 
+    def test_rootfs_resize_requires_rootfs_label_on_emmc(self):
+        code = runpy.run_path(str(PACKAGE / 'rootfs/usr/lib/flange/unoq/grow-userdata'))
+        parse = code['mount_source']
+        self.assertEqual([t[0] for t in code['TARGETS']], ['/', '/home/arduino'])
+        self.assertEqual(parse('/dev/mmcblk0p70 ext4 rootfs', 'rootfs', 'rootfs'), '/dev/mmcblk0p70')
+        for output in ['/dev/mmcblk0p70 ext4 userdata', '/dev/sda2 ext4 rootfs',
+                       '/dev/mmcblk0p70 btrfs rootfs', 'overlay overlay rootfs']:
+            with self.assertRaises(ValueError):
+                parse(output, 'rootfs', 'rootfs')
+
     def test_models_rejects_changed_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -147,7 +182,7 @@ class UnoQRuntimeTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     PREPARE.verify_models(archive, root)
 
-    def test_compose_consumes_locked_image(self):
+    def test_compose_keeps_official_tag_for_system_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             assets = root / 'home/arduino/.local/share/arduino-app-cli/assets/0.12.0'
@@ -156,11 +191,15 @@ class UnoQRuntimeTest(unittest.TestCase):
             (root / 'optional-models.lock.json').write_text('[]')
             (assets / 'models-list.yaml').write_text('[]')
             compose = assets / 'brick_compose.yaml'
-            compose.write_text('services:\n  model:\n    image: ${REGISTRY:-example/}runner:1.0\n')
+            text = 'services:\n  model:\n    image: ${REGISTRY:-example/}runner:1.0\n'
+            compose.write_text(text)
             image = 'example/runner@sha256:' + 'a' * 64
             with patch.object(PREPARE, 'HERE', root):
                 PREPARE.lock_compose(root, {'images': [{'tag': 'example/runner:1.0', 'image': image}]})
-            self.assertIn('image: ' + image, compose.read_text())
+                self.assertEqual(compose.read_text(), text)
+                # 锁定镜像未被任何 Compose 引用时拒绝构建，避免锁与实际消费脱节。
+                with self.assertRaises(ValueError):
+                    PREPARE.lock_compose(root, {'images': [{'tag': 'example/other:1.0', 'image': image}]})
 
     def test_ucm_preserves_ubuntu_shared_macros(self):
         with tempfile.TemporaryDirectory() as directory:

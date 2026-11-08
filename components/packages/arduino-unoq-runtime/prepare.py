@@ -200,8 +200,18 @@ def prepare_image(item, cache, dest):
     target.with_suffix('.sha256').write_text(digest(target) + '\n')
 
 
+def compose_images(text):
+    """按 Compose 的 ${VAR:-默认值} 规则展开 image 引用（构建期不注入环境变量）。"""
+    images = []
+    for line in text.splitlines():
+        match = re.match(r'^\s*image:\s*(.*?)\s*$', line)
+        if match:
+            images.append(re.sub(r'\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]*)\}', r'\1', match[1]))
+    return images
+
+
 def lock_compose(dest, lock):
-    """改写 App CLI 真正读取的 assets，不另建未消费的旁路 catalog。"""
+    """核对 App CLI 真正读取的 assets 引用已锁定镜像；保留官方 tag 不改写。"""
     assets = dest / 'home/arduino/.local/share/arduino-app-cli/assets/0.12.0'
     optional_models = json.loads((HERE / 'optional-models.lock.json').read_text())
     model_catalog = (assets / 'models-list.yaml').read_text()
@@ -209,16 +219,15 @@ def lock_compose(dest, lock):
         if model['url'] not in model_catalog:
             raise ValueError('App CLI 模型 catalog 不再消费固定 revision：' + model['id'])
     shutil.copy2(HERE / 'optional-models.lock.json', dest / 'usr/share/flange/unoq')
-    replacements = {x['tag'].split('/')[-1]: x['image'] for x in lock['images']}
-    for path in assets.rglob('*.yaml'):
-        lines = path.read_text().splitlines(keepends=True)
-        for index, line in enumerate(lines):
-            match = re.match(r'^(\s*image:\s*)(.*?)(\r?\n)?$', line)
-            if match:
-                for suffix, image in replacements.items():
-                    if match[2].strip().endswith(suffix):
-                        lines[index] = match[1] + image + '\n'
-        path.write_text(''.join(lines))
+    # App CLI 的 system cleanup 只保留带官方前缀的 Compose 引用；
+    # 改写为摘要会让预装镜像被当作无用镜像删除，因此只核对、不改写。
+    referenced = {image for path in assets.rglob('*.yaml')
+                  for image in compose_images(path.read_text())}
+    # python-apps-base 由 App CLI 配置（PythonImage）直接引用，不出现在 Compose 中。
+    missing = [x['tag'] for x in lock['images'] if x['tag'] not in referenced
+               and not x['tag'].split(':')[0].endswith('/app-bricks/python-apps-base')]
+    if missing:
+        raise ValueError('App CLI Compose 未引用锁定镜像 tag：' + ', '.join(missing))
 
 
 def prepare_containers(dest):

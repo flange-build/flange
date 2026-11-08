@@ -1,5 +1,5 @@
 [Unit]
-Description=扩展 UNO Q userdata 文件系统至现有分区容量
+Description=扩展 UNO Q rootfs 与 userdata 文件系统至现有分区容量
 RequiresMountsFor=/home/arduino
 After=local-fs.target
 Before=flange-unoq-data.service arduino-app-cli.service

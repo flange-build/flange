@@ -506,6 +506,8 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
     no_reboot = False
     supports_no_reboot = False
     uses_named_partitions = True
+    # 全量刷写时跳过 userdata 镜像，保留设备上的用户数据（GPT 中 userdata 起点与 GUID 不变）。
+    keep_userdata = False
 
     def find_tool(self, project_dir: Path) -> Path:
         host = "macos" if sys.platform == "darwin" else "linux"
@@ -652,10 +654,19 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
                   "selected": self.selected, "status": "identity-verified"}
         (self.record_dir / "record.json").write_text(json.dumps(record, indent=2) + "\n")
 
-    def _write(self, tool, names, *, full):
+    def _full_names(self, *, gpt_only=False):
+        """全量写入必须覆盖的分区集合；仅恢复槽位时不写任何分区镜像。"""
+        if gpt_only:
+            return set()
+        return self.all_names - ({"userdata"} if self.keep_userdata else set())
+
+    def _write(self, tool, names, *, full, gpt_only=False):
         if not hasattr(self, "observed_gpt"):
             raise FlashError("写入前尚未完成 UNO Q 身份验证")
-        if not set(names).issubset(self.selected) or (full and set(names) != self.all_names):
+        if gpt_only and not full:
+            raise FlashError("仅恢复槽位必须走全量 GPT 写入路径")
+        if (not set(names).issubset(self.selected)
+                or (full and set(names) != self._full_names(gpt_only=gpt_only))):
             raise FlashError("写入范围超出本次已核验的分区计划")
         # 读取 GPT 后 QDL 会复位；保留 JCTL 跳线并等待同串号重新枚举。
         current = self.wait_for_device(tool)
@@ -704,6 +715,8 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
         record["program_sha256"] = digest(xml)
         record_path.write_text(json.dumps(record, indent=2) + "\n")
         try:
+            if full and "userdata" not in names:
+                _step("保留设备 userdata，不写入用户数据分区")
             _step(f"QDL 写入 {len(nodes)} 个镜像条目（包含所选分区及必要 GPT）")
             self._run(tool, self.record_dir, xml, timeout=3600)
         except FlashError:
@@ -714,8 +727,13 @@ class UnoQFlashStrategy(UnoQFlashPlan, FlashStrategy):
         record_path.write_text(json.dumps(record, indent=2) + "\n")
 
     def flash_whole_disk(self, tool, target_dir, config):
-        self._write(tool, self.selected, full=True)
+        names = [n for n in self.selected if not (self.keep_userdata and n == "userdata")]
+        self._write(tool, names, full=True)
         return True
+
+    def reset_slots(self, tool, target_dir, config):
+        """只写主备 GPT：从官方模板恢复 A/B 初始状态，不写任何分区镜像。"""
+        self._write(tool, [], full=True, gpt_only=True)
 
     def write_named_partition(self, tool, part, image, config):
         self._write(tool, [part.name], full=False)

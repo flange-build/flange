@@ -92,20 +92,23 @@ def main(
         if not identity:
             raise SystemExit(f'容器身份不符（平台或 config 摘要）：{item["tag"]}')
         resolved[item['tag']] = identity
-    # docker-archive 不保证 RepoDigests；Compose 只消费已校验的本地 Image ID。
+    # Compose 保留官方 tag：上面已核验 tag 指向锁定内容，本地存在时 Compose 不联网。
+    # App CLI 的 system cleanup 只保留官方前缀引用，改写为摘要或 ID 会使预装镜像被删除；
+    # 旧版本改写过的引用在此还原为 tag。
     assets = home / '.local/share/arduino-app-cli/assets/0.12.0'
     for path in assets.rglob('*.yaml'):
-        lines = path.read_text().splitlines(keepends=True)
+        original = path.read_text()
+        lines = original.splitlines(keepends=True)
         for index, line in enumerate(lines):
             match = re.match(r'^(\s*image:\s*)(.*?)(\r?\n)?$', line)
             if not match:
                 continue
+            value = match[2].strip()
             for item in lock['images']:
-                value = match[2].strip()
-                if (value in (item['image'], item['config_digest'])
-                        or value.endswith(item['tag'].split('/')[-1])):
-                    lines[index] = match[1] + resolved[item['tag']] + '\n'
-        path.write_text(''.join(lines))
+                if value in (item['image'], item['config_digest'], resolved[item['tag']]):
+                    lines[index] = match[1] + item['tag'] + (match[3] or '')
+        if ''.join(lines) != original:
+            path.write_text(''.join(lines))
 
     # 上游 Compose 使用这一标准模型目录；实际内容保留在 userdata。
     base = home / '.local/share/arduino-app-cli'

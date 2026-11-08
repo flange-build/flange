@@ -1,8 +1,8 @@
 [Unit]
 Description=Arduino 应用管理服务
 After=network-online.target docker.service arduino-router.service flange-unoq-data.service
-Wants=network-online.target docker.service arduino-router.service
-Requires=flange-unoq-data.service
+# 与官方一致只用 Wants：离线镜像导入失败或锁不匹配时 daemon 仍可运行，App Lab 可连接并报告问题。
+Wants=network-online.target docker.service arduino-router.service flange-unoq-data.service
 [Service]
 User=arduino
 Group=arduino

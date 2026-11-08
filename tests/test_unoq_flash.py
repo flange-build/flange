@@ -426,6 +426,72 @@ def test_full_flash_missing_one_boot_slot_cannot_reset_metadata(monkeypatch, bun
     assert not (strategy.record_dir / "gpt_main0.bin").exists()
 
 
+def gpt_unchanged_except_slot_bytes(strategy):
+    observed = strategy.observed_gpt
+    primary = unoq.parse_gpt((strategy.record_dir / "gpt_main0.bin").read_bytes())
+    backup = unoq.parse_gpt((strategy.record_dir / "gpt_backup0.bin").read_bytes(), backup=True)
+    unoq.validate_pair(primary, backup)
+    assert primary.entries == observed.entries
+    assert primary.header[56:72] == observed.header[56:72]
+    for name, entry in observed.entries.items():
+        offset = entry.index * 128
+        before = observed.entries_raw[offset:offset + 128]
+        after = primary.entries_raw[offset:offset + 128]
+        if name.endswith(("_a", "_b")):
+            assert after[54] == 0
+            assert after[:54] + after[55:] == before[:54] + before[55:]
+        else:
+            assert after == before
+
+
+def test_full_flash_keep_userdata_skips_userdata_but_restores_slots(monkeypatch, bundle):
+    strategy, config, calls = prepared(
+        monkeypatch, bundle, sectors=61_071_360, root_sectors=20 * 1024 ** 3 // 512,
+        attributes={"boot_a": 0x1087000000000000}, guid_seed="real-device-")
+    strategy.keep_userdata = True
+    strategy.flash_whole_disk(Path("qdl"), strategy.target_dir, config)
+    written = [n.get("label") for n in ET.parse(calls[-1]).getroot()]
+    assert "userdata" not in written
+    assert {"PrimaryGPT", "BackupGPT", "boot_a", "boot_b", "efi", "rootfs"} <= set(written)
+    gpt_unchanged_except_slot_bytes(strategy)
+
+
+def test_keep_userdata_cannot_smuggle_userdata_into_full_write(monkeypatch, bundle):
+    strategy, _, calls = prepared(monkeypatch, bundle)
+    strategy.keep_userdata = True
+    with pytest.raises(FlashError, match="写入范围"):
+        strategy._write(Path("qdl"), strategy.all_names, full=True)
+    assert len(calls) == 1
+
+
+def test_reset_slots_writes_only_gpt(monkeypatch, bundle):
+    strategy, config, calls = prepared(
+        monkeypatch, bundle, attributes={"boot_a": 0x1087000000000000}, guid_seed="real-device-")
+    strategy.reset_slots(Path("qdl"), strategy.target_dir, config)
+    written = [n.get("label") for n in ET.parse(calls[-1]).getroot()]
+    assert sorted(written) == ["BackupGPT", "PrimaryGPT"]
+    gpt_unchanged_except_slot_bytes(strategy)
+
+
+def test_gpt_only_requires_full_path_and_no_images(monkeypatch, bundle):
+    strategy, _, calls = prepared(monkeypatch, bundle)
+    with pytest.raises(FlashError, match="全量"):
+        strategy._write(Path("qdl"), [], full=False, gpt_only=True)
+    with pytest.raises(FlashError, match="写入范围"):
+        strategy._write(Path("qdl"), ["rootfs"], full=True, gpt_only=True)
+    assert len(calls) == 1
+
+
+def test_reset_slots_and_keep_userdata_cli_reject_partition_mode():
+    from builder.flash.execute import _cli_main
+    from builder.presentation import UsageError
+    for argv in (["run", "--target-dir", "x", "--reset-slots", "rootfs"],
+                 ["run", "--target-dir", "x", "--keep-userdata", "--raw", "/dev/sdz"],
+                 ["run", "--target-dir", "x", "--keep-userdata", "--reset-slots"]):
+        with pytest.raises(UsageError, match="reset-slots"):
+            _cli_main(argv)
+
+
 @pytest.mark.parametrize("flags", [0x40, 0x80])
 def test_recovery_template_cannot_mark_boot_successful_or_unbootable(
         monkeypatch, bundle, flags):
@@ -552,3 +618,29 @@ def test_scope_cannot_expand_after_single_partition_preflight(monkeypatch, bundl
     with pytest.raises(FlashError, match="写入范围"):
         strategy._write(Path("qdl"), ["rootfs"], full=True)
     assert len(calls) == 1
+
+
+def test_mark_boot_success_gpt_fallback_requires_unique_bootable_slot():
+    """ABL 不传槽位时，只认 GPT 中唯一可启动的 boot 槽位（实板 boot_a=0x2f、boot_b=0）。"""
+    import runpy
+    script = Path(__file__).resolve().parents[1] / (
+        "components/packages/arduino-unoq-runtime/rootfs/usr/lib/flange/unoq/mark-boot-success")
+    code = runpy.run_path(str(script))
+    flags_of, slot_of = code["gpt_boot_flags"], code["slot_from_gpt"]
+
+    def disk(a, b):
+        primary, _ = gpt_pair(attributes={"boot_a": a << 48, "boot_b": b << 48})
+        return primary
+
+    assert flags_of(disk(0x2f, 0x00)) == {"boot_a": 0x2f, "boot_b": 0x00}
+    assert slot_of(flags_of(disk(0x2f, 0x00))) == "a"
+    assert slot_of(flags_of(disk(0x00, 0x3f))) == "b"
+    # boot_b 已不可启动时仍可唯一判定 boot_a。
+    assert slot_of(flags_of(disk(0x3f, 0x87))) == "a"
+    for a, b in [(0x3f, 0x3f), (0x3f, 0x03), (0x00, 0x00), (0x87, 0x00), (0x03, 0x00)]:
+        with pytest.raises(ValueError):
+            slot_of(flags_of(disk(a, b)))
+    damaged = bytearray(disk(0x2f, 0x00))
+    damaged[1024 + 54] ^= 0xff
+    with pytest.raises(ValueError, match="分区数组"):
+        flags_of(bytes(damaged))

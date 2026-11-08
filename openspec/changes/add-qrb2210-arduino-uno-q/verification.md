@@ -614,3 +614,45 @@ container-identities.json。完整系统仍不能表述为“除 qbootctl 外全
 OpenSpec 全部严格校验 80 passed、0 failed，git diff --check 通过。
 日志：pre-pr/pytest.log、golden-recheck.log、pytest-final.log、openspec.log。
 本次测试在宿主 Python 3.13 执行；GitHub CI 的 Linux/Python 3.12 结果仍以 PR 检查为准。
+
+
+## 2026-11-08 兼容性审查修复与实板验收（B1、M1–M8）
+
+设备 ADB 序列号 2058906363（EDL 串号 7AB86AFB，32 GB），debug 变体，
+全量刷写记录 flash-records/unoq-mgpsj3v5（boot_a 属性 0x2f→0x00，36 项写入，status=written）。
+
+### B1 启动槽位成功标记
+
+- 第一版（重定位后读取 ABL DTB）：/chosen 无 arduino,boot-slot，qbootctl 失败。
+- 第二版改为 board_fdt_blob_setup（重定位前）解析并存 .data：arduino,boot-slot-status=no-slot，
+  说明已读到 ABL DTB，但其中无槽位。
+- 诊断属性 arduino,abl-bootargs 读回 ABL 实际 bootargs：
+  `root=/dev/notreal androidboot.bootdevice=4744000.sdhci androidboot.serialno=f1bdf2f1 androidboot.baseband=apq`。
+  **官方 251020 ABL 不下发任何槽位参数**，此前“systemd.setenv SLOT_SUFFIX”的反汇编推断在实板路径不成立。
+- 结论：mark-boot-success 在没有任何槽位来源时，按 GPT 唯一可启动 boot 槽位判定
+  （另一槽位必须完全不可启动，否则拒绝）。板上试跑：`SLOT _a: Marked boot successful`，
+  boot_a 0x2f→0x67（success 置位，剩余重试 4）；重启后保持 0x67，不再递减。
+
+### M1 Linux 侧操作 STM32U585
+
+- DMI product_name=Imola；ttyHS1 属 dialout，gpiochip1 为 500000.pinctrl（TLMM）属 gpiod。
+- `mcu-initialize --replace-mcu-firmware`：linuxgpiod SWD 识别 STM32U57/U58xx（idcode 0x30076482），
+  RDP 0、TZ 关闭，写入完成，RC=0。
+- 板上 `arduino-cli compile -u -b arduino:zephyr:unoq bridge_validation`：编译约 93 秒，
+  sketch 写入 0x08100000，RC=0。
+- 在官方 python-apps-base:0.12.0 容器内运行 verify_bridge.py：3 次回显正确，MCU 计数连续 [18, 19, 20]。
+- M2：重启 arduino-router 后 MCU 复位，计数回到 [4, 5, 6]（复位后约 6 秒内 flange.echo 未注册，属正常启动窗口）。
+- arduino-reset：计数回到 [6, 7, 8]。
+- arduino-debug + arm-zephyr-eabi-gdb 0.16.8 连接 :3333：halt 于 pc 0x080170b8，stepi 至 0x080170ba，
+  detach 后 openocd 退出，RPC 计数连续 [31, 32, 33]。
+- 未测：PC 经 ADB 远程上传、网络上传、App Lab 桌面端发现与首次配置。
+
+### 端到端复验（固化后的镜像全量刷写）
+
+- 新 rootfs（GPT 回退版 mark-boot-success）全量刷写后首次开机：qbootctl.service active，
+  日志 `SLOT _a: Marked boot successful`；boot_a=0x77（success 置位），boot_b=0x00；
+  `systemctl --failed` 为空，这是该板首次无失败单元。再重启一次 boot_a 保持 0x77。
+- M5：userdata 中 compose 保留 `${DOCKER_REGISTRY_BASE:-ghcr.io/arduino/}app-bricks/...` 官方 tag。
+- M7：rootfs 从 9 GiB 镜像在线扩展至 9.8 GiB 分区容量。
+- M3/M4：arduino 属于 sysupgrade 组；debug 变体保留研发口令且不过期。
+- 首启容器导入完成后 App CLI active，/v1/version 返回 0.13.0（HTTP 200）。
