@@ -12,6 +12,12 @@ local common = import 'config/rockchip.libsonnet';
 
 {
   platform: 'rockchip', soc: 'rk3576', vendor: 'rockchip',
+  flash_identity: {
+    // 实机（ArmSoM CM5-IO）maskrom RCI 返回 "36 37 35 33"，解码为 "6753"，
+    // 是 "3576" 的字节反转，而非 "rk3576" 字面量，因此不能只靠 soc 字段兜底
+    // 匹配（见 builder/flash/strategy.py _identity_corpus）。
+    chip_patterns: ['rk\\s*3576', '\\b3576\\b', '\\b6753\\b'],
+  },
   rkbin+: {
     // RK3576 自有 die，BootROM 识别为 rk3576（不与 rk3568/rk3588 共标签）。
     ini_prefix: 'RK3576', trust_ini_prefix: 'RK3576', mkimage_chip: 'rk3576',
@@ -39,7 +45,7 @@ local common = import 'config/rockchip.libsonnet';
   // 注：u-boot 用 gcc-10 编（base ComponentBuilder.CROSS 全平台默认）——老 rockchip
   // u-boot 在 gcc-13 下二进制布局会让 RK3576 UFS DMA 读 buffer 落坏地址 → 上板崩，
   // 2026-06 逐次上板 + 反汇编坐实。详见 openspec selfbuild-rk3576-spi-image。
-  kernel: {
+  kernel+: {
     source: { name: 'rockchip-kernel' },
     defconfig: [
       'rockchip_linux_defconfig', 'case_insensitive_fix.config',
@@ -47,7 +53,7 @@ local common = import 'config/rockchip.libsonnet';
     ],
     // GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
     // USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree: { directory: 'rockchip' },
   },
   boot+: {

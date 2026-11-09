@@ -3,6 +3,8 @@
 import pytest
 
 from builder.config.jsonnet import JsonnetConfigLoader
+from builder.config.query import get_valid_targets, parse_target
+from builder.config.registry import discover_boards
 from builder.config.validate import validate_canonical_config
 from builder.paths import PROJECT_ROOT
 
@@ -16,8 +18,9 @@ def test_q6a求值为canonical配置(product, variant):
     validate_canonical_config(config)
     assert config["kernel"]["source"] == {"name": "linux-qcs6490"}
     assert config["kernel"]["device_tree"]["directory"] == "qcom"
+    # 内核构建的 KVM 组合 DTB：UEFI Hypervisor Override=Auto 时据 /chosen/radxa,enable-kvm 进 EL2。
     assert config["kernel"]["device_tree"]["name"] == (
-        "qcs6490-radxa-dragon-q6a")
+        "qcs6490-radxa-dragon-q6a-kvm")
     assert "enable_configs" not in config["kernel"]
     assert "disable_configs" not in config["kernel"]
     assert all(not item.startswith("CONFIG_")
@@ -55,15 +58,148 @@ def test_vim3l板层与soc层共用kernel_config且保留binder():
         "khadas-vim3l", "default", "release")
 
     validate_canonical_config(config)
-    assert config["kernel"]["config"] == {
-        "CONFIG_ANDROID_BINDERFS": "y",
-        "CONFIG_ANDROID_BINDER_IPC": "y",
-        "CONFIG_DRM_GUD": "y",
-        "CONFIG_NET": "y",
-        "CONFIG_TUN": "y",
-    }
+    kernel_config = config["kernel"]["config"]
+    # 板层与 SoC 层合并的结果，binder 相关配置必须保留。
+    # 不再断言精确相等：components/kernel/config.jsonnet 作为平台无关的内核
+    # 基线层，会向每块板合并 USB gadget 配置，全集不再由板层与 SoC 层独占。
+    for symbol in (
+        "CONFIG_ANDROID_BINDERFS",
+        "CONFIG_ANDROID_BINDER_IPC",
+        "CONFIG_DRM_GUD",
+        "CONFIG_NET",
+        "CONFIG_TUN",
+    ):
+        assert kernel_config[symbol] == "y", symbol
+    # 基线层确实参与了合并，而不是被板层/SoC 层覆盖掉。
+    assert kernel_config["CONFIG_USB_CONFIGFS"] == "y"
+    assert kernel_config["CONFIG_USB_ROLE_SWITCH"] == "y"
     assert config["kernel"]["defconfig"] == ["defconfig"]
     assert config["kernel"]["device_tree"] == {
         "directory": "amlogic",
         "name": "meson-sm1-khadas-vim3l",
     }
+
+
+def _kernel_patch_names(layers):
+    names = set()
+    for layer in layers:
+        patch_dir = PROJECT_ROOT / "components" / layer / "patches/kernel"
+        names |= {patch.name for patch in patch_dir.glob("*.patch")}
+    return names
+
+
+def _mainline_kernel_patch_names():
+    names = _kernel_patch_names(("platform/qualcommqcs6490", "board/thundercomm-rubikpi3"))
+    return {name for name in names if not name.startswith("vendor-")}
+
+
+def _vendor_kernel_patch_names():
+    names = _kernel_patch_names(("board/thundercomm-rubikpi3",))
+    return {name for name in names if name.startswith("vendor-")}
+
+
+@pytest.mark.parametrize("product", ["default", "desktop", "default_ax210"])
+@pytest.mark.parametrize("variant", ["debug", "release"])
+def test_rubikpi3使用厂商内核并声明ufs启动固件(product, variant):
+    config = JsonnetConfigLoader(PROJECT_ROOT).evaluate_board(
+        "thundercomm-rubikpi3", product, variant)
+
+    validate_canonical_config(config)
+    kernel = config["kernel"]
+    assert kernel["source"] == {"name": "rubikpi-linux"}
+    assert config["sources"]["rubikpi-linux"]["url"] == (
+        "https://github.com/rubikpi-ai/linux.git")
+    assert config["sources"]["rubikpi-linux"]["commit"] == (
+        "a579877ac6b4afc6df09d8e53564dfb08d9d693f")
+    assert kernel["defconfig"] == [
+        "qcom_defconfig", "qcom_addons.config", "rubikpi3.config"]
+    # 平台层与板级补丁全部针对 mainline radxa/kernel，厂商树上必须全部排除。
+    assert set(kernel["exclude_patches"]) == _mainline_kernel_patch_names()
+    overlays = ["rubikpi3-video.dtbo"] + (
+        ["rubikpi3-ax210.dtbo"] if product == "default_ax210" else [])
+    assert kernel["device_tree"] == {
+        "directory": "qcom",
+        "name": "qcs6490-thundercomm-rubikpi3",
+        "build_overlays": overlays,
+    }
+    assert config["boot"]["overlays"]["board"] == overlays
+    assert config["boot"]["overlays"]["enabled"] == []
+    assert kernel["oot_sources"] == {
+        "video-driver": {"source": {"name": "qcom-video-driver"}}}
+    assert kernel["oot_modules"][0]["ko_pattern"] == ["{video_driver_src}/iris_vpu.ko"]
+    assert config["boot"]["kernel_args"].endswith(
+        "root=PARTLABEL=rootfs rootwait pcie_pme=nomsi deferred_probe_timeout=30")
+    bootloader = config["bootloader"]
+    assert bootloader["ufs_rawprogram"] == [f"rawprogram{n}.xml" for n in range(1, 6)]
+    assert bootloader["ufs_patch"] == [f"patch{n}.xml" for n in range(1, 6)]
+    assert "ufs_provisions" not in bootloader
+    # 统一 EL1：保持固件包默认（Gunyah）xbl_config。
+    assert "ufs_file_overrides" not in bootloader
+    assert config["partitions"]["sector_size"] == 4096
+    firmware = {entry["name"]: entry for entry in config["rootfs"]["extra_firmware"]}
+    if product == "default_ax210":
+        # 无线只用 AX210：启用 iwlwifi、连同目录开关关闭 bcmdhd，AP6256 只保留蓝牙 patchram。
+        assert {k: kernel["config"][k] for k in (
+            "CONFIG_IWLWIFI", "CONFIG_IWLMVM", "CONFIG_WLAN_VENDOR_BCMDHD", "CONFIG_BCMDHD")} == {
+            "CONFIG_IWLWIFI": "m", "CONFIG_IWLMVM": "m",
+            "CONFIG_WLAN_VENDOR_BCMDHD": "n", "CONFIG_BCMDHD": "n"}
+        assert "rubikpi3-ap6256" not in firmware
+        assert firmware["rubikpi3-ap6256-bt"]["files"] == ["brcm/BCM4345C5.hcd"]
+    else:
+        # 厂商 config 用 bcmdhd：固件布局与 rubikpi3-firmware 的 Makefile install 一致。
+        assert "CONFIG_IWLWIFI" not in kernel.get("config", {})
+        assert firmware["rubikpi3-ap6256"]["source"] == {
+            "name": "rubikpi3-firmware", "subpath": "lib/firmware"}
+        assert firmware["rubikpi3-ap6256"]["files"] == [
+            "fw_bcm43456c5_ag.bin", "nvram.txt", "config.txt", "brcm/BCM4345C5.hcd"]
+    assert "radxa-firmware" not in config["sources"]
+    assert "bluez" in config["rootfs"]["packages"]
+    desktop = "flange-ubuntu-desktop-config" in config["rootfs"]["custom_packages"]
+    assert desktop == (product == "desktop")
+
+
+@pytest.mark.parametrize("variant", ["debug", "release"])
+def test_rubikpi3_mainline_product以el2运行soc层内核(variant):
+    config = JsonnetConfigLoader(PROJECT_ROOT).evaluate_board(
+        "thundercomm-rubikpi3", "mainline", variant)
+
+    validate_canonical_config(config)
+    kernel = config["kernel"]
+    # 与 Q6A 相同的 SoC 层 mainline 内核，平台层与板级补丁全部应用，只排除厂商树补丁。
+    assert kernel["source"] == {"name": "linux-qcs6490"}
+    assert kernel["defconfig"] == [
+        "defconfig", "qcom_module.config", "radxa.config", "radxa_custom.config"]
+    assert set(kernel["exclude_patches"]) == _vendor_kernel_patch_names()
+    assert _vendor_kernel_patch_names() == {
+        "vendor-0001-phy-femto-v2-release-utmi-override-on-vbus.patch"}
+    assert "oot_modules" not in kernel
+    assert len(_mainline_kernel_patch_names()) == 11
+    assert kernel["device_tree"] == {
+        "directory": "qcom",
+        "name": "qcs6490-thundercomm-rubikpi3",
+        "build_overlays": ["rubikpi3-el2.dtbo"],
+    }
+    assert config["boot"]["overlays"]["board"] == ["rubikpi3-el2.dtbo"]
+    assert config["bootloader"]["ufs_file_overrides"] == {
+        "xbl_config.elf": "xbl_config_kvm.elf"}
+    assert set(config["sources"]).isdisjoint({"rubikpi-linux", "qcom-video-driver"})
+    firmware = {entry["name"]: entry for entry in config["rootfs"]["extra_firmware"]}
+    assert "rubikpi3-ap6256" not in firmware
+    assert firmware["rubikpi3-ap6256-wifi"]["source"]["name"] == "radxa-firmware"
+    assert firmware["rubikpi3-ap6256-wifi"]["files"] == [
+        "brcm/brcmfmac43456-sdio.bin", "brcm/brcmfmac43456-sdio.clm_blob"]
+    assert firmware["rubikpi3-ap6256-board"]["files"][0] == {
+        "src": "nvram.txt", "dest": "brcm/brcmfmac43456-sdio.thundercomm,rubikpi3.txt"}
+    assert "bluez" in config["rootfs"]["packages"]
+    assert "flange-ubuntu-desktop-config" not in config["rootfs"]["custom_packages"]
+
+
+def test_rubikpi3不再提供el1_product():
+    boards = discover_boards()
+    targets = [t for t in get_valid_targets(boards) if t.startswith("thundercomm-rubikpi3-")]
+    assert sorted(targets) == [
+        f"thundercomm-rubikpi3-{product}-{variant}"
+        for product in ("default", "default_ax210", "desktop", "mainline")
+        for variant in ("debug", "release")]
+    with pytest.raises(Exception, match="thundercomm-rubikpi3-el1-release"):
+        parse_target("thundercomm-rubikpi3-el1-release", boards)

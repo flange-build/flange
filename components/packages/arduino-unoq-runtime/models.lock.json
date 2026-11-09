@@ -1,0 +1,42 @@
+{
+  "models/ootb/ei/concrete-crack-anomaly-detection.eim": {
+    "sha256": "3329f239c4c5ec3df7f2ee305980b966aa1cf8d51f250e06487d41f4cc6fd12a",
+    "size": 13280184
+  },
+  "models/ootb/ei/fan-anomaly-detection.eim": {
+    "sha256": "dea43c076b9228c4c1c678f7f36bbbd7b56308c375e8d3cc1dd4d8c27433ec0b",
+    "size": 13777024
+  },
+  "models/ootb/ei/glass-breaking.eim": {
+    "sha256": "f3fa32b1c3f7bc4ee00fedb9b124421a955e951d7e5d3af31465fb82169027eb",
+    "size": 13069248
+  },
+  "models/ootb/ei/hand-gestures.eim": {
+    "sha256": "89b9db101535b8c638d6cc1c281707d7d40c102b51fc482b82b7fef45025442c",
+    "size": 16216432
+  },
+  "models/ootb/ei/keyword-spotting-hey-arduino.eim": {
+    "sha256": "84456c476a7de1fc76b6188d071f879eaabecfa86de6e993ed165783cca36dc7",
+    "size": 13934296
+  },
+  "models/ootb/ei/lw-face-det.eim": {
+    "sha256": "a58bb652c2655a9e1d3ad1470f565425c32b4322dd0cf30ebdcc1b9f029e59ba",
+    "size": 17634016
+  },
+  "models/ootb/ei/mobilenet-v2-224px.eim": {
+    "sha256": "dade90061702bfbf32da048ca0d991a9356fdc02e7f518c3505bf1d49b87a33d",
+    "size": 27944728
+  },
+  "models/ootb/ei/person-classification.eim": {
+    "sha256": "168a482cb8976eec4226c69879997ffa270e61046fc79a51c34c62f65a958284",
+    "size": 14364216
+  },
+  "models/ootb/ei/updown-wave-motion-detection.eim": {
+    "sha256": "fe9199f6aa7b5a09008cc9d09f1272d301914cac41351afd0d25c11db33b8874",
+    "size": 13375184
+  },
+  "models/ootb/ei/yolo-x-nano.eim": {
+    "sha256": "a2e1ad68b9bfdf7845dff019ec3c5ccff217ad94d4f1e4199aae4cd052d5cf5c",
+    "size": 18335304
+  }
+}

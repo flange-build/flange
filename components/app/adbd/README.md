@@ -1,6 +1,24 @@
-# adbd 预编译二进制来源
+# adbd
 
-## 当前二进制：ADB 36.0.1 standalone（2026-08-31）
+Android Debug Bridge daemon，作为 [usbmoded](../usbmoded/README.md) 的 adb
+能力后端。
+
+本 App 只提供两样东西：
+
+- `/usr/bin/adbd` —— 预编译二进制（来源见下）
+- `/lib/systemd/system/usbmoded-adbd.service` —— daemon unit
+
+**unit 不开机自启**（`auto_start: false`）。它的启停完全由 usbmoded 的 adb
+能力驱动：FunctionFS 要求 daemon 在 gadget 绑定 UDC 之前打开 ep0 并写入
+描述符，这个时序只有 usbmoded 知道。unit 因此没有 `[Install]` 段，
+`systemctl is-enabled` 显示 `static` 是预期结果。
+
+gadget 配置、场景定义、`usb-mode` CLI 与控制协议都属于 usbmoded，见
+[usbmoded 的 README](../usbmoded/README.md)。
+
+---
+
+## adbd 二进制来源：ADB 36.0.1 standalone（2026-08-31）
 
 - 来源：[happyme531/standalone-linux-adbd](https://github.com/happyme531/standalone-linux-adbd)（nmeum/android-tools 的 daemon 扩展，AOSP ADB 36.0.1 源码 + CMake 静态构建）
 - 基线 tag：`v36.0.1-linux.2`，commit `bdb5cdc4b516b3bc71fd2b805bc36190041a9393`
@@ -27,7 +45,7 @@
 参见 [glibc 官方行为说明](https://sourceware.org/pipermail/glibc-cvs/2021q3/074935.html)。
 
 ROCK5B 的 vendor kernel 6.1.115 在重新打开 ep0 时仍会自动解绑 UDC（USB 设备控制器），
-现有 `usbdevice` 恢复分支会重新启动 adbd 并绑定。因此允许 PID 改变、TCP 连接中断后重连；
+usbmoded 的断连恢复分支会重新启动 adbd 并绑定。因此允许 PID 改变、TCP 连接中断后重连；
 验收要求是插拔后自动恢复，无需人工重启，不增加定时 watchdog（看门狗）。
 
 - arm64：已部署 ROCK5B；旧版一次模拟断连即恢复超时，修复版连续 9 轮恢复成功。

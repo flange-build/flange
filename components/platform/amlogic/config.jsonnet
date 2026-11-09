@@ -16,7 +16,8 @@
   rootfs+: {
     // 与 Rockchip / Allwinner 同样：normal 系统也安装 recoveryctl，便于
     // ADB 触发模式切换；flange-rootfs-grow 处理 rootfs 首启自扩展。
-    custom_packages: ['adbd', 'recoveryctl', 'flange-rootfs-grow'],
+    // adbd 已在 rootfs 基线层默认启用，这里只追加本层特有的包。
+    custom_packages+: ['recoveryctl', 'flange-rootfs-grow'],
   },
   recovery: {
     enabled: true,

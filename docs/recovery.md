@@ -316,7 +316,7 @@ recoveryctl normal
 
    ```bash
    flange recovery shell    # 或直接 adb shell
-   systemctl status usbdevice
+   systemctl status usbmoded
    ```
 
 4. USB gadget 未启动：常见于内核未加载 `g_ether` / configfs gadget；

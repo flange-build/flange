@@ -48,11 +48,12 @@ flange 是一个嵌入式 Linux 系统构建框架，基于 ubuntu-base 构建�
 所有操作通过 shell 函数 `flange` 暴露。**任何构建/刷写前，先在仓库根目录加载环境并选好配置：**
 
 ```bash
-source envsetup.sh            # 加载 flange / lunch 函数（每个新 shell 都要重新 source）
-lunch <board>                 # 选配置，例：lunch radxa-zero3w
-                              # 完整格式 <board>-<product>-<variant>；省略时 product=default、variant=release
-lunch                         # 不带参数 → 层级选择界面（平台→SoC→板→product→variant，
-                              # 末级显示该目标的配置表）；--no-tui 回退编号列表
+source envsetup.sh                 # 加载 flange / lunch 函数（每个新 shell 都要重新 source）
+lunch <board>-<product>-<variant>  # 选配置，必须写完整目标名，例：lunch radxa-zero3w-default-release
+                                   # （= flange target select <target>；只写板名会报“无法解析目标”）
+flange target list [过滤词]        # 列出可选目标，例：flange target list lubancat
+lunch                              # 不带参数 → 层级选择界面（平台→SoC→板→product→variant，
+                                   # 末级显示该目标的配置表）；仅限交互终端，非 TTY 下报错
 ```
 
 配置持久化到 `.flange/current_config`，后续 `source envsetup.sh` 会自动恢复，无需重复 lunch。
@@ -63,8 +64,8 @@ lunch                         # 不带参数 → 层级选择界面（平台→S
 ```bash
 flange build                  # 构建完整镜像（等同 flange build image）；首次会自动构建 Docker 镜像
 flange build kernel           # 只构建单个组件（可选：bootloader / rootfs / recovery）
-flange build app              # 构建当前配置所需的全部 App
-flange build app <name|path>  # 构建指定 App（参数为名称，或宿主机目录路径）
+flange build app              # 构建当前配置所需的全部 App（系统组件，不接受 App 参数）
+flange app build <name|path>  # 构建指定 App（参数为名称，或宿主机目录路径）
 ```
 
 - **产物位置**：`.build/target/<board>/<product>/<variant>/`，根目录 `target` 软链接直达
@@ -89,8 +90,9 @@ flange flash --raw /dev/sdX   # dd 整盘刷写
 | `flange clean` | 清理当前配置的构建产物 |
 | `flange why [component]` | 解释缓存决策：哪一段输入变了导致重建 |
 | `flange shell` | 进入 Docker 构建环境交互式 shell |
-| `flange create app <name>` | 生成 App 工程脚手架 |
-| `flange list apps` | 列出全部可用 App |
+| `flange app create <name>` | 生成 App 工程脚手架（默认建在当前目录，`--dir` 指定父目录） |
+| `flange app list` | 列出全部可用 App |
+| `flange app deploy\|run <name>` | 经 ADB 部署 / 部署并运行指定 App |
 | `flange docker build` / `rebuild` / `status` | 管理 Docker 构建镜像 |
 
 完整命令表、参数语义，以及添加新板子 / SoC / 平台的指引见 [README.md](./README.md)。

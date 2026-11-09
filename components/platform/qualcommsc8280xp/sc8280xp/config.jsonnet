@@ -17,7 +17,7 @@
     // Q8B 只使用 Adreno/MSM 显示和 QPS615/TC956x 板载网卡。通过 flange
     // 额外 config 覆盖裁掉发行版 defconfig 中的离线调试信息、独显与
     // 无关 PCIe 网卡；USB 网卡和 M.2 E-Key Wi-Fi 驱动保持可用。
-    config: {
+    config+: {
       // flange 当前不生成 initramfs，让显示驱动在 rootfs 可用后加载固件。
       CONFIG_DRM_MSM: 'm',
       CONFIG_SCSI_UFSHCD: 'y',

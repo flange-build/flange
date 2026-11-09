@@ -21,3 +21,4 @@ updated: 2026-09-05
 - [输出系统 BuildOutput](输出系统-BuildOutput.md)：分层终端输出与持久日志。
 - [scaffold 生成器](scaffold-生成器.md)：生成 App/Package 工程。
 - [Recovery 宿主 CLI](recovery-host-CLI.md)：ADB 维护编排。
+- [USB gadget 子系统](usb-gadget-子系统.md)：设备端 USB 能力组合与工作模式切换。

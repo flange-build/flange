@@ -1,0 +1,5 @@
+#!/bin/bash
+set -xe
+if [ -d /run/systemd/system ]; then
+    systemctl stop arduino-app-cli.service arduino-router.service
+fi

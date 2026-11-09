@@ -284,7 +284,7 @@ def _build_control_tar(control_files: Dict[str, str]) -> bytes:
         control.tar.gz 的字节内容
     """
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+    with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.GNU_FORMAT) as tf:
         # 添加根目录 "./"
         dir_info = tarfile.TarInfo(name="./")
         dir_info.type = tarfile.DIRTYPE
@@ -322,7 +322,8 @@ def _build_data_tar(
     # 记录已添加的目录，避免重复
     added_dirs: set = set()
 
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+    # dpkg 不接受 PAX 扩展头；GNU 格式可保留工具链的长路径和长符号链接。
+    with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.GNU_FORMAT) as tf:
         # 添加根目录 "./"
         root_info = tarfile.TarInfo(name="./")
         root_info.type = tarfile.DIRTYPE

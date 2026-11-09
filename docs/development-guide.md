@@ -76,6 +76,17 @@ Docker Desktop 的处理器运行在其 Linux 虚拟机中；不要在 macOS 宿
 并确保 Docker 可访问该目录。构建在源码准备前检查环境，不再自动关闭驱动来规避文件名冲突。
 工具仓库直接构建时也可用 `flange init .` 创建工作区声明，再修改 `build_dir`。
 
+### 构建目录的属主
+
+构建容器内一切以 root 运行并直接写在 bind mount 的 `build_dir` 里，宿主机侧则以普通用户
+申请目标锁、写构建请求、记录部署会话和执行 `flange clean`。flange 为此做了两件事：
+锁目录与锁文件始终以 1777/0666 创建，先创建的一方不会把另一方锁在外面；每次容器
+执行结束后（成功、失败或中断），把 `locks`、`requests`、`target/<板卡>/<产品>/<变体>`
+和 `work/<目标>/apps`、`work/<目标>/packages` 交还给宿主机用户。`sources`（容器内 git
+按属主判定仓库可信）和 `cache` 保持 root。若工作区由更早版本的 flange 构建过，宿主机
+命令可能一次性报 `Permission denied: .../locks/<目标>.lock`，按提示执行
+`sudo chown -R $(id -u):$(id -g) <build_dir>/locks <build_dir>/target` 后即可恢复。
+
 ### 构建存储与磁盘空间
 
 源码、缓存归档和最终镜像保存在工作区 `build_dir`。rootfs/recovery 则需要完整 Linux 权限与 UID/GID 语义，
@@ -301,6 +312,24 @@ flange flash
 # 已有兼容布局时，可刷写清单中的单个分区
 flange flash boot
 ```
+
+### ROCK 5B 清空 SPI 启动固件
+
+当前目标为 ROCK 5B、已有 `flash-config.json` 和 miniloader 时，将唯一一台板卡通过 USB
+连接并进入 MaskROM（芯片下载模式），在宿主机执行：
+
+```bash
+flange flash --erase-spi
+```
+
+这是独立操作，会清空 SPI NOR（串行非易失闪存）的全部内容，包括原有启动固件；
+不会继续刷写系统分区。工具显式切换并确认 SPINOR 后执行擦除；失败即停止。
+EF（全片擦除）命令会自动复位设备，不支持 `--no-reboot`，组合使用时会在访问设备前报错。
+`--no-wait` 只跳过等待轮询，仍检查设备。
+此选项不能与分区名、`--raw`、`--list`、`--spi-firmware` 或 `--provision-ufs` 混用。
+后续需要刷系统时，重新进入下载模式再运行 `flange flash`。
+缺少刷写清单时先执行 `flange build image`，仅缺 loader 时执行 `flange build bootloader`。
+用户实机日志已确认 EF 返回擦除成功并触发复位；修复后的完整命令退出状态与冷启动效果仍需验收。
 
 ### Amlogic 首次 USB 刷写
 

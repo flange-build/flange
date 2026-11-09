@@ -11,10 +11,11 @@ import subprocess
 from pathlib import Path
 
 from builder.artifacts import ArtifactSpec
-from builder.config.canonical import kernel_device_tree
+from builder.config.canonical import kernel_device_tree, kernel_headers_package
 from builder.dtb_overlay import board_overlays, intree_overlays, package_overlays, vendor_overlays
 from builder.environment import environment_identity
-from builder.graph import DEPENDENCY_GRAPH, InputSpec, TaskPlan, component_enabled
+from builder.graph import InputSpec, TaskPlan, component_enabled
+from builder.platforms.spec import dependency_graph, required_artifacts
 from builder.patches import normalize_excluded_patches
 from builder.source import SourceManager
 
@@ -79,6 +80,13 @@ def output_contract(component: str, config: dict, context) -> tuple[ArtifactSpec
                     raise ValueError("平台 output_contract 必须返回目标目录内的 ArtifactSpec")
             return tuple(result)
     root = context.target_dir / component
+    platform_outputs = required_artifacts(component, root, config)
+    if platform_outputs is not None:
+        if component == "image":
+            return (*platform_outputs, ArtifactSpec(
+                "flash-config", context.target_dir / "flash-config.json", allow_empty=False
+            ))
+        return platform_outputs
     outputs: list[ArtifactSpec] = []
 
     def file(name: str, relative: str, required: bool = True):
@@ -94,6 +102,8 @@ def output_contract(component: str, config: dict, context) -> tuple[ArtifactSpec
             file("fit_boot", "boot.img")
         if intree_overlays(config):
             outputs.append(ArtifactSpec("dtbos", root / "overlay", kind="tree", allow_empty=False))
+        if kernel_headers_package(config):
+            outputs.append(ArtifactSpec("headers", root / "headers", kind="tree", allow_empty=False))
     elif component == "device-tree-overlay":
         outputs.append(ArtifactSpec("overlays", root / "overlays", kind="tree", allow_empty=True))
         for name in vendor_overlays(config) + board_overlays(config) + package_overlays(config):
@@ -279,7 +289,7 @@ def create_component_plan(component: str, config: dict, context, source: SourceM
         if key not in CONFIG_BOUNDARIES.get(component, set()) and key not in {"verbose", "quiet"}
     }
     dependencies = tuple(
-        name for name in DEPENDENCY_GRAPH[component] if component_enabled(config, name)
+        name for name in dependency_graph(config)[component] if component_enabled(config, name)
     )
     if not enabled:
         return TaskPlan(component, f"component:{component}:v1", (), (), (), False)

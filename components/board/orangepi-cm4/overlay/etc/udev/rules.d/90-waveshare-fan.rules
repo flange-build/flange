@@ -1,0 +1,2 @@
+# Waveshare CM4-DISP-BASE-5A 底板 EMC2301 风扇：hwmon 注册后拉起温控服务。
+ACTION=="add", SUBSYSTEM=="hwmon", ATTR{name}=="emc2305", TAG+="systemd", ENV{SYSTEMD_WANTS}+="waveshare-fan.service"

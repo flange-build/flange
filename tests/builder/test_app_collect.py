@@ -201,6 +201,9 @@ class TestConventionMapping:
         daemon.chmod(0o755)
         library = tmp_path / "rootfs/usr/lib/libfastrpc.so.1.0.0"
         _touch(library)
+        # 该路径原样保留源文件权限，断言的权限必须显式声明，
+        # 否则 _touch 建出的权限随宿主 umask 变化（002 即得 0664）。
+        library.chmod(0o644)
         symlink = tmp_path / "rootfs/usr/lib/libfastrpc.so.1"
         symlink.symlink_to("libfastrpc.so.1.0.0")
         _touch(tmp_path / "rootfs/usr/lib/.DS_Store")
@@ -322,14 +325,14 @@ class TestInstallOverride:
 
     def test_explicit_install_non_convention_dir(self, tmp_path: Path):
         """install 段可以引用任意路径（不限于约定子目录），文件被正确添加。"""
-        _touch(tmp_path / "conf" / "usbdevice.conf")
+        _touch(tmp_path / "conf" / "other.conf")
         spec = _make_spec(
             name="myapp",
-            install={"conf/usbdevice.conf": "/etc/usbdevice.conf"},
+            install={"conf/other.conf": "/etc/other.conf"},
         )
         files = collect_files(tmp_path, spec, "aarch64")
         m = _result_map(files)
-        assert "/etc/usbdevice.conf" in m
+        assert "/etc/other.conf" in m
 
     def test_install_mode_inferred_for_bin_dest(self, tmp_path: Path):
         """install 段中安装到 /usr/bin/ 的文件推断权限为 0o755。"""
@@ -345,15 +348,15 @@ class TestInstallOverride:
 
     def test_install_mode_inferred_for_sbin_dest(self, tmp_path: Path):
         """install 段中安装到 /usr/sbin/ 的文件推断权限为 0o755。"""
-        _touch(tmp_path / "scripts" / "usbdevice")
+        _touch(tmp_path / "scripts" / "maintain")
         spec = _make_spec(
             name="myapp",
-            install={"scripts/usbdevice": "/usr/sbin/usbdevice"},
+            install={"scripts/maintain": "/usr/sbin/maintain"},
         )
         files = collect_files(tmp_path, spec, "aarch64")
         m = _result_map(files)
-        assert "/usr/sbin/usbdevice" in m
-        assert m["/usr/sbin/usbdevice"][1] == 0o755
+        assert "/usr/sbin/maintain" in m
+        assert m["/usr/sbin/maintain"][1] == 0o755
 
     def test_install_mode_inferred_for_etc_dest(self, tmp_path: Path):
         """install 段中安装到 /etc/ 的文件推断权限为 0o644。"""
@@ -520,35 +523,18 @@ class TestAdbdIntegration:
         assert src.name == "adbd-armhf"
 
     def test_adbd_wrong_arch_excluded(self, adbd_dir: Path, adbd_spec: AppSpec):
-        """arch=aarch64 时，bin/adbd-armhf 被排除，安装列表中只有一个 adbd。"""
+        """arch=aarch64 时，bin/adbd-armhf 被排除，安装列表中只有一个 adbd 二进制。"""
         files = collect_files(adbd_dir, adbd_spec, "aarch64")
-        adbd_entries = [p for _, p, _ in files if "adbd" in p.split("/")[-1]]
+        # 按 basename 精确匹配：usbmoded-adbd.service 的 basename 也含 "adbd"。
+        adbd_entries = [p for _, p, _ in files if p.split("/")[-1] == "adbd"]
         assert len(adbd_entries) == 1
         assert adbd_entries[0] == "/usr/bin/adbd"
 
-    def test_adbd_explicit_install_overrides(self, adbd_dir: Path, adbd_spec: AppSpec):
-        """adbd install 段显式映射生效：conf、scripts、udev 使用显式路径。"""
-        files = collect_files(adbd_dir, adbd_spec, "aarch64")
-        m = _result_map(files)
-        # 显式路径存在
-        assert "/etc/usbdevice.conf" in m
-        assert "/usr/sbin/usbdevice" in m
-        assert "/etc/udev/rules.d/61-usbdevice.rules" in m
-
-    def test_adbd_convention_paths_not_present(self, adbd_dir: Path, adbd_spec: AppSpec):
-        """adbd 的 install 覆盖后，约定路径不应出现在安装列表中。"""
-        files = collect_files(adbd_dir, adbd_spec, "aarch64")
-        m = _result_map(files)
-        # 约定路径（被 install 覆盖）
-        assert "/etc/adbd/usbdevice.conf" not in m
-        assert "/usr/lib/adbd/usbdevice" not in m
-        assert "/lib/udev/rules.d/61-usbdevice.rules" not in m
-
     def test_adbd_systemd_convention(self, adbd_dir: Path, adbd_spec: AppSpec):
-        """systemd/usbdevice.service 未在 install 段中，使用约定映射。"""
+        """adbd 的 install 段为空，systemd/ 下的 unit 走约定映射。"""
         files = collect_files(adbd_dir, adbd_spec, "aarch64")
         m = _result_map(files)
-        assert "/lib/systemd/system/usbdevice.service" in m
+        assert "/lib/systemd/system/usbmoded-adbd.service" in m
 
     def test_adbd_modes(self, adbd_dir: Path, adbd_spec: AppSpec):
         """验证 adbd 各文件的权限设置是否符合预期。"""
@@ -556,22 +542,97 @@ class TestAdbdIntegration:
         m = _result_map(files)
         # bin 文件应为 0o755
         assert m["/usr/bin/adbd"][1] == 0o755
-        # sbin 脚本应为 0o755
-        assert m["/usr/sbin/usbdevice"][1] == 0o755
-        # conf 文件应为 0o644
-        assert m["/etc/usbdevice.conf"][1] == 0o644
-        # udev rules 应为 0o644
-        assert m["/etc/udev/rules.d/61-usbdevice.rules"][1] == 0o644
         # systemd unit 应为 0o644
-        assert m["/lib/systemd/system/usbdevice.service"][1] == 0o644
+        assert m["/lib/systemd/system/usbmoded-adbd.service"][1] == 0o644
 
     def test_adbd_total_files_count(self, adbd_dir: Path, adbd_spec: AppSpec):
-        """adbd aarch64 安装文件总数应为 5（adbd + conf + scripts + udev + systemd）。"""
+        """adbd aarch64 安装文件总数应为 2（adbd 二进制 + systemd unit）。
+
+        gadget 编排与配置随三层架构重构移入 usbmoded，adbd 只剩二进制与
+        对应的 daemon unit。
+        """
         files = collect_files(adbd_dir, adbd_spec, "aarch64")
-        assert len(files) == 5
+        assert len(files) == 2
 
     def test_adbd_src_paths_exist(self, adbd_dir: Path, adbd_spec: AppSpec):
         """所有收集到的源文件路径在磁盘上实际存在。"""
         files = collect_files(adbd_dir, adbd_spec, "aarch64")
+        for src, install_path, mode in files:
+            assert src.exists(), f"源文件不存在：{src}（安装到 {install_path}）"
+
+
+# ---------------------------------------------------------------------------
+# usbmoded 真实 App 集成测试
+# ---------------------------------------------------------------------------
+
+class TestUsbmodedIntegration:
+    """基于真实 usbmoded App 目录的集成测试。
+
+    三层架构重构后，usbmoded 才是带显式 install 段的那个 App —— 原先由
+    adbd 承担的「显式映射覆盖约定路径」验证随之迁到这里。
+    """
+
+    @pytest.fixture
+    def usbmoded_dir(self) -> Path:
+        """返回 usbmoded App 目录路径。"""
+        here = Path(__file__).parent
+        root = here.parent.parent
+        usbmoded = root / "components" / "app" / "usbmoded"
+        if not usbmoded.exists():
+            pytest.skip(f"usbmoded 目录不存在：{usbmoded}")
+        return usbmoded
+
+    @pytest.fixture
+    def usbmoded_spec(self, usbmoded_dir: Path) -> AppSpec:
+        """加载 usbmoded 的 AppSpec。"""
+        from builder.app_spec import load_spec
+        return load_spec(usbmoded_dir)
+
+    def test_explicit_install_overrides(self, usbmoded_dir: Path, usbmoded_spec: AppSpec):
+        """install 段显式映射生效：bin、conf、udev 使用显式路径。"""
+        files = collect_files(usbmoded_dir, usbmoded_spec, "aarch64")
+        m = _result_map(files)
+        assert "/usr/sbin/usbmoded" in m
+        assert "/etc/usbmode/gadget.d/10-default.yaml" in m
+        assert "/etc/udev/rules.d/61-usbmode.rules" in m
+
+    def test_convention_paths_not_present(self, usbmoded_dir: Path, usbmoded_spec: AppSpec):
+        """install 覆盖后，约定路径不应出现在安装列表中。"""
+        files = collect_files(usbmoded_dir, usbmoded_spec, "aarch64")
+        m = _result_map(files)
+        assert "/usr/bin/usbmoded" not in m
+        assert "/etc/usbmoded/usbmode/gadget.d/10-default.yaml" not in m
+        assert "/lib/udev/rules.d/61-usbmode.rules" not in m
+
+    def test_systemd_convention(self, usbmoded_dir: Path, usbmoded_spec: AppSpec):
+        """systemd/ 下的 unit 未在 install 段中，走约定映射。"""
+        files = collect_files(usbmoded_dir, usbmoded_spec, "aarch64")
+        m = _result_map(files)
+        assert "/lib/systemd/system/usbmoded.service" in m
+        assert "/lib/systemd/system/usbmoded-mtp-server.service" in m
+
+    def test_modes(self, usbmoded_dir: Path, usbmoded_spec: AppSpec):
+        """sbin 入口可执行，配置与 unit 为只读。"""
+        files = collect_files(usbmoded_dir, usbmoded_spec, "aarch64")
+        m = _result_map(files)
+        assert m["/usr/sbin/usbmoded"][1] == 0o755
+        assert m["/usr/sbin/usb-mode"][1] == 0o755
+        assert m["/etc/usbmode/gadget.d/10-default.yaml"][1] == 0o644
+        assert m["/etc/udev/rules.d/61-usbmode.rules"][1] == 0o644
+        assert m["/lib/systemd/system/usbmoded.service"][1] == 0o644
+
+    def test_python_package_installed_to_dist_packages(
+        self, usbmoded_dir: Path, usbmoded_spec: AppSpec
+    ):
+        """Python 包逐文件映射进 dist-packages，装上即可直接 import。"""
+        files = collect_files(usbmoded_dir, usbmoded_spec, "aarch64")
+        m = _result_map(files)
+        base = "/usr/lib/python3/dist-packages/usbmoded"
+        assert f"{base}/__init__.py" in m
+        assert f"{base}/capabilities/adb.py" in m
+
+    def test_src_paths_exist(self, usbmoded_dir: Path, usbmoded_spec: AppSpec):
+        """所有收集到的源文件路径在磁盘上实际存在。"""
+        files = collect_files(usbmoded_dir, usbmoded_spec, "aarch64")
         for src, install_path, mode in files:
             assert src.exists(), f"源文件不存在：{src}（安装到 {install_path}）"

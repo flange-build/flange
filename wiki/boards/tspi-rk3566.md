@@ -8,7 +8,7 @@ sources:
   - components/board/tspi-rk3566/patches/kernel/0002-bcmdhd-set-fw-ampak-path-brcm.patch
   - components/board/tspi-rk3566/patches/kernel/0003-add-tspi-rk3566-amp-dts.patch
   - components/board/tspi-rk3566/overlay/etc/hostname
-  - components/board/tspi-rk3566/overlay/etc/usbdevice.conf
+  - components/board/tspi-rk3566/overlay/etc/usbmode/gadget.d/20-tspi-rk3566.yaml
   - components/board/tspi-rk3566/dtso/tspi-rk3566-amp-foc.dtso
   - docs/first-steps.md
 related:
@@ -63,4 +63,4 @@ lunch tspi-rk3566-foc-debug        # AMP：cpu3 RT-Thread 驱动三相无刷电�
 
 ## overlay
 
-`overlay/etc/hostname` + `overlay/etc/usbdevice.conf`，同平台其他板。
+`overlay/etc/hostname` + `overlay/etc/usbmode/gadget.d/20-tspi-rk3566.yaml`，同平台其他板。

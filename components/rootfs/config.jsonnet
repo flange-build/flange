@@ -63,6 +63,7 @@
 //
 // — 包集合（与账号无关）—
 //   package_sets 定义集合；package_set 使用 Jsonnet variant 条件选择集合。
+//   kernel_devel 集合例外：kernel.headers_package 为 true 时自动选入。
 local variant = std.extVar('variant');
 
 {
@@ -104,6 +105,17 @@ local variant = std.extVar('variant');
       'plugdev', 'users', 'netdev', 'input', 'render',
       'i2c', 'spi', 'gpio',
     ],
+    // — 默认 App 包 —
+    // 平台无关的基线：所有板子默认装 adbd，它经 build.deps 带入 usbmoded
+    // （USB gadget 管理服务）。adb 是多数板子唯一的调试通道，usbmoded 又是
+    // USB 能力的基础设施，二者应当开箱即有，而不是靠每个平台层重复声明 ——
+    // 后者正是 CONFIG_DRM_GUD 在 14 个文件里各写一遍的老毛病。
+    //
+    // 平台/SoC/板级用 `custom_packages+:` 追加自己的包；确实不需要的板子用
+    // lib.without 从基线中显式扣除（如 Arduino UNO Q 自带整套 USB gadget
+    // 方案，与 usbmoded 抢同一个 gadget，必须扣掉）。
+    custom_packages: ['adbd'],
+
     package_sets: {
       base: [
         // — 包集合 —
@@ -115,6 +127,10 @@ local variant = std.extVar('variant');
         'net-tools', 'systemd-timesyncd', 'btop',
       ],
       debug: ['gdb', 'strace', 'tcpdump', 'valgrind'],
+      // 设备端编译内核模块的工具链，linux-headers deb 的 Depends 与 postinst
+      // 都依赖它。不在 package_set 中手选：kernel.headers_package 为 true 时
+      // 由配置展开自动追加，避免两处开关失配。
+      kernel_devel: ['make', 'gcc', 'libc6-dev', 'bc', 'bison', 'flex', 'libssl-dev', 'libelf-dev'],
       release: [],
     },
     package_set: ['base'] + (if variant == 'debug' then ['debug'] else ['release']),

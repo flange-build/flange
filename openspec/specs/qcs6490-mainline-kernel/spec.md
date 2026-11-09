@@ -45,7 +45,7 @@ mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模
 
 `radxa-dragon-q6a-meizu-e3-bringup-*` 产物 SHALL 在 mainline 6.18.2 基线上完成魅族 E3 39pin MIPI-DSI 屏的显示 + 触摸 + 背光 bring-up：经 `meizu-e3-panel` 包注入的 `panel_meizu_e3`/`sec_ts`/`sgm37604a` 三个 OOT 驱动 SHALL 能对 mainline 6.18 内核编译通过（适配 `asm/fb.h`/`asm/unaligned.h` 移除、`GPIOF_DIR_IN`→`GPIOF_IN`、`FB_EVENT_BLANK` 移除等 ABI 漂移，并 SHALL 同时保持 rock5b/a7a 旧 BSP 内核可编）。
 
-触摸/背光所在 `i2c13`（QUP1 SE5 `@a94000`）SHALL 实际运行于 geni i2c 的 FIFO 模式以避免 GPI DMA 传输失败。在 linux-7.0.2 上**仅**从 base board dts 去除 `qcom,enable-gsi-dma`（`patches/kernel/0003`）**不充分**——bootloader（对齐 radxa rsdk）已将该 SE 预 provision 成 GSI（`proto==GENI_SE_I2C`、`FIFO_IF_DISABLE` 置位），而 `i2c-qcom-geni` probe 在 `proto` 已初始化时跳过 `geni_load_se_firmware()`，`qcom,enable-gsi-dma` 永不被读。故内核 SHALL 由 `patches/kernel/0006` 在"DT 未声明 `qcom,enable-gsi-dma` 且 SE 起来为 GSI（`GENI_IF_DISABLE_RO & FIFO_IF_DISABLE` 置位）"时强制重调 `geni_load_se_firmware(GENI_SE_I2C)` 把该 SE 重 provision 回 FIFO；`patches/kernel/0003` 仍保留（删 flag 是该触发条件之一）。该重 provision SHALL 仅命中满足失配条件的 SE（即 `i2c13`），SHALL NOT 影响 `i2c10`（RTC，声明 `qcom,enable-gsi-dma`、GSI 正常）与 `default` 产物。
+触摸/背光所在 `i2c13`（QUP1 SE5 `@a94000`）SHALL 实际运行于 geni i2c 的 FIFO 模式以避免 GPI DMA 传输失败。在 linux-7.0.2 上**仅**从 base board dts 去除 `qcom,enable-gsi-dma`（`patches/kernel/0003`）**不充分**——bootloader（对齐 radxa rsdk）已将该 SE 预 provision 成 GSI（`proto==GENI_SE_I2C`、`FIFO_IF_DISABLE` 置位），而 `i2c-qcom-geni` probe 在 `proto` 已初始化时跳过 `geni_load_se_firmware()`，`qcom,enable-gsi-dma` 永不被读。故内核 SHALL 由 `patches/kernel/0006` 在"DT 未声明 `qcom,enable-gsi-dma` 且 SE 起来为 GSI（`GENI_IF_DISABLE_RO & FIFO_IF_DISABLE` 置位）"时强制重调 `geni_load_se_firmware(GENI_SE_I2C)` 把该 SE 重 provision 回 FIFO；`patches/kernel/0003` 仍保留（删 flag 是该触发条件之一）。该重 provision SHALL 命中所有满足失配条件的 i2c SE（`i2c13`，以及经 `patches/kernel/0007` 删除 flag 的 `i2c10`），SHALL NOT 影响 DT 仍声明 `qcom,enable-gsi-dma` 的 SE 与 `default` 产物的其余行为。
 
 #### Scenario: 显示 + 触摸 + 背光实板可用
 - **WHEN** 刷入 meizu-e3-bringup 产物并上电、屏接到 J10 LCD FPC
@@ -56,12 +56,8 @@ mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模
 - **THEN** `dmesg` 无 `geni_i2c ... GPI transfer failed` / `prep_slave_sg failed` / `gpi ... Error in Transaction`，`sec_ts` 读到 device id `AC,6F,70`，触摸（`evtest /dev/input/event1` 出坐标事件）与背光的 i2c 读写均成功
 
 #### Scenario: bootloader 预 provision GSI 时内核重 provision 回 FIFO
-- **WHEN** `i2c13`/SE5 被 bootloader 预 provision 成 GSI（`FIFO_IF_DISABLE` 置位、`proto==GENI_SE_I2C`）且 dts 未声明 `qcom,enable-gsi-dma`
+- **WHEN** 某 i2c SE（`i2c13`/SE5 或 `i2c10`）被 bootloader 预 provision 成 GSI（`FIFO_IF_DISABLE` 置位、`proto==GENI_SE_I2C`）且 dts 未声明 `qcom,enable-gsi-dma`
 - **THEN** 内核 `i2c-qcom-geni` probe SHALL 重调 `geni_load_se_firmware(GENI_SE_I2C)` 清除 `FIFO_IF_DISABLE`，使该 SE 以 FIFO 模式工作（`gpi_mode=false`、不再走 GPI）
-
-#### Scenario: i2c10 GSI 与 default 产物不回归
-- **WHEN** 应用本修复后开机
-- **THEN** `i2c10`（RTC `m41t11`，声明 `qcom,enable-gsi-dma`）仍以 GSI 正常工作、RTC 读写正常；`default` 产物 `i2c13` 无从机、行为不变、无新增 dmesg 报错
 
 ### Requirement: 内核基线切换到 mainline linux-7.0.2
 
@@ -80,8 +76,8 @@ mainline 6.18.2 不带 in-tree aic8800 驱动，系统 SHALL 以 out-of-tree 模
 - **THEN** 最终 `.config` 中 `qcom_module.config` 的 qcom 平台驱动均为 `=y`（如 `CONFIG_QCOM_AOSS_QMP`、`CONFIG_QCOM_LLCC`、`CONFIG_QCOM_QSEECOM`、`CONFIG_SCSI_UFS_QCOM`、`CONFIG_ARM_SMMU_V3`），radxa.config 典型项（`CONFIG_DMABUF_HEAPS=y` 等）与 radxa_custom.config 项（`CONFIG_MODULE_COMPRESS_ZSTD=y`、`CONFIG_EFI_ZBOOT` 未设）齐备
 
 #### Scenario: kodiak.dtsi 基础上 patch 正确应用
-- **WHEN** 内核构建时按序应用 0001–0006 patch（含同 commit 重建：`reset_source` 先 `git clean -fd` 清未跟踪残留）
-- **THEN** `qcs6490-radxa-dragon-q6a.dts` 中 `usb_1` 的 `dr_mode` 为 `peripheral`、`i2c13` 不含 `qcom,enable-gsi-dma`，`drivers/i2c/busses/i2c-qcom-geni.c` 含 `0006` 的"GSI/FIFO 失配则重 provision 回 FIFO"分支，`radxa.config`/`radxa_custom.config` 被创建，全部 patch 无 `already exists` / 冲突报错
+- **WHEN** 内核构建时按序应用 0001–0007 patch（含同 commit 重建：`reset_source` 先 `git clean -fd` 清未跟踪残留）
+- **THEN** `qcs6490-radxa-dragon-q6a.dts` 中 `usb_1` 的 `dr_mode` 为 `peripheral`、`i2c10` 与 `i2c13` 均不含 `qcom,enable-gsi-dma`，`drivers/i2c/busses/i2c-qcom-geni.c` 含 `0006` 的"GSI/FIFO 失配则重 provision 回 FIFO"分支，`radxa.config`/`radxa_custom.config` 被创建，全部 patch 无 `already exists` / 冲突报错
 
 ### Requirement: 硬件视频解码可用
 
@@ -122,3 +118,39 @@ rootfs SHALL 包含来自 `ubuntu-qcom-iot/qcom-ppa` 的 `linux-firmware-dragonw
 #### Scenario: GPU 固件从 updates/ 优先加载
 - **WHEN** 系统启动，drm/msm 驱动加载 GPU 固件
 - **THEN** `dmesg` 显示从 `/lib/firmware/updates/` 路径加载固件，无 firmware load 失败
+
+### Requirement: Q6A 启用的 i2c 总线不使用 GPI DMA
+
+`radxa-dragon-q6a-*` 产物中所有 `status = "okay"` 的 geni i2c 总线（当前为 `i2c10` RTC、`i2c13` 外接触摸）SHALL 运行于 FIFO 模式，SHALL NOT 申请 GPI DMA 通道。系统 SHALL 在 UEFI `Hypervisor Override` 关闭（EL1，Gunyah）与开启（EL2，KVM，Radxa UEFI 自行套用 KVM fixup）两种状态下都能启动到 rootfs。
+
+> 根因（实板，SPI 固件 `260120`/00549-KODIAKWP，EL2）：`i2c10` 走 GSI 时，`gpi_config_interrupts()` 读 gpii 1 的 `GPII_n_CNTXT_MSI_BASE_LSB` 触发同步外部中止（`ESR 0x96000010`；另一次复现为异步 `SError` panic），udev 加载 `i2c_qcom_geni` 即崩溃复位。同页前序寄存器可访问，属于寄存器级访问控制。由 `patches/kernel/0007` 删除 `i2c10` 的 `qcom,enable-gsi-dma`，再由 `0006` 把 bootloader 预 provision 的 GSI 重 provision 回 FIFO。
+
+#### Scenario: EL2 下不加启动参数即可启动
+- **WHEN** UEFI `Hypervisor Override` 开启、刷入本修复后的镜像并上电，GRUB 使用默认启动参数（不含 `module_blacklist`）
+- **THEN** 内核打印 `CPU: All CPU(s) started at EL2`、`/dev/kvm` 存在，`i2c_qcom_geni` 加载无 Oops/SError，系统启动到 rootfs 且 adb/串口可登录
+
+#### Scenario: i2c10 走 FIFO 且 RTC 可用
+- **WHEN** 系统启动后 `i2c10`（`i2c@a88000`）probe
+- **THEN** 活动 DT 中 `i2c@a88000` 不含 `qcom,enable-gsi-dma`，`dmesg` 无 `gpi` 通道分配与 `GPI transfer failed`，RTC `m41t11` 注册为 `/dev/rtc*`，且 `hwclock -r` 读、`hwclock -w` 写均成功
+
+#### Scenario: EL1 下行为不回归
+- **WHEN** UEFI `Hypervisor Override` 关闭（EL1）启动同一镜像
+- **THEN** 系统同样启动到 rootfs，`i2c10` 走 FIFO、RTC 可读
+
+### Requirement: Q6A 默认以 EL2 启动
+
+`radxa-dragon-q6a` 的全部目标 MUST 使用内核构建的组合 DTB `qcs6490-radxa-dragon-q6a-kvm`（base DTB 叠加 Radxa
+`qcs6490-radxa-dragon-q6a-kvm.dtso`），其 `/chosen` MUST 含 `radxa,enable-kvm = <1>`。在 UEFI
+`Hypervisor Override` 为出厂 `Auto` 时，系统 MUST 以 EL2 启动，ADSP/CDSP MUST 由 UEFI 预加载后被内核接管，
+venus 硬件编码 MUST 可用。系统 MUST NOT 要求用户进入 UEFI 修改该选项。
+
+#### Scenario: 配置使用 KVM 组合 DTB
+
+- **WHEN** 求值任一 `radxa-dragon-q6a` 目标
+- **THEN** `kernel.device_tree.name` 为 `qcs6490-radxa-dragon-q6a-kvm`，构建产物 DTB 的 `/chosen/radxa,enable-kvm` 为 1
+
+#### Scenario: UEFI Auto 下自动进 EL2
+
+- **WHEN** UEFI `Hypervisor Override` 为 `Auto`，刷写后启动
+- **THEN** `/dev/kvm` 存在，ADSP 与 CDSP remoteproc 为 `attached`，720p NV12 H.264 硬件编码不复位
+

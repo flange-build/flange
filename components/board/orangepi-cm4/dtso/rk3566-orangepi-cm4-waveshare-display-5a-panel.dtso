@@ -1,0 +1,67 @@
+/*
+ * Orange Pi CM4 + Waveshare CM4-DISP-BASE-5A（VER2）5" DSI 屏 + 触摸 overlay。
+ *
+ * 底板 MCU（i2c1 @0x45，REG_ID 0xc3）仿真 RPi 7" 屏的 ATTiny 控制协议，并代管
+ * 板上的 ICN6211 DSI→RGB 桥，对外是 800x480、1-lane，接 CM4 DSI1；触摸为
+ * FT5426 @0x38。这与 Waveshare 对 VER2 的官方用法 dtoverlay=vc4-kms-dsi-7inch
+ * 一致（其公开的部分原理图画的是 ICN6211 接 DSI0，与 VER2 不符）。vendor
+ * rk3566-orangepi-cm4.dtsi 已按 RPi 惯例写好 raspits_panel@45 /
+ * raspits_touch_ft5426@38（i2c1，连 dsi1），这里只是把它们打开。
+ *
+ * 依赖两个 kernel patch：
+ * - 0005：raspits_panel 是挂在 I2C 上、自行注册 DSI 设备的面板，DSI 改为在
+ *   面板 attach 时才 component_add，否则 deferred probe 活锁。代价是 Rockchip
+ *   DRM 要等面板 attach 才 bind，屏没接或面板 probe 失败时 HDMI 也不出图。
+ * - 0006：面板像素时钟改为 29 MHz，必须与本文件 &dsi1 的 rockchip,lane-rate
+ *   成对修改（lane Mbps = 像素 MHz × 24），二者不等时画面横向错位并卷绕。
+ *
+ * 与底板外设 overlay 分开，是为了能单独回退屏：从 extlinux.conf 的
+ * fdtoverlays 删掉本 dtbo 即可。
+ *
+ * dsi1 走 VOP vp1，HDMI 维持 vp0，两路可同时输出（已实机确认）。route_dsi1 只
+ * 服务 U-Boot 开机 logo，U-Boot 不认识该 panel，保持 disabled。
+ *
+ * 全部 fragment 走 &label target，根级 / 下不新增节点（根级裸节点会让
+ * U-Boot fdt_overlay_apply 报 FDT_ERR_BADOVERLAY）。
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "rockchip,rk3566-orangepi-cm4";
+
+	metadata {
+		title = "Waveshare CM4-DISP-BASE-5A VER2 5in DSI panel for Orange Pi CM4";
+		compatible = "rockchip,rk3566-orangepi-cm4";
+		category = "display";
+		exclusive = "&dsi1";
+		description = "RPi 7in-protocol DSI panel (MCU @0x45) + FT5426 touch @0x38 on i2c1, dsi1 via vp1.";
+	};
+};
+
+&dsi1 {
+	status = "okay";
+	/*
+	 * 固定 1-lane 696 Mbps，与 kernel patch 0006 里面板 mode 的 29 MHz 像素
+	 * 时钟（696 / 24 bpp）严格相等。不固定时驱动按像素时钟 ×24/0.9 推算，
+	 * 非 burst 模式下链路比像素流快，画面右移并卷绕。
+	 */
+	rockchip,lane-rate = <696>;
+};
+
+&dsi1_in_vp1 {
+	status = "okay";
+};
+
+&video_phy1 {
+	status = "okay";
+};
+
+&raspits_panel {
+	status = "okay";
+};
+
+&raspits_touch_ft5426 {
+	status = "okay";
+};

@@ -32,7 +32,7 @@ Docker container（容器）内按目标架构安装 `libasound2-dev:{arch}`、`
 ```bash
 source envsetup.sh
 lunch atk-rk3506b-default-debug
-flange build app cardputer_music_player
+flange app build cardputer_music_player
 ```
 
 产物位于：
@@ -44,8 +44,8 @@ flange build app cardputer_music_player
 设备重新接入 ADB 后可热部署：
 
 ```bash
-flange push app cardputer_music_player
-flange run app cardputer_music_player
+flange app deploy cardputer_music_player
+flange app run cardputer_music_player
 ```
 
 ## 按键

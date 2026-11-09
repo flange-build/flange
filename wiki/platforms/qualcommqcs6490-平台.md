@@ -14,16 +14,19 @@ sources:
   - components/platform/qualcommqcs6490/qcs6490/config.jsonnet
   - components/platform/qualcommqcs6490/patches/kernel/
   - builder/flash/strategy.py#QualcommFlashStrategy
+  - builder/flash/qualcomm_ufs.py
   - openspec/changes/add-qcs6490-radxa-dragon-q6a/
   - openspec/changes/archive/2026-05-31-migrate-qcs6490-kernel-702/
+  - components/board/thundercomm-rubikpi3/config.jsonnet
   - docs/development-guide.md
   - docs/extension-guide.md
 related:
   - "[[radxa-dragon-q6a]]"
+  - "[[thundercomm-rubikpi3]]"
   - "[[qualcommsc8280xp 平台]]"
   - "[[FlashStrategy 抽象]]"
   - "[[USB 线刷协议]]"
-updated: 2026-09-05
+updated: 2026-10-01
 ---
 
 > 阅读前提：先读[架构总览](../concepts/架构总览.md)，并从[板卡索引](../boards/index.md)确认型号。
@@ -39,6 +42,21 @@ QCS6490 已从下方建库时记录的 vendor BSP 6.6.90，历经 mainline 6.18.
 - ESP 只存放 GRUB EFI 与菜单，kernel/DTB 位于 rootfs `/boot`；4K LBA UFS 上不在 `fstab` 挂载 ESP。
 - 普通 `flange flash` 只写 UFS `raw.img`；`flange flash --spi-firmware` 单独更新 EDK2 SPI 固件。7.0.2 需要与当前 SPI 固件配套，旧固件可能在 UFS probe 阶段触发整机复位。
 - 全新 UFS 先执行 `flange flash --provision-ufs lun0-only` 或 `flange flash --provision-ufs qcom` 建立 LUN 布局；该操作会清除 UFS 数据，完成后须重新进入 EDL，再执行普通全量刷写。
+
+### 启动固件位于 UFS 的板（2026-09-26）
+
+[[thundercomm-rubikpi3]] 复用同一 SoC 层基线，但签名启动固件位于 UFS boot LUN 1-5。板级声明
+`bootloader.ufs_rawprogram` / `ufs_patch` 后：boot 组件额外产出 UEFI dtb 分区镜像 `dtb.bin`；
+`flange flash` 不再走 `write-sector`，而是由 `builder/flash/qualcomm_ufs.py` 暂存官方
+rawprogram/patch、`dtb.bin` 与生成的 LUN0 `rawprogram0.xml`，在一次 `edl-ng rawprogram`
+会话中写入；固件 XML 写或 patch LUN0、引用 Git LFS 指针时在等待设备前拒绝。
+未声明这两个字段的 Q6A/Q8B 行为不变。
+
+RUBIK Pi 3 另在板级覆盖了内核（2026-09-27）：改用 Thundercomm Yocto（QLI 1.5）同款厂商内核
+`rubikpi-ai/linux` 6.6.90、`qcom_defconfig` 链与高通下游视频驱动，以 EL1 同时获得 ADSP/CDSP 与
+硬件编码，平台层 mainline 补丁经 `kernel.exclude_patches` 全部排除；SoC 层与 Q6A 仍是 mainline 7.0.2。
+2026-10-01 另加 `mainline` product：继承 SoC 层内核与平台层补丁，刷 KVM 版 `xbl_config` 以 EL2 运行（与 Q6A
+同一套内核与驱动），代价是本板 TZ 不支持 `PAS_GET_RSCTABLE`、ADSP/CDSP 离线。详见 [[thundercomm-rubikpi3]]。
 
 下方 6.6.90 内容保留为早期 bring-up 基线，其中 UEFI/GRUB、4K LBA、ESP 挂载限制和排障过程仍有参考价值；涉及“当前内核”的表述以本节和 [[radxa-dragon-q6a]] 为准。
 

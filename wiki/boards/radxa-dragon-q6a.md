@@ -11,6 +11,7 @@ sources:
   - components/platform/qualcommqcs6490/patches/kernel/0004-feat-radxa-common-kernel-config.patch
   - components/platform/qualcommqcs6490/patches/kernel/0005-feat-radxa-custom-kernel-config.patch
   - components/platform/qualcommqcs6490/patches/kernel/0006-i2c-geni-force-fifo-on-gsi-mismatch.patch
+  - components/platform/qualcommqcs6490/patches/kernel/0007-dts-radxa-dragon-q6a-i2c10-drop-gsi-dma.patch
   - components/platform/qualcommqcs6490/patches/aic8800/0001-cfg80211-get-tx-power-6.18-signature.patch
   - components/platform/qualcommqcs6490/patches/aic8800/0002-in-irq-removed-linux-6.10.patch
   - components/packages/meizu-e3-panel/package.py
@@ -19,6 +20,8 @@ sources:
   - builder/source.py
   - openspec/changes/add-qcs6490-radxa-dragon-q6a/
   - openspec/changes/archive/2026-05-31-migrate-qcs6490-kernel-702/
+  - openspec/changes/archive/2026-09-27-fix-qcs6490-i2c10-fifo-el2/
+  - openspec/changes/archive/2026-09-28-enable-q6a-auto-el2/
   - docs/first-steps.md
 related:
   - "[[qualcommqcs6490 平台]]"
@@ -27,7 +30,7 @@ related:
   - "[[meizu-e3-panel]]"
   - "[[硬件特性包]]"
   - "[[构建期 dtb overlay 合并]]"
-updated: 2026-09-05
+updated: 2026-09-28
 ---
 
 > 阅读前提：先完成[初学指南](../../docs/first-steps.md)的环境准备，运行
@@ -49,7 +52,29 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 
 **⚠️ UFS 开机整机复位（QHEE `PM: Reset by PSHOLD`）双根因 + 修复**：① 早期只用 `defconfig radxa.config`、漏 `qcom_module.config` → UFS probe 缺 qcom 平台驱动；② **板上 SPI 固件过旧**（`251013`/00364-KODIAKLA），与 7.0.2 `kodiak` DTB 资源/握手不匹配。两者都必修——补四段 config + `flange flash --spi-firmware` 刷 `260120`/00549-KODIAKWP。⚠️ `flange flash` 默认只刷 UFS、**不碰 SPI**，大版本内核/DTB 迁移极易漏固件。决策档见 openspec `migrate-qcs6490-kernel-702`。
 
-**硬件编码 = 可用（真根因＝UEFI Hypervisor Override，2026-06-01 修正）**：此前"喂帧即整机复位"的根因是 **UEFI `Hypervisor Settings → Hypervisor Override` 未开 → 系统以 EL1 启动（无 Gunyah hypervisor）→ 编码器访问 CP/secure 内存 fault → 复位**，并非固件/TZ/驱动。开机 F2 进 UEFI 开启后系统以 **EL2** 启动（`/dev/kvm` 出现、`/dev/mtd0` 消失），**flange 现有 mainline 7.0.2 venus + 通用固件直接编码通过**（`v4l2h264enc` 720p→6.46MB 有效 H264、零复位）。flange 默认 EL2 为待解项。见下表编码行。
+**硬件编码 = 可用（真根因＝UEFI Hypervisor Override，2026-06-01 修正）**：此前"喂帧即整机复位"的根因是 **UEFI `Hypervisor Settings → Hypervisor Override` 未开 → 系统以 EL1 启动（无 Gunyah hypervisor）→ 编码器访问 CP/secure 内存 fault → 复位**，并非固件/TZ/驱动。开机 F2 进 UEFI 开启后系统以 **EL2** 启动（`/dev/kvm` 出现、`/dev/mtd0` 消失），**flange 现有 mainline 7.0.2 venus + 通用固件直接编码通过**（`v4l2h264enc` 720p→6.46MB 有效 H264、零复位）。2026-09-28 起 flange 默认进 EL2，无需进 UEFI 修改，见下文「默认 EL2」。见下表编码行。
+
+**EL2 启动与 GPI DMA（2026-09-27）**：`260120` 固件开启 `Hypervisor Override` 后，Radxa UEFI 在 ExitBootServices 前**自行**给 GRUB `devicetree` 加载的 flange DTB 打 KVM fixup：`/chosen` 加 `radxa,enable-kvm`、`radxa,dtb-fixup-applied`，并套用内核源里 `qcs6490-radxa-dragon-q6a-kvm.dtso` 的内容（GPU zap 禁用、scm `shm-bridge-vmid`、venus 追加 iommus 与 `video-firmware`、PCIe ranges、adsp/cdsp `qcom,broken-reset`），另有 PCIe iommu-map 等平台 fixup。因此 flange 无需像 [[thundercomm-rubikpi3]] 那样自带 el2 dtso。EL2 下 `i2c10`（RTC，原 DT 声明 `qcom,enable-gsi-dma`）申请 GPI 通道时，`gpi_config_interrupts()` 读 gpii 1 的 `GPII_n_CNTXT_MSI_BASE_LSB` 触发同步外部中止（`ESR 0x96000010`，另一次为异步 SError panic）。同页前序寄存器可访问，属于寄存器级访问控制。udev 加载 `i2c_qcom_geni` 即崩溃复位，GRUB 追加 `module_blacklist=i2c_qcom_geni` 可绕过。修复：`patches/kernel/0007` 删 `i2c10` 的 flag，由 `0006` 重 provision 回 FIFO。现在 Q6A 所有启用的 i2c 都走 FIFO、不使用 GPI。EL2 实板验证通过（2026-09-27，default-debug）：不加启动参数启动到 rootfs，`/proc/interrupts` 无 `gpi-dma`，RTC（`rtc-ds1307` 驱动 m41t11，`rtc0`）读写走时正常。EL1 下（`Hypervisor Override` 关闭，meizu-e3-bringup-debug，同日）i2c 同样正常：i2c10/i2c13 走 FIFO、无 `gpi-dma`，RTC 开机 hctosys 与宿主时间一致，`sec_ts` probe 读到 `AC,6F,70`。meizu-e3-bringup-debug 在 EL2 下同日回归通过：`card1-DSI-1` `connected`/`enabled` @ 1080×2160；`sec_ts` device id `AC,6F,70`，触摸 5 次按下、419 个输入事件、坐标连续（中断 193→304）；`sgm37604a` 背光写 1024/2048 读回一致；i2c13 无 `GPI transfer failed`，`gpi-dma` 中断为 0。change `fix-qcs6490-i2c10-fifo-el2`。
+
+**默认 EL2（2026-09-28）**：Radxa UEFI 的 `Hypervisor Override` 出厂为 `Auto`，依据 Linux 设备树
+`/chosen/radxa,enable-kvm` 决定是否进 EL2（UEFI 字符串“Auto: Auto enable or disable based on Linux DeviceTree”），
+DSP 预加载的 `Auto` 也是「以 EL2 启动时预加载」。Radxa 官方开启 KVM 的方式是 rsetup 叠加内核自带的
+`qcs6490-radxa-dragon-q6a-kvm.dtso`（`radxa,enable-kvm = <1>` 加 GPU zap、ADSP/CDSP `qcom,broken-reset`、SCM
+SHM bridge、venus `video-firmware`、PCIe 窗口修正）。flange 据此把 `device_tree.name` 改为内核 Makefile 构建的组合 DTB
+`qcs6490-radxa-dragon-q6a-kvm`（base + 该 overlay），`meizu-e3-bringup` 的面板 overlay 叠加在它之上，不复制
+overlay 内容。UEFI 保持 `Auto`（或 `Enabled`）即进 EL2，DSP 与硬件编码同时可用；**不支持 `Disabled`**：EL1 下
+这份 DTB 的 zap 禁用与 venus 非 TZ 启动会使 GPU 与视频不可用。实板（meizu-e3-bringup-debug，`Auto`）用户验证通过。
+change `enable-q6a-auto-el2`。
+
+**EL2 下 ADSP / CDSP（2026-09-27 实板，meizu-e3-bringup-debug）**：EL2 下两个 DSP 都可用。它们在进入 Linux 前已由启动固件拉起，内核 `qcom_q6v5_pas` 只做接管（attach）：`remoteproc0` adsp、`remoteproc1` cdsp 的 `state` 为 `attached`，`firmware` 为 `unknown`，rootfs 里的 `qcom/qcs6490/radxa/dragon-q6a/{adsp,cdsp}.mbn` 开机不会被加载。[[thundercomm-rubikpi3]] 不同：它在 EL2 下由内核自己经 PAS 加载 DSP，卡在 TZ 不支持 `PAS_GET_RSCTABLE`。实板证据：
+
+- glink 通道：ADSP 有 `IPCRTR`、`fastrpcglink-apps-dsp`、`adsp_apps`；CDSP 有 `IPCRTR`、`fastrpcglink-apps-dsp`、`cdsprmglink-apps-dsp`、`cvp-glink-apps-dsp`。
+- QRTR 名字服务：ADSP（node 5）发布 7 个 QMI 服务，CDSP（node 10）发布 5 个，都含 SSCTL（43）和 servreg notifier（66）；本机 `qcom_pd_mapper` 发布 servreg locator（64）。
+- FastRPC：`/dev/fastrpc-adsp`、`/dev/fastrpc-cdsp`、`/dev/fastrpc-cdsp-secure` 均存在。`FASTRPC_IOCTL_GET_DSP_INFO` 经 DSP utilities handle 与 DSP 实际往返：ADSP 为 Hexagon v66（`ARCH_VER 0xc666`）；CDSP 为 v68（`0x8a68`），HVX 128B ×2、VTCM 2 MiB ×1、HMX（depth 32 / spatial 64）、支持异步 RPC。两者 `FASTRPC_IOCTL_INIT_ATTACH`（root PD）均返回 0，dmesg 无新错误。开机的 `no reserved DMA memory for FASTRPC` 只是提示，驱动改用默认 DMA 池。rootfs 未装 libadsprpc、QNN 等用户态，目前还不能直接跑模型推理。
+- 未验证：`recovery=enabled`，但 DSP 崩溃后恢复要由内核经 PAS 重新加载，EL2 下能否成功未测；参照 RUBIK Pi 3 的结果，很可能失败。
+- 音频：ADSP 上的 GPR 服务 APM（2:1）、PRM（2:2）已注册，LPASS VA/RX/TX macro 拿到 PRM 时钟，两路 SoundWire 枚举到 WCD938x。但开机 9.7 s 有一次 `qcom-apm gprsvc:service:2:1: CMD timeout for [1001021] opcode`（`APM_CMD_GET_SPF_STATE`），随后声卡因缺少 topology `qcom/qcs6490/QCS6490-Radxa-Dragon-Q6A-tplg.bin`（-2）实例化失败，`/proc/asound/cards` 为空。音频链路要补上 topology 后再验证。
+
+**⚠️ 魅族 DSI 屏偶发黑屏（2026-09-27，与 EL 无关，待查）**：meizu-e3-bringup 曾出现一次只有背光、没有画面，fbdev 彩条和 `modetest -s 34@70` 都不显示。当时是 EL1，一度误判为 EL1 限制；之后实测 EL1 也能正常显示，现象更像面板初始化时复位没有生效。黑屏时 Linux 侧各层均无异常：DRM 原子状态中 plane-0 挂 fb、crtc-0 active、DSI-1 connected；encoder-0 vsync 持续计数、underrun 为 0；面板 `enable` 的 2 条 DCS 命令（`exit_sleep_mode`、`set_display_on`）对应 `dsi_isr` 2 次、无报错；SMMU fault 中断为 0。也就是说，驱动认为命令发出去了，但面板没有进入显示状态。相关时序见 `panel_meizu_e3.c` 的 `meizu_e3_prepare()`：复位脚 `tlmm 44`（active-low）拉低 20 ms 后释放、等 120 ms；而 overlay 里 `vcc_3v3_lcd` 为 `regulator-always-on`/`regulator-boot-on`（为让 `sec_ts` 先上电），`prepare` 中的 `regulator_enable` 不会真正给面板重新上电，面板能否回到干净状态只取决于这一次复位脉冲，热重启时尤其可疑。已知线索（未完成复现）：用户观察热重启比冷启动更容易黑屏；面板 1.8V vccio（`vreg_l1c_1p8`）同时供两个 USB PHY，热重启期间很可能不断电，而 3.3V 由 `gpio80`（pull-down）控制、热复位时大概率掉电，冷/热启动的上电顺序因此不同；同一次启动内（显示正常时）`fb0` blank/unblank 走一遍 disable→unprepare→prepare→enable 后画面能恢复，blank 时出现 `dsi_err_worker: status=5`（`TIMEOUT|FIFO`）。注意 `adb reboot` 在本板返回 `error: closed` 不会重启，热重启试验需在 shell 内执行 `systemctl reboot`。
 
 ## 内核基线：mainline 6.18.2（2026-05-30，前一步）
 
@@ -63,7 +88,7 @@ Radxa Dragon Q6A，Qualcomm QCS6490 (SC7280-class) 单板，128 GB Samsung KLUDG
 |---|---|
 | 启动链 → Kernel 6.18.2 + UFS（**无复位**）| ✓ |
 | **硬件视频解码 venus** | ✓ `/dev/video1` 解 H.264/HEVC/MPEG2/VP9（gst `v4l2h264dec` → NV12 1280×720 实跑 ~328fps）|
-| **硬件视频编码** | ✓（**需 EL2**）：venus `/dev/video1` 出 H.264/HEVC。**前提＝UEFI `Hypervisor Override` 开启、系统以 EL2 启动**（`/dev/kvm` 在、`/dev/mtd0` 失）；EL1（默认）下喂帧即整机复位。EL2 实测 `v4l2h264enc` 720p NV12→6.46MB 有效 H264（NAL 1/5/7/8、Baseline）、零复位。真根因是 EL1↔EL2（hypervisor 介导编码器 CP/secure 内存），**与驱动/固件/发行版无关**——此前"死路"证据矩阵（2 内核×2 驱动×2 发行版×2 工具）全是 EL1。详见记忆 `qcs6490-venus-encode-soc-reset` |
+| **硬件视频编码** | ✓（**需 EL2**）：venus `/dev/video1` 出 H.264/HEVC。**前提＝UEFI `Hypervisor Override` 开启、系统以 EL2 启动**（`/dev/kvm` 在、`/dev/mtd0` 失）；EL1 下喂帧即整机复位（2026-09-28 起 flange 用 KVM 组合 DTB，UEFI 保持出厂 `Auto` 即进 EL2）。EL2 实测 `v4l2h264enc` 720p NV12→6.46MB 有效 H264（NAL 1/5/7/8、Baseline）、零复位。真根因是 EL1↔EL2（hypervisor 介导编码器 CP/secure 内存），**与驱动/固件/发行版无关**——此前"死路"证据矩阵（2 内核×2 驱动×2 发行版×2 工具）全是 EL1。详见记忆 `qcs6490-venus-encode-soc-reset` |
 | GPU Adreno 643（`/dev/dri/card0`+`renderD128`，a660 fw）| ✓ |
 | 有线网 enp1s0（r8169 + REALTEK_PHY）| ✓ |
 | GENI i2c（qupv3fw.elf.zst 加载）| ✓ |
@@ -164,12 +189,14 @@ LCD FPC（J10，原理图 v1.21 sheet 31）引脚：
 
     > **⚠️ 7.0.2 更正（2026-06-01，已实机验证）**："删 `qcom,enable-gsi-dma` 即回退 FIFO"在 **mainline 7.0.2 不再成立**。7.0.2 的 `i2c-qcom-geni` probe 仅当 `proto==GENI_SE_INVALID_PROTO`（SE 未初始化）才调 `geni_load_se_firmware()`，而该 flag 的**唯一读取点**就在此函数内（i2c 驱动本身不读它，只读硬件 `GENI_IF_DISABLE_RO & FIFO_IF_DISABLE`）。bootloader（对齐 radxa rsdk）现把 SE5 预 provision 成 I2C-GSI（`proto==I2C`、`FIFO_IF_DISABLE` 置位），probe 跳过重载 → `0003` 删的 flag 永不被读、SE 仍 GSI（活动 DT 已确认 flag ABSENT 但仍 GSI）。对照 `i2c10`(RTC, SE3, 声明 gsi-dma) 的 GSI 正常 → 是 SE5 的 GSI provision 坏。**修复 = `patches/kernel/0006-i2c-geni-force-fifo-on-gsi-mismatch.patch`**：probe 里当 DT 无该 flag 但 SE 起来是 GSI 时强制重调 `geni_load_se_firmware(GENI_SE_I2C)` 回 FIFO（`0003` 保留，删 flag 是 0006 触发条件之一）。实机：device id `0,0,0`→`AC,6F,70`、`GPI transfer failed` 48→0、触摸 IRQ 0→430+evtest 识别、背光亮、`i2c10` 不回归、零 oops。**验证坑**：`i2c_qcom_geni` 不能 `rmmod` 热插（扯崩 i2c-13 背光→panel→DRM、内核 Oops），须替换 `/lib/modules/<ver>/.../i2c-qcom-geni.ko.zst`（`MODULE_SIG` 未开免签名）+ 重启；补丁在**模块**里不在 vmlinuz。详见记忆 `qcs6490-touch-i2c13-gsi-fifo`、change `fix-qcs6490-touch-i2c13-fifo`。
 
+    > **⚠️ 再更正（2026-09-27）**：上文"`i2c10` 的 GSI 正常"只在 EL1 下成立。`260120` 固件 + EL2 时，`i2c10` 申请 GPI 通道即同步外部中止、系统无法启动。现由 `0007` 删除 `i2c10` 的 flag，`i2c10` 同样经 `0006` 走 FIFO。见上文"EL2 启动与 GPI DMA"与 change `fix-qcs6490-i2c10-fifo-el2`。
+
 ## 易踩坑
 
 - **fstab 别挂 /boot/efi**：4K LBA UFS 上 512-sector FAT vfat 报 superblock 无效；rootfs.py 已只写 rootfs 行。
 - **AIC8800 固件路径与 a7a 不同**：a7a 用源码补丁改 `CONFIG_AIC_FW_PATH = /lib/firmware/aic8800_fw/USB`；Q6A QCLINUX BSP 把路径写死 `/lib/firmware/aic8800D80/`，board config 直接装到对位路径。
 - **WiFi 接口名 `wlx<MAC>`**：systemd predictable naming + USB 总线前缀；要 `wlan0` 加 kernel cmdline `net.ifnames=0`。
-- **ADSP qrtr/fastrpc-adsp -12 ENOMEM**：ADSP PIL 已 running，但 `/dev/fastrpc-adsp` 没出现（CDSP 那边正常）；非阻断，后续优化 reserved-mem 布局。
+- **ADSP qrtr/fastrpc-adsp -12 ENOMEM（2026-05 bring-up 时的记录，已过时）**：当时 ADSP PIL 已 running，但 `/dev/fastrpc-adsp` 没出现（CDSP 正常）。mainline 7.0.2 + EL2 实测（2026-09-27）`/dev/fastrpc-adsp` 存在且 FastRPC 调用成功，见上文"EL2 下 ADSP / CDSP"。
 - **mpss reserved 246 MiB @ 0x8b800000 与其他段冲突**：DT 已 disable，但 boot 早期 reserved-mem 报警告无法消除（不影响功能）。
 
 ## 未启用项

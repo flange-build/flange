@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// RUBIK Pi 3 M.2 PCIe 设备的 SMMU 流映射，构建期合并进厂商内核的 base DTB（default_ax210）。
+//
+// pcie1 后接 ASMedia ASM1182e 交换芯片（01:00.0 上游口，02:03.0 / 02:07.0 下游口），
+// M.2 槽位于 02:07.0 之下（bus 04）。sc7280.dtsi 的 iommu-map 只映射 RID 0x0 / 0x100，
+// 交换芯片之后的设备没有 SMMU 流：AX210 一开始 DMA 即触发 pcie TBU ATOS fault 与
+// AER Uncorrected (Fatal)，链路被复位，iwlwifi 无法建立 wlan 接口。
+// 只为 M.2 设备（04:00.0，RID 0x400）补一条映射；交换芯片端口不发起 DMA，保持不映射。
+// SID 取 qcs6490-rb3gen2.dts 给同一 RID 用的 0x1c88。Gunyah（EL1）下并非任意 SID 都可用：
+// 曾给 02:03.0 配 0x1c82，内核写 SMMU S2CR 即 synchronous external abort 而 panic
+// （rb3gen2 的 pcie1 映射也跳过 0x1c82 / 0x1c83）。
+
+/dts-v1/;
+/plugin/;
+
+&pcie1 {
+	iommu-map = <0x0 &apps_smmu 0x1c80 0x1>,
+		    <0x100 &apps_smmu 0x1c81 0x1>,
+		    <0x400 &apps_smmu 0x1c88 0x1>;
+};

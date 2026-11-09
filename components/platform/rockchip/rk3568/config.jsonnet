@@ -19,6 +19,12 @@ local common = import 'config/rockchip.libsonnet';
   // 约定一致），device-tree-overlay 组件用它定位 arch/arm64/boot/dts/<vendor>/
   // overlays/<stem>.dts。对 rockchip 平台恰好与 platform 同名。
   platform: 'rockchip', soc: 'rk3568', vendor: 'rockchip',
+  flash_identity: {
+    // 实机（RP-PRO-RK3568-H）maskrom RCI 返回 "38 36 35 33"，解码为 "8653"，
+    // 是 "3568" 的字节反转，而非 "rk3568" 字面量，因此不能只靠 soc 字段兜底
+    // 匹配（见 builder/flash/strategy.py _identity_corpus）。
+    chip_patterns: ['rk\\s*3568', '\\b3568\\b', '\\b8653\\b'],
+  },
   rkbin+: {
     // RK3568MINIALL.ini 选 1560MHz DDR4 训练参数，对应 RK3568 完整版
     // 硬件规格；与 rk3566 SoC 的 RK3566MINIALL.ini (1056MHz) 是关键
@@ -40,8 +46,17 @@ local common = import 'config/rockchip.libsonnet';
     // case_insensitive_fix.config 由基类生成，macOS 默认大小写不敏感 FS 上
     // 禁用 netfilter 中仅大小写不同的源码对，避免 ipt_ECN/ipt_ecn 等互踩。
     defconfig: ['rk3568_defconfig'],
+    // U-Boot 的 dts/dt.dtb 经 fdtgrep 按 OF_SPL_REMOVE_PROPS 裁属性；
+    // rk3568_defconfig 默认列表含 interrupt-parent，而 rk8xx_ofdata_to_platdata()
+    // 读不到它就放弃 probe——board 在 U-Boot DTS 里声明的 RK809/RK817 节点
+    // （提前打开 NPU 供电，见各板 patches/bootloader/）因此不生效。与 Radxa /
+    // Orange Pi 板级 defconfig 一致，保留 interrupt-parent。
+    config: {
+      CONFIG_OF_SPL_REMOVE_PROPS:
+        '"clock-names assigned-clocks assigned-clock-rates assigned-clock-parents"',
+    },
   },
-  kernel: {
+  kernel+: {
     source: { name: 'rockchip-kernel' },
     defconfig: [
       'rockchip_linux_defconfig', 'case_insensitive_fix.config',
@@ -49,7 +64,7 @@ local common = import 'config/rockchip.libsonnet';
     ],
     // GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
     // USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree: { directory: 'rockchip' },
   },
   boot+: {

@@ -1,0 +1,48 @@
+# usbmoded 场景定义 —— App 层通用场景
+#
+# 场景 = 能力集合 + 各能力参数 + role。能力集合与 role 是正交维度，
+# 场景可以只声明其一：只声明 role 表示切换角色而不动能力集合，
+# 只声明 capabilities 表示保持当前角色。
+#
+# 板级 overlay 在 20-<board>.yaml 中追加板子特有场景，或覆盖同名场景。
+
+scenes:
+  # 默认调试场景：仅 adb。
+  debug:
+    capabilities: [adb]
+    params:
+      adb:
+        # 与 USB 并行开启的网络 adb 端口。ADB 36 standalone adbd 需显式
+        # 指定；旧 vendor adbd 内建监听 5555 且忽略此值。
+        tcp_port: 5555
+        # 以 login shell 启动，读 /etc/profile 与 /root/.bashrc，
+        # 得到与 ssh 登录一致的提示符、补全与历史体验。
+        shell: /bin/bash
+
+  # U 盘模式：把一个镜像文件暴露给主机。
+  # 注意本场景不含 adb —— 经 adb 切换到它会触发自锁保护与自动回滚。
+  storage:
+    capabilities: [ums]
+    params:
+      ums:
+        file: /userdata/ums_shared.img
+        size: 256M
+        fstype: vfat
+        # 停用本场景后是否把镜像挂到设备本地，便于设备侧读写同一份数据。
+        auto_mount: false
+        mountpoint: /mnt/ums
+
+  # 调试 + 媒体传输。
+  media:
+    capabilities: [adb, mtp]
+
+  # 调试 + USB 网络。ncm 比 rndis 在 Linux/macOS 主机上支持更好。
+  net:
+    capabilities: [adb, ncm]
+
+  # 仅切换角色，不改变能力集合。
+  # host 场景会让出 UDC，gadget 整体停用 —— 经 adb 切换必然断开通道。
+  host:
+    role: host
+  device:
+    role: device

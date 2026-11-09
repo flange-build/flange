@@ -1,0 +1,11 @@
+#!/bin/bash
+# LightDM display-setup-script：检测到 Waveshare 10.1" DSI 屏时，DSI-1 默认顺时针旋转 90°。
+# 触摸旋转由设备树 overlay 在内核完成，二者须同向修改。
+# 本脚本失败会使 LightDM 放弃整个 seat，因此任何情况下都返回 0。
+set -euo pipefail
+
+panel=/sys/firmware/devicetree/base/soc@0/display-subsystem@5e00000/dsi@5e94000/dsi_panel@0/compatible
+if [[ -r "$panel" ]] && tr '\0' '\n' < "$panel" | grep -qx 'waveshare,10.1-dsi-touch-a'; then
+	xrandr --output DSI-1 --rotate right || true
+fi
+exit 0

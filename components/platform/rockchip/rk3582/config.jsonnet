@@ -23,6 +23,12 @@ local common = import 'config/rockchip.libsonnet';
 
 {
   platform: 'rockchip', soc: 'rk3582', vendor: 'rockchip',
+  flash_identity: {
+    // 与 RK3588 同 die 同 BootROM：实机 RCI 返回 "38 38 35 33"（解码 "8853"，
+    // 即 "3588" 反转），不会出现 "rk3582" 字面量，故不能靠 soc 字段兜底匹配
+    //（见 builder/flash/strategy.py _identity_corpus），照搬 rk3588 的模式。
+    chip_patterns: ['rk\\s*3588', '\\b3588\\b', '\\b8853\\b'],
+  },
   rkbin+: {
     // RK3582 / RK3588S / RK3588 同 die 同 BootROM，rkbin 字段全部一致。
     ini_prefix: 'RK3588', trust_ini_prefix: 'RK3588', mkimage_chip: 'rk3588',
@@ -39,7 +45,7 @@ local common = import 'config/rockchip.libsonnet';
     // ——RK3582 GPU 熔断，无需切 panthor 也无需关 mali_kbase。
     defconfig: ['rk3588_defconfig'],
   },
-  kernel: {
+  kernel+: {
     source: { name: 'rockchip-kernel' },
     defconfig: [
       'rockchip_linux_defconfig', 'case_insensitive_fix.config',
@@ -51,7 +57,7 @@ local common = import 'config/rockchip.libsonnet';
     // configure() 阶段写到 arch/arm64/configs/panel_mipi_dbi.config。
     // GUD（Generic USB Display）host 侧 DRM 驱动，全平台默认启用——把
     // USB display 设备（如本仓 Cardputer GUD 固件）当 DRM 设备驱动。
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree: { directory: 'rockchip' },
   },
   // 不部署 mali-csf firmware —— GPU 已熔断（RK3588/RK3588S 配置中的

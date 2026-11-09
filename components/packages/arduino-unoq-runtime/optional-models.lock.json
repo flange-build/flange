@@ -1,0 +1,18 @@
+[
+  {
+    "id": "llamacpp:gemma-3-1b-it-Q4_0",
+    "url": "https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/blob/f0b45be0aac41bd6a100a4b5734cad5f67255bfb/gemma-3-1b-it-Q4_0.gguf",
+    "sha256": "27ee88e03be02e9ba73def9a819d570d8ad73716e50769e87f374ae394b0276e",
+    "size": 721918496,
+    "download_policy": "按需由官方 hf-handler 消费 URL 内固定 revision；LFS SHA256 作为审计证据",
+    "source": "https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/raw/f0b45be0aac41bd6a100a4b5734cad5f67255bfb/gemma-3-1b-it-Q4_0.gguf"
+  },
+  {
+    "id": "llamacpp:Qwen3.5-0.8B-Q4_0",
+    "url": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/blob/f4db1b3e9c54a9f3dc2576c93b26446d95ec36d0/Qwen3.5-0.8B-Q4_0.gguf",
+    "sha256": "444406ddd926550c724ec18d5120a9d40ded44908a063b0e66e9a7e5464c652c",
+    "size": 507154688,
+    "download_policy": "按需由官方 hf-handler 消费 URL 内固定 revision；LFS SHA256 作为审计证据",
+    "source": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/raw/f4db1b3e9c54a9f3dc2576c93b26446d95ec36d0/Qwen3.5-0.8B-Q4_0.gguf"
+  }
+]

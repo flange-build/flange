@@ -1,0 +1,95 @@
+#!/bin/bash
+# UNO Q 的 ADB 与 ACM（USB 串口）组合设备；仅管理本脚本创建的 gadget。
+set -xe
+
+GADGET=/sys/kernel/config/usb_gadget/flange_unoq
+FUNCTIONFS=/dev/usb-ffs/adb
+
+fail() {
+    echo "$*" >&2
+    exit 1
+}
+
+# 在任何配置或清理前核验实板，避免在构建容器或其他 Qualcomm 板上操作。
+[[ -r /sys/firmware/devicetree/base/compatible ]] || fail '缺少 UNO Q 设备树身份'
+tr '\0' '\n' < /sys/firmware/devicetree/base/compatible | grep -Fxq arduino,imola \
+    || fail '板卡身份不是 Arduino UNO Q'
+[[ $(id -u arduino) == 1000 ]] || fail 'arduino 用户必须使用 UID 1000'
+
+select_udc() {
+    shopt -s nullglob
+    local controllers=(/sys/class/udc/*)
+    [[ ${#controllers[@]} == 1 ]] || fail '必须存在唯一 USB Device Controller（设备控制器）'
+    UDC=${controllers[0]##*/}
+    [[ -z ${ADBD_GADGET_UDC:-} || $ADBD_GADGET_UDC == "$UDC" ]] \
+        || fail '指定 UDC 与实际设备不一致'
+}
+
+reset() {
+    # 不触碰其他 gadget；未建立自己的目录时，清理为空操作。
+    [[ -d $GADGET ]] || return 0
+    if [[ -n $(cat "$GADGET/UDC") ]]; then
+        echo '' > "$GADGET/UDC"
+    fi
+    if mountpoint -q "$FUNCTIONFS"; then
+        umount "$FUNCTIONFS"
+    fi
+    # configfs（配置文件系统）的属性由内核管理，只删除创建过的链接与目录。
+    local link
+    for link in "$GADGET/configs/c.1/ffs.adb" "$GADGET/configs/c.1/acm.GS0"; do
+        if [[ -L $link ]]; then
+            rm "$link"
+        fi
+    done
+    local directory
+    for directory in "$GADGET/configs/c.1/strings/0x409" "$GADGET/configs/c.1" \
+                     "$GADGET/functions/ffs.adb" "$GADGET/functions/acm.GS0" \
+                     "$GADGET/strings/0x409" "$GADGET"; do
+        if [[ -d $directory ]]; then
+            rmdir "$directory"
+        fi
+    done
+    if [[ -d $FUNCTIONFS ]]; then
+        rmdir "$FUNCTIONFS"
+    fi
+}
+
+setup() {
+    select_udc
+    mountpoint -q /sys/kernel/config || fail 'configfs 尚未挂载'
+    reset
+    # 不接管可能属于其他 gadget 的 FunctionFS 挂载。
+    ! mountpoint -q "$FUNCTIONFS" || fail 'ADB FunctionFS 已被其他配置占用'
+    local serial
+    serial=$(cat /sys/devices/soc0/serial_number)
+    [[ -n $serial && $serial != *$'\n'* ]] || fail 'SoC 序列号为空或格式错误'
+    mkdir -p "$GADGET/configs/c.1/strings/0x409" "$GADGET/strings/0x409"
+    echo 0x2341 > "$GADGET/idVendor"
+    echo 0x0078 > "$GADGET/idProduct"
+    echo Arduino > "$GADGET/strings/0x409/manufacturer"
+    echo "UNO Q - $(cat /etc/hostname)" > "$GADGET/strings/0x409/product"
+    echo "$serial" > "$GADGET/strings/0x409/serialnumber"
+    echo 'ADB Configuration' > "$GADGET/configs/c.1/strings/0x409/configuration"
+    echo 120 > "$GADGET/configs/c.1/MaxPower"
+    mkdir -p "$GADGET/functions/ffs.adb" "$GADGET/functions/acm.GS0"
+    ln -s "$GADGET/functions/ffs.adb" "$GADGET/configs/c.1/ffs.adb"
+    ln -s "$GADGET/functions/acm.GS0" "$GADGET/configs/c.1/acm.GS0"
+    mkdir -p "$FUNCTIONFS"
+    mount -t functionfs -o uid=1000,gid=1000 adb "$FUNCTIONFS"
+}
+
+activate() {
+    select_udc
+    [[ -d $GADGET ]] && mountpoint -q "$FUNCTIONFS" || fail 'ADB gadget 尚未初始化'
+    # 服务 Type=notify 保证 adbd 已创建端点，再将 gadget 绑定控制器。
+    if [[ $(cat "$GADGET/UDC") != "$UDC" ]]; then
+        echo "$UDC" > "$GADGET/UDC"
+    fi
+}
+
+case ${1:-} in
+    setup) setup ;;
+    activate) activate ;;
+    reset) reset ;;
+    *) fail '用法：adbd-usb-gadget setup|activate|reset' ;;
+esac

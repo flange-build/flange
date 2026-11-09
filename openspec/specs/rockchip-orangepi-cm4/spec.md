@@ -3,47 +3,54 @@
 ## Purpose
 
 定义 Orange Pi CM4 的板级落地契约：WiFi/BT 固件部署与搜索路径、bootargs 与 extlinux 协作、不可用外设的禁用边界、上游 DTS 的只读约束，以及 AMP product 与从核 console 的 pinmux 独占。
-
 ## Requirements
 ### Requirement: orangepi-cm4 部署 AP6256 WiFi/BT 固件
 
-`orangepi-cm4` board 的 `BOARD["rootfs"]["+extra_firmware"]` MUST 声明从 `radxa-pkg/radxa-firmware` 仓的 `lib/firmware/` 子目录拉以下三个 AP6256（Broadcom BCM4345C5 chipset）固件文件到 rootfs 的 `/lib/firmware/`：
+`orangepi-cm4` board 的 `BOARD["rootfs"]["+extra_firmware"]` MUST 声明从 `radxa-pkg/radxa-firmware` 仓的 `lib/firmware/` 子目录拉以下四个 AP6256（Broadcom BCM43456 / BCM4345C5 chipset）固件文件到 rootfs 的 `/lib/firmware/`：
 
-- `brcm/fw_bcm43456c5_ag.bin`（WiFi 主固件，Rockchip bcmdhd `CONFIG_BCMDHD_AUTO_SELECT` 走 chip-id 拼名后实际加载文件）
-- `brcm/nvram_ap6256.txt`（NVRAM 校准参数）
+- `brcm/brcmfmac43456-sdio.bin`（WiFi 主固件，mainline brcmfmac 按 `brcmf_fw_alloc_request()` 对 chip `BCM4345/9` 拼出的名字加载）
+- `brcm/brcmfmac43456-sdio.txt`（NVRAM 校准参数，文件头 MUST 为 `#AP6256_NVRAM_*` 以确保与板载模组匹配）
+- `brcm/brcmfmac43456-sdio.clm_blob`（CLM / Country Locale Matrix）
 - `brcm/BCM4345C5.hcd`（Bluetooth patchram）
 
-extra_firmware 条目的 `source` 字段 MUST 缺省（即 `"repo"`），由 `SourceManager.ensure_extra_firmware` 独立 clone 到 `.build/sources/extra-firmware/radxa/`。
+CLM blob MUST 部署。brcmfmac 固件内置的 Generic.Min CLM 不接受 `set country`，缺该文件会导致 `country setting failed`、无可用信道、扫不到任何 AP。
 
-#### Scenario: rootfs 镜像含 AP6256 三件套
+板级 MUST NOT 部署 bcmdhd 专用的 `brcm/fw_bcm43456c5_ag.bin` 与 `brcm/nvram_ap6256.txt`——这两个文件只被 Rockchip OOT bcmdhd 使用，而该驱动已在本板禁用（见「orangepi-cm4 禁用 bcmdhd 避免 SDIO 抢绑」）。
+
+extra_firmware 条目的 `source` 字段 MUST 引用顶层 `sources` 中声明的 `radxa-firmware`，由 `SourceManager` 复用同一 checkout。
+
+#### Scenario: rootfs 镜像含 brcmfmac 三件套与 BT patchram
 
 - **WHEN** 构建 `orangepi-cm4-default-release` 的 rootfs 组件并 mount 产物镜像
-- **THEN** `/lib/firmware/brcm/fw_bcm43456c5_ag.bin` 存在且非空
-- **AND** `/lib/firmware/brcm/nvram_ap6256.txt` 存在且非空
+- **THEN** `/lib/firmware/brcm/brcmfmac43456-sdio.bin` 存在且非空
+- **AND** `/lib/firmware/brcm/brcmfmac43456-sdio.txt` 存在且非空
+- **AND** `/lib/firmware/brcm/brcmfmac43456-sdio.clm_blob` 存在且非空
 - **AND** `/lib/firmware/brcm/BCM4345C5.hcd` 存在且非空
+
+#### Scenario: rootfs 镜像不含 bcmdhd 专用固件
+
+- **WHEN** 构建 `orangepi-cm4-default-release` 的 rootfs 组件并 mount 产物镜像
+- **THEN** `/lib/firmware/brcm/fw_bcm43456c5_ag.bin` 不存在
+- **AND** `/lib/firmware/brcm/nvram_ap6256.txt` 不存在
 
 #### Scenario: 实机首启 WiFi 接口出现
 
 - **WHEN** 把构建出的镜像刷入实机
 - **THEN** `ip link` 输出包含 `wlan0`
-- **AND** `dmesg` 不包含 `Direct firmware load for /brcm/fw_bcm43456c5_ag.bin failed` 类错误
+- **AND** `dmesg` 包含 `brcmfmac: brcmf_c_preinit_dcmds: Firmware: BCM4345/9` 类固件加载成功记录
+- **AND** `dmesg` 不包含 `Direct firmware load for brcm/brcmfmac43456-sdio.bin failed` 类错误
+
+#### Scenario: 实机 WiFi 可扫描双频 AP
+
+- **WHEN** 在实机执行 `ip link set wlan0 up` 后扫描周边网络
+- **THEN** 扫描结果同时包含 2.4GHz 频段与 5GHz 频段的 AP
+- **AND** `wlan0` 的 MAC 地址不等于 NVRAM 缺省值 `00:90:4c:c5:12:38`（即已从模组 OTP 读到真实地址）
 
 #### Scenario: 实机首启 BT HCI 接口出现
 
 - **WHEN** 把构建出的镜像刷入实机
 - **THEN** `hciconfig -a` 输出包含 `hci0`
 - **AND** `dmesg` 不包含 `Failed to load Broadcom firmware file (-2)` 类错误
-
-### Requirement: orangepi-cm4 修复 bcmdhd 固件搜索路径
-
-`components/board/orangepi-cm4/patches/kernel/` MUST 包含一条 patch 启用 Rockchip bcmdhd 驱动的 `FW_AMPAK_PATH="brcm"`，修改 `drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/Makefile` 中 `CONFIG_BCMDHD_AUTO_SELECT && CONFIG_BCMDHD_REQUEST_FW` 分支下的对应行（取消默认注释并把 `ampak` 改为 `brcm`）。
-
-未应用该 patch 时，bcmdhd `dhd_conf_add_filepath()` 拼出的固件名为 `/fw_bcm43456c5_ag.bin`（缺 `brcm/` 前缀），即使固件文件正确部署也会因路径不匹配而 `request_firmware` 失败。
-
-#### Scenario: patch 落地后 bcmdhd 加载固件路径正确
-
-- **WHEN** kernel 构建期应用该 patch 并在实机加载 bcmdhd 模块
-- **THEN** `dmesg` 出现 bcmdhd 从 `/lib/firmware/brcm/fw_bcm43456c5_ag.bin` 加载固件的痕迹（或至少不出现 `firmware loading failed` 类错误）
 
 ### Requirement: orangepi-cm4 修复 bootargs 与 extlinux 协作
 
@@ -216,3 +223,26 @@ debug console。该约束 MUST 由配置回归测试覆盖，不能只依赖当�
 - **WHEN** 刷写并重启 Orange Pi CM4 RT-Thread AMP product
 - **THEN** UART7_M2 在 Linux 应用 `uart7m2_xfer` 之前已可输出
 - **AND** 能看到标准 RT-Thread banner、版本与 `cpu3 up` 日志
+
+### Requirement: orangepi-cm4 禁用 bcmdhd 避免 SDIO 抢绑
+
+`orangepi-cm4` board 的 `BOARD["kernel"]["+config"]` MUST 包含 `CONFIG_BCMDHD: 'n'`，且该设置 MUST 对所有 product / variant 生效（不得放在 `amp` 等条件分支内）。
+
+`CONFIG_BCMDHD` 是 `drivers/net/wireless/rockchip_wlan/Kconfig` 中 `default y` 的 `bool` 型 `menuconfig`，未被任何 defconfig 显式设置，只能内建、无法编为模块，因此用户态 `modprobe` blacklist 对其无效，MUST 在 Kconfig 层关闭。
+
+板级 MUST NOT 覆盖 `CONFIG_BRCMFMAC`——该 symbol 由 SoC 层 `rk3566` 引入的 `rockchip_linux_defconfig` 设为 `=m`，是本板期望生效的 WiFi 驱动。
+
+两个驱动同时存在时，brcmfmac 经 SDIO MODALIAS 自动 modprobe 后先绑定 SDIO func；若其固件缺失则进入「`request_firmware` 失败 → `brcmf_sdio_htclk: HT Avail timeout` → `mmc2: card removed` → 重新枚举」的死循环，持续占住 SDIO 总线，bcmdhd 永远无法取得设备，最终两个驱动都不工作。
+
+#### Scenario: 构建产物中不含 bcmdhd
+
+- **WHEN** 构建 `orangepi-cm4-default-release` 的 kernel 组件
+- **THEN** 生成的 `.config` 中 `CONFIG_BCMDHD` 为 `# CONFIG_BCMDHD is not set`
+- **AND** `CONFIG_BRCMFMAC` 保持为 `m`
+
+#### Scenario: 实机无 bcmdhd 且 SDIO 总线稳定
+
+- **WHEN** 把构建出的镜像刷入实机并启动
+- **THEN** `lsmod` 与 `/proc/modules` 中均无 `bcmdhd`
+- **AND** `dmesg` 不包含 `brcmf_sdio_htclk: HT Avail timeout` 与反复出现的 `mmc2: card 0001 removed`
+

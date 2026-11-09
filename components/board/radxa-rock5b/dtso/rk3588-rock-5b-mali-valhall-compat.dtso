@@ -15,8 +15,8 @@
  *
  * 修复：把 compatible 改回 arm,mali-valhall（kbase of_match 能命中），
  * 让 kbase 进入 probe 流程；驱动编译时 MALI_USE_CSF=1 + CONFIG_MALI_CSF_SUPPORT=y
- * 已具备 CSF 模式能力，配套 CSF firmware (mali_csffw.bin) 装到 rootfs 后
- * GPU 即可工作。
+ * 已具备 CSF 模式能力。rockmedia 通过 CONFIG_MALI_CSF_INCLUDE_FW=y
+ * 编译注入同源 CSF firmware (mali_csffw.bin)，用户态另配套厂商 libmali。
  *
  * 注意：覆盖会丢掉 "rockchip,rk3588-mali"；但 kbase 平台 glue 通过 platform_data
  * 注入 RK 适配，不依赖该 compatible，可接受。

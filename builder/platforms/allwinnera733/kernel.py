@@ -79,7 +79,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
         self.compile(src_dir, config)
         result = self.collect(src_dir, config)
         self._status("产物收集")
-        return result
+        return self._append_headers(src_dir, config, result)
 
     def _locate_aggregate_root(self, src_dir: Path, config: dict) -> Path:
         """定位聚合仓库根目录。
@@ -255,7 +255,7 @@ class AllwinnerA733KernelBuilder(KernelBuilder):
     def _write_usb_gadget_override(self, src_dir: Path):
         """生成 config fragment 强制 USB gadget + FunctionFS 为内建。
 
-        上游 radxa.config 将 CONFIG_USB_CONFIGFS 降为 =m，导致 usbdevice.service
+        上游 radxa.config 将 CONFIG_USB_CONFIGFS 降为 =m，导致 usbmoded.service
         启动前必须 modprobe configfs，启动时序脆弱。通过在 defconfig 合并尾部
         追加此 fragment 恢复为内建，使 adbd 开箱可用。
 

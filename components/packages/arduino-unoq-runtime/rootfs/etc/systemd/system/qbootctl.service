@@ -1,0 +1,12 @@
+[Unit]
+Description=验证 UNO Q 前级启动槽位并标记成功
+Requires=boot-complete.target
+After=local-fs.target boot-complete.target
+Conflicts=shutdown.target
+Before=shutdown.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/flange/unoq/mark-boot-success
+[Install]
+WantedBy=multi-user.target

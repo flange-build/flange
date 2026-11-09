@@ -66,8 +66,13 @@ local product = std.extVar('product');
     },
   },
   kernel+: {
-    // 主线 DTB 位于 radxa/kernel@linux-7.0.2 的 arch/arm64/boot/dts/qcom/。
-    device_tree+: { name: 'qcs6490-radxa-dragon-q6a' },
+    // 主线 DTB 位于 radxa/kernel@linux-7.0.2 的 arch/arm64/boot/dts/qcom/。使用内核 Makefile 构建的
+    // 组合 DTB：base qcs6490-radxa-dragon-q6a.dtb 叠加 Radxa 的 qcs6490-radxa-dragon-q6a-kvm.dtso
+    // （/chosen/radxa,enable-kvm = <1> 与 GPU zap、DSP、SCM、venus、PCIe 的 EL2 修正，与 Radxa rsetup
+    // 开启 KVM 的方式一致）。UEFI Hypervisor Override 为出厂 Auto 时据此自动以 EL2 启动并预加载
+    // ADSP/CDSP，EL2 下 DSP 与 venus 硬件编码同时可用。不支持把该选项设为 Disabled（EL1 下 GPU 与
+    // 视频不可用）。见 openspec/changes/archive/2026-09-28-enable-q6a-auto-el2。
+    device_tree+: { name: 'qcs6490-radxa-dragon-q6a-kvm' },
     oot_sources: {
       aic8800: { source: { name: 'aic8800' } },
     },

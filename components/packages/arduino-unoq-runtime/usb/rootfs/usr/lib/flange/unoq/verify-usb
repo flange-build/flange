@@ -1,0 +1,17 @@
+#!/usr/bin/python3
+"""构建期核验 patched adbd 对 Ubuntu Android 动态库的真实符号依赖。"""
+import json
+import subprocess
+from pathlib import Path
+
+binary = '/usr/lib/android-sdk/platform-tools/adbd'
+header = subprocess.check_output(['readelf', '-h', binary], text=True)
+if 'AArch64' not in header:
+    raise SystemExit('adbd 不是 ARM64 ELF')
+result = subprocess.run(['ldd', '-r', binary], text=True, capture_output=True)
+output = result.stdout + result.stderr
+if result.returncode or 'not found' in output or 'undefined symbol' in output:
+    raise SystemExit('Ubuntu Android ABI 不兼容：' + output)
+Path('/usr/share/flange/unoq/usb-abi-report.json').write_text(
+    json.dumps({'binary': binary, 'dependencies': output}, indent=2) + '\n')
+print('patched adbd Ubuntu Android ABI 通过；未运行 USB gadget 或连接设备')

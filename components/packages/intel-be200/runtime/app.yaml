@@ -1,0 +1,22 @@
+app:
+  name: flange-intel-be200
+  version: 1.0.0
+  description: Intel BE200 运行时调优：关闭 Wi-Fi 节能、中断绑定高性能核
+  type: vendor
+  arch: [aarch64, armhf]
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+install:
+  NetworkManager/flange-intel-be200.conf: /etc/NetworkManager/conf.d/flange-intel-be200.conf
+  udev/90-flange-iwlwifi-irq-affinity.rules: /usr/lib/udev/rules.d/90-flange-iwlwifi-irq-affinity.rules
+  bin/iwlwifi-irq-affinity: /usr/lib/flange/iwlwifi-irq-affinity
+
+depends:
+  - bash
+  - network-manager

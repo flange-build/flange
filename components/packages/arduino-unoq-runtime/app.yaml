@@ -1,0 +1,18 @@
+app:
+  name: flange-arduino-unoq-runtime
+  version: 0.1.0
+  description: UNO Q 固件、MCU 与 Arduino 完整运行环境
+  type: vendor
+  arch: [aarch64]
+maintainer:
+  name: flange
+  email: flange@localhost
+build:
+  system: custom
+  deps: [flange-arduino-unoq-usb]
+  apt_packages: [python3, binutils, skopeo]
+  commands:
+    - [python3, prepare.py]
+maintainer_scripts:
+  postinst: postinst
+  prerm: prerm

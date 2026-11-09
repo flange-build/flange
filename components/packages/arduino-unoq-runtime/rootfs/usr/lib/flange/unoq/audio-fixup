@@ -1,0 +1,16 @@
+#!/usr/bin/python3
+"""沿用官方音频恢复目的，通过 firmware 名识别 ADSP，不假定 remoteproc 序号。"""
+from pathlib import Path
+import subprocess
+
+cards = subprocess.run(['alsaucm', 'listcards'], capture_output=True, text=True)
+if cards.returncode == 0 and 'list is empty' not in cards.stdout:
+    raise SystemExit(0)
+processors = [p for p in Path('/sys/class/remoteproc').glob('remoteproc*')
+              if (p / 'firmware').read_text().strip() == 'qcom/qcm2290/adsp.mbn']
+if len(processors) != 1:
+    raise SystemExit('UNO Q 音频尚未就绪，且无法唯一识别 ADSP；未操作其它远端处理器')
+processor = processors[0]
+if (processor / 'state').read_text().strip() == 'running':
+    (processor / 'state').write_text('stop')
+(processor / 'state').write_text('start')

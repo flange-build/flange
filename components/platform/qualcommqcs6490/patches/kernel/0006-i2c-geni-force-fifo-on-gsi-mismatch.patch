@@ -1,4 +1,4 @@
-i2c: qcom-geni: 失配时把 i2c13(SE5) 重 provision 回 FIFO（魅族 E3 屏触摸/背光）
+i2c: qcom-geni: 失配时把 i2c SE 重 provision 回 FIFO（i2c13 触摸/背光、i2c10 RTC）
 
 radxa-dragon-q6a 魅族 E3 屏的触摸（sec_ts @0x48）与背光（sgm37604a @0x36）挂在
 i2c13（QUP1 SE5 @a94000）上。该 SE 被 bootloader（对齐 radxa rsdk）预 provision
@@ -23,9 +23,14 @@ HW 是 GSI"失配）时，强制重调 geni_load_se_firmware(GENI_SE_I2C)。该�
 qcom,enable-gsi-dma 缺席时按默认 GENI_SE_FIFO 重 provision、清除 FIFO_IF_DISABLE，
 后续 fifo_disable 读回为假 → gpi_mode=false → 走 FIFO/SE-DMA，触摸/背光恢复。
 
-触发面仅命中失配的 SE（即 i2c13）：i2c10 因声明 qcom,enable-gsi-dma 被排除、保持
-GSI；default 产物 i2c13 无从机、不受影响。patches/kernel/0003 仍保留（删 flag 是
-本分支触发条件之一）。
+触发面命中所有失配的 SE：i2c13（0003 删 flag）与 i2c10（0007 删 flag）。仍声明
+qcom,enable-gsi-dma 的 SE 被排除；default 产物 i2c13 无从机、不受影响。
+patches/kernel/0003 仍保留（删 flag 是本分支触发条件之一）。
+
+更正（2026-09-27）：上文"i2c10 的 GSI 正常"只在 EL1 下成立。SPI 固件 260120、
+EL2（UEFI Hypervisor Override 开启）时，i2c10 申请 GPI 通道即在
+gpi_config_interrupts() 读 GPII MSI 寄存器处同步外部中止，系统无法启动，故由
+0007 把 i2c10 也改走本分支。见 OpenSpec change fix-qcs6490-i2c10-fifo-el2。
 
 参考根因记忆：qcs6490-touch-i2c13-gsi-fifo。
 
@@ -42,11 +47,11 @@ diff --git a/drivers/i2c/busses/i2c-qcom-geni.c b/drivers/i2c/busses/i2c-qcom-ge
 +		   (readl_relaxed(gi2c->se.base + GENI_IF_DISABLE_RO) & FIFO_IF_DISABLE)) {
 +		/*
 +		 * The bootloader pre-provisioned this SE in GSI/GPI-DMA mode,
-+		 * but the device tree does not request GSI DMA. On QUP1 SE5
-+		 * (i2c13, @a94000) GPI is broken for the meizu-e3 touch and
-+		 * backlight slaves, so re-load the SE firmware to fall back to
-+		 * FIFO mode (geni_load_se_firmware() defaults to FIFO when
-+		 * "qcom,enable-gsi-dma" is absent).
++		 * but the device tree does not request GSI DMA. GPI is not
++		 * usable on radxa-dragon-q6a (i2c13 transfers fail, and at EL2
++		 * the GPII MSI registers abort), so re-load the SE firmware to
++		 * fall back to FIFO mode (geni_load_se_firmware() defaults to
++		 * FIFO when "qcom,enable-gsi-dma" is absent).
 +		 */
 +		ret = geni_load_se_firmware(&gi2c->se, GENI_SE_I2C);
 +		if (ret) {

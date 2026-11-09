@@ -12,7 +12,26 @@ local common = import 'config/khadas-vim3-common.libsonnet';
 
   sources+: common.sources,
   kernel+: {
-    config+: common.kernelConfig,
+    config+: common.kernelConfig + {
+      // MCU（微控制器）风扇在启动早期接管，避免依赖 rootfs 模块加载。
+      CONFIG_I2C: 'y',
+      CONFIG_I2C_MESON: 'y',
+      CONFIG_MFD_KHADAS_MCU: 'y',
+      CONFIG_KHADAS_MCU_FAN_THERMAL: 'y',
+      CONFIG_THERMAL: 'y',
+      CONFIG_THERMAL_OF: 'y',
+      CONFIG_AMLOGIC_THERMAL: 'y',
+      CONFIG_THERMAL_GOV_STEP_WISE: 'y',
+      CONFIG_THERMAL_DEFAULT_GOV_STEP_WISE: 'y',
+      // 白灯接 GPIOAO_4，红灯接 TCA6408 GPIO5；二者均走标准 LED 接口。
+      CONFIG_GPIO_PCA953X: 'y',
+      CONFIG_NEW_LEDS: 'y',
+      CONFIG_LEDS_CLASS: 'y',
+      CONFIG_LEDS_GPIO: 'y',
+      CONFIG_LEDS_TRIGGERS: 'y',
+      CONFIG_LEDS_TRIGGER_HEARTBEAT: 'y',
+      CONFIG_LEDS_TRIGGER_DEFAULT_ON: 'y',
+    },
     // mainline v6.12，compatible 包含 khadas,vim3 / amlogic,a311d / g12b。
     device_tree+: { name: 'meson-g12b-a311d-khadas-vim3' },
   },
@@ -23,9 +42,9 @@ local common = import 'config/khadas-vim3-common.libsonnet';
   },
   boot+: {
     overlays+: {
-      // 默认打开 40-pin header 上的 SPICC1 用户态接口。
-      board: ['vim3-spidev-spicc1.dtbo'],
-      enabled: ['vim3-spidev-spicc1.dtbo'],
+      // 默认打开 SPICC1、三档温控风扇与双色运行灯。
+      board: ['vim3-spidev-spicc1.dtbo', 'vim3-fan-led.dtbo'],
+      enabled: ['vim3-spidev-spicc1.dtbo', 'vim3-fan-led.dtbo'],
     },
   },
 

@@ -37,6 +37,11 @@ from builder.flash.model import (
     PreFlashConfig,
     _atomic_write_text,
 )
+from builder.flash.qualcomm_ufs import (
+    FIRMWARE_DIR as UFS_FIRMWARE_DIR,
+    stage_bundle as stage_ufs_bundle,
+    validate_bundle as validate_ufs_bundle,
+)
 from builder.flash.spi import (
     SPI_IDBLOADER_OFFSET,
     SPI_IMG_ALIGN,
@@ -61,6 +66,9 @@ from builder.term import Role, supports_color
 
 class FlashStrategy(FlashPlan, ABC):
     """平台刷写策略基类。"""
+
+    supports_no_reboot = True
+    uses_named_partitions = False
 
     @abstractmethod
     def find_tool(self, project_dir: Path) -> Path:
@@ -207,7 +215,11 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
             decoded.append("".join(
                 chr(value) if 32 <= value < 127 else " " for value in raw
             ))
-        return output + "\n" + "\n".join(decoded)
+        corpus = output + "\n" + "\n".join(decoded)
+        # 芯片名之后的填充字节可能落在正则单词字符内（RK3566 实机为 0x5F，解码
+        # 即 "8653_"），\b8653\b 一类模式便失去右侧单词边界。再附一份只留字母
+        # 数字的文本，让各 SoC 的边界模式不受填充字节影响。
+        return corpus + "\n" + re.sub(r"[^0-9A-Za-z]+", " ", corpus)
 
     @staticmethod
     def _read_identity(tool: Path, command: str) -> str:
@@ -426,6 +438,8 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
     def _switch_storage(self, tool: Path, name: str):
         """把 loader 当前存储切到 name（如 UFS 的 "SATA"）。"""
         # SSD 无参时进入交互列表；喂 Q 退出以仅取列表。
+        # 工具正常响应 Q 也可能返回非零值，以目标列表项判断读取成功；
+        # 真正切换存储的命令仍必须返回成功。
         listing = subprocess.run(
             [str(tool), "SSD"], input="Q\n",
             capture_output=True, text=True)
@@ -433,7 +447,7 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
         if no is None:
             raise FlashError(
                 f"upgrade_tool SSD 列表中未找到存储 {name!r}；"
-                f"输出:\n{listing.stdout}")
+                f"输出:\n{listing.stdout}{listing.stderr}")
         _info(f"切换存储到 {name}（SSD {no}）...", role=Role.ACTIVE)
         subprocess.run([str(tool), "SSD", no], check=True)
         _ok(f"存储 → {name}")
@@ -591,28 +605,104 @@ class RockchipFlashStrategy(RockchipFlashPlan, FlashStrategy):
         _info("重启设备...", role=Role.ACTIVE)
         subprocess.run([str(tool), "RD"], check=True)
 
+    def erase_spi(
+        self, tool: Path, target_dir: Path, config: FlashConfig,
+        device: Optional[DeviceInfo] = None,
+    ) -> None:
+        """确认 SPINOR 已激活后全片擦除；不使用仅支持 eMMC 的 EL。"""
+        loader_name = config.pre_flash.download_boot
+        miniloader = target_dir / loader_name
+        if not loader_name or not miniloader.is_file():
+            raise FlashError("SPI 擦除缺少 miniloader；请先执行 flange build bootloader")
+        if device is None:
+            device = self.detect_device(tool)
+        if device is None or device.mode not in {"maskrom", "loader"}:
+            raise FlashError("SPI 擦除需要唯一的 Rockchip MaskROM 或 Loader 设备")
+        if device.mode == "maskrom":
+            self._download_boot(tool, miniloader)
+
+        # 系统盘存储身份可能是 eMMC/UFS，本操作只复用 SoC 身份约束。
+        patterns = list(config.identity.chip_patterns)
+        if not patterns and config.soc:
+            patterns = [re.escape(config.soc)]
+        if not patterns:
+            raise FlashError("SPI 擦除缺少 SoC 身份信息；请重新生成 flash-config.json")
+        self._require_identity_match(
+            "SoC", self._identity_corpus(self._read_identity(tool, "RCI")), patterns)
+        self._switch_storage(tool, "SPINOR")
+        listing = subprocess.run(
+            [str(tool), "SSD"], input="Q\n", capture_output=True, text=True)
+        # 与选择前读取一致，Q 的退出码不能代替当前介质的激活标记。
+        if not re.search(
+            r"^\s*No=\d+\s+SPINOR\s*\(\*\)\s*$", listing.stdout, re.I | re.M,
+        ):
+            raise FlashError("无法确认当前存储为 SPINOR，已停止擦除")
+        _step("擦除 SPI NOR 全部内容（含启动固件）")
+        subprocess.run([str(tool), "EF", str(miniloader)], check=True)
+
 class AllwinnerA733FlashStrategy(AllwinnerA733FlashPlan, FlashStrategy):
-    """Allwinner A733 刷写策略 — SD 卡 dd 模式。"""
+    """Allwinner A733 刷写策略 — openixcli 经 USB 整盘写 raw.img。
+
+    设备处于 FEL（BootROM，``1f3a:efe8``）时，``flash-raw --bootstrap``
+    先用最小 LiveSuit 固件（boot0 + u-boot）把设备引导进 FES，再按 raw.img
+    写入 GPT + boot0 + toc1 + 各分区；写完由 openixcli 自行复位。
+    SD 卡仍可走 ``flange flash --raw /dev/sdX``。
+    """
+
+    # openixcli flash-raw 结束时按 --post-action 自行复位
+    supports_no_reboot = False
+    BOOTSTRAP = (PROJECT_ROOT / "components" / "platform" / "allwinnera733"
+                 / "firmware" / "a733_bootstrap.img")
 
     def find_tool(self, project_dir: Path) -> Path:
-        # SD 卡 dd 模式使用系统 dd，返回占位路径
-        return Path("/usr/bin/dd")
+        platform = "macos" if sys.platform == "darwin" else "linux"
+        tool = project_dir / "tools" / platform / "openixcli" / "openixcli"
+        if not tool.exists():
+            raise FlashError(f"未找到 openixcli: {tool}")
+        return tool
 
     def detect_device(self, tool: Path) -> Optional[DeviceInfo]:
-        # SD 卡模式不依赖 USB 设备检测
-        return None
+        try:
+            result = subprocess.run([str(tool), "scan"], capture_output=True,
+                                    text=True, timeout=10)
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        match = re.search(r"Found\s+(\d+)\s+device", result.stdout)
+        count = int(match.group(1)) if match else 0
+        if count > 1:
+            raise FlashError(
+                f"检测到 {count} 台 Allwinner 设备；为防止误刷，请只连接一台")
+        if count == 0:
+            return None
+        return DeviceInfo(platform="Allwinner", mode="FEL/FES",
+                          description=result.stdout.strip())
 
     def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
                   device: Optional["DeviceInfo"] = None):
-        # SD 卡模式无需 pre_flash
+        # FEL → FES 引导由 flash-raw --bootstrap 一并完成
         pass
+
+    def flash_whole_disk(self, tool: Path, target_dir: Path,
+                         config: "FlashConfig") -> bool:
+        raw = target_dir / "image" / "raw.img"
+        if not raw.exists():
+            raise FlashError(f"未找到整盘镜像 {raw}；请先执行 flange build")
+        if not self.BOOTSTRAP.exists():
+            raise FlashError(f"未找到 bootstrap 固件: {self.BOOTSTRAP}")
+        _info("openixcli flash-raw 写整盘 raw.img...", role=Role.ACTIVE)
+        subprocess.run(
+            [str(tool), "flash-raw", "--bootstrap", str(self.BOOTSTRAP),
+             "--post-action", "reboot", str(raw)],
+            check=True)
+        _ok("raw.img")
+        return True
 
     def write_partition(self, tool: Path, offset: int, image: Path):
-        # SD 卡模式通过 raw.img dd，不逐分区写入
-        pass
+        raise FlashError(
+            "A733 暂不支持单分区刷写；请用 flange flash 整盘刷写")
 
     def reboot(self, tool: Path):
-        _info("SD 卡模式：请手动插入 SD 卡并重启设备")
+        _info("openixcli 已在刷写结束后复位设备")
 
 class AmlogicFlashStrategy(AmlogicFlashPlan, FlashStrategy):
     """Amlogic 刷写策略 — 两段式 USB Burning。
@@ -1053,6 +1143,12 @@ class QualcommFlashStrategy(QualcommFlashPlan, FlashStrategy):
                 pass
         return None
 
+    def preflight(self, target_dir: Path, config: FlashConfig,
+                  partitions: list[FlashPartition]) -> None:
+        """UFS 启动固件板：等待设备前校验固件包、dtb.bin 与系统盘齐全且可安全写入。"""
+        if config.ufs_firmware.rawprogram:
+            validate_ufs_bundle(target_dir, config)
+
     def pre_flash(self, tool: Path, target_dir: Path, config: FlashConfig,
                   device: Optional["DeviceInfo"] = None):
         # 系统盘刷写无需 pre_flash；SPI EDK2 固件单刷见 flash_spi_firmware（bring-up）。
@@ -1074,6 +1170,9 @@ class QualcommFlashStrategy(QualcommFlashPlan, FlashStrategy):
         raw = target_dir / "image" / "raw.img"
         if not raw.exists():
             raise FlashError(f"未找到整盘镜像 {raw}；请先执行 flange build")
+        if config.ufs_firmware.rawprogram:
+            self.flash_ufs_bundle(tool, target_dir, config)
+            return True
         loader = self._locate_loader(target_dir)
         if (config.board in {"radxa-dragon-q6a", "radxa-dragon-q8b"}
                 and loader.name != "prog_firehose_ufs.elf"):
@@ -1107,6 +1206,22 @@ class QualcommFlashStrategy(QualcommFlashPlan, FlashStrategy):
                "--memory", memory, "write-sector", "0", str(raw_img)]
         if subprocess.run(cmd).returncode != 0:
             raise FlashError("edl-ng write-sector 失败")
+
+    def flash_ufs_bundle(self, tool: Path, target_dir: Path, config: FlashConfig):
+        """一次 edl-ng 会话写入 UFS 启动固件 LUN、dtb 分区与 LUN0 系统盘。
+
+        固件与系统盘同处 UFS，分两次调用 edl-ng 会重复 Sahara 握手；合并为单个
+        rawprogram 会话，与官方 flat build 的 QDL 刷写流程一致。
+        """
+        loader = target_dir / UFS_FIRMWARE_DIR / config.ufs_firmware.loader
+        with tempfile.TemporaryDirectory(prefix="flange-ufs-") as stage:
+            xmls = stage_ufs_bundle(target_dir, config, Path(stage))
+            _step("edl-ng rawprogram → UFS 启动固件 LUN + LUN0 系统盘"
+                  f"（loader: {loader.name}）")
+            cmd = [str(tool), "--loader", str(loader), "--memory", "UFS",
+                   "rawprogram", *xmls]
+            if subprocess.run(cmd, cwd=stage).returncode != 0:
+                raise FlashError("edl-ng UFS rawprogram 刷写失败")
 
     def flash_spi_firmware(self, tool: Path, target_dir: Path,
                            device: Optional["DeviceInfo"] = None,
@@ -1168,6 +1283,12 @@ def get_flash_strategy(platform: str, layer_stack=None) -> FlashStrategy:
             if not isinstance(result, FlashStrategy):
                 raise FlashError("create_strategy 必须返回 FlashStrategy")
             return result
+    if platform == "qualcommqrb2210":
+        from builder.flash.unoq import UnoQFlashStrategy
+        return UnoQFlashStrategy()
+    if platform == "nvidiategra186":
+        from builder.flash.tegra import TegraFlashStrategy
+        return TegraFlashStrategy()
     cls = _FLASH_STRATEGIES.get(platform)
     if not cls:
         raise FlashError(f"不支持的平台: {platform}（支持: {', '.join(_FLASH_STRATEGIES)}）")

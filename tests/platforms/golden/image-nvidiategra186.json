@@ -1,0 +1,8 @@
+[
+  "run: cp --sparse=always <TARGET>/rootfs/rootfs.img <TMP>/system.img.raw",
+  "run: e2fsck -fn <TMP>/system.img.raw",
+  "run: truncate -s 1073741824 <TMP>/system.img.raw",
+  "run: resize2fs <TMP>/system.img.raw",
+  "run: ./mksparse --fillpattern=0 <TMP>/system.img.raw system.img",
+  "run: rm -f <TMP>/system.img.raw"
+]

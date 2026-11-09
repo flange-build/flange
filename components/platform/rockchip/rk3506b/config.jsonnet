@@ -43,7 +43,7 @@
       '0006-rockchip-fit-uncomment-bl32-node.patch',
     ],
   },
-  kernel: {
+  kernel+: {
     source: { name: 'rockchip-kernel' },
     // kernel 与 U-Boot 共用 ATK SDK 的 Arm gcc-10.3.1，避免同一 BSP 的
     // 低层代码分别落到系统 gcc-13 与 vendor gcc-10。
@@ -54,7 +54,7 @@
     defconfig: ['rk3506_defconfig', 'case_insensitive_fix.config'],
     // GUD（Generic USB Display，通用 USB 显示）主机侧 DRM 驱动。
     // USB1 作为 Host 时可将兼容的 USB 显示设备注册为 DRM 显示器。
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree: { directory: '' },
   },
   rootfs+: {

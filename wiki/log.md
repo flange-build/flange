@@ -6,6 +6,134 @@
 
 ---
 
+## [2026-11-08] sync | orangepi-cm4 新增 waveshare-display-5a product（CM4-DISP-BASE-5A VER2 底板）
+
+[[orangepi-cm4]] 新增 `waveshare-display-5a` product，两个板私有 overlay 均默认加载：底板外设（PCF85063A RTC 定为 rtc0；EMC2301 风扇由用户态服务按 soc-thermal 分档，因 RK3566 两路 tsadc 被 soc/gpu 热区独占且 power_allocator 不驱动风扇；OTG 固定 host 以启用板载 FE1.1s 4 口 hub）与 5" DSI 屏。屏走 vendor dtsi 现成的 `raspits_panel@45` / `raspits_touch_ft5426@38`（i2c1 → dsi1）：VER2 底板 MCU 仿真 RPi 7" 屏的 ATTiny 协议并代管 ICN6211，与 Waveshare 官方用法 `vc4-kms-dsi-7inch` 一致，Waveshare 公开的原理图（ICN6211 接 DSI0）不适用于 VER2。
+
+屏需要两处 BSP 修正，均为板级 kernel patch：`0005` 让 DSI 对 I2C 面板改在 host attach 时 `component_add`，否则 DSI 与面板互等形成 deferred probe 活锁、内核挂不上 rootfs；`0006` 把面板 mode 改为 29 MHz / HFP 100，配合 panel overlay 的 `rockchip,lane-rate = <696>` 使像素速率与 1-lane 链路严格相等，否则非 burst 模式下链路偏快，差额积压在 DW DSI 像素 FIFO，画面右移约 80 px 并卷绕。根因与排查方法写入板页。
+
+实板（debug）验收通过：外设正常，屏幕画面对正、触摸方向一致，DSI mode 29 MHz / lane 696 Mbps 生效，开机 11.7 s、无失败单元；热插 HDMI 后 vp0 / vp1 两路同时出图。
+
+## [2026-10-23] sync | 修正 lunch 短格式示例
+
+[[radxa-rock5c-lite]] 的 `lunch radxa-rock5c-lite-lcd-key-hat` 补全为 `...-lcd-key-hat-debug`：`lunch` 即 `flange target select`，只接受完整 `<board>-<product>-<variant>`，省略 product/variant 会报“无法解析目标”。同批修正 CLAUDE.md 与 docs/amp.md 中的同类写法及 App 命令（`flange app build/create/list`）。
+
+## [2026-10-21] sync | 新增野火鲁班猫 3 / 鲁班猫 5（RK3576 / RK3588，v1/v2 共 4 个 board）
+
+[[embedfire-lubancat]] 新页。鲁班猫 3/5 的板级 dts 及 dtsi 闭包同步自野火官方 `LubanCat/kernel` lbc-develop-6.1，提交到 flange-kernel `linux-6.1-stan-rkr5.1`（`d2eccb6c9eff`），同时替换了树内未参与编译的旧版本。flange 侧：`config/embedfire-lubancat.libsonnet` 提供共享配置，`embedfire-lubancat-3`、`-3-v2`、`-5`、`-5-v2` 四个 board 各自只声明 SoC 和 dtb，其余继承 SoC 层。L3、L5 default-release 的 kernel 已构建成功，尚未实板验收。[[rockchip 平台]] 的 related 已补充，README 和板卡索引已登记。
+
+## [2026-10-01] sync | RUBIK Pi 3 新增 mainline product（SoC 层 7.0.2 + EL2）
+
+[[thundercomm-rubikpi3]] 新增 `mainline` product：继承 SoC 层 `radxa/kernel@linux-7.0.2` 与平台层补丁（与 [[radxa-dragon-q6a]] 同一套内核与驱动），恢复板级 LT9611 Port B / USB QMP PHY backport 补丁与 `rubikpi3-el2.dtso`，刷 KVM 版 `xbl_config` 以 EL2 运行，Wi-Fi 走 brcmfmac。求值结果与 2026-09-27 实板验证过的 EL2 default（`ba1c69b27`）逐字段相同。default/desktop 不变，经 `exclude_patches` 排除板级补丁。已知限制：本板 TZ 不支持 `PAS_GET_RSCTABLE`，mainline 下 ADSP/CDSP 离线（Q6A 靠 Radxa UEFI 预加载 DSP）。实板（mainline-debug）：EL2 与 `/dev/kvm`、LT9611 Port B、H.264 720p / HEVC 1080p 硬编硬解回读、brcmfmac 扫描、蓝牙、Renesas USB3 均正常，ADSP/CDSP 如预期 `-5` 离线；HDMI 显示控制台（用户目视）、以太网与 Wi-Fi 连网正常（用户实测）。
+
+## [2026-09-29] sync | rockchip U-Boot 0002 上下文漂移记入易踩坑；armsom-cm5-io 删除占用 FUSB302 中断脚的 work_led
+
+radxa/u-boot `next-dev-v2026.01` 上游 `31a7266f4d`（2026-09-18）在 `config_distro_bootcmd.h` 的 `BOOTENV_BOOT_TARGETS` 后插入 `BOOTENV_SCAN_LOGO`，平台 patch 0002 旧 hunk 以该处为 context，全 rockchip 板 bootloader 阶段打补丁失败（已由 commit 5eb5cfd 按新上下文重新生成修复）。把"跟踪分支 HEAD 导致平台 patch 上下文漂移"补入 [[rockchip 平台]] 易踩坑。
+
+armsom-cm5-io：按 ArmSoM CM5 / CM5-IO V1.1 原理图，BSP dts 的 heartbeat `work_led` 所在 GPIO0_B4 实为 FUSB302 中断 `USBCC_INT_L`，新增板级 kernel patch 0002 删除该节点（本板无 SoC 可控用户 LED，GPIO2_D0/D1 只引到 40pin）。同时把 USB-A 链路（RTS5411S hub ← USB3_OTG1，VBUS 使能 GPIO4_B0）的核对结论与"实板无反应、待诊断"状态写入 [[armsom-cm5-io]]。
+
+## [2026-09-28] sync | RUBIK Pi 3 厂商内核下的外设验收
+
+[[thundercomm-rubikpi3]]（default-debug，厂商内核 6.6.90，EL1）补充验收：Wi-Fi 连 5 GHz 并通外网，HDMI 经 LT9611 由 `kmscube` 出图（用户目视），GPU 离屏渲染读回正确，以太网、USB3 外设、冷/热启动正常。未通过：音频播放（LPAIF 需要高通 AGM/PAL 用户态建立 ADSP 音频图，原生 ALSA 返回 `-EINVAL`）、Type-C UCSI 端口仍未注册。厂商配置未开 `CONFIG_DRM_FBDEV_EMULATION`，headless 镜像开机 HDMI 无控制台，暂不打开。
+
+## [2026-09-28] sync | Q6A 默认进 EL2（UEFI Auto + KVM 组合 DTB）
+
+[[radxa-dragon-q6a]] 的 `device_tree.name` 改为内核构建的组合 DTB `qcs6490-radxa-dragon-q6a-kvm`（base 叠加 Radxa `qcs6490-radxa-dragon-q6a-kvm.dtso`，含 `/chosen/radxa,enable-kvm = <1>` 与 EL2 设备树修正），与 Radxa rsetup 开启 KVM 的方式一致。UEFI `Hypervisor Override` 出厂 `Auto` 即据此进 EL2 并预加载 DSP，此前「flange 默认 EL2 为待解项」已解决；不再支持 `Disabled`（EL1 下 GPU 与视频不可用）。用户实板验证通过。
+
+更正 2026-06-01 条目中「RUBIK Pi 3（同 SoC）能编码也只因 QLI 默认 EL2（`xbl_config_gunyah`）」：Thundercomm QLI 参考镜像刷的 `xbl_config_gunyah.elf` 对应 EL1（Gunyah），它能编码是因为下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），见 [[thundercomm-rubikpi3]]。
+
+## [2026-09-27] sync | RK356x 全系打开 NPU：U-Boot 阶段提前打开 NPU 供电
+
+neons-core3566-nanob / orangepi-cm4 / rp-pro-rk3568-h 早先因 `rknpu_mmu` probe 时 `failed to get ack on domain 'npu'` → `panic_on_set_idle` 被判为"NPU 物理不可用"而禁用。重新定位：IOMMU probe 早于 PMIC 驱动，NPU 电源轨不在 PMIC 上电时序内，flange 通用 U-Boot（`rk3568-evb`、extlinux）从不打开它；rp-pro 旧补丁里的"调压排除实验"写的是 RK809 `0x9C`（电量计寄存器），实验无效。
+
+修法写入 [[rockchip 平台]]「RK356x NPU 供电」：各板 bootloader patch 在 U-Boot DTS 声明 NPU 供电 DCDC（RK809 四板用 DCDC4 `vdd_npu`，radxa-zero3w 为 RK817、用 DCDC2 `vdd_gpu`），rk3566/rk3568 SoC 层 `bootloader.config` 保留 `interrupt-parent`。删除 neons `0001`、rp-pro `0003`、orangepi-cm4 `0003` 三个 disable-rknpu 补丁；tspi-rk3566、radxa-zero3w 新增内核补丁打开 `bus_npu` / `rknpu` / `rknpu_mmu`。平台 U-Boot 补丁 `0002` 适配上游 `next-dev-v2026.01` 强推后的 `0f2b44c`，去掉 neons / orangepi-cm4 的 U-Boot pin。
+
+[[orangepi-cm4]] 实板验证通过；其余四板仅构建验证，待实板。radxa-zero3w 的 `device_tree.name`（`rk3566-radxa-zero-3w`）在当前内核分支不存在（只有 `-aic8800ds2` / `-ap6212` 变体），为既有问题，按板载模块改为 `rk3566-radxa-zero-3w-aic8800ds2`。
+
+## [2026-09-27] sync | RUBIK Pi 3 改用 Yocto 同款厂商内核（EL1 下 DSP 与硬件编码同时可用）
+
+mainline 7.0.2 下 [[thundercomm-rubikpi3]] 无法同时拥有 DSP 与编码：EL1 下 venus（HFI Gen1）+ `vpu20_p1.mbn`（video-firmware 1.0）编码即复位，EL2 下 TZ 00126.1 不支持 `PAS_GET_RSCTABLE`，跳过资源表或换 TZ 00187 均失败。Thundercomm Yocto 参考镜像实为 EL1（`xbl_config.elf` == `xbl_config_gunyah.elf`）+ 下游 `video-driver`（HFI Gen2）+ `vpu20_1v.mbn`（2.4.2），两边的内容保护区与 DMA mask 一致，差别在驱动与固件这一代。
+
+据此板级覆盖内核为 `rubikpi-ai/linux` 6.6.90 @ `a579877`（Yocto 同款 config 链，平台 mainline 补丁经 `exclude_patches` 排除），DTB 合并 Yocto 同款 video overlay（不合并 KGSL graphics、camera），`video-driver` 以 OOT 模块编出 `iris_vpu.ko`；统一 EL1，删除 `el1` product 与 EL2 dtso。实板（default-debug）：ADSP/CDSP running、FastRPC 往返成功，720p H.264 与 1080p HEVC 硬编不复位且硬解回读帧数一致，蓝牙、USB3 网卡、drm/msm、声卡注册正常。Wi-Fi 随厂商 config 改走 bcmdhd，rootfs 改装 `rubikpi3-firmware` 的 `fw_bcm43456c5_ag.bin`/`nvram.txt`/`config.txt`（与 Thundercomm Ubuntu 固件包一致；Yocto 的 CLM blob 来自不公开的高通固件包，未引入，dhd 使用固件内嵌 CLM），实板 2.4/5 GHz 扫描正常。同步 [[qualcommqcs6490 平台]] 与板卡索引。
+
+## [2026-09-27] sync | Q6A EL2 下 ADSP / CDSP 实板验证
+
+Q6A（meizu-e3-bringup-debug，EL2）两个 DSP 均由启动固件预先拉起，内核 `qcom_q6v5_pas` 以 `attached` 状态接管，不加载 rootfs 里的 mbn；这与 [[thundercomm-rubikpi3]] 在 EL2 下由内核经 PAS 加载、卡在 TZ `PAS_GET_RSCTABLE` 不同。glink 通道与 QRTR 服务（ADSP node 5、CDSP node 10）齐全，FastRPC `GET_DSP_INFO` 与 `INIT_ATTACH` 在两个 DSP 上都成功，CDSP 报 v68 + HVX + HMX。未验证 DSP 崩溃后的恢复；声卡因缺少 topology 文件未实例化，开机有一次 APM `GET_SPF_STATE` 超时。
+
+同时更正 [[radxa-dragon-q6a]] 易踩坑中"`/dev/fastrpc-adsp` 不出现（-12 ENOMEM）"：该条是 2026-05 bring-up 时的记录，7.0.2 + EL2 下已不成立。
+
+## [2026-09-27] sync | thundercomm-rubikpi3 EL2 / EL1 product 拆分与固件实验
+
+RUBIK Pi 3 在 EL1（Gunyah）下 venus 硬件编码喂帧即整机复位，改由 `xbl_config_kvm.elf`（`bootloader.ufs_file_overrides`）以 EL2 启动并合并 `rubikpi3-el2.dtso` 后编码可用，但 ADSP/CDSP 卡在 `Error in getting resource table: -5`：7.0.2 的 EL2 PAS 需 TZ 实现 `PAS_GET_RSCTABLE`。实测 boot-assets main（TZ 00126.1）、qli2.0（TZ 00146，保留 LUN3 `usb_fw`）均不支持，Qualcomm 通用 00142（TZ 00187）在本板进内核即停。据此 default / desktop 为 EL2，新增 `el1` product（DSP 可用、无硬件编码），固件基线保持 main；`el1` 实板 ADSP/CDSP running。
+
+同时修正 [[thundercomm-rubikpi3]] 两处：LT9611 在 EL1 / EL2 下都探测失败，原因是只 backport 了 DTS（port@1）而缺上游驱动补丁 `e8bd92c4a0d2`，已补 kernel patch 0003；Type-C UCSI 未注册在 EL1 下同样存在，与 EL 无关（此前误记为 EL2 下 DSP 离线所致）。固件校验新增分区容量检查。
+
+## [2026-09-26] sync | usbmoded 在 UDC 晚注册时自动重试开机场景（RUBIK Pi 3 实板）
+
+RUBIK Pi 3 实板上 usbmoded 开机未进入 `debug`，需手动 `usb-mode set debug`。日志显示开机约 6 秒时等待 UDC 超时（`/sys/class/udc/ 仍为空`）；dwc3 依赖 pmic_glink 连接器，UDC 约 10 秒才注册。UDC 注册触发的 udev reload 确实到达，但 `reevaluate()` 在无当前场景时直接返回，开机场景从此不再重试。改为记录开机场景待完成，UDC 已注册时在 reevaluate 中重试；已有场景时的重新评估语义（不取消自锁回滚）不变。Q6A 的 usb1 被板级补丁固定为 peripheral，UDC 早注册，未暴露该竞态。
+
+同时把实板观察写入 [[thundercomm-rubikpi3]]：以太网确认为 Renesas USB3 下的 CDC-NCM 设备，`usb_fw` 挂载与 Renesas 固件加载、`wlan0`/`hci0` 均已出现。重刷后复验通过：8.7 秒等待 UDC 超时，10.5 秒 UDC 注册后重试，11.4 秒进入 `debug`。[[USB gadget 子系统（usbmoded）]] 板级矩阵补 RUBIK Pi 3 行，[[lunch-build-flash 流程]] 补 UFS 启动固件板的刷写差异。
+
+## [2026-09-26] sync | 新增 thundercomm-rubikpi3（QCS6490，UFS boot LUN 启动固件）
+
+参考 Thundercomm Yocto 工程（QLI 1.5）适配 RUBIK Pi 3，提供 default（无桌面）与 desktop 两个 product。内核、图形栈与启动链复用 [[qualcommqcs6490 平台]] 的主线 7.0.2 基线（已含 `qcs6490-thundercomm-rubikpi3.dts`），参考工程的 vendor 6.6.90 + KGSL/Adreno 私有栈只作为硬件事实来源。
+
+新增 [[thundercomm-rubikpi3]] 板页；平台页补「启动固件位于 UFS 的板」小节。与 Q6A 的核心差异是签名固件在 UFS LUN1-5：新增 `bootloader.ufs_rawprogram` / `ufs_patch`，`flange flash` 以单个 `edl-ng rawprogram` 会话写入固件、boot 组件生成的 `dtb.bin`（dtb_a）与 LUN0 raw.img。固件钉 `rubikpi-ai/boot-assets` main@10b8685（BOOT 00430）：参考工程 00364 与 Q6A 上已证实不兼容 7.0.2 的固件同代，`qli2.0`（00508）删除了存放 Renesas USB3 固件的 `usb_fw` 分区。
+
+尚未实板验收，板页「待验收」逐项列出。
+
+## [2026-09-25] sync | debug 镜像内置 linux-headers，支持设备端编译内核模块
+
+新增 `kernel.headers_package` 开关（基线 = `variant == 'debug'`）：kernel 构建后按 builddeb 的 headers 清单打出 `linux-headers-<release>` deb，rootfs Phase 2 dpkg 安装，并自动选入 `kernel_devel` 包集合（make/gcc/libssl-dev 等）。更新 [[kernel 构建器]]、[[rootfs 构建器]]。
+
+实测 radxa-cubie-a7a debug（5.15.147）：deb 约 10 MB；在镜像 chroot 中 `make -C /lib/modules/5.15.147+/build M=...` 编出 hello.ko，vermagic 与内核一致。首次失败踩到 `make scripts` 会编 scripts/selinux，需一并打包 `security/*/include`。
+
+## [2026-09-20] lint | 清理 usbdevice → usbmoded 重构后的过期引用
+
+`62090c80e` 用三层架构的 usbmoded 替换 `usbdevice` shell 脚本，但删除的文件（`scripts/usbdevice`、`conf/usbdevice.conf`、`systemd/usbdevice.service`、`udev/61-usbdevice.rules`、12 份板级 `overlay/etc/usbdevice.conf`）在仓库各处留下了仍以「现状」口吻描述它们的引用，CI 也因此有 22 个测试失败。
+
+**CI 修复**：`tests/builder/` 下四个文件的打包层断言仍在找已删除的文件。同时抓到一处真实迁移漏项——旧 `usbdevice.service` 的 `Environment=TERM=xterm` 与 `XDG_RUNTIME_DIR=/run/user/1000` 没迁到新的 `usbmoded-adbd.service`；adbd 是 `adb shell` 的父进程，这两个变量只能由跑 adbd 的 unit 注入，归档变更的 migration-table 只列了 `ADBD_SHELL` / `ADB_TCP_PORT`。已补回 unit，测试改为断言新 unit。
+
+**wiki 更新**：`apps/adbd.md` 的 `sources` 有 4 条指向 `components/app/adbd/usbmoded/` 一类根本不存在的路径（重构时对路径做了机械替换，把 usbmoded 的文件误挂在 adbd 目录下），正文整节按旧 shell 架构描述。按拆包后的职责边界重写：本页收敛到 App 打包、adbd 二进制来源与 adb shell 体验，gadget 编排指向 `subsystems/usb-gadget-子系统.md`。12 个 board 页的 `sources` 与正文文件名改为 `overlay/etc/usbmode/gadget.d/20-<board>.yaml`。子系统页的 `sources` 与正文引用的 change 目录已归档，补上 `archive/2026-09-19-` 前缀；其「延伸阅读」把能力清单/场景格式/CLI/协议指向 `app/adbd/README.md`，实际在 `app/usbmoded/README.md`。
+
+**一条语义被重构反转**，`apps/adbd.md` 易踩坑原写「板级 conf 整文件覆盖 App conf，App 层新增键必须在每块板手动跟进」——usbmoded 改为按键合并后结论相反。改为现状 + 历史两段并存，保留 commit `e13a6ec7` 为 11 块板补齐的历史结论，同时标明 overlay 叠加机制本身仍是整文件替换语义。
+
+带日期的历史小节（`2026-08-27` 根因定位、`2026-08-24` udev 自愈）按信息保全原则原样保留，仅为后者补一条迁移指向。`log.md` 既有条目不改写。
+
+## [2026-09-12] sync | orangepi-cm4 蓝牙开机自动 attach
+
+WiFi 打通后复查蓝牙，发现刷写后 `hciconfig -a` 里没有 `hci0`、`/sys/class/bluetooth/` 为空——归档 change `2026-05-17-orangepi-cm4-bringup-wifi-and-npu-fix` 写进 spec 的「实机首启 BT HCI 接口出现」Scenario 同样从未验证过，与上一条 WiFi 的情况同源。
+
+硬件与固件都没问题：`BCM4345C5.hcd` 在位，`hci_uart` 已加载且 H4/Broadcom 协议均注册，`rfkill_rk` 正确解析出 `BT,reset_gpio=79` 等 GPIO。缺的是两个开机环节：(1) 没有 UART attach——dtsi 只以独立 `wireless-bluetooth` 平台节点描述 BT，`uart1` 下没有 serdev 形态的 `bluetooth` 子节点，内核不会自动 attach（尽管 `CONFIG_BT_HCIUART_SERDEV=y`），而 `bluetooth.service` 只管已存在的 hci 设备；(2) `rfkill_rk` 的 `bt_default` 默认 soft-blocked，`systemd-rfkill` 还把该状态持久化并每次开机恢复。
+
+修法是 board overlay 加 `bluetooth-orangepi-cm4.service`（`Type=simple` 跑 `btattach -B /dev/ttyS1 -P bcm`）+ `multi-user.target.wants` 符号链接 + `usr/lib/flange/bt-unblock.sh`，并在 `rootfs.packages` 显式声明 `bluez`。
+
+三个踩坑值得记：**必须 `Type=simple`**——`btattach` 不 daemonize，持续持有 line discipline，`oneshot` 会卡在 activating 直到超时被 kill 连带销毁 `hci0`（`khadas-vim3l` 的同类 unit 正是 oneshot，且其 overlay 缺 `wants` 符号链接从未被 enable，属既有缺陷，本轮未动）。**`rfkill unblock bluetooth` 对 `rfkill_rk` 无效**——驱动没把 `set_block` 结果回写 `soft`，只能直接写 sysfs，且索引不能写死（`hci0` 就位后自身也注册成 rfkill 节点，索引右移）。**overlay 的 enable 只能靠符号链接**——`cp -a` 保留符号链接，而 `builder/deb.py` 的 `auto_start` 只服务 App deb。
+
+`btattach` 与 spec 用作验收手段的 `hciconfig` 同属 `bluez`，而 rootfs `base` 集合不含它——当时能在实机跑通只是因为 desktop product 被 `ubuntu-desktop` 顺带拉入。归档 proposal 的非目标「不预装 bluez」与同一份 spec 用 `hciconfig` 验收本就自相矛盾，本轮按「BT 开机即用」取舍，显式声明该包（约 5.3 MB）。
+
+实机验证：按 overlay 形态部署（符号链接 enable，非 `systemctl enable`），清除 `/var/lib/systemd/rfkill/*` 模拟刷写后首启并重启，`hci0` 在开机约 6 秒自动就位、服务 active、`hciconfig` 显示 `UP RUNNING` errors:0、`dmesg` 含 `BCM4345C5 'brcm/BCM4345C5.hcd' Patch` 与 `BT 5.2 [Version: 1039.1086]`、BLE 扫描 13 秒收到 724 条事件。BD Address `C0:F5:35:41:28:97` 与 WiFi 的 `…:96` 连号，同一模组 OTP 分配。
+
+更干净的 serdev 路线（给 `uart1` 加 `bluetooth` 子节点让内核自动 attach，可省掉 bluez 与常驻进程）未采用：BSP 的 `wireless-bluetooth` 持有 `BT,reset_gpio=79`，serdev 子节点需同一 GPIO 作 `shutdown-gpios`，冲突需先禁用前者，且该 BSP 上无先例、需实机反复试。留作后续可选优化。
+
+## [2026-09-12] sync | orangepi-cm4 WiFi 转 brcmfmac 路线（两驱动抢 SDIO 根因定位）
+
+实机 `orangepi-cm4` 启动后一直没有 `wlan0`。根因不是缺驱动，而是驱动路线与部署固件的命名规范对不上：BSP 内核同时编入 Rockchip OOT `bcmdhd`（`rockchip_wlan/Kconfig` 中 `default y`，不在任何 defconfig、且是 `bool` 只能内建）与 mainline `brcmfmac`（`rockchip_linux_defconfig:668` 的 `=m`，经 SDIO MODALIAS 自动 modprobe）。brcmfmac 先绑定 SDIO func，而 rootfs 只部署了 bcmdhd 命名的 `fw_bcm43456c5_ag.bin` / `nvram_ap6256.txt`，于是陷入「`request_firmware -2` → `brcmf_sdio_htclk: HT Avail timeout` → `mmc2: card removed` → 重新枚举」的死循环（周期约 1.4s），持续占住 SDIO func，bcmdhd 永远等不到设备（`lsmod` 引用计数恒 0），两个驱动都不工作。归档 change `2026-05-17-orangepi-cm4-bringup-wifi-and-npu-fix` 的 bcmdhd 路线实际从未生效，其 spec 中「实机首启 WiFi 接口出现」场景属未验证条目。
+
+关键发现：`radxa-pkg/radxa-firmware` 仓本就同时带着两套命名的固件，brcmfmac 版的 `brcmfmac43456-sdio.{bin,txt,clm_blob}` 一直在那里只是没被 `extra_firmware.files` 列进去，其 nvram 文件头为 `#AP6256_NVRAM_V1.1_08252017`，确为本模组参数。故转 brcmfmac 路线不需要引入任何新 source。
+
+定为 brcmfmac 路线：`config.jsonnet` 换固件清单（三件套 + `BCM4345C5.hcd`，移除两个 bcmdhd 专用文件）、`kernel.config` 加 `CONFIG_BCMDHD=n`（bool menuconfig 只能内建，用户态 blacklist 无效，必须 Kconfig 层关），删除随之失效的 `0002-bcmdhd-set-fw-ampak-path-brcm.patch`。`CONFIG_BRCMFMAC` 维持 SoC 层 defconfig 的 `=m`，board 不覆盖。dtsi 不动——`wifi_chip_type="ap6256"` 只被 bcmdhd 读取，SDIO 上电与时钟由 `&sdio` / `rfkill_rk` 完成，与具体 WiFi 驱动解耦。
+
+CLM blob 是必需项，同 `armsom-cm5-io` 的教训：缺它则固件内置 Generic.Min CLM 不接受 `set country`、无可用信道、扫不到任何 AP。两块板选了相反方向——CM5 IO 的 BCM43752 在 mainline 支持不足，关的是 brcmfmac、走 rkwifibt OOT；本板 BCM43456 在 brcmfmac 上支持完整，关的是 bcmdhd。
+
+实机验证（运行时热补固件）：`Firmware: BCM4345/9 wl0 version 7.45.96.61` 加载成功，`wlan0` 出现，MAC `c0:f5:35:41:28:96` 取自模组 OTP 而非 NVRAM 缺省的 `00:90:4c:c5:12:38`，`nmcli dev wifi list` 扫到 2.4G（ch11 130 Mbit/s）与 5G（ch161 540 Mbit/s）双频 AP。构建侧确认 `.config` 中 `# CONFIG_BCMDHD is not set` + `CONFIG_BRCMFMAC=m`、`vmlinux` 中 `dhd_` 符号为 0、patch 由 4 条减为 3 条。完整刷写后的实机复验见 change `fix-orangepi-cm4-wifi-brcmfmac` 的 tasks 第 3 组。
+
+## [2026-09-06] sync | VIM3 风扇与双色 LED 板级策略
+
+VIM3 内建主线 MCU 风扇与 GPIO LED 驱动，新增默认 `vim3-fan-led.dtbo`：CPU 50/60/70°C 对应三档风速、5°C 回差，保留降频与过热保护；白灯心跳、红灯运行常亮。板卡页补充标准 thermal/LED sysfs 使用方法及实板验收项，VIM3L 默认配置不变。
+
+用户刷入后，实板模拟温度测试验证风扇自动三档及回差，用户确认实际转速变化与红灯控制；测试后恢复真实温度控制。白灯配置及 GPIO 读回正常但实物未亮，用户决定暂缓排查，未计为通过；未做实际加热压力测试或 RPM 测量。
+
 ## [2026-09-04] sync | 新增 Khadas VIM3（A311D/G12B）板卡支持
 
 新增 `khadas-vim3-{default,desktop}-{debug,release}` 四个 target，接入 mainline U-Boot v2024.10、Linux v6.12、VIM3 专属 G12B FIP 与 AP6398S 固件；VIM3/VIM3L 的公共板级数据提取到共享 Jsonnet helper，A311D SoC 层只保留芯片事实。
@@ -601,3 +729,53 @@ session 以 0600 普通文件读取。OpenSpec 已同步 `app-registry` 与
 现行 schema 取消综合页 1200 非空白字符上限，拆页只以导航和主题边界为依据；新增“信息保全优先”原则，要求整理前后逐项确认唯一信息的保留或迁移去向。初次建库计划中的 600/1200 字规则保留为历史记录，但已明确标注失效。
 
 [[adbd]]、[[atk-rk3506b]]、[[radxa-dragon-q6a]]、[[qualcommqcs6490 平台]] 四页从 commit `e23fd87b` 恢复压缩前全文，再以新增章节补充 udev/systemd 自愈、fluxion product、QCS6490 7.0.2 当前基线和 UFS 初始化流程。早期验收、硬件约束、排障过程与版本迁移记录均保留；过时结论通过当前基线说明限定适用范围，不再用摘要覆盖原文。
+
+## [2026-09-27] sync | Radxa Dragon Q6A EL2 下 i2c10 改走 FIFO
+
+[[radxa-dragon-q6a]] 新增"EL2 启动与 GPI DMA"：`260120` 固件开启 `Hypervisor Override` 后，Radxa UEFI 自行给 GRUB 加载的 DTB 套用 KVM fixup，Linux 以 EL2 启动；此时 `i2c10`（RTC）申请 GPI 通道，在 `gpi_config_interrupts()` 读 gpii 1 的 MSI 寄存器处同步外部中止，系统无法启动。新增 `patches/kernel/0007` 删除 `i2c10` 的 `qcom,enable-gsi-dma`，由 `0006` 重 provision 回 FIFO，Q6A 不再使用 GPI。坑#11 原文"`i2c10` 的 GSI 正常"保留，并追加"仅 EL1 成立"的再更正。change `fix-qcs6490-i2c10-fifo-el2`。
+
+## [2026-09-27] sync | Radxa Dragon Q6A meizu-e3-bringup EL2 回归
+
+[[radxa-dragon-q6a]] 的"EL2 启动与 GPI DMA"补充 meizu-e3-bringup-debug 在 EL2 下的实板回归：DSI 屏 1080×2160 点亮，`sec_ts` 读到 `AC,6F,70` 且触摸上报坐标事件，`sgm37604a` 背光可写，i2c13 走 FIFO、无 GPI 使用。i2c10 改走 FIFO（`0007`）未影响屏幕功能。
+
+## [2026-09-27] sync | Radxa Dragon Q6A EL1 下 i2c 复验与 DSI 屏黑屏记录
+
+[[radxa-dragon-q6a]] 补充 EL1 结果：i2c10/i2c13 走 FIFO、RTC 与 `sec_ts` 正常，原"EL1 下未单独复验"更新为实测结果。新增"EL1 下魅族 DSI 屏黑屏"已知问题：`260120` 固件 + EL1 时 fbdev 与 modetest 均无画面，Linux 侧 DRM/DPU/DSI/SMMU 均无异常，推测 Gunyah stage-2 静默拦截显示 DMA（未证实）；已搁置，Q6A 以 EL2 为准。
+
+## [2026-09-27] sync | 更正 Q6A "EL1 下 DSI 屏黑屏"为面板偶发黑屏
+
+[[radxa-dragon-q6a]] 上一条"EL1 下魅族 DSI 屏黑屏、推测 Gunyah 拦截显示 DMA"是误判：实测 EL1 也能正常显示，黑屏与 EL 无关，更像面板初始化时复位未生效。条目改为"魅族 DSI 屏偶发黑屏（待查）"，保留黑屏时 Linux 侧各层正常的观测，删去 hypervisor 推测与 HDMI 对照建议，补充 `meizu_e3_prepare()` 复位时序与 `vcc_3v3_lcd` always-on 导致面板不断电的疑点。已知线索：热重启更易黑屏（用户观察），1.8V vccio 与 USB PHY 共用、热重启期间可能不断电；同一次启动内 fb0 blank/unblank 可恢复画面；热重启复现试验未完成。
+
+## [2026-09-28] sync | 新增 nvidiategra186 平台与 Jetson TX2 板卡
+
+新增 [[nvidiategra186 平台]] 与 [[nvidia-jetson-tx2]]（openspec `add-tegra186-jetson-tx2`，实施中）：L4T R32.7.6、
+OE4T 4.9 内核、Ubuntu 18.04 + L4T 用户态（`rootfs.phase2_packages`）、BSP 预编译启动链、tegraflash 刷写包与宿主策略。
+构建期与 stock `flash.sh` 产物对照已记录在变更的 verification.md；实板验收项在板卡页标为待验收。
+平台索引、板卡索引同步新增条目。
+
+## [2026-09-29] sync | Jetson TX2 实板验收：adb、stock 服务对齐与蓝牙
+
+[[nvidiategra186 平台]] 新增"USB gadget：usbmoded + adb"：TX2 改用 usbmoded + adbd（`python3.8` 运行 usbmoded、
+adbd 专用 nsswitch 绑定避免静态 glibc 2.39 加载 18.04 NSS 模块 abort、udev 规则改 `/bin/systemctl`），mask L4T USB
+device mode；首版的 L4T USB 网络与 `bridge-utils` / `isc-dhcp-server` 改写为历史说明；sshd 条目保持。易踩坑补 L4T 蓝牙
+rfkill。[[nvidia-jetson-tx2]] 连接方式从 `192.168.55.1` 改为 adb（含 5555 免认证、`adb reboot` 无效、固定序列号、
+nsswitch 副本等注意事项），新增蓝牙说明，验收表按 verification.md 第 8–11 节更新为已验证 / 待验收。
+
+## [2026-09-29] sync | Jetson TX2 外设验收完成
+
+[[nvidia-jetson-tx2]] 验收表更新：镜像内置蓝牙、以太网 DHCP 与 SSH、kernel-dtb 单刷、USB3 Host、HDMI 均已实板验证；
+新增一行记录 overlay / 内核模块属主修复（`builder/rootfs.py` 改用 tar 合并，属主统一 root，所有平台 `/etc`、`/usr`
+不再归 uid 1000）后的实板复核。仅 jetpack product 仍待验收。
+
+## [2026-10-25] sync | RUBIK Pi 3 USB 插拔后 adb 失联
+
+[[thundercomm-rubikpi3]] 新增"USB 插拔后 adb 失联"一节：拔线后 HS PHY 被外部执行者置为 UTMI 数据通路覆盖 +
+non-driving，UCSI/pmic_glink 不工作导致无人恢复；板级 `vendor-0001` 补丁让 femto v2 PHY 驱动经 PM7250B
+`ADC5_USB_IN_V_16` 检测 VBUS 并释放覆盖（mainline product 排除）。Type-C UCSI 行补充 ADSP 无 `charger_pd`、
+无 pd-mapper；实板验证拔插与开机后冷插 adb 均自动恢复。
+
+## [2026-11-08] sync | Arduino UNO Q 新增 waveshare-display-10.1a product
+
+[arduino-uno-q](../docs/boards/arduino-uno-q.md) 新增 Waveshare UNO-Q-DSI-TOUCH-10.1A product：以 base DTB 构建期合并
+官方 media carrier 与 10" 面板 overlay（合并顺序决定 pca9555 phandle，否则 LED 全组失败），板私有 dtso 修正 GT9271
+默认坐标范围并在内核旋转触摸，LightDM 脚本默认顺时针 90° 横屏。实板验证显示、触摸、LED。

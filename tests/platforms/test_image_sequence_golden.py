@@ -14,7 +14,7 @@ import json
 import re
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,6 +29,10 @@ PLATFORMS = {
     "amlogic": "builder.platforms.amlogic.image:AmlogicImageBuilder",
     "qualcommqcs6490": (
         "builder.platforms.qualcommqcs6490.image:Qcs6490ImageBuilder"),
+    "qualcommqrb2210": (
+        "builder.platforms.qualcommqrb2210.image:Qrb2210ImageBuilder"),
+    "nvidiategra186": (
+        "builder.platforms.nvidiategra186.image:Tegra186ImageBuilder"),
 }
 
 # 覆盖各平台会消费的全部分区名，让"分区名→产物路径"映射的差异可见。
@@ -90,6 +94,15 @@ def _run_compile(platform: str, tmp_path: Path, config=None) -> list[str]:
         path = target / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"\0" * 4096)
+    if platform == "nvidiategra186":
+        # tegraflash 刷写包由 BSP 刷写目录、kernel-dtb 与 rootfs 组装，分区来自 NVIDIA 模板；
+        # 布局与 manifest 内容另由 Tegra186 image / flash 测试校验。
+        from tests.platforms.tegra186_fixtures import image_config, upstream
+
+        upstream(target)
+        tegra = image_config()
+        config = {**(config or _config()), **{key: tegra[key] for key in (
+            "platform", "soc", "kernel", "bootloader", "partitions")}}
 
     builder = _load(PLATFORMS[platform])(MagicMock(), MagicMock())
     cache = MagicMock()
@@ -109,6 +122,8 @@ def _run_compile(platform: str, tmp_path: Path, config=None) -> list[str]:
                 r"/[^ ]*flange-image-[A-Za-z0-9_]+", "<TMP>", rendered)
             rendered = re.sub(r"<WORK>/.build/work/[^ ]+/image/run-[^ /]+", "<TMP>", rendered)
             calls.append(f"{name}: {rendered}")
+            if command and command[0] == "./mksparse":
+                (Path(kwargs["cwd"]) / command[-1]).write_bytes(b"sparse")
             return MagicMock()
         return call
 
@@ -116,7 +131,19 @@ def _run_compile(platform: str, tmp_path: Path, config=None) -> list[str]:
     builder.docker.run_privileged.side_effect = record("priv")
 
     try:
-        builder.compile(None, config or _config())
+        if platform == "qualcommqrb2210":
+            # QDL 组装器直接消费完整输入树；协议内容另由 UNO Q flash 测试校验。
+            def bundle(firmware, images, output):
+                record("bundle")([firmware, *[
+                    f"{name}={path}" for name, path in images.items()
+                ], output])
+                return output
+
+            with patch("builder.platforms.qualcommqrb2210.image.build_bundle", bundle):
+                builder.compile(None, config or _config())
+                assert builder.collect(None, config or _config()) == {"bundle": builder._bundle}
+        else:
+            builder.compile(None, config or _config())
     finally:
         work = getattr(builder, "_work_dir", None)
         if work and Path(work).exists():
@@ -185,5 +212,9 @@ def test_disabled_recovery_is_not_written_even_when_old_image_exists(platform, t
     config = _config()
     config["recovery"]["enabled"] = False
     commands = _run_compile(platform, tmp_path, config)
-    assert any("if=<TARGET>/rootfs/rootfs.img" in command for command in commands)
+    rootfs = {
+        "qualcommqrb2210": "rootfs=<TARGET>/rootfs/rootfs.img",
+        "nvidiategra186": "cp --sparse=always <TARGET>/rootfs/rootfs.img",
+    }.get(platform, "if=<TARGET>/rootfs/rootfs.img")
+    assert any(rootfs in command for command in commands)
     assert not any("if=<TARGET>/recovery/recovery.img" in command for command in commands)

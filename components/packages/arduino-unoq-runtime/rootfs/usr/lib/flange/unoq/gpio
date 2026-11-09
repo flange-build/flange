@@ -1,0 +1,22 @@
+#!/usr/bin/python3
+"""兼容 Ubuntu libgpiod 1.x 与上游 2.x 的瞬时 GPIO 设置。"""
+import subprocess
+import sys
+
+
+def command(version, assignment):
+    if assignment not in {'37=0', '70=0', '70=1', '38=0', '38=1'}:
+        raise ValueError('拒绝未声明的 UNO Q GPIO')
+    if 'v1.' in version:
+        return ['gpioset', '--mode=exit', 'gpiochip1', assignment]
+    if 'v2.' in version:
+        return ['gpioset', '-c', '/dev/gpiochip1', '-t0', assignment]
+    raise ValueError('未知 libgpiod 版本，拒绝操作 MCU')
+
+
+if __name__ == '__main__':
+    compatible = open('/sys/firmware/devicetree/base/compatible', 'rb').read().split(b'\0')
+    if b'arduino,imola' not in compatible:
+        raise SystemExit('不是 Arduino UNO Q，拒绝操作 MCU')
+    version = subprocess.check_output(['gpioset', '--version'], text=True)
+    subprocess.run(command(version, sys.argv[1]), check=True)

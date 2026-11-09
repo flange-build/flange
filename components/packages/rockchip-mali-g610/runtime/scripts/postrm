@@ -1,0 +1,4 @@
+#!/bin/bash
+# 移除驱动后刷新缓存，恢复发行版库的查找结果。
+set -xe
+ldconfig

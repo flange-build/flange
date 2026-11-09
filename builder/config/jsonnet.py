@@ -25,7 +25,10 @@ def _unique(items: list[str]) -> list[str]:
 
 def _expand_package_sets(config: dict) -> None:
     rootfs = config.get("rootfs") or {}
-    selected = rootfs.get("package_set") or []
+    selected = list(rootfs.get("package_set") or [])
+    # linux-headers deb 的 postinst 要在设备端编译宿主工具，工具链随开关选入。
+    if (config.get("kernel") or {}).get("headers_package"):
+        selected.append("kernel_devel")
     package_sets = rootfs.get("package_sets") or {}
     packages: list[str] = []
     for name in selected:
@@ -252,6 +255,10 @@ class JsonnetConfigLoader:
         baseline = "rootfs/config.jsonnet" if distro == "ubuntu" else f"distro/{distro}/config.jsonnet"
         imports = self._paths(baseline, required=True)
         imports += self._paths("device-tree-overlay/config.jsonnet")
+        # 平台无关的内核基线：让"全平台默认启用"的 Kconfig 有一个唯一落点，
+        # 而不是在每个 SoC 层重复声明（CONFIG_DRM_GUD 曾重复 14 处）。
+        # 位置在 platform 之前，因此平台/SoC/板级可用 `kernel+:` 追加或覆盖。
+        imports += self._paths("kernel/config.jsonnet")
         platform_result = self._evaluate_layers(
             [*imports, *platform_paths], product=product, variant=variant
         )

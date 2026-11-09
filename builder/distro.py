@@ -48,6 +48,7 @@ class AptDistro(DistroBackend):
 
     def install_extra(self, builder, root, config):
         builder._install_extra_debs(root, config)
+        builder._install_phase2_packages(root, config)
 
     def customize(self, builder, root, config):
         builder._configure_default_locale(root, config)

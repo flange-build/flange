@@ -226,7 +226,7 @@ def collect_files(
     final: list[tuple[Path, str, int]] = []
 
     for src_rel, dest_path in spec.install.items():
-        # src_rel 形如 "conf/usbdevice.conf"
+        # src_rel 形如 "conf/app.conf"
         src_path = app_dir / src_rel
         if not src_path.exists():
             # 源文件不存在，记录警告并跳过
@@ -257,8 +257,8 @@ def _infer_mode(install_path: str, src_rel: str) -> int:
     的文件赋予 0o755，其余赋予 0o644。
 
     参数：
-        install_path: 目标系统安装路径（如 /usr/sbin/usbdevice）
-        src_rel:      相对于 app_dir 的源路径（如 scripts/usbdevice）
+        install_path: 目标系统安装路径（如 /usr/sbin/usbmoded）
+        src_rel:      相对于 app_dir 的源路径（如 bin/usbmoded）
 
     返回：
         0o755 或 0o644

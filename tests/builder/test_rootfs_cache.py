@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from builder.apt import AptCache
 from builder.platforms.rockchip.rootfs import RockchipRootfsBuilder
 from builder.rootfs_base import apt_command, base_plan
 from tests.builder.context import component_context
@@ -86,9 +87,61 @@ def test_consumed_input_changes_snapshot_identity(tmp_path, field, value):
 def test_phase2_configuration_does_not_change_base_identity(tmp_path):
     config = _config()
     other = deepcopy(config)
-    other["rootfs"].update(custom_packages=["demo"], hostname="another", users={"user": {}})
+    other["rootfs"].update(
+        custom_packages=["demo"],
+        hostname="another",
+        users={"user": {}},
+        phase2_packages=["nvidia-l4t-core=32.7.6-20241104234601"],
+    )
     builder = _builder(tmp_path)
     assert builder._get_base_cache_path(config) == builder._get_base_cache_path(other)
+
+
+def test_phase2_packages_install_after_extra_debs_before_modules(tmp_path):
+    builder = _builder(tmp_path)
+    calls = []
+    for name in (
+        "_install_app_debs", "_install_extra_debs", "_install_phase2_packages",
+        "_install_kernel_modules", "_install_kernel_headers", "_install_extra_firmware",
+        "_install_panel_firmware", "apply_overlays", "_configure_default_locale",
+        "_configure_users", "_install_hostname", "_export_package_manifest",
+    ):
+        setattr(builder, name, lambda *args, _name=name: calls.append(_name))
+
+    builder._build_phase2(tmp_path, _config())
+
+    assert calls.index("_install_extra_debs") < calls.index("_install_phase2_packages")
+    assert calls.index("_install_phase2_packages") < calls.index("_install_kernel_modules")
+
+
+def test_empty_phase2_packages_touch_nothing(tmp_path, monkeypatch):
+    chroot = MagicMock()
+    monkeypatch.setattr("builder.rootfs.ChrootContext", chroot)
+
+    _builder(tmp_path)._install_phase2_packages(tmp_path, _config())
+
+    chroot.assert_not_called()
+
+
+def test_phase2_packages_refresh_index_and_use_recommendation_policy(tmp_path, monkeypatch):
+    chroot = MagicMock()
+    session = chroot.return_value.__enter__.return_value
+    monkeypatch.setattr("builder.rootfs.ChrootContext", chroot)
+    config = _config()
+    config["rootfs"]["phase2_packages"] = ["nvidia-l4t-core=32.7.6-20241104234601"]
+
+    _builder(tmp_path, config)._install_phase2_packages(tmp_path, config)
+
+    commands = [call.args[0] for call in session.run.call_args_list]
+    assert commands == [
+        ["apt-get", "update"],
+        ["apt-get", "install", "-y", "--no-install-recommends",
+         "nvidia-l4t-core=32.7.6-20241104234601"],
+        ["apt-get", "clean"],
+    ]
+    mount_source, mount_target = session.bind_mount.call_args.args
+    assert mount_source == str(AptCache(tmp_path / ".build/cache/apt").archives)
+    assert mount_target == tmp_path / "var/cache/apt/archives"
 
 
 def test_plan_apt_command_consumes_same_recommendation_policy(tmp_path):

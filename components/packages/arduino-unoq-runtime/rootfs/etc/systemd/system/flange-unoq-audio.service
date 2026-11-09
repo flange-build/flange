@@ -1,0 +1,8 @@
+[Unit]
+Description=UNO Q ADSP 音频就绪检查
+After=sound.target
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/flange/unoq/audio-fixup
+[Install]
+WantedBy=multi-user.target

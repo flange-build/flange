@@ -1,0 +1,68 @@
+app:
+  name: usbmoded
+  version: 1.0.0
+  description: USB gadget 管理服务 —— gadget 核心层 + 原子能力层 + 场景层，提供运行时 USB 工作模式切换与 device/host 角色切换
+  type: service
+  arch:
+    - aarch64
+    - armhf
+
+maintainer:
+  name: flange
+  email: flange@localhost
+
+build:
+  system: none
+
+install:
+  # Python 包。install 是逐文件映射，不支持目录递归。dist-packages 是
+  # Debian/Ubuntu 的第三方包标准路径，装在此处即可直接 import。
+  usbmoded/__init__.py: /usr/lib/python3/dist-packages/usbmoded/__init__.py
+  usbmoded/capabilities/__init__.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/__init__.py
+  usbmoded/capabilities/adb.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/adb.py
+  usbmoded/capabilities/daemon.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/daemon.py
+  usbmoded/capabilities/media.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/media.py
+  usbmoded/capabilities/network.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/network.py
+  usbmoded/capabilities/serial_hid.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/serial_hid.py
+  usbmoded/capabilities/storage.py: /usr/lib/python3/dist-packages/usbmoded/capabilities/storage.py
+  usbmoded/capability.py: /usr/lib/python3/dist-packages/usbmoded/capability.py
+  usbmoded/config.py: /usr/lib/python3/dist-packages/usbmoded/config.py
+  usbmoded/configfs.py: /usr/lib/python3/dist-packages/usbmoded/configfs.py
+  usbmoded/control.py: /usr/lib/python3/dist-packages/usbmoded/control.py
+  usbmoded/gadget.py: /usr/lib/python3/dist-packages/usbmoded/gadget.py
+  usbmoded/role.py: /usr/lib/python3/dist-packages/usbmoded/role.py
+  usbmoded/scene.py: /usr/lib/python3/dist-packages/usbmoded/scene.py
+  usbmoded/udc.py: /usr/lib/python3/dist-packages/usbmoded/udc.py
+
+  # 服务入口与 CLI。装在 sbin：与 recoveryctl 一致的系统维护命令定位。
+  bin/usbmoded: /usr/sbin/usbmoded
+  bin/usb-mode: /usr/sbin/usb-mode
+
+  # 配置。conf/ 的约定路径是 /etc/<app名>/，这里正好是 /etc/usbmode/，
+  # 但显式声明以免将来 App 改名时配置路径跟着漂。
+  conf/usbmode/gadget.d/10-default.yaml: /etc/usbmode/gadget.d/10-default.yaml
+  conf/usbmode/scenes.d/10-common.yaml: /etc/usbmode/scenes.d/10-common.yaml
+
+  # udev 规则。约定路径为 /lib/udev/rules.d/，覆盖到 /etc 便于板级调试时修改。
+  udev/61-usbmode.rules: /etc/udev/rules.d/61-usbmode.rules
+
+systemd:
+  # 主服务。usbmoded-mtp-server.service 经 systemd/ 约定目录一并安装，但不
+  # enable —— 它的启停由 usbmoded 的 mtp 能力驱动。注意该 unit 依赖系统提供
+  # mtp-server 二进制，本 App 不提供；缺失时 mtp 能力会在启动 unit 时报错。
+  unit: systemd/usbmoded.service
+  auto_start: true
+
+depends:
+  # python3 是 metapackage，会带入完整 stdlib（含 json / argparse /
+  # dataclasses / socketserver 等必需模块）；python3-minimal 不够。
+  - python3
+  # 配置文件为 YAML。不把 PyYAML 加进 rootfs base 包集合 —— 单个 App 的
+  # 需要不应污染全线 rootfs。
+  - python3-yaml
+
+conffiles:
+  - /etc/usbmode/gadget.d/10-default.yaml
+  - /etc/usbmode/scenes.d/10-common.yaml
+
+data_dirs: []

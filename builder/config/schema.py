@@ -146,8 +146,33 @@ OOT_MODULE = Object(
         "ko_pattern": STRINGS,
         "pre_build": STRINGS,
         "post_build": STRINGS,
+        "stage": BOOLEAN,
     },
     ("dir", "label", "ko_pattern"),
+)
+# NVIDIA tegraflash 刷写事实：文件名均指 BSP bootloader 扁平目录中的名字，
+# `layout_template`、`uboot`、`extra_files` 是相对 BSP 根（Linux_for_Tegra/）的路径。
+TEGRAFLASH = Object(
+    {
+        "chip": STRING,
+        "odmdata": STRING,
+        "bl": STRING,
+        "applet": STRING,
+        "layout_template": STRING,
+        "layout_tokens": Map(TEXT),
+        "bct_configs": Map(STRING),
+        "bins": ListOf(Object({"type": STRING, "file": STRING}, ("type", "file"))),
+        "extra_files": STRINGS,
+        "uboot": STRING,
+        "identity": Object(
+            {"board_id": STRING, "board_sku": STRING, "fabs": STRINGS},
+            ("board_id", "board_sku", "fabs"),
+        ),
+    },
+    (
+        "chip", "odmdata", "bl", "applet", "layout_template", "layout_tokens",
+        "bct_configs", "bins", "uboot", "identity",
+    ),
 )
 PARTITION = Object(
     {
@@ -170,6 +195,8 @@ ROOTFS = Object(
         "hostname": STRING,
         "custom_packages": STRINGS,
         "packages": STRINGS,
+        # Phase 2 在外部 deb 之后安装的 APT 包；只进 rootfs 组件指纹，不进 Phase 1 快照。
+        "phase2_packages": STRINGS,
         "package_set": STRINGS,
         "package_sets": Map(STRINGS),
         "default_locale": Object({"lang": STRING, "language": STRING}, ("lang", "language")),
@@ -278,6 +305,7 @@ SYSTEM = Object(
                 "cross_compile": STRING,
                 "defconfig": STRINGS,
                 "exclude_patches": STRINGS,
+                "headers_package": BOOLEAN,
                 "image": STRING,
                 "source": SOURCE_REF,
                 "oot_modules": ListOf(OOT_MODULE),
@@ -300,6 +328,7 @@ SYSTEM = Object(
                         "fip_board_dir",
                         "fip_tool",
                         "firehose_loader",
+                        "device_tree",
                         "idbloader_method",
                         "spi_patch",
                         "spi_rawprogram",
@@ -309,9 +338,14 @@ SYSTEM = Object(
                     STRING,
                 ),
                 **dict.fromkeys(
-                    ("edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose"), DOWNLOAD
+                    ("edk2_firmware", "toolchain", "riscv_toolchain", "ufs_firehose",
+                     "recovery_firmware", "l4t_bsp"), DOWNLOAD
                 ),
+                "tegraflash": TEGRAFLASH,
                 "ufs_provisions": Map(DOWNLOAD),
+                "ufs_rawprogram": STRINGS,
+                "ufs_patch": STRINGS,
+                "ufs_file_overrides": Map(STRING),
                 "fit_pack": Object(
                     {"copies": INTEGER, "slot_size_kb": INTEGER, "external_data_offset": STRING}
                 ),

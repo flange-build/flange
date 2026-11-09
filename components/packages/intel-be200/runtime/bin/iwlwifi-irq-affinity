@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# 把 iwlwifi 的各个 MSI-X 中断轮流绑到性能最强的一组 CPU 上。
+#
+# 大小核 SoC（如 RK3588：cpu0-3 A55、cpu4-7 A76）默认把 RSS 队列平均分到所有核，
+# 单条 TCP 流可能落在小核上，软中断成为瓶颈。按 cpu_capacity 选出容量不低于最大值
+# 90% 的核，不写死核号；无 cpu_capacity（同构 CPU）时使用全部在线核。
+set -euo pipefail
+
+proc_root=${PROC_ROOT:-/proc}
+sys_cpu=${SYS_CPU_ROOT:-/sys/devices/system/cpu}
+
+online_cpus() {
+    local range part
+    IFS=, read -ra range < "$sys_cpu/online"
+    for part in "${range[@]}"; do
+        if [[ $part == *-* ]]; then
+            seq "${part%-*}" "${part#*-}"
+        else
+            echo "$part"
+        fi
+    done
+}
+
+mapfile -t cpus < <(online_cpus)
+declare -A capacity=()
+max=0
+for cpu in "${cpus[@]}"; do
+    file="$sys_cpu/cpu$cpu/cpu_capacity"
+    [ -r "$file" ] || continue
+    capacity[$cpu]=$(< "$file")
+    (( capacity[$cpu] > max )) && max=${capacity[$cpu]}
+done
+
+targets=()
+for cpu in "${cpus[@]}"; do
+    if (( max == 0 )) || (( ${capacity[$cpu]:-0} * 10 >= max * 9 )); then
+        targets+=("$cpu")
+    fi
+done
+
+i=0
+while read -r irq _; do
+    irq=${irq%:}
+    echo "${targets[i % ${#targets[@]}]}" > "$proc_root/irq/$irq/smp_affinity_list"
+    i=$((i + 1))
+done < <(grep -E 'iwlwifi' "$proc_root/interrupts")

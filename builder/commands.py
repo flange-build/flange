@@ -45,6 +45,60 @@ def _container_environment(context) -> None:
         pass
 
 
+def _readonly_via_container(context, command: str, component: str | None) -> object:
+    """把只读命令（plan / why）转发进容器执行，宿主机只负责渲染。
+
+    源码仓库由容器内的 root clone 出来，归 root:root。git 的 safe.directory 保护
+    按 owner uid 判定仓库可信与否（与权限位无关，chmod 放宽没用），因此宿主机上
+    以普通用户跑 ``git rev-parse`` 一律 exit 128。build 早就整个转发进容器执行，
+    只读命令没有，于是成了唯一在宿主机侧读这些仓库的路径，也就是唯一会踩这个坑的
+    路径。
+
+    改 owner 不是出路：同一个目录不可能既归容器里的 root 又归宿主机用户，chown 只是
+    把故障从一侧搬到另一侧。让计算发生在拥有这些仓库的那一侧才是对的。
+
+    容器侧以 ``--json`` 输出结构化结果，本函数只解包 data；渲染仍在宿主机做，
+    终端配色与宽度适配因此不受影响。
+    """
+    import json as _json
+
+    from builder.docker import BuildError, DockerRunner
+
+    cmd = [
+        "python3",
+        "-m",
+        "builder",
+        "--workspace",
+        str(context.workspace_root),
+        "--target",
+        context.target.key,
+        "--json",
+        command,
+    ]
+    if component:
+        cmd.append(component)
+    # 只读命令不写任何东西，不申请 privileged。
+    result = DockerRunner(context=context).run(
+        cmd,
+        cwd=str(context.workspace_root),
+        capture=True,
+        check=True,
+        # 干净工作区查询计划不得落下任何目录，包括构建根。
+        ensure_build_root=False,
+    )
+    text = (result.stdout or "").strip()
+    try:
+        payload = _json.loads(text)
+    except ValueError:
+        # 镜像缺失、daemon 未启动等情况下 compose 会往 stdout 吐非 JSON，
+        # 原样带出去比抛 JSONDecodeError 好诊断。
+        raise BuildError(f"容器内 {command} 未返回结构化结果: {text[:400]}") from None
+    if not payload.get("ok", False):
+        error = payload.get("error") or {}
+        raise BuildError(error.get("message") or f"容器内 {command} 执行失败")
+    return payload.get("data")
+
+
 def _settings(start: Path) -> dict:
     return workspace_settings(discover_workspace(start))
 
@@ -195,6 +249,23 @@ def _target(args, options, start: Path, output: Presenter) -> int:
     return 0
 
 
+def _remove_build_tree(path: Path, context) -> None:
+    """删除构建产物树；宿主机删不动 root 留下的条目时改在容器内以 root 删除。
+
+    系统构建的中间目录（rootfs 的 run-* 等）由容器内 root 以 0700 创建，
+    普通用户的 rmtree 走到那里必然 EACCES。容器内的 rm 对同一 bind mount
+    路径没有这个限制；容器内运行时本来就是 root，直接抛出即可。
+    """
+    from builder.docker import DockerRunner, _is_inside_container
+
+    try:
+        shutil.rmtree(path)
+    except PermissionError:
+        if _is_inside_container():
+            raise
+        DockerRunner(context=context).run(["rm", "-rf", str(path)], capture=True)
+
+
 def _system(args, options, start: Path, output: Presenter) -> int:
     context = load_workspace(start, target=options.target)
     config = resolve_config(context)
@@ -258,23 +329,43 @@ def _system(args, options, start: Path, output: Presenter) -> int:
             if args.quiet
             else level
         )
-    engine = BuildEngine(config, context=context, output_level=level)
     from builder.layer_diagnostics import composition_report, composition_lines
     composition = composition_report(config, context)
     if args.command == "plan":
-        plans = [plan.to_dict() for plan in engine.plan(args.component)]
+        if _is_inside_container():
+            data = {
+                "target": context.target.key,
+                "tasks": [
+                    plan.to_dict()
+                    for plan in BuildEngine(
+                        config, context=context, output_level=level
+                    ).plan(args.component)
+                ],
+            }
+        else:
+            data = _readonly_via_container(context, "plan", args.component)
         output.result(
             "plan",
-            {"target": context.target.key, "tasks": plans, "composition": composition},
-            lines=render_plan(plans, context.target.key) + composition_lines(composition),
+            {**data, "composition": composition},
+            lines=render_plan(data["tasks"], context.target.key) + composition_lines(composition),
         )
     elif args.command == "why":
-        reports = engine.explain(args.component)
+        if _is_inside_container():
+            reports = BuildEngine(
+                config, context=context, output_level=level
+            ).explain(args.component)
+        else:
+            reports = _readonly_via_container(context, "why", args.component)
         for report in reports:
             report["composition"] = composition
-        output.result("why", reports, lines=render_why(reports, context.target.key) + composition_lines(composition))
+        output.result(
+            "why",
+            reports,
+            lines=render_why(reports, context.target.key) + composition_lines(composition),
+        )
     else:
         force = "all" if args.force_all else args.component if args.force else None
+        engine = BuildEngine(config, context=context, output_level=level)
         with redirect_stdout(sys.stderr):
             engine.build(args.component, force=force)
         output.result(
@@ -437,7 +528,7 @@ def _dispatch(args, options, start: Path, output: Presenter) -> int:
                     if path.is_symlink():
                         path.unlink()
                     elif path.exists():
-                        shutil.rmtree(path)
+                        _remove_build_tree(path, context)
         output.result(
             "clean",
             {"dry_run": args.dry_run, "paths": paths},

@@ -1,0 +1,54 @@
+// VIM3 板级温控与 LED（发光二极管）策略，基于 mainline Linux v6.12。
+/dts-v1/;
+/plugin/;
+
+&cpu_thermal {
+	trips {
+		// 复用上游 cpu_active 的节点和 phandle；5°C 回差避免频繁启停。
+		cpu-active {
+			temperature = <50000>;
+			hysteresis = <5000>;
+		};
+
+		vim3_fan_mid: fan-mid {
+			temperature = <60000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+
+		vim3_fan_high: fan-high {
+			temperature = <70000>;
+			hysteresis = <5000>;
+			type = "active";
+		};
+	};
+
+	cooling-maps {
+		// 精确替换上游风扇 map；保留 CPU 降频的 map0/map1。
+		// 各档上下限固定，避免 step_wise 在同一温度段继续升档。
+		map {
+			trip = <&cpu_active>;
+			cooling-device = <&khadas_mcu 1 1>;
+		};
+
+		fan-mid {
+			trip = <&vim3_fan_mid>;
+			cooling-device = <&khadas_mcu 2 2>;
+		};
+
+		fan-high {
+			trip = <&vim3_fan_high>;
+			cooling-device = <&khadas_mcu 3 3>;
+		};
+	};
+};
+
+// 保留主线 GPIO、颜色与功能命名，仅指定开机灯效。
+&{/leds/led-white} {
+	linux,default-trigger = "heartbeat";
+};
+
+&{/leds/led-red} {
+	linux,default-trigger = "default-on";
+	default-state = "on";
+};

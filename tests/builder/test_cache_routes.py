@@ -50,3 +50,14 @@ def test_Rockchip各路由保留软件包manifest产物(tmp_path, format_, key):
     builder._packages_manifest = tmp_path / 'packages.manifest'
     result = builder.collect(None, {'rootfs': {'image_format': format_}})
     assert result == {key: builder._output, 'packages': builder._packages_manifest}
+
+
+@pytest.mark.parametrize('bootloader,names', [
+    ({}, {'boot.img'}),
+    ({'ufs_rawprogram': ['rawprogram1.xml'], 'ufs_patch': ['patch1.xml']},
+     {'boot.img', 'dtb.bin'}),
+])
+def test_qcs6490_ufs启动固件板的boot另需dtb分区镜像(tmp_path, bootloader, names):
+    specs = outputs(tmp_path, 'boot', platform='qualcommqcs6490', bootloader=bootloader)
+    assert {item.path.name for item in specs.values()} == names
+    assert all(item.required and not item.allow_empty for item in specs.values())

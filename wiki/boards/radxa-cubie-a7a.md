@@ -4,7 +4,7 @@ type: board
 status: wip
 sources:
   - components/board/radxa-cubie-a7a/config.jsonnet
-  - components/board/radxa-cubie-a7a/overlay/etc/usbdevice.conf
+  - components/board/radxa-cubie-a7a/overlay/etc/usbmode/gadget.d/20-radxa-cubie-a7a.yaml
   - components/board/radxa-cubie-a7a/overlay/etc/modules-load.d/aic8800.conf
   - components/board/radxa-cubie-a7a/overlay/etc/modprobe.d/aic8800.conf
   - docs/first-steps.md

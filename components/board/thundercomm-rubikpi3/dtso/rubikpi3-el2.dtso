@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// RUBIK Pi 3 EL2（KVM）启动所需的设备树调整，构建期合并进 base DTB。
+//
+// 启动固件换用 xbl_config_kvm.elf 后 Linux 直接运行在 EL2，远程处理器固件的
+// SMMU 流不再由 Gunyah 管理，改由本 DT 的使用者（Linux）管理。依据：
+// - 上游 Qualcomm 提交的 kodiak-el2.dtso（"arm64: dts: qcom: kodiak: Add EL2
+//   overlay" v10，2026-07）：GPU zap、ADSP/CDSP iommus、watchdog。其中
+//   remoteproc_mpss / wifi 在本板 DTS 已删除，不引用；上游禁用 venus，本板改用下项。
+// - radxa/kernel@linux-7.0.2 的 qcs6490-radxa-dragon-q6a-kvm.dtso：SCM SHM bridge
+//   与 venus video-firmware（实板验证 EL2 下硬件编码可用）。Radxa UEFI 专用的
+//   /chosen 标记、7.0.2 无驱动读取的 qcom,broken-reset、Q6A 板级 PCIe 窗口不移植。
+#include <dt-bindings/firmware/qcom,scm.h>
+
+/dts-v1/;
+/plugin/;
+
+// EL2 下由 Linux 自行把 GPU 切出安全模式，不能也无需加载 TZ zap shader。
+&gpu_zap_shader {
+	status = "disabled";
+};
+
+// ADSP / CDSP 的 PAS 固件加载经 Linux 管理的 SMMU 流；缺少时 EL2 下
+// qcom_q6v5_pas 报 "error -22 initializing firmware"，DSP 停在 offline（实板复现）。
+&remoteproc_adsp {
+	iommus = <&apps_smmu 0x1800 0x0>;
+};
+
+&remoteproc_cdsp {
+	iommus = <&apps_smmu 0x11a0 0x0400>;
+};
+
+// EL1 下 APSS 看门狗归 Gunyah；EL2 下由 Linux 持有。
+&watchdog {
+	status = "okay";
+};
+
+// 没有 hypervisor 时 SHM bridge 归属 Linux 自身（qcom_tzmem 读取）。
+&scm {
+	qcom,shm-bridge-vmid = <QCOM_SCM_VMID_SELF_OWNER>;
+};
+
+// Venus 由 Linux 经 video-firmware 子节点的 SMMU 流自行加载并启动固件，并追加
+// 0x2184 流（与 Q6A KVM overlay 相同）。硬件编码在 EL1 下喂帧即整机复位，
+// Q6A 实板验证 EL2 下可用。
+&venus {
+	iommus = <&apps_smmu 0x2180 0x20>,
+		 <&apps_smmu 0x2184 0x20>;
+
+	video-firmware {
+		iommus = <&apps_smmu 0x21a2 0x0>;
+	};
+};

@@ -9,6 +9,7 @@ from builder.config.registry import resolve_config
 from builder.engine import _topo_sort
 from builder.platforms.allwinnera733.kernel import AllwinnerA733KernelBuilder
 from builder.platforms.allwinnera733.rootfs import AllwinnerA733RootfsBuilder
+from builder.rootfs import _merge_tree_command
 
 
 class RecordingDocker:
@@ -202,11 +203,10 @@ def test_rootfs安装kernel_modules到lib_modules(monkeypatch, tmp_path):
     )
 
     assert docker.privileged_commands == [
-        [
-            "cp", "-a",
-            f"{cache.target_dir}/kernel/modules/lib/modules/.",
-            str(rootfs_dir / "lib" / "modules"),
-        ]
+        _merge_tree_command(
+            cache.target_dir / "kernel/modules/lib/modules",
+            rootfs_dir / "lib" / "modules",
+        )
     ]
 
 

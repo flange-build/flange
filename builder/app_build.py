@@ -43,7 +43,9 @@ def validate_elf_architecture(files: Sequence[tuple[Path, str, int]], arch: str)
             continue
         # 固件和 /usr/share 里的 DSP payload 可能是另一处理器的 ELF。
         # 只验证 Linux 用户态执行目录与动态库搜索目录。
-        if destination.startswith("/lib/firmware/") or not destination.startswith(
+        if destination.startswith(("/lib/firmware/", "/usr/lib/firmware/")):
+            continue
+        if not destination.startswith(
             ("/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/", "/lib/", "/usr/lib/", "/usr/lib64/")
         ):
             continue

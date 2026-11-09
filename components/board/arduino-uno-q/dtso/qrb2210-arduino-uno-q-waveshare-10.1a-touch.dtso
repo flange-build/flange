@@ -1,0 +1,24 @@
+/*
+ * Waveshare UNO-Q-DSI-TOUCH-10.1A 触摸修正 overlay，须在 carrier-media 与
+ * panel-10in overlay 之后合并。
+ *
+ * GT9271 经 CCI I2C 读 186 字节配置时返回 -EOPNOTSUPP，goodix 驱动退回默认
+ * 0..4095 坐标范围，而芯片实际按 800x1280 上报，触摸挤在屏幕一角。官方镜像用
+ * udev 近似校准矩阵（5.2/3.2）补偿，但该规则依赖 fb0 先于触摸设备出现，时序
+ * 不成立时不生效。这里直接声明原始尺寸。
+ *
+ * 显示默认顺时针旋转 90°（xrandr right，见 LightDM display-setup 脚本），触摸同步
+ * 旋转：内核先翻转 X 再交换 XY，上报 1280x800 横屏坐标，等价于微雪文档
+ * "90° Right" 的 TransformationMatrix "0 1 0 -1 0 1 0 0 1"。
+ * size-x/size-y 指交换前的传感器原始轴。
+ */
+
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/cci@5c1b000/i2c-bus@0/goodix@5d} {
+	touchscreen-size-x = <800>;
+	touchscreen-size-y = <1280>;
+	touchscreen-inverted-x;
+	touchscreen-swapped-x-y;
+};

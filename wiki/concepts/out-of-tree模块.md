@@ -29,6 +29,7 @@ out-of-tree（OOT，树外）内核模块由 `kernel.oot_modules` 声明；独�
 ## 关键设计要点
 
 - `kernel.oot_modules` 声明 `dir`、`label`、`make_args`、`ko_pattern` 以及可选构建钩子。
+- 可选 `stage: true`：每次构建先把 `dir` 全新拷贝到 `.build/work/<target>/kernel-oot/` 再编译，`make_args` / `ko_pattern` 用 `{oot_build_dir}` 引用实际编译目录。硬件特性包的 oot-driver 一律暂存——包目录整树是 kernel 任务输入，原地编译产生的 `.o/.ko` 会让输入身份在执行期间变化而拒绝发布缓存。
 - `sources.<name>` 唯一描述 remote `{url,branch|commit,...}` 或 local `{local_path}` source。
 - `kernel.oot_sources.<name>: {source: {name, subpath?}}` 复用来源定义；实际编译使用当前目标隔离工作树，不写共享下载仓库。
 - `SourceManager.ensure_oot_source()` 注入 `{<name>_src}` 模板变量；`{kernel_src}` 始终可用。

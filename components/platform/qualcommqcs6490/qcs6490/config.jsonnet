@@ -48,7 +48,7 @@
       'defconfig', 'qcom_module.config', 'radxa.config',
       'radxa_custom.config',
     ],
-    config: {
+    config+: {
       // 无 initramfs 且 rootfs 位于 UFS，HCD/controller 与 QMP PHY 必须 builtin。
       CONFIG_SCSI_UFSHCD: 'y',
       CONFIG_SCSI_UFSHCD_PLATFORM: 'y',

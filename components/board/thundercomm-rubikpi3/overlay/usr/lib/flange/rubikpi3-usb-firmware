@@ -1,0 +1,38 @@
+#!/bin/bash
+# 挂载 RUBIK Pi 3 板载 usb_fw 分区并重新探测缺固件的 Renesas xHCI 主控。
+# /usr/lib/firmware/renesas_usb_fw.mem 是指向挂载点的符号链接（板级 overlay）。
+# 分区或固件缺失时只记录原因并退出 0，不阻塞启动。
+set -euo pipefail
+shopt -s nullglob
+
+PART=/dev/disk/by-partlabel/usb_fw
+MOUNT_DIR=/var/usbfw
+FW_NAME=renesas_usb_fw.mem
+
+if ! udevadm wait --timeout=10 "${PART}"; then
+    echo "未找到 ${PART}，跳过 Renesas USB3 固件加载"
+    exit 0
+fi
+
+mkdir -p "${MOUNT_DIR}"
+if ! mountpoint -q "${MOUNT_DIR}" \
+        && ! mount -t ext4 -o ro,nodev,nosuid,noexec "${PART}" "${MOUNT_DIR}"; then
+    echo "usb_fw 分区无法以 ext4 只读挂载，跳过" >&2
+    exit 0
+fi
+if [ ! -f "${MOUNT_DIR}/${FW_NAME}" ]; then
+    echo "usb_fw 分区缺少 ${FW_NAME}，跳过" >&2
+    exit 0
+fi
+
+modprobe xhci-pci-renesas
+for dev in /sys/bus/pci/devices/*; do
+    [ "$(cat "${dev}/vendor")" = "0x1912" ] || continue
+    case "$(cat "${dev}/device")" in
+        0x0014|0x0015) ;;
+        *) continue ;;
+    esac
+    [ -e "${dev}/driver" ] && continue
+    echo "重新探测 Renesas xHCI $(basename "${dev}")"
+    basename "${dev}" > /sys/bus/pci/drivers_probe
+done

@@ -24,7 +24,10 @@ local product = std.extVar('product');
   },
   rootfs+: {
     groups+: ['fastrpc'],
-    packages+: ['acl', 'libbsd0', 'libyaml-0-2', 'udev'],
+    packages+: ['acl', 'libbsd0', 'libyaml-0-2', 'udev'] + [
+      // Iris 硬件编解码验证工具：gst-launch-1.0、h264parse/h265parse、v4l2-ctl
+      'gstreamer1.0-tools', 'gstreamer1.0-plugins-bad', 'v4l-utils',
+    ],
     extra_firmware+: [{
       name: 'radxa-firmware-sc8280xp',
       source: {

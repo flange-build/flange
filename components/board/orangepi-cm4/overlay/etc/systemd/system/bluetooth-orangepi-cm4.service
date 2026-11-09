@@ -1,0 +1,27 @@
+[Unit]
+Description=Orange Pi CM4 Bluetooth UART attach (AP6256 / BCM4345C5)
+Documentation=man:btattach(1)
+# 板载 AP6256 的 BT 走 UART1。rk3566-orangepi-cm4.dtsi 只给出 wireless-bluetooth
+# 平台节点（Rockchip rfkill_rk，声明 BT_REG_ON / wake / rts GPIO），uart1 下没有
+# serdev 形态的 bluetooth 子节点，因此内核 hci_uart 不会自动 attach——尽管
+# CONFIG_BT_HCIUART_SERDEV=y。需要用户态 btattach 把 /dev/ttyS1 绑成 hci 设备，
+# attach 时 btbcm 自动加载 /lib/firmware/brcm/BCM4345C5.hcd patchram，之后由
+# bluetoothd 接管。
+Before=bluetooth.service
+After=systemd-modules-load.service
+ConditionPathExists=/dev/ttyS1
+
+[Service]
+# btattach 不 daemonize：attach 后持续持有 line discipline，进程一退出 hci 设备
+# 就消失，所以必须是 simple 而非 oneshot。
+Type=simple
+# rfkill_rk 建出的 bt_default 默认 soft-blocked，systemd-rfkill 还会把该状态
+# 持久化到 /var/lib/systemd/rfkill 并在开机恢复。实测 `rfkill unblock bluetooth`
+# 对它无效（驱动未回写 soft 状态），只能直接写 sysfs；rfkill 索引不固定，按 name 找。
+ExecStartPre=/usr/lib/flange/bt-unblock.sh
+ExecStart=/usr/bin/btattach -B /dev/ttyS1 -P bcm
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

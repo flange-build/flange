@@ -7,7 +7,7 @@ sources:
   - components/board/rp-pro-rk3568-h/patches/kernel/0001-dts-pro-rk3568-h-firmware-class-path-fix.patch
   - components/board/rp-pro-rk3568-h/patches/kernel/0002-dt-bindings-mipi-dsi-eot-packet-compat.patch
   - components/board/rp-pro-rk3568-h/overlay/etc/hostname
-  - components/board/rp-pro-rk3568-h/overlay/etc/usbdevice.conf
+  - components/board/rp-pro-rk3568-h/overlay/etc/usbmode/gadget.d/20-rp-pro-rk3568-h.yaml
   - components/platform/rockchip/rk3568/config.jsonnet
   - docs/first-steps.md
 related:
@@ -58,4 +58,4 @@ AP6275P 是 BCM43752A2 的 PCIe 版（AP6275S 才是 SDIO，rkwifibt `wifibt-uti
 
 ## overlay
 
-`overlay/etc/hostname` + `overlay/etc/usbdevice.conf`，与同平台其他板模板一致。
+`overlay/etc/hostname` + `overlay/etc/usbmode/gadget.d/20-rp-pro-rk3568-h.yaml`，与同平台其他板模板一致。

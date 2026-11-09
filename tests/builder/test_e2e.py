@@ -1,13 +1,14 @@
 """端到端验证测试（Task 13）
 
 覆盖场景：
-13.1 adbd 真实 App 端到端打包验证：
-    - 使用真实 components/app/adbd/ 目录构建 .deb（若目录不存在则跳过）
+13.1 真实 App 端到端打包验证（adbd + usbmoded）：
+    - 使用真实 components/app/ 下的目录构建 .deb（若目录不存在则跳过）
     - 验证 .deb 文件名格式
     - 验证 control 文件字段（Package / Version / Architecture / Depends）
-    - 验证 data.tar.gz 文件列表（完整安装路径）
-    - 验证 postinst 脚本包含 chroot 兼容的 systemd enable 逻辑
-    - 验证文件权限（/usr/bin/adbd 0o755，/etc/usbdevice.conf 0o644）
+    - 验证 data.tar.gz 文件列表（完整安装路径）与文件权限
+    - adbd（auto_start=false，无 conffiles）：postinst 只 daemon-reload
+    - usbmoded（auto_start=true，有 conffiles）：postinst 含 chroot 兼容的
+      systemd enable 逻辑，control.tar.gz 含 conffiles
 
 13.2 构建引擎 App 集成验证：
     - engine.build("rootfs") 时拓扑排序包含 app → rootfs 顺序
@@ -86,8 +87,14 @@ def _get_tar_info(tar_data: bytes, name: str) -> tarfile.TarInfo:
         return tf.getmember(name)
 
 
+def _read_tar_file_names(tar_data: bytes) -> list[str]:
+    """只返回 tar.gz 中的普通文件成员，滤掉中间目录项。"""
+    with tarfile.open(fileobj=io.BytesIO(tar_data), mode="r:gz") as tf:
+        return sorted(m.name for m in tf.getmembers() if m.isfile())
+
+
 # ---------------------------------------------------------------------------
-# 辅助：项目根目录 / adbd 目录探测
+# 辅助：项目根目录 / App 目录探测
 # ---------------------------------------------------------------------------
 
 # 本测试文件位于 tests/builder/，项目根为上两级目录
@@ -99,6 +106,13 @@ _ADBD_EXISTS = _ADBD_DIR.is_dir() and (_ADBD_DIR / "app.yaml").is_file()
 _SKIP_IF_NO_ADBD = pytest.mark.skipif(
     not _ADBD_EXISTS,
     reason=f"adbd App 目录不存在：{_ADBD_DIR}，跳过端到端测试",
+)
+
+_USBMODED_DIR = _PROJECT_ROOT / "components" / "app" / "usbmoded"
+_USBMODED_EXISTS = _USBMODED_DIR.is_dir() and (_USBMODED_DIR / "app.yaml").is_file()
+_SKIP_IF_NO_USBMODED = pytest.mark.skipif(
+    not _USBMODED_EXISTS,
+    reason=f"usbmoded App 目录不存在：{_USBMODED_DIR}，跳过端到端测试",
 )
 
 
@@ -267,13 +281,13 @@ def test_q8b_fastrpc_test_uses_official_package_name(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 辅助：构建 adbd .deb（供多个测试用例复用）
+# 辅助：构建真实 App 的 .deb（供多个测试用例复用）
 # ---------------------------------------------------------------------------
 
-def _build_adbd_deb(output_dir: Path) -> Path:
-    """使用真实 components/app/adbd/ 构建 adbd .deb，返回 .deb 路径。
+def _build_app_deb(name: str, output_dir: Path) -> Path:
+    """使用真实 components/app/<name>/ 构建 .deb，返回 .deb 路径。
 
-    DockerRunner 与 SourceManager 均使用 MagicMock——adbd 为预编译 App
+    DockerRunner 使用 MagicMock —— adbd / usbmoded 均为预编译或纯脚本 App
     （build.system=none），不需要 Docker 编译步骤。
     """
     config = {
@@ -292,7 +306,7 @@ def _build_adbd_deb(output_dir: Path) -> Path:
     )
     # 显式工作区把全部产物限制在测试临时目录。
     output_dir.mkdir(parents=True, exist_ok=True)
-    return builder.build_one("adbd").root().runtime_debs[0]
+    return builder.build_one(name).root().runtime_debs[0]
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +326,7 @@ class TestAdbdEndToEnd:
     def deb_path(cls, tmp_path_factory):
         """Class-scoped fixture：只构建一次 .deb，所有测试复用。"""
         out = tmp_path_factory.mktemp("adbd_deb")
-        return _build_adbd_deb(out)
+        return _build_app_deb("adbd", out)
 
     @pytest.fixture(scope="class")
     @classmethod
@@ -350,8 +364,8 @@ class TestAdbdEndToEnd:
         assert deb_path.is_file()
 
     def test_deb文件名格式(self, deb_path):
-        """文件名应为 adbd_1.0.0_arm64.deb（Package_Version_Arch.deb）。"""
-        assert deb_path.name == "adbd_1.0.0_arm64.deb", (
+        """文件名应为 adbd_2.0.0_arm64.deb（Package_Version_Arch.deb）。"""
+        assert deb_path.name == "adbd_2.0.0_arm64.deb", (
             f"文件名格式不符：{deb_path.name}"
         )
 
@@ -380,15 +394,15 @@ class TestAdbdEndToEnd:
 
     def test_control_Version字段(self, control_text):
         """control 文件必须包含正确的 Version 字段。"""
-        assert "Version: 1.0.0" in control_text
+        assert "Version: 2.0.0" in control_text
 
     def test_control_Architecture字段(self, control_text):
         """aarch64 目标架构应映射为 arm64 写入 control。"""
         assert "Architecture: arm64" in control_text
 
     def test_control_Depends字段(self, control_text):
-        """adbd app.yaml 中声明了 libc6 依赖，control 必须包含 Depends 字段。"""
-        assert "Depends: libc6" in control_text
+        """adbd app.yaml 声明了 usbmoded 与 libc6 依赖，须写进 Depends 字段。"""
+        assert "Depends: usbmoded, libc6" in control_text
 
     def test_control_Maintainer字段(self, control_text):
         """control 文件必须包含 Maintainer 字段。"""
@@ -408,35 +422,23 @@ class TestAdbdEndToEnd:
             f"./usr/bin/adbd 不在 data.tar.gz 中，现有文件：{data_names}"
         )
 
-    def test_data包含usbdevice_conf(self, data_names):
-        """data.tar.gz 应包含 ./etc/usbdevice.conf（来自 install 段显式映射）。"""
-        assert "./etc/usbdevice.conf" in data_names, (
-            f"./etc/usbdevice.conf 不在 data.tar.gz 中，现有文件：{data_names}"
-        )
-
-    def test_data包含usbdevice_script(self, data_names):
-        """data.tar.gz 应包含 ./usr/sbin/usbdevice（来自 install 段显式映射）。"""
-        assert "./usr/sbin/usbdevice" in data_names, (
-            f"./usr/sbin/usbdevice 不在 data.tar.gz 中，现有文件：{data_names}"
-        )
-
     def test_data包含systemd_service(self, data_names):
-        """data.tar.gz 应包含 usbdevice.service（来自 systemd/ 约定目录）。"""
-        assert "./lib/systemd/system/usbdevice.service" in data_names, (
-            f"./lib/systemd/system/usbdevice.service 不在 data.tar.gz 中，"
+        """data.tar.gz 应包含 usbmoded-adbd.service（来自 systemd/ 约定目录）。"""
+        assert "./lib/systemd/system/usbmoded-adbd.service" in data_names, (
+            f"./lib/systemd/system/usbmoded-adbd.service 不在 data.tar.gz 中，"
             f"现有文件：{data_names}"
         )
 
-    def test_data包含udev_rules(self, data_names):
-        """data.tar.gz 应包含 61-usbdevice.rules（install 段显式映射到 /etc/udev/rules.d/）。
+    def test_data只含二进制与unit(self, ar_members):
+        """adbd 包只装 adbd 二进制与其 daemon unit。
 
-        注意：app.yaml 的 install 段将 udev/61-usbdevice.rules 显式映射到
-        /etc/udev/rules.d/，覆盖了约定目录 /lib/udev/rules.d/ 的默认路径。
+        gadget 配置、udev 规则与编排脚本随三层架构重构移入 usbmoded 包，
+        不应再出现在 adbd 中。
         """
-        assert "./etc/udev/rules.d/61-usbdevice.rules" in data_names, (
-            f"./etc/udev/rules.d/61-usbdevice.rules 不在 data.tar.gz 中，"
-            f"现有文件：{data_names}"
-        )
+        assert _read_tar_file_names(ar_members["data.tar.gz"]) == [
+            "./lib/systemd/system/usbmoded-adbd.service",
+            "./usr/bin/adbd",
+        ]
 
     # -------------------------------------------------------------------
     # 文件权限验证
@@ -449,11 +451,13 @@ class TestAdbdEndToEnd:
             f"/usr/bin/adbd 权限错误：{oct(info.mode)}，期望 0o755"
         )
 
-    def test_conf文件权限为0o644(self, ar_members):
-        """/etc/usbdevice.conf 在 data.tar.gz 中权限应为 0o644（只读配置）。"""
-        info = _get_tar_info(ar_members["data.tar.gz"], "./etc/usbdevice.conf")
+    def test_unit文件权限为0o644(self, ar_members):
+        """systemd unit 在 data.tar.gz 中权限应为 0o644（只读）。"""
+        info = _get_tar_info(
+            ar_members["data.tar.gz"], "./lib/systemd/system/usbmoded-adbd.service"
+        )
         assert info.mode == 0o644, (
-            f"/etc/usbdevice.conf 权限错误：{oct(info.mode)}，期望 0o644"
+            f"usbmoded-adbd.service 权限错误：{oct(info.mode)}，期望 0o644"
         )
 
     # -------------------------------------------------------------------
@@ -477,14 +481,14 @@ class TestAdbdEndToEnd:
         """postinst 必须包含 chroot 兼容检测（[ -d /run/systemd/system ]）。"""
         assert "[ -d /run/systemd/system ]" in postinst_text
 
-    def test_postinst含systemctl_enable(self, postinst_text):
-        """postinst 运行中系统分支必须调用 systemctl enable usbdevice.service。"""
-        assert "systemctl enable usbdevice.service" in postinst_text
+    def test_postinst不enable服务(self, postinst_text):
+        """adbd 的 auto_start=false，postinst 不得注册任何启动目标。
 
-    def test_postinst含chroot软链接逻辑(self, postinst_text):
-        """postinst chroot 分支必须手动创建 .wants 软链接。"""
-        assert "ln -sf" in postinst_text
-        assert ".wants" in postinst_text
+        它的启停由 usbmoded 的 adb 能力驱动；一旦被 enable，systemd 会在
+        FunctionFS 就绪前抢先拉起 adbd。
+        """
+        assert "systemctl enable" not in postinst_text
+        assert ".wants" not in postinst_text
 
     def test_postinst权限可执行(self, ar_members):
         """postinst 在 control.tar.gz 中权限应有可执行位。"""
@@ -497,16 +501,136 @@ class TestAdbdEndToEnd:
     # conffiles 验证
     # -------------------------------------------------------------------
 
+    def test_无conffiles(self, ar_members):
+        """adbd 已无配置文件（conffiles: []），不应生成 ./conffiles。"""
+        names = _read_tar_names(ar_members["control.tar.gz"])
+        assert "./conffiles" not in names
+
+
+@_SKIP_IF_NO_USBMODED
+class TestUsbmodedEndToEnd:
+    """13.1 — 使用真实 components/app/usbmoded/ 构建 .deb 并验证内容。
+
+    usbmoded 是 auto_start=true 且带 conffiles 的 App —— 原先由 adbd 覆盖的
+    「postinst 注册启动目标」与「conffiles 生成」端到端验证随重构移到这里。
+    """
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def deb_path(cls, tmp_path_factory):
+        """Class-scoped fixture：只构建一次 .deb，所有测试复用。"""
+        out = tmp_path_factory.mktemp("usbmoded_deb")
+        return _build_app_deb("usbmoded", out)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def ar_members(cls, deb_path):
+        return _read_ar_members(deb_path)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def control_text(cls, ar_members):
+        return _read_tar_member(ar_members["control.tar.gz"], "./control").decode("utf-8")
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def data_names(cls, ar_members):
+        return _read_tar_names(ar_members["data.tar.gz"])
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def postinst_text(cls, ar_members):
+        return _read_tar_member(ar_members["control.tar.gz"], "./postinst").decode("utf-8")
+
+    def test_deb文件名格式(self, deb_path):
+        """文件名应为 usbmoded_1.0.0_arm64.deb（Package_Version_Arch.deb）。"""
+        assert deb_path.name == "usbmoded_1.0.0_arm64.deb", (
+            f"文件名格式不符：{deb_path.name}"
+        )
+
+    def test_control_Depends字段(self, control_text):
+        """配置为 YAML，运行时必须带上 python3 与 python3-yaml。"""
+        assert "Depends: python3, python3-yaml" in control_text
+
+    # -------------------------------------------------------------------
+    # data.tar.gz：显式 install 映射覆盖约定路径
+    # -------------------------------------------------------------------
+
+    def test_data包含sbin入口(self, data_names):
+        """服务入口与 CLI 显式映射到 /usr/sbin/（约定路径为 /usr/bin/）。"""
+        assert "./usr/sbin/usbmoded" in data_names
+        assert "./usr/sbin/usb-mode" in data_names
+        assert "./usr/bin/usbmoded" not in data_names
+
+    def test_data包含配置(self, data_names):
+        """gadget / 场景定义显式映射到 /etc/usbmode/。"""
+        assert "./etc/usbmode/gadget.d/10-default.yaml" in data_names
+        assert "./etc/usbmode/scenes.d/10-common.yaml" in data_names
+
+    def test_data包含udev_rules(self, data_names):
+        """udev 规则显式映射到 /etc/udev/rules.d/，覆盖约定的 /lib/udev/rules.d/。"""
+        assert "./etc/udev/rules.d/61-usbmode.rules" in data_names
+        assert "./lib/udev/rules.d/61-usbmode.rules" not in data_names
+
+    def test_data包含python包(self, data_names):
+        """Python 包装进 dist-packages，装上即可直接 import。"""
+        base = "./usr/lib/python3/dist-packages/usbmoded"
+        assert f"{base}/__init__.py" in data_names
+        assert f"{base}/capabilities/adb.py" in data_names
+
+    def test_data包含systemd_service(self, data_names):
+        """systemd/ 约定目录下的两个 unit 都要装入 /lib/systemd/system/。"""
+        assert "./lib/systemd/system/usbmoded.service" in data_names
+        assert "./lib/systemd/system/usbmoded-mtp-server.service" in data_names
+
+    def test_sbin入口权限为0o755(self, ar_members):
+        """/usr/sbin/usbmoded 权限应为 0o755（可执行）。"""
+        info = _get_tar_info(ar_members["data.tar.gz"], "./usr/sbin/usbmoded")
+        assert info.mode == 0o755, f"权限错误：{oct(info.mode)}，期望 0o755"
+
+    def test_conf文件权限为0o644(self, ar_members):
+        """配置文件权限应为 0o644（只读配置）。"""
+        info = _get_tar_info(
+            ar_members["data.tar.gz"], "./etc/usbmode/gadget.d/10-default.yaml"
+        )
+        assert info.mode == 0o644, f"权限错误：{oct(info.mode)}，期望 0o644"
+
+    # -------------------------------------------------------------------
+    # postinst：auto_start=true 的 chroot 兼容 enable 逻辑
+    # -------------------------------------------------------------------
+
+    def test_postinst含chroot检测(self, postinst_text):
+        """postinst 必须包含 chroot 兼容检测（[ -d /run/systemd/system ]）。"""
+        assert "[ -d /run/systemd/system ]" in postinst_text
+
+    def test_postinst含systemctl_enable(self, postinst_text):
+        """postinst 运行中系统分支必须调用 systemctl enable usbmoded.service。"""
+        assert "systemctl enable usbmoded.service" in postinst_text
+
+    def test_postinst含chroot软链接逻辑(self, postinst_text):
+        """postinst chroot 分支必须手动创建 .wants 软链接。
+
+        rootfs 构建期在 chroot 内装包，此时 systemctl enable 不可用。
+        """
+        assert "ln -sf" in postinst_text
+        assert ".wants" in postinst_text
+
+    # -------------------------------------------------------------------
+    # conffiles
+    # -------------------------------------------------------------------
+
     def test_conffiles存在(self, ar_members):
-        """control.tar.gz 内应包含 ./conffiles（adbd 有配置文件）。"""
+        """control.tar.gz 内应包含 ./conffiles（usbmoded 有配置文件）。"""
         names = _read_tar_names(ar_members["control.tar.gz"])
         assert "./conffiles" in names
 
-    def test_conffiles包含etc_usbdevice_conf(self, ar_members):
-        """/etc/usbdevice.conf 应出现在 conffiles 中（app.yaml 中已声明）。"""
-        tar_data = ar_members["control.tar.gz"]
-        conffiles_text = _read_tar_member(tar_data, "./conffiles").decode("utf-8")
-        assert "/etc/usbdevice.conf" in conffiles_text
+    def test_conffiles包含gadget与场景定义(self, ar_members):
+        """app.yaml 中声明的两个配置文件都应出现在 conffiles 中。"""
+        conffiles_text = _read_tar_member(
+            ar_members["control.tar.gz"], "./conffiles"
+        ).decode("utf-8")
+        assert "/etc/usbmode/gadget.d/10-default.yaml" in conffiles_text
+        assert "/etc/usbmode/scenes.d/10-common.yaml" in conffiles_text
 
 
 # ---------------------------------------------------------------------------

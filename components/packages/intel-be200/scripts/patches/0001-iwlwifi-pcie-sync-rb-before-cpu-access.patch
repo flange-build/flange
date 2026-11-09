@@ -1,0 +1,40 @@
+From: flange <flange@localhost>
+Subject: [PATCH] iwlwifi: pcie: 非一致性 DMA 平台读取 RB 前同步缓存
+
+iwl_pcie_rx_handle_rb() 在 dma_unmap_page() 之前就解析 RB 内容；iwlmld 开启
+rx_mpdu_no_unmap 后，MPDU 全程不 unmap 也不 sync。x86 DMA 与缓存硬件一致，
+不受影响；arm64 Rockchip PCIe 为非一致性 DMA，CPU 读到缓存中的陈旧数据，
+触发 "frame on invalid queue" WARN 并丢帧，接收吞吐跌到几十 Mbit/s。
+
+读取前 dma_sync_single_for_cpu()，保持映射复用时交还设备前
+dma_sync_single_for_device()；一致性平台上二者近似空操作。
+---
+--- a/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/rx.c
++++ b/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/rx.c
+@@ -1310,6 +1310,15 @@
+ 	if (WARN_ON(!rxb))
+ 		return;
+ 
++	/*
++	 * The RB is still DMA-mapped here and is read before (or, with
++	 * rx_mpdu_no_unmap, entirely without) dma_unmap_page(). On
++	 * non-coherent platforms (e.g. arm64 Rockchip PCIe) the CPU must
++	 * invalidate its cache first, or it parses stale data.
++	 */
++	dma_sync_single_for_cpu(trans->dev, rxb->page_dma, max_len,
++				DMA_FROM_DEVICE);
++
+ 	while (offset + sizeof(u32) + sizeof(struct iwl_cmd_header) < max_len) {
+ 		struct iwl_rx_packet *pkt;
+ 		struct iwl_cmd_header hdr;
+@@ -1456,6 +1465,10 @@
+ 				rxb->page = NULL;
+ 				goto reuse_without_page;
+ 			}
++		} else {
++			/* still mapped: hand the buffer back to the device */
++			dma_sync_single_for_device(trans->dev, rxb->page_dma,
++						   max_len, DMA_FROM_DEVICE);
+ 		}
+ 
+ 		list_add_tail(&rxb->list, &rxq->rx_free);

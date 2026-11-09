@@ -1,0 +1,82 @@
+/*
+ * Orange Pi CM4 + Waveshare CM4-DISP-BASE-5A（VER2）底板外设 overlay：
+ * RTC、风扇、USB host。5" DSI 屏单独放在
+ * rk3566-orangepi-cm4-waveshare-display-5a-panel.dtso，原因见该文件头。
+ *
+ * 底板外设与 CM4 引脚 → RK3566 控制器映射：
+ *
+ *   CM4 引脚             RK3566        底板外设
+ *   SCL0/SDA0 (80/82)    i2c1          屏控 MCU @0x45、触摸 @0x38、
+ *                                      RTC PCF85063A @0x51、风扇 EMC2301 @0x2f
+ *   DSI1 lanes           dsi1          5" DSI 屏（见 -panel.dtso）
+ *   USB2                 usbdrd_dwc3   FSUSB42 开关：BOOT 拨码 OFF → FE1.1s
+ *                                      4 口 USB2 hub；ON → Type-C 烧录口
+ *   GPIO2/3 (40pin 3/5)  i2c2 (m1)     40PIN I2C；RTC/FAN 跳线可改挂这里
+ *
+ * i2c1 ↔ SCL0/SDA0、dsi1 ↔ CM4 DSI1 的对应关系取自 vendor
+ * rk3566-orangepi-cm4.dtsi：它照搬树莓派 CM4 惯例，把 raspits_panel@45 /
+ * ft5426@38 挂在 i2c1 并连到 dsi1（另一组挂 i2c3 = ID_SD/ID_SC 连 dsi0）。
+ *
+ * 全部 fragment 走 &label / &{/path} target，根级 / 下不新增节点（根级
+ * 裸节点会让 U-Boot fdt_overlay_apply 报 FDT_ERR_BADOVERLAY）。
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "rockchip,rk3566-orangepi-cm4";
+
+	metadata {
+		title = "Waveshare CM4-DISP-BASE-5A VER2 baseboard for Orange Pi CM4";
+		compatible = "rockchip,rk3566-orangepi-cm4";
+		category = "misc";
+		exclusive = "&usbdrd_dwc3";
+		description = "PCF85063A RTC, EMC2301 fan, USB host for the onboard hub.";
+	};
+};
+
+/* ---- RTC 与风扇（RTC/FAN I2C 跳线默认 SDA0/SCL0 → i2c1）---- */
+
+&i2c1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/* 中断脚经 SN74LVC1G07 默认接 PI_RUN（闹钟触发复位），不接 SoC GPIO。 */
+	ws_rtc: rtc@51 {
+		compatible = "nxp,pcf85063a";
+		reg = <0x51>;
+	};
+
+	/*
+	 * 转速闭环与 PWM 由芯片完成；温控策略在用户态
+	 * （waveshare-fan.service）：RK3566 两路 tsadc 已被 soc/gpu 热区独占，
+	 * 且二者用 power_allocator governor，非功率型 cooling device 不会被驱动。
+	 */
+	ws_fan: fan@2f {
+		compatible = "microchip,emc2301";
+		reg = <0x2f>;
+	};
+};
+
+/*
+ * 带 CR1220 电池的 PCF85063A 固定为 rtc0：内核 hctosys 与 /dev/rtc 默认都用
+ * rtc0。RK809 自带的 RTC（无后备电池）让到 rtc1；它是 MFD 子设备、没有自己的
+ * of_node，按父节点 pmic@20 取别名。不显式占位的话，先 probe 的 RK809 会抢走
+ * ID 0，导致 rtc0 别名失效。
+ */
+&{/aliases} {
+	rtc0 = "/i2c@fe5a0000/rtc@51";
+	rtc1 = "/i2c@fdd40000/pmic@20";
+};
+
+/* ---- USB：CM4 USB2 口平时接板载 4 口 hub ---- */
+
+/*
+ * BOOT 拨码 OFF（正常启动）时 FSUSB42 把 USB0 切到 FE1.1s hub，底板 ID 脚
+ * 悬空，OTG 会停在 peripheral，hub 下的 4 个口全部不可用，所以固定 host。
+ * 代价是没有 USB gadget（USB adb）；调试改走千兆网口 ssh。
+ */
+&usbdrd_dwc3 {
+	dr_mode = "host";
+};

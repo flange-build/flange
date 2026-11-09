@@ -84,7 +84,10 @@ def test_linux_elf_checks_class_and_machine_but_firmware_has_own_arch(tmp_path):
     binary.write_bytes(header)
     with pytest.raises(ValueError, match='ELF 架构'):
         validate_elf_architecture([(binary, '/usr/bin/hello', 0o755)], 'aarch64')
-    validate_elf_architecture([(binary, '/lib/firmware/aux.bin', 0o644)], 'aarch64')
+    for firmware in ('/lib/firmware/aux.bin', '/usr/lib/firmware/updates/qcom/adsp.mbn'):
+        validate_elf_architecture([(binary, firmware, 0o644)], 'aarch64')
+    with pytest.raises(ValueError, match='ELF 架构'):
+        validate_elf_architecture([(binary, '/usr/lib/firmware-helper.so', 0o644)], 'aarch64')
 
 
 def test_debug_source_is_immutable_and_manifested(tmp_path):

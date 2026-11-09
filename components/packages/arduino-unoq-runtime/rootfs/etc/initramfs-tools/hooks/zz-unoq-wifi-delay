@@ -1,0 +1,11 @@
+#!/bin/bash
+set -xe
+case "${1:-}" in prereqs) echo udev; exit 0;; esac
+# BDF 在 local-bottom 按 PCB revision 选择；提前加载 SNOC 会读取错误校准。
+# 仅移除 initrd 中的 Wi-Fi 总线模块，真实 rootfs 保留模块并由切根后 udev 加载。
+for modules in "${DESTDIR}/lib/modules" "${DESTDIR}/usr/lib/modules"; do
+    if [ -d "$modules" ]; then
+        find "$modules" -name 'ath10k_snoc.ko*' -type f -delete
+    fi
+done
+depmod -b "$DESTDIR" "$version"

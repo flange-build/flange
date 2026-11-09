@@ -52,6 +52,17 @@ class TestRenderExtlinux:
         assert "  devicetree /dtb/x.dtb" in text
         assert "  fdt /" not in text
 
+    def test_initrd_follows_kernel(self):
+        spec = LabelSpec(name=NORMAL_LABEL, kernel="/boot/Image", initrd="/boot/initrd",
+                         append="${cbootargs} root=/dev/mmcblk0p1")
+        lines = render_extlinux(NORMAL_LABEL, [spec]).splitlines()
+        assert lines[lines.index("  kernel /boot/Image") + 1] == "  initrd /boot/initrd"
+        assert not any(line.lstrip().startswith("fdt") for line in lines)
+
+    def test_empty_initrd_renders_nothing(self):
+        spec = LabelSpec(name=NORMAL_LABEL, kernel="/Image", fdt="/dtb/x.dtb")
+        assert "initrd" not in render_extlinux(NORMAL_LABEL, [spec])
+
     def test_fdtoverlays(self):
         spec = LabelSpec(name=NORMAL_LABEL, kernel="/Image",
                          fdt="/dtb/x.dtb",

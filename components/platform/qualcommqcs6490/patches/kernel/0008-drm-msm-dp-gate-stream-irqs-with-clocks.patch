@@ -1,0 +1,150 @@
+[PATCH] drm/msm/dp: 按流时钟生命周期管理 STATUS2 中断
+
+Q6A 无显示器启动时，视频就绪和
+空闲图样状态可能无法确认。
+无条件使能 STATUS2 会产生中断风暴，
+拖垮 CPU 与 UFS 服务。
+仅在 link/pixel 时钟均开启时使能，
+关闭时钟前屏蔽。使用自旋锁串行化
+掩码变更与 ISR 确认，避免重新使能。
+
+残留状态的固件来源尚未证明；
+显示输出与热插拔需单独实板验收。
+
+---
+diff --git a/drivers/gpu/drm/msm/dp/dp_ctrl.c b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -16,6 +16,7 @@
+ #include <linux/pm_opp.h>
+ #include <linux/rational.h>
+ #include <linux/string_choices.h>
++#include <linux/spinlock.h>
+ 
+ #include <drm/display/drm_dp_helper.h>
+ #include <drm/display/drm_dsc_helper.h>
+@@ -138,6 +139,8 @@
+ 	struct completion video_comp;
+ 
+ 	u32 hw_revision;
++	spinlock_t irq_lock;
++	u32 stream_irq_mask;
+ 
+ 	bool core_clks_on;
+ 	bool link_clks_on;
+@@ -241,16 +244,35 @@
+ 
+ }
+ 
++/* 与 ISR 串行化，避免确认中断时重新打开已关闭的流中断。 */
++static void msm_dp_ctrl_set_stream_irq(struct msm_dp_ctrl_private *ctrl, bool enable)
++{
++	unsigned long flags;
++	u32 value;
++
++	spin_lock_irqsave(&ctrl->irq_lock, flags);
++	ctrl->stream_irq_mask = enable ? DP_INTERRUPT_STATUS2_MASK : 0;
++	value = ctrl->stream_irq_mask;
++	/* 相关时钟开启后，先确认残留状态，再允许新的完成事件。 */
++	if (enable)
++		value |= DP_INTERRUPT_STATUS2_ACK;
++	msm_dp_write_ahb(ctrl, REG_DP_INTR_STATUS2, value);
++	spin_unlock_irqrestore(&ctrl->irq_lock, flags);
++}
++
+ static u32 msm_dp_ctrl_get_interrupt(struct msm_dp_ctrl_private *ctrl)
+ {
++	unsigned long flags;
+ 	u32 intr, intr_ack;
+ 
++	spin_lock_irqsave(&ctrl->irq_lock, flags);
+ 	intr = msm_dp_read_ahb(ctrl, REG_DP_INTR_STATUS2);
+-	intr &= ~DP_INTERRUPT_STATUS2_MASK;
+-	intr_ack = (intr & DP_INTERRUPT_STATUS2)
+-			<< DP_INTERRUPT_STATUS_ACK_SHIFT;
++	intr &= DP_INTERRUPT_STATUS2;
++	intr_ack = intr << DP_INTERRUPT_STATUS_ACK_SHIFT;
+ 	msm_dp_write_ahb(ctrl, REG_DP_INTR_STATUS2,
+-		     intr_ack | DP_INTERRUPT_STATUS2_MASK);
++			 intr_ack | ctrl->stream_irq_mask);
++	intr &= ctrl->stream_irq_mask >> DP_INTERRUPT_STATUS_MASK_SHIFT;
++	spin_unlock_irqrestore(&ctrl->irq_lock, flags);
+ 
+ 	return intr;
+ }
+@@ -262,8 +284,8 @@
+ 
+ 	msm_dp_write_ahb(ctrl, REG_DP_INTR_STATUS,
+ 			DP_INTERRUPT_STATUS1_MASK);
+-	msm_dp_write_ahb(ctrl, REG_DP_INTR_STATUS2,
+-			DP_INTERRUPT_STATUS2_MASK);
++	/* 无显示流时仅保留 AUX/HPD，避免无时钟的状态位引发风暴。 */
++	msm_dp_ctrl_set_stream_irq(ctrl, ctrl->link_clks_on && ctrl->stream_clks_on);
+ }
+ 
+ void msm_dp_ctrl_disable_irq(struct msm_dp_ctrl *msm_dp_ctrl)
+@@ -272,7 +294,7 @@
+ 		container_of(msm_dp_ctrl, struct msm_dp_ctrl_private, msm_dp_ctrl);
+ 
+ 	msm_dp_write_ahb(ctrl, REG_DP_INTR_STATUS, 0x00);
+-	msm_dp_write_ahb(ctrl, REG_DP_INTR_STATUS2, 0x00);
++	msm_dp_ctrl_set_stream_irq(ctrl, false);
+ }
+ 
+ static u32 msm_dp_ctrl_get_psr_interrupt(struct msm_dp_ctrl_private *ctrl)
+@@ -1862,6 +1884,7 @@
+ 		return ret;
+ 
+ 	ctrl->link_clks_on = true;
++	msm_dp_ctrl_set_stream_irq(ctrl, ctrl->stream_clks_on);
+ 
+ 	drm_dbg_dp(ctrl->drm_dev, "enable link clocks\n");
+ 	drm_dbg_dp(ctrl->drm_dev, "stream_clks:%s link_clks:%s core_clks:%s\n",
+@@ -1878,6 +1901,7 @@
+ 
+ 	ctrl = container_of(msm_dp_ctrl, struct msm_dp_ctrl_private, msm_dp_ctrl);
+ 
++	msm_dp_ctrl_set_stream_irq(ctrl, false);
+ 	clk_bulk_disable_unprepare(ctrl->num_link_clks, ctrl->link_clks);
+ 
+ 	ctrl->link_clks_on = false;
+@@ -2306,6 +2330,7 @@
+ 			return ret;
+ 		}
+ 		ctrl->stream_clks_on = true;
++		msm_dp_ctrl_set_stream_irq(ctrl, ctrl->link_clks_on);
+ 	}
+ 
+ 	msm_dp_ctrl_send_phy_test_pattern(ctrl);
+@@ -2642,6 +2667,7 @@
+ 			goto end;
+ 		}
+ 		ctrl->stream_clks_on = true;
++		msm_dp_ctrl_set_stream_irq(ctrl, ctrl->link_clks_on);
+ 	}
+ 
+ 	if (force_link_train || !msm_dp_ctrl_channel_eq_ok(ctrl))
+@@ -2711,6 +2737,7 @@
+ 	msm_dp_ctrl_mainlink_disable(ctrl);
+ 
+ 	if (ctrl->stream_clks_on) {
++		msm_dp_ctrl_set_stream_irq(ctrl, false);
+ 		clk_disable_unprepare(ctrl->pixel_clk);
+ 		ctrl->stream_clks_on = false;
+ 	}
+@@ -2751,6 +2778,7 @@
+ 	msm_dp_ctrl_reset(&ctrl->msm_dp_ctrl);
+ 
+ 	if (ctrl->stream_clks_on) {
++		msm_dp_ctrl_set_stream_irq(ctrl, false);
+ 		clk_disable_unprepare(ctrl->pixel_clk);
+ 		ctrl->stream_clks_on = false;
+ 	}
+@@ -2894,6 +2922,7 @@
+ 	if (ret)
+ 		dev_err(dev, "failed to add DP OPP table\n");
+ 
++	spin_lock_init(&ctrl->irq_lock);
+ 	init_completion(&ctrl->idle_comp);
+ 	init_completion(&ctrl->psr_op_comp);
+ 	init_completion(&ctrl->video_comp);

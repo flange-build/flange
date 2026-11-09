@@ -4,6 +4,9 @@
 各组件构建器在同目录子模块中实现；create_builder 懒加载以便分组落地。
 """
 
+from pathlib import Path
+
+from builder.artifacts import ArtifactSpec
 from builder.docker import DockerRunner
 from builder.source import SourceManager
 
@@ -17,10 +20,21 @@ ARTIFACT_NAMES = {
     ("kernel",     "modules"):  "modules",
     ("bootloader", "edk2"):     "edk2-spi-firmware",
     ("boot",       "boot"):     "boot.img",
+    ("boot",       "dtb"):      "dtb.bin",
     ("rootfs",     "rootfs"):   "rootfs.img",
     ("recovery",   "recovery"): "recovery.img",
     ("image",      "image"):    "raw.img",
 }
+
+
+def required_artifacts(component: str, root: Path, config: dict):
+    """UFS 启动固件板的 boot 另需 dtb.bin；其余沿用默认契约。"""
+    if component == "boot" and (config.get("bootloader") or {}).get("ufs_rawprogram"):
+        return [
+            ArtifactSpec("boot", root / "boot.img", allow_empty=False),
+            ArtifactSpec("dtb", root / "dtb.bin", allow_empty=False),
+        ]
+    return None
 
 
 def create_builder(component: str, docker: DockerRunner, source: SourceManager):

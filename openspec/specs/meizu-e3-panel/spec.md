@@ -315,7 +315,7 @@
 - **THEN** `config["packages"]` 含 `"meizu-e3-panel"`
 - **AND** kernel oot_modules 含 `sec_ts` / `sgm37604a` / `panel_meizu_e3`
 - **AND** `boot.overlays.package` 含 `qcom-qcs6490-radxa-dragon-q6a-meizu-e3-panel.dtbo`
-- **AND** rootfs `/boot/qcs6490-radxa-dragon-q6a.dtb` 是 base dtb 与该 dtbo 经 `fdtoverlay` 合并的产物（见 [[build-time-dtb-overlay-merge]]）
+- **AND** rootfs `/boot/qcs6490-radxa-dragon-q6a-kvm.dtb` 是 KVM 组合 DTB（base dtb 叠加 Radxa KVM overlay）与该 dtbo 经 `fdtoverlay` 合并的产物（见 [[build-time-dtb-overlay-merge]]）
 
 ### Requirement: radxa-dragon-q6a 背光路径选择
 
@@ -332,3 +332,4 @@ Q6A 板原理图 v1.21 sheet 31 在 LCD FPC（J10）上同时引出**两条背�
 
 - **WHEN** 系统开机
 - **THEN** 背光默认亮度处于可见档位（非接近 0 的极暗值），可经 `/sys/class/backlight/sgm37604a/brightness` 调节
+

@@ -1,0 +1,150 @@
+From: flange <flange@localhost>
+Subject: [PATCH] drm/rockchip: dsi: 外接面板改为 host attach 时 component_add
+
+Rockchip BSP 的 dw-mipi-dsi-rockchip 在 probe 里就 component_add，DSI
+bind 要求面板已 drm_panel_add，否则 probe 失败并注销 DSI host。挂在 I2C
+上的面板（panel-raspberrypi-touchscreen）要先查到已注册的 DSI host 才能
+注册 DSI 设备并 drm_panel_add，两边互等，形成 deferred probe 活锁，内核
+挂不上 rootfs。
+
+外设（port@1 对端）不是 DSI 子节点时改用 mainline 的做法：probe 只注册
+host，外设 mipi_dsi_attach() 时经 host_ops->attach 再 component_add，
+detach 时 component_del。外设是 DSI 子节点的场景保持 BSP 原有流程。
+
+Synopsys 核心的 host_attach 在平台 attach 回调失败时回滚
+drm_bridge_add()，否则外设 deferred 重试再次 attach 时 bridge 重复入链。
+
+diff --git a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+index 3845adc..238fa83 100644
+--- a/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-mipi-dsi.c
+@@ -349,8 +349,17 @@ static int dw_mipi_dsi_host_attach(struct mipi_dsi_host *host,
+ 
+ 	if (pdata->host_ops && pdata->host_ops->attach) {
+ 		ret = pdata->host_ops->attach(pdata->priv_data, device);
+-		if (ret < 0)
++		if (ret < 0) {
++			/*
++			 * 外设 probe 失败后会被 deferred 重试、再次走到这里；
++			 * 不撤销的话 dsi->bridge 会被第二次 drm_bridge_add()，
++			 * 链表成环。
++			 */
++			drm_bridge_remove(&dsi->bridge);
++			dsi->panel = NULL;
++			dsi->next_bridge = NULL;
+ 			return ret;
++		}
+ 	}
+ 
+ 	return 0;
+diff --git a/drivers/gpu/drm/rockchip/dw-mipi-dsi-rockchip.c b/drivers/gpu/drm/rockchip/dw-mipi-dsi-rockchip.c
+index 0aee9a4..61bf0a0 100644
+--- a/drivers/gpu/drm/rockchip/dw-mipi-dsi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw-mipi-dsi-rockchip.c
+@@ -327,6 +327,12 @@ struct dw_mipi_dsi_rockchip {
+ 	struct phy *phy;
+ 	union phy_configure_opts phy_opts;
+ 
++	/*
++	 * 外设不是 DSI 子节点（如挂在 I2C 上的面板），component_add 推迟到
++	 * 外设 attach 时，见 dw_mipi_dsi_rockchip_external_peripheral()。
++	 */
++	bool late_component;
++
+ 	/* being a phy for other mipi hosts */
+ 	unsigned int usage_mode;
+ 	struct mutex usage_mutex;
+@@ -1234,6 +1240,61 @@ static int dw_mipi_dsi_rockchip_component_del(struct dw_mipi_dsi_rockchip *dsi)
+ 	return 0;
+ }
+ 
++/*
++ * 外设（port@1 对端）是否由 DSI 节点之外的驱动注册。
++ *
++ * 本 BSP 在 probe 时就 component_add，bind 时外设必须已经 drm_panel_add。
++ * 外设是 DSI 子节点时没问题：mipi_dsi_host_register() 期间它就同步 probe 完。
++ * panel-raspberrypi-touchscreen 这类挂在 I2C 上的面板则不然：它要先查到已注册
++ * 的 DSI host 才能注册自己的 DSI 设备并 drm_panel_add，而 DSI 控制器 bind 找不
++ * 到面板 → probe 失败 → 注销 host，面板再次 defer，双方永远等不到对方。且每轮
++ * DRM master bind 都会让 HDMI 新建并 probe 子设备（CEC 等），触发 deferred
++ * 重试，形成活锁：内核卡在 deferred probe 里，永远挂不上 rootfs。
++ *
++ * 对这类外设改用 mainline 的做法：probe 只注册 host，外设 attach 时再
++ * component_add。
++ */
++static bool
++dw_mipi_dsi_rockchip_external_peripheral(struct dw_mipi_dsi_rockchip *dsi)
++{
++	struct device_node *remote, *parent;
++	bool external;
++
++	remote = of_graph_get_remote_node(dsi->dev->of_node, 1, -1);
++	if (!remote)
++		return false;
++
++	parent = of_get_parent(remote);
++	external = parent != dsi->dev->of_node;
++	of_node_put(parent);
++	of_node_put(remote);
++
++	return external;
++}
++
++static int dw_mipi_dsi_rockchip_host_attach(void *priv_data,
++					    struct mipi_dsi_device *device)
++{
++	struct dw_mipi_dsi_rockchip *dsi = priv_data;
++
++	/* host 已注册、dw_mipi_dsi_probe() 尚未返回 dmd 的窗口，等 probe 完成 */
++	if (IS_ERR_OR_NULL(dsi->dmd))
++		return -EPROBE_DEFER;
++
++	return dw_mipi_dsi_rockchip_component_add(dsi);
++}
++
++static int dw_mipi_dsi_rockchip_host_detach(void *priv_data,
++					    struct mipi_dsi_device *device)
++{
++	return dw_mipi_dsi_rockchip_component_del(priv_data);
++}
++
++static const struct dw_mipi_dsi_host_ops dw_mipi_dsi_rockchip_host_ops = {
++	.attach = dw_mipi_dsi_rockchip_host_attach,
++	.detach = dw_mipi_dsi_rockchip_host_detach,
++};
++
+ static int dw_mipi_dsi_rockchip_dphy_bind(struct device *dev,
+ 					  struct device *master,
+ 					  void *data)
+@@ -1571,6 +1632,10 @@ static int dw_mipi_dsi_rockchip_probe(struct platform_device *pdev)
+ 	if (dsi->cdata->soc_type == RK3568)
+ 		dsi->pdata.stream_standby = dw_mipi_dsi_rockchip_stream_standby;
+ 
++	dsi->late_component = dw_mipi_dsi_rockchip_external_peripheral(dsi);
++	if (dsi->late_component)
++		dsi->pdata.host_ops = &dw_mipi_dsi_rockchip_host_ops;
++
+ 	platform_set_drvdata(pdev, dsi);
+ 
+ 	mutex_init(&dsi->usage_mutex);
+@@ -1595,6 +1660,9 @@ static int dw_mipi_dsi_rockchip_probe(struct platform_device *pdev)
+ 		goto err_clkdisable;
+ 	}
+ 
++	if (dsi->late_component)
++		return 0;
++
+ 	ret = dw_mipi_dsi_rockchip_component_add(dsi);
+ 	if (ret < 0) {
+ 		dw_mipi_dsi_remove(dsi->dmd);
+@@ -1613,7 +1681,9 @@ static int dw_mipi_dsi_rockchip_remove(struct platform_device *pdev)
+ 	struct dw_mipi_dsi_rockchip *dsi = platform_get_drvdata(pdev);
+ 
+ 
+-	dw_mipi_dsi_rockchip_component_del(dsi);
++	/* late_component 时 host 注销会 detach 外设，由 host_detach 做 component_del */
++	if (!dsi->late_component)
++		dw_mipi_dsi_rockchip_component_del(dsi);
+ 	dw_mipi_dsi_remove(dsi->dmd);
+ 
+ 	return 0;

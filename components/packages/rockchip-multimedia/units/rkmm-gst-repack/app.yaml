@@ -67,15 +67,15 @@ build:
   deb_outputs:
     - libgstreamer1.0-0_1.24.2-1ubuntu0.1+flange1_arm64.deb
     - gstreamer1.0-tools_1.24.2-1ubuntu0.1+flange1_arm64.deb
-    - gstreamer1.0-plugins-base-apps_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - libgstreamer-plugins-base1.0-0_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - libgstreamer-gl1.0-0_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-alsa_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-plugins-base_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-x_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-gl_1.24.2-1ubuntu0.4+flange1_arm64.deb
-    - gstreamer1.0-plugins-good_1.24.2-1ubuntu1.5+flange1_arm64.deb
-    - libgstreamer-plugins-good1.0-0_1.24.2-1ubuntu1.5+flange1_arm64.deb
+    - gstreamer1.0-plugins-base-apps_1.24.2-1ubuntu0.5+flange1_arm64.deb
+    - libgstreamer-plugins-base1.0-0_1.24.2-1ubuntu0.5+flange1_arm64.deb
+    - libgstreamer-gl1.0-0_1.24.2-1ubuntu0.5+flange1_arm64.deb
+    - gstreamer1.0-alsa_1.24.2-1ubuntu0.5+flange1_arm64.deb
+    - gstreamer1.0-plugins-base_1.24.2-1ubuntu0.5+flange1_arm64.deb
+    - gstreamer1.0-x_1.24.2-1ubuntu0.5+flange1_arm64.deb
+    - gstreamer1.0-gl_1.24.2-1ubuntu0.5+flange1_arm64.deb
+    - gstreamer1.0-plugins-good_1.24.2-1ubuntu1.8+flange1_arm64.deb
+    - libgstreamer-plugins-good1.0-0_1.24.2-1ubuntu1.8+flange1_arm64.deb
     - gstreamer1.0-plugins-bad-apps_1.24.2-1ubuntu4+flange1_arm64.deb
     - gstreamer1.0-plugins-bad_1.24.2-1ubuntu4+flange1_arm64.deb
     - libgstreamer-plugins-bad1.0-0_1.24.2-1ubuntu4+flange1_arm64.deb

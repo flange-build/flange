@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820" role="img" aria-labelledby="title desc">
+<title id="title">flange 构建与部署架构</title><desc id="desc">宿主机选择目标和解析配置，在 Docker 内执行组件构建与镜像制作，校验后的产物发布到工作区，再由宿主机刷写或部署到开发板。</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#ef6939"/></marker></defs>
+<rect width="1200" height="820" rx="16" fill="#ffffff"/>
+<g font-family="Arial, PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+<text x="40" y="48" font-size="30" fill="#24272b" font-weight="700">flange / 构建与部署架构</text>
+<text x="40" y="82" font-size="20" fill="#66717c" font-weight="400">同一目标贯穿配置、组件构建、产物发布与设备部署。</text>
+<rect x="30" y="116" width="890" height="625" rx="12" fill="#fafbfc" stroke="#dce1e5"/>
+<text x="50" y="148" font-size="21" fill="#24272b" font-weight="700">你的电脑 / 宿主机</text>
+<rect x="50" y="178" width="242" height="308" rx="12" fill="#ffffff" stroke="#dce1e5"/>
+<text x="70" y="212" font-size="23" fill="#24272b" font-weight="700">入口与配置</text>
+<text x="70" y="248" font-size="19" fill="#24272b" font-weight="400">source envsetup.sh</text>
+<text x="70" y="280" font-size="22" fill="#ef6939" font-weight="700">lunch</text>
+<text x="70" y="313" font-size="18" fill="#24272b" font-weight="400">板卡 · 产品 · 变体</text>
+<path d="M70 333 H272" stroke="#dce1e5"/>
+<text x="70" y="362" font-size="18" fill="#24272b" font-weight="400">工作区 + Layer 组合</text>
+<text x="70" y="394" font-size="18" fill="#24272b" font-weight="400">配置与资源校验</text>
+<text x="70" y="426" font-size="18" fill="#24272b" font-weight="400">计划 / 输入 / 依赖</text>
+<text x="70" y="461" font-size="17" fill="#66717c" font-weight="400">plan / why 可解释</text>
+<path d="M292 330 H322" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="334" y="178" width="330" height="308" rx="12" fill="#fff2eb" stroke="#f3c7b5"/>
+<text x="354" y="212" font-size="23" fill="#24272b" font-weight="700">Docker 构建环境</text>
+<text x="354" y="248" font-size="22" fill="#ef6939" font-weight="700">flange build</text>
+<text x="354" y="283" font-size="18" fill="#24272b" font-weight="400">构建引擎 · 自动推断依赖</text>
+<text x="354" y="315" font-size="18" fill="#24272b" font-weight="400">内容哈希 · 增量复用</text>
+<path d="M354 336 H644" stroke="#dce1e5"/>
+<text x="354" y="365" font-size="18" fill="#24272b" font-weight="400">Bootloader 引导程序</text>
+<text x="354" y="394" font-size="18" fill="#24272b" font-weight="400">Kernel 内核 · App 应用</text>
+<text x="354" y="423" font-size="18" fill="#24272b" font-weight="400">rootfs 根文件系统</text>
+<text x="354" y="453" font-size="17" fill="#66717c" font-weight="400">镜像打包 · 按配置启用组件</text>
+<path d="M664 330 H694" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="706" y="178" width="194" height="308" rx="12" fill="#ffffff" stroke="#dce1e5"/>
+<text x="722" y="212" font-size="22" fill="#24272b" font-weight="700">工作区产物</text>
+<text x="722" y="250" font-size="17" fill="#24272b" font-weight="400">校验 → 原子发布</text>
+<path d="M722 274 H884" stroke="#dce1e5"/>
+<text x="722" y="309" font-size="17" fill="#24272b" font-weight="400">组件产物与清单</text>
+<text x="722" y="345" font-size="20" fill="#24272b" font-weight="700">系统镜像</text>
+<text x="722" y="380" font-size="18" fill="#24272b" font-weight="400">应用软件包</text>
+<text x="722" y="415" font-size="18" fill="#24272b" font-weight="400">刷写清单</text>
+<text x="722" y="456" font-size="16" fill="#66717c" font-weight="400">状态 / 缓存 / 日志</text>
+<path d="M803 486 V540" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="334" y="552" width="566" height="159" rx="12" fill="#24272b" stroke="#24272b"/>
+<text x="354" y="587" font-size="23" fill="#ffffff" font-weight="700">宿主机刷写与应用部署</text>
+<text x="354" y="625" font-size="22" fill="#ffffff" font-weight="400">flange flash  /  flange app deploy</text>
+<text x="354" y="662" font-size="18" fill="#ffffff" font-weight="400">读取当前目标的产物与刷写清单，调用平台工具</text>
+<text x="354" y="691" font-size="17" fill="#cbd0d4" font-weight="400">刷写工具运行在宿主机上</text>
+<rect x="50" y="552" width="242" height="159" rx="12" fill="#ffffff" stroke="#dce1e5"/>
+<text x="70" y="585" font-size="20" fill="#24272b" font-weight="700">产物定位</text>
+<text x="70" y="622" font-size="20" fill="#24272b" font-weight="400">flange status</text>
+<text x="70" y="657" font-size="17" fill="#24272b" font-weight="400">默认 .build/target/</text>
+<text x="70" y="686" font-size="16" fill="#66717c" font-weight="400">按板卡 / 产品 / 变体隔离</text>
+<path d="M900 631 H958" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="970" y="552" width="200" height="159" rx="12" fill="#fff2eb" stroke="#f3c7b5"/>
+<text x="990" y="588" font-size="23" fill="#24272b" font-weight="700">目标开发板</text>
+<text x="990" y="627" font-size="20" fill="#24272b" font-weight="400">启动 Linux</text>
+<text x="990" y="662" font-size="20" fill="#24272b" font-weight="400">运行应用</text>
+<text x="990" y="691" font-size="17" fill="#66717c" font-weight="400">串口 / 登录验证</text>
+<text x="970" y="232" font-size="20" fill="#24272b" font-weight="700">支持的厂商平台</text>
+<text x="970" y="275" font-size="20" fill="#24272b" font-weight="400">Rockchip</text>
+<text x="970" y="314" font-size="20" fill="#24272b" font-weight="400">Amlogic</text>
+<text x="970" y="353" font-size="20" fill="#24272b" font-weight="400">Allwinner</text>
+<text x="970" y="392" font-size="20" fill="#24272b" font-weight="400">Qualcomm</text>
+<text x="970" y="446" font-size="17" fill="#66717c" font-weight="400">连接与存储介质</text>
+<text x="970" y="474" font-size="17" fill="#66717c" font-weight="400">以板卡文档为准</text>
+<text x="40" y="779" font-size="18" fill="#66717c" font-weight="400">构建不需要连接开发板；刷写与运行验证需要真实设备。Docker 镜像与设备系统镜像用途不同。</text>
+</g></svg>

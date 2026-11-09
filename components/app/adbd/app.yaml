@@ -1,7 +1,7 @@
 app:
   name: adbd
-  version: 1.0.0
-  description: Android Debug Bridge daemon，通过 USB gadget 提供 adb 调试通道
+  version: 2.0.0
+  description: Android Debug Bridge daemon —— 作为 usbmoded 的 adb 能力后端，由 usbmoded 按场景启停
   type: service
   arch:
     - aarch64
@@ -11,19 +11,29 @@ maintainer:
   name: flange
   email: flange@localhost
 
-install:
-  conf/usbdevice.conf: /etc/usbdevice.conf
-  scripts/usbdevice: /usr/sbin/usbdevice
-  udev/61-usbdevice.rules: /etc/udev/rules.d/61-usbdevice.rules
+build:
+  system: none
+  # App 间依赖：usbmoded 提供 adb 能力的实现与 gadget 管理，本 App 只提供
+  # adbd 二进制与对应的 daemon unit。声明在 build.deps 而非 depends ——
+  # 前者进构建与安装闭包，后者只是 deb 的 Depends 字段，两者都需要。
+  deps:
+    - usbmoded
+
+# 无显式 install 映射：bin/adbd-<arch> 按约定剥离架构后缀装成 /usr/bin/adbd，
+# systemd/ 下的 unit 按约定装入 /lib/systemd/system/。
+install: {}
 
 systemd:
-  unit: systemd/usbdevice.service
-  auto_start: true
+  # adbd 的 daemon unit。auto_start=false —— 它不开机自启，启停完全由
+  # usbmoded 的 adb 能力驱动（FunctionFS 要求 daemon 在 gadget 绑定 UDC
+  # 之前打开 ep0，这个时序只有 usbmoded 知道）。
+  unit: systemd/usbmoded-adbd.service
+  auto_start: false
 
 depends:
+  - usbmoded
   - libc6
 
-conffiles:
-  - /etc/usbdevice.conf
+conffiles: []
 
 data_dirs: []

@@ -63,7 +63,7 @@
     // MESON_SARADC / MESON_GPIO 等。无需 fragment。
     // GUD（USB Display）host 驱动通过统一 kernel.config 显式启用，公共
     // renderer 将其写入末尾 flange_overrides.config，不混入 defconfig。
-    config: { CONFIG_DRM_GUD: 'y' },
+    config+: { CONFIG_DRM_GUD: 'y' },
     device_tree+: { directory: 'amlogic' },
   },
   boot+: {

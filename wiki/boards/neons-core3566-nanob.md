@@ -44,4 +44,4 @@ kernel 与 bootloader 均锁定到特定 commit，确保与 Waveshare CM4 底板
 
 ## overlay
 
-仅 `overlay/etc/hostname`，无 `usbdevice.conf`（USB gadget 配置使用平台默认）。
+仅 `overlay/etc/hostname`，无板级 `usbmode/gadget.d/` 配置（USB gadget 使用 App 层默认值）。

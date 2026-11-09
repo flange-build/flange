@@ -3,6 +3,8 @@
 local product = std.extVar('product');
 local common = import 'config/rockchip.libsonnet';
 local panel = product == 'meizu-e3-bringup';
+local rockmedia = product == 'rockmedia';
+local lib = import 'config/lib.libsonnet';
 
 {
   board: 'radxa-rock5b',
@@ -20,9 +22,11 @@ local panel = product == 'meizu-e3-bringup';
   // meizu-e3-panel 硬件特性包与默认 panel overlay 由同一个 Jsonnet product
   // 条件控制（见下方 packages / boot.overlays.enabled）。
   // 其余配置（kernel、bootloader、firmware）与 default 共用。
-  products: ['default', 'desktop', 'meizu-e3-bringup'],
+  // rockmedia 使用厂商 GPU 多媒体栈，内核、用户态库与设备树必须一起切换。
+  products: ['default', 'desktop', 'meizu-e3-bringup', 'rockmedia'],
   variants: ['debug', 'release'],
   packages: ['rockchip-multimedia'] +
+            (if rockmedia then ['rockchip-mali-g610'] else []) +
             (if product == 'desktop' then ['ubuntu-desktop'] else []) +
             (if panel then [{
     // 账号体系沿用 components/rootfs/config.jsonnet base 层默认：root 完全锁定
@@ -63,6 +67,18 @@ local panel = product == 'meizu-e3-bringup';
     },
   },
   kernel+: {
+    // 移除关闭 BSP GPU 的 SoC fragment，避免先关闭再恢复时丢失依赖选项。
+    defconfig: if rockmedia then lib.without(super.defconfig, ['rk3588_panthor.config'])
+               else super.defconfig,
+    config+: if rockmedia then {
+      CONFIG_DRM_PANTHOR: 'n', CONFIG_DRM_PANFROST: 'n',
+      CONFIG_MALI400: 'n', CONFIG_MALI450: 'n', CONFIG_MALI_MIDGARD: 'n',
+      CONFIG_MALI_BIFROST: 'y', CONFIG_MALI_CSF_SUPPORT: 'y',
+      // CSF 固件与 kbase 来自同一 BSP，编译注入，不加载 libmali 包携带的旧固件。
+      CONFIG_MALI_CSF_INCLUDE_FW: 'y',
+      CONFIG_MALI_PLATFORM_NAME: '"rk"', CONFIG_MALI_BIFROST_DEVFREQ: 'y',
+      CONFIG_ROCKCHIP_MULTI_RGA: 'y', CONFIG_ROCKCHIP_MPP_SERVICE: 'y',
+    } else {},
     // 内核源继承平台层的 rockchip-kernel，不在板级覆盖。
     // argon BSP linux-6.1-stan-rkr5.1 已包含 rk3588-rock-5b.dts。
     device_tree+: { name: 'rk3588-rock-5b' },
@@ -79,11 +95,8 @@ local panel = product == 'meizu-e3-bringup';
       // 改回 "arm,mali-valhall"，让 BSP mali_kbase fork 能绑（其 of_match
       // 表只识别 -valhall 不识别 -valhall-csf）。
       //
-      // 当前主线已切到 mainline panthor 驱动（详见 SoC config 的 panthor
-      // fragment），dts 原始 compatible (arm,mali-valhall-csf) 直接被 panthor
-      // of_match 命中，**不需要**这个 overlay。dtbo 仍编进 boot 分区作为
-      // emergency rollback：万一 panthor 起不来需要紧急切回 mali_kbase，
-      // 可手动改 /boot/extlinux/extlinux.conf 加 fdtoverlays 启用。
+      // rockmedia 启用此 overlay 配合 BSP kbase；其他产品保持 Panthor，
+      // 使用 DTS 原始 compatible。仅改 overlay 不能完成 GPU 栈切换。
       board: [
         'rk3588-rock-5b-mali-valhall-compat.dtbo',
         'rk3588-rock-5b-disable-bcm-bluetooth.dtbo',
@@ -94,6 +107,7 @@ local panel = product == 'meizu-e3-bringup';
       // BSP DTS 错把不存在的 BCM4345C5 挂到 UART6，启动后会生成地址全零、
       // 持续 timeout 的 hci0；实际 RTL8852BE Bluetooth 走 USB btusb。
       enabled: ['rk3588-rock-5b-disable-bcm-bluetooth.dtbo'] +
+               (if rockmedia then ['rk3588-rock-5b-mali-valhall-compat.dtbo'] else []) +
                (if panel then ['rk3588-rock-5b-meizu-e3-panel.dtbo'] else []),
     },
   },
@@ -104,5 +118,9 @@ local panel = product == 'meizu-e3-bringup';
   // 补 .bin 后缀。
   // WiFi 部分固件 baked-in 进 8852be.ko（rkwifibt 编译期 firmware-
   // binary linkage），不需要 /lib/firmware 部署。
-  rootfs+: { extra_firmware+: [common.rtl8852beFirmware] },
+  rootfs+: {
+    extra_firmware+: [common.rtl8852beFirmware],
+    // 提供 GPU、视频设备与 DRM（直接渲染管理器）的开发检查工具。
+    packages+: if rockmedia then ['clinfo', 'mesa-utils', 'v4l-utils', 'libdrm-tests'] else [],
+  },
 }

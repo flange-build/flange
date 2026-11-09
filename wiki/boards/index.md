@@ -1,7 +1,7 @@
 ---
 title: 板级索引
 type: index
-updated: 2026-09-05
+updated: 2026-10-21
 ---
 
 # 板级索引
@@ -19,6 +19,7 @@ updated: 2026-09-05
 - [atk-rk3506b](atk-rk3506b.md) — RK3506B（ARM32，SPI NAND/UBI + CPU2 RT-Thread + Cardputer GUD/HID/UAC，status: stable）
 - [rp-pro-rk3568-h](rp-pro-rk3568-h.md) — RK3568（首颗真 RK3568，AP6275P PCIe WiFi6/BT5.2，status: wip）
 - [armsom-cm5-io](armsom-cm5-io.md) — RK3576（首颗 RK3576，Mali-G52 panfrost 开源 GPU，OP-TEE 打包，BW3752/AP6275S WiFi/BT，status: wip）
+- [embedfire-lubancat](embedfire-lubancat.md) — 野火鲁班猫 3（RK3576）/ 鲁班猫 5（RK3588），v1/v2 共 4 个 board，dts 在 flange-kernel 树内，status: wip
 - [radxa-rock-4d](radxa-rock-4d.md) — RK3576（首块 UFS 4K 存储板，image/flash 扇区参数化，UFS 启动 + SSH + WiFi/BT 上板通，status: done）
 - [radxa-cubie-a7z](radxa-cubie-a7z.md) — A733（首块 A733，ST7789V SPI 小屏 + AIC8800 USB，status: wip）
 - [radxa-cubie-a7a](radxa-cubie-a7a.md) — A733（A7 家族主线板，AXP318 + AC101B 直挂 + DSI/HDMI，沿用 a7z AIC8800 USB，status: wip）
@@ -29,6 +30,9 @@ updated: 2026-09-05
 - [khadas-vim3l](khadas-vim3l.md) — S905D3（首颗 Amlogic 板，AP6398S WiFi/BT，status: wip）
 - [radxa-zero](radxa-zero.md) — S905Y2（第二块 Amlogic 板，G12A，AW-CM256SM WiFi/BT，关 recovery，macOS host，status: wip）
 - [radxa-dragon-q6a](radxa-dragon-q6a.md) — QCS6490（首颗 Qualcomm 板，UEFI/GRUB + UFS 4K LBA + Adreno 643 freedreno + AIC8800 USB，status: wip）
+- [thundercomm-rubikpi3](thundercomm-rubikpi3.md) — QCS6490（第二块 QCS6490 板，启动固件在 UFS boot LUN、单会话 rawprogram 全量刷写；default/desktop 用 Yocto 同款厂商内核 6.6.90，EL1 下 DSP 与硬件编码同时可用；mainline product 用 SoC 层 7.0.2 + EL2）
 - [radxa-dragon-q8b](radxa-dragon-q8b.md) — SC8280XP（UEFI/GRUB + UFS 4K LBA + Adreno/MSM + QPS615/TC956x 双网口，status: wip）
+- [nvidia-jetson-tx2](nvidia-jetson-tx2.md) — Tegra186（首块 NVIDIA 板，P2597 + P3310-1000 8GB，L4T R32.7.6 + Ubuntu 18.04，tegraflash 刷写前读 EEPROM 核对身份，status: wip）
+- [arduino-uno-q](../../docs/boards/arduino-uno-q.md) — QRB2210 + STM32U585（U-Boot/systemd-boot + eMMC/QDL；启动槽位与 MCU 链路已实板验收；waveshare-display-10.1a product 接 10.1" DSI 触摸屏）
 
-- [radxa-rock5c-lite](radxa-rock5c-lite.md) — RK3588S，含 USB-C OTG 与 LCD HAT 专题。
+- [radxa-rock5c-lite](radxa-rock5c-lite.md) — RK3582，含 USB-C OTG 与 LCD HAT 专题。
