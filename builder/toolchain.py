@@ -312,6 +312,12 @@ def userland_identity(config, context):
         "architecture": toolchain.arch,
         "triple": toolchain.triple,
     }
+    from builder.distro import get_distro
+
+    # 只在非 systemd 时记录，systemd 目标的既有报告身份保持不变。
+    init_system = get_distro(config, context).init_system
+    if init_system != "systemd":
+        result["init_system"] = init_system
     if toolchain.target_sysroot:
         from builder.digest import hash_path
         from builder.environment import environment_identity

@@ -9,7 +9,14 @@ from builder.layers import stack_for
 
 
 class DistroBackend(ABC):
-    """扩展层提供的发行版接口；所有执行发生在已选 Docker 环境内。"""
+    """扩展层提供的发行版接口；所有执行发生在已选 Docker 环境内。
+
+    ``init_system`` 决定 App 服务文件与设备服务操作，``package_format`` 是 App
+    未显式声明 ``packaging.format`` 时的默认包格式。
+    """
+
+    init_system: str = "systemd"
+    package_format: str = "deb"
 
     @abstractmethod
     def base_plan(self, config, component, context): ...

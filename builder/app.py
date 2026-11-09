@@ -7,6 +7,7 @@
   conf/      → /etc/<name>/       (mode 0o644)
   scripts/   → /usr/lib/<name>/   (mode 0o755)
   systemd/   → /lib/systemd/system/  (mode 0o644)
+  openrc/    → /etc/init.d/        (mode 0o755)
   udev/      → /lib/udev/rules.d/ (mode 0o644)
   res/       → /usr/share/<name>/ (mode 0o644)
   rootfs/    → /                    (仅 vendor，递归保留目录结构与执行位)
@@ -49,6 +50,7 @@ _CONVENTION_MAP: dict[str, tuple[str, int]] = {
     "conf": ("/etc/{name}/", 0o644),
     "scripts": ("/usr/lib/{name}/", 0o755),
     "systemd": ("/lib/systemd/system/", 0o644),
+    "openrc": ("/etc/init.d/", 0o755),
     "udev": ("/lib/udev/rules.d/", 0o644),
     "res": ("/usr/share/{name}/", 0o644),
 }

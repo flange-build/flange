@@ -117,6 +117,18 @@ class SystemdConfig:
 
 
 @dataclass
+class OpenrcConfig:
+    """OpenRC 服务配置段（openrc:），仅 service 类型使用。"""
+
+    # init 脚本路径（相对于 App 目录），安装为 /etc/init.d/<文件名>
+    script: str = ""
+    # 是否随系统自动启动，默认 false
+    auto_start: bool = False
+    # auto_start 时加入的 runlevel
+    runlevel: str = "default"
+
+
+@dataclass
 class LibConfig:
     """链接库配置段（lib:），仅 lib 类型使用。"""
 
@@ -160,6 +172,8 @@ class AppSpec:
     install: Dict[str, str] = field(default_factory=dict)
     # systemd 配置（可选，仅 service 类型有意义）
     systemd: Optional[SystemdConfig] = None
+    # OpenRC 配置（可选，仅 service 类型有意义）
+    openrc: Optional[OpenrcConfig] = None
     # 运行期 apt 依赖
     depends: List[str] = field(default_factory=list)
     # dpkg conffiles 声明（安装后不被覆盖的配置文件）
@@ -180,6 +194,9 @@ APP_INFO_SCHEMA = Object(
 )
 MAINTAINER_SCHEMA = Object({"name": STRING, "email": STRING}, ("name", "email"))
 SYSTEMD_SCHEMA = Object({"unit": STRING, "auto_start": BOOLEAN}, ("unit",))
+OPENRC_SCHEMA = Object(
+    {"script": STRING, "auto_start": BOOLEAN, "runlevel": STRING}, ("script",)
+)
 LIB_SCHEMA = Object({"dev_suffix": STRING})
 SWIFT_SCHEMA = Object(
     {
@@ -206,6 +223,7 @@ BUILD_SCHEMA = Object(
 PACKAGING_SCHEMA = Object({
     "format": STRING,
     "outputs": ListOf(Object({"file": STRING, "role": STRING}, ("file", "role"))),
+    "depends": Map(STRINGS),
 })
 APP_SCHEMA = Object(
     {
@@ -215,6 +233,7 @@ APP_SCHEMA = Object(
         "packaging": PACKAGING_SCHEMA,
         "install": Map(STRING),
         "systemd": SYSTEMD_SCHEMA,
+        "openrc": OPENRC_SCHEMA,
         "depends": STRINGS,
         "conffiles": STRINGS,
         "data_dirs": STRINGS,
@@ -531,6 +550,20 @@ def _parse_systemd(raw: dict) -> SystemdConfig:
     return SystemdConfig(unit=unit, auto_start=auto_start)
 
 
+def _parse_openrc(raw: dict) -> OpenrcConfig:
+    """解析 openrc: 段，填充默认值。"""
+    if not isinstance(raw, dict):
+        raise AppSpecError("openrc: 段必须是字典")
+    _check(OPENRC_SCHEMA, raw, "openrc")
+    script = _validate_relative_path(raw.get("script", ""), "openrc.script")
+    runlevel = raw.get("runlevel", "default")
+    if not re.fullmatch(r"[a-z][a-z0-9_-]*", runlevel):
+        raise AppSpecError(f"openrc.runlevel 非法：{runlevel!r}")
+    return OpenrcConfig(
+        script=script, auto_start=raw.get("auto_start", False), runlevel=runlevel
+    )
+
+
 def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig, layer_stack=None) -> PackagingConfig:
     from builder.packaging import get_backend
 
@@ -562,9 +595,14 @@ def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig, layer_sta
                 "完整外部包由打包器维护内容和元数据，不能另行声明："
                 + ", ".join(sorted(unsupported))
             )
-        if raw.get("systemd", {}).get("auto_start", False):
+        if any(raw.get(name, {}).get("auto_start", False) for name in ("systemd", "openrc")):
             raise AppSpecError("完整外部包的服务启用策略由其维护脚本管理，不能设置 auto_start=true")
-    return PackagingConfig(format=format, outputs=outputs)
+    return PackagingConfig(
+        format=format,
+        outputs=outputs,
+        format_declared="format" in value or bool(build.deb_outputs),
+        depends={key: list(items) for key, items in value.get("depends", {}).items()},
+    )
 
 
 def _parse_lib(raw: dict) -> LibConfig:
@@ -639,8 +677,13 @@ def load_spec(app_dir: Path, *, layer_stack=None) -> AppSpec:
         if app_info.type != "service":
             raise AppSpecError("systemd 仅允许 app.type=service")
         systemd = _parse_systemd(raw["systemd"])
-    if app_info.type == "service" and systemd is None:
-        raise AppSpecError("app.type=service 必须声明 systemd.unit")
+    openrc: Optional[OpenrcConfig] = None
+    if "openrc" in raw:
+        if app_info.type != "service":
+            raise AppSpecError("openrc 仅允许 app.type=service")
+        openrc = _parse_openrc(raw["openrc"])
+    if app_info.type == "service" and systemd is None and openrc is None:
+        raise AppSpecError("app.type=service 必须声明 systemd.unit 或 openrc.script")
 
     # 解析可选段：depends / conffiles / data_dirs
     def _parse_str_list(key: str) -> List[str]:
@@ -683,6 +726,7 @@ def load_spec(app_dir: Path, *, layer_stack=None) -> AppSpec:
         packaging=packaging,
         install=install,
         systemd=systemd,
+        openrc=openrc,
         depends=depends,
         conffiles=conffiles,
         data_dirs=data_dirs,
