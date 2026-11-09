@@ -75,6 +75,9 @@
       // 与 rk3506 一致改由 OP-TEE 捕获串口 FIQ 再转交非安全世界。
       CONFIG_FIQ_DEBUGGER_FIQ_GLUE: 'n',
       CONFIG_FIQ_DEBUGGER_TRUST_ZONE: 'y',
+      // DTS bootargs 的 earlycon=uart8250 依赖 8250 console（连带 SERIAL_EARLYCON）；
+      // 缺它时 FIQ 控制台注册前的内核日志与 panic 全部不可见。
+      CONFIG_SERIAL_8250_CONSOLE: 'y',
       // 用户态 init（systemd 与 OpenRC）共同需要的内核接口。
       CONFIG_CGROUPS: 'y',
       CONFIG_INOTIFY_USER: 'y',

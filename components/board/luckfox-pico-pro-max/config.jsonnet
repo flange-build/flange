@@ -21,6 +21,14 @@
     // 设备端编译内核模块需要整套 gcc 工具链，256MB NAND 放不下。
     headers_package: false,
     device_tree+: { name: 'rv1106g-luckfox-pico-pro-max' },
+    config+: {
+      // rv1106_defconfig 不含 LED 子系统；板载工作灯用 heartbeat 指示内核运行。
+      CONFIG_NEW_LEDS: 'y',
+      CONFIG_LEDS_CLASS: 'y',
+      CONFIG_LEDS_GPIO: 'y',
+      CONFIG_LEDS_TRIGGERS: 'y',
+      CONFIG_LEDS_TRIGGER_HEARTBEAT: 'y',
+    },
   },
   recovery+: { enabled: false },
   // GPT 偏移沿用 rk3506b 已实机验证的 SPI NAND 布局（单位 512B sector）；
