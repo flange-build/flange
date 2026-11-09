@@ -110,6 +110,7 @@ def _collect_convention(
     app_name: str,
     arch: str,
     app_type: str = "exec",
+    init_system: str = "systemd",
 ) -> list[tuple[Path, str, int, str]]:
     """遍历约定子目录，收集文件并映射路径。
 
@@ -152,6 +153,10 @@ def _collect_convention(
         # include/ 约定仅适用于 lib 类型
         if subdir_name == "include" and app_type != "lib":
             continue
+        # 只打包目标 init 的服务文件：另一种 init 的脚本在本系统上无人消费，
+        # systemd 的 sysv-generator 还会误把 /etc/init.d 脚本生成 unit。
+        if subdir_name in {"systemd", "openrc"} and subdir_name != init_system:
+            continue
 
         subdir_path = app_dir / subdir_name
         if not subdir_path.is_dir():
@@ -186,6 +191,7 @@ def collect_files(
     app_dir: Path,
     spec: AppSpec,
     arch: str,
+    init_system: str = "systemd",
 ) -> List[Tuple[Path, str, int]]:
     """收集 App 文件并映射安装路径。
 
@@ -212,7 +218,7 @@ def collect_files(
     # -----------------------------------------------------------------------
     # 第一步：约定映射
     # -----------------------------------------------------------------------
-    convention_entries = _collect_convention(app_dir, app_name, arch, app_type)
+    convention_entries = _collect_convention(app_dir, app_name, arch, app_type, init_system)
 
     if not spec.install:
         # 无显式 install 段，直接使用约定映射结果

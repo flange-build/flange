@@ -26,7 +26,8 @@ def test_openrc_commands_follow_flange_conventions():
     assert OPENRC.reload() is None
     assert OPENRC.restart("demo") == ["rc-service", "demo", "restart"]
     assert OPENRC.is_active("demo") == ["rc-service", "--quiet", "demo", "status"]
-    assert OPENRC.main_pid("demo") == ["cat", "/run/demo.pid"]
+    assert OPENRC.main_pid("demo") == [
+        "sh", "-c", 'p=$(cat /run/demo.pid) && { pgrep -P "$p" || echo "$p"; } | head -n 1']
     assert OPENRC.log("demo") == ["tail", "-n", "+1", "/var/log/demo.log"]
     assert OPENRC.log("demo", lines=20, follow=True) == [
         "tail", "-n", "20", "-F", "/var/log/demo.log"]

@@ -3,9 +3,10 @@
 flange 不翻译服务描述：每种 init 由 App 提供原生服务文件（systemd unit 或
 OpenRC 脚本），这里只描述"文件放哪里"和"设备上怎么操作服务"。
 
-OpenRC 约定：flange App 的服务脚本 MUST 把进程 pid 写到 ``/run/<服务名>.pid``
-（``pidfile``），并把输出写到 ``/var/log/<服务名>.log``（``output_log``/
-``error_log``），`app debug` 与 `app log` 依赖这两个路径。
+OpenRC 约定：flange App 的服务脚本 MUST 把 pidfile 设为 ``/run/<服务名>.pid``
+（start-stop-daemon 为服务进程，supervise-daemon 为其监督进程），并把输出写到
+``/var/log/<服务名>.log``（``output_log``/``error_log``），`app debug` 与
+`app log` 依赖这两个路径。
 """
 
 from __future__ import annotations
@@ -38,7 +39,12 @@ class InitSystem:
     def main_pid(self, service: str) -> list[str]:
         if self.name == "systemd":
             return ["systemctl", "show", service, "--property", "MainPID", "--value"]
-        return ["cat", f"/run/{service}.pid"]
+        # supervise-daemon 的 pidfile 记录监督进程，服务进程是它的子进程；
+        # start-stop-daemon 的 pidfile 直接是服务进程。
+        return [
+            "sh", "-c",
+            f'p=$(cat /run/{service}.pid) && {{ pgrep -P "$p" || echo "$p"; }} | head -n 1',
+        ]
 
     def log(
         self, service: str, *, lines: int | None = None, since: str | None = None,

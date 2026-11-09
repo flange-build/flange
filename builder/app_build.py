@@ -478,7 +478,9 @@ class AppBuilder:
 
         files = {
             destination: (path, destination, mode)
-            for path, destination, mode in collect_files(source, spec, self._arch)
+            for path, destination, mode in collect_files(
+                source, spec, self._arch, getattr(self, "init_system", "systemd")
+            )
         }
         files.update(
             {
