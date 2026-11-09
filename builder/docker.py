@@ -98,6 +98,11 @@ class DockerRunner:
                 "privileged": "${FLANGE_BUILD_PRIVILEGED:-false}",
                 "working_dir": str(self.project_dir),
             }
+            # 与内建 docker-compose.yml 一致：宿主 SSH 密钥只读挂到临时位置，
+            # 镜像 entrypoint 复制并修正权限，SSH 源码仓库才能在容器内拉取。
+            ssh = Path.home() / ".ssh"
+            if ssh.is_dir():
+                service["volumes"] = [f"{ssh}:/tmp/.ssh-host:ro"]
             if spec.dockerfile is not None:
                 service["build"] = {"context": str(spec.build_context), "dockerfile": str(spec.dockerfile)}
             content = json.dumps({"services": {"build": service}}, indent=2) + "\n"
