@@ -21,16 +21,18 @@ Python App 可用；默认 adbd + usbmoded 在 OpenRC 下工作；Ubuntu 目标�
    `apk.static` 为 armv7 生成包，无需 abuild 与签名密钥；安装时 `--allow-untrusted`。
    这是首个验证点，若 mkpkg 产物不被目标 apk 接受，退回纯 Python 生成 v2 包。
 4. **musl 工具链用 clang + Alpine sysroot。** Alpine 不提供 x86_64→armv7 交叉 gcc；
-   用 Ubuntu clang/lld 配合 `apk.static --root <sdk> --arch armv7 --no-scripts add musl-dev gcc g++ ...`
+   用 flange-build 镜像随 Swift 提供的 clang/lld（实施时 Ubuntu archive 不可用，且无需第二套 LLVM）配合 `apk.static --root <sdk> --arch armv7 --no-scripts add musl-dev gcc g++ ...`
    取得 crt、libgcc、libstdc++ 与头文件，包装成 `armv7-alpine-linux-musleabihf-{gcc,g++}`，
    binutils 用 `llvm-ar/ranlib/strip/objcopy`。SDK 包版本与归档摘要写入 `/opt/flange-sdk-metadata`，
    镜像摘要进入 ABI 身份。这是第二个验证点，失败退回在镜像中构建 musl-cross-make gcc。
-5. **rootfs 基础系统**：minirootfs → 注入 qemu → chroot `apk add`；`/etc/apk/cache` 绑定到按发行版/架构
+5. **init 身份**：非 systemd 目标在 App 报告的用户态身份中记录 `init_system`，
+   systemd 目标身份不变，避免既有报告全部失效；设备命令据此生成。
+6. **rootfs 基础系统**：minirootfs → 注入 qemu → chroot `apk add`；`/etc/apk/cache` 绑定到按发行版/架构
    隔离的共享缓存。安装 `shadow sudo bash openssh` 后复用核心 `_configure_users`；hostname 通用；
    locale 跳过（musl 无 locale 生成）。OpenRC 服务在 chroot 中 `rc-update add` 启用。
-6. **板级 product 由 Alpine 层追加**：上层同名板 `products+: ['alpine']`，`distro` 随 product 选择；
+7. **板级 product 由 Alpine 层追加**：上层同名板 `products+: ['alpine']`，`distro` 随 product 选择；
    核心板不知道 Alpine 存在。
-7. **usbmoded 服务后端探测**：优先 `NOTIFY_SOCKET`/`/run/systemd/system` 判断 systemd，
+8. **usbmoded 服务后端探测**：优先 `NOTIFY_SOCKET`/`/run/systemd/system` 判断 systemd，
    否则使用 `rc-service`；udev 规则中的 reload 改为调用 usbmoded 自带的控制命令。Alpine 侧用 eudev 提供 udev。
 
 ## Risks / Trade-offs
