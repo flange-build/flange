@@ -142,7 +142,8 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         fit_extra = list(extra)
         fit_its = None
         if trust_mode == "tos":
-            fit_its = self._render_tos_fit_its(src_dir, tee_addr)
+            fit_its = self._render_tos_fit_its(
+                src_dir, tee_addr, self._fit_compression(src_dir, trust_ini))
             fit_extra.append(f"U_BOOT_ITS={fit_its}")
         fit_pack = config["bootloader"].get("fit_pack")
         if fit_pack:
@@ -250,7 +251,23 @@ class RockchipBootloaderBuilder(ComponentBuilder):
             raise FileNotFoundError(f"Rockchip trust/TOS INI 不存在: {path}")
         return path
 
-    def _render_tos_fit_its(self, src_dir: Path, tee_addr: str) -> Path:
+    def _fit_compression(self, src_dir: Path, trust_ini: Path) -> str | None:
+        """按 vendor make.sh 规则选择 FIT 镜像压缩方式。
+
+        ``CONFIG_IMAGE_GZIP=y`` 优先取 gzip，否则取 TOS INI ``[COMPRESSION]``；
+        RV1106 的 U-Boot + OP-TEE 未压缩时超过 SPL FIT 槽宽，必须 lzma。
+        """
+        config = src_dir / ".config"
+        if config.is_file() and re.search(
+                r"(?m)^CONFIG_IMAGE_GZIP=y$", config.read_text()):
+            return "gzip"
+        value = self._extract_section_value(
+            trust_ini.read_text(), "COMPRESSION", "COMPRESSION")
+        return value if value and value != "none" else None
+
+    def _render_tos_fit_its(
+        self, src_dir: Path, tee_addr: str, compression: str | None = None,
+    ) -> Path:
         """调用 make_fit_optee.sh，以 TOS INI 地址渲染临时 U-Boot ITS。"""
         generator = (
             src_dir / "arch" / "arm" / "mach-rockchip"
@@ -258,8 +275,11 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         )
         if not generator.is_file():
             raise FileNotFoundError(f"U-Boot FIT generator 不存在: {generator}")
+        command = [str(generator), "-t", tee_addr]
+        if compression:
+            command += ["-c", compression]
         result = self.docker.run(
-            [str(generator), "-t", tee_addr],
+            command,
             cwd=str(src_dir),
             capture=True,
         )

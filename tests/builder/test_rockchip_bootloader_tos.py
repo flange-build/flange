@@ -215,3 +215,39 @@ def test_bl31_bl32_parser_regression(tmp_path):
 
     assert bl31 == firmware / "bin/bl31.elf"
     assert bl32 == firmware / "bin/tee.bin"
+
+
+def test_tos_ini_compression_is_passed_to_fit_generator(tmp_path):
+    """对齐 vendor make.sh：TOS INI 的 [COMPRESSION] 以 -c 传给 FIT 生成器。
+
+    RV1106 的 U-Boot + OP-TEE 未压缩超过 SPL FIT 槽宽，vendor 依靠 lzma 压缩装下。
+    """
+    firmware = _firmware_tree(tmp_path)
+    (firmware / "RKTRUST/RK3506TOS.ini").write_text(
+        "[COMPRESSION]\nCOMPRESSION=lzma\n" + TOS_INI)
+    source = _source_tree(tmp_path)
+    (source / ".config").write_text("# CONFIG_IMAGE_GZIP is not set\n")
+    docker = FakeDocker()
+    builder = RecordingBuilder(docker, FakeSource(firmware))
+
+    builder.compile(source, _config())
+
+    generator_call = next(
+        cmd for cmd in docker.commands if cmd[0].endswith("make_fit_optee.sh"))
+    assert generator_call[1:] == ["-t", "0x1000", "-c", "lzma"]
+
+
+def test_image_gzip_kconfig_overrides_ini_compression(tmp_path):
+    firmware = _firmware_tree(tmp_path)
+    (firmware / "RKTRUST/RK3506TOS.ini").write_text(
+        "[COMPRESSION]\nCOMPRESSION=lzma\n" + TOS_INI)
+    source = _source_tree(tmp_path)
+    (source / ".config").write_text("CONFIG_IMAGE_GZIP=y\n")
+    docker = FakeDocker()
+    builder = RecordingBuilder(docker, FakeSource(firmware))
+
+    builder.compile(source, _config())
+
+    generator_call = next(
+        cmd for cmd in docker.commands if cmd[0].endswith("make_fit_optee.sh"))
+    assert generator_call[1:] == ["-t", "0x1000", "-c", "gzip"]
