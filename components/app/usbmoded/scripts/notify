@@ -1,0 +1,9 @@
+#!/bin/sh
+# udev 在 USB 状态变化时调用：通知 usbmoded 重新评估 gadget 状态（SIGHUP）。
+# systemd：--no-block reload，行为与原 udev 规则一致（ExecReload 发 SIGHUP）；
+# OpenRC：同名 reload 命令只向 supervise-daemon 托管的进程发 SIGHUP，立即返回。
+set -eu
+if [ -d /run/systemd/system ]; then
+    exec /bin/systemctl --no-block reload usbmoded.service
+fi
+exec /sbin/rc-service --quiet usbmoded reload

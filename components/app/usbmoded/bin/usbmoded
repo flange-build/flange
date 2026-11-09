@@ -14,9 +14,13 @@ import signal
 import sys
 import threading
 
-from usbmoded import capabilities, config, control, udc
-from usbmoded.gadget import Gadget
-from usbmoded.scene import SceneManager
+# 包装在 Debian 约定的 dist-packages；Alpine 等非 Debian 系 Python 不搜索该目录。
+# 追加在末尾，Debian/Ubuntu 上的导入顺序不变。
+sys.path.append("/usr/lib/python3/dist-packages")
+
+from usbmoded import capabilities, config, control, udc  # noqa: E402
+from usbmoded.gadget import Gadget  # noqa: E402
+from usbmoded.scene import SceneManager  # noqa: E402
 
 log = logging.getLogger("usbmoded")
 

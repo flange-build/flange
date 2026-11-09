@@ -30,6 +30,16 @@ systemd:
   unit: systemd/usbmoded-adbd.service
   auto_start: false
 
+openrc:
+  # 与 systemd unit 同理不开机自启，由 usbmoded 的 adb 能力启停。
+  script: openrc/usbmoded-adbd
+  auto_start: false
+
+packaging:
+  # adbd-<arch> 是静态链接二进制，apk 目标只依赖 usbmoded。
+  depends:
+    apk: [usbmoded]
+
 depends:
   - usbmoded
   - libc6

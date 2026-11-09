@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+# adbd 的 OpenRC 服务，对应 systemd/usbmoded-adbd.service。
+# 刻意不声明依赖、也不加入 runlevel：启停完全由 usbmoded 的 adb 能力驱动
+# （FunctionFS 必须先挂载好 adbd 才能打开 ep0）。
+
+description="Android Debug Bridge daemon（由 usbmoded 管理）"
+command="/usr/bin/adbd"
+supervisor="supervise-daemon"
+# 对应 Restart=always、RestartSec=1 与 30s 内 10 次的限流：FunctionFS 未就绪时
+# adbd 会立即退出，不限流会造成忙循环。
+respawn_delay=1
+respawn_max=10
+respawn_period=30
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+
+start_pre() {
+	# adb shell 会话的运行环境（adb 协议不传 TERM），以及 usbmoded 写入的
+	# 能力参数（ADBD_SHELL / ADB_TCP_PORT），对应 unit 的 Environment(File)=。
+	supervise_daemon_args="--env TERM=xterm --env XDG_RUNTIME_DIR=/run/user/1000"
+	if [ -f /run/usbmoded/adbd.env ]; then
+		while IFS= read -r line; do
+			case "$line" in
+			''|'#'*) ;;
+			*=*) supervise_daemon_args="$supervise_daemon_args --env $line" ;;
+			esac
+		done < /run/usbmoded/adbd.env
+	fi
+}

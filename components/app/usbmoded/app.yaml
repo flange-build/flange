@@ -53,6 +53,17 @@ systemd:
   unit: systemd/usbmoded.service
   auto_start: true
 
+openrc:
+  # OpenRC 目标（Alpine）的同一服务；只打包目标 init 对应的服务文件。
+  # udev 规则经 scripts/notify（→ /usr/lib/usbmoded/notify）按 init 发 reload。
+  script: openrc/usbmoded
+  auto_start: true
+
+packaging:
+  # 顶层 depends 是 Debian 包名；apk 目标按 Alpine 包名声明。
+  depends:
+    apk: [python3, py3-yaml, eudev]
+
 depends:
   # python3 是 metapackage，会带入完整 stdlib（含 json / argparse /
   # dataclasses / socketserver 等必需模块）；python3-minimal 不够。
