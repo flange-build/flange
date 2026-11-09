@@ -38,6 +38,11 @@
     // 作 secure monitor；同时把 SPL FIT 槽宽扩到 512 KiB。U-Boot + OP-TEE 须按
     // RV1106TOS.ini 的 [COMPRESSION] lzma 压缩才装得下。
     defconfig: ['rv1106_defconfig', 'rv1106-optee.config'],
+    // 原厂 RV1106 用 ENV 分区表（offset 0 的 env），rv1106_defconfig 不含 GPT
+    // 解析：U-Boot 只认出保护性 MBR，找不到 boot 分区而无法启动内核。flange 统一
+    // 用 GPT（与 rk3506b 相同），须显式打开。SPL 无需：分区表缺失时按
+    // MTD_BLK_U_BOOT_OFFS=0x4000 定位 uboot，与 GPT 布局一致。
+    config: { CONFIG_EFI_PARTITION: 'y' },
     trust_mode: 'tos',
     // RV1106MINIALL.ini 启用 NEWIDB；FlashBoot 换成本次 U-Boot 同源 SPL，
     // FlashData（DDR 初始化）仍取 rkbin。
