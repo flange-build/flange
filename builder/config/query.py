@@ -12,6 +12,7 @@ from builder.config.registry import discover_boards
 def _merged_configs(
     boards: dict[str, dict],
     project_root: Path | None = None,
+    layer_stack=None,
 ) -> dict[str, dict]:
     """返回 board 身份映射；身份投影已包含 products/variants。"""
     return boards
@@ -20,13 +21,14 @@ def _merged_configs(
 def get_valid_targets(
     boards: dict[str, dict] | None = None,
     project_root: Path | None = None,
+    layer_stack=None,
 ) -> list[str]:
     """返回所有合法的 <board>-<product>-<variant> 目标列表。
 
     按字母序排列，便于用户浏览。
     """
     if boards is None:
-        boards = discover_boards(project_root)
+        boards = discover_boards(project_root, layer_stack=layer_stack)
 
     merged = _merged_configs(boards, project_root)
     targets: list[str] = []
@@ -47,6 +49,7 @@ def parse_target(
     target: str,
     boards: dict[str, dict] | None = None,
     project_root: Path | None = None,
+    layer_stack=None,
 ) -> dict[str, str]:
     """解析 <board>-<product>-<variant> 目标字符串。
 
@@ -57,7 +60,7 @@ def parse_target(
     若无法匹配则抛出 ValueError。
     """
     if boards is None:
-        boards = discover_boards(project_root)
+        boards = discover_boards(project_root, layer_stack=layer_stack)
 
     merged = _merged_configs(boards, project_root)
 
@@ -145,13 +148,14 @@ class TargetNode:
 def build_target_tree(
     boards: dict[str, dict] | None = None,
     project_root: Path | None = None,
+    layer_stack=None,
 ) -> TargetNode:
     """构造 平台 → SoC → 板 → product → variant 的目标树。
 
     每一层按名字排序，使界面顺序稳定、可预期。
     """
     if boards is None:
-        boards = discover_boards(project_root)
+        boards = discover_boards(project_root, layer_stack=layer_stack)
 
     root = TargetNode("", "", None)
     for board_name in sorted(boards):

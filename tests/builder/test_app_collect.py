@@ -636,3 +636,23 @@ class TestUsbmodedIntegration:
         files = collect_files(usbmoded_dir, usbmoded_spec, "aarch64")
         for src, install_path, mode in files:
             assert src.exists(), f"源文件不存在：{src}（安装到 {install_path}）"
+
+
+class TestInitSystemFilter:
+    """只收集目标 init 的服务文件目录。"""
+
+    def test_systemd_target_skips_openrc_scripts(self, tmp_path: Path):
+        _touch(tmp_path / "systemd" / "demo.service")
+        _touch(tmp_path / "openrc" / "demo")
+        files = _result_map(collect_files(tmp_path, _make_spec(name="demo"), "armhf"))
+        assert "/lib/systemd/system/demo.service" in files
+        assert "/etc/init.d/demo" not in files
+
+    def test_openrc_target_installs_executable_script_only(self, tmp_path: Path):
+        _touch(tmp_path / "systemd" / "demo.service")
+        _touch(tmp_path / "openrc" / "demo")
+        files = _result_map(
+            collect_files(tmp_path, _make_spec(name="demo"), "armhf", "openrc")
+        )
+        assert files["/etc/init.d/demo"][1] == 0o755
+        assert "/lib/systemd/system/demo.service" not in files

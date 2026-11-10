@@ -1,0 +1,10 @@
+schema_version = 1
+api_version = 1
+name = "example-debian"
+requires = ["flange", "example-common"]
+[providers.distro]
+debian = "strategies/distro/provider.py"
+[providers.environment]
+debian13 = "strategies/environment/provider.py"
+[providers.toolchain]
+debian13 = "strategies/toolchain/provider.py"

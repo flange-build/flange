@@ -173,7 +173,7 @@ AppResolver 的优先级为：显式路径 → 工作区 `[apps]` 注册 → 当
 资源 ID 由 App 名称和规范源码路径摘要组成。工作目录为
 `<build_root>/work/<target.key>/apps/<resource-id>/`，发布根为
 `<target_dir>/apps/<resource-id>/`，包含 `install/`、`artifacts/`、`resource.json` 与 `manifest.json`；debug 目标另外发布 `debug-source/`。
-完整请求报告在 `apps/reports/<摘要>.json`，schema_version 为 2，记录根资源、拓扑顺序、依赖、安装树和全部包的
+完整请求报告在 `apps/reports/<摘要>.json`，schema_version 为 3，记录根资源、拓扑顺序、依赖、安装树和全部包的
 `path/format/role`。旧报告需要重新 `flange app build`；任一开发包缺失也会使缓存失效。
 
 CMake/Meson 的原生中间目录独立；Make/custom 在隔离源码副本中执行，避免修改用户源或串用目标。
@@ -259,3 +259,6 @@ Package 的显式 `actions.build` 由 `package_build.py` 在隔离副本的 Dock
 构建模型见 `app_build.py`，文件收集见 `app.py`，文件树复制见 `file_tree.py`，打包见 `deb.py`，设备会话见 `deploy.py`。
 真实 App/Package 清单纳入严格校验；跨目标编译、损坏产物和设备故障分别验证。
 当前交付状态见[设计评审](build-system-review.md)，不能把模拟设备测试表述为板卡实机验收。
+
+报告另外记录 `userland_identity`（发行版和用户态 ABI）；旧报告缺少身份必须重新构建。
+rootfs 安装与 `--no-build` 均校验身份。外部包格式、发行版与 SDK 见[多层工作区](layers.md)。

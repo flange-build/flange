@@ -4,6 +4,7 @@ from pathlib import Path
 
 from builder.config.jsonnet import JsonnetConfigLoader, JsonnetEvaluator
 from builder.paths import PROJECT_ROOT, components_dir
+from builder.layers import LayerStack
 
 
 def _root(project_root: Path | None) -> Path:
@@ -53,6 +54,7 @@ def _evaluate_overlay(path: Path, project_root: Path) -> dict:
 def _load_platform_config(
     platform: str,
     project_root: Path | None = None,
+    layer_stack=None,
 ) -> dict:
     root = _root(project_root)
     configs = _discover_platform_configs(root)
@@ -69,26 +71,22 @@ def _load_soc_config(soc: str, project_root: Path | None = None) -> dict:
     return _evaluate_overlay(root / configs[soc], root)
 
 
-def discover_boards(project_root: Path | None = None) -> dict[str, dict]:
-    """扫描 board/*/config.jsonnet 并返回身份元数据。"""
+def discover_boards(project_root: Path | None = None, *, layer_stack=None) -> dict[str, dict]:
+    """按启用层扫描并组合 board 身份，所有目标入口共用此结果。"""
     root = _root(project_root)
-    board_dir = components_dir(root) / "board"
-    if not board_dir.is_dir():
-        return {}
-    loader = JsonnetConfigLoader(root)
-    boards: dict[str, dict] = {}
-    for child in sorted(board_dir.iterdir()):
-        if child.is_dir() and (child / "config.jsonnet").is_file():
-            boards[child.name] = loader.board_identity(child.name)
-    return boards
+    stack = layer_stack or LayerStack.base(root)
+    loader = JsonnetConfigLoader(root, layer_stack=stack)
+    return {name: loader.board_identity(name)
+            for name in stack.names("components/board", "config.jsonnet")}
 
 
 def _require_board(
     board_name: str,
     boards: dict[str, dict] | None,
     root: Path,
+    layer_stack=None,
 ) -> dict:
-    available = boards if boards is not None else discover_boards(root)
+    available = boards if boards is not None else discover_boards(root, layer_stack=layer_stack)
     if board_name not in available:
         raise KeyError(f"未找到板子 {board_name!r}；可用: {', '.join(sorted(available)) or '无'}")
     return available[board_name]
@@ -98,11 +96,12 @@ def get_board_config(
     board_name: str,
     boards: dict[str, dict] | None = None,
     project_root: Path | None = None,
+    layer_stack=None,
 ) -> dict:
     """求值指定 board 的首个 product/variant canonical 配置。"""
     root = _root(project_root)
-    identity = _require_board(board_name, boards, root)
-    return JsonnetConfigLoader(root).evaluate_board(
+    identity = _require_board(board_name, boards, root, layer_stack)
+    return JsonnetConfigLoader(root, layer_stack=layer_stack).evaluate_board(
         board_name,
         identity.get("products", ["default"])[0],
         identity.get("variants", ["release"])[0],
@@ -115,8 +114,9 @@ def resolve_config(
     variant: str,
     boards: dict[str, dict] | None = None,
     project_root: Path | None = None,
+    layer_stack=None,
 ) -> dict:
     """按显式 product/variant 求值并返回最终 canonical 配置。"""
     root = _root(project_root)
-    _require_board(board_name, boards, root)
-    return JsonnetConfigLoader(root).evaluate_board(board_name, product, variant)
+    _require_board(board_name, boards, root, layer_stack)
+    return JsonnetConfigLoader(root, layer_stack=layer_stack).evaluate_board(board_name, product, variant)

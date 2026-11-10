@@ -28,6 +28,7 @@
 | 开发板 | SoC（片上系统） | 配置标识 |
 | --- | --- | --- |
 | [正点原子 RK3506B](wiki/boards/atk-rk3506b.md) | RK3506B · ARM32 | `atk-rk3506b` |
+| [Luckfox Pico Pro / Max](wiki/boards/luckfox-pico-pro-max.md) | RV1106 · ARM32 | `luckfox-pico-pro-max` |
 | [Radxa ZERO 3W](wiki/boards/radxa-zero3w.md) | RK3566 | `radxa-zero3w` |
 | [泰山派](wiki/boards/tspi-rk3566.md) | RK3566 | `tspi-rk3566` |
 | [Neons Core3566 + NanoB](wiki/boards/neons-core3566-nanob.md) | RK3566 | `neons-core3566-nanob` |

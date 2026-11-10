@@ -65,11 +65,13 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         soc = config["soc"]
         board = config["board"]
         # 用 paths.py 暴露的绝对锚点，避免依赖调用时 cwd（ProjectSpec §9）。
-        search_dirs = [
-            self.components_root / "board" / board / "patches" / "bootloader",
-            self.components_root / "platform" / platform / soc / "patches" / "bootloader",
-            self.components_root / "platform" / platform / "patches" / "bootloader",
-        ]
+        from builder.layers import stack_for
+        stack = stack_for(config, self.context, self.components_root.parent)
+        search_dirs = [ref.path for directory in (
+            f"components/board/{board}/patches/bootloader",
+            f"components/platform/{platform}/{soc}/patches/bootloader",
+            f"components/platform/{platform}/patches/bootloader",
+        ) for ref in reversed(stack.all(directory))]
         configs_dir = src_dir / "configs"
         configs_dir.mkdir(parents=True, exist_ok=True)
         for name in defconfig:

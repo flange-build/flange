@@ -1,0 +1,35 @@
+#!/sbin/openrc-run
+# usbmoded 的 OpenRC 服务，对应 systemd/usbmoded.service。
+# 本服务处于开机关键路径：多数板子上 adb 是唯一的调试通道。
+
+description="USB 工作模式管理服务（usbmoded）"
+command="/usr/sbin/usbmoded"
+supervisor="supervise-daemon"
+# 对应 Restart=on-failure、RestartSec=2 与 30s 内 5 次的限流。
+respawn_delay=2
+respawn_max=5
+respawn_period=30
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+extra_started_commands="reload"
+
+depend() {
+	need localmount
+	after modules udev
+}
+
+start_pre() {
+	# /run/usbmoded 存放能力参数环境文件，对应 RuntimeDirectory=usbmoded。
+	checkpath -d -m 0755 /run/usbmoded
+	# configfs 是 USB gadget 的配置入口，对应 Requires=sys-kernel-config.mount。
+	if ! mountpoint -q /sys/kernel/config; then
+		mount -t configfs configfs /sys/kernel/config
+	fi
+}
+
+reload() {
+	ebegin "通知 ${RC_SVCNAME} 重新评估 gadget 状态"
+	supervise-daemon "${RC_SVCNAME}" --signal HUP
+	eend $?
+}

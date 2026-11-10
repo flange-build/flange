@@ -1,4 +1,4 @@
-"""能力所需后台 daemon 的生命周期管理，全部交由 systemd。
+"""能力所需后台 daemon 的生命周期管理，交由 init 系统（systemd 或 OpenRC）。
 
 对应 race-checklist.md 知识 #10 —— 该项**不迁移**，而是消灭其存在前提。
 
@@ -19,88 +19,108 @@ adbd 被反复 kill，adb 完全不可用。
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 
 log = logging.getLogger(__name__)
 
-# 能力的 daemon unit 统一前缀，与 App 安装的 unit 文件名对应。
+# 能力的 daemon 服务统一前缀，与 App 安装的 unit / OpenRC 脚本文件名对应。
 UNIT_PREFIX = "usbmoded-"
 
 SYSTEMCTL_TIMEOUT = 30
+
+# sd_booted() 同款判据：systemd 作为 PID 1 时一定创建该目录。
+SYSTEMD_RUNTIME = "/run/systemd/system"
+# OpenRC 服务脚本目录。
+OPENRC_INIT_DIR = "/etc/init.d"
 
 
 class DaemonError(Exception):
     """daemon 操作失败。"""
 
 
+def _openrc() -> bool:
+    """非 systemd 引导的系统由 OpenRC 管理服务（Alpine 等）。"""
+    return not os.path.isdir(SYSTEMD_RUNTIME)
+
+
 def unit_name(daemon: str) -> str:
-    """daemon 名到 systemd unit 名。"""
+    """daemon 名到服务名：systemd 为 unit 名，OpenRC 为 /etc/init.d 脚本名。"""
+    if _openrc():
+        return f"{UNIT_PREFIX}{daemon}"
     return f"{UNIT_PREFIX}{daemon}.service"
 
 
-def _systemctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    cmd = ["systemctl", *args]
+def _service(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    """调用服务管理器；参数按 systemctl 语义给出，OpenRC 下翻译为 rc-service。"""
+    if _openrc():
+        action, name = args[0], args[-1]
+        cmd = ["rc-service", "--quiet", name, "status" if action == "is-active" else action]
+    else:
+        cmd = ["systemctl", *args]
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=SYSTEMCTL_TIMEOUT
         )
     except FileNotFoundError as exc:
-        raise DaemonError("systemctl 不可用 —— 本服务依赖 systemd 管理 daemon") from exc
+        raise DaemonError(f"{cmd[0]} 不可用 —— 本服务依赖 systemd 或 OpenRC 管理 daemon") from exc
     except subprocess.TimeoutExpired as exc:
-        raise DaemonError(f"systemctl {' '.join(args)} 超时") from exc
+        raise DaemonError(f"{' '.join(cmd)} 超时") from exc
     if check and result.returncode != 0:
         raise DaemonError(
-            f"systemctl {' '.join(args)} 失败（{result.returncode}）："
+            f"{' '.join(cmd)} 失败（{result.returncode}）："
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
     return result
 
 
 def start(daemon: str) -> None:
-    """启动 daemon 对应的 unit。
+    """启动 daemon 对应的服务。
 
-    不做「已运行则跳过」的判断 —— systemctl start 本身对已运行的 unit
-    是幂等的，重复判断只会引入 TOCTOU 窗口。
+    不做「已运行则跳过」的判断 —— systemctl start 与 rc-service start 对已
+    运行的服务都是幂等的，重复判断只会引入 TOCTOU 窗口。
     """
     unit = unit_name(daemon)
-    log.info("启动 daemon unit：%s", unit)
-    _systemctl("start", unit)
+    log.info("启动 daemon 服务：%s", unit)
+    _service("start", unit)
 
 
 def stop(daemon: str) -> None:
-    """停止 daemon 对应的 unit。
+    """停止 daemon 对应的服务。
 
-    unit 未运行时 systemctl stop 返回成功，因此本函数可重入 ——
+    服务未运行时 stop 返回成功，因此本函数可重入 ——
     能力的 stop() 契约要求「未启动时调用应为空操作」。
     """
     unit = unit_name(daemon)
-    log.info("停止 daemon unit：%s", unit)
-    _systemctl("stop", unit)
+    log.info("停止 daemon 服务：%s", unit)
+    _service("stop", unit)
 
 
 def restart(daemon: str) -> None:
-    """重启 daemon 对应的 unit。
+    """重启 daemon 对应的服务。
 
     断连恢复路径用它让 daemon 重新获取 endpoint（知识 #8）——
     注意该路径只重启 daemon，不触碰 configfs 链接。
     """
     unit = unit_name(daemon)
-    log.info("重启 daemon unit：%s", unit)
-    _systemctl("restart", unit)
+    log.info("重启 daemon 服务：%s", unit)
+    _service("restart", unit)
 
 
 def is_active(daemon: str) -> bool:
     """查询 daemon 是否在运行。"""
-    result = _systemctl("is-active", "--quiet", unit_name(daemon), check=False)
+    result = _service("is-active", "--quiet", unit_name(daemon), check=False)
     return result.returncode == 0
 
 
 def exists(daemon: str) -> bool:
-    """查询 unit 文件是否存在。
+    """查询服务文件是否存在。
 
-    能力启用前用它做前置检查，避免把「unit 没装」误报成「daemon 启动失败」。
+    能力启用前用它做前置检查，避免把「服务没装」误报成「daemon 启动失败」。
     """
-    result = _systemctl(
+    if _openrc():
+        return os.path.isfile(os.path.join(OPENRC_INIT_DIR, unit_name(daemon)))
+    result = _service(
         "list-unit-files", "--no-legend", unit_name(daemon), check=False
     )
     return result.returncode == 0 and bool(result.stdout.strip())

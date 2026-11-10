@@ -40,9 +40,10 @@ def base_plan(config: dict, component: str, context) -> TaskPlan:
                 "extra_sources": settings.get("extra_apt_sources") or [],
             },
         ),
+        InputSpec.value("distro", config.get("distro", "ubuntu")),
         InputSpec.value("architecture", userspace_arch(config)),
         InputSpec.value("emulator", emulator),
-        InputSpec.value("environment", environment_identity(emulator=emulator)),
+        InputSpec.value("environment", environment_identity(emulator=emulator, config=config, context=context)),
     ]
     for filename in (
         "rootfs_base.py", "rootfs_storage.py", "snapshot.py", "chroot.py", "source.py", "docker.py",
@@ -51,7 +52,7 @@ def base_plan(config: dict, component: str, context) -> TaskPlan:
         path = context.tool_root / "builder" / filename
         if path.is_file():
             inputs.append(InputSpec.file(f"recipe:{filename}", path))
-    return TaskPlan("rootfs:base", "ubuntu-base-apt-v1", tuple(inputs), ())
+    return TaskPlan("rootfs:base", f"{config.get('distro', 'ubuntu')}-base-apt-v1", tuple(inputs), ())
 
 
 def apt_command(apt: dict) -> list[str]:
@@ -94,7 +95,11 @@ def build_base(plan: TaskPlan, rootfs_dir: Path, *, context, source, docker, sta
     emulator = plan.value("emulator")
     docker.run_privileged(["cp", f"/usr/bin/{emulator}", str(rootfs_dir / "usr/bin/")])
     apt = plan.value("apt")
-    apt_cache = AptCache(context.build_root / "cache/apt")
+    from builder.digest import digest_value
+    cache_id = digest_value({"distro": plan.value("distro"),
+                             "architecture": plan.value("architecture"),
+                             "tarball": plan.value("tarball"), "sources": apt["extra_sources"]})[:20]
+    apt_cache = AptCache(context.build_root / "cache/apt" / cache_id)
     with (
         apt_cache.locked(),
         ChrootContext(rootfs_dir, docker) as chroot,

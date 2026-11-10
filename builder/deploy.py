@@ -15,6 +15,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Protocol, Sequence
 
+from builder.init_system import InitSystem, InitSystemError, get_init_system
 from builder.app_model import AppBuildReport
 from builder.packaging import get_backend
 from builder.artifacts import ArtifactManifest
@@ -162,7 +163,7 @@ def _deployment_backend(report: AppBuildReport):
         raise DeployError("该 App 闭包没有可部署的 runtime 包")
     if len(formats) != 1:
         raise DeployError("一次设备部署不能混用多种包格式")
-    return get_backend(next(iter(formats)))
+    return get_backend(next(iter(formats)), getattr(report, "layer_stack", None))
 
 
 def _deploy(report: AppBuildReport, transport: DeviceTransport, session: DeviceSession) -> None:
@@ -185,6 +186,11 @@ def _deploy(report: AppBuildReport, transport: DeviceTransport, session: DeviceS
         transport.shell(["rm", "-rf", remote_dir], check=False, capture_output=True)
 
 
+def _init_system(report: AppBuildReport) -> InitSystem:
+    """报告的用户态身份只在非 systemd 目标记录 init_system。"""
+    return get_init_system(report.userland_identity.get("init_system", "systemd"))
+
+
 def _runtime_command(report: AppBuildReport, args: Sequence[str]) -> list[str]:
     root = report.root()
     if root.app_type in {"exec", "test"} and root.executable:
@@ -192,7 +198,7 @@ def _runtime_command(report: AppBuildReport, args: Sequence[str]) -> list[str]:
     if root.app_type == "service":
         if args:
             raise DeployError("service 默认运行方式不接受额外 argv")
-        return ["systemctl", "restart", root.service_unit]
+        return _init_system(report).restart(root.service_unit)
     raise DeployError(f"App 类型 {root.app_type!r} 没有默认运行入口")
 
 
@@ -224,7 +230,7 @@ def _debug(
         if args:
             raise DeployError("service GDB 不接受额外 argv")
         pid = transport.shell(
-            ["systemctl", "show", root.service_unit, "--property", "MainPID", "--value"],
+            _init_system(report).main_pid(root.service_unit),
             capture_output=True,
         ).stdout.strip()
         if not pid.isdecimal() or int(pid) <= 0:
@@ -320,6 +326,7 @@ def operate_report(
     context: WorkspaceContext, report: AppBuildReport, action: str, **options
 ) -> dict:
     """会话期间锁定目标产物，避免构建或清理替换正在读取的符号与包。"""
+    object.__setattr__(report, "layer_stack", context.layer_stack)
     with FileLock(context.build_root / "locks" / f"{context.target.key}.lock"):
         return _operate_report(context, report, action, **options)
 
@@ -370,15 +377,16 @@ def _operate_report(
             _deploy(report, device, session)
         root = report.root() if action != "deploy" else None
         if action == "run":
-            if root.app_type == "service":
-                device.shell(["systemctl", "daemon-reload"])
+            reload = _init_system(report).reload()
+            if root.app_type == "service" and reload:
+                device.shell(reload)
             result = device.shell(_runtime_command(report, args), check=False, capture_output=True)
             session.data.update(stdout=result.stdout, stderr=result.stderr)
             if result.returncode:
                 return session.finish("failed", exit_code=result.returncode)
         elif action == "test":
             command = (
-                ["systemctl", "is-active", "--quiet", root.service_unit]
+                _init_system(report).is_active(root.service_unit)
                 if root.app_type == "service"
                 else _runtime_command(report, args)
             )
@@ -395,9 +403,11 @@ def _operate_report(
             session.save()
             try:
                 if root.app_type == "service":
+                    init = _init_system(report)
                     preparation = [
-                        ["systemctl", "daemon-reload"],
-                        ["systemctl", "restart", root.service_unit],
+                        command
+                        for command in (init.reload(), init.restart(root.service_unit))
+                        if command
                     ]
                     session.data["test"]["preparation_commands"] = preparation
                     session.save()
@@ -426,13 +436,12 @@ def _operate_report(
         elif action == "log":
             if root.app_type != "service":
                 raise DeployError("默认日志源仅支持 service App")
-            command = ["journalctl", "-u", root.service_unit, "--no-pager"]
-            if lines is not None:
-                command += ["-n", str(lines)]
-            if since:
-                command += ["--since", since]
-            if follow:
-                command.append("-f")
+            try:
+                command = _init_system(report).log(
+                    root.service_unit, lines=lines, since=since, follow=follow
+                )
+            except InitSystemError as error:
+                raise DeployError(str(error)) from error
             session.data["log"] = {"command": command}
             device.shell(command)
         elif action != "deploy":

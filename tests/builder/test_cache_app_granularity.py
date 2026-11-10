@@ -45,9 +45,11 @@ def test_content_and_permission_corruption_rebuild_every_declared_deb(tmp_path):
 def test_actual_image_identity_invalidates_cache(tmp_path, monkeypatch):
     source = app(tmp_path / 'hello')
     engine = builder(tmp_path, apps={'hello': source})
+    monkeypatch.setenv('FLANGE_ENVIRONMENT_PROVIDER', 'ubuntu')
     monkeypatch.setenv('FLANGE_BUILD_ENVIRONMENT', 'sha256:first')
     engine.build_one('hello')
     assert engine.build_one('hello').root().reused
+    monkeypatch.setenv('FLANGE_ENVIRONMENT_PROVIDER', 'ubuntu')
     monkeypatch.setenv('FLANGE_BUILD_ENVIRONMENT', 'sha256:second')
     assert not engine.build_one('hello').root().reused
 

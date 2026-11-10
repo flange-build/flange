@@ -44,3 +44,24 @@ class UbuntuBuildDependencies:
                 ]
             )
             self.installed.update(pending)
+
+
+class SdkBuildDependencies:
+    """SDK 已固定目标依赖；不允许隐式向 Ubuntu 容器安装不同发行版依赖。"""
+
+    def install(self, packages, arch):
+        if packages:
+            raise ValueError("此 SDK 未提供构建依赖适配器；请预置所需依赖或实现 create_dependencies")
+
+
+def resolve_build_dependencies(config, context, runner):
+    from builder.build_environment import resolve_environment
+    from builder.layers import stack_for
+
+    environment = resolve_environment(config, context)
+    name = config.get("userland_toolchain") or (environment.toolchain if environment else "")
+    module = stack_for(config, context).provider("toolchain", name) if name else None
+    if module is not None:
+        factory = getattr(module, "create_dependencies", None)
+        return factory(config, context, runner) if factory else SdkBuildDependencies()
+    return UbuntuBuildDependencies(runner, context.tool_root)

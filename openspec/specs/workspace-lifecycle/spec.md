@@ -3,10 +3,9 @@
 ## Purpose
 
 定义工具仓库、外部项目、目标身份和输出目录的独立边界，明确工作区发现、严格清单、持久选择和本次覆盖的优先级，让同一安装入口能够可靠服务多个相互隔离的项目。
-
 ## Requirements
 ### Requirement: 工作区显式管理目标与输出
-工作区 MUST 通过 flange.toml 声明工具根、App 搜索目录与输出根，独立保存目标选择。
+工作区 MUST 通过 flange.toml 声明工具根、有序本地扩展层、App 搜索目录与输出根，独立保存目标选择。
 CLI MUST 使用 WorkspaceContext 传递路径与目标，MUST NOT 将全局 shell 状态作为操作身份。
 
 #### Scenario: 两个外部项目独立选择目标

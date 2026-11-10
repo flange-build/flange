@@ -106,7 +106,7 @@ flange --json app build /path/to/telemetry
 ```
 
 终端显示“运行包”和“开发包”及各自路径；JSON 的 `data.apps[].packages` 给出
-`{path, format, role}`。请求报告 `apps/reports/<摘要>.json` 使用 schema_version 2；
+`{path, format, role}`。请求报告 `apps/reports/<摘要>.json` 使用 schema_version 3；
 旧报告需重新构建。所有包和安装树都进入内容校验，开发包被删除或篡改也不能复用缓存。
 `runtime_debs` 读取视图暂时保留，新增消费者应使用通用的包记录。
 
@@ -145,3 +145,6 @@ FLANGE_RUN_DOCKER_TESTS=1 .venv/bin/python -m pytest tests/integration/test_cpac
 
 第二项真实生成两个 CPack DEB，由 Flange 提取后让下游 CMake 工程找到 SDK 并链接 ARM64 静态库，
 还覆盖缓存复用和开发包丢失后的重建；不连接或部署设备。
+
+报告另外记录 `userland_identity`（发行版和用户态 ABI）；旧报告缺少身份必须重新构建。
+rootfs 安装与 `--no-build` 均校验身份。外部包格式、发行版与 SDK 见[多层工作区](layers.md)。

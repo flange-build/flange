@@ -1274,8 +1274,15 @@ _FLASH_STRATEGIES: dict[str, type[FlashStrategy]] = {
 }
 
 
-def get_flash_strategy(platform: str) -> FlashStrategy:
+def get_flash_strategy(platform: str, layer_stack=None) -> FlashStrategy:
     """根据平台名获取刷写策略实例。"""
+    if layer_stack is not None:
+        module = layer_stack.provider("flash", platform)
+        if module is not None:
+            result = module.create_strategy()
+            if not isinstance(result, FlashStrategy):
+                raise FlashError("create_strategy 必须返回 FlashStrategy")
+            return result
     if platform == "qualcommqrb2210":
         from builder.flash.unoq import UnoQFlashStrategy
         return UnoQFlashStrategy()

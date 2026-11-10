@@ -428,6 +428,7 @@ class TestRootfsDebInstallIntegration:
 
         builder = _make_builder(tmp_path)
         builder.app_report = MagicMock()
+        builder.app_report.userland_identity = {"distro": "ubuntu", "profile": "ubuntu", "sdk": "", "architecture": "aarch64", "triple": "aarch64-linux-gnu"}
         builder.app_report.validate.return_value = True
         builder.app_report.runtime_packages_for.return_value = (
             PackageArtifact(deb_file, "deb", "runtime"),
@@ -462,6 +463,7 @@ class TestRootfsDebInstallIntegration:
 
         builder = _make_builder(tmp_path)
         builder.app_report = MagicMock()
+        builder.app_report.userland_identity = {"distro": "ubuntu", "profile": "ubuntu", "sdk": "", "architecture": "aarch64", "triple": "aarch64-linux-gnu"}
         builder.app_report.validate.return_value = True
         builder.app_report.runtime_packages_for.return_value = ()
         chroot_ctx = MagicMock()

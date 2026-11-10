@@ -1,0 +1,13 @@
+# Debian 用户态验证示例。
+app:
+  name: layer-lib
+  version: "1.0.0"
+  description: "多层 Debian 用户态验证"
+  type: lib
+  arch: [aarch64]
+maintainer:
+  name: flange
+  email: flange@example.invalid
+build:
+  system: cmake
+depends: [libc6]

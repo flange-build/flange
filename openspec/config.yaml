@@ -5,7 +5,7 @@ schema: spec-driven
 # Add your tech stack, conventions, style guides, domain knowledge, etc.
 context: |
   项目名称: flange 嵌入式系统构建基座
-  项目定位: 类似 buildroot 和 yocto 的嵌入式系统构建框架，但基于 ubuntu-base 构建
+  项目定位: 类似 buildroot 和 yocto 的嵌入式系统构建框架，默认基于 ubuntu-base，支持外部层提供发行版、完整环境与 SDK
   构建系统: Python 构建引擎（配置继承 + 内容哈希增量构建 + ComponentBuilder 策略模式），Docker 容器内执行编译
   核心目标:
     1. 提供内核快速验证通道
@@ -24,7 +24,7 @@ context: |
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
 rules:
-  spec:
+  specs:
     - 所有 spec 文档必须使用中文编写，仅专业术语可以保留英文
     - 技术术语第一次出现时建议标注对应的英文原文
   proposal:

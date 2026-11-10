@@ -239,3 +239,10 @@ class TestFeedLineIntegration:
     def test_git_fatal_detected(self, output):
         output.feed_line("fatal: not a git repository\n")
         assert len(output._errors) == 1
+
+
+@pytest.fixture(autouse=True)
+def identified_container(monkeypatch):
+    """捕获测试模拟由 flange 启动的已标识容器。"""
+    monkeypatch.setenv("FLANGE_ENVIRONMENT_PROVIDER", "ubuntu")
+    monkeypatch.setenv("FLANGE_BUILD_ENVIRONMENT", "sha256:test-image")

@@ -1,0 +1,179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: flange <flange@local>
+Date: Mon, 9 Nov 2026 10:31:04 +0800
+Subject: [PATCH] 新增 Luckfox Pico Pro/Max 设备树
+
+由 Luckfox 官方 SDK（5.10）移植到 6.1 树，保留 SPI NAND、TF 卡、以太网、
+USB OTG（device）、ADC、LED、RTC；bootargs 指向 mtd3 上的 UBI rootfs。
+vdd_arm 改为固定 900mV 并删去 1104MHz 以上 OPP；LED 用 heartbeat 指示内核运行。
+---
+ .../boot/dts/rv1106g-luckfox-pico-pro-max.dts | 158 ++++++++++++++++++
+ 1 file changed, 158 insertions(+)
+ create mode 100644 arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max.dts
+
+diff --git a/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max.dts b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max.dts
+new file mode 100644
+index 0000000..46912da
+--- /dev/null
++++ b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max.dts
+@@ -0,0 +1,158 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Luckfox Pico Pro / Max（RV1106G2 128MB / RV1106G3 256MB，同一板型）。
++ *
++ * 由 Luckfox 官方 SDK（Linux 5.10）的 rv1106g-luckfox-pico-pro-max.dts 移植到
++ * 6.1 树：只保留基础外设，不含摄像头/ISP、NPU、音频编解码与 SDK 私有 DHT11
++ * 节点（依赖 5.10 树驱动）。根文件系统是 SPI NAND 上 GPT 第 4 个分区（mtd3）
++ * 的 UBI volume "rootfs"。
++ */
++
++/dts-v1/;
++
++#include "rv1106.dtsi"
++
++/ {
++	model = "Luckfox Pico Pro Max";
++	compatible = "luckfox,pico-pro-max", "rockchip,rv1106";
++
++	chosen {
++		bootargs = "earlycon=uart8250,mmio32,0xff4c0000 console=ttyFIQ0 ubi.mtd=3 root=ubi0:rootfs rw rootfstype=ubifs rootwait storagemedia=mtd androidboot.storagemedia=mtd androidboot.mode=normal";
++	};
++
++	vcc_1v8: vcc-1v8 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_1v8";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++	};
++
++	vcc_3v3: vcc-3v3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc_3v3";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++	};
++
++	/*
++	 * 板上 VDD_ARM 是固定供电，内核不可调压。官方 DTS 写成 800–1000mV 的
++	 * fixed 稳压器，fixed 驱动以 "variable voltages" 拒绝探测，cpufreq
++	 * 永远推迟、CPU 停在 CRU 初值 1104MHz。这里改为固定 900mV（官方 init 值），
++	 * 并在下方删去需要更高电压的 OPP。
++	 */
++	vdd_arm: vdd-arm {
++		compatible = "regulator-fixed";
++		regulator-name = "vdd_arm";
++		regulator-min-microvolt = <900000>;
++		regulator-max-microvolt = <900000>;
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	leds {
++		compatible = "gpio-leds";
++
++		/* 心跳闪烁 = 内核在运行；无串口时作为启动进度指示。 */
++		work_led: work {
++			gpios = <&gpio3 RK_PC6 GPIO_ACTIVE_HIGH>;
++			linux,default-trigger = "heartbeat";
++			default-state = "on";
++		};
++	};
++
++	restart-poweroff {
++		compatible = "restart-poweroff";
++	};
++};
++
++&cpu0 {
++	cpu-supply = <&vdd_arm>;
++};
++
++/*
++ * 固定 900mV 下只保留不超过 1104MHz 的 OPP：1200MHz 起的条目要么要求更高
++ * 电压，要么超出官方镜像实际运行过的频率。
++ */
++&cpu0_opp_table {
++	/delete-node/ opp-1200000000;
++	/delete-node/ opp-1296000000;
++	/delete-node/ opp-1416000000;
++	/delete-node/ opp-1512000000;
++	/delete-node/ opp-1608000000;
++};
++
++&fiq_debugger {
++	rockchip,irq-mode-enable = <1>;
++	status = "okay";
++};
++
++/* 板载 SPI NAND（256MB），SFC 四线读。 */
++&sfc {
++	status = "okay";
++
++	flash@0 {
++		compatible = "spi-nand";
++		reg = <0>;
++		spi-max-frequency = <75000000>;
++		spi-rx-bus-width = <4>;
++		spi-tx-bus-width = <1>;
++	};
++};
++
++/* TF 卡槽。 */
++&sdmmc {
++	max-frequency = <50000000>;
++	no-sdio;
++	no-mmc;
++	bus-width = <4>;
++	cap-sd-highspeed;
++	disable-wp;
++	pinctrl-names = "default";
++	pinctrl-0 = <&sdmmc0_clk &sdmmc0_cmd &sdmmc0_det &sdmmc0_bus4>;
++	status = "okay";
++};
++
++/* 百兆以太网，内置 PHY 由 rv1106.dtsi 的 rmii_phy 描述。 */
++&gmac {
++	status = "okay";
++};
++
++/* USB 2.0 OTG：官方 SDK 固定为 device，供 adb/USB 网卡等 gadget 使用。 */
++&u2phy {
++	status = "okay";
++};
++
++&u2phy_otg {
++	rockchip,dis-u2-susphy;
++	status = "okay";
++};
++
++&usbdrd {
++	status = "okay";
++};
++
++&usbdrd_dwc3 {
++	dr_mode = "peripheral";
++	status = "okay";
++};
++
++&saradc {
++	vref-supply = <&vcc_1v8>;
++	status = "okay";
++};
++
++&tsadc {
++	status = "okay";
++};
++
++&rng {
++	status = "okay";
++};
++
++&rtc {
++	status = "okay";
++};
+-- 
+2.43.0

@@ -14,9 +14,13 @@ import signal
 import sys
 import threading
 
-from usbmoded import capabilities, config, control, udc
-from usbmoded.gadget import Gadget
-from usbmoded.scene import SceneManager
+# 包装在 Debian 约定的 dist-packages；Alpine 等非 Debian 系 Python 不搜索该目录。
+# 追加在末尾，Debian/Ubuntu 上的导入顺序不变。
+sys.path.append("/usr/lib/python3/dist-packages")
+
+from usbmoded import capabilities, config, control, udc  # noqa: E402
+from usbmoded.gadget import Gadget  # noqa: E402
+from usbmoded.scene import SceneManager  # noqa: E402
 
 log = logging.getLogger("usbmoded")
 
@@ -60,6 +64,13 @@ def main() -> int:
         format="%(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+
+    # 开机场景初始化期间就会收到 SIGHUP：绑定 UDC 触发 udev → notify → reload。
+    # systemd 在 READY=1 之前把 reload 排队；OpenRC 的 supervise-daemon 则立即
+    # 发信号，而 SIGHUP 默认动作是无日志地终止进程，gadget 停在未连接状态。
+    # 处理函数就绪前只记下待办，开机完成后补做一次重新评估。
+    hup_pending = threading.Event()
+    signal.signal(signal.SIGHUP, lambda signum, frame: hup_pending.set())
 
     try:
         descriptor, default_scene = config.load_gadget()
@@ -105,6 +116,8 @@ def main() -> int:
     signal.signal(signal.SIGTERM, on_term)
     signal.signal(signal.SIGINT, on_term)
     signal.signal(signal.SIGHUP, on_hup)
+    if hup_pending.is_set():
+        on_hup(signal.SIGHUP, None)
 
     # 通知 systemd 已就绪（Type=notify）。无 NOTIFY_SOCKET 时静默跳过，
     # 便于手工运行调试。

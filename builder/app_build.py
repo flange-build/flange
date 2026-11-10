@@ -25,7 +25,7 @@ from builder.graph import InputSpec, TaskPlan
 from builder.locking import FileLock
 from builder.packaging import get_backend
 from builder.packaging.model import PackageArtifact, PackageOutput
-from builder.toolchain import Toolchain
+from builder.toolchain import Toolchain, resolve_toolchain, userland_identity
 from builder.workspace import WorkspaceContext
 
 
@@ -78,9 +78,15 @@ class AppBuilder:
         self._source = source
         self._config = config
         self._arch = userspace_arch(config)
-        self.toolchain = Toolchain.for_arch(self._arch)
+        self.toolchain = resolve_toolchain(config, context)
+        self.userland_identity = userland_identity(config, context)
+        from builder.distro import get_distro
+        distro = get_distro(config, context)
+        self.init_system = distro.init_system
+        self.default_package_format = distro.package_format
         self.resolver = AppResolver(context, source, config)
-        self.build_dependencies = UbuntuBuildDependencies(docker, context.tool_root)
+        from builder.build_dependencies import resolve_build_dependencies
+        self.build_dependencies = resolve_build_dependencies(config, context, docker)
 
     def _status(self, message: str) -> None:
         if self.output:
@@ -124,6 +130,8 @@ class AppBuilder:
         report = AppBuildReport.load(self.report_path(roots))
         if report.target != asdict(self.context.target):
             raise ValueError("App 报告与当前工作区目标不匹配")
+        if report.userland_identity != self.userland_identity:
+            raise ValueError("App 报告发行版/ABI 与当前目标不匹配，请重新构建")
         return report
 
     def build(self, requests: Sequence[str | Path], force: bool = False) -> AppBuildReport:
@@ -142,7 +150,7 @@ class AppBuilder:
             dependencies = [results[key] for key in resource.dependency_ids]
             results[resource.resource_id] = self._build_resource(resource, dependencies, force)
         report = AppBuildReport(
-            roots, tuple(results.values()), asdict(self.context.target), self._arch
+            roots, tuple(results.values()), asdict(self.context.target), self._arch, self.userland_identity
         )
         report.write(self.report_path(roots))
         return report
@@ -151,14 +159,25 @@ class AppBuilder:
         for candidate in (source, *source.parents):
             if (candidate / "package.py").is_file():
                 return candidate
-            if candidate == self.context.tool_root:
+            if any(candidate == layer.root for layer in self.context.layer_stack.layers):
                 return source
             if (candidate / ".git").exists():
                 return candidate
         return source
 
+    def _package_format(self, spec: AppSpec) -> str:
+        """未声明格式时随目标发行版；声明了与发行版不符的格式直接拒绝。"""
+        if not spec.packaging.format_declared:
+            return self.default_package_format
+        if spec.packaging.format != self.default_package_format:
+            raise ValueError(
+                f"App {spec.app.name} 声明 packaging.format={spec.packaging.format}，"
+                f"但目标发行版只安装 {self.default_package_format} 包"
+            )
+        return spec.packaging.format
+
     def _package_outputs(self, spec: AppSpec) -> tuple[PackageOutput, ...]:
-        return get_backend(spec.packaging.format).plan(spec, self._arch)
+        return get_backend(self._package_format(spec), self.context.layer_stack).plan(spec, self._arch)
 
     def _plan(self, resource: AppResource) -> TaskPlan:
         directory = self.context.target_dir / "apps" / resource.resource_id
@@ -177,7 +196,8 @@ class AppBuilder:
             InputSpec.value("spec", resource.spec),
             InputSpec.value("target", asdict(self.context.target)),
             InputSpec.value("toolchain", self.toolchain),
-            InputSpec.value("environment", environment_identity()),
+            InputSpec.value("environment", environment_identity(config=self._config, context=self.context)),
+            InputSpec.value("userland", self.userland_identity),
             InputSpec.tree(
                 "source",
                 self._source_root(resource.source_dir),
@@ -207,13 +227,26 @@ class AppBuilder:
         inputs.append(InputSpec.tree(
             "recipe:packaging", logic / "packaging", exclude_names=("__pycache__",),
         ))
-        for path in get_backend(resource.spec.packaging.format).recipe_paths():
+        for path in get_backend(self._package_format(resource.spec), self.context.layer_stack).recipe_paths():
             inputs.append(InputSpec.file(f"recipe:{path.name}", path))
+        from builder.build_environment import environment_inputs, resolve_environment
+        inputs.extend(environment_inputs(self._config, self.context))
+        stack = self.context.layer_stack
+        selected_environment = resolve_environment(self._config, self.context)
+        profile = self._config.get("userland_toolchain") or (selected_environment.toolchain if selected_environment else "")
+        for kind, name in (("toolchain", profile), ("packaging", self._package_format(resource.spec))):
+            for ref in stack.provider_inputs(kind, name):
+                inputs.append(InputSpec.file(f"provider:{kind}:{ref.identity}", ref.path))
+        if self.toolchain.target_sysroot:
+            sdk = Path(self.toolchain.target_sysroot)
+            # 镜像内 SDK 由实际镜像摘要标识；外部 SDK 必须独立哈希内容。
+            if self.toolchain.sdk_source == "directory":
+                inputs.append(InputSpec.tree("target-sdk", sdk))
         docker_root = self.context.tool_root / "docker"
-        if docker_root.is_dir():
+        if selected_environment is None and docker_root.is_dir():
             inputs.append(InputSpec.tree("container_recipe", docker_root))
         compose = self.context.tool_root / "docker-compose.yml"
-        if compose.is_file():
+        if selected_environment is None and compose.is_file():
             inputs.append(InputSpec.file("compose", compose))
         return TaskPlan(
             f"app:{resource.resource_id}",
@@ -262,7 +295,8 @@ class AppBuilder:
                 install = publish / "install"
                 install.mkdir()
                 dependency_root = work / "sysroot"
-                self._compose_dependencies(dependencies, dependency_root)
+                self._compose_dependencies(dependencies, dependency_root,
+                                           rewrite_prefix=not self.toolchain.target_sysroot)
                 source = self._prepare_source(plan, work)
                 if self.context.target.variant == "debug":
                     self._snapshot_source(plan.path("source"), publish / "debug-source")
@@ -270,8 +304,19 @@ class AppBuilder:
                 toolchain: Toolchain = plan.value("toolchain")
                 target = plan.value("target")
                 source_dir = source / plan.value("app_subpath")
+                build_sysroot = dependency_root
+                if toolchain.target_sysroot:
+                    from builder.layer_resources import copy_overlay
+                    sdk = Path(toolchain.target_sysroot)
+                    if not sdk.is_dir():
+                        raise ValueError(f"目标 SDK 不存在：{sdk}")
+                    build_sysroot = work / "target-sysroot"
+                    if build_sysroot.exists():
+                        shutil.rmtree(build_sysroot)
+                    copy_tree(sdk, build_sysroot)
+                    copy_overlay(dependency_root, build_sysroot)
                 env = {
-                    **toolchain.environment(dependency_root),
+                    **toolchain.environment(build_sysroot),
                     "FLANGE_PROJECT_ROOT": str(self.context.tool_root),
                     "FLANGE_SOURCE_DIR": str(source_dir),
                     "FLANGE_BUILD_ROOT": str(self.context.build_root),
@@ -280,6 +325,7 @@ class AppBuilder:
                     "FLANGE_TARGET_DIR": str(self.context.target_dir),
                     "FLANGE_TARGET_ARCH": self._arch,
                     "FLANGE_SYSROOT": str(dependency_root),
+                    "FLANGE_TARGET_SYSROOT": str(build_sysroot) if toolchain.target_sysroot else "",
                     "FLANGE_DEPENDENCY_DIRS": json.dumps(
                         {item.name: str(item.install_dir) for item in dependencies}
                     ),
@@ -291,7 +337,7 @@ class AppBuilder:
                     source=source_dir,
                     build=work / "build",
                     install=install,
-                    dependency_root=dependency_root,
+                    dependency_root=build_sysroot,
                     variant=target["variant"],
                 )
                 if "build" in spec.actions:
@@ -305,7 +351,7 @@ class AppBuilder:
                     if not staged.is_dir() or not any(staged.iterdir()):
                         raise ValueError(f"缺少 App staging 产物：{staged}")
                     copy_tree(staged, install)
-                backend = get_backend(spec.packaging.format)
+                backend = get_backend(self._package_format(spec), self.context.layer_stack)
                 package_outputs = backend.plan(spec, self._arch)
                 runtime_paths = None
                 if spec.packaging.outputs:
@@ -347,6 +393,7 @@ class AppBuilder:
                     "app_type": spec.app.type,
                     "target": target,
                     "architecture": self._arch,
+                    "userland_identity": self.userland_identity,
                     "compile_source_dir": str(source),
                     "debug_source_dir": str(output / "debug-source")
                     if target["variant"] == "debug"
@@ -366,7 +413,8 @@ class AppBuilder:
     def _prepare_source(self, plan: TaskPlan, work: Path) -> Path:
         original = plan.path("source")
         spec = plan.value("spec")
-        if spec.build.system not in {"make", "custom"}:
+        external = any(original.is_relative_to(layer.root) for layer in self.context.layer_stack.layers[1:])
+        if spec.build.system not in {"make", "custom"} and not external:
             return original
         snapshot = work / "source"
         for path in (snapshot, work / "build"):
@@ -389,7 +437,7 @@ class AppBuilder:
         copy_tree(original, snapshot, ignore=excluded)
 
     @staticmethod
-    def _compose_dependencies(dependencies: Sequence[AppBuildResult], target: Path) -> None:
+    def _compose_dependencies(dependencies: Sequence[AppBuildResult], target: Path, *, rewrite_prefix=True) -> None:
         if target.exists():
             shutil.rmtree(target)
         target.mkdir(parents=True)
@@ -408,6 +456,8 @@ class AppBuilder:
                     copy_entry(source, destination)
         # .pc 的 /usr 前缀属于目标安装布局；只重定位依赖副本，保留系统 APT
         # 的 pkg-config 搜索根，不能把局部依赖树冒充完整系统 sysroot。
+        if not rewrite_prefix:
+            return
         for metadata in target.rglob("*.pc"):
             if metadata.is_symlink():
                 continue
@@ -428,7 +478,9 @@ class AppBuilder:
 
         files = {
             destination: (path, destination, mode)
-            for path, destination, mode in collect_files(source, spec, self._arch)
+            for path, destination, mode in collect_files(
+                source, spec, self._arch, getattr(self, "init_system", "systemd")
+            )
         }
         files.update(
             {
@@ -447,8 +499,13 @@ class AppBuilder:
             files[destination] = (path, destination, _infer_mode(destination, relative))
         return list(files.values())
 
+    def _runtime(self, spec: AppSpec, files: Sequence[tuple[Path, str, int]]) -> tuple[str, str]:
+        return self._runtime_for(spec, files, getattr(self, "init_system", "systemd"))
+
     @staticmethod
-    def _runtime(spec: AppSpec, files: Sequence[tuple[Path, str, int]]) -> tuple[str, str]:
+    def _runtime_for(
+        spec: AppSpec, files: Sequence[tuple[Path, str, int]], init_system: str,
+    ) -> tuple[str, str]:
         installed = {destination: mode for _, destination, mode in files}
         if spec.app.type in {"exec", "test"}:
             runtime = getattr(spec, "runtime", None)
@@ -456,12 +513,22 @@ class AppBuilder:
             if executable not in installed or not installed[executable] & 0o111:
                 raise ValueError(f"App 运行入口未安装或不可执行：{executable}")
             return executable, ""
+        if spec.app.type == "service" and init_system == "openrc":
+            if not getattr(spec, "openrc", None):
+                raise ValueError(
+                    f"App {spec.app.name} 只提供 systemd unit；OpenRC 目标需要声明 openrc.script"
+                )
+            service = Path(spec.openrc.script).name
+            script = f"/etc/init.d/{service}"
+            if script not in installed or not installed[script] & 0o111:
+                raise ValueError(f"App OpenRC 脚本未安装或不可执行：{script}")
+            return "", service
         if spec.app.type == "service":
-            unit = (
-                Path(spec.systemd.unit).name
-                if spec.systemd and spec.systemd.unit
-                else f"{spec.app.name}.service"
-            )
+            if spec.systemd is None:
+                raise ValueError(
+                    f"App {spec.app.name} 只提供 OpenRC 脚本；systemd 目标需要声明 systemd.unit"
+                )
+            unit = Path(spec.systemd.unit).name
             if not any(path.endswith(f"/systemd/system/{unit}") for path in installed):
                 raise ValueError(f"App service unit 未安装：{unit}")
             return "", unit

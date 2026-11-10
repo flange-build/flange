@@ -1,0 +1,6 @@
+schema_version = 1
+api_version = 1
+name = "example-bsp"
+requires = ["flange"]
+[providers.platform]
+layerdemo = "strategies/platform/provider.py"

@@ -91,6 +91,14 @@ class OneOf:
         raise SchemaError("；或 ".join(errors))
 
 
+class ExtensionObject:
+    """延迟到 provider 的闭合结构校验；这里不接受对象以外的值。"""
+
+    def check(self, value: Any, path: str) -> None:
+        if not isinstance(value, dict):
+            raise SchemaError(f"{path} 必须是策略配置对象")
+
+
 STRING = Scalar(str)
 TEXT = Scalar(str, empty=True)
 INTEGER = Scalar(int)
@@ -181,6 +189,7 @@ PARTITION = Object(
 
 ROOTFS = Object(
     {
+        "filename": STRING,
         "url": STRING,
         "sha256": STRING,
         "hostname": STRING,
@@ -252,6 +261,10 @@ ROOTFS = Object(
 
 SYSTEM = Object(
     {
+        "distro": STRING,
+        "extensions": Map(ExtensionObject()),
+        "build_environment": STRING,
+        "userland_toolchain": STRING,
         **dict.fromkeys(
             (
                 "board",

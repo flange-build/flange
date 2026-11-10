@@ -32,7 +32,12 @@ def workspace_mounts(context: WorkspaceContext, config: dict) -> list[Path]:
         if item.get("local_path"):
             path = Path(item["local_path"]).expanduser()
             declared.append(path if path.is_absolute() else context.tool_root / path)
-    roots = {context.tool_root, context.workspace_root}
+    from builder.toolchain import resolve_toolchain
+    toolchain = resolve_toolchain(config, context) if config.get("architecture") else None
+    if toolchain and toolchain.target_sysroot and toolchain.sdk_source == "directory":
+        declared.append(Path(toolchain.target_sysroot))
+    roots = {context.tool_root, context.workspace_root,
+             *(layer.root for layer in context.layer_stack.layers)}
     for path in declared:
         if not path.is_dir():
             raise FileNotFoundError(f"已声明的本地源码目录不存在：{path}；请修正工作区或来源配置")

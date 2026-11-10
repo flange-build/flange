@@ -78,7 +78,7 @@ def test_phase2最后一步是导出清单():
     import inspect
 
     source = inspect.getsource(RootfsBuilder._build_phase2)
-    steps = [line.strip() for line in source.splitlines() if line.strip().startswith("self._")]
-    assert steps[-1].startswith("self._export_package_manifest"), (
+    steps = [line.strip() for line in source.splitlines() if line.strip().startswith(("self._", "distro."))]
+    assert steps[-1].startswith("distro.export_packages"), (
         f"_export_package_manifest 必须是 phase2 最后一步，实际最后是 {steps[-1]}"
     )
