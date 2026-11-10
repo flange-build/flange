@@ -355,13 +355,19 @@ class _FakeManager:
     def list_scenes(self):
         return {"debug": _FakeScene(["adb"]), "host": _FakeScene(role="host")}
 
-    def switch(self, name, *, persist=False, force=False):
+    def switch(self, name, *, persist=False, force=False, rollback_timeout=60):
         from usbmoded.scene import Step, SwitchResult, SceneError
 
         if name not in self.list_scenes():
             raise SceneError(f"未定义的场景：{name}", Step.RESOLVE)
         self.switched.append(name)
-        return SwitchResult(scene=name, step=Step.DONE, previous=self.current)
+        return SwitchResult(
+            scene=name,
+            step=Step.DONE,
+            previous=self.current,
+            rollback_armed=True,
+            rollback_timeout=rollback_timeout,
+        )
 
     def reset(self):
         from usbmoded.scene import Step, SwitchResult
@@ -694,3 +700,186 @@ def test_reevaluate_without_pending_boot_is_noop(fake_sys, gadget, monkeypatch):
     manager.reevaluate()
 
     assert manager.current is None
+
+
+def test_uvc_capability(fake_sys, gadget):
+    """验证 UVC 摄像头的描述符配置、GUID 长度及层级链接/解除时序。"""
+    from usbmoded.capabilities.media import H264_GUID, UvcCapability
+    from usbmoded.capability import CapabilityContext
+
+    assert len(H264_GUID) == 16, f"H264 GUID 必须是 16 字节，当前为 {len(H264_GUID)}"
+
+    uvc = UvcCapability()
+    ctx = CapabilityContext(
+        gadget_dir=gadget.gadget_dir,
+        config_dir=gadget.config_dir,
+        functions_dir=gadget.functions_dir,
+        params={"formats": {"mjpeg": ["1280x720"], "h264": ["640x480"]}},
+    )
+    instance = ctx.instance_dir("uvc.gs6")
+    instance.mkdir(parents=True, exist_ok=True)
+
+    uvc.prepare(ctx)
+
+    # 验证 format 与 frame 属性已生成
+    mjpeg_frame = instance / "streaming" / "mjpeg" / "m" / "720p"
+    assert (mjpeg_frame / "wWidth").read_text().strip() == "1280"
+    assert (mjpeg_frame / "wHeight").read_text().strip() == "720"
+
+    h264_dir = instance / "streaming" / "framebased" / "f"
+    assert (h264_dir / "guidFormat").read_bytes() == H264_GUID
+
+    # 验证 header 与 class 符号链接已建立
+    assert (instance / "streaming" / "header" / "h" / "m").is_symlink()
+    assert (instance / "streaming" / "header" / "h" / "f").is_symlink()
+    assert (instance / "streaming" / "class" / "hs" / "h").is_symlink()
+    assert (instance / "control" / "class" / "fs" / "h").is_symlink()
+
+    # 验证幂等性：已就绪的 uvc 实例重复 prepare 不报错且保持链接
+    uvc.prepare(ctx)
+    assert (instance / "streaming" / "class" / "hs" / "h").is_symlink()
+
+
+def test_ensure_group_with_addgroup(monkeypatch):
+    """验证在 Alpine/BusyBox 环境下（无 groupadd 时）能回退到 addgroup -S。"""
+    import grp
+    import shutil
+    import subprocess
+
+    import usbmoded.control as control
+
+    # 模拟 group 不存在
+    def fake_getgrnam(name):
+        raise KeyError(name)
+
+    monkeypatch.setattr(grp, "getgrnam", fake_getgrnam)
+
+    calls = []
+
+    def fake_which(cmd):
+        if cmd == "groupadd":
+            return None
+        if cmd == "addgroup":
+            return "/sbin/addgroup"
+        return None
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert control.ensure_group() is True
+    assert len(calls) == 1
+    assert calls[0] == ["/sbin/addgroup", "-S", control.PRIVILEGED_GROUP]
+
+
+def test_base_capability_status_checks_link(fake_sys, gadget):
+    """验证 BaseCapability.status 以 configuration 下的符号链接而非目录判断活跃状态。"""
+    from usbmoded.capabilities.serial_hid import AcmCapability
+    from usbmoded.capability import CapabilityContext
+
+    acm = AcmCapability()
+    ctx = CapabilityContext(
+        gadget_dir=gadget.gadget_dir,
+        config_dir=gadget.config_dir,
+        functions_dir=gadget.functions_dir,
+    )
+    # 实例目录存在但尚未链接到 configuration
+    ctx.instance_dir(acm.instances[0]).mkdir(parents=True, exist_ok=True)
+    ctx.config_dir.mkdir(parents=True, exist_ok=True)
+    assert acm.status(ctx).active is False
+
+    # 建立 configuration 链接后变为 active
+    ctx.link_path(acm.instances[0]).symlink_to(ctx.instance_dir(acm.instances[0]))
+    assert acm.status(ctx).active is True
+
+
+def test_ums_prepare_format_failure_does_not_block(fake_sys, gadget, tmp_path, monkeypatch):
+    """验证 ums 在 mkfs 失败或缺少工具时仅产生告警，不抛异常阻断启动。"""
+    import subprocess
+
+    from usbmoded.capabilities.storage import UmsCapability
+    from usbmoded.capability import CapabilityContext
+
+    img_file = tmp_path / "test_ums.img"
+    ums = UmsCapability()
+    ctx = CapabilityContext(
+        gadget_dir=gadget.gadget_dir,
+        config_dir=gadget.config_dir,
+        functions_dir=gadget.functions_dir,
+        params={"file": str(img_file), "size": "1M", "fstype": "nonexistent_fs"},
+    )
+
+    # 模拟 mkfs 工具不存在；放行 truncate 创建文件
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "truncate":
+            from pathlib import Path
+            Path(cmd[-1]).touch()
+            return subprocess.CompletedProcess(cmd, 0)
+        if cmd[0].startswith("mkfs."):
+            raise FileNotFoundError("No such file or directory")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    # 不抛出 CapabilityError
+    ums.prepare(ctx)
+    assert img_file.is_file(), "backing file 仍应被正确创建"
+
+
+def test_mtp_prepare_guards_os_desc(fake_sys, gadget):
+    """验证 mtp 在缺少 os_desc 节点的精简内核上 prepare 不抛出异常。"""
+    from usbmoded.capabilities.storage import MtpCapability
+    from usbmoded.capability import CapabilityContext
+
+    mtp = MtpCapability()
+    ctx = CapabilityContext(
+        gadget_dir=gadget.gadget_dir,
+        config_dir=gadget.config_dir,
+        functions_dir=gadget.functions_dir,
+    )
+    # 模拟无 os_desc 目录
+    instance = ctx.instance_dir(mtp.instances[0])
+    instance.mkdir(parents=True, exist_ok=True)
+
+    mtp.prepare(ctx)
+
+
+def test_rpc_scene_set_custom_timeout(rpc):
+    """验证 scene.set RPC 能够接收并生效自定义 rollback_timeout。"""
+    handler, _ = rpc
+    reply = _send(
+        handler,
+        {
+            "jsonrpc": "2.0",
+            "method": "scene.set",
+            "params": {"scene": "host", "rollback_timeout": 120},
+            "id": 1,
+        },
+    )
+    assert reply is not None
+    assert "error" not in reply, reply.get("error")
+    assert reply["result"]["rollback_armed"] is True
+    assert reply["result"]["rollback_timeout"] == 120
+
+
+def test_common_scenes_definition_and_resolution():
+    """验证 10-common.yaml 中的场景（含新增的 camera, serial, input, rndis, audio）均能正确解析。"""
+    from pathlib import Path
+
+    import usbmoded.capabilities as caps_mod
+    from usbmoded.config import load_scenes
+
+    scenes_dir = Path("components/app/usbmoded/conf/usbmode/scenes.d")
+    import usbmoded.config as cfg_mod
+    scenes = cfg_mod.load_dir(scenes_dir)["scenes"]
+
+    for expected in ("debug", "storage", "media", "net", "rndis", "camera", "serial", "input", "audio"):
+        assert expected in scenes, f"10-common.yaml 必须定义通用场景 {expected}"
+        caps = scenes[expected].get("capabilities")
+        if caps:
+            resolved = caps_mod.resolve(caps)
+            assert len(resolved) == len(caps)
+

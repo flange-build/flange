@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from .. import configfs
+
+log = logging.getLogger(__name__)
 from ..capability import (
     ORDER_MTP,
     ORDER_UMS,
@@ -56,15 +59,24 @@ class UmsCapability(BaseCapability):
             subprocess.run(
                 ["truncate", "-s", str(params["size"]), str(backing)], check=True
             )
-            result = subprocess.run(
-                [f"mkfs.{params['fstype']}", str(backing)],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                raise CapabilityError(
-                    f"格式化 {backing} 为 {params['fstype']} 失败："
-                    f"{result.stderr.strip()}"
+            try:
+                result = subprocess.run(
+                    [f"mkfs.{params['fstype']}", str(backing)],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    log.warning(
+                        "格式化 %s 为 %s 失败：%s（主机侧将看到未格式化块设备）",
+                        backing,
+                        params["fstype"],
+                        result.stderr.strip() or result.stdout.strip(),
+                    )
+            except FileNotFoundError:
+                log.warning(
+                    "未找到 mkfs.%s 工具，跳过格式化 %s（主机侧将看到未格式化块设备）",
+                    params["fstype"],
+                    backing,
                 )
 
     def start(self, ctx: CapabilityContext) -> None:
@@ -146,7 +158,9 @@ class MtpCapability(BaseCapability):
         compat = instance / "os_desc" / "interface.MTP" / "compatible_id"
         if compat.parent.is_dir():
             configfs.write_attr(compat, "MTP")
-        configfs.write_attr(ctx.gadget_dir / "os_desc" / "use", "1")
+        os_desc_use = ctx.gadget_dir / "os_desc" / "use"
+        if os_desc_use.exists():
+            configfs.write_attr(os_desc_use, "1")
 
     def start(self, ctx: CapabilityContext) -> None:
         params = {**self.default_params, **ctx.params}

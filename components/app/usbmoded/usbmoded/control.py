@@ -105,12 +105,20 @@ def ensure_group() -> bool:
     import subprocess
 
     groupadd = shutil.which("groupadd")
-    if groupadd is None:
-        log.warning("groupadd 不可用，无法创建 %s 组；变更类命令将仅限 root", PRIVILEGED_GROUP)
-        return False
-    result = subprocess.run(
-        [groupadd, "-r", "-f", PRIVILEGED_GROUP], capture_output=True, text=True
-    )
+    if groupadd is not None:
+        cmd = [groupadd, "-r", "-f", PRIVILEGED_GROUP]
+    else:
+        addgroup = shutil.which("addgroup")
+        if addgroup is not None:
+            cmd = [addgroup, "-S", PRIVILEGED_GROUP]
+        else:
+            log.warning(
+                "groupadd 与 addgroup 均不可用，无法创建 %s 组；变更类命令将仅限 root",
+                PRIVILEGED_GROUP,
+            )
+            return False
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         log.warning(
             "创建 %s 组失败（%s）；变更类命令将仅限 root",
@@ -118,7 +126,7 @@ def ensure_group() -> bool:
             result.stderr.strip(),
         )
         return False
-    log.info("已创建 system group：%s（需 usermod -aG 才能授予普通用户）", PRIVILEGED_GROUP)
+    log.info("已创建 system group：%s（需 usermod -aG 或 adduser 才能授予普通用户）", PRIVILEGED_GROUP)
     return True
 
 
@@ -313,11 +321,18 @@ class RpcHandler:
         name = params.get("scene")
         if not isinstance(name, str) or not name:
             raise RpcError(INVALID_PARAMS, "参数 scene 缺失或不是非空字符串")
-        result = self._manager.switch(
-            name,
-            persist=bool(params.get("persist")),
-            force=bool(params.get("force")),
-        )
+        timeout = params.get("rollback_timeout") or params.get("timeout")
+        kwargs: dict[str, Any] = {
+            "persist": bool(params.get("persist")),
+            "force": bool(params.get("force")),
+        }
+        if timeout is not None:
+            try:
+                kwargs["rollback_timeout"] = int(timeout)
+            except (ValueError, TypeError):
+                raise RpcError(INVALID_PARAMS, f"非法的超时时间：{timeout!r}") from None
+
+        result = self._manager.switch(name, **kwargs)
         return {
             "scene": result.scene,
             "previous": result.previous,

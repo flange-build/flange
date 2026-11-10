@@ -21,8 +21,8 @@ log = logging.getLogger(__name__)
 FRAME_INTERVALS = "333333\n666666\n1000000\n2000000"
 DEFAULT_FRAME_INTERVAL = "333333"
 
-# H.264 的 GUID：ASCII "H264" 加 UVC 规范规定的固定后缀。
-H264_GUID = bytes.fromhex("483236340000100080000000aa00389b71")
+# H.264 的 GUID：ASCII "H264" 加 UVC 规范规定的固定后缀（16 字节）。
+H264_GUID = bytes.fromhex("4832363400001000800000aa00389b71")
 
 #: 各格式在 configfs streaming 下的目录名与 header 链接名。
 FORMAT_LAYOUT = {
@@ -63,13 +63,23 @@ class UvcCapability(BaseCapability):
     def prepare(self, ctx: CapabilityContext) -> None:
         instance = ctx.instance_dir(self.instances[0])
 
+        # 若 class 描述符已建立链接，说明该 function 实例先前已配置完成，
+        # 直接复用即可，无需也不得重复重建 —— 内核 uvc_configfs 对 format 与 header
+        # 链接有严格的 linked 计数锁，重复配置或带引用解链会返回 EBUSY。
+        if (instance / "streaming" / "class" / "hs" / "h").is_symlink():
+            return
+
         # 场景给出 formats 时整体替换而非合并：只声明 mjpeg 就应当只创建
         # mjpeg 描述符，合并语义会把默认的 yuyv / h264 也带进来。
         formats = ctx.params.get("formats") or DEFAULT_FORMATS
         if not isinstance(formats, dict):
             raise CapabilityError("uvc.formats 应为「格式名 → 分辨率列表」的映射")
 
-        self._link_class_descriptors(instance)
+        # 确保 header 目录存在
+        control_header = instance / "control" / "header" / "h"
+        configfs.ensure_dir(control_header)
+        streaming_header = instance / "streaming" / "header" / "h"
+        configfs.ensure_dir(streaming_header)
 
         for fmt, resolutions in formats.items():
             key = str(fmt).lower()
@@ -81,6 +91,9 @@ class UvcCapability(BaseCapability):
                 continue
             self._add_format(instance, key, [str(r) for r in resolutions])
 
+        # 所有 format 与 frame 属性写入并链接至 header 后，最后统一链接 class 描述符。
+        self._link_class_descriptors(instance)
+
     @staticmethod
     def _link_class_descriptors(instance: Path) -> None:
         """建立 control / streaming 的 class 层级链接。
@@ -91,14 +104,16 @@ class UvcCapability(BaseCapability):
         control_header = instance / "control" / "header" / "h"
         configfs.ensure_dir(control_header)
         for speed in ("fs", "ss"):
-            configfs.symlink(control_header, instance / "control" / "class" / speed / "h")
+            speed_dir = instance / "control" / "class" / speed
+            configfs.ensure_dir(speed_dir)
+            configfs.symlink(control_header, speed_dir / "h")
 
         streaming_header = instance / "streaming" / "header" / "h"
         configfs.ensure_dir(streaming_header)
         for speed in ("fs", "hs", "ss"):
-            configfs.symlink(
-                streaming_header, instance / "streaming" / "class" / speed / "h"
-            )
+            speed_dir = instance / "streaming" / "class" / speed
+            configfs.ensure_dir(speed_dir)
+            configfs.symlink(streaming_header, speed_dir / "h")
 
     def _add_format(self, instance: Path, fmt: str, resolutions: list[str]) -> None:
         subdir, link_name = FORMAT_LAYOUT[fmt]
@@ -109,11 +124,11 @@ class UvcCapability(BaseCapability):
             # framebased 需要显式声明 GUID，否则主机无法识别码流类型。
             configfs.write_attr_bytes(format_dir / "guidFormat", H264_GUID)
 
-        header_link = instance / "streaming" / "header" / "h" / link_name
-        configfs.symlink(format_dir, header_link)
-
         for resolution in resolutions:
             self._add_frame(format_dir, fmt, resolution)
+
+        header_link = instance / "streaming" / "header" / "h" / link_name
+        configfs.symlink(format_dir, header_link)
 
     @staticmethod
     def _add_frame(format_dir: Path, fmt: str, resolution: str) -> None:

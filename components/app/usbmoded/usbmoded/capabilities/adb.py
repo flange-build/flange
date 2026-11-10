@@ -131,9 +131,13 @@ class AdbCapability(BaseCapability):
 
         # 等 adbd 真正持有 ep1，再让上层去绑定 UDC。
         if not wait_endpoint_opened(mountpoint / "ep1"):
+            hint = (
+                f"/var/log/{daemon.unit_name(DAEMON)}.log"
+                if daemon._openrc()
+                else f"journalctl -u {daemon.unit_name(DAEMON)}"
+            )
             raise CapabilityError(
-                f"adbd 未在预期时间内打开 {mountpoint}/ep1 —— "
-                f"检查 journalctl -u {daemon.unit_name(DAEMON)}"
+                f"adbd 未在预期时间内打开 {mountpoint}/ep1 —— 检查 {hint}"
             )
 
     def stop(self, ctx: CapabilityContext) -> None:

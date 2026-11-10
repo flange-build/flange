@@ -107,7 +107,10 @@ def load_gadget() -> tuple[GadgetDescriptor, str]:
     pid_map_raw = gadget.get("pid_map") or {}
     if not isinstance(pid_map_raw, dict):
         raise ConfigError("配置项 gadget.pid_map 应为映射")
-    pid_map = {str(k): _hex_str(v, f"gadget.pid_map.{k}") for k, v in pid_map_raw.items()}
+    pid_map = {
+        str(k).lower().replace(" ", "").replace(",", "_"): _hex_str(v, f"gadget.pid_map.{k}")
+        for k, v in pid_map_raw.items()
+    }
 
     descriptor = GadgetDescriptor(
         group=str(gadget["group"]),

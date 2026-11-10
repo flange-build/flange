@@ -170,8 +170,15 @@ class BaseCapability:
         """默认无需清理。"""
 
     def status(self, ctx: CapabilityContext) -> CapabilityStatus:
-        """默认以实例目录是否存在作为活跃判据。"""
-        active = all(ctx.instance_dir(i).is_dir() for i in self.instances)
+        """默认以 configuration 下的符号链接是否存在作为活跃判据。
+
+        function 实例在停用时被保留供复用（不删除目录），因此不能用
+        instance_dir().is_dir() 判断活跃状态，必须检查 configuration 下
+        的 f-<instance> 符号链接是否存在。
+        """
+        if not self.instances:
+            return CapabilityStatus(name=self.name, active=False)
+        active = all(ctx.link_path(i).is_symlink() for i in self.instances)
         return CapabilityStatus(name=self.name, active=active)
 
 

@@ -40,6 +40,26 @@ scenes:
   net:
     capabilities: [adb, ncm]
 
+  # 调试 + RNDIS 网络（Windows 主机兼容性更好）。
+  rndis:
+    capabilities: [adb, rndis]
+
+  # 调试 + UVC 摄像头。
+  camera:
+    capabilities: [adb, uvc]
+
+  # 调试 + CDC-ACM 串口。
+  serial:
+    capabilities: [adb, acm]
+
+  # 调试 + HID 输入设备（默认标准键盘）。
+  input:
+    capabilities: [adb, hid]
+
+  # 调试 + UAC1 音频设备。
+  audio:
+    capabilities: [adb, uac1]
+
   # 仅切换角色，不改变能力集合。
   # host 场景会让出 UDC，gadget 整体停用 —— 经 adb 切换必然断开通道。
   host:
