@@ -44,7 +44,14 @@
 - flange-layer 全量 `pytest tests`：2407 passed, 15 skipped；Rockchip golden 零 diff。
 - Alpine 层 `pytest tests`：9 passed。
 
-## 未验证
+## 实机验证（Luckfox Pico Pro / Max RV1106G3，任务 5.2）
 
-- 实机启动、串口登录、以太网、SSH、adb 连接与 `flange app deploy/run/log`（任务 5.2）。
-- usbmoded 在 OpenRC 下的 USB 插拔重连（依赖 eudev 触发 notify）。
+- **全量刷写与冷启动**：`flange flash` 写入 clean Alpine 镜像，冷启动正常。
+- **SSH 登录**：以太网 DHCP 分配 IP，sshd 监听在端口 22，`flange` 账号登录成功。
+- **USB Gadget 与 ADB**：`usbmoded` 在 OpenRC supervise-daemon 下运行，开机绑定 UDC 触发的 SIGHUP 信号被优雅捕获并延迟重评，不再被 OpenRC 默认 kill；FunctionFS adbd 自动就绪，主机端识别 `d7f7d398e292e518 device`。
+- **App 运行时与 CLI 闭环**：
+  - `flange app build musl-check`：生成 musl 工具链编译的 apk 包。
+  - `flange app deploy musl-check`：通过 adb 推送到板上，以 `apk add --allow-untrusted` 完成安装。
+  - `flange app run musl-check`：在设备上成功执行，输出：`musl-check: libc=musl thread=ok zlib=1.4`，验证 C++ 标准库、std::thread 与 zlib 动态链接运行正常。
+  - `flange app log usbmoded`：通过 `flange app log --no-follow usbmoded` 成功读取设备端 supervise-daemon 的实时服务日志。
+

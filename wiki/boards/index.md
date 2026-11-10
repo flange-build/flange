@@ -17,6 +17,7 @@ updated: 2026-10-21
 - [neons-core3566-nanob](neons-core3566-nanob.md) — RK3566
 - [orangepi-cm4](orangepi-cm4.md) — RK3566
 - [atk-rk3506b](atk-rk3506b.md) — RK3506B（ARM32，SPI NAND/UBI + CPU2 RT-Thread + Cardputer GUD/HID/UAC，status: stable）
+- [luckfox-pico-pro-max](luckfox-pico-pro-max.md) — RV1106（ARM32，256MB SPI NAND/UBI + 内置百兆网 + Alpine/Ubuntu + usbmoded，status: stable）
 - [rp-pro-rk3568-h](rp-pro-rk3568-h.md) — RK3568（首颗真 RK3568，AP6275P PCIe WiFi6/BT5.2，status: wip）
 - [armsom-cm5-io](armsom-cm5-io.md) — RK3576（首颗 RK3576，Mali-G52 panfrost 开源 GPU，OP-TEE 打包，BW3752/AP6275S WiFi/BT，status: wip）
 - [embedfire-lubancat](embedfire-lubancat.md) — 野火鲁班猫 3（RK3576）/ 鲁班猫 5（RK3588），v1/v2 共 4 个 board，dts 在 flange-kernel 树内，status: wip

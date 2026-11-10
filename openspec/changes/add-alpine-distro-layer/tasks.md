@@ -26,5 +26,5 @@
 ## 5. 验证与文档
 
 - [x] 5.1 C/C++ 与 Python 示例 App：构建、装入 rootfs、QEMU 运行（≤2小时）
-- [ ] 5.2 实机：启动、SSH、adb 连接、`flange app deploy/run/log`，记录 verification.md（≤2小时）
-- [ ] 5.3 ProjectSpec、`docs/layers.md`、Alpine 层 README 与 wiki 同步（≤2小时）
+- [x] 5.2 实机：启动、SSH、adb 连接、`flange app deploy/run/log`，记录 verification.md（≤2小时）
+- [x] 5.3 ProjectSpec、`docs/layers.md`、Alpine 层 README 与 wiki 同步（≤2小时）
