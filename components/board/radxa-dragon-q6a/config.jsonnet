@@ -24,7 +24,7 @@
 // ``meizu-e3-bringup`` product 启用包后，包内 ``.dtso`` 编出的 ``.dtbo`` 由
 // ``builder/platforms/qualcommqcs6490/rootfs.py`` 经 ``fdtoverlay`` 在构建期
 // 合并到 base dtb，覆盖式写入 rootfs ``/boot/<dtb>.dtb``（GRUB ``grub.cfg``
-// 不变）。详见 [[build-time-dtb-overlay-merge]]。
+// 不变）。详见 docs/hardware/device-tree-overlays.md。
 local product = std.extVar('product');
 
 {
@@ -71,7 +71,7 @@ local product = std.extVar('product');
     // （/chosen/radxa,enable-kvm = <1> 与 GPU zap、DSP、SCM、venus、PCIe 的 EL2 修正，与 Radxa rsetup
     // 开启 KVM 的方式一致）。UEFI Hypervisor Override 为出厂 Auto 时据此自动以 EL2 启动并预加载
     // ADSP/CDSP，EL2 下 DSP 与 venus 硬件编码同时可用。不支持把该选项设为 Disabled（EL1 下 GPU 与
-    // 视频不可用）。见 openspec/changes/archive/2026-09-28-enable-q6a-auto-el2。
+    // 视频不可用）。见 docs/boards/radxa-dragon-q6a.md。
     device_tree+: { name: 'qcs6490-radxa-dragon-q6a-kvm' },
     oot_sources: {
       aic8800: { source: { name: 'aic8800' } },

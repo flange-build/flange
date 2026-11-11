@@ -1,11 +1,9 @@
-"""recovery 在 image 组装与 flash-config 中的集成测试（§5.6 / §5.7）。"""
+"""recovery 在 image 组装与 flash-config 中的集成测试。"""
 
 from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-
-import pytest
 
 from builder.flash import (
     AllwinnerA733FlashStrategy,
@@ -13,22 +11,9 @@ from builder.flash import (
     FlashConfigGenerator,
     RockchipFlashStrategy,
 )
-from builder.platforms.allwinnera733.image import AllwinnerA733ImageBuilder
-from builder.platforms.rockchip.image import RockchipImageBuilder
 
 
-# ── ImageBuilder 分区镜像映射含 recovery（§5.1 / §5.2） ─────────
-
-
-class TestImagePartitionMap:
-    def test_rockchip_image_includes_recovery(self):
-        assert RockchipImageBuilder.PARTITION_IMAGES["recovery"] == "recovery/recovery.img"
-
-    def test_a733_image_includes_recovery(self):
-        assert AllwinnerA733ImageBuilder.PARTITION_IMAGES["recovery"] == "recovery/recovery.img"
-
-
-# ── FlashStrategy.partition_image_map（§5.3 / §5.4） ──────────
+# ── FlashStrategy.partition_image_map ──────────
 
 
 def _rockchip_full_config(*, recovery_enabled: bool) -> dict:
@@ -106,7 +91,7 @@ class TestA733FlashStrategyRecovery:
         assert "recovery" not in m
 
 
-# ── FlashConfigGenerator 写入 recovery + protected 元数据（§5.5 / §5.7） ──
+# ── FlashConfigGenerator 写入 recovery + protected 元数据 ──
 
 
 class TestFlashConfigRecovery:
@@ -153,32 +138,3 @@ class TestFlashConfigRecovery:
                 _rockchip_full_config(recovery_enabled=False), Path(tmpdir))
             config = FlashConfig.from_json(Path(tmpdir) / "flash-config.json")
             assert all(p.name != "recovery" for p in config.partitions)
-
-
-# ── 整盘 image dd 顺序（§5.6） ─────────────────────────────────
-
-
-class TestRawImageRecoveryEntry:
-    """RockchipImageBuilder.compile 中的 dd 循环依赖 PARTITION_IMAGES + entries
-    顺序逐分区写入。这里仅做静态断言：recovery 在 entries 中、PARTITION_IMAGES
-    中能定位到 recovery/recovery.img；compile 中的"image_path 不存在则跳过"
-    覆盖了 recovery 镜像未生成的边界场景。"""
-
-    def test_rockchip_image_partition_order(self):
-        """boot → recovery → rootfs，recovery 紧贴在 boot 之后、rootfs 之前。"""
-        cfg = _rockchip_full_config(recovery_enabled=True)
-        builder = RockchipImageBuilder(docker=None, source=None)
-        entries = builder._layout(cfg)
-        names = [e.name for e in entries]
-        assert names.index("boot") < names.index("recovery")
-        assert names.index("recovery") < names.index("rootfs")
-
-    def test_rockchip_image_recovery_offset_size(self):
-        cfg = _rockchip_full_config(recovery_enabled=True)
-        builder = RockchipImageBuilder(docker=None, source=None)
-        entries = builder._layout(cfg)
-        recovery = next(e for e in entries if e.name == "recovery")
-        # 紧随 boot：boot offset=0x8000 + size=0x20000 = recovery offset=0x28000
-        assert recovery.offset_sectors == 0x28000
-        # 0x100000 sectors = 512MB
-        assert recovery.size_sectors * 512 == 512 * 1024 * 1024

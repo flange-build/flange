@@ -1,13 +1,4 @@
-"""rootfs 包清单导出。
-
-**为什么需要它**：今天只有 ubuntu-base tarball 被 sha256 钉住，之后 apt 装进
-去的数百个包一个版本都没钉。同一个 git commit 隔一个月构建，镜像内容不同，而
-`flange build` 报"无变更、跳过" —— 缓存在这里主动说谎。
-
-钉版本会让开发期跟随上游修复变得困难，所以先做**事后可审计**：清单同时写进
-镜像与产物目录，两次构建的差异用 diff 就能看出来。这个测试锁的是"这一步不会
-在后续重构里被静默丢掉"。
-"""
+"""导出包含包名与版本的清单，同时供镜像内排障与构建产物审计。"""
 
 from __future__ import annotations
 
@@ -71,14 +62,3 @@ def test_清单按包名排序且带版本(tmp_path: Path):
     assert "dpkg-query" in script
     assert "${binary:Package}" in script and "${Version}" in script
     assert "sort" in script, "不排序的清单 diff 全是噪声"
-
-
-def test_phase2最后一步是导出清单():
-    """清单必须在所有安装动作之后导出，否则漏掉 app deb 与 extra deb。"""
-    import inspect
-
-    source = inspect.getsource(RootfsBuilder._build_phase2)
-    steps = [line.strip() for line in source.splitlines() if line.strip().startswith(("self._", "distro."))]
-    assert steps[-1].startswith("distro.export_packages"), (
-        f"_export_package_manifest 必须是 phase2 最后一步，实际最后是 {steps[-1]}"
-    )

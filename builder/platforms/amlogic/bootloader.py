@@ -64,7 +64,7 @@ class AmlogicBootloaderBuilder(ComponentBuilder):
         platform = config["platform"]
         soc = config["soc"]
         board = config["board"]
-        # 用 paths.py 暴露的绝对锚点，避免依赖调用时 cwd（ProjectSpec §9）。
+        # 用 paths.py 暴露的绝对锚点，避免依赖调用时 cwd。
         from builder.layers import stack_for
         stack = stack_for(config, self.context, self.components_root.parent)
         search_dirs = [ref.path for directory in (

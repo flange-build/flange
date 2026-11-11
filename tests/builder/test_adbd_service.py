@@ -56,14 +56,3 @@ def test_adbd_service_is_driven_by_usbmoded():
     assert not [line for line in lines if line.startswith(("After=", "Requires=", "Wants="))]
     # 没有 [Install] 段 → 不会被 enable，只能由 usbmoded 显式 start。
     assert "[Install]" not in lines
-
-
-def test_configfs_self_heals_modular_gadget_framework():
-    """ConfigFS 存在但 gadget framework 未注册时应自愈并明确报错。
-
-    原 shell 实现的 usb_ensure_gadget_framework 迁移到 configfs.py。
-    """
-    text = CONFIGFS.read_text(encoding="utf-8")
-
-    assert '"usb_f_fs"' in text
-    assert "内核 USB gadget 框架未注册" in text

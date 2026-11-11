@@ -2,7 +2,7 @@
 
 本指南说明当前 Python CLI（命令行界面）的完整开发路径：获取工具、建立工作区、选择目标、构建、部署、验证与调试。
 目标示例为 `radxa-zero3w-default-debug`；实际设备操作必须使用匹配板卡和介质的目标。
-架构约束见 [ProjectSpec](../ProjectSpec.md)，实现与验证状态见[设计评审](build-system-review.md)。
+架构约束见 [AGENTS.md](../AGENTS.md)，实现与验证状态见[设计评审](limitations.md)。
 
 **第一次接触项目，先读[入门指南](first-steps.md)。** 本页是按阶段查阅的操作参考。
 每段 `flange` 命令都在宿主机终端运行，除非明确标注设备端；工具会自行安排 Docker 中的编译。
@@ -45,7 +45,7 @@ Linux 用户还需具备访问 Docker 服务的权限；按官方安装页的安
 需要 Git、Python 3.12+（含 venv/pip）、Docker Engine 或 Docker Desktop，以及提供 `docker compose` 命令的 Compose 插件。
 构建镜像使用 `linux/amd64`；ARM 宿主需支持该容器架构。rootfs 构建通过 chroot 执行 ARM 程序，
 Docker 所用 Linux 内核需注册对应 QEMU/binfmt（跨架构执行）支持，准备示例见[固件工作流](../.github/workflows/build.yml)。
-设备操作另外需要对应平台刷写工具或 `adb`。USB 模式、权限和 macOS 限制以[板卡文档](../wiki/boards/index.md)为准。
+设备操作另外需要对应平台刷写工具或 `adb`。USB 模式、权限和 macOS 限制以[板卡文档](boards/README.md)为准。
 
 系统镜像与 rootfs 构建需要容器内的 mount（挂载）等权限，flange 会为相应调用启用特权模式；
 普通 App、Package 编译默认非特权。该权限由 Compose 服务配置按调用选择，无需手工设置环境变量，
@@ -108,13 +108,17 @@ flange shell -- df -h /var/tmp
 ### 获取仓库并安装 flange
 
 ```bash
+git lfs install
 git clone https://github.com/flange-build/flange.git
 cd flange
+git lfs pull
 source envsetup.sh
 flange --version
 flange --help
 flange doctor
 ```
+
+Git LFS（大文件存储）用于下载仓库内的预编译工具与资源；先安装 Git LFS，再运行上述命令，避免把指针文件当作二进制。
 
 `envsetup.sh` 支持 Bash/Zsh，在工具 checkout（工作副本）建立 `.venv`，执行 editable install（可编辑安装），
 激活环境并提供 `lunch` 薄包装。`flange` 是 Python 安装入口，也可用 `python -m builder` 调用。
@@ -200,6 +204,8 @@ flange shell
 ```
 
 `plan` 只列出计划，`why` 解释缓存决策；两者不会编译或下载源码。
+当前系统级 `plan/why` 在非特权 Docker 容器中查询，要求守护进程与构建镜像已就绪；
+`target list/show` 和 `status` 可在准备 Docker 前使用。
 远端分支尚未获取时，预览无法证明源码内容可复用；实际 build 会先准备输入。
 `--force` 重建指定组件，`--force-all` 重建其完整依赖闭包。
 多个依赖只按图中的关系构建，不需要手动先构建每个前置组件。
@@ -227,7 +233,7 @@ App 自身是否重新编译以逐项状态和构建报告为准。
 
 参见[真实终端示例](assets/build-log.png)：Khadas 的 App 阶段约 0.6 秒完成，
 adbd、flange-rootfs-grow 和 recoveryctl 均通过产物核验后复用。
-图片来自本次实际 PTY（伪终端）记录的文本回放，展示 App 汇总阶段，不代表完整固件构建或设备验证通过。
+图片来自记录日期的实际 PTY（伪终端）记录的文本回放，展示 App 汇总阶段，不代表完整固件构建或设备验证通过。
 
 用 `flange status` 找到当前 target 的实际产物目录。要观察详细日志，可在另一个终端执行：
 
@@ -263,7 +269,7 @@ flange build
 旧版若在 sudo 解包时报告 `/etc/sudoers.d/README.dpkg-new: Permission denied`，
 需要检查 rootfs 是否仍在宿主共享活树中构建。当前实现自动使用容器原生存储，
 保留 sudo 包要求的权限；更新后重试原构建，不通过修改 sudoers 权限或 `sudo flange` 绕过。
-本轮完整 Khadas 构建、镜像权限与基础快照恢复结果见[验证记录](../openspec/changes/archive/2026-09-05-fix-rootfs-filesystem-and-failure-context/validation.md)。
+基础快照与镜像权限语义见[rootfs 参考](components/rootfs.md)。
 
 终端颜色表达状态：蓝色表示标题、正常需构建或进行中，绿色表示成功或缓存可复用，黄色表示警告、受阻待准备或取消，
 红色表示错误或失败，青色标出路径和下一步命令。正文使用终端默认颜色，耗时等辅助说明降低亮度。
@@ -303,7 +309,7 @@ flange target show
 flange flash --list
 ```
 
-随后按[板卡指南](../wiki/boards/index.md)连接 USB/存储介质并运行：
+随后按[板卡指南](boards/README.md)连接 USB/存储介质并运行：
 
 ```bash
 # 全量刷写会重写分区布局与镜像
@@ -516,13 +522,12 @@ Package 显式 `actions.build` 可用于 actions-only 或混合包：在隔离�
 cd /path/to/flange         # 替换为真实工具仓库路径
 source envsetup.sh
 python -m pytest
-npx --yes @fission-ai/openspec@1.2.0 validate --all --strict
 ```
 
-CI 固定官方 OpenSpec 包和版本，固件工作流复用 Python 目标解析器。
+CI 运行 Python 功能测试，固件工作流复用 Python 目标解析器。
 测试与构建分层报告：配置矩阵、单元/模拟测试、容器真实编译、板卡实机验收分别给出证据。
-当前重构的状态与最终验收记录见[设计评审](build-system-review.md)，不要从命令存在推断所有平台均已实测。
+当前未覆盖的能力见[能力边界](limitations.md)，不要从命令存在推断所有平台均已实测。
 
-本次破坏性迁移移除了旧动词优先 App 入口与 Shell 状态投影。旧缓存不迁移为可信成功记录；
+当前 App 命令采用 `flange app <动作>`，目标状态由工作区持有。旧缓存不作为可信成功记录；
 App 的 `capabilities`、`lib.headers_dir`、`build.outputs` 不再接受，安装结果由 staging 与 `install` 声明。
 故障反馈请附 flange commit、工作区设置、完整 target、命令、会话/构建报告和脱敏日志。

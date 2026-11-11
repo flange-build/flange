@@ -1,43 +1,53 @@
-# flange 文档导航
+# flange 文档
 
-第一次接触 flange，请从[第一次使用](first-steps.md)开始。
-它先解释电脑、Docker、系统镜像与开发板的关系，再带你完成无需设备的构建计划，
-随后选择 App 编译或整套系统构建。查参数可随时运行 `flange <命令> --help`。
+本目录描述当前实现、操作方法、验证结果和已知限制。
+第一次使用从[入门教程](first-steps.md)开始；查命令参数可运行 `flange <命令> --help`。
+项目开发与 AI Agent 规则只有一个入口：[AGENTS.md](../AGENTS.md)。
 
-## 按你的任务阅读
+## 1. 使用与维护
 
-| 学习路径 | 先读 | 然后读 | 完成后的判断 |
-| --- | --- | --- | --- |
-| 初次使用 | [第一次使用](first-steps.md) | [开发指南](development-guide.md) | 能说明所选目标，找到计划与产物路径 |
-| 构建、刷写、使用开发板 | [开发指南 §1–4](development-guide.md#1-准备宿主机与仓库) | [对应板卡](../wiki/boards/index.md) | 构建成功，并单独记录设备启动与功能验证 |
-| 开发自己的应用 | [第一个 App](first-steps.md#第二步在-docker-中编译第一个-app) | [开发指南 §5–7](development-guide.md#5-在仓库外创建和构建-app) | 生成软件包；有设备时完成部署、运行与测试 |
-| 维护已有项目 | [维护指南](maintenance-guide.md) | [架构职责参考](build-system-design.md) | 找到问题所属层，保存复现与验证证据 |
-| 增加软件或硬件支持 | [扩展指南](extension-guide.md) | [项目规格](../ProjectSpec.md) | 在合适层修改，完成对应配置、构建与设备验证 |
-| 参与仓库贡献 | [贡献指南](../CONTRIBUTING.md) | [项目规格](../ProjectSpec.md) | 变更有清晰范围、文档和验证记录 |
+| 目标 | 文档 | 完成标志 |
+| --- | --- | --- |
+| 了解工具并完成第一次操作 | [第一次使用](first-steps.md) | 检查目标，准备 Docker 后查看计划或生成 App |
+| 构建、部署、调试和测试 | [开发指南](development-guide.md) | 找到产物与日志，有设备时完成运行验证 |
+| 排查构建与设备问题 | [维护指南](maintenance-guide.md) | 定位到配置、输入、产物或设备层 |
+| 添加 App、Package、板卡或平台 | [扩展指南](extension-guide.md) | 配置、消费者、产物和验证形成闭环 |
+| 确认能力边界与许可 | [当前限制](limitations.md)、[许可说明](licensing.md) | 明确未覆盖的功能与交付条件 |
 
-## 按问题查参考
+## 2. 架构与配置参考
 
-| 你遇到的问题 | 文档 |
+| 主题 | 文档 |
 | --- | --- |
-| 这个命令怎么用，构建失败去哪里看 | [开发指南](development-guide.md) |
-| 如何用独立仓库组合板卡、产品、发行版和构建策略 | [多层工作区](layers.md)、[Debian 验证](examples/layers/README.md) |
-| 代码从命令走到构建和设备的过程是什么 | [架构职责参考](build-system-design.md) |
-| App 的配置字段、安装与运行约定是什么 | [App 参考](app-architecture.md) |
+| 构建图、缓存、路径、产物与会话 | [构建系统架构](build-system-design.md) |
+| 目标、配置层次、字段与源码输入 | [配置参考](configuration.md) |
+| 外部工作区、Layer 优先级与发行版扩展 | [多层工作区](layers.md)、[Debian 示例](examples/layers/README.md) |
+| App 定义、构建、运行与服务 | [App 参考](app-architecture.md) |
 | DEB / APK 后端、多产物、SDK 包与 ABI 校验 | [包格式后端](package-backends.md) |
-| 如何把一个硬件功能组合成 Package（功能包） | [硬件特性包](../wiki/concepts/硬件特性包.md) |
-| 如何备份、恢复或在线刷写分区 | [Recovery（维护系统）](recovery.md) |
-| 如何开发同一芯片上的异构从核 | [AMP（非对称多处理）](amp.md) |
-| 这块板或外设验证过哪些功能 | [板卡索引](../wiki/boards/index.md)、[Wiki](../wiki/index.md) |
-| Arduino UNO Q 如何构建、刷写及验收 | [UNO Q 适配指南](boards/arduino-uno-q.md) |
-| 哪些能力仍有缺口，哪些结果已验证 | [构建系统设计评审](build-system-review.md)、[CLI 体验评审](cli-experience-review.md) |
-| 代码、固件和生成镜像如何遵守许可证 | [许可说明](licensing.md) |
+| 组合内核配置、软件包与 overlay | [功能包](packages.md) |
+| 构建容器、内核、根文件系统 | [构建环境](components/build-environment.md)、[内核](components/kernel.md)、[rootfs](components/rootfs.md) |
+| 分区几何、引导链与平台刷写 | [启动、镜像与刷写](boot-and-flash.md) |
 
-## 哪些文档代表当前约定
+## 3. 设备与协议
 
-- [项目规格](../ProjectSpec.md)规定项目约束，[能力规格](../openspec/specs/)记录功能契约。
-- 本目录的操作指南说明当前用法；板卡页说明具体硬件的适配与验证范围。
-- 设计评审区分已验证事实、已知问题和下一步工作；待办事项不表示功能已经可用。
-- `refactor-roadmap.md`、`python-build-system-design.html`、`superpowers/` 与 `proposal/`
-  保留历史设计和实验背景。阅读实现细节时核对当前规格、源码和 CLI 帮助。
+- [板卡索引](boards/README.md)：全部内置配置、产品、接线及硬件验证范围。
+- [平台索引](platforms/README.md)：平台共性、启动固件与刷写协议。
+- [Recovery 维护系统](recovery.md)与[线协议](recovery-protocol.md)：在线备份、恢复和分区写入。
+- [USB 模式管理](usb.md)：主机/设备模式、ADB、插拔事件与排障。
+- [AMP 开发](amp.md)、[运行与 rpmsg](hardware/amp-runtime.md)、[SDK 升级参考](amp-sdk-upgrade.md)。
 
-发现文档与命令不一致时，记录目标、命令与输出，按[贡献指南](../CONTRIBUTING.md)反馈。
+## 4. 硬件与外设
+
+| 主题 | 文档 |
+| --- | --- |
+| 显示与交互设备总览 | [显示和外设](hardware/displays.md) |
+| USB 显示、键盘、触摸、音频与摄像头 | [Cardputer](../components/packages/cardputer-all-in-one/README.md)、[Tab5](../components/packages/tab5-all-in-one/README.md)、[GUD 作为 X11 显示](hardware/gud-display.md) |
+| DSI 屏幕和触摸供电 | [魅族 E3 屏](hardware/meizu-e3-panel.md)、[A7A 触摸供电](hardware/a7a-touch-power.md) |
+| 桌面与 GPU / NPU | [桌面](hardware/desktop.md)、[A733 图形限制](hardware/a733-graphics.md)、[RKNN 推理](hardware/rknn.md) |
+| 蓝牙音频 | [A2DP 与 HFP](hardware/bluetooth-audio.md) |
+| 板级扩展 | [设备树 overlay](hardware/device-tree-overlays.md)、[外部内核模块](hardware/kernel-modules.md)、[rootfs 扩容](hardware/rootfs-grow.md) |
+| AMP 示例 | [RK3506 UART4/rpmsg](hardware/rk3506-amp-uart4-rpmsg-demo.md)、[RK3568 RT-Thread FOC](hardware/rk3568_amp_rtt_foc.md) |
+
+验证结论只覆盖文档注明的硬件、目标和软件版本。配置存在、编译通过与实机通过分别说明；
+遇到文档和行为不一致时，请携带复现信息[反馈问题](../CONTRIBUTING.md#报告问题)。
+
+文档中的 Logo、架构图和终端示例见[资源说明](assets/README.md)。

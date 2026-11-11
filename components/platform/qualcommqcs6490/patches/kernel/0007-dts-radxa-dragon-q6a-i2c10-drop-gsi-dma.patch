@@ -20,7 +20,7 @@ provision 成 GSI"，把 SE 重 provision 回 FIFO，于是不再申请 GPI 通�
 只有少量字节事务，FIFO 足够。连同 0003（i2c13）一起，Q6A 所有启用的 i2c 都
 走 FIFO，EL1/EL2 行为一致。
 
-OpenSpec change: fix-qcs6490-i2c10-fifo-el2
+适配约束见 docs/boards/radxa-dragon-q6a.md
 
 diff --git a/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts b/arch/arm64/boot/dts/qcom/qcs6490-radxa-dragon-q6a.dts
 index 7491d0c..b44185d 100644

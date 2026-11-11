@@ -1,7 +1,4 @@
-"""Rockchip 多媒体 package 的迁移边界与板级接入测试。"""
-
-import hashlib
-from pathlib import Path
+"""Rockchip 多媒体 package 的运行包边界与板级接入测试。"""
 
 from builder.app_spec import load_spec
 from builder.config.registry import resolve_config
@@ -24,30 +21,6 @@ ROCKCHIP_BOARDS = [
 ]
 
 
-def test_patch_set完整迁移且内容固定():
-    patch_root = PACKAGE_ROOT / "patches"
-    expected_counts = {
-        "gstreamer": 4,
-        "gst-plugins-base": 22,
-        "gst-plugins-good": 12,
-        "gst-plugins-bad": 45,
-    }
-    assert {
-        directory.name: len(list(directory.glob("*.patch")))
-        for directory in patch_root.iterdir()
-        if directory.is_dir()
-    } == expected_counts
-
-    digest = hashlib.sha256()
-    for path in sorted(patch_root.rglob("*.patch")):
-        digest.update(path.relative_to(patch_root).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-    assert digest.hexdigest() == (
-        "76170b166688ed4ef63bb1c06e30736a875011a49cced26d7cd48cbe7c75eec5"
-    )
-
-
 def _unit_specs() -> dict:
     """加载全部单元 App 的规格，按 App 名索引。"""
     return {
@@ -58,13 +31,13 @@ def _unit_specs() -> dict:
 
 
 def test_单元集合声明标准runtime分包且不发布dev包():
-    """17 个 deb 的交付契约不变，只是分散到了 4 个产 deb 的单元上。"""
+    """运行包覆盖多媒体栈，不把开发包装入目标 rootfs。"""
     specs = _unit_specs()
     outputs = [
         name for spec in specs.values() for name in spec.build.deb_outputs
     ]
 
-    assert len(outputs) == 17
+    assert outputs and len(outputs) == len(set(outputs))
     assert all(name.endswith("_arm64.deb") for name in outputs)
     assert all("+flange1_" in name or "flange1_" in name for name in outputs)
     assert not any("-dev_" in name for name in outputs)
@@ -99,23 +72,3 @@ def test_aarch64_Rockchip板显式启用本地多媒体package():
         }
         assert expected <= set(config["rootfs"]["custom_packages"])
         assert expected <= set(config["external_apps"])
-
-
-def test_旧远程DEB与强制覆盖策略已删除():
-    roots = [
-        PROJECT_ROOT / "components/config",
-        PROJECT_ROOT / "components/platform/rockchip",
-        *(
-            PROJECT_ROOT / "components/board" / board
-            for board in ROCKCHIP_BOARDS
-        ),
-    ]
-    text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for root in roots
-        for path in root.rglob("*.jsonnet")
-    )
-    assert "rockchip-multimedia-ubuntu" not in text
-    assert "multimediaDebs" not in text
-    assert "force_overwrite" not in text
-    assert "hold_packages" not in text

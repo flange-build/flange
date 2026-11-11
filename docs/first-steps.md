@@ -5,8 +5,8 @@
 
 | 阶段 | 需要什么 | 成功后得到什么 |
 | --- | --- | --- |
-| 第一步：查看构建计划 | 电脑、Git、Python 和安装依赖所需网络 | 正确的目标配置与构建步骤；还没有镜像 |
-| 第二步：编译一个 App（应用） | 再准备 Docker | 可以安装到目标系统的应用软件包；尚未验证设备运行 |
+| 第一步：查看目标配置 | 电脑、Git / Git LFS、Python 和安装依赖所需网络 | 正确的目标配置与产物路径；还没有镜像 |
+| 第二步：查看计划、编译一个 App（应用） | 再准备 Docker | 可以安装到目标系统的应用软件包；尚未验证设备运行 |
 | 第三步：构建系统镜像 | 明确板卡配置、源码访问权限和构建存储条件 | 可供后续刷写的镜像与刷写清单；尚未验证硬件启动 |
 
 ## 先认识电脑、工具和开发板
@@ -37,11 +37,11 @@ Docker 镜像则是宿主机上的构建环境，两者用途不同。
 | workspace（工作区） | 保存当前目标、自己的 App 和构建输出设置的项目目录；flange 仓库本身也可作为工作区 |
 | component（组件） | 可以单独构建的一部分，例如 `kernel`、`rootfs`；`image` 负责组合完整系统镜像 |
 
-## 第一步：查看配置和计划
+## 第一步：查看目标配置
 
 ### 1. 安装命令入口
 
-使用 Linux 或 macOS 上的 Bash / Zsh 终端。准备 Git、Python **3.12 或更新版本**，
+使用 Linux 或 macOS 上的 Bash / Zsh 终端。准备 Git 与 Git LFS、Python **3.12 或更新版本**，
 以及 Python 的 venv（虚拟环境）与 pip（包安装工具）。先检查：
 
 ```bash
@@ -52,12 +52,16 @@ python3 --version
 如果 `python3` 仍指向较旧版本，先修正终端中的 Python 选择，再执行：
 
 ```bash
+git lfs install
 git clone https://github.com/flange-build/flange.git
 cd flange
+git lfs pull
 source envsetup.sh
 flange --version
 flange --help
 ```
+
+Git LFS（大文件存储）用于下载仓库内的预编译工具与资源；先安装 Git LFS，再运行上述命令，避免把指针文件当作二进制。
 
 `source envsetup.sh` 在仓库内建立 `.venv` 并安装依赖，然后让当前终端能找到 `flange`。
 必须使用 `source`，这样环境才会保留在当前终端。新开终端后，在仓库内再次执行这一行。
@@ -95,27 +99,20 @@ flange target show
 选择保存于工作区的 `.flange/current_config`。`lunch <目标名>` 是同一操作的快捷写法；
 临时查看另一个目标可用 `flange --target <目标名> target show`，不会修改保存的选择。
 
-### 3. 预览构建并找到输出位置
+### 3. 找到输出位置
 
 ```bash
-flange plan image
 flange status
 ```
 
-`plan image` 列出完整系统需要哪些组件、它们的依赖与预计产物位置。
-flange 会自动安排依赖，你不用手动按顺序编译每一个组件。
-该命令不编译、不下载内核源码、不写开发板；缺少 Docker 时也可查看计划。
-
-**成功判断：** 计划标题显示选定目标，列表中可见 `kernel`、`boot`、`rootfs`、`image` 等组件，
-末尾提示“计划未执行构建”。`status` 显示工作区和当前产物目录。
-
+`status` 显示工作区、所选目标和产物目录；此时无需 Docker，也未执行编译。
 默认位置是：
 
 ```text
 <工作区>/.build/target/radxa-zero3w/default/debug/
 ```
 
-这只是计划使用的路径，不代表文件已经生成。到这里，你已经完成第一次使用。
+路径存在不代表镜像已经生成。到这里已完成配置检查；系统级构建计划需要下一步准备好的 Docker 环境。
 
 ## 第二步：在 Docker 中编译第一个 App
 
@@ -142,6 +139,16 @@ flange docker status
 Docker 守护进程不可用则先启动或修复 Docker。**成功判断：** 准备命令显示“构建环境已准备好”，
 `docker status` 的检查通过。`doctor` 目前检查 Python、工作区、Docker 和构建镜像，
 不代表已经检查全部源码访问权限、文件系统或硬件条件。
+
+环境就绪后预览系统计划：
+
+```bash
+flange plan image
+```
+
+计划列出组件、依赖和预计产物位置，末尾提示未执行构建。它不会编译、下载内核源码或写设备，
+但当前系统级 `plan/why` 会进入非特权容器查询源码和缓存身份，因此需要 Docker 与已准备的镜像。
+
 
 ### 2. 在独立工作区创建并构建
 
@@ -171,7 +178,7 @@ ADB（Android 调试桥）连接和安装权限，继续[App 部署、运行与�
 
 ## 第三步：为自己的开发板构建系统镜像
 
-先通过[板卡索引](../wiki/boards/index.md)找到自己的板型，阅读介质、启动链和已验证功能。
+先通过[板卡索引](boards/README.md)找到自己的板型，阅读介质、启动链和已验证功能。
 如果没有对应板卡配置，先看[扩展指南](extension-guide.md)，不要使用相近名称的板卡代替。
 
 ### 1. 检查系统构建的额外前提
@@ -233,5 +240,5 @@ GPT（GUID 分区表）目标通常还有 `image/raw.img`；SPI NAND 使用专�
 | 反复修改、构建、部署和调试 | [开发指南](development-guide.md) |
 | 更新已有项目、查失败、管理缓存与测试 | [维护指南](maintenance-guide.md) |
 | 加应用、系统软件、驱动、板卡或平台 | [扩展指南](extension-guide.md) |
-| 理解工具实现，准备修改构建框架 | [架构职责参考](build-system-design.md)、[项目规格](../ProjectSpec.md) |
+| 理解工具实现，准备修改构建框架 | [架构职责参考](build-system-design.md)、[开发规则](../AGENTS.md) |
 | 查设备恢复、从核开发或板卡经验 | [完整文档导航](README.md) |

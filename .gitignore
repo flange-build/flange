@@ -1,4 +1,4 @@
-# 构建产物（运行时产物层 + envsetup.sh 管理的便捷软链接）
+# 构建产物（含旧版本的 target 软链接）
 /.build/
 /target
 
@@ -29,7 +29,7 @@ docker-compose.override.yml
 # macOS 文件系统元数据
 .DS_Store
 
-# Claude Code 本地运行时状态（.claude/commands/ 与 .claude/skills/ 仍入库）
+# Claude Code 本地运行时状态；仓库规则统一在 AGENTS.md
 .claude/scheduled_tasks.lock
 .claude/projects/
 

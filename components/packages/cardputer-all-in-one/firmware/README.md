@@ -23,7 +23,8 @@ M5Stack Cardputer 作为 **USB 设备**，让嵌入式 Linux 主机把它当成�
 ## 构建 / 烧录
 
 ```bash
-get_idf_551                       # 激活宿主机 ESP-IDF 5.5.1
+cd components/packages/cardputer-all-in-one/firmware
+# 此前需 source 实际 ESP-IDF 5.5.1 安装目录的 export.sh
 idf.py set-target esp32s3         # 首次
 idf.py build
 ```
@@ -115,4 +116,4 @@ aplay /tmp/cardputer.wav           # 回放刚录制的 10 秒音频
 | `main/cardputer_kbd_map.h` | 键盘引脚/坐标/X_map（源自 M5Cardputer 库）|
 | `main/cardputer_pins.h` | 显示等板级 GPIO / 尺寸常量 |
 
-设计与路线：见仓库 `docs/superpowers/specs/2026-06-14-cardputer-usb-all-in-one-design.md` 与 `docs/superpowers/plans/`。
+Linux 端集成见[功能包说明](../README.md)，显示用法见 [GUD 显示](../../../../docs/hardware/gud-display.md)。

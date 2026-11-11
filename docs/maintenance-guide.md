@@ -99,7 +99,7 @@ flange doctor
 ## 4. 把修复做成一个可审阅的变更
 
 在**工具 checkout** 中先查看 `git status`，区分自己的修改与已有工作，按
-[ProjectSpec 的分支与提交规则](../ProjectSpec.md#10-git-规范)组织改动。
+[AGENTS.md 的分支与提交规则](../AGENTS.md)组织改动。
 若只修改外部 App，则在该 App 所属仓库维护和提交。
 
 一个适合第一次贡献的例子是“未知参数的错误提示没有给出帮助命令”：
@@ -118,7 +118,7 @@ flowchart LR
     Schema --> Consumer[实际读取并执行的模块]
     Consumer --> Plan[影响哪些计划输入]
     Plan --> Check[正常与错误场景验证]
-    Check --> Docs[示例 / 参考 / 规格同步]
+    Check --> Docs[示例 / 参考同步]
 ```
 
 只让 schema 接受新名字还不算实现。必须能追踪到消费者，并证明输入变化后正确重建。
@@ -134,11 +134,9 @@ python -m pytest tests/builder/test_workspace_cli.py
 
 # 收尾时运行仓库要求的完整检查
 python -m pytest
-npx --yes @fission-ai/openspec@1.2.0 validate --all --strict
 git diff --check
 ```
 
-`npx` 需要 Node.js/npm；仓库 CI 使用 Node 22。OpenSpec 的 npm 包名是 `@fission-ai/openspec`。
 查看[贡献说明](../CONTRIBUTING.md)了解问题报告与提交要求。
 
 | 证据 | 能说明什么 | 不能单独说明什么 |
@@ -162,13 +160,12 @@ FLANGE_RUN_DOCKER_TESTS=1 python -m pytest tests/integration/test_oot_lifecycle.
 | 发生了什么变化 | 更新哪里 |
 | --- | --- |
 | 首次使用的命令或前提改变 | README、[入门指南](first-steps.md)、[开发指南](development-guide.md) |
-| 字段、命令或产物契约改变 | 对应参考页、ProjectSpec、`openspec/specs/` |
-| 模块职责改变 | [架构地图](build-system-design.md)、相关 Wiki 子系统页 |
+| 字段、命令或产物契约改变 | 对应参考页；工程规则改变时更新 AGENTS.md |
+| 模块职责改变 | [架构地图](build-system-design.md)、相关组件参考 |
 | 新板卡或硬件限制 | 板卡页、平台索引、使用前提和实机记录 |
 
-OpenSpec 的一次变更包含 `proposal.md`（问题和范围）、`design.md`（做法与取舍）、
-`specs/`（能力变化）和 `tasks.md`（实施清单）。完整流程见[贡献说明](../CONTRIBUTING.md#提交一个改进)。
-当前规格用于回答“现在应当怎样工作”，归档与历史设计用于解释“为什么作过这个决定”。
+结果文档同时说明当前行为、必要的设计依据和验证边界。被替代的方案与过程记录由 Git 历史追溯；
+贡献方式见[贡献说明](../CONTRIBUTING.md)。
 
 提交前确认：读者能从文档找到新行为、示例使用当前字段、链接可点击，验证记录明确区分软件检查与实机结果。
 每个改动保持单一目的，提交描述写清问题、最终行为和证据。

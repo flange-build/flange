@@ -46,4 +46,4 @@ layer-check: answer=42 zlib=1.3.1
 
 实测 SDK 的 libc6/libc6-dev 为 `2.41-12+deb13u3`，zlib 为
 `1:1.3.dfsg+really1.3.1-1+b1`，linux-libc-dev 为 `6.12.107-1`。
-完整验证身份见同目录 [verification.json](verification.json)；它是本次运行记录，不是跨环境固定的期望摘要。
+完整验证身份见同目录 [verification.json](verification.json)；它是该次验收的固定记录，不是跨环境固定的期望摘要。

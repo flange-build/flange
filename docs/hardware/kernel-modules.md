@@ -1,0 +1,30 @@
+# out-of-tree 模块
+
+> 阅读前提：先确认[板卡配置与硬件范围](../boards/README.md)，再阅读本专题。
+> 下文接线、内核/固件行为和测试结果只覆盖注明的设备、版本与产品；单项结果不代表全部目标已验收。
+> 当前构建入口见[开发指南](../development-guide.md)，新增驱动/配置见[扩展指南](../extension-guide.md)。
+
+## 概述
+
+out-of-tree（OOT，树外）内核模块由 `kernel.oot_modules` 声明；独立仓库统一放入顶层 `sources`，再由 `kernel.oot_sources.<name>.source` 引用。
+
+## 关键设计要点
+
+- `kernel.oot_modules` 声明 `dir`、`label`、`make_args`、`ko_pattern` 以及可选构建钩子。
+- 可选 `stage: true`：每次构建先把 `dir` 全新拷贝到 `.build/work/<target>/kernel-oot/` 再编译，`make_args` / `ko_pattern` 用 `{oot_build_dir}` 引用实际编译目录。硬件特性包的 oot-driver 一律暂存——包目录整树是 kernel 任务输入，原地编译产生的 `.o/.ko` 会让输入身份在执行期间变化而拒绝发布缓存。
+- `sources.<name>` 唯一描述 remote `{url,branch|commit,...}` 或 local `{local_path}` source。
+- `kernel.oot_sources.<name>: {source: {name, subpath?}}` 复用来源定义；实际编译使用当前目标隔离工作树，不写共享下载仓库。
+- `SourceManager.ensure_oot_source()` 注入 `{<name>_src}` 模板变量；`{kernel_src}` 始终可用。
+- `_install_oot_modules()` 将模块装入 staging，最后运行 depmod 重建索引。
+- Jsonnet 各层用 `oot_modules+: [...]` 追加模块，无 Python merge alias。
+
+## 实例
+
+- A733 / img-bxm：源码位于 kernel tree，只使用 `{kernel_src}`。
+- ROCK 5B / rkwifibt：`sources.rkwifibt` 固定仓库 revision，`kernel.oot_sources.rkwifibt.source` 引用它；额外 firmware 复用同一 source 与 subpath。
+
+## 关键代码位置
+
+- [`builder/kernel_base.py:KernelBuilder`](../../builder/kernel_base.py) — OOT 编译与安装
+- [`builder/source.py:SourceManager.ensure_oot_source`](../../builder/source.py) — canonical source 解析
+- [`builder/component_plan.py`](../../builder/component_plan.py) — source 内容与 revision 的具名输入

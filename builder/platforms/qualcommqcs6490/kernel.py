@@ -65,7 +65,7 @@ class Qcs6490KernelBuilder(KernelBuilder):
         #   DTC_FLAGS += $(DTC_FLAGS_$(basetarget))
         # 给本 dtb 启用 `-@`，产生 `__symbols__` 节点，使构建期
         # `fdtoverlay` 能解析 .dtbo 的 `__fixups__`。
-        # 见 [[build-time-dtb-overlay-merge]]：base dtb 必须含 __symbols__。
+        # 见 docs/hardware/device-tree-overlays.md：base dtb 必须含 __symbols__。
         # QCLINUX BSP 默认 `dtb-y`（非 `base-dtb-y`），不带 -@，需显式加。
         dtc_at_arg = f"DTC_FLAGS_{dtb}=-@"
         self.make(src_dir, targets,
@@ -74,7 +74,7 @@ class Qcs6490KernelBuilder(KernelBuilder):
                          "KCFLAGS=-Wno-error", dtc_at_arg],
                   label="编译内核...")
 
-        # 编译 out-of-tree 模块（由 [[硬件特性包]] 注入 kernel.oot_modules，
+        # 编译 out-of-tree 模块（由 docs/packages.md 注入 kernel.oot_modules，
         # 典型如 meizu-e3-panel 的 sec_ts / sgm37604a / panel_meizu_e3 三件套）。
         # 复用 KernelBuilder 基类的 OOT 流水线；本平台仅需调度。
         self._compile_oot_modules(src_dir, config, jobs)

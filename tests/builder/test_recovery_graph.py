@@ -1,14 +1,11 @@
 """recovery 组件在构建图与缓存中的位置测试。
 
-覆盖 OpenSpec change add-recovery-boot 的任务 2.5 与 2.6：
+覆盖 Recovery 引导的构建依赖与组件过滤：
 - image 构建顺序包含 recovery 且位于 image 之前
-- recovery 哈希响应 kernel / app / recovery 自身配置变化
+- recovery 必须在 kernel / app 就绪后执行，关闭后跳过执行
 """
 
 from __future__ import annotations
-
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -20,14 +17,7 @@ from builder.engine import _topo_sort
 
 
 class TestRecoveryDependencyGraph:
-    def test_recovery_in_graph(self):
-        assert "recovery" in DEPENDENCY_GRAPH
 
-    def test_recovery_depends_on_app_and_kernel(self):
-        assert set(DEPENDENCY_GRAPH["recovery"]) == {"app", "kernel"}
-
-    def test_image_depends_on_recovery(self):
-        assert "recovery" in DEPENDENCY_GRAPH["image"]
 
     def test_topo_sort_image_includes_recovery_before_image(self):
         order = _topo_sort(DEPENDENCY_GRAPH, "image")

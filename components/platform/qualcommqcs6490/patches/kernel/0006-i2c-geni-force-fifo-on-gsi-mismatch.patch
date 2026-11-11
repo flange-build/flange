@@ -30,7 +30,7 @@ patches/kernel/0003 仍保留（删 flag 是本分支触发条件之一）。
 更正（2026-09-27）：上文"i2c10 的 GSI 正常"只在 EL1 下成立。SPI 固件 260120、
 EL2（UEFI Hypervisor Override 开启）时，i2c10 申请 GPI 通道即在
 gpi_config_interrupts() 读 GPII MSI 寄存器处同步外部中止，系统无法启动，故由
-0007 把 i2c10 也改走本分支。见 OpenSpec change fix-qcs6490-i2c10-fifo-el2。
+0007 把 i2c10 也改走本分支。见 docs/boards/radxa-dragon-q6a.md。
 
 参考根因记忆：qcs6490-touch-i2c13-gsi-fifo。
 

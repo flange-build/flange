@@ -29,8 +29,7 @@ Qualcomm 二进制 firmware 的许可不等同于 Linux 内核 GPL。
 
 `/home/arduino` 是独立 userdata，UUID 与官方一致。CLI core、工具、库、应用、模型及容器
 离线归档保存在此分区。Linux rootfs 单刷不会自动覆盖或更新旧 userdata 中的生态版本。
-`load-containers` 比对 rootfs 与 userdata 锁文件，失配时明确拒绝启动 App CLI，不能把旧环境
-当成升级成功。升级前需备份整个用户目录，按新包迁移工具及归档，并保留用户 apps/sketch；
+`load-containers` 比对 rootfs 与 userdata 锁文件，失配时让数据准备服务失败并记录原因；App CLI 通过 Wants 依赖仍可启动，不能把旧环境当成升级成功。升级前需备份整个用户目录，按新包迁移工具及归档，并保留用户 apps/sketch；
 当前没有自动跨版本迁移器，不得靠重刷 userdata 处理升级。初始 userdata 为 3 GiB；首启只对
 已挂载且 UUID 正确的 ext4 执行 resize2fs，利用现有分区容量，绝不修改 GPT。
 
@@ -51,7 +50,7 @@ Router 使用 `/dev/ttyHS1` 115200；GPIO 设置先验证 `arduino,imola`，兼�
 与 USB 断连补丁；其 Android 动态库由 Ubuntu APT 提供，已实际通过 `ldd -r`，
 没有混入 Debian 系统库。主组件通过 `build.deps` 正式依赖此组件。自有 configfs gadget
 使用 VID 2341/PID 0078、FunctionFS UID/GID1000 及 ACM GS0，校验板卡/唯一 UDC，
-reset 先解绑并完整清理，支持重复 setup/activate/reset；没有执行过真实硬件枚举。
+reset 先解绑并完整清理，支持重复 setup/activate/reset；debug 已有实际 ADB 连接记录，完整双角色与重连组合仍未验收。
 
 ## Bricks 与模型
 
@@ -63,19 +62,18 @@ reset 先解绑并完整清理，支持重复 setup/activate/reset；没有执�
 - `influxdb:2.7-alpine` 与 `llamacpp-runner:0.12.1`，覆盖其余 UNO Q 适用服务；同样预置。
 
 构建使用 `skopeo` 按 digest 导出 Docker 归档并压缩，首启导入时校验归档 SHA256、
-镜像 config digest 和 arm64 架构；以后若内容仍匹配则不重复导入。导入后把实际 Compose
-改为本地 `sha256:<configID>`，避免 docker-archive 缺失 RepoDigests 导致再次联网；
-此方式已用 Compose `up --pull missing` 的隔离容器验证。
+镜像 config digest 和 arm64 架构；以后若内容仍匹配则不重复导入。导入后保持官方 Compose 标签，并验证这些本地标签指向锁定的内容；
+修复旧版本曾改写的 digest 引用。这样 App CLI 能按官方标签识别已安装运行时，本地匹配时无需重复拉取。
 EI runner 的[官方 Dockerfile](https://github.com/arduino/app-bricks-py/blob/release/0.12.0/containers/ei-models-runner/Dockerfile)
 明确把 `models/ei-ootb-models/arm64/*` 复制至 `/models/ootb/ei`，这些预置模型随镜像层锁定。
 已从实际归档提取 10 个 `.eim` 文件的尺寸和 SHA256，记录于 `models.lock.json`；构建逐项核验并产出 `models.manifest.json`。用户新增的云模型和外部模型需要独立摘要及许可核验。
 
-五种镜像覆盖官方 0.12.0 catalog 中 UNO Q 适用的容器服务，Compose 的 image 实际改写为 digest。
+五种镜像覆盖官方 0.12.0 catalog 中 UNO Q 适用的容器服务，Compose 保留官方 image 标签，标签的本地内容另做摘要校验。
 两个可选 GGUF 模型通过原 hf-handler 按需读取固定 Hugging Face commit，URL、尺寸及 LFS SHA256
 记录于 `optional-models.lock.json`，构建核验实际 catalog 仍消费这些固定 URL。它们没有预置，
 需要网络及约 1.23 GB 额外用户空间；SHA256 是上游 LFS 审计记录，下载器未新增逐字节哈希门禁。
 gesture/QNN/genie 的 catalog 限定为 Ventuno Q，不属于 UNO Q。云服务仍需要用户网络和凭据。
-所有 Bricks 的完整实板验收仍按 OpenSpec 任务推进。
+MCU 上传、Bridge RPC 与容器导入的最新结果，以及未覆盖的 App Lab / Bricks 范围，见 [UNO Q 验证结果](../../../docs/boards/arduino-uno-q.md#已验证结果与限制)。
 
 ## 验证与限制
 
@@ -86,8 +84,8 @@ ARM64 ELF 动态符号依赖，并真正编译一个无外设 sketch。不会执
 板级 BDF 依据 `/dev/mmcblk0boot0p3` 选择新旧 PCB；身份或 revision 缺失会报错。
 音频恢复按 `qcom/qcm2290/adsp.mbn` 定位处理器，不依赖 `remoteproc1` 枚举编号。
 qbootctl 成功标记必须由前级启动槽位确定：优先读取 U-Boot EFI fixup 写入的
-`/chosen/arduino,boot-slot`，命令行若也携带 slot_suffix 必须一致；绝不缺省写 A 槽。
+`/chosen/arduino,boot-slot`，命令行若也携带 slot_suffix 必须一致；前级未传参时，仅接受 GPT 中唯一可启动的 boot 槽，
+另一槽必须完全不可启动；不按优先级猜测，不默认写 A。该回退与重复重启已实机验证。
 
-`arduino-linux-config` 的 carrier 功能需要特定 EFI/DTB 路径，当前仅标准 UNO Q 被配置。
-任意 Media Carrier 的在线修改 DTB、CSI/DSI 配件并未完成迁移或验收；不能以工具已安装
-宣称这些硬件通过。App Lab 的发行版升级功能也不能代替 flange 镜像构建与升级流程。
+`arduino-linux-config` 的 carrier 功能需要特定 EFI/DTB 路径，标准 UNO Q 与 `waveshare-display-10.1a` 使用构建期配置。
+Waveshare 屏幕、触摸与 LED 已单独验证；任意 Media Carrier 在线修改 DTB 或其他 CSI/DSI 配件不在该范围。App Lab 的发行版升级功能也不能代替 flange 镜像构建与升级流程。

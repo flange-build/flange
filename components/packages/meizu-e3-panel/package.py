@@ -18,7 +18,7 @@ component 类型由构建引擎 (builder/packages.py) 按 ``type`` 分发到既�
 - ``oot-driver``：make M= 对内核源树编译 → strip → 装入 lib/modules/.../updates/
 - ``devicetree``：cpp+dtc 编译该 board 对应 .dtso → .dtbo → boot 分区
   （U-Boot 平台经 extlinux fdtoverlays 运行时叠加；grub-with-dtb 平台 Q6A
-  经构建期 ``fdtoverlay`` 预合并到 base dtb，见 [[build-time-dtb-overlay-merge]]）
+  经构建期 ``fdtoverlay`` 预合并到 base dtb，见 docs/hardware/device-tree-overlays.md）
 """
 
 PACKAGE = {

@@ -7,7 +7,7 @@
 | 侧 | 内容 | 构建 |
 |----|------|------|
 | **Cardputer 固件** | `firmware/`（ESP-IDF + TinyUSB）—— GUD 显示 / UAC 音频 / HID 键盘 | **容器外** `idf.py`（见 `firmware/README.md`）|
-| **Linux 组件** | 内核 config fragment（`CONFIG_DRM_GUD` / `SND_USB_AUDIO` / `USB_HID`）+ 验收工具/文档 | `flange build` |
+| **Linux 组件** | 目标内核需启用 `CONFIG_DRM_GUD` / `CONFIG_SND_USB_AUDIO` / `CONFIG_USB_HID` | `flange build` |
 
 Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers/gpu/drm/gud`）、音频用 **UAC + snd-usb-audio**、键盘用 **USB HID**。
 
@@ -18,12 +18,11 @@ Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers
 - ✅ **UAC1 扬声器** —— mono 16 kHz / 16 bit USB OUT → I2S NS4168，host 由 `snd-usb-audio` 提供 ALSA playback PCM。
 - ✅ **UAC1 麦克风** —— PDM SPM1423 → mono 16 kHz / 16 bit USB IN，和扬声器按最后启动优先半双工切换。
 - ✅ **ATK-RK3506B host 支持** —— 启用 GUD、`usbhid`、`snd-usb-audio`，rootfs 提供 `evtest` 和 `alsa-utils`。
-- ⏳ 其他 Linux board 与 Cardputer firmware flash 集成。
+其他 Linux 板卡需单独核对内核与外设；本目录没有 `package.py` 清单，固件未集成 flange 自动烧录。
 
-详见 `firmware/README.md`。
+完整构建、接线和接口说明见[固件指南](firmware/README.md)。
 
 ## 文档
 
-- 设计/可行性：`docs/superpowers/specs/2026-06-14-cardputer-usb-all-in-one-design.md`
-- 实施计划：`docs/superpowers/plans/2026-06-14-cardputer-usb-all-in-one-p0-gud-display.md`（GUD 显示）、`docs/superpowers/plans/2026-06-17-cardputer-usb-hid-keyboard.md`（HID 键盘）
-- 固件细节与构建/烧录/验证：`firmware/README.md`
+- [固件指南](firmware/README.md)
+- [GUD 显示用法](../../../docs/hardware/gud-display.md)

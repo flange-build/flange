@@ -1,6 +1,6 @@
 """RK3576 idbloader 经 boot_merger 装配（取代 mkimage -T rksd）。
 
-覆盖 openspec selfbuild-rk3576-spi-image：
+覆盖 RK3576 idbloader 自编与 SPI 镜像契约：
 - `_extract_idb_path` 从 RK3576MINIALL.ini 的 [OUTPUT] IDB_PATH= 解析 idblock 文件名；
 - `idbloader_method=="boot_merger"` 时 compile 跳过 mkimage、拷 boot_merger 的 IDB_PATH
   产物为 idbloader.img，且不提前 return（_firmware_dir 赋值、collect 不抛）；

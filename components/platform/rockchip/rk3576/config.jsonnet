@@ -27,8 +27,7 @@ local common = import 'config/rockchip.libsonnet';
     // 与其他 rockchip SoC 统一用 next-dev-v2026.01（rk3576 UFS 控制器驱动仍是
     // ufs-rockchip.c）。SoC 层用 generic rk3576_defconfig（DT=rk3576-evb）；板级（如
     // radxa-rock-4d）须在 board 层覆盖为对板 defconfig（rock-4d-spi-rk3576_defconfig，
-    // DT=rk3576-rock-4d-spi），否则产「错板」proper u-boot。详见 openspec
-    // selfbuild-rk3576-spi-image。
+    // DT=rk3576-rock-4d-spi），否则产「错板」proper u-boot。详见 docs/boot-and-flash.md。
     // 与 RK3588 同分支 rkr5.1（全 SoC BSP 树，含 rk3576 dts + panfrost 源码）。
     // base defconfig 与 RK3588 一致；GPU fragment 用 panfrost（对位 RK3588
     // 的 rk3588_panthor.config）。case_insensitive_fix.config 由基类生成，
@@ -39,12 +38,11 @@ local common = import 'config/rockchip.libsonnet';
     // （armbian rockchip64_common.inc 对 BOOT_SOC==rk3576 专走 boot_merger 分支）。
     // bootloader.py 据此分流：拾取 boot_merger 的 [OUTPUT] IDB_PATH 产物为
     // idbloader.img。SoC 级声明（与存储介质无关，所有 RK3576 板通用）。详见
-    // openspec selfbuild-rk3576-spi-image。
+    // docs/boot-and-flash.md。
     idbloader_method: 'boot_merger',
   },
-  // 注：u-boot 用 gcc-10 编（base ComponentBuilder.CROSS 全平台默认）——老 rockchip
-  // u-boot 在 gcc-13 下二进制布局会让 RK3576 UFS DMA 读 buffer 落坏地址 → 上板崩，
-  // 2026-06 逐次上板 + 反汇编坐实。详见 openspec selfbuild-rk3576-spi-image。
+  // U-Boot 使用 GCC 10；SPL 与 proper 必须配套以保证 UFS DMA 访问授权。
+  // 配套装配机制见 docs/boot-and-flash.md。
   kernel+: {
     source: { name: 'rockchip-kernel' },
     defconfig: [

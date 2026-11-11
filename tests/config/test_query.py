@@ -21,79 +21,32 @@ class TestGetValidTargets:
     def boards(self):
         return discover_boards()
 
-    def test_returns_list(self, boards):
-        targets = get_valid_targets(boards=boards)
-        assert isinstance(targets, list)
-
     def test_enumeration_is_complete_and_consistent(self, boards):
-        """枚举必须覆盖每块 board 的全部 product × variant 组合，且自洽。
+        """枚举覆盖每块板的全部 product × variant 组合，并与解析结果一致。"""
+        from itertools import product
 
-        刻意不硬编码总数：每加一块板或一个 product 都会让硬编码失效，而本测试
-        要守的是「枚举完整且自洽」，不是「总数恰好是 N」。此处历史上写死 96，
-        加板之后实际为 98，导致本用例连同依赖它的 canonical 矩阵用例长期失败。
-        """
         targets = get_valid_targets(boards=boards)
-
-        assert targets, "至少应枚举出一个目标"
-        assert len(targets) == len(set(targets)), "目标列表不应有重复"
-        assert targets == sorted(targets), "目标应按字母序排列"
-
-        # 每个 target 都能解析回合法三元组，且每块 board 都被覆盖到
-        covered = set()
+        assert targets
+        assert len(targets) == len(set(targets))
+        assert targets == sorted(targets)
+        expected = {
+            (name, product_name, variant)
+            for name, config in boards.items()
+            for product_name, variant in product(config["products"], config["variants"])
+        }
+        actual = set()
         for target in targets:
             parsed = parse_target(target, boards)
-            assert parsed["board"] in boards, f"解析出未知 board：{target}"
-            covered.add(parsed["board"])
-        assert covered == set(boards), (
-            f"以下 board 未出现在枚举结果中：{sorted(set(boards) - covered)}"
-        )
-
-    def test_contains_radxa_targets(self, boards):
-        targets = get_valid_targets(boards=boards)
-        assert "radxa-zero3w-default-debug" in targets
-        assert "radxa-zero3w-default-release" in targets
-        assert "radxa-zero3w-desktop-debug" in targets
-        assert "radxa-zero3w-desktop-release" in targets
-
-    def test_contains_khadas_vim3_targets(self, boards):
-        targets = get_valid_targets(boards=boards)
-        assert {
-            "khadas-vim3-default-debug",
-            "khadas-vim3-default-release",
-            "khadas-vim3-desktop-debug",
-            "khadas-vim3-desktop-release",
-        } <= set(targets)
+            identity = (parsed["board"], parsed["product"], parsed["variant"])
+            assert "-".join(identity) == target
+            actual.add(identity)
+        assert actual == expected
 
     def test_small_spinand_board_excludes_desktop(self, boards):
         targets = get_valid_targets(boards=boards)
         assert not any(
             target.startswith("atk-rk3506b-desktop-") for target in targets
         )
-
-    def test_contains_neons_targets(self, boards):
-        targets = get_valid_targets(boards=boards)
-        assert "neons-core3566-nanob-default-debug" in targets
-        assert "neons-core3566-nanob-default-release" in targets
-
-    def test_contains_tspi_targets(self, boards):
-        targets = get_valid_targets(boards=boards)
-        assert "tspi-rk3566-default-debug" in targets
-        assert "tspi-rk3566-default-release" in targets
-
-    def test_contains_orangepi_targets(self, boards):
-        targets = get_valid_targets(boards=boards)
-        assert "orangepi-cm4-default-debug" in targets
-        assert "orangepi-cm4-default-release" in targets
-        assert "orangepi-cm4-amp-debug" in targets
-        assert "orangepi-cm4-amp-release" in targets
-        assert "orangepi-cm4-amp-rtt-debug" in targets
-        assert "orangepi-cm4-amp-rtt-release" in targets
-        assert "orangepi-cm4-waveshare-display-5a-release" in targets
-
-    def test_sorted_order(self, boards):
-        """结果应按字母序排列。"""
-        targets = get_valid_targets(boards=boards)
-        assert targets == sorted(targets)
 
 
 # ── parse_target 测试 ────────────────────────────────────────────
@@ -160,15 +113,3 @@ class TestParseTarget:
         """合法板名但非法 variant 应抛出 ValueError。"""
         with pytest.raises(ValueError):
             parse_target("radxa-zero3w-default-production", boards=boards)
-
-    def test_roundtrip_all_targets(self, boards):
-        """所有 get_valid_targets 的结果都应可被 parse_target 正确解析。"""
-        targets = get_valid_targets(boards=boards)
-        for target in targets:
-            result = parse_target(target, boards=boards)
-            assert "board" in result
-            assert "product" in result
-            assert "variant" in result
-            # 验证反向拼接一致
-            reconstructed = f"{result['board']}-{result['product']}-{result['variant']}"
-            assert reconstructed == target

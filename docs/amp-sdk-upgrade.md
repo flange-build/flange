@@ -1,10 +1,8 @@
-# Rockchip AMP SDK 升级与排障记录
+# Rockchip AMP SDK 兼容与排障
 
-本文记录 2026-07-10 至 2026-07-11 对 Rockchip HAL SDK 与 RT-Thread SDK 的升级过程。
-RT-Thread 从 3.1.3 升级到 4.1.1，目标板为 Orange Pi CM4，cpu3 运行 AArch32
-RT-Thread AMP，console 使用 UART7_M2，Linux 运行在 cpu0/cpu1/cpu2。
-
-本文不是 vendor changelog，而是 flange 本地集成的升级方法、实际故障与验证依据。
+当前集成基线为 Rockchip HAL SDK 与 RT-Thread 4.1.1。2026-07-10 至 07-11 在 Orange Pi CM4 验证：
+CPU3 运行 AArch32 RT-Thread，UART7_M2 提供控制台，Linux 运行于 CPU0/1/2。
+本页说明 SDK 集成中需要保留的 API、资源与启动约束，基本用法见[AMP 指南](amp.md)。
 
 ## 最终结果
 
@@ -14,33 +12,6 @@ RT-Thread AMP，console 使用 UART7_M2，Linux 运行在 cpu0/cpu1/cpu2。
 - RT-Thread AMP 由 flange 平台基线统一保持单核并启用 Linux RPMsg 协同。
 - Orange Pi CM4 从复位开始通过 UART7_M2 输出 RT-Thread banner、版本与 app 日志。
 - MSH、mailbox、RPMsg name-service 与 Linux↔AMP 双向 echo 均已上板验证。
-
-## 升级原则
-
-### 先提交旧基线，再替换 vendor 树
-
-vendor SDK 更新前必须保证工作区干净，并记录旧版本中所有 flange 本地修改所在的
-commit。替换后先查看这些 commit 涉及的路径，而不是只看新旧整树 diff：
-
-```bash
-git show --name-status <local-change-commit>
-git diff <before-sdk-commit> -- <affected-path>
-git log --oneline -- <affected-path>
-```
-
-本次依靠已有 Orange Pi CM4 AMP commit 找回了 UART7 iomux、UART7 IRQ、RPMsg platform
-和 ISR table 配置。若升级前没有独立 commit，这些改动会淹没在一万多个 vendor 文件差异中。
-
-### vendor 同步与产品修复分批提交
-
-建议提交顺序：
-
-1. vendor SDK 快照；
-2. flange 构建/staging 与 API 兼容；
-3. app/board 产品配置和测试；
-4. wiki 与 OpenSpec。
-
-后续升级可直接把新 vendor 快照与第 2、3 类 commit 对比，快速识别被覆盖的产品改动。
 
 ## 问题与解决方案
 
@@ -61,7 +32,7 @@ HAL SDK 自带 `.gitignore` 使用 `/middleware` 忽略整个目录。对 vendor
 删除 `/middleware` ignore 规则，完整跟踪 middleware。原先 flange 临时维护的
 `hal/rpmsg-lite-port` 被 SDK 自带实现取代。
 
-**经验**
+**排障方法**
 
 同步 vendor 树后必须同时检查 tracked 与 untracked 文件。只执行 `git diff` 看不到被
 `.gitignore` 吞掉的关键目录，应补充：
@@ -97,7 +68,7 @@ git check-ignore -v <suspect-path>
   `components/amp/rockchip/hal`。
 - 编译对象、SCons 状态和最终 ELF 继续全部落在临时 staging。
 
-**经验**
+**排障方法**
 
 不要把 vendor 的仓库组织方式当成构建输入。构建器应显式声明实际需要的源码边界，
 对必须依赖的目录做存在性检查，对非必需子模块占位保持容忍。
@@ -121,7 +92,7 @@ RT-Thread 还移除了旧的 `rt_hw_interrupt_set_route` 接口。
 - `CPU_GET_AFFINITY(3, 0)` 继续表示 GICv3 路由目标 cpu3 的 MPIDR affinity，
   它不是 RT-Thread scheduler 的 CPU mask。
 
-**经验**
+**排障方法**
 
 恢复本地功能时要按新 SDK API 重新表达语义，不能机械贴回旧代码。尤其要同时检查
 Kconfig、board、driver、HAL 和最终 `.config`，只恢复某一层通常只能通过编译，不能运行。
@@ -178,7 +149,7 @@ BSP .config → flange AMP 基线 → app .config
 
 基线目录纳入 amp 内容哈希，每次都执行 `scons --useconfig=.config` 重生成 `rtconfig.h`。
 
-**经验**
+**排障方法**
 
 产品公共约束不能依赖 vendor BSP 默认值，也不应复制到每个 app。平台基线负责运行模型，
 app 只维护 console、I2C 和板级资源选择。
@@ -201,7 +172,7 @@ UART device refcount 与 MSH 可以正常，但底层 clock gate 生命周期不
 
 **注意**
 
-它不是本次启动 banner 丢失的最终根因。排障时保留该修复，但继续追查了 pinmux 状态。
+它不是当前集成启动 banner 丢失的最终根因。排障时保留该修复，但继续追查了 pinmux 状态。
 
 ### 7. MSH 正常但启动 banner 和 app 日志丢失
 
@@ -247,7 +218,7 @@ Orange Pi CM4 UART7 app 显式声明：
 关闭 GMAC1 解决 GPIO4_A2/A3 冲突；关闭 UART2 避免 AMP 初始化 Linux 的 debug console。
 最终固件反汇编确认 `rt_hw_iomux_config()` 不再调用 UART2 或 GMAC1 pinmux。
 
-**经验**
+**排障方法**
 
 - “运行后 console 可用”不代表“启动期 console 正确”。
 - 看不到日志时先证明代码是否执行，再区分软件输出路径与物理 pin/clock。
@@ -271,41 +242,12 @@ RT-Thread app 保持以下协议：
 3. `/dev/rpmsg_ctrl0` 存在；
 4. Linux 创建 endpoint 后，写入消息能读回 Swift/RT-Thread app 的回复。
 
-## 验证清单
+## 维护时的验证方法
 
-### 构建前
+通过 `flange build amp` 在 Docker staging 构建，检查生成的 .config、rtconfig.h 与 ELF/map：
+SMP、GMAC1、UART2 关闭，UART7 和 RPMsg 公共选项启用，iomux 不在 UART7 后重新配置冲突引脚。
+SDK 源树不应出现构建产物。升级前后对比的重点是 API、Kconfig 默认值、GIC/ISR 表、linker 与板级 pinmux。
 
-- [ ] 旧 vendor 状态与 flange 本地修改均已有 commit。
-- [ ] `git status --ignored` 检查关键 middleware/board 路径。
-- [ ] 对照旧本地 commit 列出必须恢复的文件和行为。
-
-### 构建后
-
-- [ ] `flange build amp` 完成，DTS 地址交叉校验通过。
-- [ ] 最终 `.config` 关闭 SMP、GMAC1、UART2，启用 UART7 和三个 RPMsg 公共选项。
-- [ ] `rtconfig.h` 与最终 `.config` 一致。
-- [ ] ELF/map 中存在 `rt_show_version`、app cpu 日志与 RPMsg endpoint。
-- [ ] `rt_hw_iomux_config` 不在 UART7 后调用冲突 pinmux。
-- [ ] SDK 源树没有新增 `.o`、`.sconsign`、ELF 或 SwiftPM 中间产物。
-
-### 上板后
-
-- [ ] UART7 115200 baud 从复位开始输出标准 RT-Thread banner/version。
-- [ ] banner 后出现 `rk3568_amp_uart7_rtt_demo: cpu3 up`。
-- [ ] MSH 可交互，`version` 输出与启动 banner 版本一致。
-- [ ] RPMsg remote init、link-up、announce 顺序完整。
-- [ ] Linux dmesg、`/dev/rpmsg_ctrl0` 和双向 echo 均正常。
-- [ ] 写入 amp 分区前后校验 `amp.img` 与分区前缀 SHA-256 一致。
-
-## 下次升级 SOP
-
-1. 在独立升级分支上确认工作区干净。
-2. 记录 HAL/RT-Thread 旧版本和当前 AMP 上板基线。
-3. 先同步 HAL，解除必要 middleware ignore，构建并提交。
-4. 再同步 RT-Thread，先提交 vendor 快照或至少保持 vendor 路径独立提交。
-5. 用旧产品 commit 的 path list 审计 UART、GIC、ISR_COUNT、RPMsg 和 linker 配置。
-6. 比较 BSP 新旧 Kconfig 默认值，重点检查 SMP、console、GMAC、UART 和共享外设。
-7. 应用 flange 平台基线与 app 负向资源配置。
-8. 执行单元测试、容器构建、最终配置/ELF 检查。
-9. 单刷 amp 分区，依次验证早期 UART、MSH、RPMsg channel 和双向 echo。
-10. 更新本文与 OpenSpec，再按 vendor、兼容、文档分批提交。
+实板需从复位开始观察 UART7 115200 的 banner 与 app 日志，再检查 MSH version、RPMsg announce、
+Linux channel 和双向 echo。写入 AMP 分区前后的摘要核对与启动输出共同确认运行的是当前集成固件。
+工程与提交约定见 [AGENTS.md](../AGENTS.md)。

@@ -41,7 +41,7 @@ flange build
 
 ## 实机验收
 
-2026-09-16 已完成配置隔离等 36 项回归、OpenSpec 校验、Docker 内 `flange app build`，以及
+2026-09-16 已完成配置隔离等 36 项回归、Docker 内 `flange app build`，以及
 ARM64 Ubuntu 24.04 干净容器中的安装、`dpkg --audit`、EGL/GLES/GBM/OpenCL 库加载和卸载恢复验证。
 现有 RK3588 BSP 的 Kconfig 实际求值确认厂商 GPU、内置 CSF 固件、MPP 和 MULTI_RGA 均启用。
 同日已完成 `rockmedia-debug` 完整镜像构建；镜像内 `dpkg --audit`、厂商 GPU 库加载以及

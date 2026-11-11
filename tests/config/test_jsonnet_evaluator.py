@@ -18,7 +18,9 @@ def _config_tree(tmp_path: Path) -> tuple[JsonnetEvaluator, Path]:
     return JsonnetEvaluator(tmp_path), config_dir
 
 
-def test_evaluate_file_returns_plain_dict_and_dependencies(tmp_path):
+def test_evaluate_file_returns_plain_dict_and_dependencies(tmp_path, monkeypatch):
+    # flange 的求值入口使用 Python 绑定，不依赖 PATH 中的 jsonnet 命令。
+    monkeypatch.setenv("PATH", "")
     evaluator, config_dir = _config_tree(tmp_path)
     library = config_dir / "values.libsonnet"
     entry = config_dir / "config.jsonnet"

@@ -4,10 +4,7 @@
 adbd 二进制与其 daemon unit 由独立的 `adbd` App 提供，后者通过
 `build.deps` 依赖本 App。
 
-> 本 App 在 2.0.0 中以三层架构的 Python 服务替换了原先的 `usbdevice`
-> shell 脚本。脚本中积累的 13 项平台竞态知识已逐条迁移，对照表见
-> `openspec/changes/add-usb-mode-switching/race-checklist.md`；
-> **修改 L1 之前请先读它**。
+平台竞态、init 适配与硬件验证范围见 [USB 管理参考](../../../docs/usb.md)。
 
 ## 架构
 
@@ -18,10 +15,9 @@ L1  gadget 核心 (gadget/udc/configfs)  configfs 原语、UDC 生命周期、�
 ```
 
 L1 不认识任何具体 USB function —— 所有 function 相关行为都通过
-`capability.Capability` 接口调用。这条约束有自动化校验（`tests/test_usbmoded.py`
-与变更任务 2.11），是分层是否真正成立的硬指标。
+`capability.Capability` 接口调用。这条约束有自动化校验（`tests/test_usbmoded.py`），是分层是否真正成立的硬指标。
 
-daemon（adbd、mtp-server）的生命周期交给 systemd，不自制保活循环 ——
+daemon（adbd、mtp-server）的生命周期交给当前 systemd 或 OpenRC，不自制保活循环 ——
 后者的状态判断读写不对称曾在 ROCK 5B 上堆积 360+ 并发循环、USB 每 2 秒
 断连一次。
 
@@ -86,6 +82,7 @@ usb-mode get               当前场景 / 能力 / role / UDC 与枚举状态
 usb-mode set <scene>       切换（重启后回到默认场景）
 usb-mode set -p <scene>    持久化切换
 usb-mode reset             清除持久化，回到板级默认场景
+usb-mode reload            重新加载场景定义
 usb-mode confirm           确认当前场景，取消自动回滚
 ```
 
@@ -132,3 +129,6 @@ echo '{"jsonrpc":"2.0","method":"scene.get","id":1}' | socat - UNIX-CONNECT:/run
 授权基于 `SO_PEERCRED`：查询类命令对所有本机进程开放，变更类命令要求
 `uid == 0` 或属于 `usbmode` 组。该组由服务启动时幂等创建，**不会有任何
 用户默认加入** —— 授予普通用户需显式 `usermod -aG usbmode <user>`。
+
+udev 通知由 `/usr/lib/usbmoded/notify` 适配当前 init；服务 reload/SIGHUP 用于重新评估设备状态，
+`usb-mode reload` 用于重读场景定义，二者职责不同。初始化期间收到的 SIGHUP 延后处理，避免 OpenRC 下重入。

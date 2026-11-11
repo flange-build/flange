@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """usbmoded 实板验证：race-checklist 13 项竞态 + adbd×systemd×FFS + 并发。
 
-对应 openspec/changes/add-usb-mode-switching 的 tasks 8.1 / 8.3 / 8.8。
+验证 USB 场景切换、授权和回滚；行为参考 docs/usb.md。
 
 **需要真实硬件，必须以 root 在目标板上运行**，不被 pytest 收集。
 tests/test_usbmoded.py 是宿主机上的伪 configfs 单元测试，两者不可互相替代：

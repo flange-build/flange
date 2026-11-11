@@ -232,4 +232,4 @@ flowchart LR
 提交 App 时提供可运行示例和安装/运行说明；提交产品时解释每个差异的理由；
 提交板卡或平台时提供来源和分层验收记录。把字段、源码、测试和文档放在同一个变更中。
 下一步读[维护指南](maintenance-guide.md#5-选择合适的验证)和[贡献流程](../CONTRIBUTING.md)，
-然后按 ProjectSpec 与 OpenSpec 完成检查和归档。
+按 [AGENTS.md](../AGENTS.md) 完成对应检查，并同步当前结果文档。

@@ -35,7 +35,7 @@ class ComponentBuilder(ABC):
     # 整体二进制布局变化 → RK3576 UFS DMA 读 buffer 落到坏物理地址 → proper 读 GPT 拿残渣崩
     # （2026-06 逐次上板 + 反汇编坐实；radxa bsp 全程用 gcc-10）。为统一与稳妥，全平台
     # u-boot/kernel 默认用 gcc-10（kernel.org crosstool gcc-10.5，亦为内核官方推荐工具链）。
-    # 子类如需别的工具链可覆盖 CROSS。详见 openspec selfbuild-rk3576-spi-image。
+    # 子类如需别的工具链可覆盖 CROSS。工具链边界见 docs/components/build-environment.md。
     CROSS: str = "/opt/aarch64-gcc10/bin/aarch64-linux-"
 
     def __init__(self, docker: DockerRunner, source: SourceManager):

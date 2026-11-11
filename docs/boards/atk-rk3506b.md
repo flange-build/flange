@@ -128,20 +128,19 @@ flange build image -f
 
 ## Fluxion FOC OOT product
 
-`atk-rk3506b-fluxion-{debug,release}` 第一阶段只注册仓库外 AMP App
+`atk-rk3506b-fluxion-{debug,release}` 当前注册仓库外 AMP App
 `fluxion_runtime`。CPU2 运行 RT-Thread + Embedded Swift 电压模式 FOC Runtime，控制和遥测通过
-UART4 上的 MSH（模块化 Shell）`motor` 命令进行。第一阶段不构建 RPMsg/Linux bridge；
-Linux bridge 与 Web 集成属于第二阶段。
+UART4 上的 MSH（模块化 Shell）`motor` 命令进行。当前未集成 RPMsg/Linux bridge 与 Web 界面。
 
 默认 checkout 布局为：
 
 ```text
-<Project>/EMB_Project/flange
+<Project>/flange
 <Project>/fluxion
 ```
 
 board 配置只保存 `../fluxion/Device/FlangeApps/fluxion_runtime` 相对路径，不保存开发机绝对路径。
-`envsetup.sh` 在启动 build 容器前解析 FINAL_CONFIG，并把 OOT App 所在 git worktree
+Python 构建入口在启动容器前解析有效配置，通过 OOT 挂载管理把 App 所在 git worktree
 挂载到容器内对应路径。`default` product 继续使用已验证的 UART4/RPMsg echo 固件，作为
 恢复和链路诊断基线。
 
@@ -371,8 +370,48 @@ systemctl --no-pager --full status usbmoded.service
   `modprobe` 即可通过 ADB 连接。
 
 目标 rootfs 未安装 `mtdinfo`/`ubinfo`，因此 page/LEB 细节仍以 kernel UBI 启动日志、
-`/proc/mtd` 与成功的可读写挂载交叉确认。尚待实操的是原厂备份/恢复演练、四种单组件
-刷写、UART4 上的 RT-Thread banner/MSH 以及多轮 RPMsg echo。
+`/proc/mtd` 与成功的可读写挂载交叉确认。2026-07-15 用户补充确认：原厂备份/MaskROM 恢复、bootloader/boot/amp/rootfs 单刷、
+UART4 的 RT-Thread banner/MSH 和多轮 Linux↔CPU2 binary echo 均已完成。
 
-完整输出见 OpenSpec 证据
-`openspec/changes/add-rk3506b-atk-rk3506b/evidence/rk3506b-hardware-acceptance.md`。
+上述实机结果限定于表中硬件、镜像和测试条件。
+
+## 双路 YT8512C Ethernet
+
+两颗 PHY 的 ID 均为 `0x00000128`、address 1，位于独立 MDIO bus。strap 选择 RMII1，
+50 MHz REF_CLK 由 SoC GMAC 输出，因此 `clock_in_out="output"` 正确，不应为消除 warning 改为 input。
+
+板级补丁为该 ID 单独执行 LED0 `0x40c0`、LED1 `0x40c3`、清除 `0x2027` bit15 关闭 auto-sleep，
+再调用 `genphy_soft_reset()` 等待复位完成并传播 MDIO 错误，避免旧 clock init 与未等待复位造成竞争。
+旧 ID `0x00000118` 保持原初始化；PHY_POLL 是 IRQ sentinel，不能写进 driver flags。
+
+2026-07-15 实板冷启动后，end0/end1 分别接线均以 100 Mbps/Full 建链，拔线出现 Link Down，
+未执行手工 PHY reset。设备名与链路可用 `ip -brief link`、`ethtool <接口>`、`dmesg` 复核。
+
+## RTL8733BUUA Wi-Fi / Bluetooth
+
+芯片经 USB1 Host `ff780000.usb` → CH334R Hub `1a86:8091` 的 port 3 连接；
+USB 设备为 `0bda:b733`，Wi-Fi 接口 class `ff/ff/ff`，BT 为 `e0/01/01`。
+CHIP_EN 硬件上拉，不使用 SDIO/UART/PCM 或额外 wake GPIO；不要为此修改 UART4 AMP 或 USB0 ADB。
+
+| 组件 | 当前来源与内容 |
+| --- | --- |
+| Wi-Fi | wirenboard/rtl8733bu 固定 `2d9048be60759206b8db5e2370420333ef0b8478`，OOT `8733bu.ko`，固件内置 |
+| Bluetooth | fengyuzhong/rtl8733bu-bt 固定 `dc7b30b4b9d2c5437a80bfaff6c8a77c97642778`，OOT `rtk_btusb.ko` |
+| BT 固件 | 同源 `rtl8733bu_fw` / `rtl8733bu_config` 安装到 `/lib/firmware/` |
+| 用户态 | NetworkManager / wpa_supplicant，BlueZ；不用与 USB 拓扑无关的 HCI UART/SDIO glue |
+
+in-tree btusb 关闭以避免竞争；Wi-Fi 源补丁适配已移除的 regulatory flag，内核依赖保留 cfg80211/BT/rfkill。
+2026-07-14 的镜像验证了 Hub 枚举、模块自动加载与 WLAN interface 出现；
+2.4/5 GHz 扫描/关联、IP 连通、Bluetooth HCI/发现和长期 ADB 压力未独立验收。
+
+```bash
+lsusb
+lsmod | grep -E '8733bu|rtk_btusb'
+ip -brief link
+nmcli device wifi list --rescan yes
+bluetoothctl list
+dmesg | grep -Ei '8733|rtk_btusb|firmware|hci'
+```
+
+没有 USB 设备先检查 Host/Hub 供电；设备存在但没有 WLAN/HCI 时，再检查对应 interface 的 driver、
+modules.alias 和固件请求。不要把 WLAN 注册当作 Wi-Fi 与 BT 全功能通过。

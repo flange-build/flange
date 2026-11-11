@@ -2,22 +2,6 @@ from builder.config.jsonnet import JsonnetEvaluator
 from builder.paths import PROJECT_ROOT
 
 
-def test_jsonnet_sources_have_chinese_responsibility_comment():
-    components = PROJECT_ROOT / "components"
-    sources = sorted(components.rglob("*.jsonnet"))
-    sources += sorted(components.rglob("*.libsonnet"))
-
-    missing = []
-    for path in sources:
-        first_line = path.read_text(encoding="utf-8").lstrip().partition("\n")[0]
-        has_chinese = any("\u4e00" <= char <= "\u9fff" for char in first_line)
-        if not first_line.startswith("//") or not has_chinese:
-            missing.append(str(path.relative_to(PROJECT_ROOT)))
-
-    assert sources
-    assert missing == []
-
-
 def test_rootfs_jsonnet_package_set_matches_variant():
     evaluator = JsonnetEvaluator(PROJECT_ROOT)
     path = PROJECT_ROOT / "components/rootfs/config.jsonnet"

@@ -100,7 +100,7 @@ local variant = std.extVar('variant');
     install_recommends: false,
     groups: [
       // — Group 集合（嵌入式开发板向）—
-      // 框架预创 + 默认入组；新增/修改请同步 wiki/components/rootfs-构建器.md
+      // 框架预创 + 默认入组；新增/修改请同步 docs/components/rootfs.md
       'adm', 'dialout', 'cdrom', 'sudo', 'audio', 'video',
       'plugdev', 'users', 'netdev', 'input', 'render',
       'i2c', 'spi', 'gpio',

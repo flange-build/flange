@@ -16,7 +16,7 @@ flange 自有代码与文档采用 [Apache License 2.0](../LICENSE)，SPDX（软
 引入第三方内容时记录上游来源、版本或 commit、许可证及随附版权信息。
 发布镜像前，应核对实际包含的软件包与固件，保留需要随分发交付的许可、版权和对应源码材料。
 当前框架导出部分包版本信息，但尚未自动生成完整 SBOM（软件物料清单）、许可清单或对应源码归档；
-这些属于[设计评审](build-system-review.md)中的后续发布能力。
+这些属于[设计评审](limitations.md)中的后续发布能力。
 
 仓库中已有独立声明的例子包括 `components/amp/rockchip/rt-thread/`、
 `components/amp/rockchip/hal/`、`tools/*/edl-ng/` 和 `tools/*/qdl/*/`。这不是完整第三方清单，

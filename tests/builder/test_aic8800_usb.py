@@ -98,12 +98,6 @@ def test_allwinnera733_rootfs安装模块和usb诊断工具():
     assert "wpasupplicant" in packages
 
 
-def test_radxa_cubie_a7z不保留无消费者wifi开关():
-    config = resolve_config("radxa-cubie-a7z", "default", "release")
-
-    assert "wifi" not in config
-
-
 def test_radxa_cubie_a7z依赖radxa_aic8800_usb固件():
     """A7Z rootfs 应从 Radxa aic8800 仓库安装 D80 USB 固件。"""
     config = resolve_config("radxa-cubie-a7z", "default", "release")

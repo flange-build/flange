@@ -677,7 +677,7 @@
  *
  * 官方 IPA 把 ISP 各画质级的参数按**当前工作点**查表下发，不带任何误差反馈
  * （adn / acc / aen 三个模块的表全部以 gain / color_temp / luma 为索引，没有误差
- *  项，见 docs/superpowers/research/2026-08-19-esp32p4-official-isp-pipeline.md §B.1）。
+ *  项，见 firmware/CAMERA.md 的控制参数说明）。
  * 我们照此办理：标定表在 cam_isp_cal.h（机械生成），查表逻辑在 cam_isp_map.c
  * （纯逻辑、宿主机可测），本文件只放开关与迟滞。
  *

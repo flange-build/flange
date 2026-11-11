@@ -12,7 +12,7 @@ flange 在 boot 分区中提供 normal 与 recovery 两条启动路径，并预�
 > recovery rootfs 默认安装 `parted` + `gdisk`。
 
 本文聚焦于"用户视角的怎么用"和"出问题怎么查"。架构与设计取舍参见
-[OpenSpec change `add-recovery-boot`](../openspec/changes/archive/2026-04-25-add-recovery-boot/)。
+[Recovery 线协议](recovery-protocol.md)。
 
 ## 为什么需要 recovery
 

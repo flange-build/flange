@@ -282,7 +282,7 @@ def test_khadas_vim3_board_contract(configs):
     assert "CONFIG_FASTBOOT_FLASH_MMC_DEV=2" in fragment.read_text().splitlines()
     assert (board_dir / "dtso" / "vim3-spidev-spicc1.dtso").is_file()
     # USB gadget 板级配置已从 shell 格式的 usbdevice.conf 迁移为 usbmoded 的
-    # YAML（见 openspec/changes/archive/2026-09-19-add-usb-mode-switching）。
+    # YAML（合并行为见 docs/usb.md）。
     usb_config = (
         board_dir / "overlay" / "etc" / "usbmode" / "gadget.d" / "20-khadas-vim3.yaml"
     )

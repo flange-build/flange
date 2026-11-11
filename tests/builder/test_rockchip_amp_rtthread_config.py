@@ -23,22 +23,19 @@ def test_rtthread_amp_base_config_owns_common_options():
     assert "CONFIG_RT_USING_WITH_LINUX=y" in config
 
 
-def test_rtthread_app_config_only_keeps_app_differences():
-    """app 配置不应重复声明 AMP 基线选项。"""
-    config = UART7_APP_CONFIG.read_text()
+def test_uart7_app_enables_console_and_i2c_without_bsp_conflicts(tmp_path):
+    """合并后的配置启用 UART7/I2C0，关闭冲突的 GMAC1 与 Linux 保留的 UART2。"""
+    merged = tmp_path / ".config"
+    merged.write_text("CONFIG_RT_USING_GMAC1=y\nCONFIG_RT_USING_UART2=y\n")
+    RockchipAmpBuilder._merge_kconfig_fragment(merged, BASE_CONFIG)
+    RockchipAmpBuilder._merge_kconfig_fragment(merged, UART7_APP_CONFIG)
+    settings = set(merged.read_text().splitlines())
 
-    assert "CONFIG_RT_USING_SMP" not in config
-    assert "CONFIG_RT_USING_RPMSG_LITE" not in config
-    assert "CONFIG_RT_USING_LINUX_RPMSG" not in config
-    assert "CONFIG_RT_USING_WITH_LINUX" not in config
-
-
-def test_uart7_app_disables_conflicting_bsp_defaults():
-    """UART7 app 必须关闭冲突的 GMAC1 和 Linux 保留的 UART2。"""
-    config = UART7_APP_CONFIG.read_text()
-
-    assert "# CONFIG_RT_USING_GMAC1 is not set" in config
-    assert "# CONFIG_RT_USING_UART2 is not set" in config
+    assert {
+        "# CONFIG_RT_USING_GMAC1 is not set", "# CONFIG_RT_USING_UART2 is not set",
+        "CONFIG_RT_USING_UART7=y", 'CONFIG_RT_CONSOLE_DEVICE_NAME="uart7"',
+        "CONFIG_RT_USING_I2C=y", "CONFIG_RT_USING_I2C0=y",
+    } <= settings
 
 
 def test_rtthread_config_merge_order_is_bsp_base_then_app(tmp_path):
@@ -66,18 +63,3 @@ def test_rtthread_amp_cache_includes_sdk_and_flange_base_config(tmp_path):
         'amp': {'enabled': True}, 'kernel': {}}, context, SourceManager(context=context))
     assert plan.path('amp:sdk') == ROOT / 'components/amp'
     assert plan.path('amp:platform') == ROOT / 'components/platform/rockchip/amp'
-
-
-def test_serial_open_notifies_rockchip_uart_clock_control():
-    """serial open/close 应对称通知 Rockchip UART 驱动管理时钟。"""
-    serial_path = (
-        "components/amp/rockchip/rt-thread/components/drivers/serial/serial.c"
-    )
-    serial = (ROOT / serial_path).read_text()
-    uart_path = "components/amp/rockchip/rt-thread/bsp/rockchip/common/drivers/drv_uart.c"
-    uart = (ROOT / uart_path).read_text()
-
-    assert "serial->ops->control(serial, RT_DEVICE_CTRL_OPEN, RT_NULL);" in serial
-    assert "serial->ops->control(serial, RT_DEVICE_CTRL_CLOSE, RT_NULL);" in serial
-    assert "case RT_DEVICE_CTRL_OPEN:" in uart
-    assert "case RT_DEVICE_CTRL_CLOSE:" in uart

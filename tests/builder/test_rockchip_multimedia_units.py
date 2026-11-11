@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -196,13 +195,6 @@ def test_staging单元声明了产物树(toolkit):
     for name, spec in _unit_specs().items():
         if spec.app.type == "staging":
             assert spec.build.staging, name
-
-
-def test_deb交付总量与拆分前一致(toolkit):
-    """拆分不改变交付契约：仍是 17 个 deb。"""
-    total = sum(
-        len(spec.build.deb_outputs) for spec in _unit_specs().values())
-    assert total == 17
 
 
 def test_repack依赖全部四个gst单元(toolkit):

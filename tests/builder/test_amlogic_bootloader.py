@@ -101,7 +101,7 @@ def test_configure_stages_fragment_into_configs(tmp_path, monkeypatch):
     u-boot ``configs/``，并按序逐个 make defconfig 列表。"""
     builder, docker, _, src_dir, _ = _make_builder(tmp_path)
 
-    # 模拟仓库内 fragment 文件位置；ProjectSpec §9 路径走 COMPONENTS_ROOT
+    # 模拟仓库内 fragment 文件位置；路径走 COMPONENTS_ROOT
     # 锚点，测试通过 monkeypatch 把锚点改到临时目录。
     fragment_root = tmp_path / "repo"
     components_root = fragment_root / "components"

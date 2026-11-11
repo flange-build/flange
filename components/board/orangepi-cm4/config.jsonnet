@@ -31,7 +31,7 @@
 //   对 I2C 面板改在 host attach 时 component_add，否则 DSI 与面板互等形成
 //   deferred probe 活锁，内核挂不上 rootfs；0006 把面板像素时钟改为
 //   29 MHz，与 panel overlay 固定的 696 Mbps lane 速率严格相等，否则非
-//   burst 模式下画面右移约 80 px 并卷绕（见 wiki/boards/orangepi-cm4.md）。
+//   burst 模式下画面右移约 80 px 并卷绕（见 docs/boards/orangepi-cm4.md）。
 // - AMP：额外提供 amp / amp-rtt 两个 product，cpu3 交给从核固件。Orange Pi CM4
 //   40pin 未引出 tspi-rk3566 既有 demo 使用的 UART4_M1，故本板 AMP 从核 console
 //   改用 40pin 可引出的 UART7_M2（GPIO4_A2/TX、GPIO4_A3/RX）。

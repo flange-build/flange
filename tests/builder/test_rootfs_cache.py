@@ -1,6 +1,7 @@
 """rootfs 基础计划与两阶段编排：执行输入与快照身份使用同一契约。"""
 
 from copy import deepcopy
+from contextlib import nullcontext
 from unittest.mock import MagicMock
 
 import pytest
@@ -97,7 +98,7 @@ def test_phase2_configuration_does_not_change_base_identity(tmp_path):
     assert builder._get_base_cache_path(config) == builder._get_base_cache_path(other)
 
 
-def test_phase2_packages_install_after_extra_debs_before_modules(tmp_path):
+def test_phase2_preserves_customization_dependencies_and_exports_last(tmp_path):
     builder = _builder(tmp_path)
     calls = []
     for name in (
@@ -112,6 +113,9 @@ def test_phase2_packages_install_after_extra_debs_before_modules(tmp_path):
 
     assert calls.index("_install_extra_debs") < calls.index("_install_phase2_packages")
     assert calls.index("_install_phase2_packages") < calls.index("_install_kernel_modules")
+    assert calls.index("_install_app_debs") < calls.index("apply_overlays")
+    assert calls.index("apply_overlays") < calls.index("_configure_users")
+    assert calls[-1] == "_export_package_manifest"
 
 
 def test_empty_phase2_packages_touch_nothing(tmp_path, monkeypatch):
@@ -161,17 +165,40 @@ def test_plan_apt_command_consumes_same_recommendation_policy(tmp_path):
 
 
 @pytest.mark.parametrize("hit", [False, True])
-def test_compile_uses_verified_restore_result_and_always_customizes(tmp_path, hit):
+def test_compile_uses_verified_restore_result_and_always_customizes(tmp_path, hit, monkeypatch):
+    monkeypatch.setattr("builder.rootfs.rootfs_staging", lambda component: nullcontext(tmp_path))
     builder = _builder(tmp_path)
     calls = []
-    builder._extract_base = MagicMock(return_value=hit)
-    builder._build_phase1 = MagicMock(side_effect=lambda *args: calls.append("base"))
+
+    def write_base(root):
+        (root / "etc").mkdir(parents=True, exist_ok=True)
+        (root / "etc/fstab").write_text("# UNCONFIGURED FSTAB FOR BASE SYSTEM\n")
+
+    def restore(cache, root):
+        if hit:
+            write_base(root)
+        return hit
+
+    def build_base(root, config):
+        calls.append("base")
+        write_base(root)
+
+    def customize(root, config):
+        assert not (root / "etc/fstab").exists(), "基础 fstab 必须在定制前清理"
+        calls.append("customize")
+        (root / "etc/fstab").write_text("# 定制挂载\n")
+
+    def image(root, config):
+        assert (root / "etc/fstab").read_text() == "# 定制挂载\n"
+        calls.append("image")
+
+    builder._extract_base = MagicMock(side_effect=restore)
+    builder._build_phase1 = MagicMock(side_effect=build_base)
     builder._save_base_snapshot = MagicMock(side_effect=lambda *args: calls.append("save"))
-    builder._build_phase2 = MagicMock(side_effect=lambda *args: calls.append("customize"))
+    builder._build_phase2 = MagicMock(side_effect=customize)
     builder._post_customize = MagicMock()
-    builder._install_fstab = MagicMock()
     builder._ensure_api_mountpoints = MagicMock()
-    builder._build_image = MagicMock(side_effect=lambda *args: calls.append("image"))
+    builder._build_image = MagicMock(side_effect=image)
     builder.compile(None, _config())
     assert calls == (["customize", "image"] if hit else ["base", "save", "customize", "image"])
     assert builder._phase1_plan.value("apt")["packages"] == ["systemd"]

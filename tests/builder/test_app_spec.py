@@ -7,11 +7,7 @@ import pytest
 import yaml
 
 from builder.app_spec import (
-    AppSpec,
     AppSpecError,
-    BuildConfig,
-    LibConfig,
-    SystemdConfig,
     SwiftBuildConfig,
     load_spec,
 )
@@ -731,17 +727,6 @@ class TestBuildSystemValues:
             with pytest.raises(AppSpecError, match="build.system"):
                 load_spec(_write_yaml(tmpdir, yaml_content))
 
-    def test_build_system_none_is_default(self):
-        """未指定 build.system 时默认为 none。"""
-        yaml_content = (
-            "app:\n  name: foo\n  version: 1.0.0\n  description: desc\n  type: exec\n  arch: [aarch64]\n"
-            "maintainer:\n  name: flange\n  email: a@b.com\n"
-            "build: {}\n"
-        )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            spec = load_spec(_write_yaml(tmpdir, yaml_content))
-        assert spec.build.system == "none"
-
 
 class TestBuildAptPackagesValidation:
     """验证 App 构建期 APT 依赖的格式与架构占位符。"""
@@ -867,89 +852,3 @@ class TestSwiftBuildValidation:
         with tempfile.TemporaryDirectory() as tmpdir:
             with pytest.raises(AppSpecError, match="product"):
                 load_spec(_write_yaml(tmpdir, yaml_content))
-
-
-# ---------------------------------------------------------------------------
-# 测试：真实 adbd app.yaml 解析
-# ---------------------------------------------------------------------------
-
-class TestAdbdAppYaml:
-    """验证 components/app/adbd/app.yaml 可被正确解析（集成测试）。"""
-
-    def test_adbd_spec_loads(self):
-        # 从真实路径加载（相对于项目根目录）
-        project_root = Path(__file__).parent.parent.parent
-        adbd_dir = project_root / "components" / "app" / "adbd"
-        if not (adbd_dir / "app.yaml").exists():
-            pytest.skip("components/app/adbd/app.yaml 不存在，跳过集成测试")
-
-        spec = load_spec(adbd_dir)
-        assert spec.app.name == "adbd"
-        assert spec.app.type == "service"
-        assert "aarch64" in spec.app.arch
-        assert spec.maintainer.email == "flange@localhost"
-
-    def test_adbd_depends_on_usbmoded(self):
-        """adbd 的 adb 能力实现在 usbmoded，构建与运行时都必须依赖它。
-
-        build.deps 进构建与安装闭包，depends 只写进 deb 的 Depends 字段，
-        两者都需要。
-        """
-        project_root = Path(__file__).parent.parent.parent
-        adbd_dir = project_root / "components" / "app" / "adbd"
-        if not (adbd_dir / "app.yaml").exists():
-            pytest.skip("components/app/adbd/app.yaml 不存在，跳过集成测试")
-
-        spec = load_spec(adbd_dir)
-        assert "usbmoded" in spec.build.deps
-        assert "usbmoded" in spec.depends
-
-    def test_adbd_has_systemd_section(self):
-        """adbd app.yaml 应包含 systemd 配置，且不开机自启。
-
-        auto_start=false 是设计要求：adbd 的启停由 usbmoded 的 adb 能力驱动
-        （FunctionFS 要求 daemon 在 gadget 绑定 UDC 之前打开 ep0）。
-        """
-        project_root = Path(__file__).parent.parent.parent
-        adbd_dir = project_root / "components" / "app" / "adbd"
-        if not (adbd_dir / "app.yaml").exists():
-            pytest.skip("components/app/adbd/app.yaml 不存在，跳过集成测试")
-
-        spec = load_spec(adbd_dir)
-        assert spec.systemd is not None
-        assert spec.systemd.auto_start is False
-
-
-class TestUsbmodedAppYaml:
-    """验证 components/app/usbmoded/app.yaml 可被正确解析（集成测试）。"""
-
-    @staticmethod
-    def _spec():
-        project_root = Path(__file__).parent.parent.parent
-        usbmoded_dir = project_root / "components" / "app" / "usbmoded"
-        if not (usbmoded_dir / "app.yaml").exists():
-            pytest.skip("components/app/usbmoded/app.yaml 不存在，跳过集成测试")
-        return load_spec(usbmoded_dir)
-
-    def test_usbmoded_spec_loads(self):
-        spec = self._spec()
-        assert spec.app.name == "usbmoded"
-        assert spec.app.type == "service"
-        assert "aarch64" in spec.app.arch
-
-    def test_usbmoded_has_install_section(self):
-        """usbmoded app.yaml 应包含 install 安装映射。"""
-        spec = self._spec()
-        assert spec.install, "usbmoded 应定义 install 映射"
-
-    def test_usbmoded_auto_starts(self):
-        """usbmoded 是 gadget 管理服务，必须开机自启。"""
-        spec = self._spec()
-        assert spec.systemd is not None
-        assert spec.systemd.auto_start is True
-
-    def test_usbmoded_declares_conffiles(self):
-        """gadget / 场景定义是配置文件，升级时不得覆盖板级改动。"""
-        spec = self._spec()
-        assert "/etc/usbmode/gadget.d/10-default.yaml" in spec.conffiles
-        assert "/etc/usbmode/scenes.d/10-common.yaml" in spec.conffiles

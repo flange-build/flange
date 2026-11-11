@@ -32,7 +32,7 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
         grub.cfg 由 boot 组件生成；这里只负责把构建产物落到 /boot：
           /boot/vmlinuz   ← kernel Image
           /boot/<dtb>.dtb ← 设备树（GRUB devicetree 指令加载）
-        initrd 由后续 boot 阶段在 chroot 内 update-initramfs 生成（按需）。
+        当前 GRUB 配置不使用 initramfs，启动所需的存储驱动应内建。
 
         ## 构建期 fdtoverlay 合并（grub-with-dtb 平台专用）
 
@@ -42,7 +42,7 @@ class Qcs6490RootfsBuilder(RootfsBuilder):
         /boot/<dtb>.dtb（与 grub.cfg 的 `devicetree /boot/<dtb>.dtb` 配套）。
         无 overlay 时走直拷路径，与未启用本能力前字节等价。
 
-        参见 [[build-time-dtb-overlay-merge]] 规格。
+        参见 docs/hardware/device-tree-overlays.md。
         """
         target_dir = self._target_dir()
         boot = rootfs_dir / "boot"

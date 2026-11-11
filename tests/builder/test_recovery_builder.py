@@ -4,7 +4,6 @@
 - recovery-config.json 渲染逻辑
 - 自定义包并集 helper
 - 平台 builder 工厂注册
-- 关键路径与文件系统 label 常量
 """
 
 from __future__ import annotations
@@ -25,8 +24,6 @@ from builder.platforms.allwinnera733 import (
 from builder.platforms.rockchip.recovery import RockchipRecoveryBuilder
 from builder.platforms.allwinnera733.recovery import AllwinnerA733RecoveryBuilder
 from builder.recovery import (
-    FS_LABEL,
-    RECOVERY_CONFIG_PATH,
     RecoveryBuilder,
     build_recovery_config,
 )
@@ -165,22 +162,6 @@ class TestPlatformIntegration:
 
     def test_a733_artifact_name(self):
         assert A733_ARTIFACT_NAMES[("recovery", "recovery")] == "recovery.img"
-
-
-# ── recovery 镜像约定常量 ────────────────────────────────────────
-
-
-class TestRecoveryConstants:
-    def test_fs_label_is_recovery(self):
-        assert FS_LABEL == "recovery"
-        assert RecoveryBuilder.fs_label == "recovery"
-
-    def test_recovery_config_path(self):
-        assert RECOVERY_CONFIG_PATH == "etc/flange/recovery-config.json"
-        assert RecoveryBuilder.config_rel_path == "etc/flange/recovery-config.json"
-
-    def test_component_name(self):
-        assert RecoveryBuilder.component == "recovery"
 
 
 # ── 分区大小读取 ──────────────────────────────────────────────

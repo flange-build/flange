@@ -276,7 +276,7 @@ Package 的显式 `actions.build` 由 `package_build.py` 在隔离副本的 Dock
 新增字段同时更新 AppSpec/Package schema、消费者、计划输入、有效/无效测试和本文。
 构建模型见 `app_build.py`，文件收集见 `app.py`，文件树复制见 `file_tree.py`，打包见 `deb.py`，设备会话见 `deploy.py`。
 真实 App/Package 清单纳入严格校验；跨目标编译、损坏产物和设备故障分别验证。
-当前交付状态见[设计评审](build-system-review.md)，不能把模拟设备测试表述为板卡实机验收。
+当前能力边界见[限制说明](limitations.md)，不能把模拟设备测试表述为板卡实机验收。
 
 报告另外记录 `userland_identity`（发行版和用户态 ABI）；旧报告缺少身份必须重新构建。
 rootfs 安装与 `--no-build` 均校验身份。外部包格式、发行版与 SDK 见[多层工作区](layers.md)。

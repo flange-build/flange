@@ -1,7 +1,7 @@
 // Orange Pi 5 Plus 板级配置：声明设备树、产品条件和板载硬件策略。
 // OrangePi 5 Plus (RK3588) 板级配置
 //
-// 硬件外设与 [[radxa-rock5b]] 等价（首版验收范围内）：同 SoC（RK3588）、同 PMIC
+// 硬件外设与 radxa-rock5b 等价（首版验收范围内）：同 SoC（RK3588）、同 PMIC
 // （RK806）、同 UART2 1500000 调试 console、同 eMMC 启动路径；M.2 E-Key 槽位插
 // RTL8852BE WiFi6+BT5.2 combo 卡走 rkwifibt OOT 路线，与 ROCK 5B 共用同一驱动栈。
 // 板载特有外设（双 2.5G PCIe RTL8125 网卡、双 HDMI、4-lane MIPI CSI、PCIe Gen3 x4

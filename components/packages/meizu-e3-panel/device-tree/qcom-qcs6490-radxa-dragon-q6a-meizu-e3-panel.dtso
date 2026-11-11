@@ -83,7 +83,7 @@
 
 	/* TP-RST = tlmm 105：sec_ts 驱动不管理 reset，用 regulator-fixed
 	 * （always-on + boot-on）在驱动注册时把 tlmm 105 拉高解复位。
-	 * 与 a7a 同款做法（参见 [[meizu-e3-panel]] radxa-cubie-a7a 章节）。 */
+	 * 与 a7a 同款做法（参见 docs/hardware/meizu-e3-panel.md）。 */
 	reg_tp_reset: tp-reset-deassert {
 		compatible = "regulator-fixed";
 		regulator-name = "tp-reset-deassert";

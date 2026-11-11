@@ -12,14 +12,14 @@ import subprocess
 import tempfile
 from io import StringIO
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from builder.config.registry import resolve_config
 from builder.flash import (
     FlashConfig, FlashConfigGenerator, FlashError, FlashExecutor,
-    FlashIdentityConfig, FlashPartition, FlashStrategy, PreFlashConfig,
+    FlashIdentityConfig, FlashPartition, PreFlashConfig,
     RockchipFlashStrategy, DeviceInfo, get_flash_strategy,
 )
 from builder.flash.console import _header, _info, _ok, _step, _warn
@@ -692,16 +692,3 @@ class TestCLI入口:
         assert result.returncode == 0, (
             f"python3 -m builder.flash 执行失败:\n{result.stderr}")
         assert "run" in result.stdout, "帮助里应列出 run 子命令"
-
-    def test_安装入口与模块入口共用可调用的main(self):
-        """Shell 不承载业务路由；安装命令与模块调用指向同一服务。"""
-        import importlib.util
-        import importlib
-        import tomllib
-        from pathlib import Path
-
-        root = Path(__file__).resolve().parents[2]
-        project = tomllib.loads((root / "pyproject.toml").read_text())
-        module, function = project["project"]["scripts"]["flange"].split(":")
-        assert callable(getattr(importlib.import_module(module), function))
-        assert importlib.util.find_spec("builder.__main__") is not None

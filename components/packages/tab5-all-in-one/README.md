@@ -1,128 +1,38 @@
-# tab5-all-in-one
+# Tab5 USB 复合终端
 
-用一根 USB-C 线，把 **M5Stack Tab5（ESP32-P4）** 接到 flange 嵌入式 Linux 主机，让它当一个
-「USB 瘦终端」：USB 显示屏 + USB 键盘 + USB 触摸屏 + USB 麦/扬声器 + USB 摄像头，
-全走 mainline 驱动（host 侧零自定义驱动）。
+用一根 USB-C 线将 M5Stack Tab5（ESP32-P4）接到 Linux 主机，提供 GUD（通用 USB 显示）、
+HID（人机接口）键盘与触摸、UAC1（USB 音频）和 UVC（USB 视频）摄像头。
+Linux 使用内核已有的 gud、usbhid/hid-multitouch、snd-usb-audio 和 uvcvideo 驱动。
 
-姊妹包是 `components/packages/cardputer-all-in-one`（M5Cardputer / ESP32-S3），同一形态、
-互不共享代码。
+## 使用入口
 
-## 两侧分工
+1. 按[固件指南](firmware/README.md)准备 ESP-IDF、构建并烧录 Tab5。
+2. 在 Linux 目标的 `kernel.config` 中确认 `CONFIG_DRM_GUD`、`CONFIG_USB_HID`、
+   `CONFIG_HID_MULTITOUCH`、`CONFIG_SND_USB_AUDIO`、`CONFIG_USB_VIDEO_CLASS` 及其依赖已启用。
+   需要调整时通过 `flange build` 构建匹配的内核与 rootfs。
+3. 将 Tab5 USB-C 接到 Linux Host 端口，按固件指南检查显示、输入、声卡和视频设备。
+   X11 用法见 [GUD 显示](../../../docs/hardware/gud-display.md)。
 
-| 侧 | 内容 | 构建 |
-|----|------|------|
-| **Tab5 固件** | `firmware/`（ESP-IDF + TinyUSB）—— GUD 显示 / HID 键盘 + 多点触摸 / UAC1 音频 / UVC 摄像头 | **容器外** `idf.py`（见 `firmware/README.md`）|
-| **Linux 组件** | 内核 config fragment（`CONFIG_DRM_GUD` / `HID_MULTITOUCH` / `SND_USB_AUDIO` / `USB_VIDEO_CLASS`）+ 验收工具/文档 | `flange build` |
+本目录存放独立 ESP-IDF 固件，**没有 `package.py` 注册清单或自动烧录动作**。
+当前 flange Docker 不包含 ESP 工具链，固件通过独立 ESP-IDF 环境构建；
+不能把 `flange package build tab5-all-in-one` 当作已集成的入口。
 
-Linux 侧零自定义驱动：显示用 **GUD**（Generic USB Display，`drivers/gpu/drm/gud`）、
-音频用 **UAC + snd-usb-audio**、键盘与触摸用 **usbhid + hid-multitouch**、摄像头用 **uvcvideo**。
+## 能力与验证边界
 
-## 状态
+| 功能 | 当前实现 | 实际验证范围 |
+| --- | --- | --- |
+| GUD 显示 | 640×360 RGB565，LZ4/脏矩形，PPA 放大旋转到 720×1280 | ILI9881C 面板、Linux console 出图通过；ST7123 仅编译 |
+| 键盘 | Tab5 Keyboard，Normal 模式转换 6KRO 报告 | 输入与组合键通过；不支持 BIOS boot keyboard 协议 |
+| 触摸 | GT911，声明最多 5 点 | 三指与四角坐标通过；四/五指未实测 |
+| 音频 | 16 kHz 单声道 S16_LE，硬件支持全双工 | 播放、录音及硬件音量分别通过；长时同时收发未测 |
+| 摄像头 | SC202CS → ISP → PPA → JPEG，MJPEG 640×360 / 10 fps | 旧管线出图与 AE 通过；当前 ISP 对齐实现只完成宿主测试和构建 |
 
-- ✅ **USB-C 枚举为 `16d0:10a9`，host `gud` 绑定成功** —— 实机验证通过。
-  两个必要条件缺一不可：`TINYUSB_CONFIG_FULL_SPEED`（选对端口），
-  以及 `usb_wrap_ll_phy_select(&USB_WRAP, 0)`（把内部 FSLS PHY 0 从
-  USB-Serial/JTAG 划给 OTG1.1）。**只做前者的话主机只看得到 `303a:1001` 的 CDC ACM**，
-  详见 `firmware/README.md`。
-- ✅ **GUD 出图** —— Linux console 已实机显示在 Tab5 屏上，
-  即 USB 枚举 → `drm/gud` 绑定 → `/dev/dri/cardN` → 收帧 → PPA 缩放旋转 → 面板
-  整条链路打通。
-- ✅ **MIPI-DSI 面板点亮** —— 720×1280 竖屏，2 lane @ 1000 Mbps，两种面板批次运行时 I2C 探测。
-  实机验证通过（开发用机为 ILI9881C 批次；ST7123 路径只编译未上板）。
-- ✅ **PPA 缩放 + 旋转** —— 一次 SRM 操作完成 2× 放大 + 90° 旋转，640×360 铺满面板。
-  实机验证通过，旋转方向已标定（`DISPLAY_ROT_CCW90 = 1`）。
-- ⏳ **脏矩形 + LZ4 的定量验证**：Linux console 的文本渲染已经在走脏矩形路径且显示正常，
-  但尚未对着 UART 日志确认 `LZ4 解压失败` / `ppa srm 失败` 均为 0 条，也未跑
-  GStreamer 全屏动态内容压测。
-- ⏳ **帧率实测**（两个场景：`videotestsrc` 全屏动态内容测下限、文本终端测实际体感）。
-- ✅ **HID 键盘**（Tab5 Keyboard，I2C `0x6D`，独立总线 G0/G1，INT G50）—— 实机验证通过，
-  键盘输入正常。用键盘固件的 Normal 模式自建 6KRO 状态机，不用其自带的 HID 模式
-  （修饰键不进队列、一次只能表达一个键），详见 `firmware/README.md`。
-- ✅ **HID 多点触摸**（GT911，`0x14`，与键盘共用一个 HID 接口、用 Report ID 区分：
-  RID 1 键盘 / RID 2 digitizer，不新增端点）—— 实机验证通过：host 侧 `hid-multitouch`
-  正常绑定，键盘仍是独立的 input 设备；`ABS_MT_SLOT Max 4`（= `TOUCH_CONTACTS_MAX` − 1）
-  证明 Contact Count Maximum 的 Feature 报告被内核读到；**多点触摸已验证（实测 3 指同时）**，
-  4/5 指未验证。**四角坐标标定已实机验证通过**（X 与 Y 各自都能跑到接近 0 与接近 32767，
-  反变换与轴向都对）。最大的坑是 **TP_INT(G23) 上到 3V3 的上拉电阻会压住 GT911 不出坐标**
-  （现象是完全静默），必须把该脚驱动为低**且**给驱动传 `int_gpio_num = GPIO_NUM_NC`，
-  详见 `firmware/README.md`。
-- ✅ **UAC1 全双工音频 —— 播放与录音均已实机验证**（ES8388 播放 `0x10` / ES7210 双麦录音 `0x40`，
-  一个 I2S 端口真全双工，**16 kHz / 单声道 / S16_LE**）：host 侧枚举成 UAC1 声卡，
-  喇叭**放得出声**、`arecord` **录得到正常的声音**，且 GUD / 键盘 / 触摸无回归。
-  **播放音量控制（UAC Feature Unit）也已实机验证** —— host 侧 `alsamixer` 出 `PCM Playback`
-  通道，拖动直接改 ES8388 的硬件音量（不是主机软件衰减）；录音增益未做。
-  音频已改为**无条件编译**（默认构建就带），排障旋钮全部删除。
-  **尚未验证**：全双工同时收发的长时间稳定性、与 GUD/HID 并跑时对帧率的影响、
-  以及无反馈端点带来的长时间时钟漂移（是否爆音/断续）。
-  这里最贵的一个坑：曾经开音频后不但没出录音设备，**连 GUD 显示也枚举不出来** ——
-  根因是 **IDF 的 `gpio_ll_func_sel()` 把「哪条全速 PHY 归谁」写死了**，配 G26/G27
-  时它会写 `USB_WRAP.otg_conf.usb_pad_enable = 0`，而我们把 OTG 换到了 PHY0，
-  于是关掉的是 **G24/G25 这条 USB-C**。修法是把音频硬件 bring-up 排到
-  `tinyusb_driver_install()` 之前 + 装完后跑一次焊盘修复，详见 `firmware/README.md`。
-  占 IF2/IF3/IF4 与端点 `0x02`(播放 ISO OUT) / `0x83`(录音 ISO IN)；
-  **坚决不用显式反馈端点**，因为最后一条 IN(`0x84`) 要留给 UVC —— **UVC 已经如约用上了它**。
-  参数不是听感定的而是 FIFO 账定的：16 kHz 单声道的 OUT 包 36 B 小于 vendor 已有的 64 B，
-  共享 RX FIFO 一个 word 都不涨，整个音频功能的 FIFO 代价只有录音那 9 words
-  （**可分配的是 242 words 不是 256**，扣完余 123）；48 kHz 立体声会把余量压到 17 words，
-  UVC 那 112 words 直接没位置。详见 `firmware/README.md` 的「UAC1 全双工音频」。
-- ✅ **UVC 摄像头 —— 出真实画面已实机验证**（SC202CS，spec 里「风险最高、允许砍」的那一项，
-  **没砍**）：**MJPEG 640×360 @ 10 fps**，ISO IN `0x84` × 448 字节/帧。
-  整条链路 `SC202CS →(MIPI-CSI 1 lane RAW8 1280×720@30) ISP 去马赛克→ RGB565 →
-  PPA ×0.5 → 硬件 JPEG(4:2:2, q=70) → tud_video_n_frame_xfer()` 已打通，
-  host 侧 mainline `uvcvideo` 出 `/dev/videoN`，`ffplay` 显示真实摄像头画面。
-  实测：CSI 取流 **30 fps 稳定**（抢缓冲 / 丢弃 / 取帧超时全 0，帧长 1843200 正确），
-  UVC 侧**每 10 秒精确 +100 帧、提交 == 完成、零拒收**，亮度跟手（挡住 / 拿开 / 手电三档分明）。
-  **自动曝光（AE）闭环已实机验证**（软件全帧均值 + 目标 120 的那一版）。
-  ⚠️ **限定与未验项**：只声明这**一个**格式/分辨率/帧率（不做多模式协商）；
-  自动白平衡（AWB）闭环、单色场景防护的实际效果、以及**开摄像头时 GUD 帧率的实测变化**
-  均未测（见下方带宽提示与下一条）。
-  最贵的一类坑是 **ESP32-P4 rev <3.0 缺一批硬件功能**（CSI 桥没有颜色转换硬件、
-  JPEG 编码器不吃 YUV420/444、ISP 的 WBG/BLC/crop 不可用），照抄 IDF 例程会直接
-  `ESP_ERR_NOT_SUPPORTED` 或**静默拿到半帧**，`firmware/README.md` 有专章。
-- ⛔ **ISP 对齐（与官方 `esp_ipa` 管线逐级对齐）—— 已实现，全部未上板验证。**
-  10 个 commit（`751b24bb` … `e6201fc3`）把摄像头画质从「对角阵 CCM + 软件全帧 AE +
-  灰世界 AWB」推进到官方口径：**gamma**（4 档，按 `env.luma` 动态选）、
-  **BF / Demosaic / SHARP / Color**（按增益查官方表）、**LSC**（273 格 × 4 通道，按 CCT 3 档）、
-  **CCM**（官方 19 档按 CCT 插值 + 白平衡右乘折叠 + S2.10 强度钳制）、
-  **硬件 AE 5×5 统计**（官方加权测光，采在 demosaic 后）、
-  **硬件 AWB 白点统计**（官方白点框，采在 CCM 前，开环绝对增益公式）、
-  **直方图 + `env.luma` 重建**、以及**黑电平量具**。
-  标定值全部从官方 `sc202cs_default.json` **机械提取**（`firmware/test/isp_cal_extract.py`，
-  `--check` 是烧板前的闸门）。
-  **已验证的只有宿主机侧**：9 组共 **3258** 个用例、两档 clean build 零告警、
-  USB 描述符两档逐字节未变（`check_usb_desc.py` 双档过）、依赖树仍是 12 个目录。
-  ⚠️ **一次都没有烧过板** —— 所有结论都是源码推导与宿主机仿真。
-  每一项都在一个编译开关后面，`firmware/README.md` 的「**上板验证清单**」给出了
-  从底层（统计抽头在不在画面上）到上层（观感）的有序验证顺序、三个判定点
-  （ρ ≈ 0.79 / `env.luma` 重建 / 黑电平基座）、以及「关掉哪个退回哪个 commit」的对照表。
-- ⏳ **五项能力的复合回归尚未执行**（GUD + 键盘 + 触摸 + 音频 + 摄像头同跑 10 分钟）。
-  五项**各自**都已实机验证，且每次新增能力时都复验过前面几项无回归，
-  但「同时全开」这一场压测还没做。可执行规程见 `firmware/README.md` 的
-  「**五项能力复合回归规程**」—— 它同时是 **P0 欠账**（脏矩形/LZ4 定量、GUD 帧率实测）
-  与 **P3 欠账**（全双工长时稳定性、无反馈端点的时钟漂移）唯一的采集时机。
-- ⏳ 规划中：主机侧全局内核 config（`flange_common.config` + builder 注入，对所有 board 生效）。
+当前 ISP 的 gamma、降噪、锐化、LSC、CCM、硬件 AE/AWB、直方图及环境亮度模型的参数和限制，
+统一见[相机参考](firmware/CAMERA.md)。2026-08-21 的记录为 9 组共 3258 个宿主用例及两档 clean build 通过，
+不能据此声明当前 ISP 画质已实机验收。
 
-> USB-C 只有 **12 Mbps 全速**（480 Mbps 的高速口被接到了 USB-A 母座）。带宽是零和的：
-> 摄像头/音频/显示同时使用会明显互相拖慢，这是全速口的物理上限，**不是实现缺陷**。
->
-> 具体到摄像头：**打开摄像头会让显示明显变慢** —— 周期性传输从 172 B/ms 涨到
-> 584 B/ms，留给 GUD 的理论带宽上限从约 1364 掉到约 916 B/ms（**−33%**）。
-> 这是推算值，**实测尚未取得**。反过来，**不开摄像头时影响严格为零**：
-> VideoStreaming 停在 alt 0（零端点、零 ISO 带宽），固件侧连 CSI 都不启动
-> （那 ≈55 MB/s 的 PSRAM 写入是 DPI 面板刷新的直接竞争者）。
+USB-C 是 **12 Mbps 全速口**；摄像头、音频和显示共用带宽。
+摄像头启用后 GUD 可用带宽下降约三分之一是预算估算，尚无整机帧率实测。
+五项同时运行的长期稳定性、音频时钟漂移、LZ4/脏矩形定量性能均未完成验收。
 
-详见 `firmware/README.md`。
-
-## 文档
-
-- 设计/可行性：`docs/superpowers/specs/2026-08-11-tab5-all-in-one-design.md`
-- 实施计划：`docs/superpowers/plans/2026-08-11-tab5-all-in-one-p0-gud-display.md`（GUD 显示）、
-  `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p1-hid-keyboard.md`（HID 键盘）、
-  `docs/superpowers/plans/2026-08-13-tab5-all-in-one-p2-hid-touch.md`（HID 触摸）、
-  `docs/superpowers/plans/2026-08-14-tab5-all-in-one-p3-uac-audio.md`（UAC1 音频）、
-  `docs/superpowers/plans/2026-08-15-tab5-all-in-one-p4-uvc-camera.md`（UVC 摄像头）、
-  `docs/superpowers/plans/2026-08-21-tab5-isp-align-with-official.md`（ISP 对齐）
-- ISP 基线研究：`docs/superpowers/research/2026-08-19-esp32p4-official-isp-pipeline.md`
-  （官方管线逻辑重建）、`docs/superpowers/research/2026-08-19-our-isp-pipeline-audit.md`
-  （对齐前的自身基线审计）
-- 固件细节与构建/烧录/验证：`firmware/README.md`
+同类 ESP32-S3 设备见 [Cardputer](../cardputer-all-in-one/README.md)。

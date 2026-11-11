@@ -1,7 +1,7 @@
 # Arduino UNO Q
 
 目标为 `arduino-uno-q-default-{debug,release}` 与接 Waveshare 10.1" DSI 屏的
-`arduino-uno-q-waveshare-display-10.1a-{debug,release}`（见板级文档）。
+`arduino-uno-q-waveshare-display-10.1a-{debug,release}`（见[板级文档](../../../docs/boards/arduino-uno-q.md)）。
 2 GB/16 GB 与 4 GB/32 GB 共用板级设备树；QDL 按实际容量校验分区布局。
 当前代码和离线检查不能替代实板的冷启动、USB、Wi-Fi、音频和 MCU 验收。
 

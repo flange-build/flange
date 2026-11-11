@@ -15,12 +15,12 @@
 <path d="M70 333 H272" stroke="#dce1e5"/>
 <text x="70" y="362" font-size="18" fill="#24272b" font-weight="400">工作区 + Layer 组合</text>
 <text x="70" y="394" font-size="18" fill="#24272b" font-weight="400">配置与资源校验</text>
-<text x="70" y="426" font-size="18" fill="#24272b" font-weight="400">计划 / 输入 / 依赖</text>
-<text x="70" y="461" font-size="17" fill="#66717c" font-weight="400">plan / why 可解释</text>
+<text x="70" y="426" font-size="18" fill="#24272b" font-weight="400">target show / status</text>
+<text x="70" y="461" font-size="17" fill="#66717c" font-weight="400">目标与产物查询</text>
 <path d="M292 330 H322" fill="none" stroke="#ef6939" stroke-width="2.5" marker-end="url(#arrow)"/>
 <rect x="334" y="178" width="330" height="308" rx="12" fill="#fff2eb" stroke="#f3c7b5"/>
 <text x="354" y="212" font-size="23" fill="#24272b" font-weight="700">Docker 构建环境</text>
-<text x="354" y="248" font-size="22" fill="#ef6939" font-weight="700">flange build</text>
+<text x="354" y="248" font-size="20" fill="#ef6939" font-weight="700">flange build · plan · why</text>
 <text x="354" y="283" font-size="18" fill="#24272b" font-weight="400">构建引擎 · 自动推断依赖</text>
 <text x="354" y="315" font-size="18" fill="#24272b" font-weight="400">内容哈希 · 增量复用</text>
 <path d="M354 336 H644" stroke="#dce1e5"/>
@@ -60,7 +60,8 @@
 <text x="970" y="314" font-size="20" fill="#24272b" font-weight="400">Amlogic</text>
 <text x="970" y="353" font-size="20" fill="#24272b" font-weight="400">Allwinner</text>
 <text x="970" y="392" font-size="20" fill="#24272b" font-weight="400">Qualcomm</text>
-<text x="970" y="446" font-size="17" fill="#66717c" font-weight="400">连接与存储介质</text>
-<text x="970" y="474" font-size="17" fill="#66717c" font-weight="400">以板卡文档为准</text>
+<text x="970" y="431" font-size="20" fill="#24272b" font-weight="400">NVIDIA</text>
+<text x="970" y="476" font-size="17" fill="#66717c" font-weight="400">连接与存储介质</text>
+<text x="970" y="504" font-size="17" fill="#66717c" font-weight="400">以板卡文档为准</text>
 <text x="40" y="779" font-size="18" fill="#66717c" font-weight="400">构建不需要连接开发板；刷写与运行验证需要真实设备。Docker 镜像与设备系统镜像用途不同。</text>
 </g></svg>

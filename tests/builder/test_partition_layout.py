@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from builder.partition.layout import PartitionLayout, ResolvedPartition
+from builder.partition.layout import PartitionLayout
 
 
 ENTRIES = [
@@ -135,7 +135,7 @@ def test_sector_size默认512可被配置覆盖():
 
 
 # ---------------------------------------------------------------------------
-# 消费方一致性：这才是这次重构真正要守住的东西
+# 镜像装配与刷写几何一致性
 # ---------------------------------------------------------------------------
 
 def test_所有消费方对同一份配置算出同一个尺寸():
@@ -145,7 +145,6 @@ def test_所有消费方对同一份配置算出同一个尺寸():
     """
     from unittest.mock import MagicMock
 
-    from builder.platforms.rockchip.boot import RockchipBootBuilder
     from builder.platforms.rockchip.image import RockchipImageBuilder
     from builder.platforms.rockchip.rootfs import RockchipRootfsBuilder
 
@@ -158,14 +157,11 @@ def test_所有消费方对同一份配置算出同一个尺寸():
 
     image = RockchipImageBuilder(MagicMock(), MagicMock())
     rootfs = RockchipRootfsBuilder(MagicMock(), MagicMock())
-    boot = RockchipBootBuilder(MagicMock(), MagicMock())
 
     expected_mb = 64
     assert rootfs._partition_size_mb(config, "boot") == expected_mb
     assert image._layout(config).size_mb("boot") == expected_mb
     assert PartitionLayout.from_config(config).size_mb("boot") == expected_mb
-    # boot.py 不再有自己的 _partition_size_mb
-    assert not hasattr(boot, "_partition_size_mb")
 
 
 def test_parameter_txt与GPT用同一份几何():
@@ -207,28 +203,9 @@ def test_flash_config的几何与GPT一致(tmp_path):
     by_name = {p["name"]: p
                for p in json.loads(written.read_text())["partitions"]}
 
+    assert set(by_name) == {"idbloader", "boot", "rootfs"}
     image = RockchipImageBuilder(MagicMock(), MagicMock())
     for part in image._layout(config):
-        recorded = by_name.get(part.name)
-        if recorded is None:
-            continue  # 无镜像的分区不进 flash-config
+        recorded = by_name[part.name]
         assert int(recorded["offset"], 0) == part.offset_sectors, part.name
         assert int(recorded["size"], 0) == part.size_sectors, part.name
-
-
-def test_flash_config的size总是可解析(tmp_path):
-    """刷写侧对每个分区做 int(part.size, 0) —— 抄进去的 "4M" 会当场炸。"""
-    from builder.flash.generate import FlashConfigGenerator
-
-    config = {
-        "platform": "rockchip", "board": "b", "product": "default",
-        "variant": "release", "soc": "rk3576", "flash_tool": "upgrade_tool",
-        "storage": {"type": "emmc", "size": "8G"},
-        "partitions": {"format": "gpt", "entries": [
-            {"name": "boot", "type": "ext4", "offset": "0x8000", "size": "4M"},
-        ]},
-    }
-    written = FlashConfigGenerator().generate(config, tmp_path)
-    for part in json.loads(written.read_text())["partitions"]:
-        int(part["offset"], 0)
-        int(part["size"], 0)

@@ -1,8 +1,8 @@
 // Orange Pi CM5 Tablet 板级配置：声明设备树、产品变体和板载硬件策略。
 // OrangePi CM5 Tablet (RK3588S) 板级配置
 //
-// 首版交付范围：**console + WiFi/BT 硬件就绪**，与 [[orangepi-cm4]] / [[radxa-rock5b]]
-// / [[orangepi-5-plus]] 三板「不点屏」惯例对齐。Tablet 形态特有外设——DSI LCD
+// 首版交付范围：**console + WiFi/BT 硬件就绪**，与 orangepi-cm4 / radxa-rock5b
+// / orangepi-5-plus 三板「不点屏」惯例对齐。Tablet 形态特有外设——DSI LCD
 // （rkr5.1 已含 ``rk3588s-orangepi-cm5-tablet-lcd.dtsi``）、触屏控制器、电池/充电
 // PMIC、MIPI CSI 相机（``-tablet-camera{1,2,3}.dtsi``）—— 全部不在首版范围，靠
 // dts 默认 disabled 自然屏蔽。
@@ -20,7 +20,7 @@
 // （逐字节复用 cm4 同名 patch）—— 启用 ``-DFW_AMPAK_PATH=""brcm""``，让驱动按
 // ``/lib/firmware/brcm/<file>`` 查 AP6256 固件，与 ``extra_firmware`` 部署路径
 // 对齐。**不**移植 cm4 0001（dtsi bootargs，dts 路径不通用）与 0003（NPU disable，
-// cm5-tablet 上 NPU 状态未验，apply 阶段 dmesg 判断后视情起独立 change）。
+// cm5-tablet 上 NPU 状态未验，需按运行内核 dmesg 和供电配置验证）。
 local product = std.extVar('product');
 
 {
@@ -39,7 +39,7 @@ local product = std.extVar('product');
       // 用户 flange/flange 入 sudo group。
       // 不在 board 层覆盖 bootloader.defconfig：沿用 SoC 层 generic
       // rk3588_defconfig。RK3588 / RK3588S 同 die 同 BootROM，u-boot 阶段无差异；
-      // 若 apply 阶段 SPL 无 UART 输出 / DDR init 失败，备胎是切到 radxa-pkg
+      // 若 SPL 无 UART 输出 / DDR init 失败，应先核对板级配置与 DDR；可对照 radxa-pkg
       // u-boot 已有的 radxa-cm5-io-rk3588s_defconfig，最后才考虑 patch 新 defconfig
       // （见 change design Risk R1）。
       //

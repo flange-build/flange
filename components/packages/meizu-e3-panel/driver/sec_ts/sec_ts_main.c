@@ -946,8 +946,8 @@ static irqreturn_t sec_ts_irq_thread(int irq, void *ptr) {
 
 	ts = (struct sec_ts_data *)ptr;
 
-	/* a7a 防御性限速到 100Hz：触摸 IC 开机浪涌欠压锁死（根因见
-	 * docs/proposal/t6_dsi_power_analysis.md 与 [[sec_ts 触摸 a7a 供电欠压]]）会把 INT
+	/* a7a 防御性限速到 100Hz：触摸 IC 无响应（现象与验证边界见
+	 * docs/hardware/a7a-touch-power.md）会把 INT
 	 * 钉低引发中断风暴（engine 模式实测 ~1748/s）狂读共享 i2c-2 拖垮背光。距上次"处理"不足
 	 * HZ/100(10ms) 的中断直接返回、不读事件 → 不碰 i2c → 总线放空、背光不被拖死锁。代价：
 	 * level-low 下硬中断仍快速重触发占一个核，故配套把本 IRQ 亲和性钉到小核(见 probe)。
@@ -1848,7 +1848,7 @@ static int sec_ts_probe(struct i2c_client *client,
 
 	/* a7a：把触摸 IRQ 亲和性钉到小核(A55=cpu0-5)，避免故障态欠压 storm 占用大核
 	 * (A76=cpu6-7)。掩码 0x3f 为 A733 拓扑专属，故仅 sec,irq-storm-guard(a7a) 启用，
-	 * 不误伤 rock-5b(rk3588 小核=cpu0-3) / q6a。详见 [[sec_ts 触摸 a7a 供电欠压]]。 */
+	 * 不误伤 rock-5b(rk3588 小核=cpu0-3) / q6a。详见 docs/hardware/a7a-touch-power.md。 */
 	if (ts->plat_data->irq_storm_guard) {
 		struct cpumask little;
 		int cpu;

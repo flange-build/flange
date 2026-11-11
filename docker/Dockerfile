@@ -125,7 +125,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # UFS）。Ubuntu 24.04 仓库无 gcc-10，装独立可重定位的 kernel.org crosstool gcc-10.5 aarch64
 # （prefix aarch64-linux-）。全平台 u-boot/kernel 默认工具链 = builder/base.py 的
 # ComponentBuilder.CROSS = /opt/aarch64-gcc10/bin/aarch64-linux-（各 platform builder 不覆盖；
-# app 构建仍用系统 gcc）。单独成层保留上面 apt 大层缓存。详见 openspec selfbuild-rk3576-spi-image。
+# app 构建仍用系统 gcc）。单独成层保留上面 apt 大层缓存。详见 docs/boot-and-flash.md。
 RUN curl -fsSL "https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/10.5.0/x86_64-gcc-10.5.0-nolibc-aarch64-linux.tar.xz" \
         | tar -xJ -C /opt \
     && ln -sfn /opt/gcc-10.5.0-nolibc/aarch64-linux /opt/aarch64-gcc10 \

@@ -208,12 +208,12 @@
 		/* a7a 专用：跳过 on-probe 的 SW_RESET 引导握手 + 固件强刷。芯片出厂已带可用
 		 * 固件(无需重刷)；SW_RESET 在 drv 模式会刷死、在 engine 模式虽安全但既不能消
 		 * 除 idle 持续拉 INT(根因在芯片/模组侧)、又因芯片不回 BOOT_COMPLETE 致
-		 * wait_for_ready 超时白加 ~2.8s 开机延时，故一并跳过。触摸靠 read_event 轮询
-		 * 正常工作。rock-5b overlay 不设此属性，走完整 SW_RESET + fw-update 路径。 */
+		 * wait_for_ready 超时白加 ~2.8s 开机延时，故一并跳过。这只跳过初始化握手，不代表触摸
+		 * 已恢复正常。rock-5b overlay 不设此属性，走完整 SW_RESET + fw-update 路径。 */
 		sec,skip-fw-update-on-probe;
-		/* a7a：触摸 IC 开机浪涌欠压锁死后 INT 钉低引发中断风暴拖垮共享 i2c-2 背光
-		 * （根因见 docs/proposal/t6_dsi_power_analysis.md）。启用故障态中断保护：
-		 * sec_ts_irq_thread 限速 100Hz + IRQ 亲和性钉小核。根治仍需硬件加 bulk 电容。 */
+		/* a7a：触摸 IC 无响应后 INT 钉低引发中断风暴拖垮共享 i2c-2 背光
+		 * （现象与验证边界见 docs/hardware/a7a-touch-power.md）。启用故障态中断保护：
+		 * sec_ts_irq_thread 限速 100Hz + IRQ 亲和性钉小核。供电瞬态与电容方案仍需实测，限速不修复触摸本身。 */
 		sec,irq-storm-guard;
 	};
 

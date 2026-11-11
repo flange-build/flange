@@ -1,19 +1,11 @@
 # Arduino UNO Q
 
-UNO Q 使用 QRB2210 Linux 主处理器和 STM32U585 微控制器（MCU）。flange 的目标是提供
-Ubuntu 系统及完整 Arduino 工具链、Router/Bridge、App Lab 和 Bricks。已完成离线实现、组件构建和镜像组装验证，
-已完成首次 debug 启动、ADB、Wi-Fi 联网和部分运行时热修复验证，完整实板验收仍未完成；最新证据见 [OpenSpec 验证记录](../../openspec/changes/add-qrb2210-arduino-uno-q/verification.md)。
+UNO Q 使用 QRB2210 Linux 主处理器和 STM32U585 MCU（微控制器）。flange 提供 Ubuntu、
+Arduino 工具链、Router/Bridge、App CLI、Bricks 及离线运行资源。
+默认 debug 镜像已完成全量刷写、重复启动、启动成功标记和 Linux 到 MCU 的上传/RPC 验证；
+下方验证表限定实际完成范围，release 和 App Lab 桌面端的完整流程不能由此推定。
 
-2026-09-09 已通过标准 Docker 环境端到端构建 default-debug 成套镜像，包含首轮实板热修复。
-最终交付的烧入和冷启动验收由用户执行；release 的离线基线不代表这批 debug 修复已完成 release 实板验收。
-
-公共构建器改动、可复用新增能力及板级实现的边界，见[适配影响清单](arduino-uno-q-integration.md)。
-
-当前已知限制：qbootctl 启动成功确认尚未完成，反复重启仍可能耗尽 A/B 尝试次数；
-QDL 在写完后的复位或 USB 收尾阶段曾出现等待不退出，具体阻塞点待定位。
-当前 CPUidle 驱动也未注册；音频声卡/UCM 可枚举但存在启动路由报错，实际音频未验证。
-这些问题和未完成的硬件验收需在合入评审中明确保留，不能声明完整生产可用。
-
+[板卡索引](README.md) · [运行时与资源版本](../../components/packages/arduino-unoq-runtime/README.md)
 
 ## 目标与构建
 
@@ -120,7 +112,7 @@ UNO Q 不支持 `--no-reboot`，因为 QDL 会自行复位。它也不使用现�
 
 运行时使用 Ubuntu 原生系统库，固定并校验 Arduino 二进制、Zephyr core、上传工具、Bridge 库和容器摘要。
 不安装会替换 flange 内核的 Debian `arduino-unoq` 元包。
-构建门禁检查 ELF（可执行文件格式）依赖，并实际编译一个 MCU sketch；这不代表上传及板间通信已经验证。
+构建检查 ELF（可执行文件格式）依赖并编译 MCU sketch；Linux 到 MCU 的上传及板间通信另有下表实机结果。
 
 设备端可检查：
 
@@ -177,19 +169,37 @@ flange flash --yes
 实板（debug）已验证：横屏显示、触摸四角与拖动对齐、12 个载板 LED 与板载 LED 均注册、
 无失败单元。音频与摄像头未验证。
 
-## 实板验收清单
+## 已验证结果与限制
 
-以下为最终烧入后的验收范围。此前热修复系统上的部分验证已经通过，仍须对最终镜像复验；
-每项记录镜像摘要、设备状态、命令输出及失败日志。操作步骤见[本轮交付与验收](arduino-uno-q-handoff.md)。
+2026-11-08，`arduino-uno-q-default-debug` 在 4GB/32GB 实板完成以下验证；
+写入记录中的 36 项均为 `written`。该状态表示工具写入完成，启动及应用结论来自后续独立检查。
 
-- 官方系统基线、板卡身份和可恢复备份；EDL 恢复、全量刷写及 efi/rootfs/boot_a 单刷。
-- 冷启动、重复重启、正确内核/模块/initrd、独立 userdata 挂载、启动成功标记及更新后的数据保留。
-- Wi-Fi 扫描/连接、Bluetooth、USB Host、ADB 重连与实际使用的供电路径。
-- GPU/桌面、USB-C 显示、音频输入输出；摄像头与载板按实际配件逐项记录。
-- MCU 编译上传、Router 双向 RPC（远程过程调用）、重复重启后 sketch 保留。
-- App Lab 连接与应用创建，Bricks 运行/停止/恢复，以及离线容器和模型的可用范围。
+| 范围 | 已确认结果 |
+| --- | --- |
+| 完整镜像 | 全量刷写后启动，无失败 systemd 单元；rootfs 从约 9 GiB 扩展到约 9.8 GiB，userdata 独立挂载 |
+| A/B 启动成功 | qbootctl 服务成功标记 boot_a，最终属性为 `0x77`，boot_b 为 `0`，再次重启保持成功状态 |
+| Arduino 账户与容器 | debug 口令不强制过期，用户属于 sysupgrade 组；首启导入五种容器，保留官方标签；App CLI `/v1/version` 返回 0.13.0 / HTTP 200 |
+| MCU 初始化 | `mcu-initialize --replace-mcu-firmware` 经 SWD 识别 STM32U585，RDP 0、TrustZone 关闭，执行成功 |
+| MCU 编译与上传 | `arduino:zephyr:unoq` 的 Bridge 验证 sketch 编译、上传到 `0x08100000` 成功 |
+| Bridge RPC | 官方 python-apps-base 0.12.0 环境下 echo 三次正确，计数返回 18、19、20 |
+| 复位与调试 | Router 重启复位 MCU，约 6 秒后恢复 RPC；arduino-reset 可用；OpenOCD/GDB 0.16.8 的 halt、stepi、detach 后 RPC 继续工作 |
 
-完成容器构建与全部实板验收后，才同步正式能力规格并归档本次 OpenSpec 变更。
+官方 251020 ABL 在本次实际 DTB 中未提供槽位参数。`mark-boot-success` 在这种情况下仅接受 GPT 中
+**唯一可启动的 boot 槽位**；另一槽必须完全不可启动，存在歧义就拒绝标记，不能把优先级猜测当作当前槽位。
+该回退曾把 boot_a `0x2f` 标记到 `0x67` 并通过重启，随后最终完整镜像的属性稳定为 `0x77`。
+
+此前 debug 实板已验证基本启动、ADB 与 Wi-Fi 联网。Waveshare 产品的显示、触摸和 LED 结果见上节。
+这些结果不扩大为以下未完成项：
+
+- PC 端 ADB 上传、网络上传，以及 App Lab 桌面端设备发现、首次设置和完整应用流程。
+- 全部 Bricks、模型、Bluetooth 配对、USB 双角色/重连组合和每种供电方式的验收。
+- 音频实际输入输出；目前声卡/UCM 可枚举，但存在启动路由报错。
+- CPUidle 驱动仍未注册，PSCI 曾出现 `-517`；不能声明低功耗功能完成。
+- release 实板验收、所有容量版本及长期压力测试。
+
+QDL 曾在写完后的复位/USB 收尾阶段不退出；2026-11-08 的完整写入已完成，
+但这不足以证明该偶发问题对所有宿主与 USB 路径已消失。遇到等待时保留 `program.log` 和 flash-records，
+先确认写入阶段与设备状态，避免直接重复刷写。
 
 ## 上游基线
 

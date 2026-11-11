@@ -4,7 +4,7 @@
 // APP 分区 /boot/extlinux → Linux；刷写只能在 USB Recovery（0955:7c18）下用
 // BSP 自带的 tegraflash 完成。L4T R32 的 CUDA / 硬件编解码 / 摄像头只在 4.9 内核 +
 // Ubuntu 18.04 用户态上完整可用，所以本平台把 rootfs 基线换成 18.04。
-// 设计依据见 openspec/changes/add-tegra186-jetson-tx2/design.md。
+// 设计依据见 docs/boards/nvidia-jetson-tx2.md。
 local lib = import 'config/lib.libsonnet';
 
 // L4T 用户态包版本必须与 BSP 启动链（R32.7.6）和内核一致。

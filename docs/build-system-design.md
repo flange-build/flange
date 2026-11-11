@@ -1,7 +1,7 @@
-# flange 构建系统设计与维护指南
+# flange 构建系统架构
 
 本文描述当前代码边界及修改落点。操作步骤见[开发指南](development-guide.md)，规范见
-[ProjectSpec](../ProjectSpec.md)，重构前问题、处置和验证证据见[设计评审](build-system-review.md)。
+[AGENTS.md](../AGENTS.md)，当前未覆盖的能力见[能力边界](limitations.md)。
 
 第一次阅读源码，可先沿[维护指南的一条命令](maintenance-guide.md#2-跟着一条命令读代码)走一遍；
 已经明确要添加功能时，按[扩展指南](extension-guide.md)选择修改层。本页用于查阅内部契约。
@@ -29,7 +29,8 @@ flowchart LR
 ```
 
 - 宿主负责命令呈现、配置、容器编排、USB 刷写及 ADB 设备会话。
-- Docker 负责目标编译、rootfs/chroot 和镜像制作。
+- Docker 负责目标编译、rootfs/chroot 和镜像制作。系统级 `plan/why` 也转入非特权容器查询，
+  避免由宿主用户读取容器属主的 Git 工作树触发 safe.directory 保护。
 - 工作区保存自己的目标、外部 App 注册和产物路径；工具 checkout 提供代码、模板与平台内容。
 - 平台策略保留硬件配方，通用层承担输入、执行、依赖、缓存和产物契约。
 
@@ -75,7 +76,7 @@ flowchart LR
 | --- | --- |
 | `cli.py`、`commands.py`、`presentation.py` | 命令语法、退出码、人类/JSON 输出；不承载平台配方 |
 | `workspace.py` | 清单、目标选择、路径域与上下文构建 |
-| `config/jsonnet.py` | 四层求值、包配置、归一化和依赖元数据 |
+| `config/jsonnet.py` | 分层求值、包配置、归一化和依赖元数据 |
 | `config/schema.py`、`validate.py` | 闭合结构规则与跨字段/平台语义 |
 | `config/registry.py`、`query.py` | 平台/板卡发现、统一 target 解析和枚举 |
 | `graph.py`、`component_plan.py` | 输入、依赖、启用状态、产物与系统计划 |
@@ -234,12 +235,11 @@ GDB 支持设备端与 `adb forward` 远程模式，符号树与源码映射属�
 | 新设备动作 | argv/设备协议、会话结果、失败退出码、清理路径与模拟/实机验证 |
 | 新 CLI 命令 | 参数层、独立服务、人类与 JSON 结果、非交互和错误帮助 |
 
-局部测试通过后进行集成；真实编译在 Docker 中完成。完整运行结果见评审中的验证记录。
+局部测试通过后进行集成；真实编译在 Docker 中完成。硬件验证范围见各板卡页。
 
 ## 8. 文档事实源
 
 README 提供起点；first-steps 提供首次教学；development-guide 提供操作参考；
 maintenance-guide 和 extension-guide 提供修改路径；本文提供内部边界；
-ProjectSpec 规定项目约束，`openspec/specs/` 记录能力契约。
-历史评审和 `docs/superpowers/` 只能解释当时的决策，不能覆盖当前 CLI 或 schema。
-每次改变入口、路径、字段或输出，必须一起修改当前文档、测试与对应能力规格。
+AGENTS.md 集中维护全部开发与 Agent 规则。功能契约与使用限制在对应结果文档中维护，
+以[文档导航](README.md)为统一入口。入口、路径、字段或输出改变时，同步正文、示例与相关测试。

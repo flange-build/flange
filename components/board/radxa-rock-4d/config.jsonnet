@@ -14,8 +14,7 @@
 // - **SPI NOR**：flange **自编** spi.img（idbloader@32KiB + u-boot.itb@8MiB）。idbloader
 //   用 boot_merger 装配（含引导级 rk3576_boost，SoC 层 `idbloader_method="boot_merger"`），
 //   u-boot proper 用**对板** defconfig `rock-4d-spi-rk3576_defconfig`（DT=rk3576-rock-4d-spi）；
-//   `flange flash --spi-firmware` 写入 SPI（DB→SSD SPINOR→WL 0 spi.img）。详见 openspec
-//   selfbuild-rk3576-spi-image。
+//   `flange flash --spi-firmware` 写入 SPI（DB→SSD SPINOR→WL 0 spi.img）。详见 docs/boot-and-flash.md。
 // - **UFS（4K）**：`flash_storage="SATA"` + `partitions.sector_size=4096`，刷写走
 //   `upgrade_tool di -p parameter.txt` + `di`，由 loader 按 4K 落盘。UFS 只放
 //   boot/recovery/rootfs —— **不放 uboot**（u-boot.itb 在 SPI；实板日志确认 SPL 从
@@ -119,15 +118,12 @@ local product = std.extVar('product');
   // rkbin BL31 + OP-TEE，平台 0006 patch 把 BL32 打进 FIT）。
   // **board 覆盖 defconfig = rock-4d-spi-rk3576_defconfig**（DT=rk3576-rock-4d-spi，
   // 含 SPI NOR 控制器 pinmux + 板级节点）；SoC 层 generic rk3576_defconfig 的
-  // DT=rk3576-evb 缺这些。详见 openspec selfbuild-rk3576-spi-image。
+  // DT=rk3576-evb 缺这些。详见 docs/boot-and-flash.md。
   bootloader+: { defconfig: ['rock-4d-spi-rk3576_defconfig'] },
   rootfs+: {
     // BL31：用 rkbin 自带 v1.24（_parse_trust_ini 读 RK3576TRUST.ini），不 override。
-    // **UFS 崩溃真因（2026-06 逐次上板 + 反汇编坐实）= 工具链**：老 rockchip u-boot 在
-    // Ubuntu 24.04 默认 gcc-13 下整体二进制布局变化 → 开机 malloc 的 UFS GPT 读 buffer
-    // 落到 RK3576 UFS DMA 写不进的坏物理地址 → proper 读到堆残渣崩。须用 gcc-10（base
-    // ComponentBuilder.CROSS 全平台默认，radxa bsp 同款）。BL31 版本 / OP-TEE / DDR /
-    // u-boot 分支 / kconfig 均经上板实测排除。详见 openspec selfbuild-rk3576-spi-image。
+    // UFS DMA 授权由 SPL 设置；当前使用同源自编 SPL 与 proper，配套 GCC 10。
+    // 不能仅以更换编译器代替 SPL/DDR 配套检查，详见 docs/boot-and-flash.md。
     // 与其他 rockchip bring-up 板（rock5b / tspi-rk3566 / cubie-a7z）一致，
     // 开发期设 root 口令便于切板调试；ubuntu-base 默认 root 锁定，不设则
     // root 无法登录（默认 flange/flange 用户仍可 SSH）。

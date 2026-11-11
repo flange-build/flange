@@ -2,7 +2,7 @@
 //
 // fab 相关的 BCT / BPMP DTB / cboot DTB、ODMDATA 与 cmdline 取自同一块实板用
 // L4T R32.7.6 flash.sh 成功刷写后的 flashcmd.txt 与 boot.img（EEPROM：3310-B02-1000-E.0），
-// 证据见 openspec/changes/add-tegra186-jetson-tx2/verification.md。
+// 证据见 docs/boards/nvidia-jetson-tx2.md。
 // TX2 4GB（P3489-0888）、TX2i（P3489-0000）的 BCT 与 DTB 不同，不能复用本配置。
 // overlay/etc/nv_boot_control.conf 取自同一实板（nvbootctrl / OTA 读取），TNSPEC 含该模块的 FAB 与 REV。
 local product = std.extVar('product');

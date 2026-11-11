@@ -5,9 +5,9 @@ radxa/rockchip u-boot 的 SPL FIT 生成器 make_fit_atf.sh 默认注释掉 gen_
 u-boot.itb 不含 OP-TEE(BL32) 节点。本 patch 取消该注释，使 rockchip SoC 的 u-boot.itb
 把 rkbin 提供的 tee.bin(OP-TEE) 打进 FIT，供 secure 世界服务。
 
-说明（2026-06 实测）：OP-TEE 进 FIT 与 RK3576 UFS 启动崩溃**无关**——崩溃真因是
-gcc-13 编老 rockchip u-boot 的整体二进制布局让 UFS DMA 读 buffer 落到坏物理地址（须用
-gcc-10，见 base ComponentBuilder.CROSS）。曾一度删此 patch 排查 OP-TEE，证伪后恢复。
+OP-TEE 打包满足启用 OPTEE_CLIENT 的引导链要求；RK3576 UFS 的 DMA 授权另由
+配套 SPL 初始化。不能以关闭 OP-TEE 或只更换 GCC 来代替 SPL/proper 配套检查，
+详见 docs/boot-and-flash.md。
 
 arm64 路径无需 CONFIG_SPL_OPTEE：fit_args.sh 在 CONFIG_ARM64=y 时令生成器 ARCH=arm64，
 gen_bl32_node 内 `[ "${ARCH}" == "arm" ]` 分支被跳过，仅靠 TEE_LOAD_ADDR 非空（fit_args.sh
@@ -16,7 +16,7 @@ gen_arm64_configurations 接入 config loadables，SPL 加载交 BL31。（注�
 不可用于 arm64——会拉入 armv7 专用汇编 common/spl/spl_optee.S 编不过；本 patch 不依赖它。）
 
 tee.bin 由 flange bootloader 既有逻辑从 rkbin RKTRUST 的 BL32 段复制到位（各 rockchip SoC
-的 RKTRUST.ini 均含 BL32_OPTION），Python 代码零改动。详见 openspec selfbuild-rk3576-spi-image。
+的 RKTRUST.ini 均含 BL32_OPTION），Python 代码零改动。详见 docs/boot-and-flash.md。
 ---
 --- a/arch/arm/mach-rockchip/make_fit_atf.sh
 +++ b/arch/arm/mach-rockchip/make_fit_atf.sh

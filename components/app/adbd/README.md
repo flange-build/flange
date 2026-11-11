@@ -3,15 +3,17 @@
 Android Debug Bridge daemon，作为 [usbmoded](../usbmoded/README.md) 的 adb
 能力后端。
 
-本 App 只提供两样东西：
+本 App 提供 `/usr/bin/adbd` 预编译二进制，以及按目标 init 系统选择的服务：
 
-- `/usr/bin/adbd` —— 预编译二进制（来源见下）
-- `/lib/systemd/system/usbmoded-adbd.service` —— daemon unit
+| init | 服务入口 |
+| --- | --- |
+| systemd | `/lib/systemd/system/usbmoded-adbd.service` |
+| OpenRC | `/etc/init.d/usbmoded-adbd` |
 
-**unit 不开机自启**（`auto_start: false`）。它的启停完全由 usbmoded 的 adb
-能力驱动：FunctionFS 要求 daemon 在 gadget 绑定 UDC 之前打开 ep0 并写入
-描述符，这个时序只有 usbmoded 知道。unit 因此没有 `[Install]` 段，
-`systemctl is-enabled` 显示 `static` 是预期结果。
+两者均声明 `auto_start: false`，默认由 usbmoded 的 ADB 能力管理启停。
+FunctionFS 要求 daemon 在 gadget 绑定 UDC 前打开 ep0 并写入描述符，时序由 usbmoded 控制。
+systemd unit 没有 `[Install]` 段，`systemctl is-enabled` 显示 `static` 是预期结果。
+OpenRC 的安装策略不主动撤销用户此前启用的服务；应避免额外启动入口与 gadget 编排竞争。
 
 gadget 配置、场景定义、`usb-mode` CLI 与控制协议都属于 usbmoded，见
 [usbmoded 的 README](../usbmoded/README.md)。
@@ -99,7 +101,7 @@ readelf -d build/linux-adbd-armhf/vendor/adbd
 脚本默认启用 `ADBD_ONLY`、`FULLY_STATIC`、`USB` 及内置依赖。确认两份产物均无 `NEEDED`
 条目后，将它们分别复制到 `components/app/adbd/bin/adbd-arm64` 与 `adbd-armhf`，更新摘要。
 
-## 历史：为什么替换旧 vendor adbd
+## macOS USB 兼容性
 
 旧 vendor adbd（协议 1.0.28，Android 5 时代）在 macOS adb host（1.0.41+）
 claim interface 时必然崩溃：macOS 版 adb 在 claim 后发预防性
@@ -112,10 +114,3 @@ unbind UDC → 设备从总线消失 → host 重试 → 无限循环（实测 2
 AOSP 于 Android 10 时代修复（`daemon/usb.cpp`：首包前的 read `EPIPE` →
 resubmit 而非拆接口），ADB 36.0.1 含此修复，已在 rock5b + macOS 实测：
 枚举即连、冷启动零干预可用、push ≈85 MB/s（USB 2.0 高速）。
-
-2026-08-27 首次采用上游 release（2026-07-22）的 arm64 资产
-`adbd-36.0.1-linux-aarch64-static`，SHA256 为
-`e7876da9ddf2fd74176de83b7ff276252292c0e5e1150565d53a812c6eab2442`。
-上游未发布 armhf 资产，当时在 ROCK5B Ubuntu 24.04 上用 GCC 13.3.0 交叉编译，
-旧产物 SHA256 为 `840bc2410ad025dd2f008061e5461c88e9743b630c0ecd91732f50705fb8a6fa`，
-只验证过 aarch32 用户态 TCP 监听、连接及 shell。这些历史验证不代表本次产物的运行结果。

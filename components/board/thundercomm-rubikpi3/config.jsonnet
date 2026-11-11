@@ -6,11 +6,11 @@
 // - default / desktop：板级覆盖为 Thundercomm Yocto（QLI 1.5）同款厂商内核 rubikpi-ai/linux
 //   6.6.90 + 高通下游视频驱动，EL1（Gunyah）下 DSP 与硬件编码同时可用。GPU 仍走 drm/msm +
 //   Ubuntu Mesa，不引入 Yocto 的 KGSL 与闭源 Adreno 用户态。详见
-//   openspec/changes/archive/2026-09-28-align-rubikpi3-vendor-kernel。
+//   docs/boards/thundercomm-rubikpi3.md。
 // - mainline：继承 SoC 层 mainline 内核 radxa/kernel@linux-7.0.2（与 Q6A 相同），EL2（KVM），
 //   venus 硬件编码可用；ADSP / CDSP 离线——7.0.2 的 EL2 PAS 需 TZ 实现 PAS_GET_RSCTABLE，
 //   本板 TZ 00126.1 返回 -5（Q6A 靠 Radxa UEFI 预加载 DSP，本板 UEFI 没有该能力）。
-//   详见 openspec/changes/archive/2026-09-30-add-rubikpi3-mainline-product。
+//   详见 docs/boards/thundercomm-rubikpi3.md。
 //
 // ## 启动固件位于 UFS（与 Q6A 的 SPI NOR 不同）
 //

@@ -212,9 +212,7 @@ def test_all_repository_app_and_package_manifests_are_strict():
         load_package_manifest_dir(manifest.parent)
 
 
-def test_ci_uses_scoped_pinned_openspec_and_canonical_target_parser(tmp_path, monkeypatch):
-    ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text()
-    assert "@fission-ai/openspec@1.2.0 validate --all --strict" in ci
+def test_ci_uses_canonical_target_parser(tmp_path, monkeypatch):
     workflow = yaml.safe_load((PROJECT_ROOT / ".github/workflows/build.yml").read_text())
     step = next(item for item in workflow["jobs"]["build"]["steps"] if item.get("id") == "target")
     assert "from builder.config.query import parse_target" in step["run"]

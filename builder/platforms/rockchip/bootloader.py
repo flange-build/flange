@@ -86,7 +86,7 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         # 预编 spi.img 板（RK3576 ROCK 4D）：整套 SPI 启动固件用 radxa bsp 预编的
         # spi.img（board 声明 bootloader.prebuilt_spi_image，flash.py 直接刷之），
         # flange 不自编 u-boot —— 此处只产 DB 刷写阶段要用的 miniloader.bin，跳过
-        # u-boot/idbloader/itb 自编。为何不自编详见 openspec design「bootloader 根因」。
+        # u-boot/idbloader/itb 自编。预编译固件的使用边界见 docs/boot-and-flash.md。
         if prebuilt_spi_image:
             loader_ini = self._loader_ini_path(firmware_dir, config)
             self.docker.run([
@@ -170,7 +170,7 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         # 自洽 → SCSI READ 数据静默不落 buffer → proper 读 UFS GPT 拿残渣 →
         # Synchronous Abort。官方 bsp 即 sed RK3576MINIALL.ini 的 FlashBoot=自编
         # spl/u-boot-spl.bin（FlashBoost/FlashData 仍 rkbin），再 boot_merger。详见
-        # openspec selfbuild-rk3576-spi-image design。
+        # docs/boot-and-flash.md 的 Rockchip 引导说明。
         use_boot_merger = (
             config["bootloader"].get("idbloader_method") == "boot_merger")
         use_selfbuilt_spl = config["bootloader"].get(
@@ -194,7 +194,7 @@ class RockchipBootloaderBuilder(ComponentBuilder):
         #    FlashBoot 的）ini 装配 NEWIDB；RK3506 是 DDR + SPL，RK3576 还含 boost。
         #    此处整段跳过 mkimage。
         #  - 其他 RK35xx：mkimage -T rksd -d ddr:spl 产 idbloader.img（rkbin 预编 blob）。
-        # 详见 openspec selfbuild-rk3576-spi-image design Decision 1。
+        # RK3576 的 SPL/DDR 打包约束见 docs/boot-and-flash.md。
         if not use_boot_merger:
             ddr_bin, spl_bin = self._parse_loader_ini(loader_ini, firmware_dir)
             self.docker.run([
