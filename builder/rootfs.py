@@ -26,6 +26,7 @@ from builder.config.canonical import kernel_headers_package
 from builder.docker import BuildError
 from builder.firmware_panel import encode_file as _encode_panel_file
 from builder.partition.layout import PartitionLayout
+from builder.packaging.staging import stage_packages
 from builder.snapshot import SnapshotStore
 from builder.rootfs_storage import rootfs_staging
 from builder.rootfs_base import (
@@ -134,6 +135,8 @@ class RootfsBuilder(ComponentBuilder):
                 self._save_base_snapshot(rootfs_dir, base_cache_path)
             if self.output:
                 self.output.dedent()
+
+        (rootfs_dir / "etc" / "fstab").unlink(missing_ok=True)
 
         # Phase 2：每次都跑。步骤间有两条顺序硬约束——board overlay 必须在
         # app deb 之后（overlay 要压回 deb 里的 conffile），rootfs overlay
@@ -250,17 +253,23 @@ class RootfsBuilder(ComponentBuilder):
             raise RuntimeError("rootfs 构建必须注入 WorkspaceContext")
         return self.context.target_dir
 
-    def _install_app_debs(self, rootfs_dir: Path, config: dict) -> None:
-        """只安装本次报告中请求 App 的完整运行依赖闭包。"""
+    def _app_runtime_packages(self, config: dict):
+        """校验报告内容和目标身份，返回请求 App 的完整运行包闭包。"""
         names = self._component_config(config).get("custom_packages") or []
         if self.app_report is None:
             raise BuildError("rootfs 缺少本次构建的 AppBuildReport")
         if not self.app_report.validate():
             raise BuildError("App 产物已经变更或缺失，拒绝安装")
         from builder.toolchain import userland_identity
-        if self.context is not None and self.app_report.userland_identity != userland_identity(config, self.context):
-            raise BuildError("App 报告发行版/ABI 与 rootfs 不匹配，请重新构建")
-        packages = self.app_report.runtime_packages_for(names)
+        if self.context is not None:
+            expected = userland_identity(config, self.context)
+            if self.app_report.userland_identity != expected:
+                raise BuildError("App 报告发行版/ABI 与 rootfs 不匹配，请重新构建")
+        return self.app_report.runtime_packages_for(names)
+
+    def _install_app_debs(self, rootfs_dir: Path, config: dict) -> None:
+        """只安装本次报告中请求 App 的完整运行依赖闭包。"""
+        packages = self._app_runtime_packages(config)
         if any(package.format != "deb" for package in packages):
             raise BuildError("APT rootfs 策略仅支持安装 DEB 格式的 App 包")
         deb_files = tuple(package.path for package in packages)
@@ -268,17 +277,12 @@ class RootfsBuilder(ComponentBuilder):
             return
         names = [deb.name for deb in deb_files]
         self._status(f"安装 {len(deb_files)} 个 deb: {', '.join(names)}")
-        deb_tmp = rootfs_dir / "tmp" / "flange-debs"
-        deb_tmp.mkdir(parents=True, exist_ok=True)
-        for deb in deb_files:
-            shutil.copy2(deb, deb_tmp)
-        with ChrootContext(rootfs_dir, self.docker) as chroot:
-            chroot.run(
-                ["dpkg", "-i", "--force-confnew"]
-                + [f"/tmp/flange-debs/{deb.name}" for deb in deb_files],
-                label=f"dpkg -i ({len(deb_files)} 个包)...",
-            )
-        shutil.rmtree(deb_tmp)
+        with stage_packages(packages, rootfs_dir, "flange-debs") as paths:
+            with ChrootContext(rootfs_dir, self.docker) as chroot:
+                chroot.run(
+                    ["dpkg", "-i", "--force-confnew", *paths],
+                    label=f"dpkg -i ({len(deb_files)} 个包)...",
+                )
 
     def _install_kernel_modules(self, rootfs_dir: Path, config: dict) -> None:
         """把 kernel 产物里的 lib/modules 子树整体复制进 rootfs。
@@ -328,17 +332,10 @@ class RootfsBuilder(ComponentBuilder):
         return self.FSTAB_MOUNTS
 
     def _install_fstab(self, rootfs_dir: Path, config: dict) -> None:
-        """写 /etc/fstab；overlay 已声明真实 fstab 则不覆盖。
-
-        判据是"是否含挂载项标记"而非"是否有非注释行"：ubuntu-base tarball
-        自带的占位 fstab 只有一行 "# UNCONFIGURED FSTAB FOR BASE SYSTEM"
-        注释、没有任何挂载项，按后者判会被误认成"overlay 已接管 fstab"。
-        """
+        """base fstab 在定制前移除；保留定制结果，否则生成板级挂载项。"""
         fstab = rootfs_dir / "etc" / "fstab"
-        if fstab.exists():
-            existing = fstab.read_text()
-            if any(marker in existing for marker in ("LABEL=", "UUID=", "/dev/", "PARTUUID=")):
-                return
+        if fstab.exists() or fstab.is_symlink():
+            return
         fstab.parent.mkdir(parents=True, exist_ok=True)
 
         mounts = self._fstab_mounts(config)

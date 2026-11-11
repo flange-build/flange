@@ -10,12 +10,12 @@
 
 | `app.type` | 默认行为 |
 | --- | --- |
-| `exec` | 可执行程序、runtime deb；默认运行 `/usr/bin/<name>` |
-| `service` | 带 systemd unit 的 deb；运行时重启服务，日志读取 journal |
+| `exec` | 可执行程序、runtime 包；默认运行 `/usr/bin/<name>` |
+| `service` | 携带当前 init 的原生服务文件；运行时重启服务，按 init 读取日志 |
 | `lib` | 运行库与开发文件拆包；开发包依赖对应版本的运行包 |
 | `test` | 可执行验证程序或脚本，支持设备测试结果记录 |
 | `vendor` | 按安装树交付固件、工具或厂商组件；可带 Debian 维护脚本 |
-| `staging` | 只发布依赖安装树，不生成 runtime deb |
+| `staging` | 只发布依赖安装树，不生成 runtime 包 |
 | `amp` | 协处理器固件，必须通过系统 `amp` 组件构建 |
 
 普通 AppBuilder 不把 AMP 声明当空构建成功。AMP 的 SDK、内存与固件格式由对应平台组件处理。
@@ -63,11 +63,13 @@ data_dirs: [/var/lib/telemetry]
 | `build.commands` | custom 专用非空 argv 列表的列表；不接受 shell 字符串 |
 | `build.staging` | 相对 `FLANGE_APP_WORK_DIR` 的非空安装树；staging 类型必须声明 |
 | `build.deb_outputs` | custom vendor 的旧完整 DEB 声明，规范化为全部 runtime；不能与 packaging 混用 |
-| `packaging.format` | 包格式，缺省 deb；由已注册的 PackageBackend 处理 |
+| `packaging.format` | 包格式，省略时取目标发行版默认值；由已注册的 PackageBackend 处理 |
+| `packaging.depends` | 按格式声明原生运行依赖，如 `deb: [libc6]`、`apk: [musl]`；不翻译包名 |
 | `packaging.outputs` | 完整外部包列表；每项必填精确 file 和 runtime/development role |
 | `build.swift` | AMP+scons 的 Embedded Swift 配置；不等同于原生 Swift App |
 | `install` | 源相对路径 → 目标绝对路径，覆盖约定收集结果 |
-| `systemd` | service 必填 unit；`auto_start` 缺省 false |
+| `systemd` | service 的 systemd 声明，必填 unit；`auto_start` 缺省 false |
+| `openrc` | service 的 OpenRC 声明，必填 script；runlevel 缺省 default，auto_start 缺省 false |
 | `depends` | Debian 运行依赖；不代替 `build.deps` |
 | `conffiles` | 目标绝对路径列表，写入 dpkg conffiles |
 | `data_dirs` | service 安装时创建的目标绝对目录列表 |
@@ -78,11 +80,21 @@ data_dirs: [/var/lib/telemetry]
 
 `capabilities`、`lib.headers_dir` 和旧 `build.outputs` 已删除，因为它们没有兑现执行语义。
 头文件通过原生 install、`install` 映射或 `include/` 约定进入安装树。
-非 service 的非空 `data_dirs`、不适用的 systemd/lib/runtime 块和其他未消费配置会报错。
+非 service 的非空 `data_dirs`、不适用的 systemd/openrc/lib/runtime 块和其他未消费配置会报错。
 源相对路径拒绝绝对值及 `..`，设备路径必须为规范绝对路径。
 
-默认生成的 service 包安装时更新 unit 索引和数据目录；只有 `auto_start: true` 才调用 systemctl enable，
-或在 chroot 中注册 WantedBy 链接。安装不直接启动服务；运行由 `flange app run` 控制。
+service 至少提供 systemd 或 OpenRC 声明，所选发行版要求对应文件；可同时提供两套原生声明，
+构建时只收集当前 init 的约定目录，不自动翻译服务文件。`flange app create --type service` 随当前目标生成对应模板。
+
+默认生成的服务包安装时建立数据目录并按 init 注册服务；`auto_start: true` 才启用开机启动，
+false 在安装/升级时保留用户已有启用状态；升级不停止正在运行的服务。
+安装不直接启动服务，`flange app run` 显式启动/重启；卸载仍负责停止服务与清理注册。
+systemd chroot 通过 WantedBy 链接启用，OpenRC 在注册前创建指定 runlevel 目录。
+
+OpenRC 脚本约定 `/run/<服务名>.pid` 与 `/var/log/<服务名>.log`；使用 supervise-daemon 时，
+调试器先验证监督进程与 child_pid 的父子关系，再附加实际应用进程；
+监督程序升级后 `/proc/<pid>/exe` 带有 ` (deleted)` 时仍按同一规则解析。OpenRC 日志不支持 `--since`。
+DEB 的 `packaging.depends.deb` 与旧顶层 `depends` 合并，APK 使用 `packaging.depends.apk`；跨发行版 App 必须写各自包名。
 完整外部包的启用、升级和数据保留策略由其维护脚本负责，Flange 不覆盖包内容。
 
 安装在其他位置的程序：
@@ -100,7 +112,9 @@ install:
 
 默认打包时，原生构建先把 install 输出放入发布 staging，再合并约定目录和显式 `install`，形成唯一安装树。
 `builder/packaging/` 的 PackageBackend（包格式后端）接收规划、默认打包、完整包导入与设备安装请求；
-当前仅注册 DEB，默认生成仍复用 `DebBuilder`。构建容器的 APT 编译依赖单独由
+核心内置 DEB（默认生成复用 `DebBuilder`），外部发行版层可注册 APK 等后端。
+省略 `packaging.format` 时，解析 outputs 前就使用目标发行版默认值；独立未指定目标的解析默认 DEB。
+旧 `build.deb_outputs` 始终为 DEB，不随发行版转换。构建容器的 APT 编译依赖单独由
 `UbuntuBuildDependencies` 管理，不由交付包格式决定。
 
 安装树复制由 `builder/file_tree.py` 的 `copy_tree` / `copy_entry` 处理。动态库的
@@ -119,18 +133,22 @@ install:
 | `include/` | `/usr/include/<name>/`，用于 lib |
 | `conf/` | `/etc/<name>/` |
 | `scripts/` | `/usr/lib/<name>/` |
-| `systemd/` | `/lib/systemd/system/` |
+| `systemd/` | `/lib/systemd/system/`，仅 systemd 目标收集 |
+| `openrc/` | `/etc/init.d/`，仅 OpenRC 目标收集，保留执行位 |
 | `udev/` | `/lib/udev/rules.d/` |
 | `res/` | `/usr/share/<name>/` |
 | `rootfs/` | `/`，vendor 专用、保留目录结构及执行位 |
 
 架构后缀用于选择预编译文件，例如 `-arm64`/`-aarch64` 与 `-armhf`/`-arm32`；
+`systemd/` 和 `openrc/` 中的原生服务文件名保持完整，不参与架构后缀过滤。
 实际 ELF 检查仍是最后的架构门禁，文件名不能证明机器类型。
+使用独立目标 SDK 时还检查加载器、libc 依赖与 ARM 浮点 ABI，具体范围见
+[包的 ABI 校验](package-backends.md#包的-abi-校验)。
 
 lib 运行包名为 `lib<app.name>`，开发包追加 dev_suffix。
 `/usr/include/`、静态库 `.a`、pkg-config `.pc`、CMake 开发元数据及未带版本的 `.so` 链接属于开发文件，
 运行包与开发包由同一安装清单拆分。带版本的共享库留在运行包。
-默认设备/rootfs 安装 runtime deb，不把开发包或历史残留包自动装入设备。
+默认设备/rootfs 安装 runtime 包，不把开发包或历史残留包自动装入设备。
 
 ### 导入 CPack 等工具生成的完整包
 
@@ -146,14 +164,14 @@ packaging:
       role: development
 ```
 
-构建脚本把完整包写到 `FLANGE_APP_OUTPUT_DIR`。Flange 校验每包架构为当前目标或 `all`，
+构建脚本把完整包写到 `FLANGE_APP_OUTPUT_DIR`。Flange 校验每包架构为当前目标或后端允许的无架构值（DEB 为 `all`），
 提取全部包形成 `install/` 并检查用户态 ELF；运行入口或 unit 必须存在于 runtime 包。
 下游 `build.deps` 可以消费开发头文件、库和 CMake/pkg-config 元数据；默认部署只安装 runtime。
 文件名中的 `-dev` 不决定角色，Architecture 也不由角色推断。
 
 声明外部完整包后，原包字节和维护脚本保持不变，不再生成 wrapper 包，也不使用源目录约定覆盖包内容。
-因此新配置不能另行声明 `install`、`depends`、`conffiles`、`data_dirs`、`maintainer_scripts`、`lib`
-或 `systemd.auto_start: true`；这些交付语义应写入外部包。`systemd.unit` 仍绑定 service 生命周期。
+因此新配置不能另行声明 `install`、`depends`、`packaging.depends`、`conffiles`、`data_dirs`、`maintainer_scripts`、`lib`
+或任一 init 的 `auto_start: true`；这些交付语义应写入外部包。`systemd.unit` / `openrc.script` 仍绑定 service 生命周期。
 重复文件名、路径、glob、未知格式/角色及不同内容的安装路径冲突会明确失败，保留上次成功产物。
 旧 `build.deb_outputs` 继续接受 custom vendor 的完整 DEB，全部视为 runtime。
 
@@ -214,13 +232,13 @@ flange app log ./telemetry --serial SERIAL --lines 100 --no-follow
 
 `app build` 与 `package build` 支持 `-v/-q`，完整日志统一位于 `<target_dir>/build.log`。
 `--no-build` 跳过重建，仍验证报告和产物。默认 deploy/run/test/debug 会部署准确闭包，
-核对设备架构与传输后的 SHA256。exec/test 执行 runtime 入口；service 测试先重启已部署 unit 再检查是否 active，
+核对设备架构与传输后的 SHA256。exec/test 执行 runtime 入口；service 测试按 init 重启服务并检查运行状态，
 复杂协议和外设断言应由项目自己的测试实现。
 会话位于 `<target_dir>/sessions/<id>/session.json`，记录设备、target、产物、状态和测试输出位置。
 
 默认 GDB 限 exec/service 且要求 debug target。源码来自 manifest 记录的 `debug-source` 副本，
 编译源根由 `compile_source_dir` 记录；设备端与远程模式都使用 substitute-path（源码路径替换）。远程模式通过 gdbserver、
-ADB 端口转发和宿主 GDB，记录命令、符号树与源目录。service 调试附加到已启动的 MainPID。
+ADB 端口转发和宿主 GDB，记录命令、符号树与源目录。service 调试附加到实际应用 PID（systemd MainPID 或经验证的 OpenRC 子进程）。
 远程 service 模式读取 `/proc/<PID>/exe`，对应符号文件必须位于该 App 的 install 树。
 测试超时也保留已获得的 stdout/stderr。这不包含完整系统符号下载或自动 IDE 工程生成。
 

@@ -199,7 +199,7 @@ fi
 def _generate_prerm(service_name: str) -> str:
     """生成 prerm 脚本。
 
-    在软件包移除前停止并禁用 systemd 服务。
+    在软件包移除前停止并禁用 systemd 服务；升级保留运行和启用状态。
     在 chroot 中 /run/systemd/system 不存在，跳过 systemctl 操作。
 
     参数：
@@ -213,8 +213,8 @@ def _generate_prerm(service_name: str) -> str:
 #!/bin/bash
 set -e
 
-# 停止并禁用 systemd 服务（仅在运行中的系统执行）
-if [ -d /run/systemd/system ]; then
+# 仅卸载停止并禁用服务；upgrade/deconfigure/failed-upgrade 保留用户状态。
+if [ "${{1:-}}" = remove ] && [ -d /run/systemd/system ]; then
     systemctl stop {service_name} 2>/dev/null || true
     systemctl disable {service_name} 2>/dev/null || true
 fi
@@ -244,7 +244,7 @@ def generate_control(spec: AppSpec, arch: str) -> Dict[str, str]:
         arch=deb_arch,
         maintainer=maintainer_str,
         description=spec.app.description,
-        depends=spec.depends,
+        depends=list(dict.fromkeys([*spec.depends, *spec.packaging.depends.get("deb", [])])),
     )
 
     result: Dict[str, str] = {"control": control_text}

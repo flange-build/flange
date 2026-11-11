@@ -19,6 +19,7 @@ from builder.build_dependencies import UbuntuBuildDependencies
 from builder.config.apps import gather_custom_packages
 from builder.config.canonical import userspace_arch
 from builder.digest import digest_value, hash_path
+from builder.elf import ELF_ARCHITECTURES, is_userland_path, validate_elf_abi
 from builder.environment import environment_identity
 from builder.file_tree import copy_entry, copy_tree
 from builder.graph import InputSpec, TaskPlan
@@ -31,23 +32,11 @@ from builder.workspace import WorkspaceContext
 
 def validate_elf_architecture(files: Sequence[tuple[Path, str, int]], arch: str) -> None:
     """直接读取 ELF 头，拒绝把宿主二进制错误标记为目标架构包。"""
-    expected = {
-        "aarch64": (2, 183),
-        "armhf": (1, 40),
-        "x86_64": (2, 62),
-        "i386": (1, 3),
-        "riscv64": (2, 243),
-    }[arch]
+    expected = ELF_ARCHITECTURES[arch]
     for source, destination, _ in files:
         if source.is_symlink():
             continue
-        # 固件和 /usr/share 里的 DSP payload 可能是另一处理器的 ELF。
-        # 只验证 Linux 用户态执行目录与动态库搜索目录。
-        if destination.startswith(("/lib/firmware/", "/usr/lib/firmware/")):
-            continue
-        if not destination.startswith(
-            ("/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/", "/lib/", "/usr/lib/", "/usr/lib64/")
-        ):
+        if not is_userland_path(destination):
             continue
         with source.open("rb") as stream:
             header = stream.read(20)
@@ -219,6 +208,7 @@ class AppBuilder:
             "app_model.py",
             "apt.py",
             "build_dependencies.py",
+            "elf.py",
             "file_tree.py",
             "locking.py",
             "toolchain.py",
@@ -363,6 +353,11 @@ class AppBuilder:
                 else:
                     files = self._collect(source_dir, spec, install)
                 validate_elf_architecture(files, self._arch)
+                if toolchain.target_sysroot:
+                    validate_elf_abi(
+                        files, self._arch, Path(toolchain.target_sysroot), toolchain.triple,
+                        executable=spec.runtime.executable,
+                    )
                 # 原生安装与约定文件组成单一发布树，依赖与调试读取同一份内容。
                 for source_file, destination, mode in files:
                     target_file = install / destination.lstrip("/")

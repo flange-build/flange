@@ -171,11 +171,17 @@ rootfs/recovery 对实际挂载的下载目录加锁，模板下载读取共享�
 
 ### 5.1 rootfs、Recovery 与镜像
 
-rootfs-base 计划集中声明 ubuntu-base URL/SHA256、APT 列表、额外源、推荐包策略、ABI、模拟器、环境与配方。
+rootfs-base 计划由发行版策略声明基础包 URL/SHA256、包管理器输入、ABI、模拟器与环境。
+Ubuntu 使用 ubuntu-base 与 APT，Alpine 使用 minirootfs 与 apk；通用入口统一追加
+`rootfs_storage.py`、`snapshot.py`、chroot 和资源管理代码的配方输入，发行版层不重复维护公共列表。
 rootfs/recovery 实际基础阶段消费该计划，快照位于 `<build_root>/cache/rootfs-base/`。
 保存使用临时 tar、完整验证和原子替换；损坏快照不能命中。
 原始 ubuntu-base 解包与快照创建/恢复统一使用数字所有权、xattrs 和 ACL 选项，包括 `security.capability`。
 `snapshot.py` 进入 Phase 1 配方指纹，不能让旧归档语义遗漏的权限属性随缓存命中进入新镜像。
+
+进入 Phase 2 前移除基础系统自带的 `/etc/fstab`，新建和缓存恢复执行同一规则。
+App、overlay 或定制钩子提供的 fstab 原样保留，包括空文件；没有定制文件时才生成板级挂载项。
+因此 Alpine minirootfs 的光盘/USB 示例挂载不影响板级配置，也不通过文件内容猜测来源。
 
 可变根文件树通过 `rootfs_storage.rootfs_staging` 建立在容器原生 `/var/tmp`，不跟随 TMPDIR。
 解包、快照恢复、APT、系统定制和平台成像钩子均消费这棵活树；最终镜像、包清单与辅助产物仍写入组件持久化工作目录。
@@ -186,7 +192,8 @@ ChrootContext 保存并恢复临时 DNS 和 policy-rc.d，部分初始化失败�
 避免一次包安装错误最终只剩无关 umount 输出。
 
 基础树之后再安装各自 App 闭包、modules、固件、overlay 与账户设置，最后路由 ext4/UBI 镜像。
-rootfs 和 recovery 不再扫描目录里碰巧留下的全部 deb；使用 AppBuildReport 的选择集合。
+rootfs 和 recovery 使用 AppBuildReport 的运行包选择集合，并校验发行版与 ABI 身份。
+DEB/APK 暂存共用同名隔离规则，避免不同 App 的同名外部包互相覆盖。
 kernel 所声明的 modules 是必需产物，缺失不能在 rootfs 中静默跳过。
 镜像与刷写清单依据本次启用组件过滤，旧 recovery 文件的存在不是启用指令。
 

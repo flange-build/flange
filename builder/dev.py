@@ -23,6 +23,7 @@ from builder.config.canonical import userspace_arch
 from builder.deploy import DeviceSession, operate_report
 from builder.development_output import run_logged
 from builder.docker import BuildError, DockerRunner
+from builder.distro import get_distro
 from builder.locking import FileLock, atomic_write
 from builder.paths import PROJECT_ROOT
 from builder.presentation import ArgumentParser, Presenter
@@ -358,7 +359,10 @@ def _app_request(args, forwarded: Sequence[str], context: WorkspaceContext, conf
         else builder.resolver
     )
     path = resolver.resolve(args.target)
-    spec = load_spec(path, layer_stack=context.layer_stack)
+    spec = load_spec(
+        path, layer_stack=context.layer_stack,
+        default_package_format=builder.default_package_format,
+    )
     if args.action == "build" and forwarded:
         raise DevelopmentError("build 的配置由 AppSpec 描述，不接受额外 argv")
     if args.action == "deploy" and forwarded and "deploy" not in spec.actions:
@@ -624,7 +628,9 @@ def execute(argv: Sequence[str] | None = None, *, context: WorkspaceContext | No
         invocation = context.invocation_dir if context else Path.cwd()
         parent = (invocation / (args.dir or invocation).expanduser()).resolve()
         tool = context.tool_root if context else PROJECT_ROOT
-        arch = args.arch or (userspace_arch(resolve_config(context)) if context else "aarch64")
+        config = resolve_config(context) if context else None
+        arch = args.arch or (userspace_arch(config) if config is not None else "aarch64")
+        init_system = get_distro(config, context).init_system if config is not None else "systemd"
         if args.resource == "app":
             path = AppScaffold(tool).create(
                 args.name,
@@ -636,6 +642,7 @@ def execute(argv: Sequence[str] | None = None, *, context: WorkspaceContext | No
                 embedded_swift=args.embedded_swift,
                 show_registration_hint=False,
                 arch=arch,
+                init_system=init_system,
             )
         else:
             if args.embedded_swift:
@@ -648,6 +655,7 @@ def execute(argv: Sequence[str] | None = None, *, context: WorkspaceContext | No
                 version=args.version,
                 description=args.description,
                 arch=arch,
+                init_system=init_system,
             )
         return {"path": str(path), "resource": args.resource, "name": args.name}
     context = context or load_workspace()

@@ -23,6 +23,7 @@ from typing import Optional
 import yaml
 
 from builder.app_spec import APP_VERSION_PATTERN, SUPPORTED_APP_ARCHITECTURES
+from builder.init_system import get_init_system
 
 # 模板目录（与本文件同级的 templates/ 子目录）
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -95,6 +96,7 @@ class AppScaffold:
         embedded_swift: bool = False,
         show_registration_hint: bool = True,
         arch: str = "aarch64",
+        init_system: str = "systemd",
     ) -> Path:
         """生成 App 工程目录。
 
@@ -111,6 +113,7 @@ class AppScaffold:
             embedded_swift: amp+scons 专用；生成 SwiftPM static library 骨架
             show_registration_hint: 是否输出仓库外 registry 注册提示
             arch: 用户态架构，由 CLI 默认取当前工作区 target
+            init_system: 服务使用的 init 系统，由 CLI 默认取当前目标发行版
 
         返回：
             已创建的 App 目录路径（Path）
@@ -122,6 +125,10 @@ class AppScaffold:
         self._validate(name, app_type, build_system, version)
         if arch not in SUPPORTED_APP_ARCHITECTURES:
             raise ScaffoldError(f"未知用户态架构：{arch}")
+        try:
+            get_init_system(init_system)
+        except ValueError as error:
+            raise ScaffoldError(str(error)) from error
         if embedded_swift and (app_type, build_system) != ("amp", "scons"):
             raise ScaffoldError("embedded_swift 仅支持 type=amp 且 build_system=scons")
         if target_dir is not None and parent_dir is not None:
@@ -143,6 +150,7 @@ class AppScaffold:
             name, app_type, build_system, version, description, embedded_swift
         )
         variables["arch"] = arch
+        variables["init_system"] = init_system
 
         # 4. 渲染并写入文件
         try:
@@ -282,6 +290,17 @@ class AppScaffold:
                 "    extra_flags: []\n"
             )
             out_path.write_text(content, encoding="utf-8")
+        if variables["type"] == "service":
+            init_system = variables["init_system"]
+            name = variables["name"]
+            service = (
+                {"unit": f"systemd/{name}.service", "auto_start": False}
+                if init_system == "systemd"
+                else {"script": f"openrc/{name}", "auto_start": False}
+            )
+            with out_path.open("a", encoding="utf-8") as stream:
+                stream.write("\n")
+                yaml.safe_dump({init_system: service}, stream, sort_keys=False)
 
     def _render_type_templates(
         self,
@@ -295,7 +314,7 @@ class AppScaffold:
         """渲染类型专属模板目录下的所有文件。
 
         模板目录结构：builder/templates/<type>/<build_system>/
-        service 类型还会额外渲染 systemd/ 和 conf/ 两个共享子目录。
+        service 类型还会额外渲染所选 init 和 conf/ 两个共享子目录。
         """
         type_bs_dir = _TEMPLATES_DIR / app_type / build_system
 
@@ -306,9 +325,8 @@ class AppScaffold:
             if not swift_dir.exists():
                 raise ScaffoldError(f"模板目录不存在：{swift_dir}")
             self._render_dir(swift_dir, dest, variables)
-        # service 类型附加 systemd/ 和 conf/ 共享模板
         if app_type == "service":
-            for shared in ("systemd", "conf"):
+            for shared in (variables["init_system"], "conf"):
                 shared_dir = _TEMPLATES_DIR / app_type / shared
                 if shared_dir.exists():
                     self._render_dir(shared_dir, dest / shared, variables)
@@ -372,6 +390,7 @@ class PackageScaffold:
         version: str = "0.1.0",
         description: str = "",
         arch: str = "aarch64",
+        init_system: str = "systemd",
     ) -> Path:
         """在 ``parent_dir/name`` 创建 Package 与内嵌 vendor App。"""
         import re
@@ -394,6 +413,7 @@ class PackageScaffold:
                 description=description,
                 show_registration_hint=False,
                 arch=arch,
+                init_system=init_system,
             )
             package = (
                 '"""Package 清单。"""\n\n'

@@ -1,7 +1,7 @@
 # 包格式后端与 CPack 接入
 
 `flange app build` 可以交付多个独立的软件包。每个包都有精确文件名和明确角色，
-构建、依赖消费和部署共同读取这份交付记录。当前实现 DEB（Debian 软件包）；
+构建、依赖消费和部署共同读取这份交付记录。核心实现 DEB（Debian 软件包），Alpine 层实现 APK；
 它与 `flange package` 的 Package（功能包）概念不同。
 
 ## 1. 选择由谁打包
@@ -14,6 +14,9 @@
 
 `runtime` 表示默认需要安装到运行设备的包；`development` 表示交付给开发者、供下游编译消费的包。
 角色由配置声明，不能从文件名或包架构猜测。
+
+省略 `packaging.format` 时，在解析 AppSpec 与校验输出文件名时就采用目标发行版的默认格式：
+Ubuntu 为 `deb`，Alpine 为 `apk`。显式格式必须与目标兼容，旧 `build.deb_outputs` 始终表示 DEB。
 
 ```mermaid
 flowchart LR
@@ -60,7 +63,7 @@ packaging:
 完整包的首次启用、升级、配置保留与用户数据保护由 CPack 维护脚本负责，Flange 不重写这些脚本。
 `auto_start: false` 不会撤销外部包自身的启用动作；应让维护脚本兑现同一策略。
 
-完整外部包不接受另一份 `install/depends/conffiles/data_dirs/maintainer_scripts/lib` 声明或
+完整外部包不接受另一份 `install/depends/packaging.depends/conffiles/data_dirs/maintainer_scripts/lib` 声明或
 `auto_start: true`，避免设置被静默忽略。编译依赖仍可通过 `build.deps`、`build.apt_packages` 声明。
 
 CPack 使用 `CPACK_DEB_COMPONENT_INSTALL=ON` 开启组件拆包，组件专属变量使用大写组件名。
@@ -112,13 +115,34 @@ flange --json app build /path/to/telemetry
 
 ## 4. 依赖与安装边界
 
+默认打包读取 `packaging.depends.<格式>` 中的原生依赖声明。DEB 将 `packaging.depends.deb`
+与旧顶层 `depends` 按原顺序合并去重；APK 只读取 `packaging.depends.apk`，不转换 Debian 包名。
+完整外部包的依赖由原打包器写入包元数据。
+
 下游 App 声明 `build.deps: [../telemetry]` 后，Flange 先构建服务的完整交付物，
 再将运行包和开发包中的安装内容共同组成下游编译前缀。CMake 的配置包、头文件和库可由其原生发现机制消费。
-这份前缀不是完整系统 sysroot（目标根目录），系统编译依赖仍由 Ubuntu 构建容器提供。
+这份前缀不是完整系统 sysroot（目标根目录）。Ubuntu 使用构建容器的系统编译依赖；
+Alpine 使用目标 musl SDK，并把 App 依赖安装树合并进独立的构建 sysroot。
 
 默认 `app deploy` 和产品 rootfs 只安装 runtime 闭包；开发包可作为 SDK 交付物分发，
-Flange 当前没有自动在宿主安装开发包的命令。Ubuntu rootfs 明确只接收 DEB；
+Flange 当前没有自动在宿主安装开发包的命令。Ubuntu rootfs 只接收 DEB，Alpine rootfs 只接收 APK；
 默认设备部署要求同一闭包使用单一格式，并由该后端查询设备架构和生成安装命令。
+rootfs 暂存完整包时，同名文件分别放入独立子目录，保持包内容与原始文件名；
+不同 App 都输出 `shared.apk` 或 `shared.deb` 时仍各自安装，不发生覆盖。
+
+### 包的 ABI 校验
+
+报告的 `userland_identity` 记录构建目标身份，不能代替包内二进制校验。
+默认打包与完整外部包导入都检查用户态 ELF 的机器类型。
+工具链提供独立目标 SDK 时，还读取 ELF 程序头和动态表：加载器必须存在于 SDK，
+libc 及其配套运行库的依赖必须由 SDK 提供，`armhf` 拒绝显式软浮点 ABI。
+SDK 中的绝对符号链接以 SDK 为根解析，不借用宿主文件。
+这会拒绝把需要 glibc 加载器或 `libc.so.6` 的 ARM 包标记为 Alpine musl 包。
+
+检查覆盖用户态执行和库目录，以及显式 `runtime.executable`；固件目录不按 Linux 用户态检查。
+静态程序没有动态加载器或 libc 依赖时按架构检查接受。
+此检查不验证全部动态库、符号版本或实际设备运行；其他运行库仍需原生包依赖声明，
+没有独立目标 SDK 的工具链当前只执行 ELF 架构检查。
 
 ## 5. 维护与扩展后端
 
@@ -127,6 +151,8 @@ Flange 当前没有自动在宿主安装开发包的命令。Ubuntu rootfs 明�
 | builder/packaging/model.py | PackageOutput、PackagingConfig、PackageArtifact |
 | builder/packaging/base.py | PackageBackend 抽象接口 |
 | builder/packaging/deb.py | DEB 规划、默认拆包、导入、设备命令 |
+| builder/packaging/staging.py | rootfs 包暂存、同名隔离和清理 |
+| builder/elf.py | 目标 SDK 下的 ELF 加载器与 libc ABI 校验 |
 | builder/packaging/__init__.py | 显式格式注册 |
 | builder/build_dependencies.py | Ubuntu 构建容器的 APT 编译依赖 |
 | builder/apt.py | 共享 APT 目录、参数与资源互斥，涵盖多个工作区 |
@@ -145,6 +171,11 @@ FLANGE_RUN_DOCKER_TESTS=1 .venv/bin/python -m pytest tests/integration/test_cpac
 
 第二项真实生成两个 CPack DEB，由 Flange 提取后让下游 CMake 工程找到 SDK 并链接 ARM64 静态库，
 还覆盖缓存复用和开发包丢失后的重建；不连接或部署设备。
+
+2026-11-11 在 Docker 中验证了同名 APK/DEB 同时安装、DEB 升级保留手动启用状态及卸载清理，
+并针对 `luckfox-pico-pro-max-alpine-release` 完成服务与 C++ App 编译、musl 外部包导入、
+glibc 动态程序/共享库及显式软浮点 ELF 拒绝；导入失败保留原成功产物。
+这些是容器内验证，未连接板卡、刷写介质或验证实机启动。
 
 报告另外记录 `userland_identity`（发行版和用户态 ABI）；旧报告缺少身份必须重新构建。
 rootfs 安装与 `--no-build` 均校验身份。外部包格式、发行版与 SDK 见[多层工作区](layers.md)。

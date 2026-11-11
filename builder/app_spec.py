@@ -564,7 +564,10 @@ def _parse_openrc(raw: dict) -> OpenrcConfig:
     )
 
 
-def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig, layer_stack=None) -> PackagingConfig:
+def _parse_packaging(
+    raw: dict, app_info: AppInfo, build: BuildConfig, layer_stack=None,
+    *, default_package_format: str = "deb",
+) -> PackagingConfig:
     from builder.packaging import get_backend
 
     if "packaging" in raw and build.deb_outputs:
@@ -577,7 +580,7 @@ def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig, layer_sta
             [PackageOutput(file, "runtime") for file in build.deb_outputs]
             if build.deb_outputs else [PackageOutput(**item) for item in value.get("outputs", [])]
         )
-        format = value.get("format", "deb")
+        format = "deb" if build.deb_outputs else value.get("format", default_package_format)
         backend = get_backend(format, layer_stack)
         for output in outputs:
             backend.validate_output(output)
@@ -590,6 +593,8 @@ def _parse_packaging(raw: dict, app_info: AppInfo, build: BuildConfig, layer_sta
         unsupported = set(raw) & {
             "install", "depends", "conffiles", "data_dirs", "maintainer_scripts", "lib",
         }
+        if "depends" in value:
+            unsupported.add("packaging.depends")
         if unsupported:
             raise AppSpecError(
                 "完整外部包由打包器维护内容和元数据，不能另行声明："
@@ -616,11 +621,14 @@ def _parse_lib(raw: dict) -> LibConfig:
     return LibConfig(dev_suffix=dev_suffix)
 
 
-def load_spec(app_dir: Path, *, layer_stack=None) -> AppSpec:
+def load_spec(
+    app_dir: Path, *, layer_stack=None, default_package_format: str = "deb",
+) -> AppSpec:
     """从 app_dir/app.yaml 加载并返回 AppSpec。
 
     参数：
         app_dir: App 工程目录，必须包含 app.yaml
+        default_package_format: 目标发行版的默认包格式
 
     返回：
         解析并校验完毕的 AppSpec 对象
@@ -660,7 +668,9 @@ def load_spec(app_dir: Path, *, layer_stack=None) -> AppSpec:
 
     # 解析可选段：build
     build = _parse_build(raw["build"], app_info) if "build" in raw else BuildConfig()
-    packaging = _parse_packaging(raw, app_info, build, layer_stack)
+    packaging = _parse_packaging(
+        raw, app_info, build, layer_stack, default_package_format=default_package_format,
+    )
 
     # 解析可选段：install（文件映射）
     raw_install = raw.get("install", {})

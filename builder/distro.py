@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import replace
 
+from builder.graph import InputSpec
 from builder.layers import stack_for
 
 
@@ -79,13 +80,28 @@ def get_distro(config, context=None) -> DistroBackend:
     return result
 
 
+def base_recipe_inputs(context) -> tuple[InputSpec, ...]:
+    """各发行版共用的基础执行、活树存储和快照配方。"""
+    filenames = (
+        "distro.py", "rootfs_storage.py", "snapshot.py", "chroot.py", "source.py",
+        "docker.py", "environment.py", "locking.py",
+    )
+    return tuple(
+        InputSpec.file(f"recipe:{name}", path)
+        for name in filenames
+        if (path := context.tool_root / "builder" / name).is_file()
+    )
+
+
 def distro_base_plan(config, component, context):
-    from builder.graph import InputSpec
     from builder.build_environment import environment_inputs
 
     plan = get_distro(config, context).base_plan(config, component, context)
     stack = stack_for(config, context)
     inputs = list(plan.inputs)
+    for item in base_recipe_inputs(context):
+        if item not in inputs:
+            inputs.append(item)
     inputs.extend(
         InputSpec.file(f"distro:{ref.identity}", ref.path)
         for ref in stack.provider_inputs("distro", config.get("distro", "ubuntu"))

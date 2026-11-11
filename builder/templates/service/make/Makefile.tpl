@@ -14,8 +14,6 @@ $$(TARGET): $$(SRCS)
 
 install: $$(TARGET)
 	install -Dm755 $$(TARGET) $$(DESTDIR)/usr/bin/${name}
-	install -Dm644 systemd/${name}.service \
-	    $$(DESTDIR)/lib/systemd/system/${name}.service
 	install -Dm644 conf/config.yaml \
 	    $$(DESTDIR)/etc/${name}/config.yaml
 

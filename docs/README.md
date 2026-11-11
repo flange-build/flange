@@ -23,7 +23,7 @@
 | 如何用独立仓库组合板卡、产品、发行版和构建策略 | [多层工作区](layers.md)、[Debian 验证](examples/layers/README.md) |
 | 代码从命令走到构建和设备的过程是什么 | [架构职责参考](build-system-design.md) |
 | App 的配置字段、安装与运行约定是什么 | [App 参考](app-architecture.md) |
-| 如何接入 CPack、拆分运行/开发包或扩展打包格式 | [包格式后端](package-backends.md) |
+| DEB / APK 后端、多产物、SDK 包与 ABI 校验 | [包格式后端](package-backends.md) |
 | 如何把一个硬件功能组合成 Package（功能包） | [硬件特性包](../wiki/concepts/硬件特性包.md) |
 | 如何备份、恢复或在线刷写分区 | [Recovery（维护系统）](recovery.md) |
 | 如何开发同一芯片上的异构从核 | [AMP（非对称多处理）](amp.md) |

@@ -39,11 +39,21 @@ class InitSystem:
     def main_pid(self, service: str) -> list[str]:
         if self.name == "systemd":
             return ["systemctl", "show", service, "--property", "MainPID", "--value"]
-        # supervise-daemon 的 pidfile 记录监督进程，服务进程是它的子进程；
-        # start-stop-daemon 的 pidfile 直接是服务进程。
         return [
             "sh", "-c",
-            f'p=$(cat /run/{service}.pid) && {{ pgrep -P "$p" || echo "$p"; }} | head -n 1',
+            'p=$(cat "/run/$1.pid") || exit 1\n'
+            'case "$p" in ""|*[!0-9]*|0) exit 1;; esac\n'
+            'exe=$(readlink "/proc/$p/exe") || exit 1\n'
+            'case "$exe" in */supervise-daemon|*/supervise-daemon\\ \\(deleted\\))\n'
+            '  child=$(cat "${RC_SVCDIR:-/run/openrc}/options/$1/child_pid") || exit 1\n'
+            '  case "$child" in ""|*[!0-9]*|0) exit 1;; esac\n'
+            '  parent=$(awk \'/^PPid:/ {print $2}\' "/proc/$child/status") || exit 1\n'
+            '  [ "$parent" = "$p" ] || exit 1\n'
+            '  p=$child;;\n'
+            'esac\n'
+            'kill -0 "$p" || exit 1\n'
+            'printf "%s\\n" "$p"',
+            "flange-openrc-pid", service,
         ]
 
     def log(

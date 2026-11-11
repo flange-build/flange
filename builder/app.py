@@ -169,8 +169,8 @@ def _collect_convention(
 
             filename = src_file.name
 
-            # 架构过滤：若文件名带有已知架构后缀，只保留匹配目标架构的
-            if _has_any_arch_suffix(filename):
+            # 原生服务名直接绑定运行与调试；其他目录才按架构后缀筛选预编译文件。
+            if subdir_name not in {"systemd", "openrc"} and _has_any_arch_suffix(filename):
                 stripped = _strip_arch_suffix(filename, arch)
                 if stripped is None:
                     # 不匹配目标架构，排除
@@ -261,7 +261,8 @@ def collect_files(
 def _infer_mode(install_path: str, src_rel: str) -> int:
     """根据安装路径推断文件权限。
 
-    可执行目录（/usr/bin/、/usr/sbin/、/bin/、/sbin/）或来源于 scripts/ 子目录
+    可执行目录（/usr/bin/、/usr/sbin/、/bin/、/sbin/、/etc/init.d/）或来源于
+    bin/、scripts/、openrc/ 子目录
     的文件赋予 0o755，其余赋予 0o644。
 
     参数：
@@ -273,11 +274,11 @@ def _infer_mode(install_path: str, src_rel: str) -> int:
     """
     # 按来源子目录判断
     src_subdir = src_rel.split("/")[0] if "/" in src_rel else ""
-    if src_subdir in ("bin", "scripts"):
+    if src_subdir in ("bin", "scripts", "openrc"):
         return 0o755
 
     # 按安装目录判断
-    exec_prefixes = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/")
+    exec_prefixes = ("/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/etc/init.d/")
     for prefix in exec_prefixes:
         if install_path.startswith(prefix):
             return 0o755

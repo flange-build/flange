@@ -25,6 +25,8 @@ def emulator_for(config: dict) -> str:
 
 def base_plan(config: dict, component: str, context) -> TaskPlan:
     """两个系统共享同一配方，只把真正消费的 APT 输入纳入计划。"""
+    from builder.distro import base_recipe_inputs
+
     base = config.get("rootfs") or {}
     settings = config.get(component) or {}
     emulator = emulator_for(config)
@@ -45,10 +47,8 @@ def base_plan(config: dict, component: str, context) -> TaskPlan:
         InputSpec.value("emulator", emulator),
         InputSpec.value("environment", environment_identity(emulator=emulator, config=config, context=context)),
     ]
-    for filename in (
-        "rootfs_base.py", "rootfs_storage.py", "snapshot.py", "chroot.py", "source.py", "docker.py",
-        "environment.py", "apt.py", "locking.py",
-    ):
+    inputs.extend(base_recipe_inputs(context))
+    for filename in ("rootfs_base.py", "apt.py"):
         path = context.tool_root / "builder" / filename
         if path.is_file():
             inputs.append(InputSpec.file(f"recipe:{filename}", path))

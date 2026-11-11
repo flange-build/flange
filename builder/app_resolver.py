@@ -8,6 +8,7 @@ from typing import Sequence
 
 from builder.app_spec import AppSpec, load_spec
 from builder.digest import digest_value
+from builder.distro import get_distro
 from builder.workspace import WorkspaceContext
 
 
@@ -70,6 +71,7 @@ class AppResolver:
         visiting: list[Path] = []
         ordered: list[AppResource] = []
         names: dict[str, Path] = {}
+        default_package_format = get_distro(self.config, self.context).package_format
 
         def visit(path: Path) -> AppResource:
             if path in visiting:
@@ -77,7 +79,10 @@ class AppResolver:
                 raise ValueError("App 循环依赖：" + " → ".join(map(str, chain)))
             if path in resolved:
                 return resolved[path]
-            spec = load_spec(path, layer_stack=self.context.layer_stack)
+            spec = load_spec(
+                path, layer_stack=self.context.layer_stack,
+                default_package_format=default_package_format,
+            )
             other = names.get(spec.app.name)
             if other is not None and other != path:
                 raise ValueError(

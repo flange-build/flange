@@ -29,7 +29,7 @@ class PackagingConfig:
 
     format: str = "deb"
     outputs: list[PackageOutput] = field(default_factory=list)
-    # False 时 format 只是缺省值，App 构建改用目标发行版的默认包格式。
+    # False 表示未固定格式；解析时采用目标默认值，直接构造时由 AppBuilder 补齐。
     format_declared: bool = False
     # 按包格式声明的运行依赖（如 {"apk": ["musl"]}）；顶层 depends 仍是 DEB 语义。
     depends: dict[str, list[str]] = field(default_factory=dict)
