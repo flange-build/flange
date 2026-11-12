@@ -6,13 +6,14 @@
 三层架构：场景层（业务）→ 原子能力层（单个 USB function）→ gadget 核心层
 （configfs 与竞态处理）。以 `usb-mode` CLI 与 unix socket 上的 JSON-RPC 2.0 对外。
 
+Rust 静态程序提供模式管理与 CLI，设备端不需要 Python/PyYAML。
 服务分为 `usbmoded`（模式管理）与 `adbd`（独立守护进程），由 init 系统负责保活。
 已验证范围见下表；完整 CLI、场景配置与 JSON-RPC 接口见[组件参考](../components/app/usbmoded/README.md)。
 
 ## 关键设计要点
 
 - **L1 不认识任何具体 function。** 所有 function 行为经 `Capability` 接口调用，
-  核心层没有 `if name == "adb"` 这类分支。有自动化校验守着这条线。
+  核心层不按具体能力名称分支。
 - **能力自带排序权重。** 内核对 function 排列有顺序要求，权重由各能力声明，
   核心层不再持有硬编码顺序表，新增能力无需改 L1。
 - **daemon 交给 systemd 或 OpenRC。** 按当前 init 管理服务，避免重复保活循环。
@@ -27,17 +28,15 @@
 
 | 层 | 文件 | 职责 |
 |---|---|---|
-| L3 | `components/app/usbmoded/usbmoded/scene.py` | 场景模型、切换编排、自锁回滚、持久化 |
-| L3 | `usbmoded/control.py` | unix socket、JSON-RPC 2.0、`SO_PEERCRED` 授权 |
-| L2 | `usbmoded/capability.py` | L1↔L2 接口契约、排序权重刻度 |
-| L2 | `usbmoded/capabilities/` | 各能力实现 + init daemon 适配 |
-| L1 | `usbmoded/gadget.py` | 描述符、生命周期编排、幂等守卫、断连恢复 |
-| L1 | `usbmoded/udc.py` | UDC 探测、绑定校验、枚举校验与恢复 |
-| L1 | `usbmoded/configfs.py` | configfs 原语、幂等写 |
-| — | `usbmoded/role.py` | device↔host 角色切换的平台抽象 |
-| — | `usbmoded/config.py` | YAML 分层加载与按键合并 |
+| L3 | `src/scene.rs` | 场景模型、切换编排、自锁回滚、持久化 |
+| L3 | `src/control.rs` | Unix socket、JSON-RPC 2.0、`SO_PEERCRED` 授权与信号事件循环 |
+| L2 | `src/capabilities.rs` | 能力接口、排序、11 种能力的生命周期 |
+| L1 | `src/gadget.rs` | 描述符、生命周期编排、幂等守卫、断连恢复 |
+| L1 | `src/system.rs` | ConfigFS 原语、UDC 校验、角色切换、init 命令边界 |
+| — | `src/config.rs` | YAML 分层加载与按键合并 |
 
-表中其余相对路径均位于 `components/app/usbmoded/`。入口：`bin/usbmoded`（服务）、`bin/usb-mode`（CLI）。
+表中路径均位于 `components/app/usbmoded/`。入口为 `src/bin/usbmoded.rs`（服务）、
+`src/bin/usb-mode.rs`（CLI）；构建及验收命令见[组件参考](../components/app/usbmoded/README.md#构建与验收)。
 
 ## 数据流
 
@@ -50,7 +49,8 @@
 
 udev 事件：USB 状态变化 → `/usr/lib/usbmoded/notify` 选择 systemd 异步 reload 或 OpenRC reload → SIGHUP →
 重新评估（UDC 掉了走断连恢复；能力未变则被幂等守卫短路；开机场景因 UDC 尚未
-注册而失败时，UDC 注册后在此重试开机场景）。
+注册而失败时，UDC 注册后在此重试开机场景）。开机场景仍未完成时另有 5–30 秒退避重试，
+覆盖 adbd endpoint 延迟就绪且不产生新 udev 事件的情况。
 
 ## 平台竞态知识（13 项）
 
@@ -72,17 +72,18 @@ udev 事件：USB 状态变化 → `/usr/lib/usbmoded/notify` 选择 systemd 异
 | 12 | 内核要求的 function 排序 | 描述符顺序错乱 | 是 |
 | 13 | 启动幂等守卫 | 每次 udev 事件都重配，重置环 | 是 |
 
-自动化覆盖在 `tests/test_usbmoded.py`，用伪 configfs 验证编排逻辑。
+自动化覆盖在 `components/app/usbmoded/src/tests.rs` 及传输层测试中，通过 Docker 内的
+`cargo test --locked` 验证伪 ConfigFS 编排和真实 Unix socket 行为。
 标「否」或「部分」的项目依赖真实硬件时序，只能实板验证。
 
 ## 板级验证范围
 
 | 板卡 / 系统 | 已确认的行为 | 边界 |
 | --- | --- | --- |
-| ROCK 5B | 场景切换、权限、自锁回滚、开机路径，device↔host 切换 | 依赖 dwc3 用户态 role 控制补丁；各场景仍受内核 function 支持限制 |
-| [Jetson TX2](boards/nvidia-jetson-tx2.md) | usbmoded + adbd、重启 adbd 后重连 | Linux 4.9 无 usb_role，不能切换 host/device |
-| [RUBIK Pi 3](boards/thundercomm-rubikpi3.md) | 延迟 UDC 的开机恢复；厂商内核的 USB 重连 | mainline 与厂商产品的 role/连接器行为分别判断 |
-| [Luckfox](boards/luckfox-pico-pro-max.md) | 外部 Alpine/OpenRC 下自动枚举 ADB | 不代表所有发行版组合或双角色通过 |
+| ROCK 5B（Python 版本） | 场景切换、权限、自锁回滚、开机路径，device↔host 切换 | 依赖 dwc3 用户态 role 控制补丁；各场景仍受内核 function 支持限制 |
+| [Jetson TX2](boards/nvidia-jetson-tx2.md)（Python 版本） | usbmoded + adbd、重启 adbd 后重连 | Linux 4.9 无 usb_role，不能切换 host/device |
+| [RUBIK Pi 3](boards/thundercomm-rubikpi3.md)（Python 版本） | 延迟 UDC 的开机恢复；厂商内核的 USB 重连 | mainline 与厂商产品的 role/连接器行为分别判断 |
+| [Luckfox](boards/luckfox-pico-pro-max.md) | 2026-11-12，Alpine/OpenRC 下 Rust 服务的正常重启、3 次软断连、5 次 reload、权限、串口场景和 host 自动回滚通过 | 真实插拔与外接 USB Host 外设未测 |
 | [ATK-RK3506B](boards/atk-rk3506b.md) | USB0 gadget 自动加载/绑定，ADB 与 USB1 Host 共存 | 早期记录使用旧服务，长期切换压力未验收 |
 
 VID、gadget group 和默认场景来自当前 App 基线与板级 `overlay/etc/usbmode/`，不另维护易漂移的静态副本。
@@ -105,6 +106,8 @@ role 切换不可用有两种性质完全不同的原因，服务会分别诊断
 
 ## 易踩坑
 
+- **ConfigFS 返回的链接可能是相对路径**：内核会规范化链接目标；复用时比较解析后的对象，
+  按路径字面值比较会误报不一致，导致断连后无法重新绑定。
 - **清空 configfs 属性必须写换行符**，0 字节写入不触发内核 store 回调，
   解绑 UDC、清空 ums lun 会**静默失效**。
 - **停用时不要删除 function 实例**，只解除 configuration 里的链接。删实例会

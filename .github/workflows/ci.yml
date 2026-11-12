@@ -1,4 +1,4 @@
-# CI 在 push 与 Pull Request 时运行 Python 功能测试。
+# CI 在 push 与 Pull Request 时运行 Python 与 Rust 功能测试。
 # 目标编译、刷写和实机验证分别在 Docker 与对应设备执行。
 name: CI
 
@@ -43,3 +43,31 @@ jobs:
 
       - name: 运行测试
         run: pytest
+
+  usbmoded:
+    name: usbmoded (Rust / ${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: ubuntu:24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [armhf, aarch64]
+    steps:
+      - name: 安装容器编译依赖
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3 build-essential ca-certificates git xz-utils
+
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 测试并交叉编译静态 USB 服务
+        working-directory: components/app/usbmoded
+        env:
+          FLANGE_TARGET_ARCH: ${{ matrix.arch }}
+          FLANGE_BUILD_ROOT: ${{ runner.temp }}/usbmoded-build
+          FLANGE_APP_WORK_DIR: ${{ runner.temp }}/usbmoded-build/work
+          DESTDIR: ${{ runner.temp }}/usbmoded-build/install
+        # 与 App 构建共用固定摘要工具链、Cargo.lock、格式检查及原生回归测试。
+        run: python3 build.py

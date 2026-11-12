@@ -10,7 +10,6 @@ from pathlib import Path
 
 ADBD_SERVICE = Path("components/app/adbd/systemd/usbmoded-adbd.service")
 GADGET_SERVICE = Path("components/app/usbmoded/systemd/usbmoded.service")
-CONFIGFS = Path("components/app/usbmoded/usbmoded/configfs.py")
 ROOT_BASHRC = Path("components/rootfs/overlay/root/.bashrc")
 
 

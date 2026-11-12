@@ -209,10 +209,10 @@ def test_jetson_tx2_rootfs_contract(configs):
 
     assert rootfs["url"].endswith("ubuntu-base-18.04.5-base-arm64.tar.gz")
     assert rootfs["sha256"] == "9327cf905e818c38ba04605e40fbe11ac6548537786dc12936ca5819f8a563ad"
-    # adb 与其他平台相同走 adbd + usbmoded；usbmoded 需要 Python >= 3.8。
+    # adb 与其他平台相同走 adbd + usbmoded，USB 管理程序为静态 ELF。
     assert "adbd" in rootfs["custom_packages"]
     assert not {"btop", "systemd-timesyncd"} & set(rootfs["packages"])
-    assert {"openssh-server", "network-manager", "python3.8", "python3-yaml"} <= set(rootfs["packages"])
+    assert {"openssh-server", "network-manager"} <= set(rootfs["packages"])
     # 板载 BCM4354 蓝牙由 L4T nvwifibt 拉起，bluetoothd 来自 bluez，rfkill 命令需单独安装。
     assert {"bluez", "rfkill"} <= set(rootfs["packages"])
     phase2 = dict(item.split("=", 1) for item in rootfs["phase2_packages"])

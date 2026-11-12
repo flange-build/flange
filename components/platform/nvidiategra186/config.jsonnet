@@ -39,11 +39,8 @@ local nvidiaKey = {
     },
     // USB gadget 与其他平台一样由 usbmoded 管理（默认 debug 场景 = adb），L4T 自带的
     // USB device mode（192.168.55.1）在 overlay 中 mask，两者会争用同一个 UDC。
-    // usbmoded 用到 typing.Protocol（Python >= 3.8），18.04 默认 python3 是 3.6，
-    // 因此装 universe 的 python3.8，overlay 中让 usbmoded 与 usb-mode 用它运行。
-    // python3-yaml 是 usbmoded 的 deb 依赖（自有 deb 以 dpkg 安装，不会自动补依赖）。
-    // flange 编译型 App 按容器内 glibc 2.39 编译，仍不能在 18.04 上运行；adbd 为静态链接。
-    packages+: ['python3.8', 'python3-yaml'],
+    // usbmoded/usb-mode 使用 Rust 静态 musl，adbd 为静态 glibc，无需 Python 包装。
+    // 其余链接容器 glibc 2.39 的 App 仍不能直接在 18.04 上运行。
     // 与 stock L4T 相同的两个源保留在镜像中，设备上可直接 apt install nvidia-jetpack。
     // 不再安装 nvidia-l4t-apt-source，避免同一源被配置两次。
     extra_apt_sources: [

@@ -1,6 +1,7 @@
 # USB gadget 子系统（usbmoded）
 
-本 App 是设备端的 USB gadget 管理服务。adb 只是它管理的原子能力之一 ——
+本 App 用 Rust 实现设备端 USB gadget 管理服务与 `usb-mode` CLI（命令行客户端），
+以静态 musl ELF（可执行与链接格式）交付，设备端不依赖 Python 或 PyYAML。adb 只是它管理的原子能力之一 ——
 adbd 二进制与其 daemon unit 由独立的 `adbd` App 提供，后者通过
 `build.deps` 依赖本 App。
 
@@ -9,17 +10,53 @@ adbd 二进制与其 daemon unit 由独立的 `adbd` App 提供，后者通过
 ## 架构
 
 ```
-L3  场景层 (scene.py)        场景 = 能力集合 + 参数 + role，切换编排
-L2  原子能力层 (capabilities/) 每个 USB function 一个能力，统一接口 + 参数
-L1  gadget 核心 (gadget/udc/configfs)  configfs 原语、UDC 生命周期、竞态处理
+L3  场景层 (src/scene.rs)        场景 = 能力集合 + 参数 + role，切换编排
+L2  原子能力层 (src/capabilities.rs) 每个 USB function 一个能力，统一接口 + 参数
+L1  gadget 核心 (src/gadget.rs、src/system.rs)  configfs 原语、UDC 生命周期、竞态处理
 ```
 
 L1 不认识任何具体 USB function —— 所有 function 相关行为都通过
-`capability.Capability` 接口调用。这条约束有自动化校验（`tests/test_usbmoded.py`），是分层是否真正成立的硬指标。
+`Capability` 生命周期接口调用。行为回归测试位于 `src/tests.rs`，通过伪 ConfigFS（内核配置文件系统）
+覆盖排序、幂等、解绑、恢复、延迟 UDC 与回滚。
 
 daemon（adbd、mtp-server）的生命周期交给当前 systemd 或 OpenRC，不自制保活循环 ——
 后者的状态判断读写不对称曾在 ROCK 5B 上堆积 360+ 并发循环、USB 每 2 秒
 断连一次。
+
+## 构建与验收
+
+在 flange 仓库根目录，完成 [开发环境准备](../../../docs/development-guide.md) 后运行：
+
+```sh
+flange --target luckfox-pico-pro-max-default-release app build usbmoded
+flange --target luckfox-pico-pro-max-default-release app deploy usbmoded --no-build --serial <USB序列号>
+```
+
+Alpine 外部工作区使用相同命令，并加 `-C <工作区>`、选择 `luckfox-pico-pro-max-alpine-release`。
+构建通过 custom 配方在 Docker 内执行 `cargo test --locked` 和 release 交叉编译；
+支持 `armhf` → `armv7-unknown-linux-musleabihf`、`aarch64` → `aarch64-unknown-linux-musl`。
+`build.py` 只用于构建，不安装到设备。Rust 1.90.0 的官方组件 URL 与 SHA256 固定在
+`rust-toolchain-artifacts.json`，crate（Rust 依赖包）及校验和固定在 `Cargo.lock`；
+首次构建需要访问 Rust 官方分发站和 crates.io，下载与工具链缓存在工作区 `.build/` 下。
+摘要或测试失败会中止构建，不发布部分产物。
+
+结果位于 `<工作区>/.build/target/<board>/<product>/<variant>/apps/usbmoded-<来源摘要>/`，
+`install/usr/sbin/` 是两个静态程序，`artifacts/` 是 DEB 或 APK。
+包内 `/usr/share/doc/usbmoded/licenses/` 保留上游依赖和 Rust 标准库的许可与版权。
+增量部署后用目标 init 重启 `usbmoded`，并执行 `usbmoded --version` 与 `usb-mode get`。
+从旧 Jetson 镜像升级，还须移除手工遗留的 Python ExecStart drop-in 与 `/usr/local/sbin/usb-mode`
+包装；当前平台 overlay 已不包含它们。
+
+主机端真机验收命令（设备不需要 Python）：
+
+```sh
+python3 tests/usbmoded_field_verify.py --serial <USB序列号>
+python3 tests/adbd_usb_reconnect.py --serial <USB序列号> --cycles 3 --timeout 60 --allow-pid-change
+```
+
+第一条验证公开协议、5 次 reload、endpoint 持有和非特权拒绝；第二条会短暂断开 ADB，
+由宿主等待恢复。失败时检查 `usb-mode get`、当前 init 的服务日志与 `dmesg`，
+不要把伪 ConfigFS 测试当作外设通过。已测硬件与启动时间见 [Luckfox 板卡页](../../../docs/boards/luckfox-pico-pro-max.md)。
 
 ## 能力清单
 
@@ -73,6 +110,9 @@ scenes:
 开机进入持久化场景，没有则进入 `default_scene`（默认 `debug`）。UDC 晚于服务注册
 （deferred probe，如 RUBIK Pi 3 的 dwc3 依赖 pmic_glink，约 10 秒才出现）导致开机场景
 失败时，服务在 UDC 注册触发的 udev reload 中自动重试，无需手动 `usb-mode set`。
+SPI NAND 冷启动中 adbd 的代码装入可能较慢，服务按实际 endpoint 打开状态轮询，
+就绪立即继续，最长等待 15 秒；开机场景仍未完成时按 5–30 秒退避重试，
+不依赖 endpoint 就绪后再次产生 udev 事件。已成功选择场景后不再进行开机重试。
 
 ## 命令行
 
@@ -107,7 +147,7 @@ echo '{"jsonrpc":"2.0","method":"scene.get","id":1}' | socat - UNIX-CONNECT:/run
 |---|---|---|
 | `scene.list` | — | 查询 |
 | `scene.get` | — | 查询 |
-| `scene.set` | `scene`、`persist`、`force` | 变更 |
+| `scene.set` | `scene`、`persist`、`force`、`rollback_timeout`（兼容 `timeout`） | 变更 |
 | `scene.reset` | — | 变更 |
 | `scene.confirm` | — | 变更 |
 | `config.reload` | — | 变更 |
@@ -132,3 +172,8 @@ echo '{"jsonrpc":"2.0","method":"scene.get","id":1}' | socat - UNIX-CONNECT:/run
 
 udev 通知由 `/usr/lib/usbmoded/notify` 适配当前 init；服务 reload/SIGHUP 用于重新评估设备状态，
 `usb-mode reload` 用于重读场景定义，二者职责不同。初始化期间收到的 SIGHUP 延后处理，避免 OpenRC 下重入。
+
+服务在操作硬件前取得单实例锁。SIGHUP、RPC 与单调时钟回滚在同一事件循环中执行；
+布尔参数必须为 JSON 布尔值，回滚时间为 1–86400 秒整数，默认 60 秒。
+控制接口最多接收 16 个并发连接，每行最多 64 KiB，未完成请求或未读响应的连接在 5 秒后关闭。
+配置拒绝重复 YAML 键、未知字段和错误类型；持久化场景采用原子替换。

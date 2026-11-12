@@ -45,8 +45,9 @@ BootROM → MB1 → MB2 → cboot ──(kernel-dtb 分区的 DTB，运行期修
 （`nv-l4t-usb-device-mode`，RNDIS/ECM `192.168.55.1` + ACM）在平台 overlay 中 mask，避免两套 gadget 争用
 `3550000.xudc`。18.04 上需要额外处理：
 
-- **Python**：usbmoded 用到 `typing.Protocol`，需要 ≥ 3.8；平台装 `python3.8`、`python3-yaml`，
-  `usbmoded.service.d/10-python3.8.conf` 改 `ExecStart`，`/usr/local/sbin/usb-mode` 包装 CLI。
+- **USB 管理程序**：usbmoded/usb-mode 使用静态 musl Rust ELF，不依赖系统 Python 或 glibc。
+  平台已移除旧 Python 3.8 包与包装入口；从旧镜像手工升级时也要移除这些包装。
+  aarch64 交叉编译已验证，Rust 版本尚未在 TX2 实机复验。
 - **adbd 的 NSS**：静态 glibc 2.39 的 adbd 会 dlopen 系统 2.27 的 `libnss_compat`，`adb shell` 时 abort
   （`_dl_call_libc_early_init` 断言），随后 FunctionFS 关闭、gadget 被解绑。`usbmoded-adbd.service.d/10-nsswitch.conf`
   用 `BindReadOnlyPaths` 只在 adbd 的挂载命名空间里换成仅 `files` / `dns` 的 nsswitch（glibc ≥ 2.34 内建这两个

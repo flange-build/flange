@@ -49,9 +49,8 @@
       // 如某个板子存储紧张可在 board 配置覆盖 enabled: false。
       // SoC/board 层需在 partitions.entries 中提供 recovery 分区，
       // 否则 validate_config 会拒绝配置。
-      // python3-yaml：usbmoded 的场景/gadget 配置是 YAML，recovery 同样
-      // 装 adbd（经 build.deps 带入 usbmoded），缺它 dpkg 会因依赖不满足失败。
-      'systemd', 'systemd-sysv', 'udev', 'dbus', 'python3', 'python3-yaml', 'util-linux',
+      // Python 留给 recovery 控制程序；usbmoded 已静态链接 YAML 解析库。
+      'systemd', 'systemd-sysv', 'udev', 'dbus', 'python3', 'util-linux',
       'e2fsprogs', 'dosfstools', 'parted', 'gdisk', 'zstd', 'coreutils',
       'ca-certificates',
     ],

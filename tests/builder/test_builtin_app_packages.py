@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import io
+import shutil
 import tarfile
 from pathlib import Path
 from typing import Dict
@@ -128,7 +129,11 @@ def test_q8b_fastrpc_packages_follow_radxa_boundaries(tmp_path: Path):
                                  Target(config["board"], config["product"], config["variant"])),
     )
 
-    packages = {item.name: item.runtime_debs[0] for item in builder.build_all().ordered if item.runtime_debs}
+    # 只构建本用例验收的 FastRPC 资源闭包；其他 App 的编译与安装各有独立验证。
+    requests = ["radxa-firmware-sc8280xp", "libadsprpc1", "libadsp-default-listener1",
+                "libcdsprpc1", "libcdsp-default-listener1", "fastrpc"]
+    packages = {item.name: item.runtime_debs[0] for item in builder.build(requests).ordered
+                if item.runtime_debs}
 
     assert {
         "radxa-firmware-sc8280xp",
@@ -249,8 +254,19 @@ def service_packages(request, tmp_path_factory):
         "architecture": {"userspace": arch, "kernel": "arm64", "bootloader": "arm64"},
         "rootfs": {"custom_packages": ["adbd"]},
     }
+    def compile_fixture(command, *, cwd, env):
+        # 此测试验证安装闭包与包契约；Rust 编译及行为由容器内 cargo test 验证。
+        # 提供同架构的真实静态 ELF，继续经过完整包头与 ABI 校验。
+        output = Path(cwd) / "out"
+        output.mkdir()
+        suffix = {"aarch64": "arm64", "armhf": "armhf"}[arch]
+        for name in ("usbmoded", "usb-mode"):
+            shutil.copy2(_PROJECT_ROOT / f"components/app/adbd/bin/adbd-{suffix}", output / name)
+
+    docker = MagicMock()
+    docker.run.side_effect = compile_fixture
     builder = AppBuilder(
-        docker=MagicMock(),
+        docker=docker,
         source=SourceManager(project_root=_PROJECT_ROOT, sources_dir=workspace / "sources"),
         config=config,
         context=WorkspaceContext(_PROJECT_ROOT, workspace, workspace / "build",
@@ -293,15 +309,14 @@ def test_usbmoded_package_installs_runtime_and_preserves_configuration(service_p
         "./etc/udev/rules.d/61-usbmode.rules": 0o644,
         "./lib/systemd/system/usbmoded.service": 0o644,
         "./lib/systemd/system/usbmoded-mtp-server.service": 0o644,
-        "./usr/lib/python3/dist-packages/usbmoded/__init__.py": 0o644,
-        "./usr/lib/python3/dist-packages/usbmoded/capabilities/adb.py": 0o644,
     }
     assert expected.items() <= modes.items()
+    assert not any("/python" in path or path.endswith(".py") for path in modes)
     assert not {"./usr/bin/usbmoded", "./usr/bin/usb-mode",
                 "./lib/udev/rules.d/61-usbmode.rules"} & modes.keys()
     control_tar = packages["usbmoded"]["control.tar.gz"]
     control = _read_tar_member(control_tar, "./control").decode()
-    assert "Depends: python3, python3-yaml" in control.splitlines()
+    assert "Depends: udev" in control.splitlines()
     assert set(_read_tar_member(control_tar, "./conffiles").decode().splitlines()) == {
         "/etc/usbmode/gadget.d/10-default.yaml",
         "/etc/usbmode/scenes.d/10-common.yaml",

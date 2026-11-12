@@ -1,0 +1,42 @@
+{
+  "rustc-x86_64-unknown-linux-gnu": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/rustc-1.90.0-x86_64-unknown-linux-gnu.tar.xz",
+    "sha256": "48c2a42de9e92fcae8c24568f5fe40d5734696a6f80e83cc6d46eef1a78f13c9"
+  },
+  "rustc-aarch64-unknown-linux-gnu": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/rustc-1.90.0-aarch64-unknown-linux-gnu.tar.xz",
+    "sha256": "4e1a9987a11d7d91f0d5afbf5333feb62f44172e4a31f33ce7246549003217f2"
+  },
+  "cargo-x86_64-unknown-linux-gnu": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/cargo-1.90.0-x86_64-unknown-linux-gnu.tar.xz",
+    "sha256": "9853db03d68578a30972e2755c89c66aec035fec641cf8f3a7117c81eec2578d"
+  },
+  "cargo-aarch64-unknown-linux-gnu": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/cargo-1.90.0-aarch64-unknown-linux-gnu.tar.xz",
+    "sha256": "bd8d1da6fe88ea7e29338f24277c22156267447adbfc47d690467ad32d02c2a7"
+  },
+  "rust-std-x86_64-unknown-linux-gnu": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/rust-std-1.90.0-x86_64-unknown-linux-gnu.tar.xz",
+    "sha256": "663f4ab7945b392d5e5294dec1b050a66820a20e86f084ec37eeb0f2f7ff5569"
+  },
+  "rust-std-aarch64-unknown-linux-gnu": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/rust-std-1.90.0-aarch64-unknown-linux-gnu.tar.xz",
+    "sha256": "4952abb7d9d3ed7cea4f7ea44dcb23dc67631fae4ac44a5f059b90a4b5e9223f"
+  },
+  "rust-std-armv7-unknown-linux-musleabihf": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/rust-std-1.90.0-armv7-unknown-linux-musleabihf.tar.xz",
+    "sha256": "072027aa8ce4ce6d053c73abc3a8bb603149533e4109dce72b36c9f0fd63d00a"
+  },
+  "rust-std-aarch64-unknown-linux-musl": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/rust-std-1.90.0-aarch64-unknown-linux-musl.tar.xz",
+    "sha256": "a603e135d4eb67ababdd193268a69937fa4490bafde592f2c931d17c7567b228"
+  },
+  "rustfmt-preview-x86_64-unknown-linux-gnu": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/rustfmt-1.90.0-x86_64-unknown-linux-gnu.tar.xz",
+    "sha256": "7f4d38b9d782e55832bf17969ef35477703c60781545bb098eb127cc8172d1c6"
+  },
+  "rustfmt-preview-aarch64-unknown-linux-gnu": {
+    "url": "https://static.rust-lang.org/dist/2025-09-18/rustfmt-1.90.0-aarch64-unknown-linux-gnu.tar.xz",
+    "sha256": "9bf68ec789280a8fb43574f8a7ae28bbd9fb55c2c0f7d893a51c49a17b7bae76"
+  }
+}
