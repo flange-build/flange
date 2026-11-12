@@ -141,6 +141,7 @@ class ComponentBuilder(ABC):
         下载物及其他增量缓存。本地源码模式本来就跳过 reset/patch，不受影响。
         """
         root = src_dir.resolve()
+        candidates = []
         # 扫描全部声明 patch，而不是只看当前适用集合。这样从 product A
         # 切到排除某 patch 的 product B 时，也能删除 A 留下的 untracked 文件。
         for patch in self._all_patch_paths(config):
@@ -155,17 +156,40 @@ class ComponentBuilder(ABC):
                 target = (src_dir / relative).resolve()
                 if not target.is_relative_to(root):
                     raise ValueError(f"补丁新增文件路径越出源码树: {patch}: {relative}")
-                if target.is_symlink() or target.is_file():
-                    target.unlink()
-                elif target.exists():
-                    raise IsADirectoryError(f"补丁声明新增文件但目标是目录: {target}")
+                candidates.append((relative, target))
+        if not candidates:
+            return
+        # 切换源码时，新上游可能已包含旧补丁新增的文件。reset 已恢复它们，
+        # 不可因仍在历史补丁清单中而删掉受 Git 跟踪的上游内容。
+        tracked = set(self.docker.run(
+            ["git", "ls-files", "-z", "--", *(name for name, _ in candidates)],
+            cwd=str(src_dir), capture=True,
+        ).stdout.split("\0"))
+        for relative, target in candidates:
+            if relative in tracked:
+                continue
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+            elif target.exists():
+                raise IsADirectoryError(f"补丁声明新增文件但目标是目录: {target}")
 
     def apply_patches(self, src_dir: Path, config: dict):
         """按序应用平台补丁 + 板级补丁"""
-        for patch in self._patch_paths(config):
+        patches = self._patch_paths(config)
+        if not patches:
+            return
+        # source.subpath 可把组件放在 SDK 仓库子目录。git apply 的路径仍相对
+        # 仓库根；不加此前缀会静默跳过全部文件，并以成功状态退出。
+        prefix = self.docker.run(
+            ["git", "rev-parse", "--show-prefix"], cwd=str(src_dir), capture=True
+        ).stdout.strip().rstrip("/")
+        command = ["git", "apply"]
+        if prefix:
+            command.append(f"--directory={prefix}")
+        for patch in patches:
             abs_patch = str(patch.resolve())
             try:
-                self.docker.run(["git", "apply", abs_patch], cwd=str(src_dir))
+                self.docker.run([*command, abs_patch], cwd=str(src_dir))
             except Exception:
                 self.docker.run(["patch", "-p1", "-i", abs_patch], cwd=str(src_dir))
 

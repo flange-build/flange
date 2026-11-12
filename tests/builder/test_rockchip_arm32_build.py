@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -81,6 +82,13 @@ class ForbiddenDocker:
 
     def run(self, cmd: list[str], **kwargs):
         raise AssertionError(f"FIT boot 不应调用 Docker: {cmd}")
+
+
+class LocalGitRunner:
+    """用临时 Git 仓库验证补丁行为，不需要 Docker 或目标编译器。"""
+
+    def run(self, cmd, *, cwd, capture=False):
+        return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, check=True)
 
 
 class BootloaderPatchCounter(ComponentBuilder):
@@ -433,6 +441,7 @@ def test_patch_created_files_are_removed_without_cleaning_other_cache(
     added.write_text("old patch output")
     cached = source / "arch/arm/dts/rk3506.o"
     cached.write_bytes(b"incremental-cache")
+    subprocess.run(["git", "init", str(source)], check=True, capture_output=True)
     patch_file = tmp_path / "board.patch"
     patch_file.write_text(
         "diff --git a/arch/arm/dts/alientek-rk3506.dts "
@@ -441,6 +450,7 @@ def test_patch_created_files_are_removed_without_cleaning_other_cache(
         "+++ b/arch/arm/dts/alientek-rk3506.dts\n"
     )
     counter = BootloaderPatchCounter(docker=None, source=None)
+    counter.docker = LocalGitRunner()
     monkeypatch.setattr(
         counter,
         "_all_patch_paths",
@@ -461,6 +471,7 @@ def test_excluded_patch_created_file_is_removed_on_route_switch(
     added = source / "arch/arm/dts/route-only.dts"
     added.parent.mkdir(parents=True)
     added.write_text("previous route")
+    subprocess.run(["git", "init", str(source)], check=True, capture_output=True)
     patch_file = tmp_path / "route.patch"
     patch_file.write_text(
         "diff --git a/arch/arm/dts/route-only.dts "
@@ -469,6 +480,7 @@ def test_excluded_patch_created_file_is_removed_on_route_switch(
         "+++ b/arch/arm/dts/route-only.dts\n"
     )
     counter = BootloaderPatchCounter(docker=None, source=None)
+    counter.docker = LocalGitRunner()
     monkeypatch.setattr(
         counter,
         "_all_patch_paths",
@@ -479,3 +491,43 @@ def test_excluded_patch_created_file_is_removed_on_route_switch(
     counter._remove_patch_created_files(source, {})
 
     assert not added.exists()
+
+
+@pytest.mark.parametrize("subpath", [".", "sdk/kernel"])
+def test_component_patches_apply_relative_to_source_subpath(tmp_path, monkeypatch, subpath):
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    source = tmp_path / subpath
+    source.mkdir(parents=True, exist_ok=True)
+    existing = source / "existing.txt"
+    existing.write_text("before\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    patch = tmp_path / "component.patch"
+    patch.write_text(
+        "diff --git a/existing.txt b/existing.txt\n"
+        "--- a/existing.txt\n+++ b/existing.txt\n"
+        "@@ -1 +1 @@\n-before\n+after\n"
+        "diff --git a/added.txt b/added.txt\nnew file mode 100644\n"
+        "--- /dev/null\n+++ b/added.txt\n@@ -0,0 +1 @@\n+added\n"
+    )
+    counter = BootloaderPatchCounter(docker=LocalGitRunner(), source=None)
+    monkeypatch.setattr(counter, "_patch_paths", lambda config: [patch])
+    counter.apply_patches(source, {})
+    assert existing.read_text() == "after\n"
+    assert (source / "added.txt").read_text() == "added\n"
+    if subpath != ".":
+        assert not (tmp_path / "added.txt").exists()
+
+
+def test_patch_cleanup_preserves_new_upstream_tracked_files(tmp_path, monkeypatch):
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    source = tmp_path / "sdk/kernel"
+    source.mkdir(parents=True)
+    upstream = source / "board.dts"
+    upstream.write_text("upstream content\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    patch = tmp_path / "old.patch"
+    patch.write_text("--- /dev/null\n+++ b/board.dts\n")
+    counter = BootloaderPatchCounter(docker=LocalGitRunner(), source=None)
+    monkeypatch.setattr(counter, "_all_patch_paths", lambda config: [patch])
+    counter._remove_patch_created_files(source, {})
+    assert upstream.read_text() == "upstream content\n"

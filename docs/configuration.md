@@ -69,6 +69,8 @@ Package 配置只按首次求值得到的直接启用列表加载一轮，不递
 | `partitions.entries` | 分区几何与产物用途，见[启动与刷写](boot-and-flash.md) |
 
 `local_path` 引用的用户源码不执行 Git reset 或重复应用仓库补丁；构建使用隔离副本与内容身份。
+远端源码的组件补丁以 `source.subpath` 指定的组件目录为基准；切换 SDK 后，上游已经跟踪的
+文件不会被旧补丁的新增文件清理逻辑删除。
 下载文件使用包含 `url`、可信 `sha256` 和可选 `filename` 的描述符，校验通过后才进入缓存。
 普通相对路径与跨层 `layer.path()` 的区别见[路径与 import](layers.md#路径与-import)。
 

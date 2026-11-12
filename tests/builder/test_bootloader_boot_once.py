@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from subprocess import CompletedProcess
 from unittest.mock import MagicMock
 
 from builder.base import ComponentBuilder
@@ -138,6 +139,7 @@ class RecordingDocker:
 
     def run(self, cmd, **kwargs):
         self.commands.append(cmd)
+        return CompletedProcess(cmd, 0, stdout="", stderr="")
 
 
 class StaticSource:
