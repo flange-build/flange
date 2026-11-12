@@ -32,7 +32,7 @@
 - [板卡索引](boards/README.md)：全部内置配置、产品、接线及硬件验证范围。
 - [平台索引](platforms/README.md)：平台共性、启动固件与刷写协议。
 - [Recovery 维护系统](recovery.md)与[线协议](recovery-protocol.md)：在线备份、恢复和分区写入。
-- [USB 模式管理](usb.md)：Rust 主机/设备模式服务、ADB、插拔事件与排障。
+- [USB 模式管理](usb.md)：Rust 主机/设备模式服务、OpenRC 提前启动、ADB、插拔事件与排障。
 - [AMP 开发](amp.md)、[运行与 rpmsg](hardware/amp-runtime.md)、[SDK 升级参考](amp-sdk-upgrade.md)。
 
 ## 4. 硬件与外设

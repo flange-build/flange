@@ -200,6 +200,16 @@ def test_platform_builder_inputs_match_canonical_config(configs, target):
     assert _get(config, download_path)[download_key] == download_value
 
 
+@pytest.mark.parametrize("variant", ["debug", "release"])
+def test_luckfox_spinand_uses_high_resolution_waits(configs, variant):
+    # 页就绪轮询会休眠数微秒；低精度 100Hz 定时器使真机每页读退化到 10ms。
+    config = configs[f"luckfox-pico-pro-max-default-{variant}"]
+    assert config["storage"]["type"] == "spinand"
+    assert "CONFIG_HIGH_RES_TIMERS=y" in render_kconfig(
+        config["kernel"]["config"], "kernel.config"
+    )
+
+
 L4T = "32.7.6-20241104234601"
 
 

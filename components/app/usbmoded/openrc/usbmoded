@@ -16,7 +16,9 @@ extra_started_commands="reload"
 
 depend() {
 	need localmount
-	after modules udev
+	# bootmisc 完成运行目录清理；USB 的设备链路不依赖网络地址。
+	after bootmisc modules udev
+	before networking
 }
 
 start_pre() {

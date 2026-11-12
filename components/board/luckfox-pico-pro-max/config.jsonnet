@@ -22,6 +22,9 @@
     headers_package: false,
     device_tree+: { name: 'rv1106g-luckfox-pico-pro-max' },
     config+: {
+      // SPI NAND 的页就绪轮询需要微秒级休眠；HZ=100 下缺少高精度定时器
+      // 会把每页等待放大到约 10ms，拖慢 UBI 扫描和全部冷读。
+      CONFIG_HIGH_RES_TIMERS: 'y',
       // rv1106_defconfig 不含 LED 子系统；板载工作灯用 heartbeat 指示内核运行。
       CONFIG_NEW_LEDS: 'y',
       CONFIG_LEDS_CLASS: 'y',

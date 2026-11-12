@@ -28,3 +28,10 @@ start_pre() {
 		done < /run/usbmoded/adbd.env
 	fi
 }
+
+start_post() {
+	# 按需启动的服务须跨 boot → default 保留；显式 stop 和关机仍由 OpenRC 处理。
+	# mark_service_* 会接管状态标记，因此同时声明已完成启动，避免遗留 starting。
+	mark_service_hotplugged || return $?
+	mark_service_started
+}

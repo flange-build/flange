@@ -83,7 +83,7 @@ udev 事件：USB 状态变化 → `/usr/lib/usbmoded/notify` 选择 systemd 异
 | ROCK 5B（Python 版本） | 场景切换、权限、自锁回滚、开机路径，device↔host 切换 | 依赖 dwc3 用户态 role 控制补丁；各场景仍受内核 function 支持限制 |
 | [Jetson TX2](boards/nvidia-jetson-tx2.md)（Python 版本） | usbmoded + adbd、重启 adbd 后重连 | Linux 4.9 无 usb_role，不能切换 host/device |
 | [RUBIK Pi 3](boards/thundercomm-rubikpi3.md)（Python 版本） | 延迟 UDC 的开机恢复；厂商内核的 USB 重连 | mainline 与厂商产品的 role/连接器行为分别判断 |
-| [Luckfox](boards/luckfox-pico-pro-max.md) | 2026-11-12，Alpine/OpenRC 下 Rust 服务的正常重启、3 次软断连、5 次 reload、权限、串口场景和 host 自动回滚通过 | 真实插拔与外接 USB Host 外设未测 |
+| [Luckfox](boards/luckfox-pico-pro-max.md) | 2026-11-12，Alpine/OpenRC；高精度内核与 USB 提前启动下正常重启、跨运行级别保留、网络延迟 15 秒时提前上线、3 次软断连、5 次 reload 和权限通过；Rust 版本另已验证串口场景和 host 自动回滚 | NAND 页等待与启动耗时见板卡页；新内核的 rootfs 首次空间修复、真实插拔与外接 USB Host 外设未测 |
 | [ATK-RK3506B](boards/atk-rk3506b.md) | USB0 gadget 自动加载/绑定，ADB 与 USB1 Host 共存 | 早期记录使用旧服务，长期切换压力未验收 |
 
 VID、gadget group 和默认场景来自当前 App 基线与板级 `overlay/etc/usbmode/`，不另维护易漂移的静态副本。
@@ -122,7 +122,9 @@ role 切换不可用有两种性质完全不同的原因，服务会分别诊断
 - **拆包后在已装旧版的设备上增量升级会撞 dpkg overwrite 冲突**，需先
   `dpkg -r adbd`。rootfs 全新构建不受影响。
 
-- systemd 下服务在早期 sysinit 阶段启动，OpenRC 使用其原生服务顺序；初始化期间的 SIGHUP 必须延后到场景建立后处理，避免递归重入。
+- systemd 下服务在早期 sysinit 阶段启动；OpenRC 在 `boot` 中完成本地挂载、`bootmisc` 与设备初始化后，
+  于 `networking` 之前启动 usbmoded。adbd 成功启动后标记为 `hotplugged`，否则跨运行级别时
+  会被 OpenRC 当作手工服务停止。初始化期间的 SIGHUP 必须延后到场景建立后处理，避免递归重入。
 - **`-p` 持久化到不含 adb 的场景会让设备每次开机都无法远程访问**，需 `--force`
   才能执行，恢复只能靠串口或重新刷写。
 - **不要把 `usbmode` 加进 rootfs 顶层 `groups`。** 该字段的第二职是「作为每个

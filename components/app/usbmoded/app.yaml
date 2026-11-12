@@ -41,6 +41,8 @@ openrc:
   # udev 规则经 scripts/notify（→ /usr/lib/usbmoded/notify）按 init 发 reload。
   script: openrc/usbmoded
   auto_start: true
+  # USB 调试在本地文件系统与设备就绪后启动，不等待 DHCP 或其他 default 服务。
+  runlevel: boot
 
 packaging:
   depends:

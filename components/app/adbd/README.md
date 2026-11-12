@@ -14,6 +14,9 @@ Android Debug Bridge daemon，作为 [usbmoded](../usbmoded/README.md) 的 adb
 FunctionFS 要求 daemon 在 gadget 绑定 UDC 前打开 ep0 并写入描述符，时序由 usbmoded 控制。
 systemd unit 没有 `[Install]` 段，`systemctl is-enabled` 显示 `static` 是预期结果。
 OpenRC 的安装策略不主动撤销用户此前启用的服务；应避免额外启动入口与 gadget 编排竞争。
+OpenRC 脚本在成功启动后将 adbd 标记为 `hotplugged`（热插拔服务）及 `started`，
+避免 usbmoded 在 `boot` 提前拉起它后，切换到 `default` 时被作为手工服务停掉。
+该标记不增加开机启动入口，也不阻止显式停止或正常关机。
 
 gadget 配置、场景定义、`usb-mode` CLI 与控制协议都属于 usbmoded，见
 [usbmoded 的 README](../usbmoded/README.md)。
@@ -52,7 +55,11 @@ usbmoded 的断连恢复分支会重新启动 adbd 并绑定。因此允许 PID 
 
 - arm64：已部署 ROCK5B；旧版一次模拟断连即恢复超时，修复版连续 9 轮恢复成功。
   第 10 轮因图形会话自动挂起而中断，未计为通过；真实数据线插拔仍待确认。
-- armhf：已完成交叉编译及静态依赖检查，本次修复产物尚未做运行验证。
+- armhf：2026-11-12，在 Luckfox Pico Max（RV1106G3、SPI NAND）、
+  `luckfox-pico-pro-max-alpine-release`、Alpine 3.24.4 / Linux 6.1.115+ 上验证
+  USB 与 TCP ADB、正常重启后自动连接，以及连续 3 次模拟断连恢复。
+  每次由 usbmoded 自动重启 adbd 并重新绑定 UDC，无需人工重启服务；二进制摘要与上表一致。
+  真实数据线插拔尚未验证；首次烧录的长时间启动见 [Luckfox 板卡说明](../../../docs/boards/luckfox-pico-pro-max.md#首次启动与-adb-排障)。
 
 宿主机回归命令如下，使用 `adb devices` 中的目标 USB 序列号；该检查会短暂断开整个 gadget：
 

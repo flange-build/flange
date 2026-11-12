@@ -23,6 +23,11 @@ daemon（adbd、mtp-server）的生命周期交给当前 systemd 或 OpenRC，�
 后者的状态判断读写不对称曾在 ROCK 5B 上堆积 360+ 并发循环、USB 每 2 秒
 断连一次。
 
+OpenRC 将 usbmoded 加入 `boot`，在本地挂载、`bootmisc` 运行目录清理与设备初始化之后、
+`networking` 之前启动，USB 调试不等待 DHCP（动态主机配置协议）。adbd 仍只由能力层
+在 FunctionFS（用户态 USB 功能文件系统）准备好后启动，并由其服务脚本标记为
+`hotplugged`（热插拔服务），跨 `boot → default` 保留；显式停止和关机仍走正常服务流程。
+
 ## 构建与验收
 
 在 flange 仓库根目录，完成 [开发环境准备](../../../docs/development-guide.md) 后运行：
@@ -54,7 +59,7 @@ python3 tests/usbmoded_field_verify.py --serial <USB序列号>
 python3 tests/adbd_usb_reconnect.py --serial <USB序列号> --cycles 3 --timeout 60 --allow-pid-change
 ```
 
-第一条验证公开协议、5 次 reload、endpoint 持有和非特权拒绝；第二条会短暂断开 ADB，
+第一条验证公开协议、5 次 reload、endpoint 持有、非特权拒绝与 OpenRC 动态服务归属；第二条会短暂断开 ADB，
 由宿主等待恢复。失败时检查 `usb-mode get`、当前 init 的服务日志与 `dmesg`，
 不要把伪 ConfigFS 测试当作外设通过。已测硬件与启动时间见 [Luckfox 板卡页](../../../docs/boards/luckfox-pico-pro-max.md)。
 

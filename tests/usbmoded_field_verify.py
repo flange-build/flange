@@ -2,12 +2,13 @@
 """从宿主通过公开协议验收 usbmoded，目标板不需要 Python。
 
 用法：python3 tests/usbmoded_field_verify.py --serial <ADB序列号>
-检查查询、权限、CLI 防失联保护、重复 reload与 FunctionFS endpoint。
+检查查询、权限、CLI 防失联保护、重复 reload、FunctionFS endpoint 与 OpenRC 动态服务归属。
 模拟断连由相邻的 adbd_usb_reconnect.py 执行；不把本脚本当作角色/外设验收。
 """
 from __future__ import annotations
 
 import argparse
+import configparser
 import json
 import socket
 import subprocess
@@ -43,6 +44,14 @@ def main() -> None:
         assert initial['udc_state'] == 'configured', initial
         pids = adb('shell', 'pidof adbd').stdout.split()
         assert len(pids) == 1, pids
+        openrc_state = 'not_applicable'
+        if adb('shell', 'test -d /run/openrc', check=False).returncode == 0:
+            # 提前启动后必须归入 hotplugged，不能在 boot → default 时被当作手工服务停掉。
+            services = configparser.ConfigParser()
+            services.read_string(adb('shell', 'rc-status --format ini --in-state hotplugged').stdout)
+            state = services.get('Dynamic hotplugged', 'usbmoded-adbd', fallback='')
+            assert state.split()[:1] == ['started'], services.sections()
+            openrc_state = 'passed'
         for _ in range(5):
             adb('shell', '/usr/lib/usbmoded/notify')
             assert rpc('scene.get')['scene'] == initial['scene']
@@ -61,7 +70,8 @@ def main() -> None:
         final = rpc('scene.get')
         assert final['scene'] == initial['scene'] and final['udc_state'] == 'configured', final
         print(json.dumps({'status': 'passed', 'scene': final, 'reload_cycles': 5,
-                          'authorization': 'passed', 'self_lock_guard': 'passed'},
+                          'authorization': 'passed', 'self_lock_guard': 'passed',
+                          'openrc_dynamic_service': openrc_state},
                          ensure_ascii=False))
     finally:
         adb('forward', '--remove', f'tcp:{port}', check=False)
