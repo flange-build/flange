@@ -1,42 +1,30 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: flange <flange@local>
-Date: Mon, 9 Nov 2026 10:31:04 +0800
-Subject: [PATCH] 新增 Luckfox Pico Pro/Max 设备树
+新增 Luckfox 多媒体设备树，保留 flange 启动布局与供电约束。
 
-由 Luckfox 官方 SDK（5.10）移植到 6.1 树，保留 SPI NAND、TF 卡、以太网、
-USB OTG（device）、ADC、LED、RTC；bootargs 指向 mtd3 上的 UBI rootfs。
-vdd_arm 改为固定 900mV 并删去 1104MHz 以上 OPP；LED 用 heartbeat 指示内核运行。
----
- .../boot/dts/rv1106g-luckfox-pico-pro-max.dts | 158 ++++++++++++++++++
- 1 file changed, 158 insertions(+)
- create mode 100644 arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max.dts
-
-diff --git a/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max.dts b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max.dts
+diff --git a/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max-flange-media.dts b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max-flange-media.dts
 new file mode 100644
-index 0000000..46912da
 --- /dev/null
-+++ b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max.dts
-@@ -0,0 +1,158 @@
++++ b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max-flange-media.dts
+@@ -0,0 +1,168 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * Luckfox Pico Pro / Max（RV1106G2 128MB / RV1106G3 256MB，同一板型）。
 + *
-+ * 由 Luckfox 官方 SDK（Linux 5.10）的 rv1106g-luckfox-pico-pro-max.dts 移植到
-+ * 6.1 树：只保留基础外设，不含摄像头/ISP、NPU、音频编解码与 SDK 私有 DHT11
-+ * 节点（依赖 5.10 树驱动）。根文件系统是 SPI NAND 上 GPT 第 4 个分区（mtd3）
-+ * 的 UBI volume "rootfs"。
++ * 基于官方 Linux 5.10.160，保留 flange 的 SPI NAND 分区、固定电压与心跳灯。
++ * 启用 RGA、ISP 和编码通路；摄像头传感器与接线须独立配置。
 + */
 +
 +/dts-v1/;
 +
 +#include "rv1106.dtsi"
++#include "rv1106-amp.dtsi"
 +
 +/ {
 +	model = "Luckfox Pico Pro Max";
 +	compatible = "luckfox,pico-pro-max", "rockchip,rv1106";
 +
++	/* 厂商 MPI 使用专用 CMA 池，大小由该参数控制，不另建通用池。 */
 +	chosen {
-+		bootargs = "earlycon=uart8250,mmio32,0xff4c0000 console=ttyFIQ0 ubi.mtd=3 root=ubi0:rootfs rw rootfstype=ubifs rootwait storagemedia=mtd androidboot.storagemedia=mtd androidboot.mode=normal";
++		bootargs = "earlycon=uart8250,mmio32,0xff4c0000 console=ttyFIQ0 ubi.mtd=3 root=ubi0:rootfs rw rootfstype=ubifs rootwait rk_dma_heap_cma=66M storagemedia=mtd androidboot.storagemedia=mtd androidboot.mode=normal";
 +	};
 +
 +	vcc_1v8: vcc-1v8 {
@@ -175,5 +163,13 @@ index 0000000..46912da
 +&rtc {
 +	status = "okay";
 +};
--- 
-2.43.0
++
++/* 多媒体硬件由配套 SDK 模块驱动，连续内存大小由板级产品配置指定。 */
++&mpp_srv { status = "okay"; };
++&mpp_vcodec { status = "okay"; };
++&rkvenc { status = "okay"; };
++&rkvenc_pp { status = "okay"; };
++&rkdvbm { status = "okay"; };
++&rga2 { status = "okay"; };
++&rkisp { status = "okay"; };
++&rkisp_vir0 { status = "okay"; };

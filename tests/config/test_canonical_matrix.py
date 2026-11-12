@@ -78,6 +78,18 @@ def test_all_targets_are_canonical(configs):
                 assert ref["name"] in sources, (target, component)
 
 
+@pytest.mark.parametrize("variant", ["debug", "release"])
+def test_rv1106_uses_pinned_sdk_kernel_without_external_layers(configs, variant):
+    config = configs[f"luckfox-pico-pro-max-default-{variant}"]
+    kernel = config["kernel"]
+    source = config["sources"][kernel["source"]["name"]]
+    assert kernel["source"]["subpath"] == "sysdrv/source/kernel"
+    assert source["url"] == "https://github.com/LuckfoxTECH/luckfox-pico.git"
+    assert len(bytes.fromhex(source["commit"])) == 20
+    assert kernel["boot_format"] == "fit"
+    assert kernel["config"]["CONFIG_HIGH_RES_TIMERS"] == "y"
+
+
 PLATFORM_CASES = {
     "arduino-uno-q-default-release": {
         "platform": "qualcommqrb2210",

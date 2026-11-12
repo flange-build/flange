@@ -6,7 +6,7 @@
 
 ## 概述
 
-Rockchip 系列平台，覆盖 ARM32 RK3506B 与 ARM64 RK3566/RK3568/RK3576/RK3588(S)。同一策略层按配置选择 extlinux/FIT、ext4/UBI、块设备 GPT/SPI NAND MTD；[atk-rk3506b](../boards/atk-rk3506b.md) 已完成全刷与冷启动实机验收。
+Rockchip 系列平台，覆盖 ARM32 RK3506B / RV1106 与 ARM64 RK3566/RK3568/RK3576/RK3588(S)。同一策略层按配置选择 extlinux/FIT、ext4/UBI、块设备 GPT/SPI NAND MTD；[atk-rk3506b](../boards/atk-rk3506b.md) 已完成全刷与冷启动实机验收。
 
 ## 关键设计要点
 
@@ -30,6 +30,8 @@ Rockchip 系列平台，覆盖 ARM32 RK3506B 与 ARM64 RK3566/RK3568/RK3576/RK35
 **内核与 GPU**
 
 当前平台默认源码分支为 `linux-6.1-stan-rkr5.1`，具体版本可由 SoC/板覆盖。
+RV1106 各发行版统一使用固定的 Luckfox SDK Linux 5.10.160，内核位于 SDK 的
+`sysdrv/source/kernel`；多媒体模块与实机边界见 [Luckfox 板卡说明](../boards/luckfox-pico-pro-max.md#多媒体驱动与运行时)。
 RK3506B 与 RV1106 为 ARM32，采用 vendor FIT 与 UBI；ARM64 块设备通常采用 extlinux 与 ext4。
 RK3566/3568/3576 通过 `panfrost.config` 选择 Panfrost；RK3588/3588S 默认通过
 `rk3588_panthor.config` 选择 Panthor，固件由规范 `source: {name, subpath}` 引用 BSP 中的 CSF blob。

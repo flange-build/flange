@@ -1,8 +1,7 @@
 // Rockchip RV1106 SoC 层配置：ARM32、vendor FIT、TOS、SPI NAND 启动。
 //
-// 结构对齐 rk3506b（同为 Cortex-A7 + SPI NAND + UBI 路由）；源码全部复用
-// Rockchip 平台既有仓库：flange-build/kernel（含 rv1106.dtsi / rv1106_defconfig）、
-// radxa/u-boot（含 rv1106_defconfig）、radxa/rkbin（含 RV1106MINIALL.ini）。
+// 各发行版共用 Luckfox 官方 5.10.160 内核，与 RV1106 厂商多媒体模块保持 ABI 一致。
+// 引导链复用 radxa/u-boot 与 radxa/rkbin；板级配置负责介质和设备树。
 {
   platform: 'rockchip',
   soc: 'rv1106',
@@ -12,6 +11,13 @@
     userspace: 'armhf',
     kernel: 'arm',
     bootloader: 'arm',
+  },
+  sources+: {
+    'luckfox-sdk': {
+      url: 'https://github.com/LuckfoxTECH/luckfox-pico.git',
+      branch: 'main',
+      commit: '824b817f889c2cbff1d48fcdb18ab494a68f69d1',
+    },
   },
   flash_identity: {
     // 按 RK3568 实测规律（RCI 返回芯片号字节反转的 ASCII）推断 RV1106 为
@@ -60,7 +66,7 @@
     ],
   },
   kernel+: {
-    source: { name: 'rockchip-kernel' },
+    source: { name: 'luckfox-sdk', subpath: 'sysdrv/source/kernel' },
     cross_compile: '/opt/arm-linux-gcc10/bin/arm-none-linux-gnueabihf-',
     image: 'zImage',
     boot_format: 'fit',
@@ -72,12 +78,17 @@
       'case_insensitive_fix.config',
     ],
     config+: {
+      // 厂商 DMA 使用独立 CMA 池；容量由板级 rk_dma_heap_cma 启动参数设置。
+      CONFIG_CMA_SIZE_MBYTES: '0',
+      CONFIG_ROCKCHIP_MPP_OSAL: 'y',
+      CONFIG_ROCKCHIP_DVBM: 'm',
+      CONFIG_ROCKCHIP_MULTI_RGA: 'm',
+      CONFIG_VIDEO_ROCKCHIP_ISP: 'm',
+      CONFIG_VIDEO_ROCKCHIP_CIF: 'm',
       // 板载百兆 MAC + 内置 FEPHY（PHY ID 0x00441400，rk630phy 驱动）。
       CONFIG_DWMAC_ROCKCHIP: 'y',
       CONFIG_RK630_PHY: 'y',
-      // rv1106_defconfig 的 FIQ_GLUE 依赖 !THREAD_INFO_IN_TASK，而 6.1 ARMv7 经
-      // CURRENT_POINTER_IN_TPIDRURO 强制选中后者，fiq_debugger.c 编译失败。
-      // 与 rk3506 一致改由 OP-TEE 捕获串口 FIQ 再转交非安全世界。
+      // 使用当前 OP-TEE 引导链，由安全世界捕获串口 FIQ 再转交内核。
       CONFIG_FIQ_DEBUGGER_FIQ_GLUE: 'n',
       CONFIG_FIQ_DEBUGGER_TRUST_ZONE: 'y',
       // DTS bootargs 的 earlycon=uart8250 依赖 8250 console（连带 SERIAL_EARLYCON）；

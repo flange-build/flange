@@ -17,20 +17,23 @@ Luckfox Pico Pro (RV1106G2 128MB) / Max (RV1106G3 256MB) 单板计算机，Corte
 | SoC | Rockchip RV1106（ARMv7 / Cortex-A7，userspace=armhf，kernel/bootloader=arm） |
 | 启动介质 | 256MB SPI NAND（2048B page，128KB PEB），GPT 分区表 |
 | Bootloader | U-Boot（`rv1106_defconfig` + `rv1106-optee.config`，`CONFIG_EFI_PARTITION: 'y'`） |
-| 内核 | Linux 6.1.115+（`rv1106g-luckfox-pico-pro-max.dts`，vendor FIT `boot.img`） |
+| 内核 | Ubuntu / Alpine 共用 Luckfox 官方 Linux 5.10.160，设备树为 `rv1106g-luckfox-pico-pro-max-flange-media.dts`，生成 vendor FIT `boot.img` |
 | 根文件系统 | UBI 卷 `ubi0:rootfs`（mtd3，223MB），Alpine Linux（musl + apk + OpenRC）或 Ubuntu Base |
 | 调试通道 | USB gadget（FunctionFS adbd + usbmoded），串口 `ttyFIQ0`，以太网 SSH |
+
+2026-11-12，`luckfox-pico-pro-max-default-release` 的共享 5.10.160 内核已在 Docker 中编译通过。
+Ubuntu 系统镜像及实机启动尚未验收；下文硬件结果属于 Alpine 产品。
 
 ## 实机验收结果
 
 2026-11-12，在 RV1106G3 Max、W25N02KV 256MB SPI NAND 上完成
 `luckfox-pico-pro-max-alpine-release` 的完整构建、Maskrom 烧录与启动验证，
-同机在线升级 Rust usbmoded、提前启动的 OpenRC 服务，并单独更新启用高精度定时器的 boot 分区后，
-验证正常重启和 USB 恢复。
-基线为 Alpine 3.24.4、musl 1.2.6、apk 3.0.9、OpenRC 0.63.2。当前 Rust 版本完整镜像
-构建和清单校验通过，包含 110 个 APK，rootfs 文件树约 40 MB，`rootfs.ubi` 为 28,704,768 B；
-这份完整镜像尚未重新全量烧录，实机数据来自原 rootfs 上的 APK 升级和 boot 分区更新；
-新 boot 镜像的 NAND 读回摘要与构建产物一致。
+同机在线升级 Rust usbmoded、提前启动的 OpenRC 服务，以及配套的多媒体 APK、内核模块和 boot 分区，
+验证启动、USB 恢复及下文的多媒体功能。
+当前系统为 Alpine 3.24.4、musl 1.2.6、apk 3.0.9、OpenRC 0.63.2、Linux 5.10.160。
+完整镜像构建和清单校验通过，包含 111 个 APK；这份完整镜像尚未重新全量烧录，
+实机数据来自原 rootfs 上的 APK、模块升级和 boot 分区更新；
+已烧录 boot 镜像的 NAND 读回摘要校验通过。
 没有 systemd/dpkg/apt。外部层与 SDK 不随此仓库发布，接入约定见[多层工作区](../layers.md)。
 
 - **启动与控制台**：U-Boot 解析 SPI NAND 上的 GPT 分区表，加载 vendor FIT boot.img；Linux 内核启动，板载工作灯以 heartbeat 双闪指示内核运行。
@@ -40,21 +43,38 @@ Luckfox Pico Pro (RV1106G2 128MB) / Max (RV1106G3 256MB) 单板计算机，Corte
   5 次幂等 reload、非特权拒绝、`debug → serial → debug` 和 host 场景自动回滚均通过。
 - **App 运行时**：2026-11-10 已通过 `flange app` 构建、部署并运行 C++ / musl / zlib 测试程序（`musl-check`）；使用 armv7 musl SDK 和 Clang 21，动态加载器为 `/lib/ld-musl-armhf.so.1`。2026-11-12 的独立 uClibc 检查见下文。
 
-## 多媒体运行时的实机边界
+## 多媒体驱动与运行时
 
 外部 Alpine 层的 `rockchip-multimedia-uclibc` 将厂商运行库安装到 `/opt/rockchip-uclibc`。
-2026-11-12，Rockit、MPP、RGA、RKAIQ 的 `RTLD_NOW` 加载和公开符号解析均通过，
-检查前后 BusyBox/musl 正常，系统 musl 加载器 SHA256 未改变。
+当前使用的厂商 Rockit / KMPP 模块与官方 Linux 5.10.160 的 ABI（应用二进制接口）绑定。
+核心 RV1106 配置固定 Luckfox SDK 提交 `824b817f889c2cbff1d48fcdb18ab494a68f69d1`，
+从 `sysdrv/source/kernel` 构建各产品共享的内核；设备树和通用驱动配置也由核心提供。
+Alpine 包追加厂商模块及用户态运行库；构建时校验模块 SHA256、vermagic 和关键结构体布局，
+不将旧模块强制装入 6.1。系统继续使用 musl，厂商应用通过 `rockchip-uclibc-run` 在独立进程运行。
 
-当前 BSP 尚未形成可用的硬件多媒体链路：设备上没有 `/dev/mpi/*`、`/dev/rga`、
-`/dev/mpp_service`、`/dev/video*` 或 `/dev/media*`。H.264 探针调用
-`RK_MPI_SYS_Init()` 返回 0，但日志报告缺少 `/dev/mpi/valloc`、`vsys`、`venc` 等节点；
-随后 `RK_MPI_SYS_MmzAlloc_Cached()` 在 `RTDmaStore::fetchDma` 断言中止，退出码 134，
-未产生码流。不能把 `SYS_Init` 返回成功或用户态库可加载当作硬件可用。
+2026-11-12，在上述 Max / SPI NAND / Alpine 目标上完成：
 
-硬件编码仍需集成与内核匹配的厂商 MPI/编码驱动；RGA、ISP 和摄像头还需启用对应板级
-设备树节点，并提供实际传感器的连接与 IQ 标定文件。当前没有摄像头采集、RGA 图像处理
-或 MPP 编解码通过的实机结论。
+| 项目 | 实际结果 |
+| --- | --- |
+| 四库加载 | Rockit、MPP、RGA、RKAIQ 的 `RTLD_NOW` 加载与公开符号解析通过 |
+| 驱动与内存 | Rockit、KMPP、RGA、ISP、DVBM 加载；厂商专用 CMA 实测为 66 MiB，MPI 分配、映射、缓存同步及释放通过 |
+| H.264 编码 | 16 帧 320×240 合成 NV12 输入经硬件编码，主机 FFmpeg 完整解码，帧数和尺寸正确；按完整色彩范围比较，逐帧亮度平均绝对误差为 0.53–0.73 |
+| RGA | 128×96 RGBA 复制的 49,152 字节一致；缩放到 64×48 后逐像素比较通过 |
+| 普通用户 | udev 将 MPI、vcodec、RGA 节点设为 `root:video 0660`，`flange` 用户可运行编码与 RGA 自检 |
+
+`rockchip-multimedia` OpenRC 服务在 `default` 阶段加载驱动；USB 在 `boot` 阶段启动。
+设备应出现 `/dev/mpi/valloc`、`/dev/mpi/venc`、`/dev/vcodec` 和 `/dev/rga`。
+最终 5.10.160 镜像连续两次正常重启后，驱动与权限自动恢复，普通用户 RGA 自检通过，
+内核没有 Oops / BUG。以单调时钟测量 `sync; reboot` 到新 boot ID 的 ADB shell 可用，
+耗时 11.43–12.69 秒；这不代表物理上电时间，也不是与 6.1 的同条件性能对照。
+仅 `SYS_Init` 返回成功或库可加载不能证明硬件可用，应运行实际分配、编码和像素校验。
+
+当前服务显式使用 `en_mcu=0`。已观察到官方驱动初始化 HPMCU 时写启动地址寄存器引发总线异常，
+MCU 卷绕通路尚未适配；普通帧缓冲编码和 RGA 已在关闭 MCU 时通过。
+RKAIQ 目前只验证库加载，摄像头仍须提供实际传感器型号、CSI/I2C/供电连接和 IQ 标定文件，
+未验收采集及算法。上述合成输入也不代表 H.265/JPEG、实际摄像头分辨率、长期压力或 Pro 128 MB 验收。
+构建、升级和自检命令见外部层的
+[多媒体包说明](https://github.com/flange-build/flange-layer-alpine/blob/main/components/packages/rockchip-multimedia-uclibc/README.md)。
 
 ## 首次启动与 ADB 排障
 
@@ -65,6 +85,7 @@ Luckfox Pico Pro (RV1106G2 128MB) / Max (RV1106G3 256MB) 单板计算机，Corte
 这同时拖慢 UBI 扫描、UBIFS 挂载和启动程序的冷读，不能只归因于 USB 管理程序的语言。
 内核对低精度休眠的说明见[定时器文档](https://docs.kernel.org/timers/delay_sleep_functions.html)。
 
+以下启动对照在 Linux 6.1.115+ 下完成；当前多媒体用的 5.10.160 配置同样保留高精度定时器和提前启动的 USB 服务。
 2026-11-12，在上述 Max / SPI NAND / Alpine 目标上保持 Rust usbmoded、rootfs、SPI 时钟和
 网络连接不变，仅更新高精度定时器内核，结果如下。内核时刻来自 `dmesg`，宿主时间使用单调时钟。
 
@@ -76,7 +97,7 @@ Luckfox Pico Pro (RV1106G2 128MB) / Max (RV1106G3 256MB) 单板计算机，Corte
 | 根文件系统挂载完成的内核时刻 | 38.56 s | 0.75 s |
 
 低精度内核曾使正常重启到 ADB shell 可用达到 114.4–114.8 秒。
-高精度内核配合当前 OpenRC 服务顺序的可用时间见下节；两项配置共同影响启动。
+高精度内核配合提前启动的 OpenRC 服务顺序，其 6.1 对照结果见下节；两项配置共同影响启动。
 
 已有 Alpine 工作区可在 flange 仓库根目录重建；让设备进入 Maskrom（芯片下载模式）后仅更新 boot：
 
@@ -97,12 +118,12 @@ OpenRC 按 `sysinit → boot → default` 推进。当前 usbmoded 位于 `boot`
 将它标记为 `hotplugged`（热插拔服务），跨运行级别保留且仍可正常停止、关机。
 仅提前 usbmoded 而不处理该归属，会导致 ADB 在进入 `default` 后离线。
 
-2026-11-12，在上述 Max / SPI NAND / Alpine 目标上保持高精度内核、软件包、网线与宿主不变，
+2026-11-12，在上述 Max / SPI NAND / Alpine 目标上保持 6.1 高精度内核、软件包、网线与宿主不变，
 仅切换 usbmoded 的运行级别，以相同单调时钟脚本计时。宿主使用
 `adb wait-for-usb-disconnect` / `adb wait-for-usb-device`，随后执行 shell 并核对新 boot ID，
 不含旧测量脚本每两秒轮询的额外等待。
 
-| 测量项 | 网络之后的 `default` | 当前网络之前的 `boot` |
+| 测量项 | 网络之后的 `default` | 网络之前的 `boot` |
 | --- | --- | --- |
 | USB `CONFIGURED` 的内核时刻 | 9.01–9.99 s | 4.46–4.49 s |
 | 发出 `sync; reboot` 到新系统 ADB shell 可用 | 17.65–18.25 s（2 次） | 12.11–13.54 s（4 次） |

@@ -20,7 +20,7 @@
   kernel+: {
     // 设备端编译内核模块需要整套 gcc 工具链，256MB NAND 放不下。
     headers_package: false,
-    device_tree+: { name: 'rv1106g-luckfox-pico-pro-max' },
+    device_tree+: { name: 'rv1106g-luckfox-pico-pro-max-flange-media' },
     config+: {
       // SPI NAND 的页就绪轮询需要微秒级休眠；HZ=100 下缺少高精度定时器
       // 会把每页等待放大到约 10ms，拖慢 UBI 扫描和全部冷读。
