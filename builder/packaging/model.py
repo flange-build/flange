@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 PACKAGE_ROLES = frozenset({"runtime", "development"})
 
@@ -24,6 +24,28 @@ class PackageOutput:
 
 
 @dataclass
+class IsolatedRuntime:
+    """自带加载器与依赖库的私有运行时；不改变目标系统的默认 ABI。"""
+
+    root: str
+    loader: str
+
+    def __post_init__(self) -> None:
+        root = PurePosixPath(self.root)
+        loader = PurePosixPath(self.loader)
+        if (
+            not self.root.startswith("/opt/") or len(root.parts) < 3
+            or str(root) != self.root or ".." in root.parts
+        ):
+            raise ValueError("isolated_runtime.root 必须是 /opt 下的规范绝对路径")
+        if (
+            loader.is_absolute() or str(loader) != self.loader
+            or not loader.parts or ".." in loader.parts or self.loader == "."
+        ):
+            raise ValueError("isolated_runtime.loader 必须是运行时内的规范相对路径")
+
+
+@dataclass
 class PackagingConfig:
     """输出留空时由格式后端从安装树打包，否则导入完整外部包。"""
 
@@ -33,6 +55,7 @@ class PackagingConfig:
     format_declared: bool = False
     # 按包格式声明的运行依赖（如 {"apk": ["musl"]}）；顶层 depends 仍是 DEB 语义。
     depends: dict[str, list[str]] = field(default_factory=dict)
+    isolated_runtime: IsolatedRuntime | None = None
 
 
 @dataclass(frozen=True)

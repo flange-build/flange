@@ -33,6 +33,22 @@ Luckfox Pico Pro (RV1106G2 128MB) / Max (RV1106G3 256MB) 单板计算机，Corte
 - **USB 调试（ADB）**：OpenRC 下 usbmoded 管理 DWC3 peripheral，正确拉起 adbd，实机稳定枚举。
 - **App 运行时**：通过 `flange app` 成功构建、部署并运行 C++ / musl / zlib 测试程序（`musl-check`）；使用 armv7 musl SDK 和 Clang 21，动态加载器为 `/lib/ld-musl-armhf.so.1`。
 
+## 多媒体运行时的实机边界
+
+外部 Alpine 层的 `rockchip-multimedia-uclibc` 将厂商运行库安装到 `/opt/rockchip-uclibc`。
+2026-11-12，Rockit、MPP、RGA、RKAIQ 的 `RTLD_NOW` 加载和公开符号解析均通过，
+检查前后 BusyBox/musl 正常，系统 musl 加载器 SHA256 未改变。
+
+当前 BSP 尚未形成可用的硬件多媒体链路：设备上没有 `/dev/mpi/*`、`/dev/rga`、
+`/dev/mpp_service`、`/dev/video*` 或 `/dev/media*`。H.264 探针调用
+`RK_MPI_SYS_Init()` 返回 0，但日志报告缺少 `/dev/mpi/valloc`、`vsys`、`venc` 等节点；
+随后 `RK_MPI_SYS_MmzAlloc_Cached()` 在 `RTDmaStore::fetchDma` 断言中止，退出码 134，
+未产生码流。不能把 `SYS_Init` 返回成功或用户态库可加载当作硬件可用。
+
+硬件编码仍需集成与内核匹配的厂商 MPI/编码驱动；RGA、ISP 和摄像头还需启用对应板级
+设备树节点，并提供实际传感器的连接与 IQ 标定文件。当前没有摄像头采集、RGA 图像处理
+或 MPP 编解码通过的实机结论。
+
 ## 启动约束
 
 SPI NAND 的 page 为 2048 B、PEB 为 128 KiB；GPT 中 idbloader、uboot、boot、rootfs 的起始扇区分别为

@@ -130,6 +130,38 @@ Flange 当前没有自动在宿主安装开发包的命令。Ubuntu rootfs 只�
 rootfs 暂存完整包时，同名文件分别放入独立子目录，保持包内容与原始文件名；
 不同 App 都输出 `shared.apk` 或 `shared.deb` 时仍各自安装，不发生覆盖。
 
+### 独立 libc 运行时
+
+目标系统可以保留 musl，同时安装由另一种 libc 构建的厂商库。该模式使用独立进程，
+不能让 musl 程序直接 `dlopen`（动态加载）uClibc/glibc 库。原生程序仍使用目标 SDK。
+
+自带完整运行环境的 `vendor` App 可以声明：
+
+```yaml
+packaging:
+  isolated_runtime:
+    root: /opt/vendor-runtime
+    loader: lib/ld-vendor.so.0
+```
+
+`root` 必须是 `/opt/` 下的规范绝对目录，`loader` 是其中的规范相对路径；两字段均必填。
+缺省没有私有运行时。当前只允许从完整安装树生成 vendor 包，不与 `packaging.outputs` 或
+其他 App 类型组合，确保加载器与全部运行库作为同一运行包交付。
+
+安装树必须提供可执行的 ELF 加载器、libc 和全部 `DT_NEEDED`（动态依赖）库。
+库放入私有根的 `lib/` 或 `usr/lib/`；符号链接必须相对且落在私有根内，并且目标存在。
+此类 vendor 包不能在私有根之外安装符号链接，避免通过系统库名暴露私有 ABI。
+所有私有 ELF 均检查架构、字节序、ARM 浮点 ABI；有 `PT_INTERP`（解释器路径）的文件必须
+指向 `root/loader`。构建配方可以用 `patchelf` 在隔离副本中重定位原始厂商二进制。
+这些检查独立于目标是否提供 SDK；声明之外的文件仍按原有规则校验。
+
+启动脚本只为子进程设置私有 `LD_LIBRARY_PATH`，不得覆盖系统加载器或全局导出库路径。
+这提供运行库路径隔离，不是安全沙箱。硬件、传感器 IQ（图像质量）标定和内核驱动兼容性
+仍须实机验证；动态依赖闭包不覆盖厂商自行 `dlopen` 的可选插件。
+
+声明随 AppSpec 进入任务指纹，校验器与打包后端属于配方输入，所有运行时文件受产物清单保护。
+报告的发行版/ABI 身份继续表示宿主目标系统，私有运行时不会改变下游 App 默认工具链。
+
 ### 包的 ABI 校验
 
 报告的 `userland_identity` 记录构建目标身份，不能代替包内二进制校验。

@@ -11,7 +11,7 @@ import yaml
 
 from builder.actions import validate_actions
 from builder.config.schema import BOOLEAN, STRING, STRINGS, TEXT, ListOf, Map, Object, SchemaError
-from builder.packaging.model import PackageOutput, PackagingConfig
+from builder.packaging.model import IsolatedRuntime, PackageOutput, PackagingConfig
 
 
 # 允许的 App 类型。amp = 协处理器固件工程（裸机 HAL / RT-Thread 之上的用户
@@ -224,6 +224,7 @@ PACKAGING_SCHEMA = Object({
     "format": STRING,
     "outputs": ListOf(Object({"file": STRING, "role": STRING}, ("file", "role"))),
     "depends": Map(STRINGS),
+    "isolated_runtime": Object({"root": STRING, "loader": STRING}, ("root", "loader")),
 })
 APP_SCHEMA = Object(
     {
@@ -576,10 +577,17 @@ def _parse_packaging(
         raise AppSpecError("amp/staging 不交付软件包，不能声明 packaging")
     value = raw.get("packaging", {})
     try:
+        isolated = (
+            IsolatedRuntime(**value["isolated_runtime"]) if "isolated_runtime" in value else None
+        )
+        if isolated and app_info.type != "vendor":
+            raise ValueError("isolated_runtime 仅用于 vendor 包；程序通过显式加载器启动")
         outputs = (
             [PackageOutput(file, "runtime") for file in build.deb_outputs]
             if build.deb_outputs else [PackageOutput(**item) for item in value.get("outputs", [])]
         )
+        if isolated and outputs:
+            raise ValueError("isolated_runtime 必须从完整安装树生成 vendor 包，不能导入外部包")
         format = "deb" if build.deb_outputs else value.get("format", default_package_format)
         backend = get_backend(format, layer_stack)
         for output in outputs:
@@ -607,6 +615,7 @@ def _parse_packaging(
         outputs=outputs,
         format_declared="format" in value or bool(build.deb_outputs),
         depends={key: list(items) for key, items in value.get("depends", {}).items()},
+        isolated_runtime=isolated,
     )
 
 

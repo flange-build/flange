@@ -19,7 +19,9 @@ from builder.build_dependencies import UbuntuBuildDependencies
 from builder.config.apps import gather_custom_packages
 from builder.config.canonical import userspace_arch
 from builder.digest import digest_value, hash_path
-from builder.elf import ELF_ARCHITECTURES, is_userland_path, validate_elf_abi
+from builder.elf import (
+    ELF_ARCHITECTURES, is_userland_path, validate_elf_abi, validate_isolated_runtime,
+)
 from builder.environment import environment_identity
 from builder.file_tree import copy_entry, copy_tree
 from builder.graph import InputSpec, TaskPlan
@@ -353,11 +355,6 @@ class AppBuilder:
                 else:
                     files = self._collect(source_dir, spec, install)
                 validate_elf_architecture(files, self._arch)
-                if toolchain.target_sysroot:
-                    validate_elf_abi(
-                        files, self._arch, Path(toolchain.target_sysroot), toolchain.triple,
-                        executable=spec.runtime.executable,
-                    )
                 # 原生安装与约定文件组成单一发布树，依赖与调试读取同一份内容。
                 for source_file, destination, mode in files:
                     target_file = install / destination.lstrip("/")
@@ -366,6 +363,16 @@ class AppBuilder:
                         if not target_file.is_symlink():
                             target_file.chmod(mode)
                 files = self._installed_files(install)
+                native_files = files
+                if spec.packaging.isolated_runtime:
+                    native_files = validate_isolated_runtime(
+                        files, self._arch, install, spec.packaging.isolated_runtime,
+                    )
+                if toolchain.target_sysroot:
+                    validate_elf_abi(
+                        native_files, self._arch, Path(toolchain.target_sysroot), toolchain.triple,
+                        executable=spec.runtime.executable,
+                    )
                 executable, unit = self._runtime(
                     spec, files if runtime_paths is None else [
                         entry for entry in files if entry[1] in runtime_paths

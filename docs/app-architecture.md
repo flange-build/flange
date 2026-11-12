@@ -66,6 +66,7 @@ data_dirs: [/var/lib/telemetry]
 | `packaging.format` | 包格式，省略时取目标发行版默认值；由已注册的 PackageBackend 处理 |
 | `packaging.depends` | 按格式声明原生运行依赖，如 `deb: [libc6]`、`apk: [musl]`；不翻译包名 |
 | `packaging.outputs` | 完整外部包列表；每项必填精确 file 和 runtime/development role |
+| `packaging.isolated_runtime` | vendor 专用私有运行时，含 `/opt/` 下的 `root` 与相对 `loader`；缺省不启用，见[包后端](package-backends.md#独立-libc-运行时) |
 | `build.swift` | AMP+scons 的 Embedded Swift 配置；不等同于原生 Swift App |
 | `install` | 源相对路径 → 目标绝对路径，覆盖约定收集结果 |
 | `systemd` | service 的 systemd 声明，必填 unit；`auto_start` 缺省 false |

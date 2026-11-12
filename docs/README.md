@@ -22,7 +22,7 @@
 | 目标、配置层次、字段与源码输入 | [配置参考](configuration.md) |
 | 外部工作区、Layer 优先级与发行版扩展 | [多层工作区](layers.md)、[Debian 示例](examples/layers/README.md) |
 | App 定义、构建、运行与服务 | [App 参考](app-architecture.md) |
-| DEB / APK 后端、多产物、SDK 包与 ABI 校验 | [包格式后端](package-backends.md) |
+| DEB / APK 后端、多产物、SDK 包与 ABI 校验 | [包格式后端](package-backends.md)、[独立 libc 运行时](package-backends.md#独立-libc-运行时) |
 | 组合内核配置、软件包与 overlay | [功能包](packages.md) |
 | 构建容器、内核、根文件系统 | [构建环境](components/build-environment.md)、[内核](components/kernel.md)、[rootfs](components/rootfs.md) |
 | 分区几何、引导链与平台刷写 | [启动、镜像与刷写](boot-and-flash.md) |

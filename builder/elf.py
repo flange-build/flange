@@ -8,6 +8,8 @@ from pathlib import Path, PurePosixPath
 import re
 import struct
 
+from builder.packaging.model import IsolatedRuntime
+
 
 ELF_ARCHITECTURES = {
     "aarch64": (2, 183),
@@ -166,10 +168,7 @@ def validate_elf_abi(
         abi = read_elf_abi(source)
         if abi is None:
             continue
-        if (abi.elf_class, abi.machine) != ELF_ARCHITECTURES[arch] or abi.encoding != 1:
-            raise ValueError(f"ELF 架构或字节序与 {arch} 不符：{destination}")
-        if arch == "armhf" and abi.flags & _EF_ARM_ABI_FLOAT_SOFT:
-            raise ValueError(f"ELF 使用软浮点 ABI，与 armhf 不符：{destination}")
+        _validate_machine(abi, arch, destination)
         if abi.interpreter:
             if not abi.interpreter.startswith("/") or _sdk_file(sdk, abi.interpreter) is None:
                 raise ValueError(
@@ -180,3 +179,60 @@ def validate_elf_abi(
                 _sdk_file(sdk, f"{directory}/{name}") for directory in directories
             ):
                 raise ValueError(f"ELF libc ABI 与目标 SDK 不兼容：{destination} 需要 {name}")
+
+
+def _validate_machine(abi: ElfABI, arch: str, destination: str) -> None:
+    if (abi.elf_class, abi.machine) != ELF_ARCHITECTURES[arch] or abi.encoding != 1:
+        raise ValueError(f"ELF 架构或字节序与 {arch} 不符：{destination}")
+    if arch == "armhf" and abi.flags & _EF_ARM_ABI_FLOAT_SOFT:
+        raise ValueError(f"ELF 使用软浮点 ABI，与 armhf 不符：{destination}")
+
+
+def validate_isolated_runtime(
+    files: Sequence[tuple[Path, str, int]], arch: str, install: Path, runtime: IsolatedRuntime,
+) -> list[tuple[Path, str, int]]:
+    """校验私有运行时的完整动态依赖，返回仍须按系统 SDK 校验的文件。"""
+    root = install / runtime.root.lstrip("/")
+    if (
+        root.is_symlink() or not root.is_dir()
+        or not root.resolve().is_relative_to(install.resolve())
+    ):
+        raise ValueError(f"缺少隔离运行时目录：{runtime.root}")
+    private, native = [], []
+    for entry in files:
+        source, destination, mode = entry
+        if not destination.startswith(runtime.root + "/"):
+            if source.is_symlink():
+                raise ValueError(f"隔离运行时包不能在私有目录之外安装符号链接：{destination}")
+            native.append(entry)
+            continue
+        relative = destination[len(runtime.root):]
+        private.append((source, relative, mode))
+        if source.is_symlink():
+            # 实际安装不具备 chroot 语义，绝对链接会访问系统默认运行库。
+            target = source.readlink()
+            if target.is_absolute() or not source.resolve().is_relative_to(root.resolve()):
+                raise ValueError(f"隔离运行时链接越界：{destination} -> {target}")
+            if not source.exists():
+                raise ValueError(f"隔离运行时链接目标缺失：{destination}")
+    loader = _sdk_file(root, "/" + runtime.loader)
+    if loader is None or not loader.stat().st_mode & 0o111 or read_elf_abi(loader) is None:
+        raise ValueError(f"隔离运行时加载器缺失或不是 ELF：{runtime.loader}")
+    for source, destination, _ in private:
+        if source.is_symlink():
+            continue
+        abi = read_elf_abi(source)
+        if abi is None:
+            continue
+        _validate_machine(abi, arch, runtime.root + destination)
+        if abi.interpreter and abi.interpreter != runtime.root + "/" + runtime.loader:
+            raise ValueError(f"隔离运行时程序未使用声明的加载器：{destination}")
+        # 连同 C++、厂商库一起检查，不能从系统目录补齐另一种 libc 的依赖。
+        for name in abi.needed:
+            dependency = next((
+                path for directory in ("/lib", "/usr/lib")
+                if (path := _sdk_file(root, f"{directory}/{name}")) is not None
+            ), None) if "/" not in name else None
+            if dependency is None or read_elf_abi(dependency) is None:
+                raise ValueError(f"隔离运行时缺少依赖：{destination} 需要 {name}")
+    return native
