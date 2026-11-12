@@ -56,18 +56,24 @@ Alpine 包追加厂商模块及用户态运行库；构建时校验模块 SHA256
 
 | 项目 | 实际结果 |
 | --- | --- |
-| 四库加载 | Rockit、MPP、RGA、RKAIQ 的 `RTLD_NOW` 加载与公开符号解析通过 |
-| 驱动与内存 | Rockit、KMPP、RGA、ISP、DVBM 加载；厂商专用 CMA 实测为 66 MiB，MPI 分配、映射、缓存同步及释放通过 |
+| 五库加载 | Rockit、MPP、RGA、RKAIQ、RKNN 的 `RTLD_NOW` 加载与公开符号解析通过 |
+| 驱动与内存 | Rockit、KMPP、RGA、ISP、DVBM、RKNPU 加载；厂商专用 CMA 实测为 66 MiB，MPI 分配、映射、缓存同步及释放通过 |
 | H.264 编码 | 16 帧 320×240 合成 NV12 输入经硬件编码，主机 FFmpeg 完整解码，帧数和尺寸正确；按完整色彩范围比较，逐帧亮度平均绝对误差为 0.53–0.73 |
 | RGA | 128×96 RGBA 复制的 49,152 字节一致；缩放到 64×48 后逐像素比较通过 |
-| 普通用户 | udev 将 MPI、vcodec、RGA 节点设为 `root:video 0660`，`flange` 用户可运行编码与 RGA 自检 |
+| NPU 图片推理 | RKNN 1.6.0 / RKNPU 0.9.2，NPU 420 MHz；官方 YOLOv5 公交车图片检测出 1 个公交车框和 4 个行人框，10 次结果一致，`rknn_run` 为 80.91–81.12 ms |
+| 普通用户 | udev 将 MPI、vcodec、RGA、rknpu 节点设为 `root:video 0660`，`flange` 用户可运行编码、RGA 自检及 RKNN 推理 |
 
 `rockchip-multimedia` OpenRC 服务在 `default` 阶段加载驱动；USB 在 `boot` 阶段启动。
-设备应出现 `/dev/mpi/valloc`、`/dev/mpi/venc`、`/dev/vcodec` 和 `/dev/rga`。
-最终 5.10.160 镜像连续两次正常重启后，驱动与权限自动恢复，普通用户 RGA 自检通过，
+设备应出现 `/dev/mpi/valloc`、`/dev/mpi/venc`、`/dev/vcodec`、`/dev/rga` 和 `/dev/rknpu`。
+5.10.160 BSP 的编码/RGA 验收连续两次正常重启后，驱动与权限自动恢复，普通用户 RGA 自检通过，
 内核没有 Oops / BUG。以单调时钟测量 `sync; reboot` 到新 boot ID 的 ADB shell 可用，
 耗时 11.43–12.69 秒；这不代表物理上电时间，也不是与 6.1 的同条件性能对照。
 仅 `SYS_Init` 返回成功或库可加载不能证明硬件可用，应运行实际分配、编码和像素校验。
+
+NPU 通过板级设备树的 `&npu` 启用，核心配置保留模块和厂商 DMA heap 内存接口，
+Alpine 服务负责开机加载。启用后正常重启及普通用户图片推理已通过；非方形图片的坐标还原、
+空图零检测和无效 PPM 拒绝也已实测。上述推理时间不含模型加载、预处理、后处理及传输，
+不代表端到端帧率或摄像头检测验收。示例解码器限定 640×640、COCO 80 类、三输出头的 INT8 YOLOv5。
 
 当前服务显式使用 `en_mcu=0`。已观察到官方驱动初始化 HPMCU 时写启动地址寄存器引发总线异常，
 MCU 卷绕通路尚未适配；普通帧缓冲编码和 RGA 已在关闭 MCU 时通过。

@@ -4,13 +4,13 @@ diff --git a/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max-flange-media.dts b/a
 new file mode 100644
 --- /dev/null
 +++ b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max-flange-media.dts
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,169 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * Luckfox Pico Pro / Max（RV1106G2 128MB / RV1106G3 256MB，同一板型）。
 + *
 + * 基于官方 Linux 5.10.160，保留 flange 的 SPI NAND 分区、固定电压与心跳灯。
-+ * 启用 RGA、ISP 和编码通路；摄像头传感器与接线须独立配置。
++ * 启用 NPU、RGA、ISP 和编码通路；摄像头传感器与接线须独立配置。
 + */
 +
 +/dts-v1/;
@@ -173,3 +173,4 @@ new file mode 100644
 +&rga2 { status = "okay"; };
 +&rkisp { status = "okay"; };
 +&rkisp_vir0 { status = "okay"; };
++&npu { status = "okay"; };

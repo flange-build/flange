@@ -80,6 +80,10 @@
     config+: {
       // 厂商 DMA 使用独立 CMA 池；容量由板级 rk_dma_heap_cma 启动参数设置。
       CONFIG_CMA_SIZE_MBYTES: '0',
+      // RV1106 NPU 通过厂商 DMA heap 分配连续内存，提供 /dev/rknpu。
+      CONFIG_ROCKCHIP_RKNPU: 'm',
+      CONFIG_ROCKCHIP_RKNPU_DMA_HEAP: 'y',
+      CONFIG_ROCKCHIP_RKNPU_PROC_FS: 'y',
       CONFIG_ROCKCHIP_MPP_OSAL: 'y',
       CONFIG_ROCKCHIP_DVBM: 'm',
       CONFIG_ROCKCHIP_MULTI_RGA: 'm',

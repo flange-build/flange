@@ -65,5 +65,5 @@
 - 页面中的硬件版本、存储介质、product、内核和验证日期共同限定结论。
 - `bringup` 产品用于特定外设适配；查看相应页面确认可用项。
 - Luckfox 的 Alpine 结果来自外部发行版层；本仓库内置产品只有 `default`。
-  两个产品共用核心的 5.10.160 BSP，Alpine 多媒体包的 H.264 和 RGA 实机范围见[板卡说明](luckfox-pico-pro-max.md#多媒体驱动与运行时)。
+  两个产品共用核心的 5.10.160 BSP，Alpine 多媒体包的 H.264、RGA 和 NPU 实机范围见[板卡说明](luckfox-pico-pro-max.md#多媒体驱动与运行时)。
 - TX2 的设备刷写要求 x86_64 Linux；其他平台限制见[平台索引](../platforms/README.md)。
