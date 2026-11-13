@@ -1,0 +1,29 @@
+{
+  "version": "v2.44",
+  "source_url": "https://github.com/khadas/utils/tree/8e808208e4f030716d49261d5aa1ddddd639ab93/rk-flash-tool/tools/Linux_Upgrade_Tool",
+  "source_commit": "8e808208e4f030716d49261d5aa1ddddd639ab93",
+  "source_files": {
+    "config.ini": {
+      "url": "https://raw.githubusercontent.com/khadas/utils/8e808208e4f030716d49261d5aa1ddddd639ab93/rk-flash-tool/tools/Linux_Upgrade_Tool/config.ini",
+      "git_blob_sha1": "976abc84fbdc57f8e6f362d9c40dce56a034eda4"
+    },
+    "revision.txt": {
+      "url": "https://raw.githubusercontent.com/khadas/utils/8e808208e4f030716d49261d5aa1ddddd639ab93/rk-flash-tool/tools/Linux_Upgrade_Tool/revision.txt",
+      "git_blob_sha1": "a64360f13229863cf20aca26ee8eb7cae455eef9"
+    },
+    "upgrade_tool": {
+      "url": "https://raw.githubusercontent.com/khadas/utils/8e808208e4f030716d49261d5aa1ddddd639ab93/rk-flash-tool/tools/Linux_Upgrade_Tool/upgrade_tool",
+      "git_blob_sha1": "3a730e1dc1f2f7bbeec4d7cad31e1bb6ab5127b9"
+    },
+    "命令行开发工具使用文档.pdf": {
+      "url": "https://raw.githubusercontent.com/khadas/utils/8e808208e4f030716d49261d5aa1ddddd639ab93/rk-flash-tool/tools/Linux_Upgrade_Tool/linux-upgrade-tool-user-guide.pdf",
+      "git_blob_sha1": "b7d2ab94262e11a5d81e47ecd1dcc24140ea7e6f"
+    }
+  },
+  "files": {
+    "config.ini": "a47dca2a4dce0939cfc37248394c0e79d6c839c00d5b36f5ca7730a524c5e15a",
+    "revision.txt": "7dcf311068482b0c2a9c776ca1cd2a998c6d5aeb565458ffd79ac8fd837be5b5",
+    "upgrade_tool": "65781afe7c7633d8c72187e78c31822d79f7224a979b922369970dcbbe06a430",
+    "命令行开发工具使用文档.pdf": "925b671058730eaa2f1e5ea17bc7c736c1d90e34da320480ca80e99d5a9fe42c"
+  }
+}

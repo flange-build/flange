@@ -19,5 +19,6 @@ flange 自有代码与文档采用 [Apache License 2.0](../LICENSE)，SPDX（软
 这些属于[设计评审](limitations.md)中的后续发布能力。
 
 仓库中已有独立声明的例子包括 `components/amp/rockchip/rt-thread/`、
-`components/amp/rockchip/hal/`、`tools/*/edl-ng/` 和 `tools/*/qdl/*/`。这不是完整第三方清单，
+`components/amp/rockchip/hal/`、`tools/*/edl-ng/` 和 `tools/*/qdl/*/`。
+`tools/*/upgrade_tool/` 的来源与原始材料说明见各目录 README 和 manifest。这不是完整第三方清单，
 根目录 LICENSE 的加入也不代表已完成全仓第三方材料审计。

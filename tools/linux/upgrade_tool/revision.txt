@@ -1,3 +1,30 @@
+v2.44 revision(2024/12/24)
+1.change name from vdk into rvd
+
+v2.44 revision(2024/12/02)
+1.fix the second idblock for nor bug
+
+v2.43 revision(2024/11/12)
+1.switch storage support ufs and vdk
+
+v2.42 revision(2024/10/23)
+1.fix switch storage into ufs bug
+
+v2.41 revision(2024/09/02)
+1.add cpu command to read cpu id
+
+v2.40 revision(2024/08/22)
+1.support erase idblock for ufs
+
+v2.39 revision(2024/08/06)
+1.delete backup gpt protect from wl 
+
+v2.38 revision(2024/07/19)
+1.delete usb3_transfer check when using 4m usb transfer
+
+v2.37 revision(2024/07/04)
+1.fix dhara image download bug
+
 v2.36 revision(2024/06/14)
 1.add check partition for download gpt
 2.add dhara image support 

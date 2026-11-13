@@ -45,6 +45,46 @@ RK3582 的 GPU 已熔断；板级产品可以显式替换 GPU 栈，不应仅根
 
 `components/platform/rockchip/patches/` 下有 `bootloader/`、`kernel/` 两类补丁目录；board 层也可有同名补丁目录，构建器依次应用。
 
+## 宿主 upgrade_tool
+
+截至 2026-11-13，核对 Khadas 与 Luckfox 官方公开分发后，两端收录版本均为 v2.44。
+`flange flash` 按宿主系统选择下表路径，无需重新构建 Docker 或目标固件。
+
+| 宿主 | 工具与来源记录 | 可执行架构 |
+| --- | --- | --- |
+| Linux | [Linux 工具目录](../../tools/linux/upgrade_tool/README.md) | x86_64，静态 ELF |
+| macOS | [macOS 工具目录](../../tools/macos/upgrade_tool/README.md) | 通用 Mach-O：x86_64、arm64 |
+
+完成[开发环境准备](../development-guide.md)后，在 flange 仓库根目录执行以下命令。
+二进制由 Git LFS（大文件存储）管理，若运行时报格式错误，先确认文件没有停留在 LFS 指针状态：
+
+```bash
+git lfs pull --include="tools/*/upgrade_tool/upgrade_tool"
+case "$(uname -s)" in
+    Darwin) tool=tools/macos/upgrade_tool/upgrade_tool ;;
+    Linux) tool=tools/linux/upgrade_tool/upgrade_tool ;;
+esac
+"$tool" -v
+"$tool" -h
+"$tool" LD
+python -m pytest tests/builder/test_rockchip_tools.py tests/builder/test_flash.py
+```
+
+版本查询应输出 `Upgrade Tool v2.44`；`LD` 只枚举设备，输出 `List of rockusb connected(n)`。
+未发现设备时按[对应板卡说明](../boards/README.md)检查 USB 连接与下载模式；Linux 还需有
+Rockusb 设备访问权限。确认设备后，按[刷写指南](../development-guide.md#4-刷写与设备验证)
+使用 `flange flash`，由生成的清单约束写入范围。
+
+更新工具时保留原始配置、修订记录和使用手册，先核对固定提交的 Git 对象或官方发布摘要，
+再更新各目录的 `manifest.json` 文件摘要。完整性测试检查全部随附文件、可执行权限和宿主架构。
+厂商文本保留原始换行与空格，避免改变其摘要。
+
+2026-11-13，完整 Python 测试集结果为 2148 项通过、15 项跳过。
+宿主工具验证不绑定板卡 target：Linux 6.8.0 x86_64 上版本查询、帮助与
+`LD` 均成功，枚举结果为 0 台；未进行固件写入。macOS 已检查双架构文件头与系统库依赖，
+最低系统声明为 Intel 10.15、Apple Silicon 11.0，尚未完成 Mac 原生执行与 USB 刷写验证。
+这些检查不替代各板卡的实机验收。
+
 ## 易踩坑
 
 - rkbin 的 `RKTRUST.ini` 区分 BL31/BL32；RK3566 使用 `RK3568TRUST.ini`（ini_prefix 与 trust_ini_prefix 不同，见 `rk3566/config.jsonnet`）

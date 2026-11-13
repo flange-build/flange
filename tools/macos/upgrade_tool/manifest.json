@@ -1,0 +1,15 @@
+{
+  "version": "v2.44",
+  "source_url": "https://github.com/LuckfoxTECH/Luckfox-Pico-docs/blob/ebab43ef1ff00d821d1a989037aaf886cfaaa01c/Tools/upgrade_tool_v2.44_for_mac.zip",
+  "source_commit": "ebab43ef1ff00d821d1a989037aaf886cfaaa01c",
+  "archive_url": "https://raw.githubusercontent.com/LuckfoxTECH/Luckfox-Pico-docs/ebab43ef1ff00d821d1a989037aaf886cfaaa01c/Tools/upgrade_tool_v2.44_for_mac.zip",
+  "archive_sha256": "a6652ed71c2feeef5ccf54dacc0dda3104b1b0caa534bc0b5a00760138dfa80c",
+  "archive_git_blob_sha1": "83bbb0c7860c32e89f65451aaa94cd02ed2d0bc4",
+  "archive_digest_url": "https://api.github.com/repos/jetkvm/rv1106-system/releases/tags/v0.2.5",
+  "files": {
+    "config.ini": "de40a55a95df909810245a0bc0e2d1919758205c5c6fe7a5788194aaff715472",
+    "revision.txt": "7dcf311068482b0c2a9c776ca1cd2a998c6d5aeb565458ffd79ac8fd837be5b5",
+    "upgrade_tool": "c24a53050510194f5cad65d85c749c67a5d42f7d2134eb37529b67db552d5f70",
+    "命令行开发工具使用文档.pdf": "925b671058730eaa2f1e5ea17bc7c736c1d90e34da320480ca80e99d5a9fe42c"
+  }
+}
