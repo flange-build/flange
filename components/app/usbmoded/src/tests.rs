@@ -421,10 +421,11 @@ fn init_service_commands_and_missing_manager() {
         s.service_args("adbd", "start"),
         ["systemctl", "start", "usbmoded-adbd.service"]
     );
-    assert!(system::run(&["/nonexistent-service-manager"])
-        .unwrap_err()
-        .message
-        .contains("不可用"));
+    // 原生执行可能在 spawn 时报错，跨架构容器也可能由加载器返回非零退出码。
+    // 两种路径都必须传播执行失败，并保留失败命令。
+    let error = system::run(&["/nonexistent-service-manager"]).unwrap_err();
+    assert_eq!(error.code, -32003);
+    assert!(error.message.contains("/nonexistent-service-manager"));
 }
 #[test]
 fn uvc_descriptors_and_mtp_optional_os_descriptors() {
