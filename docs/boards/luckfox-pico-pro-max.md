@@ -96,17 +96,17 @@ RKAIQ 枚举到残缺媒体拓扑后在 `CamHwIsp20::init` 内段错误。驱动
 `/sys/module/video_rkcif/parameters/clr_unready_dev` 与
 `/sys/module/video_rkisp/parameters/clr_unready_dev`，并确认
 `/sys/class/video4linux/v4l-subdev*/name` 出现 `rkisp-isp-subdev`，否则启动失败；
-`rockchip-camera-stream` 内置同样的就绪守卫，手动运行不再带着残缺拓扑进入 RKAIQ。
+上层采集应用应内置同样的就绪守卫，避免带着残缺拓扑进入 RKAIQ。
 
 ### VENC 绑定顺序
 
 Rockit 的 VENC 内核节点在 `RK_MPI_VENC_StartRecvFrame` 时才创建并启动；在此之前
 `RK_MPI_SYS_Bind` 会被 vsys 以 EPERM 拒绝（节点状态未就绪，并非权限问题）。
-官方 `simple_vi_bind_venc` 示例即先 StartRecvFrame 再 Bind。外部层运行包
-1.4.1-r0 已按该顺序修正 `rockchip-camera-stream`。2026-11-14 在同一 Max / Alpine
-目标复测：root 与 video 组用户 `--frames 30` 自检退出 0（约 30 fps），正常重启后
-服务自动恢复拓扑，宿主 GStreamer 预览窗口持续解码 H.264。近全黑环境下 AE 收敛于
-约 92 倍模拟增益、30 ms 曝光，画面偏暗属环境光照限制；画质调优与长时间压力未验收。
+官方 `simple_vi_bind_venc` 示例即先 StartRecvFrame 再 Bind。2026-11-14 在同一 Max / Alpine
+目标以临时上层串流程序复测（程序不随能力包发布）：root 与 video 组用户 30 帧自检
+退出 0（约 30 fps），正常重启后服务自动恢复拓扑，宿主 GStreamer 预览窗口持续解码
+H.264。近全黑环境下 AE 收敛于约 92 倍模拟增益、30 ms 曝光，画面偏暗属环境光照限制；
+画质调优与长时间压力未验收。
 
 ## 首次启动与 ADB 排障
 
