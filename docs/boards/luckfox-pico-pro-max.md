@@ -77,10 +77,36 @@ Alpine 服务负责开机加载。启用后正常重启及普通用户图片推�
 
 当前服务显式使用 `en_mcu=0`。已观察到官方驱动初始化 HPMCU 时写启动地址寄存器引发总线异常，
 MCU 卷绕通路尚未适配；普通帧缓冲编码和 RGA 已在关闭 MCU 时通过。
-RKAIQ 目前只验证库加载，摄像头仍须提供实际传感器型号、CSI/I2C/供电连接和 IQ 标定文件，
-未验收采集及算法。上述合成输入也不代表 H.265/JPEG、实际摄像头分辨率、长期压力或 Pro 128 MB 验收。
+2026-11-13 在同一 Max / Alpine 目标上以 SC3336 模组（CMK-OT2119-PC1、30IRC-F16 镜头）
+完成 RKAIQ 摄像头 bringup：板级 DTS 启用 I2C4 M2（0x30）、2 lane MIPI、24 MHz、PWDN GPIO3_C5，
+链路 SC3336 → CSI DPHY → MIPI0 CSI2 → RKCIF → SDITF → ISP，禁用与摄像头引脚冲突的 SDMMC；
+boot 分区按 NAND 页补齐擦写并读回校验。RKAIQ 使用官方 IQ 文件
+`sc3336_CMK-OT2119-PC1_30IRC-F16`，2304×1296@30 采集，VI→VENC H.264 经 ADB forward 在宿主
+GStreamer 解码预览通过。上述合成输入与摄像头结果都不代表 H.265/JPEG、长期压力或 Pro 128 MB 验收。
 构建、升级和自检命令见外部层的
 [多媒体包说明](https://github.com/flange-build/flange-layer-alpine/blob/main/components/packages/rockchip-multimedia-uclibc/README.md)。
+
+### ISP 媒体拓扑启动竞态
+
+CIF 驱动的 notifier 线程只在 5 秒窗口内把 SDITF 注册为异步 subdev；启动期传感器探测晚于该窗口时，
+ISP 侧 notifier 永远停在等待状态，`rkisp-isp-subdev` 没有 `/dev/v4l-subdevN` 节点，
+RKAIQ 枚举到残缺媒体拓扑后在 `CamHwIsp20::init` 内段错误。驱动自带
+`clr_unready_dev` 模块参数可清除未就绪等待并触发 ISP notifier 完成。
+`rockchip-multimedia` 服务在加载传感器后显式加载 `video_rkisp`（原先随 Rockit 依赖加载），写入
+`/sys/module/video_rkcif/parameters/clr_unready_dev` 与
+`/sys/module/video_rkisp/parameters/clr_unready_dev`，并确认
+`/sys/class/video4linux/v4l-subdev*/name` 出现 `rkisp-isp-subdev`，否则启动失败；
+`rockchip-camera-stream` 内置同样的就绪守卫，手动运行不再带着残缺拓扑进入 RKAIQ。
+
+### VENC 绑定顺序
+
+Rockit 的 VENC 内核节点在 `RK_MPI_VENC_StartRecvFrame` 时才创建并启动；在此之前
+`RK_MPI_SYS_Bind` 会被 vsys 以 EPERM 拒绝（节点状态未就绪，并非权限问题）。
+官方 `simple_vi_bind_venc` 示例即先 StartRecvFrame 再 Bind。外部层运行包
+1.4.1-r0 已按该顺序修正 `rockchip-camera-stream`。2026-11-14 在同一 Max / Alpine
+目标复测：root 与 video 组用户 `--frames 30` 自检退出 0（约 30 fps），正常重启后
+服务自动恢复拓扑，宿主 GStreamer 预览窗口持续解码 H.264。近全黑环境下 AE 收敛于
+约 92 倍模拟增益、30 ms 曝光，画面偏暗属环境光照限制；画质调优与长时间压力未验收。
 
 ## 首次启动与 ADB 排障
 

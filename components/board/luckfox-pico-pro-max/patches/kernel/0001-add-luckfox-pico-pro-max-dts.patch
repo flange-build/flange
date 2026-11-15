@@ -1,16 +1,16 @@
-新增 Luckfox 多媒体设备树，保留 flange 启动布局与供电约束。
+新增 Luckfox 多媒体设备树，接入 SC3336 并保留 flange 启动布局与供电约束。
 
 diff --git a/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max-flange-media.dts b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max-flange-media.dts
 new file mode 100644
 --- /dev/null
 +++ b/arch/arm/boot/dts/rv1106g-luckfox-pico-pro-max-flange-media.dts
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,300 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * Luckfox Pico Pro / Max（RV1106G2 128MB / RV1106G3 256MB，同一板型）。
 + *
 + * 基于官方 Linux 5.10.160，保留 flange 的 SPI NAND 分区、固定电压与心跳灯。
-+ * 启用 NPU、RGA、ISP 和编码通路；摄像头传感器与接线须独立配置。
++ * 启用 NPU、RGA、SC3336、CSI 和 ISP 通路；CSI 与 SD 卡引脚不可同时使用。
 + */
 +
 +/dts-v1/;
@@ -110,7 +110,7 @@ new file mode 100644
 +	};
 +};
 +
-+/* TF 卡槽。 */
++/* TF 卡槽与摄像头共用 GPIO3_B6/B7/C0..C5，默认让出引脚给 SC3336。 */
 +&sdmmc {
 +	max-frequency = <50000000>;
 +	no-sdio;
@@ -120,7 +120,7 @@ new file mode 100644
 +	disable-wp;
 +	pinctrl-names = "default";
 +	pinctrl-0 = <&sdmmc0_clk &sdmmc0_cmd &sdmmc0_det &sdmmc0_bus4>;
-+	status = "okay";
++	status = "disabled";
 +};
 +
 +/* 百兆以太网，内置 PHY 由 rv1106.dtsi 的 rmii_phy 描述。 */
@@ -172,5 +172,136 @@ new file mode 100644
 +&rkdvbm { status = "okay"; };
 +&rga2 { status = "okay"; };
 +&rkisp { status = "okay"; };
-+&rkisp_vir0 { status = "okay"; };
 +&npu { status = "okay"; };
++
++&csi2_dphy_hw {
++	status = "okay";
++};
++
++&csi2_dphy0 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			csi_dphy_input: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&sc3336_out>;
++				data-lanes = <1 2>;
++			};
++		};
++
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			csi_dphy_output: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&mipi_csi2_input>;
++			};
++		};
++	};
++};
++
++&i2c4 {
++	status = "okay";
++	clock-frequency = <400000>;
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c4m2_xfer>;
++
++	sc3336: sc3336@30 {
++		compatible = "smartsens,sc3336";
++		reg = <0x30>;
++		clocks = <&cru MCLK_REF_MIPI0>;
++		clock-names = "xvclk";
++		pwdn-gpios = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "rockchip,camera_default";
++		pinctrl-0 = <&mipi_refclk_out0>;
++		rockchip,camera-module-index = <0>;
++		rockchip,camera-module-facing = "back";
++		rockchip,camera-module-name = "CMK-OT2119-PC1";
++		rockchip,camera-module-lens-name = "30IRC-F16";
++		status = "okay";
++
++		port {
++			sc3336_out: endpoint {
++				remote-endpoint = <&csi_dphy_input>;
++				data-lanes = <1 2>;
++			};
++		};
++	};
++};
++
++&mipi0_csi2 {
++	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		port@0 {
++			reg = <0>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi_csi2_input: endpoint@1 {
++				reg = <1>;
++				remote-endpoint = <&csi_dphy_output>;
++			};
++		};
++
++		port@1 {
++			reg = <1>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			mipi_csi2_output: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&cif_mipi_in>;
++			};
++		};
++	};
++};
++
++&rkcif {
++	status = "okay";
++};
++
++&rkcif_mipi_lvds {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&mipi_pins>;
++
++	port {
++		cif_mipi_in: endpoint {
++			remote-endpoint = <&mipi_csi2_output>;
++		};
++	};
++};
++
++&rkcif_mipi_lvds_sditf {
++	status = "okay";
++
++	port {
++		mipi_lvds_sditf_out: endpoint {
++			remote-endpoint = <&isp_in>;
++		};
++	};
++};
++
++&rkisp_vir0 {
++	status = "okay";
++
++	port@0 {
++		isp_in: endpoint {
++			remote-endpoint = <&mipi_lvds_sditf_out>;
++		};
++	};
++};
