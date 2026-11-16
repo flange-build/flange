@@ -195,6 +195,10 @@ AppResolver 的优先级为：显式路径 → 工作区 `[apps]` 注册 → 当
 完整请求报告在 `apps/reports/<摘要>.json`，schema_version 为 3，记录根资源、拓扑顺序、依赖、安装树和全部包的
 `path/format/role`。旧报告需要重新 `flange app build`；任一开发包缺失也会使缓存失效。
 
+缓存的源码输入按根归属取值：App 位于 Git 仓库或 Package 目录内时取该仓库/目录根，
+向上不越过工作区、工具根或任一启用层根；这些边界之外的祖先目录即使带有 `.git`
+也不属于本工作区的输入，独立目录只以自身为根。`build_root` 落在源码根内时从指纹与复制中排除。
+
 CMake/Meson 的原生中间目录独立；Make/custom 在隔离源码副本中执行，避免修改用户源或串用目标。
 Toolchain 为目标统一提供 CC/CXX/AR/STRIP。依赖安装树组成当前节点编译前缀，不冒充完整系统 sysroot。
 隔离源码与 `debug-source` 快照复用相同文件树复制策略，保留目录内的链接对象；

@@ -147,11 +147,20 @@ class AppBuilder:
         return report
 
     def _source_root(self, source: Path) -> Path:
+        boundaries = {
+            self.context.workspace_root,
+            self.context.tool_root,
+            *(layer.root for layer in self.context.layer_stack.layers),
+        }
+        # 工作区/工具/层根之外的祖先目录不属于本工作区声明的输入；
+        # 即使它们碰巧带有 .git 或 package.py，也不得整树纳入指纹。
+        if not any(source == root or source.is_relative_to(root) for root in boundaries):
+            return source
         for candidate in (source, *source.parents):
+            if candidate in boundaries:
+                return source
             if (candidate / "package.py").is_file():
                 return candidate
-            if any(candidate == layer.root for layer in self.context.layer_stack.layers):
-                return source
             if (candidate / ".git").exists():
                 return candidate
         return source

@@ -84,3 +84,17 @@ def test_target_variant_and_same_name_source_have_separate_outputs(tmp_path):
     c = other.build_one(first).root()
     assert c.runtime_debs[0] != a.runtime_debs[0]
     assert a.validate() and b.validate() and c.validate()
+
+
+def test_source_root_never_escapes_workspace_to_ambient_git(tmp_path):
+    """tmp_path 的祖先即使碰巧有 .git，也不能把工作区之外的目录当源码输入。"""
+    ambient = tmp_path / "ambient"
+    (ambient / ".git").mkdir(parents=True)
+    root = ambient / "suite"
+    source = app(root / "hello")
+    engine = builder(root, apps={"hello": source})
+    assert engine._source_root(source) == source
+    plan = engine.plan(["hello"])[0]
+    assert plan.path("source") == source
+    assert plan.value("app_subpath") == "."
+    assert engine.build_one("hello").validate()
