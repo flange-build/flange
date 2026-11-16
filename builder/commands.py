@@ -22,6 +22,7 @@ from builder.term import Role, style
 from builder.workspace import (
     Target,
     WorkspaceError,
+    add_layer,
     discover_workspace,
     init_workspace,
     load_workspace,
@@ -379,7 +380,33 @@ def _system(args, options, start: Path, output: Presenter) -> int:
 def _layer(args, start: Path, output: Presenter) -> int:
     from builder.config.registry import discover_boards
 
-    settings = _settings(start)
+    root = discover_workspace(start)
+    if args.action == "add":
+        path = args.path.expanduser()
+        if not path.is_absolute():
+            path = start / path
+        data = add_layer(root, path)
+        next_command = (
+            "flange layer check"
+            if start == root or root in start.parents
+            else f"flange -C {shlex.quote(str(root))} layer check"
+        )
+        output.result(
+            "layer add",
+            data,
+            lines=[
+                f"{style('已启用扩展层', Role.SUCCESS)} {data['layer']['name']}",
+                field("层目录", data["layer"]["root"], Role.PATH),
+                field("配置", data["manifest"], Role.PATH),
+                field(
+                    "下一步",
+                    next_command,
+                    Role.COMMAND,
+                ),
+            ],
+        )
+        return 0
+    settings = workspace_settings(root)
     stack = settings["layer_stack"]
     if args.action == "check":
         stack.check_providers()

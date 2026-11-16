@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import json
+from os.path import relpath
 from pathlib import Path
 import re
 import tomllib
@@ -9,8 +10,8 @@ from types import MappingProxyType
 from typing import Mapping
 
 from builder.paths import PROJECT_ROOT, build_dir, components_dir
-from builder.locking import atomic_write
-from builder.layers import LayerStack
+from builder.locking import FileLock, atomic_write
+from builder.layers import LayerStack, read_layer
 
 
 class WorkspaceError(ValueError):
@@ -240,6 +241,113 @@ def save_target(root: Path, target: Target) -> None:
         Path(root) / ".flange" / "current_config",
         json.dumps(target.to_dict(), ensure_ascii=False, indent=2) + "\n",
     )
+
+
+def _array_end(text: str, start: int) -> int:
+    """返回 TOML 数组闭合括号之后的位置；跳过字符串与注释。"""
+    depth = 0
+    index = start
+    quote = ""
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if len(quote) == 3:
+                if text[index : index + 3] == quote:
+                    quote = ""
+                    index += 3
+                    continue
+            elif char == "\\" and quote == '"':
+                index += 2
+                continue
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char * 3 if text[index : index + 3] == char * 3 else char
+            index += len(quote)
+            continue
+        elif char == "#":
+            newline = text.find("\n", index)
+            index = len(text) if newline < 0 else newline
+            continue
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    raise WorkspaceError("flange.toml 的 layers 数组未闭合")
+
+
+def _with_layers(text: str, layers: list[str]) -> str:
+    """只改写顶层 schema_version 与 layers，保留其余声明和注释。"""
+    header = re.search(r"(?m)^[ \t]*\[", text)
+    boundary = header.start() if header else len(text)
+    prefix, suffix = text[:boundary], text[boundary:]
+    prefix = re.sub(
+        r"(?m)^([ \t]*schema_version\s*=\s*)1([ \t]*(?:#.*)?)$",
+        r"\g<1>2\g<2>",
+        prefix,
+        count=1,
+    )
+    value = "[" + ", ".join(json.dumps(item, ensure_ascii=False) for item in layers) + "]"
+    assignment = re.search(r"(?m)^([ \t]*)layers\s*=\s*", prefix)
+    if assignment:
+        opening = prefix.find("[", assignment.end())
+        if opening < 0:
+            raise WorkspaceError("flange.toml 的 layers 必须是路径数组")
+        end = _array_end(prefix, opening)
+        prefix = (
+            prefix[: assignment.start()]
+            + f"{assignment.group(1)}layers = {value}"
+            + prefix[end:]
+        )
+    else:
+        anchor = re.search(r"(?m)^[ \t]*schema_version\s*=.*$", prefix)
+        if anchor is None:
+            raise WorkspaceError("flange.toml 缺少顶层 schema_version，无法添加扩展层")
+        prefix = (
+            prefix[: anchor.end()] + f"\nlayers = {value}" + prefix[anchor.end() :]
+        )
+    return prefix + suffix
+
+
+def add_layer(root: Path, path: Path, *, tool_root: Path = PROJECT_ROOT) -> dict:
+    """把已有本地层追加为最高层；不创建、下载或重排层。"""
+    root = Path(root).resolve()
+    manifest = root / "flange.toml"
+    if not manifest.is_file():
+        raise WorkspaceError(
+            f"{root} 缺少 flange.toml；请先运行 flange init 创建产品工作区再添加扩展层"
+        )
+    with FileLock(root / ".flange" / "workspace.lock"):
+        settings = workspace_settings(root, tool_root=tool_root)
+        candidate = read_layer(Path(path))
+        existing = list(settings["layer_stack"].layers[1:])
+        if any(item.root == candidate.root for item in existing):
+            raise WorkspaceError(f"层已启用：{candidate.name} ({candidate.root})")
+        stack = LayerStack.load(
+            settings["tool_root"], [item.root for item in existing] + [candidate.root]
+        )
+        output = settings["build_root"]
+        if output == candidate.root or output in candidate.root.parents:
+            raise WorkspaceError("build_dir 不能覆盖任一扩展层根目录")
+        text = manifest.read_text(encoding="utf-8")
+        data = tomllib.loads(text)
+        stored = Path(relpath(candidate.root, root)).as_posix()
+        layers = [*data.get("layers", []), stored]
+        updated = _with_layers(text, layers)
+        expected = {**data, "schema_version": 2, "layers": layers}
+        if tomllib.loads(updated) != expected:
+            raise WorkspaceError(
+                f"无法安全更新 {manifest}；请手动把 {stored!r} 追加到 layers 并保持 schema_version = 2"
+            )
+        atomic_write(manifest, updated)
+        return {
+            "layer": dict(candidate.to_dict(), order=len(stack.layers) - 1),
+            "manifest": str(manifest),
+            "layers": stack.to_dict(),
+        }
 
 
 def resolve_config(context: WorkspaceContext) -> dict:

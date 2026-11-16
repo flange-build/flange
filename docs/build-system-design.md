@@ -75,7 +75,7 @@ flowchart LR
 | 模块 | 责任与适用修改 |
 | --- | --- |
 | `cli.py`、`commands.py`、`presentation.py` | 命令语法、退出码、人类/JSON 输出；不承载平台配方 |
-| `workspace.py` | 清单、目标选择、路径域与上下文构建 |
+| `workspace.py` | 清单、扩展层登记、目标选择、路径域与上下文构建 |
 | `config/jsonnet.py` | 分层求值、包配置、归一化和依赖元数据 |
 | `config/schema.py`、`validate.py` | 闭合结构规则与跨字段/平台语义 |
 | `config/registry.py`、`query.py` | 平台/板卡发现、统一 target 解析和枚举 |
@@ -124,7 +124,7 @@ product/variant 通过 Jsonnet 外部变量求值，最终没有待执行的维�
 
 | 输入 | 解析器 | 主要规则 |
 | --- | --- | --- |
-| `flange.toml` | `workspace.py` | 版本、根路径、App 注册、默认目标；路径相对清单 |
+| `flange.toml` | `workspace.py` | 版本、根路径、层组合、App 注册、默认目标；路径相对清单 |
 | 系统 Jsonnet 结果 | `config/schema.py` + `validate.py` | 闭合对象、严格 bool/int/str/list、引用/分区/平台语义 |
 | `app.yaml` | `app_spec.py` | 拒绝重复 YAML 键、未知字段和隐式转换；转换为 AppSpec |
 | `package.py:PACKAGE` | `packages.py` | 按 component.type 的闭合联合、包内路径与安全 argv |
@@ -159,6 +159,7 @@ SoC 层声明架构、工具链和芯片事实；具体显示、存储、rootfs 
 实际 build 才确认可执行输入。旧 `.build_hash` 不被迁移为有效成功记录。
 
 目标锁保护 `.build/work/<target.key>` 与该目标发布区；共享源码存储另有锁。
+工作区清单添加层由 `.flange/workspace.lock` 串行化读取、校验和原子替换，不占用目标构建锁。
 
 APT 互斥按实际目录确定：App 共用工具仓库 `.build/cache/apt` 和 `apt-lists`，
 rootfs/recovery 对实际挂载的下载目录加锁，模板下载读取共享索引时也须协调。

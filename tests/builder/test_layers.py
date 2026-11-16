@@ -2,14 +2,22 @@
 
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from builder.cli import main
 from builder.config.jsonnet import JsonnetConfigLoader, JsonnetEvaluator
 from builder.config.query import get_valid_targets
 from builder.layers import LayerError, LayerStack
 from builder.source import SourceManager
-from builder.workspace import load_workspace, workspace_settings
+from builder.workspace import (
+    WorkspaceError,
+    add_layer,
+    init_workspace,
+    load_workspace,
+    workspace_settings,
+)
 
 
 def put(root, path, text):
@@ -506,3 +514,138 @@ def create_environment(config, context):
     before = selected.digest()
     dockerfile.write_text("FROM debian:trixie-slim\n")
     assert selected.digest() != before
+
+
+def test_add_layer_appends_relative_path_and_preserves_declaration(tree, tmp_path):
+    workspace = tmp_path / "product"
+    init_workspace(workspace, tool_root=tree)
+    manifest = workspace / "flange.toml"
+    original = manifest.read_text()
+    first = layer(tmp_path / "vendor", "vendor", ["flange"])
+    second = layer(tmp_path / "product-support", "product-support", ["vendor"])
+    nested = workspace / "nested"
+    nested.mkdir()
+    assert main([
+        "--json", "-C", str(nested), "layer", "add", "../../vendor"
+    ]) == 0
+    assert main([
+        "--json", "-C", str(workspace), "layer", "add", str(second)
+    ]) == 0
+    text = manifest.read_text()
+    assert 'schema_version = 2\nlayers = ["../vendor", "../product-support"]\n' in text
+    assert manifest.read_text().replace(
+        'layers = ["../vendor", "../product-support"]\n', ""
+    ) == original.replace("schema_version = 1", "schema_version = 2")
+    stack = workspace_settings(workspace, tool_root=tree)["layer_stack"]
+    assert [item.name for item in stack.layers] == ["flange", "vendor", "product-support"]
+    assert stack.layers[-1].requires == ("vendor",)
+    assert first.is_dir() and second.is_dir()
+    assert not (workspace / ".build").exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["missing_manifest", "duplicate_path", "duplicate_name", "missing_dependency", "build_root", "invalid_layer"],
+)
+def test_add_layer_failure_keeps_manifest(tree, tmp_path, case):
+    workspace = tmp_path / "product"
+    init_workspace(workspace, tool_root=tree)
+    manifest = workspace / "flange.toml"
+    candidate = layer(tmp_path / "candidate", "candidate", ["flange"])
+    if case == "missing_manifest":
+        workspace = tmp_path / "not-a-workspace"
+        workspace.mkdir()
+    elif case == "duplicate_path":
+        add_layer(workspace, candidate, tool_root=tree)
+    elif case == "duplicate_name":
+        alias = layer(tmp_path / "alias", "candidate")
+        add_layer(workspace, candidate, tool_root=tree)
+        candidate = alias
+    elif case == "missing_dependency":
+        layer(candidate, "candidate", ["absent"])
+    elif case == "build_root":
+        manifest.write_text(manifest.read_text().replace('".build"', '"../candidate"'))
+    else:
+        (candidate / "layer.toml").write_text("schema_version = 1\n")
+    original = manifest.read_bytes()
+    with pytest.raises((LayerError, WorkspaceError)):
+        add_layer(workspace, candidate, tool_root=tree)
+    assert manifest.read_bytes() == original
+
+
+@pytest.mark.parametrize("schema", [1, 2])
+def test_add_layer_preserves_comments_and_multiline_values(tree, tmp_path, schema):
+    workspace = tmp_path / "product"
+    workspace.mkdir()
+    vendor = layer(tmp_path / "vendor", "vendor")
+    upper = layer(tmp_path / "upper", "upper")
+    manifest = workspace / "flange.toml"
+    layer_declaration = 'layers = [\n    "../vendor", # 下层内容\n] # 列表说明\n' if schema == 2 else ""
+    manifest.write_text(f'''# 产品工作区说明。
+schema_version = {schema} # 版本说明
+tool_root = {json.dumps(str(tree))}
+{layer_declaration}
+app_dirs = [
+    "apps",
+]
+
+[apps]
+shared = "../shared" # 外部应用
+
+[target]
+board = "test"
+product = "default"
+variant = "release"
+''')
+    original_tables = manifest.read_text().split("\n\n[apps]", 1)[1]
+    add_layer(workspace, upper, tool_root=tree)
+    text = manifest.read_text()
+    assert '# 产品工作区说明。' in text
+    assert 'schema_version = 2 # 版本说明' in text
+    if schema == 2:
+        assert 'layers = ["../vendor", "../upper"] # 列表说明' in text
+        assert '# 下层内容' not in text
+    else:
+        assert 'layers = ["../upper"]' in text
+    assert text.split("\n\n[apps]", 1)[1] == original_tables
+    assert 'shared = "../shared" # 外部应用' in text
+    assert workspace_settings(workspace, tool_root=tree)["target"].board == "test"
+
+
+def test_add_layer_concurrent_calls_do_not_lose_entries(tree, tmp_path):
+    workspace = tmp_path / "product"
+    init_workspace(workspace, tool_root=tree)
+    candidates = [
+        layer(tmp_path / name, name, ["flange"]) for name in ("vendor", "support")
+    ]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(
+            lambda path: add_layer(workspace, path, tool_root=tree), candidates
+        ))
+    stack = workspace_settings(workspace, tool_root=tree)["layer_stack"]
+    assert {item.name for item in stack.layers} == {"flange", "vendor", "support"}
+    assert len(results) == 2
+
+
+def test_add_layer_accepts_workspace_itself_and_keeps_it_last(tree, tmp_path):
+    workspace = layer(tmp_path / "product", "product", ["flange"])
+    init_workspace(workspace, tool_root=tree)
+    assert main(["--json", "-C", str(workspace), "layer", "add", "."]) == 0
+    assert workspace_settings(workspace, tool_root=tree)["layer_stack"].layers[-1].root == workspace
+    original = (workspace / "flange.toml").read_bytes()
+    assert main(["--json", "-C", str(workspace), "layer", "add", str(workspace)]) == 2
+    assert (workspace / "flange.toml").read_bytes() == original
+
+
+def test_add_layer_json_reports_order_and_failure(tmp_path, capsys):
+    init_workspace(tmp_path)
+    vendor = layer(tmp_path / "vendor", "vendor")
+    assert main(["--json", "-C", str(tmp_path), "layer", "add", str(vendor)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["command"] == "layer add"
+    assert result["data"]["layer"]["order"] == 1
+    assert result["data"]["layers"][-1]["root"] == str(vendor)
+    assert main(["--json", "-C", str(tmp_path), "layer", "add", str(vendor)]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["command"] == "layer" and result["error"]["exit_code"] == 2
+    assert "层已启用" in result["error"]["message"]

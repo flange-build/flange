@@ -21,8 +21,43 @@ myplatform = "strategies/platform/provider.py"
 ```
 
 同一目录可以同时提供两份清单。`layers` 路径相对工作区，`requires` 引用层名称；每个依赖必须已位于下层。
-重复名称、重复真实路径、缺失依赖、依赖循环和顺序错误都会报错。flange 不自动排序或同步 Git 仓库。
+重复名称、重复真实路径、缺失依赖、依赖循环和顺序错误都会报错。flange 不自动排序或同步 Git 仓库，
+`layer add` 只按输入顺序登记本地目录。
 未声明 `layers` 的 schema 1/2 工作区只有基础层。并行保留不同组合需要不同工作区。
+
+## 添加扩展层
+
+在产品工作区运行 `flange layer add <目录>`，把已存在的本地层追加为最高层：
+
+```sh
+flange layer add ../layer-bsp
+flange layer add /abs/layer-common
+flange layer check
+flange layer list
+flange layer show layer-common
+```
+
+路径相对调用目录解释，也可使用 `~` 或绝对路径；清单保存相对工作区的路径。
+产品目录本身也可以是层，此时运行 `flange layer add .`。
+命令不创建、下载、克隆或重排层，只更新 `layers` 并按需将 `schema_version` 升级为 2。
+其他字段、表和注释保留；原有多行 `layers` 数组改为单行，数组内注释不会保留。
+无法无损更新时会拒绝写入，并提示手动添加该路径。
+
+写入前校验 `layer.toml`、名称与真实路径唯一性、依赖顺序及 `build_dir` 边界；
+失败不修改清单，重复启用同一目录也报错。工作区锁覆盖读取、校验和原子替换，避免并发添加丢失条目。
+成功结果包含层声明、清单路径和完整层顺序，支持全局 `--json`、`-C/--workspace`。
+此命令不选择目标，也不导入策略或求值板卡配置；这些检查由后续 `layer check` 完成。
+工具仓库没有产品清单时，先创建独立工作区，再添加扩展层。
+
+```sh
+flange init ~/workspace/my-product --tool-root /path/to/flange
+flange -C ~/workspace/my-product layer add /path/to/layer-bsp
+flange -C ~/workspace/my-product layer check
+```
+
+预期清单出现 `schema_version = 2` 和对应 `layers` 条目，`layer list` 将新层显示在末位。
+目录缺少有效 `layer.toml`、依赖尚未启用或名称重复时，修正输入或先添加其依赖后重试原命令；
+不要删除既有层或产物来绕过错误。组合完成后的板卡内容编写见[扩展指南](extension-guide.md)。
 
 ## 内容与优先级
 
@@ -123,6 +158,7 @@ rootfs 安装和 `--no-build` 检查身份；缺少身份的旧报告必须重�
 刷写清单记录提供者 URI 与 API 版本，当前层集合选中另一提供者时拒绝执行。
 
 ```sh
+flange layer add ../layer-bsp
 flange layer list
 flange layer check
 flange layer show product
