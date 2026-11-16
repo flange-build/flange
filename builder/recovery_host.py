@@ -20,12 +20,14 @@ import argparse
 import hashlib
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
 import socket as _socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -379,6 +381,34 @@ def _connect_local(host: str, port: int) -> "_socket.socket":
     return s
 
 
+def _control_lines(proc):
+    """后台读取控制行；主线程在 on_data 期间不被 stdout 读取阻塞。
+
+    adb shell 的 stdout 管道容量有限：数据面传输可能持续数分钟，若主线程
+    停在 on_data 里不读控制行，设备端持续输出的 PROGRESS/STATUS 行会把
+    管道写满，设备端阻塞在 printf 上无法关闭数据 socket，双方互等死锁。
+    """
+    lines: queue.SimpleQueue = queue.SimpleQueue()
+
+    def pump() -> None:
+        try:
+            for raw in proc.stdout:
+                lines.put(raw)
+        except BaseException as exc:
+            lines.put(exc)
+        finally:
+            lines.put(None)
+
+    threading.Thread(target=pump, daemon=True).start()
+    while True:
+        item = lines.get()
+        if item is None:
+            return
+        if isinstance(item, BaseException):
+            raise item
+        yield item
+
+
 def run_listener_session(
     transport: Transport,
     *,
@@ -407,7 +437,7 @@ def run_listener_session(
     pending_exc: BaseException | None = None
 
     try:
-        for raw in proc.stdout:
+        for raw in _control_lines(proc):
             line = raw.rstrip("\r\n").rstrip("\r")
             if not line:
                 continue

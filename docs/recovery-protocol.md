@@ -14,6 +14,7 @@
 - **模式守卫**：`flash`、`backup` 等危险操作先检查 `mode == recovery`，在 normal 模式下拒绝执行
 - **失败语义**：accept 之前失败（preflight、bind/listen、accept 超时）报"目标分区未改动"；accept 之后失败（short / sha-mismatch / readback-mismatch / over）报"可能已部分写入"
 - **宿主机编排**：`builder/recovery_host.py` 的 `Transport` 抽象暴露 `wait`/`push`/`pull`/`shell`/`shell_streaming`/`forward`/`forward_remove`/`interactive_shell`；`run_listener_session()` helper 编排 shell_streaming → 解析控制行 → forward → connect → on_data(sock) → 等 STATUS+rc → 清理 forward
+- **控制面持续排空**：host 用独立读线程消费 `adb shell` stdout 的控制行，数据面 `on_data` 传输期间也不中断读取；否则设备端持续输出的 `PROGRESS:`/`STATUS:` 行会写满 stdout 管道，设备阻塞在控制行输出上无法关闭数据 socket，与 host 的 recv 互等死锁
 - **transport 扩展**：当前仅 ADB over USB；接口设计允许后续添加 USB DFU 等通道
 
 ## 控制行格式（ABNF 摘要）

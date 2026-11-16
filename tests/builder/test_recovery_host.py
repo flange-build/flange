@@ -395,6 +395,65 @@ class TestList:
 
 
 class TestBackup:
+    def test_backup_drains_control_pipe_while_receiving(self, tmp_path, monkeypatch):
+        """数据面接收期间控制管道持续排空，管道写满不会互相等待。"""
+        from builder import recovery_host as rh
+        import fcntl
+        import os
+        import socket as _socket
+        import threading
+
+        out = tmp_path / "rootfs.img.zst"
+        payload = b"backup-payload" * 64
+
+        read_fd, write_fd = os.pipe()
+        # 收窄管道容量，让填充行确定性地写满并阻塞设备线程。
+        fcntl.fcntl(write_fd, 1031, 4096)  # F_SETPIPE_SZ
+        server, client = _socket.socketpair()
+
+        class PipeProc:
+            def __init__(self):
+                self.stdout = os.fdopen(read_fd, "r")
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        monkeypatch.setattr(rh, "_connect_local", lambda h, p: client)
+
+        def device():
+            # 模拟设备端：READY 之后边传输边发 PROGRESS；控制管道写满时
+            # 设备阻塞在控制行上，数据与 EOF 都发不出来。旧实现停在
+            # on_data 的 recv 里不读控制行，双方互等死锁。
+            with os.fdopen(write_fd, "w") as stream:
+                stream.write("PORT=7654\nREADY\n")
+                stream.flush()
+                stream.write("PROGRESS:1/2\n" * 20000)
+                stream.flush()
+                stream.write("STATUS:OK\n__flange_rc__=0\n")
+            server.sendall(payload)
+            server.shutdown(_socket.SHUT_WR)
+            server.close()
+
+        threading.Thread(target=device, daemon=True).start()
+
+        t = FakeTransport(mode_sequence=["recovery"])
+        monkeypatch.setattr(t, "shell_streaming", lambda args: PipeProc())
+
+        result = {}
+
+        def run():
+            result["rc"] = cmd_backup(t, partition="rootfs", output=out)
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(timeout=30)
+        assert not worker.is_alive(), "控制管道写满时备份互等死锁"
+        assert result["rc"] == 0
+        assert out.read_bytes() == payload
+
     def test_backup_streams_to_partial_then_renames(self, tmp_path, monkeypatch):
         from builder import recovery_host as rh
         import socket as _socket
