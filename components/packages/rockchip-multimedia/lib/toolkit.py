@@ -15,6 +15,7 @@ App（7 个编译单元 + 1 个模板重打单元），每个 App 由 flange 的
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -242,6 +243,12 @@ class TemplatePackage:
 
     name: str
     version: str
+    sha256: str
+    path: str
+
+    @property
+    def url(self) -> str:
+        return f"https://snapshot.ubuntu.com/ubuntu/{TEMPLATE_SNAPSHOT}/{self.path}"
 
     @property
     def flange_version(self) -> str:
@@ -251,21 +258,11 @@ class TemplatePackage:
         return f"{self.name}_{version or self.version}_arm64.deb"
 
 
-TEMPLATE_PACKAGES = (
-    TemplatePackage("libgstreamer1.0-0", "1.24.2-1ubuntu0.1"),
-    TemplatePackage("gstreamer1.0-tools", "1.24.2-1ubuntu0.1"),
-    TemplatePackage("gstreamer1.0-plugins-base-apps", "1.24.2-1ubuntu0.5"),
-    TemplatePackage("libgstreamer-plugins-base1.0-0", "1.24.2-1ubuntu0.5"),
-    TemplatePackage("libgstreamer-gl1.0-0", "1.24.2-1ubuntu0.5"),
-    TemplatePackage("gstreamer1.0-alsa", "1.24.2-1ubuntu0.5"),
-    TemplatePackage("gstreamer1.0-plugins-base", "1.24.2-1ubuntu0.5"),
-    TemplatePackage("gstreamer1.0-x", "1.24.2-1ubuntu0.5"),
-    TemplatePackage("gstreamer1.0-gl", "1.24.2-1ubuntu0.5"),
-    TemplatePackage("gstreamer1.0-plugins-good", "1.24.2-1ubuntu1.8"),
-    TemplatePackage("libgstreamer-plugins-good1.0-0", "1.24.2-1ubuntu1.8"),
-    TemplatePackage("gstreamer1.0-plugins-bad-apps", "1.24.2-1ubuntu4"),
-    TemplatePackage("gstreamer1.0-plugins-bad", "1.24.2-1ubuntu4"),
-    TemplatePackage("libgstreamer-plugins-bad1.0-0", "1.24.2-1ubuntu4"),
+# 摘要来自 Ubuntu 已签名索引；固定快照避免滚动仓库淘汰旧修订。
+_template_manifest = json.loads((PACKAGE_ROOT / "lib/templates.json").read_text())
+TEMPLATE_SNAPSHOT = _template_manifest["snapshot"]
+TEMPLATE_PACKAGES = tuple(
+    TemplatePackage(**entry) for entry in _template_manifest["packages"]
 )
 
 

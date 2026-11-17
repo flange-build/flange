@@ -1,0 +1,89 @@
+{
+  "snapshot": "20261117T140000Z",
+  "packages": [
+    {
+      "name": "libgstreamer1.0-0",
+      "version": "1.24.2-1ubuntu0.1",
+      "sha256": "48c930493054b261621ca7ea887ee4c49488bb216f0a42d8572189e5a3e291f0",
+      "path": "pool/main/g/gstreamer1.0/libgstreamer1.0-0_1.24.2-1ubuntu0.1_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-tools",
+      "version": "1.24.2-1ubuntu0.1",
+      "sha256": "f1e42af0a6626f5c575ae5746559354c6211614e6cb389cecc8e3ba2945cdee4",
+      "path": "pool/main/g/gstreamer1.0/gstreamer1.0-tools_1.24.2-1ubuntu0.1_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-plugins-base-apps",
+      "version": "1.24.2-1ubuntu0.7",
+      "sha256": "374f32d224c69e7f94e547ed9ee2d72e6cb0c65d8930080b28d3d17e6e1cce08",
+      "path": "pool/main/g/gst-plugins-base1.0/gstreamer1.0-plugins-base-apps_1.24.2-1ubuntu0.7_arm64.deb"
+    },
+    {
+      "name": "libgstreamer-plugins-base1.0-0",
+      "version": "1.24.2-1ubuntu0.7",
+      "sha256": "163149d4491b7244b679baf4bfbd12f2a225c7e9b6ad65457ebedcc246a71c61",
+      "path": "pool/main/g/gst-plugins-base1.0/libgstreamer-plugins-base1.0-0_1.24.2-1ubuntu0.7_arm64.deb"
+    },
+    {
+      "name": "libgstreamer-gl1.0-0",
+      "version": "1.24.2-1ubuntu0.7",
+      "sha256": "50915397537fe80403fa76de908cb85c2c2086763927d403792197a09f28c23a",
+      "path": "pool/main/g/gst-plugins-base1.0/libgstreamer-gl1.0-0_1.24.2-1ubuntu0.7_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-alsa",
+      "version": "1.24.2-1ubuntu0.7",
+      "sha256": "0f5643ea47f678de19cf97a5a914b0fc5502334b68afc63fd85c01250431d0ac",
+      "path": "pool/main/g/gst-plugins-base1.0/gstreamer1.0-alsa_1.24.2-1ubuntu0.7_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-plugins-base",
+      "version": "1.24.2-1ubuntu0.7",
+      "sha256": "7d6b314255416a9da95717ee099c612eba6dd907378c216cc0bad96bd915f7e0",
+      "path": "pool/main/g/gst-plugins-base1.0/gstreamer1.0-plugins-base_1.24.2-1ubuntu0.7_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-x",
+      "version": "1.24.2-1ubuntu0.7",
+      "sha256": "855e3da1def3773d9b7e6d903ecf15d16a538f460870a86adcbf351c7061061b",
+      "path": "pool/main/g/gst-plugins-base1.0/gstreamer1.0-x_1.24.2-1ubuntu0.7_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-gl",
+      "version": "1.24.2-1ubuntu0.7",
+      "sha256": "9e356780fce496a50cb9b3ee4c903b9b08f5dd9cf8464a3927dd4ead3841b3b1",
+      "path": "pool/main/g/gst-plugins-base1.0/gstreamer1.0-gl_1.24.2-1ubuntu0.7_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-plugins-good",
+      "version": "1.24.2-1ubuntu1.8",
+      "sha256": "c1dba2da2de061f8df51eaedf3ee22ac4aefaae6356d79b0fd9918cb64b8beae",
+      "path": "pool/main/g/gst-plugins-good1.0/gstreamer1.0-plugins-good_1.24.2-1ubuntu1.8_arm64.deb"
+    },
+    {
+      "name": "libgstreamer-plugins-good1.0-0",
+      "version": "1.24.2-1ubuntu1.8",
+      "sha256": "a67bd34f000e34163221749b20aa605487ba1a3fd562a07b81d2060eb3006d5d",
+      "path": "pool/main/g/gst-plugins-good1.0/libgstreamer-plugins-good1.0-0_1.24.2-1ubuntu1.8_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-plugins-bad-apps",
+      "version": "1.24.2-1ubuntu4",
+      "sha256": "d86779d5f80b88ee49752fb21386c87d865b212653d6d3cc1e2730a55068aabe",
+      "path": "pool/universe/g/gst-plugins-bad1.0/gstreamer1.0-plugins-bad-apps_1.24.2-1ubuntu4_arm64.deb"
+    },
+    {
+      "name": "gstreamer1.0-plugins-bad",
+      "version": "1.24.2-1ubuntu4",
+      "sha256": "4948ce79d4e173ec50605188784082f2161e7fd374a584e28db38d44e8cf46ff",
+      "path": "pool/universe/g/gst-plugins-bad1.0/gstreamer1.0-plugins-bad_1.24.2-1ubuntu4_arm64.deb"
+    },
+    {
+      "name": "libgstreamer-plugins-bad1.0-0",
+      "version": "1.24.2-1ubuntu4",
+      "sha256": "917784636880a70102884e4842b4bf226feafb5b29417fdd71522dff4253c2ec",
+      "path": "pool/universe/g/gst-plugins-bad1.0/libgstreamer-plugins-bad1.0-0_1.24.2-1ubuntu4_arm64.deb"
+    }
+  ]
+}

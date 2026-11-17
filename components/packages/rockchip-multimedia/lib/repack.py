@@ -15,10 +15,10 @@ staging 的文件。所以重打必须在四个单元**全部就绪之后**做�
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
+import tempfile
 
-from builder.apt import AptCache
+from builder.locking import FileLock
 
 from toolkit import (
     OUTPUT_ROOT,
@@ -31,26 +31,27 @@ from toolkit import (
     compose_sysroot,
     copy_entry,
     run,
+    sha256_file,
     upstream_stage,
     validate_debs,
 )
 
 
 def download_template(package: TemplatePackage) -> Path:
-    """通过已签名 Noble APT 索引下载固定 ARM64 binary package。"""
+    """下载固定快照中的模板，缓存与新下载均校验已签名索引给出的摘要。"""
     from toolkit import DOWNLOAD_ROOT
 
     DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     target = DOWNLOAD_ROOT / package.filename()
-    if target.is_file():
-        return target
-    cache = AptCache.for_tool(Path(os.environ["FLANGE_PROJECT_ROOT"]))
-    with cache.locked():
-        # 模板解析会读取共享索引，必须与其他工作区的 update 协调。
-        run(["apt-get", "download", *cache.options, f"{package.name}:arm64={package.version}"],
-            cwd=DOWNLOAD_ROOT)
-    if not target.is_file():
-        raise RuntimeError(f"APT 未生成模板 DEB: {target.name}")
+    with FileLock(DOWNLOAD_ROOT / f".{target.name}.lock"):
+        if target.is_file() and sha256_file(target) == package.sha256:
+            return target
+        with tempfile.TemporaryDirectory(prefix=".template-", dir=DOWNLOAD_ROOT) as directory:
+            partial = Path(directory) / target.name
+            run(["wget", "-q", "--show-progress", "-O", str(partial), package.url])
+            if sha256_file(partial) != package.sha256:
+                raise RuntimeError(f"模板 DEB SHA256 不匹配：{target.name}")
+            partial.replace(target)
     return target
 
 

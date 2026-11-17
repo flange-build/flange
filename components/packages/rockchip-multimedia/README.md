@@ -29,7 +29,14 @@ flange build rootfs
 ```
 
 首次构建会下载固定版本的 GStreamer tarball 和三个 Rockchip git revision，缓存位于 `.build/sources/`（跨单元共享）。
-各单元的中间产物位于 `.build/work/apps/<单元名>/<arch>/`，DEB 位于当前 target 的 `app/` 目录。
+模板 DEB 从 [Ubuntu 快照服务](https://snapshot.ubuntu.com/)的固定时间点下载，
+`lib/templates.json` 保存快照时间、包版本、路径和来自已签名 Ubuntu 索引的 SHA256。
+模板缓存每次校验摘要；下载在资源锁内完成，校验通过后原子发布。
+模板不再依赖当前 APT 索引保留旧修订，也不会因共享索引更新而变更版本。
+更新模板时须核对签名索引，整体更新清单与 `rkmm-gst-repack/app.yaml` 的输出文件名，
+并验证分包映射、依赖和安装。快照服务的历史保留范围有限，不承诺永久可下载。
+各单元的中间产物位于 `.build/work/<target-key>/apps/<资源标识>/`，
+DEB 位于 `.build/target/<board>/<product>/<variant>/apps/<资源标识>/artifacts/`。
 
 ## 单元拆分
 
@@ -56,13 +63,24 @@ flange build rootfs
 
 ## 验证
 
-本迁移已在 flange 构建容器完成 AArch64 交叉构建，并在干净的 Ubuntu 24.04 ARM64 容器中通过一次性 APT 安装、
-`dpkg --audit` 与下列四项 `gst-inspect-1.0` 检查。尚未生成完整目标板 rootfs，也未在 Rockchip 实机验证 VPU、RGA、
+`rp-pro-rk3568-h-default-debug` 曾因滚动 Noble 索引移除 base 模板
+`1.24.2-1ubuntu0.5` 而在 `rkmm-gst-repack` 失败。当前 base 模板使用 `.7` 修订，
+全部模板固定到 `20261117T140000Z` 快照；自编 GStreamer 源码仍为 1.24.2。
+遇到快照网络错误可重试原构建命令；摘要错误不会发布新文件，不应通过关闭校验绕过。
+
+2026-11-17：复用 `rp-pro-rk3568-h-default-debug` 已交叉编译的 staging，
+在 flange Docker 容器中成功重打 14 个模板 DEB；加上 MPP、RGA 和 Rockchip 插件，
+17 个 DEB 的 metadata、文件归属与 WebRTC 文件检查通过。
+在干净的 Ubuntu 24.04 ARM64 容器（QEMU 模拟，无硬件/介质）中通过一次性 APT 安装、
+`dpkg --audit` 与下列四项 `gst-inspect-1.0` 检查。完整 pytest 为 2177 通过、15 跳过。
+尚未生成完整目标板 rootfs，也未在 Rockchip 实机验证 VPU、RGA、
 KMS 或显示输出；这些硬件验证应在目标板安装镜像后执行。
 
 ```bash
-python3 components/packages/rockchip-multimedia/tests/check_package.py \
-    .build/target/<board>/<product>/<variant>/app
+mkdir -p .build/multimedia-check
+find .build/target/<board>/<product>/<variant>/apps -path '*/artifacts/*.deb' \
+    -exec cp -t .build/multimedia-check {} +
+python3 components/packages/rockchip-multimedia/tests/check_package.py .build/multimedia-check
 ```
 
 目标机安装后还需检查：

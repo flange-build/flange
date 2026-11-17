@@ -142,39 +142,81 @@ def test_每个单元的源都已声明(toolkit):
         assert unit.source in known, f"{name} 引用了未声明的源"
 
 
-def test_模板下载在共享索引锁内执行(toolkit, tmp_path, monkeypatch):
-    from contextlib import contextmanager
-
-    from builder.apt import AptCache
-
+@pytest.fixture
+def repack(toolkit, tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "toolkit", toolkit)
     spec = importlib.util.spec_from_file_location("rkmm_repack", PACKAGE_ROOT / "lib/repack.py")
-    repack = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(repack)
-    tool = tmp_path / "tool"
-    monkeypatch.setenv("FLANGE_PROJECT_ROOT", str(tool))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     monkeypatch.setattr(toolkit, "DOWNLOAD_ROOT", tmp_path / "downloads")
-    package = toolkit.TEMPLATE_PACKAGES[0]
+    return module
+
+
+def test_模板缓存校验且在资源锁内原子发布(toolkit, repack, tmp_path, monkeypatch):
+    import hashlib
+    from contextlib import contextmanager
+    from dataclasses import replace
+
+    content = b"verified template"
+    package = replace(toolkit.TEMPLATE_PACKAGES[0], sha256=hashlib.sha256(content).hexdigest())
+    target = toolkit.DOWNLOAD_ROOT / package.filename()
+    target.parent.mkdir()
+    target.write_bytes(b"corrupt cache")
     events = []
 
     @contextmanager
-    def locked(cache):
-        assert cache == AptCache.for_tool(tool)
+    def locked(path):
+        assert path.parent == toolkit.DOWNLOAD_ROOT
         events.append("lock")
         yield
         events.append("unlock")
 
-    def download(command, cwd):
+    def download(command):
         assert events == ["lock"]
-        assert command[:2] == ["apt-get", "download"]
-        assert f"Dir::State::lists={AptCache.for_tool(tool).lists}" in command
-        (cwd / package.filename()).write_text("完整包夹具")
+        assert command[-1] == package.url
+        assert "snapshot.ubuntu.com" in command[-1]
+        assert target.read_bytes() == b"corrupt cache"
+        from pathlib import Path
+        Path(command[command.index("-O") + 1]).write_bytes(content)
         events.append("download")
 
-    monkeypatch.setattr(AptCache, "locked", locked)
+    monkeypatch.setattr(repack, "FileLock", locked)
     monkeypatch.setattr(repack, "run", download)
-    assert repack.download_template(package).is_file()
+    assert repack.download_template(package).read_bytes() == content
     assert events == ["lock", "download", "unlock"]
+    events.clear()
+    assert repack.download_template(package).read_bytes() == content
+    assert events == ["lock", "unlock"]
+
+
+@pytest.mark.parametrize("failure", ["digest", "download"])
+def test_模板下载失败不发布且清理临时文件(toolkit, repack, monkeypatch, failure):
+    from pathlib import Path
+
+    package = toolkit.TEMPLATE_PACKAGES[0]
+
+    def download(command):
+        Path(command[command.index("-O") + 1]).write_bytes(b"partial")
+        if failure == "download":
+            raise RuntimeError("network failed")
+
+    monkeypatch.setattr(repack, "run", download)
+    with pytest.raises(RuntimeError):
+        repack.download_template(package)
+    assert not (toolkit.DOWNLOAD_ROOT / package.filename()).exists()
+    assert not list(toolkit.DOWNLOAD_ROOT.glob(".template-*"))
+
+
+def test_固定模板与声明产物一致(toolkit):
+    templates = toolkit.TEMPLATE_PACKAGES
+    assert templates
+    assert {p.filename(p.flange_version) for p in templates} == set(
+        _unit_specs()[toolkit.REPACK_APP].build.deb_outputs
+    )
+    assert len({p.name for p in templates}) == len(templates)
+    for package in templates:
+        assert len(package.sha256) == 64
+        assert package.path.endswith("/" + package.filename())
 
 
 def test_只有产deb的单元声明deb_outputs(toolkit):
