@@ -44,7 +44,11 @@ Linux 用户还需具备访问 Docker 服务的权限；按官方安装页的安
 
 需要 Git、Python 3.12+（含 venv/pip）、Docker Engine 或 Docker Desktop，以及提供 `docker compose` 命令的 Compose 插件。
 构建镜像使用 `linux/amd64`；ARM 宿主需支持该容器架构。rootfs 构建通过 chroot 执行 ARM 程序，
-Docker 所用 Linux 内核需注册对应 QEMU/binfmt（跨架构执行）支持，准备示例见[固件工作流](../.github/workflows/build.yml)。
+`flange build` 在启动构建容器前自动检查 Docker 内核的 QEMU/binfmt（跨架构执行）能力，
+构建镜像架构或目标用户态架构缺少执行支持时自动注册并复查；每次构建都会检查，重启后无需手工恢复。
+检查与注册使用固定摘要的 `tonistiigi/binfmt` 多架构镜像，首次需要联网拉取，
+并要求 Docker 允许特权容器。注册作用于 Docker 所用 Linux 内核，影响同一内核上的容器。
+拉取、注册或复查失败时立即停止构建并报告原因。App/Package 独立构建与只读命令不触发注册。
 设备操作另外需要对应平台刷写工具或 `adb`。USB 模式、权限和 macOS 限制以[板卡文档](boards/README.md)为准。
 
 系统镜像与 rootfs 构建需要容器内的 mount（挂载）等权限，flange 会为相应调用启用特权模式；
@@ -61,8 +65,8 @@ flange shell -- ls /proc/sys/fs/binfmt_misc
 ```
 
 前两条只证明模拟器存在；执行非原生架构的 rootfs 程序还需要 binfmt 注册。
-普通 Linux Docker Engine 缺少 ARM 支持时，可按 [binfmt 项目的说明](https://github.com/tonistiigi/binfmt)
-由管理员注册 `arm64,arm`；该准备步骤会修改 Docker 所在 Linux 内核的格式处理器：
+需要手工排障时，可按 [binfmt 项目的说明](https://github.com/tonistiigi/binfmt)
+注册 `arm64,arm`；正常使用 `flange build` 不需要手工执行此步骤：
 
 ```bash
 docker run --privileged --rm tonistiigi/binfmt --install arm64,arm

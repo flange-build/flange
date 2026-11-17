@@ -41,9 +41,12 @@ def test_宿主仅对本次已呈现错误去重(tmp_path, capsys, monkeypatch, 
     init_workspace(tmp_path)
     save_target(tmp_path, Target("khadas-vim3", "default", "debug"))
     monkeypatch.setattr("builder.docker._is_inside_container", lambda: False)
+    checked = []
+    monkeypatch.setattr("builder.binfmt.ensure_binfmt", lambda *args: checked.append(args))
     paths = []
 
     def run(self, command, **kwargs):
+        assert checked == [("aarch64", "linux/amd64")]
         env = kwargs["env"]
         assert shlex.split(env["FLANGE_BUILD_RETRY_COMMAND"]) == [
             "flange", "-C", str(tmp_path.resolve()), "build",

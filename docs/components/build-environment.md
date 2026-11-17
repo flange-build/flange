@@ -1,6 +1,8 @@
 # Docker 构建环境
 
 标准构建镜像由 [docker/Dockerfile](../../docker/Dockerfile) 定义。
+系统构建启动前自动检测 Docker 内核的跨架构执行能力，缺失时注册 binfmt 并复查；
+实现位于 `builder/binfmt.py`，每次构建重新检测，不将注册状态作为持久缓存。
 宿主准备、ARM 主机运行 amd64 容器、QEMU/binfmt 与文件系统要求见[开发指南](../development-guide.md)。
 运行时的工作区挂载与权限边界见[架构参考](../build-system-design.md)。
 

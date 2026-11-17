@@ -276,6 +276,13 @@ def _system(args, options, start: Path, output: Presenter) -> int:
         _container_environment(context)
     if args.command == "build" and not _is_inside_container():
         runner = DockerRunner(context=context)
+        from builder.binfmt import ensure_binfmt
+        from builder.config.canonical import userspace_arch
+
+        ensure_binfmt(
+            userspace_arch(config),
+            runner.environment_spec.platform if runner.environment_spec else "linux/amd64",
+        )
         from builder.oot_mounts import workspace_mounts
 
         command = [
